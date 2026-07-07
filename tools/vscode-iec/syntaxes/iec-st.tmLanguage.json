@@ -1,0 +1,200 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "IEC 61131-3 Structured Text",
+  "scopeName": "source.iec-st",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#literals" },
+    { "include": "#keywords" },
+    { "include": "#storage" },
+    { "include": "#functions" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.block.iec-st",
+          "begin": "\\(\\*",
+          "end": "\\*\\)",
+          "captures": {
+            "0": { "name": "punctuation.definition.comment.iec-st" }
+          }
+        },
+        {
+          "name": "comment.line.double-slash.iec-st",
+          "begin": "//",
+          "end": "$",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.comment.iec-st" }
+          }
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.single.iec-st",
+          "begin": "'",
+          "end": "'",
+          "beginCaptures": {
+            "0": { "name": "punctuation.definition.string.begin.iec-st" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.string.end.iec-st" }
+          },
+          "patterns": [
+            {
+              "name": "constant.character.escape.iec-st",
+              "match": "\\$([0-9A-Fa-f]{2}|[LlNnPpRrTt$'\"])"
+            }
+          ]
+        }
+      ]
+    },
+    "literals": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.iec-st",
+          "match": "(?i)\\b(TRUE|FALSE)\\b"
+        },
+        {
+          "name": "constant.other.time.iec-st",
+          "match": "(?i)\\b(LTIME|TIME|LT|T)#[0-9smhd_.]+\\b"
+        },
+        {
+          "name": "constant.other.datetime.iec-st",
+          "match": "(?i)\\b(DATE_AND_TIME|TIME_OF_DAY|DATE|DT|TOD|D)#[0-9:\\-.]+\\b"
+        },
+        {
+          "name": "constant.numeric.typed.iec-st",
+          "match": "(?i)\\b(BOOL|BYTE|WORD|DWORD|LWORD|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|REAL|LREAL)#[+\\-]?[0-9A-Fa-f_.eE#+\\-]+"
+        },
+        {
+          "name": "constant.numeric.based.iec-st",
+          "match": "\\b[0-9]+#[0-9A-Fa-f_]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.iec-st",
+          "match": "\\b[0-9][0-9_]*\\.[0-9_]+([eE][+\\-]?[0-9]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.exponent.iec-st",
+          "match": "\\b[0-9][0-9_]*[eE][+\\-]?[0-9]+\\b"
+        },
+        {
+          "name": "constant.numeric.integer.iec-st",
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.block.iec-st",
+          "match": "(?i)\\b(PROGRAM|END_PROGRAM|FUNCTION_BLOCK|END_FUNCTION_BLOCK|FUNCTION|END_FUNCTION|TYPE|END_TYPE|STRUCT|END_STRUCT)\\b"
+        },
+        {
+          "name": "keyword.control.conditional.iec-st",
+          "match": "(?i)\\b(IF|THEN|ELSIF|ELSE|END_IF|CASE|OF|END_CASE)\\b"
+        },
+        {
+          "name": "keyword.control.loop.iec-st",
+          "match": "(?i)\\b(FOR|TO|BY|DO|END_FOR|WHILE|END_WHILE|REPEAT|UNTIL|END_REPEAT)\\b"
+        },
+        {
+          "name": "keyword.control.flow.iec-st",
+          "match": "(?i)\\b(RETURN|EXIT|CONTINUE)\\b"
+        },
+        {
+          "name": "keyword.operator.logical.iec-st",
+          "match": "(?i)\\b(AND|OR|XOR|NOT|MOD)\\b"
+        }
+      ]
+    },
+    "storage": {
+      "patterns": [
+        {
+          "name": "keyword.other.var.iec-st",
+          "match": "(?i)\\b(VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT|VAR_TEMP|VAR_GLOBAL|VAR_EXTERNAL|VAR|END_VAR)\\b"
+        },
+        {
+          "name": "storage.modifier.iec-st",
+          "match": "(?i)\\b(RETAIN|CONSTANT)\\b"
+        },
+        {
+          "name": "storage.type.array.iec-st",
+          "match": "(?i)\\b(ARRAY)\\b"
+        },
+        {
+          "name": "storage.type.iec-st",
+          "match": "(?i)\\b(BOOL|BYTE|WORD|DWORD|LWORD|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|REAL|LREAL|LTIME|TIME|DATE_AND_TIME|TIME_OF_DAY|DATE|DT|TOD|WSTRING|STRING|WCHAR|CHAR)\\b"
+        }
+      ]
+    },
+    "functions": {
+      "patterns": [
+        {
+          "name": "support.function.builtin.iec-st",
+          "match": "(?i)\\b(ABS|MIN|MAX|LIMIT|SQRT|LN|LOG|EXP|SIN|COS|TAN)\\b"
+        },
+        {
+          "name": "support.function.conversion.iec-st",
+          "match": "(?i)\\b(INT_TO_REAL|REAL_TO_INT|BOOL_TO_INT|INT_TO_BOOL|INT_TO_TIME|TIME_TO_INT|REAL_TO_TIME|TIME_TO_REAL)\\b"
+        },
+        {
+          "name": "support.class.function-block.iec-st",
+          "match": "(?i)\\b(TON|TOF|TP|R_TRIG|F_TRIG|CTUD|CTU|CTD|SR|RS)\\b"
+        },
+        {
+          "match": "(?i)\\b([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+          "captures": {
+            "1": { "name": "entity.name.function.iec-st" }
+          }
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.assignment.iec-st",
+          "match": ":="
+        },
+        {
+          "name": "keyword.operator.output-assignment.iec-st",
+          "match": "=>"
+        },
+        {
+          "name": "keyword.operator.comparison.iec-st",
+          "match": "<>|<=|>=|<|>|="
+        },
+        {
+          "name": "keyword.operator.arithmetic.iec-st",
+          "match": "\\+|\\-|\\*|/"
+        },
+        {
+          "name": "keyword.operator.range.iec-st",
+          "match": "\\.\\."
+        }
+      ]
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "name": "punctuation.terminator.statement.iec-st",
+          "match": ";"
+        },
+        {
+          "name": "punctuation.separator.iec-st",
+          "match": ","
+        },
+        {
+          "name": "punctuation.accessor.iec-st",
+          "match": "\\."
+        }
+      ]
+    }
+  }
+}

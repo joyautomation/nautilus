@@ -1,0 +1,228 @@
+/* nautilus HMI theme — light & dark token layer.
+   [data-theme] is stamped on <html> (by the theme store, or inline before
+   paint in your app.html). Every component in this kit references these tokens
+   via var(--…), so overriding a token here re-skins the whole HMI. Chart color
+   roles follow a validated dataviz palette, with distinct steps per surface
+   (not an automatic flip). Import once in your app: `import
+   '@joyautomation/nautilus-hmi/theme.css';` */
+:root {
+	--radius: 10px;
+	--font: system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--mono: ui-monospace, 'SF Mono', 'Cascadia Mono', monospace;
+}
+
+:root,
+:root[data-theme='dark'] {
+	--bg: #0d0d0d;
+	--surface: #1a1a19;
+	--surface-2: #232321;
+	--border: rgba(255, 255, 255, 0.1);
+	--ink: #ffffff;
+	--ink-2: #c3c2b7;
+	--muted: #898781;
+	--grid: #2c2c2a;
+	--axis: #383835;
+
+	/* categorical series (validated on --surface, dark) */
+	--s1: #3987e5; /* blue — primary series */
+	--s2: #c98500; /* yellow — secondary / setpoint */
+	--s3: #199e70; /* aqua — tertiary series */
+	--s5: #9085e9; /* violet */
+
+	/* status (reserved, never used as series) */
+	--good: #0ca30c;
+	--warn: #fab219;
+	--serious: #ec835a;
+	--crit: #d03b3b;
+
+	/* interaction tokens */
+	--hover: #2c2c2a;
+	--accent: #3987e5;
+	--primary-bg: #1c5cab;
+	--primary-border: #2a78d6;
+	--primary-hover: #256abf;
+	color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+	--bg: #f3f2ee;
+	--surface: #ffffff;
+	--surface-2: #e9e7e0;
+	--border: rgba(0, 0, 0, 0.13);
+	--ink: #1b1a17;
+	--ink-2: #45443d;
+	--muted: #74726a;
+	--grid: #e4e2da;
+	--axis: #c9c7bd;
+
+	/* categorical series (darker steps read on the light surface) */
+	--s1: #2a6fc9;
+	--s2: #9c6a00;
+	--s3: #157a55;
+	--s5: #6357cf;
+
+	--good: #0a8a0a;
+	--warn: #b07d0d;
+	--serious: #c85f38;
+	--crit: #c22f2f;
+
+	--hover: #e4e2da;
+	--accent: #2a6fc9;
+	--primary-bg: #2a6fc9;
+	--primary-border: #4a86d6;
+	--primary-hover: #245fb0;
+	color-scheme: light;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+/* Reduced motion — set via the MotionSwitch or the OS preference, stamped as
+   data-motion on <html>. Neutralizes CSS animations (pump spin, pipe flow,
+   tank bubbles) and the data-driven transitions. JS/SMIL motion is gated
+   separately via the motion store's `reduced` flag. */
+:root[data-motion='reduced'] *,
+:root[data-motion='reduced'] *::before,
+:root[data-motion='reduced'] *::after {
+	animation-duration: 0.01ms !important;
+	animation-iteration-count: 1 !important;
+	transition-duration: 0.01ms !important;
+	scroll-behavior: auto !important;
+}
+
+/* ── Optional base primitives ──────────────────────────────────────────────
+   These style the raw elements the operator faceplates lean on (cards,
+   buttons, inputs, tables). They are convenience defaults; scope or drop them
+   if your host app owns its own base styles. */
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--ink);
+	font-family: var(--font);
+	font-size: 14px;
+	line-height: 1.45;
+}
+
+h1 {
+	font-size: 20px;
+	font-weight: 650;
+	margin: 0 0 4px;
+}
+
+h2 {
+	font-size: 13px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--ink-2);
+	margin: 0 0 10px;
+}
+
+p {
+	color: var(--ink-2);
+}
+
+a {
+	color: inherit;
+	text-decoration: none;
+}
+
+.card {
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	padding: 16px;
+}
+
+.num {
+	font-variant-numeric: tabular-nums;
+}
+
+.subtle {
+	color: var(--muted);
+	font-size: 12px;
+}
+
+button,
+.btn {
+	background: var(--surface-2);
+	color: var(--ink);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 7px 14px;
+	font: inherit;
+	font-weight: 550;
+	cursor: pointer;
+	transition: background 0.12s;
+}
+
+button:hover,
+.btn:hover {
+	background: var(--hover);
+}
+
+button.primary {
+	background: var(--primary-bg);
+	border-color: var(--primary-border);
+	color: #fff;
+}
+
+button.primary:hover {
+	background: var(--primary-hover);
+}
+
+button.danger {
+	border-color: var(--crit);
+}
+
+button.active {
+	background: var(--primary-bg);
+	border-color: var(--accent);
+	color: #fff;
+}
+
+input[type='number'],
+input[type='text'] {
+	background: var(--bg);
+	color: var(--ink);
+	border: 1px solid var(--border);
+	border-radius: 8px;
+	padding: 7px 10px;
+	font: inherit;
+	font-variant-numeric: tabular-nums;
+	width: 100%;
+}
+
+input[type='range'] {
+	accent-color: var(--accent);
+	width: 100%;
+}
+
+input:focus,
+button:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 1px;
+}
+
+table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+th {
+	text-align: left;
+	color: var(--muted);
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	font-weight: 600;
+	padding: 6px 10px;
+	border-bottom: 1px solid var(--border);
+}
+
+td {
+	padding: 7px 10px;
+	border-bottom: 1px solid var(--grid);
+	font-variant-numeric: tabular-nums;
+}

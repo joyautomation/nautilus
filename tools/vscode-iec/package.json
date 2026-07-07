@@ -1,0 +1,61 @@
+{
+  "name": "vscode-iec",
+  "displayName": "nautilus IEC 61131-3",
+  "description": "IEC 61131-3 Structured Text (.st) language support for the nautilus SCADA framework: syntax highlighting today, language server and live tag values on the roadmap.",
+  "version": "0.1.0",
+  "publisher": "joyautomation",
+  "license": "SEE LICENSE IN LICENSE",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "iec 61131-3",
+    "structured text",
+    "plc",
+    "scada",
+    "nautilus"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/joyautomation/nautilus"
+  },
+  "//main": "Purely declarative today (grammar + language config only), so highlighting works with no build step. Uncomment main + activationEvents once src/extension.ts is compiled to wire up the language client (see README roadmap).",
+  "//activationEvents": [
+    "onLanguage:iec-st"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "iec-st",
+        "aliases": [
+          "Structured Text",
+          "IEC 61131-3 Structured Text",
+          "iec-st"
+        ],
+        "extensions": [
+          ".st"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "iec-st",
+        "scopeName": "source.iec-st",
+        "path": "./syntaxes/iec-st.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.4.0"
+  }
+}

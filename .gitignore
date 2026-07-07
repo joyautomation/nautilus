@@ -1,0 +1,12 @@
+# Go
+/bin/
+*.test
+*.out
+# Node / SvelteKit (hmi/, tools/)
+node_modules/
+.svelte-kit/
+dist/
+build/
+*.vsix
+# editors / os
+.DS_Store

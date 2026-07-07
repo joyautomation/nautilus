@@ -1,0 +1,51 @@
+{
+  "name": "@joyautomation/nautilus-hmi",
+  "version": "0.1.0",
+  "description": "The HMI / digital-twin component layer of nautilus — Svelte 5 SCADA faceplates (Tank, Gauge, Trend, Pump, Valve…), a generic SSE realtime client, and a themeable token layer.",
+  "license": "MIT",
+  "type": "module",
+  "svelte": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "svelte": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./theme.css": "./dist/theme.css"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "scripts": {
+    "package": "svelte-kit sync && svelte-package && publint",
+    "prepublishOnly": "npm run package",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
+  },
+  "peerDependencies": {
+    "svelte": "^5.0.0"
+  },
+  "devDependencies": {
+    "@sveltejs/kit": "^2.21.0",
+    "@sveltejs/package": "^2.3.0",
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
+    "publint": "^0.3.0",
+    "svelte": "^5.30.0",
+    "svelte-check": "^4.1.0",
+    "typescript": "^5.8.0",
+    "vite": "^6.3.0"
+  },
+  "keywords": [
+    "svelte",
+    "sveltekit",
+    "scada",
+    "hmi",
+    "digital-twin",
+    "sse",
+    "nautilus",
+    "joyautomation"
+  ]
+}
