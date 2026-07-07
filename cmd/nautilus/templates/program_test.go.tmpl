@@ -1,0 +1,103 @@
+package main
+
+import (
+	_ "embed"
+	"testing"
+
+	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/runtime"
+)
+
+// Acceptance tests for the control program: drive scans deterministically
+// against the loopback Memory driver and assert on the outputs. This is
+// the test style that gates deploys — the logic, not the physics.
+
+func newTestRT(t *testing.T, drv *nio.Memory) *runtime.Runtime {
+	t.Helper()
+	rt, err := runtime.New(runtime.Options{
+		Program: program,
+		Driver:  drv,
+{{- if .Plant}}
+		Inputs:  []string{"LevelPct", "TempC"},
+		Outputs: []string{"PumpRun", "Heater"},
+		DtTag:   "ScanDtS",
+		Seed: nio.Values{
+			"TempSP": 65.0, "Kp": 12.0, "Ki": 0.15,
+			"PumpStartLevel": 40.0, "PumpStopLevel": 75.0,
+			"LevelPct": 60.0, "TempC": 60.0,
+		},
+{{- else}}
+		Inputs:  []string{"Sensor"},
+		Outputs: []string{"Actuator"},
+		Seed:    nio.Values{"Setpoint": 50.0, "Sensor": 0.0},
+{{- end}}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rt
+}
+
+{{- if .Plant}}
+
+func TestPumpHysteresis(t *testing.T) {
+	drv := nio.NewMemory()
+	rt := newTestRT(t, drv)
+
+	// Below the start level → pump latches on.
+	drv.WriteOutputs(nio.Values{"LevelPct": 35.0, "TempC": 60.0})
+	rt.Scan()
+	if !rt.Tags().Bool("PumpRun") {
+		t.Fatal("pump should start below PumpStartLevel")
+	}
+
+	// Between the bands → stays on (hysteresis).
+	drv.WriteOutputs(nio.Values{"LevelPct": 60.0, "TempC": 60.0})
+	rt.Scan()
+	if !rt.Tags().Bool("PumpRun") {
+		t.Fatal("pump should stay latched between bands")
+	}
+
+	// Above the stop level → off.
+	drv.WriteOutputs(nio.Values{"LevelPct": 80.0, "TempC": 60.0})
+	rt.Scan()
+	if rt.Tags().Bool("PumpRun") {
+		t.Fatal("pump should stop above PumpStopLevel")
+	}
+}
+
+func TestHeaterRespondsToError(t *testing.T) {
+	drv := nio.NewMemory()
+	rt := newTestRT(t, drv)
+
+	drv.WriteOutputs(nio.Values{"LevelPct": 60.0, "TempC": 55.0}) // 10° cold
+	rt.Scan()
+	if h := rt.Tags().Real("Heater"); h <= 0 {
+		t.Fatalf("heater should drive on cold error, got %v", h)
+	}
+
+	drv.WriteOutputs(nio.Values{"LevelPct": 60.0, "TempC": 75.0}) // 10° hot
+	rt.Scan()
+	if h := rt.Tags().Real("Heater"); h != 0 {
+		t.Fatalf("heater should clamp to 0 when hot, got %v", h)
+	}
+}
+{{- else}}
+
+func TestActuatorTracksError(t *testing.T) {
+	drv := nio.NewMemory()
+	rt := newTestRT(t, drv)
+
+	drv.WriteOutputs(nio.Values{"Sensor": 20.0})
+	rt.Scan()
+	if a := rt.Tags().Real("Actuator"); a != 30.0 {
+		t.Fatalf("Actuator = %v, want Setpoint-Sensor = 30", a)
+	}
+
+	drv.WriteOutputs(nio.Values{"Sensor": 90.0})
+	rt.Scan()
+	if a := rt.Tags().Real("Actuator"); a != 0.0 {
+		t.Fatalf("Actuator = %v, want clamp at 0", a)
+	}
+}
+{{- end}}

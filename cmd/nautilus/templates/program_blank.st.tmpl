@@ -1,0 +1,16 @@
+PROGRAM {{.Program}}
+(* Your control logic. VAR_EXTERNAL tags are bound by the runtime each
+   scan: field inputs are written before the scan, outputs collected
+   after. VAR is program state, retained across scans. *)
+VAR_EXTERNAL
+    Sensor   : REAL;  (* field input — see driver.go *)
+    Setpoint : REAL;  (* operator value, seeded in main.go *)
+    Actuator : REAL;  (* field output *)
+END_VAR
+VAR
+    err : REAL;
+END_VAR
+
+err := Setpoint - Sensor;
+Actuator := LIMIT(0.0, err, 100.0);
+END_PROGRAM

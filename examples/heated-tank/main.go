@@ -8,12 +8,14 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/server"
 )
 
 //go:embed program.st
@@ -41,7 +43,17 @@ func main() {
 	defer stop()
 	go rt.Run(ctx)
 
-	fmt.Println("nautilus · heated-tank — Ctrl+C to stop")
+	// Tag API: feeds the HMI kit and the VS Code extension's inline live
+	// values (GET /api/state, GET /api/stream, POST /api/tags).
+	srv := server.New(rt)
+	go srv.Run(ctx)
+	go func() {
+		if err := http.ListenAndServe("localhost:8080", srv.Handler()); err != nil {
+			fmt.Fprintln(os.Stderr, "tag api:", err)
+		}
+	}()
+
+	fmt.Println("nautilus · heated-tank — tag API on http://localhost:8080 — Ctrl+C to stop")
 	t := rt.Tags()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()

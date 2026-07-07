@@ -1,0 +1,134 @@
+package server
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/runtime"
+)
+
+const testProgram = `PROGRAM Test
+VAR_EXTERNAL
+  Level : REAL;
+  SP : REAL;
+  Out : REAL;
+END_VAR
+Out := SP - Level;
+END_PROGRAM
+`
+
+func newTestRuntime(t *testing.T) *runtime.Runtime {
+	t.Helper()
+	drv := nio.NewMemory()
+	rt, err := runtime.New(runtime.Options{
+		Program: testProgram,
+		Driver:  drv,
+		Inputs:  []string{"Level"},
+		Outputs: []string{"Out"},
+		Seed:    nio.Values{"Level": 40.0, "SP": 65.0, "Out": 0.0},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan()
+	return rt
+}
+
+func TestStateSnapshot(t *testing.T) {
+	srv := New(newTestRuntime(t))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+
+	if rec.Code != 200 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var f Frame
+	if err := json.Unmarshal(rec.Body.Bytes(), &f); err != nil {
+		t.Fatal(err)
+	}
+	if f.Scans != 1 || f.TS == 0 {
+		t.Errorf("frame meta = %+v", f)
+	}
+	if out, ok := f.Tags["Out"].(float64); !ok || out != 25.0 {
+		t.Errorf("Out = %v, want 25.0", f.Tags["Out"])
+	}
+}
+
+func TestWriteTag(t *testing.T) {
+	rt := newTestRuntime(t)
+	srv := New(rt)
+
+	body := bytes.NewBufferString(`{"name": "SP", "value": 80.0}`)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", body))
+	if rec.Code != 204 {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	if got := rt.Tags().Real("SP"); got != 80.0 {
+		t.Errorf("SP = %v", got)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", strings.NewReader("{}")))
+	if rec.Code != 400 {
+		t.Errorf("empty name accepted: %d", rec.Code)
+	}
+}
+
+func TestStreamDeliversFrames(t *testing.T) {
+	rt := newTestRuntime(t)
+	srv := New(rt, Options{Interval: 5 * time.Millisecond})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go srv.Run(ctx)
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	resp, err := ts.Client().Get(ts.URL + "/api/stream")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
+		t.Fatalf("content-type = %q", ct)
+	}
+
+	// The immediate greeting frame plus at least one broadcast tick.
+	sc := bufio.NewScanner(resp.Body)
+	frames := 0
+	for sc.Scan() && frames < 2 {
+		line := sc.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var f Frame
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &f); err != nil {
+			t.Fatalf("bad frame %q: %v", line, err)
+		}
+		if _, ok := f.Tags["Level"]; !ok {
+			t.Fatalf("frame missing tags: %+v", f)
+		}
+		frames++
+	}
+	if frames < 2 {
+		t.Fatalf("got %d frames, want 2 (scan err %v)", frames, sc.Err())
+	}
+}
+
+func TestCORSPreflight(t *testing.T) {
+	srv := New(newTestRuntime(t))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("OPTIONS", "/api/tags", nil))
+	if rec.Code != 204 || rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Errorf("preflight: code=%d headers=%v", rec.Code, rec.Header())
+	}
+}

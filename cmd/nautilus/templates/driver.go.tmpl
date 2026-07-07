@@ -1,0 +1,38 @@
+package main
+
+import (
+	"sync"
+
+	nio "github.com/joyautomation/nautilus/io"
+)
+
+// Driver is your field-I/O seam: the runtime calls ReadInputs before each
+// scan and WriteOutputs after. Replace the stub bodies with your bus —
+// Modbus, EtherNet/IP, OPC-UA, a REST-fronted rack, or a simulation.
+type Driver struct {
+	mu       sync.Mutex
+	actuator float64
+}
+
+func NewDriver() *Driver {
+	return &Driver{}
+}
+
+// ReadInputs reports the current field inputs by tag name.
+func (d *Driver) ReadInputs() (nio.Values, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	// TODO: read your instruments. The stub feeds the actuator back in so
+	// the loop settles visibly at Setpoint/2.
+	return nio.Values{"Sensor": d.actuator}, nil
+}
+
+// WriteOutputs receives the controller's commanded outputs by tag name.
+func (d *Driver) WriteOutputs(v nio.Values) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if a, ok := v["Actuator"].(float64); ok {
+		d.actuator = a // TODO: drive your actuators
+	}
+	return nil
+}

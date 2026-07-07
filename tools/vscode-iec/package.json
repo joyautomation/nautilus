@@ -1,12 +1,12 @@
 {
   "name": "vscode-iec",
   "displayName": "nautilus IEC 61131-3",
-  "description": "IEC 61131-3 Structured Text (.st) language support for the nautilus SCADA framework: syntax highlighting today, language server and live tag values on the roadmap.",
-  "version": "0.1.0",
+  "description": "IEC 61131-3 Structured Text (.st) language support for the nautilus SCADA framework: syntax highlighting, compile diagnostics, go-to-definition, and inline live tag values from a running controller.",
+  "version": "0.2.0",
   "publisher": "joyautomation",
   "license": "SEE LICENSE IN LICENSE",
   "engines": {
-    "vscode": "^1.75.0"
+    "vscode": "^1.82.0"
   },
   "categories": [
     "Programming Languages"
@@ -22,8 +22,8 @@
     "type": "git",
     "url": "https://github.com/joyautomation/nautilus"
   },
-  "//main": "Purely declarative today (grammar + language config only), so highlighting works with no build step. Uncomment main + activationEvents once src/extension.ts is compiled to wire up the language client (see README roadmap).",
-  "//activationEvents": [
+  "main": "./out/extension.js",
+  "activationEvents": [
     "onLanguage:iec-st"
   ],
   "contributes": {
@@ -47,15 +47,50 @@
         "scopeName": "source.iec-st",
         "path": "./syntaxes/iec-st.tmLanguage.json"
       }
-    ]
+    ],
+    "commands": [
+      {
+        "command": "nautilus.liveValues.toggle",
+        "title": "nautilus: Toggle Inline Live Tag Values"
+      },
+      {
+        "command": "nautilus.restartLanguageServer",
+        "title": "nautilus: Restart Language Server"
+      }
+    ],
+    "configuration": {
+      "title": "nautilus IEC 61131-3",
+      "properties": {
+        "nautilus.cliPath": {
+          "type": "string",
+          "default": "nautilus",
+          "description": "Path to the nautilus CLI binary (provides the language server via `nautilus lsp`). Install with: go install github.com/joyautomation/nautilus/cmd/nautilus@latest"
+        },
+        "nautilus.runtimeUrl": {
+          "type": "string",
+          "default": "http://localhost:8080",
+          "description": "Base URL of a running nautilus controller's tag API. Inline live values subscribe to <url>/api/stream."
+        },
+        "nautilus.liveValues.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show live tag values inline next to identifiers in .st files when a controller is reachable."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node --test out/scan.test.js"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
-    "@types/vscode": "^1.75.0",
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.82.0",
     "typescript": "^5.4.0"
   }
 }

@@ -10,3 +10,4 @@ build/
 *.vsix
 # editors / os
 .DS_Store
+tools/vscode-iec/out/

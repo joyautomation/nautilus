@@ -1,0 +1,37 @@
+# {{.Name}}
+
+A [nautilus](https://github.com/joyautomation/nautilus) controller —
+IEC 61131-3 Structured Text on a deterministic scan loop, shipped like
+any other Go binary.
+
+## Run
+
+```sh
+go mod tidy   # first time: pulls github.com/joyautomation/nautilus
+go run .      # scan loop + tag API on http://localhost:8080
+```
+
+## Develop
+
+- `program.st` is the control logic. With the **nautilus IEC 61131-3**
+  VS Code extension you get compile diagnostics as you type, and inline
+  live tag values while the controller runs.
+- `go test ./...` runs the program's acceptance tests
+  (`program_test.go`) — deterministic scans against a loopback driver.
+- `nautilus check .` compiles the ST headlessly (CI runs this).
+{{- if .Plant}}
+- `plant.go` simulates the field device. Swap it for a real
+  `io.Driver` (Modbus, EtherNet/IP, OPC-UA, ...) when you have hardware;
+  the control logic doesn't change.
+{{- else}}
+- `driver.go` is your field-I/O seam — fill in `ReadInputs` /
+  `WriteOutputs` for your bus.
+{{- end}}
+
+## Tag API
+
+| Endpoint | |
+|---|---|
+| `GET /api/state` | one JSON frame of every tag |
+| `GET /api/stream` | the same frame over SSE, 4 Hz |
+| `POST /api/tags` | `{"name": "TempSP", "value": 65}` |

@@ -1,0 +1,66 @@
+// Command {{.Name}} is a nautilus controller: an IEC 61131-3 program on a
+// deterministic scan loop, plus a tag API for HMIs and editor live values.
+// Scaffolded by `nautilus new` — every line is yours to change.
+package main
+
+import (
+	"context"
+	_ "embed"
+	"fmt"
+	"net/http"
+	"os"
+	"os/signal"
+	"time"
+
+	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/server"
+)
+
+//go:embed program.st
+var program string
+
+func main() {
+	rt, err := runtime.New(runtime.Options{
+		Program: program,
+{{- if .Plant}}
+		Driver:  NewPlant(), // swap for your field bus (Modbus, OPC-UA, ...)
+		Scan:    100 * time.Millisecond,
+		Inputs:  []string{"LevelPct", "TempC"},
+		Outputs: []string{"PumpRun", "Heater"},
+		DtTag:   "ScanDtS",
+		Seed: nio.Values{
+			"TempSP": 65.0, "Kp": 12.0, "Ki": 0.15,
+			"PumpStartLevel": 40.0, "PumpStopLevel": 75.0,
+		},
+{{- else}}
+		Driver:  NewDriver(), // implement ReadInputs/WriteOutputs in driver.go
+		Scan:    100 * time.Millisecond,
+		Inputs:  []string{"Sensor"},
+		Outputs: []string{"Actuator"},
+		Seed:    nio.Values{"Setpoint": 50.0},
+{{- end}}
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "compile:", err)
+		os.Exit(1)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	go rt.Run(ctx)
+
+	// Tag API: GET /api/state, GET /api/stream (SSE), POST /api/tags.
+	// The VS Code extension's inline live values read from here.
+	srv := server.New(rt)
+	go srv.Run(ctx)
+	go func() {
+		if err := http.ListenAndServe("localhost:8080", srv.Handler()); err != nil {
+			fmt.Fprintln(os.Stderr, "tag api:", err)
+		}
+	}()
+
+	fmt.Println("nautilus · {{.Name}} — tag API on http://localhost:8080 — Ctrl+C to stop")
+	<-ctx.Done()
+	fmt.Println("\nstopped.")
+}

@@ -13,3 +13,16 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - run: go build ./...
+      - name: nautilus check (examples)
+        run: go run ./cmd/nautilus check examples
+  vscode-iec:
+    name: VS Code extension — compile, test
+    runs-on: ubuntu-latest
+    defaults:
+      run: {working-directory: tools/vscode-iec}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: npm ci
+      - run: npm test

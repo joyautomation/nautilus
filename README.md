@@ -29,8 +29,10 @@ runtime/     scan loop · tag bus · program host (compile, hot-swap, retained s
 lang/st      IEC 61131-3 Structured Text: lexer, parser, lowering
 lang/ir      typed IR + tree-walking virtual machine (pure stdlib)
 io/          Driver seam — bring your own bus (Modbus, EtherNet/IP, OPC-UA, sim)
+server/      tag API over HTTP: JSON snapshot, SSE stream, tag writes
+cmd/nautilus the developer CLI: `new` (scaffold) · `check` (CI compile) · `lsp`
 hmi/         SvelteKit digital-twin component kit + realtime SSE client
-tools/vscode-iec/   VS Code extension: ST syntax today; LSP + live values next
+tools/vscode-iec/   VS Code extension: syntax, diagnostics, go-to-def, live values
 examples/heated-tank/   a complete controller built on the libraries
 ```
 
@@ -45,8 +47,19 @@ examples/heated-tank/   a complete controller built on the libraries
 
 ## Quickstart
 
-A complete controller — an IEC program on a 10 Hz scan loop driving a field
-device — is about 30 lines:
+```sh
+go install github.com/joyautomation/nautilus/cmd/nautilus@latest
+nautilus new my-plant     # interactive: pick features, get a runnable project
+cd my-plant && go mod tidy && go run .
+```
+
+You get a controller on a 10 Hz scan loop, acceptance tests (`go test`), CI
+that compiles your control logic (`nautilus check`), and — with the
+**nautilus IEC 61131-3** VS Code extension — compile diagnostics as you type
+plus **live tag values inline in your source** while the controller runs.
+
+Under the scaffold, a complete controller — an IEC program on a 10 Hz scan
+loop driving a field device — is about 30 lines:
 
 ```go
 rt, _ := runtime.New(runtime.Options{
@@ -85,16 +98,19 @@ Early. This is the extracted, generalized core of a working demo
 - ✅ `lang/st` + `lang/ir` — the Structured Text VM (pure stdlib, tested)
 - ✅ `runtime` — scan loop, tag bus, program host + hot-swap
 - ✅ `io` — the Driver seam + an in-memory driver
-- ✅ `examples/heated-tank` — a runnable controller
-- 🚧 `hmi/` — SvelteKit component kit (in progress)
-- 🚧 `tools/vscode-iec/` — VS Code extension (syntax now; LSP + live values next)
+- ✅ `server` — tag API: JSON snapshot, SSE stream, tag writes (HMI + editor)
+- ✅ `cmd/nautilus` — CLI: interactive project scaffold, headless ST compile
+  check for CI, and the ST language server
+- ✅ `tools/vscode-iec/` — VS Code extension: syntax, compile diagnostics,
+  go-to-definition, hover, completion, inline live tag values
+- ✅ `examples/heated-tank` — a runnable controller serving the tag API
+- 🚧 `hmi/` — SvelteKit component kit (in progress; not yet on npm)
 
 ## Roadmap
 
 - Retained-memory, redundancy, and historian packages behind clean interfaces
+- Publish `@joyautomation/nautilus-hmi` and add an HMI starter to `nautilus new`
 - Native-Go function blocks alongside ST (both lowering to the same IR)
-- VS Code LSP that reuses `lang/st` for real compile diagnostics + go-to-tag,
-  and **inline live values** from a running runtime, in your editor
 - Ladder (LD), Function Block (FBD), and SFC front-ends to the same IR, edited
   as text that projects to a diagram in VS Code
 - A test harness for acceptance tests that gate deploys (from mini-scada)
