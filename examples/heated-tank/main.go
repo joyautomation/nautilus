@@ -49,7 +49,9 @@ func main() {
 	// port up front so the banner reports the API honestly — a port
 	// conflict shouldn't stop the controller, but it also shouldn't be
 	// announced as running.
-	srv := server.New(rt)
+	// Writes are same-origin-only out of the box; set NAUTILUS_TOKEN to
+	// require a token on writes instead (progressive auth).
+	srv := server.New(rt, server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN")})
 	go srv.Run(ctx)
 	const apiAddr = "localhost:8080"
 	apiUp := false

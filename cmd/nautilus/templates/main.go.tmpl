@@ -53,7 +53,9 @@ func main() {
 
 	// Tag API: GET /api/state, GET /api/stream (SSE), POST /api/tags.
 	// The VS Code extension's inline live values read from here.
-	srv := server.New(rt)
+	// Writes are same-origin-only out of the box; set NAUTILUS_TOKEN to
+	// require a token on writes instead (progressive auth).
+	srv := server.New(rt, server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN")})
 	go srv.Run(ctx)
 	const apiAddr = "localhost:8080"
 	apiUp := false

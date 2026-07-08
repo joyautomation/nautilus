@@ -35,3 +35,8 @@ go run .      # scan loop + tag API on http://localhost:8080
 | `GET /api/state` | one JSON frame of every tag |
 | `GET /api/stream` | the same frame over SSE, 4 Hz |
 | `POST /api/tags` | `{"name": "TempSP", "value": 65}` |
+
+Reads are open. Writes are same-origin-only by default (a random web page
+can't actuate your outputs); run with `NAUTILUS_TOKEN=<secret>` to require
+`Authorization: Bearer <secret>` on writes instead — which also lets an
+authorized dashboard on another host write.

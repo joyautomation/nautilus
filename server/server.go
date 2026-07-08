@@ -11,6 +11,12 @@
 // the hmi kit's frame-generic realtime client and the editor tooling share
 // one endpoint. Pure stdlib.
 //
+// Security is progressive. Reads are always open (LAN dashboards, editor
+// live values). Writes are same-origin-only by default — enough to stop a
+// random browser page from actuating outputs, with zero configuration.
+// Set Options.AuthToken to require a token on writes (and allow authorized
+// cross-origin writers); see authorizeWrite.
+//
 //	srv := server.New(rt)
 //	go srv.Run(ctx)                       // broadcast loop
 //	http.ListenAndServe(":8080", srv.Handler())
@@ -18,10 +24,13 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,12 +58,22 @@ type Options struct {
 	// for live editor values and HMI needles, slow enough to be negligible
 	// load. Snapshots are taken only while at least one client is connected.
 	Interval time.Duration
+
+	// AuthToken turns on write authentication (progressive enhancement).
+	// When empty (the default) nautilus runs unauthenticated: writes are
+	// allowed only from same-origin browser pages and non-browser clients
+	// (see authorizeWrite). When set, a tag write must present the token in
+	// an "Authorization: Bearer <token>" or "X-Nautilus-Token: <token>"
+	// header, which also permits authorized cross-origin writers. Reads are
+	// never gated — dashboards and editor live values stay open on the LAN.
+	AuthToken string
 }
 
 // Server fans runtime frames out to SSE clients and answers snapshot reads.
 type Server struct {
-	rt       *runtime.Runtime
-	interval time.Duration
+	rt        *runtime.Runtime
+	interval  time.Duration
+	authToken string
 
 	mu      sync.Mutex
 	clients map[chan []byte]struct{}
@@ -63,13 +82,18 @@ type Server struct {
 // New builds a Server over a runtime.
 func New(rt *runtime.Runtime, opts ...Options) *Server {
 	interval := 250 * time.Millisecond
-	if len(opts) > 0 && opts[0].Interval > 0 {
-		interval = opts[0].Interval
+	token := ""
+	if len(opts) > 0 {
+		if opts[0].Interval > 0 {
+			interval = opts[0].Interval
+		}
+		token = opts[0].AuthToken
 	}
 	return &Server{
-		rt:       rt,
-		interval: interval,
-		clients:  map[chan []byte]struct{}{},
+		rt:        rt,
+		interval:  interval,
+		authToken: token,
+		clients:   map[chan []byte]struct{}{},
 	}
 }
 
@@ -136,7 +160,9 @@ func withCORS(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		if r.Method == http.MethodOptions {
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			// Allow the auth headers so an authorized cross-origin writer's
+			// preflight succeeds; Content-Type for JSON bodies.
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Nautilus-Token")
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -199,6 +225,59 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// authorizeWrite decides whether a tag-write request may proceed, returning
+// (0, "") to allow or an (HTTP status, message) to reject.
+//
+// Base layer — no AuthToken configured: writes must be same-origin. A
+// browser page from another origin (the drive-by CSRF case) carries an
+// Origin header that won't match the host and is refused; non-browser
+// clients (curl, the LSP, server-to-server) send no Origin and are allowed.
+// This costs nothing to run and needs no setup.
+//
+// Progressive enhancement — AuthToken set: the request must present the
+// token, and a valid token authorizes the write from any origin (an
+// attacker's page can't read or guess it, so CORS is irrelevant to safety).
+func (s *Server) authorizeWrite(r *http.Request) (int, string) {
+	if s.authToken != "" {
+		if tokenMatches(r, s.authToken) {
+			return 0, ""
+		}
+		return http.StatusUnauthorized, "missing or invalid auth token"
+	}
+	if sameOrigin(r) {
+		return 0, ""
+	}
+	return http.StatusForbidden, "cross-origin writes require an auth token (start nautilus with one, e.g. NAUTILUS_TOKEN)"
+}
+
+// tokenMatches reports whether the request carries the expected token, in
+// either "Authorization: Bearer <t>" or "X-Nautilus-Token: <t>" form.
+// Comparison is constant-time.
+func tokenMatches(r *http.Request, token string) bool {
+	got := r.Header.Get("X-Nautilus-Token")
+	if got == "" {
+		if a := r.Header.Get("Authorization"); strings.HasPrefix(a, "Bearer ") {
+			got = strings.TrimPrefix(a, "Bearer ")
+		}
+	}
+	return got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1
+}
+
+// sameOrigin reports whether a request is safe from a CSRF standpoint: it
+// either carries no Origin header (a non-browser client) or an Origin whose
+// host matches the request's Host.
+func sameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true // not a browser-issued cross-origin request
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	return u.Host == r.Host
+}
+
 // writeTagRequest is the POST /api/tags payload. Value must be a JSON
 // number or boolean — the tag kinds the runtime can store.
 type writeTagRequest struct {
@@ -207,6 +286,10 @@ type writeTagRequest struct {
 }
 
 func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
+	if code, msg := s.authorizeWrite(r); code != 0 {
+		http.Error(w, msg, code)
+		return
+	}
 	var req writeTagRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		http.Error(w, `expected {"name": ..., "value": ...}`, http.StatusBadRequest)

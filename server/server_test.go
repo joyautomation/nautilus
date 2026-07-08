@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -133,6 +134,66 @@ func TestStreamDeliversFrames(t *testing.T) {
 	}
 	if frames < 2 {
 		t.Fatalf("got %d frames, want 2 (scan err %v)", frames, sc.Err())
+	}
+}
+
+func TestWriteAuthBaseLayer(t *testing.T) {
+	srv := New(newTestRuntime(t)) // no token → same-origin-only writes
+	post := func(setup func(*http.Request)) int {
+		req := httptest.NewRequest("POST", "http://plc.local/api/tags",
+			bytes.NewBufferString(`{"name":"SP","value":70}`))
+		if setup != nil {
+			setup(req)
+		}
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// No Origin (curl, the extension, server-to-server): allowed.
+	if code := post(nil); code != 204 {
+		t.Errorf("no-Origin write = %d, want 204", code)
+	}
+	// Same-origin browser page: allowed.
+	if code := post(func(r *http.Request) { r.Header.Set("Origin", "http://plc.local") }); code != 204 {
+		t.Errorf("same-origin write = %d, want 204", code)
+	}
+	// Cross-origin drive-by: refused.
+	if code := post(func(r *http.Request) { r.Header.Set("Origin", "http://evil.example") }); code != 403 {
+		t.Errorf("cross-origin write = %d, want 403", code)
+	}
+}
+
+func TestWriteAuthToken(t *testing.T) {
+	srv := New(newTestRuntime(t), Options{AuthToken: "s3cret"})
+	post := func(setup func(*http.Request)) int {
+		req := httptest.NewRequest("POST", "http://plc.local/api/tags",
+			bytes.NewBufferString(`{"name":"SP","value":70}`))
+		if setup != nil {
+			setup(req)
+		}
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Same-origin but no token: refused now that a token is required.
+	if code := post(func(r *http.Request) { r.Header.Set("Origin", "http://plc.local") }); code != 401 {
+		t.Errorf("no-token write = %d, want 401", code)
+	}
+	// Correct token via either header: allowed, even cross-origin.
+	if code := post(func(r *http.Request) {
+		r.Header.Set("Origin", "http://dashboard.example")
+		r.Header.Set("X-Nautilus-Token", "s3cret")
+	}); code != 204 {
+		t.Errorf("X-Nautilus-Token write = %d, want 204", code)
+	}
+	if code := post(func(r *http.Request) { r.Header.Set("Authorization", "Bearer s3cret") }); code != 204 {
+		t.Errorf("Bearer write = %d, want 204", code)
+	}
+	// Wrong token: refused.
+	if code := post(func(r *http.Request) { r.Header.Set("X-Nautilus-Token", "nope") }); code != 401 {
+		t.Errorf("wrong-token write = %d, want 401", code)
 	}
 }
 
