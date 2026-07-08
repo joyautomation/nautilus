@@ -124,6 +124,30 @@ func TestStreamDeliversFrames(t *testing.T) {
 	}
 }
 
+func TestLandingPage(t *testing.T) {
+	srv := New(newTestRuntime(t))
+
+	// "/" serves the dashboard.
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != 200 {
+		t.Fatalf("GET / status = %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("GET / content-type = %q", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "nautilus") || !strings.Contains(rec.Body.String(), "/api/stream") {
+		t.Error("landing page missing expected content")
+	}
+
+	// An unknown path still 404s (the catch-all only serves exactly "/").
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/nope", nil))
+	if rec.Code != 404 {
+		t.Errorf("GET /nope status = %d, want 404", rec.Code)
+	}
+}
+
 func TestCORSPreflight(t *testing.T) {
 	srv := New(newTestRuntime(t))
 	rec := httptest.NewRecorder()

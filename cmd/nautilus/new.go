@@ -28,6 +28,12 @@ type scaffold struct {
 	CI     bool // GitHub Actions workflow
 	VSCode bool // .vscode extension recommendation + runtime URL
 	Git    bool // git init
+
+	// Replace, if set, adds a filesystem `replace` directive pointing the
+	// nautilus dependency at a local checkout. For contributors testing
+	// `nautilus new` before the module is published/tagged: the generated
+	// project builds against the working copy without a network/VCS fetch.
+	Replace string
 }
 
 var identRE = regexp.MustCompile(`[^A-Za-z0-9]+`)
@@ -39,6 +45,7 @@ func runNew(args []string) int {
 	fs := flag.NewFlagSet("new", flag.ContinueOnError)
 	module := fs.String("module", "", "Go module path (default: name)")
 	noInput := fs.Bool("no-input", false, "accept defaults instead of prompting")
+	replace := fs.String("replace", "", "path to a local nautilus checkout; adds a filesystem replace directive so the project builds against it (for contributors, pre-publish)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -57,6 +64,16 @@ func runNew(args []string) int {
 		Name:   name,
 		Module: *module,
 		Plant:  true, CI: true, VSCode: true, Git: true,
+	}
+	if *replace != "" {
+		// Absolute, so the directive resolves from the generated project dir
+		// regardless of where the user later runs go from.
+		abs, err := filepath.Abs(*replace)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "nautilus new: --replace:", err)
+			return 2
+		}
+		sc.Replace = abs
 	}
 
 	if *noInput {
@@ -80,18 +97,22 @@ func runNew(args []string) int {
 		return 1
 	}
 
+	dep := "pulls github.com/joyautomation/nautilus"
+	if sc.Replace != "" {
+		dep = "resolves against " + sc.Replace
+	}
 	fmt.Printf(`
   created %s/
 
   next steps:
     cd %s
-    go mod tidy      # pulls github.com/joyautomation/nautilus
+    go mod tidy      # %s
     go run .         # scan loop + tag API on http://localhost:8080
     go test ./...    # the program's acceptance test
 
   open the folder in VS Code with the "nautilus IEC 61131-3" extension for
   compile diagnostics and live tag values in program.st while it runs.
-`, sc.Name, sc.Name)
+`, sc.Name, sc.Name, dep)
 	return 0
 }
 

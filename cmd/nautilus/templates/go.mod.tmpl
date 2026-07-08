@@ -1,3 +1,8 @@
 module {{.Module}}
 
 go 1.24
+{{if .Replace}}
+require github.com/joyautomation/nautilus v0.0.0
+
+replace github.com/joyautomation/nautilus => {{.Replace}}
+{{end}}

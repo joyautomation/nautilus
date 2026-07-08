@@ -11,3 +11,6 @@ build/
 # editors / os
 .DS_Store
 tools/vscode-iec/out/
+
+# Local QA scaffolds from `nautilus new`
+/demo/

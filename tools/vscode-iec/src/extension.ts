@@ -22,8 +22,10 @@ let client: LanguageClient | undefined;
 let live: LiveValues | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  await startLanguageClient(context);
-
+  // Register commands and live values FIRST, independent of the language
+  // client: they don't need it, and if the CLI is missing we must not let a
+  // failed/slow client start block them (otherwise the toggle command is
+  // "not found" and live values never connect).
   live = new LiveValues();
   context.subscriptions.push(live);
 
@@ -42,6 +44,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     })
   );
+
+  await startLanguageClient(context);
 }
 
 async function startLanguageClient(context: vscode.ExtensionContext): Promise<void> {
@@ -69,18 +73,23 @@ async function startLanguageClient(context: vscode.ExtensionContext): Promise<vo
     context.subscriptions.push({ dispose: () => client?.stop() });
   } catch {
     client = undefined;
-    // Syntax highlighting still works without the server; point the user
-    // at the one-line install instead of failing hard.
-    const pick = await vscode.window.showWarningMessage(
-      `nautilus: couldn't start the language server ("${cliPath} lsp"). ` +
-        "Install the CLI for diagnostics and go-to-definition.",
-      "Copy install command"
-    );
-    if (pick) {
-      await vscode.env.clipboard.writeText(
-        "go install github.com/joyautomation/nautilus/cmd/nautilus@latest"
-      );
-    }
+    // Syntax highlighting, commands, and live values still work without the
+    // server; point the user at the one-line install instead of failing hard.
+    // Fire-and-forget: do NOT await the toast — an un-dismissed notification
+    // would otherwise leave activate() pending forever.
+    void vscode.window
+      .showWarningMessage(
+        `nautilus: couldn't start the language server ("${cliPath} lsp"). ` +
+          "Install the CLI for diagnostics and go-to-definition.",
+        "Copy install command"
+      )
+      .then((pick) => {
+        if (pick) {
+          void vscode.env.clipboard.writeText(
+            "go install github.com/joyautomation/nautilus/cmd/nautilus@latest"
+          );
+        }
+      });
   }
 }
 

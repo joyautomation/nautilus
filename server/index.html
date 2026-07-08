@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>nautilus · controller</title>
+    <style>
+      :root {
+        --bg: #0d1117;
+        --panel: #161b22;
+        --border: #21262d;
+        --text: #e6edf3;
+        --muted: #8b949e;
+        --good: #64d88a;
+        --bad: #ff6b6b;
+        --accent: #58a6ff;
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        --sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f6f8fa;
+          --panel: #ffffff;
+          --border: #d0d7de;
+          --text: #1f2328;
+          --muted: #656d76;
+          --good: #1a7f37;
+          --bad: #cf222e;
+          --accent: #0969da;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+      .wrap { max-width: 820px; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
+      header { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; }
+      h1 { font-size: 1.6rem; margin: 0; letter-spacing: -0.01em; }
+      h1 .n { color: var(--accent); }
+      .tagline { color: var(--muted); margin: 0.35rem 0 0; }
+      .status {
+        display: inline-flex; align-items: center; gap: 0.4rem;
+        margin-left: auto; font-size: 0.8rem; font-weight: 600;
+        padding: 0.2rem 0.6rem; border-radius: 999px; border: 1px solid var(--border);
+        color: var(--muted); white-space: nowrap;
+      }
+      .dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--muted); }
+      .status.live { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent); }
+      .status.live .dot { background: var(--good); animation: pulse 1.6s ease-in-out infinite; }
+      .status.stale { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+      .status.stale .dot { background: var(--bad); }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+      section { margin-top: 2.25rem; }
+      .meta { color: var(--muted); font-size: 0.85rem; margin-top: 0.5rem; }
+      .meta b { color: var(--text); font-variant-numeric: tabular-nums; }
+
+      table { width: 100%; border-collapse: collapse; margin-top: 0.75rem; }
+      .tags-wrap {
+        border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+        background: var(--panel);
+      }
+      th, td { text-align: left; padding: 0.5rem 0.9rem; font-size: 0.9rem; }
+      th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+      tbody tr { border-top: 1px solid var(--border); }
+      td.name { font-family: var(--mono); }
+      td.val { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; color: var(--good); }
+      td.val.bool-false { color: var(--muted); }
+      .empty { padding: 1.5rem 0.9rem; color: var(--muted); text-align: center; }
+
+      .endpoints { list-style: none; padding: 0; margin: 0.75rem 0 0; display: grid; gap: 0.5rem; }
+      .endpoints li {
+        display: flex; gap: 0.75rem; align-items: baseline;
+        font-family: var(--mono); font-size: 0.85rem;
+      }
+      .endpoints .m { color: var(--accent); min-width: 3.2rem; font-weight: 600; }
+      .endpoints a { color: var(--text); text-decoration: none; border-bottom: 1px solid var(--border); }
+      .endpoints a:hover { border-color: var(--accent); }
+      .endpoints .desc { color: var(--muted); font-family: var(--sans); }
+      h2 { font-size: 0.95rem; margin: 0; }
+      footer { margin-top: 2.5rem; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+      footer a { color: var(--accent); text-decoration: none; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div>
+          <h1><span class="n">nautilus</span> controller</h1>
+          <p class="tagline">Your control logic is running. This page is served by the built-in tag API.</p>
+        </div>
+        <span class="status" id="status"><span class="dot"></span><span id="status-text">connecting…</span></span>
+      </header>
+
+      <section>
+        <h2>Live tags</h2>
+        <p class="meta">scan <b id="scans">—</b> · <span id="count">0</span> tags · updated <b id="age">—</b></p>
+        <div class="tags-wrap">
+          <table>
+            <thead><tr><th>Tag</th><th style="text-align:right">Value</th></tr></thead>
+            <tbody id="tags"><tr><td colspan="2" class="empty">waiting for the first frame…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>API</h2>
+        <ul class="endpoints">
+          <li><span class="m">GET</span><a href="/api/state">/api/state</a><span class="desc">current tag snapshot (JSON)</span></li>
+          <li><span class="m">GET</span><a href="/api/stream">/api/stream</a><span class="desc">live frames (Server-Sent Events)</span></li>
+          <li><span class="m">POST</span><span>/api/tags</span><span class="desc">write a tag: {"name":"TempSP","value":65}</span></li>
+        </ul>
+      </section>
+
+      <footer>
+        Edit your control logic in <code>program.st</code> — with the nautilus VS Code extension you get
+        compile diagnostics and these live values inline. ·
+        <a href="https://github.com/joyautomation/nautilus">github.com/joyautomation/nautilus</a>
+      </footer>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      let lastFrameMs = 0;
+
+      function fmt(v) {
+        if (v === null || v === undefined) return "—";
+        if (typeof v === "number") {
+          if (Number.isInteger(v)) return String(v);
+          const a = Math.abs(v);
+          if (a !== 0 && (a < 1e-3 || a >= 1e6)) return v.toExponential(2);
+          return v.toFixed(3);
+        }
+        if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
+        return String(v);
+      }
+
+      function render(frame) {
+        lastFrameMs = Date.now();
+        $("scans").textContent = frame.scans ?? "—";
+        const tags = frame.tags ?? {};
+        const names = Object.keys(tags).sort();
+        $("count").textContent = names.length;
+        if (names.length === 0) {
+          $("tags").innerHTML = '<tr><td colspan="2" class="empty">no tags</td></tr>';
+          return;
+        }
+        $("tags").innerHTML = names
+          .map((n) => {
+            const v = tags[n];
+            const cls = typeof v === "boolean" && !v ? "val bool-false" : "val";
+            const name = n.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+            return `<tr><td class="name">${name}</td><td class="${cls}">${fmt(v)}</td></tr>`;
+          })
+          .join("");
+      }
+
+      function setStatus(state, text) {
+        const el = $("status");
+        el.className = "status" + (state ? " " + state : "");
+        $("status-text").textContent = text;
+      }
+
+      // Freshness clock: label the age of the last frame and flip to "stale"
+      // if the stream goes quiet (matches the extension's 3s freshness window).
+      setInterval(() => {
+        if (!lastFrameMs) return;
+        const ms = Date.now() - lastFrameMs;
+        $("age").textContent = ms < 1500 ? "just now" : Math.round(ms / 1000) + "s ago";
+        if (ms > 3000) setStatus("stale", "stream idle");
+      }, 500);
+
+      const es = new EventSource("/api/stream");
+      es.onmessage = (e) => {
+        try {
+          render(JSON.parse(e.data));
+          setStatus("live", "live");
+        } catch {}
+      };
+      es.onerror = () => setStatus("stale", "reconnecting…");
+    </script>
+  </body>
+</html>

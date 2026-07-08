@@ -64,9 +64,17 @@ export class LiveValues implements vscode.Disposable {
 
   toggle(): void {
     this.enabled = !this.enabled;
+    // Write to the scope that actually governs the effective value. A
+    // scaffolded project pins liveValues.enabled in workspace
+    // .vscode/settings.json, which overrides a Global write — so toggling to
+    // Global would be immediately reverted by configChanged() re-reading the
+    // workspace value. Target Workspace when a folder is open, else Global.
+    const target = vscode.workspace.workspaceFolders?.length
+      ? vscode.ConfigurationTarget.Workspace
+      : vscode.ConfigurationTarget.Global;
     void vscode.workspace
       .getConfiguration("nautilus")
-      .update("liveValues.enabled", this.enabled, vscode.ConfigurationTarget.Global);
+      .update("liveValues.enabled", this.enabled, target);
     this.onEditorsChanged();
   }
 

@@ -2,6 +2,7 @@
 // extension's inline live values, and any other observer can read (and
 // write) the tag store without bespoke wiring:
 //
+//	GET  /             a self-contained live dashboard (landing page)
 //	GET  /api/state    one JSON Frame — the current tag snapshot
 //	GET  /api/stream   Server-Sent Events; one Frame per broadcast tick
 //	POST /api/tags     {"name": "TempSP", "value": 65.0} — write one tag
@@ -17,6 +18,7 @@ package server
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -25,6 +27,13 @@ import (
 
 	"github.com/joyautomation/nautilus/runtime"
 )
+
+// indexHTML is the built-in landing page: a self-contained live dashboard
+// served at "/", so hitting the controller in a browser shows running tags
+// and the API surface instead of a bare 404.
+//
+//go:embed index.html
+var indexHTML []byte
 
 // Frame is one observation of the runtime: the full tag store plus loop
 // progress, timestamped server-side.
@@ -114,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/stream", s.handleStream)
 	mux.HandleFunc("POST /api/tags", s.handleWriteTag)
+	mux.HandleFunc("GET /", s.handleIndex)
 	return withCORS(mux)
 }
 
@@ -132,6 +142,18 @@ func withCORS(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// handleIndex serves the landing page at exactly "/". Because "GET /" is
+// the catch-all pattern, anything not matched by a more specific route
+// lands here; non-root paths get a real 404 rather than the page.
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(indexHTML)
 }
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
