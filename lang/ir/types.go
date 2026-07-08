@@ -1,4 +1,3 @@
-
 package ir
 
 // TypeKind identifies the runtime representation of a value.
@@ -80,12 +79,12 @@ type StructField struct {
 // the FB body once per scan with the instance's slot vector and a
 // host-provided context (NowMs etc.).
 type FBDef struct {
-	Name       string
-	Inputs     []FBSlot
-	Outputs    []FBSlot
-	Internals  []FBSlot
-	SlotIndex  map[string]int
-	Step       FBStepFn
+	Name      string
+	Inputs    []FBSlot
+	Outputs   []FBSlot
+	Internals []FBSlot
+	SlotIndex map[string]int
+	Step      FBStepFn
 }
 
 // FBSlot is a single named slot on a function block instance.

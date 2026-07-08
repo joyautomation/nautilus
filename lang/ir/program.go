@@ -1,4 +1,3 @@
-
 package ir
 
 // VarKind classifies where a slot's canonical value lives.

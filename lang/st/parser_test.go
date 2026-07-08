@@ -1,4 +1,3 @@
-
 package st
 
 import (
@@ -388,4 +387,3 @@ END_PROGRAM`
 		t.Errorf("Statements = %d, want 3", len(prog.Statements))
 	}
 }
-

@@ -1,4 +1,3 @@
-
 package st
 
 import (
@@ -343,9 +342,9 @@ type lowerer struct {
 	irProg          *ir.Program
 	scope           map[string]symbol
 	types           map[string]*ir.Type
-	userFBs         map[string]*ir.FBDef  // optional; consulted for FB type resolution
+	userFBs         map[string]*ir.FBDef   // optional; consulted for FB type resolution
 	userFuncs       map[string]*ir.FuncDef // optional; consulted at call sites for bare-name lookup
-	implicitGlobals map[string]*ir.Type   // optional; PLC project vars surfaced as globals
+	implicitGlobals map[string]*ir.Type    // optional; PLC project vars surfaced as globals
 	// returnSlot, when >= 0, marks the slot the bare function-name
 	// identifier should bind to inside a FUNCTION body so `Name := value`
 	// assigns the return value rather than failing as undeclared.

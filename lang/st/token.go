@@ -1,4 +1,3 @@
-
 // Package st implements an IEC 61131-3 Structured Text parser.
 // Phase 1 of the IR pipeline produced ST → Starlark text (see codegen.go).
 // Phase 3 replaces that with ST → internal/plc/ir (typed tree-walk evaluator).
@@ -83,25 +82,25 @@ const (
 	TokenAssign       // :=
 	TokenOutputAssign // =>  (IEC 61131-3 FB output binding)
 	TokenEqual        // =
-	TokenNotEqual  // <>
-	TokenLess      // <
-	TokenLessEq    // <=
-	TokenGreater   // >
-	TokenGreaterEq // >=
-	TokenPlus      // +
-	TokenMinus     // -
-	TokenStar      // *
-	TokenSlash     // /
-	TokenLParen    // (
-	TokenRParen    // )
-	TokenLBracket  // [
-	TokenRBracket  // ]
-	TokenSemicolon // ;
-	TokenColon     // :
-	TokenComma     // ,
-	TokenDot       // .
-	TokenDotDot    // ..
-	TokenHash      // #
+	TokenNotEqual     // <>
+	TokenLess         // <
+	TokenLessEq       // <=
+	TokenGreater      // >
+	TokenGreaterEq    // >=
+	TokenPlus         // +
+	TokenMinus        // -
+	TokenStar         // *
+	TokenSlash        // /
+	TokenLParen       // (
+	TokenRParen       // )
+	TokenLBracket     // [
+	TokenRBracket     // ]
+	TokenSemicolon    // ;
+	TokenColon        // :
+	TokenComma        // ,
+	TokenDot          // .
+	TokenDotDot       // ..
+	TokenHash         // #
 )
 
 // Token represents a single lexical token.
@@ -176,32 +175,32 @@ var keywords = map[string]TokenType{
 // parser and type resolver both consult this table so "USINT", "BYTE" etc.
 // don't need a dedicated token kind.
 var scalarTypeNames = map[string]struct{}{
-	"BOOL":    {},
-	"BYTE":    {},
-	"WORD":    {},
-	"DWORD":   {},
-	"LWORD":   {},
-	"SINT":    {},
-	"INT":     {},
-	"DINT":    {},
-	"LINT":    {},
-	"USINT":   {},
-	"UINT":    {},
-	"UDINT":   {},
-	"ULINT":   {},
-	"REAL":    {},
-	"LREAL":   {},
-	"TIME":    {},
-	"LTIME":   {},
-	"DATE":    {},
-	"TOD":     {},
-	"TIME_OF_DAY": {},
-	"DT":      {},
+	"BOOL":          {},
+	"BYTE":          {},
+	"WORD":          {},
+	"DWORD":         {},
+	"LWORD":         {},
+	"SINT":          {},
+	"INT":           {},
+	"DINT":          {},
+	"LINT":          {},
+	"USINT":         {},
+	"UINT":          {},
+	"UDINT":         {},
+	"ULINT":         {},
+	"REAL":          {},
+	"LREAL":         {},
+	"TIME":          {},
+	"LTIME":         {},
+	"DATE":          {},
+	"TOD":           {},
+	"TIME_OF_DAY":   {},
+	"DT":            {},
 	"DATE_AND_TIME": {},
-	"STRING":  {},
-	"WSTRING": {},
-	"CHAR":    {},
-	"WCHAR":   {},
+	"STRING":        {},
+	"WSTRING":       {},
+	"CHAR":          {},
+	"WCHAR":         {},
 }
 
 // IsScalarTypeName reports whether name is a known IEC elementary type.

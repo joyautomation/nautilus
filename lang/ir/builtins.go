@@ -1,4 +1,3 @@
-
 package ir
 
 import (
@@ -20,9 +19,9 @@ type BuiltinFn func(args []Value) (Value, error)
 // MIN/MAX/ABS whose result depends on operand kinds.
 type BuiltinSig struct {
 	Name     string
-	Params   []*Type     // formal parameter types (nil entry means "any numeric")
-	Result   *Type       // fixed result type, or nil if Coerce computes it
-	Variadic bool        // last param repeats
+	Params   []*Type // formal parameter types (nil entry means "any numeric")
+	Result   *Type   // fixed result type, or nil if Coerce computes it
+	Variadic bool    // last param repeats
 	Coerce   func(argTypes []*Type) (*Type, error)
 	Fn       BuiltinFn
 }

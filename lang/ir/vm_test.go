@@ -1,4 +1,3 @@
-
 package ir
 
 import "testing"
@@ -10,9 +9,9 @@ type stubHost struct {
 
 func newStubHost() *stubHost { return &stubHost{globals: map[string]Value{}} }
 
-func (h *stubHost) ReadGlobal(name string) (Value, error)   { return h.globals[name], nil }
-func (h *stubHost) WriteGlobal(name string, v Value) error  { h.globals[name] = v; return nil }
-func (h *stubHost) NowMs() int64                            { return h.now }
+func (h *stubHost) ReadGlobal(name string) (Value, error)  { return h.globals[name], nil }
+func (h *stubHost) WriteGlobal(name string, v Value) error { h.globals[name] = v; return nil }
+func (h *stubHost) NowMs() int64                           { return h.now }
 
 // Retained state: counter := counter + 1 across 5 scans lands at 5.
 func TestRetainedAccumulator(t *testing.T) {

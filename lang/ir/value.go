@@ -1,4 +1,3 @@
-
 package ir
 
 // Value is the tagged-union runtime representation of an IR value.

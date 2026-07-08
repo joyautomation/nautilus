@@ -1,4 +1,3 @@
-
 package ir
 
 import "fmt"

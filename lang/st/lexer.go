@@ -1,4 +1,3 @@
-
 package st
 
 import (
@@ -249,8 +248,10 @@ func (l *Lexer) peek(offset int) byte {
 	return l.input[idx]
 }
 
-func isDigit(ch byte) bool     { return ch >= '0' && ch <= '9' }
-func isHexDigit(ch byte) bool  { return isDigit(ch) || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F') }
+func isDigit(ch byte) bool { return ch >= '0' && ch <= '9' }
+func isHexDigit(ch byte) bool {
+	return isDigit(ch) || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')
+}
 func isBaseDigit(ch byte) bool { return isHexDigit(ch) || ch == '_' }
 func isTimeChar(ch byte) bool {
 	// Digits and unit letters: s, m, h, d, ms (letters consumed as identifier chars).
@@ -261,4 +262,6 @@ func isTypedLitChar(ch byte) bool {
 		(ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_' || ch == '#'
 }
 func isIdentStart(ch byte) bool { return unicode.IsLetter(rune(ch)) || ch == '_' }
-func isIdentPart(ch byte) bool  { return unicode.IsLetter(rune(ch)) || unicode.IsDigit(rune(ch)) || ch == '_' }
+func isIdentPart(ch byte) bool {
+	return unicode.IsLetter(rune(ch)) || unicode.IsDigit(rune(ch)) || ch == '_'
+}

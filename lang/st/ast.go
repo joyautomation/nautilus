@@ -1,4 +1,3 @@
-
 package st
 
 // Pos is a 1-based source location captured by the parser. Zero values
@@ -39,13 +38,13 @@ type Posed interface {
 // (PROGRAM / FUNCTION_BLOCK / FUNCTION / ""), used by the API to derive
 // the POU category for the navigator.
 type Program struct {
-	Name        string
-	TypeDecls   []TypeDecl
-	VarBlocks   []VarBlock
-	Statements  []Statement
-	FBDecls     []*FunctionBlockDecl
-	FuncDecls   []*FunctionDecl
-	TopKeyword  string
+	Name       string
+	TypeDecls  []TypeDecl
+	VarBlocks  []VarBlock
+	Statements []Statement
+	FBDecls    []*FunctionBlockDecl
+	FuncDecls  []*FunctionDecl
+	TopKeyword string
 }
 
 func (p *Program) nodeType() string { return "Program" }

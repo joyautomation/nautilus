@@ -1,4 +1,3 @@
-
 package ir
 
 // Stmt is the interface implemented by all statement nodes.
@@ -35,7 +34,7 @@ type If struct {
 func (*If) stmtNode() {}
 
 type For struct {
-	Slot       int  // loop variable slot (always TypeInt in phase 1)
+	Slot       int // loop variable slot (always TypeInt in phase 1)
 	Start, End Expr
 	Step       Expr // nil ⇒ 1
 	Body       []Stmt
