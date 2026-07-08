@@ -32,18 +32,16 @@ export class LiveValues implements vscode.Disposable {
   private renderTimer: NodeJS.Timeout | undefined;
   private disposables: vscode.Disposable[] = [];
 
-  private readonly freshDeco = vscode.window.createTextEditorDecorationType({
-    after: {
-      margin: "0 0 0 0.75em",
-      color: new vscode.ThemeColor("charts.green"),
-    },
-  });
-  private readonly staleDeco = vscode.window.createTextEditorDecorationType({
-    after: {
-      margin: "0 0 0 0.75em",
-      color: new vscode.ThemeColor("disabledForeground"),
-    },
-  });
+  private readonly freshDeco = pillDecoration(
+    new vscode.ThemeColor("charts.green"),
+    "rgba(100, 216, 138, 0.13)",
+    "rgba(100, 216, 138, 0.38)"
+  );
+  private readonly staleDeco = pillDecoration(
+    new vscode.ThemeColor("descriptionForeground"),
+    "rgba(140, 140, 140, 0.12)",
+    "rgba(140, 140, 140, 0.32)"
+  );
   private readonly status = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     90
@@ -219,7 +217,7 @@ export class LiveValues implements vscode.Disposable {
         decos.push({
           range: new vscode.Range(pos, pos),
           renderOptions: {
-            after: { contentText: ` ${formatValue(value)}` },
+            after: { contentText: formatValue(value) },
           },
           hoverMessage: `${this.casing.get(site.lowerName) ?? site.lowerName} — live value from ${this.runtimeUrl()}`,
         });
@@ -256,5 +254,29 @@ export class LiveValues implements vscode.Disposable {
     this.status.dispose();
     for (const d of this.disposables) d.dispose();
   }
+}
+
+// pillDecoration builds a rounded "pill" attachment so live values read as an
+// overlay, not as part of the source. VS Code's decoration API exposes color,
+// background, border, and weight as typed fields but has no border-radius or
+// padding; it applies the `textDecoration` string as raw CSS on the ::after
+// box, so the pill shape is smuggled through there (the leading `none;`
+// terminates the text-decoration declaration).
+function pillDecoration(
+  color: vscode.ThemeColor,
+  background: string,
+  border: string
+): vscode.TextEditorDecorationType {
+  return vscode.window.createTextEditorDecorationType({
+    after: {
+      margin: "0 0 0 0.6em",
+      color,
+      backgroundColor: background,
+      border: `1px solid ${border}`,
+      fontWeight: "600",
+      textDecoration:
+        "none; border-radius: 5px; padding: 0px 5px; font-size: 0.85em; vertical-align: baseline;",
+    },
+  });
 }
 
