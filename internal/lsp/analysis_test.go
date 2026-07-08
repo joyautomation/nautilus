@@ -140,7 +140,13 @@ func TestWordAt(t *testing.T) {
 
 func TestStaticCompletionsIncludeBuiltins(t *testing.T) {
 	items := staticCompletions()
-	want := map[string]bool{"IF": false, "TON": false, "REAL": false}
+	// Keyword, standard FB, common type, and — the regression this guards —
+	// elementary types that the old hardcoded list omitted but the compiler
+	// accepts (LINT, WSTRING, TOD, ...).
+	want := map[string]bool{
+		"IF": false, "TON": false, "REAL": false,
+		"LINT": false, "WSTRING": false, "TOD": false, "LTIME": false,
+	}
 	for _, it := range items {
 		if _, ok := want[it.Label]; ok {
 			want[it.Label] = true
@@ -150,5 +156,21 @@ func TestStaticCompletionsIncludeBuiltins(t *testing.T) {
 		if !seen {
 			t.Errorf("static completions missing %s", label)
 		}
+	}
+
+	// A name that is both a keyword token and an elementary type (REAL) must
+	// appear exactly once, as the type.
+	var realCount, realKind int
+	for _, it := range items {
+		if it.Label == "REAL" {
+			realCount++
+			realKind = it.Kind
+		}
+	}
+	if realCount != 1 {
+		t.Errorf("REAL appears %d times, want 1", realCount)
+	}
+	if realKind != CompletionKindStruct {
+		t.Errorf("REAL kind = %d, want type (%d)", realKind, CompletionKindStruct)
 	}
 }

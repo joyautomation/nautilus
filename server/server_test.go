@@ -80,6 +80,18 @@ func TestWriteTag(t *testing.T) {
 	if rec.Code != 400 {
 		t.Errorf("empty name accepted: %d", rec.Code)
 	}
+
+	// A non-scalar value the runtime can't store must be rejected, not
+	// silently accepted with a 204 that wrote nothing.
+	rec = httptest.NewRecorder()
+	body = bytes.NewBufferString(`{"name": "Mode", "value": "AUTO"}`)
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", body))
+	if rec.Code != 422 {
+		t.Errorf("string value status = %d, want 422", rec.Code)
+	}
+	if _, ok := rt.Tags().All()["Mode"]; ok {
+		t.Error("rejected write should not have created the tag")
+	}
 }
 
 func TestStreamDeliversFrames(t *testing.T) {

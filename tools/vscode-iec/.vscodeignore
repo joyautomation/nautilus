@@ -1,9 +1,12 @@
 .vscode/**
 .vscode-test/**
 src/**
-node_modules/**
 tsconfig.json
 .gitignore
 .vscodeignore
 **/*.map
 **/*.ts
+# Do NOT ignore node_modules wholesale: the extension now has a runtime
+# dependency (vscode-languageclient) that must ship in the VSIX. vsce
+# includes production dependencies and prunes devDependencies on its own,
+# so leaving node_modules unignored packages exactly the right set.

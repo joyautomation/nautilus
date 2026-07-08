@@ -8,6 +8,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -44,16 +45,30 @@ func main() {
 	go rt.Run(ctx)
 
 	// Tag API: feeds the HMI kit and the VS Code extension's inline live
-	// values (GET /api/state, GET /api/stream, POST /api/tags).
+	// values (GET /api/state, GET /api/stream, POST /api/tags). Bind the
+	// port up front so the banner reports the API honestly — a port
+	// conflict shouldn't stop the controller, but it also shouldn't be
+	// announced as running.
 	srv := server.New(rt)
 	go srv.Run(ctx)
-	go func() {
-		if err := http.ListenAndServe("localhost:8080", srv.Handler()); err != nil {
-			fmt.Fprintln(os.Stderr, "tag api:", err)
-		}
-	}()
+	const apiAddr = "localhost:8080"
+	apiUp := false
+	if ln, err := net.Listen("tcp", apiAddr); err != nil {
+		fmt.Fprintf(os.Stderr, "tag api: %v (continuing without it)\n", err)
+	} else {
+		apiUp = true
+		go func() {
+			if err := http.Serve(ln, srv.Handler()); err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, "tag api:", err)
+			}
+		}()
+	}
 
-	fmt.Println("nautilus · heated-tank — tag API on http://localhost:8080 — Ctrl+C to stop")
+	banner := "nautilus · heated-tank — Ctrl+C to stop"
+	if apiUp {
+		banner = "nautilus · heated-tank — tag API on http://" + apiAddr + " — Ctrl+C to stop"
+	}
+	fmt.Println(banner)
 	t := rt.Tags()
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()

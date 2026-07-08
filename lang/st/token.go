@@ -209,3 +209,28 @@ func IsScalarTypeName(name string) bool {
 	_, ok := scalarTypeNames[name]
 	return ok
 }
+
+// KeywordNames returns every IEC 61131-3 keyword spelling the lexer
+// recognizes, in unspecified order. It includes the few elementary types
+// that carry dedicated token kinds (INT, REAL, BOOL, STRING, DINT, LREAL);
+// callers that want the type names on their own should use ScalarTypeNames.
+// Exposed so tooling (the LSP completion set) derives keywords from the one
+// authoritative table instead of hand-maintaining a copy.
+func KeywordNames() []string {
+	out := make([]string, 0, len(keywords))
+	for k := range keywords {
+		out = append(out, k)
+	}
+	return out
+}
+
+// ScalarTypeNames returns every IEC 61131-3 elementary type name, in
+// unspecified order — the full set the parser accepts (26 names), so
+// tooling advertises exactly what the compiler understands.
+func ScalarTypeNames() []string {
+	out := make([]string, 0, len(scalarTypeNames))
+	for k := range scalarTypeNames {
+		out = append(out, k)
+	}
+	return out
+}

@@ -199,8 +199,8 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// writeTagRequest is the POST /api/tags payload. Value takes any JSON
-// scalar; the tag store coerces types.
+// writeTagRequest is the POST /api/tags payload. Value must be a JSON
+// number or boolean — the tag kinds the runtime can store.
 type writeTagRequest struct {
 	Name  string `json:"name"`
 	Value any    `json:"value"`
@@ -212,6 +212,14 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `expected {"name": ..., "value": ...}`, http.StatusBadRequest)
 		return
 	}
-	s.rt.Tags().Set(req.Name, req.Value)
-	w.WriteHeader(http.StatusNoContent)
+	// Tags.Set silently ignores anything that isn't a number or bool, so
+	// reject those here rather than returning 204 for a write that didn't
+	// happen. JSON numbers decode to float64; booleans to bool.
+	switch req.Value.(type) {
+	case float64, bool:
+		s.rt.Tags().Set(req.Name, req.Value)
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "value must be a number or boolean", http.StatusUnprocessableEntity)
+	}
 }

@@ -87,7 +87,13 @@ func runCheck(args []string) int {
 func compileErr(src string) (string, st.Pos, bool) {
 	prog, err := st.Parse(src)
 	if err != nil {
-		return err.Error(), st.Pos{Line: 1, Col: 1}, true
+		// Anchor on the parser-reported position (shared with the LSP via
+		// st.ParseErrorPos) instead of always 1:1.
+		pos := st.Pos{Line: 1, Col: 1}
+		if p, ok := st.ParseErrorPos(err); ok {
+			pos = p
+		}
+		return err.Error(), pos, true
 	}
 	if _, err := st.Lower(prog); err != nil {
 		pos := st.Pos{Line: 1, Col: 1}

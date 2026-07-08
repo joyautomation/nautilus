@@ -1,8 +1,6 @@
 package lsp
 
 import (
-	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -34,8 +32,6 @@ type scope struct {
 	start, end int
 }
 
-var lineRE = regexp.MustCompile(`line (\d+)`)
-
 // analyze runs the real compiler over the source: st.Parse for syntax
 // diagnostics, st.Lower for semantic ones (undeclared identifiers, type
 // errors), and walks the AST for the symbol index.
@@ -45,11 +41,12 @@ func analyze(text string) analysis {
 
 	prog, err := st.Parse(text)
 	if err != nil {
-		// Parser errors are strings; most embed "line N". Anchor there,
-		// falling back to the first line.
+		// Anchor on the position the parser reported, falling back to line 1.
+		// st.ParseErrorPos is the single source of truth so `nautilus check`
+		// and this diagnostic agree.
 		line := 1
-		if m := lineRE.FindStringSubmatch(err.Error()); m != nil {
-			fmt.Sscanf(m[1], "%d", &line)
+		if pos, ok := st.ParseErrorPos(err); ok {
+			line = pos.Line
 		}
 		a.Diags = append(a.Diags, Diagnostic{
 			Range:    lineRange(text, line),
@@ -267,32 +264,25 @@ func wordAt(text string, p Position) (string, Range) {
 
 // ─── Static completion sets ─────────────────────────────────────────────────
 
-var stKeywords = []string{
-	"PROGRAM", "END_PROGRAM", "FUNCTION", "END_FUNCTION", "FUNCTION_BLOCK",
-	"END_FUNCTION_BLOCK", "VAR", "VAR_INPUT", "VAR_OUTPUT", "VAR_IN_OUT",
-	"VAR_TEMP", "VAR_GLOBAL", "VAR_EXTERNAL", "END_VAR", "IF", "THEN",
-	"ELSIF", "ELSE", "END_IF", "FOR", "TO", "BY", "DO", "END_FOR", "WHILE",
-	"END_WHILE", "REPEAT", "UNTIL", "END_REPEAT", "CASE", "OF", "END_CASE",
-	"RETURN", "EXIT", "CONTINUE", "TRUE", "FALSE", "AND", "OR", "NOT",
-	"XOR", "MOD", "TYPE", "END_TYPE", "STRUCT", "END_STRUCT", "ARRAY",
-	"RETAIN", "CONSTANT",
-}
-
-var stTypes = []string{
-	"BOOL", "INT", "DINT", "REAL", "LREAL", "STRING", "TIME",
-	"BYTE", "WORD", "DWORD", "LWORD", "SINT", "UINT", "UDINT",
-}
-
-// staticCompletions is the position-independent completion set: keywords,
-// elementary types, builtin functions (from the IR registry, so new
-// builtins show up automatically), and standard function blocks.
+// staticCompletions is the position-independent completion set, derived
+// entirely from the compiler's own tables so it never drifts from what the
+// compiler accepts: elementary types (st.ScalarTypeNames), keywords
+// (st.KeywordNames), builtin functions (ir.Builtins), and standard function
+// blocks (ir.FBs). A few names (INT, REAL, BOOL, STRING, DINT, LREAL) are
+// both a keyword token and an elementary type; they're offered once, as the
+// type.
 func staticCompletions() []CompletionItem {
 	var items []CompletionItem
-	for _, k := range stKeywords {
-		items = append(items, CompletionItem{Label: k, Kind: CompletionKindKeyword})
-	}
-	for _, t := range stTypes {
+	types := map[string]bool{}
+	for _, t := range st.ScalarTypeNames() {
+		types[t] = true
 		items = append(items, CompletionItem{Label: t, Kind: CompletionKindStruct, Detail: "elementary type"})
+	}
+	for _, k := range st.KeywordNames() {
+		if types[k] {
+			continue // already offered as a type
+		}
+		items = append(items, CompletionItem{Label: k, Kind: CompletionKindKeyword})
 	}
 	for name := range ir.Builtins {
 		items = append(items, CompletionItem{Label: name, Kind: CompletionKindFunction, Detail: "builtin function"})

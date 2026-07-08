@@ -7,6 +7,7 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -54,13 +55,24 @@ func main() {
 	// The VS Code extension's inline live values read from here.
 	srv := server.New(rt)
 	go srv.Run(ctx)
-	go func() {
-		if err := http.ListenAndServe("localhost:8080", srv.Handler()); err != nil {
-			fmt.Fprintln(os.Stderr, "tag api:", err)
-		}
-	}()
+	const apiAddr = "localhost:8080"
+	apiUp := false
+	if ln, err := net.Listen("tcp", apiAddr); err != nil {
+		fmt.Fprintf(os.Stderr, "tag api: %v (continuing without it)\n", err)
+	} else {
+		apiUp = true
+		go func() {
+			if err := http.Serve(ln, srv.Handler()); err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, "tag api:", err)
+			}
+		}()
+	}
 
-	fmt.Println("nautilus · {{.Name}} — tag API on http://localhost:8080 — Ctrl+C to stop")
+	banner := "nautilus · {{.Name}} — Ctrl+C to stop"
+	if apiUp {
+		banner = "nautilus · {{.Name}} — tag API on http://" + apiAddr + " — Ctrl+C to stop"
+	}
+	fmt.Println(banner)
 	<-ctx.Done()
 	fmt.Println("\nstopped.")
 }
