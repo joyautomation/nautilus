@@ -1,0 +1,41 @@
+# GoReleaser builds the nautilus CLI for every platform and publishes a
+# GitHub Release on a v* tag. Validated on every push by the `goreleaser
+# check` job in ci.yml, so a schema mistake surfaces on a PR, not at tag time.
+version: 2
+
+project_name: nautilus
+
+builds:
+  - id: nautilus
+    main: ./cmd/nautilus
+    binary: nautilus
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      # -s -w strips debug info; -X injects the tag version into the CLI so
+      # `nautilus version` matches the release.
+      - -s -w -X github.com/joyautomation/nautilus/internal/lsp.Version={{ .Version }}
+
+archives:
+  - id: nautilus
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  sort: asc
+
+release:
+  github:
+    owner: joyautomation
+    name: nautilus
+  # v0.x.y-rc* etc. are marked as pre-releases automatically.
+  prerelease: auto

@@ -1,0 +1,90 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub Release and upload assets
+
+jobs:
+  # CLI binaries → GitHub Release. Needs no secrets beyond the automatic
+  # GITHUB_TOKEN, so this works the moment you push a tag.
+  cli:
+    name: CLI binaries (GoReleaser)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # GoReleaser needs full history + tags
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # VS Code extension → attached to the Release, and published to the VS Code
+  # Marketplace / Open VSX when the corresponding secret is set. Each publish
+  # step skips cleanly (exit 0) if its token is absent, so the pipeline is
+  # dormant-but-ready until you add secrets.
+  extension:
+    name: VS Code extension
+    runs-on: ubuntu-latest
+    needs: cli # the Release must exist before we upload the VSIX to it
+    defaults:
+      run:
+        working-directory: tools/vscode-iec
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - name: Set version from tag
+        run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
+      - run: npm run compile
+      - name: Package VSIX
+        run: npx --yes @vscode/vsce package
+      - name: Attach VSIX to the Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" ./*.vsix --clobber
+      - name: Publish to VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then echo "VSCE_PAT not set — skipping Marketplace publish"; exit 0; fi
+          npx --yes @vscode/vsce publish -p "$VSCE_PAT"
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -z "$OVSX_PAT" ]; then echo "OVSX_PAT not set — skipping Open VSX publish"; exit 0; fi
+          npx --yes ovsx publish -p "$OVSX_PAT"
+
+  # HMI component kit → npm, when NPM_TOKEN is set. prepublishOnly builds the
+  # package (svelte-package + publint).
+  hmi:
+    name: HMI kit (npm)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hmi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - run: npm ci
+      - name: Set version from tag
+        run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then echo "NPM_TOKEN not set — skipping npm publish"; exit 0; fi
+          npm publish --access public

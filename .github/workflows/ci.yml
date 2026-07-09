@@ -26,3 +26,10 @@ jobs:
         with: {node-version: '22'}
       - run: npm ci
       - run: npm test
+  release-config:
+    name: Release config — goreleaser check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: goreleaser/goreleaser-action@v6
+        with: {version: '~> v2', args: check}

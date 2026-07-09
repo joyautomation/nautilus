@@ -9,8 +9,10 @@ import (
 )
 
 // Version is stamped into serverInfo so `nautilus lsp` and the extension
-// can be correlated in logs.
-const Version = "0.2.0"
+// can be correlated in logs. It's a var, not a const, so a release build can
+// inject the tag via -ldflags "-X .../internal/lsp.Version=X.Y.Z" (see
+// .goreleaser.yaml); the default is the dev version.
+var Version = "0.2.0"
 
 // Server hosts LSP sessions over a single connection (normally stdio).
 // One Server serves one editor process; document state is per-connection.
