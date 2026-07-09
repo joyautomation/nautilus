@@ -4,7 +4,7 @@
   "description": "IEC 61131-3 Structured Text (.st) language support for the nautilus SCADA framework: syntax highlighting, compile diagnostics, go-to-definition, and inline live tag values from a running controller.",
   "version": "0.2.0",
   "publisher": "joyautomation",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "Apache-2.0",
   "engines": {
     "vscode": "^1.82.0"
   },

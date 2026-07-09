@@ -117,4 +117,4 @@ Early. This is the extracted, generalized core of a working demo
 
 ## License
 
-TBD.
+Apache License 2.0 — see [LICENSE](LICENSE). Copyright © Joy Automation.

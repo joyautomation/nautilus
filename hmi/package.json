@@ -2,7 +2,7 @@
   "name": "@joyautomation/nautilus-hmi",
   "version": "0.1.0",
   "description": "The HMI / digital-twin component layer of nautilus — Svelte 5 SCADA faceplates (Tank, Gauge, Trend, Pump, Valve…), a generic SSE realtime client, and a themeable token layer.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "svelte": "./dist/index.js",
   "types": "./dist/index.d.ts",
