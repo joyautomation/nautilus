@@ -35,10 +35,9 @@ Add the secrets when you want the public registries.
   tagged, `go install github.com/joyautomation/nautilus/cmd/nautilus@latest`
   and `go get` of the libraries resolve through the module proxy with no
   further step. (Private works too, but only for you.)
-- **Settle the license.** There is currently no `LICENSE` file, yet the root
-  README says "TBD", the extension's `package.json` says
-  `SEE LICENSE IN LICENSE`, and `hmi/package.json` says `MIT`. Pick one, add a
-  root `LICENSE`, and align the three references. `vsce` warns without it.
+- ~~Settle the license.~~ Done — Apache-2.0 at the repo root and in the
+  `tools/vscode-iec` and `hmi` packages.
+- **Add the registry secrets** below for whichever channels you want live.
 
 ## Registry accounts / secrets to create (Settings → Secrets → Actions)
 
