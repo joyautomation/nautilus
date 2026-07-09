@@ -17,17 +17,22 @@ versions are set from the tag at publish time — no manual version bumps.
 
 ## What ships, and what it needs
 
-| Artifact | Channel | Secret required | Without the secret |
+| Artifact | Channel | Credential | When absent |
 |---|---|---|---|
 | CLI binaries (`cmd/nautilus`) | GitHub Release (GoReleaser) | none — uses `GITHUB_TOKEN` | **still publishes** |
 | VSIX | attached to the GitHub Release | none | **still attached** |
-| VS Code extension | VS Code Marketplace | `VSCE_PAT` | step skips |
-| VS Code extension | Open VSX | `OVSX_PAT` | step skips |
-| `@joyautomation/nautilus-hmi` | npm | `NPM_TOKEN` | step skips |
+| VS Code extension | VS Code Marketplace | secret `VSCE_PAT` | step skips |
+| VS Code extension | Open VSX | secret `OVSX_PAT` | step skips |
+| `@joyautomation/nautilus-hmi` | npm | OIDC trusted publisher + var `PUBLISH_HMI=true` | step skips |
 
-So on the very first tag — with **no secrets configured** — you get
+So on the very first tag — with **nothing configured** — you get
 cross-platform CLI binaries and the packaged `.vsix` on a GitHub Release.
-Add the secrets when you want the public registries.
+Turn on each registry independently when you want it.
+
+npm uses **OIDC trusted publishing**, not a stored token: the job mints a
+short-lived credential GitHub↔npm and publishes with provenance. There's no
+`NPM_TOKEN` to rotate. Because there's no secret to gate on, the HMI publish
+is switched by a repository **variable** `PUBLISH_HMI` instead.
 
 ## Before the first *public* release
 
@@ -39,15 +44,22 @@ Add the secrets when you want the public registries.
   `tools/vscode-iec` and `hmi` packages.
 - **Add the registry secrets** below for whichever channels you want live.
 
-## Registry accounts / secrets to create (Settings → Secrets → Actions)
+## Registry setup (Settings → Secrets and variables → Actions)
 
-- `VSCE_PAT` — VS Code Marketplace. Azure DevOps org, publisher `joyautomation`
-  (already set in `package.json`), Personal Access Token with Marketplace →
-  Manage scope.
-- `OVSX_PAT` — Open VSX. Eclipse account, claim the `joyautomation` namespace,
-  create a token.
-- `NPM_TOKEN` — npm. Account with access to the `@joyautomation` org, an
-  automation token.
+- **`VSCE_PAT`** (secret) — VS Code Marketplace. Azure DevOps org, publisher
+  `joyautomation` (already in `package.json`), Personal Access Token with
+  Marketplace → Manage scope.
+- **`OVSX_PAT`** (secret) — Open VSX. Eclipse Foundation account + signed
+  Publisher Agreement, `joyautomation` namespace, access token.
+- **npm — OIDC, no secret.** On npmjs.com, open the package's Settings →
+  Trusted Publisher and point it at repo `joyautomation/nautilus`, workflow
+  `release.yml` (leave environment blank). Then set repository **variable**
+  `PUBLISH_HMI` = `true` (Variables tab) to arm the publish step.
+  - First-publish bootstrap: npm can only attach a trusted publisher to a
+    package that exists. If `@joyautomation/nautilus-hmi` has never been
+    published, do one manual `npm publish` (from `hmi/`, logged in locally),
+    then configure the trusted publisher — every CI publish after that is
+    tokenless.
 
 ## Validating changes to the pipeline
 

@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "The HMI / digital-twin component layer of nautilus — Svelte 5 SCADA faceplates (Tank, Gauge, Trend, Pump, Valve…), a generic SSE realtime client, and a themeable token layer.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/joyautomation/nautilus.git",
+    "directory": "hmi"
+  },
   "type": "module",
   "svelte": "./dist/index.js",
   "types": "./dist/index.d.ts",

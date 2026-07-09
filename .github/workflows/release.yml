@@ -68,8 +68,14 @@ jobs:
   # HMI component kit → npm, when NPM_TOKEN is set. prepublishOnly builds the
   # package (svelte-package + publint).
   hmi:
-    name: HMI kit (npm)
+    name: HMI kit (npm, OIDC)
     runs-on: ubuntu-latest
+    # No stored NPM token: publish via npm trusted publishing (OIDC). The
+    # id-token permission lets the job mint a short-lived credential that npm
+    # verifies against the trusted-publisher config on the package.
+    permissions:
+      id-token: write
+      contents: read
     defaults:
       run:
         working-directory: hmi
@@ -79,12 +85,14 @@ jobs:
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
+      # Trusted publishing requires npm >= 11.5.1; Node 22 ships npm 10.
+      - run: npm install -g npm@latest
       - run: npm ci
       - name: Set version from tag
         run: npm version "${GITHUB_REF_NAME#v}" --no-git-tag-version --allow-same-version
-      - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Publish to npm (trusted publisher, no token)
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then echo "NPM_TOKEN not set — skipping npm publish"; exit 0; fi
-          npm publish --access public
+          if [ "${{ vars.PUBLISH_HMI }}" != "true" ]; then
+            echo "repo variable PUBLISH_HMI != true — skipping npm publish"; exit 0
+          fi
+          npm publish --access public --provenance
