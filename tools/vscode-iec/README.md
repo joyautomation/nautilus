@@ -4,7 +4,7 @@ VS Code language support for **IEC 61131-3 Structured Text** (`.st`) as used by
 the [nautilus](https://github.com/joyautomation/nautilus) Go + SvelteKit SCADA
 framework: develop SCADA in VS Code like a real software developer.
 
-<!-- TODO: drop in a screenshot/GIF of live-value pills + inline diagnostics here. -->
+![Live tag values rendered as pills next to identifiers in a .st file, with the nautilus file tree alongside](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/live-values.png)
 
 ## Features
 

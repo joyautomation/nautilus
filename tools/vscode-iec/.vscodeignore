@@ -6,6 +6,9 @@ tsconfig.json
 .vscodeignore
 **/*.map
 **/*.ts
+# Listing screenshot is referenced by absolute URL in the README, so it
+# doesn't need to ship in the VSIX.
+images/**
 # Do NOT ignore node_modules wholesale: the extension now has a runtime
 # dependency (vscode-languageclient) that must ship in the VSIX. vsce
 # includes production dependencies and prunes devDependencies on its own,
