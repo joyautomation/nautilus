@@ -45,18 +45,66 @@ examples/heated-tank/   a complete controller built on the libraries
 | *coordinator* | redundancy / leader election (k8s Lease / raft) — *coming* |
 | *historian sink* | where process history is archived (Postgres / TSDB) — *coming* |
 
-## Quickstart
+## Getting started
+
+**Prerequisites:** Go 1.24+ with `$(go env GOPATH)/bin` on your `PATH`, and
+VS Code for the editor experience.
+
+**1. Install the CLI**
 
 ```sh
 go install github.com/joyautomation/nautilus/cmd/nautilus@latest
-nautilus new my-plant     # interactive: pick features, get a runnable project
-cd my-plant && go mod tidy && go run .
 ```
 
-You get a controller on a 10 Hz scan loop, acceptance tests (`go test`), CI
-that compiles your control logic (`nautilus check`), and — with the
-**nautilus IEC 61131-3** VS Code extension — compile diagnostics as you type
-plus **live tag values inline in your source** while the controller runs.
+This gives you `nautilus new` (scaffold a project), `nautilus check`
+(headless Structured Text compile for CI), and `nautilus lsp` (the language
+server the VS Code extension uses).
+
+**2. Scaffold a project**
+
+```sh
+nautilus new my-plant
+```
+
+Interactive, sv-create style — pick the module path and features (a simulated
+plant, a CI workflow, VS Code setup, git init). You get `main.go`,
+`program.st` (your control logic), a simulated `plant.go`, acceptance tests,
+CI, and `.vscode/` recommendations.
+
+**3. Run and test it**
+
+```sh
+cd my-plant
+go mod tidy      # resolves github.com/joyautomation/nautilus from the proxy
+go run .         # scan loop + tag API on http://localhost:8080
+go test ./...    # the program's acceptance tests
+```
+
+Open **http://localhost:8080** for the built-in live dashboard, or
+`GET /api/state` for the raw tag snapshot. Reads are open; set
+`NAUTILUS_TOKEN=<secret>` to require a token on writes.
+
+**4. Develop in VS Code**
+
+Install **nautilus IEC 61131-3** from the
+[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=joyautomation.vscode-iec)
+or [Open VSX](https://open-vsx.org/extension/joyautomation/vscode-iec). It
+currently ships on the **pre-release** channel, so use *Install Pre-Release
+Version* (or `code --install-extension joyautomation.vscode-iec --pre-release`).
+Open your project folder — it recommends the extension — and with `go run .`
+running you get compile diagnostics as you type, go-to-definition / hover /
+completion, and **live tag values as pills** next to identifiers in
+`program.st`.
+
+**5. Make it yours**
+
+- Write control logic in `program.st` (IEC 61131-3 Structured Text).
+- Swap `plant.go` for a real `io.Driver` — Modbus, EtherNet/IP, OPC-UA, your
+  bus — when you have hardware. The control logic doesn't change.
+- Add an HMI: `npm install @joyautomation/nautilus-hmi` in a SvelteKit app for
+  SCADA faceplates and an SSE realtime client.
+- Ship it like any Go binary: `go build`, deploy. The scaffolded CI gates on
+  `go test` and `nautilus check`.
 
 Under the scaffold, a complete controller — an IEC program on a 10 Hz scan
 loop driving a field device — is about 30 lines:
@@ -74,7 +122,7 @@ rt, _ := runtime.New(runtime.Options{
 go rt.Run(ctx)                    // read inputs → run program → write outputs, every scan
 ```
 
-Run the worked example:
+Or, from a clone of this repo, run the worked example:
 
 ```sh
 go run ./examples/heated-tank
