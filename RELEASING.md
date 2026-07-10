@@ -15,6 +15,13 @@ That triggers `.github/workflows/release.yml`. The **tag drives every
 version**: the CLI gets it via ldflags, and the extension / HMI package
 versions are set from the tag at publish time — no manual version bumps.
 
+**Versioning convention:** everything shares one line, currently `0.3.x`, and
+we increment the **patch** during active development (`v0.3.1`, `v0.3.2`, …).
+Because `0.x` already means "unstable" in semver, a patch bump is a fine
+signal for "another dev drop." Bump the **minor** (`v0.4.0`) only when you
+want to mark a notable capability jump or a break — `^0.3.0` consumers keep
+auto-updating within `0.3.x` but do *not* cross into `0.4.0`.
+
 ## What ships, and what it needs
 
 | Artifact | Channel | Credential | When absent |

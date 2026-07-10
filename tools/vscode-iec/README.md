@@ -4,6 +4,8 @@ VS Code language support for **IEC 61131-3 Structured Text** (`.st`) as used by
 the [nautilus](https://github.com/joyautomation/nautilus) Go + SvelteKit SCADA
 framework: develop SCADA in VS Code like a real software developer.
 
+<!-- TODO: drop in a screenshot/GIF of live-value pills + inline diagnostics here. -->
+
 ## Features
 
 ### Syntax highlighting (no setup)
@@ -46,26 +48,15 @@ when the stream goes stale; the status-bar item shows connection state and
 toggles the feature. Set `nautilus.runtimeUrl` (default
 `http://localhost:8080`) to point at your controller.
 
-This is the port of mini-scada's CodeMirror inline-values editor to VS Code
-`TextEditorDecorationType`s.
+## Requirements
 
-## Develop / try it
-
-```sh
-npm install
-npm run compile   # or: npm test (compiles + runs scanner tests)
-```
-
-Open this folder in VS Code and press **F5** for an Extension Development
-Host, then open a `.st` file — e.g. `examples/heated-tank/program.st` with
-`go run ./examples/heated-tank` running to see live values.
-
-Package a VSIX:
-
-```sh
-npx @vscode/vsce package
-code --install-extension vscode-iec-0.2.0.vsix
-```
+- **Syntax highlighting** works with no setup.
+- **Language features** (diagnostics, go-to-definition, hover, completion)
+  need the nautilus CLI on your PATH — `go install
+  github.com/joyautomation/nautilus/cmd/nautilus@latest`. Point
+  `nautilus.cliPath` at it if it's installed elsewhere.
+- **Inline live values** need a running nautilus controller exposing the tag
+  API; set `nautilus.runtimeUrl` (default `http://localhost:8080`).
 
 ## Roadmap
 
@@ -73,18 +64,8 @@ code --install-extension vscode-iec-0.2.0.vsix
 that edit the *same* program and lower to the *same* nautilus IR as the text;
 text ↔ diagram stay in sync as projections of one IR.
 
-## Files
+## Source & license
 
-| Path | Purpose |
-| --- | --- |
-| `package.json` | Manifest — language/grammar contributions, settings, commands |
-| `language-configuration.json` | Comments, brackets, auto-closing, indentation |
-| `syntaxes/iec-st.tmLanguage.json` | TextMate grammar (`source.iec-st`) |
-| `src/extension.ts` | Activation: language client + live values wiring |
-| `src/liveValues.ts` | SSE subscription, decorations, status bar |
-| `src/scan.ts` | Identifier scanner + value formatting (vscode-free, unit-tested) |
-| `src/scan.test.ts` | node:test suite for the scanner |
-
-## License
-
-See the nautilus repository root.
+Part of the [nautilus](https://github.com/joyautomation/nautilus) monorepo
+(`tools/vscode-iec`). Issues and contributions welcome there. Licensed under
+the Apache License 2.0.

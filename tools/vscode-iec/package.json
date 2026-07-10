@@ -2,15 +2,20 @@
   "name": "vscode-iec",
   "displayName": "nautilus IEC 61131-3",
   "description": "IEC 61131-3 Structured Text (.st) language support for the nautilus SCADA framework: syntax highlighting, compile diagnostics, go-to-definition, and inline live tag values from a running controller.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "joyautomation",
   "license": "Apache-2.0",
   "icon": "icon.png",
+  "galleryBanner": {
+    "color": "#0d1117",
+    "theme": "dark"
+  },
   "engines": {
     "vscode": "^1.82.0"
   },
   "categories": [
-    "Programming Languages"
+    "Programming Languages",
+    "Linters"
   ],
   "keywords": [
     "iec 61131-3",
@@ -21,7 +26,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/joyautomation/nautilus"
+    "url": "git+https://github.com/joyautomation/nautilus.git",
+    "directory": "tools/vscode-iec"
+  },
+  "homepage": "https://github.com/joyautomation/nautilus/tree/main/tools/vscode-iec#readme",
+  "bugs": {
+    "url": "https://github.com/joyautomation/nautilus/issues"
   },
   "main": "./out/extension.js",
   "activationEvents": [
