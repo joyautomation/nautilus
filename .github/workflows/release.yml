@@ -57,7 +57,13 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
           if [ -z "$VSCE_PAT" ]; then echo "VSCE_PAT not set — skipping Marketplace publish"; exit 0; fi
-          npx --yes @vscode/vsce publish -p "$VSCE_PAT"
+          # VS Code convention: odd minor = pre-release channel, even = stable.
+          # So 0.3.x publishes as pre-release, 0.4.0 would be the first stable.
+          MINOR=$(echo "${GITHUB_REF_NAME#v}" | cut -d. -f2)
+          PRE=""
+          if [ $((MINOR % 2)) -eq 1 ]; then PRE="--pre-release"; fi
+          echo "Publishing ${GITHUB_REF_NAME} to Marketplace ${PRE:-(stable)}"
+          npx --yes @vscode/vsce publish $PRE -p "$VSCE_PAT"
       - name: Publish to Open VSX
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
