@@ -31,6 +31,8 @@ func (n *Node) birth() error {
 		{Name: "bdSeq", Datatype: spb.DataType_Int64, Timestamp: ts, Value: int64(n.bdSeq)},
 		{Name: "Node Control/Rebirth", Datatype: spb.DataType_Boolean, Timestamp: ts, Value: false},
 	}
+	// UDT template definitions precede instances so a host can resolve them.
+	nbirth = append(nbirth, n.templateDefs(snap, ts)...)
 	for _, name := range nodeTags {
 		m, err := n.birthMetric(name, snap[name], ts)
 		if err != nil {
