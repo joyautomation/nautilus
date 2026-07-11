@@ -71,6 +71,16 @@
       td.name { font-family: var(--mono); }
       td.val { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; color: var(--good); }
       td.val.bool-false { color: var(--muted); }
+      td.val.summary { color: var(--muted); font-style: italic; }
+      tr.expandable { cursor: pointer; }
+      tr.expandable:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+      .caret {
+        display: inline-block; width: 1em; color: var(--muted);
+        transition: transform 0.12s ease; user-select: none;
+      }
+      tr.open .caret { transform: rotate(90deg); }
+      tr.child td.name { color: var(--muted); }
+      tr.child td.name .leaf { color: var(--text); }
       .empty { padding: 1.5rem 0.9rem; color: var(--muted); text-align: center; }
 
       .endpoints { list-style: none; padding: 0; margin: 0.75rem 0 0; display: grid; gap: 0.5rem; }
@@ -128,6 +138,10 @@
       const $ = (id) => document.getElementById(id);
       let lastFrameMs = 0;
 
+      // Expanded compound tags (UDT structs / arrays), by dotted path.
+      // Survives the per-frame re-render so the tree doesn't snap shut.
+      const expanded = new Set();
+
       function fmt(v) {
         if (v === null || v === undefined) return "—";
         if (typeof v === "number") {
@@ -140,25 +154,67 @@
         return String(v);
       }
 
-      function render(frame) {
-        lastFrameMs = Date.now();
-        $("scans").textContent = frame.scans ?? "—";
-        const tags = frame.tags ?? {};
-        const names = Object.keys(tags).sort();
+      const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+      const isCompound = (v) => v !== null && typeof v === "object";
+
+      // rows renders one tag (or member) and, when expanded, its children —
+      // structs as .Field rows, arrays as [i] rows, nested to any depth.
+      function rows(label, v, path, depth) {
+        const indent = `padding-left:${0.9 + depth * 1.1}rem`;
+        const leaf = esc(label);
+        const nameCell =
+          depth === 0
+            ? (pre) => `<td class="name" style="${indent}">${pre}${leaf}</td>`
+            : (pre) => `<td class="name" style="${indent}">${pre}<span class="leaf">${leaf}</span></td>`;
+        if (!isCompound(v)) {
+          const cls = typeof v === "boolean" && !v ? "val bool-false" : "val";
+          const rowCls = depth > 0 ? "child" : "";
+          return `<tr class="${rowCls}">${nameCell('<span class="caret"></span>')}<td class="${cls}">${fmt(v)}</td></tr>`;
+        }
+        const arr = Array.isArray(v);
+        const keys = arr ? null : Object.keys(v).sort();
+        const count = arr ? v.length : keys.length;
+        const open = expanded.has(path);
+        const summary = arr ? `[${count} element${count === 1 ? "" : "s"}]` : `{${count} field${count === 1 ? "" : "s"}}`;
+        const rowCls = (depth > 0 ? "child " : "") + "expandable" + (open ? " open" : "");
+        let html = `<tr class="${rowCls}" data-path="${esc(path)}">${nameCell('<span class="caret">▸</span>')}<td class="val summary">${summary}</td></tr>`;
+        if (open) {
+          if (arr) {
+            html += v.map((e, i) => rows(`[${i}]`, e, `${path}[${i}]`, depth + 1)).join("");
+          } else {
+            html += keys.map((k) => rows("." + k, v[k], `${path}.${k}`, depth + 1)).join("");
+          }
+        }
+        return html;
+      }
+
+      let lastTags = {};
+
+      function renderTable() {
+        const names = Object.keys(lastTags).sort();
         $("count").textContent = names.length;
         if (names.length === 0) {
           $("tags").innerHTML = '<tr><td colspan="2" class="empty">no tags</td></tr>';
           return;
         }
-        $("tags").innerHTML = names
-          .map((n) => {
-            const v = tags[n];
-            const cls = typeof v === "boolean" && !v ? "val bool-false" : "val";
-            const name = n.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-            return `<tr><td class="name">${name}</td><td class="${cls}">${fmt(v)}</td></tr>`;
-          })
-          .join("");
+        $("tags").innerHTML = names.map((n) => rows(n, lastTags[n], n, 0)).join("");
       }
+
+      function render(frame) {
+        lastFrameMs = Date.now();
+        $("scans").textContent = frame.scans ?? "—";
+        lastTags = frame.tags ?? {};
+        renderTable();
+      }
+
+      $("tags").addEventListener("click", (e) => {
+        const tr = e.target.closest("tr.expandable");
+        if (!tr) return;
+        const path = tr.dataset.path;
+        if (expanded.has(path)) expanded.delete(path);
+        else expanded.add(path);
+        renderTable();
+      });
 
       function setStatus(state, text) {
         const el = $("status");
