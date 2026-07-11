@@ -14,7 +14,7 @@ const values = new Map<string, unknown>([
 test("finds identifiers case-insensitively", () => {
   const sites = scanIdentifiers("IF levelPct < 40.0 THEN PumpRun := TRUE; END_IF;", values);
   assert.deepEqual(
-    sites.map((s) => s.lowerName),
+    sites.map((s) => s.path.toLowerCase()),
     ["levelpct", "pumprun"]
   );
 });
@@ -35,7 +35,7 @@ test("skips line comments, block comments, and strings", () => {
   ].join("\n");
   const sites = scanIdentifiers(text, values);
   assert.deepEqual(
-    sites.map((s) => s.lowerName),
+    sites.map((s) => s.path.toLowerCase()),
     ["levelpct"]
   );
 });
@@ -85,4 +85,36 @@ test("formatValueHover elides long arrays and deep floods", () => {
   const wideOut = formatValueHover(wide);
   assert.ok(wideOut.split("\n").length <= 41);
   assert.ok(wideOut.includes("more lines"));
+});
+
+test("resolves member and index accessors to the child value", () => {
+  const vals = new Map<string, unknown>([
+    ["rtu", { VALUE: -25.019, Header: { Displacement: 3.5 } }],
+    ["plt", [{ Count: 10 }, { Count: 20 }]],
+  ]);
+  const sites = (text: string) => scanIdentifiers(text, vals);
+
+  // A member reference shows the child value, and the chip lands past .VALUE.
+  const [m] = sites("X := RTU.VALUE;");
+  assert.equal(m.value, -25.019);
+  assert.equal(m.path, "RTU.VALUE");
+
+  // Nested member.
+  assert.equal(sites("X := RTU.Header.Displacement;")[0].value, 3.5);
+
+  // Case-insensitive member key.
+  assert.equal(sites("X := rtu.value;")[0].value, -25.019);
+
+  // A bare struct reference stays the whole object (hover expands it).
+  const [whole] = sites("RTU : Analog;");
+  assert.equal(typeof whole.value, "object");
+  assert.equal(whole.path, "RTU");
+
+  // Array index + member.
+  assert.equal(sites("X := Plt[1].Count;")[0].value, 20);
+
+  // An unknown member stops the walk at the deepest resolved value.
+  const [partial] = sites("X := RTU.Nope;");
+  assert.equal(typeof partial.value, "object");
+  assert.equal(partial.path, "RTU");
 });

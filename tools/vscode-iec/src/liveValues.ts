@@ -24,7 +24,6 @@ const RENDER_THROTTLE_MS = 150;
 export class LiveValues implements vscode.Disposable {
   private enabled: boolean;
   private values = new Map<string, unknown>(); // lowercased tag name → value
-  private casing = new Map<string, string>(); // lowercased → declared casing
   private lastFrameMs = 0;
   private req: http.ClientRequest | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
@@ -167,10 +166,8 @@ export class LiveValues implements vscode.Disposable {
       return;
     }
     this.values.clear();
-    this.casing.clear();
     for (const [name, value] of Object.entries(frame.tags ?? {})) {
       this.values.set(name.toLowerCase(), value);
-      this.casing.set(name.toLowerCase(), name);
     }
     const wasStale = !this.fresh();
     this.lastFrameMs = Date.now();
@@ -213,17 +210,15 @@ export class LiveValues implements vscode.Disposable {
       const text = editor.document.getText();
       for (const site of scanIdentifiers(text, this.values)) {
         const pos = editor.document.positionAt(site.end);
-        const value = this.values.get(site.lowerName);
-        const name = this.casing.get(site.lowerName) ?? site.lowerName;
-        // Hover carries the full value — for UDT structs and arrays that's a
-        // TypeScript-style multi-line expansion; inline stays a quiet chip.
+        // site.value is resolved down the accessor path — a member reference
+        // (RTU.VALUE) shows the child value, not the parent struct.
         const hover = new vscode.MarkdownString();
-        hover.appendMarkdown(`**${name}** — live value from ${this.runtimeUrl()}\n`);
-        hover.appendCodeblock(formatValueHover(value), "");
+        hover.appendMarkdown(`**${site.path}** — live value from ${this.runtimeUrl()}\n`);
+        hover.appendCodeblock(formatValueHover(site.value), "");
         decos.push({
           range: new vscode.Range(pos, pos),
           renderOptions: {
-            after: { contentText: formatValue(value) },
+            after: { contentText: formatValue(site.value) },
           },
           hoverMessage: hover,
         });
