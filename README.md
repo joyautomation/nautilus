@@ -234,6 +234,10 @@ Early. This is the extracted, generalized core of a working demo
 ([mini-scada](https://github.com/joyautomation)). What's here now:
 
 - ✅ `lang/st` + `lang/ir` — the Structured Text VM (pure stdlib, tested)
+- ✅ `lang/stgen` — build ST type declarations functionally in Go and render
+  them to source (`stgen.Struct("Motor", stgen.Field("Speed", stgen.REAL), …)`),
+  for generating UDTs from a schema; validates output by compiling it. This is
+  the codegen path — the compiler stays the single source of truth
 - ✅ `runtime` — scan loop, tag bus, program host + hot-swap, and PLC-style
   **online edits**: warm-swap the ST program while it runs, carrying retained
   state (PID integrals, timers, counters) across by name and type, with
