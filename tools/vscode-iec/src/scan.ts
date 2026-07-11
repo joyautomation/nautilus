@@ -66,7 +66,11 @@ function isIdentPart(c: string): boolean {
   return isIdentStart(c) || (c >= "0" && c <= "9");
 }
 
-/** Compact value rendering: 59.887482 → 59.887, booleans → TRUE/FALSE. */
+/**
+ * Compact value rendering: 59.887482 → 59.887, booleans → TRUE/FALSE.
+ * Compound values (UDT structs, arrays) render as a quiet size hint —
+ * `{…}` / `[4]` — the full breakdown lives in the hover (formatValueHover).
+ */
 export function formatValue(v: unknown): string {
   if (v === null || v === undefined) return "—";
   if (typeof v === "number") {
@@ -80,10 +84,60 @@ export function formatValue(v: unknown): string {
     const s = v.length > 32 ? v.slice(0, 29) + "…" : v;
     return JSON.stringify(s);
   }
-  try {
-    const s = JSON.stringify(v);
-    return s.length > 32 ? s.slice(0, 29) + "…" : s;
-  } catch {
-    return String(v);
+  if (Array.isArray(v)) return `[${v.length}]`;
+  if (typeof v === "object") return "{…}";
+  return String(v);
+}
+
+/** Hover rendering caps so a 173-member AOI doesn't flood the tooltip. */
+const HOVER_MAX_LINES = 40;
+const HOVER_MAX_ELEMS = 10;
+
+/**
+ * Multi-line breakdown of a value for the hover, in the spirit of how
+ * TypeScript expands a type on hover:
+ *
+ *	{
+ *	  AI: -4.000
+ *	  hhalm_timer: {
+ *	    PRE: 1200000
+ *	    ...
+ *	  }
+ *	}
+ *
+ * Scalars pass through formatValue; long arrays elide after HOVER_MAX_ELEMS
+ * elements and the whole rendering elides after HOVER_MAX_LINES lines.
+ */
+export function formatValueHover(v: unknown): string {
+  const lines: string[] = [];
+  build(v, "", "", lines);
+  if (lines.length > HOVER_MAX_LINES) {
+    const kept = lines.slice(0, HOVER_MAX_LINES);
+    kept.push(`… (${lines.length - HOVER_MAX_LINES} more lines)`);
+    return kept.join("\n");
   }
+  return lines.join("\n");
+}
+
+function build(v: unknown, label: string, indent: string, out: string[]): void {
+  const prefix = label === "" ? indent : `${indent}${label}: `;
+  if (Array.isArray(v)) {
+    out.push(prefix + "[");
+    const n = Math.min(v.length, HOVER_MAX_ELEMS);
+    for (let i = 0; i < n; i++) {
+      build(v[i], `[${i}]`, indent + "  ", out);
+    }
+    if (v.length > n) out.push(`${indent}  … (${v.length - n} more elements)`);
+    out.push(indent + "]");
+    return;
+  }
+  if (v !== null && typeof v === "object") {
+    out.push(prefix + "{");
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      build(val, k, indent + "  ", out);
+    }
+    out.push(indent + "}");
+    return;
+  }
+  out.push(prefix + formatValue(v));
 }

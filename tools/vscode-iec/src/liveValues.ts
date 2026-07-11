@@ -12,7 +12,7 @@
 import * as http from "http";
 import * as https from "https";
 import * as vscode from "vscode";
-import { formatValue, scanIdentifiers } from "./scan";
+import { formatValue, formatValueHover, scanIdentifiers } from "./scan";
 
 type Frame = { ts: number; scans: number; tags: Record<string, unknown> };
 
@@ -214,12 +214,18 @@ export class LiveValues implements vscode.Disposable {
       for (const site of scanIdentifiers(text, this.values)) {
         const pos = editor.document.positionAt(site.end);
         const value = this.values.get(site.lowerName);
+        const name = this.casing.get(site.lowerName) ?? site.lowerName;
+        // Hover carries the full value — for UDT structs and arrays that's a
+        // TypeScript-style multi-line expansion; inline stays a quiet chip.
+        const hover = new vscode.MarkdownString();
+        hover.appendMarkdown(`**${name}** — live value from ${this.runtimeUrl()}\n`);
+        hover.appendCodeblock(formatValueHover(value), "");
         decos.push({
           range: new vscode.Range(pos, pos),
           renderOptions: {
             after: { contentText: formatValue(value) },
           },
-          hoverMessage: `${this.casing.get(site.lowerName) ?? site.lowerName} — live value from ${this.runtimeUrl()}`,
+          hoverMessage: hover,
         });
       }
       editor.setDecorations(fresh ? this.staleDeco : this.freshDeco, []);
