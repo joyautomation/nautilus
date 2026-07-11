@@ -57,7 +57,13 @@ func main() {
 	// require a token on writes instead (progressive auth).
 	srv := server.New(rt, server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN")})
 	go srv.Run(ctx)
-	const apiAddr = "localhost:8080"
+	// Binds loopback by default. To reach the tag API from another machine
+	// (a dev workstation, an HMI), set NAUTILUS_ADDR=0.0.0.0:8080 — and set
+	// NAUTILUS_TOKEN too, since that exposes the write surface on the network.
+	apiAddr := os.Getenv("NAUTILUS_ADDR")
+	if apiAddr == "" {
+		apiAddr = "localhost:8080"
+	}
 	apiUp := false
 	if ln, err := net.Listen("tcp", apiAddr); err != nil {
 		fmt.Fprintf(os.Stderr, "tag api: %v (continuing without it)\n", err)

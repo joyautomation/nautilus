@@ -218,6 +218,16 @@ and exits non-zero, so CI can fail a build when a controller has un-pulled
 edits. Composition is a single definition shared by the runtime, the language
 server, download, and pull, so a program round-trips losslessly.
 
+**Working against a remote controller.** All of this — live values, online
+edits, pull — works over the network, not just against a local process. A
+scaffolded controller binds loopback by default; set `NAUTILUS_ADDR=0.0.0.0:8080`
+to expose the tag API to other machines, and point the editor at it with the
+`nautilus.runtimeUrl` setting (`nautilus pull` takes `--host`). Exposing the
+API on the network also exposes its write surface, so set `NAUTILUS_TOKEN` on
+the controller and the matching `nautilus.token` in the editor — reads and
+`nautilus pull` stay open, but tag writes and online edits then require the
+token.
+
 ## Status
 
 Early. This is the extracted, generalized core of a working demo

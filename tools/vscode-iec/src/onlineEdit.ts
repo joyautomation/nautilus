@@ -59,6 +59,16 @@ export class OnlineEdit implements vscode.Disposable {
       .replace(/\/+$/, "");
   }
 
+  /** Headers for a write request: JSON plus the bearer token when the
+   * controller requires one (nautilus.token), so online edits reach a
+   * token-gated controller on the network. */
+  private writeHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const token = vscode.workspace.getConfiguration("nautilus").get<string>("token", "");
+    if (token) headers["Authorization"] = "Bearer " + token;
+    return headers;
+  }
+
   private async fetchInfo(): Promise<ProgramInfo | undefined> {
     try {
       const res = await fetch(this.runtimeUrl() + "/api/program");
@@ -154,7 +164,7 @@ export class OnlineEdit implements vscode.Disposable {
     try {
       const res = await fetch(this.runtimeUrl() + "/api/program", {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: this.writeHeaders(),
         body: JSON.stringify({ source: composed.source, baseHash: info.hash }),
       });
       const body = (await res.json()) as { hash?: string; resets?: string[]; error?: string };
@@ -188,7 +198,7 @@ export class OnlineEdit implements vscode.Disposable {
   private async put(source: string): Promise<void> {
     const res = await fetch(this.runtimeUrl() + "/api/program", {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: this.writeHeaders(),
       body: JSON.stringify({ source }),
     });
     const body = (await res.json()) as { hash?: string; error?: string };
@@ -276,7 +286,7 @@ export class OnlineEdit implements vscode.Disposable {
   /** One-step stateful undo of the last download. */
   async rollback(): Promise<void> {
     try {
-      const res = await fetch(this.runtimeUrl() + "/api/program/rollback", { method: "POST" });
+      const res = await fetch(this.runtimeUrl() + "/api/program/rollback", { method: "POST", headers: this.writeHeaders() });
       const body = (await res.json()) as { hash?: string; error?: string };
       if (res.ok) {
         void vscode.window.showInformationMessage(`nautilus: rolled back to ${body.hash}`);
