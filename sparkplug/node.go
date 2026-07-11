@@ -69,7 +69,10 @@ type Node struct {
 	known        map[string]bool // metric names present in the last birth
 	devHealth    map[string]bool
 	hostOnline   bool
+	hostTS       int64 // last STATE timestamp seen (monotonic guard)
 	rebirthTimer *time.Timer
+
+	sf *storeForward // nil unless WithStoreForward
 
 	cancel context.CancelFunc
 	done   chan struct{}

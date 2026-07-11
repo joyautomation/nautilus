@@ -47,25 +47,32 @@ func (n *Node) scanAndPublish() {
 		}
 	}
 
-	// Assign seq + encode under the lock; publish after releasing it.
+	// Gather the changed messages as {topic, metrics}. Delivery depends on
+	// the primary host: when it's offline (and store-and-forward is on) we
+	// buffer instead of publishing, replaying on recovery.
+	ts := nowMs()
+	var msgs []sfRecord
+	if len(nodeChanged) > 0 {
+		msgs = append(msgs, sfRecord{topic: n.topic("NDATA"), metrics: nodeChanged, ts: ts})
+	}
+	for _, d := range n.devices {
+		if ms := devChanged[d.ID]; len(ms) > 0 {
+			msgs = append(msgs, sfRecord{topic: n.deviceTopic("DDATA", d.ID), metrics: ms, ts: ts})
+		}
+	}
+	deliverable := n.hostDeliverableLocked()
+
+	// Encode deliverable messages (assigning seq) under the lock.
 	type pub struct {
 		topic   string
 		payload []byte
 	}
 	var pubs []pub
-	ts := nowMs()
-	if len(nodeChanged) > 0 {
-		if p, err := (Payload{Timestamp: ts, Seq: n.nextSeq(), Metrics: nodeChanged}).Encode(); err == nil {
-			pubs = append(pubs, pub{n.topic("NDATA"), p})
-		}
-	}
-	for _, d := range n.devices {
-		ms := devChanged[d.ID]
-		if len(ms) == 0 {
-			continue
-		}
-		if p, err := (Payload{Timestamp: ts, Seq: n.nextSeq(), Metrics: ms}).Encode(); err == nil {
-			pubs = append(pubs, pub{n.deviceTopic("DDATA", d.ID), p})
+	if deliverable {
+		for _, m := range msgs {
+			if p, err := (Payload{Timestamp: m.ts, Seq: n.nextSeq(), Metrics: m.metrics}).Encode(); err == nil {
+				pubs = append(pubs, pub{m.topic, p})
+			}
 		}
 	}
 	n.mu.Unlock()
@@ -73,8 +80,55 @@ func (n *Node) scanAndPublish() {
 	for _, e := range deviceEvents {
 		e(n) // DBIRTH/DDEATH, self-locking
 	}
+
+	if !deliverable {
+		if n.sf != nil {
+			for _, m := range msgs {
+				n.sf.enqueue(m)
+			}
+		}
+		return
+	}
+
+	// Deliverable: replay any backlog (marked historical) before live data so
+	// the host sees history then current.
+	n.drainStoreForward()
 	for _, p := range pubs {
 		n.cli.Publish(p.topic, 0, false, p.payload).Wait()
+	}
+}
+
+// hostDeliverableLocked reports whether live data can be published now:
+// with no primary host configured, always; otherwise only when the host is
+// online. Caller holds n.mu.
+func (n *Node) hostDeliverableLocked() bool {
+	if n.cfg.PrimaryHostID == "" {
+		return true
+	}
+	return n.hostOnline
+}
+
+// drainStoreForward replays a bounded batch of buffered messages as historical
+// data. Rate-limited per call so a large backlog trickles rather than floods.
+func (n *Node) drainStoreForward() {
+	if n.sf == nil || n.sf.len() == 0 {
+		return
+	}
+	const batch = 50 // messages per publish tick
+	recs := n.sf.drainBatch(batch)
+	for _, r := range recs {
+		for i := range r.metrics {
+			r.metrics[i].IsHistorical = true
+		}
+		n.mu.Lock()
+		p, err := Payload{Timestamp: r.ts, Seq: n.nextSeq(), Metrics: r.metrics}.Encode()
+		n.mu.Unlock()
+		if err == nil {
+			n.cli.Publish(r.topic, 0, false, p).Wait()
+		}
+	}
+	if left := n.sf.len(); left > 0 {
+		n.log.Info("sparkplug: store-forward draining", "remaining", left)
 	}
 }
 

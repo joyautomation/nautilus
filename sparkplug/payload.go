@@ -18,12 +18,13 @@ import (
 // datatype, and a Go value. It wraps the generated spb types so the node code
 // never touches protobuf oneofs directly.
 type Metric struct {
-	Name      string
-	Alias     uint64
-	Timestamp uint64
-	Datatype  spb.DataType
-	IsNull    bool
-	Value     any // bool | int64 | float64 | string | *Template
+	Name         string
+	Alias        uint64
+	Timestamp    uint64
+	Datatype     spb.DataType
+	IsNull       bool
+	IsHistorical bool // replayed store-and-forward data
+	Value        any  // bool | int64 | float64 | string | *Template
 }
 
 // Template is a Sparkplug template value — a UDT definition (IsDefinition) or
@@ -83,6 +84,9 @@ func encodeMetric(m Metric) (*spb.Payload_Metric, error) {
 	}
 	if m.Timestamp != 0 {
 		em.Timestamp = proto.Uint64(m.Timestamp)
+	}
+	if m.IsHistorical {
+		em.IsHistorical = proto.Bool(true)
 	}
 	if m.IsNull {
 		em.IsNull = proto.Bool(true)
