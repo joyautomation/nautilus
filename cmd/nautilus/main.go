@@ -24,6 +24,9 @@ Usage:
   nautilus new [name]     Scaffold a new nautilus project.
   nautilus eip <cmd>      EtherNet/IP tools: import (browse a Logix controller
                           and generate types + tag manifest) and browse.
+  nautilus pull           Pull a controller's online edits back into the
+                          program file (--host <controller>). Inverse of the
+                          VS Code "Download Program to Controller" command.
   nautilus version        Print version.
 `
 
@@ -44,6 +47,8 @@ func main() {
 		os.Exit(runNew(os.Args[2:]))
 	case "eip":
 		os.Exit(runEIP(os.Args[2:]))
+	case "pull":
+		os.Exit(runPull(os.Args[2:]))
 	case "version", "--version", "-v":
 		fmt.Println("nautilus", lsp.Version)
 	case "help", "--help", "-h":

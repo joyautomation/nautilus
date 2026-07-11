@@ -209,6 +209,15 @@ program the binary embeds, so **committing the ST to git is the only way an
 edit becomes permanent**. The rule of thumb falls out of the two planes:
 logic you want to tune online, write in ST; infrastructure, write in Go.
 
+Pulling a field edit back to git closes the loop. **Pull Program from
+Controller** (VS Code) or `nautilus pull --host <controller>` writes the
+running program back into your program file — the inverse of download — so
+you review it with `git diff` and commit. Only the program file is rewritten;
+generated type files are never touched. `nautilus pull --check` reports drift
+and exits non-zero, so CI can fail a build when a controller has un-pulled
+edits. Composition is a single definition shared by the runtime, the language
+server, download, and pull, so a program round-trips losslessly.
+
 ## Status
 
 Early. This is the extracted, generalized core of a working demo

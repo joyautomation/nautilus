@@ -81,3 +81,58 @@ func TestIsLibrary(t *testing.T) {
 		t.Error("unparsable file must not be a library")
 	}
 }
+
+func TestJoinSplitRoundTrip(t *testing.T) {
+	libs := []string{typesSrc, "TYPE Extra : STRUCT\n  A : INT;\nEND_STRUCT;\nEND_TYPE\n"}
+	composed := Join(libs, programSrc)
+	prelude := Join(libs, "")
+	prog, ok := SplitProgram(composed, prelude)
+	if !ok || prog != programSrc {
+		t.Fatalf("round trip: ok=%v, program mismatch:\n%q", ok, prog)
+	}
+	// A library file that lacks a trailing newline still round-trips: Join
+	// adds the separator, and SplitProgram tolerates the trimmed prelude.
+	noNL := []string{strings.TrimRight(typesSrc, "\n")}
+	if prog, ok := SplitProgram(Join(noNL, programSrc), Join(noNL, "")); !ok || prog != programSrc {
+		t.Fatalf("no-trailing-newline library split failed: ok=%v %q", ok, prog)
+	}
+	// Libraries that don't match yield ok=false rather than a wrong split.
+	if _, ok := SplitProgram(composed, Join([]string{"TYPE Other : STRUCT\n  Z : INT;\nEND_STRUCT;\nEND_TYPE\n"}, "")); ok {
+		t.Fatal("mismatched prelude should not split")
+	}
+}
+
+func TestComposeDecomposesProject(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "eip_types.st", typesSrc)
+	writeFile(t, dir, "program.st", programSrc)
+
+	comp, err := Compose(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if comp.ProgramFile != "program.st" || comp.ProgramBody != programSrc {
+		t.Fatalf("program file = %q", comp.ProgramFile)
+	}
+	// Compose then split recovers the program exactly.
+	prog, ok := SplitProgram(comp.Composed, comp.Prelude)
+	if !ok || prog != programSrc {
+		t.Fatalf("compose→split mismatch: ok=%v %q", ok, prog)
+	}
+	// Overrides win over disk.
+	edited := strings.ReplaceAll(programSrc, "H.Displacement", "H.Displacement * 2.0")
+	comp2, err := Compose(dir, map[string]string{"program.st": edited})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if comp2.ProgramBody != edited {
+		t.Fatal("override not applied")
+	}
+}
+
+func writeFile(t *testing.T, dir, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

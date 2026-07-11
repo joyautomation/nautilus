@@ -40,6 +40,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("nautilus.program.download", () => online.download()),
     vscode.commands.registerCommand("nautilus.program.diff", () => online.diff()),
     vscode.commands.registerCommand("nautilus.program.rollback", () => online.rollback()),
+    vscode.commands.registerCommand("nautilus.program.pull", () => online.pull()),
     vscode.commands.registerCommand("nautilus.restartLanguageServer", async () => {
       await client?.stop().catch(() => undefined);
       client = undefined;

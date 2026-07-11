@@ -2,7 +2,7 @@
   "name": "vscode-iec",
   "displayName": "nautilus IEC 61131-3",
   "description": "IEC 61131-3 Structured Text (.st) language support for the nautilus SCADA framework: syntax highlighting, compile diagnostics, go-to-definition, and inline live tag values from a running controller.",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "publisher": "joyautomation",
   "license": "Apache-2.0",
   "icon": "icon.png",
@@ -79,6 +79,10 @@
       {
         "command": "nautilus.program.rollback",
         "title": "nautilus: Rollback Controller Program"
+      },
+      {
+        "command": "nautilus.program.pull",
+        "title": "nautilus: Pull Program from Controller"
       }
     ],
     "configuration": {

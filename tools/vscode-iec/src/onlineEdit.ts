@@ -70,11 +70,16 @@ export class OnlineEdit implements vscode.Disposable {
   }
 
   /**
-   * Compose the project source the way the runtime does: library .st files
-   * (no PROGRAM) in the program file's directory, sorted by name, then the
-   * program file. Open editor buffers win over on-disk content.
+   * Compose the project source the way the runtime does (stproject.Join):
+   * library .st files (no PROGRAM) in the program file's directory, sorted by
+   * name and each ended with a newline, then the program file. Open editor
+   * buffers win over on-disk content. Returns the composed source, the
+   * prelude (composed minus program body — the split prefix), and the program
+   * file's URI + body.
    */
-  private async compose(): Promise<{ source: string; programFile: string } | undefined> {
+  private async compose(): Promise<
+    { source: string; prelude: string; programFile: string; programUri: vscode.Uri; programBody: string } | undefined
+  > {
     const active = vscode.window.activeTextEditor?.document;
     let dir: vscode.Uri | undefined;
     if (active && active.languageId === "iec-st" && active.uri.scheme === "file") {
@@ -105,7 +110,6 @@ export class OnlineEdit implements vscode.Disposable {
     }
     let programFile = programs[0];
     if (programs.length > 1) {
-      // Prefer the active file when it is one of the programs.
       const activeName = active ? active.uri.path.split("/").pop() ?? "" : "";
       if (programs.includes(activeName)) programFile = activeName;
       else {
@@ -116,14 +120,20 @@ export class OnlineEdit implements vscode.Disposable {
       }
     }
 
-    let source = "";
+    let prelude = "";
     for (const name of stFiles) {
-      if (name === programFile || !contents.get(name) || isProgram(contents.get(name)!)) continue;
-      source += contents.get(name);
-      if (!source.endsWith("\n")) source += "\n";
+      const src = contents.get(name);
+      if (name === programFile || !src || isProgram(src)) continue;
+      prelude += src.endsWith("\n") ? src : src + "\n";
     }
-    source += contents.get(programFile);
-    return { source, programFile };
+    const programBody = contents.get(programFile) ?? "";
+    return {
+      source: prelude + programBody,
+      prelude,
+      programFile,
+      programUri: vscode.Uri.joinPath(dir, programFile),
+      programBody,
+    };
   }
 
   /** Push the composed workspace program to the controller (warm swap). */
@@ -210,6 +220,59 @@ export class OnlineEdit implements vscode.Disposable {
     );
   }
 
+  /**
+   * Pull the controller's running program into the workspace program file —
+   * the inverse of download, so a field online-edit can be reviewed and
+   * committed. Only the program file is rewritten; generated type files are
+   * never touched. Shows the change and asks before saving.
+   */
+  async pull(): Promise<void> {
+    const info = await this.fetchInfo();
+    if (!info) {
+      void vscode.window.showErrorMessage(`nautilus: no controller at ${this.runtimeUrl()}`);
+      return;
+    }
+    const composed = await this.compose();
+    if (!composed) return;
+
+    const program = splitProgram(info.source, composed.prelude);
+    if (program === undefined) {
+      void vscode.window.showErrorMessage(
+        "nautilus: the controller's type/library sources differ from this project — " +
+          "re-run `nautilus eip import` to reconcile the generated types before pulling the program."
+      );
+      return;
+    }
+    if (program === composed.programBody) {
+      void vscode.window.showInformationMessage(`nautilus: ${composed.programFile} already matches the controller`);
+      return;
+    }
+
+    // Preview the incoming change before writing.
+    this.remoteSource = program;
+    this.localSource = composed.programBody;
+    const remote = vscode.Uri.parse(`${REMOTE_SCHEME}:/incoming.st?${Date.now()}`);
+    const local = vscode.Uri.parse(`${LOCAL_SCHEME}:/current.st?${Date.now()}`);
+    await vscode.commands.executeCommand(
+      "vscode.diff",
+      local,
+      remote,
+      `nautilus: ${composed.programFile} (workspace ↔ controller ${info.hash})`
+    );
+    const pick = await vscode.window.showWarningMessage(
+      `Overwrite ${composed.programFile} with the controller's program?`,
+      { modal: true },
+      "Pull and overwrite"
+    );
+    if (pick !== "Pull and overwrite") return;
+
+    await vscode.workspace.fs.writeFile(composed.programUri, new TextEncoder().encode(program));
+    void vscode.window.showInformationMessage(
+      `nautilus: pulled ${composed.programFile} from controller — review the diff and commit to keep it`
+    );
+    void this.refreshStatus();
+  }
+
   /** One-step stateful undo of the last download. */
   async rollback(): Promise<void> {
     try {
@@ -264,6 +327,19 @@ export class OnlineEdit implements vscode.Disposable {
     this.status.dispose();
     for (const d of this.disposables) d.dispose();
   }
+}
+
+/** Recover the program body from composed source given the prelude Join
+ * placed ahead of it — the TypeScript mirror of stproject.SplitProgram.
+ * Returns undefined when the prelude isn't a prefix (the controller's
+ * libraries don't match this project). */
+function splitProgram(composed: string, prelude: string): string | undefined {
+  if (composed.startsWith(prelude)) return composed.slice(prelude.length);
+  const trimmed = prelude.replace(/\n+$/, "");
+  if (trimmed !== prelude && composed.startsWith(trimmed)) {
+    return composed.slice(trimmed.length).replace(/^\n/, "");
+  }
+  return undefined;
 }
 
 /** Whitespace-insensitive comparison: embed order and blank lines differ
