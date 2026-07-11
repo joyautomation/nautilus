@@ -131,7 +131,11 @@ func (s *Server) setDocument(uri, text string) {
 		}
 		prelude, preludeLines = stproject.Prelude(path, overrides)
 	}
-	doc := &document{text: text, an: analyze(text, prelude, preludeLines)}
+	an := analyze
+	if strings.HasSuffix(strings.ToLower(uri), ".fbd") {
+		an = analyzeFBD
+	}
+	doc := &document{text: text, an: an(text, prelude, preludeLines)}
 	s.docs[uri] = doc
 	s.w.notify("textDocument/publishDiagnostics", PublishDiagnosticsParams{
 		URI: uri, Diagnostics: nonNil(doc.an.Diags),

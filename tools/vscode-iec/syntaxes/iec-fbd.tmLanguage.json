@@ -1,0 +1,12 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "IEC 61131-3 Function Block Diagram",
+  "scopeName": "source.iec-fbd",
+  "patterns": [
+    {
+      "name": "keyword.control.iec-fbd",
+      "match": "(?i)\\b(FBD|END_FBD)\\b"
+    },
+    { "include": "source.iec-st" }
+  ]
+}

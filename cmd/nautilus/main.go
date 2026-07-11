@@ -1,8 +1,9 @@
 // Command nautilus is the developer CLI for the nautilus SCADA framework.
 //
-//	nautilus lsp     run the IEC 61131-3 Structured Text language server (stdio)
-//	nautilus check   compile .st files and report diagnostics (CI-friendly)
-//	nautilus new     scaffold a new nautilus project (interactive)
+//	nautilus lsp        run the IEC 61131-3 language server (stdio)
+//	nautilus check      compile .st/.fbd files and report diagnostics (CI-friendly)
+//	nautilus new        scaffold a new nautilus project (interactive)
+//	nautilus fbd graph  emit a .fbd file's diagram render model as JSON
 //
 // Install: go install github.com/joyautomation/nautilus/cmd/nautilus@latest
 package main
@@ -27,6 +28,8 @@ Usage:
   nautilus pull           Pull a controller's online edits back into the
                           program file (--host <controller>). Inverse of the
                           VS Code "Download Program to Controller" command.
+  nautilus fbd graph <f>  Emit a .fbd file's diagram render model as JSON
+                          (used by the VS Code FBD preview).
   nautilus version        Print version.
 `
 
@@ -49,6 +52,8 @@ func main() {
 		os.Exit(runEIP(os.Args[2:]))
 	case "pull":
 		os.Exit(runPull(os.Args[2:]))
+	case "fbd":
+		os.Exit(runFBD(os.Args[2:]))
 	case "version", "--version", "-v":
 		fmt.Println("nautilus", lsp.Version)
 	case "help", "--help", "-h":

@@ -6,31 +6,33 @@ import (
 )
 
 // transpile turns the netlist into ordered ST statement strings plus the FB
-// instance declarations to inject as a VAR block.
-func (nl *netlist) transpile() (stmts []string, fbDecls []fbDecl, err error) {
+// instance declarations to inject as a VAR block. lines[i] is the 1-based
+// .fbd source line stmts[i] came from, so diagnostics can be mapped back.
+func (nl *netlist) transpile() (stmts []string, lines []int, fbDecls []fbDecl, err error) {
 	// Order nodes (FB calls + coils) so an FB call precedes any node reading
 	// its outputs; ties keep source order. Cycles fall back to source order.
 	order, err := nl.order()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	for _, i := range order {
 		n := nl.nodes[i]
 		if n.isCall {
 			s, err := nl.emitCall(n)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			stmts = append(stmts, s)
 		} else {
 			e, err := nl.emit(n.source, nil)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
 			}
 			stmts = append(stmts, fmt.Sprintf("%s := %s;", n.target, e))
 		}
+		lines = append(lines, n.line)
 	}
-	return stmts, nl.fbDecls, nil
+	return stmts, lines, nl.fbDecls, nil
 }
 
 // order returns node indices in dependency order (FB call before readers of

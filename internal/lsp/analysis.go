@@ -1,10 +1,12 @@
 package lsp
 
 import (
+	"errors"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/st"
 )
@@ -116,6 +118,41 @@ func analyze(text, prelude string, preludeLines int) analysis {
 			Source:   "nautilus-st",
 			Message:  msg,
 		})
+	}
+	return a
+}
+
+// analyzeFBD analyzes a .fbd document: transpile the netlist to ST (the FBD
+// semantics live in lang/fbd, once), run the normal ST analysis over the
+// result, and project diagnostic positions back onto the .fbd source through
+// the transpiler's line map. Symbol positions stay in transpiled coordinates —
+// header declarations map 1:1, so hover/completion on variables still work;
+// go-to-definition inside the netlist is approximate for now.
+func analyzeFBD(text, prelude string, preludeLines int) analysis {
+	stText, lineMap, err := fbd.TranspileWithLines(text)
+	if err != nil {
+		var a analysis
+		line := 1
+		var pe *fbd.ParseError
+		if errors.As(err, &pe) {
+			line = pe.Line
+		}
+		a.Diags = append(a.Diags, Diagnostic{
+			Range:    lineRange(text, line),
+			Severity: SeverityError,
+			Source:   "nautilus-fbd",
+			Message:  err.Error(),
+		})
+		return a
+	}
+	a := analyze(stText, prelude, preludeLines)
+	for i := range a.Diags {
+		// Diagnostics carry 0-based lines; the map is 1-based on both sides.
+		orig := 1
+		if l := a.Diags[i].Range.Start.Line; l >= 0 && l < len(lineMap) {
+			orig = lineMap[l]
+		}
+		a.Diags[i].Range = lineRange(text, orig)
 	}
 	return a
 }

@@ -16,12 +16,16 @@ type netlist struct {
 	nodes   []node          // FB calls and coils, in source order
 }
 
-type fbDecl struct{ name, typ string }
+type fbDecl struct {
+	name, typ string
+	line      int // 1-based source line of the declaration
+}
 
 // node is an ordered netlist statement that becomes an ST statement: an FB
 // call or a coil.
 type node struct {
 	isCall bool
+	line   int // 1-based source line of the statement, for diagnostics
 	// call: inst(pin := expr, ...)
 	inst string
 	args []namedArg
@@ -58,10 +62,13 @@ func (callExpr) isExpr() {}
 type netParser struct {
 	toks []st.Token
 	pos  int
+	// lineOffset maps token lines (relative to the FBD body) back to lines in
+	// the whole .fbd file, so parse errors point at the real source line.
+	lineOffset int
 }
 
-func parseNetlist(body string) (*netlist, error) {
-	p := &netParser{toks: st.Lex(body)}
+func parseNetlist(body string, lineOffset int) (*netlist, error) {
+	p := &netParser{toks: st.Lex(body), lineOffset: lineOffset}
 	nl := &netlist{wires: map[string]expr{}}
 	for !p.at(st.TokenEOF) {
 		if err := p.item(nl); err != nil {
@@ -77,7 +84,18 @@ func (p *netParser) next() st.Token         { t := p.toks[p.pos]; p.pos++; retur
 
 func (p *netParser) posErr(msg string) error {
 	t := p.peek()
-	return fmt.Errorf("fbd: line %d col %d: %s", t.Line, t.Col, msg)
+	return &ParseError{Line: t.Line + p.lineOffset, Col: t.Col, Msg: msg}
+}
+
+// ParseError is a netlist parse error with a position in the .fbd file, so
+// tooling (LSP diagnostics, the preview) can point at the offending line.
+type ParseError struct {
+	Line, Col int
+	Msg       string
+}
+
+func (e *ParseError) Error() string {
+	return fmt.Sprintf("fbd: line %d col %d: %s", e.Line, e.Col, e.Msg)
 }
 
 // item parses one netlist statement. Statements are terminated by an optional
@@ -87,6 +105,7 @@ func (p *netParser) item(nl *netlist) error {
 	if !p.at(st.TokenIdent) {
 		return p.posErr(fmt.Sprintf("expected a wire, coil, or block, got %q", p.peek().Literal))
 	}
+	line := p.peek().Line + p.lineOffset
 	name := p.next().Literal
 	switch p.peek().Type {
 	case st.TokenEqual: // wire: name = <block>
@@ -106,27 +125,27 @@ func (p *netParser) item(nl *netlist) error {
 		if err != nil {
 			return err
 		}
-		nl.nodes = append(nl.nodes, node{target: name, source: e})
+		nl.nodes = append(nl.nodes, node{target: name, source: e, line: line})
 	case st.TokenColon: // FB instance decl: inst : TYPE  (optionally with a call)
 		p.next()
 		if !p.at(st.TokenIdent) {
 			return p.posErr("expected a function-block type after ':'")
 		}
 		typ := p.next().Literal
-		nl.fbDecls = append(nl.fbDecls, fbDecl{name: name, typ: typ})
+		nl.fbDecls = append(nl.fbDecls, fbDecl{name: name, typ: typ, line: line})
 		if p.at(st.TokenLParen) { // inline call: inst : TON(IN := ..., ...)
 			args, err := p.namedArgs()
 			if err != nil {
 				return err
 			}
-			nl.nodes = append(nl.nodes, node{isCall: true, inst: name, args: args})
+			nl.nodes = append(nl.nodes, node{isCall: true, inst: name, args: args, line: line})
 		}
 	case st.TokenLParen: // FB call: inst(pin := ..., ...)
 		args, err := p.namedArgs()
 		if err != nil {
 			return err
 		}
-		nl.nodes = append(nl.nodes, node{isCall: true, inst: name, args: args})
+		nl.nodes = append(nl.nodes, node{isCall: true, inst: name, args: args, line: line})
 	default:
 		return p.posErr(fmt.Sprintf("expected '=', ':=', ':', or '(' after %q", name))
 	}

@@ -83,6 +83,46 @@ func TestAnalyzeUndeclaredIdentifier(t *testing.T) {
 	}
 }
 
+func TestAnalyzeFBDMapsDiagnosticsToSource(t *testing.T) {
+	// "bogus" is undeclared; the diagnostic must land on the .fbd line that
+	// reads it (line 6, 0-based 5), not on the transpiled ST line.
+	src := `PROGRAM Latch
+VAR_EXTERNAL
+  Start : BOOL; Run : BOOL;
+END_VAR
+FBD
+  Run := AND(Start, bogus)
+END_FBD
+END_PROGRAM
+`
+	a := analyzeFBD(src, "", 0)
+	if len(a.Diags) != 1 {
+		t.Fatalf("expected 1 diagnostic, got %v", a.Diags)
+	}
+	d := a.Diags[0]
+	if !strings.Contains(d.Message, "undeclared identifier") {
+		t.Errorf("message = %q", d.Message)
+	}
+	if d.Range.Start.Line != 5 {
+		t.Errorf("diagnostic on 0-based line %d, want 5 (the netlist statement)", d.Range.Start.Line)
+	}
+}
+
+func TestAnalyzeFBDParseError(t *testing.T) {
+	src := "PROGRAM P\nFBD\n  x := \nEND_FBD\nEND_PROGRAM\n" // empty RHS
+	a := analyzeFBD(src, "", 0)
+	if len(a.Diags) != 1 {
+		t.Fatalf("expected 1 diagnostic, got %v", a.Diags)
+	}
+	d := a.Diags[0]
+	if d.Source != "nautilus-fbd" || d.Severity != SeverityError {
+		t.Errorf("source/severity = %q/%d", d.Source, d.Severity)
+	}
+	if d.Range.Start.Line != 2 { // 0-based: the "x :=" line
+		t.Errorf("diagnostic on 0-based line %d, want 2", d.Range.Start.Line)
+	}
+}
+
 func TestAnalyzeParseError(t *testing.T) {
 	src := "PROGRAM P\nVAR\n  x : REAL;\nEND_VAR\nx := ;\nEND_PROGRAM\n" // empty RHS
 	a := analyze(src, "", 0)

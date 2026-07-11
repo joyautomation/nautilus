@@ -18,6 +18,7 @@ import {
 } from "vscode-languageclient/node";
 import { LiveValues } from "./liveValues";
 import { OnlineEdit } from "./onlineEdit";
+import { FbdPreview } from "./fbdPreview";
 
 let client: LanguageClient | undefined;
 let live: LiveValues | undefined;
@@ -33,10 +34,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const online = new OnlineEdit();
   context.subscriptions.push(online);
 
+  const fbd = new FbdPreview(context);
+  context.subscriptions.push(fbd);
+
   context.subscriptions.push(
     vscode.commands.registerCommand("nautilus.liveValues.toggle", () =>
       live?.toggle()
     ),
+    vscode.commands.registerCommand("nautilus.fbd.preview", () => fbd.preview()),
+    vscode.commands.registerCommand("nautilus.fbd.diff", () => fbd.diff()),
     vscode.commands.registerCommand("nautilus.program.download", () => online.download()),
     vscode.commands.registerCommand("nautilus.program.diff", () => online.diff()),
     vscode.commands.registerCommand("nautilus.program.rollback", () => online.rollback()),
@@ -66,7 +72,7 @@ async function startLanguageClient(context: vscode.ExtensionContext): Promise<vo
     args: ["lsp"],
   };
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [{ language: "iec-st" }],
+    documentSelector: [{ language: "iec-st" }, { language: "iec-fbd" }],
   };
 
   client = new LanguageClient(

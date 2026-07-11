@@ -3,6 +3,28 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.7] - 2026-07-11
+
+### Added
+- **Function Block Diagram (`.fbd`) language support**: syntax highlighting
+  (reusing the ST grammar plus `FBD`/`END_FBD`), and live LSP diagnostics —
+  the netlist is transpiled to ST by the same `lang/fbd` compiler the runtime
+  uses, and error positions map back to the exact `.fbd` source line.
+- **FBD Diagram Preview** (`nautilus: Open FBD Diagram Preview`, editor-title
+  button): a live, read-only diagram of the open `.fbd` file — operator and
+  FB blocks with pins, input/coil variable chips, wire fan-out with signal
+  labels, IEC negation circles, and seal-in feedback routed below the logic.
+  Layout is derived from topology (no coordinates in the file); the panel
+  re-renders as you type (150 ms debounce), pans/zooms with mouse or
+  keyboard, follows the active `.fbd` editor, and matches the editor theme.
+  Rendering consumes `nautilus fbd graph` JSON, so the FBD parser exists only
+  in Go.
+- **FBD visual diff** (`nautilus: Diff FBD Diagram (vs git HEAD)`): overlays
+  the committed and working-tree diagrams and colors nodes and wires
+  added / removed / changed using the git decoration theme colors. Matching
+  uses stable structural node ids, so renaming a signal or reordering
+  statements diffs precisely.
+
 ## [0.3.0] - 2026-07-09
 
 First public release. (0.1.x–0.2.x were internal and never published.)

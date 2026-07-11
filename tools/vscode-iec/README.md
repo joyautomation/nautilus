@@ -1,7 +1,8 @@
-# nautilus IEC 61131-3 (Structured Text)
+# nautilus IEC 61131-3
 
-VS Code language support for **IEC 61131-3 Structured Text** (`.st`) as used by
-the [nautilus](https://github.com/joyautomation/nautilus) Go + SvelteKit SCADA
+VS Code language support for **IEC 61131-3 Structured Text** (`.st`) and
+**Function Block Diagram** (`.fbd`) as used by the
+[nautilus](https://github.com/joyautomation/nautilus) Go + SvelteKit SCADA
 framework: develop SCADA in VS Code like a real software developer.
 
 ![Live tag values rendered as pills next to identifiers in a .st file, with the nautilus file tree alongside](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/live-values.png)
@@ -38,6 +39,25 @@ go install github.com/joyautomation/nautilus/cmd/nautilus@latest
 
 `nautilus.cliPath` points elsewhere if it's not on PATH.
 
+### FBD diagram preview & visual diff (needs the nautilus CLI)
+
+nautilus's Function Block Diagram source (`.fbd`) is a git-diffable text
+netlist; the extension projects it into the diagram a controls engineer
+expects:
+
+- **Live diagram preview** — `nautilus: Open FBD Diagram Preview` (or the
+  editor-title button) renders blocks, pins, variable chips, wire fan-out
+  with signal names, IEC negation circles, and seal-in feedback wires. It
+  re-renders as you type; the text stays the source of truth, and layout is
+  computed from topology so no coordinates pollute your diffs.
+- **Visual diff** — `nautilus: Diff FBD Diagram (vs git HEAD)` overlays the
+  committed and working-tree diagrams, coloring added / removed / changed
+  blocks and wires. Review a logic change the way you'd review the wiring,
+  not the text.
+- `.fbd` files get the same **diagnostics-as-you-type** as `.st` — the
+  netlist compiles through the identical `lang/fbd` → `lang/st` pipeline the
+  runtime uses, with errors mapped back to the exact `.fbd` line.
+
 ### Inline live tag values (needs a running controller)
 
 When a nautilus controller is running (any program using the `server`
@@ -60,9 +80,10 @@ toggles the feature. Set `nautilus.runtimeUrl` (default
 
 ## Roadmap
 
-**Graphical LD / FBD / SFC projection** — render Ladder / FBD / SFC views
-that edit the *same* program and lower to the *same* nautilus IR as the text;
-text ↔ diagram stay in sync as projections of one IR.
+**Graphical LD / SFC projection and FBD editing** — the FBD preview is the
+first projection; next are Ladder / SFC views and bidirectional editing,
+where diagram edits write back to the *same* text that lowers to the *same*
+nautilus IR.
 
 ## Source & license
 

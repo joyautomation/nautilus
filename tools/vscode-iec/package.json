@@ -1,8 +1,8 @@
 {
   "name": "vscode-iec",
   "displayName": "nautilus IEC 61131-3",
-  "description": "IEC 61131-3 Structured Text (.st) language support for the nautilus SCADA framework: syntax highlighting, compile diagnostics, go-to-definition, and inline live tag values from a running controller.",
-  "version": "0.3.6",
+  "description": "IEC 61131-3 language support for the nautilus SCADA framework: Structured Text (.st) and Function Block Diagram (.fbd) with syntax highlighting, compile diagnostics, go-to-definition, a live FBD diagram preview with visual diff, and inline live tag values from a running controller.",
+  "version": "0.3.7",
   "publisher": "joyautomation",
   "license": "Apache-2.0",
   "icon": "icon.png",
@@ -35,7 +35,8 @@
   },
   "main": "./out/extension.js",
   "activationEvents": [
-    "onLanguage:iec-st"
+    "onLanguage:iec-st",
+    "onLanguage:iec-fbd"
   ],
   "contributes": {
     "languages": [
@@ -50,6 +51,18 @@
           ".st"
         ],
         "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "iec-fbd",
+        "aliases": [
+          "Function Block Diagram",
+          "IEC 61131-3 Function Block Diagram",
+          "iec-fbd"
+        ],
+        "extensions": [
+          ".fbd"
+        ],
+        "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
@@ -57,6 +70,11 @@
         "language": "iec-st",
         "scopeName": "source.iec-st",
         "path": "./syntaxes/iec-st.tmLanguage.json"
+      },
+      {
+        "language": "iec-fbd",
+        "scopeName": "source.iec-fbd",
+        "path": "./syntaxes/iec-fbd.tmLanguage.json"
       }
     ],
     "commands": [
@@ -83,8 +101,37 @@
       {
         "command": "nautilus.program.pull",
         "title": "nautilus: Pull Program from Controller"
+      },
+      {
+        "command": "nautilus.fbd.preview",
+        "title": "nautilus: Open FBD Diagram Preview",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "nautilus.fbd.diff",
+        "title": "nautilus: Diff FBD Diagram (vs git HEAD)",
+        "icon": "$(diff)"
       }
     ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "nautilus.fbd.preview",
+          "when": "resourceLangId == iec-fbd",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "nautilus.fbd.preview",
+          "when": "resourceLangId == iec-fbd"
+        },
+        {
+          "command": "nautilus.fbd.diff",
+          "when": "resourceLangId == iec-fbd"
+        }
+      ]
+    },
     "configuration": {
       "title": "nautilus IEC 61131-3",
       "properties": {

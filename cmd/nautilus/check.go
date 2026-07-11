@@ -72,16 +72,17 @@ func runCheck(args []string) int {
 		}
 		source := string(src)
 		// FBD compiles by transpiling to ST, then it's checked exactly like an
-		// .st file (positions are approximate against the transpiled form for
-		// now).
+		// .st file; the transpiler's line map projects diagnostic positions
+		// back onto the .fbd source.
+		var lineMap []int
 		if strings.EqualFold(filepath.Ext(f), ".fbd") {
-			stSrc, terr := fbd.Transpile(source)
+			stSrc, lm, terr := fbd.TranspileWithLines(source)
 			if terr != nil {
 				bad++
 				fmt.Printf("%s: %s\n", f, terr.Error())
 				continue
 			}
-			source = stSrc
+			source, lineMap = stSrc, lm
 		}
 		// Sibling library files (TYPE/FB/FUNCTION-only .st in the same
 		// directory) are in scope, exactly as the LSP and a runtime that
@@ -89,6 +90,13 @@ func runCheck(args []string) int {
 		prelude, preludeLines := stproject.Prelude(f, nil)
 		if msg, pos, failed := compileErr(source, prelude, preludeLines); failed {
 			bad++
+			if lineMap != nil {
+				if pos.Line >= 1 && pos.Line <= len(lineMap) {
+					pos = st.Pos{Line: lineMap[pos.Line-1], Col: 1}
+				} else {
+					pos = st.Pos{Line: 1, Col: 1}
+				}
+			}
 			fmt.Printf("%s:%d:%d: %s\n", f, pos.Line, pos.Col, msg)
 		}
 	}

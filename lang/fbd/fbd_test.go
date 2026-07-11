@@ -125,6 +125,53 @@ END_PROGRAM`
 	run(t, src, map[string]ir.Value{"Run": ir.BoolVal(false)})
 }
 
+func TestTranspileLineMap(t *testing.T) {
+	// Each transpiled line must map back to the .fbd line it came from:
+	// header verbatim, FB decls and statements to their netlist lines.
+	src := `PROGRAM Timed
+VAR_EXTERNAL
+  Run : BOOL; Elapsed : BOOL;
+END_VAR
+FBD
+  Elapsed := t1.Q
+  t1 : TON(IN := Run, PT := T#5S)
+END_FBD
+END_PROGRAM`
+	stSrc, lineMap, err := TranspileWithLines(src)
+	if err != nil {
+		t.Fatalf("TranspileWithLines: %v", err)
+	}
+	if got, want := stSrc, mustTranspile(src); got != want {
+		t.Fatalf("TranspileWithLines output differs from Transpile:\n%s\n---\n%s", got, want)
+	}
+	stLines := strings.Split(stSrc, "\n")
+	if len(lineMap) != len(stLines) {
+		t.Fatalf("lineMap has %d entries for %d lines", len(lineMap), len(stLines))
+	}
+	find := func(prefix string) int {
+		for i, l := range stLines {
+			if strings.HasPrefix(strings.TrimSpace(l), prefix) {
+				return i
+			}
+		}
+		t.Fatalf("no transpiled line starts with %q:\n%s", prefix, stSrc)
+		return -1
+	}
+	// Header maps 1:1; the t1 decl and call map to .fbd line 7; the coil to 6.
+	for i, want := range map[int]int{
+		0:                     1, // PROGRAM Timed
+		2:                     3, // Run : BOOL; ...
+		find("t1 : TON;"):     7,
+		find("t1(IN"):         7,
+		find("Elapsed := t1"): 6,
+		find("END_PROGRAM"):   9,
+	} {
+		if lineMap[i] != want {
+			t.Errorf("lineMap[%d] (%q) = %d, want %d", i, stLines[i], lineMap[i], want)
+		}
+	}
+}
+
 func TestCombinationalLoopRejected(t *testing.T) {
 	src := `PROGRAM Loop
 VAR_EXTERNAL X : BOOL; END_VAR
