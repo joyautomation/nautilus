@@ -1,6 +1,9 @@
 package runtime
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"sync"
 	"time"
 
@@ -20,11 +23,22 @@ type Program struct {
 	compiledAt time.Time
 	scans      uint64
 	lastErr    string
+
+	// bootSource is what Compile was first given — the program the deployed
+	// binary embeds. A running source that differs is an online edit in
+	// progress (Dirty), ephemeral by design: restarts revert to boot.
+	bootSource string
+
+	// One-step undo for online edits: the previous program AND its frame,
+	// kept by SwapWarm so Rollback is instant and stateful.
+	prevSource string
+	prevProg   *ir.Program
+	prevFrame  *ir.Frame
 }
 
 // Compile parses and lowers ST source into a runnable program.
 func Compile(src string) (*Program, error) {
-	p := &Program{}
+	p := &Program{bootSource: src}
 	if err := p.Swap(src); err != nil {
 		return nil, err
 	}
@@ -61,6 +75,81 @@ func (p *Program) Run(tags *Tags) error {
 	}
 	p.scans++
 	return nil
+}
+
+// SwapReport describes what a warm swap did.
+type SwapReport struct {
+	Hash string `json:"hash"`
+	// Resets are variables that could not carry over: new names, renamed
+	// names, or changed types. They restarted at their declared initial
+	// values.
+	Resets []string `json:"resets,omitempty"`
+}
+
+// SwapWarm replaces the running program like Swap, but migrates retained
+// state by name and type — the online-edit transfer: a PID integral, timer,
+// or counter survives the edit. The outgoing program and frame are kept for
+// one Rollback. On a compile error the running program is untouched.
+func (p *Program) SwapWarm(src string) (SwapReport, error) {
+	ast, err := st.Parse(src)
+	if err == nil {
+		var prog *ir.Program
+		if prog, err = st.Lower(ast); err == nil {
+			p.mu.Lock()
+			frame, resets := ir.MigrateFrame(prog, p.prog, p.frame)
+			p.prevSource, p.prevProg, p.prevFrame = p.source, p.prog, p.frame
+			p.prog, p.frame = prog, frame
+			p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
+			p.mu.Unlock()
+			return SwapReport{Hash: sourceHash(src), Resets: resets}, nil
+		}
+	}
+	p.mu.Lock()
+	p.lastErr = err.Error()
+	p.mu.Unlock()
+	return SwapReport{}, err
+}
+
+// Rollback restores the program and frame exactly as they were before the
+// last SwapWarm — a one-step, stateful undo. It errors when there is
+// nothing to roll back to.
+func (p *Program) Rollback() (SwapReport, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.prevProg == nil {
+		return SwapReport{}, errors.New("runtime: nothing to roll back")
+	}
+	p.source, p.prog, p.frame = p.prevSource, p.prevProg, p.prevFrame
+	p.prevSource, p.prevProg, p.prevFrame = "", nil, nil
+	p.compiledAt, p.scans, p.lastErr = time.Now(), 0, ""
+	return SwapReport{Hash: sourceHash(p.source)}, nil
+}
+
+// Hash identifies the running source (first 12 hex chars of its SHA-256).
+func (p *Program) Hash() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return sourceHash(p.source)
+}
+
+// Dirty reports whether the running source differs from what the binary
+// booted with — an online edit is in progress.
+func (p *Program) Dirty() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.source != p.bootSource
+}
+
+// CanRollback reports whether a previous program is available.
+func (p *Program) CanRollback() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.prevProg != nil
+}
+
+func sourceHash(src string) string {
+	sum := sha256.Sum256([]byte(src))
+	return hex.EncodeToString(sum[:6])
 }
 
 // ResetFrame discards retained state — call on a redundancy takeover so the

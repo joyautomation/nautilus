@@ -67,13 +67,23 @@ type Options struct {
 	// header, which also permits authorized cross-origin writers. Reads are
 	// never gated — dashboards and editor live values stay open on the LAN.
 	AuthToken string
+
+	// OnlineEdits enables the program endpoints (PUT /api/program, POST
+	// /api/program/rollback) — PLC-style online edits of the running ST
+	// program. Off by default: pushing logic is remote code execution on a
+	// control system, so a controller must opt in (think keyswitch in
+	// REMOTE). Online edits are ephemeral by design — a restart reverts to
+	// the program the binary embeds; committing the source is how an edit
+	// becomes permanent. Program writes honor AuthToken like tag writes.
+	OnlineEdits bool
 }
 
 // Server fans runtime frames out to SSE clients and answers snapshot reads.
 type Server struct {
-	rt        *runtime.Runtime
-	interval  time.Duration
-	authToken string
+	rt          *runtime.Runtime
+	interval    time.Duration
+	authToken   string
+	onlineEdits bool
 
 	mu      sync.Mutex
 	clients map[chan []byte]struct{}
@@ -83,17 +93,20 @@ type Server struct {
 func New(rt *runtime.Runtime, opts ...Options) *Server {
 	interval := 250 * time.Millisecond
 	token := ""
+	onlineEdits := false
 	if len(opts) > 0 {
 		if opts[0].Interval > 0 {
 			interval = opts[0].Interval
 		}
 		token = opts[0].AuthToken
+		onlineEdits = opts[0].OnlineEdits
 	}
 	return &Server{
-		rt:        rt,
-		interval:  interval,
-		authToken: token,
-		clients:   map[chan []byte]struct{}{},
+		rt:          rt,
+		interval:    interval,
+		authToken:   token,
+		onlineEdits: onlineEdits,
+		clients:     map[chan []byte]struct{}{},
 	}
 }
 
@@ -147,6 +160,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/stream", s.handleStream)
 	mux.HandleFunc("POST /api/tags", s.handleWriteTag)
+	mux.HandleFunc("GET /api/program", s.handleGetProgram)
+	mux.HandleFunc("PUT /api/program", s.handlePutProgram)
+	mux.HandleFunc("POST /api/program/rollback", s.handleRollback)
 	mux.HandleFunc("GET /", s.handleIndex)
 	return withCORS(mux)
 }

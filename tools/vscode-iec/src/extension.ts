@@ -17,6 +17,7 @@ import {
   ServerOptions,
 } from "vscode-languageclient/node";
 import { LiveValues } from "./liveValues";
+import { OnlineEdit } from "./onlineEdit";
 
 let client: LanguageClient | undefined;
 let live: LiveValues | undefined;
@@ -29,10 +30,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   live = new LiveValues();
   context.subscriptions.push(live);
 
+  const online = new OnlineEdit();
+  context.subscriptions.push(online);
+
   context.subscriptions.push(
     vscode.commands.registerCommand("nautilus.liveValues.toggle", () =>
       live?.toggle()
     ),
+    vscode.commands.registerCommand("nautilus.program.download", () => online.download()),
+    vscode.commands.registerCommand("nautilus.program.diff", () => online.diff()),
+    vscode.commands.registerCommand("nautilus.program.rollback", () => online.rollback()),
     vscode.commands.registerCommand("nautilus.restartLanguageServer", async () => {
       await client?.stop().catch(() => undefined);
       client = undefined;
