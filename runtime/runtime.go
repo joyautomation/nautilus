@@ -6,6 +6,7 @@ import (
 	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/lang/ir"
 )
 
 // Options configure a Runtime.
@@ -119,7 +120,14 @@ func (r *Runtime) Scan() {
 		out := make(nio.Values, len(r.outputs))
 		for _, name := range r.outputs {
 			if v, err := r.tags.ReadGlobal(name); err == nil {
-				out[name] = plain(v)
+				// Compound values (UDTs, arrays) cross the seam as ir.Value so
+				// typed drivers keep field names and integer widths; scalars
+				// stay plain Go values for simple drivers.
+				if v.Kind == ir.TypeStruct || v.Kind == ir.TypeArray {
+					out[name] = v
+				} else {
+					out[name] = plain(v)
+				}
 			}
 		}
 		_ = r.driver.WriteOutputs(out)

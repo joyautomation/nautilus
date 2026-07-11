@@ -5,6 +5,7 @@
 package runtime
 
 import (
+	"strconv"
 	"sync"
 	"time"
 
@@ -63,7 +64,9 @@ func (t *Tags) Bool(name string) bool {
 func (t *Tags) SetReal(name string, v float64) { _ = t.WriteGlobal(name, ir.RealVal(v)) }
 func (t *Tags) SetBool(name string, v bool)    { _ = t.WriteGlobal(name, ir.BoolVal(v)) }
 
-// Set writes a Go value (float64/bool) to a tag, choosing the tag kind.
+// Set writes a Go value to a tag, choosing the tag kind. Scalars accept
+// bool/float64/int/int64/string; drivers with typed values (integer widths,
+// UDT structs, arrays) pass an ir.Value directly and it is stored as-is.
 func (t *Tags) Set(name string, v any) {
 	switch x := v.(type) {
 	case bool:
@@ -72,6 +75,12 @@ func (t *Tags) Set(name string, v any) {
 		t.SetReal(name, x)
 	case int:
 		t.SetReal(name, float64(x))
+	case int64:
+		_ = t.WriteGlobal(name, ir.IntVal(x))
+	case string:
+		_ = t.WriteGlobal(name, ir.StringVal(x))
+	case ir.Value:
+		_ = t.WriteGlobal(name, x)
 	}
 }
 
@@ -96,6 +105,25 @@ func plain(v ir.Value) any {
 		return v.I
 	case ir.TypeString:
 		return v.S
+	case ir.TypeArray:
+		out := make([]any, len(v.Arr))
+		for i, e := range v.Arr {
+			out[i] = plain(e)
+		}
+		return out
+	case ir.TypeStruct:
+		out := make(map[string]any, len(v.Fld))
+		for i, f := range v.Fld {
+			name := ""
+			if v.Struct != nil && i < len(v.Struct.Fields) {
+				name = v.Struct.Fields[i].Name
+			}
+			if name == "" {
+				name = "_" + strconv.Itoa(i)
+			}
+			out[name] = plain(f)
+		}
+		return out
 	default:
 		return nil
 	}

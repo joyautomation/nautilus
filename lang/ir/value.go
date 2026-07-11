@@ -10,7 +10,11 @@ type Value struct {
 	S    string  // TypeString
 	Arr  []Value // TypeArray
 	Fld  []Value // TypeStruct — parallel to StructDef.Fields
-	FB   *FBInstance
+	// Struct names the fields of a TypeStruct value. The VM addresses fields
+	// by index and never needs it; it exists so consumers outside the VM
+	// (HMI JSON, field-bus drivers) can render or bind fields by name.
+	Struct *StructDef
+	FB     *FBInstance
 }
 
 // FBInstance holds the retained slot frame of a function block. Placeholder; populated in phase 4.
@@ -54,7 +58,7 @@ func Zero(t *Type) Value {
 		for i, fld := range t.Struct.Fields {
 			f[i] = Zero(fld.Type)
 		}
-		return Value{Kind: TypeStruct, Fld: f}
+		return Value{Kind: TypeStruct, Fld: f, Struct: t.Struct}
 	case TypeFB:
 		return Value{Kind: TypeFB, FB: NewFBInstance(t.FB)}
 	}
