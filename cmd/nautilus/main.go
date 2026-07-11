@@ -22,6 +22,8 @@ Usage:
   nautilus check [path]   Compile every .st file under path (default ".")
                           and print diagnostics. Exits 1 on any error.
   nautilus new [name]     Scaffold a new nautilus project.
+  nautilus eip <cmd>      EtherNet/IP tools: import (browse a Logix controller
+                          and generate types + tag manifest) and browse.
   nautilus version        Print version.
 `
 
@@ -40,6 +42,8 @@ func main() {
 		os.Exit(runCheck(os.Args[2:]))
 	case "new":
 		os.Exit(runNew(os.Args[2:]))
+	case "eip":
+		os.Exit(runEIP(os.Args[2:]))
 	case "version", "--version", "-v":
 		fmt.Println("nautilus", lsp.Version)
 	case "help", "--help", "-h":
