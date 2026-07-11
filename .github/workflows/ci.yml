@@ -15,6 +15,18 @@ jobs:
       - run: go build ./...
       - name: nautilus check (examples)
         run: go run ./cmd/nautilus check examples
+  sparkplug-tck:
+    name: Sparkplug B — TCK edge-node conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.24'}
+      # Drives an in-process edge node through its full lifecycle against the
+      # joyautomation/sparkplug-tck-go edge-node profile (embeds its own
+      # broker) and fails on any conformance assertion failure.
+      - run: NAUTILUS_TCK=1 go test ./sparkplug/ -run TestTCKConformance -v -timeout 90s
+
   vscode-iec:
     name: VS Code extension — compile, test
     runs-on: ubuntu-latest

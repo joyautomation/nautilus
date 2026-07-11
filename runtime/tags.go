@@ -84,6 +84,19 @@ func (t *Tags) Set(name string, v any) {
 	}
 }
 
+// Snapshot returns a typed copy of every tag as ir.Value — for consumers
+// that need the kind (e.g. the Sparkplug node's faithful datatype mapping),
+// where All()'s plain-JSON collapse would lose int-vs-real.
+func (t *Tags) Snapshot() map[string]ir.Value {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make(map[string]ir.Value, len(t.vals))
+	for k, v := range t.vals {
+		out[k] = v
+	}
+	return out
+}
+
 // All returns a plain-JSON snapshot of every tag — for an HMI's live watch.
 func (t *Tags) All() map[string]any {
 	t.mu.RLock()
