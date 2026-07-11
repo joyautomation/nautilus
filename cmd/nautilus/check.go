@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/joyautomation/nautilus/internal/stproject"
+	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
@@ -46,7 +47,7 @@ func runCheck(args []string) int {
 				}
 				return nil
 			}
-			if strings.EqualFold(filepath.Ext(path), ".st") {
+			if ext := strings.ToLower(filepath.Ext(path)); ext == ".st" || ext == ".fbd" {
 				files = append(files, path)
 			}
 			return nil
@@ -58,7 +59,7 @@ func runCheck(args []string) int {
 	}
 
 	if len(files) == 0 {
-		fmt.Fprintln(os.Stderr, "nautilus check: no .st files found")
+		fmt.Fprintln(os.Stderr, "nautilus check: no .st or .fbd files found")
 		return 0
 	}
 
@@ -69,11 +70,24 @@ func runCheck(args []string) int {
 			fmt.Fprintln(os.Stderr, "nautilus check:", err)
 			return 2
 		}
+		source := string(src)
+		// FBD compiles by transpiling to ST, then it's checked exactly like an
+		// .st file (positions are approximate against the transpiled form for
+		// now).
+		if strings.EqualFold(filepath.Ext(f), ".fbd") {
+			stSrc, terr := fbd.Transpile(source)
+			if terr != nil {
+				bad++
+				fmt.Printf("%s: %s\n", f, terr.Error())
+				continue
+			}
+			source = stSrc
+		}
 		// Sibling library files (TYPE/FB/FUNCTION-only .st in the same
 		// directory) are in scope, exactly as the LSP and a runtime that
 		// concatenates sources see it.
 		prelude, preludeLines := stproject.Prelude(f, nil)
-		if msg, pos, failed := compileErr(string(src), prelude, preludeLines); failed {
+		if msg, pos, failed := compileErr(source, prelude, preludeLines); failed {
 			bad++
 			fmt.Printf("%s:%d:%d: %s\n", f, pos.Line, pos.Col, msg)
 		}
