@@ -7,6 +7,7 @@
 	import { Handle, Position } from '@xyflow/svelte';
 	import type { Placed } from './layout';
 	import { pinOffset, EXTENSIBLE } from './layout';
+	import { live, liveValue, member, formatLive } from './liveState.svelte';
 
 	let {
 		data
@@ -47,6 +48,15 @@
 	}
 
 	const problems = $derived(data.problems ?? []);
+	// Live value pills, mirroring the text editor's inline decorations:
+	// variable chips and coils show their value; FB instances show each
+	// output pin's value off the streamed instance struct. Literals need no
+	// pill (the label IS the value); plain blocks have no runtime identity
+	// (their wires are inlined expressions). Hidden in diff mode.
+	const chipVal = $derived(
+		data.editable && chip && !n.src ? liveValue(n.label) : undefined
+	);
+	const fbStruct = $derived(data.editable && n.kind === 'fb' ? liveValue(n.label) : undefined);
 	// An undeclared variable chip offers declare-in-place: double-click, type
 	// the type, done — the header edit the netlist itself can't express.
 	const undeclared = $derived(
@@ -83,6 +93,9 @@
 		<span>{n.label}</span>
 		<Handle type="source" position={Position.Right} id="" style="top: {n.h / 2}px" isConnectable={data.editable} />
 		{#if problems.length}<span class="badge">!</span>{/if}
+		{#if chipVal !== undefined}
+			<span class="val below" class:off={!live.fresh} title="{n.label} = {formatLive(chipVal)} (live)">{formatLive(chipVal)}</span>
+		{/if}
 	</div>
 {:else}
 	<div
@@ -104,6 +117,14 @@
 		{#each n.outs as pin (pin)}
 			<Handle type="source" position={Position.Right} id={pin} style="top: {pinOffset(n, pin, 'out')}px" isConnectable={data.editable} />
 			<span class="pin out" style="top: {pinOffset(n, pin, 'out') - 7}px">{pin}</span>
+			{#if fbStruct !== undefined && member(fbStruct, pin) !== undefined}
+				<span
+					class="val beside"
+					class:off={!live.fresh}
+					style="top: {pinOffset(n, pin, 'out') - 8}px"
+					title="{n.label}.{pin} = {formatLive(member(fbStruct, pin))} (live)"
+				>{formatLive(member(fbStruct, pin))}</span>
+			{/if}
 		{/each}
 		{#if plusPin}
 			<!-- drop a wire here to ADD an input: the pin exists because it's wired -->
@@ -204,6 +225,37 @@
 		transform: translateX(100%);
 		font-size: 9px;
 		opacity: 0.85;
+	}
+	/* Live value pill — same palette as the text editor's inline decorations
+	   (green while frames flow, grey once the stream goes stale). */
+	.val {
+		position: absolute;
+		font-size: 9px;
+		font-weight: 600;
+		line-height: 1;
+		padding: 2px 5px;
+		border-radius: 5px;
+		white-space: nowrap;
+		pointer-events: auto;
+		color: var(--vscode-charts-green, #64d88a);
+		/* Opaque: pills sit over wires (an FB pin's value rides its wire like
+		   an inline tag), so the line must not bleed through the text. */
+		background: color-mix(in srgb, var(--vscode-charts-green, #64d88a) 13%, var(--vscode-editor-background, #1e1e1e));
+		border: 1px solid rgba(100, 216, 138, 0.38);
+	}
+	.val.off {
+		color: var(--vscode-descriptionForeground, #8c8c8c);
+		background: color-mix(in srgb, #8c8c8c 12%, var(--vscode-editor-background, #1e1e1e));
+		border-color: rgba(140, 140, 140, 0.32);
+	}
+	.val.below {
+		left: 50%;
+		top: 100%;
+		transform: translate(-50%, 3px);
+	}
+	.val.beside {
+		right: -10px;
+		transform: translateX(100%);
 	}
 	:global(.svelte-flow__handle) {
 		width: 7px;

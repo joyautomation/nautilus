@@ -34,11 +34,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const online = new OnlineEdit();
   context.subscriptions.push(online);
 
-  const fbd = new FbdPreview(context);
+  const fbd = new FbdPreview(context, live);
   context.subscriptions.push(fbd);
   // "Open With → FBD Diagram": the diagram as a real editor over the .fbd
   // document (text remains the default editor).
-  context.subscriptions.push(new FbdEditorProvider(context).register());
+  context.subscriptions.push(new FbdEditorProvider(context, live).register());
 
   context.subscriptions.push(
     vscode.commands.registerCommand("nautilus.liveValues.toggle", () =>

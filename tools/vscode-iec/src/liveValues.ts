@@ -34,9 +34,17 @@ const FRESHNESS_MS = 3000;
 const RECONNECT_MS = 2000;
 const RENDER_THROTTLE_MS = 150;
 
+/** A frame fanned out to non-text consumers (the FBD diagram webviews). */
+export type LiveFrameListener = (frame: {
+  enabled: boolean;
+  fresh: boolean;
+  values: Record<string, unknown>;
+}) => void;
+
 export class LiveValues implements vscode.Disposable {
   private enabled: boolean;
   private values = new Map<string, unknown>(); // lowercased tag name → value
+  private listeners = new Set<LiveFrameListener>();
   private lastFrameMs = 0;
   private req: http.ClientRequest | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
@@ -111,9 +119,32 @@ export class LiveValues implements vscode.Disposable {
     return vscode.window.visibleTextEditors.filter((e) => isIecDoc(e.document));
   }
 
+  /** The diagram webviews consume frames too: while any are open, keep the
+   * stream alive even with no text editor visible, and push each frame (and
+   * enabled-state changes) to them. */
+  addConsumer(listener: LiveFrameListener): vscode.Disposable {
+    this.listeners.add(listener);
+    this.onEditorsChanged();
+    this.notify(); // current state immediately
+    return new vscode.Disposable(() => {
+      this.listeners.delete(listener);
+      this.onEditorsChanged();
+    });
+  }
+
+  private notify(): void {
+    if (this.listeners.size === 0) return;
+    const frame = {
+      enabled: this.enabled,
+      fresh: this.fresh(),
+      values: Object.fromEntries(this.values),
+    };
+    for (const l of this.listeners) l(frame);
+  }
+
   /** Connect only while enabled and an ST editor is visible. */
   private onEditorsChanged(): void {
-    const wanted = this.enabled && this.stEditors().length > 0;
+    const wanted = this.enabled && (this.stEditors().length > 0 || this.listeners.size > 0);
     if (wanted && !this.req) this.connect();
     if (!wanted) this.disconnect();
     this.updateStatus();
@@ -242,6 +273,7 @@ export class LiveValues implements vscode.Disposable {
       editor.setDecorations(fresh ? this.staleDeco : this.freshDeco, []);
       editor.setDecorations(fresh ? this.freshDeco : this.staleDeco, decos);
     }
+    this.notify();
   }
 
   private updateStatus(): void {

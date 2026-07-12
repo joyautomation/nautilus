@@ -3,6 +3,18 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.3] - 2026-07-12
+
+### Added
+- **Live values in the diagram.** The FBD editor and preview now show the
+  same live controller values as the text editor's inline pills: variable
+  chips and coils get a green value pill, and FB instances show each
+  output pin's value (a1.Q, a1.ET) as an inline tag on its wire. Fed by
+  the same SSE stream as the text decorations, so it honors
+  `nautilus.liveValues.enabled` (and the status-bar toggle), greys out
+  when frames stop arriving, and hides in diff mode. A diagram-only
+  session keeps the stream alive — no text editor needs to be visible.
+
 ## [0.7.2] - 2026-07-12
 
 ### Added

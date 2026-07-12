@@ -22,6 +22,7 @@
 	import { mergeDiff } from './diff';
 	import { vscode, postOp } from './vscodeApi';
 	import { setRects, updateRect } from './diagState.svelte';
+	import { setLive } from './liveState.svelte';
 
 	const nodeTypes = { fbd: FbdNode };
 	const edgeTypes = { fbd: FbdEdge };
@@ -150,8 +151,19 @@
 	}
 
 	window.addEventListener('message', (ev) => {
-		const msg = ev.data as Msg & { type: 'diagnostics'; diags?: Diag[] };
+		const msg = ev.data as Msg & {
+			type: 'diagnostics' | 'liveValues';
+			diags?: Diag[];
+			enabled?: boolean;
+			fresh?: boolean;
+			values?: Record<string, unknown>;
+		};
 		if (!msg?.type) return;
+		if (msg.type === 'liveValues') {
+			// Store-only update: FbdNode pills react directly, no node rebuild.
+			setLive({ enabled: !!msg.enabled, fresh: !!msg.fresh, values: msg.values ?? {} });
+			return;
+		}
 		if (msg.type === 'diagnostics') {
 			diags = msg.diags ?? [];
 			if (!diffing && lastModel) render(lastModel, false);

@@ -15,6 +15,7 @@ import * as vscode from "vscode";
 import { execFile } from "child_process";
 import * as path from "path";
 import type { ProgramInfo } from "./onlineEdit";
+import type { LiveValues } from "./liveValues";
 
 /** Mirror of lang/fbd.Model — see lang/fbd/graph.go for the contract. */
 export type FbdModel = {
@@ -224,6 +225,17 @@ async function postModel(webview: vscode.Webview, doc: vscode.TextDocument): Pro
   }
 }
 
+/** Feed live controller values into the diagram for the webview's lifetime.
+ * The same stream that drives text-editor pills fans out here, so the
+ * diagram obeys the identical enable toggle and freshness window. */
+function attachLiveValues(live: LiveValues | undefined, panel: vscode.WebviewPanel): void {
+  if (!live) return;
+  const sub = live.addConsumer((frame) => {
+    void panel.webview.postMessage({ type: "liveValues", ...frame });
+  });
+  panel.onDidDispose(() => sub.dispose());
+}
+
 /** Forward the document's squiggles into the diagram: the webview joins
  * them onto nodes by source line, so an error marks the offending block
  * with the same message the text editor shows. */
@@ -246,7 +258,10 @@ export class FbdPreview implements vscode.Disposable {
   /** Set while showing a diff; live edits leave the diff on screen. */
   private diffing = false;
 
-  constructor(private readonly context: vscode.ExtensionContext) {
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly live?: LiveValues
+  ) {
     this.disposables.push(
       vscode.workspace.onDidChangeTextDocument((e) => {
         if (this.panel && !this.diffing && e.document.uri.toString() === this.docUri?.toString()) {
@@ -403,6 +418,7 @@ export class FbdPreview implements vscode.Disposable {
       if (doc) void handleWebviewMessage(doc, msg);
     });
     this.panel.webview.html = buildWebviewHtml(this.panel.webview, this.context.extensionUri);
+    attachLiveValues(this.live, this.panel);
   }
 
   private post(msg: unknown): void {
@@ -427,7 +443,10 @@ export class FbdPreview implements vscode.Disposable {
 export class FbdEditorProvider implements vscode.CustomTextEditorProvider {
   static readonly viewType = "nautilus.fbdDiagram";
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly live?: LiveValues
+  ) {}
 
   register(): vscode.Disposable {
     return vscode.window.registerCustomEditorProvider(FbdEditorProvider.viewType, this, {
@@ -463,6 +482,7 @@ export class FbdEditorProvider implements vscode.CustomTextEditorProvider {
       messageSub.dispose();
       diagSub.dispose();
     });
+    attachLiveValues(this.live, panel);
 
     await postModel(panel.webview, document);
   }
