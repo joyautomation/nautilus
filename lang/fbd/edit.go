@@ -34,6 +34,8 @@ type TextEdit struct {
 //	insertStatement  Text (netlist statement(s), validated before insert)
 //	setLayout   Node, X, Y — pin a dragged node's position
 //	clearLayout Node (one entry) or nothing (whole block → full auto-layout)
+//	disconnect  To/ToPin (+From/FromPin) — remove the connection into a pin
+//	addInput    Node (extensible block), Source (+SourcePin) — append an arg
 type EditOp struct {
 	Type      string `json:"type"`
 	Node      string `json:"node,omitempty"`
@@ -83,6 +85,10 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		return b.opSetLayout(op)
 	case "clearLayout":
 		return b.opClearLayout(op)
+	case "disconnect":
+		return b.opDisconnect(op)
+	case "addInput":
+		return b.opAddInput(op)
 	}
 	return nil, fmt.Errorf("fbd edit: unknown op %q", op.Type)
 }
@@ -536,4 +542,119 @@ func (b *modelBuilder) deleteSpan(span exprPos) TextEdit {
 		return TextEdit{Line: span.line, Col: 1, EndLine: span.endLine + 1, EndCol: 1}
 	}
 	return TextEdit{Line: span.line, Col: span.col, EndLine: span.endLine, EndCol: span.endCol}
+}
+
+// ── disconnect / addInput ──────────────────────────────────────────────────
+
+// opArity is the pin-count contract of an operator/function block: min
+// inputs and max (-1 = extensible). Unknown functions are unrestricted —
+// compile diagnostics own their arity.
+func opArity(fn string) (min, max int) {
+	switch fn {
+	case "AND", "OR", "XOR", "ADD", "MUL", "MIN", "MAX", "MUX":
+		return 2, -1
+	case "SUB", "DIV", "MOD", "GT", "GE", "LT", "LE", "EQ", "NE":
+		return 2, 2
+	case "NOT", "MOVE":
+		return 1, 1
+	case "LIMIT", "SEL":
+		return 3, 3
+	}
+	return 1, -1
+}
+
+// opDisconnect removes the connection into an input pin. FB pins drop their
+// named argument; extensible operator inputs drop the argument when the
+// block keeps its minimum arity; fixed-arity inputs and coil sources cannot
+// dangle in text form, so those explain what to do instead.
+func (b *modelBuilder) opDisconnect(op EditOp) ([]TextEdit, error) {
+	if _, err := b.findEdge(op); err != nil {
+		return nil, err
+	}
+	switch {
+	case strings.HasPrefix(op.To, "f:"):
+		inst := strings.TrimPrefix(op.To, "f:")
+		for _, n := range b.nl.nodes {
+			if !n.isCall || n.inst != inst {
+				continue
+			}
+			for i, a := range n.args {
+				if a.pin != op.ToPin {
+					continue
+				}
+				if len(n.args) == 1 {
+					return nil, fmt.Errorf("fbd edit: %s's only input — delete the block instead", inst)
+				}
+				return []TextEdit{argRemoval(i, len(n.args),
+					func(j int) exprPos { return n.args[j].pinPos },
+					func(j int) expr { return n.args[j].val })}, nil
+			}
+		}
+		return nil, fmt.Errorf("fbd edit: %s has no argument for pin %q", inst, op.ToPin)
+
+	case strings.HasPrefix(op.To, "c:"):
+		return nil, fmt.Errorf("fbd edit: a coil needs a source — rewire it, or delete the coil")
+
+	default: // operator/function block
+		call, ok := b.exprOf[op.To]
+		if !ok {
+			return nil, fmt.Errorf("fbd edit: unknown block %q", op.To)
+		}
+		node := b.nodes[op.To]
+		idx := -1
+		for i, p := range node.Inputs {
+			if p == op.ToPin {
+				idx = i
+			}
+		}
+		if idx < 0 || idx >= len(call.args) {
+			return nil, fmt.Errorf("fbd edit: %s has no input %q", node.Label, op.ToPin)
+		}
+		minA, _ := opArity(call.fn)
+		if len(call.args)-1 < minA {
+			return nil, fmt.Errorf("fbd edit: %s needs at least %d inputs — rewire this one instead", call.fn, minA)
+		}
+		return []TextEdit{argRemoval(idx, len(call.args),
+			func(j int) exprPos {
+				l, c := call.args[j].pos()
+				el, ec := call.args[j].end()
+				return exprPos{l, c, el, ec}
+			},
+			func(j int) expr { return call.args[j] })}, nil
+	}
+}
+
+// argRemoval spans one argument plus its list separator: interior/trailing
+// args take the comma before them, a leading arg takes the comma after.
+func argRemoval(i, n int, headOf func(int) exprPos, valOf func(int) expr) TextEdit {
+	endL, endC := valOf(i).end()
+	if i > 0 {
+		prevL, prevC := valOf(i - 1).end()
+		return TextEdit{Line: prevL, Col: prevC, EndLine: endL, EndCol: endC}
+	}
+	start := headOf(i)
+	next := headOf(i + 1)
+	return TextEdit{Line: start.line, Col: start.col, EndLine: next.line, EndCol: next.col}
+}
+
+// opAddInput appends an argument to an extensible block — the "+" pin: the
+// input EXISTS because it is wired, so no dangling placeholder state.
+func (b *modelBuilder) opAddInput(op EditOp) ([]TextEdit, error) {
+	call, ok := b.exprOf[op.Node]
+	if !ok {
+		return nil, fmt.Errorf("fbd edit: unknown block %q", op.Node)
+	}
+	_, maxA := opArity(call.fn)
+	if maxA != -1 && len(call.args) >= maxA {
+		return nil, fmt.Errorf("fbd edit: %s takes exactly %d inputs", call.fn, maxA)
+	}
+	if len(call.args) == 0 {
+		return nil, fmt.Errorf("fbd edit: %s has no argument list to extend", call.fn)
+	}
+	ref, err := b.refText(op.Source, op.SourcePin)
+	if err != nil {
+		return nil, err
+	}
+	l, c := call.args[len(call.args)-1].end()
+	return []TextEdit{{Line: l, Col: c, EndLine: l, EndCol: c, NewText: ", " + ref}}, nil
 }

@@ -290,3 +290,57 @@ func TestLayoutBatchSkipsPhantoms(t *testing.T) {
 		t.Errorf("all-phantom batch should no-op, got %v", edits)
 	}
 }
+
+func TestEditDisconnect(t *testing.T) {
+	// FB pin: the named argument disappears entirely.
+	out := apply(t, editSrc, mustOp(t, editSrc, EditOp{Type: "disconnect", To: "f:t1", ToPin: "PT"}))
+	if !strings.Contains(out, "t1 : TON(IN := Run)") {
+		t.Errorf("PT arg not removed:\n%s", out)
+	}
+	// First named arg: the separator after it goes too.
+	out = apply(t, editSrc, mustOp(t, editSrc, EditOp{Type: "disconnect", To: "f:t1", ToPin: "IN"}))
+	if !strings.Contains(out, "t1 : TON(PT := T#5S)") {
+		t.Errorf("IN arg not removed:\n%s", out)
+	}
+	// Fixed-arity operator input refuses with guidance.
+	if _, err := ApplyEdit(editSrc, EditOp{Type: "disconnect", To: "b:w.hot", ToPin: "IN2"}); err == nil ||
+		!strings.Contains(err.Error(), "at least 2") {
+		t.Errorf("fixed-arity disconnect must refuse, got %v", err)
+	}
+	// Coil sources can't dangle.
+	if _, err := ApplyEdit(editSrc, EditOp{Type: "disconnect", To: "c:Hot", ToPin: ""}); err == nil ||
+		!strings.Contains(err.Error(), "coil") {
+		t.Errorf("coil disconnect must refuse, got %v", err)
+	}
+}
+
+func TestEditDisconnectExtensible(t *testing.T) {
+	// A 3-input OR sheds one input and stays a valid 2-input OR.
+	src := strings.Replace(editSrc, "seal = OR(Start, Run)", "seal = OR(Start, Run, Hot)", 1)
+	out := apply(t, src, mustOp(t, src, EditOp{Type: "disconnect", To: "b:w.seal", ToPin: "IN2"}))
+	if !strings.Contains(out, "seal = OR(Start, Hot)") {
+		t.Errorf("middle input not removed:\n%s", out)
+	}
+	// Leading input removal keeps the list well-formed.
+	out = apply(t, src, mustOp(t, src, EditOp{Type: "disconnect", To: "b:w.seal", ToPin: "IN1"}))
+	if !strings.Contains(out, "seal = OR(Run, Hot)") {
+		t.Errorf("leading input not removed:\n%s", out)
+	}
+	// At minimum arity it refuses.
+	if _, err := ApplyEdit(out, EditOp{Type: "disconnect", To: "b:w.seal", ToPin: "IN1"}); err == nil {
+		t.Error("2-input OR must refuse a disconnect")
+	}
+}
+
+func TestEditAddInput(t *testing.T) {
+	// Dropping a source on the "+" pin appends an argument.
+	out := apply(t, editSrc, mustOp(t, editSrc, EditOp{Type: "addInput", Node: "b:w.seal", Source: "v:Stop"}))
+	if !strings.Contains(out, "seal = OR(Start, Run, Stop)") {
+		t.Errorf("input not appended:\n%s", out)
+	}
+	// Fixed-arity blocks refuse.
+	if _, err := ApplyEdit(editSrc, EditOp{Type: "addInput", Node: "b:w.hot", Source: "v:Stop"}); err == nil ||
+		!strings.Contains(err.Error(), "exactly 2") {
+		t.Errorf("GT addInput must refuse, got %v", err)
+	}
+}

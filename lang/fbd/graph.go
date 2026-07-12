@@ -121,6 +121,7 @@ func buildModel(src string, userFBs ...map[string]*ir.FBDef) (*modelBuilder, err
 	b := &modelBuilder{
 		nl:      nl,
 		src:     strings.Split(src, "\n"),
+		exprOf:  map[string]callExpr{},
 		m:       &Model{Name: pouName(header)},
 		nodes:   map[string]*Node{},
 		inputs:  map[string]*Node{},
@@ -181,6 +182,7 @@ type modelBuilder struct {
 	fbs                    map[string]*Node  // fb node per instance name
 	wireOut                map[string]outRef // memoized wire resolutions (fan-out shares them)
 	userFBs                map[string]*ir.FBDef
+	exprOf                 map[string]callExpr // block node id -> the call that produced it
 	litSeq                 int
 }
 
@@ -403,6 +405,7 @@ func (b *modelBuilder) source(e expr, baseID string, visited []string) (outRef, 
 		// Not an FB instance: a struct-member read like M.Speed.
 		return outRef{node: b.inputChip(x.inst + "." + x.pin).ID}, nil
 	case callExpr:
+		b.exprOf[baseID] = x
 		n := b.add(&Node{
 			ID: baseID, Kind: "block", Label: x.fn,
 			Inputs:  blockPins(x.fn, len(x.args)),

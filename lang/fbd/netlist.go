@@ -43,8 +43,9 @@ type node struct {
 }
 
 type namedArg struct {
-	pin string
-	val expr
+	pin    string
+	pinPos exprPos // the pin-name token, so a disconnect can remove "PIN := expr"
+	val    expr
 }
 
 // expr is the FBD expression tree (blocks, refs, literals, negation). Every
@@ -267,7 +268,9 @@ func (p *netParser) namedArgs() ([]namedArg, error) {
 		if !p.at(st.TokenIdent) {
 			return nil, p.posErr("expected a pin name")
 		}
+		pinAt := p.here()
 		pin := p.next().Literal
+		pinAt.endLine, pinAt.endCol = pinAt.line, pinAt.col+len(pin)
 		if !p.at(st.TokenAssign) {
 			return nil, p.posErr(fmt.Sprintf("FB input %q must use ':=' (named pins)", pin))
 		}
@@ -276,7 +279,7 @@ func (p *netParser) namedArgs() ([]namedArg, error) {
 		if err != nil {
 			return nil, err
 		}
-		args = append(args, namedArg{pin: pin, val: e})
+		args = append(args, namedArg{pin: pin, pinPos: pinAt, val: e})
 		if p.at(st.TokenComma) {
 			p.next()
 		}

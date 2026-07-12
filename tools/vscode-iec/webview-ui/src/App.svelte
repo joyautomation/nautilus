@@ -93,7 +93,7 @@
 			sourceHandle: e.fromPin ?? '',
 			target: e.to,
 			targetHandle: e.toPin ?? '',
-			selectable: false,
+			selectable: editable,
 			data: {
 				e,
 				lane: laneIdx.get(e),
@@ -144,8 +144,18 @@
 	// ── gestures → ops ──────────────────────────────────────────────────────
 	function onconnect(c: Connection) {
 		// Dragging output→input rewires that input (or wires an unwired FB
-		// pin). We never mutate edges locally: the op round-trips through the
-		// text and the re-render brings the new wiring back.
+		// pin); dropping on an extensible block's "+" pin appends an input.
+		// We never mutate edges locally: the op round-trips through the text
+		// and the re-render brings the new wiring back.
+		if (c.targetHandle === '+') {
+			postOp({
+				type: 'addInput',
+				node: c.target,
+				source: c.source,
+				sourcePin: c.sourceHandle ?? ''
+			});
+			return;
+		}
 		postOp({
 			type: 'rewire',
 			to: c.target,
@@ -155,8 +165,21 @@
 		});
 	}
 
-	function onbeforedelete({ nodes: sel }: { nodes: Node[]; edges: Edge[] }) {
+	function onbeforedelete({ nodes: sel, edges: selEdges }: { nodes: Node[]; edges: Edge[] }) {
 		for (const n of sel) postOp({ type: 'deleteNode', node: n.id });
+		// A selected edge deletes as a DISCONNECT: FB pins drop their named
+		// arg, extensible inputs shrink, fixed-arity/coil inputs explain.
+		for (const e of selEdges) {
+			const d = e.data as { e?: { to: string; toPin?: string; from: string; fromPin?: string } };
+			if (!d?.e) continue;
+			postOp({
+				type: 'disconnect',
+				to: d.e.to,
+				toPin: d.e.toPin ?? '',
+				from: d.e.from,
+				fromPin: d.e.fromPin ?? ''
+			});
+		}
 		return Promise.resolve(false); // ops re-render; never delete locally
 	}
 
@@ -208,7 +231,7 @@
 				<span><i class="sw changed"></i>changed</span>
 			</span>
 		{:else if hint}
-			<span class="hint">double-click: edit & rename · drag pin→pin: wire · drag node: pin layout · Del: delete</span>
+			<span class="hint">double-click: edit & rename · drag pin→pin: wire (+ adds an input) · drag node: pin layout · Del: delete / disconnect</span>
 		{/if}
 		<span class="spacer"></span>
 		{#if selectedCount > 0}
@@ -380,11 +403,9 @@
 		border-bottom: 1px solid var(--vscode-editorWidget-border, #454545);
 		fill: var(--vscode-foreground, #ccc);
 	}
-	:global(.svelte-flow__edge) {
-		pointer-events: none;
-	}
-	:global(.svelte-flow__edge .not-hit) {
-		pointer-events: all;
+	:global(.svelte-flow__edge.selected .wirepath) {
+		stroke: var(--vscode-focusBorder, #58a6ff) !important;
+		stroke-width: 2.4;
 	}
 	:global(.svelte-flow__connectionline path) {
 		stroke: var(--vscode-charts-blue, #58a6ff);

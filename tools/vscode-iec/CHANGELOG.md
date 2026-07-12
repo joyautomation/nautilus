@@ -3,6 +3,21 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0] - 2026-07-12
+
+### Added
+- **Disconnect wires**: click a wire to select it (it highlights), press
+  Delete. Semantics follow the text form — an FB pin drops its named
+  argument, an extensible operator input (AND/OR/ADD/MUL/…) is removed as
+  long as the block keeps its minimum inputs, and fixed-arity inputs (SUB,
+  GT, LIMIT…) or a coil's source refuse with guidance, since the text form
+  can't leave them dangling.
+- **Add inputs to extensible blocks**: AND/OR/XOR/ADD/MUL/MIN/MAX/MUX show
+  a dashed "+" pin below their inputs — drop any wire on it to append an
+  input (`OR(a, b)` → `OR(a, b, c)`). The pin exists because it's wired:
+  no dangling placeholder state, ever. Fixed-arity blocks refuse
+  ("GT takes exactly 2 inputs").
+
 ## [0.6.5] - 2026-07-12
 
 ### Fixed

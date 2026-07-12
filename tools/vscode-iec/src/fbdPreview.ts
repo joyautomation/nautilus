@@ -52,7 +52,9 @@ export type FbdEditOp = {
     | "deleteNode"
     | "insertStatement"
     | "setLayout"
-    | "clearLayout";
+    | "clearLayout"
+    | "disconnect"
+    | "addInput";
   node?: string;
   to?: string;
   toPin?: string;

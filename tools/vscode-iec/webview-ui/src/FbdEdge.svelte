@@ -90,6 +90,8 @@
 </script>
 
 <g class="fbd-edge {d.e.status ?? ''}" class:feedback={d.e.feedback || backward}>
+	<!-- wide invisible twin of the wire: the click/selection target -->
+	<path class="interaction" d={path} fill="none" stroke="transparent" stroke-width="11" />
 	<path class="wirepath" d={path} fill="none" />
 	{#if d.e.negated}
 		<circle class="neg" cx={targetX - 4.5} cy={targetY} r="4.5" />
@@ -130,6 +132,11 @@
 		stroke: var(--wire);
 		stroke-width: 1.4;
 		opacity: 0.9;
+		pointer-events: none;
+	}
+	.interaction {
+		pointer-events: stroke;
+		cursor: pointer;
 	}
 	.fbd-edge.feedback .wirepath {
 		stroke-dasharray: 6 3;

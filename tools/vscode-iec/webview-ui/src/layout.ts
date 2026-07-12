@@ -40,6 +40,8 @@ export type Placed = FbdNode & {
   outs: string[];
 };
 
+export const EXTENSIBLE = new Set(['AND', 'OR', 'XOR', 'ADD', 'MUL', 'MIN', 'MAX', 'MUX']);
+
 const PIN_PITCH = 18;
 const TITLE_H = 20;
 const FB_TITLE_H = 32;

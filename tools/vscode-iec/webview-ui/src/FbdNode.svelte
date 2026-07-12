@@ -6,7 +6,7 @@
 	// retype (setLiteral), FB instances and named wires rename.
 	import { Handle, Position } from '@xyflow/svelte';
 	import type { Placed } from './layout';
-	import { pinOffset } from './layout';
+	import { pinOffset, EXTENSIBLE } from './layout';
 
 	let {
 		data
@@ -22,6 +22,8 @@
 	const chip = $derived(n.kind === 'input' || n.kind === 'coil');
 	const editableConst = $derived(data.editable && !!n.src);
 	const renameable = $derived(data.editable && (n.kind === 'fb' || (n.kind === 'block' && !!n.wire)));
+	const plusPin = $derived(data.editable && n.kind === 'block' && EXTENSIBLE.has(n.label));
+	const plusTop = $derived(n.titleH + (n.ins.length + 0.5) * 18);
 
 	// A direct listener (not Svelte's delegated ondblclick): survives synthetic
 	// events in tests and never races xyflow's node wrapper handling.
@@ -83,6 +85,11 @@
 			<Handle type="source" position={Position.Right} id={pin} style="top: {pinOffset(n, pin, 'out')}px" isConnectable={data.editable} />
 			<span class="pin out" style="top: {pinOffset(n, pin, 'out') - 7}px">{pin}</span>
 		{/each}
+		{#if plusPin}
+			<!-- drop a wire here to ADD an input: the pin exists because it's wired -->
+			<Handle type="target" class="plus-handle" position={Position.Left} id="+" style="top: {plusTop}px" isConnectable={true} />
+			<span class="pin in plus" style="top: {plusTop - 7}px" title="drop a wire here to add an input">+</span>
+		{/if}
 		{#if n.wire}<span class="wire">{n.wire}</span>{/if}
 	</div>
 {/if}
@@ -162,6 +169,17 @@
 		background: var(--vscode-charts-blue, #58a6ff);
 		border: none;
 		opacity: 0.65;
+	}
+	:global(.svelte-flow__handle.plus-handle) {
+		background: transparent;
+		border: 1.2px dashed var(--vscode-charts-blue, #58a6ff);
+		width: 9px;
+		height: 9px;
+	}
+	.pin.plus {
+		color: var(--vscode-charts-blue, #58a6ff);
+		opacity: 0.9;
+		font-weight: 700;
 	}
 	/* Selection must be unmissable, single node included: the wrapper gets
 	   an outline + glow, AND the element itself recolors (multiple cues so
