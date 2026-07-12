@@ -92,8 +92,17 @@
       .chart { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 0.6rem 0.8rem; }
       .chart .k { display: block; font-size: 0.65rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.25rem; }
       .chart svg { width: 100%; display: block; }
+      /* Smooth chart updates: sparklines scroll via a transitioned group
+         transform, histogram bars ease between heights, phase widths ease.
+         The transition spans the SSE broadcast interval so motion is
+         continuous rather than stepped. */
+      .chart svg g.scroll { transition: transform 0.3s linear; }
+      .chart svg rect.hbar { transition: y 0.3s ease, height 0.3s ease; }
       .phasebar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--border); margin-top: 0.3rem; }
-      .phasebar span { min-width: 1px; }
+      .phasebar span { min-width: 1px; transition: width 0.3s ease; }
+      @media (prefers-reduced-motion: reduce) {
+        .chart svg g.scroll, .chart svg rect.hbar, .phasebar span { transition: none; }
+      }
       .ph-read { background: var(--accent); }
       .ph-exec { background: #d7a021; }
       .ph-write { background: var(--good); }
@@ -302,32 +311,64 @@
       // ── scan diagnostics ─────────────────────────────────────────────
       const fmtMs = (v, d = 1) => (typeof v === "number" && isFinite(v) ? v.toFixed(d) : "—");
 
-      function sparkline(el, values, color) {
-        if (!values || values.length < 2) { el.innerHTML = ""; return; }
-        const w = 240, h = 48;
+      // sparkline draws a scrolling window: each sample is plotted at its
+      // ABSOLUTE scan index (endIndex anchors the newest sample), and a
+      // transitioned group transform slides the window left as samples
+      // arrive — existing geometry never moves relative to itself, so the
+      // line scrolls instead of redrawing. The y-domain eases toward the
+      // data's range (expanding immediately so nothing clips) to avoid
+      // vertical snapping on rescale.
+      function sparkline(el, values, color, endIndex) {
+        if (!values || values.length < 2) { el.innerHTML = ""; el._g = null; return; }
+        const w = 240, h = 48, WINDOW = 180;
+        const dx = w / (WINDOW - 1);
+        if (!el._g) {
+          el.innerHTML =
+            `<g class="scroll"><polyline fill="none" stroke="${color}" stroke-width="1.3" vector-effect="non-scaling-stroke"/></g>`;
+          el._g = el.firstChild;
+          el._lo = undefined;
+        }
         let lo = Math.min(...values), hi = Math.max(...values);
         if (hi - lo < 1e-9) { lo -= 0.5; hi += 0.5; }
+        if (el._lo === undefined) { el._lo = lo; el._hi = hi; }
+        else {
+          el._lo += (lo - el._lo) * 0.2;
+          el._hi += (hi - el._hi) * 0.2;
+          if (lo < el._lo) el._lo = lo;
+          if (hi > el._hi) el._hi = hi;
+        }
+        const span = el._hi - el._lo || 1;
+        const first = endIndex - values.length + 1;
         const pts = values
           .map((v, i) => {
-            const x = (i / (values.length - 1)) * (w - 4) + 2;
-            const y = 3 + (1 - (v - lo) / (hi - lo)) * (h - 6);
-            return `${x.toFixed(1)},${y.toFixed(1)}`;
+            const x = (first + i) * dx;
+            const y = 3 + (1 - (v - el._lo) / span) * (h - 6);
+            return `${x.toFixed(2)},${y.toFixed(2)}`;
           })
           .join(" ");
-        el.innerHTML = `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.3" vector-effect="non-scaling-stroke"/>`;
+        el._g.firstChild.setAttribute("points", pts);
+        el._g.style.transform = `translateX(${(w - 2 - endIndex * dx).toFixed(2)}px)`;
       }
 
+      // histogram keeps one <rect> per bucket alive and only moves y/height,
+      // so the CSS transition carries bars smoothly between frames.
       function histogram(el, counts) {
-        if (!counts || !counts.length) { el.innerHTML = ""; return; }
+        if (!counts || !counts.length) { el.innerHTML = ""; el._bars = null; return; }
         const w = 240, h = 48;
-        const max = Math.max(...counts, 1);
         const bw = w / counts.length;
-        el.innerHTML = counts
-          .map((c, i) => {
-            const bh = (c / max) * (h - 4);
-            return `<rect x="${(i * bw + 1).toFixed(1)}" y="${(h - bh).toFixed(1)}" width="${(bw - 2).toFixed(1)}" height="${Math.max(bh, c > 0 ? 1.5 : 0).toFixed(1)}" rx="1.5" fill="var(--accent)"/>`;
-          })
-          .join("");
+        if (!el._bars || el._bars.length !== counts.length) {
+          el.innerHTML = counts
+            .map((_, i) =>
+              `<rect class="hbar" x="${(i * bw + 1).toFixed(1)}" y="${h}" width="${(bw - 2).toFixed(1)}" height="0" rx="1.5" fill="var(--accent)"/>`)
+            .join("");
+          el._bars = Array.from(el.querySelectorAll("rect"));
+        }
+        const max = Math.max(...counts, 1);
+        counts.forEach((c, i) => {
+          const bh = Math.max((c / max) * (h - 4), c > 0 ? 1.5 : 0);
+          el._bars[i].setAttribute("y", (h - bh).toFixed(1));
+          el._bars[i].setAttribute("height", bh.toFixed(1));
+        });
       }
 
       function renderScan(s) {
@@ -341,8 +382,9 @@
         $("d-count").textContent = (s.count ?? 0).toLocaleString();
         $("d-recent-k").textContent = `scan time — last ${(s.recent ?? []).length} scans`;
         $("d-periods-k").textContent = `scan period — target ${fmtMs(s.targetMs, 0)} ms`;
-        sparkline($("d-recent"), s.recent, "var(--accent)");
-        sparkline($("d-periods"), s.periods, "var(--good)");
+        // The scan count anchors the newest sample so the window scrolls.
+        sparkline($("d-recent"), s.recent, "var(--accent)", s.count);
+        sparkline($("d-periods"), s.periods, "var(--good)", s.count);
         histogram($("d-hist"), s.histogram);
 
         const execMs = (s.execUs ?? 0) / 1000;
