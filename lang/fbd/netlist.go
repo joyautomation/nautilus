@@ -40,16 +40,19 @@ type namedArg struct {
 }
 
 // expr is the FBD expression tree (blocks, refs, literals, negation). Every
-// node records the 1-based file position of its first token, so diagram
-// tooling can map graphical gestures back to text edits.
+// node records the 1-based file span of its tokens — start of the first,
+// just past the last — so diagram tooling can map graphical gestures back to
+// text edits (replace an argument, insert before it, delete a NOT).
 type expr interface {
 	isExpr()
 	pos() (line, col int)
+	end() (line, col int)
 }
 
-type exprPos struct{ line, col int }
+type exprPos struct{ line, col, endLine, endCol int }
 
 func (p exprPos) pos() (int, int) { return p.line, p.col }
+func (p exprPos) end() (int, int) { return p.endLine, p.endCol }
 
 type refExpr struct { // a variable or wire name
 	exprPos
@@ -87,10 +90,14 @@ type netParser struct {
 	// lineOffset maps token lines (relative to the FBD body) back to lines in
 	// the whole .fbd file, so parse errors point at the real source line.
 	lineOffset int
+	// end of the most recently consumed token (file-absolute, 1-based; col
+	// just past the token) — the closing edge of expression spans.
+	lastEndLine, lastEndCol int
+	lines                   []string // body lines, for token-width measuring
 }
 
 func parseNetlist(body string, lineOffset int) (*netlist, error) {
-	p := &netParser{toks: st.Lex(body), lineOffset: lineOffset}
+	p := &netParser{toks: st.Lex(body), lineOffset: lineOffset, lines: strings.Split(body, "\n")}
 	nl := &netlist{wires: map[string]expr{}}
 	for !p.at(st.TokenEOF) {
 		if err := p.item(nl); err != nil {
@@ -102,12 +109,47 @@ func parseNetlist(body string, lineOffset int) (*netlist, error) {
 
 func (p *netParser) peek() st.Token         { return p.toks[p.pos] }
 func (p *netParser) at(t st.TokenType) bool { return p.toks[p.pos].Type == t }
-func (p *netParser) next() st.Token         { t := p.toks[p.pos]; p.pos++; return t }
+
+func (p *netParser) next() st.Token {
+	t := p.toks[p.pos]
+	p.pos++
+	p.lastEndLine, p.lastEndCol = t.Line+p.lineOffset, t.Col+p.tokWidth(t)
+	return t
+}
+
+// tokWidth is the token's source width, for expression end positions. Most
+// literals carry their raw source slice; strings drop the quotes, and time
+// literals drop their T#/TIME# prefix (measured back from the source).
+func (p *netParser) tokWidth(t st.Token) int {
+	switch t.Type {
+	case st.TokenString:
+		return len(t.Literal) + 2
+	case st.TokenTimeLiteral:
+		if t.Line-1 >= 0 && t.Line-1 < len(p.lines) {
+			line := p.lines[t.Line-1]
+			if t.Col-1 >= 0 && t.Col-1 < len(line) {
+				if h := strings.IndexByte(line[t.Col-1:], '#'); h >= 0 {
+					return h + 1 + len(t.Literal)
+				}
+			}
+		}
+		return len(t.Literal) + 2 // fallback: assume a "T#" prefix
+	default:
+		return len(t.Literal)
+	}
+}
 
 // here is the current token's file-absolute position, for expr nodes.
 func (p *netParser) here() exprPos {
 	t := p.peek()
 	return exprPos{line: t.Line + p.lineOffset, col: t.Col}
+}
+
+// span closes an expr's position over everything consumed since `at` — the
+// end is just past the last token next() returned.
+func (p *netParser) span(at exprPos) exprPos {
+	at.endLine, at.endCol = p.lastEndLine, p.lastEndCol
+	return at
 }
 
 func (p *netParser) posErr(msg string) error {
@@ -221,7 +263,7 @@ func (p *netParser) expr() (expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return notExpr{exprPos: at, inner: inner}, nil
+		return notExpr{exprPos: p.span(at), inner: inner}, nil
 	}
 	return p.primary()
 }
@@ -238,12 +280,12 @@ func (p *netParser) primary() (expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return callExpr{exprPos: at, fn: op, args: args}, nil
+		return callExpr{exprPos: p.span(at), fn: op, args: args}, nil
 	}
 	switch t := p.peek(); t.Type {
 	case st.TokenNumber, st.TokenString, st.TokenTimeLiteral, st.TokenTypedLiteral:
 		p.next()
-		return litExpr{exprPos: at, text: literalText(t)}, nil
+		return litExpr{exprPos: p.span(at), text: literalText(t)}, nil
 	case st.TokenLParen:
 		p.next()
 		e, err := p.expr()
@@ -263,21 +305,21 @@ func (p *netParser) primary() (expr, error) {
 			if err != nil {
 				return nil, err
 			}
-			return callExpr{exprPos: at, fn: strings.ToUpper(name), args: args}, nil
+			return callExpr{exprPos: p.span(at), fn: strings.ToUpper(name), args: args}, nil
 		case st.TokenDot: // FB output pin
 			p.next()
 			if !p.at(st.TokenIdent) {
 				return nil, p.posErr("expected a pin name after '.'")
 			}
 			pin := p.next().Literal
-			return pinExpr{exprPos: at, inst: name, pin: pin}, nil
+			return pinExpr{exprPos: p.span(at), inst: name, pin: pin}, nil
 		default:
 			// TRUE/FALSE lex as idents in some paths — treat boolean words as
 			// literals so they emit correctly.
 			if u := strings.ToUpper(name); u == "TRUE" || u == "FALSE" {
-				return litExpr{exprPos: at, text: u}, nil
+				return litExpr{exprPos: p.span(at), text: u}, nil
 			}
-			return refExpr{exprPos: at, name: name}, nil
+			return refExpr{exprPos: p.span(at), name: name}, nil
 		}
 	}
 	return nil, p.posErr(fmt.Sprintf("unexpected %q in expression", p.peek().Literal))

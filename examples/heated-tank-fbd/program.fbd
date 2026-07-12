@@ -45,6 +45,6 @@ FBD
   TempLowAlm := a1.Q
 
   test := 123;
-  test := test2;
+  test2 := test;
 END_FBD
 END_PROGRAM

@@ -330,9 +330,19 @@ END_PROGRAM`
 	if plain.Arg == nil || plain.Arg.Line != 4 || plain.Arg.Col != 12 || plain.Not != nil {
 		t.Errorf("plain edge spans wrong: %s", mustJSON(plain))
 	}
+	if plain.Arg.Text != "A" || plain.Arg.EndCol != 13 {
+		t.Errorf("plain arg text/end wrong: %s", mustJSON(plain.Arg))
+	}
 	neg := m.edge(t, "v:C", andBlock)
 	if !neg.Negated || neg.Arg == nil || neg.Arg.Col != 15 {
 		t.Errorf("negated edge arg wrong: %s", mustJSON(neg))
+	}
+	if neg.Arg.Text != "NOT C" || neg.Arg.EndCol != 20 {
+		t.Errorf("negated arg text/end wrong: %s", mustJSON(neg.Arg))
+	}
+	// The coil's whole source expression is replaceable for rewiring.
+	if e := m.edge(t, andBlock, "c:B"); e.Arg == nil || e.Arg.Text != "AND(A, NOT C)" {
+		t.Errorf("coil arg span wrong: %s", mustJSON(e.Arg))
 	}
 	if neg.Not == nil || neg.Not.Col != 15 || neg.Not.Text != "NOT" ||
 		neg.Inner == nil || neg.Inner.Col != 19 {

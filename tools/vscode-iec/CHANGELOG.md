@@ -3,6 +3,27 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.3] - 2026-07-12
+
+### Fixed
+- **Diagram edit gestures actually work now.** The pan handler captured the
+  pointer on every press, which retargeted the derived double-click/click
+  events to the canvas — so "double-click to edit" and pin clicks never
+  reached their targets in a real session. Panning now captures only after
+  the pointer moves, and interactive elements opt out entirely.
+
+### Added
+- **Rewire connections by dragging.** Drag any referenceable output — a
+  variable or constant chip, a named wire's block output, an FB output pin
+  (`a1.Q`), or a coil — onto an input pin: the target argument's text is
+  replaced with a reference to the source (span-verified before applying,
+  like every diagram edit). Blocks without a wire name aren't draggable —
+  name the wire first.
+- **Insert instructions from the diagram.** The preview toolbar's "+ add"
+  palette drops a template — block→wire, coil, TON timer, CTU counter —
+  just above `END_FBD` as a snippet with live tabstops: focus lands in the
+  text editor on the placeholders while the diagram re-renders as you type.
+
 ## [0.4.2] - 2026-07-11
 
 ### Added

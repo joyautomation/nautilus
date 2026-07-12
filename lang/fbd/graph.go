@@ -54,13 +54,16 @@ type Node struct {
 	Src *Span `json:"src,omitempty"`
 }
 
-// Span locates an editable token in the .fbd source: the 1-based line/col of
-// its first character, plus (when known) the token text so an editor can
-// verify the document before applying a change.
+// Span locates an editable region in the .fbd source: the 1-based line/col
+// of its first character, optionally the end (just past the last character),
+// plus the source text so an editor can verify the document before applying
+// a change.
 type Span struct {
-	Line int    `json:"line"`
-	Col  int    `json:"col"`
-	Text string `json:"text,omitempty"`
+	Line    int    `json:"line"`
+	Col     int    `json:"col"`
+	EndLine int    `json:"endLine,omitempty"`
+	EndCol  int    `json:"endCol,omitempty"`
+	Text    string `json:"text,omitempty"`
 }
 
 // Edge is a wire from an output pin to an input pin. Pin names are "" for
@@ -75,9 +78,10 @@ type Edge struct {
 	Wire     string `json:"wire,omitempty"` // signal name, when fed by a named wire
 	Negated  bool   `json:"negated,omitempty"`
 	Feedback bool   `json:"feedback,omitempty"`
-	// NOT-toggle anchors. Arg is where the consumer's argument expression
-	// starts — the insertion point for a new NOT. When the edge is negated,
-	// Not is the NOT keyword and Inner the expression it negates (deleting
+	// Edit anchors. Arg spans the consumer's whole argument expression —
+	// the insertion point for a new NOT, and the replacement range when the
+	// input is rewired to a different source. When the edge is negated, Not
+	// is the NOT keyword and Inner the expression it negates (deleting
 	// [Not, Inner) removes the negation); they may sit inside a wire
 	// definition when the negation rides a shared wire.
 	Arg   *Span `json:"arg,omitempty"`
@@ -102,6 +106,7 @@ func Graph(src string, userFBs ...map[string]*ir.FBDef) (*Model, error) {
 	}
 	b := &modelBuilder{
 		nl:      nl,
+		src:     strings.Split(src, "\n"),
 		m:       &Model{Name: pouName(header)},
 		nodes:   map[string]*Node{},
 		inputs:  map[string]*Node{},
@@ -143,6 +148,7 @@ type outRef struct {
 
 type modelBuilder struct {
 	nl      *netlist
+	src     []string // source lines, for slicing argument text into spans
 	m       *Model
 	nodes   map[string]*Node  // id -> node
 	inputs  map[string]*Node  // input chip per variable name / member path
@@ -195,7 +201,7 @@ func (b *modelBuilder) build() error {
 					return err
 				}
 				ensurePin(&fb.Inputs, a.pin)
-				b.m.Edges = append(b.m.Edges, edgeWithSpans(&Edge{
+				b.m.Edges = append(b.m.Edges, b.edgeWithSpans(&Edge{
 					From: r.node, FromPin: r.pin, To: fb.ID, ToPin: a.pin,
 					Wire: r.wire, Negated: r.negated, Feedback: r.feedback,
 				}, a.val, r))
@@ -210,7 +216,7 @@ func (b *modelBuilder) build() error {
 			if err != nil {
 				return err
 			}
-			b.m.Edges = append(b.m.Edges, edgeWithSpans(&Edge{
+			b.m.Edges = append(b.m.Edges, b.edgeWithSpans(&Edge{
 				From: r.node, FromPin: r.pin, To: b.coils[n.target].ID,
 				Wire: r.wire, Negated: r.negated, Feedback: r.feedback,
 			}, n.source, r))
@@ -219,17 +225,53 @@ func (b *modelBuilder) build() error {
 	return nil
 }
 
-// edgeWithSpans anchors an edge for NOT toggling: Arg at the consumer-side
-// argument expression (where an inserted NOT goes — local to this consumer
-// even when the value rides a shared wire), and, when negated, the spans of
-// the NOT that did it.
-func edgeWithSpans(e *Edge, arg expr, r outRef) *Edge {
+// edgeWithSpans anchors an edge for editing: Arg spans the consumer-side
+// argument expression with its source text (where an inserted NOT goes, and
+// what a rewire replaces — local to this consumer even when the value rides
+// a shared wire), and, when negated, the spans of the NOT that did it.
+func (b *modelBuilder) edgeWithSpans(e *Edge, arg expr, r outRef) *Edge {
 	line, col := arg.pos()
-	e.Arg = &Span{Line: line, Col: col}
+	endLine, endCol := arg.end()
+	e.Arg = &Span{
+		Line: line, Col: col, EndLine: endLine, EndCol: endCol,
+		Text: b.slice(line, col, endLine, endCol),
+	}
 	if r.negated {
 		e.Not, e.Inner = r.notSpan, r.innerSpan
 	}
 	return e
+}
+
+// slice returns the source text between two 1-based positions (end
+// exclusive), "" when out of range — a "" Text makes editors refuse the
+// gesture rather than guess.
+func (b *modelBuilder) slice(l1, c1, l2, c2 int) string {
+	if l1 < 1 || l2 < l1 || l2 > len(b.src) {
+		return ""
+	}
+	if l1 == l2 {
+		line := b.src[l1-1]
+		if c1 < 1 || c2 < c1 || c2-1 > len(line) {
+			return ""
+		}
+		return line[c1-1 : c2-1]
+	}
+	var parts []string
+	for l := l1; l <= l2; l++ {
+		line := b.src[l-1]
+		lo, hi := 0, len(line)
+		if l == l1 {
+			lo = c1 - 1
+		}
+		if l == l2 {
+			hi = c2 - 1
+		}
+		if lo < 0 || hi < lo || hi > len(line) {
+			return ""
+		}
+		parts = append(parts, line[lo:hi])
+	}
+	return strings.Join(parts, "\n")
 }
 
 // fbNode returns the node for an FB instance, creating it on first sight.
@@ -299,9 +341,16 @@ func (b *modelBuilder) source(e expr, baseID string, visited []string) (outRef, 
 	case litExpr:
 		id := "k:" + strconv.Itoa(b.litSeq)
 		b.litSeq++
+		// Src.Text is the literal AS WRITTEN (sliced from the source, e.g.
+		// TIME#5s), not the canonical label — editors verify and replace the
+		// real bytes.
+		raw := b.slice(x.line, x.col, x.endLine, x.endCol)
+		if raw == "" {
+			raw = x.text
+		}
 		b.add(&Node{
 			ID: id, Kind: "input", Label: x.text,
-			Src: &Span{Line: x.line, Col: x.col, Text: x.text},
+			Src: &Span{Line: x.line, Col: x.col, EndLine: x.endLine, EndCol: x.endCol, Text: raw},
 		})
 		return outRef{node: id}, nil
 	case notExpr:
@@ -339,7 +388,7 @@ func (b *modelBuilder) source(e expr, baseID string, visited []string) (outRef, 
 			if err != nil {
 				return outRef{}, err
 			}
-			b.m.Edges = append(b.m.Edges, edgeWithSpans(&Edge{
+			b.m.Edges = append(b.m.Edges, b.edgeWithSpans(&Edge{
 				From: r.node, FromPin: r.pin, To: n.ID, ToPin: n.Inputs[i],
 				Wire: r.wire, Negated: r.negated, Feedback: r.feedback,
 			}, a, r))

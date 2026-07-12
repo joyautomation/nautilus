@@ -81,6 +81,22 @@
     g.node.editable:hover rect.body { stroke-width: 2; }
     circle.not-hit { fill: transparent; pointer-events: all; cursor: pointer; }
     circle.not-hit:hover { fill: var(--vscode-editor-foreground); fill-opacity: .18; }
+    circle.src-hit { fill: transparent; pointer-events: all; cursor: crosshair; }
+    circle.src-hit:hover { fill: var(--vscode-charts-blue, #58a6ff); fill-opacity: .3; }
+    svg.rewiring circle.not-hit { fill: var(--vscode-charts-blue, #58a6ff); fill-opacity: .25; }
+    svg.rewiring circle.not-hit.over { fill-opacity: .6; }
+    line.ghost { stroke: var(--vscode-charts-blue, #58a6ff); stroke-width: 1.6; stroke-dasharray: 5 3; pointer-events: none; }
+    #addmenu { position: fixed; z-index: 11; display: none; flex-direction: column; min-width: 240px;
+      background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+      border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,.4)); border-radius: 5px;
+      padding: 4px; box-shadow: 0 4px 14px rgba(0,0,0,.35); }
+    #addmenu.on { display: flex; }
+    #addmenu button { display: flex; justify-content: space-between; gap: 12px; width: 100%;
+      background: transparent; border: none; color: var(--vscode-foreground);
+      padding: 5px 8px; border-radius: 3px; cursor: pointer; font-size: 12px; text-align: left; }
+    #addmenu button:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.15)); }
+    #addmenu button code { font-family: var(--vscode-editor-font-family, monospace); font-size: 10px;
+      color: var(--vscode-descriptionForeground, #888); }
     #lit-edit {
       position: fixed; z-index: 10; font-family: var(--vscode-editor-font-family, monospace);
       font-size: 12px; padding: 2px 6px; border-radius: 4px;
@@ -102,11 +118,41 @@
     '<span><i style="background:var(--vscode-gitDecoration-addedResourceForeground,#2ea043)"></i>added</span>' +
     '<span><i style="background:var(--vscode-gitDecoration-deletedResourceForeground,#f85149)"></i>removed</span>' +
     '<span><i style="background:var(--vscode-gitDecoration-modifiedResourceForeground,#d7a021)"></i>changed</span>';
-  const hintEl = el("span", { class: "hint" }, "double-click a constant to edit · click a pin to toggle NOT");
+  const hintEl = el("span", { class: "hint" }, "double-click a constant to edit · click a pin to toggle NOT · drag an output onto a pin to rewire");
+  const addBtn = el("button", { class: "fit", title: "Insert an instruction into the netlist" }, "+ add");
   const zoomOut = el("button", { title: "Zoom out (-)" }, "−");
   const zoomFit = el("button", { class: "fit", title: "Fit (0)" }, "fit");
   const zoomIn = el("button", { title: "Zoom in (+)" }, "+");
-  bar.append(titleEl, legendEl, hintEl, el("span", { class: "spacer" }), zoomOut, zoomFit, zoomIn);
+  bar.append(titleEl, legendEl, hintEl, el("span", { class: "spacer" }), addBtn, zoomOut, zoomFit, zoomIn);
+
+  // Instruction palette: each entry inserts a snippet (with tabstops) at the
+  // end of the FBD block — the text editor takes focus with placeholders
+  // active, and the diagram re-renders live as they're filled in.
+  const TEMPLATES = [
+    ["block → wire", "w = AND(a, b)", "${1:w1} = ${2:AND}(${3:in1}, ${4:in2})"],
+    ["coil (assign output)", "Out := src", "${1:Output} := ${2:source}"],
+    ["timer", "t : TON(…)", "${1:t1} : ${2:TON}(IN := ${3:condition}, PT := ${4:T#1S})"],
+    ["counter", "c : CTU(…)", "${1:c1} : CTU(CU := ${2:count}, R := ${3:reset}, PV := ${4:10})"],
+  ];
+  const addMenu = el("div", { id: "addmenu" });
+  for (const [label, preview, snippet] of TEMPLATES) {
+    const b = el("button", {});
+    b.append(el("span", {}, label), el("code", {}, preview));
+    b.addEventListener("click", () => {
+      addMenu.classList.remove("on");
+      vscode.postMessage({ type: "insertTemplate", snippet });
+    });
+    addMenu.appendChild(b);
+  }
+  document.body.appendChild(addMenu);
+  addBtn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const r = addBtn.getBoundingClientRect();
+    addMenu.style.right = window.innerWidth - r.right + "px";
+    addMenu.style.top = r.bottom + 4 + "px";
+    addMenu.classList.toggle("on");
+  });
+  document.addEventListener("click", () => addMenu.classList.remove("on"));
   const errorEl = el("div", { id: "error" });
   const canvas = el("div", { id: "canvas", tabindex: "0", role: "img", "aria-label": "FBD diagram" });
   app.append(bar, errorEl, canvas);
@@ -349,11 +395,13 @@
         g.appendChild(t);
       }
       if (!diffing && e.arg) {
-        // Pin hit-target: click toggles NOT on this input (a text edit —
-        // insert NOT at the consumer argument, or delete the existing one).
+        // Pin hit-target: click toggles NOT on this input, and it doubles as
+        // the drop target when rewiring (the edge's Arg span is what a new
+        // source replaces).
         const hit = svgEl("circle", { class: "not-hit", cx: p2.x - 4.5, cy: p2.y, r: 7.5 });
+        hit._edge = e;
         const tip = svgEl("title");
-        tip.textContent = e.negated ? "remove NOT" : "add NOT";
+        tip.textContent = (e.negated ? "remove NOT" : "add NOT") + " · drop a source here to rewire";
         hit.appendChild(tip);
         hit.addEventListener("click", (ev) => {
           ev.stopPropagation();
@@ -362,6 +410,30 @@
         g.appendChild(hit);
       }
       root.appendChild(g);
+    }
+
+    // Rewire drag sources: every referenceable output pin. Dragging one onto
+    // an input pin replaces that input's argument text with a reference to
+    // this source (variable, wire name, or inst.pin).
+    if (!diffing) {
+      const refTextFor = (n, pin) => {
+        if (n.kind === "input" || n.kind === "coil") return n.label;
+        if (n.kind === "fb") return pin ? `${n.label}.${pin}` : null;
+        return n.wire || null; // a block needs a wire name to be referenced
+      };
+      for (const n of L.nodes) {
+        for (const pin in n.pinOut) {
+          const ref = refTextFor(n, pin);
+          if (!ref) continue;
+          const pt = n.pinOut[pin];
+          const srcHit = svgEl("circle", { class: "src-hit", cx: pt.x + 3, cy: pt.y, r: 7 });
+          const tip = svgEl("title");
+          tip.textContent = `drag to an input pin to wire ${ref}`;
+          srcHit.appendChild(tip);
+          srcHit.addEventListener("pointerdown", (ev) => beginRewire(ev, srcHit, pt, ref));
+          root.appendChild(srcHit);
+        }
+      }
     }
 
     for (const n of L.nodes) {
@@ -423,6 +495,54 @@
     applyViewBox();
     canvas.appendChild(svg);
     wireSvgEvents();
+  }
+
+  // beginRewire drags a ghost wire from a source pin; dropping on an input
+  // pin's hit target posts a rewire (replace that argument's text with a
+  // reference to the source).
+  function beginRewire(ev, srcEl, srcPt, refText) {
+    ev.stopPropagation();
+    ev.preventDefault();
+    if (!svg) return;
+    const toSvg = (cx, cy) => {
+      const m = svg.getScreenCTM();
+      if (!m) return { x: srcPt.x, y: srcPt.y };
+      const inv = m.inverse();
+      return { x: inv.a * cx + inv.c * cy + inv.e, y: inv.b * cx + inv.d * cy + inv.f };
+    };
+    const ghost = svgEl("line", { class: "ghost", x1: srcPt.x, y1: srcPt.y, x2: srcPt.x, y2: srcPt.y });
+    svg.appendChild(ghost);
+    svg.classList.add("rewiring");
+    try { srcEl.setPointerCapture(ev.pointerId); } catch { /* synthetic pointer */ }
+    let over = null;
+    const move = (mv) => {
+      const p = toSvg(mv.clientX, mv.clientY);
+      ghost.setAttribute("x2", p.x);
+      ghost.setAttribute("y2", p.y);
+      const under = document.elementFromPoint(mv.clientX, mv.clientY);
+      const target = under && under.closest ? under.closest("circle.not-hit") : null;
+      if (over && over !== target) over.classList.remove("over");
+      over = target;
+      if (over) over.classList.add("over");
+    };
+    const finish = (up) => {
+      srcEl.removeEventListener("pointermove", move);
+      srcEl.removeEventListener("pointerup", finish);
+      srcEl.removeEventListener("pointercancel", finish);
+      ghost.remove();
+      svg.classList.remove("rewiring");
+      if (over) over.classList.remove("over");
+      if (up.type === "pointerup" && over && over._edge && over._edge.arg && over._edge.arg.text) {
+        const arg = over._edge.arg;
+        if (arg.text !== refText) {
+          vscode.postMessage({ type: "rewire", arg, newText: refText });
+        }
+      }
+      over = null;
+    };
+    srcEl.addEventListener("pointermove", move);
+    srcEl.addEventListener("pointerup", finish);
+    srcEl.addEventListener("pointercancel", finish);
   }
 
   // beginEditLiteral floats an input over a constant chip; Enter commits the
@@ -543,22 +663,32 @@
   }
   function wireSvgEvents() {
     if (!svg) return;
+    // Pan starts only after real movement. Capturing the pointer on every
+    // pointerdown would retarget the derived click/dblclick events to the
+    // svg, killing the chip and pin gestures — so capture lazily, on drag.
     let drag = null;
+    let panning = false;
     svg.addEventListener("pointerdown", (ev) => {
-      drag = { x: ev.clientX, y: ev.clientY };
-      svg.classList.add("panning");
-      svg.setPointerCapture(ev.pointerId);
+      if (ev.target.closest("circle.not-hit, circle.src-hit, g.node.editable")) return;
+      drag = { x: ev.clientX, y: ev.clientY, id: ev.pointerId };
     });
     svg.addEventListener("pointermove", (ev) => {
       if (!drag || !vb) return;
+      if (!panning) {
+        if (Math.abs(ev.clientX - drag.x) + Math.abs(ev.clientY - drag.y) < 4) return;
+        panning = true;
+        svg.classList.add("panning");
+        try { svg.setPointerCapture(drag.id); } catch { /* synthetic pointer */ }
+      }
       const r = svg.getBoundingClientRect();
       vb.x -= ((ev.clientX - drag.x) * vb.w) / r.width;
       vb.y -= ((ev.clientY - drag.y) * vb.h) / r.height;
-      drag = { x: ev.clientX, y: ev.clientY };
+      drag = { x: ev.clientX, y: ev.clientY, id: drag.id };
       applyViewBox();
     });
     const stop = () => {
       drag = null;
+      panning = false;
       svg.classList.remove("panning");
     };
     svg.addEventListener("pointerup", stop);

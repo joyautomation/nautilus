@@ -31,7 +31,7 @@ export type FbdNode = {
   outputs?: string[];
   layer: number;
 };
-export type FbdSpan = { line: number; col: number; text?: string };
+export type FbdSpan = { line: number; col: number; endLine?: number; endCol?: number; text?: string };
 export type FbdEdge = {
   from: string;
   fromPin?: string;
@@ -49,7 +49,9 @@ export type FbdEdge = {
  * anchored by source spans from the render model. */
 type EditMessage =
   | { type: "editLiteral"; span: FbdSpan; newText: string }
-  | { type: "toggleNot"; arg: FbdSpan; not?: FbdSpan | null; inner?: FbdSpan | null };
+  | { type: "toggleNot"; arg: FbdSpan; not?: FbdSpan | null; inner?: FbdSpan | null }
+  | { type: "rewire"; arg: FbdSpan; newText: string }
+  | { type: "insertTemplate"; snippet: string };
 
 const DEBOUNCE_MS = 150;
 
@@ -314,6 +316,35 @@ export class FbdPreview implements vscode.Disposable {
       } else {
         edit.insert(doc.uri, at(msg.arg), "NOT ");
       }
+    } else if (msg.type === "rewire") {
+      // Replace the whole argument expression with a reference to the
+      // dragged source. The span carries the exact source text — verify it
+      // (case-sensitive: we're replacing the real bytes) before touching.
+      const a = msg.arg;
+      if (!a.text || a.endLine === undefined || a.endCol === undefined) return;
+      const range = new vscode.Range(at(a), new vscode.Position(a.endLine - 1, a.endCol - 1));
+      if (doc.getText(range) !== a.text) {
+        void vscode.window.showWarningMessage(
+          "nautilus: couldn't locate that connection in the source — edit the text directly"
+        );
+        return;
+      }
+      edit.replace(doc.uri, range, msg.newText);
+    } else if (msg.type === "insertTemplate") {
+      // Drop a snippet just above END_FBD and hand focus to the text editor
+      // with the tabstops live — the diagram re-renders as they're filled.
+      for (let i = doc.lineCount - 1; i >= 0; i--) {
+        if (/^\s*END_FBD\s*$/i.test(doc.lineAt(i).text)) {
+          const editor = await vscode.window.showTextDocument(doc, { preview: false });
+          await editor.insertSnippet(
+            new vscode.SnippetString("  " + msg.snippet + "\n"),
+            new vscode.Position(i, 0)
+          );
+          return;
+        }
+      }
+      void vscode.window.showWarningMessage("nautilus: no END_FBD found to insert before");
+      return;
     }
     await vscode.workspace.applyEdit(edit);
   }
