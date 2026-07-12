@@ -54,7 +54,8 @@ export type FbdEditOp = {
     | "setLayout"
     | "clearLayout"
     | "disconnect"
-    | "addInput";
+    | "addInput"
+    | "declareVar";
   node?: string;
   to?: string;
   toPin?: string;

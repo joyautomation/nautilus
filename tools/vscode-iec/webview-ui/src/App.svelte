@@ -92,10 +92,12 @@
 				problems: n.line ? (diagsByLine.get(n.line) ?? []) : [],
 				editable,
 				requestInput,
-				onEdit: (a: { type: 'setLiteral' | 'rename'; node: string; value: string }) =>
-					a.type === 'setLiteral'
-						? postOp({ type: 'setLiteral', node: a.node, value: a.value })
-						: postOp({ type: 'rename', node: a.node, newName: a.value })
+				onEdit: (a: { type: 'setLiteral' | 'rename' | 'declareVar'; node: string; value: string }) => {
+					if (a.type === 'setLiteral') postOp({ type: 'setLiteral', node: a.node, value: a.value });
+					else if (a.type === 'rename') postOp({ type: 'rename', node: a.node, newName: a.value });
+					// declareVar: node carries the variable NAME, value its type.
+					else postOp({ type: 'declareVar', newName: a.node, value: a.value, text: 'VAR_EXTERNAL' });
+				}
 			},
 			draggable: editable,
 			connectable: editable,

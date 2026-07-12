@@ -2,7 +2,7 @@
 	// Instruction palette: pick a template, fill its fields here, Insert posts
 	// an insertStatement op — Go validates the fragment before it touches the
 	// file, and focus never leaves the diagram.
-	import { postOp } from './vscodeApi';
+	import { postOp, type FbdEditOp } from './vscodeApi';
 
 	let { open = $bindable(false) }: { open?: boolean } = $props();
 
@@ -10,7 +10,9 @@
 		label: string;
 		preview: string;
 		fields: [string, string][];
-		build: (f: Record<string, string>) => string;
+		// Either a netlist statement (insertStatement) or a custom op.
+		build?: (f: Record<string, string>) => string;
+		op?: (f: Record<string, string>) => FbdEditOp;
 	};
 	const TEMPLATES: Template[] = [
 		{
@@ -53,6 +55,24 @@
 				['PV', '10']
 			],
 			build: (f) => `${f.name} : CTU(CU := ${f.CU}, R := ${f.R}, PV := ${f.PV})`
+		},
+		{
+			label: 'variable (external tag)',
+			preview: 'name : REAL',
+			fields: [
+				['name', 'Tag1'],
+				['type', 'REAL']
+			],
+			op: (f) => ({ type: 'declareVar', newName: f.name, value: f.type, text: 'VAR_EXTERNAL' })
+		},
+		{
+			label: 'local variable (retained)',
+			preview: 'VAR name : REAL',
+			fields: [
+				['name', 'local1'],
+				['type', 'REAL']
+			],
+			op: (f) => ({ type: 'declareVar', newName: f.name, value: f.type, text: 'VAR' })
 		}
 	];
 
@@ -65,7 +85,7 @@
 	}
 	function commit() {
 		if (!active) return;
-		postOp({ type: 'insertStatement', text: active.build(values) });
+		postOp(active.op ? active.op(values) : { type: 'insertStatement', text: active.build!(values) });
 		open = false;
 		active = null;
 	}

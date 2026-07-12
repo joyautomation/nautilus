@@ -36,6 +36,7 @@ type TextEdit struct {
 //	clearLayout Node (one entry) or nothing (whole block → full auto-layout)
 //	disconnect  To/ToPin (+From/FromPin) — remove the connection into a pin
 //	addInput    Node (extensible block), Source (+SourcePin) — append an arg
+//	declareVar  NewName, Value (type), Text (section) — add a declaration
 type EditOp struct {
 	Type      string `json:"type"`
 	Node      string `json:"node,omitempty"`
@@ -89,6 +90,8 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		return b.opDisconnect(op)
 	case "addInput":
 		return b.opAddInput(op)
+	case "declareVar":
+		return b.opDeclareVar(op)
 	}
 	return nil, fmt.Errorf("fbd edit: unknown op %q", op.Type)
 }
@@ -657,4 +660,83 @@ func (b *modelBuilder) opAddInput(op EditOp) ([]TextEdit, error) {
 	}
 	l, c := call.args[len(call.args)-1].end()
 	return []TextEdit{{Line: l, Col: c, EndLine: l, EndCol: c, NewText: ", " + ref}}, nil
+}
+
+// ── declareVar ─────────────────────────────────────────────────────────────
+
+var varSectionRe = regexp.MustCompile(`(?i)^\s*(VAR_EXTERNAL|VAR)\s*$`)
+var declNameRe = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*:`)
+
+// opDeclareVar inserts "name : TYPE;" into a header section — the one edit
+// the netlist can't express, so the diagram can introduce variables. NewName
+// is the variable, Value the type, Text the section ("VAR_EXTERNAL" default,
+// or "VAR" for retained locals). A missing section is created above FBD.
+func (b *modelBuilder) opDeclareVar(op EditOp) ([]TextEdit, error) {
+	name := strings.TrimSpace(op.NewName)
+	typ := strings.TrimSpace(op.Value)
+	section := strings.ToUpper(strings.TrimSpace(op.Text))
+	if section == "" {
+		section = "VAR_EXTERNAL"
+	}
+	if section != "VAR" && section != "VAR_EXTERNAL" {
+		return nil, fmt.Errorf("fbd edit: unknown section %q", section)
+	}
+	if !identRe.MatchString(name) {
+		return nil, fmt.Errorf("fbd edit: %q is not a valid identifier", name)
+	}
+	if !identRe.MatchString(typ) {
+		return nil, fmt.Errorf("fbd edit: %q is not a valid type name", typ)
+	}
+
+	// The header ends where the FBD block begins.
+	fbdLine := -1
+	for i, l := range b.src {
+		if strings.EqualFold(strings.TrimSpace(l), "FBD") {
+			fbdLine = i
+			break
+		}
+	}
+	if fbdLine == -1 {
+		return nil, fmt.Errorf("fbd edit: no FBD block")
+	}
+
+	// Scan header sections: existing declarations (duplicate check across
+	// ALL sections) and the insertion point for the requested one.
+	insertAt := -1 // 0-based line index of the target section's END_VAR
+	inSection := ""
+	for i := 0; i < fbdLine; i++ {
+		line := b.src[i]
+		if m := varSectionRe.FindStringSubmatch(line); m != nil {
+			inSection = strings.ToUpper(m[1])
+			continue
+		}
+		trimmed := strings.ToUpper(strings.TrimSpace(line))
+		if trimmed == "END_VAR" {
+			if inSection == section {
+				insertAt = i
+			}
+			inSection = ""
+			continue
+		}
+		if inSection != "" {
+			for _, m := range declNameRe.FindAllStringSubmatch(line, -1) {
+				if strings.EqualFold(m[1], name) {
+					return nil, fmt.Errorf("fbd edit: %q is already declared", name)
+				}
+			}
+		}
+	}
+	if b.nameTaken(name) {
+		return nil, fmt.Errorf("fbd edit: the name %q is already in use", name)
+	}
+
+	decl := "  " + name + " : " + typ + ";\n"
+	if insertAt >= 0 {
+		at := insertAt + 1 // 1-based line of END_VAR
+		return []TextEdit{{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: decl}}, nil
+	}
+	// No such section yet: create it just above FBD.
+	at := fbdLine + 1
+	return []TextEdit{{Line: at, Col: 1, EndLine: at, EndCol: 1,
+		NewText: section + "\n" + decl + "END_VAR\n"}}, nil
 }

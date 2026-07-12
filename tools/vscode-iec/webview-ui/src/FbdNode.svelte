@@ -16,7 +16,7 @@
 			problems?: { message: string; severity: string }[];
 			editable: boolean;
 			requestInput: (init: string, at: { x: number; y: number; w: number }, commit: (v: string) => void) => void;
-			onEdit: (op: { type: 'setLiteral' | 'rename'; node: string; value: string }) => void;
+			onEdit: (op: { type: 'setLiteral' | 'rename' | 'declareVar'; node: string; value: string }) => void;
 		};
 	} = $props();
 	const n = $derived(data.n);
@@ -33,7 +33,9 @@
 			ev.stopPropagation();
 			const rect = el.getBoundingClientRect();
 			const at = { x: rect.left, y: rect.top, w: rect.width };
-			if (editableConst) {
+			if (undeclared) {
+				data.requestInput('REAL', at, (v) => data.onEdit({ type: 'declareVar', node: n.label, value: v }));
+			} else if (editableConst) {
 				data.requestInput(n.label, at, (v) => data.onEdit({ type: 'setLiteral', node: n.id, value: v }));
 			} else if (renameable) {
 				const current = n.kind === 'fb' ? n.label : (n.wire ?? '');
@@ -45,8 +47,19 @@
 	}
 
 	const problems = $derived(data.problems ?? []);
+	// An undeclared variable chip offers declare-in-place: double-click, type
+	// the type, done — the header edit the netlist itself can't express.
+	const undeclared = $derived(
+		data.editable &&
+			n.kind === 'input' &&
+			!n.src &&
+			problems.some((p) => /undeclared/i.test(p.message))
+	);
 	const title = $derived.by(() => {
 		// Diagnostics take over the tooltip — the same message as the squiggle.
+		if (undeclared) {
+			return problems.map((p) => p.message).join('\n') + '\ndouble-click to declare (enter its type)';
+		}
 		if (problems.length) return problems.map((p) => p.message).join('\n');
 		const base = n.kind === 'fb' ? `${n.label} : ${n.type ?? '?'}` : n.label;
 		if (editableConst) return `${base} — double-click to edit`;
@@ -58,7 +71,7 @@
 {#if chip}
 	<div
 		class="chip {n.kind} {n.status ?? ''}"
-		class:editable={editableConst}
+		class:editable={editableConst || undeclared}
 		class:problem={problems.length > 0}
 		style="width: {n.w}px; height: {n.h}px"
 		{title}

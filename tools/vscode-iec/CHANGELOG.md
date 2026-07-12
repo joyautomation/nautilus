@@ -3,6 +3,18 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.2] - 2026-07-12
+
+### Added
+- **Declare variables from the diagram.** The "+ add" palette gains
+  "variable (external tag)" and "local variable (retained)" — a
+  declareVar op inserts \ into the right VAR_EXTERNAL/VAR
+  section (creating the section above FBD if missing), with duplicate and
+  collision checks. And the quick path: an UNDECLARED variable chip (it
+  already wears the error badge) can be double-clicked — type its type,
+  Enter, and the declaration lands in VAR_EXTERNAL. Add a block from the
+  palette, double-click its red inputs, and the program compiles.
+
 ## [0.7.1] - 2026-07-12
 
 ### Added

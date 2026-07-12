@@ -344,3 +344,30 @@ func TestEditAddInput(t *testing.T) {
 		t.Errorf("GT addInput must refuse, got %v", err)
 	}
 }
+
+func TestEditDeclareVar(t *testing.T) {
+	// Into the existing VAR_EXTERNAL section, before its END_VAR.
+	out := apply(t, editSrc, mustOp(t, editSrc, EditOp{Type: "declareVar", NewName: "condition", Value: "BOOL"}))
+	if !strings.Contains(out, "condition : BOOL;\nEND_VAR") {
+		t.Errorf("not declared in VAR_EXTERNAL:\n%s", out)
+	}
+	// A VAR section doesn't exist in editSrc — created above FBD.
+	out2 := apply(t, editSrc, mustOp(t, editSrc, EditOp{Type: "declareVar", NewName: "accum", Value: "REAL", Text: "VAR"}))
+	if !strings.Contains(out2, "VAR\n  accum : REAL;\nEND_VAR\nFBD") {
+		t.Errorf("VAR section not created:\n%s", out2)
+	}
+	// The declared program still compiles end to end.
+	if _, err := Compile(out2); err != nil {
+		t.Errorf("declared program broke compilation: %v", err)
+	}
+	// Duplicates and collisions refuse.
+	if _, err := ApplyEdit(editSrc, EditOp{Type: "declareVar", NewName: "TempC", Value: "REAL"}); err == nil {
+		t.Error("existing declaration must be rejected")
+	}
+	if _, err := ApplyEdit(editSrc, EditOp{Type: "declareVar", NewName: "seal", Value: "BOOL"}); err == nil {
+		t.Error("netlist name collision must be rejected")
+	}
+	if _, err := ApplyEdit(editSrc, EditOp{Type: "declareVar", NewName: "2bad", Value: "BOOL"}); err == nil {
+		t.Error("invalid identifier must be rejected")
+	}
+}
