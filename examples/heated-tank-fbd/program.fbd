@@ -1,0 +1,45 @@
+PROGRAM Main
+(* Heated surge tank, FBD flavor — the same plant as examples/heated-tank,
+   but the logic is a Function Block Diagram netlist: the pump hysteresis is
+   a seal-in latch, the temperature PI feeds its integral back through a
+   retained variable, and a TON delays the low-temperature alarm.
+   Open the diagram: VS Code -> "nautilus: Open FBD Diagram Preview". *)
+VAR_EXTERNAL
+    (* field inputs *)
+    LevelPct       : REAL;
+    TempC          : REAL;
+    ScanDtS        : REAL;
+    (* operator setpoints *)
+    TempSP         : REAL;
+    Kp             : REAL;
+    Ki             : REAL;
+    PumpStartLevel : REAL;
+    PumpStopLevel  : REAL;
+    (* field outputs + alarm *)
+    PumpRun        : BOOL;
+    Heater         : REAL;
+    TempLowAlm     : BOOL;
+END_VAR
+VAR
+    integral : REAL;
+END_VAR
+FBD
+  // P-101 pump: level hysteresis as a seal-in latch — start when low,
+  // seal through PumpRun, drop out when high.
+  low  = LE(LevelPct, PumpStartLevel)
+  high = GE(LevelPct, PumpStopLevel)
+  PumpRun := AND(OR(low, PumpRun), NOT high)
+
+  // TIC-101: temperature PI with anti-windup clamp. "e" fans out to both
+  // the proportional and integral paths; integral is retained state fed
+  // back from its own coil.
+  e = SUB(TempSP, TempC)
+  integral := LIMIT(0.0, ADD(integral, MUL(Ki, e, ScanDtS)), 100.0)
+  Heater := LIMIT(0.0, ADD(MUL(Kp, e), integral), 100.0)
+
+  // TAL-101: low-temperature alarm with a 10 s on-delay.
+  cold = LT(TempC, 62.0)
+  a1 : TON(IN := cold, PT := T#10S)
+  TempLowAlm := a1.Q
+END_FBD
+END_PROGRAM

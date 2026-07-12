@@ -3,6 +3,13 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.8] - 2026-07-11
+
+### Added
+- **Inline live tag values in `.fbd` files** — the identifier scanner is
+  syntax-agnostic and FBD netlists reference the same runtime tags, so
+  `.fbd` editors now get the same live value pills as `.st`.
+
 ## [0.3.7] - 2026-07-11
 
 ### Added

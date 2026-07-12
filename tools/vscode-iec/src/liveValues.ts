@@ -1,5 +1,5 @@
-// Inline live tag values: decorate identifiers in .st editors with the
-// current value from a running nautilus controller.
+// Inline live tag values: decorate identifiers in .st and .fbd editors with
+// the current value from a running nautilus controller.
 //
 // Data path: the nautilus `server` package broadcasts tag frames over SSE
 // (GET <runtimeUrl>/api/stream, `data: {"ts":..,"scans":..,"tags":{...}}`).
@@ -15,6 +15,12 @@ import * as vscode from "vscode";
 import { formatValue, formatValueHover, scanIdentifiers } from "./scan";
 
 type Frame = { ts: number; scans: number; tags: Record<string, unknown> };
+
+/** Both IEC languages get live values — the identifier scanner is syntax-
+ * agnostic and FBD netlists reference the same runtime tags. */
+function isIecDoc(doc: vscode.TextDocument): boolean {
+  return doc.languageId === "iec-st" || doc.languageId === "iec-fbd";
+}
 
 /** A frame is "fresh" if it arrived within this window; otherwise chips gray out. */
 const FRESHNESS_MS = 3000;
@@ -53,7 +59,7 @@ export class LiveValues implements vscode.Disposable {
     this.disposables.push(
       vscode.window.onDidChangeVisibleTextEditors(() => this.onEditorsChanged()),
       vscode.workspace.onDidChangeTextDocument((e) => {
-        if (e.document.languageId === "iec-st") this.scheduleRender();
+        if (isIecDoc(e.document)) this.scheduleRender();
       })
     );
     this.onEditorsChanged();
@@ -95,9 +101,7 @@ export class LiveValues implements vscode.Disposable {
   }
 
   private stEditors(): vscode.TextEditor[] {
-    return vscode.window.visibleTextEditors.filter(
-      (e) => e.document.languageId === "iec-st"
-    );
+    return vscode.window.visibleTextEditors.filter((e) => isIecDoc(e.document));
   }
 
   /** Connect only while enabled and an ST editor is visible. */
