@@ -184,6 +184,12 @@ function handleWebviewMessage(doc: vscode.TextDocument, msg: WebviewMessage): vo
 
 async function applyOpMessage(doc: vscode.TextDocument, msg: WebviewMessage): Promise<void> {
   if (msg.type !== "edit") return;
+  // Belt and braces against xyflow selection-drag phantom entries: drop
+  // anything without a node id before it reaches the CLI.
+  if (msg.op.type === "setLayout" && msg.op.entries) {
+    msg.op.entries = msg.op.entries.filter((e) => !!e.node);
+    if (msg.op.entries.length === 0) return;
+  }
   const res = await fbdEdit(doc.getText(), msg.op);
   if ("error" in res) {
     void vscode.window.showWarningMessage("nautilus: " + res.error);

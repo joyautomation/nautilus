@@ -269,3 +269,24 @@ func TestLayoutBatch(t *testing.T) {
 		}
 	}
 }
+
+func TestLayoutBatchSkipsPhantoms(t *testing.T) {
+	// Selection drags can include synthetic entries with no model id — the
+	// batch pins the real nodes and ignores the phantoms.
+	edits := mustOp(t, editSrc, EditOp{Type: "setLayout", Entries: []LayoutOpEntry{
+		{Node: "", X: 1, Y: 2},
+		{Node: "c:Run", X: 100, Y: 10},
+		{Node: "nonsense", X: 3, Y: 4},
+	}})
+	out := apply(t, editSrc, edits)
+	if !strings.Contains(out, "c:Run 100,10") {
+		t.Errorf("real node not pinned:\n%s", out)
+	}
+	if strings.Contains(out, "nonsense") || strings.Contains(out, " 1,2") {
+		t.Errorf("phantom entries leaked:\n%s", out)
+	}
+	// All-phantom batches are a clean no-op.
+	if edits, _ := ApplyEdit(editSrc, EditOp{Type: "setLayout", Entries: []LayoutOpEntry{{Node: "", X: 1, Y: 2}}}); len(edits) != 0 {
+		t.Errorf("all-phantom batch should no-op, got %v", edits)
+	}
+}

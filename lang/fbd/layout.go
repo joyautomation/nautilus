@@ -132,11 +132,22 @@ func (b *modelBuilder) opSetLayout(op EditOp) ([]TextEdit, error) {
 	for id, e := range b.layout {
 		entries[id] = e
 	}
+	pinned := 0
 	for _, p := range pins {
 		if _, ok := b.nodes[p.Node]; !ok {
+			// Selection drags can carry phantom group entries alongside real
+			// nodes — in a batch, skip them and pin the rest; only a
+			// single-node op is strict.
+			if len(pins) > 1 {
+				continue
+			}
 			return nil, fmt.Errorf("fbd edit: unknown node %q", p.Node)
 		}
 		entries[p.Node] = layoutEntry{x: p.X, y: p.Y}
+		pinned++
+	}
+	if pinned == 0 {
+		return nil, nil
 	}
 	return b.writeLayout(entries)
 }

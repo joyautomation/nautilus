@@ -3,6 +3,14 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.5] - 2026-07-12
+
+### Fixed
+- Multi-select drags persist reliably: phantom selection-group entries are
+  now dropped at every layer (webview, extension, and the Go op itself
+  skips unknown ids within a batch instead of rejecting it wholesale), so
+  the real nodes always pin. Requires the matching nautilus CLI build.
+
 ## [0.6.4] - 2026-07-12
 
 ### Fixed
