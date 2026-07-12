@@ -3,6 +3,14 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.4] - 2026-07-12
+
+### Fixed
+- The "+ add" palette opened the program in a NEW tab inside the preview's
+  editor group, covering the diagram. The snippet now inserts into the
+  editor group where the file is already open (or the first group), so the
+  preview stays visible beside the text while the tabstops are filled.
+
 ## [0.4.3] - 2026-07-12
 
 ### Fixed

@@ -333,9 +333,18 @@ export class FbdPreview implements vscode.Disposable {
     } else if (msg.type === "insertTemplate") {
       // Drop a snippet just above END_FBD and hand focus to the text editor
       // with the tabstops live — the diagram re-renders as they're filled.
+      // Target the group where the file is ALREADY visible (or group one),
+      // never the preview's own group — otherwise a duplicate tab opens on
+      // top of the diagram.
       for (let i = doc.lineCount - 1; i >= 0; i--) {
         if (/^\s*END_FBD\s*$/i.test(doc.lineAt(i).text)) {
-          const editor = await vscode.window.showTextDocument(doc, { preview: false });
+          const visible = vscode.window.visibleTextEditors.find(
+            (e) => e.document.uri.toString() === doc.uri.toString()
+          );
+          const editor = await vscode.window.showTextDocument(doc, {
+            viewColumn: visible?.viewColumn ?? vscode.ViewColumn.One,
+            preview: false,
+          });
           await editor.insertSnippet(
             new vscode.SnippetString("  " + msg.snippet + "\n"),
             new vscode.Position(i, 0)
