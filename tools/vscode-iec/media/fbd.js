@@ -169,15 +169,25 @@
       bands[bandIdx.get(r)].push(n);
     }
 
-    // Adjacency for crossing reduction (forward edges only).
-    const srcOf = new Map(); // node id -> source node ids
-    const dstOf = new Map(); // node id -> target node ids
+    // Adjacency for crossing reduction (forward edges only). Each entry
+    // carries the neighbor plus the pin's y-offset from that neighbor's
+    // center, so ordering aligns wires pin-to-pin — two chips feeding IN1
+    // and IN2 of the same block stack in pin order instead of tying.
+    const pinDy = (n, pin, list) => {
+      if (n.kind === "input" || n.kind === "coil") return 0;
+      const i = Math.max(0, list.indexOf(pin));
+      return n.titleH + (i + 0.5) * PIN_PITCH - n.h / 2;
+    };
+    const srcOf = new Map(); // node id -> [{id, dy}] of its input-pin sources
+    const dstOf = new Map(); // node id -> [{id, dy}] of its output-pin targets
     for (const e of edges) {
       if (e.feedback) continue;
+      const from = byId.get(e.from);
+      const to = byId.get(e.to);
       if (!srcOf.has(e.to)) srcOf.set(e.to, []);
-      srcOf.get(e.to).push(e.from);
+      srcOf.get(e.to).push({ id: e.from, dy: pinDy(from, e.fromPin || "", from.outputs) });
       if (!dstOf.has(e.from)) dstOf.set(e.from, []);
-      dstOf.get(e.from).push(e.to);
+      dstOf.get(e.from).push({ id: e.to, dy: pinDy(to, e.toPin || "", to.inputs) });
     }
 
     // Feedback wires route in lanes below their band — reserve gap for them.
@@ -240,10 +250,10 @@
     };
     cols.forEach(stack);
     const orderBy = (col, neighborsOf) => {
-      col.forEach((n, i) => {
-        const ns = (neighborsOf.get(n.id) || []).filter((m) => inBand.has(m));
+      col.forEach((n) => {
+        const ns = (neighborsOf.get(n.id) || []).filter((m) => inBand.has(m.id));
         n._bary = ns.length
-          ? ns.reduce((a, m) => a + center.get(m), 0) / ns.length
+          ? ns.reduce((a, m) => a + center.get(m.id) + m.dy, 0) / ns.length
           : center.get(n.id); // nothing to align to: hold position
       });
       col.sort((a, b) => a._bary - b._bary);

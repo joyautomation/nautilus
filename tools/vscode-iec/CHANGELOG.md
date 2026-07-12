@@ -12,7 +12,8 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   chips sit adjacent to their consumers, reading another network's coil
   shows a variable box (only an in-network seal-in draws as a feedback
   wire, routed in lanes under its own band), coils right-align per band,
-  and row ordering uses iterated barycenter sweeps to cut wire crossings.
+  and row ordering uses iterated pin-aware barycenter sweeps (chips align
+  to the exact pin they feed) to cut wire crossings.
 
 ## [0.3.8] - 2026-07-11
 
