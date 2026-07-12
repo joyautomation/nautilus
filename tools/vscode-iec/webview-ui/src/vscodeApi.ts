@@ -48,6 +48,7 @@ export type FbdEditOp = {
 	text?: string;
 	x?: number;
 	y?: number;
+	entries?: { node: string; x: number; y: number }[];
 };
 
 export function postOp(op: FbdEditOp): void {

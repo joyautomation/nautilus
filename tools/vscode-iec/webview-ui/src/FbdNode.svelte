@@ -163,9 +163,13 @@
 		border: none;
 		opacity: 0.65;
 	}
-	:global(.svelte-flow__node.selected .chip),
-	:global(.svelte-flow__node.selected .block) {
-		outline: 1.5px solid var(--vscode-focusBorder, #58a6ff);
-		outline-offset: 2px;
+	/* Selection must be unmissable, single node included: bright outline +
+	   glow on the wrapper (xyflow sets .selected there). */
+	:global(.svelte-flow__node.selected) {
+		outline: 2px solid var(--vscode-focusBorder, #58a6ff);
+		outline-offset: 3px;
+		border-radius: 4px;
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-focusBorder, #58a6ff) 25%, transparent),
+			0 0 14px color-mix(in srgb, var(--vscode-focusBorder, #58a6ff) 45%, transparent);
 	}
 </style>

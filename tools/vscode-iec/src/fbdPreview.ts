@@ -65,6 +65,7 @@ export type FbdEditOp = {
   text?: string;
   x?: number;
   y?: number;
+  entries?: { node: string; x: number; y: number }[];
 };
 
 /** Mirror of lang/fbd.TextEdit: 1-based, end-exclusive. */
@@ -172,11 +173,16 @@ function webviewOptions(extensionUri: vscode.Uri): vscode.WebviewOptions {
   };
 }
 
-/** Handle a gesture from the webview against a specific document. Ops go
- * through `nautilus fbd edit` — Go resolves them on the CURRENT buffer text
- * and returns minimal edits, so a moved buffer can't misfire; a rejected op
- * (used wire deleted, name collision, …) surfaces its reason. */
-async function handleWebviewMessage(doc: vscode.TextDocument, msg: WebviewMessage): Promise<void> {
+/** Ops apply strictly in order: each must read the text AFTER the previous
+ * one's edit landed, or rapid gestures (a multi-node drag, fast clicks)
+ * rewrite the same region from stale text and drop each other's changes. */
+let editQueue: Promise<void> = Promise.resolve();
+
+function handleWebviewMessage(doc: vscode.TextDocument, msg: WebviewMessage): void {
+  editQueue = editQueue.then(() => applyOpMessage(doc, msg)).catch(() => undefined);
+}
+
+async function applyOpMessage(doc: vscode.TextDocument, msg: WebviewMessage): Promise<void> {
   if (msg.type !== "edit") return;
   const res = await fbdEdit(doc.getText(), msg.op);
   if ("error" in res) {

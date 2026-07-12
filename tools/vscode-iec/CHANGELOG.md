@@ -3,6 +3,18 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.3] - 2026-07-12
+
+### Fixed
+- **Multi-select drag moves the whole selection.** Drag-stop posted one
+  setLayout op per node; each op resolved against the text before the
+  previous one landed, so they overwrote each other's layout entries and
+  everything but one node snapped back. A multi-node drag is now ONE
+  batched op (one text edit), and the extension serializes all ops so
+  rapid gestures can never race each other again.
+- **Selection is unmissable** — selected nodes get a bright focus outline
+  and glow, single node included.
+
 ## [0.6.2] - 2026-07-12
 
 ### Fixed

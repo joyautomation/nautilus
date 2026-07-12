@@ -117,19 +117,27 @@ func (b *modelBuilder) writeLayout(entries map[string]layoutEntry) ([]TextEdit, 
 	return nil, fmt.Errorf("fbd edit: no END_FBD to anchor the layout block")
 }
 
-// opSetLayout pins one node's position (a drag in the diagram editor).
+// opSetLayout pins node positions (a drag in the diagram editor). A batch
+// (op.Entries) pins every dragged node atomically; the single-node form
+// (Node + X/Y) remains for one-node drags.
 func (b *modelBuilder) opSetLayout(op EditOp) ([]TextEdit, error) {
-	if _, ok := b.nodes[op.Node]; !ok {
-		return nil, fmt.Errorf("fbd edit: unknown node %q", op.Node)
-	}
-	if op.X == nil || op.Y == nil {
-		return nil, fmt.Errorf("fbd edit: setLayout needs x and y")
+	pins := op.Entries
+	if len(pins) == 0 {
+		if op.X == nil || op.Y == nil {
+			return nil, fmt.Errorf("fbd edit: setLayout needs x and y")
+		}
+		pins = []LayoutOpEntry{{Node: op.Node, X: *op.X, Y: *op.Y}}
 	}
 	entries := map[string]layoutEntry{}
 	for id, e := range b.layout {
 		entries[id] = e
 	}
-	entries[op.Node] = layoutEntry{x: *op.X, y: *op.Y}
+	for _, p := range pins {
+		if _, ok := b.nodes[p.Node]; !ok {
+			return nil, fmt.Errorf("fbd edit: unknown node %q", p.Node)
+		}
+		entries[p.Node] = layoutEntry{x: p.X, y: p.Y}
+	}
 	return b.writeLayout(entries)
 }
 

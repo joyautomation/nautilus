@@ -48,6 +48,16 @@ type EditOp struct {
 	Text      string `json:"text,omitempty"`
 	X         *int   `json:"x,omitempty"`
 	Y         *int   `json:"y,omitempty"`
+	// Entries batches setLayout: a multi-node drag pins every moved node in
+	// ONE op — one text edit, no lost updates.
+	Entries []LayoutOpEntry `json:"entries,omitempty"`
+}
+
+// LayoutOpEntry is one node's pinned position in a batched setLayout.
+type LayoutOpEntry struct {
+	Node string `json:"node"`
+	X    int    `json:"x"`
+	Y    int    `json:"y"`
 }
 
 // ApplyEdit resolves op against src and returns the text edits realizing it.

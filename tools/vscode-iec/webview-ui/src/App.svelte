@@ -172,14 +172,17 @@
 
 	function onnodedragstop({ nodes: dragged }: { nodes: Node[] }) {
 		trackDrag(dragged);
-		for (const n of dragged) {
-			postOp({
-				type: 'setLayout',
+		if (dragged.length === 0) return;
+		// ONE batched op for the whole selection — per-node ops would race
+		// each other rewriting the layout block and drop all but the last.
+		postOp({
+			type: 'setLayout',
+			entries: dragged.map((n) => ({
 				node: n.id,
 				x: Math.round(n.position.x),
 				y: Math.round(n.position.y)
-			});
-		}
+			}))
+		});
 	}
 </script>
 

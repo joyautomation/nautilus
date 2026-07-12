@@ -255,3 +255,17 @@ func TestEditRewireUnwiredFBPin(t *testing.T) {
 		t.Error("unknown pin must be rejected")
 	}
 }
+
+func TestLayoutBatch(t *testing.T) {
+	// A multi-node drag pins every node in one op — one atomic block write.
+	out := apply(t, editSrc, mustOp(t, editSrc, EditOp{Type: "setLayout", Entries: []LayoutOpEntry{
+		{Node: "c:Run", X: 100, Y: 10},
+		{Node: "f:t1", X: 200, Y: 20},
+		{Node: "b:w.seal", X: 300, Y: 30},
+	}}))
+	for _, want := range []string{"c:Run 100,10", "f:t1 200,20", "b:w.seal 300,30"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q:\n%s", want, out)
+		}
+	}
+}
