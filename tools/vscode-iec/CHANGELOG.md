@@ -3,6 +3,16 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.4] - 2026-07-12
+
+### Fixed
+- Multi-select drags no longer fail with "unknown node" — selection drags
+  hand the handler synthetic group entries alongside the real nodes; pins
+  now apply only to nodes that exist in the model.
+- Selection is visible on every cue at once: the selected element itself
+  recolors (focus-colored border + background tint) in addition to the
+  wrapper outline/glow, and the toolbar shows an "N selected" pill.
+
 ## [0.6.3] - 2026-07-12
 
 ### Fixed

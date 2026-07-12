@@ -163,13 +163,24 @@
 		border: none;
 		opacity: 0.65;
 	}
-	/* Selection must be unmissable, single node included: bright outline +
-	   glow on the wrapper (xyflow sets .selected there). */
+	/* Selection must be unmissable, single node included: the wrapper gets
+	   an outline + glow, AND the element itself recolors (multiple cues so
+	   no theme/zoom combination can hide it). */
 	:global(.svelte-flow__node.selected) {
 		outline: 2px solid var(--vscode-focusBorder, #58a6ff);
 		outline-offset: 3px;
 		border-radius: 4px;
 		box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-focusBorder, #58a6ff) 25%, transparent),
 			0 0 14px color-mix(in srgb, var(--vscode-focusBorder, #58a6ff) 45%, transparent);
+	}
+	:global(.svelte-flow__node.selected) .chip,
+	:global(.svelte-flow__node.selected) .block {
+		border-color: var(--vscode-focusBorder, #58a6ff);
+		border-width: 2px;
+		background: color-mix(
+			in srgb,
+			var(--vscode-focusBorder, #58a6ff) 14%,
+			var(--vscode-editorWidget-background, #252526)
+		);
 	}
 </style>

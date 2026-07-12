@@ -35,6 +35,8 @@
 	let structureKey = $state('');
 	let paletteOpen = $state(false);
 	let hasPins = $state(false);
+	let selectedCount = $state(0);
+	let knownIds = new Set<string>();
 
 	// Floating text input for constants/renames.
 	let input = $state<{ at: { x: number; y: number; w: number }; value: string; commit: (v: string) => void } | null>(null);
@@ -100,6 +102,7 @@
 			}
 		}));
 		setRects(placed.map((n) => [n.id, { x: n.x, y: n.y, w: n.w, h: n.h }]));
+		knownIds = new Set(placed.map((n) => n.id));
 		structureKey = placed
 			.map((n) => n.id)
 			.sort()
@@ -159,9 +162,12 @@
 
 	function trackDrag(dragged: Node[]) {
 		// Keep the live rect store current so feedback lanes reroute around
-		// nodes as they move.
+		// nodes as they move. Selection drags can hand us synthetic group
+		// entries — only track nodes we actually rendered.
 		for (const n of dragged) {
-			const pn = (n.data as { n: import('./layout').Placed }).n;
+			if (!n?.id || !knownIds.has(n.id)) continue;
+			const pn = (n.data as { n?: import('./layout').Placed })?.n;
+			if (!pn) continue;
 			updateRect(n.id, { x: n.position.x, y: n.position.y, w: pn.w, h: pn.h });
 		}
 	}
@@ -172,17 +178,23 @@
 
 	function onnodedragstop({ nodes: dragged }: { nodes: Node[] }) {
 		trackDrag(dragged);
-		if (dragged.length === 0) return;
 		// ONE batched op for the whole selection — per-node ops would race
 		// each other rewriting the layout block and drop all but the last.
-		postOp({
-			type: 'setLayout',
-			entries: dragged.map((n) => ({
+		// Selection drags include synthetic group entries; pin only the nodes
+		// that exist in the model.
+		const entries = dragged
+			.filter((n) => n?.id && knownIds.has(n.id))
+			.map((n) => ({
 				node: n.id,
 				x: Math.round(n.position.x),
 				y: Math.round(n.position.y)
-			}))
-		});
+			}));
+		if (entries.length === 0) return;
+		postOp({ type: 'setLayout', entries });
+	}
+
+	function onselectionchange({ nodes: sel }: { nodes: Node[]; edges: Edge[] }) {
+		selectedCount = sel.length;
 	}
 </script>
 
@@ -199,6 +211,9 @@
 			<span class="hint">double-click: edit & rename · drag pin→pin: wire · drag node: pin layout · Del: delete</span>
 		{/if}
 		<span class="spacer"></span>
+		{#if selectedCount > 0}
+			<span class="selcount">{selectedCount} selected</span>
+		{/if}
 		{#if !diffing}
 			{#if hasPins}
 				<button title="Clear all pinned positions (back to full auto-layout)" onclick={() => postOp({ type: 'clearLayout' })}>auto layout</button>
@@ -219,6 +234,7 @@
 			{onbeforedelete}
 			{onnodedrag}
 			{onnodedragstop}
+			{onselectionchange}
 			zoomOnDoubleClick={false}
 			fitView
 			minZoom={0.15}
@@ -312,6 +328,14 @@
 	}
 	.legend .sw.changed {
 		background: var(--vscode-gitDecoration-modifiedResourceForeground, #d7a021);
+	}
+	.selcount {
+		font-size: 11px;
+		font-weight: 600;
+		padding: 1px 8px;
+		border-radius: 999px;
+		color: var(--vscode-focusBorder, #58a6ff);
+		border: 1px solid var(--vscode-focusBorder, #58a6ff);
 	}
 	.error {
 		padding: 6px 10px;
