@@ -14,6 +14,9 @@ export type FbdNode = {
   outputs?: string[];
   layer: number;
   src?: unknown;
+  x?: number;
+  y?: number;
+  status?: 'added' | 'removed' | 'changed' | 'same';
 };
 export type FbdEdge = {
   from: string;
@@ -23,6 +26,7 @@ export type FbdEdge = {
   wire?: string;
   negated?: boolean;
   feedback?: boolean;
+  status?: 'added' | 'removed' | 'changed' | 'same';
 };
 export type FbdModel = { name: string; nodes: FbdNode[]; edges: FbdEdge[] };
 
@@ -60,7 +64,17 @@ export function pinOffset(n: Placed, pin: string, side: "in" | "out"): number {
   return n.titleH + (i + 0.5) * PIN_PITCH;
 }
 
-export function layout(model: FbdModel): { placed: Placed[]; edges: FbdEdge[] } {
+export function layout(model: FbdModel): {
+  placed: Placed[];
+  edges: FbdEdge[];
+  lanePoints: Map<FbdEdge, number[][]>;
+} {
+  // Pinned coordinates from the @layout block, captured before Placed
+  // initializes x/y to zero for the auto pass.
+  const pinned = new Map<string, { x: number; y: number }>();
+  for (const n of model.nodes) {
+    if (n.x !== undefined && n.y !== undefined) pinned.set(n.id, { x: n.x, y: n.y });
+  }
   const placed: Placed[] = model.nodes.map((n) => {
     const ins = n.inputs ?? [];
     const outs = n.outputs ?? [];
@@ -127,12 +141,53 @@ export function layout(model: FbdModel): { placed: Placed[]; edges: FbdEdge[] } 
   }
 
   let bandTop = PAD;
+  const bandBottom = new Map<number, number>();
   bands.forEach((band, bi) => {
     const h = layoutBand(band, srcOf, dstOf, bandTop);
+    bandBottom.set(bi, bandTop + h);
     const lanes = fbCount.get(bi) ?? 0;
     bandTop += h + (lanes ? 14 + lanes * 10 : 0) + BAND_GAP;
   });
-  return { placed, edges };
+
+  // Pinned positions (the @layout block) override auto placement — dragged
+  // nodes sit exactly where the user left them; everything else stays auto.
+  for (const n of placed) {
+    const p = pinned.get(n.id);
+    if (p) {
+      n.x = p.x;
+      n.y = p.y;
+    }
+  }
+
+  // Backward wires (seal-in feedback, FB cycles) route in lanes under their
+  // band: precompute the polyline per edge for the custom edge component.
+  const lanePoints = new Map<FbdEdge, number[][]>();
+  const laneOf = new Map<number, number>();
+  for (const e of edges) {
+    const from = byId.get(e.from)!;
+    const to = byId.get(e.to)!;
+    const x1 = from.x + from.w;
+    const y1 = from.y + pinOffset(from, e.fromPin ?? '', 'out');
+    const x2 = to.x;
+    const y2 = to.y + pinOffset(to, e.toPin ?? '', 'in');
+    if (x1 < x2 - 4) continue; // forward: bezier, no lane
+    const bi = bandIdx.get(find(e.from))!;
+    const lane = laneOf.get(bi) ?? 0;
+    laneOf.set(bi, lane + 1);
+    const ly = (bandBottom.get(bi) ?? y1) + 12 + lane * 10;
+    const endX = e.negated ? x2 - 9 : x2;
+    const ox = x1 + 14 + lane * 6;
+    const ix = endX - 14 - lane * 6;
+    lanePoints.set(e, [
+      [x1, y1],
+      [ox, y1],
+      [ox, ly],
+      [ix, ly],
+      [ix, y2],
+      [endX, y2],
+    ]);
+  }
+  return { placed, edges, lanePoints };
 }
 
 function layoutBand(

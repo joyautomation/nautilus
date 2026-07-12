@@ -3,6 +3,29 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] - 2026-07-12
+
+### Changed
+- **The FBD diagram is rebuilt on Svelte Flow** (xyflow) — the hand-rolled
+  SVG renderer is gone. Same banded auto-layout and Go-owned edit ops, now
+  with a real editor's interaction model: node selection (click, shift for
+  multi, marquee), a minimap, zoom controls, keyboard navigation, and
+  native drag-to-connect with a live connection preview.
+
+### Added
+- **Wire by dragging pin → pin**: drag from any output handle to an input
+  handle to rewire it — including pins that aren't wired yet (dropping on
+  an unwired FB input adds the named argument to the call).
+- **Delete from the diagram**: select nodes and press Delete/Backspace.
+  Reference-protected as always — deleting a wire that still feeds inputs
+  explains itself instead of breaking the program.
+- **Manual layout, optional and per-node**: drag a node and its position
+  pins into a `(* @layout *)` comment in the `.fbd` source, keyed by the
+  node's stable id — invisible to the compiler, versioned like any text.
+  Everything without a pinned position keeps auto-layout; renames carry
+  pins along, deletes clean them up; an "auto layout" button clears all
+  pins. Hand-placed where it matters, automatic everywhere else.
+
 ## [0.5.1] - 2026-07-12
 
 ### Changed

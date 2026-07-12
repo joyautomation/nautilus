@@ -44,7 +44,15 @@ export type FbdEdge = {
 
 /** Mirror of lang/fbd.EditOp — a structural edit addressed by model ids. */
 export type FbdEditOp = {
-  type: "setLiteral" | "toggleNot" | "rewire" | "rename" | "deleteNode" | "insertStatement";
+  type:
+    | "setLiteral"
+    | "toggleNot"
+    | "rewire"
+    | "rename"
+    | "deleteNode"
+    | "insertStatement"
+    | "setLayout"
+    | "clearLayout";
   node?: string;
   to?: string;
   toPin?: string;
@@ -55,6 +63,8 @@ export type FbdEditOp = {
   source?: string;
   sourcePin?: string;
   text?: string;
+  x?: number;
+  y?: number;
 };
 
 /** Mirror of lang/fbd.TextEdit: 1-based, end-exclusive. */
@@ -133,15 +143,19 @@ function cliMissing(cli: string): string {
 // ── shared webview session logic ───────────────────────────────────────────
 
 function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
-  const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "fbd.js"));
+  // The Svelte Flow editor bundle (webview-ui → media/dist): one JS + one
+  // CSS, fully self-contained, CSP-pinned by nonce.
+  const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "dist", "fbd-flow.js"));
+  const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "dist", "fbd-flow.css"));
   const nonce = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
   return /* html */ `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
+      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="${styleUri}">
 <title>FBD</title>
 </head>
 <body>

@@ -32,6 +32,8 @@ type TextEdit struct {
 //	rename      Node (b:w.* wire or f:* instance), NewName
 //	deleteNode  Node (b:w.* wire, c:* coil, or f:* instance)
 //	insertStatement  Text (netlist statement(s), validated before insert)
+//	setLayout   Node, X, Y — pin a dragged node's position
+//	clearLayout Node (one entry) or nothing (whole block → full auto-layout)
 type EditOp struct {
 	Type      string `json:"type"`
 	Node      string `json:"node,omitempty"`
@@ -44,6 +46,8 @@ type EditOp struct {
 	Source    string `json:"source,omitempty"`
 	SourcePin string `json:"sourcePin,omitempty"`
 	Text      string `json:"text,omitempty"`
+	X         *int   `json:"x,omitempty"`
+	Y         *int   `json:"y,omitempty"`
 }
 
 // ApplyEdit resolves op against src and returns the text edits realizing it.
@@ -65,6 +69,10 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		return b.opDelete(op)
 	case "insertStatement":
 		return b.opInsert(op)
+	case "setLayout":
+		return b.opSetLayout(op)
+	case "clearLayout":
+		return b.opClearLayout(op)
 	}
 	return nil, fmt.Errorf("fbd edit: unknown op %q", op.Type)
 }
@@ -160,6 +168,11 @@ func (b *modelBuilder) opToggleNot(op EditOp) ([]TextEdit, error) {
 func (b *modelBuilder) opRewire(op EditOp) ([]TextEdit, error) {
 	e, err := b.findEdge(op)
 	if err != nil {
+		// Dropping a wire on a currently-unwired FB input pin ADDS the named
+		// argument to the call — how a freshly inserted block gets hooked up.
+		if strings.HasPrefix(op.To, "f:") && strings.Contains(err.Error(), "no connection") {
+			return b.wireNewFBPin(op)
+		}
 		return nil, err
 	}
 	ref, err := b.refText(op.Source, op.SourcePin)
@@ -170,6 +183,37 @@ func (b *modelBuilder) opRewire(op EditOp) ([]TextEdit, error) {
 		return nil, nil
 	}
 	return []TextEdit{spanEdit(e.Arg, ref)}, nil
+}
+
+// wireNewFBPin appends "PIN := ref" to an FB call for a pin that has no
+// argument yet.
+func (b *modelBuilder) wireNewFBPin(op EditOp) ([]TextEdit, error) {
+	inst := strings.TrimPrefix(op.To, "f:")
+	fbNode, ok := b.nodes[op.To]
+	if !ok {
+		return nil, fmt.Errorf("fbd edit: unknown instance %q", inst)
+	}
+	valid := false
+	for _, p := range fbNode.Inputs {
+		if p == op.ToPin {
+			valid = true
+		}
+	}
+	if !valid {
+		return nil, fmt.Errorf("fbd edit: %s has no input pin %q", inst, op.ToPin)
+	}
+	ref, err := b.refText(op.Source, op.SourcePin)
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range b.nl.nodes {
+		if n.isCall && n.inst == inst && len(n.args) > 0 {
+			l, c := n.args[len(n.args)-1].val.end()
+			return []TextEdit{{Line: l, Col: c, EndLine: l, EndCol: c,
+				NewText: ", " + op.ToPin + " := " + ref}}, nil
+		}
+	}
+	return nil, fmt.Errorf("fbd edit: %s has no call statement to extend", inst)
 }
 
 // refText is the netlist expression that reads a node's output: the variable
@@ -250,7 +294,34 @@ func (b *modelBuilder) renameWire(name, newName string) ([]TextEdit, error) {
 			edits = append(edits, posEdit(r.exprPos, newName))
 		}
 	})
+	edits = append(edits, b.remapLayout(idPrefixRewrite("b:w."+name, "b:w."+newName))...)
 	return edits, nil
+}
+
+// idPrefixRewrite moves layout entries when a rename changes node ids: the
+// exact id and any nested ".suffix" children follow the new name.
+func idPrefixRewrite(oldPrefix, newPrefix string) func(string) (string, bool) {
+	return func(id string) (string, bool) {
+		if id == oldPrefix {
+			return newPrefix, true
+		}
+		if strings.HasPrefix(id, oldPrefix+".") {
+			return newPrefix + id[len(oldPrefix):], true
+		}
+		return id, true
+	}
+}
+
+// idPrefixDrop removes layout entries for a deleted node and its children.
+func idPrefixDrop(prefixes ...string) func(string) (string, bool) {
+	return func(id string) (string, bool) {
+		for _, p := range prefixes {
+			if id == p || strings.HasPrefix(id, p+".") || strings.HasPrefix(id, p+"#") {
+				return "", false
+			}
+		}
+		return id, true
+	}
 }
 
 func (b *modelBuilder) renameInstance(inst, newName string) ([]TextEdit, error) {
@@ -287,6 +358,13 @@ func (b *modelBuilder) renameInstance(inst, newName string) ([]TextEdit, error) 
 			})
 		}
 	})
+	instRewrite := idPrefixRewrite("f:"+inst, "f:"+newName)
+	argRewrite := idPrefixRewrite("b:f."+inst, "b:f."+newName)
+	edits = append(edits, b.remapLayout(func(id string) (string, bool) {
+		id, _ = instRewrite(id)
+		id, _ = argRewrite(id)
+		return id, true
+	})...)
 	return edits, nil
 }
 
@@ -378,7 +456,8 @@ func (b *modelBuilder) opDelete(op EditOp) ([]TextEdit, error) {
 		if used > 0 {
 			return nil, fmt.Errorf("fbd edit: wire %q feeds %d input(s) — rewire them first", name, used)
 		}
-		return []TextEdit{b.deleteSpan(span)}, nil
+		return append([]TextEdit{b.deleteSpan(span)},
+			b.remapLayout(idPrefixDrop("b:w."+name))...), nil
 
 	case strings.HasPrefix(op.Node, "c:"):
 		target := strings.TrimPrefix(op.Node, "c:")
@@ -391,7 +470,7 @@ func (b *modelBuilder) opDelete(op EditOp) ([]TextEdit, error) {
 		if len(edits) == 0 {
 			return nil, fmt.Errorf("fbd edit: no coil writing %q", target)
 		}
-		return edits, nil
+		return append(edits, b.remapLayout(idPrefixDrop("c:"+target, "b:c."+target))...), nil
 
 	case strings.HasPrefix(op.Node, "f:"):
 		inst := strings.TrimPrefix(op.Node, "f:")
@@ -421,7 +500,7 @@ func (b *modelBuilder) opDelete(op EditOp) ([]TextEdit, error) {
 		if len(edits) == 0 {
 			return nil, fmt.Errorf("fbd edit: no instance named %q", inst)
 		}
-		return edits, nil
+		return append(edits, b.remapLayout(idPrefixDrop("f:"+inst, "b:f."+inst))...), nil
 	}
 	return nil, fmt.Errorf("fbd edit: %q is not deletable", op.Node)
 }

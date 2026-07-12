@@ -52,6 +52,10 @@ type Node struct {
 	// diagram editor can rewrite the value in place. Set for literal input
 	// chips only.
 	Src *Span `json:"src,omitempty"`
+	// X/Y are a user-pinned position from the (* @layout *) block; absent
+	// means auto-layout. Renderers place pinned nodes exactly here.
+	X *int `json:"x,omitempty"`
+	Y *int `json:"y,omitempty"`
 }
 
 // Span locates an editable region in the .fbd source: the 1-based line/col
@@ -140,6 +144,13 @@ func buildModel(src string, userFBs ...map[string]*ir.FBDef) (*modelBuilder, err
 	b.layer()
 	b.placeInputs()
 	b.alignCoils(comp)
+	b.layout, b.layoutStart, b.layoutEnd = parseLayout(b.src)
+	for id, e := range b.layout {
+		if n, ok := b.nodes[id]; ok {
+			x, y := e.x, e.y
+			n.X, n.Y = &x, &y
+		}
+	}
 	return b, nil
 }
 
@@ -157,16 +168,20 @@ type outRef struct {
 }
 
 type modelBuilder struct {
-	nl      *netlist
-	src     []string // source lines, for slicing argument text into spans
-	m       *Model
-	nodes   map[string]*Node  // id -> node
-	inputs  map[string]*Node  // input chip per variable name / member path
-	coils   map[string]*Node  // coil node per target (first write wins)
-	fbs     map[string]*Node  // fb node per instance name
-	wireOut map[string]outRef // memoized wire resolutions (fan-out shares them)
-	userFBs map[string]*ir.FBDef
-	litSeq  int
+	nl  *netlist
+	src []string // source lines, for slicing argument text into spans
+	// pinned positions from the @layout block (nil when absent) and the
+	// block's 1-based line span, for layout ops.
+	layout                 map[string]layoutEntry
+	layoutStart, layoutEnd int
+	m                      *Model
+	nodes                  map[string]*Node  // id -> node
+	inputs                 map[string]*Node  // input chip per variable name / member path
+	coils                  map[string]*Node  // coil node per target (first write wins)
+	fbs                    map[string]*Node  // fb node per instance name
+	wireOut                map[string]outRef // memoized wire resolutions (fan-out shares them)
+	userFBs                map[string]*ir.FBDef
+	litSeq                 int
 }
 
 func (b *modelBuilder) add(n *Node) *Node {

@@ -2,7 +2,7 @@
   "name": "vscode-iec",
   "displayName": "nautilus IEC 61131-3",
   "description": "IEC 61131-3 language support for the nautilus SCADA framework: Structured Text (.st) and Function Block Diagram (.fbd) with syntax highlighting, compile diagnostics, go-to-definition, a live FBD diagram preview with visual diff, and inline live tag values from a running controller.",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "publisher": "joyautomation",
   "license": "Apache-2.0",
   "icon": "icon.png",
@@ -180,10 +180,11 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run compile && npm run build:webview",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/scan.test.js"
+    "test": "npm run compile && node --test out/scan.test.js",
+    "build:webview": "npm --prefix webview-ui run build"
   },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"

@@ -199,3 +199,59 @@ func TestEditInsertStatement(t *testing.T) {
 		t.Error("duplicate instance name must be rejected")
 	}
 }
+
+func TestLayoutOps(t *testing.T) {
+	// Pin a node: block created above END_FBD.
+	x, y := 320, 64
+	out := apply(t, editSrc, mustOp(t, editSrc, EditOp{Type: "setLayout", Node: "c:Run", X: &x, Y: &y}))
+	if !strings.Contains(out, "(* @layout\n    c:Run 320,64\n  *)") {
+		t.Errorf("layout block not written:\n%s", out)
+	}
+	// The pinned position rides the model.
+	m := mustGraph(t, out)
+	run := m.node(t, "c:Run")
+	if run.X == nil || *run.X != 320 || run.Y == nil || *run.Y != 64 {
+		t.Errorf("pinned position not in model: %s", mustJSON(run))
+	}
+	// A second pin joins the block; the first survives.
+	x2, y2 := 10, 20
+	out2 := apply(t, out, mustOp(t, out, EditOp{Type: "setLayout", Node: "b:w.seal", X: &x2, Y: &y2}))
+	if !strings.Contains(out2, "b:w.seal 10,20") || !strings.Contains(out2, "c:Run 320,64") {
+		t.Errorf("second pin wrong:\n%s", out2)
+	}
+	// Renaming the wire carries its pin.
+	out3 := apply(t, out2, mustOp(t, out2, EditOp{Type: "rename", Node: "b:w.seal", NewName: "latch"}))
+	if !strings.Contains(out3, "b:w.latch 10,20") || strings.Contains(out3, "b:w.seal") {
+		t.Errorf("rename didn't remap layout:\n%s", out3)
+	}
+	// clearLayout for one node keeps the other; clearing all removes the block.
+	out4 := apply(t, out3, mustOp(t, out3, EditOp{Type: "clearLayout", Node: "b:w.latch"}))
+	if strings.Contains(out4, "b:w.latch 10,20") || !strings.Contains(out4, "c:Run 320,64") {
+		t.Errorf("single clear wrong:\n%s", out4)
+	}
+	out5 := apply(t, out4, mustOp(t, out4, EditOp{Type: "clearLayout"}))
+	if strings.Contains(out5, "@layout") {
+		t.Errorf("full clear left the block:\n%s", out5)
+	}
+	// The layout comment never disturbs compilation.
+	if _, err := Compile(out2); err != nil {
+		t.Errorf("layout block broke compilation: %v", err)
+	}
+}
+
+func TestEditRewireUnwiredFBPin(t *testing.T) {
+	// A CTU with only CU wired: dropping a source on R adds the argument.
+	src := strings.Replace(editSrc,
+		"  t1 : TON(IN := Run, PT := T#5S)",
+		"  t1 : TON(IN := Run, PT := T#5S)\n  c1 : CTU(CU := Start, PV := 5)", 1)
+	out := apply(t, src, mustOp(t, src, EditOp{
+		Type: "rewire", To: "f:c1", ToPin: "R", Source: "v:Stop",
+	}))
+	if !strings.Contains(out, "CTU(CU := Start, PV := 5, R := Stop)") {
+		t.Errorf("unwired pin not added:\n%s", out)
+	}
+	// A pin the FB doesn't have is rejected.
+	if _, err := ApplyEdit(src, EditOp{Type: "rewire", To: "f:c1", ToPin: "NOPE", Source: "v:Stop"}); err == nil {
+		t.Error("unknown pin must be rejected")
+	}
+}
