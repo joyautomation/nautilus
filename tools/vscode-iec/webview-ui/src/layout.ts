@@ -67,7 +67,7 @@ export function pinOffset(n: Placed, pin: string, side: "in" | "out"): number {
 export function layout(model: FbdModel): {
   placed: Placed[];
   edges: FbdEdge[];
-  lanePoints: Map<FbdEdge, number[][]>;
+  laneIdx: Map<FbdEdge, number>;
 } {
   // Pinned coordinates from the @layout block, captured before Placed
   // initializes x/y to zero for the auto pass.
@@ -141,10 +141,8 @@ export function layout(model: FbdModel): {
   }
 
   let bandTop = PAD;
-  const bandBottom = new Map<number, number>();
   bands.forEach((band, bi) => {
     const h = layoutBand(band, srcOf, dstOf, bandTop);
-    bandBottom.set(bi, bandTop + h);
     const lanes = fbCount.get(bi) ?? 0;
     bandTop += h + (lanes ? 14 + lanes * 10 : 0) + BAND_GAP;
   });
@@ -159,35 +157,24 @@ export function layout(model: FbdModel): {
     }
   }
 
-  // Backward wires (seal-in feedback, FB cycles) route in lanes under their
-  // band: precompute the polyline per edge for the custom edge component.
-  const lanePoints = new Map<FbdEdge, number[][]>();
+  // Backward wires (seal-in feedback, FB cycles) route in lanes: assign each
+  // a stagger index so parallel lanes don't overlap. The PATH is computed
+  // live in the edge component from the endpoints xyflow supplies, so lanes
+  // follow node drags exactly like forward wires do.
+  const laneIdx = new Map<FbdEdge, number>();
   const laneOf = new Map<number, number>();
   for (const e of edges) {
     const from = byId.get(e.from)!;
     const to = byId.get(e.to)!;
     const x1 = from.x + from.w;
-    const y1 = from.y + pinOffset(from, e.fromPin ?? '', 'out');
     const x2 = to.x;
-    const y2 = to.y + pinOffset(to, e.toPin ?? '', 'in');
-    if (x1 < x2 - 4) continue; // forward: bezier, no lane
+    if (x1 < x2 - 4) continue; // forward at rest: bezier, no lane
     const bi = bandIdx.get(find(e.from))!;
     const lane = laneOf.get(bi) ?? 0;
     laneOf.set(bi, lane + 1);
-    const ly = (bandBottom.get(bi) ?? y1) + 12 + lane * 10;
-    const endX = e.negated ? x2 - 9 : x2;
-    const ox = x1 + 14 + lane * 6;
-    const ix = endX - 14 - lane * 6;
-    lanePoints.set(e, [
-      [x1, y1],
-      [ox, y1],
-      [ox, ly],
-      [ix, ly],
-      [ix, y2],
-      [endX, y2],
-    ]);
+    laneIdx.set(e, lane);
   }
-  return { placed, edges, lanePoints };
+  return { placed, edges, laneIdx };
 }
 
 function layoutBand(

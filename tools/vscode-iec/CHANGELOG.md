@@ -3,6 +3,15 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.1] - 2026-07-12
+
+### Fixed
+- Feedback lanes (the dashed seal-in wires) now follow node drags. Their
+  paths were precomputed at layout time; they now derive from the live
+  endpoints like every other wire, tracking during the drag and settling
+  wherever the nodes land — an edge that becomes forward or backward after
+  rearranging switches shape automatically.
+
 ## [0.6.0] - 2026-07-12
 
 ### Changed

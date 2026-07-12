@@ -27,25 +27,34 @@
 			feedback?: boolean;
 			status?: string;
 		};
-		points?: number[][];
+		lane?: number;
 		editable: boolean;
 		showWireLabel: boolean;
 	});
 
+	// The path derives from the LIVE endpoints xyflow supplies, so wires —
+	// including feedback lanes — follow node drags. Forward runs are bezier;
+	// backward runs route orthogonally below the lower endpoint, staggered by
+	// the layout's lane index so parallel lanes never overlap.
+	const backward = $derived(sourceX >= targetX - 4);
 	const path = $derived.by(() => {
-		if (d.points) {
-			return d.points.map((p, i) => `${i ? 'L' : 'M'} ${p[0]} ${p[1]}`).join(' ');
-		}
 		const endX = d.e.negated ? targetX - 9 : targetX;
-		const [p] = getBezierPath({
-			sourceX,
-			sourceY,
-			targetX: endX,
-			targetY,
-			sourcePosition,
-			targetPosition
-		});
-		return p;
+		if (!backward) {
+			const [p] = getBezierPath({
+				sourceX,
+				sourceY,
+				targetX: endX,
+				targetY,
+				sourcePosition,
+				targetPosition
+			});
+			return p;
+		}
+		const lane = d.lane ?? 0;
+		const ly = Math.max(sourceY, targetY) + 26 + lane * 10;
+		const ox = sourceX + 14 + lane * 6;
+		const ix = endX - 14 - lane * 6;
+		return `M ${sourceX} ${sourceY} L ${ox} ${sourceY} L ${ox} ${ly} L ${ix} ${ly} L ${ix} ${targetY} L ${endX} ${targetY}`;
 	});
 
 	function toggleNot(ev: MouseEvent) {
@@ -61,7 +70,7 @@
 	}
 </script>
 
-<g class="fbd-edge {d.e.status ?? ''}" class:feedback={d.e.feedback || !!d.points}>
+<g class="fbd-edge {d.e.status ?? ''}" class:feedback={d.e.feedback || backward}>
 	<path class="wirepath" d={path} fill="none" />
 	{#if d.e.negated}
 		<circle class="neg" cx={targetX - 4.5} cy={targetY} r="4.5" />
@@ -80,7 +89,7 @@
 		>
 		</circle>
 	{/if}
-	{#if d.e.wire && d.showWireLabel && !d.points}
+	{#if d.e.wire && d.showWireLabel && !backward}
 		<text class="wirelabel" x={sourceX + 6} y={sourceY - 5}>{d.e.wire}</text>
 	{/if}
 </g>

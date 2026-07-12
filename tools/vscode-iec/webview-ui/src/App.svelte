@@ -61,7 +61,7 @@
 	}
 
 	function render(model: FbdModel, isDiff: boolean) {
-		const { placed, edges: modelEdges, lanePoints } = layout(model);
+		const { placed, edges: modelEdges, laneIdx } = layout(model);
 		const editable = !isDiff;
 		hasPins = model.nodes.some((n) => n.x !== undefined && n.y !== undefined);
 		nodes = placed.map((n) => ({
@@ -93,7 +93,7 @@
 			selectable: false,
 			data: {
 				e,
-				points: lanePoints.get(e),
+				lane: laneIdx.get(e),
 				editable,
 				showWireLabel: !!e.wire && !srcWire.get(e.from)
 			}
