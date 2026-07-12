@@ -82,7 +82,8 @@
     circle.not-hit { fill: transparent; pointer-events: all; cursor: pointer; }
     circle.not-hit:hover { fill: var(--vscode-editor-foreground); fill-opacity: .18; }
     circle.src-hit { fill: transparent; pointer-events: all; cursor: crosshair; }
-    circle.src-hit:hover { fill: var(--vscode-charts-blue, #58a6ff); fill-opacity: .3; }
+    circle.src-hit:hover { fill: var(--vscode-charts-blue, #58a6ff); fill-opacity: .35; }
+    circle.src-dot { fill: var(--vscode-charts-blue, #58a6ff); opacity: .55; pointer-events: none; }
     svg.rewiring circle.not-hit { fill: var(--vscode-charts-blue, #58a6ff); fill-opacity: .25; }
     svg.rewiring circle.not-hit.over { fill-opacity: .6; }
     line.ghost { stroke: var(--vscode-charts-blue, #58a6ff); stroke-width: 1.6; stroke-dasharray: 5 3; pointer-events: none; }
@@ -347,6 +348,7 @@
   let vb = null; // current viewBox {x,y,w,h}
   let lastKey = ""; // node-id fingerprint: refit only on structural change
   let svg = null;
+  let dropTargets = []; // {el, x, y, edge} — input pins, for rewire drops
 
   function render(model, diffing) {
     const L = layout(model);
@@ -360,6 +362,7 @@
     if (diffing) svg.classList.add("diffing");
     const root = svgEl("g");
     svg.appendChild(root);
+    dropTargets = [];
 
     // Feedback/backward wires get lanes just below their own band.
     const laneOf = new Map(); // band -> next lane index
@@ -400,6 +403,7 @@
         // source replaces).
         const hit = svgEl("circle", { class: "not-hit", cx: p2.x - 4.5, cy: p2.y, r: 7.5 });
         hit._edge = e;
+        if (e.arg.text) dropTargets.push({ el: hit, x: p2.x - 4.5, y: p2.y, edge: e });
         const tip = svgEl("title");
         tip.textContent = (e.negated ? "remove NOT" : "add NOT") + " · drop a source here to rewire";
         hit.appendChild(tip);
@@ -426,7 +430,10 @@
           const ref = refTextFor(n, pin);
           if (!ref) continue;
           const pt = n.pinOut[pin];
-          const srcHit = svgEl("circle", { class: "src-hit", cx: pt.x + 3, cy: pt.y, r: 7 });
+          // A small visible dot marks every draggable output; the larger
+          // transparent circle is the grab target.
+          root.appendChild(svgEl("circle", { class: "src-dot", cx: pt.x + 3, cy: pt.y, r: 2.5 }));
+          const srcHit = svgEl("circle", { class: "src-hit", cx: pt.x + 3, cy: pt.y, r: 8 });
           const tip = svgEl("title");
           tip.textContent = `drag to an input pin to wire ${ref}`;
           srcHit.appendChild(tip);
@@ -497,9 +504,11 @@
     wireSvgEvents();
   }
 
-  // beginRewire drags a ghost wire from a source pin; dropping on an input
-  // pin's hit target posts a rewire (replace that argument's text with a
-  // reference to the source).
+  // beginRewire drags a ghost wire from a source pin; dropping near an input
+  // pin posts a rewire (replace that argument's text with a reference to the
+  // source). Listeners live on window — no pointer capture, no reliance on
+  // what element happens to be under the cursor — and the drop target is the
+  // nearest input pin within reach, found geometrically.
   function beginRewire(ev, srcEl, srcPt, refText) {
     ev.stopPropagation();
     ev.preventDefault();
@@ -510,39 +519,50 @@
       const inv = m.inverse();
       return { x: inv.a * cx + inv.c * cy + inv.e, y: inv.b * cx + inv.d * cy + inv.f };
     };
+    const SNAP = 16; // svg units within which a pin catches the drop
+    const nearest = (p) => {
+      let best = null;
+      let bestD = SNAP * SNAP;
+      for (const t of dropTargets) {
+        const d = (t.x - p.x) * (t.x - p.x) + (t.y - p.y) * (t.y - p.y);
+        if (d < bestD) {
+          bestD = d;
+          best = t;
+        }
+      }
+      return best;
+    };
     const ghost = svgEl("line", { class: "ghost", x1: srcPt.x, y1: srcPt.y, x2: srcPt.x, y2: srcPt.y });
     svg.appendChild(ghost);
     svg.classList.add("rewiring");
-    try { srcEl.setPointerCapture(ev.pointerId); } catch { /* synthetic pointer */ }
     let over = null;
     const move = (mv) => {
       const p = toSvg(mv.clientX, mv.clientY);
       ghost.setAttribute("x2", p.x);
       ghost.setAttribute("y2", p.y);
-      const under = document.elementFromPoint(mv.clientX, mv.clientY);
-      const target = under && under.closest ? under.closest("circle.not-hit") : null;
-      if (over && over !== target) over.classList.remove("over");
+      const target = nearest(p);
+      if (over && over !== target) over.el.classList.remove("over");
       over = target;
-      if (over) over.classList.add("over");
+      if (over) over.el.classList.add("over");
     };
     const finish = (up) => {
-      srcEl.removeEventListener("pointermove", move);
-      srcEl.removeEventListener("pointerup", finish);
-      srcEl.removeEventListener("pointercancel", finish);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", finish);
+      window.removeEventListener("pointercancel", finish);
       ghost.remove();
-      svg.classList.remove("rewiring");
-      if (over) over.classList.remove("over");
-      if (up.type === "pointerup" && over && over._edge && over._edge.arg && over._edge.arg.text) {
-        const arg = over._edge.arg;
-        if (arg.text !== refText) {
+      if (svg) svg.classList.remove("rewiring");
+      if (over) over.el.classList.remove("over");
+      if (up.type === "pointerup" && over) {
+        const arg = over.edge.arg;
+        if (arg && arg.text && arg.text !== refText) {
           vscode.postMessage({ type: "rewire", arg, newText: refText });
         }
       }
       over = null;
     };
-    srcEl.addEventListener("pointermove", move);
-    srcEl.addEventListener("pointerup", finish);
-    srcEl.addEventListener("pointercancel", finish);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", finish);
+    window.addEventListener("pointercancel", finish);
   }
 
   // beginEditLiteral floats an input over a constant chip; Enter commits the

@@ -40,7 +40,7 @@ FBD
   Heater := LIMIT(0.0, ADD(MUL(Kp, e), integral), 100.0)
 
   // TAL-101: low-temperature alarm with a 10 s on-delay.
-  cold = LT(TempC, 62.0)
+  cold = LT(TempC, 62)
   a1 : TON(IN := cold, PT := T#10S)
   TempLowAlm := a1.Q
 

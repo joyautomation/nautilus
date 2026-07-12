@@ -3,6 +3,17 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.5] - 2026-07-12
+
+### Fixed
+- **Rewire drag works under a real mouse.** The drag depended on pointer
+  capture delivering moves to an invisible 7 px circle; it now tracks the
+  pointer at the window level (no capture at all) and drops snap to the
+  nearest input pin geometrically, so releasing near a pin is enough.
+- Draggable outputs are visible now: every referenceable output pin shows
+  a small blue dot — the drag starts there (the circle at the input end of
+  a wire is the NOT toggle, not a drag handle).
+
 ## [0.4.4] - 2026-07-12
 
 ### Fixed
