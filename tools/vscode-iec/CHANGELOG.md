@@ -8,7 +8,7 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 ### Added
 - **Declare variables from the diagram.** The "+ add" palette gains
   "variable (external tag)" and "local variable (retained)" — a
-  declareVar op inserts \ into the right VAR_EXTERNAL/VAR
+  declareVar op inserts `name : TYPE;` into the right VAR_EXTERNAL/VAR
   section (creating the section above FBD if missing), with duplicate and
   collision checks. And the quick path: an UNDECLARED variable chip (it
   already wears the error badge) can be double-clicked — type its type,
