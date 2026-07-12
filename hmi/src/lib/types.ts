@@ -46,6 +46,9 @@ export interface NautilusFrame {
 	ts: number;
 	scans: number;
 	tags: Record<string, unknown>;
+	/** Retained program locals (integrals, latches, FB instances with their
+	 * pins) — the watch inside the POU, read-only. */
+	locals?: Record<string, unknown>;
 	scan: ScanStats;
 }
 

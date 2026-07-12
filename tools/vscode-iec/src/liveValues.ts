@@ -14,7 +14,14 @@ import * as https from "https";
 import * as vscode from "vscode";
 import { formatValue, formatValueHover, scanIdentifiers } from "./scan";
 
-type Frame = { ts: number; scans: number; tags: Record<string, unknown> };
+type Frame = {
+  ts: number;
+  scans: number;
+  tags: Record<string, unknown>;
+  // Retained program locals (a PI integral, latches, FB instances with
+  // their pins) — the watch inside the POU, streamed alongside the tags.
+  locals?: Record<string, unknown>;
+};
 
 /** Both IEC languages get live values — the identifier scanner is syntax-
  * agnostic and FBD netlists reference the same runtime tags. */
@@ -170,6 +177,11 @@ export class LiveValues implements vscode.Disposable {
       return;
     }
     this.values.clear();
+    // Locals first so a tag of the same name wins (globals shadow locals in
+    // the merged watch — the rare collision resolves to the bound value).
+    for (const [name, value] of Object.entries(frame.locals ?? {})) {
+      this.values.set(name.toLowerCase(), value);
+    }
     for (const [name, value] of Object.entries(frame.tags ?? {})) {
       this.values.set(name.toLowerCase(), value);
     }

@@ -49,12 +49,15 @@ var indexHTML []byte
 // loop's diagnostics, timestamped server-side. Scan carries the full
 // PLC-style runtime diagnostics (phase breakdown, history, histogram) so a
 // diagnostics page needs nothing but the stream — a fresh client gets the
-// whole picture from its first frame.
+// whole picture from its first frame. Locals are the program's retained VAR
+// values (a PI integral, latches, FB instances with their pins) — the watch
+// window's view inside the POU, read-only.
 type Frame struct {
-	TS    int64             `json:"ts"` // epoch milliseconds
-	Scans uint64            `json:"scans"`
-	Tags  map[string]any    `json:"tags"`
-	Scan  runtime.ScanStats `json:"scan"`
+	TS     int64             `json:"ts"` // epoch milliseconds
+	Scans  uint64            `json:"scans"`
+	Tags   map[string]any    `json:"tags"`
+	Locals map[string]any    `json:"locals,omitempty"`
+	Scan   runtime.ScanStats `json:"scan"`
 }
 
 // Options tunes the server; zero values mean defaults.
@@ -154,10 +157,11 @@ func (s *Server) broadcast() {
 func (s *Server) frame() Frame {
 	stats := s.rt.Stats()
 	return Frame{
-		TS:    time.Now().UnixMilli(),
-		Scans: stats.Count,
-		Tags:  s.rt.Tags().All(),
-		Scan:  stats,
+		TS:     time.Now().UnixMilli(),
+		Scans:  stats.Count,
+		Tags:   s.rt.Tags().All(),
+		Locals: s.rt.Program().Locals(),
+		Scan:   stats,
 	}
 }
 

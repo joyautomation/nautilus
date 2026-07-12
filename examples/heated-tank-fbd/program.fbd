@@ -22,6 +22,8 @@ VAR_EXTERNAL
 END_VAR
 VAR
     integral : REAL;
+    test: REAL;
+    test2: REAL;
 END_VAR
 FBD
   // P-101 pump: level hysteresis as a seal-in latch — start when low,
@@ -41,5 +43,8 @@ FBD
   cold = LT(TempC, 62.0)
   a1 : TON(IN := cold, PT := T#10S)
   TempLowAlm := a1.Q
+
+  test := 123;
+  test := test2;
 END_FBD
 END_PROGRAM

@@ -113,6 +113,8 @@
       .phlegend .io.bad { color: var(--bad); }
       .phlegend .io.ok { color: var(--good); }
       td.desc { color: var(--muted); font-size: 0.85rem; }
+      td.desc.local, td.q.local { color: var(--muted); font-style: italic; font-size: 0.75rem; }
+      tr.localrow td.name { color: var(--accent); }
       td.unit { color: var(--muted); font-family: var(--mono); font-size: 0.85rem; }
       td.q { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.04em; }
       td.q.good { color: var(--good); }
@@ -295,17 +297,37 @@
       }
 
       let lastTags = {};
+      let lastLocals = {};
       let lastScan = null;
+
+      // localRows renders retained program locals (integral, latches, FB
+      // instances) beneath the tags — the watch inside the POU. They aren't
+      // tags: no meta, no writes, quality n/a.
+      function localRows() {
+        const names = Object.keys(lastLocals).sort();
+        return names
+          .map((n) => {
+            let body = rows(n, lastLocals[n], "local:" + n, 0, null);
+            body = body.replace(/^<tr class="/, '<tr class="localrow ');
+            if (hasMeta) {
+              body = body.replace('<td class="desc"></td>', '<td class="desc local">program local</td>');
+            }
+            return body;
+          })
+          .join("");
+      }
 
       function renderTable() {
         const names = Object.keys(lastTags).sort();
-        $("count").textContent = names.length;
+        const nLocals = Object.keys(lastLocals).length;
+        $("count").textContent = nLocals ? `${names.length} tags + ${nLocals} local` : String(names.length);
         const span = hasMeta ? 5 : 2;
-        if (names.length === 0) {
+        if (names.length === 0 && nLocals === 0) {
           $("tags").innerHTML = `<tr><td colspan="${span}" class="empty">no tags</td></tr>`;
           return;
         }
-        $("tags").innerHTML = names.map((n) => rows(n, lastTags[n], n, 0, n)).join("");
+        $("tags").innerHTML =
+          names.map((n) => rows(n, lastTags[n], n, 0, n)).join("") + localRows();
       }
 
       // ── scan diagnostics ─────────────────────────────────────────────
@@ -409,6 +431,7 @@
         lastFrameMs = Date.now();
         $("scans").textContent = frame.scans ?? "—";
         lastTags = frame.tags ?? {};
+        lastLocals = frame.locals ?? {};
         renderScan(frame.scan);
         renderTable();
       }

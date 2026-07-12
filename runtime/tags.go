@@ -6,6 +6,7 @@ package runtime
 
 import (
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -135,6 +136,22 @@ func plain(v ir.Value) any {
 				name = "_" + strconv.Itoa(i)
 			}
 			out[name] = plain(f)
+		}
+		return out
+	case ir.TypeFB:
+		// A function-block instance renders like a struct of its pins, so a
+		// watch (editor inline values, HMI) can show t1.Q and t1.ET live.
+		// Internals with the built-ins' underscore prefix stay hidden.
+		if v.FB == nil || v.FB.Def == nil {
+			return nil
+		}
+		slots := v.FB.Def.AllSlots()
+		out := make(map[string]any, len(slots))
+		for i, s := range slots {
+			if i >= len(v.FB.Slots) || strings.HasPrefix(s.Name, "_") {
+				continue
+			}
+			out[s.Name] = plain(v.FB.Slots[i])
 		}
 		return out
 	default:

@@ -3,6 +3,16 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.2] - 2026-07-11
+
+### Added
+- **Inline live values for program locals.** Retained `VAR` variables — a PI
+  integral, latches, and FB instances — now stream in every frame alongside
+  the tags, so `integral` gets a value pill just like `TempC`, and FB pins
+  resolve through member access: hovering `a1.Q` or `a1.ET` shows the live
+  timer state. (Requires a controller built from this commit; locals ride
+  the frame's new `locals` field.)
+
 ## [0.4.1] - 2026-07-11
 
 ### Added
