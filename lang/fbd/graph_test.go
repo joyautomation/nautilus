@@ -88,12 +88,67 @@ END_PROGRAM`
 	}
 	m.edge(t, "b:c.Run", "c:Run")
 
-	// Longest-path layers: inputs 0, OR 1, AND 2, coil right-aligned at 3.
+	// Longest-path layers: OR 1, AND 2, coil right-aligned at 3. Inputs sit
+	// one left of their nearest consumer, not in a global first column.
 	for id, want := range map[string]int{
-		"v:Start": 0, "v:Stop": 0, "b:w.seal": 1, "b:c.Run": 2, "c:Run": 3,
+		"v:Start": 0, "v:Stop": 1, "b:w.seal": 1, "b:c.Run": 2, "c:Run": 3,
 	} {
 		if got := m.node(t, id).Layer; got != want {
 			t.Errorf("layer(%s) = %d, want %d", id, got, want)
+		}
+	}
+}
+
+func TestGraphNetworksSplitInputChips(t *testing.T) {
+	// Two independent networks both read TempC: each gets its own chip (the
+	// IEC variable-box-per-network convention), so a renderer can band the
+	// networks by connectivity.
+	src := `PROGRAM P
+VAR_EXTERNAL TempC : REAL; Hot : BOOL; Cold : BOOL; END_VAR
+FBD
+  Hot := GT(TempC, 80.0)
+  Cold := LT(TempC, 5.0)
+END_FBD
+END_PROGRAM`
+	m := mustGraph(t, src)
+	c1 := m.node(t, "v:TempC")
+	c2 := m.node(t, "v:TempC#2")
+	if c1.Label != "TempC" || c2.Label != "TempC" {
+		t.Errorf("chip labels: %q, %q", c1.Label, c2.Label)
+	}
+	if e := m.edge(t, "v:TempC", "b:c.Hot"); e.Feedback {
+		t.Errorf("chip edge wrong: %s", mustJSON(e))
+	}
+	m.edge(t, "v:TempC#2", "b:c.Cold")
+}
+
+func TestGraphCrossNetworkCoilReadBecomesChip(t *testing.T) {
+	// Run's seal-in stays a feedback wire inside its own network, but the TON
+	// network reading Run gets a variable chip instead of a sheet-crossing
+	// wire.
+	src := `PROGRAM Motor
+VAR_EXTERNAL Start : BOOL; Stop : BOOL; Run : BOOL; Started : BOOL; END_VAR
+FBD
+  seal = OR(Start, Run)
+  Run := AND(seal, NOT Stop)
+  t1 : TON(IN := Run, PT := T#5S)
+  Started := t1.Q
+END_FBD
+END_PROGRAM`
+	m := mustGraph(t, src)
+	if e := m.edge(t, "c:Run", "b:w.seal"); !e.Feedback {
+		t.Errorf("in-network seal-in must stay a feedback wire: %s", mustJSON(e))
+	}
+	runChip := m.node(t, "v:Run")
+	if runChip.Kind != "input" || runChip.Label != "Run" {
+		t.Errorf("cross-network read should be a chip: %s", mustJSON(runChip))
+	}
+	if e := m.edge(t, "v:Run", "f:t1"); e.Feedback || e.ToPin != "IN" {
+		t.Errorf("chip->TON edge wrong: %s", mustJSON(e))
+	}
+	for _, e := range m.Edges {
+		if e.From == "c:Run" && e.To == "f:t1" {
+			t.Errorf("coil->TON wire should have been replaced: %s", mustJSON(e))
 		}
 	}
 }

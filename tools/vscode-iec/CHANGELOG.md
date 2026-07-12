@@ -3,6 +3,17 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.9] - 2026-07-11
+
+### Changed
+- **FBD preview layout is now network-banded**, the way FBD editors draw
+  sheets: each connected logic cone renders as its own horizontal band,
+  variable boxes repeat per network instead of one far-left column, input
+  chips sit adjacent to their consumers, reading another network's coil
+  shows a variable box (only an in-network seal-in draws as a feedback
+  wire, routed in lanes under its own band), coils right-align per band,
+  and row ordering uses iterated barycenter sweeps to cut wire crossings.
+
 ## [0.3.8] - 2026-07-11
 
 ### Added

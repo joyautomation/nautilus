@@ -14,6 +14,12 @@ import (
 // netlist — no coordinates, just topology plus a deterministic left-to-right
 // layer per node — so the same source always yields the same JSON and the
 // renderer owns all geometry.
+//
+// The model is pre-shaped for human-friendly drawing: each network (connected
+// logic cone) is self-contained — input variable chips repeat per network and
+// a read of another network's coil is a variable chip, not a wire across the
+// sheet — so a renderer can recover the networks by connectivity alone and
+// stack them as independent bands, the way FBD editors draw sheets.
 type Model struct {
 	Name  string  `json:"name"` // POU name (PROGRAM/FUNCTION_BLOCK ident)
 	Nodes []*Node `json:"nodes"`
@@ -29,7 +35,10 @@ type Model struct {
 //
 // IDs are stable across edits that don't change the netlist structure (they
 // derive from wire/instance/coil names plus argument position, never from
-// statement order), so they double as diff keys.
+// statement order), so they double as diff keys. Layer is the left-to-right
+// column within the node's network: longest-path depth for blocks/FBs, one
+// left of the nearest consumer for input chips, the network's deepest layer
+// for coils.
 type Node struct {
 	ID      string   `json:"id"`
 	Kind    string   `json:"kind"`
@@ -90,7 +99,11 @@ func Graph(src string, userFBs ...map[string]*ir.FBDef) (*Model, error) {
 	if err := b.build(); err != nil {
 		return nil, err
 	}
+	comp := b.components()
+	b.splitByNetwork(comp)
 	b.layer()
+	b.placeInputs()
+	b.alignCoils(comp)
 	return b.m, nil
 }
 
@@ -361,6 +374,162 @@ func (b *modelBuilder) layer() {
 	for _, n := range b.m.Nodes {
 		if n.Kind == "coil" {
 			n.Layer = max
+		}
+	}
+}
+
+// components groups the non-input nodes (blocks, FBs, coils) into networks —
+// the independently-drawn logic cones of an FBD sheet — via union-find over
+// non-feedback edges. Input chips deliberately don't union: two networks
+// reading the same variable stay separate sheets, each with its own copy of
+// the variable box (splitByNetwork makes the copies). Component indices are
+// deterministic: numbered by first appearance in the node list.
+func (b *modelBuilder) components() map[string]int {
+	parent := map[string]string{}
+	var find func(string) string
+	find = func(x string) string {
+		if parent[x] == "" || parent[x] == x {
+			parent[x] = x
+			return x
+		}
+		r := find(parent[x])
+		parent[x] = r
+		return r
+	}
+	for _, n := range b.m.Nodes {
+		if n.Kind != "input" {
+			find(n.ID)
+		}
+	}
+	for _, e := range b.m.Edges {
+		if e.Feedback {
+			continue
+		}
+		from, to := b.nodes[e.From], b.nodes[e.To]
+		if from.Kind == "input" || to.Kind == "input" {
+			continue
+		}
+		parent[find(e.From)] = find(e.To)
+	}
+	comp := map[string]int{}
+	next := 0
+	for _, n := range b.m.Nodes {
+		if n.Kind == "input" {
+			continue
+		}
+		r := find(n.ID)
+		if _, ok := comp[r]; !ok {
+			comp[r] = next
+			next++
+		}
+		comp[n.ID] = comp[r]
+	}
+	return comp
+}
+
+// splitByNetwork gives each network its own copy of every input chip it
+// reads (the IEC convention: a variable box repeats per network) and turns
+// cross-network coil reads into ordinary variable chips — only a read inside
+// the coil's own cone stays drawn as a seal-in feedback wire. The first
+// network to use a chip keeps the original id; later copies append #2, #3, …
+// so ids stay deterministic diff keys.
+func (b *modelBuilder) splitByNetwork(comp map[string]int) {
+	// chip instance per (variable label, network)
+	byComp := map[string]map[int]*Node{}
+	count := map[string]int{}
+	instance := func(baseID, label string, c int) *Node {
+		if byComp[baseID] == nil {
+			byComp[baseID] = map[int]*Node{}
+		}
+		if n, ok := byComp[baseID][c]; ok {
+			return n
+		}
+		count[baseID]++
+		k := count[baseID]
+		if orig, ok := b.nodes[baseID]; ok && orig.Kind == "input" && k == 1 {
+			byComp[baseID][c] = orig // first network keeps the original chip
+			return orig
+		}
+		id := baseID
+		if k > 1 {
+			id = fmt.Sprintf("%s#%d", baseID, k)
+		}
+		n := b.add(&Node{ID: id, Kind: "input", Label: label})
+		byComp[baseID][c] = n
+		return n
+	}
+	for _, e := range b.m.Edges {
+		tc := comp[e.To]
+		from := b.nodes[e.From]
+		switch {
+		case from.Kind == "input":
+			// Literals are per-use already; shared variable chips re-home to
+			// the reading network's copy.
+			if strings.HasPrefix(from.ID, "v:") {
+				e.From = instance(from.ID, from.Label, tc).ID
+			}
+		case from.Kind == "coil" && e.Feedback && comp[e.From] != tc:
+			// Reading another network's coil: a variable box, not a wire
+			// across the sheet.
+			e.From = instance("v:"+from.Label, from.Label, tc).ID
+			e.Feedback = false
+		}
+	}
+	// Drop variable chips whose consumers all moved to copies.
+	used := map[string]bool{}
+	for _, e := range b.m.Edges {
+		used[e.From] = true
+		used[e.To] = true
+	}
+	kept := b.m.Nodes[:0]
+	for _, n := range b.m.Nodes {
+		if n.Kind == "input" && !used[n.ID] {
+			delete(b.nodes, n.ID)
+			continue
+		}
+		kept = append(kept, n)
+	}
+	b.m.Nodes = kept
+}
+
+// placeInputs pulls every input chip up against its nearest consumer —
+// layer = min(consumer layer) − 1 — instead of a single far-left column, so
+// wires stay short. Runs after layer(); chips contribute 0 to block depths
+// either way.
+func (b *modelBuilder) placeInputs() {
+	minTo := map[string]int{}
+	for _, e := range b.m.Edges {
+		if from := b.nodes[e.From]; from == nil || from.Kind != "input" {
+			continue
+		}
+		l := b.nodes[e.To].Layer
+		if cur, ok := minTo[e.From]; !ok || l < cur {
+			minTo[e.From] = l
+		}
+	}
+	for _, n := range b.m.Nodes {
+		if n.Kind != "input" {
+			continue
+		}
+		if l, ok := minTo[n.ID]; ok && l > 0 {
+			n.Layer = l - 1
+		}
+	}
+}
+
+// alignCoils right-aligns each coil to its own network's deepest layer (each
+// network is drawn as an independent band, so a global rail would just
+// stretch wires).
+func (b *modelBuilder) alignCoils(comp map[string]int) {
+	maxOf := map[int]int{}
+	for _, n := range b.m.Nodes {
+		if c, ok := comp[n.ID]; ok && n.Layer > maxOf[c] {
+			maxOf[c] = n.Layer
+		}
+	}
+	for _, n := range b.m.Nodes {
+		if n.Kind == "coil" {
+			n.Layer = maxOf[comp[n.ID]]
 		}
 	}
 }

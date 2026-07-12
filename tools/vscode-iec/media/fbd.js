@@ -118,6 +118,12 @@
   }
 
   // ── layout ────────────────────────────────────────────────────────────
+  // Each network (connected component) lays out as its own horizontal band,
+  // stacked vertically — the way FBD editors draw independent logic. The
+  // model is pre-shaped for this: variable chips repeat per network, so
+  // connectivity alone recovers the bands.
+  const BAND_GAP = 44;
+
   function layout(model) {
     const nodes = model.nodes.map((n) => ({ ...n, inputs: n.inputs || [], outputs: n.outputs || [] }));
     const byId = new Map(nodes.map((n) => [n.id, n]));
@@ -138,46 +144,58 @@
       }
     }
 
-    // Column per layer.
-    const layers = [];
-    for (const n of nodes) (layers[n.layer] = layers[n.layer] || []).push(n);
-    for (let i = 0; i < layers.length; i++) layers[i] = layers[i] || [];
+    // Bands: union-find over all edges; band order by first node appearance.
+    const parent = new Map();
+    const find = (x) => {
+      let r = x;
+      while (parent.get(r) !== r) r = parent.get(r);
+      while (parent.get(x) !== r) {
+        const next = parent.get(x);
+        parent.set(x, r);
+        x = next;
+      }
+      return r;
+    };
+    for (const n of nodes) parent.set(n.id, n.id);
+    for (const e of edges) parent.set(find(e.from), find(e.to));
+    const bandIdx = new Map();
+    const bands = [];
+    for (const n of nodes) {
+      const r = find(n.id);
+      if (!bandIdx.has(r)) {
+        bandIdx.set(r, bands.length);
+        bands.push([]);
+      }
+      bands[bandIdx.get(r)].push(n);
+    }
 
-    // Order within each layer by barycenter of forward sources to cut
-    // crossings; sources sit in earlier (already ordered) layers.
-    const srcOf = new Map(); // node id -> [source ids] (forward edges only)
+    // Adjacency for crossing reduction (forward edges only).
+    const srcOf = new Map(); // node id -> source node ids
+    const dstOf = new Map(); // node id -> target node ids
     for (const e of edges) {
       if (e.feedback) continue;
       if (!srcOf.has(e.to)) srcOf.set(e.to, []);
       srcOf.get(e.to).push(e.from);
+      if (!dstOf.has(e.from)) dstOf.set(e.from, []);
+      dstOf.get(e.from).push(e.to);
     }
-    const orderIdx = new Map();
-    layers.forEach((col, li) => {
-      if (li > 0) {
-        col.forEach((n, i) => {
-          const src = (srcOf.get(n.id) || []).filter((s) => byId.get(s).layer < li);
-          n._bary = src.length
-            ? src.reduce((a, s) => a + orderIdx.get(s), 0) / src.length
-            : i; // keep relative position when nothing feeds it
-        });
-        col.sort((a, b) => a._bary - b._bary);
-      }
-      col.forEach((n, i) => orderIdx.set(n.id, i));
-    });
 
-    // Positions: columns left to right, nodes stacked and vertically centered.
-    const colW = layers.map((col) => Math.max(0, ...col.map((n) => n.w)));
-    const colH = layers.map((col) => col.reduce((a, n) => a + n.h, 0) + Math.max(0, col.length - 1) * ROW_GAP);
-    const maxH = Math.max(0, ...colH);
-    let x = PAD;
-    layers.forEach((col, li) => {
-      let y = PAD + (maxH - colH[li]) / 2;
-      for (const n of col) {
-        n.x = x + (colW[li] - n.w) / 2;
-        n.y = y;
-        y += n.h + ROW_GAP;
-      }
-      x += colW[li] + COL_GAP;
+    // Feedback wires route in lanes below their band — reserve gap for them.
+    const fbCount = new Map();
+    for (const e of edges) {
+      if (!e.feedback) continue;
+      const b = bandIdx.get(find(e.from));
+      fbCount.set(b, (fbCount.get(b) || 0) + 1);
+    }
+
+    let bandTop = PAD;
+    let width = 0;
+    bands.forEach((band, bi) => {
+      const h = layoutBand(band, byId, srcOf, dstOf, bandTop);
+      band.bottom = bandTop + h;
+      const lanes = fbCount.get(bi) || 0;
+      bandTop += h + (lanes ? 14 + lanes * 10 : 0) + BAND_GAP;
+      width = Math.max(width, ...band.map((n) => n.x + n.w));
     });
 
     // Pin coordinates.
@@ -196,8 +214,63 @@
         });
       }
     }
-    const width = x - COL_GAP + PAD;
-    return { nodes, edges, byId, width, height: maxH + 2 * PAD };
+    const bandOf = new Map();
+    for (const band of bands) for (const n of band) bandOf.set(n.id, band);
+    return { nodes, edges, byId, bands, bandOf, width: width + PAD, height: bandTop - BAND_GAP + PAD };
+  }
+
+  // layoutBand positions one network's nodes: columns by layer, rows ordered
+  // by iterated barycenter sweeps (left→right by sources, right→left by
+  // targets), then stacked and vertically centered. Returns the band height.
+  function layoutBand(band, byId, srcOf, dstOf, top) {
+    const inBand = new Set(band.map((n) => n.id));
+    const layers = [];
+    for (const n of band) (layers[n.layer] = layers[n.layer] || []).push(n);
+    const cols = [];
+    for (const col of layers) if (col && col.length) cols.push(col);
+
+    // Provisional row centers drive the barycenter; refine over 3 rounds.
+    const center = new Map();
+    const stack = (col) => {
+      let y = 0;
+      for (const n of col) {
+        center.set(n.id, y + n.h / 2);
+        y += n.h + ROW_GAP;
+      }
+    };
+    cols.forEach(stack);
+    const orderBy = (col, neighborsOf) => {
+      col.forEach((n, i) => {
+        const ns = (neighborsOf.get(n.id) || []).filter((m) => inBand.has(m));
+        n._bary = ns.length
+          ? ns.reduce((a, m) => a + center.get(m), 0) / ns.length
+          : center.get(n.id); // nothing to align to: hold position
+      });
+      col.sort((a, b) => a._bary - b._bary);
+      stack(col);
+    };
+    for (let round = 0; round < 3; round++) {
+      for (let i = 1; i < cols.length; i++) orderBy(cols[i], srcOf);
+      for (let i = cols.length - 2; i >= 0; i--) orderBy(cols[i], dstOf);
+    }
+    // Final left→right pass so sources win the last word.
+    for (let i = 1; i < cols.length; i++) orderBy(cols[i], srcOf);
+
+    // Positions: columns left to right, centered within the band height.
+    const colW = cols.map((col) => Math.max(0, ...col.map((n) => n.w)));
+    const colH = cols.map((col) => col.reduce((a, n) => a + n.h, 0) + Math.max(0, col.length - 1) * ROW_GAP);
+    const bandH = Math.max(0, ...colH);
+    let x = PAD;
+    cols.forEach((col, ci) => {
+      let y = top + (bandH - colH[ci]) / 2;
+      for (const n of col) {
+        n.x = x + (colW[ci] - n.w) / 2;
+        n.y = y;
+        y += n.h + ROW_GAP;
+      }
+      x += colW[ci] + COL_GAP;
+    });
+    return bandH;
   }
 
   // ── render ────────────────────────────────────────────────────────────
@@ -218,9 +291,8 @@
     const root = svgEl("g");
     svg.appendChild(root);
 
-    // Feedback/backward wires get lanes below the diagram.
-    let lane = 0;
-    let laneBottom = L.height - PAD + 14;
+    // Feedback/backward wires get lanes just below their own band.
+    const laneOf = new Map(); // band -> next lane index
 
     for (const e of L.edges) {
       const from = L.byId.get(e.from);
@@ -235,11 +307,13 @@
         d = `M ${p1.x} ${p1.y} C ${p1.x + dx} ${p1.y}, ${endX - dx} ${p2.y}, ${endX} ${p2.y}`;
       } else {
         // Backward wire (seal-in feedback or FB cycle): out, down under the
-        // diagram, back left, and up into the pin.
-        const y = laneBottom + lane * 10;
+        // band, back left, and up into the pin.
+        const band = L.bandOf.get(e.from);
+        const lane = laneOf.get(band) || 0;
+        laneOf.set(band, lane + 1);
+        const y = band.bottom + 12 + lane * 10;
         const ox = p1.x + 14 + lane * 6;
         const ix = endX - 14 - lane * 6;
-        lane++;
         d = `M ${p1.x} ${p1.y} L ${ox} ${p1.y} L ${ox} ${y} L ${ix} ${y} L ${ix} ${p2.y} L ${endX} ${p2.y}`;
       }
       g.appendChild(svgEl("path", { d }));
@@ -295,7 +369,7 @@
       root.appendChild(g);
     }
 
-    const contentH = L.height + (lane ? lane * 10 + 20 : 0);
+    const contentH = L.height; // lane space is already reserved per band
     const key = L.nodes.map((n) => n.id).sort().join("|");
     if (!vb || key !== lastKey) {
       vb = fitBox(L.width, contentH);
