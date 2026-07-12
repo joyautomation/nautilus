@@ -21,6 +21,7 @@
 	import { layout, type FbdModel } from './layout';
 	import { mergeDiff } from './diff';
 	import { vscode, postOp } from './vscodeApi';
+	import { setRects, updateRect } from './diagState.svelte';
 
 	const nodeTypes = { fbd: FbdNode };
 	const edgeTypes = { fbd: FbdEdge };
@@ -98,6 +99,7 @@
 				showWireLabel: !!e.wire && !srcWire.get(e.from)
 			}
 		}));
+		setRects(placed.map((n) => [n.id, { x: n.x, y: n.y, w: n.w, h: n.h }]));
 		structureKey = placed
 			.map((n) => n.id)
 			.sort()
@@ -155,7 +157,21 @@
 		return Promise.resolve(false); // ops re-render; never delete locally
 	}
 
+	function trackDrag(dragged: Node[]) {
+		// Keep the live rect store current so feedback lanes reroute around
+		// nodes as they move.
+		for (const n of dragged) {
+			const pn = (n.data as { n: import('./layout').Placed }).n;
+			updateRect(n.id, { x: n.position.x, y: n.position.y, w: pn.w, h: pn.h });
+		}
+	}
+
+	function onnodedrag({ nodes: dragged }: { nodes: Node[] }) {
+		trackDrag(dragged);
+	}
+
 	function onnodedragstop({ nodes: dragged }: { nodes: Node[] }) {
+		trackDrag(dragged);
 		for (const n of dragged) {
 			postOp({
 				type: 'setLayout',
@@ -198,6 +214,7 @@
 			{edgeTypes}
 			{onconnect}
 			{onbeforedelete}
+			{onnodedrag}
 			{onnodedragstop}
 			zoomOnDoubleClick={false}
 			fitView

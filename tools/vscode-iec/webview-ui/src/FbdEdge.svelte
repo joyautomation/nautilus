@@ -5,6 +5,7 @@
 	// colors ride a class on the group.
 	import { getBezierPath, type EdgeProps } from '@xyflow/svelte';
 	import { postOp } from './vscodeApi';
+	import { diag } from './diagState.svelte';
 
 	let {
 		sourceX,
@@ -34,8 +35,9 @@
 
 	// The path derives from the LIVE endpoints xyflow supplies, so wires —
 	// including feedback lanes — follow node drags. Forward runs are bezier;
-	// backward runs route orthogonally below the lower endpoint, staggered by
-	// the layout's lane index so parallel lanes never overlap.
+	// backward runs route orthogonally in a lane that clears EVERY node its
+	// horizontal run would cross (consulting the live rect store), staggered
+	// by the layout's lane index so parallel lanes never coincide.
 	const backward = $derived(sourceX >= targetX - 4);
 	const path = $derived.by(() => {
 		const endX = d.e.negated ? targetX - 9 : targetX;
@@ -51,9 +53,26 @@
 			return p;
 		}
 		const lane = d.lane ?? 0;
-		const ly = Math.max(sourceY, targetY) + 26 + lane * 10;
 		const ox = sourceX + 14 + lane * 6;
 		const ix = endX - 14 - lane * 6;
+		// Drop the horizontal run just below whatever it would actually cross:
+		// start under the lower endpoint and push past each intersected node
+		// until the line is clear. Nodes it doesn't touch never matter, so
+		// lanes stay tight to their own logic instead of diving under the
+		// whole sheet.
+		const lo = Math.min(ix, ox);
+		const hi = Math.max(ix, ox);
+		let ly = Math.max(sourceY, targetY) + 18 + lane * 10;
+		for (let guard = 0; guard < 50; guard++) {
+			let pushed = false;
+			for (const r of diag.rects.values()) {
+				if (r.x < hi && r.x + r.w > lo && ly >= r.y - 6 && ly <= r.y + r.h + 6) {
+					ly = r.y + r.h + 10 + lane * 6;
+					pushed = true;
+				}
+			}
+			if (!pushed) break;
+		}
 		return `M ${sourceX} ${sourceY} L ${ox} ${sourceY} L ${ox} ${ly} L ${ix} ${ly} L ${ix} ${targetY} L ${endX} ${targetY}`;
 	});
 

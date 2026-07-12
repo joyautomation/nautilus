@@ -3,6 +3,14 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.2] - 2026-07-12
+
+### Fixed
+- Feedback lanes route around nodes instead of through them: the lane's
+  horizontal run drops just below whatever it would actually cross —
+  consulting live node positions, so it reroutes as you drag — while
+  staying tight to its own logic rather than clearing the whole sheet.
+
 ## [0.6.1] - 2026-07-12
 
 ### Fixed
