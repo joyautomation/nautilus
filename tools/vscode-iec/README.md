@@ -49,7 +49,10 @@ expects:
   editor-title button) renders blocks, pins, variable chips, wire fan-out
   with signal names, IEC negation circles, and seal-in feedback wires. It
   re-renders as you type; the text stays the source of truth, and layout is
-  computed from topology so no coordinates pollute your diffs.
+  computed from topology so no coordinates pollute your diffs. First
+  graphical edits: double-click a constant to retype it, click an input pin
+  to toggle `NOT` — each gesture is a verified text edit in the `.fbd`
+  buffer.
 - **Visual diff** — `nautilus: Diff FBD Diagram (vs git HEAD)` overlays the
   committed and working-tree diagrams, coloring added / removed / changed
   blocks and wires; `(vs Controller)` does the same against the program a

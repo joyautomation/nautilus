@@ -31,6 +31,7 @@ export type FbdNode = {
   outputs?: string[];
   layer: number;
 };
+export type FbdSpan = { line: number; col: number; text?: string };
 export type FbdEdge = {
   from: string;
   fromPin?: string;
@@ -39,7 +40,16 @@ export type FbdEdge = {
   wire?: string;
   negated?: boolean;
   feedback?: boolean;
+  arg?: FbdSpan;
+  not?: FbdSpan;
+  inner?: FbdSpan;
 };
+
+/** Edit gestures the webview can send back; each maps to a text edit
+ * anchored by source spans from the render model. */
+type EditMessage =
+  | { type: "editLiteral"; span: FbdSpan; newText: string }
+  | { type: "toggleNot"; arg: FbdSpan; not?: FbdSpan | null; inner?: FbdSpan | null };
 
 const DEBOUNCE_MS = 150;
 
@@ -230,6 +240,7 @@ export class FbdPreview implements vscode.Disposable {
       this.panel = undefined;
       this.diffing = false;
     });
+    this.panel.webview.onDidReceiveMessage((msg: EditMessage) => void this.applyEdit(msg));
     const webview = this.panel.webview;
     const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.context.extensionUri, "media", "fbd.js")
@@ -255,6 +266,56 @@ export class FbdPreview implements vscode.Disposable {
     if (!this.panel) return;
     this.panel.title = "FBD: " + ((msg as { title?: string }).title ?? "Preview");
     void this.panel.webview.postMessage(msg);
+  }
+
+  /** Apply a diagram gesture as a text edit to the tracked .fbd document.
+   * Every edit is span-anchored and verified against the current text before
+   * it applies — if the document moved under us (or a literal's rendered
+   * form differs from the source), nothing is touched. The text edit then
+   * round-trips through the normal change → re-render path, so the diagram
+   * the user sees is always a projection of real text. */
+  private async applyEdit(msg: EditMessage): Promise<void> {
+    if (this.diffing || !this.docUri) return;
+    const doc = vscode.workspace.textDocuments.find(
+      (d) => d.uri.toString() === this.docUri?.toString()
+    );
+    if (!doc) return;
+    const at = (s: FbdSpan) => new vscode.Position(s.line - 1, s.col - 1);
+    const verify = (s: FbdSpan): boolean => {
+      if (!s.text) return true;
+      const range = new vscode.Range(at(s), at(s).translate(0, s.text.length));
+      return doc.getText(range).toUpperCase() === s.text.toUpperCase();
+    };
+    const edit = new vscode.WorkspaceEdit();
+    if (msg.type === "editLiteral") {
+      const newText = msg.newText.trim();
+      if (!newText || !msg.span.text || newText === msg.span.text) return;
+      if (!verify(msg.span)) {
+        void vscode.window.showWarningMessage(
+          "nautilus: couldn't locate that constant in the source — edit the text directly"
+        );
+        return;
+      }
+      edit.replace(
+        doc.uri,
+        new vscode.Range(at(msg.span), at(msg.span).translate(0, msg.span.text.length)),
+        newText
+      );
+    } else if (msg.type === "toggleNot") {
+      if (msg.not && msg.inner) {
+        // Negated: delete [NOT, operand) — the keyword and its whitespace.
+        if (!verify(msg.not)) {
+          void vscode.window.showWarningMessage(
+            "nautilus: couldn't locate the NOT in the source — edit the text directly"
+          );
+          return;
+        }
+        edit.delete(doc.uri, new vscode.Range(at(msg.not), at(msg.inner)));
+      } else {
+        edit.insert(doc.uri, at(msg.arg), "NOT ");
+      }
+    }
+    await vscode.workspace.applyEdit(edit);
   }
 
   dispose(): void {

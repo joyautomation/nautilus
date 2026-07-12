@@ -48,6 +48,19 @@ type Node struct {
 	Inputs  []string `json:"inputs,omitempty"`
 	Outputs []string `json:"outputs,omitempty"`
 	Layer   int      `json:"layer"`
+	// Src locates a constant chip's literal token in the .fbd source, so a
+	// diagram editor can rewrite the value in place. Set for literal input
+	// chips only.
+	Src *Span `json:"src,omitempty"`
+}
+
+// Span locates an editable token in the .fbd source: the 1-based line/col of
+// its first character, plus (when known) the token text so an editor can
+// verify the document before applying a change.
+type Span struct {
+	Line int    `json:"line"`
+	Col  int    `json:"col"`
+	Text string `json:"text,omitempty"`
 }
 
 // Edge is a wire from an output pin to an input pin. Pin names are "" for
@@ -62,6 +75,14 @@ type Edge struct {
 	Wire     string `json:"wire,omitempty"` // signal name, when fed by a named wire
 	Negated  bool   `json:"negated,omitempty"`
 	Feedback bool   `json:"feedback,omitempty"`
+	// NOT-toggle anchors. Arg is where the consumer's argument expression
+	// starts — the insertion point for a new NOT. When the edge is negated,
+	// Not is the NOT keyword and Inner the expression it negates (deleting
+	// [Not, Inner) removes the negation); they may sit inside a wire
+	// definition when the negation rides a shared wire.
+	Arg   *Span `json:"arg,omitempty"`
+	Not   *Span `json:"not,omitempty"`
+	Inner *Span `json:"inner,omitempty"`
 }
 
 // Graph parses .fbd source and builds its render model. It walks the netlist
@@ -108,13 +129,16 @@ func Graph(src string, userFBs ...map[string]*ir.FBDef) (*Model, error) {
 }
 
 // outRef identifies the output pin an expression's value comes from, plus
-// negation/feedback accumulated on the way.
+// negation/feedback accumulated on the way. notSpan/innerSpan locate the
+// outermost NOT that produced the negation (possibly inside a wire def).
 type outRef struct {
-	node     string
-	pin      string
-	wire     string // named-wire label, if routed through one
-	negated  bool
-	feedback bool
+	node      string
+	pin       string
+	wire      string // named-wire label, if routed through one
+	negated   bool
+	feedback  bool
+	notSpan   *Span
+	innerSpan *Span
 }
 
 type modelBuilder struct {
@@ -171,10 +195,10 @@ func (b *modelBuilder) build() error {
 					return err
 				}
 				ensurePin(&fb.Inputs, a.pin)
-				b.m.Edges = append(b.m.Edges, &Edge{
+				b.m.Edges = append(b.m.Edges, edgeWithSpans(&Edge{
 					From: r.node, FromPin: r.pin, To: fb.ID, ToPin: a.pin,
 					Wire: r.wire, Negated: r.negated, Feedback: r.feedback,
-				})
+				}, a.val, r))
 			}
 		} else {
 			baseID := "b:c." + n.target
@@ -186,13 +210,26 @@ func (b *modelBuilder) build() error {
 			if err != nil {
 				return err
 			}
-			b.m.Edges = append(b.m.Edges, &Edge{
+			b.m.Edges = append(b.m.Edges, edgeWithSpans(&Edge{
 				From: r.node, FromPin: r.pin, To: b.coils[n.target].ID,
 				Wire: r.wire, Negated: r.negated, Feedback: r.feedback,
-			})
+			}, n.source, r))
 		}
 	}
 	return nil
+}
+
+// edgeWithSpans anchors an edge for NOT toggling: Arg at the consumer-side
+// argument expression (where an inserted NOT goes — local to this consumer
+// even when the value rides a shared wire), and, when negated, the spans of
+// the NOT that did it.
+func edgeWithSpans(e *Edge, arg expr, r outRef) *Edge {
+	line, col := arg.pos()
+	e.Arg = &Span{Line: line, Col: col}
+	if r.negated {
+		e.Not, e.Inner = r.notSpan, r.innerSpan
+	}
+	return e
 }
 
 // fbNode returns the node for an FB instance, creating it on first sight.
@@ -262,11 +299,17 @@ func (b *modelBuilder) source(e expr, baseID string, visited []string) (outRef, 
 	case litExpr:
 		id := "k:" + strconv.Itoa(b.litSeq)
 		b.litSeq++
-		b.add(&Node{ID: id, Kind: "input", Label: x.text})
+		b.add(&Node{
+			ID: id, Kind: "input", Label: x.text,
+			Src: &Span{Line: x.line, Col: x.col, Text: x.text},
+		})
 		return outRef{node: id}, nil
 	case notExpr:
 		r, err := b.source(x.inner, baseID, visited)
 		r.negated = !r.negated
+		il, ic := x.inner.pos()
+		r.notSpan = &Span{Line: x.line, Col: x.col, Text: "NOT"}
+		r.innerSpan = &Span{Line: il, Col: ic}
 		return r, err
 	case refExpr:
 		if _, isWire := b.nl.wires[x.name]; isWire {
@@ -296,10 +339,10 @@ func (b *modelBuilder) source(e expr, baseID string, visited []string) (outRef, 
 			if err != nil {
 				return outRef{}, err
 			}
-			b.m.Edges = append(b.m.Edges, &Edge{
+			b.m.Edges = append(b.m.Edges, edgeWithSpans(&Edge{
 				From: r.node, FromPin: r.pin, To: n.ID, ToPin: n.Inputs[i],
 				Wire: r.wire, Negated: r.negated, Feedback: r.feedback,
-			})
+			}, a, r))
 		}
 		return outRef{node: n.ID, pin: "OUT"}, nil
 	}

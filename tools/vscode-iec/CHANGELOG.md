@@ -3,6 +3,17 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.1] - 2026-07-11
+
+### Added
+- **First graphical edits in the FBD preview.** The diagram is no longer
+  read-only: double-click a constant chip to retype its value (setpoints,
+  timer presets, thresholds), and click an input pin to toggle its `NOT`.
+  Every gesture becomes a span-anchored text edit in the `.fbd` buffer —
+  verified against the source before applying, round-tripped through the
+  normal re-render — so the text stays the single source of truth and undo
+  is just the editor's undo. Editing is disabled in diff views.
+
 ## [0.4.0] - 2026-07-11
 
 ### Added

@@ -39,14 +39,36 @@ type namedArg struct {
 	val expr
 }
 
-// expr is the FBD expression tree (blocks, refs, literals, negation).
-type expr interface{ isExpr() }
+// expr is the FBD expression tree (blocks, refs, literals, negation). Every
+// node records the 1-based file position of its first token, so diagram
+// tooling can map graphical gestures back to text edits.
+type expr interface {
+	isExpr()
+	pos() (line, col int)
+}
 
-type refExpr struct{ name string }      // a variable or wire name
-type pinExpr struct{ inst, pin string } // FB output pin: inst.pin
-type litExpr struct{ text string }      // literal, emitted verbatim
-type notExpr struct{ inner expr }       // inline pin negation
-type callExpr struct {                  // operator/function block
+type exprPos struct{ line, col int }
+
+func (p exprPos) pos() (int, int) { return p.line, p.col }
+
+type refExpr struct { // a variable or wire name
+	exprPos
+	name string
+}
+type pinExpr struct { // FB output pin: inst.pin
+	exprPos
+	inst, pin string
+}
+type litExpr struct { // literal, emitted verbatim
+	exprPos
+	text string
+}
+type notExpr struct { // inline pin negation
+	exprPos
+	inner expr
+}
+type callExpr struct { // operator/function block
+	exprPos
 	fn   string
 	args []expr
 }
@@ -81,6 +103,12 @@ func parseNetlist(body string, lineOffset int) (*netlist, error) {
 func (p *netParser) peek() st.Token         { return p.toks[p.pos] }
 func (p *netParser) at(t st.TokenType) bool { return p.toks[p.pos].Type == t }
 func (p *netParser) next() st.Token         { t := p.toks[p.pos]; p.pos++; return t }
+
+// here is the current token's file-absolute position, for expr nodes.
+func (p *netParser) here() exprPos {
+	t := p.peek()
+	return exprPos{line: t.Line + p.lineOffset, col: t.Col}
+}
 
 func (p *netParser) posErr(msg string) error {
 	t := p.peek()
@@ -187,18 +215,20 @@ func (p *netParser) namedArgs() ([]namedArg, error) {
 // expr := 'NOT' expr | primary
 func (p *netParser) expr() (expr, error) {
 	if p.at(st.TokenNot) {
+		at := p.here()
 		p.next()
 		inner, err := p.expr()
 		if err != nil {
 			return nil, err
 		}
-		return notExpr{inner: inner}, nil
+		return notExpr{exprPos: at, inner: inner}, nil
 	}
 	return p.primary()
 }
 
 // primary := literal | IDENT ('.' IDENT)? | IDENT '(' args ')' | '(' expr ')'
 func (p *netParser) primary() (expr, error) {
+	at := p.here()
 	// The boolean/bit/mod operators lex as keyword tokens, not identifiers,
 	// but in FBD they're block-function names (AND(a,b), MOD(a,b)). Accept
 	// them as function heads when followed by '('.
@@ -208,12 +238,12 @@ func (p *netParser) primary() (expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		return callExpr{fn: op, args: args}, nil
+		return callExpr{exprPos: at, fn: op, args: args}, nil
 	}
 	switch t := p.peek(); t.Type {
 	case st.TokenNumber, st.TokenString, st.TokenTimeLiteral, st.TokenTypedLiteral:
 		p.next()
-		return litExpr{text: literalText(t)}, nil
+		return litExpr{exprPos: at, text: literalText(t)}, nil
 	case st.TokenLParen:
 		p.next()
 		e, err := p.expr()
@@ -233,21 +263,21 @@ func (p *netParser) primary() (expr, error) {
 			if err != nil {
 				return nil, err
 			}
-			return callExpr{fn: strings.ToUpper(name), args: args}, nil
+			return callExpr{exprPos: at, fn: strings.ToUpper(name), args: args}, nil
 		case st.TokenDot: // FB output pin
 			p.next()
 			if !p.at(st.TokenIdent) {
 				return nil, p.posErr("expected a pin name after '.'")
 			}
 			pin := p.next().Literal
-			return pinExpr{inst: name, pin: pin}, nil
+			return pinExpr{exprPos: at, inst: name, pin: pin}, nil
 		default:
 			// TRUE/FALSE lex as idents in some paths — treat boolean words as
 			// literals so they emit correctly.
 			if u := strings.ToUpper(name); u == "TRUE" || u == "FALSE" {
-				return litExpr{text: u}, nil
+				return litExpr{exprPos: at, text: u}, nil
 			}
-			return refExpr{name: name}, nil
+			return refExpr{exprPos: at, name: name}, nil
 		}
 	}
 	return nil, p.posErr(fmt.Sprintf("unexpected %q in expression", p.peek().Literal))

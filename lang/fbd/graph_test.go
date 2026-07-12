@@ -306,3 +306,36 @@ END_PROGRAM`
 		}
 	}
 }
+
+func TestGraphEditSpans(t *testing.T) {
+	// Spans anchor diagram gestures to text edits: a literal chip knows its
+	// token, an edge knows where its consumer argument starts (NOT insertion
+	// point) and, when negated, where the NOT keyword and its operand sit.
+	src := `PROGRAM T
+VAR_EXTERNAL A : BOOL; B : BOOL; C : BOOL; END_VAR
+FBD
+  B := AND(A, NOT C)
+  t1 : TON(IN := B, PT := T#5S)
+END_FBD
+END_PROGRAM`
+	m := mustGraph(t, src)
+
+	lit := m.node(t, "k:0")
+	if lit.Src == nil || lit.Src.Line != 5 || lit.Src.Text != "T#5S" {
+		t.Errorf("literal span wrong: %s", mustJSON(lit.Src))
+	}
+	// Line 4: "  B := AND(A, NOT C)" — A at col 12, NOT at col 15, C at 19.
+	andBlock := "b:c.B"
+	plain := m.edge(t, "v:A", andBlock)
+	if plain.Arg == nil || plain.Arg.Line != 4 || plain.Arg.Col != 12 || plain.Not != nil {
+		t.Errorf("plain edge spans wrong: %s", mustJSON(plain))
+	}
+	neg := m.edge(t, "v:C", andBlock)
+	if !neg.Negated || neg.Arg == nil || neg.Arg.Col != 15 {
+		t.Errorf("negated edge arg wrong: %s", mustJSON(neg))
+	}
+	if neg.Not == nil || neg.Not.Col != 15 || neg.Not.Text != "NOT" ||
+		neg.Inner == nil || neg.Inner.Col != 19 {
+		t.Errorf("NOT spans wrong: not=%s inner=%s", mustJSON(neg.Not), mustJSON(neg.Inner))
+	}
+}

@@ -76,6 +76,19 @@
     g.edge.feedback path { stroke-dasharray: 6 3; }
     g.edge circle.neg { fill: var(--vscode-editor-background); stroke: var(--ink); stroke-width: 1.3; }
     g.edge text.wire { font-size: 9px; fill: var(--ink); opacity: .85; }
+    /* edit affordances (preview mode only) */
+    g.node.editable { cursor: pointer; }
+    g.node.editable:hover rect.body { stroke-width: 2; }
+    circle.not-hit { fill: transparent; pointer-events: all; cursor: pointer; }
+    circle.not-hit:hover { fill: var(--vscode-editor-foreground); fill-opacity: .18; }
+    #lit-edit {
+      position: fixed; z-index: 10; font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 12px; padding: 2px 6px; border-radius: 4px;
+      background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-focusBorder, #58a6ff); outline: none;
+    }
+    #bar .hint { font-size: 11px; color: var(--vscode-descriptionForeground, #888); display: none; }
+    #bar .hint.on { display: inline; }
     @media (prefers-reduced-motion: no-preference) {
       svg * { transition: opacity .12s ease; }
     }
@@ -89,10 +102,11 @@
     '<span><i style="background:var(--vscode-gitDecoration-addedResourceForeground,#2ea043)"></i>added</span>' +
     '<span><i style="background:var(--vscode-gitDecoration-deletedResourceForeground,#f85149)"></i>removed</span>' +
     '<span><i style="background:var(--vscode-gitDecoration-modifiedResourceForeground,#d7a021)"></i>changed</span>';
+  const hintEl = el("span", { class: "hint" }, "double-click a constant to edit · click a pin to toggle NOT");
   const zoomOut = el("button", { title: "Zoom out (-)" }, "−");
   const zoomFit = el("button", { class: "fit", title: "Fit (0)" }, "fit");
   const zoomIn = el("button", { title: "Zoom in (+)" }, "+");
-  bar.append(titleEl, legendEl, el("span", { class: "spacer" }), zoomOut, zoomFit, zoomIn);
+  bar.append(titleEl, legendEl, hintEl, el("span", { class: "spacer" }), zoomOut, zoomFit, zoomIn);
   const errorEl = el("div", { id: "error" });
   const canvas = el("div", { id: "canvas", tabindex: "0", role: "img", "aria-label": "FBD diagram" });
   app.append(bar, errorEl, canvas);
@@ -334,6 +348,19 @@
         t.textContent = e.wire;
         g.appendChild(t);
       }
+      if (!diffing && e.arg) {
+        // Pin hit-target: click toggles NOT on this input (a text edit —
+        // insert NOT at the consumer argument, or delete the existing one).
+        const hit = svgEl("circle", { class: "not-hit", cx: p2.x - 4.5, cy: p2.y, r: 7.5 });
+        const tip = svgEl("title");
+        tip.textContent = e.negated ? "remove NOT" : "add NOT";
+        hit.appendChild(tip);
+        hit.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          vscode.postMessage({ type: "toggleNot", arg: e.arg, not: e.not ?? null, inner: e.inner ?? null });
+        });
+        g.appendChild(hit);
+      }
       root.appendChild(g);
     }
 
@@ -375,6 +402,14 @@
       }
       const tip = svgEl("title");
       tip.textContent = n.kind === "fb" ? `${n.label} : ${n.type || "?"}` : n.label;
+      if (!diffing && n.src) {
+        g.classList.add("editable");
+        tip.textContent = `${n.label} — double-click to edit`;
+        g.addEventListener("dblclick", (ev) => {
+          ev.stopPropagation();
+          beginEditLiteral(n, body);
+        });
+      }
       g.appendChild(tip);
       root.appendChild(g);
     }
@@ -388,6 +423,43 @@
     applyViewBox();
     canvas.appendChild(svg);
     wireSvgEvents();
+  }
+
+  // beginEditLiteral floats an input over a constant chip; Enter commits the
+  // new value as a span-anchored text edit in the .fbd document (the edit
+  // round-trips through the extension, and the re-render replaces us).
+  function beginEditLiteral(node, rectEl) {
+    document.getElementById("lit-edit")?.remove();
+    const r = rectEl.getBoundingClientRect();
+    const input = el("input", { id: "lit-edit", spellcheck: "false" });
+    input.value = node.label;
+    input.style.left = r.left + "px";
+    input.style.top = r.top - 2 + "px";
+    input.style.width = Math.max(r.width, 64) + "px";
+    document.body.appendChild(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const close = () => {
+      done = true;
+      input.remove();
+      canvas.focus();
+    };
+    input.addEventListener("keydown", (ev) => {
+      ev.stopPropagation();
+      if (ev.key === "Enter") {
+        const newText = input.value.trim();
+        if (newText && newText !== node.label) {
+          vscode.postMessage({ type: "editLiteral", span: node.src, newText });
+        }
+        close();
+      } else if (ev.key === "Escape") {
+        close();
+      }
+    });
+    input.addEventListener("blur", () => {
+      if (!done) close();
+    });
   }
 
   function firstPin(pins) {
@@ -534,12 +606,14 @@
     if (msg.type === "model") {
       titleEl.textContent = (msg.model.name ? msg.model.name + " — " : "") + (msg.title || "");
       legendEl.classList.remove("on");
+      hintEl.classList.add("on");
       errorEl.classList.remove("on");
       canvas.classList.remove("stale");
       render(msg.model, false);
     } else if (msg.type === "diff") {
       titleEl.textContent = (msg.head.name ? msg.head.name + " — " : "") + (msg.title || "");
       legendEl.classList.add("on");
+      hintEl.classList.remove("on");
       errorEl.classList.remove("on");
       canvas.classList.remove("stale");
       render(mergeDiff(msg.base, msg.head), true);
