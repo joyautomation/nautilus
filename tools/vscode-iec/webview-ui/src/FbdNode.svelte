@@ -13,6 +13,7 @@
 	}: {
 		data: {
 			n: Placed;
+			problems?: { message: string; severity: string }[];
 			editable: boolean;
 			requestInput: (init: string, at: { x: number; y: number; w: number }, commit: (v: string) => void) => void;
 			onEdit: (op: { type: 'setLiteral' | 'rename'; node: string; value: string }) => void;
@@ -43,7 +44,10 @@
 		return { destroy: () => el.removeEventListener('dblclick', handler) };
 	}
 
+	const problems = $derived(data.problems ?? []);
 	const title = $derived.by(() => {
+		// Diagnostics take over the tooltip — the same message as the squiggle.
+		if (problems.length) return problems.map((p) => p.message).join('\n');
 		const base = n.kind === 'fb' ? `${n.label} : ${n.type ?? '?'}` : n.label;
 		if (editableConst) return `${base} — double-click to edit`;
 		if (renameable) return `${base} — double-click to rename`;
@@ -55,6 +59,7 @@
 	<div
 		class="chip {n.kind} {n.status ?? ''}"
 		class:editable={editableConst}
+		class:problem={problems.length > 0}
 		style="width: {n.w}px; height: {n.h}px"
 		{title}
 		use:dblEdit
@@ -64,11 +69,13 @@
 		{/if}
 		<span>{n.label}</span>
 		<Handle type="source" position={Position.Right} id="" style="top: {n.h / 2}px" isConnectable={data.editable} />
+		{#if problems.length}<span class="badge">!</span>{/if}
 	</div>
 {:else}
 	<div
 		class="block {n.status ?? ''}"
 		class:editable={renameable}
+		class:problem={problems.length > 0}
 		style="width: {n.w}px; height: {n.h}px"
 		{title}
 		use:dblEdit
@@ -91,6 +98,7 @@
 			<span class="pin in plus" style="top: {plusTop - 7}px" title="drop a wire here to add an input">+</span>
 		{/if}
 		{#if n.wire}<span class="wire">{n.wire}</span>{/if}
+		{#if problems.length}<span class="badge">!</span>{/if}
 	</div>
 {/if}
 
@@ -116,6 +124,27 @@
 	}
 	.changed {
 		--ink: var(--vscode-gitDecoration-modifiedResourceForeground, #d7a021);
+	}
+	/* A diagnostic on this element's line: red border + badge; the tooltip
+	   carries the compiler's message, exactly like the squiggle's hover. */
+	.problem {
+		border-color: var(--vscode-errorForeground, #f48771) !important;
+		box-shadow: 0 0 8px color-mix(in srgb, var(--vscode-errorForeground, #f48771) 45%, transparent);
+	}
+	.badge {
+		position: absolute;
+		top: -7px;
+		right: -7px;
+		width: 14px;
+		height: 14px;
+		border-radius: 50%;
+		background: var(--vscode-errorForeground, #f48771);
+		color: var(--vscode-editor-background, #1e1e1e);
+		font-size: 10px;
+		font-weight: 800;
+		line-height: 14px;
+		text-align: center;
+		pointer-events: none;
 	}
 	.editable {
 		cursor: pointer;

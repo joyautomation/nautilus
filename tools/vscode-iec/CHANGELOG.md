@@ -3,6 +3,16 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.1] - 2026-07-12
+
+### Added
+- **Diagnostics in the diagram.** Anything that squiggles in the text now
+  marks the diagram too: the offending element gets a red border, glow,
+  and "!" badge, its tooltip carries the compiler's exact message, and
+  the toolbar shows an "N problems" pill (hover for the full list).
+  Every model node carries its source line, so the join uses the same
+  line-mapped diagnostics the language server produces.
+
 ## [0.7.0] - 2026-07-12
 
 ### Added

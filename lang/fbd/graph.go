@@ -56,6 +56,9 @@ type Node struct {
 	// means auto-layout. Renderers place pinned nodes exactly here.
 	X *int `json:"x,omitempty"`
 	Y *int `json:"y,omitempty"`
+	// Line is the 1-based source line this element comes from, so renderers
+	// can join compiler diagnostics (which carry lines) onto diagram nodes.
+	Line int `json:"line,omitempty"`
 }
 
 // Span locates an editable region in the .fbd source: the 1-based line/col
@@ -203,14 +206,14 @@ func (b *modelBuilder) build() error {
 		if _, dup := b.coils[n.target]; dup {
 			continue // repeated writes share one coil node (each adds an edge)
 		}
-		b.coils[n.target] = b.add(&Node{ID: "c:" + n.target, Kind: "coil", Label: n.target})
+		b.coils[n.target] = b.add(&Node{ID: "c:" + n.target, Kind: "coil", Label: n.target, Line: n.line})
 	}
 	for _, d := range b.nl.fbDecls {
-		b.fbNode(d.name, d.typ)
+		b.fbNode(d.name, d.typ, d.line)
 	}
 	for _, n := range b.nl.nodes { // calls of instances declared in the ST header
 		if n.isCall {
-			b.fbNode(n.inst, "")
+			b.fbNode(n.inst, "", n.line)
 		}
 	}
 	for _, w := range b.nl.wireSrc {
@@ -304,7 +307,7 @@ func (b *modelBuilder) slice(l1, c1, l2, c2 int) string {
 // fbNode returns the node for an FB instance, creating it on first sight.
 // Pin lists come from the built-in/user FB registries when the type is
 // known; otherwise they accumulate from usage.
-func (b *modelBuilder) fbNode(inst, typ string) *Node {
+func (b *modelBuilder) fbNode(inst, typ string, line int) *Node {
 	if n, ok := b.fbs[inst]; ok {
 		if n.Type == "" && typ != "" {
 			n.Type = typ
@@ -312,7 +315,7 @@ func (b *modelBuilder) fbNode(inst, typ string) *Node {
 		}
 		return n
 	}
-	n := b.add(&Node{ID: "f:" + inst, Kind: "fb", Label: inst, Type: typ})
+	n := b.add(&Node{ID: "f:" + inst, Kind: "fb", Label: inst, Type: typ, Line: line})
 	b.fbPins(n)
 	b.fbs[inst] = n
 	return n
@@ -376,7 +379,7 @@ func (b *modelBuilder) source(e expr, baseID string, visited []string) (outRef, 
 			raw = x.text
 		}
 		b.add(&Node{
-			ID: id, Kind: "input", Label: x.text,
+			ID: id, Kind: "input", Label: x.text, Line: x.line,
 			Src: &Span{Line: x.line, Col: x.col, EndLine: x.endLine, EndCol: x.endCol, Text: raw},
 		})
 		return outRef{node: id}, nil
@@ -396,18 +399,18 @@ func (b *modelBuilder) source(e expr, baseID string, visited []string) (outRef, 
 			// feedback wire, drawn from the coil back into the logic.
 			return outRef{node: c.ID, feedback: true}, nil
 		}
-		return outRef{node: b.inputChip(x.name).ID}, nil
+		return outRef{node: b.inputChip(x.name, x.line).ID}, nil
 	case pinExpr:
 		if fb, ok := b.fbs[x.inst]; ok {
 			ensurePin(&fb.Outputs, x.pin)
 			return outRef{node: fb.ID, pin: x.pin}, nil
 		}
 		// Not an FB instance: a struct-member read like M.Speed.
-		return outRef{node: b.inputChip(x.inst + "." + x.pin).ID}, nil
+		return outRef{node: b.inputChip(x.inst+"."+x.pin, x.line).ID}, nil
 	case callExpr:
 		b.exprOf[baseID] = x
 		n := b.add(&Node{
-			ID: baseID, Kind: "block", Label: x.fn,
+			ID: baseID, Kind: "block", Label: x.fn, Line: x.line,
 			Inputs:  blockPins(x.fn, len(x.args)),
 			Outputs: []string{"OUT"},
 		})
@@ -428,11 +431,11 @@ func (b *modelBuilder) source(e expr, baseID string, visited []string) (outRef, 
 
 // inputChip returns the shared input node for a variable (or struct member
 // path), creating it on first use.
-func (b *modelBuilder) inputChip(name string) *Node {
+func (b *modelBuilder) inputChip(name string, line int) *Node {
 	if n, ok := b.inputs[name]; ok {
 		return n
 	}
-	n := b.add(&Node{ID: "v:" + name, Kind: "input", Label: name})
+	n := b.add(&Node{ID: "v:" + name, Kind: "input", Label: name, Line: line})
 	b.inputs[name] = n
 	return n
 }
@@ -574,7 +577,11 @@ func (b *modelBuilder) splitByNetwork(comp map[string]int) {
 		if k > 1 {
 			id = fmt.Sprintf("%s#%d", baseID, k)
 		}
-		n := b.add(&Node{ID: id, Kind: "input", Label: label})
+		line := 0
+		if orig, ok := b.nodes[baseID]; ok {
+			line = orig.Line
+		}
+		n := b.add(&Node{ID: id, Kind: "input", Label: label, Line: line})
 		byComp[baseID][c] = n
 		return n
 	}

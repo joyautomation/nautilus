@@ -14,6 +14,7 @@ export type FbdNode = {
   outputs?: string[];
   layer: number;
   src?: unknown;
+  line?: number;
   x?: number;
   y?: number;
   status?: 'added' | 'removed' | 'changed' | 'same';

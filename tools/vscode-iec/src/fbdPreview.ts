@@ -219,7 +219,20 @@ async function postModel(webview: vscode.Webview, doc: vscode.TextDocument): Pro
     void webview.postMessage({ type: "error", message: res.error, title: docTitle(doc) });
   } else {
     void webview.postMessage({ type: "model", model: res.model, title: docTitle(doc) });
+    postDiagnostics(webview, doc);
   }
+}
+
+/** Forward the document's squiggles into the diagram: the webview joins
+ * them onto nodes by source line, so an error marks the offending block
+ * with the same message the text editor shows. */
+function postDiagnostics(webview: vscode.Webview, doc: vscode.TextDocument): void {
+  const diags = vscode.languages.getDiagnostics(doc.uri).map((d) => ({
+    line: d.range.start.line + 1,
+    message: d.message,
+    severity: d.severity === vscode.DiagnosticSeverity.Warning ? "warning" : "error",
+  }));
+  void webview.postMessage({ type: "diagnostics", diags });
 }
 
 // ── the preview command's singleton panel ──────────────────────────────────
@@ -246,6 +259,14 @@ export class FbdPreview implements vscode.Disposable {
           this.diffing = false;
           this.scheduleUpdate(ed.document);
         }
+      }),
+      vscode.languages.onDidChangeDiagnostics((e) => {
+        if (!this.panel || this.diffing || !this.docUri) return;
+        if (!e.uris.some((u) => u.toString() === this.docUri?.toString())) return;
+        const doc = vscode.workspace.textDocuments.find(
+          (d) => d.uri.toString() === this.docUri?.toString()
+        );
+        if (doc) postDiagnostics(this.panel.webview, doc);
       })
     );
   }
@@ -354,6 +375,7 @@ export class FbdPreview implements vscode.Disposable {
       this.post({ type: "error", message: res.error, title: docTitle(doc) });
     } else {
       this.post({ type: "model", model: res.model, title: docTitle(doc) });
+      postDiagnostics(this.panel.webview, doc);
     }
   }
 
@@ -429,10 +451,16 @@ export class FbdEditorProvider implements vscode.CustomTextEditorProvider {
     const messageSub = panel.webview.onDidReceiveMessage((msg: WebviewMessage) => {
       void handleWebviewMessage(document, msg);
     });
+    const diagSub = vscode.languages.onDidChangeDiagnostics((e) => {
+      if (e.uris.some((u) => u.toString() === document.uri.toString())) {
+        postDiagnostics(panel.webview, document);
+      }
+    });
     panel.onDidDispose(() => {
       if (debounce) clearTimeout(debounce);
       changeSub.dispose();
       messageSub.dispose();
+      diagSub.dispose();
     });
 
     await postModel(panel.webview, document);

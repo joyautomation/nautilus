@@ -37,6 +37,11 @@
 	let hasPins = $state(false);
 	let selectedCount = $state(0);
 	let knownIds = new Set<string>();
+	type Diag = { line: number; message: string; severity: 'error' | 'warning' };
+	let diags: Diag[] = [];
+	let problemCount = $state(0);
+	let problemTip = $state('');
+	let lastModel: FbdModel | null = null;
 
 	// Floating text input for constants/renames.
 	let input = $state<{ at: { x: number; y: number; w: number }; value: string; commit: (v: string) => void } | null>(null);
@@ -64,8 +69,19 @@
 	}
 
 	function render(model: FbdModel, isDiff: boolean) {
+		if (!isDiff) lastModel = model;
 		const { placed, edges: modelEdges, laneIdx } = layout(model);
 		const editable = !isDiff;
+		// Join the compiler's squiggles onto nodes by source line — the same
+		// message the text editor shows, as a badge + tooltip on the block.
+		const diagsByLine = new Map<number, Diag[]>();
+		if (!isDiff) {
+			for (const d of diags) {
+				(diagsByLine.get(d.line) ?? diagsByLine.set(d.line, []).get(d.line)!).push(d);
+			}
+		}
+		problemCount = diags.length;
+		problemTip = diags.map((d) => `line ${d.line}: ${d.message}`).join('\n');
 		hasPins = model.nodes.some((n) => n.x !== undefined && n.y !== undefined);
 		nodes = placed.map((n) => ({
 			id: n.id,
@@ -73,6 +89,7 @@
 			position: { x: n.x, y: n.y },
 			data: {
 				n,
+				problems: n.line ? (diagsByLine.get(n.line) ?? []) : [],
 				editable,
 				requestInput,
 				onEdit: (a: { type: 'setLiteral' | 'rename'; node: string; value: string }) =>
@@ -131,8 +148,13 @@
 	}
 
 	window.addEventListener('message', (ev) => {
-		const msg = ev.data as Msg;
+		const msg = ev.data as Msg & { type: 'diagnostics'; diags?: Diag[] };
 		if (!msg?.type) return;
+		if (msg.type === 'diagnostics') {
+			diags = msg.diags ?? [];
+			if (!diffing && lastModel) render(lastModel, false);
+			return;
+		}
 		if (msg.type !== 'error') vscode.setState(msg);
 		show(msg);
 	});
@@ -234,6 +256,9 @@
 			<span class="hint">double-click: edit & rename · drag pin→pin: wire (+ adds an input) · drag node: pin layout · Del: delete / disconnect</span>
 		{/if}
 		<span class="spacer"></span>
+		{#if problemCount > 0 && !diffing}
+			<span class="problems" title={problemTip}>{problemCount} problem{problemCount === 1 ? '' : 's'}</span>
+		{/if}
 		{#if selectedCount > 0}
 			<span class="selcount">{selectedCount} selected</span>
 		{/if}
@@ -359,6 +384,15 @@
 		border-radius: 999px;
 		color: var(--vscode-focusBorder, #58a6ff);
 		border: 1px solid var(--vscode-focusBorder, #58a6ff);
+	}
+	.problems {
+		font-size: 11px;
+		font-weight: 600;
+		padding: 1px 8px;
+		border-radius: 999px;
+		color: var(--vscode-errorForeground, #f48771);
+		border: 1px solid var(--vscode-errorForeground, #f48771);
+		cursor: help;
 	}
 	.error {
 		padding: 6px 10px;
