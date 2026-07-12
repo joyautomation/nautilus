@@ -5,11 +5,12 @@
 //	GET  /             a self-contained live dashboard (landing page)
 //	GET  /api/state    one JSON Frame — the current tag snapshot
 //	GET  /api/stream   Server-Sent Events; one Frame per broadcast tick
+//	GET  /api/meta     tag descriptions/units, I/O binding, scan target
 //	POST /api/tags     {"name": "TempSP", "value": 65.0} — write one tag
 //
-// The Frame shape is deliberately generic (every tag, plus scan stats) so
-// the hmi kit's frame-generic realtime client and the editor tooling share
-// one endpoint. Pure stdlib.
+// The Frame shape is deliberately generic (every tag, plus the scan loop's
+// full PLC-style diagnostics) so the hmi kit's frame-generic realtime client
+// and the editor tooling share one endpoint. Pure stdlib.
 //
 // Security is progressive. Reads are always open (LAN dashboards, editor
 // live values). Writes are same-origin-only by default — enough to stop a
@@ -44,12 +45,16 @@ import (
 //go:embed index.html
 var indexHTML []byte
 
-// Frame is one observation of the runtime: the full tag store plus loop
-// progress, timestamped server-side.
+// Frame is one observation of the runtime: the full tag store plus the scan
+// loop's diagnostics, timestamped server-side. Scan carries the full
+// PLC-style runtime diagnostics (phase breakdown, history, histogram) so a
+// diagnostics page needs nothing but the stream — a fresh client gets the
+// whole picture from its first frame.
 type Frame struct {
-	TS    int64          `json:"ts"` // epoch milliseconds
-	Scans uint64         `json:"scans"`
-	Tags  map[string]any `json:"tags"`
+	TS    int64             `json:"ts"` // epoch milliseconds
+	Scans uint64            `json:"scans"`
+	Tags  map[string]any    `json:"tags"`
+	Scan  runtime.ScanStats `json:"scan"`
 }
 
 // Options tunes the server; zero values mean defaults.
@@ -147,10 +152,12 @@ func (s *Server) broadcast() {
 }
 
 func (s *Server) frame() Frame {
+	stats := s.rt.Stats()
 	return Frame{
 		TS:    time.Now().UnixMilli(),
-		Scans: s.rt.Stats().Count,
+		Scans: stats.Count,
 		Tags:  s.rt.Tags().All(),
+		Scan:  stats,
 	}
 }
 
@@ -158,6 +165,7 @@ func (s *Server) frame() Frame {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/state", s.handleState)
+	mux.HandleFunc("GET /api/meta", s.handleMeta)
 	mux.HandleFunc("GET /api/stream", s.handleStream)
 	mux.HandleFunc("POST /api/tags", s.handleWriteTag)
 	mux.HandleFunc("GET /api/program", s.handleGetProgram)
@@ -201,6 +209,38 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.frame())
+}
+
+// metaResponse is the static tag documentation for an HMI: descriptions and
+// units (runtime.Options.Meta) plus which tags are driver-bound. A tag table
+// derives quality from this + the frame: an input while the scan reports
+// ioHealthy=false is showing a stale, held value.
+type metaResponse struct {
+	Tags         map[string]runtime.TagMeta `json:"tags"`
+	Inputs       []string                   `json:"inputs"`
+	Outputs      []string                   `json:"outputs"`
+	ScanTargetMs float64                    `json:"scanTargetMs"`
+}
+
+func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
+	meta := s.rt.Meta()
+	if meta == nil {
+		meta = map[string]runtime.TagMeta{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(metaResponse{
+		Tags:         meta,
+		Inputs:       nonNilStrings(s.rt.Inputs()),
+		Outputs:      nonNilStrings(s.rt.Outputs()),
+		ScanTargetMs: s.rt.Stats().TargetMs,
+	})
+}
+
+func nonNilStrings(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {

@@ -19,6 +19,14 @@ go run ./examples/heated-tank-fbd
 You should see the heater PI ramp toward the 65 °C setpoint and, after 10 s
 below 62 °C, `tempLowAlm ON` — that's the TON firing.
 
+Open <http://localhost:8080> for the built-in dashboard: PLC-style scan
+diagnostics (scan time / period / jitter, phase breakdown, distribution) and
+a live tag table with the descriptions and units this example registers via
+`runtime.Options.Meta`. The same data feeds any HMI through `/api/stream`
+(every frame carries `scan`) and `/api/meta`; the
+`@joyautomation/nautilus-hmi` kit ships a ready-made `<ScanDiagnostics>`
+component for it.
+
 ## Try the FBD tooling (VS Code + nautilus CLI ≥ 0.3.7)
 
 1. **Open `program.fbd`** — syntax highlighting; the language server compiles

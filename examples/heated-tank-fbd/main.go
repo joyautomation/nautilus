@@ -51,6 +51,21 @@ func main() {
 			// its initial state so the tag exists on scan one.
 			"PumpRun": false,
 		},
+		// HMI documentation: served at GET /api/meta, shown in the built-in
+		// dashboard's live tag table (description / unit / quality columns).
+		Meta: map[string]runtime.TagMeta{
+			"LevelPct":       {Desc: "Tank level", Unit: "%"},
+			"TempC":          {Desc: "Tank temperature", Unit: "°C"},
+			"ScanDtS":        {Desc: "Measured scan interval", Unit: "s"},
+			"TempSP":         {Desc: "Temperature setpoint", Unit: "°C"},
+			"Kp":             {Desc: "PI proportional gain"},
+			"Ki":             {Desc: "PI integral gain", Unit: "1/s"},
+			"PumpStartLevel": {Desc: "Pump seal-in level", Unit: "%"},
+			"PumpStopLevel":  {Desc: "Pump drop-out level", Unit: "%"},
+			"PumpRun":        {Desc: "Pump run command"},
+			"Heater":         {Desc: "Heater output command", Unit: "%"},
+			"TempLowAlm":     {Desc: "Low temperature alarm (10 s delay)"},
+		},
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "compile:", err)
