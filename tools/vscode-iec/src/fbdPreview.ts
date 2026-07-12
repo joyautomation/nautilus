@@ -13,6 +13,7 @@
 import * as vscode from "vscode";
 import { execFile } from "child_process";
 import * as path from "path";
+import type { ProgramInfo } from "./onlineEdit";
 
 /** Mirror of lang/fbd.Model — see lang/fbd/graph.go for the contract. */
 export type FbdModel = {
@@ -93,21 +94,59 @@ export class FbdPreview implements vscode.Disposable {
       );
       return;
     }
+    await this.showDiff(doc, baseSrc, "in git HEAD", `${this.title(doc)} — HEAD ↔ working tree`);
+  }
+
+  /** Visual diff: the working tree (current buffer) vs what the controller
+   * is running. The controller serves its ORIGINAL program source, so an
+   * .fbd program diffs as two render models — the wiring review, live. */
+  async diffController(): Promise<void> {
+    const doc = this.activeFbdDoc();
+    if (!doc) return;
+    const url = vscode.workspace
+      .getConfiguration("nautilus")
+      .get<string>("runtimeUrl", "http://localhost:8080")
+      .replace(/\/+$/, "");
+    let info: ProgramInfo;
+    try {
+      const res = await fetch(url + "/api/program");
+      if (!res.ok) throw new Error(res.statusText);
+      info = (await res.json()) as ProgramInfo;
+    } catch {
+      void vscode.window.showErrorMessage(`nautilus: no controller at ${url}`);
+      return;
+    }
+    if (info.language !== "fbd") {
+      void vscode.window.showErrorMessage(
+        "nautilus: the controller is running an ST program — use \"Diff Program with Controller\" for the text diff"
+      );
+      return;
+    }
+    await this.showDiff(
+      doc,
+      info.source,
+      "in the controller's program",
+      `${this.title(doc)} — controller ${info.hash}${info.dirty ? " · online edit" : ""} ↔ workspace`
+    );
+  }
+
+  /** Graph base + head sources and post the overlay to the webview. */
+  private async showDiff(
+    doc: vscode.TextDocument,
+    baseSrc: string,
+    baseLabel: string,
+    title: string
+  ): Promise<void> {
     this.docUri = doc.uri;
     this.ensurePanel();
     const [base, head] = await Promise.all([this.graph(baseSrc), this.graph(doc.getText())]);
     if ("error" in base || "error" in head) {
-      const msg = ("error" in head ? head.error : "") || ("error" in base ? `in git HEAD: ${base.error}` : "");
+      const msg = ("error" in head ? head.error : "") || ("error" in base ? `${baseLabel}: ${base.error}` : "");
       this.post({ type: "error", message: msg, title: this.title(doc) });
       return;
     }
     this.diffing = true;
-    this.post({
-      type: "diff",
-      base: base.model,
-      head: head.model,
-      title: `${this.title(doc)} — HEAD ↔ working tree`,
-    });
+    this.post({ type: "diff", base: base.model, head: head.model, title });
   }
 
   private activeFbdDoc(): vscode.TextDocument | undefined {

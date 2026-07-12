@@ -17,14 +17,21 @@
 
 import * as vscode from "vscode";
 
-type ProgramInfo = {
+export type ProgramInfo = {
   source: string;
+  language?: "st" | "fbd"; // which language the controller's program is in
   hash: string;
   dirty: boolean;
   editable: boolean;
   canRollback: boolean;
   error?: string;
 };
+
+/** Both IEC languages participate in online edits: a project's program file
+ * may be .st or .fbd (the runtime accepts and serves either). */
+function isIecLang(languageId: string): boolean {
+  return languageId === "iec-st" || languageId === "iec-fbd";
+}
 
 const REMOTE_SCHEME = "nautilus-controller";
 const LOCAL_SCHEME = "nautilus-workspace";
@@ -92,7 +99,7 @@ export class OnlineEdit implements vscode.Disposable {
   > {
     const active = vscode.window.activeTextEditor?.document;
     let dir: vscode.Uri | undefined;
-    if (active && active.languageId === "iec-st" && active.uri.scheme === "file") {
+    if (active && isIecLang(active.languageId) && active.uri.scheme === "file") {
       dir = vscode.Uri.joinPath(active.uri, "..");
     } else if (vscode.workspace.workspaceFolders?.length) {
       dir = vscode.workspace.workspaceFolders[0].uri;
@@ -100,22 +107,22 @@ export class OnlineEdit implements vscode.Disposable {
     if (!dir) return undefined;
 
     const entries = await vscode.workspace.fs.readDirectory(dir);
-    const stFiles = entries
-      .filter(([name, kind]) => kind === vscode.FileType.File && /\.st$/i.test(name))
+    const iecFiles = entries
+      .filter(([name, kind]) => kind === vscode.FileType.File && /\.(st|fbd)$/i.test(name))
       .map(([name]) => name)
       .sort();
 
     const contents = new Map<string, string>();
-    for (const name of stFiles) {
+    for (const name of iecFiles) {
       const uri = vscode.Uri.joinPath(dir, name);
       const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
       contents.set(name, open ? open.getText() : new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)));
     }
 
     const isProgram = (src: string) => /^\s*PROGRAM\b/m.test(src);
-    const programs = stFiles.filter((n) => isProgram(contents.get(n) ?? ""));
+    const programs = iecFiles.filter((n) => isProgram(contents.get(n) ?? ""));
     if (programs.length === 0) {
-      void vscode.window.showErrorMessage("nautilus: no .st file with a PROGRAM found in " + dir.fsPath);
+      void vscode.window.showErrorMessage("nautilus: no .st or .fbd file with a PROGRAM found in " + dir.fsPath);
       return undefined;
     }
     let programFile = programs[0];
@@ -130,10 +137,11 @@ export class OnlineEdit implements vscode.Disposable {
       }
     }
 
+    // Only .st libraries join the prelude, matching internal/stproject.
     let prelude = "";
-    for (const name of stFiles) {
+    for (const name of iecFiles) {
       const src = contents.get(name);
-      if (name === programFile || !src || isProgram(src)) continue;
+      if (name === programFile || !src || isProgram(src) || !/\.st$/i.test(name)) continue;
       prelude += src.endsWith("\n") ? src : src + "\n";
     }
     const programBody = contents.get(programFile) ?? "";
@@ -220,8 +228,11 @@ export class OnlineEdit implements vscode.Disposable {
     const composed = await this.compose();
     this.remoteSource = info.source;
     this.localSource = composed?.source ?? "";
-    const remote = vscode.Uri.parse(`${REMOTE_SCHEME}:/controller.st?${Date.now()}`);
-    const local = vscode.Uri.parse(`${LOCAL_SCHEME}:/workspace.st?${Date.now()}`);
+    // Name the virtual docs by the controller's language so the diff view
+    // gets the right syntax highlighting (.fbd programs diff as .fbd).
+    const ext = info.language === "fbd" ? "fbd" : "st";
+    const remote = vscode.Uri.parse(`${REMOTE_SCHEME}:/controller.${ext}?${Date.now()}`);
+    const local = vscode.Uri.parse(`${LOCAL_SCHEME}:/workspace.${ext}?${Date.now()}`);
     await vscode.commands.executeCommand(
       "vscode.diff",
       remote,
@@ -261,8 +272,9 @@ export class OnlineEdit implements vscode.Disposable {
     // Preview the incoming change before writing.
     this.remoteSource = program;
     this.localSource = composed.programBody;
-    const remote = vscode.Uri.parse(`${REMOTE_SCHEME}:/incoming.st?${Date.now()}`);
-    const local = vscode.Uri.parse(`${LOCAL_SCHEME}:/current.st?${Date.now()}`);
+    const pullExt = composed.programFile.toLowerCase().endsWith(".fbd") ? "fbd" : "st";
+    const remote = vscode.Uri.parse(`${REMOTE_SCHEME}:/incoming.${pullExt}?${Date.now()}`);
+    const local = vscode.Uri.parse(`${LOCAL_SCHEME}:/current.${pullExt}?${Date.now()}`);
     await vscode.commands.executeCommand(
       "vscode.diff",
       local,
@@ -302,7 +314,7 @@ export class OnlineEdit implements vscode.Disposable {
   // ── sync status ─────────────────────────────────────────────────────────
 
   private async refreshStatus(): Promise<void> {
-    const stVisible = vscode.window.visibleTextEditors.some((e) => e.document.languageId === "iec-st");
+    const stVisible = vscode.window.visibleTextEditors.some((e) => isIecLang(e.document.languageId));
     if (!stVisible) {
       this.status.hide();
       return;

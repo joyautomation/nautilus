@@ -64,10 +64,11 @@ type Composition struct {
 }
 
 // Compose reads a project directory and decomposes it: the .st files with no
-// PROGRAM (sorted by name) are libraries, the single .st file with a PROGRAM
-// is the program. override maps a base file name to in-editor content so
-// unsaved buffers win over disk. Errors when there isn't exactly one program
-// file — the pull target must be unambiguous.
+// PROGRAM (sorted by name) are libraries, and the single file with a PROGRAM
+// — .st or .fbd (the runtime accepts both) — is the program. override maps a
+// base file name to in-editor content so unsaved buffers win over disk.
+// Errors when there isn't exactly one program file — the pull target must be
+// unambiguous.
 func Compose(dir string, override map[string]string) (Composition, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -79,7 +80,8 @@ func Compose(dir string, override map[string]string) (Composition, error) {
 	}
 	var files []stFile
 	for _, e := range entries {
-		if e.IsDir() || !strings.EqualFold(filepath.Ext(e.Name()), ".st") {
+		ext := strings.ToLower(filepath.Ext(e.Name()))
+		if e.IsDir() || (ext != ".st" && ext != ".fbd") {
 			continue
 		}
 		src, ok := override[e.Name()]
@@ -103,12 +105,14 @@ func Compose(dir string, override map[string]string) (Composition, error) {
 			programFile, programBody = f.name, f.src
 			continue
 		}
-		if IsLibrary(f.src) {
+		// Only .st files join the prelude; a non-program .fbd has no
+		// composition role (yet).
+		if strings.EqualFold(filepath.Ext(f.name), ".st") && IsLibrary(f.src) {
 			libs = append(libs, f.src)
 		}
 	}
 	if programs == 0 {
-		return Composition{}, fmt.Errorf("no .st file with a PROGRAM in %s", dir)
+		return Composition{}, fmt.Errorf("no .st or .fbd file with a PROGRAM in %s", dir)
 	}
 	if programs > 1 {
 		return Composition{}, fmt.Errorf("multiple PROGRAM files in %s — pull needs exactly one", dir)

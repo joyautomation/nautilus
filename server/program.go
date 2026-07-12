@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 // Program endpoints — PLC-style online edits over HTTP.
@@ -16,9 +18,12 @@ import (
 // boots the binary's embedded program, so committing the source to git is
 // the only way an edit becomes permanent.
 
-// programInfo is the GET /api/program response.
+// programInfo is the GET /api/program response. Source is the ORIGINAL
+// program source — for an FBD controller that's the .fbd netlist, so a
+// workspace file diffs 1:1 against it; Language says which ("st" | "fbd").
 type programInfo struct {
 	Source      string `json:"source"`
+	Language    string `json:"language"`
 	Hash        string `json:"hash"`
 	Dirty       bool   `json:"dirty"` // running source != boot source
 	Editable    bool   `json:"editable"`
@@ -33,6 +38,7 @@ func (s *Server) handleGetProgram(w http.ResponseWriter, r *http.Request) {
 	st := p.Status()
 	writeJSON(w, http.StatusOK, programInfo{
 		Source:      p.Source(),
+		Language:    runtime.Language(p.Source()),
 		Hash:        p.Hash(),
 		Dirty:       p.Dirty(),
 		Editable:    s.onlineEdits,

@@ -4,9 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"regexp"
 	"sync"
 	"time"
 
+	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/st"
 )
@@ -36,7 +38,42 @@ type Program struct {
 	prevFrame  *ir.Frame
 }
 
-// Compile parses and lowers ST source into a runnable program.
+// fbdBlockRe detects a Function Block Diagram netlist in program source: an
+// FBD keyword alone on its line, the same line-based convention lang/fbd's
+// splitter uses.
+var fbdBlockRe = regexp.MustCompile(`(?mi)^\s*FBD\s*$`)
+
+// Language reports a program source's language: "fbd" when it carries an
+// FBD netlist block, else "st". The runtime accepts both everywhere a
+// program is given (boot, online edit); FBD transpiles through lang/fbd on
+// the way in, and the ORIGINAL source is what Source/Hash/Dirty describe —
+// so a workspace .fbd file compares 1:1 with what the controller reports.
+func Language(src string) string {
+	if fbdBlockRe.MatchString(src) {
+		return "fbd"
+	}
+	return "st"
+}
+
+// lowerSource compiles original program source — ST, or ST with an FBD
+// program body — down to the IR.
+func lowerSource(src string) (*ir.Program, error) {
+	if Language(src) == "fbd" {
+		stSrc, err := fbd.Transpile(src)
+		if err != nil {
+			return nil, err
+		}
+		src = stSrc
+	}
+	ast, err := st.Parse(src)
+	if err != nil {
+		return nil, err
+	}
+	return st.Lower(ast)
+}
+
+// Compile parses and lowers program source (ST or FBD) into a runnable
+// program.
 func Compile(src string) (*Program, error) {
 	p := &Program{bootSource: src}
 	if err := p.Swap(src); err != nil {
@@ -48,16 +85,13 @@ func Compile(src string) (*Program, error) {
 // Swap replaces the running program with newly-compiled source, resetting the
 // retained frame. On a compile error the old program keeps running.
 func (p *Program) Swap(src string) error {
-	ast, err := st.Parse(src)
+	prog, err := lowerSource(src)
 	if err == nil {
-		var prog *ir.Program
-		if prog, err = st.Lower(ast); err == nil {
-			p.mu.Lock()
-			p.prog, p.frame = prog, ir.NewFrame(prog)
-			p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
-			p.mu.Unlock()
-			return nil
-		}
+		p.mu.Lock()
+		p.prog, p.frame = prog, ir.NewFrame(prog)
+		p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
+		p.mu.Unlock()
+		return nil
 	}
 	p.mu.Lock()
 	p.lastErr = err.Error()
@@ -91,18 +125,15 @@ type SwapReport struct {
 // or counter survives the edit. The outgoing program and frame are kept for
 // one Rollback. On a compile error the running program is untouched.
 func (p *Program) SwapWarm(src string) (SwapReport, error) {
-	ast, err := st.Parse(src)
+	prog, err := lowerSource(src)
 	if err == nil {
-		var prog *ir.Program
-		if prog, err = st.Lower(ast); err == nil {
-			p.mu.Lock()
-			frame, resets := ir.MigrateFrame(prog, p.prog, p.frame)
-			p.prevSource, p.prevProg, p.prevFrame = p.source, p.prog, p.frame
-			p.prog, p.frame = prog, frame
-			p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
-			p.mu.Unlock()
-			return SwapReport{Hash: sourceHash(src), Resets: resets}, nil
-		}
+		p.mu.Lock()
+		frame, resets := ir.MigrateFrame(prog, p.prog, p.frame)
+		p.prevSource, p.prevProg, p.prevFrame = p.source, p.prog, p.frame
+		p.prog, p.frame = prog, frame
+		p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
+		p.mu.Unlock()
+		return SwapReport{Hash: sourceHash(src), Resets: resets}, nil
 	}
 	p.mu.Lock()
 	p.lastErr = err.Error()

@@ -136,3 +136,31 @@ func writeFile(t *testing.T, dir, name, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestComposeFBDProgram(t *testing.T) {
+	// A .fbd file holding the PROGRAM composes like an .st program: the ST
+	// libraries form the prelude, the netlist is the program body — the same
+	// shape the runtime boots and serves over /api/program.
+	fbdSrc := `PROGRAM Main
+VAR_EXTERNAL X : BOOL; Y : BOOL; END_VAR
+FBD
+  Y := NOT X
+END_FBD
+END_PROGRAM
+`
+	dir := t.TempDir()
+	writeFile(t, dir, "eip_types.st", typesSrc)
+	writeFile(t, dir, "program.fbd", fbdSrc)
+
+	comp, err := Compose(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if comp.ProgramFile != "program.fbd" || comp.ProgramBody != fbdSrc {
+		t.Fatalf("program file = %q", comp.ProgramFile)
+	}
+	prog, ok := SplitProgram(comp.Composed, comp.Prelude)
+	if !ok || prog != fbdSrc {
+		t.Fatalf("compose→split mismatch: ok=%v", ok)
+	}
+}

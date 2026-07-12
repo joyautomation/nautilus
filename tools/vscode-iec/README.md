@@ -52,8 +52,12 @@ expects:
   computed from topology so no coordinates pollute your diffs.
 - **Visual diff** — `nautilus: Diff FBD Diagram (vs git HEAD)` overlays the
   committed and working-tree diagrams, coloring added / removed / changed
-  blocks and wires. Review a logic change the way you'd review the wiring,
-  not the text.
+  blocks and wires; `(vs Controller)` does the same against the program a
+  live controller is running. Review a logic change the way you'd review
+  the wiring, not the text.
+- **Online edits speak `.fbd`** — a controller running an FBD program
+  serves and accepts the `.fbd` source itself, so download / text diff /
+  pull and the sync status bar work exactly as they do for `.st`.
 - `.fbd` files get the same **diagnostics-as-you-type** as `.st` — the
   netlist compiles through the identical `lang/fbd` → `lang/st` pipeline the
   runtime uses, with errors mapped back to the exact `.fbd` line.

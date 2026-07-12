@@ -148,3 +148,119 @@ func TestSwapWarmCompileErrorLeavesRunning(t *testing.T) {
 		t.Errorf("old program no longer runs: %v", err)
 	}
 }
+
+// FBD sources are first-class programs: the runtime detects the netlist
+// block, transpiles through lang/fbd, and keeps the ORIGINAL .fbd text as
+// the program of record — so online edits and hashes speak .fbd end to end.
+
+const fbdV1 = `PROGRAM Main
+VAR_EXTERNAL
+  In1 : REAL;
+  Out1 : REAL;
+END_VAR
+VAR
+  integral : REAL;
+END_VAR
+FBD
+  integral := ADD(integral, In1)
+  Out1 := integral
+END_FBD
+END_PROGRAM`
+
+// fbdV2 keeps integral (retained across the swap) and scales the output.
+const fbdV2 = `PROGRAM Main
+VAR_EXTERNAL
+  In1 : REAL;
+  Out1 : REAL;
+END_VAR
+VAR
+  integral : REAL;
+END_VAR
+FBD
+  integral := ADD(integral, In1)
+  Out1 := MUL(integral, 2.0)
+END_FBD
+END_PROGRAM`
+
+func TestLanguageDetection(t *testing.T) {
+	if l := Language(fbdV1); l != "fbd" {
+		t.Errorf("Language(fbd source) = %q, want fbd", l)
+	}
+	if l := Language(editV1); l != "st" {
+		t.Errorf("Language(st source) = %q, want st", l)
+	}
+}
+
+func TestSwapWarmFBDCarriesRetainedState(t *testing.T) {
+	p, err := Compile(fbdV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Source() != fbdV1 {
+		t.Fatal("Source() must be the original .fbd text, not the transpiled ST")
+	}
+	tags := NewTags()
+	tags.SetReal("In1", 1.0)
+	tags.SetReal("Out1", 0)
+	for i := 0; i < 5; i++ {
+		if err := p.Run(tags); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := tags.Real("Out1"); got != 5.0 {
+		t.Fatalf("Out1 after 5 scans = %v, want 5", got)
+	}
+
+	report, err := p.SwapWarm(fbdV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Resets) != 0 {
+		t.Errorf("resets = %v, want none (integral carries)", report.Resets)
+	}
+	if err := p.Run(tags); err != nil {
+		t.Fatal(err)
+	}
+	// integral was 5, +1 = 6, doubled = 12: the edit went live warm.
+	if got := tags.Real("Out1"); got != 12.0 {
+		t.Fatalf("Out1 after warm fbd edit = %v, want 12", got)
+	}
+	if !p.Dirty() || p.Source() != fbdV2 {
+		t.Error("swap must mark dirty and report the new .fbd source")
+	}
+
+	// Rollback restores the old program AND its pre-swap state snapshot
+	// (integral back to 5), so the next scan integrates to 6, unscaled.
+	if _, err := p.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Run(tags); err != nil {
+		t.Fatal(err)
+	}
+	if got := tags.Real("Out1"); got != 6.0 {
+		t.Fatalf("Out1 after rollback = %v, want 6", got)
+	}
+	if p.Source() != fbdV1 {
+		t.Error("rollback must restore the original .fbd source")
+	}
+}
+
+func TestSwapWarmFBDCompileErrorLeavesRunning(t *testing.T) {
+	p, err := Compile(fbdV1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := strings.Replace(fbdV1, "Out1 := integral", "Out1 := bogus_wire", 1)
+	if _, err := p.SwapWarm(bad); err == nil {
+		t.Fatal("expected compile error")
+	}
+	if p.Source() != fbdV1 {
+		t.Error("failed swap must leave the running program untouched")
+	}
+	tags := NewTags()
+	tags.SetReal("In1", 1.0)
+	tags.SetReal("Out1", 0)
+	if err := p.Run(tags); err != nil {
+		t.Fatal(err)
+	}
+}

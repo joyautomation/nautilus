@@ -20,7 +20,6 @@ import (
 	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
-	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
 )
@@ -29,16 +28,11 @@ import (
 var program string
 
 func main() {
-	// FBD compiles by transpiling to ST — the runtime never knows the source
-	// was a diagram. A syntax error reports the .fbd line.
-	stProgram, err := fbd.Transpile(program)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "transpile:", err)
-		os.Exit(1)
-	}
-
+	// The runtime takes the .fbd source directly — it detects the FBD block,
+	// transpiles through lang/fbd, and keeps the ORIGINAL source as the
+	// program of record, so online edits and diffs speak .fbd end to end.
 	rt, err := runtime.New(runtime.Options{
-		Program: stProgram,
+		Program: program,
 		Driver:  NewPlant(),
 		Scan:    100 * time.Millisecond, // 10 Hz
 		Inputs:  []string{"LevelPct", "TempC"},
@@ -79,7 +73,13 @@ func main() {
 	// Tag API for the HMI kit and the VS Code extension's inline live values.
 	// NAUTILUS_API overrides the bind address (e.g. localhost:8081 when
 	// another controller already owns 8080 — match nautilus.runtimeUrl).
-	srv := server.New(rt, server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN")})
+	// OnlineEdits on: this is a dev playground, so PLC-style online edits of
+	// the running .fbd program (VS Code "Download Program to Controller",
+	// text + graphical controller diffs) are allowed.
+	srv := server.New(rt, server.Options{
+		AuthToken:   os.Getenv("NAUTILUS_TOKEN"),
+		OnlineEdits: true,
+	})
 	go srv.Run(ctx)
 	apiAddr := os.Getenv("NAUTILUS_API")
 	if apiAddr == "" {

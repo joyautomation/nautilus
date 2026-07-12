@@ -3,6 +3,22 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] - 2026-07-11
+
+### Added
+- **Online edits for `.fbd` programs.** The nautilus runtime now accepts and
+  serves Function Block Diagram source as the program of record, so the
+  whole online-edit loop speaks `.fbd` end to end: "Download Program to
+  Controller" composes a `.fbd` program file with its `.st` libraries,
+  "Diff Program with Controller" shows a syntax-highlighted `.fbd` text
+  diff, "Pull Program from Controller" writes a field edit back to the
+  `.fbd` file, and the sync status bar watches `.fbd` editors too.
+- **`nautilus: Diff FBD Diagram (vs Controller)`** — the graphical diff
+  against what the controller is *running*: added / removed / changed
+  blocks and wires between the live program and your working tree. Pairs
+  with the git-HEAD diagram diff for the full review story: text or
+  wiring, against git or against the plant floor.
+
 ## [0.3.9] - 2026-07-11
 
 ### Changed

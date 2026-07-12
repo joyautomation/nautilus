@@ -43,6 +43,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ),
     vscode.commands.registerCommand("nautilus.fbd.preview", () => fbd.preview()),
     vscode.commands.registerCommand("nautilus.fbd.diff", () => fbd.diff()),
+    vscode.commands.registerCommand("nautilus.fbd.diffController", () => fbd.diffController()),
     vscode.commands.registerCommand("nautilus.program.download", () => online.download()),
     vscode.commands.registerCommand("nautilus.program.diff", () => online.diff()),
     vscode.commands.registerCommand("nautilus.program.rollback", () => online.rollback()),
