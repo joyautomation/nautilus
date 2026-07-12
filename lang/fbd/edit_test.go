@@ -180,3 +180,22 @@ func TestEditDelete(t *testing.T) {
 		t.Errorf("deletion left blank lines:\n%s", out2)
 	}
 }
+
+func TestEditInsertStatement(t *testing.T) {
+	out := apply(t, editSrc, mustOp(t, editSrc, EditOp{
+		Type: "insertStatement", Text: "t2 : TON(IN := hot, PT := T#3S)",
+	}))
+	if !strings.Contains(out, "  t2 : TON(IN := hot, PT := T#3S)\nEND_FBD") {
+		t.Errorf("statement not inserted above END_FBD:\n%s", out)
+	}
+	// Broken fragments and name collisions never reach the file.
+	if _, err := ApplyEdit(editSrc, EditOp{Type: "insertStatement", Text: "t2 : TON(IN := "}); err == nil {
+		t.Error("unparseable statement must be rejected")
+	}
+	if _, err := ApplyEdit(editSrc, EditOp{Type: "insertStatement", Text: "seal = AND(Start, Run)"}); err == nil {
+		t.Error("duplicate wire name must be rejected")
+	}
+	if _, err := ApplyEdit(editSrc, EditOp{Type: "insertStatement", Text: "t1 : CTU(CU := Start, R := Stop, PV := 5)"}); err == nil {
+		t.Error("duplicate instance name must be rejected")
+	}
+}

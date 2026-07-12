@@ -44,7 +44,7 @@ export type FbdEdge = {
 
 /** Mirror of lang/fbd.EditOp — a structural edit addressed by model ids. */
 export type FbdEditOp = {
-  type: "setLiteral" | "toggleNot" | "rewire" | "rename" | "deleteNode";
+  type: "setLiteral" | "toggleNot" | "rewire" | "rename" | "deleteNode" | "insertStatement";
   node?: string;
   to?: string;
   toPin?: string;
@@ -54,14 +54,13 @@ export type FbdEditOp = {
   newName?: string;
   source?: string;
   sourcePin?: string;
+  text?: string;
 };
 
 /** Mirror of lang/fbd.TextEdit: 1-based, end-exclusive. */
 type FbdTextEdit = { line: number; col: number; endLine: number; endCol: number; newText: string };
 
-type WebviewMessage =
-  | { type: "edit"; op: FbdEditOp }
-  | { type: "insertTemplate"; snippet: string };
+type WebviewMessage = { type: "edit"; op: FbdEditOp };
 
 const DEBOUNCE_MS = 150;
 
@@ -164,48 +163,22 @@ function webviewOptions(extensionUri: vscode.Uri): vscode.WebviewOptions {
  * and returns minimal edits, so a moved buffer can't misfire; a rejected op
  * (used wire deleted, name collision, …) surfaces its reason. */
 async function handleWebviewMessage(doc: vscode.TextDocument, msg: WebviewMessage): Promise<void> {
-  if (msg.type === "edit") {
-    const res = await fbdEdit(doc.getText(), msg.op);
-    if ("error" in res) {
-      void vscode.window.showWarningMessage("nautilus: " + res.error);
-      return;
-    }
-    if (res.edits.length === 0) return;
-    const edit = new vscode.WorkspaceEdit();
-    for (const e of res.edits) {
-      edit.replace(
-        doc.uri,
-        new vscode.Range(e.line - 1, e.col - 1, e.endLine - 1, e.endCol - 1),
-        e.newText
-      );
-    }
-    await vscode.workspace.applyEdit(edit);
+  if (msg.type !== "edit") return;
+  const res = await fbdEdit(doc.getText(), msg.op);
+  if ("error" in res) {
+    void vscode.window.showWarningMessage("nautilus: " + res.error);
     return;
   }
-  if (msg.type === "insertTemplate") {
-    // Drop a snippet just above END_FBD and hand focus to the text editor
-    // with the tabstops live — the diagram re-renders as they're filled.
-    // Target the group where the file is ALREADY visible (or group one),
-    // never the diagram's own group — otherwise a duplicate tab opens on
-    // top of it.
-    for (let i = doc.lineCount - 1; i >= 0; i--) {
-      if (/^\s*END_FBD\s*$/i.test(doc.lineAt(i).text)) {
-        const visible = vscode.window.visibleTextEditors.find(
-          (e) => e.document.uri.toString() === doc.uri.toString()
-        );
-        const editor = await vscode.window.showTextDocument(doc, {
-          viewColumn: visible?.viewColumn ?? vscode.ViewColumn.One,
-          preview: false,
-        });
-        await editor.insertSnippet(
-          new vscode.SnippetString("  " + msg.snippet + "\n"),
-          new vscode.Position(i, 0)
-        );
-        return;
-      }
-    }
-    void vscode.window.showWarningMessage("nautilus: no END_FBD found to insert before");
+  if (res.edits.length === 0) return;
+  const edit = new vscode.WorkspaceEdit();
+  for (const e of res.edits) {
+    edit.replace(
+      doc.uri,
+      new vscode.Range(e.line - 1, e.col - 1, e.endLine - 1, e.endCol - 1),
+      e.newText
+    );
   }
+  await vscode.workspace.applyEdit(edit);
 }
 
 function docTitle(doc: vscode.TextDocument): string {

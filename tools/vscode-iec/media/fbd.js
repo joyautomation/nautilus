@@ -98,6 +98,17 @@
     #addmenu button:hover { background: var(--vscode-list-hoverBackground, rgba(128,128,128,.15)); }
     #addmenu button code { font-family: var(--vscode-editor-font-family, monospace); font-size: 10px;
       color: var(--vscode-descriptionForeground, #888); }
+    #addmenu label.field { display: flex; align-items: center; gap: 8px; padding: 3px 8px; font-size: 11px; }
+    #addmenu label.field span { min-width: 64px; color: var(--vscode-descriptionForeground, #888); }
+    #addmenu label.field input { flex: 1; font-family: var(--vscode-editor-font-family, monospace);
+      font-size: 12px; padding: 2px 6px; border-radius: 3px;
+      background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,.4)); outline: none; }
+    #addmenu label.field input:focus { border-color: var(--vscode-focusBorder, #58a6ff); }
+    #addmenu .actions { display: flex; justify-content: flex-end; gap: 6px; padding: 6px 8px 4px; }
+    #addmenu .actions button { width: auto; padding: 2px 10px; border: 1px solid var(--vscode-editorWidget-border, rgba(128,128,128,.4)); }
+    #addmenu .actions button.primary { background: var(--vscode-button-background, #2ea043);
+      color: var(--vscode-button-foreground, #fff); border-color: transparent; }
     #lit-edit {
       position: fixed; z-index: 10; font-family: var(--vscode-editor-font-family, monospace);
       font-size: 12px; padding: 2px 6px; border-radius: 4px;
@@ -126,33 +137,81 @@
   const zoomIn = el("button", { title: "Zoom in (+)" }, "+");
   bar.append(titleEl, legendEl, hintEl, el("span", { class: "spacer" }), addBtn, zoomOut, zoomFit, zoomIn);
 
-  // Instruction palette: each entry inserts a snippet (with tabstops) at the
-  // end of the FBD block — the text editor takes focus with placeholders
-  // active, and the diagram re-renders live as they're filled in.
+  // Instruction palette: pick a template, fill its fields RIGHT HERE in the
+  // menu, and Insert posts an insertStatement op — Go validates the fragment
+  // (parse + name collisions) before it touches the file, and focus never
+  // leaves the diagram.
   const TEMPLATES = [
-    ["block → wire", "w = AND(a, b)", "${1:w1} = ${2:AND}(${3:in1}, ${4:in2})"],
-    ["coil (assign output)", "Out := src", "${1:Output} := ${2:source}"],
-    ["timer", "t : TON(…)", "${1:t1} : ${2:TON}(IN := ${3:condition}, PT := ${4:T#1S})"],
-    ["counter", "c : CTU(…)", "${1:c1} : CTU(CU := ${2:count}, R := ${3:reset}, PV := ${4:10})"],
+    { label: "block → wire", preview: "w = AND(a, b)",
+      fields: [["name", "w1"], ["function", "AND"], ["inputs", "in1, in2"]],
+      build: (f) => `${f.name} = ${f.function}(${f.inputs})` },
+    { label: "coil (assign output)", preview: "Out := src",
+      fields: [["output", "Output"], ["source", "source"]],
+      build: (f) => `${f.output} := ${f.source}` },
+    { label: "timer", preview: "t : TON(…)",
+      fields: [["name", "t1"], ["type", "TON"], ["IN", "condition"], ["PT", "T#1S"]],
+      build: (f) => `${f.name} : ${f.type}(IN := ${f.IN}, PT := ${f.PT})` },
+    { label: "counter", preview: "c : CTU(…)",
+      fields: [["name", "c1"], ["CU", "count"], ["R", "reset"], ["PV", "10"]],
+      build: (f) => `${f.name} : CTU(CU := ${f.CU}, R := ${f.R}, PV := ${f.PV})` },
   ];
   const addMenu = el("div", { id: "addmenu" });
-  for (const [label, preview, snippet] of TEMPLATES) {
-    const b = el("button", {});
-    b.append(el("span", {}, label), el("code", {}, preview));
-    b.addEventListener("click", () => {
-      addMenu.classList.remove("on");
-      vscode.postMessage({ type: "insertTemplate", snippet });
-    });
-    addMenu.appendChild(b);
-  }
   document.body.appendChild(addMenu);
+
+  function showTemplateList() {
+    addMenu.innerHTML = "";
+    for (const t of TEMPLATES) {
+      const b = el("button", {});
+      b.append(el("span", {}, t.label), el("code", {}, t.preview));
+      b.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        showTemplateForm(t);
+      });
+      addMenu.appendChild(b);
+    }
+  }
+
+  function showTemplateForm(t) {
+    addMenu.innerHTML = "";
+    const inputs = new Map();
+    for (const [key, def] of t.fields) {
+      const row = el("label", { class: "field" });
+      const input = el("input", { spellcheck: "false", value: def });
+      input.value = def;
+      inputs.set(key, input);
+      row.append(el("span", {}, key), input);
+      addMenu.appendChild(row);
+    }
+    const commit = () => {
+      const values = {};
+      for (const [key, input] of inputs) values[key] = input.value.trim();
+      addMenu.classList.remove("on");
+      vscode.postMessage({ type: "edit", op: { type: "insertStatement", text: t.build(values) } });
+    };
+    const actions = el("div", { class: "actions" });
+    const insertBtn = el("button", { class: "primary" }, "insert");
+    insertBtn.addEventListener("click", (ev) => { ev.stopPropagation(); commit(); });
+    const cancelBtn = el("button", {}, "cancel");
+    cancelBtn.addEventListener("click", (ev) => { ev.stopPropagation(); showTemplateList(); });
+    actions.append(cancelBtn, insertBtn);
+    addMenu.appendChild(actions);
+    addMenu.addEventListener("keydown", (ev) => {
+      ev.stopPropagation();
+      if (ev.key === "Enter") commit();
+      if (ev.key === "Escape") addMenu.classList.remove("on");
+    });
+    const first = inputs.values().next().value;
+    if (first) { first.focus(); first.select(); }
+  }
   addBtn.addEventListener("click", (ev) => {
     ev.stopPropagation();
     const r = addBtn.getBoundingClientRect();
     addMenu.style.right = window.innerWidth - r.right + "px";
     addMenu.style.top = r.bottom + 4 + "px";
+    if (!addMenu.classList.contains("on")) showTemplateList();
     addMenu.classList.toggle("on");
   });
+  addMenu.addEventListener("click", (ev) => ev.stopPropagation());
   document.addEventListener("click", () => addMenu.classList.remove("on"));
   const errorEl = el("div", { id: "error" });
   const canvas = el("div", { id: "canvas", tabindex: "0", role: "img", "aria-label": "FBD diagram" });

@@ -3,6 +3,17 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.1] - 2026-07-12
+
+### Changed
+- **"+ add" stays in the diagram.** The palette no longer drops a snippet
+  into the text editor (which yanked focus out of the diagram flow):
+  template fields are filled in the palette itself, and Insert posts an
+  `insertStatement` op — Go validates the fragment (it must parse, and new
+  names must not collide) before anything touches the file, then the new
+  block appears in the diagram. Works identically in the "Open With → FBD
+  Diagram" editor, where no text editor need exist at all.
+
 ## [0.5.0] - 2026-07-12
 
 ### Changed

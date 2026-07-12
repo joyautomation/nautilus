@@ -31,6 +31,7 @@ type TextEdit struct {
 //	rewire      To/ToPin (+From/FromPin), Source node id (+SourcePin for FBs)
 //	rename      Node (b:w.* wire or f:* instance), NewName
 //	deleteNode  Node (b:w.* wire, c:* coil, or f:* instance)
+//	insertStatement  Text (netlist statement(s), validated before insert)
 type EditOp struct {
 	Type      string `json:"type"`
 	Node      string `json:"node,omitempty"`
@@ -42,6 +43,7 @@ type EditOp struct {
 	NewName   string `json:"newName,omitempty"`
 	Source    string `json:"source,omitempty"`
 	SourcePin string `json:"sourcePin,omitempty"`
+	Text      string `json:"text,omitempty"`
 }
 
 // ApplyEdit resolves op against src and returns the text edits realizing it.
@@ -61,6 +63,8 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		return b.opRename(op)
 	case "deleteNode":
 		return b.opDelete(op)
+	case "insertStatement":
+		return b.opInsert(op)
 	}
 	return nil, fmt.Errorf("fbd edit: unknown op %q", op.Type)
 }
@@ -313,6 +317,46 @@ func (b *modelBuilder) eachExpr(visit func(expr)) {
 			walk(n.source)
 		}
 	}
+}
+
+// ── insertStatement ────────────────────────────────────────────────────────
+
+// opInsert appends netlist statement(s) just above END_FBD — validated as a
+// parseable fragment with no name collisions BEFORE anything is written, so
+// a bad palette entry becomes an explanation instead of a broken file.
+func (b *modelBuilder) opInsert(op EditOp) ([]TextEdit, error) {
+	stmt := strings.TrimSpace(op.Text)
+	if stmt == "" {
+		return nil, fmt.Errorf("fbd edit: nothing to insert")
+	}
+	frag, err := parseNetlist(stmt, 0)
+	if err != nil {
+		return nil, fmt.Errorf("fbd edit: not a valid netlist statement: %v", err)
+	}
+	for _, w := range frag.wireSrc {
+		if b.nameTaken(w) {
+			return nil, fmt.Errorf("fbd edit: the name %q is already in use", w)
+		}
+	}
+	for _, d := range frag.fbDecls {
+		if b.nameTaken(d.name) {
+			return nil, fmt.Errorf("fbd edit: the name %q is already in use", d.name)
+		}
+	}
+	endFBD := -1
+	for i, line := range b.src {
+		if strings.EqualFold(strings.TrimSpace(line), "END_FBD") {
+			endFBD = i + 1 // 1-based
+		}
+	}
+	if endFBD == -1 {
+		return nil, fmt.Errorf("fbd edit: no END_FBD to insert before")
+	}
+	var text strings.Builder
+	for _, line := range strings.Split(stmt, "\n") {
+		text.WriteString("  " + strings.TrimSpace(line) + "\n")
+	}
+	return []TextEdit{{Line: endFBD, Col: 1, EndLine: endFBD, EndCol: 1, NewText: text.String()}}, nil
 }
 
 // ── deleteNode ─────────────────────────────────────────────────────────────
