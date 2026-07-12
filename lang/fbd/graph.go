@@ -96,6 +96,16 @@ type Edge struct {
 // resolve pin lists for user-defined FB types; unknown types fall back to the
 // pins the source actually uses.
 func Graph(src string, userFBs ...map[string]*ir.FBDef) (*Model, error) {
+	b, err := buildModel(src, userFBs...)
+	if err != nil {
+		return nil, err
+	}
+	return b.m, nil
+}
+
+// buildModel is Graph exposing the builder — the edit service needs the
+// netlist and node index behind the model, not just the JSON shape.
+func buildModel(src string, userFBs ...map[string]*ir.FBDef) (*modelBuilder, error) {
 	header, body, _, bodyLine, err := splitFBD(src)
 	if err != nil {
 		return nil, err
@@ -130,7 +140,7 @@ func Graph(src string, userFBs ...map[string]*ir.FBDef) (*Model, error) {
 	b.layer()
 	b.placeInputs()
 	b.alignCoils(comp)
-	return b.m, nil
+	return b, nil
 }
 
 // outRef identifies the output pin an expression's value comes from, plus

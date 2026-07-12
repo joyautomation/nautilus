@@ -3,6 +3,31 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] - 2026-07-12
+
+### Changed
+- **All diagram edits are structural operations now.** A gesture no longer
+  computes text spans in the webview: it posts an op addressed by stable
+  render-model ids (`setLiteral`, `toggleNot`, `rewire`, `rename`,
+  `deleteNode`) to `nautilus fbd edit`, which resolves it against a fresh
+  parse of the current buffer and returns minimal text edits. Rejected ops
+  explain themselves ("wire seal feeds 2 inputs — rewire them first",
+  "the name hot is already in use"). This is the foundation for
+  full-editor parity — new edits are one AST operation in Go, not span
+  plumbing across three layers.
+
+### Added
+- **Rename from the diagram**: double-click a function-block instance or a
+  named wire's block to rename it — every reference updates (declaration,
+  calls, pin reads, wire fan-out), with identifier validation and collision
+  checks.
+- **"Open With → FBD Diagram"** (CustomTextEditor): the diagram as a real
+  editor over the `.fbd` document, tied to its lifecycle — undo, dirty
+  state, and revert belong to the text document. Plain text remains the
+  default editor; right-click a `.fbd` file → Open With to choose.
+- `nautilus fbd edit` CLI: `{"source", "op"}` in, `{"edits"}` out — the
+  same op service, scriptable.
+
 ## [0.4.5] - 2026-07-12
 
 ### Fixed

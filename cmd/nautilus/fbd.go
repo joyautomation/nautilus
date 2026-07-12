@@ -19,6 +19,13 @@ Usage:
                               Used by the VS Code diagram preview. "-" reads
                               source from stdin. On a parse error, emits
                               {"error": "..."} and exits 1.
+  nautilus fbd edit           Apply a structural edit op to .fbd source. Reads
+                              {"source": "...", "op": {...}} JSON on stdin and
+                              writes {"edits": [...]} — the minimal text edits
+                              realizing the op (1-based, end-exclusive spans).
+                              Ops address render-model node ids: setLiteral,
+                              toggleNot, rewire, rename, deleteNode. On a
+                              rejected op, emits {"error": "..."} and exits 1.
 `
 
 func runFBD(args []string) int {
@@ -29,10 +36,37 @@ func runFBD(args []string) int {
 	switch args[0] {
 	case "graph":
 		return runFBDGraph(args[1:])
+	case "edit":
+		return runFBDEdit()
 	default:
 		fmt.Fprintf(os.Stderr, "nautilus fbd: unknown subcommand %q\n\n%s", args[0], fbdUsage)
 		return 2
 	}
+}
+
+func runFBDEdit() int {
+	var req struct {
+		Source string     `json:"source"`
+		Op     fbd.EditOp `json:"op"`
+	}
+	enc := json.NewEncoder(os.Stdout)
+	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil || req.Source == "" {
+		_ = enc.Encode(map[string]string{"error": "expected {\"source\": ..., \"op\": {...}} on stdin"})
+		return 2
+	}
+	edits, err := fbd.ApplyEdit(req.Source, req.Op)
+	if err != nil {
+		_ = enc.Encode(map[string]string{"error": err.Error()})
+		return 1
+	}
+	if edits == nil {
+		edits = []fbd.TextEdit{}
+	}
+	if err := enc.Encode(map[string]any{"edits": edits}); err != nil {
+		fmt.Fprintln(os.Stderr, "nautilus fbd edit:", err)
+		return 2
+	}
+	return 0
 }
 
 func runFBDGraph(args []string) int {

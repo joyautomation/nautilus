@@ -18,7 +18,7 @@ import {
 } from "vscode-languageclient/node";
 import { LiveValues } from "./liveValues";
 import { OnlineEdit } from "./onlineEdit";
-import { FbdPreview } from "./fbdPreview";
+import { FbdEditorProvider, FbdPreview } from "./fbdPreview";
 
 let client: LanguageClient | undefined;
 let live: LiveValues | undefined;
@@ -36,6 +36,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const fbd = new FbdPreview(context);
   context.subscriptions.push(fbd);
+  // "Open With → FBD Diagram": the diagram as a real editor over the .fbd
+  // document (text remains the default editor).
+  context.subscriptions.push(new FbdEditorProvider(context).register());
 
   context.subscriptions.push(
     vscode.commands.registerCommand("nautilus.liveValues.toggle", () =>

@@ -14,18 +14,26 @@ type netlist struct {
 	wireSrc []string        // wire names in source order (for stable errors)
 	fbDecls []fbDecl        // FB instances: inst : TYPE
 	nodes   []node          // FB calls and coils, in source order
+	// Edit anchors: the LHS name token and the whole statement span of each
+	// wire definition, so ops can rename or delete by name.
+	wirePos  map[string]exprPos
+	wireSpan map[string]exprPos
 }
 
 type fbDecl struct {
 	name, typ string
-	line      int // 1-based source line of the declaration
+	line      int     // 1-based source line of the declaration
+	namePos   exprPos // the instance name token, for rename
+	span      exprPos // the whole declaration statement, for delete
 }
 
 // node is an ordered netlist statement that becomes an ST statement: an FB
 // call or a coil.
 type node struct {
 	isCall bool
-	line   int // 1-based source line of the statement, for diagnostics
+	line   int     // 1-based source line of the statement, for diagnostics
+	lhs    exprPos // the leading name token (target / instance), for rename
+	span   exprPos // the whole statement, for delete
 	// call: inst(pin := expr, ...)
 	inst string
 	args []namedArg
@@ -98,7 +106,7 @@ type netParser struct {
 
 func parseNetlist(body string, lineOffset int) (*netlist, error) {
 	p := &netParser{toks: st.Lex(body), lineOffset: lineOffset, lines: strings.Split(body, "\n")}
-	nl := &netlist{wires: map[string]expr{}}
+	nl := &netlist{wires: map[string]expr{}, wirePos: map[string]exprPos{}, wireSpan: map[string]exprPos{}}
 	for !p.at(st.TokenEOF) {
 		if err := p.item(nl); err != nil {
 			return nil, err
@@ -175,8 +183,13 @@ func (p *netParser) item(nl *netlist) error {
 	if !p.at(st.TokenIdent) {
 		return p.posErr(fmt.Sprintf("expected a wire, coil, or block, got %q", p.peek().Literal))
 	}
-	line := p.peek().Line + p.lineOffset
+	lhsAt := p.here()
+	line := lhsAt.line
 	name := p.next().Literal
+	lhs := lhsAt
+	lhs.endLine, lhs.endCol = lhsAt.line, lhsAt.col+len(name)
+	kind := ""
+	nodeIdx := -1
 	switch p.peek().Type {
 	case st.TokenEqual: // wire: name = <block>
 		p.next()
@@ -189,38 +202,56 @@ func (p *netParser) item(nl *netlist) error {
 		}
 		nl.wires[name] = e
 		nl.wireSrc = append(nl.wireSrc, name)
+		kind = "wire"
 	case st.TokenAssign: // coil: target := <expr>
 		p.next()
 		e, err := p.expr()
 		if err != nil {
 			return err
 		}
-		nl.nodes = append(nl.nodes, node{target: name, source: e, line: line})
+		nl.nodes = append(nl.nodes, node{target: name, source: e, line: line, lhs: lhs})
+		nodeIdx = len(nl.nodes) - 1
 	case st.TokenColon: // FB instance decl: inst : TYPE  (optionally with a call)
 		p.next()
 		if !p.at(st.TokenIdent) {
 			return p.posErr("expected a function-block type after ':'")
 		}
 		typ := p.next().Literal
-		nl.fbDecls = append(nl.fbDecls, fbDecl{name: name, typ: typ, line: line})
+		nl.fbDecls = append(nl.fbDecls, fbDecl{name: name, typ: typ, line: line, namePos: lhs})
+		kind = "decl"
 		if p.at(st.TokenLParen) { // inline call: inst : TON(IN := ..., ...)
 			args, err := p.namedArgs()
 			if err != nil {
 				return err
 			}
-			nl.nodes = append(nl.nodes, node{isCall: true, inst: name, args: args, line: line})
+			nl.nodes = append(nl.nodes, node{isCall: true, inst: name, args: args, line: line, lhs: lhs})
+			nodeIdx = len(nl.nodes) - 1
 		}
 	case st.TokenLParen: // FB call: inst(pin := ..., ...)
 		args, err := p.namedArgs()
 		if err != nil {
 			return err
 		}
-		nl.nodes = append(nl.nodes, node{isCall: true, inst: name, args: args, line: line})
+		nl.nodes = append(nl.nodes, node{isCall: true, inst: name, args: args, line: line, lhs: lhs})
+		nodeIdx = len(nl.nodes) - 1
 	default:
 		return p.posErr(fmt.Sprintf("expected '=', ':=', ':', or '(' after %q", name))
 	}
 	if p.at(st.TokenSemicolon) {
 		p.next()
+	}
+	// Close the whole-statement span (through the trailing ';') and record
+	// the edit anchors on whatever this item produced.
+	span := p.span(lhsAt)
+	switch kind {
+	case "wire":
+		nl.wirePos[name] = lhs
+		nl.wireSpan[name] = span
+	case "decl":
+		nl.fbDecls[len(nl.fbDecls)-1].span = span
+	}
+	if nodeIdx >= 0 {
+		nl.nodes[nodeIdx].span = span
 	}
 	return nil
 }

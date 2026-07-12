@@ -2,7 +2,7 @@
   "name": "vscode-iec",
   "displayName": "nautilus IEC 61131-3",
   "description": "IEC 61131-3 language support for the nautilus SCADA framework: Structured Text (.st) and Function Block Diagram (.fbd) with syntax highlighting, compile diagnostics, go-to-definition, a live FBD diagram preview with visual diff, and inline live tag values from a running controller.",
-  "version": "0.4.5",
+  "version": "0.5.0",
   "publisher": "joyautomation",
   "license": "Apache-2.0",
   "icon": "icon.png",
@@ -162,10 +162,22 @@
         "nautilus.token": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed only for online-edit download/rollback against a controller started with a token \u2014 reads and `nautilus pull` never require it. Prefer setting this in workspace settings, not user settings."
+          "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed only for online-edit download/rollback against a controller started with a token — reads and `nautilus pull` never require it. Prefer setting this in workspace settings, not user settings."
         }
       }
-    }
+    },
+    "customEditors": [
+      {
+        "viewType": "nautilus.fbdDiagram",
+        "displayName": "FBD Diagram",
+        "selector": [
+          {
+            "filenamePattern": "*.fbd"
+          }
+        ],
+        "priority": "option"
+      }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",

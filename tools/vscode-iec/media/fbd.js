@@ -119,7 +119,7 @@
     '<span><i style="background:var(--vscode-gitDecoration-addedResourceForeground,#2ea043)"></i>added</span>' +
     '<span><i style="background:var(--vscode-gitDecoration-deletedResourceForeground,#f85149)"></i>removed</span>' +
     '<span><i style="background:var(--vscode-gitDecoration-modifiedResourceForeground,#d7a021)"></i>changed</span>';
-  const hintEl = el("span", { class: "hint" }, "double-click a constant to edit · click a pin to toggle NOT · drag an output onto a pin to rewire");
+  const hintEl = el("span", { class: "hint" }, "double-click: edit constants & rename · click pin: toggle NOT · drag output→pin: rewire");
   const addBtn = el("button", { class: "fit", title: "Insert an instruction into the netlist" }, "+ add");
   const zoomOut = el("button", { title: "Zoom out (-)" }, "−");
   const zoomFit = el("button", { class: "fit", title: "Fit (0)" }, "fit");
@@ -409,7 +409,10 @@
         hit.appendChild(tip);
         hit.addEventListener("click", (ev) => {
           ev.stopPropagation();
-          vscode.postMessage({ type: "toggleNot", arg: e.arg, not: e.not ?? null, inner: e.inner ?? null });
+          vscode.postMessage({
+            type: "edit",
+            op: { type: "toggleNot", to: e.to, toPin: e.toPin || "", from: e.from, fromPin: e.fromPin || "" },
+          });
         });
         g.appendChild(hit);
       }
@@ -437,7 +440,7 @@
           const tip = svgEl("title");
           tip.textContent = `drag to an input pin to wire ${ref}`;
           srcHit.appendChild(tip);
-          srcHit.addEventListener("pointerdown", (ev) => beginRewire(ev, srcHit, pt, ref));
+          srcHit.addEventListener("pointerdown", (ev) => beginRewire(ev, pt, n.id, pin));
           root.appendChild(srcHit);
         }
       }
@@ -482,11 +485,25 @@
       const tip = svgEl("title");
       tip.textContent = n.kind === "fb" ? `${n.label} : ${n.type || "?"}` : n.label;
       if (!diffing && n.src) {
+        // Constant chip: double-click retypes the value.
         g.classList.add("editable");
         tip.textContent = `${n.label} — double-click to edit`;
         g.addEventListener("dblclick", (ev) => {
           ev.stopPropagation();
-          beginEditLiteral(n, body);
+          beginTextInput(body, n.label, (value) =>
+            vscode.postMessage({ type: "edit", op: { type: "setLiteral", node: n.id, value } })
+          );
+        });
+      } else if (!diffing && (n.kind === "fb" || (n.kind === "block" && n.wire))) {
+        // FB instance / named wire: double-click renames it everywhere.
+        g.classList.add("editable");
+        const current = n.kind === "fb" ? n.label : n.wire;
+        tip.textContent += " — double-click to rename";
+        g.addEventListener("dblclick", (ev) => {
+          ev.stopPropagation();
+          beginTextInput(body, current, (newName) =>
+            vscode.postMessage({ type: "edit", op: { type: "rename", node: n.id, newName } })
+          );
         });
       }
       g.appendChild(tip);
@@ -509,7 +526,7 @@
   // source). Listeners live on window — no pointer capture, no reliance on
   // what element happens to be under the cursor — and the drop target is the
   // nearest input pin within reach, found geometrically.
-  function beginRewire(ev, srcEl, srcPt, refText) {
+  function beginRewire(ev, srcPt, sourceId, sourcePin) {
     ev.stopPropagation();
     ev.preventDefault();
     if (!svg) return;
@@ -553,10 +570,14 @@
       if (svg) svg.classList.remove("rewiring");
       if (over) over.el.classList.remove("over");
       if (up.type === "pointerup" && over) {
-        const arg = over.edge.arg;
-        if (arg && arg.text && arg.text !== refText) {
-          vscode.postMessage({ type: "rewire", arg, newText: refText });
-        }
+        const e = over.edge;
+        vscode.postMessage({
+          type: "edit",
+          op: {
+            type: "rewire", to: e.to, toPin: e.toPin || "", from: e.from, fromPin: e.fromPin || "",
+            source: sourceId, sourcePin: sourcePin || "",
+          },
+        });
       }
       over = null;
     };
@@ -565,17 +586,17 @@
     window.addEventListener("pointercancel", finish);
   }
 
-  // beginEditLiteral floats an input over a constant chip; Enter commits the
-  // new value as a span-anchored text edit in the .fbd document (the edit
-  // round-trips through the extension, and the re-render replaces us).
-  function beginEditLiteral(node, rectEl) {
+  // beginTextInput floats an input over a diagram element; Enter commits the
+  // value through onCommit (which posts a structural op — the edit resolves
+  // in Go and round-trips through the normal re-render).
+  function beginTextInput(rectEl, initial, onCommit) {
     document.getElementById("lit-edit")?.remove();
     const r = rectEl.getBoundingClientRect();
     const input = el("input", { id: "lit-edit", spellcheck: "false" });
-    input.value = node.label;
+    input.value = initial;
     input.style.left = r.left + "px";
     input.style.top = r.top - 2 + "px";
-    input.style.width = Math.max(r.width, 64) + "px";
+    input.style.width = Math.max(r.width, 72) + "px";
     document.body.appendChild(input);
     input.focus();
     input.select();
@@ -588,10 +609,8 @@
     input.addEventListener("keydown", (ev) => {
       ev.stopPropagation();
       if (ev.key === "Enter") {
-        const newText = input.value.trim();
-        if (newText && newText !== node.label) {
-          vscode.postMessage({ type: "editLiteral", span: node.src, newText });
-        }
+        const value = input.value.trim();
+        if (value && value !== initial) onCommit(value);
         close();
       } else if (ev.key === "Escape") {
         close();
