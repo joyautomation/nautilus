@@ -3,6 +3,17 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.5] - 2026-07-12
+
+### Added
+- **Variables panel.** A "vars" toolbar button lists every header
+  declaration — name, type, initializer, section badge (ext/local/in/out)
+  — including ones the logic doesn't reference yet (which the diagram
+  itself intentionally doesn't draw); those are marked *unused*. Live
+  values appear next to each variable, on the same stream/toggle as the
+  node pills. Backed by a new `vars` list in the `nautilus fbd graph`
+  render model.
+
 ## [0.7.4] - 2026-07-12
 
 ### Added

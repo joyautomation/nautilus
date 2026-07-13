@@ -29,7 +29,14 @@ export type FbdEdge = {
   feedback?: boolean;
   status?: 'added' | 'removed' | 'changed' | 'same';
 };
-export type FbdModel = { name: string; nodes: FbdNode[]; edges: FbdEdge[] };
+export type VarDecl = {
+	name: string;
+	type: string;
+	init?: string;
+	section: string;
+	line: number;
+};
+export type FbdModel = { name: string; nodes: FbdNode[]; edges: FbdEdge[]; vars?: VarDecl[] };
 
 export type Placed = FbdNode & {
   x: number;

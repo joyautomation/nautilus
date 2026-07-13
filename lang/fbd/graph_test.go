@@ -349,3 +349,36 @@ END_PROGRAM`
 		t.Errorf("NOT spans wrong: not=%s inner=%s", mustJSON(neg.Not), mustJSON(neg.Inner))
 	}
 }
+
+func TestGraphVars(t *testing.T) {
+	src := `PROGRAM Main
+VAR_EXTERNAL
+  TempC : REAL;
+  Heater : REAL;
+END_VAR
+VAR
+  // retained state
+  integral : REAL := 0.0;
+END_VAR
+FBD
+  Heater := TempC
+END_FBD
+END_PROGRAM`
+	m, err := Graph(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []VarDecl{
+		{Name: "TempC", Type: "REAL", Section: "VAR_EXTERNAL", Line: 3},
+		{Name: "Heater", Type: "REAL", Section: "VAR_EXTERNAL", Line: 4},
+		{Name: "integral", Type: "REAL", Init: "0.0", Section: "VAR", Line: 8},
+	}
+	if len(m.Vars) != len(want) {
+		t.Fatalf("vars = %+v, want %d entries", m.Vars, len(want))
+	}
+	for i, w := range want {
+		if m.Vars[i] != w {
+			t.Errorf("vars[%d] = %+v, want %+v", i, m.Vars[i], w)
+		}
+	}
+}

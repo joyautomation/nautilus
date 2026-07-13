@@ -24,6 +24,20 @@ type Model struct {
 	Name  string  `json:"name"` // POU name (PROGRAM/FUNCTION_BLOCK ident)
 	Nodes []*Node `json:"nodes"`
 	Edges []*Edge `json:"edges"`
+	// Vars lists the header declarations (every section before FBD), whether
+	// or not the netlist references them — a diagram's variables panel shows
+	// what exists, not just what's wired.
+	Vars []VarDecl `json:"vars,omitempty"`
+}
+
+// VarDecl is one header declaration: `Name : Type [:= init];` inside a
+// VAR/VAR_EXTERNAL/VAR_INPUT/VAR_OUTPUT/VAR_IN_OUT section.
+type VarDecl struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Init    string `json:"init,omitempty"` // initializer text after :=, if any
+	Section string `json:"section"`
+	Line    int    `json:"line"` // 1-based source line of the declaration
 }
 
 // Node is one diagram element. Kind decides the shape:
@@ -125,7 +139,7 @@ func buildModel(src string, userFBs ...map[string]*ir.FBDef) (*modelBuilder, err
 		nl:      nl,
 		src:     strings.Split(src, "\n"),
 		exprOf:  map[string]callExpr{},
-		m:       &Model{Name: pouName(header)},
+		m:       &Model{Name: pouName(header), Vars: parseVarDecls(header)},
 		nodes:   map[string]*Node{},
 		inputs:  map[string]*Node{},
 		coils:   map[string]*Node{},
@@ -710,4 +724,40 @@ func pouName(header string) string {
 		return m[1]
 	}
 	return ""
+}
+
+// Header declaration scanning for the variables panel. Line-based like
+// opDeclareVar (section keywords alone on a line), permissive about section
+// kinds so FUNCTION_BLOCK POUs list their pins too. One declaration per
+// line: `name : TYPE [:= init];` — comment-only and blank lines skip.
+var varSectionOpenRe = regexp.MustCompile(`(?i)^\s*(VAR_EXTERNAL|VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT|VAR)\s*$`)
+var varDeclLineRe = regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^;:=]+?)\s*(?::=\s*([^;]+?)\s*)?;`)
+
+func parseVarDecls(header string) []VarDecl {
+	var out []VarDecl
+	section := ""
+	for i, line := range strings.Split(header, "\n") {
+		if m := varSectionOpenRe.FindStringSubmatch(line); m != nil {
+			section = strings.ToUpper(m[1])
+			continue
+		}
+		trimmed := strings.ToUpper(strings.TrimSpace(line))
+		if trimmed == "END_VAR" {
+			section = ""
+			continue
+		}
+		if section == "" {
+			continue
+		}
+		if m := varDeclLineRe.FindStringSubmatch(line); m != nil {
+			out = append(out, VarDecl{
+				Name:    m[1],
+				Type:    strings.TrimSpace(m[2]),
+				Init:    strings.TrimSpace(m[3]),
+				Section: section,
+				Line:    i + 1,
+			})
+		}
+	}
+	return out
 }

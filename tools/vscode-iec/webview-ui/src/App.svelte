@@ -18,7 +18,8 @@
 	import FbdEdge from './FbdEdge.svelte';
 	import FitController from './FitController.svelte';
 	import Palette from './Palette.svelte';
-	import { layout, type FbdModel } from './layout';
+	import VarsPanel from './VarsPanel.svelte';
+	import { layout, type FbdModel, type VarDecl } from './layout';
 	import { mergeDiff } from './diff';
 	import { vscode, postOp } from './vscodeApi';
 	import { setRects, updateRect } from './diagState.svelte';
@@ -35,6 +36,9 @@
 	let error = $state('');
 	let structureKey = $state('');
 	let paletteOpen = $state(false);
+	let varsOpen = $state(false);
+	let varList = $state<VarDecl[]>([]);
+	let usedNames = $state(new Set<string>());
 	let hasPins = $state(false);
 	let selectedCount = $state(0);
 	let knownIds = new Set<string>();
@@ -84,6 +88,15 @@
 		problemCount = diags.length;
 		problemTip = diags.map((d) => `line ${d.line}: ${d.message}`).join('\n');
 		hasPins = model.nodes.some((n) => n.x !== undefined && n.y !== undefined);
+		if (!isDiff) {
+			varList = model.vars ?? [];
+			// Referenced = it became a diagram element (chip, coil, FB instance).
+			usedNames = new Set(
+				model.nodes
+					.filter((n) => n.kind === 'input' || n.kind === 'coil' || n.kind === 'fb')
+					.map((n) => n.label.split('.')[0].toLowerCase())
+			);
+		}
 		nodes = placed.map((n) => ({
 			id: n.id,
 			type: 'fbd',
@@ -294,7 +307,8 @@
 			{#if hasPins}
 				<button title="Clear all pinned positions (back to full auto-layout)" onclick={() => postOp({ type: 'clearLayout' })}>auto layout</button>
 			{/if}
-			<button title="Insert an instruction" onclick={(e) => { e.stopPropagation(); paletteOpen = !paletteOpen; }}>+ add</button>
+			<button title="All header declarations, including ones the logic doesn't reference yet" onclick={(e) => { e.stopPropagation(); varsOpen = !varsOpen; paletteOpen = false; }}>vars</button>
+			<button title="Insert an instruction" onclick={(e) => { e.stopPropagation(); paletteOpen = !paletteOpen; varsOpen = false; }}>+ add</button>
 		{/if}
 	</div>
 	{#if error}
@@ -324,6 +338,7 @@
 		</SvelteFlow>
 	</div>
 	<Palette bind:open={paletteOpen} />
+	<VarsPanel bind:open={varsOpen} vars={varList} used={usedNames} />
 	{#if input}
 		<input
 			bind:this={inputEl}
@@ -337,7 +352,7 @@
 	{/if}
 </div>
 
-<svelte:window onclick={() => (paletteOpen = false)} />
+<svelte:window onclick={() => { paletteOpen = false; varsOpen = false; }} />
 
 <style>
 	.host {
