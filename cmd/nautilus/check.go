@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/joyautomation/nautilus/internal/stproject"
+	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
@@ -45,7 +47,7 @@ func runCheck(args []string) int {
 				}
 				return nil
 			}
-			if strings.EqualFold(filepath.Ext(path), ".st") {
+			if ext := strings.ToLower(filepath.Ext(path)); ext == ".st" || ext == ".fbd" {
 				files = append(files, path)
 			}
 			return nil
@@ -57,7 +59,7 @@ func runCheck(args []string) int {
 	}
 
 	if len(files) == 0 {
-		fmt.Fprintln(os.Stderr, "nautilus check: no .st files found")
+		fmt.Fprintln(os.Stderr, "nautilus check: no .st or .fbd files found")
 		return 0
 	}
 
@@ -68,8 +70,33 @@ func runCheck(args []string) int {
 			fmt.Fprintln(os.Stderr, "nautilus check:", err)
 			return 2
 		}
-		if msg, pos, failed := compileErr(string(src)); failed {
+		source := string(src)
+		// FBD compiles by transpiling to ST, then it's checked exactly like an
+		// .st file; the transpiler's line map projects diagnostic positions
+		// back onto the .fbd source.
+		var lineMap []int
+		if strings.EqualFold(filepath.Ext(f), ".fbd") {
+			stSrc, lm, terr := fbd.TranspileWithLines(source)
+			if terr != nil {
+				bad++
+				fmt.Printf("%s: %s\n", f, terr.Error())
+				continue
+			}
+			source, lineMap = stSrc, lm
+		}
+		// Sibling library files (TYPE/FB/FUNCTION-only .st in the same
+		// directory) are in scope, exactly as the LSP and a runtime that
+		// concatenates sources see it.
+		prelude, preludeLines := stproject.Prelude(f, nil)
+		if msg, pos, failed := compileErr(source, prelude, preludeLines); failed {
 			bad++
+			if lineMap != nil {
+				if pos.Line >= 1 && pos.Line <= len(lineMap) {
+					pos = st.Pos{Line: lineMap[pos.Line-1], Col: 1}
+				} else {
+					pos = st.Pos{Line: 1, Col: 1}
+				}
+			}
 			fmt.Printf("%s:%d:%d: %s\n", f, pos.Line, pos.Col, msg)
 		}
 	}
@@ -83,8 +110,9 @@ func runCheck(args []string) int {
 
 // compileErr runs the same parse+lower pipeline as the LSP and returns the
 // first diagnostic. Positions default to 1:1 when the compiler couldn't
-// attach one (e.g. some parse errors).
-func compileErr(src string) (string, st.Pos, bool) {
+// attach one (e.g. some parse errors). The prelude participates in lowering
+// only; positions are remapped back into the checked file.
+func compileErr(src, prelude string, preludeLines int) (string, st.Pos, bool) {
 	prog, err := st.Parse(src)
 	if err != nil {
 		// Anchor on the parser-reported position (shared with the LSP via
@@ -95,14 +123,31 @@ func compileErr(src string) (string, st.Pos, bool) {
 		}
 		return err.Error(), pos, true
 	}
-	if _, err := st.Lower(prog); err != nil {
+	lowerProg := prog
+	if prelude != "" {
+		if combined, cerr := st.Parse(prelude + src); cerr == nil {
+			lowerProg = combined
+		} else {
+			preludeLines = 0
+		}
+	} else {
+		preludeLines = 0
+	}
+	if _, err := st.Lower(lowerProg); err != nil {
 		pos := st.Pos{Line: 1, Col: 1}
+		msg := err.Error()
 		if le, ok := st.AsLowerError(err); ok && le.Pos.Line > 0 {
 			// Print the unwrapped message: the position prefix that
 			// LowerError.Error() adds is already in the path:line:col.
-			return le.Err.Error(), le.Pos, true
+			pos, msg = le.Pos, le.Err.Error()
 		}
-		return err.Error(), pos, true
+		if pos.Line > preludeLines {
+			pos.Line -= preludeLines
+		} else if preludeLines > 0 {
+			pos = st.Pos{Line: 1, Col: 1}
+			msg = "in project library files: " + msg
+		}
+		return msg, pos, true
 	}
 	return "", st.Pos{}, false
 }

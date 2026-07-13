@@ -229,3 +229,60 @@ func TestCORSPreflight(t *testing.T) {
 		t.Errorf("preflight: code=%d headers=%v", rec.Code, rec.Header())
 	}
 }
+
+func TestFrameCarriesScanDiagnostics(t *testing.T) {
+	srv := New(newTestRuntime(t))
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	var f Frame
+	if err := json.Unmarshal(rec.Body.Bytes(), &f); err != nil {
+		t.Fatal(err)
+	}
+	s := f.Scan
+	if s.Count != 1 || s.TargetMs != 100 || s.LastMs <= 0 || s.ExecUs <= 0 {
+		t.Errorf("scan stats wrong: %+v", s)
+	}
+	if len(s.Recent) != 1 || len(s.Histogram) != 15 {
+		t.Errorf("history wrong: recent=%d histogram=%d", len(s.Recent), len(s.Histogram))
+	}
+	if !s.IOHealthy {
+		t.Error("memory driver should report healthy IO")
+	}
+}
+
+func TestMetaEndpoint(t *testing.T) {
+	drv := nio.NewMemory()
+	rt, err := runtime.New(runtime.Options{
+		Program: testProgram,
+		Driver:  drv,
+		Inputs:  []string{"Level"},
+		Outputs: []string{"Out"},
+		Seed:    nio.Values{"Level": 40.0, "SP": 65.0, "Out": 0.0},
+		Meta: map[string]runtime.TagMeta{
+			"Level": {Desc: "Tank level", Unit: "%"},
+			"SP":    {Desc: "Setpoint", Unit: "°C"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New(rt)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/meta", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var m metaResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Tags["Level"].Desc != "Tank level" || m.Tags["Level"].Unit != "%" {
+		t.Errorf("Level meta = %+v", m.Tags["Level"])
+	}
+	if len(m.Inputs) != 1 || m.Inputs[0] != "Level" || len(m.Outputs) != 1 || m.Outputs[0] != "Out" {
+		t.Errorf("io lists = %v / %v", m.Inputs, m.Outputs)
+	}
+	if m.ScanTargetMs != 100 {
+		t.Errorf("ScanTargetMs = %v, want 100", m.ScanTargetMs)
+	}
+}

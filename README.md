@@ -29,6 +29,8 @@ runtime/     scan loop · tag bus · program host (compile, hot-swap, retained s
 lang/st      IEC 61131-3 Structured Text: lexer, parser, lowering
 lang/ir      typed IR + tree-walking virtual machine (pure stdlib)
 io/          Driver seam — bring your own bus (Modbus, EtherNet/IP, OPC-UA, sim)
+eip/         EtherNet/IP driver for Allen-Bradley Logix: pure-Go CIP stack,
+             tag browse + UDT import codegen, polling io.Driver, Logix emulator
 server/      tag API over HTTP: JSON snapshot, SSE stream, tag writes
 cmd/nautilus the developer CLI: `new` (scaffold) · `check` (CI compile) · `lsp`
 hmi/         SvelteKit digital-twin component kit + realtime SSE client
@@ -138,15 +140,154 @@ level  59.9%  temp  60.4°C  pump off  heater  63%  scans 20
 The control logic itself lives in [`examples/heated-tank/program.st`](examples/heated-tank/program.st) —
 pump hysteresis and a PI temperature loop, in plain Structured Text.
 
+### Talking to a real PLC (EtherNet/IP)
+
+Point the importer at an Allen-Bradley Logix controller and it generates the
+types and bindings your project needs — committed source, not runtime config:
+
+```sh
+nautilus eip browse --host 192.168.1.10                 # see what's on the controller
+nautilus eip import --host 192.168.1.10 \
+  --tags 'Line1*,Program:MainProgram.*' \
+  --writable 'Line1Cmd*'
+```
+
+That writes `eip_types.st` (a TYPE block mirroring the controller's UDTs plus
+suggested VAR_EXTERNAL declarations) and `eip_manifest.go` (the tag manifest).
+Wire it into `main.go`:
+
+```go
+driver, err := eip.New("192.168.1.10", EIPManifest,
+    eip.WithSlot(0),
+    // Polling policy is configuration, not codegen: re-running the import
+    // refreshes the tag catalog without touching these.
+    eip.WithScanRate(500*time.Millisecond),           // default scan class
+    eip.WithScanClass("fast", 100*time.Millisecond),
+    eip.WithScanClass("slow", 10*time.Second),
+    eip.WithTagClass("fast", "Line1_PIT_*"),          // globs on tag/device names
+    eip.WithTagClass("slow", "*_Totals"),
+    eip.WithTagClass(eip.NoPoll, "Line1Cmd*"),        // cataloged + writable, never polled
+)
+driver.Start(ctx)
+rt, err := runtime.New(runtime.Options{
+    Program: program,
+    Driver:  driver,
+    Inputs:  driver.InputNames(),
+    Outputs: driver.OutputNames(),
+})
+```
+
+The driver polls each scan class on its own interval over one connection
+(UDTs arrive as real struct values in ST), validates the manifest against
+the live controller at startup so type drift fails loudly, and writes
+changed outputs back on change — the runtime behaves like a PLC peer on the
+network. Pure Go, no cgo; tested against an in-repo ControlLogix emulator
+(`eip/logixserver`).
+
+### Online edits — change logic while it runs
+
+nautilus has two planes. The **cold plane** — connections, the tag manifest,
+scan classes, server wiring — is Go, and changes ship through CI/CD as a new
+binary. The **hot plane** — the ST program and tag values — can change live,
+the way you online-edit a traditional PLC. Because the program is data on a
+VM, a warm swap carries retained state (PID integrals, timers, counters)
+across by name and type; a failed compile leaves the running program
+untouched, so a typo can never fault the controller.
+
+Enable it per controller (off by default — pushing logic is code execution
+on a control system):
+
+```go
+srv := server.New(rt, server.Options{OnlineEdits: true})
+```
+
+Then from VS Code: **Download Program to Controller** warm-swaps your open
+program, **Diff Program with Controller** shows running-vs-workspace, and a
+status-bar indicator flags when the controller runs something other than the
+committed file. Edits are ephemeral by design — a restart reverts to the
+program the binary embeds, so **committing the ST to git is the only way an
+edit becomes permanent**. The rule of thumb falls out of the two planes:
+logic you want to tune online, write in ST; infrastructure, write in Go.
+
+Pulling a field edit back to git closes the loop. **Pull Program from
+Controller** (VS Code) or `nautilus pull --host <controller>` writes the
+running program back into your program file — the inverse of download — so
+you review it with `git diff` and commit. Only the program file is rewritten;
+generated type files are never touched. `nautilus pull --check` reports drift
+and exits non-zero, so CI can fail a build when a controller has un-pulled
+edits. Composition is a single definition shared by the runtime, the language
+server, download, and pull, so a program round-trips losslessly.
+
+**Working against a remote controller.** All of this — live values, online
+edits, pull — works over the network, not just against a local process. A
+scaffolded controller binds loopback by default; set `NAUTILUS_ADDR=0.0.0.0:8080`
+to expose the tag API to other machines, and point the editor at it with the
+`nautilus.runtimeUrl` setting (`nautilus pull` takes `--host`). Exposing the
+API on the network also exposes its write surface, so set `NAUTILUS_TOKEN` on
+the controller and the matching `nautilus.token` in the editor — reads and
+`nautilus pull` stay open, but tag writes and online edits then require the
+token.
+
+### Publishing to MQTT (Sparkplug B)
+
+Expose a controller's tags to a Sparkplug host (Ignition, any Sparkplug-aware
+SCADA) with the `sparkplug` package. The runtime is the edge node; each
+`io.Driver` becomes a device whose birth/death follows its link:
+
+```go
+node, _ := sparkplug.New(rt, sparkplug.Config{
+    BrokerURL: "tcp://broker:1883", GroupID: "Plant", EdgeNode: "Line1",
+    BdSeqFile: "/var/lib/nautilus/line1.bdseq",
+},
+    // Publish classes are report-by-exception groups, like scan classes:
+    sparkplug.WithDefaultRBE(sparkplug.RBE{Deadband: 0.5, MaxInterval: 30 * time.Second}),
+    sparkplug.WithPublishClass("fast", sparkplug.RBE{Deadband: 0.1, MaxInterval: 5 * time.Second}),
+    sparkplug.WithMetricClass("fast", "PIT_*"),
+    // The EtherNet/IP driver's tags become a device; DBIRTH/DDEATH track its health.
+    sparkplug.WithDevice(sparkplug.Device{
+        ID: "plc1", Tags: driver.InputNames(),
+        Health: func() bool { return driver.Health().Connected },
+    }),
+)
+node.Start(ctx)
+```
+
+Types map faithfully (BOOL→Boolean, integer→Int64, REAL→Double, UDT→Template),
+a SCADA host can write tags back via NCMD, and `Node Control/Rebirth` is
+honored. The node passes the **Sparkplug TCK edge-node profile** — CI runs the
+`joyautomation/sparkplug-tck-go` harness against a live node on every push. MQTT
+and protobuf live only in this package; the runtime core stays stdlib-only.
+
 ## Status
 
 Early. This is the extracted, generalized core of a working demo
 ([mini-scada](https://github.com/joyautomation)). What's here now:
 
 - ✅ `lang/st` + `lang/ir` — the Structured Text VM (pure stdlib, tested)
-- ✅ `runtime` — scan loop, tag bus, program host + hot-swap
+- ✅ `lang/stgen` — build ST type declarations functionally in Go and render
+  them to source (`stgen.Struct("Motor", stgen.Field("Speed", stgen.REAL), …)`),
+  for generating UDTs from a schema; validates output by compiling it. This is
+  the codegen path — the compiler stays the single source of truth
+- ✅ `runtime` — scan loop, tag bus, program host + hot-swap, and PLC-style
+  **online edits**: warm-swap the ST program while it runs, carrying retained
+  state (PID integrals, timers, counters) across by name and type, with
+  one-step rollback
 - ✅ `io` — the Driver seam + an in-memory driver
-- ✅ `server` — tag API: JSON snapshot, SSE stream, tag writes (HMI + editor)
+- ✅ `sparkplug` — MQTT **Sparkplug B edge node**: publishes the tag store to a
+  broker (the runtime is the edge node; each io.Driver is a device whose
+  DBIRTH/DDEATH tracks its connection health), faithful datatypes, UDTs as
+  templates, NCMD writeback, and **publish classes** with report-by-exception
+  (deadband + min/max interval), mirroring scan classes. Passes the
+  joyautomation/sparkplug-tck-go edge-node conformance profile in CI
+- ✅ `eip` — EtherNet/IP driver for ControlLogix/CompactLogix: pure-Go (no
+  cgo) CIP client with connected messaging and batched reads, tag-list + UDT
+  template upload, `nautilus eip import` codegen (ST TYPE block + Go tag
+  manifest), write-on-change outputs, and a Logix controller emulator
+  (`eip/logixserver`) for hermetic integration tests
+- ✅ `server` — tag API: JSON snapshot, SSE stream, tag writes (HMI + editor),
+  and a gated program API for online edits (`GET/PUT /api/program`, rollback)
+- ✅ `tools/vscode-iec/` online edits — Download Program to Controller, diff
+  running-vs-workspace, rollback, and a sync-status indicator
 - ✅ `cmd/nautilus` — CLI: interactive project scaffold, headless ST compile
   check for CI, and the ST language server
 - ✅ `tools/vscode-iec/` — VS Code extension: syntax, compile diagnostics,

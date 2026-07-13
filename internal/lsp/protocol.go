@@ -103,6 +103,7 @@ type MarkupContent struct {
 // CompletionItem kinds (the subset used).
 const (
 	CompletionKindFunction = 3
+	CompletionKindField    = 5 // used for UDT/FB members after a dot
 	CompletionKindVariable = 6
 	CompletionKindClass    = 7 // used for function blocks
 	CompletionKindKeyword  = 14

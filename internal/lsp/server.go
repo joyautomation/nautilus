@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
+	"path/filepath"
 	"strings"
+
+	"github.com/joyautomation/nautilus/internal/stproject"
 )
 
 // Version is stamped into serverInfo so `nautilus lsp` and the extension
@@ -60,7 +64,7 @@ func (s *Server) dispatch(m *message) {
 				TextDocumentSync:   1, // Full: client resends the whole doc per change
 				HoverProvider:      true,
 				DefinitionProvider: true,
-				CompletionProvider: &CompletionOpts{},
+				CompletionProvider: &CompletionOpts{TriggerCharacters: []string{"."}},
 			},
 			ServerInfo: ServerInfo{Name: "nautilus-st-lsp", Version: Version},
 		})
@@ -108,13 +112,53 @@ func unmarshal(raw json.RawMessage, v any) bool {
 	return json.Unmarshal(raw, v) == nil
 }
 
-// setDocument stores new text, re-analyzes, and pushes diagnostics.
+// setDocument stores new text, re-analyzes, and pushes diagnostics. Sibling
+// library files (TYPE / FB / FUNCTION-only .st in the same directory) join
+// the compile as a prelude so cross-file types resolve — unsaved buffers of
+// those siblings win over their on-disk content.
 func (s *Server) setDocument(uri, text string) {
-	doc := &document{text: text, an: analyze(text)}
+	var prelude string
+	var preludeLines int
+	if path, ok := uriToPath(uri); ok {
+		overrides := map[string]string{}
+		for otherURI, otherDoc := range s.docs {
+			if otherURI == uri {
+				continue
+			}
+			if p, ok := uriToPath(otherURI); ok {
+				overrides[p] = otherDoc.text
+			}
+		}
+		prelude, preludeLines = stproject.Prelude(path, overrides)
+	}
+	an := analyze
+	if strings.HasSuffix(strings.ToLower(uri), ".fbd") {
+		an = analyzeFBD
+	}
+	doc := &document{text: text, an: an(text, prelude, preludeLines)}
 	s.docs[uri] = doc
 	s.w.notify("textDocument/publishDiagnostics", PublishDiagnosticsParams{
 		URI: uri, Diagnostics: nonNil(doc.an.Diags),
 	})
+}
+
+// uriToPath converts a file:// URI to a filesystem path. Non-file schemes
+// (untitled:, vscode-vfs:, ...) report ok=false — those documents compile
+// without a project prelude.
+func uriToPath(uri string) (string, bool) {
+	if !strings.HasPrefix(uri, "file://") {
+		return "", false
+	}
+	u, err := url.Parse(uri)
+	if err != nil {
+		return "", false
+	}
+	p := u.Path
+	// Windows URIs arrive as file:///C:/dir/file.st.
+	if len(p) >= 3 && p[0] == '/' && p[2] == ':' {
+		p = p[1:]
+	}
+	return filepath.FromSlash(p), true
 }
 
 // nonNil keeps empty diagnostic lists serializing as [] not null.
@@ -187,6 +231,15 @@ func (s *Server) handleHover(m *message) {
 	}
 	sym := doc.an.lookup(word, pos.Line+1)
 	if sym == nil {
+		// Not a declared symbol — but it may be a type name from a project
+		// library file (e.g. hovering "Analog_Input" in a declaration).
+		if def, ok := doc.an.typeExpansion(word); ok {
+			s.w.respond(m.ID, Hover{
+				Contents: MarkupContent{Kind: "markdown", Value: "```iec-st\nTYPE " + def + "\n```"},
+				Range:    &wr,
+			})
+			return
+		}
 		s.w.respond(m.ID, nil)
 		return
 	}
@@ -197,11 +250,22 @@ func (s *Server) handleHover(m *message) {
 	case "FUNCTION":
 		fmt.Fprintf(&b, "```iec-st\nFUNCTION %s : %s\n```", sym.Name, sym.Datatype)
 	case "TYPE":
-		fmt.Fprintf(&b, "```iec-st\nTYPE %s : %s\n```", sym.Name, sym.Datatype)
+		// Show the full definition, not just the name.
+		if def, ok := doc.an.typeExpansion(sym.Name); ok {
+			fmt.Fprintf(&b, "```iec-st\nTYPE %s\n```", def)
+		} else {
+			fmt.Fprintf(&b, "```iec-st\nTYPE %s : %s\n```", sym.Name, sym.Datatype)
+		}
 	default:
 		fmt.Fprintf(&b, "```iec-st\n%s : %s\n```\n\n%s", sym.Name, sym.Datatype, sym.BlockKind)
 		if sym.Container != "" {
 			fmt.Fprintf(&b, " — %s", sym.Container)
+		}
+		// A variable of a UDT type gets the type's structure expanded
+		// beneath, TypeScript-style — including types declared in sibling
+		// library files.
+		if def, ok := doc.an.typeExpansion(sym.Datatype); ok {
+			fmt.Fprintf(&b, "\n\n```iec-st\nTYPE %s\n```", def)
 		}
 	}
 	s.w.respond(m.ID, Hover{
@@ -213,6 +277,18 @@ func (s *Server) handleHover(m *message) {
 func (s *Server) handleCompletion(m *message) {
 	doc, _, _, _, pos, ok := s.positional(m)
 	if !ok {
+		return
+	}
+	// After a dot, offer the members of the base expression's type —
+	// "PIT_001.| " lists Analog_Input's members, chains and array indexing
+	// included ("Plt[3].Header.|"). Nothing else is meaningful there.
+	line := lineText(doc.text, pos.Line+1)
+	if base, path, isMember := memberContext(line, pos.Character); isMember {
+		var items []CompletionItem
+		if t, ok := doc.an.resolveChain(base, path, pos.Line+1); ok {
+			items = doc.an.memberCompletions(t)
+		}
+		s.w.respond(m.ID, items)
 		return
 	}
 	container := doc.an.containerAt(pos.Line + 1)

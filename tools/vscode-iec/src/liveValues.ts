@@ -1,5 +1,5 @@
-// Inline live tag values: decorate identifiers in .st editors with the
-// current value from a running nautilus controller.
+// Inline live tag values: decorate identifiers in .st and .fbd editors with
+// the current value from a running nautilus controller.
 //
 // Data path: the nautilus `server` package broadcasts tag frames over SSE
 // (GET <runtimeUrl>/api/stream, `data: {"ts":..,"scans":..,"tags":{...}}`).
@@ -12,19 +12,39 @@
 import * as http from "http";
 import * as https from "https";
 import * as vscode from "vscode";
-import { formatValue, scanIdentifiers } from "./scan";
+import { formatValue, formatValueHover, scanIdentifiers } from "./scan";
 
-type Frame = { ts: number; scans: number; tags: Record<string, unknown> };
+type Frame = {
+  ts: number;
+  scans: number;
+  tags: Record<string, unknown>;
+  // Retained program locals (a PI integral, latches, FB instances with
+  // their pins) — the watch inside the POU, streamed alongside the tags.
+  locals?: Record<string, unknown>;
+};
+
+/** Both IEC languages get live values — the identifier scanner is syntax-
+ * agnostic and FBD netlists reference the same runtime tags. */
+function isIecDoc(doc: vscode.TextDocument): boolean {
+  return doc.languageId === "iec-st" || doc.languageId === "iec-fbd";
+}
 
 /** A frame is "fresh" if it arrived within this window; otherwise chips gray out. */
 const FRESHNESS_MS = 3000;
 const RECONNECT_MS = 2000;
 const RENDER_THROTTLE_MS = 150;
 
+/** A frame fanned out to non-text consumers (the FBD diagram webviews). */
+export type LiveFrameListener = (frame: {
+  enabled: boolean;
+  fresh: boolean;
+  values: Record<string, unknown>;
+}) => void;
+
 export class LiveValues implements vscode.Disposable {
   private enabled: boolean;
   private values = new Map<string, unknown>(); // lowercased tag name → value
-  private casing = new Map<string, string>(); // lowercased → declared casing
+  private listeners = new Set<LiveFrameListener>();
   private lastFrameMs = 0;
   private req: http.ClientRequest | undefined;
   private reconnectTimer: NodeJS.Timeout | undefined;
@@ -54,7 +74,7 @@ export class LiveValues implements vscode.Disposable {
     this.disposables.push(
       vscode.window.onDidChangeVisibleTextEditors(() => this.onEditorsChanged()),
       vscode.workspace.onDidChangeTextDocument((e) => {
-        if (e.document.languageId === "iec-st") this.scheduleRender();
+        if (isIecDoc(e.document)) this.scheduleRender();
       })
     );
     this.onEditorsChanged();
@@ -96,14 +116,35 @@ export class LiveValues implements vscode.Disposable {
   }
 
   private stEditors(): vscode.TextEditor[] {
-    return vscode.window.visibleTextEditors.filter(
-      (e) => e.document.languageId === "iec-st"
-    );
+    return vscode.window.visibleTextEditors.filter((e) => isIecDoc(e.document));
+  }
+
+  /** The diagram webviews consume frames too: while any are open, keep the
+   * stream alive even with no text editor visible, and push each frame (and
+   * enabled-state changes) to them. */
+  addConsumer(listener: LiveFrameListener): vscode.Disposable {
+    this.listeners.add(listener);
+    this.onEditorsChanged();
+    this.notify(); // current state immediately
+    return new vscode.Disposable(() => {
+      this.listeners.delete(listener);
+      this.onEditorsChanged();
+    });
+  }
+
+  private notify(): void {
+    if (this.listeners.size === 0) return;
+    const frame = {
+      enabled: this.enabled,
+      fresh: this.fresh(),
+      values: Object.fromEntries(this.values),
+    };
+    for (const l of this.listeners) l(frame);
   }
 
   /** Connect only while enabled and an ST editor is visible. */
   private onEditorsChanged(): void {
-    const wanted = this.enabled && this.stEditors().length > 0;
+    const wanted = this.enabled && (this.stEditors().length > 0 || this.listeners.size > 0);
     if (wanted && !this.req) this.connect();
     if (!wanted) this.disconnect();
     this.updateStatus();
@@ -167,10 +208,13 @@ export class LiveValues implements vscode.Disposable {
       return;
     }
     this.values.clear();
-    this.casing.clear();
+    // Locals first so a tag of the same name wins (globals shadow locals in
+    // the merged watch — the rare collision resolves to the bound value).
+    for (const [name, value] of Object.entries(frame.locals ?? {})) {
+      this.values.set(name.toLowerCase(), value);
+    }
     for (const [name, value] of Object.entries(frame.tags ?? {})) {
       this.values.set(name.toLowerCase(), value);
-      this.casing.set(name.toLowerCase(), name);
     }
     const wasStale = !this.fresh();
     this.lastFrameMs = Date.now();
@@ -213,22 +257,29 @@ export class LiveValues implements vscode.Disposable {
       const text = editor.document.getText();
       for (const site of scanIdentifiers(text, this.values)) {
         const pos = editor.document.positionAt(site.end);
-        const value = this.values.get(site.lowerName);
+        // site.value is resolved down the accessor path — a member reference
+        // (RTU.VALUE) shows the child value, not the parent struct.
+        const hover = new vscode.MarkdownString();
+        hover.appendMarkdown(`**${site.path}** — live value from ${this.runtimeUrl()}\n`);
+        hover.appendCodeblock(formatValueHover(site.value), "");
         decos.push({
           range: new vscode.Range(pos, pos),
           renderOptions: {
-            after: { contentText: formatValue(value) },
+            after: { contentText: formatValue(site.value) },
           },
-          hoverMessage: `${this.casing.get(site.lowerName) ?? site.lowerName} — live value from ${this.runtimeUrl()}`,
+          hoverMessage: hover,
         });
       }
       editor.setDecorations(fresh ? this.staleDeco : this.freshDeco, []);
       editor.setDecorations(fresh ? this.freshDeco : this.staleDeco, decos);
     }
+    this.notify();
   }
 
   private updateStatus(): void {
-    if (this.stEditors().length === 0) {
+    // Visible while anything shows live values — a text editor OR a diagram
+    // webview (the diagram's toolbar toggle drives the same command).
+    if (this.stEditors().length === 0 && this.listeners.size === 0) {
       this.status.hide();
       return;
     }

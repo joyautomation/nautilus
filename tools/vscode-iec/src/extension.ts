@@ -17,6 +17,8 @@ import {
   ServerOptions,
 } from "vscode-languageclient/node";
 import { LiveValues } from "./liveValues";
+import { OnlineEdit } from "./onlineEdit";
+import { FbdEditorProvider, FbdPreview } from "./fbdPreview";
 
 let client: LanguageClient | undefined;
 let live: LiveValues | undefined;
@@ -29,10 +31,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   live = new LiveValues();
   context.subscriptions.push(live);
 
+  const online = new OnlineEdit();
+  context.subscriptions.push(online);
+
+  const fbd = new FbdPreview(context, live);
+  context.subscriptions.push(fbd);
+  // "Open With → FBD Diagram": the diagram as a real editor over the .fbd
+  // document (text remains the default editor).
+  context.subscriptions.push(new FbdEditorProvider(context, live).register());
+
   context.subscriptions.push(
     vscode.commands.registerCommand("nautilus.liveValues.toggle", () =>
       live?.toggle()
     ),
+    vscode.commands.registerCommand("nautilus.fbd.preview", () => fbd.preview()),
+    vscode.commands.registerCommand("nautilus.fbd.diff", () => fbd.diff()),
+    vscode.commands.registerCommand("nautilus.fbd.diffController", () => fbd.diffController()),
+    vscode.commands.registerCommand("nautilus.program.download", () => online.download()),
+    vscode.commands.registerCommand("nautilus.program.diff", () => online.diff()),
+    vscode.commands.registerCommand("nautilus.program.rollback", () => online.rollback()),
+    vscode.commands.registerCommand("nautilus.program.pull", () => online.pull()),
     vscode.commands.registerCommand("nautilus.restartLanguageServer", async () => {
       await client?.stop().catch(() => undefined);
       client = undefined;
@@ -58,7 +76,7 @@ async function startLanguageClient(context: vscode.ExtensionContext): Promise<vo
     args: ["lsp"],
   };
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [{ language: "iec-st" }],
+    documentSelector: [{ language: "iec-st" }, { language: "iec-fbd" }],
   };
 
   client = new LanguageClient(

@@ -6,7 +6,11 @@ package io
 
 import "sync"
 
-// Values is a set of tag values keyed by name (float64 or bool).
+// Values is a set of tag values keyed by name. Simple drivers exchange plain
+// scalars (float64, bool, int64, string); typed field-bus drivers (EtherNet/IP
+// UDTs, arrays) exchange ir.Value so field names and integer widths survive
+// the crossing. The runtime accepts both on input and hands compound tags to
+// WriteOutputs as ir.Value.
 type Values map[string]any
 
 // Driver is a field device. ReadInputs is called before each scan;

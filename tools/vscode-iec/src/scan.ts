@@ -4,14 +4,20 @@
 //
 // Ported from mini-scada's CodeMirror inline-values scanner.
 
-export type Site = { lowerName: string; end: number };
+// A resolved reference site: the accessor path as written (for the hover
+// label), the offset just past it (where the chip attaches), and the value
+// that path resolves to — the referenced child for a member/index access
+// (RTU.VALUE → the atomic), not the whole struct.
+export type Site = { path: string; end: number; value: unknown };
+
+const NOT_FOUND = Symbol("not-found");
 
 /**
- * Find identifiers whose lowercased name is a key of `values`, skipping
- * `//` line comments, `(* *)` block comments, and 'string' / "string"
- * literals. Returns the offset just past each identifier — where the
- * value chip attaches. Matching is case-insensitive (IEC identifiers are
- * case-insensitive; the runtime keys tags by declared casing).
+ * Find references to live tags — a tag name optionally followed by member
+ * (`.Field`) and index (`[3]`, `[2,3]`) accessors — resolving each to the
+ * value it names. Skips `//` and `(* *)` comments and string literals.
+ * Base-tag matching is case-insensitive (IEC identifiers are); member keys
+ * match case-insensitively against the struct's fields.
  */
 export function scanIdentifiers(
   text: string,
@@ -50,12 +56,90 @@ export function scanIdentifiers(
       i++;
       while (i < n && isIdentPart(text[i])) i++;
       const lower = text.slice(start, i).toLowerCase();
-      if (values.has(lower)) out.push({ lowerName: lower, end: i });
+      if (!values.has(lower)) continue;
+
+      // Walk member/index accessors, resolving into the value. Stop at the
+      // first accessor that can't be resolved (or a non-accessor char), and
+      // report the deepest resolved value at that point.
+      let value = values.get(lower);
+      let end = i;
+      let j = i;
+      while (j < n) {
+        if (text[j] === ".") {
+          let k = j + 1;
+          if (!(k < n && isIdentStart(text[k]))) break;
+          const ms = k;
+          k++;
+          while (k < n && isIdentPart(text[k])) k++;
+          const resolved = resolveMember(value, text.slice(ms, k));
+          if (resolved === NOT_FOUND) break;
+          value = resolved;
+          j = k;
+          end = k;
+        } else if (text[j] === "[") {
+          const parsed = parseIndex(text, j);
+          if (!parsed) break;
+          let v: unknown = value;
+          for (const idx of parsed.indices) {
+            const r = resolveIndex(v, idx);
+            if (r === NOT_FOUND) {
+              v = NOT_FOUND;
+              break;
+            }
+            v = r;
+          }
+          if (v === NOT_FOUND) break;
+          value = v;
+          j = parsed.end;
+          end = parsed.end;
+        } else {
+          break;
+        }
+      }
+      out.push({ path: text.slice(start, end), end, value });
+      i = end;
       continue;
     }
     i++;
   }
   return out;
+}
+
+/** resolveMember reads a struct field by name, case-insensitively. */
+function resolveMember(value: unknown, member: string): unknown | typeof NOT_FOUND {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return NOT_FOUND;
+  const obj = value as Record<string, unknown>;
+  if (member in obj) return obj[member];
+  const lower = member.toLowerCase();
+  for (const key of Object.keys(obj)) {
+    if (key.toLowerCase() === lower) return obj[key];
+  }
+  return NOT_FOUND;
+}
+
+/** resolveIndex reads an array element. */
+function resolveIndex(value: unknown, idx: number): unknown | typeof NOT_FOUND {
+  if (!Array.isArray(value) || idx < 0 || idx >= value.length) return NOT_FOUND;
+  return value[idx];
+}
+
+/** parseIndex reads a `[N]` or `[N,M]` subscript starting at `[`. */
+function parseIndex(text: string, at: number): { indices: number[]; end: number } | undefined {
+  let k = at + 1;
+  const indices: number[] = [];
+  for (;;) {
+    const start = k;
+    while (k < text.length && text[k] >= "0" && text[k] <= "9") k++;
+    if (k === start) return undefined;
+    indices.push(parseInt(text.slice(start, k), 10));
+    if (text[k] === ",") {
+      k++;
+      continue;
+    }
+    break;
+  }
+  if (text[k] !== "]") return undefined;
+  return { indices, end: k + 1 };
 }
 
 function isIdentStart(c: string): boolean {
@@ -66,7 +150,11 @@ function isIdentPart(c: string): boolean {
   return isIdentStart(c) || (c >= "0" && c <= "9");
 }
 
-/** Compact value rendering: 59.887482 → 59.887, booleans → TRUE/FALSE. */
+/**
+ * Compact value rendering: 59.887482 → 59.887, booleans → TRUE/FALSE.
+ * Compound values (UDT structs, arrays) render as a quiet size hint —
+ * `{…}` / `[4]` — the full breakdown lives in the hover (formatValueHover).
+ */
 export function formatValue(v: unknown): string {
   if (v === null || v === undefined) return "—";
   if (typeof v === "number") {
@@ -80,10 +168,60 @@ export function formatValue(v: unknown): string {
     const s = v.length > 32 ? v.slice(0, 29) + "…" : v;
     return JSON.stringify(s);
   }
-  try {
-    const s = JSON.stringify(v);
-    return s.length > 32 ? s.slice(0, 29) + "…" : s;
-  } catch {
-    return String(v);
+  if (Array.isArray(v)) return `[${v.length}]`;
+  if (typeof v === "object") return "{…}";
+  return String(v);
+}
+
+/** Hover rendering caps so a 173-member AOI doesn't flood the tooltip. */
+const HOVER_MAX_LINES = 40;
+const HOVER_MAX_ELEMS = 10;
+
+/**
+ * Multi-line breakdown of a value for the hover, in the spirit of how
+ * TypeScript expands a type on hover:
+ *
+ *	{
+ *	  AI: -4.000
+ *	  hhalm_timer: {
+ *	    PRE: 1200000
+ *	    ...
+ *	  }
+ *	}
+ *
+ * Scalars pass through formatValue; long arrays elide after HOVER_MAX_ELEMS
+ * elements and the whole rendering elides after HOVER_MAX_LINES lines.
+ */
+export function formatValueHover(v: unknown): string {
+  const lines: string[] = [];
+  build(v, "", "", lines);
+  if (lines.length > HOVER_MAX_LINES) {
+    const kept = lines.slice(0, HOVER_MAX_LINES);
+    kept.push(`… (${lines.length - HOVER_MAX_LINES} more lines)`);
+    return kept.join("\n");
   }
+  return lines.join("\n");
+}
+
+function build(v: unknown, label: string, indent: string, out: string[]): void {
+  const prefix = label === "" ? indent : `${indent}${label}: `;
+  if (Array.isArray(v)) {
+    out.push(prefix + "[");
+    const n = Math.min(v.length, HOVER_MAX_ELEMS);
+    for (let i = 0; i < n; i++) {
+      build(v[i], `[${i}]`, indent + "  ", out);
+    }
+    if (v.length > n) out.push(`${indent}  … (${v.length - n} more elements)`);
+    out.push(indent + "]");
+    return;
+  }
+  if (v !== null && typeof v === "object") {
+    out.push(prefix + "{");
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      build(val, k, indent + "  ", out);
+    }
+    out.push(indent + "}");
+    return;
+  }
+  out.push(prefix + formatValue(v));
 }

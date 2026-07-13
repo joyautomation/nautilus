@@ -39,7 +39,7 @@ END_PROGRAM
 `
 
 func TestAnalyzeGoodProgram(t *testing.T) {
-	a := analyze(goodSrc)
+	a := analyze(goodSrc, "", 0)
 	if len(a.Diags) != 0 {
 		t.Fatalf("expected no diagnostics, got %v", a.Diags)
 	}
@@ -67,7 +67,7 @@ func TestAnalyzeGoodProgram(t *testing.T) {
 
 func TestAnalyzeUndeclaredIdentifier(t *testing.T) {
 	src := "PROGRAM P\nVAR\n  x : REAL;\nEND_VAR\nx := y + 1.0;\nEND_PROGRAM\n"
-	a := analyze(src)
+	a := analyze(src, "", 0)
 	if len(a.Diags) != 1 {
 		t.Fatalf("expected 1 diagnostic, got %v", a.Diags)
 	}
@@ -83,9 +83,49 @@ func TestAnalyzeUndeclaredIdentifier(t *testing.T) {
 	}
 }
 
+func TestAnalyzeFBDMapsDiagnosticsToSource(t *testing.T) {
+	// "bogus" is undeclared; the diagnostic must land on the .fbd line that
+	// reads it (line 6, 0-based 5), not on the transpiled ST line.
+	src := `PROGRAM Latch
+VAR_EXTERNAL
+  Start : BOOL; Run : BOOL;
+END_VAR
+FBD
+  Run := AND(Start, bogus)
+END_FBD
+END_PROGRAM
+`
+	a := analyzeFBD(src, "", 0)
+	if len(a.Diags) != 1 {
+		t.Fatalf("expected 1 diagnostic, got %v", a.Diags)
+	}
+	d := a.Diags[0]
+	if !strings.Contains(d.Message, "undeclared identifier") {
+		t.Errorf("message = %q", d.Message)
+	}
+	if d.Range.Start.Line != 5 {
+		t.Errorf("diagnostic on 0-based line %d, want 5 (the netlist statement)", d.Range.Start.Line)
+	}
+}
+
+func TestAnalyzeFBDParseError(t *testing.T) {
+	src := "PROGRAM P\nFBD\n  x := \nEND_FBD\nEND_PROGRAM\n" // empty RHS
+	a := analyzeFBD(src, "", 0)
+	if len(a.Diags) != 1 {
+		t.Fatalf("expected 1 diagnostic, got %v", a.Diags)
+	}
+	d := a.Diags[0]
+	if d.Source != "nautilus-fbd" || d.Severity != SeverityError {
+		t.Errorf("source/severity = %q/%d", d.Source, d.Severity)
+	}
+	if d.Range.Start.Line != 2 { // 0-based: the "x :=" line
+		t.Errorf("diagnostic on 0-based line %d, want 2", d.Range.Start.Line)
+	}
+}
+
 func TestAnalyzeParseError(t *testing.T) {
 	src := "PROGRAM P\nVAR\n  x : REAL;\nEND_VAR\nx := ;\nEND_PROGRAM\n" // empty RHS
-	a := analyze(src)
+	a := analyze(src, "", 0)
 	if len(a.Diags) != 1 {
 		t.Fatalf("expected 1 diagnostic, got %v", a.Diags)
 	}
@@ -111,7 +151,7 @@ END_VAR
 n := 1.0;
 END_PROGRAM
 `
-	a := analyze(src)
+	a := analyze(src, "", 0)
 	inFB := a.lookup("n", 5)
 	if inFB == nil || inFB.Container != "FB1" || inFB.Datatype != "BOOL" {
 		t.Fatalf("FB-body lookup = %+v", inFB)
@@ -173,4 +213,135 @@ func TestStaticCompletionsIncludeBuiltins(t *testing.T) {
 	if realKind != CompletionKindStruct {
 		t.Errorf("REAL kind = %d, want type (%d)", realKind, CompletionKindStruct)
 	}
+}
+
+func TestAnalyzeWithPreludeResolvesCrossFileTypes(t *testing.T) {
+	prelude := "TYPE\n  Header_Type : STRUCT\n    Valid : BOOL;\n  END_STRUCT;\nEND_TYPE\n"
+	src := "PROGRAM Main\nVAR_EXTERNAL\n  H : Header_Type;\n  Ok : BOOL;\nEND_VAR\nOk := H.Valid;\nEND_PROGRAM\n"
+
+	// Without the prelude the type is unknown; with it the program is clean.
+	if a := analyze(src, "", 0); len(a.Diags) == 0 {
+		t.Fatalf("expected unknown-type diagnostic without prelude")
+	}
+	if a := analyze(src, prelude, strings.Count(prelude, "\n")); len(a.Diags) != 0 {
+		t.Fatalf("unexpected diagnostics with prelude: %+v", a.Diags)
+	}
+}
+
+func TestAnalyzeWithPreludeRemapsPositions(t *testing.T) {
+	prelude := "TYPE\n  Header_Type : STRUCT\n    Valid : BOOL;\n  END_STRUCT;\nEND_TYPE\n"
+	// Line 6 references an undeclared identifier.
+	src := "PROGRAM Main\nVAR_EXTERNAL\n  H : Header_Type;\n  Ok : BOOL;\nEND_VAR\nOk := Nope;\nEND_PROGRAM\n"
+	a := analyze(src, prelude, strings.Count(prelude, "\n"))
+	if len(a.Diags) != 1 {
+		t.Fatalf("diags = %+v, want 1", a.Diags)
+	}
+	if got := a.Diags[0].Range.Start.Line; got != 5 { // 0-based line of "Ok := Nope;"
+		t.Fatalf("diagnostic on 0-based line %d, want 5 (position not remapped?)", got)
+	}
+}
+
+func TestTypeExpansionForHover(t *testing.T) {
+	prelude := "TYPE\n  Header_Type : STRUCT\n    Displacement : REAL;\n    Valid : BOOL;\n  END_STRUCT;\nEND_TYPE\n"
+	src := "PROGRAM Main\nVAR_EXTERNAL\n  H : Header_Type;\n  Arr : ARRAY [0..3] OF Header_Type;\nEND_VAR\nEND_PROGRAM\n"
+	a := analyze(src, prelude, strings.Count(prelude, "\n"))
+
+	def, ok := a.typeExpansion("Header_Type")
+	if !ok {
+		t.Fatalf("prelude type not indexed; have %v", a.types)
+	}
+	for _, want := range []string{"Header_Type : STRUCT", "Displacement : REAL;", "Valid : BOOL;", "END_STRUCT"} {
+		if !strings.Contains(def, want) {
+			t.Errorf("expansion missing %q:\n%s", want, def)
+		}
+	}
+	// Array declarations expand their element type; case-insensitive.
+	if _, ok := a.typeExpansion("ARRAY [0..3] OF header_type"); !ok {
+		t.Errorf("array-of-UDT datatype did not expand")
+	}
+	if _, ok := a.typeExpansion("REAL"); ok {
+		t.Errorf("elementary type should not expand")
+	}
+}
+
+func TestMemberContext(t *testing.T) {
+	cases := []struct {
+		line string
+		col  int
+		base string
+		path []string
+		ok   bool
+	}{
+		{"X := PIT_001.VAL", 17, "PIT_001", nil, true},
+		{"X := PIT_001.", 13, "PIT_001", nil, true},
+		{"X := Plt[3].Header.", 19, "Plt", []string{"Header"}, true},
+		{"X := A.B.C.", 11, "A", []string{"B", "C"}, true},
+		{"X := PIT_001", 12, "", nil, false},
+		{"X := 3.14", 9, "", nil, false},
+	}
+	for _, tc := range cases {
+		base, path, ok := memberContext(tc.line, tc.col)
+		if ok != tc.ok || base != tc.base {
+			t.Errorf("memberContext(%q,%d) = %q,%v,%v; want %q,%v,%v", tc.line, tc.col, base, path, ok, tc.base, tc.path, tc.ok)
+			continue
+		}
+		if len(path) != len(tc.path) {
+			t.Errorf("memberContext(%q,%d) path = %v, want %v", tc.line, tc.col, path, tc.path)
+		}
+	}
+}
+
+func TestMemberCompletionsThroughChain(t *testing.T) {
+	prelude := "TYPE\n  Header_Type : STRUCT\n    Displacement : REAL;\n    Valid : BOOL;\n  END_STRUCT;\n  Plt_Type : STRUCT\n    Header : Header_Type;\n    Count : DINT;\n  END_STRUCT;\nEND_TYPE\n"
+	src := "PROGRAM Main\nVAR_EXTERNAL\n  P : Plt_Type;\n  Arr : ARRAY [0..3] OF Plt_Type;\nEND_VAR\nVAR\n  T1 : TON;\nEND_VAR\nEND_PROGRAM\n"
+	a := analyze(src, prelude, strings.Count(prelude, "\n"))
+
+	// P. → Plt_Type members
+	typ, ok := a.resolveChain("P", nil, 6)
+	if !ok {
+		t.Fatalf("resolveChain(P) failed")
+	}
+	labels := labelsOf(a.memberCompletions(typ))
+	if !contains(labels, "Header") || !contains(labels, "Count") {
+		t.Errorf("P. completions = %v", labels)
+	}
+
+	// P.Header. → nested Header_Type members
+	typ, ok = a.resolveChain("P", []string{"Header"}, 6)
+	if !ok || !contains(labelsOf(a.memberCompletions(typ)), "Displacement") {
+		t.Errorf("P.Header. completions wrong (type %q)", typ)
+	}
+
+	// Arr (array of UDT) resolves through the element type; case-insensitive member.
+	typ, ok = a.resolveChain("Arr", []string{"header"}, 6)
+	if !ok || !contains(labelsOf(a.memberCompletions(typ)), "Valid") {
+		t.Errorf("Arr[i].header. completions wrong (type %q)", typ)
+	}
+
+	// Builtin FB instance: T1. → TON slots.
+	typ, ok = a.resolveChain("T1", nil, 6)
+	if !ok {
+		t.Fatalf("resolveChain(T1) failed")
+	}
+	labels = labelsOf(a.memberCompletions(typ))
+	if !contains(labels, "Q") || !contains(labels, "ET") {
+		t.Errorf("T1. completions = %v", labels)
+	}
+}
+
+func labelsOf(items []CompletionItem) []string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i] = it.Label
+	}
+	return out
+}
+
+func contains(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }

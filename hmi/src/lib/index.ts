@@ -12,6 +12,7 @@ export { default as StatusPill } from './components/StatusPill.svelte';
 export { default as Sparkline } from './components/Sparkline.svelte';
 export { default as Histogram } from './components/Histogram.svelte';
 export { default as NumberField } from './components/NumberField.svelte';
+export { default as ScanDiagnostics } from './components/ScanDiagnostics.svelte';
 export { default as ThemeSwitch } from './components/ThemeSwitch.svelte';
 export { default as MotionSwitch } from './components/MotionSwitch.svelte';
 
@@ -27,7 +28,14 @@ export type { Motion } from './motion.svelte.js';
 
 // Helpers & types
 export { tempColor } from './color.js';
-export type { TrendPoint, StatusKind } from './types.js';
+export type {
+	TrendPoint,
+	StatusKind,
+	ScanStats,
+	NautilusFrame,
+	TagMeta,
+	ControllerMeta
+} from './types.js';
 
 // Theme tokens live in ./theme.css — import it once in your app:
 //   import '@joyautomation/nautilus-hmi/theme.css';
