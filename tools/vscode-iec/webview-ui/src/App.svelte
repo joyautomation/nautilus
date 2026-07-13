@@ -22,7 +22,7 @@
 	import { mergeDiff } from './diff';
 	import { vscode, postOp } from './vscodeApi';
 	import { setRects, updateRect } from './diagState.svelte';
-	import { setLive } from './liveState.svelte';
+	import { live, setLive } from './liveState.svelte';
 
 	const nodeTypes = { fbd: FbdNode };
 	const edgeTypes = { fbd: FbdEdge };
@@ -277,6 +277,20 @@
 			<span class="selcount">{selectedCount} selected</span>
 		{/if}
 		{#if !diffing}
+			{#if live.seen}
+				<!-- same toggle as the text editor's status bar item -->
+				<button
+					class="livepill"
+					class:on={live.enabled && live.fresh}
+					class:offline={live.enabled && !live.fresh}
+					title={live.enabled
+						? live.fresh
+							? 'Streaming live values from the controller — click to disable'
+							: 'Live values enabled but no frames arriving — is the controller running? Click to disable'
+						: 'Live values are off — click to enable'}
+					onclick={() => vscode.postMessage({ type: 'toggleLive' })}
+				>{live.enabled ? (live.fresh ? '● live' : '◌ offline') : '○ live off'}</button>
+			{/if}
 			{#if hasPins}
 				<button title="Clear all pinned positions (back to full auto-layout)" onclick={() => postOp({ type: 'clearLayout' })}>auto layout</button>
 			{/if}
@@ -368,6 +382,18 @@
 	}
 	.bar button:hover {
 		background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.2));
+	}
+	.bar button.livepill {
+		border-radius: 999px;
+		color: var(--vscode-descriptionForeground, #8c8c8c);
+	}
+	.bar button.livepill.on {
+		color: var(--vscode-charts-green, #64d88a);
+		border-color: var(--vscode-charts-green, #64d88a);
+	}
+	.bar button.livepill.offline {
+		color: var(--vscode-editorWarning-foreground, #d7a021);
+		border-color: var(--vscode-editorWarning-foreground, #d7a021);
 	}
 	.legend {
 		display: inline-flex;

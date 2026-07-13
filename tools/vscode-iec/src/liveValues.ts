@@ -277,7 +277,9 @@ export class LiveValues implements vscode.Disposable {
   }
 
   private updateStatus(): void {
-    if (this.stEditors().length === 0) {
+    // Visible while anything shows live values — a text editor OR a diagram
+    // webview (the diagram's toolbar toggle drives the same command).
+    if (this.stEditors().length === 0 && this.listeners.size === 0) {
       this.status.hide();
       return;
     }

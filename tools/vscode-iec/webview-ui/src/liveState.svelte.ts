@@ -6,6 +6,9 @@
 // selections, and open inputs are never disturbed by a data update.
 
 export const live = $state({
+	// True once the extension has reported state — the toolbar pill stays
+	// hidden until then rather than claiming "off" before we know.
+	seen: false,
 	enabled: false,
 	fresh: false,
 	// Top-level keys are lowercased by the extension; struct members inside
@@ -14,6 +17,7 @@ export const live = $state({
 });
 
 export function setLive(frame: { enabled: boolean; fresh: boolean; values: Record<string, unknown> }): void {
+	live.seen = true;
 	live.enabled = frame.enabled;
 	live.fresh = frame.fresh;
 	live.values = frame.values;

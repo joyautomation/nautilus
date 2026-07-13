@@ -3,6 +3,21 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.4] - 2026-07-12
+
+### Added
+- **Live-values toggle in the diagram.** The diagram toolbar shows the
+  stream state as a pill — green "live", amber "offline" (enabled but no
+  frames), grey "live off" — and clicking it runs the same
+  `nautilus.liveValues.toggle` command as the status bar item. The status
+  bar item itself now stays visible while a diagram is open, not just a
+  text editor.
+
+### Fixed
+- 0.7.3 was packaged without its runtime dependencies
+  (`vscode-languageclient`), which crashed the whole extension on
+  activation.
+
 ## [0.7.3] - 2026-07-12
 
 ### Added

@@ -75,7 +75,7 @@ export type FbdEditOp = {
 /** Mirror of lang/fbd.TextEdit: 1-based, end-exclusive. */
 type FbdTextEdit = { line: number; col: number; endLine: number; endCol: number; newText: string };
 
-type WebviewMessage = { type: "edit"; op: FbdEditOp };
+type WebviewMessage = { type: "edit"; op: FbdEditOp } | { type: "toggleLive" };
 
 const DEBOUNCE_MS = 150;
 
@@ -183,6 +183,12 @@ function webviewOptions(extensionUri: vscode.Uri): vscode.WebviewOptions {
 let editQueue: Promise<void> = Promise.resolve();
 
 function handleWebviewMessage(doc: vscode.TextDocument, msg: WebviewMessage): void {
+  // The diagram toolbar's live pill drives the same command as the status
+  // bar item — one toggle, every surface.
+  if (msg.type === "toggleLive") {
+    void vscode.commands.executeCommand("nautilus.liveValues.toggle");
+    return;
+  }
   editQueue = editQueue.then(() => applyOpMessage(doc, msg)).catch(() => undefined);
 }
 
@@ -411,6 +417,10 @@ export class FbdPreview implements vscode.Disposable {
       this.diffing = false;
     });
     this.panel.webview.onDidReceiveMessage((msg: WebviewMessage) => {
+      if (msg.type === "toggleLive") {
+        void vscode.commands.executeCommand("nautilus.liveValues.toggle");
+        return;
+      }
       if (this.diffing || !this.docUri) return;
       const doc = vscode.workspace.textDocuments.find(
         (d) => d.uri.toString() === this.docUri?.toString()
