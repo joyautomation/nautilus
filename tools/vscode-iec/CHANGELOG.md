@@ -3,6 +3,34 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] - 2026-07-12
+
+### Added
+- **Comments in the diagram.** Full-line `//` comment runs render as
+  italic notes above the network they precede. Double-click edits (use
+  `\n` for multi-line; empty text deletes), Del deletes, and the "+ add"
+  palette inserts new ones.
+- **Delete variables.** Each row in the vars panel gets an × — the
+  declaration is removed even if still referenced (the references become
+  ordinary diagnostics that lead you to the fix).
+- **Copy & paste.** Ctrl+C captures the selected blocks/coils/instances,
+  Ctrl+V pastes copies with fresh `_copy` names; references between the
+  copied statements follow the renames (a copied seal-in latch stays a
+  self-consistent loop).
+- **Bare input/output references.** The palette can drop a lone variable
+  chip (dashed "ghost") onto the canvas — it lives in the `(* @layout *)`
+  block until you wire it, at which point it becomes real netlist text
+  (an output reference writes its coil statement on first connection).
+
+### Changed
+- **Edits are never blocked by semantics.** Validation only guards
+  parseability now: disconnecting a fixed-arity/min-arity pin or a coil
+  source leaves a `_` placeholder (position preserved, undeclared-`_`
+  diagnostic marks the open pin); deleting a wire or FB instance that is
+  still referenced is allowed — the dangling reads become diagnostics,
+  exactly as if you had typed it in text. Compilation/push to the runtime
+  remains the gate.
+
 ## [0.7.5] - 2026-07-12
 
 ### Added

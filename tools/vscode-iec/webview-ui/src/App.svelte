@@ -106,9 +106,10 @@
 				problems: n.line ? (diagsByLine.get(n.line) ?? []) : [],
 				editable,
 				requestInput,
-				onEdit: (a: { type: 'setLiteral' | 'rename' | 'declareVar'; node: string; value: string }) => {
+				onEdit: (a: { type: 'setLiteral' | 'rename' | 'declareVar' | 'setComment'; node: string; value: string }) => {
 					if (a.type === 'setLiteral') postOp({ type: 'setLiteral', node: a.node, value: a.value });
 					else if (a.type === 'rename') postOp({ type: 'rename', node: a.node, newName: a.value });
+					else if (a.type === 'setComment') postOp({ type: 'setComment', node: a.node, text: a.value });
 					// declareVar: node carries the variable NAME, value its type.
 					else postOp({ type: 'declareVar', newName: a.node, value: a.value, text: 'VAR_EXTERNAL' });
 				}
@@ -116,7 +117,13 @@
 			draggable: editable,
 			connectable: editable,
 			selectable: true,
-			deletable: editable && (n.id.startsWith('b:w.') || n.id.startsWith('c:') || n.id.startsWith('f:'))
+			deletable:
+					editable &&
+					(n.id.startsWith('b:w.') ||
+						n.id.startsWith('c:') ||
+						n.id.startsWith('f:') ||
+						n.id.startsWith('cm:') ||
+						n.id.startsWith('g:'))
 		}));
 		const srcWire = new Map(placed.map((n) => [n.id, !!n.wire]));
 		edges = modelEdges.map((e, i) => ({
@@ -267,6 +274,27 @@
 
 	function onselectionchange({ nodes: sel }: { nodes: Node[]; edges: Edge[] }) {
 		selectedCount = sel.length;
+		selectedIds = sel.map((n) => n.id).filter(Boolean);
+	}
+
+	// ── copy / paste ────────────────────────────────────────────────────────
+	// Ctrl+C captures the selection; Ctrl+V posts ONE duplicate op — Go
+	// copies the statements behind the ids with fresh names and keeps
+	// references between them consistent.
+	let selectedIds: string[] = [];
+	let clipboard: string[] = [];
+	function onkeydown(ev: KeyboardEvent) {
+		if (diffing || input) return;
+		const el = document.activeElement;
+		if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+		if (!(ev.ctrlKey || ev.metaKey)) return;
+		if (ev.key === 'c' && selectedIds.length) {
+			clipboard = [...selectedIds];
+			ev.preventDefault();
+		} else if (ev.key === 'v' && clipboard.length) {
+			postOp({ type: 'duplicate', nodes: clipboard });
+			ev.preventDefault();
+		}
 	}
 </script>
 
@@ -280,7 +308,7 @@
 				<span><i class="sw changed"></i>changed</span>
 			</span>
 		{:else if hint}
-			<span class="hint">double-click: edit & rename · drag pin→pin: wire (+ adds an input) · drag node: pin layout · Del: delete / disconnect</span>
+			<span class="hint">double-click: edit & rename · drag pin→pin: wire (+ adds an input) · drag node: pin layout · Del: delete / disconnect · Ctrl+C/V: copy & paste</span>
 		{/if}
 		<span class="spacer"></span>
 		{#if problemCount > 0 && !diffing}
@@ -352,7 +380,7 @@
 	{/if}
 </div>
 
-<svelte:window onclick={() => { paletteOpen = false; varsOpen = false; }} />
+<svelte:window onclick={() => { paletteOpen = false; varsOpen = false; }} {onkeydown} />
 
 <style>
 	.host {

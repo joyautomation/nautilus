@@ -54,6 +54,8 @@ type EditOp struct {
 	// Entries batches setLayout: a multi-node drag pins every moved node in
 	// ONE op — one text edit, no lost updates.
 	Entries []LayoutOpEntry `json:"entries,omitempty"`
+	// Nodes lists the selection for duplicate (copy/paste).
+	Nodes []string `json:"nodes,omitempty"`
 }
 
 // LayoutOpEntry is one node's pinned position in a batched setLayout.
@@ -92,6 +94,12 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		return b.opAddInput(op)
 	case "declareVar":
 		return b.opDeclareVar(op)
+	case "deleteVar":
+		return b.opDeleteVar(op)
+	case "setComment":
+		return b.opSetComment(op)
+	case "duplicate":
+		return b.opDuplicate(op)
 	}
 	return nil, fmt.Errorf("fbd edit: unknown op %q", op.Type)
 }
@@ -185,6 +193,10 @@ func (b *modelBuilder) opToggleNot(op EditOp) ([]TextEdit, error) {
 }
 
 func (b *modelBuilder) opRewire(op EditOp) ([]TextEdit, error) {
+	// Dropping onto a ghost output chip writes its first (real) coil.
+	if strings.HasPrefix(op.To, "g:out.") {
+		return b.wireGhostCoil(op)
+	}
 	e, err := b.findEdge(op)
 	if err != nil {
 		// Dropping a wire on a currently-unwired FB input pin ADDS the named
@@ -201,7 +213,8 @@ func (b *modelBuilder) opRewire(op EditOp) ([]TextEdit, error) {
 	if ref == e.Arg.Text {
 		return nil, nil
 	}
-	return []TextEdit{spanEdit(e.Arg, ref)}, nil
+	// A ghost source just became real text: its pin moves to the real chip id.
+	return append([]TextEdit{spanEdit(e.Arg, ref)}, b.ghostConsumed(op.Source)...), nil
 }
 
 // wireNewFBPin appends "PIN := ref" to an FB call for a pin that has no
@@ -228,8 +241,8 @@ func (b *modelBuilder) wireNewFBPin(op EditOp) ([]TextEdit, error) {
 	for _, n := range b.nl.nodes {
 		if n.isCall && n.inst == inst && len(n.args) > 0 {
 			l, c := n.args[len(n.args)-1].val.end()
-			return []TextEdit{{Line: l, Col: c, EndLine: l, EndCol: c,
-				NewText: ", " + op.ToPin + " := " + ref}}, nil
+			return append([]TextEdit{{Line: l, Col: c, EndLine: l, EndCol: c,
+				NewText: ", " + op.ToPin + " := " + ref}}, b.ghostConsumed(op.Source)...), nil
 		}
 	}
 	return nil, fmt.Errorf("fbd edit: %s has no call statement to extend", inst)
@@ -466,15 +479,8 @@ func (b *modelBuilder) opDelete(op EditOp) ([]TextEdit, error) {
 		if !ok {
 			return nil, fmt.Errorf("fbd edit: no wire named %q", name)
 		}
-		used := 0
-		b.eachExpr(func(e expr) {
-			if r, ok := e.(refExpr); ok && r.name == name {
-				used++
-			}
-		})
-		if used > 0 {
-			return nil, fmt.Errorf("fbd edit: wire %q feeds %d input(s) — rewire them first", name, used)
-		}
+		// References the wire still feeds become undeclared identifiers —
+		// allowed by design: the edit lands, diagnostics mark the holes.
 		return append([]TextEdit{b.deleteSpan(span)},
 			b.remapLayout(idPrefixDrop("b:w."+name))...), nil
 
@@ -493,15 +499,7 @@ func (b *modelBuilder) opDelete(op EditOp) ([]TextEdit, error) {
 
 	case strings.HasPrefix(op.Node, "f:"):
 		inst := strings.TrimPrefix(op.Node, "f:")
-		reads := 0
-		b.eachExpr(func(e expr) {
-			if pe, ok := e.(pinExpr); ok && pe.inst == inst {
-				reads++
-			}
-		})
-		if reads > 0 {
-			return nil, fmt.Errorf("fbd edit: %s's outputs are read %d time(s) — rewire those inputs first", inst, reads)
-		}
+		// Remaining inst.pin reads become diagnostics, not a blocked edit.
 		var edits []TextEdit
 		seen := map[exprPos]bool{}
 		for _, d := range b.nl.fbDecls {
@@ -520,6 +518,20 @@ func (b *modelBuilder) opDelete(op EditOp) ([]TextEdit, error) {
 			return nil, fmt.Errorf("fbd edit: no instance named %q", inst)
 		}
 		return append(edits, b.remapLayout(idPrefixDrop("f:"+inst, "b:f."+inst))...), nil
+
+	case strings.HasPrefix(op.Node, "cm:"):
+		n, ok := commentOrdinal(op.Node)
+		if !ok || n < 0 || n >= len(b.comments) {
+			return nil, fmt.Errorf("fbd edit: unknown comment %q", op.Node)
+		}
+		return append(b.deleteComment(n), b.remapLayout(idPrefixDrop(op.Node))...), nil
+
+	case strings.HasPrefix(op.Node, "g:"):
+		// A ghost lives only in the layout block — deleting is dropping it.
+		if _, _, ok := ghostName(op.Node); !ok {
+			return nil, fmt.Errorf("fbd edit: unknown ghost %q", op.Node)
+		}
+		return b.remapLayout(idPrefixDrop(op.Node)), nil
 	}
 	return nil, fmt.Errorf("fbd edit: %q is not deletable", op.Node)
 }
@@ -586,7 +598,11 @@ func (b *modelBuilder) opDisconnect(op EditOp) ([]TextEdit, error) {
 					continue
 				}
 				if len(n.args) == 1 {
-					return nil, fmt.Errorf("fbd edit: %s's only input — delete the block instead", inst)
+					// The call needs an argument list to stay parseable — a
+					// placeholder leaves the open pin as a diagnostic.
+					l, c := n.args[i].val.pos()
+					el, ec := n.args[i].val.end()
+					return []TextEdit{posEdit(exprPos{l, c, el, ec}, "_")}, nil
 				}
 				return []TextEdit{argRemoval(i, len(n.args),
 					func(j int) exprPos { return n.args[j].pinPos },
@@ -596,7 +612,16 @@ func (b *modelBuilder) opDisconnect(op EditOp) ([]TextEdit, error) {
 		return nil, fmt.Errorf("fbd edit: %s has no argument for pin %q", inst, op.ToPin)
 
 	case strings.HasPrefix(op.To, "c:"):
-		return nil, fmt.Errorf("fbd edit: a coil needs a source — rewire it, or delete the coil")
+		// `X := _`: parses, and the undeclared placeholder marks the open pin.
+		target := strings.TrimPrefix(op.To, "c:")
+		for _, n := range b.nl.nodes {
+			if !n.isCall && n.target == target {
+				l, c := n.source.pos()
+				el, ec := n.source.end()
+				return []TextEdit{posEdit(exprPos{l, c, el, ec}, "_")}, nil
+			}
+		}
+		return nil, fmt.Errorf("fbd edit: no coil writing %q", target)
 
 	default: // operator/function block
 		call, ok := b.exprOf[op.To]
@@ -615,7 +640,11 @@ func (b *modelBuilder) opDisconnect(op EditOp) ([]TextEdit, error) {
 		}
 		minA, _ := opArity(call.fn)
 		if len(call.args)-1 < minA {
-			return nil, fmt.Errorf("fbd edit: %s needs at least %d inputs — rewire this one instead", call.fn, minA)
+			// Fixed-arity (and minimum-arity) pins keep their POSITION with a
+			// placeholder — removing the arg would silently shift the others.
+			l, c := call.args[idx].pos()
+			el, ec := call.args[idx].end()
+			return []TextEdit{posEdit(exprPos{l, c, el, ec}, "_")}, nil
 		}
 		return []TextEdit{argRemoval(idx, len(call.args),
 			func(j int) exprPos {
@@ -659,7 +688,8 @@ func (b *modelBuilder) opAddInput(op EditOp) ([]TextEdit, error) {
 		return nil, err
 	}
 	l, c := call.args[len(call.args)-1].end()
-	return []TextEdit{{Line: l, Col: c, EndLine: l, EndCol: c, NewText: ", " + ref}}, nil
+	return append([]TextEdit{{Line: l, Col: c, EndLine: l, EndCol: c, NewText: ", " + ref}},
+		b.ghostConsumed(op.Source)...), nil
 }
 
 // ── declareVar ─────────────────────────────────────────────────────────────

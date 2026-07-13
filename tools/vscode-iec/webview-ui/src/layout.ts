@@ -6,7 +6,7 @@
 
 export type FbdNode = {
   id: string;
-  kind: "input" | "block" | "fb" | "coil";
+  kind: "input" | "block" | "fb" | "coil" | "comment";
   label: string;
   type?: string;
   wire?: string;
@@ -17,6 +17,7 @@ export type FbdNode = {
   line?: number;
   x?: number;
   y?: number;
+  ghost?: boolean;
   status?: 'added' | 'removed' | 'changed' | 'same';
 };
 export type FbdEdge = {
@@ -88,6 +89,11 @@ export function layout(model: FbdModel): {
   const placed: Placed[] = model.nodes.map((n) => {
     const ins = n.inputs ?? [];
     const outs = n.outputs ?? [];
+    if (n.kind === "comment") {
+      const lines = n.label.split("\n");
+      const w = Math.ceil(Math.max(60, ...lines.map((l) => textW(l, 11)))) + 20;
+      return { ...n, ins, outs, x: 0, y: 0, w, h: lines.length * 15 + 10, titleH: 0 };
+    }
     if (n.kind === "input" || n.kind === "coil") {
       return { ...n, ins, outs, x: 0, y: 0, w: Math.ceil(textW(n.label, 12)) + 22, h: CHIP_H, titleH: 0 };
     }
@@ -119,9 +125,14 @@ export function layout(model: FbdModel): {
   };
   for (const n of placed) parent.set(n.id, n.id);
   for (const e of edges) parent.set(find(e.from), find(e.to));
+  // Comments and ghosts don't band: comments flow as notes above the network
+  // they precede in the source; ghosts are always pinned (they ONLY exist as
+  // layout entries).
+  const comments = placed.filter((n) => n.kind === "comment");
   const bandIdx = new Map<string, number>();
   const bands: Placed[][] = [];
   for (const n of placed) {
+    if (n.kind === "comment" || n.ghost) continue;
     const r = find(n.id);
     if (!bandIdx.has(r)) {
       bandIdx.set(r, bands.length);
@@ -150,12 +161,36 @@ export function layout(model: FbdModel): {
     fbCount.set(b, (fbCount.get(b) ?? 0) + 1);
   }
 
+  // Assign each comment to the first band whose earliest source line
+  // follows it — the note renders above that network, like in the text.
+  const minLine = bands.map((band) => Math.min(...band.map((n) => n.line ?? Infinity)));
+  const notesFor = new Map<number, Placed[]>();
+  const trailing: Placed[] = [];
+  for (const c of comments) {
+    let best = -1;
+    for (let bi = 0; bi < bands.length; bi++) {
+      if (minLine[bi] >= (c.line ?? 0) && (best === -1 || minLine[bi] < minLine[best])) best = bi;
+    }
+    if (best === -1) trailing.push(c);
+    else (notesFor.get(best) ?? notesFor.set(best, []).get(best)!).push(c);
+  }
+
   let bandTop = PAD;
   bands.forEach((band, bi) => {
+    for (const c of notesFor.get(bi) ?? []) {
+      c.x = PAD;
+      c.y = bandTop;
+      bandTop += c.h + 10;
+    }
     const h = layoutBand(band, srcOf, dstOf, bandTop);
     const lanes = fbCount.get(bi) ?? 0;
     bandTop += h + (lanes ? 14 + lanes * 10 : 0) + BAND_GAP;
   });
+  for (const c of trailing) {
+    c.x = PAD;
+    c.y = bandTop;
+    bandTop += c.h + 10;
+  }
 
   // Pinned positions (the @layout block) override auto placement — dragged
   // nodes sit exactly where the user left them; everything else stays auto.

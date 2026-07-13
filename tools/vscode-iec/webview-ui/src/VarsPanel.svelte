@@ -5,6 +5,7 @@
 	// the same store as the node pills.
 	import type { VarDecl } from './layout';
 	import { live, liveValue, formatLive } from './liveState.svelte';
+	import { postOp } from './vscodeApi';
 
 	let {
 		open = $bindable(false),
@@ -44,6 +45,11 @@
 				{#if !used.has(v.name.toLowerCase())}
 					<span class="unused">unused</span>
 				{/if}
+				<button
+					class="del"
+					title="Delete this declaration (references it still has become diagnostics)"
+					onclick={() => postOp({ type: 'deleteVar', newName: v.name })}
+				>×</button>
 			</div>
 		{/each}
 	</div>
@@ -146,5 +152,23 @@
 		font-size: 9px;
 		font-style: italic;
 		color: var(--vscode-editorWarning-foreground, #d7a021);
+	}
+	.del {
+		background: transparent;
+		border: none;
+		color: var(--vscode-descriptionForeground, #888);
+		font-size: 13px;
+		line-height: 1;
+		padding: 0 3px;
+		cursor: pointer;
+		border-radius: 3px;
+		visibility: hidden;
+	}
+	.row:hover .del {
+		visibility: visible;
+	}
+	.del:hover {
+		color: var(--vscode-errorForeground, #f48771);
+		background: color-mix(in srgb, var(--vscode-errorForeground, #f48771) 15%, transparent);
 	}
 </style>

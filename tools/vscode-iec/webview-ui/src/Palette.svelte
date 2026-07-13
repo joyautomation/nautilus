@@ -57,6 +57,26 @@
 			build: (f) => `${f.name} : CTU(CU := ${f.CU}, R := ${f.R}, PV := ${f.PV})`
 		},
 		{
+			label: 'comment',
+			preview: '// note',
+			fields: [['text', 'note']],
+			build: (f) => '// ' + f.text
+		},
+		{
+			label: 'input reference (bare)',
+			preview: 'chip: name →',
+			fields: [['name', 'Tag1']],
+			// A ghost layout entry: the chip exists on the canvas only until a
+			// wire makes it real netlist text.
+			op: (f) => ({ type: 'setLayout', entries: [{ node: 'g:in.' + f.name, x: 40, y: 40 }] })
+		},
+		{
+			label: 'output reference (bare)',
+			preview: '→ coil: name',
+			fields: [['name', 'Out1']],
+			op: (f) => ({ type: 'setLayout', entries: [{ node: 'g:out.' + f.name, x: 240, y: 40 }] })
+		},
+		{
 			label: 'variable (external tag)',
 			preview: 'name : REAL',
 			fields: [

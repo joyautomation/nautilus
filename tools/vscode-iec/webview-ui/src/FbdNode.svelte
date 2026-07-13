@@ -17,11 +17,12 @@
 			problems?: { message: string; severity: string }[];
 			editable: boolean;
 			requestInput: (init: string, at: { x: number; y: number; w: number }, commit: (v: string) => void) => void;
-			onEdit: (op: { type: 'setLiteral' | 'rename' | 'declareVar'; node: string; value: string }) => void;
+			onEdit: (op: { type: 'setLiteral' | 'rename' | 'declareVar' | 'setComment'; node: string; value: string }) => void;
 		};
 	} = $props();
 	const n = $derived(data.n);
 	const chip = $derived(n.kind === 'input' || n.kind === 'coil');
+	const note = $derived(n.kind === 'comment');
 	const editableConst = $derived(data.editable && !!n.src);
 	const renameable = $derived(data.editable && (n.kind === 'fb' || (n.kind === 'block' && !!n.wire)));
 	const plusPin = $derived(data.editable && n.kind === 'block' && EXTENSIBLE.has(n.label));
@@ -34,7 +35,12 @@
 			ev.stopPropagation();
 			const rect = el.getBoundingClientRect();
 			const at = { x: rect.left, y: rect.top, w: rect.width };
-			if (undeclared) {
+			if (note) {
+				// Newlines edit as literal \n in the one-line input.
+				data.requestInput(n.label.replaceAll('\n', '\\n'), at, (v) =>
+					data.onEdit({ type: 'setComment', node: n.id, value: v.replaceAll('\\n', '\n') })
+				);
+			} else if (undeclared) {
 				data.requestInput('REAL', at, (v) => data.onEdit({ type: 'declareVar', node: n.label, value: v }));
 			} else if (editableConst) {
 				data.requestInput(n.label, at, (v) => data.onEdit({ type: 'setLiteral', node: n.id, value: v }));
@@ -66,6 +72,12 @@
 			problems.some((p) => /undeclared/i.test(p.message))
 	);
 	const title = $derived.by(() => {
+		if (note) return 'comment — double-click to edit (\\n for a new line); empty text deletes';
+		if (n.ghost) {
+			return n.kind === 'coil'
+				? `${n.label} — bare output reference: drop a wire on it to write the coil`
+				: `${n.label} — bare input reference: drag its pin onto a block input to use it`;
+		}
 		// Diagnostics take over the tooltip — the same message as the squiggle.
 		if (undeclared) {
 			return problems.map((p) => p.message).join('\n') + '\ndouble-click to declare (enter its type)';
@@ -78,9 +90,15 @@
 	});
 </script>
 
-{#if chip}
+{#if note}
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div class="note {n.status ?? ''}" style="width: {n.w}px; height: {n.h}px" {title} use:dblEdit>
+		{#each n.label.split('\n') as line, i (i)}<div class="noteline">{line}</div>{/each}
+	</div>
+{:else if chip}
 	<div
 		class="chip {n.kind} {n.status ?? ''}"
+		class:ghost={n.ghost}
 		class:editable={editableConst || undeclared}
 		class:problem={problems.length > 0}
 		style="width: {n.w}px; height: {n.h}px"
@@ -191,6 +209,26 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
+	}
+	/* A ghost is a reference that exists only on the canvas so far — dashed
+	   until a wire makes it real netlist text. */
+	.chip.ghost {
+		border-style: dashed;
+		opacity: 0.75;
+	}
+	.note {
+		box-sizing: border-box;
+		padding: 4px 9px;
+		font-family: var(--vscode-editor-font-family, monospace);
+		font-size: 11px;
+		font-style: italic;
+		line-height: 15px;
+		color: var(--vscode-editorLineNumber-foreground, #6a9955);
+		background: color-mix(in srgb, var(--vscode-editorWidget-background, #252526) 55%, transparent);
+		border: 1px dashed color-mix(in srgb, var(--vscode-editorLineNumber-foreground, #6a9955) 55%, transparent);
+		border-radius: 4px;
+		cursor: pointer;
+		white-space: nowrap;
 	}
 	.block {
 		border-radius: 2px;

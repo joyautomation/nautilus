@@ -56,7 +56,10 @@ export type FbdEditOp = {
     | "clearLayout"
     | "disconnect"
     | "addInput"
-    | "declareVar";
+    | "declareVar"
+    | "deleteVar"
+    | "setComment"
+    | "duplicate";
   node?: string;
   to?: string;
   toPin?: string;
@@ -70,6 +73,7 @@ export type FbdEditOp = {
   x?: number;
   y?: number;
   entries?: { node: string; x: number; y: number }[];
+	nodes?: string[];
 };
 
 /** Mirror of lang/fbd.TextEdit: 1-based, end-exclusive. */

@@ -70,6 +70,10 @@ type Node struct {
 	// means auto-layout. Renderers place pinned nodes exactly here.
 	X *int `json:"x,omitempty"`
 	Y *int `json:"y,omitempty"`
+	// Ghost marks a bare input/output reference chip that exists only as a
+	// @layout entry so far — no netlist text references it yet. Wiring it
+	// writes the real text and the ghost becomes an ordinary chip.
+	Ghost bool `json:"ghost,omitempty"`
 	// Line is the 1-based source line this element comes from, so renderers
 	// can join compiler diagnostics (which carry lines) onto diagram nodes.
 	Line int `json:"line,omitempty"`
@@ -163,6 +167,11 @@ func buildModel(src string, userFBs ...map[string]*ir.FBDef) (*modelBuilder, err
 	b.placeInputs()
 	b.alignCoils(comp)
 	b.layout, b.layoutStart, b.layoutEnd = parseLayout(b.src)
+	b.comments = scanComments(b.src, bodyLine)
+	for i, run := range b.comments {
+		b.add(&Node{ID: "cm:" + strconv.Itoa(i), Kind: "comment", Label: run.text, Line: run.start})
+	}
+	b.buildGhosts()
 	for id, e := range b.layout {
 		if n, ok := b.nodes[id]; ok {
 			x, y := e.x, e.y
@@ -201,6 +210,8 @@ type modelBuilder struct {
 	userFBs                map[string]*ir.FBDef
 	exprOf                 map[string]callExpr // block node id -> the call that produced it
 	litSeq                 int
+	comments               []commentRun // full-line // comment runs in the body
+
 }
 
 func (b *modelBuilder) add(n *Node) *Node {

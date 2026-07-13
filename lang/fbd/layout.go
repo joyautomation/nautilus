@@ -135,6 +135,13 @@ func (b *modelBuilder) opSetLayout(op EditOp) ([]TextEdit, error) {
 	pinned := 0
 	for _, p := range pins {
 		if _, ok := b.nodes[p.Node]; !ok {
+			// New ghost ids are CREATED by pinning them (a bare input/output
+			// reference dropped on the canvas).
+			if name, _, isGhost := ghostName(p.Node); isGhost && identRe.MatchString(name) {
+				entries[p.Node] = layoutEntry{x: p.X, y: p.Y}
+				pinned++
+				continue
+			}
 			// Selection drags can carry phantom group entries alongside real
 			// nodes — in a batch, skip them and pin the rest; only a
 			// single-node op is strict.

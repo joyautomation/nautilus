@@ -157,14 +157,16 @@ func TestEditRenameSplitDeclAndCall(t *testing.T) {
 }
 
 func TestEditDelete(t *testing.T) {
-	// A used wire refuses to die.
-	if _, err := ApplyEdit(editSrc, EditOp{Type: "deleteNode", Node: "b:w.seal"}); err == nil ||
-		!strings.Contains(err.Error(), "rewire") {
-		t.Errorf("used wire must be protected, got %v", err)
+	// Deleting a used wire is ALLOWED — the dangling reference becomes an
+	// undeclared-identifier diagnostic, not a blocked edit.
+	out0 := apply(t, editSrc, mustOp(t, editSrc, EditOp{Type: "deleteNode", Node: "b:w.seal"}))
+	if strings.Contains(out0, "seal = OR(") {
+		t.Errorf("wire statement not deleted:\n%s", out0)
 	}
-	// A used FB refuses too.
-	if _, err := ApplyEdit(editSrc, EditOp{Type: "deleteNode", Node: "f:t1"}); err == nil {
-		t.Error("read FB must be protected")
+	// Same for an FB whose outputs are still read.
+	out0 = apply(t, editSrc, mustOp(t, editSrc, EditOp{Type: "deleteNode", Node: "f:t1"}))
+	if strings.Contains(out0, "TON(") {
+		t.Errorf("read FB statement not deleted:\n%s", out0)
 	}
 	// Deleting the coil that reads t1.Q frees the FB for deletion.
 	out := apply(t, editSrc, mustOp(t, editSrc, EditOp{Type: "deleteNode", Node: "c:Started"}))
@@ -302,15 +304,16 @@ func TestEditDisconnect(t *testing.T) {
 	if !strings.Contains(out, "t1 : TON(PT := T#5S)") {
 		t.Errorf("IN arg not removed:\n%s", out)
 	}
-	// Fixed-arity operator input refuses with guidance.
-	if _, err := ApplyEdit(editSrc, EditOp{Type: "disconnect", To: "b:w.hot", ToPin: "IN2"}); err == nil ||
-		!strings.Contains(err.Error(), "at least 2") {
-		t.Errorf("fixed-arity disconnect must refuse, got %v", err)
+	// Fixed-arity pins keep their position with a placeholder — the edit is
+	// never blocked; the undeclared "_" is the diagnostic breadcrumb.
+	out = apply(t, editSrc, mustOp(t, editSrc, EditOp{Type: "disconnect", To: "b:w.hot", ToPin: "IN2"}))
+	if !strings.Contains(out, "GT(TempC, _)") {
+		t.Errorf("fixed-arity disconnect must placehold:\n%s", out)
 	}
-	// Coil sources can't dangle.
-	if _, err := ApplyEdit(editSrc, EditOp{Type: "disconnect", To: "c:Hot", ToPin: ""}); err == nil ||
-		!strings.Contains(err.Error(), "coil") {
-		t.Errorf("coil disconnect must refuse, got %v", err)
+	// A coil keeps parsing via the placeholder source.
+	out = apply(t, editSrc, mustOp(t, editSrc, EditOp{Type: "disconnect", To: "c:Hot", ToPin: ""}))
+	if !strings.Contains(out, "Hot := _") {
+		t.Errorf("coil disconnect must placehold:\n%s", out)
 	}
 }
 
@@ -326,9 +329,10 @@ func TestEditDisconnectExtensible(t *testing.T) {
 	if !strings.Contains(out, "seal = OR(Run, Hot)") {
 		t.Errorf("leading input not removed:\n%s", out)
 	}
-	// At minimum arity it refuses.
-	if _, err := ApplyEdit(out, EditOp{Type: "disconnect", To: "b:w.seal", ToPin: "IN1"}); err == nil {
-		t.Error("2-input OR must refuse a disconnect")
+	// At minimum arity the pin placeholds instead of refusing.
+	out = apply(t, out, mustOp(t, out, EditOp{Type: "disconnect", To: "b:w.seal", ToPin: "IN1"}))
+	if !strings.Contains(out, "seal = OR(_, Hot)") {
+		t.Errorf("min-arity disconnect must placehold:\n%s", out)
 	}
 }
 

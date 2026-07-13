@@ -38,7 +38,10 @@ export type FbdEditOp = {
 		| 'clearLayout'
 		| 'disconnect'
 		| 'addInput'
-		| 'declareVar';
+		| 'declareVar'
+		| 'deleteVar'
+		| 'setComment'
+		| 'duplicate';
 	node?: string;
 	to?: string;
 	toPin?: string;
@@ -52,6 +55,7 @@ export type FbdEditOp = {
 	x?: number;
 	y?: number;
 	entries?: { node: string; x: number; y: number }[];
+	nodes?: string[];
 };
 
 export function postOp(op: FbdEditOp): void {
