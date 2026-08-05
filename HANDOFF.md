@@ -6,8 +6,8 @@ for the vision/architecture; this file is the practical state + next steps.
 
 ## What this is
 
-**nautilus** = "SCADA as software": a Go + SvelteKit framework for building
-industrial control/supervisory systems like real software (version control,
+**nautilus** = "SCADA, built like software": a Go + SvelteKit framework
+for building industrial control/supervisory systems like real software (version control,
 tests, CI/CD, VS Code) instead of a vendor IDE. Control logic in **IEC 61131-3
 Structured Text** (or, later, native Go), on a deterministic scan loop, with
 bring-your-own field I/O / redundancy / historian / HMI through small

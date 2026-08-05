@@ -10,7 +10,7 @@ export default defineConfig({
       logo: { src: './src/assets/logo.png', alt: 'nautilus' },
       customCss: ['./src/styles/fonts.css'],
       description:
-        'SCADA as software — a Go + SvelteKit toolkit for building industrial control and supervisory systems with version control, tests, CI/CD, and code review.',
+        'SCADA, built like software — a Go + SvelteKit toolkit for industrial control and supervisory systems with version control, tests, CI/CD, and code review.',
       social: [
         {
           icon: 'github',
