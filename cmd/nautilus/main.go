@@ -15,18 +15,25 @@ import (
 	"github.com/joyautomation/nautilus/internal/lsp"
 )
 
-const usage = `nautilus — SCADA as software
+const usage = `nautilus — SCADA, built like software
 
 Usage:
   nautilus lsp            Run the ST language server on stdio (used by the
                           VS Code extension; not meant to be run by hand).
   nautilus check [path]   Compile every .st file under path (default ".")
                           and print diagnostics. Exits 1 on any error.
-  nautilus new [name]     Scaffold a new nautilus project (--no-go for a
-                          manifest project: nautilus.yaml + IEC files, no Go;
-                          --language st|fbd|ld picks the program language).
+  nautilus new [name]     Scaffold a new nautilus project. --template picks
+                          the shape: demo (default) or minimal for a manifest
+                          project — nautilus.yaml + IEC files, no toolchain —
+                          or sdk / sdk-demo for a Go project when you need a
+                          custom field bus or richer simulation.
+                          --language st|fbd|ld|sfc picks the blank program's
+                          language (minimal and sdk).
   nautilus run [dir]      Run a manifest project (nautilus.yaml + programs):
                           scan loop, dashboard, and tag API — no Go needed.
+  nautilus test [dir]     Run a manifest project's acceptance tests
+                          (*_test.yaml) in virtual time, so timers and loop
+                          responses assert exactly (-run re, -v, -json).
   nautilus build [dir]    Emit a self-contained controller binary from a
                           manifest project (-o name). Ships like any compiled
                           program; no Go toolchain involved.
@@ -65,6 +72,8 @@ func main() {
 		os.Exit(runRun(os.Args[2:]))
 	case "build":
 		os.Exit(runBuild(os.Args[2:]))
+	case "test":
+		os.Exit(runTest(os.Args[2:]))
 	case "new":
 		os.Exit(runNew(os.Args[2:]))
 	case "eip":

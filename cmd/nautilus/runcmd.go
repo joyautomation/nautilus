@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/joyautomation/nautilus/acceptance"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
@@ -196,8 +197,11 @@ func emitBinary(self, dir, out string) error {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		// Ship the sources, not the artifacts: skip dotdirs, prior builds.
-		if strings.HasPrefix(rel, ".") || rel == out || rel == filepath.Base(out) {
+		// Ship the sources, not the artifacts: skip dotdirs, prior builds,
+		// and the acceptance suites — tests gate the deploy, they do not
+		// ride along on the controller.
+		if strings.HasPrefix(rel, ".") || rel == out || rel == filepath.Base(out) ||
+			strings.HasSuffix(rel, acceptance.SuffixTest) {
 			return nil
 		}
 		w, err := zw.Create(rel)

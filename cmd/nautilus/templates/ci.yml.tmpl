@@ -16,6 +16,8 @@ jobs:
         run: go install github.com/joyautomation/nautilus/cmd/nautilus@latest
       - name: check control logic
         run: nautilus check .
+      - name: acceptance tests
+        run: nautilus test .
       - name: build controller binary
         run: nautilus build -o {{.Name}}
 {{- else}}
