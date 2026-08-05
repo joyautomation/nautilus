@@ -16,6 +16,12 @@ const pages = [
       'How a scan evaluates each IEC 61131-3 language, and every built-in operator, function, and function block.',
   },
   {
+    src: join(root, '..', 'docs', 'testing.md'),
+    dest: join(root, 'src', 'content', 'docs', 'reference', 'testing.md'),
+    description:
+      'Acceptance tests for control logic in virtual time — assert on-delays, debounces, and loop settling exactly, with no Go and no toolchain.',
+  },
+  {
     // The package README is already the reference for the HMI kit; syncing it
     // beats maintaining a second copy that quietly falls behind the components.
     src: join(root, '..', 'hmi', 'README.md'),

@@ -5,3 +5,4 @@ dist/
 # and ../hmi/
 src/content/docs/reference/functions.md
 src/content/docs/reference/hmi.md
+src/content/docs/reference/testing.md

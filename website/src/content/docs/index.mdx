@@ -28,6 +28,11 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
     logic on a live controller with retained state carried across. A tiny,
     pure-stdlib Go core.
   </Card>
+  <Card title="Control logic with real tests" icon="approve-check">
+    Acceptance tests run on a virtual clock, so a ten-second interlock delay
+    or a PI loop's settling time is asserted exactly — deterministically, in
+    milliseconds. No toolchain, and CI that gates on more than a compile.
+  </Card>
   <Card title="Talk to real hardware" icon="setting">
     A pure-Go EtherNet/IP driver for Allen-Bradley Logix with tag browse and
     UDT import codegen, Sparkplug B publishing, and an io.Driver seam for any

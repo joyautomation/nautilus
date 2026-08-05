@@ -14,8 +14,8 @@ nautilus eip import --host 192.168.1.10 \
 ```
 
 That writes `eip_types.st` (a TYPE block mirroring the controller's UDTs plus
-suggested VAR_EXTERNAL declarations) and `eip_manifest.go` (the tag manifest).
-Wire it into `main.go`:
+suggested VAR_EXTERNAL declarations) and the tag manifest. In an SDK
+project (`nautilus new --template sdk`) you wire that into `main.go`:
 
 ```go
 driver, err := eip.New("192.168.1.10", EIPManifest,
@@ -51,9 +51,27 @@ ControlLogix emulator (`eip/logixserver`) — the same emulator is available
 for your own hermetic integration tests, so a CI pipeline can exercise the
 full browse → import → poll → write path without hardware.
 
-## Manifest projects
+## In a manifest project
 
-In a `--no-go` manifest project, the EtherNet/IP driver is configuration in
-`nautilus.yaml` rather than Go code — see the scaffolded comments from
-`nautilus new`, and `examples/client60` for a complete manifest project
-driving a Logix controller with a ladder program and an HMI.
+In a manifest project — what `nautilus new` scaffolds by default — the
+EtherNet/IP driver is configuration rather than Go code:
+
+```yaml
+driver:
+  type: eip
+  host: 192.168.1.10
+  manifest: eip_manifest.yaml   # from `nautilus eip import`
+  scan-rate: 500ms
+  scan-classes: { fast: 100ms, slow: 10s }
+  tag-classes:
+    fast: ["Line1_PIT_*"]
+    slow: ["*_Totals"]
+```
+
+`examples/client60` is a complete manifest project driving a Logix
+controller with a ladder program and an HMI.
+
+`nautilus test` never opens a socket: whatever `driver:` says, the tests
+substitute a stub, so an EtherNet/IP project is fully testable on a laptop
+with nothing on the network. Feed the `role: input` tags from `given:` and
+the logic runs exactly as it would against the field.
