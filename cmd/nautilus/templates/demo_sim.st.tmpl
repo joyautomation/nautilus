@@ -1,0 +1,29 @@
+PROGRAM Sim
+(* The PLANT, simulated in IEC — so this project runs, moves, and alarms
+   with no hardware and no Go. The pump fills the tank against a constant
+   demand; the heater warms it against ambient loss.
+
+   A real deployment deletes this task and marks LevelPct/TempC as
+   `role: input` in nautilus.yaml, so the field driver supplies them
+   instead. Nothing else has to change: the control program reads the same
+   tags either way. (Richer physics is the Go tier — see `nautilus new
+   --template sdk-demo`.) *)
+VAR_EXTERNAL
+    LevelPct : REAL;
+    TempC    : REAL;
+    SimDtS   : REAL;
+    PumpRun  : BOOL;
+    Heater   : REAL;
+END_VAR
+
+(* tank: pump inflow vs demand, in %/s *)
+IF PumpRun THEN
+    LevelPct := LIMIT(0.0, LevelPct + 1.7 * SimDtS, 100.0);
+ELSE
+    LevelPct := LIMIT(0.0, LevelPct - 1.5 * SimDtS, 100.0);
+END_IF;
+
+(* thermal: the heater warms, ambient pulls toward 20 °C (equilibrium
+   ~80 °C at full heat, so the PI has headroom around its setpoint) *)
+TempC := LIMIT(0.0, TempC + (Heater * 0.012 - (TempC - 20.0) * 0.02) * SimDtS, 110.0);
+END_PROGRAM

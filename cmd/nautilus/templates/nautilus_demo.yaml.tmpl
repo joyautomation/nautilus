@@ -1,0 +1,63 @@
+# {{.Name}} — a nautilus controller, no Go required.
+#   nautilus run     scan loop + dashboard + tag API
+#   nautilus test    acceptance tests in virtual time
+#   nautilus check   compile (the CI gate)
+#   nautilus build   emit a self-contained controller binary
+#
+# Three tasks, three IEC languages, one tag store — the resource/task model
+# from the standard. Control in FBD, the annunciator in ladder, and even the
+# PLANT PHYSICS simulated in ST, so this runs and moves with no hardware.
+# Go remains the tier for real field buses and richer simulation:
+# `nautilus new --template sdk-demo`.
+name: {{.Name}}
+
+server:
+  addr: "localhost:8080"   # NAUTILUS_ADDR overrides; set NAUTILUS_TOKEN to gate writes
+  online-edits: true       # PLC-style online edits from VS Code (off for production)
+
+# One program per task, each on its own scan. The FIRST task owns field I/O.
+# dt-tag receives the measured scan-to-scan seconds — bind it wherever you
+# integrate (PI loops, ramps, physics) instead of assuming the interval.
+tasks:
+  - program: program.fbd   # the control loop — pump seal-in + heater PI
+    scan: 100ms
+    dt-tag: ScanDtS
+  - name: sim              # the plant, simulated in IEC (delete for real I/O)
+    program: sim.st
+    scan: 100ms
+    dt-tag: SimDtS
+  - name: interlocks       # the annunciator, in ladder
+    program: interlocks.ld
+    scan: 200ms
+
+# Tags by role: input (driver → tag), output (tag → driver),
+# setpoint (operator-writable, exists from scan one), state (retained).
+# unit/desc feed the dashboard's tag table and GET /api/meta.
+tags:
+  # process values — owned by the sim task here. For real I/O, delete the
+  # sim task and make these `role: input` so the driver supplies them.
+  - { name: LevelPct, role: state, init: 60.0, unit: "%",  desc: "Tank level" }
+  - { name: TempC,    role: state, init: 60.0, unit: "°C", desc: "Tank temperature" }
+  # operator setpoints — writable from the HMI/API from scan one
+  - { name: TempSP,         role: setpoint, init: 65.0, unit: "°C", desc: "Temperature setpoint" }
+  - { name: Kp,             role: setpoint, init: 12.0, desc: "PI proportional gain" }
+  - { name: Ki,             role: setpoint, init: 0.15, unit: "1/s", desc: "PI integral gain" }
+  - { name: PumpStartLevel, role: setpoint, init: 40.0, unit: "%", desc: "Pump seal-in level" }
+  - { name: PumpStopLevel,  role: setpoint, init: 75.0, unit: "%", desc: "Pump drop-out level" }
+  - { name: HornAck,        role: setpoint, init: false, desc: "Horn acknowledge — releases when alarms clear" }
+  # commands — sent to the driver (loopback here)
+  - { name: PumpRun, role: output, init: false, desc: "Pump run command" }
+  - { name: Heater,  role: output, unit: "%",   desc: "Heater output command" }
+  # computed state — retained across scans and online edits
+  - { name: TempLowAlm, role: state, init: false, desc: "Low temperature alarm (10 s delay)" }
+  - { name: HiTempAlm,  role: state, init: false, desc: "High temperature alarm (interlocks.ld)" }
+  - { name: Horn,       role: state, init: false, desc: "Annunciator horn (interlocks.ld)" }
+  - { name: TempRate,   role: state, init: 0.0, unit: "°C/min", desc: "Temperature rate of change (blocks.st)" }
+
+# memory = loopback for bring-up. For an Allen-Bradley Logix controller:
+#   driver:
+#     type: eip
+#     host: 192.168.1.10
+#     manifest: eip_manifest.yaml   # from `nautilus eip import`
+driver:
+  type: memory

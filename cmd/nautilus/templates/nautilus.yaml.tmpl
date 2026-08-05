@@ -1,9 +1,10 @@
 # {{.Name}} — a nautilus controller, no Go required.
 #   nautilus run              scan loop + dashboard + tag API
+#   nautilus test             acceptance tests, in virtual time
 #   nautilus build            emit a self-contained controller binary
 #   nautilus check            compile in CI
-# Grows into Go when you need custom buses or simulation: nautilus new
-# (without --no-go) scaffolds the library form of this same project.
+# Grows into Go when you need a custom field bus or richer simulation:
+# `nautilus new --template sdk` scaffolds that form of this same project.
 name: {{.Name}}
 
 server:

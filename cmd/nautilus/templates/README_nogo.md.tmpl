@@ -2,19 +2,66 @@
 
 A [nautilus](https://github.com/joyautomation/nautilus) controller — IEC
 61131-3 logic, run and shipped by the `nautilus` CLI. No Go in this
-project: the logic is `program.{{.Language}}`, the wiring is
-`nautilus.yaml`.
+project: the logic is in the IEC files, the wiring is `nautilus.yaml`, and
+nothing here needs a toolchain.
 
 ```sh
 nautilus run        # scan loop + dashboard + tag API on http://localhost:8080
+nautilus test       # acceptance tests, in virtual time
 nautilus check      # compile (CI gate)
 nautilus build      # emit ./{{.Name}} — a self-contained controller binary
 ```
+
+{{if .Demo -}}
+## What's here
+
+| File | What it is |
+| --- | --- |
+| `nautilus.yaml` | the wiring: three tasks, tags by role, server, driver |
+| `program.fbd` | control at 10 Hz — pump seal-in latch, heater PI, `TON` alarm delay |
+| `sim.st` | the plant, simulated in Structured Text (delete it for real I/O) |
+| `interlocks.ld` | the annunciator in ladder, on its own 200 ms task |
+| `blocks.st` | a user `FUNCTION_BLOCK`, callable from any language |
+| `{{.Name}}_test.yaml` | acceptance tests, including the 10 s alarm delay |
+
+Three tasks, three IEC languages, one tag store — the resource/task model
+from the standard. Right-click `program.fbd` → *Open With → FBD Diagram*,
+or `interlocks.ld` → *Ladder Diagram*: live values paint power flow while
+the controller runs, and every gesture is a structural edit to the text.
+
+## Going to real I/O
+
+Delete the `sim` task from `nautilus.yaml` and change `LevelPct`/`TempC`
+to `role: input`. The control program doesn't change — it reads the same
+tags either way. Then point `driver:` at the field:
+
+```yaml
+driver:
+  type: eip
+  host: 192.168.1.10
+  manifest: eip_manifest.yaml   # from `nautilus eip import`
+```
+
+{{else -}}
+The logic is `program.{{.Language}}`; `nautilus.yaml` declares the tasks,
+the tags and their roles, and the driver. `{{.Name}}_test.yaml` holds the
+acceptance tests — they run in **virtual time**, so an on-delay or a
+loop's settling time is asserted exactly, in milliseconds.
+
+{{end -}}
+## Tests
+
+`nautilus test` runs every `*_test.yaml` here. The fixture comes from
+`nautilus.yaml` itself, so a retuned gain or a renamed tag can't drift
+away from what the tests verify. Assertions are tag matchers
+(`{near: 72.0, tol: 0.5}`) or ST expressions
+(`ABS(TempC - TempSP) < 0.5`) compiled by the same compiler as your logic
+— put reusable ones in a library file as a `FUNCTION` returning `BOOL`.
 
 Open the folder in VS Code with the **nautilus IEC 61131-3** extension for
 diagnostics, the graphical FBD/ladder editors, live tag values, and
 online edits against the running controller.
 
-When you need custom field buses, simulation physics, or Go tests, this
-same project grows into the Go library form: `nautilus new` (without
-`--no-go`) scaffolds it, and everything here carries over.
+When you need a custom field bus or richer simulation physics, that's the
+Go SDK: `nautilus new --template sdk` (or `sdk-demo`) scaffolds it, and
+the IEC logic here carries over unchanged.

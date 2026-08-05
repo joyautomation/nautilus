@@ -1,0 +1,61 @@
+# Acceptance tests for {{.Name}} — the CI gate for your control logic.
+#
+#   nautilus test          run them
+#   nautilus test -v       with the virtual time each test covered
+#   nautilus test -run re  just the ones whose name matches
+#
+# The fixture is nautilus.yaml: tasks, scan rates, tag roles and seeds all
+# come from the manifest that deploys, so a test can never drift away from
+# what actually runs. `given` routes by the role you declared — a field
+# input arrives through the driver, everything else is written directly.
+#
+# Time is VIRTUAL. `advance: 30s` runs thirty seconds of process time in
+# well under a millisecond, exactly, so on-delays and loop responses are
+# ordinary things to assert rather than things you hope about.
+
+tolerance: 0.5 # default ± for `near` in this file
+
+tests:
+{{- if eq .Language "ld"}}
+  - name: alarm follows the setpoint
+    steps:
+      - given: { Sensor: 20.0 }
+        scans: 1
+        expect: { Alarm: false }
+      - given: { Sensor: 80.0 } # above the setpoint
+        scans: 1
+        expect: { Alarm: true }
+
+  - name: alarm holds while the sensor stays high
+    given: { Sensor: 80.0 }
+    advance: 5s
+    always: { Alarm: true } # checked after every scan, not just at the end
+{{- else}}
+  - name: actuator tracks the error and clamps
+    steps:
+      - given: { Sensor: 20.0 } # 30 below the setpoint
+        scans: 1
+        expect: { Actuator: { near: 30.0 } }
+      - given: { Sensor: 80.0 } # above it — the clamp takes over
+        scans: 1
+        expect: { Actuator: { eq: 0.0 } }
+
+  - name: actuator stays inside its clamp
+    given: { Sensor: 20.0 }
+    advance: 5s
+    # An ST expression, compiled by the same compiler as your logic — for
+    # anything a fixed matcher cannot say. Put reusable ones in a library
+    # file as a FUNCTION returning BOOL and call them here by name.
+    always:
+      - Actuator >= 0.0 AND Actuator <= 100.0
+{{- end}}
+# Once your logic has a timer, this is what asserting it looks like — the
+# whole point of virtual time, and impossible against a wall clock:
+#
+#   - name: alarm waits its full delay
+#     given: { Sensor: 95.0 }
+#     steps:
+#       - advance: 9.5s
+#         expect: { HighAlarm: false }   # the TON has not elapsed
+#       - advance: 1s
+#         expect: { HighAlarm: true }    # ... and now it has

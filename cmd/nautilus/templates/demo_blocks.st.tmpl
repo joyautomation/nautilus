@@ -1,0 +1,31 @@
+(* Reusable function blocks for this project — authored in ST, callable
+   from ANY IEC language: program.fbd instantiates RateOfChange exactly the
+   way it instantiates a built-in TON.
+
+   Every .st file here without a PROGRAM is a library: `nautilus run`, the
+   VS Code extension, `nautilus check`, and `nautilus pull` all compose them
+   the same way, so online edits round-trip losslessly. *)
+
+FUNCTION_BLOCK RateOfChange
+(* Rate of change of IN in units/minute, from the previous scan's value.
+   Each instance retains its own prev — across scans and online edits. *)
+VAR_INPUT
+    IN : REAL;
+    DT : REAL; (* seconds since last scan *)
+END_VAR
+VAR_OUTPUT
+    OUT : REAL; (* units per minute *)
+END_VAR
+VAR
+    prev   : REAL;
+    primed : BOOL;
+END_VAR
+IF NOT primed THEN
+    prev := IN;
+    primed := TRUE;
+END_IF;
+IF DT > 0.0 THEN
+    OUT := (IN - prev) / DT * 60.0;
+END_IF;
+prev := IN;
+END_FUNCTION_BLOCK

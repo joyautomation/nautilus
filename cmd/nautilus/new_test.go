@@ -6,10 +6,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/joyautomation/nautilus/acceptance"
+	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/internal/stproject"
 	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/lang/ld"
 	"github.com/joyautomation/nautilus/lang/st"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 // Scaffold both variants into a temp dir and sanity-check the tree: the
@@ -23,34 +26,45 @@ func TestScaffoldVariants(t *testing.T) {
 		absent []string
 	}{
 		{
-			name: "plant with everything",
-			sc:   scaffold{Name: "plant-proj", Module: "example.com/plant-proj", Program: "PlantProj", Plant: true, CI: true, VSCode: true},
+			name: "sdk-demo with everything",
+			sc:   scaffold{Name: "plant-proj", Module: "example.com/plant-proj", Program: "PlantProj", Template: tmplSDKDemo, CI: true, VSCode: true},
 			want: []string{
 				"go.mod", "main.go", "plant.go", "program.st", "blocks.st", "program_test.go",
 				".github/workflows/ci.yml", ".vscode/extensions.json", ".vscode/settings.json",
 				"README.md", ".gitignore",
 			},
-			absent: []string{"driver.go"},
+			absent: []string{"driver.go", "nautilus.yaml"},
 		},
 		{
-			name: "blank minimal",
-			sc:   scaffold{Name: "blank-proj", Module: "blank-proj", Program: "BlankProj", Plant: false, CI: false, VSCode: false},
+			name: "sdk, blank program",
+			sc:   scaffold{Name: "blank-proj", Module: "blank-proj", Program: "BlankProj", Template: tmplSDK},
 			want: []string{"go.mod", "main.go", "driver.go", "program.st", "program_test.go"},
 			absent: []string{
-				"plant.go", "blocks.st", ".github/workflows/ci.yml", ".vscode/extensions.json",
+				"plant.go", "blocks.st", "nautilus.yaml", ".github/workflows/ci.yml", ".vscode/extensions.json",
 			},
 		},
 		{
-			name:   "ladder program",
-			sc:     scaffold{Name: "ld-proj", Module: "ld-proj", Program: "LdProj", Language: "ld"},
+			name:   "sdk, ladder program",
+			sc:     scaffold{Name: "ld-proj", Module: "ld-proj", Program: "LdProj", Template: tmplSDK, Language: "ld"},
 			want:   []string{"go.mod", "main.go", "driver.go", "program.ld", "program_test.go"},
 			absent: []string{"program.st", "program.fbd", "plant.go", "blocks.st"},
 		},
 		{
-			name:   "fbd program",
-			sc:     scaffold{Name: "fbd-proj", Module: "fbd-proj", Program: "FbdProj", Language: "fbd"},
-			want:   []string{"go.mod", "main.go", "driver.go", "program.fbd", "program_test.go"},
-			absent: []string{"program.st", "program.ld", "plant.go"},
+			name:   "minimal manifest project",
+			sc:     scaffold{Name: "min-proj", Program: "MinProj", Template: tmplMinimal, Language: "fbd"},
+			want:   []string{"nautilus.yaml", "program.fbd", "min-proj_test.yaml", "README.md", ".gitignore"},
+			absent: []string{"go.mod", "main.go", "driver.go", "plant.go", "program_test.go", "sim.st"},
+		},
+		{
+			// The manifest tour: three tasks in three languages, plus the
+			// library FB and the plant simulated in IEC.
+			name: "demo manifest project",
+			sc:   scaffold{Name: "demo-proj", Program: "DemoProj", Template: tmplDemo, CI: true},
+			want: []string{
+				"nautilus.yaml", "program.fbd", "sim.st", "interlocks.ld", "blocks.st",
+				"demo-proj_test.yaml", "README.md", ".github/workflows/ci.yml",
+			},
+			absent: []string{"go.mod", "main.go", "plant.go", "program.st", "program_test.go"},
 		},
 	}
 
@@ -136,5 +150,52 @@ func TestPascalCase(t *testing.T) {
 		if got := pascalCase(in); got != want {
 			t.Errorf("pascalCase(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// The scaffolded manifest projects must load, compile every task, and pass
+// their own acceptance tests — the promise `nautilus new` makes. This is
+// the check that catches a broken template the moment it lands, rather
+// than in someone's first five minutes with the tool.
+func TestScaffoldedManifestProjectsPass(t *testing.T) {
+	for _, tc := range []struct{ name, template, language string }{
+		{"minimal-st", tmplMinimal, "st"},
+		{"minimal-fbd", tmplMinimal, "fbd"},
+		{"minimal-ld", tmplMinimal, "ld"},
+		{"demo", tmplDemo, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cwd, _ := os.Getwd()
+			if err := os.Chdir(dir); err != nil {
+				t.Fatal(err)
+			}
+			defer os.Chdir(cwd)
+
+			sc := scaffold{Name: tc.name, Program: pascalCase(tc.name), Template: tc.template, Language: tc.language}
+			if err := write(&sc); err != nil {
+				t.Fatal(err)
+			}
+			fsys := os.DirFS(filepath.Join(dir, tc.name))
+			proj, err := project.Load(fsys)
+			if err != nil {
+				t.Fatalf("scaffolded project does not load: %v", err)
+			}
+			if _, err := runtime.New(proj.Runtime); err != nil {
+				t.Fatalf("scaffolded project does not compile: %v", err)
+			}
+			results, err := acceptance.RunDir(fsys, proj.Runtime)
+			if err != nil {
+				t.Fatalf("scaffolded tests do not run: %v", err)
+			}
+			if len(results) == 0 {
+				t.Fatal("scaffolded project has no acceptance tests")
+			}
+			for _, r := range results {
+				if !r.Passed {
+					t.Errorf("scaffolded test %q fails:\n%s", r.Name, acceptance.FormatFailure(r))
+				}
+			}
+		})
 	}
 }

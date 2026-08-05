@@ -1,0 +1,78 @@
+# Acceptance tests for {{.Name}} — the CI gate for your control logic.
+#
+#   nautilus test          run them
+#   nautilus test -v       with the virtual time each test covered
+#   nautilus test -run re  just the ones whose name matches
+#
+# The fixture is nautilus.yaml: tasks, scan rates, tag roles and seeds all
+# come from the manifest that deploys, so a test can never drift away from
+# what actually runs. Retune Kp here and the tests retune with it.
+#
+# Time is VIRTUAL. `advance: 10s` runs ten seconds of process time in well
+# under a millisecond, EXACTLY — so the 10 s alarm delay and the loop's
+# settling time are ordinary things to assert, not things to hope about.
+# None of this is possible against a wall clock.
+
+tolerance: 0.5 # default ± for `near` in this file
+
+tests:
+  - name: pump seals in below the start level and drops out above it
+    suspend: [sim] # freeze the plant — this test owns the level
+    steps:
+      - given: { LevelPct: 35.0 }
+        scans: 1
+        expect: { PumpRun: true }
+      - given: { LevelPct: 60.0 } # between the bands — the seal-in holds
+        scans: 1
+        expect: { PumpRun: true }
+      - given: { LevelPct: 80.0 }
+        scans: 1
+        expect: { PumpRun: false }
+
+  - name: low-temp alarm waits its full 10 s
+    suspend: [sim] # drive the temperature directly
+    given: { TempC: 45.0 } # below the 62 °C cold threshold
+    steps:
+      - advance: 9.5s
+        expect: { TempLowAlm: false } # the TON has not elapsed
+      - advance: 1s
+        expect: { TempLowAlm: true } # ... and now it has
+      - given: { TempC: 70.0 }
+        scans: 1
+        expect: { TempLowAlm: false } # TON has no off-delay
+
+  - name: PI settles a setpoint step and holds it
+    # Closed loop: sim.st integrates the plant while the PI runs, both on
+    # virtual dt. `until` + `hold` is the assertion a settling test needs —
+    # a loop that merely passes through its target on the way to an
+    # overshoot has not settled, and "assert after 45 s" cannot tell.
+    steps:
+      - until: 300s
+        expect: { TempC: { near: 65.0 } }
+      - given: { TempSP: 72.0 }
+        until: 45s
+        hold: 5s
+        expect:
+          # An ST expression, compiled by the same compiler as your logic —
+          # for anything a fixed matcher cannot say. Reusable predicates go
+          # in blocks.st as a FUNCTION returning BOOL.
+          - ABS(TempC - TempSP) < 0.5
+        always:
+          Heater: { between: [0.0, 100.0] } # the clamp never breaks
+
+  - name: high-temp interlock sounds the horn until the operator acks
+    suspend: [sim]
+    given: { TempC: 95.0 } # above the 90 °C trip in interlocks.ld
+    steps:
+      - advance: 4s
+        expect: { HiTempAlm: false } # 5 s on-delay on the 200 ms task
+      - advance: 1.5s
+        expect: { HiTempAlm: true, Horn: true }
+      - given: { HornAck: true }
+        advance: 400ms
+        expect:
+          Horn: false
+          HiTempAlm: true # acking the horn must not clear the alarm
+      - given: { TempC: 60.0 } # both alarms clear → the ack self-releases
+        advance: 1s
+        expect: { HiTempAlm: false, HornAck: false }
