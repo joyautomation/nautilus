@@ -6,6 +6,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -21,6 +22,7 @@ func runTest(args []string) int {
 	run := fs.String("run", "", "only run tests whose name matches this regexp")
 	verbose := fs.Bool("v", false, "print virtual elapsed time and scan counts for passing tests")
 	asJSON := fs.Bool("json", false, "emit one NDJSON event per test (for editors and CI tooling)")
+	list := fs.Bool("list", false, "list the tests (suite, name, line) without running them")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -32,14 +34,19 @@ func runTest(args []string) int {
 
 	// A compile failure is a suite failure, carrying the diagnostic: there
 	// is no point reporting assertions about a program that does not build.
+	// Listing skips it — an editor asks what tests exist while the program
+	// is still mid-edit, and answering "it doesn't compile" would empty the
+	// test explorer on every keystroke.
 	proj, err := project.Load(fsys)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "nautilus test:", err)
 		return 1
 	}
-	if _, err := runtime.New(proj.Runtime); err != nil {
-		fmt.Fprintln(os.Stderr, "nautilus test: compile:", err)
-		return 1
+	if !*list {
+		if _, err := runtime.New(proj.Runtime); err != nil {
+			fmt.Fprintln(os.Stderr, "nautilus test: compile:", err)
+			return 1
+		}
 	}
 
 	paths, err := acceptance.DiscoverSuites(fsys)
@@ -79,6 +86,10 @@ func runTest(args []string) int {
 			}
 			suite.Tests = kept
 		}
+		if *list {
+			listSuite(suite)
+			continue
+		}
 		rs, err := acceptance.RunSuite(suite, proj.Runtime)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "nautilus test:", err)
@@ -87,6 +98,9 @@ func runTest(args []string) int {
 		results = append(results, rs...)
 	}
 
+	if *list {
+		return 0
+	}
 	if len(results) == 0 {
 		fmt.Fprintf(os.Stderr, "nautilus test: no tests matched %q\n", *run)
 		return 1
@@ -101,4 +115,19 @@ func runTest(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// listSuite emits one NDJSON record per test without running anything —
+// what an editor's test explorer needs to populate its tree. Same shape as
+// a result minus the outcome, so a consumer can key on (suite, name)
+// across both.
+func listSuite(s *acceptance.Suite) {
+	enc := json.NewEncoder(os.Stdout)
+	for _, t := range s.Tests {
+		_ = enc.Encode(struct {
+			Suite string `json:"suite"`
+			Name  string `json:"name"`
+			Line  int    `json:"line"`
+		}{s.Path, t.Name, t.Line})
+	}
 }

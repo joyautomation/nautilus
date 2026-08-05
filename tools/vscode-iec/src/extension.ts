@@ -25,6 +25,7 @@ import { MimicEditorProvider } from "./mimicEditor";
 import { ComponentEditorProvider } from "./componentEditor";
 import { UserComponentManager } from "./userComponents";
 import { registerEditComponentPortsCommand } from "./editComponentPorts";
+import { AcceptanceTests } from "./acceptanceTests";
 
 let client: LanguageClient | undefined;
 let live: LiveValues | undefined;
@@ -36,6 +37,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // "not found" and live values never connect).
   live = new LiveValues();
   context.subscriptions.push(live);
+
+  // Acceptance tests in the Test Explorer. Independent of the language
+  // client too: it shells out to the CLI, and a project's tests should be
+  // runnable whether or not the server came up.
+  context.subscriptions.push(new AcceptanceTests());
 
   // The status poll's verdict streams into every diagram webview, so
   // divergence from the live program is visible where the editing happens.

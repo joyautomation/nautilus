@@ -39,7 +39,9 @@
     "onLanguage:iec-st",
     "onLanguage:iec-fbd",
     "onLanguage:iec-ld",
-    "onLanguage:iec-sfc"
+    "onLanguage:iec-sfc",
+    "workspaceContains:**/nautilus.yaml",
+    "workspaceContains:**/*_test.yaml"
   ],
   "contributes": {
     "languages": [
@@ -202,7 +204,7 @@
       },
       {
         "command": "nautilus.editComponentPorts",
-        "title": "Nautilus: Edit Component Ports…"
+        "title": "Nautilus: Edit Component Ports\u2026"
       }
     ],
     "menus": {
@@ -283,7 +285,7 @@
         "nautilus.token": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed only for online-edit download/rollback against a controller started with a token — reads and `nautilus pull` never require it. Prefer setting this in workspace settings, not user settings."
+          "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed only for online-edit download/rollback against a controller started with a token \u2014 reads and `nautilus pull` never require it. Prefer setting this in workspace settings, not user settings."
         },
         "nautilus.mimic.snapToGrid": {
           "type": "boolean",
@@ -343,12 +345,18 @@
         ],
         "priority": "default"
       }
+    ],
+    "yamlValidation": [
+      {
+        "fileMatch": "*_test.yaml",
+        "url": "./schemas/nautilus-test.schema.json"
+      }
     ]
   },
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "Rendering user-authored Svelte components inside the mimic/Component Editor compiles project code with esbuild and the workspace's own toolchain (svelte/compiler, node_modules). This is disabled in untrusted workspaces — the built-in kit components and placeholder chips still work fully."
+      "description": "Rendering user-authored Svelte components inside the mimic/Component Editor compiles project code with esbuild and the workspace's own toolchain (svelte/compiler, node_modules). This is disabled in untrusted workspaces \u2014 the built-in kit components and placeholder chips still work fully."
     }
   },
   "scripts": {
