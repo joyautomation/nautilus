@@ -1,15 +1,16 @@
 # nautilus
 
-**SCADA as software.** A Go + SvelteKit toolkit for building industrial
-control and supervisory systems the way software engineers already work —
-version control, tests, CI/CD, code review — instead of inside a proprietary
-vendor IDE.
+**SCADA, built like software.** A Go + SvelteKit toolkit for building
+industrial control and supervisory systems the way software engineers already
+work — version control, tests, CI/CD, code review — instead of inside a
+proprietary vendor IDE.
 
 Write your control logic in **IEC 61131-3** — Structured Text, Ladder, or
 Function Block, the portable standard languages — or in **native Go**. Host it
-on a deterministic scan loop. Bring your own field I/O, redundancy, historian,
-and HMI through small, documented interfaces. Develop it in **VS Code**. Ship
-it like any other binary.
+on a deterministic scan loop. Build the operator screens on the included
+**SvelteKit component kit**. Bring your own field I/O, redundancy and historian
+through small, documented interfaces. Develop it in **VS Code**. Ship it like
+any other binary.
 
 > For teams that want the libraries and the seams, not a walled garden.
 
@@ -65,16 +66,19 @@ server the VS Code extension uses).
 **2. Scaffold a project**
 
 ```sh
-nautilus new my-plant --no-go     # manifest project: IEC logic + nautilus.yaml, no Go
-nautilus new my-plant             # or the Go library form (simulated plant, Go tests)
+nautilus new my-plant                      # the tour: 3 tasks, 3 IEC languages, simulated plant
+nautilus new my-plant --template minimal   # one task, one program, one test
+nautilus new my-plant --template sdk       # Go project, for a custom field bus
+nautilus new my-plant --template sdk-demo  # Go project with plant physics in Go
 ```
 
-A `--no-go` project is just your logic and a manifest — run and ship it
-with the CLI alone:
+A nautilus project is your logic and a manifest. Run, test, and ship it
+with the CLI alone — no toolchain:
 
 ```sh
 cd my-plant
 nautilus run        # scan loop + dashboard + tag API on http://localhost:8080
+nautilus test       # acceptance tests, in virtual time
 nautilus build      # emit ./my-plant — a self-contained controller binary
 ```
 
@@ -82,24 +86,50 @@ nautilus build      # emit ./my-plant — a self-contained controller binary
 own scan rates), the tags by role, the server, and the field driver
 (loopback for bring-up, EtherNet/IP by configuration). `nautilus build`
 appends the project to the runner and emits one deployable binary — no Go
-toolchain anywhere. Go is the *extension tier*: custom field buses,
-simulation physics, and Go acceptance tests live in the library form
-below, which is the same runtime with the manifest written as code.
+toolchain anywhere.
 
-Interactive, sv-create style — pick the module path and features (a simulated
-plant, a CI workflow, VS Code setup, git init). You get `main.go`,
-`program.st` (your control logic), `blocks.st` (reusable function blocks —
-the PI controller lives there), a simulated `plant.go`, acceptance tests,
-CI, and `.vscode/` recommendations.
+**Your logic gets real tests.** `*_test.yaml` files run against a **virtual
+clock**, so a ten-second on-delay or a PI loop's settling time is asserted
+exactly, deterministically, in milliseconds — the assertions a wall clock
+makes impossible:
+
+```yaml
+  - name: low-temp alarm waits its full 10 s
+    suspend: [sim]                    # freeze the plant; drive the value directly
+    given: { TempC: 45.0 }
+    steps:
+      - advance: 9.5s
+        expect: { TempLowAlm: false } # the TON has not elapsed
+      - advance: 1s
+        expect: { TempLowAlm: true }  # ... and now it has
+```
+
+The fixture is `nautilus.yaml` itself — tasks, rates, roles, seeds — so a
+retuned gain can't drift away from what the tests verify. Assertions are
+tag matchers or ST expressions (`ABS(TempC - TempSP) < 0.5`) compiled by
+the same compiler as your logic.
+
+Go is the **SDK**, not the base: `--template sdk` when you need a custom
+field bus or richer simulation physics. Same runtime, with the manifest
+written as code.
+
+Run it bare for the interactive form, sv-create style — pick the template,
+the program language, and the features (CI workflow, VS Code setup, git
+init). An `sdk` template also asks for a module path, and gives you
+`main.go`, `program.st`, a `driver.go` seam to fill in, Go acceptance
+tests, CI, and `.vscode/` recommendations.
 
 **3. Run and test it**
 
 ```sh
 cd my-plant
-go mod tidy      # resolves github.com/joyautomation/nautilus from the proxy
-go run .         # scan loop + tag API on http://localhost:8080
-go test ./...    # the program's acceptance tests
+nautilus test    # the acceptance suite, in virtual time
+nautilus run     # scan loop + tag API on http://localhost:8080
 ```
+
+An `sdk` project is an ordinary Go program — `go mod tidy`, `go run .`,
+`go test ./...` — and its Go tests get the same virtual clock through the
+`acceptance` package.
 
 Open **http://localhost:8080** for the built-in live dashboard, or
 `GET /api/state` for the raw tag snapshot. Setpoints are click-to-set right

@@ -1,0 +1,92 @@
+# Acceptance tests for the control logic — no Go, no toolchain.
+#
+#   nautilus test        run them
+#   nautilus test -v     with virtual elapsed time per test
+#
+# The fixture is nautilus.yaml: tasks, scan rates, tag roles, and seeds all
+# come from the manifest that deploys, so nothing here can drift away from
+# what actually runs. Time is virtual, so a 10-second alarm delay and a
+# 32-second loop response are asserted exactly, in milliseconds.
+
+tolerance: 0.5 # default ± for `near` in this file
+
+tests:
+  - name: pump seals in below the start level and drops out above it
+    suspend: [sim] # the level is driven by this test, not the plant
+    steps:
+      - given: { LevelPct: 35.0 }
+        scans: 1
+        expect: { PumpRun: true }
+      - given: { LevelPct: 60.0 } # between the bands — the seal-in holds
+        scans: 1
+        expect: { PumpRun: true }
+      - given: { LevelPct: 80.0 }
+        scans: 1
+        expect: { PumpRun: false }
+      - given: { LevelPct: 60.0 } # still between the bands, still out
+        scans: 1
+        expect: { PumpRun: false }
+
+  - name: low-temp alarm waits its full 10 s
+    suspend: [sim] # freeze the plant; drive the temperature directly
+    given: { TempC: 45.0 } # below the 62 °C cold threshold
+    steps:
+      - advance: 9.5s
+        expect: { TempLowAlm: false } # the TON has not elapsed
+      - advance: 1s
+        expect: { TempLowAlm: true } # ... and now it has
+      - given: { TempC: 70.0 }
+        scans: 1
+        expect: { TempLowAlm: false } # TON has no off-delay
+
+  - name: eco mode retargets the loop to the eco setpoint
+    suspend: [sim]
+    given: { TempC: 60.0, EcoMode: true }
+    scans: 1
+    # SEL takes IN1 when the selector is true, so the working setpoint
+    # becomes TempSPEco (55 °C) — below the process value, so no heat.
+    expect:
+      - Heater <= 0.0
+
+  - name: PI settles a 65 to 72 C setpoint step and holds it
+    # Closed loop — sim.st integrates the plant while the PI runs, both on
+    # virtual dt. The cold start is far slower than the step: Ki is 0.15,
+    # so the integral must climb from zero to the ~75 % the plant needs to
+    # hold setpoint, where after a step it starts most of the way there.
+    steps:
+      - until: 300s
+        expect: { TempC: { near: 65.0 } }
+      - given: { TempSP: 72.0 }
+        until: 45s
+        hold: 5s # settled, not merely passing through on the way up
+        expect:
+          - ABS(TempC - TempSP) < 0.5 # relational: tracks the setpoint tag
+        always:
+          Heater: { between: [0.0, 100.0] } # the clamp never breaks
+
+  - name: high-temp interlock sounds the horn until the operator acks
+    suspend: [sim]
+    given: { TempC: 95.0 } # above the 90 °C trip in interlocks.ld
+    steps:
+      - advance: 4s
+        expect: { HiTempAlm: false } # 5 s on-delay, 200 ms ladder task
+      - advance: 1.5s
+        expect: { HiTempAlm: true, Horn: true }
+      - given: { HornAck: true }
+        advance: 400ms
+        expect:
+          Horn: false
+          HiTempAlm: true # acking the horn must not clear the alarm
+      - given: { TempC: 60.0 } # both alarms clear → the ack self-releases
+        advance: 1s
+        expect: { HiTempAlm: false, HornAck: false }
+
+  - name: reports task publishes an operator status line
+    # The 1 Hz task, three languages away from the control loop: an ARRAY
+    # shift register and string building, on the same tag store.
+    suspend: [sim]
+    given: { TempC: 70.0 }
+    advance: 3s
+    expect:
+      Status: "tank 70 degC — ok"
+      TempAvg: { gt: 0.0 }
