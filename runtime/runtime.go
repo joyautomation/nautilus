@@ -45,6 +45,10 @@ type Options struct {
 	// (Program/Scan above) owns field I/O and remains the online-edit
 	// target; task programs are fixed at composition.
 	Tasks []Task
+	// Clock, when set, replaces the wall clock as the basis for scan dt and
+	// for the IEC timers' NowMs — the two clocks a program can observe. Nil
+	// in production; tests inject a virtual one. See clock.go.
+	Clock Clock
 }
 
 // Task is one additional program in the resource: its source, its own
@@ -98,6 +102,7 @@ type Runtime struct {
 	dtTag   string
 	meta    map[string]TagMeta
 	tasks   []*taskRun
+	clock   Clock // nil = wall clock; see clock.go
 
 	// scanMu serializes scan execution across the main task and every
 	// additional task — a scan always sees a consistent tag snapshot.
@@ -166,12 +171,16 @@ func New(o Options) (*Runtime, error) {
 		o.Scan = 100 * time.Millisecond
 	}
 	tags := NewTags()
+	// Set before any scan or goroutine can observe it, so the store's NowMs
+	// and the scan's dt always read the same clock.
+	tags.clock = o.Clock
 	for k, v := range o.Seed {
 		tags.Set(k, v)
 	}
 	r := &Runtime{
 		prog: prog, tags: tags, driver: o.Driver, scan: o.Scan,
 		inputs: o.Inputs, outputs: o.Outputs, dtTag: o.DtTag, meta: o.Meta,
+		clock: o.Clock,
 	}
 	// POU names are the programs' identities (online edits route by them),
 	// so every program in the resource must carry a distinct one.
@@ -327,12 +336,13 @@ func (r *Runtime) ScanTask(name string) error {
 // owns the field seam; tasks compute on the store at their own rates.
 func (r *Runtime) scanTask(tr *taskRun) {
 	t0 := time.Now()
+	now := r.now(t0) // dt basis: the injected clock under test, else t0
 	tr.mu.Lock()
 	dt := tr.scan.Seconds()
 	if !tr.lastScan.IsZero() {
-		dt = t0.Sub(tr.lastScan).Seconds()
+		dt = now.Sub(tr.lastScan).Seconds()
 	}
-	tr.lastScan = t0
+	tr.lastScan = now
 	tr.mu.Unlock()
 
 	r.scanMu.Lock()
@@ -357,13 +367,14 @@ func (r *Runtime) scanTask(tr *taskRun) {
 // (tests, a custom scheduler, or a redundancy standby stepping in sync).
 func (r *Runtime) Scan() {
 	t0 := time.Now()
+	now := r.now(t0) // dt basis: the injected clock under test, else t0
 	r.mu.Lock()
 	dt := r.scan.Seconds()
 	first := r.lastScan.IsZero()
 	if !first {
-		dt = t0.Sub(r.lastScan).Seconds()
+		dt = now.Sub(r.lastScan).Seconds()
 	}
-	r.lastScan = t0
+	r.lastScan = now
 	r.mu.Unlock()
 
 	// The whole cycle excludes other tasks — one consistent tag snapshot.

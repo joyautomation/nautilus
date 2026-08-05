@@ -20,6 +20,9 @@ import (
 type Tags struct {
 	mu   sync.RWMutex
 	vals map[string]ir.Value
+	// clock backs NowMs. Nil = wall clock; a Runtime built with
+	// Options.Clock sets it once at construction, before any scan runs.
+	clock Clock
 }
 
 func NewTags() *Tags { return &Tags{vals: make(map[string]ir.Value)} }
@@ -41,7 +44,15 @@ func (t *Tags) WriteGlobal(name string, v ir.Value) error {
 	return nil
 }
 
-func (t *Tags) NowMs() int64 { return time.Now().UnixMilli() }
+// NowMs is the millisecond base every IEC timer counts from (ir.Host). It
+// follows the runtime's Clock so TON/TOF/TP elapse in virtual time under
+// test; production leaves the clock nil and reads the wall.
+func (t *Tags) NowMs() int64 {
+	if t.clock != nil {
+		return t.clock.Now().UnixMilli()
+	}
+	return time.Now().UnixMilli()
+}
 
 // UndefinedTagError is returned when a program reads a tag that was never set.
 type UndefinedTagError struct{ Name string }
