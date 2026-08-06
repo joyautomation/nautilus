@@ -115,6 +115,12 @@ type CompletionItem struct {
 	Label  string `json:"label"`
 	Kind   int    `json:"kind,omitempty"`
 	Detail string `json:"detail,omitempty"`
+	// Documentation is the expanded panel beside the list — where a
+	// project tag's description, role, and unit go.
+	Documentation *MarkupContent `json:"documentation,omitempty"`
+	// InsertText replaces Label when accepting the item, so completing a
+	// tag inside VAR_EXTERNAL can write the whole declaration.
+	InsertText string `json:"insertText,omitempty"`
 }
 
 // InitializeResult advertises the server's capabilities.

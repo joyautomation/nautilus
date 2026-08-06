@@ -117,6 +117,8 @@ func (s *Server) dispatch(m *message) {
 		s.handleHover(m)
 	case "textDocument/completion":
 		s.handleCompletion(m)
+	case "nautilus/projectTags":
+		s.handleProjectTags(m)
 	default:
 		if m.ID != nil { // unknown request: must answer; unknown notification: ignore
 			s.w.respondError(m.ID, codeMethodNotFound, fmt.Sprintf("method %q not supported", m.Method))
@@ -243,7 +245,7 @@ func declRange(text string, sym *Symbol) Range {
 }
 
 func (s *Server) handleHover(m *message) {
-	doc, _, word, wr, pos, ok := s.positional(m)
+	doc, uri, word, wr, pos, ok := s.positional(m)
 	if !ok {
 		return
 	}
@@ -252,6 +254,17 @@ func (s *Server) handleHover(m *message) {
 		return
 	}
 	sym := doc.an.lookup(word, pos.Line+1)
+	// A VAR_EXTERNAL name is a project tag, and what the author usually
+	// wants to know is what the manifest says about it — its unit, what it
+	// is, and how it moves through the scan — not that it is a REAL.
+	if tag, found := s.manifestTag(uri, word); found &&
+		(sym == nil || strings.EqualFold(sym.BlockKind, "VAR_EXTERNAL")) {
+		s.w.respond(m.ID, Hover{
+			Contents: MarkupContent{Kind: "markdown", Value: tag.hoverDoc()},
+			Range:    &wr,
+		})
+		return
+	}
 	if sym == nil {
 		// Not a declared symbol — but it may be a type name from a project
 		// library file (e.g. hovering "Analog_Input" in a declaration).
@@ -297,9 +310,40 @@ func (s *Server) handleHover(m *message) {
 }
 
 func (s *Server) handleCompletion(m *message) {
-	doc, _, _, _, pos, ok := s.positional(m)
+	doc, uri, _, _, pos, ok := s.positional(m)
 	if !ok {
 		return
+	}
+	// Inside VAR_EXTERNAL the question is "which of the project's tags do I
+	// want to bind?", and only nautilus.yaml can answer it. Elsewhere in the
+	// program the answer would be actively wrong: an undeclared tag doesn't
+	// compile, so offering one would suggest a name that cannot be used.
+	if inVarExternal(doc.text, pos.Line+1) {
+		declared := map[string]bool{}
+		for i := range doc.an.Symbols {
+			declared[strings.ToLower(doc.an.Symbols[i].Name)] = true
+		}
+		var items []CompletionItem
+		for _, t := range s.projectTagsFor(uri) {
+			if declared[strings.ToLower(t.Name)] {
+				continue // already bound in this POU
+			}
+			text := t.Name
+			if t.Type != "" {
+				text = t.Name + " : " + t.Type + ";"
+			}
+			items = append(items, CompletionItem{
+				Label:         t.Name,
+				Kind:          CompletionKindVariable,
+				Detail:        t.detail(),
+				Documentation: &MarkupContent{Kind: "markdown", Value: t.hoverDoc()},
+				InsertText:    text,
+			})
+		}
+		if len(items) > 0 {
+			s.w.respond(m.ID, items)
+			return
+		}
 	}
 	// After a dot, offer the members of the base expression's type —
 	// "PIT_001.| " lists Analog_Input's members, chains and array indexing

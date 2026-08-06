@@ -26,6 +26,7 @@ import { ComponentEditorProvider } from "./componentEditor";
 import { UserComponentManager } from "./userComponents";
 import { registerEditComponentPortsCommand } from "./editComponentPorts";
 import { AcceptanceTests } from "./acceptanceTests";
+import { registerTestCompletion } from "./testCompletion";
 
 let client: LanguageClient | undefined;
 let live: LiveValues | undefined;
@@ -149,6 +150,9 @@ async function startLanguageClient(context: vscode.ExtensionContext): Promise<vo
   try {
     await client.start();
     context.subscriptions.push({ dispose: () => client?.stop() });
+    // Tag completion in *_test.yaml asks the server for the project's tags,
+    // so it only makes sense once the server is up.
+    context.subscriptions.push(registerTestCompletion(client));
   } catch {
     client = undefined;
     // Syntax highlighting, commands, and live values still work without the
