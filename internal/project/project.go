@@ -202,9 +202,12 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 
 var programRe = regexp.MustCompile(`(?mi)^\s*PROGRAM\b`)
 
-// Load reads nautilus.yaml and the project's IEC sources from fsys (a
-// directory via os.DirFS, or a built binary's embedded archive).
-func Load(fsys fs.FS) (*Project, error) {
+// ReadManifest decodes nautilus.yaml and stops there — no programs
+// compiled, no driver constructed, nothing opened. Tooling that only needs
+// the declarations uses this instead of Load: the language server reads a
+// project's tags this way to answer completion and hover, and must stay
+// cheap enough to do it on a keystroke.
+func ReadManifest(fsys fs.FS) (*Manifest, error) {
 	raw, err := fs.ReadFile(fsys, ManifestName)
 	if err != nil {
 		return nil, fmt.Errorf("no %s: %w", ManifestName, err)
@@ -215,6 +218,17 @@ func Load(fsys fs.FS) (*Project, error) {
 	if err := dec.Decode(&m); err != nil {
 		return nil, fmt.Errorf("%s: %w", ManifestName, err)
 	}
+	return &m, nil
+}
+
+// Load reads nautilus.yaml and the project's IEC sources from fsys (a
+// directory via os.DirFS, or a built binary's embedded archive).
+func Load(fsys fs.FS) (*Project, error) {
+	mp, err := ReadManifest(fsys)
+	if err != nil {
+		return nil, err
+	}
+	m := *mp
 	if len(m.Tasks) == 0 {
 		return nil, fmt.Errorf("%s: at least one task (a program file) is required", ManifestName)
 	}

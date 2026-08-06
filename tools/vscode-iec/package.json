@@ -130,6 +130,13 @@
         "language": "iec-sfc",
         "scopeName": "source.iec-sfc",
         "path": "./syntaxes/iec-sfc.tmLanguage.json"
+      },
+      {
+        "scopeName": "nautilus.injection.test-yaml",
+        "path": "./syntaxes/nautilus-test.injection.json",
+        "injectTo": [
+          "source.yaml"
+        ]
       }
     ],
     "commands": [

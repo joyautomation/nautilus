@@ -1,0 +1,12 @@
+{
+  // .st is a contested file extension: other Structured Text extensions claim
+  // it too, and whichever loads last wins the association. Losing it is quiet
+  // but total — the nautilus language server binds to the `iec-st` language,
+  // so the examples here would get someone else's highlighting and none of
+  // our compile diagnostics, completion, hover, or inline live values, while
+  // the status bar still reads "Structured Text" because both extensions use
+  // that alias. (.fbd/.ld/.sfc are unclaimed by anything else.)
+  "files.associations": {
+    "*.st": "iec-st"
+  }
+}

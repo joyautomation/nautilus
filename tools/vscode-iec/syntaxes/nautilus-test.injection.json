@@ -1,0 +1,61 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "scopeName": "nautilus.injection.test-yaml",
+  "injectionSelector": "L:source.yaml -comment",
+  "patterns": [{ "include": "#expectBlock" }, { "include": "#expectInline" }],
+  "repository": {
+    "expectBlock": {
+      "comment": "An expect:/always: whose value is on following lines. `while` keeps the context open for as long as the lines stay indented past the key, which is how the block's extent is known without parsing YAML.",
+      "begin": "^(\\s*)(expect|always)\\s*:\\s*$",
+      "beginCaptures": {
+        "2": { "name": "keyword.control.nautilus-test" }
+      },
+      "end": "^(?!\\1\\s+\\S)(?!\\s*$)",
+      "patterns": [{ "include": "#expressionItem" }]
+    },
+
+    "expectInline": {
+      "comment": "expect: ABS(TempC - TempSP) < 0.5 — an inline scalar. A value opening with { or [ is a matcher mapping or a list, not an expression, so it is left to the YAML grammar. begin/end rather than match+captures: an `include` of another grammar only takes effect inside a real region, not inside a capture.",
+      "begin": "^\\s*(expect|always)\\s*:[ \\t]+(?=[^{\\[#\\s])",
+      "beginCaptures": {
+        "1": { "name": "keyword.control.nautilus-test" }
+      },
+      "end": "$",
+      "patterns": [{ "include": "#expression" }]
+    },
+
+    "expressionItem": {
+      "comment": "A `- ` list item that is a bare scalar. Items that open a flow mapping ({ A: true }) or are a block mapping (A: true) are tag matchers, and stay YAML.",
+      "begin": "^\\s*(-)[ \\t]+(?![{\\[#])(?![^\\s:]+\\s*:(?:\\s|$))(?=\\S)",
+      "beginCaptures": {
+        "1": { "name": "punctuation.definition.block.sequence.item.yaml" }
+      },
+      "end": "$",
+      "patterns": [{ "include": "#expression" }]
+    },
+
+    "expression": {
+      "comment": "Structured Text, highlighted by the same grammar as a .st file — because that is exactly what the runtime compiles this string as. Quotes are stripped first so a quoted expression still highlights, and a trailing YAML comment is claimed before the ST grammar can treat it as expression text.",
+      "patterns": [
+        { "include": "#quoted" },
+        { "include": "#trailingComment" },
+        { "include": "source.iec-st" }
+      ]
+    },
+
+    "trailingComment": {
+      "comment": "In YAML a # only opens a comment when whitespace precedes it, so this cannot eat a # inside an expression.",
+      "match": "(?<=\\s)#.*$",
+      "name": "comment.line.number-sign.yaml"
+    },
+
+    "quoted": {
+      "comment": "A YAML-quoted expression: strip the quotes off the ST so operators inside still highlight.",
+      "begin": "(['\"])",
+      "end": "(\\1)",
+      "beginCaptures": { "1": { "name": "punctuation.definition.string.begin.yaml" } },
+      "endCaptures": { "1": { "name": "punctuation.definition.string.end.yaml" } },
+      "patterns": [{ "include": "source.iec-st" }]
+    }
+  }
+}

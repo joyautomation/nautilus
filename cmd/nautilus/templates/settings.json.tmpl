@@ -1,4 +1,14 @@
 {
   "nautilus.runtimeUrl": "http://localhost:8080",
-  "nautilus.liveValues.enabled": true
+  "nautilus.liveValues.enabled": true,
+
+  // .st is a contested extension — other Structured Text extensions claim it
+  // too, and whichever loads last wins. Losing it is quiet but total: the
+  // nautilus language server binds to the `iec-st` language, so without this
+  // you get someone else's highlighting and none of the compile diagnostics,
+  // completion, hover, or inline live values. (.fbd/.ld/.sfc are unclaimed by
+  // anything else, which is why only .st needs saying.)
+  "files.associations": {
+    "*.st": "iec-st"
+  }
 }
