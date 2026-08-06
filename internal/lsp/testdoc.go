@@ -40,9 +40,9 @@ func isTestDoc(uri string) bool {
 	return strings.HasSuffix(strings.ToLower(uri), acceptance.SuffixTest)
 }
 
-// exprRegion is one ST expression's span inside the YAML, in editor
-// coordinates.
-type exprRegion struct {
+// span is a piece of the YAML that means something in IEC terms — an ST
+// expression, or a tag name in key position — in editor coordinates.
+type span struct {
 	line       int // 0-based
 	start, end int // 0-based character span within that line
 	text       string
@@ -50,56 +50,62 @@ type exprRegion struct {
 
 // testDoc is the analysis of one suite file.
 type testDoc struct {
-	regions []exprRegion
-	tags    []ProjectTag  // what nautilus.yaml declares, for documentation
-	build   *projectBuild // nil when the project doesn't currently compile
+	exprs []span        // ST expectation expressions
+	keys  []span        // tag names in key position under given/expect/always
+	tags  []ProjectTag  // what nautilus.yaml declares, for documentation
+	build *projectBuild // nil when the project doesn't currently compile
 }
 
-func (t *testDoc) regionAt(p Position) *exprRegion {
-	for i := range t.regions {
-		r := &t.regions[i]
-		if r.line == p.Line && p.Character >= r.start && p.Character <= r.end {
-			return r
+func (t *testDoc) exprAt(p Position) *span { return at(t.exprs, p) }
+func (t *testDoc) keyAt(p Position) *span  { return at(t.keys, p) }
+
+func at(spans []span, p Position) *span {
+	for i := range spans {
+		if s := &spans[i]; s.line == p.Line && p.Character >= s.start && p.Character <= s.end {
+			return s
 		}
 	}
 	return nil
 }
 
-// diagRange spans the whole expression. The compiler positions an error at
-// statement granularity and the expression is exactly one statement, so
-// there is no finer span to be honest about — the same reason a .st file
+// diagRange spans the whole thing. For an expression that is the honest
+// answer: the compiler positions an error at statement granularity and an
+// expression is exactly one statement — the same reason a .st file
 // squiggles from the start of the offending statement.
-func (r exprRegion) diagRange() Range {
+func (s span) diagRange() Range {
 	return Range{
-		Start: Position{Line: r.line, Character: r.start},
-		End:   Position{Line: r.line, Character: r.end},
+		Start: Position{Line: s.line, Character: s.start},
+		End:   Position{Line: s.line, Character: s.end},
 	}
 }
 
-// testRegions finds the ST expressions in a suite. It mirrors
-// Expect.UnmarshalYAML exactly: under `expect:` and `always:`, a scalar is
-// an expression, a mapping is tag matchers, and a sequence mixes the two.
+// scanSuite finds the parts of a suite that are IEC rather than YAML.
 //
-// A file that does not parse yields no regions and therefore no
-// diagnostics. That is deliberate: YAML syntax belongs to the YAML
-// extension and the schema, and a file half-typed should not be squiggled
-// twice by two sources that word it differently.
-func testRegions(text string) []exprRegion {
+// It mirrors the loader exactly. Under `expect:` and `always:`
+// (Expect.UnmarshalYAML) a scalar is an ST expression, a mapping is tag
+// matchers, and a sequence mixes the two; under `given:` a mapping's keys
+// are tags. Only the FIRST level of keys counts — inside
+// `TempC: {near: 65.0}` the inner keys are matcher operators, not tags.
+//
+// A file that does not parse yields nothing, and therefore no diagnostics.
+// That is deliberate: YAML syntax belongs to the YAML extension and the
+// schema, and a file half-typed should not be squiggled twice by two
+// sources that word it differently.
+func scanSuite(text string) (exprs, keys []span) {
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(text), &root); err != nil {
-		return nil
+		return nil, nil
 	}
 	lines := strings.Split(text, "\n")
-	var out []exprRegion
-	add := func(n *yaml.Node) {
+	spanOf := func(n *yaml.Node) (span, bool) {
 		// A block scalar spanning lines has no single span to squiggle;
 		// saying nothing beats pointing somewhere wrong.
 		if n.Kind != yaml.ScalarNode || strings.Contains(n.Value, "\n") {
-			return
+			return span{}, false
 		}
 		line := n.Line - 1
 		if line < 0 || line >= len(lines) {
-			return
+			return span{}, false
 		}
 		start := n.Column - 1
 		if n.Style == yaml.SingleQuotedStyle || n.Style == yaml.DoubleQuotedStyle {
@@ -107,9 +113,21 @@ func testRegions(text string) []exprRegion {
 		}
 		end := min(start+len(n.Value), len(lines[line]))
 		if start < 0 || start >= end {
-			return
+			return span{}, false
 		}
-		out = append(out, exprRegion{line: line, start: start, end: end, text: n.Value})
+		return span{line: line, start: start, end: end, text: n.Value}, true
+	}
+	addExpr := func(n *yaml.Node) {
+		if s, ok := spanOf(n); ok {
+			exprs = append(exprs, s)
+		}
+	}
+	addKeys := func(m *yaml.Node) {
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			if s, ok := spanOf(m.Content[i]); ok {
+				keys = append(keys, s)
+			}
+		}
 	}
 	var walk func(*yaml.Node)
 	walk = func(n *yaml.Node) {
@@ -121,23 +139,35 @@ func testRegions(text string) []exprRegion {
 		case yaml.MappingNode:
 			for i := 0; i+1 < len(n.Content); i += 2 {
 				k, v := n.Content[i], n.Content[i+1]
-				if k.Value == "expect" || k.Value == "always" {
+				switch k.Value {
+				case "expect", "always":
 					switch v.Kind {
 					case yaml.ScalarNode:
-						add(v)
+						addExpr(v)
+					case yaml.MappingNode:
+						addKeys(v)
 					case yaml.SequenceNode:
 						for _, item := range v.Content {
-							add(item)
+							switch item.Kind {
+							case yaml.ScalarNode:
+								addExpr(item)
+							case yaml.MappingNode:
+								addKeys(item)
+							}
 						}
 					}
-					continue
+				case "given":
+					if v.Kind == yaml.MappingNode {
+						addKeys(v)
+					}
+				default:
+					walk(v)
 				}
-				walk(v)
 			}
 		}
 	}
 	walk(&root)
-	return out
+	return exprs, keys
 }
 
 // ─── the project an expression compiles against ────────────────────────
@@ -272,7 +302,8 @@ func buildProject(dir string) (*projectBuild, error) {
 
 // analyzeTest builds a suite's analysis and its diagnostics.
 func (s *Server) analyzeTest(uri, text string) (*testDoc, []Diagnostic) {
-	td := &testDoc{regions: testRegions(text)}
+	td := &testDoc{}
+	td.exprs, td.keys = scanSuite(text)
 	path, ok := uriToPath(uri)
 	if !ok {
 		return td, nil
@@ -281,30 +312,127 @@ func (s *Server) analyzeTest(uri, text string) (*testDoc, []Diagnostic) {
 	entry := projectBuildFor(path)
 	if entry == nil {
 		// No project, or none that has ever compiled. There is nothing to
-		// check an expression against, and guessing would mean squiggling
-		// names that are perfectly real.
+		// check a name against, and guessing would mean squiggling names
+		// that are perfectly real.
 		return td, nil
 	}
 	td.build = entry.build
 
 	var diags []Diagnostic
-	for _, r := range td.regions {
-		verdict := entry.check(r.text)
+	for _, e := range td.exprs {
+		verdict := entry.check(e.text)
 		if verdict == nil {
 			continue
 		}
 		diags = append(diags, Diagnostic{
-			Range:    r.diagRange(),
+			Range:    e.diagRange(),
 			Severity: SeverityError,
 			Source:   "nautilus-test",
 			Message:  verdict.Error(),
 		})
 	}
+	diags = append(diags, td.unknownTagDiags()...)
 	return td, diags
 }
 
+// unknownTagDiags reports a tag name in key position that the project does
+// not have. `nautilus test` already refuses these — "no tag %q in this
+// project" — so this is the same verdict, moved to where the mistake was
+// made rather than where it is discovered.
+func (t *testDoc) unknownTagDiags() []Diagnostic {
+	known := t.knownTags()
+	if len(known) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(known))
+	for n := range known {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	var out []Diagnostic
+	for _, k := range t.keys {
+		// `expect: { main.integral: ... }` names a program's retained local,
+		// which nothing outside a run can enumerate.
+		if strings.Contains(k.text, ".") || known[k.text] {
+			continue
+		}
+		msg := fmt.Sprintf("no tag %q in this project", k.text)
+		if did := nearest(k.text, names); did != "" {
+			msg += fmt.Sprintf(" — did you mean %q?", did)
+		}
+		out = append(out, Diagnostic{
+			Range:    k.diagRange(),
+			Severity: SeverityError,
+			Source:   "nautilus-test",
+			Message:  msg,
+		})
+	}
+	return out
+}
+
+// knownTags is every name a test may use, as the union of what the programs
+// bind and what the manifest declares.
+//
+// The union is deliberately wider than either authority the runner
+// consults — `given` checks the manifest's declarations, `expect` reads the
+// live store — because the cost of the two errors is not symmetric. Missing
+// a typo means the test still fails loudly when run; squiggling a real tag
+// means the editor is lying about working code.
+func (t *testDoc) knownTags() map[string]bool {
+	known := map[string]bool{}
+	if t.build != nil {
+		for n := range t.build.ext {
+			known[n] = true
+		}
+	}
+	for _, tag := range t.tags {
+		known[tag.Name] = true
+	}
+	return known
+}
+
+// nearest returns the closest known name within a two-edit distance, or ""
+// — a typo is nearly always a transposition or a doubled key, and anything
+// looser starts suggesting unrelated tags with confidence it hasn't earned.
+func nearest(name string, known []string) string {
+	best, bestDist := "", 3
+	for _, candidate := range known {
+		// A case-only difference is always the answer; IEC identifiers are
+		// case-insensitive but tag names are not.
+		if strings.EqualFold(candidate, name) {
+			return candidate
+		}
+		if d := editDistance(name, candidate); d < bestDist {
+			best, bestDist = candidate, d
+		}
+	}
+	return best
+}
+
+// editDistance is Levenshtein over two short identifiers, one row at a time.
+func editDistance(a, b string) int {
+	prev := make([]int, len(b)+1)
+	curr := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		curr[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			curr[j] = min(prev[j]+1, min(curr[j-1]+1, prev[j-1]+cost))
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(b)]
+}
+
 func (s *Server) hoverTest(m *message, doc *document, uri, word string, wr Range, pos Position) {
-	if word == "" || doc.test.regionAt(pos) == nil {
+	if word == "" || (doc.test.exprAt(pos) == nil && doc.test.keyAt(pos) == nil) {
 		s.w.respond(m.ID, nil)
 		return
 	}
@@ -315,7 +443,9 @@ func (s *Server) hoverTest(m *message, doc *document, uri, word string, wr Range
 		})
 		return
 	}
-	if b := doc.test.build; b != nil {
+	// A library FUNCTION is only callable from an expression; in key
+	// position the name can only ever be a tag.
+	if b := doc.test.build; b != nil && doc.test.exprAt(pos) != nil {
 		if sym := fileScopeSymbol(&b.lib, word); sym != nil {
 			s.w.respond(m.ID, Hover{
 				Contents: MarkupContent{Kind: "markdown", Value: symbolHover(&b.lib, sym)},
@@ -330,7 +460,7 @@ func (s *Server) hoverTest(m *message, doc *document, uri, word string, wr Range
 func (s *Server) completeTest(m *message, doc *document, pos Position) {
 	td := doc.test
 	switch {
-	case td.regionAt(pos) != nil:
+	case td.exprAt(pos) != nil:
 		items := td.tagItems()
 		if b := td.build; b != nil {
 			for i := range b.lib.Symbols {

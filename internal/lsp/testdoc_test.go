@@ -32,7 +32,7 @@ func exampleURI(t *testing.T, name string) (uri, text string) {
 // YAML) and no less (a missed one is a silent hole).
 func TestRegionsMatchTheLoader(t *testing.T) {
 	_, text := exampleURI(t, "heated-tank_test.yaml")
-	regions := testRegions(text)
+	exprs, _ := scanSuite(text)
 
 	suite, err := acceptance.LoadSuite(os.DirFS(theExample), "heated-tank_test.yaml")
 	if err != nil {
@@ -61,9 +61,9 @@ func TestRegionsMatchTheLoader(t *testing.T) {
 		t.Fatal("the example suite has no ST expressions — this test proves nothing")
 	}
 
-	got := make([]string, len(regions))
+	got := make([]string, len(exprs))
 	lines := strings.Split(text, "\n")
-	for i, r := range regions {
+	for i, r := range exprs {
 		got[i] = r.text
 		// The span must actually cover the expression in the file, or the
 		// squiggle lands on the wrong characters.
@@ -88,7 +88,7 @@ func TestExampleSuiteHasNoDiagnostics(t *testing.T) {
 	if td.build == nil {
 		t.Fatal("the example project did not build — nothing was actually checked")
 	}
-	if len(td.regions) == 0 {
+	if len(td.exprs) == 0 {
 		t.Fatal("no expressions found")
 	}
 }
@@ -118,6 +118,73 @@ func TestUnknownTagInAnExpression(t *testing.T) {
 	line := strings.Split(broken, "\n")[d.Range.Start.Line]
 	if got := line[d.Range.Start.Character:d.Range.End.Character]; got != "ABS(TempX - TempSP) < 0.5" {
 		t.Errorf("squiggle covers %q, want just the expression", got)
+	}
+}
+
+// A misspelled tag in KEY position — `expect: { PudmpRun: false }` — is the
+// same mistake as one in an expression, and `nautilus test` already refuses
+// it. It must squiggle, name the tag, and suggest the near miss.
+func TestUnknownTagInKeyPosition(t *testing.T) {
+	s := &Server{docs: map[string]*document{}}
+	uri, text := exampleURI(t, "heated-tank_test.yaml")
+	for _, tc := range []struct{ from, to, want string }{
+		{"expect: { PumpRun: false }", "expect: { PudmpRun: false }", "PudmpRun"},
+		{"given: { LevelPct: 35.0 }", "given: { LevelPtc: 35.0 }", "LevelPtc"},
+		{"expect: { TempLowAlm: true }", "expect: { templowalm: true }", "templowalm"},
+	} {
+		broken := strings.Replace(text, tc.from, tc.to, 1)
+		if broken == text {
+			t.Fatalf("%q is no longer in the example suite", tc.from)
+		}
+		_, diags := s.analyzeTest(uri, broken)
+		if len(diags) != 1 {
+			t.Errorf("%s: got %d diagnostics, want 1: %+v", tc.want, len(diags), diags)
+			continue
+		}
+		d := diags[0]
+		if !strings.Contains(d.Message, tc.want) || !strings.Contains(d.Message, "did you mean") {
+			t.Errorf("%s: message = %q", tc.want, d.Message)
+		}
+		line := strings.Split(broken, "\n")[d.Range.Start.Line]
+		if got := line[d.Range.Start.Character:d.Range.End.Character]; got != tc.want {
+			t.Errorf("%s: squiggle covers %q, want just the key", tc.want, got)
+		}
+	}
+}
+
+// The far more damaging failure is the opposite one: squiggling a name that
+// is real. Every key the example suite uses must pass, matcher operators
+// and `task.local` included.
+func TestKeyCheckHasNoFalsePositives(t *testing.T) {
+	s := &Server{docs: map[string]*document{}}
+	uri, text := exampleURI(t, "heated-tank_test.yaml")
+	// A matcher's own keys (near, tol, between, gt) are operators, and a
+	// dotted name is a program local nothing can enumerate before a run.
+	extra := strings.Replace(text,
+		"expect: { TempLowAlm: true }",
+		"expect: { TempLowAlm: true, main.integral: { gt: 0.0 } }", 1)
+	if extra == text {
+		t.Fatal("the expectation this test edits is gone")
+	}
+	td, diags := s.analyzeTest(uri, extra)
+	if len(diags) != 0 {
+		t.Fatalf("real names squiggled: %+v", diags)
+	}
+	// And the keys were actually found — a scanner that saw nothing would
+	// pass this test for the wrong reason.
+	var found int
+	for _, k := range td.keys {
+		if k.text == "TempLowAlm" || k.text == "Heater" || k.text == "LevelPct" {
+			found++
+		}
+	}
+	if found == 0 {
+		t.Fatal("no tag keys were scanned at all")
+	}
+	for _, k := range td.keys {
+		if k.text == "near" || k.text == "between" || k.text == "gt" {
+			t.Errorf("matcher operator %q was scanned as a tag name", k.text)
+		}
 	}
 }
 
@@ -161,16 +228,17 @@ func TestExternalsCoverTagsWithNoSeed(t *testing.T) {
 // produce ST documentation for it.
 func TestHoverOnlyInsideExpressions(t *testing.T) {
 	_, text := exampleURI(t, "heated-tank_test.yaml")
-	td := &testDoc{regions: testRegions(text)}
+	td := &testDoc{}
+	td.exprs, td.keys = scanSuite(text)
 	// Line 63 (1-based) holds `- ABS(TempC - TempSP) < 0.5`.
 	inside := Position{Line: 62, Character: strings.Index(strings.Split(text, "\n")[62], "TempC")}
-	if td.regionAt(inside) == nil {
+	if td.exprAt(inside) == nil {
 		t.Fatal("TempC in the expression is not inside a region")
 	}
 	// Line 58 (1-based) holds `expect: { TempC: { near: 65.0 } }` — a
 	// matcher, not ST.
 	outside := Position{Line: 57, Character: strings.Index(strings.Split(text, "\n")[57], "TempC")}
-	if r := td.regionAt(outside); r != nil {
+	if r := td.exprAt(outside); r != nil {
 		t.Errorf("a tag matcher was treated as an expression: %q", r.text)
 	}
 }
@@ -222,8 +290,8 @@ func TestSuiteWithoutAProject(t *testing.T) {
 	if len(diags) != 0 {
 		t.Fatalf("got diagnostics with no project to check against: %+v", diags)
 	}
-	if len(td.regions) != 1 {
-		t.Fatalf("got %d regions, want 1", len(td.regions))
+	if len(td.exprs) != 1 {
+		t.Fatalf("got %d regions, want 1", len(td.exprs))
 	}
 }
 
@@ -336,7 +404,7 @@ func TestBrokenYAMLIsSilent(t *testing.T) {
 	s := &Server{docs: map[string]*document{}}
 	uri, _ := exampleURI(t, "heated-tank_test.yaml")
 	td, diags := s.analyzeTest(uri, "tests:\n  - name: [unclosed\n")
-	if len(diags) != 0 || len(td.regions) != 0 {
-		t.Fatalf("broken YAML produced %d diagnostics and %d regions", len(diags), len(td.regions))
+	if len(diags) != 0 || len(td.exprs) != 0 {
+		t.Fatalf("broken YAML produced %d diagnostics and %d regions", len(diags), len(td.exprs))
 	}
 }
