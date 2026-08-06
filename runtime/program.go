@@ -247,6 +247,27 @@ func (p *Program) Locals() map[string]any {
 	return out
 }
 
+// Globals reports every PLC variable the program binds, with the type it
+// was declared as — the VAR_EXTERNAL block as the compiler resolved it,
+// diagram languages included (they transpile to ST before lowering).
+//
+// This is introspection for tooling, not a scan path. It answers a question
+// the tag store cannot until something has run: an output tag with no seed
+// exists in no snapshot, yet the program declares its type and a test may
+// well assert on it.
+func (p *Program) Globals() map[string]*ir.Type {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.prog == nil {
+		return nil
+	}
+	out := make(map[string]*ir.Type, len(p.prog.Globals))
+	for name, t := range p.prog.Globals {
+		out[name] = t
+	}
+	return out
+}
+
 func (p *Program) Source() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -362,7 +362,7 @@ type symbol struct {
 func newLowerer(prog *Program, userFBs map[string]*ir.FBDef) *lowerer {
 	return &lowerer{
 		prog:       prog,
-		irProg:     &ir.Program{Name: prog.Name, SlotIndex: map[string]int{}},
+		irProg:     &ir.Program{Name: prog.Name, SlotIndex: map[string]int{}, Globals: map[string]*ir.Type{}},
 		scope:      map[string]symbol{},
 		types:      map[string]*ir.Type{},
 		userFBs:    userFBs,
@@ -589,6 +589,9 @@ func (l *lowerer) collectVars() error {
 			}
 			if kind == ir.VarGlobal {
 				l.scope[vd.Name] = symbol{slot: -1, typ: t, kind: ir.VarGlobal, global: vd.Name}
+				// A global has no slot, so Slots cannot record that the
+				// program binds it; Globals is where tooling reads it.
+				l.irProg.Globals[vd.Name] = t
 				continue
 			}
 			slot := len(l.irProg.Slots)
@@ -614,6 +617,7 @@ func (l *lowerer) collectVars() error {
 			continue
 		}
 		l.scope[name] = symbol{slot: -1, typ: t, kind: ir.VarGlobal, global: name}
+		l.irProg.Globals[name] = t
 	}
 	return nil
 }

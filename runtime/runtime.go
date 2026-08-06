@@ -241,6 +241,23 @@ func (r *Runtime) TaskNames() []string {
 	return names
 }
 
+// Globals reports every PLC variable the resource's programs bind, unioned
+// across the main task and every additional task, with the type each was
+// declared as. It is available the moment New returns — before any scan —
+// which is what tooling needs.
+func (r *Runtime) Globals() map[string]*ir.Type {
+	out := r.prog.Globals()
+	if out == nil {
+		out = map[string]*ir.Type{}
+	}
+	for _, tr := range r.tasks {
+		for name, t := range tr.prog.Globals() {
+			out[name] = t
+		}
+	}
+	return out
+}
+
 // TaskProgram returns a task's program by task name — "main" (or "") for
 // the main task, nil for an unknown name. Task programs hot-swap exactly
 // like the main one; the swap applies on that task's next scan.

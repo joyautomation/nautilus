@@ -31,6 +31,13 @@ type Program struct {
 	// The VM does not consult this; it exists for introspection (LSP, debug, tests).
 	SlotIndex map[string]int
 
+	// Globals maps every PLC variable this program binds — VAR_EXTERNAL and
+	// VAR_GLOBAL — to its declared type. Globals have no slot (their
+	// canonical value lives in the tag store, reached through Host), so
+	// Slots cannot answer what tags a program touches. Introspection only:
+	// the VM resolves globals by name at runtime.
+	Globals map[string]*Type
+
 	// UserFBs are FBDefs declared at the top of this source file via
 	// FUNCTION_BLOCK ... END_FUNCTION_BLOCK. The engine pulls these out
 	// after Lower returns and registers them so other programs can use

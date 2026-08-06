@@ -16,8 +16,10 @@ package acceptance
 // is an expression, a mapping is tag matchers.
 
 import (
+	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -25,6 +27,7 @@ import (
 
 	"github.com/joyautomation/nautilus/internal/stproject"
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -235,7 +238,9 @@ func numOf(v ir.Value) float64 {
 
 // trim renders a float without trailing zeros, so a want reads like the
 // number the author wrote.
-func trim(f float64) string { return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.4f", f), "0"), ".") }
+func trim(f float64) string {
+	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.4f", f), "0"), ".")
+}
 
 // show renders an actual value for a failure line.
 func show(v ir.Value) string {
@@ -265,43 +270,116 @@ type predicate struct {
 	prog *runtime.Program
 }
 
-// compile wraps the expression in a throwaway POU whose VAR_EXTERNAL block
-// is generated from the live tag store, so the expression sees exactly the
-// tags the resource has, with their real types. The project's own library
-// files come along, which is what makes an ST FUNCTION in blocks.st usable
-// as a reusable assertion.
-func compilePredicate(rt *runtime.Runtime, libs []string, expr string) (*predicate, error) {
-	snap := rt.Tags().Snapshot()
-	names := make([]string, 0, len(snap))
-	for n := range snap {
-		if n == resultTag {
+// Externals is the VAR_EXTERNAL block an expectation expression compiles
+// against: tag name → the ST type it is declared as.
+type Externals map[string]string
+
+// ExternalsOf reports the tags an expression may name, as the union of what
+// the tag store HOLDS and what the programs DECLARE.
+//
+// Neither source alone is right. The store misses a tag nothing has written
+// yet — an output with no seed exists in no snapshot, and is exactly the
+// sort of tag a first-scan expectation names. The declarations miss a tag
+// only the manifest seeds. Compound values (UDTs, arrays, FB instances)
+// have no place in a generated VAR_EXTERNAL block, so they are left out and
+// an expression referencing one fails to compile with the name unknown.
+func ExternalsOf(rt *runtime.Runtime) Externals {
+	ext := Externals{}
+	for name, t := range rt.Globals() {
+		if t == nil {
 			continue
 		}
-		if _, ok := stTypeName(snap[n].Kind); ok {
-			names = append(names, n)
+		if ty, ok := stTypeName(t.Kind); ok {
+			ext[name] = ty
 		}
+	}
+	// The store wins on a disagreement: it is what eval actually reads.
+	for name, v := range rt.Tags().Snapshot() {
+		if ty, ok := stTypeName(v.Kind); ok {
+			ext[name] = ty
+		}
+	}
+	delete(ext, resultTag)
+	return ext
+}
+
+// exprPrefix opens the generated assignment; its length is what maps a
+// compiler column back onto the author's expression.
+const exprPrefix = resultTag + " := ("
+
+// exprSource wraps an expression in a throwaway POU that declares every tag
+// as VAR_EXTERNAL, so the expression sees exactly what the resource has,
+// with real types. The project's own library files come along, which is
+// what makes an ST FUNCTION in blocks.st usable as a reusable assertion.
+//
+// preludeLines counts the library source placed ahead of the POU, which is
+// what tells a mistake in the expression apart from a broken library file.
+func exprSource(ext Externals, libs []string, expr string) (src string, preludeLines int) {
+	names := make([]string, 0, len(ext))
+	for n := range ext {
+		names = append(names, n)
 	}
 	sort.Strings(names)
 
 	var b strings.Builder
 	b.WriteString("PROGRAM __ExpectPOU\nVAR_EXTERNAL\n")
 	for _, n := range names {
-		ty, _ := stTypeName(snap[n].Kind)
-		fmt.Fprintf(&b, "    %s : %s;\n", n, ty)
+		fmt.Fprintf(&b, "    %s : %s;\n", n, ext[n])
 	}
 	fmt.Fprintf(&b, "    %s : BOOL;\nEND_VAR\n", resultTag)
-	fmt.Fprintf(&b, "%s := (%s);\nEND_PROGRAM\n", resultTag, expr)
+	fmt.Fprintf(&b, "%s%s);\nEND_PROGRAM\n", exprPrefix, expr)
 
-	src := b.String()
+	src = b.String()
 	if len(libs) > 0 {
-		src = stproject.Join(libs, src)
+		prelude := stproject.Join(libs, "")
+		src = prelude + src
+		preludeLines = strings.Count(prelude, "\n")
 	}
+	return src, preludeLines
+}
+
+// compile wraps the expression and compiles it against the live runtime.
+func compilePredicate(rt *runtime.Runtime, libs []string, expr string) (*predicate, error) {
+	src, _ := exprSource(ExternalsOf(rt), libs, expr)
 	prog, err := runtime.Compile(src)
 	if err != nil {
 		return nil, fmt.Errorf("expression %q: %w", expr, err)
 	}
 	return &predicate{expr: expr, prog: prog}, nil
 }
+
+// CheckExpr compiles one expectation expression without running it, for
+// tooling that wants the compiler's verdict on an expression in isolation —
+// an editor squiggling a test file as it is typed. It shares exprSource
+// with the runner, so what checks here is what runs there.
+//
+// The message is rewritten for where it will be shown: the line number a
+// compiler error carries belongs to the generated POU, which the author
+// never sees, so it is stripped rather than shown as a lie.
+func CheckExpr(ext Externals, libs []string, expr string) error {
+	src, preludeLines := exprSource(ext, libs, expr)
+	_, err := runtime.Compile(src)
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	pos, known := st.ParseErrorPos(err)
+	if le, ok := st.AsLowerError(err); ok && le.Pos.Line > 0 {
+		pos, known, msg = le.Pos, true, le.Err.Error()
+	}
+	msg = linePrefix.ReplaceAllString(msg, "")
+	// A failure positioned in the prelude is the project's library files
+	// being broken, not this expression. Say so, or the author hunts for a
+	// mistake that isn't in front of them.
+	if known && pos.Line <= preludeLines && preludeLines > 0 {
+		msg = "in project library files: " + msg
+	}
+	return errors.New(msg)
+}
+
+// linePrefix is the "line N: " a compiler error carries; the line belongs
+// to generated scaffolding and would only mislead.
+var linePrefix = regexp.MustCompile(`^line \d+: `)
 
 // eval runs the compiled expression against the live tag store.
 func (p *predicate) eval(rt *runtime.Runtime) (bool, error) {

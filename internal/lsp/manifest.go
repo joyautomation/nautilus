@@ -238,22 +238,3 @@ func inVarExternal(text string, line int) bool {
 	}
 	return inBlock
 }
-
-// handleProjectTags answers the custom `nautilus/projectTags` request: the
-// tags declared by the project governing a URI. The editor uses it where
-// there is no ST document to analyze — completing a tag name inside a
-// *_test.yaml, whose expectations name tags rather than program locals.
-func (s *Server) handleProjectTags(m *message) {
-	var p struct {
-		URI string `json:"uri"`
-	}
-	if !unmarshal(m.Params, &p) {
-		s.w.respondError(m.ID, codeInvalidParams, "bad projectTags params")
-		return
-	}
-	tags := s.projectTagsFor(p.URI)
-	if tags == nil {
-		tags = []ProjectTag{}
-	}
-	s.w.respond(m.ID, tags)
-}

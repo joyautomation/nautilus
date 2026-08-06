@@ -18,6 +18,7 @@ nautilus test -json     # one NDJSON event per test, for editors and CI
 - [Expectations](#expectations)
 - [Freezing tasks](#freezing-tasks)
 - [Reading a failure](#reading-a-failure)
+- [In the editor](#in-the-editor)
 - [In CI](#in-ci)
 - [From a Go project](#from-a-go-project)
 - [What these tests cannot do](#what-these-tests-cannot-do)
@@ -206,6 +207,36 @@ actually doing — with the units and descriptions from your manifest:
 The trajectory is the point. Here the loop is fine and still converging —
 the 20 s contract was too tight, which the numbers say and a bare
 pass/fail wouldn't.
+
+## In the editor
+
+With the VS Code extension installed, a suite gets the treatment a program
+gets.
+
+The Test Explorer discovers every `*_test.yaml` in the workspace and runs
+them individually, by file, or all at once; a failure reports its line and
+its trajectory.
+
+Expectations written as ST are compiled as you type, against the tags your
+project actually has — what `nautilus.yaml` declares, unioned with what
+the programs bind, so a tag with no `init:` is typed by the program that
+writes it. A name that doesn't exist is a squiggle before anything runs:
+
+```
+expect:
+  - ABS(TempX - TempSP) < 0.5     undeclared identifier "TempX"
+```
+
+Hover a tag for what the manifest says it is — its unit, its description,
+and what its role means in the scan. Completion offers the project's tags,
+ST's builtin functions, and the `FUNCTION`s declared in your own library
+files, which makes the reusable-predicate story discoverable rather than
+something you have to remember.
+
+All of that comes from the CLI's language server, so it needs `nautilus`
+on your `PATH`. The rest of the file — keys, durations, matcher shapes —
+is checked against a JSON schema, which needs the YAML extension
+(`redhat.vscode-yaml`); the ST parts don't.
 
 ## In CI
 

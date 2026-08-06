@@ -26,7 +26,6 @@ import { ComponentEditorProvider } from "./componentEditor";
 import { UserComponentManager } from "./userComponents";
 import { registerEditComponentPortsCommand } from "./editComponentPorts";
 import { AcceptanceTests } from "./acceptanceTests";
-import { registerTestCompletion } from "./testCompletion";
 
 let client: LanguageClient | undefined;
 let live: LiveValues | undefined;
@@ -137,6 +136,12 @@ async function startLanguageClient(context: vscode.ExtensionContext): Promise<vo
       { language: "iec-fbd" },
       { language: "iec-ld" },
       { language: "iec-sfc" },
+      // Acceptance suites: YAML holding ST expectation expressions, which
+      // the server compiles and completes like any other ST. The language
+      // id is "yaml" with the YAML extension installed and "plaintext"
+      // without it, and both must reach the server.
+      { language: "yaml", pattern: "**/*_test.yaml" },
+      { language: "plaintext", pattern: "**/*_test.yaml" },
     ],
   };
 
@@ -150,9 +155,6 @@ async function startLanguageClient(context: vscode.ExtensionContext): Promise<vo
   try {
     await client.start();
     context.subscriptions.push({ dispose: () => client?.stop() });
-    // Tag completion in *_test.yaml asks the server for the project's tags,
-    // so it only makes sense once the server is up.
-    context.subscriptions.push(registerTestCompletion(client));
   } catch {
     client = undefined;
     // Syntax highlighting, commands, and live values still work without the

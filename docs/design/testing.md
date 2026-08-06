@@ -383,21 +383,35 @@ have gone looking for it at wall-clock speed.
 3. ✅ **Done.** `cmd/nautilus`: `nautilus test [dir] [-run re] [-v] [-json]`, which compiles
    first (a compile error is a suite failure carrying the diagnostic); `nautilus build`
    excludes `*_test.yaml` from the embedded archive.
-4. ✅ **Mostly done.** Scaffolding: every manifest template writes a `<name>_test.yaml`, the
+4. ✅ **Done.** Scaffolding: every manifest template writes a `<name>_test.yaml`, the
    manifest CI template runs `nautilus test`, and `examples/heated-tank-nogo` carries a worked
-   suite. **Still to do:** the JSON Schema and its `yaml.schemas` contribution in the
-   extension — the piece that turns author-time typos and tag-name completion into editor
-   features rather than run-time errors.
+   suite.
+5. ✅ **Done.** Editor integration, in three layers:
+   - **JSON Schema** (`tools/vscode-iec/schemas/nautilus-test.schema.json`) over the keys,
+     with a Go guard (`acceptance/schema_test.go`) proving it accepts and rejects exactly what
+     the loader does — it originally accepted three shapes the loader refused.
+   - **Test Explorer** over `nautilus test -list` / `-json`, one CLI invocation per project.
+   - **ST inside the YAML.** An injection grammar highlights expectation expressions, and
+     `nautilus lsp` treats a `*_test.yaml` as a document of its own: it finds the expression
+     regions with the same rule `Expect.UnmarshalYAML` uses, compiles each through
+     `acceptance.CheckExpr` — the runner's own wrapper — and publishes diagnostics, hover, and
+     completion against them. The tags in scope are `ExternalsOf`: what the store holds
+     unioned with what the programs *declare*, which is the only way an unseeded tag like
+     `Heater` or a `dt-tag` like `ScanDtS` is typed at all. That union needed
+     `ir.Program.Globals`: globals have no slot, so `Slots` could never answer which tags a
+     program binds.
 
 Also still to do, in rough priority order:
 
-- **Editor integration**: JSON Schema, tag-name completion from the manifest, and a test
-  explorer over `-json`.
 - **A recorder**: capture a window of a live run off the SSE stream and emit a `*_test.yaml`.
   This is the DX argument that only works because tests are data, and it turns commissioning
   into a regression suite.
 - **Locals in expressions.** `expect` resolves `task.local` (e.g. `main.integral`), but an
   ST expression cannot reference one — the generated `VAR_EXTERNAL` block only covers tags.
+- **Column-precise squiggles.** The compiler positions errors at statement granularity and an
+  expression is exactly one statement, so an editor squiggle spans the whole expression. Same
+  behaviour a `.st` file gets; finer positions would need the lowerer to carry sub-expression
+  spans.
 
 ## 8. Non-goals and known limits
 
@@ -424,3 +438,7 @@ Also still to do, in rough priority order:
 | Stub driver | `io/io.go` (`Memory`) |
 | Scaffolded CI | `cmd/nautilus/templates/ci.yml.tmpl` |
 | CLI command switch | `cmd/nautilus/main.go` |
+| Expression wrapper (shared) | `acceptance/expect.go` (`exprSource`, `ExternalsOf`, `CheckExpr`) |
+| Suites in the language server | `internal/lsp/testdoc.go` |
+| Tags a program binds | `lang/ir/program.go` (`Program.Globals`), `runtime/runtime.go` (`Runtime.Globals`) |
+| Editor contributions | `tools/vscode-iec/package.json`, `syntaxes/nautilus-test.injection.json` |

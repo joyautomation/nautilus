@@ -49,6 +49,10 @@ type Server struct {
 type document struct {
 	text string
 	an   analysis
+	// test is set for a `*_test.yaml` acceptance suite: the document is
+	// YAML with ST expressions embedded in it, not an IEC program, and
+	// every handler answers from this instead of from an.
+	test *testDoc
 }
 
 // Serve runs a session until the client disconnects or sends exit.
@@ -117,8 +121,6 @@ func (s *Server) dispatch(m *message) {
 		s.handleHover(m)
 	case "textDocument/completion":
 		s.handleCompletion(m)
-	case "nautilus/projectTags":
-		s.handleProjectTags(m)
 	default:
 		if m.ID != nil { // unknown request: must answer; unknown notification: ignore
 			s.w.respondError(m.ID, codeMethodNotFound, fmt.Sprintf("method %q not supported", m.Method))
@@ -135,6 +137,14 @@ func unmarshal(raw json.RawMessage, v any) bool {
 // the compile as a prelude so cross-file types resolve — unsaved buffers of
 // those siblings win over their on-disk content.
 func (s *Server) setDocument(uri, text string) {
+	if isTestDoc(uri) {
+		td, diags := s.analyzeTest(uri, text)
+		s.docs[uri] = &document{text: text, test: td}
+		s.w.notify("textDocument/publishDiagnostics", PublishDiagnosticsParams{
+			URI: uri, Diagnostics: nonNil(diags),
+		})
+		return
+	}
 	var prelude string
 	var preludeLines int
 	if path, ok := uriToPath(uri); ok {
@@ -215,6 +225,12 @@ func (s *Server) handleDefinition(m *message) {
 	if !ok {
 		return
 	}
+	// A test file's names live in the project's programs and libraries, not
+	// in the suite; there is nothing in this document to jump to.
+	if doc.test != nil {
+		s.w.respond(m.ID, nil)
+		return
+	}
 	sym := (*Symbol)(nil)
 	if word != "" {
 		sym = doc.an.lookup(word, pos.Line+1)
@@ -249,6 +265,10 @@ func (s *Server) handleHover(m *message) {
 	if !ok {
 		return
 	}
+	if doc.test != nil {
+		s.hoverTest(m, doc, uri, word, wr, pos)
+		return
+	}
 	if word == "" {
 		s.w.respond(m.ID, nil)
 		return
@@ -278,6 +298,16 @@ func (s *Server) handleHover(m *message) {
 		s.w.respond(m.ID, nil)
 		return
 	}
+	s.w.respond(m.ID, Hover{
+		Contents: MarkupContent{Kind: "markdown", Value: symbolHover(&doc.an, sym)},
+		Range:    &wr,
+	})
+}
+
+// symbolHover renders a declared symbol as markdown. Shared so a name means
+// the same thing wherever it is hovered — in a program, or inside an ST
+// expectation expression in a test file.
+func symbolHover(an *analysis, sym *Symbol) string {
 	var b strings.Builder
 	switch sym.BlockKind {
 	case "FUNCTION_BLOCK":
@@ -286,7 +316,7 @@ func (s *Server) handleHover(m *message) {
 		fmt.Fprintf(&b, "```iec-st\nFUNCTION %s : %s\n```", sym.Name, sym.Datatype)
 	case "TYPE":
 		// Show the full definition, not just the name.
-		if def, ok := doc.an.typeExpansion(sym.Name); ok {
+		if def, ok := an.typeExpansion(sym.Name); ok {
 			fmt.Fprintf(&b, "```iec-st\nTYPE %s\n```", def)
 		} else {
 			fmt.Fprintf(&b, "```iec-st\nTYPE %s : %s\n```", sym.Name, sym.Datatype)
@@ -299,19 +329,20 @@ func (s *Server) handleHover(m *message) {
 		// A variable of a UDT type gets the type's structure expanded
 		// beneath, TypeScript-style — including types declared in sibling
 		// library files.
-		if def, ok := doc.an.typeExpansion(sym.Datatype); ok {
+		if def, ok := an.typeExpansion(sym.Datatype); ok {
 			fmt.Fprintf(&b, "\n\n```iec-st\nTYPE %s\n```", def)
 		}
 	}
-	s.w.respond(m.ID, Hover{
-		Contents: MarkupContent{Kind: "markdown", Value: b.String()},
-		Range:    &wr,
-	})
+	return b.String()
 }
 
 func (s *Server) handleCompletion(m *message) {
 	doc, uri, _, _, pos, ok := s.positional(m)
 	if !ok {
+		return
+	}
+	if doc.test != nil {
+		s.completeTest(m, doc, pos)
 		return
 	}
 	// Inside VAR_EXTERNAL the question is "which of the project's tags do I
