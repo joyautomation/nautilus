@@ -1,0 +1,9 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "nautilus tag file",
+  "description": "A bare YAML list of tags, composed into a project by naming this file under `tag-files:` in nautilus.yaml. Normally generated and committed — the diff is the review — so it carries a `do not edit; re-run the generator` header. Entries are exactly the entries of `tags:`; a tag declared here and in the manifest is an error, not an override.",
+  "type": "array",
+  "items": {
+    "$ref": "nautilus.schema.json#/definitions/tag"
+  }
+}

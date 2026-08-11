@@ -1,0 +1,371 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "nautilus project manifest",
+  "description": "A manifest-defined nautilus controller: tasks, tags by role, the server, and a configured field driver. Pure data — anything needing computation is generated upstream and committed. Secrets are NEVER in this file: NAUTILUS_TOKEN and NAUTILUS_MQTT_PASSWORD come from the environment.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "tasks"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The controller's name. Defaults to \"nautilus\"; also the default Sparkplug edge-node id and the default output name for `nautilus build`."
+    },
+    "server": {
+      "$ref": "#/definitions/server",
+      "description": "The tag API an HMI reads."
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/definitions/task"
+      },
+      "description": "One program per scan. The FIRST task is the main task: it owns field I/O and is the default online-edit target."
+    },
+    "tag-files": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Files holding additional tags, each a bare YAML list of the same entries as `tags`. This is where a GENERATED tag set lives, so it stays a separate reviewable artifact instead of a 500-line smear through the file you edit — and how one project ships to several sites, by choosing which tag files a site's manifest composes. Read in order, then `tags` last. A tag declared twice in any two sources is an error: fix the generator, or narrow its scope."
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/tag"
+      },
+      "description": "Tags declared by role. Hand-authored tags belong here; bulk or generated sets belong in a file listed under `tag-files`."
+    },
+    "tag-meta": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/meta"
+      },
+      "description": "HMI documentation layered onto tags declared elsewhere, keyed by tag name or by a dotted field path (`P101.Speed`). Use it when a generator cannot supply documentation — `nautilus eip import` cannot, because Logix keeps tag descriptions in the offline project file. A generator that HAS descriptions should emit them into its tag file instead. This reaches only unit and desc: it can never change what the controller does."
+    },
+    "driver": {
+      "$ref": "#/definitions/driver",
+      "description": "The field driver. Defaults to \"memory\", the loopback used for bring-up."
+    },
+    "sparkplug": {
+      "$ref": "#/definitions/sparkplug",
+      "description": "Republish the tag store as a Sparkplug B edge node."
+    }
+  },
+  "definitions": {
+    "duration": {
+      "type": "string",
+      "pattern": "^([-+]?0|[-+]?(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
+      "description": "A Go duration: \"250ms\", \"2s\", \"1h30m\". A bare number is not one — the unit is required."
+    },
+    "server": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "addr": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Listen address for the tag API (default \"localhost:8080\"). NAUTILUS_ADDR overrides at start."
+        },
+        "online-edits": {
+          "type": "boolean",
+          "description": "Allow a running controller's program to be replaced without a restart."
+        },
+        "interval": {
+          "$ref": "#/definitions/duration",
+          "description": "How often the server pushes tag updates to connected clients."
+        }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "program"
+      ],
+      "description": "One program on its own scan.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifies the task in status and acceptance tests. Defaults to the program's filename. \"main\" is reserved for the first task."
+        },
+        "program": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The program file in this project — normally .st, .fbd, .ld, or .sfc. The loader requires a PROGRAM declaration inside it, not a particular extension, so none is enforced here."
+        },
+        "scan": {
+          "$ref": "#/definitions/duration",
+          "description": "Scan period (default 100ms)."
+        },
+        "dt-tag": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tag to publish this task's measured scan delta into, for logic that integrates over real elapsed time."
+        }
+      }
+    },
+    "tag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "role"
+      ],
+      "description": "One tag, declared by the role it plays in the scan data path.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The tag name. ST binds it with VAR_EXTERNAL; the driver and HMI address it by this name."
+        },
+        "role": {
+          "enum": [
+            "input",
+            "output",
+            "setpoint",
+            "state"
+          ],
+          "description": "input: driver → tag each scan, deliberately unseeded so a missing value faults loudly. output: tag → driver each scan; add init when the logic reads it back. setpoint: seeded operator/config value. state: seeded logic-owned value (latches, integrators)."
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A UDT declared by this project's ST, for a tag whose value is a struct — the same TYPE the programs bind with VAR_EXTERNAL, so the tag store and the logic cannot disagree about its shape. A typed setpoint or state needs no init: zero-of-type is its seed. A typed input stays unseeded, so a driver that has not delivered still faults loudly."
+        },
+        "init": {
+          "type": [
+            "boolean",
+            "string",
+            "number"
+          ],
+          "description": "Initial value. Required for setpoint and state unless `type` supplies one. On an output, needed only when the logic reads it before writing it (a seal-in latch)."
+        },
+        "unit": {
+          "type": "string",
+          "description": "Engineering unit shown by an HMI (\"°C\", \"%\", \"L/s\")."
+        },
+        "desc": {
+          "type": "string",
+          "description": "Human description shown in tag tables."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "enum": [
+                  "setpoint",
+                  "state"
+                ]
+              }
+            },
+            "required": [
+              "role"
+            ]
+          },
+          "then": {
+            "anyOf": [
+              {
+                "required": [
+                  "init"
+                ]
+              },
+              {
+                "required": [
+                  "type"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Documentation for one tag or one field of a tag.",
+      "properties": {
+        "unit": {
+          "type": "string",
+          "description": "Engineering unit shown by an HMI (\"°C\", \"%\", \"L/s\")."
+        },
+        "desc": {
+          "type": "string",
+          "description": "Human description shown in tag tables."
+        }
+      }
+    },
+    "driver": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "memory",
+            "eip"
+          ],
+          "description": "memory: loopback for bring-up, so logic and HMI run before hardware exists. eip: polls an Allen-Bradley Logix controller. Custom buses are the Go tier."
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "description": "eip: controller IP or hostname."
+        },
+        "slot": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "eip: processor backplane slot (default 0)."
+        },
+        "manifest": {
+          "type": "string",
+          "minLength": 1,
+          "description": "eip: the imported tag manifest, generated by `nautilus eip import --format yaml`. Any path the project can read; no extension is enforced."
+        },
+        "scan-rate": {
+          "$ref": "#/definitions/duration",
+          "description": "eip: default poll period for bound tags."
+        },
+        "scan-classes": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/duration"
+          },
+          "description": "eip: named poll groups and their periods."
+        },
+        "tag-classes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "eip: glob patterns assigning tags to a scan class. Overrides the generated manifest, so imports stay regenerable and policy stays here."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "eip"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "host",
+              "manifest"
+            ]
+          }
+        }
+      ]
+    },
+    "sparkplug": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "broker",
+        "group-id"
+      ],
+      "description": "Sparkplug B edge node. The MQTT password is NEVER here — set NAUTILUS_MQTT_PASSWORD.",
+      "properties": {
+        "broker": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Broker URL, e.g. tcp://host:1883 or ssl://host:8883. Passed through to the MQTT client, which decides what it accepts, so no scheme is enforced here."
+        },
+        "group-id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Sparkplug group_id."
+        },
+        "edge-node": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Sparkplug edge node id. Defaults to the project name."
+        },
+        "client-id": {
+          "type": "string",
+          "description": "MQTT client id. Defaults to something derived from the edge node."
+        },
+        "username": {
+          "type": "string",
+          "description": "MQTT username. The password comes from NAUTILUS_MQTT_PASSWORD."
+        },
+        "primary-host": {
+          "type": "string",
+          "description": "Gate births on this SCADA host's STATE topic."
+        },
+        "publish-interval": {
+          "$ref": "#/definitions/duration",
+          "description": "How often changed metrics are published."
+        },
+        "bdseq-file": {
+          "type": "string",
+          "description": "File persisting bdSeq across restarts."
+        },
+        "device": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Publish the field driver's input tags as a Sparkplug DEVICE with this id; its DBIRTH/DDEATH follow the driver's connection health. Empty means everything publishes at node level."
+        },
+        "default-class": {
+          "$ref": "#/definitions/rbe",
+          "description": "Report-by-exception tuning applied to metrics with no class."
+        },
+        "classes": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/rbe"
+          },
+          "description": "Named publish classes."
+        },
+        "metric-classes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "Glob patterns assigning metrics to a named class."
+        }
+      }
+    },
+    "rbe": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One publish class's report-by-exception tuning.",
+      "properties": {
+        "deadband": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Suppress changes smaller than this."
+        },
+        "min-interval": {
+          "$ref": "#/definitions/duration",
+          "description": "Never publish this metric more often than this."
+        },
+        "max-interval": {
+          "$ref": "#/definitions/duration",
+          "description": "Publish at least this often even when unchanged."
+        },
+        "every-change": {
+          "type": "boolean",
+          "description": "Publish every transition unconditionally (alarms, counters) — deadband and min-interval are ignored."
+        }
+      }
+    }
+  }
+}

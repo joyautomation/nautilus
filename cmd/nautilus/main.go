@@ -37,8 +37,18 @@ Usage:
   nautilus build [dir]    Emit a self-contained controller binary from a
                           manifest project (-o name). Ships like any compiled
                           program; no Go toolchain involved.
+
+                          run, test, and build take -m <manifest> to load one
+                          other than nautilus.yaml. That is how one project
+                          serves several sites: shared programs, a manifest
+                          per site choosing which tag-files it composes and
+                          which controller it points at. Every one of them is
+                          committed, so what deploys is always readable.
   nautilus eip <cmd>      EtherNet/IP tools: import (browse a Logix controller
                           and generate types + tag manifest) and browse.
+  nautilus tags <cmd>     Generate a tag file from a spreadsheet export
+                          (import-csv). Commit the output and compose it
+                          with tag-files:.
   nautilus pull           Pull a controller's online edits back into the
                           program file (--host <controller>). Inverse of the
                           VS Code "Download Program to Controller" command.
@@ -54,7 +64,7 @@ func main() {
 	// rides embedded on the executable's tail, and running it hosts the
 	// scan loop directly (NAUTILUS_CLI=1 recovers the CLI).
 	if fsys, ok := embeddedProject(); ok {
-		os.Exit(runProject(fsys, "built"))
+		os.Exit(runProject(fsys, embeddedManifest(fsys), "built"))
 	}
 	if len(os.Args) < 2 {
 		fmt.Fprint(os.Stderr, usage)
@@ -78,6 +88,8 @@ func main() {
 		os.Exit(runNew(os.Args[2:]))
 	case "eip":
 		os.Exit(runEIP(os.Args[2:]))
+	case "tags":
+		os.Exit(runTags(os.Args[2:]))
 	case "pull":
 		os.Exit(runPull(os.Args[2:]))
 	case "fbd":

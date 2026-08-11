@@ -357,6 +357,18 @@
       {
         "fileMatch": "*_test.yaml",
         "url": "./schemas/nautilus-test.schema.json"
+      },
+      {
+        "fileMatch": "nautilus.yaml",
+        "url": "./schemas/nautilus.schema.json"
+      },
+      {
+        "fileMatch": "sites/*.yaml",
+        "url": "./schemas/nautilus.schema.json"
+      },
+      {
+        "fileMatch": "tags/*.yaml",
+        "url": "./schemas/nautilus-tags.schema.json"
       }
     ]
   },

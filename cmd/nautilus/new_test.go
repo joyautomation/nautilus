@@ -177,7 +177,7 @@ func TestScaffoldedManifestProjectsPass(t *testing.T) {
 				t.Fatal(err)
 			}
 			fsys := os.DirFS(filepath.Join(dir, tc.name))
-			proj, err := project.Load(fsys)
+			proj, err := project.Load(fsys, "")
 			if err != nil {
 				t.Fatalf("scaffolded project does not load: %v", err)
 			}

@@ -117,6 +117,12 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 	if err := l.collectTypes(); err != nil {
 		return nil, err
 	}
+	// Keep the resolved TYPE table on the program. The VM never reads it —
+	// this is the same introspection-only category as SlotIndex and Globals
+	// — but a manifest tag naming a UDT (`type: Motor`) has nowhere else to
+	// resolve against, and the ST library is where the programs already
+	// agree on what a Motor is.
+	l.irProg.Types = l.types
 	if err := l.collectVars(); err != nil {
 		return nil, err
 	}

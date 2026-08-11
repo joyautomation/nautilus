@@ -1,17 +1,21 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
+	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/internal/stproject"
 	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/lang/ld"
 	"github.com/joyautomation/nautilus/lang/sfc"
 	"github.com/joyautomation/nautilus/lang/st"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 // runCheck compiles every .st file under the given paths (files or
@@ -21,7 +25,12 @@ import (
 //
 // Exit code 0 = clean, 1 = diagnostics found, 2 = usage/IO error.
 func runCheck(args []string) int {
-	paths := args
+	fset := flag.NewFlagSet("check", flag.ContinueOnError)
+	manifest := fset.String("m", "", manifestFlagUsage)
+	if err := fset.Parse(args); err != nil {
+		return 2
+	}
+	paths := fset.Args()
 	if len(paths) == 0 {
 		paths = []string{"."}
 	}
@@ -158,11 +167,181 @@ func runCheck(args []string) int {
 		}
 	}
 
-	fmt.Printf("nautilus check: %d file(s), %d with errors\n", len(files), bad)
+	// Compiling every file proves each one is well-formed. It says nothing
+	// about whether the tag set and the logic agree — which is the thing a
+	// generated manifest most needs checked, and the reason composition
+	// (tag-files) and verification landed together.
+	manifestErrs, manifestWarns := 0, 0
+	if bad == 0 {
+		manifestErrs, manifestWarns = checkManifest(paths, *manifest)
+		bad += manifestErrs
+	}
+
+	fmt.Printf("nautilus check: %d file(s), %d with errors", len(files), bad)
+	if manifestWarns > 0 {
+		fmt.Printf(", %d warning(s)", manifestWarns)
+	}
+	fmt.Println()
 	if bad > 0 {
 		return 1
 	}
 	return 0
+}
+
+// checkManifest cross-checks a manifest project's declared tags against the
+// tags its programs actually bind, in both directions. Returns (errors,
+// warnings).
+//
+// The asymmetry is deliberate:
+//
+//   - a program READS a tag the manifest never declares → error. Undeclared
+//     means unseeded and not driver-fed, so the first read faults the scan.
+//     This is the failure that used to wait until commissioning.
+//   - a program only WRITES an undeclared tag → warning. It runs, but it
+//     reaches an HMI with no unit and no description.
+//   - the manifest declares a tag no program binds → warning. Often correct
+//     (driver- or HMI-only tags are real), so it cannot be an error — but it
+//     is also what a stale generated tag file looks like.
+func checkManifest(paths []string, manifestName string) (errs, warns int) {
+	dir, ok := manifestDir(paths, manifestName)
+	if !ok {
+		return 0, 0 // not a manifest project; compiling the files was the whole job
+	}
+	proj, err := project.Load(os.DirFS(dir), manifestName)
+	if err != nil {
+		fmt.Printf("%s: %s\n", dir, err)
+		return 1, 0
+	}
+	rt, err := runtime.New(proj.Runtime)
+	if err != nil {
+		// The per-file pass already reported real compile errors; reaching
+		// here means the composed resource failed for some other reason.
+		fmt.Printf("%s: %s\n", dir, err)
+		return 1, 0
+	}
+
+	declared := make(map[string]bool, len(proj.Runtime.Tags))
+	for _, d := range proj.Runtime.Tags {
+		declared[d.Name] = true
+	}
+	// A task's dt-tag is written by the runtime every scan, so a program may
+	// read it without any tag entry. It is declared in the manifest — just
+	// not under tags: — and reporting it would be a false alarm on the one
+	// tag the manifest is most certain about.
+	if proj.Runtime.DtTag != "" {
+		declared[proj.Runtime.DtTag] = true
+	}
+	for _, t := range proj.Runtime.Tasks {
+		if t.DtTag != "" {
+			declared[t.DtTag] = true
+		}
+	}
+	uses := rt.GlobalUses()
+
+	for _, name := range sortedNames(rt.Globals()) {
+		if declared[name] {
+			continue
+		}
+		switch {
+		case uses.Read[name]:
+			errs++
+			fmt.Printf("%s: error: the programs read %q, which %s declares no tag for — "+
+				"an undeclared tag is never seeded and never driver-fed, so the first "+
+				"read faults the scan\n", dir, name, manifestLabel(manifestName))
+		default:
+			warns++
+			fmt.Printf("%s: warning: the programs write %q, which %s declares no tag for — "+
+				"it will reach an HMI with no unit and no description\n",
+				dir, name, manifestLabel(manifestName))
+		}
+	}
+
+	bound := rt.Globals()
+	for _, d := range proj.Runtime.Tags {
+		if _, ok := bound[d.Name]; ok {
+			continue
+		}
+		// An INPUT no program binds is not a defect: the driver fills it and
+		// an HMI or Sparkplug republishes it, which is what most of an
+		// imported tag list is for. client60 is the proof — every one of its
+		// unbound tags is telemetry, and warning on all of them would teach
+		// people to ignore this warning before it ever caught anything.
+		//
+		// The other roles have no such excuse. A setpoint or state exists to
+		// be read by logic, and an output that nothing writes ships its seed
+		// to the field forever.
+		if d.Role == runtime.RoleInput {
+			continue
+		}
+		warns++
+		fmt.Printf("%s: warning: %s declares %s %q, which no program binds — "+
+			"dead, or a stale generated entry\n",
+			dir, manifestLabel(manifestName), roleName(d.Role), d.Name)
+	}
+
+	// A tag-meta key that matched a tag was folded into that tag's own
+	// documentation by Load; what survives in Meta matched nothing. A dotted
+	// key is a field path and legitimate, so only bare names are reported —
+	// which is where a typo in a hand-written documentation block shows up.
+	for _, key := range sortedNames(proj.Runtime.Meta) {
+		if strings.Contains(key, ".") || declared[key] {
+			continue
+		}
+		warns++
+		fmt.Printf("%s: warning: tag-meta documents %q, which is not a declared tag — "+
+			"documentation for a tag that does not exist reaches nothing\n", dir, key)
+	}
+	return errs, warns
+}
+
+func roleName(r runtime.TagRole) string {
+	switch r {
+	case runtime.RoleInput:
+		return "input"
+	case runtime.RoleOutput:
+		return "output"
+	case runtime.RoleSetpoint:
+		return "setpoint"
+	case runtime.RoleState:
+		return "state"
+	}
+	return "tag"
+}
+
+// manifestDir finds the single directory to cross-check: the first checked
+// path that is a directory holding the manifest. Checking a bare file, or a
+// tree with no manifest, skips this pass entirely.
+func manifestDir(paths []string, manifestName string) (string, bool) {
+	name := manifestName
+	if name == "" {
+		name = project.ManifestName
+	}
+	for _, p := range paths {
+		info, err := os.Stat(p)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if st, err := os.Stat(filepath.Join(p, filepath.FromSlash(name))); err == nil && !st.IsDir() {
+			return p, true
+		}
+	}
+	return "", false
+}
+
+func manifestLabel(manifestName string) string {
+	if manifestName == "" {
+		return project.ManifestName
+	}
+	return manifestName
+}
+
+func sortedNames[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // compileErr runs the same parse+lower pipeline as the LSP and returns the

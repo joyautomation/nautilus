@@ -102,7 +102,7 @@ func projectTags(path string) []ProjectTag {
 }
 
 func readTags(mpath string) ([]ProjectTag, error) {
-	m, err := project.ReadManifest(os.DirFS(filepath.Dir(mpath)))
+	m, err := project.ReadManifest(os.DirFS(filepath.Dir(mpath)), "")
 	if err != nil {
 		return nil, err
 	}
@@ -111,10 +111,18 @@ func readTags(mpath string) ([]ProjectTag, error) {
 		if t.Name == "" {
 			continue
 		}
+		// A declared type is the truth; inferring from the seed is the
+		// fallback that existed only because there was nothing better. This
+		// also answers the type of a tag with no seed at all, which
+		// inference never could.
+		typ := t.Type
+		if typ == "" {
+			typ = iecTypeOf(t.Init)
+		}
 		out = append(out, ProjectTag{
 			Name: t.Name,
 			Role: strings.ToLower(t.Role),
-			Type: iecTypeOf(t.Init),
+			Type: typ,
 			Unit: t.Unit,
 			Desc: t.Desc,
 		})

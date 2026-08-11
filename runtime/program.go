@@ -268,6 +268,33 @@ func (p *Program) Globals() map[string]*ir.Type {
 	return out
 }
 
+// Types reports every TYPE this program's sources declare, resolved. A
+// manifest tag naming a UDT resolves against this.
+func (p *Program) Types() map[string]*ir.Type {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.prog == nil {
+		return nil
+	}
+	out := make(map[string]*ir.Type, len(p.prog.Types))
+	for name, t := range p.prog.Types {
+		out[name] = t
+	}
+	return out
+}
+
+// GlobalUses reports which of this program's globals are read and which are
+// written — the split `nautilus check` needs to tell a missing manifest entry
+// that costs an HMI description from one that faults the scan.
+func (p *Program) GlobalUses() ir.GlobalUse {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.prog == nil {
+		return ir.GlobalUse{Read: map[string]bool{}, Written: map[string]bool{}}
+	}
+	return p.prog.GlobalUses()
+}
+
 func (p *Program) Source() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()

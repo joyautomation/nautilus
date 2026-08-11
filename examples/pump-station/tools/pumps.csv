@@ -1,0 +1,25 @@
+Tag,Kind,UDT,Initial,EU,Service
+P101,state,Motor,,,Filter backwash pump 1
+P101_RunHrs,state,,0,h,Filter backwash pump 1 — run hours
+P101_StartSP,setpoint,,45,%,Filter backwash pump 1 — start speed
+P101_Enable,setpoint,,false,,Filter backwash pump 1 — operator enable
+P102,state,Motor,,,Filter backwash pump 2
+P102_RunHrs,state,,0,h,Filter backwash pump 2 — run hours
+P102_StartSP,setpoint,,45,%,Filter backwash pump 2 — start speed
+P102_Enable,setpoint,,false,,Filter backwash pump 2 — operator enable
+P103,state,Motor,,,Filter backwash pump 3
+P103_RunHrs,state,,0,h,Filter backwash pump 3 — run hours
+P103_StartSP,setpoint,,45,%,Filter backwash pump 3 — start speed
+P103_Enable,setpoint,,false,,Filter backwash pump 3 — operator enable
+P201,state,Motor,,,Transfer pump 1
+P201_RunHrs,state,,0,h,Transfer pump 1 — run hours
+P201_StartSP,setpoint,,45,%,Transfer pump 1 — start speed
+P201_Enable,setpoint,,false,,Transfer pump 1 — operator enable
+P202,state,Motor,,,Transfer pump 2
+P202_RunHrs,state,,0,h,Transfer pump 2 — run hours
+P202_StartSP,setpoint,,45,%,Transfer pump 2 — start speed
+P202_Enable,setpoint,,false,,Transfer pump 2 — operator enable
+P301,state,Motor,,,High service pump
+P301_RunHrs,state,,0,h,High service pump — run hours
+P301_StartSP,setpoint,,45,%,High service pump — start speed
+P301_Enable,setpoint,,false,,High service pump — operator enable

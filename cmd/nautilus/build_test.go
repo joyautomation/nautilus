@@ -28,7 +28,7 @@ func TestBuildEmbedRoundTrip(t *testing.T) {
 	os.WriteFile(filepath.Join(proj, "program.st"), []byte("PROGRAM P\nEND_PROGRAM"), 0o644)
 
 	out := filepath.Join(dir, "out")
-	if err := emitBinary(runner, proj, out); err != nil {
+	if err := emitBinary(runner, proj, out, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -72,7 +72,7 @@ func TestBuildEmbedRoundTrip(t *testing.T) {
 	// Rebuild from the BUILT binary with a changed project.
 	os.WriteFile(filepath.Join(proj, "program.st"), []byte("PROGRAM P2\nEND_PROGRAM"), 0o644)
 	out2 := filepath.Join(dir, "out2")
-	if err := emitBinary(out, proj, out2); err != nil {
+	if err := emitBinary(out, proj, out2, ""); err != nil {
 		t.Fatal(err)
 	}
 	prefix2, files2 := read(out2)

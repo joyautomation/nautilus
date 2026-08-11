@@ -1,0 +1,27 @@
+# A pump station built the way docs/design/tags.md §2.2 describes:
+# a UDT declared once in ST, a config table + expander that writes
+# tags/pumps.yaml, and one line here to compose it.
+name: pump-station
+
+server:
+  addr: "localhost:8080"
+
+tasks:
+  - program: station.st
+    scan: 100ms
+    dt-tag: StationDtS
+  - name: sim
+    program: sim.st
+    scan: 100ms
+
+# 24 generated tags, from 9 rows a person edits in tools/tags.ts.
+tag-files:
+  - tags/pumps.yaml
+
+# Hand-authored tags stay where a person edits them.
+tags:
+  - { name: RunningCount, role: state, init: 0.0, desc: "Pumps currently running" }
+  - { name: AnyFault, role: state, init: false, desc: "Any pump faulted" }
+
+driver:
+  type: memory

@@ -15,7 +15,7 @@ import (
 
 func TestHeatedTankSuite(t *testing.T) {
 	fsys := os.DirFS(nogo)
-	proj, err := project.Load(fsys)
+	proj, err := project.Load(fsys, "")
 	if err != nil {
 		t.Fatal(err)
 	}

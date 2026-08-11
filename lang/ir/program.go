@@ -38,6 +38,14 @@ type Program struct {
 	// the VM resolves globals by name at runtime.
 	Globals map[string]*Type
 
+	// Types maps every TYPE declared in this source file (including the
+	// project libraries joined ahead of it) to its resolved type. Like
+	// SlotIndex and Globals this is introspection only — the VM resolves
+	// nothing through it — but it is what a manifest tag naming a UDT
+	// resolves against, so the tag store and the programs cannot disagree
+	// about what a Motor is.
+	Types map[string]*Type
+
 	// UserFBs are FBDefs declared at the top of this source file via
 	// FUNCTION_BLOCK ... END_FUNCTION_BLOCK. The engine pulls these out
 	// after Lower returns and registers them so other programs can use

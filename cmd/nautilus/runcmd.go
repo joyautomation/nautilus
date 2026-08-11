@@ -29,8 +29,8 @@ import (
 )
 
 // runProject hosts a loaded project: scan loop + tag API, Ctrl+C to stop.
-func runProject(fsys fs.FS, label string) int {
-	proj, err := project.Load(fsys)
+func runProject(fsys fs.FS, manifest, label string) int {
+	proj, err := project.Load(fsys, manifest)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "nautilus run:", err)
 		return 1
@@ -108,6 +108,7 @@ func runProject(fsys fs.FS, label string) int {
 
 func runRun(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	manifest := fs.String("m", "", manifestFlagUsage)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -115,8 +116,15 @@ func runRun(args []string) int {
 	if fs.NArg() > 0 {
 		dir = fs.Arg(0)
 	}
-	return runProject(os.DirFS(dir), "")
+	return runProject(os.DirFS(dir), *manifest, "")
 }
+
+// manifestFlagUsage documents -m on every command that loads a project.
+// One project, one set of programs, several manifests: a site differs by
+// which tag files it composes and which controller it points at, and each
+// manifest is committed, so what deploys is always something you can read.
+const manifestFlagUsage = "manifest to load, relative to the project " +
+	"(default nautilus.yaml); e.g. sites/hayward.yaml"
 
 // ── build: emit a deployable binary ─────────────────────────────────────────
 // The output is THIS executable with the project zipped onto its tail and a
@@ -129,6 +137,7 @@ var embedMagic = [8]byte{'N', 'A', 'U', 'T', 'P', 'R', 'O', 'J'}
 func runBuild(args []string) int {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
 	out := fs.String("o", "", "output binary name (default: the manifest's name)")
+	manifest := fs.String("m", "", manifestFlagUsage)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -138,7 +147,7 @@ func runBuild(args []string) int {
 	}
 
 	// The project must load AND compile before it ships.
-	proj, err := project.Load(os.DirFS(dir))
+	proj, err := project.Load(os.DirFS(dir), *manifest)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "nautilus build:", err)
 		return 1
@@ -157,7 +166,7 @@ func runBuild(args []string) int {
 		fmt.Fprintln(os.Stderr, "nautilus build:", err)
 		return 1
 	}
-	if err := emitBinary(self, dir, name); err != nil {
+	if err := emitBinary(self, dir, name, *manifest); err != nil {
 		fmt.Fprintln(os.Stderr, "nautilus build:", err)
 		return 1
 	}
@@ -165,7 +174,25 @@ func runBuild(args []string) int {
 	return 0
 }
 
-func emitBinary(self, dir, out string) error {
+// manifestMarker records which manifest a built binary loads, for projects
+// holding more than one (`nautilus build -m sites/hayward.yaml`). Every
+// manifest ships in the archive — the marker only says which one boots, so
+// the binary still carries the whole reviewable project. A dot-name because
+// the archive walk skips dotfiles: nothing in the project can collide with
+// it, and `unzip -p <binary> .manifest` answers "what is this built from?".
+const manifestMarker = ".manifest"
+
+// embeddedManifest reads the marker, or "" for a project built without -m
+// (which means nautilus.yaml, the default everywhere else).
+func embeddedManifest(fsys fs.FS) string {
+	raw, err := fs.ReadFile(fsys, manifestMarker)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
+}
+
+func emitBinary(self, dir, out, manifest string) error {
 	src, err := os.Open(self)
 	if err != nil {
 		return err
@@ -217,6 +244,15 @@ func emitBinary(self, dir, out string) error {
 	})
 	if err != nil {
 		return err
+	}
+	if manifest != "" {
+		w, err := zw.Create(manifestMarker)
+		if err != nil {
+			return err
+		}
+		if _, err := w.Write([]byte(manifest)); err != nil {
+			return err
+		}
 	}
 	if err := zw.Close(); err != nil {
 		return err

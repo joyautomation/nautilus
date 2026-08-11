@@ -101,6 +101,7 @@ type Runtime struct {
 	outputs []string
 	dtTag   string
 	meta    map[string]TagMeta
+	types   map[string]*ir.Type
 	tasks   []*taskRun
 	clock   Clock // nil = wall clock; see clock.go
 
@@ -157,9 +158,14 @@ type ScanStats struct {
 	Tasks []TaskStats `json:"tasks,omitempty"`
 }
 
-// New compiles the program and prepares the runtime.
+// New compiles the programs and prepares the runtime.
+//
+// Order matters here. A TagDef may name a UDT (`Type: "Motor"`), and the only
+// place that name has a meaning is the compiled programs' TYPE table — the
+// same declarations the logic uses, so the tag store and the programs cannot
+// disagree about a Motor's shape. So every program compiles FIRST, the type
+// tables union, and only then are tags expanded and seeded.
 func New(o Options) (*Runtime, error) {
-	o = expandTags(o)
 	if len(o.Libraries) > 0 {
 		o.Program = stproject.Join(o.Libraries, o.Program)
 	}
@@ -170,20 +176,10 @@ func New(o Options) (*Runtime, error) {
 	if o.Scan <= 0 {
 		o.Scan = 100 * time.Millisecond
 	}
-	tags := NewTags()
-	// Set before any scan or goroutine can observe it, so the store's NowMs
-	// and the scan's dt always read the same clock.
-	tags.clock = o.Clock
-	for k, v := range o.Seed {
-		tags.Set(k, v)
-	}
-	r := &Runtime{
-		prog: prog, tags: tags, driver: o.Driver, scan: o.Scan,
-		inputs: o.Inputs, outputs: o.Outputs, dtTag: o.DtTag, meta: o.Meta,
-		clock: o.Clock,
-	}
+
 	// POU names are the programs' identities (online edits route by them),
 	// so every program in the resource must carry a distinct one.
+	var tasks []*taskRun
 	pous := map[string]string{strings.ToLower(prog.POU()): MainTaskName}
 	for i, td := range o.Tasks {
 		src := td.Program
@@ -213,7 +209,28 @@ func New(o Options) (*Runtime, error) {
 		tr := &taskRun{name: name, prog: tprog, scan: scan, dtTag: td.DtTag}
 		tr.stats.Name = name
 		tr.stats.TargetMs = scan.Seconds() * 1000
-		r.tasks = append(r.tasks, tr)
+		tasks = append(tasks, tr)
+	}
+
+	types, err := unionTypes(prog, tasks)
+	if err != nil {
+		return nil, err
+	}
+	if o, err = expandTags(o, types); err != nil {
+		return nil, err
+	}
+
+	tags := NewTags()
+	// Set before any scan or goroutine can observe it, so the store's NowMs
+	// and the scan's dt always read the same clock.
+	tags.clock = o.Clock
+	for k, v := range o.Seed {
+		tags.Set(k, v)
+	}
+	r := &Runtime{
+		prog: prog, tags: tags, driver: o.Driver, scan: o.Scan,
+		inputs: o.Inputs, outputs: o.Outputs, dtTag: o.DtTag, meta: o.Meta,
+		clock: o.Clock, types: types, tasks: tasks,
 	}
 	r.stats.TargetMs = o.Scan.Seconds() * 1000
 	r.stats.IOHealthy = true
@@ -253,6 +270,99 @@ func (r *Runtime) Globals() map[string]*ir.Type {
 	for _, tr := range r.tasks {
 		for name, t := range tr.prog.Globals() {
 			out[name] = t
+		}
+	}
+	return out
+}
+
+// Types reports every TYPE the resource's programs declare, unioned across
+// tasks. Available the moment New returns.
+func (r *Runtime) Types() map[string]*ir.Type {
+	out := make(map[string]*ir.Type, len(r.types))
+	for name, t := range r.types {
+		out[name] = t
+	}
+	return out
+}
+
+// unionTypes merges every program's TYPE table. Tasks share a project's
+// library files, so they normally agree; two tasks declaring DIFFERENT types
+// under one name is an error for the same reason a POU collision is — a tag
+// declared `type: Motor` would otherwise mean whichever Motor compiled last.
+func unionTypes(main *Program, tasks []*taskRun) (map[string]*ir.Type, error) {
+	out := map[string]*ir.Type{}
+	from := map[string]string{}
+	merge := func(src string, types map[string]*ir.Type) error {
+		for name, t := range types {
+			prev, seen := out[name]
+			if seen && !sameType(prev, t) {
+				return fmt.Errorf("TYPE %s is declared differently in %s and %s — "+
+					"a tag naming it could not say which one it meant", name, from[name], src)
+			}
+			out[name], from[name] = t, src
+		}
+		return nil
+	}
+	if err := merge(MainTaskName, main.Types()); err != nil {
+		return nil, err
+	}
+	for _, tr := range tasks {
+		if err := merge(tr.name, tr.prog.Types()); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// sameType compares two resolved types structurally — the programs are
+// compiled separately, so identical declarations produce distinct pointers.
+func sameType(a, b *ir.Type) bool {
+	switch {
+	case a == b:
+		return true
+	case a == nil || b == nil || a.Kind != b.Kind:
+		return false
+	}
+	switch a.Kind {
+	case ir.TypeStruct:
+		if a.Struct == nil || b.Struct == nil {
+			return a.Struct == b.Struct
+		}
+		if a.Struct.Name != b.Struct.Name || len(a.Struct.Fields) != len(b.Struct.Fields) {
+			return false
+		}
+		for i := range a.Struct.Fields {
+			if a.Struct.Fields[i].Name != b.Struct.Fields[i].Name ||
+				!sameType(a.Struct.Fields[i].Type, b.Struct.Fields[i].Type) {
+				return false
+			}
+		}
+		return true
+	case ir.TypeArray:
+		return a.ArrLen == b.ArrLen && a.ArrLoBound == b.ArrLoBound && sameType(a.Elem, b.Elem)
+	default:
+		return true
+	}
+}
+
+// GlobalUses reports how the resource's programs use their globals, unioned
+// across every task: a tag read by any task is read, written by any task is
+// written. Like Globals, it is available the moment New returns.
+func (r *Runtime) GlobalUses() ir.GlobalUse {
+	out := r.prog.GlobalUses()
+	if out.Read == nil {
+		out.Read = map[string]bool{}
+	}
+	if out.Written == nil {
+		out.Written = map[string]bool{}
+	}
+	for _, tr := range r.tasks {
+		u := tr.prog.GlobalUses()
+		for name := range u.Read {
+			out.Read[name] = true
+		}
+		for name := range u.Written {
+			out.Written[name] = true
 		}
 	}
 	return out

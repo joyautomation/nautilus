@@ -25,7 +25,7 @@ const nogo = "../examples/heated-tank-nogo"
 // a virtual clock.
 func load(t *testing.T) (*runtime.Runtime, *acceptance.Scheduler) {
 	t.Helper()
-	proj, err := project.Load(os.DirFS(nogo))
+	proj, err := project.Load(os.DirFS(nogo), "")
 	if err != nil {
 		t.Fatalf("load %s: %v", nogo, err)
 	}

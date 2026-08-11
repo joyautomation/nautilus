@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/eip"
 	"github.com/joyautomation/nautilus/eip/codegen"
 	"github.com/joyautomation/nautilus/eip/logix"
 	"gopkg.in/yaml.v3"
@@ -20,6 +21,9 @@ Usage:
   nautilus eip import --host <ip> [flags]   Browse a Logix controller and
                                             generate eip_types.st + eip_manifest.go.
   nautilus eip browse --host <ip> [flags]   Print the controller's tag list.
+  nautilus eip tags <eip_manifest.yaml>    Re-derive the tag file from an
+                                           already-committed manifest — no
+                                           controller needed (-o path).
 
 Import flags:
   --host       Controller IP or hostname (required)
@@ -42,6 +46,8 @@ func runEIP(args []string) int {
 	switch args[0] {
 	case "import":
 		return runEIPImport(args[1:])
+	case "tags":
+		return runEIPTags(args[1:])
 	case "browse":
 		return runEIPBrowse(args[1:])
 	default:
@@ -83,6 +89,8 @@ func runEIPImport(args []string) int {
 	outDir := fs.String("out", ".", "output directory")
 	pkg := fs.String("package", "main", "Go package for the manifest")
 	format := fs.String("format", "go", "manifest format: go (eip_manifest.go, for library projects) or yaml (eip_manifest.yaml, for nautilus.yaml manifest projects)")
+	tagsOut := fs.String("tags-out", "tags/eip.yaml", "tag file to emit (--format yaml only); compose it with tag-files:")
+	tagsSkip := fs.String("tags-skip", "", "comma-separated globs to leave OUT of the tag file, for tags the manifest declares by hand")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -155,8 +163,73 @@ func runEIPImport(args []string) int {
 		fmt.Fprintln(os.Stderr, "nautilus eip import: --format must be go or yaml")
 		return 2
 	}
+	// The tags file only makes sense for a manifest project; a Go project
+	// composes []runtime.TagDef in code.
+	tagsPath := ""
+	if *format == "yaml" {
+		tagsPath = filepath.Join(*outDir, *tagsOut)
+		if err := writeTagsFile(tagsPath, out.Manifest, *host, splitPatterns(*tagsSkip)); err != nil {
+			fmt.Fprintln(os.Stderr, "nautilus eip import:", err)
+			return 1
+		}
+	}
 	fmt.Printf("wrote %s (%d types) and %s (%d tag bindings)\n",
 		stPath, len(out.Manifest.Types), manifestPath, len(out.Manifest.Tags))
+	if tagsPath != "" {
+		fmt.Printf("wrote %s — compose it with `tag-files: [%s]`\n", tagsPath, *tagsOut)
+	}
+	return 0
+}
+
+// writeTagsFile renders the manifest's bindings as a nautilus tag file,
+// creating the directory the path implies (tags/ by convention).
+func writeTagsFile(path string, m eip.Manifest, host string, skip []string) error {
+	raw, err := codegen.TagsYAML(m, host, skip)
+	if err != nil {
+		return err
+	}
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return os.WriteFile(path, raw, 0o644)
+}
+
+// runEIPTags re-derives the tag file from an ALREADY COMMITTED eip manifest.
+// The import needs a controller on the network; this needs only the repo, so
+// a tag file can be regenerated during review, in CI, or after the scan
+// classes in the manifest change — without a PLC.
+func runEIPTags(args []string) int {
+	fs := flag.NewFlagSet("eip tags", flag.ContinueOnError)
+	out := fs.String("o", "tags/eip.yaml", "output tag file")
+	host := fs.String("host", "the controller", "host to name in the generated header")
+	skip := fs.String("skip", "", "comma-separated globs to leave OUT, for tags the manifest declares by hand")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: nautilus eip tags [-o tags/eip.yaml] <eip_manifest.yaml>")
+		return 2
+	}
+	raw, err := os.ReadFile(fs.Arg(0))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "nautilus eip tags:", err)
+		return 1
+	}
+	var m eip.Manifest
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&m); err != nil {
+		fmt.Fprintf(os.Stderr, "nautilus eip tags: %s: %v\n", fs.Arg(0), err)
+		return 1
+	}
+	if err := writeTagsFile(*out, m, *host, splitPatterns(*skip)); err != nil {
+		fmt.Fprintln(os.Stderr, "nautilus eip tags:", err)
+		return 1
+	}
+	fmt.Printf("wrote %s (%d tag bindings) — compose it with `tag-files: [%s]`\n",
+		*out, len(m.Tags), *out)
 	return 0
 }
 

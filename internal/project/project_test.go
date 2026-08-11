@@ -64,7 +64,7 @@ driver:
 `
 
 func TestLoad(t *testing.T) {
-	p, err := Load(fsys(manifest))
+	p, err := Load(fsys(manifest), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestLoadErrors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := Load(fsys(tc.manifest))
+			_, err := Load(fsys(tc.manifest), "")
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want containing %q", err, tc.want)
 			}
@@ -132,7 +132,7 @@ func TestLoadErrors(t *testing.T) {
 // behave identically (the tag store is REAL-typed).
 func TestInitNormalization(t *testing.T) {
 	m := strings.Replace(manifest, "init: 50.0", "init: 50", 1)
-	p, err := Load(fsys(m))
+	p, err := Load(fsys(m), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ sparkplug:
     fast: ["Sensor"]
     alarms: ["Alarm", "*Alm"]
 `
-	p, err := Load(fsys(m))
+	p, err := Load(fsys(m), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,11 +173,11 @@ sparkplug:
 	}
 
 	// No section → no node; missing group-id → a readable error.
-	p2, _ := Load(fsys(manifest))
+	p2, _ := Load(fsys(manifest), "")
 	if n, err := p2.Sparkplug(rt); n != nil || err != nil {
 		t.Fatalf("no-section must be (nil, nil): %v %v", n, err)
 	}
-	p3, err := Load(fsys(manifest + "\nsparkplug:\n  broker: tcp://x:1883\n"))
+	p3, err := Load(fsys(manifest+"\nsparkplug:\n  broker: tcp://x:1883\n"), "")
 	if err != nil {
 		t.Fatal(err)
 	}

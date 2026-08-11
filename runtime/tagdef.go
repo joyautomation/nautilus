@@ -1,6 +1,13 @@
 package runtime
 
-import nio "github.com/joyautomation/nautilus/io"
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/lang/ir"
+)
 
 // Declarative tag definitions: one place per tag for its ROLE in the scan
 // data path, its initial value, and its HMI documentation — instead of
@@ -46,6 +53,12 @@ type TagDef struct {
 	Role TagRole
 	Init any // seed value; nil = none
 	Meta TagMeta
+	// Type names a UDT declared by the project's ST — `Motor` for a tag the
+	// programs bind as `VAR_EXTERNAL P101 : Motor;`. It is resolved against
+	// the compiled programs' TYPE table in New, so one declaration serves
+	// the logic, the tag store, the driver, and the HMI. Empty for a scalar,
+	// whose type comes from its seed as before.
+	Type string
 }
 
 // TagOpt customizes a TagDef (Desc, Unit, Init).
@@ -88,12 +101,28 @@ func State(name string, initial any, opts ...TagOpt) TagDef {
 	return newDef(name, RoleState, initial, opts)
 }
 
-// expandTags merges o.Tags into the flat Options fields. The caller's maps
+// Typed declares a tag whose value is a UDT named by the project's ST. The
+// role still decides how it moves each scan; the type decides its shape.
+func Typed(name string, role TagRole, typeName string, opts ...TagOpt) TagDef {
+	d := newDef(name, role, nil, opts)
+	d.Type = typeName
+	return d
+}
+
+// expandTags merges o.Tags into the flat Options fields, resolving any UDT
+// names against types (the compiled programs' TYPE table). The caller's maps
 // are never mutated; TagDef seeds/meta win over the flat fields on a
 // duplicate name (the declarative form is the single source of truth).
-func expandTags(o Options) Options {
+//
+// A typed tag with no explicit Init seeds the ZERO of its type for the roles
+// that are seeded at all — so a `Motor` setpoint exists on scan one with its
+// fields correctly named and its StructDef attached, instead of being absent
+// until something writes it. Inputs and outputs stay unseeded: an input that
+// the driver has not delivered must still fault loudly rather than run on a
+// silent zero, which is the whole reason RoleInput exists.
+func expandTags(o Options, types map[string]*ir.Type) (Options, error) {
 	if len(o.Tags) == 0 {
-		return o
+		return o, nil
 	}
 	seed := make(nio.Values, len(o.Seed)+len(o.Tags))
 	for k, v := range o.Seed {
@@ -115,13 +144,38 @@ func expandTags(o Options) Options {
 		case RoleOutput:
 			outputs = append(outputs, d.Name)
 		}
-		if d.Init != nil {
+		switch {
+		case d.Init != nil:
 			seed[d.Name] = d.Init
+		case d.Type != "":
+			t, ok := types[d.Type]
+			if !ok {
+				return o, fmt.Errorf("tag %s: no TYPE %s is declared by this project's "+
+					"ST — a tag's type is the one the programs use, so declare it in a "+
+					"library .st file (known: %s)", d.Name, d.Type, knownTypes(types))
+			}
+			if d.Role == RoleSetpoint || d.Role == RoleState {
+				seed[d.Name] = ir.Zero(t)
+			}
 		}
 		if d.Meta != (TagMeta{}) {
 			meta[d.Name] = d.Meta
 		}
 	}
 	o.Inputs, o.Outputs, o.Seed, o.Meta = inputs, outputs, seed, meta
-	return o
+	return o, nil
+}
+
+// knownTypes lists what the project does declare, so a misspelled type name
+// is one message rather than a hunt through the library files.
+func knownTypes(types map[string]*ir.Type) string {
+	if len(types) == 0 {
+		return "none — this project declares no TYPE"
+	}
+	names := make([]string, 0, len(types))
+	for n := range types {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }

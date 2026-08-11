@@ -23,6 +23,7 @@ func runTest(args []string) int {
 	verbose := fs.Bool("v", false, "print virtual elapsed time and scan counts for passing tests")
 	asJSON := fs.Bool("json", false, "emit one NDJSON event per test (for editors and CI tooling)")
 	list := fs.Bool("list", false, "list the tests (suite, name, line) without running them")
+	manifest := fs.String("m", "", manifestFlagUsage)
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -37,7 +38,7 @@ func runTest(args []string) int {
 	// Listing skips it — an editor asks what tests exist while the program
 	// is still mid-edit, and answering "it doesn't compile" would empty the
 	// test explorer on every keystroke.
-	proj, err := project.Load(fsys)
+	proj, err := project.Load(fsys, *manifest)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "nautilus test:", err)
 		return 1

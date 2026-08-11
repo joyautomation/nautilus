@@ -1,0 +1,37 @@
+# Acceptance tests that address UDT FIELDS directly — `P101.Running`, not
+# just `P101`. This is §4.7: before this change the resolver read the dot as
+# task.local and reported "no task P101".
+
+tolerance: 0.01
+
+tests:
+  - name: an enabled pump runs at its start speed
+    steps:
+      - given: { P101_Enable: true, P101_StartSP: 60.0 }
+        scans: 1
+        expect: { P101.Running: true, P101.Speed: 60.0 }
+
+  - name: a faulted pump does not run, however enabled it is
+    steps:
+      - given: { P102_Enable: true, P102.Fault: true }
+        scans: 1
+        expect: { P102.Running: false, P102.Speed: 0.0 }
+
+  - name: run hours accumulate only while running
+    suspend: [sim] # drive the motor struct directly, not through the sim
+    steps:
+      - given: { P201.Running: true }
+        advance: 1h
+        expect: { P201_RunHrs: { near: 1.0, tol: 0.01 } }
+      - given: { P201.Running: false }
+        advance: 1h
+        expect: { P201_RunHrs: { near: 1.0, tol: 0.01 } } # frozen
+
+  - name: the station rollups see every pump
+    steps:
+      - given: { P101_Enable: true, P103_Enable: true, P301_Enable: true }
+        scans: 2
+        expect: { RunningCount: 3.0, AnyFault: false }
+      - given: { P202.Fault: true }
+        scans: 2
+        expect: { AnyFault: true }

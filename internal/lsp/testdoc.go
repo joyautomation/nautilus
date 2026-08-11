@@ -279,7 +279,7 @@ func isProgramFile(name string) bool {
 // compiles every task and seeds the tag store; it starts no goroutine and
 // touches no driver, so this is safe to do on a save.
 func buildProject(dir string) (*projectBuild, error) {
-	p, err := project.Load(os.DirFS(dir))
+	p, err := project.Load(os.DirFS(dir), "")
 	if err != nil {
 		return nil, err
 	}

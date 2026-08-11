@@ -8,7 +8,9 @@
 package project
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -33,12 +35,24 @@ const ManifestName = "nautilus.yaml"
 // server.Options as data; the yaml decoder runs with KnownFields so a typo
 // is an error, not silence.
 type Manifest struct {
-	Name      string           `yaml:"name"`
-	Server    ServerConfig     `yaml:"server"`
-	Tasks     []TaskConfig     `yaml:"tasks"`
-	Tags      []TagConfig      `yaml:"tags"`
-	Driver    DriverConfig     `yaml:"driver"`
-	Sparkplug *SparkplugConfig `yaml:"sparkplug"`
+	Name   string       `yaml:"name"`
+	Server ServerConfig `yaml:"server"`
+	Tasks  []TaskConfig `yaml:"tasks"`
+	// TagFiles names files holding additional tags — each a bare YAML
+	// sequence of the same tag entries as Tags. This is how a GENERATED
+	// tag set stays a separate reviewable artifact instead of a 500-line
+	// smear through the file a person edits, and how one project ships to
+	// several sites: the site's manifest picks which tag files it wants.
+	// Resolved by ReadManifest, so every consumer (Load, the language
+	// server, check) sees one composed tag list.
+	TagFiles []string    `yaml:"tag-files"`
+	Tags     []TagConfig `yaml:"tags"`
+	// TagMeta layers HMI documentation onto tags declared elsewhere — keyed
+	// by tag name, or by a dotted path (`P101.Speed`) for one field of a
+	// UDT tag. Documentation only; it cannot change a tag's role or seed.
+	TagMeta   map[string]MetaConfig `yaml:"tag-meta"`
+	Driver    DriverConfig          `yaml:"driver"`
+	Sparkplug *SparkplugConfig      `yaml:"sparkplug"`
 }
 
 // SparkplugConfig republishes the tag store as a Sparkplug B edge node —
@@ -95,7 +109,28 @@ type TaskConfig struct {
 type TagConfig struct {
 	Name string `yaml:"name"`
 	Role string `yaml:"role"` // input | output | setpoint | state
+	// Type names a UDT the project's ST declares, for a tag whose value is
+	// a struct rather than a scalar. It replaces both the prose desc: that
+	// used to describe such a tag and the type-from-seed inference: a tag
+	// with a type has a knowable shape even with no init.
+	Type string `yaml:"type"`
 	Init any    `yaml:"init"`
+	Unit string `yaml:"unit"`
+	Desc string `yaml:"desc"`
+}
+
+// MetaConfig is HMI documentation for a tag, kept separate from the tag's
+// declaration so it can be attached to a GENERATED tag without redeclaring
+// it. This is not an override mechanism in disguise: it reaches only unit
+// and desc, so its worst failure is a stale sentence, where an override on
+// role or init would silently change what the controller does.
+//
+// It exists because some generators cannot supply documentation at all —
+// `nautilus eip import` is the case that forced it, since Logix keeps tag
+// descriptions in the offline project file rather than anywhere the CIP tag
+// browse can reach. A generator that HAS descriptions should emit them into
+// its tag file instead.
+type MetaConfig struct {
 	Unit string `yaml:"unit"`
 	Desc string `yaml:"desc"`
 }
@@ -202,29 +237,110 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 
 var programRe = regexp.MustCompile(`(?mi)^\s*PROGRAM\b`)
 
-// ReadManifest decodes nautilus.yaml and stops there — no programs
-// compiled, no driver constructed, nothing opened. Tooling that only needs
-// the declarations uses this instead of Load: the language server reads a
-// project's tags this way to answer completion and hover, and must stay
-// cheap enough to do it on a keystroke.
-func ReadManifest(fsys fs.FS) (*Manifest, error) {
-	raw, err := fs.ReadFile(fsys, ManifestName)
+// ReadManifest decodes a manifest and stops there — no programs compiled, no
+// driver constructed, nothing opened beyond the manifest and its tag files.
+// Tooling that only needs the declarations uses this instead of Load: the
+// language server reads a project's tags this way to answer completion and
+// hover, and must stay cheap enough to do it on a keystroke.
+//
+// name selects the manifest; "" means nautilus.yaml. A project may hold
+// several — one per site — sharing the same programs and differing in which
+// tag files they compose.
+func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
+	if name == "" {
+		name = ManifestName
+	}
+	name, err := projectPath(name)
 	if err != nil {
-		return nil, fmt.Errorf("no %s: %w", ManifestName, err)
+		return nil, fmt.Errorf("manifest %w", err)
+	}
+	raw, err := fs.ReadFile(fsys, name)
+	if err != nil {
+		return nil, fmt.Errorf("no %s: %w", name, err)
 	}
 	var m Manifest
 	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
 	dec.KnownFields(true)
 	if err := dec.Decode(&m); err != nil {
-		return nil, fmt.Errorf("%s: %w", ManifestName, err)
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if err := composeTags(fsys, &m, name); err != nil {
+		return nil, err
 	}
 	return &m, nil
 }
 
-// Load reads nautilus.yaml and the project's IEC sources from fsys (a
-// directory via os.DirFS, or a built binary's embedded archive).
-func Load(fsys fs.FS) (*Project, error) {
-	mp, err := ReadManifest(fsys)
+// projectPath keeps a manifest-referenced file inside the project. The
+// deployable artifact is the directory (or the archive built from it), so a
+// path that escapes it would load in development and vanish once built.
+func projectPath(p string) (string, error) {
+	c := path.Clean(p)
+	if !fs.ValidPath(c) {
+		return "", fmt.Errorf("path %q is outside the project", p)
+	}
+	return c, nil
+}
+
+// composeTags folds tag-files into m.Tags: each file in listed order, then
+// the manifest's own tags last.
+//
+// A name declared twice is an ERROR naming both sources, never last-wins.
+// Last-wins reads fine on the day it is written and rots silently: regenerate
+// a tag file, and an override that no longer matches anything keeps applying,
+// or stops applying, with no diff to show for it. The remedies stay legible —
+// fix the generator, or narrow its scope so the tag is never generated.
+func composeTags(fsys fs.FS, m *Manifest, manifestName string) error {
+	from := make(map[string]string, len(m.Tags))
+	out := make([]TagConfig, 0, len(m.Tags))
+	add := func(tags []TagConfig, src string) error {
+		for _, t := range tags {
+			// An unnamed tag is tagDefs' error to report, with its own
+			// wording; skipping it here keeps one message per problem.
+			if t.Name == "" {
+				continue
+			}
+			if prev, dup := from[t.Name]; dup {
+				return fmt.Errorf("tag %q is declared in both %s and %s — "+
+					"a tag may be declared once (fix the generator, or narrow "+
+					"its scope so the tag is not generated)", t.Name, prev, src)
+			}
+			from[t.Name] = src
+		}
+		out = append(out, tags...)
+		return nil
+	}
+	for _, f := range m.TagFiles {
+		p, err := projectPath(f)
+		if err != nil {
+			return fmt.Errorf("tag-files: %w", err)
+		}
+		raw, err := fs.ReadFile(fsys, p)
+		if err != nil {
+			return fmt.Errorf("tag-files: %w", err)
+		}
+		var tags []TagConfig
+		dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+		dec.KnownFields(true)
+		if err := dec.Decode(&tags); err != nil && !errors.Is(err, io.EOF) {
+			return fmt.Errorf("%s: %w (a tag file is a bare YAML list of tags, "+
+				"with no top-level keys)", p, err)
+		}
+		if err := add(tags, p); err != nil {
+			return err
+		}
+	}
+	if err := add(m.Tags, manifestName); err != nil {
+		return err
+	}
+	m.Tags = out
+	return nil
+}
+
+// Load reads a manifest and the project's IEC sources from fsys (a directory
+// via os.DirFS, or a built binary's embedded archive). name selects the
+// manifest; "" means nautilus.yaml.
+func Load(fsys fs.FS, name string) (*Project, error) {
+	mp, err := ReadManifest(fsys, name)
 	if err != nil {
 		return nil, err
 	}
@@ -282,6 +398,7 @@ func Load(fsys fs.FS) (*Project, error) {
 	if opts.Tags, err = tagDefs(m.Tags); err != nil {
 		return nil, err
 	}
+	opts.Meta = applyTagMeta(opts.Tags, m.TagMeta)
 	if opts.Driver, err = buildDriver(fsys, m.Driver); err != nil {
 		return nil, err
 	}
@@ -290,9 +407,9 @@ func Load(fsys fs.FS) (*Project, error) {
 	if addr == "" {
 		addr = "localhost:8080"
 	}
-	name := m.Name
-	if name == "" {
-		name = "nautilus"
+	projName := m.Name
+	if projName == "" {
+		projName = "nautilus"
 	}
 	var inputs []string
 	for _, t := range m.Tags {
@@ -301,7 +418,7 @@ func Load(fsys fs.FS) (*Project, error) {
 		}
 	}
 	return &Project{
-		Name:    name,
+		Name:    projName,
 		Addr:    addr,
 		Runtime: opts,
 		Server: server.Options{
@@ -351,32 +468,73 @@ func tagDefs(tags []TagConfig) ([]runtime.TagDef, error) {
 		if t.Desc != "" {
 			meta = append(meta, runtime.Desc(t.Desc))
 		}
+		var def runtime.TagDef
 		switch strings.ToLower(t.Role) {
 		case "input":
 			if t.Init != nil {
 				meta = append(meta, runtime.Init(normalize(t.Init)))
 			}
-			defs = append(defs, runtime.Input(t.Name, meta...))
+			def = runtime.Input(t.Name, meta...)
 		case "output":
 			if t.Init != nil {
 				meta = append(meta, runtime.Init(normalize(t.Init)))
 			}
-			defs = append(defs, runtime.Output(t.Name, meta...))
+			def = runtime.Output(t.Name, meta...)
 		case "setpoint":
-			if t.Init == nil {
-				return nil, fmt.Errorf("tag %s: a setpoint needs init (its value from scan one)", t.Name)
+			// A typed tag needs no init: zero-of-type is a complete, correctly
+			// shaped value, which is exactly what a seed is for. An untyped
+			// one still does — without either, it has no value on scan one and
+			// no knowable shape.
+			if t.Init == nil && t.Type == "" {
+				return nil, fmt.Errorf("tag %s: a setpoint needs init or type (its value from scan one)", t.Name)
 			}
-			defs = append(defs, runtime.Setpoint(t.Name, normalize(t.Init), meta...))
+			def = runtime.Setpoint(t.Name, normalize(t.Init), meta...)
 		case "state":
-			if t.Init == nil {
-				return nil, fmt.Errorf("tag %s: state needs init", t.Name)
+			if t.Init == nil && t.Type == "" {
+				return nil, fmt.Errorf("tag %s: state needs init or type", t.Name)
 			}
-			defs = append(defs, runtime.State(t.Name, normalize(t.Init), meta...))
+			def = runtime.State(t.Name, normalize(t.Init), meta...)
 		default:
 			return nil, fmt.Errorf("tag %s: role must be input, output, setpoint, or state (got %q)", t.Name, t.Role)
 		}
+		def.Type = t.Type
+		defs = append(defs, def)
 	}
 	return defs, nil
+}
+
+// applyTagMeta layers a tag-meta: block onto the tags. A key matching a tag
+// by name is merged into that tag's own documentation and WINS over it: the
+// block exists precisely to say what a generator could not, so a hand-written
+// unit must beat a generated blank — or an out-of-date generated string.
+//
+// Keys matching no tag (a dotted field path, or a typo) pass through to
+// Options.Meta as-is. The meta key space is plain strings, so per-field
+// documentation needs no new type; `nautilus check` reports keys that name
+// nothing, which is where a typo surfaces.
+func applyTagMeta(defs []runtime.TagDef, tm map[string]MetaConfig) map[string]runtime.TagMeta {
+	if len(tm) == 0 {
+		return nil
+	}
+	byName := make(map[string]int, len(defs))
+	for i, d := range defs {
+		byName[d.Name] = i
+	}
+	out := make(map[string]runtime.TagMeta, len(tm))
+	for key, mc := range tm {
+		i, ok := byName[key]
+		if !ok {
+			out[key] = runtime.TagMeta{Unit: mc.Unit, Desc: mc.Desc}
+			continue
+		}
+		if mc.Unit != "" {
+			defs[i].Meta.Unit = mc.Unit
+		}
+		if mc.Desc != "" {
+			defs[i].Meta.Desc = mc.Desc
+		}
+	}
+	return out
 }
 
 // normalize maps yaml's integer literals onto the float64 the tag store

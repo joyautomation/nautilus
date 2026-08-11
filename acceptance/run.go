@@ -68,7 +68,7 @@ type TB interface {
 // tb. This is the Go tier's entry point:
 //
 //	func TestAcceptance(t *testing.T) {
-//	    proj, _ := project.Load(os.DirFS("."))
+//	    proj, _ := project.Load(os.DirFS("."), "")
 //	    acceptance.Run(t, os.DirFS("."), proj.Runtime)
 //	}
 func Run(tb TB, fsys fs.FS, opts runtime.Options) {
@@ -130,6 +130,7 @@ type testRun struct {
 	tol    float64
 	inputs map[string]bool // tags the driver produces — `given` routes there
 	known  map[string]bool
+	types  map[string]string // tag name → declared UDT, for field-level `given`
 	meta   map[string]runtime.TagMeta
 	preds  map[string]*predicate
 }
@@ -153,6 +154,7 @@ func runTest(s *Suite, t *Test, opts runtime.Options) (Result, error) {
 		tol:    firstNonZero(deref(t.Tolerance), s.Tolerance),
 		inputs: inputSet(o),
 		known:  knownTags(o),
+		types:  declaredTypes(o),
 		// From the runtime, not the Options: role-declared tags carry their
 		// unit and description in TagDef, and only New() merges those into
 		// the flat meta map a trace reads.
@@ -352,25 +354,79 @@ func (r *testRun) predicate(expr string) (*predicate, error) {
 	return p, nil
 }
 
-// value resolves a name to a stored value: a tag, or `task.local` for a
-// program's retained internal state.
+// value resolves a name to a stored value. A dotted name is ambiguous once
+// tags can be UDTs — `P101.Speed` is a field, `main.err` is a task local —
+// so the order is fixed and tag-first:
+//
+//  1. an exact tag name (a tag literally called "A.B" wins; unambiguous)
+//  2. <tag>.<field>… when the head names a tag holding a struct
+//  3. <task>.<local> when the head names a task
+//  4. otherwise an error listing BOTH namespaces, since the writer cannot
+//     tell from the name alone which one they meant to reach
+//
+// Tags come first because they are the manifest's namespace and the thing a
+// test is usually about; a task local is the more specialized reach.
 func (r *testRun) value(name string) (ir.Value, error) {
-	if task, local, dotted := strings.Cut(name, "."); dotted {
-		prog := r.rt.TaskProgram(task)
-		if prog == nil {
-			return ir.Value{}, fmt.Errorf("no task %q in this project (tasks: %s)", task, strings.Join(r.rt.TaskNames(), ", "))
+	if v, err := r.rt.Tags().ReadGlobal(name); err == nil {
+		return v, nil
+	}
+	head, rest, dotted := strings.Cut(name, ".")
+	if !dotted {
+		return ir.Value{}, fmt.Errorf("no tag %q in this project", name)
+	}
+	if root, err := r.rt.Tags().ReadGlobal(head); err == nil {
+		v, ferr := fieldOf(root, head, rest)
+		if ferr != nil {
+			return ir.Value{}, ferr
 		}
-		v, ok := prog.Locals()[local]
+		return v, nil
+	}
+	if prog := r.rt.TaskProgram(head); prog != nil {
+		v, ok := prog.Locals()[rest]
 		if !ok {
-			return ir.Value{}, fmt.Errorf("task %s has no local %q", task, local)
+			return ir.Value{}, fmt.Errorf("task %s has no local %q", head, rest)
 		}
 		return irValue(v)
 	}
-	v, err := r.rt.Tags().ReadGlobal(name)
-	if err != nil {
-		return ir.Value{}, fmt.Errorf("no tag %q in this project", name)
+	return ir.Value{}, fmt.Errorf("no tag or task %q in this project (tags: %s; tasks: %s)",
+		head, strings.Join(sortedKeys(anyMap(r.known)), ", "), strings.Join(r.rt.TaskNames(), ", "))
+}
+
+// fieldOf walks a dotted path into a struct value. path may be several
+// segments deep ("Motor.Drive.Speed"); each step reports what it could not
+// find and what was available, because a wrong field name in a test is
+// otherwise indistinguishable from a wrong value.
+func fieldOf(v ir.Value, sofar, path string) (ir.Value, error) {
+	for path != "" {
+		var field string
+		field, path, _ = strings.Cut(path, ".")
+		if v.Kind != ir.TypeStruct || v.Struct == nil {
+			return ir.Value{}, fmt.Errorf("%s is not a struct, so it has no field %q", sofar, field)
+		}
+		i, ok := v.Struct.FieldIndex[field]
+		if !ok || i >= len(v.Fld) {
+			return ir.Value{}, fmt.Errorf("%s has no field %q (%s has: %s)",
+				sofar, field, v.Struct.Name, strings.Join(fieldNames(v.Struct), ", "))
+		}
+		v, sofar = v.Fld[i], sofar+"."+field
 	}
 	return v, nil
+}
+
+func fieldNames(sd *ir.StructDef) []string {
+	out := make([]string, 0, len(sd.Fields))
+	for _, f := range sd.Fields {
+		out = append(out, f.Name)
+	}
+	return out
+}
+
+func anyMap(m map[string]bool) map[string]any {
+	out := make(map[string]any, len(m))
+	for k := range m {
+		out[k] = nil
+	}
+	return out
 }
 
 // apply writes the step's given values, routing each by the role the
@@ -380,6 +436,14 @@ func (r *testRun) value(name string) (ir.Value, error) {
 func (r *testRun) apply(given map[string]any) error {
 	for _, name := range sortedKeys(given) {
 		if !r.known[name] {
+			// A dotted name may address one field of a UDT tag. Resolution
+			// order matches `expect` (value()): whole tag first, then field.
+			if head, path, dotted := strings.Cut(name, "."); dotted && r.known[head] {
+				if err := r.applyField(head, path, given[name]); err != nil {
+					return fmt.Errorf("given: %w", err)
+				}
+				continue
+			}
 			return fmt.Errorf("given: no tag %q in this project", name)
 		}
 		v := r.coerce(name, given[name])
@@ -392,6 +456,108 @@ func (r *testRun) apply(given map[string]any) error {
 		r.rt.Tags().Set(name, v)
 	}
 	return nil
+}
+
+// applyField sets one field of a struct tag: read the current value, replace
+// the field, write the whole tag back — the tag store and the driver image
+// both hold whole tags.
+//
+// The base value is the wrinkle. A typed INPUT is deliberately unseeded by
+// the runtime, so on the first `given` there is nothing to modify. The
+// harness materialises zero-of-type for that case and production does not:
+// a test that never delivers a value fails its own `expect`, so the
+// loud-fault argument that keeps inputs unseeded does not apply here. It
+// happens lazily, only for a tag a test actually addresses by field, so no
+// test that does not use this feature changes behaviour.
+func (r *testRun) applyField(tag, path string, raw any) error {
+	base, err := r.rt.Tags().ReadGlobal(tag)
+	if err != nil {
+		typeName, typed := r.types[tag]
+		if !typed {
+			return fmt.Errorf("%s has no value yet and no declared type, so its "+
+				"field %q cannot be set — give the whole tag instead", tag, path)
+		}
+		t, ok := r.rt.Types()[typeName]
+		if !ok {
+			return fmt.Errorf("%s is declared as %s, which this project does not declare", tag, typeName)
+		}
+		base = ir.Zero(t)
+	}
+	updated, err := setField(base, tag, path, raw)
+	if err != nil {
+		return err
+	}
+	if r.inputs[tag] {
+		return r.drv.WriteOutputs(nio.Values{tag: updated})
+	}
+	r.rt.Tags().Set(tag, updated)
+	return nil
+}
+
+// setField returns a copy of v with the dotted path replaced. Copies rather
+// than mutates: the tag store hands out values that may share backing arrays
+// with the last scan's snapshot.
+func setField(v ir.Value, sofar, path string, raw any) (ir.Value, error) {
+	field, rest, _ := strings.Cut(path, ".")
+	if v.Kind != ir.TypeStruct || v.Struct == nil {
+		return ir.Value{}, fmt.Errorf("%s is not a struct, so it has no field %q", sofar, field)
+	}
+	i, ok := v.Struct.FieldIndex[field]
+	if !ok || i >= len(v.Fld) {
+		return ir.Value{}, fmt.Errorf("%s has no field %q (%s has: %s)",
+			sofar, field, v.Struct.Name, strings.Join(fieldNames(v.Struct), ", "))
+	}
+	fld := append([]ir.Value(nil), v.Fld...)
+	if rest == "" {
+		nv, err := coerceTo(fld[i], raw)
+		if err != nil {
+			return ir.Value{}, fmt.Errorf("%s.%s: %w", sofar, field, err)
+		}
+		fld[i] = nv
+	} else {
+		nv, err := setField(fld[i], sofar+"."+field, rest, raw)
+		if err != nil {
+			return ir.Value{}, err
+		}
+		fld[i] = nv
+	}
+	v.Fld = fld
+	return v, nil
+}
+
+// coerceTo keeps a field write in the field's own declared type, the same
+// contract coerce() gives whole tags.
+func coerceTo(cur ir.Value, raw any) (ir.Value, error) {
+	switch cur.Kind {
+	case ir.TypeBool:
+		if b, ok := raw.(bool); ok {
+			return ir.BoolVal(b), nil
+		}
+	case ir.TypeReal:
+		if f, ok := toFloat(raw); ok {
+			return ir.RealVal(f), nil
+		}
+	case ir.TypeInt, ir.TypeTime:
+		if f, ok := toFloat(raw); ok {
+			return ir.IntVal(int64(f)), nil
+		}
+	case ir.TypeString:
+		if s, ok := raw.(string); ok {
+			return ir.StringVal(s), nil
+		}
+	}
+	return ir.Value{}, fmt.Errorf("cannot assign %v to a %s field", raw, cur.Kind)
+}
+
+// declaredTypes maps tag name → declared UDT name, for the tags that have one.
+func declaredTypes(o runtime.Options) map[string]string {
+	m := map[string]string{}
+	for _, d := range o.Tags {
+		if d.Type != "" {
+			m[d.Name] = d.Type
+		}
+	}
+	return m
 }
 
 // coerce keeps a write in the tag's own type: YAML has one number kind, the
