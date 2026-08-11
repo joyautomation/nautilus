@@ -4,83 +4,258 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>nautilus · controller</title>
+    <link rel="icon" href="/assets/favicon.png" sizes="128x128" />
+    <!-- Resolve the theme before first paint. Anything later — even a script at
+         the top of <body> — flashes the dark default at a light-mode operator.
+         The key and the three modes match the HMI kit's theme store
+         (hmi/src/lib/theme.svelte.ts), so a controller page and an HMI served
+         from the same origin agree on the choice. -->
+    <script>
+      (function () {
+        var m = "system";
+        try { var s = localStorage.getItem("theme"); if (s === "light" || s === "dark" || s === "system") m = s; } catch (e) {}
+        var dark = m === "dark" || (m === "system" && !window.matchMedia("(prefers-color-scheme: light)").matches);
+        document.documentElement.dataset.theme = dark ? "dark" : "light";
+      })();
+    </script>
     <style>
+      /* ── brand faces ──────────────────────────────────────────────────
+         Righteous / Space Grotesk / IBM Plex Mono, the same three faces as
+         nautilus.joyautomation.com. Served from the binary rather than a CDN:
+         a controller lives on a plant network that usually can't reach one,
+         and a dashboard that silently falls back to Arial isn't ours. Latin
+         subsets only — ~65 KB for all four files. */
+      @font-face {
+        font-family: "Righteous";
+        src: url("/assets/fonts/righteous-400.woff2") format("woff2");
+        font-weight: 400; font-style: normal; font-display: swap;
+      }
+      @font-face {
+        font-family: "Space Grotesk";
+        src: url("/assets/fonts/space-grotesk-var.woff2") format("woff2");
+        font-weight: 300 700; font-style: normal; font-display: swap;
+      }
+      @font-face {
+        font-family: "IBM Plex Mono";
+        src: url("/assets/fonts/ibm-plex-mono-400.woff2") format("woff2");
+        font-weight: 400; font-style: normal; font-display: swap;
+      }
+      @font-face {
+        font-family: "IBM Plex Mono";
+        src: url("/assets/fonts/ibm-plex-mono-600.woff2") format("woff2");
+        font-weight: 600; font-style: normal; font-display: swap;
+      }
+
+      /* ── token layer ──────────────────────────────────────────────────
+         Mirrors the HMI kit's token layer (hmi/src/lib/theme.css) name for
+         name, so this page and any HMI built on the kit are the same surface.
+         Nothing below this block hard-codes a colour: re-skinning the
+         dashboard means editing these three blocks and nothing else.
+
+         --brand is the one token the kit doesn't carry: the Nautilus green
+         from the logo. It takes a darker step on light, exactly as the
+         categorical series do — #64d88a on paper is a 1.4:1 smear. */
       :root {
-        --bg: #0d1117;
-        --panel: #161b22;
-        --border: #21262d;
-        --text: #e6edf3;
-        --muted: #8b949e;
-        --good: #64d88a;
-        --bad: #ff6b6b;
-        --accent: #58a6ff;
-        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-        --sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
+        --radius: 10px;
+        --display: "Righteous", ui-sans-serif, system-ui, sans-serif;
+        --font: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, sans-serif;
+        --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+        /* Type scale — the floor for anything an operator reads. --font-2xs
+           is the minimum and is reserved for all-caps labels (pair it with
+           letter-spacing); prose and readouts sit at --font-sm or above. */
+        --font-2xs: 0.75rem;    /* 12px — all-caps labels only */
+        --font-xs: 0.8125rem;   /* 13px */
+        --font-sm: 0.875rem;    /* 14px */
+        --font-md: 0.9375rem;   /* 15px */
+        --font-lg: 1.25rem;     /* 20px */
+        --font-xl: 1.6rem;      /* 26px — the wordmark */
       }
-      @media (prefers-color-scheme: light) {
-        :root {
-          --bg: #f6f8fa;
-          --panel: #ffffff;
-          --border: #d0d7de;
-          --text: #1f2328;
-          --muted: #656d76;
-          --good: #1a7f37;
-          --bad: #cf222e;
-          --accent: #0969da;
-        }
+
+      :root,
+      :root[data-theme="dark"] {
+        --bg: #0d0d0d;
+        --surface: #1a1a19;
+        --surface-2: #232321;
+        --border: rgba(255, 255, 255, 0.1);
+        --ink: #ffffff;
+        --ink-2: #c3c2b7;
+        --muted: #898781;
+        --grid: #2c2c2a;
+        --axis: #383835;
+
+        --brand: #64d88a;
+
+        /* categorical series (validated on --surface, dark) */
+        --s1: #3987e5;  /* blue — primary series */
+        --s2: #c98500;  /* yellow — secondary */
+        --s3: #199e70;  /* aqua — tertiary */
+        --s5: #9085e9;  /* violet */
+
+        /* status (reserved, never used as series) */
+        --good: #0ca30c;
+        --warn: #fab219;
+        --serious: #ec835a;
+        --crit: #d03b3b;
+
+        --hover: #2c2c2a;
+        --accent: #3987e5;
+        --primary-bg: #1c5cab;
+        --primary-border: #2a78d6;
+        --primary-hover: #256abf;
+        color-scheme: dark;
       }
+
+      :root[data-theme="light"] {
+        --bg: #f3f2ee;
+        --surface: #ffffff;
+        --surface-2: #e9e7e0;
+        --border: rgba(0, 0, 0, 0.13);
+        --ink: #1b1a17;
+        --ink-2: #45443d;
+        --muted: #74726a;
+        --grid: #e4e2da;
+        --axis: #c9c7bd;
+
+        --brand: #1f7a46;
+
+        --s1: #2a6fc9;
+        --s2: #9c6a00;
+        --s3: #157a55;
+        --s5: #6357cf;
+
+        --good: #0a8a0a;
+        --warn: #b07d0d;
+        --serious: #c85f38;
+        --crit: #c22f2f;
+
+        --hover: #e4e2da;
+        --accent: #2a6fc9;
+        --primary-bg: #2a6fc9;
+        --primary-border: #4a86d6;
+        --primary-hover: #245fb0;
+        color-scheme: light;
+      }
+
+      /* There is deliberately no prefers-color-scheme fallback for the
+         no-data-theme case. Everything on this page — the tag table, the
+         charts, the freshness clock — is drawn by the script below, so with
+         scripting off there is nothing to theme; a third copy of the light
+         palette would only be one more place for it to drift. */
+
+      /* ── base ─────────────────────────────────────────────────────────── */
       * { box-sizing: border-box; }
       body {
         margin: 0;
         background: var(--bg);
-        color: var(--text);
-        font-family: var(--sans);
+        color: var(--ink);
+        font-family: var(--font);
+        font-size: var(--font-sm);
         line-height: 1.5;
         -webkit-font-smoothing: antialiased;
       }
-      .wrap { max-width: 820px; margin: 0 auto; padding: 3rem 1.25rem 4rem; }
-      header { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; }
-      h1 { font-size: 1.6rem; margin: 0; letter-spacing: -0.01em; }
-      h1 .n { color: var(--accent); }
-      .tagline { color: var(--muted); margin: 0.35rem 0 0; }
+      .wrap { max-width: 880px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+
+      /* ── masthead ─────────────────────────────────────────────────────
+         The spiral is painted, not drawn: a mask fed by --brand means the
+         mark re-colours with the theme from the same one-token change as
+         everything else, which an <img> could not do. */
+      header { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
+      .mark {
+        flex: none; width: 2rem; height: 2rem; background: var(--brand);
+        -webkit-mask: url("/assets/logo.svg") center / contain no-repeat;
+        mask: url("/assets/logo.svg") center / contain no-repeat;
+      }
+      h1 {
+        font-family: var(--display); font-weight: 400; font-size: var(--font-xl);
+        margin: 0; letter-spacing: 0.005em; line-height: 1.1;
+      }
+      h1 .n { color: var(--brand); }
+      .actions { display: flex; align-items: center; gap: 0.5rem; margin-left: auto; flex-wrap: wrap; }
+      .tagline { color: var(--ink-2); margin: 0.6rem 0 0; font-size: var(--font-md); }
+
       .status {
-        display: inline-flex; align-items: center; gap: 0.4rem;
-        margin-left: auto; font-size: 0.8rem; font-weight: 600;
-        padding: 0.2rem 0.6rem; border-radius: 999px; border: 1px solid var(--border);
+        display: inline-flex; align-items: center; gap: 0.4rem; flex: none;
+        font-size: var(--font-2xs); font-weight: 600;
+        padding: 0.25rem 0.6rem; border-radius: 999px; border: 1px solid var(--border);
         color: var(--muted); white-space: nowrap;
       }
-      .dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--muted); }
+      .dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--muted); }
       .status.live { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent); }
       .status.live .dot { background: var(--good); animation: pulse 1.6s ease-in-out infinite; }
-      .status.stale { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
-      .status.stale .dot { background: var(--bad); }
+      .status.stale { color: var(--crit); border-color: color-mix(in srgb, var(--crit) 45%, transparent); }
+      .status.stale .dot { background: var(--crit); }
       @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
-      section { margin-top: 2.25rem; }
-      .meta { color: var(--muted); font-size: 0.85rem; margin-top: 0.5rem; }
-      .meta b { color: var(--text); font-variant-numeric: tabular-nums; }
+      /* Three-way theme selector, matching the kit's ThemeSwitch: rigid
+         options that never shrink, so a narrow header can't scrunch them. */
+      .theme-switch {
+        display: inline-flex; flex: none; gap: 2px;
+        background: var(--surface-2); border-radius: 8px; padding: 3px;
+      }
+      .theme-switch .opt {
+        flex: none; display: flex; align-items: center; justify-content: center;
+        width: 30px; height: 26px; padding: 0; border: none; border-radius: 6px;
+        background: transparent; color: var(--muted); cursor: pointer;
+        transition: color 0.12s ease, background 0.12s ease;
+      }
+      .theme-switch .opt:hover { color: var(--ink-2); background: var(--hover); }
+      .theme-switch .opt[aria-pressed="true"] {
+        background: var(--surface); color: var(--s1);
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+      }
+      .theme-switch .opt:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+      .docs {
+        display: inline-flex; align-items: center; gap: 0.35rem; flex: none;
+        font-size: var(--font-2xs); font-weight: 600; text-decoration: none;
+        color: var(--ink-2); background: var(--surface-2);
+        border: 1px solid var(--border); border-radius: 8px;
+        padding: 0.3rem 0.6rem; transition: color 0.12s ease, background 0.12s ease;
+      }
+      .docs:hover { color: var(--ink); background: var(--hover); }
+      .docs svg { opacity: 0.7; }
+
+      section { margin-top: 2.25rem; }
+      h2 {
+        font-size: var(--font-xs); font-weight: 600; text-transform: uppercase;
+        letter-spacing: 0.06em; color: var(--ink-2); margin: 0;
+      }
+      .meta { color: var(--muted); font-size: var(--font-xs); margin-top: 0.4rem; }
+      .meta b { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+      /* ── tables ───────────────────────────────────────────────────────── */
       table { width: 100%; border-collapse: collapse; margin-top: 0.75rem; }
       .tags-wrap {
-        border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
-        background: var(--panel);
+        border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+        background: var(--surface);
       }
-      th, td { text-align: left; padding: 0.5rem 0.9rem; font-size: 0.9rem; }
-      th { color: var(--muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
-      tbody tr { border-top: 1px solid var(--border); }
-      td.name { font-family: var(--mono); }
-      td.val { font-family: var(--mono); text-align: right; font-variant-numeric: tabular-nums; color: var(--good); }
+      th, td { text-align: left; padding: 0.5rem 0.9rem; font-size: var(--font-sm); }
+      th {
+        color: var(--muted); font-weight: 600; font-size: var(--font-2xs);
+        text-transform: uppercase; letter-spacing: 0.06em;
+      }
+      tbody tr { border-top: 1px solid var(--grid); }
+      td.name { font-family: var(--mono); color: var(--ink); }
+      td.val {
+        font-family: var(--mono); text-align: right;
+        font-variant-numeric: tabular-nums; color: var(--ink);
+      }
+      /* Colour on a value means something: a live TRUE reads as energized,
+         a FALSE recedes. Numbers stay ink — a green temperature is decoration
+         pretending to be a status. */
+      td.val.bool-true { color: var(--good); }
       td.val.bool-false { color: var(--muted); }
       td.val.summary { color: var(--muted); font-style: italic; }
       tr.expandable { cursor: pointer; }
-      tr.expandable:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+      tr.expandable:hover td { background: var(--hover); }
       .caret {
         display: inline-block; width: 1em; color: var(--muted);
         transition: transform 0.12s ease; user-select: none;
       }
       tr.open .caret { transform: rotate(90deg); }
       tr.child td.name { color: var(--muted); }
-      tr.child td.name .leaf { color: var(--text); }
+      tr.child td.name .leaf { color: var(--ink-2); }
       .empty { padding: 1.5rem 0.9rem; color: var(--muted); text-align: center; }
 
       /* Operator-writable values. Only setpoints and state get this: an input
@@ -92,14 +267,14 @@
         content: "✎"; margin-left: 0.5rem; color: var(--muted);
         opacity: 0; transition: opacity 0.12s ease; font-size: 0.85em;
       }
-      td.val.writable:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+      td.val.writable:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
       td.val.writable:hover::after { opacity: 0.75; }
       td.val.editing::after, td.val.has-err::after { content: none; }
       td.val.writing { color: var(--muted); }
       td.val input {
         width: 7.5rem; padding: 0.15rem 0.4rem; text-align: right;
-        font-family: var(--mono); font-size: 0.9rem; font-variant-numeric: tabular-nums;
-        color: var(--text); background: var(--bg);
+        font-family: var(--mono); font-size: var(--font-sm); font-variant-numeric: tabular-nums;
+        color: var(--ink); background: var(--bg);
         border: 1px solid var(--accent); border-radius: 6px; outline: none;
       }
       /* A writable BOOL is a toggle, not a text field: typing "true" to start a
@@ -111,70 +286,32 @@
       }
       td.val .toggle .track {
         width: 1.9rem; height: 1.05rem; border-radius: 999px; padding: 2px;
-        background: var(--border); transition: background 0.12s ease;
+        background: var(--surface-2); border: 1px solid var(--border);
+        transition: background 0.12s ease;
       }
       td.val .toggle .knob {
-        display: block; width: 0.85rem; height: 0.85rem; border-radius: 50%;
+        display: block; width: 0.8rem; height: 0.8rem; border-radius: 50%;
         background: var(--muted); transition: transform 0.12s ease, background 0.12s ease;
       }
       td.val .toggle.on .track { background: color-mix(in srgb, var(--good) 55%, transparent); }
       td.val .toggle.on .knob { background: var(--good); transform: translateX(0.85rem); }
-      td.val .toggle:hover .track { background: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+      td.val .toggle:hover .track { background: color-mix(in srgb, var(--accent) 45%, var(--surface-2)); }
       /* Write failures land next to the value that failed, not in a corner
          toast — the tag you just touched is where you are looking. */
       .write-err {
-        display: block; margin-top: 0.25rem; font-family: var(--sans);
-        font-size: 0.72rem; color: var(--bad); text-align: right; font-style: normal;
+        display: block; margin-top: 0.25rem; font-family: var(--font);
+        font-size: var(--font-2xs); color: var(--crit); text-align: right; font-style: normal;
       }
 
+      /* ── diagnostics ──────────────────────────────────────────────────── */
       .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 0.6rem; margin-top: 0.75rem; }
-      .tile { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 0.6rem 0.8rem; }
-      .tile .k { display: block; font-size: 0.65rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); }
-      .tile .v { font-family: var(--mono); font-size: 1.15rem; font-weight: 650; font-variant-numeric: tabular-nums; }
-      .tile .v small { font-size: 0.65rem; color: var(--muted); margin-left: 2px; }
+      .tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.6rem 0.8rem; }
+      .k { display: block; font-size: var(--font-2xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+      .tile .v { font-family: var(--mono); font-size: 1.15rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+      .tile .v small { font-size: var(--font-2xs); color: var(--muted); margin-left: 2px; }
       .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 0.6rem; margin-top: 0.6rem; }
-      .chart { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 0.6rem 0.8rem; }
-      /* Field-driver status cards */
-      .drivers { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.7rem; }
-      /* grid-template-columns: minmax(0,1fr) is load-bearing: a single
-         implicit `auto` column sizes to the content's MAX-content and
-         overflows the card; a 1fr track is constrained to the card width. */
-      .dcard { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 0.8rem 0.9rem; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.5rem; min-width: 0; overflow: hidden; }
-      .dcard.st-error, .dcard.st-degraded { border-color: color-mix(in srgb, var(--bad) 40%, var(--border)); }
-      .dcard .dhead { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-width: 0; }
-      /* min-width:0 lets the name shrink and ellipsize instead of forcing the
-         header (and card) wide when the group/node id is long. */
-      /* The NAME text ellipsizes; the kind badge stays fully visible (it's a
-         non-shrinking sibling, not part of the truncated text). */
-      .dcard .dname { display: flex; align-items: baseline; gap: 0.4rem; min-width: 0; font-family: var(--mono); font-weight: 650; font-size: 0.95rem; }
-      .dcard .dtxt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-      .dcard .dkind { flex: none; font-size: 0.6rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); border-radius: 4px; padding: 0 0.3rem; }
-      .cbadge { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.72rem; font-weight: 600; white-space: nowrap; border: 1px solid var(--border); color: var(--text); }
-      .cbadge .cdot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--c); box-shadow: 0 0 5px color-mix(in srgb, var(--c) 70%, transparent); }
-      .cbadge.pulse .cdot { animation: pulse 1.4s ease-in-out infinite; }
-      .cbadge { --c: var(--muted); border-color: color-mix(in srgb, var(--c) 45%, var(--border)); background: color-mix(in srgb, var(--c) 12%, transparent); }
-      .st-connected .cbadge { --c: var(--good); }
-      .st-connecting .cbadge, .st-waiting .cbadge { --c: #d9a441; }
-      .st-degraded .cbadge { --c: #e0803a; }
-      .st-error .cbadge, .st-offline .cbadge { --c: var(--bad); }
-      .dcard .ddetail { font-family: var(--mono); font-size: 0.72rem; color: var(--muted); }
-      .dcard .dmsg { font-size: 0.8rem; color: var(--text); }
-      .dcard .dmsg .dup { color: var(--muted); }
-      .dcard .derr { font-size: 0.72rem; color: var(--bad); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      /* min-width:0 lets the grid (and its tiles) shrink to the card width;
-         without it, nowrap tiles size to their intrinsic width and overflow
-         the card to the right. */
-      .dmetrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 0.4rem; min-width: 0; }
-      /* Fixed height + non-wrapping value: a metric whose text changes each
-         frame (a freshness time) must never reflow the card. */
-      .dmetric { background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 0.35rem 0.45rem; min-height: 2.7rem; min-width: 0; display: flex; flex-direction: column; justify-content: center; overflow: hidden; }
-      .dmetric .mv { font-family: var(--mono); font-weight: 650; font-size: 0.85rem; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .dmetric .ml { display: block; font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
-      .ddevices { border-top: 1px solid var(--border); padding-top: 0.5rem; display: grid; gap: 0.35rem; }
-      .ddevices .dh { font-size: 0.6rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
-      .ddevice { display: flex; align-items: center; gap: 0.5rem; }
-      .ddevice .dv { font-size: 0.7rem; color: var(--muted); font-family: var(--mono); }
-      .chart .k { display: block; font-size: 0.65rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); margin-bottom: 0.25rem; }
+      .chart { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.6rem 0.8rem; }
+      .chart .k { margin-bottom: 0.25rem; }
       .chart svg { width: 100%; display: block; }
       /* Smooth chart updates: sparklines scroll via a transitioned group
          transform, histogram bars ease between heights, phase widths ease.
@@ -182,51 +319,125 @@
          continuous rather than stepped. */
       .chart svg g.scroll { transition: transform 0.3s linear; }
       .chart svg rect.hbar { transition: y 0.3s ease, height 0.3s ease; }
-      .phasebar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--border); margin-top: 0.3rem; }
+      .phasebar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--surface-2); margin-top: 0.3rem; }
       .phasebar span { min-width: 1px; transition: width 0.3s ease; }
       @media (prefers-reduced-motion: reduce) {
-        .chart svg g.scroll, .chart svg rect.hbar, .phasebar span { transition: none; }
+        .chart svg g.scroll, .chart svg rect.hbar, .phasebar span, .status.live .dot, .cbadge.pulse .cdot { transition: none; animation: none; }
       }
-      .ph-read { background: var(--accent); }
-      .ph-exec { background: #d7a021; }
-      .ph-write { background: var(--good); }
-      .phlegend { display: flex; flex-wrap: wrap; gap: 0.9rem; margin-top: 0.45rem; font-size: 0.75rem; color: var(--muted); align-items: center; }
+      /* Read / execute / write are three series of one measurement, so they
+         take the categorical steps in order rather than three moods. */
+      .ph-read { background: var(--s1); }
+      .ph-exec { background: var(--s2); }
+      .ph-write { background: var(--s3); }
+      .phlegend { display: flex; flex-wrap: wrap; gap: 0.9rem; margin-top: 0.45rem; font-size: var(--font-xs); color: var(--muted); align-items: center; }
       .phlegend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
-      .phlegend b { font-family: var(--mono); color: var(--text); font-weight: 600; }
+      .phlegend b { font-family: var(--mono); color: var(--ink-2); font-weight: 600; }
       .phlegend .io { margin-left: auto; font-weight: 600; }
-      .phlegend .io.bad { color: var(--bad); }
+      .phlegend .io.bad { color: var(--crit); }
       .phlegend .io.ok { color: var(--good); }
-      td.desc { color: var(--muted); font-size: 0.85rem; }
-      td.desc.local, td.q.local { color: var(--muted); font-style: italic; font-size: 0.75rem; }
-      tr.localrow td.name { color: var(--accent); }
-      td.unit { color: var(--muted); font-family: var(--mono); font-size: 0.85rem; }
-      td.q { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.04em; }
-      td.q.good { color: var(--good); }
-      td.q.stale { color: var(--bad); }
 
+      /* ── field-driver status cards ────────────────────────────────────── */
+      .drivers { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.7rem; margin-top: 0.75rem; }
+      /* grid-template-columns: minmax(0,1fr) is load-bearing: a single
+         implicit `auto` column sizes to the content's MAX-content and
+         overflows the card; a 1fr track is constrained to the card width. */
+      .dcard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.8rem 0.9rem; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.5rem; min-width: 0; overflow: hidden; }
+      .dcard.st-error, .dcard.st-degraded { border-color: color-mix(in srgb, var(--crit) 40%, var(--border)); }
+      .dcard .dhead { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; min-width: 0; }
+      /* min-width:0 lets the name shrink and ellipsize instead of forcing the
+         header (and card) wide when the group/node id is long. */
+      /* The NAME text ellipsizes; the kind badge stays fully visible (it's a
+         non-shrinking sibling, not part of the truncated text). */
+      .dcard .dname { display: flex; align-items: baseline; gap: 0.4rem; min-width: 0; font-family: var(--mono); font-weight: 600; font-size: var(--font-md); }
+      .dcard .dtxt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+      .dcard .dkind { flex: none; font-size: 0.65rem; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); border-radius: 4px; padding: 0 0.3rem; }
+      .cbadge { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: var(--font-2xs); font-weight: 600; white-space: nowrap; color: var(--ink-2); }
+      .cbadge .cdot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--c); box-shadow: 0 0 5px color-mix(in srgb, var(--c) 70%, transparent); }
+      .cbadge.pulse .cdot { animation: pulse 1.4s ease-in-out infinite; }
+      .cbadge { --c: var(--muted); border: 1px solid color-mix(in srgb, var(--c) 45%, var(--border)); background: color-mix(in srgb, var(--c) 12%, transparent); }
+      .st-connected .cbadge { --c: var(--good); }
+      .st-connecting .cbadge, .st-waiting .cbadge { --c: var(--warn); }
+      .st-degraded .cbadge { --c: var(--serious); }
+      .st-error .cbadge, .st-offline .cbadge { --c: var(--crit); }
+      .dcard .ddetail { font-family: var(--mono); font-size: var(--font-2xs); color: var(--muted); }
+      .dcard .dmsg { font-size: var(--font-xs); color: var(--ink-2); }
+      .dcard .dmsg .dup { color: var(--muted); }
+      .dcard .derr { font-size: var(--font-2xs); color: var(--crit); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      /* min-width:0 lets the grid (and its tiles) shrink to the card width;
+         without it, nowrap tiles size to their intrinsic width and overflow
+         the card to the right. */
+      .dmetrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)); gap: 0.4rem; min-width: 0; }
+      /* Fixed height + non-wrapping value: a metric whose text changes each
+         frame (a freshness time) must never reflow the card. */
+      .dmetric { background: var(--bg); border: 1px solid var(--border); border-radius: 7px; padding: 0.35rem 0.45rem; min-height: 2.7rem; min-width: 0; display: flex; flex-direction: column; justify-content: center; overflow: hidden; }
+      .dmetric .mv { font-family: var(--mono); font-weight: 600; font-size: var(--font-xs); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .dmetric .ml { display: block; font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+      .ddevices { border-top: 1px solid var(--grid); padding-top: 0.5rem; display: grid; gap: 0.35rem; }
+      .ddevices .dh { font-size: 0.65rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+      .ddevice { display: flex; align-items: center; gap: 0.5rem; }
+      .ddevice .dv { font-size: var(--font-2xs); color: var(--muted); font-family: var(--mono); }
+
+      /* ── tag table trimmings ──────────────────────────────────────────── */
+      td.desc { color: var(--muted); font-size: var(--font-xs); }
+      td.desc.local, td.q.local { color: var(--muted); font-style: italic; font-size: var(--font-2xs); }
+      tr.localrow td.name { color: var(--s5); }
+      td.unit { color: var(--muted); font-family: var(--mono); font-size: var(--font-xs); }
+      td.q { font-size: var(--font-2xs); font-weight: 700; letter-spacing: 0.04em; }
+      td.q.good { color: var(--good); }
+      td.q.stale { color: var(--warn); }
+
+      /* ── API + footer ─────────────────────────────────────────────────── */
       .endpoints { list-style: none; padding: 0; margin: 0.75rem 0 0; display: grid; gap: 0.5rem; }
       .endpoints li {
         display: flex; gap: 0.75rem; align-items: baseline;
-        font-family: var(--mono); font-size: 0.85rem;
+        font-family: var(--mono); font-size: var(--font-xs);
       }
       .endpoints .m { color: var(--accent); min-width: 3.2rem; font-weight: 600; }
-      .endpoints a { color: var(--text); text-decoration: none; border-bottom: 1px solid var(--border); }
-      .endpoints a:hover { border-color: var(--accent); }
-      .endpoints .desc { color: var(--muted); font-family: var(--sans); }
-      h2 { font-size: 0.95rem; margin: 0; }
-      footer { margin-top: 2.5rem; color: var(--muted); font-size: 0.8rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+      .endpoints a { color: var(--ink-2); text-decoration: none; border-bottom: 1px solid var(--border); }
+      .endpoints a:hover { color: var(--ink); border-color: var(--accent); }
+      .endpoints .desc { color: var(--muted); font-family: var(--font); }
+      footer {
+        margin-top: 2.5rem; color: var(--muted); font-size: var(--font-xs);
+        border-top: 1px solid var(--border); padding-top: 1rem;
+      }
       footer a { color: var(--accent); text-decoration: none; }
+      footer a:hover { text-decoration: underline; }
+      footer code { font-family: var(--mono); color: var(--ink-2); }
     </style>
   </head>
   <body>
     <div class="wrap">
       <header>
-        <div>
-          <h1><span class="n">nautilus</span> controller</h1>
-          <p class="tagline">Your control logic is running. This page is served by the built-in tag API.</p>
+        <span class="mark" role="img" aria-label="nautilus"></span>
+        <h1><span class="n">nautilus</span> controller</h1>
+        <div class="actions">
+          <span class="status" id="status"><span class="dot"></span><span id="status-text">connecting…</span></span>
+          <div class="theme-switch" id="theme-switch" role="group" aria-label="Theme">
+            <button type="button" class="opt" data-theme-opt="system" title="System" aria-label="System theme" aria-pressed="false">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="2" y="3" width="20" height="14" rx="2" /><line x1="8" y1="21" x2="16" y2="21" /><line x1="12" y1="17" x2="12" y2="21" />
+              </svg>
+            </button>
+            <button type="button" class="opt" data-theme-opt="light" title="Light" aria-label="Light theme" aria-pressed="false">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="4" /><path d="M12 2v2" /><path d="M12 20v2" /><path d="m4.93 4.93 1.41 1.41" /><path d="m17.66 17.66 1.41 1.41" /><path d="M2 12h2" /><path d="M20 12h2" /><path d="m6.34 17.66-1.41 1.41" /><path d="m19.07 4.93-1.41 1.41" />
+              </svg>
+            </button>
+            <button type="button" class="opt" data-theme-opt="dark" title="Dark" aria-label="Dark theme" aria-pressed="false">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+              </svg>
+            </button>
+          </div>
+          <a class="docs" href="https://nautilus.joyautomation.com" target="_blank" rel="noreferrer noopener">
+            Docs
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M7 17 17 7" /><path d="M8 7h9v9" />
+            </svg>
+          </a>
         </div>
-        <span class="status" id="status"><span class="dot"></span><span id="status-text">connecting…</span></span>
       </header>
+      <p class="tagline">Your control logic is running. This page is served by the built-in tag API.</p>
 
       <section>
         <h2>Scan diagnostics</h2>
@@ -299,13 +510,51 @@
       <footer>
         Edit your control logic in <code>program.st</code> — with the nautilus VS Code extension you get
         compile diagnostics and these live values inline. ·
-        <a href="https://github.com/joyautomation/nautilus">github.com/joyautomation/nautilus</a>
+        <a href="https://nautilus.joyautomation.com" target="_blank" rel="noreferrer noopener">docs</a> ·
+        <a href="https://github.com/joyautomation/nautilus" target="_blank" rel="noreferrer noopener">github.com/joyautomation/nautilus</a>
       </footer>
     </div>
 
     <script>
       const $ = (id) => document.getElementById(id);
       let lastFrameMs = 0;
+
+      // ── theme ────────────────────────────────────────────────────────
+      // Three modes (System / Light / Dark), persisted under the same key
+      // and stamped the same way as the HMI kit's theme store, so an operator
+      // who picks Light here gets Light on the HMI next door. The <head>
+      // block already applied the saved choice before paint; this only wires
+      // the switch and follows the OS while the mode is System.
+      const THEME_KEY = "theme";
+      const isTheme = (v) => v === "system" || v === "light" || v === "dark";
+      let themeMode = "system";
+      const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+
+      function applyTheme(mode) {
+        const effective = mode === "system" ? (darkQuery.matches ? "dark" : "light") : mode;
+        document.documentElement.dataset.theme = effective;
+        for (const b of $("theme-switch").querySelectorAll("[data-theme-opt]")) {
+          b.setAttribute("aria-pressed", String(b.dataset.themeOpt === mode));
+        }
+      }
+      function setTheme(mode) {
+        themeMode = mode;
+        try { localStorage.setItem(THEME_KEY, mode); } catch {}
+        applyTheme(mode);
+      }
+      (function initTheme() {
+        let saved = null;
+        try { saved = localStorage.getItem(THEME_KEY); } catch {}
+        themeMode = isTheme(saved) ? saved : "system";
+        applyTheme(themeMode);
+        darkQuery.addEventListener("change", () => {
+          if (themeMode === "system") applyTheme(themeMode);
+        });
+        $("theme-switch").addEventListener("click", (e) => {
+          const b = e.target.closest("[data-theme-opt]");
+          if (b) setTheme(b.dataset.themeOpt);
+        });
+      })();
 
       // Expanded compound tags (UDT structs / arrays), by dotted path.
       // Survives the per-frame re-render so the tree doesn't snap shut.
@@ -522,7 +771,7 @@
       }
 
       const rowSig = (ms) =>
-        ms.map((m) => `${m.key} ${m.kind} ${m.depth} ${m.local ? 1 : 0}`).join("");
+        ms.map((m) => `${m.key} ${m.kind} ${m.depth} ${m.local ? 1 : 0}`).join("");
 
       // Every value cell holds its text in a .tv span so a patch can rewrite
       // the value without touching the cell itself.
@@ -540,9 +789,9 @@
         if (m.kind === "summary") {
           return `<td class="val summary"><span class="tv">${esc(m.value)}</span></td>`;
         }
-        const falsey = typeof m.value === "boolean" && !m.value ? " bool-false" : "";
+        const bool = typeof m.value === "boolean" ? (m.value ? " bool-true" : " bool-false") : "";
         const why = m.root !== null ? ownerOf(m.root) : "";
-        return `<td class="val${falsey}"${why ? ` title="${esc(why)}"` : ""}><span class="tv">${fmt(m.value)}</span></td>`;
+        return `<td class="val${bool}"${why ? ` title="${esc(why)}"` : ""}><span class="tv">${fmt(m.value)}</span></td>`;
       }
 
       function rowHTML(m) {
@@ -578,7 +827,9 @@
             const t = td.querySelector(".toggle");
             if (t) t.classList.toggle("on", !!m.value);
           } else if (m.kind === "plain") {
-            td.classList.toggle("bool-false", typeof m.value === "boolean" && !m.value);
+            const bool = typeof m.value === "boolean";
+            td.classList.toggle("bool-true", bool && m.value);
+            td.classList.toggle("bool-false", bool && !m.value);
           }
         }
         if (m.kind === "toggle" || m.kind === "num") {
@@ -681,7 +932,7 @@
         if (!el._bars || el._bars.length !== counts.length) {
           el.innerHTML = counts
             .map((_, i) =>
-              `<rect class="hbar" x="${(i * bw + 1).toFixed(1)}" y="${h}" width="${(bw - 2).toFixed(1)}" height="0" rx="1.5" fill="var(--accent)"/>`)
+              `<rect class="hbar" x="${(i * bw + 1).toFixed(1)}" y="${h}" width="${(bw - 2).toFixed(1)}" height="0" rx="1.5" fill="var(--s1)"/>`)
             .join("");
           el._bars = Array.from(el.querySelectorAll("rect"));
         }
@@ -705,8 +956,10 @@
         $("d-recent-k").textContent = `scan time — last ${(s.recent ?? []).length} scans`;
         $("d-periods-k").textContent = `scan period — target ${fmtMs(s.targetMs, 0)} ms`;
         // The scan count anchors the newest sample so the window scrolls.
-        sparkline($("d-recent"), s.recent, "var(--accent)", s.count);
-        sparkline($("d-periods"), s.periods, "var(--good)", s.count);
+        // Two series of the same measurement take the first two categorical
+        // steps; neither is a status, so neither borrows a status colour.
+        sparkline($("d-recent"), s.recent, "var(--s1)", s.count);
+        sparkline($("d-periods"), s.periods, "var(--s3)", s.count);
         histogram($("d-hist"), s.histogram);
 
         const execMs = (s.execUs ?? 0) / 1000;
@@ -771,7 +1024,7 @@
       function badge(state, label, sm) {
         const pulse = state === "connecting" || state === "waiting" ||
           state === "degraded" || state === "error";
-        return `<span class="cbadge${pulse ? " pulse" : ""}"${sm ? ' style="font-size:0.66rem;padding:0.1rem 0.4rem"' : ""}>` +
+        return `<span class="cbadge${pulse ? " pulse" : ""}"${sm ? ' style="font-size:0.7rem;padding:0.1rem 0.4rem"' : ""}>` +
           `<span class="cdot"></span>${esc(label ?? STATE_LABEL[state] ?? state)}</span>`;
       }
       function fmtMetric(m) {

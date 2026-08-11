@@ -8,6 +8,7 @@
 //	GET  /api/stream   Server-Sent Events; one Frame per broadcast tick
 //	GET  /api/meta     tag descriptions/units, I/O binding, scan target
 //	POST /api/tags     {"name": "TempSP", "value": 65.0} — write one tag
+//	GET  /assets/…     the dashboard's logo, favicon and brand fonts
 //
 // The Frame shape is deliberately generic (every tag, plus the scan loop's
 // full PLC-style diagnostics) so the hmi kit's frame-generic realtime client
@@ -27,11 +28,12 @@ package server
 import (
 	"context"
 	"crypto/subtle"
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +53,26 @@ import (
 //
 //go:embed index.html
 var indexHTML []byte
+
+// staticFS carries the page's brand furniture: the nautilus spiral, the
+// favicon the docs site uses, and latin subsets of the three brand faces
+// (Righteous / Space Grotesk / IBM Plex Mono — see assets/fonts/LICENSE).
+// They ride in the binary rather than come off a CDN because a controller
+// usually sits on a plant network that can't reach one, and a dashboard that
+// silently degrades to Arial on the machine it's supposed to represent is
+// not the product. All four faces together are ~65 KB.
+//
+//go:embed assets
+var staticFS embed.FS
+
+// assetTypes maps the extensions under assets/ to their content types. Go's
+// mime table doesn't know woff2, and a font served as octet-stream is a
+// coin-flip across browsers.
+var assetTypes = map[string]string{
+	".svg":   "image/svg+xml",
+	".png":   "image/png",
+	".woff2": "font/woff2",
+}
 
 // Frame is one observation of the runtime: the full tag store plus the scan
 // loop's diagnostics, timestamped server-side. Scan carries the full
@@ -231,6 +253,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/program", s.handleGetProgram)
 	mux.HandleFunc("PUT /api/program", s.handlePutProgram)
 	mux.HandleFunc("POST /api/program/rollback", s.handleRollback)
+	mux.HandleFunc("GET /assets/", handleAsset)
 	mux.HandleFunc("GET /", s.handleIndex)
 	return withCORS(mux)
 }
@@ -264,6 +287,29 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(indexHTML)
+}
+
+// handleAsset serves the embedded logo, favicon and fonts. Paths are matched
+// against the embedded tree, so nothing outside it is reachable; anything not
+// in the tree (including a traversal attempt) is a plain 404.
+//
+// The cache lifetime is long because these bytes only change when the binary
+// does, and a font re-fetched on every page load is a visible flash of
+// fallback text on a wall-mounted dashboard that reloads all day.
+func handleAsset(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/")
+	b, err := staticFS.ReadFile(name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if ct := assetTypes[path.Ext(name)]; ct != "" {
+		w.Header().Set("Content-Type", ct)
+	} else {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	}
+	w.Header().Set("Cache-Control", "public, max-age=604800")
+	w.Write(b)
 }
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
