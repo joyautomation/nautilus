@@ -31,6 +31,24 @@
 			"bind": { "running": "PumpRun" }
 		},
 		{
+			"id": "SUPPLY",
+			"component": "Supply",
+			"x": 14,
+			"y": 205.4,
+			"width": 80,
+			"ports": [{ "name": "out", "x": 1, "y": 0.5, "dir": "right" }],
+			"bind": { "tempC": "SupplyTempC" }
+		},
+		{
+			"id": "TOPROC",
+			"component": "ToProcess",
+			"x": 812,
+			"y": 194.4,
+			"width": 120,
+			"props": { "label": "TO ZONE 13" },
+			"ports": [{ "name": "in", "x": 0, "y": 0.5, "dir": "left" }]
+		},
+		{
 			"id": "DV101",
 			"component": "Valve",
 			"x": 680,
@@ -47,7 +65,8 @@
 	"pipes": [
 		{
 			"id": "suction",
-			"points": [[30, 235]],
+			"points": [],
+			"from": { "equip": "SUPPLY", "port": "out" },
 			"to": { "equip": "P101", "port": "in" },
 			"bind": { "flowing": "PumpRun" }
 		},
@@ -70,9 +89,10 @@
 		},
 		{
 			"id": "zone13",
-			"points": [[860, 210]],
+			"points": [],
 			"routing": "orthogonal",
 			"from": { "equip": "DV101", "port": "out" },
+			"to": { "equip": "TOPROC", "port": "in" },
 			"props": { "flowing": true, "rate": 0.5 },
 			"color": "var(--s2, #d99a27)"
 		}
@@ -82,8 +102,6 @@
 		{ "text": "TT-101", "x": 740, "y": 64, "bind": "TempC", "unit": "°C", "decimals": 1 },
 		{ "text": "JT-101", "x": 740, "y": 98, "bind": "HeaterKw", "unit": "kW", "decimals": 0 },
 		{ "text": "FT-101", "x": 200, "y": 112, "bind": "FT101", "unit": "L/s", "decimals": 2 },
-		{ "text": "FT-102", "x": 770, "y": 158, "bind": "FT102", "unit": "L/s", "decimals": 2 },
-		{ "text": "city feed", "x": 14, "y": 188, "bind": "SupplyTempC", "unit": "°C", "decimals": 0 },
-		{ "text": "to zone 13 demand", "x": 780, "y": 250 }
+		{ "text": "FT-102", "x": 770, "y": 158, "bind": "FT102", "unit": "L/s", "decimals": 2 }
 	]
 }

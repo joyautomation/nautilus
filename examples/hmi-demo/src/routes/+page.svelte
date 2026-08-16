@@ -17,6 +17,10 @@
 		type MimicEquipment
 	} from '@joyautomation/nautilus-hmi';
 	import mimicDoc from './heated-tank.mimic.json';
+	// App-supplied scene dressing (not kit equipment) — passed to <Mimic>
+	// via `registry` and placed in the doc as components "Supply"/"ToProcess".
+	import Supply from '$lib/Supply.svelte';
+	import ToProcess from '$lib/ToProcess.svelte';
 	import { rt, tempBuf, levelBuf, writeTag } from '$lib/client.svelte';
 
 	// Tag accessors over the latest frame, with sane fallbacks.
@@ -71,6 +75,7 @@
 				<Mimic
 					doc={mimicDoc as unknown as MimicDoc}
 					{tags}
+					registry={{ Supply, ToProcess }}
 					onequipmentclick={openFaceplate}
 				/>
 			</section>
