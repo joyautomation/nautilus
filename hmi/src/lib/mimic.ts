@@ -166,11 +166,22 @@ export interface MimicPipe {
 	bind?: Record<string, string>;
 }
 
-/** A free text label on the canvas. */
+/** A free text label on the canvas. Give it a `bind` and it becomes a live
+ * readout: `text` (when non-empty) prefixes the tag's value, formatted to
+ * `decimals` places with `unit` appended — "LT-101 67.3 %". Until the tag
+ * resolves to a number the value renders as the kit's usual '—'. Without
+ * `bind` it's the plain static text it has always been. */
 export interface MimicLabel {
 	text: string;
 	x: number;
 	y: number;
+	/** Tag to read live — the same tag-name form equipment `bind` values use
+	 * (resolved through the same resolveBindings() below). */
+	bind?: string;
+	/** Unit suffix shown after the live value (only meaningful with `bind`). */
+	unit?: string;
+	/** Fraction digits for the live value (default 1). */
+	decimals?: number;
 }
 
 /** Polyline points -> SVG path ("M x y L x y …"). */

@@ -12,7 +12,7 @@
 	import Sparkline from './Sparkline.svelte';
 	import Pipe from './Pipe.svelte';
 	import { makeGetPort, pointsToPath, resolveBindings, resolveRuntimePorts, routedPoints } from '../mimic.js';
-	import type { EquipmentBox, MimicDoc, MimicEquipment } from '../mimic.js';
+	import type { EquipmentBox, MimicDoc, MimicEquipment, MimicLabel } from '../mimic.js';
 
 	let {
 		doc,
@@ -45,6 +45,15 @@
 		ro.observe(el);
 		return () => ro.disconnect();
 	});
+
+	// A bound label's live value (MimicLabel.bind), resolved through the same
+	// resolveBindings() path equipment bindings use — one mechanism, "!"
+	// negation and all — and formatted for the readout. '—' until the tag
+	// resolves to a finite number, same as Trend/ScanDiagnostics.
+	const labelValue = (l: MimicLabel): string => {
+		const v = resolveBindings({ value: l.bind! }, tags).value;
+		return typeof v === 'number' && isFinite(v) ? v.toFixed(l.decimals ?? 1) : '—';
+	};
 
 	const eqProps = (eq: MimicEquipment): Record<string, unknown> => ({
 		...(eq.width !== undefined ? { width: eq.width } : {}),
@@ -151,7 +160,14 @@
 		{/each}
 
 		{#each doc.labels ?? [] as l, i (i)}
-			<span class="lbl" style="left: {l.x}px; top: {l.y}px">{l.text}</span>
+			{#if l.bind}
+				<span class="lbl readout" style="left: {l.x}px; top: {l.y}px"
+					>{#if l.text}{l.text}{/if}<b class="num">{labelValue(l)}</b
+					>{#if l.unit}<span>{l.unit}</span>{/if}</span
+				>
+			{:else}
+				<span class="lbl" style="left: {l.x}px; top: {l.y}px">{l.text}</span>
+			{/if}
 		{/each}
 	</div>
 </div>
@@ -215,5 +231,21 @@
 		font-size: var(--font-2xs);
 		color: var(--muted, #8b949e);
 		white-space: nowrap;
+	}
+	/* A bound label reads as a readout chip: the static text stays muted like
+	   any label, the live value steps up to ink on a --surface-2 pill. */
+	.lbl.readout {
+		display: inline-flex;
+		align-items: baseline;
+		gap: 0.35em;
+		padding: 2px 7px;
+		background: var(--surface-2, #232321);
+		border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+		border-radius: 6px;
+	}
+	.lbl.readout .num {
+		color: var(--ink, #e6e6e6);
+		font-weight: 650;
+		font-variant-numeric: tabular-nums;
 	}
 </style>
