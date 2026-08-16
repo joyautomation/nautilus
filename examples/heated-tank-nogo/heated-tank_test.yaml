@@ -50,14 +50,17 @@ tests:
 
   - name: PI settles a 65 to 72 C setpoint step and holds it
     # Closed loop — sim.st integrates the plant while the PI runs, both on
-    # virtual dt. The cold start is far slower than the step: Ki is 0.15,
-    # so the integral must climb from zero to the ~75 % the plant needs to
-    # hold setpoint, where after a step it starts most of the way there.
+    # virtual dt. Demand is driven to zero so the level loop stays quiet:
+    # with the drain shut the pump never cycles, and the temperature loop
+    # is tested against the pure thermal plant (600 kg of water is slow —
+    # full heat moves it ~0.08 °C/s, so the step takes minutes, not
+    # seconds, and virtual time still asserts it in milliseconds).
+    given: { Demand: 0.0 }
     steps:
       - until: 300s
         expect: { TempC: { near: 65.0 } }
       - given: { TempSP: 72.0 }
-        until: 45s
+        until: 300s
         hold: 5s # settled, not merely passing through on the way up
         expect:
           - ABS(TempC - TempSP) < 0.5 # relational: tracks the setpoint tag

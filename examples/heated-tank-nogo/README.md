@@ -19,7 +19,9 @@ nautilus build     # emit ./heated-tank-nogo — one deployable binary, no toolc
   model):
   - `program.fbd` — control at 10 Hz: pump seal-in latch, `SEL` eco
     setpoint, PI with retained integral, `TON` alarm delay.
-  - `sim.st` — the plant, simulated in Structured Text.
+  - `sim.st` — the plant, simulated in Structured Text: a flow balance
+    (pump inflow vs a head-dependent demand draw through `DV101`) and an
+    energy balance (heater in, ambient loss out, cool inlet mixing).
   - `reports.fbd` — 1 Hz: an `ARRAY` shift register, the ST-authored
     `RateOfChange` block from `blocks.st`, string building with
     `CONCAT`/`TRUNC`/`INT_TO_STRING`/`SEL`.
@@ -34,8 +36,8 @@ nautilus build     # emit ./heated-tank-nogo — one deployable binary, no toolc
   divergence pill and visual diffs track you.
 - **`heated-tank_test.yaml`** — acceptance tests with no Go and no
   toolchain. The runtime drives them on a **virtual clock**, so the 10 s
-  `TON` alarm delay and the PI loop's ~32 s step response are asserted
-  exactly, deterministically, in milliseconds. The fixture is
+  `TON` alarm delay and the PI loop's minutes-long step response against
+  600 kg of water are asserted exactly, deterministically, in milliseconds. The fixture is
   `nautilus.yaml` itself, so a retuned gain can't drift away from what the
   tests verify. Assertions are tag matchers (`{near: 72.0, tol: 0.5}`) or
   ST expressions (`ABS(TempC - TempSP) < 0.5`) compiled by the same
@@ -47,6 +49,6 @@ nautilus build     # emit ./heated-tank-nogo — one deployable binary, no toolc
   archive: they gate the deploy, they don't ride along on it.
 
 Watch it live on the dashboard: the pump seals in at 40 %, drops out at
-75 %; the PI settles the temperature at the setpoint; flip `EcoMode` or
-`TempSP` from the tag table and watch the loop — and the `Status` line —
-follow.
+75 %; the PI settles the temperature at the setpoint; flip `EcoMode`,
+`TempSP`, or `Demand` from the tag table and watch the loop — and the
+`Status` line — follow.

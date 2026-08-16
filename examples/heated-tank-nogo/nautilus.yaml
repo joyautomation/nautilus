@@ -33,8 +33,13 @@ tasks:
 tags:
   # process values — owned by the sim task here; a real deployment makes
   # these role: input and lets the field driver supply them
-  - { name: LevelPct, role: state, init: 60.0, unit: "%",  desc: "Tank level" }
-  - { name: TempC,    role: state, init: 60.0, unit: "°C", desc: "Tank temperature" }
+  - { name: LevelPct,    role: state, init: 60.0, unit: "%",   desc: "Tank level" }
+  - { name: TempC,       role: state, init: 60.0, unit: "°C",  desc: "Tank temperature" }
+  - { name: FT101,       role: state, init: 0.0,  unit: "L/s", desc: "Tank inflow (pump)" }
+  - { name: FT102,       role: state, init: 0.0,  unit: "L/s", desc: "Tank outflow (demand)" }
+  - { name: DV101,       role: state, init: 60.0, unit: "%",   desc: "Demand valve position" }
+  - { name: SupplyTempC, role: state, init: 50.0, unit: "°C",  desc: "Inlet supply temperature" }
+  - { name: HeaterKw,    role: state, init: 0.0,  unit: "kW",  desc: "Heater power" }
   # operator setpoints — writable from the HMI/API from scan one
   - { name: TempSP,         role: setpoint, init: 65.0,  unit: "°C", desc: "Temperature setpoint" }
   - { name: TempSPEco,      role: setpoint, init: 55.0,  unit: "°C", desc: "Eco-mode temperature setpoint" }
@@ -43,6 +48,7 @@ tags:
   - { name: Ki,             role: setpoint, init: 0.15,  unit: "1/s", desc: "PI integral gain" }
   - { name: PumpStartLevel, role: setpoint, init: 40.0,  unit: "%", desc: "Pump seal-in level" }
   - { name: PumpStopLevel,  role: setpoint, init: 75.0,  unit: "%", desc: "Pump drop-out level" }
+  - { name: Demand,         role: setpoint, init: 60.0,  unit: "%", desc: "Process demand — the drain valve tracks it" }
   - { name: HornAck,        role: setpoint, init: false, desc: "Horn acknowledge — releases when alarms clear" }
   # commands — sent to the driver (loopback here)
   - { name: PumpRun, role: output, init: false, desc: "Pump run command" }
