@@ -9,6 +9,12 @@
 			"y": 40,
 			"width": 190,
 			"label": "T-101",
+			"ports": [
+				{ "name": "top", "x": 0.503, "y": 0.1 },
+				{ "name": "left", "x": 0.15, "y": 0.516 },
+				{ "name": "right", "x": 0.829, "y": 0.732 },
+				{ "name": "bottom", "x": 0.516, "y": 0.836 }
+			],
 			"bind": { "levelPct": "LevelPct", "tempC": "TempC", "heaterPct": "Heater" }
 		},
 		{
@@ -18,6 +24,10 @@
 			"y": 330,
 			"width": 110,
 			"label": "P-101",
+			"ports": [
+				{ "name": "in", "x": 0, "y": 0.5 },
+				{ "name": "out", "x": 1, "y": 0.5, "dir": "right" }
+			],
 			"bind": { "running": "PumpRun" }
 		},
 		{
@@ -55,14 +65,18 @@
 		},
 		{
 			"id": "discharge",
-			"points": [[380, 120], [435, 120]],
+			"points": [],
 			"routing": "orthogonal",
 			"from": { "equip": "P101", "port": "out" },
+			"to": { "equip": "T101", "port": "left" },
 			"bind": { "flowing": "PumpRun" }
 		},
 		{
 			"id": "demand",
-			"points": [[618, 260], [680, 260]],
+			"points": [],
+			"routing": "orthogonal",
+			"from": { "equip": "T101", "port": "right" },
+			"to": { "equip": "E101", "port": "tubeIn" },
 			"props": { "flowing": true, "rate": 0.5 },
 			"color": "var(--s2, #d99a27)"
 		},
@@ -75,13 +89,16 @@
 		{
 			"id": "coolant-in",
 			"points": [[900, 150], [900, 210]],
+			"routing": "orthogonal",
 			"to": { "equip": "E101", "port": "shellIn" },
 			"color": "var(--s3, #199e70)",
 			"props": { "flowing": true, "rate": 0.35 }
 		},
 		{
 			"id": "coolant-out",
-			"points": [[760, 310], [760, 362]],
+			"points": [[760, 395]],
+			"routing": "orthogonal",
+			"from": { "equip": "E101", "port": "shellOut" },
 			"props": { "flowing": true, "rate": 0.35 },
 			"color": "var(--s3, #199e70)"
 		}
