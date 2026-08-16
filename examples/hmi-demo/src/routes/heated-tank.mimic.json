@@ -1,11 +1,11 @@
 {
 	"name": "Heated surge tank",
-	"canvas": { "width": 940, "height": 470 },
+	"canvas": { "width": 940, "height": 320 },
 	"equipment": [
 		{
 			"id": "T101",
 			"component": "Tank",
-			"x": 430,
+			"x": 390,
 			"y": 40,
 			"width": 190,
 			"label": "T-101",
@@ -20,8 +20,8 @@
 		{
 			"id": "P101",
 			"component": "Pump",
-			"x": 150,
-			"y": 330,
+			"x": 130,
+			"y": 180,
 			"width": 110,
 			"label": "P-101",
 			"ports": [
@@ -31,35 +31,23 @@
 			"bind": { "running": "PumpRun" }
 		},
 		{
-			"id": "TIC101",
-			"component": "Gauge",
-			"x": 690,
-			"y": 60,
-			"width": 160,
-			"label": "TIC-101",
-			"props": { "min": 0, "max": 110, "unit": "°C" },
-			"bind": { "value": "TempC", "setpoint": "TempSP" }
-		},
-		{
-			"id": "E101",
-			"component": "HeatExchanger",
+			"id": "DV101",
+			"component": "Valve",
 			"x": 680,
-			"y": 210,
-			"width": 160,
-			"label": "E-101",
-			"bind": { "active": "PumpRun" },
+			"y": 167,
+			"width": 80,
+			"label": "DV-101",
 			"ports": [
-				{ "name": "shellIn", "x": 0.5, "y": 0 },
-				{ "name": "tubeIn", "x": 0, "y": 0.5 },
-				{ "name": "tubeOut", "x": 1, "y": 0.5 },
-				{ "name": "shellOut", "x": 0.5, "y": 1 }
-			]
+				{ "name": "in", "x": 0.133, "y": 0.55, "dir": "left" },
+				{ "name": "out", "x": 0.867, "y": 0.55, "dir": "right" }
+			],
+			"bind": { "openPct": "DV101" }
 		}
 	],
 	"pipes": [
 		{
 			"id": "suction",
-			"points": [[40, 385]],
+			"points": [[30, 235]],
 			"to": { "equip": "P101", "port": "in" },
 			"bind": { "flowing": "PumpRun" }
 		},
@@ -76,37 +64,26 @@
 			"points": [],
 			"routing": "orthogonal",
 			"from": { "equip": "T101", "port": "right" },
-			"to": { "equip": "E101", "port": "tubeIn" },
+			"to": { "equip": "DV101", "port": "in" },
 			"props": { "flowing": true, "rate": 0.5 },
 			"color": "var(--s2, #d99a27)"
 		},
 		{
-			"id": "demand-out",
-			"points": [[840, 260], [840, 385], [870, 385]],
+			"id": "zone13",
+			"points": [[860, 210]],
+			"routing": "orthogonal",
+			"from": { "equip": "DV101", "port": "out" },
 			"props": { "flowing": true, "rate": 0.5 },
 			"color": "var(--s2, #d99a27)"
-		},
-		{
-			"id": "coolant-in",
-			"points": [[900, 195], [760, 195]],
-			"routing": "orthogonal",
-			"to": { "equip": "E101", "port": "shellIn" },
-			"color": "var(--s3, #199e70)",
-			"props": { "flowing": true, "rate": 0.35 }
-		},
-		{
-			"id": "coolant-out",
-			"points": [[760, 395]],
-			"routing": "orthogonal",
-			"from": { "equip": "E101", "port": "shellOut" },
-			"props": { "flowing": true, "rate": 0.35 },
-			"color": "var(--s3, #199e70)"
 		}
 	],
 	"labels": [
-		{ "text": "city feed", "x": 38, "y": 360 },
-		{ "text": "to zone 13 demand", "x": 774, "y": 405 },
-		{ "text": "coolant in", "x": 862, "y": 140 },
-		{ "text": "coolant out", "x": 698, "y": 378 }
+		{ "text": "LT-101", "x": 740, "y": 30, "bind": "LevelPct", "unit": "%", "decimals": 1 },
+		{ "text": "TT-101", "x": 740, "y": 64, "bind": "TempC", "unit": "°C", "decimals": 1 },
+		{ "text": "JT-101", "x": 740, "y": 98, "bind": "HeaterKw", "unit": "kW", "decimals": 0 },
+		{ "text": "FT-101", "x": 200, "y": 112, "bind": "FT101", "unit": "L/s", "decimals": 2 },
+		{ "text": "FT-102", "x": 770, "y": 158, "bind": "FT102", "unit": "L/s", "decimals": 2 },
+		{ "text": "city feed", "x": 14, "y": 188, "bind": "SupplyTempC", "unit": "°C", "decimals": 0 },
+		{ "text": "to zone 13 demand", "x": 780, "y": 250 }
 	]
 }
