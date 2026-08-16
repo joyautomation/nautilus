@@ -88,7 +88,7 @@
 		},
 		{
 			"id": "coolant-in",
-			"points": [[900, 150], [760, 150]],
+			"points": [[900, 195], [760, 195]],
 			"routing": "orthogonal",
 			"to": { "equip": "E101", "port": "shellIn" },
 			"color": "var(--s3, #199e70)",
