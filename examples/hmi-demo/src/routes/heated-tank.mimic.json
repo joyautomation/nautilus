@@ -26,7 +26,7 @@
 			"label": "P-101",
 			"ports": [
 				{ "name": "in", "x": 0, "y": 0.5 },
-				{ "name": "out", "x": 1, "y": 0.5, "dir": "right" }
+				{ "name": "out", "x": 0.5, "y": 0, "dir": "up" }
 			],
 			"bind": { "running": "PumpRun" }
 		},
@@ -88,7 +88,7 @@
 		},
 		{
 			"id": "coolant-in",
-			"points": [[900, 150], [900, 210]],
+			"points": [[900, 150], [760, 150]],
 			"routing": "orthogonal",
 			"to": { "equip": "E101", "port": "shellIn" },
 			"color": "var(--s3, #199e70)",
