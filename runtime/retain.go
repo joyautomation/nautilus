@@ -1,0 +1,213 @@
+package runtime
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/retain"
+)
+
+// Coordinator decides whether this replica owns the scan loop. leader.Elector
+// satisfies it; nil means standalone — always the leader. The runtime polls
+// rather than subscribing so the elector needs no callback plumbing, and a
+// standby costs one atomic read per tick.
+type Coordinator interface {
+	IsLeader() bool
+}
+
+// saveInterval paces the retain saver. Two seconds bounds how much operator
+// input a hard kill can lose, while keeping a busy HMI session from turning
+// every slider drag into a ConfigMap write.
+const saveInterval = 2 * time.Second
+
+// gate is the first thing every scan does. It answers "should this replica
+// scan?", and on the standby→leader edge it performs the takeover sequence
+// before any logic runs. With no coordinator and no retain store it is a
+// single nil check — existing compositions pay nothing.
+func (r *Runtime) gate() bool {
+	if r.coord == nil && r.retainStore == nil {
+		return true
+	}
+	lead := r.coord == nil || r.coord.IsLeader()
+	r.leadMu.Lock()
+	defer r.leadMu.Unlock()
+	switch {
+	case lead && !r.leading:
+		r.takeover()
+		r.leading = true
+	case !lead:
+		r.leading = false
+	}
+	return lead
+}
+
+// takeover runs once per acquisition of leadership (including process start,
+// which is an acquisition from nothing). Three steps, in order:
+//
+//  1. Re-read the retain store — the OLD leader may have accepted retunes or
+//     online edits while this replica idled, and those must win over both the
+//     manifest's seeds and anything stale in this process.
+//  2. Discard every program's retained frame — the ST warm-start path must
+//     run against live field values, not a VM state frozen hours ago.
+//  3. Zero the scan clocks — the first dt must be the scan target, not the
+//     wall-clock gap since this replica last led, which would slam every
+//     integrator in the resource.
+//
+// Process state is deliberately NOT replicated between replicas: config
+// travels through the retain store, process state re-derives from the field.
+func (r *Runtime) takeover() {
+	if r.retainStore != nil {
+		if err := r.loadRetained(); err != nil {
+			r.noteRetainError(err)
+		}
+	}
+	r.prog.ResetFrame()
+	for _, tr := range r.tasks {
+		tr.prog.ResetFrame()
+	}
+	r.mu.Lock()
+	r.lastScan = time.Time{}
+	r.mu.Unlock()
+	for _, tr := range r.tasks {
+		tr.mu.Lock()
+		tr.lastScan = time.Time{}
+		tr.mu.Unlock()
+	}
+}
+
+// loadRetained applies the store's state: retained tag values, then any
+// online-edited program sources. Tag names outside the retained set are
+// ignored — the store is not a back door for writing arbitrary tags. A
+// program that no longer compiles (a library moved under it) is reported
+// but does not block the rest of the load; the current program keeps
+// running, which is Swap's contract.
+func (r *Runtime) loadRetained() error {
+	st, err := r.retainStore.Load()
+	if err != nil {
+		return err
+	}
+	allowed := make(map[string]bool, len(r.retainTags))
+	for _, n := range r.retainTags {
+		allowed[n] = true
+	}
+	for name, v := range st.Tags {
+		if !allowed[name] {
+			continue
+		}
+		// JSON collapses every number to float64. If the tag is currently an
+		// integer kind (seeded from the manifest), restore it as one — the
+		// store must not silently retype a DINT setpoint into a REAL.
+		if f, isNum := v.(float64); isNum {
+			if cur, err := r.tags.ReadGlobal(name); err == nil &&
+				(cur.Kind == ir.TypeInt || cur.Kind == ir.TypeTime) {
+				r.tags.Set(name, int64(f))
+				continue
+			}
+		}
+		r.tags.Set(name, v)
+	}
+	var errs []error
+	for task, src := range st.Programs {
+		p := r.TaskProgram(task)
+		if p == nil {
+			errs = append(errs, fmt.Errorf("retained program for unknown task %q", task))
+			continue
+		}
+		if p.Hash() == sourceHash(src) {
+			continue
+		}
+		if err := p.Swap(src); err != nil {
+			errs = append(errs, fmt.Errorf("retained program for task %q: %w", task, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// retainSaver flushes changed state on a fixed cadence, only while leading —
+// the ConfigMap store is last-writer-wins, and leadership is what makes that
+// safe. Change detection is by comparison against the last written encoding
+// rather than dirty flags: writes reach the tag store from operator APIs,
+// field drivers, and logic alike, and a comparison catches all of them
+// without threading a flag through every path. A failed save keeps the old
+// encoding so the next tick retries.
+func (r *Runtime) retainSaver(ctx context.Context) {
+	t := time.NewTicker(saveInterval)
+	defer t.Stop()
+	var lastSaved []byte
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			lastSaved = r.saveRetained(lastSaved)
+		}
+	}
+}
+
+// saveRetained is one saver tick: skip as standby, skip when nothing
+// changed, keep the old encoding on failure so the next tick retries.
+// Returns the encoding of what the store now holds.
+func (r *Runtime) saveRetained(lastSaved []byte) []byte {
+	if r.coord != nil && !r.coord.IsLeader() {
+		return lastSaved
+	}
+	st := r.retainState()
+	enc, err := json.Marshal(st)
+	if err != nil || string(enc) == string(lastSaved) {
+		return lastSaved
+	}
+	if err := r.retainStore.Save(st); err != nil {
+		r.noteRetainError(err)
+		return lastSaved
+	}
+	return enc
+}
+
+// retainState assembles what this controller persists: the retained tags'
+// current scalar values, and the source of every program that has drifted
+// from what it compiled from (an online edit not yet pulled into git).
+// Compound values (UDTs, arrays) are skipped — their JSON form cannot be
+// written back through the tag store, so persisting them would be a lie.
+func (r *Runtime) retainState() retain.State {
+	st := retain.State{}
+	for _, name := range r.retainTags {
+		v, err := r.tags.ReadGlobal(name)
+		if err != nil {
+			continue
+		}
+		switch v.Kind {
+		case ir.TypeBool, ir.TypeReal, ir.TypeInt, ir.TypeTime, ir.TypeString:
+			if st.Tags == nil {
+				st.Tags = map[string]any{}
+			}
+			st.Tags[name] = plain(v)
+		}
+	}
+	record := func(task string, p *Program) {
+		if !p.Dirty() {
+			return
+		}
+		if st.Programs == nil {
+			st.Programs = map[string]string{}
+		}
+		st.Programs[task] = p.Source()
+	}
+	record(MainTaskName, r.prog)
+	for _, tr := range r.tasks {
+		record(tr.name, tr.prog)
+	}
+	return st
+}
+
+// noteRetainError folds a store failure into the diagnostics the dashboard
+// already shows, the same way I/O errors surface.
+func (r *Runtime) noteRetainError(err error) {
+	r.mu.Lock()
+	r.stats.RetainErrors++
+	r.stats.LastRetainError = err.Error()
+	r.mu.Unlock()
+}

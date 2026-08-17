@@ -10,6 +10,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/stproject"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/retain"
 )
 
 // Options configure a Runtime.
@@ -49,6 +50,22 @@ type Options struct {
 	// for the IEC timers' NowMs — the two clocks a program can observe. Nil
 	// in production; tests inject a virtual one. See clock.go.
 	Clock Clock
+	// Retain persists operator state across power cycles — retained tag
+	// values and online-edited program sources. See the retain package for
+	// the file and ConfigMap stores. Loaded before the first scan, saved on
+	// change every 2s, re-loaded on a redundancy takeover.
+	Retain retain.Store
+	// RetainTags names the tags Retain persists. Empty means every
+	// RoleSetpoint tag from Tags — the operator-writable values are exactly
+	// what must survive a restart, while state/inputs re-derive from the
+	// field. Ignored when Retain is nil.
+	RetainTags []string
+	// Coordinator gates the scan loop for redundancy: a standby replica
+	// (IsLeader false) skips scans entirely — no field I/O, no logic — and
+	// performs the takeover sequence (reload retained state, reset program
+	// frames, zero the dt clocks) on the edge where it becomes leader.
+	// leader.Elector satisfies this; nil means standalone, always leader.
+	Coordinator Coordinator
 }
 
 // Task is one additional program in the resource: its source, its own
@@ -105,6 +122,15 @@ type Runtime struct {
 	tasks   []*taskRun
 	clock   Clock // nil = wall clock; see clock.go
 
+	retainStore retain.Store
+	retainTags  []string
+	coord       Coordinator
+
+	// leadMu guards the leadership edge so exactly one scan performs the
+	// takeover sequence when this replica becomes leader. See retain.go.
+	leadMu  sync.Mutex
+	leading bool
+
 	// scanMu serializes scan execution across the main task and every
 	// additional task — a scan always sees a consistent tag snapshot.
 	scanMu sync.Mutex
@@ -142,6 +168,12 @@ type ScanStats struct {
 
 	PeriodMs float64 `json:"periodMs"` // actual interval between scans
 	JitterMs float64 `json:"jitterMs"` // EWMA of |period − target|
+
+	// Retain-store failures surface here the way I/O failures do: a save
+	// that keeps erroring is invisible exactly until the restart that
+	// needed it, so the dashboard must show it while it is fixable.
+	RetainErrors    uint64 `json:"retainErrors,omitempty"`
+	LastRetainError string `json:"lastRetainError,omitempty"`
 
 	// Fault counters: input reads that failed (the scan ran on last-known
 	// values) and program scans that errored.
@@ -227,10 +259,22 @@ func New(o Options) (*Runtime, error) {
 	for k, v := range o.Seed {
 		tags.Set(k, v)
 	}
+	retainTags := o.RetainTags
+	if o.Retain != nil && len(retainTags) == 0 {
+		// The default retained set is the operator-writable surface: every
+		// RoleSetpoint tag. State re-seeds, inputs re-read from the field,
+		// outputs re-derive from logic — setpoints are what a restart loses.
+		for _, d := range o.Tags {
+			if d.Role == RoleSetpoint && d.Name != "" {
+				retainTags = append(retainTags, d.Name)
+			}
+		}
+	}
 	r := &Runtime{
 		prog: prog, tags: tags, driver: o.Driver, scan: o.Scan,
 		inputs: o.Inputs, outputs: o.Outputs, dtTag: o.DtTag, meta: o.Meta,
 		clock: o.Clock, types: types, tasks: tasks,
+		retainStore: o.Retain, retainTags: retainTags, coord: o.Coordinator,
 	}
 	r.stats.TargetMs = o.Scan.Seconds() * 1000
 	r.stats.IOHealthy = true
@@ -418,8 +462,13 @@ func (r *Runtime) ProgramByPOU(pou string) (*Program, string) {
 
 // Run drives the scan loops until the context is cancelled: the main task
 // (read inputs → execute → write outputs, every Scan interval) plus one
-// loop per additional task.
+// loop per additional task. With a Coordinator, a standby's tickers still
+// fire but every scan gates out before touching I/O or logic; with a Retain
+// store, a saver goroutine flushes changed state alongside the loops.
 func (r *Runtime) Run(ctx context.Context) {
+	if r.retainStore != nil {
+		go r.retainSaver(ctx)
+	}
 	for _, tr := range r.tasks {
 		go func(tr *taskRun) {
 			t := time.NewTicker(tr.scan)
@@ -462,6 +511,9 @@ func (r *Runtime) ScanTask(name string) error {
 // against the shared tag store, stats out. No driver I/O — the main task
 // owns the field seam; tasks compute on the store at their own rates.
 func (r *Runtime) scanTask(tr *taskRun) {
+	if !r.gate() {
+		return
+	}
 	t0 := time.Now()
 	now := r.now(t0) // dt basis: the injected clock under test, else t0
 	tr.mu.Lock()
@@ -492,7 +544,12 @@ func (r *Runtime) scanTask(tr *taskRun) {
 // Scan executes one full cycle: read inputs, run the program, write outputs.
 // Run calls it on each tick; call it directly to drive the loop yourself
 // (tests, a custom scheduler, or a redundancy standby stepping in sync).
+// A standby replica returns immediately — suppression by not scanning at
+// all, so a stale replica can never write an output.
 func (r *Runtime) Scan() {
+	if !r.gate() {
+		return
+	}
 	t0 := time.Now()
 	now := r.now(t0) // dt basis: the injected clock under test, else t0
 	r.mu.Lock()
