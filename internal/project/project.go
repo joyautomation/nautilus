@@ -53,6 +53,31 @@ type Manifest struct {
 	TagMeta   map[string]MetaConfig `yaml:"tag-meta"`
 	Driver    DriverConfig          `yaml:"driver"`
 	Sparkplug *SparkplugConfig      `yaml:"sparkplug"`
+	// Retain persists operator state (setpoints, online edits) across
+	// restarts; Redundancy elects one scanning leader among replicas.
+	// Both are wired by `nautilus run` — check/build/LSP only validate.
+	Retain     *RetainConfig     `yaml:"retain"`
+	Redundancy *RedundancyConfig `yaml:"redundancy"`
+}
+
+// RetainConfig says where retained state lives. In a cluster the ConfigMap
+// is used; anywhere else the file. `retain: {}` takes both defaults.
+type RetainConfig struct {
+	// File is the JSON file path outside a cluster (default retain.json,
+	// beside the controller's working directory).
+	File string `yaml:"file"`
+	// ConfigMap is the in-cluster store's name (default <name>-retain).
+	ConfigMap string `yaml:"configmap"`
+}
+
+// RedundancyConfig turns on Lease-based leader election: replicas of this
+// controller elect one scanning leader, the rest stand by. Outside a
+// cluster the elector is standalone and always leader, so the same
+// manifest runs on a bench and in the cluster. `redundancy: {}` takes the
+// default lease name.
+type RedundancyConfig struct {
+	// Lease names the coordination.k8s.io Lease (default: the project name).
+	Lease string `yaml:"lease"`
 }
 
 // SparkplugConfig republishes the tag store as a Sparkplug B edge node —
@@ -170,6 +195,33 @@ type Project struct {
 	Server    server.Options
 	sparkplug *SparkplugConfig
 	inputTags []string // role-input tag names, for the Sparkplug device
+
+	// Retain/Redundancy carry the manifest's sections for `nautilus run`
+	// to wire; Load itself constructs nothing — check, build, and the LSP
+	// load projects too, and must not touch a cluster to do it.
+	Retain     *RetainConfig
+	Redundancy *RedundancyConfig
+}
+
+// RetainNames resolves the retain section's defaults against the project
+// name: (configMapName, filePath), ready for retain.New.
+func (p *Project) RetainNames() (configMap, file string) {
+	configMap, file = p.Name+"-retain", "retain.json"
+	if p.Retain.ConfigMap != "" {
+		configMap = p.Retain.ConfigMap
+	}
+	if p.Retain.File != "" {
+		file = p.Retain.File
+	}
+	return configMap, file
+}
+
+// LeaseName resolves the redundancy section's default lease name.
+func (p *Project) LeaseName() string {
+	if p.Redundancy.Lease != "" {
+		return p.Redundancy.Lease
+	}
+	return p.Name
 }
 
 // Sparkplug builds the manifest's edge node over a compiled runtime, or
@@ -425,8 +477,10 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			Interval:    time.Duration(m.Server.Interval),
 			OnlineEdits: m.Server.OnlineEdits,
 		},
-		sparkplug: m.Sparkplug,
-		inputTags: inputs,
+		sparkplug:  m.Sparkplug,
+		inputTags:  inputs,
+		Retain:     m.Retain,
+		Redundancy: m.Redundancy,
 	}, nil
 }
 

@@ -8,11 +8,19 @@
 //	GET  /api/stream   Server-Sent Events; one Frame per broadcast tick
 //	GET  /api/meta     tag descriptions/units, I/O binding, scan target
 //	POST /api/tags     {"name": "TempSP", "value": 65.0} — write one tag
+//	GET  /api/cluster  this replica's redundancy status (leader.Status JSON)
 //	GET  /assets/…     the dashboard's logo, favicon and brand fonts
 //
 // The Frame shape is deliberately generic (every tag, plus the scan loop's
 // full PLC-style diagnostics) so the hmi kit's frame-generic realtime client
 // and the editor tooling share one endpoint. Pure stdlib.
+//
+// Redundancy (Options.Cluster) makes every replica answerable behind a load
+// balancer even though only the leader scans: GET /api/cluster always
+// answers locally so a dashboard can see each replica's own view, and a
+// standby transparently reverse-proxies everything else under /api/ to
+// whoever holds the lease, since its own tag store is stale. See
+// proxyStandby.
 //
 // Security is progressive. Reads are always open (LAN dashboards, editor
 // live values). Writes are same-origin-only by default — enough to stop a
@@ -32,12 +40,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"path"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -120,6 +130,12 @@ type Options struct {
 	// keeps the server package free of any specific driver dependency —
 	// the runner adapts eip.Health / sparkplug.Status into DriverStatus.
 	Drivers func() []DriverStatus
+
+	// Cluster reports this replica's redundancy state — leader.Elector's
+	// Status method satisfies it. When set, GET /api/cluster serves it, and
+	// requests a standby cannot answer from its own (stale, non-scanning)
+	// tag store are reverse-proxied to the leader. Nil = no redundancy.
+	Cluster interface{ Status() leader.Status }
 }
 
 // DriverStatus is a field driver's or publisher's health, rendered by the
@@ -161,6 +177,7 @@ type Server struct {
 	authToken   string
 	onlineEdits bool
 	drivers     func() []DriverStatus
+	cluster     interface{ Status() leader.Status }
 
 	mu      sync.Mutex
 	clients map[chan []byte]struct{}
@@ -187,6 +204,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 	}
 	if len(opts) > 0 {
 		s.drivers = opts[0].Drivers
+		s.cluster = opts[0].Cluster
 	}
 	return s
 }
@@ -253,9 +271,53 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/program", s.handleGetProgram)
 	mux.HandleFunc("PUT /api/program", s.handlePutProgram)
 	mux.HandleFunc("POST /api/program/rollback", s.handleRollback)
+	mux.HandleFunc("GET /api/cluster", s.handleCluster)
 	mux.HandleFunc("GET /assets/", handleAsset)
 	mux.HandleFunc("GET /", s.handleIndex)
-	return withCORS(mux)
+	return withCORS(s.proxyStandby(mux))
+}
+
+// proxyStandby wraps mux so that on a standby replica, requests it cannot
+// safely answer from its own tag store are transparently reverse-proxied to
+// the leader — the point being that a load balancer can hit any replica and
+// still reach live data and accept writes. It only ever changes behavior
+// when Options.Cluster is set; with no Cluster configured every request
+// falls straight through to mux, exactly as before redundancy existed.
+//
+// Two things are always answered locally, even on a standby: GET
+// /api/cluster (each replica reports its own view of the cluster — showing
+// that divergence is the entire point) and the static UI ("/" and
+// "/assets/…", so a load-balancer health probe or a browser always gets a
+// page, whichever replica it lands on).
+func (s *Server) proxyStandby(mux http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cluster == nil {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == "/api/cluster" || r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/") {
+			mux.ServeHTTP(w, r)
+			return
+		}
+		st := s.cluster.Status()
+		if st.IsLeader || st.LeaderAddr == "" {
+			// We're the leader, or nobody's address is known yet (a fresh
+			// cluster still electing, or a standalone-mode elector that never
+			// sets LeaderAddr) — handle locally rather than erroring a
+			// request that has nowhere better to go.
+			mux.ServeHTTP(w, r)
+			return
+		}
+		proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: st.LeaderAddr})
+		// -1 disables buffering: an SSE frame must reach the client the
+		// instant the leader emits it, not whenever the proxy's timer next
+		// fires.
+		proxy.FlushInterval = -1
+		proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			http.Error(w, "leader unavailable: "+err.Error(), http.StatusBadGateway)
+		}
+		proxy.ServeHTTP(w, r)
+	})
 }
 
 // withCORS allows browser HMIs served from another origin (e.g. a Vite dev
@@ -329,6 +391,24 @@ func (s *Server) handleDrivers(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out)
+}
+
+// handleCluster reports this replica's own view of redundancy: its pod
+// name, who it believes holds the lease, and whether that's itself. It is
+// never proxied (see proxyStandby) — a standby and the leader disagreeing
+// briefly during a failover is the signal the dashboard exists to show, not
+// a bug to paper over by asking the leader about itself.
+//
+// With no Cluster configured this still answers, as a standalone leader —
+// so a dashboard can read /api/cluster unconditionally instead of special-
+// casing "redundancy isn't wired up" as a 404.
+func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
+	st := leader.Status{Mode: "standalone", IsLeader: true}
+	if s.cluster != nil {
+		st = s.cluster.Status()
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(st)
 }
 
 // metaResponse is the static tag documentation for an HMI: descriptions and

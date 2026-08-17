@@ -24,6 +24,8 @@ import (
 
 	"github.com/joyautomation/nautilus/acceptance"
 	"github.com/joyautomation/nautilus/internal/project"
+	"github.com/joyautomation/nautilus/leader"
+	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
 )
@@ -35,6 +37,31 @@ func runProject(fsys fs.FS, manifest, label string) int {
 		fmt.Fprintln(os.Stderr, "nautilus run:", err)
 		return 1
 	}
+
+	addr := proj.Addr
+	if env := os.Getenv("NAUTILUS_ADDR"); env != "" {
+		addr = env
+	}
+
+	// Redundancy and retained state wire in before the runtime compiles,
+	// so the first scan already answers to the elector and sees what the
+	// last leader saved. Outside a cluster the elector is standalone
+	// (always leader) and the retain store is the JSON file — the same
+	// manifest runs on a bench and as a replica set.
+	var el *leader.Elector
+	if proj.Redundancy != nil {
+		el, err = leader.New(proj.LeaseName(), os.Getenv("POD_NAME"), selfAddr(addr))
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "nautilus run: redundancy:", err)
+			return 1
+		}
+		proj.Runtime.Coordinator = el
+	}
+	if proj.Retain != nil {
+		cm, file := proj.RetainNames()
+		proj.Runtime.Retain = retain.New(cm, file)
+	}
+
 	rt, err := runtime.New(proj.Runtime)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "nautilus run: compile:", err)
@@ -43,6 +70,12 @@ func runProject(fsys fs.FS, manifest, label string) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	if el != nil {
+		go el.Run(ctx)
+		// On shutdown, hand the lease over instead of letting it expire:
+		// a standby takes over on its next tick rather than 4s later.
+		defer el.Release()
+	}
 	// Drivers with their own polling loop (eip) start here; the loopback
 	// memory driver has nothing to start.
 	if s, ok := proj.Runtime.Driver.(interface{ Start(context.Context) }); ok {
@@ -72,13 +105,12 @@ func runProject(fsys fs.FS, manifest, label string) int {
 	}
 	// Field-driver + Sparkplug status feed GET /api/drivers and the stream.
 	sopts.Drivers = proj.DriverStatus(spNode)
+	if el != nil {
+		sopts.Cluster = el
+	}
 	srv := server.New(rt, sopts)
 	go srv.Run(ctx)
 
-	addr := proj.Addr
-	if env := os.Getenv("NAUTILUS_ADDR"); env != "" {
-		addr = env
-	}
 	apiUp := false
 	if ln, err := net.Listen("tcp", addr); err != nil {
 		fmt.Fprintf(os.Stderr, "tag api: %v (continuing without it)\n", err)
@@ -101,9 +133,30 @@ func runProject(fsys fs.FS, manifest, label string) int {
 	if sparkplugUp {
 		banner += " — sparkplug up"
 	}
+	if proj.Runtime.Retain != nil {
+		banner += " — retain: " + proj.Runtime.Retain.Kind()
+	}
+	if el != nil {
+		banner += " — redundancy: " + el.Status().Mode
+	}
 	fmt.Println(banner + " — Ctrl+C to stop")
 	<-ctx.Done()
 	return 0
+}
+
+// selfAddr is what a standby needs to reach this replica: the pod IP from
+// the downward API joined with the API's listen port. Empty outside a
+// cluster — standalone mode has nobody to proxy to.
+func selfAddr(addr string) string {
+	ip := os.Getenv("POD_IP")
+	if ip == "" {
+		return ""
+	}
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil || port == "" {
+		return ""
+	}
+	return net.JoinHostPort(ip, port)
 }
 
 func runRun(args []string) int {

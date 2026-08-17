@@ -54,6 +54,38 @@
     "sparkplug": {
       "$ref": "#/definitions/sparkplug",
       "description": "Republish the tag store as a Sparkplug B edge node."
+    },
+    "retain": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Persist operator state (setpoints, online edits) across restarts: a ConfigMap in a cluster, a JSON file anywhere else. An empty mapping takes both defaults.",
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "JSON file path outside a cluster (default retain.json)."
+        },
+        "configmap": {
+          "type": "string",
+          "description": "In-cluster ConfigMap name (default <name>-retain)."
+        }
+      }
+    },
+    "redundancy": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Lease-based leader election: replicas elect one scanning leader, the rest stand by. Standalone (always leader) outside a cluster. An empty mapping takes the default lease name.",
+      "additionalProperties": false,
+      "properties": {
+        "lease": {
+          "type": "string",
+          "description": "coordination.k8s.io Lease name (default: the project name)."
+        }
+      }
     }
   },
   "definitions": {
