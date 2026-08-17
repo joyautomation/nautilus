@@ -11,6 +11,15 @@
 # `nautilus new --template sdk-demo`.
 name: {{.Name}}
 
+{{- if .Deploy}}
+
+# Deploy features (deploy/k8s.yaml runs two replicas of this controller):
+# setpoints and online edits survive restarts, and replicas elect one
+# scanning leader — see the Redundancy guide.
+retain: {}
+redundancy: {}
+{{- end}}
+
 server:
   addr: "localhost:8080"   # NAUTILUS_ADDR overrides; set NAUTILUS_TOKEN to gate writes
   online-edits: true       # PLC-style online edits from VS Code (off for production)

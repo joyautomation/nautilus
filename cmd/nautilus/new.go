@@ -43,6 +43,7 @@ type scaffold struct {
 	CI     bool // GitHub Actions workflow
 	VSCode bool // .vscode extension recommendation + runtime URL
 	Git    bool // git init
+	Deploy bool // Dockerfile + k8s manifests + CD workflow (manifest tier)
 
 	// Replace, if set, adds a filesystem `replace` directive pointing the
 	// nautilus dependency at a local checkout. For contributors testing
@@ -81,6 +82,11 @@ func (s *scaffold) settle() {
 	if s.Language == "" {
 		s.Language = "st"
 	}
+	// Deploy is a manifest-tier feature: the Dockerfile wraps the binary
+	// `nautilus build` emits, which the Go tier doesn't use.
+	if !s.NoGo() {
+		s.Deploy = false
+	}
 }
 
 var identRE = regexp.MustCompile(`[^A-Za-z0-9]+`)
@@ -98,6 +104,7 @@ func runNew(args []string) int {
 	// existing scripts don't break. Deliberately undocumented.
 	noGo := fs.Bool("no-go", false, "")
 	noInput := fs.Bool("no-input", false, "accept defaults instead of prompting")
+	deploy := fs.Bool("deploy", false, "add Dockerfile, k8s manifests, and a CD workflow (manifest templates)")
 	replace := fs.String("replace", "", "path to a local nautilus checkout; adds a filesystem replace directive so the project builds against it (for contributors, pre-publish)")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -116,7 +123,7 @@ func runNew(args []string) int {
 	sc := scaffold{
 		Name:   name,
 		Module: *module,
-		CI:     true, VSCode: true, Git: true,
+		CI:     true, VSCode: true, Git: true, Deploy: *deploy,
 		Language: strings.ToLower(strings.TrimSpace(*language)),
 		Template: strings.ToLower(strings.TrimSpace(*tmpl)),
 	}
@@ -243,13 +250,18 @@ func prompt(sc *scaffold) error {
 		Value(&sc.Module)
 
 	features := []string{"ci", "vscode", "git"}
+	if sc.Deploy {
+		features = append(features, "deploy")
+	}
 	featureSelect := huh.NewMultiSelect[string]().
 		Title("Features").
+		Description("deploy applies to manifest templates (the Dockerfile wraps `nautilus build`)").
 		Description("Space to toggle, enter to confirm.").
 		Options(
 			huh.NewOption("GitHub Actions CI (check, test, build)", "ci").Selected(true),
 			huh.NewOption("VS Code setup (extension recommendation, live values)", "vscode").Selected(true),
 			huh.NewOption("git init", "git").Selected(true),
+			huh.NewOption("Kubernetes deploy (Dockerfile, manifests, CD workflow)", "deploy"),
 		).
 		Value(&features)
 
@@ -299,7 +311,7 @@ func prompt(sc *scaffold) error {
 		}
 		return false
 	}
-	sc.CI, sc.VSCode, sc.Git = has("ci"), has("vscode"), has("git")
+	sc.CI, sc.VSCode, sc.Git, sc.Deploy = has("ci"), has("vscode"), has("git"), has("deploy")
 	return nil
 }
 
@@ -340,6 +352,14 @@ func write(sc *scaffold) error {
 		{"program_blank.fbd.tmpl", "program.fbd", sc.Blank() && sc.Language == "fbd"},
 		{"program_blank.ld.tmpl", "program.ld", sc.Blank() && sc.Language == "ld"},
 		{"program_blank.sfc.tmpl", "program.sfc", sc.Blank() && sc.Language == "sfc"},
+
+		// Deploy scaffolding — commit-to-running-controller for the
+		// manifest tier: the Dockerfile wraps the binary `nautilus build`
+		// emits, the k8s manifests carry the RBAC the retain store and
+		// elector need, and the workflow pushes an image on every main.
+		{"Dockerfile.tmpl", "Dockerfile", sc.Deploy && sc.NoGo()},
+		{"deploy_k8s.yaml.tmpl", "deploy/k8s.yaml", sc.Deploy && sc.NoGo()},
+		{"deploy.yml.tmpl", ".github/workflows/deploy.yml", sc.Deploy && sc.NoGo()},
 
 		{"gitignore.tmpl", ".gitignore", true},
 		{"README.md.tmpl", "README.md", !sc.NoGo()},

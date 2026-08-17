@@ -61,6 +61,23 @@ away from what the tests verify. Assertions are tag matchers
 Open the folder in VS Code with the **nautilus IEC 61131-3** extension for
 diagnostics, the graphical FBD/ladder editors, live tag values, and
 online edits against the running controller.
+{{if .Deploy}}
+## Deploy
+
+Every push to main that passes `check` + `test` becomes a controller
+image on GHCR (`.github/workflows/deploy.yml`). `deploy/k8s.yaml` runs it
+as a **redundant pair**: two replicas elect a scanning leader through a
+Lease, setpoints and online edits ride a ConfigMap across restarts and
+failovers, and the Service reaches live data on either replica.
+
+```sh
+kubectl apply -f deploy/k8s.yaml   # after pointing image: at your GHCR
+```
+
+Uncomment the rollout step in deploy.yml (and add a `KUBE_CONFIG`
+secret) to close the loop: a merged PR is running on the plant floor
+minutes later, by sha, with `kubectl rollout undo` as the way back.
+{{end}}
 
 When you need a custom field bus or richer simulation physics, that's the
 Go SDK: `nautilus new --template sdk` (or `sdk-demo`) scaffolds it, and

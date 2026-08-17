@@ -26,14 +26,17 @@ func TestScaffoldVariants(t *testing.T) {
 		absent []string
 	}{
 		{
+			// Deploy: true on a Go template proves the gate: the deploy
+			// scaffolding wraps `nautilus build`, which the SDK tier
+			// doesn't use, so asking for it must be a quiet no-op.
 			name: "sdk-demo with everything",
-			sc:   scaffold{Name: "plant-proj", Module: "example.com/plant-proj", Program: "PlantProj", Template: tmplSDKDemo, CI: true, VSCode: true},
+			sc:   scaffold{Name: "plant-proj", Module: "example.com/plant-proj", Program: "PlantProj", Template: tmplSDKDemo, CI: true, VSCode: true, Deploy: true},
 			want: []string{
 				"go.mod", "main.go", "plant.go", "program.st", "blocks.st", "program_test.go",
 				".github/workflows/ci.yml", ".vscode/extensions.json", ".vscode/settings.json",
 				"README.md", ".gitignore",
 			},
-			absent: []string{"driver.go", "nautilus.yaml"},
+			absent: []string{"driver.go", "nautilus.yaml", "Dockerfile", "deploy/k8s.yaml"},
 		},
 		{
 			name: "sdk, blank program",
@@ -64,7 +67,19 @@ func TestScaffoldVariants(t *testing.T) {
 				"nautilus.yaml", "program.fbd", "sim.st", "interlocks.ld", "blocks.st",
 				"demo-proj_test.yaml", "README.md", ".github/workflows/ci.yml",
 			},
-			absent: []string{"go.mod", "main.go", "plant.go", "program.st", "program_test.go"},
+			absent: []string{"go.mod", "main.go", "plant.go", "program.st", "program_test.go", "Dockerfile", "deploy/k8s.yaml"},
+		},
+		{
+			// Dockerfile and k8s manifests render template-clean; deploy.yml
+			// legitimately contains "{{" (GitHub's ${{ }} syntax), so it is
+			// asserted separately in TestDeployWorkflowRenders.
+			name: "demo with deploy",
+			sc:   scaffold{Name: "deploy-proj", Program: "DeployProj", Template: tmplDemo, CI: true, Deploy: true},
+			want: []string{
+				"nautilus.yaml", "Dockerfile", "deploy/k8s.yaml",
+				".github/workflows/ci.yml", "README.md",
+			},
+			absent: []string{"go.mod"},
 		},
 	}
 
@@ -140,6 +155,49 @@ func TestScaffoldVariants(t *testing.T) {
 	}
 }
 
+// deploy.yml renders GitHub's own ${{ }} expressions, which the generic
+// unrendered-"{{"-check would misread — so it gets its own assertions: Go
+// template actions are gone, the workflow's expressions and the project
+// name survived.
+func TestDeployWorkflowRenders(t *testing.T) {
+	dir := t.TempDir()
+	cwd, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(cwd)
+
+	sc := scaffold{Name: "wf-proj", Program: "WfProj", Template: tmplDemo, Deploy: true}
+	if err := write(&sc); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "wf-proj", ".github", "workflows", "deploy.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	for _, leftover := range []string{"{{.", "{{if", "{{end", `{{"`} {
+		if strings.Contains(s, leftover) {
+			t.Errorf("deploy.yml still contains template syntax %q", leftover)
+		}
+	}
+	for _, want := range []string{"nautilus build -o wf-proj", "${{ github.repository }}", "ghcr.io", "nautilus test ."} {
+		if !strings.Contains(s, want) {
+			t.Errorf("deploy.yml is missing %q", want)
+		}
+	}
+	// The manifest gained the sections the k8s Deployment depends on.
+	man, err := os.ReadFile(filepath.Join(dir, "wf-proj", "nautilus.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"retain: {}", "redundancy: {}"} {
+		if !strings.Contains(string(man), want) {
+			t.Errorf("nautilus.yaml is missing %q with deploy on", want)
+		}
+	}
+}
+
 func TestPascalCase(t *testing.T) {
 	for in, want := range map[string]string{
 		"water-plant": "WaterPlant",
@@ -158,11 +216,17 @@ func TestPascalCase(t *testing.T) {
 // the check that catches a broken template the moment it lands, rather
 // than in someone's first five minutes with the tool.
 func TestScaffoldedManifestProjectsPass(t *testing.T) {
-	for _, tc := range []struct{ name, template, language string }{
-		{"minimal-st", tmplMinimal, "st"},
-		{"minimal-fbd", tmplMinimal, "fbd"},
-		{"minimal-ld", tmplMinimal, "ld"},
-		{"demo", tmplDemo, ""},
+	for _, tc := range []struct {
+		name, template, language string
+		deploy                   bool
+	}{
+		{"minimal-st", tmplMinimal, "st", false},
+		{"minimal-fbd", tmplMinimal, "fbd", false},
+		{"minimal-ld", tmplMinimal, "ld", false},
+		{"demo", tmplDemo, "", false},
+		// deploy adds retain:/redundancy: to the manifest — the project
+		// must still load, compile, and pass its suites with them present.
+		{"demo-deploy", tmplDemo, "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -172,7 +236,7 @@ func TestScaffoldedManifestProjectsPass(t *testing.T) {
 			}
 			defer os.Chdir(cwd)
 
-			sc := scaffold{Name: tc.name, Program: pascalCase(tc.name), Template: tc.template, Language: tc.language}
+			sc := scaffold{Name: tc.name, Program: pascalCase(tc.name), Template: tc.template, Language: tc.language, Deploy: tc.deploy}
 			if err := write(&sc); err != nil {
 				t.Fatal(err)
 			}

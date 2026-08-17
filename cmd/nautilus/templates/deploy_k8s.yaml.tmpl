@@ -1,0 +1,93 @@
+# {{.Name}} as a redundant pair: two replicas elect a scanning leader
+# through a Lease, retained state rides a ConfigMap, and the Service can
+# hit either replica — a standby proxies API traffic to the leader.
+# Enable the matching manifest sections (scaffolded in nautilus.yaml):
+#
+#   retain: {}
+#   redundancy: {}
+#
+# Point `image:` at where your CD pushes (deploy.yml pushes to GHCR).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{.Name}}
+---
+# Exactly the verbs the retain store and elector use — note no delete:
+# a releasing leader expires its own lease by writing an epoch renew
+# time, which is why failover on shutdown is immediate.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{.Name}}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, update]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{.Name}}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{.Name}}
+subjects:
+  - kind: ServiceAccount
+    name: {{.Name}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{.Name}}
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: {{.Name}}}
+  template:
+    metadata:
+      labels: {app: {{.Name}}}
+    spec:
+      serviceAccountName: {{.Name}}
+      affinity:
+        podAntiAffinity:
+          # Prefer separate nodes, so one node loss keeps a replica.
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: {{.Name}}}
+      containers:
+        - name: controller
+          image: ghcr.io/YOUR_ORG/{{.Name}}:latest # deploy.yml pushes here
+          ports:
+            - {containerPort: 8080, name: api}
+          env:
+            # The elector's identity and the address standbys proxy to.
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+          readinessProbe:
+            # /api/cluster answers locally on every replica, leader or
+            # standby — a standby must stay Ready to serve the dashboard
+            # and proxy to the leader.
+            httpGet: {path: /api/cluster, port: api}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /api/cluster, port: api}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{.Name}}
+spec:
+  selector: {app: {{.Name}}}
+  ports:
+    - {port: 80, targetPort: api, name: http}

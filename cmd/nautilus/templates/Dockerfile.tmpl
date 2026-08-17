@@ -1,0 +1,18 @@
+# The controller image. `nautilus build` already produced a self-contained
+# binary (runtime + this project, one file), so the image is just that file
+# on a distroless base — no toolchain here either. distroless/static rather
+# than scratch: MQTT/TLS needs CA roots, and debugging needs a real image
+# ancestry, but nothing needs a shell.
+#
+#   nautilus build -o {{.Name}}
+#   docker build -t {{.Name}} .
+#
+# The base has no libc, so the controller must be STATIC. The GitHub
+# Release binaries are; a CLI you `go install` yourself needs
+# CGO_ENABLED=0 (the scaffolded deploy.yml sets it).
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY {{.Name}} /controller
+# The tag API and dashboard; NAUTILUS_ADDR overrides.
+ENV NAUTILUS_ADDR=:8080
+EXPOSE 8080
+ENTRYPOINT ["/controller"]
