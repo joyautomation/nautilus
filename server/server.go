@@ -136,6 +136,14 @@ type Options struct {
 	// requests a standby cannot answer from its own (stale, non-scanning)
 	// tag store are reverse-proxied to the leader. Nil = no redundancy.
 	Cluster interface{ Status() leader.Status }
+
+	// HistorianURL, when set, proxies GET /api/history* to a historian
+	// daemon (`nautilus historian`) at that base URL, so the HMI keeps one
+	// origin for live and archived data. History reads answer on ANY
+	// replica — the archive lives in the historian, not the tag store, so
+	// a standby's copy is as good as the leader's. Empty = 503 with a
+	// pointer at the missing configuration.
+	HistorianURL string
 }
 
 // DriverStatus is a field driver's or publisher's health, rendered by the
@@ -178,6 +186,7 @@ type Server struct {
 	onlineEdits bool
 	drivers     func() []DriverStatus
 	cluster     interface{ Status() leader.Status }
+	historian   string
 
 	mu      sync.Mutex
 	clients map[chan []byte]struct{}
@@ -205,6 +214,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 	if len(opts) > 0 {
 		s.drivers = opts[0].Drivers
 		s.cluster = opts[0].Cluster
+		s.historian = opts[0].HistorianURL
 	}
 	return s
 }
@@ -272,6 +282,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/program", s.handlePutProgram)
 	mux.HandleFunc("POST /api/program/rollback", s.handleRollback)
 	mux.HandleFunc("GET /api/cluster", s.handleCluster)
+	mux.HandleFunc("GET /api/history", s.handleHistory)
+	mux.HandleFunc("GET /api/history/", s.handleHistory)
 	mux.HandleFunc("GET /assets/", handleAsset)
 	mux.HandleFunc("GET /", s.handleIndex)
 	return withCORS(s.proxyStandby(mux))
@@ -295,7 +307,12 @@ func (s *Server) proxyStandby(mux http.Handler) http.Handler {
 			mux.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/api/cluster" || r.URL.Path == "/" || strings.HasPrefix(r.URL.Path, "/assets/") {
+		if r.URL.Path == "/api/cluster" || r.URL.Path == "/" ||
+			strings.HasPrefix(r.URL.Path, "/assets/") ||
+			strings.HasPrefix(r.URL.Path, "/api/history") {
+			// History also stays local: the archive lives in the historian,
+			// not the tag store, so a standby answers it as well as the
+			// leader — and keeps answering it mid-failover.
 			mux.ServeHTTP(w, r)
 			return
 		}
@@ -409,6 +426,31 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(st)
+}
+
+// handleHistory forwards /api/history* to the historian daemon, trimming
+// the /api prefix (/api/history/span → {historian}/history/span). The HMI
+// keeps one origin; where the archive actually lives is deployment detail.
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	if s.historian == "" {
+		http.Error(w, "no historian configured (set server.historian in the manifest, or NAUTILUS_HISTORIAN_URL)", http.StatusServiceUnavailable)
+		return
+	}
+	target, err := url.Parse(s.historian)
+	if err != nil {
+		http.Error(w, "bad historian url: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	orig := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		orig(req)
+		req.URL.Path = strings.TrimPrefix(r.URL.Path, "/api")
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+		http.Error(w, "historian unavailable: "+err.Error(), http.StatusBadGateway)
+	}
+	proxy.ServeHTTP(w, r)
 }
 
 // metaResponse is the static tag documentation for an HMI: descriptions and

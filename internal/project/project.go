@@ -119,6 +119,10 @@ type ServerConfig struct {
 	Addr        string   `yaml:"addr"`
 	OnlineEdits bool     `yaml:"online-edits"`
 	Interval    Duration `yaml:"interval"`
+	// Historian is the base URL of a `nautilus historian` daemon; when set,
+	// the API proxies GET /api/history* there so the HMI keeps one origin.
+	// NAUTILUS_HISTORIAN_URL overrides at start.
+	Historian string `yaml:"historian"`
 }
 
 // TaskConfig is one program on its own scan. The FIRST task is the main
@@ -474,8 +478,9 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		Addr:    addr,
 		Runtime: opts,
 		Server: server.Options{
-			Interval:    time.Duration(m.Server.Interval),
-			OnlineEdits: m.Server.OnlineEdits,
+			Interval:     time.Duration(m.Server.Interval),
+			OnlineEdits:  m.Server.OnlineEdits,
+			HistorianURL: m.Server.Historian,
 		},
 		sparkplug:  m.Sparkplug,
 		inputTags:  inputs,

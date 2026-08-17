@@ -103,6 +103,9 @@ func runProject(fsys fs.FS, manifest, label string) int {
 	if tok := os.Getenv("NAUTILUS_TOKEN"); tok != "" {
 		sopts.AuthToken = tok
 	}
+	if h := os.Getenv("NAUTILUS_HISTORIAN_URL"); h != "" {
+		sopts.HistorianURL = h
+	}
 	// Field-driver + Sparkplug status feed GET /api/drivers and the stream.
 	sopts.Drivers = proj.DriverStatus(spNode)
 	if el != nil {

@@ -110,6 +110,10 @@
         "interval": {
           "$ref": "#/definitions/duration",
           "description": "How often the server pushes tag updates to connected clients."
+        },
+        "historian": {
+          "type": "string",
+          "description": "Base URL of a `nautilus historian` daemon; GET /api/history* proxies there. NAUTILUS_HISTORIAN_URL overrides."
         }
       }
     },
