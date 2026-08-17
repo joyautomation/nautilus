@@ -44,8 +44,8 @@ examples/heated-tank/   a complete controller built on the libraries
 | Interface | You provide |
 |---|---|
 | `io.Driver` | your field bus (Modbus / EtherNet-IP / OPC-UA / REST rack / sim) |
-| *retain store* | where retained memory persists (file / k8s ConfigMap / db) — *coming* |
-| *coordinator* | redundancy / leader election (k8s Lease / raft) — *coming* |
+| `retain.Store` | where retained memory persists — file and k8s ConfigMap ship in `retain/` |
+| `runtime.Coordinator` | redundancy / leader election — a k8s Lease elector ships in `leader/` |
 | *historian sink* | where process history is archived (Postgres / TSDB) — *coming* |
 
 ## Getting started
