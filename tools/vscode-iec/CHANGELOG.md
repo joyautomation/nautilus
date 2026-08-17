@@ -3,6 +3,15 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.18] - 2026-08-17
+
+### Added
+
+- **Manifest schema** learns the new sections: `retain:` (retained
+  operator state), `redundancy:` (Lease leader election), and
+  `server.historian` (history proxy target) — completion and validation
+  for the redundancy/historian features shipping in nautilus 0.6.
+
 ## [0.9.17] - 2026-08-16
 
 ### Added

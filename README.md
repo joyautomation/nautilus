@@ -46,7 +46,7 @@ examples/heated-tank/   a complete controller built on the libraries
 | `io.Driver` | your field bus (Modbus / EtherNet-IP / OPC-UA / REST rack / sim) |
 | `retain.Store` | where retained memory persists — file and k8s ConfigMap ship in `retain/` |
 | `runtime.Coordinator` | redundancy / leader election — a k8s Lease elector ships in `leader/` |
-| *historian sink* | where process history is archived (Postgres / TSDB) — *coming* |
+| `hist.Sink` | where process history is archived — Postgres + `nautilus historian` ship in `hist/` |
 
 ## Getting started
 

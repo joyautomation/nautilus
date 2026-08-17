@@ -83,15 +83,22 @@ Done through the acceptance-testing branch: virtual-time harness +
 Explorer, tag files/UDTs/shape check, branded dashboard, Process Overview
 demo with flow-balance physics.
 
+Done 2026-08-17: the three mini-scada seams — `retain/` (file + ConfigMap),
+`leader/` (Lease elector; `runtime.Coordinator` gates the scan loop),
+`hist/` + `nautilus historian` (Postgres, `hist.Sink`). Manifest sections
+`retain:`/`redundancy:`/`server.historian`; standby replicas proxy their
+API to the leader. mini-scada source of truth: `/home/joyja/mini-scada-build`
+(NOT ~/Development/mini-scada — and read-only, never modify it).
+
 Next, in rough priority:
 
-1. **Extract the infra seams behind interfaces**, from mini-scada
-   (`~/Development/mini-scada/plc/internal/`): retain store (file + k8s
-   ConfigMap), coordinator/redundancy (k8s Lease leader election),
-   historian sink (Postgres). Small interfaces in nautilus (`RetainStore`,
-   `Coordinator`, `HistorianSink`), impls as sub-packages.
-2. **Grow the server package** — program get/set + hot-swap over HTTP and a
-   program-history endpoint (mini-scada's `internal/server` has the shapes).
+1. **CD scaffold** — container target for `nautilus build`, a deploy job in
+   the scaffolded CI (build image → push → rollout), and a worked k8s
+   example (Deployment with replicas + RBAC from the redundancy guide).
+   This is the commit-to-running-controller story the content calendar's
+   wk 14/N-14/N-16 need.
+2. **Grow the server package** — program-history endpoint (mini-scada's
+   `internal/server` has the shapes; get/set + hot-swap already exist).
 3. **Native-Go function blocks** alongside ST (both lowering to the IR).
 4. **Extension 0.10.0** — first stable-channel Marketplace release, when the
    Test Explorer + schema work has soaked on the pre-release channel.
