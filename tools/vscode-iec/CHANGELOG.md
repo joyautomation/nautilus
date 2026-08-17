@@ -3,6 +3,24 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.17] - 2026-08-16
+
+### Added
+
+- **Acceptance tests in the Test Explorer.** `*_test.yaml` suites appear in
+  VS Code's Test Explorer and run through `nautilus test` — per-test results,
+  failure messages on the failing step, and a gutter run button
+  (`src/acceptanceTests.ts`).
+- **JSON schemas** for `nautilus.yaml`, tag files, and `*_test.yaml` —
+  completion and validation in any YAML editor that honors schema
+  associations.
+- **ST inside test expectations is highlighted** via an injection grammar,
+  and the extension now wins the `.st` file association.
+- Manifest-aware language features (hover shows a tag's unit and
+  description, tag completion in expectations, unknown-tag squiggles in key
+  position) ship with the `nautilus` CLI ≥ 0.5.0 — update it to light
+  them up.
+
 ## [0.9.16] - 2026-07-27
 
 ### Changed
