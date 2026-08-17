@@ -27,6 +27,19 @@ func exampleURI(t *testing.T, name string) (uri, text string) {
 	return "file://" + abs, string(raw)
 }
 
+// lineWith anchors a test to content rather than a line number, so editing
+// the example suite cannot silently move an assertion off its target.
+func lineWith(t *testing.T, text, needle string) int {
+	t.Helper()
+	for i, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, needle) {
+			return i
+		}
+	}
+	t.Fatalf("%q is no longer in the example suite", needle)
+	return -1
+}
+
 // The region scanner must find exactly what the loader treats as an
 // expression — no more (a matcher mistaken for ST would squiggle valid
 // YAML) and no less (a missed one is a silent hole).
@@ -201,8 +214,9 @@ func TestSyntaxErrorInAnExpression(t *testing.T) {
 	if len(diags) != 1 {
 		t.Fatalf("got %d diagnostics, want 1: %+v", len(diags), diags)
 	}
-	if d := diags[0]; d.Range.Start.Line != 62 {
-		t.Errorf("diagnostic on line %d (0-based), want the expression's line 62", d.Range.Start.Line)
+	exprLine := lineWith(t, broken, "ABS(TempC - < 0.5")
+	if d := diags[0]; d.Range.Start.Line != exprLine {
+		t.Errorf("diagnostic on line %d (0-based), want the expression's line %d", d.Range.Start.Line, exprLine)
 	}
 }
 
@@ -230,14 +244,17 @@ func TestHoverOnlyInsideExpressions(t *testing.T) {
 	_, text := exampleURI(t, "heated-tank_test.yaml")
 	td := &testDoc{}
 	td.exprs, td.keys = scanSuite(text)
-	// Line 63 (1-based) holds `- ABS(TempC - TempSP) < 0.5`.
-	inside := Position{Line: 62, Character: strings.Index(strings.Split(text, "\n")[62], "TempC")}
+	lines := strings.Split(text, "\n")
+	// The line holding `- ABS(TempC - TempSP) < 0.5` — an ST expression.
+	exprLine := lineWith(t, text, "ABS(TempC - TempSP)")
+	inside := Position{Line: exprLine, Character: strings.Index(lines[exprLine], "TempC")}
 	if td.exprAt(inside) == nil {
 		t.Fatal("TempC in the expression is not inside a region")
 	}
-	// Line 58 (1-based) holds `expect: { TempC: { near: 65.0 } }` — a
-	// matcher, not ST.
-	outside := Position{Line: 57, Character: strings.Index(strings.Split(text, "\n")[57], "TempC")}
+	// The line holding `expect: { TempC: { near: 65.0 } }` — a matcher,
+	// not ST.
+	matchLine := lineWith(t, text, "TempC: { near: 65.0 }")
+	outside := Position{Line: matchLine, Character: strings.Index(lines[matchLine], "TempC")}
 	if r := td.exprAt(outside); r != nil {
 		t.Errorf("a tag matcher was treated as an expression: %q", r.text)
 	}
@@ -320,9 +337,10 @@ func TestSuiteSession(t *testing.T) {
 	at := func(line int, needle string) Position {
 		return Position{Line: line, Character: strings.Index(lines[line], needle) + 1}
 	}
+	exprLine := lineWith(t, text, "ABS(TempC - TempSP)")
 	id = s.send("textDocument/hover", TextDocumentPositionParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
-		Position:     at(62, "TempC"),
+		Position:     at(exprLine, "TempC"),
 	}, true)
 	var hov Hover
 	if err := json.Unmarshal(s.recvResponse(id), &hov); err != nil {
@@ -338,7 +356,7 @@ func TestSuiteSession(t *testing.T) {
 	// builtins, but not statement keywords.
 	id = s.send("textDocument/completion", TextDocumentPositionParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
-		Position:     at(62, "TempC"),
+		Position:     at(exprLine, "TempC"),
 	}, true)
 	var items []CompletionItem
 	if err := json.Unmarshal(s.recvResponse(id), &items); err != nil {
@@ -364,7 +382,7 @@ func TestSuiteSession(t *testing.T) {
 	// Completion in key position: tags, and nothing from ST.
 	id = s.send("textDocument/completion", TextDocumentPositionParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
-		Position:     at(16, "LevelPct"), // `given: { LevelPct: 35.0 }`
+		Position:     at(lineWith(t, text, "LevelPct: 35.0"), "LevelPct"),
 	}, true)
 	items = nil
 	if err := json.Unmarshal(s.recvResponse(id), &items); err != nil {
@@ -382,7 +400,7 @@ func TestSuiteSession(t *testing.T) {
 	// Plain YAML: the schema owns it, we say nothing.
 	id = s.send("textDocument/completion", TextDocumentPositionParams{
 		TextDocument: TextDocumentIdentifier{URI: uri},
-		Position:     at(13, "name"),
+		Position:     at(lineWith(t, text, "- name: pump seals in"), "name"),
 	}, true)
 	items = nil
 	if err := json.Unmarshal(s.recvResponse(id), &items); err != nil {

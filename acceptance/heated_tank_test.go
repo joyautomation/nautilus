@@ -79,20 +79,20 @@ func TestLowTempAlarmWaitsItsFullDelay(t *testing.T) {
 
 // TIC-101 settles a setpoint step. Closed loop: sim.st integrates the
 // plant at 100 ms while the PI runs at 100 ms, both on virtual dt, so the
-// whole trajectory is deterministic. The measured response is ~32 s.
+// whole trajectory is deterministic. Demand is driven to zero so the level
+// loop stays quiet: with the drain shut the pump never cycles, and the
+// loop is tested against the pure thermal plant — 600 kg of water is slow
+// (full heat moves it ~0.08 °C/s), so the step takes minutes of process
+// time, and virtual time still asserts it in milliseconds.
 func TestPISettlesSetpointStep(t *testing.T) {
 	rt, sch := load(t)
+	rt.Tags().SetReal("Demand", 0.0)
 	settled := func() bool {
 		e := rt.Tags().Real("TempC") - rt.Tags().Real("TempSP")
 		return e > -0.5 && e < 0.5
 	}
 
-	// Reach steady state at the 65 °C setpoint the manifest seeds. The cold
-	// start is far slower than the step below — Ki is 0.15, so the integral
-	// has to climb from zero all the way to the ~75 % the plant needs to
-	// hold 65 °C. That asymmetry is a property of the loop, not of the
-	// harness, and it is exactly the kind of thing nobody measures until a
-	// test makes it cheap to look at.
+	// Reach steady state at the 65 °C setpoint the manifest seeds.
 	if ok, _ := sch.AdvanceUntil(300*time.Second, 0, settled); !ok {
 		t.Fatalf("never reached the initial setpoint: TempC = %.3f, want 65.0 ± 0.5", rt.Tags().Real("TempC"))
 	}
@@ -100,12 +100,13 @@ func TestPISettlesSetpointStep(t *testing.T) {
 
 	// Now the step. Require it to settle AND stay settled: a loop that
 	// merely passes through its target on the way to an overshoot has not
-	// settled, and a bare "assert after 45 s" cannot tell the difference.
+	// settled, and a bare "assert after the deadline" cannot tell the
+	// difference.
 	stepAt := sch.Elapsed()
 	rt.Tags().SetReal("TempSP", 72.0)
-	ok, at := sch.AdvanceUntil(45*time.Second, 5*time.Second, settled)
+	ok, at := sch.AdvanceUntil(300*time.Second, 5*time.Second, settled)
 	if !ok {
-		t.Fatalf("never settled within 45s of the step: TempC = %.3f, want 72.0 ± 0.5",
+		t.Fatalf("never settled within 300s of the step: TempC = %.3f, want 72.0 ± 0.5",
 			rt.Tags().Real("TempC"))
 	}
 	t.Logf("step settled %v after it, then held 5s", at-stepAt)
