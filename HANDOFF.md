@@ -1,119 +1,97 @@
 # nautilus — session handoff
 
 Working notes for picking up development in a fresh session. See `README.md`
-for the vision/architecture; this file is the practical state + next steps.
-(Untracked working doc — commit, gitignore, or delete as you like.)
+for the vision/architecture and `RELEASING.md` for the release pipeline; this
+file is the practical state + next steps. Last refreshed: 2026-08-16.
 
 ## What this is
 
-**nautilus** = "SCADA, built like software": a Go + SvelteKit framework
-for building industrial control/supervisory systems like real software (version control,
-tests, CI/CD, VS Code) instead of a vendor IDE. Control logic in **IEC 61131-3
-Structured Text** (or, later, native Go), on a deterministic scan loop, with
-bring-your-own field I/O / redundancy / historian / HMI through small
-interfaces. It's the **high-code sibling** to Joy Automation's low-code
-*tentacle* product — same IEC substrate, different authoring surface.
+**nautilus** = "SCADA, built like software": a Go + SvelteKit framework for
+building industrial control/supervisory systems like real software (version
+control, tests, CI/CD, VS Code) instead of a vendor IDE. The **manifest form
+is the product**: `nautilus.yaml` + IEC 61131-3 sources + `*_test.yaml`
+acceptance suites, no toolchain required (`nautilus run/build/test/check`).
+Go is the SDK tier for custom field buses and richer simulation.
 
-It was extracted from the **mini-scada** demo (`~/Development/mini-scada`, repo
-`joyautomation/mini-scada`). mini-scada stays as the reference demo — **do not
-modify it** when working on nautilus; copy/adapt from it.
+Extracted from the **mini-scada** demo (`~/Development/mini-scada`).
+mini-scada stays as the reference demo — **do not modify it** when working on
+nautilus; copy/adapt from it.
 
 ## Repo / status
 
-- GitHub: `joyautomation/nautilus` (private). SSH remote
-  `git@github.com:joyautomation/nautilus.git`. **CI is green.**
-- Go module `github.com/joyautomation/nautilus`, go 1.24, pure-stdlib core.
-- **P1 is done and pushed** (initial commit). Everything below builds/tests.
+- GitHub: `joyautomation/nautilus` (private). `main` is the release branch.
+- Go module `github.com/joyautomation/nautilus`; core is pure stdlib.
+- **CI only runs on pushes to main and on PRs.** A long-lived branch with no
+  PR gets zero CI — open the PR early. (This bit the acceptance-testing
+  branch: 23 commits accumulated with a red test suite nobody saw.)
+- Releases: see `RELEASING.md`. CLI ships on `v*` tags (GoReleaser);
+  extension + HMI publish-on-bump from main (`publish.yml`); `version-sync`
+  in CI fails any push where a registry is ahead of the repo. Extension
+  channel: odd minor = pre-release, even minor = stable.
 
-## Layout (P1 + P2 editor slice complete)
+## Layout
 
 ```
-lang/st, lang/ir     IEC 61131-3 Structured Text VM (from mini-scada/tentacle; tests pass)
-runtime/             scan loop, Tags bus, Program host (compile, hot-swap, retained frame)
-                     Runtime.Run(ctx) or manual Runtime.Scan(); Options{Program,Driver,Scan,Inputs,Outputs,DtTag,Seed}
-io/                  io.Driver seam (ReadInputs/WriteOutputs) + Memory driver
-server/              tag API: GET /api/state, GET /api/stream (SSE, 250ms), POST /api/tags. CORS on.
-                     server.New(rt) + go srv.Run(ctx) + http.ListenAndServe(addr, srv.Handler())
-internal/lsp/        LSP 3.17 server (pure stdlib JSON-RPC over stdio): diagnostics (st.Parse+st.Lower),
-                     definition/hover/completion, POU-scoped symbol lookup. Tested end-to-end.
-cmd/nautilus/        CLI: `lsp` (stdio LSP), `check` (headless .st compile, gcc-style diags, exit 1),
-                     `new` (interactive scaffold, charmbracelet/huh; --no-input for CI; go:embed templates)
-examples/heated-tank/  runnable controller: plant.go (in-process Driver), program.st (pump+PI), main.go
-                     now also serves the tag API on localhost:8080
-hmi/                 @joyautomation/nautilus-hmi — Svelte 5 kit + realtime.svelte.ts (SSE, frame-generic).
-                     NOT yet published to npm (blocks the `new` HMI starter).
-tools/vscode-iec/    VS Code extension v0.2: grammar + language client (spawns `nautilus lsp`) +
-                     inline live values (SSE from server pkg; scanner in src/scan.ts, node:test'd).
-                     npm install && npm test. engines.vscode ^1.82. out/ is gitignored.
-.github/workflows/ci.yml   go: vet/test/build + `nautilus check examples`; node: extension compile+test
+lang/st, lang/ir     IEC 61131-3 ST compiler + VM (shared substrate)
+runtime/             scan loop, Tags bus, program host; injectable Clock (virtual time)
+acceptance/          deterministic virtual-time test harness; runs *_test.yaml suites
+internal/project     manifest loader — builds exactly what `nautilus run` runs
+internal/lsp         LSP: ST diagnostics/hover/completion, manifest-aware tags,
+                     ST expectation regions inside *_test.yaml
+io/, eip/            driver seam + Memory driver; EtherNet/IP (incl. logixserver)
+sparkplug/           Sparkplug B (TCK conformance test in CI)
+server/              tag API (state/SSE/write) + branded dashboard
+cmd/nautilus         CLI: new, run, build, check, test, lsp, pull
+examples/            heated-tank (Go tier), heated-tank-nogo (manifest flagship:
+                     4 tasks, 3 IEC languages, sim in ST), FBD + SFC examples
+hmi/                 @joyautomation/nautilus-hmi (Svelte 5): realtime SSE, Mimic
+tools/vscode-iec/    VS Code extension: grammar, LSP client, inline live values,
+                     Test Explorer for *_test.yaml, JSON schemas
+website/, docs/      docs site (deploys from main); design briefs in docs/design/
 ```
 
-### P2 slice notes (2026-07-07)
+## Design briefs (docs/design/)
 
-- **Entry-point story**: `go install .../cmd/nautilus@latest` → `nautilus new`
-  (sv-create-style interactive: plant sim / CI / VS Code / git-init features)
-  → open in VS Code → `nautilus lsp` auto-spawned by the extension →
-  `go run .` serves tags → inline live values light up. `nautilus check` gates CI.
-- Parser accepts FUNCTION_BLOCKs only *before* END_PROGRAM — FBs after the
-  program are silently ignored (LSP symbol tests document this; worth a
-  parser diagnostic later).
-- charmbracelet/huh dep is CLI-only; core stays pure-stdlib. Module pruning
-  keeps it out of library consumers.
-- Extension can't be integration-tested headlessly here; scanner logic is
-  unit-tested, LSP is tested from Go. Manual QA: F5 dev host + heated-tank.
+- `testing.md` — manifest-tier acceptance testing. **Built and running.**
+- `tags.md` — tag generation, shape verification, UDTs. **Built.**
+- `sfc.md` — SFC front-end notes.
 
-## Toolchain (NOT on PATH — this machine keeps them in ~/.local)
+## Gotchas
 
-```sh
-GO=~/.local/go/bin/go
-NODE_PATH_PREFIX='PATH="$HOME/.local/node/bin:$PATH"'   # prepend for npm/node
-GIT=~/.local/git-pkg/usr/bin/git                        # with:
-export GIT_EXEC_PATH=~/.local/git-pkg/usr/lib/git-core
-# gh IS on PATH, but it CANNOT shell out to the ~/.local git. So to make a
-# repo: `gh repo create <name> --private ...` then add remote + push with $GIT.
-```
+- `examples/heated-tank-nogo` is a shared test fixture: the Go acceptance
+  tests (`acceptance/heated_tank_test.go`) and the LSP tests
+  (`internal/lsp/testdoc_test.go`) both run against it. If you change its
+  physics or its YAML suite, run `go test ./acceptance/ ./internal/lsp/`.
+  The LSP tests locate targets by content (`lineWith`), so pure line-number
+  shifts are safe; renaming tags or expressions is not.
+- npm trusted-publisher for the HMI verifies the workflow *filename*
+  (`publish.yml`); repo variable `PUBLISH_HMI=true` arms it.
+- `GOTOOLCHAIN=local` in CI keeps the pinned Go a floor (this bit v0.4.1).
+- Toolchain is standard now: `go` on PATH (1.25.x local, CI pins 1.24),
+  `npm`/`node` via `~/.local/node/bin` on PATH for hmi/extension work.
 
-Verify everything still works:
+## Working habits
 
-```sh
-cd ~/Development/joyautomation/nautilus
-~/.local/go/bin/go build ./... && ~/.local/go/bin/go test ./...     # Go core
-~/.local/go/bin/go run ./examples/heated-tank                       # runnable controller (Ctrl+C)
-cd hmi && PATH="$HOME/.local/node/bin:$PATH" npm run check          # HMI kit type-check
-```
+- **Content as you go**: when work produces something demo-able (feature,
+  war story, design rationale), record the episode/post idea in
+  `~/Development/joyautomation/content` before wrapping up.
 
-Git author for this repo is set locally (James Joy <joyja@joyautomation.com>).
-End commit messages with `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`.
+## Roadmap / where to pick up
 
-## Roadmap / where to pick up (P3+)
+Done through the acceptance-testing branch: virtual-time harness +
+`nautilus test`, manifest-first docs/README, manifest-aware LSP + Test
+Explorer, tag files/UDTs/shape check, branded dashboard, Process Overview
+demo with flow-balance physics.
 
-Done in P2: ✅ LSP + inline live values, ✅ server package (thin slice of the
-old item 3), ✅ `nautilus` CLI with interactive scaffold.
+Next, in rough priority:
 
-Prioritized next:
-
-1. **Publish the pieces**: tag a release so `go install .../cmd/nautilus@latest`
-   resolves; publish `@joyautomation/nautilus-hmi` to npm; package/publish the
-   VS Code extension (vsce). Then add the HMI starter to `nautilus new`.
-2. **Extract the infra seams behind interfaces**, from mini-scada
-   (`~/Development/mini-scada/plc/internal/`):
-   - retain store — `retain/` (file + k8s ConfigMap impls)
-   - coordinator / redundancy — `leader/` (k8s Lease leader election)
-   - historian sink — `hist/` + `cmd/historian` (Postgres, lib/pq)
-   Define small Go interfaces in nautilus (`RetainStore`, `Coordinator`,
-   `HistorianSink`) and provide the impls as sub-packages.
-3. **Grow the server package** — program get/set + hot-swap over HTTP and a
-   program-history endpoint (mini-scada's `internal/server` has the reference
-   shapes); the tag snapshot/stream/write slice shipped in P2.
-4. **Native-Go function blocks** alongside ST (both lowering to the IR).
-5. **LD / FBD / SFC** front-ends to the same IR (text that projects to a
-   diagram in VS Code). Correctness risk lives in network eval order + SFC
-   action qualifiers.
-
-## Gotchas noted
-
-- gh ↔ git PATH issue (above).
-- The example plant physics (`examples/heated-tank/plant.go`) are
-  demo-plausible but lightly tuned (heater vs. ambient-loss balance).
-- HMI kit has no demo/gallery route yet (the app-specific stories were left in
-  mini-scada); a small `src/routes/` demo page would help local visual QA.
+1. **Extract the infra seams behind interfaces**, from mini-scada
+   (`~/Development/mini-scada/plc/internal/`): retain store (file + k8s
+   ConfigMap), coordinator/redundancy (k8s Lease leader election),
+   historian sink (Postgres). Small interfaces in nautilus (`RetainStore`,
+   `Coordinator`, `HistorianSink`), impls as sub-packages.
+2. **Grow the server package** — program get/set + hot-swap over HTTP and a
+   program-history endpoint (mini-scada's `internal/server` has the shapes).
+3. **Native-Go function blocks** alongside ST (both lowering to the IR).
+4. **Extension 0.10.0** — first stable-channel Marketplace release, when the
+   Test Explorer + schema work has soaked on the pre-release channel.
