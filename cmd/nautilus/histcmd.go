@@ -1,0 +1,294 @@
+// `nautilus historian`: a standalone daemon that archives a controller's
+// tags into Postgres and serves downsampled history back out. Separate
+// process, separate binary target from the controller — the scan loop
+// keeps running whether or not history is being collected, and the
+// nautilus runtime never imports package hist (see hist's doc comment).
+//
+// This ports mini-scada's cmd/historian, generalized: the original hardcoded
+// seven tag names from a bespoke JSON shape (a specific PID loop's process
+// variables). nautilus tags are open-ended, so instead of a fixed struct
+// this polls the generic Frame the runtime's GET /api/state already serves
+// and records whatever numeric/boolean tags match a glob pattern.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"net/http"
+	"os"
+	"path"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/joyautomation/nautilus/hist"
+)
+
+const historianUsage = `nautilus historian — archive a controller's tags into Postgres
+
+Polls a running controller's GET /api/state once per interval, records every
+numeric or boolean tag matching a --tags pattern, and serves downsampled
+history back out over HTTP for an HMI trend chart.
+
+Usage:
+  nautilus historian -source <url> -db <dsn> [flags]
+
+Flags:
+  -addr       Listen address for the historian's own HTTP API (default :9100)
+  -source     Controller base URL to poll, e.g. http://plc:8080
+              (env NAUTILUS_SOURCE_URL). Required.
+  -db         Postgres DSN (env DATABASE_URL). Required.
+  -retention  How long to keep samples before pruning (default 168h)
+  -interval   Poll/collect interval (default 1s)
+  -tags       Comma-separated glob patterns (path.Match syntax) selecting
+              which tags to archive, e.g. "PIT_*,level" (default "*")
+
+HTTP API:
+  GET /history       ?from&to (ms epoch), ?maxPoints, ?tags (CSV) — downsampled series
+  GET /history/span   earliest/latest sample and total count
+  GET /healthz        liveness probe
+`
+
+// frameTagsResponse is the slice of server.Frame this command needs: just
+// the tags map. Decoding into this instead of the full Frame keeps
+// histcmd.go from importing package server for one field, and tolerates
+// the Frame growing new fields over time.
+type frameTagsResponse struct {
+	Tags map[string]any `json:"tags"`
+}
+
+// runHistorian is the entry point for `nautilus historian`.
+func runHistorian(args []string) int {
+	fs := flag.NewFlagSet("historian", flag.ExitOnError)
+	addr := fs.String("addr", ":9100", "listen address")
+	source := fs.String("source", envDefault("NAUTILUS_SOURCE_URL", ""), "controller base URL to poll")
+	dbURL := fs.String("db", envDefault("DATABASE_URL", ""), "Postgres DSN")
+	retention := fs.Duration("retention", 168*time.Hour, "how long to keep samples")
+	interval := fs.Duration("interval", time.Second, "poll/collect interval")
+	tagsFlag := fs.String("tags", "*", "comma-separated glob patterns selecting tags to archive")
+	fs.Usage = func() { fmt.Fprint(os.Stderr, historianUsage) }
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	if *source == "" {
+		fmt.Fprintln(os.Stderr, "nautilus historian: -source / NAUTILUS_SOURCE_URL is required")
+		return 2
+	}
+	if *dbURL == "" {
+		fmt.Fprintln(os.Stderr, "nautilus historian: -db / DATABASE_URL is required")
+		return 2
+	}
+	patterns := splitCSVHist(*tagsFlag)
+	if len(patterns) == 0 {
+		patterns = []string{"*"}
+	}
+
+	// Retry until Postgres is reachable: the historian and its database
+	// commonly start together (e.g. as sibling containers), and there is
+	// no useful fallback besides waiting.
+	var store *hist.Store
+	for {
+		s, err := hist.Open(*dbURL)
+		if err == nil {
+			store = s
+			break
+		}
+		fmt.Fprintf(os.Stderr, "nautilus historian: waiting for database: %v\n", err)
+		time.Sleep(3 * time.Second)
+	}
+	defer store.Close()
+	fmt.Fprintf(os.Stderr, "nautilus historian: connected to database, polling %s\n", *source)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go runCollector(ctx, store, *source, patterns, *interval)
+	go pruneLoop(ctx, store, *retention)
+
+	srv := &historianServer{store: store}
+	fmt.Fprintf(os.Stderr, "nautilus historian: serving history on %s\n", *addr)
+	if err := http.ListenAndServe(*addr, srv.handler()); err != nil {
+		fmt.Fprintln(os.Stderr, "nautilus historian:", err)
+		return 1
+	}
+	return 0
+}
+
+// sampleOf extracts the archivable sample from one /api/state poll: every
+// tag whose value is a JSON number (float64) or boolean (recorded as 0/1)
+// and whose name matches at least one of patterns. Strings, objects, and
+// arrays are skipped — the historian only archives scalar process data,
+// and a tag holding e.g. online-edit source text or a nested diagnostics
+// object would otherwise poison a numeric series.
+//
+// Pure and side-effect free so it's testable without an HTTP server or a
+// database — see histcmd_test.go.
+func sampleOf(frameTags map[string]any, patterns []string) map[string]float64 {
+	out := make(map[string]float64)
+	for name, v := range frameTags {
+		if !matchesAny(name, patterns) {
+			continue
+		}
+		switch t := v.(type) {
+		case float64:
+			out[name] = t
+		case bool:
+			if t {
+				out[name] = 1
+			} else {
+				out[name] = 0
+			}
+		default:
+			// string, object, array, nil — not an archivable scalar.
+		}
+	}
+	return out
+}
+
+// matchesAny reports whether name matches any of the glob patterns
+// (path.Match syntax — "*", "?", "[...]"). A malformed pattern never
+// matches rather than erroring, since a typo'd -tags flag shouldn't crash
+// the collector loop.
+func matchesAny(name string, patterns []string) bool {
+	for _, p := range patterns {
+		if ok, err := path.Match(p, name); err == nil && ok {
+			return true
+		}
+	}
+	return false
+}
+
+// runCollector polls source once per interval and archives a sample into
+// sink. Kept separate from sampleOf so the network/decode/insert plumbing
+// and the pure filtering logic can be tested independently.
+func runCollector(ctx context.Context, sink hist.Sink, source string, patterns []string, interval time.Duration) {
+	hc := &http.Client{Timeout: 2 * time.Second}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			collectOnce(hc, sink, source, patterns)
+		}
+	}
+}
+
+// collectOnce performs one poll-and-archive step. Split out from
+// runCollector so a test can drive it directly against an httptest server
+// and a fake Sink without a ticker in the way.
+//
+// Timestamps are taken here, at the collector, rather than trusting the
+// source's own clock or a value embedded in the response — as the
+// original mini-scada historian did. That means a sample can carry up to
+// one interval's jitter relative to when the controller actually scanned
+// it (network + JSON decode latency), which is acceptable for trend
+// charts but worth knowing if sub-second alignment ever matters.
+func collectOnce(hc *http.Client, sink hist.Sink, source string, patterns []string) {
+	resp, err := hc.Get(source + "/api/state")
+	if err != nil {
+		// Source momentarily unreachable — e.g. mid-failover, where the
+		// standby proxy means the Service answers again in seconds. Skip
+		// this tick and try again next interval rather than erroring out.
+		return
+	}
+	defer resp.Body.Close()
+	var frame frameTagsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&frame); err != nil {
+		return
+	}
+	sample := sampleOf(frame.Tags, patterns)
+	if err := sink.Insert(time.Now(), sample); err != nil {
+		fmt.Fprintf(os.Stderr, "nautilus historian: insert: %v\n", err)
+	}
+}
+
+func pruneLoop(ctx context.Context, store *hist.Store, keep time.Duration) {
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := store.Prune(keep); err != nil {
+				fmt.Fprintf(os.Stderr, "nautilus historian: prune: %v\n", err)
+			}
+		}
+	}
+}
+
+type historianServer struct{ store *hist.Store }
+
+func (s *historianServer) handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /history", s.handleQuery)
+	mux.HandleFunc("GET /history/span", s.handleSpan)
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
+	return mux
+}
+
+func (s *historianServer) handleQuery(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	to := parseMsHist(q.Get("to"), time.Now())
+	from := parseMsHist(q.Get("from"), to.Add(-time.Hour))
+	maxPoints, _ := strconv.Atoi(q.Get("maxPoints"))
+	// Unlike the original (which defaulted to its hardcoded 7-tag list),
+	// there is no fixed tag set to fall back to here — an empty/missing
+	// tags param yields an empty series map rather than guessing.
+	tags := splitCSVHist(q.Get("tags"))
+	series, err := s.store.Query(from, to, tags, maxPoints)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"from": from.UnixMilli(), "to": to.UnixMilli(), "series": series,
+	})
+}
+
+func (s *historianServer) handleSpan(w http.ResponseWriter, r *http.Request) {
+	first, last, count, err := s.store.Span()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"first": first.UnixMilli(), "last": last.UnixMilli(), "count": count,
+	})
+}
+
+func parseMsHist(s string, def time.Time) time.Time {
+	if s == "" {
+		return def
+	}
+	ms, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return def
+	}
+	return time.UnixMilli(ms)
+}
+
+// splitCSVHist splits a comma-separated flag/query value, dropping empty
+// fields (so a trailing comma or empty string yields no elements).
+func splitCSVHist(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func envDefault(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}

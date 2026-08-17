@@ -52,6 +52,8 @@ Usage:
   nautilus pull           Pull a controller's online edits back into the
                           program file (--host <controller>). Inverse of the
                           VS Code "Download Program to Controller" command.
+  nautilus historian      Archive a controller's tags into Postgres and
+                          serve downsampled history (-source, -db).
   nautilus fbd graph <f>  Emit a .fbd file's diagram render model as JSON
                           (used by the VS Code FBD preview).
   nautilus sfc check <f>  Parse a .sfc file and run its structural checks
@@ -92,6 +94,8 @@ func main() {
 		os.Exit(runTags(os.Args[2:]))
 	case "pull":
 		os.Exit(runPull(os.Args[2:]))
+	case "historian":
+		os.Exit(runHistorian(os.Args[2:]))
 	case "fbd":
 		os.Exit(runFBD(os.Args[2:]))
 	case "ld":
