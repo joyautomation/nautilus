@@ -121,8 +121,11 @@ func assertNoFailures(t *testing.T, path string) {
 	if err != nil {
 		t.Fatalf("read TCK results: %v", err)
 	}
+	// The harness emits runner.Result, whose id field is "assertion_id" —
+	// `json:"id"` silently decoded to "" and every reported failure came out
+	// nameless.
 	var items []struct {
-		ID     string `json:"id"`
+		ID     string `json:"assertion_id"`
 		Status string `json:"status"`
 		Detail string `json:"detail"`
 	}
