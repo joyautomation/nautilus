@@ -319,7 +319,8 @@ func scalarRange(n *yaml.Node) Range {
 
 // identOccurrences finds every identifier in text equal (case-insensitively)
 // to name, skipping (* block *) and // line comments and 'string' / "string"
-// literals. Ranges are 0-based LSP ranges.
+// literals. Block comments nest per IEC 61131-3 3rd edition. Ranges are
+// 0-based LSP ranges.
 func identOccurrences(text, name string) []Range {
 	var out []Range
 	line, col := 0, 0
@@ -339,11 +340,25 @@ func identOccurrences(text, name string) []Range {
 		c := text[i]
 		switch {
 		case c == '(' && i+1 < len(text) && text[i+1] == '*':
-			end := strings.Index(text[i+2:], "*)")
-			if end < 0 {
-				return out
+			// Skip nested block comment: (* ... (*  ... *) ... *)
+			depth := 1
+			advance(2) // consume the opening (*
+			for i < len(text) && depth > 0 {
+				switch {
+				case text[i] == '(' && i+1 < len(text) && text[i+1] == '*':
+					depth++
+					advance(2)
+				case text[i] == '*' && i+1 < len(text) && text[i+1] == ')':
+					depth--
+					advance(2)
+				case text[i] == '\n':
+					line++
+					col = 0
+					i++
+				default:
+					advance(1)
+				}
 			}
-			advance(end + 4)
 		case c == '/' && i+1 < len(text) && text[i+1] == '/':
 			end := strings.IndexByte(text[i:], '\n')
 			if end < 0 {

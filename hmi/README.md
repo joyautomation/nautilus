@@ -88,6 +88,78 @@ await rt.writeTag('P101', { LVL: { CTL1HSP: 60 } }); // several members at once 
 await rt.writeTag('TempSP', 65, { token }); // cross-origin writer
 ```
 
+## Alarms
+
+A nautilus controller built with an `alarm/` engine (definitions computed from BOOL tags, ISA-18.2
+state) serves it at `GET /api/alarms*` and rides a counts-only `alarms` summary on every stream
+frame. `createAlarmClient` wires the two together; `AlarmBanner` / `AlarmTable` / `AlarmJournal`
+render what it exposes. **Same house rule as everything else in the kit: components take props and
+emit callbacks, and never call fetch themselves** — only `alarms.ts`'s client does. Types and JSON
+shapes are contracted against `docs/design/alarms.md` (see `src/lib/alarms.ts`).
+
+```svelte
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import {
+		createRealtimeClient,
+		createAlarmClient,
+		AlarmBanner,
+		AlarmTable,
+		toast,
+		type NautilusFrame
+	} from '@joyautomation/nautilus-hmi';
+
+	const rt = createRealtimeClient<NautilusFrame>();
+	const alarms = createAlarmClient(rt, { url: '/api/alarms' });
+
+	onMount(() => {
+		rt.start();
+		alarms.start(); // seed the list; frame.alarms.rev drives refetches from here
+		return () => {
+			rt.stop();
+			alarms.stop();
+		};
+	});
+</script>
+
+<AlarmBanner summary={alarms.summary} now={Date.now()} onclick={() => goto('/alarms')} />
+
+{#if alarms.supported}
+	<AlarmTable
+		alarms={alarms.instances}
+		operator="rchon"
+		onack={(ids, by) => alarms.ack(ids[0] === '*' ? 'all' : ids, by).then(() => toast.success('acked'))}
+		onshelve={(id, until, by) => alarms.shelve(id, (until - Date.now()) / 1000, by)}
+		onunshelve={(id, by) => alarms.unshelve(id, by)}
+		onselect={(a) => goto(`/faceplate/${a.id}`)}
+	/>
+{:else}
+	<p>This controller has no alarm engine configured.</p>
+{/if}
+```
+
+`AlarmClient` (returned by `createAlarmClient`) exposes:
+
+- `instances` — the full active + unack-RTN + shelved list from the last successful fetch;
+  `active` / `shelved` are derived filters over it.
+- `summary` — updated from *every* frame that carries `frame.alarms` (cheap: it's counts only); the
+  full list is only refetched from `GET /api/alarms` when `frame.alarms.rev` changes, per
+  `shouldRefetch` (exported, unit-testable in isolation from any network or component).
+- `supported` — flips to `false` if `GET /api/alarms` 404s, i.e. this controller was built with no
+  alarm definitions. Starts `true` until the first response lands.
+- `ack(ids | 'all', by)`, `shelve(id, seconds, by)`, `unshelve(id, by)`, `journal(from, to, filters)`.
+
+`AlarmTable`'s columns, widths, and default sort (Active Time, descending) come verbatim from the
+Perspective view the brief was reverse-engineered from: Priority | Active Time | State | Label |
+Pipeline | Ack Time | Ack User. State colors follow the reserved status tokens
+(`--crit`/`--serious`/`--warn`/`--ink-2`/`--muted`) and are never color-alone — every state and
+priority also carries a label and a glyph, same convention as `ConnectionBadge`'s `STATE_META`.
+2,000+ row lists are handled with simple pagination rather than a virtualization dependency.
+`AlarmJournal` takes a `from`/`to` (epoch ms) range plus an `onrange` callback so the host re-fetches
+via `alarms.journal(...)` and hands back fresh `events`; its CSV export is a client-side
+`Blob`/`URL.createObjectURL` download — this is an ordinary web app, not a sandboxed artifact, so
+`<a download>` works fine here.
+
 ## Theming
 
 Every component reads tokens from `theme.css`. Flip the whole HMI between light and dark by stamping
@@ -122,6 +194,9 @@ touching component source. The `motion` store / `MotionSwitch` do the same for r
 | `Sparkline` | `values: number[]`, `color`, `height`, `yMin`, `yMax` |
 | `Histogram` | `counts: number[]`, `bucketWidth`, `unit`, `height`, `color` |
 | `NumberField` | `label`, `unit`, `value`, `min`, `max`, `step`, `onsubmit(v)` |
+| `AlarmBanner` | `summary: AlarmSummary`, `now`, `onclick?`, `href?` |
+| `AlarmTable` | `alarms: AlarmInstance[]`, `sites?`, `now`, `onack(ids,by)`, `onshelve(id,until,by)`, `onunshelve?(id,by)`, `shelveTimes?`, `operator?`, `onselect?(instance)`, `pageSize?` |
+| `AlarmJournal` | `events: AlarmEvent[]`, `from`, `to`, `onrange(from,to)`, `sites?`, `loading?` |
 
 ## Building the package
 

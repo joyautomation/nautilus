@@ -21,7 +21,10 @@
           "end": "\\*\\)",
           "captures": {
             "0": { "name": "punctuation.definition.comment.iec-st" }
-          }
+          },
+          "patterns": [
+            { "include": "#block-comment" }
+          ]
         },
         {
           "name": "comment.line.double-slash.iec-st",
@@ -30,6 +33,21 @@
           "beginCaptures": {
             "0": { "name": "punctuation.definition.comment.iec-st" }
           }
+        }
+      ]
+    },
+    "block-comment": {
+      "patterns": [
+        {
+          "name": "comment.block.iec-st",
+          "begin": "\\(\\*",
+          "end": "\\*\\)",
+          "captures": {
+            "0": { "name": "punctuation.definition.comment.iec-st" }
+          },
+          "patterns": [
+            { "include": "#block-comment" }
+          ]
         }
       ]
     },
