@@ -16,6 +16,7 @@ line/rung**, never a silent coercion.
 - [Type conversions](#type-conversions)
 - [Standard function blocks](#standard-function-blocks)
 - [User function blocks](#user-function-blocks)
+- [Function blocks in ladder](#function-blocks-in-ladder)
 
 ## How a scan evaluates
 
@@ -243,10 +244,26 @@ parentheses:
 | `R_TRIG`, `F_TRIG` | `CLK` | `Q` |
 | `SR` | `S1` | `Q1` |
 | `RS` | `S` | `Q1` |
-| user FUNCTION_BLOCK | `IN` | `Q` |
+| user FUNCTION_BLOCK | `EN`, else the first **BOOL** `VAR_INPUT` the call doesn't bind by name | `ENO`, else the first **BOOL** `VAR_OUTPUT` |
 
 Passing the power pin explicitly in the argument list (`t1:TON(IN := x)`)
 is an error — power owns it.
+
+A user block's pins are resolved from the **whole compile** — this file's
+own `FUNCTION_BLOCK`s plus every project library — so the rung lands power
+where the block actually declares it. Two shapes have no pin to use, and
+both are meaningful:
+
+- **No power-in** — every BOOL input is bound by name, or the block has
+  none. The block is still called, unconditionally, so it may only sit on
+  a rung whose condition is the rail itself. A rung with contacts ahead of
+  it is a compile error (`no free BOOL input for the rung's power`): say
+  which pin the gate lands on, or give the block an `EN`.
+- **No power-out** — the block has no BOOL output. Power **passes
+  through** unchanged, so whatever conditioned the block still conditions
+  the coils to its right.
+
+A block whose type nothing in the compile declares falls back to `IN`/`Q`.
 
 ### PID: closed-loop control
 
@@ -377,3 +394,92 @@ single return value, and the compiler says so.
 `VAR_IN_OUT` pins are ST/FBD-callable; the FBD and ladder editors expose a
 block's `VAR_INPUT`/`VAR_OUTPUT` pins only, so a block meant to be wired
 graphically should keep its interface on those.
+
+## Function blocks in ladder
+
+A `.ld` file may **define** `FUNCTION_BLOCK`s as well as (or instead of) a
+`PROGRAM`. Each one is an ordinary IEC POU whose body happens to be rungs:
+
+```
+FUNCTION_BLOCK PumpSeq
+VAR_INPUT  Start : BOOL; Stop : BOOL; Level : REAL; StopLevel : REAL; END_VAR
+VAR_OUTPUT Run : BOOL; Warm : BOOL; END_VAR
+VAR        t1 : TON; END_VAR
+LD
+  RUNG seal  [ Start | Run ] /Stop /GE(Level, StopLevel) ( Run )
+  RUNG warm  Run t1:TON(PT := T#5S) ( Warm )
+END_LD
+END_FUNCTION_BLOCK
+```
+
+This is what ladder has instead of a JSR: a subroutine with a real
+interface — pins, not shared tags — and its own retained state **per
+instance**. Two pumps are two instances of one block, each with its own
+seal-in and its own `t1`.
+
+The `VAR_*` sections are ordinary POU declarations, `VAR_IN_OUT` included,
+so a ladder block can take a UDT by reference the same way an ST one does
+(see [VAR_IN_OUT is a reference pin](#var_in_out-is-a-reference-pin)). The
+LD body lowers through the usual single hop — LD → FBD netlist → ST — so
+by the time the compiler sees it, it is an ordinary
+`FUNCTION_BLOCK … END_FUNCTION_BLOCK`. There is no special case anywhere
+downstream.
+
+### Calling one
+
+From ladder, with the rung's power on the block's power-in pin and `=>`
+capturing outputs (the same `inst:TYPE(args)` syntax the standard blocks
+use — see [Power pins in ladder](#power-pins-in-ladder) for where power
+lands on a user block):
+
+```
+RUNG lead
+  P101Start p101:PumpSeq(Stop := P101Stop, Level := LevelPct,
+                         StopLevel := StopLevel,
+                         Run => P101Run, Warm => P101Warm)
+```
+
+From ST or FBD, like any other block:
+
+```iecst
+VAR p : PumpSeq; END_VAR
+p(Start := Cmd, Stop := Halt, Level := LevelPct, StopLevel := 80.0);
+PumpRun := p.Run;
+```
+
+An FB instance a rung declares inline (`t1:TON(...)`) needs no separate
+`VAR` entry — but writing one, as the block above does, is fine and often
+clearer: a declaration in the POU's own header wins, and the rung is then
+a call on it rather than a second declaration.
+
+### A `.ld` library
+
+A `.ld` file with **no PROGRAM** is a project library, exactly like a
+PROGRAM-less `.st` file. Its blocks join the prelude ahead of every task,
+so any program in the project — in any language — can instantiate them.
+`.fbd` libraries work the same way.
+
+**Composition order.** Every `.st` library first, in file-name order, then
+every transpiled `.ld` / `.fbd` library, in file-name order. ST leads
+because that is where a project's `TYPE` declarations live and a graphical
+block's pin may name a UDT. Order never decides whether a call *resolves*:
+the ST front-end registers every `FUNCTION_BLOCK` signature in the composed
+source before it lowers any body, so blocks may reference each other in
+either direction, across files. What order decides is only which
+declaration a duplicate-name collision reports.
+
+Two names, one error: declaring the same `FUNCTION_BLOCK` twice in one
+`.ld` file is refused with the second declaration's line, before anything
+is transpiled.
+
+`examples/ladder-subroutines` is the whole feature in four small files.
+
+### What the editors do
+
+The ladder view renders a file's blocks as rung groups, each under its own
+`FUNCTION_BLOCK` heading with its pins, and every rung in them edits like
+any other. Two limits worth knowing: an edit op addresses a rung by
+**name**, so two rungs with the same name in different POUs of one file
+resolve to the first — name them distinctly; and `addRung` with no `after`
+appends before the file's **first** `END_LD`. The language server analyses
+a multi-POU `.ld` fully, diagnostics landing on the offending rung.

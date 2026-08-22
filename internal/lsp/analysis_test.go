@@ -3,6 +3,8 @@ package lsp
 import (
 	"strings"
 	"testing"
+
+	"github.com/joyautomation/nautilus/internal/stproject"
 )
 
 // Note: the parser only recognizes FUNCTION_BLOCK declarations before
@@ -590,5 +592,76 @@ func TestAnalyzeSFCStepPseudoSymbol(t *testing.T) {
 	labels := labelsOf(a.memberCompletions(typ))
 	if !contains(labels, "X") || !contains(labels, "T") {
 		t.Errorf("Fill. completions = %v, want X and T", labels)
+	}
+}
+
+// A `.ld` file that DEFINES FUNCTION_BLOCKs analyses cleanly, and a
+// diagnostic inside a block's rung lands on that rung — the LD → FBD → ST
+// line map composes through the extra POU exactly as it does for one.
+func TestAnalyzeLDFunctionBlocks(t *testing.T) {
+	clean := `FUNCTION_BLOCK PumpSeq
+VAR_INPUT  Start : BOOL; Stop : BOOL; END_VAR
+VAR_OUTPUT Run : BOOL; END_VAR
+LD
+  RUNG seal  [ Start | Run ] /Stop ( Run )
+END_LD
+END_FUNCTION_BLOCK
+
+PROGRAM Main
+VAR_EXTERNAL Cmd : BOOL; Halt : BOOL; Motor : BOOL; END_VAR
+VAR p1 : PumpSeq; END_VAR
+LD
+  RUNG call  Cmd p1:PumpSeq(Stop := Halt, Run => Motor)
+END_LD
+END_PROGRAM
+`
+	if a := analyzeLD(clean, "", 0); len(a.Diags) != 0 {
+		t.Fatalf("expected no diagnostics, got %v", a.Diags)
+	}
+
+	// An undeclared reference inside the BLOCK's rung (0-based line 4).
+	bad := strings.Replace(clean, "/Stop ( Run )", "/bogus ( Run )", 1)
+	a := analyzeLD(bad, "", 0)
+	if len(a.Diags) != 1 {
+		t.Fatalf("expected 1 diagnostic, got %v", a.Diags)
+	}
+	if !strings.Contains(a.Diags[0].Message, "undeclared identifier") {
+		t.Errorf("message = %q", a.Diags[0].Message)
+	}
+	if got := a.Diags[0].Range.Start.Line; got != 4 {
+		t.Errorf("diagnostic on 0-based line %d, want 4 (the block's rung)", got)
+	}
+}
+
+// A library `.ld` — FUNCTION_BLOCKs, no PROGRAM — analyses on its own, and
+// a program that calls one resolves it through the prelude.
+func TestAnalyzeLDLibraryAndCaller(t *testing.T) {
+	lib := `FUNCTION_BLOCK PumpSeq
+VAR_INPUT  Start : BOOL; Stop : BOOL; END_VAR
+VAR_OUTPUT Run : BOOL; END_VAR
+LD
+  RUNG seal  [ Start | Run ] /Stop ( Run )
+END_LD
+END_FUNCTION_BLOCK
+`
+	if a := analyzeLD(lib, "", 0); len(a.Diags) != 0 {
+		t.Fatalf("a PROGRAM-less ladder library should analyse clean: %v", a.Diags)
+	}
+	// The prelude a project composition would hand the caller.
+	prelude, err := stproject.LibraryST("blocks.ld", lib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caller := `PROGRAM Main
+VAR_EXTERNAL Cmd : BOOL; Halt : BOOL; Motor : BOOL; END_VAR
+VAR p1 : PumpSeq; END_VAR
+LD
+  RUNG call  Cmd p1:PumpSeq(Stop := Halt, Run => Motor)
+END_LD
+END_PROGRAM
+`
+	a := analyzeLD(caller, prelude, strings.Count(prelude, "\n"))
+	if len(a.Diags) != 0 {
+		t.Fatalf("calling a library block should analyse clean: %v", a.Diags)
 	}
 }

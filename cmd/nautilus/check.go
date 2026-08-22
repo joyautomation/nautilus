@@ -82,6 +82,12 @@ func runCheck(args []string) int {
 			return 2
 		}
 		source := string(src)
+		// Sibling library files (TYPE/FB/FUNCTION-only .st, and .ld/.fbd
+		// files with no PROGRAM) are in scope, exactly as the LSP and a
+		// runtime that composes sources see it. They are resolved BEFORE the
+		// transpile hops below because a ladder rung needs a user block's
+		// signature to know which pins its power uses.
+		prelude, libSources, preludeLines := stproject.PreludeSources(f, nil)
 		// Graphical languages compile by transpiling toward ST — LD to the
 		// FBD netlist, FBD to ST — then check exactly like an .st file; the
 		// composed line maps project diagnostic positions back onto the
@@ -119,7 +125,7 @@ func runCheck(args []string) int {
 			source, lineMap = stSrc, lm
 		}
 		if strings.EqualFold(filepath.Ext(f), ".ld") {
-			fbdSrc, lm, terr := ld.TranspileWithLines(source)
+			fbdSrc, lm, terr := ld.TranspileWithLines(source, libSources...)
 			if terr != nil {
 				bad++
 				fmt.Printf("%s: %s\n", f, terr.Error())
@@ -150,10 +156,6 @@ func runCheck(args []string) int {
 			}
 			source, lineMap = stSrc, lm
 		}
-		// Sibling library files (TYPE/FB/FUNCTION-only .st in the same
-		// directory) are in scope, exactly as the LSP and a runtime that
-		// concatenates sources see it.
-		prelude, preludeLines := stproject.Prelude(f, nil)
 		if msg, pos, failed := compileErr(source, prelude, preludeLines); failed {
 			bad++
 			if lineMap != nil {

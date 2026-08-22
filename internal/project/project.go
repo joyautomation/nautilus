@@ -21,6 +21,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/joyautomation/nautilus/eip"
+	"github.com/joyautomation/nautilus/internal/stproject"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/runtime"
@@ -564,27 +565,73 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	}, nil
 }
 
+// libraries composes the project's prelude: every root-level file with no
+// PROGRAM. `.st` files join verbatim, in name order; then `.ld` and `.fbd`
+// files — libraries of ladder / netlist FUNCTION_BLOCKs, the IEC answer to
+// a JSR — transpiled to ST, also in name order. See internal/stproject for
+// why that tier order, and why it never decides whether a call resolves.
+//
+// Unlike the editor-side composition, a library that will not transpile is
+// an ERROR here: this is the path `nautilus check`, `run`, and `build` take,
+// and silently dropping a block would fail later as "unknown type".
 func libraries(fsys fs.FS) ([]string, error) {
 	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
 		return nil, err
 	}
-	var names []string
+	var stNames, gNames []string
 	for _, e := range entries {
-		if !e.IsDir() && strings.EqualFold(path.Ext(e.Name()), ".st") {
-			names = append(names, e.Name())
+		if e.IsDir() {
+			continue
+		}
+		switch {
+		case strings.EqualFold(path.Ext(e.Name()), ".st"):
+			stNames = append(stNames, e.Name())
+		case stproject.IsGraphicalLibrary(e.Name()):
+			gNames = append(gNames, e.Name())
 		}
 	}
-	sort.Strings(names)
-	var libs []string
-	for _, n := range names {
+	sort.Strings(stNames)
+	sort.Strings(gNames)
+
+	// Read every library as written first: a ladder library resolves the
+	// blocks its siblings declare, in either direction.
+	type libFile struct{ name, src string }
+	var stLibs, gLibs []libFile
+	var sources []string
+	for _, n := range stNames {
 		src, err := fs.ReadFile(fsys, n)
 		if err != nil {
 			return nil, err
 		}
-		if !hasProgramDecl(src) {
-			libs = append(libs, string(src))
+		if hasProgramDecl(src) {
+			continue
 		}
+		stLibs = append(stLibs, libFile{n, string(src)})
+		sources = append(sources, string(src))
+	}
+	for _, n := range gNames {
+		src, err := fs.ReadFile(fsys, n)
+		if err != nil {
+			return nil, err
+		}
+		if hasProgramDecl(src) {
+			continue
+		}
+		gLibs = append(gLibs, libFile{n, string(src)})
+		sources = append(sources, string(src))
+	}
+
+	var libs []string
+	for _, l := range stLibs {
+		libs = append(libs, l.src)
+	}
+	for _, l := range gLibs {
+		stSrc, err := stproject.LibraryST(l.name, l.src, sources...)
+		if err != nil {
+			return nil, err
+		}
+		libs = append(libs, stSrc)
 	}
 	return libs, nil
 }

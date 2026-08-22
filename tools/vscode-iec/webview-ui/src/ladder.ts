@@ -29,10 +29,25 @@ export type LdRung = {
 	endLine?: number;
 	elements: LdElement[];
 	coils: LdElement[];
+	/** The FUNCTION_BLOCK this rung belongs to; absent for the PROGRAM's
+	 * own rungs. A .ld file may define ladder subroutines alongside (or
+	 * instead of) its program — see docs/functions.md. */
+	pou?: string;
+	/** The rung's elements sit on the RUNG header line itself. */
+	inline?: boolean;
 };
-export type LdVar = { name: string; type: string; init?: string; section: string; line: number };
+export type LdPin = { name: string; type: string; dir: 'in' | 'out' };
+/** A FUNCTION_BLOCK POU defined in the file: a group of rungs. */
+export type LdBlock = { name: string; line: number; endLine: number; pins?: LdPin[] };
+export type LdVar = { name: string; type: string; init?: string; section: string; line: number; pou?: string };
 export type LdComment = { line: number; endLine: number; text: string };
-export type LdModel = { name: string; vars?: LdVar[]; rungs: LdRung[]; comments?: LdComment[] };
+export type LdModel = {
+	name: string;
+	vars?: LdVar[];
+	rungs: LdRung[];
+	comments?: LdComment[];
+	blocks?: LdBlock[];
+};
 
 /** One element annotated with its power state. */
 export type Ann = {

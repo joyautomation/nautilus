@@ -29,10 +29,13 @@
 //	[ a | b ]     parallel branch (legs are series; branches nest)
 //	FN(args)      a function used as a contact: GT(TempC, 90.0)
 //	inst:TYPE(…)  a function block in the rung: power drives its boolean
-//	              input (IN for timers, CU/CD for counters, CLK for edges),
-//	              power continues from its boolean output (Q). A rung
-//	              needs at least one coil or function block — the block's
-//	              own output (inst.Q, inst.ET, …) is a legal sole output.
+//	              input (IN for timers, CU/CD for counters, CLK for edges;
+//	              for a USER block, EN if it declares one, else its first
+//	              BOOL VAR_INPUT the call doesn't bind by name), power
+//	              continues from its boolean output (Q; for a user block,
+//	              ENO or its first BOOL VAR_OUTPUT). A rung needs at least
+//	              one coil or function block — the block's own output
+//	              (inst.Q, inst.ET, …) is a legal sole output.
 //	( Name )      output coil: Name := rung condition
 //	( S Name )    set coil:    Name := OR(Name, condition)  — latches
 //	( R Name )    reset coil:  Name := AND(Name, NOT condition)
@@ -62,6 +65,39 @@
 // alone. Split such a rung into one nautilus rung per output leg instead
 // (each keeping the source rung's identity, e.g. a letter suffix).
 //
+// A rung's elements may sit on its RUNG header line — the compact form a
+// short subroutine reads best in — or start on the next line and run over
+// as many as they need. Both are the same rung.
+//
+// # Function blocks written in ladder
+//
+// A `.ld` file may DEFINE FUNCTION_BLOCKs as well as (or instead of) a
+// PROGRAM. Each block is an ordinary IEC POU whose body happens to be
+// rungs:
+//
+//	FUNCTION_BLOCK PumpSeq
+//	VAR_INPUT  Start : BOOL; Level : REAL; END_VAR
+//	VAR_OUTPUT Run : BOOL; END_VAR
+//	VAR        t1 : TON; END_VAR
+//	LD
+//	  RUNG seal  [ Start | Run ] /Stop ( Run )
+//	  RUNG dly   Run t1:TON(PT := T#5S)
+//	END_LD
+//	END_FUNCTION_BLOCK
+//
+// The VAR_* sections pass through untouched (VAR_IN_OUT included, so a
+// block can take a struct by reference), the LD body becomes an FBD
+// netlist like any other, and lang/fbd emits an ordinary ST
+// `FUNCTION_BLOCK … END_FUNCTION_BLOCK`. Nothing downstream has a special
+// case: ST, FBD and ladder all instantiate it the same way, and the ST
+// compiler type-checks every pin. A `.ld` file with no PROGRAM is a
+// project LIBRARY, exactly like a PROGRAM-less `.st` — see
+// internal/stproject for the composition and its order.
+//
+// This is what ladder has instead of a JSR: a subroutine with a real
+// interface and per-instance retained state, callable as many times as
+// you like.
+//
 // Compilation is a single hop: LD emits an FBD netlist, so the whole FBD
 // toolchain — the function vocabulary, user FUNCTION_BLOCKs, arrays, the
 // ST lowering, and exact diagnostics — is inherited rather than rebuilt.
@@ -76,7 +112,11 @@ import (
 var (
 	ldStartRe = regexp.MustCompile(`(?i)^\s*LD\s*$`)
 	ldEndRe   = regexp.MustCompile(`(?i)^\s*END_LD\s*$`)
-	rungRe    = regexp.MustCompile(`(?i)^\s*RUNG(?:\s+([A-Za-z_][A-Za-z0-9_]*))?\s*(?:\(\*\s*(.*?)\s*\*\)\s*)?$`)
+	// A RUNG header: the keyword, an optional name, an optional (* … *)
+	// comment, and — optionally — the rung's elements on the SAME line.
+	// A one-line rung reads well when it is short; the elements may also
+	// start on the next line and run over as many as they need.
+	rungRe = regexp.MustCompile(`(?i)^\s*RUNG\b(?:\s+([A-Za-z_][A-Za-z0-9_]*))?\s*(?:\(\*\s*(.*?)\s*\*\)\s*)?(.*)$`)
 )
 
 // HasBlock reports whether source contains an LD … END_LD body.
@@ -89,15 +129,23 @@ func HasBlock(src string) bool {
 	return false
 }
 
-// Transpile rewrites an LD program as an FBD-netlist program.
-func Transpile(src string) (string, error) {
-	out, _, err := TranspileWithLines(src)
+// Transpile rewrites an LD file as an FBD-netlist file. libs are project
+// library sources (ST or LD) whose FUNCTION_BLOCK signatures are in scope —
+// what a rung needs to know where a user block's power pins are. Passing
+// none is fine: blocks defined in this same file resolve either way, and an
+// unresolved type keeps the IN/Q default.
+func Transpile(src string, libs ...string) (string, error) {
+	out, _, err := TranspileWithLines(src, libs...)
 	return out, err
 }
 
 // TranspileWithLines also returns, for each 1-based output line, the
 // 1-based source line it came from — diagnostics map back through it.
-func TranspileWithLines(src string) (string, []int, error) {
+func TranspileWithLines(src string, libs ...string) (string, []int, error) {
+	if err := checkDuplicateFBs(src); err != nil {
+		return "", nil, err
+	}
+	res := newResolver(src, libs)
 	lines := strings.Split(src, "\n")
 	var out []string
 	var lineOf []int
@@ -112,7 +160,7 @@ func TranspileWithLines(src string) (string, []int, error) {
 		if rung == nil {
 			return nil
 		}
-		stmts, err := rung.compile()
+		stmts, err := rung.compile(res)
 		if err != nil {
 			return err
 		}
@@ -145,7 +193,7 @@ func TranspileWithLines(src string) (string, []int, error) {
 				if name == "" {
 					name = fmt.Sprintf("rung%d", n)
 				}
-				rung = &rungParse{name: name, line: n}
+				rung = &rungParse{name: name, line: n, text: strings.TrimSpace(m[3])}
 				// A named rung reads as a comment above its network.
 				emit("  // RUNG "+name, n)
 			} else if trimmed == "" || strings.HasPrefix(trimmed, "//") {
@@ -179,6 +227,11 @@ type rungParse struct {
 	comment string // the header's (* … *) text, if any
 	line    int
 	text    string // the rung's element text, newlines collapsed
+	pou     string // owning FUNCTION_BLOCK, "" for the file's PROGRAM
+	// A one-line rung carries elements on the RUNG header itself:
+	// headText is that inline text, bodyCol its 1-based column.
+	headText string
+	bodyCol  int
 }
 
 // element kinds
@@ -242,8 +295,28 @@ func sanitizeIdent(s string) string {
 	return s
 }
 
+// checkDuplicateFBs reports a FUNCTION_BLOCK name declared twice in one
+// file. The ST compiler catches it too, but only after the whole file has
+// been transpiled — and it cannot say which LADDER line the second one is
+// on, which is the only thing the author wants to know.
+func checkDuplicateFBs(src string) error {
+	seen := map[string]int{}
+	for i, l := range strings.Split(src, "\n") {
+		m := fbStartRe.FindStringSubmatch(l)
+		if m == nil {
+			continue
+		}
+		key := strings.ToUpper(m[1])
+		if prev, dup := seen[key]; dup {
+			return fmt.Errorf("ld: line %d: FUNCTION_BLOCK %s is already declared on line %d", i+1, m[1], prev)
+		}
+		seen[key] = i + 1
+	}
+	return nil
+}
+
 // compile parses the rung text and emits FBD statements.
-func (r *rungParse) compile() ([]string, error) {
+func (r *rungParse) compile(res *resolver) ([]string, error) {
 	p := &rungTok{src: r.text, line: r.line}
 	elems, err := p.series(false)
 	if err != nil {
@@ -278,7 +351,7 @@ func (r *rungParse) compile() ([]string, error) {
 
 	ec := &edgeCtx{rung: r.name, seen: map[string]int{}}
 	var stmts []string
-	cond, err := seriesCond(elems[:condEnd], ec, &stmts)
+	cond, err := seriesCond(elems[:condEnd], ec, &stmts, res)
 	if err != nil {
 		return nil, fmt.Errorf("ld: rung %s (line %d): %w", r.name, r.line, err)
 	}
@@ -331,8 +404,9 @@ func hasFB(elems []any) bool {
 
 // seriesCond folds condition elements into one FBD expression, emitting FB
 // declarations along the way (power flows through their boolean pins).
-// ec names any implicit edge-trigger instances the elements introduce.
-func seriesCond(elems []any, ec *edgeCtx, stmts *[]string) (string, error) {
+// ec names any implicit edge-trigger instances the elements introduce; res
+// resolves a user block's power pins.
+func seriesCond(elems []any, ec *edgeCtx, stmts *[]string, res *resolver) (string, error) {
 	parts := []string{}
 	flush := func() string {
 		switch len(parts) {
@@ -369,7 +443,7 @@ func seriesCond(elems []any, ec *edgeCtx, stmts *[]string) (string, error) {
 		case branch:
 			var legs []string
 			for _, leg := range x.legs {
-				lc, err := seriesCond(leg, ec, stmts)
+				lc, err := seriesCond(leg, ec, stmts, res)
 				if err != nil {
 					return "", err
 				}
@@ -377,41 +451,41 @@ func seriesCond(elems []any, ec *edgeCtx, stmts *[]string) (string, error) {
 			}
 			parts = append(parts, "OR("+strings.Join(legs, ", ")+")")
 		case fbEl:
-			in, out := powerPins(x.typ)
-			if containsPin(x.args, in) {
-				return "", fmt.Errorf("%s: the rung's power drives %s — don't pass it as an argument", x.inst, in)
+			in, out := res.powerPins(x.typ, x.args)
+			switch {
+			case in == "":
+				// Nothing left for power to drive: every BOOL input is
+				// bound by name (or the block has none). The block is
+				// still called — unconditionally — so a rung that MEANT
+				// to gate it must say which pin the gate lands on.
+				if len(parts) > 0 {
+					return "", fmt.Errorf("%s: %s has no free BOOL input for the rung's power — "+
+						"leave its power pin unbound, or give the block an EN input", x.inst, x.typ)
+				}
+				args := strings.TrimSpace(x.args)
+				*stmts = append(*stmts, fmt.Sprintf("%s : %s(%s)", x.inst, x.typ, args))
+			default:
+				if containsPin(x.args, in) {
+					return "", fmt.Errorf("%s: the rung's power drives %s — don't pass it as an argument", x.inst, in)
+				}
+				args := in + " := " + flush()
+				if strings.TrimSpace(x.args) != "" {
+					args += ", " + x.args
+				}
+				*stmts = append(*stmts, fmt.Sprintf("%s : %s(%s)", x.inst, x.typ, args))
 			}
-			args := in + " := " + flush()
-			if strings.TrimSpace(x.args) != "" {
-				args += ", " + x.args
+			if out == "" {
+				// No BOOL output — power passes through unchanged, so
+				// whatever conditioned the block still conditions what
+				// follows it. (An unconditioned block leaves the rail.)
+				continue
 			}
-			*stmts = append(*stmts, fmt.Sprintf("%s : %s(%s)", x.inst, x.typ, args))
 			parts = []string{x.inst + "." + out}
 		default:
 			return "", fmt.Errorf("unexpected element %T", e)
 		}
 	}
 	return flush(), nil
-}
-
-// powerPins is the boolean in/out pin a rung's power rail connects on each
-// standard block; unknown (user) blocks default to IN/Q.
-func powerPins(typ string) (in, out string) {
-	switch strings.ToUpper(typ) {
-	case "TON", "TOF", "TP":
-		return "IN", "Q"
-	case "CTU":
-		return "CU", "Q"
-	case "CTD":
-		return "CD", "Q"
-	case "R_TRIG", "F_TRIG":
-		return "CLK", "Q"
-	case "SR":
-		return "S1", "Q1"
-	case "RS":
-		return "S", "Q1"
-	}
-	return "IN", "Q"
 }
 
 func containsPin(args, pin string) bool {

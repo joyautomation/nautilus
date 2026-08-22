@@ -76,9 +76,11 @@ func refValid(s string) bool {
 	return err == nil && got == strings.TrimSpace(s) && t.peek() == ""
 }
 
-// ApplyEdit resolves op against source and returns the text edits.
-func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
-	m, err := Graph(src)
+// ApplyEdit resolves op against source and returns the text edits. libs
+// are the project's library sources, so an inserted user block records the
+// power pins it will really compile to.
+func ApplyEdit(src string, op EditOp, libs ...string) ([]TextEdit, error) {
+	m, err := Graph(src, libs...)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +96,7 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 	case "renameRung":
 		return opRenameRung(src, m, op)
 	case "move":
-		return opMove(m, op)
+		return opMove(src, m, op)
 	case "setComment":
 		return opSetComment(m, op)
 	case "addComment":
@@ -166,7 +168,7 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		if op.Element != nil {
 			uniquifyInsts(m, op.Element)
 		}
-		if err := opInsert(r, op); err != nil {
+		if err := opInsert(m, r, op); err != nil {
 			return nil, err
 		}
 	case "delete":
@@ -204,6 +206,29 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 
 	// The mutated rung re-prints canonically; the parse gate below keeps
 	// the never-break-the-text guarantee.
+	return rungEdit(src, r)
+}
+
+// rungEdit replaces a rung's element text with the canonical print of its
+// (mutated) model, keeping the rung's own layout: a one-line rung stays on
+// its RUNG header, a two-line rung keeps its indented body line.
+func rungEdit(src string, r *Rung) ([]TextEdit, error) {
+	if r.Inline {
+		body := printRung(r)
+		if _, err := parseRungText(body, r.Line); err != nil {
+			return nil, fmt.Errorf("ld edit: refused — the result would not parse: %w", err)
+		}
+		line := strings.Split(src, "\n")[r.Line-1]
+		endCol := len(line) + 1
+		endLine := r.Line
+		if r.EndLine > r.Line {
+			// Elements ran over onto following lines — they fold back onto
+			// the header, which is where this rung keeps them.
+			endLine, endCol = r.EndLine+1, 1
+			body += "\n"
+		}
+		return []TextEdit{{Line: r.Line, Col: r.bodyCol, EndLine: endLine, EndCol: endCol, NewText: body}}, nil
+	}
 	body := "    " + printRung(r)
 	if _, err := parseRungText(body, r.Line); err != nil {
 		return nil, fmt.Errorf("ld edit: refused — the result would not parse: %w", err)
@@ -215,7 +240,7 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 // it at the target (another spot in the same rung, or a different rung).
 // Index adjustment for same-series moves, and the re-parse gate on every
 // touched rung, keep the drag gesture unable to corrupt the text.
-func opMove(m *Model, op EditOp) ([]TextEdit, error) {
+func opMove(src string, m *Model, op EditOp) ([]TextEdit, error) {
 	from, err := findRung(m, op.Rung)
 	if err != nil {
 		return nil, err
@@ -312,11 +337,11 @@ func opMove(m *Model, op EditOp) ([]TextEdit, error) {
 	}
 	var edits []TextEdit
 	for _, r := range rungs {
-		body := "    " + printRung(r)
-		if _, err := parseRungText(body, r.Line); err != nil {
-			return nil, fmt.Errorf("ld edit: refused — the result would not parse: %w", err)
+		e, err := rungEdit(src, r)
+		if err != nil {
+			return nil, err
 		}
-		edits = append(edits, TextEdit{Line: r.Line + 1, Col: 1, EndLine: r.EndLine + 1, EndCol: 1, NewText: body + "\n"})
+		edits = append(edits, e...)
 	}
 	return edits, nil
 }
@@ -396,7 +421,7 @@ func locateSeries(r *Rung, path []int) (*[]Element, error) {
 	return series, nil
 }
 
-func newElement(op EditOp) (Element, error) {
+func newElement(op EditOp, res *resolver) (Element, error) {
 	switch op.Kind {
 	case "contact":
 		ref := op.Ref
@@ -443,7 +468,7 @@ func newElement(op EditOp) (Element, error) {
 		if !identOnly.MatchString(op.Inst) || !identOnly.MatchString(op.FbType) {
 			return Element{}, fmt.Errorf("ld edit: a block needs an instance name and a type")
 		}
-		in, out := powerPins(op.FbType)
+		in, out := res.powerPins(op.FbType, op.Args)
 		return Element{Kind: "fb", Inst: op.Inst, Type: op.FbType, Args: op.Args, PowerIn: in, PowerOut: out}, nil
 	}
 	return Element{}, fmt.Errorf("ld edit: unknown element kind %q", op.Kind)
@@ -534,7 +559,7 @@ func uniquifyInsts(m *Model, el *Element) {
 	walk(el)
 }
 
-func opInsert(r *Rung, op EditOp) error {
+func opInsert(m *Model, r *Rung, op EditOp) error {
 	var el Element
 	if op.Element != nil {
 		el = *op.Element
@@ -543,7 +568,7 @@ func opInsert(r *Rung, op EditOp) error {
 		}
 	} else {
 		var err error
-		el, err = newElement(op)
+		el, err = newElement(op, m.res)
 		if err != nil {
 			return err
 		}
@@ -715,9 +740,19 @@ func opSetRungComment(src string, m *Model, op EditOp) ([]TextEdit, error) {
 		return nil, fmt.Errorf("ld edit: a rung comment can't contain *)")
 	}
 	line := strings.Split(src, "\n")[r.Line-1]
-	newLine := strings.TrimRight(headerCommentRe.ReplaceAllString(line, ""), " \t")
+	// A one-line rung carries its elements on this same line: rewrite only
+	// the header part, or the new comment would land after the elements
+	// (where the next parse would read it as one).
+	head, rest := line, ""
+	if r.Inline && r.bodyCol >= 1 && r.bodyCol <= len(line)+1 {
+		head, rest = line[:r.bodyCol-1], line[r.bodyCol-1:]
+	}
+	newLine := strings.TrimRight(headerCommentRe.ReplaceAllString(head, ""), " \t")
 	if text != "" {
 		newLine += "  (* " + text + " *)"
+	}
+	if rest != "" {
+		newLine += "  " + rest
 	}
 	return []TextEdit{{Line: r.Line, Col: 1, EndLine: r.Line, EndCol: len(line) + 1, NewText: newLine}}, nil
 }

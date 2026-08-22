@@ -513,9 +513,9 @@ the standard here on purpose: there is no vendor-style "call another
 program" — a program is a scheduling unit, a function block is a reuse
 unit, and reaching for reuse means writing a block.
 
-Blocks live in **library files** — `.st` files holding only `TYPE`,
-`FUNCTION`, and `FUNCTION_BLOCK` declarations — and compose ahead of the
-program:
+Blocks live in **library files** — a `.st` file holding only `TYPE`,
+`FUNCTION`, and `FUNCTION_BLOCK` declarations, or a `.ld` / `.fbd` file
+with no `PROGRAM` — and compose ahead of the program:
 
 ```go
 //go:embed blocks.st
@@ -549,11 +549,14 @@ Heater := tic.OUT;
 
 The pieces that make this first-class rather than a convention:
 
-- **Callable from any IEC language.** The same `PI` block instantiates
-  from an FBD diagram (`tic : PI(SP := TempSP, ...)`) exactly like a
-  built-in TON — author blocks once, use them from whichever language
-  fits the logic. (Authoring blocks *in* FBD/LD is on the roadmap;
-  today libraries are ST.)
+- **Callable from any IEC language, and writable in any.** The same `PI`
+  block instantiates from an FBD diagram (`tic : PI(SP := TempSP, ...)`)
+  exactly like a built-in TON. Blocks are also AUTHORED in any language:
+  a `.ld` file with no PROGRAM is a library of ladder subroutines —
+  `FUNCTION_BLOCK`s whose bodies are rungs, with pins and per-instance
+  retained state, which is what IEC gives you instead of a JSR. See
+  [docs/functions.md](docs/functions.md#function-blocks-in-ladder) and
+  [examples/ladder-subroutines](examples/ladder-subroutines).
 - **The tooling composes the same way.** The VS Code extension, the LSP,
   `nautilus check`, and `nautilus pull` all treat sibling library files
   as in-scope for the program, byte-identically to `Libraries` — so
@@ -671,13 +674,15 @@ Early. This is the extracted, generalized core of a working demo
 - ✅ `lang/sfc` — Sequential Function Chart: steps, transitions, and actions
   on the same IR, with LSP support, a graphical VS Code editor, and a batch
   example (`examples/tank-batch-sfc`)
+- ✅ `examples/ladder-subroutines` — `FUNCTION_BLOCK`s written as rungs in a
+  PROGRAM-less `.ld` library, instantiated per pump from a ladder program
+  and callable from ST/FBD — ladder's answer to a JSR
 
 ## Roadmap
 
 - Retained-memory, redundancy, and historian packages behind clean interfaces
 - An HMI starter in `nautilus new`
 - Native-Go function blocks alongside ST (both lowering to the same IR)
-- FUNCTION_BLOCKs authored in FBD/LD (today: ST)
 - Vendor-format import (Studio 5000 L5X, TIA, PLCopen XML) → nautilus
 - A test harness for acceptance tests that gate deploys (from mini-scada)
 

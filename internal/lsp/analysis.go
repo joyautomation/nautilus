@@ -129,7 +129,7 @@ func analyze(text, prelude string, preludeLines int) analysis {
 // analysis, with the extra line map composed so diagnostics land on the
 // offending RUNG in the .ld source.
 func analyzeLD(text, prelude string, preludeLines int) analysis {
-	fbdText, ldMap, err := ld.TranspileWithLines(text)
+	fbdText, ldMap, err := ld.TranspileWithLines(text, prelude)
 	if err != nil {
 		var a analysis
 		a.Diags = append(a.Diags, Diagnostic{

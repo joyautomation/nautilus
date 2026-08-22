@@ -18,11 +18,14 @@ import {
   webviewOptions,
 } from "./fbdPreview";
 
-/** Run `nautilus ld graph -` over source text. */
-function ldGraph(source: string): Promise<{ model?: unknown; error?: string }> {
+/** Run `nautilus ld graph -` over source text. `at` is the path the buffer
+ * belongs to, so the project's library files — a PROGRAM-less .ld/.fbd/.st
+ * holding FUNCTION_BLOCKs — are in scope for a user block's power pins. */
+function ldGraph(source: string, at?: string): Promise<{ model?: unknown; error?: string }> {
   const cli = vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "nautilus");
+  const args = at ? ["ld", "graph", "-", at] : ["ld", "graph", "-"];
   return new Promise((resolve) => {
-    const child = execFile(cli, ["ld", "graph", "-"], { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
+    const child = execFile(cli, args, { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
       try {
         const parsed = JSON.parse(stdout) as { error?: string };
         if (parsed.error) return resolve({ error: parsed.error });
@@ -48,7 +51,7 @@ function logLd(msg: string): void {
 }
 
 /** Run `nautilus ld edit`: resolve op against source, get rung-level edits. */
-function ldEdit(source: string, op: unknown): Promise<{ edits?: LdTextEdit[]; error?: string }> {
+function ldEdit(source: string, op: unknown, at?: string): Promise<{ edits?: LdTextEdit[]; error?: string }> {
   const cli = vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "nautilus");
   return new Promise((resolve) => {
     const child = execFile(cli, ["ld", "edit"], { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
@@ -61,7 +64,7 @@ function ldEdit(source: string, op: unknown): Promise<{ edits?: LdTextEdit[]; er
       }
       resolve({ error: err ? String(err) : "nautilus ld edit: empty output" });
     });
-    child.stdin?.end(JSON.stringify({ source, op }));
+    child.stdin?.end(JSON.stringify({ source, op, file: at }));
   });
 }
 
@@ -86,7 +89,7 @@ function handleLdMessage(doc: vscode.TextDocument, msg: { type?: string; op?: un
   ldEditQueue = ldEditQueue
     .then(async () => {
       logLd("op: " + JSON.stringify(msg.op));
-      const res = await ldEdit(doc.getText(), msg.op);
+      const res = await ldEdit(doc.getText(), msg.op, docPath(doc));
       if (res.error) {
         logLd("  -> refused: " + res.error);
         void vscode.window.showWarningMessage("nautilus: " + res.error);
@@ -112,9 +115,15 @@ function handleLdMessage(doc: vscode.TextDocument, msg: { type?: string; op?: un
 
 const DEBOUNCE_MS = 250;
 
+/** The on-disk path a document belongs to, for library resolution;
+ * undefined for untitled/virtual documents, which have no project. */
+function docPath(doc: vscode.TextDocument): string | undefined {
+  return doc.uri.scheme === "file" ? doc.uri.fsPath : undefined;
+}
+
 /** Post the ladder model (or the parse error) into a webview. */
 async function postLdModel(webview: vscode.Webview, doc: vscode.TextDocument): Promise<void> {
-  const res = await ldGraph(doc.getText());
+  const res = await ldGraph(doc.getText(), docPath(doc));
   if (res.error) {
     void webview.postMessage({ type: "error", message: res.error, title: docTitle(doc) });
   } else {
@@ -287,7 +296,8 @@ export class LdPreview implements vscode.Disposable {
   /** Graph the frozen base + the CURRENT text and post the overlay. */
   private async postDiff(doc: vscode.TextDocument): Promise<void> {
     if (!this.panel || !this.diffBase) return;
-    const [base, head] = await Promise.all([ldGraph(this.diffBase.src), ldGraph(doc.getText())]);
+    const at = docPath(doc);
+    const [base, head] = await Promise.all([ldGraph(this.diffBase.src, at), ldGraph(doc.getText(), at)]);
     if (base.error || head.error) {
       // Mid-edit the head may not parse for a moment — stay in diff mode,
       // surface the message, and the next edit re-diffs.

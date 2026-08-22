@@ -24,6 +24,7 @@ package fbd
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -57,19 +58,19 @@ func Transpile(src string) (string, error) {
 // Header and footer lines map verbatim; each generated statement maps to the
 // netlist statement it was emitted for, so diagnostics against the ST form
 // can be projected back onto the .fbd file exactly.
+//
+// A file may hold SEVERAL netlist blocks — one per POU. That is what lets a
+// FUNCTION_BLOCK carry an FBD (or, through the LD → FBD hop, a ladder) body
+// alongside the file's PROGRAM: each FBD … END_FBD becomes the statements of
+// the POU it sits in, and everything between blocks (the next POU's header,
+// its VAR sections, END_FUNCTION_BLOCK) passes through as ST verbatim.
 func TranspileWithLines(src string) (string, []int, error) {
-	header, body, footer, bodyLine, err := splitFBD(src)
+	blocks, err := splitBlocks(src)
 	if err != nil {
 		return "", nil, err
 	}
-	net, err := parseNetlist(body, bodyLine)
-	if err != nil {
-		return "", nil, err
-	}
-	stmts, stmtLines, fbDecls, err := net.transpile()
-	if err != nil {
-		return "", nil, err
-	}
+	lines := strings.Split(src, "\n")
+
 	var b strings.Builder
 	var lineMap []int
 	writeLine := func(s string, orig int) {
@@ -77,29 +78,110 @@ func TranspileWithLines(src string) (string, []int, error) {
 		b.WriteByte('\n')
 		lineMap = append(lineMap, orig)
 	}
-	for i, l := range strings.Split(header, "\n") {
-		writeLine(l, i+1)
-	}
-	if len(fbDecls) > 0 {
-		writeLine("VAR", fbDecls[0].line)
-		for _, d := range fbDecls {
-			writeLine(fmt.Sprintf("  %s : %s;", d.name, d.typ), d.line)
+
+	prev := 0 // 0-based index of the first not-yet-written line
+	for _, blk := range blocks {
+		for i := prev; i < blk.start; i++ {
+			writeLine(lines[i], i+1)
 		}
-		writeLine("END_VAR", fbDecls[len(fbDecls)-1].line)
+		body := strings.Join(lines[blk.start+1:blk.end], "\n")
+		net, err := parseNetlist(body, blk.start+1)
+		if err != nil {
+			return "", nil, err
+		}
+		stmts, stmtLines, fbDecls, err := net.transpile()
+		if err != nil {
+			return "", nil, err
+		}
+		// An instance the POU's own header already declares keeps that
+		// declaration — the netlist's `inst : TYPE(...)` is then a CALL on
+		// a declared instance, not a second declaration of it. (Without
+		// this, writing both — which reads naturally, and is how a block's
+		// retained timers are usually spelled out — is a duplicate slot.)
+		declared := declaredNames(strings.Join(lines[prev:blk.start], "\n"))
+		var fresh []fbDecl
+		for _, d := range fbDecls {
+			if !declared[strings.ToLower(d.name)] {
+				fresh = append(fresh, d)
+			}
+		}
+		if len(fresh) > 0 {
+			writeLine("VAR", fresh[0].line)
+			for _, d := range fresh {
+				writeLine(fmt.Sprintf("  %s : %s;", d.name, d.typ), d.line)
+			}
+			writeLine("END_VAR", fresh[len(fresh)-1].line)
+		}
+		for i, s := range stmts {
+			writeLine(s, stmtLines[i])
+		}
+		prev = blk.end + 1 // drops END_FBD; the POU's own END_ keyword follows
 	}
-	for i, s := range stmts {
-		writeLine(s, stmtLines[i])
-	}
-	// The footer is the source tail verbatim; written raw (no trailing
+	// The tail is the source's remainder verbatim; written raw (no trailing
 	// newline added) to keep the output byte-identical with what tests and
 	// hashes have seen.
-	footerLines := strings.Split(footer, "\n")
-	footerStart := len(strings.Split(src, "\n")) - len(footerLines) + 1
-	b.WriteString(footer)
-	for i := range footerLines {
-		lineMap = append(lineMap, footerStart+i)
+	tail := strings.Join(lines[prev:], "\n")
+	b.WriteString(tail)
+	for i := prev; i < len(lines); i++ {
+		lineMap = append(lineMap, i+1)
+	}
+	if prev >= len(lines) {
+		// Nothing after the last END_FBD: the empty tail still splits to
+		// one (empty) line, so the map keeps one entry per output line.
+		lineMap = append(lineMap, len(lines))
 	}
 	return b.String(), lineMap, nil
+}
+
+// block is one FBD … END_FBD netlist body, by 0-based line index.
+type block struct{ start, end int }
+
+// headerDeclRe matches a `name :` declaration head inside a VAR section.
+var headerDeclRe = regexp.MustCompile(`(?im)(?:^|[;,])\s*([A-Za-z_][A-Za-z0-9_]*)\s*:[^=]`)
+
+// headerSectionRe spans one VAR* … END_VAR section, however it is laid out.
+var headerSectionRe = regexp.MustCompile(`(?is)\bVAR(?:_[A-Z]+)?\b(.*?)\bEND_VAR\b`)
+
+// declaredNames lists the variable names a POU's header declares, lowered
+// for case-insensitive comparison (IEC identifiers are case-insensitive).
+func declaredNames(header string) map[string]bool {
+	out := map[string]bool{}
+	for _, sec := range headerSectionRe.FindAllStringSubmatch(header, -1) {
+		for _, m := range headerDeclRe.FindAllStringSubmatch("\n"+sec[1], -1) {
+			out[strings.ToLower(m[1])] = true
+		}
+	}
+	return out
+}
+
+// splitBlocks finds every FBD … END_FBD pair in source order and rejects the
+// malformed shapes (an unclosed block, an END_FBD with no opener).
+func splitBlocks(src string) ([]block, error) {
+	lines := strings.Split(src, "\n")
+	var out []block
+	start := -1
+	for i, l := range lines {
+		switch strings.ToUpper(strings.TrimSpace(l)) {
+		case "FBD":
+			if start != -1 {
+				return nil, fmt.Errorf("fbd: line %d: FBD inside an FBD block — the previous one has no END_FBD", i+1)
+			}
+			start = i
+		case "END_FBD":
+			if start == -1 {
+				return nil, fmt.Errorf("fbd: line %d: END_FBD with no FBD", i+1)
+			}
+			out = append(out, block{start: start, end: i})
+			start = -1
+		}
+	}
+	if start != -1 {
+		return nil, fmt.Errorf("fbd: line %d: FBD block has no END_FBD", start+1)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("fbd: source must contain an FBD ... END_FBD body")
+	}
+	return out, nil
 }
 
 // splitFBD separates the source into the ST header (up to the FBD keyword),
