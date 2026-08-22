@@ -49,10 +49,10 @@ type Rung struct {
 
 // Element is one drawable ladder element.
 type Element struct {
-	Kind string `json:"kind"` // "contact" | "branch" | "fn" | "fb" | "coil"
+	Kind string `json:"kind"` // "contact" | "edge" | "branch" | "fn" | "fb" | "coil"
 	Ref  string `json:"ref,omitempty"`
-	Neg  bool   `json:"neg,omitempty"`
-	Mode string `json:"mode,omitempty"` // coil: "" | "S" | "R"
+	Neg  bool   `json:"neg,omitempty"`  // contact / fn: negated
+	Mode string `json:"mode,omitempty"` // coil: "" | "S" | "R" | "P" | "N"; edge: "P" | "N"
 	Fn   string `json:"fn,omitempty"`
 	Args string `json:"args,omitempty"`
 	Inst string `json:"inst,omitempty"`
@@ -167,7 +167,13 @@ func toElements(elems []any) []Element {
 		case contact:
 			out = append(out, Element{Kind: "contact", Ref: x.ref, Neg: x.neg})
 		case fnEl:
-			out = append(out, Element{Kind: "fn", Fn: x.fn, Args: x.args})
+			out = append(out, Element{Kind: "fn", Fn: x.fn, Args: x.args, Neg: x.neg})
+		case edgeEl:
+			mode := "P"
+			if !x.rise {
+				mode = "N"
+			}
+			out = append(out, Element{Kind: "edge", Ref: x.ref, Mode: mode})
 		case fbEl:
 			in, pOut := powerPins(x.typ)
 			out = append(out, Element{

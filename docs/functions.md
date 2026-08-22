@@ -51,15 +51,38 @@ A rung is a boolean expression that reads left to right:
 | --- | --- | --- |
 | NO contact | `Tag` | passes power when `Tag` is TRUE |
 | NC contact | `/Tag` | passes power when `Tag` is FALSE |
+| Rising-edge contact | `+Tag` | one scan TRUE on `Tag`'s 0→1 transition (an implicit `R_TRIG`) |
+| Falling-edge contact | `-Tag` | one scan TRUE on `Tag`'s 1→0 transition (an implicit `F_TRIG`) |
 | Parallel branch | `[ a \| b ]` | OR of its legs; legs are series (AND) and nest freely |
 | Function contact | `FN(args)` | passes power when the call yields TRUE — **the function must return BOOL** |
+| Negated function contact | `/FN(args)` | passes power when the call yields FALSE — `/` negates any BOOL-yielding contact term: a plain ref, an accessor chain (`/t1.Q`), or a call (`/GT(a, b)`) |
 | Function block | `inst:TYPE(args)` | power drives the block's power-in pin; power continues from its power-out pin (table [below](#standard-function-blocks)) |
 | Coil | `( Tag )` | `Tag :=` the rung condition, every scan |
 | Set coil | `( S Tag )` | latch: `Tag := Tag OR condition` |
 | Reset coil | `( R Tag )` | unlatch: `Tag := Tag AND NOT condition` |
+| Rising-edge coil | `( P Tag )` | `Tag :=` TRUE for one scan when the rung condition rises (an implicit `R_TRIG`) |
+| Falling-edge coil | `( N Tag )` | `Tag :=` TRUE for one scan when the rung condition falls (an implicit `F_TRIG`) |
 
 Series elements AND together; a rung with only a coil is driven by the
-rail (`TRUE`). Multiple coils on one rung share the same condition.
+rail (`TRUE`). Multiple coils on one rung share the same condition. A
+rung's only output may be a function block instance — no trailing coil is
+required — its own output (`inst.Q`, `inst.DN`, …) is read elsewhere, the
+same way an `inst.Q` fed to a coil would be: `A B t1:TON(PT := T#5S)` is a
+complete, legal rung.
+
+Edge instances (`+Tag`, `-Tag`, and the `P`/`N` coils) are unnamed in the
+text — the compiler derives a stable instance name from the rung name,
+the reference, and the occurrence's position among repeats of the same
+(rung, ref, edge kind) within that rung (contacts key on the watched tag,
+`P`/`N` coils key on the coil's own tag), so the name — and the R_TRIG's
+retained state — survives an unrelated edit elsewhere in the program.
+Two edge contacts on the same tag in one rung are independent instances.
+
+A rung's trailing output zone (coils, or a rung-final function block) must
+be contiguous at the rung's right end — coils ahead of a later function
+block in the same rung aren't supported (`coils must sit at the rung's
+right end`). Split such a rung into one nautilus rung per output leg
+instead.
 
 **The BOOL rule.** Power is boolean, so anything that gates it must yield
 BOOL. Comparisons do: `GT(TempC, 90.0)` is a fine contact. Numeric
