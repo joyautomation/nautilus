@@ -41,6 +41,25 @@ type Config struct {
 	RebirthOnStart     bool          // ask every manifest node to rebirth at connect (default true)
 	CommandInterval    time.Duration // coalesce window for outbound NCMD/DCMD (default 100ms)
 	Log                *slog.Logger
+
+	// ADDED BY B3 (mqtt.go).
+
+	// NoRebirthOnStart is the explicit opt-out from RebirthOnStart, which
+	// defaults to *true*: a plain Config literal leaves RebirthOnStart false,
+	// so New cannot tell "unset" from "off" without a second field. New reads
+	// the pair as: RebirthOnStart || !NoRebirthOnStart.
+	NoRebirthOnStart bool
+
+	// Leader reports whether this replica currently holds leadership. It gates
+	// the STATE birth/death publish and every outbound NCMD/DCMD, so a standby
+	// under `redundancy:` never publishes STATE online — its LWT would
+	// otherwise flap store-and-forward across every site
+	// (docs/design/sparkplug-host.md §8.1). nil means "always the leader".
+	//
+	// The driver samples it once per connection attempt (the will is baked
+	// into CONNECT and cannot be changed mid-session) and once a second while
+	// connected; a change forces a reconnect so the will matches reality.
+	Leader func() bool
 }
 
 // Discovery modes for metrics seen on the wire but absent from the manifest
@@ -179,6 +198,26 @@ type Driver struct {
 	// nodeCfg indexes manifest nodes by edge_node_id.
 	nodeCfg map[string]Node
 
+	// ── ADDED BY B3 (driver.go, mqtt.go); built in New, read-only after ──
+
+	// groups is the resolved subscription group list: Config.GroupIDs if set,
+	// else the manifest's Group, else the "+" wildcard.
+	groups []string
+	// rebirthTags maps a manifest node's RebirthTag (a BOOL *output*) to its
+	// edge_node_id. A rising edge on one of these sends NCMD Rebirth; they are
+	// synthesized, so they are not in byName.
+	rebirthTags map[string]string
+	// synthInputs are the driver-synthesized companion INPUT tag names —
+	// Node.OnlineTagName / BirthTagName per node and DeviceOnlineTagName per
+	// device — sorted. They are not bindings (no metric backs them), so they
+	// live beside inputs rather than in it. (added by B1)
+	synthInputs []string
+	// synthOutputs are the synthesized companion OUTPUT tag names:
+	// Node.RebirthTagName, one per node, sorted. (added by B1)
+	synthOutputs []string
+	// (rebirthTags — declared above in the B3 block; B1 fills it in
+	// buildIndexes, B3 reads it in WriteOutputs.)
+
 	// ── state machine (owned by B2: state.go) ──
 	// mu guards everything in this block.
 	mu sync.Mutex
@@ -195,11 +234,40 @@ type Driver struct {
 	unknown map[metricKey]*discovery
 	stats   stats
 
+	// ── added by B2 (state.go); still guarded by mu ──
+	//
+	// The state machine asks for an NCMD Node Control/Rebirth through B3's
+	// onRebirthNeeded hook (declared below, with the outbound machinery it
+	// belongs to): an unfilled sequence gap, data from a node that has not
+	// birthed, or a node gone stale. It is always called with mu released.
+
+	// rebirthQ accumulates rebirth requests raised while mu is held;
+	// flushRebirths drains it and invokes onRebirthNeeded outside the lock.
+	rebirthQ []nodeKey
+	// degraded is set when the discovery policy is DiscoveryStrict and an
+	// unmanifested metric has been seen. /api/drivers reports "degraded".
+	degraded bool
+	// warned dedupes the log-once diagnostics the state machine emits
+	// (unresolvable aliases, unknown template members, unsupported
+	// bindings), keyed by an opaque reason string.
+	warned map[string]bool
+
 	// ── outbound commands (owned by B3: mqtt.go) ──
 	wmu     sync.Mutex
 	pending map[string]any // queued writes: nautilus tag name → desired value
 	written map[string]any // last value successfully published (for on-change)
 	wkick   chan struct{}  // non-blocking nudge to the writer goroutine
+
+	// rebirths is the async NCMD-Rebirth queue. state.go's reorder timer runs
+	// under d.mu and inside paho's ordered message goroutine, so it must never
+	// publish inline; it calls onRebirthNeeded, which does a non-blocking send
+	// here and lets the writer goroutine do the I/O. Full queue = dropped
+	// request; the next gap re-raises it. ADDED BY B3.
+	rebirths chan nodeKey
+	// onRebirthNeeded is the state machine's escape hatch: an unfilled seq gap
+	// (ReorderTimeout) asks for a rebirth. Set in New (B3), called from
+	// state.go (B2). Never blocks, never takes d.mu.
+	onRebirthNeeded func(group, edge string)
 
 	// ── transport (owned by B3: mqtt.go) ──
 	// pub is the publish seam; nil until connected. Tests substitute a fake,
@@ -282,8 +350,15 @@ type nodeState struct {
 	defs map[string]*ir.StructDef
 	// gapTimer fires ReorderTimeout after an unfilled seq gap → NCMD Rebirth.
 	gapTimer *time.Timer
+	// gapGen (B2) invalidates an in-flight gapTimer callback: stopGap bumps
+	// it, and the callback bails when the generation it captured is stale.
+	// time.Timer.Stop cannot report whether an AfterFunc already started.
+	gapGen uint64
 	// pending is the out-of-order buffer, keyed by seq.
 	pending map[uint64]queued
+	// rebirthAsked (B2) debounces rebirth requests to one per birth cycle:
+	// set when the state machine asks, cleared by the next NBIRTH.
+	rebirthAsked bool
 	// metrics counts the node-level metrics the last birth carried.
 	metrics int
 	// stale marks a node silent for longer than StaleAfter.
