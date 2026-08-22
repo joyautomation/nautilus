@@ -104,7 +104,7 @@ Writing template members:
     - node: W6                 # the Sparkplug edge_node_id
       prefix: W6               # optional; default sanitize(node)
       metrics:                 # node-level metrics (NBIRTH/NDATA)
-        - {name: Well/Level, type: Double}
+        - {name: Well/Level, type: Double, desc: "Well 6 level"}
         - {name: Pump1,      type: Motor, writable: [Speed]}
       devices:
         - device: PLC1
@@ -120,6 +120,13 @@ Writing template members:
   writable: true marks a SCALAR metric an output. A Template metric takes a
   list of dotted member paths instead — writable: [START, LVL.CTL1HSP] — one
   output tag per member; init: applies only to the whole-metric form.
+
+  desc: is optional and purely descriptive. It rides into the generated tag
+  file's desc:, which is what an alarm name's {desc} renders instead of the
+  sanitized tag — "Well 6 level high" rather than "W6_Well_Level high". Member
+  tags inherit their metric's description. The --broker path cannot supply one
+  (a metric's Properties/description does not survive payload decoding), so an
+  import from live births leaves every desc empty.
 `
 
 func runSparkplug(args []string) int {

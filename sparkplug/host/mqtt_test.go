@@ -27,6 +27,7 @@ import (
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
 
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/sparkplug"
 	"github.com/joyautomation/nautilus/sparkplug/spb"
 )
@@ -173,6 +174,34 @@ func startDriver(t *testing.T, cfg Config, opts ...Option) *Driver {
 	d.Start(context.Background())
 	t.Cleanup(d.Stop)
 	return d
+}
+
+// outputSnapshot is what the runtime hands WriteOutputs on EVERY scan: all of
+// the driver's outputs at their current tag values (runtime.go's output
+// rebuild). Absent an operator write an output tag sits at its init:, which
+// is exactly the snapshot that used to command every online site's setpoints
+// to the zero of their type. over supplies the tags the "operator" has moved.
+func outputSnapshot(d *Driver, over map[string]any) map[string]any {
+	out := map[string]any{}
+	for _, s := range d.manifest.TagSpecs() {
+		if s.Role != RoleOutput || s.Init == nil {
+			continue
+		}
+		out[s.Name] = s.Init
+	}
+	for k, v := range over {
+		out[k] = v
+	}
+	return out
+}
+
+// baselineScan feeds the driver the runtime's FIRST output snapshot. Nothing
+// may come of it on the wire: an output nobody has written is not a command.
+func baselineScan(t *testing.T, d *Driver) {
+	t.Helper()
+	if err := d.WriteOutputs(outputSnapshot(d, nil)); err != nil {
+		t.Fatalf("baseline WriteOutputs: %v", err)
+	}
 }
 
 // edgePublisher is a raw paho client standing in for an edge node.
@@ -504,6 +533,9 @@ func TestMqttWriteOutputsSendsDCMD(t *testing.T) {
 	})
 	waitForValue(t, d, "W6__Online", func(v any) bool { return v == true })
 
+	// The runtime's first output snapshot is the baseline, not a command.
+	baselineScan(t, d)
+
 	if err := d.WriteOutputs(map[string]any{"W6_PLC1_Pump_SpeedSP": 42.5}); err != nil {
 		t.Fatalf("WriteOutputs: %v", err)
 	}
@@ -588,6 +620,7 @@ func TestMqttWriteMemberSendsPartialTemplate(t *testing.T) {
 	d := startDriver(t, testConfig(addr, "h-member"))
 	waitConnected(t, d)
 	bringW6Online(t, d, addr, "edge-member")
+	baselineScan(t, d)
 
 	if err := d.WriteOutputs(map[string]any{"W6_Pump1_Speed": 61.5}); err != nil {
 		t.Fatalf("WriteOutputs: %v", err)
@@ -632,6 +665,7 @@ func TestMqttWriteNestedMembersCoalesce(t *testing.T) {
 	d := startDriver(t, testConfig(addr, "h-nested"))
 	waitConnected(t, d)
 	bringW6Online(t, d, addr, "edge-nested")
+	baselineScan(t, d)
 
 	if err := d.WriteOutputs(map[string]any{
 		"W6_Skid1_Drive_Run":   true,
@@ -690,6 +724,7 @@ func TestMqttWriteToOfflineNodeIsDropped(t *testing.T) {
 	obs := newObserver(t, addr, "obs-drop", "spBv1.0/G/DCMD/+/+")
 	d := startDriver(t, testConfig(addr, "h-drop"))
 	waitConnected(t, d)
+	baselineScan(t, d)
 
 	if err := d.WriteOutputs(map[string]any{"W6_PLC1_Pump_SpeedSP": 7.0}); err != nil {
 		t.Fatalf("WriteOutputs: %v", err)
@@ -715,6 +750,7 @@ func TestMqttRebirthTagRisingEdge(t *testing.T) {
 	cfg.NoRebirthOnStart = true // isolate the operator-forced path
 	d := startDriver(t, cfg)
 	waitConnected(t, d)
+	baselineScan(t, d)
 
 	isRebirth := func(m recMsg) bool { return m.topic == "spBv1.0/G/NCMD/W6" }
 	if err := d.WriteOutputs(map[string]any{"W6__Rebirth": false}); err != nil {
@@ -871,4 +907,218 @@ func TestStatusShape(t *testing.T) {
 	if fmt.Sprint(st.Groups) == "" {
 		t.Error("unreachable")
 	}
+}
+
+// ── outputs are commands (the baseline rule) ─────────────────────────────
+
+// isCommandFor reports whether a recorded message is a real command — one
+// carrying a metric other than Node Control/Rebirth. RebirthOnStart and the
+// state machine's own gap recovery put Rebirth NCMDs on the same topics, and
+// those are not what these tests are counting.
+func isCommandFor(topics ...string) func(recMsg) bool {
+	return func(m recMsg) bool {
+		match := false
+		for _, tp := range topics {
+			if m.topic == tp {
+				match = true
+			}
+		}
+		if !match {
+			return false
+		}
+		p, err := sparkplug.DecodePayload(m.payload)
+		if err != nil {
+			return false
+		}
+		for _, mm := range p.Metrics {
+			if mm.Name != RebirthMetric {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// scanFor hands the driver n output snapshots the way the runtime does — all
+// outputs, every scan — and gives the coalescing writer time to act on them.
+func scanFor(t *testing.T, d *Driver, n int, over map[string]any) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		if err := d.WriteOutputs(outputSnapshot(d, over)); err != nil {
+			t.Fatalf("WriteOutputs: %v", err)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
+	time.Sleep(150 * time.Millisecond)
+}
+
+// TestMqttStartCommandsNothing is the unit-scale half of the regression the
+// PomonaSCADA demo found (host/README.md, "the host zeroes an edge's
+// setpoints when it starts"). A host that connects to a group whose sites are
+// already online used to publish EVERY writable output once, still holding
+// the zero of its type because nobody had written it — and for a member
+// binding that is a partial template of zeros the edge merges member by
+// member, wiping every commissioned setpoint in the writable globs.
+//
+// Scanning an output set nobody has touched must put NOTHING on the wire.
+func TestMqttStartCommandsNothing(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = srv.Close() })
+
+	obs := newObserver(t, addr, "obs-nocmd", "spBv1.0/G/NCMD/+", "spBv1.0/G/DCMD/+/+")
+	d := startDriver(t, testConfig(addr, "h-nocmd"))
+	waitConnected(t, d)
+	// The site is ONLINE — a command would not be dropped as "dark site", so
+	// nothing but the rule itself is holding the wire quiet.
+	bringW6Online(t, d, addr, "edge-nocmd")
+
+	scanFor(t, d, 5, nil)
+
+	cmd := isCommandFor("spBv1.0/G/NCMD/W6", "spBv1.0/G/DCMD/W6/PLC1")
+	if n := obs.count(cmd); n != 0 {
+		t.Fatalf("a host that has been written to by nobody published %d commands; "+
+			"outputs are commands, and an unchanged output since start is not one", n)
+	}
+}
+
+// TestMqttOperatorWritePublishesOnce — the other side of the rule: a value an
+// operator actually moves IS a command, exactly once, however many scans hand
+// it back afterwards.
+func TestMqttOperatorWritePublishesOnce(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = srv.Close() })
+
+	obs := newObserver(t, addr, "obs-once", "spBv1.0/G/DCMD/+/+")
+	d := startDriver(t, testConfig(addr, "h-once"))
+	waitConnected(t, d)
+	bringW6Online(t, d, addr, "edge-once")
+	baselineScan(t, d)
+
+	dcmd := isCommandFor("spBv1.0/G/DCMD/W6/PLC1")
+	over := map[string]any{"W6_PLC1_Pump_SpeedSP": 42.5}
+	scanFor(t, d, 1, over)
+	obs.wait(t, "DCMD for the operator's setpoint", dcmd)
+
+	// The runtime keeps handing the same snapshot back every scan.
+	scanFor(t, d, 5, over)
+	if n := obs.count(dcmd); n != 1 {
+		t.Fatalf("one operator write produced %d DCMDs, want exactly 1", n)
+	}
+}
+
+// TestMqttReconnectDoesNotReplayOutputs — a session that comes back must not
+// re-command the world. The change detector tracks the runtime's output tags,
+// not the broker session, so it survives the reconnect and there is nothing
+// to replay.
+func TestMqttReconnectDoesNotReplayOutputs(t *testing.T) {
+	addr := freePort(t)
+	srv, _ := startBroker(t, addr)
+
+	d := startDriver(t, testConfig(addr, "h-replay"))
+	waitConnected(t, d)
+	bringW6Online(t, d, addr, "edge-replay")
+	baselineScan(t, d)
+
+	// One genuine command before the drop.
+	over := map[string]any{"W6_PLC1_Pump_SpeedSP": 42.5, "W6_Pump1_Speed": 61.5}
+	scanFor(t, d, 2, over)
+
+	if err := srv.Close(); err != nil {
+		t.Fatalf("close broker: %v", err)
+	}
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) && d.Status().Connected {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if d.Status().Connected {
+		t.Fatal("driver still reports connected after the broker went away")
+	}
+
+	srv2, _ := startBroker(t, addr)
+	t.Cleanup(func() { _ = srv2.Close() })
+	waitConnected(t, d)
+
+	// Watch the NEW session only. The site is online again, so a replay would
+	// land — and with the same values the operator set, which is precisely
+	// what makes it invisible until a member write clobbers a sibling.
+	obs := newObserver(t, addr, "obs-replay", "spBv1.0/G/NCMD/+", "spBv1.0/G/DCMD/+/+")
+	bringW6Online(t, d, addr, "edge-replay2")
+	scanFor(t, d, 5, over)
+
+	cmd := isCommandFor("spBv1.0/G/NCMD/W6", "spBv1.0/G/DCMD/W6/PLC1")
+	if n := obs.count(cmd); n != 0 {
+		t.Fatalf("the reconnect replayed %d commands; a reconnect is not a command", n)
+	}
+}
+
+// TestMqttMemberBaselineAdoptsLiveValue — the birth settles what the SITE
+// holds, so a member output's baseline stops being "the zero of its type" the
+// moment its parent template arrives: writing the value the panel already has
+// is a no-op, and writing anything else goes out once.
+func TestMqttMemberBaselineAdoptsLiveValue(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = srv.Close() })
+
+	obs := newObserver(t, addr, "obs-adopt", "spBv1.0/G/NCMD/+")
+	d := startDriver(t, testConfig(addr, "h-adopt"))
+	waitConnected(t, d)
+
+	// The site births Pump1 with a commissioned Speed. Nothing in the host's
+	// own tag store knows that number; the birth is where it learns it.
+	edge := edgePublisher(t, addr, "edge-adopt")
+	publishPayload(t, edge, "spBv1.0/G/NBIRTH/W6", sparkplug.Payload{
+		Timestamp: uint64(time.Now().UnixMilli()),
+		Seq:       0,
+		Metrics: []sparkplug.Metric{
+			{Name: bdSeqMetric, Datatype: spb.DataType_Int64, Value: int64(1)},
+			{Name: "Pump1", Datatype: spb.DataType_Template,
+				Value: &sparkplug.Template{TemplateRef: "Motor", Metrics: []sparkplug.Metric{
+					{Name: "Run", Datatype: spb.DataType_Boolean, Value: true},
+					{Name: "Speed", Datatype: spb.DataType_Double, Value: 1450.0},
+					{Name: "Label", Datatype: spb.DataType_String, Value: "M1"},
+				}}},
+		},
+	})
+	waitForValue(t, d, "W6__Online", func(v any) bool { return v == true })
+	waitForValue(t, d, "W6_Pump1", func(v any) bool {
+		s, ok := v.(ir.Value)
+		return ok && s.Kind == ir.TypeStruct && fieldByName(s, "Speed").F == 1450
+	})
+	baselineScan(t, d)
+
+	cmd := isCommandFor("spBv1.0/G/NCMD/W6")
+
+	// An operator dialling the member to the value the panel already holds is
+	// asking for nothing.
+	scanFor(t, d, 3, map[string]any{"W6_Pump1_Speed": 1450.0})
+	if n := obs.count(cmd); n != 0 {
+		t.Fatalf("writing a member the value the site already reported produced %d NCMDs, want 0", n)
+	}
+
+	// Any other value is a real command, published once.
+	scanFor(t, d, 3, map[string]any{"W6_Pump1_Speed": 61.5})
+	if n := obs.count(cmd); n != 1 {
+		t.Fatalf("moving the member to a new value produced %d NCMDs, want exactly 1", n)
+	}
+	msg := obs.wait(t, "member NCMD", cmd)
+	p, err := sparkplug.DecodePayload(msg.payload)
+	if err != nil {
+		t.Fatalf("decode NCMD: %v", err)
+	}
+	tm := tmplOf(t, p.Metrics[0])
+	if sp := memberOf(t, tm, "Speed"); sp.Value != 61.5 {
+		t.Errorf("Speed = %v, want 61.5", sp.Value)
+	}
+}
+
+// fieldByName reads one field of a struct ir.Value by name.
+func fieldByName(v ir.Value, name string) ir.Value {
+	if v.Struct == nil {
+		return ir.Value{}
+	}
+	i, ok := v.Struct.FieldIndex[name]
+	if !ok || i >= len(v.Fld) {
+		return ir.Value{}
+	}
+	return v.Fld[i]
 }

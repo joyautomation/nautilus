@@ -239,6 +239,11 @@ type metric struct {
 	// becomes its own scalar output binding.
 	members []string
 	init    any
+	// desc is the metric's human description, from a --sites file's `desc:`.
+	// A birth cannot state one — the wire's Properties/description does not
+	// survive sparkplug.DecodePayload today — so the broker path leaves it
+	// empty rather than inventing one.
+	desc string
 }
 
 // buildNodes turns the harvested sites into manifest nodes, devices and
@@ -355,6 +360,7 @@ func bindings(prefix, edge, device string, mt metric, used map[string]bool,
 		Device: device,
 		Metric: mt.name,
 		Type:   mt.typ,
+		Desc:   mt.desc,
 	}
 	b.Writable = whole
 	if whole {
@@ -403,6 +409,10 @@ func bindings(prefix, edge, device string, mt metric, used map[string]bool,
 			Member:   leaf,
 			Type:     mt.typ,
 			Writable: true,
+			// A member tag inherits the metric's description: the source
+			// describes the METRIC, and the member path is already in the
+			// tag's own name.
+			Desc: mt.desc,
 		})
 	}
 	// A named member that is not a scalar leaf of the type is a typo or a

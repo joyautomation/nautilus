@@ -663,3 +663,62 @@ sites: [{node: W6, metrics: [{name: M, type: Motor, writable: [Speed], init: 1.0
 		})
 	}
 }
+
+// TestSitesCarryDesc — a `desc:` on a --sites metric rides through the
+// manifest into the generated tag file's `desc:`, so the host's alarm names
+// render "{desc} high" as "Well 6 level high" rather than repeating the
+// sanitized tag. Member tags inherit their metric's description; a metric
+// that says nothing produces no desc: at all — nothing is invented.
+func TestSitesCarryDesc(t *testing.T) {
+	const src = `
+group: G
+types:
+  - {name: Motor, fields: [{name: Speed, type: Double}, {name: START, type: Boolean}]}
+sites:
+  - node: W6
+    metrics:
+      - {name: Well/Level, type: Double, desc: "Well 6 level"}
+      - {name: Motor1, type: Motor, writable: [START], desc: "Transfer pump"}
+      - {name: Quiet, type: Double}
+    devices:
+      - device: PLC1
+        metrics:
+          - {name: Pump/SpeedSP, type: Double, writable: true, desc: "Pump speed setpoint"}
+`
+	specs, err := ParseSites([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := FromSites(specs, Options{})
+	if err != nil {
+		t.Fatalf("FromSites: %v", err)
+	}
+	if got := bindingNamed(t, m, "W6_Well_Level").Desc; got != "Well 6 level" {
+		t.Errorf("W6_Well_Level desc = %q, want %q", got, "Well 6 level")
+	}
+	if got := bindingNamed(t, m, "W6_Motor1_START").Desc; got != "Transfer pump" {
+		t.Errorf("member tag desc = %q, want the metric's %q", got, "Transfer pump")
+	}
+	if got := bindingNamed(t, m, "W6_Quiet").Desc; got != "" {
+		t.Errorf("an undescribed metric invented desc %q", got)
+	}
+
+	out, err := TagsYAML(m, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`- { name: W6_Motor1_START, role: output, init: false, desc: "Transfer pump" }`,
+		`- { name: W6_PLC1_Pump_SpeedSP, role: output, init: 0.0, desc: "Pump speed setpoint" }`,
+		`- { name: W6_Well_Level, role: input, desc: "Well 6 level" }`,
+		"- { name: W6_Quiet, role: input }\n",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("tag file missing %q:\n%s", want, out)
+		}
+	}
+	// The companions are the driver's, not a metric's: they carry no desc.
+	if want := "- { name: W6__Online, role: input }\n"; !strings.Contains(string(out), want) {
+		t.Errorf("tag file missing %q:\n%s", want, out)
+	}
+}

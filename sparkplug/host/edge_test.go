@@ -292,7 +292,11 @@ func TestEdgeToHostDogfood(t *testing.T) {
 	rt.Tags().SetReal("Well_Level", 50)
 	waitForValue(t, host, "W6_Well_Level", func(v any) bool { return v == 50.0 })
 
-	// 3. a host write reaches the edge's OWN tag store over NCMD.
+	// 3. a host write reaches the edge's OWN tag store over NCMD. The
+	// runtime's first output snapshot is the baseline — see
+	// TestEdgeToHostStartKeepsSetpoints — so it goes in first, and only the
+	// operator's move after it is a command.
+	baselineScan(t, host)
 	if err := host.WriteOutputs(map[string]any{"W6_SpeedSP": 7.5}); err != nil {
 		t.Fatalf("WriteOutputs: %v", err)
 	}
@@ -506,4 +510,156 @@ func TestEdgeToHostStatus(t *testing.T) {
 			t.Fatalf("Status.Nodes = %+v, want one node with device plc1", st2.Nodes)
 		}
 	})
+}
+
+// ── outputs are commands: the setpoint-zeroing regression ────────────────
+
+// startDogfoodEdge brings up the edge fixture against addr with a
+// commissioned SpeedSP — the stand-in for the demo's RAWMIN/HHSP — and waits
+// until the host has consumed its birth. Returns the edge's runtime.
+func startDogfoodEdge(t *testing.T, host *Driver, addr string, speedSP float64) *runtime.Runtime {
+	t.Helper()
+	rt := buildEdgeRuntime(t)
+	rt.Tags().SetReal("SpeedSP", speedSP)
+	rtCtx, rtCancel := context.WithCancel(context.Background())
+	t.Cleanup(rtCancel)
+	go rt.Run(rtCtx)
+
+	edge, err := sparkplug.New(rt, sparkplug.Config{
+		BrokerURL:       brokerURL(addr),
+		GroupID:         "G",
+		EdgeNode:        "W6",
+		BdSeqFile:       filepath.Join(t.TempDir(), "w6.bdseq"),
+		PublishInterval: 50 * time.Millisecond,
+		Log:             quietLogger(),
+	})
+	if err != nil {
+		t.Fatalf("sparkplug.New: %v", err)
+	}
+	if err := edge.Start(context.Background()); err != nil {
+		t.Fatalf("edge Start: %v", err)
+	}
+	t.Cleanup(func() { settleAfterBirth(); edge.Stop() })
+
+	waitForValue(t, host, "W6_SpeedSP", func(v any) bool { return v == speedSP })
+	waitForValue(t, host, "W6__Online", func(v any) bool { return v == true })
+	return rt
+}
+
+// TestEdgeToHostStartKeepsSetpoints is the regression test for the defect the
+// PomonaSCADA demo diagnosed (~/Development/pomona/wrd/host/README.md, "Open
+// defect: the host zeroes an edge's setpoints when it starts"):
+//
+//	RTU9 alone, host down:   RAWMIN=3277 RAWMAX=16383 HHSP=1000 ...
+//	after a host connects:   RAWMIN=0    RAWMAX=0     HHSP=0    ...
+//
+// On connect the host published every writable output once. None of them had
+// ever been written, so each held the zero of its type, and for a member
+// binding that is a PARTIAL TEMPLATE of zeros — which the edge dutifully
+// merges member by member, wiping every commissioned setpoint in the
+// `--writable` globs while the members outside them survive.
+//
+// Nothing here is mocked: a real sparkplug.Node edge with real values, a real
+// host driver, and the real merge. The host is handed the output snapshot the
+// runtime would hand it — every output, every scan, all at their init: — and
+// the edge's tags must not move.
+func TestEdgeToHostStartKeepsSetpoints(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = srv.Close() })
+
+	obs := newObserver(t, addr, "obs-keepsp", "spBv1.0/G/NCMD/+", "spBv1.0/G/DCMD/+/+")
+
+	// Host first, edge second — see the ordering note in TestEdgeToHostDogfood.
+	host := startHostDriver(t, edgeDogfoodManifest(), testConfig(addr, "h-keepsp"))
+	waitConnected(t, host)
+	rt := startDogfoodEdge(t, host, addr, 3277)
+
+	// The host now scans. Nobody has written a thing: W6_SpeedSP,
+	// W6_Pump1_Speed and W6_Pump1_Drive_Torque are all sitting at their init:.
+	scanFor(t, host, 6, nil)
+
+	if n := obs.count(isCommandFor("spBv1.0/G/NCMD/W6")); n != 0 {
+		t.Errorf("the host published %d commands on connect; an output nobody has "+
+			"written is not a command", n)
+	}
+
+	// The edge's own tags are the real assertion: this is what the operator
+	// would have found zeroed.
+	if got := rt.Tags().Real("SpeedSP"); got != 3277 {
+		t.Errorf("edge SpeedSP = %v, want 3277 — the host zeroed a commissioned setpoint", got)
+	}
+	ep, err := rt.Tags().ReadGlobal("Pump1")
+	if err != nil {
+		t.Fatalf("edge ReadGlobal(Pump1): %v", err)
+	}
+	if got := fieldVal(t, ep, "Speed").F; got != 1450 {
+		t.Errorf("edge Pump1.Speed = %v, want 1450 — a partial template of zeros was merged", got)
+	}
+	if got := fieldVal(t, ep, "Drive", "Torque").F; got != 88.5 {
+		t.Errorf("edge Pump1.Drive.Torque = %v, want 88.5 — a nested member was zeroed", got)
+	}
+	// And the members outside the writable set were never at risk — which is
+	// exactly the fingerprint that made the demo's diagnosis exact.
+	if got := fieldVal(t, ep, "Run").B; got != true {
+		t.Errorf("edge Pump1.Run = %v, want true", got)
+	}
+
+	// The host's own view agrees: it never told itself a lie either.
+	hp := mustStruct(t, host, "W6_Pump1")
+	if got := fieldVal(t, hp, "Speed").F; got != 1450 {
+		t.Errorf("host W6_Pump1.Speed = %v, want 1450", got)
+	}
+}
+
+// TestEdgeToHostMemberBaselineAdoptsLiveValue — once the site's template has
+// arrived, the host knows what each writable member actually holds. An
+// operator dialling a member to the value it already has is asking for
+// nothing; dialling it anywhere else is one command. Driven against the real
+// edge, so the birth that teaches the host is a real birth.
+func TestEdgeToHostMemberBaselineAdoptsLiveValue(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = srv.Close() })
+
+	obs := newObserver(t, addr, "obs-adoptlive", "spBv1.0/G/NCMD/+")
+	host := startHostDriver(t, edgeDogfoodManifest(), testConfig(addr, "h-adoptlive"))
+	waitConnected(t, host)
+	rt := startDogfoodEdge(t, host, addr, 3277)
+
+	// buildEdgeRuntime seeds Pump1.Speed = 1450 and Pump1.Drive.Torque = 88.5,
+	// and the birth has already carried both to the host.
+	cmd := isCommandFor("spBv1.0/G/NCMD/W6")
+	scanFor(t, host, 3, map[string]any{
+		"W6_Pump1_Speed":        1450.0,
+		"W6_Pump1_Drive_Torque": 88.5,
+	})
+	if n := obs.count(cmd); n != 0 {
+		t.Fatalf("writing members the values the site already reported produced %d NCMDs, want 0", n)
+	}
+
+	// A different value is a real command, and it lands.
+	scanFor(t, host, 3, map[string]any{
+		"W6_Pump1_Speed":        61.5,
+		"W6_Pump1_Drive_Torque": 88.5,
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		v, err := rt.Tags().ReadGlobal("Pump1")
+		if err == nil && v.Kind == ir.TypeStruct && fieldVal(t, v, "Speed").F == 61.5 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	ep, err := rt.Tags().ReadGlobal("Pump1")
+	if err != nil {
+		t.Fatalf("edge ReadGlobal(Pump1): %v", err)
+	}
+	if got := fieldVal(t, ep, "Speed").F; got != 61.5 {
+		t.Fatalf("edge Pump1.Speed = %v, want 61.5 — the real command never landed", got)
+	}
+	if got := fieldVal(t, ep, "Drive", "Torque").F; got != 88.5 {
+		t.Errorf("edge Pump1.Drive.Torque = %v, want 88.5 — an unchanged member was re-commanded", got)
+	}
+	if n := obs.count(cmd); n != 1 {
+		t.Errorf("moving one member produced %d NCMDs, want exactly 1", n)
+	}
 }

@@ -62,6 +62,13 @@ a whole; that would clobber them. `fleet.st` forwards the operator's
 `PumpSpeedCmd` into it, interlocked on `W6__Online`, and `fleet_test.yaml`
 covers it.
 
+Nothing is written until somebody writes it: **an output that has not moved
+since the host started is not a command**, so bringing this project up
+against sites that are already online sends no NCMD/DCMD at all, and a
+member output adopts the site's live value from its birth. Host and sites
+start in either order — see the guide's "Outputs are commands: the baseline
+rule".
+
 **Live**, listening to a real broker — the other input to the *same*
 generator, so both paths agree on tag names byte-for-byte for the metrics
 they share:

@@ -102,6 +102,7 @@ func (d *Driver) handleMessage(topic string, payload []byte) {
 	}
 	d.mu.Unlock()
 	d.flushRebirths()
+	d.flushAdopts()
 }
 
 // parseTopic splits a Sparkplug topic into its parts. ok is false for
@@ -599,6 +600,63 @@ func (d *Driver) applyBindingLocked(ns *nodeState, b Binding, m sparkplug.Metric
 			"tag", b.Name, "type", b.Type, "member", u)
 	}
 	d.values[b.Name] = plainOrIR(v)
+	d.adoptMembersLocked(b, v)
+}
+
+// adoptMembersLocked queues the live value of every member OUTPUT bound to
+// this metric as that output's baseline of what the SITE holds.
+//
+// A member output is write-only by role — reads come from the parent struct
+// tag, and duplicating every member as an input would double the fleet's tag
+// count for nothing. But the host still needs to know what it would be
+// commanding: an operator who dials a setpoint to the value the panel already
+// has is asking for nothing, and a host that has never heard the panel's
+// value has no business assuming it is zero. Every NBIRTH, DBIRTH, NDATA or
+// rebirth that carries the parent template settles that question, for every
+// member it carries.
+//
+// Until the parent struct arrives a member output has no adopted value at
+// all; its baseline is its init:, and an operator write before the birth
+// still publishes (when the node is online — a write to a dark site is
+// dropped and counted, as always). Caller holds d.mu.
+func (d *Driver) adoptMembersLocked(b Binding, v ir.Value) {
+	if v.Kind != ir.TypeStruct {
+		return
+	}
+	names := d.memberOf[metricKey{EdgeNode: b.Node, Device: b.Device, Metric: b.Metric}]
+	for _, name := range names {
+		mo, ok := d.members[name]
+		if !ok {
+			continue
+		}
+		leaf, ok := memberValue(v, mo.path)
+		if !ok {
+			continue // the member is not in this value's shape
+		}
+		d.adoptQ = append(d.adoptQ, adoption{name: name, value: ir.CoerceValue(leaf, mo.leaf)})
+	}
+}
+
+// memberValue walks a struct value down a member path by the StructDef's own
+// FieldIndex, never by field order. It reports false for a path that does not
+// resolve, or that lands on something other than a scalar leaf.
+func memberValue(v ir.Value, path []string) (ir.Value, bool) {
+	cur := v
+	for _, seg := range path {
+		if cur.Kind != ir.TypeStruct || cur.Struct == nil {
+			return ir.Value{}, false
+		}
+		i, ok := cur.Struct.FieldIndex[seg]
+		if !ok || i < 0 || i >= len(cur.Fld) {
+			return ir.Value{}, false
+		}
+		cur = cur.Fld[i]
+	}
+	switch cur.Kind {
+	case ir.TypeStruct, ir.TypeArray, ir.TypeFB:
+		return ir.Value{}, false
+	}
+	return cur, true
 }
 
 // targetType is the ir.Type a binding's value must take.

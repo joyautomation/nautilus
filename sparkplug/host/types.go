@@ -183,6 +183,12 @@ type Binding struct {
 	// Init is the generated output tag's initial value, so the tag exists
 	// from scan one. Nil means the type zero.
 	Init any
+	// Desc is a human description of what this metric IS ("Well 6 raw span
+	// minimum"), carried from the --sites file's `desc:` into the generated
+	// tag file's `desc:`. It is what an alarm name's {desc} renders instead
+	// of the sanitized tag name, and what an HMI can label a control with.
+	// Empty when the source did not say — never invented.
+	Desc string
 }
 
 // ── Driver ───────────────────────────────────────────────────────────────
@@ -218,6 +224,12 @@ type Driver struct {
 	// by nautilus tag name — resolved once here so flushWrites never walks
 	// the types: block.
 	members map[string]memberOut
+	// memberOf is members read the other way round: the parent metric → the
+	// member OUTPUT tags that address a leaf inside it. It is what lets
+	// an inbound template value adopt itself as those outputs' baseline
+	// (adoptMembersLocked), so the host never commands a member back to the
+	// zero of its type.
+	memberOf map[metricKey][]string
 	// nodeCfg indexes manifest nodes by edge_node_id.
 	nodeCfg map[string]Node
 
@@ -267,6 +279,12 @@ type Driver struct {
 	// rebirthQ accumulates rebirth requests raised while mu is held;
 	// flushRebirths drains it and invokes onRebirthNeeded outside the lock.
 	rebirthQ []nodeKey
+	// adoptQ accumulates member-output baseline adoptions raised while mu is
+	// held. It exists for the same reason rebirthQ does — the write maps are
+	// under wmu, and flushWrites already takes wmu before d.mu (nodeOnline),
+	// so taking wmu under d.mu would invert the order. flushAdopts drains it
+	// with neither lock held and then takes wmu alone.
+	adoptQ []adoption
 	// degraded is set when the discovery policy is DiscoveryStrict and an
 	// unmanifested metric has been seen. /api/drivers reports "degraded".
 	degraded bool
@@ -276,10 +294,30 @@ type Driver struct {
 	warned map[string]bool
 
 	// ── outbound commands (owned by B3: mqtt.go) ──
-	wmu     sync.Mutex
-	pending map[string]any // queued writes: nautilus tag name → desired value
-	written map[string]any // last value successfully published (for on-change)
-	wkick   chan struct{}  // non-blocking nudge to the writer goroutine
+	// OUTPUTS ARE COMMANDS. The runtime hands WriteOutputs *all* outputs
+	// every scan, so "the driver was handed a value" is not "the operator
+	// asked for it". Three maps keep those apart, all guarded by wmu and all
+	// holding CANONICAL values (canonWrite: an ir.Value, coerced to the
+	// template leaf's type for a member output) so comparisons never trip
+	// over int64-vs-float64 or a plain-vs-ir shape.
+	wmu sync.Mutex
+	// pending are queued commands: nautilus tag name → desired value.
+	pending map[string]any
+	// lastOut is the CHANGE DETECTOR: the last value the runtime handed us
+	// for this output that we have accounted for. A scan whose value equals
+	// lastOut is not a command and produces nothing on the wire. The very
+	// first snapshot after Start (and after each reconnect) fills lastOut
+	// without publishing — see armBaseline.
+	lastOut map[string]any
+	// remote is what we believe the NODE currently holds: the last value we
+	// published for this tag, or — for a member output — the member's live
+	// value adopted from an NBIRTH/DBIRTH/NDATA (adoptMembersLocked). A
+	// command whose value the node already holds is suppressed.
+	remote map[string]any
+	// baseline arms the next WriteOutputs snapshot as a baseline: recorded
+	// into lastOut, never published.
+	baseline bool
+	wkick    chan struct{} // non-blocking nudge to the writer goroutine
 
 	// rebirths is the async NCMD-Rebirth queue. state.go's reorder timer runs
 	// under d.mu and inside paho's ordered message goroutine, so it must never
@@ -367,6 +405,15 @@ type memberOut struct {
 	// datatype is the leaf's Sparkplug datatype NAME ("Double", "Boolean"),
 	// which the generated tag file's init: follows.
 	datatype string
+}
+
+// adoption is one member output's baseline, taken from the live value the
+// node just reported for the member: "the site already holds this, so a
+// command carrying it would be a no-op". Queued under d.mu, applied to
+// Driver.remote under wmu by flushAdopts.
+type adoption struct {
+	name  string
+	value any
 }
 
 // metricRef is what an alias resolves to inside one edge node. Aliases are

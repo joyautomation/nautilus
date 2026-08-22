@@ -198,6 +198,9 @@ type TagSpec struct {
 	// binding. Empty for struct-shaped tags and for the companions. The tag
 	// renderer follows it when it types an init: literal.
 	Datatype string
+	// Desc is the binding's description, verbatim. Empty for the synthesized
+	// companions and for any binding whose source did not describe it.
+	Desc string
 }
 
 // TagSpecs returns every tag this manifest implies — the synthesized
@@ -228,7 +231,7 @@ func (m Manifest) TagSpecs() []TagSpec {
 		// type, not the struct's: the whole point is that the operator writes
 		// one control, so the tag an HMI binds is a BOOL or a LREAL.
 		if b.Member != "" {
-			spec := TagSpec{Name: b.Name, Role: RoleOutput, Init: b.Init}
+			spec := TagSpec{Name: b.Name, Role: RoleOutput, Init: b.Init, Desc: b.Desc}
 			if f, _, err := m.ResolveMember(b.Type, b.Member); err == nil {
 				spec.Datatype = f.Type
 				if spec.Init == nil {
@@ -238,7 +241,7 @@ func (m Manifest) TagSpecs() []TagSpec {
 			out = append(out, spec)
 			continue
 		}
-		spec := TagSpec{Name: b.Name, Role: RoleInput}
+		spec := TagSpec{Name: b.Name, Role: RoleInput, Desc: b.Desc}
 		if _, isStruct := types[b.Type]; isStruct {
 			spec.Type = b.Type
 		} else {
@@ -304,6 +307,7 @@ func (d *Driver) buildIndexes() error {
 	d.byName = make(map[string]Binding)
 	d.byMetric = make(map[metricKey]Binding, len(m.Tags))
 	d.members = make(map[string]memberOut)
+	d.memberOf = make(map[metricKey][]string)
 	for _, b := range m.Bindings() {
 		// Validate has already rejected an unresolvable type; this catches a
 		// Driver built from a Manifest literal that skipped the loader.
@@ -330,6 +334,10 @@ func (d *Driver) buildIndexes() error {
 				leaf:     leaf,
 				datatype: f.Type,
 			}
+			// The reverse index: when the parent metric arrives, these are
+			// the outputs whose baseline it settles (adoptMembersLocked).
+			pk := metricKey{EdgeNode: b.Node, Device: b.Device, Metric: b.Metric}
+			d.memberOf[pk] = append(d.memberOf[pk], b.Name)
 			continue
 		}
 		d.byMetric[metricKey{EdgeNode: b.Node, Device: b.Device, Metric: b.Metric}] = b

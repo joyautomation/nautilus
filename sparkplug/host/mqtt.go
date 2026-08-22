@@ -254,7 +254,15 @@ func (d *Driver) connect(ctx context.Context) (mqtt.Client, <-chan struct{}, err
 	if d.cfg.RebirthOnStart {
 		go d.rebirthAll(ctx)
 	}
-	// Anything queued while we were down can go now.
+	// A reconnect deliberately does NOT re-arm the baseline. d.lastOut is
+	// session-independent — it tracks the runtime's output tags, not the
+	// broker — so it is already the baseline the moment we come back and
+	// there is nothing to replay. Re-arming here would be strictly worse: it
+	// would swallow an operator command that happened to land in the same
+	// scan as the reconnect.
+	//
+	// Anything genuinely asked for while we were down is in d.pending and can
+	// go now.
 	d.kickWriter()
 	return cli, lost, nil
 }
@@ -502,6 +510,7 @@ func (d *Driver) flushWrites() {
 		}
 		if !d.nodeOnline(b.Node) {
 			drops++
+			d.unaccount(name)
 			d.log.Debug("host: dropping write to offline node", "tag", name, "node", b.Node)
 			continue
 		}
@@ -631,9 +640,55 @@ func setTemplateMember(root *sparkplug.Template, mo memberOut, leaf sparkplug.Me
 	cur.Metrics = append(cur.Metrics, leaf)
 }
 
+// markWritten records that a value reached the node: it is both the last
+// thing the runtime handed us for this tag and what we now believe the site
+// holds, so neither a re-scan nor a re-write of the same value commands
+// again.
 func (d *Driver) markWritten(name string, v any) {
 	d.wmu.Lock()
-	d.written[name] = v
+	d.initWriteMapsLocked()
+	d.lastOut[name] = v
+	d.remote[name] = v
+	d.wmu.Unlock()
+}
+
+// unaccount forgets a command that never left — a write to an offline node.
+// Dropping lastOut is what makes the next scan see the tag as changed again
+// and re-raise it, which is the behaviour a dark site has always had: the
+// operator's setpoint is retried (and counted as a drop) until the site
+// births or the operator moves the tag somewhere else.
+func (d *Driver) unaccount(name string) {
+	d.wmu.Lock()
+	delete(d.lastOut, name)
+	d.wmu.Unlock()
+}
+
+// flushAdopts applies the member-output baselines the state machine queued
+// while it held d.mu: the live value of a member IS what the site holds, so a
+// later operator write of that same value is a no-op and a write of anything
+// else goes out once. It must be called with NEITHER lock held: wmu and d.mu
+// are never nested anywhere in this package, and this is the one path that
+// crosses from the state machine's lock into the writer's, so it drains under
+// d.mu, releases, and only then takes wmu.
+//
+// A tag with a command already queued is skipped: the operator's intent is
+// newer than the birth that raced it.
+func (d *Driver) flushAdopts() {
+	d.mu.Lock()
+	q := d.adoptQ
+	d.adoptQ = nil
+	d.mu.Unlock()
+	if len(q) == 0 {
+		return
+	}
+	d.wmu.Lock()
+	d.initWriteMapsLocked()
+	for _, a := range q {
+		if _, queued := d.pending[a.name]; queued {
+			continue
+		}
+		d.remote[a.name] = a.value
+	}
 	d.wmu.Unlock()
 }
 
