@@ -204,6 +204,7 @@ scans. Outputs read as `inst.Pin` from any language.
 | `F_TRIG` | `CLK` | `Q` | one-scan pulse on the falling edge |
 | `SR` | `S1: BOOL, R: BOOL` | `Q1: BOOL` | set-dominant latch |
 | `RS` | `S: BOOL, R1: BOOL` | `Q1: BOOL` | reset-dominant latch |
+| `PID` | see [below](#pid-closed-loop-control) | see below | closed-loop control — proportional/integral/derivative with anti-windup and bumpless auto/manual |
 
 ### Power pins in ladder
 
@@ -223,6 +224,61 @@ parentheses:
 
 Passing the power pin explicitly in the argument list (`t1:TON(IN := x)`)
 is an error — power owns it.
+
+### PID: closed-loop control
+
+`PID` is a positional (non-velocity) three-term controller in the IEC/OSCAT
+spirit — no ladder power pin (like `CTUD`, it has no single input that
+means "run"), so instantiate it from ST or an FBD diagram, the way the
+[heated-tank-nogo](../examples/heated-tank-nogo) example wires its own
+hand-rolled PI today.
+
+| Pin | Kind | Type | Meaning |
+| --- | --- | --- | --- |
+| `AUTO` | input | `BOOL` | `TRUE` = closed loop; `FALSE` = manual — `CV` tracks `CV_MAN` and the integral free-wheels for a bumpless return to AUTO |
+| `PV` | input | `REAL` | process value |
+| `SP` | input | `REAL` | setpoint |
+| `KP` | input | `REAL` | proportional gain. **`KP = 0` disables the whole controller**, not just the P term — see below |
+| `KI` | input | `REAL` | integral gain, **repeats/second** (`1/TI`); `0` disables integral action |
+| `KD` | input | `REAL` | derivative gain, **seconds** (`TD`); `0` disables derivative action |
+| `CV_MAN` | input | `REAL` | manual output, used when `AUTO = FALSE` |
+| `CV_MIN` | input | `REAL` | output clamp floor. Default `0` (see below) |
+| `CV_MAX` | input | `REAL` | output clamp ceiling. Default `100` (see below) |
+| `DIRECT` | input | `BOOL` | `FALSE` = reverse acting, `error = SP − PV` (e.g. a heater — raise `CV` when `PV` is low); `TRUE` = direct acting, `error = PV − SP` (e.g. a cooling valve) |
+| `DT` | input | `REAL` | seconds since the last call. Left at `0` (unbound), the block measures elapsed time itself from the scan clock — bind a task's `dt-tag` when one is available, same as any hand-written loop |
+| `DB` | input | `REAL` | deadband on `error` — within `±DB` the P and I terms see zero error (chatter suppression); the D term still sees every `PV` move |
+| `RESET` | input | `BOOL` | `TRUE` zeroes the integral this scan |
+| `CV` | output | `REAL` | controller output, clamped to `[CV_MIN, CV_MAX]` |
+| `ERR` | output | `REAL` | `error`, before the deadband |
+| `SAT_HI`, `SAT_LO` | output | `BOOL` | `TRUE` when `CV` is clamped at its ceiling/floor |
+| `P_TERM`, `I_TERM`, `D_TERM` | output | `REAL` | the three contributions to `CV`, for trending/diagnostics |
+
+**Algorithm.** ISA standard form: `CV = KP·(error + KI·∫error·dt + KD·d(PV)/dt)`.
+The derivative acts on `PV`, not on `error` (so a setpoint step never
+"kicks" `D_TERM` — only a `PV` change does), through a fixed first-order
+filter (time constant `KD/10`) that keeps sensor noise from being
+amplified into a noisy `CV`. Anti-windup is **conditional integration**:
+the integral only accumulates when doing so wouldn't push the unclamped
+output further past a rail it has already reached — cheap, and unlike
+back-calculation it needs no extra tracking-gain to tune. `AUTO`/`MANUAL`
+is bumpless both ways: in `MANUAL`, the integral is continuously
+back-solved every scan so `P_TERM + I_TERM + D_TERM` already equals
+`CV_MAN`, so the instant `AUTO` goes `TRUE`, `CV` continues from exactly
+where `CV_MAN` left off instead of jumping. Leaving `CV_MIN`/`CV_MAX` both
+unbound (they default to `0`) falls back to the IEC `0..100` range, since
+an explicit `0..0` clamp would otherwise pin `CV` at zero.
+
+```iecst
+(* LIC-101: tank level, reverse acting — open the inlet valve more as
+   level falls below setpoint, close it as level rises to setpoint. *)
+VAR lic : PID; END_VAR
+lic(AUTO   := TRUE,     PV     := LevelPct, SP    := LevelSP,
+    KP     := 1.5,      KI     := 0.05,     KD    := 0.0,
+    CV_MAN := 0.0,      CV_MIN := 0.0,      CV_MAX := 100.0,
+    DIRECT := FALSE,    DB     := 0.5,      DT    := ScanDtS);
+InletValve := lic.CV;
+IF lic.SAT_HI THEN InletMaxedAlm := TRUE; END_IF;
+```
 
 ## User function blocks
 

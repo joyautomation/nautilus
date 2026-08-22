@@ -549,7 +549,10 @@ The pieces that make this first-class rather than a convention:
   [docs/functions.md](docs/functions.md#user-function-blocks).
 
 `nautilus new` scaffolds this shape: the PI controller ships in
-`blocks.st`, instantiated from `program.st`.
+`blocks.st`, instantiated from `program.st`. (This one is worth writing
+by hand once to see how it works; for real loops reach for the built-in
+`PID` — anti-windup, bumpless auto/manual, derivative-on-PV filtering,
+diagnostics — see [docs/functions.md](docs/functions.md#pid-closed-loop-control).)
 
 ### More than one program: tasks
 

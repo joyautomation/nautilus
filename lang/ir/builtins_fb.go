@@ -37,6 +37,7 @@ func init() {
 	registerEdgeTriggers()
 	registerCounters()
 	registerLatches()
+	registerPID()
 }
 
 // ─── TON: timer on-delay ────────────────────────────────────────────
