@@ -118,6 +118,84 @@ func TestLoadRestoresIntegerKind(t *testing.T) {
 	}
 }
 
+// A retained STRUCT tag must both persist (retainState) and restore
+// (loadRetained) member by member: setAny has no case for a map, so before
+// this fix a struct tag's operator setpoints silently reverted to the
+// manifest's seed on every restart or takeover.
+const motorLib = `
+TYPE
+  Motor : STRUCT
+    Speed : REAL;
+    Starts : INT;
+    Name : STRING;
+  END_STRUCT;
+END_TYPE
+`
+
+const motorProg = `PROGRAM P VAR_EXTERNAL P101 : Motor; END_VAR END_PROGRAM`
+
+func TestRetainStatePersistsStructTag(t *testing.T) {
+	rt, err := New(Options{
+		Program:   motorProg,
+		Libraries: []string{motorLib},
+		Tags: []TagDef{
+			Typed("P101", RoleSetpoint, "Motor",
+				Init(map[string]any{"Speed": 42.0})),
+		},
+		Retain: &fakeStore{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := rt.retainState()
+	got, ok := st.Tags["P101"].(map[string]any)
+	if !ok {
+		t.Fatalf("retainState did not persist struct tag P101: %+v", st.Tags)
+	}
+	if got["Speed"] != 42.0 {
+		t.Fatalf("P101.Speed = %v, want 42.0", got["Speed"])
+	}
+}
+
+func TestRetainedStructTagRestoresBeforeFirstScan(t *testing.T) {
+	store := &fakeStore{state: retain.State{Tags: map[string]any{
+		"P101": map[string]any{"Speed": 88.0, "Starts": 5.0},
+	}}}
+	rt, err := New(Options{
+		Program:   motorProg,
+		Libraries: []string{motorLib},
+		Tags: []TagDef{
+			Typed("P101", RoleSetpoint, "Motor",
+				Init(map[string]any{"Speed": 42.0, "Name": "seed"})),
+		},
+		Retain: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan()
+	v, err := rt.Tags().ReadGlobal("P101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Kind != ir.TypeStruct {
+		t.Fatalf("P101 kind = %v, want TypeStruct", v.Kind)
+	}
+	all := rt.Tags().All()["P101"].(map[string]any)
+	if all["Speed"] != 88.0 {
+		t.Fatalf("P101.Speed = %v, want the retained 88.0 over the 42.0 seed", all["Speed"])
+	}
+	if got, ok := all["Starts"].(int64); !ok || got != 5 {
+		t.Fatalf("P101.Starts = %v (kind %T), want the retained int 5, not a float64", all["Starts"], all["Starts"])
+	}
+	// A member the retained map didn't name (Name) must keep the seed's
+	// value, not zero out — the retained restore is a merge, same as
+	// SeedFromInit/SetPath.
+	if all["Name"] != "seed" {
+		t.Fatalf("P101.Name = %v, want the seed's %q to survive the merge", all["Name"], "seed")
+	}
+}
+
 // A standby must not scan at all — no logic, no stats, and above all no
 // output writes. Suppression by absence is the redundancy safety story.
 func TestStandbyDoesNotScan(t *testing.T) {

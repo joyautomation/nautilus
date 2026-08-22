@@ -114,6 +114,11 @@
         "historian": {
           "type": "string",
           "description": "Base URL of a `nautilus historian` daemon; GET /api/history* proxies there. NAUTILUS_HISTORIAN_URL overrides."
+        },
+        "hmi": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A built HMI's directory, relative to the project (e.g. the SvelteKit `adapter-static` output, \"./hmi/build\") — must resolve inside the project, like every other manifest-referenced path. When set, the controller serves it at \"/\" (falling back to its index.html for a client-side route), and the built-in dashboard moves to \"/_nautilus/\". The HMI must call the tag API same-origin (a relative \"/api/...\" base URL)."
         }
       }
     },

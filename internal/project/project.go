@@ -123,6 +123,20 @@ type ServerConfig struct {
 	// the API proxies GET /api/history* there so the HMI keeps one origin.
 	// NAUTILUS_HISTORIAN_URL overrides at start.
 	Historian string `yaml:"historian"`
+	// HMI is a built HMI's directory, relative to the project (e.g. the
+	// SvelteKit `adapter-static` output, "./hmi/build") — same rule as
+	// every other manifest-referenced path (tag-files, driver.manifest):
+	// it must resolve inside the project (see projectPath), so what
+	// `nautilus build` ships is what a reviewer can see in the checkout.
+	// When set, the controller serves that directory at "/" (SPA fallback
+	// to its index.html for a client-side route), and the built-in
+	// dashboard moves to "/_nautilus/" — see server.Options.HMI. Empty (the
+	// default): unchanged, the dashboard keeps "/".
+	//
+	// The HMI must call the tag API same-origin (a relative "/api/..."
+	// base URL) — server.hmi and the API are one process on one address,
+	// so there is no cross-origin URL to configure.
+	HMI string `yaml:"hmi"`
 }
 
 // TaskConfig is one program on its own scan. The FIRST task is the main
@@ -199,6 +213,11 @@ type Project struct {
 	Server    server.Options
 	sparkplug *SparkplugConfig
 	inputTags []string // role-input tag names, for the Sparkplug device
+
+	// HMIDir is server.hmi's path, cleaned and relative to the project
+	// (e.g. "hmi/build") — "" when unset. `nautilus build` uses it to warn
+	// on a large embed; Server.HMI (above) is the fs.FS actually served.
+	HMIDir string
 
 	// Retain/Redundancy carry the manifest's sections for `nautilus run`
 	// to wire; Load itself constructs nothing — check, build, and the LSP
@@ -489,6 +508,24 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			inputs = append(inputs, t.Name)
 		}
 	}
+	var hmiFS fs.FS
+	var hmiDir string
+	if m.Server.HMI != "" {
+		hmiPath, err := projectPath(m.Server.HMI)
+		if err != nil {
+			return nil, fmt.Errorf("server.hmi: %w", err)
+		}
+		hmiDir = hmiPath
+		// fs.Sub only wraps a path prefix — it does not require hmiPath to
+		// exist yet, so `nautilus check`/a language server reading the
+		// manifest before `npm run build` has run doesn't fail here. A
+		// request against a missing build 404s at serve time instead (see
+		// server.handleHMI); `nautilus run`'s banner and `nautilus build`'s
+		// output both name the configured directory either way.
+		if hmiFS, err = fs.Sub(fsys, hmiPath); err != nil {
+			return nil, fmt.Errorf("server.hmi: %w", err)
+		}
+	}
 	return &Project{
 		Name:    projName,
 		Addr:    addr,
@@ -497,11 +534,13 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			Interval:     time.Duration(m.Server.Interval),
 			OnlineEdits:  m.Server.OnlineEdits,
 			HistorianURL: m.Server.Historian,
+			HMI:          hmiFS,
 		},
 		sparkplug:  m.Sparkplug,
 		inputTags:  inputs,
 		Retain:     m.Retain,
 		Redundancy: m.Redundancy,
+		HMIDir:     hmiDir,
 	}, nil
 }
 

@@ -149,7 +149,11 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		banner += " (" + label + ")"
 	}
 	if apiUp {
-		banner += " — dashboard + tag API on http://" + addr
+		if proj.HMIDir != "" {
+			banner += " — hmi (" + proj.HMIDir + ") + tag API on http://" + addr
+		} else {
+			banner += " — dashboard + tag API on http://" + addr
+		}
 	}
 	if sparkplugUp {
 		banner += " — sparkplug up"
@@ -261,6 +265,12 @@ func runBuild(args []string) int {
 		fmt.Fprintln(os.Stderr, "nautilus build: compile:", err)
 		return 1
 	}
+	if proj.HMIDir != "" {
+		if st, err := os.Stat(filepath.Join(dir, proj.HMIDir)); err != nil || !st.IsDir() {
+			fmt.Fprintf(os.Stderr, "nautilus build: server.hmi: %s: not a directory (run the HMI's own build first, e.g. `npm run build` in its project)\n", proj.HMIDir)
+			return 1
+		}
+	}
 
 	name := *out
 	if name == "" {
@@ -276,13 +286,28 @@ func runBuild(args []string) int {
 	// commits from an air-gapped network. No repo is fine — the endpoint
 	// just serves an empty history.
 	history, note := captureHistory(dir)
-	if err := emitBinary(self, dir, name, *manifest, history); err != nil {
+	archiveBytes, err := emitBinary(self, dir, name, *manifest, history)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "nautilus build:", err)
 		return 1
 	}
 	fmt.Printf("built %s — a self-contained controller (run it like any binary; NAUTILUS_ADDR/NAUTILUS_TOKEN apply)%s\n", name, note)
+	if archiveBytes > embedSizeWarning {
+		fmt.Fprintf(os.Stderr,
+			"nautilus build: warning: the embedded project is %.1f MB (over the %d MB comfort threshold) — "+
+				"if server.hmi is set, check its build didn't drag in a dependency tree (node_modules etc. "+
+				"should already be excluded; a stray copy elsewhere in the project would not be)\n",
+			float64(archiveBytes)/(1024*1024), embedSizeWarning/(1024*1024))
+	}
 	return 0
 }
+
+// embedSizeWarning is where `nautilus build` starts saying something: a
+// controller binary is meant to be "one file to ship," and an HMI's own
+// build output is normally a few MB of hashed JS/CSS — comfortably under
+// this. Not a hard limit (the archive still embeds and the binary still
+// runs), just a nudge to look at what's riding along.
+const embedSizeWarning = 50 * 1024 * 1024
 
 // captureHistory snapshots dir's git history as the JSON `.history` embeds,
 // plus a note for the build line. Failures degrade to no history — a build
@@ -325,32 +350,54 @@ func embeddedManifest(fsys fs.FS) string {
 	return strings.TrimSpace(string(raw))
 }
 
-func emitBinary(self, dir, out, manifest string, history []byte) error {
+// embedSkipDirs names project subdirectories that never ship, however large
+// they are on disk: dependency trees a package manager can regenerate, not
+// project sources. This matters more once an hmi/ directory can sit inside
+// the project (server.hmi points at its *build* output, e.g. hmi/build) —
+// without this, a `nautilus build` run from beside an un-.gitignore'd
+// node_modules would embed the whole SvelteKit toolchain into the CLI
+// binary instead of the few static files server.hmi actually needs. Named
+// the same as runCheck's own source walk (cmd/nautilus/check.go), for the
+// same reason: neither is a project source.
+var embedSkipDirs = map[string]bool{".git": true, "node_modules": true, "vendor": true}
+
+// emitBinary appends dir's project (plus manifest/history markers) onto a
+// copy of the runner at self, writing the result to out. It returns the
+// archive's uncompressed byte total — runBuild's size warning threshold —
+// alongside the usual error.
+func emitBinary(self, dir, out, manifest string, history []byte) (int64, error) {
 	src, err := os.Open(self)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer src.Close()
 	f, err := os.OpenFile(out, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer f.Close()
 	// 1. the runner: this executable, byte for byte (minus any project a
 	//    previous build appended to it).
 	base, err := runnerSize(src)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if _, err := io.CopyN(f, src, base); err != nil {
-		return err
+		return 0, err
 	}
 	// 2. the project archive.
 	zipStart := base
+	var archiveBytes int64
 	zw := zip.NewWriter(f)
 	err = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
 			return err
+		}
+		if d.IsDir() {
+			if embedSkipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		rel, err := filepath.Rel(dir, p)
 		if err != nil {
@@ -372,32 +419,33 @@ func emitBinary(self, dir, out, manifest string, history []byte) error {
 		if err != nil {
 			return err
 		}
+		archiveBytes += int64(len(raw))
 		_, err = w.Write(raw)
 		return err
 	})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if manifest != "" {
 		w, err := zw.Create(manifestMarker)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if _, err := w.Write([]byte(manifest)); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	if len(history) > 0 {
 		w, err := zw.Create(historyMarker)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		if _, err := w.Write(history); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	if err := zw.Close(); err != nil {
-		return err
+		return 0, err
 	}
 	// 3. the footer: where the zip starts, and the magic that marks a
 	//    built controller.
@@ -405,7 +453,7 @@ func emitBinary(self, dir, out, manifest string, history []byte) error {
 	binary.LittleEndian.PutUint64(footer[:8], uint64(zipStart))
 	copy(footer[8:], embedMagic[:])
 	_, err = f.Write(footer[:])
-	return err
+	return archiveBytes, err
 }
 
 // runnerSize is where the executable's own bytes end: the whole file for a

@@ -94,8 +94,33 @@ func (r *Runtime) loadRetained() error {
 	for _, n := range r.retainTags {
 		allowed[n] = true
 	}
+	var errs []error
 	for name, v := range st.Tags {
 		if !allowed[name] {
+			continue
+		}
+		// A retained STRUCT tag: JSON collapsed it to a plain
+		// map[string]any (see retainState/plain), which setAny has no case
+		// for — a flat write must never conjure a tag from nothing (see
+		// Tags.Set), so a map there is silently dropped. Restoring
+		// configuration is different: the tag already exists, seeded from
+		// the manifest (with its StructDef attached) before takeover ever
+		// runs, so it is read-modify-written member by member through
+		// ir.SetField exactly like a struct's own operator writes
+		// (Tags.SetPath) are — an empty path assigns the whole value, which
+		// for a struct target means the same partial merge SetPath does.
+		if m, isMap := v.(map[string]any); isMap {
+			cur, err := r.tags.ReadGlobal(name)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("retained tag %q: %w", name, err))
+				continue
+			}
+			nv, err := ir.SetField(cur, nil, m, "tag "+name)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("retained tag %q: %w", name, err))
+				continue
+			}
+			r.tags.setAny(name, nv)
 			continue
 		}
 		// JSON collapses every number to float64. If the tag is currently an
@@ -113,7 +138,6 @@ func (r *Runtime) loadRetained() error {
 		// not go through Set's member-path guard.
 		r.tags.setAny(name, v)
 	}
-	var errs []error
 	for task, src := range st.Programs {
 		p := r.TaskProgram(task)
 		if p == nil {
@@ -171,10 +195,15 @@ func (r *Runtime) saveRetained(lastSaved []byte) []byte {
 }
 
 // retainState assembles what this controller persists: the retained tags'
-// current scalar values, and the source of every program that has drifted
-// from what it compiled from (an online edit not yet pulled into git).
-// Compound values (UDTs, arrays) are skipped — their JSON form cannot be
-// written back through the tag store, so persisting them would be a lie.
+// current values, and the source of every program that has drifted from
+// what it compiled from (an online edit not yet pulled into git). A struct
+// (UDT) tag persists as its plain JSON form (see plain) — the same shape
+// GET /api/state already sends an HMI — and loadRetained merges it back
+// member by member through ir.SetField, so a restart doesn't lose a
+// faceplate's setpoints just because they live inside a UDT. Arrays are
+// still skipped: there is no settled path-addressed way to write one back
+// through the tag store (see ir.SetField's TypeArray case), so persisting
+// one would be a lie loadRetained could not make good on.
 func (r *Runtime) retainState() retain.State {
 	st := retain.State{}
 	for _, name := range r.retainTags {
@@ -183,7 +212,7 @@ func (r *Runtime) retainState() retain.State {
 			continue
 		}
 		switch v.Kind {
-		case ir.TypeBool, ir.TypeReal, ir.TypeInt, ir.TypeTime, ir.TypeString:
+		case ir.TypeBool, ir.TypeReal, ir.TypeInt, ir.TypeTime, ir.TypeString, ir.TypeStruct:
 			if st.Tags == nil {
 				st.Tags = map[string]any{}
 			}

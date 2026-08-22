@@ -18,6 +18,12 @@
 // full PLC-style diagnostics) so the hmi kit's frame-generic realtime client
 // and the editor tooling share one endpoint. Pure stdlib.
 //
+// Options.HMI turns the controller into a one-process HMI deploy: a built
+// SPA (SvelteKit's `adapter-static` output, or any other static bundle)
+// takes over "/" — with SPA-fallback routing — and the built-in dashboard
+// above moves to "/_nautilus/" so it stays reachable. See Options.HMI and
+// the manifest's `server.hmi`.
+//
 // Redundancy (Options.Cluster) makes every replica answerable behind a load
 // balancer even though only the leader scans: GET /api/cluster always
 // answers locally so a dashboard can see each replica's own view, and a
@@ -42,6 +48,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -163,6 +170,21 @@ type Options struct {
 	// live in one place; nil disables activation while leaving the history
 	// readable.
 	SourcesAt func(sha string) (map[string]string, error)
+
+	// HMI, when set, serves a built HMI — a SvelteKit `adapter-static`
+	// build, or any other static SPA bundle — at "/", so the controller is
+	// a one-process deploy: no separate web server for the operator screen.
+	// An unmatched, non-"/api" path falls back to the bundle's index.html
+	// (SPA client-side routing), and the built-in dashboard moves to
+	// "/_nautilus/" (its assets to "/_nautilus/assets/") so it stays
+	// reachable without colliding with whatever the HMI's own build puts
+	// under "/assets/". Nil (the default): the dashboard keeps "/" exactly
+	// as before.
+	//
+	// The HMI must call the API same-origin (a relative "/api/..." base
+	// URL, not an absolute host) — see the manifest's `server.hmi` and the
+	// "Serving the HMI from the controller" guide.
+	HMI fs.FS
 }
 
 // DriverStatus is a field driver's or publisher's health, rendered by the
@@ -208,6 +230,7 @@ type Server struct {
 	historian   string
 	historyFn   func() *ProgramHistory
 	sourcesAt   func(sha string) (map[string]string, error)
+	hmi         fs.FS
 
 	mu      sync.Mutex
 	clients map[chan []byte]struct{}
@@ -239,6 +262,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.historian = opts[0].HistorianURL
 		s.historyFn = opts[0].History
 		s.sourcesAt = opts[0].SourcesAt
+		s.hmi = opts[0].HMI
 	}
 	return s
 }
@@ -310,8 +334,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/cluster", s.handleCluster)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/history/", s.handleHistory)
-	mux.HandleFunc("GET /assets/", handleAsset)
-	mux.HandleFunc("GET /", s.handleIndex)
+	if s.hmi != nil {
+		// The HMI owns "/" (and whatever paths its own build wants under
+		// it, "/assets/" included); the built-in dashboard moves out of
+		// the way to "/_nautilus/" so it stays reachable without a name
+		// collision.
+		mux.HandleFunc("GET /_nautilus/", s.handleNautilusIndex)
+		mux.HandleFunc("GET /_nautilus/assets/", handleAsset)
+		mux.Handle("GET /", s.handleHMI())
+	} else {
+		mux.HandleFunc("GET /assets/", handleAsset)
+		mux.HandleFunc("GET /", s.handleIndex)
+	}
 	return withCORS(s.proxyStandby(mux))
 }
 
@@ -322,23 +356,27 @@ func (s *Server) Handler() http.Handler {
 // when Options.Cluster is set; with no Cluster configured every request
 // falls straight through to mux, exactly as before redundancy existed.
 //
-// Two things are always answered locally, even on a standby: GET
-// /api/cluster (each replica reports its own view of the cluster — showing
-// that divergence is the entire point) and the static UI ("/" and
-// "/assets/…", so a load-balancer health probe or a browser always gets a
-// page, whichever replica it lands on).
+// Everything outside "/api/" is always answered locally, even on a
+// standby: the built-in dashboard, its assets, and — when server.hmi is
+// configured — the whole HMI build, SPA-fallback routes included. None of
+// it reads the tag store, so a load-balancer health probe or a browser
+// always gets a page, whichever replica it lands on, and a client-side
+// route two levels deep in the HMI doesn't need special-casing here (it
+// was never a "/api/" path to begin with). Within "/api/", GET
+// /api/cluster is also always local (each replica reports its own view of
+// the cluster — showing that divergence is the entire point), and so is
+// /api/history*: the archive lives in the historian, not the tag store,
+// so a standby answers it as well as the leader and keeps answering it
+// mid-failover.
 func (s *Server) proxyStandby(mux http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cluster == nil {
 			mux.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/api/cluster" || r.URL.Path == "/" ||
-			strings.HasPrefix(r.URL.Path, "/assets/") ||
+		if !strings.HasPrefix(r.URL.Path, "/api/") ||
+			r.URL.Path == "/api/cluster" ||
 			strings.HasPrefix(r.URL.Path, "/api/history") {
-			// History also stays local: the archive lives in the historian,
-			// not the tag store, so a standby answers it as well as the
-			// leader — and keeps answering it mid-failover.
 			mux.ServeHTTP(w, r)
 			return
 		}
@@ -384,7 +422,8 @@ func withCORS(next http.Handler) http.Handler {
 
 // handleIndex serves the landing page at exactly "/". Because "GET /" is
 // the catch-all pattern, anything not matched by a more specific route
-// lands here; non-root paths get a real 404 rather than the page.
+// lands here; non-root paths get a real 404 rather than the page. Only
+// mounted when no HMI is configured — see handleHMI.
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -394,6 +433,47 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Write(indexHTML)
 }
 
+// handleNautilusIndex is handleIndex's counterpart when an HMI has claimed
+// "/": the same page, moved to "/_nautilus/" so it's still reachable
+// (linking a build's operator screen back to the raw tag table is exactly
+// the point of moving it rather than dropping it).
+func (s *Server) handleNautilusIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/_nautilus/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(indexHTML)
+}
+
+// handleHMI serves a configured HMI build (Options.HMI) at "/": a real
+// file in the tree is served as-is (content type, range requests, caching
+// — all http.FileServer's usual behavior); anything else falls back to
+// the bundle's own index.html, so client-side routing (SvelteKit, or any
+// other SPA router) resolves a deep link like "/tanks/101" itself instead
+// of getting a 404 from this server, which has no idea such a route
+// exists.
+func (s *Server) handleHMI() http.Handler {
+	fsrv := http.FileServer(http.FS(s.hmi))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		lookup := path.Clean(p)
+		if lookup == "." || strings.HasSuffix(p, "/") {
+			// The root, or a directory-style path (trailing slash): the
+			// file that answers it — if any — is its own index.html, same
+			// as http.FileServer's own directory convention.
+			lookup = path.Join(lookup, "index.html")
+		}
+		if st, err := fs.Stat(s.hmi, lookup); err == nil && !st.IsDir() {
+			fsrv.ServeHTTP(w, r)
+			return
+		}
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = "/"
+		fsrv.ServeHTTP(w, r2)
+	})
+}
+
 // handleAsset serves the embedded logo, favicon and fonts. Paths are matched
 // against the embedded tree, so nothing outside it is reachable; anything not
 // in the tree (including a traversal attempt) is a plain 404.
@@ -401,8 +481,13 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 // The cache lifetime is long because these bytes only change when the binary
 // does, and a font re-fetched on every page load is a visible flash of
 // fallback text on a wall-mounted dashboard that reloads all day.
+//
+// Mounted at both "/assets/" (no HMI configured) and "/_nautilus/assets/"
+// (HMI configured, dashboard moved) — the "_nautilus/" prefix, if present,
+// is stripped before the embedded-tree lookup so one handler serves both.
 func handleAsset(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/")
+	name = strings.TrimPrefix(name, "_nautilus/")
 	b, err := staticFS.ReadFile(name)
 	if err != nil {
 		http.NotFound(w, r)

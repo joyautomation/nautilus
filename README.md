@@ -156,7 +156,10 @@ completion, and **live tag values as pills** next to identifiers in
 - Swap `plant.go` for a real `io.Driver` — Modbus, EtherNet/IP, OPC-UA, your
   bus — when you have hardware. The control logic doesn't change.
 - Add an HMI: `npm install @joyautomation/nautilus-hmi` in a SvelteKit app for
-  SCADA faceplates and an SSE realtime client.
+  SCADA faceplates and an SSE realtime client. Build it with `adapter-static`
+  and a manifest project can serve the build itself — `server: { hmi:
+  ./hmi/build }` — so one binary is the whole deploy; see the tag-model guide's
+  "Serving the HMI from the controller".
 - Ship it like any Go binary: `go build`, deploy. The scaffolded CI gates on
   `go test` and `nautilus check`.
 
@@ -621,7 +624,9 @@ Early. This is the extracted, generalized core of a working demo
   manifest), write-on-change outputs, and a Logix controller emulator
   (`eip/logixserver`) for hermetic integration tests
 - ✅ `server` — tag API: JSON snapshot, SSE stream, tag writes (HMI + editor),
-  and a gated program API for online edits (`GET/PUT /api/program`, rollback)
+  a gated program API for online edits (`GET/PUT /api/program`, rollback),
+  and (`server.hmi`) serving a built HMI at "/" with SPA fallback, so the
+  controller can be the whole deploy — no separate web server
 - ✅ `tools/vscode-iec/` online edits — Download Program to Controller, diff
   running-vs-workspace, rollback, and a sync-status indicator
 - ✅ `cmd/nautilus` — CLI: interactive project scaffold, headless ST compile

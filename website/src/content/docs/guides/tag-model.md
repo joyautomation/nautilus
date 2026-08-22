@@ -159,6 +159,42 @@ writable struct tag and each leaf is editable), and the HMI kit's
 `rt.writeTag('WEL15_SUP_015.START', true)`, which resolves to `null` on
 success or the controller's reason when it refuses.
 
+## Serving the HMI from the controller
+
+`server.hmi` points the controller at a built HMI — a SvelteKit
+`adapter-static` build (`npm run build` → `build/`), or any other static SPA
+bundle — and it serves that directory at `/` instead of the built-in
+dashboard:
+
+```yaml
+server:
+  hmi: ./hmi/build
+```
+
+The path is relative to the project and must resolve inside it, the same
+rule as `tag-files:` and `driver.manifest`: what `nautilus build` ships is
+what a reviewer can see in the checkout. An unmatched, non-`/api` path
+falls back to the bundle's `index.html`, so client-side routing (SvelteKit's
+router, or any other SPA router) resolves a deep link itself instead of
+getting a 404 from the controller, which has no idea such a route exists.
+The built-in dashboard doesn't disappear — it moves to `/_nautilus/` (its
+assets to `/_nautilus/assets/`), so the raw tag table is still one URL away
+when you need it. `/api/*` and `/api/stream` are untouched either way.
+
+**The HMI must call the API same-origin** — a relative `/api/...` base URL,
+not an absolute host. `server.hmi` and the tag API are one process on one
+address, so there is nothing to configure; an app built against a separate
+controller URL (the `PUBLIC_NAUTILUS_URL`-style env var some HMI deploys
+use for a standalone dev server) should leave that unset, or point it at
+`""`, when it's built to be served this way.
+
+`nautilus build` embeds the HMI's build output in the archive exactly like
+every other project file (and prints a warning if the embedded project
+comes out over ~50 MB — a sign a dependency tree rode along by accident,
+not the HMI build itself); `nautilus run` serves it straight off disk. Set
+it once, and `go build`-style "one file to ship" applies to the operator
+screen too.
+
 ## Adding a field input end to end
 
 Adding a **new field input** is three lines in three places, all by the
