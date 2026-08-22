@@ -9,8 +9,8 @@
 	// `AlarmClient.journal()`) — this component only asks for a new range via
 	// `onrange` and renders whatever `events` it is then given.
 	import { untrack } from 'svelte';
-	import type { AlarmEvent, AlarmEventKind, Priority } from '../alarms.js';
-	import { PRIORITY_META } from '../alarms.js';
+	import type { AlarmEvent, AlarmEventKind, Priority } from '../alarms.svelte.js';
+	import { PRIORITY_META } from '../alarms.svelte.js';
 	import Button from './Button.svelte';
 
 	const EVENT_LABEL: Record<AlarmEventKind, string> = {

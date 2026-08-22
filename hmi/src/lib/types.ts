@@ -1,7 +1,7 @@
 // Public, app-agnostic types for the nautilus HMI kit. The realtime client is
 // generic over the frame shape, so nothing here is tied to any specific
 // runtime snapshot — only the primitives the visual components consume.
-import type { AlarmSummary } from './alarms.js';
+import type { AlarmSummary } from './alarms.svelte.js';
 
 /** A single timestamped sample. `t` is epoch milliseconds, `v` the value. */
 export interface TrendPoint {

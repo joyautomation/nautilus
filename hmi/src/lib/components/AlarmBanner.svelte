@@ -6,8 +6,8 @@
 	// off the stream — no fetching here, same house rule as
 	// `DriverStatusPanel`. Flashes via CSS while `unacked > 0`; respects
 	// reduced-motion.
-	import type { AlarmSummary, Priority } from '../alarms.js';
-	import { PRIORITY_META, PRIORITY_ORDER } from '../alarms.js';
+	import type { AlarmSummary, Priority } from '../alarms.svelte.js';
+	import { PRIORITY_META, PRIORITY_ORDER } from '../alarms.svelte.js';
 
 	let {
 		summary,

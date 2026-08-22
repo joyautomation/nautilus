@@ -38,7 +38,7 @@ export { default as DriverStatusPanel } from './components/DriverStatusPanel.sve
 export { default as AlarmBanner } from './components/AlarmBanner.svelte';
 export { default as AlarmTable } from './components/AlarmTable.svelte';
 export { default as AlarmJournal } from './components/AlarmJournal.svelte';
-export { AlarmClient, createAlarmClient, shouldRefetch, PRIORITY_ORDER, PRIORITY_META, STATE_META, DEFAULT_SHELVE_TIMES_S } from './alarms.js';
+export { AlarmClient, createAlarmClient, shouldRefetch, PRIORITY_ORDER, PRIORITY_META, STATE_META, DEFAULT_SHELVE_TIMES_S } from './alarms.svelte.js';
 export type {
 	Priority,
 	AlarmState,
@@ -51,7 +51,7 @@ export type {
 	AlarmJournalResult,
 	AlarmClientOptions,
 	FrameWithAlarms
-} from './alarms.js';
+} from './alarms.svelte.js';
 
 // App-shell primitives: icons, menus, navigation, dialogs, toasts — the
 // chrome around the process graphics, themed as siblings of the components

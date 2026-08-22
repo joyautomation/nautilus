@@ -10,8 +10,8 @@
 	// carry out. Simple pagination stands in for virtualization at 2,000+ rows
 	// — a fixed page size keeps row count, and therefore DOM size, bounded.
 	import { untrack } from 'svelte';
-	import type { AlarmInstance, AlarmState, Priority } from '../alarms.js';
-	import { DEFAULT_SHELVE_TIMES_S, PRIORITY_META, PRIORITY_ORDER, STATE_META } from '../alarms.js';
+	import type { AlarmInstance, AlarmState, Priority } from '../alarms.svelte.js';
+	import { DEFAULT_SHELVE_TIMES_S, PRIORITY_META, PRIORITY_ORDER, STATE_META } from '../alarms.svelte.js';
 	import Modal from './Modal.svelte';
 	import Button from './Button.svelte';
 	import Icon from './Icon.svelte';
