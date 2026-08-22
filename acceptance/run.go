@@ -375,11 +375,18 @@ func (r *testRun) value(name string) (ir.Value, error) {
 		return ir.Value{}, fmt.Errorf("no tag %q in this project", name)
 	}
 	if root, err := r.rt.Tags().ReadGlobal(head); err == nil {
-		v, ferr := fieldOf(root, head, rest)
-		if ferr != nil {
-			return ir.Value{}, ferr
+		// The walk itself is Tags.ReadPath now — the same promotion the
+		// design brief asks for, so a test, the alarm engine and the API
+		// resolve a member path identically. ReadPath only needs true/false
+		// (an HTTP handler has no prose to show a caller), but a test
+		// author staring at a typo needs to know WHICH segment failed and
+		// what the struct actually has — fieldMissErr redoes that one walk
+		// purely to build the message, only on the (rare, already-failed)
+		// error path.
+		if v, ok := r.rt.Tags().ReadPath(name); ok {
+			return irValue(v)
 		}
-		return v, nil
+		return ir.Value{}, fieldMissErr(root, head, rest)
 	}
 	if prog := r.rt.TaskProgram(head); prog != nil {
 		v, ok := prog.Locals()[rest]
@@ -392,25 +399,29 @@ func (r *testRun) value(name string) (ir.Value, error) {
 		head, strings.Join(sortedKeys(anyMap(r.known)), ", "), strings.Join(r.rt.TaskNames(), ", "))
 }
 
-// fieldOf walks a dotted path into a struct value. path may be several
+// fieldMissErr reconstructs the reason a dotted path did not resolve via
+// Tags.ReadPath, for a test-writer-friendly message: which segment failed,
+// and what the struct at that point actually has. path may be several
 // segments deep ("Motor.Drive.Speed"); each step reports what it could not
 // find and what was available, because a wrong field name in a test is
 // otherwise indistinguishable from a wrong value.
-func fieldOf(v ir.Value, sofar, path string) (ir.Value, error) {
+func fieldMissErr(v ir.Value, sofar, path string) error {
 	for path != "" {
 		var field string
 		field, path, _ = strings.Cut(path, ".")
 		if v.Kind != ir.TypeStruct || v.Struct == nil {
-			return ir.Value{}, fmt.Errorf("%s is not a struct, so it has no field %q", sofar, field)
+			return fmt.Errorf("%s is not a struct, so it has no field %q", sofar, field)
 		}
 		i, ok := v.Struct.FieldIndex[field]
 		if !ok || i >= len(v.Fld) {
-			return ir.Value{}, fmt.Errorf("%s has no field %q (%s has: %s)",
+			return fmt.Errorf("%s has no field %q (%s has: %s)",
 				sofar, field, v.Struct.Name, strings.Join(fieldNames(v.Struct), ", "))
 		}
 		v, sofar = v.Fld[i], sofar+"."+field
 	}
-	return v, nil
+	// Unreachable in practice: ReadPath already walked this exact path and
+	// found nothing wrong, so this branch has nothing to report.
+	return fmt.Errorf("%s: could not resolve", sofar)
 }
 
 func fieldNames(sd *ir.StructDef) []string {

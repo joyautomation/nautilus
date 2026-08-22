@@ -159,6 +159,26 @@ writable struct tag and each leaf is editable), and the HMI kit's
 `rt.writeTag('WEL15_SUP_015.START', true)`, which resolves to `null` on
 success or the controller's reason when it refuses.
 
+## Observing scans: `Runtime.OnScan`
+
+A Go-level subsystem that needs to react to the tag store every cycle — an
+alarm engine evaluating `AI.HH` after each scan, for instance — registers
+with `rt.OnScan(func(t *runtime.Tags) { ... })` instead of polling on its
+own ticker or wrapping the driver. It fires once per main-task `Scan()`,
+after the program has run and any driver outputs have been written, so the
+callback sees the store exactly as that scan left it; it also works
+unchanged under a test's virtual clock, since it is driven by `Scan()`
+itself rather than by wall-clock time. Registered observers run
+synchronously, in registration order, and a panic in one is recovered and
+logged rather than taking the scan down — but an observer must not block or
+write tags, since it runs inside the same lock that serializes every scan.
+`OnScan` returns a `cancel` func to unregister; reading a member path from
+inside a callback with `Tags.ReadPath("AI.HH")` — the Go-level counterpart
+of the dotted paths above, returning a plain scalar for a leaf or an
+`ir.Value` for a struct sub-tree — is safe and does not deadlock. See the
+doc comments on `runtime.Runtime.OnScan` and `runtime.Tags.ReadPath` for
+the full contract.
+
 ## Serving the HMI from the controller
 
 `server.hmi` points the controller at a built HMI — a SvelteKit

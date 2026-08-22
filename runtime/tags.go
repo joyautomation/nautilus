@@ -177,6 +177,74 @@ func (t *Tags) setFieldLocked(root string, cur ir.Value, path []string, v any) e
 	return nil
 }
 
+// ReadPath resolves a tag or a member path — "Tag" or "Tag.Member.Sub" — the
+// read counterpart of SetPath's address space, and the walk the acceptance
+// harness's `expect:`/`given:` and ST expressions already do to reach a
+// struct field like RTU9_WEL15_FIT_001.HH. As SetPath does, a tag whose own
+// NAME contains a dot wins over member resolution; failing that, the first
+// segment names the tag and every remaining segment steps into one struct
+// field.
+//
+// A leaf value comes back as a plain Go scalar — bool, int64, float64, or
+// string, the same collapse All() applies to a whole tag — so a caller
+// compares against a literal without importing ir. TIME collapses to its
+// int64 milliseconds like INT does; nothing here needs to tell them apart
+// (see All's `plain`). A struct, array, or FB sub-tree comes back as
+// ir.Value, since there is no lossless plain form for one and a caller that
+// wants a single field deeper just extends the path.
+//
+// ok is false for an unknown tag, an unknown member at any step, or a step
+// into a non-struct — never an error, because this is meant to be tried
+// speculatively (is "X.Y" a tag or a field?) far more often than SetPath's
+// descriptive errors are wanted. Goroutine-safe: one RLock for the whole
+// walk, the same guarantee ReadGlobal gives a single tag.
+func (t *Tags) ReadPath(path string) (any, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if v, ok := t.vals[path]; ok {
+		return plainLeaf(v), true
+	}
+	root, rest, dotted := strings.Cut(path, ".")
+	if !dotted {
+		return nil, false
+	}
+	v, ok := t.vals[root]
+	if !ok {
+		return nil, false
+	}
+	for rest != "" {
+		var field string
+		field, rest, _ = strings.Cut(rest, ".")
+		if v.Kind != ir.TypeStruct || v.Struct == nil {
+			return nil, false
+		}
+		i, ok := v.Struct.FieldIndex[field]
+		if !ok || i >= len(v.Fld) {
+			return nil, false
+		}
+		v = v.Fld[i]
+	}
+	return plainLeaf(v), true
+}
+
+// plainLeaf collapses a scalar ir.Value to its plain Go form; a composite
+// value (struct/array/FB) comes back as-is, since ReadPath's contract only
+// promises a plain form for leaves.
+func plainLeaf(v ir.Value) any {
+	switch v.Kind {
+	case ir.TypeBool:
+		return v.B
+	case ir.TypeReal:
+		return v.F
+	case ir.TypeInt, ir.TypeTime:
+		return v.I
+	case ir.TypeString:
+		return v.S
+	default:
+		return v
+	}
+}
+
 // Snapshot returns a typed copy of every tag as ir.Value — for consumers
 // that need the kind (e.g. the Sparkplug node's faithful datatype mapping),
 // where All()'s plain-JSON collapse would lose int-vs-real.
