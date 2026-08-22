@@ -437,6 +437,10 @@
       {
         "fileMatch": "tags/*.yaml",
         "url": "./schemas/nautilus-tags.schema.json"
+      },
+      {
+        "fileMatch": "alarms/*.yaml",
+        "url": "./schemas/nautilus-alarms.schema.json"
       }
     ]
   },

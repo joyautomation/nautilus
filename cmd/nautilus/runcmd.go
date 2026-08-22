@@ -74,6 +74,20 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		return 1
 	}
 
+	// Alarms before the scan loop starts: the engine registers itself on
+	// the runtime's post-scan hook, and SetAlarms hands it to the retain
+	// saver, so the first takeover restores the acknowledgements the last
+	// leader saved rather than re-annunciating them.
+	alarms, err := proj.NewAlarms(rt)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "nautilus run: alarms:", err)
+		return 1
+	}
+	if alarms != nil {
+		defer alarms.Close()
+		rt.SetAlarms(alarms.Engine)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if el != nil {
@@ -114,6 +128,10 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	// Field-driver + Sparkplug status feed GET /api/drivers and the stream.
 	sopts.Drivers = proj.DriverStatus(spNode)
+	if alarms != nil {
+		sopts.Alarms = alarms.Engine
+		sopts.AlarmShelveTimes = alarms.ShelveTimes
+	}
 	if el != nil {
 		sopts.Cluster = el
 	}
@@ -157,6 +175,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	if sparkplugUp {
 		banner += " — sparkplug up"
+	}
+	if alarms != nil {
+		banner += fmt.Sprintf(" — %d alarms", len(alarms.Defs))
 	}
 	if proj.Runtime.Retain != nil {
 		banner += " — retain: " + proj.Runtime.Retain.Kind()

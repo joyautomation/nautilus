@@ -185,6 +185,58 @@ retained state a program keeps but never publishes as a tag.
 One assertion is implicit: **a scan that faults fails the test that ran
 it**, with the error and the virtual timestamp. You never write that one.
 
+## Alarms
+
+Alarm state is **host state**: acknowledgement, shelf and the journal live
+in the alarm engine, not in the tag store, and no ST expression can see
+them. So they get a key of their own — `alarms:`, a sibling of `expect:`
+rather than a matcher inside it, since `expect:` is a mapping of *tag* to
+matcher and `expect: {alarms: …}` would be an assertion about a tag
+literally named `alarms`.
+
+The project needs an [`alarms:` section](/guides/alarms/) for any of this to
+mean anything; without one, a test that uses these keys is an error rather
+than a quiet pass.
+
+| key | meaning |
+| --- | --- |
+| `active: [id, …]` | the exact set of ids active or unack-RTN, order-insensitive. `[]` asserts nothing is annunciating |
+| `unacked: 2` | how many alarms are waiting on an operator |
+| `shelved: [id, …]` | the exact set of shelved ids |
+| `state: {id: unack-active}` | one alarm's ISA-18.2 state |
+| `priority: {high: 1}` | active counts by priority |
+| `journal: [active, ack, rtn]` | the exact sequence of event kinds this test produced, chronologically |
+
+And three verbs, applied with `given:` before the step spends its time —
+the same calls `POST /api/alarms/*` makes:
+
+```yaml
+- ack:      { ids: ["RTU9_WEL15_FIT_001.HH"], by: test }   # or { all: true }
+- shelve:   { id: RTU9_TNK01_LIT_001.L, for: 15m, by: test }
+- unshelve: { id: RTU9_TNK01_LIT_001.L, by: test }
+```
+
+Virtual time comes free, and it is the reason this is worth having: the
+engine reads the runtime's clock, so a five-minute `on-delay` is walked
+exactly by `advance: 4m` then `advance: 1m1s`, and a fifteen-minute shelf
+expires under `advance: 16m` — in microseconds, identically on every
+machine.
+
+```yaml
+- given: { RTU9_WEL15_FIT_001.PV: 120.0 }
+  advance: 4m                    # the bit is set; the ALARM is not, yet
+  expect: { RTU9_WEL15_FIT_001.HH: true }
+  alarms: { active: [], unacked: 0 }
+- advance: 1m1s                  # ... and now the on-delay has elapsed
+  alarms:
+    active: ["RTU9_WEL15_FIT_001.HH"]
+    state: { RTU9_WEL15_FIT_001.HH: unack-active }
+```
+
+`alarms:` is checked at the end of a step, so it does not combine with
+`until:` — a step that waits and then asserts alarms is two steps, and
+reads better as two. `examples/alarms` is the whole thing working.
+
 ## Freezing tasks
 
 `suspend: [sim]` stops the named tasks from scanning for the duration of a
@@ -274,9 +326,15 @@ func TestAcceptance(t *testing.T) {
     if err != nil {
         t.Fatal(err)
     }
-    acceptance.Run(t, fsys, proj.Runtime)
+    acceptance.Run(t, fsys, proj.Runtime,
+        acceptance.WithAlarms(proj.AlarmEngine))
 }
 ```
+
+`WithAlarms` is what makes the `alarms:` key work: it builds the
+manifest's own alarm engine over each test's runtime, with an in-memory
+journal and no notifiers — a test must never write to the site's alarm
+database. Leave it off and everything else behaves exactly as before.
 
 Hand-written Go tests get the virtual clock too — `acceptance.NewRuntime`
 returns a runtime and a scheduler with `Advance`, `Scans`, `AdvanceUntil`,

@@ -132,6 +132,12 @@ type Runtime struct {
 	leadMu  sync.Mutex
 	leading bool
 
+	// alarms is the alarm engine, as retained operator state — nil unless
+	// SetAlarms registered one. Its own mutex because loadRetained reads it
+	// from inside takeover, which already holds leadMu.
+	alarmMu sync.Mutex
+	alarms  retain.AlarmRetainer
+
 	// scanMu serializes scan execution across the main task and every
 	// additional task — a scan always sees a consistent tag snapshot.
 	scanMu sync.Mutex

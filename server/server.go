@@ -57,6 +57,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -108,6 +109,12 @@ type Frame struct {
 	Locals  map[string]any    `json:"locals,omitempty"`
 	Scan    runtime.ScanStats `json:"scan"`
 	Drivers []DriverStatus    `json:"drivers,omitempty"`
+	// Alarms is the alarm engine's counts — never the rows. Present only
+	// when Options.Alarms is set, so a controller without alarms and an
+	// HMI built before them see exactly the frame they saw before. Its
+	// Rev bumps on any state change, which is how an HMI knows to refetch
+	// GET /api/alarms and how it knows not to.
+	Alarms *alarm.Summary `json:"alarms,omitempty"`
 }
 
 // Options tunes the server; zero values mean defaults.
@@ -185,6 +192,20 @@ type Options struct {
 	// URL, not an absolute host) — see the manifest's `server.hmi` and the
 	// "Serving the HMI from the controller" guide.
 	HMI fs.FS
+
+	// Alarms, when set, serves the five /api/alarms* routes and puts the
+	// engine's Summary on every stream frame. Nil (the default): those
+	// routes 404 and the frame carries no alarms field at all — which is
+	// what the HMI kit's AlarmClient reads as "this controller has no
+	// alarm engine" and renders nothing for, rather than showing an empty
+	// list that looks like a quiet plant.
+	Alarms *alarm.Engine
+
+	// AlarmShelveTimes is the shelf durations an operator screen offers,
+	// served on /api/meta as seconds. Empty uses alarm.DefaultShelveTimes.
+	// It is configuration, not policy: the engine accepts any deadline in
+	// the future, and this is only what the picker suggests.
+	AlarmShelveTimes []time.Duration
 }
 
 // DriverStatus is a field driver's or publisher's health, rendered by the
@@ -231,6 +252,8 @@ type Server struct {
 	historyFn   func() *ProgramHistory
 	sourcesAt   func(sha string) (map[string]string, error)
 	hmi         fs.FS
+	alarms      *alarm.Engine
+	shelveTimes []time.Duration
 
 	mu      sync.Mutex
 	clients map[chan []byte]struct{}
@@ -263,6 +286,11 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.historyFn = opts[0].History
 		s.sourcesAt = opts[0].SourcesAt
 		s.hmi = opts[0].HMI
+		s.alarms = opts[0].Alarms
+		s.shelveTimes = opts[0].AlarmShelveTimes
+	}
+	if len(s.shelveTimes) == 0 {
+		s.shelveTimes = alarm.DefaultShelveTimes
 	}
 	return s
 }
@@ -315,6 +343,7 @@ func (s *Server) frame() Frame {
 	if s.drivers != nil {
 		f.Drivers = s.drivers()
 	}
+	f.Alarms = s.alarmSummary()
 	return f
 }
 
@@ -324,6 +353,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/meta", s.handleMeta)
 	mux.HandleFunc("GET /api/drivers", s.handleDrivers)
+	// Alarms: always registered, 404 when no engine — see server/alarms.go.
+	// Registering them unconditionally is what makes "this controller has
+	// no alarm engine" a message rather than a bare route-not-found.
+	mux.HandleFunc("GET /api/alarms", s.handleAlarms)
+	mux.HandleFunc("GET /api/alarms/journal", s.handleAlarmJournal)
+	mux.HandleFunc("POST /api/alarms/ack", s.handleAlarmAck)
+	mux.HandleFunc("POST /api/alarms/shelve", s.handleAlarmShelve)
+	mux.HandleFunc("POST /api/alarms/unshelve", s.handleAlarmUnshelve)
 	mux.HandleFunc("GET /api/stream", s.handleStream)
 	mux.HandleFunc("POST /api/tags", s.handleWriteTag)
 	mux.HandleFunc("GET /api/program", s.handleGetProgram)
@@ -582,6 +619,17 @@ type metaResponse struct {
 	// faceplate built for a newer runtime must be able to tell, and disable
 	// its controls against an older one instead of writing into the void.
 	MemberWrites bool `json:"memberWrites"`
+	// Alarms says this controller runs an alarm engine, so /api/alarms*
+	// will answer. Same capability-flag reasoning as MemberWrites: an HMI
+	// that renders an alarm banner needs to know whether to render one at
+	// all, and finding out by taking a 404 makes an ordinary page load
+	// look like an error.
+	Alarms bool `json:"alarms"`
+	// ShelveTimes is the shelf durations the operator screen's picker
+	// offers, in SECONDS — the unit every other duration in this API's
+	// JSON is not, but the one the HMI kit's DEFAULT_SHELVE_TIMES_S uses,
+	// and a shelf of 4.5 milliseconds is not a thing anyone wants.
+	ShelveTimes []int `json:"shelveTimes"`
 }
 
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
@@ -596,7 +644,17 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		Outputs:      nonNilStrings(s.rt.Outputs()),
 		ScanTargetMs: s.rt.Stats().TargetMs,
 		MemberWrites: true,
+		Alarms:       s.alarms != nil,
+		ShelveTimes:  shelveSeconds(s.shelveTimes),
 	})
+}
+
+func shelveSeconds(ds []time.Duration) []int {
+	out := make([]int, 0, len(ds))
+	for _, d := range ds {
+		out = append(out, int(d.Seconds()))
+	}
+	return out
 }
 
 func nonNilStrings(s []string) []string {

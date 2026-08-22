@@ -28,6 +28,9 @@ import (
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/joyautomation/nautilus/alarm"
+	"gopkg.in/yaml.v3"
 )
 
 const schemaPath = "../../tools/vscode-iec/schemas/nautilus.schema.json"
@@ -118,6 +121,12 @@ func TestSchemaMatchesLoader(t *testing.T) {
 		{"sparkplug", goKeys(SparkplugConfig{}), schemaKeys(s.Definitions["sparkplug"].Properties)},
 		{"an rbe class", goKeys(RBEConfig{}), schemaKeys(s.Definitions["rbe"].Properties)},
 		{"tag-meta", goKeys(MetaConfig{}), schemaKeys(s.Definitions["meta"].Properties)},
+		{"alarms", goKeys(AlarmsConfig{}), schemaKeys(s.Definitions["alarms"].Properties)},
+		{"alarm defaults", goKeys(alarm.Defaults{}), schemaKeys(s.Definitions["alarm-defaults"].Properties)},
+		{"the alarm journal", goKeys(AlarmJournalConfig{}), schemaKeys(s.Definitions["alarm-journal"].Properties)},
+		{"an alarm notifier", goKeys(AlarmNotifyConfig{}), schemaKeys(s.Definitions["alarm-notify"].Properties)},
+		{"an alarm rule", goKeys(alarm.Rule{}), schemaKeys(s.Definitions["alarm-rule"].Properties)},
+		{"an alarm rule's match", goKeys(alarm.Match{}), schemaKeys(s.Definitions["alarm-match"].Properties)},
 	} {
 		if !reflect.DeepEqual(tc.got, tc.schema) {
 			t.Errorf("%s: the loader accepts %v, the extension's schema declares %v\n"+
@@ -338,6 +347,198 @@ func TestSeededRolesNeedInit(t *testing.T) {
 	for _, role := range []string{"input", "output"} {
 		if _, err := tagDefs([]TagConfig{{Name: "T", Role: role}}); err != nil {
 			t.Errorf("loader rejected %s with no init, but unseeded is the point: %v", role, err)
+		}
+	}
+}
+
+// alarm.Def cannot be reflected the way every other definition can: its
+// three policy bools default to TRUE and its durations arrive as strings,
+// so the yaml keys live on an unexported wire struct with Def itself
+// tagged `yaml:"-"`. Reflection would under-declare the schema and pass.
+//
+// So this asserts the thing that actually matters, one key at a time:
+// every key the schema offers on an alarm, the loader accepts — and a key
+// it does not offer, the loader rejects. That is a stronger check than
+// name equality, since it exercises the decoder rather than a struct tag.
+func TestSchemaAlarmKeysAreAccepted(t *testing.T) {
+	s := loadSchema(t)
+	props := s.Definitions["alarm"].Properties
+	if len(props) == 0 {
+		t.Fatal("schema has no definitions.alarm — did it move?")
+	}
+	// A value of the right YAML shape for each key the schema declares.
+	sample := map[string]string{
+		"id": "A", "tag": "T.HH", "name": "High High", "priority": "high",
+		"class": "process", "site": "RTU9", "area": "WEL15",
+		"display": "Wells/15", "notes": "n", "on-delay": "5m",
+		"off-delay": "2s", "ack-required": "false", "auto-clear": "false",
+		"shelve": "false", "enable": "RTU9__Online",
+	}
+	for _, key := range schemaKeys(props) {
+		v, ok := sample[key]
+		if !ok {
+			t.Errorf("schema offers alarm.%s but this test has no sample value for it — "+
+				"add one, so the loader half is actually checked", key)
+			continue
+		}
+		doc := "- tag: T.HH\n  " + key + ": " + v + "\n"
+		if key == "tag" {
+			doc = "- tag: " + v + "\n"
+		}
+		if _, err := alarm.Load(strings.NewReader(doc)); err != nil {
+			t.Errorf("schema offers alarm.%s but the loader rejects it: %v", key, err)
+		}
+	}
+	if _, err := alarm.Load(strings.NewReader("- tag: T.HH\n  pryority: high\n")); err == nil {
+		t.Error("loader accepted a key the schema does not offer — a typo that looks configured " +
+			"and is not is the worst outcome available")
+	}
+}
+
+// Every priority and every journal sink the schema offers must be one the
+// loader implements, the same pairing TestSchemaRolesAreImplemented makes
+// for tag roles.
+func TestSchemaAlarmEnumsAreImplemented(t *testing.T) {
+	s := loadSchema(t)
+	for _, p := range enumOf(t, s, "alarm", "priority") {
+		if _, err := alarm.ParsePriority(p); err != nil {
+			t.Errorf("schema offers priority %q but the loader rejects it: %v", p, err)
+		}
+	}
+	if _, err := alarm.ParsePriority("urgent"); err == nil {
+		t.Error("loader accepted a priority the schema's enum does not offer")
+	}
+	for _, sink := range enumOf(t, s, "alarm-journal", "sink") {
+		c := AlarmsConfig{Journal: AlarmJournalConfig{Sink: sink, Path: "alarms.jsonl"}}
+		if err := c.validate(); err != nil {
+			t.Errorf("schema offers journal sink %q but the loader rejects it: %v", sink, err)
+		}
+	}
+	c := AlarmsConfig{Journal: AlarmJournalConfig{Sink: "sqlite"}}
+	if err := c.validate(); err == nil {
+		t.Error("loader accepted a journal sink the schema's enum does not offer")
+	}
+}
+
+// An alarm file is a bare list of the SAME entries as `alarms.defs:` and
+// `alarms.rules:`, so its schema refs those definitions rather than
+// copying them — two copies would drift and only one would be tested.
+// Exactly the argument TestTagFileSchemaRefsTheTagDefinition makes.
+func TestAlarmFileSchemaRefsTheAlarmDefinitions(t *testing.T) {
+	const path = "../../tools/vscode-iec/schemas/nautilus-alarms.schema.json"
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the extension's alarm-file schema is missing: %v", err)
+	}
+	var doc struct {
+		Type  string `json:"type"`
+		Items struct {
+			AnyOf []struct {
+				Ref string `json:"$ref"`
+			} `json:"anyOf"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("alarm-file schema is not valid JSON: %v", err)
+	}
+	if doc.Type != "array" {
+		t.Errorf("an alarm file is a bare YAML list, but its schema declares type %q", doc.Type)
+	}
+	var refs []string
+	for _, a := range doc.Items.AnyOf {
+		refs = append(refs, a.Ref)
+	}
+	sort.Strings(refs)
+	want := []string{"nautilus.schema.json#/definitions/alarm", "nautilus.schema.json#/definitions/alarm-rule"}
+	if !reflect.DeepEqual(refs, want) {
+		t.Fatalf("alarm-file items $ref = %v, want %v — a copied definition would drift "+
+			"from the loader untested", refs, want)
+	}
+	s := loadSchema(t)
+	for _, def := range []string{"alarm", "alarm-rule"} {
+		if _, ok := s.Definitions[def]; !ok {
+			t.Errorf("the alarm-file schema refs #/definitions/%s, which does not exist", def)
+		}
+	}
+}
+
+// Durations in the alarm section must ref the shared duration definition,
+// never `type: string` — the same rule the rest of the manifest follows,
+// and the reason TestSchemaDurationPatternMatchesParseDuration is worth
+// anything.
+func TestAlarmDurationsRefTheDurationDefinition(t *testing.T) {
+	raw, err := os.ReadFile(schemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Definitions map[string]struct {
+			Properties map[string]struct {
+				Ref  string `json:"$ref"`
+				Type any    `json:"type"`
+			} `json:"properties"`
+		} `json:"definitions"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, def := range []string{"alarm", "alarm-rule", "alarm-defaults"} {
+		for _, key := range []string{"on-delay", "off-delay"} {
+			p, ok := doc.Definitions[def].Properties[key]
+			if !ok {
+				t.Errorf("schema has no %s.%s", def, key)
+				continue
+			}
+			if p.Ref != "#/definitions/duration" {
+				t.Errorf("%s.%s is %v/%q, want $ref #/definitions/duration", def, key, p.Type, p.Ref)
+			}
+		}
+	}
+}
+
+// The alarm section round-trips through the manifest decoder with
+// KnownFields on, which is the only thing standing between a mistyped
+// alarm key and silence.
+func TestManifestAlarmsDecodeStrictly(t *testing.T) {
+	const good = `
+name: x
+alarms:
+  defaults: { priority: high }
+  shelve-times: [5m, 1h]
+  journal: { keep: 100 }
+  notify: [{ log: true }]
+  site-from: "^([A-Z]+[0-9]+)_"
+  rules:
+    - match: { type: AnalogInput, member: HH }
+      name: "{desc} High High"
+      priority: high
+  defs:
+    - id: A
+      tag: T
+      on-delay: 5m
+`
+	var m Manifest
+	dec := yaml.NewDecoder(strings.NewReader(good))
+	dec.KnownFields(true)
+	if err := dec.Decode(&m); err != nil {
+		t.Fatalf("a valid alarms section failed to decode: %v", err)
+	}
+	if m.Alarms == nil || len(m.Alarms.Rules) != 1 || len(m.Alarms.Defs) != 1 {
+		t.Fatalf("alarms decoded as %+v", m.Alarms)
+	}
+	if got := m.Alarms.Defs[0].OnDelay; got != 5*time.Minute {
+		t.Errorf("on-delay = %s, want 5m", got)
+	}
+	for _, bad := range []string{
+		"alarms: { defaultz: {} }",
+		"alarms: { rules: [{ match: { typ: X } }] }",
+		"alarms: { defs: [{ tag: T, pryority: high }] }",
+	} {
+		var m Manifest
+		dec := yaml.NewDecoder(strings.NewReader(bad))
+		dec.KnownFields(true)
+		if err := dec.Decode(&m); err == nil {
+			t.Errorf("decoder accepted %q — a typo must be an error, not silence", bad)
 		}
 	}
 }

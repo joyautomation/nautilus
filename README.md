@@ -32,7 +32,8 @@ lang/ir      typed IR + tree-walking virtual machine (pure stdlib)
 io/          Driver seam — bring your own bus (Modbus, EtherNet/IP, OPC-UA, sim)
 eip/         EtherNet/IP driver for Allen-Bradley Logix: pure-Go CIP stack,
              tag browse + UDT import codegen, polling io.Driver, Logix emulator
-server/      tag API over HTTP: JSON snapshot, SSE stream, tag writes
+server/      tag API over HTTP: JSON snapshot, SSE stream, tag writes, alarms
+alarm/       ISA-18.2 alarms: rules over UDT members, ack/shelve, journal
 cmd/nautilus the developer CLI: `new` (scaffold) · `check` (CI compile) · `lsp`
 hmi/         SvelteKit digital-twin component kit + realtime SSE client
 tools/vscode-iec/   VS Code extension: syntax, diagnostics, go-to-def, live values
@@ -47,6 +48,7 @@ examples/heated-tank/   a complete controller built on the libraries
 | `retain.Store` | where retained memory persists — file and k8s ConfigMap ship in `retain/` |
 | `runtime.Coordinator` | redundancy / leader election — a k8s Lease elector ships in `leader/` |
 | `hist.Sink` | where process history is archived — Postgres + `nautilus historian` ship in `hist/` |
+| `alarm.Journal` / `alarm.Notifier` | where alarm events land — a ring, rotated JSONL, and Postgres ship in `alarm/` |
 
 ## Getting started
 
@@ -292,6 +294,23 @@ API on the network also exposes its write surface, so set `NAUTILUS_TOKEN` on
 the controller and the matching `nautilus.token` in the editor — reads and
 `nautilus pull` stay open, but tag writes and online edits then require the
 token.
+
+### Alarms
+
+An alarm engine is a small thing when alarms are just tags. Your logic
+already computes the bits — a limit comparison, a fault contact, a `.HH`
+member an edge node published. `alarms:` in the manifest adds the part a
+*person* needs: an ISA-18.2 active list, acknowledge, a shelf that always
+expires, and an append-only journal, served at `/api/alarms*` with a
+counts-only summary on every stream frame. `rules:` generate definitions in
+bulk by matching a UDT type and a member, so a dozen rules cover a fleet's
+thousands of alarms and `nautilus alarms list` prints what they became.
+Acknowledgement is host state — never written back to the edge, persisted
+through `retain`, so a restart or a failover cannot resurrect four hundred
+acked alarms as unacked. Acceptance tests get an `alarms:` key and
+`ack:`/`shelve:` verbs, and the engine reads the runtime's clock, so a
+five-minute on-delay is asserted exactly in virtual time. See
+`examples/alarms` and the [Alarms guide](https://nautilus.joyautomation.com/guides/alarms/).
 
 ### Publishing to MQTT (Sparkplug B)
 
@@ -612,6 +631,12 @@ Early. This is the extracted, generalized core of a working demo
   state (PID integrals, timers, counters) across by name and type, with
   one-step rollback
 - ✅ `io` — the Driver seam + an in-memory driver
+- ✅ `alarm` — ISA-18.2 alarms declared in the manifest: rules that expand
+  over UDT members, on/off delays, acknowledge and time-boxed shelve
+  (retained across restart and failover), suppression on a dark site, and a
+  journal with ring / rotated-JSONL / Postgres sinks. Five `/api/alarms*`
+  routes, a summary on the SSE frame, and `alarms:` matchers in the
+  acceptance harness
 - ✅ `sparkplug` — MQTT **Sparkplug B edge node**: publishes the tag store to a
   broker (the runtime is the edge node; each io.Driver is a device whose
   DBIRTH/DDEATH tracks its connection health), faithful datatypes, UDTs as

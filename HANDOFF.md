@@ -42,8 +42,10 @@ io/, eip/            driver seam + Memory driver; EtherNet/IP (incl. logixserver
 sparkplug/           Sparkplug B (TCK conformance test in CI)
 server/              tag API (state/SSE/write) + branded dashboard
 cmd/nautilus         CLI: new, run, build, check, test, lsp, pull
+alarm/               ISA-18.2 alarm engine: defs/rules, state machine, journal,
+                     notifiers. Manifest `alarms:`, `/api/alarms*`, retained ack
 examples/            heated-tank (Go tier), heated-tank-nogo (manifest flagship:
-                     4 tasks, 3 IEC languages, sim in ST), FBD + SFC examples
+                     4 tasks, 3 IEC languages, sim in ST), alarms, FBD + SFC
 hmi/                 @joyautomation/nautilus-hmi (Svelte 5): realtime SSE, Mimic
 tools/vscode-iec/    VS Code extension: grammar, LSP client, inline live values,
                      Test Explorer for *_test.yaml, JSON schemas
@@ -55,6 +57,7 @@ website/, docs/      docs site (deploys from main); design briefs in docs/design
 - `testing.md` — manifest-tier acceptance testing. **Built and running.**
 - `tags.md` — tag generation, shape verification, UDTs. **Built.**
 - `sfc.md` — SFC front-end notes.
+- `alarms.md` — the alarm subsystem. **Built** (see 2026-08-22 below).
 
 ## Gotchas
 
@@ -102,6 +105,28 @@ topology mismatch → 409 "deploy that commit instead").
 `project.Sources(fsys, manifest)` composes task→source from any fs.FS —
 pointed at a snapshot it rebuilds the past exactly as boot composes the
 present. Guide: website .../guides/program-history.md.
+
+Done 2026-08-22: **alarms** — `alarm/` turns BOOL tags into ISA-18.2 state
+(active list, ack, shelve, journal, notifiers), wired through every tier.
+Manifest `alarms:` + `alarm-files:` (mirrors `tag-files:`, duplicate id
+across sources = error naming both); `rules:` generate definitions in bulk
+by struct TYPE + member, materialized once at load — `nautilus alarms list`
+dumps the expansion, `nautilus check` validates it offline (unknown member
+= error, dead rule / undeclared tag = warning). `internal/project`
+composes and builds the engine over a compiled runtime
+(`NewAlarms` for `run`, `AlarmEngine` for tests, `AlarmDefs`/`CheckAlarms`
+offline); evaluation rides `Runtime.OnScan`, timestamps ride the runtime
+Clock so virtual time drives on-delays. Server: five `/api/alarms*` routes
+(writes through `authorizeWrite`, 404 with no engine), `Frame.Alarms`
+summary, `/api/meta` capability flag + shelve times. Retain:
+`Runtime.SetAlarms` puts ack/shelf in `retain.State.Alarms`, restored on
+every takeover — a failover cannot resurrect acked alarms as unacked.
+Acceptance: a sibling `alarms:` key plus `ack:`/`shelve:`/`unshelve:`
+verbs (the deliberate exception to "no new keys — write an ST
+expression": alarm state is not in the tag store and no ST expression can
+see it). New example `examples/alarms`; guide at
+website/.../guides/alarms.md; HMI kit components were already in `hmi/`.
+Secrets stay in the environment: `journal.dsn-env`, `notify[].header-env`.
 
 Next, in rough priority:
 

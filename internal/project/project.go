@@ -58,6 +58,15 @@ type Manifest struct {
 	// Both are wired by `nautilus run` — check/build/LSP only validate.
 	Retain     *RetainConfig     `yaml:"retain"`
 	Redundancy *RedundancyConfig `yaml:"redundancy"`
+	// Alarms turns BOOL tags into ISA-18.2 alarm state — the active list,
+	// acknowledge, shelve, and the journal behind /api/alarms. Absent (the
+	// default): no engine, and behaviour identical to before it existed.
+	// AlarmFiles mirrors TagFiles exactly, for the same reason: a
+	// GENERATED alarm set belongs in its own reviewable artifact, not
+	// smeared through the file a person edits. Both are composed by
+	// ReadManifest, so check, run and the language server see one set.
+	Alarms     *AlarmsConfig `yaml:"alarms"`
+	AlarmFiles []string      `yaml:"alarm-files"`
 }
 
 // RetainConfig says where retained state lives. In a cluster the ConfigMap
@@ -224,6 +233,13 @@ type Project struct {
 	// load projects too, and must not touch a cluster to do it.
 	Retain     *RetainConfig
 	Redundancy *RedundancyConfig
+
+	// Alarms is the composed `alarms:` section (alarm-files folded in),
+	// or nil when the manifest declares none. Load composes and validates
+	// it; building the engine over a compiled runtime is a separate call
+	// (see alarms.go) for the same reason Sparkplug is: Load must stay
+	// side-effect-free so check, build and the LSP can use it.
+	Alarms *AlarmsConfig
 }
 
 // RetainNames resolves the retain section's defaults against the project
@@ -356,6 +372,9 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	if err := composeTags(fsys, &m, name); err != nil {
+		return nil, err
+	}
+	if err := composeAlarms(fsys, &m); err != nil {
 		return nil, err
 	}
 	return &m, nil
@@ -540,6 +559,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		inputTags:  inputs,
 		Retain:     m.Retain,
 		Redundancy: m.Redundancy,
+		Alarms:     m.Alarms,
 		HMIDir:     hmiDir,
 	}, nil
 }

@@ -24,6 +24,32 @@ type Coordinator interface {
 // every slider drag into a ConfigMap write.
 const saveInterval = 2 * time.Second
 
+// SetAlarms registers the alarm engine as retained operator state, so
+// acknowledgement and shelf ride along in the store the setpoints already
+// use.
+//
+// A method rather than an Options field for the same reason OnScan is one:
+// the engine is built AFTER runtime.New — it reads the tag store, which
+// does not exist until then. Call it before Run; the first takeover is
+// what restores what the last leader saved.
+//
+// Nil is legal and is the default: a project with no alarms writes no
+// alarms section, and a store written before alarms existed loads
+// unchanged (retain.State.Alarms is omitempty).
+func (r *Runtime) SetAlarms(a retain.AlarmRetainer) {
+	r.alarmMu.Lock()
+	r.alarms = a
+	r.alarmMu.Unlock()
+}
+
+// alarmRetainer reads the registered engine. Its own mutex, not leadMu:
+// loadRetained runs inside takeover, which already holds leadMu.
+func (r *Runtime) alarmRetainer() retain.AlarmRetainer {
+	r.alarmMu.Lock()
+	defer r.alarmMu.Unlock()
+	return r.alarms
+}
+
 // gate is the first thing every scan does. It answers "should this replica
 // scan?", and on the standby→leader edge it performs the takeover sequence
 // before any logic runs. With no coordinator and no retain store it is a
@@ -138,6 +164,14 @@ func (r *Runtime) loadRetained() error {
 		// not go through Set's member-path guard.
 		r.tags.setAny(name, v)
 	}
+	// Operator alarm state — acknowledgement and shelf — goes back to the
+	// engine before the first Evaluate of this leadership term. Doing it
+	// here rather than at construction is what makes a standby takeover
+	// correct: takeover() re-reads the store on the standby→leader edge, so
+	// a failover cannot resurrect hundreds of acked alarms as unacked.
+	if a := r.alarmRetainer(); a != nil {
+		a.RestoreAlarms(st.Alarms)
+	}
 	for task, src := range st.Programs {
 		p := r.TaskProgram(task)
 		if p == nil {
@@ -231,6 +265,16 @@ func (r *Runtime) retainState() retain.State {
 	record(MainTaskName, r.prog)
 	for _, tr := range r.tasks {
 		record(tr.name, tr.prog)
+	}
+	// Only ack and shelf: active and return-to-normal re-derive from the
+	// field on the next scan, and a retained "active" would be a claim
+	// about the plant made by a file. The map is omitted when empty, so a
+	// project with no alarms — or one whose alarms are all normal — writes
+	// exactly what it wrote before this existed.
+	if a := r.alarmRetainer(); a != nil {
+		if m := a.RetainedAlarms(); len(m) > 0 {
+			st.Alarms = m
+		}
 	}
 	return st
 }

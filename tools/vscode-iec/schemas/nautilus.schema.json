@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "nautilus project manifest",
-  "description": "A manifest-defined nautilus controller: tasks, tags by role, the server, and a configured field driver. Pure data — anything needing computation is generated upstream and committed. Secrets are NEVER in this file: NAUTILUS_TOKEN and NAUTILUS_MQTT_PASSWORD come from the environment.",
+  "description": "A manifest-defined nautilus controller: tasks, tags by role, the server, and a configured field driver. Pure data \u2014 anything needing computation is generated upstream and committed. Secrets are NEVER in this file: NAUTILUS_TOKEN and NAUTILUS_MQTT_PASSWORD come from the environment.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -31,7 +31,7 @@
         "type": "string",
         "minLength": 1
       },
-      "description": "Files holding additional tags, each a bare YAML list of the same entries as `tags`. This is where a GENERATED tag set lives, so it stays a separate reviewable artifact instead of a 500-line smear through the file you edit — and how one project ships to several sites, by choosing which tag files a site's manifest composes. Read in order, then `tags` last. A tag declared twice in any two sources is an error: fix the generator, or narrow its scope."
+      "description": "Files holding additional tags, each a bare YAML list of the same entries as `tags`. This is where a GENERATED tag set lives, so it stays a separate reviewable artifact instead of a 500-line smear through the file you edit \u2014 and how one project ships to several sites, by choosing which tag files a site's manifest composes. Read in order, then `tags` last. A tag declared twice in any two sources is an error: fix the generator, or narrow its scope."
     },
     "tags": {
       "type": "array",
@@ -45,7 +45,7 @@
       "additionalProperties": {
         "$ref": "#/definitions/meta"
       },
-      "description": "HMI documentation layered onto tags declared elsewhere, keyed by tag name or by a dotted field path (`P101.Speed`). Use it when a generator cannot supply documentation — `nautilus eip import` cannot, because Logix keeps tag descriptions in the offline project file. A generator that HAS descriptions should emit them into its tag file instead. This reaches only unit and desc: it can never change what the controller does."
+      "description": "HMI documentation layered onto tags declared elsewhere, keyed by tag name or by a dotted field path (`P101.Speed`). Use it when a generator cannot supply documentation \u2014 `nautilus eip import` cannot, because Logix keeps tag descriptions in the offline project file. A generator that HAS descriptions should emit them into its tag file instead. This reaches only unit and desc: it can never change what the controller does."
     },
     "driver": {
       "$ref": "#/definitions/driver",
@@ -86,13 +86,24 @@
           "description": "coordination.k8s.io Lease name (default: the project name)."
         }
       }
+    },
+    "alarms": {
+      "$ref": "#/definitions/alarms"
+    },
+    "alarm-files": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Files holding additional alarm definitions and rules, each a bare YAML list. Mirrors `tag-files:` exactly, and for the same reason: a GENERATED alarm set stays a separate reviewable artifact. Read in order, then `alarms:` last. An id declared twice in any two sources is an error naming both."
     }
   },
   "definitions": {
     "duration": {
       "type": "string",
-      "pattern": "^([-+]?0|[-+]?(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$",
-      "description": "A Go duration: \"250ms\", \"2s\", \"1h30m\". A bare number is not one — the unit is required."
+      "pattern": "^([-+]?0|[-+]?(([0-9]+(\\.[0-9]*)?|\\.[0-9]+)(ns|us|\u00b5s|\u03bcs|ms|s|m|h))+)$",
+      "description": "A Go duration: \"250ms\", \"2s\", \"1h30m\". A bare number is not one \u2014 the unit is required."
     },
     "server": {
       "type": "object",
@@ -118,7 +129,7 @@
         "hmi": {
           "type": "string",
           "minLength": 1,
-          "description": "A built HMI's directory, relative to the project (e.g. the SvelteKit `adapter-static` output, \"./hmi/build\") — must resolve inside the project, like every other manifest-referenced path. When set, the controller serves it at \"/\" (falling back to its index.html for a client-side route), and the built-in dashboard moves to \"/_nautilus/\". The HMI must call the tag API same-origin (a relative \"/api/...\" base URL)."
+          "description": "A built HMI's directory, relative to the project (e.g. the SvelteKit `adapter-static` output, \"./hmi/build\") \u2014 must resolve inside the project, like every other manifest-referenced path. When set, the controller serves it at \"/\" (falling back to its index.html for a client-side route), and the built-in dashboard moves to \"/_nautilus/\". The HMI must call the tag API same-origin (a relative \"/api/...\" base URL)."
         }
       }
     },
@@ -138,7 +149,7 @@
         "program": {
           "type": "string",
           "minLength": 1,
-          "description": "The program file in this project — normally .st, .fbd, .ld, or .sfc. The loader requires a PROGRAM declaration inside it, not a particular extension, so none is enforced here."
+          "description": "The program file in this project \u2014 normally .st, .fbd, .ld, or .sfc. The loader requires a PROGRAM declaration inside it, not a particular extension, so none is enforced here."
         },
         "scan": {
           "$ref": "#/definitions/duration",
@@ -172,12 +183,12 @@
             "setpoint",
             "state"
           ],
-          "description": "input: driver → tag each scan, deliberately unseeded so a missing value faults loudly. output: tag → driver each scan; add init when the logic reads it back. setpoint: seeded operator/config value. state: seeded logic-owned value (latches, integrators)."
+          "description": "input: driver \u2192 tag each scan, deliberately unseeded so a missing value faults loudly. output: tag \u2192 driver each scan; add init when the logic reads it back. setpoint: seeded operator/config value. state: seeded logic-owned value (latches, integrators)."
         },
         "type": {
           "type": "string",
           "minLength": 1,
-          "description": "A UDT declared by this project's ST, for a tag whose value is a struct — the same TYPE the programs bind with VAR_EXTERNAL, so the tag store and the logic cannot disagree about its shape. A typed setpoint or state needs no init: zero-of-type is its seed. A typed input stays unseeded, so a driver that has not delivered still faults loudly."
+          "description": "A UDT declared by this project's ST, for a tag whose value is a struct \u2014 the same TYPE the programs bind with VAR_EXTERNAL, so the tag store and the logic cannot disagree about its shape. A typed setpoint or state needs no init: zero-of-type is its seed. A typed input stays unseeded, so a driver that has not delivered still faults loudly."
         },
         "init": {
           "type": [
@@ -186,11 +197,11 @@
             "number",
             "object"
           ],
-          "description": "Initial value. A scalar for an untyped (or scalar-typed) tag. For a struct-typed tag (`type:`), init may instead be a mapping of member name to value — nested for a member that is itself a struct — to seed only the members that need a non-zero starting value; every member the mapping omits still takes the zero of its own field type. A struct-typed tag given a scalar init is an error. Required for setpoint and state unless `type` supplies one. On an output, needed only when the logic reads it before writing it (a seal-in latch)."
+          "description": "Initial value. A scalar for an untyped (or scalar-typed) tag. For a struct-typed tag (`type:`), init may instead be a mapping of member name to value \u2014 nested for a member that is itself a struct \u2014 to seed only the members that need a non-zero starting value; every member the mapping omits still takes the zero of its own field type. A struct-typed tag given a scalar init is an error. Required for setpoint and state unless `type` supplies one. On an output, needed only when the logic reads it before writing it (a seal-in latch)."
         },
         "unit": {
           "type": "string",
-          "description": "Engineering unit shown by an HMI (\"°C\", \"%\", \"L/s\")."
+          "description": "Engineering unit shown by an HMI (\"\u00b0C\", \"%\", \"L/s\")."
         },
         "desc": {
           "type": "string",
@@ -236,7 +247,7 @@
       "properties": {
         "unit": {
           "type": "string",
-          "description": "Engineering unit shown by an HMI (\"°C\", \"%\", \"L/s\")."
+          "description": "Engineering unit shown by an HMI (\"\u00b0C\", \"%\", \"L/s\")."
         },
         "desc": {
           "type": "string",
@@ -320,7 +331,7 @@
         "broker",
         "group-id"
       ],
-      "description": "Sparkplug B edge node. The MQTT password is NEVER here — set NAUTILUS_MQTT_PASSWORD.",
+      "description": "Sparkplug B edge node. The MQTT password is NEVER here \u2014 set NAUTILUS_MQTT_PASSWORD.",
       "properties": {
         "broker": {
           "type": "string",
@@ -405,7 +416,342 @@
         },
         "every-change": {
           "type": "boolean",
-          "description": "Publish every transition unconditionally (alarms, counters) — deadband and min-interval are ignored."
+          "description": "Publish every transition unconditionally (alarms, counters) \u2014 deadband and min-interval are ignored."
+        }
+      }
+    },
+    "alarms": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "description": "Turn BOOL tags into ISA-18.2 alarm state: an active list, acknowledge, shelve, and an append-only journal behind /api/alarms. Rules cover the UDT members (a handful of them cover a whole fleet, because a fleet is the same types repeated); `defs` are the standalone BOOLs that name themselves. Omit the section entirely and the controller runs exactly as it did before alarms existed.",
+      "properties": {
+        "defaults": {
+          "$ref": "#/definitions/alarm-defaults"
+        },
+        "shelve-times": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/duration"
+          },
+          "description": "The shelf durations an operator screen offers, served on /api/meta. Default 5m 15m 30m 1h 2h 4h 8h."
+        },
+        "journal": {
+          "$ref": "#/definitions/alarm-journal"
+        },
+        "notify": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/alarm-notify"
+          },
+          "description": "Where events go besides the journal. Notifiers run off the scan goroutine on a bounded queue: a slow endpoint drops events with a counter rather than stalling the scan."
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/alarm-rule"
+          },
+          "description": "Generate definitions in bulk by matching a struct TYPE and member, or a tag glob. File order, FIRST MATCH WINS, materialized once at load."
+        },
+        "defs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/alarm"
+          },
+          "description": "Explicit definitions, one per condition \u2014 the standalone BOOLs a rule cannot generalize."
+        },
+        "site-from": {
+          "type": "string",
+          "description": "Regexp over the TAG NAME whose first capture group becomes a definition's site, e.g. \"^([A-Z]+[0-9]+)_\" turns RTU9_WEL15_FIT_001 into site RTU9. Site is the alarm table's sort and filter axis and the `{site}` placeholder in a rule's templates. Omit it and site is empty."
+        },
+        "area-from": {
+          "type": "string",
+          "description": "The same, for area \u2014 the second axis, e.g. \"^[A-Z]+[0-9]+_([A-Z]+[0-9]+)_\"."
+        }
+      }
+    },
+    "alarm-defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What a definition gets when it does not say for itself. A value a rule or an entry spelled explicitly is never overwritten.",
+      "properties": {
+        "priority": {
+          "type": "string",
+          "enum": [
+            "diagnostic",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "description": "Default priority. The package default is medium."
+        },
+        "class": {
+          "type": "string",
+          "description": "Grouping and notification-routing label."
+        },
+        "site": {
+          "type": "string"
+        },
+        "area": {
+          "type": "string"
+        },
+        "on-delay": {
+          "$ref": "#/definitions/duration",
+          "description": "How long the condition must hold before it annunciates \u2014 host-side qualification."
+        },
+        "off-delay": {
+          "$ref": "#/definitions/duration",
+          "description": "How long it must stay clear before it returns to normal."
+        },
+        "ack-required": {
+          "type": "boolean",
+          "description": "false collapses unack-active to ack-active and unack-rtn to normal on arrival: annunciate-only, no operator workflow. Default true."
+        },
+        "auto-clear": {
+          "type": "boolean",
+          "description": "false means latched \u2014 clearing the field bit does not discharge the operator's obligation to see it. Default true."
+        },
+        "shelve": {
+          "type": "boolean",
+          "description": "Whether an operator may shelve it. Default true."
+        },
+        "enable": {
+          "type": "string",
+          "description": "A BOOL that must be true or the definition is Suppressed. Pointing it at a site's online flag is what stops a dead edge node from freezing four alarms on."
+        }
+      }
+    },
+    "alarm-journal": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The always-on in-memory ring, plus an optional durable sink. The ring sits in front of every sink, so the journal view works on a box with no database at all, and it is bounded by construction \u2014 the answer to a flapping storm.",
+      "properties": {
+        "keep": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Ring depth. 0 takes the default (5000)."
+        },
+        "sink": {
+          "type": "string",
+          "enum": [
+            "file",
+            "postgres"
+          ],
+          "description": "An additional durable journal. Omit it for the ring alone."
+        },
+        "path": {
+          "type": "string",
+          "description": "Where the `file` sink writes JSONL, inside the project. Rotated at a size cap."
+        },
+        "dsn-env": {
+          "type": "string",
+          "description": "The ENVIRONMENT VARIABLE holding the postgres sink's connection string \u2014 never the string itself, because a manifest is committed and a password in git is a password you have to rotate. Default NAUTILUS_ALARM_DB_URL, falling back to DATABASE_URL."
+        }
+      },
+      "dependencies": {
+        "path": {
+          "properties": {
+            "sink": {
+              "const": "file"
+            }
+          }
+        }
+      }
+    },
+    "alarm-notify": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One notifier: either `log: true` or `webhook: <url>`, never both in one entry.",
+      "properties": {
+        "log": {
+          "type": "boolean",
+          "description": "Write every event to the structured log \u2014 often the only notifier a site needs, since a journal that also lands in the log stream is searchable by whatever already collects logs."
+        },
+        "webhook": {
+          "type": "string",
+          "description": "POST each event as JSON to this URL. Retries a couple of times, then drops rather than stalling the scan."
+        },
+        "header": {
+          "type": "string",
+          "description": "Header name for the webhook's API key (default Authorization)."
+        },
+        "header-env": {
+          "type": "string",
+          "description": "Environment variable holding the webhook's API key. Same rule as the DSN: the secret is never in the file."
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "log"
+          ]
+        },
+        {
+          "required": [
+            "webhook"
+          ]
+        }
+      ]
+    },
+    "alarm-match": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "What a rule claims. All three are globs (*, ?, [class]); an empty field means any. A rule with no `member` matches only FLAT BOOL tags, and one with a `member` matches only struct members \u2014 a struct tag is not itself a BOOL, so \"which member\" is never a detail a rule can leave out.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "The UDT name of a struct tag, as the project's ST declares it."
+        },
+        "member": {
+          "type": "string",
+          "description": "A BOOL field within it."
+        },
+        "tag": {
+          "type": "string",
+          "description": "A glob on the tag name."
+        }
+      }
+    },
+    "alarm-rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "match"
+      ],
+      "description": "Generate definitions in bulk: name the (type, member) pair once and every matching tag gets an instance. First match wins across the rule list, and the expansion is materialized at load, never per scan \u2014 `nautilus alarms list` dumps the result so a few rules covering thousands of alarms stays auditable, not magic.",
+      "properties": {
+        "match": {
+          "$ref": "#/definitions/alarm-match"
+        },
+        "id": {
+          "type": "string",
+          "description": "The definition's id. Template over {tag} {member} {site} {area} {desc} {type} {path}; an unknown placeholder is an error, so a typo fails the load instead of reaching an operator screen as literal braces. Default \"{path}\"."
+        },
+        "name": {
+          "type": "string",
+          "description": "The human-readable identity an operator reads. Template over {tag} {member} {site} {area} {desc} {type} {path}; an unknown placeholder is an error, so a typo fails the load instead of reaching an operator screen as literal braces. Default \"{desc} {member}\"."
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "diagnostic",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "class": {
+          "type": "string"
+        },
+        "site": {
+          "type": "string",
+          "description": "Site. Template over {tag} {member} {site} {area} {desc} {type} {path}; an unknown placeholder is an error, so a typo fails the load instead of reaching an operator screen as literal braces. Defaults to the tag's own, from `site-from`."
+        },
+        "area": {
+          "type": "string",
+          "description": "Area. Template over {tag} {member} {site} {area} {desc} {type} {path}; an unknown placeholder is an error, so a typo fails the load instead of reaching an operator screen as literal braces. Defaults to the tag's own, from `area-from`."
+        },
+        "display": {
+          "type": "string",
+          "description": "Display path. Template over {tag} {member} {site} {area} {desc} {type} {path}; an unknown placeholder is an error, so a typo fails the load instead of reaching an operator screen as literal braces."
+        },
+        "notes": {
+          "type": "string"
+        },
+        "on-delay": {
+          "$ref": "#/definitions/duration",
+          "description": "How long the condition must hold before it annunciates."
+        },
+        "off-delay": {
+          "$ref": "#/definitions/duration",
+          "description": "How long it must stay clear before it returns to normal."
+        },
+        "ack-required": {
+          "type": "boolean"
+        },
+        "auto-clear": {
+          "type": "boolean"
+        },
+        "shelve": {
+          "type": "boolean"
+        },
+        "enable": {
+          "type": "string",
+          "description": "A BOOL that must be true, else Suppressed. Template over {tag} {member} {site} {area} {desc} {type} {path}; an unknown placeholder is an error, so a typo fails the load instead of reaching an operator screen as literal braces. e.g. \"{site}__Online\"."
+        }
+      }
+    },
+    "alarm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tag"
+      ],
+      "description": "One alarm definition: the BOOL condition to watch and the operator policy that governs it.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The identity everywhere \u2014 row key, ack target, journal id. Defaults to `tag`."
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The condition PATH: a flat tag (\"PumpFault\") or one member of a struct tag (\"FIT_001.HH\"). Must resolve to a BOOL; true means in alarm. A path that does not resolve is Suppressed with a reason, never an error \u2014 one dark site must not fault the engine."
+        },
+        "name": {
+          "type": "string",
+          "description": "The human-readable identity. Defaults to the id."
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "diagnostic",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "class": {
+          "type": "string"
+        },
+        "site": {
+          "type": "string"
+        },
+        "area": {
+          "type": "string"
+        },
+        "display": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "on-delay": {
+          "$ref": "#/definitions/duration",
+          "description": "How long the condition must hold before it annunciates."
+        },
+        "off-delay": {
+          "$ref": "#/definitions/duration",
+          "description": "How long it must stay clear before it returns to normal."
+        },
+        "ack-required": {
+          "type": "boolean"
+        },
+        "auto-clear": {
+          "type": "boolean"
+        },
+        "shelve": {
+          "type": "boolean"
+        },
+        "enable": {
+          "type": "string",
+          "description": "A BOOL that must be true, else Suppressed."
         }
       }
     }

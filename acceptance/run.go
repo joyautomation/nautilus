@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
@@ -69,11 +70,15 @@ type TB interface {
 //
 //	func TestAcceptance(t *testing.T) {
 //	    proj, _ := project.Load(os.DirFS("."), "")
-//	    acceptance.Run(t, os.DirFS("."), proj.Runtime)
+//	    acceptance.Run(t, os.DirFS("."), proj.Runtime,
+//	        acceptance.WithAlarms(proj.AlarmEngine))
 //	}
-func Run(tb TB, fsys fs.FS, opts runtime.Options) {
+//
+// The Options are variadic and last, so a call written before any of them
+// existed still compiles and behaves identically.
+func Run(tb TB, fsys fs.FS, opts runtime.Options, o ...Option) {
 	tb.Helper()
-	results, err := RunDir(fsys, opts)
+	results, err := RunDir(fsys, opts, o...)
 	if err != nil {
 		tb.Errorf("acceptance: %v", err)
 		return
@@ -88,7 +93,7 @@ func Run(tb TB, fsys fs.FS, opts runtime.Options) {
 }
 
 // RunDir discovers and runs every `*_test.yaml` under fsys.
-func RunDir(fsys fs.FS, opts runtime.Options) ([]Result, error) {
+func RunDir(fsys fs.FS, opts runtime.Options, o ...Option) ([]Result, error) {
 	paths, err := DiscoverSuites(fsys)
 	if err != nil {
 		return nil, err
@@ -99,7 +104,7 @@ func RunDir(fsys fs.FS, opts runtime.Options) ([]Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		rs, err := RunSuite(suite, opts)
+		rs, err := RunSuite(suite, opts, o...)
 		if err != nil {
 			return nil, err
 		}
@@ -109,10 +114,11 @@ func RunDir(fsys fs.FS, opts runtime.Options) ([]Result, error) {
 }
 
 // RunSuite runs one loaded suite.
-func RunSuite(s *Suite, opts runtime.Options) ([]Result, error) {
+func RunSuite(s *Suite, opts runtime.Options, o ...Option) ([]Result, error) {
+	cfg := collect(o)
 	out := make([]Result, 0, len(s.Tests))
 	for _, t := range s.Tests {
-		r, err := runTest(s, t, opts)
+		r, err := runTest(s, t, opts, cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -133,9 +139,13 @@ type testRun struct {
 	types  map[string]string // tag name → declared UDT, for field-level `given`
 	meta   map[string]runtime.TagMeta
 	preds  map[string]*predicate
+	// alarms is this test's OWN engine — built fresh like the runtime, so
+	// an acknowledgement in one test cannot leak into the next. Nil when
+	// the project declares no alarms.
+	alarms *alarm.Engine
 }
 
-func runTest(s *Suite, t *Test, opts runtime.Options) (Result, error) {
+func runTest(s *Suite, t *Test, opts runtime.Options, cfg runOptions) (Result, error) {
 	res := Result{Suite: s.Path, Name: t.Name, Line: t.Line}
 
 	// A stub driver, always — whatever the manifest configures. Tests never
@@ -160,6 +170,14 @@ func runTest(s *Suite, t *Test, opts runtime.Options) (Result, error) {
 		// the flat meta map a trace reads.
 		meta:  rt.Meta(),
 		preds: map[string]*predicate{},
+	}
+	// The alarm engine registers itself on the runtime's post-scan hook,
+	// so it evaluates in lockstep with the scans the scheduler drives —
+	// which is what makes an on-delay walk exactly with `advance:`.
+	if cfg.alarms != nil {
+		if r.alarms, err = cfg.alarms(rt); err != nil {
+			return res, fmt.Errorf("%s: alarms: %w", s.Path, err)
+		}
 	}
 
 	suspend := t.Suspend
@@ -216,6 +234,23 @@ func runTest(s *Suite, t *Test, opts runtime.Options) (Result, error) {
 func (r *testRun) runStep(st *Step) (*Failure, error) {
 	if err := r.apply(st.Given); err != nil {
 		return nil, err
+	}
+	// The operator verbs land with `given:`, before the step spends its
+	// time: an ack is an input to the step, the same way a tag write is.
+	if st.Ack != nil {
+		if err := r.ack(st.Ack); err != nil {
+			return nil, err
+		}
+	}
+	if st.Shelve != nil {
+		if err := r.shelve(st.Shelve); err != nil {
+			return nil, err
+		}
+	}
+	if st.Unshelve != nil {
+		if err := r.unshelve(st.Unshelve); err != nil {
+			return nil, err
+		}
 	}
 
 	tr := r.newTracer(st)
@@ -301,6 +336,18 @@ func (r *testRun) runStep(st *Step) (*Failure, error) {
 		if !ok {
 			return &Failure{
 				At: r.sch.Elapsed(), Reason: "expectation failed",
+				Detail: detail, Trace: tr.result(),
+			}, nil
+		}
+	}
+	if st.Alarms != nil {
+		ok, detail, err := r.checkAlarms(st.Alarms)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return &Failure{
+				At: r.sch.Elapsed(), Reason: "alarm expectation failed",
 				Detail: detail, Trace: tr.result(),
 			}, nil
 		}

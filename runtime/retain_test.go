@@ -345,3 +345,89 @@ func TestRetainStateContents(t *testing.T) {
 		t.Fatal("an online-edited program was not persisted")
 	}
 }
+
+// ── alarms ─────────────────────────────────────────────────────────────
+
+// fakeAlarms is a retain.AlarmRetainer a test drives by hand — the alarm
+// engine's shape without the alarm package, which is exactly the
+// dependency direction retain.AlarmRetainer exists to preserve.
+type fakeAlarms struct {
+	mu       sync.Mutex
+	held     map[string]retain.AlarmRetain
+	restored []map[string]retain.AlarmRetain
+}
+
+func (f *fakeAlarms) RetainedAlarms() map[string]retain.AlarmRetain {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.held
+}
+
+func (f *fakeAlarms) RestoreAlarms(m map[string]retain.AlarmRetain) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.restored = append(f.restored, m)
+}
+
+// An ack is a decision a person made, so it persists beside the setpoints
+// — and comes back on the takeover that starts the next leadership term.
+func TestAlarmStateRoundTripsThroughRetain(t *testing.T) {
+	store := &fakeStore{state: retain.State{
+		Alarms: map[string]retain.AlarmRetain{
+			"HiTemp": {Acked: true, AckBy: "rchon", AckMs: 1700000000000},
+		},
+	}}
+	rt := newRetained(t, store, nil)
+	eng := &fakeAlarms{held: map[string]retain.AlarmRetain{
+		"LoFlow": {ShelfUntilMs: 1700000600000, ShelfBy: "rchon"},
+	}}
+	rt.SetAlarms(eng)
+
+	rt.Scan() // the first scan is a takeover, which is what loads the store
+
+	if len(eng.restored) != 1 {
+		t.Fatalf("RestoreAlarms called %d times, want once on takeover", len(eng.restored))
+	}
+	if got := eng.restored[0]["HiTemp"]; !got.Acked || got.AckBy != "rchon" {
+		t.Errorf("restored %+v, want the stored acknowledgement", got)
+	}
+
+	if got := rt.retainState().Alarms; len(got) != 1 || got["LoFlow"].ShelfBy != "rchon" {
+		t.Errorf("saved alarms = %+v, want the engine's shelf", got)
+	}
+}
+
+// The whole point of retaining ack: a standby taking over must not
+// resurrect acknowledged alarms as unacknowledged. takeover() re-reads the
+// store on the standby→leader edge, so the engine hears about it again.
+func TestTakeoverRestoresAlarmsOnTheLeadershipEdge(t *testing.T) {
+	f := &flag{lead: true}
+	store := &fakeStore{state: retain.State{
+		Alarms: map[string]retain.AlarmRetain{"HiTemp": {Acked: true, AckBy: "rchon"}},
+	}}
+	rt := newRetained(t, store, f)
+	eng := &fakeAlarms{}
+	rt.SetAlarms(eng)
+
+	rt.Scan()
+	f.lead = false
+	rt.Scan() // standby: no takeover, no scan
+	f.lead = true
+	rt.Scan() // and back: a fresh takeover
+
+	if len(eng.restored) != 2 {
+		t.Fatalf("RestoreAlarms called %d times, want one per acquisition of leadership", len(eng.restored))
+	}
+}
+
+// A project with no alarms writes exactly what it wrote before alarms
+// existed: retain.State.Alarms is omitempty, and nothing registers a
+// retainer, so an existing store loads and saves unchanged.
+func TestNoAlarmRetainerLeavesTheStateAlone(t *testing.T) {
+	store := &fakeStore{}
+	rt := newRetained(t, store, nil)
+	rt.Scan()
+	if got := rt.retainState().Alarms; got != nil {
+		t.Errorf("a runtime with no alarm engine saved %+v", got)
+	}
+}
