@@ -92,3 +92,57 @@ func NewFuncFrame(def *FuncDef) *Frame {
 	slots[def.ReturnSlot] = Zero(def.ReturnType)
 	return &Frame{Slots: slots}
 }
+
+// GlobalsDeep reports every PLC variable this program binds: its own
+// Globals plus, transitively, the Globals of every FUNCTION_BLOCK instance
+// it declares — nested FB-in-FB included, and however deep an array or
+// struct field buries the instance. A library FB compiled with its own
+// VAR_EXTERNAL has no top-level declaration of its own; the tag is bound
+// through whichever program (or enclosing FB) gives the FB a slot, which is
+// exactly what this walk follows. An FB type that exists but is never
+// instantiated by anything reachable from this program contributes
+// nothing — which is the point: an unused library block shouldn't make a
+// tag look bound.
+func (p *Program) GlobalsDeep() map[string]*Type {
+	out := make(map[string]*Type, len(p.Globals))
+	for name, t := range p.Globals {
+		out[name] = t
+	}
+	seen := map[*FBDef]bool{}
+	for _, s := range p.Slots {
+		collectFBGlobals(s.Type, seen, out)
+	}
+	return out
+}
+
+// collectFBGlobals walks t looking for FUNCTION_BLOCK instances (directly,
+// or nested inside an array/struct), merges each one's own Globals into
+// out, and recurses into its slots to reach FB-in-FB instances. seen guards
+// against revisiting a shared *FBDef (every instance of a type points at
+// the same one) and against a pathological cycle.
+func collectFBGlobals(t *Type, seen map[*FBDef]bool, out map[string]*Type) {
+	if t == nil {
+		return
+	}
+	switch t.Kind {
+	case TypeFB:
+		if t.FB == nil || seen[t.FB] {
+			return
+		}
+		seen[t.FB] = true
+		for name, gt := range t.FB.Globals {
+			out[name] = gt
+		}
+		for _, s := range t.FB.AllSlots() {
+			collectFBGlobals(s.Type, seen, out)
+		}
+	case TypeArray:
+		collectFBGlobals(t.Elem, seen, out)
+	case TypeStruct:
+		if t.Struct != nil {
+			for _, f := range t.Struct.Fields {
+				collectFBGlobals(f.Type, seen, out)
+			}
+		}
+	}
+}

@@ -90,6 +90,23 @@ type FBDef struct {
 	Internals []FBSlot
 	SlotIndex map[string]int
 	Step      FBStepFn
+
+	// Globals are the PLC variables this FB type's OWN body binds via
+	// VAR_EXTERNAL/VAR_GLOBAL, with the type each was declared as — the
+	// FB-scoped counterpart of Program.Globals. A library FUNCTION_BLOCK
+	// compiles and runs correctly with one of these: the VM resolves the
+	// tag through whichever program's instance steps the FB, not through
+	// any top-level declaration of its own — so a caller has to walk every
+	// instantiated FB's Globals (Program.GlobalsDeep does this) to see the
+	// tags a program actually touches. Populated once, at Lower time
+	// (lang/st), for user-defined FBs; nil for built-ins, which have no
+	// source body to declare one.
+	Globals map[string]*Type
+
+	// Uses records how this FB type's own body reads/writes its Globals —
+	// the FB-scoped counterpart of Program.GlobalUses. Populated alongside
+	// Globals.
+	Uses GlobalUse
 }
 
 // FBSlot is a single named slot on a function block instance.

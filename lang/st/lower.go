@@ -259,6 +259,16 @@ func lowerFBBody(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[string]*i
 	sub.irProg.Body = stmts
 	bodyIR := sub.irProg
 
+	// The FB's own VAR_EXTERNAL/VAR_GLOBAL block and how its body uses it —
+	// tooling's only way to see what this FB type binds, since the FB has
+	// no scan path of its own to observe (Program.GlobalsDeep and
+	// GlobalUses walk instances to reach these; see FBDef.Globals).
+	// DirectGlobalUses, not GlobalUses: an FB body may instantiate another
+	// FB declared later in this same file, whose own Uses isn't populated
+	// yet at this point in the lowering loop below.
+	def.Globals = bodyIR.Globals
+	def.Uses = bodyIR.DirectGlobalUses()
+
 	def.Step = func(inst *ir.FBInstance, ctx ir.FBStepCtx) error {
 		frame := &ir.Frame{Slots: inst.Slots}
 		return ir.Run(bodyIR, frame, ctx.Host)
