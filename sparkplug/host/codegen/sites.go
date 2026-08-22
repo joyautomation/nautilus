@@ -29,7 +29,7 @@
 //	  - node: W6                       # the Sparkplug edge_node_id
 //	    prefix: W6                     # optional; default sanitize(node)
 //	    metrics:                       # node-level metrics (NDATA)
-//	      - {name: Well/Level, type: Double}
+//	      - {name: Well/Level, type: Double, desc: "Well 6 level"}
 //	      - {name: Pump1,      type: Motor}          # a template instance
 //	    devices:
 //	      - device: PLC1
@@ -39,6 +39,13 @@
 //
 // `type:` is a Sparkplug datatype name (Boolean, Int8..UInt64, DateTime,
 // Float, Double, String, Text, UUID) or one of the `types:` entries.
+//
+// `desc:` is optional and purely descriptive: it rides through the manifest
+// into the generated tag file's `desc:`, so an alarm named "{desc} high" reads
+// "Well 6 level high" instead of "RTU9_WEL15_FIT_001 high". Member tags
+// inherit the metric's description. The BROKER path cannot supply one — a
+// metric's Properties/description does not survive payload decoding — so an
+// import from live births leaves every desc empty.
 
 package codegen
 
@@ -115,6 +122,12 @@ type MetricSpec struct {
 	// zero. Member bindings take the member's own zero (they are many, and
 	// one init: could not say which).
 	Init any
+	// Desc is an optional human description of the metric ("Well 6 raw span
+	// minimum"). It rides into the generated tag file's `desc:`, which is
+	// what an alarm name's {desc} renders instead of the sanitized tag name.
+	// Member tags inherit it. Omit it and the tag simply has no description —
+	// nothing is invented.
+	Desc string
 }
 
 // writableSpec normalises a MetricSpec's writable: value into "the whole
@@ -295,6 +308,7 @@ func siteMetrics(node, device string, ms []MetricSpec, opts Options) ([]metric, 
 			writable: whole,
 			members:  members,
 			init:     mm.Init,
+			desc:     mm.Desc,
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].name < out[j].name })

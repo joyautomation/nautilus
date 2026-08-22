@@ -160,6 +160,47 @@ Each match generates its own tag, named `<prefix>_<metric>_<member path>`
 a `--sites` file says the same thing with a list instead of `true`:
 `{name: Motor1, type: Motor, writable: [START, LVL.CTL1HSP]}`.
 
+### Outputs are commands: the baseline rule
+
+**An output that has not moved since the host started is not a command,
+and nothing goes on the wire for it.**
+
+This matters more than it sounds. The runtime rebuilds and hands the
+driver *every* output on *every* scan, and an output tag's value before
+anyone writes it is its `init:` — the zero of its type by default. Take
+that at face value and a host connecting to a fleet that is already
+online publishes every writable output once, each carrying a zero nobody
+asked for. For a member binding that zero is a partial template, and the
+edge merges partial templates member by member, so every commissioned
+setpoint in the writable set lands on `0` while the members outside it
+sit there looking fine. A zeroed span reads as a configuration fault at
+the panel; the site is then wrong for the rest of the run.
+
+So the driver reads its output set as follows.
+
+- **The first snapshot after `Start` is the baseline.** It is recorded
+  and published to nobody: it describes the world at t=0, it does not
+  command it.
+- **Thereafter only a value that actually moved is a command**, and it
+  is published once, however many scans hand it back afterwards.
+- **A member output adopts the site's live value** the moment its parent
+  template arrives — NBIRTH, DBIRTH, NDATA or a later rebirth. Dial a
+  member to the value the panel already reports and nothing is sent;
+  dial it anywhere else and one partial template goes out. Until the
+  parent template has arrived a member's baseline is just its `init:`,
+  and an operator write before the first birth still publishes.
+- **A reconnect replays nothing.** Change detection tracks the runtime's
+  output tags, not the broker session, so it survives a dropped
+  connection intact. Commands genuinely raised while the broker was away
+  are still queued and go out on reconnect.
+- **`__Rebirth` is unaffected**: its baseline is `false` and only a
+  rising edge is a command, which is what it always meant.
+
+Writes to an offline node are still dropped and counted
+(`Status.WriteDrops`) rather than queued.
+
+Host and sites can therefore be started in any order.
+
 ## `/api/drivers`
 
 `Kind: "sparkplug-host"`, `Name: <host-id>`. State climbs `error` (broker

@@ -107,15 +107,20 @@ func New(m Manifest, cfg Config, opts ...Option) (*Driver, error) {
 		byName:      map[string]Binding{},
 		byMetric:    map[metricKey]Binding{},
 		members:     map[string]memberOut{},
+		memberOf:    map[metricKey][]string{},
 		nodeCfg:     map[string]Node{},
 		rebirthTags: map[string]string{},
 		nodes:       map[nodeKey]*nodeState{},
 		values:      nio.Values{},
 		unknown:     map[metricKey]*discovery{},
 		pending:     map[string]any{},
-		written:     map[string]any{},
-		wkick:       make(chan struct{}, 1),
-		rebirths:    make(chan nodeKey, 256),
+		lastOut:     map[string]any{},
+		remote:      map[string]any{},
+		// A driver is born un-baselined: the first output snapshot it is
+		// handed describes the world, it does not command it.
+		baseline: true,
+		wkick:    make(chan struct{}, 1),
+		rebirths: make(chan nodeKey, 256),
 	}
 	for _, o := range opts {
 		o(d)
@@ -165,6 +170,7 @@ func (d *Driver) Start(ctx context.Context) {
 	d.mu.Lock()
 	d.started = true
 	d.mu.Unlock()
+	d.armBaseline()
 	go d.run(ctx)
 }
 
@@ -204,17 +210,44 @@ func (d *Driver) ReadInputs() (nio.Values, error) {
 	return d.snapshot(), nil
 }
 
-// WriteOutputs queues changed values for the command writer. The runtime
-// rebuilds and hands us *all* outputs every scan (runtime.go:590-608), so
-// change detection is ours: suppress against both the last published value
-// and anything already queued, then nudge the writer.
+// WriteOutputs queues changed values for the command writer.
+//
+// OUTPUTS ARE COMMANDS; AN UNCHANGED OUTPUT SINCE START IS NOT A COMMAND.
+// The runtime rebuilds and hands us *all* outputs every scan
+// (runtime.go:590-608) and an output tag's value before anyone writes it is
+// its init: — the zero of its type by default. So "the driver was handed a
+// value" is emphatically not "the operator asked for it", and change
+// detection is ours:
+//
+//  1. BASELINE. The first snapshot after Start is recorded into lastOut and
+//     published to NOBODY: it is the state of the world at t=0, not a set of
+//     commands. A reconnect does not re-arm it (see connect) — lastOut tracks
+//     the runtime's tags, not the session, so it survives one intact and
+//     there is nothing to replay. Without the baseline the host's first
+//     scan writes every writable output's init back to every site that is
+//     already online: for a member binding that is a partial template full of
+//     zeros, and the edge merges it member by member, wiping RAWMIN, HHSP,
+//     MTN.OILSP and every other commissioned setpoint in the writable globs.
+//  2. CHANGE. Thereafter a value that equals lastOut is not a command and
+//     produces nothing. Only a value an operator or a program actually moved
+//     goes further.
+//  3. REDUNDANCY. A changed value the node is already known to hold — we
+//     published it, or its birth/data reported it (adoptMembersLocked) — is
+//     accounted for but not sent.
 //
 // Two kinds of name land here: writable manifest bindings (→ NCMD/DCMD) and
 // the synthesized <site>__Rebirth outputs (rising edge → NCMD Rebirth).
 // Anything else is ignored — the runtime hands us exactly the Outputs list it
 // was configured with, but a hand-wired driver may not.
+//
+// __Rebirth is deliberately unaffected by the baseline: its baseline value is
+// false, and only a rising edge (false → true) is a command, so the rule
+// already reads it correctly.
 func (d *Driver) WriteOutputs(vals nio.Values) error {
 	d.wmu.Lock()
+	d.initWriteMapsLocked()
+	baseline := d.baseline
+	d.baseline = false
 	changed := false
 	for name, v := range vals {
 		_, writable := d.byName[name]
@@ -222,13 +255,28 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 		if !writable && !isRebirth {
 			continue
 		}
-		if prev, ok := d.written[name]; ok && sameValue(prev, v) {
+		cv := d.canonWrite(name, v)
+		if baseline {
+			// Record, never publish. A tag with a command already queued
+			// keeps it: that one WAS asked for.
+			if _, queued := d.pending[name]; !queued {
+				d.lastOut[name] = cv
+			}
 			continue
 		}
-		if prev, ok := d.pending[name]; ok && sameValue(prev, v) {
+		if prev, ok := d.lastOut[name]; ok && sameValue(prev, cv) {
+			continue // unchanged since the last scan we accounted for
+		}
+		// The tag moved. Account for it whatever we do next, so the change is
+		// detected once rather than every scan from here on.
+		d.lastOut[name] = cv
+		if prev, ok := d.remote[name]; ok && sameValue(prev, cv) {
+			continue // the node already holds it
+		}
+		if prev, ok := d.pending[name]; ok && sameValue(prev, cv) {
 			continue
 		}
-		d.pending[name] = v
+		d.pending[name] = cv
 		changed = true
 	}
 	d.wmu.Unlock()
@@ -236,6 +284,46 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 		d.kickWriter()
 	}
 	return nil
+}
+
+// initWriteMapsLocked allocates the three write maps on first use. New fills
+// them, but a Driver assembled field by field (state_test.go's newTestDriver)
+// does not, and the write path must not care. Caller holds wmu.
+func (d *Driver) initWriteMapsLocked() {
+	if d.pending == nil {
+		d.pending = map[string]any{}
+	}
+	if d.lastOut == nil {
+		d.lastOut = map[string]any{}
+	}
+	if d.remote == nil {
+		d.remote = map[string]any{}
+	}
+}
+
+// armBaseline makes the NEXT WriteOutputs snapshot a baseline rather than a
+// set of commands. Start arms it, and nothing else does: lastOut tracks the
+// runtime's output tags rather than the broker session, so it survives a
+// reconnect intact and a reconnect has nothing to replay (see connect).
+func (d *Driver) armBaseline() {
+	d.wmu.Lock()
+	d.baseline = true
+	d.wmu.Unlock()
+}
+
+// canonWrite normalizes an output value into the shape it would take on the
+// wire, so lastOut/remote/pending always compare like with like: a member
+// output is coerced to its template leaf's declared type (the same coercion
+// flushWrites applies), everything else becomes a plain ir.Value.
+func (d *Driver) canonWrite(name string, v any) any {
+	iv, ok := irValueOf(v)
+	if !ok {
+		return v // unwritable type; flushWrites logs it
+	}
+	if mo, isMember := d.members[name]; isMember {
+		return ir.CoerceValue(iv, mo.leaf)
+	}
+	return iv
 }
 
 // kickWriter opens the coalesce window without blocking.

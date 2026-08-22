@@ -161,6 +161,12 @@ func TestTCKHostConformance(t *testing.T) {
 	}
 
 	// An operator write on the writable binding → DCMD (HostDCMDCompliant).
+	// The runtime's first output snapshot is the BASELINE — every output at
+	// its init:, describing the world rather than commanding it — and only
+	// what moves after it is a command. See the host driver's WriteOutputs.
+	if err := d.WriteOutputs(tckBaseline()); err != nil {
+		t.Fatalf("baseline WriteOutputs: %v", err)
+	}
 	if err := d.WriteOutputs(nio.Values{"E1_D1_Pump_SpeedSP": 42.5}); err != nil {
 		t.Fatalf("WriteOutputs: %v", err)
 	}
@@ -528,6 +534,19 @@ func topicN(kind string) string { return "spBv1.0/" + tckGroup + "/" + kind + "/
 func topicD(kind string) string { return topicN(kind) + "/" + tckDevice }
 
 // ── fixtures + small helpers ─────────────────────────────────────────────
+
+// tckBaseline is the runtime's first output snapshot for tckManifest: every
+// output tag at its init:. Handing it over before any operator write is what
+// a real project's first scan does.
+func tckBaseline() nio.Values {
+	out := nio.Values{}
+	for _, spec := range tckManifest().TagSpecs() {
+		if spec.Role == sphost.RoleOutput && spec.Init != nil {
+			out[spec.Name] = spec.Init
+		}
+	}
+	return out
+}
 
 // tckManifest is the smallest manifest that exercises every outbound path:
 // a node, a device, node- and device-level inputs, and one writable binding
