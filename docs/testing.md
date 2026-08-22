@@ -139,6 +139,13 @@ taken over from the simulation, no test changes.
 
 Writing an undeclared tag is an error, not a new tag.
 
+A dotted name may address one field of a UDT tag — `P101.Speed: 12.5` —
+which zero-fills the rest of that struct the first time a test touches it.
+Every dotted field named for the *same* tag in one `given` map composes
+onto a single copy of that tag's current value and is written once, so
+`{ P101.Running: true, P101.Speed: 12.5 }` sets both, regardless of key
+order — a map's keys are otherwise unordered.
+
 **Tests never open a socket.** Whatever `driver:` says — including `eip` —
 the test harness substitutes a stub, so a project bound to real hardware
 is fully testable on a laptop with nothing on the network.
