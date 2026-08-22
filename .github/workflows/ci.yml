@@ -22,7 +22,7 @@ jobs:
       - name: nautilus check (examples)
         run: go run ./cmd/nautilus check examples
   sparkplug-tck:
-    name: Sparkplug B — TCK edge-node conformance
+    name: Sparkplug B — TCK conformance
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,7 +31,15 @@ jobs:
       # Drives an in-process edge node through its full lifecycle against the
       # joyautomation/sparkplug-tck-go edge-node profile (embeds its own
       # broker) and fails on any conformance assertion failure.
-      - run: NAUTILUS_TCK=1 go test ./sparkplug/ -run TestTCKConformance -v -timeout 90s
+      - name: Edge-node profile
+        run: NAUTILUS_TCK=1 go test ./sparkplug/ -run TestTCKConformance -v -timeout 90s
+      # The host-application profile's twin: sparkplug/host.Driver is the SUT,
+      # and the test scripts its own raw-paho edge node into the harness
+      # broker (births, a deliberate seq gap that must provoke NCMD/Rebirth,
+      # D/NDEATH) because the harness does not simulate one. Asserts zero FAIL
+      # and a non-zero PASS count, so an all-N/A run cannot pass silently.
+      - name: Host-application profile
+        run: NAUTILUS_TCK=1 go test ./sparkplug/host/ -run TestTCKHostConformance -v -timeout 120s
 
   vscode-iec:
     name: VS Code extension — compile, test
