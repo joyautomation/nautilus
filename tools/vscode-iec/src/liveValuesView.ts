@@ -59,6 +59,13 @@ export class LiveValuesView implements vscode.TreeDataProvider<Node> {
     item.contextValue = node.settable ? "nautilusTag" : "nautilusLocal";
     // Carry the name so nautilus.setValue can read it off the tree element.
     (item as unknown as { tag: string }).tag = node.name;
+    // Click-to-edit: a settable scalar opens the Set Live Value input on a
+    // plain row click, so the panel reads as a values EDITOR (the pencil is
+    // the same action, for discoverability). Compound values and locals have
+    // no command — clicking just expands/selects them.
+    if (node.settable && !compound) {
+      item.command = { command: "nautilus.setValue", title: "Set value", arguments: [{ tag: node.name }] };
+    }
     return item;
   }
 
