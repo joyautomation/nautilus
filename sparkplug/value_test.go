@@ -444,6 +444,46 @@ func TestStructDefsFromTemplatesErrors(t *testing.T) {
 	}
 }
 
+// TestStructDefsFromTemplatesFromNautilusEdge feeds StructDefsFromTemplates
+// definitions built by nautilus's own edge-side encoder (n.templateDefs /
+// definitionTemplate in templates.go) for a two-level nested struct.
+//
+// Before definitionTemplate set TemplateRef on struct-typed definition
+// members, a nested member came across as a bare Template-datatype metric
+// with no ref and no inline definition — exactly the "member has no
+// templateRef" shape StructDefsFromTemplates rejects — so a host could never
+// resolve nautilus's own nested UDTs from its NBIRTH. This pins the fix:
+// nautilus's own edge output now round-trips successfully.
+func TestStructDefsFromTemplatesFromNautilusEdge(t *testing.T) {
+	header := &ir.StructDef{Name: "Header_Type", Fields: []ir.StructField{
+		{Name: "Displacement", Type: ir.RealT}, {Name: "Valid", Type: ir.BoolT},
+	}}
+	plt := &ir.StructDef{Name: "Plt_Type", Fields: []ir.StructField{
+		{Name: "Header", Type: &ir.Type{Kind: ir.TypeStruct, Struct: header}},
+		{Name: "Count", Type: ir.IntT},
+	}}
+	pltVal := ir.Value{Kind: ir.TypeStruct, Struct: plt, Fld: []ir.Value{
+		{Kind: ir.TypeStruct, Struct: header, Fld: []ir.Value{ir.RealVal(1), ir.BoolVal(true)}},
+		ir.IntVal(3),
+	}}
+
+	n := &Node{classRBE: map[string]RBE{DefaultClass: {}}, tagOwner: map[string]string{}}
+	snap := map[string]ir.Value{"TRS": pltVal}
+	defs := n.templateDefs(snap, 100)
+
+	sds, err := StructDefsFromTemplates(defs)
+	if err != nil {
+		t.Fatalf("StructDefsFromTemplates(nautilus edge defs): %v", err)
+	}
+	pltSD, headerSD := sds["Plt_Type"], sds["Header_Type"]
+	if pltSD == nil || headerSD == nil {
+		t.Fatalf("defs = %v, want Plt_Type + Header_Type", keys(sds))
+	}
+	if pltSD.Fields[0].Type.Kind != ir.TypeStruct || pltSD.Fields[0].Type.Struct != headerSD {
+		t.Fatalf("Plt_Type.Header did not resolve to Header_Type: %+v", pltSD.Fields[0].Type)
+	}
+}
+
 func keys(m map[string]*ir.StructDef) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
