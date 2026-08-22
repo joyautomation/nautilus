@@ -38,8 +38,16 @@ func (n *Node) handleCommand(_ mqtt.Client, msg mqtt.Message) {
 }
 
 // Rebirth republishes the birth certificates without a new MQTT session:
-// bdSeq stays the same, seq restarts at 0.
+// bdSeq stays the same, seq restarts at 0. Runs on its own goroutine (see
+// handleCommand's `go n.Rebirth()` and the rebirth-debounce timer in
+// data.go), so it registers itself as in-flight the same way birth() does —
+// no-op once Stop has begun, so Stop can wait for it before mutating bdSeq.
 func (n *Node) Rebirth() {
+	if !n.beginInflight() {
+		return // Stop already in progress; no-op
+	}
+	defer n.inflight.Done()
+
 	n.mu.Lock()
 	n.born = false
 	n.mu.Unlock()
