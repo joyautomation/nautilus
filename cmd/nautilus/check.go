@@ -291,6 +291,29 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		fmt.Printf("%s: warning: tag-meta documents %q, which is not a declared tag — "+
 			"documentation for a tag that does not exist reaches nothing\n", dir, key)
 	}
+
+	// Alarms: the rules really expand, the templates really interpolate,
+	// and every condition path really names a BOOL. Offline — no engine is
+	// constructed, nothing is opened.
+	defs, aerrs, awarns, err := proj.CheckAlarms(rt)
+	if err != nil {
+		errs++
+		fmt.Printf("%s: error: alarms: %s\n", dir, err)
+		return errs, warns
+	}
+	for _, m := range aerrs {
+		errs++
+		fmt.Printf("%s: error: %s\n", dir, m)
+	}
+	for _, m := range awarns {
+		warns++
+		fmt.Printf("%s: warning: %s\n", dir, m)
+	}
+	if proj.Alarms != nil {
+		// The count is the auditable half of "a few rules cover thousands
+		// of alarms": `nautilus alarms list` dumps what they became.
+		fmt.Printf("%s: %d alarm definitions\n", dir, len(defs))
+	}
 	return errs, warns
 }
 

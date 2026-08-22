@@ -29,7 +29,7 @@ type EditOp struct {
 	Ref    string `json:"ref,omitempty"`
 	Neg    bool   `json:"neg,omitempty"`
 	Mode   string `json:"mode,omitempty"` // coil "", "S", "R"
-	Kind   string `json:"kind,omitempty"` // insert: contact | coil | fn | fb | branch
+	Kind   string `json:"kind,omitempty"` // insert: contact | coil | edge | fn | fb | branch
 	Fn     string `json:"fn,omitempty"`
 	Inst   string `json:"inst,omitempty"`
 	FbType string `json:"fbType,omitempty"`
@@ -120,8 +120,8 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		if err != nil {
 			return nil, err
 		}
-		if el.Kind != "contact" && el.Kind != "coil" {
-			return nil, fmt.Errorf("ld edit: only contacts and coils retag")
+		if el.Kind != "contact" && el.Kind != "coil" && el.Kind != "edge" {
+			return nil, fmt.Errorf("ld edit: only contacts, coils, and edges retag")
 		}
 		el.Ref = op.Ref
 	case "toggleNeg":
@@ -129,8 +129,8 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		if err != nil {
 			return nil, err
 		}
-		if el.Kind != "contact" {
-			return nil, fmt.Errorf("ld edit: only contacts toggle NO/NC")
+		if el.Kind != "contact" && el.Kind != "fn" {
+			return nil, fmt.Errorf("ld edit: only contacts and function contacts toggle negation")
 		}
 		el.Neg = !el.Neg
 	case "setCoilMode":
@@ -141,8 +141,8 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		if el.Kind != "coil" {
 			return nil, fmt.Errorf("ld edit: %s is not a coil", el.Kind)
 		}
-		if op.Mode != "" && op.Mode != "S" && op.Mode != "R" {
-			return nil, fmt.Errorf("ld edit: coil mode must be \"\", S, or R")
+		if op.Mode != "" && op.Mode != "S" && op.Mode != "R" && op.Mode != "P" && op.Mode != "N" {
+			return nil, fmt.Errorf("ld edit: coil mode must be \"\", S, R, P, or N")
 		}
 		el.Mode = op.Mode
 	case "setArgs":
@@ -416,6 +416,18 @@ func newElement(op EditOp) (Element, error) {
 			return Element{}, fmt.Errorf("ld edit: %q is not a valid reference", ref)
 		}
 		return Element{Kind: "coil", Ref: ref, Mode: op.Mode}, nil
+	case "edge":
+		ref := op.Ref
+		if ref == "" {
+			ref = "_"
+		}
+		if !refValid(ref) {
+			return Element{}, fmt.Errorf("ld edit: %q is not a valid reference", ref)
+		}
+		if op.Mode != "P" && op.Mode != "N" {
+			return Element{}, fmt.Errorf("ld edit: an edge contact needs mode P or N")
+		}
+		return Element{Kind: "edge", Ref: ref, Mode: op.Mode}, nil
 	case "branch":
 		// A fresh branch: the new parallel path plus a placeholder leg.
 		return Element{Kind: "branch", Legs: [][]Element{
@@ -447,6 +459,16 @@ func sanitizeElement(e *Element) error {
 		}
 		if !refValid(e.Ref) {
 			return fmt.Errorf("ld edit: %q is not a valid reference", e.Ref)
+		}
+	case "edge":
+		if e.Ref == "" {
+			e.Ref = "_"
+		}
+		if !refValid(e.Ref) {
+			return fmt.Errorf("ld edit: %q is not a valid reference", e.Ref)
+		}
+		if e.Mode != "P" && e.Mode != "N" {
+			return fmt.Errorf("ld edit: an edge contact needs mode P or N")
 		}
 	case "fn":
 		if e.Fn == "" {
@@ -811,7 +833,15 @@ func printElement(e *Element) string {
 		}
 		return e.Ref
 	case "fn":
+		if e.Neg {
+			return "/" + e.Fn + "(" + e.Args + ")"
+		}
 		return e.Fn + "(" + e.Args + ")"
+	case "edge":
+		if e.Mode == "N" {
+			return "-" + e.Ref
+		}
+		return "+" + e.Ref
 	case "fb":
 		if strings.TrimSpace(e.Args) == "" {
 			return e.Inst + ":" + e.Type

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/joyautomation/nautilus/internal/tagfile"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -175,5 +176,180 @@ tag-meta:
 	}
 	if got := rt.Meta()["P101.Speed"].Unit; got != "rpm" {
 		t.Errorf("per-field meta did not survive to the runtime: %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Per-member init: a struct-typed tag's `init:` may be a (possibly nested)
+// map of member name to value instead of only zero-of-type. See
+// docs/design/tags.md §4.4 ("Deferred: init: as a field mapping") and
+// lang/ir/seed.go (SeedFromInit).
+
+const levelLib = `TYPE
+  Level : STRUCT
+    CTL1HSP : REAL;
+    CTL1LSP : REAL;
+  END_STRUCT;
+  Pump : STRUCT
+    STRTTMRSP : INT;
+    REMOTE    : BOOL;
+    LVL       : Level;
+  END_STRUCT;
+END_TYPE
+`
+
+const pumpProgram = `PROGRAM Main
+VAR_EXTERNAL
+    P101 : Pump;
+END_VAR
+END_PROGRAM`
+
+// pumpProject builds a project around the Level/Pump UDTs above, with the
+// given tags: block (and, optionally, a tags/gen.yaml tag-files: entry —
+// pass "" for tagFile to skip it).
+func pumpProject(tags, tagFile string) fstest.MapFS {
+	manifest := "tasks:\n  - program: program.st\n"
+	if tagFile != "" {
+		manifest += "tag-files: [tags/gen.yaml]\n"
+	}
+	manifest += "tags:\n" + tags
+	fs := fstest.MapFS{
+		"nautilus.yaml": &fstest.MapFile{Data: []byte(manifest)},
+		"level.st":      &fstest.MapFile{Data: []byte(levelLib)},
+		"program.st":    &fstest.MapFile{Data: []byte(pumpProgram)},
+	}
+	if tagFile != "" {
+		fs["tags/gen.yaml"] = &fstest.MapFile{Data: []byte(tagFile)}
+	}
+	return fs
+}
+
+// A nested init map seeds exactly the members it names — at any depth — and
+// leaves everything else at zero-of-field-type, which is the whole point:
+// a site's ~55-field first-scan CfgDone block collapses into the manifest.
+func TestStructInitSeedsNestedMembersOthersZero(t *testing.T) {
+	proj, err := Load(pumpProject(
+		"  - { name: P101, role: state, type: Pump, init: { STRTTMRSP: 30, LVL: { CTL1HSP: 60.0, CTL1LSP: 40.0 } } }\n", ""), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := runtime.New(proj.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := rt.Tags().ReadGlobal("P101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.Fld[0].I; got != 30 {
+		t.Errorf("STRTTMRSP = %d, want 30", got)
+	}
+	if got := v.Fld[1].B; got != false {
+		t.Errorf("REMOTE = %v, want zero (false) — not named in init", got)
+	}
+	lvl := v.Fld[2]
+	if got := lvl.Fld[0].F; got != 60.0 {
+		t.Errorf("LVL.CTL1HSP = %v, want 60", got)
+	}
+	if got := lvl.Fld[1].F; got != 40.0 {
+		t.Errorf("LVL.CTL1LSP = %v, want 40", got)
+	}
+}
+
+// The same shape, composed through tag-files: rather than the inline tags:
+// block — composeTags folds both into one list ahead of tagDefs/expandTags,
+// so a generated tag file gets exactly the same per-member seeding.
+func TestStructInitWorksThroughTagFiles(t *testing.T) {
+	proj, err := Load(pumpProject("",
+		"- { name: P101, role: state, type: Pump, init: { STRTTMRSP: 45 } }\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := runtime.New(proj.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := rt.Tags().ReadGlobal("P101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.Fld[0].I; got != 45 {
+		t.Errorf("STRTTMRSP = %d, want 45", got)
+	}
+}
+
+// An unknown member name is a load error naming the tag and the member —
+// not a silently ignored key.
+func TestStructInitUnknownMemberIsAnError(t *testing.T) {
+	proj, err := Load(pumpProject(
+		"  - { name: P101, role: state, type: Pump, init: { STRTTMRS: 30 } }\n", ""), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runtime.New(proj.Runtime)
+	if err == nil {
+		t.Fatal("an unknown init member was accepted")
+	}
+	const want = "tag P101: init: unknown member STRTTMRS (did you mean STRTTMRSP?)"
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), want)
+	}
+}
+
+// A struct-typed tag given a bare scalar init is a load error, not a value
+// that quietly does nothing (Tags.Set's switch has no case for a struct
+// tag's raw manifest value, so before SeedFromInit this failed silently).
+func TestStructInitScalarOnStructIsAnError(t *testing.T) {
+	proj, err := Load(pumpProject(
+		"  - { name: P101, role: state, type: Pump, init: 42.0 }\n", ""), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runtime.New(proj.Runtime)
+	if err == nil {
+		t.Fatal("a scalar init against a struct-typed tag was accepted")
+	}
+	if !strings.Contains(err.Error(), "P101") {
+		t.Errorf("error should name the tag: %v", err)
+	}
+}
+
+// The generator round trip: internal/tagfile.Render emits a struct's
+// per-member init as a flow-style mapping (tagfile_test.go), and this proves
+// the other half — that a tag file containing exactly that shape composes
+// and seeds the same way a hand-written one does. This is the path
+// `nautilus eip tags` / `nautilus tags import-csv` output would take.
+func TestStructInitRenderRoundTripsThroughTagFile(t *testing.T) {
+	raw, err := tagfile.Render(nil, []tagfile.Tag{{
+		Name: "P101", Role: "state", Type: "Pump",
+		Init: map[string]any{
+			"STRTTMRSP": 30,
+			"LVL":       map[string]any{"CTL1HSP": 60.0, "CTL1LSP": 40.0},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj, err := Load(pumpProject("", string(raw)), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := runtime.New(proj.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := rt.Tags().ReadGlobal("P101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := v.Fld[0].I; got != 30 {
+		t.Errorf("STRTTMRSP = %d, want 30", got)
+	}
+	lvl := v.Fld[2]
+	if got := lvl.Fld[0].F; got != 60.0 {
+		t.Errorf("LVL.CTL1HSP = %v, want 60", got)
+	}
+	if got := lvl.Fld[1].F; got != 40.0 {
+		t.Errorf("LVL.CTL1LSP = %v, want 40", got)
 	}
 }

@@ -32,6 +32,27 @@ export { default as Tabs } from './components/Tabs.svelte';
 export { default as DriverStatusCard } from './components/DriverStatusCard.svelte';
 export { default as DriverStatusPanel } from './components/DriverStatusPanel.svelte';
 
+// Alarms — ISA-18.2 state, active/journal views, ack/shelve, fed from the
+// `alarm/` package's GET /api/alarms*, POST /api/alarms/{ack,shelve,unshelve}
+// and the stream frame's `alarms` summary. contract: docs/design/alarms.md
+export { default as AlarmBanner } from './components/AlarmBanner.svelte';
+export { default as AlarmTable } from './components/AlarmTable.svelte';
+export { default as AlarmJournal } from './components/AlarmJournal.svelte';
+export { AlarmClient, createAlarmClient, shouldRefetch, PRIORITY_ORDER, PRIORITY_META, STATE_META, DEFAULT_SHELVE_TIMES_S } from './alarms.js';
+export type {
+	Priority,
+	AlarmState,
+	AlarmInstance,
+	AlarmBrief,
+	AlarmSummary,
+	AlarmEvent,
+	AlarmEventKind,
+	AlarmJournalFilter,
+	AlarmJournalResult,
+	AlarmClientOptions,
+	FrameWithAlarms
+} from './alarms.js';
+
 // App-shell primitives: icons, menus, navigation, dialogs, toasts — the
 // chrome around the process graphics, themed as siblings of the components
 // above rather than a bolted-on UI library.

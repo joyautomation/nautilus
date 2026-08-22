@@ -55,13 +55,50 @@ func (r RBE) shouldPublish(st *rbeState, v ir.Value, now time.Time) bool {
 	if r.MinInterval > 0 && now.Sub(st.lastTime) < r.MinInterval {
 		return false // rate-limited
 	}
-	if newF, oldF, ok := numeric(v, st.last); ok {
+	return r.memberChanged(v, st.last)
+}
+
+// memberChanged applies the deadband rule to one value: a numeric leaf
+// compares by deadband (or exact change, deadband disabled); a struct or
+// array recurses per member instead of collapsing to valuesEqual, which is
+// what makes deadband do anything at all on a Template (UDT) metric.
+// Without this, numeric()/asFloat only understand scalars, every struct
+// value falls straight to !valuesEqual, and any single member's change —
+// even sub-deadband dither on one field — republishes the whole template.
+//
+// Comparisons are against st.last, which record() only ever sets from a
+// value that WAS published, so this is always "moved since the last
+// publish", the same guarantee shouldPublish gives scalars.
+func (r RBE) memberChanged(v, last ir.Value) bool {
+	if newF, oldF, ok := numeric(v, last); ok {
 		if r.Deadband > 0 {
 			return math.Abs(newF-oldF) > r.Deadband
 		}
 		return newF != oldF
 	}
-	return !valuesEqual(v, st.last)
+	switch v.Kind {
+	case ir.TypeStruct:
+		if last.Kind != ir.TypeStruct || len(v.Fld) != len(last.Fld) {
+			return true
+		}
+		for i := range v.Fld {
+			if r.memberChanged(v.Fld[i], last.Fld[i]) {
+				return true
+			}
+		}
+		return false
+	case ir.TypeArray:
+		if last.Kind != ir.TypeArray || len(v.Arr) != len(last.Arr) {
+			return true
+		}
+		for i := range v.Arr {
+			if r.memberChanged(v.Arr[i], last.Arr[i]) {
+				return true
+			}
+		}
+		return false
+	}
+	return !valuesEqual(v, last)
 }
 
 // record updates the state after a publish.

@@ -49,6 +49,10 @@ Usage:
   nautilus tags <cmd>     Generate a tag file from a spreadsheet export
                           (import-csv). Commit the output and compose it
                           with tag-files:.
+  nautilus alarms list    Expand a manifest project's alarm rules and files
+                          and print every definition (-o yaml, -count,
+                          -site, -priority). The auditable half of "a few
+                          rules cover thousands of alarms".
   nautilus pull           Pull a controller's online edits back into the
                           program file (--host <controller>). Inverse of the
                           VS Code "Download Program to Controller" command.
@@ -92,6 +96,8 @@ func main() {
 		os.Exit(runEIP(os.Args[2:]))
 	case "tags":
 		os.Exit(runTags(os.Args[2:]))
+	case "alarms":
+		os.Exit(runAlarms(os.Args[2:]))
 	case "pull":
 		os.Exit(runPull(os.Args[2:]))
 	case "historian":

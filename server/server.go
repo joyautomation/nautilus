@@ -7,13 +7,22 @@
 //	GET  /api/state    one JSON Frame — the current tag snapshot
 //	GET  /api/stream   Server-Sent Events; one Frame per broadcast tick
 //	GET  /api/meta     tag descriptions/units, I/O binding, scan target
-//	POST /api/tags     {"name": "TempSP", "value": 65.0} — write one tag
+//	POST /api/tags     {"name": "TempSP", "value": 65.0} — write one tag,
+//	                   or one member of a struct tag by dotted path:
+//	                   {"name": "P101.Drive.Speed", "value": 60.0}, or several
+//	                   at once: {"name": "P101", "value": {"Cmd": true}}
 //	GET  /api/cluster  this replica's redundancy status (leader.Status JSON)
 //	GET  /assets/…     the dashboard's logo, favicon and brand fonts
 //
 // The Frame shape is deliberately generic (every tag, plus the scan loop's
 // full PLC-style diagnostics) so the hmi kit's frame-generic realtime client
 // and the editor tooling share one endpoint. Pure stdlib.
+//
+// Options.HMI turns the controller into a one-process HMI deploy: a built
+// SPA (SvelteKit's `adapter-static` output, or any other static bundle)
+// takes over "/" — with SPA-fallback routing — and the built-in dashboard
+// above moves to "/_nautilus/" so it stays reachable. See Options.HMI and
+// the manifest's `server.hmi`.
 //
 // Redundancy (Options.Cluster) makes every replica answerable behind a load
 // balancer even though only the leader scans: GET /api/cluster always
@@ -39,6 +48,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -47,6 +57,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -98,6 +109,12 @@ type Frame struct {
 	Locals  map[string]any    `json:"locals,omitempty"`
 	Scan    runtime.ScanStats `json:"scan"`
 	Drivers []DriverStatus    `json:"drivers,omitempty"`
+	// Alarms is the alarm engine's counts — never the rows. Present only
+	// when Options.Alarms is set, so a controller without alarms and an
+	// HMI built before them see exactly the frame they saw before. Its
+	// Rev bumps on any state change, which is how an HMI knows to refetch
+	// GET /api/alarms and how it knows not to.
+	Alarms *alarm.Summary `json:"alarms,omitempty"`
 }
 
 // Options tunes the server; zero values mean defaults.
@@ -160,6 +177,35 @@ type Options struct {
 	// live in one place; nil disables activation while leaving the history
 	// readable.
 	SourcesAt func(sha string) (map[string]string, error)
+
+	// HMI, when set, serves a built HMI — a SvelteKit `adapter-static`
+	// build, or any other static SPA bundle — at "/", so the controller is
+	// a one-process deploy: no separate web server for the operator screen.
+	// An unmatched, non-"/api" path falls back to the bundle's index.html
+	// (SPA client-side routing), and the built-in dashboard moves to
+	// "/_nautilus/" (its assets to "/_nautilus/assets/") so it stays
+	// reachable without colliding with whatever the HMI's own build puts
+	// under "/assets/". Nil (the default): the dashboard keeps "/" exactly
+	// as before.
+	//
+	// The HMI must call the API same-origin (a relative "/api/..." base
+	// URL, not an absolute host) — see the manifest's `server.hmi` and the
+	// "Serving the HMI from the controller" guide.
+	HMI fs.FS
+
+	// Alarms, when set, serves the five /api/alarms* routes and puts the
+	// engine's Summary on every stream frame. Nil (the default): those
+	// routes 404 and the frame carries no alarms field at all — which is
+	// what the HMI kit's AlarmClient reads as "this controller has no
+	// alarm engine" and renders nothing for, rather than showing an empty
+	// list that looks like a quiet plant.
+	Alarms *alarm.Engine
+
+	// AlarmShelveTimes is the shelf durations an operator screen offers,
+	// served on /api/meta as seconds. Empty uses alarm.DefaultShelveTimes.
+	// It is configuration, not policy: the engine accepts any deadline in
+	// the future, and this is only what the picker suggests.
+	AlarmShelveTimes []time.Duration
 }
 
 // DriverStatus is a field driver's or publisher's health, rendered by the
@@ -205,6 +251,9 @@ type Server struct {
 	historian   string
 	historyFn   func() *ProgramHistory
 	sourcesAt   func(sha string) (map[string]string, error)
+	hmi         fs.FS
+	alarms      *alarm.Engine
+	shelveTimes []time.Duration
 
 	mu      sync.Mutex
 	clients map[chan []byte]struct{}
@@ -236,6 +285,12 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.historian = opts[0].HistorianURL
 		s.historyFn = opts[0].History
 		s.sourcesAt = opts[0].SourcesAt
+		s.hmi = opts[0].HMI
+		s.alarms = opts[0].Alarms
+		s.shelveTimes = opts[0].AlarmShelveTimes
+	}
+	if len(s.shelveTimes) == 0 {
+		s.shelveTimes = alarm.DefaultShelveTimes
 	}
 	return s
 }
@@ -288,6 +343,7 @@ func (s *Server) frame() Frame {
 	if s.drivers != nil {
 		f.Drivers = s.drivers()
 	}
+	f.Alarms = s.alarmSummary()
 	return f
 }
 
@@ -297,6 +353,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/meta", s.handleMeta)
 	mux.HandleFunc("GET /api/drivers", s.handleDrivers)
+	// Alarms: always registered, 404 when no engine — see server/alarms.go.
+	// Registering them unconditionally is what makes "this controller has
+	// no alarm engine" a message rather than a bare route-not-found.
+	mux.HandleFunc("GET /api/alarms", s.handleAlarms)
+	mux.HandleFunc("GET /api/alarms/journal", s.handleAlarmJournal)
+	mux.HandleFunc("POST /api/alarms/ack", s.handleAlarmAck)
+	mux.HandleFunc("POST /api/alarms/shelve", s.handleAlarmShelve)
+	mux.HandleFunc("POST /api/alarms/unshelve", s.handleAlarmUnshelve)
 	mux.HandleFunc("GET /api/stream", s.handleStream)
 	mux.HandleFunc("POST /api/tags", s.handleWriteTag)
 	mux.HandleFunc("GET /api/program", s.handleGetProgram)
@@ -307,8 +371,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/cluster", s.handleCluster)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/history/", s.handleHistory)
-	mux.HandleFunc("GET /assets/", handleAsset)
-	mux.HandleFunc("GET /", s.handleIndex)
+	if s.hmi != nil {
+		// The HMI owns "/" (and whatever paths its own build wants under
+		// it, "/assets/" included); the built-in dashboard moves out of
+		// the way to "/_nautilus/" so it stays reachable without a name
+		// collision.
+		mux.HandleFunc("GET /_nautilus/", s.handleNautilusIndex)
+		mux.HandleFunc("GET /_nautilus/assets/", handleAsset)
+		mux.Handle("GET /", s.handleHMI())
+	} else {
+		mux.HandleFunc("GET /assets/", handleAsset)
+		mux.HandleFunc("GET /", s.handleIndex)
+	}
 	return withCORS(s.proxyStandby(mux))
 }
 
@@ -319,23 +393,27 @@ func (s *Server) Handler() http.Handler {
 // when Options.Cluster is set; with no Cluster configured every request
 // falls straight through to mux, exactly as before redundancy existed.
 //
-// Two things are always answered locally, even on a standby: GET
-// /api/cluster (each replica reports its own view of the cluster — showing
-// that divergence is the entire point) and the static UI ("/" and
-// "/assets/…", so a load-balancer health probe or a browser always gets a
-// page, whichever replica it lands on).
+// Everything outside "/api/" is always answered locally, even on a
+// standby: the built-in dashboard, its assets, and — when server.hmi is
+// configured — the whole HMI build, SPA-fallback routes included. None of
+// it reads the tag store, so a load-balancer health probe or a browser
+// always gets a page, whichever replica it lands on, and a client-side
+// route two levels deep in the HMI doesn't need special-casing here (it
+// was never a "/api/" path to begin with). Within "/api/", GET
+// /api/cluster is also always local (each replica reports its own view of
+// the cluster — showing that divergence is the entire point), and so is
+// /api/history*: the archive lives in the historian, not the tag store,
+// so a standby answers it as well as the leader and keeps answering it
+// mid-failover.
 func (s *Server) proxyStandby(mux http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.cluster == nil {
 			mux.ServeHTTP(w, r)
 			return
 		}
-		if r.URL.Path == "/api/cluster" || r.URL.Path == "/" ||
-			strings.HasPrefix(r.URL.Path, "/assets/") ||
+		if !strings.HasPrefix(r.URL.Path, "/api/") ||
+			r.URL.Path == "/api/cluster" ||
 			strings.HasPrefix(r.URL.Path, "/api/history") {
-			// History also stays local: the archive lives in the historian,
-			// not the tag store, so a standby answers it as well as the
-			// leader — and keeps answering it mid-failover.
 			mux.ServeHTTP(w, r)
 			return
 		}
@@ -381,7 +459,8 @@ func withCORS(next http.Handler) http.Handler {
 
 // handleIndex serves the landing page at exactly "/". Because "GET /" is
 // the catch-all pattern, anything not matched by a more specific route
-// lands here; non-root paths get a real 404 rather than the page.
+// lands here; non-root paths get a real 404 rather than the page. Only
+// mounted when no HMI is configured — see handleHMI.
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -391,6 +470,47 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Write(indexHTML)
 }
 
+// handleNautilusIndex is handleIndex's counterpart when an HMI has claimed
+// "/": the same page, moved to "/_nautilus/" so it's still reachable
+// (linking a build's operator screen back to the raw tag table is exactly
+// the point of moving it rather than dropping it).
+func (s *Server) handleNautilusIndex(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/_nautilus/" {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(indexHTML)
+}
+
+// handleHMI serves a configured HMI build (Options.HMI) at "/": a real
+// file in the tree is served as-is (content type, range requests, caching
+// — all http.FileServer's usual behavior); anything else falls back to
+// the bundle's own index.html, so client-side routing (SvelteKit, or any
+// other SPA router) resolves a deep link like "/tanks/101" itself instead
+// of getting a 404 from this server, which has no idea such a route
+// exists.
+func (s *Server) handleHMI() http.Handler {
+	fsrv := http.FileServer(http.FS(s.hmi))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := strings.TrimPrefix(r.URL.Path, "/")
+		lookup := path.Clean(p)
+		if lookup == "." || strings.HasSuffix(p, "/") {
+			// The root, or a directory-style path (trailing slash): the
+			// file that answers it — if any — is its own index.html, same
+			// as http.FileServer's own directory convention.
+			lookup = path.Join(lookup, "index.html")
+		}
+		if st, err := fs.Stat(s.hmi, lookup); err == nil && !st.IsDir() {
+			fsrv.ServeHTTP(w, r)
+			return
+		}
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = "/"
+		fsrv.ServeHTTP(w, r2)
+	})
+}
+
 // handleAsset serves the embedded logo, favicon and fonts. Paths are matched
 // against the embedded tree, so nothing outside it is reachable; anything not
 // in the tree (including a traversal attempt) is a plain 404.
@@ -398,8 +518,13 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 // The cache lifetime is long because these bytes only change when the binary
 // does, and a font re-fetched on every page load is a visible flash of
 // fallback text on a wall-mounted dashboard that reloads all day.
+//
+// Mounted at both "/assets/" (no HMI configured) and "/_nautilus/assets/"
+// (HMI configured, dashboard moved) — the "_nautilus/" prefix, if present,
+// is stripped before the embedded-tree lookup so one handler serves both.
 func handleAsset(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/")
+	name = strings.TrimPrefix(name, "_nautilus/")
 	b, err := staticFS.ReadFile(name)
 	if err != nil {
 		http.NotFound(w, r)
@@ -485,6 +610,26 @@ type metaResponse struct {
 	Inputs       []string                   `json:"inputs"`
 	Outputs      []string                   `json:"outputs"`
 	ScanTargetMs float64                    `json:"scanTargetMs"`
+	// MemberWrites says this controller accepts POST /api/tags with a dotted
+	// member path ("P101.Drive.Speed") or an object payload merging into a
+	// struct tag. It is a capability flag, not a policy: writability itself
+	// is still the root tag's (a member of an Input is refused like the
+	// Input is). An HMI that binds UDT members needs it because the answer
+	// used to be no — a dotted name silently created a junk tag — so a
+	// faceplate built for a newer runtime must be able to tell, and disable
+	// its controls against an older one instead of writing into the void.
+	MemberWrites bool `json:"memberWrites"`
+	// Alarms says this controller runs an alarm engine, so /api/alarms*
+	// will answer. Same capability-flag reasoning as MemberWrites: an HMI
+	// that renders an alarm banner needs to know whether to render one at
+	// all, and finding out by taking a 404 makes an ordinary page load
+	// look like an error.
+	Alarms bool `json:"alarms"`
+	// ShelveTimes is the shelf durations the operator screen's picker
+	// offers, in SECONDS — the unit every other duration in this API's
+	// JSON is not, but the one the HMI kit's DEFAULT_SHELVE_TIMES_S uses,
+	// and a shelf of 4.5 milliseconds is not a thing anyone wants.
+	ShelveTimes []int `json:"shelveTimes"`
 }
 
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
@@ -498,7 +643,18 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		Inputs:       nonNilStrings(s.rt.Inputs()),
 		Outputs:      nonNilStrings(s.rt.Outputs()),
 		ScanTargetMs: s.rt.Stats().TargetMs,
+		MemberWrites: true,
+		Alarms:       s.alarms != nil,
+		ShelveTimes:  shelveSeconds(s.shelveTimes),
 	})
+}
+
+func shelveSeconds(ds []time.Duration) []int {
+	out := make([]int, 0, len(ds))
+	for _, d := range ds {
+		out = append(out, int(d.Seconds()))
+	}
+	return out
 }
 
 func nonNilStrings(s []string) []string {
@@ -604,8 +760,15 @@ func sameOrigin(r *http.Request) bool {
 	return u.Host == r.Host
 }
 
-// writeTagRequest is the POST /api/tags payload. Value must be a JSON
-// number or boolean — the tag kinds the runtime can store.
+// writeTagRequest is the POST /api/tags payload.
+//
+// Name addresses a whole tag ("TempSP") or one member of a struct tag by a
+// dotted path ("P101.Drive.Speed") — the same paths a test manifest's
+// `given:`/`expect:` and an HMI's tag bindings already use.
+//
+// Value is a JSON number or boolean for a scalar; for a struct tag it may
+// also be an OBJECT of member → value, which merges (members it names are
+// set, every other member keeps its current value).
 type writeTagRequest struct {
 	Name  string `json:"name"`
 	Value any    `json:"value"`
@@ -621,9 +784,30 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `expected {"name": ..., "value": ...}`, http.StatusBadRequest)
 		return
 	}
-	// Tags.Set silently ignores anything that isn't a number or bool, so
-	// reject those here rather than returning 204 for a write that didn't
-	// happen. JSON numbers decode to float64; booleans to bool.
+	// A member write — a dotted name, or an object payload merging into a
+	// struct tag — resolves through the tag's own StructDef and is
+	// read-modify-written whole. It must address something that EXISTS: a
+	// flat assignment of "P101.Spede" would otherwise create a top-level tag
+	// under that literal name, which no program reads and a Sparkplug edge
+	// would publish as a bogus metric. That is a 400 with the reason.
+	_, isObject := req.Value.(map[string]any)
+	if isObject || strings.Contains(req.Name, ".") {
+		root, _, _ := strings.Cut(req.Name, ".")
+		if msg := s.refuseMemberWrite(root); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		if err := s.rt.Tags().SetPath(req.Name, req.Value); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	// Whole-tag scalar write, unchanged: Tags.Set silently ignores anything
+	// that isn't a number or bool, so reject those here rather than
+	// returning 204 for a write that didn't happen. JSON numbers decode to
+	// float64; booleans to bool.
 	switch req.Value.(type) {
 	case float64, bool:
 		s.rt.Tags().Set(req.Name, req.Value)
@@ -631,4 +815,29 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "value must be a number or boolean", http.StatusUnprocessableEntity)
 	}
+}
+
+// refuseMemberWrite reports why a member write to this root tag must not
+// proceed, or "" to allow it. The role rule is applied to the ROOT tag, not
+// to the member: the store holds whole tags, so writing P101.Cmd rewrites
+// P101.
+//
+// Only a driver-owned INPUT is refused. A whole-tag write to one is still
+// accepted (that is PLC forcing — it lands, and the driver takes the tag
+// back on the next scan, which is visible and self-correcting), but a MEMBER
+// write reads a base the driver replaces wholesale before the next scan, so
+// the edit cannot survive even one cycle: it is a lost update dressed up as
+// a command. Everything else stays writable — setpoints and state because
+// they are the operator's, and OUTPUTS because that is exactly how a
+// Sparkplug host commands an edge node: the operator writes the output tag
+// and the host driver publishes it as a command.
+func (s *Server) refuseMemberWrite(root string) string {
+	for _, in := range s.rt.Inputs() {
+		if in == root {
+			return "tag " + root + " is a driver-owned input: the driver replaces its whole " +
+				"value before every scan, so a member write would be discarded unread — " +
+				"write the setpoint or command tag the logic reads instead"
+		}
+	}
+	return ""
 }

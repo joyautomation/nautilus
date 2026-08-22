@@ -280,22 +280,26 @@ type Externals map[string]string
 // Neither source alone is right. The store misses a tag nothing has written
 // yet — an output with no seed exists in no snapshot, and is exactly the
 // sort of tag a first-scan expectation names. The declarations miss a tag
-// only the manifest seeds. Compound values (UDTs, arrays, FB instances)
-// have no place in a generated VAR_EXTERNAL block, so they are left out and
-// an expression referencing one fails to compile with the name unknown.
+// only the manifest seeds. A struct-typed (UDT/Template) tag declares as
+// its own TYPE name rather than being left out: the project's library .st
+// already declares that TYPE, exprSource composes those libraries ahead of
+// the generated POU, so `WEL15_FIT_001.VALUE < X + 5.0` compiles exactly
+// the way `WEL15_FIT_001.VALUE: {gt: 800}` (the matcher form) already
+// worked. Arrays and FB instances still have no place in a VAR_EXTERNAL
+// block generated this way, so they stay left out.
 func ExternalsOf(rt *runtime.Runtime) Externals {
 	ext := Externals{}
 	for name, t := range rt.Globals() {
 		if t == nil {
 			continue
 		}
-		if ty, ok := stTypeName(t.Kind); ok {
+		if ty, ok := stTypeNameOfType(t); ok {
 			ext[name] = ty
 		}
 	}
 	// The store wins on a disagreement: it is what eval actually reads.
 	for name, v := range rt.Tags().Snapshot() {
-		if ty, ok := stTypeName(v.Kind); ok {
+		if ty, ok := stTypeNameOfValue(v); ok {
 			ext[name] = ty
 		}
 	}
@@ -391,9 +395,11 @@ func (p *predicate) eval(rt *runtime.Runtime) (bool, error) {
 }
 
 // stTypeName maps a stored value's kind onto a declarable ST scalar type.
-// Compound values (UDTs, arrays, FB instances) have no place in a
-// VAR_EXTERNAL block generated this way, so they are left out and an
-// expression referencing one fails to compile with the name unknown.
+// Arrays and FB instances have no place in a VAR_EXTERNAL block generated
+// this way, so they are left out and an expression referencing one fails to
+// compile with the name unknown. Structs are handled separately by
+// stTypeNameOfType/stTypeNameOfValue, which need the UDT's name, not just
+// its kind.
 func stTypeName(k ir.TypeKind) (string, bool) {
 	switch k {
 	case ir.TypeBool:
@@ -408,4 +414,31 @@ func stTypeName(k ir.TypeKind) (string, bool) {
 		return "STRING", true
 	}
 	return "", false
+}
+
+// stTypeNameOfType maps a program-declared global's type onto a declarable
+// ST type name: a scalar's own keyword, or — for a struct-typed (UDT) tag —
+// the UDT's TYPE name, so the generated VAR_EXTERNAL block reads
+// `P101 : Motor;` exactly as the real program does.
+func stTypeNameOfType(t *ir.Type) (string, bool) {
+	if t.Kind == ir.TypeStruct {
+		if t.Struct == nil || t.Struct.Name == "" {
+			return "", false
+		}
+		return t.Struct.Name, true
+	}
+	return stTypeName(t.Kind)
+}
+
+// stTypeNameOfValue is stTypeNameOfType's counterpart for a stored value —
+// used for a tag the store holds but no program declares (manifest-seeded
+// UDT tags), where the UDT name comes from the value's own StructDef.
+func stTypeNameOfValue(v ir.Value) (string, bool) {
+	if v.Kind == ir.TypeStruct {
+		if v.Struct == nil || v.Struct.Name == "" {
+			return "", false
+		}
+		return v.Struct.Name, true
+	}
+	return stTypeName(v.Kind)
 }

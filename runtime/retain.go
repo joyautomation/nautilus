@@ -24,6 +24,32 @@ type Coordinator interface {
 // every slider drag into a ConfigMap write.
 const saveInterval = 2 * time.Second
 
+// SetAlarms registers the alarm engine as retained operator state, so
+// acknowledgement and shelf ride along in the store the setpoints already
+// use.
+//
+// A method rather than an Options field for the same reason OnScan is one:
+// the engine is built AFTER runtime.New — it reads the tag store, which
+// does not exist until then. Call it before Run; the first takeover is
+// what restores what the last leader saved.
+//
+// Nil is legal and is the default: a project with no alarms writes no
+// alarms section, and a store written before alarms existed loads
+// unchanged (retain.State.Alarms is omitempty).
+func (r *Runtime) SetAlarms(a retain.AlarmRetainer) {
+	r.alarmMu.Lock()
+	r.alarms = a
+	r.alarmMu.Unlock()
+}
+
+// alarmRetainer reads the registered engine. Its own mutex, not leadMu:
+// loadRetained runs inside takeover, which already holds leadMu.
+func (r *Runtime) alarmRetainer() retain.AlarmRetainer {
+	r.alarmMu.Lock()
+	defer r.alarmMu.Unlock()
+	return r.alarms
+}
+
 // gate is the first thing every scan does. It answers "should this replica
 // scan?", and on the standby→leader edge it performs the takeover sequence
 // before any logic runs. With no coordinator and no retain store it is a
@@ -94,8 +120,33 @@ func (r *Runtime) loadRetained() error {
 	for _, n := range r.retainTags {
 		allowed[n] = true
 	}
+	var errs []error
 	for name, v := range st.Tags {
 		if !allowed[name] {
+			continue
+		}
+		// A retained STRUCT tag: JSON collapsed it to a plain
+		// map[string]any (see retainState/plain), which setAny has no case
+		// for — a flat write must never conjure a tag from nothing (see
+		// Tags.Set), so a map there is silently dropped. Restoring
+		// configuration is different: the tag already exists, seeded from
+		// the manifest (with its StructDef attached) before takeover ever
+		// runs, so it is read-modify-written member by member through
+		// ir.SetField exactly like a struct's own operator writes
+		// (Tags.SetPath) are — an empty path assigns the whole value, which
+		// for a struct target means the same partial merge SetPath does.
+		if m, isMap := v.(map[string]any); isMap {
+			cur, err := r.tags.ReadGlobal(name)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("retained tag %q: %w", name, err))
+				continue
+			}
+			nv, err := ir.SetField(cur, nil, m, "tag "+name)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("retained tag %q: %w", name, err))
+				continue
+			}
+			r.tags.setAny(name, nv)
 			continue
 		}
 		// JSON collapses every number to float64. If the tag is currently an
@@ -104,13 +155,23 @@ func (r *Runtime) loadRetained() error {
 		if f, isNum := v.(float64); isNum {
 			if cur, err := r.tags.ReadGlobal(name); err == nil &&
 				(cur.Kind == ir.TypeInt || cur.Kind == ir.TypeTime) {
-				r.tags.Set(name, int64(f))
+				r.tags.setAny(name, int64(f))
 				continue
 			}
 		}
-		r.tags.Set(name, v)
+		// setAny: a restore puts a declared tag's own value back under its
+		// own name — it is configuration, not an operator write, so it does
+		// not go through Set's member-path guard.
+		r.tags.setAny(name, v)
 	}
-	var errs []error
+	// Operator alarm state — acknowledgement and shelf — goes back to the
+	// engine before the first Evaluate of this leadership term. Doing it
+	// here rather than at construction is what makes a standby takeover
+	// correct: takeover() re-reads the store on the standby→leader edge, so
+	// a failover cannot resurrect hundreds of acked alarms as unacked.
+	if a := r.alarmRetainer(); a != nil {
+		a.RestoreAlarms(st.Alarms)
+	}
 	for task, src := range st.Programs {
 		p := r.TaskProgram(task)
 		if p == nil {
@@ -168,10 +229,15 @@ func (r *Runtime) saveRetained(lastSaved []byte) []byte {
 }
 
 // retainState assembles what this controller persists: the retained tags'
-// current scalar values, and the source of every program that has drifted
-// from what it compiled from (an online edit not yet pulled into git).
-// Compound values (UDTs, arrays) are skipped — their JSON form cannot be
-// written back through the tag store, so persisting them would be a lie.
+// current values, and the source of every program that has drifted from
+// what it compiled from (an online edit not yet pulled into git). A struct
+// (UDT) tag persists as its plain JSON form (see plain) — the same shape
+// GET /api/state already sends an HMI — and loadRetained merges it back
+// member by member through ir.SetField, so a restart doesn't lose a
+// faceplate's setpoints just because they live inside a UDT. Arrays are
+// still skipped: there is no settled path-addressed way to write one back
+// through the tag store (see ir.SetField's TypeArray case), so persisting
+// one would be a lie loadRetained could not make good on.
 func (r *Runtime) retainState() retain.State {
 	st := retain.State{}
 	for _, name := range r.retainTags {
@@ -180,7 +246,7 @@ func (r *Runtime) retainState() retain.State {
 			continue
 		}
 		switch v.Kind {
-		case ir.TypeBool, ir.TypeReal, ir.TypeInt, ir.TypeTime, ir.TypeString:
+		case ir.TypeBool, ir.TypeReal, ir.TypeInt, ir.TypeTime, ir.TypeString, ir.TypeStruct:
 			if st.Tags == nil {
 				st.Tags = map[string]any{}
 			}
@@ -199,6 +265,16 @@ func (r *Runtime) retainState() retain.State {
 	record(MainTaskName, r.prog)
 	for _, tr := range r.tasks {
 		record(tr.name, tr.prog)
+	}
+	// Only ack and shelf: active and return-to-normal re-derive from the
+	// field on the next scan, and a retained "active" would be a claim
+	// about the plant made by a file. The map is omitted when empty, so a
+	// project with no alarms — or one whose alarms are all normal — writes
+	// exactly what it wrote before this existed.
+	if a := r.alarmRetainer(); a != nil {
+		if m := a.RetainedAlarms(); len(m) > 0 {
+			st.Alarms = m
+		}
 	}
 	return st
 }

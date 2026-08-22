@@ -1,0 +1,123 @@
+package server
+
+import (
+	"bytes"
+	"net/http/httptest"
+	"testing"
+	"testing/fstest"
+)
+
+// Options.HMI turns the controller into a one-process HMI deploy: a built
+// SPA takes "/" (with SPA-fallback routing for client-side routes), and the
+// built-in dashboard moves to "/_nautilus/" so it stays reachable without
+// colliding with whatever the HMI's own build puts under "/assets/".
+
+func testHMI() fstest.MapFS {
+	return fstest.MapFS{
+		"index.html":       {Data: []byte("<html>hmi shell</html>")},
+		"favicon.png":      {Data: []byte("PNGDATA")},
+		"assets/index.js":  {Data: []byte("console.log('hmi')")},
+		"tanks/index.html": {Data: []byte("<html>nested route file</html>")},
+	}
+}
+
+// A real file in the HMI build is served as-is at its own path.
+func TestHMIServesStaticFile(t *testing.T) {
+	h := New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/favicon.png", nil))
+	if rec.Code != 200 {
+		t.Fatalf("GET /favicon.png = %d, want 200", rec.Code)
+	}
+	if rec.Body.String() != "PNGDATA" {
+		t.Fatalf("GET /favicon.png body = %q", rec.Body.String())
+	}
+}
+
+// The HMI's own "/assets/…" (its Vite/SvelteKit build output) must be
+// reachable at "/assets/…" — the built-in dashboard's assets are the ones
+// that moved, not the HMI's.
+func TestHMIOwnAssetsServed(t *testing.T) {
+	h := New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/assets/index.js", nil))
+	if rec.Code != 200 || rec.Body.String() != "console.log('hmi')" {
+		t.Fatalf("GET /assets/index.js = %d %q", rec.Code, rec.Body.String())
+	}
+}
+
+// A client-side route the HMI's build doesn't have a matching file for
+// (a SvelteKit page reached by a deep link, not a full navigation) falls
+// back to the bundle's index.html so its router can take over.
+func TestHMISPAFallback(t *testing.T) {
+	h := New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()
+	for _, p := range []string{"/", "/dashboard", "/tanks/101/trend"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		if rec.Code != 200 {
+			t.Fatalf("GET %s = %d, want 200 (SPA fallback)", p, rec.Code)
+		}
+		if rec.Body.String() != "<html>hmi shell</html>" {
+			t.Fatalf("GET %s body = %q, want the HMI's index.html", p, rec.Body.String())
+		}
+	}
+}
+
+// A path that resolves to a real file one directory down (not the SPA
+// fallback) is served as that file, not index.html.
+func TestHMINestedRealFileWins(t *testing.T) {
+	h := New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/tanks/", nil))
+	if rec.Code != 200 || rec.Body.String() != "<html>nested route file</html>" {
+		t.Fatalf("GET /tanks/ = %d %q, want the nested index.html", rec.Code, rec.Body.String())
+	}
+}
+
+// /api/* must keep working exactly as before — an HMI build is never
+// allowed to shadow the tag API, even though it owns "/".
+func TestHMIDoesNotShadowAPI(t *testing.T) {
+	h := New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/state", nil))
+	if rec.Code != 200 {
+		t.Fatalf("GET /api/state = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("GET /api/state Content-Type = %q, want application/json (not the HMI's index.html)", ct)
+	}
+}
+
+// The built-in dashboard moves to "/_nautilus/" (and its assets to
+// "/_nautilus/assets/") once an HMI is configured, rather than
+// disappearing — it's still the fastest way to see the raw tag table.
+func TestHMIMovesBuiltinDashboardToNautilusPrefix(t *testing.T) {
+	h := New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/_nautilus/", nil))
+	if rec.Code != 200 || rec.Header().Get("Content-Type") != "text/html; charset=utf-8" {
+		t.Fatalf("GET /_nautilus/ = %d %q, want the built-in dashboard", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	if !bytes.Equal(rec.Body.Bytes(), indexHTML) {
+		t.Fatal("GET /_nautilus/ did not serve the built-in dashboard's HTML")
+	}
+
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, httptest.NewRequest("GET", "/", nil))
+	if rec2.Body.String() != "<html>hmi shell</html>" {
+		t.Fatal("GET / must serve the HMI, not the built-in dashboard, once server.hmi is set")
+	}
+}
+
+// Once the dashboard moves, plain "/assets/…" belongs to the HMI's build,
+// not the embedded dashboard assets — those only answer under
+// "/_nautilus/assets/…" now.
+func TestHMIBuiltinAssetsMoveWithDashboard(t *testing.T) {
+	h := New(newTestRuntime(t), Options{HMI: testHMI()}).Handler()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/_nautilus/assets/logo.svg", nil))
+	if rec.Code != 200 {
+		t.Fatalf("GET /_nautilus/assets/logo.svg = %d, want 200 (the embedded dashboard asset)", rec.Code)
+	}
+}

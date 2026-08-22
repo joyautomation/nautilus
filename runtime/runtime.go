@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -131,13 +132,35 @@ type Runtime struct {
 	leadMu  sync.Mutex
 	leading bool
 
+	// alarms is the alarm engine, as retained operator state — nil unless
+	// SetAlarms registered one. Its own mutex because loadRetained reads it
+	// from inside takeover, which already holds leadMu.
+	alarmMu sync.Mutex
+	alarms  retain.AlarmRetainer
+
 	// scanMu serializes scan execution across the main task and every
 	// additional task — a scan always sees a consistent tag snapshot.
 	scanMu sync.Mutex
 
+	// obsMu guards onScan/obsNext independently of scanMu: OnScan may be
+	// called (registration or cancel) from any goroutine at any time,
+	// including while a scan is in flight. scanMu still serializes the
+	// CALLS to registered observers — see fireOnScan.
+	obsMu   sync.Mutex
+	obsNext uint64
+	onScan  []onScanEntry
+
 	mu       sync.Mutex
 	lastScan time.Time
 	stats    ScanStats
+}
+
+// onScanEntry is one registered OnScan observer, identified by an id so
+// cancel can remove exactly this registration without aliasing another
+// caller's identical func value.
+type onScanEntry struct {
+	id uint64
+	fn func(*Tags)
 }
 
 // Scan-history sizing for the diagnostics view: enough samples to see a
@@ -257,7 +280,31 @@ func New(o Options) (*Runtime, error) {
 	// and the scan's dt always read the same clock.
 	tags.clock = o.Clock
 	for k, v := range o.Seed {
-		tags.Set(k, v)
+		// setAny, not Set: a seed CREATES the tag under exactly the name it
+		// was configured with. Set's member-path guard is for operator
+		// writes, which may only address a tag that already exists.
+		tags.setAny(k, v)
+	}
+	// A dt-tag is otherwise unseeded: the scan loop only writes it AFTER a
+	// scan completes (see step() below), so a snapshot taken between New()
+	// and the first scan is missing it — exactly the gap a Sparkplug birth
+	// reads from. Left that way, a node births with N-1 metrics and rebirths
+	// a scan later once the tag exists: one spurious NBIRTH per restart per
+	// task with a dt-tag. Seed it here at REAL 0.0 like any other `state`
+	// tag, unless it was already seeded explicitly (a declared tag with this
+	// name wins, so an operator-visible init: still applies).
+	seedDtTag := func(name string) {
+		if name == "" {
+			return
+		}
+		if _, ok := tags.vals[name]; ok {
+			return
+		}
+		tags.SetReal(name, 0.0)
+	}
+	seedDtTag(o.DtTag)
+	for _, tr := range tasks {
+		seedDtTag(tr.dtTag)
 	}
 	retainTags := o.RetainTags
 	if o.Retain != nil && len(retainTags) == 0 {
@@ -282,6 +329,86 @@ func New(o Options) (*Runtime, error) {
 	r.stats.Periods = make([]float64, 0, historyLen)
 	r.stats.Histogram = make([]int, histBuckets)
 	return r, nil
+}
+
+// OnScan registers fn to run at the end of every main-task Scan() — after
+// the program has executed and, if a driver is bound, after outputs have
+// been written to it — so fn observes the tag store exactly as this scan
+// left it. Registered observers run in registration order, synchronously,
+// still holding scanMu: nothing else can be mid-scan while fn runs, which
+// is what lets fn read the store through Tags without racing the next
+// scan. fn must NOT block (it shares the scan budget: a slow observer is a
+// slow scan) and must NOT write field tags (inputs for this cycle already
+// landed in the read phase; a write here would be invisible to the program
+// that just ran and only take effect next scan, which is not what "post-
+// scan" means). Reads are fine and safe — fn runs with scanMu held but NOT
+// t.mu, so Tags.ReadPath/ReadGlobal/Snapshot etc. all work without
+// deadlocking.
+//
+// A panicking observer is recovered and logged rather than propagated: one
+// misbehaving observer (a bug in an alarm engine, say) must not fault the
+// scan loop or block the remaining observers.
+//
+// Only the main task fires OnScan — additional Tasks share the tag store
+// but not the field I/O phase this hook is defined relative to. A standby
+// replica never scans at all (Scan returns immediately, see gate), so it
+// never fires OnScan either — correct by construction, since a standby has
+// nothing new to observe.
+//
+// cancel unregisters fn; calling it more than once is a no-op. Cost with
+// nobody registered is one slice-length check per scan.
+func (r *Runtime) OnScan(fn func(*Tags)) (cancel func()) {
+	r.obsMu.Lock()
+	id := r.obsNext
+	r.obsNext++
+	r.onScan = append(r.onScan, onScanEntry{id: id, fn: fn})
+	r.obsMu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.obsMu.Lock()
+			for i, e := range r.onScan {
+				if e.id == id {
+					r.onScan = append(r.onScan[:i], r.onScan[i+1:]...)
+					break
+				}
+			}
+			r.obsMu.Unlock()
+		})
+	}
+}
+
+// fireOnScan runs every registered OnScan observer, in registration order.
+// Called from Scan() with scanMu already held (see the call site) — that is
+// the whole contract OnScan documents, so this only needs to snapshot the
+// observer list (registration can happen concurrently from any goroutine,
+// guarded by obsMu, independent of scanMu) and run it.
+func (r *Runtime) fireOnScan() {
+	r.obsMu.Lock()
+	if len(r.onScan) == 0 {
+		r.obsMu.Unlock()
+		return
+	}
+	obs := make([]onScanEntry, len(r.onScan))
+	copy(obs, r.onScan)
+	r.obsMu.Unlock()
+
+	for _, e := range obs {
+		r.runOnScan(e.fn)
+	}
+}
+
+// runOnScan calls one observer with its panic recovered, so a bug in one
+// observer cannot fault the scan loop or stop the observers after it.
+func (r *Runtime) runOnScan(fn func(*Tags)) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Default().Error("runtime: OnScan observer panicked",
+				"panic", rec)
+		}
+	}()
+	fn(r.tags)
 }
 
 // Tags exposes the tag store for operator writes and HMI reads.
@@ -573,7 +700,10 @@ func (r *Runtime) Scan() {
 		if err == nil {
 			for _, name := range r.inputs {
 				if v, ok := in[name]; ok {
-					r.tags.Set(name, v)
+					// setAny: the driver delivers whole tags under the names
+					// the project bound, including the first delivery of an
+					// (unseeded) input, which has no value to modify yet.
+					r.tags.setAny(name, v)
 				}
 			}
 		}
@@ -607,6 +737,11 @@ func (r *Runtime) Scan() {
 		}
 	}
 	t3 := time.Now()
+
+	// 4. observers — the store now holds exactly what this scan left it
+	// (program ran, outputs written), and nothing else can be scanning
+	// (scanMu is still held). See OnScan's doc comment for the contract.
+	r.fireOnScan()
 
 	r.recordScan(t0, t1, t2, t3, dt, first, ioErr, logicErr)
 }

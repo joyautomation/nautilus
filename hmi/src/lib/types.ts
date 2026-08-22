@@ -1,6 +1,7 @@
 // Public, app-agnostic types for the nautilus HMI kit. The realtime client is
 // generic over the frame shape, so nothing here is tied to any specific
 // runtime snapshot — only the primitives the visual components consume.
+import type { AlarmSummary } from './alarms.js';
 
 /** A single timestamped sample. `t` is epoch milliseconds, `v` the value. */
 export interface TrendPoint {
@@ -108,6 +109,12 @@ export interface NautilusFrame {
 	 * driver that reports it (also served standalone at GET /api/drivers).
 	 * Mirrors server.DriverStatus in Go. */
 	drivers?: DriverStatus[];
+	/** Alarm counts, present when the controller runs an alarm engine
+	 * (`alarm/` package — also served in full at GET /api/alarms). Counts
+	 * only, never the alarm list itself; `rev` bumps on any change so the
+	 * HMI can refetch /api/alarms exactly when something moved. Mirrors
+	 * alarm.Summary in Go. See ./alarms.ts — contract: docs/design/alarms.md */
+	alarms?: AlarmSummary;
 }
 
 /** The connection lifecycle a driver-status card renders. Maps to a
@@ -168,6 +175,15 @@ export interface ControllerMeta {
 	inputs: string[];
 	outputs: string[];
 	scanTargetMs: number;
+	/**
+	 * True when the controller accepts a dotted member path (or an object
+	 * payload) on `POST /api/tags` — i.e. UDT members are writable. Absent on
+	 * runtimes older than that, where a dotted name silently created a junk
+	 * tag, so treat `undefined` as false and disable member controls.
+	 * Writability is still the ROOT tag's: a member of an `inputs` tag is
+	 * refused like the input itself.
+	 */
+	memberWrites?: boolean;
 }
 
 /** One link in a Nav sidebar section. */
