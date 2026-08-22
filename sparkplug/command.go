@@ -4,7 +4,6 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/joyautomation/nautilus/lang/ir"
 )
 
 // handleCommand processes NCMD/DCMD. A "Node Control/Rebirth" = true triggers
@@ -72,5 +71,3 @@ func commandValue(m Metric) (any, bool) {
 	}
 	return nil, false
 }
-
-var _ = ir.TypeBool // keep ir import stable for future typed writeback
