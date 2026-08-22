@@ -172,6 +172,52 @@ export class RealtimeClient<T = unknown> {
 			body: JSON.stringify({ cmd, ...fields })
 		});
 	}
+
+	/**
+	 * Write one tag through `POST /api/tags`, and return the controller's
+	 * reason when it refuses — `null` on success. A faceplate shows that reason
+	 * on the control instead of pretending the command landed.
+	 *
+	 * `name` is a whole tag (`'TempSP'`) or a dotted MEMBER path of a UDT tag
+	 * (`'WEL15_SUP_015.START'`, `'AI_001.LVL.CTL1HSP'`) — the same paths the
+	 * frame's nested tag objects are read with, so a bound control writes back
+	 * exactly what it displays. `value` may also be an object to set several
+	 * members of one struct tag at once; members it omits keep their current
+	 * value.
+	 *
+	 * The controller refuses a path that resolves to nothing (an unknown tag or
+	 * a misspelled member) rather than creating a tag — so a typo surfaces here
+	 * as a message, not as a phantom tag on the wire. A member of a
+	 * driver-owned input is refused for the same reason it is not editable in
+	 * the dashboard: the driver overwrites the whole tag before the next scan.
+	 *
+	 * `token` sets `X-Nautilus-Token` for a cross-origin writer; same-origin
+	 * pages (the usual deployment, and a dev proxy that rewrites Origin) need
+	 * nothing.
+	 */
+	async writeTag(
+		name: string,
+		value: unknown,
+		opts: { url?: string; token?: string } = {}
+	): Promise<string | null> {
+		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+		if (opts.token) headers['X-Nautilus-Token'] = opts.token;
+		try {
+			const res = await fetch(opts.url ?? '/api/tags', {
+				method: 'POST',
+				headers,
+				body: JSON.stringify({ name, value })
+			});
+			if (res.ok) return null;
+			const detail = (await res.text()).trim();
+			if (res.status === 401 || res.status === 403) {
+				return detail || 'write refused — this controller requires an auth token';
+			}
+			return detail || `write failed (${res.status})`;
+		} catch {
+			return 'write failed — controller unreachable';
+		}
+	}
 }
 
 /** Convenience factory mirroring `new RealtimeClient<T>(opts)`. */

@@ -7,7 +7,10 @@
 //	GET  /api/state    one JSON Frame — the current tag snapshot
 //	GET  /api/stream   Server-Sent Events; one Frame per broadcast tick
 //	GET  /api/meta     tag descriptions/units, I/O binding, scan target
-//	POST /api/tags     {"name": "TempSP", "value": 65.0} — write one tag
+//	POST /api/tags     {"name": "TempSP", "value": 65.0} — write one tag,
+//	                   or one member of a struct tag by dotted path:
+//	                   {"name": "P101.Drive.Speed", "value": 60.0}, or several
+//	                   at once: {"name": "P101", "value": {"Cmd": true}}
 //	GET  /api/cluster  this replica's redundancy status (leader.Status JSON)
 //	GET  /assets/…     the dashboard's logo, favicon and brand fonts
 //
@@ -485,6 +488,15 @@ type metaResponse struct {
 	Inputs       []string                   `json:"inputs"`
 	Outputs      []string                   `json:"outputs"`
 	ScanTargetMs float64                    `json:"scanTargetMs"`
+	// MemberWrites says this controller accepts POST /api/tags with a dotted
+	// member path ("P101.Drive.Speed") or an object payload merging into a
+	// struct tag. It is a capability flag, not a policy: writability itself
+	// is still the root tag's (a member of an Input is refused like the
+	// Input is). An HMI that binds UDT members needs it because the answer
+	// used to be no — a dotted name silently created a junk tag — so a
+	// faceplate built for a newer runtime must be able to tell, and disable
+	// its controls against an older one instead of writing into the void.
+	MemberWrites bool `json:"memberWrites"`
 }
 
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
@@ -498,6 +510,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		Inputs:       nonNilStrings(s.rt.Inputs()),
 		Outputs:      nonNilStrings(s.rt.Outputs()),
 		ScanTargetMs: s.rt.Stats().TargetMs,
+		MemberWrites: true,
 	})
 }
 
@@ -604,8 +617,15 @@ func sameOrigin(r *http.Request) bool {
 	return u.Host == r.Host
 }
 
-// writeTagRequest is the POST /api/tags payload. Value must be a JSON
-// number or boolean — the tag kinds the runtime can store.
+// writeTagRequest is the POST /api/tags payload.
+//
+// Name addresses a whole tag ("TempSP") or one member of a struct tag by a
+// dotted path ("P101.Drive.Speed") — the same paths a test manifest's
+// `given:`/`expect:` and an HMI's tag bindings already use.
+//
+// Value is a JSON number or boolean for a scalar; for a struct tag it may
+// also be an OBJECT of member → value, which merges (members it names are
+// set, every other member keeps its current value).
 type writeTagRequest struct {
 	Name  string `json:"name"`
 	Value any    `json:"value"`
@@ -621,9 +641,30 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `expected {"name": ..., "value": ...}`, http.StatusBadRequest)
 		return
 	}
-	// Tags.Set silently ignores anything that isn't a number or bool, so
-	// reject those here rather than returning 204 for a write that didn't
-	// happen. JSON numbers decode to float64; booleans to bool.
+	// A member write — a dotted name, or an object payload merging into a
+	// struct tag — resolves through the tag's own StructDef and is
+	// read-modify-written whole. It must address something that EXISTS: a
+	// flat assignment of "P101.Spede" would otherwise create a top-level tag
+	// under that literal name, which no program reads and a Sparkplug edge
+	// would publish as a bogus metric. That is a 400 with the reason.
+	_, isObject := req.Value.(map[string]any)
+	if isObject || strings.Contains(req.Name, ".") {
+		root, _, _ := strings.Cut(req.Name, ".")
+		if msg := s.refuseMemberWrite(root); msg != "" {
+			http.Error(w, msg, http.StatusBadRequest)
+			return
+		}
+		if err := s.rt.Tags().SetPath(req.Name, req.Value); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	// Whole-tag scalar write, unchanged: Tags.Set silently ignores anything
+	// that isn't a number or bool, so reject those here rather than
+	// returning 204 for a write that didn't happen. JSON numbers decode to
+	// float64; booleans to bool.
 	switch req.Value.(type) {
 	case float64, bool:
 		s.rt.Tags().Set(req.Name, req.Value)
@@ -631,4 +672,29 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.Error(w, "value must be a number or boolean", http.StatusUnprocessableEntity)
 	}
+}
+
+// refuseMemberWrite reports why a member write to this root tag must not
+// proceed, or "" to allow it. The role rule is applied to the ROOT tag, not
+// to the member: the store holds whole tags, so writing P101.Cmd rewrites
+// P101.
+//
+// Only a driver-owned INPUT is refused. A whole-tag write to one is still
+// accepted (that is PLC forcing — it lands, and the driver takes the tag
+// back on the next scan, which is visible and self-correcting), but a MEMBER
+// write reads a base the driver replaces wholesale before the next scan, so
+// the edit cannot survive even one cycle: it is a lost update dressed up as
+// a command. Everything else stays writable — setpoints and state because
+// they are the operator's, and OUTPUTS because that is exactly how a
+// Sparkplug host commands an edge node: the operator writes the output tag
+// and the host driver publishes it as a command.
+func (s *Server) refuseMemberWrite(root string) string {
+	for _, in := range s.rt.Inputs() {
+		if in == root {
+			return "tag " + root + " is a driver-owned input: the driver replaces its whole " +
+				"value before every scan, so a member write would be discarded unread — " +
+				"write the setpoint or command tag the logic reads instead"
+		}
+	}
+	return ""
 }

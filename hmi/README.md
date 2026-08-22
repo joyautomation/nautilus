@@ -76,6 +76,18 @@ Send an operator command back to the runtime:
 await rt.send('setSetpoint', { value: 42 }); // POST /api/command  { cmd, ...fields }
 ```
 
+Write a tag — a whole tag, or one **member** of a UDT tag by dotted path.
+`writeTag` resolves to `null` on success, or to the controller's reason when it
+refuses (a misspelled member, a type mismatch, a driver-owned input, a missing
+token), so a faceplate can show that on the control instead of pretending the
+command landed:
+
+```ts
+const err = await rt.writeTag('P101.START', true); // POST /api/tags
+await rt.writeTag('P101', { LVL: { CTL1HSP: 60 } }); // several members at once (a merge)
+await rt.writeTag('TempSP', 65, { token }); // cross-origin writer
+```
+
 ## Theming
 
 Every component reads tokens from `theme.css`. Flip the whole HMI between light and dark by stamping

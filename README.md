@@ -379,7 +379,8 @@ comes from a write, and there are exactly four writers:
 
 1. a **seed** in the Go composition (initial value, exists from scan one),
 2. a **driver** delivering it as an input each scan,
-3. an **operator** writing it through the HMI or `POST /api/tags`,
+3. an **operator** writing it through the HMI or `POST /api/tags` (a whole
+   tag, or one member of a UDT tag — see below),
 4. the **program itself** assigning it (a coil write creates the tag).
 
 The one rule that bites: **writes create, reads fault.** Reading a tag
@@ -437,6 +438,49 @@ by the same name: declare it in the program (`VAR_EXTERNAL testExt : REAL;`
 composition (`runtime.Input("testExt")`). The `Inputs` list is a deliberate
 allowlist — a driver can't spray arbitrary names into the store — which is
 why the middle step alone isn't enough.
+
+### Writing a member: `POST /api/tags` with `Tag.Member`
+
+A UDT tag is one value in the store, so an operator writing one of its
+members is a read-modify-write of the whole struct. `POST /api/tags` does
+that for you — `name` takes a dotted member path, to any depth:
+
+```sh
+curl -X POST localhost:8080/api/tags -d '{"name": "P101.START", "value": true}'
+curl -X POST localhost:8080/api/tags -d '{"name": "P101.LVL.CTL1HSP", "value": 60}'
+```
+
+`value` may also be an **object**, to set several members of one tag at
+once: `{"name": "P101", "value": {"START": true, "LVL": {"CTL1HSP": 60}}}`.
+That is a **merge** — members the object doesn't name keep their current
+values. (Deliberately unlike `init:` seeding, which zero-fills what its
+mapping omits: seeding builds a value from nothing, a write edits one the
+plant is already running on.)
+
+The rules:
+
+- **Nothing is created.** An unknown tag, a misspelled member, or a member
+  path into a scalar tag is a `400` with the reason —
+  `tag P101: unknown member STRAT (did you mean START?)` — never a new
+  top-level tag literally named `P101.STRAT`, which no program reads and a
+  Sparkplug edge would publish as a bogus metric.
+- **The leaf keeps its type.** A number lands on a `REAL` member as a REAL
+  and on a `DINT` member as an integer; a mismatch is
+  `tag P101.START: want BOOL, got a number` rather than a silent retype.
+- **The role rule is the root tag's.** A member of a driver-owned `Input`
+  is refused (the driver replaces the whole tag before the next scan, so
+  the edit could not survive one cycle); setpoints, state and outputs are
+  writable — an output being exactly how a Sparkplug host commands an edge
+  node. A struct-typed `Output` needs an `Init(...)` to exist before the
+  first write, like any tag the operator addresses.
+- **`GET /api/meta`** reports `"memberWrites": true`, so an HMI can tell a
+  controller that resolves member paths from an older one that would have
+  swallowed them.
+
+The same paths work everywhere else a tag is addressed: a test manifest's
+`given:`/`expect:`, the dashboard's tag table (expand a writable struct and
+each leaf is editable), and the HMI kit's `rt.writeTag('P101.START', true)`,
+which returns the controller's reason when it refuses.
 
 ## Structuring logic: functions and function blocks
 

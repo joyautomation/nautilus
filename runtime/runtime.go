@@ -257,7 +257,10 @@ func New(o Options) (*Runtime, error) {
 	// and the scan's dt always read the same clock.
 	tags.clock = o.Clock
 	for k, v := range o.Seed {
-		tags.Set(k, v)
+		// setAny, not Set: a seed CREATES the tag under exactly the name it
+		// was configured with. Set's member-path guard is for operator
+		// writes, which may only address a tag that already exists.
+		tags.setAny(k, v)
 	}
 	// A dt-tag is otherwise unseeded: the scan loop only writes it AFTER a
 	// scan completes (see step() below), so a snapshot taken between New()
@@ -594,7 +597,10 @@ func (r *Runtime) Scan() {
 		if err == nil {
 			for _, name := range r.inputs {
 				if v, ok := in[name]; ok {
-					r.tags.Set(name, v)
+					// setAny: the driver delivers whole tags under the names
+					// the project bound, including the first delivery of an
+					// (unseeded) input, which has no value to modify yet.
+					r.tags.setAny(name, v)
 				}
 			}
 		}

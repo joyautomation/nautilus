@@ -104,11 +104,14 @@ func (r *Runtime) loadRetained() error {
 		if f, isNum := v.(float64); isNum {
 			if cur, err := r.tags.ReadGlobal(name); err == nil &&
 				(cur.Kind == ir.TypeInt || cur.Kind == ir.TypeTime) {
-				r.tags.Set(name, int64(f))
+				r.tags.setAny(name, int64(f))
 				continue
 			}
 		}
-		r.tags.Set(name, v)
+		// setAny: a restore puts a declared tag's own value back under its
+		// own name — it is configuration, not an operator write, so it does
+		// not go through Set's member-path guard.
+		r.tags.setAny(name, v)
 	}
 	var errs []error
 	for task, src := range st.Programs {

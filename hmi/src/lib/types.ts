@@ -168,6 +168,15 @@ export interface ControllerMeta {
 	inputs: string[];
 	outputs: string[];
 	scanTargetMs: number;
+	/**
+	 * True when the controller accepts a dotted member path (or an object
+	 * payload) on `POST /api/tags` — i.e. UDT members are writable. Absent on
+	 * runtimes older than that, where a dotted name silently created a junk
+	 * tag, so treat `undefined` as false and disable member controls.
+	 * Writability is still the ROOT tag's: a member of an `inputs` tag is
+	 * refused like the input itself.
+	 */
+	memberWrites?: boolean;
 }
 
 /** One link in a Nav sidebar section. */

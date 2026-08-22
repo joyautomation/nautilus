@@ -112,6 +112,53 @@ a struct-typed tag given a scalar `init:` — rather than a mapping — is an
 error too. A generator (`nautilus eip tags`, `nautilus tags import-csv`)
 round-trips the same nested shape through a `tag-files:` entry.
 
+## Writing a member: `POST /api/tags` with `Tag.Member`
+
+A UDT tag is one value in the store, so an operator writing one of its
+members is a read-modify-write of the whole struct. The API does that for
+you — `name` takes a dotted member path, to any depth:
+
+```sh
+curl -X POST localhost:8080/api/tags \
+  -d '{"name": "WEL15_SUP_015.START", "value": true}'
+curl -X POST localhost:8080/api/tags \
+  -d '{"name": "WEL15_SUP_015.LVL.CTL1HSP", "value": 60}'
+```
+
+`value` may also be an object, to set several members of one tag at once:
+
+```json
+{ "name": "WEL15_SUP_015", "value": { "START": true, "LVL": { "CTL1HSP": 60 } } }
+```
+
+That is a **merge**: members the object doesn't name keep their **current**
+values. Deliberately unlike `init:` above, which zero-fills the members its
+mapping omits — seeding builds a value from nothing, a write edits one the
+plant is already running on.
+
+- **Nothing is created.** An unknown tag, a misspelled member, or a member
+  path into a scalar tag is a `400` carrying the reason
+  (`tag WEL15_SUP_015: unknown member STRAT (did you mean START?)`), never a
+  new top-level tag literally named `WEL15_SUP_015.STRAT` — which no program
+  reads and a Sparkplug edge would publish as a bogus metric.
+- **The leaf keeps its type.** A number lands on a `REAL` member as a REAL
+  and on a `DINT` member as an integer; a mismatch is
+  `tag WEL15_SUP_015.START: want BOOL, got a number`, not a silent retype.
+- **The role rule is the root tag's**, because the store holds whole tags. A
+  member of a driver-owned `input` is refused — the driver replaces the whole
+  value before the next scan, so the edit could not survive one cycle.
+  `setpoint`, `state` and `output` roots are writable; an output is exactly
+  how a Sparkplug host commands an edge node, and a struct-typed output needs
+  an `init:` so it exists before the first write.
+- **`GET /api/meta`** reports `"memberWrites": true`, so an HMI can tell a
+  controller that resolves member paths from an older one that swallowed them.
+
+The same dotted paths work everywhere else a tag is addressed: a test
+manifest's `given:`/`expect:`, the built-in dashboard's tag table (expand a
+writable struct tag and each leaf is editable), and the HMI kit's
+`rt.writeTag('WEL15_SUP_015.START', true)`, which resolves to `null` on
+success or the controller's reason when it refuses.
+
 ## Adding a field input end to end
 
 Adding a **new field input** is three lines in three places, all by the

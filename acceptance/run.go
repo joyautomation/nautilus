@@ -520,7 +520,11 @@ func (r *testRun) applyFields(tag string, edits map[string]any) error {
 	}
 	sort.Strings(paths)
 	for _, path := range paths {
-		updated, err := setField(base, tag, path, edits[path])
+		// ir.SetField is the shared dotted-write primitive: the same
+		// read-modify-write the HTTP API's member writes use (Tags.SetPath),
+		// so a `given:` path and an operator's POST resolve, coerce and fail
+		// identically.
+		updated, err := ir.SetField(base, strings.Split(path, "."), edits[path], tag)
 		if err != nil {
 			return err
 		}
@@ -531,61 +535,6 @@ func (r *testRun) applyFields(tag string, edits map[string]any) error {
 	}
 	r.rt.Tags().Set(tag, base)
 	return nil
-}
-
-// setField returns a copy of v with the dotted path replaced. Copies rather
-// than mutates: the tag store hands out values that may share backing arrays
-// with the last scan's snapshot.
-func setField(v ir.Value, sofar, path string, raw any) (ir.Value, error) {
-	field, rest, _ := strings.Cut(path, ".")
-	if v.Kind != ir.TypeStruct || v.Struct == nil {
-		return ir.Value{}, fmt.Errorf("%s is not a struct, so it has no field %q", sofar, field)
-	}
-	i, ok := v.Struct.FieldIndex[field]
-	if !ok || i >= len(v.Fld) {
-		return ir.Value{}, fmt.Errorf("%s has no field %q (%s has: %s)",
-			sofar, field, v.Struct.Name, strings.Join(fieldNames(v.Struct), ", "))
-	}
-	fld := append([]ir.Value(nil), v.Fld...)
-	if rest == "" {
-		nv, err := coerceTo(fld[i], raw)
-		if err != nil {
-			return ir.Value{}, fmt.Errorf("%s.%s: %w", sofar, field, err)
-		}
-		fld[i] = nv
-	} else {
-		nv, err := setField(fld[i], sofar+"."+field, rest, raw)
-		if err != nil {
-			return ir.Value{}, err
-		}
-		fld[i] = nv
-	}
-	v.Fld = fld
-	return v, nil
-}
-
-// coerceTo keeps a field write in the field's own declared type, the same
-// contract coerce() gives whole tags.
-func coerceTo(cur ir.Value, raw any) (ir.Value, error) {
-	switch cur.Kind {
-	case ir.TypeBool:
-		if b, ok := raw.(bool); ok {
-			return ir.BoolVal(b), nil
-		}
-	case ir.TypeReal:
-		if f, ok := toFloat(raw); ok {
-			return ir.RealVal(f), nil
-		}
-	case ir.TypeInt, ir.TypeTime:
-		if f, ok := toFloat(raw); ok {
-			return ir.IntVal(int64(f)), nil
-		}
-	case ir.TypeString:
-		if s, ok := raw.(string); ok {
-			return ir.StringVal(s), nil
-		}
-	}
-	return ir.Value{}, fmt.Errorf("cannot assign %v to a %s field", raw, cur.Kind)
 }
 
 // declaredTypes maps tag name → declared UDT name, for the tags that have one.
