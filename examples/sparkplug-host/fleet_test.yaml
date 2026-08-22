@@ -1,0 +1,91 @@
+# Acceptance tests for fleet.st — no broker, no toolchain, virtual time.
+#
+#   nautilus test        run them
+#   nautilus test -v     with virtual elapsed time per test
+#
+# The fixture is nautilus.yaml, same as every manifest example. There is no
+# live Sparkplug traffic here at all: __Online, __LastBirthMs and the data
+# tags are role: input, so `given:` writes the driver's input image
+# directly — exactly what a real NBIRTH/NDATA/NDEATH would leave behind,
+# without a broker in sight.
+#
+# fleet.st reads every site's data tag unconditionally every scan (ST's AND
+# does not short-circuit), so every test seeds a full baseline — every
+# __Online and every data tag fleet.st touches — before its first scan.
+# That baseline IS the "first birth": a site's role: input tags read as a
+# fault until something (a real NBIRTH, or a test's `given`) delivers one,
+# which is the "reads fault until first birth" rule the guide calls out —
+# drop any one of these `given` entries and `nautilus test -v` shows
+# exactly that fault.
+
+tolerance: 0.01
+
+tests:
+  - name: SitesOnline counts exactly the sites currently online
+    given: { W6_Pump1.Run: false, BP2_plc1_Pump_Run: false, W6_Well_Level: 50.0 }
+    steps:
+      - given: { W6__Online: true, BP2__Online: false, CL1__Online: true }
+        scans: 1
+        expect: { SitesOnline: 2 }
+      - given: { BP2__Online: true }
+        scans: 1
+        expect: { SitesOnline: 3 }
+      - given: { W6__Online: false, BP2__Online: false, CL1__Online: false }
+        scans: 1
+        expect: { SitesOnline: 0 }
+
+  - name: AnyPumpRunning follows either site's pump, guarded on __Online
+    given: {
+      W6__Online: true, BP2__Online: true, CL1__Online: true,
+      W6_Well_Level: 50.0, W6_Pump1.Run: false, BP2_plc1_Pump_Run: false,
+    }
+    steps:
+      - given: { W6_Pump1.Run: true }
+        scans: 1
+        expect: { AnyPumpRunning: true }
+      - given: { W6_Pump1.Run: false }
+        scans: 1
+        expect: { AnyPumpRunning: false }
+      - given: { BP2_plc1_Pump_Run: true }
+        scans: 1
+        expect: { AnyPumpRunning: true }
+      # The important case: Sparkplug keeps the LAST value through a death —
+      # a companion tag's data never resets to false on its own — so it is
+      # __Online that must gate it, not the value. A site that goes dark
+      # with its pump last seen running must not read as a running pump.
+      - given: { W6__Online: false, BP2__Online: false, W6_Pump1.Run: true }
+        scans: 1
+        expect: { AnyPumpRunning: false }
+
+  - name: well low-level alarm waits its full 10 s, and only while online
+    given: {
+      W6__Online: true, BP2__Online: true, CL1__Online: true,
+      W6_Pump1.Run: false, BP2_plc1_Pump_Run: false,
+      WellLowLevelSP: 20.0, W6_Well_Level: 50.0,
+    }
+    steps:
+      - scans: 1
+        expect: { WellLowLevelAlm: false }
+      - given: { W6_Well_Level: 10.0 }
+        advance: 9.5s
+        expect: { WellLowLevelAlm: false } # the TON has not elapsed
+      - advance: 1s
+        expect: { WellLowLevelAlm: true } # ... and now it has
+      - given: { W6_Well_Level: 50.0 }
+        scans: 1
+        expect: { WellLowLevelAlm: false } # TON has no off-delay
+
+  - name: a dead site does not fire the alarm off its last-known reading
+    given: {
+      BP2__Online: true, CL1__Online: true,
+      W6_Pump1.Run: false, BP2_plc1_Pump_Run: false,
+      WellLowLevelSP: 20.0,
+    }
+    steps:
+      # W6 last reported a low level, then went dark — __Online guards it.
+      - given: { W6__Online: true, W6_Well_Level: 5.0 }
+        advance: 10.5s
+        expect: { WellLowLevelAlm: true } # proven while online: correct
+      - given: { W6__Online: false }
+        scans: 1
+        expect: { WellLowLevelAlm: false } # offline clears it immediately

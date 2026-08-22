@@ -218,6 +218,35 @@ replace the retained set, `quality` deliberately NOT retained.
 **Measured 4.3 MB/min → 0.15 MB/min, ~28× smaller** for a no-tags delta
 client at 5% churn (`-bench FrameFloor`).
 
+Done 2026-08-19: **Sparkplug manifest tier finished** — `store-forward:`
+joined the `sparkplug:` section (project.go + schema, the schema-sync
+test enforces the pair), client60 uses it, and the sparkplug guide was
+rewritten manifest-first (YAML leads, Go tier demoted to a "From Go"
+section — the house pattern for all guides). Content: N-13 (comms/MQTT
+episode) developed in ~/Development/joyautomation/content — angle, beat
+sketch, Tier-3 sourcing note; still gated on wk 16 shipping.
+
+Done 2026-08-22: **Sparkplug B host application driver** — the other side
+of the wire from the edge node. `sparkplug/host` (package `host`), a
+manifest-tier `io.Driver` (`driver: {type: sparkplug-host}`), never dials
+(`New` builds offline; `Start` connects — same split as `eip`, so
+`nautilus check`/`build` pass with no broker in sight). `nautilus
+sparkplug import|browse|tags` generates `sparkplug_types.st` +
+`sparkplug_manifest.yaml` + `tags/sparkplug.yaml`, live (`--broker`) or
+offline from a committed `--sites` file — byte-identical output either
+way. Quality rides on driver-synthesized `__Online`/`__LastBirthMs`/
+`__Rebirth` companions (Sparkplug keeps the last value through a death;
+"reads fault until first birth" — guard on `__Online`). Passes the
+Sparkplug TCK **host-application** profile (81/0/3 — 81 PASS, 0 FAIL, 3
+N/A) alongside the existing edge-node profile, both gated in CI.
+`examples/sparkplug-host` (a 3-site fleet, generated via `--sites`,
+`fleet.st` rollups, `fleet_test.yaml` in virtual time) and the manifest-
+first guide (`guides/sparkplug-host.md`, linked from the edge-node guide).
+`st-struct-pins` (worktree `~/Development/joyautomation/nautilus-st`) is
+a separate branch in flight, untouched by this work. Driving project:
+the Pomona WRD demo at `~/Development/pomona/wrd` — a ~60-site fleet is
+the real target this driver is being built for.
+
 Next, in rough priority:
 
 1. **HMI Versions page** — render /api/program/history in
@@ -233,3 +262,12 @@ Next, in rough priority:
 8. **Extension stable release** — first stable-channel Marketplace release, when the Test Explorer + schema work has soaked on the pre-release channel.
 
 - **VS Code extension (2026-08-22 check):** the ladder-FB webview work (ldPreview.ts, LadderView.svelte, ladder.ts) compiles, svelte-checks, vite-builds and tests green (59+84). Pre-existing, unrelated: `tools/vscode-iec/webview-ui/package.json` pins `typescript: ^7.0.2`, which svelte-check 4.7.x cannot load (needs TS ^5||^6 — `ts.sys` gone); run `npm install --no-save typescript@^5.9` to check locally, and 39 older svelte-check errors exist in App/Sfc/mimic/test files (missing @types/node, allowImportingTsExtensions, @xyflow .d.ts). Track separately.
+
+2. **Alarm engine + fleet HMI patterns** — driven by the Pomona WRD demo
+   (`~/Development/pomona/wrd`): a real alarm/annunciation model over a
+   sparkplug-host fleet (priorities, ack/shelve, per-site rollups), and
+   the HMI components a multi-site SCADA screen actually needs beyond
+   `DriverStatusPanel`.
+3. **Native-Go function blocks** alongside ST (both lowering to the IR).
+4. **Extension 0.10.0** — first stable-channel Marketplace release, when the
+   Test Explorer + schema work has soaked on the pre-release channel.

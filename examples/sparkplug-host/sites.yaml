@@ -1,0 +1,51 @@
+# The fleet this project consumes — three generic water-system edge nodes.
+# Committed here so the central project's files can be regenerated OFFLINE,
+# in CI, with none of the sites online:
+#
+#   go run ./cmd/nautilus sparkplug import --sites sites.yaml --out .
+#
+# A live re-import (with every site actually birthing on the broker) uses
+# the same generator, the other input:
+#
+#   go run ./cmd/nautilus sparkplug import --broker tcp://broker:1883 \
+#       --group Plant --out .
+#
+# Both paths produce byte-identical output for the metrics they share — see
+# README.md.
+group: Plant
+
+types:
+  - name: Motor
+    fields:
+      - { name: Speed, type: Double }
+      - { name: Run,   type: Boolean }
+
+sites:
+  # W6 — a well: a level transmitter at node level, and one pump modeled as
+  # a Template instance (Motor) with a writable speed setpoint.
+  - node: W6
+    metrics:
+      - { name: Well/Level,     type: Double }
+      - { name: Pump1,          type: Motor }
+      - { name: Pump1/SpeedSP,  type: Double, writable: true, init: 0.0 }
+
+  # BP2 — a booster station: node-level pressure instruments, plus a PLC
+  # device (plc1) carrying the pump's run/fault status and its own speed
+  # setpoint.
+  - node: BP2
+    metrics:
+      - { name: Booster/DischargePress, type: Double }
+      - { name: Booster/SuctionPress,   type: Double }
+    devices:
+      - device: plc1
+        metrics:
+          - { name: Pump/Run,     type: Boolean }
+          - { name: Pump/Fault,   type: Boolean }
+          - { name: Pump/SpeedSP, type: Double, writable: true, init: 0.0 }
+
+  # CL1 — a chlorine analyzer site: two node-level metrics, no device and
+  # no template — the minimal shape a fleet member can take.
+  - node: CL1
+    metrics:
+      - { name: Chlorine/ResidualPpm,   type: Double }
+      - { name: Chlorine/AnalyzerFault, type: Boolean }

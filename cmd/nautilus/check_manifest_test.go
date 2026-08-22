@@ -13,13 +13,12 @@ package main
 //	declared state, unbound  → warning (nothing writes it, nothing reads it)
 
 import (
+	"github.com/joyautomation/nautilus/internal/project"
+	sphost "github.com/joyautomation/nautilus/sparkplug/host"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/joyautomation/nautilus/internal/project"
-	sphost "github.com/joyautomation/nautilus/sparkplug/host"
 )
 
 // checkIn runs runCheck against a temp project and returns its stdout.
@@ -397,12 +396,9 @@ END_PROGRAM`,
 	}
 	if strings.Contains(out, "Setpoint") {
 		t.Errorf("Setpoint is bound through the LdWrapper instance; it must not be reported:\n%s", out)
+	}
+}
 
-// A sparkplug-host project checks OFFLINE. `nautilus check` runs in CI, on a
-// laptop, in a pre-commit hook — nowhere near the plant broker — so
-// host.New must construct the whole driver (manifest, indexes, companion
-// tags) without dialing. This fixture is the regression test for that: a
-// broker address that cannot resolve, and a check that still passes.
 func TestCheckSparkplugHostProjectOffline(t *testing.T) {
 	files := map[string]string{
 		"nautilus.yaml": `
