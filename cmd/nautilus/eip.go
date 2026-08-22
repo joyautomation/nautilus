@@ -132,6 +132,11 @@ func runEIPImport(args []string) int {
 		fmt.Fprintln(os.Stderr, "  skipped:", s)
 	}
 
+	if err := os.MkdirAll(*outDir, 0o755); err != nil {
+		fmt.Fprintln(os.Stderr, "nautilus eip import:", err)
+		return 1
+	}
+
 	stPath := filepath.Join(*outDir, "eip_types.st")
 	if err := os.WriteFile(stPath, []byte(out.TypesST), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, "nautilus eip import:", err)
