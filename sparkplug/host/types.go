@@ -401,8 +401,12 @@ type Status struct {
 	StateOnlineMs                       int64
 	Msgs, Rebirths, SeqGaps, WriteDrops uint64
 	Unknown                             int
-	LastError                           string
-	Nodes                               []NodeStatus
+	// Degraded is set when the discovery policy is DiscoveryStrict and an
+	// unmanifested metric has been seen — /api/drivers reports the driver
+	// "degraded" for it (docs/design/sparkplug-host.md §5).
+	Degraded  bool
+	LastError string
+	Nodes     []NodeStatus
 }
 
 // NodeStatus is one edge node's row.
