@@ -79,6 +79,30 @@ func TestSparkplugImportFromSites(t *testing.T) {
 	}
 }
 
+func TestSparkplugImportCreatesOutDir(t *testing.T) {
+	dir := t.TempDir()
+	sites := filepath.Join(dir, "sites.yaml")
+	if err := os.WriteFile(sites, []byte(sampleSites), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// --out points at a directory tree that does not exist yet — the
+	// import must create it rather than failing to write
+	// sparkplug_types.st into a missing directory.
+	out := filepath.Join(dir, "generated", "central")
+	if code := runSparkplug([]string{"import", "--sites", sites, "--out", out}); code != 0 {
+		t.Fatalf("import into non-existent --out failed (%d)", code)
+	}
+	if _, err := os.Stat(filepath.Join(out, "sparkplug_types.st")); err != nil {
+		t.Errorf("sparkplug_types.st not written: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "sparkplug_manifest.yaml")); err != nil {
+		t.Errorf("sparkplug_manifest.yaml not written: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "tags", "sparkplug.yaml")); err != nil {
+		t.Errorf("tags/sparkplug.yaml not written: %v", err)
+	}
+}
+
 func TestSparkplugTagsSkipMustMatch(t *testing.T) {
 	dir := t.TempDir()
 	sites := filepath.Join(dir, "sites.yaml")
