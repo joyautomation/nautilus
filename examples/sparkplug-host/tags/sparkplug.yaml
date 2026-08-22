@@ -3,7 +3,7 @@
 # `nautilus sparkplug tags sparkplug_manifest.yaml` to re-derive this file
 # from the committed manifest alone.
 #
-# Group Plant · 3 node(s) · 10 bound metric(s).
+# Group Plant · 3 node(s) · 11 bound metric(s).
 #
 # Compose it into a project with:  tag-files: [tags/sparkplug.yaml]
 #
@@ -25,6 +25,7 @@
 - { name: CL1__Online, role: input }
 - { name: CL1__Rebirth, role: output, init: false }
 - { name: W6_Pump1, role: input, type: Motor }
+- { name: W6_Pump1_Speed, role: output, init: 0.0 }
 - { name: W6_Pump1_SpeedSP, role: output, init: 0.0 }
 - { name: W6_Well_Level, role: input }
 - { name: W6__LastBirthMs, role: input }

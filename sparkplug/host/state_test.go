@@ -48,6 +48,17 @@ func testManifest() Manifest {
 			{Name: "W6_PLC1_Pump_Run", Node: "W6", Device: "PLC1", Metric: "Pump/Run", Type: "Boolean"},
 			{Name: "W6_PLC1_Pump_SpeedSP", Node: "W6", Device: "PLC1", Metric: "Pump/SpeedSP",
 				Type: "Double", Writable: true, Init: 0.0},
+			// Member bindings: scalar OUTPUT tags addressing one leaf inside a
+			// Template metric. They share their metric with the struct binding
+			// above (W6_Pump1 / W6_Skid1), which is exactly what makes them
+			// worth testing — reads keep coming from the struct, writes go out
+			// as a partial template.
+			{Name: "W6_Pump1_Speed", Node: "W6", Metric: "Pump1", Member: "Speed",
+				Type: "Motor", Writable: true},
+			{Name: "W6_Skid1_Drive_Run", Node: "W6", Metric: "Skid1", Member: "Drive.Run",
+				Type: "Skid", Writable: true},
+			{Name: "W6_Skid1_Drive_Speed", Node: "W6", Metric: "Skid1", Member: "Drive.Speed",
+				Type: "Skid", Writable: true},
 		},
 	}
 }

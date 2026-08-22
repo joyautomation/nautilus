@@ -99,9 +99,51 @@ type MetricSpec struct {
 	// Type is a Sparkplug datatype name or a types: entry.
 	Type string
 	// Writable marks the metric an output: writes go back as NCMD/DCMD.
-	Writable bool
-	// Init is a writable metric's initial value; nil means the type zero.
+	//
+	// `true` writes the metric AS A WHOLE, which only a scalar metric can be
+	// — a Template metric written whole would clobber every member the edge
+	// is driving. A Template's controls are named individually instead, as a
+	// list of dotted member paths:
+	//
+	//	- {name: Pump/SpeedSP, type: Double, writable: true}
+	//	- {name: Motor1,       type: Motor,  writable: [START, LVL.CTL1HSP]}
+	//
+	// Each member becomes its own scalar output tag, and a write publishes a
+	// partial template carrying only that member.
+	Writable any
+	// Init is a whole-metric writable's initial value; nil means the type
+	// zero. Member bindings take the member's own zero (they are many, and
+	// one init: could not say which).
 	Init any
+}
+
+// writableSpec normalises a MetricSpec's writable: value into "the whole
+// metric" or "these member paths".
+func writableSpec(node, name string, v any) (bool, []string, error) {
+	bad := func(hint string) error {
+		return fmt.Errorf("codegen: site %q metric %q: writable: %s — want `true` for a scalar "+
+			"metric, or a list of member paths for a Template (writable: [START, LVL.HSP])", node, name, hint)
+	}
+	switch x := v.(type) {
+	case nil:
+		return false, nil, nil
+	case bool:
+		return x, nil, nil
+	case []any:
+		members := make([]string, 0, len(x))
+		for _, e := range x {
+			s, ok := e.(string)
+			if !ok || s == "" {
+				return false, nil, bad(fmt.Sprintf("member %v is not a path", e))
+			}
+			members = append(members, s)
+		}
+		if len(members) == 0 {
+			return false, nil, bad("the member list is empty")
+		}
+		return false, members, nil
+	}
+	return false, nil, bad(fmt.Sprintf("%v", v))
 }
 
 // ParseSites decodes a --sites file and folds its file-level group and types
@@ -239,10 +281,19 @@ func siteMetrics(node, device string, ms []MetricSpec, opts Options) ([]metric, 
 		if !selects(qualify(device, mm.Name), opts.Metrics) && !selects(mm.Name, opts.Metrics) {
 			continue
 		}
+		whole, members, err := writableSpec(node, mm.Name, mm.Writable)
+		if err != nil {
+			return nil, err
+		}
+		if len(members) > 0 && mm.Init != nil {
+			return nil, fmt.Errorf("codegen: site %q metric %q: init: applies to a whole-metric "+
+				"writable, not to a member list — each member tag takes its member's zero", node, mm.Name)
+		}
 		out = append(out, metric{
 			name:     mm.Name,
 			typ:      mm.Type,
-			writable: mm.Writable,
+			writable: whole,
+			members:  members,
 			init:     mm.Init,
 		})
 	}

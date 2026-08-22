@@ -193,6 +193,11 @@ type TagSpec struct {
 	// the binding's init when it has one, else the type zero. Nil for inputs
 	// and for struct-shaped outputs, which have no scalar literal.
 	Init any
+	// Datatype is the Sparkplug datatype NAME the tag's value takes — the
+	// binding's own type for a scalar, the LEAF member's type for a member
+	// binding. Empty for struct-shaped tags and for the companions. The tag
+	// renderer follows it when it types an init: literal.
+	Datatype string
 }
 
 // TagSpecs returns every tag this manifest implies — the synthesized
@@ -219,9 +224,25 @@ func (m Manifest) TagSpecs() []TagSpec {
 	}
 
 	for _, b := range m.Bindings() {
+		// A member binding is a SCALAR output carrying the leaf member's
+		// type, not the struct's: the whole point is that the operator writes
+		// one control, so the tag an HMI binds is a BOOL or a LREAL.
+		if b.Member != "" {
+			spec := TagSpec{Name: b.Name, Role: RoleOutput, Init: b.Init}
+			if f, _, err := m.ResolveMember(b.Type, b.Member); err == nil {
+				spec.Datatype = f.Type
+				if spec.Init == nil {
+					spec.Init = zeroInit(f.Type)
+				}
+			}
+			out = append(out, spec)
+			continue
+		}
 		spec := TagSpec{Name: b.Name, Role: RoleInput}
 		if _, isStruct := types[b.Type]; isStruct {
 			spec.Type = b.Type
+		} else {
+			spec.Datatype = b.Type
 		}
 		if b.Writable {
 			spec.Role = RoleOutput
@@ -282,11 +303,34 @@ func (d *Driver) buildIndexes() error {
 	d.inputs = nil
 	d.byName = make(map[string]Binding)
 	d.byMetric = make(map[metricKey]Binding, len(m.Tags))
+	d.members = make(map[string]memberOut)
 	for _, b := range m.Bindings() {
 		// Validate has already rejected an unresolvable type; this catches a
 		// Driver built from a Manifest literal that skipped the loader.
 		if _, err := bindingType(b, d.defs); err != nil {
 			return err
+		}
+		// A member binding is output-only, so it never enters byMetric (no
+		// inbound message routes to it) and never enters inputs. Its write
+		// plan is resolved here, once.
+		if b.Member != "" {
+			f, refs, err := m.ResolveMember(b.Type, b.Member)
+			if err != nil {
+				return fmt.Errorf("host: binding %q: %w", b.Name, err)
+			}
+			leaf, ok := scalarType(f.Type)
+			if !ok {
+				return fmt.Errorf("host: binding %q: member %q has unrepresentable type %q",
+					b.Name, b.Member, f.Type)
+			}
+			d.byName[b.Name] = b
+			d.members[b.Name] = memberOut{
+				path:     MemberPath(b.Member),
+				refs:     refs,
+				leaf:     leaf,
+				datatype: f.Type,
+			}
+			continue
 		}
 		d.byMetric[metricKey{EdgeNode: b.Node, Device: b.Device, Metric: b.Metric}] = b
 		if b.Writable {

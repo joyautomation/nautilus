@@ -181,11 +181,11 @@ func TestTagSpecs(t *testing.T) {
 	// Sorted by byte order — the same comparison internal/tagfile.Render
 	// applies, so the generated file is already in this order.
 	want := []TagSpec{
-		{Name: "W6_PLC1_Pump_Run", Role: RoleInput},
-		{Name: "W6_PLC1_Pump_SpeedSP", Role: RoleOutput, Init: 0.0},
+		{Name: "W6_PLC1_Pump_Run", Role: RoleInput, Datatype: "Boolean"},
+		{Name: "W6_PLC1_Pump_SpeedSP", Role: RoleOutput, Init: 0.0, Datatype: "Double"},
 		{Name: "W6_PLC1__Online", Role: RoleInput},
 		{Name: "W6_Pump1", Role: RoleInput, Type: "Motor"},
-		{Name: "W6_Well_Level", Role: RoleInput},
+		{Name: "W6_Well_Level", Role: RoleInput, Datatype: "Double"},
 		{Name: "W6__LastBirthMs", Role: RoleInput},
 		{Name: "W6__Online", Role: RoleInput},
 		{Name: "W6__Rebirth", Role: RoleOutput, Init: false},

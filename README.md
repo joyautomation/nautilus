@@ -341,7 +341,10 @@ tag-files: [tags/sparkplug.yaml]
 manifest, tag file, and Template types. Reads fault until a site's first
 birth, so guard logic on the driver-synthesized `<site>__Online`
 companion; writes leave as NCMD/DCMD, dropped and counted for an offline
-site rather than queued. Both the edge-node and host-application **TCK
+site rather than queued. A UDT is never written as a whole — bind its
+controls per member (`member: Speed`, or `--writable 'Motor1.START,*.HSP'`)
+and each write goes out as a partial template the edge merges, leaving the
+members the site is driving untouched. Both the edge-node and host-application **TCK
 profiles** pass in CI. See `examples/sparkplug-host` and the
 [host guide](https://nautilus.joyautomation.com/guides/sparkplug-host/).
 

@@ -106,6 +106,7 @@ func New(m Manifest, cfg Config, opts ...Option) (*Driver, error) {
 		defs:        map[string]*ir.StructDef{},
 		byName:      map[string]Binding{},
 		byMetric:    map[metricKey]Binding{},
+		members:     map[string]memberOut{},
 		nodeCfg:     map[string]Node{},
 		rebirthTags: map[string]string{},
 		nodes:       map[nodeKey]*nodeState{},

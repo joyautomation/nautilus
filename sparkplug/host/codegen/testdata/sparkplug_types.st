@@ -25,14 +25,17 @@ VAR_EXTERNAL
   W6_PLC1_Pump_SpeedSP : LREAL;
   W6_PLC1__Online : BOOL;
   W6_Pump1 : Motor;
+  W6_Pump1_Speed : LREAL;
   W6_Site_Name : STRING;
   W6_Skid_A : Skid;
+  W6_Skid_A_Main_Run : BOOL;
   W6_Well_LastSample : LINT;
   W6_Well_Level : LREAL;
   W6__LastBirthMs : LINT;
   W6__Online : BOOL;
   W6__Rebirth : BOOL;
   W7_Pump1 : Motor;
+  W7_Pump1_Speed : LREAL;
   W7_Well_Level : LREAL;
   W7__LastBirthMs : LINT;
   W7__Online : BOOL;

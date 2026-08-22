@@ -143,6 +143,14 @@ func edgeDogfoodManifest() Manifest {
 			{Name: "W6_SpeedSP", Node: "W6", Metric: "SpeedSP", Type: "Double",
 				Writable: true, Init: 0.0},
 			{Name: "W6_Pump1", Node: "W6", Metric: "Pump1", Type: "Motor"},
+			// Member bindings on the SAME metric the struct binding reads:
+			// one flat (Pump1.Speed), one two levels deep
+			// (Pump1.Drive.Torque). Writing either must reach the edge's UDT
+			// tag without disturbing the members it is not addressing.
+			{Name: "W6_Pump1_Speed", Node: "W6", Metric: "Pump1", Member: "Speed",
+				Type: "Motor", Writable: true},
+			{Name: "W6_Pump1_Drive_Torque", Node: "W6", Metric: "Pump1", Member: "Drive.Torque",
+				Type: "Motor", Writable: true},
 		},
 	}
 }
@@ -297,6 +305,66 @@ func TestEdgeToHostDogfood(t *testing.T) {
 	}
 	// The edge's own scan loop should notice the change and echo it back.
 	waitForValue(t, host, "W6_SpeedSP", func(v any) bool { return v == 7.5 })
+
+	// 3b. a host write to two MEMBERS of the edge's UDT reaches its tag store
+	// as a PARTIAL template, changing exactly those members. This is the
+	// whole feature dogfooded: the host has no business writing Pump1.Run or
+	// Pump1.Drive.Fault, and after the command the edge must still hold the
+	// values its own logic put there.
+	if err := host.WriteOutputs(map[string]any{
+		"W6_Pump1_Speed":        61.5,
+		"W6_Pump1_Drive_Torque": 12.25,
+	}); err != nil {
+		t.Fatalf("WriteOutputs(members): %v", err)
+	}
+	edgePump1 := func(t *testing.T) ir.Value {
+		t.Helper()
+		v, err := rt.Tags().ReadGlobal("Pump1")
+		if err != nil {
+			t.Fatalf("edge ReadGlobal(Pump1): %v", err)
+		}
+		return v
+	}
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		v, err := rt.Tags().ReadGlobal("Pump1")
+		if err == nil && v.Kind == ir.TypeStruct &&
+			fieldVal(t, v, "Speed").F == 61.5 && fieldVal(t, v, "Drive", "Torque").F == 12.25 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	ep := edgePump1(t)
+	if got := fieldVal(t, ep, "Speed").F; got != 61.5 {
+		t.Fatalf("edge Pump1.Speed = %v, want 61.5 — the member NCMD never landed", got)
+	}
+	if got := fieldVal(t, ep, "Drive", "Torque").F; got != 12.25 {
+		t.Fatalf("edge Pump1.Drive.Torque = %v, want 12.25 — the nested member NCMD never landed", got)
+	}
+	// The siblings the host never addressed are untouched: this is what a
+	// whole-struct write would have destroyed.
+	if got := fieldVal(t, ep, "Run").B; got != true {
+		t.Errorf("edge Pump1.Run = %v, want true — a partial template must not clobber siblings", got)
+	}
+	if got := fieldVal(t, ep, "Drive", "Fault").B; got != false {
+		t.Errorf("edge Pump1.Drive.Fault = %v, want false — nested sibling clobbered", got)
+	}
+	// And the edge's own RBE publishes the merged struct back, so the host's
+	// struct tag agrees with what the site now holds.
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if v := mustStruct(t, host, "W6_Pump1"); fieldVal(t, v, "Speed").F == 61.5 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	hp := mustStruct(t, host, "W6_Pump1")
+	if got := fieldVal(t, hp, "Speed").F; got != 61.5 {
+		t.Errorf("host W6_Pump1.Speed = %v, want 61.5 echoed back over NDATA", got)
+	}
+	if got := fieldVal(t, hp, "Run").B; got != true {
+		t.Errorf("host W6_Pump1.Run = %v, want true", got)
+	}
 
 	// 4. stop the edge: NDEATH clears __Online but every value survives.
 	settleAfterBirth() // see settleAfterBirth's doc — genuine race, not this test's bug

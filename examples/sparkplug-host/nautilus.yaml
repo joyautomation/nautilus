@@ -55,3 +55,4 @@ tags:
   - { name: AnyPumpRunning,  role: state, init: false,  desc: "Any fleet pump running (W6 or BP2)" }
   - { name: WellLowLevelSP,  role: setpoint, init: 20.0, unit: "%", desc: "W6 well level low-alarm setpoint" }
   - { name: WellLowLevelAlm, role: state, init: false,  desc: "W6 well level low, 10 s proven (TON)" }
+  - { name: PumpSpeedCmd,    role: setpoint, init: 0.0, unit: "rpm", desc: "Operator speed command for W6 Pump1 (written to the UDT's Speed member)" }

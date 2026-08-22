@@ -96,8 +96,12 @@ func wire(t *testing.T, p sparkplug.Payload) sparkplug.Payload {
 	return out
 }
 
+// sampleOptions exercises both shapes of --writable: a plain glob marking a
+// SCALAR metric writable as a whole, and dotted MEMBER globs — one naming a
+// member of a flat template (Pump1.Speed), one reaching through a nested one
+// (*.Main.Run, which resolves inside "Skid A" : Skid → Main : Motor).
 func sampleOptions() Options {
-	return Options{Writable: []string{"PLC1/Pump/SpeedSP"}}
+	return Options{Writable: []string{"PLC1/Pump/SpeedSP", "Pump1.Speed", "*.Main.Run"}}
 }
 
 // ── golden files ─────────────────────────────────────────────────────────
@@ -218,9 +222,9 @@ types:
 sites:
   - node: W6
     metrics:
-      - {name: Pump1, type: Motor}
+      - {name: Pump1, type: Motor, writable: [Speed]}
       - {name: Site Name, type: String}
-      - {name: Skid A, type: Skid}
+      - {name: Skid A, type: Skid, writable: [Main.Run]}
       - {name: Well/LastSample, type: DateTime}
       - {name: Well/Level, type: Double}
     devices:
@@ -230,7 +234,7 @@ sites:
           - {name: Pump/SpeedSP, type: Double, writable: true}
   - node: W7
     metrics:
-      - {name: Pump1, type: Motor}
+      - {name: Pump1, type: Motor, writable: [Speed]}
       - {name: Well/Level, type: Double}
 `)
 	specs, err := ParseSites(sites)
@@ -489,5 +493,173 @@ func TestUnrepresentableDatatypeReported(t *testing.T) {
 	}
 	if len(skipped) != 1 || !strings.Contains(skipped[0], "Blob") {
 		t.Errorf("skipped = %v", skipped)
+	}
+}
+
+// ── writable members ─────────────────────────────────────────────────────
+
+// bindingNamed finds one binding by nautilus tag name.
+func bindingNamed(t *testing.T, m host.Manifest, name string) host.Binding {
+	t.Helper()
+	for _, b := range m.Tags {
+		if b.Name == name {
+			return b
+		}
+	}
+	t.Fatalf("no binding named %q in %d bindings", name, len(m.Tags))
+	return host.Binding{}
+}
+
+// TestWritableWholeTemplateIsAnError — a --writable glob matching a Template
+// metric fails LOUD. Writing the struct back would clobber every member the
+// edge is driving, so the fix is to name the member, and the message says so.
+func TestWritableWholeTemplateIsAnError(t *testing.T) {
+	_, err := FromBirths(sampleBirths(t), Options{Writable: []string{"Pump1"}})
+	if err == nil {
+		t.Fatal("want an error: a Template metric cannot be written as a whole")
+	}
+	for _, want := range []string{"templates are written per member", "Pump1.Speed"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %v should contain %q", err, want)
+		}
+	}
+	// A --sites file saying writable: true about a Template fails the same way.
+	specs, err := ParseSites([]byte(`
+group: G
+types: [{name: Motor, fields: [{name: Speed, type: Double}]}]
+sites:
+  - node: W6
+    metrics:
+      - {name: Pump1, type: Motor, writable: true}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FromSites(specs, Options{}); err == nil ||
+		!strings.Contains(err.Error(), "templates are written per member") {
+		t.Errorf("FromSites(writable: true on a Template) = %v, want the per-member error", err)
+	}
+}
+
+// TestWritableMemberGlobs — a dotted pattern selects template MEMBERS, one
+// scalar output tag each, and leaves the metric's own struct binding an input.
+func TestWritableMemberGlobs(t *testing.T) {
+	m, err := FromBirths(sampleBirths(t), Options{Writable: []string{"Pump1.*", "*.Main.Speed"}})
+	if err != nil {
+		t.Fatalf("FromBirths: %v", err)
+	}
+
+	// The struct binding is untouched: reads still come from it.
+	if b := bindingNamed(t, m, "W6_Pump1"); b.Writable || b.Member != "" {
+		t.Errorf("W6_Pump1 = %+v, want a plain input binding", b)
+	}
+	// Pump1.* takes every leaf of Motor, on both sites that carry a Pump1.
+	for _, name := range []string{"W6_Pump1_Speed", "W6_Pump1_Run", "W7_Pump1_Speed", "W7_Pump1_Run"} {
+		b := bindingNamed(t, m, name)
+		if !b.Writable || b.Metric != "Pump1" || b.Type != "Motor" {
+			t.Errorf("%s = %+v, want a writable member of Pump1 : Motor", name, b)
+		}
+	}
+	// A nested path: "Skid A" : Skid → Main : Motor → Speed.
+	if b := bindingNamed(t, m, "W6_Skid_A_Main_Speed"); b.Member != "Main.Speed" || b.Type != "Skid" {
+		t.Errorf("W6_Skid_A_Main_Speed = %+v, want member Main.Speed of Skid", b)
+	}
+	// "*" does not cross ".", so Pump1.* never reaches into a nested template
+	// and *.Main.Speed never matches a flat one.
+	for _, b := range m.Tags {
+		if b.Member == "Main.Run" {
+			t.Errorf("*.Main.Speed matched %q too", b.Member)
+		}
+	}
+}
+
+// TestSitesWritableMemberList — the offline path names members explicitly, and
+// a path the type does not have is a typo, not a silently missing tag.
+func TestSitesWritableMemberList(t *testing.T) {
+	const src = `
+group: G
+types:
+  - {name: Motor, fields: [{name: Speed, type: Double}, {name: START, type: Boolean}]}
+sites:
+  - node: W6
+    metrics:
+      - {name: Motor1, type: Motor, writable: [START]}
+`
+	specs, err := ParseSites([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := FromSites(specs, Options{})
+	if err != nil {
+		t.Fatalf("FromSites: %v", err)
+	}
+	if b := bindingNamed(t, m, "W6_Motor1_START"); b.Member != "START" || !b.Writable {
+		t.Errorf("W6_Motor1_START = %+v", b)
+	}
+	if b := bindingNamed(t, m, "W6_Motor1"); b.Writable {
+		t.Error("the struct binding must stay an input")
+	}
+	// Speed was not listed, so no tag for it.
+	for _, b := range m.Tags {
+		if b.Member == "Speed" {
+			t.Error("an unlisted member generated a tag")
+		}
+	}
+	// The generated tag file types the member by its LEAF, not the struct.
+	out, err := TagsYAML(m, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "- { name: W6_Motor1_START, role: output, init: false }"; !strings.Contains(string(out), want) {
+		t.Errorf("tag file missing %q:\n%s", want, out)
+	}
+
+	bad := strings.Replace(src, "writable: [START]", "writable: [Nope]", 1)
+	specs, err = ParseSites([]byte(bad))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := FromSites(specs, Options{}); err == nil ||
+		!strings.Contains(err.Error(), `has no scalar member "Nope"`) {
+		t.Errorf("FromSites(bad member) = %v, want a no-such-member error", err)
+	}
+}
+
+// TestSitesWritableRejectsBadShapes — writable: must be `true` or a list of
+// member paths, and a member list on a scalar metric is a mistake.
+func TestSitesWritableRejectsBadShapes(t *testing.T) {
+	cases := []struct{ name, src, want string }{{
+		name: "a bare string",
+		src: `
+group: G
+sites: [{node: W6, metrics: [{name: SP, type: Double, writable: "yes"}]}]
+`,
+		want: "want `true` for a scalar metric",
+	}, {
+		name: "a member list on a scalar",
+		src: `
+group: G
+sites: [{node: W6, metrics: [{name: SP, type: Double, writable: [START]}]}]
+`,
+		want: "not a Template",
+	}, {
+		name: "init with a member list",
+		src: `
+group: G
+types: [{name: Motor, fields: [{name: Speed, type: Double}]}]
+sites: [{node: W6, metrics: [{name: M, type: Motor, writable: [Speed], init: 1.0}]}]
+`,
+		want: "init: applies to a whole-metric writable",
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			specs, err := ParseSites([]byte(tc.src))
+			if err == nil {
+				_, err = FromSites(specs, Options{})
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want it to contain %q", err, tc.want)
+			}
+		})
 	}
 }

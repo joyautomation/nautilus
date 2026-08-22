@@ -32,6 +32,7 @@ VAR_EXTERNAL
   CL1__Online : BOOL;
   CL1__Rebirth : BOOL;
   W6_Pump1 : Motor;
+  W6_Pump1_Speed : LREAL;
   W6_Pump1_SpeedSP : LREAL;
   W6_Well_Level : LREAL;
   W6__LastBirthMs : LINT;

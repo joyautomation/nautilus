@@ -53,6 +53,15 @@ instruments plus a `plc1` device carrying pump run/fault and its own
 setpoint), and `CL1` (a chlorine analyzer — the minimal shape, no device,
 no Template).
 
+`W6`'s `Pump1` also shows the **member binding**: `writable: [Speed]` on a
+Template metric generates one scalar output tag, `W6_Pump1_Speed : LREAL`,
+addressing `Pump1.Speed` inside the UDT. A write publishes an NCMD carrying
+a *partial* template — just that member — which the edge merges, so the
+members the site drives itself (`Run`) survive. A UDT is never writable as
+a whole; that would clobber them. `fleet.st` forwards the operator's
+`PumpSpeedCmd` into it, interlocked on `W6__Online`, and `fleet_test.yaml`
+covers it.
+
 **Live**, listening to a real broker — the other input to the *same*
 generator, so both paths agree on tag names byte-for-byte for the metrics
 they share:

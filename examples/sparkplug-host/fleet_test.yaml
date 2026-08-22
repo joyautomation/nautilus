@@ -89,3 +89,27 @@ tests:
       - given: { W6__Online: false }
         scans: 1
         expect: { WellLowLevelAlm: false } # offline clears it immediately
+
+  # A MEMBER output. W6_Pump1_Speed is a plain LREAL tag here, but it
+  # addresses ONE member of W6's Pump1 UDT: a write publishes an NCMD
+  # carrying a partial template (just Speed), which the edge merges into its
+  # own Pump1 tag — Run and every other member survive untouched. That is
+  # what makes commanding a site's UDT controls safe; writing the whole
+  # struct back would clobber whatever the site was driving.
+  - name: the operator speed command reaches W6's Pump1.Speed member, gated on __Online
+    given: {
+      W6__Online: true, BP2__Online: true, CL1__Online: true,
+      W6_Well_Level: 50.0, W6_Pump1.Run: false, BP2_plc1_Pump_Run: false,
+    }
+    steps:
+      - given: { PumpSpeedCmd: 1450.0 }
+        scans: 1
+        expect: { W6_Pump1_Speed: 1450.0 }
+      - given: { PumpSpeedCmd: 900.0 }
+        scans: 1
+        expect: { W6_Pump1_Speed: 900.0 }
+      # A dark site holds no command: it must not inherit a stale one when
+      # it births again.
+      - given: { W6__Online: false }
+        scans: 1
+        expect: { W6_Pump1_Speed: 0.0 }
