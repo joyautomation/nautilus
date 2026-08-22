@@ -427,9 +427,54 @@ new codegen dir); {D1, D3}.
    `project.go:415` treats every root-level `.st` without a `PROGRAM` as a library. Confirm the
    generated file lands in the project root (as `examples/client60` does), not a subdirectory, or
    `type:` references won't resolve.
-8. **Open: host-as-edge.** A project with both `driver: {type: sparkplug-host}` and a
-   `sparkplug:` section would consume the group and republish it as one giant edge node (cloud
-   aggregation). Legal and maybe desirable, but `nautilus check` should warn when
-   `driver.host-id == sparkplug.primary-host`.
+8. **Verified: host-as-edge.** A project with both `driver: {type: sparkplug-host}` and a
+   `sparkplug:` section consumes group A as INPUT tags and republishes its OWN tags as an edge
+   node on group B — legal, `driver:`/`sparkplug:` are independent top-level keys with no
+   cross-check (`internal/project/project.go`'s `buildDriver` and `(*Project).Sparkplug` are
+   separate code paths). Proved on a 3-project bench
+   (twin/ 1s-scan edge on `PomonaTwin` → site/ host-as-edge on `PomonaWRD`, `driver:
+   sparkplug-host` consuming `PomonaTwin` primary: false → host/ central consumer of
+   `PomonaWRD`), broker `tcp://10.154.92.220:1883`:
+   - **Node-level publish republishes the WHOLE tag store by default** (`sparkplug/birth.go`'s
+     `birth()` calls `n.rt.Tags().Snapshot()`; `SparkplugConfig.Device`'s doc comment: "Empty =
+     everything publishes at node level") — including the sparkplug-host driver's own INPUT tags,
+     which would otherwise echo group A's truths back into group B. The existing
+     `metric-classes: {none: [...]}` glob (`sparkplug/classes.go`'s `NoPublish` class — the same
+     knob `examples/client60/nautilus.yaml` uses) excludes them, and is NOT clumsy at 54 sites: one
+     pattern (`none: ["TWIN_*"]`) covers every truth a site consumes, because they all share the
+     twin's single edge-node prefix — no per-metric enumeration, same line verbatim on every site.
+     Confirmed against the LIVE broker with `nautilus sparkplug browse`: W6's NBIRTH carries
+     exactly `bdSeq`, `Node Control/Rebirth`, `Level`, `PumpRun` — no `TWIN_*`. No
+     `publish-inputs: false` knob needed.
+   - `primary: false` on the site correctly suppresses the STATE certificate (`sparkplug/host/
+     mqtt.go`'s `mayPublish`/the will's `SetBinaryWill` are both gated on it) — confirmed no
+     `spBv1.0/STATE/site-W6` ever appears on the broker, retained or otherwise.
+   - **Bug found and fixed:** `rebirth-on-start: true` (the default) was a silent no-op for any
+     `primary: false` consumer — `publishRebirth` funneled through `publishCommand`'s
+     `mayPublish()` gate (`Primary && isLeader`), so the NCMD Rebirth request was rejected with
+     "not the publishing host" and logged a WARN. Fatal for host-as-edge specifically: a group
+     with no OTHER primary host on it (e.g. `PomonaTwin`, where the site is the only consumer of
+     `TWIN`) means the passive consumer NEVER sees a birth — Sparkplug forbids retaining them, so
+     a site that starts after the twin's last birth is permanently stuck with `TWIN__Online`
+     false. Fixed in `sparkplug/host/mqtt.go`'s `publishRebirth`: it now bypasses the `Primary`
+     check (still gated on `isLeader`, so a standby replica under `redundancy:` still doesn't
+     duplicate the request) — a Rebirth request doesn't contend for the STATE certificate and
+     commands no field device, so it isn't "writing to the group" in the sense `mayPublish`'s
+     gate exists for. Covered by
+     `TestMqttPassiveConsumerCanRequestRebirth`; `TestMqttPassiveConsumerPublishesNoState` narrowed
+     to `NoRebirthOnStart: true` to isolate the STATE claim from this exception. Full
+     `sparkplug/...` suite and `go build ./...` pass. Change is on `sparkplug-host`, uncommitted.
+   - Kill the twin (SIGKILL) → site's `TWIN__Online` goes false within ~1 LWT round trip,
+     `Level`/`PumpRun` hold their last value (guarded read, no bare read), scan count keeps
+     climbing at the full 250 ms rate — no task fault. Restart the twin → fresh NBIRTH on its own
+     reconnect, `TWIN__Online` true again, `Level` tracking within one scan.
+   - **Lag, twin change → site tag** (1 s twin scan, 250 ms site scan, deadband 0 / min-interval
+     0 / 100 ms sample loop): ~193–262 ms, avg ≈ 248 ms across 16 samples — dominated by the
+     site's own 250 ms scan period landing after the MQTT delivery, as expected; a few near-zero
+     outliers near the sine's extrema (negligible twin delta) were excluded as measurement
+     artifacts, not real propagation.
+   - Still open: the `nautilus check` warning for `driver.host-id == sparkplug.primary-host`
+     this item originally asked for guards a DIFFERENT misconfiguration (a project's own
+     driver/sparkplug sections colliding) and was out of scope for this bench — not implemented.
 9. **Integer width.** nautilus's IR collapses all integers to int64, so a `UInt64` metric above
    2^63 wraps. The edge side already has this; document it.
