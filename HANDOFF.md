@@ -128,12 +128,36 @@ see it). New example `examples/alarms`; guide at
 website/.../guides/alarms.md; HMI kit components were already in `hmi/`.
 Secrets stay in the environment: `journal.dsn-env`, `notify[].header-env`.
 
+Done 2026-08-22 (st-struct-pins):
+
+- FB struct pins/VAR_IN_OUT/field assignment (3ab4362)
+- Four fixes a real site project exposed (ae30474)
+- Struct-typed tags per-member init: (76d6ecf)
+- Struct-member API writes — Tags.SetPath, POST /api/tags (358380e)
+- Acceptance dotted given: edits on struct tags compose (51afacd)
+- Built-in PID function block — ISA form, anti-windup, bumpless auto/manual (4bd5e32)
+- Nested block comments in ST; LexErrors on unterminated comment (c2099f9)
+- HMI alarm kit — AlarmBanner, AlarmTable, AlarmJournal, createAlarmClient (2ffdb11)
+- Server HMI tier — serve SPA from controller, dashboard at /_nautilus/, retained struct restore (2416d77)
+- Historian struct members as dotted leaves, deadband/min-interval change filter (8ac5fbd)
+- Historian server-side aggregates (/history/agg min|max|avg|sum|count|first|last|delta|ontime, bucketed) (1c56011)
+- Runtime OnScan observer seam and Tags.ReadPath for dotted reads (35b80d1)
+- Alarm engine core — ISA-18.2 state machine, ack/shelve, ring/file/Postgres journal, notifiers (e17cb88)
+- Alarms manifest tier — alarms:/alarm-files:, rules expansion, offline check, acceptance ack:/shelve:/unshelve:, examples/alarms, guide (a5b6232)
+- HMI alarms.ts → alarms.svelte.ts (runes module requires .svelte.ts suffix) (e55399c)
+- LD FB-only rungs, edge contacts +x/-x and P/N coils, negated function contacts (baba4db)
+- Ladder FUNCTION_BLOCKs — library .ld/.fbd files, multi-POU, power-pin resolution, struct-field bindings, LSP + editor (d094337)
+
 Next, in rough priority:
 
 1. **HMI Versions page** — render /api/program/history in
    @joyautomation/nautilus-hmi (mini-scada's Versions page is the
    reference): commit list, diffs, activate button. The demo moment for
    the content calendar ("your PLC shows its own git log").
-2. **Native-Go function blocks** alongside ST (both lowering to the IR).
-3. **Extension 0.10.0** — first stable-channel Marketplace release, when the
-   Test Explorer + schema work has soaked on the pre-release channel.
+2. **Verify VS Code ladder editor webview build** (FB rung groups) and cut an extension pre-release.
+3. **Publish @joyautomation/nautilus-hmi** (alarm kit, alarms.svelte.ts rename) to npm.
+4. **Remote counter RESET coil / task scan-order guarantee / remote-program FB pin reads** — asks from a real ControlLogix transpile (see the Pomona demo's sites/aep/README.md limitations table, abstract it as "a real ControlLogix transpile").
+5. **Alarm notifiers beyond log/webhook**.
+6. **Merge PRs #6 and #7** (note: the `demo-integration` worktree ~/Development/joyautomation/nautilus-demo exists only to build the demo binary).
+7. **Native-Go function blocks** alongside ST (both lowering to the IR).
+8. **Extension stable release** — first stable-channel Marketplace release, when the Test Explorer + schema work has soaked on the pre-release channel.
