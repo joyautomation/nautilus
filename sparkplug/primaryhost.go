@@ -7,6 +7,10 @@ import (
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 )
 
+// primaryhost.go is the *edge node's* watcher for its configured primary
+// host's STATE topic. It is not the host application driver — that lives in
+// the sparkplug/host subpackage.
+//
 // Primary-host STATE gating. When a PrimaryHostID is configured the edge node
 // tracks that host's STATE birth-certificate: it defers its own birth until
 // the host is ONLINE and, once born, dies (NDEATH) if the host goes offline —
