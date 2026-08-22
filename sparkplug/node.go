@@ -74,6 +74,8 @@ type Node struct {
 	hostOnline   bool
 	hostTS       int64 // last STATE timestamp seen (monotonic guard)
 	rebirthTimer *time.Timer
+	stopping     bool           // set by Stop before it mutates bdSeq/born; birth/Rebirth no-op once true
+	inflight     sync.WaitGroup // in-flight birth()/Rebirth() calls; Stop waits for this to drain
 
 	// Publish-tick working set, all under n.mu. The tag STORE decides when
 	// these are stale: everything here is derived from the set of tag NAMES,
@@ -178,6 +180,7 @@ func (n *Node) Start(ctx context.Context) error {
 	// must carry the same value, so load it before building the will.
 	n.mu.Lock()
 	n.bdSeq = n.loadBdSeq()
+	n.stopping = false // clear any stop from a previous session (Node is reused across Start/Stop)
 	n.mu.Unlock()
 
 	willTopic := n.topic("NDEATH")
@@ -221,6 +224,16 @@ func (n *Node) Stop() {
 	if n.cancel == nil {
 		return
 	}
+	// Block any birth()/Rebirth() that hasn't started yet (a connect- or
+	// command-triggered one can fire concurrently with Stop, from paho's own
+	// goroutines) and wait for whichever is already running to finish before
+	// we touch bdSeq/born below. mu is not held across Wait — birth/Rebirth
+	// take mu themselves to do their own bookkeeping.
+	n.mu.Lock()
+	n.stopping = true
+	n.mu.Unlock()
+	n.inflight.Wait()
+
 	n.cancel()
 	<-n.done
 	// Graceful death: NDEATH before DISCONNECT (a clean disconnect does not
@@ -243,7 +256,10 @@ func (n *Node) Stop() {
 }
 
 // onConnect (re)subscribes to command topics and births. Fires on first
-// connect and on every auto-reconnect.
+// connect and on every auto-reconnect, from paho's own connection goroutine —
+// asynchronously with respect to Start() returning, and (via reconnect) even
+// after Stop() has begun. beginInflight/n.inflight is what lets Stop() wait
+// for this before it mutates bdSeq/born.
 func (n *Node) onConnect(_ mqtt.Client) {
 	n.cli.Subscribe(n.topic("NCMD"), 1, n.handleCommand)
 	n.cli.Subscribe(n.deviceTopic("DCMD", "+"), 1, n.handleCommand)
@@ -255,6 +271,23 @@ func (n *Node) onConnect(_ mqtt.Client) {
 	if err := n.birth(); err != nil {
 		n.log.Error("sparkplug: birth failed", "error", err)
 	}
+}
+
+// beginInflight registers an in-flight birth/rebirth attempt and reports
+// whether it may proceed. It reports false — no registration — once Stop has
+// begun (n.stopping), so a rebirth triggered concurrently with Stop (by
+// paho's connection or subscription goroutines: onConnect, handleCommand's
+// `go n.Rebirth()`, the primary-host STATE handler, or the rebirth-debounce
+// timer) no-ops instead of racing Stop's bdSeq/born mutation. A caller that
+// gets true owns a matching n.inflight.Done(), typically via defer.
+func (n *Node) beginInflight() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.stopping {
+		return false
+	}
+	n.inflight.Add(1)
+	return true
 }
 
 func (n *Node) run(ctx context.Context) {
