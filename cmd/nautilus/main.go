@@ -46,6 +46,9 @@ Usage:
                           committed, so what deploys is always readable.
   nautilus eip <cmd>      EtherNet/IP tools: import (browse a Logix controller
                           and generate types + tag manifest) and browse.
+  nautilus sparkplug <cmd> Sparkplug B host tools: import (listen to a group
+                          and generate types + manifest + tag file), browse,
+                          and tags (re-derive the tag file, no broker).
   nautilus tags <cmd>     Generate a tag file from a spreadsheet export
                           (import-csv). Commit the output and compose it
                           with tag-files:.
@@ -90,6 +93,8 @@ func main() {
 		os.Exit(runNew(os.Args[2:]))
 	case "eip":
 		os.Exit(runEIP(os.Args[2:]))
+	case "sparkplug":
+		os.Exit(runSparkplug(os.Args[2:]))
 	case "tags":
 		os.Exit(runTags(os.Args[2:]))
 	case "pull":

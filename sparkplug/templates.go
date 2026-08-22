@@ -52,16 +52,25 @@ func (n *Node) templateDefs(snap map[string]ir.Value, ts uint64) []Metric {
 	return defs
 }
 
-// definitionTemplate builds a Template definition (members carry name +
-// datatype, no value) for a struct type.
+// definitionTemplate builds a Template definition for a struct type. Scalar
+// members carry name + datatype and no value (IsNull). A member that is
+// itself a struct carries no scalar value either, but instead of IsNull it
+// carries a Template value with TemplateRef set to the nested type's name
+// (IsDefinition left false) — a reference to that type's own definition
+// metric, which templateDefs emits alongside this one (dependency-ordered:
+// nested types before their users). This is the convention Ignition/Tahu use
+// for a UDT member that is itself a UDT: the member is a reference, not an
+// inline copy of the nested definition.
 func definitionTemplate(sd *ir.StructDef) *Template {
 	t := &Template{IsDefinition: true}
 	for _, f := range sd.Fields {
-		t.Metrics = append(t.Metrics, Metric{
-			Name:     f.Name,
-			Datatype: definitionDatatype(f.Type),
-			IsNull:   true, // definition members have no value
-		})
+		m := Metric{Name: f.Name, Datatype: definitionDatatype(f.Type)}
+		if s := structOf(f.Type); s != nil {
+			m.Value = &Template{TemplateRef: s.Name}
+		} else {
+			m.IsNull = true // definition members have no value
+		}
+		t.Metrics = append(t.Metrics, m)
 	}
 	return t
 }
