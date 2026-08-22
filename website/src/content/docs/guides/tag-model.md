@@ -75,6 +75,43 @@ Picking a role, by use case:
 | your logic owns across scans (integrator)   | `State(name, initial, …)`    | the seed, then the coil                     |
 | the HMI watches but the field never sees    | plain coil write — no entry  | the program creates it on first write       |
 
+## Seeding struct members
+
+A manifest tag naming a UDT (`type: Motor1Speed`) seeds to the zero of that
+type by default — every member `FALSE`/`0`/`0.0` until something writes it.
+For a `setpoint` or `state` tag, `init:` can instead be a mapping of member
+name to value, nested for a member that is itself a struct:
+
+```yaml
+tags:
+  - name: WEL15_FIT_001
+    role: state
+    type: AnalogInput
+    init:
+      RAWMIN: 6553.0
+      RAWMAX: 32767.0
+      HHSP: 2800.0
+      ALMDLY: 5
+  - name: WEL15_SUP_015
+    role: state
+    type: Motor1Speed
+    init:
+      STRTTMRSP: 30
+      LVL: { CTL1HSP: 60.0, CTL1LSP: 40.0 } # nested struct member
+```
+
+Every member the mapping omits still takes the zero of its own field type —
+`init:` names only what needs a real starting value, not the whole shape.
+This is what replaces a first-scan `IF NOT CfgDone THEN ... END_IF` block of
+plain field assignments: the same setpoints, declared once where the tag
+already is, instead of duplicated as ST in every program that uses the type.
+
+An unknown member name is a load error naming the tag and the member path
+(`tag WEL15_FIT_001: init: unknown member RAWMN (did you mean RAWMIN?)`), and
+a struct-typed tag given a scalar `init:` — rather than a mapping — is an
+error too. A generator (`nautilus eip tags`, `nautilus tags import-csv`)
+round-trips the same nested shape through a `tag-files:` entry.
+
 ## Adding a field input end to end
 
 Adding a **new field input** is three lines in three places, all by the

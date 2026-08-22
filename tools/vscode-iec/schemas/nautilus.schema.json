@@ -178,9 +178,10 @@
           "type": [
             "boolean",
             "string",
-            "number"
+            "number",
+            "object"
           ],
-          "description": "Initial value. Required for setpoint and state unless `type` supplies one. On an output, needed only when the logic reads it before writing it (a seal-in latch)."
+          "description": "Initial value. A scalar for an untyped (or scalar-typed) tag. For a struct-typed tag (`type:`), init may instead be a mapping of member name to value — nested for a member that is itself a struct — to seed only the members that need a non-zero starting value; every member the mapping omits still takes the zero of its own field type. A struct-typed tag given a scalar init is an error. Required for setpoint and state unless `type` supplies one. On an output, needed only when the logic reads it before writing it (a seal-in latch)."
         },
         "unit": {
           "type": "string",

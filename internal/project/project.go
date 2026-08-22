@@ -615,6 +615,11 @@ func applyTagMeta(defs []runtime.TagDef, tm map[string]MetaConfig) map[string]ru
 // normalize maps yaml's integer literals onto the float64 the tag store
 // expects for numerics (yaml decodes 65 as int, 65.0 as float64; ST REAL
 // tags want the latter). BOOL and string pass through.
+//
+// It does NOT recurse into a struct tag's nested init map: a member's
+// target kind (REAL vs INT vs BOOL) is only known once the tag's `type:`
+// resolves against the compiled TYPE table, so ir.SeedFromInit does that
+// conversion itself, per member, once expandTags has the type in hand.
 func normalize(v any) any {
 	switch x := v.(type) {
 	case int:

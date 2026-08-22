@@ -294,6 +294,38 @@ func TestTagFileSchemaRefsTheTagDefinition(t *testing.T) {
 	}
 }
 
+// A struct-typed tag's init may be a mapping of member name to value
+// (internal/project/udt_test.go's TestStructInit* prove the loader side);
+// this is the schema half — the editor must not squiggle the shape the
+// loader actually accepts.
+func TestSchemaInitAllowsAnObject(t *testing.T) {
+	s := loadSchema(t)
+	raw, ok := s.Definitions["tag"].Properties["init"]
+	if !ok {
+		t.Fatal("schema has no tag.init — did it move?")
+	}
+	var node struct {
+		Type []string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &node); err != nil {
+		t.Fatal(err)
+	}
+	types := node.Type
+	if !slices.Contains(types, "object") {
+		t.Errorf("tag.init's schema type is %v — a struct tag's per-member init "+
+			"(a YAML mapping) needs \"object\" alongside the scalar kinds", types)
+	}
+
+	// And the loader really does accept it — this is the schema/loader pair
+	// TestSchemaRolesAreImplemented and friends check for every other field.
+	if _, err := tagDefs([]TagConfig{{
+		Name: "T", Role: "state", Type: "Motor",
+		Init: map[string]any{"Speed": 1.0},
+	}}); err != nil {
+		t.Errorf("loader rejected an object init the schema now offers: %v", err)
+	}
+}
+
 // setpoint and state are seeded roles: without init they have no value on
 // scan one, which the loader treats as an error. The schema says the same
 // with an if/then, and this proves the loader half of that pair.

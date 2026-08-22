@@ -78,6 +78,45 @@ func TestRenderRejectsDuplicates(t *testing.T) {
 	}
 }
 
+// A struct-typed tag's per-member init renders as a flow-style mapping, not
+// as `%v`-formatted Go syntax — the shape ir.SeedFromInit reads back, so a
+// generator can emit `init: { RAWMIN: 6553.0, HHSP: 2800.0 }` and it loads.
+func TestRenderStructInitAsFlowMapping(t *testing.T) {
+	raw, err := Render(nil, []Tag{{
+		Name: "T", Role: "state", Type: "AnalogInput",
+		Init: map[string]any{"RAWMIN": 6553.0, "ALMDLY": 5},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := strings.TrimSpace(string(raw))
+	want := "- { name: T, role: state, type: AnalogInput, init: { ALMDLY: 5, RAWMIN: 6553.0 } }"
+	if out != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+	}
+}
+
+// Nested struct members render as nested flow mappings, keys sorted at
+// every level — the same shape a manifest author would hand-write.
+func TestRenderNestedStructInit(t *testing.T) {
+	raw, err := Render(nil, []Tag{{
+		Name: "T", Role: "state", Type: "Motor1Speed",
+		Init: map[string]any{
+			"STRTTMRSP": 30,
+			"LVL":       map[string]any{"CTL1HSP": 60.0, "CTL1LSP": 40.0},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := strings.TrimSpace(string(raw))
+	want := "- { name: T, role: state, type: Motor1Speed, init: " +
+		"{ LVL: { CTL1HSP: 60.0, CTL1LSP: 40.0 }, STRTTMRSP: 30 } }"
+	if out != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out, want)
+	}
+}
+
 func TestRenderHeader(t *testing.T) {
 	raw, err := Render([]string{"line one", "", "line two"}, []Tag{{Name: "T", Role: "input"}})
 	if err != nil {
