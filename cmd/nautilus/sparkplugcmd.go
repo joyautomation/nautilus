@@ -282,6 +282,10 @@ func writeSparkplugFiles(outDir, tagsOut string, m host.Manifest, skip []string)
 		return g, err
 	}
 
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		return g, err
+	}
+
 	// sparkplug_types.st has to land in the project ROOT: project.go treats
 	// every root-level .st without a PROGRAM as a library, which is how the
 	// generated TYPEs become visible to `type:` references.
