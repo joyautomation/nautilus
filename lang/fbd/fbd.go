@@ -144,9 +144,11 @@ var headerSectionRe = regexp.MustCompile(`(?is)\bVAR(?:_[A-Z]+)?\b(.*?)\bEND_VAR
 
 // declaredNames lists the variable names a POU's header declares, lowered
 // for case-insensitive comparison (IEC identifiers are case-insensitive).
+// Matched against comment-stripped text, so a VAR-section-shaped example in
+// a `(* ... *)` doc comment can't read as a real declaration.
 func declaredNames(header string) map[string]bool {
 	out := map[string]bool{}
-	for _, sec := range headerSectionRe.FindAllStringSubmatch(header, -1) {
+	for _, sec := range headerSectionRe.FindAllStringSubmatch(stripComments(header), -1) {
 		for _, m := range headerDeclRe.FindAllStringSubmatch("\n"+sec[1], -1) {
 			out[strings.ToLower(m[1])] = true
 		}
@@ -155,9 +157,13 @@ func declaredNames(header string) map[string]bool {
 }
 
 // splitBlocks finds every FBD … END_FBD pair in source order and rejects the
-// malformed shapes (an unclosed block, an END_FBD with no opener).
+// malformed shapes (an unclosed block, an END_FBD with no opener). Matched
+// against comment-stripped text (see stripComments) so a `(* ... *)` doc
+// comment whose text happens to contain a bare "FBD" or "END_FBD" line
+// (documentation showing example FBD, say) is never mistaken for a real
+// block boundary.
 func splitBlocks(src string) ([]block, error) {
-	lines := strings.Split(src, "\n")
+	lines := strings.Split(stripComments(src), "\n")
 	var out []block
 	start := -1
 	for i, l := range lines {
@@ -189,10 +195,15 @@ func splitBlocks(src string) ([]block, error) {
 // with END_FBD replaced by nothing so END_PROGRAM remains). The header/footer
 // are valid ST verbatim. bodyLine is the number of file lines preceding the
 // body (the offset that maps body-relative parse positions back to the file).
+//
+// The FBD / END_FBD boundary lines are found on comment-stripped text (see
+// splitBlocks); header/body/footer are still sliced from the ORIGINAL
+// source so nothing downstream loses real comment text.
 func splitFBD(src string) (header, body, footer string, bodyLine int, err error) {
 	lines := strings.Split(src, "\n")
+	stripped := strings.Split(stripComments(src), "\n")
 	start, end := -1, -1
-	for i, l := range lines {
+	for i, l := range stripped {
 		switch strings.ToUpper(strings.TrimSpace(l)) {
 		case "FBD":
 			if start == -1 {

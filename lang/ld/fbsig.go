@@ -51,9 +51,7 @@ var (
 	fbEndRe   = regexp.MustCompile(`(?i)^\s*END_FUNCTION_BLOCK\s*$`)
 	// A VAR_INPUT / VAR_OUTPUT section anywhere in a block's header text,
 	// declarations and END_VAR possibly sharing its line.
-	varSectionRe  = regexp.MustCompile(`(?is)\b(VAR_INPUT|VAR_OUTPUT)\b(.*?)\bEND_VAR\b`)
-	commentRe     = regexp.MustCompile(`(?s)\(\*.*?\*\)`)
-	lineCommentRe = regexp.MustCompile(`(?m)//.*$`)
+	varSectionRe = regexp.MustCompile(`(?is)\b(VAR_INPUT|VAR_OUTPUT)\b(.*?)\bEND_VAR\b`)
 )
 
 // newResolver scans src plus any library sources for user FB signatures.
@@ -94,18 +92,27 @@ func (r *resolver) lookup(typ string) (fbSig, bool) {
 // runs before any parse, over ST and LD alike, and a shape it cannot read
 // simply yields no signature (the caller falls back to the IN/Q default and
 // the real compiler reports whatever is wrong).
+//
+// The FUNCTION_BLOCK / END_FUNCTION_BLOCK boundaries are found on the
+// COMMENT-STRIPPED text, so a `(* ... *)` block comment whose text happens
+// to start a line with one of those keywords (documentation showing example
+// ladder, say) is never mistaken for a real declaration. Bodies are sliced
+// from the ORIGINAL source — scanFBBody strips comments itself before
+// reading pins, since a rung's own header comment or a diagram note may
+// legitimately sit inside a block's body text.
 func scanFBSigs(src string) []fbSig {
 	var out []fbSig
 	lines := strings.Split(src, "\n")
+	stripped := strings.Split(stripComments(src), "\n")
 	name, start := "", -1
-	for i, l := range lines {
+	for i := range lines {
 		if start == -1 {
-			if m := fbStartRe.FindStringSubmatch(l); m != nil {
+			if m := fbStartRe.FindStringSubmatch(stripped[i]); m != nil {
 				name, start = m[1], i+1
 			}
 			continue
 		}
-		if fbEndRe.MatchString(l) {
+		if fbEndRe.MatchString(stripped[i]) {
 			out = append(out, scanFBBody(name, strings.Join(lines[start:i], "\n")))
 			name, start = "", -1
 		}
@@ -119,9 +126,9 @@ func scanFBSigs(src string) []fbSig {
 func scanFBBody(name, body string) fbSig {
 	sig := fbSig{name: name}
 	// A block's body may itself be ladder; the pin sections precede it, and
-	// stripping comments first keeps a commented-out END_VAR out of the way.
-	body = commentRe.ReplaceAllString(body, " ")
-	body = lineCommentRe.ReplaceAllString(body, "")
+	// stripping comments first keeps a commented-out END_VAR (or a VAR_INPUT
+	// mentioned only in prose) out of the way.
+	body = stripComments(body)
 	for _, m := range varSectionRe.FindAllStringSubmatch(body, -1) {
 		pins := parseDecls(m[2])
 		if strings.EqualFold(m[1], "VAR_INPUT") {

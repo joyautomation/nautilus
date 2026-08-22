@@ -119,9 +119,11 @@ var (
 	rungRe = regexp.MustCompile(`(?i)^\s*RUNG\b(?:\s+([A-Za-z_][A-Za-z0-9_]*))?\s*(?:\(\*\s*(.*?)\s*\*\)\s*)?(.*)$`)
 )
 
-// HasBlock reports whether source contains an LD … END_LD body.
+// HasBlock reports whether source contains an LD … END_LD body. Tested
+// against comment-stripped text, so a `(* ... *)` doc comment whose text
+// happens to start a line with "LD" doesn't count.
 func HasBlock(src string) bool {
-	for _, line := range strings.Split(src, "\n") {
+	for _, line := range strings.Split(stripComments(src), "\n") {
 		if ldStartRe.MatchString(line) {
 			return true
 		}
@@ -147,6 +149,12 @@ func TranspileWithLines(src string, libs ...string) (string, []int, error) {
 	}
 	res := newResolver(src, libs)
 	lines := strings.Split(src, "\n")
+	// Structural matches (LD / END_LD / RUNG headers) are tested against
+	// the comment-stripped text so a `(* ... *)` doc comment whose text
+	// happens to start a line with one of those keywords is never mistaken
+	// for real code; the RUNG match is then re-read from the ORIGINAL line
+	// so its `(* ... *)` header comment (if any) still comes through.
+	strippedLines := strings.Split(stripComments(src), "\n")
 	var out []string
 	var lineOf []int
 	emit := func(text string, srcLine int) {
@@ -173,11 +181,12 @@ func TranspileWithLines(src string, libs ...string) (string, []int, error) {
 
 	for i, raw := range lines {
 		n := i + 1
+		stripped := strippedLines[i]
 		switch {
-		case !inLD && ldStartRe.MatchString(raw):
+		case !inLD && ldStartRe.MatchString(stripped):
 			inLD = true
 			emit("FBD", n)
-		case inLD && ldEndRe.MatchString(raw):
+		case inLD && ldEndRe.MatchString(stripped):
 			if err := flushRung(); err != nil {
 				return "", nil, err
 			}
@@ -185,7 +194,8 @@ func TranspileWithLines(src string, libs ...string) (string, []int, error) {
 			emit("END_FBD", n)
 		case inLD:
 			trimmed := strings.TrimSpace(raw)
-			if m := rungRe.FindStringSubmatch(raw); m != nil {
+			if rungRe.MatchString(stripped) {
+				m := rungRe.FindStringSubmatch(raw)
 				if err := flushRung(); err != nil {
 					return "", nil, err
 				}
@@ -299,9 +309,13 @@ func sanitizeIdent(s string) string {
 // file. The ST compiler catches it too, but only after the whole file has
 // been transpiled — and it cannot say which LADDER line the second one is
 // on, which is the only thing the author wants to know.
+//
+// Scanned on comment-stripped text: a `(* ... *)` block comment whose text
+// happens to contain a line starting "FUNCTION_BLOCK Name" — documentation
+// showing example code, say — must not read as a second declaration.
 func checkDuplicateFBs(src string) error {
 	seen := map[string]int{}
-	for i, l := range strings.Split(src, "\n") {
+	for i, l := range strings.Split(stripComments(src), "\n") {
 		m := fbStartRe.FindStringSubmatch(l)
 		if m == nil {
 			continue

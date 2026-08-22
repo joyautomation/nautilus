@@ -644,12 +644,7 @@ func opAddRung(src string, m *Model, op EditOp) ([]TextEdit, error) {
 		}
 		at = r.EndLine + 1
 	} else {
-		for i, line := range strings.Split(src, "\n") {
-			if ldEndRe.MatchString(line) {
-				at = i + 1
-				break
-			}
-		}
+		at = findEndLD(src)
 		if at == 0 {
 			return nil, fmt.Errorf("ld edit: no END_LD to insert before")
 		}
@@ -715,17 +710,25 @@ func opAddComment(src string, m *Model, op EditOp) ([]TextEdit, error) {
 		}
 		at = r.EndLine + 1
 	} else {
-		for i, line := range strings.Split(src, "\n") {
-			if ldEndRe.MatchString(line) {
-				at = i + 1
-				break
-			}
-		}
+		at = findEndLD(src)
 		if at == 0 {
 			return nil, fmt.Errorf("ld edit: no END_LD to insert before")
 		}
 	}
 	return []TextEdit{{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: "\n" + printComment(text)}}, nil
+}
+
+// findEndLD returns the 1-based line of the file's first END_LD, or 0 if
+// none. Scanned on comment-stripped text so a `(* ... *)` doc comment whose
+// text happens to contain a line that reads "END_LD" isn't mistaken for
+// the real closer.
+func findEndLD(src string) int {
+	for i, line := range strings.Split(stripComments(src), "\n") {
+		if ldEndRe.MatchString(line) {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 var headerCommentRe = regexp.MustCompile(`\s*\(\*.*?\*\)\s*$`)
@@ -788,7 +791,10 @@ func opDeclareVar(src string, m *Model, op EditOp) ([]TextEdit, error) {
 		}
 	}
 
-	lines := strings.Split(src, "\n")
+	// Scanned on comment-stripped text so a `(* ... *)` doc comment whose
+	// text happens to start a line with "LD" or "VAR" isn't mistaken for
+	// real header structure.
+	lines := strings.Split(stripComments(src), "\n")
 	ldLine := -1 // 0-based line of the LD block start = end of the header
 	for i, l := range lines {
 		if ldStartRe.MatchString(l) {

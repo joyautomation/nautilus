@@ -110,6 +110,13 @@ func Graph(src string, libs ...string) (*Model, error) {
 	m.res = res
 
 	lines := strings.Split(src, "\n")
+	// Structural matches (FUNCTION_BLOCK boundaries, LD / END_LD, RUNG
+	// headers) are tested against comment-stripped text so a `(* ... *)`
+	// doc comment whose text happens to start a line with one of those
+	// keywords is never mistaken for real code; content the caller actually
+	// wants — a rung's header comment, the FB name — is still read back
+	// from the ORIGINAL line.
+	strippedLines := strings.Split(stripComments(src), "\n")
 	inLD := false
 	pou := "" // the FUNCTION_BLOCK currently open, "" inside the PROGRAM
 	var rung *rungParse
@@ -158,21 +165,27 @@ func Graph(src string, libs ...string) (*Model, error) {
 	}
 	for i, raw := range lines {
 		n := i + 1
+		stripped := strippedLines[i]
 		switch {
-		case !inLD && fbStartRe.MatchString(raw):
+		case !inLD && fbStartRe.MatchString(stripped):
 			pou = fbStartRe.FindStringSubmatch(raw)[1]
-		case !inLD && fbEndRe.MatchString(raw):
+		case !inLD && fbEndRe.MatchString(stripped):
 			pou = ""
-		case !inLD && ldStartRe.MatchString(raw):
+		case !inLD && ldStartRe.MatchString(stripped):
 			inLD = true
-		case inLD && ldEndRe.MatchString(raw):
+		case inLD && ldEndRe.MatchString(stripped):
 			flushCom()
 			if err := flush(); err != nil {
 				return nil, err
 			}
 			inLD = false
 		case inLD:
-			if idx := rungRe.FindStringSubmatchIndex(raw); idx != nil {
+			// Tested against stripped so a comment can't be mistaken for a
+			// RUNG header; the match itself (and bodyCol, which is a column
+			// offset) is re-read from the ORIGINAL line so a real header
+			// comment and the true source column both come through.
+			if rungRe.MatchString(stripped) {
+				idx := rungRe.FindStringSubmatchIndex(raw)
 				flushCom()
 				if err := flush(); err != nil {
 					return nil, err
@@ -246,8 +259,11 @@ func toElements(elems []any, res *resolver) []Element {
 	return out
 }
 
+// pouName reads the file's PROGRAM name, tested against comment-stripped
+// text so a `(* ... *)` doc comment whose text happens to start a line with
+// "PROGRAM " isn't mistaken for the declaration.
 func pouName(src string) string {
-	for _, line := range strings.Split(src, "\n") {
+	for _, line := range strings.Split(stripComments(src), "\n") {
 		t := strings.TrimSpace(line)
 		if strings.HasPrefix(strings.ToUpper(t), "PROGRAM ") {
 			f := strings.Fields(t)
@@ -260,13 +276,17 @@ func pouName(src string) string {
 }
 
 // scanBlocks lists the FUNCTION_BLOCK POUs the file defines, with their
-// pins — the rung groups an editor draws under their own headings.
+// pins — the rung groups an editor draws under their own headings. Block
+// boundaries are found on comment-stripped text (see stripComments);
+// scanFBBody strips comments again over the ORIGINAL body text itself
+// before reading pins.
 func scanBlocks(src string) []Block {
 	var out []Block
 	lines := strings.Split(src, "\n")
+	stripped := strings.Split(stripComments(src), "\n")
 	start := -1
 	name := ""
-	for i, l := range lines {
+	for i, l := range stripped {
 		if start == -1 {
 			if m := fbStartRe.FindStringSubmatch(l); m != nil {
 				name, start = m[1], i
@@ -292,11 +312,15 @@ func scanBlocks(src string) []Block {
 // scanVars reads header declarations line-based, mirroring lang/fbd's vars
 // list: every `name : TYPE [:= init];` inside VAR* sections. Declarations
 // inside a FUNCTION_BLOCK carry that block's name in POU.
+//
+// Scanned on comment-stripped text throughout, so a `(* ... *)` or `//`
+// comment naming a section keyword, or showing an example declaration,
+// can't be read as real header structure or a real declaration.
 func scanVars(src string) []VarDecl {
 	var out []VarDecl
 	section := ""
 	pou := ""
-	lines := strings.Split(src, "\n")
+	lines := strings.Split(stripComments(src), "\n")
 	for i, raw := range lines {
 		t := strings.TrimSpace(raw)
 		u := strings.ToUpper(t)
