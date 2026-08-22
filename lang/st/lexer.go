@@ -1,6 +1,7 @@
 package st
 
 import (
+	"fmt"
 	"strings"
 	"unicode"
 )
@@ -12,13 +13,45 @@ type Lexer struct {
 	line   int
 	col    int
 	tokens []Token
+	errs   []LexError
 }
 
-// Lex tokenizes the entire input and returns a token slice.
+// LexError is a lexical-level error found while scanning input. Currently
+// the only case produced is an unterminated (possibly nested) block
+// comment. The lexer is best-effort: it keeps producing whatever tokens it
+// can and records errors on the side rather than aborting, so Lex's
+// token-only signature (relied on by lang/sfc, lang/fbd, and
+// internal/project) never has to change shape.
+type LexError struct {
+	Pos Pos
+	Msg string
+}
+
+func (e LexError) Error() string {
+	if e.Pos.Line > 0 {
+		return fmt.Sprintf("%s at line %d:%d", e.Msg, e.Pos.Line, e.Pos.Col)
+	}
+	return e.Msg
+}
+
+// Lex tokenizes the entire input and returns a token slice. Lexical errors
+// (see LexError) are dropped for backward compatibility with the many
+// existing callers of this exact signature; use LexErrors to observe them.
 func Lex(input string) []Token {
 	l := &Lexer{input: input, line: 1, col: 1}
 	l.lex()
 	return l.tokens
+}
+
+// LexErrors tokenizes input exactly like Lex, additionally returning any
+// lexical errors encountered. An unterminated block comment is reported at
+// the position of its outermost "(*" — the point IEC 61131-3 3rd edition
+// nesting considers still open at EOF — not the position of whichever
+// nested "(*" happened to be scanned last.
+func LexErrors(input string) ([]Token, []LexError) {
+	l := &Lexer{input: input, line: 1, col: 1}
+	l.lex()
+	return l.tokens, l.errs
 }
 
 func (l *Lexer) lex() {
@@ -98,21 +131,7 @@ func (l *Lexer) skipWhitespaceAndComments() {
 			l.line++
 			l.col = 1
 		} else if ch == '(' && l.peek(1) == '*' {
-			// Block comment (* ... *)
-			l.advance(2)
-			for l.pos < len(l.input)-1 {
-				if l.input[l.pos] == '*' && l.input[l.pos+1] == ')' {
-					l.advance(2)
-					break
-				}
-				if l.input[l.pos] == '\n' {
-					l.line++
-					l.col = 1
-					l.pos++
-				} else {
-					l.advance(1)
-				}
-			}
+			l.skipBlockComment()
 		} else if ch == '/' && l.peek(1) == '/' {
 			// Line comment // ...
 			for l.pos < len(l.input) && l.input[l.pos] != '\n' {
@@ -122,6 +141,50 @@ func (l *Lexer) skipWhitespaceAndComments() {
 			break
 		}
 	}
+}
+
+// skipBlockComment consumes a (possibly nested) "(* ... *)" block comment,
+// with l.pos positioned at its opening "(". IEC 61131-3 3rd edition allows
+// block comments to nest, so every "(*" seen while already inside a
+// comment bumps a depth counter and only its matching "*)" pops it — a
+// stray "*)" that closes an inner comment no longer spills the rest of the
+// outer comment's text out as code (the bug this fixes). Scanning here is
+// raw byte matching: it never special-cases string quotes, matching how
+// real ST tooling treats comment bodies (a "(*" or "*)" inside a string
+// literal is never reached from here in the first place — string tokens
+// are only ever scanned from the top-level dispatch in lex(), not from
+// inside a comment).
+//
+// If EOF is reached before depth returns to zero, a LexError is recorded
+// pointing at the outermost "(*" — the position that IEC nesting still
+// considers open — not whatever nested "(*" was scanned last.
+func (l *Lexer) skipBlockComment() {
+	openLine, openCol := l.line, l.col
+	depth := 1
+	l.advance(2) // consume the outermost "(*"
+	for l.pos < len(l.input) {
+		switch {
+		case l.input[l.pos] == '(' && l.peek(1) == '*':
+			depth++
+			l.advance(2)
+		case l.input[l.pos] == '*' && l.peek(1) == ')':
+			depth--
+			l.advance(2)
+			if depth == 0 {
+				return
+			}
+		case l.input[l.pos] == '\n':
+			l.line++
+			l.col = 1
+			l.pos++
+		default:
+			l.advance(1)
+		}
+	}
+	l.errs = append(l.errs, LexError{
+		Pos: Pos{Line: openLine, Col: openCol},
+		Msg: "unterminated block comment opened",
+	})
 }
 
 func (l *Lexer) lexString() {
