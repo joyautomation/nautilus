@@ -1,0 +1,57 @@
+# A Sparkplug B HOST — the other side of the wire from a project like
+# examples/heated-tank-nogo (an edge node). This project consumes a small
+# fleet of edge nodes on one broker/group and presents them as INPUT tags;
+# operator writes go back out as NCMD/DCMD.
+#   nautilus check .   compile + verify the generated tags agree with fleet.st
+#   nautilus test      acceptance tests, virtual time, no broker
+#   nautilus run       connect to the broker in `driver:` below and go live
+name: plant-scada
+
+server:
+  addr: "localhost:8080"
+
+tasks:
+  - program: fleet.st
+    scan: 250ms
+
+# The driver: consumes the group as a Sparkplug B host application.
+#   broker, host-id, group-id, manifest are the required fields
+#   (internal/project/project.go's buildDriver — a driver missing any of
+#   them fails `nautilus check`, not `nautilus run`, so a bad config never
+#   reaches the field).
+# host-id "plant-scada" is this host's identity on the wire: its STATE
+# certificate publishes to spBv1.0/STATE/plant-scada, retained, and every
+# edge node in the group watches for it if it names this host as its
+# primary-host.
+driver:
+  type: sparkplug-host
+  broker: "tcp://127.0.0.1:1883"     # temporary broker — see README.md
+  group-id: Plant
+  host-id: plant-scada
+  manifest: sparkplug_manifest.yaml
+  primary: true                      # publish STATE (default; explicit here)
+  state-form: both                   # 3.0 JSON + legacy STATE/<host>, for
+                                     # edges that only watch the old form
+  reorder-timeout: 5s                # unfilled seq gap this long -> NCMD Rebirth
+  stale-after: 2m                    # silence this long -> node marked stale
+  on-unknown: log                    # metrics on the wire the manifest never
+                                     # bound: logged once each, never dropped
+                                     # silently — see Driver.Discovered()
+
+# sparkplug_types.st (the Motor template as an ST TYPE) is a root-level .st
+# with no PROGRAM, so it composes as a library automatically — no entry
+# needed here, same as eip_types.st in examples/client60.
+#
+# tags/sparkplug.yaml is GENERATED — see sites.yaml and README.md. Do not
+# hand-edit it; re-run the import instead.
+tag-files:
+  - tags/sparkplug.yaml
+
+# Fleet-wide rollups fleet.st computes, plus the one operator setpoint.
+# These are hand-written because they exist only in this project, not on
+# any site's birth certificate.
+tags:
+  - { name: SitesOnline,     role: state, init: 0,     desc: "Edge nodes currently online, of 3" }
+  - { name: AnyPumpRunning,  role: state, init: false,  desc: "Any fleet pump running (W6 or BP2)" }
+  - { name: WellLowLevelSP,  role: setpoint, init: 20.0, unit: "%", desc: "W6 well level low-alarm setpoint" }
+  - { name: WellLowLevelAlm, role: state, init: false,  desc: "W6 well level low, 10 s proven (TON)" }

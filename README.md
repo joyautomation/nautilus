@@ -320,6 +320,31 @@ honored. The node passes the **Sparkplug TCK edge-node profile** — CI runs the
 `joyautomation/sparkplug-tck-go` harness against a live node on every push. MQTT
 and protobuf live only in this package; the runtime core stays stdlib-only.
 
+#### Consuming Sparkplug B (host)
+
+The other side of the wire: `driver: {type: sparkplug-host}` makes a
+project a Sparkplug B **host application**, consuming a whole group of
+edge nodes as `role: input` tags instead of publishing its own:
+
+```yaml
+driver:
+  type: sparkplug-host
+  broker: "tcp://mqtt.plant:1883"
+  group-id: Plant
+  host-id: plant-scada          # STATE topic spBv1.0/STATE/plant-scada
+  manifest: sparkplug_manifest.yaml   # from `nautilus sparkplug import`
+tag-files: [tags/sparkplug.yaml]
+```
+
+`nautilus sparkplug import --broker ... --group ...` (live) or
+`--sites sites.yaml` (offline, no broker — CI-buildable) generates the
+manifest, tag file, and Template types. Reads fault until a site's first
+birth, so guard logic on the driver-synthesized `<site>__Online`
+companion; writes leave as NCMD/DCMD, dropped and counted for an offline
+site rather than queued. Both the edge-node and host-application **TCK
+profiles** pass in CI. See `examples/sparkplug-host` and the
+[host guide](https://nautilus.joyautomation.com/guides/sparkplug-host/).
+
 ## Three languages, one program model
 
 A program file is `.st`, `.fbd`, or `.ld` — pick per task, mix freely in

@@ -2,7 +2,7 @@
 
 Working notes for picking up development in a fresh session. See `README.md`
 for the vision/architecture and `RELEASING.md` for the release pipeline; this
-file is the practical state + next steps. Last refreshed: 2026-08-16.
+file is the practical state + next steps. Last refreshed: 2026-08-22.
 
 ## What this is
 
@@ -103,12 +103,46 @@ topology mismatch → 409 "deploy that commit instead").
 pointed at a snapshot it rebuilds the past exactly as boot composes the
 present. Guide: website .../guides/program-history.md.
 
+Done 2026-08-19: **Sparkplug manifest tier finished** — `store-forward:`
+joined the `sparkplug:` section (project.go + schema, the schema-sync
+test enforces the pair), client60 uses it, and the sparkplug guide was
+rewritten manifest-first (YAML leads, Go tier demoted to a "From Go"
+section — the house pattern for all guides). Content: N-13 (comms/MQTT
+episode) developed in ~/Development/joyautomation/content — angle, beat
+sketch, Tier-3 sourcing note; still gated on wk 16 shipping.
+
+Done 2026-08-22: **Sparkplug B host application driver** — the other side
+of the wire from the edge node. `sparkplug/host` (package `host`), a
+manifest-tier `io.Driver` (`driver: {type: sparkplug-host}`), never dials
+(`New` builds offline; `Start` connects — same split as `eip`, so
+`nautilus check`/`build` pass with no broker in sight). `nautilus
+sparkplug import|browse|tags` generates `sparkplug_types.st` +
+`sparkplug_manifest.yaml` + `tags/sparkplug.yaml`, live (`--broker`) or
+offline from a committed `--sites` file — byte-identical output either
+way. Quality rides on driver-synthesized `__Online`/`__LastBirthMs`/
+`__Rebirth` companions (Sparkplug keeps the last value through a death;
+"reads fault until first birth" — guard on `__Online`). Passes the
+Sparkplug TCK **host-application** profile (81/0/3 — 81 PASS, 0 FAIL, 3
+N/A) alongside the existing edge-node profile, both gated in CI.
+`examples/sparkplug-host` (a 3-site fleet, generated via `--sites`,
+`fleet.st` rollups, `fleet_test.yaml` in virtual time) and the manifest-
+first guide (`guides/sparkplug-host.md`, linked from the edge-node guide).
+`st-struct-pins` (worktree `~/Development/joyautomation/nautilus-st`) is
+a separate branch in flight, untouched by this work. Driving project:
+the Pomona WRD demo at `~/Development/pomona/wrd` — a ~60-site fleet is
+the real target this driver is being built for.
+
 Next, in rough priority:
 
 1. **HMI Versions page** — render /api/program/history in
    @joyautomation/nautilus-hmi (mini-scada's Versions page is the
    reference): commit list, diffs, activate button. The demo moment for
    the content calendar ("your PLC shows its own git log").
-2. **Native-Go function blocks** alongside ST (both lowering to the IR).
-3. **Extension 0.10.0** — first stable-channel Marketplace release, when the
+2. **Alarm engine + fleet HMI patterns** — driven by the Pomona WRD demo
+   (`~/Development/pomona/wrd`): a real alarm/annunciation model over a
+   sparkplug-host fleet (priorities, ack/shelve, per-site rollups), and
+   the HMI components a multi-site SCADA screen actually needs beyond
+   `DriverStatusPanel`.
+3. **Native-Go function blocks** alongside ST (both lowering to the IR).
+4. **Extension 0.10.0** — first stable-channel Marketplace release, when the
    Test Explorer + schema work has soaked on the pre-release channel.
