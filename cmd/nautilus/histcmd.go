@@ -80,9 +80,18 @@ Flags:
                 instrument state might use "-deadband 0 -min-interval 60s".
 
 HTTP API:
-  GET /history       ?from&to (ms epoch), ?maxPoints, ?tags (CSV) — downsampled series
-  GET /history/span   earliest/latest sample and total count
-  GET /healthz        liveness probe
+  GET /history        ?from&to (ms epoch), ?maxPoints, ?tags (CSV) — downsampled series
+  GET /history/span    earliest/latest sample and total count
+  GET /history/agg     ?tags (CSV) &from&to (ms epoch) &bucket (Go duration,
+                        e.g. "1h"; omit for the whole [from,to) range as one
+                        bucket) &fn=min|max|avg|sum|first|last|count|delta|
+                        ontime — [{tag, ts (bucket start, ms epoch), value}].
+                        delta is last-first (a totalizer's period total);
+                        ontime is seconds the tag was non-zero, read off
+                        consecutive samples (a BOOL RUNST's runtime).
+  GET /history/at       ?tags (CSV) &at (ms epoch) — each tag's last value
+                        at-or-before at, e.g. a reservoir level at 6am.
+  GET /healthz         liveness probe
 `
 
 // frameTagsResponse is the slice of server.Frame this command needs: just
@@ -352,12 +361,27 @@ func pruneLoop(ctx context.Context, store *hist.Store, keep time.Duration) {
 	}
 }
 
-type historianServer struct{ store *hist.Store }
+// histStore is the subset of *hist.Store the historian's HTTP API drives,
+// factored out so handler tests can exercise handleAgg/handleAt against a
+// fake without a real Postgres — mirroring hist.Sink's role for the
+// collector side.
+type histStore interface {
+	Query(from, to time.Time, tags []string, maxPoints int) (map[string]hist.Series, error)
+	Span() (first, last time.Time, count int64, err error)
+	Aggregate(ctx context.Context, q hist.AggQuery) ([]hist.AggRow, error)
+	Snapshot(ctx context.Context, tags []string, at time.Time) ([]hist.AggRow, error)
+}
+
+var _ histStore = (*hist.Store)(nil)
+
+type historianServer struct{ store histStore }
 
 func (s *historianServer) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /history", s.handleQuery)
 	mux.HandleFunc("GET /history/span", s.handleSpan)
+	mux.HandleFunc("GET /history/agg", s.handleAgg)
+	mux.HandleFunc("GET /history/at", s.handleAt)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	return mux
 }
@@ -380,6 +404,81 @@ func (s *historianServer) handleQuery(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"from": from.UnixMilli(), "to": to.UnixMilli(), "series": series,
 	})
+}
+
+// aggRowJSON is the wire shape for /history/agg and /history/at: hist.AggRow
+// with Ts as a ms-epoch int, matching every other endpoint's timestamp
+// convention (handleQuery, handleSpan) instead of hist.AggRow's Go-domain
+// time.Time.
+type aggRowJSON struct {
+	Tag   string  `json:"tag"`
+	Ts    int64   `json:"ts"`
+	Value float64 `json:"value"`
+}
+
+func toAggRowsJSON(rows []hist.AggRow) []aggRowJSON {
+	out := make([]aggRowJSON, len(rows))
+	for i, r := range rows {
+		out[i] = aggRowJSON{Tag: r.Tag, Ts: r.Ts.UnixMilli(), Value: r.Value}
+	}
+	return out
+}
+
+// handleAgg serves GET /history/agg — bucketed min/max/avg/sum/count/
+// first/last/delta/ontime per tag, computed server-side by hist.Store.
+// Aggregate so a compliance/daily report never has to pull raw rows down
+// to compute its own totals.
+func (s *historianServer) handleAgg(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	tags := splitCSVHist(q.Get("tags"))
+	if len(tags) == 0 {
+		http.Error(w, "tags is required", http.StatusBadRequest)
+		return
+	}
+	fn := q.Get("fn")
+	if fn == "" {
+		http.Error(w, "fn is required", http.StatusBadRequest)
+		return
+	}
+	to := parseMsHist(q.Get("to"), time.Now())
+	from := parseMsHist(q.Get("from"), to.Add(-24*time.Hour))
+	var bucket time.Duration
+	if b := q.Get("bucket"); b != "" {
+		d, err := time.ParseDuration(b)
+		if err != nil {
+			http.Error(w, "bad bucket: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		bucket = d
+	}
+	rows, err := s.store.Aggregate(r.Context(), hist.AggQuery{
+		Tags: tags, From: from, To: to, Bucket: bucket, Fn: fn,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(toAggRowsJSON(rows))
+}
+
+// handleAt serves GET /history/at — each tag's last value at-or-before
+// ?at, e.g. a reservoir level snapshot at 6am.
+func (s *historianServer) handleAt(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	tags := splitCSVHist(q.Get("tags"))
+	if len(tags) == 0 {
+		http.Error(w, "tags is required", http.StatusBadRequest)
+		return
+	}
+	at := parseMsHist(q.Get("at"), time.Now())
+	rows, err := s.store.Snapshot(r.Context(), tags, at)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(toAggRowsJSON(rows))
 }
 
 func (s *historianServer) handleSpan(w http.ResponseWriter, r *http.Request) {
