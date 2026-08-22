@@ -375,19 +375,59 @@ func (d *Driver) publishCommand(topic string, metrics []sparkplug.Metric) error 
 	return p.publish(topic, 0, false, body)
 }
 
-// publishRebirth sends NCMD Node Control/Rebirth to one edge node. It does
-// NOT bump Status.Rebirths: the state machine counts its own requests when it
-// raises them (askRebirthLocked), so only the paths that originate here —
-// RequestRebirth, the connect-time sweep, a __Rebirth rising edge — call
-// countRebirth.
+// publishRebirth sends NCMD Node Control/Rebirth to one edge node.
+//
+// Unlike publishCommand (gated on mayPublish — Primary && isLeader), a
+// Rebirth request bypasses the Primary check: it does not contend for the
+// STATE certificate and it commands no field device, so it does not "write
+// to the group" in the sense mayPublish's doc comment means. It is gated on
+// isLeader alone, so a standby replica under redundancy: still doesn't
+// duplicate the request.
+//
+// This matters for host-as-edge (docs/design/sparkplug-host.md §8.8): a
+// project consuming a group with primary: false is a passive consumer with
+// no STATE and no outbound writes — but NBIRTH is never retained (spec), so
+// without SOME way to ask, a passive consumer that starts (or reconnects)
+// after the edge node's last birth sees nothing, ever, unless another host
+// happens to trigger a fresh birth on that group. rebirth-on-start: true
+// (the default) is documented as "the fix" for exactly this — silently
+// failing it whenever primary: false breaks that promise. Confirmed by a
+// host-as-edge bench (twin/ + site/ + host/, sparkplug-host branch): a
+// site's `driver: {type: sparkplug-host, primary: false, ...}` consuming
+// the twin's group never saw TWIN__Online go true until this fix.
+//
+// It does NOT bump Status.Rebirths: the state machine counts its own
+// requests when it raises them (askRebirthLocked), so only the paths that
+// originate here — RequestRebirth, the connect-time sweep, a __Rebirth
+// rising edge — call countRebirth.
 func (d *Driver) publishRebirth(group, edge string) error {
-	err := d.publishCommand(cmdTopic(group, edge, ""), []sparkplug.Metric{{
-		Name:      RebirthMetric,
-		Datatype:  spb.DataType_Boolean,
+	p := d.publisher()
+	if p == nil {
+		err := fmt.Errorf("host: not connected")
+		d.log.Warn("host: rebirth request failed", "group", group, "node", edge, "error", err)
+		return err
+	}
+	if !d.isLeader() {
+		err := fmt.Errorf("host: not the leader")
+		d.log.Warn("host: rebirth request failed", "group", group, "node", edge, "error", err)
+		return err
+	}
+	body, err := sparkplug.Payload{
 		Timestamp: uint64(time.Now().UnixMilli()),
-		Value:     true,
-	}})
+		OmitSeq:   true,
+		Metrics: []sparkplug.Metric{{
+			Name:      RebirthMetric,
+			Datatype:  spb.DataType_Boolean,
+			Timestamp: uint64(time.Now().UnixMilli()),
+			Value:     true,
+		}},
+	}.Encode()
 	if err != nil {
+		err = fmt.Errorf("host: encode rebirth for %s: %w", cmdTopic(group, edge, ""), err)
+		d.log.Warn("host: rebirth request failed", "group", group, "node", edge, "error", err)
+		return err
+	}
+	if err := p.publish(cmdTopic(group, edge, ""), 0, false, body); err != nil {
 		d.log.Warn("host: rebirth request failed", "group", group, "node", edge, "error", err)
 		return err
 	}

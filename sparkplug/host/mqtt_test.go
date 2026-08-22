@@ -398,7 +398,9 @@ func TestMqttPassiveConsumerPublishesNoState(t *testing.T) {
 
 	obs := newObserver(t, addr, "obs-passive", "spBv1.0/STATE/#", "spBv1.0/G/NCMD/+")
 	cfg := testConfig(addr, "h-passive")
-	cfg.Primary = false // passive consumer: no STATE, no commands
+	cfg.Primary = false         // passive consumer: no STATE, no output writes
+	cfg.NoRebirthOnStart = true // isolate that claim from publishRebirth's
+	// deliberate exception (TestMqttPassiveConsumerCanRequestRebirth below)
 	d := startDriver(t, cfg)
 
 	// Give the driver room to connect and (wrongly) publish.
@@ -412,6 +414,35 @@ func TestMqttPassiveConsumerPublishesNoState(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 	if n := obs.count(func(recMsg) bool { return true }); n != 0 {
 		t.Fatalf("passive consumer published %d messages; want 0", n)
+	}
+}
+
+// TestMqttPassiveConsumerCanRequestRebirth is host-as-edge's load-bearing
+// case (docs/design/sparkplug-host.md §8.8): a passive consumer (primary:
+// false) of a group with no other primary host present would otherwise
+// NEVER see a birth — Sparkplug forbids retaining them, so a driver that
+// starts after the edge node's last birth has nothing to read until
+// something asks for a rebirth. publishRebirth deliberately bypasses the
+// Primary gate for exactly this NCMD (still gated on isLeader), so
+// rebirth-on-start: true (the default) keeps its promise even when
+// primary: false. STATE stays off; that part is
+// TestMqttPassiveConsumerPublishesNoState's job.
+func TestMqttPassiveConsumerCanRequestRebirth(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = srv.Close() })
+
+	obsState := newObserver(t, addr, "obs-passive-state", "spBv1.0/STATE/#")
+	obsCmd := newObserver(t, addr, "obs-passive-cmd", "spBv1.0/G/NCMD/+")
+	cfg := testConfig(addr, "h-passive-rebirth")
+	cfg.Primary = false // passive, but rebirth-on-start defaults true
+	startDriver(t, cfg)
+
+	obsCmd.wait(t, "NCMD Rebirth despite primary: false", func(m recMsg) bool {
+		return m.topic == "spBv1.0/G/NCMD/W6"
+	})
+	time.Sleep(150 * time.Millisecond)
+	if n := obsState.count(func(recMsg) bool { return true }); n != 0 {
+		t.Fatalf("passive consumer published %d STATE messages; want 0", n)
 	}
 }
 
