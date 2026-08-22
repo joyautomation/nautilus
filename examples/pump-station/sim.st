@@ -2,11 +2,11 @@ PROGRAM Sim
 (* Stands in for the field bus: writes the Motor structs that a real
    deployment's EtherNet/IP driver would supply.
 
-   NOTE THE SHAPE. You cannot write `P101.Running := ...` when P101 is a
-   VAR_EXTERNAL — the VM has no store path for a field of a global, and it
-   faults every scan (see the note in the walkthrough). The working form is
-   copy → mutate the LOCAL → assign the whole struct back. Reading
-   `P101.Running` is fine; only writing needs this. *)
+   NOTE THE SHAPE. `P101.Running := ...` on a VAR_EXTERNAL struct compiles
+   and runs (the VM read-modify-writes the tag). This file keeps the older
+   form — copy → mutate the LOCAL → assign the whole struct back — because
+   it rewrites most of the struct each scan, and that is one tag write
+   instead of a dozen. Either form is correct. *)
 VAR_EXTERNAL
     P101 : Motor;  P101_Enable : BOOL;  P101_StartSP : REAL;
     P102 : Motor;  P102_Enable : BOOL;  P102_StartSP : REAL;

@@ -8,6 +8,7 @@ const (
 	VarInput                 // VAR_INPUT — treated as Local for scalars; FB call sites write before invoke
 	VarOutput                // VAR_OUTPUT — treated as Local; caller reads after invoke
 	VarGlobal                // shared PLC variable, read/written via Host
+	VarInOut                 // VAR_IN_OUT — like Local; the FB call site copies in before Step and back out after
 )
 
 // VarSlot is a compile-time description of a variable location.

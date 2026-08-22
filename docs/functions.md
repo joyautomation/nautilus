@@ -15,6 +15,7 @@ line/rung**, never a silent coercion.
 - [Standard functions](#standard-functions)
 - [Type conversions](#type-conversions)
 - [Standard function blocks](#standard-function-blocks)
+- [User function blocks](#user-function-blocks)
 
 ## How a scan evaluates
 
@@ -87,6 +88,15 @@ non-BOOL (coils only assign BOOL). `=>` works in ST and FBD calls too.
   `T#2M30S`. TIME values compare with the ordinary comparisons.
 - Mixed numeric arguments promote to REAL; comparing or combining a
   STRING with a number is an error, not a coercion.
+- A `TYPE` is a first-class type: a UDT can be a variable, a tag, a struct
+  field, an array element, a `FUNCTION` argument or return, and a
+  `FUNCTION_BLOCK` pin. Structs nest.
+- Assigning a struct or an array **copies** it. `b := a; b.F := 1` leaves
+  `a.F` alone, and so does a struct passed to a `VAR_INPUT` pin. The one
+  pin that writes back to the caller is `VAR_IN_OUT`, [below](#user-function-blocks).
+- A field or element of a `VAR_EXTERNAL` tag assigns directly —
+  `P101.Running := TRUE`, `Levels[2] := 41.0`. The tag store holds the
+  whole aggregate, so the VM reads it, writes the field, and puts it back.
 
 ## Operators
 
@@ -214,6 +224,77 @@ parentheses:
 Passing the power pin explicitly in the argument list (`t1:TON(IN := x)`)
 is an error — power owns it.
 
+## User function blocks
+
 User `FUNCTION`s and `FUNCTION_BLOCK`s written in library files
 participate everywhere the built-ins do; see "Structuring logic" in the
-main README.
+main README. Two things about their pins are worth stating outright,
+because they decide how a block's signature is shaped.
+
+### A pin may be any type, including a user TYPE
+
+`VAR_INPUT`, `VAR_OUTPUT`, `VAR_IN_OUT` and `VAR`
+declarations inside a `FUNCTION_BLOCK` (and a `FUNCTION`'s inputs, locals,
+and return type) resolve against the **whole compile**: this file's `TYPE`
+block plus every project library joined ahead of it. So a block can take
+the UDT its site model already defines, nested structs and all:
+
+```iecst
+FUNCTION_BLOCK FB_Scale
+VAR_INPUT  IN  : AnalogInput; END_VAR   (* a user TYPE, nested structs fine *)
+VAR_OUTPUT OUT : AnalogInput; END_VAR
+OUT       := IN;
+OUT.VALUE := IN.SCALE.LO + (IN.SCALE.HI - IN.SCALE.LO) * INT_TO_REAL(IN.RAW) / 32767.0;
+END_FUNCTION_BLOCK
+```
+
+At the call site the struct output reads like any other pin, one field at a
+time (`s.OUT.VALUE`) or whole (`Scaled := s.OUT`). A pin naming a type
+nothing declares is still a compile error that names the type.
+
+### VAR_IN_OUT is a reference pin
+
+A `VAR_IN_OUT` pin is bound at the call site to a **variable**, and what
+the block writes into it is visible to the caller when the call returns.
+That is what collapses a block whose UDT already names its own inputs and
+outputs from thirty scalar pins to one:
+
+```iecst
+FUNCTION_BLOCK FB_Starter
+VAR_IN_OUT M : Motor; END_VAR
+VAR edge : R_TRIG; END_VAR
+edge(CLK := M.Cmd);
+IF edge.Q THEN M.Starts := M.Starts + 1; END_IF;
+M.Running := M.Cmd;
+END_FUNCTION_BLOCK
+```
+
+```iecst
+VAR_EXTERNAL P101 : Motor; END_VAR
+VAR s : FB_Starter; END_VAR
+s(M := P101);          (* P101 carries the block's writes afterwards *)
+```
+
+The rules, all of them enforced at compile time:
+
+| Rule | Why |
+| --- | --- |
+| Bound with `:=`, like an input — `s(M := P101)` | it *is* an input; the `=>` form binds outputs, and an IN_OUT already writes back |
+| The argument must be **assignable**: a variable, a struct field, an array element, or a `VAR_EXTERNAL` tag | the block writes back to it; an expression has nowhere to write |
+| The argument's type must match the pin **exactly** | a reference cannot convert, so an `INT` variable does not stand in for a `REAL` pin |
+| Every `VAR_IN_OUT` must be bound at **every** call site | there is no default for a reference |
+| The pin's own type may not be a function block | an instance is retained state, not a value; nothing in the language copies one |
+
+Mechanically the pin is copied in before the block's body runs and copied
+back to the same variable after it — the observable behaviour of "by
+reference" for scan code, and what makes a `VAR_IN_OUT` bound to a
+`VAR_EXTERNAL` UDT round-trip through the tag store as one whole-struct
+write. Two calls in one scan bound to different variables each see and
+update their own.
+
+`FUNCTION`s have no `VAR_IN_OUT` (or `VAR_OUTPUT`): an IEC function is a
+single return value, and the compiler says so.
+
+`VAR_IN_OUT` pins are ST/FBD-callable; the FBD and ladder editors expose a
+block's `VAR_INPUT`/`VAR_OUTPUT` pins only, so a block meant to be wired
+graphically should keep its interface on those.

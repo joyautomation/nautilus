@@ -423,6 +423,9 @@ func (a *analysis) memberCompletions(typeName string) []CompletionItem {
 		for _, slot := range def.Outputs {
 			items = append(items, CompletionItem{Label: slot.Name, Kind: CompletionKindField, Detail: slot.Type.String() + " output"})
 		}
+		for _, slot := range def.InOuts {
+			items = append(items, CompletionItem{Label: slot.Name, Kind: CompletionKindField, Detail: slot.Type.String() + " in_out"})
+		}
 		return items
 	}
 	var items []CompletionItem

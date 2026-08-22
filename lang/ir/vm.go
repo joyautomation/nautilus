@@ -197,7 +197,10 @@ func execStmt(ctx *EvalCtx, s Stmt) error {
 			if in.SlotIdx < 0 || in.SlotIdx >= len(inst.Slots) {
 				return fmt.Errorf("FB input slot %d out of range", in.SlotIdx)
 			}
-			inst.Slots[in.SlotIdx] = coerceValue(v, n.Def.Slot(in.SlotIdx).Type)
+			// Copy-in: the pin gets its own storage so the block cannot
+			// reach back through a shared slice into the caller's variable.
+			// A VAR_IN_OUT pin is copied back out after Step instead.
+			inst.Slots[in.SlotIdx] = CopyValue(coerceValue(v, n.Def.Slot(in.SlotIdx).Type))
 		}
 		stepCtx := FBStepCtx{NowMs: ctx.Host.NowMs(), Host: ctx.Host}
 		if err := n.Def.Step(inst, stepCtx); err != nil {
@@ -234,10 +237,22 @@ func writeLValue(ctx *EvalCtx, lv LValue, v Value) error {
 		case *SlotRef:
 			return storeAtRoot(&ctx.Frame.Slots[n.Slot], chain, v)
 		case *GlobalRef:
-			if len(chain) != 0 {
-				return fmt.Errorf("cannot assign to a field/element of global %q without a declared composite type", n.Name)
+			if len(chain) == 0 {
+				return ctx.Host.WriteGlobal(n.Name, CopyValue(v))
 			}
-			return ctx.Host.WriteGlobal(n.Name, v)
+			// Reaching into a field/element of a global: the tag store holds
+			// the whole aggregate, so read-modify-write it. This is the same
+			// thing a program used to have to spell out by hand ("copy →
+			// mutate the local → assign the whole struct back").
+			cur, err := ctx.Host.ReadGlobal(n.Name)
+			if err != nil {
+				return err
+			}
+			cur = CopyValue(coerceValue(cur, n.T))
+			if err := storeAtRoot(&cur, chain, v); err != nil {
+				return fmt.Errorf("assign to %s: %w", n.Name, err)
+			}
+			return ctx.Host.WriteGlobal(n.Name, cur)
 		case *IndexRef:
 			iv, err := evalExpr(ctx, n.Index)
 			if err != nil {
@@ -269,6 +284,15 @@ func storeAtRoot(root *Value, chain []accessor, v Value) error {
 	for i := len(chain) - 1; i >= 0; i-- {
 		a := chain[i]
 		if a.isField {
+			// A function-block instance addresses its pins by slot, not by
+			// struct field — `t1.PT := T#5S` and `fb.OUT.VALUE` both land here.
+			if target.Kind == TypeFB {
+				if target.FB == nil || a.fieldIdx < 0 || a.fieldIdx >= len(target.FB.Slots) {
+					return fmt.Errorf("FB pin index %d out of bounds", a.fieldIdx)
+				}
+				target = &target.FB.Slots[a.fieldIdx]
+				continue
+			}
 			if a.fieldIdx < 0 || a.fieldIdx >= len(target.Fld) {
 				return fmt.Errorf("field index %d out of bounds", a.fieldIdx)
 			}
@@ -280,7 +304,7 @@ func storeAtRoot(root *Value, chain []accessor, v Value) error {
 			target = &target.Arr[a.arrIdx]
 		}
 	}
-	*target = v
+	*target = CopyValue(v)
 	return nil
 }
 
@@ -363,7 +387,7 @@ func evalExpr(ctx *EvalCtx, e Expr) (Value, error) {
 			if err != nil {
 				return Value{}, err
 			}
-			frame.Slots[i] = coerceValue(v, n.Def.Inputs[i].Type)
+			frame.Slots[i] = CopyValue(coerceValue(v, n.Def.Inputs[i].Type))
 		}
 		if err := n.Def.Run(frame, ctx.Host); err != nil {
 			return Value{}, err

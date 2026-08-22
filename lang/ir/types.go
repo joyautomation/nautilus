@@ -74,14 +74,19 @@ type StructField struct {
 }
 
 // FBDef describes a function block type. Slots are laid out
-// Inputs ‖ Outputs ‖ Internals so call sites can address inputs by
+// Inputs ‖ Outputs ‖ InOuts ‖ Internals so call sites can address inputs by
 // SlotIndex and read outputs/internals through MemberRef. Step runs
 // the FB body once per scan with the instance's slot vector and a
 // host-provided context (NowMs etc.).
+//
+// InOuts are VAR_IN_OUT pins: the call site must bind each to an
+// assignable variable, whose value is copied in before Step and copied
+// back out after it (see the FBCall lowering in lang/st).
 type FBDef struct {
 	Name      string
 	Inputs    []FBSlot
 	Outputs   []FBSlot
+	InOuts    []FBSlot
 	Internals []FBSlot
 	SlotIndex map[string]int
 	Step      FBStepFn
@@ -106,9 +111,9 @@ type FBStepCtx struct {
 // invoking Step.
 type FBStepFn func(inst *FBInstance, ctx FBStepCtx) error
 
-// Slot returns the i'th slot of the Inputs ‖ Outputs ‖ Internals layout
-// without materialising the combined slice — the VM's per-scan path, kept
-// allocation-free.
+// Slot returns the i'th slot of the Inputs ‖ Outputs ‖ InOuts ‖ Internals
+// layout without materialising the combined slice — the VM's per-scan path,
+// kept allocation-free.
 func (d *FBDef) Slot(i int) FBSlot {
 	if i < len(d.Inputs) {
 		return d.Inputs[i]
@@ -117,17 +122,36 @@ func (d *FBDef) Slot(i int) FBSlot {
 	if i < len(d.Outputs) {
 		return d.Outputs[i]
 	}
-	return d.Internals[i-len(d.Outputs)]
+	i -= len(d.Outputs)
+	if i < len(d.InOuts) {
+		return d.InOuts[i]
+	}
+	return d.Internals[i-len(d.InOuts)]
 }
 
 // AllSlots returns the FB's slot layout as a single ordered slice
 // matching the runtime FBInstance.Slots layout.
 func (d *FBDef) AllSlots() []FBSlot {
-	out := make([]FBSlot, 0, len(d.Inputs)+len(d.Outputs)+len(d.Internals))
+	out := make([]FBSlot, 0, len(d.Inputs)+len(d.Outputs)+len(d.InOuts)+len(d.Internals))
 	out = append(out, d.Inputs...)
 	out = append(out, d.Outputs...)
+	out = append(out, d.InOuts...)
 	out = append(out, d.Internals...)
 	return out
+}
+
+// IsInput reports whether slot index i is a VAR_INPUT pin.
+func (d *FBDef) IsInput(i int) bool { return i >= 0 && i < len(d.Inputs) }
+
+// IsOutput reports whether slot index i is a VAR_OUTPUT pin.
+func (d *FBDef) IsOutput(i int) bool {
+	return i >= len(d.Inputs) && i < len(d.Inputs)+len(d.Outputs)
+}
+
+// IsInOut reports whether slot index i is a VAR_IN_OUT pin.
+func (d *FBDef) IsInOut(i int) bool {
+	lo := len(d.Inputs) + len(d.Outputs)
+	return i >= lo && i < lo+len(d.InOuts)
 }
 
 // FuncDef describes a stateless IEC FUNCTION: a callable POU with typed

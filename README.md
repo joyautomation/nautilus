@@ -496,6 +496,13 @@ The pieces that make this first-class rather than a convention:
   across scans, and PLC-style online edits carry it across program swaps
   by name and type — a `PI` keeps its integral through a live logic
   change, like a real controller.
+- **Pins are typed by your model, not just by scalars.** A pin may be a
+  user `TYPE` from the same library — `VAR_INPUT IN : AnalogInput;` —
+  and `VAR_IN_OUT AI : AnalogInput;` binds the caller's variable (a
+  local, a struct field, or a `VAR_EXTERNAL` UDT tag) so the block's
+  writes land back in it. A block whose UDT already names its own
+  inputs and outputs takes one pin instead of thirty. See
+  [docs/functions.md](docs/functions.md#user-function-blocks).
 
 `nautilus new` scaffolds this shape: the PI controller ships in
 `blocks.st`, instantiated from `program.st`.
