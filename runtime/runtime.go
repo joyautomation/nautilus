@@ -259,6 +259,27 @@ func New(o Options) (*Runtime, error) {
 	for k, v := range o.Seed {
 		tags.Set(k, v)
 	}
+	// A dt-tag is otherwise unseeded: the scan loop only writes it AFTER a
+	// scan completes (see step() below), so a snapshot taken between New()
+	// and the first scan is missing it — exactly the gap a Sparkplug birth
+	// reads from. Left that way, a node births with N-1 metrics and rebirths
+	// a scan later once the tag exists: one spurious NBIRTH per restart per
+	// task with a dt-tag. Seed it here at REAL 0.0 like any other `state`
+	// tag, unless it was already seeded explicitly (a declared tag with this
+	// name wins, so an operator-visible init: still applies).
+	seedDtTag := func(name string) {
+		if name == "" {
+			return
+		}
+		if _, ok := tags.vals[name]; ok {
+			return
+		}
+		tags.SetReal(name, 0.0)
+	}
+	seedDtTag(o.DtTag)
+	for _, tr := range tasks {
+		seedDtTag(tr.dtTag)
+	}
 	retainTags := o.RetainTags
 	if o.Retain != nil && len(retainTags) == 0 {
 		// The default retained set is the operator-writable surface: every

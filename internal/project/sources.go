@@ -49,7 +49,7 @@ func Sources(fsys fs.FS, name string) (map[string]string, error) {
 		if err != nil {
 			return nil, fmt.Errorf("task program %q: %w", t.Program, err)
 		}
-		if !programRe.Match(src) {
+		if !hasProgramDecl(src) {
 			return nil, fmt.Errorf("%s has no PROGRAM declaration", t.Program)
 		}
 		taskName := runtime.MainTaskName
