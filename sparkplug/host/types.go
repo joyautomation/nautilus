@@ -155,6 +155,24 @@ type Binding struct {
 	Device string
 	// Metric is the verbatim Sparkplug metric name.
 	Metric string
+	// Member is a dotted path to ONE member inside a Template metric
+	// ("START", "LVL.CTL1HSP"), or "" for the metric as a whole.
+	//
+	// A member binding is how an operator commands one control of a site's
+	// UDT without touching its siblings. It is a SCALAR nautilus tag carrying
+	// the leaf member's type, and it is OUTPUT-ONLY: Writable must be true.
+	// Reads still come from the metric's own struct binding — duplicating
+	// every member as an input tag would double the fleet's tag count for no
+	// gain, and the struct tag already carries every member's live value.
+	//
+	// A write publishes an NCMD/DCMD carrying a PARTIAL template — the parent
+	// metric's name, with only this member inside it — which Sparkplug B
+	// permits and nautilus's own edge (sparkplug/command.go) merges member by
+	// member.
+	//
+	// Member requires Type to name a types: entry, and the path must resolve
+	// to a scalar leaf in it.
+	Member string
 	// Type is a Sparkplug datatype name or a TypeDef name.
 	Type string
 	// ArrayLen > 0 marks an array metric.
@@ -193,8 +211,13 @@ type Driver struct {
 	// byName indexes writable bindings by nautilus tag name.
 	byName map[string]Binding
 	// byMetric routes an inbound metric to its binding, keyed by
-	// (edge node, device, metric name).
+	// (edge node, device, metric name). Member bindings are NOT in it: they
+	// are output-only, so nothing inbound ever routes to one.
 	byMetric map[metricKey]Binding
+	// members is the precomputed write plan for every member binding, keyed
+	// by nautilus tag name — resolved once here so flushWrites never walks
+	// the types: block.
+	members map[string]memberOut
 	// nodeCfg indexes manifest nodes by edge_node_id.
 	nodeCfg map[string]Node
 
@@ -318,6 +341,32 @@ type nodeKey struct {
 // node-level metric.
 type metricKey struct {
 	EdgeNode, Device, Metric string
+}
+
+// bindKey identifies what one binding CLAIMS: a metric, or one member path
+// inside it. A struct binding and any number of member bindings can share a
+// metric; two bindings claiming the same member path cannot.
+type bindKey struct {
+	metricKey
+	Member string
+}
+
+// memberOut is one member binding's write plan, resolved from the types:
+// block in buildIndexes so the write path is a lookup rather than a walk.
+type memberOut struct {
+	// path is the dotted member path split into segments; the last is the
+	// leaf member's own name.
+	path []string
+	// refs is the TemplateRef at each level of the nesting: refs[0] is the
+	// metric's own type, refs[i] the type path[i-1] steps into. len(refs) ==
+	// len(path).
+	refs []string
+	// leaf is the leaf member's ir.Type, so a write is coerced to what the
+	// template declares before it goes on the wire.
+	leaf *ir.Type
+	// datatype is the leaf's Sparkplug datatype NAME ("Double", "Boolean"),
+	// which the generated tag file's init: follows.
+	datatype string
 }
 
 // metricRef is what an alias resolves to inside one edge node. Aliases are

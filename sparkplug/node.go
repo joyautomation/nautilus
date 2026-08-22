@@ -74,8 +74,12 @@ type Node struct {
 	hostOnline   bool
 	hostTS       int64 // last STATE timestamp seen (monotonic guard)
 	rebirthTimer *time.Timer
-	stopping     bool           // set by Stop before it mutates bdSeq/born; birth/Rebirth no-op once true
-	inflight     sync.WaitGroup // in-flight birth()/Rebirth() calls; Stop waits for this to drain
+	// cmdWarned dedupes the log-once diagnostics handleCommand emits (a
+	// template command for an unknown tag, an unknown member), keyed by an
+	// opaque reason string.
+	cmdWarned map[string]bool
+	stopping  bool           // set by Stop before it mutates bdSeq/born; birth/Rebirth no-op once true
+	inflight  sync.WaitGroup // in-flight birth()/Rebirth() calls; Stop waits for this to drain
 
 	// Publish-tick working set, all under n.mu. The tag STORE decides when
 	// these are stale: everything here is derived from the set of tag NAMES,

@@ -45,11 +45,6 @@ func TagsYAML(m host.Manifest, skip []string) ([]byte, error) {
 		}
 	}
 
-	byName := make(map[string]host.Binding, len(m.Tags))
-	for _, b := range m.Tags {
-		byName[b.Name] = b
-	}
-
 	specs := m.TagSpecs()
 	hit := make(map[string]int, len(skip))
 	out := make([]tagfile.Tag, 0, len(specs))
@@ -62,7 +57,10 @@ func TagsYAML(m host.Manifest, skip []string) ([]byte, error) {
 			Name: s.Name,
 			Role: s.Role,
 			Type: s.Type,
-			Init: typedInit(s.Init, byName[s.Name].Type),
+			// TagSpec.Datatype is the type the VALUE takes — the binding's own
+			// for a scalar, the LEAF member's for a member binding — so a
+			// member init: follows the member, not the enclosing template.
+			Init: typedInit(s.Init, s.Datatype),
 		})
 	}
 	for _, p := range skip {

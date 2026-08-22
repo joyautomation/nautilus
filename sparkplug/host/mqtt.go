@@ -29,6 +29,7 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/sparkplug"
 	"github.com/joyautomation/nautilus/sparkplug/spb"
 )
@@ -474,6 +475,10 @@ func (d *Driver) flushWrites() {
 
 	byTopic := map[string][]sparkplug.Metric{}
 	names := map[string][]string{}
+	// at indexes the metrics already accumulated for a topic by metric name,
+	// so two member writes to the same UDT in one coalesce window merge into
+	// ONE partial template rather than two metrics sharing a name.
+	at := map[string]map[string]int{}
 	drops := uint64(0)
 
 	for name, v := range work {
@@ -509,6 +514,43 @@ func (d *Driver) flushWrites() {
 			d.log.Warn("host: unwritable value type", "tag", name, "value", fmt.Sprintf("%T", v))
 			continue
 		}
+		topic := cmdTopic(group, b.Node, b.Device)
+		if at[topic] == nil {
+			at[topic] = map[string]int{}
+		}
+
+		// A member binding goes out as a PARTIAL template: the parent
+		// metric's name, carrying only the leaf this tag addresses. The edge
+		// merges it member by member, so the site's other members — the ones
+		// its own logic is driving — are untouched.
+		if mo, isMember := d.members[name]; isMember {
+			leaf, err := sparkplug.MetricFromValue(mo.path[len(mo.path)-1],
+				ir.CoerceValue(iv, mo.leaf), "")
+			if err != nil {
+				d.log.Warn("host: encode member write failed",
+					"tag", name, "metric", b.Metric, "member", b.Member, "error", err)
+				continue
+			}
+			if i, merged := at[topic][b.Metric]; merged {
+				if t, ok := byTopic[topic][i].Value.(*sparkplug.Template); ok && t != nil {
+					setTemplateMember(t, mo, leaf)
+					names[topic] = append(names[topic], name)
+					continue
+				}
+			}
+			root := &sparkplug.Template{TemplateRef: mo.refs[0]}
+			setTemplateMember(root, mo, leaf)
+			at[topic][b.Metric] = len(byTopic[topic])
+			byTopic[topic] = append(byTopic[topic], sparkplug.Metric{
+				Name:      b.Metric,
+				Datatype:  spb.DataType_Template,
+				Timestamp: uint64(time.Now().UnixMilli()),
+				Value:     root,
+			})
+			names[topic] = append(names[topic], name)
+			continue
+		}
+
 		ref := ""
 		if _, isType := d.defs[b.Type]; isType {
 			ref = b.Type
@@ -519,7 +561,7 @@ func (d *Driver) flushWrites() {
 			continue
 		}
 		m.Timestamp = uint64(time.Now().UnixMilli())
-		topic := cmdTopic(group, b.Node, b.Device)
+		at[topic][b.Metric] = len(byTopic[topic])
 		byTopic[topic] = append(byTopic[topic], m)
 		names[topic] = append(names[topic], name)
 	}
@@ -549,6 +591,44 @@ func (d *Driver) flushWrites() {
 		}
 		d.log.Debug("host: command published", "topic", topic, "metrics", len(metrics))
 	}
+}
+
+// setTemplateMember inserts a leaf metric at mo's member path inside a
+// template tree, creating the intermediate partial templates the path needs
+// and reusing any that are already there. Each level carries its own
+// TemplateRef, which is what makes the result a well-formed Sparkplug
+// template instance rather than an anonymous bag of metrics.
+func setTemplateMember(root *sparkplug.Template, mo memberOut, leaf sparkplug.Metric) {
+	cur := root
+	for i := 0; i < len(mo.path)-1; i++ {
+		seg := mo.path[i]
+		var next *sparkplug.Template
+		for j := range cur.Metrics {
+			if cur.Metrics[j].Name != seg {
+				continue
+			}
+			if t, ok := cur.Metrics[j].Value.(*sparkplug.Template); ok && t != nil {
+				next = t
+			}
+			break
+		}
+		if next == nil {
+			next = &sparkplug.Template{TemplateRef: mo.refs[i+1]}
+			cur.Metrics = append(cur.Metrics, sparkplug.Metric{
+				Name:     seg,
+				Datatype: spb.DataType_Template,
+				Value:    next,
+			})
+		}
+		cur = next
+	}
+	for j := range cur.Metrics {
+		if cur.Metrics[j].Name == leaf.Name {
+			cur.Metrics[j] = leaf
+			return
+		}
+	}
+	cur.Metrics = append(cur.Metrics, leaf)
 }
 
 func (d *Driver) markWritten(name string, v any) {

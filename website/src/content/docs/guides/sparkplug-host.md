@@ -65,7 +65,7 @@ sites:
   - node: W6                          # the Sparkplug edge_node_id
     metrics:
       - { name: Well/Level, type: Double }
-      - { name: Pump1,      type: Motor }              # a Template instance
+      - { name: Pump1,      type: Motor, writable: [Speed] }  # a Template instance
     devices:
       - device: plc1
         metrics:
@@ -113,6 +113,52 @@ metrics) or `spBv1.0/<group>/DCMD/<edge>/<device>` (device metrics), QoS
 node are dropped and counted (`Status.WriteDrops`) rather than queued — a
 command to a dark site is meaningless, and the operator is already seeing
 `__Online: false`.
+
+## Writing template members
+
+Most of the controls on a water-utility HMI live *inside* a UDT —
+`Motor1.START`, `AnalogInput.HSP`, `LevelControl.CTL1HSP`. A Template
+metric binds to one struct tag, and writing that struct back as a whole
+would clobber every member the site's own logic is driving. So a UDT is
+**never writable as a whole** — a `--writable` glob that matches a
+Template metric is a hard error — and its controls are bound **per
+member** instead:
+
+```yaml
+tags:
+  - { name: W6_Pump1,       node: W6, metric: Pump1, type: Motor }
+  - { name: W6_Pump1_Speed, node: W6, metric: Pump1, type: Motor,
+      member: Speed, writable: true }
+```
+
+`member:` is a dotted path into the binding's `types:` shape — `Speed`,
+or `Drive.Torque` to reach a nested template. The generated tag is a
+plain **scalar** carrying the leaf member's type
+(`W6_Pump1_Speed : LREAL`), so ST and the HMI bind it like any other
+setpoint. Member bindings are **output-only** (`writable: true` is
+required): reads keep coming from the metric's own struct tag, which
+already carries every member's live value, so a fleet does not pay for a
+duplicate input tag per member.
+
+A write publishes a **partial template** — the parent metric's name,
+carrying only that member — which Sparkplug B permits in NCMD/DCMD and
+which nautilus's own edge merges member by member into its tag store.
+Two members of the same UDT written in one coalesce window go out as one
+partial template, not two metrics sharing a name. Members the host never
+wrote are simply absent from the payload, so the site keeps them.
+
+Generate them with a `--writable` pattern containing a `.`, matched
+against `<metric>.<member.path>`:
+
+```bash
+nautilus sparkplug import --broker tcp://mqtt:1883 --group Plant \
+  --writable 'PLC1/Pump/SpeedSP,Motor1.START,*.HSP,*.LVL.CTL*SP'
+```
+
+Each match generates its own tag, named `<prefix>_<metric>_<member path>`
+— `Motor1.START` at site `W6` becomes `W6_Motor1_START : BOOL`. Offline,
+a `--sites` file says the same thing with a list instead of `true`:
+`{name: Motor1, type: Motor, writable: [START, LVL.CTL1HSP]}`.
 
 ## `/api/drivers`
 

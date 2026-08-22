@@ -23,10 +23,17 @@ types:
 sites:
   # W6 — a well: a level transmitter at node level, and one pump modeled as
   # a Template instance (Motor) with a writable speed setpoint.
+  #
+  # Pump1 is a UDT, and a UDT is never written as a whole — that would
+  # clobber every member the site's own logic is driving. Its controls are
+  # named per member instead: `writable: [Speed]` generates ONE scalar
+  # output tag, W6_Pump1_Speed, whose writes go out as an NCMD carrying a
+  # partial template (just Speed) that the edge merges into its Pump1 tag.
+  # Reads still come from the W6_Pump1 struct tag.
   - node: W6
     metrics:
       - { name: Well/Level,     type: Double }
-      - { name: Pump1,          type: Motor }
+      - { name: Pump1,          type: Motor, writable: [Speed] }
       - { name: Pump1/SpeedSP,  type: Double, writable: true, init: 0.0 }
 
   # BP2 — a booster station: node-level pressure instruments, plus a PLC

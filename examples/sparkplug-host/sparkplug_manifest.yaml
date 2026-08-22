@@ -41,6 +41,7 @@ tags:
       node: BP2
       device: ""
       metric: Booster/DischargePress
+      member: ""
       type: Double
       arraylen: 0
       writable: false
@@ -49,6 +50,7 @@ tags:
       node: BP2
       device: ""
       metric: Booster/SuctionPress
+      member: ""
       type: Double
       arraylen: 0
       writable: false
@@ -57,6 +59,7 @@ tags:
       node: BP2
       device: plc1
       metric: Pump/Fault
+      member: ""
       type: Boolean
       arraylen: 0
       writable: false
@@ -65,6 +68,7 @@ tags:
       node: BP2
       device: plc1
       metric: Pump/Run
+      member: ""
       type: Boolean
       arraylen: 0
       writable: false
@@ -73,6 +77,7 @@ tags:
       node: BP2
       device: plc1
       metric: Pump/SpeedSP
+      member: ""
       type: Double
       arraylen: 0
       writable: true
@@ -81,6 +86,7 @@ tags:
       node: CL1
       device: ""
       metric: Chlorine/AnalyzerFault
+      member: ""
       type: Boolean
       arraylen: 0
       writable: false
@@ -89,6 +95,7 @@ tags:
       node: CL1
       device: ""
       metric: Chlorine/ResidualPpm
+      member: ""
       type: Double
       arraylen: 0
       writable: false
@@ -97,14 +104,25 @@ tags:
       node: W6
       device: ""
       metric: Pump1
+      member: ""
       type: Motor
       arraylen: 0
       writable: false
+      init: null
+    - name: W6_Pump1_Speed
+      node: W6
+      device: ""
+      metric: Pump1
+      member: Speed
+      type: Motor
+      arraylen: 0
+      writable: true
       init: null
     - name: W6_Pump1_SpeedSP
       node: W6
       device: ""
       metric: Pump1/SpeedSP
+      member: ""
       type: Double
       arraylen: 0
       writable: true
@@ -113,6 +131,7 @@ tags:
       node: W6
       device: ""
       metric: Well/Level
+      member: ""
       type: Double
       arraylen: 0
       writable: false

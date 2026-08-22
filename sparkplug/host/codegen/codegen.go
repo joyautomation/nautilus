@@ -71,6 +71,14 @@ type Options struct {
 	Metrics []string
 	// Writable are the same shape of globs, marking matching bindings
 	// writable — the tags whose values go back out as NCMD/DCMD.
+	//
+	// A pattern containing "." is a MEMBER pattern: it is matched against
+	// "<metric>.<member.path>" (and its device-qualified form) and generates
+	// one scalar output tag per matching member of a Template metric —
+	// "Motor1.START", "*.HSP", "*.LVL.CTL*SP". A pattern with no "." marks
+	// the whole metric writable, which only a scalar metric can be: matching
+	// a Template as a whole is an ERROR, because writing the struct back
+	// would clobber the members the edge is driving.
 	Writable []string
 	// Layout is LayoutFlat (default) or LayoutStruct (rejected — see above).
 	Layout string
@@ -224,10 +232,13 @@ type site struct {
 type metric struct {
 	name string
 	typ  string
-	// writable/init come from a --sites file, which can state them; a birth
-	// cannot, so the broker path leaves them to the --writable globs.
+	// writable/members/init come from a --sites file, which can state them; a
+	// birth cannot, so the broker path leaves them to the --writable globs.
 	writable bool
-	init     any
+	// members are dotted member paths inside a Template metric, each of which
+	// becomes its own scalar output binding.
+	members []string
+	init    any
 }
 
 // buildNodes turns the harvested sites into manifest nodes, devices and
@@ -282,14 +293,26 @@ func buildNodes(m *host.Manifest, sites map[string]*site, order []string, opts O
 	}
 	m.Nodes = nodes
 
+	types := make(map[string]host.TypeDef, len(m.Types))
+	for _, td := range m.Types {
+		types[td.Name] = td
+	}
 	for _, edge := range order {
 		s := sites[edge]
 		for _, mt := range s.metrics {
-			m.Tags = append(m.Tags, binding(prefixes[edge], edge, "", mt, used, opts))
+			bs, err := bindings(prefixes[edge], edge, "", mt, used, opts, types)
+			if err != nil {
+				return err
+			}
+			m.Tags = append(m.Tags, bs...)
 		}
 		for _, id := range s.deviceIDs {
 			for _, mt := range s.devices[id] {
-				m.Tags = append(m.Tags, binding(prefixes[edge], edge, id, mt, used, opts))
+				bs, err := bindings(prefixes[edge], edge, id, mt, used, opts, types)
+				if err != nil {
+					return err
+				}
+				m.Tags = append(m.Tags, bs...)
 			}
 		}
 	}
@@ -297,8 +320,35 @@ func buildNodes(m *host.Manifest, sites map[string]*site, order []string, opts O
 	return nil
 }
 
-// binding composes one tag binding, claiming its name.
-func binding(prefix, edge, device string, mt metric, used map[string]bool, opts Options) host.Binding {
+// bindings composes the tag bindings one metric implies, claiming their
+// names: the metric's own binding, plus one scalar output binding per
+// writable MEMBER of a Template metric.
+func bindings(prefix, edge, device string, mt metric, used map[string]bool,
+	opts Options, types map[string]host.TypeDef) ([]host.Binding, error) {
+
+	_, isTemplate := types[mt.typ]
+	path := qualify(device, mt.name)
+
+	// Same matching rule as --metrics: a glob may name the metric alone
+	// ("Pump/*") or its device path ("PLC1/Pump/*"). Only the patterns
+	// WITHOUT a "." speak about the metric as a whole.
+	whole := mt.writable
+	for _, p := range opts.Writable {
+		if strings.Contains(p, host.MemberSep) {
+			continue
+		}
+		if selects(path, []string{p}) || selects(mt.name, []string{p}) {
+			whole = true
+			break
+		}
+	}
+	if whole && isTemplate {
+		return nil, fmt.Errorf("codegen: %s is a Template (%s) — templates are written per member: "+
+			"use metric.MEMBER (e.g. --writable %q) rather than the whole metric, "+
+			"which would clobber every member the edge is driving",
+			path, mt.typ, mt.name+"."+firstLeaf(types, mt.typ))
+	}
+
 	b := host.Binding{
 		Name:   claim(host.TagName(prefix, device, mt.name), used),
 		Node:   edge,
@@ -306,14 +356,112 @@ func binding(prefix, edge, device string, mt metric, used map[string]bool, opts 
 		Metric: mt.name,
 		Type:   mt.typ,
 	}
-	// Same matching rule as --metrics: a glob may name the metric alone
-	// ("Pump/*") or its device path ("PLC1/Pump/*").
-	b.Writable = mt.writable || (len(opts.Writable) > 0 &&
-		(selects(qualify(device, mt.name), opts.Writable) || selects(mt.name, opts.Writable)))
-	if b.Writable {
+	b.Writable = whole
+	if whole {
 		b.Init = mt.init
 	}
-	return b
+	out := []host.Binding{b}
+
+	// Member bindings. Candidates are the type's scalar leaves, walked in
+	// declaration order so the generated names are deterministic; a leaf is
+	// taken when the --sites file names it or a dotted --writable glob
+	// matches "<metric>.<leaf>" (or its device-qualified form).
+	leaves := leafPaths(types, mt.typ)
+	named := make(map[string]bool, len(mt.members))
+	for _, s := range mt.members {
+		named[s] = true
+	}
+	if !isTemplate && len(mt.members) > 0 {
+		return nil, fmt.Errorf("codegen: %s is a %s, not a Template — writable: names members (%s) "+
+			"but a scalar metric has none; use writable: true",
+			path, mt.typ, strings.Join(mt.members, ", "))
+	}
+	seen := map[string]bool{}
+	for _, leaf := range leaves {
+		wanted := named[leaf]
+		if !wanted {
+			for _, p := range opts.Writable {
+				if !strings.Contains(p, host.MemberSep) {
+					continue
+				}
+				cand := mt.name + host.MemberSep + leaf
+				if selects(cand, []string{p}) || selects(qualify(device, cand), []string{p}) {
+					wanted = true
+					break
+				}
+			}
+		}
+		if !wanted {
+			continue
+		}
+		seen[leaf] = true
+		out = append(out, host.Binding{
+			Name:     claim(host.MemberTagName(prefix, device, mt.name, leaf), used),
+			Node:     edge,
+			Device:   device,
+			Metric:   mt.name,
+			Member:   leaf,
+			Type:     mt.typ,
+			Writable: true,
+		})
+	}
+	// A named member that is not a scalar leaf of the type is a typo or a
+	// stale path: fail loud rather than generate nothing for it.
+	for _, s := range mt.members {
+		if !seen[s] {
+			return nil, fmt.Errorf("codegen: %s: type %s has no scalar member %q (members: %s)",
+				path, mt.typ, s, strings.Join(leaves, ", "))
+		}
+	}
+	return out, nil
+}
+
+// leafPaths lists the dotted paths to every SCALAR leaf of a manifest type,
+// depth-first in declaration order — the candidate set a dotted --writable
+// glob matches against, and the set a --sites writable: list must name from.
+// A nested template contributes its own leaves under its member name; a
+// cyclic types: block (which Manifest.Validate rejects) terminates here too.
+func leafPaths(types map[string]host.TypeDef, typ string) []string {
+	var out []string
+	var walk func(t, prefix string, stack []string)
+	walk = func(t, prefix string, stack []string) {
+		td, ok := types[t]
+		if !ok {
+			return
+		}
+		for _, s := range stack {
+			if s == t {
+				return
+			}
+		}
+		inner := append(stack, t)
+		for _, f := range td.Fields {
+			if f.ArrayLen > 0 {
+				continue
+			}
+			p := f.Name
+			if prefix != "" {
+				p = prefix + host.MemberSep + f.Name
+			}
+			if _, nested := types[f.Type]; nested {
+				walk(f.Type, p, inner)
+				continue
+			}
+			if representable(f.Type) {
+				out = append(out, p)
+			}
+		}
+	}
+	walk(typ, "", nil)
+	return out
+}
+
+// firstLeaf names one member of a type, for the "use metric.MEMBER" hint.
+func firstLeaf(types map[string]host.TypeDef, typ string) string {
+	if l := leafPaths(types, typ); len(l) > 0 {
+		return l[0]
+	}
+	return "MEMBER"
 }
 
 // claim resolves one generated name against the names already taken,
@@ -764,7 +912,16 @@ func varFields(m host.Manifest) []stgen.FieldDef {
 		}
 	}
 	for _, b := range m.Tags {
-		all = append(all, entry{b.Name, stType(b.Type, b.ArrayLen)})
+		// A member binding is a SCALAR tag carrying the LEAF member's type,
+		// not the enclosing template's — declaring it as the struct would not
+		// compile against the value the driver writes.
+		typ := b.Type
+		if b.Member != "" {
+			if f, _, err := m.ResolveMember(b.Type, b.Member); err == nil {
+				typ = f.Type
+			}
+		}
+		all = append(all, entry{b.Name, stType(typ, b.ArrayLen)})
 	}
 	sort.SliceStable(all, func(i, j int) bool { return all[i].name < all[j].name })
 	out := make([]stgen.FieldDef, 0, len(all))

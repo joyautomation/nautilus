@@ -538,6 +538,151 @@ func TestMqttWriteOutputsSendsDCMD(t *testing.T) {
 	}
 }
 
+// bringW6Online births W6 so a command is not dropped as "write to a dark
+// site", and returns once the driver has seen it.
+func bringW6Online(t *testing.T, d *Driver, addr, id string) {
+	t.Helper()
+	edge := edgePublisher(t, addr, id)
+	publishPayload(t, edge, "spBv1.0/G/NBIRTH/W6", sparkplug.Payload{
+		Timestamp: uint64(time.Now().UnixMilli()),
+		Metrics: []sparkplug.Metric{
+			{Name: bdSeqMetric, Datatype: spb.DataType_Int64, Value: int64(1)},
+		},
+	})
+	waitForValue(t, d, "W6__Online", func(v any) bool { return v == true })
+}
+
+// tmplOf asserts a metric is a Template and returns it.
+func tmplOf(t *testing.T, m sparkplug.Metric) *sparkplug.Template {
+	t.Helper()
+	if m.Datatype != spb.DataType_Template {
+		t.Fatalf("metric %q datatype = %v, want Template", m.Name, m.Datatype)
+	}
+	tm, ok := m.Value.(*sparkplug.Template)
+	if !ok || tm == nil {
+		t.Fatalf("metric %q value = %T, want *sparkplug.Template", m.Name, m.Value)
+	}
+	return tm
+}
+
+// memberOf finds one member of a template by name.
+func memberOf(t *testing.T, tm *sparkplug.Template, name string) sparkplug.Metric {
+	t.Helper()
+	for _, m := range tm.Metrics {
+		if m.Name == name {
+			return m
+		}
+	}
+	t.Fatalf("template (ref %q) has no member %q; has %d", tm.TemplateRef, name, len(tm.Metrics))
+	return sparkplug.Metric{}
+}
+
+// TestMqttWriteMemberSendsPartialTemplate — writing a member binding puts an
+// NCMD on the wire naming the PARENT metric and carrying ONLY that member.
+// The whole point: the edge merges it, so the members it is driving survive.
+func TestMqttWriteMemberSendsPartialTemplate(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = srv.Close() })
+
+	obs := newObserver(t, addr, "obs-member", "spBv1.0/G/NCMD/+")
+	d := startDriver(t, testConfig(addr, "h-member"))
+	waitConnected(t, d)
+	bringW6Online(t, d, addr, "edge-member")
+
+	if err := d.WriteOutputs(map[string]any{"W6_Pump1_Speed": 61.5}); err != nil {
+		t.Fatalf("WriteOutputs: %v", err)
+	}
+
+	msg := obs.wait(t, "NCMD", func(m recMsg) bool {
+		if m.topic != "spBv1.0/G/NCMD/W6" {
+			return false
+		}
+		p, err := sparkplug.DecodePayload(m.payload)
+		return err == nil && len(p.Metrics) == 1 && p.Metrics[0].Name == "Pump1"
+	})
+	if msg.retain {
+		t.Error("NCMD must not be retained")
+	}
+	p, err := sparkplug.DecodePayload(msg.payload)
+	if err != nil {
+		t.Fatalf("decode NCMD: %v", err)
+	}
+	tm := tmplOf(t, p.Metrics[0])
+	if tm.TemplateRef != "Motor" {
+		t.Errorf("templateRef = %q, want Motor", tm.TemplateRef)
+	}
+	if len(tm.Metrics) != 1 {
+		t.Fatalf("template carries %d members, want exactly 1 (a PARTIAL update)", len(tm.Metrics))
+	}
+	speed := memberOf(t, tm, "Speed")
+	if speed.Datatype != spb.DataType_Double || speed.Value != 61.5 {
+		t.Errorf("Speed = %v (%v), want 61.5 Double", speed.Value, speed.Datatype)
+	}
+}
+
+// TestMqttWriteNestedMembersCoalesce — two member writes to the SAME metric in
+// one coalesce window become ONE partial template (two metrics sharing a name
+// would be ambiguous), and a nested path builds the intermediate template with
+// its own TemplateRef.
+func TestMqttWriteNestedMembersCoalesce(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = srv.Close() })
+
+	obs := newObserver(t, addr, "obs-nested", "spBv1.0/G/NCMD/+")
+	d := startDriver(t, testConfig(addr, "h-nested"))
+	waitConnected(t, d)
+	bringW6Online(t, d, addr, "edge-nested")
+
+	if err := d.WriteOutputs(map[string]any{
+		"W6_Skid1_Drive_Run":   true,
+		"W6_Skid1_Drive_Speed": 1450.0,
+	}); err != nil {
+		t.Fatalf("WriteOutputs: %v", err)
+	}
+
+	msg := obs.wait(t, "NCMD", func(m recMsg) bool {
+		if m.topic != "spBv1.0/G/NCMD/W6" {
+			return false
+		}
+		p, err := sparkplug.DecodePayload(m.payload)
+		return err == nil && len(p.Metrics) == 1 && p.Metrics[0].Name == "Skid1"
+	})
+	p, err := sparkplug.DecodePayload(msg.payload)
+	if err != nil {
+		t.Fatalf("decode NCMD: %v", err)
+	}
+	if len(p.Metrics) != 1 {
+		t.Fatalf("NCMD has %d metrics, want 1 — both members belong to Skid1", len(p.Metrics))
+	}
+	skid := tmplOf(t, p.Metrics[0])
+	if skid.TemplateRef != "Skid" {
+		t.Errorf("templateRef = %q, want Skid", skid.TemplateRef)
+	}
+	if len(skid.Metrics) != 1 {
+		t.Fatalf("Skid template carries %d members, want 1 (Drive only)", len(skid.Metrics))
+	}
+	drive := tmplOf(t, memberOf(t, skid, "Drive"))
+	if drive.TemplateRef != "Motor" {
+		t.Errorf("nested templateRef = %q, want Motor", drive.TemplateRef)
+	}
+	if len(drive.Metrics) != 2 {
+		t.Fatalf("Drive carries %d members, want 2 (Run + Speed merged)", len(drive.Metrics))
+	}
+	if run := memberOf(t, drive, "Run"); run.Value != true {
+		t.Errorf("Drive.Run = %v, want true", run.Value)
+	}
+	if sp := memberOf(t, drive, "Speed"); sp.Value != 1450.0 {
+		t.Errorf("Drive.Speed = %v, want 1450", sp.Value)
+	}
+	// Label is a sibling the host never wrote: it must not be on the wire at
+	// all, or the edge's merge would overwrite whatever the site holds.
+	for _, m := range drive.Metrics {
+		if m.Name == "Label" {
+			t.Error("a member the host never wrote leaked into the partial template")
+		}
+	}
+}
+
 func TestMqttWriteToOfflineNodeIsDropped(t *testing.T) {
 	srv, addr := startBroker(t, "")
 	t.Cleanup(func() { _ = srv.Close() })

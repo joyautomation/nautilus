@@ -267,6 +267,57 @@ tags:
 `,
 		want: "both bind metric W6/A",
 	}, {
+		name: "member on a scalar type",
+		src: `
+nodes: [{edgenode: W6}]
+tags: [{ name: W6_A_X, node: W6, metric: A, member: X, type: Double, writable: true }]
+`,
+		want: "requires a types: template type",
+	}, {
+		name: "member binding must be writable",
+		src: `
+types: [{name: Motor, fields: [{name: Speed, type: Double}]}]
+nodes: [{edgenode: W6}]
+tags: [{ name: W6_M_Speed, node: W6, metric: M, member: Speed, type: Motor }]
+`,
+		want: "member bindings are output-only",
+	}, {
+		name: "member path does not resolve",
+		src: `
+types: [{name: Motor, fields: [{name: Speed, type: Double}]}]
+nodes: [{edgenode: W6}]
+tags: [{ name: W6_M_Nope, node: W6, metric: M, member: Nope, type: Motor, writable: true }]
+`,
+		want: `type "Motor" has no member "Nope"`,
+	}, {
+		name: "member path stops on a nested template",
+		src: `
+types:
+    - {name: Motor, fields: [{name: Speed, type: Double}]}
+    - {name: Skid,  fields: [{name: Drive, type: Motor}]}
+nodes: [{edgenode: W6}]
+tags: [{ name: W6_S_Drive, node: W6, metric: S, member: Drive, type: Skid, writable: true }]
+`,
+		want: "is a nested template",
+	}, {
+		name: "member path continues past a scalar",
+		src: `
+types: [{name: Motor, fields: [{name: Speed, type: Double}]}]
+nodes: [{edgenode: W6}]
+tags: [{ name: W6_M_X, node: W6, metric: M, member: Speed.Deeper, type: Motor, writable: true }]
+`,
+		want: "not a nested template",
+	}, {
+		name: "one member bound twice",
+		src: `
+types: [{name: Motor, fields: [{name: Speed, type: Double}]}]
+nodes: [{edgenode: W6}]
+tags:
+    - { name: W6_M_Speed,  node: W6, metric: M, member: Speed, type: Motor, writable: true }
+    - { name: W6_M_Speed2, node: W6, metric: M, member: Speed, type: Motor, writable: true }
+`,
+		want: "both bind member Speed of metric W6/M",
+	}, {
 		name: "binding without a node",
 		src: `
 tags: [{ name: W6_A, metric: A, type: Double }]
@@ -329,6 +380,81 @@ types:
 				t.Errorf("error %q should be prefixed host:", err)
 			}
 		})
+	}
+}
+
+// TestValidateMemberBindings — the shape a fleet actually uses: one struct
+// INPUT binding on a Template metric plus several member OUTPUT bindings on
+// the same metric. They must coexist (the metric feeds one tag inbound and
+// several tags outbound), and the members must resolve to the leaf's own
+// datatype so the generated tag is a scalar, not a copy of the struct.
+func TestValidateMemberBindings(t *testing.T) {
+	m := mustParse(t, `
+group: G
+types:
+    - name: Motor
+      fields:
+        - { name: Speed, type: Double }
+        - { name: START, type: Boolean }
+    - name: Skid
+      fields:
+        - { name: Hours, type: Int32 }
+        - { name: Drive, type: Motor }
+nodes: [{edgenode: W6}]
+tags:
+    - { name: W6_M,          node: W6, metric: M, type: Skid }
+    - { name: W6_M_Hours,    node: W6, metric: M, member: Hours,       type: Skid, writable: true }
+    - { name: W6_M_Dr_START, node: W6, metric: M, member: Drive.START, type: Skid, writable: true }
+`)
+	if err := m.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+
+	// The nested path resolves to Boolean, and its TemplateRef chain is the
+	// one the wire form wraps the leaf in.
+	f, refs, err := m.ResolveMember("Skid", "Drive.START")
+	if err != nil {
+		t.Fatalf("ResolveMember: %v", err)
+	}
+	if f.Type != "Boolean" {
+		t.Errorf("leaf type = %q, want Boolean", f.Type)
+	}
+	if len(refs) != 2 || refs[0] != "Skid" || refs[1] != "Motor" {
+		t.Errorf("refs = %v, want [Skid Motor]", refs)
+	}
+
+	// The member tags are scalar outputs carrying the LEAF's zero, and the
+	// struct binding stays an input.
+	specs := map[string]TagSpec{}
+	for _, s := range m.TagSpecs() {
+		specs[s.Name] = s
+	}
+	if s := specs["W6_M"]; s.Role != RoleInput || s.Type != "Skid" {
+		t.Errorf("W6_M = %+v, want an input typed Skid", s)
+	}
+	if s := specs["W6_M_Hours"]; s.Role != RoleOutput || s.Type != "" || s.Init != int64(0) || s.Datatype != "Int32" {
+		t.Errorf("W6_M_Hours = %+v, want a scalar Int32 output initialised 0", s)
+	}
+	if s := specs["W6_M_Dr_START"]; s.Role != RoleOutput || s.Type != "" || s.Init != false || s.Datatype != "Boolean" {
+		t.Errorf("W6_M_Dr_START = %+v, want a scalar Boolean output initialised false", s)
+	}
+
+	// The driver indexes them as outputs only: nothing inbound routes to a
+	// member, so the struct binding keeps sole ownership of the metric.
+	d := &Driver{manifest: m}
+	if err := d.buildIndexes(); err != nil {
+		t.Fatalf("buildIndexes: %v", err)
+	}
+	if got := d.OutputNames(); len(got) != 3 {
+		t.Errorf("OutputNames() = %v, want the two members plus __Rebirth", got)
+	}
+	for _, in := range d.InputNames() {
+		if in == "W6_M_Hours" || in == "W6_M_Dr_START" {
+			t.Errorf("member binding %q leaked into the input set", in)
+		}
+	}
+	if b := d.byMetric[metricKey{EdgeNode: "W6", Metric: "M"}]; b.Name != "W6_M" {
+		t.Errorf("metric M routes inbound to %q, want the struct binding W6_M", b.Name)
 	}
 }
 

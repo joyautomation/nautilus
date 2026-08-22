@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/sparkplug/spb"
@@ -122,9 +123,106 @@ func (m Manifest) Bindings() []Binding {
 		if a.Device != b.Device {
 			return a.Device < b.Device
 		}
-		return a.Metric < b.Metric
+		if a.Metric != b.Metric {
+			return a.Metric < b.Metric
+		}
+		return a.Member < b.Member
 	})
 	return out
+}
+
+// ── Template members ─────────────────────────────────────────────────────
+
+// MemberSep is the separator in a binding's member path. Sparkplug member
+// names are plain identifiers inside a template, so "." is free to mean
+// "step into the nested template".
+const MemberSep = "."
+
+// MemberPath splits a binding's dotted member path into its segments.
+func MemberPath(member string) []string { return strings.Split(member, MemberSep) }
+
+// MemberTagName composes the nautilus tag name for a member binding:
+// the metric's own tag name plus the sanitized member path.
+//
+//	MemberTagName("W6", "", "Pump1", "Speed")     → "W6_Pump1_Speed"
+//	MemberTagName("W6", "", "LVL", "CTL1.HSP")    → "W6_LVL_CTL1_HSP"
+func MemberTagName(prefix, device, metric, member string) string {
+	base := TagName(prefix, device, metric)
+	if member == "" {
+		return base
+	}
+	for _, seg := range MemberPath(member) {
+		if s := sanitizeRunes(seg); s != "" {
+			base += "_" + s
+		}
+	}
+	return identGuard(base)
+}
+
+// ResolveMember walks a dotted member path through the manifest's types:
+// block and returns the leaf FieldDef plus the type name at every level of
+// the nesting — refs[0] is root, refs[i] the nested type path[i-1] steps
+// into, which is exactly the TemplateRef chain the wire form needs.
+//
+// It walks the DECLARED types rather than the lowered ir.StructDefs so the
+// leaf keeps its Sparkplug datatype name (Int32, Float), which the generated
+// tag file's init: and the wire encoding both want — the IR has already
+// collapsed those to int64/float64.
+func (m Manifest) ResolveMember(root, member string) (FieldDef, []string, error) {
+	if member == "" {
+		return FieldDef{}, nil, fmt.Errorf("member path is empty")
+	}
+	idx := m.typeIndex()
+	td, ok := idx[root]
+	if !ok {
+		return FieldDef{}, nil, fmt.Errorf("member requires a types: template type, and %q is not one", root)
+	}
+	segs := MemberPath(member)
+	refs := []string{root}
+	for i, seg := range segs {
+		if seg == "" {
+			return FieldDef{}, nil, fmt.Errorf("member path %q has an empty segment", member)
+		}
+		var f FieldDef
+		found := false
+		for _, cand := range td.Fields {
+			if cand.Name == seg {
+				f, found = cand, true
+				break
+			}
+		}
+		if !found {
+			return FieldDef{}, nil, fmt.Errorf("type %q has no member %q (in path %q)", td.Name, seg, member)
+		}
+		if f.ArrayLen > 0 {
+			return FieldDef{}, nil, fmt.Errorf("member %q is an array; arrays unsupported",
+				strings.Join(segs[:i+1], MemberSep))
+		}
+		last := i == len(segs)-1
+		if _, isScalar := scalarType(f.Type); isScalar {
+			if !last {
+				return FieldDef{}, nil, fmt.Errorf("member %q is a %s, not a nested template — %q cannot continue past it",
+					strings.Join(segs[:i+1], MemberSep), f.Type, member)
+			}
+			return f, refs, nil
+		}
+		nested, ok := idx[f.Type]
+		if !ok {
+			if dt, isDT := datatypeOf(f.Type); isDT {
+				return FieldDef{}, nil, fmt.Errorf("member %q: Sparkplug datatype %v is not representable as a nautilus value",
+					strings.Join(segs[:i+1], MemberSep), dt)
+			}
+			return FieldDef{}, nil, fmt.Errorf("member %q references unknown type %q",
+				strings.Join(segs[:i+1], MemberSep), f.Type)
+		}
+		if last {
+			return FieldDef{}, nil, fmt.Errorf("member %q is a nested template (%s), not a value — "+
+				"bind one of its own members (%s.<member>)", member, f.Type, member)
+		}
+		td = nested
+		refs = append(refs, nested.Name)
+	}
+	return FieldDef{}, nil, fmt.Errorf("member path %q did not resolve", member)
 }
 
 // ── Validation ───────────────────────────────────────────────────────────
@@ -217,7 +315,7 @@ func (m Manifest) validateNodes() (map[string]Node, map[string]bool, error) {
 // the synthesized companion tags against the bindings.
 func (m Manifest) validateBindings(types map[string]bool, nodes map[string]Node, devices map[string]bool) error {
 	byName := map[string]bool{}
-	byMetric := map[metricKey]string{}
+	byMetric := map[bindKey]string{}
 
 	for i, b := range m.Tags {
 		switch {
@@ -263,12 +361,38 @@ func (m Manifest) validateBindings(types map[string]bool, nodes map[string]Node,
 			return fmt.Errorf("host: binding %q references unknown type %q", b.Name, b.Type)
 		}
 
+		// A member binding addresses one leaf inside a Template metric. It is
+		// output-only by construction (see Binding.Member), so it needs a
+		// types: type to resolve the path in and a writable flag to mean
+		// anything at all.
+		if b.Member != "" {
+			if _, isScalar := scalarType(b.Type); isScalar {
+				return fmt.Errorf("host: binding %q sets member %q on type %s — "+
+					"member: requires a types: template type, not a Sparkplug datatype",
+					b.Name, b.Member, b.Type)
+			}
+			if !b.Writable {
+				return fmt.Errorf("host: binding %q sets member %q but is not writable — "+
+					"member bindings are output-only; reads come from the metric's own struct tag",
+					b.Name, b.Member)
+			}
+			if _, _, err := m.ResolveMember(b.Type, b.Member); err != nil {
+				return fmt.Errorf("host: binding %q: %w", b.Name, err)
+			}
+		}
+
 		// One metric feeding two tags cannot be routed: the inbound index is
-		// keyed by (node, device, metric).
-		k := metricKey{EdgeNode: b.Node, Device: b.Device, Metric: b.Metric}
+		// keyed by (node, device, metric). Member bindings claim (metric,
+		// member) instead, so a struct binding and its members coexist while
+		// two bindings on the same member still collide.
+		k := bindKey{metricKey{EdgeNode: b.Node, Device: b.Device, Metric: b.Metric}, b.Member}
 		if prev, dup := byMetric[k]; dup {
+			if b.Member != "" {
+				return fmt.Errorf("host: bindings %q and %q both bind member %s of metric %s",
+					prev, b.Name, b.Member, metricPath(k.metricKey))
+			}
 			return fmt.Errorf("host: bindings %q and %q both bind metric %s",
-				prev, b.Name, metricPath(k))
+				prev, b.Name, metricPath(k.metricKey))
 		}
 		byMetric[k] = b.Name
 	}

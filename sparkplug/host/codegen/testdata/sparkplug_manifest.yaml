@@ -43,6 +43,7 @@ tags:
       node: W6
       device: PLC1
       metric: Pump/Run
+      member: ""
       type: Boolean
       arraylen: 0
       writable: false
@@ -51,6 +52,7 @@ tags:
       node: W6
       device: PLC1
       metric: Pump/SpeedSP
+      member: ""
       type: Double
       arraylen: 0
       writable: true
@@ -59,14 +61,25 @@ tags:
       node: W6
       device: ""
       metric: Pump1
+      member: ""
       type: Motor
       arraylen: 0
       writable: false
+      init: null
+    - name: W6_Pump1_Speed
+      node: W6
+      device: ""
+      metric: Pump1
+      member: Speed
+      type: Motor
+      arraylen: 0
+      writable: true
       init: null
     - name: W6_Site_Name
       node: W6
       device: ""
       metric: Site Name
+      member: ""
       type: String
       arraylen: 0
       writable: false
@@ -75,14 +88,25 @@ tags:
       node: W6
       device: ""
       metric: Skid A
+      member: ""
       type: Skid
       arraylen: 0
       writable: false
+      init: null
+    - name: W6_Skid_A_Main_Run
+      node: W6
+      device: ""
+      metric: Skid A
+      member: Main.Run
+      type: Skid
+      arraylen: 0
+      writable: true
       init: null
     - name: W6_Well_LastSample
       node: W6
       device: ""
       metric: Well/LastSample
+      member: ""
       type: DateTime
       arraylen: 0
       writable: false
@@ -91,6 +115,7 @@ tags:
       node: W6
       device: ""
       metric: Well/Level
+      member: ""
       type: Double
       arraylen: 0
       writable: false
@@ -99,14 +124,25 @@ tags:
       node: W7
       device: ""
       metric: Pump1
+      member: ""
       type: Motor
       arraylen: 0
       writable: false
+      init: null
+    - name: W7_Pump1_Speed
+      node: W7
+      device: ""
+      metric: Pump1
+      member: Speed
+      type: Motor
+      arraylen: 0
+      writable: true
       init: null
     - name: W7_Well_Level
       node: W7
       device: ""
       metric: Well/Level
+      member: ""
       type: Double
       arraylen: 0
       writable: false

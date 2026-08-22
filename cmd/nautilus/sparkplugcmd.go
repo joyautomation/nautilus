@@ -60,7 +60,9 @@ Import flags:
   --metrics     Comma-separated globs selecting metrics, matched against the
                 metric name ("Well/Level") and its device path ("PLC1/Pump/Run")
   --writable    Same shape of globs, marking the matching tags writable —
-                their values go back out as NCMD/DCMD
+                their values go back out as NCMD/DCMD. A pattern containing
+                "." names a template MEMBER instead of a whole metric (see
+                "Writing template members" below).
   --sites       Generate from a site list instead of a broker (see below)
   --layout      flat (default). struct is not yet supported.
   --prefix      node (default: tag names start with the edge_node_id), none,
@@ -74,6 +76,23 @@ Import flags:
 Globs are path.Match patterns: "*" does not cross "/", so a folder-shaped
 metric name needs "Pump/*" rather than "Pump*".
 
+Writing template members:
+  A Template (UDT) metric cannot be written as a whole — the edge is driving
+  its other members, and a whole-struct NCMD would clobber them. So a
+  --writable pattern that matches a Template metric is an ERROR, and its
+  controls are named per member instead. A pattern containing "." is matched
+  against "<metric>.<member.path>" (and its device path):
+
+    --writable 'PLC1/Pump/SpeedSP'          a scalar metric, written whole
+    --writable 'Motor1.START'               one member of one UDT
+    --writable '*.HSP,*.LVL.CTL*SP'         that member of every UDT that has it
+
+  Each match generates its OWN scalar output tag, named
+  <prefix>_<metric>_<member path>:  Motor1.START -> W6_Motor1_START : BOOL.
+  A write publishes a partial template carrying only that member. Member tags
+  are output-only — reads come from the metric's own struct tag, which already
+  carries every member's live value.
+
 --sites file (offline generation):
   group: PomonaWRD
   types:
@@ -86,7 +105,7 @@ metric name needs "Pump/*" rather than "Pump*".
       prefix: W6               # optional; default sanitize(node)
       metrics:                 # node-level metrics (NBIRTH/NDATA)
         - {name: Well/Level, type: Double}
-        - {name: Pump1,      type: Motor}     # a template instance
+        - {name: Pump1,      type: Motor, writable: [Speed]}
       devices:
         - device: PLC1
           metrics:
@@ -97,6 +116,10 @@ metric name needs "Pump/*" rather than "Pump*".
   Double, String, Text, UUID) or one of the types: entries. Keys are the
   lowercased Go field names and unknown keys are an error, exactly like
   sparkplug_manifest.yaml.
+
+  writable: true marks a SCALAR metric an output. A Template metric takes a
+  list of dotted member paths instead — writable: [START, LVL.CTL1HSP] — one
+  output tag per member; init: applies only to the whole-metric form.
 `
 
 func runSparkplug(args []string) int {

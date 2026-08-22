@@ -17,6 +17,13 @@ VAR_EXTERNAL
     W6_Well_Level       : LREAL;
     WellLowLevelSP      : LREAL;
     WellLowLevelAlm     : BOOL;
+
+    (* A MEMBER output: W6_Pump1_Speed writes Pump1.Speed inside W6's UDT.
+       Manifest `member: Speed` on the Pump1 binding makes it a plain LREAL
+       here; the driver sends an NCMD carrying a partial template, so the
+       members W6 is driving itself (Run) are never touched. *)
+    W6_Pump1_Speed      : LREAL;
+    PumpSpeedCmd        : LREAL;
 END_VAR
 VAR
     LevelLow : TON; (* 10 s proven — a level glitch on the wire, or one
@@ -38,4 +45,13 @@ AnyPumpRunning := (W6__Online AND W6_Pump1.Run) OR (BP2__Online AND BP2_plc1_Pum
 
 LevelLow(IN := W6__Online AND (W6_Well_Level < WellLowLevelSP), PT := T#10S);
 WellLowLevelAlm := LevelLow.Q;
+
+(* Forward the operator's speed command into W6's pump UDT, interlocked on
+   __Online. Holding 0 while the site is dark means a site coming back does
+   not inherit a stale command the operator has long since forgotten. *)
+IF W6__Online THEN
+    W6_Pump1_Speed := PumpSpeedCmd;
+ELSE
+    W6_Pump1_Speed := 0.0;
+END_IF;
 END_PROGRAM
