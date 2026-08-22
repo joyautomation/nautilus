@@ -1,6 +1,8 @@
 package project
 
 import (
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -8,6 +10,7 @@ import (
 
 	"github.com/joyautomation/nautilus/eip"
 	"github.com/joyautomation/nautilus/runtime"
+	sphost "github.com/joyautomation/nautilus/sparkplug/host"
 )
 
 func eipHealthLike(connected bool, lastErr string, polls, pollErrors uint64) eip.Health {
@@ -151,6 +154,7 @@ sparkplug:
   broker: "tcp://localhost:1883"
   group-id: Joy
   device: plc
+  store-forward: 5000
   default-class: { deadband: 0.5, max-interval: 30s }
   classes:
     fast: { deadband: 0.1, max-interval: 5s }
@@ -203,5 +207,172 @@ func TestEIPStatusStates(t *testing.T) {
 	connecting := eipStatus(eipHealthLike(false, "", 0, 0))
 	if connecting.State != "connecting" {
 		t.Fatalf("connecting: %+v", connecting)
+	}
+}
+
+// hostStatusLike is one host snapshot: connected, with `nodes` sites of
+// which `online` have birthed and are up.
+func hostStatusLike(connected bool, nodes, online int) sphost.Status {
+	st := sphost.Status{
+		Broker: "tcp://mqtt:1883", HostID: "central", Groups: []string{"PomonaWRD"},
+		Connected: connected, Msgs: 42,
+	}
+	for i := range nodes {
+		n := sphost.NodeStatus{
+			Group: "PomonaWRD", EdgeNode: fmt.Sprintf("W%d", i+1),
+			Online: i < online, BirthMs: time.Now().UnixMilli(), Metrics: 12,
+		}
+		st.Nodes = append(st.Nodes, n)
+	}
+	return st
+}
+
+func TestHostStatusStates(t *testing.T) {
+	// Broker down → error, whatever the node rows say.
+	errored := hostStatusLike(false, 2, 2)
+	errored.LastError = "connection refused"
+	if s := hostStatus(errored); s.State != "error" || s.Kind != "sparkplug-host" || s.LastError == "" {
+		t.Fatalf("broker down: %+v", s)
+	}
+
+	// Connected but nothing has birthed → connecting. Births are not
+	// retained, so this is the normal first second of a host's life.
+	connecting := hostStatusLike(true, 2, 0)
+	for i := range connecting.Nodes {
+		connecting.Nodes[i].BirthMs = 0
+	}
+	if s := hostStatus(connecting); s.State != "connecting" {
+		t.Fatalf("no births yet: %+v", s)
+	}
+
+	// A dark site degrades the whole driver — that is the alarm the HMI's
+	// comms page exists to raise.
+	if s := hostStatus(hostStatusLike(true, 3, 2)); s.State != "degraded" {
+		t.Fatalf("one site offline must be degraded: %+v", s)
+	}
+
+	// Strict discovery seeing an unbound metric degrades it too, even with
+	// every site up: the manifest and the wire disagree.
+	strict := hostStatusLike(true, 2, 2)
+	strict.Degraded, strict.Unknown = true, 3
+	if s := hostStatus(strict); s.State != "degraded" {
+		t.Fatalf("strict discovery: %+v", s)
+	}
+
+	all := hostStatus(hostStatusLike(true, 2, 2))
+	if all.State != "connected" {
+		t.Fatalf("all sites up: %+v", all)
+	}
+	if all.Detail != "tcp://mqtt:1883 · PomonaWRD" {
+		t.Fatalf("detail = %q", all.Detail)
+	}
+	if all.Name != "central" {
+		t.Fatalf("name = %q, want the host id", all.Name)
+	}
+	var sites string
+	for _, m := range all.Metrics {
+		if m.Label == "sites online" {
+			sites = m.Text
+		}
+	}
+	if sites != "2 / 2" {
+		t.Fatalf("sites online = %q", sites)
+	}
+}
+
+// Every edge node is a Devices row, and its devices are sub-rows flattened
+// as "<edge>/<device>" — which is what makes 60 sites' comms status render
+// with no HMI change at all.
+func TestHostStatusDeviceRows(t *testing.T) {
+	st := hostStatusLike(true, 2, 1)
+	st.Nodes[0].Devices = []sphost.DeviceStatus{{ID: "PLC1", Online: true, Metrics: 5}}
+	s := hostStatus(st)
+	var ids []string
+	for _, d := range s.Devices {
+		ids = append(ids, d.ID)
+	}
+	want := []string{"W1", "W1/PLC1", "W2"}
+	if !reflect.DeepEqual(ids, want) {
+		t.Fatalf("device rows = %v, want %v", ids, want)
+	}
+	if !strings.HasPrefix(s.Devices[0].Detail, "12 tags · born ") {
+		t.Fatalf("online site detail = %q", s.Devices[0].Detail)
+	}
+	if s.Devices[2].Detail != "offline" {
+		t.Fatalf("offline site detail = %q", s.Devices[2].Detail)
+	}
+	if _, ok := s.Extra["nodes"]; !ok {
+		t.Fatal("extra.nodes must carry the full node rows for a richer page")
+	}
+}
+
+// The sparkplug-host driver builds from the manifest tier with no broker
+// anywhere — the guarantee `nautilus check` and `nautilus build` rest on —
+// and DriverStatus picks it up so /api/drivers reports the sites.
+func TestLoadSparkplugHostDriver(t *testing.T) {
+	files := fsys(strings.Replace(manifest, "driver:\n  type: memory\n", "", 1) + `
+driver:
+  type: sparkplug-host
+  broker: "tcp://mqtt.invalid:1883"
+  group-id: PomonaWRD
+  host-id: pomona-central
+  manifest: sparkplug_manifest.yaml
+  primary: true
+  state-form: both
+  reorder-timeout: 5s
+  stale-after: 2m
+  on-unknown: log
+  rebirth-on-start: false
+`)
+	files["sparkplug_manifest.yaml"] = &fstest.MapFile{Data: []byte(`group: PomonaWRD
+nodes:
+    - edgenode: W6
+tags:
+    - { name: W6_Well_Level, node: W6, device: "", metric: Well/Level, type: Double, arraylen: 0, writable: false }
+`)}
+	p, err := Load(files, "")
+	if err != nil {
+		t.Fatalf("a sparkplug-host project must load with no broker: %v", err)
+	}
+	drv, ok := p.Runtime.Driver.(*sphost.Driver)
+	if !ok {
+		t.Fatalf("driver = %T, want *host.Driver", p.Runtime.Driver)
+	}
+	// The manifest's binding plus the synthesized companions.
+	if got := drv.InputNames(); !reflect.DeepEqual(got, []string{"W6_Well_Level", "W6__LastBirthMs", "W6__Online"}) {
+		t.Fatalf("InputNames = %v", got)
+	}
+	if got := drv.OutputNames(); !reflect.DeepEqual(got, []string{"W6__Rebirth"}) {
+		t.Fatalf("OutputNames = %v", got)
+	}
+	if fn := p.DriverStatus(nil); fn == nil {
+		t.Fatal("DriverStatus must report a sparkplug-host driver")
+	} else if sts := fn(); len(sts) != 1 || sts[0].Kind != "sparkplug-host" {
+		t.Fatalf("DriverStatus = %+v", sts)
+	}
+}
+
+func TestLoadSparkplugHostErrors(t *testing.T) {
+	base := `tasks:
+  - program: program.fbd
+driver:
+  type: sparkplug-host
+`
+	for _, tc := range []struct{ name, extra, want string }{
+		{"no broker", "  host-id: h\n  manifest: m.yaml\n  group-id: G\n", "broker is required"},
+		{"no host-id", "  broker: tcp://b:1883\n  manifest: m.yaml\n  group-id: G\n", "host-id is required"},
+		{"no manifest", "  broker: tcp://b:1883\n  host-id: h\n  group-id: G\n", "manifest"},
+		{"no group", "  broker: tcp://b:1883\n  host-id: h\n  manifest: m.yaml\n", "group-id"},
+		{"unknown on-unknown", "  broker: tcp://b:1883\n  host-id: h\n  manifest: m.yaml\n  group-id: G\n  on-unknown: shout\n", "unknown discovery mode"},
+		{"unknown state-form", "  broker: tcp://b:1883\n  host-id: h\n  manifest: m.yaml\n  group-id: G\n  state-form: 4.0\n", "unknown state-form"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			files := fsys(base + tc.extra)
+			files["m.yaml"] = &fstest.MapFile{Data: []byte("group: G\n")}
+			_, err := Load(files, "")
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
 	}
 }

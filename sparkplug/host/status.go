@@ -28,6 +28,7 @@ func (d *Driver) Status() Status {
 		SeqGaps:    d.stats.SeqGaps,
 		WriteDrops: d.stats.WriteDrops,
 		Unknown:    len(d.unknown),
+		Degraded:   d.degraded,
 		Nodes:      nodes,
 	}
 	if d.connected {

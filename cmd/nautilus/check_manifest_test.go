@@ -17,6 +17,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/joyautomation/nautilus/internal/project"
+	sphost "github.com/joyautomation/nautilus/sparkplug/host"
 )
 
 // checkIn runs runCheck against a temp project and returns its stdout.
@@ -237,5 +240,125 @@ func TestCheckWarnsOnTagMetaNamingNothing(t *testing.T) {
 	}
 	if strings.Contains(out, "Sensor.Raw") {
 		t.Errorf("a dotted tag-meta key is a field path and must not be reported:\n%s", out)
+	}
+}
+
+// A sparkplug-host project checks OFFLINE. `nautilus check` runs in CI, on a
+// laptop, in a pre-commit hook — nowhere near the plant broker — so
+// host.New must construct the whole driver (manifest, indexes, companion
+// tags) without dialing. This fixture is the regression test for that: a
+// broker address that cannot resolve, and a check that still passes.
+func TestCheckSparkplugHostProjectOffline(t *testing.T) {
+	files := map[string]string{
+		"nautilus.yaml": `
+name: pomona-central
+tasks:
+  - program: program.st
+driver:
+  type: sparkplug-host
+  broker: "tcp://mqtt.invalid:1883"
+  group-id: PomonaWRD
+  host-id: pomona-central
+  manifest: sparkplug_manifest.yaml
+  primary: true
+  state-form: both
+  reorder-timeout: 5s
+  stale-after: 2m
+  on-unknown: log
+tag-files: [tags/sparkplug.yaml]
+`,
+		"sparkplug_manifest.yaml": `group: PomonaWRD
+nodes:
+    - edgenode: W6
+      prefix: W6
+      devices:
+        - { device: PLC1 }
+types:
+    - name: Motor
+      fields:
+        - { name: Speed, type: Double, arraylen: 0 }
+        - { name: Run, type: Boolean, arraylen: 0 }
+tags:
+    - { name: W6_Well_Level, node: W6, device: "", metric: Well/Level, type: Double, arraylen: 0, writable: false }
+    - { name: W6_Pump1, node: W6, device: "", metric: Pump1, type: Motor, arraylen: 0, writable: false }
+    - { name: W6_PLC1_Pump_Run, node: W6, device: PLC1, metric: Pump/Run, type: Boolean, arraylen: 0, writable: false }
+`,
+		// A Template becomes an ST TYPE. The generated file lands in the
+		// project ROOT, where every .st without a PROGRAM is composed as a
+		// library — which is the only way `type: Motor` below resolves
+		// (docs/design/sparkplug-host.md §8.7).
+		"sparkplug_types.st": `TYPE
+  Motor : STRUCT
+    Speed : REAL;
+    Run : BOOL;
+  END_STRUCT;
+END_TYPE
+`,
+		// What `nautilus sparkplug import` renders: the bindings plus the
+		// driver-synthesized quality companions.
+		"tags/sparkplug.yaml": `- { name: W6_Well_Level, role: input }
+- { name: W6_Pump1, role: input, type: Motor }
+- { name: W6_PLC1_Pump_Run, role: input }
+- { name: W6__Online, role: input }
+- { name: W6__LastBirthMs, role: input }
+- { name: W6_PLC1__Online, role: input }
+- { name: W6__Rebirth, role: output, init: false }
+- { name: WellAlarm, role: output, init: false }
+`,
+		// __Online is present from t=0 even though data metrics stay absent
+		// until first seen, so interlocks work before the first birth.
+		"program.st": `PROGRAM Main
+VAR_EXTERNAL
+    W6__Online     : BOOL;
+    W6_Well_Level  : REAL;
+    W6_Pump1       : Motor;
+    WellAlarm      : BOOL;
+END_VAR
+WellAlarm := W6__Online AND (W6_Well_Level > 90.0) AND W6_Pump1.Run;
+END_PROGRAM`,
+	}
+	out, code := checkIn(t, files)
+	if code != 0 {
+		t.Fatalf("check must pass with no broker in sight; exit %d:\n%s", code, out)
+	}
+	if !strings.Contains(out, "0 with errors") {
+		t.Fatalf("unexpected errors:\n%s", out)
+	}
+	// The one warning is expected and worth keeping: __Rebirth is the
+	// operator's HMI button, so no program binds it. A host project's
+	// synthesized outputs look "unbound" to the cross-check by design.
+	if !strings.Contains(out, `output "W6__Rebirth"`) {
+		t.Fatalf("expected the unbound-rebirth warning:\n%s", out)
+	}
+
+	// And the driver it built is the real one, fully indexed.
+	dir := t.TempDir()
+	for name, body := range files {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	proj, err := project.Load(os.DirFS(dir), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drv, ok := proj.Runtime.Driver.(*sphost.Driver)
+	if !ok {
+		t.Fatalf("driver = %T, want *host.Driver", proj.Runtime.Driver)
+	}
+	if got := len(drv.InputNames()); got != 6 {
+		t.Fatalf("InputNames = %v, want the 3 bindings + 3 companions", drv.InputNames())
+	}
+	if _, ok := drv.StructDefs()["Motor"]; !ok {
+		t.Fatalf("StructDefs = %v, want the manifest's Motor template", drv.StructDefs())
+	}
+	// Before Start the driver reports "not connected yet" rather than
+	// scanning zeros — nothing here has touched the network.
+	if _, err := drv.ReadInputs(); err == nil {
+		t.Fatal("an unstarted host driver must fault the scan, not return zeros")
 	}
 }

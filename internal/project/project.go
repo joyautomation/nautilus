@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"regexp"
@@ -26,6 +27,7 @@ import (
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
 	"github.com/joyautomation/nautilus/sparkplug"
+	sphost "github.com/joyautomation/nautilus/sparkplug/host"
 )
 
 // ManifestName is the file that marks a directory as a manifest project.
@@ -96,6 +98,10 @@ type SparkplugConfig struct {
 	// with this id (DBIRTH/DDEATH follow the driver's connection health).
 	// Empty = everything publishes at node level.
 	Device string `yaml:"device"`
+	// StoreForward buffers up to this many data messages while the broker
+	// (or the primary host) is unreachable and replays them, marked
+	// historical, on reconnect. Zero disables (the default).
+	StoreForward int `yaml:"store-forward"`
 	// RBE tuning: a default class, named classes, and glob assignments.
 	DefaultClass  *RBEConfig           `yaml:"default-class"`
 	Classes       map[string]RBEConfig `yaml:"classes"`
@@ -166,17 +172,50 @@ type MetaConfig struct {
 
 // DriverConfig selects and configures the field driver. "memory" (the
 // default) is the loopback used for bring-up; "eip" polls an
-// Allen-Bradley Logix controller. Custom buses are the Go tier.
+// Allen-Bradley Logix controller; "sparkplug-host" consumes a Sparkplug B
+// group as a host application. Custom buses are the Go tier.
+//
+// One flat struct serves every driver type, so `manifest` is shared: for
+// eip it is the imported Logix tag manifest, for sparkplug-host the
+// imported Sparkplug manifest. buildDriver validates per type, so a key
+// belonging to another driver is inert rather than an error.
 type DriverConfig struct {
 	Type string `yaml:"type"`
 
 	// eip
 	Host        string              `yaml:"host"`
 	Slot        int                 `yaml:"slot"`
-	Manifest    string              `yaml:"manifest"` // YAML eip.Manifest file
+	Manifest    string              `yaml:"manifest"` // YAML eip.Manifest / host.Manifest file
 	ScanRate    Duration            `yaml:"scan-rate"`
 	ScanClasses map[string]Duration `yaml:"scan-classes"`
 	TagClasses  map[string][]string `yaml:"tag-classes"`
+
+	// sparkplug-host. The MQTT password is NEVER in the file — set
+	// NAUTILUS_MQTT_PASSWORD, the same rule the sparkplug: section keeps.
+	Broker   string   `yaml:"broker"`    // tcp://host:1883, ssl://host:8883
+	GroupID  string   `yaml:"group-id"`  // the Sparkplug group_id to consume
+	GroupIDs []string `yaml:"group-ids"` // several groups; overrides group-id
+	HostID   string   `yaml:"host-id"`   // STATE topic spBv1.0/STATE/<host-id>
+	ClientID string   `yaml:"client-id"`
+	Username string   `yaml:"username"`
+	// Primary publishes the STATE certificate (default true). false makes
+	// this a passive consumer: it subscribes and reads, but never announces
+	// itself and never sends NCMD/DCMD.
+	Primary   *bool  `yaml:"primary"`
+	StateForm string `yaml:"state-form"` // "3.0" (default) | "2.x" | "both"
+	// ReorderTimeout is how long an unfilled sequence gap waits before the
+	// host gives up and asks the node to rebirth (default 5s).
+	ReorderTimeout Duration `yaml:"reorder-timeout"`
+	// StaleAfter marks a silent node stale (0 = off).
+	StaleAfter Duration `yaml:"stale-after"`
+	Keepalive  Duration `yaml:"keepalive"` // MQTT keepalive (default 30s)
+	// OnUnknown is the policy for metrics on the wire that the manifest does
+	// not bind: "log" (default), "ignore", or "strict".
+	OnUnknown string `yaml:"on-unknown"`
+	// RebirthOnStart asks every manifest node to rebirth on connect
+	// (default true) — births are not retained, so a host starting
+	// mid-stream sees nothing until it asks.
+	RebirthOnStart *bool `yaml:"rebirth-on-start"`
 }
 
 // Duration parses "100ms" / "2s" yaml scalars.
@@ -262,6 +301,9 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 		}
 	}
 	var opts []sparkplug.Option
+	if c.StoreForward > 0 {
+		opts = append(opts, sparkplug.WithStoreForward(c.StoreForward))
+	}
 	if c.DefaultClass != nil {
 		opts = append(opts, sparkplug.WithDefaultRBE(rbe(*c.DefaultClass)))
 	}
@@ -643,7 +685,65 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 			opts = append(opts, eip.WithTagClass(class, patterns...))
 		}
 		return eip.New(d.Host, em, opts...)
+	case "sparkplug-host":
+		// A Sparkplug B host application: consume a whole group of edge
+		// nodes as INPUT tags, send operator writes back as NCMD/DCMD.
+		//
+		// host.New NEVER dials — buildDriver runs inside `nautilus check`
+		// and `nautilus build`, i.e. in CI with no broker — so everything
+		// that can fail on bad configuration fails here, offline, and the
+		// connection is Start's job. Same split as eip.
+		if d.Broker == "" {
+			return nil, fmt.Errorf("driver sparkplug-host: broker is required (tcp://host:1883)")
+		}
+		if d.HostID == "" {
+			return nil, fmt.Errorf("driver sparkplug-host: host-id is required (the STATE topic spBv1.0/STATE/<host-id>)")
+		}
+		if d.Manifest == "" {
+			return nil, fmt.Errorf("driver sparkplug-host: manifest (the imported sparkplug manifest .yaml) is required")
+		}
+		// A host that subscribed to every group would consume other
+		// projects' traffic silently; name the group you mean.
+		if d.GroupID == "" && len(d.GroupIDs) == 0 {
+			return nil, fmt.Errorf("driver sparkplug-host: group-id (or group-ids) is required")
+		}
+		raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
+		if err != nil {
+			return nil, fmt.Errorf("driver sparkplug-host: %w", err)
+		}
+		// ParseManifest decodes with KnownFields(true), so a typo is an
+		// error rather than a silently dropped binding.
+		hm, err := sphost.ParseManifest(raw)
+		if err != nil {
+			return nil, fmt.Errorf("driver sparkplug-host: %s: %w", d.Manifest, err)
+		}
+		groups := d.GroupIDs
+		if len(groups) == 0 {
+			groups = []string{d.GroupID}
+		}
+		cfg := sphost.Config{
+			BrokerURL: d.Broker,
+			HostID:    d.HostID,
+			GroupIDs:  groups,
+			ClientID:  d.ClientID,
+			Username:  d.Username,
+			Password:  os.Getenv("NAUTILUS_MQTT_PASSWORD"),
+			Keepalive: time.Duration(d.Keepalive),
+			// primary: and rebirth-on-start: both DEFAULT TRUE, so they are
+			// pointers here — an absent key is "yes", and only an explicit
+			// `false` opts out.
+			Primary:          d.Primary == nil || *d.Primary,
+			StateForm:        d.StateForm,
+			ReorderTimeout:   time.Duration(d.ReorderTimeout),
+			StaleAfter:       time.Duration(d.StaleAfter),
+			NoRebirthOnStart: d.RebirthOnStart != nil && !*d.RebirthOnStart,
+		}
+		opts := []sphost.Option{sphost.WithLogger(slog.Default().With("driver", "sparkplug-host"))}
+		if d.OnUnknown != "" {
+			opts = append(opts, sphost.WithDiscovery(d.OnUnknown))
+		}
+		return sphost.New(hm, cfg, opts...)
 	default:
-		return nil, fmt.Errorf("driver type %q: manifest projects support memory and eip — custom buses are the Go tier (io.Driver)", d.Type)
+		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip and sparkplug-host — custom buses are the Go tier (io.Driver)", d.Type)
 	}
 }

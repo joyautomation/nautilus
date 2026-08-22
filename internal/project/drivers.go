@@ -2,11 +2,13 @@ package project
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/joyautomation/nautilus/eip"
 	"github.com/joyautomation/nautilus/server"
 	"github.com/joyautomation/nautilus/sparkplug"
+	sphost "github.com/joyautomation/nautilus/sparkplug/host"
 )
 
 // DriverStatus adapts the field driver's and Sparkplug node's health into the
@@ -15,13 +17,17 @@ import (
 // the server package staying free of any driver dependency.
 func (p *Project) DriverStatus(node *sparkplug.Node) func() []server.DriverStatus {
 	eipDrv, hasEIP := p.Runtime.Driver.(*eip.Driver)
-	if !hasEIP && node == nil {
+	hostDrv, hasHost := p.Runtime.Driver.(*sphost.Driver)
+	if !hasEIP && !hasHost && node == nil {
 		return nil
 	}
 	return func() []server.DriverStatus {
 		var out []server.DriverStatus
 		if hasEIP {
 			out = append(out, eipStatus(eipDrv.Health()))
+		}
+		if hasHost {
+			out = append(out, hostStatus(hostDrv.Status()))
 		}
 		if node != nil {
 			out = append(out, sparkplugStatus(node.Status()))
@@ -70,6 +76,114 @@ func eipStatus(h eip.Health) server.DriverStatus {
 		})
 	}
 	return s
+}
+
+// hostStatus adapts the Sparkplug host application's health. Its per-node
+// rows land on Devices — the same shape a Sparkplug edge node's devices take
+// — so DriverStatusPanel/DriverStatusCard render 60 sites' comms status with
+// no HMI change at all. Device sub-rows flatten as "<edge>/<device>".
+func hostStatus(st sphost.Status) server.DriverStatus {
+	group := strings.Join(st.Groups, ", ")
+	detail := st.Broker
+	if group != "" {
+		detail += " · " + group
+	}
+	s := server.DriverStatus{
+		Kind:      "sparkplug-host",
+		Name:      st.HostID,
+		Detail:    detail,
+		SinceMs:   st.StateOnlineMs,
+		LastError: st.LastError,
+	}
+
+	online, born := 0, 0
+	for _, n := range st.Nodes {
+		if n.Online {
+			online++
+		}
+		if n.BirthMs > 0 {
+			born++
+		}
+	}
+	// error (broker down) → connecting (connected, nothing has birthed) →
+	// degraded (a site is dark, or strict discovery saw an unbound metric)
+	// → connected.
+	switch {
+	case !st.Connected:
+		s.State = "error"
+		s.Message = "Broker unreachable"
+		s.SinceMs = 0
+	case born == 0:
+		s.State = "connecting"
+		s.Message = "Connected, waiting for births"
+	case st.Degraded:
+		s.State = "degraded"
+		s.Message = fmt.Sprintf("%d unmanifested metric(s) — re-run the import", st.Unknown)
+	case online < len(st.Nodes):
+		s.State = "degraded"
+		s.Message = fmt.Sprintf("%d of %d sites offline", len(st.Nodes)-online, len(st.Nodes))
+	default:
+		s.State = "connected"
+		s.Message = fmt.Sprintf("Consuming %d sites", len(st.Nodes))
+	}
+
+	var lastMs int64
+	for _, n := range st.Nodes {
+		if n.LastMsgMs > lastMs {
+			lastMs = n.LastMsgMs
+		}
+	}
+	s.Metrics = []server.DriverMetric{
+		{Label: "sites online", Value: float64(online), Text: fmt.Sprintf("%d / %d", online, len(st.Nodes))},
+		{Label: "messages", Value: float64(st.Msgs)},
+		{Label: "rebirths", Value: float64(st.Rebirths)},
+		{Label: "seq gaps", Value: float64(st.SeqGaps)},
+		{Label: "unknown metrics", Value: float64(st.Unknown)},
+	}
+	if st.WriteDrops > 0 {
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "write drops", Value: float64(st.WriteDrops)})
+	}
+	if lastMs > 0 {
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "last message", Text: agoText(lastMs)})
+	}
+
+	for _, n := range st.Nodes {
+		s.Devices = append(s.Devices, server.DriverDevice{
+			ID:     n.EdgeNode,
+			Online: n.Online,
+			Detail: nodeDetail(n),
+		})
+		for _, dv := range n.Devices {
+			detail := "offline"
+			if dv.Online {
+				detail = fmt.Sprintf("%d tags", dv.Metrics)
+			}
+			s.Devices = append(s.Devices, server.DriverDevice{
+				ID:     n.EdgeNode + "/" + dv.ID,
+				Online: dv.Online,
+				Detail: detail,
+			})
+		}
+	}
+	s.Extra = map[string]any{"nodes": st.Nodes}
+	return s
+}
+
+// nodeDetail is one site's row text: "12 tags · born 3m" while it is up,
+// and why it is not while it is down. Stale is called out separately from
+// offline — a node that stopped talking without an NDEATH is a different
+// fault (network, broker) from one that said goodbye.
+func nodeDetail(n sphost.NodeStatus) string {
+	switch {
+	case !n.Online:
+		return "offline"
+	case n.Stale:
+		return fmt.Sprintf("%d tags · stale %s", n.Metrics, agoText(n.LastMsgMs))
+	case n.BirthMs > 0:
+		return fmt.Sprintf("%d tags · born %s", n.Metrics, agoText(n.BirthMs))
+	default:
+		return fmt.Sprintf("%d tags", n.Metrics)
+	}
 }
 
 func sparkplugStatus(st sparkplug.Status) server.DriverStatus {
