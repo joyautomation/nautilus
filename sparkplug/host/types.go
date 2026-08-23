@@ -314,6 +314,19 @@ type Driver struct {
 	// value adopted from an NBIRTH/DBIRTH/NDATA (adoptMembersLocked). A
 	// command whose value the node already holds is suppressed.
 	remote map[string]any
+	// queued holds commands whose destination node was dark when the writer
+	// reached them: edge_node_id → nautilus tag name → desired value, the
+	// LATEST value per tag and at most maxQueuedPerNode tags per node. A
+	// command to a dark site is delivered when the site comes back, ONCE,
+	// unless the site's own birth already reports that value — so the queue
+	// is drained against remote (see releaseQueued), never replayed blindly.
+	//
+	// It replaces the old drop-and-unaccount dance, which relied on
+	// WriteOutputs being called every scan to re-raise the write. Under the
+	// runtime's change-push contract (io.Driver: WriteOutputs is called when
+	// an output MOVED, not every scan) that re-raise never comes, and the
+	// operator's command would be lost until the tag changed again.
+	queued map[string]map[string]any
 	// baseline arms the next WriteOutputs snapshot as a baseline: recorded
 	// into lastOut, never published.
 	baseline bool
@@ -346,10 +359,17 @@ type Driver struct {
 
 // stats are the monotonic counters Status() reports.
 type stats struct {
-	Msgs       uint64
-	Rebirths   uint64
-	SeqGaps    uint64
+	Msgs     uint64
+	Rebirths uint64
+	SeqGaps  uint64
+	// WriteDrops counts commands that will NEVER be sent: the destination
+	// node is unaddressable (not in the manifest, so there is no topic for
+	// it) or its queue is full. A write to a node that is merely dark is not
+	// a drop — it is queued (WriteQueued) and delivered on the next birth.
 	WriteDrops uint64
+	// WriteQueued counts commands parked for a dark node, cumulatively. The
+	// gauge — how many are waiting right now — is Status.QueuedWrites.
+	WriteQueued uint64
 }
 
 // ── Internal seam ────────────────────────────────────────────────────────
@@ -491,12 +511,17 @@ type discovery struct {
 // Status is the driver's health snapshot, adapted into a server.DriverStatus
 // for /api/drivers. Copied from docs/design/sparkplug-host.md §1.
 type Status struct {
-	Broker, HostID                      string
-	Groups                              []string
-	Connected                           bool
-	StateOnlineMs                       int64
-	Msgs, Rebirths, SeqGaps, WriteDrops uint64
-	Unknown                             int
+	Broker, HostID          string
+	Groups                  []string
+	Connected               bool
+	StateOnlineMs           int64
+	Msgs, Rebirths, SeqGaps uint64
+	// WriteDrops counts commands abandoned for good (an unaddressable node,
+	// a full queue); WriteQueued counts commands parked for a dark node,
+	// cumulatively, and QueuedWrites is how many are waiting RIGHT NOW.
+	WriteDrops, WriteQueued uint64
+	QueuedWrites            int
+	Unknown                 int
 	// Degraded is set when the discovery policy is DiscoveryStrict and an
 	// unmanifested metric has been seen — /api/drivers reports the driver
 	// "degraded" for it (docs/design/sparkplug-host.md §5).
@@ -513,7 +538,11 @@ type NodeStatus struct {
 	Seq                uint64
 	BirthMs, LastMsgMs int64
 	Metrics            int
-	Devices            []DeviceStatus
+	// QueuedWrites is how many operator commands are parked for this node
+	// waiting for it to come back — an HMI's "3 pending" badge on a dark
+	// site. Zero for an online node.
+	QueuedWrites int
+	Devices      []DeviceStatus
 }
 
 // DeviceStatus is one device sub-row, flattened as "<edge>/<device>" in the

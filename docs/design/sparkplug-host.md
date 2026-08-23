@@ -49,6 +49,7 @@ func WithLogger(*slog.Logger) Option
 func WithDiscovery(mode string) Option        // "log" (default) | "ignore" | "strict"
 
 func (d *Driver) ReadInputs() (nio.Values, error)     // io.Driver
+func (d *Driver) ReadInputsInto(dst nio.Values) error // io.BatchReader — same delivery, no allocation
 func (d *Driver) WriteOutputs(nio.Values) error
 func (d *Driver) Start(ctx context.Context)           // matches runcmd.go:87's assertion
 func (d *Driver) Stop()                               // needs a NEW assertion in runcmd (§5)
@@ -62,7 +63,8 @@ func (d *Driver) RequestRebirth(node string) error
 type Status struct {
 	Broker, HostID string; Groups []string
 	Connected bool; StateOnlineMs int64
-	Msgs, Rebirths, SeqGaps, WriteDrops uint64
+	Msgs, Rebirths, SeqGaps uint64
+	WriteDrops, WriteQueued uint64; QueuedWrites int
 	Unknown int; LastError string
 	Nodes []NodeStatus
 }
@@ -221,8 +223,17 @@ changed metrics for one destination coalesce into one payload per flush.
 `Node Control/Rebirth` is reserved: a manifest binding using that metric name is rejected in
 `New()`; `<site>__Rebirth` is the sanctioned operator path.
 
-Writes to an offline node are **dropped and counted** (`Status.WriteDrops`), not queued — a
-command to a dark site is meaningless and the operator should be seeing `__Online=false`.
+Writes to an offline node are **queued per node** and delivered on that node's next
+NBIRTH/DBIRTH, once, unless the birth reports the value already — a command to a dark site is
+an ask that outlives the outage. The queue holds the latest value per tag, bounded at 256 tags
+per node; `Status.WriteQueued` counts what has been parked and `Status.QueuedWrites` what is
+waiting now. `Status.WriteDrops` keeps its name for commands that will never be sent: a node
+no topic addresses, or a full queue.
+
+(Superseded the original "dropped and counted, never queued" rule when the runtime moved to
+change-pushed outputs — `WriteOutputs` is called when an output MOVED, not every scan, so the
+old drop-and-re-raise had no next scan to be re-raised by. See `runtime/tags.go`, "Write
+generations".)
 
 Writable bindings generate as `role: output` with an `init:` (the manifest's, else the type
 zero) so the tag exists from scan one; `RoleOutput` is unseeded by default

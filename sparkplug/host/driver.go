@@ -116,6 +116,7 @@ func New(m Manifest, cfg Config, opts ...Option) (*Driver, error) {
 		pending:     map[string]any{},
 		lastOut:     map[string]any{},
 		remote:      map[string]any{},
+		queued:      map[string]map[string]any{},
 		// A driver is born un-baselined: the first output snapshot it is
 		// handed describes the world, it does not command it.
 		baseline: true,
@@ -210,14 +211,54 @@ func (d *Driver) ReadInputs() (nio.Values, error) {
 	return d.snapshot(), nil
 }
 
+// ReadInputsInto is ReadInputs without the per-scan allocation: the runtime
+// hands back the same map every scan and the driver refills it in place
+// (io.BatchReader). A fleet host serves hundreds of UDT-shaped inputs, and
+// re-allocating that map ten times a second is garbage for a key set that
+// never changes.
+//
+// SAME DELIVERY, SAME SEMANTICS as ReadInputs — before Start it errors with
+// the identical "host: not connected yet", offline nodes are still in the
+// snapshot with __Online=false, and a data metric not yet seen is still
+// absent so the scan that reads it faults. dst is left holding exactly what
+// the driver holds, never a stale leftover.
+//
+// It deliberately carries no `var _ nio.BatchReader = (*Driver)(nil)`
+// assertion: the interface lives on the runtime branch, and the runtime picks
+// the method up by type assertion at scan time whether or not this package
+// names it.
+func (d *Driver) ReadInputsInto(dst nio.Values) error {
+	d.mu.Lock()
+	started := d.started
+	d.mu.Unlock()
+	if !started {
+		return fmt.Errorf("host: not connected yet")
+	}
+	if dst == nil {
+		return fmt.Errorf("host: ReadInputsInto needs a non-nil map to fill")
+	}
+	d.snapshotInto(dst)
+	return nil
+}
+
 // WriteOutputs queues changed values for the command writer.
 //
 // OUTPUTS ARE COMMANDS; AN UNCHANGED OUTPUT SINCE START IS NOT A COMMAND.
-// The runtime rebuilds and hands us *all* outputs every scan
-// (runtime.go:590-608) and an output tag's value before anyone writes it is
-// its init: — the zero of its type by default. So "the driver was handed a
-// value" is emphatically not "the operator asked for it", and change
-// detection is ours:
+// The runtime rebuilds and hands us *ALL* outputs on every call it makes, and
+// an output tag's value before anyone writes it is its init: — the zero of
+// its type by default. So "the driver was handed a value" is emphatically not
+// "the operator asked for it", and change detection is ours.
+//
+// How OFTEN the runtime calls is not our business and must not be: the older
+// contract called every scan, the current one calls on the first scan, when
+// an output tag CHANGED, after a failed write and after a leadership takeover
+// (runtime.Options.AlwaysWriteOutputs restores per-scan calls). Both are
+// correct here, because the rules below are stated over the values we are
+// handed rather than over the cadence we are handed them at — the one place
+// that ever assumed "every scan" was the offline-write re-raise, which is now
+// a per-node queue instead (see flushWrites).
+//
+// The rules:
 //
 //  1. BASELINE. The first snapshot after Start is recorded into lastOut and
 //     published to NOBODY: it is the state of the world at t=0, not a set of
@@ -234,6 +275,11 @@ func (d *Driver) ReadInputs() (nio.Values, error) {
 //  3. REDUNDANCY. A changed value the node is already known to hold — we
 //     published it, or its birth/data reported it (adoptMembersLocked) — is
 //     accounted for but not sent.
+//  4. DARKNESS IS NOT REFUSAL. A change bound for a node that is offline is
+//     accounted for here like any other and parked by the writer until the
+//     node births (flushWrites → queueOffline → releaseQueued). It is
+//     delivered once, when the site comes back, unless the site's own birth
+//     already reports that value.
 //
 // Two kinds of name land here: writable manifest bindings (→ NCMD/DCMD) and
 // the synthesized <site>__Rebirth outputs (rising edge → NCMD Rebirth).

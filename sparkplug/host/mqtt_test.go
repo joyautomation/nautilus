@@ -18,6 +18,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ import (
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
 
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/sparkplug"
 	"github.com/joyautomation/nautilus/sparkplug/spb"
@@ -748,27 +750,212 @@ func TestMqttWriteNestedMembersCoalesce(t *testing.T) {
 	}
 }
 
-func TestMqttWriteToOfflineNodeIsDropped(t *testing.T) {
+// waitQueued blocks until the driver reports exactly n commands parked for
+// dark nodes.
+func waitQueued(t *testing.T, d *Driver, n int) Status {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if st := d.Status(); st.QueuedWrites == n {
+			return st
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	st := d.Status()
+	t.Fatalf("QueuedWrites = %d, want %d (drops %d, queued total %d)",
+		st.QueuedWrites, n, st.WriteDrops, st.WriteQueued)
+	return st
+}
+
+// TestMqttWriteToOfflineNodeIsQueued — a command to a dark site is KEPT, not
+// dropped. It used to be dropped, unaccounted and re-raised by the next
+// scan's snapshot; under the runtime's change-push contract that re-raise
+// never comes (WriteOutputs is called when an output MOVED), so the
+// operator's setpoint would simply be lost.
+func TestMqttWriteToOfflineNodeIsQueued(t *testing.T) {
 	srv, addr := startBroker(t, "")
 	t.Cleanup(func() { _ = srv.Close() })
 
-	obs := newObserver(t, addr, "obs-drop", "spBv1.0/G/DCMD/+/+")
-	d := startDriver(t, testConfig(addr, "h-drop"))
+	obs := newObserver(t, addr, "obs-queued", "spBv1.0/G/DCMD/+/+")
+	d := startDriver(t, testConfig(addr, "h-queued"))
 	waitConnected(t, d)
 	baselineScan(t, d)
 
 	if err := d.WriteOutputs(map[string]any{"W6_PLC1_Pump_SpeedSP": 7.0}); err != nil {
 		t.Fatalf("WriteOutputs: %v", err)
 	}
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) && d.Status().WriteDrops == 0 {
-		time.Sleep(10 * time.Millisecond)
+	st := waitQueued(t, d, 1)
+	if st.WriteDrops != 0 {
+		t.Errorf("WriteDrops = %d, want 0 — a dark site is not a drop", st.WriteDrops)
 	}
-	if d.Status().WriteDrops == 0 {
-		t.Fatal("write to an offline node was not counted as a drop")
+	if st.WriteQueued != 1 {
+		t.Errorf("WriteQueued = %d, want 1", st.WriteQueued)
 	}
 	if n := obs.count(func(recMsg) bool { return true }); n != 0 {
 		t.Fatalf("write to an offline node produced %d DCMDs; want 0", n)
+	}
+	// The site is in the manifest but has never been heard from, so it has no
+	// Status row yet; the fleet-level gauge is what an operator sees.
+	if st.QueuedWrites != 1 {
+		t.Errorf("QueuedWrites = %d, want 1", st.QueuedWrites)
+	}
+}
+
+// TestMqttQueuedWriteIsDeliveredOnBirth — the site comes back and the command
+// goes out, once, carrying the value the operator asked for.
+func TestMqttQueuedWriteIsDeliveredOnBirth(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = srv.Close() })
+
+	obs := newObserver(t, addr, "obs-flush", "spBv1.0/G/DCMD/+/+")
+	d := startDriver(t, testConfig(addr, "h-flush"))
+	waitConnected(t, d)
+	baselineScan(t, d)
+
+	if err := d.WriteOutputs(map[string]any{"W6_PLC1_Pump_SpeedSP": 7.0}); err != nil {
+		t.Fatalf("WriteOutputs: %v", err)
+	}
+	waitQueued(t, d, 1)
+
+	bringW6Online(t, d, addr, "edge-flush")
+
+	dcmd := isCommandFor("spBv1.0/G/DCMD/W6/PLC1")
+	msg := obs.wait(t, "the queued DCMD, delivered on the birth", dcmd)
+	p, err := sparkplug.DecodePayload(msg.payload)
+	if err != nil {
+		t.Fatalf("decode DCMD: %v", err)
+	}
+	if len(p.Metrics) != 1 || p.Metrics[0].Name != "Pump/SpeedSP" || p.Metrics[0].Value != 7.0 {
+		t.Fatalf("delivered payload = %+v, want one Pump/SpeedSP = 7", p.Metrics)
+	}
+
+	// Once, and the queue is empty afterwards.
+	st := waitQueued(t, d, 0)
+	if st.WriteDrops != 0 {
+		t.Errorf("WriteDrops = %d, want 0", st.WriteDrops)
+	}
+	scanFor(t, d, 3, map[string]any{"W6_PLC1_Pump_SpeedSP": 7.0})
+	if n := obs.count(dcmd); n != 1 {
+		t.Fatalf("the queued command was delivered %d times, want exactly 1", n)
+	}
+}
+
+// TestMqttQueuedWriteTheSiteAlreadyHoldsIsNotSent — "unless the site already
+// reports that value". The birth is both the trigger to flush the queue and
+// the answer to whether flushing it would say anything: a member the site
+// comes back already holding is settled, and only the member that still
+// disagrees goes on the wire.
+func TestMqttQueuedWriteTheSiteAlreadyHoldsIsNotSent(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = srv.Close() })
+
+	obs := newObserver(t, addr, "obs-settled", "spBv1.0/G/NCMD/+")
+	d := startDriver(t, testConfig(addr, "h-settled"))
+	waitConnected(t, d)
+	baselineScan(t, d)
+
+	// Two member writes to a dark site: one the site will turn out to hold
+	// already (Pump1.Speed = 1450), one it will not (Skid1.Drive.Speed = 99).
+	if err := d.WriteOutputs(map[string]any{
+		"W6_Pump1_Speed":       1450.0,
+		"W6_Skid1_Drive_Speed": 99.0,
+	}); err != nil {
+		t.Fatalf("WriteOutputs: %v", err)
+	}
+	waitQueued(t, d, 2)
+
+	edge := edgePublisher(t, addr, "edge-settled")
+	publishPayload(t, edge, "spBv1.0/G/NBIRTH/W6", sparkplug.Payload{
+		Timestamp: uint64(time.Now().UnixMilli()),
+		Seq:       0,
+		Metrics: []sparkplug.Metric{
+			{Name: bdSeqMetric, Datatype: spb.DataType_Int64, Value: int64(1)},
+			{Name: "Pump1", Datatype: spb.DataType_Template,
+				Value: &sparkplug.Template{TemplateRef: "Motor", Metrics: []sparkplug.Metric{
+					{Name: "Run", Datatype: spb.DataType_Boolean, Value: true},
+					{Name: "Speed", Datatype: spb.DataType_Double, Value: 1450.0},
+				}}},
+			{Name: "Skid1", Datatype: spb.DataType_Template,
+				Value: &sparkplug.Template{TemplateRef: "Skid", Metrics: []sparkplug.Metric{
+					{Name: "Hours", Datatype: spb.DataType_Int64, Value: int64(12)},
+					{Name: "Drive", Datatype: spb.DataType_Template,
+						Value: &sparkplug.Template{TemplateRef: "Motor", Metrics: []sparkplug.Metric{
+							{Name: "Speed", Datatype: spb.DataType_Double, Value: 10.0},
+						}}},
+				}}},
+		},
+	})
+	waitForValue(t, d, "W6__Online", func(v any) bool { return v == true })
+	waitQueued(t, d, 0)
+
+	cmd := isCommandFor("spBv1.0/G/NCMD/W6")
+	msg := obs.wait(t, "the member the site does NOT hold", cmd)
+	p, err := sparkplug.DecodePayload(msg.payload)
+	if err != nil {
+		t.Fatalf("decode NCMD: %v", err)
+	}
+	if len(p.Metrics) != 1 || p.Metrics[0].Name != "Skid1" {
+		t.Fatalf("delivered %d metrics (%v), want only Skid1 — Pump1 was already at 1450",
+			len(p.Metrics), p.Metrics)
+	}
+	drive := tmplOf(t, memberOf(t, tmplOf(t, p.Metrics[0]), "Drive"))
+	if sp := memberOf(t, drive, "Speed"); sp.Value != 99.0 {
+		t.Errorf("Skid1.Drive.Speed = %v, want 99", sp.Value)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if n := obs.count(cmd); n != 1 {
+		t.Fatalf("the flush published %d commands, want exactly 1 — the member the "+
+			"site already reported must not be re-commanded", n)
+	}
+}
+
+// TestQueueOfflineIsBoundedPerNode — the queue is one value per TAG, bounded
+// per node. Past the bound a write is a real drop (counted), and a second
+// write to a tag already parked REPLACES it rather than consuming budget.
+// A pure unit test: no broker, no goroutines.
+func TestQueueOfflineIsBoundedPerNode(t *testing.T) {
+	d := &Driver{log: quietLogger()}
+
+	over := 40
+	hold := map[string]map[string]any{"W6": {}}
+	for i := 0; i < maxQueuedPerNode+over; i++ {
+		hold["W6"][fmt.Sprintf("W6_T%04d", i)] = float64(i)
+	}
+	if got := d.queueOffline(hold); got != uint64(over) {
+		t.Errorf("dropped %d, want %d (everything past the bound)", got, over)
+	}
+	if n := len(d.queued["W6"]); n != maxQueuedPerNode {
+		t.Errorf("queue holds %d, want %d", n, maxQueuedPerNode)
+	}
+	if d.stats.WriteQueued != maxQueuedPerNode {
+		t.Errorf("WriteQueued = %d, want %d", d.stats.WriteQueued, maxQueuedPerNode)
+	}
+
+	// Re-writing a tag that is already parked keeps the LATEST value and is
+	// never a drop — the queue is full, but this one costs nothing.
+	var parked string
+	for name := range d.queued["W6"] {
+		parked = name
+		break
+	}
+	if got := d.queueOffline(map[string]map[string]any{"W6": {parked: 99.0}}); got != 0 {
+		t.Errorf("replacing a parked tag dropped %d, want 0", got)
+	}
+	if got := d.queued["W6"][parked]; got != 99.0 {
+		t.Errorf("%s = %v, want the later value 99", parked, got)
+	}
+
+	// The bound is per node: another site has its own budget.
+	if got := d.queueOffline(map[string]map[string]any{"W9": {"W9_A": 1.0}}); got != 0 {
+		t.Errorf("a different node dropped %d, want 0 — the bound is per node", got)
+	}
+	if n := len(d.queued["W9"]); n != 1 {
+		t.Errorf("W9 queue holds %d, want 1", n)
+	}
+
+	depths := d.queuedDepths()
+	if depths["W6"] != maxQueuedPerNode || depths["W9"] != 1 {
+		t.Errorf("queuedDepths = %v, want W6:%d W9:1", depths, maxQueuedPerNode)
 	}
 }
 
@@ -1152,4 +1339,212 @@ func fieldByName(v ir.Value, name string) ir.Value {
 		return ir.Value{}
 	}
 	return v.Fld[i]
+}
+
+// ── the change-push cadence (io.Driver's newer contract) ─────────────────
+
+// pushScan hands the driver ONE output snapshot the way the change-push
+// runtime does: ALL outputs, but only on the scans where at least one of them
+// actually moved. The scans in between call WriteOutputs not at all — which
+// is the whole point of the contract, and the thing the driver may not lean
+// on. scanFor above is the older, every-scan cadence; both must be correct.
+func pushScan(t *testing.T, d *Driver, over map[string]any) {
+	t.Helper()
+	if err := d.WriteOutputs(outputSnapshot(d, over)); err != nil {
+		t.Fatalf("WriteOutputs: %v", err)
+	}
+	time.Sleep(150 * time.Millisecond)
+}
+
+// TestMqttChangePushCadence walks the whole output contract at the cadence
+// the runtime now uses (runtime.Scan: WriteOutputs on the first scan, when an
+// output CHANGED, after a failed write, and after a leadership takeover):
+//
+//	baseline               → nothing on the wire
+//	one operator write     → exactly one command
+//	site goes dark, write  → queued, not dropped, nothing on the wire
+//	site births            → delivered once
+//	nothing moves          → the runtime calls nothing, and neither do we
+func TestMqttChangePushCadence(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = srv.Close() })
+
+	obs := newObserver(t, addr, "obs-push", "spBv1.0/G/NCMD/+", "spBv1.0/G/DCMD/+/+")
+	d := startDriver(t, testConfig(addr, "h-push"))
+	waitConnected(t, d)
+	bringW6Online(t, d, addr, "edge-push")
+
+	cmd := isCommandFor("spBv1.0/G/NCMD/W6", "spBv1.0/G/DCMD/W6/PLC1")
+	dcmd := isCommandFor("spBv1.0/G/DCMD/W6/PLC1")
+
+	// 1. The first call is the baseline: the world at t=0, not a command.
+	pushScan(t, d, nil)
+	if n := obs.count(cmd); n != 0 {
+		t.Fatalf("the baseline call published %d commands, want 0", n)
+	}
+
+	// 2. An operator moves a setpoint: one call, one command.
+	over := map[string]any{"W6_PLC1_Pump_SpeedSP": 42.5}
+	pushScan(t, d, over)
+	obs.wait(t, "the operator's DCMD", dcmd)
+	if n := obs.count(dcmd); n != 1 {
+		t.Fatalf("one operator write produced %d DCMDs, want 1", n)
+	}
+
+	// 3. Nothing moves, so the runtime makes no call at all — and a call it
+	//    DOES make (AlwaysWriteOutputs, a failed write, a takeover) is still
+	//    not a second command.
+	pushScan(t, d, over)
+	pushScan(t, d, over)
+	if n := obs.count(dcmd); n != 1 {
+		t.Fatalf("re-handing an unchanged snapshot produced %d DCMDs, want 1", n)
+	}
+
+	// 4. The site goes dark and the operator writes again. Under the old
+	//    contract this was dropped and re-raised by the next scan's snapshot;
+	//    there is no next scan now, so it must be kept.
+	edge := edgePublisher(t, addr, "edge-push-death")
+	publishPayload(t, edge, "spBv1.0/G/NDEATH/W6", ndeath(1))
+	waitForValue(t, d, "W6__Online", func(v any) bool { return v == false })
+
+	over["W6_PLC1_Pump_SpeedSP"] = 55.0
+	pushScan(t, d, over)
+	st := waitQueued(t, d, 1)
+	if st.WriteDrops != 0 {
+		t.Errorf("WriteDrops = %d, want 0 — a dark site is not a drop", st.WriteDrops)
+	}
+	if st.WriteQueued != 1 {
+		t.Errorf("WriteQueued = %d, want 1", st.WriteQueued)
+	}
+	if n := obs.count(dcmd); n != 1 {
+		t.Fatalf("a write to a dark site published %d DCMDs, want none (1 from step 2)", n)
+	}
+
+	// 5. The site comes back: the command is delivered, once, with NO further
+	//    WriteOutputs call — nothing moved, so the runtime makes none.
+	bringW6Online(t, d, addr, "edge-push-back")
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && obs.count(dcmd) < 2 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := obs.count(dcmd); n != 2 {
+		t.Fatalf("after the site birthed, DCMD count = %d, want 2 (the queued command)", n)
+	}
+	msg := obs.wait(t, "the delivered setpoint", func(m recMsg) bool {
+		if !dcmd(m) {
+			return false
+		}
+		p, err := sparkplug.DecodePayload(m.payload)
+		return err == nil && len(p.Metrics) == 1 && p.Metrics[0].Value == 55.0
+	})
+	_ = msg
+
+	st = waitQueued(t, d, 0)
+	if st.WriteDrops != 0 {
+		t.Errorf("WriteDrops = %d, want 0", st.WriteDrops)
+	}
+	if st.WriteQueued != 1 {
+		t.Errorf("WriteQueued = %d, want 1 (cumulative)", st.WriteQueued)
+	}
+
+	// 6. And the runtime keeps making no calls; a stray one changes nothing.
+	pushScan(t, d, over)
+	time.Sleep(200 * time.Millisecond)
+	if n := obs.count(dcmd); n != 2 {
+		t.Fatalf("the delivered command was re-sent: DCMD count = %d, want 2", n)
+	}
+}
+
+// ── io.BatchReader ───────────────────────────────────────────────────────
+
+// batchReader mirrors io.BatchReader as the runtime branch declares it
+// (st-struct-pins: a Driver that can also refill the caller's map). The
+// interface itself does not exist on this branch, so the SHAPE is pinned
+// against a local copy here rather than with an assertion the package cannot
+// yet compile — when the branches merge, the runtime's own type assertion
+// finds the method precisely because this does.
+type batchReader interface {
+	nio.Driver
+	ReadInputsInto(dst nio.Values) error
+}
+
+var _ batchReader = (*Driver)(nil)
+
+// TestReadInputsIntoMatchesReadInputs — ReadInputsInto is the same delivery
+// as ReadInputs, into the caller's map: same error before Start, same values
+// after, and dst left holding EXACTLY what the driver holds (a name the
+// caller had that the driver does not is removed, never served as stale).
+func TestReadInputsIntoMatchesReadInputs(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = srv.Close() })
+
+	d, err := New(testManifest(), testConfig(addr, "h-into"), WithLogger(quietLogger()))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Before Start both refuse, identically — a project wired up but never
+	// started fails loudly rather than scanning zeros.
+	_, err1 := d.ReadInputs()
+	err2 := d.ReadInputsInto(nio.Values{})
+	if err1 == nil || err2 == nil {
+		t.Fatalf("before Start: ReadInputs err = %v, ReadInputsInto err = %v; want both non-nil", err1, err2)
+	}
+	if err1.Error() != err2.Error() {
+		t.Errorf("errors differ: %q vs %q", err1, err2)
+	}
+
+	d.Start(context.Background())
+	t.Cleanup(d.Stop)
+	waitConnected(t, d)
+
+	edge := edgePublisher(t, addr, "edge-into")
+	publishPayload(t, edge, "spBv1.0/G/NBIRTH/W6", sparkplug.Payload{
+		Timestamp: uint64(time.Now().UnixMilli()),
+		Seq:       0,
+		Metrics: []sparkplug.Metric{
+			{Name: bdSeqMetric, Datatype: spb.DataType_Int64, Value: int64(1)},
+			dbl("Well/Level", 42.5),
+			str("Site", "W6"),
+			{Name: "Pump1", Datatype: spb.DataType_Template,
+				Value: &sparkplug.Template{TemplateRef: "Motor", Metrics: []sparkplug.Metric{
+					{Name: "Run", Datatype: spb.DataType_Boolean, Value: true},
+					{Name: "Speed", Datatype: spb.DataType_Double, Value: 1450.0},
+				}}},
+		},
+	})
+	waitForValue(t, d, "W6_Well_Level", func(v any) bool { return v == 42.5 })
+
+	want, err := d.ReadInputs()
+	if err != nil {
+		t.Fatalf("ReadInputs: %v", err)
+	}
+	// A dirty buffer, the way the runtime's reused map would be if the driver
+	// ever stopped serving a name.
+	got := nio.Values{"W6_Well_Level": 0.0, "gone_stale": true}
+	if err := d.ReadInputsInto(got); err != nil {
+		t.Fatalf("ReadInputsInto: %v", err)
+	}
+	if _, stale := got["gone_stale"]; stale {
+		t.Error("ReadInputsInto left a name the driver does not serve in dst")
+	}
+	if !reflect.DeepEqual(map[string]any(got), map[string]any(want)) {
+		t.Errorf("ReadInputsInto delivered a different set than ReadInputs:\n into: %v\n  new: %v",
+			sortedKeys(got), sortedKeys(want))
+		for k, w := range want {
+			if g, ok := got[k]; !ok || !reflect.DeepEqual(g, w) {
+				t.Errorf("  %s: into = %#v, new = %#v", k, g, w)
+			}
+		}
+	}
+
+	// It allocates nothing: the same map comes back filled, scan after scan.
+	for i := 0; i < 3; i++ {
+		if err := d.ReadInputsInto(got); err != nil {
+			t.Fatalf("ReadInputsInto (repeat): %v", err)
+		}
+	}
+	if !reflect.DeepEqual(map[string]any(got), map[string]any(want)) {
+		t.Error("repeated ReadInputsInto calls diverged from the snapshot")
+	}
 }

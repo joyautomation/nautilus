@@ -663,3 +663,85 @@ func TestEdgeToHostMemberBaselineAdoptsLiveValue(t *testing.T) {
 		t.Errorf("moving one member produced %d NCMDs, want exactly 1", n)
 	}
 }
+
+// TestEdgeToHostQueuedWriteReachesAWokenSite is the dark-site delivery,
+// end to end against the real edge: the operator moves a member while the
+// site is DOWN — no broker session, no birth, nothing to write to — the site
+// then starts, and the command lands exactly once without disturbing a single
+// member the operator did not touch.
+//
+// It is the case the old drop-and-re-raise could not survive the runtime's
+// change-push contract: the write was dropped while the site was dark and
+// re-raised by the NEXT scan's snapshot, but under change-push there is no
+// next call until the tag moves again, so the operator's command evaporated
+// and the site came back holding its old value.
+func TestEdgeToHostQueuedWriteReachesAWokenSite(t *testing.T) {
+	srv, addr := startBroker(t, "")
+	t.Cleanup(func() { _ = srv.Close() })
+
+	obs := newObserver(t, addr, "obs-darkwrite", "spBv1.0/G/NCMD/+")
+	host := startHostDriver(t, edgeDogfoodManifest(), testConfig(addr, "h-darkwrite"))
+	waitConnected(t, host)
+
+	// No edge yet: W6 is dark, and the host has never heard from it.
+	baselineScan(t, host)
+	if err := host.WriteOutputs(outputSnapshot(host, map[string]any{
+		"W6_Pump1_Speed": 61.5,
+	})); err != nil {
+		t.Fatalf("WriteOutputs: %v", err)
+	}
+	st := waitQueued(t, host, 1)
+	if st.WriteDrops != 0 {
+		t.Fatalf("WriteDrops = %d, want 0 — the site is dark, not unaddressable", st.WriteDrops)
+	}
+	cmd := isCommandFor("spBv1.0/G/NCMD/W6")
+	if n := obs.count(cmd); n != 0 {
+		t.Fatalf("a write to a site that has never birthed published %d commands, want 0", n)
+	}
+
+	// The site starts. buildEdgeRuntime seeds Pump1 = {Speed: 1450, Run: true,
+	// Drive: {Torque: 88.5, Fault: false}} and SpeedSP = 3277 — every one of
+	// them a commissioned value the operator did NOT ask to change.
+	rt := startDogfoodEdge(t, host, addr, 3277)
+
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		v, err := rt.Tags().ReadGlobal("Pump1")
+		if err == nil && v.Kind == ir.TypeStruct && fieldVal(t, v, "Speed").F == 61.5 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	ep, err := rt.Tags().ReadGlobal("Pump1")
+	if err != nil {
+		t.Fatalf("edge ReadGlobal(Pump1): %v", err)
+	}
+	if got := fieldVal(t, ep, "Speed").F; got != 61.5 {
+		t.Fatalf("edge Pump1.Speed = %v, want 61.5 — the command queued while the "+
+			"site was dark never arrived", got)
+	}
+	// Every member the operator did not touch is intact — the delivery is a
+	// partial template, exactly like a live write.
+	if got := fieldVal(t, ep, "Run").B; got != true {
+		t.Errorf("edge Pump1.Run = %v, want true", got)
+	}
+	if got := fieldVal(t, ep, "Drive", "Torque").F; got != 88.5 {
+		t.Errorf("edge Pump1.Drive.Torque = %v, want 88.5", got)
+	}
+	if got := fieldVal(t, ep, "Drive", "Fault").B; got != false {
+		t.Errorf("edge Pump1.Drive.Fault = %v, want false", got)
+	}
+	if got := rt.Tags().Real("SpeedSP"); got != 3277 {
+		t.Errorf("edge SpeedSP = %v, want 3277 — a sibling output was commanded too", got)
+	}
+
+	// Exactly once, and the queue is empty.
+	time.Sleep(300 * time.Millisecond)
+	if n := obs.count(cmd); n != 1 {
+		t.Fatalf("the queued command was published %d times, want exactly 1", n)
+	}
+	if st := waitQueued(t, host, 0); st.WriteQueued != 1 {
+		t.Errorf("WriteQueued = %d, want 1 (cumulative)", st.WriteQueued)
+	}
+}

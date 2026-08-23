@@ -109,10 +109,29 @@ the whole controller.
 
 An output binding's writes leave as `spBv1.0/<group>/NCMD/<edge>` (node
 metrics) or `spBv1.0/<group>/DCMD/<edge>/<device>` (device metrics), QoS
-0, retain false, full metric names (never aliases). Writes to an offline
-node are dropped and counted (`Status.WriteDrops`) rather than queued — a
-command to a dark site is meaningless, and the operator is already seeing
-`__Online: false`.
+0, retain false, full metric names (never aliases).
+
+### Writes to a site that is down
+
+**A command to a dark site is delivered when it comes back, once, unless
+the site already reports that value.**
+
+An operator who dials a setpoint on a site showing `__Online: false` has
+still asked for something, and the ask outlives the outage: the write is
+held per site (the latest value per tag, up to 256 tags) and delivered on
+that site's next `NBIRTH`/`DBIRTH` — after the birth has settled what the
+site actually holds. If the site comes back already at the commanded
+value, the command is satisfied and nothing goes on the wire; if it comes
+back at anything else, one command goes out, and only for the members the
+operator touched. Write twice while the site is down and the second value
+is what lands, because that is what the operator asked for last.
+
+`Status` counts both halves: `WriteQueued` is how many commands have been
+parked, `QueuedWrites` how many are waiting *right now* (per site in
+`Status.Nodes[].QueuedWrites`, and as a "queued writes" metric on
+`/api/drivers`), and `WriteDrops` is reserved for commands that will
+never be sent at all — a node no topic addresses, or a site whose queue
+is full.
 
 ## Writing template members
 
@@ -196,10 +215,16 @@ So the driver reads its output set as follows.
 - **`__Rebirth` is unaffected**: its baseline is `false` and only a
   rising edge is a command, which is what it always meant.
 
-Writes to an offline node are still dropped and counted
-(`Status.WriteDrops`) rather than queued.
+None of this depends on how often the runtime calls the driver. The scan
+loop hands the driver *every* output on the calls it makes, but it only
+makes them when an output actually moved (plus the first scan, a scan
+after a failed write, and the first scan after a redundancy takeover).
+The rules above are written over the values, not the cadence — and a
+command for a site that is down is held rather than retried, so it does
+not need a call that will never come.
 
-Host and sites can therefore be started in any order.
+Host and sites can therefore be started in any order, and a site can be
+commanded while it is down.
 
 ## `/api/drivers`
 
