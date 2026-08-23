@@ -128,7 +128,12 @@ N/A) alongside the existing edge-node profile, both gated in CI.
 `fleet.st` rollups, `fleet_test.yaml` in virtual time) and the manifest-
 first guide (`guides/sparkplug-host.md`, linked from the edge-node guide).
 `st-struct-pins` (worktree `~/Development/joyautomation/nautilus-st`) is
-a separate branch in flight, untouched by this work. Driving project:
+a separate branch in flight; `sparkplug-host` is now correct under BOTH
+output contracts ahead of the `demo-integration` merge — a write to an
+offline node is queued per site and delivered once on its next birth
+(unless the birth already reports that value) instead of being dropped
+and re-raised by a next scan change-push never makes, and the driver
+implements `io.BatchReader`'s `ReadInputsInto`. Driving project:
 the Pomona WRD demo at `~/Development/pomona/wrd` — a ~60-site fleet is
 the real target this driver is being built for.
 

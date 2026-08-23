@@ -505,9 +505,14 @@ func (d *Driver) staleLoop(ctx context.Context) {
 }
 
 // flushWrites turns the queued tag values into NCMD/DCMD payloads, one per
-// destination. Writes to an offline node are dropped and counted, never
-// queued — a command to a dark site is meaningless and the operator is already
-// looking at __Online=false (design §4).
+// destination.
+//
+// A command to a DARK SITE IS DELIVERED WHEN IT COMES BACK, ONCE, unless the
+// site already reports that value: the write is parked in d.queued (latest
+// value per tag, at most maxQueuedPerNode per node) and released by
+// releaseQueued on the node's next birth, after adoption has settled what the
+// site actually holds. Only a command nothing can ever address — a node with
+// no group, or a node whose queue is full — is dropped and counted.
 func (d *Driver) flushWrites() {
 	if d.publisher() == nil || !d.mayPublish() {
 		return // stay queued; connect() kicks us again
@@ -528,6 +533,9 @@ func (d *Driver) flushWrites() {
 	// ONE partial template rather than two metrics sharing a name.
 	at := map[string]map[string]int{}
 	drops := uint64(0)
+	// hold gathers the writes whose destination node is dark, per node, so
+	// the whole batch parks under one wmu acquisition below.
+	hold := map[string]map[string]any{}
 
 	for name, v := range work {
 		// Synthesized <site>__Rebirth: a rising edge is an operator-forced
@@ -548,14 +556,20 @@ func (d *Driver) flushWrites() {
 		if !ok {
 			continue
 		}
-		if !d.nodeOnline(b.Node) {
-			drops++
-			d.unaccount(name)
-			d.log.Debug("host: dropping write to offline node", "tag", name, "node", b.Node)
-			continue
-		}
 		group, ok := d.groupFor(b.Node)
 		if !ok {
+			// No group resolves for this node, so no topic addresses it —
+			// a manifest problem, not a dark site. Nothing to wait for.
+			drops++
+			d.log.Warn("host: dropping write to an unaddressable node",
+				"tag", name, "node", b.Node)
+			continue
+		}
+		if !d.nodeOnline(b.Node) {
+			if hold[b.Node] == nil {
+				hold[b.Node] = map[string]any{}
+			}
+			hold[b.Node][name] = v
 			continue
 		}
 		iv, ok := irValueOf(v)
@@ -613,6 +627,17 @@ func (d *Driver) flushWrites() {
 		at[topic][b.Metric] = len(byTopic[topic])
 		byTopic[topic] = append(byTopic[topic], m)
 		names[topic] = append(names[topic], name)
+	}
+
+	if len(hold) > 0 {
+		drops += d.queueOffline(hold)
+		// A node that birthed while this flush was in flight found nothing
+		// to release — it parked here, after the birth had passed. Close
+		// that race rather than making the operator wait for the next
+		// message from the site.
+		for node := range hold {
+			d.releaseQueued(node)
+		}
 	}
 
 	if drops > 0 {
@@ -692,15 +717,118 @@ func (d *Driver) markWritten(name string, v any) {
 	d.wmu.Unlock()
 }
 
-// unaccount forgets a command that never left — a write to an offline node.
-// Dropping lastOut is what makes the next scan see the tag as changed again
-// and re-raise it, which is the behaviour a dark site has always had: the
-// operator's setpoint is retried (and counted as a drop) until the site
-// births or the operator moves the tag somewhere else.
-func (d *Driver) unaccount(name string) {
+// maxQueuedPerNode bounds the dark-site queue. It is one value per TAG — a
+// second write to the same setpoint replaces the first — so 256 is "every
+// writable output a site plausibly has", not a burst budget. Past it the
+// write is dropped and counted: a node with more than 256 distinct commands
+// outstanding is a runaway program, not an operator.
+const maxQueuedPerNode = 256
+
+// queueOffline parks the writes whose destination node is dark, one wmu
+// acquisition for the whole batch, and reports how many had to be dropped
+// because the node's queue is full. Only the LATEST value per tag survives:
+// an operator who moves a setpoint twice while the site is down commanded it
+// once, to the second value.
+func (d *Driver) queueOffline(hold map[string]map[string]any) uint64 {
+	var dropped uint64
+	var full []string
+	var parked uint64
+
 	d.wmu.Lock()
-	delete(d.lastOut, name)
+	if d.queued == nil {
+		d.queued = map[string]map[string]any{}
+	}
+	for node, tags := range hold {
+		q := d.queued[node]
+		if q == nil {
+			q = map[string]any{}
+			d.queued[node] = q
+		}
+		for name, v := range tags {
+			if _, replacing := q[name]; !replacing && len(q) >= maxQueuedPerNode {
+				dropped++
+				full = append(full, name)
+				continue
+			}
+			q[name] = v
+			parked++
+		}
+	}
 	d.wmu.Unlock()
+
+	if parked > 0 {
+		d.mu.Lock()
+		d.stats.WriteQueued += parked
+		d.mu.Unlock()
+		d.log.Debug("host: queued writes for a dark node", "writes", parked, "nodes", len(hold))
+	}
+	for _, name := range full {
+		d.log.Warn("host: dropping write; the node's queue is full",
+			"tag", name, "limit", maxQueuedPerNode)
+	}
+	return dropped
+}
+
+// releaseQueued delivers the commands parked for one edge node, now that it
+// has birthed. It is called from the inbound path with NEITHER lock held —
+// the same discipline flushAdopts documents, and for the same reason: wmu and
+// d.mu are never nested in this package.
+//
+// It must run AFTER adoption (flushAdopts), because adoption is what settles
+// the question the queue cannot answer for itself: the operator asked for a
+// value while the site was dark, and the site has now told us what it holds.
+// If they agree the command has already happened — drop it silently. If they
+// differ it goes out, once. A queued write whose tag has been moved again
+// since is superseded by the newer value already in pending.
+func (d *Driver) releaseQueued(edge string) {
+	d.wmu.Lock()
+	waiting := len(d.queued[edge])
+	d.wmu.Unlock()
+	if waiting == 0 || !d.nodeOnline(edge) {
+		return
+	}
+
+	d.wmu.Lock()
+	d.initWriteMapsLocked()
+	q := d.queued[edge]
+	delete(d.queued, edge)
+	sent, settled := 0, 0
+	for name, v := range q {
+		if _, newer := d.pending[name]; newer {
+			continue // a later scan already queued this tag; that value wins
+		}
+		if prev, ok := d.remote[name]; ok && sameValue(prev, v) {
+			settled++ // the site came back already holding it
+			continue
+		}
+		d.pending[name] = v
+		sent++
+	}
+	d.wmu.Unlock()
+
+	if sent > 0 {
+		d.log.Info("host: delivering commands queued while the node was dark",
+			"node", edge, "commands", sent, "alreadyHeld", settled)
+		d.kickWriter()
+	}
+}
+
+// queuedDepths is how many commands are parked per edge node, for Status. It
+// takes wmu alone — Status gathers it before touching d.mu, so the two locks
+// stay unnested.
+func (d *Driver) queuedDepths() map[string]int {
+	d.wmu.Lock()
+	defer d.wmu.Unlock()
+	if len(d.queued) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(d.queued))
+	for node, q := range d.queued {
+		if len(q) > 0 {
+			out[node] = len(q)
+		}
+	}
+	return out
 }
 
 // flushAdopts applies the member-output baselines the state machine queued
@@ -734,7 +862,8 @@ func (d *Driver) flushAdopts() {
 
 // nodeOnline reports whether an edge node has birthed and not died. An unknown
 // node — one we have never heard from — is offline, which is exactly the case
-// the write drop exists for.
+// the dark-site queue exists for: a host that starts before its fleet can
+// still be commanded, and the commands land as the sites birth.
 func (d *Driver) nodeOnline(edge string) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()

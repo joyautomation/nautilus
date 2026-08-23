@@ -12,24 +12,35 @@ package host
 // give the HMI its comms-status page with zero HMI changes — they adapt
 // straight onto server.DriverDevice.
 func (d *Driver) Status() Status {
-	// nodeStatuses takes d.mu itself, so gather it outside the lock.
+	// Both take a lock of their own, so gather them before taking d.mu —
+	// queuedDepths takes wmu, and wmu and d.mu are never nested.
+	depths := d.queuedDepths()
 	nodes := d.nodeStatuses()
+	queued := 0
+	for _, n := range depths {
+		queued += n
+	}
+	for i := range nodes {
+		nodes[i].QueuedWrites = depths[nodes[i].EdgeNode]
+	}
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
 	st := Status{
-		Broker:     d.cfg.BrokerURL,
-		HostID:     d.cfg.HostID,
-		Groups:     append([]string(nil), d.groups...),
-		Connected:  d.connected,
-		Msgs:       d.stats.Msgs,
-		Rebirths:   d.stats.Rebirths,
-		SeqGaps:    d.stats.SeqGaps,
-		WriteDrops: d.stats.WriteDrops,
-		Unknown:    len(d.unknown),
-		Degraded:   d.degraded,
-		Nodes:      nodes,
+		Broker:       d.cfg.BrokerURL,
+		HostID:       d.cfg.HostID,
+		Groups:       append([]string(nil), d.groups...),
+		Connected:    d.connected,
+		Msgs:         d.stats.Msgs,
+		Rebirths:     d.stats.Rebirths,
+		SeqGaps:      d.stats.SeqGaps,
+		WriteDrops:   d.stats.WriteDrops,
+		WriteQueued:  d.stats.WriteQueued,
+		QueuedWrites: queued,
+		Unknown:      len(d.unknown),
+		Degraded:     d.degraded,
+		Nodes:        nodes,
 	}
 	if d.connected {
 		// The STATE birth timestamp — the same value the will carries, so a

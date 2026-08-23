@@ -103,6 +103,14 @@ func (d *Driver) handleMessage(topic string, payload []byte) {
 	d.mu.Unlock()
 	d.flushRebirths()
 	d.flushAdopts()
+	// A birth is what a command parked for a dark site was waiting for. It
+	// runs after flushAdopts on purpose: the birth's own values are this
+	// node's adopted baseline, and a queued command the site already holds
+	// must not go out again. releaseQueued is a cheap map lookup when there
+	// is nothing waiting, which is the normal case, so every message from
+	// the node gets the chance — a DBIRTH that arrived out of order and
+	// drained later still delivers.
+	d.releaseQueued(edge)
 }
 
 // parseTopic splits a Sparkplug topic into its parts. ok is false for
@@ -617,8 +625,10 @@ func (d *Driver) applyBindingLocked(ns *nodeState, b Binding, m sparkplug.Metric
 //
 // Until the parent struct arrives a member output has no adopted value at
 // all; its baseline is its init:, and an operator write before the birth
-// still publishes (when the node is online — a write to a dark site is
-// dropped and counted, as always). Caller holds d.mu.
+// still publishes — immediately when the node is online, and on the node's
+// next birth when it is dark (the write waits in d.queued, and this is what
+// decides whether it still has anything to say when it is released).
+// Caller holds d.mu.
 func (d *Driver) adoptMembersLocked(b Binding, v ir.Value) {
 	if v.Kind != ir.TypeStruct {
 		return
@@ -885,6 +895,30 @@ func (d *Driver) snapshot() nio.Values {
 		out[k] = v
 	}
 	return out
+}
+
+// snapshotInto is snapshot without the allocation: it refills the caller's
+// map and leaves it holding EXACTLY what the driver holds, so a name the
+// driver no longer serves disappears from dst rather than lingering as a
+// stale reading. It mirrors runtime.Tags.SnapshotInto, which is the same
+// trick on the other side of the seam.
+func (d *Driver) snapshotInto(dst nio.Values) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for k, v := range d.values {
+		dst[k] = v
+	}
+	// d.values ⊆ dst now, so equal lengths already prove the key sets match;
+	// only a name the driver dropped can make them differ, and the driver
+	// never drops one (values survive death by design), so this is the cold
+	// path it looks like.
+	if len(dst) != len(d.values) {
+		for k := range dst {
+			if _, ok := d.values[k]; !ok {
+				delete(dst, k)
+			}
+		}
+	}
 }
 
 // nodeStatuses is the per-site rows Status() and /api/drivers' Devices list
