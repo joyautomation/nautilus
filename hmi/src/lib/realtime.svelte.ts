@@ -90,7 +90,7 @@ export class RealtimeClient<T = unknown> {
 	#es: EventSource | null = null;
 	#reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	#heartbeat: ReturnType<typeof setInterval> | null = null;
-	#onOpen: (() => void) | null = null;
+	#opens = new Set<() => void>();
 
 	constructor(opts: RealtimeOptions<T> = {}) {
 		this.#url = opts.url ?? '/api/stream';
@@ -106,9 +106,14 @@ export class RealtimeClient<T = unknown> {
 		return () => this.#subs.delete(cb);
 	}
 
-	/** Register a callback run whenever the stream (re)opens — e.g. to backfill. */
-	onOpen(cb: () => void) {
-		this.#onOpen = cb;
+	/**
+	 * Register a callback run whenever the stream (re)opens — e.g. to backfill
+	 * a trend from the historian and close whatever gap the outage left.
+	 * Returns an unsubscribe function; several subscribers may coexist.
+	 */
+	onOpen(cb: () => void): () => void {
+		this.#opens.add(cb);
+		return () => this.#opens.delete(cb);
 	}
 
 	/** Open the stream and begin tracking freshness. Idempotent. */
@@ -136,7 +141,9 @@ export class RealtimeClient<T = unknown> {
 	#connect() {
 		const es = new EventSource(this.#url);
 		this.#es = es;
-		es.onopen = () => this.#onOpen?.();
+		es.onopen = () => {
+			for (const cb of this.#opens) cb();
+		};
 		es.onerror = () => {
 			// The built-in reconnect can stall across a proxy failover — tear the
 			// stream down and reconnect ourselves on a fixed interval.

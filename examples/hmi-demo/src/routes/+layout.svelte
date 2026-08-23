@@ -21,7 +21,8 @@
 	const nav = [
 		{ href: '/', label: 'Overview', icon: '⬡' },
 		{ href: '/trends', label: 'Trends', icon: '∿' },
-		{ href: '/primitives', label: 'Primitives', icon: '▦' }
+		{ href: '/primitives', label: 'Primitives', icon: '▦' },
+		{ href: '/legacy', label: 'Legacy port', icon: '⌸' }
 	];
 
 	function isActive(href: string) {

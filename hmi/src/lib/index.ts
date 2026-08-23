@@ -3,7 +3,10 @@
 
 // Visual / operator components
 export { default as Tank } from './components/Tank.svelte';
+export { default as LevelTank } from './components/LevelTank.svelte';
 export { default as Gauge } from './components/Gauge.svelte';
+export { default as ScaleBar } from './components/ScaleBar.svelte';
+export type { ScaleBand } from './components/ScaleBar.svelte';
 export { default as Trend } from './components/Trend.svelte';
 export { default as TrendChart } from './components/TrendChart.svelte';
 export { default as Pump } from './components/Pump.svelte';
@@ -21,9 +24,37 @@ export { default as MotionSwitch } from './components/MotionSwitch.svelte';
 // publisher) — feed from GET /api/drivers or frame.drivers.
 export { default as ConnectionBadge } from './components/ConnectionBadge.svelte';
 
+// Legacy-symbol chrome: a raster symbol library (Ignition, FactoryTalk, WinCC)
+// with SCADA state decoration around it, and the one-line device status bar
+// those packages tile by the hundred.
+export { default as EquipSymbol } from './components/EquipSymbol.svelte';
+export { default as StatusRow } from './components/StatusRow.svelte';
+export type { RowState } from './components/StatusRow.svelte';
+
+// Schematic glyphs — SVG `<g>` primitives for a network/P&ID view you lay out
+// yourself. Drop them inside your own `<svg>`.
+export { default as TankGlyph } from './components/TankGlyph.svelte';
+export { default as PumpGlyph } from './components/PumpGlyph.svelte';
+export { default as ValveGlyph } from './components/ValveGlyph.svelte';
+export { default as FlowLink } from './components/FlowLink.svelte';
+
 // Process mimic: a P&ID-style graphic as data (*.mimic.json) rendered live —
 // the spatial parts of an HMI; screens/routing stay ordinary SvelteKit.
 export { default as Mimic } from './components/Mimic.svelte';
+
+// Coordinate canvas: a fixed, scaled plane of absolutely-placed symbols — the
+// shape every legacy HMI screen has. Bring your own spec and component
+// registry; see ./canvas.ts.
+export { default as CoordinateCanvas } from './components/CoordinateCanvas.svelte';
+export { CONTAINER_TYPES, inlineStyle, flexStyle, walkSpec } from './canvas.js';
+export type { CanvasSpec, CanvasNode, CanvasRegistry } from './canvas.js';
+
+// Write-back controls. All three take an injected `write(name, value)` that
+// resolves to `null` on success or a refusal reason — `RealtimeClient.writeTag`
+// satisfies it directly, and so does any other transport.
+export { default as WriteNumber } from './components/WriteNumber.svelte';
+export { default as WriteToggle } from './components/WriteToggle.svelte';
+export { default as CommandButton } from './components/CommandButton.svelte';
 
 // Faceplates: the popup a mimic click opens (chrome + tab bar; compose the
 // content from StatusPill / NumberField / Gauge / your own markup).
@@ -74,6 +105,17 @@ export { default as AppShell } from './components/AppShell.svelte';
 // Realtime client (generic over the frame shape)
 export { RealtimeClient, createRealtimeClient, TrendBuffer } from './realtime.svelte.js';
 export type { RealtimeOptions } from './realtime.svelte.js';
+
+// Trends: live off the stream, backfilled from the historian.
+export { useTrend } from './trend.svelte.js';
+export type { UseTrendOptions } from './trend.svelte.js';
+export { fetchHistory, historyAvailable, mergeHistory } from './history.js';
+export type { HistoryOptions, HistoryResult } from './history.js';
+
+// Reading a frame's tag map — dotted struct paths, and enumerating what a
+// runtime actually publishes (for a tag picker that can't offer a dead tag).
+export { tagAt, numAt, boolAt, hasTagAt, numericLeaves } from './tags.js';
+export type { TagTree, NumericLeaf } from './tags.js';
 
 // Theme / motion preference stores
 export { theme } from './theme.svelte.js';

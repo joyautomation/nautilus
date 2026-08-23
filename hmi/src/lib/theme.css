@@ -102,6 +102,27 @@
 	scroll-behavior: auto !important;
 }
 
+/* Attention flash for an unacknowledged condition. Components that need it
+   (EquipSymbol's fault bell) set `class:blinking` rather than styling it
+   themselves, so a host app can redefine this one rule — it is deliberately
+   NOT scoped to a component. The reduced-motion rule above already stops it;
+   the outline below keeps the indication once the animation is gone, so the
+   signal never rests on motion alone. */
+.blinking {
+	animation: nautilus-blink 1.5s cubic-bezier(0.68, -0.55, 0.265, 1.55) infinite alternate;
+}
+
+@keyframes nautilus-blink {
+	to {
+		opacity: 0.3;
+	}
+}
+
+:root[data-motion='reduced'] .blinking {
+	animation: none;
+	outline: 2px solid var(--crit);
+}
+
 /* ── Optional base primitives ──────────────────────────────────────────────
    These style the raw elements the operator faceplates lean on (cards,
    buttons, inputs, tables). They are convenience defaults; scope or drop them

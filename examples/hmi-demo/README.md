@@ -35,6 +35,15 @@ CONTROLLER_URL=http://localhost:8081 npm run dev
 - **`ScanDiagnostics`** — the PLC scan loop, fed straight from `frame.scan`.
 - **`RealtimeClient`** — one generic SSE client drives everything; `theme`
   and `ThemeSwitch` flip the whole screen light/dark.
+- **`/legacy` — the legacy-port components**, the pieces you reach for when
+  the screen already exists in Ignition, FactoryTalk or WinCC and the job is
+  to reproduce it: `CoordinateCanvas` (a fixed, scaled coordinate plane),
+  `EquipSymbol` (a raster symbol with SCADA state chrome), `ScaleBar`,
+  `StatusRow`, `LevelTank`, the four schematic glyphs (`TankGlyph`,
+  `PumpGlyph`, `ValveGlyph`, `FlowLink`) and the write-back trio
+  (`WriteNumber`, `WriteToggle`, `CommandButton`). This page needs no
+  controller — every value is one slow sine wave, so the bands cross, the
+  flow link starts marching and the status rows change colour on their own.
 
 ## How it's wired
 
