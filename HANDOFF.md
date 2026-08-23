@@ -175,3 +175,5 @@ Next, in rough priority:
 6. **Merge PRs #6 and #7** (note: the `demo-integration` worktree ~/Development/joyautomation/nautilus-demo exists only to build the demo binary).
 7. **Native-Go function blocks** alongside ST (both lowering to the IR).
 8. **Extension stable release** — first stable-channel Marketplace release, when the Test Explorer + schema work has soaked on the pre-release channel.
+
+- **VS Code extension (2026-08-22 check):** the ladder-FB webview work (ldPreview.ts, LadderView.svelte, ladder.ts) compiles, svelte-checks, vite-builds and tests green (59+84). Pre-existing, unrelated: `tools/vscode-iec/webview-ui/package.json` pins `typescript: ^7.0.2`, which svelte-check 4.7.x cannot load (needs TS ^5||^6 — `ts.sys` gone); run `npm install --no-save typescript@^5.9` to check locally, and 39 older svelte-check errors exist in App/Sfc/mimic/test files (missing @types/node, allowImportingTsExtensions, @xyflow .d.ts). Track separately.
