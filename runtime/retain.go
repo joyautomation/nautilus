@@ -95,6 +95,11 @@ func (r *Runtime) takeover() {
 	for _, tr := range r.tasks {
 		tr.prog.ResetFrame()
 	}
+	// This replica has never written to the field, whatever its predecessor
+	// left in the store: the first scan as leader pushes the FULL output set
+	// rather than trusting a generation stamp the old leader's driver knows
+	// nothing about. See Options.AlwaysWriteOutputs.
+	r.outSent.Store(false)
 	r.mu.Lock()
 	r.lastScan = time.Time{}
 	r.mu.Unlock()

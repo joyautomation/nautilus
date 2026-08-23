@@ -258,6 +258,17 @@ type Server struct {
 	mu      sync.Mutex
 	clients map[chan []byte]struct{}
 	active  string // last activated commit sha; see setActive
+
+	// Tag-map memo for the frame builder. A frame's Tags block is the
+	// plain-JSON rendering of the WHOLE store, and on a controller with
+	// thousands of tags that is by far the most expensive part of a frame —
+	// rebuilt four times a second whether or not a single value moved.
+	// runtime.Tags.Generation says whether it moved. The memoised map is
+	// never mutated after it is built (a change replaces it wholesale), so
+	// concurrent frame encoders may share one.
+	tagMu   sync.Mutex
+	tagGen  uint64
+	tagSnap map[string]any
 }
 
 // New builds a Server over a runtime.
@@ -331,12 +342,27 @@ func (s *Server) broadcast() {
 	s.mu.Unlock()
 }
 
+// tagsFrame is the frame's Tags block, rebuilt only when the tag store has
+// actually changed. The generation is read BEFORE the rendering, so it can
+// only ever under-state what the map holds — one redundant rebuild, never a
+// stale frame.
+func (s *Server) tagsFrame() map[string]any {
+	tags := s.rt.Tags()
+	gen := tags.Generation()
+	s.tagMu.Lock()
+	defer s.tagMu.Unlock()
+	if s.tagSnap == nil || gen != s.tagGen {
+		s.tagSnap, s.tagGen = tags.All(), gen
+	}
+	return s.tagSnap
+}
+
 func (s *Server) frame() Frame {
 	stats := s.rt.Stats()
 	f := Frame{
 		TS:     time.Now().UnixMilli(),
 		Scans:  stats.Count,
-		Tags:   s.rt.Tags().All(),
+		Tags:   s.tagsFrame(),
 		Locals: s.rt.AllLocals(),
 		Scan:   stats,
 	}

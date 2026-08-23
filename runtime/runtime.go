@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/joyautomation/nautilus/internal/stproject"
@@ -61,6 +62,17 @@ type Options struct {
 	// what must survive a restart, while state/inputs re-derive from the
 	// field. Ignored when Retain is nil.
 	RetainTags []string
+	// AlwaysWriteOutputs restores the pre-generation behaviour: call the
+	// driver's WriteOutputs on EVERY scan, even when not one output tag
+	// moved. By default the runtime pushes output CHANGES — it calls
+	// WriteOutputs on the first scan, on any scan where an output tag's
+	// value differs from the one last handed over, after a failed write,
+	// and after a redundancy takeover — because that is what every driver
+	// in tree already reduces the call to internally (see eip.Driver, which
+	// diffs against its own last-written set). Set this for a driver that
+	// needs a per-scan refresh in its own right: a watchdog that must be
+	// re-armed, or a bus whose outputs decay without a rewrite.
+	AlwaysWriteOutputs bool
 	// Coordinator gates the scan loop for redundancy: a standby replica
 	// (IsLeader false) skips scans entirely — no field I/O, no logic — and
 	// performs the takeover sequence (reload retained state, reset program
@@ -126,6 +138,19 @@ type Runtime struct {
 	retainStore retain.Store
 	retainTags  []string
 	coord       Coordinator
+
+	// alwaysWrite / outGen / outSent implement the output push rule (see
+	// Options.AlwaysWriteOutputs): outGen is the tag store's output-write
+	// generation at the last SUCCESSFUL WriteOutputs, so a scan that finds
+	// the same stamp knows the driver already holds exactly these values.
+	// Atomic because takeover() clears outSent from outside scanMu.
+	alwaysWrite bool
+	outGen      atomic.Uint64
+	outSent     atomic.Bool
+
+	// inBuf is the delivery map an io.BatchReader driver refills each scan
+	// instead of allocating one. Touched only from Scan, under scanMu.
+	inBuf nio.Values
 
 	// leadMu guards the leadership edge so exactly one scan performs the
 	// takeover sequence when this replica becomes leader. See retain.go.
@@ -322,7 +347,11 @@ func New(o Options) (*Runtime, error) {
 		inputs: o.Inputs, outputs: o.Outputs, dtTag: o.DtTag, meta: o.Meta,
 		clock: o.Clock, types: types, tasks: tasks,
 		retainStore: o.Retain, retainTags: retainTags, coord: o.Coordinator,
+		alwaysWrite: o.AlwaysWriteOutputs,
 	}
+	// Flag the output tags in the store so a write to one stamps the
+	// output generation Scan reads (see Tags.markOutputs).
+	tags.markOutputs(o.Outputs)
 	r.stats.TargetMs = o.Scan.Seconds() * 1000
 	r.stats.IOHealthy = true
 	r.stats.Recent = make([]float64, 0, historyLen)
@@ -695,17 +724,26 @@ func (r *Runtime) Scan() {
 	// 1. inputs — on a read failure the scan runs on last-known values.
 	var ioErr error
 	if r.driver != nil {
-		in, err := r.driver.ReadInputs()
+		var in nio.Values
+		var err error
+		if br, ok := r.driver.(nio.BatchReader); ok {
+			// The driver can refill our map: no per-scan allocation of the
+			// whole input set. See io.BatchReader.
+			if r.inBuf == nil {
+				r.inBuf = make(nio.Values, len(r.inputs))
+			}
+			in, err = r.inBuf, br.ReadInputsInto(r.inBuf)
+		} else {
+			in, err = r.driver.ReadInputs()
+		}
 		ioErr = err
 		if err == nil {
-			for _, name := range r.inputs {
-				if v, ok := in[name]; ok {
-					// setAny: the driver delivers whole tags under the names
-					// the project bound, including the first delivery of an
-					// (unseeded) input, which has no value to modify yet.
-					r.tags.setAny(name, v)
-				}
-			}
+			// setMany: the driver delivers whole tags under the names the
+			// project bound, including the first delivery of an (unseeded)
+			// input, which has no value to modify yet. One lock for the
+			// whole delivery, and a re-delivered identical value is not a
+			// write at all — see Tags' "Write generations".
+			r.tags.setMany(r.inputs, in)
 		}
 	}
 	if r.dtTag != "" {
@@ -717,23 +755,30 @@ func (r *Runtime) Scan() {
 	logicErr := r.prog.Run(r.tags)
 	t2 := time.Now()
 
-	// 3. outputs
+	// 3. outputs — a push of what CHANGED. The generation stamp over the
+	// output tags answers "does the driver already hold exactly this?"
+	// without reading a single value, which is what keeps a controller with
+	// thousands of output bindings from re-serialising all of them every
+	// scan to say nothing. Options.AlwaysWriteOutputs opts back out.
 	if r.driver != nil && len(r.outputs) > 0 {
-		out := make(nio.Values, len(r.outputs))
-		for _, name := range r.outputs {
-			if v, err := r.tags.ReadGlobal(name); err == nil {
-				// Compound values (UDTs, arrays) cross the seam as ir.Value so
-				// typed drivers keep field names and integer widths; scalars
-				// stay plain Go values for simple drivers.
-				if v.Kind == ir.TypeStruct || v.Kind == ir.TypeArray {
-					out[name] = v
-				} else {
-					out[name] = plain(v)
+		gen := r.tags.outputGeneration()
+		if r.alwaysWrite || !r.outSent.Load() || gen != r.outGen.Load() {
+			// Compound values (UDTs, arrays) cross the seam as ir.Value so
+			// typed drivers keep field names and integer widths; scalars
+			// stay plain Go values for simple drivers.
+			out := make(nio.Values, len(r.outputs))
+			r.tags.readMany(r.outputs, out)
+			if err := r.driver.WriteOutputs(out); err != nil {
+				if ioErr == nil {
+					ioErr = err
 				}
+				// A failed write leaves the driver holding who-knows-what:
+				// retry the whole set next scan rather than trusting the stamp.
+				r.outSent.Store(false)
+			} else {
+				r.outGen.Store(gen)
+				r.outSent.Store(true)
 			}
-		}
-		if err := r.driver.WriteOutputs(out); err != nil && ioErr == nil {
-			ioErr = err
 		}
 	}
 	t3 := time.Now()

@@ -61,6 +61,20 @@ website/, docs/      docs site (deploys from main); design briefs in docs/design
 
 ## Gotchas
 
+- **The tag store is generation-stamped.** `runtime.Tags` bumps a counter
+  only on a write that CHANGES a value; a write of the value already there
+  is a no-op. Everything downstream asks "did this move?" with an integer
+  compare instead of a walk: the Sparkplug RBE pass, the SSE frame, and the
+  driver output push. Consequences to remember when touching this code:
+  `WriteOutputs` is called on CHANGE (first scan, a moved output, after a
+  failed write, after a takeover) — `runtime.Options.AlwaysWriteOutputs`
+  restores per-scan calls for a driver that needs a watchdog re-armed; a
+  driver may implement `io.BatchReader` to be handed the runtime's own input
+  map instead of allocating one per scan; and anything caching per-tag state
+  keyed by NAME should invalidate on `Tags.NameGeneration()`. Full write-up:
+  `runtime/tags.go` ("Write generations") and the tag-model guide's
+  "Performance notes". Benchmarks that pin it: `runtime/bigstore_bench_test.go`,
+  `runtime/hostdriver_bench_test.go`, `sparkplug/publish_bench_test.go`.
 - `examples/heated-tank-nogo` is a shared test fixture: the Go acceptance
   tests (`acceptance/heated_tank_test.go`) and the LSP tests
   (`internal/lsp/testdoc_test.go`) both run against it. If you change its

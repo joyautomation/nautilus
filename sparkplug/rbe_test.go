@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 func TestRBEDeadbandAndHeartbeat(t *testing.T) {
@@ -16,7 +17,7 @@ func TestRBEDeadbandAndHeartbeat(t *testing.T) {
 	if !r.shouldPublish(st, ir.RealVal(10), t0) {
 		t.Fatal("first value must publish")
 	}
-	st.record(ir.RealVal(10), t0)
+	st.record(ir.RealVal(10), 0, t0)
 
 	// Within min-interval: suppressed even on a big change.
 	if r.shouldPublish(st, ir.RealVal(20), t0.Add(50*time.Millisecond)) {
@@ -38,7 +39,7 @@ func TestRBEDeadbandAndHeartbeat(t *testing.T) {
 
 func TestRBEDisableAndBoolChange(t *testing.T) {
 	st := &rbeState{}
-	st.record(ir.BoolVal(false), time.Unix(0, 0))
+	st.record(ir.BoolVal(false), 0, time.Unix(0, 0))
 	// Non-numeric change publishes.
 	if !(RBE{}).shouldPublish(st, ir.BoolVal(true), time.Unix(1, 0)) {
 		t.Error("bool change should publish")
@@ -81,7 +82,7 @@ func TestRBEDeadbandOnStructMembers(t *testing.T) {
 	if !r.shouldPublish(st, mk(10.0, false), t0) {
 		t.Fatal("first value must publish")
 	}
-	st.record(mk(10.0, false), t0)
+	st.record(mk(10.0, false), 0, t0)
 
 	// Sub-deadband REAL member dither alone must not republish the template.
 	if r.shouldPublish(st, mk(10.4, false), t0) {
@@ -93,7 +94,7 @@ func TestRBEDeadbandOnStructMembers(t *testing.T) {
 	if !r.shouldPublish(st, mk(11.2, false), t0) {
 		t.Error("over-deadband member change must publish")
 	}
-	st.record(mk(11.2, false), t0)
+	st.record(mk(11.2, false), 0, t0)
 
 	// A non-numeric member changing publishes even though the REAL member
 	// stays within deadband of the last PUBLISHED value.
@@ -130,7 +131,7 @@ func TestRBEDeadbandOnNestedStruct(t *testing.T) {
 	if !r.shouldPublish(st, mk(1, 10.0), t0) {
 		t.Fatal("first value must publish")
 	}
-	st.record(mk(1, 10.0), t0)
+	st.record(mk(1, 10.0), 0, t0)
 
 	if r.shouldPublish(st, mk(1, 10.2), t0) {
 		t.Error("sub-deadband change in a nested struct member must not publish")
@@ -157,7 +158,7 @@ func TestRBEMinIntervalStillAppliesToStructs(t *testing.T) {
 	if !r.shouldPublish(st, mk(10.0), t0) {
 		t.Fatal("first value must publish")
 	}
-	st.record(mk(10.0), t0)
+	st.record(mk(10.0), 0, t0)
 
 	if r.shouldPublish(st, mk(50.0), t0.Add(50*time.Millisecond)) {
 		t.Error("a struct metric must still be rate-limited within MinInterval")
@@ -181,5 +182,43 @@ func TestClassResolution(t *testing.T) {
 	}
 	if n.classOf("Other") != DefaultClass {
 		t.Error("unmatched -> default")
+	}
+}
+
+// The generation fast path must be a shortcut, never a different answer:
+// an unchanged tag stays quiet exactly as the value comparison would have
+// decided, a heartbeat still fires through it, and a value that DID move is
+// handed to the full rule.
+func TestShouldPublishSampleGeneration(t *testing.T) {
+	v := ir.RealVal(10)
+	r := RBE{Deadband: 1.0}
+	st := &rbeState{}
+	t0 := time.Unix(0, 0)
+
+	// First value publishes, and records the generation it was published at.
+	if !r.shouldPublishSample(st, runtime.Sample{Value: v, Gen: 7}, t0) {
+		t.Fatal("first value must publish")
+	}
+	st.record(v, 7, t0)
+
+	// Same generation → no comparison, no publish, however much later.
+	if r.shouldPublishSample(st, runtime.Sample{Value: v, Gen: 7}, t0.Add(time.Hour)) {
+		t.Error("an unchanged generation published")
+	}
+
+	// Same generation, but the class has a heartbeat: it still fires.
+	hb := RBE{Deadband: 1.0, MaxInterval: time.Second}
+	if !hb.shouldPublishSample(st, runtime.Sample{Value: v, Gen: 7}, t0.Add(2*time.Second)) {
+		t.Error("the heartbeat did not fire through the generation fast path")
+	}
+
+	// A new generation falls through to the real rule — which still applies
+	// the deadband, so a sub-deadband move stays quiet…
+	if r.shouldPublishSample(st, runtime.Sample{Value: ir.RealVal(10.5), Gen: 8}, t0) {
+		t.Error("a sub-deadband change published")
+	}
+	// …and an over-deadband move publishes.
+	if !r.shouldPublishSample(st, runtime.Sample{Value: ir.RealVal(12), Gen: 9}, t0) {
+		t.Error("an over-deadband change did not publish")
 	}
 }

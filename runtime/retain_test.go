@@ -91,7 +91,7 @@ func TestLoadIgnoresTagsOutsideTheRetainedSet(t *testing.T) {
 	}}}
 	rt := newRetained(t, store, nil)
 	rt.Scan()
-	if got := rt.Tags().vals["Count"].I; got == 999 {
+	if got := rt.Tags().vals["Count"].v.I; got == 999 {
 		t.Fatal("a non-retained tag was written from the store")
 	}
 }
@@ -207,7 +207,7 @@ func TestStandbyDoesNotScan(t *testing.T) {
 	if n := rt.Stats().Count; n != 0 {
 		t.Fatalf("standby executed %d scans, want 0", n)
 	}
-	if got := rt.Tags().vals["Count"].I; got != 0 {
+	if got := rt.Tags().vals["Count"].v.I; got != 0 {
 		t.Fatalf("standby ran logic: Count = %d", got)
 	}
 }
@@ -223,7 +223,7 @@ func TestTakeoverReloadsAndResetsFrames(t *testing.T) {
 	for range 3 {
 		rt.Scan()
 	}
-	if got := rt.Tags().vals["Count"].I; got != 3 {
+	if got := rt.Tags().vals["Count"].v.I; got != 3 {
 		t.Fatalf("Count = %d after 3 scans, want 3", got)
 	}
 
@@ -240,7 +240,7 @@ func TestTakeoverReloadsAndResetsFrames(t *testing.T) {
 	if got := rt.Tags().Real("SP"); got != 80.0 {
 		t.Fatalf("SP = %v after takeover, want the old leader's 80.0", got)
 	}
-	if got := rt.Tags().vals["Count"].I; got != 1 {
+	if got := rt.Tags().vals["Count"].v.I; got != 1 {
 		t.Fatalf("Count = %d after takeover, want 1 — the frame must reset", got)
 	}
 }
@@ -252,7 +252,7 @@ func TestRetainedProgramApplies(t *testing.T) {
 	store := &fakeStore{state: retain.State{Programs: map[string]string{MainTaskName: edited}}}
 	rt := newRetained(t, store, nil)
 	rt.Scan()
-	if got := rt.Tags().vals["Count"].I; got != 10 {
+	if got := rt.Tags().vals["Count"].v.I; got != 10 {
 		t.Fatalf("Count = %d, want 10 — the retained edit should be running", got)
 	}
 	if !rt.Program().Dirty() {
@@ -266,7 +266,7 @@ func TestBrokenRetainedProgramIsReportedNotFatal(t *testing.T) {
 	store := &fakeStore{state: retain.State{Programs: map[string]string{MainTaskName: "PROGRAM Broken syntax error"}}}
 	rt := newRetained(t, store, nil)
 	rt.Scan()
-	if got := rt.Tags().vals["Count"].I; got != 1 {
+	if got := rt.Tags().vals["Count"].v.I; got != 1 {
 		t.Fatalf("Count = %d, want 1 from the built-in program", got)
 	}
 	s := rt.Stats()

@@ -224,3 +224,61 @@ from the diagram's vars panel), produce it in the driver
 composition (`runtime.Input("testExt")`). The `Inputs` list is a deliberate
 allowlist — a driver can't spray arbitrary names into the store — which is
 why the middle step alone isn't enough.
+
+## Performance notes: write generations
+
+The tag store is the seam everything meets at, which also makes it the thing
+everything *sweeps*. A controller whose store is 500 UDT tags of 40 members
+has 20,000 leaves in it, and the naive version of each consumer walks all of
+them on its own clock: the driver copy writes every input every scan, the
+Sparkplug edge deep-compares every metric against its last published value
+every publish interval, the SSE frame renders the whole store four times a
+second, and the runtime hands the driver every output every scan. None of
+that is logic. On a 1s-scan controller it dwarfed the logic by two orders of
+magnitude.
+
+The store answers all of it with one number. **Every stored value carries
+the store generation at which it last CHANGED**, and a write that stores a
+value equal to the one already there is not a change: the counter does not
+move, and the tag keeps the value it had. The tag store holds values, not
+deliveries — re-delivering the same reading is not an event.
+
+That makes "has this changed since I last looked?" an integer comparison
+rather than a walk:
+
+| Consumer | Question | What it compares |
+| --- | --- | --- |
+| `Scan()` output push | did any output move? | `Tags` output generation vs the last successful `WriteOutputs` |
+| Sparkplug RBE | did this metric move? | the metric's `Sample.Gen` vs the generation it was last published at |
+| SSE frame / HMI | did anything move? | `Tags.Generation()` vs the last rendered frame |
+| Anything keyed by tag NAME | did a tag appear? | `Tags.NameGeneration()` |
+
+The public surface is four methods on `runtime.Tags` — `Generation()`,
+`NameGeneration()`, `TagGeneration(name)`, and `SnapshotInto(dst)`, which
+refills your map with `Sample{Value, Gen}` instead of allocating a fresh
+whole-store copy per tick. `Snapshot()` and `All()` are unchanged; prefer
+the generation-aware forms in anything that runs on a clock.
+
+Two consequences are worth knowing about:
+
+**`WriteOutputs` is a push of changes, not a per-scan heartbeat.** The
+runtime calls it on the first scan, on any scan where an output tag's value
+differs from the one it last handed over, after a failed write, and after a
+redundancy takeover — and skips it otherwise. Every driver in tree already
+reduced the call to that internally; now the call itself is skipped. A
+driver that genuinely needs a per-scan call — a watchdog to re-arm, a bus
+whose outputs decay without a rewrite — asks for one with
+`runtime.Options{AlwaysWriteOutputs: true}`.
+
+**A driver can skip the per-scan input map.** `ReadInputs` returns a fresh
+`io.Values` every scan; on a driver with thousands of bindings that is tens
+of kilobytes of garbage per scan for a map whose keys never change. A driver
+may also implement `io.BatchReader` — `ReadInputsInto(dst io.Values) error`
+— and the runtime hands it the same map back each scan. It is never
+required, and the runtime falls back to `ReadInputs` when it is absent.
+
+The change detection is deliberately conservative: two struct values are
+equal only if they share the same `StructDef`, and a function-block instance
+is never equal to anything (an FB is identity — its retained frame — not a
+value). The only mistake it can make is to report a change that did not
+happen, never to hide one.
