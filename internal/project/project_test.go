@@ -1,6 +1,7 @@
 package project
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -295,15 +296,97 @@ func TestHostStatusDeviceRows(t *testing.T) {
 	if !reflect.DeepEqual(ids, want) {
 		t.Fatalf("device rows = %v, want %v", ids, want)
 	}
-	if !strings.HasPrefix(s.Devices[0].Detail, "12 tags · born ") {
+	if s.Devices[0].Detail != "12 tags" {
 		t.Fatalf("online site detail = %q", s.Devices[0].Detail)
 	}
 	if s.Devices[2].Detail != "offline" {
 		t.Fatalf("offline site detail = %q", s.Devices[2].Detail)
 	}
-	if _, ok := s.Extra["nodes"]; !ok {
-		t.Fatal("extra.nodes must carry the full node rows for a richer page")
+	rows, ok := s.Extra["nodes"].([]nodeRow)
+	if !ok || len(rows) != 2 {
+		t.Fatalf("extra.nodes must carry the node rows for a richer page: %#v", s.Extra["nodes"])
 	}
+	if rows[0].EdgeNode != "W1" || rows[0].Metrics != 12 || rows[0].BirthMs == 0 {
+		t.Fatalf("node row = %+v", rows[0])
+	}
+	if len(rows[0].Devices) != 1 || rows[0].Devices[0].ID != "PLC1" {
+		t.Fatalf("node device rows = %+v", rows[0].Devices)
+	}
+}
+
+// The regression that put this status back on every frame of the live
+// Pomona stream. The controller sends a driver block only when it CHANGES —
+// it hashes the block — so a status that renders anything free-running is
+// not a cosmetic problem: it is 13 kB × 4/s, permanently, for a client that
+// asked for nothing. Two builds a quarter-second apart, with only the things
+// that move on their own having moved, must be byte-identical.
+//
+// Marshalled equality is a stronger claim than hash equality and does not
+// reach across into the server package: if these two frames are the same
+// bytes, no gate anywhere can tell them apart.
+func TestHostStatusHoldsStillWhileOnlyTrafficMoves(t *testing.T) {
+	a := hostStatusLike(true, 3, 3)
+	a.Nodes[0].Devices = []sphost.DeviceStatus{{ID: "PLC1", Online: true, Metrics: 5}}
+	for i := range a.Nodes {
+		a.Nodes[i].LastMsgMs = 1_700_000_000_000
+		a.Nodes[i].Seq = uint64(150 + i)
+	}
+
+	b := hostStatusLike(true, 3, 3)
+	b.Nodes[0].Devices = []sphost.DeviceStatus{{ID: "PLC1", Online: true, Metrics: 5}}
+	for i := range b.Nodes {
+		// A quarter-second later: every site has published again, so its
+		// last-message stamp and Sparkplug sequence have moved, and the
+		// host's total message count with them. Nothing has HAPPENED.
+		b.Nodes[i].LastMsgMs = 1_700_000_000_250
+		b.Nodes[i].Seq = uint64(153 + i)
+		b.Nodes[i].BirthMs = a.Nodes[i].BirthMs
+	}
+	b.Msgs = a.Msgs + 25
+	b.WriteQueued = a.WriteQueued + 3 // cumulative, and not an event
+
+	if x, y := mustJSON(t, hostStatus(a)), mustJSON(t, hostStatus(b)); x != y {
+		t.Fatalf("traffic alone changed the status block:\n%s\n%s", x, y)
+	}
+
+	// …and the things an operator acts on still do change it, one at a time.
+	for _, tc := range []struct {
+		name string
+		fn   func(st *sphost.Status)
+	}{
+		{"a site going offline", func(st *sphost.Status) { st.Nodes[1].Online = false }},
+		{"a site going stale", func(st *sphost.Status) { st.Nodes[1].Stale = true }},
+		{"a site's tag count", func(st *sphost.Status) { st.Nodes[1].Metrics = 99 }},
+		{"a device going offline", func(st *sphost.Status) { st.Nodes[0].Devices[0].Online = false }},
+		{"a rebirth", func(st *sphost.Status) { st.Rebirths++ }},
+		{"a sequence gap", func(st *sphost.Status) { st.SeqGaps++ }},
+		{"an unmanifested metric", func(st *sphost.Status) { st.Unknown++ }},
+		{"a write dropped", func(st *sphost.Status) { st.WriteDrops++ }},
+		{"a command parked for a dark site", func(st *sphost.Status) { st.QueuedWrites++ }},
+		{"a rebirth stamp", func(st *sphost.Status) { st.Nodes[1].BirthMs += 1000 }},
+		{"the broker dropping", func(st *sphost.Status) { st.Connected = false }},
+	} {
+		c := hostStatusLike(true, 3, 3)
+		c.Nodes[0].Devices = []sphost.DeviceStatus{{ID: "PLC1", Online: true, Metrics: 5}}
+		for i := range c.Nodes {
+			c.Nodes[i].LastMsgMs = 1_700_000_000_000
+			c.Nodes[i].Seq = uint64(150 + i)
+			c.Nodes[i].BirthMs = a.Nodes[i].BirthMs
+		}
+		tc.fn(&c)
+		if mustJSON(t, hostStatus(c)) == mustJSON(t, hostStatus(a)) {
+			t.Errorf("%s did not change the status block", tc.name)
+		}
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
 }
 
 // The sparkplug-host driver builds from the manifest tier with no broker
