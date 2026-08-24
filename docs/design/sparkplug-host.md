@@ -352,12 +352,27 @@ driver's own decoder, so the generator cannot drift from the runtime.
 **`/api/drivers` shape.** `Kind: "sparkplug-host"`, `Name: <host-id>`,
 `Detail: "<broker> · <group>"`. State: `error` (broker down) → `connecting` (connected, no
 births) → `degraded` (any node offline, or unknown metrics in strict mode) → `connected`.
-Metrics: `sites online` (`52 / 60`), `messages`, `rebirths`, `seq gaps`, `unknown metrics`,
-`last message` (via the existing `agoText`). **`Devices []DriverDevice` is the per-site row** —
-one entry per edge node (`{ID: "W6", Online: true, Detail: "12 tags · born 3m"}`), device
-sub-rows flattened as `W6/PLC1`. That satisfies the HMI comms-status requirement with **zero HMI
-changes**: `DriverStatusPanel.svelte` / `DriverStatusCard.svelte` already render `Devices`.
-`Extra: {"nodes": [...NodeStatus...]}` for a future richer page.
+Metrics: `sites online` (`52 / 60`), `sites stale`, `rebirths`, `seq gaps`, `unknown metrics`,
+plus `write drops` / `queued writes` when either is non-zero. **`Devices []DriverDevice` is the
+per-site row** — one entry per edge node (`{ID: "W6", Online: true, Detail: "12 tags"}`, or
+`"12 tags · stale"` / `"offline"`), device sub-rows flattened as `W6/PLC1`. That satisfies the
+HMI comms-status requirement with **zero HMI changes**: `DriverStatusPanel.svelte` /
+`DriverStatusCard.svelte` already render `Devices`.
+`Extra: {"nodes": [...]}` — a projection of the node table (`edgeNode`, `online`, `stale`,
+`bdSeq`, `birthMs`, `metrics`, `queuedWrites`, `devices`) for a future richer page.
+
+**Nothing in this status may free-run.** A delta stream sends the driver block only when it
+CHANGES (the server hashes it), and for 55 sites the block is ~13 kB — so one value that moves on
+its own is 13 kB on four frames a second, forever, for a client that asked for nothing. That is
+not hypothetical: the first live measurement on the Pomona host put this block on **every** frame
+(3.0 MB/min to a no-tags client) because `Extra` marshalled `sphost.NodeStatus` whole (carrying
+`LastMsgMs` and `Seq`, which step on every NDATA), the metrics grid carried a total message count
+and a clock-rendered `last message`, and each site's row rendered `born 3m` / `stale 4s`. So the
+status reports the plant **categorically** — flags, counts, and counters that step on real events
+— and reports moments (`birthMs`) rather than ages, which a reader renders against the block's own
+`asOfMs`. A status that genuinely needs a free-running readout declares it: `DriverMetric.Volatile`,
+or `DriverStatus.VolatileExtra` with a nested path (`"nodes.*.lastMsgMs"`). See the streaming
+guide's "frame floor".
 
 ## 6. Testing
 
