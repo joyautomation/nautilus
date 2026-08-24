@@ -105,12 +105,12 @@
 	.banner {
 		display: flex;
 		align-items: center;
-		gap: 14px;
+		gap: var(--space-3);
 		width: 100%;
-		padding: 8px 14px;
+		padding: var(--space-2) var(--space-3);
 		background: var(--surface);
 		border: 1px solid color-mix(in srgb, var(--worst) 35%, var(--border));
-		border-radius: var(--radius, 8px);
+		border-radius: var(--radius);
 		color: var(--ink);
 		font: inherit;
 		text-align: left;
@@ -118,7 +118,7 @@
 		cursor: pointer;
 	}
 	.banner:hover {
-		background: var(--hover, var(--surface-2));
+		background: var(--hover);
 	}
 	.banner:focus-visible {
 		outline: 2px solid var(--accent);
@@ -163,16 +163,16 @@
 	}
 	.counts {
 		display: flex;
-		gap: 10px;
+		gap: var(--space-2);
 		flex: none;
 	}
 	.count {
 		display: inline-flex;
 		align-items: center;
-		gap: 4px;
+		gap: var(--space-1);
 		font-family: var(--mono);
 		font-size: var(--font-xs);
-		font-weight: 650;
+		font-weight: var(--weight-numeric);
 		color: var(--c);
 	}
 	.count.clear {
@@ -186,11 +186,11 @@
 	.newest {
 		display: flex;
 		align-items: baseline;
-		gap: 8px;
+		gap: var(--space-2);
 		min-width: 0;
 		flex: 1;
 		border-left: 1px solid var(--border);
-		padding-left: 12px;
+		padding-left: var(--space-2);
 	}
 	.newest .name {
 		font-size: var(--font-xs);

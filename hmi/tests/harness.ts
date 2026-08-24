@@ -22,24 +22,53 @@ declare const process: {
 	on(event: 'exit', listener: () => void): void;
 };
 
-type Fn = () => void;
+type Fn = () => void | Promise<void>;
 
 let failures = 0;
 let ran = 0;
+let pending = 0;
 
-export function describe(name: string, fn: Fn): void {
+export function describe(name: string, fn: () => void): void {
 	console.log(name);
 	fn();
 }
 
+function pass(name: string) {
+	console.log(`  ok   ${name}`);
+}
+function fail(name: string, e: unknown) {
+	failures++;
+	console.log(`  FAIL ${name}\n       ${(e as Error)?.message ?? String(e)}`);
+}
+
+/**
+ * A spec may be async. Anything it awaits must be MICROTASK-only (a promise
+ * already in flight, not a timer): the harness has no runner loop, it simply
+ * lets node drain the microtask queue before `exit` fires. A spec that awaits
+ * a timer would be reported as never having settled rather than silently
+ * passing — see the `pending` check in the exit hook.
+ */
 export function it(name: string, fn: Fn): void {
 	ran++;
 	try {
-		fn();
-		console.log(`  ok   ${name}`);
+		const r = fn();
+		if (r && typeof (r as Promise<void>).then === 'function') {
+			pending++;
+			(r as Promise<void>).then(
+				() => {
+					pending--;
+					pass(name);
+				},
+				(e) => {
+					pending--;
+					fail(name, e);
+				}
+			);
+			return;
+		}
+		pass(name);
 	} catch (e) {
-		failures++;
-		console.log(`  FAIL ${name}\n       ${(e as Error).message}`);
+		fail(name, e);
 	}
 }
 
@@ -103,6 +132,12 @@ export function expect(got: unknown): Matchers {
 // Reported at exit rather than after each describe, so a run of several
 // spec files gives one verdict and a non-zero status CI can read.
 process.on('exit', () => {
+	if (pending > 0) {
+		// An async spec that never settled is a spec that never ran. Report it
+		// as a failure rather than letting it disappear into a green run.
+		failures += pending;
+		console.log(`\n  FAIL ${pending} async spec(s) never settled`);
+	}
 	console.log(`\n${ran - failures}/${ran} passed`);
 	if (failures > 0) process.exitCode = 1;
 });

@@ -22,7 +22,8 @@
       "svelte": "./dist/mimic.js",
       "default": "./dist/mimic.js"
     },
-    "./theme.css": "./dist/theme.css"
+    "./theme.css": "./dist/theme.css",
+    "./fonts.css": "./dist/fonts.css"
   },
   "files": [
     "dist"
@@ -34,7 +35,7 @@
     "package": "svelte-kit sync && svelte-package && publint",
     "prepublishOnly": "npm run package",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "test": "esbuild tests/*.test.ts --bundle --format=esm --platform=node --outdir=.svelte-kit/tests --log-level=warning && node .svelte-kit/tests/delta.test.js"
+    "test": "esbuild tests/*.test.ts --bundle --format=esm --platform=node --outdir=.svelte-kit/tests --log-level=warning && node .svelte-kit/tests/delta.test.js && node .svelte-kit/tests/quality.test.js && node .svelte-kit/tests/confirm.test.js"
   },
   "peerDependencies": {
     "svelte": "^5.0.0"
@@ -58,5 +59,10 @@
     "sse",
     "nautilus",
     "joyautomation"
-  ]
+  ],
+  "dependencies": {
+    "@fontsource-variable/space-grotesk": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
+    "@fontsource/righteous": "^5.3.0"
+  }
 }

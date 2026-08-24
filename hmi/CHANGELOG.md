@@ -87,15 +87,128 @@ hopeless for tablets.
 - **`NautilusFrame.quality` / `.seq` / `.full`** and **`ControllerMeta.quality` / `.deltas`** —
   the wire shapes, all optional and all absent on older controllers.
 
+### Added — the house style, and the token layer it needed
+
+`theme.css` grows from a palette into the full house token layer, surveyed off `@joyautomation/salt`
+and the two web properties that already use it. **Every existing token name still resolves** — see
+the mapping table below — so nothing that consumes 0.5.0 breaks.
+
+- **Type**: `--font` is now Space Grotesk, `--mono` is IBM Plex Mono, and `--font-display`
+  (Righteous) joins them for a header wordmark — **chrome only, never a process value**. The size
+  scale is unchanged. Three weight tokens name the house half-steps that carry as much of the
+  hierarchy as size does: `--weight-control` 550 · `--weight-numeric` 650 · `--weight-eyebrow` 700.
+- **Space**: `--space-unit` (salt's `0.325rem`) and `--space-1 … --space-8` on it — the layer the
+  kit was missing, and the reason literal px kept reappearing in component styles.
+- **Radii**: `--radius-sm` (6px, controls and chips) and `--radius-pill` join `--radius` (10px,
+  unchanged, panels and faceplates).
+- **Depth**: `--elevation-float`, the ONE elevation, for things that actually float. Plus
+  `--tint-strength` / `--wash-strength` so a tint is the same tint everywhere, `--overlay` for the
+  ground a modal is seen against, and `--transition` / `--transition-slow` (0.12/0.15s).
+- **Utility classes**: `.eyebrow` (the house micro-label, now a class instead of a copied five-line
+  rule), `.readout` (mono · tabular · 650), `.float`, `.inset`, `.tint`.
+- **Meaning-carrying colour, named.** The fifteen literals a legacy port keeps because they record
+  a *fact* rather than a taste are re-expressed as roles on the reserved safety palette:
+  `--q-good`, `--q-stale`, `--q-bad`, **`--q-notpublished`** (the source's 3.5px magenta comm-fail
+  border — *this point is not being published*), **`--q-simulated`** (its 3px orange outline), and
+  the equipment-state family `--eq-state-run` / `-stop` / `-fault` / `-unknown` / `-run-wash`
+  (`unknown` deliberately not collapsing into `stop`). One line each restores the literal magenta
+  and orange for a site whose operators are trained on them.
+- **`./fonts.css`** — a new export that self-hosts the three faces through `@fontsource`
+  (`@fontsource-variable/space-grotesk`, `@fontsource/ibm-plex-mono`, `@fontsource/righteous`,
+  now dependencies). Deliberately **separate from `theme.css`**, which only names the families with
+  full fallback stacks: an app with its own typography pays nothing, and an app that wants the house
+  faces gets them from its own bundle. **Never a Google Fonts `<link>`** — an HMI runs on an
+  isolated OT network as often as not.
+
+#### Token mapping — 0.5.0 → 0.6.0
+
+Nothing was renamed or removed; two families changed *value* and everything else is additive.
+
+| 0.5.0 | 0.6.0 | note |
+| --- | --- | --- |
+| `--font` `system-ui, …` | `'Space Grotesk', system-ui, …` | same name, house face first, same fallbacks |
+| `--mono` `ui-monospace, …` | `'IBM Plex Mono', ui-monospace, …` | same name, house face first |
+| `--accent` `#3987e5`/`#2a6fc9` | `#06b6d4` (dark) / `#0e7490` (light) | the house cyan brand |
+| `--primary-bg/-border/-hover` | cyan steps `#155e75`/`#0e7490`/`#0891b2` (dark), `#0e7490`/`#22a3bd`/`#155e75` (light) | follow `--accent` |
+| `--radius` 10px | unchanged | |
+| `--font-2xs … --font-lg` | unchanged | |
+| `--bg --surface --surface-2 --border --ink --ink-2 --muted --grid --axis --hover` | unchanged | the kit's light/dark sets are adopted verbatim |
+| `--s1 --s2 --s3 --s5`, `--good --warn --serious --crit` | unchanged | safety colours stay reserved |
+| literal `6px`/`8px` radii inside components | `var(--radius-sm)` | same rendering |
+| literal `4/8/10/14px` gaps and padding | `var(--space-1 … --space-3)` | ±0.4px where the scale lands nearby |
+| `button` / `.btn` base rule | `--radius-sm`, `--space-2 var(--space-3)` padding, `:active { translateY(1px) }` | the house button idiom; ~3px taller, 6px corners |
+| `.card` base rule | padding `var(--space-3)` (15.6px, was 16px) | |
+| — | `--font-display`, `--weight-*`, `--space-*`, `--radius-sm`, `--radius-pill`, `--elevation-float`, `--tint-strength`, `--wash-strength`, `--overlay`, `--transition*`, `--q-*`, `--eq-state-*` | new |
+
+### Added — the faceplate standard, cards, and confirmation
+
+- **`FaceplateShell`** — one faceplate layout for every equipment family: header (label · tag path ·
+  quality chip · `SIM` chip · close) → state strip → hero → tabs → footer action row. A plant has
+  four or five families and no more; it does not have one faceplate per device, which is how a
+  project ends up with six hand-written valve popups that drift apart. **Two hosts from one prop**:
+  `as="modal"` is a native `<dialog>` (focus trap, top layer, Escape); `as="page"` lays the same
+  regions out as a route, for the small-screen rule where tapping a card navigates instead of
+  opening a popup; `as="auto"` (default) picks by viewport width against `breakpoint` (900px).
+  Supplying the `sim` snippet appends a standard **Sim** tab — per-equipment `SIMULATE`/`SIMVALUE`
+  is a production feature of the controller, not a demo affordance. The `footer` snippet receives
+  **`writable`**, which is quality-gated but *sim-permitted*: stale, bad and unpublished disable a
+  control; simulated leaves it enabled and raises a persistent
+  `SIMULATED — not commanding the plant` banner instead. `Faceplate` is unchanged and remains the
+  bare chrome underneath.
+- **`EquipmentCard`** — what a schematic becomes when the screen is too narrow to hold it: symbol
+  slot (or an `EquipSymbol` from `src`), an eyebrow description with the alarm bell at its right,
+  one to three quality-aware values, a state-chip row, an optional sparkline, and **the whole card
+  as one tap target**. **Quality drives the border** — solid `--q-notpublished`, dashed
+  `--q-simulated` — the legacy magenta/orange convention, tokenised, so a card can never show a
+  confident number for a point the runtime is not publishing.
+- **`ValueText`** — the quality-aware value primitive, and now the only place in the kit that
+  renders a number an operator reads. Takes the value plus the two facts about it and draws the
+  indication once: `notPublished > bad > simulated > stale > good`. The value is **never blanked**
+  for stale or bad — it is what the plant last was, and the number plus its age beats a dash. Only
+  an unpublished point loses its number.
+- **`StateChip`** — the house state chip (`--font-2xs`, pill radius, `1px var(--space-1)`, colour
+  from the safety set), taking either a `StatusKind` or a `ValueStatus`, so a quality chip and a
+  state chip are one component. Denser than `StatusPill`, which is unchanged.
+- **`ConfirmDialog`** + **`confirm()`** — one dialog, mounted once next to `<Toast/>`, for every
+  irreversible or plant-affecting action. Promise-based on purpose: `if (await confirm({…}))` at
+  the call site cannot forget to ask, which a per-call-site `open` boolean plus a callback very much
+  can. Requests **queue**, each keeping its own promise, so an operator who triggers two confirmable
+  actions before answering either loses neither. Escape and the backdrop cancel; **the confirm
+  button is never the focused default**. `operator: true` shows the editable name field, prefilled
+  from `localStorage` — the last point before an unauthenticated, permanent record is written.
+  Called with no host mounted it warns once and falls through to `window.confirm` rather than
+  returning a promise that never settles.
+- **`AckButton`** (+ `worstFirst`, `ackLine`) and **`AlarmTable.confirmAck`** — ack routed through
+  the dialog with the alarms enumerated worst first. **Both paths confirm**: Ack All *and* a single
+  row, because there is no role gate to slow an accidental click and the record cannot be undone.
+  `confirmAck` defaults to `false`, so nothing changes for an existing caller.
+- **`./quality.ts`** — `valueStatus`, `isWritable`, `formatValue`, `formatAge`, `STATUS_META`. The
+  precedence order and the never-a-confident-zero rule as pure functions, so they are testable and
+  so an app can gate its own controls on exactly what the kit draws.
+- **`./confirm.ts`** — `createConfirmQueue`, `splitItems`, `getOperator`, `setOperator`. The whole
+  decidable half of the dialog, runes-free and unit-tested.
+
 ### Added — testing
 
-- **`npm test`** — the kit now has a test rig: `tests/harness.ts`, a ~60-line stand-in for vitest
+- **`npm test`** — the kit now has a test rig: `tests/harness.ts`, a small stand-in for vitest
   (a strict subset of its API) bundled with esbuild and run on node, so the kit's pure logic can be
-  tested without acquiring a test-runner dependency. Ten specs cover the delta merge. If the kit
-  ever does adopt vitest, each spec changes one import line.
+  tested without acquiring a test-runner dependency. **40 specs** across three files: the delta
+  merge (10), the quality precedence and value formatting rules (17), and the confirm queue's
+  promise flow (13). If the kit ever does adopt vitest, each spec changes one import line.
+- The harness accepts **async specs** (anything microtask-only), and reports an async spec that
+  never settled as a failure rather than letting it vanish into a green run.
 
 ### Changed
 
+- **`theme.svelte.ts`** — `theme.init()` now defaults to **dark** rather than system. An HMI's
+  design case is an ops room at 03:00, and a control screen that comes up white because the
+  workstation happens to be set to a light desktop theme is the wrong default for the room it lives
+  in. A saved choice always wins, and `theme.init('system')` restores the old behaviour in one
+  argument. `ThemeSwitch` is unchanged and now shows Dark selected on a first visit.
+- **`AlarmTable`** and **`AlarmBanner`** — token swap only, no layout change: literal px gaps,
+  padding and radii become `--space-*` / `--radius-sm` / `--radius`, hard-coded mix percentages
+  become `--tint-strength`, and `font-weight: 650` becomes `--weight-numeric`. `AlarmTable` also
+  gains `confirmAck` (above).
 - **`Gauge`** gained `sweep` (degrees of scale, default 240 — unchanged) and `gap` (its
   complement, for the 360° donut idiom), plus `thickness`. The drawing box grows downward as the
   arc closes and the end labels move off the seam past 300°. **The default rendering is byte-for-byte
@@ -115,11 +228,23 @@ hopeless for tablets.
 - README: a **Porting a legacy HMI** section, a **Writing back** section, a
   **Trends over history** section, the legacy-port token families under
   Theming, and every new component in the props table.
+- README: a **Faceplates, cards and confirmation** section, and a rewritten **Theming**
+  section covering the two layers, the space/radius/depth families, the meaning-carrying quality
+  tokens, the dark default, the pre-paint stamp, and `fonts.css`.
 - `examples/hmi-demo` gained a **`/legacy`** route exercising all of the
-  above against a synthetic sine wave — it needs no controller running.
+  above against a synthetic sine wave — it needs no controller running. It now also covers the five
+  `ValueText` quality states, a four-card `EquipmentCard` grid, a `FaceplateShell` with hero, tabs,
+  Sim tab and a quality-gated footer, and both confirm paths; `<ConfirmDialog/>` is mounted in its
+  layout and `app.html` carries the pre-paint theme stamp.
 
 ### Fixed
 
+- **`EquipSymbol` rendered no picture at all when both `width` and `height` were given and it sat
+  next to anything else** — a chip column, a card's value stack, any flex row. A symbol file that
+  carries only a `viewBox` (no width/height attributes) contributes a min-content width of **zero**
+  to a flex row, so the wrapper collapsed and the `contain`-fit path the 0.6.0 notes describe drew
+  nothing. The wrapper now gets a real `width × height` box with the picture `contain`-fit inside
+  it. The `width`-only path is untouched. This is why the demo's own symbols were invisible.
 - `TankGlyph` takes its liquid colour from the `fill` **attribute** and no longer sets `fill` on
   it from CSS. In the app this glyph came from, a `.glyph rect { fill: … }` rule was silently
   overriding the band colour every caller passed, so the level bar rendered in the surface colour.

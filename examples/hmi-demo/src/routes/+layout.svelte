@@ -5,10 +5,13 @@
 	// preference, follows the OS otherwise), and starts the one shared
 	// realtime client the header pills and every page read from.
 	import '@joyautomation/nautilus-hmi/theme.css';
+	// The house faces, self-hosted via @fontsource — never a CDN link. Optional:
+	// theme.css only names the families, this ships them.
+	import '@joyautomation/nautilus-hmi/fonts.css';
 	import './app.css';
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { theme, StatusPill, ThemeSwitch } from '@joyautomation/nautilus-hmi';
+	import { theme, ConfirmDialog, StatusPill, ThemeSwitch } from '@joyautomation/nautilus-hmi';
 	import { rt } from '$lib/client.svelte';
 
 	let { children } = $props();
@@ -38,12 +41,15 @@
 	const alarmKind = $derived(hiAlm ? ('critical' as const) : lowAlm ? ('warning' as const) : ('good' as const));
 </script>
 
+<!-- Mounted ONCE, app-wide: every `await confirm({…})` anywhere renders here. -->
+<ConfirmDialog />
+
 <div class="shell">
 	<aside>
 		<div class="brand">
 			<span class="logo">⬢</span>
 			<div>
-				<div class="name">NAUTILUS</div>
+				<div class="name display">NAUTILUS</div>
 				<div class="subtle">heated tank demo</div>
 			</div>
 		</div>
@@ -120,6 +126,12 @@
 	.name {
 		font-weight: 750;
 		letter-spacing: 0.04em;
+	}
+	/* Righteous is CHROME ONLY — a wordmark, never a process value. */
+	.name.display {
+		font-family: var(--font-display);
+		font-weight: 400;
+		font-size: var(--font-md);
 	}
 	.spacer {
 		flex: 1;

@@ -1,14 +1,36 @@
-/* nautilus HMI theme — light & dark token layer.
-   [data-theme] is stamped on <html> (by the theme store, or inline before
-   paint in your app.html). Every component in this kit references these tokens
-   via var(--…), so overriding a token here re-skins the whole HMI. Chart color
-   roles follow a validated dataviz palette, with distinct steps per surface
-   (not an automatic flip). Import once in your app: `import
-   '@joyautomation/nautilus-hmi/theme.css';` */
+/* nautilus HMI theme — the house token layer, light & dark.
+
+   TWO LAYERS, always: a raw palette, then a semantic alias. A component never
+   names a hex; it names a role. Override a role in your own stylesheet and the
+   whole HMI re-skins without touching component source.
+
+   [data-theme] is stamped on <html> (by the `theme` store, or inline before
+   paint in your app.html — see the README's Theming section for the snippet).
+   DARK IS THE DEFAULT: bare :root is the dark set, because the design case is
+   an ops room at 03:00. `[data-theme='light']` opts out.
+
+   DEPTH IS BORDERS AND color-mix(), NOT SHADOWS. Exactly one elevation exists
+   (`--elevation-float`) and it is for things that actually float — a modal, a
+   faceplate, a dropdown. Everything else is a 1px `--border` on a `--surface`.
+
+   FONTS are named here with full fallback stacks but are NOT loaded here, so a
+   host app pays for no font it did not ask for. To self-host the house faces
+   (Space Grotesk / IBM Plex Mono / Righteous, via @fontsource — never a CDN
+   link), import the sibling stylesheet once:
+
+       import '@joyautomation/nautilus-hmi/theme.css';
+       import '@joyautomation/nautilus-hmi/fonts.css';   // optional
+
+   Chart color roles follow a validated dataviz palette, with distinct steps
+   per surface (not an automatic flip). */
+
 :root {
-	--radius: 10px;
-	--font: system-ui, -apple-system, 'Segoe UI', sans-serif;
-	--mono: ui-monospace, 'SF Mono', 'Cascadia Mono', monospace;
+	/* ── type ──────────────────────────────────────────────────────────────
+	   Three faces, three jobs. `--font-display` is CHROME ONLY — a header
+	   wordmark, never a process value: display faces do not go near data. */
+	--font: 'Space Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', monospace;
+	--font-display: 'Righteous', var(--font);
 
 	/* Type scale — the floor for anything the operator reads. --font-2xs is
 	   the absolute minimum (12px) and is reserved for tiny all-caps section
@@ -20,6 +42,44 @@
 	--font-sm: 0.875rem; /* 14px */
 	--font-md: 0.9375rem; /* 15px */
 	--font-lg: 1.25rem; /* 20px */
+
+	/* The house half-steps. Weight carries as much of the hierarchy as size
+	   does, so name the three jobs rather than sprinkling magic numbers. */
+	--weight-control: 550; /* buttons, tabs, chips */
+	--weight-numeric: 650; /* every value the operator reads */
+	--weight-eyebrow: 700; /* uppercase micro-labels */
+
+	/* ── space ─────────────────────────────────────────────────────────────
+	   One unit (salt's 0.325rem), six steps. Prefer these over literal px in
+	   anything that lays out; px survives only where it is a drawing
+	   dimension (stroke widths, symbol boxes, glyph geometry). */
+	--space-unit: 0.325rem;
+	--space-1: 0.325rem;
+	--space-2: 0.65rem;
+	--space-3: 0.975rem;
+	--space-4: 1.3rem;
+	--space-6: 1.95rem;
+	--space-8: 2.6rem;
+
+	/* ── radii ─────────────────────────────────────────────────────────────
+	   --radius on panels/cards/faceplates; --radius-sm on controls and chips;
+	   --radius-pill on state chips. */
+	--radius: 10px;
+	--radius-sm: 6px;
+	--radius-pill: 9999px;
+
+	/* ── depth ─────────────────────────────────────────────────────────────
+	   The one elevation, plus the mix strengths components share so a tint is
+	   the same tint everywhere. */
+	--elevation-float: 0 10px 30px rgb(0 0 0 / 0.12);
+	--tint-strength: 14%;
+	--wash-strength: 18%;
+
+	/* ── motion ────────────────────────────────────────────────────────────
+	   0.12–0.15s, and nothing longer. The reduced-motion rule below
+	   neutralises both. */
+	--transition: 0.12s ease;
+	--transition-slow: 0.15s ease;
 }
 
 :root,
@@ -40,18 +100,22 @@
 	--s3: #199e70; /* aqua — tertiary series */
 	--s5: #9085e9; /* violet */
 
-	/* status (reserved, never used as series) */
+	/* status (RESERVED — process state and nothing else. Never chrome, never
+	   a chart series.) */
 	--good: #0ca30c;
 	--warn: #fab219;
 	--serious: #ec835a;
 	--crit: #d03b3b;
 
-	/* interaction tokens */
+	/* interaction tokens — the house cyan brand */
 	--hover: #2c2c2a;
-	--accent: #3987e5;
-	--primary-bg: #1c5cab;
-	--primary-border: #2a78d6;
-	--primary-hover: #256abf;
+	--accent: #06b6d4; /* cyan-500 */
+	--primary-bg: #155e75;
+	--primary-border: #0e7490;
+	--primary-hover: #0891b2;
+
+	/* the ground a floating thing is seen against */
+	--overlay: color-mix(in srgb, var(--bg) 55%, transparent);
 	color-scheme: dark;
 }
 
@@ -78,11 +142,40 @@
 	--crit: #c22f2f;
 
 	--hover: #e4e2da;
-	--accent: #2a6fc9;
-	--primary-bg: #2a6fc9;
-	--primary-border: #4a86d6;
-	--primary-hover: #245fb0;
+	--accent: #0e7490; /* cyan-700 */
+	--primary-bg: #0e7490;
+	--primary-border: #22a3bd;
+	--primary-hover: #155e75;
+
+	--overlay: color-mix(in srgb, var(--bg) 55%, transparent);
 	color-scheme: light;
+}
+
+/* ── Meaning-carrying colour, named ────────────────────────────────────────
+   A legacy HMI hard-codes a handful of colours that are NOT taste — they are
+   the only place a fact is recorded. A 3.5px magenta border meant "this point
+   is not being published"; a 3px orange one meant "this value is simulated".
+   Re-expressed here as roles on the reserved safety palette, so the fact
+   survives a re-skin and the palette stays four colours deep.
+
+   Trained on the originals? One line each restores them:
+       --q-notpublished: #ff00ff;
+       --q-simulated: #ff8c00;                                              */
+:root {
+	--q-good: var(--good); /* current value, healthy source */
+	--q-stale: var(--warn); /* was good, no longer refreshed — show it, and its age */
+	--q-bad: var(--crit); /* the source says the value is wrong */
+	--q-notpublished: var(--crit); /* the runtime does not publish this point at all */
+	--q-simulated: var(--serious); /* substituted upstream of alarming — not the plant */
+
+	/* Equipment state, the same four facts every symbol in every package
+	   shows. `--eq-state-unknown` is deliberately NOT `--eq-state-stop`: an
+	   absent point and a stopped pump mean opposite things. */
+	--eq-state-run: var(--good);
+	--eq-state-stop: var(--muted);
+	--eq-state-fault: var(--crit);
+	--eq-state-unknown: var(--muted);
+	--eq-state-run-wash: color-mix(in srgb, var(--good) var(--wash-strength), transparent);
 }
 
 * {
@@ -138,7 +231,7 @@ body {
 
 h1 {
 	font-size: var(--font-lg);
-	font-weight: 650;
+	font-weight: var(--weight-numeric);
 	margin: 0 0 4px;
 }
 
@@ -164,11 +257,49 @@ a {
 	background: var(--surface);
 	border: 1px solid var(--border);
 	border-radius: var(--radius);
-	padding: 16px;
+	padding: var(--space-3);
 }
 
+/* The one elevation. Put it on things that float, and nothing else. */
+.float {
+	box-shadow: var(--elevation-float);
+}
+
+/* A recessed region inside a card — depth by surface step and border, never
+   by an inner shadow. */
+.inset {
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius-sm);
+}
+
+/* A colour wash at the house strength. Set `--tint` to the role you want
+   (`style="--tint: var(--good)"`); it defaults to the accent. */
+.tint {
+	background: color-mix(in srgb, var(--tint, var(--accent)) var(--tint-strength), transparent);
+}
+
+/* The eyebrow: the house micro-label. Smallest size, uppercase, letter-spaced,
+   muted. Every section header, card description and field label above a value
+   is one of these. */
+.eyebrow {
+	font-size: var(--font-2xs);
+	font-weight: var(--weight-eyebrow);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--muted);
+	line-height: 1.3;
+}
+
+/* Every value on every screen: mono, tabular, 650. */
 .num {
 	font-variant-numeric: tabular-nums;
+}
+
+.readout {
+	font-family: var(--mono);
+	font-variant-numeric: tabular-nums;
+	font-weight: var(--weight-numeric);
 }
 
 .subtle {
@@ -181,17 +312,22 @@ button,
 	background: var(--surface-2);
 	color: var(--ink);
 	border: 1px solid var(--border);
-	border-radius: 8px;
-	padding: 7px 14px;
+	border-radius: var(--radius-sm);
+	padding: var(--space-2) var(--space-3);
 	font: inherit;
-	font-weight: 550;
+	font-weight: var(--weight-control);
 	cursor: pointer;
-	transition: background 0.12s;
+	transition: background var(--transition);
 }
 
 button:hover,
 .btn:hover {
 	background: var(--hover);
+}
+
+button:active,
+.btn:active {
+	transform: translateY(1px);
 }
 
 button.primary {
@@ -219,8 +355,8 @@ input[type='text'] {
 	background: var(--bg);
 	color: var(--ink);
 	border: 1px solid var(--border);
-	border-radius: 8px;
-	padding: 7px 10px;
+	border-radius: var(--radius-sm);
+	padding: var(--space-2);
 	font: inherit;
 	font-variant-numeric: tabular-nums;
 	width: 100%;
@@ -237,6 +373,10 @@ button:focus-visible {
 	outline-offset: 1px;
 }
 
+input:invalid {
+	border-color: var(--crit);
+}
+
 table {
 	width: 100%;
 	border-collapse: collapse;
@@ -249,12 +389,12 @@ th {
 	text-transform: uppercase;
 	letter-spacing: 0.06em;
 	font-weight: 600;
-	padding: 6px 10px;
+	padding: var(--space-1) var(--space-2);
 	border-bottom: 1px solid var(--border);
 }
 
 td {
-	padding: 7px 10px;
+	padding: var(--space-1) var(--space-2);
 	border-bottom: 1px solid var(--grid);
 	font-variant-numeric: tabular-nums;
 }

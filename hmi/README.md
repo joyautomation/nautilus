@@ -272,6 +272,128 @@ Each renders the refusal on the control rather than swallowing it, and each take
 `readonlyReason` (or `disabled` + `disabledReason`) for a point the runtime will not accept — a
 faceplate that silently fails to command is worse than one that says it cannot.
 
+## Faceplates, cards and confirmation
+
+Three pieces that go together: one faceplate layout for every equipment family, one card for what a
+schematic becomes on a narrow screen, and one confirm step in front of anything irreversible.
+
+### The faceplate standard — `FaceplateShell`
+
+A plant has four or five equipment families and no more. It does **not** have one faceplate per
+device — that is how a project ends up with six hand-written valve popups that drift apart. So the
+layout is fixed by the shell and only the content varies: header (label · tag path · quality chip ·
+`SIM` chip · close) → state strip → hero → tabs → footer action row.
+
+```svelte
+<FaceplateShell
+	label="LIT-001"
+	tag="RTU9/LIT_001"
+	typeName="Analog Input"
+	quality={rt.quality('RTU9/LIT_001')}
+	simulated={sim}
+	tabs={['Value', 'Scale', 'Alarms']}
+	bind:active
+	chips={[{ label: 'AUTO' }, { label: 'HI-HI', kind: 'critical' }]}
+	onclose={() => (open = null)}
+>
+	{#snippet hero()}<ScaleBar … /><Sparkline … />{/snippet}
+	{#snippet panel(label)}{#if label === 'Value'}…{/if}{/snippet}
+	{#snippet sim()}<WriteToggle tag="…SIMULATE" … />{/snippet}
+	{#snippet footer(writable)}
+		<CommandButton disabled={!writable} disabledReason="Bad quality" … />
+	{/snippet}
+</FaceplateShell>
+```
+
+**Two hosts, one prop.** `as="modal"` is a native `<dialog>` (focus trap, top layer and Escape for
+free); `as="page"` lays the same regions out as a route, for the small-screen rule where tapping a
+card navigates instead of opening a floating popup; `as="auto"` (the default) picks by viewport
+width against `breakpoint` (900px). The tab strip and everything above it stay pinned — only the
+panel scrolls, because a header that scrolls out of view is how an operator loses track of which
+device they are commanding.
+
+**Supplying the `sim` snippet appends a standard `Sim` tab.** Per-equipment `SIMULATE`/`SIMVALUE`
+is a production feature of the controller, not a demo affordance, so every family gets the tab on
+every build.
+
+**Write-backs are gated on quality, not on existence.** The `footer` snippet receives `writable` —
+`false` when the value is stale, bad or unpublished, and *`true` while simulated*, because a
+simulated command is still a real command against the simulation. While `simulated`, the footer
+carries a persistent `SIMULATED — not commanding the plant` banner: not a toast, because the
+operator has to see it at the moment they press the button.
+
+### The card — `EquipmentCard` and `ValueText`
+
+Below the breakpoint a fixed coordinate plane is replaced by one wrapping grid of cards, one per
+tag, each opening that equipment. Grid-friendly by construction:
+
+```svelte
+<div style="display:grid; gap:var(--space-3);
+            grid-template-columns:repeat(auto-fill, minmax(min(320px,100%), 1fr))">
+	{#each equipment as e (e.tag)}
+		<EquipmentCard
+			label={e.name}
+			description={e.description}
+			tag={e.tag}
+			src={e.symbol}
+			running={e.running}
+			quality={rt.quality(e.tag)}
+			values={[{ label: 'Flow', value: e.flow, units: 'gpm', precision: 0 }]}
+			chips={[{ label: e.running ? 'RUN' : 'STOP', kind: e.running ? 'good' : 'off' }]}
+			onopen={() => openFaceplate(e.tag)}
+		/>
+	{/each}
+</div>
+```
+
+`ValueText` is the primitive underneath, and is worth using on its own — **it is the one place in
+the kit that renders a number an operator reads, and the one place that qualifies it**:
+
+| status | precedence | what is drawn |
+| --- | --- | --- |
+| not published (`present={false}`) | 1st | `—` in `--q-notpublished`, badge `NO DATA` |
+| `bad` / `notConnected` | 2nd | the value in `--q-bad`, badge `BAD` |
+| `simulated` | 3rd | the value in `--q-simulated`, badge `SIM` |
+| `stale` | 4th | the value in `--q-stale`, badge `STALE 12m` (from `ageMs`) |
+| `good` | — | the value in `--ink`, no badge at all |
+
+The value is **never blanked** for stale or bad: it is what the plant last was, and an operator
+needs it plus its age far more than a dash. Only a point the runtime does not publish loses its
+number — a screen must never show a confident `0.0` for a tag that does not exist. `EquipmentCard`
+carries the same fact on its **border** (solid `--q-notpublished`, dashed `--q-simulated`), which
+is the legacy magenta/orange border convention re-expressed as tokens. The rules are pure functions
+(`valueStatus`, `isWritable`, `formatValue`, `formatAge` in `./quality.ts`) and are unit-tested.
+
+### Confirming — `ConfirmDialog`, `confirm()`, `AckButton`
+
+Mount the host once, next to `<Toast/>`; then `confirm()` is an ordinary awaited function:
+
+```svelte
+<!-- +layout.svelte -->
+<ConfirmDialog />
+```
+
+```ts
+if (await confirm({ title: 'Stop P-101?', danger: true, operator: true })) stop();
+```
+
+Promise-based on purpose: a call site reads `if (await confirm(…))` and cannot forget to ask, which
+a per-call-site `open` boolean plus a callback very much can. Requests **queue** — an operator who
+triggers two confirmable actions before answering either gets both questions, in order, each with
+its own promise; dropping the second would silently discard a command. Escape and the backdrop
+cancel, and **the confirm button is never the focused default** — Cancel takes focus, so a stray
+Enter cannot command the plant. `operator: true` shows the editable name field, prefilled from
+`localStorage` and remembered: the last point before an unauthenticated, permanent record is
+written.
+
+For alarms, `AckButton` and `AlarmTable`'s `confirmAck` prop (default `false`, so nothing changes
+for an existing caller) wire ack through it with the alarms enumerated **worst first**. Both paths
+confirm — Ack All *and* a single row — because there is no role gate to slow an accidental click
+and the record cannot be undone.
+
+Called with no `<ConfirmDialog/>` mounted, `confirm()` warns once and falls through to the
+browser's own dialog rather than returning a promise that never settles.
+
 ## Trends over history
 
 `useTrend` is the live stream and the historian in one call. The SSE frame gives full scan
@@ -298,23 +420,100 @@ that resolves to nothing.
 
 ## Theming
 
-Every component reads tokens from `theme.css`. Flip the whole HMI between light and dark by stamping
-`data-theme="light" | "dark"` on `<html>` — the bundled `theme` store does this for you and persists
-the choice:
+Two token layers, always: a raw palette, then a semantic alias. **A component never names a hex; it
+names a role.** Override a role in your own stylesheet and the whole HMI re-skins without touching
+component source.
 
 ```svelte
 <script>
+	import '@joyautomation/nautilus-hmi/theme.css';
+	import '@joyautomation/nautilus-hmi/fonts.css'; // optional — see below
 	import { onMount } from 'svelte';
 	import { theme, ThemeSwitch } from '@joyautomation/nautilus-hmi';
-	onMount(() => theme.init());
+	onMount(() => theme.init()); // theme.init('system') to follow the OS instead
 </script>
 
 <ThemeSwitch />
 ```
 
-Override any token (e.g. `--s1`, `--surface`, `--accent`) in your own stylesheet to rebrand without
-touching component source. The `motion` store / `MotionSwitch` do the same for reduced-motion via
-`data-motion`.
+**Dark is the default.** Bare `:root` is the dark set and `theme.init()` defaults to `'dark'`; an
+HMI's design case is an ops room at 03:00, and a control screen that comes up white because the
+workstation happens to be set to a light desktop theme is the wrong default for the room it lives
+in. A saved choice always wins. To follow the OS instead, pass `theme.init('system')`.
+
+**Stamp the theme before paint** or a dark HMI flashes white on every load. `theme.init()` runs
+after hydration, which is too late; put this in `app.html`'s `<head>`, after `%sveltekit.head%`:
+
+```html
+<script>
+	(function () {
+		try {
+			var t = localStorage.getItem('theme');
+			if (t === 'system') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+			document.documentElement.dataset.theme = t === 'light' ? 'light' : 'dark';
+		} catch (e) {
+			document.documentElement.dataset.theme = 'dark';
+		}
+	})();
+</script>
+```
+
+### The layers
+
+| family | tokens |
+| --- | --- |
+| type | `--font` (Space Grotesk) · `--mono` (IBM Plex Mono) · `--font-display` (Righteous, **chrome only** — a wordmark, never a process value) · `--font-2xs … --font-lg` |
+| weight | `--weight-control` 550 · `--weight-numeric` 650 · `--weight-eyebrow` 700 |
+| space | `--space-unit` `0.325rem`, and `--space-1 … --space-8` on it. Prefer these over literal px in anything that lays out; px survives only as a drawing dimension |
+| radii | `--radius` 10px (panels, cards, faceplates) · `--radius-sm` 6px (controls, inputs, chips) · `--radius-pill` |
+| ground | `--bg --surface --surface-2 --border --ink --ink-2 --muted --grid --axis --hover --overlay` |
+| series | `--s1 --s2 --s3 --s5` — chart roles, validated per surface |
+| **safety (reserved)** | `--good --warn --serious --crit`. These mean **process state and nothing else** — never chrome, never a chart series |
+| brand | `--accent` (cyan-700 `#0e7490` light / cyan-500 `#06b6d4` dark) · `--primary-bg/-border/-hover` |
+| depth | `--elevation-float` (the ONE elevation, for things that float) · `--tint-strength` 14% · `--wash-strength` 18% |
+| motion | `--transition` .12s · `--transition-slow` .15s |
+
+**Depth is borders and `color-mix()`, not shadows.** Exactly one elevation exists and it is for
+modals, faceplates and dropdowns. Everything else is a 1px `--border` on a `--surface`. Four
+utility classes ship with it: `.card` (surface + border + `--radius` + `--space-3`), `.float` (the
+one elevation), `.inset` (a recessed region), and `.tint` (a wash at the house strength — set
+`--tint` to the role you want).
+
+**The eyebrow is a class.** `.eyebrow` is the house micro-label: `--font-2xs`, 700, uppercase,
+`letter-spacing .06em`, `--muted`. Every section header, card description and label above a value
+is one of these. `.readout` is its numeric counterpart: mono, tabular, 650 — every value on every
+screen.
+
+### Meaning-carrying colour
+
+A legacy HMI hard-codes a handful of colours that are not taste — they are the only place a fact is
+recorded. A 3.5px magenta border meant *this point is not being published*; a 3px orange one meant
+*this value is simulated*. Those facts are re-expressed as roles on the reserved safety palette, so
+they survive a re-skin and the palette stays four colours deep:
+
+| token | means | default |
+| --- | --- | --- |
+| `--q-good` | current value, healthy source | `var(--good)` |
+| `--q-stale` | was good, no longer refreshed | `var(--warn)` |
+| `--q-bad` | the source says the value is wrong | `var(--crit)` |
+| `--q-notpublished` | the runtime does not publish this point at all | `var(--crit)` |
+| `--q-simulated` | substituted upstream of alarming — not the plant | `var(--serious)` |
+| `--eq-state-run` / `-stop` / `-fault` / `-unknown` | equipment state; `unknown` is deliberately not `stop` | `--good` / `--muted` / `--crit` / `--muted` |
+| `--eq-state-run-wash` | the run tint | `--good` at `--wash-strength` |
+
+Trained on the originals? `--q-notpublished: #ff00ff; --q-simulated: #ff8c00;` restores them.
+
+### Fonts
+
+`theme.css` **names** the three faces with full fallback stacks but does not load them, so a host
+app with its own typography pays nothing. Import `fonts.css` as well and they are served from your
+own bundle via `@fontsource` — **never a Google Fonts `<link>`**. An HMI runs on an isolated OT
+network as often as not, and a stylesheet that reaches out to a CDN is a screen that renders in
+Times New Roman on the day it matters. Space Grotesk is the variable cut (the house weights are
+half-steps); IBM Plex Mono is pulled at 400/500/600/700; Righteous is one weight, because it is
+chrome only.
+
+### Legacy-port token families
 
 The legacy-port components carry a second, narrower set of tokens, because a 1:1 recreation has to
 reproduce colours the source package hard-coded rather than themed. Each falls back to a theme
@@ -331,7 +530,8 @@ token, so setting none of them still yields a coherent light/dark component:
 `theme.css` also defines one unscoped rule, `.blinking`, for an attention flash on an
 unacknowledged condition (`EquipSymbol`'s fault bell sets it). It is deliberately not
 component-scoped so a host app can redefine it, and the reduced-motion rule replaces it with an
-outline rather than dropping the indication.
+outline rather than dropping the indication. The `motion` store / `MotionSwitch` do the same for
+reduced-motion via `data-motion`.
 
 ## Components (props)
 
@@ -360,22 +560,34 @@ outline rather than dropping the indication.
 | `Histogram` | `counts: number[]`, `bucketWidth`, `unit`, `height`, `color` |
 | `NumberField` | `label`, `unit`, `value`, `min`, `max`, `step`, `onsubmit(v)` |
 | `AlarmBanner` | `summary: AlarmSummary`, `now`, `onclick?`, `href?` |
-| `AlarmTable` | `alarms: AlarmInstance[]`, `sites?`, `now`, `onack(ids,by)`, `onshelve(id,until,by)`, `onunshelve?(id,by)`, `shelveTimes?`, `operator?`, `onselect?(instance)`, `pageSize?` |
+| `AlarmTable` | `alarms: AlarmInstance[]`, `sites?`, `now`, `onack(ids,by)`, `onshelve(id,until,by)`, `onunshelve?(id,by)`, `shelveTimes?`, `operator?`, `onselect?(instance)`, `pageSize?`, `confirmAck?` |
+| `AckButton` | `alarms?: AlarmInstance[]`, `ids?` (`['*']` = ack all), `onack(ids,by)`, `label?`, `operator?`, `confirmAck?`, `variant?`, `size?`, `icon?`, `disabled?` |
+| `FaceplateShell` | `label`, `tag?`, `typeName?`, `quality?`, `present?`, `simulated?`, `showQuality?`, `as: 'modal' \| 'page' \| 'auto'`, `breakpoint?`, `size?`, `tabs?`, `bind:active`, `simTab?`, `chips?`, `closeOnEscape?`, `closeOnBackdrop?`, `simNote?`, `onclose`, snippets `hero` / `status` / `panel(label, i)` / `sim` / `children` / `footer(writable)` |
+| `EquipmentCard` | `label`, `description?`, `tag?`, `src?`/`symbol` (snippet), `symbolWidth?`, `symbolHeight?`, `running?`, `fault?`, `auto?`, `remote?`, `stateText?`, `quality?`, `present?`, `simulated?`, `values?: CardValue[]`, `chips?: CardChip[]`, `onopen?`/`href?`, snippets `sparkline` / `extra` |
+| `ValueText` | `value`, `units?`, `precision?`, `quality?`, `simulated?`, `present?`, `ageMs?`, `label?`, `size?`, `align?`, `placeholder?`, `trueText?`/`falseText?`, `showBadge?` |
+| `StateChip` | `label`, `kind?: StatusKind \| ValueStatus \| 'neutral'`, `title?`, `dot?`, `solid?` |
+| `ConfirmDialog` | `bind:operator?`, `size?` — mount once; drive it with `confirm({ title, body?, items?, confirmLabel?, cancelLabel?, danger?, operator?, note? })` |
 | `AlarmJournal` | `events: AlarmEvent[]`, `from`, `to`, `onrange(from,to)`, `sites?`, `loading?` |
 
 ## Testing
 
 Most of this kit is Svelte components whose test is looking at them. The pure
-logic that can *silently mislead an operator* — the delta-frame merge above all
-— has real tests, run with no dependencies:
+logic that can *silently mislead an operator* has real tests, run with no
+dependencies: the delta-frame merge (`delta.ts`), the quality precedence and
+value formatting rules (`quality.ts`), and the confirm queue's promise flow
+(`confirm.ts`) — each one a place where a bug shows up as a plausible screen
+rather than as an error.
 
 ```sh
 npm test
 ```
 
-`tests/harness.ts` is a ~60-line stand-in for vitest (a strict subset of its
-API), so the kit tests its own logic without acquiring a test runner. If it ever
-adopts one, each spec changes a single import line.
+`tests/harness.ts` is a small stand-in for vitest (a strict subset of its API),
+so the kit tests its own logic without acquiring a test runner. If it ever
+adopts one, each spec changes a single import line. A spec may be `async`, as
+long as everything it awaits is microtask-only: the harness has no runner loop
+and reports an async spec that never settled as a failure rather than letting it
+disappear into a green run.
 
 ## Building the package
 

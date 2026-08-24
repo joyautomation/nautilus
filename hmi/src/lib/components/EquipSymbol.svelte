@@ -89,15 +89,17 @@
 			class="img"
 			class:clickable={!!onclick}
 			class:sim={simulate || comFail}
+			class:fit={height !== undefined}
 			{onclick}
 			title={label || alt}
+			style:width={height !== undefined ? `${width}px` : undefined}
+			style:height={height !== undefined ? `${height}px` : undefined}
 		>
 			<img
 				{src}
 				alt={alt || label}
-				style:width={height ? 'auto' : `${width}px`}
-				style:max-width={`${width}px`}
-				style:max-height={height ? `${height}px` : undefined}
+				style:width={height !== undefined ? undefined : `${width}px`}
+				style:max-width={height !== undefined ? undefined : `${width}px`}
 				class:mirror
 			/>
 			<span class="tint" class:on={running} aria-hidden="true"></span>
@@ -167,6 +169,26 @@
 	.img img {
 		height: auto;
 		display: block;
+	}
+
+	/* Both `width` and `height` given: the symbol gets a REAL box and the
+	   picture is `contain`-fit inside it, keeping its own ratio.
+	   The box has to be explicit rather than left to `max-width`/`max-height`
+	   on the picture: a raster/SVG symbol whose file carries only a viewBox
+	   contributes a min-content width of zero to a flex row, so the wrapper
+	   collapsed and the symbol rendered as nothing at all the moment it sat
+	   next to anything else (a chip column, a card's value stack). */
+	.img.fit {
+		display: grid;
+		place-items: center;
+		flex: none;
+	}
+
+	.img.fit img {
+		width: auto;
+		height: auto;
+		max-width: 100%;
+		max-height: 100%;
 	}
 
 	.img img.mirror {

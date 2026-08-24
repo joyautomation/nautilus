@@ -22,6 +22,15 @@
 		WriteNumber,
 		WriteToggle,
 		CommandButton,
+		AckButton,
+		Button,
+		EquipmentCard,
+		FaceplateShell,
+		Sparkline,
+		StateChip,
+		ValueText,
+		confirm,
+		type AlarmInstance,
 		type CanvasSpec,
 		type CanvasNode
 	} from '@joyautomation/nautilus-hmi';
@@ -109,6 +118,44 @@
 	};
 
 	const prop = (n: CanvasNode, k: string) => String(n.p?.[k] ?? '');
+
+	// ── quality, the fourth axis ──────────────────────────────────────────
+	// A number, and the two facts about it. Everything below reads these the
+	// same way, because `ValueText` is the only thing that renders a value.
+	const history = $derived(Array.from({ length: 40 }, (_, i) => 16 + 14 * Math.sin((t - 40 + i) / 9)));
+
+	// ── the faceplate ─────────────────────────────────────────────────────
+	let openTag = $state<string | null>(null);
+	let tab = $state(0);
+	// `auto` is what an app ships; the two explicit values are here so both
+	// hosts can be seen without resizing the window.
+	let host = $state<'auto' | 'modal' | 'page'>('auto');
+	// Derived here rather than inline: a snippet body does not keep the
+	// narrowing that `{#if openTag}` establishes around it.
+	const isSim = $derived(openTag?.endsWith('SUP_017') ?? false);
+	const isMissing = $derived(openTag?.endsWith('SUP_018') ?? false);
+	const TABS = ['Value', 'Scale', 'Alarms'];
+
+	// ── alarms, for the confirm step ──────────────────────────────────────
+	const alarms: AlarmInstance[] = [
+		{ id: 'a1', tag: 'LIT_001', name: 'Clearwell 1 level high-high', priority: 'critical', state: 'unack-active', cond: true, activeMs: Date.now() - 240_000 },
+		{ id: 'a2', tag: 'SUP_015', name: 'Supply pump 15 fault', priority: 'high', state: 'unack-active', cond: true, activeMs: Date.now() - 900_000 },
+		{ id: 'a3', tag: 'FIT_004', name: 'Discharge flow low', priority: 'low', state: 'unack-active', cond: true, activeMs: Date.now() - 60_000 }
+	];
+	let acked = $state<string[]>([]);
+	let lastConfirm = $state('—');
+
+	async function askSomething() {
+		const ok = await confirm({
+			title: 'Reset SUP-015 runtime?',
+			body: 'The accumulated hours go to zero and cannot be recovered.',
+			confirmLabel: 'Reset',
+			danger: true,
+			operator: true,
+			note: 'Recorded against the name above — unauthenticated.'
+		});
+		lastConfirm = ok ? `reset confirmed at ${new Date().toLocaleTimeString()}` : 'cancelled';
+	}
 </script>
 
 <h1>Legacy-port components</h1>
@@ -346,7 +393,218 @@
 	<p class="note">Last command: <code>{lastCommand}</code></p>
 </section>
 
+<section>
+	<h2>Quality-aware values</h2>
+	<div class="row wrap">
+		<ValueText label="Good" value={level} units="ft" size="lg" />
+		<ValueText label="Stale" value={level} units="ft" size="lg" quality="stale" ageMs={735_000} />
+		<ValueText label="Bad" value={level} units="ft" size="lg" quality="bad" />
+		<ValueText label="Simulated" value={level} units="ft" size="lg" simulated />
+		<ValueText label="Not published" value={level} units="ft" size="lg" present={false} />
+	</div>
+	<p class="note">
+		One primitive, five states. The value is <strong>never blanked</strong> for stale or bad — it is
+		what the plant last was, and an operator needs it plus its age far more than a dash. Only a point
+		the runtime does not publish at all loses its number.
+	</p>
+</section>
+
+<section>
+	<h2>Equipment cards</h2>
+	<div class="cards">
+		<EquipmentCard
+			label="SUP-015"
+			description="Supply pump — north bay"
+			tag="RTU9/SUP_015"
+			src={PUMP_PNG}
+			{running}
+			auto={true}
+			remote={true}
+			stateText={running ? 'On' : 'Off'}
+			values={[{ label: 'Discharge', value: flow, units: 'gpm', precision: 0 }]}
+			chips={[{ label: running ? 'RUN' : 'STOP', kind: running ? 'good' : 'off' }, { label: 'AUTO' }]}
+			onopen={() => ((openTag = 'RTU9/SUP_015'), (tab = 0))}
+		>
+			{#snippet sparkline()}
+				<Sparkline values={history} height={28} />
+			{/snippet}
+		</EquipmentCard>
+
+		<EquipmentCard
+			label="LIT-001"
+			description="Clearwell 1 level transmitter"
+			tag="RTU9/LIT_001"
+			src={PUMP_PNG}
+			values={[
+				{ label: 'Level', value: level, units: 'ft' },
+				{ label: 'Volume', value: level * 41800, units: 'gal', precision: 0 }
+			]}
+			chips={[{ label: band === 'crit' ? 'HI-HI' : band === 'warn' ? 'HIGH' : 'NORMAL', kind: band === 'crit' ? 'critical' : band === 'warn' ? 'warning' : 'good' }]}
+			fault={band === 'crit'}
+			onopen={() => ((openTag = 'RTU9/LIT_001'), (tab = 0))}
+		/>
+
+		<EquipmentCard
+			label="SUP-017"
+			description="Supply pump — simulated value"
+			tag="RTU9/SUP_017"
+			src={PUMP_PNG}
+			running
+			simulated
+			stateText="On"
+			values={[{ label: 'Discharge', value: 1180, units: 'gpm', precision: 0 }]}
+			chips={[{ label: 'RUN', kind: 'good' }]}
+			onopen={() => ((openTag = 'RTU9/SUP_017'), (tab = 0))}
+		/>
+
+		<EquipmentCard
+			label="SUP-018"
+			description="Supply pump — not published by this runtime"
+			tag="RTU9/SUP_018"
+			src={PUMP_PNG}
+			present={false}
+			values={[{ label: 'Discharge', units: 'gpm' }]}
+			onopen={() => ((openTag = 'RTU9/SUP_018'), (tab = 0))}
+		/>
+	</div>
+	<p class="note">
+		Quality drives the border: solid <code>--q-notpublished</code> for a point the runtime does not
+		publish, dashed <code>--q-simulated</code> for a substituted value. The whole card is the tap
+		target — tap one to open the faceplate.
+	</p>
+</section>
+
+<section>
+	<h2>Faceplate shell</h2>
+	<div class="row wrap">
+		<Button variant="primary" onclick={() => ((host = 'auto'), (openTag = 'RTU9/LIT_001'), (tab = 0))}>
+			Open LIT-001
+		</Button>
+		<Button onclick={() => ((host = 'page'), (openTag = 'RTU9/LIT_001'), (tab = 0))}>
+			…as a full page
+		</Button>
+		<StateChip label="auto: modal ≥ 900px · full page below" kind="neutral" dot={false} />
+	</div>
+	<p class="note">
+		One layout for every equipment family, and <strong>two hosts from one prop</strong>: narrow the
+		window below 900px and the same faceplate renders as a full page instead of a floating modal.
+		The second button forces <code>as="page"</code> — it renders in place at the bottom of this
+		page, because in a real app the page host is mounted on its own route.
+	</p>
+</section>
+
+<section>
+	<h2>Confirm before you command</h2>
+	<div class="row wrap">
+		<AckButton
+			alarms={alarms.filter((a) => !acked.includes(a.id))}
+			onack={(ids) => (acked = [...acked, ...ids])}
+			label="Ack 3 alarms"
+			variant="primary"
+		/>
+		<AckButton
+			alarms={[alarms[1]]}
+			onack={(ids) => (acked = [...acked, ...ids])}
+			label="Ack one row"
+		/>
+		<Button variant="danger" onclick={askSomething}>Reset runtime</Button>
+	</div>
+	<p class="note">
+		Ack All enumerates worst first; <strong>a single row confirms too</strong> — there is no role
+		gate, and the record is unauthenticated and permanent. Escape and the backdrop cancel, and Cancel
+		takes focus, so a stray Enter cannot command the plant.
+		<br />Acknowledged: <code>{acked.length ? acked.join(', ') : '—'}</code> · last confirm:
+		<code>{lastConfirm}</code>
+	</p>
+</section>
+
+{#if openTag}
+	<FaceplateShell
+		as={host}
+		label={openTag.split('/').pop() ?? openTag}
+		tag={openTag}
+		typeName="Analog Input"
+		simulated={isSim}
+		present={!isMissing}
+		tabs={TABS}
+		bind:active={tab}
+		chips={[
+			{ label: running ? 'RUN' : 'STOP', kind: running ? 'good' : 'off' },
+			{ label: 'AUTO' },
+			{ label: 'REMOTE' },
+			{ label: band === 'crit' ? 'HI-HI ALARM' : 'NO ALARM', kind: band === 'crit' ? 'critical' : 'good' }
+		]}
+		onclose={() => (openTag = null)}
+	>
+		{#snippet hero()}
+			<div class="heroscale">
+				<ScaleBar value={level} min={0} max={32} label="Level" units="ft" hh={HH} h={H} l={L} ll={LL} length={150} thickness={26} />
+			</div>
+			<div class="herotrend">
+				<Sparkline values={history} height={72} />
+				<ValueText label="Level" value={level} units="ft" size="lg" present={!isMissing} simulated={isSim} />
+			</div>
+		{/snippet}
+
+		{#snippet panel(label: string)}
+			{#if label === 'Value'}
+				<Gauge value={level} min={0} max={32} unit="ft" label="Level" setpoint={sp} />
+			{:else if label === 'Scale'}
+				<div class="row wrap">
+					<WriteNumber tag="LIT_001.HHSP" label="High-high" value={HH} units="ft" {write} />
+					<WriteNumber tag="LIT_001.HSP" label="High" value={H} units="ft" {write} />
+					<WriteNumber tag="LIT_001.LSP" label="Low" value={L} units="ft" {write} />
+					<WriteNumber tag="LIT_001.LLSP" label="Low-low" value={LL} units="ft" {write} />
+				</div>
+				<p class="note">Setpoints commit on blur/Enter and do <strong>not</strong> confirm — they are adjustments, not commands.</p>
+			{:else}
+				<div class="rows">
+					<StatusRow state={band === 'crit' ? 'fault' : 'off'} label="High-high" wide />
+					<StatusRow state={band === 'warn' ? 'fault' : 'off'} label="High" wide />
+					<StatusRow state="off" label="Low" wide />
+				</div>
+			{/if}
+		{/snippet}
+
+		{#snippet sim()}
+			<div class="row wrap">
+				<WriteToggle tag="LIT_001.SIMULATE" label="Simulate" value={isSim} {write} />
+				<WriteNumber tag="LIT_001.SIMVALUE" label="Simulated value" value={level} units="ft" {write} />
+			</div>
+			<p class="note">
+				The simulated value substitutes <strong>before</strong> alarming, in the controller — every
+				indication and every alarm downstream sees it. A production feature of every analog block,
+				on every build.
+			</p>
+		{/snippet}
+
+		{#snippet footer(writable: boolean)}
+			<CommandButton tag="LIT_001.RESET" label="Reset" disabled={!writable} disabledReason="Disabled — the runtime cannot vouch for this value" {write} />
+			<Button variant="primary" disabled={!writable} onclick={askSomething}>Command…</Button>
+		{/snippet}
+	</FaceplateShell>
+{/if}
+
 <style>
+	.cards {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+		gap: var(--space-3);
+	}
+
+	.heroscale {
+		flex: none;
+		width: 150px;
+	}
+
+	.herotrend {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+		min-width: 200px;
+		flex: 1;
+	}
+
 	.lede {
 		max-width: 62ch;
 	}

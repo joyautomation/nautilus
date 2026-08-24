@@ -15,6 +15,9 @@
 	import Modal from './Modal.svelte';
 	import Button from './Button.svelte';
 	import Icon from './Icon.svelte';
+	import { confirm } from '../confirm.svelte.js';
+	import { getOperator } from '../confirm.js';
+	import { ackLine, worstFirst } from './AckButton.svelte';
 
 	type SortKey = 'priority' | 'activeTime' | 'state' | 'name' | 'ackTime';
 
@@ -28,7 +31,8 @@
 		shelveTimes = DEFAULT_SHELVE_TIMES_S,
 		operator = '',
 		onselect,
-		pageSize = 100
+		pageSize = 100,
+		confirmAck = false
 	}: {
 		/** Full instance list — active, unack-RTN, and shelved together (e.g.
 		 * `alarmClient.instances`). Shelved rows are hidden by default; toggle
@@ -52,6 +56,13 @@
 		/** Row click (outside the checkbox) — faceplate navigation. */
 		onselect?: (instance: AlarmInstance) => void;
 		pageSize?: number;
+		/** Route Ack and Ack All through `ConfirmDialog` first — the alarms
+		 *  enumerated worst first, the operator name editable, both paths
+		 *  confirming (a single row too: there is no role gate, and the record
+		 *  is unauthenticated and permanent). Default `false`, so nothing
+		 *  changes for an existing caller; mount `<ConfirmDialog/>` once and
+		 *  turn it on. */
+		confirmAck?: boolean;
 	} = $props();
 
 	let sortKey = $state<SortKey>('activeTime');
@@ -159,13 +170,37 @@
 
 	const unackedCount = $derived(alarms.filter((a) => a.state === 'unack-active' || a.state === 'unack-rtn').length);
 
-	function ackSelected() {
+	/** Ask before acking, when `confirmAck` is on. Returns the name to record. */
+	async function askAck(subject: AlarmInstance[], title: string): Promise<string | null> {
+		if (!confirmAck) return byField || operator;
+		const ok = await confirm({
+			title,
+			items: worstFirst(subject).map(ackLine),
+			confirmLabel: 'Acknowledge',
+			operator: true,
+			note: 'Acknowledgement is permanent and unauthenticated — the name above is the whole record.'
+		});
+		if (!ok) return null;
+		return getOperator() || byField || operator;
+	}
+
+	async function ackSelected() {
 		if (!selected.size) return;
-		onack([...selected], byField || operator);
+		const ids = [...selected];
+		const subject = alarms.filter((a) => selected.has(a.id));
+		const by = await askAck(
+			subject,
+			`Acknowledge ${ids.length} alarm${ids.length === 1 ? '' : 's'}?`
+		);
+		if (by === null) return;
+		onack(ids, by);
 		selected = new Set();
 	}
-	function ackAll() {
-		onack(['*'], byField || operator);
+	async function ackAll() {
+		const subject = alarms.filter((a) => a.state === 'unack-active' || a.state === 'unack-rtn');
+		const by = await askAck(subject, `Acknowledge all ${subject.length} unacknowledged alarms?`);
+		if (by === null) return;
+		onack(['*'], by);
 		selected = new Set();
 	}
 	function unshelveSelected() {
@@ -360,36 +395,36 @@
 <style>
 	.wrap {
 		display: grid;
-		gap: 10px;
+		gap: var(--space-2);
 	}
 	.toolbar {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
 		justify-content: space-between;
-		gap: 10px;
+		gap: var(--space-2);
 	}
 	.filters {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
-		gap: 8px;
+		gap: var(--space-2);
 	}
 	select,
 	input[type='search'],
 	input[type='text'] {
 		background: var(--surface-2);
 		border: 1px solid var(--border);
-		border-radius: 6px;
+		border-radius: var(--radius-sm);
 		color: var(--ink);
 		font: inherit;
 		font-size: var(--font-xs);
-		padding: 5px 8px;
+		padding: var(--space-1) var(--space-2);
 	}
 	.chip {
 		display: inline-flex;
 		align-items: center;
-		gap: 5px;
+		gap: var(--space-1);
 		font-size: var(--font-2xs);
 		color: var(--muted);
 		white-space: nowrap;
@@ -397,18 +432,18 @@
 	.actions {
 		display: flex;
 		align-items: center;
-		gap: 8px;
+		gap: var(--space-2);
 	}
 	.actions .count {
 		font-size: var(--font-2xs);
 		color: var(--muted);
-		margin-right: 4px;
+		margin-right: var(--space-1);
 		white-space: nowrap;
 	}
 	.tablescroll {
 		overflow-x: auto;
 		border: 1px solid var(--border);
-		border-radius: var(--radius, 8px);
+		border-radius: var(--radius);
 	}
 	table {
 		width: 100%;
@@ -422,7 +457,7 @@
 		letter-spacing: 0.04em;
 		text-transform: uppercase;
 		color: var(--muted);
-		padding: 8px 10px;
+		padding: var(--space-2);
 		border-bottom: 1px solid var(--border);
 		background: var(--surface-2);
 		white-space: nowrap;
@@ -442,7 +477,7 @@
 		color: var(--ink);
 	}
 	td {
-		padding: 7px 10px;
+		padding: var(--space-2);
 		border-bottom: 1px solid var(--border);
 		color: var(--ink-2);
 		/* Fixed min-height via line-height-ish padding keeps a per-frame
@@ -478,7 +513,7 @@
 	tr.empty td {
 		text-align: center;
 		color: var(--muted);
-		padding: 24px 10px;
+		padding: var(--space-6) var(--space-2);
 	}
 	.sel {
 		width: 32px;
@@ -514,14 +549,14 @@
 		height: 20px;
 		align-items: center;
 		justify-content: center;
-		border-radius: 5px;
+		border-radius: var(--radius-sm);
 		color: var(--c);
-		background: color-mix(in srgb, var(--c) 14%, transparent);
+		background: color-mix(in srgb, var(--c) var(--tint-strength), transparent);
 	}
 	.state {
 		display: inline-flex;
 		align-items: center;
-		gap: 6px;
+		gap: var(--space-1);
 		color: var(--c);
 		font-weight: 600;
 	}
@@ -536,13 +571,13 @@
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		gap: 10px;
+		gap: var(--space-2);
 		font-size: var(--font-2xs);
 		color: var(--muted);
 	}
 	.field {
 		display: grid;
-		gap: 4px;
+		gap: var(--space-1);
 		font-size: var(--font-xs);
 		color: var(--ink-2);
 	}

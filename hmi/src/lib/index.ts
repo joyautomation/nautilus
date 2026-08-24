@@ -60,6 +60,31 @@ export { default as CommandButton } from './components/CommandButton.svelte';
 // content from StatusPill / NumberField / Gauge / your own markup).
 export { default as Faceplate } from './components/Faceplate.svelte';
 export { default as Tabs } from './components/Tabs.svelte';
+
+// `FaceplateShell` is the STANDARD faceplate container — one layout for every
+// equipment family (header with quality chip · state strip · hero · tabs incl.
+// a standard Sim tab · footer action row), hosted either as a modal or as a
+// full page from one prop. `Faceplate` remains the bare chrome underneath it.
+export { default as FaceplateShell } from './components/FaceplateShell.svelte';
+
+// The card a schematic becomes when the screen is too narrow to hold it: one
+// tap target per piece of equipment, quality carried on the border.
+export { default as EquipmentCard } from './components/EquipmentCard.svelte';
+export type { CardValue, CardChip } from './components/EquipmentCard.svelte';
+
+// Quality-aware value primitives. `ValueText` is the one place a number an
+// operator reads gets rendered, and the one place it gets qualified.
+export { default as ValueText } from './components/ValueText.svelte';
+export { default as StateChip } from './components/StateChip.svelte';
+export type { ChipKind } from './components/StateChip.svelte';
+export {
+	STATUS_META,
+	valueStatus,
+	isWritable,
+	formatValue,
+	formatAge
+} from './quality.js';
+export type { ValueStatus, StatusMeta, StatusInput, FormatOptions, FormattedValue } from './quality.js';
 export { default as DriverStatusCard } from './components/DriverStatusCard.svelte';
 export { default as DriverStatusPanel } from './components/DriverStatusPanel.svelte';
 
@@ -69,6 +94,7 @@ export { default as DriverStatusPanel } from './components/DriverStatusPanel.sve
 export { default as AlarmBanner } from './components/AlarmBanner.svelte';
 export { default as AlarmTable } from './components/AlarmTable.svelte';
 export { default as AlarmJournal } from './components/AlarmJournal.svelte';
+export { default as AckButton, worstFirst, ackLine } from './components/AckButton.svelte';
 export { AlarmClient, createAlarmClient, shouldRefetch, PRIORITY_ORDER, PRIORITY_META, STATE_META, DEFAULT_SHELVE_TIMES_S } from './alarms.svelte.js';
 export type {
 	Priority,
@@ -99,6 +125,14 @@ export { default as Modal } from './components/Modal.svelte';
 export { default as Toast } from './components/Toast.svelte';
 export { toast } from './toast.svelte.js';
 export type { ToastEntry } from './toast.svelte.js';
+
+// Confirmation: one dialog, mounted once, for every irreversible or
+// plant-affecting action. `confirm()` is promise-based, so a call site reads
+// `if (await confirm({…})) …` and cannot forget to ask.
+export { default as ConfirmDialog } from './components/ConfirmDialog.svelte';
+export { confirm, confirmState } from './confirm.svelte.js';
+export { createConfirmQueue, splitItems, getOperator, setOperator, DEFAULT_MAX_ITEMS } from './confirm.js';
+export type { ConfirmOptions, ConfirmRequest, ConfirmQueue, QueueOptions } from './confirm.js';
 export { default as Tooltip } from './components/Tooltip.svelte';
 export { default as AppShell } from './components/AppShell.svelte';
 
@@ -172,3 +206,6 @@ export type {
 
 // Theme tokens live in ./theme.css — import it once in your app:
 //   import '@joyautomation/nautilus-hmi/theme.css';
+// The house faces (Space Grotesk / IBM Plex Mono / Righteous), self-hosted via
+// @fontsource, are the optional sibling — theme.css only NAMES the families:
+//   import '@joyautomation/nautilus-hmi/fonts.css';
