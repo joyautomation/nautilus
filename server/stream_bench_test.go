@@ -235,8 +235,12 @@ func benchDrivers(round *int, flip *bool) func() []DriverStatus {
 				{Label: "last publish", AtMs: 1_700_000_000_000 + int64(*round)*250, Text: "0.2s"},
 			},
 			Devices:       devs,
-			Extra:         map[string]any{"born": true, "primaryHost": "SCADA", "nodes": nodeList},
-			VolatileExtra: []string{"nodes"},
+			Extra: map[string]any{"born": true, "primaryHost": "SCADA", "nodes": nodeList},
+			// The per-node roster stays watched — a site going offline is
+			// the change this block exists to carry — and only the two
+			// fields that step on every message are excluded. That is the
+			// shape the live host runs; see TestHashDriversIgnoresNestedChurn.
+			VolatileExtra: []string{"nodes.*.msgs", "nodes.*.lastMs"},
 		}}
 	}
 }

@@ -310,7 +310,8 @@ type Options struct {
 //   - A metric that free-runs (a message counter, a poll count) sets
 //     DriverMetric.Volatile, and one that reports a moment in time sets
 //     AtMs instead of pre-rendering an age into Text.
-//   - Extra keys that free-run are named in VolatileExtra.
+//   - Parts of Extra that free-run are named in VolatileExtra, by key or by
+//     path ("nodes.*.lastMsgMs") — nested churn is the common case.
 //
 // Volatile values still ride along whenever the block IS sent; they simply
 // do not, on their own, put 13 kB on 4 frames a second. Their worst-case
@@ -335,10 +336,21 @@ type DriverStatus struct {
 	// every resync, which reads as a plant going quiet.
 	AsOfMs int64 `json:"asOfMs,omitempty"`
 
-	// VolatileExtra names Extra keys that free-run — a message count, a
-	// last-seen timestamp, anything that moves on its own. They are
-	// excluded from the change comparison, so they do not by themselves
+	// VolatileExtra names the parts of Extra that free-run — a message
+	// count, a last-seen timestamp, anything that moves on its own. They
+	// are excluded from the change comparison, so they do not by themselves
 	// push the whole status onto the wire. Never serialised.
+	//
+	// An entry is a top-level key ("unknown") or a PATH ("nodes.*.lastMsgMs"),
+	// because the churn that matters is usually nested. A 55-site Sparkplug
+	// host learned this the expensive way: every element of its
+	// Extra["nodes"] carried a last-message stamp and a sequence number that
+	// stepped on every message, so the block rode every frame — and naming
+	// the whole "nodes" key volatile would have thrown away the roster
+	// (online, stale, tag counts) that the gate exists to notice. In a path,
+	// "*" matches every key of a map or every element of a list, and a list
+	// is transparent to a plain segment, so "nodes.lastMsgMs" reaches into a
+	// list of node objects too.
 	VolatileExtra []string `json:"-"`
 }
 

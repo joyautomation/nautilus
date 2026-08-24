@@ -145,7 +145,20 @@ GET /api/stream?delta=1&blocks=delta
   they are excluded from the comparison (they still ride along whenever the
   block *is* sent). A driver adapter marks its own free-running readouts:
   `DriverMetric.Volatile` for a counter, `DriverStatus.VolatileExtra` for
-  protocol-specific fields.
+  protocol-specific fields — by key, or by **path**, since nested churn is
+  the common case. A 55-site Sparkplug host taught that one in production:
+  each entry of its `extra.nodes` carried a last-message stamp and a
+  sequence number that step on every message, so the block rode every frame
+  anyway, and excluding the whole `nodes` key would have thrown away the
+  roster the gate exists to watch. `VolatileExtra: ["nodes.*.lastMsgMs"]`
+  excludes the two fields and keeps the rest (`*` matches any key or list
+  element).
+
+  The corollary is a rule for anyone writing a driver adapter: **report the
+  plant categorically.** A flag, a count of sites, a moment (`birthMs`) —
+  not an age rendered from the clock and not a message counter. A value that
+  only refreshes when something else changes was never live to begin with,
+  so pre-rendering it costs the whole block and buys nothing.
 - **`alarms`** — the engine already publishes a `rev` that bumps when an
   alarm moves and never otherwise. Gate on it. As a bonus the controller
   stops *computing* the summary on ticks nobody is owed one.

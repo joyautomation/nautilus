@@ -497,15 +497,30 @@ func hashDrivers(ds []DriverStatus) uint64 {
 	return h.Sum64()
 }
 
-// hashExtra folds a driver's protocol-specific Extra into h, minus the keys
-// it declared volatile. encoding/json sorts map keys, which is what makes
-// the rendering stable across two builds of the same map.
+// hashExtra folds a driver's protocol-specific Extra into h, minus what it
+// declared volatile. encoding/json sorts map keys, which is what makes the
+// rendering stable across two builds of the same map.
+//
+// A VolatileExtra entry is either a top-level key ("nodes") or a PATH into
+// the structure ("nodes.*.lastMsgMs"), because the churn that matters is
+// usually nested. That is not a hypothesis: the first live deploy of the
+// block gate put a 55-site Sparkplug host's status on every frame anyway,
+// because each element of Extra["nodes"] carried a last-message stamp and a
+// sequence number that stepped on every message — two fields, one level
+// down, where excluding the whole "nodes" key would have thrown away the
+// roster (online, stale, tag counts) that the gate exists to notice.
+//
+// In a path, "*" matches every key of a map or every element of a list, and
+// a list is also transparent to a plain segment, so "nodes.lastMsgMs" and
+// "nodes.*.lastMsgMs" both reach into a list of node objects. A leaf "*"
+// means every key at that level is volatile.
 func hashExtra(h hash.Hash64, extra map[string]any, volatile []string) {
 	if len(extra) == 0 {
 		h.Write([]byte{0})
 		return
 	}
 	m := extra
+	var paths [][]string
 	if len(volatile) > 0 {
 		m = make(map[string]any, len(extra))
 		for k, v := range extra {
@@ -520,8 +535,27 @@ func hashExtra(h hash.Hash64, extra map[string]any, volatile []string) {
 				m[k] = v
 			}
 		}
+		for _, vol := range volatile {
+			if strings.Contains(vol, ".") {
+				paths = append(paths, strings.Split(vol, "."))
+			}
+		}
 	}
 	b, err := json.Marshal(m)
+	if err == nil && len(paths) > 0 {
+		// Scrubbing happens on the rendered JSON rather than on the Go
+		// values because Extra holds whatever the adapter put there —
+		// structs, slices of structs, maps — and JSON is the one shape all
+		// of them agree on. It costs a round trip per tick, paid only by a
+		// driver that declared a nested path, and only while a client is
+		// actually gating on the block.
+		if scrubbed, ok := scrubPaths(b, paths); ok {
+			b = scrubbed
+		}
+		// A scrub that fails hashes the unscrubbed bytes: the block then
+		// goes out more often than it needs to, which is the harmless
+		// direction.
+	}
 	if err != nil {
 		// A value JSON cannot render (a NaN, a channel) is a bug in the
 		// adapter, not a reason to stall the stream. Fall back to the key
@@ -539,6 +573,67 @@ func hashExtra(h hash.Hash64, extra map[string]any, volatile []string) {
 		return
 	}
 	h.Write(b)
+}
+
+// scrubPaths re-renders JSON with the values at the given paths removed.
+// Reports false if the round trip fails, which leaves the caller hashing
+// what it already had.
+func scrubPaths(b []byte, paths [][]string) ([]byte, bool) {
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		return nil, false
+	}
+	for _, p := range paths {
+		deleteAt(v, p)
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+// deleteAt removes the value at one path from a decoded JSON tree, treating
+// a list as transparent: a roster's INDEX is not a stable address (nodes
+// come and go), so a segment addressing a list applies to every element.
+func deleteAt(v any, path []string) {
+	if len(path) == 0 {
+		return
+	}
+	seg := path[0]
+	switch t := v.(type) {
+	case map[string]any:
+		if len(path) == 1 {
+			if seg == "*" {
+				for k := range t {
+					delete(t, k)
+				}
+			} else {
+				delete(t, seg)
+			}
+			return
+		}
+		if seg == "*" {
+			for _, child := range t {
+				deleteAt(child, path[1:])
+			}
+			return
+		}
+		if child, ok := t[seg]; ok {
+			deleteAt(child, path[1:])
+		}
+	case []any:
+		rest := path
+		if seg == "*" {
+			rest = path[1:]
+			if len(rest) == 0 {
+				return // "a.*" on a list: the list itself was the target
+			}
+		}
+		for _, child := range t {
+			deleteAt(child, rest)
+		}
+	}
 }
 
 // seqPeek reads the client's frame counter for the frame about to be built.

@@ -12,6 +12,7 @@ package server
 // asserts an absence is paired with one that asserts the change lands.
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -317,5 +318,112 @@ func TestHashDriversHonoursVolatileExtra(t *testing.T) {
 func TestHashDriversStableWhenEmpty(t *testing.T) {
 	if hashDrivers(nil) != hashDrivers([]DriverStatus{}) {
 		t.Error("nil and empty driver lists hash differently")
+	}
+}
+
+// ── the Pomona regression ─────────────────────────────────────────────────
+//
+// The first live deploy of the block gate did not hold: on the WRD host the
+// driver status rode every frame anyway (3.0 MB/min to a client subscribed
+// to no tags), because the churn was NESTED. Each element of Extra["nodes"]
+// carried a last-message stamp and a Sparkplug sequence number that step on
+// every message, one level below anything a top-level exclusion could
+// reach. These are that shape, held still.
+
+// hostLike is a Sparkplug-host-shaped status: one driver in front of n edge
+// nodes, with the per-node roster in Extra that made the real block 13 kB.
+// tick advances only the things that move on their own.
+func hostLike(n int, tick int64) []DriverStatus {
+	nodes := make([]any, 0, n)
+	devs := make([]DriverDevice, 0, n)
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("RTU%02d", i)
+		devs = append(devs, DriverDevice{ID: id, Online: true, Detail: fmt.Sprintf("%d tags", 100+i)})
+		nodes = append(nodes, map[string]any{
+			"edgeNode": id, "group": "WRD", "online": true, "stale": false,
+			"metrics": float64(100 + i), "bdSeq": float64(i % 7),
+			"birthMs": float64(1_700_000_000_000),
+			// The two free-runners, exactly as the host reported them.
+			"lastMsgMs": float64(1_700_000_000_000 + tick*250),
+			"seq":       float64(150 + tick),
+		})
+	}
+	return []DriverStatus{{
+		Kind: "sparkplug-host", Name: "pomona-central",
+		Detail: "tcp://mqtt:1883 · PomonaWRD", State: "connected",
+		Message: fmt.Sprintf("Consuming %d sites", n),
+		SinceMs: 1_700_000_000_000, AsOfMs: 1_700_000_000_000 + tick*250,
+		Metrics: []DriverMetric{
+			{Label: "sites online", Value: float64(n), Text: fmt.Sprintf("%d / %d", n, n)},
+			{Label: "sites stale", Value: 0},
+			{Label: "messages", Value: float64(41149 + tick*25), Volatile: true},
+			{Label: "rebirths", Value: 3},
+			{Label: "last message", AtMs: 1_700_000_000_000 + tick*250, Text: "0.2s"},
+		},
+		Devices:       devs,
+		Extra:         map[string]any{"nodes": nodes, "unknown": float64(0)},
+		VolatileExtra: []string{"nodes.*.lastMsgMs", "nodes.*.seq"},
+	}}
+}
+
+func TestHashDriversIgnoresNestedChurn(t *testing.T) {
+	a, b := hostLike(55, 0), hostLike(55, 1)
+	if hashDrivers(a) != hashDrivers(b) {
+		t.Fatal("a quarter-second of ordinary Sparkplug traffic changed the hash — " +
+			"the block would ride every frame, which is the bug this test exists for")
+	}
+
+	// The roster is still watched, which is the whole point of excluding the
+	// two fields rather than the whole "nodes" key.
+	for _, tc := range []struct {
+		name string
+		fn   func(d *DriverStatus)
+	}{
+		{"a site going offline", func(d *DriverStatus) {
+			d.Extra["nodes"].([]any)[7].(map[string]any)["online"] = false
+		}},
+		{"a site going stale", func(d *DriverStatus) {
+			d.Extra["nodes"].([]any)[7].(map[string]any)["stale"] = true
+		}},
+		{"a site's tag count", func(d *DriverStatus) {
+			d.Extra["nodes"].([]any)[7].(map[string]any)["metrics"] = float64(1)
+		}},
+		{"a rebirth stamp", func(d *DriverStatus) {
+			d.Extra["nodes"].([]any)[7].(map[string]any)["birthMs"] = float64(1_700_000_009_000)
+		}},
+		{"a site disappearing", func(d *DriverStatus) {
+			d.Extra["nodes"] = d.Extra["nodes"].([]any)[:54]
+		}},
+		{"a device row going offline", func(d *DriverStatus) { d.Devices[7].Online = false }},
+		{"a device row's detail", func(d *DriverStatus) { d.Devices[7].Detail = "100 tags · stale" }},
+		{"an unmanifested metric", func(d *DriverStatus) { d.Extra["unknown"] = float64(1) }},
+	} {
+		c := hostLike(55, 0)
+		tc.fn(&c[0])
+		if hashDrivers(c) == hashDrivers(a) {
+			t.Errorf("%s did not change the hash", tc.name)
+		}
+	}
+}
+
+// A path may also name a plain nested key, and a list is transparent to it —
+// "nodes.lastMsgMs" is the spelling someone will reach for first.
+func TestVolatileExtraPathForms(t *testing.T) {
+	a, b := hostLike(3, 0), hostLike(3, 1)
+	for _, form := range [][]string{
+		{"nodes.*.lastMsgMs", "nodes.*.seq"},
+		{"nodes.lastMsgMs", "nodes.seq"},
+	} {
+		a[0].VolatileExtra, b[0].VolatileExtra = form, form
+		if hashDrivers(a) != hashDrivers(b) {
+			t.Errorf("path form %v did not exclude the nested churn", form)
+		}
+	}
+
+	// A bad path excludes nothing and breaks nothing: the block simply goes
+	// out more often, which is the harmless direction.
+	a[0].VolatileExtra, b[0].VolatileExtra = []string{"nope.*.gone"}, []string{"nope.*.gone"}
+	if hashDrivers(a) == hashDrivers(b) {
+		t.Error("an unmatched path silently excluded something")
 	}
 }
