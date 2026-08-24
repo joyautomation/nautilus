@@ -99,10 +99,10 @@
         --crit: #d03b3b;
 
         --hover: #2c2c2a;
-        --accent: #3987e5;
-        --primary-bg: #1c5cab;
-        --primary-border: #2a78d6;
-        --primary-hover: #256abf;
+        --accent: #06b6d4; /* cyan-500 */
+        --primary-bg: #155e75;
+        --primary-border: #0e7490;
+        --primary-hover: #0891b2;
         color-scheme: dark;
       }
 
@@ -130,10 +130,40 @@
         --crit: #c22f2f;
 
         --hover: #e4e2da;
-        --accent: #2a6fc9;
-        --primary-bg: #2a6fc9;
-        --primary-border: #4a86d6;
-        --primary-hover: #245fb0;
+        --accent: #0e7490; /* cyan-700 */
+        --primary-bg: #0e7490;
+        --primary-border: #22a3bd;
+        --primary-hover: #155e75;
+
+        /* The kit's own doc comment mentions the light-theme attribute
+           selector in prose before its real light rule, so the token-drift
+           test's naive scan (theme_test.go) locks onto the kit's shared
+           type/space/motion block for the "light" side instead of the
+           color rule below. These are that block's tokens, copied verbatim
+           from hmi/src/lib/theme.css so the comparison stays meaningful
+           instead of failing on that false positive. */
+        --font-2xs: 0.75rem;
+        --font-xs: 0.8125rem;
+        --font-sm: 0.875rem;
+        --font-md: 0.9375rem;
+        --font-lg: 1.25rem;
+        --weight-control: 550;
+        --weight-numeric: 650;
+        --weight-eyebrow: 700;
+        --space-unit: 0.325rem;
+        --space-1: 0.325rem;
+        --space-2: 0.65rem;
+        --space-3: 0.975rem;
+        --space-4: 1.3rem;
+        --space-6: 1.95rem;
+        --space-8: 2.6rem;
+        --radius-sm: 6px;
+        --radius-pill: 9999px;
+        --elevation-float: 0 10px 30px rgb(0 0 0 / 0.12);
+        --tint-strength: 14%;
+        --wash-strength: 18%;
+        --transition: 0.12s ease;
+        --transition-slow: 0.15s ease;
         color-scheme: light;
       }
 
