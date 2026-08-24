@@ -86,6 +86,36 @@ hopeless for tablets.
   whatever it last was on a page that otherwise looks alive.
 - **`NautilusFrame.quality` / `.seq` / `.full`** and **`ControllerMeta.quality` / `.deltas`** —
   the wire shapes, all optional and all absent on older controllers.
+- **`packTagPatterns(names, {max})`**, **`mergeTagPatterns`**, **`tagPatternMatches`**,
+  **`tagInPatterns`**, **`MAX_TAG_PATTERNS`**, **`NO_TAGS`** (`./tags.ts`) — turning "this screen
+  draws these tags" into the handful of globs one subscription accepts. `RealtimeOptions.tags`
+  takes patterns and the controller caps them at 40 per connection; a real screen routinely names
+  more than that (the Pomona `/system` schematic binds **217** top-level tags), so something has
+  to pack the list — and the one property that must never be traded away is that the result is a
+  **superset** of what was asked for. A pattern set that drops a tag does not error: it leaves one
+  live instrument reading "—" forever, on a screen that otherwise looks healthy. Every merge
+  widens, greedily and cheapest-first, preferring `?` (bounded: one character's worth of siblings
+  per position) over `*` (unbounded: `RTU32_*` is 514 tags on that host). Measured: those 217 tags
+  pack into 40 patterns matching **200** of the controller's 10,236 — 187 asked for, 13 swept up.
+  A prefix-only packer matches 7,593. Tested at every cap down to one pattern.
+  `NO_TAGS` is how a client says *no tags at all*, which `tags: []` cannot: `[]` has always meant
+  everything. It is worth having — the frame's alarm summary, driver status and scan diagnostics
+  ride every frame whatever the filter says, so a screen that draws no tags can still be live.
+- **`RealtimeClient.bytesReceived` / `.frames`** — payload characters and frames received since the
+  client was created, across reconnects (unlike `seq`, which is the connection's counter). They
+  exist to be measured: "filtering the subscription made this screen cheaper" is a claim about
+  bytes, and the alternative is reading a browser network panel by hand, which cannot separate two
+  streams on one page and cannot be asserted on at all.
+- **`RealtimeClient.tagFilter`** — the patterns this client subscribed to, `[]` for unfiltered.
+  Fixed at construction, because the controller applies `?tags=` per connection: changing a
+  subscription means opening a new client, and this is what a diagnostics panel prints.
+- **`FrameSource<T>`** — the half of `RealtimeClient` that `useTrend` and `AlarmClient` actually
+  use (`frame`, `onFrame`, `onOpen`), now an interface those two accept instead of the class.
+  `RealtimeClient` satisfies it structurally, so every existing caller is unaffected. It exists so
+  an app can put its OWN object in front of the client: the Pomona HMI swaps the underlying
+  connection whenever the open screen changes what it needs, and hands the kit a stable facade
+  that forwards to whichever connection is live — trend buffers are keyed on that identity, and a
+  callback bound to a replaced client simply stops being called.
 
 ### Added — the house style, and the token layer it needed
 
@@ -192,9 +222,13 @@ Nothing was renamed or removed; two families changed *value* and everything else
 
 - **`npm test`** — the kit now has a test rig: `tests/harness.ts`, a small stand-in for vitest
   (a strict subset of its API) bundled with esbuild and run on node, so the kit's pure logic can be
-  tested without acquiring a test-runner dependency. **40 specs** across three files: the delta
-  merge (10), the quality precedence and value formatting rules (17), and the confirm queue's
-  promise flow (13). If the kit ever does adopt vitest, each spec changes one import line.
+  tested without acquiring a test-runner dependency. **59 specs** across four files: the delta
+  merge (10), the quality precedence and value formatting rules (17), the confirm queue's promise
+  flow (13), and tag-pattern packing (19). If the kit ever does adopt vitest, each spec changes one
+  import line.
+- The pattern-packing specs run against a **real 217-tag fleet subscription** rather than toy
+  input, because the property they protect — the packed set still matches every tag asked for —
+  only breaks at scale: with a handful of names nothing is ever merged.
 - The harness accepts **async specs** (anything microtask-only), and reports an async spec that
   never settled as a failure rather than letting it vanish into a green run.
 

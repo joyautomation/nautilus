@@ -51,6 +51,27 @@ export class TrendBuffer {
 	}
 }
 
+/**
+ * The half of `RealtimeClient` that everything downstream of a frame
+ * actually uses — `useTrend`, `AlarmClient`, any consumer that wires itself
+ * to frames rather than being handed one.
+ *
+ * It is an interface rather than the class so an app can put its OWN object
+ * in front of the client: the Pomona HMI swaps the underlying connection
+ * whenever the open screen changes what it needs (`?tags=`, fixed at
+ * connect), and hands the kit a stable facade that forwards to whichever
+ * connection is live. Trend buffers are keyed on this identity, so a facade
+ * is what keeps a sparkline's history across that swap.
+ */
+export interface FrameSource<T> {
+	/** The most recent frame, or null before the first one. */
+	readonly frame: T | null;
+	/** Subscribe to frames. Returns an unsubscribe function. */
+	onFrame(cb: (frame: T) => void): () => void;
+	/** Subscribe to (re)opens — the backfill hook. Returns an unsubscribe. */
+	onOpen(cb: () => void): () => void;
+}
+
 export interface RealtimeOptions<T> {
 	/** SSE endpoint. Default `/api/stream`. */
 	url?: string;
@@ -123,6 +144,26 @@ export class RealtimeClient<T = unknown> {
 	 */
 	resyncs = $state(0);
 
+	/**
+	 * Frames received on this client since it was created, across every
+	 * reconnect — unlike `seq`, which is the CONNECTION's counter and
+	 * restarts at 1 each time the stream reopens.
+	 */
+	frames = $state(0);
+	/**
+	 * Payload characters received since this client was created: the sum of
+	 * every `data:` line's length, excluding SSE framing and HTTP headers.
+	 *
+	 * It exists to be measured. "Filtering the subscription made the screen
+	 * cheaper" is a claim about bytes, and the alternative to counting them
+	 * here is reading a browser network panel by hand — which cannot
+	 * separate two streams on one page, and cannot be asserted on at all.
+	 * Tag names and values are ASCII in every nautilus frame, so characters
+	 * and bytes are the same number in practice; treat it as approximate if
+	 * yours are not.
+	 */
+	bytesReceived = $state(0);
+
 	#url: string;
 	#freshnessMs: number;
 	#reconnectMs: number;
@@ -151,6 +192,16 @@ export class RealtimeClient<T = unknown> {
 		this.#tags = opts.tags ?? [];
 		this.#delta = opts.delta ?? true;
 		if (opts.onFrame) this.#subs.add(opts.onFrame);
+	}
+
+	/**
+	 * The glob patterns this client subscribed to, or `[]` for the
+	 * unfiltered stream. Fixed at construction — the controller applies
+	 * `?tags=` per connection, so CHANGING a subscription means opening a
+	 * new client, not mutating this one.
+	 */
+	get tagFilter(): string[] {
+		return [...this.#tags];
 	}
 
 	/**
@@ -306,6 +357,8 @@ export class RealtimeClient<T = unknown> {
 		es.onmessage = (ev) => {
 			this.lastMessageAt = Date.now();
 			this.connected = true;
+			this.frames++;
+			this.bytesReceived += ev.data.length;
 			let f: T;
 			try {
 				f = this.#parse(ev.data);

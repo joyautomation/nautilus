@@ -35,7 +35,7 @@
     "package": "svelte-kit sync && svelte-package && publint",
     "prepublishOnly": "npm run package",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "test": "esbuild tests/*.test.ts --bundle --format=esm --platform=node --outdir=.svelte-kit/tests --log-level=warning && node .svelte-kit/tests/delta.test.js && node .svelte-kit/tests/quality.test.js && node .svelte-kit/tests/confirm.test.js"
+    "test": "esbuild tests/*.test.ts --bundle --format=esm --platform=node --outdir=.svelte-kit/tests --log-level=warning && node .svelte-kit/tests/delta.test.js && node .svelte-kit/tests/quality.test.js && node .svelte-kit/tests/confirm.test.js && node .svelte-kit/tests/tags.test.js"
   },
   "peerDependencies": {
     "svelte": "^5.0.0"

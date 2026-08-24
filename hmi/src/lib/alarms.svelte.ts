@@ -7,7 +7,7 @@
 // stay props-in/callbacks-out), and the client degrades gracefully when the
 // controller was built with no alarm definitions at all (`GET /api/alarms`
 // 404s → `supported` flips to `false` rather than throwing).
-import type { RealtimeClient } from './realtime.svelte.js';
+import type { FrameSource } from './realtime.svelte.js';
 
 /** ISA-18.2 priority, JSON lowercase. Ordered low → high for sorting. */
 export type Priority = 'diagnostic' | 'low' | 'medium' | 'high' | 'critical';
@@ -251,7 +251,7 @@ export class AlarmClient {
 	#lastFetchedRev: number | null = null;
 	#unsub: (() => void) | null = null;
 
-	constructor(realtime: RealtimeClient<FrameWithAlarms> | null, opts: AlarmClientOptions = {}) {
+	constructor(realtime: FrameSource<FrameWithAlarms> | null, opts: AlarmClientOptions = {}) {
 		this.#url = opts.url ?? '/api/alarms';
 		this.#token = opts.token;
 		if (realtime) {
@@ -404,7 +404,7 @@ export class AlarmClient {
  * to `frame.alarms.rev`, or `null` to drive the client by hand (`refresh()`/
  * `start()`) with no realtime frame source. */
 export function createAlarmClient(
-	realtime: RealtimeClient<FrameWithAlarms> | null,
+	realtime: FrameSource<FrameWithAlarms> | null,
 	opts: AlarmClientOptions = {}
 ): AlarmClient {
 	return new AlarmClient(realtime, opts);

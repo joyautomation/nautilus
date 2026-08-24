@@ -12,7 +12,7 @@
 // Buffers are SHARED and refcounted per (client, tag, window): ten sparklines
 // on the same tag cost one subscription and one array, not ten. The last
 // component to unmount releases it.
-import { TrendBuffer, type RealtimeClient } from './realtime.svelte.js';
+import { TrendBuffer, type FrameSource } from './realtime.svelte.js';
 import { fetchHistory, type HistoryOptions } from './history.js';
 import { numAt, type TagTree } from './tags.js';
 import type { TrendPoint } from './types.js';
@@ -89,7 +89,7 @@ function defaultTs<F>(frame: F): number {
  * ```
  */
 export function useTrend<F = unknown>(
-	client: RealtimeClient<F>,
+	client: FrameSource<F>,
 	tag: string,
 	opts: UseTrendOptions<F> = {}
 ): TrendBuffer {

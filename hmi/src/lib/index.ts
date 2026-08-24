@@ -138,7 +138,7 @@ export { default as AppShell } from './components/AppShell.svelte';
 
 // Realtime client (generic over the frame shape)
 export { RealtimeClient, createRealtimeClient, TrendBuffer } from './realtime.svelte.js';
-export type { RealtimeOptions } from './realtime.svelte.js';
+export type { RealtimeOptions, FrameSource } from './realtime.svelte.js';
 
 // Trends: live off the stream, backfilled from the historian.
 export { useTrend } from './trend.svelte.js';
@@ -150,6 +150,16 @@ export type { HistoryOptions, HistoryResult } from './history.js';
 // runtime actually publishes (for a tag picker that can't offer a dead tag).
 export { tagAt, numAt, boolAt, hasTagAt, numericLeaves } from './tags.js';
 export type { TagTree, NumericLeaf } from './tags.js';
+// Declaring a SUBSET of them: packing a screen's tag list into the handful of
+// glob patterns one `?tags=` subscription accepts.
+export {
+	MAX_TAG_PATTERNS,
+	NO_TAGS,
+	mergeTagPatterns,
+	packTagPatterns,
+	tagPatternMatches,
+	tagInPatterns
+} from './tags.js';
 
 // Theme / motion preference stores
 export { theme } from './theme.svelte.js';
