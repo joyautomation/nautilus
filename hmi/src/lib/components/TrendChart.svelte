@@ -19,6 +19,7 @@
 	// %). Readouts (legend + hover) always show the pen's real value in its
 	// own units; only the *geometry* changes between modes.
 	import Icon from './Icon.svelte';
+	import { isThresholdActive, resolveYLabel } from '../trendchart.js';
 	import type { TrendPen, TrendThreshold } from '../types.js';
 
 	let {
@@ -29,10 +30,14 @@
 		axisMode = 'shared',
 		yMin,
 		yMax,
+		yLabel,
 		gapMs,
 		paused = $bindable(false)
 	}: {
 		pens: TrendPen[];
+		/** A pen's own threshold (`penId` set) or a CHART-LEVEL threshold
+		 *  (`penId` omitted) drawn against the shared axis — only meaningful
+		 *  with `axisMode="shared"`, silently skipped in `percent` mode. */
 		thresholds?: TrendThreshold[];
 		height?: number;
 		/** Rolling live window in ms. Omit to auto-fit the full data extent (historical). */
@@ -43,6 +48,12 @@
 		/** Shared-mode fixed bounds; omit either to auto-scale that side. */
 		yMin?: number;
 		yMax?: number;
+		/** Explicit y-axis label, overriding auto-detection from the pens'
+		 *  shared `units` — needed when pens carry mixed units, or whenever a
+		 *  chart (e.g. a report) must always carry the correct engineering-unit
+		 *  label. Only applies in `shared` mode; `percent` mode always shows
+		 *  "% of range". */
+		yLabel?: string;
 		/** Break a pen's line where consecutive samples are farther apart than this, ms. */
 		gapMs?: number;
 		/** Freeze the visible window while data keeps accumulating (live mode). */
@@ -287,7 +298,24 @@
 		return nearest(p, t1);
 	}
 
-	const activeThresholds = $derived(thresholds.filter((th) => visible.some((p) => p.id === th.penId)));
+	const visiblePenIds = $derived(new Set(visible.map((p) => p.id)));
+	const activeThresholds = $derived(
+		thresholds.filter((th) => isThresholdActive(th, axisMode, visiblePenIds))
+	);
+	const yLabelText = $derived(resolveYLabel(axisMode, yLabel, commonUnit));
+
+	// A per-pen threshold reads its `value`/`lo`/`hi` through that pen's own
+	// scale (`yOf`, which handles percent-mode normalization); a chart-level
+	// threshold (`penId` omitted — only ever active in `shared` mode, per
+	// `isThresholdActive`) reads straight off the shared domain instead, since
+	// it isn't tied to any one pen's range. `undefined` means "don't draw" —
+	// e.g. a per-pen threshold whose pen got hidden after `activeThresholds`
+	// was computed on a stale value.
+	function yForThreshold(th: TrendThreshold, v: number): number | undefined {
+		if (th.penId === undefined) return yFromDomain(v, sharedDomain.min, sharedDomain.max);
+		const pen = visible.find((p) => p.id === th.penId);
+		return pen ? yOf(pen, v) : undefined;
+	}
 </script>
 
 <div class="trendchart" bind:clientWidth={w}>
@@ -347,18 +375,15 @@
 					{fmtTime(tk.t)}
 				</text>
 			{/each}
-			{#if axisMode === 'percent'}
-				<text x={PAD.l} y={PAD.t - 3} font-size="12" fill="var(--muted)">% of range</text>
-			{:else if commonUnit}
-				<text x={PAD.l} y={PAD.t - 3} font-size="12" fill="var(--muted)">{commonUnit}</text>
+			{#if yLabelText}
+				<text x={PAD.l} y={PAD.t - 3} font-size="12" fill="var(--muted)">{yLabelText}</text>
 			{/if}
 
 			<!-- Alarm bands, drawn behind everything else. -->
 			{#each activeThresholds.filter((th) => th.lo !== undefined && th.hi !== undefined) as th}
-				{@const pen = visible.find((p) => p.id === th.penId)}
-				{#if pen}
-					{@const yA = yOf(pen, th.hi as number)}
-					{@const yB = yOf(pen, th.lo as number)}
+				{@const yA = yForThreshold(th, th.hi as number)}
+				{@const yB = yForThreshold(th, th.lo as number)}
+				{#if yA !== undefined && yB !== undefined}
 					<rect
 						x={PAD.l}
 						y={Math.min(yA, yB)}
@@ -374,9 +399,8 @@
 
 			<!-- Threshold lines, above the bands but below the data. -->
 			{#each activeThresholds.filter((th) => th.value !== undefined) as th}
-				{@const pen = visible.find((p) => p.id === th.penId)}
-				{#if pen}
-					{@const y = yOf(pen, th.value as number)}
+				{@const y = yForThreshold(th, th.value as number)}
+				{#if y !== undefined}
 					<line x1={PAD.l} x2={w - PAD.r} y1={y} y2={y} stroke={`var(--${th.kind})`} stroke-width="1.5" stroke-dasharray="4 3" opacity="0.85" />
 					{#if th.label}
 						<text x={w - PAD.r - 4} y={y - 4} text-anchor="end" font-size="12" fill={`var(--${th.kind})`}>{th.label}</text>

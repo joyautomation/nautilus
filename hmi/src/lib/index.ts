@@ -14,6 +14,15 @@ export { default as Valve } from './components/Valve.svelte';
 export { default as Pipe } from './components/Pipe.svelte';
 export { default as StatusPill } from './components/StatusPill.svelte';
 export { default as Sparkline } from './components/Sparkline.svelte';
+export { sparklineDomain, sparklineMetrics, sparklineGeometry } from './sparkline.js';
+export type {
+	SparklineDomain,
+	SparklineMetrics,
+	SparklinePoint,
+	SparklineGeometry,
+	SparklineGeometryOptions
+} from './sparkline.js';
+export { isThresholdActive, resolveYLabel } from './trendchart.js';
 export { default as Histogram } from './components/Histogram.svelte';
 export { default as NumberField } from './components/NumberField.svelte';
 export { default as ScanDiagnostics } from './components/ScanDiagnostics.svelte';

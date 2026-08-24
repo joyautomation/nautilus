@@ -256,14 +256,38 @@ Nothing was renamed or removed; two families changed *value* and everything else
 - **`./confirm.ts`** — `createConfirmQueue`, `splitItems`, `getOperator`, `setOperator`. The whole
   decidable half of the dialog, runes-free and unit-tested.
 
+### Added — Sparkline & TrendChart (wave-5 fidelity backlog)
+
+- **`Sparkline`** gained **`compact`** — tighter insets and a thinner stroke for dense contexts
+  (e.g. `EquipmentCard`'s sparkline slot) rather than a stat tile. `yMin`/`yMax` (a fixed scale that
+  does not jump as new samples stream in) were already there; what was missing was **safety on an
+  empty or single-point series**. An empty series now falls back to a `[0, 1]` domain instead of
+  propagating `Infinity`/`NaN` (it always did draw nothing for one, since a line needs two points),
+  and a **single-point series now draws a dot** — centered in static mode, positioned at the
+  leading scroll edge in scrolling mode — rather than rendering nothing. The geometry (domain,
+  insets, path-building) moved into a new pure module, **`./sparkline.ts`**
+  (`sparklineDomain`, `sparklineMetrics`, `sparklineGeometry`), so "never a NaN in the path" is
+  something a spec pins down directly rather than something to trust from reading a `$derived`
+  chain. Default rendering (non-compact, 2+ points) is byte-for-byte unchanged.
+- **`TrendChart`** gained **`yLabel`** (an explicit axis-label override — needed when pens carry
+  mixed units, or whenever a report chart must always carry the correct engineering-unit label
+  regardless of which pens happen to be visible; `percent` mode's "% of range" still always wins)
+  and a **chart-level threshold**: `TrendThreshold.penId` is now optional — omit it for a threshold
+  drawn across the whole chart against the shared y-domain rather than one pen's own range. Only
+  meaningful in `axisMode="shared"`; a chart-level threshold is silently not drawn in `percent`
+  mode, which has no single engineering-units axis for it to sit on. The gating rule and the label
+  fallback moved into a new pure module, **`./trendchart.ts`** (`isThresholdActive`,
+  `resolveYLabel`). Every existing `TrendThreshold` (which always set `penId`) keeps behaving
+  exactly as before.
+
 ### Added — testing
 
 - **`npm test`** — the kit now has a test rig: `tests/harness.ts`, a small stand-in for vitest
   (a strict subset of its API) bundled with esbuild and run on node, so the kit's pure logic can be
-  tested without acquiring a test-runner dependency. **59 specs** across four files: the delta
-  merge (10), the quality precedence and value formatting rules (17), the confirm queue's promise
-  flow (13), and tag-pattern packing (19). If the kit ever does adopt vitest, each spec changes one
-  import line.
+  tested without acquiring a test-runner dependency. **86 specs** across six files: the delta
+  merge (15), the quality precedence and value formatting rules (17), the confirm queue's promise
+  flow (13), tag-pattern packing (19), `Sparkline` geometry (14), and `TrendChart`'s threshold/label
+  rules (8). If the kit ever does adopt vitest, each spec changes one import line.
 - The pattern-packing specs run against a **real 217-tag fleet subscription** rather than toy
   input, because the property they protect — the packed set still matches every tag asked for —
   only breaks at scale: with a handful of names nothing is ever merged.

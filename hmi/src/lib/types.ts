@@ -39,9 +39,15 @@ export interface TrendPen {
  * pen's trace, in that pen's own engineering units — converted through
  * whichever axis mode the chart is using. Uses the theme's reserved
  * `--crit`/`--warn` roles, never a series color.
+ *
+ * `penId` is optional: omit it for a CHART-LEVEL threshold, drawn across the
+ * whole chart against the shared y-domain rather than one pen's range. Only
+ * meaningful in `axisMode="shared"` — a chart in `percent` mode has no single
+ * engineering-units axis for it to sit on, so a penless threshold is simply
+ * not drawn there.
  */
 export interface TrendThreshold {
-	penId: string;
+	penId?: string;
 	kind: 'crit' | 'warn';
 	value?: number;
 	lo?: number;

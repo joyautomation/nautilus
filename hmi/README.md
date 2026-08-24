@@ -556,7 +556,8 @@ reduced-motion via `data-motion`.
 | `Valve` | `openPct`, `label`, `width` |
 | `Pipe` | `d` (SVG path), `flowing`, `rate`, `color` — render inside an `<svg>` |
 | `StatusPill` | `kind: 'good' \| 'warning' \| 'serious' \| 'critical' \| 'off'`, `label` |
-| `Sparkline` | `values: number[]`, `color`, `height`, `yMin`, `yMax` |
+| `Sparkline` | `values: number[]`, `color`, `height`, `yMin`, `yMax`, `endIndex`, `windowSize`, `compact` |
+| `TrendChart` | `pens: TrendPen[]`, `thresholds?: TrendThreshold[]` (chart-level when `penId` is omitted, `shared` mode only), `height`, `windowMs`, `axisMode: 'shared' \| 'percent'`, `yMin`, `yMax`, `yLabel`, `gapMs`, `bind:paused` |
 | `Histogram` | `counts: number[]`, `bucketWidth`, `unit`, `height`, `color` |
 | `NumberField` | `label`, `unit`, `value`, `min`, `max`, `step`, `onsubmit(v)` |
 | `AlarmBanner` | `summary: AlarmSummary`, `now`, `onclick?`, `href?` |
