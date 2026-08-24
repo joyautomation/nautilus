@@ -51,6 +51,49 @@ gone. Nothing here changes an existing component's default rendering.
   number a runtime is currently publishing. Build a tag picker from `numericLeaves` and it can
   never offer a tag that resolves to nothing.
 
+### Added — subscriptions: deltas, filters, data quality
+
+The two things that separate a demo HMI from one a plant runs on: how much a client has to pull to
+draw a screen, and whether it can tell a live number from an old one. Both land in the controller
+(`server`/`runtime`/`io`) and both are surfaced here. Measured on the WRD host: `/api/state` was
+571 KB and one SSE client pulled ~2 MB per ten seconds, which is fine for one wall screen and
+hopeless for tablets.
+
+- **`RealtimeOptions.delta`** (default **`true`**) — ask the controller for delta frames. After the
+  first full snapshot only changed tags cross the wire, and the client merges them, so
+  `frame.tags` is always complete and nothing downstream changes. **~17× less on the wire** at 10k
+  tags / 5% churn (280 kB → 17 kB per client per tick); ~51× at 1% churn. A controller that
+  predates deltas sends frames with no `seq` and is passed through untouched, so turning it on is
+  never a compatibility risk.
+- **`RealtimeOptions.tags`** — glob patterns (`['RTU9_*', '*_LIT_*']`) narrowing the subscription
+  server-side, applied to the first frame too. Composes with `delta`, and each is useful alone:
+  filters help most when a screen is small, deltas when the plant is quiet.
+- **`RealtimeClient.quality(tag)`** / **`.isGood(tag)`**, and **`Quality`**
+  (`'good' | 'stale' | 'bad' | 'notConnected'`) — per-tag data quality as the controller reports
+  it. This is the axis the kit could not see: `tags.ts` detects a tag's *absence* (a screen bound
+  to an unpublished point shows "—", never a confident zero), but a tag that was published and had
+  merely gone stale was indistinguishable from a live one — finite number, resolving binding,
+  gauge rendered at full confidence. Apps were left inferring "comms bad" from magic values.
+  `quality()` resolves a dotted member path to its root tag: a UDT arrives from its source whole.
+  **Check `ControllerMeta.quality` before drawing a badge** — an empty quality map looks exactly
+  like a healthy plant, and on a controller that cannot report quality a green badge is a lie.
+- **`RealtimeClient.seq` / `.resyncs`** — the current connection's frame counter and the number of
+  gap-triggered reconnects (normally zero for a session's life; a climbing number is a transport
+  problem, not a tuning knob).
+- **`mergeDelta` / `emptyDelta` / `DeltaState`** (`./delta.ts`) — the merge rules as a pure,
+  dependency-free function, extracted because this is the one piece of the kit that can silently
+  mislead an operator: a merge bug does not throw or blank a screen, it freezes one number at
+  whatever it last was on a page that otherwise looks alive.
+- **`NautilusFrame.quality` / `.seq` / `.full`** and **`ControllerMeta.quality` / `.deltas`** —
+  the wire shapes, all optional and all absent on older controllers.
+
+### Added — testing
+
+- **`npm test`** — the kit now has a test rig: `tests/harness.ts`, a ~60-line stand-in for vitest
+  (a strict subset of its API) bundled with esbuild and run on node, so the kit's pure logic can be
+  tested without acquiring a test-runner dependency. Ten specs cover the delta merge. If the kit
+  ever does adopt vitest, each spec changes one import line.
+
 ### Changed
 
 - **`Gauge`** gained `sweep` (degrees of scale, default 240 — unchanged) and `gap` (its
@@ -65,6 +108,10 @@ gone. Nothing here changes an existing component's default rendering.
 
 ### Docs
 
+- README: a **Subscriptions: deltas and data quality** section and a **Testing** section.
+- A new controller guide, [Streaming and data quality](https://nautilus.joyautomation.com/guides/streaming/),
+  covering the frame protocol, the measured delta ratios, the tag-filter globs, and the quality
+  model end to end.
 - README: a **Porting a legacy HMI** section, a **Writing back** section, a
   **Trends over history** section, the legacy-port token families under
   Theming, and every new component in the props table.

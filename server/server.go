@@ -5,7 +5,12 @@
 //	GET  /             a self-contained live dashboard (landing page); its
 //	                   tag table writes setpoints back through POST /api/tags
 //	GET  /api/state    one JSON Frame — the current tag snapshot
+//	                   ?tags=glob,glob — only the tags matching these
 //	GET  /api/stream   Server-Sent Events; one Frame per broadcast tick
+//	                   ?tags=glob,glob — only the tags matching these
+//	                   ?delta=1        — after the first frame, send only
+//	                                     what changed (see handleStream)
+//	                   ?full=1         — never send deltas on this stream
 //	GET  /api/meta     tag descriptions/units, I/O binding, scan target
 //	POST /api/tags     {"name": "TempSP", "value": 65.0} — write one tag,
 //	                   or one member of a struct tag by dotted path:
@@ -47,7 +52,6 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/json"
-	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httputil"
@@ -102,6 +106,17 @@ var assetTypes = map[string]string{
 // whole picture from its first frame. Locals are the program's retained VAR
 // values (a PI integral, latches, FB instances with their pins) — the watch
 // window's view inside the POU, read-only.
+//
+// # Delta frames
+//
+// On a delta stream (see handleStream) Tags carries only what CHANGED since
+// this client's previous frame, and Seq/Full say which kind of frame this
+// is: Full marks a complete snapshot to replace state with, and every other
+// frame is a merge. Everything else on the frame — scan diagnostics, driver
+// status, alarm counts — is sent whole every time, because it is a few
+// kilobytes that a client would otherwise have to reassemble for no gain.
+// A plain (non-delta) client's frames carry neither field and are byte-for-
+// byte what this server has always sent.
 type Frame struct {
 	TS      int64             `json:"ts"` // epoch milliseconds
 	Scans   uint64            `json:"scans"`
@@ -109,6 +124,26 @@ type Frame struct {
 	Locals  map[string]any    `json:"locals,omitempty"`
 	Scan    runtime.ScanStats `json:"scan"`
 	Drivers []DriverStatus    `json:"drivers,omitempty"`
+	// Quality is the tags whose value is not to be trusted — ONLY the
+	// non-Good ones, keyed by tag name, valued with io.Quality's token
+	// ("stale" | "bad" | "notConnected"). Absent from the map means Good,
+	// which is what keeps a healthy 10,000-tag plant paying nothing for the
+	// feature: the field is omitted entirely. A name here need not appear
+	// in Tags — "notConnected" is exactly the source that has never
+	// delivered a value. See runtime.Runtime.Quality.
+	Quality map[string]string `json:"quality,omitempty"`
+	// Seq counts the frames sent to ONE client, from 1. Present only on a
+	// delta stream, where it is the gap detector: frames are built from a
+	// per-client generation and are never silently dropped mid-stream, so a
+	// seq that skips means the connection did, and the client should
+	// reconnect for a fresh full frame rather than merge into a state it
+	// can no longer vouch for.
+	Seq uint64 `json:"seq,omitempty"`
+	// Full marks a complete snapshot: replace, don't merge. True on a delta
+	// stream's first frame, on each periodic resync, and whenever the tag
+	// SET changed (a delta cannot express a deletion). Omitted on a plain
+	// stream, whose every frame is full by definition.
+	Full bool `json:"full,omitempty"`
 	// Alarms is the alarm engine's counts — never the rows. Present only
 	// when Options.Alarms is set, so a controller without alarms and an
 	// HMI built before them see exactly the frame they saw before. Its
@@ -123,6 +158,17 @@ type Options struct {
 	// for live editor values and HMI needles, slow enough to be negligible
 	// load. Snapshots are taken only while at least one client is connected.
 	Interval time.Duration
+
+	// ResyncInterval is how often a delta stream sends a full frame anyway
+	// (default 30s). Deltas are gap-free by construction — a frame that is
+	// not enqueued does not advance the client's generation — so this is
+	// not a correctness crutch; it is the bound on how long a client can
+	// stay wrong if something outside that argument ever does go wrong (a
+	// merge bug, a proxy that rewrites bodies, a client that reloaded its
+	// own state from somewhere). Thirty seconds costs a 10,000-tag stream
+	// about one full frame per 120 deltas and puts a ceiling on any drift.
+	// Negative disables the periodic resync entirely.
+	ResyncInterval time.Duration
 
 	// AuthToken turns on write authentication (progressive enhancement).
 	// When empty (the default) nautilus runs unauthenticated: writes are
@@ -255,9 +301,16 @@ type Server struct {
 	alarms      *alarm.Engine
 	shelveTimes []time.Duration
 
+	resync time.Duration
+
 	mu      sync.Mutex
-	clients map[chan []byte]struct{}
+	clients map[*client]struct{}
 	active  string // last activated commit sha; see setActive
+
+	// chBuf is the broadcast loop's reusable Change buffer — one delta
+	// sweep per tick, shared by every delta client (see broadcast). Touched
+	// only from the broadcast goroutine.
+	chBuf []runtime.Change
 
 	// Tag-map memo for the frame builder. A frame's Tags block is the
 	// plain-JSON rendering of the WHOLE store, and on a controller with
@@ -274,11 +327,15 @@ type Server struct {
 // New builds a Server over a runtime.
 func New(rt *runtime.Runtime, opts ...Options) *Server {
 	interval := 250 * time.Millisecond
+	resync := defaultResync
 	token := ""
 	onlineEdits := false
 	if len(opts) > 0 {
 		if opts[0].Interval > 0 {
 			interval = opts[0].Interval
+		}
+		if opts[0].ResyncInterval != 0 {
+			resync = opts[0].ResyncInterval
 		}
 		token = opts[0].AuthToken
 		onlineEdits = opts[0].OnlineEdits
@@ -286,9 +343,10 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 	s := &Server{
 		rt:          rt,
 		interval:    interval,
+		resync:      resync,
 		authToken:   token,
 		onlineEdits: onlineEdits,
-		clients:     map[chan []byte]struct{}{},
+		clients:     map[*client]struct{}{},
 	}
 	if len(opts) > 0 {
 		s.drivers = opts[0].Drivers
@@ -321,27 +379,6 @@ func (s *Server) Run(ctx context.Context) {
 	}
 }
 
-func (s *Server) broadcast() {
-	s.mu.Lock()
-	n := len(s.clients)
-	s.mu.Unlock()
-	if n == 0 {
-		return // nobody listening — skip the snapshot
-	}
-	b, err := json.Marshal(s.frame())
-	if err != nil {
-		return
-	}
-	s.mu.Lock()
-	for ch := range s.clients {
-		select {
-		case ch <- b:
-		default: // slow client — drop the frame, never block the loop
-		}
-	}
-	s.mu.Unlock()
-}
-
 // tagsFrame is the frame's Tags block, rebuilt only when the tag store has
 // actually changed. The generation is read BEFORE the rendering, so it can
 // only ever under-state what the map holds — one redundant rebuild, never a
@@ -357,14 +394,19 @@ func (s *Server) tagsFrame() map[string]any {
 	return s.tagSnap
 }
 
-func (s *Server) frame() Frame {
+// frame builds one complete Frame over every tag — the whole-store
+// observation /api/state answers with and a plain SSE client receives every
+// tick. pats, when non-empty, keeps only the tags (and quality entries)
+// matching one of those globs; see matchAny.
+func (s *Server) frame(pats []string) Frame {
 	stats := s.rt.Stats()
 	f := Frame{
-		TS:     time.Now().UnixMilli(),
-		Scans:  stats.Count,
-		Tags:   s.tagsFrame(),
-		Locals: s.rt.AllLocals(),
-		Scan:   stats,
+		TS:      time.Now().UnixMilli(),
+		Scans:   stats.Count,
+		Tags:    filterTags(s.tagsFrame(), pats),
+		Locals:  s.rt.AllLocals(),
+		Scan:    stats,
+		Quality: filterQuality(qualityJSON(s.rt.Quality()), pats),
 	}
 	if s.drivers != nil {
 		f.Drivers = s.drivers()
@@ -565,9 +607,18 @@ func handleAsset(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
+// handleState answers one whole-store Frame. `?tags=` narrows it to the
+// matching tags — the same globs /api/stream takes, so a screen that
+// subscribes to a subset fetches the same subset on load instead of pulling
+// half a megabyte to read forty points.
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
+	pats, err := parseTagFilter(r.URL.Query().Get("tags"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.frame())
+	json.NewEncoder(w).Encode(s.frame(pats))
 }
 
 // handleDrivers serves the current field-driver / publisher status list.
@@ -651,6 +702,24 @@ type metaResponse struct {
 	// all, and finding out by taking a 404 makes an ordinary page load
 	// look like an error.
 	Alarms bool `json:"alarms"`
+	// Quality says this controller can report per-tag data quality: it runs
+	// a driver that implements io.QualityReporter, or simply has
+	// driver-bound inputs the runtime can mark Stale on a read failure.
+	// The capability flag matters more here than anywhere else in this
+	// response, because the FALSE case is invisible: an empty `quality` map
+	// looks exactly like a healthy plant, and an HMI that cannot tell the
+	// two apart would render a confident green badge on a controller that
+	// has no idea. With this false, a screen shows no quality indication at
+	// all rather than a reassuring one.
+	Quality bool `json:"quality"`
+	// Deltas says GET /api/stream understands `?delta=1` and `?tags=`. An
+	// HMI kit newer than the controller must not ask for a delta stream
+	// from a server that will ignore the parameter and send full frames
+	// the client then merges as if they were partial — which happens to be
+	// harmless (a full frame merged over a subset is the full state), but
+	// the client would never see `full` and could not tell resync from
+	// steady state. Cheaper to advertise.
+	Deltas bool `json:"deltas"`
 	// ShelveTimes is the shelf durations the operator screen's picker
 	// offers, in SECONDS — the unit every other duration in this API's
 	// JSON is not, but the one the HMI kit's DEFAULT_SHELVE_TIMES_S uses,
@@ -671,6 +740,8 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		ScanTargetMs: s.rt.Stats().TargetMs,
 		MemberWrites: true,
 		Alarms:       s.alarms != nil,
+		Quality:      s.rt.ReportsQuality(),
+		Deltas:       true,
 		ShelveTimes:  shelveSeconds(s.shelveTimes),
 	})
 }
@@ -688,49 +759,6 @@ func nonNilStrings(s []string) []string {
 		return []string{}
 	}
 	return s
-}
-
-func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
-	fl, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	// Tell buffering reverse proxies (nginx, some ingress controllers) not to
-	// hold the response — an SSE stream never "finishes", so a proxy that
-	// waits for EOF starves the client. Doesn't affect a direct connection;
-	// a client-side inspecting proxy/extension can still buffer regardless.
-	w.Header().Set("X-Accel-Buffering", "no")
-
-	ch := make(chan []byte, 8)
-	s.mu.Lock()
-	s.clients[ch] = struct{}{}
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		delete(s.clients, ch)
-		s.mu.Unlock()
-	}()
-
-	// Send one frame immediately so a fresh client (editor decorations, a
-	// just-opened HMI) isn't blank until the next tick.
-	if b, err := json.Marshal(s.frame()); err == nil {
-		fmt.Fprintf(w, "data: %s\n\n", b)
-		fl.Flush()
-	}
-
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case b := <-ch:
-			fmt.Fprintf(w, "data: %s\n\n", b)
-			fl.Flush()
-		}
-	}
 }
 
 // authorizeWrite decides whether a tag-write request may proceed, returning

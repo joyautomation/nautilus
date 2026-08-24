@@ -88,6 +88,47 @@ await rt.writeTag('P101', { LVL: { CTL1HSP: 60 } }); // several members at once 
 await rt.writeTag('TempSP', 65, { token }); // cross-origin writer
 ```
 
+## Subscriptions: deltas and data quality
+
+Against a nautilus controller, `RealtimeClient` **asks for delta frames by
+default**. After the first full snapshot the controller sends only the tags that
+changed, and the client merges them — `rt.frame.tags` is always complete, so
+nothing downstream notices. On a 10,000-tag controller at 5% churn that is
+~17 kB a tick instead of ~280 kB, per client. Pass `delta: false` for whole
+frames; a controller that predates deltas is detected and passed through
+untouched, so asking is never a compatibility risk.
+
+Narrow the subscription with globs — a screen that draws forty points should
+pull forty points:
+
+```ts
+const rt = new RealtimeClient<NautilusFrame>({
+	tags: ['RTU9_*', '*_LIT_*'], // matched against whole dotted tag names
+	delta: true // the default
+});
+```
+
+And a screen can stop guessing whether a number is real. The controller reports
+per-tag **quality** — the axis the kit could not see before, since `tags.ts`
+detects a tag's *absence* but a published-yet-stale value looked exactly like a
+live one:
+
+```ts
+rt.isGood('RTU9_WEL15_LIT_001'); // false when stale / bad / never-connected
+rt.quality('AI_001.LVL.CTL1HSP'); // 'good' | 'stale' | 'bad' | 'notConnected'
+```
+
+`quality()` resolves a dotted member path to its root tag — a UDT arrives from
+its source whole, so a member is exactly as trustworthy as its tag. **Check
+`/api/meta`'s `quality` flag before drawing a quality badge**: an empty quality
+map looks exactly like a healthy plant, and on a controller that cannot report
+quality a confident green badge is a lie.
+
+`rt.seq` counts frames on the current connection and `rt.resyncs` counts gap
+recoveries — normally zero for the life of a session. See the
+[Streaming and data quality](https://nautilus.joyautomation.com/guides/streaming/)
+guide for the protocol.
+
 ## Alarms
 
 A nautilus controller built with an `alarm/` engine (definitions computed from BOOL tags, ISA-18.2
@@ -321,6 +362,20 @@ outline rather than dropping the indication.
 | `AlarmBanner` | `summary: AlarmSummary`, `now`, `onclick?`, `href?` |
 | `AlarmTable` | `alarms: AlarmInstance[]`, `sites?`, `now`, `onack(ids,by)`, `onshelve(id,until,by)`, `onunshelve?(id,by)`, `shelveTimes?`, `operator?`, `onselect?(instance)`, `pageSize?` |
 | `AlarmJournal` | `events: AlarmEvent[]`, `from`, `to`, `onrange(from,to)`, `sites?`, `loading?` |
+
+## Testing
+
+Most of this kit is Svelte components whose test is looking at them. The pure
+logic that can *silently mislead an operator* — the delta-frame merge above all
+— has real tests, run with no dependencies:
+
+```sh
+npm test
+```
+
+`tests/harness.ts` is a ~60-line stand-in for vitest (a strict subset of its
+API), so the kit tests its own logic without acquiring a test runner. If it ever
+adopts one, each spec changes a single import line.
 
 ## Building the package
 

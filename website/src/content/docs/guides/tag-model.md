@@ -282,3 +282,26 @@ equal only if they share the same `StructDef`, and a function-block instance
 is never equal to anything (an FB is identity — its retained frame — not a
 value). The only mistake it can make is to report a change that did not
 happen, never to hide one.
+
+The same counter is what makes an SSE **delta stream** possible: a client's
+entire subscription state is one `uint64`, and "what changed since you last
+heard from us" is an integer comparison per tag with no value comparison
+anywhere. `Tags.ChangedSince(gen, dst)` appends exactly the tags that moved
+and hands back the generation to ask with next time. See
+[Streaming and data quality](/guides/streaming/).
+
+## What a value is worth: quality
+
+The store holds values, not statements about values. Whether a reading is
+current, held over from a source that went away, or from a device that has
+never answered is not a property of the number — it comes from the driver,
+and it travels beside the tags rather than inside them.
+
+A driver may implement `io.QualityReporter`; the runtime adds its own
+derivation (a driver-bound input whose last read failed is stale); and the
+server puts the non-`good` entries on `/api/state` and every stream frame
+as a `quality` map. An absent name means `good`, so a healthy plant pays
+nothing for it. The full model — the four values, where each comes from,
+and why an HMI must check `/api/meta`'s capability flag before drawing a
+quality badge — is in
+[Streaming and data quality](/guides/streaming/#per-tag-quality).

@@ -49,6 +49,29 @@ export interface TrendThreshold {
 	label?: string;
 }
 
+/**
+ * How much a tag's value is worth believing, as the controller reports it
+ * (`frame.quality`, `RealtimeClient.quality()`). Mirrors io.Quality in Go.
+ *
+ * This is the axis the kit could not see before. `tags.ts`'s helpers detect
+ * a tag's ABSENCE — a screen bound to a point the controller does not
+ * publish shows "—" rather than a confident zero — but a tag that IS
+ * published and merely old was indistinguishable from a live one: the
+ * number is finite, the binding resolves, and the gauge renders it with
+ * full confidence. `quality` is the missing half.
+ *
+ * - `good` — current value from a healthy source. The default: a tag the
+ *   controller says nothing about is good.
+ * - `stale` — was good, is no longer being refreshed. Show the number and
+ *   its age; do not blank it. It is what the plant last was.
+ * - `bad` — the source itself calls this reading untrustworthy (sensor
+ *   fault, conversion out of range). The link is fine; the value is not.
+ * - `notConnected` — the source has never delivered. There may be no value
+ *   at all. A Sparkplug node that never birthed, an address that never
+ *   answered.
+ */
+export type Quality = 'good' | 'stale' | 'bad' | 'notConnected';
+
 /** Reserved status roles used by StatusPill and other indicators. */
 export type StatusKind = 'good' | 'warning' | 'serious' | 'critical' | 'off';
 
@@ -105,6 +128,34 @@ export interface NautilusFrame {
 	 * pins) — the watch inside the POU, read-only. */
 	locals?: Record<string, unknown>;
 	scan: ScanStats;
+	/**
+	 * Tags whose value is NOT to be trusted — only the non-good ones, so a
+	 * healthy controller omits the field entirely and an absent name means
+	 * `good`. A name here need not appear in `tags`: `notConnected` is
+	 * precisely the source that has never delivered a value. Read it
+	 * through `RealtimeClient.quality()` / `.isGood()` rather than by hand,
+	 * which also resolves a dotted member path to its root tag.
+	 *
+	 * Present only on controllers whose `/api/meta` reports `quality: true`
+	 * — an empty map on an older runtime means "no idea", not "all good".
+	 */
+	quality?: Record<string, Quality>;
+	/**
+	 * Frame counter for ONE delta-stream client, from 1. Absent on a plain
+	 * stream. The client's gap detector: frames are built from a per-client
+	 * generation and are never dropped mid-stream, so a skipped `seq` means
+	 * the connection broke and the merged state can no longer be vouched
+	 * for — `RealtimeClient` reconnects rather than merging on.
+	 */
+	seq?: number;
+	/**
+	 * This frame is a COMPLETE snapshot: replace the merged tag state, do
+	 * not merge into it. True on a delta stream's first frame, on each
+	 * periodic resync, and whenever the controller's tag set changed (a
+	 * delta cannot express a deletion). Absent on a plain stream, whose
+	 * every frame is full by definition.
+	 */
+	full?: boolean;
 	/** Field-driver / publisher status, present when the controller runs a
 	 * driver that reports it (also served standalone at GET /api/drivers).
 	 * Mirrors server.DriverStatus in Go. */
@@ -184,6 +235,25 @@ export interface ControllerMeta {
 	 * refused like the input itself.
 	 */
 	memberWrites?: boolean;
+	/**
+	 * True when this controller can report per-tag data quality at all —
+	 * it runs a driver that knows, or has driver-bound inputs the runtime
+	 * can mark stale on a read failure.
+	 *
+	 * This flag matters more than the others because the false case is
+	 * INVISIBLE: an empty `frame.quality` looks exactly like a healthy
+	 * plant. A screen that renders a quality badge must check this first,
+	 * or it paints a confident green on a controller that has no idea.
+	 */
+	quality?: boolean;
+	/**
+	 * True when `GET /api/stream` understands `?delta=1` and `?tags=`.
+	 * Absent on older runtimes, which ignore both and send whole frames —
+	 * harmless to merge, but the client never sees `full` and cannot tell a
+	 * resync from steady state, so `RealtimeClient` falls back to plain
+	 * pass-through when a frame arrives without a `seq`.
+	 */
+	deltas?: boolean;
 }
 
 /** One link in a Nav sidebar section. */

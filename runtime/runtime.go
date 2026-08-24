@@ -152,6 +152,15 @@ type Runtime struct {
 	// instead of allocating one. Touched only from Scan, under scanMu.
 	inBuf nio.Values
 
+	// readOK is whether the LAST input read succeeded — the runtime's own
+	// contribution to per-tag quality (see Quality). Distinct from
+	// ScanStats.IOHealthy, which a failed output WRITE also clears: a write
+	// that did not land says nothing about how old the readings are, and
+	// calling every input Stale over it would cry wolf on every screen.
+	// Atomic because Quality is answered from the server's goroutine.
+	// Starts false: before the first scan, nothing has been read.
+	readOK atomic.Bool
+
 	// leadMu guards the leadership edge so exactly one scan performs the
 	// takeover sequence when this replica becomes leader. See retain.go.
 	leadMu  sync.Mutex
@@ -737,6 +746,7 @@ func (r *Runtime) Scan() {
 			in, err = r.driver.ReadInputs()
 		}
 		ioErr = err
+		r.readOK.Store(err == nil)
 		if err == nil {
 			// setMany: the driver delivers whole tags under the names the
 			// project bound, including the first delivery of an (unseeded)

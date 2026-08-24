@@ -2,7 +2,7 @@
 
 Working notes for picking up development in a fresh session. See `README.md`
 for the vision/architecture and `RELEASING.md` for the release pipeline; this
-file is the practical state + next steps. Last refreshed: 2026-08-16.
+file is the practical state + next steps. Last refreshed: 2026-08-24.
 
 ## What this is
 
@@ -74,7 +74,17 @@ website/, docs/      docs site (deploys from main); design briefs in docs/design
   keyed by NAME should invalidate on `Tags.NameGeneration()`. Full write-up:
   `runtime/tags.go` ("Write generations") and the tag-model guide's
   "Performance notes". Benchmarks that pin it: `runtime/bigstore_bench_test.go`,
-  `runtime/hostdriver_bench_test.go`, `sparkplug/publish_bench_test.go`.
+  `runtime/hostdriver_bench_test.go`, `sparkplug/publish_bench_test.go`,
+  `server/stream_bench_test.go`. The SSE delta stream is the newest consumer:
+  a client's whole subscription state is ONE `uint64` (the generation it was
+  last brought up to date at), and `Tags.ChangedSince(gen, dst)` is the sweep.
+  Its correctness rests on one rule — a client's generation advances only when
+  a frame is actually ENQUEUED, so a dropped frame costs latency, never
+  content. Do not "optimise" that by advancing it at build time.
+- **Quality is answered lazily, off the scan loop.** `Runtime.Quality()` asks
+  the driver on demand (server tick / `/api/state`), so a driver's `Quality()`
+  is called from a goroutine other than the one calling `ReadInputs` and must
+  be safe for that. Per-tag quality costs the control cycle nothing.
 - `examples/heated-tank-nogo` is a shared test fixture: the Go acceptance
   tests (`acceptance/heated_tank_test.go`) and the LSP tests
   (`internal/lsp/testdoc_test.go`) both run against it. If you change its
@@ -161,6 +171,27 @@ Done 2026-08-22 (st-struct-pins):
 - HMI alarms.ts → alarms.svelte.ts (runes module requires .svelte.ts suffix) (e55399c)
 - LD FB-only rungs, edge contacts +x/-x and P/N coils, negated function contacts (baba4db)
 - Ladder FUNCTION_BLOCKs — library .ld/.fbd files, multi-POU, power-pin resolution, struct-field bindings, LSP + editor (d094337)
+
+Done 2026-08-24 (st-struct-pins, uncommitted): **per-tag quality + SSE
+deltas/filters** — the two platform seams the HMI phase needs. `io.Quality`
+(good/stale/bad/notConnected) + optional `io.QualityReporter` on a driver;
+`Runtime.Quality()/TagQuality()/ReportsQuality()` (driver-reported wins,
+runtime derives Stale for driver-bound inputs when the last input READ
+failed — not on a failed write); `Tags.ChangedSince(gen, dst)` and exported
+`runtime.Plain`. Server: `?delta=1` (per-client `lastGen`, `seq`+`full`
+markers, resync on tag-set change or `Options.ResyncInterval`, default 30s),
+`?tags=glob,glob` on both /api/stream and /api/state, `?full=1` escape
+hatch, `quality` map on every frame (non-Good entries only), `/api/meta`
+`quality`+`deltas` flags. Kit: `RealtimeClient({tags, delta})` — **delta
+defaults on**, merges into a complete `frame.tags`; `quality(tag)`/
+`isGood(tag)`; pure `delta.ts` merge + `npm test` (tests/harness.ts, a
+60-line vitest subset, no new dependency). Measured 10k tags / 5% churn:
+**280 kB full → 17 kB delta, 17× smaller** (51× at 1%, 4.8× at 20%); a
+50-client delta broadcast costs ~1/10 of a full one (encodings are memoised
+per generation+filter, so the fleet shares one). Deltas are OPT-IN on the
+wire — the plain stream is byte-identical to what it always was, since the
+VS Code extension and any curl client depend on it. Guide:
+website/.../guides/streaming.md.
 
 Next, in rough priority:
 

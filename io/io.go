@@ -44,10 +44,13 @@ type BatchReader interface {
 }
 
 // Memory is a trivial in-process driver: outputs written are readable as
-// inputs. Useful for tests and loopback wiring.
+// inputs. Useful for tests and loopback wiring. It also implements
+// QualityReporter (see SetQuality), so the per-tag quality path can be
+// exercised end to end without a field bus.
 type Memory struct {
 	mu sync.Mutex
 	v  Values
+	q  map[string]Quality
 }
 
 func NewMemory() *Memory { return &Memory{v: Values{}} }

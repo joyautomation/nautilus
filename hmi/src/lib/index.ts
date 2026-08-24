@@ -157,6 +157,7 @@ export type {
 	TrendPen,
 	TrendThreshold,
 	StatusKind,
+	Quality,
 	ScanStats,
 	NautilusFrame,
 	TagMeta,

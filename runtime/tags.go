@@ -585,6 +585,56 @@ func (t *Tags) SnapshotInto(dst map[string]Sample) map[string]Sample {
 	return dst
 }
 
+// Change is one tag that moved: its name, its new value, and the store
+// generation it moved at. What ChangedSince appends.
+type Change struct {
+	Name  string
+	Value ir.Value
+	Gen   uint64
+}
+
+// ChangedSince appends to dst every tag whose value changed AFTER gen, and
+// returns dst along with the store's current generation — which the caller
+// passes back next time to get the next batch. Pass 0 to get every tag.
+//
+// This is the whole delta mechanism, and it is only possible because
+// generations are per-STORE and monotonic (see Tags' "Write generations"):
+// "changed since the client last heard from us" is one integer comparison
+// per tag, with no per-tag bookkeeping on the consumer's side and no
+// comparison of the values themselves. An SSE client's entire delta state is
+// therefore ONE uint64, not a 10,000-entry map of what it was last sent.
+//
+// The sweep is O(tags) but touches nothing but two integers per tag, and it
+// appends only what moved — which for a plant at steady state is a handful
+// of names out of ten thousand. Passing dst[:0] back each tick reuses the
+// caller's buffer and allocates nothing.
+//
+// Deletions are NOT reported: a tag that vanished has no generation to
+// compare. NameGeneration moves when the tag SET changes, so a consumer
+// that cares takes the (rare) full snapshot then — see the server's
+// resync-on-shape-change rule.
+func (t *Tags) ChangedSince(gen uint64, dst []Change) ([]Change, uint64) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.gen == gen {
+		return dst, t.gen // nothing moved; the common tick
+	}
+	for k, v := range t.vals {
+		if v.gen > gen {
+			dst = append(dst, Change{Name: k, Value: v.v, Gen: v.gen})
+		}
+	}
+	return dst, t.gen
+}
+
+// Plain renders one tag value in the plain-JSON form All() and the HTTP
+// frame use — scalars collapsed to Go primitives, a struct or FB to a map
+// of its members, an array to a slice. Exported so a consumer that renders
+// tags INCREMENTALLY (the server's delta frames re-render only what moved)
+// gets byte-identical output to the whole-store rendering, rather than a
+// second, subtly different copy of these rules.
+func Plain(v ir.Value) any { return plain(v) }
+
 // AppendNames appends every tag name, in sorted order, to dst and returns
 // it. The sort is cached and redone only when a tag is CREATED, so a caller
 // that needs deterministic order every tick (Sparkplug's metric order) pays
