@@ -206,7 +206,87 @@ func TestSchemaRequiresWhatLoaderRequires(t *testing.T) {
 		if _, err := buildDriver(fstest.MapFS{}, cfg); err == nil {
 			t.Fatalf("loader accepted an eip driver with no %s", key)
 		}
+		requires(t, "driver(eip)", driverRequires(t, "eip"), key)
 	}
+
+	// sparkplug-host needs a broker, a host id, a manifest, and a group.
+	// Unlike eip's, ALL of its checks are offline — host.New never dials —
+	// so the positive case is asserted too: a complete config must build
+	// with no broker in sight, which is what `nautilus check` relies on.
+	hostFS := fstest.MapFS{"sparkplug_manifest.yaml": &fstest.MapFile{Data: []byte("group: G\n")}}
+	full := DriverConfig{
+		Type: "sparkplug-host", Broker: "tcp://mqtt:1883", HostID: "central",
+		Manifest: "sparkplug_manifest.yaml", GroupID: "G",
+	}
+	if _, err := buildDriver(hostFS, full); err != nil {
+		t.Fatalf("a complete sparkplug-host driver must build offline: %v", err)
+	}
+	for _, key := range []string{"broker", "host-id", "manifest", "group-id"} {
+		cfg := full
+		switch key {
+		case "broker":
+			cfg.Broker = ""
+		case "host-id":
+			cfg.HostID = ""
+		case "manifest":
+			cfg.Manifest = ""
+		case "group-id":
+			cfg.GroupID = ""
+		}
+		if _, err := buildDriver(hostFS, cfg); err == nil {
+			t.Fatalf("loader accepted a sparkplug-host driver with no %s", key)
+		}
+		requires(t, "driver(sparkplug-host)", driverRequires(t, "sparkplug-host"), key)
+	}
+}
+
+// driverRequires reports what the schema demands of one driver type. A
+// driver's required keys cannot live in the definition's own `required` —
+// they depend on `type` — so they sit in an allOf/if/then branch, and an
+// anyOf inside that branch is how "group-id OR group-ids" is expressed.
+// Both count as required for this test's purposes.
+func driverRequires(t *testing.T, typ string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(schemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Definitions struct {
+			Driver struct {
+				AllOf []struct {
+					If struct {
+						Properties struct {
+							Type struct {
+								Const string `json:"const"`
+							} `json:"type"`
+						} `json:"properties"`
+					} `json:"if"`
+					Then struct {
+						Required []string `json:"required"`
+						AnyOf    []struct {
+							Required []string `json:"required"`
+						} `json:"anyOf"`
+					} `json:"then"`
+				} `json:"allOf"`
+			} `json:"driver"`
+		} `json:"definitions"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range doc.Definitions.Driver.AllOf {
+		if b.If.Properties.Type.Const != typ {
+			continue
+		}
+		out := append([]string(nil), b.Then.Required...)
+		for _, a := range b.Then.AnyOf {
+			out = append(out, a.Required...)
+		}
+		return out
+	}
+	t.Fatalf("schema has no allOf branch requiring anything of driver type %q", typ)
+	return nil
 }
 
 // A `pattern` is the easiest way to make the schema STRICTER than the loader,

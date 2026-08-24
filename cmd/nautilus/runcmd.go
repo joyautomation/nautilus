@@ -82,10 +82,25 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		// a standby takes over on its next tick rather than 4s later.
 		defer el.Release()
 	}
-	// Drivers with their own polling loop (eip) start here; the loopback
-	// memory driver has nothing to start.
+	// Drivers with their own polling loop (eip, sparkplug-host) start here;
+	// the loopback memory driver has nothing to start.
+	//
+	// A driver that also has Stop() owns its own teardown, so it gets a
+	// context Ctrl+C does NOT cancel and is stopped by the deferred call
+	// instead. The ordering matters: the Sparkplug host must publish its
+	// STATE death certificate on a live connection before the DISCONNECT,
+	// and cancelling its context first would tear the session down out from
+	// under it. Stop publishes synchronously and waits, so by the time this
+	// returns the certificate is on the wire.
 	if s, ok := proj.Runtime.Driver.(interface{ Start(context.Context) }); ok {
-		s.Start(ctx)
+		if st, ok := proj.Runtime.Driver.(interface{ Stop() }); ok {
+			dctx, dcancel := context.WithCancel(context.Background())
+			defer dcancel() // belt and braces: Stop cancels its own child
+			s.Start(dctx)
+			defer st.Stop()
+		} else {
+			s.Start(ctx)
+		}
 	}
 	go rt.Run(ctx)
 
