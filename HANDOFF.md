@@ -137,6 +137,8 @@ implements `io.BatchReader`'s `ReadInputsInto`. Driving project:
 the Pomona WRD demo at `~/Development/pomona/wrd` — a ~60-site fleet is
 the real target this driver is being built for.
 
+Done 2026-08-24: **Per-tag quality on sparkplug-host** — `Driver.Quality()` implements `io.QualityReporter` (its seam ported from `st-struct-pins`' `io/quality.go`, byte-identical apart from the Memory-driver half that branch's differing `io.go` doesn't support here yet): NotConnected for a data binding never delivered (never birthed, or the metric a birth simply never carries), Stale for one with a value on file whose node/device is offline or gone stale, Good (omitted) once delivered and online; writable and companion tags are always Good.
+
 Next, in rough priority:
 
 1. **HMI Versions page** — render /api/program/history in
