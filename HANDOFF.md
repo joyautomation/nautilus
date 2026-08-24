@@ -193,6 +193,31 @@ wire — the plain stream is byte-identical to what it always was, since the
 VS Code extension and any curl client depend on it. Guide:
 website/.../guides/streaming.md.
 
+Done 2026-08-24 (st-struct-pins, uncommitted): **the SSE frame floor** — the
+non-tag blocks gated like tags. Measured on the WRD host, every frame
+carried ~17.9 kB that had nothing to do with tags (driver status ~12.8 kB —
+55 device rows + `extra`; scan diagnostics ~5 kB; alarm summary), so a
+client filtered down to NO tags still pulled 4.35 MB/min. Now, for a client
+that asks `?blocks=delta` (kit sends it whenever `delta` is on, opt-in
+again on top of deltas — an older kit merges tags but not blocks and would
+blank its driver panel): `drivers` on change (`hashDrivers` — a 64-bit FNV
+over everything an operator would call a change, EXCLUDING `AsOfMs`,
+`DriverMetric.Volatile` counters, `AtMs`, the `Text` of a metric that has
+an `AtMs`, and `VolatileExtra` keys); `alarms` on `Summary.Rev` (and the
+summary is not computed when nobody is owed it); `scan` on a cadence
+(`Options.DiagnosticsInterval`, default 3s — the block is a 180-sample
+history ring, so a cadence under the ring's span loses nothing) with
+`Frame.Scan` now `*runtime.ScanStats`. Per-client `blockRevs` advance only
+on a successful enqueue, exactly like `lastGen`; full frames (first +
+resync) always carry everything. Ages moved client-side:
+`DriverMetric.AtMs` + `DriverStatus.AsOfMs` (server-stamped), rendered as
+`asOfMs − atMs` so a block sent 20 s ago does not creep upward; `Text` kept
+for older readers, `/api/meta` gains `blockDeltas`. Kit: `mergeDelta`
+retains `scan`/`drivers`/`alarms` (`DeltaState.blocks`), full frames
+replace the retained set, `quality` deliberately NOT retained.
+**Measured 4.3 MB/min → 0.15 MB/min, ~28× smaller** for a no-tags delta
+client at 5% churn (`-bench FrameFloor`).
+
 Next, in rough priority:
 
 1. **HMI Versions page** — render /api/program/history in

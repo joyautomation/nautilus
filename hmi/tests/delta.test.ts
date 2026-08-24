@@ -121,6 +121,114 @@ describe('mergeDelta', () => {
 		expect(out.scan).toEqual({ count: 9 });
 	});
 
+	// ── the non-tag blocks ────────────────────────────────────────────
+	//
+	// The controller sends `scan`, `drivers` and `alarms` only when they
+	// change (they were ~18 kB of every frame). Absent means unchanged, so
+	// the merge has to put the last known one back — a consumer must never
+	// see a driver panel blink out because nothing happened.
+
+	it('retains a non-tag block that is absent from a delta', () => {
+		const st = emptyDelta();
+		const drivers = [{ kind: 'sparkplug', name: 'Plant/Edge1', state: 'connected' }];
+		mergeDelta(st, {
+			ts: 1,
+			tags: { A: 1 },
+			seq: 1,
+			full: true,
+			scan: { count: 1 },
+			drivers,
+			alarms: { active: 0, rev: 3 }
+		} as unknown as F);
+
+		// A quiet frame: no blocks at all on the wire.
+		const r = mergeDelta(st, { ts: 2, tags: {}, seq: 2 } as unknown as F);
+		const out = r.frame as unknown as Record<string, unknown>;
+		expect(out.scan).toEqual({ count: 1 });
+		expect(out.drivers).toEqual(drivers);
+		expect(out.alarms).toEqual({ active: 0, rev: 3 });
+	});
+
+	it('takes a new block when one arrives, and keeps it after', () => {
+		const st = emptyDelta();
+		mergeDelta(st, {
+			ts: 1,
+			tags: {},
+			seq: 1,
+			full: true,
+			scan: { count: 1 },
+			drivers: [{ name: 'A', state: 'connected' }],
+			alarms: { active: 0, rev: 3 }
+		} as unknown as F);
+
+		// One block changed: only it is on the wire.
+		const changed = mergeDelta(st, {
+			ts: 2,
+			tags: {},
+			seq: 2,
+			drivers: [{ name: 'A', state: 'degraded' }]
+		} as unknown as F).frame as unknown as Record<string, unknown>;
+		expect(changed.drivers).toEqual([{ name: 'A', state: 'degraded' }]);
+		expect(changed.scan).toEqual({ count: 1 }); // still the retained one
+
+		// ...and the NEW version is what gets retained.
+		const after = mergeDelta(st, { ts: 3, tags: {}, seq: 3 } as unknown as F)
+			.frame as unknown as Record<string, unknown>;
+		expect(after.drivers).toEqual([{ name: 'A', state: 'degraded' }]);
+	});
+
+	it('lets a full frame drop a block that has gone away', () => {
+		// A controller that stopped reporting drivers (or lost its alarm
+		// engine) says so the only way the protocol can: a full frame
+		// without the field. Retaining it there would leave a panel on the
+		// screen describing something that no longer exists.
+		const st = emptyDelta();
+		mergeDelta(st, {
+			ts: 1,
+			tags: {},
+			seq: 1,
+			full: true,
+			scan: { count: 1 },
+			drivers: [{ name: 'A' }]
+		} as unknown as F);
+		const r = mergeDelta(st, {
+			ts: 2,
+			tags: {},
+			seq: 2,
+			full: true,
+			scan: { count: 2 }
+		} as unknown as F);
+		const out = r.frame as unknown as Record<string, unknown>;
+		expect(out.drivers).toBe(undefined);
+		expect(out.scan).toEqual({ count: 2 });
+	});
+
+	it('does not retain blocks on a stream with no seq', () => {
+		// A controller that does not implement deltas sends whole frames;
+		// the merge must stay out of the way entirely, including here.
+		const st = emptyDelta();
+		const f = { ts: 1, tags: { A: 1 }, drivers: [{ name: 'A' }] } as unknown as F;
+		const r = mergeDelta(st, f);
+		expect(r.frame).toBe(f);
+		expect(st.blocks).toEqual({});
+	});
+
+	it('never publishes a stale quality map from a retained block', () => {
+		// quality is NOT retained: absent already means "every tag is
+		// good", and a field cannot mean both that and "unchanged".
+		const st = emptyDelta();
+		mergeDelta(st, {
+			ts: 1,
+			tags: { A: 1 },
+			seq: 1,
+			full: true,
+			quality: { A: 'stale' }
+		} as unknown as F);
+		const out = mergeDelta(st, { ts: 2, tags: {}, seq: 2 } as unknown as F)
+			.frame as unknown as Record<string, unknown>;
+		expect(out.quality).toBe(undefined);
+	});
+
 	it('survives a long run of deltas without drifting', () => {
 		const st: DeltaState = emptyDelta();
 		const truth: Record<string, number> = {};

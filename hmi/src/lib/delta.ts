@@ -22,8 +22,25 @@
 //     difference a delta cannot express (there is no way to say "this tag
 //     is gone").
 //
-// Everything else on the frame — scan diagnostics, driver status, alarm
-// counts, `quality` — is sent whole every time and simply passes through.
+// # The non-tag blocks
+//
+// `scan`, `drivers` and `alarms` follow the same rule as the tags, for the
+// same reason: on the controller this was written against they were ~18 kB
+// of every frame — a 55-device driver status alone was 13 kB — so a client
+// subscribed to NO tags still pulled 4.35 MB a minute. The controller now
+// sends each of them only when it has something new to say, and an ABSENT
+// block means unchanged, exactly as it does for a tag.
+//
+// So this module retains the last one it saw of each and puts it back on
+// every frame it publishes. A consumer sees a complete frame either way and
+// never learns the difference — which is the same contract the tag merge
+// keeps. A `full` frame carries all of them, so it REPLACES the retained
+// set rather than merging into it: a block that has genuinely gone away (a
+// driver removed from the controller) disappears on the next resync.
+//
+// `quality` is deliberately NOT in that set. An absent `quality` already
+// means something on this protocol — "every tag is good" — and a field
+// cannot mean both "unchanged" and "all clear".
 //
 // # Why a gap means reconnect, not "ask for a resync"
 //
@@ -51,7 +68,22 @@ export interface DeltaState {
 	tags: TagMap | null;
 	/** The last `seq` accepted; 0 before the first frame. */
 	seq: number;
+	/**
+	 * The last version seen of each non-tag block the controller sends only
+	 * on change (`scan`, `drivers`, `alarms`) — see the module header.
+	 * Replaced wholesale by a `full` frame, never mutated: the objects here
+	 * are published as-is, and a mutated one would leave a Svelte proxy
+	 * holding stale per-property signals.
+	 */
+	blocks: Record<string, unknown>;
 }
+
+/**
+ * The frame fields the controller sends only when they changed. Everything
+ * else on a delta frame is either per-frame (`ts`, `scans`, `seq`) or means
+ * something on its own by being absent (`quality`).
+ */
+const RETAINED = ['scan', 'drivers', 'alarms'] as const;
 
 /** What one frame did. */
 export interface DeltaResult<T> {
@@ -71,7 +103,7 @@ export interface DeltaResult<T> {
 
 /** A fresh, empty subscription state. */
 export function emptyDelta(): DeltaState {
-	return { tags: null, seq: 0 };
+	return { tags: null, seq: 0, blocks: {} };
 }
 
 /**
@@ -89,6 +121,11 @@ export function emptyDelta(): DeltaState {
  *     absent from a delta is UNCHANGED, never deleted; deletions arrive as
  *     a `full` frame, because that is the only way the protocol can
  *     express one.
+ *
+ * The non-tag blocks (`scan`, `drivers`, `alarms`) get the same treatment:
+ * present means new, absent means unchanged, and the published frame always
+ * carries the last known one so nothing downstream has to know they are
+ * gated. See the module header.
  *
  * The published frame gets a shallow COPY of the accumulated tags, never
  * the accumulator itself. That is not politeness: the caller assigns the
@@ -120,5 +157,16 @@ export function mergeDelta<T>(state: DeltaState, frame: T): DeltaResult<T> {
 		if (raw.tags) for (const k in raw.tags) tags[k] = raw.tags[k];
 	}
 	state.tags = tags;
-	return { frame: { ...raw, tags: { ...tags } } as T, gap: false, full };
+
+	// The non-tag blocks. A full frame replaces the retained set (a block
+	// that has gone away must not survive a resync); every frame then
+	// records what it brought and back-fills what it didn't.
+	if (full) state.blocks = {};
+	const out = { ...raw, tags: { ...tags } } as Record<string, unknown>;
+	for (const k of RETAINED) {
+		const v = out[k];
+		if (v !== undefined) state.blocks[k] = v;
+		else if (state.blocks[k] !== undefined) out[k] = state.blocks[k];
+	}
+	return { frame: out as T, gap: false, full };
 }

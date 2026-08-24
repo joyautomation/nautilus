@@ -54,18 +54,29 @@ func eipStatus(h eip.Health) server.DriverStatus {
 		s.State = "degraded"
 		s.Message = "Connected, but reads are failing"
 	}
+	// Volatile marks the readouts that free-run with traffic rather than
+	// with anything an operator would call a change: they ride the block
+	// whenever it goes out, but do not by themselves push a driver status
+	// onto a delta stream (see server.DriverStatus). Tag count is not one
+	// of them — it changing means the subscription changed.
 	s.Metrics = []server.DriverMetric{
 		{Label: "tags", Value: float64(h.Tags)},
-		{Label: "polls", Value: float64(h.Polls)},
-		{Label: "poll errors", Value: float64(h.PollErrors)},
-		{Label: "reconnects", Value: float64(h.Reconnects)},
+		{Label: "polls", Value: float64(h.Polls), Volatile: true},
+		{Label: "poll errors", Value: float64(h.PollErrors), Volatile: true},
+		{Label: "reconnects", Value: float64(h.Reconnects), Volatile: true},
 	}
 	if h.LeafMode > 0 {
 		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "leaf structs", Value: float64(h.LeafMode)})
 	}
 	if h.LastPollMs > 0 {
+		// AtMs is the freshness a reader renders; Text is the same age
+		// pre-rendered for readers that predate AtMs. The moment itself is
+		// what travels, so a delta client can render "0.4s" against the
+		// block's own AsOfMs instead of watching a healthy driver's age
+		// creep up between blocks.
 		s.Metrics = append(s.Metrics, server.DriverMetric{
 			Label: "last poll",
+			AtMs:  h.LastPollMs,
 			Text:  agoText(h.LastPollMs),
 		})
 	}
@@ -101,13 +112,19 @@ func sparkplugStatus(st sparkplug.Status) server.DriverStatus {
 		s.State = "connected"
 		s.Message = fmt.Sprintf("Publishing · bdSeq %d", st.BdSeq)
 	}
+	// messages and seq free-run with every publish; bdSeq does not — it
+	// steps on a rebirth, which is exactly a change worth a frame.
 	s.Metrics = []server.DriverMetric{
-		{Label: "messages", Value: float64(st.Msgs)},
+		{Label: "messages", Value: float64(st.Msgs), Volatile: true},
 		{Label: "bdSeq", Value: float64(st.BdSeq)},
-		{Label: "seq", Value: float64(st.Seq)},
+		{Label: "seq", Value: float64(st.Seq), Volatile: true},
 	}
 	if st.LastPubMs > 0 {
-		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "last publish", Text: agoText(st.LastPubMs)})
+		s.Metrics = append(s.Metrics, server.DriverMetric{
+			Label: "last publish",
+			AtMs:  st.LastPubMs,
+			Text:  agoText(st.LastPubMs),
+		})
 	}
 	if sf := st.StoreForward; sf != nil {
 		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "buffered", Value: float64(sf.Buffered), Text: fmt.Sprintf("%d / %d", sf.Buffered, sf.Max)})

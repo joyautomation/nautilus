@@ -127,6 +127,13 @@ export interface NautilusFrame {
 	/** Retained program locals (integrals, latches, FB instances with their
 	 * pins) — the watch inside the POU, read-only. */
 	locals?: Record<string, unknown>;
+	/**
+	 * Scan-loop diagnostics. Always present on a frame published by
+	 * `RealtimeClient` — but on the WIRE a delta frame carries the block
+	 * only on its cadence (~2 s), and `drivers` / `alarms` only when they
+	 * change, so code that parses the SSE stream itself must merge them the
+	 * way `mergeDelta` does rather than assume every frame is complete.
+	 */
 	scan: ScanStats;
 	/**
 	 * Tags whose value is NOT to be trusted — only the non-good ones, so a
@@ -197,14 +204,33 @@ export interface DriverStatus {
 	devices?: DriverDevice[];
 	/** Protocol-specific structured fields (born, primaryHost, …). */
 	extra?: Record<string, unknown>;
+	/**
+	 * Epoch ms this status was OBSERVED — which on a delta stream is not
+	 * when the frame carrying it arrived: the block is sent only when it
+	 * changes, so a healthy driver's status can be up to one resync old.
+	 * Render every age in it (a metric's `atMs`) against THIS, not against
+	 * the clock, or a perfectly healthy "last publish 0.2s" creeps up to
+	 * 30s and snaps back on every resync. Uptime from `sinceMs` is
+	 * different — that is an absolute start time and grows honestly.
+	 */
+	asOfMs?: number;
 }
 
-/** One labeled readout on a driver-status card. `text` overrides `value`. */
+/** One labeled readout on a driver-status card. `text` overrides `value`,
+ * and `atMs` overrides both. */
 export interface DriverMetric {
 	label: string;
 	value: number;
 	unit?: string;
 	text?: string;
+	/**
+	 * A moment in time (epoch ms) to render as an age — "last poll", "last
+	 * publish". The controller sends the moment rather than a pre-rendered
+	 * age because a rendered age changes on every build, which would put
+	 * the whole driver block on the wire four times a second. Measure it
+	 * against `DriverStatus.asOfMs`.
+	 */
+	atMs?: number;
 }
 
 /** One sub-device under a driver (a Sparkplug device). */
@@ -254,6 +280,16 @@ export interface ControllerMeta {
 	 * pass-through when a frame arrives without a `seq`.
 	 */
 	deltas?: boolean;
+	/**
+	 * True when `GET /api/stream` understands `?blocks=delta`: the non-tag
+	 * blocks (`scan`, `drivers`, `alarms`) sent only when they change
+	 * rather than on every frame — ~18 kB a frame on the controller this
+	 * was measured against. Absent on older runtimes, which ignore the
+	 * parameter and keep sending every block; `mergeDelta` handles both,
+	 * so a client never has to branch on this. It is here for a diagnostics
+	 * page that wants to say which reductions a controller supports.
+	 */
+	blockDeltas?: boolean;
 }
 
 /** One link in a Nav sidebar section. */

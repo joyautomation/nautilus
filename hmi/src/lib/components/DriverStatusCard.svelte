@@ -25,7 +25,26 @@
 		return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
 	});
 
+	// Ages (`atMs`) are measured against the status's OWN observation time,
+	// not the wall clock. On a delta stream the controller sends this block
+	// only when it changes, so a healthy driver's status can be seconds old
+	// — and rendering "last publish" against `now` would show a plant going
+	// quiet every time nothing happened. `asOfMs` is what the server
+	// stamped; without it (an older controller) the clock is the best
+	// available answer, and that controller re-sent the block every frame
+	// anyway. Uptime stays on `now`: `sinceMs` is an absolute start.
+	const asOf = $derived(driver.asOfMs || now);
+
+	const ago = (ms: number) => {
+		const s = Math.max(0, ms) / 1000;
+		if (s < 10) return `${s.toFixed(1)}s`;
+		if (s < 60) return `${Math.round(s)}s`;
+		if (s < 3600) return `${Math.round(s / 60)}m`;
+		return `${Math.round(s / 3600)}h`;
+	};
+
 	const fmt = (m: DriverMetric) => {
+		if (m.atMs) return ago(asOf - m.atMs);
 		if (m.text) return m.text;
 		const v = m.value;
 		const n = Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2);

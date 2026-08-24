@@ -143,9 +143,11 @@ func TestDeltaStreamSendsOnlyWhatChanged(t *testing.T) {
 	}
 }
 
-// A delta stream still carries the frame's non-tag payload every tick: an
-// HMI's diagnostics page and alarm banner must not have to reassemble
-// state, and they are kilobytes against a store of megabytes.
+// A delta frame's HEADLINE diagnostics ride every tick — the timestamp and
+// the scan counter a dashboard watches to see the loop turning — and the
+// block behind them arrives on its cadence rather than four times a second
+// (see blocks_test.go, and Options.DiagnosticsInterval for why the two are
+// separated at all).
 func TestDeltaFrameKeepsDiagnostics(t *testing.T) {
 	rt := newTestRuntime(t)
 	f := openStream(t, rt, "?delta=1")
@@ -153,8 +155,11 @@ func TestDeltaFrameKeepsDiagnostics(t *testing.T) {
 	rt.Scan()
 	f.tick()
 	d := f.next()
-	if d.Scans == 0 || d.TS == 0 || d.Scan.TargetMs == 0 {
-		t.Errorf("delta frame lost its diagnostics: %+v", d.Scan)
+	if d.Scans == 0 || d.TS == 0 {
+		t.Errorf("delta frame lost its headline diagnostics: scans=%d ts=%d", d.Scans, d.TS)
+	}
+	if d.Scan == nil || d.Scan.TargetMs == 0 {
+		t.Errorf("the first broadcast after connect did not re-offer the scan block: %+v", d.Scan)
 	}
 }
 

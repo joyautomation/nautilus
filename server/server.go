@@ -10,6 +10,8 @@
 //	                   ?tags=glob,glob — only the tags matching these
 //	                   ?delta=1        — after the first frame, send only
 //	                                     what changed (see handleStream)
+//	                   ?blocks=delta   — and gate the NON-tag blocks the
+//	                                     same way (scan/drivers/alarms)
 //	                   ?full=1         — never send deltas on this stream
 //	GET  /api/meta     tag descriptions/units, I/O binding, scan target
 //	POST /api/tags     {"name": "TempSP", "value": 65.0} — write one tag,
@@ -112,18 +114,33 @@ var assetTypes = map[string]string{
 // On a delta stream (see handleStream) Tags carries only what CHANGED since
 // this client's previous frame, and Seq/Full say which kind of frame this
 // is: Full marks a complete snapshot to replace state with, and every other
-// frame is a merge. Everything else on the frame — scan diagnostics, driver
-// status, alarm counts — is sent whole every time, because it is a few
-// kilobytes that a client would otherwise have to reassemble for no gain.
-// A plain (non-delta) client's frames carry neither field and are byte-for-
-// byte what this server has always sent.
+// frame is a merge.
+//
+// The NON-tag blocks — Scan, Drivers, Alarms — follow the same rule, for
+// the same reason. Measured on the Pomona WRD host, they are ~18 kB per
+// frame (a 55-device driver status alone is ~13 kB), so a client that
+// filtered its tags down to nothing still pulled 4.3 MB a minute: a floor
+// no amount of tag filtering could get under. On a delta frame each of
+// them is present only when it CHANGED (Drivers, Alarms) or when its
+// cadence came round (Scan — see Options.DiagnosticsInterval), and ABSENT
+// means unchanged, exactly as it does for a tag. A full frame — the first
+// one and every resync — always carries all of them, which is what makes
+// "absent means unchanged" safe: a client is never more than one resync
+// away from a block it can vouch for.
+//
+// A plain (non-delta) client's frames carry every block every tick, no Seq
+// and no Full, byte-for-byte what this server has always sent.
 type Frame struct {
-	TS      int64             `json:"ts"` // epoch milliseconds
-	Scans   uint64            `json:"scans"`
-	Tags    map[string]any    `json:"tags"`
-	Locals  map[string]any    `json:"locals,omitempty"`
-	Scan    runtime.ScanStats `json:"scan"`
-	Drivers []DriverStatus    `json:"drivers,omitempty"`
+	TS     int64          `json:"ts"` // epoch milliseconds
+	Scans  uint64         `json:"scans"`
+	Tags   map[string]any `json:"tags"`
+	Locals map[string]any `json:"locals,omitempty"`
+	// Scan is the scan loop's diagnostics. A pointer so a delta frame can
+	// omit it: the block is ~5 kB of history rings, and it is nil on the
+	// delta frames between diagnostics cadences. Never nil on a full frame
+	// or on a plain stream.
+	Scan    *runtime.ScanStats `json:"scan,omitempty"`
+	Drivers []DriverStatus     `json:"drivers,omitempty"`
 	// Quality is the tags whose value is not to be trusted — ONLY the
 	// non-Good ones, keyed by tag name, valued with io.Quality's token
 	// ("stale" | "bad" | "notConnected"). Absent from the map means Good,
@@ -148,7 +165,9 @@ type Frame struct {
 	// when Options.Alarms is set, so a controller without alarms and an
 	// HMI built before them see exactly the frame they saw before. Its
 	// Rev bumps on any state change, which is how an HMI knows to refetch
-	// GET /api/alarms and how it knows not to.
+	// GET /api/alarms and how it knows not to — and, on a delta stream,
+	// what decides whether the block goes on the wire at all: an unchanged
+	// Rev is a block the client already holds.
 	Alarms *alarm.Summary `json:"alarms,omitempty"`
 }
 
@@ -169,6 +188,23 @@ type Options struct {
 	// about one full frame per 120 deltas and puts a ceiling on any drift.
 	// Negative disables the periodic resync entirely.
 	ResyncInterval time.Duration
+
+	// DiagnosticsInterval is how often a DELTA frame carries the scan
+	// diagnostics block (default 3s). Unlike the driver status and the
+	// alarm counts, the scan block changes every single scan — there is no
+	// "unchanged" to gate on — and it is ~5 kB of history rings, so at a
+	// 250 ms tick it was 20 kB/s of the stream on its own.
+	//
+	// A cadence loses nothing as long as it is shorter than the span the
+	// rings cover: Recent/Periods hold 180 samples, which is 18 s at a
+	// 100 ms scan, so a block every 2 s still delivers every sample a
+	// diagnostics page plots — just in batches. The live headline number
+	// (Frame.Scans) rides every frame regardless.
+	//
+	// Zero uses the default; negative sends the block on every frame (what
+	// this server did before the cadence existed). A plain, non-delta
+	// stream and /api/state are unaffected — they always carry it.
+	DiagnosticsInterval time.Duration
 
 	// AuthToken turns on write authentication (progressive enhancement).
 	// When empty (the default) nautilus runs unauthenticated: writes are
@@ -258,6 +294,27 @@ type Options struct {
 // HMI's driver-status components. The envelope is generic; Metrics and
 // Extra carry the protocol-specific detail without the server needing to
 // know the protocol.
+//
+// # Keeping it off the wire
+//
+// A driver status is the most expensive block on a frame — a Sparkplug host
+// fronting 55 edge nodes renders ~13 kB of device rows and Extra — and on a
+// delta stream it is sent only when it CHANGED (see hashDrivers). What
+// "changed" means is therefore part of this type's contract, and an adapter
+// that renders free-running values into it defeats the whole mechanism:
+//
+//   - AsOfMs is stamped by the server, not the adapter, and is excluded
+//     from the comparison — it says WHEN this block was built, which is
+//     what lets a client render "last poll 0.4s" from AtMs without the age
+//     drifting upward between blocks.
+//   - A metric that free-runs (a message counter, a poll count) sets
+//     DriverMetric.Volatile, and one that reports a moment in time sets
+//     AtMs instead of pre-rendering an age into Text.
+//   - Extra keys that free-run are named in VolatileExtra.
+//
+// Volatile values still ride along whenever the block IS sent; they simply
+// do not, on their own, put 13 kB on 4 frames a second. Their worst-case
+// staleness on a delta stream is one resync (30 s by default).
 type DriverStatus struct {
 	Kind      string         `json:"kind"`    // "ethernet-ip" | "sparkplug"
 	Name      string         `json:"name"`    // display name (host, or group/node)
@@ -269,6 +326,20 @@ type DriverStatus struct {
 	Metrics   []DriverMetric `json:"metrics,omitempty"` // labeled scalar readouts
 	Devices   []DriverDevice `json:"devices,omitempty"` // sub-devices (Sparkplug devices, etc.)
 	Extra     map[string]any `json:"extra,omitempty"`   // protocol-specific structured fields
+
+	// AsOfMs is when this status was OBSERVED, stamped by the server. On a
+	// delta stream the block may be several seconds older than the frame
+	// carrying it, so every age rendered from it (a metric's AtMs) must be
+	// measured against this, not against the reader's clock — otherwise a
+	// perfectly healthy "last publish 0.2s" creeps up to 30s and back on
+	// every resync, which reads as a plant going quiet.
+	AsOfMs int64 `json:"asOfMs,omitempty"`
+
+	// VolatileExtra names Extra keys that free-run — a message count, a
+	// last-seen timestamp, anything that moves on its own. They are
+	// excluded from the change comparison, so they do not by themselves
+	// push the whole status onto the wire. Never serialised.
+	VolatileExtra []string `json:"-"`
 }
 
 // DriverMetric is one labeled readout on a status card (poll rate, msgs, …).
@@ -277,6 +348,21 @@ type DriverMetric struct {
 	Value float64 `json:"value"`
 	Unit  string  `json:"unit,omitempty"`
 	Text  string  `json:"text,omitempty"` // set for non-numeric values (overrides Value)
+
+	// AtMs is a moment in time (epoch ms) the reader should render as an
+	// age — "last poll", "last publish". Prefer it to pre-rendering the age
+	// into Text: a rendered age changes on every build, which on a delta
+	// stream would put the whole driver block on the wire four times a
+	// second. Clients render it against DriverStatus.AsOfMs. Adapters may
+	// set Text as well, for readers that predate this field; that text is
+	// ignored for change detection whenever AtMs is set.
+	AtMs int64 `json:"atMs,omitempty"`
+
+	// Volatile marks a free-running readout — a counter that ticks with
+	// traffic rather than with anything an operator would call a change.
+	// Excluded from the change comparison (see DriverStatus). Never
+	// serialised: it is a statement about the value, not part of it.
+	Volatile bool `json:"-"`
 }
 
 // DriverDevice is one sub-device under a driver (a Sparkplug device).
@@ -302,6 +388,7 @@ type Server struct {
 	shelveTimes []time.Duration
 
 	resync time.Duration
+	diag   time.Duration
 
 	mu      sync.Mutex
 	clients map[*client]struct{}
@@ -311,6 +398,18 @@ type Server struct {
 	// sweep per tick, shared by every delta client (see broadcast). Touched
 	// only from the broadcast goroutine.
 	chBuf []runtime.Change
+
+	// The non-tag blocks' change tracking, all touched ONLY from the
+	// broadcast goroutine (like chBuf) — a client's own copy of where it
+	// has got to lives on the client, under its mutex.
+	//
+	// driversHash is the last hashDrivers value; driversRev counts the
+	// times it changed, so a client compares one integer instead of a hash
+	// it would have to store. scanRev counts diagnostics cadences.
+	driversHash uint64
+	driversRev  uint64
+	scanRev     uint64
+	scanAt      time.Time
 
 	// Tag-map memo for the frame builder. A frame's Tags block is the
 	// plain-JSON rendering of the WHOLE store, and on a controller with
@@ -328,6 +427,7 @@ type Server struct {
 func New(rt *runtime.Runtime, opts ...Options) *Server {
 	interval := 250 * time.Millisecond
 	resync := defaultResync
+	diag := defaultDiagnostics
 	token := ""
 	onlineEdits := false
 	if len(opts) > 0 {
@@ -337,6 +437,9 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		if opts[0].ResyncInterval != 0 {
 			resync = opts[0].ResyncInterval
 		}
+		if opts[0].DiagnosticsInterval != 0 {
+			diag = opts[0].DiagnosticsInterval
+		}
 		token = opts[0].AuthToken
 		onlineEdits = opts[0].OnlineEdits
 	}
@@ -344,6 +447,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		rt:          rt,
 		interval:    interval,
 		resync:      resync,
+		diag:        diag,
 		authToken:   token,
 		onlineEdits: onlineEdits,
 		clients:     map[*client]struct{}{},
@@ -400,19 +504,37 @@ func (s *Server) tagsFrame() map[string]any {
 // matching one of those globs; see matchAny.
 func (s *Server) frame(pats []string) Frame {
 	stats := s.rt.Stats()
+	now := time.Now()
 	f := Frame{
-		TS:      time.Now().UnixMilli(),
+		TS:      now.UnixMilli(),
 		Scans:   stats.Count,
 		Tags:    filterTags(s.tagsFrame(), pats),
 		Locals:  s.rt.AllLocals(),
-		Scan:    stats,
+		Scan:    &stats,
 		Quality: filterQuality(qualityJSON(s.rt.Quality()), pats),
-	}
-	if s.drivers != nil {
-		f.Drivers = s.drivers()
+		Drivers: s.driverStatus(now),
 	}
 	f.Alarms = s.alarmSummary()
 	return f
+}
+
+// driverStatus polls the configured driver provider and stamps each status
+// with the moment it was observed. The stamp is the server's job, not the
+// adapter's, because it is what a client renders a metric's age against —
+// see DriverStatus.AsOfMs, and hashDrivers for why the stamp is excluded
+// from the block's change comparison.
+func (s *Server) driverStatus(now time.Time) []DriverStatus {
+	if s.drivers == nil {
+		return nil
+	}
+	ds := s.drivers()
+	ms := now.UnixMilli()
+	for i := range ds {
+		if ds[i].AsOfMs == 0 {
+			ds[i].AsOfMs = ms
+		}
+	}
+	return ds
 }
 
 // Handler returns the API routes. Mount it directly or under your own mux.
@@ -624,10 +746,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 // handleDrivers serves the current field-driver / publisher status list.
 // Empty (but 200) when no Drivers provider is configured.
 func (s *Server) handleDrivers(w http.ResponseWriter, r *http.Request) {
-	var out []DriverStatus
-	if s.drivers != nil {
-		out = s.drivers()
-	}
+	out := s.driverStatus(time.Now())
 	if out == nil {
 		out = []DriverStatus{}
 	}
@@ -720,6 +839,15 @@ type metaResponse struct {
 	// the client would never see `full` and could not tell resync from
 	// steady state. Cheaper to advertise.
 	Deltas bool `json:"deltas"`
+	// BlockDeltas says GET /api/stream understands `?blocks=delta`: the
+	// non-tag blocks (scan diagnostics, driver status, alarm counts) sent
+	// only when they change, instead of on every frame. Advertised for the
+	// same reason as Deltas — a client that merges partial blocks against
+	// a controller that does not implement them is merely paying for
+	// nothing, but a client that DOESN'T merge them against a controller
+	// that does would blank a driver panel between changes, so the
+	// capability is asked for explicitly rather than assumed.
+	BlockDeltas bool `json:"blockDeltas"`
 	// ShelveTimes is the shelf durations the operator screen's picker
 	// offers, in SECONDS — the unit every other duration in this API's
 	// JSON is not, but the one the HMI kit's DEFAULT_SHELVE_TIMES_S uses,
@@ -742,6 +870,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		Alarms:       s.alarms != nil,
 		Quality:      s.rt.ReportsQuality(),
 		Deltas:       true,
+		BlockDeltas:  true,
 		ShelveTimes:  shelveSeconds(s.shelveTimes),
 	})
 }

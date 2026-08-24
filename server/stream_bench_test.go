@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -86,7 +87,7 @@ func BenchmarkFrameBytes(b *testing.B) {
 						v, _ := tags.ReadGlobal(n)
 						full[n] = runtime.Plain(v)
 					}
-					fb, _ := json.Marshal(Frame{Tags: full, Scan: stats})
+					fb, _ := json.Marshal(Frame{Tags: full, Scan: &stats})
 
 					// Delta: only what moved since the last tick.
 					chBuf, gen = tags.ChangedSince(gen, chBuf[:0])
@@ -94,7 +95,7 @@ func BenchmarkFrameBytes(b *testing.B) {
 					for j := range chBuf {
 						d[chBuf[j].Name] = runtime.Plain(chBuf[j].Value)
 					}
-					db, _ := json.Marshal(Frame{Tags: d, Seq: uint64(round), Scan: stats})
+					db, _ := json.Marshal(Frame{Tags: d, Seq: uint64(round), Scan: &stats})
 
 					fullBytes += len(fb)
 					deltaBytes += len(db)
@@ -182,4 +183,161 @@ func benchBroadcast(b *testing.B, nClients int, delta bool) {
 		churn(tags, names, 5, i+1)
 		srv.broadcast()
 	}
+}
+
+// ── the frame floor ───────────────────────────────────────────────────────
+//
+// The measurement that produced the non-tag block gate. On the Pomona WRD
+// host every frame carried ~17.9 kB that had nothing to do with tags — a
+// 55-device driver status, the scan diagnostics, the alarm counts — so a
+// client that had filtered its subscription down to NOTHING still pulled
+// 4.35 MB a minute. Tag filtering and tag deltas could not touch it.
+//
+//	go test ./server/ -run XXX -bench FrameFloor -benchtime 1x -v
+
+// benchDrivers is a Pomona-shaped driver status: one Sparkplug host in
+// front of 55 edge nodes, with the per-node roster in Extra that made the
+// block 13 kB. The counters climb on every call, the way a live host's do.
+func benchDrivers(round *int, flip *bool) func() []DriverStatus {
+	const nodes = 55
+	return func() []DriverStatus {
+		*round++
+		nodeList := make([]any, 0, nodes)
+		devs := make([]DriverDevice, 0, nodes)
+		for i := 0; i < nodes; i++ {
+			online := true
+			// One node flapping is a real change — the kind the gate must
+			// let through — and it is the only one in this fixture.
+			if i == 7 && *flip {
+				online = false
+			}
+			id := fmt.Sprintf("RTU%02d_WEL%02d", i/8, i)
+			detail := "offline"
+			if online {
+				detail = fmt.Sprintf("%d tags", 120+i)
+			}
+			devs = append(devs, DriverDevice{ID: id, Online: online, Detail: detail})
+			nodeList = append(nodeList, map[string]any{
+				"id": id, "group": "WRD", "edgeNode": id, "online": online,
+				"state": map[bool]string{true: "online", false: "offline"}[online],
+				"tags": float64(120 + i), "msgs": float64(*round*3 + i),
+				"lastMs": float64(1_700_000_000_000 + *round*250), "births": float64(i%3 + 1),
+				"lastBirthMs": float64(1_700_000_000_000), "bdSeq": float64(i % 7),
+			})
+		}
+		return []DriverStatus{{
+			Kind: "sparkplug", Name: "WRD/Host", Detail: "tcp://broker.wrd:1883",
+			State: "connected", Message: "Publishing · bdSeq 4", SinceMs: 1_700_000_000_000,
+			Metrics: []DriverMetric{
+				{Label: "messages", Value: float64(*round * 17), Volatile: true},
+				{Label: "bdSeq", Value: 4},
+				{Label: "seq", Value: float64(*round % 256), Volatile: true},
+				{Label: "last publish", AtMs: 1_700_000_000_000 + int64(*round)*250, Text: "0.2s"},
+			},
+			Devices:       devs,
+			Extra:         map[string]any{"born": true, "primaryHost": "SCADA", "nodes": nodeList},
+			VolatileExtra: []string{"nodes"},
+		}}
+	}
+}
+
+// BenchmarkFrameFloor reports what one minute of stream costs a client
+// subscribed to no tags at all — before the gate (every block on every
+// frame, which is what this server used to send) and after it. Sixty
+// seconds of a 250 ms stream is 240 ticks, with 5% of the store churning
+// each tick, a resync every 30 s, and one edge node dropping offline
+// mid-minute so the driver block has a real change to carry.
+func BenchmarkFrameFloor(b *testing.B) {
+	const tick = 250 * time.Millisecond
+	const ticks = 240 // 60 s
+
+	drv := nio.NewMemory()
+	rt, err := runtime.New(runtime.Options{
+		Program: testProgram, Driver: drv,
+		Seed: nio.Values{"Level": 40.0, "SP": 65.0, "Out": 0.0},
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	// Fill the scan history rings: an idle runtime's diagnostics block is a
+	// few hundred bytes, a running one's is ~5 kB, and it is the running
+	// one this measurement is about.
+	for i := 0; i < 200; i++ {
+		rt.Scan()
+	}
+	tags := rt.Tags()
+	for i := 0; i < benchTags; i++ {
+		tags.SetReal(benchName(i), float64(i))
+	}
+	names := tags.AppendNames(nil)
+
+	round, flip := 0, false
+	cond := map[string]any{"HiTempAlm": false}
+	eng, err := alarm.New(alarm.Options{
+		Defs: []alarm.Def{{ID: "HiTemp", Tag: "HiTempAlm", Name: "High temperature",
+			Priority: alarm.High, Site: "Plant", AckRequired: true, AutoClear: true}},
+		Read: func(p string) (any, bool) { v, ok := cond[p]; return v, ok },
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer eng.Close()
+	eng.Evaluate()
+
+	srv := New(rt, Options{Drivers: benchDrivers(&round, &flip), Alarms: eng})
+
+	// A client that asked for nothing: the pattern matches no tag name, so
+	// every byte it receives is the floor under measurement.
+	c := &client{ch: make(chan []byte, 4), delta: true, blocks: true, pats: []string{"__no_tags__"}}
+	c.lastGen, c.lastKeyGen = tags.Generation(), tags.NameGeneration()
+	srv.mu.Lock()
+	srv.clients[c] = struct{}{}
+	srv.mu.Unlock()
+
+	var after, before int
+	b.ResetTimer()
+	for n := 0; n < b.N; n++ {
+		after, before = 0, 0
+		for t := 1; t <= ticks; t++ {
+			churn(tags, names, 5, t)
+			if t == 120 {
+				flip = true // one node drops, halfway through the minute
+			}
+			// The cadences read a real clock and this loop runs a minute of
+			// stream in milliseconds, so age the two deadlines by one tick
+			// each time round — exactly what wall time would have done.
+			srv.scanAt = srv.scanAt.Add(-tick)
+			c.mu.Lock()
+			c.lastFull = c.lastFull.Add(-tick)
+			c.mu.Unlock()
+
+			srv.broadcast()
+			raw := <-c.ch
+			after += len(raw)
+
+			// The same frame as this server used to build it: every non-tag
+			// block, every tick.
+			var f Frame
+			if err := json.Unmarshal(raw, &f); err != nil {
+				b.Fatal(err)
+			}
+			stats := rt.Stats()
+			f.Scan = &stats
+			f.Drivers = srv.driverStatus(time.Now())
+			f.Alarms = srv.alarmSummary()
+			legacy, err := json.Marshal(f)
+			if err != nil {
+				b.Fatal(err)
+			}
+			before += len(legacy)
+		}
+	}
+	b.StopTimer()
+	if after == 0 {
+		b.Fatal("nothing measured")
+	}
+	const mb = 1024 * 1024
+	b.ReportMetric(float64(before)/mb, "before-MB/min")
+	b.ReportMetric(float64(after)/mb, "after-MB/min")
+	b.ReportMetric(float64(before)/float64(after), "×smaller")
 }

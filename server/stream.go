@@ -1,6 +1,6 @@
 package server
 
-// SSE streaming: who is connected, what each of them is owed, and the two
+// SSE streaming: who is connected, what each of them is owed, and the three
 // ways a stream is made small enough for a tablet.
 //
 // The problem this file exists to solve was measured on the Pomona WRD
@@ -10,7 +10,8 @@ package server
 // wall screen it was built for; ruinous for a handful of tablets on plant
 // wifi, and there is no version of "more clients" that gets better.
 //
-// Two independent reductions, either usable alone:
+// Three independent reductions, each usable alone — two over the tags, and
+// one over everything else on the frame (see "The frame floor" below):
 //
 //   - `?tags=` — a client that draws forty points subscribes to forty
 //     points. Glob patterns over dotted tag names (path.Match), applied to
@@ -23,6 +24,37 @@ package server
 //     integer comparison per tag with no value comparison anywhere. See
 //     runtime.Tags' "Write generations" and Tags.ChangedSince.
 //
+// # The frame floor
+//
+// Those two reductions left a floor neither could get under. Measured on
+// the same host: every frame carried ~17.9 kB of NON-tag payload — ~12.8 kB
+// of driver status (55 device rows and the driver's own Extra), ~5 kB of
+// scan diagnostics (two 180-sample history rings and a histogram), and the
+// alarm summary — rebuilt and re-sent four times a second whether or not
+// anything in them had moved. A client subscribed to zero tags still pulled
+// 4.35 MB a minute.
+//
+// So a delta frame now gates those blocks by the same philosophy as the
+// tags: send it when it CHANGED, and let absent mean unchanged.
+//
+//   - drivers — hashed over everything an operator would call a change and
+//     nothing that free-runs (see hashDrivers), one revision counter for
+//     the fleet, one integer per client.
+//   - alarms — the engine already publishes a Rev that bumps when an alarm
+//     moves and never otherwise. Gate on it, and skip building the summary
+//     at all when nobody is owed one.
+//   - scan — no "unchanged" exists: every scan changes it. So it rides a
+//     CADENCE instead (Options.DiagnosticsInterval, 3s), which loses no
+//     samples because the block is a history ring covering far longer than
+//     the cadence.
+//
+// A full frame — the first and every resync — always carries all of them,
+// which is what keeps "absent means unchanged" honest: no client is more
+// than one resync from a block it can vouch for. And the same enqueue
+// discipline as the tags applies, for the same reason: a client's record of
+// which blocks it holds advances only when a frame is actually enqueued, so
+// a dropped frame re-offers the block on the next tick.
+//
 // Deltas are opt-in, not the default. The frame shape is a public API with
 // clients this repo does not own — the VS Code extension's inline values,
 // whatever anyone wired to /api/stream with curl — and silently switching
@@ -30,6 +62,12 @@ package server
 // looks like the plant went quiet rather than like a protocol change. The
 // HMI kit opts in (RealtimeClient's `delta` defaults to true), which covers
 // the clients that matter without breaking the ones that don't ask.
+//
+// The block gate is opt-in AGAIN, on top of deltas (`?blocks=delta`), for
+// the same argument one level down: an HMI built against the older protocol
+// merges tags but not blocks, so gating them for it would blank its driver
+// panel between changes — the same failure wearing the same disguise. A kit
+// that knows how to merge them asks; nothing else is affected.
 //
 // # Why deltas cannot lose an update
 //
@@ -43,15 +81,22 @@ package server
 // CONNECTION, not a lost frame.
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash"
+	"hash/fnv"
+	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -59,6 +104,18 @@ import (
 // defaultResync is how often a delta stream sends a full frame anyway.
 // See Options.ResyncInterval for why a gap-free protocol still has one.
 const defaultResync = 30 * time.Second
+
+// defaultDiagnostics is how often a delta frame carries the scan block.
+// See Options.DiagnosticsInterval for why this one is a cadence and not a
+// change gate: the scan diagnostics change every scan, by definition.
+//
+// Three seconds is chosen against the block's own history rings: they hold
+// 180 samples, so anything up to 180× the scan target loses no samples, and
+// 3 s clears that for any scan of 17 ms or slower — every real controller.
+// It is also what keeps the block from dominating what is left of the
+// stream: at ~5 kB it is 1.7 kB/s here, against 0.5 kB/s for everything
+// else a quiet delta client receives.
+const defaultDiagnostics = 3 * time.Second
 
 // maxTagPatterns caps `?tags=` so a request cannot turn a glob list into a
 // per-tag CPU cost multiplier. Forty patterns is far past any real screen's
@@ -69,9 +126,10 @@ const maxTagPatterns = 40
 // owes it: the channel its frames go down, what it asked for, and where its
 // delta stream has got to.
 type client struct {
-	ch    chan []byte
-	delta bool     // ?delta=1 and not ?full=1
-	pats  []string // ?tags= globs; nil = every tag
+	ch     chan []byte
+	delta  bool     // ?delta=1 and not ?full=1
+	blocks bool     // ?blocks=delta — gate the non-tag blocks too
+	pats   []string // ?tags= globs; nil = every tag
 
 	// mu guards the rest. It is taken by the broadcast goroutine once per
 	// tick per client and by handleStream once at connect — never held
@@ -87,22 +145,47 @@ type client struct {
 	lastKeyGen uint64
 	seq        uint64
 	lastFull   time.Time
+	// seen is lastGen's counterpart for the non-tag blocks: which version
+	// of each the client has actually been SENT. Same discipline — it
+	// advances only on a successful enqueue, so a dropped frame re-offers
+	// the block rather than losing it.
+	seen blockRevs
+}
+
+// blockRevs is which version of each non-tag block a client holds — the
+// whole state behind "send it only when it changed", three integers wide.
+//
+// Zero means "never sent": a freshly connected client is deliberately
+// credited with nothing, even though its first frame was full, because the
+// revisions are the broadcast goroutine's and reading them from the HTTP
+// handler would be a race whose losing side is a block the client never
+// gets. It costs one repeat of the non-tag blocks on the first broadcast
+// after connect, which is a superset, and a superset is always correct.
+type blockRevs struct {
+	drivers uint64 // Server.driversRev of the driver block last sent
+	scan    uint64 // Server.scanRev of the scan block last sent
+	alarms  uint64 // alarm.Summary.Rev of the alarm block last sent
+	// alarmsSent distinguishes "sent the summary at rev 0" — a controller
+	// whose alarms have never moved — from "never sent one".
+	alarmsSent bool
 }
 
 // snapshot copies the client's delta state for one broadcast decision.
-func (c *client) snapshot() (lastGen, lastKeyGen, seq uint64, lastFull time.Time) {
+func (c *client) snapshot() (lastGen, lastKeyGen, seq uint64, lastFull time.Time, seen blockRevs) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.lastGen, c.lastKeyGen, c.seq, c.lastFull
+	return c.lastGen, c.lastKeyGen, c.seq, c.lastFull, c.seen
 }
 
-// sent records that a frame carrying every change up to gen was enqueued.
-// Called ONLY on a successful enqueue — see this file's header on why a
-// dropped frame must leave lastGen alone.
-func (c *client) sent(gen, keyGen uint64, full bool, at time.Time) {
+// sent records that a frame carrying every change up to gen — and the
+// blocks named by seen — was enqueued. Called ONLY on a successful enqueue
+// — see this file's header on why a dropped frame must leave lastGen alone,
+// which applies to the non-tag blocks exactly as it does to the tags.
+func (c *client) sent(gen, keyGen uint64, full bool, at time.Time, seen blockRevs) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.lastGen, c.lastKeyGen = gen, keyGen
+	c.seen = seen
 	c.seq++
 	if full {
 		c.lastFull = at
@@ -147,13 +230,15 @@ func (s *Server) broadcast() {
 	// needs, so one sweep serves all of them.
 	deltaFor := make([]bool, len(cs))
 	from := make([]uint64, len(cs))
+	held := make([]blockRevs, len(cs))
 	var minGen uint64
-	haveDelta, needFull := false, false
+	haveDelta, needFull, anyGate := false, false, false
 	for i, c := range cs {
-		lastGen, lastKeyGen, seq, lastFull := c.snapshot()
+		lastGen, lastKeyGen, seq, lastFull, seen := c.snapshot()
 		d := c.delta && seq > 0 && lastKeyGen == keyGen &&
 			(s.resync < 0 || now.Sub(lastFull) < s.resync)
-		deltaFor[i], from[i] = d, lastGen
+		deltaFor[i], from[i], held[i] = d, lastGen, seen
+		anyGate = anyGate || (d && c.blocks)
 		if d {
 			if !haveDelta || lastGen < minGen {
 				minGen = lastGen
@@ -178,18 +263,54 @@ func (s *Server) broadcast() {
 		}
 	}
 
-	// The shared parts of every frame this tick.
+	// The shared parts of every frame this tick. Scans — the counter a
+	// dashboard watches to see the loop turning — rides every frame; the
+	// diagnostics BLOCK behind it does not (see below).
 	stats := s.rt.Stats()
 	base := Frame{
 		TS:    now.UnixMilli(),
 		Scans: stats.Count,
-		Scan:  stats,
 	}
-	if s.drivers != nil {
-		base.Drivers = s.drivers()
-	}
-	base.Alarms = s.alarmSummary()
 	quality := qualityJSON(s.rt.Quality())
+
+	// This tick's verdict on each non-tag block. They are the reason a
+	// client that filtered its tags down to nothing still pulled megabytes
+	// a minute: ~18 kB of driver status, scan history and alarm counts,
+	// rebuilt and re-sent four times a second whether or not anything in
+	// them moved. Each is now gated the way tags are — by change, or (for
+	// the scan block, which changes every scan by definition) by cadence —
+	// and the verdict is computed ONCE for the fleet, so clients that tick
+	// together still share one encoding.
+	if s.diag < 0 || s.scanAt.IsZero() || now.Sub(s.scanAt) >= s.diag {
+		s.scanRev++
+		s.scanAt = now
+	}
+	ds := s.driverStatus(now)
+	// Hashing the driver block is worth doing only for a client that gates
+	// on it — a fleet of plain clients pays nothing for a feature it is not
+	// using. `driversRev == 0` forces the first evaluation to count, so a
+	// freshly connected client (which holds revision zero) is always owed
+	// the block whatever the hash happens to be.
+	if anyGate {
+		if h := hashDrivers(ds); h != s.driversHash || s.driversRev == 0 {
+			s.driversHash, s.driversRev = h, s.driversRev+1
+		}
+	}
+	// The alarm summary carries a revision of its own — Rev bumps when an
+	// alarm moves and never otherwise — so the block needs no hash. Rev is
+	// also far cheaper than Summary (which walks every instance), so the
+	// summary itself is built only if some client turns out to be owed it.
+	var alarmRev uint64
+	var alarmSum *alarm.Summary
+	if s.alarms != nil {
+		alarmRev = s.alarms.Rev()
+	}
+	summary := func() *alarm.Summary {
+		if alarmSum == nil {
+			alarmSum = s.alarmSummary()
+		}
+		return alarmSum
+	}
 
 	locals := s.rt.AllLocals()
 	var fullTags map[string]any
@@ -213,6 +334,28 @@ func (s *Server) broadcast() {
 		f.Quality = filterQuality(quality, c.pats)
 		patsKey := strings.Join(c.pats, ",")
 		full := !deltaFor[i]
+
+		// The non-tag blocks. A whole-store frame carries all of them —
+		// that is what makes a full frame a state a client can be rebuilt
+		// from, and what makes "absent means unchanged" safe on every other
+		// frame. So does a client that did not ask for `?blocks=delta`,
+		// which is every client written before the gate existed. `next` is
+		// what this client will hold ONCE the frame is enqueued; it is
+		// committed in sent(), never before, so a dropped frame re-offers
+		// every block it was carrying.
+		next := held[i]
+		gate := c.blocks && !full
+		if !gate || next.scan != s.scanRev {
+			f.Scan, next.scan = &stats, s.scanRev
+		}
+		if !gate || next.drivers != s.driversRev {
+			f.Drivers, next.drivers = ds, s.driversRev
+		}
+		if s.alarms != nil && (!gate || !next.alarmsSent || next.alarms != alarmRev) {
+			f.Alarms = summary()
+			next.alarms, next.alarmsSent = alarmRev, true
+		}
+
 		if deltaFor[i] {
 			dk := deltaKey{from: from[i], pats: patsKey}
 			d, ok := deltas[dk]
@@ -237,7 +380,14 @@ func (s *Server) broadcast() {
 				f.Seq = c.seqPeek() + 1
 			}
 		}
-		k := frameKey{delta: deltaFor[i], full: f.Full, from: from[i], seq: f.Seq, pats: patsKey}
+		k := frameKey{
+			delta: deltaFor[i], full: f.Full, from: from[i], seq: f.Seq, pats: patsKey,
+			// Two clients holding different versions of a non-tag block are
+			// owed different bytes, so the memo has to know: a fleet in
+			// step shares one encoding, and a tablet that just reconnected
+			// gets its own rather than someone else's.
+			scan: f.Scan != nil, drivers: f.Drivers != nil, alarms: f.Alarms != nil,
+		}
 		b, ok := enc[k]
 		if !ok {
 			var err error
@@ -248,7 +398,7 @@ func (s *Server) broadcast() {
 		}
 		select {
 		case c.ch <- b:
-			c.sent(gen, keyGen, full || f.Full, now)
+			c.sent(gen, keyGen, full || f.Full, now, next)
 		default:
 			// Slow client — drop the frame, never block the loop. Its
 			// lastGen stays put, so the next frame carries what this one
@@ -269,11 +419,126 @@ type deltaKey struct {
 }
 
 type frameKey struct {
-	delta bool
-	full  bool
-	from  uint64
-	seq   uint64
-	pats  string
+	delta   bool
+	full    bool
+	from    uint64
+	seq     uint64
+	pats    string
+	scan    bool
+	drivers bool
+	alarms  bool
+}
+
+// hashDrivers reduces a driver-status list to one number over everything an
+// operator would call a change — and deliberately not over the things that
+// move on their own.
+//
+// This is the whole of "send the driver block only when it changed", and
+// the exclusions are the load-bearing part. A Sparkplug host fronting 55
+// edge nodes renders ~13 kB of status; if a message counter or a
+// pre-rendered "born 3m" put that on the wire, the gate would open on every
+// single frame and buy nothing. So: DriverStatus.AsOfMs (the server's own
+// stamp), any metric marked Volatile, any metric's AtMs, the Text of a
+// metric that HAS an AtMs (that text is a rendering of the age), and the
+// Extra keys the adapter named in VolatileExtra are all excluded. Everything
+// else — state, message, device roster, error, the rest of Extra — is in.
+//
+// Excluded does not mean unsent: the current value of every counter rides
+// the block whenever the block goes out, and a full frame goes out on every
+// resync. It means a counter cannot, by itself, cost 13 kB four times a
+// second.
+func hashDrivers(ds []DriverStatus) uint64 {
+	h := fnv.New64a()
+	var buf [8]byte
+	u64 := func(v uint64) {
+		binary.LittleEndian.PutUint64(buf[:], v)
+		h.Write(buf[:])
+	}
+	// Length-prefixed, so no concatenation of two fields can be mistaken
+	// for a different split of the same bytes.
+	str := func(s string) { u64(uint64(len(s))); io.WriteString(h, s) }
+
+	u64(uint64(len(ds)))
+	for i := range ds {
+		d := &ds[i]
+		str(d.Kind)
+		str(d.Name)
+		str(d.Detail)
+		str(d.State)
+		str(d.Message)
+		str(d.LastError)
+		u64(uint64(d.SinceMs))
+		u64(uint64(len(d.Metrics)))
+		for j := range d.Metrics {
+			m := &d.Metrics[j]
+			str(m.Label)
+			str(m.Unit)
+			if m.Volatile {
+				continue
+			}
+			u64(math.Float64bits(m.Value))
+			if m.AtMs == 0 {
+				str(m.Text)
+			}
+		}
+		u64(uint64(len(d.Devices)))
+		for j := range d.Devices {
+			dev := &d.Devices[j]
+			str(dev.ID)
+			str(dev.Detail)
+			if dev.Online {
+				u64(1)
+			} else {
+				u64(0)
+			}
+		}
+		hashExtra(h, d.Extra, d.VolatileExtra)
+	}
+	return h.Sum64()
+}
+
+// hashExtra folds a driver's protocol-specific Extra into h, minus the keys
+// it declared volatile. encoding/json sorts map keys, which is what makes
+// the rendering stable across two builds of the same map.
+func hashExtra(h hash.Hash64, extra map[string]any, volatile []string) {
+	if len(extra) == 0 {
+		h.Write([]byte{0})
+		return
+	}
+	m := extra
+	if len(volatile) > 0 {
+		m = make(map[string]any, len(extra))
+		for k, v := range extra {
+			skip := false
+			for _, vol := range volatile {
+				if k == vol {
+					skip = true
+					break
+				}
+			}
+			if !skip {
+				m[k] = v
+			}
+		}
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		// A value JSON cannot render (a NaN, a channel) is a bug in the
+		// adapter, not a reason to stall the stream. Fall back to the key
+		// set: the block then changes only when a key appears or goes,
+		// which is the conservative direction — fewer bytes, never a lost
+		// state change, since state lives in the typed fields above.
+		keys := make([]string, 0, len(m))
+		for k := range m {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			io.WriteString(h, k)
+		}
+		return
+	}
+	h.Write(b)
 }
 
 // seqPeek reads the client's frame counter for the frame about to be built.
@@ -310,6 +575,16 @@ func pickChanged(changed []runtime.Change, rendered map[string]any, from uint64,
 //	?tags=Tank*,P101*   only these tags, glob-matched with path.Match over
 //	                    the dotted name. Applies to the first frame too.
 //	?delta=1            after the first frame, send only what changed.
+//	?blocks=delta       gate the NON-tag blocks (scan diagnostics, driver
+//	                    status, alarm counts) the same way — send each only
+//	                    when it changed. Requires delta=1; ignored without
+//	                    it. Opt-in for the same reason deltas are: a client
+//	                    that does not merge them would show a blank driver
+//	                    panel between changes, which looks like a plant
+//	                    going quiet rather than like a protocol it has not
+//	                    implemented. `?blocks=full` (the default) sends
+//	                    every block on every frame, as this endpoint always
+//	                    has.
 //	?full=1             never send deltas on this connection (overrides
 //	                    delta=1) — the escape hatch for a client that has
 //	                    reason to distrust its own merge.
@@ -331,6 +606,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	delta := flag(q, "delta") && !flag(q, "full")
+	// The non-tag block gate rides on deltas — a client receiving whole
+	// frames has nothing to merge a partial block into.
+	blocks := delta && strings.EqualFold(strings.TrimSpace(q.Get("blocks")), "delta")
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -341,7 +619,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	// a client-side inspecting proxy/extension can still buffer regardless.
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	c := &client{ch: make(chan []byte, 8), delta: delta, pats: pats}
+	c := &client{ch: make(chan []byte, 8), delta: delta, blocks: blocks, pats: pats}
 
 	// The first frame is built and written BEFORE the client is registered,
 	// which is what keeps its seq honest: registering first would let the

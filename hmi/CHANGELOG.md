@@ -51,6 +51,43 @@ gone. Nothing here changes an existing component's default rendering.
   number a runtime is currently publishing. Build a tag picker from `numericLeaves` and it can
   never offer a tag that resolves to nothing.
 
+### Added — the frame floor: non-tag blocks sent only when they change
+
+Tag filters and tag deltas both shrink the same part of the frame, and on the WRD host they ran
+into what was left: every frame carried **~17.9 kB that had nothing to do with tags** — ~12.8 kB
+of driver status (55 Sparkplug device rows plus the host's per-node roster in `extra`), ~5 kB of
+scan diagnostics, and the alarm counts — re-sent four times a second whether or not anything in
+them had moved. A client subscribed to *no tags at all* still pulled **4.35 MB a minute**. The
+controller now gates those blocks by the same rule as the tags (absent means unchanged) and the
+kit merges them: **4.3 MB/min → 0.15 MB/min**, ~28× less, measured over a minute of a 250 ms
+stream with a resync every 30 s (`go test ./server/ -run XXX -bench FrameFloor`).
+
+- **`mergeDelta` retains the non-tag blocks** — `scan`, `drivers` and `alarms` are put back on
+  every published frame from the last one seen, so `frame.drivers` and friends are complete
+  whether or not this frame carried them, and no component learns the difference. A `full` frame
+  replaces the retained set rather than merging into it, so a driver removed from the controller
+  disappears on the next resync. `quality` is deliberately *not* retained: absent already means
+  "every tag is good", and a field cannot mean both that and "unchanged".
+- **`DeltaState.blocks`** — the retained set, for anyone driving the merge themselves.
+- **`RealtimeClient` asks for it** (`?blocks=delta`, sent whenever `delta` is on). Opt-in on the
+  wire, separately from deltas, for the same reason deltas are: an HMI built against the older
+  protocol merges tags but not blocks, so gating them for it would blank its driver panel between
+  changes — the same failure wearing the same disguise. Asking an older controller is harmless:
+  it ignores the parameter and keeps sending every block, which merges to the same thing.
+- **`DriverMetric.atMs` and `DriverStatus.asOfMs`** — a freshness readout now travels as the
+  MOMENT rather than a pre-rendered age, because a rendered age changes on every build and would
+  have put 13 kB on the wire four times a second. `DriverStatusCard` renders `atMs` against the
+  status's own `asOfMs` (when the server observed it), *not* against the clock — a block sent 20 s
+  ago must still say "last publish 0.2s", not creep upward and snap back on every resync. Uptime
+  still runs off `sinceMs` and the live clock, which is an absolute start time and grows honestly.
+  `text` is still sent, so a card written before `atMs` renders as it always did.
+- **`ControllerMeta.blockDeltas`** — the capability flag for `?blocks=delta`.
+
+**Upgrading:** a kit older than this against a controller with the gate is unaffected — the
+controller only gates for clients that ask. Apps that parse the SSE stream themselves (rather than
+through `RealtimeClient`) and send `?blocks=delta` must merge the blocks the way `mergeDelta`
+does, or a driver panel will blink out between changes.
+
 ### Added — subscriptions: deltas, filters, data quality
 
 The two things that separate a demo HMI from one a plant runs on: how much a client has to pull to
@@ -100,7 +137,8 @@ hopeless for tablets.
   A prefix-only packer matches 7,593. Tested at every cap down to one pattern.
   `NO_TAGS` is how a client says *no tags at all*, which `tags: []` cannot: `[]` has always meant
   everything. It is worth having — the frame's alarm summary, driver status and scan diagnostics
-  ride every frame whatever the filter says, so a screen that draws no tags can still be live.
+  are never filtered, so a screen that draws no tags can still be live. (They are now sent only
+  when they change; the merge keeps them complete. See the frame-floor section above.)
 - **`RealtimeClient.bytesReceived` / `.frames`** — payload characters and frames received since the
   client was created, across reconnects (unlike `seq`, which is the connection's counter). They
   exist to be measured: "filtering the subscription made this screen cheaper" is a claim about

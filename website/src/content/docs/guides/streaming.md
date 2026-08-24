@@ -44,9 +44,8 @@ Two fields make it a protocol rather than a trick:
   delta cannot express: there is no way to say "this tag is gone".
 
 Everything else on the frame — the scan diagnostics, driver status, alarm
-counts, `quality` — is sent **whole every time**. They are a few kilobytes
-against a store of hundreds, and a client that had to reassemble them would
-gain nothing.
+counts — is gated the same way, once the client says it can merge them.
+That is [the frame floor](#the-frame-floor), below.
 
 ### What it costs
 
@@ -60,8 +59,9 @@ included in both (`go test ./server/ -run XXX -bench FrameBytes`):
 | 20 % | 284 KB | 59 KB | **4.8× smaller** |
 
 Five percent is a realistic steady state for a plant that is running rather
-than starting up. The floor a delta frame cannot go below is the
-diagnostics block (~3 KB), which is why the 1 % row is 51× and not 280×.
+than starting up. The floor those numbers cannot go below is the
+diagnostics block (~3 KB here), which is why the 1 % row is 51× and not
+280× — and which is what [the frame floor](#the-frame-floor) removes.
 
 The server side gets *cheaper*, not more expensive, because the per-tick
 work is shared: one sweep of the store for all delta clients, one rendering
@@ -108,6 +108,112 @@ plant went quiet rather than like a protocol change.
 `?full=1` forces whole frames even alongside `?delta=1` — the escape hatch
 for a client with reason to distrust its own merge.
 
+## The frame floor
+
+Tag filters and tag deltas both shrink the same part of the frame, and on
+the WRD host they eventually ran into what was left. Every frame carried
+**~17.9 kB that had nothing to do with tags**:
+
+| Block | Size | Why it moves |
+| --- | --- | --- |
+| `drivers` | ~12.8 kB | 55 Sparkplug device rows plus the host's own per-node roster in `extra` |
+| `scan` | ~5 kB | two 180-sample history rings and a histogram |
+| `alarms` | ~0.1 kB | the banner's counts |
+
+Rebuilt and re-sent four times a second whether or not anything in them had
+moved. A client that had filtered its subscription down to *nothing* still
+pulled **4.35 MB a minute** — a floor no amount of tag filtering could get
+under.
+
+So a delta stream now gates those blocks by the same rule as the tags:
+**absent means unchanged**.
+
+```
+GET /api/stream?delta=1&blocks=delta
+```
+
+```jsonc
+// a frame where a node dropped: the driver block, and nothing else
+{"ts":1770000000250,"seq":41,"tags":{},"drivers":[{…}]}
+// the next frame: nothing happened, so nothing but the headline
+{"ts":1770000000500,"seq":42,"scans":918274,"tags":{}}
+```
+
+- **`drivers`** — hashed over everything an operator would call a change,
+  and nothing that free-runs. A message counter climbing, an age ticking or
+  the server's own observation stamp must not put 13 kB on the wire, so
+  they are excluded from the comparison (they still ride along whenever the
+  block *is* sent). A driver adapter marks its own free-running readouts:
+  `DriverMetric.Volatile` for a counter, `DriverStatus.VolatileExtra` for
+  protocol-specific fields.
+- **`alarms`** — the engine already publishes a `rev` that bumps when an
+  alarm moves and never otherwise. Gate on it. As a bonus the controller
+  stops *computing* the summary on ticks nobody is owed one.
+- **`scan`** — there is no "unchanged": every scan changes it. So it rides
+  a **cadence** instead (`server.Options{DiagnosticsInterval: …}`, 3 s by
+  default). The block is a history ring covering 180 samples — 18 s at a
+  100 ms scan — so a 3 s cadence delivers every sample a diagnostics page
+  plots, just in batches. The live headline (`scans`, `ts`) rides every
+  frame regardless.
+
+A **full frame carries all of them**, which is what keeps "absent means
+unchanged" honest: no client is more than one resync (30 s) from a block it
+can vouch for. And the same enqueue discipline as the tags applies — a
+client's record of which blocks it holds advances only when a frame is
+actually enqueued, so a dropped frame re-offers the block rather than
+losing it.
+
+`quality` is deliberately **not** gated. An absent `quality` already means
+something on this protocol — "every tag is good" — and a field cannot mean
+both that and "unchanged".
+
+### What the floor costs now
+
+One minute of a 250 ms stream (240 frames) for a client subscribed to no
+tags at all, against the 55-node driver status above, with a resync every
+30 s and one edge node dropping mid-minute
+(`go test ./server/ -run XXX -bench FrameFloor -benchtime 1x`):
+
+| | Before | After |
+| --- | --- | --- |
+| bytes/minute | 4.3 MB | **0.15 MB** |
+
+**~28× less**, and what is left is mostly the two resyncs and the scan
+cadence — both tunable, neither a floor.
+
+### Ages move to the client
+
+The driver block is now sent seconds apart, which breaks anything the
+server pre-rendered from the clock: a "last publish 0.2s" frozen into a
+block sent 20 seconds ago reads as a plant going quiet. So a freshness
+readout travels as the **moment itself**:
+
+```jsonc
+{"kind":"sparkplug","name":"WRD/Host","asOfMs":1770000000000,
+ "metrics":[{"label":"last publish","atMs":1769999999800,"text":"0.2s"}]}
+```
+
+- `metrics[].atMs` — the moment, epoch ms.
+- `asOfMs` — when the whole status was **observed**, stamped by the server.
+
+A client renders the age as `asOfMs − atMs`, *not* against its own clock:
+the answer is then the same one the server would have rendered, and it does
+not creep upward between blocks. `sinceMs` (uptime) is different — an
+absolute start time, honestly measured against now. The kit's
+`DriverStatusCard` does all of this; `text` is still sent for readers that
+predate `atMs`.
+
+### Merging blocks is opt-in, separately
+
+`?blocks=delta` is asked for, never assumed — the same argument as deltas
+themselves, one level down. An HMI built against the older protocol merges
+tags but not blocks, so gating them for it would blank its driver panel
+between changes: the same failure wearing the same disguise. `/api/meta`
+reports `"blockDeltas": true` on a controller that understands the
+parameter, and the HMI kit sends it whenever deltas are on (asking an older
+controller is harmless — it ignores the parameter and keeps sending every
+block).
+
 ## Tag filters
 
 A screen that draws forty points should pull forty points:
@@ -129,10 +235,11 @@ it is not sending. It also applies to `/api/state`, so a screen's initial
 load matches its subscription instead of pulling the whole plant to read
 forty points.
 
-The two reductions compose, and each is useful alone: filters help most
-when a screen is small, deltas when the plant is quiet. Diagnostics, driver
-status and alarm counts are never filtered — a subscription narrows tags,
-not the controller's own health.
+The reductions compose, and each is useful alone: filters help most when a
+screen is small, deltas when the plant is quiet, and the block gate when
+both have already done their work. Diagnostics, driver status and alarm
+counts are never *filtered* — a subscription narrows tags, not the
+controller's own health — they are gated on change instead.
 
 A pattern `path.Match` cannot compile is a `400`, not a silent
 match-nothing; a screen bound to a typo should show an error, not an empty
@@ -217,7 +324,8 @@ quality at all. Check it before rendering a quality indicator, because the
 false case is **invisible**: an empty `quality` map looks exactly like a
 healthy plant, and a screen that cannot tell the two apart paints a
 confident green badge on a controller that has no idea. `/api/meta` also
-reports `"deltas": true` for `?delta=1` and `?tags=` support.
+reports `"deltas": true` for `?delta=1` and `?tags=` support, and
+`"blockDeltas": true` for `?blocks=delta`.
 
 ## From the HMI kit
 
@@ -227,7 +335,7 @@ the point being that nothing downstream notices:
 ```ts
 const rt = new RealtimeClient<NautilusFrame>({
   tags: ['RTU9_*'],   // subscribe to a subset (optional)
-  delta: true         // the default
+  delta: true         // the default — tags AND the non-tag blocks
 });
 rt.start();
 
@@ -248,6 +356,11 @@ granularity.
 Against a controller that predates any of this, the client falls back to
 plain pass-through automatically — frames arrive with no `seq`, and it
 publishes them untouched. Asking for deltas is never a compatibility risk.
+
+`frame.scan`, `frame.drivers` and `frame.alarms` are complete on every
+published frame too: the client retains the last one it saw of each and
+puts it back, so no component has to know the controller stopped repeating
+itself.
 
 The merge rules live in one small, dependency-free module
 (`hmi/src/lib/delta.ts`) with their own tests, precisely because they are

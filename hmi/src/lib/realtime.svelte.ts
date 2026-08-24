@@ -106,6 +106,13 @@ export interface RealtimeOptions<T> {
 	 * the wire, per client, per tick. That is the difference between one
 	 * wall screen and a shift's worth of tablets.
 	 *
+	 * It also asks the controller to gate the NON-tag blocks the same way
+	 * (`?blocks=delta`): the scan diagnostics, driver status and alarm
+	 * counts are sent only when they change, and the merge puts the last
+	 * known one back on every frame. That is the floor a tag filter could
+	 * never get under — on the same controller, ~18 kB a frame, 4.35 MB a
+	 * minute for a client subscribed to nothing at all.
+	 *
 	 * Falls back to plain pass-through automatically against a controller
 	 * that does not implement deltas (its frames carry no `seq`), so
 	 * turning it on is never a compatibility risk. Set `false` to force
@@ -212,7 +219,17 @@ export class RealtimeClient<T = unknown> {
 	get streamUrl(): string {
 		const qs = new URLSearchParams();
 		if (this.#tags.length) qs.set('tags', this.#tags.join(','));
-		if (this.#delta) qs.set('delta', '1');
+		if (this.#delta) {
+			qs.set('delta', '1');
+			// …and gate the non-tag blocks too (scan diagnostics, driver
+			// status, alarm counts — ~18 kB of every frame on the
+			// controller this was measured on). `mergeDelta` retains the
+			// last one it saw of each, so consumers still get a complete
+			// frame. Safe to ask an older controller: it ignores the
+			// parameter and keeps sending every block every tick, which
+			// merges to the same thing.
+			qs.set('blocks', 'delta');
+		}
 		const q = qs.toString();
 		if (!q) return this.#url;
 		return this.#url + (this.#url.includes('?') ? '&' : '?') + q;
