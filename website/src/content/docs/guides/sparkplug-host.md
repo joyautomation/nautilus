@@ -105,6 +105,30 @@ ever arrived: `WellAlarm := W6__Online AND W6_Well_Level > 90.0`, never
 per-site tasks where practical — one dead site then faults one task, not
 the whole controller.
 
+## Per-tag quality
+
+Beyond `__Online`, the driver implements `io.QualityReporter`: `Quality()`
+returns a `map[string]io.Quality` naming, per **data** binding, how much
+its value is worth believing right now — non-Good entries only, so a
+fully-birthed fleet reports an empty map. A tag never named in it is Good.
+
+- A binding whose metric has **never been delivered** — the site has
+  never birthed, or the birth simply never carries that metric — is
+  `NotConnected`. The driver cannot tell "hasn't happened yet" from "will
+  never happen", so both read the same: nothing to show.
+- A binding with a value on file whose site is not currently online — an
+  `NDEATH`, a site gone quiet past `StaleAfter`, or (for a device-scoped
+  metric) a `DDEATH` on just that device — is `Stale`. The value is real,
+  just old.
+- A binding whose site is online and has delivered its metric is `Good`
+  (omitted).
+
+Only data (read-only) bindings get a verdict. Writable bindings — plain
+outputs, member outputs, and the `__Online`/`__LastBirthMs`/`__Rebirth`
+companions — are host-authored, not field readings, and are always Good;
+`__Online` (etc.) already **is** the quality signal for the tags around
+it, so `Quality()` never puts a verdict on top of a verdict.
+
 ## Writes: DCMD/NCMD
 
 An output binding's writes leave as `spBv1.0/<group>/NCMD/<edge>` (node
