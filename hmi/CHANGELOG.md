@@ -369,6 +369,8 @@ Nothing was renamed or removed; two families changed *value* and everything else
 
 ### Fixed
 
+- `EquipSymbol`: contain-fit now clamps height as well as width — a grid with no declared rows made the image's percentage `max-height` circular (resolved as `none`), so wide symbols given both `width` and `height` spilled vertically.
+
 - **`EquipSymbol` rendered no picture at all when both `width` and `height` were given and it sat
   next to anything else** — a chip column, a card's value stack, any flex row. A symbol file that
   carries only a `viewBox` (no width/height attributes) contributes a min-content width of **zero**

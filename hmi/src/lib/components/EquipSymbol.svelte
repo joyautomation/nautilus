@@ -180,6 +180,12 @@
 	   next to anything else (a chip column, a card's value stack). */
 	.img.fit {
 		display: grid;
+		/* Declared 1fr tracks make the grid area definite so the img's
+		   percentage max-height resolves; with the default auto row it is
+		   circular and browsers resolve it as none — wide images then size
+		   by width alone and spill vertically past a given height. */
+		grid-template-rows: minmax(0, 1fr);
+		grid-template-columns: minmax(0, 1fr);
 		place-items: center;
 		flex: none;
 	}
