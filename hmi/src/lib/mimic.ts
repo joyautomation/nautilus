@@ -67,6 +67,21 @@ export const BUILTIN_PORTS: Record<string, MimicPort[]> = {
 		{ name: 'right', x: 1, y: 0.5 },
 		{ name: 'bottom', x: 0.5, y: 1 }
 	],
+	// The level-only reservoir (LevelTank) is not one of <Mimic>'s built-in
+	// components — it reaches a doc through the `registry` prop — but its
+	// ports belong here all the same: BUILTIN_PORTS is keyed by the
+	// component NAME a doc writes, and resolveRuntimePorts() consults it for
+	// whatever that name resolves to. Its rendered box is the vessel itself
+	// when `label` is empty (the caption is the only thing below the svg), so
+	// these fractions land on the vessel walls exactly; a doc that captions
+	// the tank should override them per instance rather than let the caption
+	// push the bottom port off the vessel.
+	LevelTank: [
+		{ name: 'top', x: 0.5, y: 0 },
+		{ name: 'left', x: 0, y: 0.5 },
+		{ name: 'right', x: 1, y: 0.5 },
+		{ name: 'bottom', x: 0.5, y: 1 }
+	],
 	Pump: [
 		{ name: 'in', x: 0, y: 0.5 },
 		{ name: 'out', x: 1, y: 0.5 }
@@ -142,7 +157,9 @@ export interface MimicPipeAnchor {
 }
 
 /** A pipe run: a polyline in canvas units. Bind `flowing` (and optionally
- * `rate`) to tags to animate flow with the process. */
+ * `rate`) to tags to animate flow with the process — or `dead` (see
+ * Pipe.svelte) for the run whose meter the runtime does not publish, which is
+ * NOT the same as a run that is standing still. */
 export interface MimicPipe {
 	id: string;
 	/** Interior vertices only when an end is anchored (see `from`/`to`) —
