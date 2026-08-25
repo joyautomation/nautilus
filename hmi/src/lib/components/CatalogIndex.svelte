@@ -106,7 +106,15 @@
 			{/if}
 			<div class="grid">
 				{#each group.stories as story (story.slug)}
-					<a class="card" href={linkTo(story, group)}>
+					<!-- The card is a DIV with a stretched link on the title, not an
+					     `<a>` wrapping the preview. A real component library is full of
+					     components that render their own `<a>` or `<button>` — a card,
+					     a nav node, anything clickable — and an anchor inside an anchor
+					     is invalid HTML: the parser silently splits it, so the server's
+					     markup and the client's DOM disagree and hydration fails on the
+					     whole page. The `::after` overlay keeps the entire card
+					     clickable without ever nesting interactive content. -->
+					<div class="card">
 						<div class="stage" class:note-stage={!isPreviewable(story)}>
 							{#if preview}
 								{@render preview(story, group)}
@@ -120,7 +128,7 @@
 							{/if}
 						</div>
 						<div class="meta">
-							<span class="title">{story.title}</span>
+							<a class="title" href={linkTo(story, group)}>{story.title}</a>
 							<span class="sub">
 								{#if isPreviewable(story)}
 									{story.variants!.length} variant{story.variants!.length === 1 ? '' : 's'}
@@ -129,7 +137,7 @@
 								{/if}
 							</span>
 						</div>
-					</a>
+					</div>
 				{/each}
 			</div>
 		</section>
@@ -207,6 +215,7 @@
 		gap: var(--space-3);
 	}
 	.card {
+		position: relative;
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-2);
@@ -215,11 +224,10 @@
 		border-radius: var(--radius);
 		background: var(--surface);
 		color: inherit;
-		text-decoration: none;
 		transition: border-color var(--transition), background var(--transition);
 	}
 	.card:hover,
-	.card:focus-visible {
+	.card:has(a:focus-visible) {
 		border-color: var(--accent);
 		background: var(--hover, var(--surface-2));
 	}
@@ -267,6 +275,23 @@
 	.title {
 		font-weight: var(--weight-control);
 		font-size: var(--font-sm);
+		color: inherit;
+		text-decoration: none;
+	}
+	/* The stretched link: one anchor, the whole card's worth of hit area, and
+	   no interactive element ever nested inside another. */
+	.title::after {
+		content: '';
+		position: absolute;
+		inset: 0;
+		border-radius: inherit;
+	}
+	.title:focus-visible {
+		outline: none;
+	}
+	.card:has(a:focus-visible) {
+		outline: 2px solid var(--accent);
+		outline-offset: 1px;
 	}
 	.none {
 		padding: var(--space-6);
