@@ -145,6 +145,25 @@ export type { ConfirmOptions, ConfirmRequest, ConfirmQueue, QueueOptions } from 
 export { default as Tooltip } from './components/Tooltip.svelte';
 export { default as AppShell } from './components/AppShell.svelte';
 
+// Component catalog: the storybook route pair every deployment wants and none
+// should write twice. The REGISTRY stays in the app (its symbols, its process
+// systems); the kit ships the shape and the two screens. A story whose
+// component reads live data has no static preview and says so — see
+// ./catalog.ts.
+export { default as CatalogIndex } from './components/CatalogIndex.svelte';
+export { default as CatalogEntry } from './components/CatalogEntry.svelte';
+export {
+	allStories,
+	filterGroups,
+	findStory,
+	formatProps,
+	isPreviewable,
+	neighbors,
+	previewVariant,
+	storyCount
+} from './catalog.js';
+export type { Story, Variant, StoryGroup, FormatPropsOptions } from './catalog.js';
+
 // Realtime client (generic over the frame shape)
 export { RealtimeClient, createRealtimeClient, TrendBuffer } from './realtime.svelte.js';
 export type { RealtimeOptions, FrameSource } from './realtime.svelte.js';

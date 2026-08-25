@@ -30,6 +30,40 @@ gone. Nothing here changes an existing component's default rendering.
   primitives for a network view you lay out yourself. `FlowLink` draws its marching dashes only
   when `flowing`, so a still line means still water.
 
+### Added — the component catalog
+
+A storybook for a plant, kept inside the plant. Every deployment ends up wanting a `/components`
+route — a page that shows what each symbol looks like in every state the process can put it in —
+and every deployment writes the same two screens to get it. The **registry** stays in the app
+(its symbols, its process systems, its equipment families are none of the kit's business); the
+kit ships the shape and the two screens that render any registry of that shape.
+
+- **`./catalog.ts`** — `Story` (`slug`, `title`, `blurb`, `component?`, `variants?`, `note?`,
+  `tags?`), `Variant` (`name`, `props`, `note?`), `StoryGroup` (`id`, `title`, `blurb?`,
+  `stories`), plus the pure helpers the screens run on: `isPreviewable`, `previewVariant`,
+  `findStory`, `neighbors`, `allStories`, `storyCount`, `filterGroups`, `formatProps`.
+- **`CatalogIndex`** — the grouped grid: every story as a card carrying a **live** preview of its
+  first variant, sectioned by group, with an optional filter box. The card renders the component,
+  not a screenshot; a screenshot goes stale the moment someone changes a fill, and a catalog that
+  lies about the current look is worse than no catalog.
+- **`CatalogEntry`** — one story: group eyebrow, title, blurb, every variant on its own stage with
+  its note, and a collapsed `props` readout. The readout is the part that earns the page — a
+  picture tells you the component exists, the props tell you how to get that picture in your own
+  screen, which is the question anyone opening a catalog actually has.
+- **`Story.component` is optional, and that is the design.** A variant must render from STATIC
+  PROPS ALONE: a catalog that needs a live subscription to draw a card is blank exactly when
+  someone is looking at it — during a comms failure. Real HMI code is full of components that read
+  their own data (a tag path, a store, a fetch), and those cannot honour it. So a story with no
+  component renders as a **live-only card** carrying `note`: still named, still grouped, still
+  searchable, saying *why* it has no preview. That is information; a broken box is not, and
+  dropping it from the list is worse than either.
+- **`formatProps`** is not `JSON.stringify`. Story props carry event handlers, components and
+  500-point trend arrays: functions become `ƒ()`, long arrays elide to `[…N items]`, long strings
+  truncate, cycles are named (an ancestor stack, so a value referenced twice as a *sibling* is
+  still rendered rather than falsely reported as circular), and a value that refuses to serialise
+  degrades to a comment. The readout is documentation, and documentation must not be the thing
+  that takes a screen down.
+
 ### Added — writing back
 
 - **`WriteNumber`**, **`WriteToggle`**, **`CommandButton`** — a labelled setpoint field, a

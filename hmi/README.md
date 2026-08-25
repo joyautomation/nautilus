@@ -569,6 +569,73 @@ reduced-motion via `data-motion`.
 | `StateChip` | `label`, `kind?: StatusKind \| ValueStatus \| 'neutral'`, `title?`, `dot?`, `solid?` |
 | `ConfirmDialog` | `bind:operator?`, `size?` — mount once; drive it with `confirm({ title, body?, items?, confirmLabel?, cancelLabel?, danger?, operator?, note? })` |
 | `AlarmJournal` | `events: AlarmEvent[]`, `from`, `to`, `onrange(from,to)`, `sites?`, `loading?` |
+| `CatalogIndex` | `groups: StoryGroup[]`, `title?`, `blurb?`, `basePath?`, `href?(story,group)`, `search?`, `bind:query?`, `searchPlaceholder?`, `minColumn?`, `previewHeight?`, `showGroupHeadings?`, snippets `preview(story,group)` / `empty(query)` |
+| `CatalogEntry` | `story?: Story`, `group?`, `backPath?`, `backLabel?`, `prev?`/`next?`, `basePath?`, `href?(story)`, `showProps?`, `propsLabel?`, `maxArray?`, `minColumn?`, `stageMinHeight?`, snippet `notFound` |
+
+### The component catalog — `CatalogIndex`, `CatalogEntry`, `./catalog.ts`
+
+A storybook for a plant. The kit ships the *shape* and the two screens; the
+**registry is the app's**, because a deployment's symbols and process systems
+are none of the kit's business. Two route files and one `stories.ts`:
+
+```ts
+// src/lib/stories.ts — grouped by PROCESS SYSTEM, not by component taxonomy:
+// that is the axis an engineer is thinking on when they come looking.
+import type { StoryGroup } from '@joyautomation/nautilus-hmi';
+import LevelTank from '…';
+
+export const groups: StoryGroup[] = [
+  {
+    id: 'reservoirs',
+    title: 'Reservoirs',
+    stories: [
+      {
+        slug: 'level-tank',
+        title: 'Level tank',
+        blurb: 'Level-only vessel; the band marks are the alarm limits.',
+        component: LevelTank,
+        variants: [
+          { name: 'Normal', props: { value: 21.4, min: 0, max: 30, units: 'ft' } },
+          { name: 'Low-low', props: { value: 2.1, min: 0, max: 30, units: 'ft' },
+            note: 'Below LL the fill goes critical, not merely red.' }
+        ]
+      },
+      // No `component`: this one reads its own tags, so it has no static state.
+      { slug: 'zone-box', title: 'Zone box', blurb: 'Panel rollup tile.',
+        note: 'Takes an RTU id and renders from the live subscription.' }
+    ]
+  }
+];
+```
+
+```svelte
+<!-- routes/components/+page.svelte -->
+<script lang="ts">
+  import { CatalogIndex } from '@joyautomation/nautilus-hmi';
+  import { groups } from '$lib/stories';
+</script>
+<CatalogIndex {groups} search />
+```
+
+```svelte
+<!-- routes/components/[slug]/+page.svelte -->
+<script lang="ts">
+  import { page } from '$app/state';
+  import { CatalogEntry, findStory, neighbors } from '@joyautomation/nautilus-hmi';
+  import { groups } from '$lib/stories';
+  const hit = $derived(findStory(groups, page.params.slug));
+  const near = $derived(neighbors(groups, page.params.slug));
+</script>
+<CatalogEntry story={hit?.story} group={hit?.group} {...near} />
+```
+
+**A variant renders from static props alone.** That is the one rule, and it is
+what makes the catalog useful during a comms failure rather than blank. A
+component that reads its own data cannot honour it, so `Story.component` is
+optional: leave it off and add a `note`, and the story renders as a **live-only
+card** — still named, still grouped, still searchable, saying why it has no
+preview. That is information. A broken box is not, and hiding the component
+from the list is worse than either.
 
 ## Testing
 
