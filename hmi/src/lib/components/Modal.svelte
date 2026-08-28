@@ -110,6 +110,7 @@
 	.modal.full {
 		width: calc(100vw - 32px);
 		height: calc(100vh - 32px);
+		height: calc(100dvh - 32px);
 		max-height: none;
 	}
 	.modal::backdrop {

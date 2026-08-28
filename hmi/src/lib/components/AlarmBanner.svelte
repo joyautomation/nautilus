@@ -12,6 +12,7 @@
 	let {
 		summary,
 		now = Date.now(),
+		compact = false,
 		onclick,
 		href
 	}: {
@@ -20,6 +21,13 @@
 		summary?: AlarmSummary | null;
 		/** Epoch ms "now" for the newest-alarm age readout. */
 		now?: number;
+		/**
+		 * The header-on-a-phone rendering: dot, unack count and the per-priority
+		 * counts only — no newest-alarm name, no shelved count — sized to its
+		 * content and able to shrink (ellipsis) rather than push the row wider.
+		 * `worst` still colours it; the click still goes where `href` says.
+		 */
+		compact?: boolean;
 		/** Click handler — set this or `href`, not both. */
 		onclick?: () => void;
 		/** Renders as an `<a>` instead of a `<button>` when set. */
@@ -49,7 +57,8 @@
 	<span class="dot" aria-hidden="true"></span>
 
 	<span class="unacked">
-		<b>{summary?.unacked}</b> unack
+		<b>{summary?.unacked}</b>
+		{#if !compact}unack{/if}
 	</span>
 
 	<span class="counts">
@@ -59,18 +68,18 @@
 			</span>
 		{/each}
 		{#if !byPriority.length}
-			<span class="count clear">no active alarms</span>
+			<span class="count clear">{compact ? 'clear' : 'no active alarms'}</span>
 		{/if}
 	</span>
 
-	{#if summary?.newest}
+	{#if summary?.newest && !compact}
 		<span class="newest">
 			<span class="name">{summary.newest.name}</span>
 			<span class="age">{newestAge}</span>
 		</span>
 	{/if}
 
-	{#if summary?.shelved}
+	{#if summary?.shelved && !compact}
 		<span class="shelved" title="{summary.shelved} shelved">{summary.shelved} shelved</span>
 	{/if}
 {/snippet}
@@ -80,10 +89,13 @@
 		<a
 			{href}
 			class="banner"
+			class:compact
 			class:flash={summary.unacked > 0}
 			style="--worst: {worstColor}"
 			{onclick}
 			aria-live={summary.unacked > 0 ? 'assertive' : 'polite'}
+			title={compact ? `${summary.unacked} unacknowledged` : undefined}
+			aria-label={compact ? `${summary.unacked} unacknowledged alarms` : undefined}
 		>
 			{@render content()}
 		</a>
@@ -91,10 +103,13 @@
 		<button
 			type="button"
 			class="banner"
+			class:compact
 			class:flash={summary.unacked > 0}
 			style="--worst: {worstColor}"
 			{onclick}
 			aria-live={summary.unacked > 0 ? 'assertive' : 'polite'}
+			title={compact ? `${summary.unacked} unacknowledged` : undefined}
+			aria-label={compact ? `${summary.unacked} unacknowledged alarms` : undefined}
 		>
 			{@render content()}
 		</button>
@@ -208,5 +223,40 @@
 		flex: none;
 		font-size: var(--font-2xs);
 		color: var(--muted);
+	}
+
+	/* ── compact ──────────────────────────────────────────────────────────
+	   Content-sized, one line, and it SHRINKS: min-width 0 all the way down
+	   and an ellipsis on the counts, so the header it sits in never grows a
+	   horizontal scrollbar. 44 px tall — it is a tap target on a phone. */
+	.banner.compact {
+		width: auto;
+		min-width: 0;
+		max-width: 100%;
+		min-height: 44px;
+		gap: var(--space-2);
+		padding: var(--space-1) var(--space-2);
+		overflow: hidden;
+	}
+	.banner.compact .unacked {
+		flex: none;
+		font-size: var(--font-xs);
+	}
+	.banner.compact .unacked b {
+		font-size: var(--font-sm);
+	}
+	.banner.compact .counts {
+		flex: 0 1 auto;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		display: block;
+	}
+	.banner.compact .count {
+		margin-right: var(--space-2);
+	}
+	.banner.compact .count:last-child {
+		margin-right: 0;
 	}
 </style>

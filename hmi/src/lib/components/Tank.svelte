@@ -111,6 +111,13 @@
 </svg>
 
 <style>
+	/* `width` stays a real attribute, but the rendered box also shrinks under
+	   a narrower parent instead of overflowing it. */
+	svg {
+		max-width: 100%;
+		height: auto;
+	}
+
 	/* Data may arrive at 10 Hz; short linear transitions turn the steps into
 	   continuous motion. */
 	.geo {

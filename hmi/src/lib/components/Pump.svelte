@@ -54,6 +54,12 @@
 </svg>
 
 <style>
+	/* `width` stays a real attribute, but the rendered box also shrinks under
+	   a narrower parent instead of overflowing it. */
+	svg {
+		max-width: 100%;
+		height: auto;
+	}
 	.spin {
 		animation: rot var(--period) linear infinite;
 	}

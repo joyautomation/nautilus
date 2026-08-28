@@ -138,4 +138,17 @@
 			animation-duration: 1.4s;
 		}
 	}
+
+	/* Coarse pointer (touch/pen): grow to the minimum hit area. Desktop
+	   density (mouse/trackpad) is untouched. */
+	@media (pointer: coarse) {
+		.nhbtn.md,
+		.nhbtn.sm {
+			min-height: var(--tap);
+		}
+		.nhbtn.icon-only.md,
+		.nhbtn.icon-only.sm {
+			min-width: var(--tap);
+		}
+	}
 </style>

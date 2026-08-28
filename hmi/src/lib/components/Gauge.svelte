@@ -111,6 +111,14 @@
 </svg>
 
 <style>
+	/* `width` stays a real attribute (it drives the gauge's own coordinate
+	   math via `thickness`/box sizing), but the rendered box also shrinks
+	   under a narrower parent instead of overflowing it. */
+	svg {
+		max-width: 100%;
+		height: auto;
+	}
+
 	/* Smooth updates. `d` interpolates in Chromium when the path structure is
 	   unchanged; elsewhere it falls back to stepping. */
 	.val {

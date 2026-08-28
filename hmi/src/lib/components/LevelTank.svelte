@@ -111,10 +111,16 @@
 		flex-direction: column;
 		align-items: center;
 		gap: 2px;
+		/* `width` stays a real attribute (the inline style above, and the svg's
+		   own attr/viewBox), but the rendered box also shrinks under a
+		   narrower parent instead of overflowing it. */
+		max-width: 100%;
 	}
 
 	svg {
 		display: block;
+		max-width: 100%;
+		height: auto;
 		font-family: var(--font);
 	}
 

@@ -38,7 +38,8 @@
 		href,
 		fontFamily = 'var(--font)',
 		fontSize = 'var(--font-sm)',
-		color = 'var(--ink)'
+		color = 'var(--ink)',
+		minScale = 0
 	}: {
 		/** The screen: its design-time canvas, and the nodes on it. */
 		spec: CanvasSpec;
@@ -72,43 +73,63 @@
 		fontFamily?: string;
 		fontSize?: string;
 		color?: string;
+		/**
+		 * Floor under which the canvas stops shrinking. When the scale that
+		 * would otherwise fill the frame (or, under `fit`, the fit-constrained
+		 * scale) drops below this, the canvas is drawn at `minScale` instead
+		 * and the frame becomes a scrollable viewport onto it rather than
+		 * rendering illegibly small (e.g. chart text at a fraction of its
+		 * design size on a narrow phone). `fit`'s own letterboxing semantics
+		 * are unchanged — this only kicks in once fit's own scale would go
+		 * lower than the floor. `0` (the default) is exactly today's
+		 * behaviour: no floor, the canvas always shrinks to fit.
+		 */
+		minScale?: number;
 	} = $props();
 
 	let frameW = $state(0);
 	let frameH = $state(0);
 
-	const scale = $derived.by(() => {
+	const rawScale = $derived.by(() => {
 		if (!frameW) return 1;
 		const byW = frameW / spec.width;
 		if (!fit || !frameH) return byW;
 		return Math.min(byW, frameH / spec.height);
 	});
+	const floored = $derived(minScale > 0 && frameW > 0 && rawScale < minScale);
+	const scale = $derived(floored ? minScale : rawScale);
 </script>
 
-<div class="frame" bind:clientWidth={frameW} bind:clientHeight={frameH}>
+<div class="frame" class:scrolling={floored} bind:clientWidth={frameW} bind:clientHeight={frameH}>
 	<div
-		class="canvas"
-		style:width={`${spec.width}px`}
-		style:height={`${spec.height}px`}
-		style:transform={`scale(${scale})`}
-		style:margin-bottom={`${spec.height * (scale - 1)}px`}
-		style:font-family={fontFamily}
-		style:font-size={fontSize}
-		style:color
+		class="scroll-host"
+		style:width={floored ? `${spec.width * scale}px` : undefined}
+		style:height={floored ? `${spec.height * scale}px` : undefined}
 	>
-		{#each spec.items as item, i (i)}
-			<CanvasBox
-				node={item}
-				{registry}
-				{leaf}
-				{containers}
-				{graphics}
-				{stretch}
-				{visible}
-				{style}
-				{href}
-			/>
-		{/each}
+		<div
+			class="canvas"
+			style:width={`${spec.width}px`}
+			style:height={`${spec.height}px`}
+			style:transform={`scale(${scale})`}
+			style:margin-bottom={`${spec.height * (scale - 1)}px`}
+			style:font-family={fontFamily}
+			style:font-size={fontSize}
+			style:color
+		>
+			{#each spec.items as item, i (i)}
+				<CanvasBox
+					node={item}
+					{registry}
+					{leaf}
+					{containers}
+					{graphics}
+					{stretch}
+					{visible}
+					{style}
+					{href}
+				/>
+			{/each}
+		</div>
 	</div>
 </div>
 
@@ -116,6 +137,24 @@
 	.frame {
 		width: 100%;
 		overflow: hidden;
+	}
+
+	/* Only entered when `minScale` has floored the render — see the prop's
+	   doc comment above. Lets the frame scroll to the real (floored) size
+	   instead of clipping it. */
+	.frame.scrolling {
+		overflow: auto;
+		touch-action: pan-x pan-y pinch-zoom;
+		-webkit-overflow-scrolling: touch;
+	}
+
+	/* A plain, unsized wrapper except in the floored state, where its
+	   explicit width/height (set inline, above) give the frame a real
+	   scrollable content box — rather than relying on the UA to fold the
+	   transform-scaled `.canvas` below into the frame's scrollable overflow,
+	   which is inconsistent across browsers (notably iOS Safari). */
+	.scroll-host {
+		display: block;
 	}
 
 	.canvas {

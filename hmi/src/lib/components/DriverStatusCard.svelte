@@ -120,7 +120,10 @@
 	.title {
 		display: flex;
 		align-items: baseline;
-		gap: 8px;
+		/* The kind chip drops under the name when the two will not share a
+		   line — on a phone the name is the fact, the chip is the footnote. */
+		flex-wrap: wrap;
+		gap: 2px 8px;
 		min-width: 0;
 	}
 	.name {
@@ -128,9 +131,15 @@
 		font-size: var(--font-md);
 		color: var(--ink);
 		font-family: var(--mono);
+		/* Two lines, then ellipsis. A one-line name on a 390 px screen was
+		   "Pomo…" next to a chip and a pill at full width. */
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
 		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
+		overflow-wrap: anywhere;
+		min-width: 0;
 	}
 	.kind {
 		font-size: var(--font-2xs);
@@ -179,8 +188,9 @@
 		border: 1px solid var(--border);
 		border-radius: 6px;
 		padding: 6px 8px;
-		/* Fixed height + non-wrapping value: a metric whose text changes each
-		   frame (a freshness time) must never reflow the card. */
+		/* Floored height + non-wrapping VALUE: a metric whose text changes
+		   each frame (a freshness time) must never reflow the card. The
+		   caption is static, so it may wrap once and set the height. */
 		min-height: 44px;
 		min-width: 0;
 		display: flex;
@@ -204,9 +214,8 @@
 		color: var(--muted);
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
+		line-height: 1.25;
+		overflow-wrap: anywhere;
 	}
 	.devices {
 		display: grid;

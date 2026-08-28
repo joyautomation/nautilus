@@ -70,4 +70,12 @@
 		outline: 2px solid var(--s1, #3987e5);
 		outline-offset: -2px;
 	}
+
+	/* Coarse pointer (touch/pen): grow to the minimum hit area. Desktop
+	   density (mouse/trackpad) is untouched. */
+	@media (pointer: coarse) {
+		button {
+			min-height: var(--tap);
+		}
+	}
 </style>

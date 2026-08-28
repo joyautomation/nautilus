@@ -132,4 +132,13 @@
 	.err {
 		color: var(--crit);
 	}
+
+	/* Coarse pointer (touch/pen): grow the clickable row to the minimum hit
+	   area. Desktop density (mouse/trackpad) is untouched. The read-only
+	   (non-clickable) rendering is display only and is left alone. */
+	@media (pointer: coarse) {
+		.clickable {
+			min-height: var(--tap);
+		}
+	}
 </style>

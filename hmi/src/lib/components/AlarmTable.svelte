@@ -144,12 +144,26 @@
 	});
 	const pageRows = $derived(sorted.slice(page * pageSize, page * pageSize + pageSize));
 
+	const SORT_LABEL: Record<SortKey, string> = {
+		activeTime: 'Active time',
+		priority: 'Priority',
+		state: 'State',
+		name: 'Label',
+		ackTime: 'Ack time'
+	};
+
+	/** Newest first for time; otherwise ascending — the header's first-click
+	 * direction, shared with the stacked layout's sort select. */
+	function setSort(key: SortKey) {
+		sortKey = key;
+		sortDir = key === 'activeTime' ? 'desc' : 'asc';
+	}
 	function sortBy(key: SortKey) {
 		if (sortKey === key) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
-		else {
-			sortKey = key;
-			sortDir = key === 'activeTime' ? 'desc' : 'asc';
-		}
+		else setSort(key);
+	}
+	function flipSort() {
+		sortDir = sortDir === 'asc' ? 'desc' : 'asc';
 	}
 
 	function toggleOne(id: string, ev: Event) {
@@ -272,6 +286,27 @@
 				<input type="checkbox" bind:checked={showShelved} />
 				show shelved
 			</label>
+			<!-- Only shown in the stacked layout, where the sortable header is
+			     out of sight — same `sortKey`/`sortDir` the header drives. -->
+			<div class="sortctl" role="group" aria-label="Sort">
+				<select
+					value={sortKey}
+					onchange={(e) => setSort(e.currentTarget.value as SortKey)}
+					aria-label="Sort by"
+				>
+					{#each Object.keys(SORT_LABEL) as k (k)}
+						<option value={k}>{SORT_LABEL[k as SortKey]}</option>
+					{/each}
+				</select>
+				<button
+					type="button"
+					class="dir"
+					onclick={flipSort}
+					aria-label={sortDir === 'desc' ? 'Sorted descending — switch to ascending' : 'Sorted ascending — switch to descending'}
+				>
+					{sortDir === 'desc' ? '▾' : '▴'}
+				</button>
+			</div>
 		</div>
 
 		<div class="actions">
@@ -335,7 +370,9 @@
 								: undefined
 							: undefined}
 					>
-						<td class="sel"><input type="checkbox" checked={selected.has(a.id)} onclick={(e) => toggleOne(a.id, e)} /></td>
+						<td class="sel" onclick={(e) => toggleOne(a.id, e)}>
+							<input type="checkbox" checked={selected.has(a.id)} onclick={(e) => toggleOne(a.id, e)} />
+						</td>
 						<td class="col-priority">
 							<span class="prio" style="--c: {PRIORITY_META[a.priority].color}" title={PRIORITY_META[a.priority].label}>
 								<span aria-hidden="true">{PRIORITY_META[a.priority].glyph}</span>
@@ -352,8 +389,8 @@
 						</td>
 						<td class="col-label" title={a.tag}>{a.name}</td>
 						<td class="col-pipeline">{a.class ?? ([a.site, a.area].filter(Boolean).join(' / ') || '—')}</td>
-						<td class="col-ack num">{fmtTime(a.ackMs)}</td>
-						<td class="col-ackuser">{a.ackBy ?? '—'}</td>
+						<td class="col-ack num" class:blank={!a.ackMs} data-label="Acked">{fmtTime(a.ackMs)}</td>
+						<td class="col-ackuser" class:blank={!a.ackBy} data-label="by">{a.ackBy ?? '—'}</td>
 					</tr>
 				{:else}
 					<tr class="empty"><td colspan="8">No alarms match these filters.</td></tr>
@@ -404,11 +441,47 @@
 		justify-content: space-between;
 		gap: var(--space-2);
 	}
+	/* Both toolbar rows wrap, and every control may shrink below its
+	   intrinsic width — three selects fit a phone in one or two rows and
+	   nothing runs past the container. */
+	.toolbar > * {
+		min-width: 0;
+		max-width: 100%;
+	}
 	.filters {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-2);
+		flex: 1 1 auto;
+	}
+	.filters > select {
+		min-width: 0;
+		flex: 1 1 7.5rem;
+	}
+	.filters > input[type='search'] {
+		min-width: 0;
+		flex: 1 1 10rem;
+	}
+	.sortctl {
+		display: none; /* stacked layout only — see the container query */
+		align-items: center;
+		gap: var(--space-1);
+		flex: 1 1 auto;
+	}
+	.sortctl select {
+		min-width: 0;
+		flex: 1 1 auto;
+	}
+	.sortctl .dir {
+		background: var(--surface-2);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		color: var(--ink-2);
+		font: inherit;
+		font-size: var(--font-xs);
+		padding: var(--space-1) var(--space-2);
+		cursor: pointer;
 	}
 	select,
 	input[type='search'],
@@ -431,6 +504,7 @@
 	}
 	.actions {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-2);
 	}
@@ -515,28 +589,33 @@
 		color: var(--muted);
 		padding: var(--space-6) var(--space-2);
 	}
-	.sel {
+	/* Column widths ride on the header cells (the column follows) so the
+	   stacked layout below can lay the body cells out freely. */
+	th.sel {
 		width: 32px;
 	}
-	.col-priority {
+	td.sel {
+		cursor: default;
+	}
+	th.col-priority {
 		width: 70px;
 	}
-	.col-active {
+	th.col-active {
 		width: 140px;
 	}
-	.col-state {
+	th.col-state {
 		width: 160px;
 	}
-	.col-label {
+	th.col-label {
 		min-width: 220px;
 	}
-	.col-pipeline {
+	th.col-pipeline {
 		width: 160px;
 	}
-	.col-ack {
+	th.col-ack {
 		width: 150px;
 	}
-	.col-ackuser {
+	th.col-ackuser {
 		width: 120px;
 	}
 	.num {
@@ -584,5 +663,119 @@
 	.field select,
 	.field input {
 		width: 100%;
+	}
+
+	/* ── stacked cards ──────────────────────────────────────────────────
+	   Below 640px of the component's OWN width (a container query, so a
+	   table in a narrow panel on a wide screen stacks too) the 8-column
+	   grid gives way to one card per row. Same DOM — the `<tr>`/`<td>`
+	   are what a11y and the tests expect — the row becomes a grid and each
+	   cell takes its place by column class:
+	     line 1  priority glyph · label (wraps, never ellipsised) · select
+	     line 2  state · active age · pipeline (site/area)
+	     line 3  ack time · ack user — only when there is one
+	   The header is hidden from sight, not from the tree (its sort buttons
+	   stay reachable); the toolbar's `.sortctl` shows in its stead. */
+	.wrap {
+		container-type: inline-size;
+	}
+	@container (max-width: 640px) {
+		.sortctl {
+			display: inline-flex;
+		}
+		.tablescroll {
+			position: relative;
+			overflow: hidden;
+		}
+		table,
+		tbody {
+			display: block;
+		}
+		thead {
+			display: block;
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			overflow: hidden;
+			clip-path: inset(50%);
+			white-space: nowrap;
+		}
+		tbody tr {
+			display: grid;
+			grid-template-columns: max-content minmax(0, 1fr) max-content fit-content(40%);
+			gap: var(--space-1) var(--space-2);
+			align-items: center;
+			padding: var(--space-2);
+			border-bottom: 1px solid var(--border);
+		}
+		tbody td {
+			display: block;
+			padding: 0;
+			border: 0;
+			min-width: 0;
+		}
+		td.col-priority {
+			grid-area: 1 / 1;
+		}
+		td.col-label {
+			grid-area: 1 / 2 / 2 / 4;
+			color: var(--ink);
+			font-weight: 600;
+			white-space: normal;
+			overflow-wrap: anywhere;
+		}
+		td.sel {
+			grid-area: 1 / 4;
+			justify-self: end;
+			display: grid;
+			place-items: center;
+		}
+		td.col-state {
+			grid-area: 2 / 1 / 3 / 3;
+		}
+		td.col-active {
+			grid-area: 2 / 3;
+		}
+		td.col-pipeline {
+			grid-area: 2 / 4;
+			justify-self: end;
+			text-align: right;
+			color: var(--muted);
+			white-space: normal;
+			overflow-wrap: anywhere;
+		}
+		td.col-ack {
+			grid-area: 3 / 1 / 4 / 3;
+		}
+		td.col-ackuser {
+			grid-area: 3 / 3 / 4 / 5;
+		}
+		td.col-ack::before,
+		td.col-ackuser::before {
+			content: attr(data-label) ' ';
+			font-family: var(--font);
+			color: var(--muted);
+		}
+		td.blank {
+			display: none;
+		}
+		tr.empty,
+		tr.empty td {
+			display: block;
+		}
+	}
+
+	/* Coarse pointer (touch/pen): the select cell grows to the minimum hit
+	   area — the cell, not just the 13px box, toggles the row. Desktop
+	   density (mouse/trackpad) is untouched. */
+	@media (pointer: coarse) {
+		td.sel {
+			min-width: var(--tap);
+			min-height: var(--tap);
+		}
+		.sortctl .dir {
+			min-height: var(--tap);
+			min-width: var(--tap);
+		}
 	}
 </style>

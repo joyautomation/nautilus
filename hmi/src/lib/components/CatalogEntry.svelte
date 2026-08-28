@@ -182,7 +182,7 @@
 	}
 	.variants {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(var(--min-col), 1fr));
+		grid-template-columns: repeat(auto-fill, minmax(min(var(--min-col), 100%), 1fr));
 		gap: var(--space-3);
 		margin-top: var(--space-4);
 	}

@@ -131,6 +131,9 @@ export { default as DropdownMenu } from './components/DropdownMenu.svelte';
 export type { MenuItem, MenuBarMenu } from './menu.js';
 export { default as Nav } from './components/Nav.svelte';
 export { default as Modal } from './components/Modal.svelte';
+// The edge panel a dock becomes below the shell's breakpoint: left/right/
+// bottom, native <dialog> underneath (focus trap, Escape, top layer).
+export { default as Drawer } from './components/Drawer.svelte';
 export { default as Toast } from './components/Toast.svelte';
 export { toast } from './toast.svelte.js';
 export type { ToastEntry } from './toast.svelte.js';

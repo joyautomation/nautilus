@@ -61,6 +61,11 @@
 	--space-6: 1.95rem;
 	--space-8: 2.6rem;
 
+	/* Minimum hit area under a coarse pointer (touch/pen) — WCAG's 44px
+	   target size. Desktop density (mouse/trackpad) is untouched; components
+	   pull this in only inside an `@media (pointer: coarse)` block. */
+	--tap: 44px;
+
 	/* ── radii ─────────────────────────────────────────────────────────────
 	   --radius on panels/cards/faceplates; --radius-sm on controls and chips;
 	   --radius-pill on state chips. */

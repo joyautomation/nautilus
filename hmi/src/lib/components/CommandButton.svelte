@@ -112,4 +112,12 @@
 		font-size: 9px;
 		color: var(--crit);
 	}
+
+	/* Coarse pointer (touch/pen): grow to the minimum hit area. Desktop
+	   density (mouse/trackpad) is untouched. */
+	@media (pointer: coarse) {
+		.cmd {
+			min-height: var(--tap);
+		}
+	}
 </style>

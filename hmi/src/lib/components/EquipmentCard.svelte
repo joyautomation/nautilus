@@ -119,17 +119,53 @@
 	// own status colour, so the outline and the border never disagree.
 	const interactive = $derived(!!onopen || !!href);
 	const tagName = $derived(href ? 'a' : onopen ? 'button' : 'div');
+	// Known up front rather than read off `.sym:empty`, because the compact
+	// grid below has to decide whether it HAS a symbol column before anything
+	// is laid out — an empty `auto` track still costs its column gap.
+	const hasSym = $derived(!!symbol || !!src);
+	// The second row of the compact layout: everything after the primary
+	// value. Rendered as a real element only when there is something to put
+	// in it, so a card with one value and no chips is one row tall.
+	const hasRest = $derived(values.length > 1 || chips.length > 0 || st !== 'good');
 </script>
+
+<!-- The values, one snippet so the primary and the rest can sit in different
+     boxes without being written twice. -->
+{#snippet fact(v: CardValue, i: number)}
+	{@const vs = valueStatus({
+		present: v.present ?? present,
+		quality: v.quality ?? quality,
+		simulated: v.simulated ?? simulated
+	})}
+	<ValueText
+		label={v.label}
+		value={v.value}
+		units={v.units}
+		precision={v.precision ?? 1}
+		quality={v.quality ?? quality}
+		simulated={v.simulated ?? simulated}
+		present={v.present ?? present}
+		ageMs={v.ageMs}
+		size={i === 0 ? 'lg' : 'sm'}
+		showBadge={vs !== st}
+	/>
+{/snippet}
 
 <!-- The click handler only ever exists when `tagName` resolved to `button` or
      `a` (see `tagName` above), so the element is always natively interactive —
      which the compiler cannot see through a dynamic tag. -->
+<!-- `.host` is the container the compact layout queries. The card cannot be
+     its own query container — a container query matches ancestors only — so
+     one neutral wrapper stands in, sized by whatever grid the consumer put
+     the card in. -->
+<div class="host">
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <svelte:element
 	this={tagName}
 	class="eqcard {st}"
 	class:interactive
 	class:fault
+	class:nosym={!hasSym}
 	style="--eq-sim: {meta.token}"
 	href={href || undefined}
 	type={tagName === 'button' ? 'button' : undefined}
@@ -175,34 +211,32 @@
 		     row. A per-value badge repeating it is noise; a per-value badge that
 		     DIFFERS from it is the whole point, so only that one is drawn. -->
 		<div class="facts">
-			{#each values.slice(0, 3) as v, i (`${i}:${v.label ?? ''}`)}
-				{@const vs = valueStatus({
-					present: v.present ?? present,
-					quality: v.quality ?? quality,
-					simulated: v.simulated ?? simulated
-				})}
-				<ValueText
-					label={v.label}
-					value={v.value}
-					units={v.units}
-					precision={v.precision ?? 1}
-					quality={v.quality ?? quality}
-					simulated={v.simulated ?? simulated}
-					present={v.present ?? present}
-					ageMs={v.ageMs}
-					size={i === 0 ? 'lg' : 'sm'}
-					showBadge={vs !== st}
-				/>
-			{/each}
+			{#if values.length}
+				{@render fact(values[0], 0)}
+			{:else if stateText}
+				<!-- Compact layout only (hidden otherwise): a card with no
+				     value puts its state word where the value would go, so a
+				     motor or valve still reads at a glance once the symbol's
+				     own state line has been trimmed away. -->
+				<span class="statev">{stateText}</span>
+			{/if}
 
-			{#if chips.length || st !== 'good'}
-				<div class="chips">
-					{#if st !== 'good'}
-						<StateChip kind={st} label={meta.label} title={meta.description} />
-					{/if}
-					{#each chips as c, i (`${i}:${c.label}`)}
-						<StateChip label={c.label} kind={c.kind ?? 'neutral'} title={c.title} />
+			{#if hasRest}
+				<div class="rest">
+					{#each values.slice(1, 3) as v, i (`${i + 1}:${v.label ?? ''}`)}
+						{@render fact(v, i + 1)}
 					{/each}
+
+					{#if chips.length || st !== 'good'}
+						<div class="chips">
+							{#if st !== 'good'}
+								<StateChip kind={st} label={meta.label} title={meta.description} />
+							{/if}
+							{#each chips as c, i (`${i}:${c.label}`)}
+								<StateChip label={c.label} kind={c.kind ?? 'neutral'} title={c.title} />
+							{/each}
+						</div>
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -215,8 +249,18 @@
 		<div class="extra">{@render extra()}</div>
 	{/if}
 </svelte:element>
+</div>
 
 <style>
+	.host {
+		/* The query container. `display: grid` so the card fills whatever
+		   height the consumer's grid row gives the host, exactly as it did
+		   when the card WAS the grid item. */
+		container-type: inline-size;
+		display: grid;
+		min-width: 0;
+		width: 100%;
+	}
 	.eqcard {
 		/* Fluid near the source's 295×210 card, floored so three values and a
 		   chip row still fit at the narrowest column the grid will make. */
@@ -331,14 +375,138 @@
 		min-width: 0;
 		flex: 1;
 	}
+	/* Everything after the primary value. Transparent to the wide layout —
+	   its children lay out as `.facts` items — and the second row of the
+	   compact one. */
+	.rest {
+		display: contents;
+	}
 	.chips {
 		display: flex;
 		flex-wrap: wrap;
 		gap: var(--space-1);
 		min-width: 0;
 	}
+	.statev {
+		display: none;
+	}
 	.spark,
 	.extra {
 		min-width: 0;
+	}
+
+	/* THE COMPACT CARD. Below 420 px of container — one card per row on a
+	   phone — the stacked card is mostly air: a title, a floor of 168 px, and
+	   one number centred in what is left. So it becomes one dense row —
+	   symbol · eyebrow+name · primary value — with the chips on a wrapping
+	   line beneath, the whole card still one tap target no shorter than
+	   `--tap`. The wide layout above is untouched: this block only re-places
+	   the same boxes. `.body` and `.facts` step out of the way
+	   (`display: contents`) so the card's grid can reach the pieces. */
+	@container (max-width: 420px) {
+		.eqcard {
+			display: grid;
+			grid-template-columns: [sym] auto [main] minmax(0, 1fr) [val] auto;
+			grid-template-rows: auto auto;
+			column-gap: var(--space-2);
+			row-gap: 0;
+			align-items: center;
+			min-height: var(--tap);
+			padding: var(--space-2) var(--space-3);
+		}
+		.eqcard.nosym {
+			grid-template-columns: [main] minmax(0, 1fr) [val] auto;
+		}
+		.body,
+		.facts {
+			display: contents;
+		}
+
+		.sym {
+			grid-column: sym;
+			grid-row: 1 / -1;
+		}
+		/* The symbol is trimmed to its picture: the card already has a bell
+		   and a title, and the state word moves to the value column. The
+		   picture's own box (inline `width`/`height` from `EquipSymbol`) is
+		   capped, not restyled, so it keeps its contain-fit. */
+		.sym :global(.eq .state),
+		.sym :global(.eq .bell) {
+			display: none;
+		}
+		.sym :global(.eq .img) {
+			max-width: 48px;
+			max-height: 48px;
+		}
+		.sym :global(.eq .chips) {
+			gap: 3px;
+		}
+		.sym :global(.eq .chip) {
+			width: 20px;
+			height: 20px;
+			font-size: var(--font-2xs);
+		}
+
+		.head {
+			grid-column: main;
+			grid-row: 1;
+			align-items: center;
+		}
+		.desc {
+			/* One line here; the name is the identity, the eyebrow the hint. */
+			display: block;
+			-webkit-line-clamp: unset;
+			line-clamp: unset;
+			white-space: nowrap;
+			text-overflow: ellipsis;
+		}
+
+		/* The primary value, or the state word standing in for it, sits at
+		   the row's right in the value column. */
+		.facts > :global(.v),
+		.statev {
+			grid-column: val;
+			grid-row: 1;
+			justify-self: end;
+			align-items: flex-end;
+			text-align: right;
+		}
+		.statev {
+			display: block;
+			font-family: var(--mono);
+			font-size: var(--font-sm);
+			font-weight: var(--weight-numeric);
+			color: var(--ink);
+			white-space: nowrap;
+		}
+
+		/* Row two: secondary values inline (eyebrow · number) and the chips,
+		   one wrapping line under the title. */
+		.rest {
+			display: flex;
+			flex-wrap: wrap;
+			align-items: center;
+			gap: var(--space-1) var(--space-2);
+			grid-column: main / -1;
+			grid-row: 2;
+			margin-top: var(--space-1);
+			min-width: 0;
+		}
+		.rest > :global(.v) {
+			flex-direction: row;
+			align-items: baseline;
+			gap: var(--space-1);
+		}
+		.chips {
+			display: contents;
+		}
+
+		.spark {
+			display: none;
+		}
+		.extra {
+			grid-column: 1 / -1;
+			grid-row: 3;
+		}
 	}
 </style>

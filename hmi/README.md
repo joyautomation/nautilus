@@ -235,6 +235,11 @@ one of your components — the kit owns the geometry, you own what the nodes mea
 `['coord', 'flex']`) recurse into `node.c`, and `graphics` names the types that FILL their box
 instead of centring a component in it. `visible` / `style` / `href` are where live bindings land.
 
+By default the whole schematic keeps shrinking to fit — legible on a desktop monitor, illegible on
+a phone. `minScale` puts a floor under that: once the fitted scale would drop below it, the canvas
+renders at `minScale` instead and the frame becomes a scrollable viewport onto it (`fit`'s own
+letterboxing is unchanged; the floor only applies once fit's own scale would go lower still).
+
 **`EquipSymbol`** — a raster symbol with SCADA state chrome: the run wash, the simulate/comm-fail
 outline, the fault bell and the A/M · R/L chips. Legacy symbol libraries are PNGs with wildly
 different aspect ratios, so pass **both** `width` and `height` and the picture is `contain`-fit
@@ -543,7 +548,7 @@ reduced-motion via `data-motion`.
 | `ScaleBar` | `value`, `min`, `max`, `hh`/`h`/`l`/`ll` (`null` = limit disabled), `bands`, `orientation`, `thickness`, `length`, `showScale`, `indicatorColor`, `label`, `units`, `precision` |
 | `EquipSymbol` | `src`, `width`, `height`, `running`, `auto`, `remote`, `fault`, `simulate`, `comFail`, `stateText`, `label`, `mirror`, `showChips`, `onclick`, `extra` |
 | `StatusRow` | `state: 'on' \| 'off' \| 'fault' \| 'unknown'`, `label`, `auto`/`remote` (`null` hides the chip), `wide`, `valueFault`, `height`, `title`, `value` (snippet) |
-| `CoordinateCanvas` | `spec: { width, height, items }`, `registry`, `leaf` (snippet), `fit`, `containers`, `graphics`, `stretch`, `visible`, `style`, `href`, `fontFamily`, `fontSize`, `color` |
+| `CoordinateCanvas` | `spec: { width, height, items }`, `registry`, `leaf` (snippet), `fit`, `minScale` (floor below which the frame scrolls instead of shrinking further; default `0` = no floor), `containers`, `graphics`, `stretch`, `visible`, `style`, `href`, `fontFamily`, `fontSize`, `color` |
 | `TankGlyph` | `x`, `y`, `w`, `h`, `level` (0–1, `undefined` = no data), `fill`, `marks`, `id`, `corner`, `value`, `sub` — SVG `<g>` |
 | `PumpGlyph` | `cx`, `cy`, `r`, `label`, `value`, `running`, `nodata`, `disabled` — SVG `<g>` |
 | `ValveGlyph` | `cx`, `cy`, `rx`, `ry`, `label`, `value`, `open`, `nodata` — SVG `<g>` |

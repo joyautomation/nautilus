@@ -277,6 +277,7 @@
 		width: min(560px, calc(100vw - var(--space-4)));
 		height: min(88vh, 760px);
 		max-height: calc(100vh - var(--space-4));
+		max-height: calc(100dvh - var(--space-4));
 	}
 	.modal.md {
 		width: min(460px, calc(100vw - var(--space-4)));
