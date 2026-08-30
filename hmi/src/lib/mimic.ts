@@ -443,3 +443,406 @@ export function resolveBindings(
 	}
 	return out;
 }
+
+// ── attaching free pipe ends to ports ───────────────────────────────────────
+// A document that arrives with its pipes as bare polylines — transcribed from
+// another HMI, traced off a drawing, auto-generated from a P&ID export — has
+// ends that merely COME CLOSE to the equipment they mean. This turns "close"
+// into an anchor, the same gesture the mimic editor makes when a dragged pipe
+// end snaps to a port (PORT_SNAP), done once over a whole doc as data.
+
+/** One free pipe end the attach pass could not anchor, and the best it found. */
+export interface FreePipeEnd {
+	pipe: string;
+	end: 'from' | 'to';
+	x: number;
+	y: number;
+	/** The nearest resolved port anywhere on the doc, however far — evidence
+	 * for choosing a tolerance, or for a tee that is nobody's port. */
+	nearest?: { equip: string; port: string; dist: number };
+}
+
+export interface AttachReport {
+	attached: number;
+	free: FreePipeEnd[];
+}
+
+export interface AttachOptions {
+	/** Farthest a free end may sit from a port and still anchor to it, in
+	 * canvas units — one number for every end, or a function of the end for
+	 * a caller that knows some ends deserve less reach (a vertex several
+	 * pipes share is a junction, and should only anchor when it is ON the
+	 * port, not merely near one). */
+	tolerance: number | ((end: Pick<FreePipeEnd, 'pipe' | 'end' | 'x' | 'y'>) => number);
+	/** The rendered size of an equipment box. `MimicEquipment` carries only
+	 * `width` — both renderers measure the height from the DOM, which a pure
+	 * function cannot — so a caller that knows better supplies it. Default:
+	 * `props.height` when set, else the width (a square). */
+	measure?: (eq: MimicEquipment) => { width: number; height: number };
+}
+
+function defaultMeasure(eq: MimicEquipment): { width: number; height: number } {
+	const width = eq.width ?? 0;
+	const h = eq.props?.height;
+	return { width, height: typeof h === 'number' ? h : width };
+}
+
+interface PortHit {
+	equip: string;
+	port: string;
+	dist: number;
+	at: ResolvedPort;
+}
+
+/** Anchor every free pipe end that lies within `tolerance` of a port.
+ *
+ * Pure: returns a new doc, the input is untouched. For each pipe end that is
+ * a stored point (no `from`/`to` on that side), the nearest port across all
+ * equipment — instance `ports` else BUILTIN_PORTS, via resolveRuntimePorts()
+ * — is looked up; within tolerance the stored end point is REPLACED by the
+ * anchor (so `points` keeps only interior vertices, per MimicPipe's
+ * contract). Both ends of one pipe may attach; a pipe whose two points both
+ * attach ends up with `points: []`. Both ends of one pipe are never anchored
+ * to the SAME port (that would be a pipe of no length): the closer end takes
+ * it and the other is reported free.
+ *
+ * So the run stays straight, the vertex now adjacent to the anchor is moved
+ * onto the port's exit axis when the port has a direction: for `up`/`down`
+ * the vertex takes the port's x, for `left`/`right` its y. Only an INTERIOR
+ * vertex is moved — an end that stayed free is left where it was (it may be
+ * a tee shared with other pipes, and shifting it would open the joint), so
+ * that pipe gets its small jog at the free end, where orthogonalPoints()
+ * puts it. A vertex that lands on the anchor itself or on the PORT_STUB end
+ * is dropped as redundant.
+ *
+ * Each end is decided against the ORIGINAL geometry, before any vertex is
+ * moved, so attaching one end never changes what the other end snaps to. */
+export function attachPipeEnds(doc: MimicDoc, opts: AttachOptions): { doc: MimicDoc; report: AttachReport } {
+	const measure = opts.measure ?? defaultMeasure;
+	const tolerance = (pipe: string, end: 'from' | 'to', pt: [number, number]) =>
+		typeof opts.tolerance === 'function' ? opts.tolerance({ pipe, end, x: pt[0], y: pt[1] }) : opts.tolerance;
+	// Every resolved port on the canvas, once — through portAbsolute(), the
+	// same arithmetic makeGetPort() gives both renderers, so an anchor written
+	// here lands where <Mimic> and the editor will draw it.
+	const all: { equip: string; port: string; at: ResolvedPort }[] = [];
+	for (const eq of doc.equipment ?? []) {
+		const { width, height } = measure(eq);
+		const box: EquipmentBox = { x: eq.x, y: eq.y, w: width, h: height };
+		for (const p of resolveRuntimePorts(eq)) all.push({ equip: eq.id, port: p.name, at: portAbsolute(box, p) });
+	}
+
+	const nearest = (x: number, y: number): PortHit | undefined => {
+		let best: PortHit | undefined;
+		for (const c of all) {
+			const dist = Math.hypot(c.at.x - x, c.at.y - y);
+			if (!best || dist < best.dist) best = { equip: c.equip, port: c.port, dist, at: c.at };
+		}
+		return best;
+	};
+
+	const report: AttachReport = { attached: 0, free: [] };
+	const free = (pipe: string, end: 'from' | 'to', pt: [number, number], hit: PortHit | undefined) =>
+		report.free.push({
+			pipe,
+			end,
+			x: pt[0],
+			y: pt[1],
+			...(hit ? { nearest: { equip: hit.equip, port: hit.port, dist: hit.dist } } : {})
+		});
+
+	const pipes = (doc.pipes ?? []).map((pipe): MimicPipe => {
+		const pts = pipe.points.map((p) => [p[0], p[1]] as [number, number]);
+		// Decide both ends first, against the untouched points.
+		const decide = (end: 'from' | 'to'): PortHit | undefined => {
+			if (pipe[end]) return undefined; // already anchored
+			const pt = end === 'from' ? pts[0] : pts[pts.length - 1];
+			if (!pt) return undefined; // nothing stored on that side
+			const hit = nearest(pt[0], pt[1]);
+			if (hit && hit.dist <= tolerance(pipe.id, end, pt)) return hit;
+			free(pipe.id, end, pt, hit);
+			return undefined;
+		};
+		let fromHit = decide('from');
+		// A single stored point can serve only one end.
+		let toHit = pts.length > 1 || !fromHit ? decide('to') : undefined;
+		if (fromHit && toHit && fromHit.equip === toHit.equip && fromHit.port === toHit.port) {
+			if (toHit.dist < fromHit.dist) {
+				free(pipe.id, 'from', pts[0], fromHit);
+				fromHit = undefined;
+			} else {
+				free(pipe.id, 'to', pts[pts.length - 1], toHit);
+				toHit = undefined;
+			}
+		}
+		if (!fromHit && !toHit) return { ...pipe, points: pts };
+
+		let out = pts;
+		let from = pipe.from;
+		let to = pipe.to;
+		if (fromHit) {
+			from = { equip: fromHit.equip, port: fromHit.port };
+			out = out.slice(1);
+			report.attached++;
+		}
+		if (toHit) {
+			to = { equip: toHit.equip, port: toHit.port };
+			out = out.slice(0, -1);
+			report.attached++;
+		}
+		// Straighten: the vertex next to each new anchor goes onto its axis —
+		// only when that vertex is interior (the other end is anchored too, or
+		// there is more than one vertex left between an anchor and a free end).
+		const interior = (i: number) => {
+			if (i < 0 || i >= out.length) return false;
+			if (i === 0 && !from) return false;
+			if (i === out.length - 1 && !to) return false;
+			return true;
+		};
+		const straighten = (hit: ResolvedPort, i: number) => {
+			if (!interior(i) || !hit.dir) return;
+			const v = out[i];
+			if (hit.dir === 'up' || hit.dir === 'down') v[0] = hit.x;
+			else v[1] = hit.y;
+			const [dx, dy] = DIR_VECTOR[hit.dir];
+			const onAnchor = v[0] === hit.x && v[1] === hit.y;
+			const onStub = v[0] === hit.x + dx * PORT_STUB && v[1] === hit.y + dy * PORT_STUB;
+			if (onAnchor || onStub) out.splice(i, 1);
+		};
+		if (fromHit) straighten(fromHit.at, 0);
+		if (toHit) straighten(toHit.at, out.length - 1);
+
+		const next: MimicPipe = { ...pipe, points: out };
+		if (from) next.from = from;
+		if (to) next.to = to;
+		return next;
+	});
+
+	return { doc: { ...doc, pipes }, report };
+}
+
+// ── piping the nozzles nobody drew a pipe to ─────────────────────────────────
+// The complement of attachPipeEnds(): that pass takes pipe ends that come
+// close to a port and anchors them; this one takes PORTS that no pipe comes
+// close to and runs a pipe from each to the nearest existing run. It is how
+// a transcribed screen whose pumps merely sit between two header rails
+// (nothing drawn to a flange — the picture implies the connection) becomes a
+// doc in which every nozzle is piped.
+
+export interface ConnectOptions {
+	/** Farthest a port may be from an existing run and still get a connector,
+	 * in canvas units. */
+	reach: number;
+	/** See AttachOptions.measure. */
+	measure?: (eq: MimicEquipment) => { width: number; height: number };
+	/** Which of an equipment's ports to pipe, in PRIORITY order — the first
+	 * named gets first pick of target runs (see the distinct-target rule).
+	 * Default: every port that has an exit direction, in list order.
+	 * Undefined from the callback means the default for that equipment. */
+	ports?: (eq: MimicEquipment) => string[] | undefined;
+}
+
+export interface ConnectedPort {
+	equip: string;
+	port: string;
+	/** The new pipe's id. */
+	pipe: string;
+	/** The existing pipe the connector runs to. */
+	target: string;
+	dist: number;
+	/** `ray`: the run lay straight ahead in the port's own direction; `nearest`:
+	 * it was off-axis, so the connector turns a corner. */
+	via: 'ray' | 'nearest';
+}
+
+export interface SkippedPort {
+	equip: string;
+	port: string;
+	reason: string;
+	nearest?: { pipe: string; dist: number };
+}
+
+export interface ConnectReport {
+	connected: ConnectedPort[];
+	skipped: SkippedPort[];
+}
+
+/** Ray from `p` in `d` against segment `a`→`b`: the distance along the ray
+ * to the hit, or undefined. A ray that merely grazes a parallel segment does
+ * not count — a nozzle sitting ON a run's line is not a nozzle that needs a
+ * connector to it. */
+function rayHit(
+	p: [number, number],
+	d: [number, number],
+	a: [number, number],
+	b: [number, number]
+): { t: number; at: [number, number] } | undefined {
+	const ex = b[0] - a[0];
+	const ey = b[1] - a[1];
+	const den = d[0] * ey - d[1] * ex;
+	if (Math.abs(den) < 1e-9) return undefined; // parallel
+	const wx = a[0] - p[0];
+	const wy = a[1] - p[1];
+	const t = (wx * ey - wy * ex) / den; // along the ray
+	const u = (wx * d[1] - wy * d[0]) / den; // along the segment
+	if (t < 0 || u < 0 || u > 1) return undefined;
+	return { t, at: [p[0] + d[0] * t, p[1] + d[1] * t] };
+}
+
+/** The point of segment `a`→`b` nearest `p`, and how far it is. */
+function nearestOn(
+	p: [number, number],
+	a: [number, number],
+	b: [number, number]
+): { dist: number; at: [number, number] } {
+	const ex = b[0] - a[0];
+	const ey = b[1] - a[1];
+	const len2 = ex * ex + ey * ey;
+	const u = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((p[0] - a[0]) * ex + (p[1] - a[1]) * ey) / len2));
+	const at: [number, number] = [a[0] + ex * u, a[1] + ey * u];
+	return { dist: Math.hypot(at[0] - p[0], at[1] - p[1]), at };
+}
+
+/** Run a pipe from every unpiped, directional port to the nearest existing
+ * run within `reach`.
+ *
+ * Pure: returns a new doc. For each equipment, each port the `ports`
+ * callback names (default: every port with a resolved direction, in list
+ * order) is checked in turn; ports that share one position are ONE nozzle
+ * (a `suction`/`in` alias pair gets one connector, under the first name),
+ * and a nozzle some pipe already anchors to — under any of its names — is
+ * left alone.
+ *
+ * Target choice, in order:
+ *  - a run the port's own ray (its `dir`) hits within reach beats any run
+ *    that is merely nearby, so a nozzle facing a header runs straight to it;
+ *    otherwise the nearest point on any run within reach, and the connector
+ *    turns a corner on the way (orthogonal routing);
+ *  - runs that already anchor to THIS equipment are never targets (a pipe
+ *    from a pump's discharge is not where its suction goes);
+ *  - the ports of one equipment prefer DISTINCT targets: a port only settles
+ *    for a run an earlier port of the same equipment chose when no other run
+ *    is within reach (a pump with both nozzles on one header is wrong).
+ *
+ * A port whose exit stub (PORT_STUB in `dir`) would leave the canvas or land
+ * inside ANOTHER equipment's box is skipped and reported — the pipe would
+ * have to start through a neighbour.
+ *
+ * The connector is `{from: {equip, port}, points: [hit], routing:
+ * 'orthogonal'}` — anchored at the nozzle, its other end a stored vertex ON
+ * the target run: a tee, in the same convention a transcribed doc uses for
+ * every junction (several pipes ending at one shared point; the kit has no
+ * junction object). Ids are `${equip}-${port}`. */
+export function connectPorts(doc: MimicDoc, opts: ConnectOptions): { doc: MimicDoc; report: ConnectReport } {
+	const measure = opts.measure ?? defaultMeasure;
+	const equipment = doc.equipment ?? [];
+	const boxes = new Map<string, EquipmentBox>();
+	const portsOf = new Map<string, MimicPort[]>();
+	for (const eq of equipment) {
+		const { width, height } = measure(eq);
+		boxes.set(eq.id, { x: eq.x, y: eq.y, w: width, h: height });
+		portsOf.set(eq.id, resolveRuntimePorts(eq));
+	}
+	const getPort = makeGetPort(
+		(id) => boxes.get(id),
+		(id) => portsOf.get(id)
+	);
+
+	const pipes = doc.pipes ?? [];
+	const routed = pipes.map((p) => ({ pipe: p, pts: routedPoints(p, getPort) }));
+	const key = (x: number, y: number) => `${x},${y}`;
+
+	// Which nozzle POSITIONS on each equipment already have a pipe.
+	const anchored = new Map<string, Set<string>>();
+	const anchorsTo = new Map<string, Set<string>>(); // pipe id -> equipment ids
+	for (const p of pipes) {
+		for (const a of [p.from, p.to]) {
+			if (!a) continue;
+			const r = getPort(a.equip, a.port);
+			if (!r) continue;
+			if (!anchored.has(a.equip)) anchored.set(a.equip, new Set());
+			anchored.get(a.equip)!.add(key(r.x, r.y));
+			if (!anchorsTo.has(p.id)) anchorsTo.set(p.id, new Set());
+			anchorsTo.get(p.id)!.add(a.equip);
+		}
+	}
+
+	const inBox = (b: EquipmentBox, x: number, y: number) => x > b.x && x < b.x + b.w && y > b.y && y < b.y + b.h;
+	const report: ConnectReport = { connected: [], skipped: [] };
+	const added: MimicPipe[] = [];
+
+	for (const eq of equipment) {
+		const ports = portsOf.get(eq.id) ?? [];
+		const names = opts.ports?.(eq) ?? ports.filter((p) => resolvedPortDir(p)).map((p) => p.name);
+		const done = new Set(anchored.get(eq.id) ?? []);
+		const used = new Set<string>();
+		const box = boxes.get(eq.id)!;
+		for (const name of names) {
+			const port = ports.find((p) => p.name === name);
+			if (!port) {
+				report.skipped.push({ equip: eq.id, port: name, reason: 'no such port' });
+				continue;
+			}
+			const at = portAbsolute(box, port);
+			const k = key(at.x, at.y);
+			if (done.has(k)) continue; // piped already, or an alias of one just piped
+			done.add(k);
+			if (!at.dir) {
+				report.skipped.push({ equip: eq.id, port: name, reason: 'no exit direction' });
+				continue;
+			}
+			const [dx, dy] = DIR_VECTOR[at.dir];
+			const p: [number, number] = [at.x, at.y];
+			const stub: [number, number] = [at.x + dx * PORT_STUB, at.y + dy * PORT_STUB];
+			if (stub[0] < 0 || stub[1] < 0 || stub[0] > doc.canvas.width || stub[1] > doc.canvas.height) {
+				report.skipped.push({ equip: eq.id, port: name, reason: 'stub leaves the canvas' });
+				continue;
+			}
+			const blocker = equipment.find(
+				(o) => o.id !== eq.id && !inBox(boxes.get(o.id)!, at.x, at.y) && inBox(boxes.get(o.id)!, stub[0], stub[1])
+			);
+			if (blocker) {
+				report.skipped.push({ equip: eq.id, port: name, reason: `stub lands inside ${blocker.id}` });
+				continue;
+			}
+
+			// Best target among a set of runs: ray first, then nearest.
+			const search = (skipUsed: boolean) => {
+				let ray: { pipe: string; t: number; at: [number, number] } | undefined;
+				let near: { pipe: string; dist: number; at: [number, number] } | undefined;
+				for (const { pipe, pts } of routed) {
+					if (anchorsTo.get(pipe.id)?.has(eq.id)) continue;
+					if (skipUsed && used.has(pipe.id)) continue;
+					for (let i = 1; i < pts.length; i++) {
+						const h = rayHit(p, [dx, dy], pts[i - 1], pts[i]);
+						if (h && h.t <= opts.reach && (!ray || h.t < ray.t)) ray = { pipe: pipe.id, ...h };
+						const n = nearestOn(p, pts[i - 1], pts[i]);
+						if (!near || n.dist < near.dist) near = { pipe: pipe.id, ...n };
+					}
+				}
+				return { ray, near };
+			};
+			let { ray, near } = search(true);
+			if (!ray && !(near && near.dist <= opts.reach)) ({ ray, near } = search(false));
+			const hit = ray
+				? { pipe: ray.pipe, dist: ray.t, at: ray.at, via: 'ray' as const }
+				: near && near.dist <= opts.reach
+					? { pipe: near.pipe, dist: near.dist, at: near.at, via: 'nearest' as const }
+					: undefined;
+			if (!hit) {
+				report.skipped.push({
+					equip: eq.id,
+					port: name,
+					reason: 'no run within reach',
+					...(near ? { nearest: { pipe: near.pipe, dist: near.dist } } : {})
+				});
+				continue;
+			}
+			const id = `${eq.id}-${name}`;
+			added.push({ id, from: { equip: eq.id, port: name }, points: [hit.at], routing: 'orthogonal' });
+			used.add(hit.pipe);
+			report.connected.push({ equip: eq.id, port: name, pipe: id, target: hit.pipe, dist: hit.dist, via: hit.via });
+		}
+	}
+
+	return { doc: { ...doc, pipes: [...pipes, ...added] }, report };
+}

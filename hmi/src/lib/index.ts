@@ -212,7 +212,9 @@ export {
 	portAbsolute,
 	makeGetPort,
 	BUILTIN_PORTS,
-	PORT_STUB
+	PORT_STUB,
+	attachPipeEnds,
+	connectPorts
 } from './mimic.js';
 export type {
 	MimicDoc,
@@ -225,7 +227,14 @@ export type {
 	EquipmentBox,
 	ResolvedPort,
 	GetPort,
-	PipeEndpoints
+	PipeEndpoints,
+	AttachOptions,
+	AttachReport,
+	FreePipeEnd,
+	ConnectOptions,
+	ConnectReport,
+	ConnectedPort,
+	SkippedPort
 } from './mimic.js';
 export type {
 	TrendPoint,
