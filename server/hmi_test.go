@@ -121,3 +121,58 @@ func TestHMIBuiltinAssetsMoveWithDashboard(t *testing.T) {
 		t.Fatalf("GET /_nautilus/assets/logo.svg = %d, want 200 (the embedded dashboard asset)", rec.Code)
 	}
 }
+
+// The stale-tab regression: an embedded FS has no mod times, so before the
+// explicit cache policy every file went out "Last-Modified: 1979" and a
+// browser's If-Modified-Since revalidation was answered 304 forever — a tab
+// open across a redeploy never saw the new build.
+func TestHMICachePolicy(t *testing.T) {
+	hmi := testHMI()
+	hmi["_app/immutable/entry/app.test.js"] = &fstest.MapFile{Data: []byte("js")}
+	h := New(newTestRuntime(t), Options{HMI: hmi}).Handler()
+
+	// index.html (and the SPA fallback): no-cache, a content ETag, and NO
+	// Last-Modified — the hash is the only validator.
+	for _, p := range []string{"/", "/tanks/101"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", p, nil))
+		if cc := rec.Header().Get("Cache-Control"); cc != "no-cache" {
+			t.Fatalf("%s Cache-Control = %q, want no-cache", p, cc)
+		}
+		if rec.Header().Get("Etag") == "" {
+			t.Fatalf("%s: no ETag", p)
+		}
+		if lm := rec.Header().Get("Last-Modified"); lm != "" {
+			t.Fatalf("%s Last-Modified = %q, want none (zero mod time)", p, lm)
+		}
+	}
+
+	// A correct ETag revalidates to 304…
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	etag := rec.Header().Get("Etag")
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("If-None-Match", etag)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 304 {
+		t.Fatalf("If-None-Match %s: code %d, want 304", etag, rec.Code)
+	}
+
+	// …but If-Modified-Since alone — what a tab cached before the redeploy
+	// sends — must NOT 304: the mod time is not a validator here.
+	req = httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("If-Modified-Since", "Fri, 30 Nov 1979 00:00:00 GMT")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("If-Modified-Since-only revalidation: code %d, want 200", rec.Code)
+	}
+
+	// Content-hashed files are immutable for a year.
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/_app/immutable/entry/app.test.js", nil))
+	if cc := rec.Header().Get("Cache-Control"); cc != "public, max-age=31536000, immutable" {
+		t.Fatalf("immutable asset Cache-Control = %q", cc)
+	}
+}

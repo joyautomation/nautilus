@@ -51,9 +51,12 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httputil"
@@ -692,8 +695,65 @@ func (s *Server) handleNautilusIndex(w http.ResponseWriter, r *http.Request) {
 // other SPA router) resolves a deep link like "/tanks/101" itself instead
 // of getting a 404 from this server, which has no idea such a route
 // exists.
+// Caching: an embedded FS has no mod times, so http.FileServer's default
+// stamps every file "Fri, 30 Nov 1979" — browsers heuristically cache such
+// HTML for years and their If-Modified-Since revalidations 304 forever,
+// which strands every open tab on the build BEFORE a redeploy (found live:
+// a reviewed fix was deployed and the operator's browser kept rendering
+// the old bundle). So the split every SPA build wants is made explicit
+// here: content-hashed files (SvelteKit's _app/immutable/) are immutable
+// for a year, and EVERYTHING else — index.html above all — is no-cache
+// with a content ETag, served with a zero mod time so the only validator
+// is the hash and a stale tab's next navigation always fetches the new
+// HTML.
 func (s *Server) handleHMI() http.Handler {
 	fsrv := http.FileServer(http.FS(s.hmi))
+	var mu sync.Mutex
+	etags := map[string]string{}
+	etagFor := func(lookup string) string {
+		mu.Lock()
+		defer mu.Unlock()
+		if e, ok := etags[lookup]; ok {
+			return e
+		}
+		b, err := fs.ReadFile(s.hmi, lookup)
+		if err != nil {
+			return ""
+		}
+		sum := sha256.Sum256(b)
+		e := `"` + hex.EncodeToString(sum[:8]) + `"`
+		etags[lookup] = e
+		return e
+	}
+	serve := func(w http.ResponseWriter, r *http.Request, lookup string) {
+		if strings.HasPrefix(lookup, "_app/immutable/") {
+			// The name carries the content hash; the bytes can never
+			// change under it. The 1979 Last-Modified is harmless here.
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			fsrv.ServeHTTP(w, r)
+			return
+		}
+		f, err := s.hmi.Open(lookup)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		defer f.Close()
+		rs, ok := f.(io.ReadSeeker)
+		if !ok {
+			// An fs.FS that can't seek can't range-serve; embed.FS can.
+			fsrv.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-cache")
+		if e := etagFor(lookup); e != "" {
+			w.Header().Set("Etag", e)
+		}
+		// Zero mod time: ServeContent then neither sends Last-Modified nor
+		// honours If-Modified-Since — the ETag is the only validator, so a
+		// redeploy (new hash) can never be answered with a stale 304.
+		http.ServeContent(w, r, path.Base(lookup), time.Time{}, rs)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/")
 		lookup := path.Clean(p)
@@ -704,12 +764,12 @@ func (s *Server) handleHMI() http.Handler {
 			lookup = path.Join(lookup, "index.html")
 		}
 		if st, err := fs.Stat(s.hmi, lookup); err == nil && !st.IsDir() {
-			fsrv.ServeHTTP(w, r)
+			serve(w, r, lookup)
 			return
 		}
-		r2 := r.Clone(r.Context())
-		r2.URL.Path = "/"
-		fsrv.ServeHTTP(w, r2)
+		// SPA fallback: the bundle's own index.html answers unknown paths
+		// (client-side routing), with the same no-cache/ETag policy.
+		serve(w, r, "index.html")
 	})
 }
 
