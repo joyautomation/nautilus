@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"io/fs"
 	"net/http/httptest"
 	"testing"
 	"testing/fstest"
@@ -119,6 +120,44 @@ func TestHMIBuiltinAssetsMoveWithDashboard(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/_nautilus/assets/logo.svg", nil))
 	if rec.Code != 200 {
 		t.Fatalf("GET /_nautilus/assets/logo.svg = %d, want 200 (the embedded dashboard asset)", rec.Code)
+	}
+}
+
+// A controller built by `nautilus build` serves the HMI from an archive
+// whose files are NOT seekable — fstest.MapFS's are, which is exactly how
+// the ReadSeeker-dependent draft of the cache policy passed its tests while
+// 404ing every deep link in production. This FS strips Seek.
+type noSeekFS struct{ inner fs.FS }
+
+type noSeekFile struct{ inner fs.File }
+
+func (f noSeekFS) Open(name string) (fs.File, error) {
+	file, err := f.inner.Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return noSeekFile{file}, nil
+}
+func (f noSeekFile) Stat() (fs.FileInfo, error) { return f.inner.Stat() }
+func (f noSeekFile) Read(b []byte) (int, error) { return f.inner.Read(b) }
+func (f noSeekFile) Close() error               { return f.inner.Close() }
+
+// Deep links and the cache policy must survive a non-seekable HMI FS.
+func TestHMINonSeekableFS(t *testing.T) {
+	h := New(newTestRuntime(t), Options{HMI: noSeekFS{testHMI()}}).Handler()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/tanks/101", nil))
+	if rec.Code != 200 {
+		t.Fatalf("deep link on non-seekable FS = %d, want 200", rec.Code)
+	}
+	if !bytes.Contains(rec.Body.Bytes(), []byte("hmi shell")) {
+		t.Fatalf("deep link body = %q, want the SPA shell", rec.Body.String())
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-cache" {
+		t.Fatalf("Cache-Control = %q, want no-cache", cc)
+	}
+	if rec.Header().Get("Etag") == "" {
+		t.Fatal("no ETag on non-seekable FS")
 	}
 }
 

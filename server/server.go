@@ -50,13 +50,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
-	"io"
 	"io/fs"
 	"net/http"
 	"net/http/httputil"
@@ -733,16 +733,16 @@ func (s *Server) handleHMI() http.Handler {
 			fsrv.ServeHTTP(w, r)
 			return
 		}
-		f, err := s.hmi.Open(lookup)
+		// ReadFile, not Open: the HMI FS is whatever the build embedded,
+		// and a bundle's files need not be seekable (a controller built by
+		// `nautilus build` serves them from an archive — an earlier draft
+		// that fell back to http.FileServer for non-seekable files served
+		// the request's ORIGINAL path there and 404ed every deep link).
+		// These files are small; a bytes.Reader gives ServeContent the
+		// seeking it wants for ranges.
+		b, err := fs.ReadFile(s.hmi, lookup)
 		if err != nil {
 			http.NotFound(w, r)
-			return
-		}
-		defer f.Close()
-		rs, ok := f.(io.ReadSeeker)
-		if !ok {
-			// An fs.FS that can't seek can't range-serve; embed.FS can.
-			fsrv.ServeHTTP(w, r)
 			return
 		}
 		w.Header().Set("Cache-Control", "no-cache")
@@ -752,7 +752,7 @@ func (s *Server) handleHMI() http.Handler {
 		// Zero mod time: ServeContent then neither sends Last-Modified nor
 		// honours If-Modified-Since — the ETag is the only validator, so a
 		// redeploy (new hash) can never be answered with a stale 304.
-		http.ServeContent(w, r, path.Base(lookup), time.Time{}, rs)
+		http.ServeContent(w, r, path.Base(lookup), time.Time{}, bytes.NewReader(b))
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/")
