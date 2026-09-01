@@ -3,6 +3,18 @@
 	// marches along the path; speed scales with rate (0–1).
 	// Render inside an <svg> element.
 	//
+	// JUNCTIONS NEED LAYERED RENDERING. A pipe is a wall stroke with a
+	// background-coloured bore stroke over it; render pipes one-at-a-time and
+	// every tee is a lie — the later pipe's bore punches a slot across the
+	// earlier pipe's wall, and a network reads as lines crossing with notches
+	// instead of runs merging. The `layer` prop exists so a caller drawing
+	// MANY pipes (Mimic, the editor canvas) can paint every wall, then every
+	// bore, then every flow overlay: walls union into one casing, bores into
+	// one continuous waterway, and a branch whose end sits on another run's
+	// centreline merges seamlessly (the 10/6 widths and round caps keep its
+	// cap inside the crossing run's bands). Unset = all three layers, the
+	// right thing for a standalone pipe.
+	//
 	// THREE STATES, NOT TWO. A process line is either flowing, standing still,
 	// or UNKNOWN — and the third one is not a slower version of the second.
 	// `dead` is the pipe whose meter the runtime does not publish (a panel off
@@ -17,7 +29,8 @@
 		flowing = false,
 		rate = 1,
 		color = 'var(--s1, #3987e5)',
-		dead = false
+		dead = false,
+		layer = undefined
 	}: {
 		d: string;
 		flowing?: boolean;
@@ -25,6 +38,8 @@
 		color?: string;
 		/** No data for this run — dashed, dimmed, never animated. */
 		dead?: boolean;
+		/** Paint only this stratum (see the junction note above). */
+		layer?: 'wall' | 'bore' | 'flow';
 	} = $props();
 
 	// Quantize rate into quarter-steps: a continuously varying duration would
@@ -34,23 +49,27 @@
 </script>
 
 <g class:dead>
-	<path
-		class="wall"
-		{d}
-		fill="none"
-		stroke="var(--pipe-wall, var(--axis, #383835))"
-		stroke-width="10"
-		stroke-linecap="round"
-	/>
-	<path
-		class="bore"
-		{d}
-		fill="none"
-		stroke="var(--pipe-bore, var(--bg, #0d0d0d))"
-		stroke-width="6"
-		stroke-linecap="round"
-	/>
-	{#if period > 0}
+	{#if !layer || layer === 'wall'}
+		<path
+			class="wall"
+			{d}
+			fill="none"
+			stroke="var(--pipe-wall, var(--axis, #383835))"
+			stroke-width="10"
+			stroke-linecap="round"
+		/>
+	{/if}
+	{#if !layer || layer === 'bore'}
+		<path
+			class="bore"
+			{d}
+			fill="none"
+			stroke="var(--pipe-bore, var(--bg, #0d0d0d))"
+			stroke-width="6"
+			stroke-linecap="round"
+		/>
+	{/if}
+	{#if (!layer || layer === 'flow') && period > 0}
 		<path
 			class="flow"
 			style="--period: {period}s"

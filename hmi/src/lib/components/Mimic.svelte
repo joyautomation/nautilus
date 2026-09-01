@@ -131,6 +131,9 @@
 		void boxVersion;
 		return (doc.pipes ?? []).map((p) => ({ pipe: p, d: pointsToPath(routedPoints(p, getPort)) }));
 	});
+
+	/** Paint order for the pipe network — see the junction note in Pipe.svelte. */
+	const PIPE_LAYERS = ['wall', 'bore', 'flow'] as const;
 </script>
 
 <div class="mimic" class:scrolling={floored} bind:this={host} style="height: {doc.canvas.height * scale}px">
@@ -150,13 +153,21 @@
 				viewBox="0 0 {doc.canvas.width} {doc.canvas.height}"
 				aria-hidden="true"
 			>
-				{#each pipePaths as { pipe: p, d } (p.id)}
-					<Pipe
-						{d}
-						{...(p.color !== undefined ? { color: p.color } : {})}
-						{...(p.props ?? {})}
-						{...resolveBindings(p.bind, tags)}
-					/>
+				<!-- Layered, not per-pipe: every wall, then every bore, then
+				     every flow overlay, so runs UNION at junctions — a branch's
+				     bore merges into the main's instead of the later pipe's
+				     background-coloured bore punching a slot across the earlier
+				     pipe's wall. See the junction note in Pipe.svelte. -->
+				{#each PIPE_LAYERS as layer (layer)}
+					{#each pipePaths as { pipe: p, d } (p.id)}
+						<Pipe
+							{d}
+							{...(p.color !== undefined ? { color: p.color } : {})}
+							{...(p.props ?? {})}
+							{...resolveBindings(p.bind, tags)}
+							{layer}
+						/>
+					{/each}
 				{/each}
 			</svg>
 
