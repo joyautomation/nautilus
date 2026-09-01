@@ -32,7 +32,8 @@ lang/ir      typed IR + tree-walking virtual machine (pure stdlib)
 io/          Driver seam — bring your own bus (Modbus, EtherNet/IP, OPC-UA, sim)
 eip/         EtherNet/IP driver for Allen-Bradley Logix: pure-Go CIP stack,
              tag browse + UDT import codegen, polling io.Driver, Logix emulator
-server/      tag API over HTTP: JSON snapshot, SSE stream, tag writes
+server/      tag API over HTTP: JSON snapshot, SSE stream, tag writes, alarms
+alarm/       ISA-18.2 alarms: rules over UDT members, ack/shelve, journal
 cmd/nautilus the developer CLI: `new` (scaffold) · `check` (CI compile) · `lsp`
 hmi/         SvelteKit digital-twin component kit + realtime SSE client
 tools/vscode-iec/   VS Code extension: syntax, diagnostics, go-to-def, live values
@@ -47,6 +48,7 @@ examples/heated-tank/   a complete controller built on the libraries
 | `retain.Store` | where retained memory persists — file and k8s ConfigMap ship in `retain/` |
 | `runtime.Coordinator` | redundancy / leader election — a k8s Lease elector ships in `leader/` |
 | `hist.Sink` | where process history is archived — Postgres + `nautilus historian` ship in `hist/` |
+| `alarm.Journal` / `alarm.Notifier` | where alarm events land — a ring, rotated JSONL, and Postgres ship in `alarm/` |
 
 ## Getting started
 
@@ -156,7 +158,10 @@ completion, and **live tag values as pills** next to identifiers in
 - Swap `plant.go` for a real `io.Driver` — Modbus, EtherNet/IP, OPC-UA, your
   bus — when you have hardware. The control logic doesn't change.
 - Add an HMI: `npm install @joyautomation/nautilus-hmi` in a SvelteKit app for
-  SCADA faceplates and an SSE realtime client.
+  SCADA faceplates and an SSE realtime client. Build it with `adapter-static`
+  and a manifest project can serve the build itself — `server: { hmi:
+  ./hmi/build }` — so one binary is the whole deploy; see the tag-model guide's
+  "Serving the HMI from the controller".
 - Ship it like any Go binary: `go build`, deploy. The scaffolded CI gates on
   `go test` and `nautilus check`.
 
@@ -290,6 +295,23 @@ the controller and the matching `nautilus.token` in the editor — reads and
 `nautilus pull` stay open, but tag writes and online edits then require the
 token.
 
+### Alarms
+
+An alarm engine is a small thing when alarms are just tags. Your logic
+already computes the bits — a limit comparison, a fault contact, a `.HH`
+member an edge node published. `alarms:` in the manifest adds the part a
+*person* needs: an ISA-18.2 active list, acknowledge, a shelf that always
+expires, and an append-only journal, served at `/api/alarms*` with a
+counts-only summary on every stream frame. `rules:` generate definitions in
+bulk by matching a UDT type and a member, so a dozen rules cover a fleet's
+thousands of alarms and `nautilus alarms list` prints what they became.
+Acknowledgement is host state — never written back to the edge, persisted
+through `retain`, so a restart or a failover cannot resurrect four hundred
+acked alarms as unacked. Acceptance tests get an `alarms:` key and
+`ack:`/`shelve:` verbs, and the engine reads the runtime's clock, so a
+five-minute on-delay is asserted exactly in virtual time. See
+`examples/alarms` and the [Alarms guide](https://nautilus.joyautomation.com/guides/alarms/).
+
 ### Publishing to MQTT (Sparkplug B)
 
 Expose a controller's tags to a Sparkplug host (Ignition, any Sparkplug-aware
@@ -379,7 +401,8 @@ comes from a write, and there are exactly four writers:
 
 1. a **seed** in the Go composition (initial value, exists from scan one),
 2. a **driver** delivering it as an input each scan,
-3. an **operator** writing it through the HMI or `POST /api/tags`,
+3. an **operator** writing it through the HMI or `POST /api/tags` (a whole
+   tag, or one member of a UDT tag — see below),
 4. the **program itself** assigning it (a coil write creates the tag).
 
 The one rule that bites: **writes create, reads fault.** Reading a tag
@@ -438,6 +461,49 @@ composition (`runtime.Input("testExt")`). The `Inputs` list is a deliberate
 allowlist — a driver can't spray arbitrary names into the store — which is
 why the middle step alone isn't enough.
 
+### Writing a member: `POST /api/tags` with `Tag.Member`
+
+A UDT tag is one value in the store, so an operator writing one of its
+members is a read-modify-write of the whole struct. `POST /api/tags` does
+that for you — `name` takes a dotted member path, to any depth:
+
+```sh
+curl -X POST localhost:8080/api/tags -d '{"name": "P101.START", "value": true}'
+curl -X POST localhost:8080/api/tags -d '{"name": "P101.LVL.CTL1HSP", "value": 60}'
+```
+
+`value` may also be an **object**, to set several members of one tag at
+once: `{"name": "P101", "value": {"START": true, "LVL": {"CTL1HSP": 60}}}`.
+That is a **merge** — members the object doesn't name keep their current
+values. (Deliberately unlike `init:` seeding, which zero-fills what its
+mapping omits: seeding builds a value from nothing, a write edits one the
+plant is already running on.)
+
+The rules:
+
+- **Nothing is created.** An unknown tag, a misspelled member, or a member
+  path into a scalar tag is a `400` with the reason —
+  `tag P101: unknown member STRAT (did you mean START?)` — never a new
+  top-level tag literally named `P101.STRAT`, which no program reads and a
+  Sparkplug edge would publish as a bogus metric.
+- **The leaf keeps its type.** A number lands on a `REAL` member as a REAL
+  and on a `DINT` member as an integer; a mismatch is
+  `tag P101.START: want BOOL, got a number` rather than a silent retype.
+- **The role rule is the root tag's.** A member of a driver-owned `Input`
+  is refused (the driver replaces the whole tag before the next scan, so
+  the edit could not survive one cycle); setpoints, state and outputs are
+  writable — an output being exactly how a Sparkplug host commands an edge
+  node. A struct-typed `Output` needs an `Init(...)` to exist before the
+  first write, like any tag the operator addresses.
+- **`GET /api/meta`** reports `"memberWrites": true`, so an HMI can tell a
+  controller that resolves member paths from an older one that would have
+  swallowed them.
+
+The same paths work everywhere else a tag is addressed: a test manifest's
+`given:`/`expect:`, the dashboard's tag table (expand a writable struct and
+each leaf is editable), and the HMI kit's `rt.writeTag('P101.START', true)`,
+which returns the controller's reason when it refuses.
+
 ## Structuring logic: functions and function blocks
 
 When a program outgrows one file, IEC 61131-3's unit of reuse is the
@@ -447,9 +513,9 @@ the standard here on purpose: there is no vendor-style "call another
 program" — a program is a scheduling unit, a function block is a reuse
 unit, and reaching for reuse means writing a block.
 
-Blocks live in **library files** — `.st` files holding only `TYPE`,
-`FUNCTION`, and `FUNCTION_BLOCK` declarations — and compose ahead of the
-program:
+Blocks live in **library files** — a `.st` file holding only `TYPE`,
+`FUNCTION`, and `FUNCTION_BLOCK` declarations, or a `.ld` / `.fbd` file
+with no `PROGRAM` — and compose ahead of the program:
 
 ```go
 //go:embed blocks.st
@@ -483,11 +549,14 @@ Heater := tic.OUT;
 
 The pieces that make this first-class rather than a convention:
 
-- **Callable from any IEC language.** The same `PI` block instantiates
-  from an FBD diagram (`tic : PI(SP := TempSP, ...)`) exactly like a
-  built-in TON — author blocks once, use them from whichever language
-  fits the logic. (Authoring blocks *in* FBD/LD is on the roadmap;
-  today libraries are ST.)
+- **Callable from any IEC language, and writable in any.** The same `PI`
+  block instantiates from an FBD diagram (`tic : PI(SP := TempSP, ...)`)
+  exactly like a built-in TON. Blocks are also AUTHORED in any language:
+  a `.ld` file with no PROGRAM is a library of ladder subroutines —
+  `FUNCTION_BLOCK`s whose bodies are rungs, with pins and per-instance
+  retained state, which is what IEC gives you instead of a JSR. See
+  [docs/functions.md](docs/functions.md#function-blocks-in-ladder) and
+  [examples/ladder-subroutines](examples/ladder-subroutines).
 - **The tooling composes the same way.** The VS Code extension, the LSP,
   `nautilus check`, and `nautilus pull` all treat sibling library files
   as in-scope for the program, byte-identically to `Libraries` — so
@@ -496,9 +565,19 @@ The pieces that make this first-class rather than a convention:
   across scans, and PLC-style online edits carry it across program swaps
   by name and type — a `PI` keeps its integral through a live logic
   change, like a real controller.
+- **Pins are typed by your model, not just by scalars.** A pin may be a
+  user `TYPE` from the same library — `VAR_INPUT IN : AnalogInput;` —
+  and `VAR_IN_OUT AI : AnalogInput;` binds the caller's variable (a
+  local, a struct field, or a `VAR_EXTERNAL` UDT tag) so the block's
+  writes land back in it. A block whose UDT already names its own
+  inputs and outputs takes one pin instead of thirty. See
+  [docs/functions.md](docs/functions.md#user-function-blocks).
 
 `nautilus new` scaffolds this shape: the PI controller ships in
-`blocks.st`, instantiated from `program.st`.
+`blocks.st`, instantiated from `program.st`. (This one is worth writing
+by hand once to see how it works; for real loops reach for the built-in
+`PID` — anti-windup, bumpless auto/manual, derivative-on-PV filtering,
+diagnostics — see [docs/functions.md](docs/functions.md#pid-closed-loop-control).)
 
 ### More than one program: tasks
 
@@ -555,6 +634,12 @@ Early. This is the extracted, generalized core of a working demo
   state (PID integrals, timers, counters) across by name and type, with
   one-step rollback
 - ✅ `io` — the Driver seam + an in-memory driver
+- ✅ `alarm` — ISA-18.2 alarms declared in the manifest: rules that expand
+  over UDT members, on/off delays, acknowledge and time-boxed shelve
+  (retained across restart and failover), suppression on a dark site, and a
+  journal with ring / rotated-JSONL / Postgres sinks. Five `/api/alarms*`
+  routes, a summary on the SSE frame, and `alarms:` matchers in the
+  acceptance harness
 - ✅ `sparkplug` — MQTT **Sparkplug B edge node**: publishes the tag store to a
   broker (the runtime is the edge node; each io.Driver is a device whose
   DBIRTH/DDEATH tracks its connection health), faithful datatypes, UDTs as
@@ -567,7 +652,9 @@ Early. This is the extracted, generalized core of a working demo
   manifest), write-on-change outputs, and a Logix controller emulator
   (`eip/logixserver`) for hermetic integration tests
 - ✅ `server` — tag API: JSON snapshot, SSE stream, tag writes (HMI + editor),
-  and a gated program API for online edits (`GET/PUT /api/program`, rollback)
+  a gated program API for online edits (`GET/PUT /api/program`, rollback),
+  and (`server.hmi`) serving a built HMI at "/" with SPA fallback, so the
+  controller can be the whole deploy — no separate web server
 - ✅ `tools/vscode-iec/` online edits — Download Program to Controller, diff
   running-vs-workspace, rollback, and a sync-status indicator
 - ✅ `cmd/nautilus` — CLI: interactive project scaffold, headless ST compile
@@ -587,13 +674,15 @@ Early. This is the extracted, generalized core of a working demo
 - ✅ `lang/sfc` — Sequential Function Chart: steps, transitions, and actions
   on the same IR, with LSP support, a graphical VS Code editor, and a batch
   example (`examples/tank-batch-sfc`)
+- ✅ `examples/ladder-subroutines` — `FUNCTION_BLOCK`s written as rungs in a
+  PROGRAM-less `.ld` library, instantiated per pump from a ladder program
+  and callable from ST/FBD — ladder's answer to a JSR
 
 ## Roadmap
 
 - Retained-memory, redundancy, and historian packages behind clean interfaces
 - An HMI starter in `nautilus new`
 - Native-Go function blocks alongside ST (both lowering to the same IR)
-- FUNCTION_BLOCKs authored in FBD/LD (today: ST)
 - Vendor-format import (Studio 5000 L5X, TIA, PLCopen XML) → nautilus
 - A test harness for acceptance tests that gate deploys (from mini-scada)
 

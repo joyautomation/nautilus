@@ -120,6 +120,13 @@ func Typed(name string, role TagRole, typeName string, opts ...TagOpt) TagDef {
 // until something writes it. Inputs and outputs stay unseeded: an input that
 // the driver has not delivered must still fault loudly rather than run on a
 // silent zero, which is the whole reason RoleInput exists.
+//
+// A typed tag's Init may instead be a (possibly nested) map of member name
+// to value — see ir.SeedFromInit — to seed only the members that need a
+// non-zero starting value (a UDT's setpoint fields) while every other
+// member still takes the zero of its own type. An unknown member name or a
+// scalar Init against a struct type is a load error naming the tag and the
+// member path.
 func expandTags(o Options, types map[string]*ir.Type) (Options, error) {
 	if len(o.Tags) == 0 {
 		return o, nil
@@ -145,6 +152,23 @@ func expandTags(o Options, types map[string]*ir.Type) (Options, error) {
 			outputs = append(outputs, d.Name)
 		}
 		switch {
+		case d.Init != nil && d.Type != "":
+			// A typed tag's init is validated and shaped against the
+			// resolved struct (SeedFromInit), rather than stored as the
+			// raw manifest value — a nested map is not one of the kinds
+			// Tags.Set understands, so without this it would silently do
+			// nothing.
+			t, ok := types[d.Type]
+			if !ok {
+				return o, fmt.Errorf("tag %s: no TYPE %s is declared by this project's "+
+					"ST — a tag's type is the one the programs use, so declare it in a "+
+					"library .st file (known: %s)", d.Name, d.Type, knownTypes(types))
+			}
+			v, err := ir.SeedFromInit(t, d.Init)
+			if err != nil {
+				return o, fmt.Errorf("tag %s: %w", d.Name, err)
+			}
+			seed[d.Name] = v
 		case d.Init != nil:
 			seed[d.Name] = d.Init
 		case d.Type != "":

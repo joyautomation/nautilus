@@ -15,6 +15,8 @@ line/rung**, never a silent coercion.
 - [Standard functions](#standard-functions)
 - [Type conversions](#type-conversions)
 - [Standard function blocks](#standard-function-blocks)
+- [User function blocks](#user-function-blocks)
+- [Function blocks in ladder](#function-blocks-in-ladder)
 
 ## How a scan evaluates
 
@@ -50,15 +52,38 @@ A rung is a boolean expression that reads left to right:
 | --- | --- | --- |
 | NO contact | `Tag` | passes power when `Tag` is TRUE |
 | NC contact | `/Tag` | passes power when `Tag` is FALSE |
+| Rising-edge contact | `+Tag` | one scan TRUE on `Tag`'s 0→1 transition (an implicit `R_TRIG`) |
+| Falling-edge contact | `-Tag` | one scan TRUE on `Tag`'s 1→0 transition (an implicit `F_TRIG`) |
 | Parallel branch | `[ a \| b ]` | OR of its legs; legs are series (AND) and nest freely |
 | Function contact | `FN(args)` | passes power when the call yields TRUE — **the function must return BOOL** |
+| Negated function contact | `/FN(args)` | passes power when the call yields FALSE — `/` negates any BOOL-yielding contact term: a plain ref, an accessor chain (`/t1.Q`), or a call (`/GT(a, b)`) |
 | Function block | `inst:TYPE(args)` | power drives the block's power-in pin; power continues from its power-out pin (table [below](#standard-function-blocks)) |
 | Coil | `( Tag )` | `Tag :=` the rung condition, every scan |
 | Set coil | `( S Tag )` | latch: `Tag := Tag OR condition` |
 | Reset coil | `( R Tag )` | unlatch: `Tag := Tag AND NOT condition` |
+| Rising-edge coil | `( P Tag )` | `Tag :=` TRUE for one scan when the rung condition rises (an implicit `R_TRIG`) |
+| Falling-edge coil | `( N Tag )` | `Tag :=` TRUE for one scan when the rung condition falls (an implicit `F_TRIG`) |
 
 Series elements AND together; a rung with only a coil is driven by the
-rail (`TRUE`). Multiple coils on one rung share the same condition.
+rail (`TRUE`). Multiple coils on one rung share the same condition. A
+rung's only output may be a function block instance — no trailing coil is
+required — its own output (`inst.Q`, `inst.DN`, …) is read elsewhere, the
+same way an `inst.Q` fed to a coil would be: `A B t1:TON(PT := T#5S)` is a
+complete, legal rung.
+
+Edge instances (`+Tag`, `-Tag`, and the `P`/`N` coils) are unnamed in the
+text — the compiler derives a stable instance name from the rung name,
+the reference, and the occurrence's position among repeats of the same
+(rung, ref, edge kind) within that rung (contacts key on the watched tag,
+`P`/`N` coils key on the coil's own tag), so the name — and the R_TRIG's
+retained state — survives an unrelated edit elsewhere in the program.
+Two edge contacts on the same tag in one rung are independent instances.
+
+A rung's trailing output zone (coils, or a rung-final function block) must
+be contiguous at the rung's right end — coils ahead of a later function
+block in the same rung aren't supported (`coils must sit at the rung's
+right end`). Split such a rung into one nautilus rung per output leg
+instead.
 
 **The BOOL rule.** Power is boolean, so anything that gates it must yield
 BOOL. Comparisons do: `GT(TempC, 90.0)` is a fine contact. Numeric
@@ -87,6 +112,15 @@ non-BOOL (coils only assign BOOL). `=>` works in ST and FBD calls too.
   `T#2M30S`. TIME values compare with the ordinary comparisons.
 - Mixed numeric arguments promote to REAL; comparing or combining a
   STRING with a number is an error, not a coercion.
+- A `TYPE` is a first-class type: a UDT can be a variable, a tag, a struct
+  field, an array element, a `FUNCTION` argument or return, and a
+  `FUNCTION_BLOCK` pin. Structs nest.
+- Assigning a struct or an array **copies** it. `b := a; b.F := 1` leaves
+  `a.F` alone, and so does a struct passed to a `VAR_INPUT` pin. The one
+  pin that writes back to the caller is `VAR_IN_OUT`, [below](#user-function-blocks).
+- A field or element of a `VAR_EXTERNAL` tag assigns directly —
+  `P101.Running := TRUE`, `Levels[2] := 41.0`. The tag store holds the
+  whole aggregate, so the VM reads it, writes the field, and puts it back.
 
 ## Operators
 
@@ -194,6 +228,7 @@ scans. Outputs read as `inst.Pin` from any language.
 | `F_TRIG` | `CLK` | `Q` | one-scan pulse on the falling edge |
 | `SR` | `S1: BOOL, R: BOOL` | `Q1: BOOL` | set-dominant latch |
 | `RS` | `S: BOOL, R1: BOOL` | `Q1: BOOL` | reset-dominant latch |
+| `PID` | see [below](#pid-closed-loop-control) | see below | closed-loop control — proportional/integral/derivative with anti-windup and bumpless auto/manual |
 
 ### Power pins in ladder
 
@@ -209,11 +244,242 @@ parentheses:
 | `R_TRIG`, `F_TRIG` | `CLK` | `Q` |
 | `SR` | `S1` | `Q1` |
 | `RS` | `S` | `Q1` |
-| user FUNCTION_BLOCK | `IN` | `Q` |
+| user FUNCTION_BLOCK | `EN`, else the first **BOOL** `VAR_INPUT` the call doesn't bind by name | `ENO`, else the first **BOOL** `VAR_OUTPUT` |
 
 Passing the power pin explicitly in the argument list (`t1:TON(IN := x)`)
 is an error — power owns it.
 
+A user block's pins are resolved from the **whole compile** — this file's
+own `FUNCTION_BLOCK`s plus every project library — so the rung lands power
+where the block actually declares it. Two shapes have no pin to use, and
+both are meaningful:
+
+- **No power-in** — every BOOL input is bound by name, or the block has
+  none. The block is still called, unconditionally, so it may only sit on
+  a rung whose condition is the rail itself. A rung with contacts ahead of
+  it is a compile error (`no free BOOL input for the rung's power`): say
+  which pin the gate lands on, or give the block an `EN`.
+- **No power-out** — the block has no BOOL output. Power **passes
+  through** unchanged, so whatever conditioned the block still conditions
+  the coils to its right.
+
+A block whose type nothing in the compile declares falls back to `IN`/`Q`.
+
+### PID: closed-loop control
+
+`PID` is a positional (non-velocity) three-term controller in the IEC/OSCAT
+spirit — no ladder power pin (like `CTUD`, it has no single input that
+means "run"), so instantiate it from ST or an FBD diagram, the way the
+[heated-tank-nogo](../examples/heated-tank-nogo) example wires its own
+hand-rolled PI today.
+
+| Pin | Kind | Type | Meaning |
+| --- | --- | --- | --- |
+| `AUTO` | input | `BOOL` | `TRUE` = closed loop; `FALSE` = manual — `CV` tracks `CV_MAN` and the integral free-wheels for a bumpless return to AUTO |
+| `PV` | input | `REAL` | process value |
+| `SP` | input | `REAL` | setpoint |
+| `KP` | input | `REAL` | proportional gain. **`KP = 0` disables the whole controller**, not just the P term — see below |
+| `KI` | input | `REAL` | integral gain, **repeats/second** (`1/TI`); `0` disables integral action |
+| `KD` | input | `REAL` | derivative gain, **seconds** (`TD`); `0` disables derivative action |
+| `CV_MAN` | input | `REAL` | manual output, used when `AUTO = FALSE` |
+| `CV_MIN` | input | `REAL` | output clamp floor. Default `0` (see below) |
+| `CV_MAX` | input | `REAL` | output clamp ceiling. Default `100` (see below) |
+| `DIRECT` | input | `BOOL` | `FALSE` = reverse acting, `error = SP − PV` (e.g. a heater — raise `CV` when `PV` is low); `TRUE` = direct acting, `error = PV − SP` (e.g. a cooling valve) |
+| `DT` | input | `REAL` | seconds since the last call. Left at `0` (unbound), the block measures elapsed time itself from the scan clock — bind a task's `dt-tag` when one is available, same as any hand-written loop |
+| `DB` | input | `REAL` | deadband on `error` — within `±DB` the P and I terms see zero error (chatter suppression); the D term still sees every `PV` move |
+| `RESET` | input | `BOOL` | `TRUE` zeroes the integral this scan |
+| `CV` | output | `REAL` | controller output, clamped to `[CV_MIN, CV_MAX]` |
+| `ERR` | output | `REAL` | `error`, before the deadband |
+| `SAT_HI`, `SAT_LO` | output | `BOOL` | `TRUE` when `CV` is clamped at its ceiling/floor |
+| `P_TERM`, `I_TERM`, `D_TERM` | output | `REAL` | the three contributions to `CV`, for trending/diagnostics |
+
+**Algorithm.** ISA standard form: `CV = KP·(error + KI·∫error·dt + KD·d(PV)/dt)`.
+The derivative acts on `PV`, not on `error` (so a setpoint step never
+"kicks" `D_TERM` — only a `PV` change does), through a fixed first-order
+filter (time constant `KD/10`) that keeps sensor noise from being
+amplified into a noisy `CV`. Anti-windup is **conditional integration**:
+the integral only accumulates when doing so wouldn't push the unclamped
+output further past a rail it has already reached — cheap, and unlike
+back-calculation it needs no extra tracking-gain to tune. `AUTO`/`MANUAL`
+is bumpless both ways: in `MANUAL`, the integral is continuously
+back-solved every scan so `P_TERM + I_TERM + D_TERM` already equals
+`CV_MAN`, so the instant `AUTO` goes `TRUE`, `CV` continues from exactly
+where `CV_MAN` left off instead of jumping. Leaving `CV_MIN`/`CV_MAX` both
+unbound (they default to `0`) falls back to the IEC `0..100` range, since
+an explicit `0..0` clamp would otherwise pin `CV` at zero.
+
+```iecst
+(* LIC-101: tank level, reverse acting — open the inlet valve more as
+   level falls below setpoint, close it as level rises to setpoint. *)
+VAR lic : PID; END_VAR
+lic(AUTO   := TRUE,     PV     := LevelPct, SP    := LevelSP,
+    KP     := 1.5,      KI     := 0.05,     KD    := 0.0,
+    CV_MAN := 0.0,      CV_MIN := 0.0,      CV_MAX := 100.0,
+    DIRECT := FALSE,    DB     := 0.5,      DT    := ScanDtS);
+InletValve := lic.CV;
+IF lic.SAT_HI THEN InletMaxedAlm := TRUE; END_IF;
+```
+
+## User function blocks
+
 User `FUNCTION`s and `FUNCTION_BLOCK`s written in library files
 participate everywhere the built-ins do; see "Structuring logic" in the
-main README.
+main README. Two things about their pins are worth stating outright,
+because they decide how a block's signature is shaped.
+
+### A pin may be any type, including a user TYPE
+
+`VAR_INPUT`, `VAR_OUTPUT`, `VAR_IN_OUT` and `VAR`
+declarations inside a `FUNCTION_BLOCK` (and a `FUNCTION`'s inputs, locals,
+and return type) resolve against the **whole compile**: this file's `TYPE`
+block plus every project library joined ahead of it. So a block can take
+the UDT its site model already defines, nested structs and all:
+
+```iecst
+FUNCTION_BLOCK FB_Scale
+VAR_INPUT  IN  : AnalogInput; END_VAR   (* a user TYPE, nested structs fine *)
+VAR_OUTPUT OUT : AnalogInput; END_VAR
+OUT       := IN;
+OUT.VALUE := IN.SCALE.LO + (IN.SCALE.HI - IN.SCALE.LO) * INT_TO_REAL(IN.RAW) / 32767.0;
+END_FUNCTION_BLOCK
+```
+
+At the call site the struct output reads like any other pin, one field at a
+time (`s.OUT.VALUE`) or whole (`Scaled := s.OUT`). A pin naming a type
+nothing declares is still a compile error that names the type.
+
+### VAR_IN_OUT is a reference pin
+
+A `VAR_IN_OUT` pin is bound at the call site to a **variable**, and what
+the block writes into it is visible to the caller when the call returns.
+That is what collapses a block whose UDT already names its own inputs and
+outputs from thirty scalar pins to one:
+
+```iecst
+FUNCTION_BLOCK FB_Starter
+VAR_IN_OUT M : Motor; END_VAR
+VAR edge : R_TRIG; END_VAR
+edge(CLK := M.Cmd);
+IF edge.Q THEN M.Starts := M.Starts + 1; END_IF;
+M.Running := M.Cmd;
+END_FUNCTION_BLOCK
+```
+
+```iecst
+VAR_EXTERNAL P101 : Motor; END_VAR
+VAR s : FB_Starter; END_VAR
+s(M := P101);          (* P101 carries the block's writes afterwards *)
+```
+
+The rules, all of them enforced at compile time:
+
+| Rule | Why |
+| --- | --- |
+| Bound with `:=`, like an input — `s(M := P101)` | it *is* an input; the `=>` form binds outputs, and an IN_OUT already writes back |
+| The argument must be **assignable**: a variable, a struct field, an array element, or a `VAR_EXTERNAL` tag | the block writes back to it; an expression has nowhere to write |
+| The argument's type must match the pin **exactly** | a reference cannot convert, so an `INT` variable does not stand in for a `REAL` pin |
+| Every `VAR_IN_OUT` must be bound at **every** call site | there is no default for a reference |
+| The pin's own type may not be a function block | an instance is retained state, not a value; nothing in the language copies one |
+
+Mechanically the pin is copied in before the block's body runs and copied
+back to the same variable after it — the observable behaviour of "by
+reference" for scan code, and what makes a `VAR_IN_OUT` bound to a
+`VAR_EXTERNAL` UDT round-trip through the tag store as one whole-struct
+write. Two calls in one scan bound to different variables each see and
+update their own.
+
+`FUNCTION`s have no `VAR_IN_OUT` (or `VAR_OUTPUT`): an IEC function is a
+single return value, and the compiler says so.
+
+`VAR_IN_OUT` pins are ST/FBD-callable; the FBD and ladder editors expose a
+block's `VAR_INPUT`/`VAR_OUTPUT` pins only, so a block meant to be wired
+graphically should keep its interface on those.
+
+## Function blocks in ladder
+
+A `.ld` file may **define** `FUNCTION_BLOCK`s as well as (or instead of) a
+`PROGRAM`. Each one is an ordinary IEC POU whose body happens to be rungs:
+
+```
+FUNCTION_BLOCK PumpSeq
+VAR_INPUT  Start : BOOL; Stop : BOOL; Level : REAL; StopLevel : REAL; END_VAR
+VAR_OUTPUT Run : BOOL; Warm : BOOL; END_VAR
+VAR        t1 : TON; END_VAR
+LD
+  RUNG seal  [ Start | Run ] /Stop /GE(Level, StopLevel) ( Run )
+  RUNG warm  Run t1:TON(PT := T#5S) ( Warm )
+END_LD
+END_FUNCTION_BLOCK
+```
+
+This is what ladder has instead of a JSR: a subroutine with a real
+interface — pins, not shared tags — and its own retained state **per
+instance**. Two pumps are two instances of one block, each with its own
+seal-in and its own `t1`.
+
+The `VAR_*` sections are ordinary POU declarations, `VAR_IN_OUT` included,
+so a ladder block can take a UDT by reference the same way an ST one does
+(see [VAR_IN_OUT is a reference pin](#var_in_out-is-a-reference-pin)). The
+LD body lowers through the usual single hop — LD → FBD netlist → ST — so
+by the time the compiler sees it, it is an ordinary
+`FUNCTION_BLOCK … END_FUNCTION_BLOCK`. There is no special case anywhere
+downstream.
+
+### Calling one
+
+From ladder, with the rung's power on the block's power-in pin and `=>`
+capturing outputs (the same `inst:TYPE(args)` syntax the standard blocks
+use — see [Power pins in ladder](#power-pins-in-ladder) for where power
+lands on a user block):
+
+```
+RUNG lead
+  P101Start p101:PumpSeq(Stop := P101Stop, Level := LevelPct,
+                         StopLevel := StopLevel,
+                         Run => P101Run, Warm => P101Warm)
+```
+
+From ST or FBD, like any other block:
+
+```iecst
+VAR p : PumpSeq; END_VAR
+p(Start := Cmd, Stop := Halt, Level := LevelPct, StopLevel := 80.0);
+PumpRun := p.Run;
+```
+
+An FB instance a rung declares inline (`t1:TON(...)`) needs no separate
+`VAR` entry — but writing one, as the block above does, is fine and often
+clearer: a declaration in the POU's own header wins, and the rung is then
+a call on it rather than a second declaration.
+
+### A `.ld` library
+
+A `.ld` file with **no PROGRAM** is a project library, exactly like a
+PROGRAM-less `.st` file. Its blocks join the prelude ahead of every task,
+so any program in the project — in any language — can instantiate them.
+`.fbd` libraries work the same way.
+
+**Composition order.** Every `.st` library first, in file-name order, then
+every transpiled `.ld` / `.fbd` library, in file-name order. ST leads
+because that is where a project's `TYPE` declarations live and a graphical
+block's pin may name a UDT. Order never decides whether a call *resolves*:
+the ST front-end registers every `FUNCTION_BLOCK` signature in the composed
+source before it lowers any body, so blocks may reference each other in
+either direction, across files. What order decides is only which
+declaration a duplicate-name collision reports.
+
+Two names, one error: declaring the same `FUNCTION_BLOCK` twice in one
+`.ld` file is refused with the second declaration's line, before anything
+is transpiled.
+
+`examples/ladder-subroutines` is the whole feature in four small files.
+
+### What the editors do
+
+The ladder view renders a file's blocks as rung groups, each under its own
+`FUNCTION_BLOCK` heading with its pins, and every rung in them edits like
+any other. Two limits worth knowing: an edit op addresses a rung by
+**name**, so two rungs with the same name in different POUs of one file
+resolve to the first — name them distinctly; and `addRung` with no `after`
+appends before the file's **first** `END_LD`. The language server analyses
+a multi-POU `.ld` fully, diagnostics landing on the offending rung.

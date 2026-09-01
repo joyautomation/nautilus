@@ -112,7 +112,10 @@ func (n *Node) birthMetric(name string, v ir.Value, ts uint64) (Metric, error) {
 	m.Timestamp = ts
 	n.known[name] = true
 	st := &rbeState{}
-	st.record(v, timeFromMs(ts))
+	// gen 0: a birth has no store generation to hand on (it works from a
+	// plain Snapshot), so the first publish pass after a birth compares
+	// values once — conservative, and births are rare.
+	st.record(v, 0, timeFromMs(ts))
 	n.rbeState[name] = st
 	return m, nil
 }

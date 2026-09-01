@@ -1,0 +1,15 @@
+# alarms/rtu9.yaml — the standalone contacts at RTU 9.
+#
+# A bare YAML list, exactly like a tag file: an entry with a `match:` key
+# is a rule, everything else is one definition. Normally generated from
+# the same source that emits the tag file; committed either way, because
+# the diff is the review. An id declared here and in nautilus.yaml is an
+# error naming both, never an override.
+- id: RTU9_WEL15_INT_001_YA
+  tag: RTU9_WEL15_INT_001_YA
+  name: RTU 9 Well 15 Intrusion
+  priority: critical
+  class: security
+  site: RTU9
+  area: WEL15
+  enable: RTU9__Online

@@ -152,13 +152,16 @@ func (nl *netlist) emitCall(n node) (string, error) {
 	return fmt.Sprintf("%s(%s);", n.inst, strings.Join(args, ", ")), nil
 }
 
-// exprText renders a binding target (ref or accessor) as-written.
+// exprText renders a binding target (a ref, an accessor chain, or a
+// single `.member` struct field) as-written.
 func exprText(e expr) string {
 	switch x := e.(type) {
 	case refExpr:
 		return x.name
 	case accExpr:
 		return x.text
+	case pinExpr:
+		return x.inst + "." + x.pin
 	}
 	return "_"
 }

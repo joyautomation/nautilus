@@ -1,0 +1,38 @@
+/* The house faces, self-hosted.
+
+   Separate from theme.css on purpose: theme.css only NAMES the families (with
+   full fallback stacks), so a host app that has its own typography — or that
+   ships to a plant network with no font budget to spare — pays nothing. Import
+   this one as well and the three faces are served from your own bundle:
+
+       import '@joyautomation/nautilus-hmi/theme.css';
+       import '@joyautomation/nautilus-hmi/fonts.css';
+
+   NEVER a Google Fonts <link>. An HMI runs on an isolated OT network as often
+   as not; a stylesheet that reaches out to a CDN is a screen that renders in
+   Times New Roman on the day it matters. @fontsource ships the woff2 files as
+   an ordinary dependency and your bundler emits them as assets.
+
+   Space Grotesk is the VARIABLE cut, because the house weights are half-steps
+   (550 controls · 650 numerics · 700 eyebrows) and a static 400/500/600/700
+   set would round them away. IBM Plex Mono has no variable release; the three
+   static weights the kit actually asks for are pulled instead. Righteous is
+   chrome only — a header wordmark, never a process value — so one weight is
+   the whole of it. */
+
+@import '@fontsource-variable/space-grotesk/index.css';
+
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+@import '@fontsource/ibm-plex-mono/600.css';
+@import '@fontsource/ibm-plex-mono/700.css';
+
+@import '@fontsource/righteous/400.css';
+
+/* The variable family registers under a "Variable" suffix; theme.css names the
+   plain family, so alias the stack here rather than making every consumer know
+   which cut was installed. */
+:root {
+	--font: 'Space Grotesk Variable', 'Space Grotesk', system-ui, -apple-system, 'Segoe UI',
+		sans-serif;
+}

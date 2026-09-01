@@ -2,7 +2,7 @@
 
 Working notes for picking up development in a fresh session. See `README.md`
 for the vision/architecture and `RELEASING.md` for the release pipeline; this
-file is the practical state + next steps. Last refreshed: 2026-08-16.
+file is the practical state + next steps. Last refreshed: 2026-08-24.
 
 ## What this is
 
@@ -42,8 +42,10 @@ io/, eip/            driver seam + Memory driver; EtherNet/IP (incl. logixserver
 sparkplug/           Sparkplug B (TCK conformance test in CI)
 server/              tag API (state/SSE/write) + branded dashboard
 cmd/nautilus         CLI: new, run, build, check, test, lsp, pull
+alarm/               ISA-18.2 alarm engine: defs/rules, state machine, journal,
+                     notifiers. Manifest `alarms:`, `/api/alarms*`, retained ack
 examples/            heated-tank (Go tier), heated-tank-nogo (manifest flagship:
-                     4 tasks, 3 IEC languages, sim in ST), FBD + SFC examples
+                     4 tasks, 3 IEC languages, sim in ST), alarms, FBD + SFC
 hmi/                 @joyautomation/nautilus-hmi (Svelte 5): realtime SSE, Mimic
 tools/vscode-iec/    VS Code extension: grammar, LSP client, inline live values,
                      Test Explorer for *_test.yaml, JSON schemas
@@ -55,9 +57,34 @@ website/, docs/      docs site (deploys from main); design briefs in docs/design
 - `testing.md` — manifest-tier acceptance testing. **Built and running.**
 - `tags.md` — tag generation, shape verification, UDTs. **Built.**
 - `sfc.md` — SFC front-end notes.
+- `alarms.md` — the alarm subsystem. **Built** (see 2026-08-22 below).
 
 ## Gotchas
 
+- **The tag store is generation-stamped.** `runtime.Tags` bumps a counter
+  only on a write that CHANGES a value; a write of the value already there
+  is a no-op. Everything downstream asks "did this move?" with an integer
+  compare instead of a walk: the Sparkplug RBE pass, the SSE frame, and the
+  driver output push. Consequences to remember when touching this code:
+  `WriteOutputs` is called on CHANGE (first scan, a moved output, after a
+  failed write, after a takeover) — `runtime.Options.AlwaysWriteOutputs`
+  restores per-scan calls for a driver that needs a watchdog re-armed; a
+  driver may implement `io.BatchReader` to be handed the runtime's own input
+  map instead of allocating one per scan; and anything caching per-tag state
+  keyed by NAME should invalidate on `Tags.NameGeneration()`. Full write-up:
+  `runtime/tags.go` ("Write generations") and the tag-model guide's
+  "Performance notes". Benchmarks that pin it: `runtime/bigstore_bench_test.go`,
+  `runtime/hostdriver_bench_test.go`, `sparkplug/publish_bench_test.go`,
+  `server/stream_bench_test.go`. The SSE delta stream is the newest consumer:
+  a client's whole subscription state is ONE `uint64` (the generation it was
+  last brought up to date at), and `Tags.ChangedSince(gen, dst)` is the sweep.
+  Its correctness rests on one rule — a client's generation advances only when
+  a frame is actually ENQUEUED, so a dropped frame costs latency, never
+  content. Do not "optimise" that by advancing it at build time.
+- **Quality is answered lazily, off the scan loop.** `Runtime.Quality()` asks
+  the driver on demand (server tick / `/api/state`), so a driver's `Quality()`
+  is called from a goroutine other than the one calling `ReadInputs` and must
+  be safe for that. Per-tag quality costs the control cycle nothing.
 - `examples/heated-tank-nogo` is a shared test fixture: the Go acceptance
   tests (`acceptance/heated_tank_test.go`) and the LSP tests
   (`internal/lsp/testdoc_test.go`) both run against it. If you change its
@@ -103,12 +130,106 @@ topology mismatch → 409 "deploy that commit instead").
 pointed at a snapshot it rebuilds the past exactly as boot composes the
 present. Guide: website .../guides/program-history.md.
 
+Done 2026-08-22: **alarms** — `alarm/` turns BOOL tags into ISA-18.2 state
+(active list, ack, shelve, journal, notifiers), wired through every tier.
+Manifest `alarms:` + `alarm-files:` (mirrors `tag-files:`, duplicate id
+across sources = error naming both); `rules:` generate definitions in bulk
+by struct TYPE + member, materialized once at load — `nautilus alarms list`
+dumps the expansion, `nautilus check` validates it offline (unknown member
+= error, dead rule / undeclared tag = warning). `internal/project`
+composes and builds the engine over a compiled runtime
+(`NewAlarms` for `run`, `AlarmEngine` for tests, `AlarmDefs`/`CheckAlarms`
+offline); evaluation rides `Runtime.OnScan`, timestamps ride the runtime
+Clock so virtual time drives on-delays. Server: five `/api/alarms*` routes
+(writes through `authorizeWrite`, 404 with no engine), `Frame.Alarms`
+summary, `/api/meta` capability flag + shelve times. Retain:
+`Runtime.SetAlarms` puts ack/shelf in `retain.State.Alarms`, restored on
+every takeover — a failover cannot resurrect acked alarms as unacked.
+Acceptance: a sibling `alarms:` key plus `ack:`/`shelve:`/`unshelve:`
+verbs (the deliberate exception to "no new keys — write an ST
+expression": alarm state is not in the tag store and no ST expression can
+see it). New example `examples/alarms`; guide at
+website/.../guides/alarms.md; HMI kit components were already in `hmi/`.
+Secrets stay in the environment: `journal.dsn-env`, `notify[].header-env`.
+
+Done 2026-08-22 (st-struct-pins):
+
+- FB struct pins/VAR_IN_OUT/field assignment (3ab4362)
+- Four fixes a real site project exposed (ae30474)
+- Struct-typed tags per-member init: (76d6ecf)
+- Struct-member API writes — Tags.SetPath, POST /api/tags (358380e)
+- Acceptance dotted given: edits on struct tags compose (51afacd)
+- Built-in PID function block — ISA form, anti-windup, bumpless auto/manual (4bd5e32)
+- Nested block comments in ST; LexErrors on unterminated comment (c2099f9)
+- HMI alarm kit — AlarmBanner, AlarmTable, AlarmJournal, createAlarmClient (2ffdb11)
+- Server HMI tier — serve SPA from controller, dashboard at /_nautilus/, retained struct restore (2416d77)
+- Historian struct members as dotted leaves, deadband/min-interval change filter (8ac5fbd)
+- Historian server-side aggregates (/history/agg min|max|avg|sum|count|first|last|delta|ontime, bucketed) (1c56011)
+- Runtime OnScan observer seam and Tags.ReadPath for dotted reads (35b80d1)
+- Alarm engine core — ISA-18.2 state machine, ack/shelve, ring/file/Postgres journal, notifiers (e17cb88)
+- Alarms manifest tier — alarms:/alarm-files:, rules expansion, offline check, acceptance ack:/shelve:/unshelve:, examples/alarms, guide (a5b6232)
+- HMI alarms.ts → alarms.svelte.ts (runes module requires .svelte.ts suffix) (e55399c)
+- LD FB-only rungs, edge contacts +x/-x and P/N coils, negated function contacts (baba4db)
+- Ladder FUNCTION_BLOCKs — library .ld/.fbd files, multi-POU, power-pin resolution, struct-field bindings, LSP + editor (d094337)
+
+Done 2026-08-24 (st-struct-pins, uncommitted): **per-tag quality + SSE
+deltas/filters** — the two platform seams the HMI phase needs. `io.Quality`
+(good/stale/bad/notConnected) + optional `io.QualityReporter` on a driver;
+`Runtime.Quality()/TagQuality()/ReportsQuality()` (driver-reported wins,
+runtime derives Stale for driver-bound inputs when the last input READ
+failed — not on a failed write); `Tags.ChangedSince(gen, dst)` and exported
+`runtime.Plain`. Server: `?delta=1` (per-client `lastGen`, `seq`+`full`
+markers, resync on tag-set change or `Options.ResyncInterval`, default 30s),
+`?tags=glob,glob` on both /api/stream and /api/state, `?full=1` escape
+hatch, `quality` map on every frame (non-Good entries only), `/api/meta`
+`quality`+`deltas` flags. Kit: `RealtimeClient({tags, delta})` — **delta
+defaults on**, merges into a complete `frame.tags`; `quality(tag)`/
+`isGood(tag)`; pure `delta.ts` merge + `npm test` (tests/harness.ts, a
+60-line vitest subset, no new dependency). Measured 10k tags / 5% churn:
+**280 kB full → 17 kB delta, 17× smaller** (51× at 1%, 4.8× at 20%); a
+50-client delta broadcast costs ~1/10 of a full one (encodings are memoised
+per generation+filter, so the fleet shares one). Deltas are OPT-IN on the
+wire — the plain stream is byte-identical to what it always was, since the
+VS Code extension and any curl client depend on it. Guide:
+website/.../guides/streaming.md.
+
+Done 2026-08-24 (st-struct-pins, uncommitted): **the SSE frame floor** — the
+non-tag blocks gated like tags. Measured on the WRD host, every frame
+carried ~17.9 kB that had nothing to do with tags (driver status ~12.8 kB —
+55 device rows + `extra`; scan diagnostics ~5 kB; alarm summary), so a
+client filtered down to NO tags still pulled 4.35 MB/min. Now, for a client
+that asks `?blocks=delta` (kit sends it whenever `delta` is on, opt-in
+again on top of deltas — an older kit merges tags but not blocks and would
+blank its driver panel): `drivers` on change (`hashDrivers` — a 64-bit FNV
+over everything an operator would call a change, EXCLUDING `AsOfMs`,
+`DriverMetric.Volatile` counters, `AtMs`, the `Text` of a metric that has
+an `AtMs`, and `VolatileExtra` keys); `alarms` on `Summary.Rev` (and the
+summary is not computed when nobody is owed it); `scan` on a cadence
+(`Options.DiagnosticsInterval`, default 3s — the block is a 180-sample
+history ring, so a cadence under the ring's span loses nothing) with
+`Frame.Scan` now `*runtime.ScanStats`. Per-client `blockRevs` advance only
+on a successful enqueue, exactly like `lastGen`; full frames (first +
+resync) always carry everything. Ages moved client-side:
+`DriverMetric.AtMs` + `DriverStatus.AsOfMs` (server-stamped), rendered as
+`asOfMs − atMs` so a block sent 20 s ago does not creep upward; `Text` kept
+for older readers, `/api/meta` gains `blockDeltas`. Kit: `mergeDelta`
+retains `scan`/`drivers`/`alarms` (`DeltaState.blocks`), full frames
+replace the retained set, `quality` deliberately NOT retained.
+**Measured 4.3 MB/min → 0.15 MB/min, ~28× smaller** for a no-tags delta
+client at 5% churn (`-bench FrameFloor`).
+
 Next, in rough priority:
 
 1. **HMI Versions page** — render /api/program/history in
    @joyautomation/nautilus-hmi (mini-scada's Versions page is the
    reference): commit list, diffs, activate button. The demo moment for
    the content calendar ("your PLC shows its own git log").
-2. **Native-Go function blocks** alongside ST (both lowering to the IR).
-3. **Extension 0.10.0** — first stable-channel Marketplace release, when the
-   Test Explorer + schema work has soaked on the pre-release channel.
+2. **Verify VS Code ladder editor webview build** (FB rung groups) and cut an extension pre-release.
+3. **Publish @joyautomation/nautilus-hmi** (alarm kit, alarms.svelte.ts rename) to npm.
+4. **Remote counter RESET coil / task scan-order guarantee / remote-program FB pin reads** — asks from a real ControlLogix transpile (see the Pomona demo's sites/aep/README.md limitations table, abstract it as "a real ControlLogix transpile").
+5. **Alarm notifiers beyond log/webhook**.
+6. **Merge PRs #6 and #7** (note: the `demo-integration` worktree ~/Development/joyautomation/nautilus-demo exists only to build the demo binary).
+7. **Native-Go function blocks** alongside ST (both lowering to the IR).
+8. **Extension stable release** — first stable-channel Marketplace release, when the Test Explorer + schema work has soaked on the pre-release channel.
+
+- **VS Code extension (2026-08-22 check):** the ladder-FB webview work (ldPreview.ts, LadderView.svelte, ladder.ts) compiles, svelte-checks, vite-builds and tests green (59+84). Pre-existing, unrelated: `tools/vscode-iec/webview-ui/package.json` pins `typescript: ^7.0.2`, which svelte-check 4.7.x cannot load (needs TS ^5||^6 — `ts.sys` gone); run `npm install --no-save typescript@^5.9` to check locally, and 39 older svelte-check errors exist in App/Sfc/mimic/test files (missing @types/node, allowImportingTsExtensions, @xyflow .d.ts). Track separately.

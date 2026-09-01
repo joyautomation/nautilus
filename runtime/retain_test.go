@@ -91,7 +91,7 @@ func TestLoadIgnoresTagsOutsideTheRetainedSet(t *testing.T) {
 	}}}
 	rt := newRetained(t, store, nil)
 	rt.Scan()
-	if got := rt.Tags().vals["Count"].I; got == 999 {
+	if got := rt.Tags().vals["Count"].v.I; got == 999 {
 		t.Fatal("a non-retained tag was written from the store")
 	}
 }
@@ -118,6 +118,84 @@ func TestLoadRestoresIntegerKind(t *testing.T) {
 	}
 }
 
+// A retained STRUCT tag must both persist (retainState) and restore
+// (loadRetained) member by member: setAny has no case for a map, so before
+// this fix a struct tag's operator setpoints silently reverted to the
+// manifest's seed on every restart or takeover.
+const motorLib = `
+TYPE
+  Motor : STRUCT
+    Speed : REAL;
+    Starts : INT;
+    Name : STRING;
+  END_STRUCT;
+END_TYPE
+`
+
+const motorProg = `PROGRAM P VAR_EXTERNAL P101 : Motor; END_VAR END_PROGRAM`
+
+func TestRetainStatePersistsStructTag(t *testing.T) {
+	rt, err := New(Options{
+		Program:   motorProg,
+		Libraries: []string{motorLib},
+		Tags: []TagDef{
+			Typed("P101", RoleSetpoint, "Motor",
+				Init(map[string]any{"Speed": 42.0})),
+		},
+		Retain: &fakeStore{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := rt.retainState()
+	got, ok := st.Tags["P101"].(map[string]any)
+	if !ok {
+		t.Fatalf("retainState did not persist struct tag P101: %+v", st.Tags)
+	}
+	if got["Speed"] != 42.0 {
+		t.Fatalf("P101.Speed = %v, want 42.0", got["Speed"])
+	}
+}
+
+func TestRetainedStructTagRestoresBeforeFirstScan(t *testing.T) {
+	store := &fakeStore{state: retain.State{Tags: map[string]any{
+		"P101": map[string]any{"Speed": 88.0, "Starts": 5.0},
+	}}}
+	rt, err := New(Options{
+		Program:   motorProg,
+		Libraries: []string{motorLib},
+		Tags: []TagDef{
+			Typed("P101", RoleSetpoint, "Motor",
+				Init(map[string]any{"Speed": 42.0, "Name": "seed"})),
+		},
+		Retain: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan()
+	v, err := rt.Tags().ReadGlobal("P101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Kind != ir.TypeStruct {
+		t.Fatalf("P101 kind = %v, want TypeStruct", v.Kind)
+	}
+	all := rt.Tags().All()["P101"].(map[string]any)
+	if all["Speed"] != 88.0 {
+		t.Fatalf("P101.Speed = %v, want the retained 88.0 over the 42.0 seed", all["Speed"])
+	}
+	if got, ok := all["Starts"].(int64); !ok || got != 5 {
+		t.Fatalf("P101.Starts = %v (kind %T), want the retained int 5, not a float64", all["Starts"], all["Starts"])
+	}
+	// A member the retained map didn't name (Name) must keep the seed's
+	// value, not zero out — the retained restore is a merge, same as
+	// SeedFromInit/SetPath.
+	if all["Name"] != "seed" {
+		t.Fatalf("P101.Name = %v, want the seed's %q to survive the merge", all["Name"], "seed")
+	}
+}
+
 // A standby must not scan at all — no logic, no stats, and above all no
 // output writes. Suppression by absence is the redundancy safety story.
 func TestStandbyDoesNotScan(t *testing.T) {
@@ -129,7 +207,7 @@ func TestStandbyDoesNotScan(t *testing.T) {
 	if n := rt.Stats().Count; n != 0 {
 		t.Fatalf("standby executed %d scans, want 0", n)
 	}
-	if got := rt.Tags().vals["Count"].I; got != 0 {
+	if got := rt.Tags().vals["Count"].v.I; got != 0 {
 		t.Fatalf("standby ran logic: Count = %d", got)
 	}
 }
@@ -145,7 +223,7 @@ func TestTakeoverReloadsAndResetsFrames(t *testing.T) {
 	for range 3 {
 		rt.Scan()
 	}
-	if got := rt.Tags().vals["Count"].I; got != 3 {
+	if got := rt.Tags().vals["Count"].v.I; got != 3 {
 		t.Fatalf("Count = %d after 3 scans, want 3", got)
 	}
 
@@ -162,7 +240,7 @@ func TestTakeoverReloadsAndResetsFrames(t *testing.T) {
 	if got := rt.Tags().Real("SP"); got != 80.0 {
 		t.Fatalf("SP = %v after takeover, want the old leader's 80.0", got)
 	}
-	if got := rt.Tags().vals["Count"].I; got != 1 {
+	if got := rt.Tags().vals["Count"].v.I; got != 1 {
 		t.Fatalf("Count = %d after takeover, want 1 — the frame must reset", got)
 	}
 }
@@ -174,7 +252,7 @@ func TestRetainedProgramApplies(t *testing.T) {
 	store := &fakeStore{state: retain.State{Programs: map[string]string{MainTaskName: edited}}}
 	rt := newRetained(t, store, nil)
 	rt.Scan()
-	if got := rt.Tags().vals["Count"].I; got != 10 {
+	if got := rt.Tags().vals["Count"].v.I; got != 10 {
 		t.Fatalf("Count = %d, want 10 — the retained edit should be running", got)
 	}
 	if !rt.Program().Dirty() {
@@ -188,7 +266,7 @@ func TestBrokenRetainedProgramIsReportedNotFatal(t *testing.T) {
 	store := &fakeStore{state: retain.State{Programs: map[string]string{MainTaskName: "PROGRAM Broken syntax error"}}}
 	rt := newRetained(t, store, nil)
 	rt.Scan()
-	if got := rt.Tags().vals["Count"].I; got != 1 {
+	if got := rt.Tags().vals["Count"].v.I; got != 1 {
 		t.Fatalf("Count = %d, want 1 from the built-in program", got)
 	}
 	s := rt.Stats()
@@ -265,5 +343,91 @@ func TestRetainStateContents(t *testing.T) {
 	st = rt.retainState()
 	if _, ok := st.Programs[MainTaskName]; !ok {
 		t.Fatal("an online-edited program was not persisted")
+	}
+}
+
+// ── alarms ─────────────────────────────────────────────────────────────
+
+// fakeAlarms is a retain.AlarmRetainer a test drives by hand — the alarm
+// engine's shape without the alarm package, which is exactly the
+// dependency direction retain.AlarmRetainer exists to preserve.
+type fakeAlarms struct {
+	mu       sync.Mutex
+	held     map[string]retain.AlarmRetain
+	restored []map[string]retain.AlarmRetain
+}
+
+func (f *fakeAlarms) RetainedAlarms() map[string]retain.AlarmRetain {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.held
+}
+
+func (f *fakeAlarms) RestoreAlarms(m map[string]retain.AlarmRetain) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.restored = append(f.restored, m)
+}
+
+// An ack is a decision a person made, so it persists beside the setpoints
+// — and comes back on the takeover that starts the next leadership term.
+func TestAlarmStateRoundTripsThroughRetain(t *testing.T) {
+	store := &fakeStore{state: retain.State{
+		Alarms: map[string]retain.AlarmRetain{
+			"HiTemp": {Acked: true, AckBy: "rchon", AckMs: 1700000000000},
+		},
+	}}
+	rt := newRetained(t, store, nil)
+	eng := &fakeAlarms{held: map[string]retain.AlarmRetain{
+		"LoFlow": {ShelfUntilMs: 1700000600000, ShelfBy: "rchon"},
+	}}
+	rt.SetAlarms(eng)
+
+	rt.Scan() // the first scan is a takeover, which is what loads the store
+
+	if len(eng.restored) != 1 {
+		t.Fatalf("RestoreAlarms called %d times, want once on takeover", len(eng.restored))
+	}
+	if got := eng.restored[0]["HiTemp"]; !got.Acked || got.AckBy != "rchon" {
+		t.Errorf("restored %+v, want the stored acknowledgement", got)
+	}
+
+	if got := rt.retainState().Alarms; len(got) != 1 || got["LoFlow"].ShelfBy != "rchon" {
+		t.Errorf("saved alarms = %+v, want the engine's shelf", got)
+	}
+}
+
+// The whole point of retaining ack: a standby taking over must not
+// resurrect acknowledged alarms as unacknowledged. takeover() re-reads the
+// store on the standby→leader edge, so the engine hears about it again.
+func TestTakeoverRestoresAlarmsOnTheLeadershipEdge(t *testing.T) {
+	f := &flag{lead: true}
+	store := &fakeStore{state: retain.State{
+		Alarms: map[string]retain.AlarmRetain{"HiTemp": {Acked: true, AckBy: "rchon"}},
+	}}
+	rt := newRetained(t, store, f)
+	eng := &fakeAlarms{}
+	rt.SetAlarms(eng)
+
+	rt.Scan()
+	f.lead = false
+	rt.Scan() // standby: no takeover, no scan
+	f.lead = true
+	rt.Scan() // and back: a fresh takeover
+
+	if len(eng.restored) != 2 {
+		t.Fatalf("RestoreAlarms called %d times, want one per acquisition of leadership", len(eng.restored))
+	}
+}
+
+// A project with no alarms writes exactly what it wrote before alarms
+// existed: retain.State.Alarms is omitempty, and nothing registers a
+// retainer, so an existing store loads and saves unchanged.
+func TestNoAlarmRetainerLeavesTheStateAlone(t *testing.T) {
+	store := &fakeStore{}
+	rt := newRetained(t, store, nil)
+	rt.Scan()
+	if got := rt.retainState().Alarms; got != nil {
+		t.Errorf("a runtime with no alarm engine saved %+v", got)
 	}
 }

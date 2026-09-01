@@ -1,5 +1,6 @@
 <script lang="ts">
-	// Radial gauge: 240° arc, optional setpoint marker.
+	// Radial gauge. A 240° arc by default; `sweep` (or `gap`) opens it out to a
+	// full ring for the donut style legacy SCADA packages draw.
 	let {
 		value = 0,
 		min = 0,
@@ -9,7 +10,10 @@
 		color = 'var(--s1)',
 		setpoint,
 		decimals = 1,
-		width = 170
+		width = 170,
+		sweep = 240,
+		gap,
+		thickness = 10
 	}: {
 		value?: number;
 		min?: number;
@@ -17,23 +21,52 @@
 		unit?: string;
 		label?: string;
 		color?: string;
+		/** Draws a marker ring at this value; omit for none. */
 		setpoint?: number;
 		decimals?: number;
 		width?: number;
+		/**
+		 * Degrees the scale spans, centred on twelve o'clock. 240 (the default)
+		 * is the classic three-quarter dial; 360 is a closed ring. Clamped to
+		 * 30…360. Ignored when `gap` is given.
+		 */
+		sweep?: number;
+		/**
+		 * The complement of `sweep`, for the donut idiom: degrees of ring left
+		 * OPEN at the bottom. `gap={30}` is a 330° ring. Takes precedence over
+		 * `sweep` when set.
+		 */
+		gap?: number;
+		/** Arc stroke width, in the gauge's own 170-unit coordinate space. */
+		thickness?: number;
 	} = $props();
 
 	const CX = 85, CY = 82, R = 60;
 
+	const span = $derived(
+		Math.max(30, Math.min(360, gap === undefined ? sweep : 360 - gap))
+	);
+	/** A closed (or near-closed) ring needs its end labels moved off the seam. */
+	const closed = $derived(span > 300);
+
+	// The drawing box grows downward as the arc closes: at 240° the ends sit at
+	// y=112, at 360° they meet at y=142. +18 leaves room for the end labels and
+	// keeps the default exactly the historical 170×130 box.
+	const height = $derived(
+		Math.ceil(CY - R * Math.cos((span / 2) * (Math.PI / 180))) + 18
+	);
+
 	function polar(frac: number): [number, number] {
-		const a = ((-120 + 240 * frac) * Math.PI) / 180;
+		const a = ((-span / 2 + span * frac) * Math.PI) / 180;
 		return [CX + R * Math.sin(a), CY - R * Math.cos(a)];
 	}
 
 	function arc(f0: number, f1: number) {
 		const [x0, y0] = polar(f0);
-		const [x1, y1] = polar(f1);
-		// large-arc flips at 180° of actual sweep; the full scale spans 240°.
-		const large = (f1 - f0) * 240 > 180 ? 1 : 0;
+		// A literal 360° arc collapses to a point in SVG — back off a hair so the
+		// ring closes visually instead of vanishing.
+		const [x1, y1] = polar(span >= 360 && f1 >= 1 ? 0.9995 : f1);
+		const large = (f1 - f0) * span > 180 ? 1 : 0;
 		return `M ${x0} ${y0} A ${R} ${R} 0 ${large} 1 ${x1} ${y1}`;
 	}
 
@@ -43,10 +76,15 @@
 	);
 </script>
 
-<svg viewBox="0 0 170 130" {width} role="img" aria-label={`${label}: ${value.toFixed(decimals)} ${unit}`}>
-	<path d={arc(0, 1)} fill="none" stroke="var(--grid)" stroke-width="10" stroke-linecap="round" />
+<svg
+	viewBox={`0 0 170 ${height}`}
+	{width}
+	role="img"
+	aria-label={`${label}: ${value.toFixed(decimals)} ${unit}`}
+>
+	<path d={arc(0, 1)} fill="none" stroke="var(--grid)" stroke-width={thickness} stroke-linecap="round" />
 	{#if frac > 0.005}
-		<path class="val" d={arc(0, frac)} fill="none" stroke={color} stroke-width="10" stroke-linecap="round" />
+		<path class="val" d={arc(0, frac)} fill="none" stroke={color} stroke-width={thickness} stroke-linecap="round" />
 	{/if}
 	{#if spFrac !== null}
 		{@const [sx, sy] = polar(spFrac)}
@@ -61,11 +99,26 @@
 	<text x={CX} y={CY + 42} text-anchor="middle" font-size="12" font-weight="600" fill="var(--ink-2)">{label}</text>
 	{#each [0, 1] as f}
 		{@const [tx, ty] = polar(f)}
-		<text x={tx} y={ty + 16} text-anchor="middle" font-size="12" fill="var(--muted)" class="num">{f ? max : min}</text>
+		<text
+			x={closed ? tx + (f ? 8 : -8) : tx}
+			y={closed ? ty + 4 : ty + 16}
+			text-anchor={closed ? (f ? 'start' : 'end') : 'middle'}
+			font-size="12"
+			fill="var(--muted)"
+			class="num">{f ? max : min}</text
+		>
 	{/each}
 </svg>
 
 <style>
+	/* `width` stays a real attribute (it drives the gauge's own coordinate
+	   math via `thickness`/box sizing), but the rendered box also shrinks
+	   under a narrower parent instead of overflowing it. */
+	svg {
+		max-width: 100%;
+		height: auto;
+	}
+
 	/* Smooth updates. `d` interpolates in Chromium when the path structure is
 	   unchanged; elsewhere it falls back to stepping. */
 	.val {

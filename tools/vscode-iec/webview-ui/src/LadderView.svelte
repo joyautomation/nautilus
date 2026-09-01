@@ -92,12 +92,24 @@
 
 	// Rungs and comment runs interleaved in document order — comments render
 	// as note blocks above whatever follows them, just like FBD's.
+	// A .ld file may define ladder FUNCTION_BLOCKs (subroutines) as well as
+	// its PROGRAM; each one's rungs get a heading, and the rungs themselves
+	// draw and edit exactly like the program's.
 	type LBlock =
 		| { t: 'rung'; line: number; x: (typeof rungs)[number] }
-		| { t: 'note'; line: number; idx: number; text: string };
+		| { t: 'note'; line: number; idx: number; text: string }
+		| { t: 'pou'; line: number; name: string; pins: string };
 	const blocks = $derived.by(() => {
 		const out: LBlock[] = rungs.map((x) => ({ t: 'rung' as const, line: x.r.line, x }));
 		(model.comments ?? []).forEach((c, idx) => out.push({ t: 'note', line: c.line, idx, text: c.text }));
+		(model.blocks ?? []).forEach((b) =>
+			out.push({
+				t: 'pou',
+				line: b.line,
+				name: b.name,
+				pins: (b.pins ?? []).map((p) => `${p.dir === 'out' ? '⇢ ' : ''}${p.name} : ${p.type}`).join(', ')
+			})
+		);
 		return out.sort((a, b) => a.line - b.line);
 	});
 
@@ -570,8 +582,13 @@
 		</div>
 	{/if}
 	<div class="ladder" onclick={() => (selected = null)}>
-		{#each blocks as b (b.t === 'rung' ? 'r:' + b.x.r.name : 'n:' + b.idx)}
-			{#if b.t === 'note'}
+		{#each blocks as b (b.t === 'rung' ? 'r:' + b.x.r.name : b.t === 'pou' ? 'p:' + b.name : 'n:' + b.idx)}
+			{#if b.t === 'pou'}
+				<div class="pouhead" title="a FUNCTION_BLOCK written in ladder — callable from any language">
+					<span class="poukw">FUNCTION_BLOCK</span> <span class="pouname">{b.name}</span>
+					{#if b.pins}<span class="poupins">{b.pins}</span>{/if}
+				</div>
+			{:else if b.t === 'note'}
 				<div
 					class="note"
 					class:editable
@@ -907,6 +924,24 @@
 	}
 	svg:hover .ghosttext {
 		opacity: 0.45;
+	}
+	.pouhead {
+		margin: 14px 0 2px;
+		padding: 3px 8px;
+		border-left: 3px solid var(--vscode-textLink-foreground, #4ea1ff);
+		font-size: 11px;
+		opacity: 0.9;
+	}
+	.poukw {
+		font-weight: 600;
+		opacity: 0.7;
+	}
+	.pouname {
+		font-weight: 700;
+	}
+	.poupins {
+		opacity: 0.7;
+		margin-left: 8px;
 	}
 	.note {
 		align-self: flex-start;

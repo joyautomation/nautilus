@@ -75,6 +75,20 @@ type Node struct {
 	hostTS       int64 // last STATE timestamp seen (monotonic guard)
 	rebirthTimer *time.Timer
 
+	// Publish-tick working set, all under n.mu. The tag STORE decides when
+	// these are stale: everything here is derived from the set of tag NAMES,
+	// which changes only when a tag is created, so it is rebuilt on a change
+	// of runtime.Tags.NameGeneration and never once per tick. Before this,
+	// every 100ms tick re-sorted 550 names (once per destination) and
+	// re-ran path.Match over every class pattern for every tag.
+	shapeGen  uint64                    // Tags.NameGeneration this was built from
+	shapeOK   bool                      // false until the first build
+	pubNames  []string                  // published tags, sorted
+	ownerName map[string][]string       // device id ("" = node) → its sorted tags
+	tagRBE    map[string]RBE            // published tag → its resolved class rule
+	snapBuf   map[string]runtime.Sample // reused across ticks; see Tags.SnapshotInto
+	snapGen   uint64                    // store write generation snapBuf holds
+
 	sf *storeForward // nil unless WithStoreForward
 
 	cancel context.CancelFunc

@@ -196,4 +196,12 @@
 		outline: 2px solid var(--accent);
 		outline-offset: -1px;
 	}
+
+	/* Coarse pointer (touch/pen): grow nav items to the minimum hit area.
+	   Desktop density (mouse/trackpad) is untouched. */
+	@media (pointer: coarse) {
+		.item {
+			min-height: var(--tap);
+		}
+	}
 </style>

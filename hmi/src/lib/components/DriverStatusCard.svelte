@@ -25,7 +25,26 @@
 		return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
 	});
 
+	// Ages (`atMs`) are measured against the status's OWN observation time,
+	// not the wall clock. On a delta stream the controller sends this block
+	// only when it changes, so a healthy driver's status can be seconds old
+	// — and rendering "last publish" against `now` would show a plant going
+	// quiet every time nothing happened. `asOfMs` is what the server
+	// stamped; without it (an older controller) the clock is the best
+	// available answer, and that controller re-sent the block every frame
+	// anyway. Uptime stays on `now`: `sinceMs` is an absolute start.
+	const asOf = $derived(driver.asOfMs || now);
+
+	const ago = (ms: number) => {
+		const s = Math.max(0, ms) / 1000;
+		if (s < 10) return `${s.toFixed(1)}s`;
+		if (s < 60) return `${Math.round(s)}s`;
+		if (s < 3600) return `${Math.round(s / 60)}m`;
+		return `${Math.round(s / 3600)}h`;
+	};
+
 	const fmt = (m: DriverMetric) => {
+		if (m.atMs) return ago(asOf - m.atMs);
 		if (m.text) return m.text;
 		const v = m.value;
 		const n = Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2);
@@ -101,7 +120,10 @@
 	.title {
 		display: flex;
 		align-items: baseline;
-		gap: 8px;
+		/* The kind chip drops under the name when the two will not share a
+		   line — on a phone the name is the fact, the chip is the footnote. */
+		flex-wrap: wrap;
+		gap: 2px 8px;
 		min-width: 0;
 	}
 	.name {
@@ -109,9 +131,15 @@
 		font-size: var(--font-md);
 		color: var(--ink);
 		font-family: var(--mono);
+		/* Two lines, then ellipsis. A one-line name on a 390 px screen was
+		   "Pomo…" next to a chip and a pill at full width. */
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
+		-webkit-box-orient: vertical;
 		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
+		overflow-wrap: anywhere;
+		min-width: 0;
 	}
 	.kind {
 		font-size: var(--font-2xs);
@@ -160,8 +188,9 @@
 		border: 1px solid var(--border);
 		border-radius: 6px;
 		padding: 6px 8px;
-		/* Fixed height + non-wrapping value: a metric whose text changes each
-		   frame (a freshness time) must never reflow the card. */
+		/* Floored height + non-wrapping VALUE: a metric whose text changes
+		   each frame (a freshness time) must never reflow the card. The
+		   caption is static, so it may wrap once and set the height. */
 		min-height: 44px;
 		min-width: 0;
 		display: flex;
@@ -185,9 +214,8 @@
 		color: var(--muted);
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
-		white-space: nowrap;
-		overflow: hidden;
-		text-overflow: ellipsis;
+		line-height: 1.25;
+		overflow-wrap: anywhere;
 	}
 	.devices {
 		display: grid;

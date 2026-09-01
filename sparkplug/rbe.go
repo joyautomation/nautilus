@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 // RBE is a report-by-exception rule for a publish class or a single tag —
@@ -30,8 +31,29 @@ type RBE struct {
 // rbeState is the per-metric memory RBE needs across evaluations.
 type rbeState struct {
 	last     ir.Value
+	lastGen  uint64 // tag-store write generation of last (see shouldPublishSample)
 	lastTime time.Time
 	primed   bool
+}
+
+// shouldPublishSample is shouldPublish given the tag store's write
+// generation for the value — the fast path that keeps a Template metric from
+// being deep-compared member by member ten times a second to conclude, ten
+// times a second, that nothing moved.
+//
+// A generation equal to the one recorded at the last PUBLISH means the store
+// has not changed this tag since, so no comparison can find a change: only
+// the heartbeat (MaxInterval) can still force a publish, and that is
+// evaluated exactly where shouldPublish evaluates it — second, after the
+// first-value rule. Everything below the heartbeat in shouldPublish's order
+// (every-change, rate limit, deadband) can only answer "no" for a value that
+// did not move, so skipping straight past them is the same answer for less
+// work. See runtime.Tags' "Write generations".
+func (r RBE) shouldPublishSample(st *rbeState, s runtime.Sample, now time.Time) bool {
+	if st.primed && st.lastGen == s.Gen {
+		return r.MaxInterval > 0 && now.Sub(st.lastTime) >= r.MaxInterval
+	}
+	return r.shouldPublish(st, s.Value, now)
 }
 
 // shouldPublish applies the RBE rule to a new value at time now:
@@ -47,30 +69,72 @@ func (r RBE) shouldPublish(st *rbeState, v ir.Value, now time.Time) bool {
 		// Every CHANGE publishes — no deadband, no rate limit — but an
 		// unchanged sample still stays quiet: Sparkplug hosts assume RBE,
 		// and republishing a constant every poll is just broker load.
-		if newF, oldF, ok := numeric(v, st.last); ok {
+		if newF, oldF, ok := numeric(&v, &st.last); ok {
 			return newF != oldF
 		}
-		return !valuesEqual(v, st.last)
+		return !valuesEqual(&v, &st.last)
 	}
 	if r.MinInterval > 0 && now.Sub(st.lastTime) < r.MinInterval {
 		return false // rate-limited
 	}
-	if newF, oldF, ok := numeric(v, st.last); ok {
+	return r.memberChanged(&v, &st.last)
+}
+
+// memberChanged applies the deadband rule to one value: a numeric leaf
+// compares by deadband (or exact change, deadband disabled); a struct or
+// array recurses per member instead of collapsing to valuesEqual, which is
+// what makes deadband do anything at all on a Template (UDT) metric.
+// Without this, numeric()/asFloat only understand scalars, every struct
+// value falls straight to !valuesEqual, and any single member's change —
+// even sub-deadband dither on one field — republishes the whole template.
+//
+// Comparisons are against st.last, which record() only ever sets from a
+// value that WAS published, so this is always "moved since the last
+// publish", the same guarantee shouldPublish gives scalars.
+// The values are passed by POINTER: ir.Value is a ~100-byte tagged union,
+// and a by-value recursion over a 46-member template spent more time
+// copying values than comparing them.
+func (r RBE) memberChanged(v, last *ir.Value) bool {
+	if newF, oldF, ok := numeric(v, last); ok {
 		if r.Deadband > 0 {
 			return math.Abs(newF-oldF) > r.Deadband
 		}
 		return newF != oldF
 	}
-	return !valuesEqual(v, st.last)
+	switch v.Kind {
+	case ir.TypeStruct:
+		if last.Kind != ir.TypeStruct || len(v.Fld) != len(last.Fld) {
+			return true
+		}
+		for i := range v.Fld {
+			if r.memberChanged(&v.Fld[i], &last.Fld[i]) {
+				return true
+			}
+		}
+		return false
+	case ir.TypeArray:
+		if last.Kind != ir.TypeArray || len(v.Arr) != len(last.Arr) {
+			return true
+		}
+		for i := range v.Arr {
+			if r.memberChanged(&v.Arr[i], &last.Arr[i]) {
+				return true
+			}
+		}
+		return false
+	}
+	return !valuesEqual(v, last)
 }
 
-// record updates the state after a publish.
-func (st *rbeState) record(v ir.Value, now time.Time) {
-	st.last, st.lastTime, st.primed = v, now, true
+// record updates the state after a publish. gen is the tag-store write
+// generation the published value carried — 0 from a caller that has none
+// (a birth), which simply means the next evaluation compares values.
+func (st *rbeState) record(v ir.Value, gen uint64, now time.Time) {
+	st.last, st.lastGen, st.lastTime, st.primed = v, gen, now, true
 }
 
 // numeric returns both values as float64 when both are numeric.
-func numeric(a, b ir.Value) (float64, float64, bool) {
+func numeric(a, b *ir.Value) (float64, float64, bool) {
 	af, ok := asFloat(a)
 	if !ok {
 		return 0, 0, false
@@ -82,7 +146,7 @@ func numeric(a, b ir.Value) (float64, float64, bool) {
 	return af, bf, true
 }
 
-func asFloat(v ir.Value) (float64, bool) {
+func asFloat(v *ir.Value) (float64, bool) {
 	switch v.Kind {
 	case ir.TypeReal:
 		return v.F, true
@@ -94,7 +158,7 @@ func asFloat(v ir.Value) (float64, bool) {
 
 // valuesEqual compares two ir.Values for change detection (scalars and, for
 // completeness, structs/arrays by deep comparison).
-func valuesEqual(a, b ir.Value) bool {
+func valuesEqual(a, b *ir.Value) bool {
 	if a.Kind != b.Kind {
 		return false
 	}
@@ -112,7 +176,7 @@ func valuesEqual(a, b ir.Value) bool {
 			return false
 		}
 		for i := range a.Arr {
-			if !valuesEqual(a.Arr[i], b.Arr[i]) {
+			if !valuesEqual(&a.Arr[i], &b.Arr[i]) {
 				return false
 			}
 		}
@@ -122,7 +186,7 @@ func valuesEqual(a, b ir.Value) bool {
 			return false
 		}
 		for i := range a.Fld {
-			if !valuesEqual(a.Fld[i], b.Fld[i]) {
+			if !valuesEqual(&a.Fld[i], &b.Fld[i]) {
 				return false
 			}
 		}

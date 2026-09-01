@@ -239,3 +239,160 @@ func TestCheckWarnsOnTagMetaNamingNothing(t *testing.T) {
 		t.Errorf("a dotted tag-meta key is a field path and must not be reported:\n%s", out)
 	}
 }
+
+// A library FUNCTION_BLOCK's VAR_EXTERNAL binds the tag through whichever
+// program instantiates it — it compiles and runs correctly (the AEP
+// transpile is the real-world proof: 1,325 of these, all working) — so an
+// instantiated library FB must not trigger "no program binds", the false
+// positive that used to force re-declaring every one of them in the calling
+// program's own VAR_EXTERNAL block.
+func TestCheckSeesTagsBoundThroughInstantiatedLibraryFB(t *testing.T) {
+	out, code := checkIn(t, map[string]string{
+		"nautilus.yaml": checkManifestYAML +
+			"  - { name: Setpoint, role: setpoint, init: 0.0 }\n",
+		"blocks.st": `FUNCTION_BLOCK Wrapper
+VAR_EXTERNAL
+    Setpoint : REAL;
+END_VAR
+VAR_OUTPUT
+    Q : REAL;
+END_VAR
+    Q := Setpoint;
+END_FUNCTION_BLOCK
+`,
+		"program.st": `PROGRAM Main
+VAR_EXTERNAL
+    Sensor   : REAL;
+    Actuator : REAL;
+END_VAR
+VAR
+    w : Wrapper;
+END_VAR
+Actuator := Sensor;
+w();
+END_PROGRAM`,
+	})
+	if code != 0 {
+		t.Errorf("an instantiated library FB's external failed the check (%d):\n%s", code, out)
+	}
+	if strings.Contains(out, "Setpoint") {
+		t.Errorf("Setpoint is bound through the Wrapper instance; it must not be reported:\n%s", out)
+	}
+}
+
+// The same FB, declared but never instantiated by anything a task reaches,
+// binds nothing — an unused library block must not make its externals look
+// bound, or a genuinely dead tag would go uncaught.
+func TestCheckWarnsWhenLibraryFBNotInstantiated(t *testing.T) {
+	out, code := checkIn(t, map[string]string{
+		"nautilus.yaml": checkManifestYAML +
+			"  - { name: Setpoint, role: setpoint, init: 0.0 }\n",
+		"blocks.st": `FUNCTION_BLOCK Wrapper
+VAR_EXTERNAL
+    Setpoint : REAL;
+END_VAR
+VAR_OUTPUT
+    Q : REAL;
+END_VAR
+    Q := Setpoint;
+END_FUNCTION_BLOCK
+`,
+		"program.st": programBinding("", ""),
+	})
+	if code != 0 {
+		t.Errorf("an unbound setpoint is a warning, not a failure (%d):\n%s", code, out)
+	}
+	if !strings.Contains(out, ": warning:") || !strings.Contains(out, "Setpoint") ||
+		!strings.Contains(out, "no program binds") {
+		t.Errorf("output does not warn that Setpoint is unbound:\n%s", out)
+	}
+}
+
+// FB-in-FB: a library block instantiating another library block, both
+// declaring VAR_EXTERNAL. The bound set must walk the whole instance tree,
+// not just the program's direct instances.
+func TestCheckSeesTagsBoundThroughNestedLibraryFB(t *testing.T) {
+	out, code := checkIn(t, map[string]string{
+		"nautilus.yaml": checkManifestYAML +
+			"  - { name: Setpoint, role: setpoint, init: 0.0 }\n",
+		"blocks.st": `FUNCTION_BLOCK Inner
+VAR_EXTERNAL
+    Setpoint : REAL;
+END_VAR
+VAR_OUTPUT
+    Q : REAL;
+END_VAR
+    Q := Setpoint;
+END_FUNCTION_BLOCK
+
+FUNCTION_BLOCK Outer
+VAR
+    inner : Inner;
+END_VAR
+VAR_OUTPUT
+    Q : REAL;
+END_VAR
+    inner();
+    Q := inner.Q;
+END_FUNCTION_BLOCK
+`,
+		"program.st": `PROGRAM Main
+VAR_EXTERNAL
+    Sensor   : REAL;
+    Actuator : REAL;
+END_VAR
+VAR
+    o : Outer;
+END_VAR
+Actuator := Sensor;
+o();
+END_PROGRAM`,
+	})
+	if code != 0 {
+		t.Errorf("a nested library FB's external failed the check (%d):\n%s", code, out)
+	}
+	if strings.Contains(out, "Setpoint") {
+		t.Errorf("Setpoint is bound through Outer -> Inner; it must not be reported:\n%s", out)
+	}
+}
+
+// The ladder-diagram shape: a PROGRAM-less .ld file is a library exactly
+// like a .st one (docs/design, examples/ladder-subroutines), and a
+// FUNCTION_BLOCK written as rungs declares VAR_EXTERNAL the same way an ST
+// one does. The bound set must see through the LD->FBD->ST transpile chain.
+func TestCheckSeesTagsBoundThroughLadderLibraryFB(t *testing.T) {
+	out, code := checkIn(t, map[string]string{
+		"nautilus.yaml": checkManifestYAML +
+			"  - { name: Setpoint, role: setpoint, init: false }\n",
+		"blocks.ld": `FUNCTION_BLOCK LdWrapper
+VAR_EXTERNAL
+    Setpoint : BOOL;
+END_VAR
+VAR_OUTPUT
+    Q : BOOL;
+END_VAR
+LD
+  RUNG r1
+    Setpoint ( Q )
+END_LD
+END_FUNCTION_BLOCK
+`,
+		"program.st": `PROGRAM Main
+VAR_EXTERNAL
+    Sensor   : REAL;
+    Actuator : REAL;
+END_VAR
+VAR
+    w : LdWrapper;
+END_VAR
+Actuator := Sensor;
+w();
+END_PROGRAM`,
+	})
+	if code != 0 {
+		t.Errorf("a ladder library FB's external failed the check (%d):\n%s", code, out)
+	}
+	if strings.Contains(out, "Setpoint") {
+		t.Errorf("Setpoint is bound through the LdWrapper instance; it must not be reported:\n%s", out)
+	}
+}

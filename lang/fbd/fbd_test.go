@@ -259,3 +259,101 @@ END_PROGRAM`
 		t.Fatal("literal binding target must be rejected")
 	}
 }
+
+// A file may hold several netlist blocks, one per POU — how a
+// FUNCTION_BLOCK carries an FBD (or, through the LD hop, a ladder) body
+// alongside the file's PROGRAM. Each block becomes its own POU's
+// statements; everything between them passes through as ST verbatim.
+func TestTranspileMultipleBlocks(t *testing.T) {
+	src := `FUNCTION_BLOCK Scale
+VAR_INPUT  IN : REAL; END_VAR
+VAR_OUTPUT OUT : REAL; END_VAR
+FBD
+  OUT := MUL(IN, 2.0)
+END_FBD
+END_FUNCTION_BLOCK
+
+PROGRAM Main
+VAR_EXTERNAL Raw : REAL; Eng : REAL; END_VAR
+FBD
+  s1 : Scale(IN := Raw)
+  Eng := s1.OUT
+END_FBD
+END_PROGRAM
+`
+	out, lineMap, err := TranspileWithLines(src)
+	if err != nil {
+		t.Fatalf("transpile: %v", err)
+	}
+	for _, want := range []string{
+		"FUNCTION_BLOCK Scale",
+		"OUT := (IN * 2.0);",
+		"END_FUNCTION_BLOCK",
+		"PROGRAM Main",
+		"  s1 : Scale;",
+		"s1(IN := Raw);",
+		"Eng := s1.OUT;",
+		"END_PROGRAM",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if n := strings.Count(out, "FBD"); n != 0 {
+		t.Errorf("no FBD keyword should survive, found %d:\n%s", n, out)
+	}
+	if got, want := len(lineMap), len(strings.Split(out, "\n")); got != want {
+		t.Fatalf("lineMap has %d entries for %d lines", got, want)
+	}
+	// The second POU's statement maps back to ITS netlist line, not the
+	// first block's — the map composes across POUs.
+	srcLines := strings.Split(src, "\n")
+	for i, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "Eng := s1.OUT;") {
+			if !strings.Contains(srcLines[lineMap[i]-1], "Eng := s1.OUT") {
+				t.Fatalf("maps to source line %d (%q)", lineMap[i], srcLines[lineMap[i]-1])
+			}
+			return
+		}
+	}
+	t.Fatal("statement not found")
+}
+
+func TestSplitBlocksRejectsMalformed(t *testing.T) {
+	cases := []struct{ name, src, want string }{
+		{"unclosed", "PROGRAM p\nFBD\n  a := b\nEND_PROGRAM\n", "no END_FBD"},
+		{"orphan end", "PROGRAM p\nEND_FBD\nEND_PROGRAM\n", "END_FBD with no FBD"},
+		{"nested", "PROGRAM p\nFBD\nFBD\nEND_FBD\nEND_PROGRAM\n", "inside an FBD block"},
+		{"none", "PROGRAM p\nEND_PROGRAM\n", "must contain an FBD"},
+	}
+	for _, tc := range cases {
+		_, err := Transpile(tc.src)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: err = %v, want containing %q", tc.name, err, tc.want)
+		}
+	}
+}
+
+// An instance the POU's header already declares is CALLED by the netlist,
+// not re-declared — writing both reads naturally and must not collide.
+func TestInstanceDeclaredInHeaderIsNotRedeclared(t *testing.T) {
+	src := `PROGRAM p
+VAR_EXTERNAL Run : BOOL; Done : BOOL; END_VAR
+VAR t1 : TON; END_VAR
+FBD
+  t1 : TON(IN := Run, PT := T#5S)
+  Done := t1.Q
+END_FBD
+END_PROGRAM
+`
+	out, err := Transpile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(out, "t1 : TON"); n != 1 {
+		t.Fatalf("t1 declared %d times, want 1:\n%s", n, out)
+	}
+	if _, err := Compile(src); err != nil {
+		t.Fatalf("compile: %v\n%s", err, out)
+	}
+}

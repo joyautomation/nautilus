@@ -164,3 +164,92 @@ END_PROGRAM
 		t.Fatalf("compose→split mismatch: ok=%v", ok)
 	}
 }
+
+// A `.ld` file with no PROGRAM is a library like any other: its ladder
+// FUNCTION_BLOCKs reach the prelude as ST, after the .st libraries.
+const ldLibSrc = `FUNCTION_BLOCK PumpSeq
+VAR_INPUT  Start : BOOL; Stop : BOOL; END_VAR
+VAR_OUTPUT Run : BOOL; END_VAR
+LD
+  RUNG seal  [ Start | Run ] /Stop ( Run )
+END_LD
+END_FUNCTION_BLOCK
+`
+
+const ldProgramSrc = `PROGRAM Main
+VAR_EXTERNAL Cmd : BOOL; Halt : BOOL; Motor : BOOL; END_VAR
+VAR p1 : PumpSeq; END_VAR
+LD
+  RUNG call  Cmd p1:PumpSeq(Stop := Halt, Run => Motor)
+END_LD
+END_PROGRAM
+`
+
+func TestComposeAdmitsLadderLibrary(t *testing.T) {
+	dir := t.TempDir()
+	for name, src := range map[string]string{
+		"blocks.ld":     ldLibSrc,
+		"main.ld":       ldProgramSrc,
+		"eip_types.st":  typesSrc,
+		"nautilus.yaml": "name: x\n", // ignored: not an IEC source
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, err := ComposeAll(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Programs) != 1 || m.Programs[0].File != "main.ld" || m.Programs[0].POU != "Main" {
+		t.Fatalf("programs = %+v", m.Programs)
+	}
+	if len(m.Libraries) != 2 {
+		t.Fatalf("want the .st and the .ld library, got %d: %q", len(m.Libraries), m.Libraries)
+	}
+	// Tier order: .st first, then the transpiled ladder.
+	if !strings.Contains(m.Libraries[0], "Header_Type") {
+		t.Errorf("library 0 should be eip_types.st:\n%s", m.Libraries[0])
+	}
+	if !strings.Contains(m.Libraries[1], "FUNCTION_BLOCK PumpSeq") ||
+		strings.Contains(m.Libraries[1], "RUNG") {
+		t.Errorf("library 1 should be blocks.ld as ST:\n%s", m.Libraries[1])
+	}
+	// The prelude/program seam still round-trips, which `nautilus pull`
+	// depends on: a composed source splits back to the program body.
+	composed := Join(m.Libraries, m.Programs[0].Body)
+	body, ok := SplitProgram(composed, m.Prelude)
+	if !ok || body != m.Programs[0].Body {
+		t.Fatalf("round trip failed (ok=%v)", ok)
+	}
+}
+
+// A ladder PROGRAM's sibling ladder library is in its prelude, and the
+// library's ORIGINAL text comes back too — what the LD front-end needs to
+// place a rung's power on a block declared in another file.
+func TestPreludeSourcesIncludesLadderLibrary(t *testing.T) {
+	dir := t.TempDir()
+	prog := filepath.Join(dir, "main.ld")
+	for name, src := range map[string]string{
+		"blocks.ld": ldLibSrc,
+		"main.ld":   ldProgramSrc,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	prelude, sources, lines := PreludeSources(prog, nil)
+	if !strings.Contains(prelude, "FUNCTION_BLOCK PumpSeq") {
+		t.Fatalf("prelude missing the ladder library:\n%s", prelude)
+	}
+	if lines != strings.Count(prelude, "\n") {
+		t.Errorf("line count %d != %d", lines, strings.Count(prelude, "\n"))
+	}
+	if len(sources) != 1 || !strings.Contains(sources[0], "RUNG seal") {
+		t.Fatalf("sources should carry blocks.ld as written: %q", sources)
+	}
+	// The program itself never joins its own prelude.
+	if strings.Contains(prelude, "PROGRAM Main") {
+		t.Errorf("the file being compiled must not be in its own prelude")
+	}
+}

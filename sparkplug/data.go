@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 // scanAndPublish samples the tag store once, applies each metric's RBE rule,
@@ -16,56 +17,10 @@ func (n *Node) scanAndPublish() {
 		n.mu.Unlock()
 		return
 	}
-	snap := n.rt.Tags().Snapshot()
-	now := time.Now()
-
-	// A metric name we've never birthed → rebirth (debounced) so it appears
-	// in a birth before any data references it. Tags owned by an OFFLINE
-	// device are exempt: they cannot be born until the device is healthy —
-	// its DBIRTH covers them on the health transition — and rebirthing for
-	// them would storm empty births the whole time the device is down
-	// (e.g. every startup, while the field driver is still connecting).
-	for name := range snap {
-		if _, pub := n.rbeFor(name); !pub {
-			continue
-		}
-		if !n.known[name] {
-			if dev, owned := n.tagOwner[name]; owned && dev != "" && !n.devHealth[dev] {
-				continue
-			}
-			n.scheduleRebirthLocked()
-			n.mu.Unlock()
-			return
-		}
-	}
-
-	// Device health transitions.
-	deviceEvents := n.deviceHealthLocked(snap)
-
-	// Collect changed metrics per destination.
-	nodeChanged := n.collectChanged(snap, now, "")
-	devChanged := map[string][]Metric{}
-	for _, d := range n.devices {
-		if !n.devHealth[d.ID] {
-			continue
-		}
-		if ms := n.collectChanged(snap, now, d.ID); len(ms) > 0 {
-			devChanged[d.ID] = ms
-		}
-	}
-
-	// Gather the changed messages as {topic, metrics}. Delivery depends on
-	// the primary host: when it's offline (and store-and-forward is on) we
-	// buffer instead of publishing, replaying on recovery.
-	ts := nowMs()
-	var msgs []sfRecord
-	if len(nodeChanged) > 0 {
-		msgs = append(msgs, sfRecord{topic: n.topic("NDATA"), metrics: nodeChanged, ts: ts})
-	}
-	for _, d := range n.devices {
-		if ms := devChanged[d.ID]; len(ms) > 0 {
-			msgs = append(msgs, sfRecord{topic: n.deviceTopic("DDATA", d.ID), metrics: ms, ts: ts})
-		}
+	msgs, deviceEvents, rebirth := n.publishPassLocked(time.Now())
+	if rebirth {
+		n.mu.Unlock()
+		return
 	}
 	deliverable := n.hostDeliverableLocked()
 
@@ -111,6 +66,74 @@ func (n *Node) scanAndPublish() {
 	}
 }
 
+// publishPassLocked is the CPU half of one publish tick: sample the tag
+// store, notice a metric that was never birthed, detect device-health
+// transitions, and run every published metric through its RBE rule. It
+// returns the {topic, metrics} messages to deliver (or buffer), the
+// DBIRTH/DDEATH closures to run after the lock is released, and rebirth=true
+// when a rebirth was scheduled instead — in which case the caller publishes
+// nothing this tick. Caller holds n.mu.
+//
+// Split out of scanAndPublish so the pass can be benchmarked without a
+// broker: everything above the MQTT seam is here.
+func (n *Node) publishPassLocked(now time.Time) (msgs []sfRecord, deviceEvents []func(*Node), rebirth bool) {
+	tags := n.rt.Tags()
+	n.refreshShapeLocked(tags)
+	// Re-copy the store only when SOMETHING moved. The generation is read
+	// before the copy, so it can only ever under-state what snapBuf holds —
+	// which costs a redundant copy next tick, never a missed value.
+	if gen := tags.Generation(); n.snapBuf == nil || gen != n.snapGen {
+		n.snapBuf, n.snapGen = tags.SnapshotInto(n.snapBuf), gen
+	}
+	snap := n.snapBuf
+
+	// A metric name we've never birthed → rebirth (debounced) so it appears
+	// in a birth before any data references it. Tags owned by an OFFLINE
+	// device are exempt: they cannot be born until the device is healthy —
+	// its DBIRTH covers them on the health transition — and rebirthing for
+	// them would storm empty births the whole time the device is down
+	// (e.g. every startup, while the field driver is still connecting).
+	for _, name := range n.pubNames {
+		if n.known[name] {
+			continue // already birthed — the overwhelmingly common case
+		}
+		if dev, owned := n.tagOwner[name]; owned && dev != "" && !n.devHealth[dev] {
+			continue
+		}
+		n.scheduleRebirthLocked()
+		return nil, nil, true
+	}
+
+	// Device health transitions.
+	deviceEvents = n.deviceHealthLocked(snap)
+
+	// Collect changed metrics per destination.
+	nodeChanged := n.collectChanged(snap, now, "")
+	devChanged := map[string][]Metric{}
+	for _, d := range n.devices {
+		if !n.devHealth[d.ID] {
+			continue
+		}
+		if ms := n.collectChanged(snap, now, d.ID); len(ms) > 0 {
+			devChanged[d.ID] = ms
+		}
+	}
+
+	// Gather the changed messages as {topic, metrics}. Delivery depends on
+	// the primary host: when it's offline (and store-and-forward is on) we
+	// buffer instead of publishing, replaying on recovery.
+	ts := nowMs()
+	if len(nodeChanged) > 0 {
+		msgs = append(msgs, sfRecord{topic: n.topic("NDATA"), metrics: nodeChanged, ts: ts})
+	}
+	for _, d := range n.devices {
+		if ms := devChanged[d.ID]; len(ms) > 0 {
+			msgs = append(msgs, sfRecord{topic: n.deviceTopic("DDATA", d.ID), metrics: ms, ts: ts})
+		}
+	}
+	return msgs, deviceEvents, false
+}
+
 // hostDeliverableLocked reports whether live data can be published now:
 // with no primary host configured, always; otherwise only when the host is
 // online. Caller holds n.mu.
@@ -145,28 +168,63 @@ func (n *Node) drainStoreForward() {
 	}
 }
 
-// collectChanged returns the aliased data metrics for one destination
-// (owner=="" is node level) whose values passed RBE, recording new baselines.
-// Caller holds n.mu.
-func (n *Node) collectChanged(snap map[string]ir.Value, now time.Time, owner string) []Metric {
-	var out []Metric
-	for _, name := range sortedNames(snap) {
-		if n.tagOwner[name] != owner {
-			continue
-		}
+// refreshShapeLocked rebuilds the tick-invariant tables — which tags publish
+// at all, their resolved class rule, and their destination — when and only
+// when the tag store's NAME set has changed. Caller holds n.mu.
+//
+// Class assignment is glob matching (path.Match over every pattern, last
+// match wins) and it depends on nothing but the tag's name, so doing it once
+// per new tag instead of once per tag per tick is exact, not approximate.
+func (n *Node) refreshShapeLocked(tags *runtime.Tags) {
+	gen := tags.NameGeneration()
+	if n.shapeOK && gen == n.shapeGen {
+		return
+	}
+	n.pubNames = tags.AppendNames(n.pubNames[:0])
+	n.tagRBE = make(map[string]RBE, len(n.pubNames))
+	n.ownerName = map[string][]string{}
+	kept := n.pubNames[:0]
+	for _, name := range n.pubNames {
 		rbe, pub := n.rbeFor(name)
-		if !pub || !n.known[name] {
+		if !pub {
+			continue // NoPublish: not a metric, not our business
+		}
+		n.tagRBE[name] = rbe
+		owner := n.tagOwner[name]
+		n.ownerName[owner] = append(n.ownerName[owner], name)
+		kept = append(kept, name)
+	}
+	n.pubNames = kept
+	n.shapeGen, n.shapeOK = gen, true
+}
+
+// collectChanged returns the data metrics for one destination (owner==""
+// is node level) whose values passed RBE, recording new baselines.
+// Caller holds n.mu.
+//
+// It walks only that destination's tags, in the order refreshShapeLocked
+// sorted them, so metric order in a message is what it always was — a full
+// re-sort of the whole store per destination per tick is not the price of a
+// stable order.
+func (n *Node) collectChanged(snap map[string]runtime.Sample, now time.Time, owner string) []Metric {
+	var out []Metric
+	for _, name := range n.ownerName[owner] {
+		if !n.known[name] {
 			continue
 		}
-		v := snap[name]
+		s, ok := snap[name]
+		if !ok {
+			continue
+		}
 		st := n.rbeState[name]
 		if st == nil {
 			st = &rbeState{}
 			n.rbeState[name] = st
 		}
-		if !rbe.shouldPublish(st, v, now) {
+		if !n.tagRBE[name].shouldPublishSample(st, s, now) {
 			continue
 		}
+		v := s.Value
 		tmplRef := ""
 		if v.Kind == ir.TypeStruct && v.Struct != nil {
 			tmplRef = v.Struct.Name
@@ -179,7 +237,7 @@ func (n *Node) collectChanged(snap map[string]ir.Value, now time.Time, owner str
 		// under the TCK — see birth.go).
 		m.Timestamp = nowMs()
 		out = append(out, m)
-		st.record(v, now)
+		st.record(v, s.Gen, now)
 	}
 	return out
 }
@@ -187,7 +245,7 @@ func (n *Node) collectChanged(snap map[string]ir.Value, now time.Time, owner str
 // deviceHealthLocked detects device health transitions and returns closures
 // that publish the corresponding DBIRTH/DDEATH after the lock is released.
 // Caller holds n.mu.
-func (n *Node) deviceHealthLocked(snap map[string]ir.Value) []func(*Node) {
+func (n *Node) deviceHealthLocked(snap map[string]runtime.Sample) []func(*Node) {
 	var events []func(*Node)
 	for _, d := range n.devices {
 		healthy := d.Health == nil || d.Health()
