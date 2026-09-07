@@ -1,6 +1,7 @@
 package st
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -204,6 +205,52 @@ END_PROGRAM`
 	}
 	if got := frame.Slots[prog.SlotIndex["result"]].I; got != 20 {
 		t.Errorf("result = %d, want 20", got)
+	}
+}
+
+func TestLowerCaseRanges(t *testing.T) {
+	// `lo..hi` labels are inclusive, mix with plain values and comma lists,
+	// and a value outside every label falls through to ELSE. Before ranges
+	// were parsed the `..` silently mis-parsed and the clause matched the
+	// wrong thing without any diagnostic.
+	for _, tc := range []struct{ x, want int64 }{
+		{0, 99}, {1, 10}, {2, 20}, {5, 20}, {6, 99}, {7, 30}, {9, 30}, {10, 30}, {11, 99},
+	} {
+		src := fmt.Sprintf(`
+PROGRAM p
+VAR
+    x : INT := %d;
+    result : INT;
+END_VAR
+CASE x OF
+    1: result := 10;
+    2..5: result := 20;
+    7, 9..10: result := 30;
+ELSE
+    result := 99;
+END_CASE;
+END_PROGRAM`, tc.x)
+		prog := lowerSource(t, src)
+		frame := ir.NewFrame(prog)
+		if err := ir.Run(prog, frame, newStubHost()); err != nil {
+			t.Fatal(err)
+		}
+		if got := frame.Slots[prog.SlotIndex["result"]].I; got != tc.want {
+			t.Errorf("x=%d: result = %d, want %d", tc.x, got, tc.want)
+		}
+	}
+}
+
+func TestParseCaseMissingColonIsAnError(t *testing.T) {
+	src := `
+PROGRAM p
+VAR x : INT; y : INT; END_VAR
+CASE x OF
+    1 y := 1;
+END_CASE;
+END_PROGRAM`
+	if _, err := Parse(src); err == nil {
+		t.Fatal("expected a parse error for a CASE label with no ':'")
 	}
 }
 

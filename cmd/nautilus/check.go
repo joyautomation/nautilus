@@ -96,9 +96,9 @@ func runCheck(args []string) int {
 		if strings.EqualFold(filepath.Ext(f), ".sfc") {
 			// SFC transpiles directly to ST (a sibling of the LD/FBD hops,
 			// not a stage in their chain — docs/design/sfc.md §3). The
-			// structural checks of §5.1 run for real here; the ST-level
-			// hop (sfc.TranspileWithLines) is a follow-on slice's
-			// deliverable and errors cleanly until it lands.
+			// structural checks of §5.1 run first, then the ST-level
+			// hop (sfc.TranspileWithLines) compiles the chart like any
+			// other program.
 			prog, perr := sfc.Parse(source)
 			if perr != nil {
 				bad++

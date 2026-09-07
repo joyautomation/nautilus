@@ -67,7 +67,13 @@ func (*Case) stmtNode() {}
 
 type CaseClause struct {
 	Values []Expr
+	Ranges []CaseRange // inclusive lo..hi labels
 	Body   []Stmt
+}
+
+// CaseRange is an inclusive `lo..hi` CASE label.
+type CaseRange struct {
+	Lo, Hi Expr
 }
 
 type Return struct{}

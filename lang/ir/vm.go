@@ -165,6 +165,19 @@ func execStmt(ctx *EvalCtx, s Stmt) error {
 					return execBlock(ctx, cl.Body)
 				}
 			}
+			for _, r := range cl.Ranges {
+				lo, err := evalExpr(ctx, r.Lo)
+				if err != nil {
+					return err
+				}
+				hi, err := evalExpr(ctx, r.Hi)
+				if err != nil {
+					return err
+				}
+				if compareValues(sv, lo) >= 0 && compareValues(sv, hi) <= 0 {
+					return execBlock(ctx, cl.Body)
+				}
+			}
 		}
 		return execBlock(ctx, n.Else)
 

@@ -35,13 +35,14 @@ func (d Diagnostic) String() string {
 	return fmt.Sprintf("%d:%d: %s: %s", d.Pos.Line, d.Pos.Col, d.Severity, d.Message)
 }
 
-// slice1Qualifiers are the action qualifiers this slice implements (§2.5).
-var slice1Qualifiers = map[string]bool{"N": true, "S": true, "R": true, "P": true, "P0": true, "P1": true}
+// supportedQualifiers are the action qualifiers the transpiler implements
+// (design §2.5). None of them takes a time argument.
+var supportedQualifiers = map[string]bool{"N": true, "S": true, "R": true, "P": true, "P0": true, "P1": true}
 
-// stagedQualifiers are known IEC qualifiers deferred to a later slice
-// (§2.5, §7) — distinguished from a genuinely unknown token so the
-// diagnostic can point at the staging plan instead of just saying "unknown".
-var stagedQualifiers = map[string]bool{"L": true, "D": true, "SD": true, "DS": true, "SL": true}
+// timedQualifiers are the IEC qualifiers that take a time argument and are
+// not implemented (§2.5, §7) — distinguished from a genuinely unknown token
+// so the diagnostic says "not implemented" rather than "unknown".
+var timedQualifiers = map[string]bool{"L": true, "D": true, "SD": true, "DS": true, "SL": true}
 
 // Check runs the structural checks of design doc §5.1 against a parsed
 // chart and returns every finding, positioned and sorted by location.
@@ -147,7 +148,10 @@ func Check(prog *Program) []Diagnostic {
 		if !s.Initial && !isTarget[key] {
 			add(s.Pos, SeverityError, "step %q is unreachable: no transition's TO targets it", s.Name)
 		}
-		if !isSource[key] {
+		// A chart that is one INITIAL_STEP and nothing else is a valid
+		// degenerate chart (one continuously active step), so the dead-end
+		// warning is for charts that have somewhere else to go.
+		if !isSource[key] && len(prog.Steps) > 1 {
 			add(s.Pos, SeverityWarning, "step %q is a dead end: no transition's FROM sources it", s.Name)
 		}
 	}
@@ -155,12 +159,17 @@ func Check(prog *Program) []Diagnostic {
 	// ── action associations: qualifier support + target resolution ───────
 	for _, s := range prog.Steps {
 		for _, a := range s.Actions {
-			if !slice1Qualifiers[a.Qualifier] {
-				if stagedQualifiers[a.Qualifier] {
-					add(a.Pos, SeverityError, "qualifier %q is staged for a later slice (docs/design/sfc.md §2.5, §7); slice 1 supports N, S, R, P, P0, P1", a.Qualifier)
+			if !supportedQualifiers[a.Qualifier] {
+				if timedQualifiers[a.Qualifier] {
+					add(a.Pos, SeverityError, "timed qualifier %q is not implemented; supported qualifiers are N, S, R, P, P0, P1", a.Qualifier)
 				} else {
-					add(a.Pos, SeverityError, "unknown action qualifier %q; slice 1 supports N, S, R, P, P0, P1", a.Qualifier)
+					add(a.Pos, SeverityError, "unknown action qualifier %q; supported qualifiers are N, S, R, P, P0, P1", a.Qualifier)
 				}
+			} else if a.Time != "" {
+				// The parser keeps the `(time)` argument so the editor can
+				// round-trip it, but no supported qualifier reads it: refuse
+				// rather than run a chart that silently ignores a duration.
+				add(a.Pos, SeverityError, "qualifier %s does not take a time argument (%q); only the timed qualifiers L, D, SD, DS, SL do, and those are not implemented", a.Qualifier, a.Time)
 			}
 			key := strings.ToUpper(a.Target)
 			if actionByName[key] == nil && !varNames[key] {

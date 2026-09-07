@@ -4,10 +4,10 @@ PROGRAM {{.Program}}
    N/S/R/P1/...) drive outputs while a step is active. Open the diagram:
    VS Code → right-click program.sfc → "Open With → SFC Diagram".
    This starter chart is a single always-active step (no transitions yet)
-   so it slots into the same Sensor/Setpoint/Actuator wiring main.go/
-   driver.go use for every non-ladder language — replace Track with your
-   real sequence (INITIAL_STEP + STEPs + TRANSITIONs) as your logic grows
-   past "one continuously running action". *)
+   so it uses the same Sensor/Setpoint/Actuator tags every other starter
+   program does — replace Track with your real sequence (INITIAL_STEP +
+   STEPs + TRANSITIONs) once there is more than one continuously running
+   action. *)
 VAR_EXTERNAL
     Sensor   : REAL;  (* field input — {{if .NoGo}}bound by the driver in nautilus.yaml{{else}}see driver.go{{end}} *)
     Setpoint : REAL;  (* operator value — {{if .NoGo}}declared in nautilus.yaml{{else}}seeded in main.go{{end}} *)

@@ -139,8 +139,10 @@ A `FUNCTION_BLOCK` you write yourself instantiates the same way a `TON` does:
 ```
 
 `RateOfChange` is authored in an ST library file (`blocks.st`) and composed
-ahead of the program. Write a block once, call it from whichever language
-fits the logic. See [function blocks, libraries, and
+ahead of the program. A `FUNCTION_BLOCK` can carry an FBD body as well: a
+`.fbd` file with no `PROGRAM` is a project library, and its blocks
+instantiate from any language. Write a block once, call it from whichever
+language fits the logic. See [function blocks, libraries, and
 tasks](/guides/blocks-and-tasks/).
 
 ## In the editor
@@ -197,8 +199,8 @@ Because the source is text, a wiring change reviews as a diff:
 
 ## Not supported
 
-- Authoring a `FUNCTION` or `FUNCTION_BLOCK` in FBD. Library files are ST;
-  the diagram instantiates them.
+- Authoring a `FUNCTION` in FBD. Functions are ST; blocks may be FBD or
+  ladder.
 - `EN`/`ENO` pins. Blocks always evaluate.
 - Execution-order overrides. Order is source order plus the FB-before-reader
   rule described above.

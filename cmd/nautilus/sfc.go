@@ -18,10 +18,9 @@ Usage:
                               resolution, unreachable/dead-end steps,
                               qualifier support, alt-priority ambiguity,
                               and more. Prints gcc-style diagnostics.
-                              This does NOT yet run the ST-level hop
-                              (transpile + lower) — that's a follow-on
-                              slice; "nautilus check" will pick it up
-                              automatically once it lands.
+                              Chart-shape checks only; "nautilus check"
+                              runs these and then the ST-level hop
+                              (transpile + lower) as well.
   nautilus sfc graph <file>   Emit the diagram render model for a .sfc file
                               as JSON on stdout: steps (with action
                               associations), transitions (with derived

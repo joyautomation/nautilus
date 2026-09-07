@@ -1,8 +1,9 @@
 // Ladder Diagram preview: renders a .ld file's rungs in the shared diagram
 // webview (App switches to ladder mode on the ldModel message). Layout is
 // canonical — the drawing is a pure function of the source — and live
-// values paint power flow through contacts, branches, and coils. Read-only
-// for now: edit the text, the ladder follows.
+// values paint power flow through contacts, branches, and coils. Editable:
+// every gesture resolves through `nautilus ld edit` into a text edit on the
+// source, and the ladder re-renders from the result.
 
 import { execFile } from "child_process";
 import * as vscode from "vscode";

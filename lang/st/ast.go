@@ -290,8 +290,14 @@ type CaseStmt struct {
 
 type CaseClause struct {
 	Values []Expression
+	Ranges []CaseRange // `lo..hi` labels, matched inclusively
 	Body   []Statement
 	Pos    Pos
+}
+
+// CaseRange is one `lo..hi` label in a CASE clause.
+type CaseRange struct {
+	Lo, Hi Expression
 }
 
 func (s *CaseStmt) nodeType() string { return "CaseStmt" }

@@ -799,11 +799,23 @@ func (l *lowerer) lowerStmt(s Statement) (ir.Stmt, error) {
 				}
 				vals = append(vals, lv)
 			}
+			var ranges []ir.CaseRange
+			for _, r := range c.Ranges {
+				lo, err := l.lowerExpr(r.Lo)
+				if err != nil {
+					return nil, err
+				}
+				hi, err := l.lowerExpr(r.Hi)
+				if err != nil {
+					return nil, err
+				}
+				ranges = append(ranges, ir.CaseRange{Lo: lo, Hi: hi})
+			}
 			body, err := l.lowerStmts(c.Body)
 			if err != nil {
 				return nil, err
 			}
-			clauses = append(clauses, ir.CaseClause{Values: vals, Body: body})
+			clauses = append(clauses, ir.CaseClause{Values: vals, Ranges: ranges, Body: body})
 		}
 		elseB, err := l.lowerStmts(n.Else)
 		if err != nil {

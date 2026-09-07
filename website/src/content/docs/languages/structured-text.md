@@ -105,12 +105,14 @@ without narrowing. `TIME` counts milliseconds.
 `ARRAY[lo..hi] OF T` takes several comma-separated dimensions and any element
 type, including a UDT or a function block. Bounds are integer literals.
 `TYPE … END_TYPE` declares a `STRUCT` or an alias for another type. An initial
-value after `:=` must be a single literal constant.
+value after `:=` must be a single literal constant. A struct-typed
+`VAR_EXTERNAL` tag is written one field at a time (`P101.Running := TRUE`)
+or whole, and each field write reaches the tag store as a member write.
 
 Literals cover decimals and exponents (`1.5e3`), based integers (`16#FF`,
 `2#1010`, `8#777`), typed forms (`INT#42`, `BOOL#TRUE`, `STRING#'hi'`), and
-durations (`T#5s`, `T#500ms`, `T#1h30m`). Comments are `(* … *)` or `//` to end
-of line.
+durations (`T#5s`, `T#500ms`, `T#1h30m`). Comments are `(* … *)`, which
+nest, or `//` to end of line.
 
 `RETAIN` parses and changes nothing at runtime today. Every program `VAR` and
 function block instance already keeps its value from scan to scan, and a warm
@@ -122,12 +124,14 @@ across a restart is configured per tag on the retain store.
 `IF … ELSIF … ELSE … END_IF`, `CASE … OF … ELSE … END_CASE`,
 `FOR … TO … BY … DO … END_FOR`, `WHILE … DO … END_WHILE`,
 `REPEAT … UNTIL … END_REPEAT`, plus `EXIT`, `CONTINUE`, and `RETURN`.
+A `CASE` label is a constant, a comma list, or an inclusive `lo..hi` range.
 Assignment is `:=`, equality is `=`, and inequality is `<>`.
 
 ```iecst
 CASE Mode OF
-    0:    Running := FALSE;
-    1, 2: Running := TRUE;
+    0:      Running := FALSE;
+    1, 2:   Running := TRUE;
+    10..19: Running := Manual;
 ELSE
     Running := FALSE;
 END_CASE;
@@ -153,13 +157,19 @@ target at the call site, and `dwell.Q` reads one anywhere. Struct fields and
 array elements use `.field` and `[i]` on either side of an assignment; an index
 outside the declared bounds faults the scan.
 
-Every built-in function and function block is in the
+Every built-in function and function block, `PID` included, is in the
 [language reference](/reference/functions/).
 
 ## Functions and function blocks
 
 `FUNCTION` is stateless and returns one value, assigned to the function's own
-name. `FUNCTION_BLOCK` is stateful, and each instance owns its slots.
+name. `FUNCTION_BLOCK` is stateful, and each instance owns its slots. Pins
+may be any type, a user `TYPE` included, and a `VAR_IN_OUT` pin is a
+reference: the caller binds a variable with `:=`, the block's writes land in
+that variable when the call returns, and a `VAR_EXTERNAL` UDT bound this way
+round-trips through the tag store as one whole-struct write. Every
+`VAR_IN_OUT` must be bound at every call, to an assignable of exactly the
+pin's type.
 
 ```iecst
 FUNCTION_BLOCK RateOfChange
@@ -189,7 +199,9 @@ END_FUNCTION_BLOCK
 
 A `.st` file with no `PROGRAM` keyword is a library: `TYPE`, `FUNCTION`, and
 `FUNCTION_BLOCK` declarations, in scope for every program in the same
-directory. The runtime, the language server, `nautilus check`, download, and
+directory. Blocks may also be written in ladder or FBD, in `.ld` or `.fbd`
+libraries; ST libraries compose first, because that is where the `TYPE`
+declarations a graphical block's pins may name live. The runtime, the language server, `nautilus check`, download, and
 pull all compose libraries the same way, so a program round-trips losslessly.
 See [function blocks, libraries, and tasks](/guides/blocks-and-tasks/).
 

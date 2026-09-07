@@ -61,13 +61,18 @@ Every element the grammar accepts:
 | --- | --- | --- |
 | NO contact | `Tag` | passes power when `Tag` is TRUE |
 | NC contact | `/Tag` | passes power when `Tag` is FALSE |
+| Rising-edge contact | `+Tag` | one scan of power on `Tag`'s 0→1 transition (an implicit `R_TRIG`) |
+| Falling-edge contact | `-Tag` | one scan of power on `Tag`'s 1→0 transition (an implicit `F_TRIG`) |
 | Parallel branch | `[ a \| b ]` | OR of its legs; each leg is a series, and branches nest |
 | Function contact | `GT(TempC, 90.0)` | passes power when the call returns TRUE |
+| Negated function contact | `/GT(TempC, 90.0)` | passes power when the call returns FALSE; `/` negates any BOOL term, `/t1.Q` included |
 | Block in the rung | `t2:TON(PT := T#5S)` | power drives its power-in pin, and continues from its power-out pin |
 | Output capture | `ET => HiSecs` | binds a non-BOOL output pin to a variable, inside the block's parentheses |
 | Output coil | `( Tag )` | `Tag :=` the rung condition, every scan |
 | Set coil | `( S Tag )` | latch: `Tag := Tag OR condition` |
 | Reset coil | `( R Tag )` | unlatch: `Tag := Tag AND NOT condition` |
+| Rising-edge coil | `( P Tag )` | `Tag` is TRUE for one scan when the rung condition rises |
+| Falling-edge coil | `( N Tag )` | `Tag` is TRUE for one scan when the rung condition falls |
 
 Contacts and coils take the same accessor references FBD takes, so array
 elements and struct members address directly: `Levels[2]`, `PIT_001.VALUE`.
@@ -81,9 +86,11 @@ Series elements AND together and branch legs OR, so
 `Run := AND(OR(Start, Run), NOT Stop)`. That is the seal-in: Start energizes
 Run, Run's own contact holds it in, Stop drops it out.
 
-Coils sit at the right end of a rung, and a rung needs at least one. Several
-coils share one condition, evaluated once and fanned out. A rung with only a
-coil is driven by the rail, so `( AlwaysOn )` assigns TRUE. Rungs evaluate
+Coils sit at the right end of a rung. A rung needs at least one coil or a
+function block as its last element: `A B t1:TON(PT := T#5S)` is a complete
+rung whose only output is `t1.Q`, read elsewhere. Several coils share one
+condition, evaluated once and fanned out. A rung with only a coil is driven
+by the rail, so `( AlwaysOn )` assigns TRUE. Rungs evaluate
 top to bottom within a scan, so a coil written on one rung reads back as a
 contact on the next rung in the same scan.
 
@@ -103,6 +110,11 @@ value, use the standard's output binding at the call site, `ET => HiSecs`
 above. Any instance output is also readable as `inst.Pin` anywhere,
 including as a contact: `GE(t2.ET, T#2S)`.
 
+Edge contacts and edge coils are unnamed in the text. The compiler derives
+a stable instance name from the rung name, the tag, and the position among
+repeats in that rung, so the edge's retained state survives an unrelated
+edit elsewhere in the program.
+
 ## Types, functions, and blocks
 
 LD transpiles in one hop to the FBD netlist, which transpiles to ST. Ladder
@@ -111,12 +123,37 @@ operator, function and function-block vocabulary, user `FUNCTION`s and
 `FUNCTION_BLOCK`s from library `.st` files, arrays and structs through
 accessor references, and typed diagnostics mapped back to the rung.
 
-A user block drops into a rung the way a TON does, with power on `IN` and
-continuing from `Q`, so a block meant for rung use declares those two pins.
-Any block is readable from a rung through `inst.Pin` whatever its pins are
-called. Instance state persists across scans, and an online edit carries it
-by name and type. See [Function blocks, libraries, and
-tasks](/guides/blocks-and-tasks/); library files are ST today.
+A user block drops into a rung the way a TON does. Power lands on `EN` if
+the block declares one, otherwise on the first BOOL `VAR_INPUT` the call
+does not bind by name, and continues from `ENO` or the first BOOL
+`VAR_OUTPUT`. Every other pin is bound in the parentheses, with `=>`
+capturing outputs. Instance state persists across scans, and an online edit
+carries it by name and type.
+
+Blocks can be written in ladder, too. A `.ld` file may hold
+`FUNCTION_BLOCK`s whose bodies are rungs, and a `.ld` file with no
+`PROGRAM` is a project library, the same rule that makes a PROGRAM-less
+`.st` one:
+
+```iecld
+FUNCTION_BLOCK PumpSeq
+VAR_INPUT  Start : BOOL; Stop : BOOL; Level : REAL; StopLevel : REAL; END_VAR
+VAR_OUTPUT Run : BOOL; Warm : BOOL; END_VAR
+VAR        t1 : TON; END_VAR
+LD
+  RUNG seal  [ Start | Run ] /Stop /GE(Level, StopLevel) ( Run )
+  RUNG warm  Run t1:TON(PT := T#5S) ( Warm )
+END_LD
+END_FUNCTION_BLOCK
+```
+
+This is what ladder has instead of a JSR: a subroutine with pins rather
+than shared tags, and retained state per instance. Two pumps are two
+instances of one block, each with its own seal-in and its own `t1`. The
+`VAR_*` sections are ordinary POU declarations, `VAR_IN_OUT` included, so
+a ladder block can take a UDT by reference. `examples/ladder-subroutines`
+is the whole feature in four files. See [Function blocks, libraries, and
+tasks](/guides/blocks-and-tasks/).
 
 ## In the editor
 
@@ -187,17 +224,11 @@ whose program is ladder.
 - **Master control relay zones.** No `MCR` or zone bracketing.
 - **Negated coils.** `( /Tag )` is rejected; invert with NC contacts or use
   a reset coil.
-- **Negated function contacts.** `/GT(a, b)` is rejected; write the opposite
-  comparison.
-- **Coils inside a branch.** Coils sit at the rung's right end. Several
-  coils on one rung drive more than one output.
-- **A rung with no coil.** Rejected even when the rung holds a function
-  block. Give the block's `Q` a coil, or read `inst.Q` from another rung.
-- **Edge contact modifiers.** No `|P|` / `|N|` form. One-shots are
-  `e1:R_TRIG()` and `e1:F_TRIG()` in the rung.
+- **Coils inside a branch, or ahead of a later block.** The output zone is
+  contiguous at the rung's right end. Split such a rung into one rung per
+  output leg.
 - **Vendor instruction sets.** The vocabulary is the IEC built-ins in the
   [language reference](/reference/functions/), and nothing else.
-- **Authoring function blocks in ladder.** Library files are `.st` today.
 
 ## See also
 

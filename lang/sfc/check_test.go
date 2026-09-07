@@ -300,7 +300,7 @@ END_SFC
 END_PROGRAM
 `
 	prog := mustParse(t, src)
-	wantDiag(t, Check(prog), SeverityError, `qualifier "L" is staged for a later slice`)
+	wantDiag(t, Check(prog), SeverityError, `timed qualifier "L" is not implemented`)
 }
 
 func TestCheckUnknownStepXTRef(t *testing.T) {
@@ -462,4 +462,44 @@ END_PROGRAM
 `
 	prog := mustParse(t, src)
 	wantNoDiag(t, Check(prog), "ambiguous alternative-priority group")
+}
+
+func TestCheckSingleStepChartIsNotADeadEnd(t *testing.T) {
+	// One INITIAL_STEP and nothing else is a valid degenerate chart (the
+	// scaffold's starter): a continuously active step with no transitions.
+	src := `PROGRAM P
+VAR Out : BOOL; END_VAR
+SFC
+INITIAL_STEP Track:
+  N Out;
+END_STEP
+END_SFC
+END_PROGRAM
+`
+	prog := mustParse(t, src)
+	if diags := Check(prog); len(diags) != 0 {
+		t.Errorf("Check(single-step chart) = %v, want none", diags)
+	}
+}
+
+func TestCheckTimeArgumentOnUntimedQualifierIsAnError(t *testing.T) {
+	// The parser keeps `(T#5s)` so the editor round-trips it, but N/S/R/P
+	// never read it; a chart must not run while silently ignoring a duration.
+	src := `PROGRAM P
+VAR Out : BOOL; END_VAR
+SFC
+INITIAL_STEP A:
+  N Out (T#5s);
+END_STEP
+STEP B:
+END_STEP
+TRANSITION FROM A TO B := TRUE;
+END_TRANSITION
+TRANSITION FROM B TO A := TRUE;
+END_TRANSITION
+END_SFC
+END_PROGRAM
+`
+	prog := mustParse(t, src)
+	wantDiag(t, Check(prog), SeverityError, "does not take a time argument")
 }

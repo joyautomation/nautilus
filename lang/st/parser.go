@@ -705,22 +705,33 @@ func (p *Parser) parseCaseStmt() (Statement, error) {
 	for p.peek().Type != TokenEndCase && p.peek().Type != TokenElse && p.peek().Type != TokenEOF {
 		clausePos := p.peekPos()
 		var values []Expression
+		var ranges []CaseRange
 		for {
 			val, err := p.parseExpression()
 			if err != nil {
 				return nil, err
 			}
-			values = append(values, val)
+			if p.match(TokenDotDot) {
+				hi, err := p.parseExpression()
+				if err != nil {
+					return nil, fmt.Errorf("line %d: CASE range: %w", clausePos.Line, err)
+				}
+				ranges = append(ranges, CaseRange{Lo: val, Hi: hi})
+			} else {
+				values = append(values, val)
+			}
 			if !p.match(TokenComma) {
 				break
 			}
 		}
-		p.expect(TokenColon)
+		if _, err := p.expect(TokenColon); err != nil {
+			return nil, fmt.Errorf("line %d: CASE label: expected ':' after the label list: %w", clausePos.Line, err)
+		}
 		body, err := p.parseCaseBody()
 		if err != nil {
 			return nil, err
 		}
-		stmt.Cases = append(stmt.Cases, CaseClause{Values: values, Body: body, Pos: clausePos})
+		stmt.Cases = append(stmt.Cases, CaseClause{Values: values, Ranges: ranges, Body: body, Pos: clausePos})
 
 		if p.peek().Type == TokenEndCase || p.peek().Type == TokenElse || p.peek().Type == TokenEOF {
 			break
@@ -764,33 +775,42 @@ func (p *Parser) parseCaseBody() ([]Statement, error) {
 	}
 }
 
-// looksLikeCaseLabel returns true if the upcoming tokens form `<const>[, <const>]* :`.
-// Case labels in ST are constant values, so an integer/typed literal or negative
-// number followed by `,` or `:` unambiguously starts a new clause.
+// looksLikeCaseLabel returns true if the upcoming tokens form
+// `<label>[, <label>]* :` where a label is a constant or a `<const>..<const>`
+// range. Case labels in ST are constant values, so an integer/typed literal
+// or negative number followed by `,`, `..`, or `:` unambiguously starts a
+// new clause.
 func (p *Parser) looksLikeCaseLabel() bool {
-	i := 0
-	// Optional leading '-' for negative numeric labels.
-	if p.peekAt(i).Type == TokenMinus {
-		i++
-	}
-	switch p.peekAt(i).Type {
-	case TokenNumber, TokenBasedNumber, TokenTypedLiteral, TokenTrue, TokenFalse, TokenString, TokenTimeLiteral:
-	default:
-		return false
-	}
-	i++
-	// Walk additional comma-separated values.
-	for p.peekAt(i).Type == TokenComma {
-		i++
+	// constAt reports whether a (possibly negated) constant starts at i and
+	// returns the index just past it.
+	constAt := func(i int) (int, bool) {
 		if p.peekAt(i).Type == TokenMinus {
 			i++
 		}
 		switch p.peekAt(i).Type {
 		case TokenNumber, TokenBasedNumber, TokenTypedLiteral, TokenTrue, TokenFalse, TokenString, TokenTimeLiteral:
-		default:
+			return i + 1, true
+		}
+		return i, false
+	}
+	labelAt := func(i int) (int, bool) {
+		i, ok := constAt(i)
+		if !ok {
+			return i, false
+		}
+		if p.peekAt(i).Type == TokenDotDot {
+			return constAt(i + 1)
+		}
+		return i, true
+	}
+	i, ok := labelAt(0)
+	if !ok {
+		return false
+	}
+	for p.peekAt(i).Type == TokenComma {
+		if i, ok = labelAt(i + 1); !ok {
 			return false
 		}
-		i++
 	}
 	return p.peekAt(i).Type == TokenColon
 }

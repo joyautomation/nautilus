@@ -49,8 +49,9 @@ The pieces that make this first-class rather than a convention:
 - **Callable from any IEC language.** The same `PI` block instantiates
   from an FBD diagram (`tic : PI(SP := TempSP, ...)`) exactly like a
   built-in TON — author blocks once, use them from whichever language
-  fits the logic. (Authoring blocks *in* FBD/LD is on the roadmap;
-  today libraries are ST.)
+  fits the logic. Blocks can be authored in ladder or FBD as well: a
+  `.ld` or `.fbd` file holding `FUNCTION_BLOCK`s is a library, the same
+  as a `.st` one (see [Ladder](/languages/ladder/)).
 - **The tooling composes the same way.** The VS Code extension, the LSP,
   `nautilus check`, and `nautilus pull` all treat sibling library files
   as in-scope for the program, byte-identically to `Libraries` — so
