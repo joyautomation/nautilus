@@ -2,12 +2,12 @@
 
 **SCADA, built like software.** A Go + SvelteKit toolkit for building
 industrial control and supervisory systems the way software engineers already
-work — version control, tests, CI/CD, code review — instead of inside a
+work, with version control, tests, CI/CD, and code review, instead of inside a
 proprietary vendor IDE.
 
-Write your control logic in **IEC 61131-3** — Structured Text, Ladder, or
-Function Block, the portable standard languages — or in **native Go**. Host it
-on a deterministic scan loop. Build the operator screens on the included
+Write your control logic in **IEC 61131-3** (Structured Text, Ladder, Function
+Block, or Sequential Function Chart, the portable standard languages) or in
+**native Go**. Host it on a deterministic scan loop. Build the operator screens on the included
 **SvelteKit component kit**. Bring your own field I/O, redundancy and historian
 through small, documented interfaces. Develop it in **VS Code**. Ship it like
 any other binary.
@@ -28,15 +28,21 @@ runtime/     scan loop · tag bus · program host (compile, hot-swap, retained s
 lang/st      IEC 61131-3 Structured Text: lexer, parser, lowering
 lang/fbd     Function Block Diagram: netlist text ⇄ diagram model, transpiles to ST
 lang/ld      Ladder Diagram: rung text ⇄ ladder model, transpiles to FBD
+lang/sfc     Sequential Function Chart: steps, transitions, actions, transpiles to ST
 lang/ir      typed IR + tree-walking virtual machine (pure stdlib)
 io/          Driver seam — bring your own bus (Modbus, EtherNet/IP, OPC-UA, sim)
 eip/         EtherNet/IP driver for Allen-Bradley Logix: pure-Go CIP stack,
              tag browse + UDT import codegen, polling io.Driver, Logix emulator
-server/      tag API over HTTP: JSON snapshot, SSE stream, tag writes
-cmd/nautilus the developer CLI: `new` (scaffold) · `check` (CI compile) · `lsp`
+sparkplug/   Sparkplug B edge node (and host application) over MQTT
+retain/      retained-memory stores: file, Kubernetes ConfigMap
+leader/      redundancy: Kubernetes Lease leader election
+hist/        historian seam + Postgres sink, `nautilus historian`
+acceptance/  virtual-time acceptance tests (`nautilus test`, `*_test.yaml`)
+server/      tag API over HTTP: JSON snapshot, SSE stream, tag writes, program history
+cmd/nautilus the developer CLI: new · run · test · check · build · pull · lsp · eip · sparkplug · historian
 hmi/         SvelteKit digital-twin component kit + realtime SSE client
-tools/vscode-iec/   VS Code extension: syntax, diagnostics, go-to-def, live values
-examples/heated-tank/   a complete controller built on the libraries
+tools/vscode-iec/   VS Code extension: syntax, diagnostics, go-to-def, live values, diagram editors
+examples/    heated-tank-nogo (manifest project, four tasks, three languages), hmi-demo, tank-batch-sfc, …
 ```
 
 **The public API is the seams.** You implement interfaces to bring your world:
@@ -59,9 +65,11 @@ VS Code for the editor experience.
 go install github.com/joyautomation/nautilus/cmd/nautilus@latest
 ```
 
-This gives you `nautilus new` (scaffold a project), `nautilus check`
-(headless Structured Text compile for CI), and `nautilus lsp` (the language
-server the VS Code extension uses).
+This gives you the whole toolchain in one binary: `nautilus new` (scaffold a
+project), `run`, `test`, `check` (the CI gate: compiles every program and
+cross-checks it against the manifest), `build`, `pull` (bring a controller's
+running program back into the repo), `lsp` (the language server the VS Code
+extension uses), and the `eip`, `sparkplug`, and `historian` tools.
 
 **2. Scaffold a project**
 
@@ -152,13 +160,17 @@ completion, and **live tag values as pills** next to identifiers in
 
 **5. Make it yours**
 
-- Write control logic in `program.st` (IEC 61131-3 Structured Text).
+- Write control logic in `program.st`, or in `.ld`, `.fbd`, or `.sfc`; the
+  graphical languages open in full diagram editors in VS Code.
 - Swap `plant.go` for a real `io.Driver` — Modbus, EtherNet/IP, OPC-UA, your
   bus — when you have hardware. The control logic doesn't change.
 - Add an HMI: `npm install @joyautomation/nautilus-hmi` in a SvelteKit app for
   SCADA faceplates and an SSE realtime client.
-- Ship it like any Go binary: `go build`, deploy. The scaffolded CI gates on
-  `go test` and `nautilus check`.
+- Ship it as one binary: `nautilus build` for a manifest project, `go build`
+  for an SDK project. The scaffolded CI gates on `nautilus check`,
+  `nautilus test`, and `nautilus build`; `nautilus new --deploy` adds a
+  Dockerfile, a redundant-pair Kubernetes manifest, and the workflow that
+  ships a merged commit to the controller.
 
 Under the scaffold, a complete controller — an IEC program on a 10 Hz scan
 loop driving a field device — is about 30 lines:
@@ -320,14 +332,15 @@ honored. The node passes the **Sparkplug TCK edge-node profile** — CI runs the
 `joyautomation/sparkplug-tck-go` harness against a live node on every push. MQTT
 and protobuf live only in this package; the runtime core stays stdlib-only.
 
-## Three languages, one program model
+## Four languages, one program model
 
-A program file is `.st`, `.fbd`, or `.ld` — pick per task, mix freely in
-one controller. The graphical languages are **text first**: an `.fbd` is a
-netlist, an `.ld` is rung text, both diff/review/merge like code, and the
-VS Code extension projects them into a full graphical editor (right-click
-→ "Open With → FBD Diagram" / "Ladder Diagram") where every gesture is a
-structural edit to the text underneath.
+A program file is `.st`, `.fbd`, `.ld`, or `.sfc`: pick per task, mix freely
+in one controller. The graphical languages are **text first**: an `.fbd` is a
+netlist, an `.ld` is rung text, an `.sfc` is a step/transition list, all of
+them diff/review/merge like code, and the VS Code extension projects them
+into a full graphical editor (right-click → "Open With → FBD Diagram" /
+"Ladder Diagram" / "SFC Diagram") where every gesture is a structural edit
+to the text underneath.
 
 ```iecst
 (* interlocks.ld *)
@@ -372,9 +385,9 @@ HMI / POST /api/tags ──(writes)─────▶ │           │ ──(r
                                      (coils)    ▼
 ```
 
-**A `VAR_EXTERNAL` declaration is a binding, not a creation.** Declaring
-`TempC : REAL;` in your program tells the compiler "resolve this name in
-the tag store at scan time" — it does not make the tag exist. Existence
+**A `VAR_EXTERNAL` declaration binds a name; it does not create the tag.**
+Declaring `TempC : REAL;` in your program means "resolve this name in the
+tag store at scan time", and nothing more. Existence
 comes from a write, and there are exactly four writers:
 
 1. a **seed** in the Go composition (initial value, exists from scan one),
@@ -542,8 +555,9 @@ block with signatures and behavior — is in
 
 ## Status
 
-Early. This is the extracted, generalized core of a working demo
-([mini-scada](https://github.com/joyautomation)). What's here now:
+Pre-1.0, and the foundation Joy Automation builds SCADA systems on. Every artifact is versioned
+on its own: the CLI by `v*` tags, the VS Code extension on the Marketplace
+pre-release channel, the HMI kit on npm. What ships today:
 
 - ✅ `lang/st` + `lang/ir` — the Structured Text VM (pure stdlib, tested)
 - ✅ `lang/stgen` — build ST type declarations functionally in Go and render
@@ -590,12 +604,10 @@ Early. This is the extracted, generalized core of a working demo
 
 ## Roadmap
 
-- Retained-memory, redundancy, and historian packages behind clean interfaces
 - An HMI starter in `nautilus new`
 - Native-Go function blocks alongside ST (both lowering to the same IR)
 - FUNCTION_BLOCKs authored in FBD/LD (today: ST)
 - Vendor-format import (Studio 5000 L5X, TIA, PLCopen XML) → nautilus
-- A test harness for acceptance tests that gate deploys (from mini-scada)
 
 ## License
 

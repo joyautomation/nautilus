@@ -7,7 +7,11 @@ export default defineConfig({
     starlight({
       title: 'nautilus',
       favicon: '/favicon.png',
-      logo: { src: './src/assets/logo.png', alt: 'nautilus' },
+      logo: {
+        light: './src/assets/logo-light.svg',
+        dark: './src/assets/logo.svg',
+        alt: 'nautilus',
+      },
       customCss: ['./src/styles/fonts.css'],
       description:
         'SCADA, built like software — a Go + SvelteKit toolkit for industrial control and supervisory systems with version control, tests, CI/CD, and code review.',

@@ -17,9 +17,9 @@ HMI / POST /api/tags ──(writes)─────▶ │           │ ──(r
                                      (coils)    ▼
 ```
 
-**A `VAR_EXTERNAL` declaration is a binding, not a creation.** Declaring
-`TempC : REAL;` in your program tells the compiler "resolve this name in
-the tag store at scan time" — it does not make the tag exist. Existence
+**A `VAR_EXTERNAL` declaration binds a name; it does not create the tag.**
+Declaring `TempC : REAL;` in your program means "resolve this name in the
+tag store at scan time", and nothing more. Existence
 comes from a write, and there are exactly four writers:
 
 1. a **seed** in the Go composition (initial value, exists from scan one),

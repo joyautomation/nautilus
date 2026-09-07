@@ -24,13 +24,14 @@ Every task runs the classic PLC cycle on its interval:
 read inputs → evaluate the program top to bottom → write outputs
 ```
 
-All three languages end up as the same intermediate form, one hop at a
+All four languages end up as the same intermediate form, one hop at a
 time:
 
 ```
  .st  ─────────────────────────►  IR (compiled, type-checked)
  .fbd ── transpile ──► ST ──────►  IR
  .ld  ── transpile ──► FBD ──► ST ─►  IR
+ .sfc ── transpile ──► ST ──────►  IR
 ```
 
 Because each hop preserves line maps, a diagnostic anywhere in that chain

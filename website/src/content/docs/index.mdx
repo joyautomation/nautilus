@@ -4,7 +4,7 @@ description: SCADA, built like software — a Go + SvelteKit toolkit for industr
 template: splash
 hero:
   title: nautilus
-  tagline: SCADA, built like software. Build industrial control and supervisory systems the way software engineers already work — version control, tests, CI/CD, code review — instead of inside a proprietary vendor IDE.
+  tagline: SCADA, built like software. Build industrial control and supervisory systems the way software engineers already work, with version control, tests, CI/CD, and code review, instead of inside a proprietary vendor IDE.
   actions:
     - text: Get started
       link: /getting-started/
@@ -18,19 +18,19 @@ hero:
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
 <CardGrid>
-  <Card title="Three IEC languages, one program model" icon="seti:plan">
-    Structured Text, Ladder, and Function Block — text first, so they diff,
-    review, and merge like code, with full graphical editors in VS Code. All
-    three lower to the same IR.
+  <Card title="Four IEC languages, one program model" icon="seti:plan">
+    Structured Text, Ladder, Function Block, and Sequential Function Chart.
+    Text first, so they diff, review, and merge like code, with full
+    graphical editors in VS Code. All four lower to the same IR.
   </Card>
   <Card title="A runtime you can read" icon="rocket">
-    Deterministic scan loop, tag bus, and PLC-style online edits — warm-swap
+    Deterministic scan loop, tag bus, and PLC-style online edits: warm-swap
     logic on a live controller with retained state carried across. A tiny,
     pure-stdlib Go core.
   </Card>
   <Card title="Control logic with real tests" icon="approve-check">
     Acceptance tests run on a virtual clock, so a ten-second interlock delay
-    or a PI loop's settling time is asserted exactly — deterministically, in
+    or a PI loop's settling time is asserted exactly, deterministically, in
     milliseconds. No toolchain, and CI that gates on more than a compile.
   </Card>
   <Card title="Talk to real hardware" icon="setting">

@@ -51,11 +51,11 @@ configure — it uses the repo's own `GITHUB_TOKEN`). The final step —
 it needs one secret only you can add: a namespace-scoped kubeconfig as
 `KUBE_CONFIG`. Uncomment it and the loop closes.
 
-Rolling by sha rather than `latest` is deliberate: a Deployment that says
-`:latest` redeploys to *whatever was pushed most recently*, which is a
-statement about time, not about code. A sha is a statement about code.
+Rolling by sha rather than `latest` is deliberate: a sha pins the code,
+while a Deployment that says `:latest` redeploys to whatever was pushed most
+recently.
 
-## The artifact answers for itself
+## The artifact carries its own provenance
 
 `nautilus build` embeds the project's git history in the binary it emits —
 `— N commits of program history embedded` on the build line. The deployed

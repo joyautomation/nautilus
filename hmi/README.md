@@ -12,7 +12,7 @@ It ships three things:
 2. **A generic realtime client** (`RealtimeClient` / `createRealtimeClient`) — one SSE stream in,
    commands out over POST. It is agnostic to your frame shape: it hands you the latest parsed JSON
    frame (typed by a generic parameter) and tracks connection **freshness** rather than trusting
-   `EventSource` events (which lie across a proxy failover). A `TrendBuffer` helper keeps a rolling,
+   `EventSource` events (which are unreliable across a proxy failover). A `TrendBuffer` helper keeps a rolling,
    windowed history you can bind straight into `Trend`.
 3. **A themeable token layer** (`theme.css`) — light & dark `[data-theme]` tokens (surfaces, ink,
    grid/axis, a validated categorical chart palette, status colors, interaction tokens) plus a

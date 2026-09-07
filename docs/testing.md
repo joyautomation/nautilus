@@ -284,8 +284,8 @@ reproducible. Real scheduling gives every task its own ticker and lets the
 OS decide; a passing suite says your logic is correct under one valid
 interleaving, not under all of them. That is a deliberate trade.
 
-They also don't test the physics. A simulated plant is a fixture, not a
-subject — it exists so the control logic has something to control.
+They also don't test the physics. A simulated plant is a fixture: it exists
+so the control logic has something to control.
 
 And they don't touch hardware. For driver conformance against a real
 controller, see the EtherNet/IP guide's emulator.

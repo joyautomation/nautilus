@@ -1,13 +1,13 @@
 ---
 title: Program history
-description: The running controller answers for its own commits — review every change as a diff, and warm-swap back to any revision in its history.
+description: The running controller serves its own commit history. Review every change as a diff, and warm-swap back to any revision.
 ---
 
-A traditional PLC cannot tell you where its logic came from. A nautilus
-controller can: `GET /api/program/history` serves every commit that touched
-the project — author, date, subject, and the full diff — from the controller
-itself. The commit-to-running-controller pipeline gains its mirror:
-running-controller-back-to-commits.
+A traditional PLC keeps no record of where its logic came from. A nautilus
+controller does: `GET /api/program/history` serves every commit that touched
+the project (author, date, subject, and the full diff) from the controller
+itself. This is the mirror of the commit-to-running-controller pipeline:
+running controller back to commits.
 
 ```bash
 curl localhost:8080/api/program/history
@@ -43,9 +43,9 @@ The history is captured **where git exists** and travels with the artifact:
 
 - **`nautilus build`** snapshots the project's git history into the emitted
   binary (you'll see `— N commits of program history embedded` on the build
-  line). The deployed controller — a distroless container on an air-gapped
-  plant network, with no git binary, no `.git` dir, and no route out —
-  answers from data it carries.
+  line). A deployed controller, even a distroless container on an air-gapped
+  plant network with no git binary, no `.git` dir, and no route out, serves
+  history from the data it carries.
 - **`nautilus run`** in a checkout captures live from the repo on first
   request.
 
@@ -86,9 +86,8 @@ commit.
 
 ## What activation cannot do
 
-Time travel covers **logic only**. Tasks, tags, drivers, retain and
-redundancy wiring — the cold plane — stay as the running manifest booted
-them. A commit that changed topology (added a task, renamed one) is refused
+Time travel covers **logic only**. The cold plane (tasks, tags, drivers,
+retain and redundancy wiring) is left as the running manifest booted it. A commit that changed topology (added a task, renamed one) is refused
 with a `409` naming the difference: deploy that commit's image instead.
 That's the same two-plane rule online edits follow — logic changes live,
 infrastructure ships through [CD](/guides/deployment/).

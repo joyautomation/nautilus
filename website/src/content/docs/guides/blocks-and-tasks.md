@@ -3,7 +3,7 @@ title: Function blocks, libraries, and tasks
 description: Structuring logic beyond one file — FUNCTION_BLOCKs and FUNCTIONs in library files, and multiple programs scheduled as tasks.
 ---
 
-When a program outgrows one file, IEC 61131-3's unit of reuse is the
+Once a program no longer fits in one file, IEC 61131-3's unit of reuse is the
 **`FUNCTION_BLOCK`** (stateful — each instance keeps its own timers,
 integrals, latches) and the **`FUNCTION`** (stateless). nautilus sticks to
 the standard here on purpose: there is no vendor-style "call another
@@ -65,9 +65,9 @@ The pieces that make this first-class rather than a convention:
 
 ## More than one program: tasks
 
-The spec's answer to "many programs" isn't calling between them — it's the
-**resource/task model**: several programs scheduled at their own rates
-against one shared tag store. `Options.Tasks` is exactly that:
+The spec's answer to "many programs" is the **resource/task model**:
+several programs scheduled at their own rates against one shared tag store,
+with no calling between them. `Options.Tasks` is exactly that:
 
 ```go
 rt, _ := runtime.New(runtime.Options{

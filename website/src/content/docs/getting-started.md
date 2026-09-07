@@ -12,9 +12,11 @@ VS Code for the editor experience.
 go install github.com/joyautomation/nautilus/cmd/nautilus@latest
 ```
 
-This gives you `nautilus new` (scaffold a project), `nautilus check`
-(headless Structured Text compile for CI), and `nautilus lsp` (the language
-server the VS Code extension uses).
+This gives you the whole toolchain in one binary: `nautilus new` (scaffold a
+project), `run`, `test`, `check` (the CI gate: compiles every program and
+cross-checks it against the manifest), `build`, `pull` (bring a controller's
+running program back into the repo), `lsp` (the language server the VS Code
+extension uses), and the `eip`, `sparkplug`, and `historian` tools.
 
 ## 2. Scaffold a project
 
@@ -29,7 +31,7 @@ Run it bare for the interactive form — it asks for the template, the
 program language, and the features you want.
 
 A nautilus project is your logic and a manifest. Run, test, and ship it
-with the CLI alone — no toolchain:
+with the CLI alone, no toolchain:
 
 ```sh
 cd my-plant
@@ -41,10 +43,10 @@ nautilus build      # emit ./my-plant — a self-contained controller binary
 
 `nautilus.yaml` declares the tasks (one program file each, any language,
 own scan rates), the tags by role, the server, and the field driver.
-`nautilus build` emits one deployable binary — no Go toolchain anywhere.
+`nautilus build` emits one deployable binary, with no Go toolchain anywhere.
 
 `*_test.yaml` holds the acceptance tests, and they run against a **virtual
-clock** — so a ten-second on-delay or a loop's settling time is asserted
+clock**, so a ten-second on-delay or a loop's settling time is asserted
 exactly, deterministically, in milliseconds:
 
 ```yaml
@@ -60,8 +62,8 @@ exactly, deterministically, in milliseconds:
 
 See [Testing](/reference/testing/) for the whole format.
 
-Go is the **SDK**, not the base — reach for `--template sdk` when you need
-a custom field bus or richer simulation physics. That form is the same
+Go is the **SDK**. Reach for `--template sdk` when you need a custom field
+bus or richer simulation physics. That form is the same
 runtime with the manifest written as code, and it's an ordinary Go
 program:
 
@@ -91,8 +93,8 @@ values next to identifiers in your program.
 
 ## 4. Make it yours
 
-- Write control logic in `program.st` — or `.ld` / `.fbd`; the graphical
-  languages open in full diagram editors in VS Code.
+- Write control logic in `program.st`, or in `.ld`, `.fbd`, or `.sfc`; the
+  graphical languages open in full diagram editors in VS Code.
 - Assert on it in `*_test.yaml`, and keep asserting as you tune. The
   fixture comes from `nautilus.yaml`, so a retuned gain can't drift away
   from what the tests verify.
@@ -102,10 +104,14 @@ values next to identifiers in your program.
 - Add an HMI with the SvelteKit component kit: faceplates, trends, and an
   SSE realtime client.
 - Ship it as one binary. The scaffolded CI gates on `nautilus check`,
-  `nautilus test`, and `nautilus build`.
+  `nautilus test`, and `nautilus build`. Add `--deploy` to `nautilus new`
+  for a Dockerfile, a redundant-pair Kubernetes manifest, and the workflow
+  that ships a merged commit to the controller.
 
 ## Next
 
+- [Online edits](/guides/online-edits/) — change logic on a running
+  controller from VS Code, and pull field edits back into git.
 - [Testing](/reference/testing/) — virtual time, and the `*_test.yaml`
   format for asserting on timers and loop responses.
 - [The tag model](/guides/tag-model/) — how tags come to exist, which role

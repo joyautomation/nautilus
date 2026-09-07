@@ -19,3 +19,18 @@ h2,
   font-family: 'Righteous', var(--sl-font);
   font-weight: 400;
 }
+
+/* Brand accent: the spiral's green (content/assets/brand tokens). Starlight
+   derives the wordmark, links, and the primary button from these, so the
+   site title takes the mark's own colour. Light mode uses a darker green
+   that clears 4.5:1 on white; dark mode uses the spiral green itself. */
+:root {
+  --sl-color-accent-low: #dff5e7;
+  --sl-color-accent: #1a7f45;
+  --sl-color-accent-high: #0f4d2a;
+}
+:root[data-theme='dark'] {
+  --sl-color-accent-low: #12341f;
+  --sl-color-accent: #2f9e5c;
+  --sl-color-accent-high: #64d88a;
+}
