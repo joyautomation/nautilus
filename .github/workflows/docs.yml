@@ -3,9 +3,9 @@ name: docs
 on:
   push:
     branches: [main]
-    paths: ['website/**', 'docs/**']
+    paths: ['website/**', 'docs/**', 'hmi/README.md', 'tools/vscode-iec/syntaxes/**']
   pull_request:
-    paths: ['website/**', 'docs/**']
+    paths: ['website/**', 'docs/**', 'hmi/README.md', 'tools/vscode-iec/syntaxes/**']
 
 jobs:
   build:

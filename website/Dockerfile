@@ -4,6 +4,7 @@ FROM node:22-alpine AS build
 WORKDIR /repo
 COPY docs ./docs
 COPY hmi/README.md ./hmi/README.md
+COPY tools/vscode-iec/syntaxes ./tools/vscode-iec/syntaxes
 COPY website ./website
 WORKDIR /repo/website
 RUN npm ci && npm run build
