@@ -21,15 +21,73 @@ type GlobalUse struct {
 	Written map[string]bool
 }
 
-// GlobalUses walks the program body and classifies every GlobalRef.
+// DirectGlobalUses walks only this program's own body and classifies every
+// GlobalRef it finds — no FB-instance recursion. lang/st uses this to
+// populate an owning FBDef.Uses at Lower time, one FB body at a time; a
+// deep version there would risk baking in a stale, partly-empty snapshot of
+// a sibling FB not yet lowered (bodies lower in declaration order, and one
+// may instantiate another declared later in the same file). GlobalUses is
+// the version everything else should call.
 //
 // A compound assignment target (`P101.Speed := …`, `Buf[i] := …`) counts as
 // BOTH: setting one field means reading the aggregate that holds it, so the
 // tag must already have a value.
-func (p *Program) GlobalUses() GlobalUse {
+func (p *Program) DirectGlobalUses() GlobalUse {
 	u := GlobalUse{Read: map[string]bool{}, Written: map[string]bool{}}
 	u.stmts(p.Body)
 	return u
+}
+
+// GlobalUses reports how this program uses the PLC-wide variables it
+// binds: DirectGlobalUses, plus transitively the Uses of every
+// FUNCTION_BLOCK instance it declares — nested FB-in-FB included. A
+// library FB's VAR_EXTERNAL reads and writes the tag store through
+// whichever program's instance steps it, so those reads/writes belong to
+// this program exactly as if it had named the tag directly (see
+// FBDef.Uses and Program.GlobalsDeep, which this mirrors). Safe to call
+// any time after the whole project has finished lowering — unlike
+// FBDef.Uses, which a sibling FB may still be populating.
+func (p *Program) GlobalUses() GlobalUse {
+	u := p.DirectGlobalUses()
+	seen := map[*FBDef]bool{}
+	for _, s := range p.Slots {
+		u.collectFB(s.Type, seen)
+	}
+	return u
+}
+
+// collectFB is the GlobalUse counterpart of collectFBGlobals: it merges in
+// the Read/Written sets of every FB instance reachable from t (directly, or
+// nested inside an array/struct/FB-in-FB), guarding against revisiting a
+// shared *FBDef.
+func (u *GlobalUse) collectFB(t *Type, seen map[*FBDef]bool) {
+	if t == nil {
+		return
+	}
+	switch t.Kind {
+	case TypeFB:
+		if t.FB == nil || seen[t.FB] {
+			return
+		}
+		seen[t.FB] = true
+		for name := range t.FB.Uses.Read {
+			u.Read[name] = true
+		}
+		for name := range t.FB.Uses.Written {
+			u.Written[name] = true
+		}
+		for _, s := range t.FB.AllSlots() {
+			u.collectFB(s.Type, seen)
+		}
+	case TypeArray:
+		u.collectFB(t.Elem, seen)
+	case TypeStruct:
+		if t.Struct != nil {
+			for _, f := range t.Struct.Fields {
+				u.collectFB(f.Type, seen)
+			}
+		}
+	}
 }
 
 func (u *GlobalUse) stmts(ss []Stmt) {

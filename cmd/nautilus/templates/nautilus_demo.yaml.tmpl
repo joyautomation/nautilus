@@ -23,6 +23,8 @@ redundancy: {}
 server:
   addr: "localhost:8080"   # NAUTILUS_ADDR overrides; set NAUTILUS_TOKEN to gate writes
   online-edits: true       # PLC-style online edits from VS Code (off for production)
+  # hmi: ./hmi/build        # serve a built HMI at "/" instead of the dashboard —
+                            # see "Serving the HMI from the controller" in the docs
 
 # One program per task, each on its own scan. The FIRST task owns field I/O.
 # dt-tag receives the measured scan-to-scan seconds — bind it wherever you

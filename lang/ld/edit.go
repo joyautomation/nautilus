@@ -29,7 +29,7 @@ type EditOp struct {
 	Ref    string `json:"ref,omitempty"`
 	Neg    bool   `json:"neg,omitempty"`
 	Mode   string `json:"mode,omitempty"` // coil "", "S", "R"
-	Kind   string `json:"kind,omitempty"` // insert: contact | coil | fn | fb | branch
+	Kind   string `json:"kind,omitempty"` // insert: contact | coil | edge | fn | fb | branch
 	Fn     string `json:"fn,omitempty"`
 	Inst   string `json:"inst,omitempty"`
 	FbType string `json:"fbType,omitempty"`
@@ -76,9 +76,11 @@ func refValid(s string) bool {
 	return err == nil && got == strings.TrimSpace(s) && t.peek() == ""
 }
 
-// ApplyEdit resolves op against source and returns the text edits.
-func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
-	m, err := Graph(src)
+// ApplyEdit resolves op against source and returns the text edits. libs
+// are the project's library sources, so an inserted user block records the
+// power pins it will really compile to.
+func ApplyEdit(src string, op EditOp, libs ...string) ([]TextEdit, error) {
+	m, err := Graph(src, libs...)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +96,7 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 	case "renameRung":
 		return opRenameRung(src, m, op)
 	case "move":
-		return opMove(m, op)
+		return opMove(src, m, op)
 	case "setComment":
 		return opSetComment(m, op)
 	case "addComment":
@@ -120,8 +122,8 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		if err != nil {
 			return nil, err
 		}
-		if el.Kind != "contact" && el.Kind != "coil" {
-			return nil, fmt.Errorf("ld edit: only contacts and coils retag")
+		if el.Kind != "contact" && el.Kind != "coil" && el.Kind != "edge" {
+			return nil, fmt.Errorf("ld edit: only contacts, coils, and edges retag")
 		}
 		el.Ref = op.Ref
 	case "toggleNeg":
@@ -129,8 +131,8 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		if err != nil {
 			return nil, err
 		}
-		if el.Kind != "contact" {
-			return nil, fmt.Errorf("ld edit: only contacts toggle NO/NC")
+		if el.Kind != "contact" && el.Kind != "fn" {
+			return nil, fmt.Errorf("ld edit: only contacts and function contacts toggle negation")
 		}
 		el.Neg = !el.Neg
 	case "setCoilMode":
@@ -141,8 +143,8 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		if el.Kind != "coil" {
 			return nil, fmt.Errorf("ld edit: %s is not a coil", el.Kind)
 		}
-		if op.Mode != "" && op.Mode != "S" && op.Mode != "R" {
-			return nil, fmt.Errorf("ld edit: coil mode must be \"\", S, or R")
+		if op.Mode != "" && op.Mode != "S" && op.Mode != "R" && op.Mode != "P" && op.Mode != "N" {
+			return nil, fmt.Errorf("ld edit: coil mode must be \"\", S, R, P, or N")
 		}
 		el.Mode = op.Mode
 	case "setArgs":
@@ -166,7 +168,7 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		if op.Element != nil {
 			uniquifyInsts(m, op.Element)
 		}
-		if err := opInsert(r, op); err != nil {
+		if err := opInsert(m, r, op); err != nil {
 			return nil, err
 		}
 	case "delete":
@@ -204,6 +206,29 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 
 	// The mutated rung re-prints canonically; the parse gate below keeps
 	// the never-break-the-text guarantee.
+	return rungEdit(src, r)
+}
+
+// rungEdit replaces a rung's element text with the canonical print of its
+// (mutated) model, keeping the rung's own layout: a one-line rung stays on
+// its RUNG header, a two-line rung keeps its indented body line.
+func rungEdit(src string, r *Rung) ([]TextEdit, error) {
+	if r.Inline {
+		body := printRung(r)
+		if _, err := parseRungText(body, r.Line); err != nil {
+			return nil, fmt.Errorf("ld edit: refused — the result would not parse: %w", err)
+		}
+		line := strings.Split(src, "\n")[r.Line-1]
+		endCol := len(line) + 1
+		endLine := r.Line
+		if r.EndLine > r.Line {
+			// Elements ran over onto following lines — they fold back onto
+			// the header, which is where this rung keeps them.
+			endLine, endCol = r.EndLine+1, 1
+			body += "\n"
+		}
+		return []TextEdit{{Line: r.Line, Col: r.bodyCol, EndLine: endLine, EndCol: endCol, NewText: body}}, nil
+	}
 	body := "    " + printRung(r)
 	if _, err := parseRungText(body, r.Line); err != nil {
 		return nil, fmt.Errorf("ld edit: refused — the result would not parse: %w", err)
@@ -215,7 +240,7 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 // it at the target (another spot in the same rung, or a different rung).
 // Index adjustment for same-series moves, and the re-parse gate on every
 // touched rung, keep the drag gesture unable to corrupt the text.
-func opMove(m *Model, op EditOp) ([]TextEdit, error) {
+func opMove(src string, m *Model, op EditOp) ([]TextEdit, error) {
 	from, err := findRung(m, op.Rung)
 	if err != nil {
 		return nil, err
@@ -312,11 +337,11 @@ func opMove(m *Model, op EditOp) ([]TextEdit, error) {
 	}
 	var edits []TextEdit
 	for _, r := range rungs {
-		body := "    " + printRung(r)
-		if _, err := parseRungText(body, r.Line); err != nil {
-			return nil, fmt.Errorf("ld edit: refused — the result would not parse: %w", err)
+		e, err := rungEdit(src, r)
+		if err != nil {
+			return nil, err
 		}
-		edits = append(edits, TextEdit{Line: r.Line + 1, Col: 1, EndLine: r.EndLine + 1, EndCol: 1, NewText: body + "\n"})
+		edits = append(edits, e...)
 	}
 	return edits, nil
 }
@@ -396,7 +421,7 @@ func locateSeries(r *Rung, path []int) (*[]Element, error) {
 	return series, nil
 }
 
-func newElement(op EditOp) (Element, error) {
+func newElement(op EditOp, res *resolver) (Element, error) {
 	switch op.Kind {
 	case "contact":
 		ref := op.Ref
@@ -416,6 +441,18 @@ func newElement(op EditOp) (Element, error) {
 			return Element{}, fmt.Errorf("ld edit: %q is not a valid reference", ref)
 		}
 		return Element{Kind: "coil", Ref: ref, Mode: op.Mode}, nil
+	case "edge":
+		ref := op.Ref
+		if ref == "" {
+			ref = "_"
+		}
+		if !refValid(ref) {
+			return Element{}, fmt.Errorf("ld edit: %q is not a valid reference", ref)
+		}
+		if op.Mode != "P" && op.Mode != "N" {
+			return Element{}, fmt.Errorf("ld edit: an edge contact needs mode P or N")
+		}
+		return Element{Kind: "edge", Ref: ref, Mode: op.Mode}, nil
 	case "branch":
 		// A fresh branch: the new parallel path plus a placeholder leg.
 		return Element{Kind: "branch", Legs: [][]Element{
@@ -431,7 +468,7 @@ func newElement(op EditOp) (Element, error) {
 		if !identOnly.MatchString(op.Inst) || !identOnly.MatchString(op.FbType) {
 			return Element{}, fmt.Errorf("ld edit: a block needs an instance name and a type")
 		}
-		in, out := powerPins(op.FbType)
+		in, out := res.powerPins(op.FbType, op.Args)
 		return Element{Kind: "fb", Inst: op.Inst, Type: op.FbType, Args: op.Args, PowerIn: in, PowerOut: out}, nil
 	}
 	return Element{}, fmt.Errorf("ld edit: unknown element kind %q", op.Kind)
@@ -447,6 +484,16 @@ func sanitizeElement(e *Element) error {
 		}
 		if !refValid(e.Ref) {
 			return fmt.Errorf("ld edit: %q is not a valid reference", e.Ref)
+		}
+	case "edge":
+		if e.Ref == "" {
+			e.Ref = "_"
+		}
+		if !refValid(e.Ref) {
+			return fmt.Errorf("ld edit: %q is not a valid reference", e.Ref)
+		}
+		if e.Mode != "P" && e.Mode != "N" {
+			return fmt.Errorf("ld edit: an edge contact needs mode P or N")
 		}
 	case "fn":
 		if e.Fn == "" {
@@ -512,7 +559,7 @@ func uniquifyInsts(m *Model, el *Element) {
 	walk(el)
 }
 
-func opInsert(r *Rung, op EditOp) error {
+func opInsert(m *Model, r *Rung, op EditOp) error {
 	var el Element
 	if op.Element != nil {
 		el = *op.Element
@@ -521,7 +568,7 @@ func opInsert(r *Rung, op EditOp) error {
 		}
 	} else {
 		var err error
-		el, err = newElement(op)
+		el, err = newElement(op, m.res)
 		if err != nil {
 			return err
 		}
@@ -597,12 +644,7 @@ func opAddRung(src string, m *Model, op EditOp) ([]TextEdit, error) {
 		}
 		at = r.EndLine + 1
 	} else {
-		for i, line := range strings.Split(src, "\n") {
-			if ldEndRe.MatchString(line) {
-				at = i + 1
-				break
-			}
-		}
+		at = findEndLD(src)
 		if at == 0 {
 			return nil, fmt.Errorf("ld edit: no END_LD to insert before")
 		}
@@ -668,17 +710,25 @@ func opAddComment(src string, m *Model, op EditOp) ([]TextEdit, error) {
 		}
 		at = r.EndLine + 1
 	} else {
-		for i, line := range strings.Split(src, "\n") {
-			if ldEndRe.MatchString(line) {
-				at = i + 1
-				break
-			}
-		}
+		at = findEndLD(src)
 		if at == 0 {
 			return nil, fmt.Errorf("ld edit: no END_LD to insert before")
 		}
 	}
 	return []TextEdit{{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: "\n" + printComment(text)}}, nil
+}
+
+// findEndLD returns the 1-based line of the file's first END_LD, or 0 if
+// none. Scanned on comment-stripped text so a `(* ... *)` doc comment whose
+// text happens to contain a line that reads "END_LD" isn't mistaken for
+// the real closer.
+func findEndLD(src string) int {
+	for i, line := range strings.Split(stripComments(src), "\n") {
+		if ldEndRe.MatchString(line) {
+			return i + 1
+		}
+	}
+	return 0
 }
 
 var headerCommentRe = regexp.MustCompile(`\s*\(\*.*?\*\)\s*$`)
@@ -693,9 +743,19 @@ func opSetRungComment(src string, m *Model, op EditOp) ([]TextEdit, error) {
 		return nil, fmt.Errorf("ld edit: a rung comment can't contain *)")
 	}
 	line := strings.Split(src, "\n")[r.Line-1]
-	newLine := strings.TrimRight(headerCommentRe.ReplaceAllString(line, ""), " \t")
+	// A one-line rung carries its elements on this same line: rewrite only
+	// the header part, or the new comment would land after the elements
+	// (where the next parse would read it as one).
+	head, rest := line, ""
+	if r.Inline && r.bodyCol >= 1 && r.bodyCol <= len(line)+1 {
+		head, rest = line[:r.bodyCol-1], line[r.bodyCol-1:]
+	}
+	newLine := strings.TrimRight(headerCommentRe.ReplaceAllString(head, ""), " \t")
 	if text != "" {
 		newLine += "  (* " + text + " *)"
+	}
+	if rest != "" {
+		newLine += "  " + rest
 	}
 	return []TextEdit{{Line: r.Line, Col: 1, EndLine: r.Line, EndCol: len(line) + 1, NewText: newLine}}, nil
 }
@@ -731,7 +791,10 @@ func opDeclareVar(src string, m *Model, op EditOp) ([]TextEdit, error) {
 		}
 	}
 
-	lines := strings.Split(src, "\n")
+	// Scanned on comment-stripped text so a `(* ... *)` doc comment whose
+	// text happens to start a line with "LD" or "VAR" isn't mistaken for
+	// real header structure.
+	lines := strings.Split(stripComments(src), "\n")
 	ldLine := -1 // 0-based line of the LD block start = end of the header
 	for i, l := range lines {
 		if ldStartRe.MatchString(l) {
@@ -811,7 +874,15 @@ func printElement(e *Element) string {
 		}
 		return e.Ref
 	case "fn":
+		if e.Neg {
+			return "/" + e.Fn + "(" + e.Args + ")"
+		}
 		return e.Fn + "(" + e.Args + ")"
+	case "edge":
+		if e.Mode == "N" {
+			return "-" + e.Ref
+		}
+		return "+" + e.Ref
 	case "fb":
 		if strings.TrimSpace(e.Args) == "" {
 			return e.Inst + ":" + e.Type

@@ -21,6 +21,10 @@ type Tag struct {
 	Name string
 	Role string
 	Type string
+	// Init is a scalar (bool/float64/int/int64/string) for an untyped or
+	// scalar tag, or a map[string]any for a struct-typed tag's per-member
+	// seed — nested map[string]any for a nested struct member. nil omits
+	// init: entirely (zero-of-type, for a Type tag).
 	Init any
 	Unit string
 	Desc string
@@ -63,7 +67,7 @@ func Render(header []string, tags []Tag) ([]byte, error) {
 			fmt.Fprintf(&b, ", type: %s", t.Type)
 		}
 		if t.Init != nil {
-			fmt.Fprintf(&b, ", init: %s", scalar(t.Init))
+			fmt.Fprintf(&b, ", init: %s", renderInit(t.Init))
 		}
 		if t.Unit != "" {
 			fmt.Fprintf(&b, ", unit: %s", quote(t.Unit))
@@ -76,9 +80,36 @@ func Render(header []string, tags []Tag) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-// scalar renders an init value. Floats keep a decimal point so YAML decodes
-// them as float64 and not int — the tag store distinguishes DINT from REAL,
-// and "0" instead of "0.0" would silently retype a tag.
+// renderInit renders a tag's init value: a scalar as before, or — for a
+// struct-typed tag's per-member seed (internal/project's `init:` mapping) —
+// a flow-style YAML mapping, recursively for a nested struct member. This is
+// what lets a generator emit `init: { RAWMIN: 6553.0, LVL: { CTL1HSP: 85.0 } }`
+// instead of only ever seeding zero-of-type, and it is the same shape the
+// loader (`ir.SeedFromInit`) accepts back — round-tripping a manifest tag
+// through `nautilus eip tags` / `nautilus tags import-csv` and back.
+//
+// Keys are sorted for the same reason the tag list itself is: a regenerated
+// file must diff cleanly, not reshuffle.
+func renderInit(v any) string {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return scalar(v)
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = fmt.Sprintf("%s: %s", k, renderInit(m[k]))
+	}
+	return "{ " + strings.Join(parts, ", ") + " }"
+}
+
+// scalar renders a leaf init value. Floats keep a decimal point so YAML
+// decodes them as float64 and not int — the tag store distinguishes DINT
+// from REAL, and "0" instead of "0.0" would silently retype a tag.
 func scalar(v any) string {
 	switch x := v.(type) {
 	case bool:

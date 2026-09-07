@@ -3,7 +3,8 @@
 Status: **built.** All six pieces of §8 are implemented and tested; §2 argues
 the approach and §4 answers every question it opened. Findings were verified
 against the tree at `040b2a4`; notes marked *Built* record where the
-implementation sharpened a decision.
+implementation sharpened a decision. §4.4's per-field `init:` mapping,
+originally deferred, shipped later (`st-struct-pins`) — see its *Built* note.
 
 ## 0. Why this exists
 
@@ -696,6 +697,26 @@ value, not a template, so §6 holds. What stays out is any per-field *addressing
 form (`init.Speed:`, `init: {P101.Speed: …}`); anything that wants computing
 computes upstream, and anything that wants sequencing is first-scan logic.
 
+*Built.* `ir.SeedFromInit(t, init)` (`lang/ir/seed.go`) is the implementation:
+`init == nil` still returns `Zero(t)`; a `map[string]any` sets the members it
+names — recursively for a nested struct member, e.g. `LVL: { CTL1HSP: 60.0 }`
+— and leaves every other member, at any depth, at zero of its own field type.
+`runtime.expandTags` (`runtime/tagdef.go`) calls it for a typed tag whose
+`Init` is non-nil, instead of handing the raw manifest value to `Tags.Set` —
+which has no case for a struct map and would previously have done nothing.
+Errors name the member path: `tag WEL15_FIT_001: init: unknown member RAWMN
+(did you mean RAWMIN?)`, with the `did you mean` suggestion (Levenshtein,
+≤2 edits) included when one is close. A struct-typed tag given a scalar
+`init:` — the case this section flagged as needing to be an error, not a
+silent no-op — is now one: `%s is a struct — init must be a mapping of
+member: value, not %s`. `internal/tagfile.Render` emits the same nested
+flow-style shape back out, so a generator (`nautilus eip tags`, `nautilus
+tags import-csv`) round-trips a struct's per-member init exactly like a
+hand-written one. This was Pomona WRD's motivating case: a site's ~55-line
+first-scan `CfgDone` block of UDT-field assignments — RAWMIN/RAWMAX/HHSP/…,
+`LVL.CTL1HSP`/`LVL.CTL1LSP` — collapses into the tag's own `init:`, in the
+manifest that already declares the tag.
+
 ### 4.5 Does `TagMeta` need to be per-field?
 
 **No. The hidden cost the brief feared is not there — I checked all three
@@ -883,8 +904,6 @@ Schema-widening stays backward compatible if this is ever wrong.
 
 ### Deferred (all backward compatible to add)
 
-- **`init:` as a field mapping** (§4.4) — ship zero-of-type only. A frozen
-  schema is worth the most at its first release.
 - **Per-type meta** `Motor.Speed` (§4.5) — no project has the repetition yet.
 - **`given:` field writes** (§4.7) — needs the harness to seed the input
   image; `expect` covers the common case first.

@@ -20,6 +20,7 @@
 
 	let visible = $state(false);
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	let wrapEl = $state<HTMLElement | null>(null);
 	const id = `nh-tt-${Math.random().toString(36).slice(2, 9)}`;
 
 	function show() {
@@ -33,15 +34,36 @@
 	function onkeydown(ev: KeyboardEvent) {
 		if (ev.key === 'Escape') hide();
 	}
+
+	// Touch/pen path: hover and focus don't exist under a coarse pointer, so
+	// a tap on the trigger toggles the tip directly (no hover delay — it was
+	// a deliberate tap) and a tap anywhere outside, on the same pointer
+	// family, closes it. Mouse/focus behaviour above is untouched.
+	function onpointerdown(ev: PointerEvent) {
+		if (ev.pointerType !== 'touch' && ev.pointerType !== 'pen') return;
+		clearTimeout(timer);
+		visible = !visible;
+	}
+	function onDocumentPointerDown(ev: PointerEvent) {
+		if (ev.pointerType !== 'touch' && ev.pointerType !== 'pen') return;
+		if (wrapEl?.contains(ev.target as Node)) return;
+		hide();
+	}
+	$effect(() => {
+		document.addEventListener('pointerdown', onDocumentPointerDown);
+		return () => document.removeEventListener('pointerdown', onDocumentPointerDown);
+	});
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <span
 	class="tt-wrap"
+	bind:this={wrapEl}
 	onmouseenter={show}
 	onmouseleave={hide}
 	onfocusin={show}
 	onfocusout={hide}
+	{onpointerdown}
 	{onkeydown}
 >
 	<span aria-describedby={visible ? id : undefined}>

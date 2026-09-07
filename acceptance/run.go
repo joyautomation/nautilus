@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
@@ -69,11 +70,15 @@ type TB interface {
 //
 //	func TestAcceptance(t *testing.T) {
 //	    proj, _ := project.Load(os.DirFS("."), "")
-//	    acceptance.Run(t, os.DirFS("."), proj.Runtime)
+//	    acceptance.Run(t, os.DirFS("."), proj.Runtime,
+//	        acceptance.WithAlarms(proj.AlarmEngine))
 //	}
-func Run(tb TB, fsys fs.FS, opts runtime.Options) {
+//
+// The Options are variadic and last, so a call written before any of them
+// existed still compiles and behaves identically.
+func Run(tb TB, fsys fs.FS, opts runtime.Options, o ...Option) {
 	tb.Helper()
-	results, err := RunDir(fsys, opts)
+	results, err := RunDir(fsys, opts, o...)
 	if err != nil {
 		tb.Errorf("acceptance: %v", err)
 		return
@@ -88,7 +93,7 @@ func Run(tb TB, fsys fs.FS, opts runtime.Options) {
 }
 
 // RunDir discovers and runs every `*_test.yaml` under fsys.
-func RunDir(fsys fs.FS, opts runtime.Options) ([]Result, error) {
+func RunDir(fsys fs.FS, opts runtime.Options, o ...Option) ([]Result, error) {
 	paths, err := DiscoverSuites(fsys)
 	if err != nil {
 		return nil, err
@@ -99,7 +104,7 @@ func RunDir(fsys fs.FS, opts runtime.Options) ([]Result, error) {
 		if err != nil {
 			return nil, err
 		}
-		rs, err := RunSuite(suite, opts)
+		rs, err := RunSuite(suite, opts, o...)
 		if err != nil {
 			return nil, err
 		}
@@ -109,10 +114,11 @@ func RunDir(fsys fs.FS, opts runtime.Options) ([]Result, error) {
 }
 
 // RunSuite runs one loaded suite.
-func RunSuite(s *Suite, opts runtime.Options) ([]Result, error) {
+func RunSuite(s *Suite, opts runtime.Options, o ...Option) ([]Result, error) {
+	cfg := collect(o)
 	out := make([]Result, 0, len(s.Tests))
 	for _, t := range s.Tests {
-		r, err := runTest(s, t, opts)
+		r, err := runTest(s, t, opts, cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -133,9 +139,13 @@ type testRun struct {
 	types  map[string]string // tag name → declared UDT, for field-level `given`
 	meta   map[string]runtime.TagMeta
 	preds  map[string]*predicate
+	// alarms is this test's OWN engine — built fresh like the runtime, so
+	// an acknowledgement in one test cannot leak into the next. Nil when
+	// the project declares no alarms.
+	alarms *alarm.Engine
 }
 
-func runTest(s *Suite, t *Test, opts runtime.Options) (Result, error) {
+func runTest(s *Suite, t *Test, opts runtime.Options, cfg runOptions) (Result, error) {
 	res := Result{Suite: s.Path, Name: t.Name, Line: t.Line}
 
 	// A stub driver, always — whatever the manifest configures. Tests never
@@ -160,6 +170,14 @@ func runTest(s *Suite, t *Test, opts runtime.Options) (Result, error) {
 		// the flat meta map a trace reads.
 		meta:  rt.Meta(),
 		preds: map[string]*predicate{},
+	}
+	// The alarm engine registers itself on the runtime's post-scan hook,
+	// so it evaluates in lockstep with the scans the scheduler drives —
+	// which is what makes an on-delay walk exactly with `advance:`.
+	if cfg.alarms != nil {
+		if r.alarms, err = cfg.alarms(rt); err != nil {
+			return res, fmt.Errorf("%s: alarms: %w", s.Path, err)
+		}
 	}
 
 	suspend := t.Suspend
@@ -216,6 +234,23 @@ func runTest(s *Suite, t *Test, opts runtime.Options) (Result, error) {
 func (r *testRun) runStep(st *Step) (*Failure, error) {
 	if err := r.apply(st.Given); err != nil {
 		return nil, err
+	}
+	// The operator verbs land with `given:`, before the step spends its
+	// time: an ack is an input to the step, the same way a tag write is.
+	if st.Ack != nil {
+		if err := r.ack(st.Ack); err != nil {
+			return nil, err
+		}
+	}
+	if st.Shelve != nil {
+		if err := r.shelve(st.Shelve); err != nil {
+			return nil, err
+		}
+	}
+	if st.Unshelve != nil {
+		if err := r.unshelve(st.Unshelve); err != nil {
+			return nil, err
+		}
 	}
 
 	tr := r.newTracer(st)
@@ -305,6 +340,18 @@ func (r *testRun) runStep(st *Step) (*Failure, error) {
 			}, nil
 		}
 	}
+	if st.Alarms != nil {
+		ok, detail, err := r.checkAlarms(st.Alarms)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return &Failure{
+				At: r.sch.Elapsed(), Reason: "alarm expectation failed",
+				Detail: detail, Trace: tr.result(),
+			}, nil
+		}
+	}
 	return nil, nil
 }
 
@@ -375,11 +422,18 @@ func (r *testRun) value(name string) (ir.Value, error) {
 		return ir.Value{}, fmt.Errorf("no tag %q in this project", name)
 	}
 	if root, err := r.rt.Tags().ReadGlobal(head); err == nil {
-		v, ferr := fieldOf(root, head, rest)
-		if ferr != nil {
-			return ir.Value{}, ferr
+		// The walk itself is Tags.ReadPath now — the same promotion the
+		// design brief asks for, so a test, the alarm engine and the API
+		// resolve a member path identically. ReadPath only needs true/false
+		// (an HTTP handler has no prose to show a caller), but a test
+		// author staring at a typo needs to know WHICH segment failed and
+		// what the struct actually has — fieldMissErr redoes that one walk
+		// purely to build the message, only on the (rare, already-failed)
+		// error path.
+		if v, ok := r.rt.Tags().ReadPath(name); ok {
+			return irValue(v)
 		}
-		return v, nil
+		return ir.Value{}, fieldMissErr(root, head, rest)
 	}
 	if prog := r.rt.TaskProgram(head); prog != nil {
 		v, ok := prog.Locals()[rest]
@@ -392,25 +446,29 @@ func (r *testRun) value(name string) (ir.Value, error) {
 		head, strings.Join(sortedKeys(anyMap(r.known)), ", "), strings.Join(r.rt.TaskNames(), ", "))
 }
 
-// fieldOf walks a dotted path into a struct value. path may be several
+// fieldMissErr reconstructs the reason a dotted path did not resolve via
+// Tags.ReadPath, for a test-writer-friendly message: which segment failed,
+// and what the struct at that point actually has. path may be several
 // segments deep ("Motor.Drive.Speed"); each step reports what it could not
 // find and what was available, because a wrong field name in a test is
 // otherwise indistinguishable from a wrong value.
-func fieldOf(v ir.Value, sofar, path string) (ir.Value, error) {
+func fieldMissErr(v ir.Value, sofar, path string) error {
 	for path != "" {
 		var field string
 		field, path, _ = strings.Cut(path, ".")
 		if v.Kind != ir.TypeStruct || v.Struct == nil {
-			return ir.Value{}, fmt.Errorf("%s is not a struct, so it has no field %q", sofar, field)
+			return fmt.Errorf("%s is not a struct, so it has no field %q", sofar, field)
 		}
 		i, ok := v.Struct.FieldIndex[field]
 		if !ok || i >= len(v.Fld) {
-			return ir.Value{}, fmt.Errorf("%s has no field %q (%s has: %s)",
+			return fmt.Errorf("%s has no field %q (%s has: %s)",
 				sofar, field, v.Struct.Name, strings.Join(fieldNames(v.Struct), ", "))
 		}
 		v, sofar = v.Fld[i], sofar+"."+field
 	}
-	return v, nil
+	// Unreachable in practice: ReadPath already walked this exact path and
+	// found nothing wrong, so this branch has nothing to report.
+	return fmt.Errorf("%s: could not resolve", sofar)
 }
 
 func fieldNames(sd *ir.StructDef) []string {
@@ -433,15 +491,21 @@ func anyMap(m map[string]bool) map[string]any {
 // manifest already declared: a driver-fed input goes to the input image,
 // where the next scan picks it up exactly as the field would; everything
 // else goes straight to the tag store.
+//
+// Dotted field writes are gathered per root tag rather than applied one at a
+// time: see applyFields for why a single map's fields must compose onto one
+// base value instead of each re-reading the store independently.
 func (r *testRun) apply(given map[string]any) error {
+	fieldEdits := map[string]map[string]any{} // root tag → path → raw
 	for _, name := range sortedKeys(given) {
 		if !r.known[name] {
 			// A dotted name may address one field of a UDT tag. Resolution
 			// order matches `expect` (value()): whole tag first, then field.
 			if head, path, dotted := strings.Cut(name, "."); dotted && r.known[head] {
-				if err := r.applyField(head, path, given[name]); err != nil {
-					return fmt.Errorf("given: %w", err)
+				if fieldEdits[head] == nil {
+					fieldEdits[head] = map[string]any{}
 				}
+				fieldEdits[head][path] = given[name]
 				continue
 			}
 			return fmt.Errorf("given: no tag %q in this project", name)
@@ -455,27 +519,52 @@ func (r *testRun) apply(given map[string]any) error {
 		}
 		r.rt.Tags().Set(name, v)
 	}
+	// Every root tag's field edits are applied — and written — as one unit,
+	// after the whole-tag writes above. Map iteration order is undefined, so
+	// the root tags are visited in sorted order for a deterministic result
+	// when a test (wrongly, but harmlessly now) gives both a whole tag and
+	// one of its fields in the same map.
+	tags := make([]string, 0, len(fieldEdits))
+	for tag := range fieldEdits {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	for _, tag := range tags {
+		if err := r.applyFields(tag, fieldEdits[tag]); err != nil {
+			return fmt.Errorf("given: %w", err)
+		}
+	}
 	return nil
 }
 
-// applyField sets one field of a struct tag: read the current value, replace
-// the field, write the whole tag back — the tag store and the driver image
-// both hold whole tags.
+// applyFields sets every field a single `given:` map addressed on one struct
+// tag: read the current value ONCE, replace every field on that one copy,
+// write the whole tag back ONCE — the tag store and the driver image both
+// hold whole tags, so a partial write is not possible.
 //
-// The base value is the wrinkle. A typed INPUT is deliberately unseeded by
+// Applying edits one at a time here used to be a trap: each call re-read
+// the tag store as its base, but an INPUT tag's `given` writes land in the
+// driver's image, not the tag store — nothing promotes it there before the
+// next scan. So `{X.HH: true, X.H: true}` in one map raced: both reads saw
+// the same stale (usually zero-of-type) base, and the driver's last write
+// replaced the whole tag, silently discarding every edit but one. Gathering
+// every field for a tag before reading the base — and writing only once —
+// makes them compose regardless of routing or map iteration order.
+//
+// The base value's other wrinkle: a typed INPUT is deliberately unseeded by
 // the runtime, so on the first `given` there is nothing to modify. The
 // harness materialises zero-of-type for that case and production does not:
 // a test that never delivers a value fails its own `expect`, so the
 // loud-fault argument that keeps inputs unseeded does not apply here. It
 // happens lazily, only for a tag a test actually addresses by field, so no
 // test that does not use this feature changes behaviour.
-func (r *testRun) applyField(tag, path string, raw any) error {
+func (r *testRun) applyFields(tag string, edits map[string]any) error {
 	base, err := r.rt.Tags().ReadGlobal(tag)
 	if err != nil {
 		typeName, typed := r.types[tag]
 		if !typed {
 			return fmt.Errorf("%s has no value yet and no declared type, so its "+
-				"field %q cannot be set — give the whole tag instead", tag, path)
+				"field cannot be set — give the whole tag instead", tag)
 		}
 		t, ok := r.rt.Types()[typeName]
 		if !ok {
@@ -483,70 +572,27 @@ func (r *testRun) applyField(tag, path string, raw any) error {
 		}
 		base = ir.Zero(t)
 	}
-	updated, err := setField(base, tag, path, raw)
-	if err != nil {
-		return err
+	paths := make([]string, 0, len(edits))
+	for path := range edits {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		// ir.SetField is the shared dotted-write primitive: the same
+		// read-modify-write the HTTP API's member writes use (Tags.SetPath),
+		// so a `given:` path and an operator's POST resolve, coerce and fail
+		// identically.
+		updated, err := ir.SetField(base, strings.Split(path, "."), edits[path], tag)
+		if err != nil {
+			return err
+		}
+		base = updated
 	}
 	if r.inputs[tag] {
-		return r.drv.WriteOutputs(nio.Values{tag: updated})
+		return r.drv.WriteOutputs(nio.Values{tag: base})
 	}
-	r.rt.Tags().Set(tag, updated)
+	r.rt.Tags().Set(tag, base)
 	return nil
-}
-
-// setField returns a copy of v with the dotted path replaced. Copies rather
-// than mutates: the tag store hands out values that may share backing arrays
-// with the last scan's snapshot.
-func setField(v ir.Value, sofar, path string, raw any) (ir.Value, error) {
-	field, rest, _ := strings.Cut(path, ".")
-	if v.Kind != ir.TypeStruct || v.Struct == nil {
-		return ir.Value{}, fmt.Errorf("%s is not a struct, so it has no field %q", sofar, field)
-	}
-	i, ok := v.Struct.FieldIndex[field]
-	if !ok || i >= len(v.Fld) {
-		return ir.Value{}, fmt.Errorf("%s has no field %q (%s has: %s)",
-			sofar, field, v.Struct.Name, strings.Join(fieldNames(v.Struct), ", "))
-	}
-	fld := append([]ir.Value(nil), v.Fld...)
-	if rest == "" {
-		nv, err := coerceTo(fld[i], raw)
-		if err != nil {
-			return ir.Value{}, fmt.Errorf("%s.%s: %w", sofar, field, err)
-		}
-		fld[i] = nv
-	} else {
-		nv, err := setField(fld[i], sofar+"."+field, rest, raw)
-		if err != nil {
-			return ir.Value{}, err
-		}
-		fld[i] = nv
-	}
-	v.Fld = fld
-	return v, nil
-}
-
-// coerceTo keeps a field write in the field's own declared type, the same
-// contract coerce() gives whole tags.
-func coerceTo(cur ir.Value, raw any) (ir.Value, error) {
-	switch cur.Kind {
-	case ir.TypeBool:
-		if b, ok := raw.(bool); ok {
-			return ir.BoolVal(b), nil
-		}
-	case ir.TypeReal:
-		if f, ok := toFloat(raw); ok {
-			return ir.RealVal(f), nil
-		}
-	case ir.TypeInt, ir.TypeTime:
-		if f, ok := toFloat(raw); ok {
-			return ir.IntVal(int64(f)), nil
-		}
-	case ir.TypeString:
-		if s, ok := raw.(string); ok {
-			return ir.StringVal(s), nil
-		}
-	}
-	return ir.Value{}, fmt.Errorf("cannot assign %v to a %s field", raw, cur.Kind)
 }
 
 // declaredTypes maps tag name → declared UDT name, for the tags that have one.

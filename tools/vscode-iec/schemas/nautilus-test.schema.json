@@ -76,6 +76,18 @@
         },
         "always": {
           "$ref": "#/definitions/always"
+        },
+        "ack": {
+          "$ref": "#/definitions/ack"
+        },
+        "shelve": {
+          "$ref": "#/definitions/shelve"
+        },
+        "unshelve": {
+          "$ref": "#/definitions/unshelve"
+        },
+        "alarms": {
+          "$ref": "#/definitions/alarms"
         }
       },
       "not": {
@@ -115,6 +127,26 @@
               {
                 "required": [
                   "always"
+                ]
+              },
+              {
+                "required": [
+                  "ack"
+                ]
+              },
+              {
+                "required": [
+                  "shelve"
+                ]
+              },
+              {
+                "required": [
+                  "unshelve"
+                ]
+              },
+              {
+                "required": [
+                  "alarms"
                 ]
               }
             ]
@@ -156,6 +188,14 @@
               "until"
             ]
           }
+        },
+        "alarms": {
+          "not": {
+            "required": [
+              "until"
+            ]
+          },
+          "description": "`alarms:` is checked at the end of a step; `until:` polls `expect` on every tick. A step that waits and then asserts alarms is two steps."
         }
       }
     },
@@ -184,6 +224,18 @@
         },
         "always": {
           "$ref": "#/definitions/always"
+        },
+        "ack": {
+          "$ref": "#/definitions/ack"
+        },
+        "shelve": {
+          "$ref": "#/definitions/shelve"
+        },
+        "unshelve": {
+          "$ref": "#/definitions/unshelve"
+        },
+        "alarms": {
+          "$ref": "#/definitions/alarms"
         }
       },
       "dependencies": {
@@ -220,6 +272,14 @@
               "until"
             ]
           }
+        },
+        "alarms": {
+          "not": {
+            "required": [
+              "until"
+            ]
+          },
+          "description": "`alarms:` is checked at the end of a step; `until:` polls `expect` on every tick. A step that waits and then asserts alarms is two steps."
         }
       }
     },
@@ -374,6 +434,157 @@
           }
         }
       ]
+    },
+    "alarms": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "What the alarm engine must say. Alarm state is host state, not tag state \u2014 no ST expression can see it \u2014 so it is a sibling of `expect:` rather than a matcher inside it. Needs an `alarms:` section in nautilus.yaml.",
+      "properties": {
+        "active": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The EXACT set of alarm ids that are active or unack-RTN, order-insensitive. `[]` asserts nothing is annunciating \u2014 the assertion an on-delay test needs before the delay elapses. Shelved alarms are deliberately not active."
+        },
+        "unacked": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many alarms are waiting on an operator."
+        },
+        "shelved": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The exact set of shelved alarm ids."
+        },
+        "state": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/definitions/alarm-state"
+          },
+          "description": "One alarm's ISA-18.2 state, keyed by alarm id."
+        },
+        "priority": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "description": "Active counts by priority, as the summary reports them: diagnostic|low|medium|high|critical."
+        },
+        "journal": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/alarm-kind"
+          },
+          "description": "The exact sequence of event kinds this test produced, chronologically. suppress/unsuppress are excluded \u2014 they are plumbing, not the operator story."
+        }
+      }
+    },
+    "alarm-state": {
+      "type": "string",
+      "enum": [
+        "normal",
+        "unack-active",
+        "ack-active",
+        "unack-rtn",
+        "shelved",
+        "suppressed"
+      ],
+      "description": "ISA-18.2 alarm state."
+    },
+    "alarm-kind": {
+      "type": "string",
+      "enum": [
+        "active",
+        "rtn",
+        "ack",
+        "shelve",
+        "unshelve"
+      ],
+      "description": "An alarm journal event kind."
+    },
+    "ack": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "description": "An operator acknowledging, exactly as POST /api/alarms/ack would. Applied with `given:`, before the step spends its time.",
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Alarm ids to acknowledge."
+        },
+        "all": {
+          "type": "boolean",
+          "description": "Acknowledge everything \u2014 the operator's one button."
+        },
+        "by": {
+          "type": "string",
+          "description": "The audit string recorded in the journal. Unauthenticated: nautilus has one token, not user accounts."
+        }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "ids"
+          ]
+        },
+        {
+          "required": [
+            "all"
+          ]
+        }
+      ]
+    },
+    "shelve": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "for"
+      ],
+      "description": "Silence one alarm for a while. `for:` is virtual time from now, so the shelf expires when the test advances past it \u2014 there is no permanent shelf.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "for": {
+          "$ref": "#/definitions/duration",
+          "description": "How long the shelf lasts, from now."
+        },
+        "by": {
+          "type": "string"
+        }
+      }
+    },
+    "unshelve": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "description": "End a shelf early, restoring the state it interrupted.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "by": {
+          "type": "string"
+        }
+      }
     }
   }
 }

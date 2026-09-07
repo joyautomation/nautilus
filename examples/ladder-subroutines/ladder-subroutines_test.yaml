@@ -1,0 +1,49 @@
+# The blocks, exercised through their instances. Time is virtual, so the
+# five-second warm-up and the three-second fail-to-start assert exactly.
+#
+#   nautilus test examples/ladder-subroutines -v
+
+tests:
+  - name: each instance seals in and drops out on its own
+    steps:
+      - given: { P101Start: true }
+        scans: 1
+        expect: { P101Run: true, P102Run: false } # one instance, not both
+      - given: { P101Start: false } # the seal-in holds without the command
+        scans: 1
+        expect: { P101Run: true }
+      - given: { P102Start: true }
+        scans: 1
+        expect: { P101Run: true, P102Run: true }
+      - given: { P102Start: false, P101Stop: true } # stop only the duty pump
+        scans: 1
+        expect: { P101Run: false, P102Run: true }
+
+  - name: the level permissive inside the block drops both pumps
+    steps:
+      - given: { P101Start: true, P102Start: true }
+        scans: 1
+        expect: { P101Run: true, P102Run: true }
+      - given: { P101Start: false, P102Start: false, LevelPct: 85.0 }
+        scans: 1
+        expect: { P101Run: false, P102Run: false }
+
+  - name: each instance's TON is its own retained state
+    steps:
+      - given: { P101Start: true }
+        advance: 3s
+        expect: { P101Warm: false, AnyWarm: false }
+      - given: { P102Start: true } # the lag pump starts three seconds late
+        advance: 2.5s
+        expect: { P101Warm: true, P102Warm: false, AnyWarm: true }
+      - advance: 3s
+        expect: { P101Warm: true, P102Warm: true }
+
+  - name: the fail-to-start block alarms only the pump with no flow
+    steps:
+      - given: { P101Start: true, P102Start: true, P101Flow: true }
+        advance: 4s
+        expect: { P101FailAlm: false, P102FailAlm: true }
+      - given: { P102Flow: true } # flow proved: the alarm clears
+        scans: 1
+        expect: { P102FailAlm: false }

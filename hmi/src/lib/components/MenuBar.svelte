@@ -263,4 +263,15 @@
 		opacity: 0.4;
 		cursor: default;
 	}
+
+	/* Coarse pointer (touch/pen): grow to the minimum hit area. Desktop
+	   density (mouse/trackpad) is untouched. */
+	@media (pointer: coarse) {
+		.trigger {
+			min-height: var(--tap);
+		}
+		.item {
+			min-height: var(--tap);
+		}
+	}
 </style>

@@ -25,7 +25,12 @@ func (n *Node) handleCommand(_ mqtt.Client, msg mqtt.Message) {
 			}
 		}
 	}
-	// Remaining metrics are writes into the tag store.
+	// Remaining metrics are writes into the tag store. A metric named after
+	// a TEMPLATE MEMBER ("P101/Speed" flattened to "P101.Speed" by the host)
+	// resolves through Tags.Set to that member of the UDT tag and
+	// read-modify-writes the whole struct; a name that resolves to nothing
+	// is dropped rather than stored, so a host's typo can no longer create a
+	// junk top-level tag that the next NBIRTH would publish back at it.
 	tags := n.rt.Tags()
 	for _, m := range payload.Metrics {
 		if m.Name == "" || m.IsNull {

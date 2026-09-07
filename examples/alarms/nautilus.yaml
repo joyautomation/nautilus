@@ -1,0 +1,95 @@
+# The smallest project that is a real alarm system: two analog points on a
+# UDT, two rules that claim their limit bits, one hand-written definition
+# for a standalone contact, and an acceptance suite that walks a
+# five-minute on-delay in a few milliseconds of virtual time.
+#
+#   nautilus check examples/alarms         validate the rules offline
+#   nautilus alarms list examples/alarms   see what they expanded to
+#   nautilus test examples/alarms          the suite
+#   nautilus run examples/alarms           dashboard + /api/alarms
+name: alarms
+
+server:
+  addr: "localhost:8080"
+
+tasks:
+  - program: program.st   # the bits: limits compared at scan rate
+    scan: 200ms
+  - name: sim             # the plant — suspended by the tests
+    program: sim.st
+    scan: 500ms
+    dt-tag: SimDtS
+
+tags:
+  # Two analog points. A Sparkplug Template lands as ONE struct tag, which
+  # is why the fleet's alarm conditions are `TAG.MEMBER` paths rather than
+  # flat BOOLs — and why a rule matches a type and a member.
+  - name: RTU9_WEL15_FIT_001
+    role: state
+    type: AnalogInput
+    init: { PV: 50.0 }
+    unit: "L/s"
+    desc: "Well 15 flow"
+  - name: RTU9_TNK01_LIT_001
+    role: state
+    type: AnalogInput
+    init: { PV: 50.0 }
+    unit: "%"
+    desc: "Tank 1 level"
+
+  # A standalone contact: no type, no members, names itself. This is the
+  # other half of a real fleet, and the half `alarm-files:` carries.
+  - { name: RTU9_WEL15_INT_001_YA, role: state, init: false, desc: "Well 15 intrusion" }
+
+  # The suppression input. `<node>__Online` is what a Sparkplug host
+  # publishes for each edge node; every definition below gates on it, so a
+  # site that goes dark moves its alarms to Suppressed instead of freezing
+  # them lit.
+  - { name: RTU9__Online, role: setpoint, init: true, desc: "RTU 9 edge node online" }
+  - { name: RTU9_AnyAlm, role: state, init: false, desc: "RTU 9 — any alarm (overview rollup)" }
+
+  # Limits, operator-writable.
+  - { name: FlowHH,  role: setpoint, init: 100.0, unit: "L/s", desc: "Flow high-high limit" }
+  - { name: FlowH,   role: setpoint, init: 80.0,  unit: "L/s", desc: "Flow high limit" }
+  - { name: FlowL,   role: setpoint, init: 10.0,  unit: "L/s", desc: "Flow low limit" }
+  - { name: FlowLL,  role: setpoint, init: 5.0,   unit: "L/s", desc: "Flow low-low limit" }
+  - { name: LevelHH, role: setpoint, init: 90.0,  unit: "%",   desc: "Level high-high limit" }
+  - { name: LevelH,  role: setpoint, init: 80.0,  unit: "%",   desc: "Level high limit" }
+  - { name: LevelL,  role: setpoint, init: 20.0,  unit: "%",   desc: "Level low limit" }
+  - { name: LevelLL, role: setpoint, init: 10.0,  unit: "%",   desc: "Level low-low limit" }
+
+alarms:
+  # Site and area come from the tag NAME, by regexp: the first capture
+  # group wins. RTU9_WEL15_FIT_001 → site RTU9, area WEL15. That is what
+  # gives `{site}` and `{area}` below something to interpolate, without a
+  # generator writing two lines on every entry.
+  site-from: "^([A-Za-z]+[0-9]+)_"
+  area-from: "^[A-Za-z]+[0-9]+_([A-Za-z]+[0-9]+)_"
+
+  defaults: { ack-required: true, auto-clear: true, shelve: true }
+  shelve-times: [5m, 15m, 30m, 1h]
+  journal: { keep: 500 }
+  notify:
+    - log: true   # events also land in the log stream, where they are searchable
+
+  # Two rules cover both analog points, and would cover two thousand.
+  rules:
+    - match: { type: AnalogInput, member: HH }
+      name: "{desc} High High"
+      priority: high
+      on-delay: 5m               # host-side qualification: a real excursion, not a spike
+      enable: "{site}__Online"
+      class: process
+    - match: { type: AnalogInput, member: L }
+      name: "{desc} Low"
+      priority: medium
+      enable: "{site}__Online"
+      class: process
+
+# The standalone contacts, one entry each — normally generated, always
+# committed, so the diff is the review.
+alarm-files:
+  - alarms/rtu9.yaml
+
+driver:
+  type: memory

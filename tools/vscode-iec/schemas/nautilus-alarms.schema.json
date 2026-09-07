@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "nautilus alarm file",
+  "description": "A bare YAML list of alarm definitions and rules, composed into a project by naming this file under `alarm-files:` in nautilus.yaml. Normally generated and committed \u2014 the diff is the review. An entry carrying a `match:` key is a rule; everything else is one definition. An id declared here and in the manifest is an error, not an override.",
+  "type": "array",
+  "items": {
+    "anyOf": [
+      {
+        "$ref": "nautilus.schema.json#/definitions/alarm-rule"
+      },
+      {
+        "$ref": "nautilus.schema.json#/definitions/alarm"
+      }
+    ]
+  }
+}

@@ -18,7 +18,8 @@
 		doc,
 		tags = {},
 		registry = {},
-		onequipmentclick
+		onequipmentclick,
+		minScale = 0
 	}: {
 		doc: MimicDoc;
 		tags?: Record<string, unknown>;
@@ -27,24 +28,39 @@
 		registry?: Record<string, Component<any>>;
 		/** Present = equipment is clickable (open a faceplate, navigate…). */
 		onequipmentclick?: (eq: MimicEquipment) => void;
+		/**
+		 * Floor under which the mimic stops shrinking. When the container is
+		 * narrow enough that `containerWidth / doc.canvas.width` would drop
+		 * below this, the mimic is drawn at `minScale` instead and the frame
+		 * becomes a scrollable viewport onto it, rather than rendering the
+		 * plant illegibly small on a phone. `0` (the default) is exactly
+		 * today's behaviour: no floor, the mimic always shrinks to fit the
+		 * container width.
+		 */
+		minScale?: number;
 	} = $props();
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const builtin: Record<string, Component<any>> = { Tank, Pump, Valve, Gauge, Sparkline };
 	const components = $derived({ ...builtin, ...registry });
 
-	// Scale the logical canvas to the container width (height follows).
+	// Scale the logical canvas to the container width (height follows),
+	// floored at minScale — below that, the frame scrolls instead of
+	// shrinking the canvas further.
 	let host = $state<HTMLDivElement | null>(null);
-	let scale = $state(1);
+	let frameWidth = $state(0);
 	$effect(() => {
 		if (!host) return;
 		const el = host;
-		const update = () => (scale = el.clientWidth / doc.canvas.width);
+		const update = () => (frameWidth = el.clientWidth);
 		update();
 		const ro = new ResizeObserver(update);
 		ro.observe(el);
 		return () => ro.disconnect();
 	});
+	const rawScale = $derived(frameWidth ? frameWidth / doc.canvas.width : 1);
+	const floored = $derived(minScale > 0 && frameWidth > 0 && rawScale < minScale);
+	const scale = $derived(floored ? minScale : rawScale);
 
 	// A bound label's live value (MimicLabel.bind), resolved through the same
 	// resolveBindings() path equipment bindings use — one mechanism, "!"
@@ -115,60 +131,77 @@
 		void boxVersion;
 		return (doc.pipes ?? []).map((p) => ({ pipe: p, d: pointsToPath(routedPoints(p, getPort)) }));
 	});
+
+	/** Paint order for the pipe network — see the junction note in Pipe.svelte. */
+	const PIPE_LAYERS = ['wall', 'bore', 'flow'] as const;
 </script>
 
-<div class="mimic" bind:this={host} style="height: {doc.canvas.height * scale}px">
+<div class="mimic" class:scrolling={floored} bind:this={host} style="height: {doc.canvas.height * scale}px">
 	<div
-		class="canvas"
-		style="width: {doc.canvas.width}px; height: {doc.canvas.height}px; transform: scale({scale})"
+		class="scroll-host"
+		style:width={floored ? `${doc.canvas.width * scale}px` : undefined}
+		style:height={floored ? `${doc.canvas.height * scale}px` : undefined}
 	>
-		<svg
-			class="pipes"
-			width={doc.canvas.width}
-			height={doc.canvas.height}
-			viewBox="0 0 {doc.canvas.width} {doc.canvas.height}"
-			aria-hidden="true"
+		<div
+			class="canvas"
+			style="width: {doc.canvas.width}px; height: {doc.canvas.height}px; transform: scale({scale})"
 		>
-			{#each pipePaths as { pipe: p, d } (p.id)}
-				<Pipe
-					{d}
-					{...(p.color !== undefined ? { color: p.color } : {})}
-					{...(p.props ?? {})}
-					{...resolveBindings(p.bind, tags)}
-				/>
+			<svg
+				class="pipes"
+				width={doc.canvas.width}
+				height={doc.canvas.height}
+				viewBox="0 0 {doc.canvas.width} {doc.canvas.height}"
+				aria-hidden="true"
+			>
+				<!-- Layered, not per-pipe: every wall, then every bore, then
+				     every flow overlay, so runs UNION at junctions — a branch's
+				     bore merges into the main's instead of the later pipe's
+				     background-coloured bore punching a slot across the earlier
+				     pipe's wall. See the junction note in Pipe.svelte. -->
+				{#each PIPE_LAYERS as layer (layer)}
+					{#each pipePaths as { pipe: p, d } (p.id)}
+						<Pipe
+							{d}
+							{...(p.color !== undefined ? { color: p.color } : {})}
+							{...(p.props ?? {})}
+							{...resolveBindings(p.bind, tags)}
+							{layer}
+						/>
+					{/each}
+				{/each}
+			</svg>
+
+			{#each doc.equipment ?? [] as eq (eq.id)}
+				{@const C = components[eq.component]}
+				{#if onequipmentclick}
+					<button
+						type="button"
+						class="eq clickable"
+						style="left: {eq.x}px; top: {eq.y}px"
+						aria-label={eq.label ?? eq.id}
+						use:regEl={eq.id}
+						onclick={() => onequipmentclick(eq)}
+					>
+						{#if C}<C {...eqProps(eq)} />{:else}<span class="unknown">{eq.component}?</span>{/if}
+					</button>
+				{:else}
+					<div class="eq" style="left: {eq.x}px; top: {eq.y}px" use:regEl={eq.id}>
+						{#if C}<C {...eqProps(eq)} />{:else}<span class="unknown">{eq.component}?</span>{/if}
+					</div>
+				{/if}
 			{/each}
-		</svg>
 
-		{#each doc.equipment ?? [] as eq (eq.id)}
-			{@const C = components[eq.component]}
-			{#if onequipmentclick}
-				<button
-					type="button"
-					class="eq clickable"
-					style="left: {eq.x}px; top: {eq.y}px"
-					aria-label={eq.label ?? eq.id}
-					use:regEl={eq.id}
-					onclick={() => onequipmentclick(eq)}
-				>
-					{#if C}<C {...eqProps(eq)} />{:else}<span class="unknown">{eq.component}?</span>{/if}
-				</button>
-			{:else}
-				<div class="eq" style="left: {eq.x}px; top: {eq.y}px" use:regEl={eq.id}>
-					{#if C}<C {...eqProps(eq)} />{:else}<span class="unknown">{eq.component}?</span>{/if}
-				</div>
-			{/if}
-		{/each}
-
-		{#each doc.labels ?? [] as l, i (i)}
-			{#if l.bind}
-				<span class="lbl readout" style="left: {l.x}px; top: {l.y}px"
-					>{#if l.text}{l.text}{/if}<b class="num">{labelValue(l)}</b
-					>{#if l.unit}<span>{l.unit}</span>{/if}</span
-				>
-			{:else}
-				<span class="lbl" style="left: {l.x}px; top: {l.y}px">{l.text}</span>
-			{/if}
-		{/each}
+			{#each doc.labels ?? [] as l, i (i)}
+				{#if l.bind}
+					<span class="lbl readout" style="left: {l.x}px; top: {l.y}px"
+						>{#if l.text}{l.text}{/if}<b class="num">{labelValue(l)}</b
+						>{#if l.unit}<span>{l.unit}</span>{/if}</span
+					>
+				{:else}
+					<span class="lbl" style="left: {l.x}px; top: {l.y}px">{l.text}</span>
+				{/if}
+			{/each}
+		</div>
 	</div>
 </div>
 
@@ -183,6 +216,23 @@
 		   room so a round pipe cap landing exactly on the boundary isn't cut
 		   in half — anything further out still gets clipped. */
 		clip-path: inset(-4px);
+	}
+	/* Only entered when `minScale` has floored the render — see the prop's
+	   doc comment above. Lets the frame scroll to the real (floored) size
+	   instead of clipping it. */
+	.mimic.scrolling {
+		overflow: auto;
+		touch-action: pan-x pan-y pinch-zoom;
+		-webkit-overflow-scrolling: touch;
+	}
+	/* A plain, unsized wrapper except in the floored state, where its
+	   explicit width/height (set inline, above) give the frame a real
+	   scrollable content box — rather than relying on the UA to fold the
+	   absolutely-positioned, transform-scaled `.canvas` below into the
+	   frame's scrollable overflow, which is inconsistent across browsers
+	   (notably iOS Safari). */
+	.scroll-host {
+		display: block;
 	}
 	.canvas {
 		position: absolute;

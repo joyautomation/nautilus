@@ -472,8 +472,11 @@ func (b *modelBuilder) opInsert(op EditOp) ([]TextEdit, error) {
 			return nil, fmt.Errorf("fbd edit: the name %q is already in use", d.name)
 		}
 	}
+	// Scanned on comment-stripped text so a `(* ... *)` doc comment whose
+	// text happens to contain a bare "END_FBD" line isn't mistaken for the
+	// real closer.
 	endFBD := -1
-	for i, line := range b.src {
+	for i, line := range b.srcStripped {
 		if strings.EqualFold(strings.TrimSpace(line), "END_FBD") {
 			endFBD = i + 1 // 1-based
 		}
@@ -798,9 +801,11 @@ func (b *modelBuilder) opDeclareVar(op EditOp) ([]TextEdit, error) {
 		return nil, fmt.Errorf("fbd edit: %q is not a valid type name", typ)
 	}
 
-	// The header ends where the FBD block begins.
+	// The header ends where the FBD block begins. Scanned on comment-stripped
+	// text (see stripComments) so a `(* ... *)` doc comment whose text
+	// happens to read like real header structure can't be mistaken for it.
 	fbdLine := -1
-	for i, l := range b.src {
+	for i, l := range b.srcStripped {
 		if strings.EqualFold(strings.TrimSpace(l), "FBD") {
 			fbdLine = i
 			break
@@ -815,7 +820,7 @@ func (b *modelBuilder) opDeclareVar(op EditOp) ([]TextEdit, error) {
 	insertAt := -1 // 0-based line index of the target section's END_VAR
 	inSection := ""
 	for i := 0; i < fbdLine; i++ {
-		line := b.src[i]
+		line := b.srcStripped[i]
 		if m := varSectionRe.FindStringSubmatch(line); m != nil {
 			inSection = strings.ToUpper(m[1])
 			continue

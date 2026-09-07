@@ -301,7 +301,11 @@ func (p *netParser) namedArgs() ([]namedArg, error) {
 				return nil, err
 			}
 			switch e.(type) {
-			case refExpr, accExpr:
+			// A plain variable, an accessor chain, and a single `.member`
+			// (a struct field — which the expression grammar reads as a
+			// pin, since `inst.Q` and `M.Starts` are spelled alike) are all
+			// assignable; anything else has nowhere to write.
+			case refExpr, accExpr, pinExpr:
 			default:
 				return nil, p.posErr(fmt.Sprintf("output binding %q needs a variable target", pin))
 			}

@@ -29,6 +29,16 @@ func TestIdentOccurrencesSkipsCommentsAndStrings(t *testing.T) {
 	}
 }
 
+func TestIdentOccurrencesSkipsNestedComments(t *testing.T) {
+	src := "x := 1; (* outer (* x nested *) still outer *) x := 2;"
+	got := identOccurrences(src, "x")
+	// First x, then the x after the nested comment — never the one inside.
+	// First x is at line 0, character 0; second x is at line 0, character 47
+	if len(got) != 2 || got[0].Start.Character != 0 || got[1].Start.Character != 47 {
+		t.Fatalf("occurrences = %+v", got)
+	}
+}
+
 // A library file with two function blocks, each with its own local `err` —
 // the real shape a nautilus project uses (FBs live in library .st files).
 // Renaming Alpha's err must leave Beta's err alone: the scoping guarantee.

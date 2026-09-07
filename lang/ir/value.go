@@ -31,6 +31,43 @@ func BoolVal(v bool) Value     { return Value{Kind: TypeBool, B: v} }
 func TimeVal(ms int64) Value   { return Value{Kind: TypeTime, I: ms} }
 func StringVal(v string) Value { return Value{Kind: TypeString, S: v} }
 
+// CopyValue returns a value with independent storage for composite kinds.
+//
+// Value is a tagged union whose ARRAY and STRUCT payloads are slices, so a
+// plain Go copy aliases the source's backing array — two variables would
+// then share fields, and a later `a.F := 1` would silently mutate `b`. Every
+// point that *stores* a value (assignment, FB pin copy-in/copy-back) runs it
+// through here so ST assignment has value semantics, which is what the
+// standard means by assigning a structured variable.
+//
+// FB instances are deliberately NOT copied: an instance is identity (its
+// retained state), never a value, and nothing in the language assigns one.
+func CopyValue(v Value) Value {
+	switch v.Kind {
+	case TypeArray:
+		if v.Arr == nil {
+			return v
+		}
+		out := v
+		out.Arr = make([]Value, len(v.Arr))
+		for i, e := range v.Arr {
+			out.Arr[i] = CopyValue(e)
+		}
+		return out
+	case TypeStruct:
+		if v.Fld == nil {
+			return v
+		}
+		out := v
+		out.Fld = make([]Value, len(v.Fld))
+		for i, f := range v.Fld {
+			out.Fld[i] = CopyValue(f)
+		}
+		return out
+	}
+	return v
+}
+
 // Zero returns the IEC 61131-3 default value for t.
 func Zero(t *Type) Value {
 	if t == nil {

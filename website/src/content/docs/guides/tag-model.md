@@ -75,6 +75,146 @@ Picking a role, by use case:
 | your logic owns across scans (integrator)   | `State(name, initial, …)`    | the seed, then the coil                     |
 | the HMI watches but the field never sees    | plain coil write — no entry  | the program creates it on first write       |
 
+## Seeding struct members
+
+A manifest tag naming a UDT (`type: Motor1Speed`) seeds to the zero of that
+type by default — every member `FALSE`/`0`/`0.0` until something writes it.
+For a `setpoint` or `state` tag, `init:` can instead be a mapping of member
+name to value, nested for a member that is itself a struct:
+
+```yaml
+tags:
+  - name: WEL15_FIT_001
+    role: state
+    type: AnalogInput
+    init:
+      RAWMIN: 6553.0
+      RAWMAX: 32767.0
+      HHSP: 2800.0
+      ALMDLY: 5
+  - name: WEL15_SUP_015
+    role: state
+    type: Motor1Speed
+    init:
+      STRTTMRSP: 30
+      LVL: { CTL1HSP: 60.0, CTL1LSP: 40.0 } # nested struct member
+```
+
+Every member the mapping omits still takes the zero of its own field type —
+`init:` names only what needs a real starting value, not the whole shape.
+This is what replaces a first-scan `IF NOT CfgDone THEN ... END_IF` block of
+plain field assignments: the same setpoints, declared once where the tag
+already is, instead of duplicated as ST in every program that uses the type.
+
+An unknown member name is a load error naming the tag and the member path
+(`tag WEL15_FIT_001: init: unknown member RAWMN (did you mean RAWMIN?)`), and
+a struct-typed tag given a scalar `init:` — rather than a mapping — is an
+error too. A generator (`nautilus eip tags`, `nautilus tags import-csv`)
+round-trips the same nested shape through a `tag-files:` entry.
+
+## Writing a member: `POST /api/tags` with `Tag.Member`
+
+A UDT tag is one value in the store, so an operator writing one of its
+members is a read-modify-write of the whole struct. The API does that for
+you — `name` takes a dotted member path, to any depth:
+
+```sh
+curl -X POST localhost:8080/api/tags \
+  -d '{"name": "WEL15_SUP_015.START", "value": true}'
+curl -X POST localhost:8080/api/tags \
+  -d '{"name": "WEL15_SUP_015.LVL.CTL1HSP", "value": 60}'
+```
+
+`value` may also be an object, to set several members of one tag at once:
+
+```json
+{ "name": "WEL15_SUP_015", "value": { "START": true, "LVL": { "CTL1HSP": 60 } } }
+```
+
+That is a **merge**: members the object doesn't name keep their **current**
+values. Deliberately unlike `init:` above, which zero-fills the members its
+mapping omits — seeding builds a value from nothing, a write edits one the
+plant is already running on.
+
+- **Nothing is created.** An unknown tag, a misspelled member, or a member
+  path into a scalar tag is a `400` carrying the reason
+  (`tag WEL15_SUP_015: unknown member STRAT (did you mean START?)`), never a
+  new top-level tag literally named `WEL15_SUP_015.STRAT` — which no program
+  reads and a Sparkplug edge would publish as a bogus metric.
+- **The leaf keeps its type.** A number lands on a `REAL` member as a REAL
+  and on a `DINT` member as an integer; a mismatch is
+  `tag WEL15_SUP_015.START: want BOOL, got a number`, not a silent retype.
+- **The role rule is the root tag's**, because the store holds whole tags. A
+  member of a driver-owned `input` is refused — the driver replaces the whole
+  value before the next scan, so the edit could not survive one cycle.
+  `setpoint`, `state` and `output` roots are writable; an output is exactly
+  how a Sparkplug host commands an edge node, and a struct-typed output needs
+  an `init:` so it exists before the first write.
+- **`GET /api/meta`** reports `"memberWrites": true`, so an HMI can tell a
+  controller that resolves member paths from an older one that swallowed them.
+
+The same dotted paths work everywhere else a tag is addressed: a test
+manifest's `given:`/`expect:`, the built-in dashboard's tag table (expand a
+writable struct tag and each leaf is editable), and the HMI kit's
+`rt.writeTag('WEL15_SUP_015.START', true)`, which resolves to `null` on
+success or the controller's reason when it refuses.
+
+## Observing scans: `Runtime.OnScan`
+
+A Go-level subsystem that needs to react to the tag store every cycle — an
+alarm engine evaluating `AI.HH` after each scan, for instance — registers
+with `rt.OnScan(func(t *runtime.Tags) { ... })` instead of polling on its
+own ticker or wrapping the driver. It fires once per main-task `Scan()`,
+after the program has run and any driver outputs have been written, so the
+callback sees the store exactly as that scan left it; it also works
+unchanged under a test's virtual clock, since it is driven by `Scan()`
+itself rather than by wall-clock time. Registered observers run
+synchronously, in registration order, and a panic in one is recovered and
+logged rather than taking the scan down — but an observer must not block or
+write tags, since it runs inside the same lock that serializes every scan.
+`OnScan` returns a `cancel` func to unregister; reading a member path from
+inside a callback with `Tags.ReadPath("AI.HH")` — the Go-level counterpart
+of the dotted paths above, returning a plain scalar for a leaf or an
+`ir.Value` for a struct sub-tree — is safe and does not deadlock. See the
+doc comments on `runtime.Runtime.OnScan` and `runtime.Tags.ReadPath` for
+the full contract.
+
+## Serving the HMI from the controller
+
+`server.hmi` points the controller at a built HMI — a SvelteKit
+`adapter-static` build (`npm run build` → `build/`), or any other static SPA
+bundle — and it serves that directory at `/` instead of the built-in
+dashboard:
+
+```yaml
+server:
+  hmi: ./hmi/build
+```
+
+The path is relative to the project and must resolve inside it, the same
+rule as `tag-files:` and `driver.manifest`: what `nautilus build` ships is
+what a reviewer can see in the checkout. An unmatched, non-`/api` path
+falls back to the bundle's `index.html`, so client-side routing (SvelteKit's
+router, or any other SPA router) resolves a deep link itself instead of
+getting a 404 from the controller, which has no idea such a route exists.
+The built-in dashboard doesn't disappear — it moves to `/_nautilus/` (its
+assets to `/_nautilus/assets/`), so the raw tag table is still one URL away
+when you need it. `/api/*` and `/api/stream` are untouched either way.
+
+**The HMI must call the API same-origin** — a relative `/api/...` base URL,
+not an absolute host. `server.hmi` and the tag API are one process on one
+address, so there is nothing to configure; an app built against a separate
+controller URL (the `PUBLIC_NAUTILUS_URL`-style env var some HMI deploys
+use for a standalone dev server) should leave that unset, or point it at
+`""`, when it's built to be served this way.
+
+`nautilus build` embeds the HMI's build output in the archive exactly like
+every other project file (and prints a warning if the embedded project
+comes out over ~50 MB — a sign a dependency tree rode along by accident,
+not the HMI build itself); `nautilus run` serves it straight off disk. Set
+it once, and `go build`-style "one file to ship" applies to the operator
+screen too.
+
 ## Adding a field input end to end
 
 Adding a **new field input** is three lines in three places, all by the
@@ -84,3 +224,84 @@ from the diagram's vars panel), produce it in the driver
 composition (`runtime.Input("testExt")`). The `Inputs` list is a deliberate
 allowlist — a driver can't spray arbitrary names into the store — which is
 why the middle step alone isn't enough.
+
+## Performance notes: write generations
+
+The tag store is the seam everything meets at, which also makes it the thing
+everything *sweeps*. A controller whose store is 500 UDT tags of 40 members
+has 20,000 leaves in it, and the naive version of each consumer walks all of
+them on its own clock: the driver copy writes every input every scan, the
+Sparkplug edge deep-compares every metric against its last published value
+every publish interval, the SSE frame renders the whole store four times a
+second, and the runtime hands the driver every output every scan. None of
+that is logic. On a 1s-scan controller it dwarfed the logic by two orders of
+magnitude.
+
+The store answers all of it with one number. **Every stored value carries
+the store generation at which it last CHANGED**, and a write that stores a
+value equal to the one already there is not a change: the counter does not
+move, and the tag keeps the value it had. The tag store holds values, not
+deliveries — re-delivering the same reading is not an event.
+
+That makes "has this changed since I last looked?" an integer comparison
+rather than a walk:
+
+| Consumer | Question | What it compares |
+| --- | --- | --- |
+| `Scan()` output push | did any output move? | `Tags` output generation vs the last successful `WriteOutputs` |
+| Sparkplug RBE | did this metric move? | the metric's `Sample.Gen` vs the generation it was last published at |
+| SSE frame / HMI | did anything move? | `Tags.Generation()` vs the last rendered frame |
+| Anything keyed by tag NAME | did a tag appear? | `Tags.NameGeneration()` |
+
+The public surface is four methods on `runtime.Tags` — `Generation()`,
+`NameGeneration()`, `TagGeneration(name)`, and `SnapshotInto(dst)`, which
+refills your map with `Sample{Value, Gen}` instead of allocating a fresh
+whole-store copy per tick. `Snapshot()` and `All()` are unchanged; prefer
+the generation-aware forms in anything that runs on a clock.
+
+Two consequences are worth knowing about:
+
+**`WriteOutputs` is a push of changes, not a per-scan heartbeat.** The
+runtime calls it on the first scan, on any scan where an output tag's value
+differs from the one it last handed over, after a failed write, and after a
+redundancy takeover — and skips it otherwise. Every driver in tree already
+reduced the call to that internally; now the call itself is skipped. A
+driver that genuinely needs a per-scan call — a watchdog to re-arm, a bus
+whose outputs decay without a rewrite — asks for one with
+`runtime.Options{AlwaysWriteOutputs: true}`.
+
+**A driver can skip the per-scan input map.** `ReadInputs` returns a fresh
+`io.Values` every scan; on a driver with thousands of bindings that is tens
+of kilobytes of garbage per scan for a map whose keys never change. A driver
+may also implement `io.BatchReader` — `ReadInputsInto(dst io.Values) error`
+— and the runtime hands it the same map back each scan. It is never
+required, and the runtime falls back to `ReadInputs` when it is absent.
+
+The change detection is deliberately conservative: two struct values are
+equal only if they share the same `StructDef`, and a function-block instance
+is never equal to anything (an FB is identity — its retained frame — not a
+value). The only mistake it can make is to report a change that did not
+happen, never to hide one.
+
+The same counter is what makes an SSE **delta stream** possible: a client's
+entire subscription state is one `uint64`, and "what changed since you last
+heard from us" is an integer comparison per tag with no value comparison
+anywhere. `Tags.ChangedSince(gen, dst)` appends exactly the tags that moved
+and hands back the generation to ask with next time. See
+[Streaming and data quality](/guides/streaming/).
+
+## What a value is worth: quality
+
+The store holds values, not statements about values. Whether a reading is
+current, held over from a source that went away, or from a device that has
+never answered is not a property of the number — it comes from the driver,
+and it travels beside the tags rather than inside them.
+
+A driver may implement `io.QualityReporter`; the runtime adds its own
+derivation (a driver-bound input whose last read failed is stale); and the
+server puts the non-`good` entries on `/api/state` and every stream frame
+as a `quality` map. An absent name means `good`, so a healthy plant pays
+nothing for it. The full model — the four values, where each comes from,
+and why an HMI must check `/api/meta`'s capability flag before drawing a
+quality badge — is in
+[Streaming and data quality](/guides/streaming/#per-tag-quality).

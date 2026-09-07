@@ -140,15 +140,16 @@ func buildModel(src string, userFBs ...map[string]*ir.FBDef) (*modelBuilder, err
 		return nil, err
 	}
 	b := &modelBuilder{
-		nl:      nl,
-		src:     strings.Split(src, "\n"),
-		exprOf:  map[string]callExpr{},
-		m:       &Model{Name: pouName(header), Vars: parseVarDecls(header)},
-		nodes:   map[string]*Node{},
-		inputs:  map[string]*Node{},
-		coils:   map[string]*Node{},
-		fbs:     map[string]*Node{},
-		wireOut: map[string]outRef{},
+		nl:          nl,
+		src:         strings.Split(src, "\n"),
+		srcStripped: strings.Split(stripComments(src), "\n"),
+		exprOf:      map[string]callExpr{},
+		m:           &Model{Name: pouName(header), Vars: parseVarDecls(header)},
+		nodes:       map[string]*Node{},
+		inputs:      map[string]*Node{},
+		coils:       map[string]*Node{},
+		fbs:         map[string]*Node{},
+		wireOut:     map[string]outRef{},
 	}
 	for _, reg := range userFBs {
 		for name, def := range reg {
@@ -197,6 +198,12 @@ type outRef struct {
 type modelBuilder struct {
 	nl  *netlist
 	src []string // source lines, for slicing argument text into spans
+	// srcStripped is src with every comment blanked (see stripComments),
+	// same line count and length. Every STRUCTURAL edit-time line scan
+	// (finding END_FBD to insert before, header VAR sections) must test
+	// against this, not src, so a `(* ... *)` doc comment whose text
+	// happens to read like real structure can't be mistaken for it.
+	srcStripped []string
 	// pinned positions from the @layout block (nil when absent) and the
 	// block's 1-based line span, for layout ops.
 	layout                 map[string]layoutEntry
@@ -768,8 +775,11 @@ func blockPins(fn string, n int) []string {
 var pouNameRe = regexp.MustCompile(`(?im)^\s*(?:PROGRAM|FUNCTION_BLOCK)\s+([A-Za-z_][A-Za-z0-9_]*)`)
 
 // pouName extracts the POU identifier from the ST header, "" if not found.
+// Matched against comment-stripped text so a `(* ... *)` doc comment whose
+// text happens to start a line with "PROGRAM " or "FUNCTION_BLOCK " isn't
+// mistaken for the real declaration.
 func pouName(header string) string {
-	if m := pouNameRe.FindStringSubmatch(header); m != nil {
+	if m := pouNameRe.FindStringSubmatch(stripComments(header)); m != nil {
 		return m[1]
 	}
 	return ""
@@ -779,13 +789,17 @@ func pouName(header string) string {
 // opDeclareVar (section keywords alone on a line), permissive about section
 // kinds so FUNCTION_BLOCK POUs list their pins too. One declaration per
 // line: `name : TYPE [:= init];` — comment-only and blank lines skip.
+//
+// Scanned on comment-stripped text throughout (see stripComments), so a
+// commented-out section keyword or example declaration can't be read as
+// real header structure.
 var varSectionOpenRe = regexp.MustCompile(`(?i)^\s*(VAR_EXTERNAL|VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT|VAR)\s*$`)
 var varDeclLineRe = regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^;:=]+?)\s*(?::=\s*([^;]+?)\s*)?;`)
 
 func parseVarDecls(header string) []VarDecl {
 	var out []VarDecl
 	section := ""
-	for i, line := range strings.Split(header, "\n") {
+	for i, line := range strings.Split(stripComments(header), "\n") {
 		if m := varSectionOpenRe.FindStringSubmatch(line); m != nil {
 			section = strings.ToUpper(m[1])
 			continue

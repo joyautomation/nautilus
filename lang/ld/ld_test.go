@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/joyautomation/nautilus/lang/fbd"
+	"github.com/joyautomation/nautilus/lang/ir"
 )
 
 const ladderSrc = `PROGRAM Main
@@ -623,5 +624,226 @@ END_PROGRAM`
 	}
 	if _, err := ApplyEdit(src, EditOp{Type: "wrapBranch", Rung: "r", Coil: coilIdx(0)}); err == nil {
 		t.Fatal("wrapping a coil must be refused")
+	}
+}
+
+// ── a rung's only output may be a function block ────────────────────────────
+
+// A rung whose only output is a TON/CTU instance is legal — the block's own
+// output (.Q, .ET, …) is read elsewhere, the way an AB status bit was.
+func TestFBOnlyRung(t *testing.T) {
+	src := `PROGRAM p
+VAR_EXTERNAL Cold : BOOL; Hot : BOOL; Elapsed : TIME; END_VAR
+LD
+  RUNG timer
+    Cold Hot t1:TON(PT := T#5S)
+  RUNG bare
+    c1:CTU(PV := 5)
+END_LD
+END_PROGRAM`
+	out, err := Transpile(src)
+	if err != nil {
+		t.Fatalf("a rung whose sole output is a function block must compile: %v", err)
+	}
+	if !strings.Contains(out, "t1 : TON(IN := AND(Cold, Hot), PT := T#5S)") {
+		t.Errorf("timer rung wrong:\n%s", out)
+	}
+	if !strings.Contains(out, "c1 : CTU(CU := TRUE, PV := 5)") {
+		t.Errorf("bare (rail-driven) FB-only rung wrong:\n%s", out)
+	}
+	if _, err := fbd.Compile(out); err != nil {
+		t.Fatalf("does not compile: %v\n%s", err, out)
+	}
+
+	// Nested in a branch leg, still counts as the rung's output.
+	nested := `PROGRAM p
+VAR_EXTERNAL A : BOOL; B : BOOL; END_VAR
+LD
+  RUNG r
+    [ A | B c1:CTU(PV := 3) ]
+END_LD
+END_PROGRAM`
+	if _, err := Transpile(nested); err != nil {
+		t.Fatalf("FB nested in a branch leg must still satisfy the rung: %v", err)
+	}
+
+	// A rung with neither a coil nor a function block anywhere is still an
+	// error — TestRungErrors' "no coil" case covers the exact message.
+}
+
+// ── edge contacts (+Name rising, -Name falling; ( P x ) / ( N x ) coils) ────
+
+func TestEdgeContactSyntax(t *testing.T) {
+	src := `PROGRAM p
+VAR_EXTERNAL A : BOOL; B : BOOL; Rise : BOOL; Fall : BOOL; Both : BOOL; PulseOut : BOOL; DropOut : BOOL; END_VAR
+LD
+  RUNG rise
+    +A ( Rise )
+  RUNG fall
+    -A ( Fall )
+  RUNG dup
+    [ +B | +B ] ( Both )
+  RUNG pcoil
+    A ( P PulseOut )
+  RUNG ncoil
+    A ( N DropOut )
+END_LD
+END_PROGRAM`
+	out, err := Transpile(src)
+	if err != nil {
+		t.Fatalf("transpile: %v", err)
+	}
+	for _, want := range []string{
+		"rt_rise_A : R_TRIG(CLK := A)",
+		"Rise := rt_rise_A.Q",
+		"ft_fall_A : F_TRIG(CLK := A)",
+		"Fall := ft_fall_A.Q",
+		"rt_pcoil_PulseOut : R_TRIG(CLK := A)",
+		"PulseOut := rt_pcoil_PulseOut.Q",
+		"ft_ncoil_DropOut : F_TRIG(CLK := A)",
+		"DropOut := ft_ncoil_DropOut.Q",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	// Two edge contacts on the same tag in one rung are independent
+	// instances, not one instance referenced twice.
+	if n := strings.Count(out, ": R_TRIG(CLK := B)"); n != 2 {
+		t.Fatalf("want 2 independent R_TRIG instances for B, got %d:\n%s", n, out)
+	}
+	if !strings.Contains(out, "rt_dup_B :") || !strings.Contains(out, "rt_dup_B_2 :") {
+		t.Fatalf("second occurrence must get a distinguishing, stable name:\n%s", out)
+	}
+	if _, err := fbd.Compile(out); err != nil {
+		t.Fatalf("does not compile: %v\n%s", err, out)
+	}
+
+	// A recompile of unchanged text yields the same instance names — the
+	// naming is stable, so a warm swap's retained R_TRIG/F_TRIG state
+	// (their _prev slot) survives.
+	out2, err := Transpile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != out2 {
+		t.Fatalf("edge instance naming is not stable across recompiles:\n--- first ---\n%s\n--- second ---\n%s", out, out2)
+	}
+}
+
+// ldHost is a minimal ir.Host that lets a test drive several scans and
+// watch retained state (here, an edge trigger's one-shot pulse) evolve.
+type ldHost struct{ vals map[string]ir.Value }
+
+func (h *ldHost) ReadGlobal(name string) (ir.Value, error) {
+	if v, ok := h.vals[name]; ok {
+		return v, nil
+	}
+	return ir.Value{}, nil
+}
+func (h *ldHost) WriteGlobal(name string, v ir.Value) error { h.vals[name] = v; return nil }
+func (h *ldHost) NowMs() int64                              { return 0 }
+
+// A rising-edge contact fires for exactly one scan on 0->1, a falling-edge
+// contact for exactly one scan on 1->0, and holding the input steady fires
+// neither again.
+func TestEdgeContactOneShot(t *testing.T) {
+	src := `PROGRAM p
+VAR_EXTERNAL A : BOOL; Rise : BOOL; Fall : BOOL; END_VAR
+LD
+  RUNG rise
+    +A ( Rise )
+  RUNG fall
+    -A ( Fall )
+END_LD
+END_PROGRAM`
+	out, err := Transpile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, err := fbd.Compile(out)
+	if err != nil {
+		t.Fatalf("compile: %v\n%s", err, out)
+	}
+	frame := ir.NewFrame(prog)
+	h := &ldHost{vals: map[string]ir.Value{"A": ir.BoolVal(false)}}
+
+	scan := func(a bool) (rise, fall bool) {
+		h.vals["A"] = ir.BoolVal(a)
+		if err := ir.Run(prog, frame, h); err != nil {
+			t.Fatalf("run: %v", err)
+		}
+		return h.vals["Rise"].B, h.vals["Fall"].B
+	}
+
+	if r, f := scan(false); r || f {
+		t.Fatalf("scan1 (A=false, no transition): rise=%v fall=%v, want false,false", r, f)
+	}
+	if r, f := scan(true); !r || f {
+		t.Fatalf("scan2 (A rises): rise=%v fall=%v, want true,false", r, f)
+	}
+	if r, f := scan(true); r || f {
+		t.Fatalf("scan3 (A held true): rise=%v fall=%v, want false,false (one-shot)", r, f)
+	}
+	if r, f := scan(false); r || !f {
+		t.Fatalf("scan4 (A falls): rise=%v fall=%v, want false,true", r, f)
+	}
+	if r, f := scan(false); r || f {
+		t.Fatalf("scan5 (A held false): rise=%v fall=%v, want false,false (one-shot)", r, f)
+	}
+}
+
+// The edge-trigger instances must show up as R_TRIG/F_TRIG in the ST the
+// FBD stage lowers to — not some hand-rolled equivalent.
+func TestEdgeContactLowersToST(t *testing.T) {
+	src := `PROGRAM p
+VAR_EXTERNAL A : BOOL; Rise : BOOL; END_VAR
+LD
+  RUNG rise
+    +A ( Rise )
+END_LD
+END_PROGRAM`
+	fbdSrc, err := Transpile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := fbd.Transpile(fbdSrc)
+	if err != nil {
+		t.Fatalf("fbd -> st: %v\n%s", err, fbdSrc)
+	}
+	if !strings.Contains(st, "rt_rise_A : R_TRIG;") {
+		t.Errorf("ST must declare the implicit R_TRIG instance:\n%s", st)
+	}
+	if !strings.Contains(st, "R_TRIG") {
+		t.Errorf("ST must show the R_TRIG call:\n%s", st)
+	}
+}
+
+// ── negated function contacts ────────────────────────────────────────────────
+
+// `/` negates any BOOL-yielding contact term, not just a plain reference:
+// a function call (/GT(a, b)) and an accessor chain (/t1.Q) both negate.
+func TestNegatedFunctionContact(t *testing.T) {
+	src := `PROGRAM p
+VAR_EXTERNAL A : REAL; B : REAL; Ok : BOOL; NotDone : BOOL; END_VAR
+LD
+  RUNG cmp
+    /GT(A, B) ( Ok )
+  RUNG fb
+    t1:TON(PT := T#1S) /t1.Q ( NotDone )
+END_LD
+END_PROGRAM`
+	out, err := Transpile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "Ok := NOT GT(A, B)") {
+		t.Errorf("negated function contact wrong:\n%s", out)
+	}
+	if !strings.Contains(out, "NotDone := AND(t1.Q, NOT t1.Q)") {
+		t.Errorf("negated accessor-chain contact wrong:\n%s", out)
+	}
+	if _, err := fbd.Compile(out); err != nil {
+		t.Fatalf("does not compile: %v\n%s", err, out)
 	}
 }

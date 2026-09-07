@@ -242,6 +242,66 @@ END_PROGRAM`
 	}
 }
 
+// TestDtTagSeededBeforeFirstScan is a regression test: a dt-tag used to
+// come into existence only after the first scan wrote it (see the scan
+// loop's tags.SetReal(dtTag, dt) after logic runs), so a snapshot taken
+// between New() and the first scan — exactly what a Sparkplug birth reads —
+// was missing it. Across many tasks that showed up as a spurious second
+// NBIRTH one scan later, once every dt-tag finally existed. New() now seeds
+// every dt-tag (main task and additional tasks) at REAL 0.0 up front, the
+// same as a declared `state` tag, so the tag store's shape is stable from
+// construction.
+func TestDtTagSeededBeforeFirstScan(t *testing.T) {
+	mainProg := `PROGRAM Main
+VAR_EXTERNAL ScanDtS : REAL; Doubled : REAL; END_VAR
+Doubled := ScanDtS;
+END_PROGRAM`
+	totalizer := `PROGRAM Totals
+VAR_EXTERNAL TotDtS : REAL; END_VAR
+END_PROGRAM`
+
+	rt, err := runtime.New(runtime.Options{
+		Program: mainProg,
+		DtTag:   "ScanDtS",
+		Tasks: []runtime.Task{
+			{Name: "totals", Program: totalizer, DtTag: "TotDtS"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	snap := rt.Tags().Snapshot() // before ANY scan, main or task
+	for _, name := range []string{"ScanDtS", "TotDtS"} {
+		if _, ok := snap[name]; !ok {
+			t.Fatalf("dt-tag %s must exist before the first scan", name)
+		}
+	}
+	if got := rt.Tags().Real("ScanDtS"); got != 0.0 {
+		t.Fatalf("ScanDtS must seed at 0.0, got %v", got)
+	}
+	if got := rt.Tags().Real("TotDtS"); got != 0.0 {
+		t.Fatalf("TotDtS must seed at 0.0, got %v", got)
+	}
+
+	// An explicitly declared dt-tag (e.g. `state: {init: 0.25}`, the
+	// workaround this fix makes unnecessary) still wins — auto-seeding
+	// must not clobber an operator-visible initial value.
+	rt2, err := runtime.New(runtime.Options{
+		Program: mainProg,
+		DtTag:   "ScanDtS",
+		Tags: []runtime.TagDef{
+			runtime.State("ScanDtS", 0.25),
+		},
+	})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if got := rt2.Tags().Real("ScanDtS"); got != 0.25 {
+		t.Fatalf("explicit dt-tag init must not be overwritten, got %v", got)
+	}
+}
+
 // Run schedules every task concurrently; scans serialize on the shared
 // store (this test's value is mostly under -race).
 func TestTasksRunConcurrently(t *testing.T) {

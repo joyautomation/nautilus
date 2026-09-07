@@ -107,6 +107,56 @@ func TestLoad(t *testing.T) {
 	}
 }
 
+// TestLoadLibraryCommentMentioningProgram is a regression test: library
+// detection used to match the word PROGRAM against raw file text, so a
+// comment line beginning with "program" (block or line style) demoted a
+// library file to a "program" and silently dropped it from the composed
+// library set — surfacing later as "unknown type"/undeclared-identifier
+// errors wherever its declarations were needed. Detection now tokenizes
+// with the ST lexer, which strips comments before keyword matching.
+func TestLoadLibraryCommentMentioningProgram(t *testing.T) {
+	cases := []struct {
+		name, comment string
+	}{
+		{"block comment", "(*\n   program; the site program owns the main scan.\n*)\n"},
+		{"line comment", "// program note: the site program owns the main scan.\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fs := fsys(manifest)
+			fs["util.st"] = &fstest.MapFile{Data: []byte(c.comment + `FUNCTION Doubled : REAL
+VAR_INPUT X : REAL; END_VAR
+Doubled := X * 2.0;
+END_FUNCTION
+`)}
+			p, err := Load(fs, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(p.Runtime.Libraries) != 1 || !strings.Contains(p.Runtime.Libraries[0], "FUNCTION Doubled") {
+				t.Fatalf("util.st must stay a library despite the comment: %v", p.Runtime.Libraries)
+			}
+			if _, err := runtime.New(p.Runtime); err != nil {
+				t.Fatalf("composed project must still build: %v", err)
+			}
+		})
+	}
+}
+
+// TestLoadRealProgramStillDetected makes sure the lexer-based detection
+// keeps rejecting a genuine program file as a library candidate, and keeps
+// accepting one as a task program — the behaviour the regex used to give
+// for the non-comment case.
+func TestLoadRealProgramStillDetected(t *testing.T) {
+	fs := fsys(manifest)
+	if !hasProgramDecl(fs["program.fbd"].Data) {
+		t.Fatal("program.fbd must be detected as a program")
+	}
+	if hasProgramDecl(fs["util.st"].Data) {
+		t.Fatal("util.st (a FUNCTION only) must not be detected as a program")
+	}
+}
+
 func TestLoadErrors(t *testing.T) {
 	cases := []struct {
 		name, manifest, want string

@@ -15,6 +15,33 @@ type State struct {
 	// edit made through the runtime API survives a pod restart until
 	// `nautilus pull` lands it in git.
 	Programs map[string]string `json:"programs,omitempty"`
+	// Alarms is operator alarm state — acknowledgement and shelf — keyed by
+	// alarm definition id. Retained for the same reason setpoints are: an
+	// ack is a decision a person made, and a restart or a standby takeover
+	// must not resurrect hundreds of acked alarms as unacked. Active and
+	// return-to-normal are deliberately absent; they re-derive from the
+	// field on the next scan.
+	Alarms map[string]AlarmRetain `json:"alarms,omitempty"`
+}
+
+// AlarmRetain is one alarm's retained operator state. Every field is
+// omitempty, so a store written before alarms existed loads unchanged and
+// the overwhelming majority of alarms — the normal ones — cost nothing.
+type AlarmRetain struct {
+	Acked        bool   `json:"acked,omitempty"`
+	AckBy        string `json:"ackBy,omitempty"`
+	AckMs        int64  `json:"ackMs,omitempty"`
+	ShelfUntilMs int64  `json:"shelfUntilMs,omitempty"`
+	ShelfBy      string `json:"shelfBy,omitempty"`
+}
+
+// AlarmRetainer is the alarm engine, as far as the retain saver and loader
+// are concerned. Declaring it here rather than importing the alarm package
+// keeps the dependency pointing one way: alarm knows about retain, retain
+// knows only about a shape.
+type AlarmRetainer interface {
+	RetainedAlarms() map[string]AlarmRetain
+	RestoreAlarms(map[string]AlarmRetain)
 }
 
 // Store persists and recalls State. Implementations must treat "nothing has

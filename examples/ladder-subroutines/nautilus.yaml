@@ -1,0 +1,42 @@
+# Ladder subroutines: FUNCTION_BLOCKs written as rungs.
+#
+#   nautilus check examples/ladder-subroutines
+#   nautilus test  examples/ladder-subroutines
+#   nautilus run   examples/ladder-subroutines
+#
+# blocks.ld has NO PROGRAM, so it is a project library — the same rule
+# that makes a PROGRAM-less .st file one. Its two blocks compose into the
+# prelude ahead of every task, and main.ld instantiates each of them
+# twice, once per pump. Before this, the only way to reuse a routine was
+# to copy its rungs or make it a whole extra task.
+name: ladder-subroutines
+
+server:
+  addr: "localhost:8080"
+
+tasks:
+  - program: main.ld
+    scan: 100ms
+
+tags:
+  # Operator commands
+  - { name: P101Start, role: setpoint, init: false, desc: "P101 start" }
+  - { name: P101Stop,  role: setpoint, init: false, desc: "P101 stop" }
+  - { name: P102Start, role: setpoint, init: false, desc: "P102 start" }
+  - { name: P102Stop,  role: setpoint, init: false, desc: "P102 stop" }
+  # Field feedback (a real deployment makes these role: input)
+  - { name: P101Flow, role: setpoint, init: false, desc: "P101 flow switch" }
+  - { name: P102Flow, role: setpoint, init: false, desc: "P102 flow switch" }
+  - { name: LevelPct,  role: setpoint, init: 20.0, unit: "%", desc: "Tank level" }
+  - { name: StopLevel, role: setpoint, init: 80.0, unit: "%", desc: "Level that drops both pumps" }
+  # Block outputs
+  - { name: P101Run,  role: output, init: false, desc: "P101 run command" }
+  - { name: P102Run,  role: output, init: false, desc: "P102 run command" }
+  - { name: P101Warm, role: state,  init: false, desc: "P101 has run 5 s" }
+  - { name: P102Warm, role: state,  init: false, desc: "P102 has run 5 s" }
+  - { name: P101FailAlm, role: state, init: false, desc: "P101 failed to start" }
+  - { name: P102FailAlm, role: state, init: false, desc: "P102 failed to start" }
+  - { name: AnyWarm, role: state, init: false, desc: "Either pump is warm" }
+
+driver:
+  type: memory

@@ -1,0 +1,131 @@
+# Alarm behaviour, asserted in virtual time.
+#
+# `alarms:` is a sibling of `expect:`, not a matcher inside it: alarm state
+# is host state, it does not live in the tag store, and no ST expression
+# can see it. `ack:`, `shelve:` and `unshelve:` are the operator's side of
+# the same story — the exact calls POST /api/alarms/* makes.
+#
+# The sim task is frozen throughout, so the measurements are the test's to
+# drive.
+suspend: [sim]
+
+tests:
+  - name: the flow high-high alarm qualifies after its on-delay, annunciates, and acks
+    steps:
+      # The bit is set within one scan; the ALARM is not, because the rule
+      # gives it a five-minute on-delay. This is the assertion a wall clock
+      # makes untestable and a stopped virtual clock makes exact.
+      - given: { RTU9_WEL15_FIT_001.PV: 120.0 }
+        advance: 4m
+        expect: { RTU9_WEL15_FIT_001.HH: true }
+        alarms: { active: [], unacked: 0 }
+
+      - advance: 1m1s
+        alarms:
+          active: ["RTU9_WEL15_FIT_001.HH"]
+          unacked: 1
+          state: { RTU9_WEL15_FIT_001.HH: unack-active }
+          priority: { high: 1 }
+
+      # An ack is host state and is never written back to the edge: the
+      # tag store is untouched, only the alarm moves.
+      - ack: { ids: ["RTU9_WEL15_FIT_001.HH"], by: test }
+        scans: 1
+        alarms:
+          state: { RTU9_WEL15_FIT_001.HH: ack-active }
+          unacked: 0
+
+      # auto-clear, already acknowledged: the alarm is done, and the
+      # journal holds the whole story in order.
+      - given: { RTU9_WEL15_FIT_001.PV: 50.0 }
+        scans: 1
+        alarms:
+          active: []
+          state: { RTU9_WEL15_FIT_001.HH: normal }
+          journal: [active, ack, rtn]
+
+  - name: an unacknowledged alarm that clears stays on the screen as unack-rtn
+    steps:
+      - given: { RTU9_TNK01_LIT_001.PV: 5.0 }
+        scans: 1
+        alarms:
+          active: ["RTU9_TNK01_LIT_001.L"]
+          state: { RTU9_TNK01_LIT_001.L: unack-active }
+
+      # Return to normal without an ack: the condition is gone, the
+      # operator's obligation is not.
+      - given: { RTU9_TNK01_LIT_001.PV: 50.0 }
+        scans: 1
+        alarms:
+          active: ["RTU9_TNK01_LIT_001.L"]
+          unacked: 1
+          state: { RTU9_TNK01_LIT_001.L: unack-rtn }
+
+      - ack: { all: true, by: test }
+        scans: 1
+        alarms:
+          active: []
+          unacked: 0
+          journal: [active, rtn, ack]
+
+  - name: a shelf silences an alarm and always expires
+    steps:
+      - given: { RTU9_TNK01_LIT_001.PV: 5.0 }
+        scans: 1
+        alarms: { active: ["RTU9_TNK01_LIT_001.L"] }
+
+      - shelve: { id: RTU9_TNK01_LIT_001.L, for: 15m, by: test }
+        scans: 1
+        alarms:
+          active: []
+          shelved: ["RTU9_TNK01_LIT_001.L"]
+
+      # There is no permanent shelf. When it expires the alarm comes back
+      # in the state the shelf interrupted — shelving is not a back-door
+      # acknowledgement.
+      - advance: 16m
+        alarms:
+          shelved: []
+          active: ["RTU9_TNK01_LIT_001.L"]
+          state: { RTU9_TNK01_LIT_001.L: unack-active }
+
+  - name: unshelving early restores the state the shelf interrupted
+    steps:
+      - given: { RTU9_TNK01_LIT_001.PV: 5.0 }
+        scans: 1
+        alarms: { unacked: 1 }
+      - shelve: { id: RTU9_TNK01_LIT_001.L, for: 1h, by: test }
+        scans: 1
+        alarms: { shelved: ["RTU9_TNK01_LIT_001.L"] }
+      - unshelve: { id: RTU9_TNK01_LIT_001.L, by: test }
+        scans: 1
+        alarms:
+          shelved: []
+          state: { RTU9_TNK01_LIT_001.L: unack-active }
+
+  - name: an offline edge node suppresses its alarms instead of freezing them lit
+    steps:
+      - given: { RTU9_WEL15_FIT_001.PV: 120.0 }
+        advance: 5m1s
+        alarms: { state: { RTU9_WEL15_FIT_001.HH: unack-active } }
+
+      # The tag store holds its last value — that is the point of a host
+      # tag — so without `enable:` this alarm would sit lit forever on a
+      # site nobody can see. Suppressed is the honest answer.
+      - given: { RTU9__Online: false }
+        scans: 1
+        expect: { RTU9_WEL15_FIT_001.HH: true }
+        alarms:
+          active: []
+          state: { RTU9_WEL15_FIT_001.HH: suppressed }
+
+      # Coming back re-baselines the on-delay rather than re-annunciating
+      # instantly: while the site was dark the engine had no idea what the
+      # bit was doing, so the qualification starts over.
+      - given: { RTU9__Online: true }
+        scans: 1
+        alarms:
+          state: { RTU9_WEL15_FIT_001.HH: normal }
+      - advance: 5m1s
+        alarms:
+          state: { RTU9_WEL15_FIT_001.HH: unack-active }

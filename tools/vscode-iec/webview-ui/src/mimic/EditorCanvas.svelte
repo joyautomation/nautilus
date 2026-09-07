@@ -231,6 +231,11 @@
 		return minInteriorPoints(!!p.from, !!p.to);
 	}
 
+	/** Paint order for the pipe network — walls, then bores, then flow
+	 * overlays, matching the kit's Mimic (see the junction note in the kit's
+	 * Pipe.svelte). */
+	const PIPE_LAYERS = ['wall', 'bore', 'flow'] as const;
+
 	/** `{points, from, to}` to feed routedPoints()/resolvePipeEndpoints() for
 	 * `p`, with an in-flight 'anchor' drag on THIS pipe live-substituted in.
 	 * The substitution mirrors dropAnchor() EXACTLY — same anchor state, same
@@ -1150,18 +1155,35 @@
 				height={doc.canvas.height}
 				viewBox="0 0 {doc.canvas.width} {doc.canvas.height}"
 			>
+				<!-- Layered like the kit's Mimic: every wall, then every bore,
+				     then every flow overlay, so runs UNION at junctions instead
+				     of a later pipe's background-coloured bore punching a slot
+				     across an earlier pipe's wall (see the junction note in the
+				     kit's Pipe.svelte) — the editor must show the tee the
+				     runtime will draw. Selection halo rides the wall pass
+				     (under everything of its own pipe and every bore); the hit
+				     strokes come last so they win pointer events over all
+				     paint. -->
+				{#each PIPE_LAYERS as layer (layer)}
+					{#each doc.pipes ?? [] as p (p.id)}
+						{@const d = pointsToPath(routedPoints(pipeRouteInput(p), getPort))}
+						<g class="piperun" class:sel={selected('pipe', p.id)} class:flagged={pipeFlagged(p)}>
+							{#if layer === 'wall' && selected('pipe', p.id)}
+								<path class="pipesel" {d} style="stroke-width: {10 / scale}" />
+							{/if}
+							<Pipe
+								{d}
+								{...(p.color !== undefined ? { color: p.color } : {})}
+								{...(p.props ?? {})}
+								{...resolveBindings(p.bind, ed.tags ?? {})}
+								{layer}
+							/>
+						</g>
+					{/each}
+				{/each}
 				{#each doc.pipes ?? [] as p (p.id)}
 					{@const d = pointsToPath(routedPoints(pipeRouteInput(p), getPort))}
-					<g class="piperun" class:sel={selected('pipe', p.id)} class:flagged={pipeFlagged(p)}>
-						{#if selected('pipe', p.id)}
-							<path class="pipesel" {d} style="stroke-width: {10 / scale}" />
-						{/if}
-						<Pipe
-							{d}
-							{...(p.color !== undefined ? { color: p.color } : {})}
-							{...(p.props ?? {})}
-							{...resolveBindings(p.bind, ed.tags ?? {})}
-						/>
+					<g class="piperun" class:flagged={pipeFlagged(p)}>
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<path class="hit" {d} style="stroke-width: {14 / scale}" onpointerdown={(e) => pipeDown(e, p)} />
 					</g>

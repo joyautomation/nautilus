@@ -91,7 +91,10 @@ func runTest(args []string) int {
 			listSuite(suite)
 			continue
 		}
-		rs, err := acceptance.RunSuite(suite, proj.Runtime)
+		// The manifest's own alarms, over each test's own runtime and
+		// virtual clock, with an in-memory journal and no notifiers — a
+		// test must never write to the site's alarm database.
+		rs, err := acceptance.RunSuite(suite, proj.Runtime, acceptance.WithAlarms(proj.AlarmEngine))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "nautilus test:", err)
 			return 1

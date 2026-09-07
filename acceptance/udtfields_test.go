@@ -95,6 +95,27 @@ tests:
 	}
 }
 
+// TestExpressionAddressesStructField is a regression test: an ST boolean
+// expression like "WEL15_FIT_001.VALUE < WellFlowGpm + 5.0" used to fail
+// with `undeclared identifier "WEL15_FIT_001"`, because ExternalsOf left
+// every struct-typed (UDT) tag out of the expression's generated
+// VAR_EXTERNAL block entirely — only the matcher form
+// (`P101.Speed: {gt: 800}`) reached a struct field. A struct-typed tag now
+// declares as its own TYPE, the same way the project's own program does.
+func TestExpressionAddressesStructField(t *testing.T) {
+	for _, r := range runUDT(t, `
+tests:
+  - name: an expression can reach a struct field
+    given: { P101.Speed: 12.5 }
+    scans: 2
+    expect: "P101.Speed < Duty + 1.0"
+`) {
+		if !r.Passed {
+			t.Errorf("FAIL %s\n%s", r.Name, acceptance.FormatFailure(r))
+		}
+	}
+}
+
 // A task local is still reachable, and still by the same syntax — the point
 // of fixing the ORDER rather than inventing a second one.
 func TestTaskLocalStillResolves(t *testing.T) {

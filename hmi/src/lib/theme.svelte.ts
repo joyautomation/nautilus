@@ -17,7 +17,8 @@ function resolve(t: Theme): 'light' | 'dark' {
 }
 
 function createTheme() {
-	let current = $state<Theme>('system');
+	// Dark before `init()` runs too, so a pre-paint stamp and the store agree.
+	let current = $state<Theme>('dark');
 	let effective = $state<'light' | 'dark'>('dark');
 	let bound = false;
 
@@ -42,14 +43,26 @@ function createTheme() {
 		get effective() {
 			return effective;
 		},
-		init() {
+		/**
+		 * Read the persisted choice and stamp it on `<html>`.
+		 *
+		 * **The default is dark**, not system. An HMI's design case is an ops
+		 * room at 03:00, and a control screen that comes up white because the
+		 * workstation happens to be set to a light desktop theme is the wrong
+		 * default for the room it lives in. Pass `'system'` to follow the OS
+		 * instead (which itself falls back to dark where `matchMedia` cannot
+		 * answer), or `'light'` for a daylight panel.
+		 *
+		 * A saved choice always wins; this is only what a first visit gets.
+		 */
+		init(fallback: Theme = 'dark') {
 			let saved: string | null = null;
 			try {
 				saved = localStorage.getItem(KEY);
 			} catch {
 				/* private mode */
 			}
-			current = isTheme(saved) ? saved : 'system';
+			current = isTheme(saved) ? saved : fallback;
 			apply(current);
 			bindSystem();
 		},

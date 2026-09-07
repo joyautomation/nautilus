@@ -249,7 +249,14 @@ func (p *Program) Locals() map[string]any {
 
 // Globals reports every PLC variable the program binds, with the type it
 // was declared as — the VAR_EXTERNAL block as the compiler resolved it,
-// diagram languages included (they transpile to ST before lowering).
+// diagram languages included (they transpile to ST before lowering), PLUS
+// the VAR_EXTERNAL/VAR_GLOBAL block of every FUNCTION_BLOCK instance the
+// program declares, nested FB-in-FB included. A library FB's VAR_EXTERNAL
+// has no top-level declaration of its own to see here — the tag is bound
+// through whichever program's instance steps it, exactly as a scan
+// resolves it — so leaving those out would undercount what this program
+// actually binds. An FB type that exists but nothing here instantiates
+// contributes nothing.
 //
 // This is introspection for tooling, not a scan path. It answers a question
 // the tag store cannot until something has run: an output tag with no seed
@@ -261,11 +268,7 @@ func (p *Program) Globals() map[string]*ir.Type {
 	if p.prog == nil {
 		return nil
 	}
-	out := make(map[string]*ir.Type, len(p.prog.Globals))
-	for name, t := range p.prog.Globals {
-		out[name] = t
-	}
-	return out
+	return p.prog.GlobalsDeep()
 }
 
 // Types reports every TYPE this program's sources declare, resolved. A
@@ -285,7 +288,9 @@ func (p *Program) Types() map[string]*ir.Type {
 
 // GlobalUses reports which of this program's globals are read and which are
 // written — the split `nautilus check` needs to tell a missing manifest entry
-// that costs an HMI description from one that faults the scan.
+// that costs an HMI description from one that faults the scan. Like
+// Globals, this includes reads/writes performed through an instantiated
+// FUNCTION_BLOCK's own VAR_EXTERNAL, nested FB-in-FB included.
 func (p *Program) GlobalUses() ir.GlobalUse {
 	p.mu.Lock()
 	defer p.mu.Unlock()

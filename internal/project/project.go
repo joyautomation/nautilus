@@ -14,7 +14,6 @@ import (
 	"io/fs"
 	"os"
 	"path"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -22,7 +21,9 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/joyautomation/nautilus/eip"
+	"github.com/joyautomation/nautilus/internal/stproject"
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
 	"github.com/joyautomation/nautilus/sparkplug"
@@ -58,6 +59,15 @@ type Manifest struct {
 	// Both are wired by `nautilus run` — check/build/LSP only validate.
 	Retain     *RetainConfig     `yaml:"retain"`
 	Redundancy *RedundancyConfig `yaml:"redundancy"`
+	// Alarms turns BOOL tags into ISA-18.2 alarm state — the active list,
+	// acknowledge, shelve, and the journal behind /api/alarms. Absent (the
+	// default): no engine, and behaviour identical to before it existed.
+	// AlarmFiles mirrors TagFiles exactly, for the same reason: a
+	// GENERATED alarm set belongs in its own reviewable artifact, not
+	// smeared through the file a person edits. Both are composed by
+	// ReadManifest, so check, run and the language server see one set.
+	Alarms     *AlarmsConfig `yaml:"alarms"`
+	AlarmFiles []string      `yaml:"alarm-files"`
 }
 
 // RetainConfig says where retained state lives. In a cluster the ConfigMap
@@ -123,6 +133,20 @@ type ServerConfig struct {
 	// the API proxies GET /api/history* there so the HMI keeps one origin.
 	// NAUTILUS_HISTORIAN_URL overrides at start.
 	Historian string `yaml:"historian"`
+	// HMI is a built HMI's directory, relative to the project (e.g. the
+	// SvelteKit `adapter-static` output, "./hmi/build") — same rule as
+	// every other manifest-referenced path (tag-files, driver.manifest):
+	// it must resolve inside the project (see projectPath), so what
+	// `nautilus build` ships is what a reviewer can see in the checkout.
+	// When set, the controller serves that directory at "/" (SPA fallback
+	// to its index.html for a client-side route), and the built-in
+	// dashboard moves to "/_nautilus/" — see server.Options.HMI. Empty (the
+	// default): unchanged, the dashboard keeps "/".
+	//
+	// The HMI must call the tag API same-origin (a relative "/api/..."
+	// base URL) — server.hmi and the API are one process on one address,
+	// so there is no cross-origin URL to configure.
+	HMI string `yaml:"hmi"`
 }
 
 // TaskConfig is one program on its own scan. The FIRST task is the main
@@ -200,11 +224,23 @@ type Project struct {
 	sparkplug *SparkplugConfig
 	inputTags []string // role-input tag names, for the Sparkplug device
 
+	// HMIDir is server.hmi's path, cleaned and relative to the project
+	// (e.g. "hmi/build") — "" when unset. `nautilus build` uses it to warn
+	// on a large embed; Server.HMI (above) is the fs.FS actually served.
+	HMIDir string
+
 	// Retain/Redundancy carry the manifest's sections for `nautilus run`
 	// to wire; Load itself constructs nothing — check, build, and the LSP
 	// load projects too, and must not touch a cluster to do it.
 	Retain     *RetainConfig
 	Redundancy *RedundancyConfig
+
+	// Alarms is the composed `alarms:` section (alarm-files folded in),
+	// or nil when the manifest declares none. Load composes and validates
+	// it; building the engine over a compiled runtime is a separate call
+	// (see alarms.go) for the same reason Sparkplug is: Load must stay
+	// side-effect-free so check, build and the LSP can use it.
+	Alarms *AlarmsConfig
 }
 
 // RetainNames resolves the retain section's defaults against the project
@@ -291,7 +327,23 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 	return sparkplug.New(rt, cfg, opts...)
 }
 
-var programRe = regexp.MustCompile(`(?mi)^\s*PROGRAM\b`)
+// hasProgramDecl reports whether src contains a PROGRAM declaration,
+// deciding by lexical token rather than raw text: a comment or string
+// literal containing the word "program" (e.g. a block comment that reads
+// "program; the site program owns...") must not count, or a library file
+// gets misidentified as a program and silently dropped from the composed
+// library set — surfacing later as spurious "unknown type" errors for
+// whatever it declared. lang/st's lexer already strips (* ... *) and //
+// comments and tokenizes string literals separately from keywords, so a
+// single PROGRAM token scan is both cheap and correct without a full parse.
+func hasProgramDecl(src []byte) bool {
+	for _, tok := range st.Lex(string(src)) {
+		if tok.Type == st.TokenProgram {
+			return true
+		}
+	}
+	return false
+}
 
 // ReadManifest decodes a manifest and stops there — no programs compiled, no
 // driver constructed, nothing opened beyond the manifest and its tag files.
@@ -321,6 +373,9 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	if err := composeTags(fsys, &m, name); err != nil {
+		return nil, err
+	}
+	if err := composeAlarms(fsys, &m); err != nil {
 		return nil, err
 	}
 	return &m, nil
@@ -420,7 +475,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		if err != nil {
 			return "", fmt.Errorf("task program %q: %w", t.Program, err)
 		}
-		if !programRe.Match(src) {
+		if !hasProgramDecl(src) {
 			return "", fmt.Errorf("%s has no PROGRAM declaration", t.Program)
 		}
 		return string(src), nil
@@ -473,6 +528,24 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			inputs = append(inputs, t.Name)
 		}
 	}
+	var hmiFS fs.FS
+	var hmiDir string
+	if m.Server.HMI != "" {
+		hmiPath, err := projectPath(m.Server.HMI)
+		if err != nil {
+			return nil, fmt.Errorf("server.hmi: %w", err)
+		}
+		hmiDir = hmiPath
+		// fs.Sub only wraps a path prefix — it does not require hmiPath to
+		// exist yet, so `nautilus check`/a language server reading the
+		// manifest before `npm run build` has run doesn't fail here. A
+		// request against a missing build 404s at serve time instead (see
+		// server.handleHMI); `nautilus run`'s banner and `nautilus build`'s
+		// output both name the configured directory either way.
+		if hmiFS, err = fs.Sub(fsys, hmiPath); err != nil {
+			return nil, fmt.Errorf("server.hmi: %w", err)
+		}
+	}
 	return &Project{
 		Name:    projName,
 		Addr:    addr,
@@ -481,35 +554,84 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			Interval:     time.Duration(m.Server.Interval),
 			OnlineEdits:  m.Server.OnlineEdits,
 			HistorianURL: m.Server.Historian,
+			HMI:          hmiFS,
 		},
 		sparkplug:  m.Sparkplug,
 		inputTags:  inputs,
 		Retain:     m.Retain,
 		Redundancy: m.Redundancy,
+		Alarms:     m.Alarms,
+		HMIDir:     hmiDir,
 	}, nil
 }
 
+// libraries composes the project's prelude: every root-level file with no
+// PROGRAM. `.st` files join verbatim, in name order; then `.ld` and `.fbd`
+// files — libraries of ladder / netlist FUNCTION_BLOCKs, the IEC answer to
+// a JSR — transpiled to ST, also in name order. See internal/stproject for
+// why that tier order, and why it never decides whether a call resolves.
+//
+// Unlike the editor-side composition, a library that will not transpile is
+// an ERROR here: this is the path `nautilus check`, `run`, and `build` take,
+// and silently dropping a block would fail later as "unknown type".
 func libraries(fsys fs.FS) ([]string, error) {
 	entries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
 		return nil, err
 	}
-	var names []string
+	var stNames, gNames []string
 	for _, e := range entries {
-		if !e.IsDir() && strings.EqualFold(path.Ext(e.Name()), ".st") {
-			names = append(names, e.Name())
+		if e.IsDir() {
+			continue
+		}
+		switch {
+		case strings.EqualFold(path.Ext(e.Name()), ".st"):
+			stNames = append(stNames, e.Name())
+		case stproject.IsGraphicalLibrary(e.Name()):
+			gNames = append(gNames, e.Name())
 		}
 	}
-	sort.Strings(names)
-	var libs []string
-	for _, n := range names {
+	sort.Strings(stNames)
+	sort.Strings(gNames)
+
+	// Read every library as written first: a ladder library resolves the
+	// blocks its siblings declare, in either direction.
+	type libFile struct{ name, src string }
+	var stLibs, gLibs []libFile
+	var sources []string
+	for _, n := range stNames {
 		src, err := fs.ReadFile(fsys, n)
 		if err != nil {
 			return nil, err
 		}
-		if !programRe.Match(src) {
-			libs = append(libs, string(src))
+		if hasProgramDecl(src) {
+			continue
 		}
+		stLibs = append(stLibs, libFile{n, string(src)})
+		sources = append(sources, string(src))
+	}
+	for _, n := range gNames {
+		src, err := fs.ReadFile(fsys, n)
+		if err != nil {
+			return nil, err
+		}
+		if hasProgramDecl(src) {
+			continue
+		}
+		gLibs = append(gLibs, libFile{n, string(src)})
+		sources = append(sources, string(src))
+	}
+
+	var libs []string
+	for _, l := range stLibs {
+		libs = append(libs, l.src)
+	}
+	for _, l := range gLibs {
+		stSrc, err := stproject.LibraryST(l.name, l.src, sources...)
+		if err != nil {
+			return nil, err
+		}
+		libs = append(libs, stSrc)
 	}
 	return libs, nil
 }
@@ -599,6 +721,11 @@ func applyTagMeta(defs []runtime.TagDef, tm map[string]MetaConfig) map[string]ru
 // normalize maps yaml's integer literals onto the float64 the tag store
 // expects for numerics (yaml decodes 65 as int, 65.0 as float64; ST REAL
 // tags want the latter). BOOL and string pass through.
+//
+// It does NOT recurse into a struct tag's nested init map: a member's
+// target kind (REAL vs INT vs BOOL) is only known once the tag's `type:`
+// resolves against the compiled TYPE table, so ir.SeedFromInit does that
+// conversion itself, per member, once expandTags has the type in hand.
 func normalize(v any) any {
 	switch x := v.(type) {
 	case int:

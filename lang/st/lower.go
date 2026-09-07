@@ -21,10 +21,16 @@ import (
 // in the PLC config) so programs can reference them directly without
 // repeating VAR_GLOBAL boilerplate. Names already declared explicitly
 // in the source win; the implicit entry is then silently ignored.
+//
+// Types is a registry of TYPEs resolved elsewhere (a separately compiled
+// library) that this source should see in addition to its own TYPE block.
+// nautilus normally joins library text ahead of the program, so this is
+// usually nil; a TYPE declared in the joined text needs nothing here.
 type LowerOpts struct {
 	UserFBs         map[string]*ir.FBDef
 	UserFuncs       map[string]*ir.FuncDef
 	ImplicitGlobals map[string]*ir.Type
+	Types           map[string]*ir.Type
 }
 
 // Lower converts a parsed ST program into typed IR.
@@ -75,14 +81,6 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 		}
 	}
 
-	// Resolve FB signatures (slot lists + types) before lowering any body
-	// so FB-on-FB member access type-checks regardless of declaration order.
-	for _, fbDecl := range prog.FBDecls {
-		if err := populateFBSignature(fbDecl, inFile[fbDecl.Name], combined); err != nil {
-			return nil, err
-		}
-	}
-
 	// Same dance for FUNCTIONs: build empty shells so peer functions and
 	// the outer program can resolve each by name regardless of order.
 	inFileFuncs := map[string]*ir.FuncDef{}
@@ -103,20 +101,36 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 		}
 	}
 
-	// Resolve FUNCTION signatures (return type + input list) before any
-	// body so peer calls type-check regardless of declaration order.
+	l := newLowerer(prog, combined)
+	l.userFuncs = combinedFuncs
+	l.implicitGlobals = opts.ImplicitGlobals
+	// Seed the file's TYPE table with any the caller supplies (a separately
+	// compiled library), then resolve this file's own TYPE block. Both are
+	// in scope for the POUs below — a FUNCTION_BLOCK pin may name a UDT.
+	for name, t := range opts.Types {
+		if t != nil {
+			l.types[name] = t
+		}
+	}
+	if err := l.collectTypes(); err != nil {
+		return nil, err
+	}
+
+	// Resolve FB and FUNCTION signatures (slot lists + types) before
+	// lowering any body so FB-on-FB member access type-checks regardless of
+	// declaration order. They resolve against l.types, so a pin may be
+	// declared with a user TYPE from this file or a project library.
+	for _, fbDecl := range prog.FBDecls {
+		if err := populateFBSignature(fbDecl, inFile[fbDecl.Name], combined, l.types); err != nil {
+			return nil, err
+		}
+	}
 	for _, fd := range prog.FuncDecls {
-		if err := populateFuncSignature(fd, inFileFuncs[fd.Name], combined); err != nil {
+		if err := populateFuncSignature(fd, inFileFuncs[fd.Name], combined, l.types); err != nil {
 			return nil, err
 		}
 	}
 
-	l := newLowerer(prog, combined)
-	l.userFuncs = combinedFuncs
-	l.implicitGlobals = opts.ImplicitGlobals
-	if err := l.collectTypes(); err != nil {
-		return nil, err
-	}
 	// Keep the resolved TYPE table on the program. The VM never reads it —
 	// this is the same introspection-only category as SlotIndex and Globals
 	// — but a manifest tag naming a UDT (`type: Motor`) has nowhere else to
@@ -137,7 +151,7 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 	// every in-file FB plus the engine-supplied registry.
 	for _, fbDecl := range prog.FBDecls {
 		def := inFile[fbDecl.Name]
-		if err := lowerFBBody(fbDecl, def, combined, combinedFuncs); err != nil {
+		if err := lowerFBBody(fbDecl, def, combined, combinedFuncs, l.types); err != nil {
 			return nil, err
 		}
 		l.irProg.UserFBs = append(l.irProg.UserFBs, def)
@@ -146,7 +160,7 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 	// (and user FBs) since both registries are now populated.
 	for _, fd := range prog.FuncDecls {
 		def := inFileFuncs[fd.Name]
-		if err := lowerFuncBody(fd, def, combined, combinedFuncs); err != nil {
+		if err := lowerFuncBody(fd, def, combined, combinedFuncs, l.types); err != nil {
 			return nil, err
 		}
 		l.irProg.UserFuncs = append(l.irProg.UserFuncs, def)
@@ -155,11 +169,16 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 }
 
 // populateFBSignature resolves the slot types for a FUNCTION_BLOCK and
-// writes them into def.Inputs/Outputs/Internals plus the SlotIndex map.
-// VAR_GLOBAL/VAR_EXTERNAL declarations don't contribute slots — they're
-// only honored during body lowering.
-func populateFBSignature(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[string]*ir.FBDef) error {
+// writes them into def.Inputs/Outputs/InOuts/Internals plus the SlotIndex
+// map. VAR_GLOBAL/VAR_EXTERNAL declarations don't contribute slots —
+// they're only honored during body lowering.
+//
+// types is the enclosing file's resolved TYPE table (its own TYPE block
+// plus the project libraries joined ahead of it), so a pin may be declared
+// with a user TYPE: `VAR_INPUT IN : AnalogInput; END_VAR`.
+func populateFBSignature(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[string]*ir.FBDef, types map[string]*ir.Type) error {
 	sig := newLowerer(&Program{Name: fbDecl.Name}, userFBs)
+	sig.types = types
 	for _, vb := range fbDecl.VarBlocks {
 		for _, vd := range vb.Variables {
 			switch vb.Kind {
@@ -176,48 +195,43 @@ func populateFBSignature(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[s
 				def.Inputs = append(def.Inputs, slot)
 			case "VAR_OUTPUT":
 				def.Outputs = append(def.Outputs, slot)
+			case "VAR_IN_OUT":
+				if t.Kind == ir.TypeFB {
+					return errAt(vd.Pos, fmt.Errorf("FUNCTION_BLOCK %s VAR_IN_OUT %s: a function-block instance cannot be passed by reference", fbDecl.Name, vd.Name))
+				}
+				if vd.Initial != nil {
+					return errAt(vd.Pos, fmt.Errorf("FUNCTION_BLOCK %s VAR_IN_OUT %s: no initial value — the caller's variable supplies it", fbDecl.Name, vd.Name))
+				}
+				def.InOuts = append(def.InOuts, slot)
 			default:
 				def.Internals = append(def.Internals, slot)
 			}
 		}
 	}
-	idx := 0
-	for _, s := range def.Inputs {
+	for idx, s := range def.AllSlots() {
 		if _, dup := def.SlotIndex[s.Name]; dup {
 			return fmt.Errorf("FUNCTION_BLOCK %s: duplicate slot %q", fbDecl.Name, s.Name)
 		}
 		def.SlotIndex[s.Name] = idx
-		idx++
-	}
-	for _, s := range def.Outputs {
-		if _, dup := def.SlotIndex[s.Name]; dup {
-			return fmt.Errorf("FUNCTION_BLOCK %s: duplicate slot %q", fbDecl.Name, s.Name)
-		}
-		def.SlotIndex[s.Name] = idx
-		idx++
-	}
-	for _, s := range def.Internals {
-		if _, dup := def.SlotIndex[s.Name]; dup {
-			return fmt.Errorf("FUNCTION_BLOCK %s: duplicate slot %q", fbDecl.Name, s.Name)
-		}
-		def.SlotIndex[s.Name] = idx
-		idx++
 	}
 	return nil
 }
 
 // lowerFBBody compiles the FUNCTION_BLOCK body to IR statements and
 // installs a Step closure on def. The body lowers against a synthetic
-// Program whose VarBlocks are reordered to VAR_INPUT ‖ VAR_OUTPUT ‖ VAR
-// so the resulting Slots match FBInstance.Slots index-for-index.
-func lowerFBBody(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[string]*ir.FBDef, userFuncs map[string]*ir.FuncDef) error {
-	var inputBlocks, outputBlocks, internalBlocks, globalBlocks []VarBlock
+// Program whose VarBlocks are reordered to
+// VAR_INPUT ‖ VAR_OUTPUT ‖ VAR_IN_OUT ‖ VAR so the resulting Slots match
+// FBInstance.Slots (FBDef.AllSlots) index-for-index.
+func lowerFBBody(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[string]*ir.FBDef, userFuncs map[string]*ir.FuncDef, types map[string]*ir.Type) error {
+	var inputBlocks, outputBlocks, inoutBlocks, internalBlocks, globalBlocks []VarBlock
 	for _, vb := range fbDecl.VarBlocks {
 		switch vb.Kind {
 		case "VAR_INPUT":
 			inputBlocks = append(inputBlocks, vb)
 		case "VAR_OUTPUT":
 			outputBlocks = append(outputBlocks, vb)
+		case "VAR_IN_OUT":
+			inoutBlocks = append(inoutBlocks, vb)
 		case "VAR_GLOBAL", "VAR_EXTERNAL":
 			globalBlocks = append(globalBlocks, vb)
 		default:
@@ -227,12 +241,14 @@ func lowerFBBody(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[string]*i
 	var blocks []VarBlock
 	blocks = append(blocks, inputBlocks...)
 	blocks = append(blocks, outputBlocks...)
+	blocks = append(blocks, inoutBlocks...)
 	blocks = append(blocks, internalBlocks...)
 	blocks = append(blocks, globalBlocks...)
 
 	bodyProg := &Program{Name: fbDecl.Name, VarBlocks: blocks, Statements: fbDecl.Statements}
 	sub := newLowerer(bodyProg, userFBs)
 	sub.userFuncs = userFuncs
+	sub.types = types
 	if err := sub.collectVars(); err != nil {
 		return fmt.Errorf("FUNCTION_BLOCK %s: %w", fbDecl.Name, err)
 	}
@@ -242,6 +258,16 @@ func lowerFBBody(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[string]*i
 	}
 	sub.irProg.Body = stmts
 	bodyIR := sub.irProg
+
+	// The FB's own VAR_EXTERNAL/VAR_GLOBAL block and how its body uses it —
+	// tooling's only way to see what this FB type binds, since the FB has
+	// no scan path of its own to observe (Program.GlobalsDeep and
+	// GlobalUses walk instances to reach these; see FBDef.Globals).
+	// DirectGlobalUses, not GlobalUses: an FB body may instantiate another
+	// FB declared later in this same file, whose own Uses isn't populated
+	// yet at this point in the lowering loop below.
+	def.Globals = bodyIR.Globals
+	def.Uses = bodyIR.DirectGlobalUses()
 
 	def.Step = func(inst *ir.FBInstance, ctx ir.FBStepCtx) error {
 		frame := &ir.Frame{Slots: inst.Slots}
@@ -253,8 +279,9 @@ func lowerFBBody(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[string]*i
 // populateFuncSignature resolves a FUNCTION's input slot list and return
 // type, writing them onto def so peer call sites can type-check before
 // the body itself is lowered.
-func populateFuncSignature(decl *FunctionDecl, def *ir.FuncDef, userFBs map[string]*ir.FBDef) error {
+func populateFuncSignature(decl *FunctionDecl, def *ir.FuncDef, userFBs map[string]*ir.FBDef, types map[string]*ir.Type) error {
 	sig := newLowerer(&Program{Name: decl.Name}, userFBs)
+	sig.types = types
 	retT, err := sig.resolveType(decl.ReturnType)
 	if err != nil {
 		return errAt(decl.Pos, fmt.Errorf("FUNCTION %s return type: %w", decl.Name, err))
@@ -296,7 +323,7 @@ func populateFuncSignature(decl *FunctionDecl, def *ir.FuncDef, userFBs map[stri
 // closure on def. The body lowers against a synthetic Program whose
 // VarBlocks are reordered VAR_INPUT ‖ VAR (locals) ‖ <return slot>, so
 // the per-call Frame.Slots layout matches def's FrameSize.
-func lowerFuncBody(decl *FunctionDecl, def *ir.FuncDef, userFBs map[string]*ir.FBDef, userFuncs map[string]*ir.FuncDef) error {
+func lowerFuncBody(decl *FunctionDecl, def *ir.FuncDef, userFBs map[string]*ir.FBDef, userFuncs map[string]*ir.FuncDef, types map[string]*ir.Type) error {
 	var inputBlocks, localBlocks, globalBlocks []VarBlock
 	for _, vb := range decl.VarBlocks {
 		switch vb.Kind {
@@ -328,6 +355,7 @@ func lowerFuncBody(decl *FunctionDecl, def *ir.FuncDef, userFBs map[string]*ir.F
 	bodyProg := &Program{Name: decl.Name, VarBlocks: blocks, Statements: decl.Statements}
 	sub := newLowerer(bodyProg, userFBs)
 	sub.userFuncs = userFuncs
+	sub.types = types
 	if err := sub.collectVars(); err != nil {
 		return fmt.Errorf("FUNCTION %s: %w", decl.Name, err)
 	}
@@ -634,6 +662,8 @@ func varKindFor(blockKind string) ir.VarKind {
 		return ir.VarInput
 	case "VAR_OUTPUT":
 		return ir.VarOutput
+	case "VAR_IN_OUT":
+		return ir.VarInOut
 	case "VAR_GLOBAL", "VAR_EXTERNAL":
 		return ir.VarGlobal
 	}
@@ -823,12 +853,39 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		return nil, fmt.Errorf("FB call %q must use named args (IN := …, PT := …)", n.Call.Name)
 	}
 	bindings := make([]ir.FBInput, 0, len(n.Call.NamedArgs))
+	// VAR_IN_OUT bindings become a pair: an input binding that copies the
+	// caller's variable in before Step, and an output binding that copies
+	// the (possibly rewritten) pin back to the same lvalue after it. That is
+	// observably "by reference" for scan code, and it is what makes a
+	// VAR_IN_OUT bound to a VAR_EXTERNAL struct round-trip to the tag store.
+	inoutBack := make([]ir.FBOutput, 0, len(def.InOuts))
+	boundInOut := make([]bool, len(def.InOuts))
 	for _, na := range n.Call.NamedArgs {
 		idx, ok := def.SlotIndex[na.Name]
 		if !ok {
 			return nil, fmt.Errorf("FB %s has no input %q", def.Name, na.Name)
 		}
-		if idx >= len(def.Inputs) {
+		if def.IsInOut(idx) {
+			target, err := l.lowerInOutArg(def, na)
+			if err != nil {
+				return nil, err
+			}
+			slotT := def.Slot(idx).Type
+			if !slotT.Equal(target.ExprType()) {
+				return nil, fmt.Errorf("FB %s VAR_IN_OUT %q: needs a %s variable, got %s "+
+					"(an IN_OUT is passed by reference, so no conversion happens)",
+					def.Name, na.Name, slotT, target.ExprType())
+			}
+			nth := idx - len(def.Inputs) - len(def.Outputs)
+			if boundInOut[nth] {
+				return nil, fmt.Errorf("FB %s: VAR_IN_OUT %q given twice", def.Name, na.Name)
+			}
+			boundInOut[nth] = true
+			bindings = append(bindings, ir.FBInput{SlotIdx: idx, Value: target})
+			inoutBack = append(inoutBack, ir.FBOutput{SlotIdx: idx, Target: target})
+			continue
+		}
+		if !def.IsInput(idx) {
 			return nil, fmt.Errorf("FB %s field %q is not an input", def.Name, na.Name)
 		}
 		v, err := l.lowerExpr(na.Value)
@@ -838,13 +895,26 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		v = coerce(v, def.Inputs[idx].Type)
 		bindings = append(bindings, ir.FBInput{SlotIdx: idx, Value: v})
 	}
-	outputs := make([]ir.FBOutput, 0, len(n.Call.OutputBindings))
+	// Every VAR_IN_OUT must be bound at every call site: unlike an input it
+	// has no meaningful default, and leaving it unbound would let the block
+	// write into whatever the previous call left behind.
+	for i, ok := range boundInOut {
+		if !ok {
+			return nil, fmt.Errorf("FB %s: VAR_IN_OUT %q must be bound at every call site (%s := <variable>)",
+				def.Name, def.InOuts[i].Name, def.InOuts[i].Name)
+		}
+	}
+	outputs := append([]ir.FBOutput(nil), inoutBack...)
 	for _, ob := range n.Call.OutputBindings {
 		idx, ok := def.SlotIndex[ob.Name]
 		if !ok {
 			return nil, fmt.Errorf("FB %s has no member %q", def.Name, ob.Name)
 		}
-		if idx < len(def.Inputs) || idx >= len(def.Inputs)+len(def.Outputs) {
+		if def.IsInOut(idx) {
+			return nil, fmt.Errorf("FB %s field %q is a VAR_IN_OUT — bind it with %q := <variable>, "+
+				"which already writes back to the caller", def.Name, ob.Name, ob.Name)
+		}
+		if !def.IsOutput(idx) {
 			return nil, fmt.Errorf("FB %s field %q is not an output (=> binds outputs only)", def.Name, ob.Name)
 		}
 		target, err := l.lowerLValue(ob.Target)
@@ -854,6 +924,25 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		outputs = append(outputs, ir.FBOutput{SlotIdx: idx, Target: target})
 	}
 	return &ir.FBCall{InstanceSlot: sym.slot, Def: def, Inputs: bindings, Outputs: outputs}, nil
+}
+
+// lowerInOutArg lowers the argument bound to a VAR_IN_OUT pin. The pin is
+// written back to the caller after Step, so the argument has to name
+// storage the caller can see: a variable, a struct field, an array element,
+// or a VAR_EXTERNAL tag. An expression has nowhere to write back to, and
+// that is a compile error rather than a silently discarded result.
+func (l *lowerer) lowerInOutArg(def *ir.FBDef, na NamedArg) (ir.LValue, error) {
+	lowered, err := l.lowerExpr(na.Value)
+	if err != nil {
+		return nil, fmt.Errorf("FB %s VAR_IN_OUT %q: %w", def.Name, na.Name, err)
+	}
+	lv, ok := lowered.(ir.LValue)
+	if !ok {
+		return nil, fmt.Errorf("FB %s VAR_IN_OUT %q needs a variable to write back to, "+
+			"got an expression — pass a variable, struct field, array element, or VAR_EXTERNAL tag",
+			def.Name, na.Name)
+	}
+	return lv, nil
 }
 
 func (l *lowerer) lowerAssign(a *AssignStmt) (ir.Stmt, error) {

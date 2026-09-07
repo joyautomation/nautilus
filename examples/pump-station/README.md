@@ -87,14 +87,16 @@ file and every check still passes. The fix belongs in your project's CI, not
 in nautilus — re-run the generator and `git diff --exit-code`. That is exactly
 what `generators_test.go` does for this example.
 
-## One sharp edge
+## A sharp edge, since filed down
 
-`P101.Running := x` does **not** work when `P101` is a `VAR_EXTERNAL`. It
-parses, it compiles, `nautilus check` passes — and then it faults every single
-scan, visible only as `logicErrors` in `/api/state`. The VM has no store path
-for a field of a global (`lang/ir/vm.go:238`).
+`P101.Running := x` when `P101` is a `VAR_EXTERNAL` used to parse, compile, and
+then fault every single scan — visible only as `logicErrors` in `/api/state`,
+because the VM had no store path for a field of a global. It works now: the
+tag store holds the whole aggregate, so the VM reads it, writes the field, and
+puts it back (`lang/ir/vm.go`, `writeLValue`).
 
-The working form is copy, mutate the local, assign the whole struct back:
+`sim.st` still spells the older form out for all six pumps, and it is worth
+keeping in your eye — copy, mutate the local, assign the whole struct back:
 
 ```
 m := P101;
@@ -102,6 +104,6 @@ m.Running := P101_Enable AND NOT m.Fault;
 P101 := m;
 ```
 
-`sim.st` does this for all six pumps. *Reading* `P101.Running` is fine, and so
-is `given: { P101.Running: true }` in an acceptance test — the harness does a
-read-modify-write. Only ST assigning to a field of a global fails.
+It is one tag write instead of three, so a struct you are rewriting field by
+field is still cheaper assembled locally and assigned once. Both forms are
+correct; pick by how many fields you touch.

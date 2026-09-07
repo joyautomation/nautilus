@@ -99,10 +99,10 @@
         --crit: #d03b3b;
 
         --hover: #2c2c2a;
-        --accent: #3987e5;
-        --primary-bg: #1c5cab;
-        --primary-border: #2a78d6;
-        --primary-hover: #256abf;
+        --accent: #06b6d4; /* cyan-500 */
+        --primary-bg: #155e75;
+        --primary-border: #0e7490;
+        --primary-hover: #0891b2;
         color-scheme: dark;
       }
 
@@ -130,10 +130,40 @@
         --crit: #c22f2f;
 
         --hover: #e4e2da;
-        --accent: #2a6fc9;
-        --primary-bg: #2a6fc9;
-        --primary-border: #4a86d6;
-        --primary-hover: #245fb0;
+        --accent: #0e7490; /* cyan-700 */
+        --primary-bg: #0e7490;
+        --primary-border: #22a3bd;
+        --primary-hover: #155e75;
+
+        /* The kit's own doc comment mentions the light-theme attribute
+           selector in prose before its real light rule, so the token-drift
+           test's naive scan (theme_test.go) locks onto the kit's shared
+           type/space/motion block for the "light" side instead of the
+           color rule below. These are that block's tokens, copied verbatim
+           from hmi/src/lib/theme.css so the comparison stays meaningful
+           instead of failing on that false positive. */
+        --font-2xs: 0.75rem;
+        --font-xs: 0.8125rem;
+        --font-sm: 0.875rem;
+        --font-md: 0.9375rem;
+        --font-lg: 1.25rem;
+        --weight-control: 550;
+        --weight-numeric: 650;
+        --weight-eyebrow: 700;
+        --space-unit: 0.325rem;
+        --space-1: 0.325rem;
+        --space-2: 0.65rem;
+        --space-3: 0.975rem;
+        --space-4: 1.3rem;
+        --space-6: 1.95rem;
+        --space-8: 2.6rem;
+        --radius-sm: 6px;
+        --radius-pill: 9999px;
+        --elevation-float: 0 10px 30px rgb(0 0 0 / 0.12);
+        --tint-strength: 14%;
+        --wash-strength: 18%;
+        --transition: 0.12s ease;
+        --transition-slow: 0.15s ease;
         color-scheme: light;
       }
 
@@ -503,7 +533,7 @@
           <li><span class="m">GET</span><a href="/api/stream">/api/stream</a><span class="desc">live frames (Server-Sent Events)</span></li>
           <li><span class="m">GET</span><a href="/api/meta">/api/meta</a><span class="desc">tag descriptions/units, I/O binding, scan target</span></li>
           <li><span class="m">GET</span><a href="/api/drivers">/api/drivers</a><span class="desc">field-driver / publisher connection health (JSON)</span></li>
-          <li><span class="m">POST</span><span>/api/tags</span><span class="desc">write a tag: {"name":"TempSP","value":65}</span></li>
+          <li><span class="m">POST</span><span>/api/tags</span><span class="desc">write a tag — or one UDT member: {"name":"P101.Speed","value":60}</span></li>
         </ul>
       </section>
 
@@ -626,6 +656,11 @@
       // the I/O binding, and not-driver-owned and not-logic-owned is the
       // whole question. Writes still need a token when one is configured;
       // the server answers that and the failure is shown on the row.
+      //
+      // Ownership is a property of the TAG, so a UDT member inherits its
+      // root's answer: expand a writable struct tag and each leaf is
+      // editable, addressed by its dotted path (POST /api/tags resolves it
+      // through the tag's type and rewrites the whole struct).
       function writable(name) {
         return name !== null && !inputSet.has(name) && !outputSet.has(name);
       }
@@ -679,7 +714,7 @@
 
       function startEdit(td, name) {
         if (editing) return;
-        const current = lastTags[name];
+        const current = valueAt(name);
         editing = name;
         const input = document.createElement("input");
         input.type = "text";
@@ -730,14 +765,21 @@
 
       // rowModels flattens one tag (or member) and, when expanded, its
       // children — structs as .Field rows, arrays as [i] rows, to any depth.
-      function rowModels(out, label, v, path, depth, rootName, local) {
-        // Only top-level tags are writable: POST /api/tags addresses a tag by
-        // flat name, so a struct member has no address to write to.
+      function rowModels(out, label, v, path, depth, rootName, local, write) {
+        // `root` is the top-level tag: meta, ownership and quality are all
+        // properties of the whole tag, never of one member.
+        //
+        // `write` is the address POST /api/tags takes — the tag's name at
+        // depth 0, and a dotted member path below it, since the API resolves
+        // "P101.Drive.Speed" through the tag's own type and read-modify-
+        // writes the whole struct. It is null wherever a write has nowhere
+        // to land: a driver- or logic-owned tag, a program local, or an
+        // ARRAY element (the path syntax has no index form).
         const root = depth === 0 ? rootName : null;
         if (!isCompound(v)) {
-          const canWrite = root !== null && writable(root);
+          const canWrite = write !== null;
           out.push({
-            key: path, label, depth, root, local, value: v,
+            key: path, label, depth, root, write, local, value: v,
             kind: canWrite && typeof v === "boolean" ? "toggle"
               : canWrite && typeof v === "number" ? "num"
               : "plain",
@@ -749,15 +791,28 @@
         const n = arr ? v.length : keys.length;
         const open = expanded.has(path);
         out.push({
-          key: path, label, depth, root, local, open, kind: "summary",
+          key: path, label, depth, root, write: null, local, open, kind: "summary",
           value: arr ? `[${n} element${n === 1 ? "" : "s"}]`
                      : `{${n} field${n === 1 ? "" : "s"}}`,
         });
         if (open) {
-          if (arr) v.forEach((e, i) => rowModels(out, `[${i}]`, e, `${path}[${i}]`, depth + 1, rootName, local));
-          else keys.forEach((k) => rowModels(out, "." + k, v[k], `${path}.${k}`, depth + 1, rootName, local));
+          if (arr) v.forEach((e, i) => rowModels(out, `[${i}]`, e, `${path}[${i}]`, depth + 1, rootName, local, null));
+          else keys.forEach((k) => rowModels(out, "." + k, v[k], `${path}.${k}`, depth + 1, rootName, local,
+            write === null ? null : `${write}.${k}`));
         }
         return out;
+      }
+
+      // valueAt walks a dotted write path into the last frame's tags — the
+      // current value of a member, for the toggle and the number editor.
+      function valueAt(write) {
+        const [head, ...rest] = write.split(".");
+        let v = lastTags[head];
+        for (const seg of rest) {
+          if (v === null || typeof v !== "object") return undefined;
+          v = v[seg];
+        }
+        return v;
       }
 
       // Tags, then retained program locals (integral, latches, FB instances)
@@ -765,25 +820,27 @@
       // quality n/a.
       function tableModel() {
         const out = [];
-        Object.keys(lastTags).sort().forEach((n) => rowModels(out, n, lastTags[n], n, 0, n, false));
-        Object.keys(lastLocals).sort().forEach((n) => rowModels(out, n, lastLocals[n], "local:" + n, 0, null, true));
+        Object.keys(lastTags).sort().forEach((n) =>
+          rowModels(out, n, lastTags[n], n, 0, n, false, writable(n) ? n : null));
+        Object.keys(lastLocals).sort().forEach((n) =>
+          rowModels(out, n, lastLocals[n], "local:" + n, 0, null, true, null));
         return out;
       }
 
       const rowSig = (ms) =>
-        ms.map((m) => `${m.key} ${m.kind} ${m.depth} ${m.local ? 1 : 0}`).join("");
+        ms.map((m) => `${m.key} ${m.kind} ${m.depth} ${m.local ? 1 : 0} ${m.write ?? ""}`).join("");
 
       // Every value cell holds its text in a .tv span so a patch can rewrite
       // the value without touching the cell itself.
       function valueCell(m) {
-        const err = m.root !== null ? writeErrors.get(m.root) : null;
+        const err = m.write ? writeErrors.get(m.write) : null;
         const note = err ? `<span class="write-err">${esc(err)}</span>` : "";
         if (m.kind === "toggle") {
-          return `<td class="val"><span class="toggle${m.value ? " on" : ""}" data-write="${esc(m.root)}" title="click to toggle">` +
+          return `<td class="val"><span class="toggle${m.value ? " on" : ""}" data-write="${esc(m.write)}" title="click to toggle">` +
             `<span class="track"><span class="knob"></span></span><span class="tv">${fmt(m.value)}</span></span>${note}</td>`;
         }
         if (m.kind === "num") {
-          return `<td class="val writable${err ? " has-err" : ""}" data-write="${esc(m.root)}" title="click to set">` +
+          return `<td class="val writable${err ? " has-err" : ""}" data-write="${esc(m.write)}" title="click to set">` +
             `<span class="tv">${fmt(m.value)}</span>${note}</td>`;
         }
         if (m.kind === "summary") {
@@ -833,7 +890,7 @@
           }
         }
         if (m.kind === "toggle" || m.kind === "num") {
-          const err = m.root !== null ? writeErrors.get(m.root) : null;
+          const err = m.write ? writeErrors.get(m.write) : null;
           let note = td.querySelector(".write-err");
           if (err && !note) {
             note = document.createElement("span");
@@ -1066,8 +1123,10 @@
       $("tags").addEventListener("click", (e) => {
         const toggle = e.target.closest(".toggle[data-write]");
         if (toggle) {
-          const name = toggle.dataset.write;
-          writeTag(name, !lastTags[name]);
+          // Read the current state off the toggle, not out of lastTags: the
+          // address may be a dotted member path, and the rendered state is
+          // the value the operator is looking at.
+          writeTag(toggle.dataset.write, !toggle.classList.contains("on"));
           return;
         }
         const cell = e.target.closest("td.val.writable[data-write]");

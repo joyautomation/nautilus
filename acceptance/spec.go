@@ -57,6 +57,13 @@ type Test struct {
 	Expect  *Expect   `yaml:"expect"`
 	Always  *Expect   `yaml:"always"`
 
+	// Alarm state is host state, not tag state — see alarms.go for why it
+	// gets keys of its own rather than living inside `expect:`.
+	Alarms   *AlarmExpect  `yaml:"alarms"`
+	Ack      *AckStep      `yaml:"ack"`
+	Shelve   *ShelveStep   `yaml:"shelve"`
+	Unshelve *UnshelveStep `yaml:"unshelve"`
+
 	Line int `yaml:"-"`
 }
 
@@ -73,6 +80,13 @@ type Step struct {
 
 	Expect *Expect `yaml:"expect"` // checked at the end (or, with Until, each tick)
 	Always *Expect `yaml:"always"` // checked after every scan in the step
+
+	// The operator verbs, applied with `given:` before the step's time is
+	// spent, and the alarm assertion, checked with `expect:` after it.
+	Ack      *AckStep      `yaml:"ack"`
+	Shelve   *ShelveStep   `yaml:"shelve"`
+	Unshelve *UnshelveStep `yaml:"unshelve"`
+	Alarms   *AlarmExpect  `yaml:"alarms"`
 
 	Line int `yaml:"-"`
 }
@@ -162,7 +176,8 @@ func (d *Duration) get() time.Duration {
 // built from its own time/expect keys.
 func (t *Test) steps() ([]*Step, error) {
 	inline := t.Scans != nil || t.Advance != nil || t.Until != nil ||
-		t.Hold != nil || t.Expect != nil || t.Always != nil
+		t.Hold != nil || t.Expect != nil || t.Always != nil ||
+		t.Alarms != nil || t.Ack != nil || t.Shelve != nil || t.Unshelve != nil
 	if len(t.Steps) > 0 {
 		if inline {
 			return nil, fmt.Errorf("test %q: use either `steps:` or the single-step keys, not both", t.Name)
@@ -174,7 +189,9 @@ func (t *Test) steps() ([]*Step, error) {
 	}
 	return []*Step{{
 		Scans: t.Scans, Advance: t.Advance, Until: t.Until, Hold: t.Hold,
-		Expect: t.Expect, Always: t.Always, Line: t.Line,
+		Expect: t.Expect, Always: t.Always,
+		Ack: t.Ack, Shelve: t.Shelve, Unshelve: t.Unshelve, Alarms: t.Alarms,
+		Line: t.Line,
 	}}, nil
 }
 
@@ -197,6 +214,14 @@ func (s *Step) validate(testName string) error {
 	}
 	if s.Scans != nil && *s.Scans < 0 {
 		return fmt.Errorf("test %q: scans cannot be negative", testName)
+	}
+	if s.Until != nil && s.Alarms != nil {
+		// `until` polls `expect` on every tick; polling an alarm
+		// assertion too would need a second predicate and a second
+		// failure story. A step that waits, then asserts alarms, is two
+		// steps — and reads better as two.
+		return fmt.Errorf("test %q: `alarms:` is checked at the end of a step, so it does not "+
+			"go with `until:` — use `advance:`, or split it into two steps", testName)
 	}
 	return nil
 }

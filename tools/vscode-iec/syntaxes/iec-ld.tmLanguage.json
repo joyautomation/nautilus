@@ -8,14 +8,19 @@
       "match": "(?i)\\b(LD|END_LD|RUNG)\\b"
     },
     {
-      "comment": "coils: ( Name ), ( S Name ), ( R Name )",
+      "comment": "coils: ( Name ), ( S Name ), ( R Name ), ( P Name ), ( N Name )",
       "name": "entity.name.function.coil.iec-ld",
-      "match": "\\(\\s*(?:(?i:[SR])\\s+)?[A-Za-z_][A-Za-z0-9_]*(?:\\[[^\\]]*\\]|\\.[A-Za-z_][A-Za-z0-9_]*)*\\s*\\)"
+      "match": "\\(\\s*(?:(?i:[SRPN])\\s+)?[A-Za-z_][A-Za-z0-9_]*(?:\\[[^\\]]*\\]|\\.[A-Za-z_][A-Za-z0-9_]*)*\\s*\\)"
     },
     {
-      "comment": "NC contact prefix",
+      "comment": "NC contact prefix, and negated function contacts (/FN(args), /t1.Q)",
       "name": "keyword.operator.contact.iec-ld",
       "match": "/(?=[A-Za-z_])"
+    },
+    {
+      "comment": "rising/falling edge contact prefix: +Name, -Name",
+      "name": "keyword.operator.contact.edge.iec-ld",
+      "match": "[+-](?=[A-Za-z_])"
     },
     {
       "comment": "branch rails",

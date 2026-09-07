@@ -11,19 +11,10 @@ var FBs = map[string]*FBDef{}
 // indices are computed once when the type is registered so call sites
 // resolve named args without re-walking the slot list every scan.
 func RegisterFB(def *FBDef) {
-	def.SlotIndex = make(map[string]int, len(def.Inputs)+len(def.Outputs)+len(def.Internals))
-	idx := 0
-	for _, s := range def.Inputs {
+	all := def.AllSlots()
+	def.SlotIndex = make(map[string]int, len(all))
+	for idx, s := range all {
 		def.SlotIndex[s.Name] = idx
-		idx++
-	}
-	for _, s := range def.Outputs {
-		def.SlotIndex[s.Name] = idx
-		idx++
-	}
-	for _, s := range def.Internals {
-		def.SlotIndex[s.Name] = idx
-		idx++
 	}
 	FBs[def.Name] = def
 }
@@ -46,6 +37,7 @@ func init() {
 	registerEdgeTriggers()
 	registerCounters()
 	registerLatches()
+	registerPID()
 }
 
 // ─── TON: timer on-delay ────────────────────────────────────────────
