@@ -24,8 +24,9 @@ lines.
 
 ## One compile chain
 
-Each language lowers one hop toward Structured Text, and ST lowers to the
-typed IR the runtime executes:
+Each graphical language transpiles toward Structured Text, one hop for FBD
+and SFC and two for ladder, and ST lowers to the typed IR the runtime
+executes:
 
 ```
  .st  ─────────────────────────►  IR
@@ -38,7 +39,8 @@ Because the hops preserve line maps, a diagnostic anywhere in the chain
 lands on your source: an `.ld` error points at the rung, an `.sfc` error at
 the step or transition. And because everything ends in one IR, the whole
 toolchain is shared. Built-in functions and function blocks, user
-`FUNCTION_BLOCK`s from library files, arrays and structs, `nautilus check`,
+`FUNCTION_BLOCK`s from `.st`, `.ld`, or `.fbd` library files, arrays and
+structs, `nautilus check`,
 acceptance tests, live values, online edits, and visual diffs behave the
 same in every language.
 
