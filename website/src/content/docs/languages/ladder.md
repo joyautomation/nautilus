@@ -157,6 +157,8 @@ tasks](/guides/blocks-and-tasks/).
 
 ## In the editor
 
+![interlocks.ld as text on the left with live values inline, and the same rungs as a ladder diagram on the right, with power flow painted green from the running controller](../../../assets/editors/ladder.png)
+
 Right-click a `.ld` file and choose **Open With → Ladder Diagram** to use
 the diagram as the editor, or run **nautilus: Open Ladder Diagram Preview**
 for text on the left and rungs on the right. Layout is canonical, computed

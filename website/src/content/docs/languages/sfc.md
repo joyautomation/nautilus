@@ -174,6 +174,8 @@ body on its `ACTION` line.
 
 ## In the editor
 
+![program.sfc as text on the left with live values inline, and the chart on the right with the active step outlined from the running controller](../../../assets/editors/sfc.png)
+
 Right-click a `.sfc` file and pick **Open With → SFC Diagram**, or run
 **nautilus: Open SFC Diagram Preview** beside the text. Steps draw as boxes,
 double-bordered for the initial step, with their associations tabled

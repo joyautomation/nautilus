@@ -147,6 +147,8 @@ tasks](/guides/blocks-and-tasks/).
 
 ## In the editor
 
+![program.fbd as text on the left with live values inline, and the same netlist as a function block diagram on the right, with value pills on variable chips and block outputs](../../../assets/editors/function-block.png)
+
 Right-click a `.fbd` file and choose **Open With → FBD Diagram** to use the
 diagram as the editor itself, or run **nautilus: Open FBD Diagram Preview**
 to open it beside the text, which then updates as you type.

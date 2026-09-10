@@ -207,6 +207,8 @@ See [function blocks, libraries, and tasks](/guides/blocks-and-tasks/).
 
 ## In the editor
 
+![sim.st open in VS Code: every identifier carries its live value from the running controller in a green pill beside it, so the flow and energy balance read as numbers, not just expressions](../../../assets/editors/structured-text.png)
+
 The VS Code extension highlights `.st` with no setup, from keyword lists
 generated out of the compiler. With the CLI installed it also runs
 `nautilus lsp`, the same compiler over stdio: diagnostics as you type for parse
