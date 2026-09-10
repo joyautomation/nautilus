@@ -374,8 +374,9 @@ tag-files: [tags/sparkplug.yaml]
 `--sites sites.yaml` (offline, no broker — CI-buildable) generates the
 manifest, tag file, and Template types. Reads fault until a site's first
 birth, so guard logic on the driver-synthesized `<site>__Online`
-companion; writes leave as NCMD/DCMD, dropped and counted for an offline
-site rather than queued. A UDT is never written as a whole — bind its
+companion; writes leave as NCMD/DCMD, and a write to a site that is
+offline is queued per node and delivered on its next birth, unless the
+birth already reports that value. A UDT is never written as a whole — bind its
 controls per member (`member: Speed`, or `--writable 'Motor1.START,*.HSP'`)
 and each write goes out as a partial template the edge merges, leaving the
 members the site is driving untouched. Both the edge-node and host-application **TCK
