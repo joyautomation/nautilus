@@ -1,6 +1,6 @@
 # Changelog — @joyautomation/nautilus-hmi
 
-## Unreleased — suggest **0.6.0** (minor: additive, no breaking changes)
+## 0.6.0 — 2026-09-10 (minor: additive, no breaking changes)
 
 Everything below came out of the Pomona WRD recreation (`pomona/wrd/host/hmi`), which ported an
 Ignition Perspective application onto this kit and kept a running list of what it had to build
@@ -328,7 +328,41 @@ Nothing was renamed or removed; two families changed *value* and everything else
 - The harness accepts **async specs** (anything microtask-only), and reports an async spec that
   never settled as a failure rather than letting it vanish into a green run.
 
+### Added — mimic: import passes, layered pipes, dead runs
+
+- **`attachPipeEnds()`** and **`connectPorts()`** (`./mimic`) — the two passes an imported P&ID
+  needs before it is a network: snap every free pipe end to the nearest resolved port and
+  straighten the adjacent vertex, then branch every unpiped directional port to the nearest run
+  (ray-first, distinct targets per equipment). 14 specs.
+- **Layered pipe painting.** A pipe is a wall stroke with a background-coloured bore over it, and
+  rendered one pipe at a time every tee was broken: the later pipe's bore cut a slot across the
+  earlier pipe's wall. `Pipe` gains `layer` (`'wall' | 'bore' | 'flow'`; unset = all three, so
+  standalone use is unchanged) and `Mimic` paints the network in three passes — every wall, then
+  every bore, then every flow overlay — so walls union into one casing and bores into one
+  continuous waterway. The editor canvas paints the same three passes.
+- **`Pipe` `dead`** — a run whose meter the runtime does not publish is a third state, not a
+  slower "not flowing": the wall goes dashed and dim (`--pipe-dead`, falling back to `--axis`),
+  the bore steps back, and no flow is claimed whatever `flowing`/`rate` say. Wall and bore colours
+  are tokenised (`--pipe-wall`, `--pipe-bore`).
+- **`BUILTIN_PORTS` gains `LevelTank`** (the four cardinals, matching `Tank`), so a reservoir
+  placed through the `registry` with no instance `ports` anchors correctly.
+
+### Added — mobile
+
+- **`Drawer`** — a native `<dialog>` side or bottom sheet.
+- **`--tap`** (44px) and `@media (pointer: coarse)` hit areas on every control; `AlarmBanner`
+  compact mode; `Mimic`/`CoordinateCanvas` `minScale` (floor the scale, then scroll or pinch);
+  container-query card layouts for `AlarmTable`, `AlarmJournal` and `EquipmentCard`;
+  `DriverStatusCard` wraps; `Tooltip` has a touch path; `dvh` pairs and a symbol `max-width` so
+  nothing overflows a phone.
+
 ### Changed
+
+- **`EquipSymbol` running state is now an image tint by default** (`runStyle="tint"`): the same
+  `src`, masked to its own opaque pixels and painted `--eq-run-tint`, so the metal shading still
+  reads through — the legacy idiom (Ignition tints the picture itself). The flat wash box the kit
+  drew before read as a green rectangle in the field; `runStyle="wash"` keeps it for a port not
+  ready to switch.
 
 - **`theme.svelte.ts`** — `theme.init()` now defaults to **dark** rather than system. An HMI's
   design case is an ops room at 03:00, and a control screen that comes up white because the
@@ -368,6 +402,12 @@ Nothing was renamed or removed; two families changed *value* and everything else
   layout and `app.html` carries the pre-paint theme stamp.
 
 ### Fixed
+
+- **`CatalogIndex` card is a `div` with a stretched link, not an anchor.** A component library is
+  full of components that render their own `<a>` or `<button>`; interactive content nested inside
+  an anchor is invalid HTML, the parser splits it, and Svelte gives up hydrating the whole route
+  (`HierarchyRequestError`). The title carries the link and an `::after` overlay stretches its hit
+  area over the card, so it is still one tap target.
 
 - `EquipSymbol`: contain-fit now clamps height as well as width — a grid with no declared rows made the image's percentage `max-height` circular (resolved as `none`), so wide symbols given both `width` and `height` spilled vertically.
 
