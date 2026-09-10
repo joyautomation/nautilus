@@ -23,6 +23,23 @@ export default defineConfig({
         alt: 'nautilus',
       },
       customCss: ['./src/styles/fonts.css'],
+      // Google Analytics — the same GA4 property joyautomation.com reports to
+      // (src/app.html there); the docs show up under their own hostname.
+      // Starlight pages are full loads, so `config` on each page is enough.
+      head: [
+        {
+          tag: 'script',
+          attrs: { src: 'https://www.googletagmanager.com/gtag/js?id=G-5EGNNTRBYC', async: true },
+        },
+        {
+          tag: 'script',
+          content:
+            'window.dataLayer = window.dataLayer || [];' +
+            'function gtag(){dataLayer.push(arguments);}' +
+            "gtag('js', new Date());" +
+            "gtag('config', 'G-5EGNNTRBYC');",
+        },
+      ],
       expressiveCode: { shiki: { langs: ['st', 'ld', 'fbd', 'sfc'].map(grammar) } },
       description:
         'SCADA, built like software — a Go + SvelteKit toolkit for industrial control and supervisory systems with version control, tests, CI/CD, and code review.',
