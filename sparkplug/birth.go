@@ -10,6 +10,11 @@ import (
 // and records which metric names are known — the set a later data message may
 // reference. Rebirth calls this again with bdSeq unchanged.
 func (n *Node) birth() error {
+	if !n.beginInflight() {
+		return nil // Stop already in progress; no-op
+	}
+	defer n.inflight.Done()
+
 	snap := n.rt.Tags().Snapshot()
 
 	n.mu.Lock()
@@ -84,6 +89,7 @@ func (n *Node) birth() error {
 	}
 	n.born = true
 	n.bornMs = int64(nowMs())
+	bd := n.bdSeq // captured under the lock — Stop() may mutate n.bdSeq concurrently once unlocked
 	n.mu.Unlock()
 
 	// Publish outside the lock (paho tokens).
@@ -94,7 +100,7 @@ func (n *Node) birth() error {
 		n.cli.Publish(n.deviceTopic("DBIRTH", b.device), 0, false, dbirthPayloads[b.device]).Wait()
 	}
 	n.log.Info("sparkplug: born", "group", n.cfg.GroupID, "node", n.cfg.EdgeNode,
-		"bdSeq", n.bdSeq, "nodeMetrics", len(nodeTags), "devices", len(births))
+		"bdSeq", bd, "nodeMetrics", len(nodeTags), "devices", len(births))
 	return nil
 }
 
