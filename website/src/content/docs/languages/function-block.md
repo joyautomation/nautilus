@@ -175,6 +175,8 @@ text editor.
 **nautilus: Diff FBD Diagram (vs git HEAD)** overlays the committed and
 working-tree diagrams, coloring added, removed and changed blocks and wires.
 `(vs Controller)` compares against the program a live controller is running.
+`(between git revisions…)` picks any two commits from the file's history, or
+one commit and the working tree, and overlays those.
 
 ## Tooling
 

@@ -17,6 +17,8 @@ import { execFile } from "child_process";
 import * as path from "path";
 import type { ProgramInfo } from "./onlineEdit";
 import type { LiveValues } from "./liveValues";
+import { gitShow } from "./gitHistory";
+import { pickRevisions } from "./revisionPick";
 
 /** Mirror of lang/fbd.Model — see lang/fbd/graph.go for the contract. */
 export type FbdModel = {
@@ -336,7 +338,7 @@ export class FbdPreview implements vscode.Disposable {
   /** Set while diffing: the frozen base + title. Edits RE-DIFF against
    * it so the overlay tracks changes live; "exit diff" or reopening the
    * preview leaves diff mode. */
-  private diffBase?: { src: string; label: string; title: string };
+  private diffBase?: { src: string; label: string; title: string; headSrc?: string };
   private get diffing(): boolean {
     return this.diffBase !== undefined;
   }
@@ -420,24 +422,47 @@ export class FbdPreview implements vscode.Disposable {
     );
   }
 
-  /** Enter diff mode: freeze the base and post the first overlay. */
+  /** Visual diff between any two revisions of the file in git — or one
+   * revision and the working tree. With two commits chosen both sides are
+   * frozen, so edits leave the overlay alone. */
+  async diffRevisions(): Promise<void> {
+    const doc = this.activeFbdDoc();
+    if (!doc) return;
+    if (doc.uri.scheme !== "file") {
+      void vscode.window.showErrorMessage("nautilus: FBD diff needs a file on disk");
+      return;
+    }
+    const pair = await pickRevisions(doc.uri.fsPath);
+    if (!pair) return;
+    await this.showDiff(
+      doc,
+      pair.base.src,
+      `at ${pair.base.label}`,
+      `${docTitle(doc)} — ${pair.base.label} ↔ ${pair.head?.label ?? "working tree"}`,
+      pair.head?.src
+    );
+  }
+
+  /** Enter diff mode: freeze the base (and the head, when given) and post
+   * the first overlay. */
   private async showDiff(
     doc: vscode.TextDocument,
     baseSrc: string,
     baseLabel: string,
-    title: string
+    title: string,
+    headSrc?: string
   ): Promise<void> {
     this.docUri = doc.uri;
     this.ensurePanel();
-    this.diffBase = { src: baseSrc, label: baseLabel, title };
+    this.diffBase = { src: baseSrc, label: baseLabel, title, headSrc };
     await this.postDiff(doc);
   }
 
   /** Graph the frozen base + the CURRENT text and post the overlay. */
   private async postDiff(doc: vscode.TextDocument): Promise<void> {
     if (!this.panel || !this.diffBase) return;
-    const { src, label, title } = this.diffBase;
-    const [base, head] = await Promise.all([fbdGraph(src), fbdGraph(doc.getText())]);
+    const { src, label, title, headSrc } = this.diffBase;
+    const [base, head] = await Promise.all([fbdGraph(src), fbdGraph(headSrc ?? doc.getText())]);
     if ("error" in base || "error" in head) {
       // Mid-edit the head may not parse for a moment — stay in diff mode,
       // surface the message, and the next edit re-diffs.
@@ -477,7 +502,8 @@ export class FbdPreview implements vscode.Disposable {
   private async update(doc: vscode.TextDocument): Promise<void> {
     if (!this.panel) return;
     if (this.diffBase) {
-      await this.postDiff(doc);
+      // Two frozen revisions don't move with the buffer.
+      if (this.diffBase.headSrc === undefined) await this.postDiff(doc);
       return;
     }
     const res = await fbdGraph(doc.getText());
@@ -622,17 +648,9 @@ export async function fetchControllerProgram(localSrc: string): Promise<ProgramI
   }
 }
 
-/** The file's content at git HEAD, or undefined if untracked/not a repo. */
+/** The file's content at git HEAD, or undefined if untracked/not a repo.
+ * (`gitShow` in gitHistory.ts is the general form; this stays as the
+ * three previews' HEAD-diff entry point.) */
 export function gitShowHead(fsPath: string): Promise<string | undefined> {
-  const dir = path.dirname(fsPath);
-  const base = path.basename(fsPath);
-  return new Promise((resolve) => {
-    // "./" makes the path relative to cwd rather than the repo root.
-    execFile(
-      "git",
-      ["show", `HEAD:./${base}`],
-      { cwd: dir, maxBuffer: 16 * 1024 * 1024 },
-      (err, stdout) => resolve(err ? undefined : stdout)
-    );
-  });
+  return gitShow(fsPath, "HEAD");
 }

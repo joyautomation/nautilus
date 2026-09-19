@@ -27,6 +27,7 @@ import {
   postDiagnostics,
   webviewOptions,
 } from "./fbdPreview";
+import { pickRevisions } from "./revisionPick";
 
 /** Run `naut sfc graph -` over source text. */
 function sfcGraph(source: string): Promise<{ model?: unknown; error?: string }> {
@@ -179,7 +180,7 @@ export class SfcPreview implements vscode.Disposable {
   /** Set while diffing: the frozen base source + title. Edits RE-DIFF
    * against it (the overlay tracks your changes live); the toolbar's
    * "exit diff" or reopening the preview leaves diff mode. */
-  private diffBase?: { src: string; title: string };
+  private diffBase?: { src: string; title: string; headSrc?: string };
   private disposables: vscode.Disposable[] = [];
 
   constructor(
@@ -285,11 +286,40 @@ export class SfcPreview implements vscode.Disposable {
     );
   }
 
-  /** Enter diff mode: freeze the base and post the first overlay. */
-  private async showDiff(doc: vscode.TextDocument, baseSrc: string, title: string): Promise<void> {
+  /** Visual diff between any two revisions of the file in git — or one
+   * revision and the working tree. With two commits chosen both sides are
+   * frozen, so edits leave the overlay alone. */
+  async diffRevisions(): Promise<void> {
+    const doc = this.activeSfcDoc();
+    if (!doc) {
+      void vscode.window.showErrorMessage("nautilus: open a .sfc file first");
+      return;
+    }
+    if (doc.uri.scheme !== "file") {
+      void vscode.window.showErrorMessage("nautilus: SFC diff needs a file on disk");
+      return;
+    }
+    const pair = await pickRevisions(doc.uri.fsPath);
+    if (!pair) return;
+    await this.showDiff(
+      doc,
+      pair.base.src,
+      `${docTitle(doc)} — ${pair.base.label} ↔ ${pair.head?.label ?? "working tree"}`,
+      pair.head?.src
+    );
+  }
+
+  /** Enter diff mode: freeze the base (and the head, when given) and post
+   * the first overlay. */
+  private async showDiff(
+    doc: vscode.TextDocument,
+    baseSrc: string,
+    title: string,
+    headSrc?: string
+  ): Promise<void> {
     this.docUri = doc.uri;
     this.ensurePanel();
-    this.diffBase = { src: baseSrc, title };
+    this.diffBase = { src: baseSrc, title, headSrc };
     await this.postDiff(doc);
   }
 
@@ -297,7 +327,8 @@ export class SfcPreview implements vscode.Disposable {
    * webview's diffSfc does the actual base/head merge). */
   private async postDiff(doc: vscode.TextDocument): Promise<void> {
     if (!this.panel || !this.diffBase) return;
-    const [base, head] = await Promise.all([sfcGraph(this.diffBase.src), sfcGraph(doc.getText())]);
+    const headSrc = this.diffBase.headSrc ?? doc.getText();
+    const [base, head] = await Promise.all([sfcGraph(this.diffBase.src), sfcGraph(headSrc)]);
     if (base.error || head.error) {
       // Mid-edit the head may not parse for a moment — stay in diff mode,
       // surface the message, and the next edit re-diffs.
@@ -360,7 +391,7 @@ export class SfcPreview implements vscode.Disposable {
     // A text change while diffing keeps the diff LIVE: re-overlay the
     // current text onto the frozen base.
     if (this.diffBase) {
-      await this.postDiff(doc);
+      if (this.diffBase.headSrc === undefined) await this.postDiff(doc);
       return;
     }
     this.panel.title = "SFC: " + docTitle(doc);

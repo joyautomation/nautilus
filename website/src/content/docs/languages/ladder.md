@@ -188,7 +188,11 @@ from the controller. Anything unresolvable renders neutral.
 **nautilus: Diff Ladder Diagram (vs git HEAD)** and **(vs Controller)**
 overlay the committed or running rungs on the working ones, marking added,
 changed and removed elements in cyan, amber and red. Green already means
-power here.
+power here. **(between git revisions…)** lists every commit that touched
+the file and overlays any two of them the same way, so the change between
+last month's program and today's, or between any two releases, reads as
+rungs. Pick the working tree as the newer side and the overlay follows your
+edits. The git diffs work on a Rockwell `.L5X` export as well.
 
 ## Tooling
 

@@ -194,7 +194,9 @@ save. With a controller reachable, the active step outlines and its name
 highlights, read from the retained step slot exposed in `/api/state`.
 
 **nautilus: Diff SFC Diagram (vs git HEAD)** and **(vs Controller)** overlay
-added, removed, and changed elements on the chart.
+added, removed, and changed elements on the chart. **(between git
+revisions…)** does the same for any two commits in the file's history, or one
+commit and the working tree.
 
 ## Tooling
 
