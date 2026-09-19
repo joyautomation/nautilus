@@ -64,7 +64,7 @@ export async function pickRevisions(fsPath: string): Promise<RevisionPair | unde
   });
   if (!newer) return undefined;
 
-  const baseSrc = await gitShow(fsPath, older.commit.sha);
+  const baseSrc = await gitShow(fsPath, older.commit.sha, older.commit.path);
   if (baseSrc === undefined) {
     void vscode.window.showErrorMessage(`nautilus: ${name} could not be read at ${older.commit.short}`);
     return undefined;
@@ -72,7 +72,7 @@ export async function pickRevisions(fsPath: string): Promise<RevisionPair | unde
   const base: RevisionSide = { src: baseSrc, label: older.commit.short };
   if (newer.worktree || !newer.commit) return { base };
 
-  const headSrc = await gitShow(fsPath, newer.commit.sha);
+  const headSrc = await gitShow(fsPath, newer.commit.sha, newer.commit.path);
   if (headSrc === undefined) {
     void vscode.window.showErrorMessage(`nautilus: ${name} could not be read at ${newer.commit.short}`);
     return undefined;

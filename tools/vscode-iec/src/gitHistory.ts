@@ -16,6 +16,9 @@ export type GitCommit = {
   date: string;
   author: string;
   subject: string;
+  /** The file's path, relative to the repository root, AT THIS COMMIT —
+   * `--follow` walks through renames, so it can differ from today's. */
+  path: string;
 };
 
 /** Field and record separators for the log format: US (0x1f) between
@@ -24,17 +27,31 @@ const FS = "\x1f";
 const RS = "\x1e";
 export const LOG_FORMAT = `%h${FS}%H${FS}%ad${FS}%an${FS}%s${RS}`;
 
-/** Parse `git log --format=LOG_FORMAT` output. Tolerates a trailing
- * newline and blank records; a malformed record is dropped, not thrown. */
+/** Parse `git log --name-only --format=LOG_FORMAT` output. Each record is
+ * the five fields, RS, then the path the file had at that commit on its
+ * own line (that is what `--name-only` adds, and with `--follow` it is the
+ * pre-rename path for older commits). Tolerates blank lines; a malformed
+ * record is dropped, not thrown. */
 export function parseGitLog(stdout: string): GitCommit[] {
   const out: GitCommit[] = [];
-  for (const rec of stdout.split(RS)) {
-    const line = rec.replace(/^\n+/, "");
-    if (!line.trim()) continue;
-    const f = line.split(FS);
+  const chunks = stdout.split(RS);
+  // chunks[k] = "<path of record k-1>\n<fields of record k>" (k > 0);
+  // chunks[0] is record 0's fields; the last chunk is only a path.
+  let pending: Omit<GitCommit, "path"> | undefined;
+  for (const chunk of chunks) {
+    const lines = chunk.split("\n");
+    const fieldsAt = lines.findIndex((l) => l.includes(FS));
+    const pathLines = (fieldsAt < 0 ? lines : lines.slice(0, fieldsAt)).map((l) => l.trim()).filter(Boolean);
+    if (pending) {
+      out.push({ ...pending, path: pathLines[pathLines.length - 1] ?? "" });
+      pending = undefined;
+    }
+    if (fieldsAt < 0) continue;
+    const f = lines[fieldsAt].split(FS);
     if (f.length < 5) continue;
-    out.push({ short: f[0], sha: f[1], date: f[2], author: f[3], subject: f.slice(4).join(FS) });
+    pending = { short: f[0], sha: f[1], date: f[2], author: f[3], subject: f.slice(4).join(FS) };
   }
+  if (pending) out.push({ ...pending, path: "" });
   return out;
 }
 
@@ -48,7 +65,7 @@ export function gitLog(fsPath: string): Promise<GitCommit[]> {
   return new Promise((resolve) => {
     execFile(
       "git",
-      ["log", "--follow", "--date=short", `--format=${LOG_FORMAT}`, "--", `./${base}`],
+      ["log", "--follow", "--name-only", "--date=short", `--format=${LOG_FORMAT}`, "--", `./${base}`],
       { cwd: dir, maxBuffer: MAX_BUFFER },
       (err, stdout) => resolve(err ? [] : parseGitLog(stdout))
     );
@@ -56,15 +73,19 @@ export function gitLog(fsPath: string): Promise<GitCommit[]> {
 }
 
 /** The file's content at `ref` (a sha, `HEAD`, a tag, `HEAD~3`…), or
- * undefined if the file does not exist at that revision. */
-export function gitShow(fsPath: string, ref: string): Promise<string | undefined> {
+ * undefined if the file does not exist at that revision. `repoPath` is
+ * the file's repository-relative path at that revision (a `GitCommit`'s
+ * `path`); without it the file's current name is used, which is wrong
+ * across a rename. */
+export function gitShow(fsPath: string, ref: string, repoPath?: string): Promise<string | undefined> {
   const dir = path.dirname(fsPath);
   const base = path.basename(fsPath);
+  // A bare path is relative to the repo root; "./" makes it relative to cwd.
+  const spec = repoPath ? `${ref}:${repoPath}` : `${ref}:./${base}`;
   return new Promise((resolve) => {
-    // "./" makes the path relative to cwd rather than the repo root.
     execFile(
       "git",
-      ["show", `${ref}:./${base}`],
+      ["show", spec],
       { cwd: dir, maxBuffer: MAX_BUFFER },
       (err, stdout) => resolve(err ? undefined : stdout)
     );
