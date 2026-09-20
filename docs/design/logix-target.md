@@ -463,10 +463,19 @@ for the nautilus runtime than a leaky imitation of it.
 
 Run them on `rockwell-vm`; no hardware and no customer system is involved.
 
-> **Echo's activation lapsed 2026-09-06 and is being renewed on the AEP1
-> project** (see §10). Until it lands, S3, S4 and S2a run regardless; S1 and
-> S2b are blocked. Sequence accordingly: **S3 and S4 first** — they are the
-> spikes that actually gate the Tier B decision, and they need no controller.
+> **Measured 2026-09-20: `rockwell-vm` has no valid Logix Designer license
+> either, so *every* SDK-dependent spike is blocked** — not just the two that
+> need a controller. Running the previously-working converter now returns
+> `OperationFailedException: No valid license.` from `LogixProject.Open`. The
+> August conversions ran under an activation that has since lapsed, alongside
+> Echo's. An earlier revision of this brief claimed S2a/S3/S4 could run
+> regardless; that was wrong.
+>
+> **What is still possible needs no Rockwell software at all**: L5X is a text
+> format and there are ~60 exported L5X files (~30 MB) already on disk. S3's
+> substantive question was answered from that corpus — see §11 — and **Phase 3,
+> the L5X reader, is entirely unblocked.** That is now the thing to build while
+> licensing is sorted.
 
 - **S1 — Echo as a target.** *Blocked on an Echo activation.* Start a Logix
   Echo 5580 chassis, download any project, point `nautilus eip browse --host
@@ -643,3 +652,69 @@ FBD and SFC emission to L5X (sheet coordinates and wire routing), safety
   is essentially pure Echo denial. The 52 headless ACD→L5X conversions
   demonstrably ran on 2026-08-22/28, so it works in practice; S3/S4 will
   confirm it immediately, and are the cheapest way to find out.
+
+---
+
+## 11. S3 result — L5X normalizes well (measured 2026-09-20)
+
+Run against the L5X already on disk, with no Rockwell software involved. Diff
+counts are changed lines, `difflib` unified with zero context.
+
+| Pair | Total lines | Raw diff | + attr-norm | + drop L5K |
+|---|---:|---:|---:|---:|
+| `DemoLine` vs `DemoLine.v80` — one setpoint changed, 85.0 → 80.0 | 14,488 | **4** | 4 | **2** |
+| `AEP1_CLX` vs `AEP1_CLX_v37` — same project, Studio version upgrade | 6,387 | **6** | 6 | 6 |
+
+**The format is far more diff-friendly than expected.** A single setpoint edit
+surfaces as 4 changed lines in 14,488 — 0.03%. A *Studio version upgrade* of a
+real project moves 6 lines in 6,387, which is the surprising one: version
+migration is not diff-noisy.
+
+**The volatile surface is tiny.** In 1.8 MB of `DemoLine.L5X`: one `ExportDate`,
+one `LastModifiedDate`, one `DataExchangeId`, one `ProjectSN`, and exactly one
+GUID-shaped value in the entire document. No timestamps sprinkled through
+routines, no per-element identifiers. A normalizer is a handful of regexes, not
+a canonicalizing XML rewriter.
+
+**One real lever.** Every tag value is carried twice — once as
+`<Data Format="L5K">` CDATA and once as `<Data Format="Decorated">`. Collapsing
+the L5K copy halved the setpoint diff (4 → 2 lines). It is not a general 2×
+win; it only applies to *value* changes (`DemoLine.L5X` holds 6 of each). The
+same effect is reachable upstream through `ExportOptions`, which is the cleaner
+place to do it if we control the export.
+
+### What is still unproven
+
+**Export determinism.** Everything above compares files exported at different
+times, and the fixtures already had `ExportDate`/`LastModifiedDate` pinned by
+earlier capture tooling — which is why the attr-norm column shows no further
+gain. What has *not* been measured is the decisive case: **export the same
+unchanged ACD twice and compare.** Stable attribute ordering, a single GUID and
+the absence of scattered timestamps all point to "yes, byte-identical after
+normalizing those four attributes", but it needs a license to confirm. It is
+the first thing to run when one lands.
+
+**Verdict for planning purposes:** the git-native story is in good shape. §6.1's
+option 1 (workspace as source of truth, drift measured at the L5X level) is
+viable on this evidence, and the diff an engineer reads is genuinely reviewable
+rather than a wall of noise.
+
+*Spike script: `l5xnorm.py` in this session's scratchpad — ~40 lines, supersede
+it with the Go normalizer that Phase 2 and Phase 3 both need.*
+
+## 12. Where the licensed Studio 5000 actually is
+
+Incidental but load-bearing for Phase 1. The ACD backups staged on the lab VM
+are named `Pomona_RTU06v38.EWS2.admin.BAK000.acd` — Logix Designer stamps the
+**host and user** into backup filenames, so those projects were last edited on
+**EWS2**, the customer's engineering workstation, by `admin`.
+
+Two consequences:
+
+1. **The renewal has to cover Logix Designer, not just Echo.** A lab VM that can
+   run Echo but cannot open an ACD is still blocked for every SDK spike.
+2. **It sharpens §10's open question about the `logixd` host.** The one machine
+   known to carry a working Logix Designer activation is a customer's. Running
+   our agent there is a deployment decision with its own authorization, and it
+   is not a substitute for a licensed machine of our own. Do not plan Phase 1
+   around borrowing it.
