@@ -463,14 +463,25 @@ for the nautilus runtime than a leaky imitation of it.
 
 Run them on `rockwell-vm`; no hardware and no customer system is involved.
 
-- **S1 — Echo as a target.** Start a Logix Echo 5580 chassis, download any
-  project, point `nautilus eip browse --host <echo>` and `nautilus eip import`
-  at it. *Proves the online plane and CI need no hardware.* Lowest risk, do it
-  first.
-- **S2 — SDK round trip on Echo.** `create_new_project` → `partial_import` a
-  generated L5X routine → `build` → `set_comm_path` → `download` →
-  `go_online` → `set_tag_value(ONLINE)` → read it back over CIP with `eip/`.
-  *Proves the project plane end to end, and proves the two planes agree.*
+> **Echo is not licensed on `rockwell-vm`** (measured 2026-09-20 — see §10).
+> S3 and S4 and the offline half of S2 run today regardless; S1 and the
+> download half of S2 are blocked until an Echo activation exists. Sequence
+> accordingly: **S3 and S4 first.**
+
+- **S1 — Echo as a target.** *Blocked on an Echo activation.* Start a Logix
+  Echo 5580 chassis, download any project, point `nautilus eip browse --host
+  <echo>` and `nautilus eip import` at it. *Would prove the online plane and CI
+  need no hardware.* Note this spike is **largely pre-proven**: `eip/` already
+  works against a real Logix PLC in `examples/client60`, and `eip/logixserver`
+  exercises the client side in tests. Echo's value here is CI, not
+  feasibility.
+- **S2 — SDK round trip.** Split it:
+  - **S2a, runnable now, no controller:** `create_new_project` →
+    `partial_import` a generated L5X routine → `build` → `save`. This is the
+    half that de-risks codegen, and it needs nothing but Logix Designer.
+  - **S2b, needs Echo or hardware:** `set_comm_path` → `download` →
+    `go_online` → `set_tag_value(ONLINE)` → read it back over CIP with `eip/`.
+    *Proves the project plane end to end, and proves the two planes agree.*
 - **S3 — L5X stability. The riskiest cheap thing.** Upload from Echo twice with
   no change and diff. Then make a one-rung edit in Studio 5000, upload, diff.
   *Measures whether drift detection is clean or drowns in noise* — export
@@ -536,6 +547,34 @@ FBD and SFC emission to L5X (sheet coordinates and wire routing), safety
 - **Does the 30 kB operation limit apply to partial import?** (S4.)
 - **Can L5X be normalized to a stable diff?** (S3. If no, §6.1 option 1 is
   weaker and option 2 carries more weight.)
-- **Logix Echo licensing for CI** — activations are per-instance and the trial
-  is 30 days. A CI lane that spins up an emulated controller per build needs a
-  licensing answer before it is designed.
+- **Logix Echo licensing for CI — answered, and it is a blocker.** Measured on
+  `rockwell-vm` 2026-09-20: Echo 4.00 and its whole controller catalog are
+  *installed* but **not activated**. FactoryTalk Activation serves
+  `fta.system`, `RSV.STUDIO`, `RSVME.STUDIO`, FT View SE/ME, RSLinx, the
+  RSLogix 5/500/5000-era node-locked features and the historian/KEPServer
+  features — all permanent — and **no `LGXNGEMU.SIM`**, which is Echo's
+  feature name.
+
+  Importantly, **no grace period has started, and none ever will from this
+  state.** `RSsvr.log` (27 MB) contains 111,399 `UNSUPPORTED: "LGXNGEMU.SIM"
+  … No such feature exists. (-5,346)` denials and **zero** grace, evaluation,
+  trial or borrow records. FlexNet grants grace when an activation that *did*
+  exist becomes unreachable; for a feature that has never existed in any
+  license file it denies outright. So there is no clock ticking, nothing was
+  consumed, and nothing needs rolling back. (Incus snapshot
+  `rockwell-vm/pre-echo-grace`, 2026-09-20 15:10 PDT, was taken anyway as
+  cheap insurance — ZFS CoW, instant.)
+
+  Side effect worth cleaning up: the `FactoryTalk Logix Echo Service` is set to
+  Automatic and retries the checkout roughly every 10 s, which is the sole
+  content of that 27 MB log and the reason it keeps growing. Stopping and
+  disabling the service costs nothing until an activation exists.
+
+  **Next step if Echo is wanted:** a 30-day trial activation from a Rockwell
+  account, or a purchased activation. Until then, sequence the plan around
+  S3/S4/S2a, which need no controller.
+- **Is Logix Designer itself properly activated, or was August's work on
+  grace?** No Logix Designer checkout appears in `RSsvr.log` either — the log
+  is essentially pure Echo denial. The 52 headless ACD→L5X conversions
+  demonstrably ran on 2026-08-22/28, so it works in practice; S3/S4 will
+  confirm it immediately, and are the cheapest way to find out.
