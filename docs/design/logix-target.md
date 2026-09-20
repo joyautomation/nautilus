@@ -548,22 +548,38 @@ FBD and SFC emission to L5X (sheet coordinates and wire routing), safety
 - **Can L5X be normalized to a stable diff?** (S3. If no, §6.1 option 1 is
   weaker and option 2 carries more weight.)
 - **Logix Echo licensing for CI — answered, and it is a blocker.** Measured on
-  `rockwell-vm` 2026-09-20: Echo 4.00 and its whole controller catalog are
-  *installed* but **not activated**. FactoryTalk Activation serves
-  `fta.system`, `RSV.STUDIO`, `RSVME.STUDIO`, FT View SE/ME, RSLinx, the
-  RSLogix 5/500/5000-era node-locked features and the historian/KEPServer
-  features — all permanent — and **no `LGXNGEMU.SIM`**, which is Echo's
-  feature name.
+  `rockwell-vm` 2026-09-20. Echo 4.00 and its whole controller catalog are
+  installed, and an activation **did** exist: FactoryTalk Activation Manager
+  lists *FactoryTalk Logix Echo Node*, serial **4260K18547**, feature
+  `LGXNGEMU.SIM`, host `DESKTOP-07VCTIN` — **expired 2026-09-06** (support
+  2026-09-07), shown greyed with an error marker. It lapsed 14 days before this
+  was written.
 
-  Importantly, **no grace period has started, and none ever will from this
-  state.** `RSsvr.log` (27 MB) contains 111,399 `UNSUPPORTED: "LGXNGEMU.SIM"
-  … No such feature exists. (-5,346)` denials and **zero** grace, evaluation,
-  trial or borrow records. FlexNet grants grace when an activation that *did*
-  exist becomes unreachable; for a feature that has never existed in any
-  license file it denies outright. So there is no clock ticking, nothing was
-  consumed, and nothing needs rolling back. (Incus snapshot
-  `rockwell-vm/pre-echo-grace`, 2026-09-20 15:10 PDT, was taken anyway as
-  cheap insurance — ZFS CoW, instant.)
+  Everything else FTA serves is permanent: `fta.system`, `RSV.STUDIO`,
+  `RSVME.STUDIO`, FT View SE/ME, RSLinx, the RSLogix 5/500/5000-era node-locked
+  features, KEPServer, historian.
+
+  **There is no grace period to preserve.** `RSsvr.log` (27 MB) holds 111,399
+  `UNSUPPORTED: "LGXNGEMU.SIM" … No such feature exists. (-5,346)` denials and
+  **zero** grace, evaluation or borrow records. Two things to keep straight,
+  because they look alike in the log and are not:
+  - FlexNet drops an *expired* feature from the served pool entirely, so the
+    daemon then reports it as "no such feature" rather than "expired". The log
+    line does not distinguish a lapsed activation from one that never existed;
+    FTA Manager does.
+  - FactoryTalk's 7-day grace covers an activation that became **unreachable**
+    (server down, borrow lost). A **term activation reaching its end date** does
+    not get grace — it is simply gone.
+
+  **A VM rollback cannot recover it.** Term expiry is calendar-based against the
+  host clock, so restoring a pre-expiry disk image does not rewind the date, and
+  FTA carries clock-tamper detection. The incus snapshot
+  `rockwell-vm/pre-echo-grace` (2026-09-20 15:10 PDT, ZFS CoW, instant) is
+  harmless to keep but buys nothing here.
+
+  **Path back:** a renewed or new activation against the Rockwell account tied
+  to serial 4260K18547. Whether a fresh trial can be issued to the same host is
+  an account question, not one answerable from the machine.
 
   Side effect worth cleaning up: the `FactoryTalk Logix Echo Service` is set to
   Automatic and retries the checkout roughly every 10 s, which is the sole
