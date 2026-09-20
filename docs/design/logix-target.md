@@ -463,10 +463,10 @@ for the nautilus runtime than a leaky imitation of it.
 
 Run them on `rockwell-vm`; no hardware and no customer system is involved.
 
-> **Echo is not licensed on `rockwell-vm`** (measured 2026-09-20 — see §10).
-> S3 and S4 and the offline half of S2 run today regardless; S1 and the
-> download half of S2 are blocked until an Echo activation exists. Sequence
-> accordingly: **S3 and S4 first.**
+> **Echo's activation lapsed 2026-09-06 and is being renewed on the AEP1
+> project** (see §10). Until it lands, S3, S4 and S2a run regardless; S1 and
+> S2b are blocked. Sequence accordingly: **S3 and S4 first** — they are the
+> spikes that actually gate the Tier B decision, and they need no controller.
 
 - **S1 — Echo as a target.** *Blocked on an Echo activation.* Start a Logix
   Echo 5580 chassis, download any project, point `nautilus eip browse --host
@@ -578,8 +578,57 @@ FBD and SFC emission to L5X (sheet coordinates and wire routing), safety
   harmless to keep but buys nothing here.
 
   **Path back:** a renewed or new activation against the Rockwell account tied
-  to serial 4260K18547. Whether a fresh trial can be issued to the same host is
-  an account question, not one answerable from the machine.
+  to serial 4260K18547. A second 30-day trial on the same host should not be
+  counted on — one was already consumed and lapsed on 09-06.
+
+  **Decision (2026-09-20): renew Echo, funded by the AEP1 project, not by the
+  lab.** Quoted at ~$2,200/yr. As lab overhead it is poor value — it would be
+  the only subscription among otherwise permanent activations, and three of the
+  four Phase 0 spikes do not need it. As a **delivery** cost on AEP1 it is
+  justified, for three reasons a bench controller cannot answer:
+  - **Full-size programs.** A used CompactLogix 5370 L1 (1769-L18ER-BB1B, the
+    hardware alternative considered) has 512 KB of user memory. Staging a real
+    converted program before a cutover is impossible on it. Echo has no such
+    ceiling.
+  - **The right processor family.** AEP1 targets redundant 1756-L81E — a
+    ControlLogix 5580. Echo emulates 5580/5590/5380/GuardLogix at v33–v38; the
+    L18ER is the previous generation at v30–v35.
+  - **Several processor types from one activation** (up to 17 emulated
+    controllers per license), which is also what a Tier B conformance harness
+    would need later.
+
+  The same activation then serves AEP1 delivery, the Phase 0 spikes, the Tier B
+  harness and content recording — the multi-use case is what makes the number
+  reasonable.
+
+  **Open risk on that justification: does Echo emulate controller
+  *redundancy*?** AEP1 is a redundant pair (this is why `l5xgen` forces
+  periodic-only tasks and rejects local-chassis modules). Echo emulates
+  multiple controllers in a virtual chassis, but redundancy requires a 1756-RM
+  pair and it is not established that Echo reproduces it. **Confirm before
+  purchase** — if it does not, Echo still stages the program on a single 5580,
+  which is most of the value, but the redundancy behaviour stays untested until
+  the real pair is available.
+
+  **Timing:** the year-clock starts at purchase. If AEP1's staging phase is
+  weeks out, buying then rather than now pushes coverage further into the
+  nautilus Tier B window at no cost — unless a fiscal or PO constraint argues
+  for buying while the budget exists.
+
+  **Operational note, learned the hard way:** the previous activation lapsed
+  unnoticed and cost a session to diagnose. Put the expiry date somewhere
+  visible and set a reminder at ~11 months.
+
+- **Bench hardware — downgraded to optional, not dropped.** With Echo funded,
+  a used CompactLogix is no longer a blocker-remover. It retains two narrower
+  uses: (a) validating `eip/` against a *real* Rockwell EtherNet/IP stack
+  rather than an emulator — non-trivial for a driver we ship, given that
+  `eip/driver.go`'s leaf mode exists because real AOI backing tags refuse
+  struct-root reads with CIP 0x0F, and it is unproven that Echo reproduces
+  that; and (b) physical I/O for demos and content, which an emulator cannot
+  give. Note the *read* half of (a) is already covered by `examples/client60`
+  against a real PLC; what is missing is a controller we are permitted to
+  **download** to. Cheap, permanent, buy opportunistically.
 
   Side effect worth cleaning up: the `FactoryTalk Logix Echo Service` is set to
   Automatic and retries the checkout roughly every 10 s, which is the sole
