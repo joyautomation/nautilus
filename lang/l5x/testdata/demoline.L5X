@@ -114,7 +114,7 @@
 <![CDATA[LAH-101 high-level alarm when tank level is at or above the setpoint]]>
 </Comment>
 <Text>
-<![CDATA[GEQ(LevelPct,HiLevelSP)OTE(HiLevelAlm);]]>
+<![CDATA[GE(LevelPct,HiLevelSP)OTE(HiLevelAlm);]]>
 </Text>
 </Rung>
 </RLLContent>

@@ -87,8 +87,8 @@ func TestLadderUnknownInstructionsDraw(t *testing.T) {
 		t.Fatalf("elements = %+v", boxes)
 	}
 	for i, want := range []struct{ fn, args string }{
-		{"GEQ", "P101_Level.EU, P101_Level.Alarms.Hi"},
-		{"MOV", "1, Scratch"},
+		{"GE", "P101_Level.EU, P101_Level.Alarms.Hi"},
+		{"MOVE", "1, Scratch"},
 		{"CPT", "RunHours, (RunHours + 1) / 2"}, // an expression operand, intact
 	} {
 		if boxes[i].Kind != "fn" || boxes[i].Fn != want.fn || boxes[i].Args != want.args {

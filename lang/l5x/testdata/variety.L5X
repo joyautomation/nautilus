@@ -173,7 +173,7 @@
 <![CDATA[Boxes on the rung: a compare, a move, and an expression]]>
 </Comment>
 <Text>
-<![CDATA[GEQ(P101_Level.EU,P101_Level.Alarms.Hi)MOV(1,Scratch)CPT(RunHours,(RunHours + 1) / 2)OTE(HiAlm);]]>
+<![CDATA[GE(P101_Level.EU,P101_Level.Alarms.Hi)MOVE(1,Scratch)CPT(RunHours,(RunHours + 1) / 2)OTE(HiAlm);]]>
 </Text>
 </Rung>
 <Rung Number="4" Type="N">

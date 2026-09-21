@@ -1942,122 +1942,66 @@ the slot number.
 The project must be **correlated with the controller** — the same project
 that was downloaded to it — or `GoOnline` refuses.
 
-## 21. `RxCMP_E_AUDIT_INVALIDOPTYPE` — the compare instructions do not compile (2026-09-21)
+## 21. `RxCMP_E_AUDIT_INVALIDOPTYPE` — the fixture used a display name (2026-09-21)
 
-`nautilus logix build` and `nautilus logix download` both failed on DemoLine
-with:
+`nautilus logix build` and `nautilus logix download` failed on DemoLine with
+`RxCMP_E_AUDIT_INVALIDOPTYPE - Invalid type.` at *Verifying program
+connections*.
 
-```
-RxCMP_E_AUDIT_INVALIDOPTYPE - Invalid type.
-  status: ServiceEvent StatusChanged: Verifying program connections
-```
+**Cause: the fixture's rung 1 read `GEQ(LevelPct,HiLevelSP)OTE(HiLevelAlm);`,
+and `GEQ` is not a neutral-text mnemonic.** The ladder editor *displays* the
+block as `GEQ`; the text Logix imports and exports spells it `GE`. Whoever
+hand-authored `DemoProgram.L5X` copied the editor's caption.
 
-### Two hypotheses died first — do not retry either
+The trap is that **the L5X importer does not validate instruction names**. The
+rung imports with `Errors="0"`, so nothing complains until compile time, where
+it surfaces as a type error rather than "no such instruction".
 
-1. **Change detection.** `<Security ChangesToDetect="16#ffff_ffff_ffff_ffff"/>`
-   looks like the cause because the error names the audit layer. Clearing it to
-   zeros, converting back to ACD and building again fails **identically**. The
-   patch does survive the conversion — verified by re-exporting the ACD and
-   grepping the value back out, so this is a real falsification, not a broken
-   experiment.
-2. **An unscheduled program.** DemoLine declares a `MainProgram` and an empty
-   `<Tasks/>`, so the program is scheduled under no task. That is a genuine
-   defect in the fixture and worth fixing on its own merits, but scheduling it
-   under a `MainTask` changes nothing: the build fails identically.
+Changing one rung to `GE(LevelPct,HiLevelSP)OTE(HiLevelAlm);` and converting
+makes DemoLine build in 852ms.
 
-### The actual cause, by bisection
+### The display/neutral-text split
 
-Halving DemoLine's content, converting and building each variant:
+| editor caption | neutral text |
+| --- | --- |
+| `GEQ` `GRT` `LEQ` `LES` `EQU` `NEQ` | `GE` `GT` `LE` `LT` `EQ` `NE` |
+| `MOV` | `MOVE` |
+| `LIM` | `LIMIT` |
 
-| variant | content | build |
-| --- | --- | --- |
-| minimal hand-authored project | `NOP();` | **ok** (4.8s) |
-| + DemoLine's whole `<Programs>` block | 2 rungs | fail |
-| + DemoLine's program tags, `NOP();` rung | 6 tags | **ok** (1.0s) |
-| DemoLine rungs, `<Comment>`s stripped | 2 rungs | fail |
-| rung 0 only | `[XIC ,XIC ]XIO OTE` | **ok** (1.0s) |
-| rung 1 only | `GEQ(LevelPct,HiLevelSP)OTE(HiLevelAlm);` | fail |
-| `GEQ(...)OTE(RunCmd);` | compare, other coil | fail |
-| `GEQ(CountA,CountB)OTE(RunCmd);` | compare on DINTs | fail |
-| `GRT(LevelPct,HiLevelSP)OTE(RunCmd);` | different compare | fail |
-| `EQU(CountA,CountB)OTE(RunCmd);` | different compare | fail |
-| `ADD(CountA,1,CountB);` | math | **ok** (0.9s) |
+Across 52 real exports the vocabulary is `ABS ADD AVE BTD CLR CMP CONCAT COP
+CPT CTD CTU DIV DTOS EQ GE GSV GT JMP JSR LBL LE LIMIT LT MOVE MSG MUL NE NOP
+ONS OSF OSR OTE OTL OTU PID RES RTO SIZE SSV STOD STOR SUB TND TOF TON XIC
+XIO`. `GEQ(` and `MOV(` appear **zero** times. When hand-authoring a rung,
+take the mnemonic from a real export, never from the editor.
 
-`XIC`, `XIO`, `OTE`, `NOP` and `ADD` compile. `GEQ`, `GRT` and `EQU` do not,
-on any operand type. **The comparison instruction family does not compile
-through the SDK on ECHO1** — which is exactly what `RxCMP` names. The DataTypes
-(14k lines), the tags, the rung comments and the conversion path are all
-innocent: the last two rows differ by one instruction and nothing else.
+`lang/l5x` is unaffected — it renders whatever mnemonic it finds and never
+generates RLL. Its fixtures were corrected for realism, not correctness.
 
-### Confirmed in the GUI — it is not the SDK
+### How I got this wrong, twice, before getting it right
 
-Opening DemoLine in Logix Designer on ECHO1 and verifying reproduces it with no
-SDK involved. Rung 1 carries a red error marker and the GEQ block renders as:
+Worth recording because the failure mode is the point.
 
-```
-GEQ
-GEQ        LevelPct
-Unknown    HiLevelSP
-```
+1. Blamed change detection (`ChangesToDetect`). Falsified: clearing it changes
+   nothing, and the patch does survive conversion.
+2. Blamed an unscheduled program. `<Tasks/>` *was* empty and that *was* a real
+   defect worth fixing — but scheduling it changed nothing. I reported it as
+   the root cause before running the test that would have refuted it.
+3. Bisected properly to a single instruction, then concluded the compare
+   *family* was broken on ECHO1 — "an SDK that cannot compile `GEQ` cannot
+   build any real project, so the install must be broken." The reasoning was
+   sound and the conclusion was wrong, because the premise was wrong: no real
+   project contains `GEQ`.
 
-Those operand labels should read `Source A` and `Source B`. Logix Designer
-itself cannot resolve the GEQ instruction's operand descriptors — which is
-precisely what "invalid op type" means. The SDK was reporting a real defect in
-the installation it sits on.
+The bisection was right and I stopped one step early. Having narrowed it to a
+single token, the next move was to check that token against a real export —
+a five-second grep of a corpus already on disk. Instead I generalised from it
+to a conclusion about the machine.
 
-A second, independent reproduction: take `tags-only.ACD` (builds in 1.0s) and
-import a single GEQ rung through the SDK's own
-`PartialImportRungsFromXmlFileAsync` — the import reports `Errors="0"` in
-1.6s, and the resulting project then fails to build with the same error. So
-the trigger is the instruction, not hand-authored XML and not the L5X→ACD
-conversion path.
+**The lesson that actually generalises:** when a bisection lands on one token,
+validate the token before theorising about the system around it. A wrong
+identifier and a broken platform produce identical symptoms, and only one of
+them is cheap to check.
 
-### What the install looks like
+Credit where due: the user broke the deadlock with "this all reads like you're
+building compares wrong", which is precisely what it was.
 
-ECHO1 has Studio 5000 Logix Designer v38.01.00 with `rll.dll` v38.01.00 and its
-full set of `rll*.dll` language resources present, so the ladder language
-component is not missing. (An earlier guess that `RLLLang.dll` was absent was
-wrong — ladder's DLL is simply named `rll.dll`, unlike `ESQLang`/`FBDLang`/
-`SFCLang`/`STXLang`. Tested, not assumed.) Two oddities worth a look during a
-repair, neither yet tied to the failure:
-
-- `Logix Designer Motion Database` is **36.16** against a v38 Designer.
-- `Logix Designer System Updates` is **31.17**, suggesting later patch rollups
-  were never applied.
-- FactoryTalk Activation grants `RSLogix 5000 Full` with feature version
-  **1.00**, not a v38-era feature version.
-
-Chasing the exact binary that emits `RxCMP_E_AUDIT_INVALIDOPTYPE` was
-abandoned deliberately: it does not change the remedy, which is a Rockwell-side
-repair of the v38 installation.
-
-### What still works, so the demo is not blocked
-
-Everything except `build` and `download`: the `lang/l5x` reader, ladder
-rendering and revision diff in VS Code, `logix convert` (both directions),
-`logix push` (rung import succeeds cleanly), `logix browse`, `normalize` and
-file-based `drift`. Only the two verbs that invoke the Logix compiler are
-affected, and only for projects containing a compare.
-
-### Why this matters more than one fixture
-
-Every one of the 52 files in the local corpus uses a comparison instruction.
-An SDK build that cannot compile `GEQ` cannot build any real Logix project, so
-this is almost certainly a broken or incomplete component on ECHO1 rather than
-a limitation of the SDK — an SDK with this defect would not ship. The next
-check is a GUI one and needs a human: open DemoLine in Logix Designer on ECHO1
-and run Verify Controller. If the GUI verifies it, the fault is in the SDK
-binding; if the GUI fails the same way, ECHO1's Logix Designer install is
-incomplete and needs repairing.
-
-Until then, `logix build` and `logix download` are unusable on ECHO1 for any
-project containing a compare. Nothing in `lang/l5x`, `logixd` or the CLI is
-implicated — every one of those layers did exactly what it was asked.
-
-### Method note
-
-Two wrong answers here came from reasoning about the error string; the right
-one came from bisecting a failing artifact against a working one until the
-difference was a single instruction. §19.6 records the same lesson. When an
-error names a subsystem, that is where the failure was *reported* — the third
-time in this file that has misled.

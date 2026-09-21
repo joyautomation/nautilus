@@ -15,7 +15,7 @@
 <Routine Name="MainRoutine" Type="RLL">
 <RLLContent>
 <Rung Number="0" Type="N"><Comment><![CDATA[P-101 pump seal-in: Start latches the run command, Stop drops it out]]></Comment><Text><![CDATA[[XIC(StartPB) ,XIC(RunCmd) ]XIO(StopPB)OTE(RunCmd);]]></Text></Rung>
-<Rung Number="1" Type="N"><Comment><![CDATA[LAH-101 high-level alarm when tank level is at or above the setpoint]]></Comment><Text><![CDATA[GEQ(LevelPct,HiLevelSP)OTE(HiLevelAlm);]]></Text></Rung>
+<Rung Number="1" Type="N"><Comment><![CDATA[LAH-101 high-level alarm when tank level is at or above the setpoint]]></Comment><Text><![CDATA[GE(LevelPct,HiLevelSP)OTE(HiLevelAlm);]]></Text></Rung>
 </RLLContent>
 </Routine>
 </Routines>
