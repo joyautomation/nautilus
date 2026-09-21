@@ -684,16 +684,32 @@ win; it only applies to *value* changes (`DemoLine.L5X` holds 6 of each). The
 same effect is reachable upstream through `ExportOptions`, which is the cleaner
 place to do it if we control the export.
 
-### What is still unproven
+### Export determinism — MEASURED 2026-09-20, and it is clean
 
-**Export determinism.** Everything above compares files exported at different
-times, and the fixtures already had `ExportDate`/`LastModifiedDate` pinned by
-earlier capture tooling — which is why the attr-norm column shows no further
-gain. What has *not* been measured is the decisive case: **export the same
-unchanged ACD twice and compare.** Stable attribute ordering, a single GUID and
-the absence of scattered timestamps all point to "yes, byte-identical after
-normalizing those four attributes", but it needs a license to confirm. It is
-the first thing to run when one lands.
+The decisive case has now been run, on **ECHO1** (see §13.5): the same
+unchanged ACD exported twice through `OpenLogixProjectAsync` → `SaveAsAsync`.
+
+```
+conversion 1   Open succeeded · Save As succeeded   17.2 s   526,820 bytes
+conversion 2   Open succeeded · Save As succeeded   11.0 s   526,820 bytes
+
+differing lines: 2 of 13,194   (one line, both sides)
+   => <RSLogix5000Content … ExportDate="Su…
+   <= <RSLogix5000Content … ExportDate="Su…
+```
+
+**Identical byte-for-byte apart from the single `ExportDate` attribute.** Not
+attribute ordering, not the `DataExchangeId` GUID, not CDATA whitespace, not
+element ordering — one timestamp, on line 2, and nothing else in a 13k-line
+document.
+
+So the normalizer needed for drift detection is close to trivial: strip or pin
+`ExportDate` (plus `LastModifiedDate`, which the earlier fixtures show also
+moves) and two exports of an unchanged project hash the same. §6.1 option 1 —
+workspace as source of truth, drift measured at the L5X level — is not merely
+viable, it is exact.
+
+**S3 is closed. The git-native story holds.**
 
 **Verdict for planning purposes:** the git-native story is in good shape. §6.1's
 option 1 (workspace as source of truth, drift measured at the L5X level) is
