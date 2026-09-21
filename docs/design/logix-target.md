@@ -1420,23 +1420,69 @@ refused), the probe report, and error classification. Six tests, all green.
 **Did not run: anything that touches the SDK.** Not because of the code —
 because **ECHO1 currently has no FactoryTalk activation at all.**
 
-### The evidence, because "installed" is not "activated"
+### What actually blocks it — corrected 2026-09-21, twice
 
-| Check | Result |
-|---|---|
-| `FTACmdUtility listAvailable` | "no available activations" |
-| `…\Activations\*.lic` | only `ftasystem.lic` / `ftasystem2.lic` — the placeholders, no product activation |
-| `RSsvr.log` | `UNSUPPORTED: "LGXNGEMU.SIM" … No such feature exists (-5,346)` — the **Echo** emulation feature is absent |
-| `LogixProject.CreateNewProjectAsync(…, 38, …)` | `TimeoutException` |
+**First conclusion, wrong:** "ECHO1 has no FactoryTalk activation, so the
+SDK cannot run." The evidence looked airtight — `FTACmdUtility
+listAvailable` reports none, there are no product `.lic` files, and
+`RSsvr.log` shows `UNSUPPORTED: "LDSDK.EXE" … No such feature exists`.
 
-Everything is *installed*: Studio 5000 Logix Designer v38.01, the SDK
-2.02.00, Logix Echo with firmware packages from v33 to v38, and an
-`EmulateControlLogix5580` process is even running and answering CIP on
-port 44818. None of it is licensed to do work.
+**Then `OpenAndSaveFile.exe` ran, and succeeded.** DemoLine.ACD → L5X in
+22.6 s. So the conclusion was wrong, and the measurement that breaks it is
+worth stating precisely, because it overturns an assumption this brief has
+carried since §13.1:
 
-**A missing activation presents as a bare `TimeoutException`, not as a
-licence error.** That is the trap, and it is a new one — §14's trap was
-three gates failing differently; this is a gate failing *silently*.
+```
+08:17:09  Open project started
+08:17:11  (flexsvr) UNSUPPORTED: "LDSDK.EXE" … No such feature exists. (-5,346)
+08:17:31  Open project succeeded
+08:17:31  Save As succeeded
+```
+
+**The SDK asks for `LDSDK.EXE`, is refused, and does the work anyway.** For
+open and save-as, the FlexNet feature is requested but **not enforced**. A
+denial in `RSsvr.log` is therefore not, on its own, an explanation for
+anything — and the whole ACD ↔ L5X half of the Tier A story may need no SDK
+licence at all. That wants confirming deliberately before anyone relies on
+it commercially, but it is what this host measures.
+
+**Second conclusion, which the evidence supports:** the blocker is
+**FactoryTalk authentication**, and it is configuration, not money.
+
+Two gates behave differently, which is what finally separated them:
+
+| Call | Needs an FTSP token | Result on ECHO1 |
+|---|---|---|
+| `GetProcessorTypesAsync(38)` | no | **works** — 106 processor types |
+| `CreateNewProjectAsync(…)` | yes | `TimeoutException` at `FTSP.FactoryTalkServicesPlatformLogin.GetTokenForUserAsync` |
+
+`HKLM\SOFTWARE\WOW6432Node\Rockwell Software\FactoryTalk` still has **no
+`Directories` key**. The FactoryTalk Local Directory was never configured —
+exactly the diagnosis §13.5 reached and ended on, whose fix was apparently
+never applied. **§14's handoff table is wrong where it says ECHO1 has
+"FactoryTalk Local Directory configured".**
+
+It is also intermittent: the same `OpenAndSaveFile` run that succeeded at
+08:17 failed at 08:35 with an unhandled .NET exception in 5.9 s, and the
+FTSP timeout itself shrank from ~2 minutes to ~5 seconds between runs.
+Consistent with a cached token that expired and could not be renewed.
+
+**The fix**, from §13.5 and still not done: run
+`C:\Program Files (x86)\Common Files\Rockwell\FTDConfigurationUtility.exe`
+and configure the Local Directory. It is **GUI-only** — this session looked
+for a silent or command-line switch and found none — so it needs an incus
+console session or RDP enabled on ECHO1. Neither is drivable over SSH.
+
+### What IS genuinely unlicensed
+
+Echo. `LGXNGEMU.SIM` is denied once a minute, every minute
+(`UNSUPPORTED … No such feature exists`), which matches the term activation
+that lapsed 2026-09-06 on the other host. An `EmulateControlLogix5580`
+process is nonetheless running and answering EtherNet/IP on
+`100.93.56.45:44818` — `nautilus eip browse` connects and returns zero tags,
+which is consistent with an empty controller and does not prove the
+emulator will actually execute logic. **Whether an unactivated Echo node
+runs a downloaded program is untested.**
 
 ### A theory that was wrong, recorded on purpose
 
@@ -1460,12 +1506,13 @@ failing gate. **The moment an activation lands, it runs with no edit.**
 
 ### What to do
 
-1. **Get an activation onto ECHO1.** Scope it to cover Logix Designer, the
-   **SDK entitlement**, and the Echo emulation feature (`LGXNGEMU.SIM`) —
-   §14 already recorded that an Echo node alone leaves you unable to open an
-   ACD, and this is the same mistake from the other side.
-2. Then run `go test ./logix/logixd/ -run TestSDK -v`. S2a and S2b are that
-   command.
+1. **Configure the FactoryTalk Local Directory on ECHO1** —
+   `FTDConfigurationUtility.exe` from a console or RDP session. Free, and it
+   is the actual blocker. Then re-run `nautilus logix probe`.
+2. Then run `go test ./logix/logixd/ -run TestSDK -v`. S2a is that command.
+   S2b (the online edit) additionally needs a controller that will execute,
+   which means Echo's activation after all — but only for S2b, and only once
+   step 1 proves the SDK path works.
 3. `.github/workflows/logix.yml` has the self-hosted job ready; flip the
    repo variable `LOGIX_SELF_HOSTED=true` once a runner labelled `logix-sdk`
    exists on the licensed box.

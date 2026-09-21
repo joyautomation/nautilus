@@ -597,45 +597,110 @@ static class Probes
             : "no Logix Designer found under Studio 5000\\Logix Designer\\ENU",
     });
 
-    // The live gate. CreateNewProject exercises FTSP, FlexNet and CodeMeter
-    // in one call; its failure message is the one worth reporting.
-    string? liveDetail = null;
-    var liveOk = false;
+    // The live gate. It must exercise the whole stack — FTSP auth, the gRPC
+    // channel, the Logix services for that revision — WITHOUT depending on
+    // any string the prober guessed.
+    //
+    // GetProcessorTypes is that call. The first version of this probe used
+    // CreateNewProject with a hard-coded "1756-L85E", and when a parameter
+    // is wrong the SDK does not say so: it HANGS until its own timeout, and
+    // a TimeoutException reads exactly like a licensing failure. That cost
+    // an afternoon and produced a wrong conclusion ("this machine has no
+    // activation") while Open and SaveAs were working the whole time.
+    //
+    // So: ask the SDK what it supports, then — only if it answered — create
+    // a project using a name it gave us.
     var rev = revision ?? (installed.Length > 0 ? installed[^1] : 0u);
-    var tmp = Path.Combine(Path.GetTempPath(), $"logixd-probe-{Guid.NewGuid():N}.ACD");
+    string? typesDetail;
+    var typesOk = false;
+    string? firstType = null;
+    var typeCount = 0;
     try
     {
         if (rev == 0) throw new InvalidOperationException("no installed Logix Designer version to test with");
-        var log = new CollectingLogger();
-        using (var p = await LogixProject.CreateNewProjectAsync(tmp, rev, "1756-L85E", "LogixdProbe", log, ct)) { }
-        liveOk = true;
-        liveDetail = $"created and closed a v{rev} project";
+        var types = await LogixProject.GetProcessorTypesAsync(rev, ct);
+        foreach (var kv in types)
+        {
+            typeCount++;
+            firstType ??= kv.Key;
+        }
+        typesOk = typeCount > 0;
+        typesDetail = typesOk
+            ? $"v{rev} offers {typeCount} processor types, e.g. {firstType}"
+            : $"v{rev} returned no processor types";
     }
     catch (Exception ex)
     {
-        liveDetail = $"{ex.GetType().Name}: {ex.Message}";
+        typesDetail = Describe(ex);
     }
-    finally
+    gates.Add(new { name = "live-sdk-call", ok = typesOk, detail = typesDetail });
+
+    string? liveDetail = null;
+    var liveOk = false;
+    if (typesOk)
     {
-        try { if (File.Exists(tmp)) File.Delete(tmp); } catch { /* best effort */ }
+        var tmp = Path.Combine(Path.GetTempPath(), $"logixd-probe-{Guid.NewGuid():N}.ACD");
+        try
+        {
+            var log = new CollectingLogger();
+            using (var p = await LogixProject.CreateNewProjectAsync(tmp, rev, firstType!, "LogixdProbe", log, ct)) { }
+            liveOk = true;
+            liveDetail = $"created and closed a v{rev} {firstType} project";
+        }
+        catch (Exception ex)
+        {
+            liveDetail = Describe(ex);
+        }
+        finally
+        {
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { /* best effort */ }
+        }
+    }
+    else
+    {
+        liveDetail = "skipped — the SDK did not answer the query above";
     }
     gates.Add(new { name = "live-create-project", ok = liveOk, detail = liveDetail });
 
-    return (liveOk, (object)new
+    return (typesOk && liveOk, (object)new
     {
-            usable = liveOk,
+            usable = typesOk && liveOk,
             revisionTested = rev,
             installedRevisions = installed,
             gates,
             hint = liveOk ? null :
-                "Each licensing gate fails differently: watch RSsvr.log during the attempt (it names the " +
-                "FlexNet feature), FTACmdUtility listAvailable for FactoryTalk Activation, and cmu " +
-                "--list-content for CodeMeter. flexsvr reports absent and expired features identically, " +
-                "and a MISSING activation shows up here as a bare TimeoutException rather than as a " +
-                "licence error — check FTACmdUtility listAvailable first.",
+                "Read the live-* details above before assuming a licence problem. MEASURED on this " +
+                "codebase's reference host: the SDK requests the FlexNet feature LDSDK.EXE, is refused " +
+                "(\"No such feature exists\"), and opens and saves projects anyway — so a denial in " +
+                "RSsvr.log does NOT by itself explain a failure. " +
+                "A GetTokenForUserAsync timeout means FactoryTalk authentication, which is " +
+                "CONFIGURATION, not licensing: check that HKLM\\SOFTWARE\\WOW6432Node\\Rockwell " +
+                "Software\\FactoryTalk has a Directories key, and if it does not, configure the " +
+                "FactoryTalk Local Directory with FTDConfigurationUtility.exe (GUI only — it needs a " +
+                "console or RDP session). " +
+                "Only if live-sdk-call ALSO fails is licensing the likely cause: FTACmdUtility " +
+                "listAvailable, RSsvr.log for the feature name, cmu --list-content for CodeMeter. " +
+                "flexsvr reports absent and expired features identically.",
     });
 
 
+    }
+
+    // Describe unwraps the exception chain. A bare "The operation has timed
+    // out." is the least useful thing the SDK can say, and the inner frames
+    // are where the cause lives — an FTSP token timeout names
+    // GetTokenForUserAsync, which is a configuration problem, not a licence.
+    static string Describe(Exception ex)
+    {
+        var parts = new List<string>();
+        for (var e = ex; e is not null; e = e.InnerException)
+            parts.Add($"{e.GetType().Name}: {e.Message}");
+        var where = ex.StackTrace?
+            .Split('\n')
+            .Select(l => l.Trim())
+            .FirstOrDefault(l => l.Contains("RockwellAutomation", StringComparison.Ordinal));
+        if (!string.IsNullOrEmpty(where)) parts.Add(where);
+        return string.Join(" <- ", parts);
     }
 
     static async Task<object> Probe(string name, Func<Task<(bool, string)>> f)
