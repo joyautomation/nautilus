@@ -361,11 +361,27 @@ func runLogixPush(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if fs.NArg() != 2 || *program == "" || *routine == "" {
+	// An ONLINE edit edits what is running, so it takes no project file.
+	// An OFFLINE import edits a project on disk, so it needs one.
+	online := *commPath != ""
+	wantArgs := 2
+	if online {
+		wantArgs = 1
+	}
+	if fs.NArg() != wantArgs || *program == "" || *routine == "" {
 		fmt.Fprintln(os.Stderr,
-			"usage: nautilus logix push [flags] <project.ACD> <rungs.L5X>\n"+
-				"       --program and --routine are required")
+			"usage: nautilus logix push [flags] <project.ACD> <rungs.L5X>   (offline)\n"+
+				"       nautilus logix push --comm-path <path> [flags] <rungs.L5X>   (online)\n"+
+				"       --program and --routine are required\n\n"+
+				"An online edit takes no project file: it edits the program the\n"+
+				"controller is running. Use -o to keep a copy of the result.")
 		return 2
+	}
+	var projArg, rungArg string
+	if online {
+		rungArg = fs.Arg(0)
+	} else {
+		projArg, rungArg = fs.Arg(0), fs.Arg(1)
 	}
 	if *accept && *finalize {
 		fmt.Fprintln(os.Stderr, "nautilus logix push: --accept and --finalize are alternatives")
@@ -391,11 +407,29 @@ func runLogixPush(args []string) int {
 	defer cancel()
 
 	runID := newRunID()
-	projRel, err := stage(ctx, c, runID, fs.Arg(0))
-	if err != nil {
-		return reportErr("push", err)
+
+	// Upload the RUNNING project rather than sending one from disk. A
+	// project file cannot go online even when its logic matches the
+	// controller byte for byte: downloading stamps match information
+	// into the project, and that copy lives in the agent's working
+	// directory, not in the file on the operator's laptop. Sending the
+	// repo's own ACD fails with RxCL_E_CANNOT_UPLOAD_PHYS_ADDR, which
+	// says nothing about the real cause.
+	var projRel string
+	var err error
+	if online {
+		projRel = path.Join(runID, "controller.ACD")
+		evs, upErr := c.UploadToNew(ctx, *commPath, projRel)
+		printEvents(evs)
+		if upErr != nil {
+			return reportErr("push", upErr)
+		}
+	} else {
+		if projRel, err = stage(ctx, c, runID, projArg); err != nil {
+			return reportErr("push", err)
+		}
 	}
-	rungRel, err := stage(ctx, c, runID, fs.Arg(1))
+	rungRel, err := stage(ctx, c, runID, rungArg)
 	if err != nil {
 		return reportErr("push", err)
 	}

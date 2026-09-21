@@ -53,9 +53,13 @@ to a logixd agent on the licensed Windows machine (tools/logixd):
   nautilus logix build <project.ACD>   Compile the logic. No controller, no
                                        risk — this is CI for control code.
   nautilus logix push <project> <rungs.L5X>
-                                       Import rungs into a routine; with
-                                       --comm-path and --accept/--finalize,
-                                       an ONLINE EDIT of a running controller.
+                                       Import rungs into a routine offline.
+  nautilus logix push --comm-path <path> <rungs.L5X>
+                                       ONLINE EDIT: import rungs into the
+                                       program the controller is RUNNING.
+                                       Takes no project file — it uploads
+                                       what is running, edits that, and with
+                                       --accept/--finalize sends it back.
   nautilus logix download <proj.ACD>   Download a project to a controller.
                                        STOPS it and resets tags; needs --yes.
   nautilus logix drift <repo.L5X>      Does the controller still match the
