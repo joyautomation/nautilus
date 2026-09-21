@@ -964,3 +964,62 @@ even applicable.
 the FlexNet feature name *and* the CodeMeter container's product items. "No
 valid license" with neither is what turned a five-minute diagnosis into a
 multi-hour one.
+
+### 13.5 ECHO1: the SDK runs, and the blocker is not licensing
+
+`echo-vm` (hostname **ECHO1**, 10.154.92.210, incus description *"FactoryTalk
+Logix Echo FAT rig — Pomona AEP"*) turns out to be a better SDK host than
+`rockwell-vm`, and testing there moved the failure past licensing entirely.
+
+Setup performed (2026-09-20):
+
+- SSH as `windows` with `~/.ssh/echo_vm`; alias `echo1` added to `~/.ssh/config`.
+- ECHO1 had the .NET **runtimes** 8.0.19 and 10.0.2 but **no SDK**, so the
+  shipped examples could not be built. The SDK's C# examples target
+  **net10.0** — .NET SDK 8 fails them with `NETSDK1045`. Installed .NET SDK
+  **10.0.401** to `C:\dotnet10` via `dotnet-install.ps1` (user-dir, no admin).
+- Built `OpenAndSaveFile` from
+  `…\Logix Designer SDK\dotnet\Examples\src\OpenAndSaveFile` → `C:\s3build`.
+  **Build succeeded.**
+
+Running it against `Z:\AEP1_SIM.ACD` gives a *different* error from
+`rockwell-vm` — no licensing complaint at all:
+
+```
+System.TimeoutException: The operation has timed out.
+   at …FTSP.FactoryTalkServicesPlatformLogin.GetTokenForUserAsync(…)
+   at …FactoryTalkServicesPlatformLogin.GetTokenForCurrentUserAsync(…)
+   at …LogixProject.GetAuthToken(…)
+```
+
+**So the SDK authenticates against FactoryTalk Services Platform before it does
+anything else.** That is a third dependency, alongside the FlexNet feature and
+the CodeMeter container, and it is the one that bites first.
+
+Diagnosis on ECHO1:
+
+- FTSP 6.60.00 and FactoryTalk Activation Manager 5.02 are installed
+  (2026-08-09); `RNADirectory` is running and listening on 4255 / 5241.
+- No pending reboot; Studio 5000 v38.01 and SDK 2.02 installed 2026-09-20.
+- **`HKLM:\SOFTWARE\WOW6432Node\Rockwell Software\FactoryTalk` contains only
+  `Platform` — there is no `Directories` key.** The FactoryTalk **Local
+  Directory was never configured** on this machine, so an FTSP login has
+  nothing to answer it and times out.
+- The fix is `C:\Program Files (x86)\Common Files\Rockwell\FTDConfigurationUtility.exe`,
+  which is **GUI-only** (it hangs when driven headlessly with `/?`). RDP is
+  closed on ECHO1, so it needs a console session (incus console) or RDP
+  enabled.
+
+**Why this matters well beyond this lab.** The SDK needs *three* things before
+it will open a file: an FTSP auth token, a FlexNet feature (`LDSDK.EXE`), and a
+CodeMeter entitlement. Each fails with a different and uninformative message,
+and only the FTSP one is a pure configuration issue. Any `logixd` health check
+must probe all three independently and say which is missing — this is now the
+third distinct licensing/auth failure mode found in one session, and a customer
+hitting any of them would see a generic error.
+
+**Next step on ECHO1:** configure the FactoryTalk Local Directory from a
+console session, then re-run `C:\s3build\OpenAndSaveFile.exe Z:\AEP1_SIM.ACD
+C:\s3\run1.L5X false`. If it passes, S2a, S4 and the export-determinism half of
+S3 all unblock on this host — and ECHO1, not `rockwell-vm`, becomes the SDK
+box.
