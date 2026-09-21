@@ -1689,3 +1689,56 @@ is a Rockwell support case, not a nautilus one.
 **None of this blocks the rest of the work.** The online plane is
 unaffected and fully working — `nautilus eip browse` reads 673 AEP1_SIM
 tags from Linux — and `lang/l5x` needs no Rockwell software at all.
+
+
+### 19.3 It is time-dependent, not configuration-dependent (2026-09-21)
+
+Every apparent discriminator in §19.2 was an artifact of **when** the test
+ran, not **what** ran. The controlled experiment that shows it: two
+binaries, back to back, in one scheduled task, same console session,
+seven seconds apart —
+
+```
+09:32:50  C:\s3build\OpenAndSaveFile.exe   (Rockwell's example)   FAIL 5s
+09:32:57  C:\openprobebuild\openprobe.exe  (plain console app)    FAIL 5s
+```
+
+— and the *same* `s3build` binary had succeeded twice minutes earlier:
+
+```
+09:26:15  OpenAndSaveFile.exe  OK, exit=0
+09:28:58  OpenAndSaveFile.exe  OK, exit=0
+09:30:05  logixd openas        FAIL
+09:31:55  openprobe.exe        FAIL
+```
+
+Both DLL sets are byte-identical (`CSClient 2.2.1109.0`, same timestamp).
+
+So the earlier conclusions were wrong in both directions: "it is the Web
+SDK host" was wrong, and so was "it is the console session". A one-shot exe
+in the console session worked twice and then stopped working, with nothing
+changed.
+
+**The shape of the failure:** successes cluster shortly after a manual
+FactoryTalk action — the user logging in via `FTLoginLogout.exe` (09:14) or
+launching Logix Designer (09:19) — and stop a few minutes later. The
+working window on 2026-09-21 was roughly 09:26–09:29. Before the 08:50
+reboot the same pattern held around the user's Logix Designer session
+(08:17–08:37).
+
+**Best remaining explanation, untested:** the FactoryTalk token has a short
+lifetime, something refreshes it on an interactive FactoryTalk logon, and
+`GetTokenForCurrentUserAsync` cannot renew it by itself — so the SDK works
+for a few minutes after a human touches FactoryTalk and then times out.
+
+**This is a Rockwell support case.** It is not a nautilus defect, not a
+licensing problem (§18), and not fixable by anything in this repository.
+The reproduction is cheap and precise: log into FactoryTalk, run any SDK
+`Open`, watch it work, wait a few minutes, watch the identical command
+fail.
+
+**Method note, recorded because it cost the most:** every one of the twelve
+eliminations in §19.2 was performed without a same-run control. On a host
+whose behaviour changes over minutes, a test and its control must run
+back to back or the comparison is meaningless. That single discipline would
+have reached this conclusion in twenty minutes instead of three hours.

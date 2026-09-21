@@ -86,6 +86,27 @@ if (args.Length >= 5 && args[0] == "cnp")
     }
 }
 
+// `logixd openas <in> <out>` — the same Open+SaveAs the SDK's example does,
+// inside THIS binary, so "is it the logixd executable or is it the
+// long-lived server process?" is one run.
+if (args.Length >= 3 && args[0] == "openas")
+{
+    var sw2 = Stopwatch.StartNew();
+    try
+    {
+        using var proj = await LogixProject.OpenLogixProjectAsync(
+            args[1], new RockwellAutomation.LogixDesigner.Logging.StdOutEventLogger());
+        await proj.SaveAsAsync(args[2], true, false);
+        Console.WriteLine($"OK in {sw2.Elapsed.TotalSeconds:F1}s -> {new FileInfo(args[2]).Length} bytes");
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"FAIL in {sw2.Elapsed.TotalSeconds:F1}s: {ex.GetType().Name}: {ex.Message}");
+        return 1;
+    }
+}
+
 var builder = WebApplication.CreateSlimBuilder(args);
 builder.Services.ConfigureHttpJsonOptions(o =>
 {
