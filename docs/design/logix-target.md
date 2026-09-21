@@ -1039,3 +1039,109 @@ console session, then re-run `C:\s3build\OpenAndSaveFile.exe Z:\AEP1_SIM.ACD
 C:\s3\run1.L5X false`. If it passes, S2a, S4 and the export-determinism half of
 S3 all unblock on this host — and ECHO1, not `rockwell-vm`, becomes the SDK
 box.
+
+---
+
+## 14. Handoff — picking this up in a fresh session
+
+Written 2026-09-20 at the end of the analysis session. Everything below is
+measured, not assumed; where something is inferred it says so.
+
+### Where the work lives
+
+- Branch **`logix-target`**, worktree `~/Development/joyautomation/nautilus-logix`.
+  Nothing outside `docs/design/logix-target.md` has been touched — **no code
+  written yet.**
+- Content ideas **N-35…N-40** are committed in
+  `~/Development/joyautomation/content/ideas.md`, with the harvest noted in its
+  README.
+
+### The verdict, in one paragraph
+
+Runtime parity is unreachable (§6.2, §6.3: no online-edit API, so no warm
+per-program download and no retained-state migration). **Tier A** — Logix stays
+the runtime, nautilus supplies git-native source, review, CI, drift detection
+and live monitoring — is high-feasibility and mostly built. **Tier B**
+(code generation) is open-ended and should stay behind a conformance harness.
+§8 is the recommendation; don't re-litigate it without new information.
+
+### Machines — read this before touching anything
+
+| Host | Access | State |
+|---|---|---|
+| **ECHO1** (`echo-vm`, 10.154.92.210) | `ssh echo1` (alias added; key `~/.ssh/echo_vm`, user `windows`) | **The SDK box.** Licensed, FactoryTalk Local Directory configured, .NET SDK 10.0.401 at `C:\dotnet10`, built `OpenAndSaveFile.exe` at `C:\s3build`. Logix Echo installed but its activation lapsed 2026-09-06. |
+| **rockwell-vm** (`ssh rockwell`, 10.154.92.130) | working | **Not licensed for the SDK.** Its CodeMeter Rockwell container is healthy and *empty* (§13.4). Logix Designer's GUI works via FlexNet; the SDK does not. Don't burn time here. |
+
+`Z:` on both VMs is the same host directory (`pomona/aep/conversion/output`).
+Files there can be locked by a Logix Designer session on the *other* VM —
+copy locally before converting, or make sure nothing has the ACD open.
+
+### The gotcha that cost this session hours
+
+**The SDK needs three independent things before it will open a file:** an FTSP
+auth token, a FlexNet feature (`LDSDK.EXE`), and a CodeMeter entitlement. Each
+fails with a different, uninformative message; on `rockwell-vm` licensing fails
+first so you never see FTSP, and on ECHO1 FTSP failed first so you never saw
+licensing. `flexsvr` additionally reports *absent* and *expired* features
+identically. Diagnose by watching `RSsvr.log` during the attempt (it names the
+feature), `FTACmdUtility listAvailable`, and `cmu --list-content`.
+
+**`logixd` must probe all three and report which failed.** This is a product
+requirement, not a lab note.
+
+### What is ready to run right now on ECHO1
+
+- **S2a** — `CreateNewProject` → `PartialImportOffline` → `BuildProject` →
+  save. The codegen de-risker. All example projects are at
+  `C:\Users\Public\Documents\Studio 5000\Logix Designer SDK\dotnet\Examples\src`;
+  build them the way §13.5 describes (`C:\dotnet10\dotnet.exe build … -o C:\s3build`).
+- **S4** — generate a large routine with `l5xgen` and partial-import it to find
+  whether the documented 30 kB per-operation limit bites.
+- Productizing the n26 batch conversion as `nautilus logix convert`.
+
+S1 and S2b still need a controller — an Echo activation or bench hardware.
+
+### What to build first, and why it needs none of the above
+
+**`lang/l5x`, the reader** (§4.3, Phase 3). Pure Go, no Rockwell software, no
+licensing. RLL routines → the existing `lang/ld` graph model, ST routines →
+`lang/st` AST, UDTs → `stgen`, tags → a nautilus tag file *with descriptions*
+(which a live browse cannot recover — `eip/codegen/tags.go:56`). It lights up
+the ladder viewer, the FBD viewer, diagram diffs between git revisions, and
+hover, on Rockwell code, with zero semantic-equivalence risk.
+
+Corpus to develop against (~60 files, ~30 MB):
+
+- `~/Development/joyautomation/content/assets/capture/n26/fixtures/` —
+  `DemoLine.L5X`, `DemoLine.v80.L5X` (differ by one setpoint),
+  `DemoProgram.L5X` (a *partial* export, `TargetType="Program"` — the shape a
+  partial import takes, so it doubles as an emitter template). **Generic —
+  safe as committed test fixtures.**
+- `~/Development/pomona/wrd/docs/source/l5x/` (52 files) and
+  `~/Development/pomona/aep/conversion/output/` — **client work, Tier 3.**
+  Fine as local test input; never committed as fixtures, never on camera. Read
+  `content/sourcing.md` before publishing anything derived from them.
+
+Start from `lang/stgen` — it is the proven shape for this kind of code
+(generate, then validate by compiling the output back through the parser) and
+it is already used in production by `eip/codegen`.
+
+### Decisions taken, so they don't get reopened
+
+- **Echo renewal funded by AEP1, not the lab** (§10) — with the open question
+  of whether Echo emulates 1756-RM redundancy, which AEP1 needs. Scope the
+  renewal to cover the **SDK entitlement** too; an Echo node alone leaves you
+  unable to open an ACD.
+- **Bench hardware (1769-L18ER-BB1B) is optional, not a blocker** — kept for
+  real-CIP-stack validation of `eip/` and physical I/O for demos.
+- **Two planes, always** (§4) — the SDK for the project lifecycle, raw
+  EtherNet/IP for anything at scan rate. Never route live data through the SDK.
+
+### Corrections recorded deliberately
+
+Three conclusions in this brief were wrong before they were right: reasoning
+from `RSsvr.log` as though it were historical (it begins at the VM's last
+boot), generalizing the SDK's "No valid license" to Logix Designer, and
+assuming a CodeMeter screenshot came from the host under discussion. They are
+left in §13.x rather than silently edited out, because each one is a trap the
+next person would fall into the same way.
