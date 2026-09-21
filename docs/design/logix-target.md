@@ -1941,3 +1941,67 @@ the slot number.
 
 The project must be **correlated with the controller** — the same project
 that was downloaded to it — or `GoOnline` refuses.
+
+## 21. `RxCMP_E_AUDIT_INVALIDOPTYPE` — the fixture has no task (2026-09-21)
+
+`nautilus logix build DemoLine.ACD` and `nautilus logix download` both failed
+with:
+
+```
+RxCMP_E_AUDIT_INVALIDOPTYPE - Invalid type.
+  status: ServiceEvent StatusChanged: Verifying program connections
+```
+
+while a project the SDK creates itself builds in 174ms. The error names the
+audit subsystem, so the obvious reading is that change detection is the
+problem. **It is not.** Both `DemoLine.L5X` and `AEP1_SIM.L5X` carry
+`<Security Code="0" ChangesToDetect="16#ffff_ffff_ffff_ffff"/>`, and AEP1_SIM
+downloads fine. Clearing it to zeros, converting back to ACD (the patch does
+survive the conversion — verified by re-exporting and grepping) and building
+again fails **identically**. That hypothesis is falsified; don't retry it.
+
+### The actual cause
+
+`DemoLine.L5X` declares a `MainProgram` and then:
+
+```xml
+<Tasks/>
+```
+
+The program is scheduled under **no task**. A Logix controller cannot verify a
+project in that state, which is why the build dies at *Verifying program
+connections* — and the misleading error code is what the audit layer reports
+when the operation it is asked to log never becomes a valid one.
+
+A project the SDK creates gets a `MainTask` for free, which is the entire
+difference between the working case and the failing one.
+
+### The fix
+
+Schedule the program:
+
+```xml
+<Tasks>
+<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500"
+      DisableUpdateOutputs="false" InhibitTask="false">
+<ScheduledPrograms>
+<ScheduledProgram Name="MainProgram"/>
+</ScheduledPrograms>
+</Task>
+</Tasks>
+```
+
+Converted back to ACD and re-exported, Logix keeps the task and normalizes it
+(it adds `SynchronizeRedundancyDataDisabled="false"`), so the ACD is
+structurally complete. The generic fixture in
+`content/assets/capture/n26/fixtures/` needs this edit before it can be
+downloaded to a controller or used for the online-edit demo; it does not
+affect `lang/l5x`, which never looked at `<Tasks>`.
+
+### Method note
+
+This took one comparison, not another round of hypotheses: dump the failing
+project's structure and ask what a *working* project has that it lacks. §19.6
+says the same thing. The audit error code was a red herring for the second
+time in this file — when an error names a subsystem, that is where the failure
+was *reported*, not necessarily where it was *caused*.
