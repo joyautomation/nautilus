@@ -247,6 +247,32 @@ func TestAgentClassifiesABadRequest(t *testing.T) {
 	t.Logf("kind=%s fatal=%v: %v", logixd.Kind(err), logixd.IsFatal(err), err)
 }
 
+// Comm-path discovery needs no licence — it reads what FactoryTalk Linx has
+// already browsed. An empty result is legitimate (nobody has browsed to a
+// controller on this machine); a parse failure is not.
+func TestAgentCommPaths(t *testing.T) {
+	c := agent(t)
+	paths, err := c.CommPaths(ctx(t, 2*time.Minute))
+	if err != nil {
+		t.Fatalf("comm paths: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Skip("FactoryTalk Linx has browsed no controllers on this agent")
+	}
+	for _, p := range paths {
+		t.Logf("  %-40s %s %s", p.Path, p.Controller, p.Catalog)
+		if p.Controller == "" || p.Driver == "" {
+			t.Errorf("incomplete comm path: %+v", p)
+		}
+		// The path must have the shape SetCommunicationsPath accepts, or
+		// it is worse than useless — it looks right and fails as "cannot
+		// go online".
+		if n := len(strings.Split(p.Path, `\`)); n < 4 {
+			t.Errorf("comm path %q has %d segments, want at least 4", p.Path, n)
+		}
+	}
+}
+
 // --- tier 2: the SDK ------------------------------------------------------
 
 func TestSDKConvertAndInspect(t *testing.T) {
