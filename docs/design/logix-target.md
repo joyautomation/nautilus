@@ -868,3 +868,44 @@ change, it is a rehost.
   Anything in the Tier A deployment story that runs `logixd` in a VM inherits
   this failure mode. Worth stating plainly to customers, and worth preferring
   physical hosts or pinned VM identity where that is an option.
+
+### 13.3 The healthy Rockwell container is on a different machine
+
+A CodeMeter WebAdmin screenshot showing a green `Rockwell Automation Inc.`
+container, serial `130-4270723735`, turned out **not to be from
+`rockwell-vm`**. Checked directly: that serial appears neither in the VM's
+`cmu --list` nor in the VM's own WebAdmin page, both of which list the same
+fifteen `130-*` serials. (§13.2's conclusion was briefly withdrawn on the
+assumption the screenshot was the same host; it is not, and §13.2 stands.)
+
+State on `rockwell-vm`, confirmed:
+
+- 16 CmContainers, **14 locked**. The locked ones are `130-*` version 3.00
+  `CmActLicense` — the same family and version as the healthy Rockwell
+  container in the screenshot, and they carry firm code `6000458`.
+- The only *working* CodeMeter license is `128-4551989`, firm code `5000325`
+  ("Rockwell Automation, Inc."), checked out by `FTAStub.dll` /
+  `FTACommonEx.dll`. That is FactoryTalk Activation's own plumbing, **not a
+  product entitlement**.
+- The CodeMeter server search list is `255.255.255.255` — broadcast only. The
+  VM discovers only itself on the incus bridge, so it cannot see a CodeMeter
+  server on another host or subnet.
+
+**Three routes forward**, depending on which machine holds the healthy
+container and whether its licenses are network-enabled:
+
+1. **Network licensing.** CodeMeter can serve licenses over the LAN. Adding
+   that host to the VM's server search list (`cmu --add-server`) would let the
+   VM borrow the entitlement with nothing moved or bought. Requires the host to
+   be reachable — it is not on the incus bridge today, so this needs routing or
+   a Tailscale address — and requires the licenses to be network-enabled rather
+   than station-locked.
+2. **Rehost / re-activate** the Rockwell containers onto the VM through the
+   licensing portal.
+3. **Run `logixd` on the machine that already works**, and treat the VM as a
+   lab box only.
+
+Route 1 is the interesting one for the *product*, not just this lab: it is the
+supported way to give a build agent an entitlement without pinning a seat to
+it, and it is the closest thing to a workable CI licensing story. Worth testing
+deliberately if Tier A proceeds.
