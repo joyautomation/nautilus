@@ -1520,11 +1520,12 @@ failing gate. **The moment an activation lands, it runs with no edit.**
 
 ---
 
-## 19. FactoryTalk authentication needs a logged-on desktop (2026-09-21)
+## 19. The FactoryTalk token failure — what it is not (2026-09-21)
 
-The strongest hypothesis this session produced, and the one that explains
-every observation. **Stated as a hypothesis, not a fact — the confirming
-test has not been run.**
+This section proposed that FactoryTalk authentication needs a logged-on
+desktop. **That was tested and it is false.** The section is kept, with the
+refutation, because the theory is the obvious one and the next person will
+form it too.
 
 ### The pattern
 
@@ -1541,9 +1542,31 @@ After the reboot there is no `explorer.exe` on the machine: nobody is
 logged on at the console. Every call that needs a FactoryTalk token fails;
 the one that does not need one is unaffected.
 
-### Why this matters far more than it looks
+### Refuted 2026-09-21, same session
 
-**If it holds, `logixd` cannot run truly headless.** An agent started by a
+A user logged on at ECHO1's console (`explorer.exe` in session 1, and the
+probe's own `interactive-session` gate reporting ok) and
+`CreateNewProject` **still** timed out in `GetTokenForUserAsync`. An
+interactive desktop is not sufficient, and nothing shows it is necessary.
+
+Also checked and dead: `FTLoginLogout.exe` is GUI-only with no command-line
+switches, so there is no headless "log in to FactoryTalk" utility to call;
+the Windows event log records **no** FactoryTalk authentication errors
+during a failing attempt, so FTSP fails silently; and no
+`FtspAdapterLDSDK.exe` process was ever observed during a login, failing or
+succeeding.
+
+### What still correlates, untested as a cause
+
+Every token-needing call succeeded while **Logix Designer was open and
+running** on the console, and every one has failed since it was closed.
+That is a correlation across a handful of runs, not a mechanism. **The next
+test is to open Logix Designer, leave it open, and re-probe** — cheap, and
+it either promotes this to a finding or kills it like the others.
+
+### Why it would matter if it holds
+
+**`logixd` could not run truly headless.** An agent started by a
 service manager, by a scheduled task, or by WMI has no interactive desktop,
 so FactoryTalk has no user session to mint a token for — and the whole
 "CI runner drives the SDK unattended" half of §15.2 depends on solving

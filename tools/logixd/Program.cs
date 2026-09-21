@@ -625,19 +625,18 @@ static class Probes
             : "no Logix Designer found under Studio 5000\\Logix Designer\\ENU",
     });
 
-    // Is anyone logged on at the console? This is a gate, not trivia.
+    // Context for a FactoryTalk token failure, NOT a cause.
     //
-    // MEASURED on the reference host: every SDK call that needs a
-    // FactoryTalk token (Open, SaveAs, CreateNewProject) succeeded while a
-    // user was logged on driving Logix Designer, and every one of them
-    // began timing out inside GetTokenForUserAsync once that session ended
-    // — including across a full reboot, with no console logon at all.
-    // Calls that need no token (GetProcessorTypes) keep working throughout.
+    // The theory this gate was added for — "FactoryTalk authentication needs
+    // an interactive desktop" — was tested and is FALSE: with a user logged
+    // on at the console (explorer.exe in session 1), GetTokenForUserAsync
+    // still times out. It is reported anyway because it is the first thing
+    // anyone asks about a headless agent, and answering it up front stops
+    // the next person spending an hour on it as this one did.
     //
-    // If that holds, logixd cannot run truly headless: FactoryTalk
-    // authentication wants an interactive desktop, and an agent started by
-    // a service manager or by WMI has none. Stated here so the next person
-    // sees it in ten seconds instead of rediscovering it.
+    // What still correlates on the reference host, untested as a cause:
+    // token calls succeeded while Logix Designer was open and running, and
+    // have failed ever since it was closed.
     var interactive = Process.GetProcessesByName("explorer").Length > 0;
     gates.Add(new
     {
@@ -645,9 +644,9 @@ static class Probes
         ok = interactive,
         detail = interactive
             ? "a user is logged on at the console"
-            : "nobody is logged on at the console — FactoryTalk token calls " +
-              "(Open, SaveAs, CreateNewProject) are expected to time out; calls that need no " +
-              "token (GetProcessorTypes) will still work",
+            : "nobody is logged on at the console (context only — a console session has been " +
+              "measured NOT to be sufficient for FactoryTalk token calls, and is not known to be " +
+              "necessary either)",
     });
 
     // The live gate. It must exercise the whole stack — FTSP auth, the gRPC
