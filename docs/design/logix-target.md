@@ -776,3 +776,44 @@ dependency, since that is the half a customer can deploy for nothing.
 2. Echo renewal (`LGXNGEMU.SIM`) on AEP1 — see §10.
 3. Ask what both look like for a *customer-installed* agent, since that is the
    Tier A deployment story.
+
+### 13.1 It did work — what the evidence actually shows
+
+The SDK unambiguously worked on this machine on the same build:
+
+- `C:\acdwork\batch.log` ends `BATCH_DONE 2026-08-22T13:52:12 l5x=52` — 52 of 52
+  ACD→L5X conversions, ~12 s each.
+- Logix Designer SDK **2.02.00** and Studio 5000 v38.01 both have `InstallDate`
+  **2026-07-09**, i.e. before that batch. Nothing was upgraded since.
+
+So an `LDSDK.EXE` entitlement existed in August and is gone now. Two earlier
+conclusions in this brief were drawn from `RSsvr.log` and were wrong because
+**that log only begins `Start-Date: Thu Sep 03 2026 14:04`** — the VM's last
+boot. It holds no August history at all, so "no checkouts in the log" meant
+nothing.
+
+`FTACmdUtility listAvailable` gives the authoritative current set: **29
+activations, no `LDSDK.EXE`, no `LGXNGEMU.SIM`.** Note that `listAvailable`
+lists only *available* activations — the expired Echo Node does not appear
+there, though FTA Manager's GUI shows it greyed with its 2026-09-06 expiry. An
+expired `LDSDK` entry would be hidden from the CLI the same way.
+
+**Observation worth confirming before planning production on this host.** Of
+those 29 activations, all but Echo's carry serials of the form `2650999999`,
+`2529999999`, `2022999999` — placeholder serials — with round seat counts (10,
+20, 750) spanning essentially the whole Rockwell catalog: RSLogix 5, 500, 5000
+Professional, FT View SE/ME, ViewPoint, Historian, KEPServer, SoftLogix,
+RSNetWorx, Batch. That is the signature of a **Rockwell demo/training
+activation set**, not purchased seats. The single real-looking serial is Echo's
+`4260K18547`.
+
+If that is what this VM is, two things follow: the SDK's August entitlement
+most likely came from the same time-limited grant that Echo's did and lapsed
+with it; and **a demo activation set cannot underwrite a shipped Tier A
+deployment** — the production licensing question in §7.2 is unanswered by
+anything on this machine.
+
+**Fastest confirmation:** scroll FTA Manager's activation list to where "Logix
+Designer SDK" would sort (below "KEPServer Enterprise"). A greyed row with an
+expiry date settles it in one second, and tells the distributor conversation
+whether items 1 and 2 of §13 are one renewal or two.
