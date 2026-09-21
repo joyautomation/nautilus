@@ -909,3 +909,58 @@ Route 1 is the interesting one for the *product*, not just this lab: it is the
 supported way to give a build agent an entitlement without pinning a seat to
 it, and it is the closest thing to a workable CI licensing story. Worth testing
 deliberately if Tier A proceeds.
+
+### 13.4 Settled: the CodeMeter container is healthy and empty
+
+The Rockwell container that matters on `rockwell-vm` is `130-2465844567` —
+the one `cmu` reported as *enabled*. WebAdmin shows it **green**, named
+"Rockwell Automation Inc.", firm code **6000458**, and expanding its licenses
+gives:
+
+```
+No Product Items available
+```
+
+Healthy container, zero licenses in it. That is the whole answer, and it
+supersedes the locked-container theory in §13.2/§13.3 — the fifteen red
+`<no name>` containers are noise, not the fault.
+
+**Why everything else on the machine still works.** Two licensing systems, and
+only one is broken:
+
+- **FlexNet** holds the legacy perpetual set — RSLogix 5000 Professional
+  (`RS5K_700.EXE`), FT View SE/ME, RSLinx, Historian, KEPServer. Node-locked,
+  permanent, working. This is why Logix Designer opens v38 projects and why
+  every other Rockwell application on the box is fine.
+- **CodeMeter** holds the modern entitlements — the Logix Designer SDK and
+  Logix Echo among them. Container present and healthy, **but empty.**
+
+FactoryTalk Activation consults FlexNet, finds no `LDSDK.EXE`, consults
+CodeMeter, finds no product items, and reports the uninformative
+`No valid license.` Both halves of that search failing is why the error names
+nothing.
+
+**What most likely happened.** A time-limited Rockwell entitlement covering
+the SDK and Echo was activated into this container, worked through the
+2026-08-22 and 08-28 conversion runs, and **expired 2026-09-06** — the exact
+date FTA Manager shows for the Echo Node. CodeMeter clears expired product
+items, leaving the container intact and empty, which is precisely the state
+observed. One event explains the SDK failing, Echo failing, nothing appearing
+in the Activations folder, and all the perpetual software continuing to work.
+
+**Therefore: this is a renewal, not a repair.** No rehost, no re-activation of
+a broken binding, no separate SDK purchase to chase. The SDK and Echo came in
+together and lapsed together, so one renewal should restore both — which also
+means §10's AEP1-funded Echo decision should be scoped to cover the SDK
+entitlement in the same transaction.
+
+**One check that would confirm it:** on the machine whose Rockwell container is
+populated, expand its Licenses and read the product items and their
+`Valid Until` dates. If an SDK item is there with a live date, the comparison
+is conclusive and also tells us whether network licensing (§13.3 route 1) is
+even applicable.
+
+**The durable lesson for `logixd`,** unchanged and now better founded: report
+the FlexNet feature name *and* the CodeMeter container's product items. "No
+valid license" with neither is what turned a five-minute diagnosis into a
+multi-hour one.
