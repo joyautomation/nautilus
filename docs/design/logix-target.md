@@ -817,3 +817,54 @@ anything on this machine.
 Designer SDK" would sort (below "KEPServer Enterprise"). A greyed row with an
 expiry date settles it in one second, and tells the distributor conversation
 whether items 1 and 2 of §13 are one renewal or two.
+
+### 13.2 The real cause: locked CodeMeter containers
+
+Reinstalling the SDK component and rebooting did not help — `listAvailable`
+still returns 29 rows with no SDK entry, and the converter still refuses. The
+reboot *did* complete (WindowsUpdate and PendingFileRename flags cleared), so
+the install is not the problem.
+
+**This machine has two licensing systems running side by side**, and the
+distinction explains everything observed so far:
+
+| Mechanism | Holds | State |
+|---|---|---|
+| **FlexNet** (`flexsvr`, `.lic` files in `…\Activations`) | the legacy perpetual set — RSLogix 5/500/5000 Professional, FT View SE/ME, Historian, KEPServer, SoftLogix | **Working.** This is why Logix Designer opens v38 projects. |
+| **CodeMeter** (WIBU, firm code `5000325` "Rockwell Automation, Inc.") | the modern entitlements — where `LDSDK.EXE` and `LGXNGEMU.SIM` live | **Broken.** |
+
+`cmu --list` reports **16 CmContainers, 14 of them `(locked)`.** Only
+`128-4551989` and `130-2465844567` are enabled.
+
+That is the fault. A locked `CmActLicense` container cannot be read, so the
+entitlements inside it are invisible to everything — which is precisely why
+`LDSDK.EXE` and `LGXNGEMU.SIM` appear as "No such feature exists" to `flexsvr`
+while nothing ever showed up as a `.lic` file: **they were never FlexNet
+licenses at all.**
+
+**Why containers lock, and why a VM is exposed to it.** `CmActLicense` binds to
+a machine fingerprint. Restoring a snapshot, migrating the host, or changing
+virtual hardware identity (disk, NIC, firmware) invalidates the binding and
+locks the container. `rockwell-vm` was last started 2026-09-03 and Echo stopped
+working on 2026-09-06 — suggestive, not proven, but the shape fits.
+
+**This is recoverable and is probably not a purchase.** The remedy for locked
+CmAct containers is re-activation against the Rockwell account that issued
+them, not a new order. Check CodeMeter Control Center's WebAdmin
+(`http://localhost:22350`) on the VM for each container's status and reason,
+then re-activate through the Rockwell licensing portal. If the fingerprint did
+change, it is a rehost.
+
+**Consequences for the plan:**
+
+- §13's "the SDK is licensed separately" stands — `LDSDK.EXE` is a distinct
+  feature — but the earlier suggestion that it needs purchasing was premature.
+  Fix the containers first.
+- **`logixd` must treat CodeMeter as a first-class dependency.** Its health
+  check needs to report container lock state alongside the FlexNet feature
+  name; otherwise a fingerprint change in a customer's VM presents as the same
+  opaque "No valid license" that cost this session several hours.
+- **A virtualised agent host is a licensing risk, not just a convenience.**
+  Anything in the Tier A deployment story that runs `logixd` in a VM inherits
+  this failure mode. Worth stating plainly to customers, and worth preferring
+  physical hosts or pinned VM identity where that is an option.
