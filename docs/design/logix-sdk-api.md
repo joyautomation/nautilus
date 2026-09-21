@@ -539,9 +539,35 @@ the download path, which remains true *of downloads*.
   rollback. Logix online-edits in place under its own rules. They solve
   overlapping problems differently, and claiming parity would be exactly the
   leaky impersonation §8 warns against.
-- **None of this has been executed.** It is read from the vendor's
-  documentation and from the enum's own doc comments. It needs a controller,
-  and Echo's activation lapsed 2026-09-06.
+- ~~**None of this has been executed.**~~ **VERIFIED 2026-09-21 against a
+  running controller.** See §9.1.
+
+### 9.1 Verified against hardware, 2026-09-21
+
+An emulated ControlLogix 5580 with a real client project downloaded to it
+(≈5,000 tags), driven from Linux through `logixd`:
+
+```
+comm path   AB_ETH-1\<addr>\Backplane\0
+connection  Online          controller  Program
+export      Rung[@Number='0'] from an RLL routine, ONLINE   18,385 bytes
+import      PartialImportRungsFromXmlFile
+            insertPosition 0, replaceCount 1, FinalizeEdits
+result      "Partial Import Rungs From Xml File succeeded"   1,134 ms
+ImportLog   <Summary Warnings="0" Errors="0"/>
+after       connection Online, controller Program (unchanged)
+```
+
+Covered by `TestSDKOnlineRungImport`, which exports a routine's own rung 0
+and imports it straight back — a semantic no-op over the real online-edit
+path, so it is safe to run repeatedly.
+
+**The honest limit of what this proves.** The controller was in **Program**
+mode. `FinalizeEdits` is documented to accept the edits, send them to the
+controller, *and assemble them if the controller is in Run*. So this
+verifies **accept-and-send-down while online**; the **assemble-in-Run** leg
+is still unverified. That is the remaining test, and it needs a controller
+someone is willing to put in Run.
 
 ### Consequences to act on
 

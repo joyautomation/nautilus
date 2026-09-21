@@ -1889,3 +1889,55 @@ Three rules earned the hard way:
    compared, never suspected.
 3. **Read the implementation before theorising about it.** A vendor "black
    box" is usually a PE file you can inspect in seconds.
+
+
+---
+
+## 20. S2a and S2b are closed (2026-09-21)
+
+Both spikes ran, from Linux, through `logixd`, against the real SDK and a
+running emulated controller. The full integration suite:
+
+```
+TestAgentHealth                           PASS
+TestAgentRejectsMissingToken              PASS
+TestAgentFileRoundTrip                    PASS
+TestAgentRefusesToEscapeItsWorkDirectory  PASS
+TestAgentProbeReportsGates                PASS   all five gates ok
+TestAgentClassifiesABadRequest            PASS
+TestSDKConvertAndInspect                  PASS   ACD -> L5X -> ACD
+TestSDKBuild                              PASS   174 ms
+TestSDKPartialExport                      PASS
+TestSDKOnlineRungImport                   PASS   FinalizeEdits, 1,134 ms
+```
+
+**S2a** — create, open, convert, build, partial export. `Build` succeeds in
+under 200 ms on a fresh v38 project, which makes "CI compiles the control
+logic on every PR" a measured claim rather than a plan.
+
+**S2b** — the online edit. Rung exported from and imported back into a
+controller while online, `FinalizeEdits`, zero warnings, zero errors,
+controller state unchanged. §9 of `logix-sdk-api.md` is no longer a reading
+of the documentation; it is a test that runs.
+
+**Still unverified:** the assemble-in-Run leg (the controller was in
+Program), and `download`, which is deliberately gated (§15.2).
+
+### Running the online test
+
+```bash
+NAUTILUS_LOGIXD_URL=http://<agent>:8188 \
+NAUTILUS_LOGIXD_TOKEN=... \
+NAUTILUS_LOGIXD_COMM_PATH='AB_ETH-1\<addr>\Backplane\0' \
+NAUTILUS_LOGIXD_PROJECT='<agent-relative>.ACD' \
+NAUTILUS_LOGIXD_PROGRAM=MainProgram \
+NAUTILUS_LOGIXD_ROUTINE=<an RLL routine> \
+  go test ./logix/logixd/ -run TestSDKOnlineRungImport -v
+```
+
+The comm path is a FactoryTalk Linx browse path; read it off the FT Linx
+Network Browser tree — driver, then device address, then `Backplane`, then
+the slot number.
+
+The project must be **correlated with the controller** — the same project
+that was downloaded to it — or `GoOnline` refuses.
