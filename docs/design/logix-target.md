@@ -1645,3 +1645,47 @@ emulated controller's CIP binding (it came back on `:44818` bound to the
 Tailscale address after the reboot had left it on loopback only), and
 `nautilus eip browse` reads **673 AEP1_SIM tags** from Linux again. The
 online plane needs none of the above.
+
+
+### 19.2 Every theory tested and killed — this is a vendor support issue (2026-09-21)
+
+The Logix-Designer-session mechanism from §19.1 is **also false**. With
+Logix Designer open on the console (session 1), the user logged into
+FactoryTalk via "Log On to FactoryTalk", and a project loaded,
+`OpenAndSaveFile` from an SSH session still fails in 6.6 s at
+`GetTokenForCurrentUserAsync`.
+
+Ruled out by measurement, in order:
+
+| Theory | Killed by |
+|---|---|
+| No FactoryTalk activation | The SDK is refused `LDSDK.EXE` and works anyway (§18) |
+| Wrong processor-type argument | Rockwell's own example uses the same string and succeeded |
+| Temp path not writable by the service | Moved to a service-writable directory; unchanged |
+| `CancellationToken` overload | Both overloads fail identically |
+| Event logger implementation | `StdOutEventLogger` fails identically |
+| Dependency versions | Grpc/Protobuf/CSClient byte-identical in working and failing outputs |
+| Server GC / the ASP.NET host | `DOTNET_gcServer=0` and running as `logixd.exe` both unchanged |
+| Stale server-side project state | Fails on a freshly restarted `LdSdkService` |
+| Missing Local Directory | Directory store present since 2026-09-20 21:26 |
+| Needs an interactive desktop | `explorer.exe` in session 1; still fails |
+| Needs a FactoryTalk logon | Logged on via `FTLoginLogout.exe`; still fails |
+| Needs Logix Designer running | Designer open with a project; still fails |
+
+**What actually changed:** every token-needing call worked before the
+2026-09-21 08:50 reboot (three `Open`+`SaveAs` runs, and Rockwell's
+`CreateNewProject` example) and none has worked since, under every
+combination of the above. Calls needing no token (`GetProcessorTypes`)
+work throughout, so the SDK service, the gRPC channel and the Logix
+services are all healthy.
+
+**Stop guessing and read the vendor's own diagnostics.** FactoryTalk
+Diagnostics Viewer is GUI-only and was never readable from SSH; the Windows
+event log carries no FactoryTalk authentication entries at all. The next
+step is to open **Diagnostics Viewer** on the console while a failing SDK
+call is triggered, and read what FTSP reports. If that is empty too, this
+is a Rockwell support case, not a nautilus one.
+
+**None of this blocks the rest of the work.** The online plane is
+unaffected and fully working — `nautilus eip browse` reads 673 AEP1_SIM
+tags from Linux — and `lang/l5x` needs no Rockwell software at all.
