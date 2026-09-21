@@ -1942,9 +1942,9 @@ the slot number.
 The project must be **correlated with the controller** — the same project
 that was downloaded to it — or `GoOnline` refuses.
 
-## 21. `RxCMP_E_AUDIT_INVALIDOPTYPE` — the fixture has no task (2026-09-21)
+## 21. `RxCMP_E_AUDIT_INVALIDOPTYPE` — the compare instructions do not compile (2026-09-21)
 
-`nautilus logix build DemoLine.ACD` and `nautilus logix download` both failed
+`nautilus logix build` and `nautilus logix download` both failed on DemoLine
 with:
 
 ```
@@ -1952,56 +1952,62 @@ RxCMP_E_AUDIT_INVALIDOPTYPE - Invalid type.
   status: ServiceEvent StatusChanged: Verifying program connections
 ```
 
-while a project the SDK creates itself builds in 174ms. The error names the
-audit subsystem, so the obvious reading is that change detection is the
-problem. **It is not.** Both `DemoLine.L5X` and `AEP1_SIM.L5X` carry
-`<Security Code="0" ChangesToDetect="16#ffff_ffff_ffff_ffff"/>`, and AEP1_SIM
-downloads fine. Clearing it to zeros, converting back to ACD (the patch does
-survive the conversion — verified by re-exporting and grepping) and building
-again fails **identically**. That hypothesis is falsified; don't retry it.
+### Two hypotheses died first — do not retry either
 
-### The actual cause
+1. **Change detection.** `<Security ChangesToDetect="16#ffff_ffff_ffff_ffff"/>`
+   looks like the cause because the error names the audit layer. Clearing it to
+   zeros, converting back to ACD and building again fails **identically**. The
+   patch does survive the conversion — verified by re-exporting the ACD and
+   grepping the value back out, so this is a real falsification, not a broken
+   experiment.
+2. **An unscheduled program.** DemoLine declares a `MainProgram` and an empty
+   `<Tasks/>`, so the program is scheduled under no task. That is a genuine
+   defect in the fixture and worth fixing on its own merits, but scheduling it
+   under a `MainTask` changes nothing: the build fails identically.
 
-`DemoLine.L5X` declares a `MainProgram` and then:
+### The actual cause, by bisection
 
-```xml
-<Tasks/>
-```
+Halving DemoLine's content, converting and building each variant:
 
-The program is scheduled under **no task**. A Logix controller cannot verify a
-project in that state, which is why the build dies at *Verifying program
-connections* — and the misleading error code is what the audit layer reports
-when the operation it is asked to log never becomes a valid one.
+| variant | content | build |
+| --- | --- | --- |
+| minimal hand-authored project | `NOP();` | **ok** (4.8s) |
+| + DemoLine's whole `<Programs>` block | 2 rungs | fail |
+| + DemoLine's program tags, `NOP();` rung | 6 tags | **ok** (1.0s) |
+| DemoLine rungs, `<Comment>`s stripped | 2 rungs | fail |
+| rung 0 only | `[XIC ,XIC ]XIO OTE` | **ok** (1.0s) |
+| rung 1 only | `GEQ(LevelPct,HiLevelSP)OTE(HiLevelAlm);` | fail |
+| `GEQ(...)OTE(RunCmd);` | compare, other coil | fail |
+| `GEQ(CountA,CountB)OTE(RunCmd);` | compare on DINTs | fail |
+| `GRT(LevelPct,HiLevelSP)OTE(RunCmd);` | different compare | fail |
+| `EQU(CountA,CountB)OTE(RunCmd);` | different compare | fail |
+| `ADD(CountA,1,CountB);` | math | **ok** (0.9s) |
 
-A project the SDK creates gets a `MainTask` for free, which is the entire
-difference between the working case and the failing one.
+`XIC`, `XIO`, `OTE`, `NOP` and `ADD` compile. `GEQ`, `GRT` and `EQU` do not,
+on any operand type. **The comparison instruction family does not compile
+through the SDK on ECHO1** — which is exactly what `RxCMP` names. The DataTypes
+(14k lines), the tags, the rung comments and the conversion path are all
+innocent: the last two rows differ by one instruction and nothing else.
 
-### The fix
+### Why this matters more than one fixture
 
-Schedule the program:
+Every one of the 52 files in the local corpus uses a comparison instruction.
+An SDK build that cannot compile `GEQ` cannot build any real Logix project, so
+this is almost certainly a broken or incomplete component on ECHO1 rather than
+a limitation of the SDK — an SDK with this defect would not ship. The next
+check is a GUI one and needs a human: open DemoLine in Logix Designer on ECHO1
+and run Verify Controller. If the GUI verifies it, the fault is in the SDK
+binding; if the GUI fails the same way, ECHO1's Logix Designer install is
+incomplete and needs repairing.
 
-```xml
-<Tasks>
-<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500"
-      DisableUpdateOutputs="false" InhibitTask="false">
-<ScheduledPrograms>
-<ScheduledProgram Name="MainProgram"/>
-</ScheduledPrograms>
-</Task>
-</Tasks>
-```
-
-Converted back to ACD and re-exported, Logix keeps the task and normalizes it
-(it adds `SynchronizeRedundancyDataDisabled="false"`), so the ACD is
-structurally complete. The generic fixture in
-`content/assets/capture/n26/fixtures/` needs this edit before it can be
-downloaded to a controller or used for the online-edit demo; it does not
-affect `lang/l5x`, which never looked at `<Tasks>`.
+Until then, `logix build` and `logix download` are unusable on ECHO1 for any
+project containing a compare. Nothing in `lang/l5x`, `logixd` or the CLI is
+implicated — every one of those layers did exactly what it was asked.
 
 ### Method note
 
-This took one comparison, not another round of hypotheses: dump the failing
-project's structure and ask what a *working* project has that it lacks. §19.6
-says the same thing. The audit error code was a red herring for the second
-time in this file — when an error names a subsystem, that is where the failure
-was *reported*, not necessarily where it was *caused*.
+Two wrong answers here came from reasoning about the error string; the right
+one came from bisecting a failing artifact against a working one until the
+difference was a single instruction. §19.6 records the same lesson. When an
+error names a subsystem, that is where the failure was *reported* — the third
+time in this file that has misled.
