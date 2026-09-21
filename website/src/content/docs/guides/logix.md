@@ -194,8 +194,30 @@ it if the controller is in Run. Both require `--comm-path`: offline the SDK
 nobody accepted while the command reported success. nautilus refuses
 instead.
 
-The project you push from must be **correlated with the controller** — the
-same project that was downloaded to it — or going online is refused.
+An online edit takes **no project file**:
+
+```sh
+nautilus logix push --comm-path 'AB_ETH-1\10.0.0.5\Backplane\0' \
+  --program MainProgram --routine MainRoutine --at 1 --replace 1 \
+  --accept rungs.L5X
+```
+
+It uploads the program the controller is running, imports into that, and
+sends it back. This is not a convenience — it is the only thing that works.
+A project file on disk **cannot go online** even when its logic matches the
+controller byte for byte, because downloading stamps match information into
+the project and that copy stays on the machine that did the download. Push
+your repo's own `.ACD` and the SDK fails with:
+
+```
+RxCL_E_CANNOT_UPLOAD_PHYS_ADDR - Failed to upload physical address information.
+```
+
+which is about as far from "wrong project file" as an error message gets.
+Pass `-o` if you want to keep the resulting project locally.
+
+To check the controller still matches your repo, use `nautilus logix drift`
+— it exits 1 on a mismatch, so it works as a CI gate.
 
 ### Security
 
