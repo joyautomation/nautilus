@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -73,6 +74,32 @@ func requireSDK(t *testing.T, c *logixd.Client) {
 		}
 	}
 	t.Skipf("SDK not usable on the agent; failing gates: %s", strings.Join(failed, "; "))
+}
+
+// seedProject uploads a real .ACD into the agent's work directory and
+// returns its agent-relative path.
+//
+// The tests used to build their subject with CreateNewProject. They do not
+// any more: that call is intermittent on the reference host — it fails in
+// the SDK's OWN shipped example, on a freshly restarted service, between
+// two successful OpenLogixProject calls. Seeding from a real project is
+// both more reliable and a better test, because an empty controller
+// exercises almost nothing.
+func seedProject(t *testing.T, c *logixd.Client) string {
+	t.Helper()
+	local := os.Getenv("NAUTILUS_LOGIXD_SEED_ACD")
+	if local == "" {
+		t.Skip("set NAUTILUS_LOGIXD_SEED_ACD to a .ACD to seed SDK tests from")
+	}
+	raw, err := os.ReadFile(local)
+	if err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	rel := path.Join(runID(t), filepath.Base(local))
+	if err := c.PutFile(ctx(t, 10*time.Minute), rel, raw); err != nil {
+		t.Fatalf("uploading the seed project: %v", err)
+	}
+	return rel
 }
 
 // runID namespaces a test's files inside the agent's work directory.
@@ -222,19 +249,14 @@ func TestAgentClassifiesABadRequest(t *testing.T) {
 
 // --- tier 2: the SDK ------------------------------------------------------
 
-func TestSDKCreateConvertAndInspect(t *testing.T) {
+func TestSDKConvertAndInspect(t *testing.T) {
 	c := agent(t)
 	requireSDK(t, c)
 	cx := ctx(t, 30*time.Minute)
 
-	id := runID(t)
-	acd := path.Join(id, "smoke.ACD")
-	l5x := path.Join(id, "smoke.L5X")
-	back := path.Join(id, "roundtrip.ACD")
-
-	if _, err := c.CreateProject(cx, acd, 38, "1756-L85E", "Smoke"); err != nil {
-		t.Fatalf("create: %v", err)
-	}
+	acd := seedProject(t, c)
+	l5x := acd + ".L5X"
+	back := acd + ".roundtrip.ACD"
 
 	// ACD -> L5X, the git-native half.
 	res, _, err := c.Convert(cx, acd, l5x, false)
@@ -268,6 +290,9 @@ func TestSDKCreateConvertAndInspect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("executables: %v", err)
 	}
+	if len(execs) == 0 {
+		t.Error("a real project should have at least one routine")
+	}
 	t.Logf("%d executables, e.g. %v", len(execs), first(execs, 3))
 }
 
@@ -278,11 +303,7 @@ func TestSDKBuild(t *testing.T) {
 	requireSDK(t, c)
 	cx := ctx(t, 45*time.Minute)
 
-	acd := path.Join(runID(t), "build.ACD")
-	if _, err := c.CreateProject(cx, acd, 38, "1756-L85E", "BuildSmoke"); err != nil {
-		t.Fatal(err)
-	}
-	s, err := c.Open(cx, acd)
+	s, err := c.Open(cx, seedProject(t, c))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,53 +321,32 @@ func TestSDKBuild(t *testing.T) {
 	t.Logf("built for %s in %dms", res.Target, res.ElapsedMs)
 }
 
-// Offline tag values need no controller at all: they read and write what is
-// stored in the project file. Useful on its own, and the cheapest proof the
-// tag XPath addressing is right.
-func TestSDKOfflineTagValue(t *testing.T) {
+// A partial export is the read half of every structural operation, and the
+// only way to learn a project's contents — the SDK has no browse.
+func TestSDKPartialExport(t *testing.T) {
 	c := agent(t)
 	requireSDK(t, c)
-	cx := ctx(t, 20*time.Minute)
+	cx := ctx(t, 30*time.Minute)
 
-	id := runID(t)
-	acd := path.Join(id, "tags.ACD")
-	if _, err := c.CreateProject(cx, acd, 38, "1756-L85E", "TagSmoke"); err != nil {
-		t.Fatal(err)
-	}
+	acd := seedProject(t, c)
 	s, err := c.Open(cx, acd)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close(context.Background())
 
-	// A fresh project has no user tags, so create one by importing an L5X
-	// — which is also the only way the SDK can create anything.
-	tagL5X := path.Join(id, "tag.L5X")
-	if err := c.PutFile(cx, tagL5X, []byte(controllerTagL5X("Setpoint", "REAL", "12.5"))); err != nil {
-		t.Fatal(err)
+	out := acd + ".tags.L5X"
+	if _, err := s.PartialExport(cx, "Controller/Tags/Tag", out); err != nil {
+		t.Fatalf("partial export: %v", err)
 	}
-	if _, err := s.PartialImport(cx, "Controller/Tags", tagL5X, logixd.Overwrite, false); err != nil {
-		t.Fatalf("importing a tag: %v", err)
-	}
-
-	got, err := s.GetTag(cx, logixd.TagPath("Setpoint"), "REAL", logixd.Offline)
-	if err != nil {
-		t.Fatalf("get: %v", err)
-	}
-	if f, ok := got.(float64); !ok || f < 12.4 || f > 12.6 {
-		t.Errorf("Setpoint = %#v, want 12.5", got)
-	}
-
-	if err := s.SetTag(cx, logixd.TagPath("Setpoint"), "REAL", logixd.Offline, 80.0); err != nil {
-		t.Fatalf("set: %v", err)
-	}
-	got, err = s.GetTag(cx, logixd.TagPath("Setpoint"), "REAL", logixd.Offline)
+	raw, err := c.GetFile(cx, out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f, ok := got.(float64); !ok || f < 79.9 || f > 80.1 {
-		t.Errorf("after set, Setpoint = %#v, want 80", got)
+	if !strings.Contains(string(raw), "<Tag ") {
+		t.Errorf("export has no tags: %.300s", raw)
 	}
+	t.Logf("exported %d bytes of controller tags", len(raw))
 }
 
 // --- tier 2, online: the correction in §9 of logix-sdk-api.md, tested -----

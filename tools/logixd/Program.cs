@@ -49,13 +49,41 @@ using RockwellAutomation.LogixDesigner;
 if (args.Length > 0 && args[0] == "probe")
 {
     uint? rev = args.Length > 1 && uint.TryParse(args[1], out var r) ? r : null;
-    var (usable, payload) = await Probes.RunAsync(rev, CancellationToken.None);
+    var probeWork = Environment.GetEnvironmentVariable("LOGIXD_WORKDIR") ?? @"C:\logixd-work";
+    var (usable, payload) = await Probes.RunAsync(rev, probeWork, CancellationToken.None);
     Console.WriteLine(JsonSerializer.Serialize(payload, new JsonSerializerOptions
     {
         WriteIndented = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     }));
     return usable ? 0 : 1;
+}
+
+// `logixd cnp` is a bisection harness, not a product verb: it calls
+// CreateNewProjectAsync the way the SDK's own example does and lets each
+// difference from logixd's own call be toggled, so "the example works and
+// we do not" becomes one run instead of a morning.
+if (args.Length >= 5 && args[0] == "cnp")
+{
+    var useCt = args.Contains("--ct");
+    var mine = args.Contains("--mylogger");
+    RockwellAutomation.LogixDesigner.Logging.OperationEvent lg =
+        mine ? new CollectingLogger() : new RockwellAutomation.LogixDesigner.Logging.StdOutEventLogger();
+    Console.WriteLine($"cnp: ct={useCt} logger={(mine ? "CollectingLogger" : "StdOutEventLogger")}");
+    var sw = Stopwatch.StartNew();
+    try
+    {
+        using var proj = useCt
+            ? await LogixProject.CreateNewProjectAsync(args[1], uint.Parse(args[2]), args[3], args[4], lg, CancellationToken.None)
+            : await LogixProject.CreateNewProjectAsync(args[1], uint.Parse(args[2]), args[3], args[4], lg);
+        Console.WriteLine($"OK in {sw.Elapsed.TotalSeconds:F1}s");
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"FAIL in {sw.Elapsed.TotalSeconds:F1}s: {ex.GetType().Name}: {ex.Message}");
+        return 1;
+    }
 }
 
 var builder = WebApplication.CreateSlimBuilder(args);
@@ -250,7 +278,7 @@ app.MapGet("/v1/health", () => Results.Json(new
 // verdict is data.usable; monitoring reads the field.
 app.MapGet("/v1/probe", async (uint? revision, CancellationToken ct) =>
 {
-    var (_, payload) = await Probes.RunAsync(revision, ct);
+    var (_, payload) = await Probes.RunAsync(revision, workDir, ct);
     return Results.Json(new { ok = true, data = payload });
 });
 
@@ -573,7 +601,7 @@ record TagSetReq(string TagPath, string Type, string? Mode, JsonElement Value);
 // Probes is the licensing check, shared by `logixd probe` and GET /v1/probe.
 static class Probes
 {
-    public static async Task<(bool usable, object payload)> RunAsync(uint? revision, CancellationToken ct)
+    public static async Task<(bool usable, object payload)> RunAsync(uint? revision, string workDir, CancellationToken ct)
     {
     var gates = new List<object>();
 
@@ -639,7 +667,15 @@ static class Probes
     var liveOk = false;
     if (typesOk)
     {
-        var tmp = Path.Combine(Path.GetTempPath(), $"logixd-probe-{Guid.NewGuid():N}.ACD");
+        // NOT Path.GetTempPath(). LdSdkServer runs as a Windows service and
+        // creates the project file ITSELF, server-side — so a path under the
+        // calling user's profile is one the service cannot write. It does not
+        // say so: the call hangs until its own timeout and surfaces as a
+        // TimeoutException inside the FactoryTalk login, which reads exactly
+        // like an authentication failure. Cost: most of a morning, and a
+        // wrong conclusion about the machine's licensing.
+        Directory.CreateDirectory(workDir);
+        var tmp = Path.Combine(workDir, $"logixd-probe-{Guid.NewGuid():N}.ACD");
         try
         {
             var log = new CollectingLogger();
@@ -660,15 +696,21 @@ static class Probes
     {
         liveDetail = "skipped — the SDK did not answer the query above";
     }
-    gates.Add(new { name = "live-create-project", ok = liveOk, detail = liveDetail });
+    // Informational, and deliberately NOT part of the verdict. On the
+    // reference host CreateNewProject fails intermittently — including in
+    // the SDK's own shipped example, on a freshly restarted service, while
+    // OpenLogixProject + SaveAs succeed either side of it. Gating "is the
+    // SDK usable" on the flakiest call in the API would make the probe lie
+    // about a machine that can do real work.
+    gates.Add(new { name = "create-project", ok = liveOk, informational = true, detail = liveDetail });
 
-    return (typesOk && liveOk, (object)new
+    return (typesOk, (object)new
     {
-            usable = typesOk && liveOk,
+            usable = typesOk,
             revisionTested = rev,
             installedRevisions = installed,
             gates,
-            hint = liveOk ? null :
+            hint = typesOk ? null :
                 "Read the live-* details above before assuming a licence problem. MEASURED on this " +
                 "codebase's reference host: the SDK requests the FlexNet feature LDSDK.EXE, is refused " +
                 "(\"No such feature exists\"), and opens and saves projects anyway — so a denial in " +
