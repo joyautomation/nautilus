@@ -94,6 +94,8 @@ func newFakeLogixd(t *testing.T) (*fakeLogixd, string, func()) {
 			ok(map[string]any{"connected": "Online"})
 		case strings.HasSuffix(r.URL.Path, "/mode"):
 			ok(map[string]any{"mode": "Run"})
+		case strings.HasSuffix(r.URL.Path, "/download"):
+			ok(map[string]any{"downloaded": "p", "elapsedMs": 9})
 		case strings.HasSuffix(r.URL.Path, "/build"):
 			ok(map[string]any{"target": "EchoController", "elapsedMs": 11})
 		case strings.HasSuffix(r.URL.Path, "/save"):
@@ -252,6 +254,36 @@ func TestLogixBuildRejectsAnUnknownTarget(t *testing.T) {
 	}
 	if code := runLogixBuild([]string{"--agent", url, "--target", "echo", proj}); code != 0 {
 		t.Error("--target echo should be accepted")
+	}
+}
+
+// A download stops a controller and resets its tags. The only thing
+// standing between a recalled shell command and an outage is this refusal,
+// so it is worth more test than the code it guards.
+func TestLogixDownloadRefusesWithoutConfirmation(t *testing.T) {
+	f, url, stop := newFakeLogixd(t)
+	defer stop()
+	proj := writeTemp(t, "p.ACD", "x")
+
+	if code := runLogixDownload([]string{
+		"--agent", url, "--comm-path", "backplane\\0", proj,
+	}); code == 0 {
+		t.Fatal("a download without --yes was accepted")
+	}
+	// And it must not have touched the agent at all.
+	for _, seen := range f.seen {
+		if strings.Contains(seen, "download") {
+			t.Errorf("the refusal still reached the agent: %s", seen)
+		}
+	}
+}
+
+func TestLogixDownloadRequiresACommPath(t *testing.T) {
+	_, url, stop := newFakeLogixd(t)
+	defer stop()
+	proj := writeTemp(t, "p.ACD", "x")
+	if code := runLogixDownload([]string{"--agent", url, "--yes", proj}); code == 0 {
+		t.Error("a download with no --comm-path was accepted")
 	}
 }
 

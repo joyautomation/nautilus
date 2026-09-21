@@ -56,6 +56,8 @@ to a logixd agent on the licensed Windows machine (tools/logixd):
                                        Import rungs into a routine; with
                                        --comm-path and --accept/--finalize,
                                        an ONLINE EDIT of a running controller.
+  nautilus logix download <proj.ACD>   Download a project to a controller.
+                                       STOPS it and resets tags; needs --yes.
   nautilus logix drift <repo.L5X>      Does the controller still match the
                                        repo? --comm-path names the controller.
 
@@ -114,6 +116,8 @@ func runLogix(args []string) int {
 		return runLogixBuild(args[1:])
 	case "push":
 		return runLogixPush(args[1:])
+	case "download":
+		return runLogixDownload(args[1:])
 	case "drift":
 		return runLogixDrift(args[1:])
 	default:

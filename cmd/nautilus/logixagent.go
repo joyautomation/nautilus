@@ -50,6 +50,10 @@ const logixAgentUsage = `nautilus logix — agent-backed verbs (need a logixd ag
                                   Import rungs into a routine. With
                                   --comm-path and --accept or --finalize this
                                   is an ONLINE EDIT of a running controller.
+  nautilus logix download <project.ACD>
+                                  Download a whole project to a controller.
+                                  STOPS IT and resets its tags — requires
+                                  --yes, and --comm-path.
   nautilus logix drift <local.L5X>
                                   Upload what is really in the controller,
                                   normalize both sides, and report whether
@@ -442,6 +446,72 @@ func runLogixPush(args []string) int {
 			return reportErr("push", err)
 		}
 		fmt.Printf("wrote %s\n", *outPath)
+	}
+	return 0
+}
+
+// --- download -------------------------------------------------------------
+
+// A download is the one verb here that can stop a plant. It therefore
+// refuses to run on a flag it could have been given by accident: --yes is
+// required, and the message says exactly what will happen. Anything less
+// and a shell-history recall at the wrong moment is an outage.
+func runLogixDownload(args []string) int {
+	fs := flag.NewFlagSet("logix download", flag.ContinueOnError)
+	agent, token := agentFlags(fs)
+	commPath := fs.String("comm-path", "", "controller to download to (required)")
+	programMode := fs.Bool("program-mode", false,
+		"put the controller in Program mode first; the SDK will NOT do this for you")
+	yes := fs.Bool("yes", false, "confirm: this stops the controller and resets its tags")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 || *commPath == "" {
+		fmt.Fprintln(os.Stderr, "usage: nautilus logix download --comm-path <path> [--program-mode] --yes <project.ACD>")
+		return 2
+	}
+	if !*yes {
+		fmt.Fprintf(os.Stderr,
+			"nautilus logix download: refusing without --yes.\n\n"+
+				"  A download STOPS the controller at %s and RESETS its tags to\n"+
+				"  project values. Unlike Logix Designer, the SDK will not change the\n"+
+				"  controller mode for you and does not check that it is right.\n\n"+
+				"  Re-run with --yes when you mean it.\n", *commPath)
+		return 2
+	}
+
+	c := logixd.New(*agent, *token)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
+	defer cancel()
+
+	runID := newRunID()
+	rel, err := stage(ctx, c, runID, fs.Arg(0))
+	if err != nil {
+		return reportErr("download", err)
+	}
+	s, err := c.Open(ctx, rel)
+	if err != nil {
+		return reportErr("download", err)
+	}
+	defer s.Close(context.Background())
+
+	if _, err := s.SetCommPath(ctx, *commPath); err != nil {
+		return reportErr("download", err)
+	}
+	if mode, err := s.Mode(ctx); err == nil {
+		fmt.Printf("controller at %s is %s\n", *commPath, mode)
+	}
+	evs, err := s.Download(ctx, *programMode)
+	printEvents(evs)
+	if err != nil {
+		return reportErr("download", err)
+	}
+	fmt.Printf("downloaded %s to %s\n", filepath.Base(fs.Arg(0)), *commPath)
+	if mode, err := s.Mode(ctx); err == nil {
+		fmt.Printf("controller is now %s — the SDK does not put it back in Run for you\n", mode)
+	}
+	if _, err := s.GoOffline(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: going offline: %v\n", err)
 	}
 	return 0
 }
