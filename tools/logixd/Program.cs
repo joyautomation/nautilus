@@ -625,6 +625,31 @@ static class Probes
             : "no Logix Designer found under Studio 5000\\Logix Designer\\ENU",
     });
 
+    // Is anyone logged on at the console? This is a gate, not trivia.
+    //
+    // MEASURED on the reference host: every SDK call that needs a
+    // FactoryTalk token (Open, SaveAs, CreateNewProject) succeeded while a
+    // user was logged on driving Logix Designer, and every one of them
+    // began timing out inside GetTokenForUserAsync once that session ended
+    // — including across a full reboot, with no console logon at all.
+    // Calls that need no token (GetProcessorTypes) keep working throughout.
+    //
+    // If that holds, logixd cannot run truly headless: FactoryTalk
+    // authentication wants an interactive desktop, and an agent started by
+    // a service manager or by WMI has none. Stated here so the next person
+    // sees it in ten seconds instead of rediscovering it.
+    var interactive = Process.GetProcessesByName("explorer").Length > 0;
+    gates.Add(new
+    {
+        name = "interactive-session",
+        ok = interactive,
+        detail = interactive
+            ? "a user is logged on at the console"
+            : "nobody is logged on at the console — FactoryTalk token calls " +
+              "(Open, SaveAs, CreateNewProject) are expected to time out; calls that need no " +
+              "token (GetProcessorTypes) will still work",
+    });
+
     // The live gate. It must exercise the whole stack — FTSP auth, the gRPC
     // channel, the Logix services for that revision — WITHOUT depending on
     // any string the prober guessed.

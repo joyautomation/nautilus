@@ -1516,3 +1516,67 @@ failing gate. **The moment an activation lands, it runs with no edit.**
 3. `.github/workflows/logix.yml` has the self-hosted job ready; flip the
    repo variable `LOGIX_SELF_HOSTED=true` once a runner labelled `logix-sdk`
    exists on the licensed box.
+
+
+---
+
+## 19. FactoryTalk authentication needs a logged-on desktop (2026-09-21)
+
+The strongest hypothesis this session produced, and the one that explains
+every observation. **Stated as a hypothesis, not a fact — the confirming
+test has not been run.**
+
+### The pattern
+
+| Time | Console session | SDK call needing a token | Result |
+|---|---|---|---|
+| 08:17 | user driving Logix Designer | `Open` + `SaveAs` | **worked**, 22.6 s |
+| 08:35 | user still on the box | `Open` + `SaveAs` ×2 | **worked**, 23.2 s / 12.2 s |
+| 08:37 | user still on the box | `CreateNewProject` (Rockwell's example) | **worked**, 15.6 s, 3.8 MB ACD |
+| 08:38–08:45 | session ending | everything needing a token | timeouts in `GetTokenForUserAsync` |
+| 08:50 | **rebooted — no console logon at all** | `Open`, `CreateNewProject` | timeouts |
+| throughout | — | `GetProcessorTypes` (**no token**) | **always works**, 106 types |
+
+After the reboot there is no `explorer.exe` on the machine: nobody is
+logged on at the console. Every call that needs a FactoryTalk token fails;
+the one that does not need one is unaffected.
+
+### Why this matters far more than it looks
+
+**If it holds, `logixd` cannot run truly headless.** An agent started by a
+service manager, by a scheduled task, or by WMI has no interactive desktop,
+so FactoryTalk has no user session to mint a token for — and the whole
+"CI runner drives the SDK unattended" half of §15.2 depends on solving
+exactly that.
+
+Possible answers, none yet tested:
+
+1. Configure FactoryTalk for non-interactive authentication — a FactoryTalk
+   user with stored credentials, or Single Sign-On disabled so the SDK
+   authenticates explicitly rather than against the logged-on user.
+2. Run the agent under an auto-logon console session (a logged-on kiosk
+   user). Ugly, common in plants, and probably what most SDK users do
+   without realising why.
+3. Find whether `FtspAdapterLDSDK.exe` accepts explicit credentials. The
+   client spawns it over a named pipe; running it by hand reports
+   *"Invalid or missing pipe name argument."* and no spawn was ever observed
+   during a failing login, which suggests the login fails before reaching
+   it.
+
+### How to confirm, in two minutes
+
+Log on to ECHO1 at the console (incus console or RDP), leave the session
+open, and run `nautilus logix probe`. If `create-project` flips to ok, the
+hypothesis holds and option 1 above becomes the next piece of work.
+
+The probe now reports an **`interactive-session`** gate for exactly this
+reason, so the next person sees it rather than rediscovering it.
+
+### What is NOT the cause — all ruled out by measurement
+
+Licensing (`LDSDK.EXE` is denied even when calls succeed — §18), the
+processor-type argument, the temp path, the `CancellationToken` overload,
+the event logger, dependency versions, Server GC, running as `logixd.exe`
+versus the `dotnet` host, stale server-side state, and a stale
+`RSsvr.log`. Rockwell's own shipped example fails identically, which is
+what finally moved the search off this codebase.
