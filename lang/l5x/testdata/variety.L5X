@@ -201,6 +201,12 @@
 </Routines>
 </Program>
 </Programs>
-<Tasks/>
+<Tasks>
+<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500" DisableUpdateOutputs="false" InhibitTask="false">
+<ScheduledPrograms>
+<ScheduledProgram Name="MainProgram"/>
+</ScheduledPrograms>
+</Task>
+</Tasks>
 </Controller>
 </RSLogix5000Content>
