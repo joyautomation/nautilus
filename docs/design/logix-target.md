@@ -463,13 +463,14 @@ for the nautilus runtime than a leaky imitation of it.
 
 Run them on `rockwell-vm`; no hardware and no customer system is involved.
 
-> **Measured 2026-09-20: `rockwell-vm` has no valid Logix Designer license
-> either, so *every* SDK-dependent spike is blocked** — not just the two that
-> need a controller. Running the previously-working converter now returns
-> `OperationFailedException: No valid license.` from `LogixProject.Open`. The
-> August conversions ran under an activation that has since lapsed, alongside
-> Echo's. An earlier revision of this brief claimed S2a/S3/S4 could run
-> regardless; that was wrong.
+> **Measured 2026-09-20: every SDK-dependent spike is blocked — but not for the
+> reason first recorded here.** Logix Designer itself *is* licensed on
+> `rockwell-vm` (feature `RS5K_700.EXE`, uncounted node-locked, permanent; the
+> GUI opens v38 projects fine). **The SDK requests a different feature —
+> `LDSDK.EXE` — and that entitlement is absent.** See §13. An earlier revision
+> of this brief concluded "no valid Logix Designer license" from the SDK's
+> error text alone; that was wrong, and the distinction matters because the fix
+> is probably an entitlement request rather than a purchase.
 >
 > **What is still possible needs no Rockwell software at all**: L5X is a text
 > format and there are ~60 exported L5X files (~30 MB) already on disk. S3's
@@ -718,3 +719,60 @@ Two consequences:
    our agent there is a deployment decision with its own authorization, and it
    is not a substitute for a licensed machine of our own. Do not plan Phase 1
    around borrowing it.
+
+---
+
+## 13. The SDK is licensed separately from Logix Designer
+
+Measured 2026-09-20, and it is the most consequential licensing fact in this
+brief.
+
+Running the converter produces `OperationFailedException: No valid license.`
+— unhelpfully generic. Watching `RSsvr.log` during the attempt names the
+actual request:
+
+```
+19:20:54 (flexsvr) UNSUPPORTED: "LDSDK.EXE" (PORT_AT_HOST_PLUS)
+                   LOCAL SERVICE@DESKTOP-07VCTIN (No such feature exists. (-5,346))
+```
+
+Three distinct features, three distinct states:
+
+| Product | FlexNet feature | State on `rockwell-vm` |
+|---|---|---|
+| Studio 5000 Logix Designer (GUI) | `RS5K_700.EXE` | **Licensed** — uncounted, node-locked, permanent |
+| Logix Designer **SDK** | `LDSDK.EXE` | **Absent** — no such feature in any license file |
+| FactoryTalk Logix Echo | `LGXNGEMU.SIM` | **Expired** 2026-09-06 |
+
+**Diagnostic lesson worth keeping:** the SDK's error text says nothing about
+which feature it wanted, and `flexsvr` reports both *absent* and *expired*
+features as "No such feature exists". The only way to tell the three apart is
+to watch `RSsvr.log` during the attempt and read the feature name, then check
+FTA Manager for expiry. Any `logixd` health check should surface the feature
+name, not the SDK's generic message — otherwise every licensing problem looks
+identical in the field.
+
+**Why this is probably good news.** Rockwell's guidance is that the SDK
+requires a **Professional Edition** license or toolkit to activate, and that
+the SDK entitlement must appear separately in FactoryTalk Activation Manager.
+The `700` in `RS5K_700.EXE` is consistent with the 9324-RLD**700** Professional
+catalog line — so the edition entitlement is likely already owned, and what is
+missing is the SDK activation *on this host*. That is an account/support
+request, plausibly at no cost, rather than a new purchase. Rockwell publishes a
+dedicated answer for this exact error ("Logix Designer SDK: no valid license
+found", answer 1139072) — start there.
+
+**It also revises §7.2's first risk.** A Tier A deployment does not need "a
+licensed Studio 5000" per machine; it needs **Studio 5000 Professional plus an
+SDK entitlement** per machine — the top SKU, plus a second line item. Anyone
+running `logixd` needs both. That is a materially worse cost structure for a
+customer-installed agent than previously stated, and it strengthens the case
+for keeping the *online plane* (pure-Go EtherNet/IP) free of any Rockwell
+dependency, since that is the half a customer can deploy for nothing.
+
+**Actions, in one conversation with the distributor:**
+1. SDK entitlement (`LDSDK.EXE`) for `DESKTOP-07VCTIN` — confirm it is covered
+   by the existing Professional license.
+2. Echo renewal (`LGXNGEMU.SIM`) on AEP1 — see §10.
+3. Ask what both look like for a *customer-installed* agent, since that is the
+   Tier A deployment story.
