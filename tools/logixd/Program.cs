@@ -595,7 +595,10 @@ app.MapPost("/v1/upload-to-new", async (UploadToNewReq req, CancellationToken ct
                 statusCode: StatusCodes.Status403Forbidden);
         var dest = Resolve(req.Output);
         Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-        using var p = await LogixProject.UploadToNewProjectAsync(req.CommPath, dest, log, ct);
+        // projectFilePath FIRST, then commPath. Reversed, the SDK reports
+        // "Invalid file extension" naming the comm path — which is a good
+        // error, and still took a live run to notice.
+        using var p = await LogixProject.UploadToNewProjectAsync(dest, req.CommPath, log, ct);
         return Ok(new { output = req.Output, bytes = new FileInfo(dest).Length }, log);
     }
     catch (Exception ex) { return Fail(ex, log); }

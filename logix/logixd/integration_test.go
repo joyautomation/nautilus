@@ -396,6 +396,42 @@ func TestSDKPartialExport(t *testing.T) {
 	t.Logf("exported %s -> %d bytes", execs[0], len(raw))
 }
 
+// UploadToNewProject is the read half of drift detection, and its argument
+// order is a trap: projectFilePath comes FIRST, commPath second. Reversed,
+// the SDK reports "Invalid file extension" naming the comm path — a good
+// error that still shipped unnoticed until this ran against real hardware.
+func TestSDKUploadFromController(t *testing.T) {
+	c := agent(t)
+	requireSDK(t, c)
+	commPath := os.Getenv("NAUTILUS_LOGIXD_COMM_PATH")
+	if commPath == "" {
+		t.Skip("set NAUTILUS_LOGIXD_COMM_PATH to upload from a controller")
+	}
+	cx := ctx(t, 45*time.Minute)
+
+	id := runID(t)
+	acd := path.Join(id, "uploaded.ACD")
+	l5x := path.Join(id, "uploaded.L5X")
+
+	if _, err := c.UploadToNew(cx, commPath, acd); err != nil {
+		t.Fatalf("upload from %s: %v", commPath, err)
+	}
+	// Rendering it as L5X is what makes it comparable with the repo, and
+	// is the rest of what `nautilus logix drift` does.
+	res, _, err := c.Convert(cx, acd, l5x, false)
+	if err != nil {
+		t.Fatalf("convert the upload: %v", err)
+	}
+	raw, err := c.GetFile(cx, l5x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "<RSLogix5000Content") {
+		t.Fatalf("upload did not render as an L5X: %.200s", raw)
+	}
+	t.Logf("uploaded the controller and rendered %d bytes of L5X", res.Bytes)
+}
+
 // --- tier 2, online: the correction in §9 of logix-sdk-api.md, tested -----
 
 // TestSDKOnlineRungImport is the one that matters. It exports a routine's
