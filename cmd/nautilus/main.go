@@ -46,6 +46,11 @@ Usage:
                           committed, so what deploys is always readable.
   nautilus eip <cmd>      EtherNet/IP tools: import (browse a Logix controller
                           and generate types + tag manifest) and browse.
+  nautilus logix <cmd>    Allen-Bradley Logix tools, all offline: import an
+                          L5X export's UDTs and tags (descriptions included,
+                          which a live browse cannot recover), graph an RLL
+                          routine for the ladder preview, normalize an export
+                          so drift is detectable, info.
   nautilus sparkplug <cmd> Sparkplug B host tools: import (listen to a group
                           and generate types + manifest + tag file), browse,
                           and tags (re-derive the tag file, no broker).
@@ -101,6 +106,8 @@ func main() {
 		os.Exit(runNew(os.Args[2:]))
 	case "eip":
 		os.Exit(runEIP(os.Args[2:]))
+	case "logix":
+		os.Exit(runLogix(os.Args[2:]))
 	case "sparkplug":
 		os.Exit(runSparkplug(os.Args[2:]))
 	case "modbus":

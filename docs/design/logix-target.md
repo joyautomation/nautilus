@@ -1239,3 +1239,85 @@ Any real deployment needs an answer for tag-value preservation — Studio 5000
 has its own upload/restore of tag values, and whether the SDK exposes enough to
 automate it is unverified. Worth settling before the download path is offered
 to anyone.
+
+---
+
+## 16. `lang/l5x` — built 2026-09-20
+
+Phase 3's reader exists. Pure Go, no Rockwell software, no licence, no
+Windows — exactly as §4.3 predicted, and it took one session.
+
+### What it does
+
+| Call | Out |
+|---|---|
+| `l5x.Parse` | the document model: UDTs, AOIs, tags (descriptions and operand comments included), programs, routines, rungs — each routine and rung carrying **the line it sits on in the L5X**, because the export is the source file here and the viewer addresses rungs by line |
+| `l5x.Types` | the project's UDTs as IEC ST type declarations, via `lang/stgen` |
+| `l5x.TagsYAML` | a nautilus tag file, **with the controller's own tag descriptions** |
+| `l5x.Ladder` | the `lang/ld` render model — the same JSON `nautilus ld graph` emits |
+| `l5x.Normalize` / `Equivalent` | the volatile attributes pinned, so two exports of unchanged code compare equal |
+
+CLI: `nautilus logix import | graph | normalize | info`, structured like
+`nautilus eip import`. `--check` on normalize is drift detection in one
+command.
+
+### Measured, on the corpus
+
+- **55 files, 1,223 routines, 30,403 rungs — every rung parsed.** No
+  failures, no special cases. The neutral text Logix exports is a small,
+  regular language: instructions, `[leg , leg]` branches, a semicolon.
+- **Every file's generated ST compiles**, which is the `stgen` pattern
+  paying for itself — see below.
+- `DemoLine` with every module-defined shape included: 252 KB of valid ST,
+  10 unresolved names, all of them genuinely opaque firmware handles
+  (`MODULE`, `REF_TO_AXIS_*`). Members of an unresolvable type are omitted
+  and reported, never guessed.
+
+### Three things the corpus taught that no spec would have
+
+1. **Logix reserves no words.** Four of the 52 client files have a UDT
+   member named `retain`; `DemoLine` has one named `Constant`. Both are
+   IEC variable qualifiers, so both are parse errors in generated ST.
+   They surfaced as *compile failures from `stgen.Render`*, not as bad
+   files on disk — which is the entire argument for generate-then-compile.
+   Identifiers now route through the ST lexer's own keyword table.
+2. **A Logix UDT has no BOOL members.** An authored BOOL exports as a
+   `Hidden="true"` SINT host plus a visible `BIT` member targeting it at a
+   bit number. Rendering the type anyone actually authored means dropping
+   the hosts and declaring the bits as BOOLs.
+3. **Logix's predefined structures are not in the export.** `TIMER`,
+   `COUNTER` and `CONTROL` are firmware-defined, so a file with a timer
+   tag references a type it never declares. The reader carries their
+   shapes; anything larger and mostly-opaque (`MESSAGE`, `PID`, the
+   motion types) is reported unresolved instead of approximated.
+
+### What it deliberately does not do
+
+It renders. It does not execute, and it never claims a Logix rung and a
+nautilus rung compute the same thing — which is why an instruction the
+reader has never heard of still draws, as a box with its operands, the way
+Studio 5000 draws it. **Zero semantic-equivalence risk was the point** (§8).
+
+Still deferred, as scoped: ST routines → the `lang/st` AST (their text is
+captured verbatim), FBD and SFC bodies (kept as raw XML rather than
+dropped), and anything that WRITES L5X.
+
+### The next step, and it is a real one
+
+**`nautilus logix graph` emits the model; nothing in the editor consumes it
+yet.** The VS Code extension threads `.ld` through ~20 places — a language
+contribution, a custom editor, the diff commands, the active-file
+tracking — and `.L5X` needs the same, plus read-only semantics, since an
+L5X is not an editable nautilus source file. That is the work that turns
+"the model is right" into "the ladder viewer and the revision diff run on
+Allen-Bradley code", and it is a session of its own.
+
+### Fixtures
+
+`lang/l5x/testdata/README.md` says what each one is and why. The short
+version: one verbatim partial export, one real pair differing by a single
+setpoint (trimmed of the 1.8 MB of module-defined types that were almost
+the whole file), and one hand-built file covering every shape the corpus
+taught. The client corpus stays out of the repo and runs on demand:
+
+    NAUTILUS_L5X_CORPUS=/path/to/exports go test ./lang/l5x/

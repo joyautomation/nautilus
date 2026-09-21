@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<RSLogix5000Content SchemaRevision="1.0" TargetName="MainProgram" TargetType="Program" ContainsContext="true" ExportDate="Fri Aug 22 2026" ExportOptions="References NoRawData L5KData DecoratedData Context Dependencies ForceProtectedEncoding AllProjDocTrans">
+<Controller Use="Context" Name="DemoLine">
+<Programs Use="Context">
+<Program Use="Target" Name="MainProgram" TestEdits="false" MainRoutineName="MainRoutine" Disabled="false" UseAsFolder="false">
+<Tags>
+<Tag Name="StartPB" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write"><Data Format="L5K"><![CDATA[0]]></Data><Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data></Tag>
+<Tag Name="StopPB" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write"><Data Format="L5K"><![CDATA[0]]></Data><Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data></Tag>
+<Tag Name="RunCmd" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write"><Data Format="L5K"><![CDATA[0]]></Data><Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data></Tag>
+<Tag Name="HiLevelAlm" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write"><Data Format="L5K"><![CDATA[0]]></Data><Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data></Tag>
+<Tag Name="LevelPct" TagType="Base" DataType="REAL" Radix="Float" Constant="false" ExternalAccess="Read/Write"><Data Format="L5K"><![CDATA[0.00000000e+000]]></Data><Data Format="Decorated"><DataValue DataType="REAL" Radix="Float" Value="0.0"/></Data></Tag>
+<Tag Name="HiLevelSP" TagType="Base" DataType="REAL" Radix="Float" Constant="false" ExternalAccess="Read/Write"><Data Format="L5K"><![CDATA[8.50000000e+001]]></Data><Data Format="Decorated"><DataValue DataType="REAL" Radix="Float" Value="85.0"/></Data></Tag>
+</Tags>
+<Routines>
+<Routine Name="MainRoutine" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N"><Comment><![CDATA[P-101 pump seal-in: Start latches the run command, Stop drops it out]]></Comment><Text><![CDATA[[XIC(StartPB) ,XIC(RunCmd) ]XIO(StopPB)OTE(RunCmd);]]></Text></Rung>
+<Rung Number="1" Type="N"><Comment><![CDATA[LAH-101 high-level alarm when tank level is at or above the setpoint]]></Comment><Text><![CDATA[GEQ(LevelPct,HiLevelSP)OTE(HiLevelAlm);]]></Text></Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+</Programs>
+</Controller>
+</RSLogix5000Content>
