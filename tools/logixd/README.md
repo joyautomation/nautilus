@@ -170,6 +170,7 @@ and the session is dead.
 |---|---|---|
 | GET | `/v1/health` | version, SDK client version, open sessions |
 | GET | `/v1/probe` | the licensing gates |
+| GET | `/v1/linx-config` | the raw FactoryTalk Linx configuration — parsed into comm paths in Go (`logix/logixd/linx.go`), because the agent runs on the machine hardest to test on |
 | GET/PUT/DELETE | `/v1/files/{path}` | the work-directory sandbox |
 | GET | `/v1/files`, `/v1/workdir` | listing, root |
 | POST/GET/DELETE | `/v1/sessions[/{id}]` | open, list, close a project |

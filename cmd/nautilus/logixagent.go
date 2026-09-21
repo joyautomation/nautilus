@@ -34,6 +34,9 @@ const logixAgentUsage = `nautilus logix — agent-backed verbs (need a logixd ag
                                   machine, and if not, which of the three
                                   licensing gates failed?
   nautilus logix agent            Agent health, open sessions, work directory.
+  nautilus logix browse           Every controller FactoryTalk Linx can reach,
+                                  with the comm path that reaches it — so no
+                                  one transcribes one out of a GUI tree.
   nautilus logix convert <in> <out>
                                   Convert between ACD, L5K and L5X in either
                                   direction. --detailed adds References,
@@ -199,6 +202,46 @@ func runLogixAgent(args []string) int {
 				time.Since(s.LastUsed).Round(time.Second))
 		}
 	}
+	return 0
+}
+
+// --- browse ---------------------------------------------------------------
+
+func runLogixBrowse(args []string) int {
+	fs := flag.NewFlagSet("logix browse", flag.ContinueOnError)
+	agent, token := agentFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	c := logixd.New(*agent, *token)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	paths, err := c.CommPaths(ctx)
+	if err != nil {
+		return reportErr("browse", err)
+	}
+	if len(paths) == 0 {
+		fmt.Fprintln(os.Stderr,
+			"No controllers found in the agent's FactoryTalk Linx configuration.\n"+
+				"Browse to the controller once in the FactoryTalk Linx Network Browser —\n"+
+				"nautilus reads what FT Linx has already discovered, it does not scan.")
+		return 1
+	}
+	width := 0
+	for _, p := range paths {
+		if len(p.Path) > width {
+			width = len(p.Path)
+		}
+	}
+	for _, p := range paths {
+		line := fmt.Sprintf("%-*s  %s", width, p.Path, p.Controller)
+		if p.Catalog != "" {
+			line += "  (" + p.Catalog + ")"
+		}
+		fmt.Println(line)
+	}
+	fmt.Fprintf(os.Stderr, "\nPass one as --comm-path to `nautilus logix push` or `drift`.\n")
 	return 0
 }
 

@@ -296,6 +296,33 @@ app.MapGet("/v1/files", () =>
     return Ok(new { workDir, files }, null);
 });
 
+// ------------------------------------------------------- FactoryTalk Linx
+//
+// The agent hands back the raw FT Linx configuration and nothing more; the
+// topology is parsed in Go, where it can be unit-tested against a
+// committed fixture. An agent that parsed it would put the interesting
+// logic on the machine that is hardest to test on.
+//
+// This is local configuration, not a secret: it holds driver names, device
+// addresses and controller names — the same things the FT Linx Network
+// Browser shows anyone sitting at the console.
+
+app.MapGet("/v1/linx-config", () =>
+{
+    var dir = @"C:\ProgramData\Rockwell\RSLinx Enterprise";
+    try
+    {
+        if (!Directory.Exists(dir))
+            return Fail(new FileNotFoundException($"FactoryTalk Linx configuration not found at {dir}"), null);
+        var files = Directory.GetFiles(dir, "RSLinxNG*.xml")
+            .OrderBy(f => f)
+            .Select(f => new { name = Path.GetFileName(f), xml = File.ReadAllText(f) })
+            .ToList();
+        return Ok(new { dir, files }, null);
+    }
+    catch (Exception ex) { return Fail(ex, null); }
+});
+
 // ------------------------------------------------------------------ health
 
 app.MapGet("/v1/health", () => Results.Json(new

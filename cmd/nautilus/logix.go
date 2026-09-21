@@ -47,6 +47,8 @@ to a logixd agent on the licensed Windows machine (tools/logixd):
   nautilus logix probe                 Is the SDK usable, and if not, which
                                        licensing gate failed?
   nautilus logix agent                 Agent health and open sessions.
+  nautilus logix browse                Controllers FactoryTalk Linx can reach,
+                                       and the comm path for each.
   nautilus logix convert <in> <out>    ACD <-> L5X <-> L5K, either direction.
   nautilus logix build <project.ACD>   Compile the logic. No controller, no
                                        risk — this is CI for control code.
@@ -104,6 +106,8 @@ func runLogix(args []string) int {
 		return runLogixProbe(args[1:])
 	case "agent":
 		return runLogixAgent(args[1:])
+	case "browse":
+		return runLogixBrowse(args[1:])
 	case "convert":
 		return runLogixConvert(args[1:])
 	case "build":

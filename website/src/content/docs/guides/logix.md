@@ -173,8 +173,18 @@ nautilus logix push Plant.ACD rungs.L5X \
   --comm-path 'AB_ETH-1\10.0.0.5\Backplane\0' --finalize
 ```
 
-The comm path is a FactoryTalk Linx browse path — read it off the FT Linx
-Network Browser tree: driver, device address, `Backplane`, slot.
+Don't transcribe the comm path out of a GUI. Ask:
+
+```bash
+nautilus logix browse
+# AB_ETH-1\10.0.0.5\Backplane\0   PlantCtl   (1756-L85E)
+```
+
+`browse` reads what FactoryTalk Linx has **already discovered** — it does
+not scan the network — and prints the controller sitting on the end of each
+path, so you pick the one you meant rather than assembling a string and
+hoping. If it finds nothing, browse to the controller once in the FT Linx
+Network Browser and try again.
 
 ### Online edits
 
