@@ -1603,3 +1603,45 @@ the event logger, dependency versions, Server GC, running as `logixd.exe`
 versus the `dotnet` host, stale server-side state, and a stale
 `RSsvr.log`. Rockwell's own shipped example fails identically, which is
 what finally moved the search off this codebase.
+
+
+### 19.1 The confirmed failure, and the likely mechanism (2026-09-21)
+
+Full stack, captured from Rockwell's own `OpenAndSaveFile` example:
+
+```
+System.TimeoutException: The operation has timed out.
+  at FTSP.FactoryTalkServicesPlatformLogin.GetTokenForUserAsync(LoginRequest, CancellationToken)
+  at FTSP.FactoryTalkServicesPlatformLogin.GetTokenForCurrentUserAsync(CancellationToken)
+  at LogixProject.GetAuthToken(CancellationToken)
+  at LogixProject.Open(CancellationToken)
+```
+
+**`GetTokenForCurrentUser`** — the SDK asks FactoryTalk for a token for the
+*currently logged-on user*, and that request times out after ~5 s.
+
+The FactoryTalk Local Directory is configured (`$Local.RnaD`,
+`$System.RnaD`, `FTDSchema.xml` all written 2026-09-20 21:26), so the
+directory exists. What is missing looks like a **FactoryTalk logon session**
+for the calling user, not directory configuration.
+
+That fits the one surviving correlation with an actual mechanism:
+**Logix Designer logs the user into FactoryTalk when it starts.** Every SDK
+call succeeded while it was open; all have failed since. The SDK does not
+log anyone in — it asks for a token for a user it assumes is already logged
+on.
+
+**The test, 30 seconds, and it needs the console:** Start menu → Rockwell
+Software → **"Log On to FactoryTalk"** (`FTLoginLogout.exe`), sign in as the
+Windows user, leave it, then `nautilus logix probe`.
+
+If that is the mechanism, the headless story needs an answer to "who logs
+the agent in", and the candidates are a FactoryTalk user with stored
+credentials, single sign-on against the Windows account, or a logged-on
+service account. None tested.
+
+**Unrelated and working:** opening the Echo dashboard restored the
+emulated controller's CIP binding (it came back on `:44818` bound to the
+Tailscale address after the reboot had left it on loopback only), and
+`nautilus eip browse` reads **673 AEP1_SIM tags** from Linux again. The
+online plane needs none of the above.
