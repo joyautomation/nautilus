@@ -1989,6 +1989,56 @@ through the SDK on ECHO1** — which is exactly what `RxCMP` names. The DataType
 (14k lines), the tags, the rung comments and the conversion path are all
 innocent: the last two rows differ by one instruction and nothing else.
 
+### Confirmed in the GUI — it is not the SDK
+
+Opening DemoLine in Logix Designer on ECHO1 and verifying reproduces it with no
+SDK involved. Rung 1 carries a red error marker and the GEQ block renders as:
+
+```
+GEQ
+GEQ        LevelPct
+Unknown    HiLevelSP
+```
+
+Those operand labels should read `Source A` and `Source B`. Logix Designer
+itself cannot resolve the GEQ instruction's operand descriptors — which is
+precisely what "invalid op type" means. The SDK was reporting a real defect in
+the installation it sits on.
+
+A second, independent reproduction: take `tags-only.ACD` (builds in 1.0s) and
+import a single GEQ rung through the SDK's own
+`PartialImportRungsFromXmlFileAsync` — the import reports `Errors="0"` in
+1.6s, and the resulting project then fails to build with the same error. So
+the trigger is the instruction, not hand-authored XML and not the L5X→ACD
+conversion path.
+
+### What the install looks like
+
+ECHO1 has Studio 5000 Logix Designer v38.01.00 with `rll.dll` v38.01.00 and its
+full set of `rll*.dll` language resources present, so the ladder language
+component is not missing. (An earlier guess that `RLLLang.dll` was absent was
+wrong — ladder's DLL is simply named `rll.dll`, unlike `ESQLang`/`FBDLang`/
+`SFCLang`/`STXLang`. Tested, not assumed.) Two oddities worth a look during a
+repair, neither yet tied to the failure:
+
+- `Logix Designer Motion Database` is **36.16** against a v38 Designer.
+- `Logix Designer System Updates` is **31.17**, suggesting later patch rollups
+  were never applied.
+- FactoryTalk Activation grants `RSLogix 5000 Full` with feature version
+  **1.00**, not a v38-era feature version.
+
+Chasing the exact binary that emits `RxCMP_E_AUDIT_INVALIDOPTYPE` was
+abandoned deliberately: it does not change the remedy, which is a Rockwell-side
+repair of the v38 installation.
+
+### What still works, so the demo is not blocked
+
+Everything except `build` and `download`: the `lang/l5x` reader, ladder
+rendering and revision diff in VS Code, `logix convert` (both directions),
+`logix push` (rung import succeeds cleanly), `logix browse`, `normalize` and
+file-based `drift`. Only the two verbs that invoke the Logix compiler are
+affected, and only for projects containing a compare.
+
 ### Why this matters more than one fixture
 
 Every one of the 52 files in the local corpus uses a comparison instruction.
