@@ -1520,7 +1520,15 @@ failing gate. **The moment an activation lands, it runs with no edit.**
 
 ---
 
-## 19. The FactoryTalk token failure — what it is not (2026-09-21)
+## 19. The FactoryTalk token failure — SOLVED (2026-09-21)
+
+> **ROOT CAUSE, found by reading the SDK's own binaries rather than guessing:
+> setting `DOTNET_ROOT` to an x64 .NET install breaks the SDK's FactoryTalk
+> login. See §19.5. Everything in §19.1–§19.4 below is the three-hour
+> investigation that preceded it, and every conclusion in it is wrong —
+> including "this is a vendor support case". It is kept because the method
+> failure is the lesson.**
+
 
 This section proposed that FactoryTalk authentication needs a logged-on
 desktop. **That was tested and it is false.** The section is kept, with the
@@ -1792,3 +1800,92 @@ Everything needed is now measured:
 later shown to be artifacts of an uncontrolled comparison (§19.3), and a
 controlled time series showing the remaining candidate is also wrong
 (§19.4). Nothing further is learnable from this side.
+
+
+### 19.5 ROOT CAUSE: `DOTNET_ROOT` must not point at an x64 install
+
+**`FtspAdapterLDSDK.exe` is a 32-bit process.**
+
+```
+$ file FtspAdapter/FtspAdapterLDSDK.exe
+PE32 executable (console) Intel 80386, for MS Windows
+```
+
+It is a framework-dependent .NET **apphost** (it references
+`FtspAdapterLDSDK.dll` and `FtspAdapterLDSDK.runtimeconfig.json` internally)
+that COM-interops with FactoryTalk Security — `FactoryTalk.Security.Interop`,
+`IRNASecurityLogin`, `IRNASecurityToken`, `RNAGLOBALSCOPECLSID`. Being
+32-bit is not incidental: the entire Rockwell stack lives under
+`Program Files (x86)`.
+
+And the client's side of it, from the same binary's metadata:
+`NamedPipeServerStream`, `LoginRequest`, `LoginResult`, `LoginCurrentUser`.
+So `GetTokenForCurrentUserAsync` **creates a named-pipe server, launches the
+32-bit adapter, and waits ~5 s for it to connect.**
+
+`DOTNET_ROOT` tells a .NET apphost where to find its runtime. Point it at an
+**x64** install and the **32-bit** adapter cannot resolve a runtime, dies
+instantly, never connects the pipe, and the client reports:
+
+```
+System.TimeoutException: The operation has timed out.
+  at FTSP.FactoryTalkServicesPlatformLogin.GetTokenForUserAsync(...)
+```
+
+A bare timeout, no message, no error code, nothing in any log — for a
+missing 32-bit runtime path.
+
+**Proof.** Same scheduled task, same console session, 17 seconds apart, one
+variable:
+
+```
+09:53:19  DOTNET_ROOT=C:\dotnet10   OpenAndSaveFile.exe   FAIL  TimeoutException
+09:53:36  (unset)                   OpenAndSaveFile.exe   OK    exit=0
+```
+
+**Every earlier observation now fits.** The "working windows" were runs whose
+harness happened not to set `DOTNET_ROOT`; the failures were runs where it
+did. It was never time-dependent, never the session, never the app type,
+never Logix Designer, never the licence. §19.4's twelve consecutive failures
+were twelve runs of a batch file whose first line was
+`set DOTNET_ROOT=C:\dotnet10`.
+
+**The fix.** Use the architecture-specific variable, which only the matching
+host reads:
+
+```bat
+set DOTNET_ROOT=
+set DOTNET_ROOT_X64=C:\dotnet10
+```
+
+The x64 host still finds the ASP.NET shared framework logixd needs; the
+32-bit adapter resolves its runtime normally. With that change every probe
+gate passes, including `create-project`.
+
+**Where the variable came from.** Us. `DOTNET_ROOT` was set to fix a
+completely unrelated problem — `logixd.exe` could not find
+`Microsoft.AspNetCore.App` because the machine-default .NET install is x86
+and lacks it (`tools/logixd/README.md` documents that). The fix for one
+architecture mismatch created another, in a component nobody knew was
+32-bit.
+
+### 19.6 The method lesson, which is the expensive part
+
+Twelve theories were eliminated in §19.2 and two of those eliminations were
+later shown to be artifacts (§19.3). The investigation ran for three hours
+and concluded, wrongly, that this was a vendor bug.
+
+What actually found it, in about ten minutes: **reading the binaries.**
+`file`, then `strings` over the client DLL and the adapter. The answer —
+`PE32`, `Intel 80386` — was sitting in a shipped artifact the whole time.
+
+Three rules earned the hard way:
+
+1. **When a test and its control disagree, run them in the same process
+   invocation.** Every misleading result came from comparing runs minutes
+   apart on a host whose harness differed between them.
+2. **Audit the harness before the subject.** The variable that broke this
+   was in the batch file, not the product. It was never printed, never
+   compared, never suspected.
+3. **Read the implementation before theorising about it.** A vendor "black
+   box" is usually a PE file you can inspect in seconds.

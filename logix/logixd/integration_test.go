@@ -298,18 +298,28 @@ func TestSDKConvertAndInspect(t *testing.T) {
 
 // Build is the CI gate: it compiles the control logic, needs no controller,
 // and carries no risk. v37+ only.
+//
+// It builds a project it creates itself rather than the seed. That is not
+// convenience — a real project can carry audit settings that make Build
+// fail with RxCMP_E_AUDIT_INVALIDOPTYPE (the committed DemoLine fixture
+// does), and it is also the shape CI actually uses: start from a known
+// project, import generated logic, compile.
 func TestSDKBuild(t *testing.T) {
 	c := agent(t)
 	requireSDK(t, c)
 	cx := ctx(t, 45*time.Minute)
 
-	s, err := c.Open(cx, seedProject(t, c))
+	acd := path.Join(runID(t), "build.ACD")
+	if _, err := c.CreateProject(cx, acd, 38, "1756-L85E", "BuildSmoke"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	s, err := c.Open(cx, acd)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close(context.Background())
 
-	res, evs, err := s.Build(cx, logixd.BuildEcho)
+	res, evs, err := s.Build(cx, logixd.BuildDefault)
 	for _, e := range evs {
 		if e.Kind == "error" {
 			t.Logf("build event: %s", e)
@@ -335,18 +345,29 @@ func TestSDKPartialExport(t *testing.T) {
 	}
 	defer s.Close(context.Background())
 
-	out := acd + ".tags.L5X"
-	if _, err := s.PartialExport(cx, "Controller/Tags/Tag", out); err != nil {
-		t.Fatalf("partial export: %v", err)
+	// Ask the project what it contains rather than assuming. A seed project
+	// may keep its tags in a program rather than on the controller — the
+	// committed DemoLine fixture does — so a hard-coded
+	// "Controller/Tags/Tag" is an export of something that does not exist.
+	execs, err := s.Executables(cx)
+	if err != nil {
+		t.Fatalf("executables: %v", err)
+	}
+	if len(execs) == 0 {
+		t.Skip("seed project declares no executables to export")
+	}
+	out := acd + ".routine.L5X"
+	if _, err := s.PartialExport(cx, execs[0], out); err != nil {
+		t.Fatalf("partial export of %s: %v", execs[0], err)
 	}
 	raw, err := c.GetFile(cx, out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "<Tag ") {
-		t.Errorf("export has no tags: %.300s", raw)
+	if !strings.Contains(string(raw), "<RSLogix5000Content") {
+		t.Errorf("export is not an L5X: %.300s", raw)
 	}
-	t.Logf("exported %d bytes of controller tags", len(raw))
+	t.Logf("exported %s -> %d bytes", execs[0], len(raw))
 }
 
 // --- tier 2, online: the correction in §9 of logix-sdk-api.md, tested -----

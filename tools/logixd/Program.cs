@@ -309,8 +309,9 @@ app.MapPost("/v1/sessions", async (OpenReq req, CancellationToken ct) =>
 {
     try
     {
-        var s = await sessions.OpenAsync(req.Project,
-            log => LogixProject.OpenLogixProjectAsync(req.Project, log, ct), ct);
+        var projectPath = Resolve(req.Project);
+        var s = await sessions.OpenAsync(projectPath,
+            log => LogixProject.OpenLogixProjectAsync(projectPath, log, ct), ct);
         return Ok(new { session = s.Id, project = s.ProjectPath, openedAt = s.OpenedAt }, s.Log);
     }
     catch (Exception ex) { return Fail(ex, null); }
@@ -337,16 +338,19 @@ app.MapPost("/v1/convert", async (ConvertReq req, CancellationToken ct) =>
     var log = new CollectingLogger();
     try
     {
-        var s = await sessions.OpenAsync(req.Input,
-            l => LogixProject.OpenLogixProjectAsync(req.Input, l, ct), ct);
+        var input = Resolve(req.Input);
+        var output = Resolve(req.Output);
+        Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+        var s = await sessions.OpenAsync(input,
+            l => LogixProject.OpenLogixProjectAsync(input, l, ct), ct);
         try
         {
             await s.RunAsync(async p =>
             {
-                await p.SaveAsAsync(req.Output, req.Force, req.DetailedL5x, ct);
+                await p.SaveAsAsync(output, req.Force, req.DetailedL5x, ct);
                 return 0;
             }, ct);
-            var len = new FileInfo(req.Output).Length;
+            var len = new FileInfo(output).Length;
             return Ok(new { input = req.Input, output = req.Output, bytes = len, detailedL5x = req.DetailedL5x }, s.Log);
         }
         finally { await sessions.CloseAsync(s.Id); }
@@ -359,9 +363,11 @@ app.MapPost("/v1/create", async (CreateReq req, CancellationToken ct) =>
     var log = new CollectingLogger();
     try
     {
+        var target = Resolve(req.Project);
+        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
         using var p = await LogixProject.CreateNewProjectAsync(
-            req.Project, req.MajorRevision, req.ProcessorType, req.ControllerName, log, ct);
-        return Ok(new { project = req.Project, bytes = new FileInfo(req.Project).Length }, log);
+            target, req.MajorRevision, req.ProcessorType, req.ControllerName, log, ct);
+        return Ok(new { project = req.Project, bytes = new FileInfo(target).Length }, log);
     }
     catch (Exception ex) { return Fail(ex, log); }
 });
@@ -370,7 +376,9 @@ app.MapPost("/v1/sessions/{id}/save", async (string id, SaveReq? req, Cancellati
     await WithSession(id, async s =>
     {
         if (string.IsNullOrEmpty(req?.Path)) { await s.Project.SaveAsync(ct); return new { saved = s.ProjectPath }; }
-        await s.Project.SaveAsAsync(req!.Path!, req.Force, req.DetailedL5x, ct);
+        var dest = Resolve(req!.Path!);
+        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+        await s.Project.SaveAsAsync(dest, req.Force, req.DetailedL5x, ct);
         return new { saved = req.Path! };
     }, ct));
 
@@ -397,9 +405,11 @@ app.MapPost("/v1/sessions/{id}/partial-export", async (string id, PartialExportR
     {
         // The SDK refuses to overwrite; deleting first makes the endpoint
         // idempotent, which is what a re-run of a CI job needs.
-        if (req.Force && File.Exists(req.Output)) File.Delete(req.Output);
-        await s.Project.PartialExportToXmlFileAsync(req.XPath, req.Output, ct);
-        return new { xpath = req.XPath, output = req.Output, bytes = new FileInfo(req.Output).Length };
+        var dest = Resolve(req.Output);
+        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+        if (req.Force && File.Exists(dest)) File.Delete(dest);
+        await s.Project.PartialExportToXmlFileAsync(req.XPath, dest, ct);
+        return new { xpath = req.XPath, output = req.Output, bytes = new FileInfo(dest).Length };
     }, ct));
 
 // Offline-only. Honours per-node Use="Delete|Create|Update|Overwrite|Ignore",
@@ -408,7 +418,7 @@ app.MapPost("/v1/sessions/{id}/partial-import", async (string id, PartialImportR
     await WithSession(id, async s =>
     {
         var collision = ParseEnum(req.Collision, LogixProject.ImportCollisionOptions.OverwriteOnColl);
-        await s.Project.PartialImportFromXmlFileAsync(req.XPath, req.File, collision, req.ContinueOnErrors, ct);
+        await s.Project.PartialImportFromXmlFileAsync(req.XPath, Resolve(req.File), collision, req.ContinueOnErrors, ct);
         return new { xpath = req.XPath, file = req.File, collision = collision.ToString() };
     }, ct));
 
@@ -419,7 +429,7 @@ app.MapPost("/v1/sessions/{id}/partial-import-with-target", async (string id, Pa
     await WithSession(id, async s =>
     {
         var opt = ParseEnum(req.OnlineOption, LogixProject.PartialImportOption.LeaveEdits);
-        await s.Project.PartialImportWithTargetFromXmlFileAsync(req.XPath, req.TargetName, req.File, opt, ct);
+        await s.Project.PartialImportWithTargetFromXmlFileAsync(req.XPath, req.TargetName, Resolve(req.File), opt, ct);
         return new { xpath = req.XPath, targetName = req.TargetName, file = req.File, onlineOption = opt.ToString() };
     }, ct));
 
@@ -433,7 +443,7 @@ app.MapPost("/v1/sessions/{id}/import-rungs", async (string id, ImportRungsReq r
         var opt = ParseEnum(req.OnlineOption, LogixProject.PartialImportOption.LeaveEdits);
         var sw = Stopwatch.StartNew();
         await s.Project.PartialImportRungsFromXmlFileAsync(
-            req.XPath, req.InsertPosition, req.ReplaceCount, req.File, opt, ct);
+            req.XPath, req.InsertPosition, req.ReplaceCount, Resolve(req.File), opt, ct);
         return new
         {
             xpath = req.XPath,
@@ -527,8 +537,10 @@ app.MapPost("/v1/upload-to-new", async (UploadToNewReq req, CancellationToken ct
         if (commAllow.Length > 0 && !commAllow.Contains(req.CommPath, StringComparer.OrdinalIgnoreCase))
             return Results.Json(new { ok = false, error = new { kind = "forbidden", message = $"comm path '{req.CommPath}' is not in this agent's allowlist" } },
                 statusCode: StatusCodes.Status403Forbidden);
-        using var p = await LogixProject.UploadToNewProjectAsync(req.CommPath, req.Output, log, ct);
-        return Ok(new { output = req.Output, bytes = new FileInfo(req.Output).Length }, log);
+        var dest = Resolve(req.Output);
+        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+        using var p = await LogixProject.UploadToNewProjectAsync(req.CommPath, dest, log, ct);
+        return Ok(new { output = req.Output, bytes = new FileInfo(dest).Length }, log);
     }
     catch (Exception ex) { return Fail(ex, log); }
 });
