@@ -1145,3 +1145,97 @@ boot), generalizing the SDK's "No valid license" to Logix Designer, and
 assuming a CodeMeter screenshot came from the host under discussion. They are
 left in §13.x rather than silently edited out, because each one is a trap the
 next person would fall into the same way.
+
+---
+
+## 15. Never leaving VS Code, and CI-driven download
+
+Raised 2026-09-20 and load-bearing for adoption: **if the workflow requires a
+human to drive Studio 5000's File→Import, the product is dead.** Nobody will
+alt-tab between VS Code and Logix Designer to ship a change.
+
+### 15.1 The GUI is not required
+
+It is not required, and that is precisely what the SDK is for. Every step of
+the loop has an API:
+
+| Step | SDK call | GUI equivalent being replaced |
+|---|---|---|
+| Make/choose the project | `create_new_project`, `open_logix_project` | File → New / Open |
+| **Get generated code in** | **`partial_import_from_xml_file`** | **File → Import → Component** |
+| Get code out | `partial_export_to_xml_file` | File → Export |
+| Compile / verify | `build_project` | Verify Controller |
+| Set the target | `set_communications_path` | Who Active |
+| Ship it | `download` | Download |
+| Read it back | `upload_project`, `upload_to_new_project` | Upload |
+| Mode / online state | `change_controller_mode`, `go_online`, `read_connected_state` | the mode switch |
+| Values, offline or online | `get_tag_value` / `set_tag_value` (`OperationMode.OFFLINE｜ONLINE`) | tag editor |
+
+`partial_import_from_xml_file` takes an XPath and an L5X file and merges it into
+the project with a collision policy — the SDK's own example addresses both a
+whole program (`Controller/Programs/Program[@Name='MainProgram']`) and **a rung
+range** (`…/RLLContent/Rung[@Number>='1'][@Number<='2']`). That is finer-grained
+than most people drive the GUI.
+
+**So the honest limitation is narrow:** the SDK exposes no online-edit
+(test/assemble/accept) API, so *changing a running controller without stopping
+it* still requires Logix Designer. Everything else — author, generate, import,
+verify, download, upload, diff, monitor, write values — is scriptable, and the
+monitoring half needs no Rockwell software at all (§4.1).
+
+That is a workflow a developer will actually adopt: **VS Code for authoring and
+review, `logixd` for the project lifecycle, EtherNet/IP for live values, and
+Studio 5000 only when someone genuinely needs an online edit.**
+
+**Verification status, stated precisely.** The table above is drawn from the
+SDK's shipped examples and the Getting Results Guide — authoritative about what
+*exists*. Of those calls, this session has actually executed only
+`open_logix_project` + `save_as` (§13.5, on ECHO1). `partial_import`, `build`
+and `download` are **S2a/S2b and remain unrun.** Do not quote the table as
+proven until they are.
+
+### 15.2 Download from CI — feasible, with a real gate
+
+Driving a download from GitHub Actions is mechanically straightforward: a
+self-hosted runner on the Windows host, or any runner calling `logixd` over the
+network. The hard part is not the plumbing, it is that **a download stops the
+controller and resets tags to project values.** An unattended pipeline that can
+do that to a live plant is a liability, not a feature.
+
+Split the pipeline so the valuable half carries no risk:
+
+**Always, on every PR — no controller involved, no risk:**
+generate L5X → `partial_import` into a working copy → `build_project` →
+report pass/fail. That is real CI for control logic: it catches what "it
+compiled on my machine" never does, and it needs no plant, no downtime and no
+permission. Most of the value lives here.
+
+**Download — gated, and the gate should be layered:**
+
+1. **Repo-side:** a GitHub Environment with required reviewers. Standard, and
+   it makes the approval auditable next to the diff.
+2. **Agent-side:** `logixd` holds its own allowlist of comm paths in local
+   config, never caller-supplied. A pipeline cannot name a controller the
+   operator has not already blessed.
+3. **Plant-side permissive — the interesting one.** Before asking the SDK to do
+   anything, `logixd` reads a permissive tag over EtherNet/IP (the online
+   plane): `NAUTILUS_DOWNLOAD_PERMIT`, set by operators from the HMI, ideally
+   self-clearing after a window. This is the same permissive pattern plants
+   already use for every other consequential action, which means it needs no
+   new concept to explain to operations — and it puts the final say on the
+   plant floor, where it belongs, rather than in a merge button.
+4. **Preconditions as code:** the same read path can assert process state —
+   line stopped, no active alarms, mode as expected — before proceeding.
+5. **Around the download:** `upload_to_new_project` first and archive it (a
+   rollback artifact and a record of what was actually there), then download,
+   then upload again and diff against what was pushed to prove it landed.
+
+Steps 3–5 are where the two-plane architecture pays off twice: **the online
+plane verifies the pre- and post-conditions while the project plane does the
+work.** Neither half can do it alone.
+
+**Open question for the procedure:** a download resets tags to project values.
+Any real deployment needs an answer for tag-value preservation — Studio 5000
+has its own upload/restore of tag values, and whether the SDK exposes enough to
+automate it is unverified. Worth settling before the download path is offered
+to anyone.
