@@ -7,6 +7,7 @@
 
 import { execFile } from "child_process";
 import * as vscode from "vscode";
+import { graphArgs, isL5X } from "./l5xRouting";
 import { LiveValues } from "./liveValues";
 import {
   addSyncTarget,
@@ -19,12 +20,15 @@ import {
   webviewOptions,
 } from "./fbdPreview";
 
-/** Run `nautilus ld graph -` over source text. `at` is the path the buffer
- * belongs to, so the project's library files — a PROGRAM-less .ld/.fbd/.st
- * holding FUNCTION_BLOCKs — are in scope for a user block's power pins. */
+/** An L5X is a Rockwell export, not nautilus source — but `nautilus logix
+ * graph` renders it into the SAME ladder model `nautilus ld graph` emits,
+ * so every consumer downstream (preview, custom editor, revision diff,
+ * live values) works on Allen-Bradley rungs without knowing it. The only
+ * thing that differs is which CLI verb produces the model, and whether the
+ * result is editable — it is not: you do not hand-edit a vendor export. */
 function ldGraph(source: string, at?: string): Promise<{ model?: unknown; error?: string }> {
   const cli = vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "nautilus");
-  const args = at ? ["ld", "graph", "-", at] : ["ld", "graph", "-"];
+  const args = graphArgs(at);
   return new Promise((resolve) => {
     const child = execFile(cli, args, { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
       try {
@@ -73,6 +77,10 @@ function ldEdit(source: string, op: unknown, at?: string): Promise<{ edits?: LdT
  * must read the text AFTER the previous edit landed. */
 let ldEditQueue: Promise<void> = Promise.resolve();
 
+function isL5XDoc(doc: vscode.TextDocument): boolean {
+  return isL5X(doc.uri.path);
+}
+
 function handleLdMessage(doc: vscode.TextDocument, msg: { type?: string; op?: unknown }): void {
   if (msg?.type === "toggleLive") {
     void vscode.commands.executeCommand("nautilus.liveValues.toggle");
@@ -87,6 +95,15 @@ function handleLdMessage(doc: vscode.TextDocument, msg: { type?: string; op?: un
     return;
   }
   if (msg?.type !== "ldEdit" || !msg.op) return;
+  // An L5X is a vendor export rendered read-only. `nautilus ld edit` writes
+  // nautilus rung text, so letting a gesture through here would rewrite XML
+  // as something else entirely. Refuse, and say why.
+  if (isL5XDoc(doc)) {
+    void vscode.window.showInformationMessage(
+      "nautilus: an L5X export is read-only here — it renders as ladder, but edits belong in Logix Designer or in the nautilus source it was generated from."
+    );
+    return;
+  }
   ldEditQueue = ldEditQueue
     .then(async () => {
       logLd("op: " + JSON.stringify(msg.op));
@@ -139,14 +156,19 @@ async function postLdModel(webview: vscode.Webview, doc: vscode.TextDocument): P
  * text editor side by side — and the ladder follows. */
 export class LdEditorProvider implements vscode.CustomTextEditorProvider {
   static readonly viewType = "nautilus.ldDiagram";
+  /** The same provider serves Rockwell L5X exports: `nautilus logix graph`
+   * renders them into the identical ladder model, so the editor, the live
+   * overlay and the revision diff need no idea which one they are looking
+   * at. Only editing differs, and that is refused for an L5X. */
+  static readonly l5xViewType = "nautilus.l5xDiagram";
 
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly live?: LiveValues
   ) {}
 
-  register(): vscode.Disposable {
-    return vscode.window.registerCustomEditorProvider(LdEditorProvider.viewType, this, {
+  register(viewType: string = LdEditorProvider.viewType): vscode.Disposable {
+    return vscode.window.registerCustomEditorProvider(viewType, this, {
       webviewOptions: { retainContextWhenHidden: true },
       supportsMultipleEditorsPerDocument: true,
     });
@@ -227,9 +249,12 @@ export class LdPreview implements vscode.Disposable {
    * the tracked one, or any open .ld as a last resort. */
   private activeLdDoc(): vscode.TextDocument | undefined {
     const ed = vscode.window.activeTextEditor?.document;
-    if (ed && ed.languageId === "iec-ld") return ed;
+    if (ed && (ed.languageId === "iec-ld" || isL5XDoc(ed))) return ed;
     const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
-    if (input instanceof vscode.TabInputCustom && input.uri.path.toLowerCase().endsWith(".ld")) {
+    if (
+      input instanceof vscode.TabInputCustom &&
+      (input.uri.path.toLowerCase().endsWith(".ld") || isL5X(input.uri.path))
+    ) {
       const custom = vscode.workspace.textDocuments.find(
         (d) => d.uri.toString() === (input as vscode.TabInputCustom).uri.toString()
       );
@@ -239,14 +264,14 @@ export class LdPreview implements vscode.Disposable {
       (d) => d.uri.toString() === this.docUri?.toString()
     );
     if (tracked) return tracked;
-    return vscode.workspace.textDocuments.find((d) => d.languageId === "iec-ld");
+    return vscode.workspace.textDocuments.find((d) => d.languageId === "iec-ld" || isL5XDoc(d));
   }
 
   /** Visual diff: the working tree (current buffer) vs git HEAD. */
   async diff(): Promise<void> {
     const doc = this.activeLdDoc();
     if (!doc) {
-      void vscode.window.showErrorMessage("nautilus: open a .ld file first");
+      void vscode.window.showErrorMessage("nautilus: open a .ld or .L5X file first");
       return;
     }
     if (doc.uri.scheme !== "file") {
@@ -268,7 +293,13 @@ export class LdPreview implements vscode.Disposable {
   async diffController(): Promise<void> {
     const doc = this.activeLdDoc();
     if (!doc) {
-      void vscode.window.showErrorMessage("nautilus: open a .ld file first");
+      void vscode.window.showErrorMessage("nautilus: open a .ld or .L5X file first");
+      return;
+    }
+    if (isL5XDoc(doc)) {
+      void vscode.window.showErrorMessage(
+        "nautilus: an L5X is a Logix export — diff it against a git revision, or use `nautilus logix drift` to compare it with what the controller is actually running."
+      );
       return;
     }
     const info = await fetchControllerProgram(doc.getText());
@@ -322,7 +353,7 @@ export class LdPreview implements vscode.Disposable {
   async preview(): Promise<void> {
     const doc = this.activeLdDoc();
     if (!doc) {
-      void vscode.window.showErrorMessage("nautilus: open a .ld file to preview its ladder");
+      void vscode.window.showErrorMessage("nautilus: open a .ld or .L5X file to preview its ladder");
       return;
     }
     this.docUri = doc.uri;

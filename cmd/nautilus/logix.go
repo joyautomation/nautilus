@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,12 +25,15 @@ Usage:
                                        file WITH the controller's own tag
                                        descriptions — which a live CIP browse
                                        cannot recover.
-  nautilus logix graph <file.L5X> [routine]
+  nautilus logix graph <file.L5X|-> [routine]
                                        Emit an RLL routine's ladder render
                                        model as JSON: the same shape
                                        "nautilus ld graph" emits for a .ld
                                        file, so the ladder preview and the
                                        revision diff work on Logix rungs.
+                                       "-" reads the export from stdin,
+                                       which is how the diff graphs a git
+                                       revision.
   nautilus logix normalize <file.L5X>  Pin the attributes that move on every
                                        export (ExportDate and friends), so two
                                        exports of unchanged code compare equal.
@@ -278,12 +282,26 @@ func runLogixGraph(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	var err error
 	enc := json.NewEncoder(os.Stdout)
 	if fs.NArg() < 1 || fs.NArg() > 2 {
 		fmt.Fprint(os.Stderr, logixUsage)
 		return 2
 	}
-	f, err := l5x.ParseFile(fs.Arg(0))
+	// "-" reads the export from stdin, exactly as `nautilus ld graph -`
+	// does. That is not a convenience: the revision diff graphs a git blob,
+	// which has no path, so without stdin the diff cannot work on L5X.
+	var f *l5x.File
+	if fs.Arg(0) == "-" {
+		raw, rerr := io.ReadAll(os.Stdin)
+		if rerr != nil {
+			_ = enc.Encode(map[string]string{"error": rerr.Error()})
+			return 2
+		}
+		f, err = l5x.Parse(raw)
+	} else {
+		f, err = l5x.ParseFile(fs.Arg(0))
+	}
 	if err != nil {
 		_ = enc.Encode(map[string]string{"error": err.Error()})
 		return 2
