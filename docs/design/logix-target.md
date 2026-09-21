@@ -305,6 +305,19 @@ Recommend 1 + 2. Do not attempt 3.
 
 ### 6.2 Warm, per-program download — not possible
 
+> **⚠ Corrected 2026-09-20 — read `logix-sdk-api.md` §9 before relying on
+> this section.** The premise below ("no online-edit API") is wrong. The SDK
+> documents online partial import through
+> `PartialImportWithTargetFromXmlFileAsync` and
+> `PartialImportRungsFromXmlFileAsync`, whose `PartialImportOption` parameter
+> is the test / accept / assemble workflow (`LeaveEdits`, `AcceptEdits`,
+> `FinalizeEdits`). A *download* still stops the controller and resets tags —
+> that part holds — but a rung- or component-level change can go into a
+> running controller. Unverified against hardware; promoted to spike S2b.
+> This section is left as written because reasoning from the overview table
+> instead of the enum's own doc comments is a trap worth seeing.
+
+
 `PUT /api/program` warm-swaps one task while the others keep scanning, carrying
 retained state by name and type through `ir.MigrateFrame`, with a one-step
 rollback and a failed compile leaving the running program untouched.
@@ -1177,11 +1190,17 @@ whole program (`Controller/Programs/Program[@Name='MainProgram']`) and **a rung
 range** (`…/RLLContent/Rung[@Number>='1'][@Number<='2']`). That is finer-grained
 than most people drive the GUI.
 
-**So the honest limitation is narrow:** the SDK exposes no online-edit
-(test/assemble/accept) API, so *changing a running controller without stopping
-it* still requires Logix Designer. Everything else — author, generate, import,
-verify, download, upload, diff, monitor, write values — is scriptable, and the
-monitoring half needs no Rockwell software at all (§4.1).
+**So the honest limitation is narrow** — and it is narrower still than this
+paragraph claimed. ~~the SDK exposes no online-edit (test/assemble/accept)
+API, so *changing a running controller without stopping it* still requires
+Logix Designer.~~ **Wrong; corrected 2026-09-20.** The SDK documents online
+partial import of rungs and of whole components, with `PartialImportOption`
+supplying exactly test / accept / assemble. See `logix-sdk-api.md` §9.
+What remains true is that a *download* stops the controller.
+
+Everything else — author, generate, import, verify, download, upload, diff,
+monitor, write values — is scriptable, and the monitoring half needs no
+Rockwell software at all (§4.1).
 
 That is a workflow a developer will actually adopt: **VS Code for authoring and
 review, `logixd` for the project lifecycle, EtherNet/IP for live values, and
@@ -1321,3 +1340,39 @@ the whole file), and one hand-built file covering every shape the corpus
 taught. The client corpus stays out of the repo and runs on demand:
 
     NAUTILUS_L5X_CORPUS=/path/to/exports go test ./lang/l5x/
+
+
+---
+
+## 17. The SDK's capabilities, surveyed — `logix-sdk-api.md`
+
+Written 2026-09-20. A complete enumeration of Logix Designer SDK 2.02.00,
+produced from the shipped XML documentation file, the installed Doxygen
+reference, the release notes, and direct observation of the running service
+on ECHO1 — not from memory. Every claim carries its source, and §11 of that
+document says which of them have ever actually been executed (two).
+
+What it settles that this brief had open or wrong:
+
+- **§9 — the SDK supports online import.** `PartialImportWithTarget` and
+  `PartialImportRungs` work online, and `PartialImportOption` is test /
+  accept / assemble. §6.2 and §15.1 above are corrected in place. This is the
+  most consequential finding and it promotes **S2b** to the top of the spike
+  list.
+- **ACD ↔ L5X is a documented two-call round trip.** `OpenLogixProjectAsync`
+  accepts ACD, L5K *and* L5X; `SaveAsAsync` writes whichever the extension
+  names. The 52-file headless conversion was this path, and `SaveAsAsync`'s
+  `detailedL5x` flag is the upstream `ExportOptions` lever §11 wanted.
+- **"~0.5 s per tag online" is in the vendor's own manual.** §4's two-plane
+  split is conceded by the documentation, with a number.
+- **There is no project browse.** `GetAllExecutables` and nothing else. Every
+  other question about a project's contents is answered by exporting L5X —
+  which makes `lang/l5x` (§16) structurally load-bearing rather than a
+  convenience.
+- **The 30 kB operation limit is real but the file requests are chunked**, so
+  S4 is very likely a non-issue. Labelled as an inference, not a measurement.
+- **The concurrency model is forced:** opens are serialized machine-wide,
+  everything after that parallelizes, and one project's error can fail the
+  others. That is `logixd`'s architecture, settled.
+- **`BuildAsync` needs v37+**, which gates the "CI verifies the logic" half
+  of the Tier A pitch.
