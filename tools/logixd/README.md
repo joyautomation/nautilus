@@ -36,18 +36,35 @@ is **not on nuget.org** — the installer drops it beside its examples, and
 dotnet build -c Release -o C:\logixd-bin
 ```
 
-### Gotcha: the ASP.NET runtime
+### Gotcha: the ASP.NET runtime — and why `DOTNET_ROOT` is the wrong fix
 
-`logixd.exe` resolves its runtime through the machine's default `DOTNET_ROOT`,
-which on a Rockwell box usually points at a .NET install that has **no
-ASP.NET Core shared framework** (the Rockwell stack ships x86). If it starts
-with *"The framework 'Microsoft.AspNetCore.App' was not found"*, launch it
-through the runtime that does have it:
+`logixd` needs an x64 .NET with the **ASP.NET Core shared framework**, which
+a Rockwell box's default install often lacks (the Rockwell stack is x86). If
+it starts with *"The framework 'Microsoft.AspNetCore.App' was not found"*,
+point it at one that has it — but use the **architecture-specific**
+variable:
 
 ```powershell
-$env:DOTNET_ROOT = "C:\dotnet10"
+$env:DOTNET_ROOT_X64 = "C:\dotnet10"      # correct
 & C:\dotnet10\dotnet.exe C:\logixd-bin\logixd.dll
 ```
+
+**Do NOT set plain `DOTNET_ROOT`.** It will appear to work — logixd starts,
+health responds, `GetProcessorTypes` returns — and then **every SDK call
+that needs a FactoryTalk token fails with a bare
+`System.TimeoutException` inside `GetTokenForUserAsync`**, with no message,
+no error code, and nothing in any Windows or FactoryTalk log.
+
+The reason: the SDK authenticates by creating a named-pipe server and
+launching `FtspAdapterLDSDK.exe`, which is a **32-bit** apphost
+(`PE32, Intel 80386`) that COM-interops with FactoryTalk Security. A 32-bit
+apphost cannot resolve a runtime from an x64 `DOTNET_ROOT`, so it dies
+before connecting the pipe and the client waits out its 5-second timeout.
+`DOTNET_ROOT_X64` steers only the x64 host and leaves the adapter alone.
+
+This cost a full session to find, and the failure looks exactly like a
+licensing or FactoryTalk configuration problem. See
+`docs/design/logix-target.md` §19.5.
 
 ## Run
 

@@ -63,6 +63,12 @@ jobs:
       # framework. On a Rockwell box the machine default often does not —
       # see tools/logixd/README.md — so the runner names it explicitly and
       # this falls back to whatever is on PATH.
+      #
+      # NOTE: the runtime is steered with DOTNET_ROOT_X64, never plain
+      # DOTNET_ROOT. The SDK's FactoryTalk login launches a 32-bit adapter
+      # that cannot resolve a runtime from an x64 DOTNET_ROOT; it then dies
+      # silently and every token-needing SDK call times out with no
+      # diagnostic. See docs/design/logix-target.md §19.5.
       - name: Resolve the runner's paths
         shell: pwsh
         run: |
@@ -80,7 +86,9 @@ jobs:
         shell: pwsh
         run: |
           if ($env:LOGIXD_DOTNET -ne "dotnet") {
-            $env:DOTNET_ROOT = Split-Path -Parent $env:LOGIXD_DOTNET
+            # DOTNET_ROOT_X64, not DOTNET_ROOT — see the note above.
+            $env:DOTNET_ROOT_X64 = Split-Path -Parent $env:LOGIXD_DOTNET
+            Remove-Item Env:\DOTNET_ROOT -ErrorAction SilentlyContinue
           }
           $p = Start-Process -FilePath $env:LOGIXD_DOTNET `
             -ArgumentList "$env:LOGIXD_BIN\logixd.dll" `
