@@ -1,0 +1,465 @@
+package logixd_test
+
+// Integration tests against a live logixd agent.
+//
+//	NAUTILUS_LOGIXD_URL=http://host:8188 \
+//	NAUTILUS_LOGIXD_TOKEN=... \
+//	go test ./logix/logixd/ -run TestAgent -v
+//
+// They are in two tiers, and the split is the point.
+//
+// TIER 1 needs no Rockwell licence at all: the agent's own contract —
+// authentication, the file sandbox, error classification, the shape of the
+// probe report. These run anywhere logixd runs, which means they run in CI
+// on a machine whose activation has lapsed, and they are what catches a
+// regression in the agent itself.
+//
+// TIER 2 needs a usable SDK, so each test asks the agent's own probe first
+// and SKIPS with the gate that failed. That is deliberate: an unlicensed
+// machine must report "skipped: no activation", never a red build that
+// looks like broken code. The moment an activation lands, they run with no
+// edit.
+//
+// Tier 2 tests that touch a CONTROLLER additionally need
+// NAUTILUS_LOGIXD_COMM_PATH, and they stay read-mostly: the one write is an
+// export-then-import of a routine's own rungs, which is a semantic no-op.
+// Nothing here downloads.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"path"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/joyautomation/nautilus/logix/logixd"
+)
+
+func agent(t *testing.T) *logixd.Client {
+	t.Helper()
+	url := os.Getenv("NAUTILUS_LOGIXD_URL")
+	if url == "" {
+		t.Skip("set NAUTILUS_LOGIXD_URL to run integration tests against a logixd agent")
+	}
+	return logixd.New(url, os.Getenv("NAUTILUS_LOGIXD_TOKEN"))
+}
+
+func ctx(t *testing.T, d time.Duration) context.Context {
+	t.Helper()
+	c, cancel := context.WithTimeout(context.Background(), d)
+	t.Cleanup(cancel)
+	return c
+}
+
+// requireSDK skips unless the agent reports the SDK usable, naming the gate
+// that failed so an unlicensed run says why rather than just "skip".
+func requireSDK(t *testing.T, c *logixd.Client) {
+	t.Helper()
+	p, err := c.Probe(ctx(t, 10*time.Minute))
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if p.Usable {
+		return
+	}
+	var failed []string
+	for _, g := range p.Gates {
+		if !g.OK {
+			failed = append(failed, fmt.Sprintf("%s (%s)", g.Name, g.Detail))
+		}
+	}
+	t.Skipf("SDK not usable on the agent; failing gates: %s", strings.Join(failed, "; "))
+}
+
+// runID namespaces a test's files inside the agent's work directory.
+func runID(t *testing.T) string {
+	return "it-" + strings.ReplaceAll(t.Name(), "/", "-") + "-" +
+		time.Now().UTC().Format("150405.000")
+}
+
+// --- tier 1: the agent's own contract -------------------------------------
+
+func TestAgentHealth(t *testing.T) {
+	c := agent(t)
+	h, err := c.Health(ctx(t, 30*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Service != "logixd" {
+		t.Errorf("service = %q", h.Service)
+	}
+	if h.SDKClient == "" {
+		t.Error("the agent should report which SDK client it is linked against")
+	}
+	t.Logf("logixd %s, SDK client %s, %d sessions", h.Version, h.SDKClient, h.Sessions)
+}
+
+// An agent that can stop a controller must not answer unauthenticated
+// callers. This is the one test that fails CLOSED matters most.
+func TestAgentRejectsMissingToken(t *testing.T) {
+	c := agent(t)
+	if c.Token == "" {
+		t.Skip("agent is running without a token (loopback bind); nothing to reject")
+	}
+	anon := logixd.New(c.BaseURL, "none")
+	_, err := anon.Health(ctx(t, 30*time.Second))
+	if err == nil {
+		t.Fatal("a bad token was accepted")
+	}
+	var e *logixd.Error
+	if !errors.As(err, &e) || e.Status != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %v", err)
+	}
+}
+
+func TestAgentFileRoundTrip(t *testing.T) {
+	c := agent(t)
+	cx := ctx(t, 2*time.Minute)
+	rel := path.Join(runID(t), "hello.L5X")
+	body := []byte("<?xml version=\"1.0\"?>\n<RSLogix5000Content/>\n")
+
+	if err := c.PutFile(cx, rel, body); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.DeleteFile(context.Background(), rel) })
+
+	got, err := c.GetFile(cx, rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(body) {
+		t.Errorf("round trip changed the bytes:\n got %q\nwant %q", got, body)
+	}
+
+	files, err := c.ListFiles(cx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, f := range files {
+		if f.Path == rel {
+			found = true
+			if f.Bytes != int64(len(body)) {
+				t.Errorf("listed size = %d, want %d", f.Bytes, len(body))
+			}
+		}
+	}
+	if !found {
+		t.Errorf("%s missing from the listing", rel)
+	}
+
+	if err := c.DeleteFile(cx, rel); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.GetFile(cx, rel); logixd.Kind(err) != "not_found" {
+		t.Errorf("after delete, want not_found, got %v", err)
+	}
+}
+
+// The file sandbox is the agent's security boundary: it will fetch and
+// write files on a caller's behalf, so "any path you name" would make it a
+// file server with a controller attached.
+func TestAgentRefusesToEscapeItsWorkDirectory(t *testing.T) {
+	c := agent(t)
+	cx := ctx(t, 60*time.Second)
+	for _, bad := range []string{
+		"../outside.txt",
+		"a/../../outside.txt",
+		`..\..\Windows\System32\drivers\etc\hosts`,
+		"C:/Windows/System32/drivers/etc/hosts",
+	} {
+		if err := c.PutFile(cx, bad, []byte("nope")); err == nil {
+			t.Errorf("PutFile(%q) was allowed", bad)
+		}
+		if _, err := c.GetFile(cx, bad); err == nil {
+			t.Errorf("GetFile(%q) was allowed", bad)
+		}
+	}
+}
+
+// The probe must always produce a usable report — that is its whole job.
+// Even (especially) when the answer is "not usable", the caller needs the
+// individual gates, because whichever fails first masks the others.
+func TestAgentProbeReportsGates(t *testing.T) {
+	c := agent(t)
+	// Reporting "unusable" is a successful probe: the call must not fail.
+	p, err := c.Probe(ctx(t, 10*time.Minute))
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if len(p.Gates) == 0 {
+		t.Fatal("a probe with no gates tells an operator nothing")
+	}
+	for _, g := range p.Gates {
+		status := "ok"
+		if !g.OK {
+			status = "FAIL"
+		}
+		t.Logf("  %-4s %-22s %s", status, g.Name, g.Detail)
+	}
+	if !p.Usable && p.Hint == "" {
+		t.Error("an unusable SDK must come with the hint that says how to diagnose it")
+	}
+}
+
+// A request the agent can refuse should come back classified, not as a
+// generic 500 — the caller acts on the kind.
+func TestAgentClassifiesABadRequest(t *testing.T) {
+	c := agent(t)
+	_, err := c.Open(ctx(t, 60*time.Second), "no/such/project.ACD")
+	if err == nil {
+		t.Fatal("opening a nonexistent project should fail")
+	}
+	if k := logixd.Kind(err); k == "" || k == "bad_reply" {
+		t.Errorf("unclassified error: %v", err)
+	}
+	t.Logf("kind=%s fatal=%v: %v", logixd.Kind(err), logixd.IsFatal(err), err)
+}
+
+// --- tier 2: the SDK ------------------------------------------------------
+
+func TestSDKCreateConvertAndInspect(t *testing.T) {
+	c := agent(t)
+	requireSDK(t, c)
+	cx := ctx(t, 30*time.Minute)
+
+	id := runID(t)
+	acd := path.Join(id, "smoke.ACD")
+	l5x := path.Join(id, "smoke.L5X")
+	back := path.Join(id, "roundtrip.ACD")
+
+	if _, err := c.CreateProject(cx, acd, 38, "1756-L85E", "Smoke"); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// ACD -> L5X, the git-native half.
+	res, _, err := c.Convert(cx, acd, l5x, false)
+	if err != nil {
+		t.Fatalf("convert to L5X: %v", err)
+	}
+	if res.Bytes == 0 {
+		t.Fatal("empty L5X")
+	}
+	raw, err := c.GetFile(cx, l5x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "<RSLogix5000Content") {
+		t.Fatalf("not an L5X: %.200s", raw)
+	}
+	t.Logf("ACD -> L5X: %d bytes", res.Bytes)
+
+	// L5X -> ACD, the other direction. Open accepts all three formats, so
+	// the round trip is two calls and no GUI.
+	if _, _, err := c.Convert(cx, l5x, back, false); err != nil {
+		t.Fatalf("convert back to ACD: %v", err)
+	}
+
+	s, err := c.Open(cx, acd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(context.Background())
+	execs, err := s.Executables(cx)
+	if err != nil {
+		t.Fatalf("executables: %v", err)
+	}
+	t.Logf("%d executables, e.g. %v", len(execs), first(execs, 3))
+}
+
+// Build is the CI gate: it compiles the control logic, needs no controller,
+// and carries no risk. v37+ only.
+func TestSDKBuild(t *testing.T) {
+	c := agent(t)
+	requireSDK(t, c)
+	cx := ctx(t, 45*time.Minute)
+
+	acd := path.Join(runID(t), "build.ACD")
+	if _, err := c.CreateProject(cx, acd, 38, "1756-L85E", "BuildSmoke"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Open(cx, acd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(context.Background())
+
+	res, evs, err := s.Build(cx, logixd.BuildEcho)
+	for _, e := range evs {
+		if e.Kind == "error" {
+			t.Logf("build event: %s", e)
+		}
+	}
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	t.Logf("built for %s in %dms", res.Target, res.ElapsedMs)
+}
+
+// Offline tag values need no controller at all: they read and write what is
+// stored in the project file. Useful on its own, and the cheapest proof the
+// tag XPath addressing is right.
+func TestSDKOfflineTagValue(t *testing.T) {
+	c := agent(t)
+	requireSDK(t, c)
+	cx := ctx(t, 20*time.Minute)
+
+	id := runID(t)
+	acd := path.Join(id, "tags.ACD")
+	if _, err := c.CreateProject(cx, acd, 38, "1756-L85E", "TagSmoke"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Open(cx, acd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(context.Background())
+
+	// A fresh project has no user tags, so create one by importing an L5X
+	// — which is also the only way the SDK can create anything.
+	tagL5X := path.Join(id, "tag.L5X")
+	if err := c.PutFile(cx, tagL5X, []byte(controllerTagL5X("Setpoint", "REAL", "12.5"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PartialImport(cx, "Controller/Tags", tagL5X, logixd.Overwrite, false); err != nil {
+		t.Fatalf("importing a tag: %v", err)
+	}
+
+	got, err := s.GetTag(cx, logixd.TagPath("Setpoint"), "REAL", logixd.Offline)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if f, ok := got.(float64); !ok || f < 12.4 || f > 12.6 {
+		t.Errorf("Setpoint = %#v, want 12.5", got)
+	}
+
+	if err := s.SetTag(cx, logixd.TagPath("Setpoint"), "REAL", logixd.Offline, 80.0); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	got, err = s.GetTag(cx, logixd.TagPath("Setpoint"), "REAL", logixd.Offline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f, ok := got.(float64); !ok || f < 79.9 || f > 80.1 {
+		t.Errorf("after set, Setpoint = %#v, want 80", got)
+	}
+}
+
+// --- tier 2, online: the correction in §9 of logix-sdk-api.md, tested -----
+
+// TestSDKOnlineRungImport is the one that matters. It exports a routine's
+// own rungs and imports them straight back with FinalizeEdits while the
+// project is ONLINE — so the change is semantically a no-op, but the path
+// exercised is the real online-edit cycle: accept the edits, send them to
+// the controller, and assemble them if it is in Run.
+//
+// The design brief said for weeks that the SDK had no online-edit API. It
+// does. This is the test that settles it.
+func TestSDKOnlineRungImport(t *testing.T) {
+	c := agent(t)
+	requireSDK(t, c)
+	commPath := os.Getenv("NAUTILUS_LOGIXD_COMM_PATH")
+	if commPath == "" {
+		t.Skip("set NAUTILUS_LOGIXD_COMM_PATH to the controller to exercise the online path")
+	}
+	project := os.Getenv("NAUTILUS_LOGIXD_PROJECT")
+	if project == "" {
+		t.Skip("set NAUTILUS_LOGIXD_PROJECT to an agent-relative .ACD already downloaded to that controller")
+	}
+	program := envOr("NAUTILUS_LOGIXD_PROGRAM", "MainProgram")
+	routine := envOr("NAUTILUS_LOGIXD_ROUTINE", "MainRoutine")
+	cx := ctx(t, 30*time.Minute)
+
+	s, err := c.Open(cx, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(context.Background())
+
+	if _, err := s.SetCommPath(cx, commPath); err != nil {
+		t.Fatalf("comm path: %v", err)
+	}
+	st, err := s.GoOnline(cx)
+	if err != nil {
+		t.Fatalf("go online: %v", err)
+	}
+	t.Cleanup(func() { _, _ = s.GoOffline(context.Background()) })
+	mode, err := s.Mode(cx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("online: connection=%s controller=%s", st.Connected, mode)
+
+	// Export rung 0 of the routine, then put it back exactly where it was.
+	rungFile := path.Join(runID(t), "rung0.L5X")
+	xpath := logixd.RoutinePath(program, routine) +
+		"/RLLContent/Rung[@Number='0']"
+	if _, err := s.PartialExport(cx, xpath, rungFile); err != nil {
+		t.Fatalf("exporting rung 0 (does %s/%s exist and have a rung 0?): %v", program, routine, err)
+	}
+	exported, err := c.GetFile(cx, rungFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(exported), "<Rung") {
+		t.Fatalf("export is not a rung: %.300s", exported)
+	}
+
+	res, evs, err := s.ImportRungs(cx, logixd.RoutinePath(program, routine),
+		0, 1, rungFile, logixd.FinalizeEdits)
+	for _, e := range evs {
+		t.Logf("  %s", e)
+	}
+	if err != nil {
+		t.Fatalf("ONLINE rung import with FinalizeEdits: %v", err)
+	}
+	t.Logf("online rung import ok — %s in %dms", res.OnlineOption, res.ElapsedMs)
+
+	after, err := s.Mode(cx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != mode {
+		t.Errorf("an online edit changed the controller mode: %s -> %s", mode, after)
+	}
+}
+
+// --- helpers --------------------------------------------------------------
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
+
+func first(s []string, n int) []string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
+}
+
+// controllerTagL5X builds the smallest importable L5X that declares one
+// controller-scoped tag. The SDK has no "create a tag" call — every
+// structural change is an L5X you construct and import — so this is the
+// normal way to get anything into a project.
+func controllerTagL5X(name, dataType, value string) string {
+	return fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<RSLogix5000Content SchemaRevision="1.0" TargetName="%[1]s" TargetType="Tag" ContainsContext="true" ExportOptions="References NoRawData L5KData DecoratedData Context">
+<Controller Use="Context" Name="Smoke">
+<Tags Use="Context">
+<Tag Use="Target" Name="%[1]s" TagType="Base" DataType="%[2]s" Radix="Float" Constant="false" ExternalAccess="Read/Write">
+<Data Format="Decorated">
+<DataValue DataType="%[2]s" Radix="Float" Value="%[3]s"/>
+</Data>
+</Tag>
+</Tags>
+</Controller>
+</RSLogix5000Content>
+`, name, dataType, value)
+}

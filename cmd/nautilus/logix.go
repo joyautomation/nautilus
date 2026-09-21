@@ -36,6 +36,23 @@ Usage:
                                        The basis of drift detection.
   nautilus logix info <file.L5X>       Summarize what the export contains.
 
+Everything above is pure Go and works on an L5X already on disk. The verbs
+below drive a Logix PROJECT, which needs the Studio 5000 SDK — so they talk
+to a logixd agent on the licensed Windows machine (tools/logixd):
+
+  nautilus logix probe                 Is the SDK usable, and if not, which
+                                       licensing gate failed?
+  nautilus logix agent                 Agent health and open sessions.
+  nautilus logix convert <in> <out>    ACD <-> L5X <-> L5K, either direction.
+  nautilus logix build <project.ACD>   Compile the logic. No controller, no
+                                       risk — this is CI for control code.
+  nautilus logix push <project> <rungs.L5X>
+                                       Import rungs into a routine; with
+                                       --comm-path and --accept/--finalize,
+                                       an ONLINE EDIT of a running controller.
+  nautilus logix drift <repo.L5X>      Does the controller still match the
+                                       repo? --comm-path names the controller.
+
 Import flags:
   --out         Output directory (default ".")
   --types-out   Type declarations file (default "logix_types.st")
@@ -79,8 +96,21 @@ func runLogix(args []string) int {
 		return runLogixNormalize(args[1:])
 	case "info":
 		return runLogixInfo(args[1:])
+	case "probe":
+		return runLogixProbe(args[1:])
+	case "agent":
+		return runLogixAgent(args[1:])
+	case "convert":
+		return runLogixConvert(args[1:])
+	case "build":
+		return runLogixBuild(args[1:])
+	case "push":
+		return runLogixPush(args[1:])
+	case "drift":
+		return runLogixDrift(args[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "nautilus logix: unknown subcommand %q\n\n%s", args[0], logixUsage)
+		fmt.Fprintf(os.Stderr, "nautilus logix: unknown subcommand %q\n\n%s\n%s",
+			args[0], logixUsage, logixAgentUsage)
 		return 2
 	}
 }

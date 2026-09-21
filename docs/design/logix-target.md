@@ -1376,3 +1376,96 @@ What it settles that this brief had open or wrong:
   others. That is `logixd`'s architecture, settled.
 - **`BuildAsync` needs v37+**, which gates the "CI verifies the logic" half
   of the Tier A pitch.
+
+
+---
+
+## 18. `logixd` exists — and ECHO1 has no activation
+
+Written 2026-09-21.
+
+### What was built
+
+`tools/logixd` — the Windows agent §4.2 called for, now real. A .NET 10
+service that exposes the Studio 5000 SDK as JSON over HTTP, including
+**both online-import endpoints** (§9 of `logix-sdk-api.md`):
+`partial-import-with-target` and `import-rungs`, each taking the
+`LeaveEdits` / `AcceptEdits` / `FinalizeEdits` option.
+
+Alongside it:
+
+- `logix/logixd` — the typed Go client. It preserves the SDK's own
+  fatal/non-fatal error distinction and carries the SDK's event stream on
+  every reply, because a failed import explains itself in the events and
+  not in the exception.
+- `nautilus logix probe | agent | convert | build | push | drift` — the
+  agent-backed CLI verbs, alongside the pure-Go `import | graph | normalize
+  | info` from §16. `push` is the online edit; `drift` is upload → convert →
+  normalize → compare, which is §6.1 option 1 end to end.
+- Unit tests for the client and the CLI (a fake agent), and a two-tier
+  integration suite.
+
+The agent also enforces what the SDK will not: serialized opens, one writer
+per project path, a comm-path allowlist held agent-side rather than passed
+in, and a file sandbox — because a remote caller has to get an L5X *to* the
+machine before it can be imported, and an agent that reads any path it is
+told to is a file server with a controller attached.
+
+### What ran, and what did not
+
+**Ran, against the live agent on ECHO1 from Linux:** health, bearer-token
+rejection, the file round trip, work-directory escape attempts (all
+refused), the probe report, and error classification. Six tests, all green.
+
+**Did not run: anything that touches the SDK.** Not because of the code —
+because **ECHO1 currently has no FactoryTalk activation at all.**
+
+### The evidence, because "installed" is not "activated"
+
+| Check | Result |
+|---|---|
+| `FTACmdUtility listAvailable` | "no available activations" |
+| `…\Activations\*.lic` | only `ftasystem.lic` / `ftasystem2.lic` — the placeholders, no product activation |
+| `RSsvr.log` | `UNSUPPORTED: "LGXNGEMU.SIM" … No such feature exists (-5,346)` — the **Echo** emulation feature is absent |
+| `LogixProject.CreateNewProjectAsync(…, 38, …)` | `TimeoutException` |
+
+Everything is *installed*: Studio 5000 Logix Designer v38.01, the SDK
+2.02.00, Logix Echo with firmware packages from v33 to v38, and an
+`EmulateControlLogix5580` process is even running and answering CIP on
+port 44818. None of it is licensed to do work.
+
+**A missing activation presents as a bare `TimeoutException`, not as a
+licence error.** That is the trap, and it is a new one — §14's trap was
+three gates failing differently; this is a gate failing *silently*.
+
+### A theory that was wrong, recorded on purpose
+
+The first timeout looked like a session-0 problem: `logixd` was detached
+via WMI, FactoryTalk authentication plausibly wants an interactive logon,
+and the symptom fit. So `logixd probe` was added as a CLI mode to run the
+identical check from an interactive shell — and it produced the identical
+timeout. **Session 0 was not the cause.** The probe mode stayed, because it
+is the cheapest way to separate "the environment is wrong" from "the licence
+is missing", and it earned its place by disproving its own reason for
+existing.
+
+### What this does not change
+
+The online-edit finding (§9 of `logix-sdk-api.md`) still stands on the
+vendor's documentation, and it is now *implemented and test-covered*:
+`TestSDKOnlineRungImport` exports a routine's own rungs and imports them
+back with `FinalizeEdits` while online — a semantic no-op over the real
+online-edit path. It skips today with `live-create-project` named as the
+failing gate. **The moment an activation lands, it runs with no edit.**
+
+### What to do
+
+1. **Get an activation onto ECHO1.** Scope it to cover Logix Designer, the
+   **SDK entitlement**, and the Echo emulation feature (`LGXNGEMU.SIM`) —
+   §14 already recorded that an Echo node alone leaves you unable to open an
+   ACD, and this is the same mistake from the other side.
+2. Then run `go test ./logix/logixd/ -run TestSDK -v`. S2a and S2b are that
+   command.
+3. `.github/workflows/logix.yml` has the self-hosted job ready; flip the
+   repo variable `LOGIX_SELF_HOSTED=true` once a runner labelled `logix-sdk`
+   exists on the licensed box.

@@ -584,6 +584,7 @@ the download path, which remains true *of downloads*.
 | **Executed** (this project, ECHO1, §13.5) | `OpenLogixProjectAsync`, `SaveAsAsync` |
 | **Observed** (this session, ECHO1) | service running, port 53204 bound to loopback only, assembly contents, RPC method list, Python-is-pythonnet, package versions |
 | **Documented, unrun** | everything else — every capability in §3, the online-import finding in §9, the version gates in §5 |
+| **Implemented and test-covered, still unrun** | 2026-09-21: `tools/logixd` exposes the whole surface above, and `logix/logixd/integration_test.go` drives it. The SDK tests skip rather than fail, because ECHO1 has **no FactoryTalk activation** — see `logix-target.md` §18. |
 | **Inferred, labelled** | that the 30 kB limit bounds a gRPC message rather than a file (§5) |
 
 The single highest-value thing this survey did **not** do is run anything.
