@@ -26,6 +26,20 @@ things a caller would otherwise have to get right by itself:
 | **Events on every reply** | A failed partial import says almost nothing through its exception and a great deal through the SDK's event stream. Both ride along, on success and failure. |
 | **A licensing probe that names the gate** | The SDK needs three independent things (FactoryTalk activation, a FlexNet feature, a CodeMeter entitlement) and each fails differently. Whichever fails first masks the others. |
 
+## Packaging: what does NOT work
+
+Before reaching for the obvious simplification, two things were measured on
+the reference host and both fail:
+
+| Attempt | Result |
+|---|---|
+| **Self-contained publish** (`--self-contained`, no .NET SDK or `DOTNET_ROOT` needed) | **Worse.** `create-project` fails whether `DOTNET_ROOT` is set or not. Best explanation: `FtspAdapterLDSDK.exe` is a 32-bit apphost that resolves `hostfxr` **from its own directory**, and a self-contained publish fills that directory with an x64 runtime. Shipping it would ship the trap. |
+| **Clearing `DOTNET_ROOT` in-process at startup** so children do not inherit it | **Not sufficient.** The warning fires, the variable is cleared, and the adapter still fails — something upstream of this process's environment carries it. |
+
+**The only configuration verified green end to end is a
+framework-dependent build launched with `DOTNET_ROOT_X64` and no plain
+`DOTNET_ROOT`.** Ship that.
+
 ## Build
 
 Requires the .NET 10 SDK and the Logix Designer SDK's NuGet package, which

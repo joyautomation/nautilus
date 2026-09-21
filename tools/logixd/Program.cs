@@ -35,6 +35,35 @@ using System.Text.Json.Serialization;
 using Logixd;
 using RockwellAutomation.LogixDesigner;
 
+// Warn loudly about the DOTNET_ROOT trap.
+//
+// To authenticate, the SDK launches FtspAdapterLDSDK.exe — a 32-bit,
+// framework-dependent apphost. An x64 DOTNET_ROOT in the environment (one
+// an operator may well have set so THIS process could find ASP.NET) leaves
+// it unable to resolve a runtime: it dies before answering, and every SDK
+// call needing a FactoryTalk token fails with a bare TimeoutException —
+// no message, no code, nothing in any Windows or FactoryTalk log. It reads
+// exactly like a licensing failure and is not one.
+//
+// MEASURED: clearing it here is NOT a cure. The adapter still fails, so
+// something upstream of our process environment carries it. The only
+// configuration verified green end to end is a framework-dependent build
+// launched with DOTNET_ROOT_X64 and no plain DOTNET_ROOT. We clear it
+// anyway as hygiene, and say so, because a warning at startup is worth far
+// more than the same sentence buried in a README.
+{
+    var inherited = Environment.GetEnvironmentVariable("DOTNET_ROOT");
+    if (!string.IsNullOrEmpty(inherited))
+    {
+        Environment.SetEnvironmentVariable("DOTNET_ROOT", null);
+        Console.Error.WriteLine(
+            $"logixd: WARNING — DOTNET_ROOT is set ({inherited}). It breaks the SDK's 32-bit " +
+            "FactoryTalk adapter, and every SDK call needing a token will time out with no " +
+            "diagnostic. Unset it and use DOTNET_ROOT_X64. Cleared it for child processes, but " +
+            "that alone has been measured NOT to be sufficient — fix the launch environment.");
+    }
+}
+
 // `logixd probe` runs the licensing check and exits, without binding a
 // port. It exists to separate "the environment is wrong" from "the licence
 // is missing" in ten seconds rather than an afternoon — the same probe
