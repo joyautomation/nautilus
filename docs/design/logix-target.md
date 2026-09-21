@@ -1742,3 +1742,53 @@ eliminations in §19.2 was performed without a same-run control. On a host
 whose behaviour changes over minutes, a test and its control must run
 back to back or the comparison is meaningless. That single discipline would
 have reached this conclusion in twenty minutes instead of three hours.
+
+
+### 19.4 Controlled time series: Logix Designer open changes nothing
+
+Run 2026-09-21 with Logix Designer launched at 09:35:29 and left open for
+the duration. Twelve `OpenLogixProject` + `SaveAs` calls, 45 s apart, same
+binary (`C:\s3build\OpenAndSaveFile.exe`), same console session:
+
+```
+09:36:33  FAIL      09:39:57  FAIL      09:42:33  FAIL
+09:37:24  FAIL      09:40:51  FAIL      09:43:24  FAIL
+09:38:15  FAIL      09:41:42  FAIL
+09:39:06  FAIL
+```
+
+**Nine consecutive failures, zero successes, over seven minutes with
+Designer open throughout.** That kills the "an interactive FactoryTalk
+action refreshes the token" theory as cleanly as the back-to-back test in
+§19.3 killed the app-type and session theories.
+
+### What a support case should contain
+
+Everything needed is now measured:
+
+- **Symptom:** `LogixProject.OpenLogixProjectAsync` (and every other call
+  that needs a token) throws `System.TimeoutException` after ~5 s at
+  `FTSP.FactoryTalkServicesPlatformLogin.GetTokenForUserAsync` →
+  `GetTokenForCurrentUserAsync` → `LogixProject.GetAuthToken`.
+- **Reproduces with Rockwell's own shipped example**, `OpenAndSaveFile`,
+  not just with our code.
+- **Calls that need no token are unaffected:** `GetProcessorTypesAsync(38)`
+  returns 106 processor types reliably throughout, so the SDK service, the
+  gRPC channel on 53204 and the Logix v38 services are all healthy.
+- **It has worked, twice, on this machine today** — roughly 08:17–08:37 and
+  09:26–09:29 — with no configuration difference between the working and
+  failing runs.
+- **FactoryTalk logs nothing.** FactoryTalk Diagnostics shows a successful
+  login of `ECHO1\WINDOWS` on the Local directory via the Active Directory
+  authentication service at 09:14, and no error of any kind from the SDK.
+  The Windows event log has no FactoryTalk authentication entries.
+- **Not licensing.** FactoryTalk Activation reports Echo and Logix Designer
+  operating under a **grace period**, and the SDK is refused `LDSDK.EXE` by
+  FlexNet even in runs that succeed (§18).
+- Environment: Studio 5000 Logix Designer v38.01, Logix Designer SDK
+  2.02.00 (C# client 2.2.1109), Windows Server on `echo1`, FTSP 6.60.00.
+
+**Stop here.** Twelve theories eliminated (§19.2), two of those eliminations
+later shown to be artifacts of an uncontrolled comparison (§19.3), and a
+controlled time series showing the remaining candidate is also wrong
+(§19.4). Nothing further is learnable from this side.
