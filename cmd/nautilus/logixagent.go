@@ -536,6 +536,20 @@ func runLogixDrift(args []string) int {
 		fmt.Fprintln(os.Stderr, "nautilus logix drift:", err)
 		return 1
 	}
+	// A detailed export and a basic one of the SAME project differ by
+	// megabytes of module- and product-defined types, so the controller's
+	// export has to be the same kind as the file we are comparing it with.
+	repoFile, err := l5x.Parse(repoRaw)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "nautilus logix drift:", repoPath, err)
+		return 1
+	}
+	if repoFile.Partial() {
+		fmt.Fprintf(os.Stderr, "nautilus logix drift: %s is a partial export (TargetType=%q); "+
+			"drift needs a whole-controller export\n", repoPath, repoFile.TargetType)
+		return 2
+	}
+	detailed := repoFile.Detailed()
 
 	c := logixd.New(*agent, *token)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Minute)
@@ -552,7 +566,7 @@ func runLogixDrift(args []string) int {
 	if err != nil {
 		return reportErr("drift", err)
 	}
-	res, evs, err := c.Convert(ctx, acdRel, l5xRel, false)
+	res, evs, err := c.Convert(ctx, acdRel, l5xRel, detailed)
 	printEvents(evs)
 	if err != nil {
 		return reportErr("drift", err)

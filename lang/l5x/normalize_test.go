@@ -113,3 +113,76 @@ func TestNormalizeIsIdempotent(t *testing.T) {
 		t.Errorf("normalized export no longer parses: %v", err)
 	}
 }
+
+// An upload writes into the export the comm path it connected over. Two
+// exports of the same controller taken from different machines, or an
+// offline export compared against an uploaded one, must still compare
+// equal — otherwise drift detection reports a difference that describes
+// the operator rather than the code.
+func TestNormalizeDropsTheCommPath(t *testing.T) {
+	const offline = `<RSLogix5000Content ExportDate="Mon Sep 21 15:28:16 2026">
+<Controller Name="DemoLine" ProcessorType="1756-L85E" ProjectSN="16#0000_0000">
+<Rung><Text><![CDATA[GE(LevelPct,HiLevelSP)OTE(HiLevelAlm);]]></Text></Rung>
+</Controller></RSLogix5000Content>`
+	const uploaded = `<RSLogix5000Content ExportDate="Tue Sep 22 09:01:02 2026">
+<Controller Name="DemoLine" ProcessorType="1756-L85E" CommPath="AB_ETH-1\10.154.92.210\Backplane\0" ProjectSN="16#0000_0000">
+<Rung><Text><![CDATA[GE(LevelPct,HiLevelSP)OTE(HiLevelAlm);]]></Text></Rung>
+</Controller></RSLogix5000Content>`
+
+	if !Equivalent([]byte(offline), []byte(uploaded), NormalizeOptions{}) {
+		t.Errorf("an upload should match the offline export it came from:\n%s\n%s",
+			Normalize([]byte(offline), NormalizeOptions{}),
+			Normalize([]byte(uploaded), NormalizeOptions{}))
+	}
+	if got := string(Normalize([]byte(uploaded), NormalizeOptions{})); strings.Contains(got, "CommPath") {
+		t.Errorf("CommPath should be dropped, got:\n%s", got)
+	}
+	// Two uploads of the same controller over DIFFERENT paths agree too.
+	other := strings.Replace(uploaded, `10.154.92.210`, `10.0.0.7`, 1)
+	if !Equivalent([]byte(uploaded), []byte(other), NormalizeOptions{}) {
+		t.Error("the same controller over two paths should compare equal")
+	}
+	// But the code itself is still compared.
+	changed := strings.Replace(uploaded, "HiLevelSP", "HiLevelSP2", 1)
+	if Equivalent([]byte(uploaded), []byte(changed), NormalizeOptions{}) {
+		t.Error("a real logic change must survive normalization")
+	}
+}
+
+// Logix wraps a long attribute list at a column, so removing one attribute
+// moves the line break. Two exports of identical code must not differ over
+// where a tag happened to wrap.
+func TestNormalizeIgnoresAttributeWrapping(t *testing.T) {
+	const wrapped = `<RSLogix5000Content ExportDate="Mon Sep 21 15:28:16 2026">
+<Controller Name="DemoLine" SFCLastScan="DontScan"
+ ProjectSN="16#0000_0000" WebServerEnabled="false"
+>
+<Rung><Text><![CDATA[GE(A,B)OTE(C);]]></Text></Rung>
+</Controller></RSLogix5000Content>`
+	const flat = `<RSLogix5000Content ExportDate="Tue Sep 22 09:01:02 2026">
+<Controller Name="DemoLine" SFCLastScan="DontScan" ProjectSN="16#0000_0000" WebServerEnabled="false">
+<Rung><Text><![CDATA[GE(A,B)OTE(C);]]></Text></Rung>
+</Controller></RSLogix5000Content>`
+	if !Equivalent([]byte(wrapped), []byte(flat), NormalizeOptions{}) {
+		t.Errorf("attribute wrapping should not count as drift:\n%s\n%s",
+			Normalize([]byte(wrapped), NormalizeOptions{}),
+			Normalize([]byte(flat), NormalizeOptions{}))
+	}
+
+	// CDATA is code. ST uses "<" and ">" as operators and its whitespace
+	// is meaningful, so a tag-collapsing normalizer must not reach inside.
+	const st = `<Routine><STContent><Line Number="0"><![CDATA[IF a < b   AND c > d THEN
+    x := 1;
+END_IF;]]></Line></STContent></Routine>`
+	got := string(Normalize([]byte(st), NormalizeOptions{}))
+	for _, want := range []string{"a < b   AND c > d", "\n    x := 1;\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("CDATA altered: missing %q in:\n%s", want, got)
+		}
+	}
+
+	// And a self-closing tag agrees with its spaced spelling.
+	if !Equivalent([]byte(`<A><B c="1"/></A>`), []byte(`<A><B c="1" /></A>`), NormalizeOptions{}) {
+		t.Error("<B c=\"1\"/> and <B c=\"1\" /> should compare equal")
+	}
+}

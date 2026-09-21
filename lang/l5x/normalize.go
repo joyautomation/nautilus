@@ -45,6 +45,12 @@ var (
 	reExportDate      = regexp.MustCompile(`(?i)(\sExportDate=")[^"]*(")`)
 	reLastModified    = regexp.MustCompile(`(?i)(\sLastModifiedDate=")[^"]*(")`)
 	reProjectCreation = regexp.MustCompile(`(?i)(\sProjectCreationDate=")[^"]*(")`)
+	// An upload writes the path it connected over into the export. It
+	// describes the machine that did the upload, not the code, so two
+	// exports of identical logic taken over different paths must compare
+	// equal. A project exported offline carries no CommPath at all, so it
+	// is dropped rather than pinned.
+	reCommPath        = regexp.MustCompile(`(?i)\sCommPath="[^"]*"`)
 	reDataExchangeID  = regexp.MustCompile(`(?i)(\sDataExchangeId=")[^"]*(")`)
 	reProjectSN       = regexp.MustCompile(`(?i)(\sProjectSN=")[^"]*(")`)
 	reL5KData         = regexp.MustCompile(`(?s)[ \t]*<Data Format="L5K">.*?</Data>\n?`)
@@ -60,6 +66,14 @@ var (
 //	                      measured between two exports of an unchanged ACD
 //	LastModifiedDate      moves when the project is opened and saved
 //	ProjectCreationDate   differs between a project and a copy of it
+//	CommPath              DROPPED: an upload records the path it came over,
+//	                      an offline export has none at all
+//
+// Whitespace BETWEEN ATTRIBUTES is also collapsed to a single space.
+// Logix wraps a long attribute list at a column, so removing one
+// attribute moves the wrap and two exports of identical code differ by a
+// line break. Text and CDATA are untouched: rung text and comments mean
+// what they say.
 //
 // Left alone by default: DataExchangeId and ProjectSN. Both measured
 // stable across a re-export, and both are real identity — pinning them
@@ -67,9 +81,11 @@ var (
 // the case where a project HAS been round-tripped through a copy and only
 // the logic matters.
 func Normalize(src []byte, opts NormalizeOptions) []byte {
-	out := reExportDate.ReplaceAll(src, pinnedReplacement)
+	out := collapseTagSpace(src)
+	out = reExportDate.ReplaceAll(out, pinnedReplacement)
 	out = reLastModified.ReplaceAll(out, pinnedReplacement)
 	out = reProjectCreation.ReplaceAll(out, pinnedReplacement)
+	out = collapseTagSpace(reCommPath.ReplaceAll(out, nil))
 	if opts.PinIDs {
 		out = reDataExchangeID.ReplaceAll(out, pinnedReplacement)
 		out = reProjectSN.ReplaceAll(out, pinnedReplacement)
@@ -85,3 +101,94 @@ func Normalize(src []byte, opts NormalizeOptions) []byte {
 func Equivalent(a, b []byte, opts NormalizeOptions) bool {
 	return bytes.Equal(Normalize(a, opts), Normalize(b, opts))
 }
+
+// collapseTagSpace rewrites runs of whitespace between a start tag's
+// attributes to a single space, and drops the whitespace before the
+// closing ">" or "/>".
+//
+// It is a scanner rather than a regex because an L5X carries ST and RLL
+// source inside CDATA, and that source contains "<" and ">" as comparison
+// operators. A regex for "inside a tag" mangles the code it is meant to
+// be comparing.
+func collapseTagSpace(src []byte) []byte {
+	out := make([]byte, 0, len(src))
+	for i := 0; i < len(src); {
+		// CDATA is copied through verbatim, angle brackets and all.
+		if bytes.HasPrefix(src[i:], cdataOpen) {
+			end := bytes.Index(src[i:], cdataClose)
+			if end < 0 {
+				return append(out, src[i:]...) // truncated; leave as-is
+			}
+			end += len(cdataClose)
+			out = append(out, src[i:i+end]...)
+			i += end
+			continue
+		}
+		if bytes.HasPrefix(src[i:], commentOpen) {
+			end := bytes.Index(src[i:], commentClose)
+			if end < 0 {
+				return append(out, src[i:]...)
+			}
+			end += len(commentClose)
+			out = append(out, src[i:i+end]...)
+			i += end
+			continue
+		}
+		if src[i] != '<' {
+			out = append(out, src[i])
+			i++
+			continue
+		}
+		// A tag: copy it, collapsing whitespace outside quoted values.
+		var quote byte
+		tag := make([]byte, 0, 256)
+		for ; i < len(src); i++ {
+			c := src[i]
+			if quote != 0 {
+				tag = append(tag, c)
+				if c == quote {
+					quote = 0
+				}
+				continue
+			}
+			switch c {
+			case '"', '\'':
+				quote = c
+				tag = append(tag, c)
+			case ' ', '\t', '\r', '\n':
+				// One space, and never right before the tag closes.
+				if n := len(tag); n > 0 && tag[n-1] != ' ' && tag[n-1] != '<' {
+					tag = append(tag, ' ')
+				}
+			case '>':
+				// Trim before ">" and before the "/" of "/>", so
+				// <T a="1"/> and <T a="1" /> agree.
+				for n := len(tag); n > 0; n = len(tag) {
+					if tag[n-1] == ' ' {
+						tag = tag[:n-1]
+						continue
+					}
+					if n > 1 && tag[n-1] == '/' && tag[n-2] == ' ' {
+						tag = append(tag[:n-2], '/')
+					}
+					break
+				}
+				tag = append(tag, '>')
+				i++
+				goto done
+			default:
+				tag = append(tag, c)
+			}
+		}
+	done:
+		out = append(out, tag...)
+	}
+	return out
+}
+
+var (
+	cdataOpen    = []byte("<![CDATA[")
+	cdataClose   = []byte("]]>")
+	commentOpen  = []byte("<!--")
+	commentClose = []byte("-->")
+)

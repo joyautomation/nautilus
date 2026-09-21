@@ -55,6 +55,20 @@ func (f *File) Partial() bool {
 	return f.TargetType != "" && f.TargetType != "Controller"
 }
 
+// Detailed reports whether this is a DETAILED export — the one Logix writes
+// with Context and ProductDefinedTypes, carrying every module- and
+// product-defined type the project references. A detailed export of a small
+// project runs to megabytes; the basic export of the same project is a few
+// kilobytes, because it omits those types entirely.
+//
+// The two are not comparable. Anything that exports a project in order to
+// compare it against one on disk — drift detection, most obviously — has to
+// ask for the same kind the file on disk already is, or it will report a
+// difference of 1.8MB where there is no difference at all.
+func (f *File) Detailed() bool {
+	return strings.Contains(f.ExportOptions, "ProductDefinedTypes")
+}
+
 // Controller is the <Controller> element: the project's contents.
 type Controller struct {
 	Name          string
