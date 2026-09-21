@@ -49,26 +49,41 @@ jobs:
     env:
       # The runner's own configuration. None of it is a secret except the
       # token, and none of it is supplied by a pull request.
+      #
+      # The `runner` context is NOT available in a job-level env block, so
+      # anything derived from RUNNER_TEMP is set inside a step instead.
       LOGIXD_ADDR: http://127.0.0.1:8188
-      LOGIXD_WORKDIR: ${{ runner.temp }}\logixd-work
       NAUTILUS_LOGIXD_URL: http://127.0.0.1:8188
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version: '1.24'}
 
+      # LOGIXD_DOTNET points at the dotnet that HAS the ASP.NET Core shared
+      # framework. On a Rockwell box the machine default often does not —
+      # see tools/logixd/README.md — so the runner names it explicitly and
+      # this falls back to whatever is on PATH.
+      - name: Resolve the runner's paths
+        shell: pwsh
+        run: |
+          if (-not $env:LOGIXD_DOTNET) { $env:LOGIXD_DOTNET = "dotnet" }
+          "LOGIXD_DOTNET=$env:LOGIXD_DOTNET"        | Out-File -Append $env:GITHUB_ENV
+          "LOGIXD_WORKDIR=$env:RUNNER_TEMP\logixd-work" | Out-File -Append $env:GITHUB_ENV
+          "LOGIXD_BIN=$env:RUNNER_TEMP\logixd-bin"      | Out-File -Append $env:GITHUB_ENV
+
       - name: Build logixd
         working-directory: tools/logixd
-        run: |
-          & $env:LOGIXD_DOTNET build -c Release -o "$env:RUNNER_TEMP\logixd-bin"
         shell: pwsh
+        run: '& $env:LOGIXD_DOTNET build -c Release -o $env:LOGIXD_BIN'
 
       - name: Start logixd
         shell: pwsh
         run: |
-          $env:DOTNET_ROOT = Split-Path -Parent $env:LOGIXD_DOTNET
+          if ($env:LOGIXD_DOTNET -ne "dotnet") {
+            $env:DOTNET_ROOT = Split-Path -Parent $env:LOGIXD_DOTNET
+          }
           $p = Start-Process -FilePath $env:LOGIXD_DOTNET `
-            -ArgumentList "$env:RUNNER_TEMP\logixd-bin\logixd.dll" `
+            -ArgumentList "$env:LOGIXD_BIN\logixd.dll" `
             -RedirectStandardOutput "$env:RUNNER_TEMP\logixd.out" `
             -RedirectStandardError  "$env:RUNNER_TEMP\logixd.err" `
             -PassThru -WindowStyle Hidden
