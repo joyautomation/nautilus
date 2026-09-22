@@ -2005,3 +2005,29 @@ them is cheap to check.
 Credit where due: the user broke the deadlock with "this all reads like you're
 building compares wrong", which is precisely what it was.
 
+
+### Follow-up: the SDK hides the error that matters
+
+Downloading the bad fixture from Logix Designer produced this:
+
+```
+Downloading controller 'DemoLine'...
+Verifying Controller...
+Error: Rung 1, GEQ: Update instruction to GE.
+Error: Rung 1, GEQ, Operand 0: Invalid data type. Argument must match parameter data type.
+```
+
+**Designer names the rung, the instruction, and the fix.** The SDK, verifying
+the same project, gives `RxCMP_E_AUDIT_INVALIDOPTYPE - Invalid type.` and
+nothing else. Our `CollectingLogger` already captures every
+`LogErrorMessage` the SDK emits, so this is not something logixd is dropping
+— the per-rung detail does not come through that channel at all.
+
+Finding out whether it is reachable needs a reflection probe against the
+net10.0 client assembly (Windows PowerShell cannot load it: strong-name
+validation fails, and it is not a Framework assembly), looking for a
+verification-result or error-collection API next to `BuildAsync`.
+
+Worth doing. The gap between those two messages is the difference between a
+five-minute fix and the afternoon recorded in this section, and every user of
+`nautilus logix build` in CI inherits the worse one.
