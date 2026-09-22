@@ -4,12 +4,30 @@
 <Programs Use="Context">
 <Program Use="Target" Name="MainProgram" TestEdits="false" MainRoutineName="MainRoutine" Disabled="false" UseAsFolder="false">
 <Tags>
-<Tag Name="StartPB" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write"><Data Format="L5K"><![CDATA[0]]></Data><Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data></Tag>
-<Tag Name="StopPB" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write"><Data Format="L5K"><![CDATA[0]]></Data><Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data></Tag>
-<Tag Name="RunCmd" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write"><Data Format="L5K"><![CDATA[0]]></Data><Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data></Tag>
-<Tag Name="HiLevelAlm" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write"><Data Format="L5K"><![CDATA[0]]></Data><Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data></Tag>
-<Tag Name="LevelPct" TagType="Base" DataType="REAL" Radix="Float" Constant="false" ExternalAccess="Read/Write"><Data Format="L5K"><![CDATA[0.00000000e+000]]></Data><Data Format="Decorated"><DataValue DataType="REAL" Radix="Float" Value="0.0"/></Data></Tag>
-<Tag Name="HiLevelSP" TagType="Base" DataType="REAL" Radix="Float" Constant="false" ExternalAccess="Read/Write"><Data Format="L5K"><![CDATA[8.50000000e+001]]></Data><Data Format="Decorated"><DataValue DataType="REAL" Radix="Float" Value="85.0"/></Data></Tag>
+<Tag Name="StartPB" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[P-101 start pushbutton, field-wired NO]]>
+</Description><Data Format="L5K"><![CDATA[0]]></Data><Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data></Tag>
+<Tag Name="StopPB" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[P-101 stop pushbutton, field-wired NC]]>
+</Description><Data Format="L5K"><![CDATA[0]]></Data><Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data></Tag>
+<Tag Name="RunCmd" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[P-101 run command to the VFD]]>
+</Description><Data Format="L5K"><![CDATA[0]]></Data><Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data></Tag>
+<Tag Name="HiLevelAlm" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[LAH-101 high-level alarm active]]>
+</Description><Data Format="L5K"><![CDATA[0]]></Data><Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data></Tag>
+<Tag Name="LevelPct" TagType="Base" DataType="REAL" Radix="Float" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[T-101 level, percent of span from LT-101]]>
+</Description><Data Format="L5K"><![CDATA[0.00000000e+000]]></Data><Data Format="Decorated"><DataValue DataType="REAL" Radix="Float" Value="0.0"/></Data></Tag>
+<Tag Name="HiLevelSP" TagType="Base" DataType="REAL" Radix="Float" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[LAH-101 high-level alarm setpoint]]>
+</Description><Data Format="L5K"><![CDATA[8.50000000e+001]]></Data><Data Format="Decorated"><DataValue DataType="REAL" Radix="Float" Value="85.0"/></Data></Tag>
 </Tags>
 <Routines>
 <Routine Name="MainRoutine" Type="RLL">
