@@ -133,8 +133,28 @@ jobs:
       # Tier 2: the SDK itself. Each test asks the probe first and skips
       # with the failing gate named, so an unlicensed runner reports
       # "skipped: no activation" instead of a red build.
+      #
+      # The SDK tests also need a project to work on and, for the online
+      # path, a controller to talk to. Without those they skip QUIETLY and
+      # the job goes green having tested almost nothing -- four of the five
+      # skipped that way until this was set. Configure the repo variables
+      # LOGIX_SEED_ACD (a path on the runner) and LOGIX_COMM_PATH to arm
+      # them; the summary step below fails the job if they are missing, so
+      # a half-armed runner is loud rather than quietly reassuring.
       - name: SDK integration tests
+        env:
+          NAUTILUS_LOGIXD_SEED_ACD: ${{ vars.LOGIX_SEED_ACD }}
+          NAUTILUS_LOGIXD_COMM_PATH: ${{ vars.LOGIX_COMM_PATH }}
         run: go test ./logix/logixd/ -run TestSDK -v -timeout 45m
+
+      - name: Refuse to pass as a half-armed runner
+        run: |
+          if [ -z "${{ vars.LOGIX_SEED_ACD }}" ] || [ -z "${{ vars.LOGIX_COMM_PATH }}" ]; then
+            echo "::error::The SDK tests need LOGIX_SEED_ACD and LOGIX_COMM_PATH."
+            echo "::error::Without them four of the five skip and this job means nothing."
+            exit 1
+          fi
+        shell: bash
 
       - name: logixd log
         if: always()
