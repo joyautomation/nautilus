@@ -25,6 +25,9 @@ type fakeLogixd struct {
 	// importRungs records the body of the rung import, which is where the
 	// online-edit option lives.
 	importRungs map[string]any
+	// uploadToNew records the body of an upload-from-controller, which is
+	// how an online edit gets the project it edits.
+	uploadToNew map[string]any
 	probeUsable bool
 }
 
@@ -60,6 +63,12 @@ func newFakeLogixd(t *testing.T) (*fakeLogixd, string, func()) {
 			}
 		case r.URL.Path == "/v1/health":
 			ok(map[string]any{"service": "logixd", "version": "test", "sdkClient": "2.2.1109.0"})
+		case r.URL.Path == "/v1/upload-to-new":
+			_ = json.NewDecoder(r.Body).Decode(&f.uploadToNew)
+			if dest, _ := f.uploadToNew["projectFilePath"].(string); dest != "" {
+				f.files[dest] = []byte("UPLOADED-FROM-CONTROLLER")
+			}
+			ok(map[string]any{"project": f.uploadToNew["projectFilePath"]})
 		case r.URL.Path == "/v1/workdir":
 			ok(map[string]any{"workDir": `C:\logixd-work`})
 		case r.URL.Path == "/v1/sessions" && r.Method == http.MethodPost:
@@ -175,10 +184,17 @@ func TestLogixPushSendsTheChosenOnlineOption(t *testing.T) {
 		rungs := writeTemp(t, "r.L5X", "<x/>")
 		args := []string{"--agent", url, "--program", "MainProgram", "--routine", "MainRoutine",
 			"--at", "3", "--replace", "2"}
-		if tc.flag != "" {
+		online := tc.flag != ""
+		if online {
 			args = append(args, tc.flag, "--comm-path", "backplane\\0")
 		}
-		args = append(args, proj, rungs)
+		// An online edit edits the RUNNING program, so it takes no
+		// project file; an offline import edits a project on disk.
+		if online {
+			args = append(args, rungs)
+		} else {
+			args = append(args, proj, rungs)
+		}
 		code := runLogixPush(args)
 		stop()
 		if code != 0 {
@@ -194,6 +210,19 @@ func TestLogixPushSendsTheChosenOnlineOption(t *testing.T) {
 		want := `Controller/Programs/Program[@Name='MainProgram']/Routines/Routine[@Name='MainRoutine']`
 		if f.importRungs["xpath"] != want {
 			t.Errorf("xpath = %v", f.importRungs["xpath"])
+		}
+		// The contract that matters: online, the project comes from the
+		// CONTROLLER. A project file on disk cannot go online, so sending
+		// one fails with an error about physical addressing that says
+		// nothing about the cause.
+		if online {
+			if f.uploadToNew == nil {
+				t.Errorf("%s: online edit did not upload from the controller", tc.want)
+			} else if got := f.uploadToNew["commPath"]; got != `backplane\0` {
+				t.Errorf("%s: uploaded from commPath %v", tc.want, got)
+			}
+		} else if f.uploadToNew != nil {
+			t.Errorf("offline import should not touch the controller")
 		}
 	}
 }
