@@ -43,7 +43,20 @@ jobs:
     name: logixd — build and integration
     # Opt-in. Set the repo variable LOGIX_SELF_HOSTED=true once a runner
     # labelled `logix-sdk` exists; until then this job is skipped, not failed.
-    if: vars.LOGIX_SELF_HOSTED == 'true'
+    #
+    # NEVER runs for a pull request from a fork. This repository is PUBLIC,
+    # so anyone can open one, and this job runs on a self-hosted runner: a
+    # licensed Windows machine that can reach real controllers. A fork PR
+    # reaching it would be arbitrary code execution on plant-adjacent
+    # hardware. Same-repo pull requests are allowed because pushing a branch
+    # here already requires write access.
+    #
+    # Belt and braces: also set Settings > Actions > "Require approval for
+    # all external contributors". This guard does not depend on it.
+    if: >-
+      vars.LOGIX_SELF_HOSTED == 'true' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, windows, logix-sdk]
     timeout-minutes: 60
     env:
