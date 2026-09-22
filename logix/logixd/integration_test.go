@@ -449,13 +449,23 @@ func TestSDKOnlineRungImport(t *testing.T) {
 	if commPath == "" {
 		t.Skip("set NAUTILUS_LOGIXD_COMM_PATH to the controller to exercise the online path")
 	}
-	project := os.Getenv("NAUTILUS_LOGIXD_PROJECT")
-	if project == "" {
-		t.Skip("set NAUTILUS_LOGIXD_PROJECT to an agent-relative .ACD already downloaded to that controller")
-	}
 	program := envOr("NAUTILUS_LOGIXD_PROGRAM", "MainProgram")
 	routine := envOr("NAUTILUS_LOGIXD_ROUTINE", "MainRoutine")
 	cx := ctx(t, 30*time.Minute)
+
+	// The project comes from the CONTROLLER, not from disk. A project file
+	// cannot go online even when its logic matches byte for byte: the
+	// download stamps match information into the project, and that copy
+	// lives wherever the download ran. Opening one and calling GoOnline
+	// fails with RxCL_E_CANNOT_UPLOAD_PHYS_ADDR.
+	//
+	// This test used to require NAUTILUS_LOGIXD_PROJECT to be "an .ACD
+	// already downloaded to that controller" -- a thing that cannot exist,
+	// so the test skipped every time and the online path shipped uncovered.
+	project := path.Join(runID(t), "controller.ACD")
+	if _, err := c.UploadToNew(cx, commPath, project); err != nil {
+		t.Fatalf("uploading the running project: %v", err)
+	}
 
 	s, err := c.Open(cx, project)
 	if err != nil {
