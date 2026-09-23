@@ -238,3 +238,26 @@ that folder's README.
 Part of the [nautilus](https://github.com/joyautomation/nautilus) monorepo
 (`tools/vscode-iec`). Issues and contributions welcome there. Licensed under
 the Apache License 2.0.
+
+## Packaging a VSIX locally
+
+```sh
+npm ci
+npx @vscode/vsce package -o /tmp/vscode-iec.vsix
+```
+
+**Do not pass `--no-dependencies`.** It produces a VSIX that installs
+cleanly and then fails at activation with
+
+```
+Activating extension joyauto.vscode-iec failed due to an error:
+Error: Cannot find module 'vscode-languageclient/node'
+```
+
+Nothing surfaces in the UI: the commands still appear in the palette,
+because the palette is built from `package.json` and needs no activation.
+Selecting one silently does nothing. The only evidence is the Extension Host
+log under the user-data-dir.
+
+`publish.yml` runs `npm ci` and packages with dependencies, so releases are
+unaffected -- this only bites a local build.
