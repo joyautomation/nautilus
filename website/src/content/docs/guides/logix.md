@@ -100,22 +100,24 @@ your laptop / CI  ──HTTPS+token──▶  logixd (Windows)  ──gRPC──
 | FactoryTalk Linx | The SDK supports **only** FactoryTalk Linx — RSLinx is not supported. Your controller must be visible in the FT Linx Network Browser. |
 | OS | 64-bit only. |
 
-### Build and run it
+### Install it
 
 ```powershell
 cd tools\logixd
-dotnet build -c Release -o C:\logixd-bin
-
-$env:DOTNET_ROOT_X64 = "C:\dotnet10"         # see the warning below
-$env:LOGIXD_TOKEN    = "<a long random string>"
-$env:LOGIXD_ADDR     = "http://0.0.0.0:8188"
-$env:LOGIXD_WORKDIR  = "C:\logixd-work"
-$env:LOGIXD_COMM_ALLOW = "AB_ETH-1\10.0.0.5\Backplane\0"
-& C:\dotnet10\dotnet.exe C:\logixd-bin\logixd.dll
+.\install.ps1 -Listen 0.0.0.0 -Port 8188      # elevated PowerShell
 ```
 
+That is the whole setup. It checks the prerequisites, builds `logixd`, mints
+a bearer token, registers it to start at logon, adds a firewall rule, then
+starts it and prints the licensing probe gate by gate — so you find out
+whether the SDK is actually usable before you trust it, not later.
+
+Re-running it is an upgrade; `-Uninstall` reverses it. The token lands in
+`%ProgramData%\logixd\logixd.token`, readable by administrators only.
+
 :::danger[Never set plain `DOTNET_ROOT`]
-Set **`DOTNET_ROOT_X64`**, not `DOTNET_ROOT`.
+The installer **refuses to run** while `DOTNET_ROOT` is set, and prints the
+two commands that fix it. Set **`DOTNET_ROOT_X64`** instead.
 
 With plain `DOTNET_ROOT` pointed at an x64 install, `logixd` starts
 normally, answers health checks, and then **every SDK call that needs a
@@ -128,11 +130,18 @@ The SDK authenticates by launching `FtspAdapterLDSDK.exe`, which is a
 five-second timeout. `DOTNET_ROOT_X64` steers only the x64 host.
 
 This failure looks exactly like a licensing or FactoryTalk configuration
-problem and is neither. It cost us a full day.
+problem and is neither. It cost us a full day, which is why the installer
+will not let you reproduce it.
 :::
 
-The agent must **outlive the shell that started it** — use a scheduled task
-or a service wrapper, not a bare `Start-Process` from an SSH session.
+:::caution[Somebody has to be logged in]
+The agent runs as an **interactive scheduled task at logon, not a service**,
+because FactoryTalk authentication does not work from session 0. After a
+reboot, logixd will not come back until someone logs in at the console.
+
+That is a property of the SDK, not of the packaging. If you need it
+unattended, the machine needs an auto-login.
+:::
 
 ### Check it before you trust it
 
