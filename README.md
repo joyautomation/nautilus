@@ -83,11 +83,40 @@ flag once: `xattr -d com.apple.quarantine /usr/local/bin/nautilus`.
 
 *Linux* — `amd64` or `arm64`:
 
+> **On a desktop Linux machine, pick a different command name.** GNOME's file
+> manager is *also* called `nautilus` (`/usr/bin/nautilus`), and the two
+> collide in both directions:
+>
+> - Install this CLI as `/usr/local/bin/nautilus` and it **shadows the file
+>   manager** — `org.gnome.Nautilus.desktop` runs `Exec=nautilus --new-window`
+>   by bare name, so clicking *Files* launches this CLI instead.
+> - Leave it off `PATH` and typing `nautilus …` opens the **file manager**,
+>   which reads your argument as a folder and pops up
+>   *"Unable to find /home/you/… Please check the spelling and try again."*
+>   That dialog is GNOME, not us.
+>
+> Servers and containers without GNOME are unaffected — install as `nautilus`
+> and skip this.
+
 ```sh
 v=$(curl -fsSL https://api.github.com/repos/joyautomation/nautilus/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
 curl -fsSL "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_linux_amd64.tar.gz" | tar xz nautilus
-sudo install nautilus /usr/local/bin/
+
+# No GNOME (server, container, WSL without a desktop):
+sudo install nautilus /usr/local/bin/nautilus
+
+# GNOME desktop — any name you like; this one is used throughout the docs:
+sudo install nautilus /usr/local/bin/nautilus-iec
 ```
+
+Check you got ours, not the file manager:
+
+```sh
+nautilus-iec version     # or: nautilus version
+```
+
+If that opens a window instead of printing a version, you are running GNOME
+Files.
 
 *Windows* — PowerShell, `amd64` or `arm64`:
 
