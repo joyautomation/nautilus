@@ -13,7 +13,7 @@ type State struct {
 	Tags map[string]any `json:"tags,omitempty"`
 	// Programs are online-edited IEC sources keyed by task name, so an
 	// edit made through the runtime API survives a pod restart until
-	// `nautilus pull` lands it in git.
+	// `naut pull` lands it in git.
 	Programs map[string]string `json:"programs,omitempty"`
 	// Alarms is operator alarm state — acknowledgement and shelf — keyed by
 	// alarm definition id. Retained for the same reason setpoints are: an

@@ -1,7 +1,7 @@
 (* Reusable function blocks for this project — authored in ST, callable
    from any IEC language: reports.fbd instantiates RateOfChange exactly
    like a built-in TON. main.go composes this file via Libraries; the
-   editor, `nautilus check`, and `nautilus pull` compose it the same way,
+   editor, `naut check`, and `naut pull` compose it the same way,
    so online edits round-trip. *)
 
 FUNCTION_BLOCK RateOfChange

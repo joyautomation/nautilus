@@ -6,13 +6,13 @@ controller as a Sparkplug B **edge node**; this one is a Sparkplug B
 **host application** — it subscribes to a whole group, presents every
 edge node's data as INPUT tags, and sends operator writes back out as
 NCMD/DCMD. Shape: `driver: {type: sparkplug-host}` plus
-`nautilus sparkplug import`, mirroring `eip` end to end
+`naut sparkplug import`, mirroring `eip` end to end
 (`docs/design/sparkplug-host.md`).
 
 ```sh
-nautilus check .   # compile + verify the generated tags agree with fleet.st
-nautilus test -v   # acceptance tests, virtual time, no broker
-nautilus run       # connect to driver.broker and go live
+naut check .   # compile + verify the generated tags agree with fleet.st
+naut test -v   # acceptance tests, virtual time, no broker
+naut run       # connect to driver.broker and go live
 ```
 
 ## Host vs. edge, in one picture
@@ -43,7 +43,7 @@ broker required. This is how these files were actually generated, and how
 CI regenerates and diffs them:
 
 ```sh
-go run ./cmd/nautilus sparkplug import --sites sites.yaml --out .
+go run ./cmd/naut sparkplug import --sites sites.yaml --out .
 ```
 
 `sites.yaml` describes three generic water-system sites: `W6` (a well —
@@ -74,7 +74,7 @@ generator, so both paths agree on tag names byte-for-byte for the metrics
 they share:
 
 ```sh
-go run ./cmd/nautilus sparkplug import --broker tcp://broker:1883 \
+go run ./cmd/naut sparkplug import --broker tcp://broker:1883 \
     --group Plant --out .
 ```
 
@@ -84,7 +84,7 @@ asks), listens up to `--listen` (default 30s, returns early once the
 fleet has settled), and writes the same three files. Re-run either path
 any time a site's tag list changes; `git diff` shows exactly what moved.
 
-`nautilus sparkplug tags sparkplug_manifest.yaml` re-derives just the tag
+`naut sparkplug tags sparkplug_manifest.yaml` re-derives just the tag
 file from an already-committed manifest — no broker, for when the
 manifest was hand-edited or a `--tags-skip` pattern changed.
 
@@ -116,7 +116,7 @@ instead:
 - **`<site>__Rebirth`** — `BOOL` **output**; a rising edge sends an NCMD
   Node Control/Rebirth to that site. It is the operator's forced-resync
   button — nothing in this project's logic binds it, which is *why*
-  `nautilus check` warns about it (see below): it is meant to be driven
+  `naut check` warns about it (see below): it is meant to be driven
   from an HMI or `/api/tags`, not from a program.
 
 **The rule this project's logic follows everywhere, and the one the
@@ -125,15 +125,15 @@ guide calls out loudly: guard every read of a site's data on its
 correctly and loudly, the same "reads fault" contract every manifest
 project has for an unbound input — so `fleet_test.yaml`'s baseline
 `given:` blocks always seed every `__Online` and data tag `fleet.st`
-touches before the first scan. `nautilus check` cross-verifies this
+touches before the first scan. `naut check` cross-verifies this
 project already: `WellAlarm`-style interlocking on an un-birthed site
 would fault every scan, loudly, in CI, long before it reaches a field
 controller.
 
-## `nautilus check` warnings, explained
+## `naut check` warnings, explained
 
 ```
-nautilus check: 2 file(s), 0 with errors, 5 warning(s)
+naut check: 2 file(s), 0 with errors, 5 warning(s)
 ```
 
 The five warnings are every writable tag `fleet.st` does not bind:
@@ -142,13 +142,13 @@ buttons) and `W6_Pump1_SpeedSP`, `BP2_plc1_Pump_SpeedSP` (setpoints this
 example doesn't act on). That is expected — a host project's synthesized
 outputs and writable bindings are meant for an HMI or the API, not
 necessarily a program — and is the same shape
-`cmd/nautilus/check_manifest_test.go`'s `TestCheckSparkplugHostProjectOffline`
+`cmd/naut/check_manifest_test.go`'s `TestCheckSparkplugHostProjectOffline`
 fixture asserts. Zero *errors* is the bar that must hold.
 
 ## Try it live
 
-Everything above runs with no broker in sight — `nautilus check` and
-`nautilus test` never dial (`host.New` never dials; connecting is
+Everything above runs with no broker in sight — `naut check` and
+`naut test` never dial (`host.New` never dials; connecting is
 `Start`'s job, so CI and a laptop with no plant network both pass). To
 watch this project consume a **real** edge node:
 
@@ -163,7 +163,7 @@ watch this project consume a **real** edge node:
    `driver.broker` at `tcp://127.0.0.1:1883`, `group-id: Plant`):
 
    ```sh
-   NAUTILUS_ADDR=localhost:8081 nautilus run
+   NAUTILUS_ADDR=localhost:8081 naut run
    ```
 
 3. In a second terminal, make `examples/heated-tank-nogo` publish as an
@@ -181,7 +181,7 @@ watch this project consume a **real** edge node:
    then, from `examples/heated-tank-nogo`:
 
    ```sh
-   NAUTILUS_ADDR=localhost:8082 nautilus run
+   NAUTILUS_ADDR=localhost:8082 naut run
    ```
 
 4. Watch `http://localhost:8081` — the dashboard's **Field drivers**

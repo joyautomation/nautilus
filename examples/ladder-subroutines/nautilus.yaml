@@ -1,8 +1,8 @@
 # Ladder subroutines: FUNCTION_BLOCKs written as rungs.
 #
-#   nautilus check examples/ladder-subroutines
-#   nautilus test  examples/ladder-subroutines
-#   nautilus run   examples/ladder-subroutines
+#   naut check examples/ladder-subroutines
+#   naut test  examples/ladder-subroutines
+#   naut run   examples/ladder-subroutines
 #
 # blocks.ld has NO PROGRAM, so it is a project library — the same rule
 # that makes a PROGRAM-less .st file one. Its two blocks compose into the

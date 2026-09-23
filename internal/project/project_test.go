@@ -441,7 +441,7 @@ func mustJSON(t *testing.T, v any) string {
 }
 
 // The sparkplug-host driver builds from the manifest tier with no broker
-// anywhere — the guarantee `nautilus check` and `nautilus build` rest on —
+// anywhere — the guarantee `naut check` and `naut build` rest on —
 // and DriverStatus picks it up so /api/drivers reports the sites.
 func TestLoadSparkplugHostDriver(t *testing.T) {
 	files := fsys(strings.Replace(manifest, "driver:\n  type: memory\n", "", 1) + `
@@ -512,7 +512,7 @@ driver:
 }
 
 // The modbus driver builds from the manifest tier with no device anywhere —
-// the guarantee `nautilus check` and `nautilus build` rest on — the config
+// the guarantee `naut check` and `naut build` rest on — the config
 // keys are eip's reused wholesale, the driver's synthesized __Online
 // companion satisfies a program that interlocks on it, and DriverStatus
 // picks the driver up so /api/drivers reports the sources.
@@ -536,7 +536,7 @@ driver:
   tag-classes: { slow: ["FTIR_CO"] }
 `)},
 		// The program guards its reads on the companion — the shape
-		// `nautilus check` wants for every modbus tag.
+		// `naut check` wants for every modbus tag.
 		"program.st": &fstest.MapFile{Data: []byte(`PROGRAM Main
 VAR_EXTERNAL FTIR__Online : BOOL; FTIR_CO : REAL; FTIR_Sp : REAL; FTIR_En : BOOL; END_VAR
 FTIR_En := TRUE;
@@ -578,7 +578,7 @@ tags:
 	if !reflect.DeepEqual(classes["slow"], []string{"FTIR_CO"}) {
 		t.Fatalf("ScanClasses = %v", classes)
 	}
-	// The composed project compiles — what `nautilus check` and `build` do.
+	// The composed project compiles — what `naut check` and `build` do.
 	if _, err := runtime.New(p.Runtime); err != nil {
 		t.Fatalf("a modbus project must compile: %v", err)
 	}

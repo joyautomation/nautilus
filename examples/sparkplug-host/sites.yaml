@@ -2,12 +2,12 @@
 # Committed here so the central project's files can be regenerated OFFLINE,
 # in CI, with none of the sites online:
 #
-#   go run ./cmd/nautilus sparkplug import --sites sites.yaml --out .
+#   go run ./cmd/naut sparkplug import --sites sites.yaml --out .
 #
 # A live re-import (with every site actually birthing on the broker) uses
 # the same generator, the other input:
 #
-#   go run ./cmd/nautilus sparkplug import --broker tcp://broker:1883 \
+#   go run ./cmd/naut sparkplug import --broker tcp://broker:1883 \
 #       --group Plant --out .
 #
 # Both paths produce byte-identical output for the metrics they share — see

@@ -1,7 +1,7 @@
 <script lang="ts">
 	// The ladder diagram, drawn RSLogix-style from the pure layout pass
 	// (ladderLayout.ts) and edited through structural ops, FBD-style: a
-	// gesture posts an op, `nautilus ld edit` rewrites the rung's text,
+	// gesture posts an op, `naut ld edit` rewrites the rung's text,
 	// the ladder re-renders. Text stays the source of truth.
 	//
 	// Interaction notes carried over from the FBD editor and tentacle-plc:

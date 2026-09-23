@@ -215,7 +215,7 @@ func TestComposeAdmitsLadderLibrary(t *testing.T) {
 		strings.Contains(m.Libraries[1], "RUNG") {
 		t.Errorf("library 1 should be blocks.ld as ST:\n%s", m.Libraries[1])
 	}
-	// The prelude/program seam still round-trips, which `nautilus pull`
+	// The prelude/program seam still round-trips, which `naut pull`
 	// depends on: a composed source splits back to the program body.
 	composed := Join(m.Libraries, m.Programs[0].Body)
 	body, ok := SplitProgram(composed, m.Prelude)

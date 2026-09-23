@@ -19,8 +19,8 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - run: go build ./...
-      - name: nautilus check (examples)
-        run: go run ./cmd/nautilus check examples
+      - name: naut check (examples)
+        run: go run ./cmd/naut check examples
   sparkplug-tck:
     name: Sparkplug B — TCK conformance
     runs-on: ubuntu-latest

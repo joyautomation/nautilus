@@ -2,7 +2,7 @@
   "name": "vscode-iec",
   "displayName": "nautilus IEC 61131-3",
   "description": "IEC 61131-3 language support for the nautilus SCADA framework: Structured Text (.st), Function Block Diagram (.fbd), Ladder Diagram (.ld) and Sequential Function Chart (.sfc) with syntax highlighting, compile diagnostics, go-to-definition, live graphical diagram editors, inline live tag values from a running controller, and a graphical HMI mimic editor for *.mimic.json P&ID documents.",
-  "version": "0.9.30",
+  "version": "0.9.31",
   "publisher": "joyauto",
   "license": "Apache-2.0",
   "icon": "icon.png",
@@ -266,7 +266,7 @@
     "viewsWelcome": [
       {
         "view": "nautilusLiveValues",
-        "contents": "No live values yet \u2014 start a controller with `nautilus run`, or point the editor at one.\n[Connect to Controller](command:nautilus.connect)\nValues stream over the same API the inline pills use."
+        "contents": "No live values yet \u2014 start a controller with `naut run`, or point the editor at one.\n[Connect to Controller](command:nautilus.connect)\nValues stream over the same API the inline pills use."
       }
     ],
     "menus": {
@@ -361,8 +361,8 @@
       "properties": {
         "nautilus.cliPath": {
           "type": "string",
-          "default": "nautilus",
-          "description": "Path to the nautilus CLI binary (provides the language server via `nautilus lsp`). Install with: go install github.com/joyautomation/nautilus/cmd/nautilus@latest"
+          "default": "naut",
+          "description": "Path to the nautilus CLI binary (provides the language server via `naut lsp`). The command is `naut`, not `nautilus` -- GNOME's file manager owns that name on Linux. Install with: go install github.com/joyautomation/nautilus/cmd/naut@latest"
         },
         "nautilus.runtimeUrl": {
           "type": "string",
@@ -377,7 +377,7 @@
         "nautilus.token": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed only for online-edit download/rollback against a controller started with a token \u2014 reads and `nautilus pull` never require it. Prefer setting this in workspace settings, not user settings."
+          "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed only for online-edit download/rollback against a controller started with a token \u2014 reads and `naut pull` never require it. Prefer setting this in workspace settings, not user settings."
         },
         "nautilus.mimic.snapToGrid": {
           "type": "boolean",

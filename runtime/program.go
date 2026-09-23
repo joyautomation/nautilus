@@ -287,7 +287,7 @@ func (p *Program) Types() map[string]*ir.Type {
 }
 
 // GlobalUses reports which of this program's globals are read and which are
-// written — the split `nautilus check` needs to tell a missing manifest entry
+// written — the split `naut check` needs to tell a missing manifest entry
 // that costs an HMI description from one that faults the scan. Like
 // Globals, this includes reads/writes performed through an instantiated
 // FUNCTION_BLOCK's own VAR_EXTERNAL, nested FB-in-FB included.

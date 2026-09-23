@@ -1,8 +1,8 @@
 # The heated surge tank with NO GO ANYWHERE — the feature tour of the
 # manifest product surface:
-#   nautilus run          scan loop + dashboard + tag API
-#   nautilus build        one deployable controller binary, no toolchain
-#   nautilus check        compile in CI
+#   naut run          scan loop + dashboard + tag API
+#   naut build        one deployable controller binary, no toolchain
+#   naut check        compile in CI
 # Four tasks, three IEC languages, one tag store — control in FBD,
 # reporting in FBD, the annunciator in ladder, and even the PLANT PHYSICS
 # simulated in ST (Go remains the tier for real buses and richer sims).

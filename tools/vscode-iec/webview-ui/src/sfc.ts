@@ -14,7 +14,7 @@
 export type SfcAssoc = { qualifier: string; target: string; time?: string; line: number };
 
 // DiffStatus marks an element's relationship to a diff's base version — set
-// only by diffSfc (never present in a model straight from `nautilus sfc
+// only by diffSfc (never present in a model straight from `naut sfc
 // graph`), the same overlay convention lang/fbd's diff.ts (mergeDiff) and
 // ladder.ts (diffLd) use, rendered with the shared --nx-added/removed/
 // changed palette (App.svelte's diff legend).
@@ -153,7 +153,7 @@ export function computeRanksAndColumns(model: SfcModel): {
 	}
 
 	// Steps never reached from the initial step (a malformed/disconnected
-	// chart `nautilus sfc check` would flag) still get a visible slot: append
+	// chart `naut sfc check` would flag) still get a visible slot: append
 	// them as further roots below the deepest reached rank, in declaration
 	// order, rather than dropping them from the diagram.
 	let maxRank = 0;

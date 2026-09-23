@@ -1,6 +1,6 @@
 # Design: acceptance testing for manifest projects
 
-Status: **built and running.** `nautilus test` executes `*_test.yaml` suites in virtual
+Status: **built and running.** `naut test` executes `*_test.yaml` suites in virtual
 time; `examples/heated-tank-nogo/heated-tank_test.yaml` is the worked example and passes.
 §1–§2 are the original feasibility findings, kept because they are why any of this exists.
 The format is deliberately small and meant to be tweaked in use, not frozen by this document.
@@ -11,15 +11,15 @@ Scope: gives a manifest project a way to assert on its control logic, and gives 
 
 ## 0. Why this exists
 
-The product direction is that the **manifest form is nautilus**, and Go becomes the extension tier for custom field buses and richer simulation. Everything else already supports that: the manifest is close to a strict subset of `runtime.Options` in expressive power (multi-task, per-task scan rates, `dt-tag`, tag roles, units/descriptions, library composition, EtherNet/IP), and what is genuinely manifest-only is *lifecycle*, not capability — `nautilus run` / `nautilus build` need no toolchain, and the online-edit → `nautilus pull` → commit loop closes without a rebuild because the files are what the runtime loads.
+The product direction is that the **manifest form is nautilus**, and Go becomes the extension tier for custom field buses and richer simulation. Everything else already supports that: the manifest is close to a strict subset of `runtime.Options` in expressive power (multi-task, per-task scan rates, `dt-tag`, tag roles, units/descriptions, library composition, EtherNet/IP), and what is genuinely manifest-only is *lifecycle*, not capability — `naut run` / `naut build` need no toolchain, and the online-edit → `naut pull` → commit loop closes without a rebuild because the files are what the runtime loads.
 
 Two things stand between the manifest tier and being the whole product: **custom drivers** and **tests**. Custom drivers are a legitimate SDK concern where Go belongs. Tests are not.
 
 The stake is concrete. The pitch against vendor tooling is that PLC code has no tests and no pipeline that runs one. If the default nautilus project answers that with a compile check and a `git diff`, the argument is materially weaker than it should be. Today:
 
-- `nautilus test` does not exist (`cmd/nautilus/main.go`, command switch).
-- The scaffolded CI for a manifest project runs `nautilus check` + `nautilus build` and nothing else; the Go branch is the only one with `go test ./...` (`cmd/nautilus/templates/ci.yml.tmpl`).
-- Acceptance testing exists only as `cmd/nautilus/templates/program_test.go.tmpl`, in the Go tier.
+- `naut test` does not exist (`cmd/naut/main.go`, command switch).
+- The scaffolded CI for a manifest project runs `naut check` + `naut build` and nothing else; the Go branch is the only one with `go test ./...` (`cmd/naut/templates/ci.yml.tmpl`).
+- Acceptance testing exists only as `cmd/naut/templates/program_test.go.tmpl`, in the Go tier.
 
 ## 1. The blocking finding: the runtime has no virtual time
 
@@ -70,7 +70,7 @@ Two arguments the brief did not make, both of which strengthen it:
   extension already carries four IEC languages; the fifth thing it should carry is a schema,
   not a parser.
 - **Tests become machine-editable.** A structured file can be generated and rewritten —
-  by `nautilus new`, by an "add a test for this rung" editor action, by an agent. A bespoke
+  by `naut new`, by an "add a test for this rung" editor action, by an agent. A bespoke
   syntax makes every one of those a codegen problem.
 
 The door stays open exactly where the brief left it: if sequencing tests ("force a fault at
@@ -85,9 +85,9 @@ compiler, LSP, and editors — not a new grammar.
 dot-directories). Not a `tests:` key in `nautilus.yaml`.
 
 Rationale: `nautilus.yaml` is the *deployment artifact* — it is embedded verbatim into the
-binary by `nautilus build`, it is what `nautilus pull` round-trips against, and it is the
+binary by `naut build`, it is what `naut pull` round-trips against, and it is the
 thing an operator reads to understand what is deployed. Tests are dev-time, they get long,
-and they change on a different cadence. Keeping them out also means `nautilus build` ships
+and they change on a different cadence. Keeping them out also means `naut build` ships
 no test data (the build step will exclude `*_test.yaml` from the embedded archive).
 
 The `_test` suffix is deliberate: it mirrors Go, and it makes "is this file a test?" a rule
@@ -148,11 +148,11 @@ and writes the **driver input image** when it is `role: input` — where it will
 the store at the top of the next main scan, exactly as the field would. An unknown tag name
 is an error, not a new tag.
 
-**The driver is always a stub.** `nautilus test` replaces whatever the manifest configures
+**The driver is always a stub.** `naut test` replaces whatever the manifest configures
 with an `io.Memory` driver, regardless of `driver.type`. Tests never open a socket, never
 touch hardware, and a project with `driver: eip` is fully testable on a laptop with no
 controller on the network. `role: input` tags are fed from `given`; loopback behavior is
-identical to `nautilus run` with the default memory driver, because it *is* that driver.
+identical to `naut run` with the default memory driver, because it *is* that driver.
 
 ### 4.4 Assertions and REAL tolerance
 
@@ -228,7 +228,7 @@ func TestAcceptance(t *testing.T) { acceptance.Run(t, ".") }              // man
 func TestAcceptance(t *testing.T) { acceptance.RunOptions(t, opts, ".") } // Go project
 ```
 
-`nautilus test` is a thin CLI over the same package. One test story, two entry points; a Go
+`naut test` is a thin CLI over the same package. One test story, two entry points; a Go
 project keeps hand-written Go tests for anything the YAML cannot say, and gets virtual time
 in them too (§5 makes the clock an ordinary `runtime.Options` field).
 
@@ -253,7 +253,7 @@ It reaches nothing else. Specifically **not** Sparkplug timestamps, the SSE `ts`
 the scan-diagnostic phase timings (`ReadMs`/`ExecUs`/`WriteMs`/`LastMs`), which keep
 `time.Now()` because they measure real execution cost and that is real even in a test. This
 is safe by construction rather than by discipline: the clock is a field on one `Runtime`, not
-a global, and `nautilus test` starts no server, no Sparkplug node, and no real driver.
+a global, and `naut test` starts no server, no Sparkplug node, and no real driver.
 
 **Hot path:** the default path takes no extra `time.Now()`. `Scan` reads the wall clock once
 as it does today and uses that value for `dt` as well, substituting the injected clock only
@@ -380,19 +380,19 @@ have gone looking for it at wall-clock speed.
    `Advance`, `Scans`, `AdvanceUntil`, `Suspend`/`Resume`, `LogicErrors`), the suite loader,
    the matcher evaluator, ST-expression predicates, failure traces, the reporters (text and
    NDJSON), and `Run(tb, fsys, opts)` for the Go tier.
-3. ✅ **Done.** `cmd/nautilus`: `nautilus test [dir] [-run re] [-v] [-json]`, which compiles
-   first (a compile error is a suite failure carrying the diagnostic); `nautilus build`
+3. ✅ **Done.** `cmd/naut`: `naut test [dir] [-run re] [-v] [-json]`, which compiles
+   first (a compile error is a suite failure carrying the diagnostic); `naut build`
    excludes `*_test.yaml` from the embedded archive.
 4. ✅ **Done.** Scaffolding: every manifest template writes a `<name>_test.yaml`, the
-   manifest CI template runs `nautilus test`, and `examples/heated-tank-nogo` carries a worked
+   manifest CI template runs `naut test`, and `examples/heated-tank-nogo` carries a worked
    suite.
 5. ✅ **Done.** Editor integration, in three layers:
    - **JSON Schema** (`tools/vscode-iec/schemas/nautilus-test.schema.json`) over the keys,
      with a Go guard (`acceptance/schema_test.go`) proving it accepts and rejects exactly what
      the loader does — it originally accepted three shapes the loader refused.
-   - **Test Explorer** over `nautilus test -list` / `-json`, one CLI invocation per project.
+   - **Test Explorer** over `naut test -list` / `-json`, one CLI invocation per project.
    - **ST inside the YAML.** An injection grammar highlights expectation expressions, and
-     `nautilus lsp` treats a `*_test.yaml` as a document of its own: it finds the expression
+     `naut lsp` treats a `*_test.yaml` as a document of its own: it finds the expression
      regions with the same rule `Expect.UnmarshalYAML` uses, compiles each through
      `acceptance.CheckExpr` — the runner's own wrapper — and publishes diagnostics, hover, and
      completion against them. The tags in scope are `ExternalsOf`: what the store holds
@@ -429,15 +429,15 @@ Also still to do, in rough priority order:
 
 | What | Where |
 |---|---|
-| Reference test shape | `cmd/nautilus/templates/program_test.go.tmpl` |
+| Reference test shape | `cmd/naut/templates/program_test.go.tmpl` |
 | Scan loop + `dt` | `runtime/runtime.go:358` (`Scan`), `:328` (`scanTask`) |
 | Task scheduling | `runtime/runtime.go:286-311` (`Run`), `:315` (`ScanTask`) |
 | Timer clock | `runtime/tags.go:44`, `lang/ir/vm.go:10,202`, `lang/ir/builtins_fb.go` |
 | Tag roles → I/O lists | `runtime/tagdef.go` (`expandTags`) |
 | Manifest schema + load | `internal/project/project.go` (`Project`, `Load`) |
 | Stub driver | `io/io.go` (`Memory`) |
-| Scaffolded CI | `cmd/nautilus/templates/ci.yml.tmpl` |
-| CLI command switch | `cmd/nautilus/main.go` |
+| Scaffolded CI | `cmd/naut/templates/ci.yml.tmpl` |
+| CLI command switch | `cmd/naut/main.go` |
 | Expression wrapper (shared) | `acceptance/expect.go` (`exprSource`, `ExternalsOf`, `CheckExpr`) |
 | Suites in the language server | `internal/lsp/testdoc.go` |
 | Tags a program binds | `lang/ir/program.go` (`Program.Globals`), `runtime/runtime.go` (`Runtime.Globals`) |

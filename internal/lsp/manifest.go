@@ -49,7 +49,7 @@ var manifests = manifestCache{entries: map[string]*manifestEntry{}}
 
 // findManifest walks up from a file looking for nautilus.yaml, stopping at
 // the filesystem root. A project is a directory with a manifest in it, so
-// this is the same question `nautilus run` answers by being run there.
+// this is the same question `naut run` answers by being run there.
 func findManifest(path string) (string, bool) {
 	dir := filepath.Dir(path)
 	for range 32 { // bounded: a symlink cycle must not hang the server

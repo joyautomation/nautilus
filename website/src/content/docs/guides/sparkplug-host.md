@@ -8,8 +8,8 @@ side of the wire** from [the edge-node guide](/guides/sparkplug/): instead
 of publishing one controller's tags, it subscribes to a whole Sparkplug B
 group and presents every edge node's data as `role: input` tags. Operator
 writes go back out as NCMD/DCMD. Shape: a manifest-tier `io.Driver`, plus
-`nautilus sparkplug import` to generate what it needs — mirroring
-`nautilus eip import` end to end.
+`naut sparkplug import` to generate what it needs — mirroring
+`naut eip import` end to end.
 
 ```yaml
 driver:
@@ -29,17 +29,17 @@ tag-files: [tags/sparkplug.yaml]
 Password (if the broker needs one) is **never in the file**:
 `NAUTILUS_MQTT_PASSWORD`, the same rule the edge-node `sparkplug:` section
 keeps. `broker`, `host-id`, `group-id` (or `group-ids`), and `manifest`
-are required — a project missing one fails `nautilus check`, not
-`nautilus run`, so a bad config never reaches the field.
+are required — a project missing one fails `naut check`, not
+`naut run`, so a bad config never reaches the field.
 
-## Generating the manifest: `nautilus sparkplug import`
+## Generating the manifest: `naut sparkplug import`
 
 Three files are generated and committed — never hand-edited:
 `sparkplug_types.st` (Sparkplug Templates as ST `TYPE`s, composed
 automatically as a library — no entry needed in `nautilus.yaml`),
 `sparkplug_manifest.yaml` (node/device/metric bindings, validated against
 every birth at runtime), and `tags/sparkplug.yaml` (the tag list, via the
-same `internal/tagfile.Render` `nautilus eip import` uses).
+same `internal/tagfile.Render` `naut eip import` uses).
 
 Two ways to generate them, producing byte-identical output for metrics
 they share:
@@ -47,12 +47,12 @@ they share:
 ```sh
 # Live: listen to a broker, ask every node heard from to rebirth
 # (births aren't retained), generate from what birthed.
-nautilus sparkplug import --broker tcp://mqtt.plant:1883 --group Plant
+naut sparkplug import --broker tcp://mqtt.plant:1883 --group Plant
 
 # Offline: from a committed site list — no broker, so CI can build a
 # ~60-site central project with none of them online, and review a diff
 # before the field work happens.
-nautilus sparkplug import --sites sites.yaml --out .
+naut sparkplug import --sites sites.yaml --out .
 ```
 
 ```yaml
@@ -72,8 +72,8 @@ sites:
           - { name: Pump/SpeedSP, type: Double, writable: true, init: 0.0 }
 ```
 
-`nautilus sparkplug browse --broker ... --group ...` prints what's on the
-wire without generating anything; `nautilus sparkplug tags
+`naut sparkplug browse --broker ... --group ...` prints what's on the
+wire without generating anything; `naut sparkplug tags
 sparkplug_manifest.yaml` re-derives just the tag file from an
 already-committed manifest, no broker needed. `examples/sparkplug-host`
 is a complete three-site fleet built this way — its README walks both
@@ -194,7 +194,7 @@ Generate them with a `--writable` pattern containing a `.`, matched
 against `<metric>.<member.path>`:
 
 ```bash
-nautilus sparkplug import --broker tcp://mqtt:1883 --group Plant \
+naut sparkplug import --broker tcp://mqtt:1883 --group Plant \
   --writable 'PLC1/Pump/SpeedSP,Motor1.START,*.HSP,*.LVL.CTL*SP'
 ```
 
@@ -310,8 +310,8 @@ rt, err := runtime.New(runtime.Options{
 ```
 
 `New` never dials — it builds the whole driver (manifest, indexes,
-companion tags) offline, so `buildDriver` can run inside `nautilus check`
-and `nautilus build` with no broker in sight. `Start` owns the connection
+companion tags) offline, so `buildDriver` can run inside `naut check`
+and `naut build` with no broker in sight. `Start` owns the connection
 and its own reconnect loop; `Stop` publishes the STATE death certificate
 before disconnecting, which the TCK requires ahead of both clean and
 unclean teardown.

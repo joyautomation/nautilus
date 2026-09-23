@@ -1,9 +1,9 @@
 # ladder-subroutines — FUNCTION_BLOCKs written as rungs
 
 ```
-nautilus check examples/ladder-subroutines
-nautilus test  examples/ladder-subroutines -v
-nautilus run   examples/ladder-subroutines
+naut check examples/ladder-subroutines
+naut test  examples/ladder-subroutines -v
+naut run   examples/ladder-subroutines
 ```
 
 `blocks.ld` has **no PROGRAM**, which makes it a project library — the

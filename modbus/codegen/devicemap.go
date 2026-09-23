@@ -1,7 +1,7 @@
 // Package codegen turns a committed DEVICE MAP into the files a manifest
 // project consumes over Modbus: modbus_manifest.yaml (decoded by
 // modbus.LoadManifest) and tags/modbus.yaml (composed via tag-files:).
-// `nautilus modbus import` is the command wrapper; everything here is a
+// `naut modbus import` is the command wrapper; everything here is a
 // pure function of the map, so a regeneration is byte-identical and diffs
 // cleanly against the last one.
 //

@@ -198,7 +198,7 @@ alarms:
 	}
 }
 
-// CheckAlarms is the offline pass `nautilus check` runs. A member the type
+// CheckAlarms is the offline pass `naut check` runs. A member the type
 // does not have is an ERROR — the type is right here in the project, and
 // nothing at run time can make it appear.
 func TestCheckAlarmsCatchesUnknownMember(t *testing.T) {

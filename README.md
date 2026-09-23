@@ -36,11 +36,11 @@ eip/         EtherNet/IP driver for Allen-Bradley Logix: pure-Go CIP stack,
 sparkplug/   Sparkplug B edge node (and host application) over MQTT
 retain/      retained-memory stores: file, Kubernetes ConfigMap
 leader/      redundancy: Kubernetes Lease leader election
-hist/        historian seam + Postgres sink, `nautilus historian`
+hist/        historian seam + Postgres sink, `naut historian`
 alarm/       ISA-18.2 alarms: rules over UDT members, ack/shelve, journal
-acceptance/  virtual-time acceptance tests (`nautilus test`, `*_test.yaml`)
+acceptance/  virtual-time acceptance tests (`naut test`, `*_test.yaml`)
 server/      tag API over HTTP: JSON snapshot, SSE stream, tag writes, alarms, program history
-cmd/nautilus the developer CLI: new · run · test · check · build · pull · lsp · eip · sparkplug · historian · alarms
+cmd/naut the developer CLI: new · run · test · check · build · pull · lsp · eip · sparkplug · historian · alarms
 hmi/         SvelteKit digital-twin component kit + realtime SSE client
 tools/vscode-iec/   VS Code extension: syntax, diagnostics, go-to-def, live values, diagram editors
 examples/    heated-tank-nogo (manifest project, four tasks, three languages), hmi-demo, tank-batch-sfc, …
@@ -53,7 +53,7 @@ examples/    heated-tank-nogo (manifest project, four tasks, three languages), h
 | `io.Driver` | your field bus (Modbus / EtherNet-IP / OPC-UA / REST rack / sim) |
 | `retain.Store` | where retained memory persists — file and k8s ConfigMap ship in `retain/` |
 | `runtime.Coordinator` | redundancy / leader election — a k8s Lease elector ships in `leader/` |
-| `hist.Sink` | where process history is archived — Postgres + `nautilus historian` ship in `hist/` |
+| `hist.Sink` | where process history is archived — Postgres + `naut historian` ship in `hist/` |
 | `alarm.Journal` / `alarm.Notifier` | where alarm events land — a ring, rotated JSONL, and Postgres ship in `alarm/` |
 
 ## Getting started
@@ -73,50 +73,40 @@ has the archives and a `checksums.txt`.
 
 ```sh
 v=$(curl -fsSL https://api.github.com/repos/joyautomation/nautilus/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_darwin_arm64.tar.gz" | tar xz nautilus
-sudo mv nautilus /usr/local/bin/
+curl -fsSL "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_darwin_arm64.tar.gz" | tar xz naut
+sudo mv naut /usr/local/bin/
 ```
 
 Downloading with `curl` skips Gatekeeper's quarantine. If you fetched the
 archive in a browser instead and macOS refuses to open the binary, clear the
-flag once: `xattr -d com.apple.quarantine /usr/local/bin/nautilus`.
+flag once: `xattr -d com.apple.quarantine /usr/local/bin/naut`.
 
 *Linux* — `amd64` or `arm64`:
 
-> **On a desktop Linux machine, pick a different command name.** GNOME's file
-> manager is *also* called `nautilus` (`/usr/bin/nautilus`), and the two
-> collide in both directions:
->
-> - Install this CLI as `/usr/local/bin/nautilus` and it **shadows the file
->   manager** — `org.gnome.Nautilus.desktop` runs `Exec=nautilus --new-window`
->   by bare name, so clicking *Files* launches this CLI instead.
-> - Leave it off `PATH` and typing `nautilus …` opens the **file manager**,
->   which reads your argument as a folder and pops up
->   *"Unable to find /home/you/… Please check the spelling and try again."*
->   That dialog is GNOME, not us.
->
-> Servers and containers without GNOME are unaffected — install as `nautilus`
-> and skip this.
-
 ```sh
 v=$(curl -fsSL https://api.github.com/repos/joyautomation/nautilus/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_linux_amd64.tar.gz" | tar xz nautilus
-
-# No GNOME (server, container, WSL without a desktop):
-sudo install nautilus /usr/local/bin/nautilus
-
-# GNOME desktop — any name you like; this one is used throughout the docs:
-sudo install nautilus /usr/local/bin/nautilus-iec
+curl -fsSL "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_linux_amd64.tar.gz" | tar xz naut
+sudo install naut /usr/local/bin/naut
 ```
 
-Check you got ours, not the file manager:
+Check it:
 
 ```sh
-nautilus-iec version     # or: nautilus version
+naut version
 ```
 
-If that opens a window instead of printing a version, you are running GNOME
-Files.
+> **The command is `naut`, not `nautilus`.** GNOME's file manager already
+> owns `/usr/bin/nautilus` on essentially every Linux desktop, and sharing
+> the name broke both ways: install ours on `PATH` and clicking *Files* in
+> the dock launched the CLI (`org.gnome.Nautilus.desktop` runs
+> `Exec=nautilus` by bare name); leave it off `PATH` and typing `nautilus`
+> opened the file manager, which read the argument as a folder and showed
+> *"Unable to find … Please check the spelling and try again."*
+>
+> If you installed an earlier build as `nautilus`, remove it:
+> `sudo rm -f /usr/local/bin/nautilus`. The project is still called nautilus
+> — only the command changed.
+
 
 *Windows* — PowerShell, `amd64` or `arm64`:
 
@@ -132,13 +122,13 @@ Open a new terminal afterwards so the `Path` change is picked up.
 *Any OS, with Go 1.24+ installed:*
 
 ```sh
-go install github.com/joyautomation/nautilus/cmd/nautilus@latest
+go install github.com/joyautomation/nautilus/cmd/naut@latest
 ```
 
 This puts the binary in `$(go env GOPATH)/bin`, which needs to be on your
-`PATH`. Whichever route you took, `nautilus version` should now answer.
+`PATH`. Whichever route you took, `naut version` should now answer.
 
-The one binary is the whole toolchain: `nautilus new` (scaffold a
+The one binary is the whole toolchain: `naut new` (scaffold a
 project), `run`, `test`, `check` (the CI gate: compiles every program and
 cross-checks it against the manifest), `build`, `pull` (bring a controller's
 running program back into the repo), `lsp` (the language server the VS Code
@@ -147,10 +137,10 @@ extension uses), and the `eip`, `modbus`, `sparkplug`, and `historian` tools.
 **2. Scaffold a project**
 
 ```sh
-nautilus new my-plant                      # the tour: 3 tasks, 3 IEC languages, simulated plant
-nautilus new my-plant --template minimal   # one task, one program, one test
-nautilus new my-plant --template sdk       # Go project, for a custom field bus
-nautilus new my-plant --template sdk-demo  # Go project with plant physics in Go
+naut new my-plant                      # the tour: 3 tasks, 3 IEC languages, simulated plant
+naut new my-plant --template minimal   # one task, one program, one test
+naut new my-plant --template sdk       # Go project, for a custom field bus
+naut new my-plant --template sdk-demo  # Go project with plant physics in Go
 ```
 
 A nautilus project is your logic and a manifest. Run, test, and ship it
@@ -158,14 +148,14 @@ with the CLI alone — no toolchain:
 
 ```sh
 cd my-plant
-nautilus run        # scan loop + dashboard + tag API on http://localhost:8080
-nautilus test       # acceptance tests, in virtual time
-nautilus build      # emit ./my-plant — a self-contained controller binary
+naut run        # scan loop + dashboard + tag API on http://localhost:8080
+naut test       # acceptance tests, in virtual time
+naut build      # emit ./my-plant — a self-contained controller binary
 ```
 
 `nautilus.yaml` declares the tasks (one program file each, any language,
 own scan rates), the tags by role, the server, and the field driver
-(loopback for bring-up, EtherNet/IP by configuration). `nautilus build`
+(loopback for bring-up, EtherNet/IP by configuration). `naut build`
 appends the project to the runner and emits one deployable binary — no Go
 toolchain anywhere.
 
@@ -204,8 +194,8 @@ tests, CI, and `.vscode/` recommendations.
 
 ```sh
 cd my-plant
-nautilus test    # the acceptance suite, in virtual time
-nautilus run     # scan loop + tag API on http://localhost:8080
+naut test    # the acceptance suite, in virtual time
+naut run     # scan loop + tag API on http://localhost:8080
 ```
 
 An `sdk` project is an ordinary Go program — `go mod tidy`, `go run .`,
@@ -232,7 +222,7 @@ completion, and **live tag values as pills** next to identifiers in
 `program.st`.
 
 On macOS, VS Code launched from the Dock or Spotlight gets the login `PATH`,
-not your shell's, so it may not find `nautilus` even though your terminal
+not your shell's, so it may not find `naut` even though your terminal
 does. If the extension reports it could not start the language server, set
 `nautilus.cliPath` to the full path (`which nautilus`), or launch VS Code
 from a terminal with `code .`.
@@ -248,9 +238,9 @@ from a terminal with `code .`.
   and a manifest project can serve the build itself — `server: { hmi:
   ./hmi/build }` — so one binary is the whole deploy; see the tag-model guide's
   "Serving the HMI from the controller".
-- Ship it as one binary: `nautilus build` for a manifest project, `go build`
-  for an SDK project. The scaffolded CI gates on `nautilus check`,
-  `nautilus test`, and `nautilus build`; `nautilus new --deploy` adds a
+- Ship it as one binary: `naut build` for a manifest project, `go build`
+  for an SDK project. The scaffolded CI gates on `naut check`,
+  `naut test`, and `naut build`; `naut new --deploy` adds a
   Dockerfile, a redundant-pair Kubernetes manifest, and the workflow that
   ships a merged commit to the controller.
 
@@ -302,8 +292,8 @@ Point the importer at an Allen-Bradley Logix controller and it generates the
 types and bindings your project needs — committed source, not runtime config:
 
 ```sh
-nautilus eip browse --host 192.168.1.10                 # see what's on the controller
-nautilus eip import --host 192.168.1.10 \
+naut eip browse --host 192.168.1.10                 # see what's on the controller
+naut eip import --host 192.168.1.10 \
   --tags 'Line1*,Program:MainProgram.*' \
   --writable 'Line1Cmd*'
 ```
@@ -348,7 +338,7 @@ maps off the datasheet once per device *type*, hosts and unit-ids once per
 *instance*.
 
 ```sh
-nautilus modbus import --map devices.yaml --plan
+naut modbus import --map devices.yaml --plan
 ```
 
 That writes `modbus_manifest.yaml` and `tags/modbus.yaml` — both generated,
@@ -359,7 +349,7 @@ request instead of four. In a manifest project the driver is configuration:
 ```yaml
 driver:
   type: modbus
-  manifest: modbus_manifest.yaml   # from `nautilus modbus import`
+  manifest: modbus_manifest.yaml   # from `naut modbus import`
   scan-rate: 1s
   scan-classes: { fast: 500ms, slow: 2.5s }
 tag-files: [tags/modbus.yaml]
@@ -369,7 +359,7 @@ Addresses are 0-based PDU addresses (40001 is holding 0); word and byte
 order are per source, because the same hardware ships both ways. A Modbus
 exception marks just that block bad and keeps polling; a transport failure
 reconnects with backoff while values hold and `<source>__Online` goes false.
-`nautilus modbus serve` stands in for the whole plant on one listener, so
+`naut modbus serve` stands in for the whole plant on one listener, so
 the bench needs no hardware. `examples/modbus` is a complete plant, and the
 [Modbus TCP guide](https://nautilus.joyautomation.com/guides/modbus/) covers
 the rest.
@@ -427,10 +417,10 @@ edit becomes permanent**. The rule of thumb falls out of the two planes:
 logic you want to tune online, write in ST; infrastructure, write in Go.
 
 Pulling a field edit back to git closes the loop. **Pull Program from
-Controller** (VS Code) or `nautilus pull --host <controller>` writes the
+Controller** (VS Code) or `naut pull --host <controller>` writes the
 running program back into your program file — the inverse of download — so
 you review it with `git diff` and commit. Only the program file is rewritten;
-generated type files are never touched. `nautilus pull --check` reports drift
+generated type files are never touched. `naut pull --check` reports drift
 and exits non-zero, so CI can fail a build when a controller has un-pulled
 edits. Composition is a single definition shared by the runtime, the language
 server, download, and pull, so a program round-trips losslessly.
@@ -439,10 +429,10 @@ server, download, and pull, so a program round-trips losslessly.
 edits, pull — works over the network, not just against a local process. A
 scaffolded controller binds loopback by default; set `NAUTILUS_ADDR=0.0.0.0:8080`
 to expose the tag API to other machines, and point the editor at it with the
-`nautilus.runtimeUrl` setting (`nautilus pull` takes `--host`). Exposing the
+`nautilus.runtimeUrl` setting (`naut pull` takes `--host`). Exposing the
 API on the network also exposes its write surface, so set `NAUTILUS_TOKEN` on
 the controller and the matching `nautilus.token` in the editor — reads and
-`nautilus pull` stay open, but tag writes and online edits then require the
+`naut pull` stay open, but tag writes and online edits then require the
 token.
 
 ### Alarms
@@ -454,7 +444,7 @@ member an edge node published. `alarms:` in the manifest adds the part a
 expires, and an append-only journal, served at `/api/alarms*` with a
 counts-only summary on every stream frame. `rules:` generate definitions in
 bulk by matching a UDT type and a member, so a dozen rules cover a fleet's
-thousands of alarms and `nautilus alarms list` prints what they became.
+thousands of alarms and `naut alarms list` prints what they became.
 Acknowledgement is host state — never written back to the edge, persisted
 through `retain`, so a restart or a failover cannot resurrect four hundred
 acked alarms as unacked. Acceptance tests get an `alarms:` key and
@@ -504,11 +494,11 @@ driver:
   broker: "tcp://mqtt.plant:1883"
   group-id: Plant
   host-id: plant-scada          # STATE topic spBv1.0/STATE/plant-scada
-  manifest: sparkplug_manifest.yaml   # from `nautilus sparkplug import`
+  manifest: sparkplug_manifest.yaml   # from `naut sparkplug import`
 tag-files: [tags/sparkplug.yaml]
 ```
 
-`nautilus sparkplug import --broker ... --group ...` (live) or
+`naut sparkplug import --broker ... --group ...` (live) or
 `--sites sites.yaml` (offline, no broker — CI-buildable) generates the
 manifest, tag file, and Template types. Reads fault until a site's first
 birth, so guard logic on the driver-synthesized `<site>__Online`
@@ -553,7 +543,7 @@ BOOL), `inst:TYPE(args)` puts a timer/counter in the rung with power
 driving its standard pin, and `ET => Var` captures block outputs. Each
 language transpiles one hop (`ld → fbd → st`) into the same IR, so
 functions, user FUNCTION_BLOCKs, arrays, diagnostics, live values, online
-edits, and visual diffs work identically everywhere. `nautilus new
+edits, and visual diffs work identically everywhere. `naut new
 --language ld` (or `fbd`) scaffolds a project in that language. The full
 reference — evaluation semantics and every built-in — is
 [docs/functions.md](docs/functions.md).
@@ -738,7 +728,7 @@ The pieces that make this first-class rather than a convention:
   [docs/functions.md](docs/functions.md#function-blocks-in-ladder) and
   [examples/ladder-subroutines](examples/ladder-subroutines).
 - **The tooling composes the same way.** The VS Code extension, the LSP,
-  `nautilus check`, and `nautilus pull` all treat sibling library files
+  `naut check`, and `naut pull` all treat sibling library files
   as in-scope for the program, byte-identically to `Libraries` — so
   online edits round-trip losslessly and CI sees what the runtime sees.
 - **Instance state is retained.** A block's `VAR` section persists
@@ -753,7 +743,7 @@ The pieces that make this first-class rather than a convention:
   inputs and outputs takes one pin instead of thirty. See
   [docs/functions.md](docs/functions.md#user-function-blocks).
 
-`nautilus new` scaffolds this shape: the PI controller ships in
+`naut new` scaffolds this shape: the PI controller ships in
 `blocks.st`, instantiated from `program.st`. (This one is worth writing
 by hand once to see how it works; for real loops reach for the built-in
 `PID` — anti-windup, bumpless auto/manual, derivative-on-PV filtering,
@@ -788,7 +778,7 @@ lists the resource's programs; a `PUT` routes automatically by the POU name
 in the submitted source, and `?pou=` / `?task=` select one explicitly for
 GET/rollback. In VS Code that means a workspace with one program file per
 task Just Works: open the file, Download/Diff/Rollback target that task's
-program, retained state carries across the swap. And `nautilus pull`
+program, retained state carries across the swap. And `naut pull`
 reconciles the whole resource: every controller program pulls back into
 the workspace file declaring its POU (a new program lands in
 `<POU>.st`/`.fbd`), so a field edit to any task is reviewable and
@@ -829,14 +819,14 @@ pre-release channel, the HMI kit on npm. What ships today:
   joyautomation/sparkplug-tck-go edge-node conformance profile in CI
 - ✅ `eip` — EtherNet/IP driver for ControlLogix/CompactLogix: pure-Go (no
   cgo) CIP client with connected messaging and batched reads, tag-list + UDT
-  template upload, `nautilus eip import` codegen (ST TYPE block + Go tag
+  template upload, `naut eip import` codegen (ST TYPE block + Go tag
   manifest), write-on-change outputs, and a Logix controller emulator
   (`eip/logixserver`) for hermetic integration tests
 - ✅ `modbus` — Modbus TCP driver: block-read planner (one request per device
   instead of one per variable), per-source word/byte order, scan classes,
   per-tag quality that tells a refused register (exception → that block bad,
   siblings good) from a dead link (reconnect backoff, values hold),
-  keep-alive `rewrite:` outputs, `nautilus modbus import|browse|serve|tags`
+  keep-alive `rewrite:` outputs, `naut modbus import|browse|serve|tags`
   codegen and commissioning tools, and an in-process slave plus a pymodbus
   foreign-stack run in CI
 - ✅ `server` — tag API: JSON snapshot, SSE stream, tag writes (HMI + editor),
@@ -845,14 +835,14 @@ pre-release channel, the HMI kit on npm. What ships today:
   controller can be the whole deploy — no separate web server
 - ✅ `tools/vscode-iec/` online edits — Download Program to Controller, diff
   running-vs-workspace, rollback, and a sync-status indicator
-- ✅ `cmd/nautilus` — CLI: interactive project scaffold, headless ST compile
+- ✅ `cmd/naut` — CLI: interactive project scaffold, headless ST compile
   check for CI, and the ST language server
 - ✅ `tools/vscode-iec/` — VS Code extension: syntax, compile diagnostics,
   go-to-definition, hover, completion, inline live tag values
 - ✅ `examples/heated-tank` — a runnable controller serving the tag API
 - ✅ `examples/heated-tank-nogo` — the same plant as a manifest project:
   four tasks in three IEC languages (physics simulated in ST), zero Go,
-  `nautilus run` / `nautilus build`
+  `naut run` / `naut build`
 - ✅ `examples/hmi-demo` — a SvelteKit operator screen on the HMI kit:
   tank faceplate, trends, setpoint write-back, driver-connection cards,
   and scan diagnostics from one SSE stream
@@ -868,7 +858,7 @@ pre-release channel, the HMI kit on npm. What ships today:
 
 ## Roadmap
 
-- An HMI starter in `nautilus new`
+- An HMI starter in `naut new`
 - Native-Go function blocks alongside ST (both lowering to the same IR)
 - Vendor-format import (Studio 5000 L5X, TIA, PLCopen XML) → nautilus
 

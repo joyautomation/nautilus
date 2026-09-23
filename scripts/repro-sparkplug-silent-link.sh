@@ -3,7 +3,7 @@
 # reconnects, rebirths, and then never publishes NDATA again. See
 # docs/handover/2026-09-19-sparkplug-edge-findings.md.
 #
-#   scripts/repro-sparkplug-silent-link.sh            # builds ./cmd/nautilus, expects a broker on localhost:1883
+#   scripts/repro-sparkplug-silent-link.sh            # builds ./cmd/naut, expects a broker on localhost:1883
 #   BROKER_HOST=10.0.0.5 BROKER_PORT=1883 scripts/repro-sparkplug-silent-link.sh
 #   MOSQ="docker compose -f ../ignition/docker-compose.yml exec -T broker" scripts/repro-sparkplug-silent-link.sh
 #
@@ -25,7 +25,7 @@ cleanup() { [ -n "$pid" ] && { kill -CONT "$pid" 2>/dev/null; kill "$pid" 2>/dev
 trap cleanup EXIT
 
 echo "building nautilus from $root"
-(cd "$root" && go build -o "$work/nautilus" ./cmd/nautilus) || exit 1
+(cd "$root" && go build -o "$work/nautilus" ./cmd/naut) || exit 1
 
 mkdir -p "$work/edge"
 cat > "$work/edge/device.st" <<'EOF'

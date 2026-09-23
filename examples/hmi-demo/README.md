@@ -14,7 +14,7 @@ Point it at any running nautilus controller:
 
 ```sh
 # a no-Go manifest controller (faceplates + trends + scan diagnostics)
-( cd ../heated-tank-nogo && nautilus run )
+( cd ../heated-tank-nogo && naut run )
 
 # …or one with real field drivers, to see the EtherNet/IP + Sparkplug cards
 CONTROLLER_URL=http://localhost:8081 npm run dev

@@ -58,7 +58,7 @@ type LadderOptions struct {
 }
 
 // Ladder renders an export's RLL routines as the nautilus ladder model —
-// the same JSON `nautilus ld graph` emits for a .ld file, so every
+// the same JSON `naut ld graph` emits for a .ld file, so every
 // consumer of it works unchanged on Logix code.
 //
 // Each routine becomes a Block and its rungs carry POU, so a viewer groups

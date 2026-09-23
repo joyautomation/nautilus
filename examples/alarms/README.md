@@ -5,10 +5,10 @@ hand-written definition for a standalone contact, and an acceptance suite
 that walks a five-minute on-delay in a few milliseconds of virtual time.
 
 ```sh
-nautilus check examples/alarms         # validate the rules, offline
-nautilus alarms list examples/alarms   # see what the two rules expanded to
-nautilus test examples/alarms          # the suite
-nautilus run examples/alarms           # dashboard, /api/alarms, /api/alarms/journal
+naut check examples/alarms         # validate the rules, offline
+naut alarms list examples/alarms   # see what the two rules expanded to
+naut test examples/alarms          # the suite
+naut run examples/alarms           # dashboard, /api/alarms, /api/alarms/journal
 ```
 
 ## What is here
@@ -17,7 +17,7 @@ nautilus run examples/alarms           # dashboard, /api/alarms, /api/alarms/jou
 | --- | --- |
 | `blocks.st` | the `AnalogInput` UDT — a library, because it has no `PROGRAM` |
 | `program.st` | the bits: limits compared at scan rate. Knows nothing about alarms |
-| `sim.st` | the plant, so `nautilus run` shows alarms coming and going |
+| `sim.st` | the plant, so `naut run` shows alarms coming and going |
 | `nautilus.yaml` | tags, and the `alarms:` section: rules, defaults, journal, notify |
 | `alarms/rtu9.yaml` | the standalone contacts — a generated artifact's shape |
 | `alarms_test.yaml` | on-delay, ack, shelve expiry, unshelve, suppression |
@@ -46,7 +46,7 @@ hundred. `site-from:` pulls `RTU9` out of the tag name by regexp, so
 `{site}__Online` resolves to the node's own online flag without a
 generator writing that line on every entry.
 
-`nautilus alarms list` prints what they became, which is the whole reason
+`naut alarms list` prints what they became, which is the whole reason
 rules are an acceptable trade:
 
 ```

@@ -53,7 +53,7 @@ The pieces that make this first-class rather than a convention:
   `.ld` or `.fbd` file holding `FUNCTION_BLOCK`s is a library, the same
   as a `.st` one (see [Ladder](/languages/ladder/)).
 - **The tooling composes the same way.** The VS Code extension, the LSP,
-  `nautilus check`, and `nautilus pull` all treat sibling library files
+  `naut check`, and `naut pull` all treat sibling library files
   as in-scope for the program, byte-identically to `Libraries` — so
   online edits round-trip losslessly and CI sees what the runtime sees.
 - **Instance state is retained.** A block's `VAR` section persists
@@ -61,7 +61,7 @@ The pieces that make this first-class rather than a convention:
   by name and type — a `PI` keeps its integral through a live logic
   change, like a real controller.
 
-`nautilus new` scaffolds this shape: the PI controller ships in
+`naut new` scaffolds this shape: the PI controller ships in
 `blocks.st`, instantiated from `program.st`.
 
 ## More than one program: tasks

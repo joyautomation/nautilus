@@ -20,7 +20,7 @@ The line-map discipline (`TranspileWithLines` in FBD/LD; `check.go`, `analysis.g
 
 ### Files read to ground this design
 
-`lang/fbd/{fbd,transpile,graph,edit,editparity,layout}.go`, `lang/ld/{ld,graph}.go`, `lang/ir/{node,program}.go`, `lang/ir/builtins_fb.go` (TON), `lang/st/time.go`, `runtime/{runtime,program}.go`, `internal/stproject/stproject.go`, `internal/lsp/{server,analysis}.go`, `cmd/nautilus/{main,check,fbd,new}.go`, `tools/vscode-iec/src/{fbdPreview,scan}.ts`, `tools/vscode-iec/package.json`.
+`lang/fbd/{fbd,transpile,graph,edit,editparity,layout}.go`, `lang/ld/{ld,graph}.go`, `lang/ir/{node,program}.go`, `lang/ir/builtins_fb.go` (TON), `lang/st/time.go`, `runtime/{runtime,program}.go`, `internal/stproject/stproject.go`, `internal/lsp/{server,analysis}.go`, `cmd/naut/{main,check,fbd,new}.go`, `tools/vscode-iec/src/{fbdPreview,scan}.ts`, `tools/vscode-iec/package.json`.
 
 ---
 
@@ -208,7 +208,7 @@ fire(t)    = enabled(t) AND altGuard(t)
 
 **Set-dominates-clear (the one-scan atomicity rule).** A step that is simultaneously a source of one firing transition and a target of another firing transition in the *same* scan must end the scan **active**. This is guaranteed by ordering: emit *all* clears (step 3) before *all* sets (step 4). A tight self-loop (`FROM S TO S`) therefore leaves `S` active, matching the standard's resolution. This is stated as the declared conformant choice.
 
-**Token conservation is not machine-enforced in slice 1.** A malformed chart (e.g. a simultaneous branch whose legs are re-merged by an alternative convergence) can in principle duplicate or lose a token. `nautilus check` flags the structurally detectable cases (convergence arity mismatch, unreachable steps — §5); full token-conservation proof is a non-goal (§7).
+**Token conservation is not machine-enforced in slice 1.** A malformed chart (e.g. a simultaneous branch whose legs are re-merged by an alternative convergence) can in principle duplicate or lose a token. `naut check` flags the structurally detectable cases (convergence arity mismatch, unreachable steps — §5); full token-conservation proof is a non-goal (§7).
 
 ### 2.5 Action qualifiers — slice 1 set
 
@@ -223,7 +223,7 @@ fire(t)    = enabled(t) AND altGuard(t)
 | `P` / `P0` | Pulse (P ≡ P1 in most vendors) / pulse on deactivation. | 1 if cheap, else 1b |
 | `L` `D` `SD` `DS` `SL` | Time-limited / delayed / stored-delayed variants. | **later slice** |
 
-Rationale for staging: `N`/`S`/`R`/`P1` cover the overwhelming majority of real sequences and require **no new timer state** beyond a one-scan edge memory for `P1`. The timed qualifiers each require a per-association timer and a more elaborate action-control block; deferring them keeps slice-1 semantics small and *fully honest* (we ship a declared subset, not a broken superset). The deferral is called out in `nautilus check`: an unsupported qualifier is a clear diagnostic, never silently mis-executed.
+Rationale for staging: `N`/`S`/`R`/`P1` cover the overwhelming majority of real sequences and require **no new timer state** beyond a one-scan edge memory for `P1`. The timed qualifiers each require a per-association timer and a more elaborate action-control block; deferring them keeps slice-1 semantics small and *fully honest* (we ship a declared subset, not a broken superset). The deferral is called out in `naut check`: an unsupported qualifier is a clear diagnostic, never silently mis-executed.
 
 **Action-control model (simplified conformant subset).** The standard defines an "action control" function block per action with a `Q` output. nautilus computes, for each *(step, action, qualifier)* association, a Boolean "active" signal, then combines per action:
 
@@ -320,7 +320,7 @@ Like `fbd.TranspileWithLines` / `ld.TranspileWithLines`, `sfc.TranspileWithLines
 
 This is the third instance of the graph/edit seam. It follows **LD's posture more than FBD's**: SFC structure (which steps, which transitions, which branches) is *canonical in the text* — the drawing is a function of the source — so the render model is derived, not stored. SFC's one genuine 2-D need (horizontal placement of parallel branches) is met by **reusing FBD's optional `(* @layout *)` pin block** as an aesthetic override, not as the structural source of truth.
 
-### 4.1 Render model (`sfc.Model`, emitted by `nautilus sfc graph`)
+### 4.1 Render model (`sfc.Model`, emitted by `naut sfc graph`)
 
 ```
 Model {
@@ -366,9 +366,9 @@ Layout representation decision — **recommend: structure is implied by the text
 
 ## 5. LSP + CLI + validation
 
-### 5.1 `nautilus check` (validation)
+### 5.1 `naut check` (validation)
 
-The base pipeline is inherited: `.sfc` → `sfc.TranspileWithLines` → the existing ST parse+lower, with positions mapped back (the exact pattern already in `cmd/nautilus/check.go` for `.ld`/`.fbd`). On top, SFC-specific structural checks (in `lang/sfc/check.go`, run before transpile):
+The base pipeline is inherited: `.sfc` → `sfc.TranspileWithLines` → the existing ST parse+lower, with positions mapped back (the exact pattern already in `cmd/naut/check.go` for `.ld`/`.fbd`). On top, SFC-specific structural checks (in `lang/sfc/check.go`, run before transpile):
 
 - **Unreachable step** — a non-initial step that is no transition's `TO` target.
 - **Dead-end step** — a step that is no transition's `FROM` source (warn; a terminal step may be intentional).
@@ -388,12 +388,12 @@ Add `analyzeSFC` to `internal/lsp/analysis.go`, dispatched by the `.sfc` extensi
 
 ### 5.3 CLI verbs
 
-Mirror `nautilus fbd` (`cmd/nautilus/fbd.go`) exactly, in a new `cmd/nautilus/sfc.go`:
+Mirror `naut fbd` (`cmd/naut/fbd.go`) exactly, in a new `cmd/naut/sfc.go`:
 
-- `nautilus sfc graph <file>` — emit the render model JSON (`-` reads stdin).
-- `nautilus sfc edit` — read `{"source", "op"}`, return `{"edits":[…]}`.
+- `naut sfc graph <file>` — emit the render model JSON (`-` reads stdin).
+- `naut sfc edit` — read `{"source", "op"}`, return `{"edits":[…]}`.
 
-Plus wire `.sfc` into: `nautilus check` (walk + transpile hop), `nautilus new --language sfc` (scaffold a blank chart from a template), and `main.go`'s verb switch.
+Plus wire `.sfc` into: `naut check` (walk + transpile hop), `naut new --language sfc` (scaffold a blank chart from a template), and `main.go`'s verb switch.
 
 ---
 
@@ -405,7 +405,7 @@ Slices are cut so the parallel ones touch **disjoint files**. The shared contrac
 
 Land the "new language exists" seams as thin pass-throughs so nothing else is blocked. **Must merge before A–E start.**
 
-- Files: `runtime/program.go` (`Language`, `lowerSource`), `internal/stproject/stproject.go` (`.sfc` in the `ComposeAll` ext allowlist), `cmd/nautilus/check.go` (ext allowlist + transpile hop), `internal/lsp/server.go` (`.sfc` → `analyzeSFC` dispatch), `cmd/nautilus/main.go` (`sfc` verb), plus a new `lang/sfc/sfc.go` exposing `HasBlock`, `Compile`, `Transpile`, `TranspileWithLines` as stubs (returning "not implemented" until B fills them).
+- Files: `runtime/program.go` (`Language`, `lowerSource`), `internal/stproject/stproject.go` (`.sfc` in the `ComposeAll` ext allowlist), `cmd/naut/check.go` (ext allowlist + transpile hop), `internal/lsp/server.go` (`.sfc` → `analyzeSFC` dispatch), `cmd/naut/main.go` (`sfc` verb), plus a new `lang/sfc/sfc.go` exposing `HasBlock`, `Compile`, `Transpile`, `TranspileWithLines` as stubs (returning "not implemented" until B fills them).
 - Depends on: nothing.
 - Done when: `.sfc` files are discovered/compiled through the pipeline (erroring cleanly as "not implemented"), and every existing test still passes.
 - Tier: **mechanical**.
@@ -426,16 +426,16 @@ Land the "new language exists" seams as thin pass-throughs so nothing else is bl
 
 ### Slice C — Render model + edit ops + CLI
 
-- Files: `lang/sfc/{graph,edit,layout}.go` (layout reuses/imports FBD's), `cmd/nautilus/sfc.go`, `cmd/nautilus/fbd.go`-parallel wiring. Consumes slice A's AST/parser; **no overlap with B** (B owns transpile, C owns graph/edit).
+- Files: `lang/sfc/{graph,edit,layout}.go` (layout reuses/imports FBD's), `cmd/naut/sfc.go`, `cmd/naut/fbd.go`-parallel wiring. Consumes slice A's AST/parser; **no overlap with B** (B owns transpile, C owns graph/edit).
 - Depends on: slice A (AST). Independent of B.
-- Done when: `nautilus sfc graph` emits a stable model for the corpus; each slice-1 edit op round-trips (op → text edit → re-parse → expected model), reusing FBD's layout/comment ops.
+- Done when: `naut sfc graph` emits a stable model for the corpus; each slice-1 edit op round-trips (op → text edit → re-parse → expected model), reusing FBD's layout/comment ops.
 - Tier: **standard**.
 
 ### Slice D — VS Code editor + preview
 
 - Files: `tools/vscode-iec/src/sfcPreview.ts` (+ webview UI), `tools/vscode-iec/src/extension.ts` (register `iec-sfc` language + `nautilus.sfcDiagram` custom editor + preview command), `tools/vscode-iec/package.json` (language contribution, `*.sfc` custom editor, commands), grammar/`language-configuration`. References the existing `fbdPreview.ts` host pattern; does not redesign it.
 - Depends on: slice C (graph/edit JSON contract).
-- Done when: opening a `.sfc` file shows the chart, live-updates on text change, highlights the active step from live values, and every gesture routes through `nautilus sfc edit`.
+- Done when: opening a `.sfc` file shows the chart, live-updates on text change, highlights the active step from live values, and every gesture routes through `naut sfc edit`.
 - Tier: **frontend** (standard).
 
 ### Slice E — LSP analysis
@@ -468,12 +468,12 @@ Land the "new language exists" seams as thin pass-throughs so nothing else is bl
 Everything SFC needs is *additive* — the crucial finding is that **no existing code assumes stateless program bodies**, so there is no invasive refactor. The runtime already retains and migrates VAR-slot state, and FBD/LD already carry stateful FB instances through it. The "refactors" are therefore the thin **Slice 0 wiring** touchpoints; they must merge serially first because A–E all build on them:
 
 1. `runtime/program.go` — `Language(src)` (add an `sfc.HasBlock` branch returning `"sfc"`) and `lowerSource(src)` (add an SFC→ST transpile hop *before* the ST parse; note SFC transpiles **directly to ST**, not through FBD, so it is a sibling of the LD/FBD hops, not a stage in their chain). Small, but shared and load-bearing — every program-compile path funnels through here.
-2. `internal/stproject/stproject.go` — `ComposeAll` file-extension allowlist (`ext != ".st" && ext != ".fbd" && ext != ".ld"` → add `.sfc`), so `.sfc` program files are discovered by `nautilus pull`, the LSP prelude, and the runtime composer.
-3. `cmd/nautilus/check.go` — the walk-dir extension filter and the per-file transpile hop (add the `.sfc` branch beside `.ld`/`.fbd`, composing the line map).
+2. `internal/stproject/stproject.go` — `ComposeAll` file-extension allowlist (`ext != ".st" && ext != ".fbd" && ext != ".ld"` → add `.sfc`), so `.sfc` program files are discovered by `naut pull`, the LSP prelude, and the runtime composer.
+3. `cmd/naut/check.go` — the walk-dir extension filter and the per-file transpile hop (add the `.sfc` branch beside `.ld`/`.fbd`, composing the line map).
 4. `internal/lsp/server.go` — `setDocument` dispatch: `.sfc` → `analyzeSFC` (beside the `.fbd`/`.ld` suffix checks).
-5. `cmd/nautilus/main.go` — add the `sfc` verb to the switch and the usage text.
+5. `cmd/naut/main.go` — add the `sfc` verb to the switch and the usage text.
 6. `server/program.go` — already calls `runtime.Language(...)`; once (1) returns `"sfc"` it works unchanged (verify, no edit expected).
-7. `cmd/nautilus/new.go` — `--language` validation currently rejects anything but `st|fbd|ld`; extend to `sfc` and add a `program_blank.sfc.tmpl` template. (Scaffolding only — can land with slice C rather than strictly first.)
+7. `cmd/naut/new.go` — `--language` validation currently rejects anything but `st|fbd|ld`; extend to `sfc` and add a `program_blank.sfc.tmpl` template. (Scaffolding only — can land with slice C rather than strictly first.)
 
 None of these is risky; all are the same shape as an already-present `.ld`/`.fbd` branch. The reason they are "first" is *ordering*, not difficulty: they are the shared files, so doing them once up front prevents five parallel agents from colliding in `runtime/program.go`, `check.go`, and `server.go`.
 
@@ -513,7 +513,7 @@ Every output claimed above now follows from the §3.1 compilation: `Heater`/`Fil
 2. **Semantics:** atomic per-scan evolution from a pre-scan snapshot; source-order alternative priority guarded on `enabled` (not raw `cond`, so a higher-priority convergence can't deadlock the group), alt-groups defined by shared source; simultaneous split/merge via source/target sets; set-dominates-clear; slice-1 qualifiers `N/S/R/P1` (P/P0 if cheap) with the body-action final-scan rule (§2.5.1) so outputs shut down on a step's falling edge; `Step.T` via a reused `TON`; cold start via `INITIAL_STEP := TRUE`; warm restart preserves the token through frame migration.
 3. **Compilation:** transpile SFC→ST and reuse `st.Parse`/`st.Lower`; step state is retained VAR slots — **no VM or runtime-core change**.
 4. **Render/edit:** derived render model (structure canonical in text, LD-style) + optional reused FBD `@layout` pins; slice-1 ops for step/transition/action/branch edits; the step+its-outgoing-transition is the LD-rung-analog minimal unit.
-5. **LSP/CLI/validation:** `analyzeSFC` transpile-and-remap like `analyzeFBD`; conditions/actions are ST so hover/completion/diagnostics come free; SFC-structural checks in `check.go`; `nautilus sfc graph|edit` verbs mirroring `nautilus fbd`.
+5. **LSP/CLI/validation:** `analyzeSFC` transpile-and-remap like `analyzeFBD`; conditions/actions are ST so hover/completion/diagnostics come free; SFC-structural checks in `check.go`; `naut sfc graph|edit` verbs mirroring `naut fbd`.
 6. **Staging:** Slice 0 wiring (mechanical, serial) → A parser/AST (standard) → **B transpile/semantics (subtle, highest risk) ∥ C graph/edit+CLI (standard) ∥ E LSP (standard)** → D VS Code editor (frontend).
 7. **Non-goals:** macro/nested SFC, timed qualifiers, numeric priorities, IL bodies, full action-control edge cases, machine-checked token conservation, vendor import (future moat).
 </content>

@@ -1,7 +1,7 @@
 // The ladder view serves two completely different kinds of file — nautilus
 // .ld source and Rockwell .L5X exports — and the ONLY thing that
 // distinguishes them downstream is which CLI verb produced the model. Get
-// this dispatch wrong and an L5X is handed to `nautilus ld graph`, which
+// this dispatch wrong and an L5X is handed to `naut ld graph`, which
 // reports a parse error on XML and looks like a broken reader.
 
 import { strict as assert } from "node:assert";

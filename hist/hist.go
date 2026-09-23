@@ -1,7 +1,7 @@
 // Package hist is the historian's storage layer: a thin wrapper over
 // Postgres for time-series tag samples. This is a separate concern from
 // the controller — the nautilus runtime never imports it, only the
-// `nautilus historian` CLI binary does — so it's free to use a database
+// `naut historian` CLI binary does — so it's free to use a database
 // driver where the runtime stays close to stdlib.
 package hist
 
@@ -20,7 +20,7 @@ import (
 
 // Sink archives timestamped samples. Store (Postgres) implements it; a
 // test or an alternative TSDB implements it in a few lines — the collector
-// in cmd/nautilus depends on this interface, not on Store directly, so it
+// in cmd/naut depends on this interface, not on Store directly, so it
 // can be driven by a fake in tests without a real database.
 type Sink interface {
 	Insert(ts time.Time, vals map[string]float64) error

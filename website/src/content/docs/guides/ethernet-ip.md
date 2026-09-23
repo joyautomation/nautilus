@@ -6,7 +6,7 @@ description: Poll an Allen-Bradley Logix controller from a committed, browsed ma
 A `driver: {type: eip}` section puts a manifest project on an Allen-Bradley
 Logix controller — ControlLogix, CompactLogix — over a pure-Go CIP stack: no
 cgo, no RSLinx, no OPC server in the middle. Nothing about the controller is
-typed by hand: `nautilus eip import` browses the live PLC and writes the UDT
+typed by hand: `naut eip import` browses the live PLC and writes the UDT
 shapes, the tag bindings, and the tag file. Polling policy is the part you
 author.
 
@@ -15,7 +15,7 @@ driver:
   type: eip
   host: 192.168.1.10
   slot: 0                        # processor backplane slot (default 0)
-  manifest: eip_manifest.yaml    # from `nautilus eip import --format yaml`
+  manifest: eip_manifest.yaml    # from `naut eip import --format yaml`
   scan-rate: 500ms               # the default scan class (driver default 250ms)
   scan-classes: { fast: 100ms, slow: 10s }
   tag-classes:
@@ -26,22 +26,22 @@ tag-files: [tags/eip.yaml]
 
 `host:` and `manifest:` are both required, and the manifest is decoded
 strictly — a misspelled key is an error, not a silently dropped binding. All
-of that fails `nautilus check`, not `nautilus run`, because **`New` never
+of that fails `naut check`, not `naut run`, because **`New` never
 dials**: it decodes the manifest, resolves every type reference, rejects
 duplicate names and partitions the bindings into scan classes, all offline.
-The connection is `Start`'s job, so `nautilus check` and
-`nautilus build` pass in CI with no controller in sight. `examples/client60`
+The connection is `Start`'s job, so `naut check` and
+`naut build` pass in CI with no controller in sight. `examples/client60`
 is a complete manifest project driving a Logix controller with a ladder
 program, an HMI, and Sparkplug retransmission on top.
 
-## Generating the manifest: `nautilus eip import`
+## Generating the manifest: `naut eip import`
 
 Point the importer at the controller: it walks the Symbol class in every
 scope, uploads the templates those tags depend on, and generates source:
 
 ```sh
-nautilus eip browse --host 192.168.1.10          # what's on the controller
-nautilus eip import --host 192.168.1.10 \
+naut eip browse --host 192.168.1.10          # what's on the controller
+naut eip import --host 192.168.1.10 \
   --tags 'Line1*,Program:MainProgram.*' \
   --writable 'Line1Cmd*' \
   --format yaml
@@ -76,7 +76,7 @@ offline project file where a CIP browse cannot reach them: put those in
 `nautilus.yaml`'s `tag-meta:`, which reaches only `unit` and `desc`, so
 regenerating never argues with them.
 
-`nautilus eip tags eip_manifest.yaml -o tags/eip.yaml` re-derives **just the
+`naut eip tags eip_manifest.yaml -o tags/eip.yaml` re-derives **just the
 tag file** from the already-committed manifest — a pure function of the repo,
 no controller needed, so it runs in review or in CI. Its `-skip` takes the
 same globs as `--tags-skip`, and a skip pattern matching nothing is an error
@@ -276,13 +276,13 @@ which is how leaf mode is tested.
 
 ## Testing
 
-`nautilus test` never opens a socket: whatever `driver:` configures, every
+`naut test` never opens a socket: whatever `driver:` configures, every
 acceptance test substitutes the in-memory loopback driver, so an EtherNet/IP
 project is fully testable on a laptop with nothing on the network, no separate
 config needed.
 
 ```sh
-nautilus check . && nautilus test .
+naut check . && naut test .
 ```
 
 `given:` writes the driver's input image exactly the way a poll would —
@@ -291,7 +291,7 @@ file carries — so the same `*_test.yaml` files pass unchanged once the real
 driver is polling. Suites run in virtual time, so a ten-second interlock or a
 loop's settling time is asserted deterministically, in milliseconds. `-m`
 takes a second project file if you want one for logic-only runs
-(`nautilus test -m memory.yaml .`).
+(`naut test -m memory.yaml .`).
 
 ## Not supported
 
@@ -314,7 +314,7 @@ takes a second project file if you want one for logic-only runs
 ## From Go
 
 The `driver:` section is the manifest form of the `eip` package. An SDK
-project (`nautilus new --template sdk`, `--format go` on the import) wires it
+project (`naut new --template sdk`, `--format go` on the import) wires it
 directly as an `io.Driver`:
 
 ```go

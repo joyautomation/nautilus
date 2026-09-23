@@ -1,14 +1,14 @@
 # Testing
 
 Control logic gets acceptance tests, with no Go and no toolchain. Tests
-live in `*_test.yaml` beside `nautilus.yaml`, and `nautilus test` runs
+live in `*_test.yaml` beside `nautilus.yaml`, and `naut test` runs
 them.
 
 ```sh
-nautilus test           # run every *_test.yaml in the project
-nautilus test -v        # with the virtual time each test covered
-nautilus test -run re   # only tests whose name matches
-nautilus test -json     # one NDJSON event per test, for editors and CI
+naut test           # run every *_test.yaml in the project
+naut test -v        # with the virtual time each test covered
+naut test -run re   # only tests whose name matches
+naut test -json     # one NDJSON event per test, for editors and CI
 ```
 
 - [Why virtual time](#why-virtual-time)
@@ -31,7 +31,7 @@ exist at all, only ever assert direction — "the heater turns on when it's
 cold" — and never a delay, a debounce, or a settling time. The interesting
 properties are all time-dependent, and a wall clock puts them out of reach.
 
-`nautilus test` runs the resource on a **virtual clock**. Both clocks a
+`naut test` runs the resource on a **virtual clock**. Both clocks a
 program can observe follow it:
 
 - the measured scan-to-scan `dt` bound to `dt-tag`, which every PI loop,
@@ -292,7 +292,7 @@ ST's builtin functions, and the `FUNCTION`s declared in your own library
 files, which makes the reusable-predicate story discoverable rather than
 something you have to remember.
 
-All of that comes from the CLI's language server, so it needs `nautilus`
+All of that comes from the CLI's language server, so it needs `naut`
 on your `PATH`. The rest of the file — keys, durations, matcher shapes —
 is checked against a JSON schema, which needs the YAML extension
 (`redhat.vscode-yaml`); the ST parts don't.
@@ -302,15 +302,15 @@ is checked against a JSON schema, which needs the YAML extension
 The scaffolded workflow gates on all three:
 
 ```yaml
-      - run: nautilus check .
-      - run: nautilus test .
-      - run: nautilus build -o my-plant
+      - run: naut check .
+      - run: naut test .
+      - run: naut build -o my-plant
 ```
 
-`nautilus test` exits non-zero on any failure. `-json` emits one
+`naut test` exits non-zero on any failure. `-json` emits one
 line-delimited event per test for editors and CI tooling.
 
-Test files never reach a deployed controller: `nautilus build` excludes
+Test files never reach a deployed controller: `naut build` excludes
 `*_test.yaml` from the binary's embedded project. They gate the deploy;
 they don't ride along on it.
 

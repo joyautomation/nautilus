@@ -113,7 +113,7 @@ func WithScanClass(name string, rate time.Duration) Option {
 // WithTagClass assigns tags to a scan class by glob patterns matched against
 // the binding's nautilus name and its device path ("Line1_PIT_*",
 // "Program:MainProgram.*"). Assignments live in the driver constructor — not
-// the generated manifest — so re-running `nautilus eip import` never erases
+// the generated manifest — so re-running `naut eip import` never erases
 // polling policy. Later assignments override earlier ones.
 func WithTagClass(class string, patterns ...string) Option {
 	return func(d *Driver) {
@@ -525,7 +525,7 @@ func (d *Driver) validate(sess *session) error {
 		sess.liveType[td.Name] = tmpl
 	}
 	if len(problems) > 0 {
-		return fmt.Errorf("eip: manifest does not match controller (re-run `nautilus eip import`):\n  %s",
+		return fmt.Errorf("eip: manifest does not match controller (re-run `naut eip import`):\n  %s",
 			strings.Join(problems, "\n  "))
 	}
 	return nil

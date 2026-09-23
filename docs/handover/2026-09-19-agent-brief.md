@@ -59,7 +59,7 @@ you can run it.
 - `HANDOFF.md` says CI only runs on `main` and on PRs. Don't push or open a PR without asking.
 - Read `HANDOFF.md` and the `sparkplug` package's existing tests for conventions before writing code. Match the
   surrounding style and comment density.
-- Other `nautilus` processes running on this machine belong to the user. **Never kill processes by name**; only
+- Other `naut` processes running on this machine belong to the user. **Never kill processes by name**; only
   ones you started, by PID.
 - Report honestly: if a test can't be made to fail before the fix, or the repro still fails after it, say so with
   the output rather than adjusting the test until it passes.

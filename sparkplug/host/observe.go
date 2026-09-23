@@ -2,7 +2,7 @@
 // read-only Sparkplug client that listens to a group, asks the nodes it hears
 // from to birth again, and hands back the decoded birth certificates.
 //
-// It exists because `nautilus sparkplug import` has a chicken-and-egg
+// It exists because `naut sparkplug import` has a chicken-and-egg
 // problem. Retained births are forbidden by the spec, so a client joining
 // mid-stream sees nothing until it asks — and NCMD Node Control/Rebirth has to
 // be addressed to a specific edge node, which we do not know until some
@@ -25,7 +25,7 @@
 // (*Driver).handleMessage consumes, so the generator cannot drift from the
 // driver's own reading of the wire.
 //
-// ADDED BY C2 (`nautilus sparkplug import|browse` + sparkplug/host/codegen).
+// ADDED BY C2 (`naut sparkplug import|browse` + sparkplug/host/codegen).
 // New file; nothing else in the package changed.
 
 package host

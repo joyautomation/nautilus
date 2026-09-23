@@ -1,0 +1,32 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+{{- if .NoGo}}
+      - name: install nautilus
+        run: go install github.com/joyautomation/nautilus/cmd/naut@latest
+      - name: check control logic
+        run: naut check .
+      - name: acceptance tests
+        run: naut test .
+      - name: build controller binary
+        run: naut build -o {{.Name}}
+{{- else}}
+      - name: vet
+        run: go vet ./...
+      - name: check control logic
+        run: go run github.com/joyautomation/nautilus/cmd/naut check .
+      - name: test
+        run: go test ./...
+      - name: build
+        run: go build ./...
+{{- end}}

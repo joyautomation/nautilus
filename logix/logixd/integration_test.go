@@ -417,7 +417,7 @@ func TestSDKUploadFromController(t *testing.T) {
 		t.Fatalf("upload from %s: %v", commPath, err)
 	}
 	// Rendering it as L5X is what makes it comparable with the repo, and
-	// is the rest of what `nautilus logix drift` does.
+	// is the rest of what `naut logix drift` does.
 	res, _, err := c.Convert(cx, acd, l5x, false)
 	if err != nil {
 		t.Fatalf("convert the upload: %v", err)

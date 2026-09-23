@@ -1,5 +1,5 @@
 // store.go is the slave's data model: one Unit per unit-id, four tables
-// each, thread-safe so tests and a future `nautilus modbus serve` drive
+// each, thread-safe so tests and a future `naut modbus serve` drive
 // values from other goroutines while the server answers requests.
 package slave
 

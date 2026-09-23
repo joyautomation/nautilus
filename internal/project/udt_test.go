@@ -318,7 +318,7 @@ func TestStructInitScalarOnStructIsAnError(t *testing.T) {
 // per-member init as a flow-style mapping (tagfile_test.go), and this proves
 // the other half — that a tag file containing exactly that shape composes
 // and seeds the same way a hand-written one does. This is the path
-// `nautilus eip tags` / `nautilus tags import-csv` output would take.
+// `naut eip tags` / `naut tags import-csv` output would take.
 func TestStructInitRenderRoundTripsThroughTagFile(t *testing.T) {
 	raw, err := tagfile.Render(nil, []tagfile.Tag{{
 		Name: "P101", Role: "state", Type: "Pump",

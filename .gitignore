@@ -12,7 +12,7 @@ build/
 .DS_Store
 tools/vscode-iec/out/
 
-# Local QA scaffolds from `nautilus new`
+# Local QA scaffolds from `naut new`
 /demo/
 
 # Locally built binaries

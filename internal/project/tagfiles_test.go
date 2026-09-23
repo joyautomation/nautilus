@@ -104,7 +104,7 @@ func TestTagFilesRejectDuplicates(t *testing.T) {
 }
 
 // A tag file that escapes the project would load in development and vanish
-// the moment `nautilus build` archives the directory.
+// the moment `naut build` archives the directory.
 func TestTagFilesStayInsideTheProject(t *testing.T) {
 	for _, bad := range []string{"../outside.yaml", "/etc/tags.yaml", "a/../../b.yaml"} {
 		_, err := ReadManifest(tagProject(map[string]string{

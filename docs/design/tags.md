@@ -41,7 +41,7 @@ Analog_Input;` lowers, member access resolves, and the LSP expands the type on
 hover. The lowerer treats a global's type like any other declared type.
 
 **1.3 A generation pipeline already exists, and it is the established
-pattern.** `nautilus eip import` (`cmd/nautilus/eip.go`) writes two generated,
+pattern.** `naut eip import` (`cmd/naut/eip.go`) writes two generated,
 committed files, each carrying a *"Do not edit — re-run the import"* header:
 
 | generated | contains |
@@ -57,7 +57,7 @@ assembles `ir.Value{Kind: ir.TypeStruct, Struct: sd, Fld: ...}` from flattened
 leaf reads, under one nautilus tag name, and a test asserts the assembled value
 carries its `StructDef` (`eip/driver_test.go:226`).
 
-**1.5 The gap is exactly one file.** `nautilus eip import` generates the driver
+**1.5 The gap is exactly one file.** `naut eip import` generates the driver
 manifest and the ST types, and then stops. The `tags:` block of `nautilus.yaml`
 is still hand-written. `examples/client60/nautilus.yaml` transcribes 14 of the
 230 by hand — and two of them are UDT tags with **no `init:`**, whose structure
@@ -72,7 +72,7 @@ That line is the whole brief. The type is real, the driver delivers it, ST reads
 its members — and the manifest can only describe it in a comment.
 
 **1.6 Nothing verifies the manifest against the programs.** `runCheck`
-(`cmd/nautilus/check.go`) walks `.st`/`.fbd`/`.ld`/`.sfc` files and compiles
+(`cmd/naut/check.go`) walks `.st`/`.fbd`/`.ld`/`.sfc` files and compiles
 them. It never reads `nautilus.yaml`. So a program may declare
 `VAR_EXTERNAL Foo : REAL;` with no manifest entry and compile clean — it faults
 at run time on a read-before-write, or silently becomes a tag with no unit and
@@ -115,7 +115,7 @@ So the split is:
 
 That last point reframes the request. A TypeScript type over the generator
 proves the *object* is shaped right. It cannot prove the tag set matches the
-logic. `nautilus check` can.
+logic. `naut check` can.
 
 ### 2.1 One mechanism, and why the second one was refused
 
@@ -128,7 +128,7 @@ not. Nothing here adds a feature.
 and using them interchangeably above was sloppy. Precisely:
 
 > **A generator is a program that reads something and writes a `tags/*.yaml`
-> file, which you commit.** `nautilus eip import` is one. A twenty-line
+> file, which you commit.** `naut eip import` is one. A twenty-line
 > spreadsheet script is one. Nothing distinguishes them but who wrote them and
 > what they read.
 
@@ -142,7 +142,7 @@ Three kinds, and they stay named separately because they are separate tools:
 |---|---|---|---|
 | source of truth | a live device | the project's own intent | an existing spreadsheet |
 | input | discovery — browse the controller | a compact config table (§2.3) | exported rows + a column mapping |
-| example | `nautilus eip import` | `tools/tags.ts` | `nautilus tags import-csv` |
+| example | `naut eip import` | `tools/tags.ts` | `naut tags import-csv` |
 | roles / types | derivable (§4.6) | authored | mapped from columns |
 | regenerating tells you | the PLC program drifted | nothing — you edited the input | the export changed |
 | shipped by nautilus | yes | no — project-shaped | yes |
@@ -221,7 +221,7 @@ programs themselves — `Runtime.Globals()` already yields name → type for eve
 `VAR_EXTERNAL` (`runtime/runtime.go:248`). But a program does not know whether
 `PIT_001` is an input or a setpoint, and carries no unit or description, so
 this can only ever scaffold stubs a person then fills in. The same information
-is worth more pointed the other way: as `nautilus check` (3.3), verification
+is worth more pointed the other way: as `naut check` (3.3), verification
 rather than generation.
 
 ### 2.2 What authoring actually looks like
@@ -302,7 +302,7 @@ tags:
   - { name: ResLowSP, role: setpoint, init: 5.0 }
 ```
 
-**5 — verify.** `nautilus check` validates the file against the schema (3.1)
+**5 — verify.** `naut check` validates the file against the schema (3.1)
 and both directions against the programs (3.3). A fat-fingered id surfaces
 here as *"no program binds P1O1"*, not as a silent dead tag.
 
@@ -408,7 +408,7 @@ worked example in this idiom, not a CSV importer.
 
 1. **Per-site variation.** `hasDampers` decides at boot which tags exist.
    §6 refuses that outright, so nautilus's answer must be one committed tags
-   file per variant, or one built image per site (`nautilus build` embeds the
+   file per variant, or one built image per site (`naut build` embeds the
    project). Image-per-site versus config-per-site is a real fork and this
    doc does not settle it.
 2. **Heterogeneous buses.** Eight instrument protocols behind one tag set is
@@ -424,7 +424,7 @@ of the tree's env surface is `NAUTILUS_ADDR`, `NAUTILUS_TOKEN`,
 Everything that actually varies between sites is a literal in the manifest:
 driver `host:`, sparkplug `broker:`/`edge-node:`/`group-id:`, the tag list,
 scan rates. `Load` hardcodes `ManifestName` (`project.go:211`), and
-`nautilus build [dir]` zips one directory onto a copy of the runner. There is
+`naut build [dir]` zips one directory onto a copy of the runner. There is
 no overlay, no parameter, no manifest selection.
 
 Which leaves three bad options: **N copies of the project** (programs
@@ -445,7 +445,7 @@ plant/
   sites/fremont.yaml        # tag-files: [tags/common.yaml]
 ```
 
-`nautilus build -m sites/hayward.yaml` → one self-contained binary per site.
+`naut build -m sites/hayward.yaml` → one self-contained binary per site.
 
 Why this and not the alternatives:
 
@@ -505,7 +505,7 @@ or a `tags/*.yaml` convention. Small and orthogonal, and it is the actual
 architectural move: it makes generated output a separate reviewable artifact
 instead of a 500-line smear through the file a human edits.
 
-**3.3 `nautilus check` reads the manifest.** Report both directions:
+**3.3 `naut check` reads the manifest.** Report both directions:
 
 - a manifest tag no program binds — dead, or HMI/driver-only (warn);
 - a program global no manifest declares — no unit, no description, faults on
@@ -534,10 +534,10 @@ verification just moves the hand-typing.
 **3.4 `type:` on a tag, naming a UDT.** Given 1.1–1.4, this is closing a seam
 rather than building one. `- { name: PIT_001, type: Analog_Input, role: input }`
 replaces both the prose `desc:` and the type inference. Also lets
-`nautilus eip import` emit the `tags:` file directly, since it already knows
+`naut eip import` emit the `tags:` file directly, since it already knows
 every binding's type.
 
-**3.5 Extend `nautilus eip import` to emit the tags file.** After 3.2 and 3.4
+**3.5 Extend `naut eip import` to emit the tags file.** After 3.2 and 3.4
 this is nearly free, and it deletes the hand-transcription in §1.5.
 
 ## 4. The questions, answered
@@ -710,7 +710,7 @@ Errors name the member path: `tag WEL15_FIT_001: init: unknown member RAWMN
 `init:` — the case this section flagged as needing to be an error, not a
 silent no-op — is now one: `%s is a struct — init must be a mapping of
 member: value, not %s`. `internal/tagfile.Render` emits the same nested
-flow-style shape back out, so a generator (`nautilus eip tags`, `nautilus
+flow-style shape back out, so a generator (`naut eip tags`, `nautilus
 tags import-csv`) round-trips a struct's per-member init exactly like a
 hand-written one. This was Riverbend WTP's motivating case: a site's ~55-line
 first-scan `CfgDone` block of UDT-field assignments — RAWMIN/RAWMAX/HHSP/…,
@@ -763,7 +763,7 @@ related to 4.7.
 ### 4.6 Roles for imported tags
 
 **Derivable — confirmed, not assumed.** `--writable` glob patterns at import
-time set `TagBinding.Writable` (`cmd/nautilus/eip.go:114`), and the driver
+time set `TagBinding.Writable` (`cmd/naut/eip.go:114`), and the driver
 puts writable bindings in the output set (`eip/driver.go:166`) while
 `InputNames()` returns every polled binding (`driver.go:252`). So
 `Writable → role: output`, everything else `role: input`.
@@ -772,7 +772,7 @@ Two caveats worth writing into the generator:
 
 1. A writable tag the logic also *reads back* needs `init:` — `RoleOutput` is
    unseeded. The generator cannot know which those are, so it emits
-   `role: output` with no init and **`nautilus check`'s read-before-write rule
+   `role: output` with no init and **`naut check`'s read-before-write rule
    (3.3) is what catches it.** That is the verification earning its keep.
 2. Imports never produce `setpoint` or `state` — those are project-authored.
    client60 is the proof: 8 of its tags are derived setpoints and states, none
@@ -825,7 +825,7 @@ regression 3.1's guard tests exist to catch.
    `desc:`.
 2. A project with 40 instances of one `Motor` UDT is expressible in a manifest a
    person can read on one screen.
-3. `nautilus check` fails a project whose program reads a tag the manifest never
+3. `naut check` fails a project whose program reads a tag the manifest never
    declares, and says which.
 4. A generated tags file that is malformed is rejected in the editor by the
    schema, before it is ever run.
@@ -848,8 +848,8 @@ regression 3.1's guard tests exist to catch.
 | Tag defs → flat options | `runtime/tagdef.go` (`TagDef`, `expandTags`) |
 | Struct/array values | `lang/ir/types.go`, `lang/ir/value.go` (`Value.Fld`, `Value.Struct`) |
 | Struct assembly from a bus | `eip/driver.go:848`, `eip/leaves.go` (`expandLeaves`) |
-| Existing generator | `cmd/nautilus/eip.go` (`import`), `examples/client60/*` |
-| What `check` does today | `cmd/nautilus/check.go` (`runCheck`) |
+| Existing generator | `cmd/naut/eip.go` (`import`), `examples/client60/*` |
+| What `check` does today | `cmd/naut/check.go` (`runCheck`) |
 | Schema + guard precedent | `tools/vscode-iec/schemas/nautilus-test.schema.json`, `acceptance/schema_test.go` |
 | Tags the programs bind | `runtime.Runtime.Globals`, `lang/ir/program.go` (`Program.Globals`) |
 | Prior art (§2.3) | `~/Development/deno/tentacle-xbox` (`variables/`, `xboxSettings.ts`) |
@@ -866,7 +866,7 @@ decision:
    the import cannot know which. They are declared by hand and skipped by
    name. A skip pattern matching nothing is an error, because a stale
    exclusion silently regenerates the tag it was making room for.
-2. **`nautilus eip tags`** re-derives the tag file from an already-committed
+2. **`naut eip tags`** re-derives the tag file from an already-committed
    `eip_manifest.yaml`, with no controller. The import needs hardware; review
    and CI do not, and client60's tag file was produced this way.
 3. **A `.manifest` marker in built binaries** (§2.4) so `-m` survives into the

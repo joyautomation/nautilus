@@ -1,7 +1,7 @@
 // FBD diagram preview + editor: webviews that render a .fbd file's diagram,
 // live-updating as the text changes. The text is the source of truth; the
-// diagram is a projection. The render model comes from `nautilus fbd graph -`
-// and every edit gesture becomes a STRUCTURAL OP (`nautilus fbd edit`):
+// diagram is a projection. The render model comes from `naut fbd graph -`
+// and every edit gesture becomes a STRUCTURAL OP (`naut fbd edit`):
 // the op is addressed by stable render-model ids, resolved in Go against a
 // fresh parse of the current buffer, and comes back as minimal text edits —
 // no consumer of the model ever computes source spans itself.
@@ -90,10 +90,10 @@ const DEBOUNCE_MS = 150;
 // ── CLI seam ───────────────────────────────────────────────────────────────
 
 function cliPath(): string {
-  return vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "nautilus");
+  return vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "naut");
 }
 
-/** Run `nautilus fbd graph -` over source text. */
+/** Run `naut fbd graph -` over source text. */
 export function fbdGraph(source: string): Promise<{ model: FbdModel } | { error: string }> {
   const cli = cliPath();
   return new Promise((resolve) => {
@@ -113,14 +113,14 @@ export function fbdGraph(source: string): Promise<{ model: FbdModel } | { error:
         if (err && (err as NodeJS.ErrnoException).code === "ENOENT") {
           return resolve({ error: cliMissing(cli) });
         }
-        resolve({ error: err ? String(err) : "nautilus fbd graph: empty output" });
+        resolve({ error: err ? String(err) : "naut fbd graph: empty output" });
       }
     );
     child.stdin?.end(source);
   });
 }
 
-/** Run `nautilus fbd edit`: resolve op against source, get minimal edits. */
+/** Run `naut fbd edit`: resolve op against source, get minimal edits. */
 function fbdEdit(source: string, op: FbdEditOp): Promise<{ edits: FbdTextEdit[] } | { error: string }> {
   const cli = cliPath();
   return new Promise((resolve) => {
@@ -139,7 +139,7 @@ function fbdEdit(source: string, op: FbdEditOp): Promise<{ edits: FbdTextEdit[] 
         if (err && (err as NodeJS.ErrnoException).code === "ENOENT") {
           return resolve({ error: cliMissing(cli) });
         }
-        resolve({ error: err ? String(err) : "nautilus fbd edit: empty output" });
+        resolve({ error: err ? String(err) : "naut fbd edit: empty output" });
       }
     );
     child.stdin?.end(JSON.stringify({ source, op }));
@@ -149,7 +149,7 @@ function fbdEdit(source: string, op: FbdEditOp): Promise<{ edits: FbdTextEdit[] 
 function cliMissing(cli: string): string {
   return (
     `Couldn't run "${cli}". Install the nautilus CLI:\n` +
-    "go install github.com/joyautomation/nautilus/cmd/nautilus@latest"
+    "go install github.com/joyautomation/nautilus/cmd/naut@latest"
   );
 }
 

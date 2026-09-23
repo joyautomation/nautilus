@@ -1,6 +1,6 @@
 // client.go is the small exported client surface the commissioning tools
-// ride on: `nautilus modbus browse` reads a live register range, and
-// `nautilus modbus serve` seeds its slave through Encode. The driver itself
+// ride on: `naut modbus browse` reads a live register range, and
+// `naut modbus serve` seeds its slave through Encode. The driver itself
 // stays on the package-private seams (conn, decodeRegisters) — this file
 // only re-exposes what a tool outside the package legitimately needs, so
 // the CLI never grows a second Modbus implementation.

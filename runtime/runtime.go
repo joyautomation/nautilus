@@ -21,7 +21,7 @@ type Options struct {
 	// Libraries are ST sources declaring TYPEs, FUNCTIONs, and
 	// FUNCTION_BLOCKs the program calls — the unit of logic reuse in
 	// IEC 61131-3. They compose ahead of Program exactly the way the
-	// editor, LSP, and `nautilus pull` compose a project directory, so
+	// editor, LSP, and `naut pull` compose a project directory, so
 	// online edits round-trip losslessly. The program may be ST or FBD;
 	// libraries are ST.
 	Libraries []string
@@ -498,7 +498,7 @@ func (r *Runtime) Types() map[string]*ir.Type {
 // is the deep set, so a library block's VAR_EXTERNAL counts) with their
 // declared types — what
 // expandTags seeds an untyped tag's init against. Two programs declaring one
-// tag differently is `nautilus check`'s report to make; here the last wins,
+// tag differently is `naut check`'s report to make; here the last wins,
 // as in Runtime.Globals.
 func unionGlobals(main *Program, tasks []*taskRun) map[string]*ir.Type {
 	out := map[string]*ir.Type{}

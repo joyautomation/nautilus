@@ -48,7 +48,7 @@ Idle ──(Start AND NOT Abort)──▶ Fill ──(Level ≥ FillSP)──▶
   `Aborted` is reachable but not visited in the unattended demo.
 
 Every qualifier used is slice 1 (`N`, `S`, `R`, `P1`) — the set
-`nautilus sfc check` currently supports.
+`naut sfc check` currently supports.
 
 ## Run it
 
@@ -77,9 +77,9 @@ can literally see the token move scan to scan.
 ## Try the SFC tooling (nautilus CLI; VS Code editor 0.9.7, may still be shipping)
 
 ```sh
-nautilus sfc check examples/tank-batch-sfc/program.sfc   # structural checks (§5.1)
-nautilus check examples/tank-batch-sfc                    # + the ST-level hop
-nautilus sfc graph examples/tank-batch-sfc/program.sfc | jq .   # render model
+naut sfc check examples/tank-batch-sfc/program.sfc   # structural checks (§5.1)
+naut check examples/tank-batch-sfc                    # + the ST-level hop
+naut sfc graph examples/tank-batch-sfc/program.sfc | jq .   # render model
 ```
 
 The graph model reports each transition's derived `kind` —

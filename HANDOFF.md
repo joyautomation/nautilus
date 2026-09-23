@@ -10,7 +10,7 @@ file is the practical state + next steps. Last refreshed: 2026-09-19.
 building industrial control/supervisory systems like real software (version
 control, tests, CI/CD, VS Code) instead of a vendor IDE. The **manifest form
 is the product**: `nautilus.yaml` + IEC 61131-3 sources + `*_test.yaml`
-acceptance suites, no toolchain required (`nautilus run/build/test/check`).
+acceptance suites, no toolchain required (`naut run/build/test/check`).
 Go is the SDK tier for custom field buses and richer simulation.
 
 Extracted from the **mini-scada** demo (`~/Development/mini-scada`).
@@ -42,18 +42,18 @@ nautilus; copy/adapt from it.
 lang/st, lang/ir     IEC 61131-3 ST compiler + VM (shared substrate)
 runtime/             scan loop, Tags bus, program host; injectable Clock (virtual time)
 acceptance/          deterministic virtual-time test harness; runs *_test.yaml suites
-internal/project     manifest loader — builds exactly what `nautilus run` runs
+internal/project     manifest loader — builds exactly what `naut run` runs
 internal/lsp         LSP: ST diagnostics/hover/completion, manifest-aware tags,
                      ST expectation regions inside *_test.yaml
 io/, eip/            driver seam + Memory driver; EtherNet/IP (incl. logixserver)
 sparkplug/           Sparkplug B edge node (TCK edge profile in CI)
-sparkplug/host       Sparkplug B host application driver + `nautilus sparkplug
+sparkplug/host       Sparkplug B host application driver + `naut sparkplug
                      import|browse|tags` codegen (TCK host profile in CI)
 modbus/              Modbus TCP driver: wire, codec, block planner, per-source polling,
-                     in-process slave, codegen for `nautilus modbus import|browse|serve|tags`
+                     in-process slave, codegen for `naut modbus import|browse|serve|tags`
 retain/, leader/, hist/  retained state (file/ConfigMap), Lease election, historian
 server/              tag API (state/SSE/write) + branded dashboard
-cmd/nautilus         CLI: new, run, build, check, test, lsp, pull
+cmd/naut         CLI: new, run, build, check, test, lsp, pull
 alarm/               ISA-18.2 alarm engine: defs/rules, state machine, journal,
                      notifiers. Manifest `alarms:`, `/api/alarms*`, retained ack
 examples/            heated-tank (Go tier), heated-tank-nogo (manifest flagship:
@@ -138,23 +138,23 @@ website/, docs/      docs site (deploys from main); design briefs in docs/design
 ## Roadmap / where to pick up
 
 Done through the acceptance-testing branch: virtual-time harness +
-`nautilus test`, manifest-first docs/README, manifest-aware LSP + Test
+`naut test`, manifest-first docs/README, manifest-aware LSP + Test
 Explorer, tag files/UDTs/shape check, branded dashboard, Process Overview
 demo with flow-balance physics.
 
 Done 2026-08-17: the three mini-scada seams — `retain/` (file + ConfigMap),
 `leader/` (Lease elector; `runtime.Coordinator` gates the scan loop),
-`hist/` + `nautilus historian` (Postgres, `hist.Sink`). Manifest sections
+`hist/` + `naut historian` (Postgres, `hist.Sink`). Manifest sections
 `retain:`/`redundancy:`/`server.historian`; standby replicas proxy their
-API to the leader. Also the CD scaffold: `nautilus new --deploy` emits
+API to the leader. Also the CD scaffold: `naut new --deploy` emits
 Dockerfile + redundant-pair k8s + deploy workflow (commit-to-running-
 controller). mini-scada source of truth: `/home/joyja/mini-scada-build`
 (NOT ~/Development/mini-scada — and read-only, never modify it).
 
 Done 2026-08-18: **program history + activation** — the controller serves
 its own git provenance. `internal/vcs` captures commits + diffs + deduped
-file snapshots (git blob ids); `nautilus build` embeds it as the `.history`
-archive entry, `nautilus run` captures live (lazily, on first request);
+file snapshots (git blob ids); `naut build` embeds it as the `.history`
+archive entry, `naut run` captures live (lazily, on first request);
 `GET /api/program/history` / `POST /api/program/activate {sha}` warm-swap
 the whole resource to any captured commit (validate-all-then-swap-all,
 topology mismatch → 409 "deploy that commit instead").
@@ -166,8 +166,8 @@ Done 2026-08-22: **alarms** — `alarm/` turns BOOL tags into ISA-18.2 state
 (active list, ack, shelve, journal, notifiers), wired through every tier.
 Manifest `alarms:` + `alarm-files:` (mirrors `tag-files:`, duplicate id
 across sources = error naming both); `rules:` generate definitions in bulk
-by struct TYPE + member, materialized once at load — `nautilus alarms list`
-dumps the expansion, `nautilus check` validates it offline (unknown member
+by struct TYPE + member, materialized once at load — `naut alarms list`
+dumps the expansion, `naut check` validates it offline (unknown member
 = error, dead rule / undeclared tag = warning). `internal/project`
 composes and builds the engine over a compiled runtime
 (`NewAlarms` for `run`, `AlarmEngine` for tests, `AlarmDefs`/`CheckAlarms`
@@ -262,7 +262,7 @@ Done 2026-08-22: **Sparkplug B host application driver** — the other side
 of the wire from the edge node. `sparkplug/host` (package `host`), a
 manifest-tier `io.Driver` (`driver: {type: sparkplug-host}`), never dials
 (`New` builds offline; `Start` connects — same split as `eip`, so
-`nautilus check`/`build` pass with no broker in sight). `nautilus
+`naut check`/`build` pass with no broker in sight). `nautilus
 sparkplug import|browse|tags` generates `sparkplug_types.st` +
 `sparkplug_manifest.yaml` + `tags/sparkplug.yaml`, live (`--broker`) or
 offline from a committed `--sites` file — byte-identical output either
@@ -315,8 +315,8 @@ section; extension 0.9.26 ships the `modbus` schema. `multi-driver`
 followed as PR #9 (merged the same day): `drivers:` on one scan via
 `io.Multi`, documented in the Modbus guide and README, extension 0.9.27.
 Released as **v0.9.0** (Modbus, tagged one commit early) and **v0.9.1**
-(drivers:); CLI v0.8.0 → v0.9.1 is the jump that adds `nautilus modbus`. Not done: a run against real hardware (checklist
-below), and `nautilus modbus serve --from <url>` (feed the bench slave from a
+(drivers:); CLI v0.8.0 → v0.9.1 is the jump that adds `naut modbus`. Not done: a run against real hardware (checklist
+below), and `naut modbus serve --from <url>` (feed the bench slave from a
 running controller's /api/state so a sim project drives the "devices").
 
 Done 2026-09-19 (PR #11, **v0.9.2**): the Sparkplug edge findings from the
@@ -332,7 +332,7 @@ store-and-forward is on. (2) An untyped manifest tag's `init:` seeds as the
 type the program's `VAR_EXTERNAL` declares — `init: 0` on a DINT births as
 Int64, not Double. (3) N/DBIRTH metrics carry `engUnit`/`documentation`
 from `unit:`/`desc:` (template members under their dotted path); the
-decoder keeps properties and `nautilus sparkplug import` fills `unit:`/
+decoder keeps properties and `naut sparkplug import` fills `unit:`/
 `desc:` from a live birth. (4) Store-and-forward now buffers across a broker
 outage, not only a primary-host outage. Handover + Outcome:
 `docs/handover/2026-09-19-sparkplug-edge-findings.md`. Content idea N-34.
@@ -340,11 +340,11 @@ outage, not only a primary-host outage. Handover + Outcome:
 Next, in rough priority:
 
 1. **Modbus real-device run** — when the bench devices are available:
-   `nautilus modbus browse` each for word order and addressing; run
+   `naut modbus browse` each for word order and addressing; run
    `examples/modbus` with a device map for the real units; confirm exception
    behaviour on an unimplemented register and reconnect after a cable pull;
    record each device's quirks in a "devices we have met" table in the guide.
-   Also still open: `nautilus modbus serve --from <url>` (feed the bench
+   Also still open: `naut modbus serve --from <url>` (feed the bench
    slave from a running controller's /api/state), and rebuilding the demo
    binary from `demo-integration` (that worktree exists only for that).
 2. **HMI Versions page** — render /api/program/history in

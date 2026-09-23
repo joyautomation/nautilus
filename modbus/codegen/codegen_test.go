@@ -1,7 +1,7 @@
 package codegen
 
 // The byte-for-byte goldens live with the command
-// (cmd/nautilus/modbus_test.go, testdata/modbus). What is pinned here is
+// (cmd/naut/modbus_test.go, testdata/modbus). What is pinned here is
 // the SEMANTICS: the map parses strictly, the generator is deterministic,
 // and — the load-bearing one — the rendered manifest decodes back through
 // modbus.LoadManifest into exactly the Manifest that was rendered.
@@ -91,7 +91,7 @@ instances:
 // no silently dropped key.
 func TestManifestRoundTrips(t *testing.T) {
 	out := generate(t, sampleMap, Options{})
-	raw := ManifestYAML(out.Manifest, "nautilus modbus import --map devices.yaml")
+	raw := ManifestYAML(out.Manifest, "naut modbus import --map devices.yaml")
 	loaded, err := modbus.ParseManifest(raw)
 	if err != nil {
 		t.Fatalf("the generated manifest does not load:\n%s\n%v", raw, err)

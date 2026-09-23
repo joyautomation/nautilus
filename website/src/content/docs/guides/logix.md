@@ -14,20 +14,20 @@ There are two halves, and the first needs nothing from Rockwell at all.
 
 ## Half one: reading L5X — no Rockwell software
 
-An L5X is the XML Logix Designer writes on **File → Export**. `nautilus`
+An L5X is the XML Logix Designer writes on **File → Export**. `naut`
 reads it directly, on any OS:
 
 ```bash
-nautilus logix info    DemoLine.L5X     # what is in this export?
-nautilus logix import  DemoLine.L5X     # UDTs -> IEC types, tags -> a tag file
-nautilus logix graph   DemoLine.L5X     # RLL routines -> the ladder model
-nautilus logix normalize DemoLine.L5X   # pin the attributes that move on every export
+naut logix info    DemoLine.L5X     # what is in this export?
+naut logix import  DemoLine.L5X     # UDTs -> IEC types, tags -> a tag file
+naut logix graph   DemoLine.L5X     # RLL routines -> the ladder model
+naut logix normalize DemoLine.L5X   # pin the attributes that move on every export
 ```
 
 ### Tags arrive documented
 
 ```bash
-nautilus logix import DemoLine.L5X --scope '*'
+naut logix import DemoLine.L5X --scope '*'
 # wrote logix_types.st (3 types) and tags/logix.yaml (8 tags)
 ```
 
@@ -37,7 +37,7 @@ nautilus logix import DemoLine.L5X --scope '*'
 ```
 
 That `desc:` is the point. Logix keeps tag documentation in the **offline
-project file**, so a live CIP browse cannot see it — `nautilus eip import`
+project file**, so a live CIP browse cannot see it — `naut eip import`
 has to leave descriptions empty. Reading the L5X recovers them.
 
 UDTs come across as real IEC types. A Logix UDT has no BOOL members — an
@@ -72,7 +72,7 @@ Normalizing pins that and the other volatile attributes, and then two
 exports of unchanged code compare equal:
 
 ```bash
-nautilus logix normalize --check controller.L5X repo.L5X
+naut logix normalize --check controller.L5X repo.L5X
 ```
 
 ## Half two: driving a project — the `logixd` agent
@@ -145,7 +145,7 @@ unattended, the machine needs an auto-login.
 
 ### When something isn't working
 
-Start with `nautilus logix probe`. Every gate that fails now prints what to
+Start with `naut logix probe`. Every gate that fails now prints what to
 do about it, underneath the failure. If the probe itself cannot connect, or
 the symptom is in a verb rather than a gate, find it here.
 
@@ -159,14 +159,14 @@ the symptom is in a verb rather than a gate, find it here.
 | `drift` reports a difference of megabytes on a project you just downloaded | A detailed export compared against a basic one. | Fixed in current builds: `drift` matches the repo file's export kind. If you see it, your CLI is older than your agent. |
 | `build` fails on a project Logix Designer opens fine | Usually a real verify error the SDK reports only as a code. | Open the project in Logix Designer and run Verify Controller. Its error list names the rung and the instruction; that is currently the fastest way to a diagnosis. |
 
-If a gate fails and the remedy does not resolve it, `nautilus logix probe
+If a gate fails and the remedy does not resolve it, `naut logix probe
 --json` gives the whole result, including which Logix revisions the agent
 found installed.
 
 ### Check it before you trust it
 
 ```bash
-nautilus logix probe --agent http://plc-box:8188 --token $TOKEN
+naut logix probe --agent http://plc-box:8188 --token $TOKEN
 ```
 
 ```
@@ -186,17 +186,17 @@ reports them separately so you know which one to fix.
 
 ```bash
 # Format conversion, either direction — two SDK calls, no GUI.
-nautilus logix convert Plant.ACD Plant.L5X
-nautilus logix convert Plant.L5X Plant.ACD
+naut logix convert Plant.ACD Plant.L5X
+naut logix convert Plant.L5X Plant.ACD
 
 # CI for control logic: compile it. No controller, no downtime, no risk.
-nautilus logix build Plant.ACD
+naut logix build Plant.ACD
 
 # Does the controller still match the repo?
-nautilus logix drift repo.L5X --comm-path 'AB_ETH-1\10.0.0.5\Backplane\0'
+naut logix drift repo.L5X --comm-path 'AB_ETH-1\10.0.0.5\Backplane\0'
 
 # A warm rung edit on a RUNNING controller.
-nautilus logix push Plant.ACD rungs.L5X \
+naut logix push Plant.ACD rungs.L5X \
   --program MainProgram --routine F07_Alarms \
   --at 12 --replace 1 \
   --comm-path 'AB_ETH-1\10.0.0.5\Backplane\0' --finalize
@@ -205,7 +205,7 @@ nautilus logix push Plant.ACD rungs.L5X \
 Don't transcribe the comm path out of a GUI. Ask:
 
 ```bash
-nautilus logix browse
+naut logix browse
 # AB_ETH-1\10.0.0.5\Backplane\0   PlantCtl   (1756-L85E)
 ```
 
@@ -226,7 +226,7 @@ instead.
 An online edit takes **no project file**:
 
 ```sh
-nautilus logix push --comm-path 'AB_ETH-1\10.0.0.5\Backplane\0' \
+naut logix push --comm-path 'AB_ETH-1\10.0.0.5\Backplane\0' \
   --program MainProgram --routine MainRoutine --at 1 --replace 1 \
   --accept rungs.L5X
 ```
@@ -245,7 +245,7 @@ RxCL_E_CANNOT_UPLOAD_PHYS_ADDR - Failed to upload physical address information.
 which is about as far from "wrong project file" as an error message gets.
 Pass `-o` if you want to keep the resulting project locally.
 
-To check the controller still matches your repo, use `nautilus logix drift`
+To check the controller still matches your repo, use `naut logix drift`
 — it exits 1 on a mismatch, so it works as a CI gate.
 
 ### Security

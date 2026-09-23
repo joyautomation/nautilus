@@ -170,7 +170,7 @@ C:\dotnet10\dotnet.exe C:\logixd-bin\logixd.dll probe     # no port bound; exits
 or from anywhere:
 
 ```bash
-nautilus logix probe --agent http://host:8188 --token ...
+naut logix probe --agent http://host:8188 --token ...
 ```
 
 A probe **always answers 200** — "the SDK is unusable" is the answer you
@@ -235,7 +235,7 @@ and the session is dead.
 - `AcceptEdits` — accept and send it down to the controller
 - `FinalizeEdits` — accept, send down, and assemble if the controller is in Run
 
-It is **ignored for an offline import**, which is why `nautilus logix push`
+It is **ignored for an offline import**, which is why `naut logix push`
 refuses `--accept`/`--finalize` without a `--comm-path`: otherwise the
 option is silently dropped and the command reports success over a change
 that never landed.

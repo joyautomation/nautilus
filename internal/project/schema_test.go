@@ -221,7 +221,7 @@ func TestSchemaRequiresWhatLoaderRequires(t *testing.T) {
 	// sparkplug-host needs a broker, a host id, a manifest, and a group.
 	// Unlike eip's, ALL of its checks are offline — host.New never dials —
 	// so the positive case is asserted too: a complete config must build
-	// with no broker in sight, which is what `nautilus check` relies on.
+	// with no broker in sight, which is what `naut check` relies on.
 	hostFS := fstest.MapFS{"sparkplug_manifest.yaml": &fstest.MapFile{Data: []byte("group: G\n")}}
 	full := DriverConfig{
 		Type: "sparkplug-host", Broker: "tcp://mqtt:1883", HostID: "central",

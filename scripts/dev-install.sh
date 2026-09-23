@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
 # dev-install.sh — build the CLI from the working tree and put it where a
-# bare `nautilus` will actually find it.
+# bare `naut` will actually find it.
 #
 # `go install ...@main` is the wrong loop while developing: it goes through
 # the module proxy, so it can only ever see code that is committed AND
-# pushed, and it writes to $GOBIN — which may sit behind another `nautilus`
+# pushed, and it writes to $GOBIN — which may sit behind another `naut`
 # on your PATH, or behind /usr/bin/nautilus, which on a GNOME desktop is the
 # file manager. The failure is silent: the install succeeds, the shell keeps
 # running a different binary, and the change appears not to have worked.
@@ -36,7 +36,7 @@ is_system() {
 }
 
 # Walk PATH left to right, recording two things: the first directory that
-# already holds a `nautilus` (whatever the shell runs today), and the first
+# already holds a `naut` (whatever the shell runs today), and the first
 # user-writable directory (where we are allowed to write).
 shadow_dir="" shadow_idx=-1
 user_dir="" user_idx=-1
@@ -58,7 +58,7 @@ if [ -n "${NAUTILUS_DEV_BIN:-}" ]; then
   dest_dir=${NAUTILUS_DEV_BIN%/}
   [ -d "$dest_dir" ] || die "NAUTILUS_DEV_BIN=$dest_dir is not a directory"
 elif [ "$shadow_idx" -ge 0 ] && ! is_system "$shadow_dir"; then
-  # Something already answers to `nautilus` and we're allowed to replace it.
+  # Something already answers to `naut` and we're allowed to replace it.
   # Replacing is the point: deleting it instead would let a later PATH entry
   # (possibly /usr/bin, i.e. the file manager) win the name.
   dest_dir=$shadow_dir
@@ -83,7 +83,7 @@ fi
 
 # ── build ────────────────────────────────────────────────────────────────
 # Stamp the commit rather than a version: a working-tree build is not any
-# release, and `nautilus version` saying "dev" tells you nothing about which
+# release, and `naut version` saying "dev" tells you nothing about which
 # dev. -dirty is the common case here and is the useful part.
 sha=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
 dirty=""
@@ -94,7 +94,7 @@ echo "building nautilus $version"
 tmp="$dest_dir/.nautilus.$$"
 trap 'rm -f "$tmp"' EXIT
 go build -ldflags "-X github.com/joyautomation/nautilus/internal/lsp.Version=$version" \
-  -o "$tmp" ./cmd/nautilus
+  -o "$tmp" ./cmd/naut
 chmod 0755 "$tmp"
 # Rename within the destination directory: atomic, and safe while a
 # controller is running (the running process keeps its own inode).

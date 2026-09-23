@@ -29,10 +29,10 @@ logic you want to tune online, write in IEC; infrastructure, write in Go.
 ## Pulling field edits back
 
 Pulling a field edit back to git closes the loop. **Pull Program from
-Controller** (VS Code) or `nautilus pull --host <controller>` writes the
+Controller** (VS Code) or `naut pull --host <controller>` writes the
 running program back into your program file — the inverse of download — so
 you review it with `git diff` and commit. Only the program file is rewritten;
-generated type files are never touched. `nautilus pull --check` reports drift
+generated type files are never touched. `naut pull --check` reports drift
 and exits non-zero, so CI can fail a build when a controller has un-pulled
 edits. Composition is a single definition shared by the runtime, the language
 server, download, and pull, so a program round-trips losslessly.
@@ -43,9 +43,9 @@ All of this — live values, online edits, pull — works over the network, not
 just against a local process. A scaffolded controller binds loopback by
 default; set `NAUTILUS_ADDR=0.0.0.0:8080` to expose the tag API to other
 machines, and point the editor at it with the `nautilus.runtimeUrl` setting
-(`nautilus pull` takes `--host`). Exposing the API on the network also
+(`naut pull` takes `--host`). Exposing the API on the network also
 exposes its write surface, so set `NAUTILUS_TOKEN` on the controller and the
-matching `nautilus.token` in the editor — reads and `nautilus pull` stay
+matching `nautilus.token` in the editor — reads and `naut pull` stay
 open, but tag writes and online edits then require the token.
 
 ## Every program, both directions
@@ -56,7 +56,7 @@ automatically by the POU name in the submitted source, and `?pou=` / `?task=`
 select one explicitly for GET/rollback. In VS Code that means a workspace
 with one program file per task Just Works: open the file, Download/Diff/
 Rollback target that task's program, retained state carries across the swap.
-And `nautilus pull` reconciles the whole resource: every controller program
+And `naut pull` reconciles the whole resource: every controller program
 pulls back into the workspace file declaring its POU (a new program lands in
 `<POU>.st`/`.fbd`), so a field edit to any task is reviewable and
 committable — `--check` fails CI on drift in any of them.

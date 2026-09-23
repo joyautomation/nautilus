@@ -240,7 +240,7 @@ type Options struct {
 	Cluster interface{ Status() leader.Status }
 
 	// HistorianURL, when set, proxies GET /api/history* to a historian
-	// daemon (`nautilus historian`) at that base URL, so the HMI keeps one
+	// daemon (`naut historian`) at that base URL, so the HMI keeps one
 	// origin for live and archived data. History reads answer on ANY
 	// replica — the archive lives in the historian, not the tag store, so
 	// a standby's copy is as good as the leader's. Empty = 503 with a
@@ -250,7 +250,7 @@ type Options struct {
 	// History, when set, feeds GET /api/program/history: the project's
 	// captured git provenance (see ProgramHistory). It's a getter, not a
 	// value, so the runner can capture lazily — a built binary decodes its
-	// embedded snapshot on first request, `nautilus run` shells out to git
+	// embedded snapshot on first request, `naut run` shells out to git
 	// then — without holding up the scan loop's start. Nil (or a getter
 	// returning nil) serves an empty history; the endpoint never 404s.
 	History func() *ProgramHistory
@@ -735,7 +735,7 @@ func (s *Server) handleHMI() http.Handler {
 		}
 		// ReadFile, not Open: the HMI FS is whatever the build embedded,
 		// and a bundle's files need not be seekable (a controller built by
-		// `nautilus build` serves them from an archive — an earlier draft
+		// `naut build` serves them from an archive — an earlier draft
 		// that fell back to http.FileServer for non-seekable files served
 		// the request's ORIGINAL path there and 404ed every deep link).
 		// These files are small; a bytes.Reader gives ServeContent the

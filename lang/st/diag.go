@@ -14,7 +14,7 @@ var parseLineRE = regexp.MustCompile(`line (\d+)`)
 
 // ParseErrorPos best-effort extracts a source position from an error
 // returned by Parse. It exists so every consumer (the LSP diagnostics and
-// the `nautilus check` CLI) anchors parse errors the same way instead of
+// the `naut check` CLI) anchors parse errors the same way instead of
 // each re-deriving it. ok is false when the message carries no position
 // (callers should fall back to line 1). Lowering errors already carry a
 // structured Pos — use AsLowerError for those.

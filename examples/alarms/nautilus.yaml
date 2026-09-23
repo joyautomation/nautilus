@@ -3,10 +3,10 @@
 # for a standalone contact, and an acceptance suite that walks a
 # five-minute on-delay in a few milliseconds of virtual time.
 #
-#   nautilus check examples/alarms         validate the rules offline
-#   nautilus alarms list examples/alarms   see what they expanded to
-#   nautilus test examples/alarms          the suite
-#   nautilus run examples/alarms           dashboard + /api/alarms
+#   naut check examples/alarms         validate the rules offline
+#   naut alarms list examples/alarms   see what they expanded to
+#   naut test examples/alarms          the suite
+#   naut run examples/alarms           dashboard + /api/alarms
 name: alarms
 
 server:

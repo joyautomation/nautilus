@@ -32,8 +32,8 @@ remarkably small:
 | Consumer | Endpoints it actually calls |
 |---|---|
 | VS Code extension | `GET /api/stream`, `GET /api/state`, `POST /api/tags`, `GET /api/program`, `PUT /api/program`, `POST /api/program/rollback` |
-| `nautilus pull` | `GET /api/program` only |
-| `nautilus run/build/check/test/lsp` | **nothing** — none of them opens a socket to a runtime |
+| `naut pull` | `GET /api/program` only |
+| `naut run/build/check/test/lsp` | **nothing** — none of them opens a socket to a runtime |
 
 Six endpoints. No auth by default, no discovery protocol (`nautilus.runtimeUrl`
 is a VS Code setting, default `http://localhost:8080`), no version negotiation
@@ -41,13 +41,13 @@ beyond the capability booleans on `GET /api/meta`.
 
 Two consequences worth stating plainly:
 
-- **`nautilus check`, `nautilus test` and the LSP are already target-agnostic.**
+- **`naut check`, `naut test` and the LSP are already target-agnostic.**
   They parse the workspace and never talk to a controller. Whatever the runtime
   is, editing, diagnostics, go-to-definition and acceptance tests keep working
   unchanged. That is a large part of the product that needs *no* work.
 - **`GET /api/program` returns `source` as IEC text, and the tooling diffs it
   character-for-character** against workspace files after stripping the library
-  prelude (`onlineEdit.ts:330-349`, `cmd/nautilus/pull.go:165`). Anything that
+  prelude (`onlineEdit.ts:330-349`, `cmd/naut/pull.go:165`). Anything that
   cannot round-trip byte-identical composed source breaks pull, diff, and the
   sync status bar. This is the hinge the whole "is it really the same?"
   question turns on — see §6.1.
@@ -127,7 +127,7 @@ This is the part that makes the project plausible rather than speculative.
   member-by-member reads.
 - `eip/logixserver/` (~1.3k LOC) — an in-repo ControlLogix **emulator** that
   answers as a 1756-L83E, including the Program Name object pycomm3 wants.
-- `eip/codegen/` + `nautilus eip import|browse|tags` — live browse → UDT shapes
+- `eip/codegen/` + `naut eip import|browse|tags` — live browse → UDT shapes
   as IEC `TYPE` blocks, a driver manifest, and a nautilus tag file.
 - `examples/client60/` — a committed, working manifest pointing at a **real
   Logix PLC**, with imported UDTs (`Analog_Input`, an AOI type), 14 bindings,
@@ -173,7 +173,7 @@ already have a scan-rate transport.
 
 ```
                  ┌──────────────────────────────────────────┐
-  VS Code ──────▶│  nautilus logix serve   (Go, Linux)      │
+  VS Code ──────▶│  naut logix serve   (Go, Linux)      │
   nautilus CLI   │  serves the six endpoints of §1          │
                  └───────┬──────────────────────┬───────────┘
                          │                      │
@@ -249,7 +249,7 @@ recover them. An L5X reader recovers them.
 
 **nautilus → L5X (write).** Much harder, and §6 is mostly about why.
 
-### 4.4 The facade — `nautilus logix serve`
+### 4.4 The facade — `naut logix serve`
 
 A Go process that serves §1's six endpoints. Live data from the online plane.
 `GET /api/program` returns the last pulled-and-normalized L5X (or the ST
@@ -269,7 +269,7 @@ finding.
 |---|---|---|
 | Live tag values in the editor | `eip/` CIP polling | **Done** — adapter only |
 | Set a value from the editor | `logix.WriteTag` | **Done** — adapter only |
-| Tag / UDT discovery | `nautilus eip import` | **Done** |
+| Tag / UDT discovery | `naut eip import` | **Done** |
 | Tag *descriptions* | L5X reader | Easy, new |
 | Upload from controller → text | SDK `upload_to_new_project` → `SaveAs(.L5X)` | Easy — proven, 52 files |
 | ACD → L5X at plant scale | SDK, headless | **Done** — productize the n26 work |
@@ -386,11 +386,11 @@ is the real cost.
 
 ### 6.5 Acceptance testing
 
-`nautilus test` runs on a virtual clock — that is what makes it deterministic
+`naut test` runs on a virtual clock — that is what makes it deterministic
 and fast. Logix Echo runs on a real one. Logix conformance testing is therefore
 a **separate, slower harness** (download to Echo, drive it over CIP, compare
 against the nautilus VM running the same source), not an extension of
-`nautilus test`. Worth building if §7 Tier B is pursued; it is the only thing
+`naut test`. Worth building if §7 Tier B is pursued; it is the only thing
 that would make generated code maintainable.
 
 ---
@@ -492,8 +492,8 @@ Run them on `rockwell-vm`; no hardware and no customer system is involved.
 > licensing is sorted.
 
 - **S1 — Echo as a target.** *Blocked on an Echo activation.* Start a Logix
-  Echo 5580 chassis, download any project, point `nautilus eip browse --host
-  <echo>` and `nautilus eip import` at it. *Would prove the online plane and CI
+  Echo 5580 chassis, download any project, point `naut eip browse --host
+  <echo>` and `naut eip import` at it. *Would prove the online plane and CI
   need no hardware.* Note this spike is **largely pre-proven**: `eip/` already
   works against a real Logix PLC in `examples/client60`, and `eip/logixserver`
   exercises the client side in tests. Echo's value here is CI, not
@@ -523,13 +523,13 @@ structured audit log, runs as a service. Jobs: `convert`, `upload`, `build`,
 `OpenAndSaveFile` / `CreateNewProject` / `PartialImportOffline` work already on
 the VM as its starting point.
 
-### Phase 2 — `nautilus logix` CLI verbs (Go, talks to `logixd`)
+### Phase 2 — `naut logix` CLI verbs (Go, talks to `logixd`)
 
-- `nautilus logix convert` — ACD → L5X in bulk. Productizes the n26 work.
-- `nautilus logix pull` — upload → normalize → workspace.
-- `nautilus logix diff` / `--check` — drift gate for CI, mirroring
-  `nautilus pull --check`.
-- `nautilus logix download` — gated, confirmed, mode-checked.
+- `naut logix convert` — ACD → L5X in bulk. Productizes the n26 work.
+- `naut logix pull` — upload → normalize → workspace.
+- `naut logix diff` / `--check` — drift gate for CI, mirroring
+  `naut pull --check`.
+- `naut logix download` — gated, confirmed, mode-checked.
 
 ### Phase 3 — `lang/l5x`, the reader (pure Go, no Windows)
 
@@ -538,7 +538,7 @@ descriptions. Immediately lights up the ladder viewer, the FBD viewer, diagram
 diffs between revisions, and hover — on Rockwell code. **Highest value per unit
 of effort in the plan; start it in parallel with Phase 1 if there is capacity.**
 
-### Phase 4 — `nautilus logix serve`, the facade
+### Phase 4 — `naut logix serve`, the facade
 
 Six endpoints. Live from the online plane, `source` from the last normalized
 pull, `editable: false`. The extension works unmodified.
@@ -1110,7 +1110,7 @@ requirement, not a lab note.
   build them the way §13.5 describes (`C:\dotnet10\dotnet.exe build … -o C:\s3build`).
 - **S4** — generate a large routine with `l5xgen` and partial-import it to find
   whether the documented 30 kB per-operation limit bites.
-- Productizing the n26 batch conversion as `nautilus logix convert`.
+- Productizing the n26 batch conversion as `naut logix convert`.
 
 S1 and S2b still need a controller — an Echo activation or bench hardware.
 
@@ -1273,11 +1273,11 @@ Windows — exactly as §4.3 predicted, and it took one session.
 | `l5x.Parse` | the document model: UDTs, AOIs, tags (descriptions and operand comments included), programs, routines, rungs — each routine and rung carrying **the line it sits on in the L5X**, because the export is the source file here and the viewer addresses rungs by line |
 | `l5x.Types` | the project's UDTs as IEC ST type declarations, via `lang/stgen` |
 | `l5x.TagsYAML` | a nautilus tag file, **with the controller's own tag descriptions** |
-| `l5x.Ladder` | the `lang/ld` render model — the same JSON `nautilus ld graph` emits |
+| `l5x.Ladder` | the `lang/ld` render model — the same JSON `naut ld graph` emits |
 | `l5x.Normalize` / `Equivalent` | the volatile attributes pinned, so two exports of unchanged code compare equal |
 
-CLI: `nautilus logix import | graph | normalize | info`, structured like
-`nautilus eip import`. `--check` on normalize is drift detection in one
+CLI: `naut logix import | graph | normalize | info`, structured like
+`naut eip import`. `--check` on normalize is drift detection in one
 command.
 
 ### Measured, on the corpus
@@ -1323,7 +1323,7 @@ dropped), and anything that WRITES L5X.
 
 ### The next step, and it is a real one
 
-**`nautilus logix graph` emits the model; nothing in the editor consumes it
+**`naut logix graph` emits the model; nothing in the editor consumes it
 yet.** The VS Code extension threads `.ld` through ~20 places — a language
 contribution, a custom editor, the diff commands, the active-file
 tracking — and `.L5X` needs the same, plus read-only semantics, since an
@@ -1398,7 +1398,7 @@ Alongside it:
   fatal/non-fatal error distinction and carries the SDK's event stream on
   every reply, because a failed import explains itself in the events and
   not in the exception.
-- `nautilus logix probe | agent | convert | build | push | drift` — the
+- `naut logix probe | agent | convert | build | push | drift` — the
   agent-backed CLI verbs, alongside the pure-Go `import | graph | normalize
   | info` from §16. `push` is the online edit; `drift` is upload → convert →
   normalize → compare, which is §6.1 option 1 end to end.
@@ -1479,7 +1479,7 @@ Echo. `LGXNGEMU.SIM` is denied once a minute, every minute
 (`UNSUPPORTED … No such feature exists`), which matches the term activation
 that lapsed 2026-09-06 on the other host. An `EmulateControlLogix5580`
 process is nonetheless running and answering EtherNet/IP on
-`100.93.56.45:44818` — `nautilus eip browse` connects and returns zero tags,
+`100.93.56.45:44818` — `naut eip browse` connects and returns zero tags,
 which is consistent with an empty controller and does not prove the
 emulator will actually execute logic. **Whether an unactivated Echo node
 runs a downloaded program is untested.**
@@ -1508,7 +1508,7 @@ failing gate. **The moment an activation lands, it runs with no edit.**
 
 1. **Configure the FactoryTalk Local Directory on ECHO1** —
    `FTDConfigurationUtility.exe` from a console or RDP session. Free, and it
-   is the actual blocker. Then re-run `nautilus logix probe`.
+   is the actual blocker. Then re-run `naut logix probe`.
 2. Then run `go test ./logix/logixd/ -run TestSDK -v`. S2a is that command.
    S2b (the online edit) additionally needs a controller that will execute,
    which means Echo's activation after all — but only for S2b, and only once
@@ -1597,7 +1597,7 @@ Possible answers, none yet tested:
 ### How to confirm, in two minutes
 
 Log on to ECHO1 at the console (incus console or RDP), leave the session
-open, and run `nautilus logix probe`. If `create-project` flips to ok, the
+open, and run `naut logix probe`. If `create-project` flips to ok, the
 hypothesis holds and option 1 above becomes the next piece of work.
 
 The probe now reports an **`interactive-session`** gate for exactly this
@@ -1641,7 +1641,7 @@ on.
 
 **The test, 30 seconds, and it needs the console:** Start menu → Rockwell
 Software → **"Log On to FactoryTalk"** (`FTLoginLogout.exe`), sign in as the
-Windows user, leave it, then `nautilus logix probe`.
+Windows user, leave it, then `naut logix probe`.
 
 If that is the mechanism, the headless story needs an answer to "who logs
 the agent in", and the candidates are a FactoryTalk user with stored
@@ -1651,7 +1651,7 @@ service account. None tested.
 **Unrelated and working:** opening the Echo dashboard restored the
 emulated controller's CIP binding (it came back on `:44818` bound to the
 Tailscale address after the reboot had left it on loopback only), and
-`nautilus eip browse` reads **673 CLIENT1_SIM tags** from Linux again. The
+`naut eip browse` reads **673 CLIENT1_SIM tags** from Linux again. The
 online plane needs none of the above.
 
 
@@ -1695,7 +1695,7 @@ call is triggered, and read what FTSP reports. If that is empty too, this
 is a Rockwell support case, not a nautilus one.
 
 **None of this blocks the rest of the work.** The online plane is
-unaffected and fully working — `nautilus eip browse` reads 673 CLIENT1_SIM
+unaffected and fully working — `naut eip browse` reads 673 CLIENT1_SIM
 tags from Linux — and `lang/l5x` needs no Rockwell software at all.
 
 
@@ -1944,7 +1944,7 @@ that was downloaded to it — or `GoOnline` refuses.
 
 ## 21. `RxCMP_E_AUDIT_INVALIDOPTYPE` — the fixture used a display name (2026-09-21)
 
-`nautilus logix build` and `nautilus logix download` failed on DemoLine with
+`naut logix build` and `naut logix download` failed on DemoLine with
 `RxCMP_E_AUDIT_INVALIDOPTYPE - Invalid type.` at *Verifying program
 connections*.
 
@@ -2030,4 +2030,4 @@ verification-result or error-collection API next to `BuildAsync`.
 
 Worth doing. The gap between those two messages is the difference between a
 five-minute fix and the afternoon recorded in this section, and every user of
-`nautilus logix build` in CI inherits the worse one.
+`naut logix build` in CI inherits the worse one.

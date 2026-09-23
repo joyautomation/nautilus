@@ -65,7 +65,7 @@ type Manifest struct {
 	Sparkplug *SparkplugConfig `yaml:"sparkplug"`
 	// Retain persists operator state (setpoints, online edits) across
 	// restarts; Redundancy elects one scanning leader among replicas.
-	// Both are wired by `nautilus run` — check/build/LSP only validate.
+	// Both are wired by `naut run` — check/build/LSP only validate.
 	Retain     *RetainConfig     `yaml:"retain"`
 	Redundancy *RedundancyConfig `yaml:"redundancy"`
 	// Alarms turns BOOL tags into ISA-18.2 alarm state — the active list,
@@ -142,7 +142,7 @@ type ServerConfig struct {
 	Addr        string   `yaml:"addr"`
 	OnlineEdits bool     `yaml:"online-edits"`
 	Interval    Duration `yaml:"interval"`
-	// Historian is the base URL of a `nautilus historian` daemon; when set,
+	// Historian is the base URL of a `naut historian` daemon; when set,
 	// the API proxies GET /api/history* there so the HMI keeps one origin.
 	// NAUTILUS_HISTORIAN_URL overrides at start.
 	Historian string `yaml:"historian"`
@@ -150,7 +150,7 @@ type ServerConfig struct {
 	// SvelteKit `adapter-static` output, "./hmi/build") — same rule as
 	// every other manifest-referenced path (tag-files, driver.manifest):
 	// it must resolve inside the project (see projectPath), so what
-	// `nautilus build` ships is what a reviewer can see in the checkout.
+	// `naut build` ships is what a reviewer can see in the checkout.
 	// When set, the controller serves that directory at "/" (SPA fallback
 	// to its index.html for a client-side route), and the built-in
 	// dashboard moves to "/_nautilus/" — see server.Options.HMI. Empty (the
@@ -192,7 +192,7 @@ type TagConfig struct {
 // role or init would silently change what the controller does.
 //
 // It exists because some generators cannot supply documentation at all —
-// `nautilus eip import` is the case that forced it, since Logix keeps tag
+// `naut eip import` is the case that forced it, since Logix keeps tag
 // descriptions in the offline project file rather than anywhere the CIP tag
 // browse can reach. A generator that HAS descriptions should emit them into
 // its tag file instead.
@@ -279,11 +279,11 @@ type Project struct {
 	inputTags []string // role-input tag names, for the Sparkplug device
 
 	// HMIDir is server.hmi's path, cleaned and relative to the project
-	// (e.g. "hmi/build") — "" when unset. `nautilus build` uses it to warn
+	// (e.g. "hmi/build") — "" when unset. `naut build` uses it to warn
 	// on a large embed; Server.HMI (above) is the fs.FS actually served.
 	HMIDir string
 
-	// Retain/Redundancy carry the manifest's sections for `nautilus run`
+	// Retain/Redundancy carry the manifest's sections for `naut run`
 	// to wire; Load itself constructs nothing — check, build, and the LSP
 	// load projects too, and must not touch a cluster to do it.
 	Retain     *RetainConfig
@@ -590,10 +590,10 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		}
 		hmiDir = hmiPath
 		// fs.Sub only wraps a path prefix — it does not require hmiPath to
-		// exist yet, so `nautilus check`/a language server reading the
+		// exist yet, so `naut check`/a language server reading the
 		// manifest before `npm run build` has run doesn't fail here. A
 		// request against a missing build 404s at serve time instead (see
-		// server.handleHMI); `nautilus run`'s banner and `nautilus build`'s
+		// server.handleHMI); `naut run`'s banner and `naut build`'s
 		// output both name the configured directory either way.
 		if hmiFS, err = fs.Sub(fsys, hmiPath); err != nil {
 			return nil, fmt.Errorf("server.hmi: %w", err)
@@ -625,7 +625,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 // why that tier order, and why it never decides whether a call resolves.
 //
 // Unlike the editor-side composition, a library that will not transpile is
-// an ERROR here: this is the path `nautilus check`, `run`, and `build` take,
+// an ERROR here: this is the path `naut check`, `run`, and `build` take,
 // and silently dropping a block would fail later as "unknown type".
 func libraries(fsys fs.FS) ([]string, error) {
 	entries, err := fs.ReadDir(fsys, ".")
@@ -744,7 +744,7 @@ func tagDefs(tags []TagConfig) ([]runtime.TagDef, error) {
 //
 // Keys matching no tag (a dotted field path, or a typo) pass through to
 // Options.Meta as-is. The meta key space is plain strings, so per-field
-// documentation needs no new type; `nautilus check` reports keys that name
+// documentation needs no new type; `naut check` reports keys that name
 // nothing, which is where a typo surfaces.
 func applyTagMeta(defs []runtime.TagDef, tm map[string]MetaConfig) map[string]runtime.TagMeta {
 	if len(tm) == 0 {
@@ -918,8 +918,8 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		// A Sparkplug B host application: consume a whole group of edge
 		// nodes as INPUT tags, send operator writes back as NCMD/DCMD.
 		//
-		// host.New NEVER dials — buildDriver runs inside `nautilus check`
-		// and `nautilus build`, i.e. in CI with no broker — so everything
+		// host.New NEVER dials — buildDriver runs inside `naut check`
+		// and `naut build`, i.e. in CI with no broker — so everything
 		// that can fail on bad configuration fails here, offline, and the
 		// connection is Start's job. Same split as eip.
 		if d.Broker == "" {

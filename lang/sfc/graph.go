@@ -24,7 +24,7 @@ import (
 // JSON should treat Layout as a set). Two calls to Graph on identical
 // source produce field-for-field identical Models.
 
-// Model is the JSON `nautilus sfc graph` emits.
+// Model is the JSON `naut sfc graph` emits.
 type Model struct {
 	Name     string        `json:"name"`
 	Vars     []VarDecl     `json:"vars,omitempty"`

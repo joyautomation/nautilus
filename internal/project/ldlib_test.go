@@ -12,7 +12,7 @@ import (
 // A `.ld` file with no PROGRAM is a project LIBRARY: its FUNCTION_BLOCKs
 // are ladder subroutines, transpiled into the prelude ahead of every task
 // exactly as a PROGRAM-less `.st` file's declarations are. This is the
-// composition `nautilus check`, `run`, `build` and `test` all take.
+// composition `naut check`, `run`, `build` and `test` all take.
 
 const ldLibManifest = `
 name: ld-lib
@@ -118,7 +118,7 @@ func TestLadderLibraryProjectRuns(t *testing.T) {
 }
 
 // A ladder library that does not transpile is an error at load, not a
-// silently missing block — `nautilus check` and `run` take this path.
+// silently missing block — `naut check` and `run` take this path.
 func TestLadderLibraryErrorSurfaces(t *testing.T) {
 	fs := ldLibFS()
 	fs["blocks.ld"] = &fstest.MapFile{Data: []byte(`FUNCTION_BLOCK Broken

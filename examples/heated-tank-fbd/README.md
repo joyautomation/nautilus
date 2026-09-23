@@ -60,8 +60,8 @@ component for it.
 5. **CLI** — the same everywhere CI runs:
 
    ```sh
-   nautilus check examples/heated-tank-fbd     # compile diagnostics
-   nautilus fbd graph examples/heated-tank-fbd/program.fbd | jq .  # render model
+   naut check examples/heated-tank-fbd     # compile diagnostics
+   naut fbd graph examples/heated-tank-fbd/program.fbd | jq .  # render model
    ```
 
 ## Try the newer features
@@ -84,7 +84,7 @@ component for it.
 5. **Per-task online edits** — with `reports.fbd` open, change the
    average window math and run "nautilus: Download Program to
    Controller": the edit routes to the `reports` task by its `PROGRAM`
-   name; `Main` keeps running untouched. `nautilus pull` reconciles both
+   name; `Main` keeps running untouched. `naut pull` reconciles both
    programs back into these files.
 6. **Eco mode (SEL)** — flip it live and watch the PI retarget:
 

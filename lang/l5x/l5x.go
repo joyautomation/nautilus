@@ -141,7 +141,7 @@ type Parameter struct {
 // Tag is one <Tag>, controller- or program-scoped.
 //
 // Description is the payload a live browse cannot reach: Logix keeps tag
-// documentation in the offline project, so `nautilus eip import` has to
+// documentation in the offline project, so `naut eip import` has to
 // leave desc: empty (eip/codegen/tags.go). Reading the L5X recovers it.
 type Tag struct {
 	Name           string

@@ -1,6 +1,6 @@
 # The same project on the loopback driver — logic-only, no field bus:
-#   nautilus check -m memory.yaml .
-#   nautilus test  -m memory.yaml .
+#   naut check -m memory.yaml .
+#   naut test  -m memory.yaml .
 # The shape `*_test.yaml` runs against either way: `given:` writes the
 # driver's input image directly, so no socket is ever involved.
 name: modbus-plant

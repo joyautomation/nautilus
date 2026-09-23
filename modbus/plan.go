@@ -4,8 +4,8 @@
 // bindings into block reads per (source, table, scan class) turns a 16-channel
 // analyser's 16 requests into one.
 // Pure functions over the manifest — New validates and plans offline, so
-// `nautilus check` and `build` pass with no device in sight, and
-// `nautilus modbus import --plan` prints Plan.String for the commissioning
+// `naut check` and `build` pass with no device in sight, and
+// `naut modbus import --plan` prints Plan.String for the commissioning
 // tech.
 package modbus
 
@@ -180,7 +180,7 @@ func tableRank(table string) int {
 	}
 }
 
-// String renders the plan for humans — the `nautilus modbus import --plan`
+// String renders the plan for humans — the `naut modbus import --plan`
 // output. One header per source, one line per block request, every tag with
 // its address so a commissioning tech can match it against the datasheet:
 //

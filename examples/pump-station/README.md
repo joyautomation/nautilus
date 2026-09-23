@@ -20,9 +20,9 @@ tags/pumps.yaml     ← its output. 24 tags. Do not edit.
 
 ```sh
 go run tools/tags.go     # 9 rows -> 24 tags
-nautilus check           # schema, and both directions against the logic
-nautilus test            # 4 acceptance tests
-nautilus run             # dashboard and tag API on :8080
+naut check           # schema, and both directions against the logic
+naut test            # 4 acceptance tests
+naut run             # dashboard and tag API on :8080
 ```
 
 Then edit `tools/tags.go`:
@@ -52,7 +52,7 @@ generators whose source cannot, which is the EtherNet/IP importer's problem
 ## Five generators, one file
 
 Nautilus never runs your generator. The only `exec` in the entire toolchain is
-`git init` during `nautilus new` scaffolding — `check`, `run`, `test`, `build`,
+`git init` during `naut new` scaffolding — `check`, `run`, `test`, `build`,
 and the LSP shell out to nothing, ever. Your generator is not a plugin, is not
 registered, and is not configured. The interface is a committed YAML file that
 satisfies the published JSON Schema.
@@ -66,7 +66,7 @@ merely stated, `tools/` holds the same generator five times:
 | `tags.ts` | `node tools/tags.ts` | Node 22.6+ strips types natively — no package.json, no npm install, no tsc |
 | `tags.deno.ts` | `deno run --allow-write tools/tags.deno.ts` | one static binary, and an explicit permission on the write |
 | `tags.py` | `python3 tools/tags.py` | stdlib only — no pip, no venv |
-| `pumps.csv` | `nautilus tags import-csv --name Tag --role Kind --type UDT --init Initial --unit EU --desc Service -o tags/pumps.yaml tools/pumps.csv` | different in kind: an integrator's export, already expanded, mapped by column |
+| `pumps.csv` | `naut tags import-csv --name Tag --role Kind --type UDT --init Initial --unit EU --desc Service -o tags/pumps.yaml tools/pumps.csv` | different in kind: an integrator's export, already expanded, mapped by column |
 
 All five emit an identical tag list, and `generators_test.go` asserts it on
 every `go test ./...`, so the claim cannot rot. Go and the CSV importer are

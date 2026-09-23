@@ -13,7 +13,7 @@ var endVarRe = regexp.MustCompile(`(?i)END_VAR`)
 // stack inside their rung. No coordinates, no layout block; the drawing is
 // a pure function of the source, which is exactly what makes ladder ladder.
 
-// Model is the JSON the diagram preview consumes (`nautilus ld graph`).
+// Model is the JSON the diagram preview consumes (`naut ld graph`).
 //
 // A file may hold more than one POU: FUNCTION_BLOCK definitions whose
 // bodies are ladder, with or without a PROGRAM alongside them. Rungs and

@@ -41,12 +41,12 @@ makes invisible. A build from an uncommitted tree is flagged
 
 The history is captured **where git exists** and travels with the artifact:
 
-- **`nautilus build`** snapshots the project's git history into the emitted
+- **`naut build`** snapshots the project's git history into the emitted
   binary (you'll see `— N commits of program history embedded` on the build
   line). A deployed controller, even a distroless container on an air-gapped
   plant network with no git binary, no `.git` dir, and no route out, serves
   history from the data it carries.
-- **`nautilus run`** in a checkout captures live from the repo on first
+- **`naut run`** in a checkout captures live from the repo on first
   request.
 
 Either way the endpoint never fails for lack of provenance: outside a repo

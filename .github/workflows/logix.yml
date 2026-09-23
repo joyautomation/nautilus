@@ -29,7 +29,7 @@ jobs:
       - uses: actions/setup-go@v5
         with: {go-version: '1.24'}
       - name: Unit tests
-        run: go test ./lang/l5x/... ./logix/... ./cmd/nautilus/ -run 'Logix|L5X|Ladder|Types|Tags|Normalize|ParseRung|Parse|Client|Import|Download|Convert|Session|XPath|Event' -v
+        run: go test ./lang/l5x/... ./logix/... ./cmd/naut/ -run 'Logix|L5X|Ladder|Types|Tags|Normalize|ParseRung|Parse|Client|Import|Download|Convert|Session|XPath|Event' -v
       # The development corpus is ~60 real exports, most of it client work
       # that cannot live in the repo. A runner that has it mounted sweeps
       # it; one that does not skips, and says so.
@@ -123,7 +123,7 @@ jobs:
       # which is the thing an operator actually needs.
       - name: Licensing probe
         continue-on-error: true
-        run: go run ./cmd/nautilus logix probe
+        run: go run ./cmd/naut logix probe
 
       # Tier 1: the agent's own contract — auth, the file sandbox, error
       # classification. Needs no licence, so it MUST pass.

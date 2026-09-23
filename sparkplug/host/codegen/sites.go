@@ -1,7 +1,7 @@
 // sites.go is the OFFLINE half of the importer: generation from a committed
 // site list instead of from a live broker.
 //
-// `nautilus sparkplug import --broker ...` needs every site to be online,
+// `naut sparkplug import --broker ...` needs every site to be online,
 // birthing, and reachable from wherever the import runs. That is fine for one
 // site and wrong for sixty: the central project has to be buildable in CI,
 // reviewable before the field work happens, and regenerable when a site is

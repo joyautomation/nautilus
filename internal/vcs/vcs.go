@@ -2,7 +2,7 @@
 // touched the project directory, each with its diff and a content-addressed
 // snapshot of the project's files — into a server.ProgramHistory the
 // controller can carry. Capture runs where git exists (a dev checkout,
-// the CI job `nautilus build` runs in); the deployed artifact answers
+// the CI job `naut build` runs in); the deployed artifact answers
 // GET /api/program/history from the embedded result with no git binary,
 // no .git dir, and no network, which is what a distroless container on an
 // air-gapped plant network has to work with.

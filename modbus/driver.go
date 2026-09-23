@@ -4,8 +4,8 @@
 // requests strictly sequential; the wire layer is tcp.go, the value codec
 // encode.go, and the block-read schedule plan.go.
 //
-// New NEVER dials. buildDriver runs inside `nautilus check` and
-// `nautilus build`, i.e. in CI with no device in sight, so everything that
+// New NEVER dials. buildDriver runs inside `naut check` and
+// `naut build`, i.e. in CI with no device in sight, so everything that
 // can fail on bad configuration fails here, offline, and the connection is
 // Start's job — the same split eip and sparkplug/host make.
 package modbus
@@ -67,7 +67,7 @@ func WithScanClass(name string, rate time.Duration) Option {
 // WithTagClass assigns tags to a scan class by glob patterns matched against
 // the binding's nautilus name (eip's rule; modbus has no device path worth
 // globbing). Assignments live in the driver constructor — not the generated
-// manifest — so re-running `nautilus modbus import` never erases polling
+// manifest — so re-running `naut modbus import` never erases polling
 // policy. Later assignments override earlier ones.
 func WithTagClass(class string, patterns ...string) Option {
 	return func(d *Driver) {

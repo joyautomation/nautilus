@@ -46,10 +46,10 @@ alarm-files:                         # generated sets, in their own artifact
 `examples/alarms` is this, complete and runnable:
 
 ```sh
-nautilus check examples/alarms         # validate the rules, offline
-nautilus alarms list examples/alarms   # see what they expanded to
-nautilus test examples/alarms          # the acceptance suite
-nautilus run examples/alarms           # dashboard + /api/alarms
+naut check examples/alarms         # validate the rules, offline
+naut alarms list examples/alarms   # see what they expanded to
+naut test examples/alarms          # the acceptance suite
+naut run examples/alarms           # dashboard + /api/alarms
 ```
 
 ## Rules versus definitions
@@ -105,7 +105,7 @@ that matters: an id declared in two sources is an **error naming both**,
 never last-wins. Last-wins reads fine on the day it is written and rots
 silently the first time the generator that emitted one side changes.
 
-`nautilus alarms list` dumps the whole expanded set (`-o yaml` gives YAML
+`naut alarms list` dumps the whole expanded set (`-o yaml` gives YAML
 a manifest could take back verbatim; `-count`, `-site` and `-priority`
 narrow it). That is the deal: a dozen rules covering two thousand alarms
 is a good trade only because you can see the two thousand.
@@ -285,7 +285,7 @@ The matchers are `active`, `unacked`, `shelved`, `state`, `priority` and
 
 ## Checking it offline
 
-`nautilus check` validates the whole section without running anything, and
+`naut check` validates the whole section without running anything, and
 it is where the mistakes that would otherwise wait for commissioning
 surface:
 

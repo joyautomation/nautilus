@@ -746,7 +746,7 @@ func (d *Driver) recordUnknownLocked(group string, key metricKey, m sparkplug.Me
 }
 
 // discoveryYAML renders the manifest tags: line that would bind this metric,
-// ready to paste (or, better, to re-run `nautilus sparkplug import` for).
+// ready to paste (or, better, to re-run `naut sparkplug import` for).
 func (d *Driver) discoveryYAML(e *discovery) string {
 	typ := e.datatype
 	if typ == "" {
@@ -770,7 +770,7 @@ func (d *Driver) discoveryTagName(key metricKey) string {
 // Discovered returns every metric seen on the wire but absent from the
 // manifest, sorted, each with the manifest line that would bind it. It backs
 // /api/drivers' extra.unknown and the "what did I miss" half of
-// `nautilus sparkplug browse`.
+// `naut sparkplug browse`.
 func (d *Driver) Discovered() []Discovered {
 	d.mu.Lock()
 	defer d.mu.Unlock()

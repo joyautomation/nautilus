@@ -16,8 +16,8 @@ import (
 //	POST /api/program/activate  warm-swap every program to its source at a
 //	                            given commit (gated like online edits)
 //
-// The history is captured where git exists — `nautilus build` embeds a
-// snapshot in the artifact, `nautilus run` reads the working repo — so the
+// The history is captured where git exists — `naut build` embeds a
+// snapshot in the artifact, `naut run` reads the working repo — so the
 // deployed controller answers from data it carries, with no git binary, no
 // .git dir, and no network. See Options.History / Options.SourcesAt.
 //
@@ -160,7 +160,7 @@ func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.sourcesAt == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "no program history on this controller — build with `nautilus build` inside a git repo, or run from one",
+			"error": "no program history on this controller — build with `naut build` inside a git repo, or run from one",
 		})
 		return
 	}

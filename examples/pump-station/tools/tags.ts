@@ -58,7 +58,7 @@ const tags: Tag[] = pumps.flatMap((p) => [
 // ── 4. render ──────────────────────────────────────────────────────────────
 // These four rules are the whole contract, and they are pinned by the
 // published JSON Schema (tools/vscode-iec/schemas/nautilus-tags.schema.json)
-// plus `nautilus check`:
+// plus `naut check`:
 //   - sorted by name, so a regenerated file diffs against the last one
 //   - whole floats keep a decimal point, or YAML decodes REAL as DINT
 //   - text is quoted, because a flow mapping ends at the first bare comma

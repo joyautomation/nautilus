@@ -1,0 +1,84 @@
+# {{.Name}}
+
+A [nautilus](https://github.com/joyautomation/nautilus) controller — IEC
+61131-3 logic, run and shipped by the `naut` CLI. No Go in this
+project: the logic is in the IEC files, the wiring is `nautilus.yaml`, and
+nothing here needs a toolchain.
+
+```sh
+naut run        # scan loop + dashboard + tag API on http://localhost:8080
+naut test       # acceptance tests, in virtual time
+naut check      # compile (CI gate)
+naut build      # emit ./{{.Name}} — a self-contained controller binary
+```
+
+{{if .Demo -}}
+## What's here
+
+| File | What it is |
+| --- | --- |
+| `nautilus.yaml` | the wiring: three tasks, tags by role, server, driver |
+| `program.fbd` | control at 10 Hz — pump seal-in latch, heater PI, `TON` alarm delay |
+| `sim.st` | the plant, simulated in Structured Text (delete it for real I/O) |
+| `interlocks.ld` | the annunciator in ladder, on its own 200 ms task |
+| `blocks.st` | a user `FUNCTION_BLOCK`, callable from any language |
+| `{{.Name}}_test.yaml` | acceptance tests, including the 10 s alarm delay |
+
+Three tasks, three IEC languages, one tag store — the resource/task model
+from the standard. Right-click `program.fbd` → *Open With → FBD Diagram*,
+or `interlocks.ld` → *Ladder Diagram*: live values paint power flow while
+the controller runs, and every gesture is a structural edit to the text.
+
+## Going to real I/O
+
+Delete the `sim` task from `nautilus.yaml` and change `LevelPct`/`TempC`
+to `role: input`. The control program doesn't change — it reads the same
+tags either way. Then point `driver:` at the field:
+
+```yaml
+driver:
+  type: eip
+  host: 192.168.1.10
+  manifest: eip_manifest.yaml   # from `naut eip import`
+```
+
+{{else -}}
+The logic is `program.{{.Language}}`; `nautilus.yaml` declares the tasks,
+the tags and their roles, and the driver. `{{.Name}}_test.yaml` holds the
+acceptance tests — they run in **virtual time**, so an on-delay or a
+loop's settling time is asserted exactly, in milliseconds.
+
+{{end -}}
+## Tests
+
+`naut test` runs every `*_test.yaml` here. The fixture comes from
+`nautilus.yaml` itself, so a retuned gain or a renamed tag can't drift
+away from what the tests verify. Assertions are tag matchers
+(`{near: 72.0, tol: 0.5}`) or ST expressions
+(`ABS(TempC - TempSP) < 0.5`) compiled by the same compiler as your logic
+— put reusable ones in a library file as a `FUNCTION` returning `BOOL`.
+
+Open the folder in VS Code with the **nautilus IEC 61131-3** extension for
+diagnostics, the graphical FBD/ladder editors, live tag values, and
+online edits against the running controller.
+{{if .Deploy}}
+## Deploy
+
+Every push to main that passes `check` + `test` becomes a controller
+image on GHCR (`.github/workflows/deploy.yml`). `deploy/k8s.yaml` runs it
+as a **redundant pair**: two replicas elect a scanning leader through a
+Lease, setpoints and online edits ride a ConfigMap across restarts and
+failovers, and the Service reaches live data on either replica.
+
+```sh
+kubectl apply -f deploy/k8s.yaml   # after pointing image: at your GHCR
+```
+
+Uncomment the rollout step in deploy.yml (and add a `KUBE_CONFIG`
+secret) to close the loop: a merged PR is running on the plant floor
+minutes later, by sha, with `kubectl rollout undo` as the way back.
+{{end}}
+
+When you need a custom field bus or richer simulation physics, that's the
+Go SDK: `naut new --template sdk` (or `sdk-demo`) scaffolds it, and
+the IEC logic here carries over unchanged.

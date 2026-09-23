@@ -222,7 +222,7 @@ func (d *Def) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
-// MarshalYAML round-trips a Def back through defWire, so `nautilus alarms
+// MarshalYAML round-trips a Def back through defWire, so `naut alarms
 // list` emits YAML a manifest could take back verbatim — the policy bools
 // and the delays are on Def as plain Go values and would otherwise be lost
 // by the `yaml:"-"` tags UnmarshalYAML needs.

@@ -139,7 +139,7 @@ func irOne() ir.Value { return ir.RealVal(1) }
 //
 // This is not hypothetical: the constraints were first written on `step`
 // alone, so an editor happily accepted `{scans: 1, advance: 2s}` at test
-// level while `nautilus test` rejected it. The author sees no squiggle and
+// level while `naut test` rejected it. The author sees no squiggle and
 // then a failure at run time, which is the exact opposite of the point.
 func TestSchemaConstrainsInlineStepLikeAStep(t *testing.T) {
 	s := loadSchema(t)

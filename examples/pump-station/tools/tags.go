@@ -15,7 +15,7 @@
 //
 // Four other versions of this exact generator live beside it — tags.ts
 // (Node), tags.deno.ts, tags.py, and pumps.csv fed through
-// `nautilus tags import-csv`. All five emit an identical tag list, and
+// `naut tags import-csv`. All five emit an identical tag list, and
 // generators_test.go asserts it. That is not a coincidence to admire; it is
 // the design. Nautilus never runs your generator — the only exec in the whole
 // toolchain is `git init` during scaffolding — so the language is entirely
@@ -25,7 +25,7 @@
 // renders exactly this, but a generator in your project could not import it,
 // so using it here would make the Go version a privileged peer rather than an
 // honest one. The four rules in render() below are the entire contract, and
-// they are pinned by the published JSON Schema plus `nautilus check`.
+// they are pinned by the published JSON Schema plus `naut check`.
 package main
 
 import (
@@ -69,7 +69,7 @@ var perPump = []struct {
 //	         driver should fault on the first read rather than quietly hand
 //	         the logic zeros that look like a healthy stopped pump.
 //
-// Flip it, re-run, and `nautilus run` reports the difference.
+// Flip it, re-run, and `naut run` reports the difference.
 const udtRole = "state"
 
 type tag struct {

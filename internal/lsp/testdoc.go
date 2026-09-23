@@ -10,7 +10,7 @@ package lsp
 // project's tags and its own library FUNCTIONs.
 //
 // The expressions are compiled through acceptance.CheckExpr, the same
-// wrapper the runner builds, so the editor's verdict and `nautilus test`
+// wrapper the runner builds, so the editor's verdict and `naut test`
 // cannot disagree.
 //
 // Everything OUTSIDE an expression is YAML, and belongs to the YAML
@@ -245,7 +245,7 @@ func (e *buildEntry) check(expr string) error {
 // README, the test files themselves — must not invalidate it, or every
 // keystroke would recompile the project.
 //
-// On-disk content deliberately, not open buffers: `nautilus test` reads
+// On-disk content deliberately, not open buffers: `naut test` reads
 // disk, so an unsaved edit to a program legitimately isn't in effect yet.
 func fingerprintProject(dir string) string {
 	entries, err := os.ReadDir(dir)
@@ -336,7 +336,7 @@ func (s *Server) analyzeTest(uri, text string) (*testDoc, []Diagnostic) {
 }
 
 // unknownTagDiags reports a tag name in key position that the project does
-// not have. `nautilus test` already refuses these — "no tag %q in this
+// not have. `naut test` already refuses these — "no tag %q in this
 // project" — so this is the same verdict, moved to where the mistake was
 // made rather than where it is discovered.
 func (t *testDoc) unknownTagDiags() []Diagnostic {

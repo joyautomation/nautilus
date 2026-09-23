@@ -435,7 +435,7 @@ export class OnlineEdit implements vscode.Disposable {
     if (program === undefined) {
       void vscode.window.showErrorMessage(
         "nautilus: the controller's type/library sources differ from this project — " +
-          "re-run `nautilus eip import` to reconcile the generated types before pulling the program."
+          "re-run `naut eip import` to reconcile the generated types before pulling the program."
       );
       return;
     }

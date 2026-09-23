@@ -26,7 +26,7 @@ scripts/repro-sparkplug-silent-link.sh        # needs a broker on localhost:1883
 MOSQ="docker compose -f ../ignition/docker-compose.yml exec -T broker" scripts/repro-sparkplug-silent-link.sh
 ```
 
-It builds `./cmd/nautilus`, runs a two-tag project, freezes it with `SIGSTOP` until the broker times out the 30 s
+It builds `./cmd/naut`, runs a two-tag project, freezes it with `SIGSTOP` until the broker times out the 30 s
 keepalive, thaws it, changes a tag three times, and counts NDATA on the wire. Today:
 
 ```
@@ -246,7 +246,7 @@ Both landed as their own commits on the same branch, after item 1; each can be t
   `init: 65` on a REAL is still a Double; `init: 2.5` on an INT is a load error naming the tag and type; a
   tag no program declares still seeds a number as a REAL. No manifest change; the loader's `normalize()`
   is now only the fallback shape. Verified: four new tests in `internal/project`, `go test ./...`, and
-  every example's `nautilus check` + acceptance suite (the sparkplug-host example's `SitesOnline : INT`
+  every example's `naut check` + acceptance suite (the sparkplug-host example's `SitesOnline : INT`
   now seeds as an INT and its suite still passes). The tag-model guide gained a paragraph.
 - **Item 3** (`sparkplug: births state unit and desc as engUnit/documentation properties`). `Metric` gains
   `Properties`; the codec writes and reads a PropertySet (the decoder used to drop it — the codegen

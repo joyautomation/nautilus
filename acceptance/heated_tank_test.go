@@ -21,7 +21,7 @@ import (
 
 const nogo = "../examples/heated-tank-nogo"
 
-// load builds the example exactly as `nautilus run` would, then puts it on
+// load builds the example exactly as `naut run` would, then puts it on
 // a virtual clock.
 func load(t *testing.T) (*runtime.Runtime, *acceptance.Scheduler) {
 	t.Helper()

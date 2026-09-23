@@ -10,7 +10,7 @@ package ir
 //     tag is in no role, so it is never seeded and never driver-fed; the first
 //     read of a value nothing has written faults the scan.
 //
-// So `nautilus check` reports the second as an error and the first as a
+// So `naut check` reports the second as an error and the first as a
 // warning, and needs this split to tell them apart.
 //
 // Introspection only — the VM never calls this.

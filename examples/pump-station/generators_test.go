@@ -103,7 +103,7 @@ func TestCSVImportEmitsTheCommittedFile(t *testing.T) {
 
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "nautilus")
-	build := exec.Command("go", "build", "-o", bin, "../../cmd/nautilus")
+	build := exec.Command("go", "build", "-o", bin, "../../cmd/naut")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("building nautilus: %v\n%s", err, out)
 	}

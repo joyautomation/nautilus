@@ -2,9 +2,9 @@
 # examples/heated-tank-nogo (an edge node). This project consumes a small
 # fleet of edge nodes on one broker/group and presents them as INPUT tags;
 # operator writes go back out as NCMD/DCMD.
-#   nautilus check .   compile + verify the generated tags agree with fleet.st
-#   nautilus test      acceptance tests, virtual time, no broker
-#   nautilus run       connect to the broker in `driver:` below and go live
+#   naut check .   compile + verify the generated tags agree with fleet.st
+#   naut test      acceptance tests, virtual time, no broker
+#   naut run       connect to the broker in `driver:` below and go live
 name: plant-scada
 
 server:
@@ -17,7 +17,7 @@ tasks:
 # The driver: consumes the group as a Sparkplug B host application.
 #   broker, host-id, group-id, manifest are the required fields
 #   (internal/project/project.go's buildDriver — a driver missing any of
-#   them fails `nautilus check`, not `nautilus run`, so a bad config never
+#   them fails `naut check`, not `naut run`, so a bad config never
 #   reaches the field).
 # host-id "plant-scada" is this host's identity on the wire: its STATE
 # certificate publishes to spBv1.0/STATE/plant-scada, retained, and every

@@ -23,7 +23,7 @@ import (
 )
 
 // SuffixTest marks a file as an acceptance suite. The suffix mirrors Go's,
-// and it keeps tests out of the deployment artifact: `nautilus build`
+// and it keeps tests out of the deployment artifact: `naut build`
 // excludes them from the embedded project.
 const SuffixTest = "_test.yaml"
 

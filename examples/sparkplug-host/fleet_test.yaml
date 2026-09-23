@@ -1,7 +1,7 @@
 # Acceptance tests for fleet.st — no broker, no toolchain, virtual time.
 #
-#   nautilus test        run them
-#   nautilus test -v     with virtual elapsed time per test
+#   naut test        run them
+#   naut test -v     with virtual elapsed time per test
 #
 # The fixture is nautilus.yaml, same as every manifest example. There is no
 # live Sparkplug traffic here at all: __Online, __LastBirthMs and the data
@@ -15,7 +15,7 @@
 # That baseline IS the "first birth": a site's role: input tags read as a
 # fault until something (a real NBIRTH, or a test's `given`) delivers one,
 # which is the "reads fault until first birth" rule the guide calls out —
-# drop any one of these `given` entries and `nautilus test -v` shows
+# drop any one of these `given` entries and `naut test -v` shows
 # exactly that fault.
 
 tolerance: 0.01

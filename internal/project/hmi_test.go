@@ -2,7 +2,7 @@ package project
 
 // server.hmi: names a built HMI's directory, relative to the project — the
 // same "must resolve inside the project" rule as tag-files and
-// driver.manifest (see projectPath), so what `nautilus build` embeds is
+// driver.manifest (see projectPath), so what `naut build` embeds is
 // exactly what a reviewer can see in the checkout.
 
 import (
@@ -101,7 +101,7 @@ func TestHMIPathMustStayInsideProject(t *testing.T) {
 
 // fs.Sub only wraps a path prefix, so Load must not require the directory
 // to exist yet — a manifest declaring server.hmi before `npm run build`
-// has ever run (a fresh checkout, `nautilus check`, the language server)
+// has ever run (a fresh checkout, `naut check`, the language server)
 // must still load cleanly. A request against the missing build 404s at
 // serve time instead (see server.handleHMI).
 func TestHMIDirNeedNotExistAtLoad(t *testing.T) {

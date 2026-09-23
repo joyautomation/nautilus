@@ -123,7 +123,7 @@ func (c *AlarmsConfig) ShelveDurations() []time.Duration {
 // validate rejects at LOAD time what would otherwise be silence at run
 // time: an unusable glob, a mistyped placeholder, a site-from that is not
 // a regexp. Expand does the first two; this does the third and is called
-// from ReadManifest so `nautilus check` and the language server see it
+// from ReadManifest so `naut check` and the language server see it
 // without compiling anything.
 func (c *AlarmsConfig) validate() error {
 	for _, p := range [][2]string{{"site-from", c.SiteFrom}, {"area-from", c.AreaFrom}} {
@@ -202,8 +202,8 @@ func composeAlarms(fsys fs.FS, m *Manifest) error {
 // ── composing definitions ──────────────────────────────────────────────
 
 // AlarmDefs materializes the manifest's rules and definitions against the
-// project's tags, over a compiled runtime — the count `nautilus check`
-// prints and `nautilus alarms list` dumps.
+// project's tags, over a compiled runtime — the count `naut check`
+// prints and `naut alarms list` dumps.
 //
 // It needs the runtime because a rule matches a struct TYPE and a member,
 // and a tag's shape is only knowable once the project's ST TYPE table has
@@ -272,7 +272,7 @@ func captureFunc(pattern string) func(string) string {
 	}
 }
 
-// CheckAlarms is `nautilus check`'s alarm pass: compose the definitions
+// CheckAlarms is `naut check`'s alarm pass: compose the definitions
 // and cross-check every condition path against the project's tags.
 //
 // It returns the composed set, the problems that must be fixed, and the
@@ -411,7 +411,7 @@ func (a *Alarms) Close() error {
 // the manifest declares no alarms — a project without them behaves
 // exactly as it did before this existed.
 //
-// This is `nautilus run`'s call. It opens files and databases, so
+// This is `naut run`'s call. It opens files and databases, so
 // check/build/LSP use AlarmDefs instead, and the acceptance harness uses
 // AlarmEngine.
 func (p *Project) NewAlarms(rt *runtime.Runtime) (*Alarms, error) {

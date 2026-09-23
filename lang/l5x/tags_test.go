@@ -25,7 +25,7 @@ func tagsByName(t *testing.T, f *File, opts TagsOptions) map[string]string {
 
 // The point of the whole exercise: a live CIP browse cannot see tag
 // documentation, because Logix keeps it in the offline project file — so
-// `nautilus eip import` leaves desc: empty (eip/codegen/tags.go). The same
+// `naut eip import` leaves desc: empty (eip/codegen/tags.go). The same
 // tags read from an L5X arrive documented.
 func TestTagsCarryDescriptions(t *testing.T) {
 	f := load(t, "variety.L5X")

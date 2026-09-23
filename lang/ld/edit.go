@@ -7,7 +7,7 @@ import (
 )
 
 // Structural edits for the ladder view, mirroring the FBD edit seam: the
-// webview posts ops addressed at the render model, `nautilus ld edit`
+// webview posts ops addressed at the render model, `naut ld edit`
 // resolves them against a fresh parse, and the result comes back as text
 // edits. The ladder twist: a rung is one line of text, so an op mutates
 // the rung's MODEL and re-prints its body canonically — the rung-level

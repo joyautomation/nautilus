@@ -1,7 +1,7 @@
 package host
 
 // Discovery is the one part of the importer that cannot be a pure function:
-// retained births are forbidden, so `nautilus sparkplug import` has to hear a
+// retained births are forbidden, so `naut sparkplug import` has to hear a
 // node, ask it to birth, and wait. This test drives that loop against the
 // in-process mochi broker (mqtt_test.go's startBroker) with a raw paho client
 // standing in for an edge node that is already running — the exact case the

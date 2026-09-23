@@ -4,10 +4,10 @@ The heated surge tank as a **manifest project**: every nautilus feature in
 one folder, and not a line of Go — even the plant physics is an IEC task.
 
 ```sh
-nautilus run       # scan loop + dashboard + tag API on http://localhost:8080
-nautilus check .   # compile (the CI gate)
-nautilus test      # acceptance tests in virtual time (heated-tank_test.yaml)
-nautilus build     # emit ./heated-tank-nogo — one deployable binary, no toolchain
+naut run       # scan loop + dashboard + tag API on http://localhost:8080
+naut check .   # compile (the CI gate)
+naut test      # acceptance tests in virtual time (heated-tank_test.yaml)
+naut build     # emit ./heated-tank-nogo — one deployable binary, no toolchain
 ```
 
 ## What it demonstrates
@@ -42,7 +42,7 @@ nautilus build     # emit ./heated-tank-nogo — one deployable binary, no toolc
   tests verify. Assertions are tag matchers (`{near: 72.0, tol: 0.5}`) or
   ST expressions (`ABS(TempC - TempSP) < 0.5`) compiled by the same
   compiler as the logic.
-- **`nautilus build`** appends this folder to the runner and emits a
+- **`naut build`** appends this folder to the runner and emits a
   single self-contained controller binary — ships like any compiled
   program (`NAUTILUS_ADDR` / `NAUTILUS_TOKEN` apply; `NAUTILUS_CLI=1`
   recovers the CLI from a built binary). Test files are left out of the

@@ -201,7 +201,7 @@ A `.st` file with no `PROGRAM` keyword is a library: `TYPE`, `FUNCTION`, and
 `FUNCTION_BLOCK` declarations, in scope for every program in the same
 directory. Blocks may also be written in ladder or FBD, in `.ld` or `.fbd`
 libraries; ST libraries compose first, because that is where the `TYPE`
-declarations a graphical block's pins may name live. The runtime, the language server, `nautilus check`, download, and
+declarations a graphical block's pins may name live. The runtime, the language server, `naut check`, download, and
 pull all compose libraries the same way, so a program round-trips losslessly.
 See [function blocks, libraries, and tasks](/guides/blocks-and-tasks/).
 
@@ -211,7 +211,7 @@ See [function blocks, libraries, and tasks](/guides/blocks-and-tasks/).
 
 The VS Code extension highlights `.st` with no setup, from keyword lists
 generated out of the compiler. With the CLI installed it also runs
-`nautilus lsp`, the same compiler over stdio: diagnostics as you type for parse
+`naut lsp`, the same compiler over stdio: diagnostics as you type for parse
 and type errors, go-to-definition from an identifier to its declaration, hover
 showing the declared type and var section, and completion over in-scope
 variables, keywords, types, and the builtin registries.
@@ -225,12 +225,12 @@ Controller Program**, and **Pull Program from Controller**.
 ## Tooling
 
 ```sh
-nautilus check          # compile every .st, .fbd, .ld, .sfc under the path
-nautilus test           # *_test.yaml acceptance tests, on a virtual clock
-nautilus pull --host c1 # write a controller's running source back to the file
+naut check          # compile every .st, .fbd, .ld, .sfc under the path
+naut test           # *_test.yaml acceptance tests, on a virtual clock
+naut pull --host c1 # write a controller's running source back to the file
 ```
 
-`nautilus check` prints gcc-style `file:line:col: message` diagnostics and exits
+`naut check` prints gcc-style `file:line:col: message` diagnostics and exits
 non-zero when it finds any, which is what CI gates on. Tests are YAML fixtures
 asserting on tags over virtual time; see [Testing](/reference/testing/).
 Downloading a program warm-swaps it into a running controller with state carried

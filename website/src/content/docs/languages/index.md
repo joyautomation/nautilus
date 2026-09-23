@@ -40,7 +40,7 @@ lands on your source: an `.ld` error points at the rung, an `.sfc` error at
 the step or transition. And because everything ends in one IR, the whole
 toolchain is shared. Built-in functions and function blocks, user
 `FUNCTION_BLOCK`s from `.st`, `.ld`, or `.fbd` library files, arrays and
-structs, `nautilus check`,
+structs, `naut check`,
 acceptance tests, live values, online edits, and visual diffs behave the
 same in every language.
 
@@ -53,7 +53,7 @@ same in every language.
 | Math, arrays, structs, physics, anything algorithmic | [Structured Text](/languages/structured-text/) | The full language; the other three lower to it |
 | Batch sequences, state machines, startup and shutdown | [Sequential Function Chart](/languages/sfc/) | Steps and transitions are the spec of the process |
 
-`nautilus new --language ld` (or `fbd`, `sfc`) scaffolds a minimal project
+`naut new --language ld` (or `fbd`, `sfc`) scaffolds a minimal project
 in that language. Tasks are declared in `nautilus.yaml`, one program file
 each, at their own scan rate. See [Function blocks, libraries, and
 tasks](/guides/blocks-and-tasks/) for structuring logic across files and

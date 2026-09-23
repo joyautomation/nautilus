@@ -3,7 +3,7 @@
 // pure library — TYPE / FUNCTION_BLOCK / FUNCTION declarations with no
 // PROGRAM — is in scope. This mirrors how a runtime composes sources (e.g. a
 // generated eip_types.st concatenated with program.st), so the LSP and
-// `nautilus check` agree with what actually runs.
+// `naut check` agree with what actually runs.
 //
 // A library need not be Structured Text. A `.ld` or `.fbd` file with no
 // PROGRAM is a library too: its FUNCTION_BLOCKs are ladder (or netlist)
@@ -23,9 +23,9 @@
 // reports, never whether a call resolves.
 //
 // Join is the single definition of that composition. The runtime (main.go),
-// the LSP prelude, the VS Code online-edit download, and `nautilus pull` all
+// the LSP prelude, the VS Code online-edit download, and `naut pull` all
 // route through it, so a program can be composed to send and split back apart
-// losslessly — the round-trip guarantee `nautilus pull` relies on.
+// losslessly — the round-trip guarantee `naut pull` relies on.
 package stproject
 
 import (
@@ -185,7 +185,7 @@ func ComposeAll(dir string, override map[string]string) (MultiComposition, error
 // (in their ORIGINAL languages), which a ladder file needs to place a rung's
 // power on a block defined in another file.
 //
-// One definition, because both sides of `nautilus pull` must produce the
+// One definition, because both sides of `naut pull` must produce the
 // same bytes: the workspace composes with ComposeAll and the controller with
 // internal/project's libraries(), and a round-trip that disagreed by one
 // character would report every program as dirty.

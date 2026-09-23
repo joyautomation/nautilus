@@ -1,5 +1,5 @@
 PROGRAM Sim
-(* The plant, so `nautilus run` shows alarms coming and going without any
+(* The plant, so `naut run` shows alarms coming and going without any
    field hardware. Acceptance tests suspend this task and drive the
    measurements themselves — freezing the thing that would otherwise fight
    the test is what turns a closed loop into an open-loop assertion. *)

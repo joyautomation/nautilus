@@ -10,7 +10,7 @@ import (
 )
 
 // Model is the FBD render model consumed by diagram tooling (the VS Code
-// preview webview via `nautilus fbd graph`). It is a pure projection of the
+// preview webview via `naut fbd graph`). It is a pure projection of the
 // netlist — no coordinates, just topology plus a deterministic left-to-right
 // layer per node — so the same source always yields the same JSON and the
 // renderer owns all geometry.

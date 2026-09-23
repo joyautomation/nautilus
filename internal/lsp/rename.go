@@ -23,7 +23,7 @@ import (
 // everywhere: every program that binds it, the manifest that declares it,
 // the task that names it as dt-tag. So renaming one is a project-wide
 // edit — one WorkspaceEdit, one refactor preview, one undo. Deliberately
-// NOT covered (they fail loudly on their own, at `nautilus test` / HMI
+// NOT covered (they fail loudly on their own, at `naut test` / HMI
 // load): *_test.yaml suites, mimic bindings, Sparkplug metric lists.
 
 const codeInvalidRequest = -32600
@@ -225,7 +225,7 @@ func renameTagInManifest(mpath, name, newName string) (map[string][]TextEdit, er
 		doc := root
 		if f != mpath {
 			if doc, err = parseYAMLFile(f); err != nil {
-				continue // a missing tag-file is `nautilus check`'s finding, not rename's
+				continue // a missing tag-file is `naut check`'s finding, not rename's
 			}
 		}
 		var edits []TextEdit

@@ -13,7 +13,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/stproject"
 )
 
-// Version is stamped into serverInfo so `nautilus lsp` and the extension
+// Version is stamped into serverInfo so `naut lsp` and the extension
 // can be correlated in logs. Release binaries inject the tag via -ldflags
 // "-X .../internal/lsp.Version=X.Y.Z" (see .goreleaser.yaml); when nothing
 // is stamped, init derives it from module build info so a

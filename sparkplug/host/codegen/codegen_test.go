@@ -154,7 +154,7 @@ END_PROGRAM`
 	}
 }
 
-// TestTagsRoundTrip is `nautilus sparkplug tags`: the committed manifest
+// TestTagsRoundTrip is `naut sparkplug tags`: the committed manifest
 // alone, with no broker and no births, must re-derive the committed tag file
 // byte for byte.
 func TestTagsRoundTrip(t *testing.T) {

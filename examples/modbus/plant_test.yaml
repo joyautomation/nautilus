@@ -1,13 +1,13 @@
 # Acceptance tests for plant.st — logic only, virtual time, no socket:
 #
-#   nautilus test -m memory.yaml .       on any build
-#   nautilus test .                      once the loader knows driver modbus
+#   naut test -m memory.yaml .       on any build
+#   naut test .                      once the loader knows driver modbus
 #
 # `given:` writes the driver's input image directly — exactly what a block
 # read would leave behind — so these tests are the same against the memory
 # driver and against the real one. plant.st reads every GAS channel and
 # TC_A_Tpv unconditionally, so every test seeds that full baseline before
-# its first scan; drop one and `nautilus test -v` shows the read fault.
+# its first scan; drop one and `naut test -v` shows the read fault.
 
 tolerance: 0.001
 

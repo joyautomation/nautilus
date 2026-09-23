@@ -123,7 +123,7 @@ func TestHMIBuiltinAssetsMoveWithDashboard(t *testing.T) {
 	}
 }
 
-// A controller built by `nautilus build` serves the HMI from an archive
+// A controller built by `naut build` serves the HMI from an archive
 // whose files are NOT seekable — fstest.MapFS's are, which is exactly how
 // the ReadSeeker-dependent draft of the cache policy passed its tests while
 // 404ing every deep link in production. This FS strips Seek.

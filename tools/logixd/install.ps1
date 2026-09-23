@@ -316,5 +316,5 @@ Write-Host "Done. Point nautilus at it:" -ForegroundColor Green
 Write-Host "    NAUTILUS_LOGIXD_URL=http://${reach}:${Port}"
 Write-Host "    NAUTILUS_LOGIXD_TOKEN=<contents of $tokenOut>"
 Write-Host ""
-Write-Host "    nautilus logix probe"
+Write-Host "    naut logix probe"
 Write-Host ""

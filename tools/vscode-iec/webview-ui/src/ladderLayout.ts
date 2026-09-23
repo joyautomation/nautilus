@@ -8,7 +8,7 @@
 // right-padded with wires so every leg meets the branch's right rail.
 //
 // Every node carries its model PATH (and coils their index), so gestures
-// address `nautilus ld edit` ops directly from the geometry.
+// address `naut ld edit` ops directly from the geometry.
 
 import type { Ann } from './ladder';
 

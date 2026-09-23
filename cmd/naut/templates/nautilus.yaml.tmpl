@@ -1,0 +1,47 @@
+# {{.Name}} — a nautilus controller, no Go required.
+#   naut run              scan loop + dashboard + tag API
+#   naut test             acceptance tests, in virtual time
+#   naut build            emit a self-contained controller binary
+#   naut check            compile in CI
+# Grows into Go when you need a custom field bus or richer simulation:
+# `naut new --template sdk` scaffolds that form of this same project.
+name: {{.Name}}
+
+{{- if .Deploy}}
+
+# Deploy features (deploy/k8s.yaml runs two replicas of this controller):
+# setpoints and online edits survive restarts, and replicas elect one
+# scanning leader — see the Redundancy guide.
+retain: {}
+redundancy: {}
+{{- end}}
+
+server:
+  addr: "localhost:8080"   # NAUTILUS_ADDR overrides; set NAUTILUS_TOKEN to gate writes
+  online-edits: true       # PLC-style online edits from VS Code (off for production)
+
+# One program per task, each on its own scan. The first task owns field I/O.
+tasks:
+  - program: program.{{.Language}}
+    scan: 100ms
+
+# Tags by role: input (driver → tag), output (tag → driver),
+# setpoint (operator-writable, exists from scan one), state (retained).
+# An input needs init (its value until the driver supplies it) — a READ of
+# a tag that was never written faults the scan, on purpose.
+tags:
+  - { name: Sensor,   role: input, init: 0.0 }
+  - { name: Setpoint, role: setpoint, init: 50.0 }
+{{- if eq .Language "ld"}}
+  - { name: Alarm,    role: output }
+{{- else}}
+  - { name: Actuator, role: output }
+{{- end}}
+
+# memory = loopback for bring-up. For an Allen-Bradley Logix controller:
+#   driver:
+#     type: eip
+#     host: 192.168.1.10
+#     manifest: eip_manifest.yaml   # from `naut eip import`
+driver:
+  type: memory

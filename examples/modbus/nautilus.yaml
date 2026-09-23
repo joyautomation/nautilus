@@ -2,12 +2,12 @@
 # two PID temperature loops behind one gateway (unit-ids 1 and 2), a VFD,
 # and a four-channel gas analyser.
 #
-#   nautilus modbus import --map devices.yaml     regenerate the committed
+#   naut modbus import --map devices.yaml     regenerate the committed
 #                                                 manifest + tag file
-#   nautilus test -m memory.yaml .                logic-only acceptance tests
-#   nautilus modbus serve --manifest modbus_manifest.yaml --values seed.json
+#   naut test -m memory.yaml .                logic-only acceptance tests
+#   naut modbus serve --manifest modbus_manifest.yaml --values seed.json
 #                                                 stand in for the devices
-#   nautilus run .                                poll them for real (the
+#   naut run .                                poll them for real (the
 #                                                 modbus driver is wired in)
 #
 name: modbus-plant

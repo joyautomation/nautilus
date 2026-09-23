@@ -48,13 +48,13 @@ Open a new terminal afterwards so the `Path` change is picked up.
 ### Any OS, with Go 1.24+ installed
 
 ```sh
-go install github.com/joyautomation/nautilus/cmd/nautilus@latest
+go install github.com/joyautomation/nautilus/cmd/naut@latest
 ```
 
 This puts the binary in `$(go env GOPATH)/bin`, which needs to be on your
-`PATH`. Whichever route you took, `nautilus version` should now answer.
+`PATH`. Whichever route you took, `naut version` should now answer.
 
-The one binary is the whole toolchain: `nautilus new` (scaffold a
+The one binary is the whole toolchain: `naut new` (scaffold a
 project), `run`, `test`, `check` (the CI gate: compiles every program and
 cross-checks it against the manifest), `build`, `pull` (bring a controller's
 running program back into the repo), `lsp` (the language server the VS Code
@@ -63,10 +63,10 @@ extension uses), and the `eip`, `modbus`, `sparkplug`, and `historian` tools.
 ## 2. Scaffold a project
 
 ```sh
-nautilus new my-plant                      # the tour: 3 tasks, 3 IEC languages, simulated plant
-nautilus new my-plant --template minimal   # one task, one program, one test
-nautilus new my-plant --template sdk       # Go project, for a custom field bus
-nautilus new my-plant --template sdk-demo  # Go project with plant physics in Go
+naut new my-plant                      # the tour: 3 tasks, 3 IEC languages, simulated plant
+naut new my-plant --template minimal   # one task, one program, one test
+naut new my-plant --template sdk       # Go project, for a custom field bus
+naut new my-plant --template sdk-demo  # Go project with plant physics in Go
 ```
 
 Run it bare for the interactive form — it asks for the template, the
@@ -77,15 +77,15 @@ with the CLI alone, no toolchain:
 
 ```sh
 cd my-plant
-nautilus run        # scan loop + dashboard + tag API on http://localhost:8080
-nautilus test       # acceptance tests, in virtual time
-nautilus check      # compile (the CI gate)
-nautilus build      # emit ./my-plant — a self-contained controller binary
+naut run        # scan loop + dashboard + tag API on http://localhost:8080
+naut test       # acceptance tests, in virtual time
+naut check      # compile (the CI gate)
+naut build      # emit ./my-plant — a self-contained controller binary
 ```
 
 `nautilus.yaml` declares the tasks (one program file each, any language,
 own scan rates), the tags by role, the server, and the field driver.
-`nautilus build` emits one deployable binary, with no Go toolchain anywhere.
+`naut build` emits one deployable binary, with no Go toolchain anywhere.
 
 `*_test.yaml` holds the acceptance tests, and they run against a **virtual
 clock**, so a ten-second on-delay or a loop's settling time is asserted
@@ -134,7 +134,7 @@ diagnostics as you type, go-to-definition, hover, completion, and live tag
 values next to identifiers in your program.
 
 On macOS, VS Code launched from the Dock or Spotlight gets the login `PATH`,
-not your shell's, so it may not find `nautilus` even though your terminal
+not your shell's, so it may not find `naut` even though your terminal
 does. If the extension reports it could not start the language server, set
 `nautilus.cliPath` to the full path (`which nautilus`), or launch VS Code
 from a terminal with `code .`.
@@ -151,8 +151,8 @@ from a terminal with `code .`.
   doesn't change — it reads the same tags either way.
 - Add an HMI with the SvelteKit component kit: faceplates, trends, and an
   SSE realtime client.
-- Ship it as one binary. The scaffolded CI gates on `nautilus check`,
-  `nautilus test`, and `nautilus build`. Add `--deploy` to `nautilus new`
+- Ship it as one binary. The scaffolded CI gates on `naut check`,
+  `naut test`, and `naut build`. Add `--deploy` to `naut new`
   for a Dockerfile, a redundant-pair Kubernetes manifest, and the workflow
   that ships a merged commit to the controller.
 

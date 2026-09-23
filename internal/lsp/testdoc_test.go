@@ -135,7 +135,7 @@ func TestUnknownTagInAnExpression(t *testing.T) {
 }
 
 // A misspelled tag in KEY position — `expect: { PudmpRun: false }` — is the
-// same mistake as one in an expression, and `nautilus test` already refuses
+// same mistake as one in an expression, and `naut test` already refuses
 // it. It must squiggle, name the tag, and suggest the near miss.
 func TestUnknownTagInKeyPosition(t *testing.T) {
 	s := &Server{docs: map[string]*document{}}
@@ -294,7 +294,7 @@ func TestNamesTags(t *testing.T) {
 }
 
 // A suite outside any project must not error or invent checks — writing one
-// before `nautilus new` has run is an ordinary thing to do.
+// before `naut new` has run is an ordinary thing to do.
 func TestSuiteWithoutAProject(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "loose_test.yaml")

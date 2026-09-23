@@ -126,7 +126,7 @@ type TextEdit struct {
 // EditOp is one structural edit (design doc §4.2), addressed by the render
 // model's stable ids (st:<step>, tr:<transition>, ac:<action>, cm:<n>).
 // Resolution and printers live in edit.go; this is the wire shape shared
-// with the CLI (`nautilus sfc edit`) and, eventually, the diagram webview.
+// with the CLI (`naut sfc edit`) and, eventually, the diagram webview.
 //
 //	addStep                  Name, Initial, After (existing step id, optional)
 //	deleteStep               Step

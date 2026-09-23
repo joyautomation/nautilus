@@ -2,7 +2,7 @@
 // webview (App switches to ladder mode on the ldModel message). Layout is
 // canonical — the drawing is a pure function of the source — and live
 // values paint power flow through contacts, branches, and coils. Editable:
-// every gesture resolves through `nautilus ld edit` into a text edit on the
+// every gesture resolves through `naut ld edit` into a text edit on the
 // source, and the ladder re-renders from the result.
 
 import { execFile } from "child_process";
@@ -20,14 +20,14 @@ import {
   webviewOptions,
 } from "./fbdPreview";
 
-/** An L5X is a Rockwell export, not nautilus source — but `nautilus logix
- * graph` renders it into the SAME ladder model `nautilus ld graph` emits,
+/** An L5X is a Rockwell export, not nautilus source — but `naut logix
+ * graph` renders it into the SAME ladder model `naut ld graph` emits,
  * so every consumer downstream (preview, custom editor, revision diff,
  * live values) works on Allen-Bradley rungs without knowing it. The only
  * thing that differs is which CLI verb produces the model, and whether the
  * result is editable — it is not: you do not hand-edit a vendor export. */
 function ldGraph(source: string, at?: string): Promise<{ model?: unknown; error?: string }> {
-  const cli = vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "nautilus");
+  const cli = vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "naut");
   const args = graphArgs(at);
   return new Promise((resolve) => {
     const child = execFile(cli, args, { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
@@ -38,7 +38,7 @@ function ldGraph(source: string, at?: string): Promise<{ model?: unknown; error?
       } catch {
         // fall through
       }
-      resolve({ error: err ? String(err) : "nautilus ld graph: empty output" });
+      resolve({ error: err ? String(err) : "naut ld graph: empty output" });
     });
     child.stdin?.end(source);
   });
@@ -55,9 +55,9 @@ function logLd(msg: string): void {
   ldLog.appendLine(`[${new Date().toISOString()}] ${msg}`);
 }
 
-/** Run `nautilus ld edit`: resolve op against source, get rung-level edits. */
+/** Run `naut ld edit`: resolve op against source, get rung-level edits. */
 function ldEdit(source: string, op: unknown, at?: string): Promise<{ edits?: LdTextEdit[]; error?: string }> {
-  const cli = vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "nautilus");
+  const cli = vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "naut");
   return new Promise((resolve) => {
     const child = execFile(cli, ["ld", "edit"], { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
       try {
@@ -67,7 +67,7 @@ function ldEdit(source: string, op: unknown, at?: string): Promise<{ edits?: LdT
       } catch {
         // fall through
       }
-      resolve({ error: err ? String(err) : "nautilus ld edit: empty output" });
+      resolve({ error: err ? String(err) : "naut ld edit: empty output" });
     });
     child.stdin?.end(JSON.stringify({ source, op, file: at }));
   });
@@ -95,7 +95,7 @@ function handleLdMessage(doc: vscode.TextDocument, msg: { type?: string; op?: un
     return;
   }
   if (msg?.type !== "ldEdit" || !msg.op) return;
-  // An L5X is a vendor export rendered read-only. `nautilus ld edit` writes
+  // An L5X is a vendor export rendered read-only. `naut ld edit` writes
   // nautilus rung text, so letting a gesture through here would rewrite XML
   // as something else entirely. Refuse, and say why.
   if (isL5XDoc(doc)) {
@@ -156,7 +156,7 @@ async function postLdModel(webview: vscode.Webview, doc: vscode.TextDocument): P
  * text editor side by side — and the ladder follows. */
 export class LdEditorProvider implements vscode.CustomTextEditorProvider {
   static readonly viewType = "nautilus.ldDiagram";
-  /** The same provider serves Rockwell L5X exports: `nautilus logix graph`
+  /** The same provider serves Rockwell L5X exports: `naut logix graph`
    * renders them into the identical ladder model, so the editor, the live
    * overlay and the revision diff need no idea which one they are looking
    * at. Only editing differs, and that is refused for an L5X. */
@@ -298,7 +298,7 @@ export class LdPreview implements vscode.Disposable {
     }
     if (isL5XDoc(doc)) {
       void vscode.window.showErrorMessage(
-        "nautilus: an L5X is a Logix export — diff it against a git revision, or use `nautilus logix drift` to compare it with what the controller is actually running."
+        "nautilus: an L5X is a Logix export — diff it against a git revision, or use `naut logix drift` to compare it with what the controller is actually running."
       );
       return;
     }

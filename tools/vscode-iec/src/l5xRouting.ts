@@ -2,8 +2,8 @@
 //
 // The ladder view serves two completely different kinds of file — nautilus
 // `.ld` source and Rockwell `.L5X` exports — and downstream they are
-// indistinguishable, because `nautilus logix graph` emits exactly the model
-// `nautilus ld graph` emits. The dispatch lives here, free of any vscode
+// indistinguishable, because `naut logix graph` emits exactly the model
+// `naut ld graph` emits. The dispatch lives here, free of any vscode
 // import, so it can be tested directly: get it wrong and an L5X is handed
 // to `ld graph`, which reports a parse error on XML and reads like a broken
 // reader rather than a wiring mistake.

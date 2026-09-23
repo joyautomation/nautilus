@@ -154,8 +154,8 @@ Both `.X` and `.T` are legal in conditions and action bodies.
 
 ## Structural checks
 
-`nautilus check` runs the chart-shape checks before the ST hop;
-`nautilus sfc check <file>` runs them alone.
+`naut check` runs the chart-shape checks before the ST hop;
+`naut sfc check <file>` runs them alone.
 
 Errors: duplicate step, action, or transition names; no `INITIAL_STEP`, or
 more than one; a `FROM`/`TO` naming a step that does not exist; an empty
@@ -198,19 +198,19 @@ added, removed, and changed elements on the chart.
 
 ## Tooling
 
-`nautilus new --language sfc` scaffolds a project with a starter chart.
-`nautilus check` gates it in CI, and `nautilus test` runs the same
+`naut new --language sfc` scaffolds a project with a starter chart.
+`naut check` gates it in CI, and `naut test` runs the same
 `*_test.yaml` acceptance tests every other language uses, in virtual time.
-`nautilus sfc graph <file>` emits the render model as JSON, each transition
+`naut sfc graph <file>` emits the render model as JSON, each transition
 carrying its derived kind (`normal`/`alt`/`simDiverge`/`simConverge`), and
-`nautilus sfc edit` applies one structural op to source read on stdin.
+`naut sfc edit` applies one structural op to source read on stdin.
 
 Step activity, stored flags, pulse edge memories, and step timers are all
 retained VAR slots, so an [online edit](/guides/online-edits/) preserves the
 live token and every timer, and a running batch does not restart. Renaming a
 step is the exception: the renamed step's slot is a new name, so its token
 resets, listed in the swap report the way an FB-instance rename is.
-**Pull Program from Controller** and `nautilus pull` bring a field edit back
+**Pull Program from Controller** and `naut pull` bring a field edit back
 into the `.sfc` file for review in `git diff`.
 
 ## Not supported

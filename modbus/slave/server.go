@@ -3,7 +3,7 @@
 // register/coil store per unit-id — several units on one listener, the way
 // an Anybus gateway fronts several Omrons — with configurable exception
 // injection and artificial latency, so driver tests exercise every failure
-// path on 127.0.0.1 with no build tags, and `nautilus modbus serve` can
+// path on 127.0.0.1 with no build tags, and `naut modbus serve` can
 // stand in for a skid of devices on a bench.
 package slave
 

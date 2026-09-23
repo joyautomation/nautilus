@@ -1,13 +1,13 @@
 // Acceptance tests in the Test Explorer.
 //
-// `nautilus test` runs a project's *_test.yaml suites on a virtual clock,
+// `naut test` runs a project's *_test.yaml suites on a virtual clock,
 // so a ten-second on-delay is asserted exactly, in milliseconds. This
 // surfaces that as native VS Code testing: a tree per suite, run buttons
 // in the gutter, and failures shown inline on the assertion that broke.
 //
-// Discovery shells out to `nautilus test -list` (which does not compile
+// Discovery shells out to `naut test -list` (which does not compile
 // the project, so the tree survives a program that is mid-edit); running
-// shells out to `nautilus test -json` and maps the NDJSON back onto the
+// shells out to `naut test -json` and maps the NDJSON back onto the
 // tree by (suite, name).
 
 import * as vscode from "vscode";
@@ -16,14 +16,14 @@ import * as path from "node:path";
 
 const SUITE_GLOB = "**/*_test.yaml";
 
-/** One test as `nautilus test -list` reports it. */
+/** One test as `naut test -list` reports it. */
 interface Listed {
   suite: string;
   name: string;
   line: number;
 }
 
-/** One result as `nautilus test -json` reports it. */
+/** One result as `naut test -json` reports it. */
 interface RunResult extends Listed {
   passed: boolean;
   scans: number;
@@ -39,14 +39,14 @@ interface RunResult extends Listed {
 }
 
 function cliPath(): string {
-  return vscode.workspace.getConfiguration("nautilus").get<string>("cliPath") || "nautilus";
+  return vscode.workspace.getConfiguration("nautilus").get<string>("cliPath") || "naut";
 }
 
 /** Run the CLI in `cwd` and return stdout, or throw with stderr attached. */
 function runCli(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(cliPath(), args, { cwd, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
-      // `nautilus test` exits non-zero when tests FAIL, which is not an
+      // `naut test` exits non-zero when tests FAIL, which is not an
       // error here — the JSON on stdout is exactly what we came for.
       if (stdout.trim()) return resolve(stdout);
       if (err) return reject(new Error(stderr.trim() || err.message));

@@ -1,7 +1,7 @@
 # The blocks, exercised through their instances. Time is virtual, so the
 # five-second warm-up and the three-second fail-to-start assert exactly.
 #
-#   nautilus test examples/ladder-subroutines -v
+#   naut test examples/ladder-subroutines -v
 
 tests:
   - name: each instance seals in and drops out on its own

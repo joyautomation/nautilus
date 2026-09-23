@@ -8,7 +8,7 @@ PROGRAM TankBatch
    instead of half a minute.
 
    Open the diagram: VS Code -> right-click program.sfc -> "Open With ->
-   SFC Diagram" (or "nautilus sfc graph program.sfc | jq ."). *)
+   SFC Diagram" (or "naut sfc graph program.sfc | jq ."). *)
 VAR_EXTERNAL
     (* field inputs *)
     Level      : REAL;  (* tank level, % *)

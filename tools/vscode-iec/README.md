@@ -20,7 +20,7 @@ they match what the compiler actually accepts.
 
 ### Language intelligence (needs the nautilus CLI)
 
-The extension spawns **`nautilus lsp`** — the nautilus CLI's language-server
+The extension spawns **`naut lsp`** — the nautilus CLI's language-server
 subcommand, which runs the *real* `lang/st` compiler over stdio:
 
 - **Diagnostics as you type** — parse errors and typed lowering errors
@@ -35,7 +35,7 @@ subcommand, which runs the *real* `lang/st` compiler over stdio:
 Install the CLI once:
 
 ```sh
-go install github.com/joyautomation/nautilus/cmd/nautilus@latest
+go install github.com/joyautomation/nautilus/cmd/naut@latest
 ```
 
 `nautilus.cliPath` points elsewhere if it's not on PATH.
@@ -209,7 +209,7 @@ toggles the feature. Set `nautilus.runtimeUrl` (default
 - **Syntax highlighting** works with no setup.
 - **Language features** (diagnostics, go-to-definition, hover, completion)
   need the nautilus CLI on your PATH — `go install
-  github.com/joyautomation/nautilus/cmd/nautilus@latest`. Point
+  github.com/joyautomation/nautilus/cmd/naut@latest`. Point
   `nautilus.cliPath` at it if it's installed elsewhere.
 - **Inline live values** need a running nautilus controller exposing the tag
   API; set `nautilus.runtimeUrl` (default `http://localhost:8080`).

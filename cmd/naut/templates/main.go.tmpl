@@ -1,0 +1,113 @@
+// Command {{.Name}} is a nautilus controller: an IEC 61131-3 program on a
+// deterministic scan loop, plus a tag API for HMIs and editor live values.
+// Scaffolded by `naut new` — every line is yours to change.
+package main
+
+import (
+	"context"
+	_ "embed"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"time"
+
+	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/server"
+)
+
+//go:embed program.{{.Language}}
+var program string
+
+{{- if .Plant}}
+
+//go:embed blocks.st
+var blocks string
+{{- end}}
+
+func main() {
+	rt, err := runtime.New(runtime.Options{
+		Program: program,
+{{- if .Plant}}
+		// Libraries hold your reusable FUNCTION_BLOCKs / FUNCTIONs / TYPEs
+		// (blocks.st) — composed ahead of the program exactly as the editor
+		// and CLI tooling compose them, so online edits round-trip.
+		Libraries: []string{blocks},
+		Driver:    NewPlant(), // swap for your field bus (Modbus, OPC-UA, ...)
+		Scan:      100 * time.Millisecond,
+		DtTag:     "ScanDtS",
+		// One entry per tag — its role in the scan, its seed, its HMI docs:
+		//   Input     driver → tag before each scan (must also appear in the
+		//             driver's ReadInputs map)
+		//   Setpoint  exists from scan one; HMI/API-writable
+		//   Output    tag → driver after each scan; Init() any output the
+		//             logic READS (a seal-in latch reads its own coil)
+		Tags: []runtime.TagDef{
+			runtime.Input("LevelPct", runtime.Desc("Tank level"), runtime.Unit("%")),
+			runtime.Input("TempC", runtime.Desc("Tank temperature"), runtime.Unit("°C")),
+			runtime.Setpoint("TempSP", 65.0, runtime.Unit("°C")),
+			runtime.Setpoint("Kp", 12.0),
+			runtime.Setpoint("Ki", 0.15, runtime.Unit("1/s")),
+			runtime.Setpoint("PumpStartLevel", 40.0, runtime.Unit("%")),
+			runtime.Setpoint("PumpStopLevel", 75.0, runtime.Unit("%")),
+			runtime.Output("PumpRun", runtime.Init(false), runtime.Desc("Pump run command")),
+			runtime.Output("Heater", runtime.Unit("%")),
+		},
+{{- else}}
+		Driver:  NewDriver(), // implement ReadInputs/WriteOutputs in driver.go
+		Scan:    100 * time.Millisecond,
+		// One entry per tag — its role in the scan, its seed, its HMI docs.
+		Tags: []runtime.TagDef{
+			runtime.Input("Sensor"),            // driver → tag each scan
+			runtime.Setpoint("Setpoint", 50.0), // exists from scan one
+{{- if eq .Language "ld"}}
+			runtime.Output("Alarm"),            // tag → driver each scan
+{{- else}}
+			runtime.Output("Actuator"),         // tag → driver each scan
+{{- end}}
+		},
+{{- end}}
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "compile:", err)
+		os.Exit(1)
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	go rt.Run(ctx)
+
+	// Tag API: GET /api/state, GET /api/stream (SSE), POST /api/tags.
+	// The VS Code extension's inline live values read from here.
+	// Writes are same-origin-only out of the box; set NAUTILUS_TOKEN to
+	// require a token on writes instead (progressive auth).
+	srv := server.New(rt, server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN")})
+	go srv.Run(ctx)
+	// Binds loopback by default. To reach the tag API from another machine
+	// (a dev workstation, an HMI), set NAUTILUS_ADDR=0.0.0.0:8080 — and set
+	// NAUTILUS_TOKEN too, since that exposes the write surface on the network.
+	apiAddr := os.Getenv("NAUTILUS_ADDR")
+	if apiAddr == "" {
+		apiAddr = "localhost:8080"
+	}
+	apiUp := false
+	if ln, err := net.Listen("tcp", apiAddr); err != nil {
+		fmt.Fprintf(os.Stderr, "tag api: %v (continuing without it)\n", err)
+	} else {
+		apiUp = true
+		go func() {
+			if err := http.Serve(ln, srv.Handler()); err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, "tag api:", err)
+			}
+		}()
+	}
+
+	banner := "nautilus · {{.Name}} — Ctrl+C to stop"
+	if apiUp {
+		banner = "nautilus · {{.Name}} — tag API on http://" + apiAddr + " — Ctrl+C to stop"
+	}
+	fmt.Println(banner)
+	<-ctx.Done()
+	fmt.Println("\nstopped.")
+}

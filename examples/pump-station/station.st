@@ -1,7 +1,7 @@
 PROGRAM Station
 (* Per-pump logic. This is the part the design brief is honest about NOT
    shortening: the manifest holds 24 tags from 9 authored rows, but the
-   VAR_EXTERNAL block below is still one line per tag. `nautilus eip import`
+   VAR_EXTERNAL block below is still one line per tag. `naut eip import`
    emits a ready-to-paste block for exactly this reason. *)
 VAR_EXTERNAL
     P101 : Motor;  P101_RunHrs : REAL;  P101_StartSP : REAL;  P101_Enable : BOOL;

@@ -193,18 +193,18 @@ power here.
 ## Tooling
 
 ```sh
-nautilus check                      # compile every .st/.fbd/.ld/.sfc; errors land on the rung
-nautilus test                       # acceptance tests, on the virtual clock
-nautilus ld graph interlocks.ld     # the ladder render model as JSON
-nautilus ld edit                    # apply one structural edit op, from JSON on stdin
+naut check                      # compile every .st/.fbd/.ld/.sfc; errors land on the rung
+naut test                       # acceptance tests, on the virtual clock
+naut ld graph interlocks.ld     # the ladder render model as JSON
+naut ld edit                    # apply one structural edit op, from JSON on stdin
 ```
 
-`nautilus check` composes the line maps back through both hops, so a type
+`naut check` composes the line maps back through both hops, so a type
 error in the ST a rung produced reports at that rung's `RUNG` line. The
 language server does the same live.
 
 Online edits treat `.ld` as the program source. Download, diff against the
-controller, and `nautilus pull` all move the ladder text itself, so the
+controller, and `naut pull` all move the ladder text itself, so the
 program a controller reports compares 1:1 with the file in git. See [Online
 edits](/guides/online-edits/).
 
@@ -216,7 +216,7 @@ A rung change reviews as a rung:
 +    [ TempLowAlm | HiTempAlm | Overfill ] /HornAck ( Horn )
 ```
 
-`nautilus new my-plant --template minimal --language ld` scaffolds a project
+`naut new my-plant --template minimal --language ld` scaffolds a project
 whose program is ladder.
 
 ## Not supported

@@ -8,14 +8,14 @@ field bus that is still everywhere: PID loops behind a gateway, VFDs, gas
 analysers, power meters, IO-Link masters. Everything the driver polls comes
 from one hand-written **device map** — register maps off the datasheet once
 per device *type*, hosts and unit-ids once per *instance* — which
-`nautilus modbus import` turns into a committed manifest and a committed tag
-file. Shape: a manifest-tier `io.Driver`, mirroring `nautilus eip import`
+`naut modbus import` turns into a committed manifest and a committed tag
+file. Shape: a manifest-tier `io.Driver`, mirroring `naut eip import`
 end to end.
 
 ```yaml
 driver:
   type: modbus
-  manifest: modbus_manifest.yaml   # from `nautilus modbus import`
+  manifest: modbus_manifest.yaml   # from `naut modbus import`
   scan-rate: 1s                    # the default scan class
   scan-classes: { fast: 500ms, slow: 2.5s }
   tag-classes:
@@ -25,13 +25,13 @@ tag-files: [tags/modbus.yaml]
 ```
 
 `manifest:` is the only required key — a project missing it fails
-`nautilus check`, not `nautilus run`, so a bad config never reaches the
+`naut check`, not `naut run`, so a bad config never reaches the
 field. `New` **never dials**: it decodes the manifest, validates every
 cross-reference and format, and computes the block-read plan offline, so
-`nautilus check` and `nautilus build` pass in CI with no device in sight.
+`naut check` and `naut build` pass in CI with no device in sight.
 The connection is `Start`'s job.
 
-## Generating the manifest: `nautilus modbus import`
+## Generating the manifest: `naut modbus import`
 
 The one file you write by hand is the device map. It describes device
 **types** once — the register map, formats, scaling, word order, straight
@@ -67,7 +67,7 @@ same host. A plain TCP device is just an instance whose unit-id nobody
 cares about.
 
 ```sh
-nautilus modbus import --map devices.yaml
+naut modbus import --map devices.yaml
 ```
 
 That emits **two committed, never-hand-edited files**, byte-identical on
@@ -87,7 +87,7 @@ has to remember it. Useful flags: `--instance` for one instance id,
 tags the project declares by hand out of the tag file, `--out` and
 `--tags-out` for paths, `--plan` to print the block plan.
 
-`nautilus modbus tags modbus_manifest.yaml --map devices.yaml` re-derives
+`naut modbus tags modbus_manifest.yaml --map devices.yaml` re-derives
 just the tag file from an already-committed manifest. Without `--map` it
 still works; the unit/desc/init columns, which only the map knows, are
 dropped.
@@ -100,7 +100,7 @@ planner coalesces every binding on the same (source, table, scan class)
 into as few block reads as the protocol allows:
 
 ```sh
-nautilus modbus import --map devices.yaml --plan
+naut modbus import --map devices.yaml --plan
 ```
 
 ```
@@ -136,7 +136,7 @@ Three knobs shape the plan:
 
 **Addresses are 0-based PDU addresses.** What a datasheet calls **40001 is
 holding address 0**; 30001 is input address 0. No option flips this — see
-*Not supported*. `nautilus modbus browse --from` takes the same 0-based
+*Not supported*. `naut modbus browse --from` takes the same 0-based
 address, so the number you type there is the number you put in the map.
 
 Tables are `holding`, `input`, `coil`, `discrete`. Holding and coil are
@@ -164,7 +164,7 @@ sources:
 `wordorder` reverses the register sequence of a 32- or 64-bit value;
 `byteorder` swaps the two bytes inside each register. If a float32 reads as
 garbage whose magnitude still looks plausible, flip `wordorder` first —
-`nautilus modbus browse` settles it in seconds by printing every candidate
+`naut modbus browse` settles it in seconds by printing every candidate
 format side by side.
 
 ## The `__Online` companion and `enable:`
@@ -276,22 +276,22 @@ The in-repo slave stands in for a whole plant on one listener, multi-unit
 like a real gateway, built from the manifest alone:
 
 ```sh
-nautilus modbus serve --manifest modbus_manifest.yaml --values seed.json --ramp
+naut modbus serve --manifest modbus_manifest.yaml --values seed.json --ramp
 ```
 
 `--values` is a JSON `{tag: value}` file in **engineering units** — serve
 inverts each binding's scaling and word order on the way into the registers,
 so you write `"GAS_CH1": 120.0`, not a pair of raw words. `--ramp` drifts
 the numeric inputs so trends look alive. `--listen` defaults to
-`127.0.0.1:5020`. Point the manifest's hosts at it and `nautilus run .`
+`127.0.0.1:5020`. Point the manifest's hosts at it and `naut run .`
 polls the same plan `--plan` printed.
 
 `browse` is the commissioning poke — read a range from a live device (or
 the bench) and see every address raw and decoded:
 
 ```sh
-nautilus modbus browse --host 127.0.0.1 --port 5020 --unit 4 --from 0 --count 8
-nautilus modbus browse --host 192.168.10.51 --unit 4 --word-order little --format float32 --count 8
+naut modbus browse --host 127.0.0.1 --port 5020 --unit 4 --from 0 --count 8
+naut modbus browse --host 192.168.10.51 --unit 4 --word-order little --format float32 --count 8
 ```
 
 Without `--format` it prints every format side by side, which is how you
@@ -322,7 +322,7 @@ tag-files: [tags/modbus.yaml, tags/sparkplug.yaml]
 Reads fan out to every driver and merge; a write goes to the one driver
 whose bindings claim the tag. Ownership is disjoint by construction: a tag
 delivered by two drivers, or writable through two, is a **load error naming
-both** — `nautilus check` reports it offline, the same no-last-wins rule
+both** — `naut check` reports it offline, the same no-last-wins rule
 tag files keep. Setting `driver:` and `drivers:` together is an error too;
 move the single driver into the list. On `/api/drivers` each driver keeps
 its own row (the Modbus one still has a device row per source), quality
@@ -347,13 +347,13 @@ computes any more. Reads are unaffected on both replicas.
 
 ## Testing
 
-`nautilus test` never opens a socket. Keep a `memory.yaml` beside
+`naut test` never opens a socket. Keep a `memory.yaml` beside
 `nautilus.yaml` with the same tags and `driver: {type: memory}`, and the
 acceptance suites run in virtual time against the loopback driver:
 
 ```sh
-nautilus check -m memory.yaml .
-nautilus test  -m memory.yaml .
+naut check -m memory.yaml .
+naut test  -m memory.yaml .
 ```
 
 `given:` writes the driver's input image exactly the way a block read

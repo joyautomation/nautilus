@@ -39,7 +39,7 @@ retain:
   win over the manifest's `init:` seeds — what the operator set last
   outlives what the project file said first.
 - A retained online edit still shows as *modified* in the dashboard and
-  `nautilus pull`, so the git loop closes the same way it always did.
+  `naut pull`, so the git loop closes the same way it always did.
 
 Store failures surface in the dashboard's diagnostics (`retainErrors`,
 `lastRetainError`) — a save that keeps failing is invisible exactly until

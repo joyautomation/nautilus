@@ -1,8 +1,8 @@
 // Package tagfile renders a nautilus tag file — the bare YAML list a project
 // composes through `tag-files:`.
 //
-// Every generator emits this shape: `nautilus eip import` from a live
-// controller, `nautilus tags import-csv` from a spreadsheet export, and any
+// Every generator emits this shape: `naut eip import` from a live
+// controller, `naut tags import-csv` from a spreadsheet export, and any
 // project-shaped script that targets the published JSON Schema. The renderer
 // is shared so the shipped generators cannot drift from each other, and the
 // schema is what keeps everyone else honest.
@@ -86,7 +86,7 @@ func Render(header []string, tags []Tag) ([]byte, error) {
 // what lets a generator emit `init: { RAWMIN: 6553.0, LVL: { CTL1HSP: 85.0 } }`
 // instead of only ever seeding zero-of-type, and it is the same shape the
 // loader (`ir.SeedFromInit`) accepts back — round-tripping a manifest tag
-// through `nautilus eip tags` / `nautilus tags import-csv` and back.
+// through `naut eip tags` / `naut tags import-csv` and back.
 //
 // Keys are sorted for the same reason the tag list itself is: a regenerated
 // file must diff cleanly, not reshuffle.

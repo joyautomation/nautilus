@@ -256,7 +256,7 @@ func TestRetainedProgramApplies(t *testing.T) {
 		t.Fatalf("Count = %d, want 10 — the retained edit should be running", got)
 	}
 	if !rt.Program().Dirty() {
-		t.Fatal("a retained edit must read as dirty, so `nautilus pull` still sees it")
+		t.Fatal("a retained edit must read as dirty, so `naut pull` still sees it")
 	}
 }
 

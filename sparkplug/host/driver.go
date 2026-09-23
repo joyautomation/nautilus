@@ -2,8 +2,8 @@
 // construction (New, Option), the read/write seam the runtime scans against,
 // and the Start/Stop lifecycle. The transport itself lives in mqtt.go.
 //
-// New NEVER dials. buildDriver runs inside `nautilus check` and
-// `nautilus build`, i.e. in CI with no broker, so everything that can fail on
+// New NEVER dials. buildDriver runs inside `naut check` and
+// `naut build`, i.e. in CI with no broker, so everything that can fail on
 // bad configuration fails here, offline, and the connection is Start's job —
 // the same split eip makes.
 //

@@ -179,14 +179,14 @@ working-tree diagrams, coloring added, removed and changed blocks and wires.
 ## Tooling
 
 ```sh
-nautilus check              # compile .fbd (and .st/.ld/.sfc); the CI gate
-nautilus test               # acceptance tests, virtual clock
-nautilus fbd graph f.fbd    # the diagram render model as JSON
-nautilus fbd edit           # apply one structural edit op; stdin/stdout JSON
+naut check              # compile .fbd (and .st/.ld/.sfc); the CI gate
+naut test               # acceptance tests, virtual clock
+naut fbd graph f.fbd    # the diagram render model as JSON
+naut fbd edit           # apply one structural edit op; stdin/stdout JSON
 ```
 
 A controller running an FBD program serves and accepts the `.fbd` text
-itself, so download, text diff, `nautilus pull` and the sync status bar work
+itself, so download, text diff, `naut pull` and the sync status bar work
 as they do for `.st`. A warm swap migrates retained state by name and type,
 so a PI integral or a running `TON` keeps its value through the edit; see
 [online edits](/guides/online-edits/). An edit routes to a task by `PROGRAM` name,

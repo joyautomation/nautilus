@@ -3,13 +3,13 @@ title: Historian
 description: Archive a controller's tags into Postgres and serve downsampled history — one daemon, no toolchain, and the HMI keeps one origin.
 ---
 
-`nautilus historian` is a separate daemon that polls a controller's tag
+`naut historian` is a separate daemon that polls a controller's tag
 API and archives samples into Postgres. Separate on purpose: the runtime
 never imports it, so the controller stays pure stdlib, and the archive's
 lifecycle (retention, storage, backups) is operated apart from control.
 
 ```sh
-nautilus historian \
+naut historian \
   -source http://plc:8080 \        # or NAUTILUS_SOURCE_URL
   -db postgres://user:pw@db/hist \ # or DATABASE_URL
   -tags 'PIT_*,TempC,LevelPct' \   # glob patterns; default * (all numerics)

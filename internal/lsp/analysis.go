@@ -65,7 +65,7 @@ func analyze(text, prelude string, preludeLines int) analysis {
 	prog, err := st.Parse(text)
 	if err != nil {
 		// Anchor on the position the parser reported, falling back to line 1.
-		// st.ParseErrorPos is the single source of truth so `nautilus check`
+		// st.ParseErrorPos is the single source of truth so `naut check`
 		// and this diagnostic agree.
 		line := 1
 		if pos, ok := st.ParseErrorPos(err); ok {

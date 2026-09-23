@@ -2,7 +2,7 @@
 //
 // Three layers, each independent of the next:
 //   1. Declarative syntax highlighting (contributes.grammars — no code).
-//   2. Language intelligence: spawns `nautilus lsp` (the nautilus CLI's
+//   2. Language intelligence: spawns `naut lsp` (the nautilus CLI's
 //      language-server subcommand) over stdio for compile diagnostics,
 //      go-to-definition, hover, and completion.
 //   3. Inline live values: subscribes to a running controller's tag API
@@ -204,7 +204,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 async function startLanguageClient(context: vscode.ExtensionContext): Promise<void> {
   const cliPath = vscode.workspace
     .getConfiguration("nautilus")
-    .get<string>("cliPath", "nautilus");
+    .get<string>("cliPath", "naut");
 
   const serverOptions: ServerOptions = {
     command: cliPath,
@@ -250,7 +250,7 @@ async function startLanguageClient(context: vscode.ExtensionContext): Promise<vo
       .then((pick) => {
         if (pick) {
           void vscode.env.clipboard.writeText(
-            "go install github.com/joyautomation/nautilus/cmd/nautilus@latest"
+            "go install github.com/joyautomation/nautilus/cmd/naut@latest"
           );
         }
       });

@@ -370,7 +370,7 @@ func (e *Engine) Active() []Record {
 }
 
 // Records returns every definition with its state, in id order — what
-// `nautilus alarms list` prints and the auditable answer to "did the 14
+// `naut alarms list` prints and the auditable answer to "did the 14
 // rules really expand to what we think".
 func (e *Engine) Records() []Record {
 	e.mu.Lock()

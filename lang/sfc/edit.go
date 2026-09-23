@@ -20,7 +20,7 @@ import (
 // when its RESULT would fail to parse, or a request is unresolvable/
 // ambiguous. A structurally valid but semantically incomplete result (a new
 // step with no transitions yet, an empty transition condition, a dangling
-// FROM/TO left by deleteStep) is not an editing error — `nautilus sfc
+// FROM/TO left by deleteStep) is not an editing error — `naut sfc
 // check` surfaces it as a diagnostic breadcrumb, exactly like typing the
 // same hole directly into the text.
 

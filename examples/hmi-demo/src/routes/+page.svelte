@@ -192,7 +192,7 @@
 	<div class="waiting">
 		<p>Connecting to the controller…</p>
 		<p class="hint">
-			Run one with <code>nautilus run</code> (e.g. in <code>examples/heated-tank-nogo</code>),
+			Run one with <code>naut run</code> (e.g. in <code>examples/heated-tank-nogo</code>),
 			then this page follows its <code>/api/stream</code>.
 		</p>
 	</div>

@@ -238,7 +238,7 @@ func (m *Multi) Quality() map[string]Quality {
 
 // Start fans out to every child with its own loop to launch (eip's poll
 // loop, a Sparkplug host's MQTT session); a child without Start has
-// nothing to start, exactly as `nautilus run` treats a lone driver.
+// nothing to start, exactly as `naut run` treats a lone driver.
 func (m *Multi) Start(ctx context.Context) {
 	for _, c := range m.children {
 		if s, ok := c.Driver.(interface{ Start(context.Context) }); ok {

@@ -1,7 +1,7 @@
 # Acceptance tests for the control logic — no Go, no toolchain.
 #
-#   nautilus test        run them
-#   nautilus test -v     with virtual elapsed time per test
+#   naut test        run them
+#   naut test -v     with virtual elapsed time per test
 #
 # The fixture is nautilus.yaml: tasks, scan rates, tag roles, and seeds all
 # come from the manifest that deploys, so nothing here can drift away from

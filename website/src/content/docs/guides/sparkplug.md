@@ -29,7 +29,7 @@ sparkplug:
     alarms: ["*_Alm"]
 ```
 
-`nautilus run` (and a built binary) starts the node alongside the scan
+`naut run` (and a built binary) starts the node alongside the scan
 loop; only `broker` and `group-id` are required. Types map faithfully —
 BOOL→Boolean, integers→Int64, REAL→Double, UDT→Template — and a host can
 write tags back via NCMD (a setpoint written in the SCADA host lands in

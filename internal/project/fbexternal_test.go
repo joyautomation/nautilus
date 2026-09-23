@@ -11,7 +11,7 @@ import (
 // whichever program instantiates it — it compiles and runs correctly (the
 // VM resolves the reference through the instance, exactly like a program's
 // own VAR_EXTERNAL). Before this fix, rt.Globals()/rt.GlobalUses() only
-// walked a PROGRAM POU's own VAR_EXTERNAL block, so `nautilus check`
+// walked a PROGRAM POU's own VAR_EXTERNAL block, so `naut check`
 // reported the tag as "declared, no program binds" — a false positive that,
 // on a real transpile with a lot of library blocks, forced re-declaring
 // every one of them in the calling program (see the AEP transpile:

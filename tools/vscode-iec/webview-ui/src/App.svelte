@@ -1,7 +1,7 @@
 <script lang="ts">
 	// The FBD diagram editor: renders the Go model on Svelte Flow, and turns
 	// every gesture into a structural op the extension pipes through
-	// `nautilus fbd edit`. Layout is auto (banded, from topology) except for
+	// `naut fbd edit`. Layout is auto (banded, from topology) except for
 	// nodes the user has dragged — those pin to the (* @layout *) block via
 	// setLayout ops. Diff mode overlays two models read-only.
 	import {

@@ -3,7 +3,7 @@ title: Continuous deployment
 description: Commit-to-running-controller — every merge that passes its acceptance suites becomes a controller image, rolled out by sha to a redundant pair.
 ---
 
-`nautilus new` with the **Kubernetes deploy** feature (or `--deploy`)
+`naut new` with the **Kubernetes deploy** feature (or `--deploy`)
 scaffolds the whole pipeline:
 
 ```
@@ -20,7 +20,7 @@ and `kubectl rollout undo` is a one-command downgrade.
 
 ## The image
 
-`nautilus build` already emits a self-contained controller — runtime plus
+`naut build` already emits a self-contained controller — runtime plus
 project, one static binary — so the Dockerfile is three meaningful lines
 on `distroless/static`: no shell, no package manager, CA roots included
 for MQTT/TLS. The base has no libc, so the binary must be static: release
@@ -57,7 +57,7 @@ recently.
 
 ## The artifact carries its own provenance
 
-`nautilus build` embeds the project's git history in the binary it emits —
+`naut build` embeds the project's git history in the binary it emits —
 `— N commits of program history embedded` on the build line. The deployed
 controller then serves `GET /api/program/history` with no git, no `.git`
 dir, and no network: which commit it was built from, every change as a

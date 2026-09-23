@@ -7,15 +7,15 @@ project_name: nautilus
 
 builds:
   - id: nautilus
-    main: ./cmd/nautilus
-    binary: nautilus
+    main: ./cmd/naut
+    binary: naut
     env:
       - CGO_ENABLED=0
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
     ldflags:
       # -s -w strips debug info; -X injects the tag version into the CLI so
-      # `nautilus version` matches the release.
+      # `naut version` matches the release.
       - -s -w -X github.com/joyautomation/nautilus/internal/lsp.Version={{ .Version }}
 
 archives:

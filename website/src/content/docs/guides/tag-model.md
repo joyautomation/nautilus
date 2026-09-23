@@ -120,7 +120,7 @@ already is, instead of duplicated as ST in every program that uses the type.
 An unknown member name is a load error naming the tag and the member path
 (`tag WEL15_FIT_001: init: unknown member RAWMN (did you mean RAWMIN?)`), and
 a struct-typed tag given a scalar `init:` — rather than a mapping — is an
-error too. A generator (`nautilus eip tags`, `nautilus tags import-csv`)
+error too. A generator (`naut eip tags`, `naut tags import-csv`)
 round-trips the same nested shape through a `tag-files:` entry.
 
 ## Writing a member: `POST /api/tags` with `Tag.Member`
@@ -203,7 +203,7 @@ server:
 ```
 
 The path is relative to the project and must resolve inside it, the same
-rule as `tag-files:` and `driver.manifest`: what `nautilus build` ships is
+rule as `tag-files:` and `driver.manifest`: what `naut build` ships is
 what a reviewer can see in the checkout. An unmatched, non-`/api` path
 falls back to the bundle's `index.html`, so client-side routing (SvelteKit's
 router, or any other SPA router) resolves a deep link itself instead of
@@ -219,10 +219,10 @@ controller URL (the `PUBLIC_NAUTILUS_URL`-style env var some HMI deploys
 use for a standalone dev server) should leave that unset, or point it at
 `""`, when it's built to be served this way.
 
-`nautilus build` embeds the HMI's build output in the archive exactly like
+`naut build` embeds the HMI's build output in the archive exactly like
 every other project file (and prints a warning if the embedded project
 comes out over ~50 MB — a sign a dependency tree rode along by accident,
-not the HMI build itself); `nautilus run` serves it straight off disk. Set
+not the HMI build itself); `naut run` serves it straight off disk. Set
 it once, and `go build`-style "one file to ship" applies to the operator
 screen too.
 

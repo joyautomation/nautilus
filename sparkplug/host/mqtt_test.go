@@ -242,7 +242,7 @@ func decodeState(t *testing.T, b []byte) stateBody {
 
 func TestDriverNewNeverDials(t *testing.T) {
 	// A broker that is not there. New must still succeed — buildDriver runs
-	// inside `nautilus check` in CI, with no broker anywhere.
+	// inside `naut check` in CI, with no broker anywhere.
 	d, err := New(testManifest(), Config{
 		BrokerURL: "tcp://127.0.0.1:1", // nothing listens on port 1
 		HostID:    "h-nodial",

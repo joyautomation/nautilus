@@ -335,7 +335,7 @@
 		overrideAt = next;
 	}
 	// A newly connect-dragged transition is selected as soon as the model
-	// round-trips (App.svelte's onOp -> host -> nautilus sfc edit -> new
+	// round-trips (App.svelte's onOp -> host -> naut sfc edit -> new
 	// sfcModel) — matched by its (from, to) pair rather than a guessed id,
 	// since an unnamed transition's id (tr:<line>) isn't known client-side
 	// until the model comes back.

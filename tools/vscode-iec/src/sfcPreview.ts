@@ -3,7 +3,7 @@
 // message — the same bundle FBD/Ladder share, see fbdPreview.ts's header).
 // Structure (steps/transitions/branches) is canonical in the text, exactly
 // like Ladder; the webview derives layout from topology (lang/sfc/graph.go
-// §4.1) and every gesture round-trips through `nautilus sfc edit` as a
+// §4.1) and every gesture round-trips through `naut sfc edit` as a
 // structural op, resolved against a fresh parse, returning minimal
 // TextEdits — the identical contract `fbd.ApplyEdit`/`ld.ApplyEdit` use.
 //
@@ -27,9 +27,9 @@ import {
   webviewOptions,
 } from "./fbdPreview";
 
-/** Run `nautilus sfc graph -` over source text. */
+/** Run `naut sfc graph -` over source text. */
 function sfcGraph(source: string): Promise<{ model?: unknown; error?: string }> {
-  const cli = vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "nautilus");
+  const cli = vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "naut");
   return new Promise((resolve) => {
     const child = execFile(cli, ["sfc", "graph", "-"], { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
       try {
@@ -40,9 +40,9 @@ function sfcGraph(source: string): Promise<{ model?: unknown; error?: string }> 
         // fall through
       }
       if (err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-        return resolve({ error: `Couldn't run "${cli}". Install the nautilus CLI: go install github.com/joyautomation/nautilus/cmd/nautilus@latest` });
+        return resolve({ error: `Couldn't run "${cli}". Install the nautilus CLI: go install github.com/joyautomation/nautilus/cmd/naut@latest` });
       }
-      resolve({ error: err ? String(err) : "nautilus sfc graph: empty output" });
+      resolve({ error: err ? String(err) : "naut sfc graph: empty output" });
     });
     child.stdin?.end(source);
   });
@@ -50,9 +50,9 @@ function sfcGraph(source: string): Promise<{ model?: unknown; error?: string }> 
 
 type SfcTextEdit = { line: number; col: number; endLine: number; endCol: number; newText: string };
 
-/** Run `nautilus sfc edit`: resolve op against source, get minimal edits. */
+/** Run `naut sfc edit`: resolve op against source, get minimal edits. */
 function sfcEdit(source: string, op: unknown): Promise<{ edits?: SfcTextEdit[]; error?: string }> {
-  const cli = vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "nautilus");
+  const cli = vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "naut");
   return new Promise((resolve) => {
     const child = execFile(cli, ["sfc", "edit"], { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
       try {
@@ -62,7 +62,7 @@ function sfcEdit(source: string, op: unknown): Promise<{ edits?: SfcTextEdit[]; 
       } catch {
         // fall through
       }
-      resolve({ error: err ? String(err) : "nautilus sfc edit: empty output" });
+      resolve({ error: err ? String(err) : "naut sfc edit: empty output" });
     });
     child.stdin?.end(JSON.stringify({ source, op }));
   });
