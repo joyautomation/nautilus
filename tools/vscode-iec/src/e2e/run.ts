@@ -20,6 +20,28 @@ const extRoot = path.resolve(__dirname, "..", "..");
 const repoRoot = path.resolve(extRoot, "..", "..");
 const exe = process.platform === "win32" ? "nautilus.exe" : "nautilus";
 
+/** A scenario that hasn't finished in three minutes is hung (a healthy one
+ * takes under a minute): show what VS Code is doing and fail now, rather
+ * than holding the CI runner until the job timeout. */
+function withWatchdog(name: string, run: Promise<number>): Promise<number> {
+  let timer: NodeJS.Timeout | undefined;
+  const watchdog = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      try {
+        const ps =
+          process.platform === "win32"
+            ? execFileSync("tasklist", { encoding: "utf8" })
+            : execFileSync("ps", ["-axo", "pid,etime,command"], { encoding: "utf8" });
+        console.error(ps.split("\n").filter((l) => /code|electron|nautilus/i.test(l)).join("\n"));
+      } catch {
+        // The diagnosis is best-effort; the failure below is what matters.
+      }
+      reject(new Error(`e2e "${name}" hung for 3 minutes`));
+    }, 180_000);
+  });
+  return Promise.race([run, watchdog]).finally(() => clearTimeout(timer));
+}
+
 async function main(): Promise<void> {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "nautilus-e2e-"));
   try {
@@ -43,10 +65,13 @@ async function main(): Promise<void> {
       fs.mkdirSync(path.join(home, "go", "bin"), { recursive: true });
       if (expect === "found") fs.copyFileSync(bin, path.join(home, "go", "bin", exe));
       console.log(`\n── e2e: CLI ${expect} ──`);
-      await runTests({
+      await withWatchdog(expect, runTests({
         extensionDevelopmentPath: extRoot,
         extensionTestsPath: path.join(__dirname, "suite"),
-        launchArgs: [ws, "--disable-extensions"],
+        // The scratch HOME has no login keychain, and VS Code on macOS asks
+        // the keychain for secret storage at startup; the prompt to create
+        // one is invisible on CI and blocks the extension host forever.
+        launchArgs: [ws, "--disable-extensions", ...(process.platform === "darwin" ? ["--use-mock-keychain"] : [])],
         extensionTestsEnv: {
           NAUTILUS_E2E_EXPECT: expect,
           HOME: home,
@@ -56,7 +81,7 @@ async function main(): Promise<void> {
           GOPATH: "",
           LOCALAPPDATA: path.join(home, "AppData", "Local"),
         },
-      });
+      }));
     }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
