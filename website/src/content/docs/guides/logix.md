@@ -143,6 +143,26 @@ That is a property of the SDK, not of the packaging. If you need it
 unattended, the machine needs an auto-login.
 :::
 
+### When something isn't working
+
+Start with `nautilus logix probe`. Every gate that fails now prints what to
+do about it, underneath the failure. If the probe itself cannot connect, or
+the symptom is in a verb rather than a gate, find it here.
+
+| What you see | What it is | What to do |
+|---|---|---|
+| `logixd: unreachable ... connection refused` | The agent is not running. After a reboot this is almost always it. | Log in at the machine's console, then `Start-ScheduledTask -TaskName logixd`. The agent is an interactive task, not a service — see above. |
+| `logixd: unauthorized` / HTTP 401 | Wrong bearer token. Re-installing mints a new one. | Re-read `%ProgramData%\logixd\logixd.token`. |
+| A bare `System.TimeoutException` from any SDK call, nothing in any log | `DOTNET_ROOT` is set to an x64 .NET. | Unset it, set `DOTNET_ROOT_X64` instead, restart the agent. The installer refuses to proceed while it is set. |
+| `RxCMP_E_AUDIT_INVALIDOPTYPE - Invalid type.` on `build` or `download` | An instruction the project uses does not exist under that name. The L5X importer does **not** validate instruction names, so a bad one imports cleanly and only fails at verify. | Check the mnemonic. Neutral text uses the short spellings: `GE` `GT` `LE` `LT` `EQ` `NE` `MOVE` `LIMIT` — **not** the `GEQ`/`GRT`/`MOV`/`LIM` captions the ladder editor shows. Opening the project in Logix Designer and verifying names the rung and the fix; the SDK does not pass that detail through. |
+| `RxCL_E_CANNOT_UPLOAD_PHYS_ADDR` going online | You passed a project file to an online edit. | Don't — an online edit takes no project file. See [Online edits](#online-edits). |
+| `drift` reports a difference of megabytes on a project you just downloaded | A detailed export compared against a basic one. | Fixed in current builds: `drift` matches the repo file's export kind. If you see it, your CLI is older than your agent. |
+| `build` fails on a project Logix Designer opens fine | Usually a real verify error the SDK reports only as a code. | Open the project in Logix Designer and run Verify Controller. Its error list names the rung and the instruction; that is currently the fastest way to a diagnosis. |
+
+If a gate fails and the remedy does not resolve it, `nautilus logix probe
+--json` gives the whole result, including which Logix revisions the agent
+found installed.
+
 ### Check it before you trust it
 
 ```bash

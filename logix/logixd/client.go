@@ -241,6 +241,10 @@ type Gate struct {
 	Name   string `json:"name"`
 	OK     bool   `json:"ok"`
 	Detail string `json:"detail"`
+	// Remedy is what to DO about a failing gate, sent by the agent. Detail
+	// says what is wrong; this says what to try, in the order worth trying.
+	// Empty on a gate that passed.
+	Remedy string `json:"remedy,omitempty"`
 }
 
 // Probe is the result of the agent's licensing check.

@@ -31,6 +31,7 @@
 
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Logixd;
 using RockwellAutomation.LogixDesigner;
@@ -693,6 +694,40 @@ record TagSetReq(string TagPath, string Type, string? Mode, JsonElement Value);
 // Probes is the licensing check, shared by `logixd probe` and GET /v1/probe.
 static class Probes
 {
+    // What to DO about a failing gate. The detail says what is wrong; this
+    // says what to try, in the order worth trying it. Kept beside the gates
+    // so the two cannot drift apart.
+    static readonly Dictionary<string, string> Remedies = new()
+    {
+        ["sdk-service"] =
+            "Start it: Start-Service LdSdkService. If the service does not exist, the Logix " +
+            "Designer SDK is not installed on this machine -- install it, then re-run the probe.",
+        ["logix-designer"] =
+            "The SDK drives a real Logix Designer installation and cannot work without one. " +
+            "Install Studio 5000 Logix Designer v31 or later (v37+ for `build`), then re-run.",
+        ["interactive-session"] =
+            "Log in at the console of this machine (or over RDP) and restart logixd. " +
+            "FactoryTalk authentication does not work from session 0, so the agent runs as an " +
+            "interactive scheduled task, not a service -- it will not start until somebody is " +
+            "logged in. After a reboot this is the usual reason nothing answers.",
+        ["live-sdk-call"] =
+            "Work through these in order, because the obvious answer is usually wrong. " +
+            "(1) FactoryTalk CONFIGURATION, not licensing, is the common cause: check that " +
+            "HKLM\\SOFTWARE\\WOW6432Node\\Rockwell Software\\FactoryTalk has a Directories key, " +
+            "and if not, configure the FactoryTalk Local Directory with FTDConfigurationUtility.exe " +
+            "(GUI only -- it needs a console or RDP session). " +
+            "(2) Check DOTNET_ROOT is NOT set: with it pointing at an x64 .NET, every call that " +
+            "needs a FactoryTalk token fails with a bare TimeoutException and nothing in any log, " +
+            "because the adapter that authenticates is a 32-bit process. Use DOTNET_ROOT_X64. " +
+            "(3) Only then suspect licensing: FTACmdUtility listAvailable, RSsvr.log for the " +
+            "feature name, cmu --list-content for CodeMeter. Note that on at least one host the " +
+            "SDK is REFUSED the FlexNet feature LDSDK.EXE and opens and saves projects anyway, so " +
+            "a denial in RSsvr.log does not by itself explain a failure.",
+        ["create-project"] =
+            "Informational only -- it does not decide whether the SDK is usable. This call is " +
+            "intermittent on some hosts, including in Rockwell's own shipped example, while " +
+            "open and save succeed either side of it. If everything above passed, carry on.",
+    };
     public static async Task<(bool usable, object payload)> RunAsync(uint? revision, string workDir, CancellationToken ct)
     {
     var gates = new List<object>();
@@ -820,12 +855,23 @@ static class Probes
     // about a machine that can do real work.
     gates.Add(new { name = "create-project", ok = liveOk, informational = true, detail = liveDetail });
 
+    // Attach the remedy for anything that failed, so the answer to "now
+    // what?" travels with the result instead of living in a guide.
+    var annotated = gates.Select(g =>
+    {
+        var j = JsonSerializer.SerializeToNode(g)!.AsObject();
+        var name = j["name"]?.GetValue<string>();
+        var ok = j["ok"]?.GetValue<bool>() ?? false;
+        if (!ok && name is not null && Remedies.TryGetValue(name, out var r)) j["remedy"] = r;
+        return (object)j;
+    }).ToList();
+
     return (typesOk, (object)new
     {
             usable = typesOk,
             revisionTested = rev,
             installedRevisions = installed,
-            gates,
+            gates = annotated,
             hint = typesOk ? null :
                 "Read the live-* details above before assuming a licence problem. MEASURED on this " +
                 "codebase's reference host: the SDK requests the FlexNet feature LDSDK.EXE, is refused " +

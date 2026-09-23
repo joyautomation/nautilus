@@ -80,7 +80,8 @@ func newFakeLogixd(t *testing.T) (*fakeLogixd, string, func()) {
 				"usable": f.probeUsable,
 				"gates": []any{
 					map[string]any{"name": "sdk-service", "ok": true, "detail": "running"},
-					map[string]any{"name": "live-create-project", "ok": f.probeUsable, "detail": "no activation"},
+					map[string]any{"name": "live-create-project", "ok": f.probeUsable, "detail": "no activation",
+						"remedy": "Check the FactoryTalk Local Directory before suspecting a licence."},
 				},
 				"hint": "check FTACmdUtility listAvailable",
 			})
@@ -322,5 +323,35 @@ func TestLogixAgentReportsAnUnreachableAgentHelpfully(t *testing.T) {
 	code := runLogixAgent([]string{"--agent", "http://127.0.0.1:1"})
 	if code == 0 {
 		t.Error("an unreachable agent should be an error")
+	}
+}
+
+
+// A failing gate has to tell the reader what to DO. The detail says what is
+// wrong; without the remedy beside it they go looking through a guide, which
+// is exactly where this stack has burned the most time.
+func TestLogixProbePrintsTheRemedyForAFailingGate(t *testing.T) {
+	f, url, stop := newFakeLogixd(t)
+	defer stop()
+	f.probeUsable = false
+
+	out := captureStdout(t, func() int { return runLogixProbe([]string{"--agent", url}) })
+
+	if !strings.Contains(out, "FAIL") {
+		t.Fatalf("expected a failing gate in:\n%s", out)
+	}
+	if !strings.Contains(out, "FactoryTalk Local Directory") {
+		t.Errorf("the remedy should print under the gate that failed:\n%s", out)
+	}
+	// A gate that PASSED must not carry advice — noise on a healthy probe
+	// trains people to ignore the output.
+	sdkLine := ""
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "sdk-service") {
+			sdkLine = l
+		}
+	}
+	if sdkLine == "" || !strings.HasPrefix(sdkLine, "ok") {
+		t.Errorf("sdk-service should have passed: %q", sdkLine)
 	}
 }

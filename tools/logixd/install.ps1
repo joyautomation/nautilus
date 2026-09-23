@@ -60,6 +60,19 @@ function Stop-Logixd ($task, $dir, $port) {
     Get-CimInstance Win32_Process -Filter "Name='dotnet.exe'" -EA SilentlyContinue |
         Where-Object { $_.CommandLine -and $_.CommandLine -like "*$dir*" } |
         ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }
+    # An agent installed somewhere ELSE -- an earlier hand-rolled setup, or a
+    # previous InstallDir -- will not match on directory, but it still holds
+    # the port. Go by the port and stop it only if it is one of ours; never
+    # kill an unrelated process that happens to be listening there.
+    foreach ($c in @(Get-NetTCPConnection -State Listen -LocalPort $port -EA SilentlyContinue)) {
+        $owner = Get-Process -Id $c.OwningProcess -EA SilentlyContinue
+        if (-not $owner) { continue }
+        if ($owner.ProcessName -in @('dotnet','logixd')) {
+            Stop-Process -Id $owner.Id -Force -EA SilentlyContinue
+        } else {
+            Warn "port $port is held by $($owner.ProcessName) (pid $($owner.Id)), which is not logixd -- not touching it"
+        }
+    }
     foreach ($i in 1..15) {
         if (-not (Get-NetTCPConnection -State Listen -LocalPort $port -EA SilentlyContinue)) { return $true }
         Start-Sleep -Milliseconds 400
@@ -290,8 +303,17 @@ try {
 } catch { Warn "probe failed: $_" }
 
 Write-Host ""
+# 0.0.0.0 is a BIND address -- telling someone to connect to it is useless.
+# Print something they can actually paste.
+$reach = $Listen
+if ($Listen -eq '0.0.0.0') {
+    $ip = (Get-NetIPAddress -AddressFamily IPv4 -EA SilentlyContinue |
+           Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
+           Select-Object -First 1).IPAddress
+    $reach = if ($ip) { $ip } else { $env:COMPUTERNAME }
+}
 Write-Host "Done. Point nautilus at it:" -ForegroundColor Green
-Write-Host "    NAUTILUS_LOGIXD_URL=http://${Listen}:${Port}"
+Write-Host "    NAUTILUS_LOGIXD_URL=http://${reach}:${Port}"
 Write-Host "    NAUTILUS_LOGIXD_TOKEN=<contents of $tokenOut>"
 Write-Host ""
 Write-Host "    nautilus logix probe"

@@ -163,6 +163,13 @@ func runLogixProbe(args []string) int {
 			mark = "FAIL"
 		}
 		fmt.Printf("%s  %-22s %s\n", mark, g.Name, g.Detail)
+		// The answer to "now what?" belongs next to the thing that failed,
+		// not in a guide the reader has to go and find.
+		if !g.OK && g.Remedy != "" {
+			for _, line := range wrapIndent(g.Remedy, 72, "        ") {
+				fmt.Println(line)
+			}
+		}
 	}
 	if p.Usable {
 		fmt.Println("\nThe SDK is usable.")
@@ -633,4 +640,25 @@ func runLogixDrift(args []string) int {
 		fmt.Println("  re-run with --keep <path> to get the controller's export and diff it")
 	}
 	return 1
+}
+
+
+// wrapIndent breaks text to width and prefixes every line, so a remedy sits
+// under its gate as a readable block rather than one long line.
+func wrapIndent(text string, width int, indent string) []string {
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return nil
+	}
+	var out []string
+	line := words[0]
+	for _, w := range words[1:] {
+		if len(line)+1+len(w) > width {
+			out = append(out, indent+line)
+			line = w
+			continue
+		}
+		line += " " + w
+	}
+	return append(out, indent+line)
 }
