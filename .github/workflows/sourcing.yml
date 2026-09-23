@@ -1,0 +1,58 @@
+name: Sourcing
+
+# Client names must not enter this repository. It is PUBLIC.
+#
+# The denylist is a regex kept OUT of the repository -- a list of client
+# names committed to a public repo is the thing it exists to prevent. Set it
+# as a SECRET, not a variable:
+#
+#     gh secret set SOURCING_DENYLIST --body 'acme|widgetco|northsite'
+#
+# A secret specifically, because repository VARIABLES are passed to workflows
+# run from forked pull requests, and anyone may fork a public repo. Secrets
+# are not. On a fork PR the value is empty, the job says so and passes, so
+# forks still build -- and the denylist never leaves this organisation.
+
+on:
+  push: {branches: [main]}
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  denylist:
+    name: No client identifiers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan tracked files
+        env:
+          DENY: ${{ secrets.SOURCING_DENYLIST }}
+        run: |
+          if [ -z "$DENY" ]; then
+            echo "::notice::SOURCING_DENYLIST unset (or a fork PR) - nothing to check."
+            exit 0
+          fi
+          # Never print the pattern or the matching text: this log is public,
+          # and a violation report that quotes the line leaks the very name
+          # the check exists to keep out. File and line number only.
+          hits=0
+          while IFS= read -r f; do
+            case "$f" in
+              *node_modules/*|*package-lock.json|.github/workflows/sourcing.yml) continue ;;
+            esac
+            [ -f "$f" ] || continue
+            lines=$(grep -nEi "$DENY" -- "$f" 2>/dev/null | cut -d: -f1 | tr '\n' ',' | sed 's/,$//') || true
+            if [ -n "$lines" ]; then
+              echo "::error file=$f::client identifier present (line(s): $lines)"
+              hits=$((hits + 1))
+            fi
+          done < <(git ls-files)
+          if [ "$hits" -gt 0 ]; then
+            echo "$hits file(s) carry a denylisted identifier. The text is not printed here on purpose."
+            exit 1
+          fi
+          echo "clean"
