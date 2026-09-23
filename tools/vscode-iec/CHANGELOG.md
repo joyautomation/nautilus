@@ -3,6 +3,29 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.28] - 2026-09-23
+
+### Added
+
+- **Rockwell `.L5X` exports open as ladder.** Point the ladder view at a
+  Logix export and it renders, with no Rockwell software, no licence and no
+  Windows -- the file is parsed, not executed. `Reopen Editor With...` ->
+  nautilus Ladder Diagram, or the `nautilus: Open Ladder Diagram Preview`
+  command.
+- **Diagram diff across git revisions works on `.L5X` too**, so a changed
+  rung reads as a changed rung rather than as a wall of XML.
+
+### Fixed
+
+- Editing is refused on a `.L5X` rather than silently doing nothing: the
+  export is generated, and the controller is the source of truth.
+
+### Note
+
+The 0.9.27 published to the Marketplace does **not** contain any of the
+above. It was added to the repository without a version bump, so
+publish.yml never shipped it -- see the release note in that commit.
+
 ## [0.9.27] - 2026-09-13
 
 ### Added
