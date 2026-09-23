@@ -401,6 +401,31 @@ func TestOpInsertSimultaneousBranch(t *testing.T) {
 	wantOpErr(t, workedExample, EditOp{Type: "insertSimultaneousBranch", Transition: "tr:t_full", NewStep: "Heat"})  // already a target
 }
 
+// A third leg on an existing divergence must join the convergence too —
+// otherwise it is a dead end the join never waits for. And the edit stays
+// minimal: t_full/t_done keep their comments, the step lands with its
+// siblings.
+func TestOpInsertSimultaneousBranchWidensJoin(t *testing.T) {
+	result, m := applyOp(t, workedExample, EditOp{Type: "insertSimultaneousBranch", Transition: "tr:t_full", NewStep: "Sample"})
+	if tf := findTransT(t, m, "tr:t_full"); !equalStrings(tf.To, []string{"Heat", "Mix", "Sample"}) {
+		t.Errorf("t_full.To = %v, want [Heat Mix Sample]", tf.To)
+	}
+	if td := findTransT(t, m, "tr:t_done"); !equalStrings(td.From, []string{"Heat", "Mix", "Sample"}) {
+		t.Errorf("t_done.From = %v, want [Heat Mix Sample] (the join must wait for the new leg)", td.From)
+	}
+	if sample, mix := findStepT(t, m, "st:Sample"), findStepT(t, m, "st:Mix"); sample.Line != mix.EndLine+2 {
+		t.Errorf("Sample at line %d, want right after Mix (ends %d)", sample.Line, mix.EndLine)
+	}
+	if !strings.Contains(result, "TO (Heat, Mix, Sample) := Level >= FillSP;   (* simultaneous divergence *)") {
+		t.Errorf("t_full's trailing comment was not preserved:\n%s", result)
+	}
+	for _, d := range Check(mustParse(t, result)) {
+		if strings.Contains(d.Message, "dead end") {
+			t.Errorf("unexpected diagnostic: %s", d.Message)
+		}
+	}
+}
+
 // ── layout ────────────────────────────────────────────────────────────
 
 func TestOpLayout(t *testing.T) {

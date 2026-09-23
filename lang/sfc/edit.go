@@ -63,7 +63,7 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 	case "insertAlternativeBranch":
 		edits, err = opInsertAlternativeBranch(lines, m, op)
 	case "insertSimultaneousBranch":
-		edits, err = opInsertSimultaneousBranch(m, op)
+		edits, err = opInsertSimultaneousBranch(lines, m, op)
 	case "setLayout":
 		edits, err = opSetLayout(lines, m, op)
 	case "clearLayout":
@@ -620,11 +620,20 @@ func opInsertAlternativeBranch(lines []string, m *Model, op EditOp) ([]TextEdit,
 }
 
 // opInsertSimultaneousBranch turns a transition's TO x into TO (x, y),
-// creating step y (§4.2). Both the new step and the widened transition are
-// emitted as ONE replacement of the transition's original block — never two
-// separate edits at the same anchor point — so there is no offset ambiguity
-// about which comes first.
-func opInsertSimultaneousBranch(m *Model, op EditOp) ([]TextEdit, error) {
+// creating step y (§4.2). When the transition already opens a simultaneous
+// divergence — TO (a, b) — whose branches meet again at a convergence
+// (a transition whose FROM holds every one of a, b), that join is widened
+// too: FROM (a, b) becomes FROM (a, b, y). Without it the new branch is a
+// dead end the join never waits for, which no one drawing a third parallel
+// leg means. A plain TO x has no join to find; the new step stays a
+// never-block dead end until the user wires it (Check warns).
+//
+// Every edit is minimal: the new step lands after the last of its sibling
+// steps (in the steps section, where a reader looks for it), and each
+// widened transition has only its step-set rewritten in place, so the
+// transition's alignment and trailing comment survive — the change reads
+// in a diff as exactly what it is.
+func opInsertSimultaneousBranch(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
 	t, err := findTransition(m, op.Transition)
 	if err != nil {
 		return nil, err
@@ -641,10 +650,71 @@ func opInsertSimultaneousBranch(m *Model, op EditOp) ([]TextEdit, error) {
 			return nil, fmt.Errorf("sfc edit: %q is already a target of this transition", newStep)
 		}
 	}
-	ns := &GStep{Name: newStep}
-	t.To = append(append([]string{}, t.To...), newStep)
-	combined := printStep(ns) + printTransition(t)
-	return []TextEdit{{Line: t.Line, Col: 1, EndLine: t.EndLine + 1, EndCol: 1, NewText: combined}}, nil
+
+	// The step: after the last sibling it joins, else after the last step.
+	at := 0
+	for _, n := range t.To {
+		if s, err := findStep(m, stepID(n)); err == nil && s.EndLine+1 > at {
+			at = s.EndLine + 1
+		}
+	}
+	if at == 0 {
+		if at, err = insertionLine(lines, m, "", "step"); err != nil {
+			return nil, err
+		}
+	}
+	edits := []TextEdit{{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: "\n" + printStep(&GStep{Name: newStep})}}
+
+	edits = append(edits, stepSetEdit(lines, t, "TO", append(append([]string{}, t.To...), newStep)))
+	if len(t.To) >= 2 {
+		for i := range m.Trans {
+			j := &m.Trans[i]
+			if j.ID != t.ID && containsAllFold(j.From, t.To) {
+				edits = append(edits, stepSetEdit(lines, j, "FROM", append(append([]string{}, j.From...), newStep)))
+			}
+		}
+	}
+	return edits, nil
+}
+
+func containsAllFold(set, want []string) bool {
+	for _, w := range want {
+		found := false
+		for _, s := range set {
+			if strings.EqualFold(s, w) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+var stepSetRe = regexp.MustCompile(`(?i)\b(FROM|TO)\s+(\([^)]*\)|[A-Za-z_][A-Za-z0-9_]*)`)
+
+// stepSetEdit rewrites one side ("FROM"|"TO") of a transition's step-set
+// in place on its header line, leaving everything else on the line alone.
+// A header split across lines (legal, never how the editor prints one)
+// falls back to reprinting the whole transition block.
+func stepSetEdit(lines []string, t *GTransition, side string, names []string) TextEdit {
+	if t.Line >= 1 && t.Line <= len(lines) {
+		line := lines[t.Line-1]
+		for _, mm := range stepSetRe.FindAllStringSubmatchIndex(line, -1) {
+			if strings.EqualFold(line[mm[2]:mm[3]], side) {
+				return TextEdit{Line: t.Line, Col: mm[4] + 1, EndLine: t.Line, EndCol: mm[5] + 1, NewText: printStepSet(names)}
+			}
+		}
+	}
+	nt := *t
+	if side == "TO" {
+		nt.To = names
+	} else {
+		nt.From = names
+	}
+	return TextEdit{Line: t.Line, Col: 1, EndLine: t.EndLine + 1, EndCol: 1, NewText: printTransition(&nt)}
 }
 
 // ── layout (reuses lang/fbd's (* @layout … *) format, design doc §4.2) ──
