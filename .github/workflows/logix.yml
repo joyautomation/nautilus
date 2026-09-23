@@ -1,0 +1,169 @@
+name: Logix
+
+# The Allen-Bradley half of the toolchain, split by what it needs to run.
+#
+#   lang/l5x and logix/logixd unit tests need nothing at all — they are in
+#   the main CI job (`go test ./...`), and this workflow's `reader` job adds
+#   the corpus sweep on top when a corpus is configured.
+#
+#   Everything that drives a Logix PROJECT needs the Studio 5000 SDK, which
+#   means Windows, a licence, and the SDK's NuGet package — none of which a
+#   GitHub-hosted runner has. That work lives on a self-hosted runner and is
+#   opt-in: without one, this workflow must stay green rather than red, or a
+#   contributor with no Rockwell licence cannot land a change.
+
+on:
+  push: {branches: [main]}
+  pull_request:
+  workflow_dispatch:
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  reader:
+    name: L5X reader — unit + corpus
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.24'}
+      - name: Unit tests
+        run: go test ./lang/l5x/... ./logix/... ./cmd/nautilus/ -run 'Logix|L5X|Ladder|Types|Tags|Normalize|ParseRung|Parse|Client|Import|Download|Convert|Session|XPath|Event' -v
+      # The development corpus is ~60 real exports, most of it client work
+      # that cannot live in the repo. A runner that has it mounted sweeps
+      # it; one that does not skips, and says so.
+      - name: Corpus sweep
+        if: vars.NAUTILUS_L5X_CORPUS != ''
+        env:
+          NAUTILUS_L5X_CORPUS: ${{ vars.NAUTILUS_L5X_CORPUS }}
+        run: go test ./lang/l5x/ -run TestCorpus -v
+
+  agent:
+    name: logixd — build and integration
+    # Opt-in. Set the repo variable LOGIX_SELF_HOSTED=true once a runner
+    # labelled `logix-sdk` exists; until then this job is skipped, not failed.
+    #
+    # NEVER runs for a pull request from a fork. This repository is PUBLIC,
+    # so anyone can open one, and this job runs on a self-hosted runner: a
+    # licensed Windows machine that can reach real controllers. A fork PR
+    # reaching it would be arbitrary code execution on plant-adjacent
+    # hardware. Same-repo pull requests are allowed because pushing a branch
+    # here already requires write access.
+    #
+    # Belt and braces: also set Settings > Actions > "Require approval for
+    # all external contributors". This guard does not depend on it.
+    if: >-
+      vars.LOGIX_SELF_HOSTED == 'true' &&
+      (github.event_name != 'pull_request' ||
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, windows, logix-sdk]
+    timeout-minutes: 60
+    env:
+      # The runner's own configuration. None of it is a secret except the
+      # token, and none of it is supplied by a pull request.
+      #
+      # The `runner` context is NOT available in a job-level env block, so
+      # anything derived from RUNNER_TEMP is set inside a step instead.
+      LOGIXD_ADDR: http://127.0.0.1:8188
+      NAUTILUS_LOGIXD_URL: http://127.0.0.1:8188
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.24'}
+
+      # LOGIXD_DOTNET points at the dotnet that HAS the ASP.NET Core shared
+      # framework. On a Rockwell box the machine default often does not —
+      # see tools/logixd/README.md — so the runner names it explicitly and
+      # this falls back to whatever is on PATH.
+      #
+      # NOTE: the runtime is steered with DOTNET_ROOT_X64, never plain
+      # DOTNET_ROOT. The SDK's FactoryTalk login launches a 32-bit adapter
+      # that cannot resolve a runtime from an x64 DOTNET_ROOT; it then dies
+      # silently and every token-needing SDK call times out with no
+      # diagnostic. See docs/design/logix-target.md §19.5.
+      - name: Resolve the runner's paths
+        shell: pwsh
+        run: |
+          if (-not $env:LOGIXD_DOTNET) { $env:LOGIXD_DOTNET = "dotnet" }
+          "LOGIXD_DOTNET=$env:LOGIXD_DOTNET"        | Out-File -Append $env:GITHUB_ENV
+          "LOGIXD_WORKDIR=$env:RUNNER_TEMP\logixd-work" | Out-File -Append $env:GITHUB_ENV
+          "LOGIXD_BIN=$env:RUNNER_TEMP\logixd-bin"      | Out-File -Append $env:GITHUB_ENV
+
+      - name: Build logixd
+        working-directory: tools/logixd
+        shell: pwsh
+        run: '& $env:LOGIXD_DOTNET build -c Release -o $env:LOGIXD_BIN'
+
+      - name: Start logixd
+        shell: pwsh
+        run: |
+          if ($env:LOGIXD_DOTNET -ne "dotnet") {
+            # DOTNET_ROOT_X64, not DOTNET_ROOT — see the note above.
+            $env:DOTNET_ROOT_X64 = Split-Path -Parent $env:LOGIXD_DOTNET
+            Remove-Item Env:\DOTNET_ROOT -ErrorAction SilentlyContinue
+          }
+          $p = Start-Process -FilePath $env:LOGIXD_DOTNET `
+            -ArgumentList "$env:LOGIXD_BIN\logixd.dll" `
+            -RedirectStandardOutput "$env:RUNNER_TEMP\logixd.out" `
+            -RedirectStandardError  "$env:RUNNER_TEMP\logixd.err" `
+            -PassThru -WindowStyle Hidden
+          "LOGIXD_PID=$($p.Id)" | Out-File -Append $env:GITHUB_ENV
+          # Wait for it to answer rather than sleeping a guessed interval.
+          $deadline = (Get-Date).AddSeconds(60)
+          do {
+            Start-Sleep -Milliseconds 500
+            try { $ok = (Invoke-WebRequest "$env:NAUTILUS_LOGIXD_URL/v1/health" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 }
+            catch { $ok = $false }
+          } while (-not $ok -and (Get-Date) -lt $deadline)
+          if (-not $ok) { Get-Content "$env:RUNNER_TEMP\logixd.err"; throw "logixd did not come up" }
+
+      # Informational, never fatal. A lapsed activation is an operations
+      # problem, not a broken build — and the report says which gate failed,
+      # which is the thing an operator actually needs.
+      - name: Licensing probe
+        continue-on-error: true
+        run: go run ./cmd/nautilus logix probe
+
+      # Tier 1: the agent's own contract — auth, the file sandbox, error
+      # classification. Needs no licence, so it MUST pass.
+      - name: Agent contract tests
+        run: go test ./logix/logixd/ -run TestAgent -v -timeout 15m
+
+      # Tier 2: the SDK itself. Each test asks the probe first and skips
+      # with the failing gate named, so an unlicensed runner reports
+      # "skipped: no activation" instead of a red build.
+      #
+      # The SDK tests also need a project to work on and, for the online
+      # path, a controller to talk to. Without those they skip QUIETLY and
+      # the job goes green having tested almost nothing -- four of the five
+      # skipped that way until this was set. Configure the repo variables
+      # LOGIX_SEED_ACD (a path on the runner) and LOGIX_COMM_PATH to arm
+      # them; the summary step below fails the job if they are missing, so
+      # a half-armed runner is loud rather than quietly reassuring.
+      - name: SDK integration tests
+        env:
+          NAUTILUS_LOGIXD_SEED_ACD: ${{ vars.LOGIX_SEED_ACD }}
+          NAUTILUS_LOGIXD_COMM_PATH: ${{ vars.LOGIX_COMM_PATH }}
+        run: go test ./logix/logixd/ -run TestSDK -v -timeout 45m
+
+      - name: Refuse to pass as a half-armed runner
+        run: |
+          if [ -z "${{ vars.LOGIX_SEED_ACD }}" ] || [ -z "${{ vars.LOGIX_COMM_PATH }}" ]; then
+            echo "::error::The SDK tests need LOGIX_SEED_ACD and LOGIX_COMM_PATH."
+            echo "::error::Without them four of the five skip and this job means nothing."
+            exit 1
+          fi
+        shell: bash
+
+      - name: logixd log
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "--- stdout ---"; Get-Content "$env:RUNNER_TEMP\logixd.out" -ErrorAction SilentlyContinue -Tail 100
+          Write-Host "--- stderr ---"; Get-Content "$env:RUNNER_TEMP\logixd.err" -ErrorAction SilentlyContinue -Tail 100
+
+      - name: Stop logixd
+        if: always()
+        shell: pwsh
+        run: if ($env:LOGIXD_PID) { Stop-Process -Id $env:LOGIXD_PID -Force -ErrorAction SilentlyContinue }

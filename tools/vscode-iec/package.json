@@ -41,7 +41,8 @@
     "onLanguage:iec-ld",
     "onLanguage:iec-sfc",
     "workspaceContains:**/nautilus.yaml",
-    "workspaceContains:**/*_test.yaml"
+    "workspaceContains:**/*_test.yaml",
+    "onLanguage:logix-l5x"
   ],
   "contributes": {
     "languages": [
@@ -108,6 +109,22 @@
           "dark": "./icons/sfc-dark.svg",
           "light": "./icons/sfc-light.svg"
         }
+      },
+      {
+        "id": "logix-l5x",
+        "aliases": [
+          "Logix L5X Export",
+          "L5X"
+        ],
+        "extensions": [
+          ".L5X",
+          ".l5x"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "dark": "./icons/ld-dark.svg",
+          "light": "./icons/ld-light.svg"
+        }
       }
     ],
     "grammars": [
@@ -150,11 +167,11 @@
       },
       {
         "command": "nautilus.connect",
-        "title": "nautilus: Connect to Controller…"
+        "title": "nautilus: Connect to Controller\u2026"
       },
       {
         "command": "nautilus.setValue",
-        "title": "nautilus: Set Live Value…",
+        "title": "nautilus: Set Live Value\u2026",
         "icon": "$(edit)"
       },
       {
@@ -249,7 +266,7 @@
     "viewsWelcome": [
       {
         "view": "nautilusLiveValues",
-        "contents": "No live values yet — start a controller with `nautilus run`, or point the editor at one.\n[Connect to Controller](command:nautilus.connect)\nValues stream over the same API the inline pills use."
+        "contents": "No live values yet \u2014 start a controller with `nautilus run`, or point the editor at one.\n[Connect to Controller](command:nautilus.connect)\nValues stream over the same API the inline pills use."
       }
     ],
     "menus": {
@@ -391,6 +408,19 @@
         "priority": "option"
       },
       {
+        "viewType": "nautilus.l5xDiagram",
+        "displayName": "Ladder Diagram (Logix L5X)",
+        "selector": [
+          {
+            "filenamePattern": "*.L5X"
+          },
+          {
+            "filenamePattern": "*.l5x"
+          }
+        ],
+        "priority": "option"
+      },
+      {
         "viewType": "nautilus.sfcDiagram",
         "displayName": "SFC Diagram",
         "selector": [
@@ -454,7 +484,7 @@
     "vscode:prepublish": "npm run compile && npm run build:webview",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/scan.test.js out/programSync.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js && npm --prefix webview-ui run test",
+    "test": "npm run compile && node --test out/scan.test.js out/programSync.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js && npm --prefix webview-ui run test",
     "build:webview": "npm --prefix webview-ui run build"
   },
   "dependencies": {

@@ -68,7 +68,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // "Open With → FBD Diagram": the diagram as a real editor over the .fbd
   // document (text remains the default editor).
   context.subscriptions.push(new FbdEditorProvider(context, live).register());
-  context.subscriptions.push(new LdEditorProvider(context, live).register());
+  const ldEditor = new LdEditorProvider(context, live);
+  context.subscriptions.push(ldEditor.register());
+  // Rockwell L5X exports render through the same ladder editor.
+  context.subscriptions.push(ldEditor.register(LdEditorProvider.l5xViewType));
   context.subscriptions.push(new SfcEditorProvider(context, live).register());
   // User-authored Svelte components rendered for real inside the mimic/
   // Component Editor webviews — gated on workspace trust (it compiles and
