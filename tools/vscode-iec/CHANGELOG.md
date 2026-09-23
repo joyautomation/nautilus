@@ -3,6 +3,20 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.29] - 2026-09-23
+
+### Fixed
+
+- **The ladder commands now appear for `.L5X` files.** `Open Ladder Diagram
+  Preview` and `Diff Ladder Diagram (vs git HEAD)` were gated to
+  `resourceLangId == iec-ld`, so on a Logix export neither showed in the
+  command palette: the diagram was reachable only through *Reopen Editor
+  With...*, and the revision diff was not reachable at all. Both now accept
+  `logix-l5x` as well.
+
+  `Diff Ladder Diagram (vs Controller)` stays gated -- for a Logix project
+  the controller comparison is `nautilus logix drift`.
+
 ## [0.9.28] - 2026-09-23
 
 ### Added
