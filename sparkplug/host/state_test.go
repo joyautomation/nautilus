@@ -618,8 +618,8 @@ func TestStateMalformedInputIgnored(t *testing.T) {
 		"spBv1.0/G/NBIRTH/W6/PLC1", // node message with a device segment
 		"spBv1.0/G/DDATA/W6",       // device message without one
 		"spBv1.0/G/NBIRTH/W6/PLC1/EXTRA",
-		"spBv1.0/STATE/pomona-central", // our own certificate, echoed back
-		"STATE/pomona-central",         // the 2.x form
+		"spBv1.0/STATE/riverbend-central", // our own certificate, echoed back
+		"STATE/riverbend-central",         // the 2.x form
 		"spAv2.0/G/NBIRTH/W6",
 		"random/nonsense",
 	} {

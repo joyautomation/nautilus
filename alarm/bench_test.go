@@ -7,7 +7,7 @@ import (
 )
 
 // fleetScale builds a definition set and a matching tag map at the size the
-// Pomona export implies: ~2 500 definitions across 25 sites, each gated on
+// Riverbend export implies: ~2 500 definitions across 25 sites, each gated on
 // its node's __Online bit, with a tenth of them in alarm — a plausible bad
 // day, not an idle plant.
 func fleetScale(n int) ([]Def, tags) {

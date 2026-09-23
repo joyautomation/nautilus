@@ -547,7 +547,7 @@ func startDogfoodEdge(t *testing.T, host *Driver, addr string, speedSP float64) 
 }
 
 // TestEdgeToHostStartKeepsSetpoints is the regression test for the defect the
-// PomonaSCADA demo diagnosed (~/Development/pomona/wrd/host/README.md, "Open
+// RiverbendSCADA demo diagnosed (~/Development/riverbend/wtp/host/README.md, "Open
 // defect: the host zeroes an edge's setpoints when it starts"):
 //
 //	RTU9 alone, host down:   RAWMIN=3277 RAWMAX=16383 HHSP=1000 ...

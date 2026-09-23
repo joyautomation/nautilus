@@ -120,7 +120,7 @@ var assetTypes = map[string]string{
 // frame is a merge.
 //
 // The NON-tag blocks — Scan, Drivers, Alarms — follow the same rule, for
-// the same reason. Measured on the Pomona WRD host, they are ~18 kB per
+// the same reason. Measured on the Riverbend WTP host, they are ~18 kB per
 // frame (a 55-device driver status alone is ~13 kB), so a client that
 // filtered its tags down to nothing still pulled 4.3 MB a minute: a floor
 // no amount of tag filtering could get under. On a delta frame each of

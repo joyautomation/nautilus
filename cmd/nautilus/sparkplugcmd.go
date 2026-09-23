@@ -94,7 +94,7 @@ Writing template members:
   carries every member's live value.
 
 --sites file (offline generation):
-  group: PomonaWRD
+  group: RiverbendWTP
   types:
     - name: Motor
       fields:

@@ -2,7 +2,7 @@
 
 ## 0.6.0 — 2026-09-10 (minor: additive, no breaking changes)
 
-Everything below came out of the Pomona WRD recreation (`pomona/wrd/host/hmi`), which ported an
+Everything below came out of the Riverbend WTP recreation (`riverbend/wtp/host/hmi`), which ported an
 Ignition Perspective application onto this kit and kept a running list of what it had to build
 locally. These are those items, generalised — the app now imports them and its local copies are
 gone. Nothing here changes an existing component's default rendering.
@@ -87,7 +87,7 @@ kit ships the shape and the two screens that render any registry of that shape.
 
 ### Added — the frame floor: non-tag blocks sent only when they change
 
-Tag filters and tag deltas both shrink the same part of the frame, and on the WRD host they ran
+Tag filters and tag deltas both shrink the same part of the frame, and on the WTP host they ran
 into what was left: every frame carried **~17.9 kB that had nothing to do with tags** — ~12.8 kB
 of driver status (55 Sparkplug device rows plus the host's per-node roster in `extra`), ~5 kB of
 scan diagnostics, and the alarm counts — re-sent four times a second whether or not anything in
@@ -126,7 +126,7 @@ does, or a driver panel will blink out between changes.
 
 The two things that separate a demo HMI from one a plant runs on: how much a client has to pull to
 draw a screen, and whether it can tell a live number from an old one. Both land in the controller
-(`server`/`runtime`/`io`) and both are surfaced here. Measured on the WRD host: `/api/state` was
+(`server`/`runtime`/`io`) and both are surfaced here. Measured on the WTP host: `/api/state` was
 571 KB and one SSE client pulled ~2 MB per ten seconds, which is fine for one wall screen and
 hopeless for tablets.
 
@@ -161,7 +161,7 @@ hopeless for tablets.
   **`tagInPatterns`**, **`MAX_TAG_PATTERNS`**, **`NO_TAGS`** (`./tags.ts`) — turning "this screen
   draws these tags" into the handful of globs one subscription accepts. `RealtimeOptions.tags`
   takes patterns and the controller caps them at 40 per connection; a real screen routinely names
-  more than that (the Pomona `/system` schematic binds **217** top-level tags), so something has
+  more than that (the Riverbend `/system` schematic binds **217** top-level tags), so something has
   to pack the list — and the one property that must never be traded away is that the result is a
   **superset** of what was asked for. A pattern set that drops a tag does not error: it leaves one
   live instrument reading "—" forever, on a screen that otherwise looks healthy. Every merge
@@ -184,7 +184,7 @@ hopeless for tablets.
 - **`FrameSource<T>`** — the half of `RealtimeClient` that `useTrend` and `AlarmClient` actually
   use (`frame`, `onFrame`, `onOpen`), now an interface those two accept instead of the class.
   `RealtimeClient` satisfies it structurally, so every existing caller is unaffected. It exists so
-  an app can put its OWN object in front of the client: the Pomona HMI swaps the underlying
+  an app can put its OWN object in front of the client: the Riverbend HMI swaps the underlying
   connection whenever the open screen changes what it needs, and hands the kit a stable facade
   that forwards to whichever connection is live — trend buffers are keyed on that identity, and a
   callback bound to a replaced client simply stops being called.

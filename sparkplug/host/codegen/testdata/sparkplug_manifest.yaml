@@ -5,7 +5,7 @@
 #
 # Wire it up in nautilus.yaml:
 #   driver: {type: sparkplug-host, broker: ..., host-id: ..., manifest: sparkplug_manifest.yaml}
-group: PomonaWRD
+group: RiverbendWTP
 types:
     - name: Motor
       fields:

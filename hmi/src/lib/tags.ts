@@ -92,7 +92,7 @@ export function numericLeaves(tags: TagTree | undefined, opts: { maxDepth?: numb
 // the controller caps how many it will accept on one connection
 // (server/stream.go's `maxTagPatterns`). A screen, meanwhile, knows exactly
 // which tags it draws — and on a real plant that list is routinely longer
-// than the cap: the Pomona `/system` schematic binds 217 top-level tags.
+// than the cap: the Riverbend `/system` schematic binds 217 top-level tags.
 //
 // So something has to turn "these 217 names" into "at most 40 patterns", and
 // the ONE property that must never be traded away is that the packed set is a
@@ -161,7 +161,7 @@ export function mergeTagPatterns(a: string, b: string): string {
 // one thing here that matters, because the two are not comparable in scale —
 // a `?` admits at most one character's worth of siblings per position, while
 // a `*` on a short prefix admits an entire panel (`RTU32_*` is 514 tags on
-// the Pomona host).
+// the Riverbend host).
 //
 // MEASURED, on the fleet this was built for: `/system`'s 217 top-level tags
 // pack into 40 patterns matching **200** of the controller's 10,236 — 187 of

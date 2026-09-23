@@ -15,7 +15,7 @@ import (
 )
 
 const sampleSites = `
-group: PomonaWRD
+group: RiverbendWTP
 types:
   - name: Motor
     fields:
@@ -51,7 +51,7 @@ func TestSparkplugImportFromSites(t *testing.T) {
 		t.Errorf("types file missing the Motor TYPE:\n%s", types)
 	}
 	manifest := read(t, filepath.Join(dir, "sparkplug_manifest.yaml"))
-	for _, want := range []string{"group: PomonaWRD", "edgenode: W6", "metric: Pump/SpeedSP", "writable: true"} {
+	for _, want := range []string{"group: RiverbendWTP", "edgenode: W6", "metric: Pump/SpeedSP", "writable: true"} {
 		if !strings.Contains(manifest, want) {
 			t.Errorf("manifest missing %q:\n%s", want, manifest)
 		}

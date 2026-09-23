@@ -57,7 +57,7 @@ export class TrendBuffer {
  * to frames rather than being handed one.
  *
  * It is an interface rather than the class so an app can put its OWN object
- * in front of the client: the Pomona HMI swaps the underlying connection
+ * in front of the client: the Riverbend HMI swaps the underlying connection
  * whenever the open screen changes what it needs (`?tags=`, fixed at
  * connect), and hands the kit a stable facade that forwards to whichever
  * connection is live. Trend buffers are keyed on this identity, so a facade

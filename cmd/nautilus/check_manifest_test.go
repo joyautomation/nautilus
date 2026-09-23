@@ -402,14 +402,14 @@ END_PROGRAM`,
 func TestCheckSparkplugHostProjectOffline(t *testing.T) {
 	files := map[string]string{
 		"nautilus.yaml": `
-name: pomona-central
+name: riverbend-central
 tasks:
   - program: program.st
 driver:
   type: sparkplug-host
   broker: "tcp://mqtt.invalid:1883"
-  group-id: PomonaWRD
-  host-id: pomona-central
+  group-id: RiverbendWTP
+  host-id: riverbend-central
   manifest: sparkplug_manifest.yaml
   primary: true
   state-form: both
@@ -418,7 +418,7 @@ driver:
   on-unknown: log
 tag-files: [tags/sparkplug.yaml]
 `,
-		"sparkplug_manifest.yaml": `group: PomonaWRD
+		"sparkplug_manifest.yaml": `group: RiverbendWTP
 nodes:
     - edgenode: W6
       prefix: W6

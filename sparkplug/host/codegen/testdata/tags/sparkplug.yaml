@@ -3,7 +3,7 @@
 # `nautilus sparkplug tags sparkplug_manifest.yaml` to re-derive this file
 # from the committed manifest alone.
 #
-# Group PomonaWRD · 2 node(s) · 12 bound metric(s).
+# Group RiverbendWTP · 2 node(s) · 12 bound metric(s).
 #
 # Compose it into a project with:  tag-files: [tags/sparkplug.yaml]
 #

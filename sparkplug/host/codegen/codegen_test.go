@@ -76,9 +76,9 @@ func sampleBirths(t *testing.T) []host.Birth {
 	}}
 
 	return []host.Birth{
-		{Group: "PomonaWRD", EdgeNode: "W6", Payload: wire(t, w6)},
-		{Group: "PomonaWRD", EdgeNode: "W6", Device: "PLC1", Payload: wire(t, w6plc1)},
-		{Group: "PomonaWRD", EdgeNode: "W7", Payload: wire(t, w7)},
+		{Group: "RiverbendWTP", EdgeNode: "W6", Payload: wire(t, w6)},
+		{Group: "RiverbendWTP", EdgeNode: "W6", Device: "PLC1", Payload: wire(t, w6plc1)},
+		{Group: "RiverbendWTP", EdgeNode: "W7", Payload: wire(t, w7)},
 	}
 }
 
@@ -209,7 +209,7 @@ func golden(t *testing.T, name string, out []byte) {
 // project generated offline stops matching the wire.
 func TestFromSitesMatchesFromBirths(t *testing.T) {
 	sites := []byte(`
-group: PomonaWRD
+group: RiverbendWTP
 types:
   - name: Motor
     fields:

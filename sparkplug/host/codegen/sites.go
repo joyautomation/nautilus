@@ -10,7 +10,7 @@
 // output to what the broker path would have produced from the corresponding
 // births.
 //
-// That is also the seam a project generator writes to: the Pomona edge
+// That is also the seam a project generator writes to: the Riverbend edge
 // projects already know their tag lists, so the central manifest can be
 // generated from the same source of truth rather than sampled off a wire.
 //
@@ -19,7 +19,7 @@
 // is an error, not a silently dropped site.
 //
 //	# sites.yaml
-//	group: PomonaWRD
+//	group: RiverbendWTP
 //	types:
 //	  - name: Motor
 //	    fields:

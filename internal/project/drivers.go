@@ -123,7 +123,7 @@ func eipStatus(h eip.Health) server.DriverStatus {
 // frames a second and buys nothing, because a value that is only refreshed
 // when something ELSE changes was never live to begin with.
 //
-// Measured on the Pomona host: this block rode every single frame (3.0 MB a
+// Measured on the Riverbend host: this block rode every single frame (3.0 MB a
 // minute to a client subscribed to no tags at all) because of exactly three
 // free-runners — Extra carried each node's LastMsgMs and Seq, which move on
 // every NDATA; the metrics grid carried a total message count and an age
@@ -238,7 +238,7 @@ func hostStatus(st sphost.Status) server.DriverStatus {
 //
 // It is deliberately NOT sphost.NodeStatus itself. That struct carries Seq
 // and LastMsgMs, which step on every message the host receives, and marshalling
-// it whole was what kept this block on every frame of the Pomona stream: 55
+// it whole was what kept this block on every frame of the Riverbend stream: 55
 // nodes × two counters, nested one level down, where no top-level exclusion
 // could reach them. Everything here either holds still or moves for a reason
 // — the flags an operator acts on, the tag counts, and BirthMs, which is a

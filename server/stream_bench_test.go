@@ -11,7 +11,7 @@ import (
 	"github.com/joyautomation/nautilus/runtime"
 )
 
-// The measurement this whole feature was proposed on. The Pomona WRD demo's
+// The measurement this whole feature was proposed on. The Riverbend WTP demo's
 // central host carries 10,000-odd tags: /api/state is 571 KB and one SSE
 // client pulls ~2 MB per ten seconds. These benchmarks answer, in bytes,
 // what a delta stream costs instead — and the answer has to be reported as
@@ -34,7 +34,7 @@ func benchStore(n int) *runtime.Tags {
 }
 
 // benchName is one plant-shaped tag name (site_area_device_point), UNIQUE
-// per index. JSON key length is a real share of a frame — the WRD host's
+// per index. JSON key length is a real share of a frame — the WTP host's
 // names average ~28 characters — so a benchmark on "t0".."t9999" would
 // flatter the full frame and understate what a delta saves.
 func benchName(i int) string {
@@ -187,7 +187,7 @@ func benchBroadcast(b *testing.B, nClients int, delta bool) {
 
 // ── the frame floor ───────────────────────────────────────────────────────
 //
-// The measurement that produced the non-tag block gate. On the Pomona WRD
+// The measurement that produced the non-tag block gate. On the Riverbend WTP
 // host every frame carried ~17.9 kB that had nothing to do with tags — a
 // 55-device driver status, the scan diagnostics, the alarm counts — so a
 // client that had filtered its subscription down to NOTHING still pulled
@@ -195,7 +195,7 @@ func benchBroadcast(b *testing.B, nClients int, delta bool) {
 //
 //	go test ./server/ -run XXX -bench FrameFloor -benchtime 1x -v
 
-// benchDrivers is a Pomona-shaped driver status: one Sparkplug host in
+// benchDrivers is a Riverbend-shaped driver status: one Sparkplug host in
 // front of 55 edge nodes, with the per-node roster in Extra that made the
 // block 13 kB. The counters climb on every call, the way a live host's do.
 func benchDrivers(round *int, flip *bool) func() []DriverStatus {
@@ -218,7 +218,7 @@ func benchDrivers(round *int, flip *bool) func() []DriverStatus {
 			}
 			devs = append(devs, DriverDevice{ID: id, Online: online, Detail: detail})
 			nodeList = append(nodeList, map[string]any{
-				"id": id, "group": "WRD", "edgeNode": id, "online": online,
+				"id": id, "group": "WTP", "edgeNode": id, "online": online,
 				"state": map[bool]string{true: "online", false: "offline"}[online],
 				"tags": float64(120 + i), "msgs": float64(*round*3 + i),
 				"lastMs": float64(1_700_000_000_000 + *round*250), "births": float64(i%3 + 1),
@@ -226,7 +226,7 @@ func benchDrivers(round *int, flip *bool) func() []DriverStatus {
 			})
 		}
 		return []DriverStatus{{
-			Kind: "sparkplug", Name: "WRD/Host", Detail: "tcp://broker.wrd:1883",
+			Kind: "sparkplug", Name: "WTP/Host", Detail: "tcp://broker.wtp:1883",
 			State: "connected", Message: "Publishing · bdSeq 4", SinceMs: 1_700_000_000_000,
 			Metrics: []DriverMetric{
 				{Label: "messages", Value: float64(*round * 17), Volatile: true},

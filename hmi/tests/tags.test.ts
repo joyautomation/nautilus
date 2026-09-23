@@ -6,7 +6,7 @@
 // dropped a tag renders a live instrument as "—" forever, on a screen that
 // otherwise looks healthy. Every spec below either checks that property
 // directly or checks a rule that exists to protect it, and the fleet fixture
-// at the bottom runs it over the real Pomona name-space — 217 tags from
+// at the bottom runs it over the real Riverbend name-space — 217 tags from
 // `/system`, which is what forced the cap problem in the first place.
 import { describe, it, expect } from './harness.js';
 import {
@@ -122,10 +122,10 @@ describe('packTagPatterns', () => {
 });
 
 // The fixture is the real thing: every top-level tag `/system` binds on the
-// Pomona central host, which is 217 names against a 40-pattern cap. It is
+// Riverbend central host, which is 217 names against a 40-pattern cap. It is
 // here because the property under test only breaks at scale — with a handful
 // of names nothing is ever merged.
-const POMONA_SYSTEM = [
+const RIVERBEND_SYSTEM = [
 	'AEP_RES6_AIT_001_NO3',
 	'AEP_RES6_FIT_001',
 	'AEP_TP_AIT_004_NO3',
@@ -257,25 +257,25 @@ const POMONA_SYSTEM = [
 	'RTU9_WEL15_SUP_015'
 ];
 
-describe('packTagPatterns — the Pomona /system subscription', () => {
+describe('packTagPatterns — the Riverbend /system subscription', () => {
 	it('fits the controller cap', () => {
-		const pats = packTagPatterns(POMONA_SYSTEM);
+		const pats = packTagPatterns(RIVERBEND_SYSTEM);
 		expect(pats.length <= MAX_TAG_PATTERNS).toBe(true);
 	});
 
 	it('still matches every tag the screen draws', () => {
 		// THE property. A dropped tag is a dead-looking instrument, and
 		// nothing else in the stack would notice.
-		const pats = packTagPatterns(POMONA_SYSTEM);
-		const missed = POMONA_SYSTEM.filter((n) => !tagInPatterns(pats, n));
+		const pats = packTagPatterns(RIVERBEND_SYSTEM);
+		const missed = RIVERBEND_SYSTEM.filter((n) => !tagInPatterns(pats, n));
 		expect(missed).toEqual([]);
 	});
 
 	it('holds the property at every cap, down to one pattern', () => {
 		for (const max of [1, 2, 5, 10, 20, 40, 80]) {
-			const pats = packTagPatterns(POMONA_SYSTEM, { max });
+			const pats = packTagPatterns(RIVERBEND_SYSTEM, { max });
 			expect(pats.length <= max).toBe(true);
-			expect(POMONA_SYSTEM.filter((n) => !tagInPatterns(pats, n))).toEqual([]);
+			expect(RIVERBEND_SYSTEM.filter((n) => !tagInPatterns(pats, n))).toEqual([]);
 		}
 	});
 
@@ -284,7 +284,7 @@ describe('packTagPatterns — the Pomona /system subscription', () => {
 		// character by character, so most of the set stays narrow. This is
 		// what separates a 200 kB subscription from a 500 kB one; if it ever
 		// regresses, the packer got the cost function wrong.
-		const pats = packTagPatterns(POMONA_SYSTEM);
+		const pats = packTagPatterns(RIVERBEND_SYSTEM);
 		const wide = pats.filter((p) => p.includes('*'));
 		expect(wide.length <= 4).toBe(true);
 	});

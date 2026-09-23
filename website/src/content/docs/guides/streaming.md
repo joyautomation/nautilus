@@ -111,7 +111,7 @@ for a client with reason to distrust its own merge.
 ## The frame floor
 
 Tag filters and tag deltas both shrink the same part of the frame, and on
-the WRD host they eventually ran into what was left. Every frame carried
+the WTP host they eventually ran into what was left. Every frame carried
 **~17.9 kB that had nothing to do with tags**:
 
 | Block | Size | Why it moves |
@@ -202,7 +202,7 @@ block sent 20 seconds ago reads as a plant going quiet. So a freshness
 readout travels as the **moment itself**:
 
 ```jsonc
-{"kind":"sparkplug","name":"WRD/Host","asOfMs":1770000000000,
+{"kind":"sparkplug","name":"WTP/Host","asOfMs":1770000000000,
  "metrics":[{"label":"last publish","atMs":1769999999800,"text":"0.2s"}]}
 ```
 

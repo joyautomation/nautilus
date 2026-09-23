@@ -7,7 +7,7 @@ package acceptance_test
 // promotes it — so both reads saw the same stale (usually zero-of-type)
 // base, and the driver's last write (whichever key sorted last) replaced
 // the whole tag, silently discarding the other edit. See
-// ~/Development/pomona/wrd/host/host_test.yaml and its README "Tests"
+// ~/Development/riverbend/wtp/host/host_test.yaml and its README "Tests"
 // section, which found this while testing fleet.st.
 //
 // The fix gathers every field a given map addresses on one root tag, applies

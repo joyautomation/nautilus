@@ -266,12 +266,12 @@ func TestEIPStatusStates(t *testing.T) {
 // which `online` have birthed and are up.
 func hostStatusLike(connected bool, nodes, online int) sphost.Status {
 	st := sphost.Status{
-		Broker: "tcp://mqtt:1883", HostID: "central", Groups: []string{"PomonaWRD"},
+		Broker: "tcp://mqtt:1883", HostID: "central", Groups: []string{"RiverbendWTP"},
 		Connected: connected, Msgs: 42,
 	}
 	for i := range nodes {
 		n := sphost.NodeStatus{
-			Group: "PomonaWRD", EdgeNode: fmt.Sprintf("W%d", i+1),
+			Group: "RiverbendWTP", EdgeNode: fmt.Sprintf("W%d", i+1),
 			Online: i < online, BirthMs: time.Now().UnixMilli(), Metrics: 12,
 		}
 		st.Nodes = append(st.Nodes, n)
@@ -315,7 +315,7 @@ func TestHostStatusStates(t *testing.T) {
 	if all.State != "connected" {
 		t.Fatalf("all sites up: %+v", all)
 	}
-	if all.Detail != "tcp://mqtt:1883 · PomonaWRD" {
+	if all.Detail != "tcp://mqtt:1883 · RiverbendWTP" {
 		t.Fatalf("detail = %q", all.Detail)
 	}
 	if all.Name != "central" {
@@ -366,7 +366,7 @@ func TestHostStatusDeviceRows(t *testing.T) {
 }
 
 // The regression that put this status back on every frame of the live
-// Pomona stream. The controller sends a driver block only when it CHANGES —
+// Riverbend stream. The controller sends a driver block only when it CHANGES —
 // it hashes the block — so a status that renders anything free-running is
 // not a cosmetic problem: it is 13 kB × 4/s, permanently, for a client that
 // asked for nothing. Two builds a quarter-second apart, with only the things
@@ -448,8 +448,8 @@ func TestLoadSparkplugHostDriver(t *testing.T) {
 driver:
   type: sparkplug-host
   broker: "tcp://mqtt.invalid:1883"
-  group-id: PomonaWRD
-  host-id: pomona-central
+  group-id: RiverbendWTP
+  host-id: riverbend-central
   manifest: sparkplug_manifest.yaml
   primary: true
   state-form: both
@@ -458,7 +458,7 @@ driver:
   on-unknown: log
   rebirth-on-start: false
 `)
-	files["sparkplug_manifest.yaml"] = &fstest.MapFile{Data: []byte(`group: PomonaWRD
+	files["sparkplug_manifest.yaml"] = &fstest.MapFile{Data: []byte(`group: RiverbendWTP
 nodes:
     - edgenode: W6
 tags:

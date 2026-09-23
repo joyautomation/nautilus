@@ -321,9 +321,9 @@ func TestHashDriversStableWhenEmpty(t *testing.T) {
 	}
 }
 
-// ── the Pomona regression ─────────────────────────────────────────────────
+// ── the Riverbend regression ─────────────────────────────────────────────────
 //
-// The first live deploy of the block gate did not hold: on the WRD host the
+// The first live deploy of the block gate did not hold: on the WTP host the
 // driver status rode every frame anyway (3.0 MB/min to a client subscribed
 // to no tags), because the churn was NESTED. Each element of Extra["nodes"]
 // carried a last-message stamp and a Sparkplug sequence number that step on
@@ -340,7 +340,7 @@ func hostLike(n int, tick int64) []DriverStatus {
 		id := fmt.Sprintf("RTU%02d", i)
 		devs = append(devs, DriverDevice{ID: id, Online: true, Detail: fmt.Sprintf("%d tags", 100+i)})
 		nodes = append(nodes, map[string]any{
-			"edgeNode": id, "group": "WRD", "online": true, "stale": false,
+			"edgeNode": id, "group": "WTP", "online": true, "stale": false,
 			"metrics": float64(100 + i), "bdSeq": float64(i % 7),
 			"birthMs": float64(1_700_000_000_000),
 			// The two free-runners, exactly as the host reported them.
@@ -349,8 +349,8 @@ func hostLike(n int, tick int64) []DriverStatus {
 		})
 	}
 	return []DriverStatus{{
-		Kind: "sparkplug-host", Name: "pomona-central",
-		Detail: "tcp://mqtt:1883 · PomonaWRD", State: "connected",
+		Kind: "sparkplug-host", Name: "riverbend-central",
+		Detail: "tcp://mqtt:1883 · RiverbendWTP", State: "connected",
 		Message: fmt.Sprintf("Consuming %d sites", n),
 		SinceMs: 1_700_000_000_000, AsOfMs: 1_700_000_000_000 + tick*250,
 		Metrics: []DriverMetric{

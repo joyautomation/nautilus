@@ -3,7 +3,7 @@ package ir
 import "testing"
 
 // levelT/motorT mirror the shape a real UDT tag test wants: a struct nested
-// two levels deep, exactly what Pomona WRD's Motor1Speed/LevelControl pair
+// two levels deep, exactly what Riverbend WTP's Motor1Speed/LevelControl pair
 // looks like — a member seeded per-tag, the rest zero.
 func levelStructDef() *StructDef {
 	sd := &StructDef{

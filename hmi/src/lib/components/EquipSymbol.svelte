@@ -17,7 +17,7 @@
 	//
 	// RUNNING is drawn as a tint by default — Ignition's own Image component
 	// has a `tint` property for exactly this (`#00FF0063`, a translucent green
-	// masked to the image's own alpha channel, verified against the Pomona
+	// masked to the image's own alpha channel, verified against the Riverbend
 	// AEP Perspective export's Motor 1 Speed and Globe Valve symbols) — so the
 	// metal shading still reads through the colour instead of a flat green
 	// silhouette. `runStyle="wash"` restores the older flat translucent box

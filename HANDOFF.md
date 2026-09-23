@@ -226,7 +226,7 @@ VS Code extension and any curl client depend on it. Guide:
 website/.../guides/streaming.md.
 
 Done 2026-08-24 (st-struct-pins, uncommitted): **the SSE frame floor** — the
-non-tag blocks gated like tags. Measured on the WRD host, every frame
+non-tag blocks gated like tags. Measured on the WTP host, every frame
 carried ~17.9 kB that had nothing to do with tags (driver status ~12.8 kB —
 55 device rows + `extra`; scan diagnostics ~5 kB; alarm summary), so a
 client filtered down to NO tags still pulled 4.35 MB/min. Now, for a client
@@ -281,7 +281,7 @@ offline node is queued per site and delivered once on its next birth
 (unless the birth already reports that value) instead of being dropped
 and re-raised by a next scan change-push never makes, and the driver
 implements `io.BatchReader`'s `ReadInputsInto`. Driving project:
-the Pomona WRD demo at `~/Development/pomona/wrd` — a ~60-site fleet is
+the Riverbend WTP demo at `~/Development/riverbend/wtp` — a ~60-site fleet is
 the real target this driver is being built for.
 
 Done 2026-08-24: **Per-tag quality on sparkplug-host** — `Driver.Quality()` implements `io.QualityReporter` (its seam ported from `st-struct-pins`' `io/quality.go`, byte-identical apart from the Memory-driver half that branch's differing `io.go` doesn't support here yet): NotConnected for a data binding never delivered (never birthed, or the metric a birth simply never carries), Stale for one with a value on file whose node/device is offline or gone stale, Good (omitted) once delivered and online; writable and companion tags are always Good.
@@ -351,15 +351,15 @@ Next, in rough priority:
    @joyautomation/nautilus-hmi (mini-scada's Versions page is the
    reference): commit list, diffs, activate button. The demo moment for
    the content calendar ("your PLC shows its own git log").
-3. **Alarm engine + fleet HMI patterns** — driven by the Pomona WRD demo
-   (`~/Development/pomona/wrd`): a real alarm/annunciation model over a
+3. **Alarm engine + fleet HMI patterns** — driven by the Riverbend WTP demo
+   (`~/Development/riverbend/wtp`): a real alarm/annunciation model over a
    sparkplug-host fleet (priorities, ack/shelve, per-site rollups), and
    the HMI components a multi-site SCADA screen actually needs beyond
    `DriverStatusPanel`. Worth a look while there: IEC 62923's silence-with-
    timer state and warning→alarm escalation (evaluated 2026-09-09 against
    OpenBridge; not adopted as code, the ISA-18.2 skeleton stays).
 4. **Remote counter RESET coil / task scan-order guarantee / remote-program FB
-   pin reads** — asks from a real ControlLogix transpile (see the Pomona
+   pin reads** — asks from a real ControlLogix transpile (see the Riverbend
    demo's sites/aep/README.md limitations table; abstract it as "a real
    ControlLogix transpile").
 5. **Alarm notifiers beyond log/webhook**.

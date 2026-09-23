@@ -1171,7 +1171,7 @@ func scanFor(t *testing.T, d *Driver, n int, over map[string]any) {
 }
 
 // TestMqttStartCommandsNothing is the unit-scale half of the regression the
-// PomonaSCADA demo found (host/README.md, "the host zeroes an edge's
+// RiverbendSCADA demo found (host/README.md, "the host zeroes an edge's
 // setpoints when it starts"). A host that connects to a group whose sites are
 // already online used to publish EVERY writable output once, still holding
 // the zero of its type because nobody had written it — and for a member

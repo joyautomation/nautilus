@@ -3,7 +3,7 @@ package server
 // SSE streaming: who is connected, what each of them is owed, and the three
 // ways a stream is made small enough for a tablet.
 //
-// The problem this file exists to solve was measured on the Pomona WRD
+// The problem this file exists to solve was measured on the Riverbend WTP
 // demo: 10,000-odd tags on the central host, /api/state 571 KB, and one SSE
 // client pulling ~2 MB every ten seconds — four full renderings of the
 // entire plant per second, whether or not anything moved. Fine for the one

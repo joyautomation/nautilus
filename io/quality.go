@@ -2,7 +2,7 @@ package io
 
 // Quality is how much a tag's value is worth believing — the thing every
 // real SCADA system carries beside the number and nautilus, until now, did
-// not. An HMI without it has to GUESS: the Pomona WRD screens infer "comms
+// not. An HMI without it has to GUESS: the Riverbend WTP screens infer "comms
 // bad" from a magic value (-9999, a stuck reading, a NaN), which is a
 // heuristic that goes wrong in both directions — a legitimately -9999-scaled
 // analog reads as dead, and a genuinely dead node whose last value was

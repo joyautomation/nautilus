@@ -712,7 +712,7 @@ silent no-op — is now one: `%s is a struct — init must be a mapping of
 member: value, not %s`. `internal/tagfile.Render` emits the same nested
 flow-style shape back out, so a generator (`nautilus eip tags`, `nautilus
 tags import-csv`) round-trips a struct's per-member init exactly like a
-hand-written one. This was Pomona WRD's motivating case: a site's ~55-line
+hand-written one. This was Riverbend WTP's motivating case: a site's ~55-line
 first-scan `CfgDone` block of UDT-field assignments — RAWMIN/RAWMAX/HHSP/…,
 `LVL.CTL1HSP`/`LVL.CTL1LSP` — collapses into the tag's own `init:`, in the
 manifest that already declares the tag.
