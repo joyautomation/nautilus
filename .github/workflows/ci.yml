@@ -86,10 +86,11 @@ jobs:
         with: {go-version: '1.24'}
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
+      # The VS Code download only, never a profile (run.ts makes a fresh one).
       - uses: actions/cache@v4
         with:
-          path: tools/vscode-iec/.vscode-test
-          key: vscode-test-${{ runner.os }}-${{ hashFiles('tools/vscode-iec/package-lock.json') }}
+          path: tools/vscode-iec/.vscode-test/vscode-*
+          key: vscode-download-${{ runner.os }}-${{ hashFiles('tools/vscode-iec/package-lock.json') }}
       - run: npm ci
       # The resolver against this OS's real filesystem (the ubuntu `npm test`
       # above only exercises Linux paths).

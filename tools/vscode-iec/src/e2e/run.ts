@@ -71,7 +71,16 @@ async function main(): Promise<void> {
         // The scratch HOME has no login keychain, and VS Code on macOS asks
         // the keychain for secret storage at startup; the prompt to create
         // one is invisible on CI and blocks the extension host forever.
-        launchArgs: [ws, "--disable-extensions", ...(process.platform === "darwin" ? ["--use-mock-keychain"] : [])],
+        // A fresh profile per scenario: the harness default lives under
+        // .vscode-test, which CI caches, and a restored profile left the
+        // window unresponsive at startup.
+        launchArgs: [
+          ws,
+          "--disable-extensions",
+          `--user-data-dir=${path.join(tmp, `profile-${expect}`)}`,
+          `--extensions-dir=${path.join(tmp, `extensions-${expect}`)}`,
+          ...(process.platform === "darwin" ? ["--use-mock-keychain"] : []),
+        ],
         extensionTestsEnv: {
           NAUTILUS_E2E_EXPECT: expect,
           HOME: home,
