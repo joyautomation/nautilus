@@ -3,6 +3,31 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.30] - 2026-09-23
+
+### Fixed
+
+- **SFC: a third parallel branch joins the convergence.** *+ parallel
+  branch* on a transition that already splits into `(Heat, Mix)` widened
+  the split but not the matching join, leaving the new step a dead end
+  (`nautilus sfc check` warned). The join now waits for it too, and the
+  edit is minimal: the new step lands beside its siblings, and only the
+  step-sets change, so the transition's comment and alignment survive.
+  (Needs the matching `nautilus` CLI.)
+- **SFC: alternative exits from one step no longer draw on top of each
+  other.** `Fill -> Aborted` and `Fill -> (Heat, Mix)` put their bars at the
+  same height, with one condition label over the other's bar. They are now
+  staggered in priority order, the higher-priority branch on top.
+- **SFC: named actions are readable.** Action-block references (`HeatCtrl`,
+  `CountBatch`) used the theme's focus-border colour as text colour, which
+  some themes (Night Owl) set to near the background. They use the link
+  colour now.
+- **SFC: the loop-back glyph clears a step's action rows** instead of
+  overlapping *+ action* on a step with three or more actions.
+- **SFC visual diff: a change inside an ACTION body shows.** The action
+  had no box of its own, so `T#3S -> T#5S` inside `Stir` marked nothing; the
+  rows that run it are now marked changed.
+
 ## [0.9.29] - 2026-09-23
 
 ### Fixed
