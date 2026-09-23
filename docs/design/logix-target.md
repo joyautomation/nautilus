@@ -143,7 +143,7 @@ This is the part that makes the project plausible rather than speculative.
 
 **Outside the repo:**
 
-- `~/Development/pomona/aep/l5xgen` — ~2.4k lines of pure-stdlib Python that
+- `~/Development/<client>/site-b/l5xgen` — ~2.4k lines of pure-stdlib Python that
   **generates and lints Studio 5000 L5X import files**, with every lesson from
   real import/verify failures baked in as a build-time check (pre-v36
   mnemonics, quoted CPT expressions, empty rungs, over-long descriptions,
@@ -561,7 +561,7 @@ FBD and SFC emission to L5X (sheet coordinates and wire routing), safety
 ## 10. Open questions
 
 - **Which Windows host is the production agent?** `rockwell-vm` is the lab.
-  Pomona's EWS is a *customer* machine — anything that runs there is a
+  the client's EWS is a *customer* machine — anything that runs there is a
   deployment decision with its own authorization, not a development choice. The
   spikes should not touch it.
 - **Is there a customer for Tier A, or is this a tool for our own delivery
@@ -604,28 +604,28 @@ FBD and SFC emission to L5X (sheet coordinates and wire routing), safety
   to serial 4260K18547. A second 30-day trial on the same host should not be
   counted on — one was already consumed and lapsed on 09-06.
 
-  **Decision (2026-09-20): renew Echo, funded by the AEP1 project, not by the
+  **Decision (2026-09-20): renew Echo, funded by the CLIENT1 project, not by the
   lab.** Quoted at ~$2,200/yr. As lab overhead it is poor value — it would be
   the only subscription among otherwise permanent activations, and three of the
-  four Phase 0 spikes do not need it. As a **delivery** cost on AEP1 it is
+  four Phase 0 spikes do not need it. As a **delivery** cost on CLIENT1 it is
   justified, for three reasons a bench controller cannot answer:
   - **Full-size programs.** A used CompactLogix 5370 L1 (1769-L18ER-BB1B, the
     hardware alternative considered) has 512 KB of user memory. Staging a real
     converted program before a cutover is impossible on it. Echo has no such
     ceiling.
-  - **The right processor family.** AEP1 targets redundant 1756-L81E — a
+  - **The right processor family.** CLIENT1 targets redundant 1756-L81E — a
     ControlLogix 5580. Echo emulates 5580/5590/5380/GuardLogix at v33–v38; the
     L18ER is the previous generation at v30–v35.
   - **Several processor types from one activation** (up to 17 emulated
     controllers per license), which is also what a Tier B conformance harness
     would need later.
 
-  The same activation then serves AEP1 delivery, the Phase 0 spikes, the Tier B
+  The same activation then serves CLIENT1 delivery, the Phase 0 spikes, the Tier B
   harness and content recording — the multi-use case is what makes the number
   reasonable.
 
   **Open risk on that justification: does Echo emulate controller
-  *redundancy*?** AEP1 is a redundant pair (this is why `l5xgen` forces
+  *redundancy*?** CLIENT1 is a redundant pair (this is why `l5xgen` forces
   periodic-only tasks and rejects local-chassis modules). Echo emulates
   multiple controllers in a virtual chassis, but redundancy requires a 1756-RM
   pair and it is not established that Echo reproduces it. **Confirm before
@@ -633,7 +633,7 @@ FBD and SFC emission to L5X (sheet coordinates and wire routing), safety
   which is most of the value, but the redundancy behaviour stays untested until
   the real pair is available.
 
-  **Timing:** the year-clock starts at purchase. If AEP1's staging phase is
+  **Timing:** the year-clock starts at purchase. If CLIENT1's staging phase is
   weeks out, buying then rather than now pushes coverage further into the
   nautilus Tier B window at no cost — unless a fiscal or PO constraint argues
   for buying while the budget exists.
@@ -677,7 +677,7 @@ counts are changed lines, `difflib` unified with zero context.
 | Pair | Total lines | Raw diff | + attr-norm | + drop L5K |
 |---|---:|---:|---:|---:|
 | `DemoLine` vs `DemoLine.v80` — one setpoint changed, 85.0 → 80.0 | 14,488 | **4** | 4 | **2** |
-| `AEP1_CLX` vs `AEP1_CLX_v37` — same project, Studio version upgrade | 6,387 | **6** | 6 | 6 |
+| `CLIENT1_CLX` vs `CLIENT1_CLX_v37` — same project, Studio version upgrade | 6,387 | **6** | 6 | 6 |
 
 **The format is far more diff-friendly than expected.** A single setpoint edit
 surfaces as 4 changed lines in 14,488 — 0.03%. A *Studio version upgrade* of a
@@ -735,7 +735,7 @@ it with the Go normalizer that Phase 2 and Phase 3 both need.*
 ## 12. Where the licensed Studio 5000 actually is
 
 Incidental but load-bearing for Phase 1. The ACD backups staged on the lab VM
-are named `Pomona_RTU06v38.EWS2.admin.BAK000.acd` — Logix Designer stamps the
+are named `Site_RTU06v38.EWS2.<user>.BAK000.acd` — Logix Designer stamps the
 **host and user** into backup filenames, so those projects were last edited on
 **EWS2**, the customer's engineering workstation, by `admin`.
 
@@ -802,7 +802,7 @@ dependency, since that is the half a customer can deploy for nothing.
 **Actions, in one conversation with the distributor:**
 1. SDK entitlement (`LDSDK.EXE`) for `DESKTOP-07VCTIN` — confirm it is covered
    by the existing Professional license.
-2. Echo renewal (`LGXNGEMU.SIM`) on AEP1 — see §10.
+2. Echo renewal (`LGXNGEMU.SIM`) on CLIENT1 — see §10.
 3. Ask what both look like for a *customer-installed* agent, since that is the
    Tier A deployment story.
 
@@ -980,7 +980,7 @@ in the Activations folder, and all the perpetual software continuing to work.
 **Therefore: this is a renewal, not a repair.** No rehost, no re-activation of
 a broken binding, no separate SDK purchase to chase. The SDK and Echo came in
 together and lapsed together, so one renewal should restore both — which also
-means §10's AEP1-funded Echo decision should be scoped to cover the SDK
+means §10's CLIENT1-funded Echo decision should be scoped to cover the SDK
 entitlement in the same transaction.
 
 **One check that would confirm it:** on the machine whose Rockwell container is
@@ -997,7 +997,7 @@ multi-hour one.
 ### 13.5 ECHO1: the SDK runs, and the blocker is not licensing
 
 `echo-vm` (hostname **ECHO1**, 10.154.92.210, incus description *"FactoryTalk
-Logix Echo FAT rig — Pomona AEP"*) turns out to be a better SDK host than
+Logix Echo FAT rig — client FAT rig"*) turns out to be a better SDK host than
 `rockwell-vm`, and testing there moved the failure past licensing entirely.
 
 Setup performed (2026-09-20):
@@ -1011,7 +1011,7 @@ Setup performed (2026-09-20):
   `…\Logix Designer SDK\dotnet\Examples\src\OpenAndSaveFile` → `C:\s3build`.
   **Build succeeded.**
 
-Running it against `Z:\AEP1_SIM.ACD` gives a *different* error from
+Running it against `Z:\CLIENT1_SIM.ACD` gives a *different* error from
 `rockwell-vm` — no licensing complaint at all:
 
 ```
@@ -1048,7 +1048,7 @@ third distinct licensing/auth failure mode found in one session, and a customer
 hitting any of them would see a generic error.
 
 **Next step on ECHO1:** configure the FactoryTalk Local Directory from a
-console session, then re-run `C:\s3build\OpenAndSaveFile.exe Z:\AEP1_SIM.ACD
+console session, then re-run `C:\s3build\OpenAndSaveFile.exe Z:\CLIENT1_SIM.ACD
 C:\s3\run1.L5X false`. If it passes, S2a, S4 and the export-determinism half of
 S3 all unblock on this host — and ECHO1, not `rockwell-vm`, becomes the SDK
 box.
@@ -1085,7 +1085,7 @@ and live monitoring — is high-feasibility and mostly built. **Tier B**
 | **ECHO1** (`echo-vm`, 10.154.92.210) | `ssh echo1` (alias added; key `~/.ssh/echo_vm`, user `windows`) | **The SDK box.** Licensed, FactoryTalk Local Directory configured, .NET SDK 10.0.401 at `C:\dotnet10`, built `OpenAndSaveFile.exe` at `C:\s3build`. Logix Echo installed but its activation lapsed 2026-09-06. |
 | **rockwell-vm** (`ssh rockwell`, 10.154.92.130) | working | **Not licensed for the SDK.** Its CodeMeter Rockwell container is healthy and *empty* (§13.4). Logix Designer's GUI works via FlexNet; the SDK does not. Don't burn time here. |
 
-`Z:` on both VMs is the same host directory (`pomona/aep/conversion/output`).
+`Z:` on both VMs is the same host directory (`<client>/site-b/conversion/output`).
 Files there can be locked by a Logix Designer session on the *other* VM —
 copy locally before converting, or make sure nothing has the ACD open.
 
@@ -1130,8 +1130,8 @@ Corpus to develop against (~60 files, ~30 MB):
   `DemoProgram.L5X` (a *partial* export, `TargetType="Program"` — the shape a
   partial import takes, so it doubles as an emitter template). **Generic —
   safe as committed test fixtures.**
-- `~/Development/pomona/wrd/docs/source/l5x/` (52 files) and
-  `~/Development/pomona/aep/conversion/output/` — **client work, Tier 3.**
+- `~/Development/<client>/site-a/docs/source/l5x/` (52 files) and
+  `~/Development/<client>/site-b/conversion/output/` — **client work, Tier 3.**
   Fine as local test input; never committed as fixtures, never on camera. Read
   `content/sourcing.md` before publishing anything derived from them.
 
@@ -1141,8 +1141,8 @@ it is already used in production by `eip/codegen`.
 
 ### Decisions taken, so they don't get reopened
 
-- **Echo renewal funded by AEP1, not the lab** (§10) — with the open question
-  of whether Echo emulates 1756-RM redundancy, which AEP1 needs. Scope the
+- **Echo renewal funded by CLIENT1, not the lab** (§10) — with the open question
+  of whether Echo emulates 1756-RM redundancy, which CLIENT1 needs. Scope the
   renewal to cover the **SDK entitlement** too; an Echo node alone leaves you
   unable to open an ACD.
 - **Bench hardware (1769-L18ER-BB1B) is optional, not a blocker** — kept for
@@ -1651,7 +1651,7 @@ service account. None tested.
 **Unrelated and working:** opening the Echo dashboard restored the
 emulated controller's CIP binding (it came back on `:44818` bound to the
 Tailscale address after the reboot had left it on loopback only), and
-`nautilus eip browse` reads **673 AEP1_SIM tags** from Linux again. The
+`nautilus eip browse` reads **673 CLIENT1_SIM tags** from Linux again. The
 online plane needs none of the above.
 
 
@@ -1695,7 +1695,7 @@ call is triggered, and read what FTSP reports. If that is empty too, this
 is a Rockwell support case, not a nautilus one.
 
 **None of this blocks the rest of the work.** The online plane is
-unaffected and fully working — `nautilus eip browse` reads 673 AEP1_SIM
+unaffected and fully working — `nautilus eip browse` reads 673 CLIENT1_SIM
 tags from Linux — and `lang/l5x` needs no Rockwell software at all.
 
 
