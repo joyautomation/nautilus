@@ -40,6 +40,45 @@ the reference host and both fail:
 framework-dependent build launched with `DOTNET_ROOT_X64` and no plain
 `DOTNET_ROOT`.** Ship that.
 
+## Install
+
+`install.ps1` does the whole setup and proves it worked. Run it in an
+**elevated** PowerShell on the licensed Windows machine:
+
+```powershell
+cd tools\logixd
+.\install.ps1                                   # loopback, port 8188
+.\install.ps1 -Listen 0.0.0.0 -Port 8188        # reachable from your workstation
+.\install.ps1 -Uninstall
+```
+
+It runs preflight, builds, mints a token, registers the scheduled task, adds
+a firewall rule if it is not on loopback, then starts the agent and prints
+the licensing probe gate by gate. Re-running it is an upgrade: the old agent
+is stopped first.
+
+Two things it will not let you get wrong:
+
+- **It refuses to install while `DOTNET_ROOT` is set**, and prints the two
+  commands that fix it. A plain `DOTNET_ROOT` pointing at an x64 .NET breaks
+  FactoryTalk authentication through the 32-bit `FtspAdapterLDSDK.exe`, and
+  the only symptom is a `TimeoutException` that names nothing. Use
+  `DOTNET_ROOT_X64`.
+- **The token is per install** (`%ProgramData%\logixd\<task>.token`,
+  administrators only) and is deleted on uninstall. It is a bearer token for
+  a service that can download code to a controller.
+
+`-TaskName` installs a second agent alongside the first without disturbing
+it — a second SDK revision on one box, or a test.
+
+### The interactive-session constraint
+
+The agent is registered as an **interactive scheduled task at logon, not a
+Windows service**, because FactoryTalk authentication does not work from
+session 0. Somebody must be logged in at the console for logixd to run, and
+after a reboot it will not come back until they are. That is a property of
+the SDK, not of the packaging -- see the section above.
+
 ## Build
 
 Requires the .NET 10 SDK and the Logix Designer SDK's NuGet package, which
