@@ -349,3 +349,37 @@ test('diffSfc: an identical model diffs with no added/removed/changed elements',
 	for (const s of merged.steps) assert.equal(s.status, undefined);
 	for (const t of merged.trans) assert.equal(t.status, undefined);
 });
+
+// The shipped example (examples/tank-batch-sfc): abort goes FORWARD to its
+// own Aborted step, so Fill has two forward exits — an alternative
+// divergence — and Drain carries three actions.
+function tankBatchWithAborted(): SfcModel {
+	const m = tankBatchModel();
+	m.steps.push({ id: 'st:Aborted', name: 'Aborted', initial: false, line: 21, endLine: 22 });
+	m.trans.find((t) => t.id === 'tr:t_abort')!.to = ['Aborted'];
+	m.steps.find((s) => s.id === 'st:Drain')!.actions = [
+		{ qualifier: 'N', target: 'RunLamp' },
+		{ qualifier: 'N', target: 'DrainValve' },
+		{ qualifier: 'P1', target: 'CountBatch' }
+	] as SfcModel['steps'][number]['actions'];
+	return m;
+}
+
+test('layoutSfc: alternative exits from one step get their own bars, priority on top', () => {
+	const layout = layoutSfc(tankBatchWithAborted());
+	const abort = layout.trans.find((r) => r.t.id === 'tr:t_abort')!;
+	const full = layout.trans.find((r) => r.t.id === 'tr:t_full')!;
+	assert.equal(abort.jump, undefined);
+	assert.ok(abort.barY < full.barY, `t_abort (declared first) bar ${abort.barY} should sit above t_full's ${full.barY}`);
+	assert.ok(full.barY - abort.barY >= 20, 'the two bars must not draw on top of each other');
+	// A leftward-only bar labels its own run, not the shared stem on the right.
+	assert.ok(abort.condX < abort.barX2, `t_abort's label at x=${abort.condX} sits on the shared stem`);
+});
+
+test('layoutSfc: a jump glyph clears the step\'s action table', () => {
+	const layout = layoutSfc(tankBatchWithAborted());
+	const drain = layout.steps.find((p) => p.id === 'st:Drain')!;
+	const tEmpty = layout.trans.find((r) => r.t.id === 'tr:t_empty')!;
+	// three rows + the "+ action" row, 16 px each
+	assert.ok(tEmpty.jump!.y - 9 >= drain.y + 4 * 16, `jump at ${tEmpty.jump!.y} overlaps Drain's action rows`);
+});

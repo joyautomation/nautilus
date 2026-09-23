@@ -196,6 +196,9 @@ export function assocTableHeight(s: SfcStep): number {
 	return n === 0 ? 0 : n * G.ASSOC_ROW_H + 6;
 }
 
+// Vertical spacing between the staggered bars of an alternative divergence.
+const ALT_BAR_GAP = 26;
+
 export type Leg = { x: number; y1: number; y2: number };
 
 export type TransRoute = {
@@ -319,6 +322,17 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 
 	const centerX = (p: PlacedStep) => p.x + p.w / 2;
 
+	// Forward transitions grouped by their exact source set, in declaration
+	// order — the alternative-divergence groups the bar stagger below needs.
+	const sourceKey = (t: SfcTransition) => t.from.map((n) => n.toLowerCase()).sort().join(',');
+	const forwardFrom = new Map<string, SfcTransition[]>();
+	for (const t of model.trans ?? []) {
+		const resolved = [...t.from, ...t.to].every((n) => byId.has(stepId(n)));
+		if (!resolved || !isForward(t, rankOf)) continue;
+		const k = sourceKey(t);
+		forwardFrom.set(k, [...(forwardFrom.get(k) ?? []), t]);
+	}
+
 	const trans: TransRoute[] = [];
 	// Transitions whose FROM and/or TO don't fully resolve — collected here,
 	// positioned into OrphanChips once every step's final position is known.
@@ -344,7 +358,11 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 				condY: 0,
 				jump: {
 					x: centerX(anchor),
-					y: anchor.y + anchor.h + 14,
+					// Below the box AND below its action table (plus the
+					// "+ action" row the editor draws under it): a step with
+					// three actions reaches further down than the box, and
+					// the glyph's label runs right, into that column.
+					y: anchor.y + Math.max(anchor.h, assocTableHeight(anchor.step) + G.ASSOC_ROW_H) + 14,
 					label: '↩ ' + t.to.join(', '),
 				},
 			});
@@ -352,10 +370,21 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 		}
 		const srcBottom = Math.max(...sources.map((p) => p.y + p.h));
 		const tgtTop = Math.min(...targets.map((p) => p.y));
-		const barY = (srcBottom + tgtTop) / 2;
+		// Forward transitions leaving the SAME source set (an alternative
+		// divergence, e.g. Fill -> Aborted vs Fill -> (Heat, Mix)) would all
+		// put their bar at the same midpoint — drawn on top of each other,
+		// with one condition label sitting on the other's bar. Stagger them
+		// in declaration (= priority) order, highest priority on top.
+		const group = forwardFrom.get(sourceKey(t)) ?? [t];
+		const slot = group.indexOf(t) - (group.length - 1) / 2;
+		const barY = (srcBottom + tgtTop) / 2 + slot * ALT_BAR_GAP;
 		const xs = [...sources, ...targets].map(centerX);
 		const barX1 = Math.min(...xs);
 		const barX2 = Math.max(...xs);
+		// A bar that only runs LEFT of its source would label its right end —
+		// which is the source's own stem, where a sibling's bar continues.
+		// Label it above its own left run instead.
+		const leftOnly = group.length > 1 && Math.max(...targets.map(centerX)) < Math.min(...sources.map(centerX));
 		trans.push({
 			t,
 			barY,
@@ -364,8 +393,8 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 			double: t.kind === 'simDiverge' || t.kind === 'simConverge',
 			legsIn: sources.map((p) => ({ x: centerX(p), y1: p.y + p.h, y2: barY })),
 			legsOut: targets.map((p) => ({ x: centerX(p), y1: barY, y2: p.y })),
-			condX: barX2 + 10,
-			condY: barY,
+			condX: leftOnly ? barX1 + 10 : barX2 + 10,
+			condY: leftOnly ? barY - 12 : barY,
 		});
 	}
 

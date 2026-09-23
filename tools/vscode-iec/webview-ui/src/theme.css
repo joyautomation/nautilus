@@ -28,6 +28,10 @@
 	--nx-border: var(--vscode-editorWidget-border, rgba(128, 128, 128, 0.4));
 	--nx-accent: var(--vscode-focusBorder, #58a6ff);
 	--nx-blue: var(--vscode-charts-blue, #58a6ff);
+	/* link-like TEXT (named ACTION references). Not --nx-accent: that is
+	   focusBorder, a border colour, and Night Owl sets it to #122d42 —
+	   navy text on a navy canvas. */
+	--nx-link: var(--vscode-textLink-foreground, #58a6ff);
 
 	/* status */
 	--nx-ok: var(--vscode-charts-green, #64d88a);

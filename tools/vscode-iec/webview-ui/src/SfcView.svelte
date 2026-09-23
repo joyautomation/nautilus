@@ -641,7 +641,7 @@
 						<rect x={r.barX1 - 6} y={r.barY - 8} width={r.barX2 - r.barX1 + 12} height={(r.double ? 20 : 16)} class="barhit" />
 						<text
 							x={r.condX}
-							y={r.barY + 4}
+							y={r.condY + 4}
 							class="cond"
 							ondblclick={(e) => editCondition(e, r.t, { x: (e.currentTarget as Element).getBoundingClientRect().left, y: (e.currentTarget as Element).getBoundingClientRect().top, w: 160 })}
 						>{r.t.cond || '…'}</text>
@@ -702,8 +702,11 @@
 					<g class="assoctable" transform="translate({p.w + 12}, 0)">
 						{#each p.step.actions ?? [] as a, i (i)}
 							{@const isAction = !!actionFor(a.target)}
+							<!-- An ACTION block has no box of its own on the chart, so a
+							     diff of its BODY (T#3S -> T#5S inside Stir) shows on
+							     every row that runs it; otherwise it marks nothing. -->
 							<g
-								class="assocrow"
+								class="assocrow {actionFor(a.target)?.status ?? ''}"
 								class:selected={isSelAssoc(p.id, i)}
 								transform="translate(0, {i * 16})"
 								onclick={(e) => selectAssoc(e, p.id, i)}
@@ -912,6 +915,14 @@
 	.step.changed .box {
 		stroke: var(--nx-changed);
 	}
+	.assocrow.changed .assoctarget {
+		fill: var(--nx-changed);
+		font-weight: 700;
+	}
+	.assocrow.added .assoctarget {
+		fill: var(--nx-added);
+		font-weight: 700;
+	}
 	.stepname {
 		font-family: var(--nx-mono);
 		font-size: 12px;
@@ -943,7 +954,7 @@
 		fill: var(--nx-ui-ink);
 	}
 	.assoctarget.isaction {
-		fill: var(--nx-accent);
+		fill: var(--nx-link);
 		text-decoration: underline dotted;
 	}
 	.assocdel {
@@ -967,7 +978,7 @@
 	}
 	.assocadd:hover {
 		opacity: 1;
-		fill: var(--nx-accent);
+		fill: var(--nx-link);
 	}
 	.flowline {
 		stroke: var(--nx-ink);
