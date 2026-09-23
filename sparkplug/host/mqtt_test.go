@@ -27,6 +27,7 @@ import (
 	mqttsrv "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/listeners"
+	"github.com/mochi-mqtt/server/v2/packets"
 
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -70,6 +71,36 @@ func startBroker(t *testing.T, addr string) (*mqttsrv.Server, string) {
 	}
 	go func() { _ = srv.Serve() }()
 	return srv, tcp.Address()
+}
+
+// closeBroker stops a startBroker broker. Use it instead of srv.Close, which
+// can deadlock in mochi-mqtt v2.7.9 (mochi-mqtt/server#488, unfixed
+// upstream): Close's client sweep, Clients.GetByListener, read-locks the
+// client map and then read-locks it again through Len, so a client
+// disconnecting at that moment (Clients.Delete, a writer queued between the
+// two) blocks both forever. CI hung ten minutes on exactly that.
+//
+// TCP.Close runs its client sweep only the first time a listener closes, so
+// closing it here with a no-op sweep takes GetByListener out of srv.Close
+// entirely. The clients are disconnected from GetAll's copy instead (one
+// read lock), repeatedly while srv.Close waits for their goroutines, which
+// also catches one accepted just before the listener shut.
+func closeBroker(srv *mqttsrv.Server) error {
+	srv.Listeners.Close("t", func(string) {})
+	done := make(chan error, 1)
+	go func() { done <- srv.Close() }()
+	for {
+		for _, cl := range srv.Clients.GetAll() {
+			if !cl.Closed() {
+				_ = srv.DisconnectClient(cl, packets.ErrServerShuttingDown)
+			}
+		}
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }
 
 func brokerURL(addr string) string { return "tcp://" + addr }
@@ -324,7 +355,7 @@ func TestDriverNewRejectsBadConfig(t *testing.T) {
 
 func TestMqttStateBirthMatchesWill(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-state", "spBv1.0/STATE/#")
 	cfg := testConfig(addr, "h1")
@@ -376,7 +407,7 @@ func TestMqttStateBirthMatchesWill(t *testing.T) {
 
 func TestMqttStateFormBothPublishesLegacy(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-both", "spBv1.0/STATE/#", "STATE/#")
 	cfg := testConfig(addr, "h-both")
@@ -396,7 +427,7 @@ func TestMqttStateFormBothPublishesLegacy(t *testing.T) {
 
 func TestMqttPassiveConsumerPublishesNoState(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-passive", "spBv1.0/STATE/#", "spBv1.0/G/NCMD/+")
 	cfg := testConfig(addr, "h-passive")
@@ -431,7 +462,7 @@ func TestMqttPassiveConsumerPublishesNoState(t *testing.T) {
 // TestMqttPassiveConsumerPublishesNoState's job.
 func TestMqttPassiveConsumerCanRequestRebirth(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obsState := newObserver(t, addr, "obs-passive-state", "spBv1.0/STATE/#")
 	obsCmd := newObserver(t, addr, "obs-passive-cmd", "spBv1.0/G/NCMD/+")
@@ -452,7 +483,7 @@ func TestMqttPassiveConsumerCanRequestRebirth(t *testing.T) {
 
 func TestMqttNBirthReachesReadInputs(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	d := startDriver(t, testConfig(addr, "h-nbirth"))
 	waitConnected(t, d)
@@ -514,7 +545,7 @@ func waitForValue(t *testing.T, d *Driver, tag string, ok func(any) bool) map[st
 
 func TestMqttRebirthOnStart(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-rebirth", "spBv1.0/G/NCMD/+")
 	d := startDriver(t, testConfig(addr, "h-rebirth"))
@@ -550,7 +581,7 @@ func TestMqttRebirthOnStart(t *testing.T) {
 
 func TestMqttWriteOutputsSendsDCMD(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-dcmd", "spBv1.0/G/DCMD/+/+")
 	d := startDriver(t, testConfig(addr, "h-dcmd"))
@@ -647,7 +678,7 @@ func memberOf(t *testing.T, tm *sparkplug.Template, name string) sparkplug.Metri
 // The whole point: the edge merges it, so the members it is driving survive.
 func TestMqttWriteMemberSendsPartialTemplate(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-member", "spBv1.0/G/NCMD/+")
 	d := startDriver(t, testConfig(addr, "h-member"))
@@ -692,7 +723,7 @@ func TestMqttWriteMemberSendsPartialTemplate(t *testing.T) {
 // its own TemplateRef.
 func TestMqttWriteNestedMembersCoalesce(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-nested", "spBv1.0/G/NCMD/+")
 	d := startDriver(t, testConfig(addr, "h-nested"))
@@ -774,7 +805,7 @@ func waitQueued(t *testing.T, d *Driver, n int) Status {
 // operator's setpoint would simply be lost.
 func TestMqttWriteToOfflineNodeIsQueued(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-queued", "spBv1.0/G/DCMD/+/+")
 	d := startDriver(t, testConfig(addr, "h-queued"))
@@ -805,7 +836,7 @@ func TestMqttWriteToOfflineNodeIsQueued(t *testing.T) {
 // goes out, once, carrying the value the operator asked for.
 func TestMqttQueuedWriteIsDeliveredOnBirth(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-flush", "spBv1.0/G/DCMD/+/+")
 	d := startDriver(t, testConfig(addr, "h-flush"))
@@ -847,7 +878,7 @@ func TestMqttQueuedWriteIsDeliveredOnBirth(t *testing.T) {
 // disagrees goes on the wire.
 func TestMqttQueuedWriteTheSiteAlreadyHoldsIsNotSent(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-settled", "spBv1.0/G/NCMD/+")
 	d := startDriver(t, testConfig(addr, "h-settled"))
@@ -961,7 +992,7 @@ func TestQueueOfflineIsBoundedPerNode(t *testing.T) {
 
 func TestMqttRebirthTagRisingEdge(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-rbtag", "spBv1.0/G/NCMD/+")
 	cfg := testConfig(addr, "h-rbtag")
@@ -986,7 +1017,7 @@ func TestMqttRebirthTagRisingEdge(t *testing.T) {
 
 func TestDriverRequestRebirth(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-req", "spBv1.0/G/NCMD/+")
 	cfg := testConfig(addr, "h-req")
@@ -1007,7 +1038,7 @@ func TestDriverRequestRebirth(t *testing.T) {
 
 func TestMqttStopPublishesStateDeath(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-death", "spBv1.0/STATE/#")
 	d, err := New(testManifest(), testConfig(addr, "h-death"), WithLogger(quietLogger()))
@@ -1047,7 +1078,7 @@ func TestMqttReconnectsAfterBrokerRestart(t *testing.T) {
 	d := startDriver(t, testConfig(addr, "h-reconnect"))
 	waitConnected(t, d)
 
-	if err := srv.Close(); err != nil {
+	if err := closeBroker(srv); err != nil {
 		t.Fatalf("close broker: %v", err)
 	}
 	deadline := time.Now().Add(8 * time.Second)
@@ -1059,7 +1090,7 @@ func TestMqttReconnectsAfterBrokerRestart(t *testing.T) {
 	}
 
 	srv2, _ := startBroker(t, addr)
-	t.Cleanup(func() { _ = srv2.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv2) })
 
 	// The reconnect loop backs off 1s → 30s, so allow a couple of attempts.
 	waitConnected(t, d)
@@ -1079,7 +1110,7 @@ func TestMqttReconnectsAfterBrokerRestart(t *testing.T) {
 
 func TestStatusShape(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	d := startDriver(t, testConfig(addr, "h-status"))
 	waitConnected(t, d)
@@ -1181,7 +1212,7 @@ func scanFor(t *testing.T, d *Driver, n int, over map[string]any) {
 // Scanning an output set nobody has touched must put NOTHING on the wire.
 func TestMqttStartCommandsNothing(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-nocmd", "spBv1.0/G/NCMD/+", "spBv1.0/G/DCMD/+/+")
 	d := startDriver(t, testConfig(addr, "h-nocmd"))
@@ -1204,7 +1235,7 @@ func TestMqttStartCommandsNothing(t *testing.T) {
 // it back afterwards.
 func TestMqttOperatorWritePublishesOnce(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-once", "spBv1.0/G/DCMD/+/+")
 	d := startDriver(t, testConfig(addr, "h-once"))
@@ -1241,7 +1272,7 @@ func TestMqttReconnectDoesNotReplayOutputs(t *testing.T) {
 	over := map[string]any{"W6_PLC1_Pump_SpeedSP": 42.5, "W6_Pump1_Speed": 61.5}
 	scanFor(t, d, 2, over)
 
-	if err := srv.Close(); err != nil {
+	if err := closeBroker(srv); err != nil {
 		t.Fatalf("close broker: %v", err)
 	}
 	deadline := time.Now().Add(8 * time.Second)
@@ -1253,7 +1284,7 @@ func TestMqttReconnectDoesNotReplayOutputs(t *testing.T) {
 	}
 
 	srv2, _ := startBroker(t, addr)
-	t.Cleanup(func() { _ = srv2.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv2) })
 	waitConnected(t, d)
 
 	// Watch the NEW session only. The site is online again, so a replay would
@@ -1275,7 +1306,7 @@ func TestMqttReconnectDoesNotReplayOutputs(t *testing.T) {
 // is a no-op, and writing anything else goes out once.
 func TestMqttMemberBaselineAdoptsLiveValue(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-adopt", "spBv1.0/G/NCMD/+")
 	d := startDriver(t, testConfig(addr, "h-adopt"))
@@ -1367,7 +1398,7 @@ func pushScan(t *testing.T, d *Driver, over map[string]any) {
 //	nothing moves          → the runtime calls nothing, and neither do we
 func TestMqttChangePushCadence(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	obs := newObserver(t, addr, "obs-push", "spBv1.0/G/NCMD/+", "spBv1.0/G/DCMD/+/+")
 	d := startDriver(t, testConfig(addr, "h-push"))
@@ -1476,7 +1507,7 @@ var _ batchReader = (*Driver)(nil)
 // caller had that the driver does not is removed, never served as stale).
 func TestReadInputsIntoMatchesReadInputs(t *testing.T) {
 	srv, addr := startBroker(t, "")
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() { _ = closeBroker(srv) })
 
 	d, err := New(testManifest(), testConfig(addr, "h-into"), WithLogger(quietLogger()))
 	if err != nil {
