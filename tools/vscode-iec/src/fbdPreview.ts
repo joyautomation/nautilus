@@ -12,6 +12,7 @@
 // per-document into VS Code's editor lifecycle.
 
 import * as vscode from "vscode";
+import { cliCommand, cliMissingMessage, isMissing } from "./cli";
 import { execFile } from "child_process";
 import * as path from "path";
 import type { ProgramInfo } from "./onlineEdit";
@@ -90,7 +91,7 @@ const DEBOUNCE_MS = 150;
 // ── CLI seam ───────────────────────────────────────────────────────────────
 
 function cliPath(): string {
-  return vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "naut");
+  return cliCommand();
 }
 
 /** Run `naut fbd graph -` over source text. */
@@ -110,9 +111,7 @@ export function fbdGraph(source: string): Promise<{ model: FbdModel } | { error:
         } catch {
           /* fall through */
         }
-        if (err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-          return resolve({ error: cliMissing(cli) });
-        }
+        if (isMissing(err)) return resolve({ error: cliMissingMessage(cli) });
         resolve({ error: err ? String(err) : "naut fbd graph: empty output" });
       }
     );
@@ -136,21 +135,12 @@ function fbdEdit(source: string, op: FbdEditOp): Promise<{ edits: FbdTextEdit[] 
         } catch {
           /* fall through */
         }
-        if (err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-          return resolve({ error: cliMissing(cli) });
-        }
+        if (isMissing(err)) return resolve({ error: cliMissingMessage(cli) });
         resolve({ error: err ? String(err) : "naut fbd edit: empty output" });
       }
     );
     child.stdin?.end(JSON.stringify({ source, op }));
   });
-}
-
-function cliMissing(cli: string): string {
-  return (
-    `Couldn't run "${cli}". Install the nautilus CLI:\n` +
-    "go install github.com/joyautomation/nautilus/cmd/naut@latest"
-  );
 }
 
 // ── shared webview session logic ───────────────────────────────────────────

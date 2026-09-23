@@ -362,7 +362,7 @@
         "nautilus.cliPath": {
           "type": "string",
           "default": "naut",
-          "description": "Path to the nautilus CLI binary (provides the language server via `naut lsp`). The command is `naut`, not `nautilus` -- GNOME's file manager owns that name on Linux. Install with: go install github.com/joyautomation/nautilus/cmd/naut@latest"
+          "description": "The nautilus CLI, `naut` (provides the language server via `naut lsp`, and the diagram editors). The command is `naut`, not `nautilus` -- GNOME's file manager owns that name on Linux. A bare name is looked up on PATH, then in $GOBIN, $GOPATH/bin, ~/go/bin, ~/.local/bin, /usr/local/bin, /opt/homebrew/bin (%LOCALAPPDATA%\\nautilus on Windows); set a full path to skip the search."
         },
         "nautilus.runtimeUrl": {
           "type": "string",
@@ -484,7 +484,7 @@
     "vscode:prepublish": "npm run compile && npm run build:webview",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/scan.test.js out/programSync.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js && npm --prefix webview-ui run test",
+    "test": "npm run compile && node --test out/scan.test.js out/cliResolve.test.js out/programSync.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js && npm --prefix webview-ui run test",
     "build:webview": "npm --prefix webview-ui run build"
   },
   "dependencies": {

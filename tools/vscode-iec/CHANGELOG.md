@@ -3,6 +3,25 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **The CLI is found when VS Code doesn't see your shell's PATH.** VS Code
+  started from a desktop launcher or dock never reads `~/.bashrc` or
+  `~/.zshrc`, so a `go install`ed `naut` that answers in a terminal was
+  invisible to the extension: no diagnostics, and every diagram said the CLI
+  was missing. A bare `nautilus.cliPath` is now looked up on PATH and then in
+  `$GOBIN`, `$GOPATH/bin`, `~/go/bin`, `~/.local/bin`, `/usr/local/bin`,
+  `/opt/homebrew/bin`, and `%LOCALAPPDATA%\nautilus` on Windows. Changing
+  the setting restarts the language server.
+- **A missing CLI says what to do.** The warning offers *Locate naut…*
+  (pick the binary; saved to your user settings), *Install steps*, and
+  *Copy go install*, and the **nautilus** output channel lists every
+  directory searched. A Flatpak VS Code, whose sandbox can't run host
+  programs at all, is recognised and told so instead. The ladder and SFC
+  editors now report a missing CLI like the FBD editor does.
+
 ## [0.9.31] - 2026-09-23
 
 ### Changed

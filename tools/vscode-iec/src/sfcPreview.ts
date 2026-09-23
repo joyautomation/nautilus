@@ -15,6 +15,7 @@
 
 import { execFile } from "child_process";
 import * as vscode from "vscode";
+import { cliCommand, cliMissingMessage, isMissing } from "./cli";
 import { LiveValues } from "./liveValues";
 import {
   addSyncTarget,
@@ -29,7 +30,7 @@ import {
 
 /** Run `naut sfc graph -` over source text. */
 function sfcGraph(source: string): Promise<{ model?: unknown; error?: string }> {
-  const cli = vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "naut");
+  const cli = cliCommand();
   return new Promise((resolve) => {
     const child = execFile(cli, ["sfc", "graph", "-"], { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
       try {
@@ -39,9 +40,7 @@ function sfcGraph(source: string): Promise<{ model?: unknown; error?: string }> 
       } catch {
         // fall through
       }
-      if (err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-        return resolve({ error: `Couldn't run "${cli}". Install the nautilus CLI: go install github.com/joyautomation/nautilus/cmd/naut@latest` });
-      }
+      if (isMissing(err)) return resolve({ error: cliMissingMessage(cli) });
       resolve({ error: err ? String(err) : "naut sfc graph: empty output" });
     });
     child.stdin?.end(source);
@@ -52,7 +51,7 @@ type SfcTextEdit = { line: number; col: number; endLine: number; endCol: number;
 
 /** Run `naut sfc edit`: resolve op against source, get minimal edits. */
 function sfcEdit(source: string, op: unknown): Promise<{ edits?: SfcTextEdit[]; error?: string }> {
-  const cli = vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "naut");
+  const cli = cliCommand();
   return new Promise((resolve) => {
     const child = execFile(cli, ["sfc", "edit"], { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
       try {
@@ -62,6 +61,7 @@ function sfcEdit(source: string, op: unknown): Promise<{ edits?: SfcTextEdit[]; 
       } catch {
         // fall through
       }
+      if (isMissing(err)) return resolve({ error: cliMissingMessage(cli) });
       resolve({ error: err ? String(err) : "naut sfc edit: empty output" });
     });
     child.stdin?.end(JSON.stringify({ source, op }));
