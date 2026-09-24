@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // Coverage for the route-suggestion generator (autoroute.ts): shape
 // selection order, obstacle avoidance, determinism, and PORT_STUB
 // compliance at directional ends. Like routing.test.ts, runs directly with

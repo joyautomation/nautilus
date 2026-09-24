@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // Pure-math coverage for resolvePorts()'s precedence chain — instance
 // override -> project sidecar entry (for ANY component name, built-in or
 // custom) -> registry's built-in default. No svelte/vscode imports, so (like

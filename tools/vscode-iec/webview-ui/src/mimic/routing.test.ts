@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // Pure-math coverage for orthogonal pipe routing (hmi/src/lib/mimic.ts's
 // orthogonalPoints/routedPoints — the SAME function EditorCanvas.svelte and
 // the runtime <Mimic> both call, so editor and runtime always draw

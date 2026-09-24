@@ -61,6 +61,10 @@ jobs:
       # now also runs its pure-logic test files, so its deps must exist too.
       - run: npm ci --prefix webview-ui
       - run: npm test
+      # Vite strips types without checking them, so nothing else type-checks
+      # the webview's .svelte and .ts files. Warnings (a11y) don't fail it.
+      - name: Type-check the webview (svelte-check)
+        run: npm --prefix webview-ui run check -- --output human
   version-sync:
     name: Versions — repo not behind registries
     runs-on: ubuntu-latest

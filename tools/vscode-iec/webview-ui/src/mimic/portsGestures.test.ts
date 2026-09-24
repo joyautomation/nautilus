@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // Pure-math coverage for the shared ports gesture helpers — no svelte/vscode
 // imports, so (like mimicOps.test.ts/mimicComponentIndex.test.ts on the
 // extension-host side) it runs directly with `node --experimental-strip-types

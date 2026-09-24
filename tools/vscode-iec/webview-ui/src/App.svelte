@@ -303,16 +303,14 @@
 	}
 
 	window.addEventListener('message', (ev) => {
-		const msg = ev.data as Msg & {
-			type: 'diagnostics' | 'liveValues';
-			diags?: Diag[];
-			enabled?: boolean;
-			fresh?: boolean;
-			values?: Record<string, unknown>;
-		};
+		const msg = ev.data as
+			| Msg
+			| { type: 'diagnostics'; diags?: Diag[] }
+			| { type: 'liveValues'; enabled?: boolean; fresh?: boolean; values?: Record<string, unknown> }
+			| { type: 'syncState'; state?: string };
 		if (!msg?.type) return;
-		if ((msg as { type: string; state?: string }).type === 'syncState') {
-			syncState = (msg as unknown as { state: string }).state ?? 'unknown';
+		if (msg.type === 'syncState') {
+			syncState = msg.state ?? 'unknown';
 			return;
 		}
 		if (msg.type === 'liveValues') {
