@@ -6,6 +6,10 @@
 //            server, and the diagram editors reach the CLI.
 //   missing  no CLI anywhere, and the extension must still activate cleanly
 //            and give the diagram editors the actionable message.
+//   managed  the CLI only where "nautilus: Install or Update the naut CLI"
+//            puts it (the extension's global storage, bin/), and the language
+//            server must run from there. The binary is copied in rather than
+//            downloaded, so CI never depends on GitHub's API rate limit.
 //
 // Builds the CLI from this repo with `go build` unless NAUTILUS_E2E_BIN
 // names one. Run with `npm run test:e2e` (under xvfb-run on a headless box).
@@ -60,10 +64,16 @@ async function main(): Promise<void> {
     const emptyPath = path.join(tmp, "empty-path");
     fs.mkdirSync(emptyPath);
 
-    for (const expect of ["found", "missing"]) {
+    for (const expect of ["found", "missing", "managed"]) {
       const home = path.join(tmp, `home-${expect}`);
       fs.mkdirSync(path.join(home, "go", "bin"), { recursive: true });
       if (expect === "found") fs.copyFileSync(bin, path.join(home, "go", "bin", exe));
+      const profile = path.join(tmp, `profile-${expect}`);
+      const managedBin = path.join(profile, "User", "globalStorage", "joyauto.vscode-iec", "bin");
+      if (expect === "managed") {
+        fs.mkdirSync(managedBin, { recursive: true });
+        fs.copyFileSync(bin, path.join(managedBin, exe));
+      }
       console.log(`\n── e2e: CLI ${expect} ──`);
       await withWatchdog(expect, runTests({
         extensionDevelopmentPath: extRoot,
@@ -77,12 +87,13 @@ async function main(): Promise<void> {
         launchArgs: [
           ws,
           "--disable-extensions",
-          `--user-data-dir=${path.join(tmp, `profile-${expect}`)}`,
+          `--user-data-dir=${profile}`,
           `--extensions-dir=${path.join(tmp, `extensions-${expect}`)}`,
           ...(process.platform === "darwin" ? ["--use-mock-keychain"] : []),
         ],
         extensionTestsEnv: {
           NAUTILUS_E2E_EXPECT: expect,
+          NAUTILUS_E2E_MANAGED_BIN: managedBin,
           HOME: home,
           USERPROFILE: home,
           PATH: emptyPath,
