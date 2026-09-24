@@ -412,7 +412,8 @@ export class LdPreview implements vscode.Disposable {
         "nautilus.ldPreview",
         "Ladder",
         vscode.ViewColumn.Beside,
-        webviewOptions(this.context.extensionUri)
+        // Like FBD's: selection, clipboard and scroll survive a tab switch.
+        { ...webviewOptions(this.context.extensionUri), retainContextWhenHidden: true }
       );
       this.panel.webview.html = buildWebviewHtml(this.panel.webview, this.context.extensionUri);
       this.panel.webview.onDidReceiveMessage((msg: { type?: string; op?: unknown }) => {
