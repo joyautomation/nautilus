@@ -35,6 +35,9 @@
     "url": "https://github.com/joyautomation/nautilus/issues"
   },
   "main": "./out/extension.js",
+  "nautilusCli": {
+    "minVersion": "0.11.0"
+  },
   "activationEvents": [
     "onLanguage:iec-st",
     "onLanguage:iec-fbd",
@@ -160,6 +163,14 @@
       {
         "command": "nautilus.liveValues.toggle",
         "title": "nautilus: Toggle Inline Live Tag Values"
+      },
+      {
+        "command": "nautilus.installCli",
+        "title": "nautilus: Install or Update the naut CLI"
+      },
+      {
+        "command": "nautilus.showCliInfo",
+        "title": "nautilus: Show CLI Info"
       },
       {
         "command": "nautilus.restartLanguageServer",
@@ -389,7 +400,7 @@
         "nautilus.cliPath": {
           "type": "string",
           "default": "naut",
-          "description": "The nautilus CLI, `naut` (provides the language server via `naut lsp`, and the diagram editors). The command is `naut`, not `nautilus` -- GNOME's file manager owns that name on Linux. A bare name is looked up on PATH, then in $GOBIN, $GOPATH/bin, ~/go/bin, ~/.local/bin, /usr/local/bin, /opt/homebrew/bin (%LOCALAPPDATA%\\nautilus on Windows); set a full path to skip the search."
+          "description": "The nautilus CLI, `naut` (provides the language server via `naut lsp`, and the diagram editors). Easiest: run \"nautilus: Install or Update the naut CLI\" and leave this as `naut`. The command is `naut`, not `nautilus` -- GNOME's file manager owns that name on Linux. A bare name is looked up on PATH, then in the copy the install command manages, then $GOBIN, $GOPATH/bin, ~/go/bin, ~/.local/bin, /usr/local/bin, /opt/homebrew/bin (%LOCALAPPDATA%\\nautilus on Windows); set a full path to skip the search."
         },
         "nautilus.runtimeUrl": {
           "type": "string",
@@ -516,7 +527,7 @@
     "vscode:prepublish": "npm run compile && npm run build:webview",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/scan.test.js out/cliResolve.test.js out/gitHistory.test.js out/programSync.test.js out/onlineEditConfirm.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js && npm --prefix webview-ui run test",
+    "test": "npm run compile && node --test out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/gitHistory.test.js out/programSync.test.js out/onlineEditConfirm.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js && npm --prefix webview-ui run test",
     "build:webview": "npm --prefix webview-ui run build",
     "test:e2e": "npm run compile && node out/e2e/run.js"
   },

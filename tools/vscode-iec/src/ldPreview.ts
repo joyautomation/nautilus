@@ -7,7 +7,7 @@
 
 import { execFile } from "child_process";
 import * as vscode from "vscode";
-import { cliCommand, cliMissingMessage, isMissing } from "./cli";
+import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
 import { graphArgs, isL5X } from "./l5xRouting";
 import { LiveValues } from "./liveValues";
 import {
@@ -32,7 +32,7 @@ function ldGraph(source: string, at?: string): Promise<{ model?: unknown; error?
   const cli = cliCommand();
   const args = graphArgs(at);
   return new Promise((resolve) => {
-    const child = execFile(cli, args, { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
+    const child = execFile(cli, args, cliExecOptions(), (err, stdout) => {
       try {
         const parsed = JSON.parse(stdout) as { error?: string };
         if (parsed.error) return resolve({ error: parsed.error });
@@ -62,7 +62,7 @@ function logLd(msg: string): void {
 function ldEdit(source: string, op: unknown, at?: string): Promise<{ edits?: LdTextEdit[]; error?: string }> {
   const cli = cliCommand();
   return new Promise((resolve) => {
-    const child = execFile(cli, ["ld", "edit"], { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
+    const child = execFile(cli, ["ld", "edit"], cliExecOptions(), (err, stdout) => {
       try {
         const parsed = JSON.parse(stdout) as { edits?: LdTextEdit[]; error?: string };
         if (parsed.error) return resolve({ error: parsed.error });
