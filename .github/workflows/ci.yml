@@ -92,9 +92,9 @@ jobs:
           path: tools/vscode-iec/.vscode-test/vscode-*
           key: vscode-download-${{ runner.os }}-${{ hashFiles('tools/vscode-iec/package-lock.json') }}
       - run: npm ci
-      # The resolver against this OS's real filesystem (the ubuntu `npm test`
+      # The resolver and installer against this OS's real filesystem (the ubuntu `npm test`
       # above only exercises Linux paths).
-      - run: npm run compile && node --test out/cliResolve.test.js
+      - run: npm run compile && node --test out/cliResolve.test.js out/cliInstall.test.js
       - if: runner.os == 'Linux'
         run: xvfb-run -a npm run test:e2e
       - if: runner.os != 'Linux'

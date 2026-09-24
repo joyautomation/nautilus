@@ -109,3 +109,15 @@ test("real fs: a file without the execute bit is skipped (POSIX)", { skip: proce
     s.cleanup();
   }
 });
+
+test("resolveCli: the managed install comes after PATH and before the well-known dirs", () => {
+  const managedDir = "/home/dev/.config/Code/User/globalStorage/joyauto.vscode-iec/bin";
+  const files = ["/usr/bin/naut", `${managedDir}/naut`, "/home/dev/go/bin/naut"];
+  const withPath = resolveCli("naut", { ...env(files, { PATH: "/usr/bin" }), managedDir });
+  assert.equal(withPath.command, "/usr/bin/naut", "a developer's own naut on PATH wins");
+  const noPath = resolveCli("naut", { ...env(files, { PATH: "/bin" }), managedDir });
+  assert.equal(noPath.command, `${managedDir}/naut`, "the managed copy beats ~/go/bin");
+  assert.deepEqual(noPath.searched, ["/bin", managedDir]);
+  const explicit = resolveCli("/opt/naut", { ...env(files, {}), managedDir });
+  assert.equal(explicit.command, "/opt/naut", "an explicit cliPath beats everything");
+});
