@@ -77,9 +77,11 @@ export function registerEditComponentPortsCommand(index: ComponentIndex): vscode
     // harmless either way — the Component Editor lets ports be added from
     // there).
     const defaults = BUILTIN_COMPONENT_PORTS[pick.name] ?? [];
-    const ok = await writeComponentPortsEdit(index, anchor, pick.name, defaults);
-    if (!ok) {
-      void vscode.window.showErrorMessage(`nautilus: couldn't create ${pick.name}.component.json`);
+    const res = await writeComponentPortsEdit(index, anchor, pick.name, defaults);
+    if (!res.ok) {
+      void vscode.window.showErrorMessage(
+        `nautilus: couldn't create ${pick.name}.component.json${res.error ? ` — ${res.error}` : ""}`
+      );
       return;
     }
     const created = index.locate(pick.name);

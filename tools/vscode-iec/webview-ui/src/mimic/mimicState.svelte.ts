@@ -94,13 +94,25 @@ export const ed = $state({
 	snapToGrid: true
 });
 
+/** While the document doesn't parse (ed.error), the canvas is a stale
+ * read-only picture — MimicApp locks it, and ops are dropped here as a
+ * backstop (a gesture already in flight, a keyboard nudge) so the host
+ * isn't asked to edit text it would refuse with a warning toast apiece. */
 export function postOp(op: MimicOp): void {
+	if (ed.error) return;
 	vscode.postMessage({ type: 'mimicOp', op });
 }
 
 /** Commit a component-level ports edit to the project manifest. */
 export function postManifestOp(op: ManifestOp): void {
+	if (ed.error) return;
 	vscode.postMessage({ type: 'manifestOp', op });
+}
+
+/** Leave the graphical editor for VS Code's text editor on this file —
+ * the way out when the JSON doesn't parse. */
+export function reopenAsText(): void {
+	vscode.postMessage({ type: 'reopenAsText' });
 }
 
 export function trace(msg: string): void {

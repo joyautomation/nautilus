@@ -20,8 +20,17 @@ export const cs = $state({
 	error: ''
 });
 
+/** Dropped while the document doesn't parse (cs.error): the canvas is a
+ * stale picture then, locked by ComponentApp — and the host refuses such
+ * an op anyway rather than overwrite the half-typed text. */
 export function postComponentPortsOp(ports: Port[]): void {
+	if (cs.error) return;
 	vscode.postMessage({ type: 'componentOp', ports });
+}
+
+/** Leave the graphical editor for VS Code's text editor on this file. */
+export function reopenAsText(): void {
+	vscode.postMessage({ type: 'reopenAsText' });
 }
 
 /** Tell the host the message listener is up — it answers with the current

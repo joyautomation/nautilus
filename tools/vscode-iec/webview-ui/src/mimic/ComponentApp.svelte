@@ -16,7 +16,7 @@
 	// the mimic editor.
 	import { resolvedPortDir, type PortDir as HmiPortDir } from '@joyautomation/nautilus-hmi/mimic';
 	import { registry, DEMO_PROPS } from './registry';
-	import { cs, postComponentPortsOp, announceComponentReady, type Port } from './componentState.svelte';
+	import { cs, postComponentPortsOp, announceComponentReady, reopenAsText, type Port } from './componentState.svelte';
 	import {
 		fmtFraction,
 		newPortAtFreeSlot,
@@ -46,6 +46,8 @@
 				cs.error = '';
 			} else if (m?.type === 'componentError') {
 				cs.error = m.message ?? 'invalid document';
+				// Any gesture in flight is against the stale doc — drop it.
+				drag = null;
 			} else if (m?.type === 'userComponentDiagnostics') {
 				setUserComponentDiagnostics(m.diagnostics ?? []);
 			}
@@ -193,6 +195,7 @@
 	}
 
 	function onkeydown(e: KeyboardEvent) {
+		if (cs.error) return;
 		if (e.key === 'Escape') selected = null;
 	}
 
@@ -207,11 +210,24 @@
 		{#if cs.doc}<span class="name">· {cs.doc.component}</span>{/if}
 	</header>
 
+	{#if cs.error && !cs.doc}
+		<!-- Never parsed: no canvas to show, only the way out. -->
+		<div class="fatal" role="alert">
+			<p>This file isn't a component sidecar the editor can open:</p>
+			<pre>{cs.error}</pre>
+			<button class="reopen" onclick={reopenAsText}>Reopen as Text Editor</button>
+		</div>
+	{:else}
 	{#if cs.error}
-		<div class="err">JSON: {cs.error}</div>
+		<div class="err" role="alert">
+			<span>JSON: {cs.error} — the canvas is read-only until the text parses again</span>
+			<button class="reopen" onclick={reopenAsText}>Reopen as Text Editor</button>
+		</div>
 	{/if}
 
-	<div class="body">
+	<!-- A parse error mid-edit leaves the last good doc on screen, locked:
+	     a port drag against it would overwrite the half-typed text. -->
+	<div class="body" class:locked={!!cs.error} inert={!!cs.error}>
 		<div class="stage">
 			{#if cs.doc}
 				{@const C = registry[cs.doc.component]}
@@ -286,6 +302,8 @@
 		{/if}
 	</div>
 
+	{/if}
+
 	<footer>{hint}</footer>
 </div>
 
@@ -318,11 +336,58 @@
 		color: var(--nx-err);
 		background: var(--nx-err-bg);
 		border-bottom: 1px solid var(--nx-border);
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+	.err span {
+		flex: 1;
+		min-width: 0;
+	}
+	.reopen {
+		flex: none;
+		font: inherit;
+		font-size: 12px;
+		padding: 3px 10px;
+		border: none;
+		border-radius: 4px;
+		background: var(--nx-btn-bg);
+		color: var(--nx-btn-ink);
+		cursor: pointer;
+	}
+	.fatal {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 10px;
+		padding: 24px;
+		color: var(--nx-ui-ink);
+	}
+	.fatal p {
+		margin: 0;
+	}
+	.fatal pre {
+		margin: 0;
+		max-width: 100%;
+		white-space: pre-wrap;
+		font-family: var(--nx-mono);
+		font-size: 12px;
+		color: var(--nx-err);
+		background: var(--nx-err-bg);
+		padding: 6px 10px;
+		border-radius: 4px;
 	}
 	.body {
 		flex: 1;
 		min-height: 0;
 		display: flex;
+	}
+	.body.locked {
+		opacity: 0.5;
+		filter: grayscale(0.6);
+		pointer-events: none;
 	}
 	.stage {
 		flex: 1;

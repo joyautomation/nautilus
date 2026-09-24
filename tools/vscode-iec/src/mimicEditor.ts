@@ -72,6 +72,12 @@ function setSnapToGridConfig(value: boolean): void {
   void vscode.workspace.getConfiguration("nautilus").update("mimic.snapToGrid", value, target);
 }
 
+/** "Reopen as Text Editor" from an editor whose document doesn't parse:
+ * `default` is VS Code's built-in text editor for any resource. */
+export function reopenAsText(uri: vscode.Uri): void {
+  void vscode.commands.executeCommand("vscode.openWith", uri, "default");
+}
+
 /** Fetch the controller's tag snapshot, or null when unreachable. */
 async function fetchTags(): Promise<Record<string, unknown> | null> {
   const url = vscode.workspace.getConfiguration("nautilus").get<string>("runtimeUrl", "http://localhost:8080");
@@ -240,6 +246,10 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
           logMimic("webview: " + String((msg as { msg?: unknown }).msg ?? ""));
           return;
         }
+        if (msg?.type === "reopenAsText") {
+          reopenAsText(document.uri);
+          return;
+        }
         if (msg?.type === "setSnapToGrid") {
           setSnapToGridConfig(!!(msg as { value?: boolean }).value);
           return;
@@ -250,9 +260,12 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
           this.portsQueue = this.portsQueue
             .then(async () => {
               logMimic("manifestOp: " + JSON.stringify(op));
-              const ok = await writeComponentPortsEdit(this.componentIndex, document.uri, op.component, op.ports ?? null);
-              logMimic(`  -> applied=${ok}`);
-              if (ok) this.broadcastPorts();
+              const res = await writeComponentPortsEdit(this.componentIndex, document.uri, op.component, op.ports ?? null);
+              logMimic(`  -> applied=${res.ok}${res.error ? " (" + res.error + ")" : ""}`);
+              if (res.error) void vscode.window.showWarningMessage("nautilus: " + res.error);
+              // Re-broadcast either way: on a refusal the webview's
+              // optimistic ports snap back to what the sidecar really says.
+              this.broadcastPorts();
             })
             .catch((err) => logMimic("  -> exception: " + String(err)));
           return;
