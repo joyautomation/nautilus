@@ -3,6 +3,7 @@ package fbd
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/st"
@@ -30,7 +31,9 @@ type TextEdit struct {
 //	toggleNot   To/ToPin (+From/FromPin to disambiguate fan-in)
 //	rewire      To/ToPin (+From/FromPin), Source node id (+SourcePin for FBs)
 //	rename      Node (b:w.* wire or f:* instance), NewName
-//	deleteNode  Node (b:w.* wire, c:* coil, or f:* instance)
+//	deleteNode  Node (b:w.* wire, c:* coil, or f:* instance), or Nodes — a
+//	            whole selection resolved against ONE parse (comment ids are
+//	            ordinals, so per-node ops would retarget after the first)
 //	insertStatement  Text (netlist statement(s), validated before insert)
 //	setLayout   Node, X, Y — pin a dragged node's position
 //	clearLayout Node (one entry) or nothing (whole block → full auto-layout)
@@ -54,7 +57,8 @@ type EditOp struct {
 	// Entries batches setLayout: a multi-node drag pins every moved node in
 	// ONE op — one text edit, no lost updates.
 	Entries []LayoutOpEntry `json:"entries,omitempty"`
-	// Nodes lists the selection for duplicate (copy/paste).
+	// Nodes lists the selection for duplicate (copy/paste) and a batched
+	// deleteNode.
 	Nodes []string `json:"nodes,omitempty"`
 }
 
@@ -81,7 +85,10 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 	case "rename":
 		return b.opRename(op)
 	case "deleteNode":
-		return b.opDelete(op)
+		if len(op.Nodes) > 0 {
+			return b.opDeleteNodes(op.Nodes)
+		}
+		return b.opDeleteNodes([]string{op.Node})
 	case "insertStatement":
 		return b.opInsert(op)
 	case "setLayout":
@@ -493,21 +500,92 @@ func (b *modelBuilder) opInsert(op EditOp) ([]TextEdit, error) {
 
 // ── deleteNode ─────────────────────────────────────────────────────────────
 
-func (b *modelBuilder) opDelete(op EditOp) ([]TextEdit, error) {
+// opDeleteNodes deletes a selection in ONE op: every id resolves against
+// the same parse, the statement deletions merge, and the layout block is
+// rewritten once — dropping the deleted nodes' pins and renumbering the
+// cm:N pins of notes that follow a deleted note, so they stay on their note.
+func (b *modelBuilder) opDeleteNodes(ids []string) ([]TextEdit, error) {
+	var edits []TextEdit
+	var drop []string
+	goneComments := map[int]bool{}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		e, d, err := b.deleteTargets(id)
+		if err != nil {
+			return nil, err
+		}
+		edits = append(edits, e...)
+		drop = append(drop, d...)
+		if n, ok := commentOrdinal(id); ok {
+			goneComments[n] = true
+		}
+	}
+	dropFn := idPrefixDrop(drop...)
+	return append(mergeDeletes(edits), b.remapLayout(func(id string) (string, bool) {
+		nid, keep := dropFn(id)
+		if !keep || len(goneComments) == 0 {
+			return nid, keep
+		}
+		if n, ok := commentOrdinal(id); ok && strings.TrimPrefix(id, "cm:") == fmt.Sprint(n) {
+			shift := 0
+			for g := range goneComments {
+				if g < n {
+					shift++
+				}
+			}
+			return fmt.Sprintf("cm:%d", n-shift), true
+		}
+		return nid, keep
+	})...), nil
+}
+
+// mergeDeletes dedupes a batch's deletions and folds overlapping ones
+// together — two selected nodes can share a statement (an instance and a
+// wire it defines), and a WorkspaceEdit rejects overlapping ranges.
+func mergeDeletes(edits []TextEdit) []TextEdit {
+	sort.Slice(edits, func(i, j int) bool {
+		if edits[i].Line != edits[j].Line {
+			return edits[i].Line < edits[j].Line
+		}
+		return edits[i].Col < edits[j].Col
+	})
+	before := func(l1, c1, l2, c2 int) bool { return l1 < l2 || (l1 == l2 && c1 < c2) }
+	var out []TextEdit
+	for _, e := range edits {
+		if n := len(out); n > 0 {
+			last := &out[n-1]
+			if before(e.Line, e.Col, last.EndLine, last.EndCol) && last.NewText == "" && e.NewText == "" {
+				if before(last.EndLine, last.EndCol, e.EndLine, e.EndCol) {
+					last.EndLine, last.EndCol = e.EndLine, e.EndCol
+				}
+				continue
+			}
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+// deleteTargets resolves one deletable id to its statement deletions and
+// the layout-id prefixes the deletion orphans.
+func (b *modelBuilder) deleteTargets(id string) ([]TextEdit, []string, error) {
 	switch {
-	case strings.HasPrefix(op.Node, "b:w."):
-		name := strings.TrimPrefix(op.Node, "b:w.")
+	case strings.HasPrefix(id, "b:w."):
+		name := strings.TrimPrefix(id, "b:w.")
 		span, ok := b.nl.wireSpan[name]
 		if !ok {
-			return nil, fmt.Errorf("fbd edit: no wire named %q", name)
+			return nil, nil, fmt.Errorf("fbd edit: no wire named %q", name)
 		}
 		// References the wire still feeds become undeclared identifiers —
 		// allowed by design: the edit lands, diagnostics mark the holes.
-		return append([]TextEdit{b.deleteSpan(span)},
-			b.remapLayout(idPrefixDrop("b:w."+name))...), nil
+		return []TextEdit{b.deleteSpan(span)}, []string{"b:w." + name}, nil
 
-	case strings.HasPrefix(op.Node, "c:"):
-		target := strings.TrimPrefix(op.Node, "c:")
+	case strings.HasPrefix(id, "c:"):
+		target := strings.TrimPrefix(id, "c:")
 		var edits []TextEdit
 		for _, n := range b.nl.nodes {
 			if !n.isCall && n.target == target {
@@ -515,12 +593,12 @@ func (b *modelBuilder) opDelete(op EditOp) ([]TextEdit, error) {
 			}
 		}
 		if len(edits) == 0 {
-			return nil, fmt.Errorf("fbd edit: no coil writing %q", target)
+			return nil, nil, fmt.Errorf("fbd edit: no coil writing %q", target)
 		}
-		return append(edits, b.remapLayout(idPrefixDrop("c:"+target, "b:c."+target))...), nil
+		return edits, []string{"c:" + target, "b:c." + target}, nil
 
-	case strings.HasPrefix(op.Node, "f:"):
-		inst := strings.TrimPrefix(op.Node, "f:")
+	case strings.HasPrefix(id, "f:"):
+		inst := strings.TrimPrefix(id, "f:")
 		// Remaining inst.pin reads become diagnostics, not a blocked edit.
 		var edits []TextEdit
 		seen := map[exprPos]bool{}
@@ -537,25 +615,25 @@ func (b *modelBuilder) opDelete(op EditOp) ([]TextEdit, error) {
 			}
 		}
 		if len(edits) == 0 {
-			return nil, fmt.Errorf("fbd edit: no instance named %q", inst)
+			return nil, nil, fmt.Errorf("fbd edit: no instance named %q", inst)
 		}
-		return append(edits, b.remapLayout(idPrefixDrop("f:"+inst, "b:f."+inst))...), nil
+		return edits, []string{"f:" + inst, "b:f." + inst}, nil
 
-	case strings.HasPrefix(op.Node, "cm:"):
-		n, ok := commentOrdinal(op.Node)
+	case strings.HasPrefix(id, "cm:"):
+		n, ok := commentOrdinal(id)
 		if !ok || n < 0 || n >= len(b.comments) {
-			return nil, fmt.Errorf("fbd edit: unknown comment %q", op.Node)
+			return nil, nil, fmt.Errorf("fbd edit: unknown comment %q", id)
 		}
-		return append(b.deleteComment(n), b.remapLayout(idPrefixDrop(op.Node))...), nil
+		return b.deleteComment(n), []string{id}, nil
 
-	case strings.HasPrefix(op.Node, "g:"):
+	case strings.HasPrefix(id, "g:"):
 		// A ghost lives only in the layout block — deleting is dropping it.
-		if _, _, ok := ghostName(op.Node); !ok {
-			return nil, fmt.Errorf("fbd edit: unknown ghost %q", op.Node)
+		if _, _, ok := ghostName(id); !ok {
+			return nil, nil, fmt.Errorf("fbd edit: unknown ghost %q", id)
 		}
-		return b.remapLayout(idPrefixDrop(op.Node)), nil
+		return nil, []string{id}, nil
 	}
-	return nil, fmt.Errorf("fbd edit: %q is not deletable", op.Node)
+	return nil, nil, fmt.Errorf("fbd edit: %q is not deletable", id)
 }
 
 // deleteSpan removes a statement, taking its whole line(s) when nothing else
