@@ -32,13 +32,22 @@ subcommand, which runs the *real* `lang/st` compiler over stdio:
 - **Completion** — in-scope variables, keywords, elementary types, and the
   compiler's actual builtin function/FB registries.
 
-Install the CLI once:
+Install the CLI once: click **Install naut** when the extension says it's
+missing, or run **nautilus: Install or Update the naut CLI** from the Command
+Palette. It downloads the latest release for your OS from GitHub, checks it
+against the release's `checksums.txt`, and keeps it in the extension's own
+storage — no Go toolchain needed, and the same command updates it. Behind a
+proxy, it uses VS Code's `http.proxy` setting (or `HTTPS_PROXY`).
+
+If you have Go, `go install` works too:
 
 ```sh
 go install github.com/joyautomation/nautilus/cmd/naut@latest
 ```
 
-`nautilus.cliPath` points elsewhere if it's not on PATH.
+A `naut` on PATH wins over the extension's copy; set `nautilus.cliPath` to a
+full path to pick one explicitly. **nautilus: Show CLI Info** says which one
+is in use, and the extension warns when it's older than it needs.
 
 ### FBD diagram preview & visual diff (needs the nautilus CLI)
 
@@ -210,9 +219,11 @@ toggles the feature. Set `nautilus.runtimeUrl` (default
 
 - **Syntax highlighting** works with no setup.
 - **Language features** (diagnostics, go-to-definition, hover, completion)
-  need the nautilus CLI on your PATH — `go install
-  github.com/joyautomation/nautilus/cmd/naut@latest`. Point
-  `nautilus.cliPath` at it if it's installed elsewhere.
+  need the nautilus CLI, `naut` 0.11.0 or newer — **nautilus: Install or
+  Update the naut CLI** installs it in one click (or `go install
+  github.com/joyautomation/nautilus/cmd/naut@latest`). Point
+  `nautilus.cliPath` at it if it's installed somewhere the extension doesn't
+  look.
 - **Inline live values** need a running nautilus controller exposing the tag
   API; set `nautilus.runtimeUrl` (default `http://localhost:8080`).
 
