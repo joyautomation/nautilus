@@ -224,7 +224,7 @@ completion, and **live tag values as pills** next to identifiers in
 On macOS, VS Code launched from the Dock or Spotlight gets the login `PATH`,
 not your shell's, so it may not find `naut` even though your terminal
 does. If the extension reports it could not start the language server, set
-`nautilus.cliPath` to the full path (`which nautilus`), or launch VS Code
+`nautilus.cliPath` to the full path (`which naut`), or launch VS Code
 from a terminal with `code .`.
 
 **5. Make it yours**

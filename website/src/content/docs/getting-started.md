@@ -18,20 +18,20 @@ has the archives and a `checksums.txt`.
 
 ```sh
 v=$(curl -fsSL https://api.github.com/repos/joyautomation/nautilus/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_darwin_arm64.tar.gz" | tar xz nautilus
-sudo mv nautilus /usr/local/bin/
+curl -fsSL "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_darwin_arm64.tar.gz" | tar xz naut
+sudo mv naut /usr/local/bin/
 ```
 
 Downloading with `curl` skips Gatekeeper's quarantine. If you fetched the
 archive in a browser instead and macOS refuses to open the binary, clear the
-flag once: `xattr -d com.apple.quarantine /usr/local/bin/nautilus`.
+flag once: `xattr -d com.apple.quarantine /usr/local/bin/naut`.
 
 ### Linux — `amd64` or `arm64`:
 
 ```sh
 v=$(curl -fsSL https://api.github.com/repos/joyautomation/nautilus/releases/latest | grep -m1 '"tag_name"' | cut -d'"' -f4)
-curl -fsSL "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_linux_amd64.tar.gz" | tar xz nautilus
-sudo install nautilus /usr/local/bin/
+curl -fsSL "https://github.com/joyautomation/nautilus/releases/download/$v/nautilus_${v#v}_linux_amd64.tar.gz" | tar xz naut
+sudo install naut /usr/local/bin/naut
 ```
 
 ### Windows — PowerShell, `amd64` or `arm64`:
@@ -136,7 +136,7 @@ values next to identifiers in your program.
 On macOS, VS Code launched from the Dock or Spotlight gets the login `PATH`,
 not your shell's, so it may not find `naut` even though your terminal
 does. If the extension reports it could not start the language server, set
-`nautilus.cliPath` to the full path (`which nautilus`), or launch VS Code
+`nautilus.cliPath` to the full path (`which naut`), or launch VS Code
 from a terminal with `code .`.
 
 ## 4. Make it yours

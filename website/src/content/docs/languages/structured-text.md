@@ -234,7 +234,7 @@ naut pull --host c1 # write a controller's running source back to the file
 non-zero when it finds any, which is what CI gates on. Tests are YAML fixtures
 asserting on tags over virtual time; see [Testing](/reference/testing/).
 Downloading a program warm-swaps it into a running controller with state carried
-across, a failed compile leaves the running program untouched, and `nautilus
+across, a failed compile leaves the running program untouched, and `naut
 pull --check` fails a build when a controller holds edits nobody pulled back.
 [Online edits](/guides/online-edits/) has the whole loop.
 
