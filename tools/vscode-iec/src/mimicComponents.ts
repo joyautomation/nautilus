@@ -23,9 +23,7 @@
 import * as vscode from "vscode";
 import {
   aggregateComponentFiles,
-  applyComponentPortsEdit,
-  formatComponentEntry,
-  parseComponentEntry,
+  patchComponentPortsText,
   validatePortList,
   type ComponentFile,
   type ComponentsManifest,
@@ -35,7 +33,13 @@ import {
 export const COMPONENT_GLOB = "**/*.component.json";
 export const EXCLUDE_GLOB = "**/{node_modules,.git,out,dist,build,.svelte-kit}/**";
 
+/** A sidecar's CURRENT text: the open buffer's (unsaved edits included)
+ * when VS Code has the file open, the disk copy otherwise. Every read that
+ * feeds a later edit must go through here — a disk read of a dirty buffer
+ * followed by a whole-file replace would throw away the unsaved edits. */
 async function readText(uri: vscode.Uri): Promise<string> {
+  const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+  if (open) return open.getText();
   try {
     return new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
   } catch {
@@ -83,10 +87,27 @@ export class ComponentIndex {
   watch(onChange: () => void): vscode.Disposable {
     this.watcher = vscode.workspace.createFileSystemWatcher(COMPONENT_GLOB);
     const fire = () => void this.refresh().then(onChange);
-    const subs = [this.watcher.onDidCreate(fire), this.watcher.onDidChange(fire), this.watcher.onDidDelete(fire)];
+    // The index reads open buffers (readText), so an unsaved edit to an open
+    // sidecar — by hand or from the component editor — refreshes it too, as
+    // does closing one without saving (the buffer's text is gone; disk wins).
+    let debounce: NodeJS.Timeout | undefined;
+    const isSidecar = (doc: vscode.TextDocument) => doc.uri.path.endsWith(".component.json");
+    const fireSoon = (doc: vscode.TextDocument) => {
+      if (!isSidecar(doc)) return;
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(fire, 150);
+    };
+    const subs = [
+      this.watcher.onDidCreate(fire),
+      this.watcher.onDidChange(fire),
+      this.watcher.onDidDelete(fire),
+      vscode.workspace.onDidChangeTextDocument((e) => fireSoon(e.document)),
+      vscode.workspace.onDidCloseTextDocument(fireSoon),
+    ];
     const watcher = this.watcher;
     return {
       dispose: () => {
+        if (debounce) clearTimeout(debounce);
         subs.forEach((s) => s.dispose());
         watcher.dispose();
       },
@@ -115,47 +136,62 @@ async function newSidecarLocation(docUri: vscode.Uri, component: string): Promis
   return vscode.Uri.joinPath(dir, `${component}.component.json`);
 }
 
-/** Apply one component's shared-ports edit: read the existing sidecar (if
- * any), patch JUST the `ports` key — every other key (future per-component
+/** Apply one component's shared-ports edit: read the existing sidecar's
+ * CURRENT text (its open buffer, unsaved edits included — see readText),
+ * patch JUST the `ports` key — every other key (future per-component
  * metadata) passes through untouched — and write back as a single
  * WorkspaceEdit, or delete the file outright if the edit leaves nothing
- * worth keeping. `ports: null` with no existing sidecar is a no-op —
- * there's nothing to clear. Refreshes `index` on success so the caller's
- * next broadcast reflects the write immediately, without waiting on the
- * filesystem watcher. */
+ * worth keeping. A sidecar whose text doesn't parse right now (hand edit
+ * mid-keystroke) refuses with a message rather than being replaced.
+ * `ports: null` with no existing sidecar is a no-op — there's nothing to
+ * clear. Refreshes `index` on success so the caller's next broadcast
+ * reflects the write immediately, without waiting on the watcher. */
 export async function writeComponentPortsEdit(
   index: ComponentIndex,
   docUri: vscode.Uri,
   component: string,
   ports: Port[] | null
-): Promise<boolean> {
-  if (ports !== null && !validatePortList(ports)) return false;
+): Promise<{ ok: boolean; error?: string }> {
+  if (ports !== null && !validatePortList(ports)) return { ok: false, error: "invalid ports list" };
   const existing = index.locate(component);
-  if (!existing && ports === null) return true;
+  if (!existing && ports === null) return { ok: true };
   const target = existing ?? (await newSidecarLocation(docUri, component));
-  const current = existing ? parseComponentEntry(await readText(existing)) : {};
-  const next = applyComponentPortsEdit(current, ports);
-
-  const edit = new vscode.WorkspaceEdit();
-  if (Object.keys(next).length === 0) {
-    if (!existing) return true;
-    edit.deleteFile(existing, { ignoreIfNotExists: true });
-  } else {
-    const text = formatComponentEntry(next);
-    let existed = true;
+  // Open (or reuse) the document so what we patch IS what we replace — the
+  // disk copy may be behind a dirty buffer.
+  // (A new-sidecar target that already exists — the index lagging a
+  // create — is patched the same way, never overwritten blind.)
+  let openDoc: vscode.TextDocument | undefined;
+  const isOpen = vscode.workspace.textDocuments.some((d) => d.uri.toString() === target.toString());
+  let onDisk = isOpen;
+  if (!onDisk) {
     try {
       await vscode.workspace.fs.stat(target);
+      onDisk = true;
     } catch {
-      existed = false;
+      onDisk = false;
     }
-    if (!existed) {
-      edit.createFile(target, { overwrite: true, contents: Buffer.from(text, "utf8") });
-    } else {
-      const openDoc = await vscode.workspace.openTextDocument(target);
-      edit.replace(target, new vscode.Range(0, 0, openDoc.lineCount, 0), text);
+  }
+  if (onDisk) {
+    try {
+      openDoc = await vscode.workspace.openTextDocument(target);
+    } catch {
+      openDoc = undefined; // vanished between the check and now
     }
+  }
+  const res = patchComponentPortsText(openDoc?.getText() ?? "", ports);
+  if ("error" in res) return { ok: false, error: `${component}.component.json: ${res.error}` };
+
+  const edit = new vscode.WorkspaceEdit();
+  if (res.text === null) {
+    if (!openDoc) return { ok: true };
+    edit.deleteFile(openDoc.uri, { ignoreIfNotExists: true });
+  } else if (openDoc) {
+    if (res.text === openDoc.getText()) return { ok: true };
+    edit.replace(openDoc.uri, new vscode.Range(0, 0, openDoc.lineCount, 0), res.text);
+  } else {
+    edit.createFile(target, { overwrite: true, contents: Buffer.from(res.text, "utf8") });
   }
   const ok = await vscode.workspace.applyEdit(edit);
   if (ok) await index.refresh();
-  return ok;
+  return { ok };
 }

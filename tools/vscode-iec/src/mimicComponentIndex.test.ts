@@ -11,6 +11,7 @@ import {
   paletteCustomComponents,
   parseComponentEntry,
   parseComponentEntryStrict,
+  patchComponentPortsText,
   validatePortList,
   type ComponentFile,
 } from "./mimicComponentIndex";
@@ -204,5 +205,29 @@ test("applyComponentPortsEdit sets, deletes, and preserves unrelated (future-met
   assert.deepEqual(applyComponentPortsEdit({ palette: { category: "tanks" } }, [{ name: "a", x: 1, y: 1 }]), {
     palette: { category: "tanks" },
     ports: [{ name: "a", x: 1, y: 1 }],
+  });
+});
+
+test("patchComponentPortsText refuses unparseable text instead of overwriting it", () => {
+  const ports = [{ name: "in", x: 0, y: 0.5 }];
+  const mid = '{\n  "ports": [\n    {"name": "in", "x": 0, ';
+  const res = patchComponentPortsText(mid, ports);
+  assert.ok("error" in res);
+  assert.match((res as { error: string }).error, /valid/);
+  // A syntactically fine but invalid entry refuses too (not replaced).
+  assert.ok("error" in patchComponentPortsText('{"ports": 5, "defaults": {"a": 1}}', ports));
+  assert.ok("error" in patchComponentPortsText("[1]", ports));
+});
+
+test("patchComponentPortsText patches only ports; other keys survive; empty result is null", () => {
+  const res = patchComponentPortsText('{"defaults": {"a": 1}, "ports": []}', [{ name: "o", x: 1, y: 0.5 }]);
+  assert.ok("text" in res);
+  assert.deepEqual(JSON.parse((res as { text: string }).text), {
+    defaults: { a: 1 },
+    ports: [{ name: "o", x: 1, y: 0.5 }],
+  });
+  assert.deepEqual(patchComponentPortsText('{"ports": []}', null), { text: null });
+  assert.deepEqual(patchComponentPortsText("", [{ name: "a", x: 0, y: 0 }]), {
+    text: formatComponentEntry({ ports: [{ name: "a", x: 0, y: 0 }] }),
   });
 });

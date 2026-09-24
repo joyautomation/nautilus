@@ -615,3 +615,64 @@ test('VISUAL: ports-edit dot selection (panel-row to dot) actually changes what 
 		assertVisuallyDistinctSelection(states[baseIdx], states[selIdx]);
 	});
 });
+
+// ── invalid JSON: a stale canvas is locked, and a never-parsed doc offers
+// the way out instead of "waiting for document…" ────────────────────────────
+test('a parse error mid-edit locks the stale canvas: dragging equipment posts no op', async () => {
+	await withEditor(twoTankDoc(), async (ed) => {
+		const [t1] = await ed.eqRects();
+		await ed.deliver({ type: 'mimicError', message: 'not valid JSON: Unexpected token' });
+		await new Promise((r) => setTimeout(r, 60));
+		assert.equal(await ed.b.eval("!!document.querySelector('.cols.locked[inert]')"), true, 'canvas area is locked');
+		assert.match(await ed.b.eval("document.querySelector('.err')?.textContent ?? ''"), /Reopen as Text Editor/);
+		await ed.resetOps();
+		await ed.dragAndCapture([t1.cx, t1.cy], [[t1.cx + 60, t1.cy + 40]]);
+		await ed.pressArrow('right');
+		assert.deepEqual(await ed.ops(), [], 'no op reaches the host while the doc is broken');
+		// The text parses again: the canvas unlocks and gestures work.
+		await ed.deliver({ type: 'mimicDoc', doc: twoTankDoc(), title: 'harness.mimic.json' });
+		await new Promise((r) => setTimeout(r, 60));
+		assert.equal(await ed.b.eval("!!document.querySelector('.cols.locked')"), false);
+		await ed.dragAndCapture([t1.cx, t1.cy], [[t1.cx + 60, t1.cy + 40]]);
+		assert.ok((await ed.ops()).some((o) => o.type === 'moveEquipment'), 'drag commits once unlocked');
+	});
+});
+
+test('a doc that never parsed shows the error and "Reopen as Text Editor", which asks the host', async () => {
+	await withEditor(twoTankDoc(), async (ed) => {
+		// Fresh editor state: simulate a first load that failed by clearing the
+		// doc the harness delivered, then sending only the error.
+		await ed.b.eval('location.reload(), true');
+		for (let i = 0; i < 100; i++) {
+			if (await ed.b.eval("!!document.querySelector('.editor')")) break;
+			await new Promise((r) => setTimeout(r, 50));
+		}
+		await ed.deliver({ type: 'mimicError', message: 'not valid JSON: Unexpected end of input' });
+		await new Promise((r) => setTimeout(r, 60));
+		const text = await ed.b.eval("document.querySelector('.fatal')?.textContent ?? ''");
+		assert.match(text, /Unexpected end of input/);
+		assert.doesNotMatch(await ed.b.eval('document.body.textContent'), /waiting for document/);
+		await ed.b.eval("document.querySelector('.fatal .reopen').click(), true");
+		const posted = JSON.parse(await ed.b.eval('JSON.stringify(window.__posted().map((m) => m && m.type))'));
+		assert.ok(posted.includes('reopenAsText'));
+	});
+});
+
+test('the live pill reflects nautilus.liveValues.enabled and toggles it through the host', async () => {
+	await withEditor(twoTankDoc(), async (ed) => {
+		const pill = () => ed.b.eval("document.querySelector('button.live')?.textContent.trim() ?? ''");
+		await ed.deliver({ type: 'mimicTags', tags: null, enabled: false });
+		await new Promise((r) => setTimeout(r, 40));
+		assert.match(await pill(), /live off/);
+		await ed.deliver({ type: 'mimicTags', tags: null, enabled: true });
+		await new Promise((r) => setTimeout(r, 40));
+		assert.match(await pill(), /offline/);
+		await ed.deliver({ type: 'mimicTags', tags: { LevelPct: 42 }, enabled: true });
+		await new Promise((r) => setTimeout(r, 40));
+		assert.match(await pill(), /● live/);
+		await ed.resetOps();
+		await ed.b.eval("document.querySelector('button.live').click(), true");
+		const posted = JSON.parse(await ed.b.eval('JSON.stringify(window.__posted().map((m) => m && m.type))'));
+		assert.deepEqual(posted, ['toggleLive']);
+	});
+});

@@ -7,6 +7,7 @@
 
 import { execFile } from "child_process";
 import * as vscode from "vscode";
+import { followActiveDoc } from "./previewFollow";
 import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
 import { graphArgs, isL5X } from "./l5xRouting";
 import { LiveValues } from "./liveValues";
@@ -238,7 +239,14 @@ export class LdPreview implements vscode.Disposable {
       vscode.window.onDidChangeActiveTextEditor((ed) => {
         // Follow the active .ld file, like the markdown preview.
         if (this.panel && ed && ed.document.languageId === "iec-ld") {
+          // Diff state belongs to one document: kept when you click into
+          // the same file's text, dropped when the preview moves to another.
+          const next = followActiveDoc(
+            { docUri: this.docUri?.toString(), diffBase: this.diffBase },
+            ed.document.uri.toString()
+          );
           this.docUri = ed.document.uri;
+          this.diffBase = next.diffBase;
           this.scheduleUpdate(ed.document);
         }
       }),
@@ -404,7 +412,8 @@ export class LdPreview implements vscode.Disposable {
         "nautilus.ldPreview",
         "Ladder",
         vscode.ViewColumn.Beside,
-        webviewOptions(this.context.extensionUri)
+        // Like FBD's: selection, clipboard and scroll survive a tab switch.
+        { ...webviewOptions(this.context.extensionUri), retainContextWhenHidden: true }
       );
       this.panel.webview.html = buildWebviewHtml(this.panel.webview, this.context.extensionUri);
       this.panel.webview.onDidReceiveMessage((msg: { type?: string; op?: unknown }) => {

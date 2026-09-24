@@ -331,7 +331,17 @@ function applyOpToDoc(doc: MimicDoc, op: MimicOp): string | undefined {
         if (typeof rename !== "string" || rename === "") return "id must be a non-empty string";
         if (rename !== eq.id && idTaken(doc, rename)) return `id "${rename}" is already taken`;
       }
+      const oldId = eq.id;
       applyPatch(eq as unknown as Record<string, unknown>, op.patch);
+      // A rename carries every pipe anchored to the old id along with it, in
+      // the same edit — otherwise the pipes silently detach (an anchor to a
+      // missing equip falls back to its stored point).
+      if (typeof rename === "string" && rename !== oldId) {
+        for (const p of doc.pipes ?? []) {
+          if (p.from?.equip === oldId) p.from = { ...p.from, equip: rename };
+          if (p.to?.equip === oldId) p.to = { ...p.to, equip: rename };
+        }
+      }
       break;
     }
     case "deleteEquipment": {

@@ -35,6 +35,35 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   and edit, version) now times out after 15 seconds, and an acceptance-test
   run after 5 minutes; the ladder and SFC edit queues previously waited
   forever.
+- **The Component Editor no longer wipes a half-typed sidecar.** Dragging
+  a port while the side-by-side `*.component.json` didn't parse replaced
+  the whole file with just `{ports}`. The edit is now refused with a
+  warning, and while the JSON is broken the canvas is dimmed and locked.
+  The mimic editor's shared-ports edits (the `p` ports mode) read the
+  sidecar's open buffer, unsaved edits included, instead of the disk
+  copy, and refuse an unparseable sidecar in the same way.
+- **A mimic that doesn't parse says so, with a way out.** Opening an
+  invalid `*.mimic.json` (or `*.component.json`) used to show the error
+  above a "waiting for document…" that never went away. It now shows the
+  error with a **Reopen as Text Editor** button. A parse error mid-edit
+  dims and locks the last good canvas, so a stray drag can't queue up a
+  toast for every refused op.
+- **Renaming a mimic equipment id keeps its pipes attached.** Pipes
+  anchored to the old id (`from.equip` / `to.equip`) move to the new id
+  in the same edit.
+- **Diagram diffs stay put when you click into the file.** The FBD
+  preview left diff mode as soon as you focused the same file's text
+  editor. The Ladder and SFC previews kept the old base when you switched
+  files, so file B was overlaid on file A's HEAD. All three now keep the
+  diff (HEAD, controller or between revisions) while the preview shows
+  the same file, and leave diff mode when it moves to another.
+- **Ladder and SFC previews keep their state across tab switches.**
+  Selection, clipboard and scroll position survive, as they already did
+  in the FBD preview.
+- **The mimic editor respects `nautilus.liveValues.enabled`.** It polled
+  `/api/state` every 2 s regardless of the setting. Now it polls only while
+  live values are on, and its live pill toggles them, like the pill on the
+  FBD, Ladder and SFC diagrams: ● live / ◌ offline / ○ live off.
 
 ## [0.11.0] - 2026-09-24
 

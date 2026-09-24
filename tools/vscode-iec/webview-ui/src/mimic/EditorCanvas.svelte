@@ -982,6 +982,9 @@
 
 	// ── keyboard ────────────────────────────────────────────────────────────
 	function onkeydown(e: KeyboardEvent) {
+		// Stale canvas while the JSON doesn't parse (MimicApp locks it):
+		// no keyboard gestures either.
+		if (ed.error) return;
 		const t = e.target as HTMLElement | null;
 		if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
 		if (e.key === 'Escape') {

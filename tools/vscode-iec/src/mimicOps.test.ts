@@ -71,6 +71,36 @@ test("updateEquipment: value sets, null deletes, id renames with collision check
   assert.match(refuse(BASE, { type: "updateEquipment", id: "tank1", patch: { id: "pipe1" } }), /taken/);
 });
 
+test("updateEquipment: renaming an id carries pipes anchored to it along (same edit)", () => {
+  const anchored = apply(BASE, {
+    type: "addPipe",
+    id: "feed",
+    points: [],
+    from: { equip: "pump1", port: "out" },
+    to: { equip: "tank1", port: "left" },
+  });
+  const withLoop = apply(anchored, {
+    type: "addPipe",
+    id: "loop",
+    points: [],
+    from: { equip: "tank1", port: "out" },
+    to: { equip: "tank1", port: "in" },
+  });
+  const out = apply(withLoop, { type: "updateEquipment", id: "tank1", patch: { id: "t101", label: "T-101" } });
+  const d = doc(out);
+  const feed = d.pipes!.find((p) => p.id === "feed")!;
+  assert.deepEqual(feed.from, { equip: "pump1", port: "out" });
+  assert.deepEqual(feed.to, { equip: "t101", port: "left" });
+  const loop = d.pipes!.find((p) => p.id === "loop")!;
+  assert.deepEqual(loop.from, { equip: "t101", port: "out" });
+  assert.deepEqual(loop.to, { equip: "t101", port: "in" });
+  // Unanchored pipes are untouched.
+  assert.deepEqual(d.pipes!.find((p) => p.id === "pipe1"), doc(BASE).pipes![0]);
+  // A patch that doesn't rename leaves anchors alone.
+  const same = apply(withLoop, { type: "updateEquipment", id: "tank1", patch: { id: "tank1", label: "x" } });
+  assert.deepEqual(doc(same).pipes!.find((p) => p.id === "feed")!.to, { equip: "tank1", port: "left" });
+});
+
 test("setEquipmentPorts sets an override, null clears it, empty array is a valid explicit override", () => {
   const out = apply(BASE, {
     type: "setEquipmentPorts",

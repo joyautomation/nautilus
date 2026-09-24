@@ -23,9 +23,11 @@ import {
   componentNameFromFilename,
   formatComponentEntry,
   parseComponentEntryStrict,
+  patchComponentPortsText,
   validatePortList,
   type Port,
 } from "./mimicComponentIndex";
+import { reopenAsText } from "./mimicEditor";
 import { userComponentScriptTag, type UserComponentManager } from "./userComponents";
 
 const DEBOUNCE_MS = 150;
@@ -133,19 +135,24 @@ export class ComponentEditorProvider implements vscode.CustomTextEditorProvider 
           postUserComponentDiagnostics();
           return;
         }
+        if (msg?.type === "reopenAsText") {
+          reopenAsText(document.uri);
+          return;
+        }
         if (msg?.type !== "componentOp" || !validatePortList(msg.ports)) return;
         this.opQueue = this.opQueue
           .then(async () => {
             // Patch just `ports` — any other (future-metadata) keys already
-            // in the file pass through untouched.
-            let entry: Record<string, unknown>;
-            try {
-              entry = parseComponentEntryStrict(document.getText());
-            } catch {
-              entry = {};
+            // in the file pass through untouched. If the text doesn't parse
+            // (a side-by-side hand edit mid-keystroke), REFUSE: replacing it
+            // with `{ports}` would silently throw the hand edit away.
+            const res = patchComponentPortsText(document.getText(), msg.ports!);
+            if ("error" in res) {
+              void vscode.window.showWarningMessage(`nautilus: ${filename}: ${res.error}`);
+              postDoc();
+              return;
             }
-            const next = { ...entry, ports: msg.ports };
-            const text = formatComponentEntry(next);
+            const text = res.text ?? formatComponentEntry({});
             if (text === document.getText()) return;
             const edit = new vscode.WorkspaceEdit();
             edit.replace(document.uri, new vscode.Range(0, 0, document.lineCount, 0), text);
@@ -155,6 +162,7 @@ export class ComponentEditorProvider implements vscode.CustomTextEditorProvider 
           .catch(() => {
             /* best-effort — the change-event debounce will resync the webview */
           });
+        return;
       }
     );
 

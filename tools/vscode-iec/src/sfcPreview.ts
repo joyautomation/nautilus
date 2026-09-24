@@ -15,6 +15,7 @@
 
 import { execFile } from "child_process";
 import * as vscode from "vscode";
+import { followActiveDoc } from "./previewFollow";
 import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
 import { LiveValues } from "./liveValues";
 import {
@@ -196,7 +197,14 @@ export class SfcPreview implements vscode.Disposable {
       vscode.window.onDidChangeActiveTextEditor((ed) => {
         // Follow the active .sfc file, like the FBD/Ladder previews.
         if (this.panel && ed && ed.document.languageId === "iec-sfc") {
+          // Diff state belongs to one document: kept when you click into
+          // the same file's text, dropped when the preview moves to another.
+          const next = followActiveDoc(
+            { docUri: this.docUri?.toString(), diffBase: this.diffBase },
+            ed.document.uri.toString()
+          );
           this.docUri = ed.document.uri;
+          this.diffBase = next.diffBase;
           this.scheduleUpdate(ed.document);
         }
       }),
@@ -354,7 +362,8 @@ export class SfcPreview implements vscode.Disposable {
         "nautilus.sfcPreview",
         "SFC",
         vscode.ViewColumn.Beside,
-        webviewOptions(this.context.extensionUri)
+        // Like FBD's: selection, clipboard and scroll survive a tab switch.
+        { ...webviewOptions(this.context.extensionUri), retainContextWhenHidden: true }
       );
       this.panel.webview.html = buildWebviewHtml(this.panel.webview, this.context.extensionUri);
       this.panel.webview.onDidReceiveMessage((msg: { type?: string; op?: unknown }) => {

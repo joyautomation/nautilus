@@ -203,3 +203,25 @@ export function applyComponentPortsEdit(
   else next.ports = ports;
   return next;
 }
+
+/** Patch the `ports` key of a sidecar's CURRENT text (the open buffer's,
+ * dirty or not — never a stale disk read). Strict: text that doesn't parse
+ * as a sidecar entry refuses with a message instead of being treated as {}
+ * — a half-typed hand edit must never be replaced wholesale by `{ports}`
+ * (that silently threw away everything in the file). Empty text is a fresh
+ * entry. Returns the new text, `null` when the result is empty (the caller
+ * deletes the file, or no-ops if there wasn't one), or an error. */
+export function patchComponentPortsText(
+  text: string,
+  ports: Port[] | null
+): { text: string | null } | { error: string } {
+  let entry: ComponentManifestEntry;
+  try {
+    entry = parseComponentEntryStrict(text);
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err);
+    return { error: `the sidecar isn't valid right now (${why}) — fix the JSON before editing ports on the canvas` };
+  }
+  const next = applyComponentPortsEdit(entry, ports);
+  return { text: Object.keys(next).length === 0 ? null : formatComponentEntry(next) };
+}

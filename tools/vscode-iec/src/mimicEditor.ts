@@ -4,9 +4,11 @@
 // as one WorkspaceEdit so text undo/redo covers the whole session, and
 // editing the JSON side by side updates the canvas live.
 //
-// When a controller is reachable (nautilus.runtimeUrl), the editor polls
-// GET /api/state and renders the mimic LIVE while you edit — tag names feed
-// binding autocomplete and bound components animate with the real process.
+// When a controller is reachable (nautilus.runtimeUrl) and live values are on
+// (nautilus.liveValues.enabled — the same switch as the text editors' pills
+// and the diagrams' live pill), the editor polls GET /api/state and renders
+// the mimic LIVE while you edit — tag names feed binding autocomplete and
+// bound components animate with the real process.
 
 import * as vscode from "vscode";
 import { webviewOptions } from "./fbdPreview";
@@ -70,6 +72,18 @@ function setSnapToGridConfig(value: boolean): void {
     ? vscode.ConfigurationTarget.Workspace
     : vscode.ConfigurationTarget.Global;
   void vscode.workspace.getConfiguration("nautilus").update("mimic.snapToGrid", value, target);
+}
+
+/** The shared live-values switch (liveValues.ts owns it; the toolbar pill
+ * flips it through the same `nautilus.liveValues.toggle` command). */
+function liveEnabled(): boolean {
+  return vscode.workspace.getConfiguration("nautilus").get<boolean>("liveValues.enabled", true);
+}
+
+/** "Reopen as Text Editor" from an editor whose document doesn't parse:
+ * `default` is VS Code's built-in text editor for any resource. */
+export function reopenAsText(uri: vscode.Uri): void {
+  void vscode.commands.executeCommand("vscode.openWith", uri, "default");
 }
 
 /** Fetch the controller's tag snapshot, or null when unreachable. */
@@ -215,6 +229,9 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
     const postConfig = () => void panel.webview.postMessage({ type: "mimicConfig", snapToGrid: snapToGridConfig() });
     const configSub = vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("nautilus.mimic.snapToGrid")) postConfig();
+      if (e.affectsConfiguration("nautilus.liveValues.enabled") || e.affectsConfiguration("nautilus.runtimeUrl")) {
+        void postTags();
+      }
     });
 
     // *.component.json sidecars: the project-wide index (mimicComponents.ts)
@@ -240,6 +257,14 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
           logMimic("webview: " + String((msg as { msg?: unknown }).msg ?? ""));
           return;
         }
+        if (msg?.type === "toggleLive") {
+          void vscode.commands.executeCommand("nautilus.liveValues.toggle");
+          return;
+        }
+        if (msg?.type === "reopenAsText") {
+          reopenAsText(document.uri);
+          return;
+        }
         if (msg?.type === "setSnapToGrid") {
           setSnapToGridConfig(!!(msg as { value?: boolean }).value);
           return;
@@ -250,9 +275,12 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
           this.portsQueue = this.portsQueue
             .then(async () => {
               logMimic("manifestOp: " + JSON.stringify(op));
-              const ok = await writeComponentPortsEdit(this.componentIndex, document.uri, op.component, op.ports ?? null);
-              logMimic(`  -> applied=${ok}`);
-              if (ok) this.broadcastPorts();
+              const res = await writeComponentPortsEdit(this.componentIndex, document.uri, op.component, op.ports ?? null);
+              logMimic(`  -> applied=${res.ok}${res.error ? " (" + res.error + ")" : ""}`);
+              if (res.error) void vscode.window.showWarningMessage("nautilus: " + res.error);
+              // Re-broadcast either way: on a refusal the webview's
+              // optimistic ports snap back to what the sidecar really says.
+              this.broadcastPorts();
             })
             .catch((err) => logMimic("  -> exception: " + String(err)));
           return;
@@ -283,11 +311,17 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
       }
     );
 
-    // Live tags: poll while the panel is visible; null = controller offline
-    // (the webview shows the pill grey and keeps component defaults).
-    const postTags = async () => void panel.webview.postMessage({ type: "mimicTags", tags: await fetchTags() });
+    // Live tags: poll while the panel is visible AND live values are on;
+    // tags null = controller offline (the webview shows the pill grey and
+    // keeps component defaults). With live values off nothing is fetched at
+    // all — the pill reads "live off" and clicking it turns them back on.
+    const postTags = async () => {
+      const enabled = liveEnabled();
+      const tags = enabled ? await fetchTags() : null;
+      void panel.webview.postMessage({ type: "mimicTags", tags, enabled });
+    };
     const tagTimer = setInterval(() => {
-      if (panel.visible) void postTags();
+      if (panel.visible && liveEnabled()) void postTags();
     }, TAG_POLL_MS);
     void postTags();
 

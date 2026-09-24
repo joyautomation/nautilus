@@ -69,8 +69,12 @@ export const ed = $state({
 	title: 'mimic',
 	/** Parse error from the host — the JSON is being hand-edited mid-keystroke. */
 	error: '',
-	/** Live tag snapshot from the controller; null = offline (defaults render). */
+	/** Live tag snapshot from the controller; null = offline or live values
+	 * off (defaults render). */
 	tags: null as Record<string, unknown> | null,
+	/** Mirrors `nautilus.liveValues.enabled` (the shared live switch — see
+	 * toggleLive()); false = the host isn't polling at all. */
+	liveEnabled: true,
 	/** Resolved component ports, aggregated from the project's
 	 * *.component.json sidecars and keyed by component name; null until the
 	 * host's first mimicManifest message. */
@@ -94,13 +98,31 @@ export const ed = $state({
 	snapToGrid: true
 });
 
+/** While the document doesn't parse (ed.error), the canvas is a stale
+ * read-only picture — MimicApp locks it, and ops are dropped here as a
+ * backstop (a gesture already in flight, a keyboard nudge) so the host
+ * isn't asked to edit text it would refuse with a warning toast apiece. */
 export function postOp(op: MimicOp): void {
+	if (ed.error) return;
 	vscode.postMessage({ type: 'mimicOp', op });
 }
 
 /** Commit a component-level ports edit to the project manifest. */
 export function postManifestOp(op: ManifestOp): void {
+	if (ed.error) return;
 	vscode.postMessage({ type: 'manifestOp', op });
+}
+
+/** The live pill: the same `nautilus.liveValues.toggle` as the diagrams'
+ * pill and the status-bar item; the host answers with a fresh mimicTags. */
+export function toggleLive(): void {
+	vscode.postMessage({ type: 'toggleLive' });
+}
+
+/** Leave the graphical editor for VS Code's text editor on this file —
+ * the way out when the JSON doesn't parse. */
+export function reopenAsText(): void {
+	vscode.postMessage({ type: 'reopenAsText' });
 }
 
 export function trace(msg: string): void {
