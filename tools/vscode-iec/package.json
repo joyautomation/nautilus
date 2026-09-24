@@ -410,6 +410,11 @@
           "type": "boolean",
           "default": true,
           "description": "Snap dragged equipment, labels and pipe vertices to the grid in the Mimic Editor. Also toggleable from the editor's toolbar. Shift-arrow nudging always snaps regardless of this setting."
+        },
+        "nautilus.confirmControllerWrites": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask for confirmation before Download Program to Controller or Rollback Controller Program change what a running controller is executing. Turn this off only when iterating against a local simulator you're sure of — a tunneled nautilus.runtimeUrl can still point at a real plant, so leave it on for anything that might be live."
         }
       }
     },
@@ -511,7 +516,7 @@
     "vscode:prepublish": "npm run compile && npm run build:webview",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/scan.test.js out/cliResolve.test.js out/gitHistory.test.js out/programSync.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js && npm --prefix webview-ui run test",
+    "test": "npm run compile && node --test out/scan.test.js out/cliResolve.test.js out/gitHistory.test.js out/programSync.test.js out/onlineEditConfirm.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js && npm --prefix webview-ui run test",
     "build:webview": "npm --prefix webview-ui run build",
     "test:e2e": "npm run compile && node out/e2e/run.js"
   },
