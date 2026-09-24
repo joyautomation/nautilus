@@ -5,6 +5,22 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- **Diagram diffs between any two git revisions.** `nautilus: Diff Ladder
+  Diagram (between git revisions…)`, and the same for FBD and SFC, list
+  every commit that touched the file (newest first, following renames),
+  ask for an older and a newer side, and overlay the two as rungs, blocks
+  and wires, or chart, with the same added / removed / changed marking
+  the HEAD and controller diffs use. The newer side may be the working
+  tree, in which case the overlay keeps re-diffing as you edit; with two
+  commits chosen both sides are frozen. `src/gitHistory.ts` (log + show,
+  parser unit-tested), `src/revisionPick.ts` (the two quick picks).
+- **The ladder revision diff works on `.L5X` too.** `Diff Ladder Diagram
+  (between git revisions…)` is offered on a Logix export and graphs each
+  side through `naut logix graph`, so a rung changed between two commits
+  reads as a changed rung rather than as a wall of XML.
+
 ### Fixed
 
 - **The CLI is found when VS Code doesn't see your shell's PATH.** VS Code
@@ -84,8 +100,9 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   Windows -- the file is parsed, not executed. `Reopen Editor With...` ->
   nautilus Ladder Diagram, or the `nautilus: Open Ladder Diagram Preview`
   command.
-- **Diagram diff across git revisions works on `.L5X` too**, so a changed
-  rung reads as a changed rung rather than as a wall of XML.
+- **The ladder diff against git HEAD works on `.L5X` too**, so a changed
+  rung reads as a changed rung rather than as a wall of XML. (Its command
+  was hidden from the palette on a `.L5X` until 0.9.29.)
 
 ### Fixed
 

@@ -221,6 +221,11 @@
         "icon": "$(diff)"
       },
       {
+        "command": "nautilus.fbd.diffRevisions",
+        "title": "nautilus: Diff FBD Diagram (between git revisions…)",
+        "icon": "$(diff)"
+      },
+      {
         "command": "nautilus.ld.diff",
         "title": "nautilus: Diff Ladder Diagram (vs git HEAD)",
         "icon": "$(diff)"
@@ -231,6 +236,11 @@
         "icon": "$(diff)"
       },
       {
+        "command": "nautilus.ld.diffRevisions",
+        "title": "nautilus: Diff Ladder Diagram (between git revisions…)",
+        "icon": "$(diff)"
+      },
+      {
         "command": "nautilus.sfc.diff",
         "title": "nautilus: Diff SFC Diagram (vs git HEAD)",
         "icon": "$(diff)"
@@ -238,6 +248,11 @@
       {
         "command": "nautilus.sfc.diffController",
         "title": "nautilus: Diff SFC Diagram (vs Controller)",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "nautilus.sfc.diffRevisions",
+        "title": "nautilus: Diff SFC Diagram (between git revisions…)",
         "icon": "$(diff)"
       },
       {
@@ -339,6 +354,10 @@
           "when": "resourceLangId == iec-fbd"
         },
         {
+          "command": "nautilus.fbd.diffRevisions",
+          "when": "resourceLangId == iec-fbd"
+        },
+        {
           "command": "nautilus.ld.diff",
           "when": "resourceLangId == iec-ld || resourceLangId == logix-l5x"
         },
@@ -347,11 +366,19 @@
           "when": "resourceLangId == iec-ld"
         },
         {
+          "command": "nautilus.ld.diffRevisions",
+          "when": "resourceLangId == iec-ld || resourceLangId == logix-l5x"
+        },
+        {
           "command": "nautilus.sfc.diff",
           "when": "resourceLangId == iec-sfc"
         },
         {
           "command": "nautilus.sfc.diffController",
+          "when": "resourceLangId == iec-sfc"
+        },
+        {
+          "command": "nautilus.sfc.diffRevisions",
           "when": "resourceLangId == iec-sfc"
         }
       ]
@@ -484,7 +511,7 @@
     "vscode:prepublish": "npm run compile && npm run build:webview",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/scan.test.js out/cliResolve.test.js out/programSync.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js && npm --prefix webview-ui run test",
+    "test": "npm run compile && node --test out/scan.test.js out/cliResolve.test.js out/gitHistory.test.js out/programSync.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js && npm --prefix webview-ui run test",
     "build:webview": "npm --prefix webview-ui run build",
     "test:e2e": "npm run compile && node out/e2e/run.js"
   },

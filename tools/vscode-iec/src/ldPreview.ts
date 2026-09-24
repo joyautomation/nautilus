@@ -20,6 +20,7 @@ import {
   postDiagnostics,
   webviewOptions,
 } from "./fbdPreview";
+import { pickRevisions } from "./revisionPick";
 
 /** An L5X is a Rockwell export, not nautilus source — but `naut logix
  * graph` renders it into the SAME ladder model `naut ld graph` emits,
@@ -218,8 +219,10 @@ export class LdPreview implements vscode.Disposable {
   private debounce?: NodeJS.Timeout;
   /** Set while diffing: the frozen base source + title. Edits RE-DIFF
    * against it (the overlay tracks your changes live); the toolbar's
-   * "exit diff" or reopening the preview leaves diff mode. */
-  private diffBase?: { src: string; title: string };
+   * "exit diff" or reopening the preview leaves diff mode. `headSrc` is
+   * set when the newer side is a git revision too — then both sides are
+   * frozen and edits leave the overlay alone. */
+  private diffBase?: { src: string; title: string; headSrc?: string };
   private disposables: vscode.Disposable[] = [];
 
   constructor(
@@ -320,11 +323,40 @@ export class LdPreview implements vscode.Disposable {
     );
   }
 
-  /** Enter diff mode: freeze the base and post the first overlay. */
-  private async showDiff(doc: vscode.TextDocument, baseSrc: string, title: string): Promise<void> {
+  /** Visual diff between any two revisions of the file in git — or one
+   * revision and the working tree. Every commit that touched the file is
+   * offered, newest first; with two commits chosen both sides are frozen. */
+  async diffRevisions(): Promise<void> {
+    const doc = this.activeLdDoc();
+    if (!doc) {
+      void vscode.window.showErrorMessage("nautilus: open a .ld or .L5X file first");
+      return;
+    }
+    if (doc.uri.scheme !== "file") {
+      void vscode.window.showErrorMessage("nautilus: ladder diff needs a file on disk");
+      return;
+    }
+    const pair = await pickRevisions(doc.uri.fsPath);
+    if (!pair) return;
+    await this.showDiff(
+      doc,
+      pair.base.src,
+      `${docTitle(doc)} — ${pair.base.label} ↔ ${pair.head?.label ?? "working tree"}`,
+      pair.head?.src
+    );
+  }
+
+  /** Enter diff mode: freeze the base (and the head, when given) and post
+   * the first overlay. */
+  private async showDiff(
+    doc: vscode.TextDocument,
+    baseSrc: string,
+    title: string,
+    headSrc?: string
+  ): Promise<void> {
     this.docUri = doc.uri;
     this.ensurePanel();
-    this.diffBase = { src: baseSrc, title };
+    this.diffBase = { src: baseSrc, title, headSrc };
     await this.postDiff(doc);
   }
 
@@ -332,7 +364,8 @@ export class LdPreview implements vscode.Disposable {
   private async postDiff(doc: vscode.TextDocument): Promise<void> {
     if (!this.panel || !this.diffBase) return;
     const at = docPath(doc);
-    const [base, head] = await Promise.all([ldGraph(this.diffBase.src, at), ldGraph(doc.getText(), at)]);
+    const headSrc = this.diffBase.headSrc ?? doc.getText();
+    const [base, head] = await Promise.all([ldGraph(this.diffBase.src, at), ldGraph(headSrc, at)]);
     if (base.error || head.error) {
       // Mid-edit the head may not parse for a moment — stay in diff mode,
       // surface the message, and the next edit re-diffs.
@@ -406,9 +439,9 @@ export class LdPreview implements vscode.Disposable {
   private async update(doc: vscode.TextDocument): Promise<void> {
     if (!this.panel) return;
     // A text change while diffing keeps the diff LIVE: re-overlay the
-    // current text onto the frozen base.
+    // current text onto the frozen base. Two frozen revisions don't move.
     if (this.diffBase) {
-      await this.postDiff(doc);
+      if (this.diffBase.headSrc === undefined) await this.postDiff(doc);
       return;
     }
     this.panel.title = "Ladder: " + docTitle(doc);

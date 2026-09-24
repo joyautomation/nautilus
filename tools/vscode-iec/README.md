@@ -60,8 +60,10 @@ expects:
 - **Visual diff** — `nautilus: Diff FBD Diagram (vs git HEAD)` overlays the
   committed and working-tree diagrams, coloring added / removed / changed
   blocks and wires; `(vs Controller)` does the same against the program a
-  live controller is running. Review a logic change the way you'd review
-  the wiring, not the text.
+  live controller is running; `(between git revisions…)` picks any two
+  commits from the file's history (or one commit and the working tree)
+  and overlays those. Review a logic change the way you'd review the
+  wiring, not the text.
 - **Online edits speak `.fbd`** — a controller running an FBD program
   serves and accepts the `.fbd` source itself, so download / text diff /
   pull and the sync status bar work exactly as they do for `.st`.
@@ -120,8 +122,8 @@ own textual grammar; the extension projects it into the classic chart view:
   incomplete chart (a step with no transitions yet) is a diagnostic
   breadcrumb, not a rejected edit.
 - **Visual diff** — `nautilus: Diff SFC Diagram (vs git HEAD)` / `(vs
-  Controller)`, the same commands and added/removed/changed visual
-  language FBD/Ladder use: added/removed/changed steps, transitions,
+  Controller)` / `(between git revisions…)`, the same commands and
+  added/removed/changed visual language FBD/Ladder use: added/removed/changed steps, transitions,
   action associations and comments overlay on the chart, a removed
   element spliced back in ghosted, read-only until "exit diff".
 

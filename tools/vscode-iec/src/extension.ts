@@ -116,6 +116,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("nautilus.ld.diffController", () => ladder.diffController()),
     vscode.commands.registerCommand("nautilus.sfc.diff", () => sfc.diff()),
     vscode.commands.registerCommand("nautilus.sfc.diffController", () => sfc.diffController()),
+    vscode.commands.registerCommand("nautilus.fbd.diffRevisions", () => fbd.diffRevisions()),
+    vscode.commands.registerCommand("nautilus.ld.diffRevisions", () => ladder.diffRevisions()),
+    vscode.commands.registerCommand("nautilus.sfc.diffRevisions", () => sfc.diffRevisions()),
     // The connection is just the nautilus.runtimeUrl setting; this command
     // is the discoverable way to change it. The config watcher below does
     // the actual reconnect, so writing the setting IS connecting. Recently
