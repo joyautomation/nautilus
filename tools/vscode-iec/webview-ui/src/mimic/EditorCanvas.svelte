@@ -731,7 +731,8 @@
 				drag.moved = true;
 			}
 		} else if (drag.kind === 'port') {
-			const eq = (doc?.equipment ?? []).find((e) => e.id === drag.id);
+			const id = drag.id;
+			const eq = (doc?.equipment ?? []).find((e) => e.id === id);
 			if (eq) {
 				const b = eqBox(eq);
 				const [fx, fy] = toFraction(b, pt(e));
@@ -810,14 +811,16 @@
 				postOp({ type: 'updateLabel', index: drag.index, patch: { x: drag.x, y: drag.y } });
 				settle({ labels: { [drag.index]: { x: drag.x, y: drag.y } } });
 			} else if (drag.kind === 'port') {
-				const eq = (doc?.equipment ?? []).find((e) => e.id === drag.id);
+				const id = drag.id;
+				const eq = (doc?.equipment ?? []).find((e) => e.id === id);
 				if (eq) {
 					const ports = resolvePorts(eq, ed.manifest).map((p) => ({ ...p }));
 					ports[drag.index] = { ...ports[drag.index], x: drag.fx, y: drag.fy };
 					commitPorts(eq, ports);
 				}
 			} else if (drag.kind === 'anchor') {
-				const p = (doc?.pipes ?? []).find((pp) => pp.id === drag.id);
+				const id = drag.id;
+				const p = (doc?.pipes ?? []).find((pp) => pp.id === id);
 				if (p) dropAnchor(p, drag.end, drag.x, drag.y);
 			} else {
 				const pts = $state.snapshot(drag.pts) as [number, number][];

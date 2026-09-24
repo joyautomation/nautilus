@@ -238,7 +238,9 @@
 		return 'Step' + i;
 	}
 	function selectedStepName(): string | undefined {
-		return selected?.kind === 'step' ? model.steps.find((s) => s.id === selected!.id)?.name : undefined;
+		if (selected?.kind !== 'step') return undefined;
+		const id = selected.id;
+		return model.steps.find((s) => s.id === id)?.name;
 	}
 	function selectedTransId(): string | undefined {
 		return selected?.kind === 'trans' ? selected.id : undefined;
@@ -394,7 +396,8 @@
 	function requestDeleteSelected() {
 		if (!selected) return;
 		if (selected.kind === 'step') {
-			const step = model.steps.find((s) => s.id === selected!.id);
+			const id = selected.id;
+			const step = model.steps.find((s) => s.id === id);
 			if (!step) return;
 			const attached = attachedTransitions(model, step.name);
 			if (attached.length > 0) {
@@ -733,7 +736,8 @@
 		{/each}
 
 		{#if drag?.kind === 'connect'}
-			{@const src = layout.steps.find((p) => p.id === drag.from)}
+			{@const from = drag.from}
+			{@const src = layout.steps.find((p) => p.id === from)}
 			{#if src}
 				{@const start = connectHandlePos(src)}
 				<line x1={start.x} y1={start.y} x2={drag.x} y2={drag.y} class="rubberband" />

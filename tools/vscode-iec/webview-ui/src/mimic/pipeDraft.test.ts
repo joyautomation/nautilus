@@ -1,3 +1,4 @@
+/// <reference types="node" />
 // Regression coverage for BUG 1 (Enter wouldn't complete a pipe with an
 // anchored end) — see EditorCanvas.svelte's finishPipe(), which delegates
 // to resolveDraftFinish() below. No svelte/vscode imports, runs directly

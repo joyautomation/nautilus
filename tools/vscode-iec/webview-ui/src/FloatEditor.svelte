@@ -7,7 +7,7 @@
 		at: { x: number; y: number; w: number };
 		commit: (v: string) => void;
 		multiline?: boolean;
-		suggest?: 'tags' | 'types';
+		suggest?: 'tags' | 'types' | 'functions';
 	};
 </script>
 
