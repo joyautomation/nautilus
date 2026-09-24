@@ -28,7 +28,14 @@ CHANGELOG too) in the same PR as the change, and merge. On the push to main,
 
 For the extension, main **is the pre-release channel**: every bump on main
 is published with `--pre-release`, to both the Marketplace and Open VSX, from
-one VSIX. Bump the patch (`0.11.3` → `0.11.4`) for each change.
+one VSIX.
+
+Extension PRs usually **don't bump**. Several are often open at once, and
+when each one claims the next patch they collide (0.9.28, 0.9.31 and 0.9.32
+were each claimed twice). A PR adds its notes under `## [Unreleased]` at the
+top of the CHANGELOG instead. To ship, a release PR, which can be a one-line
+change, renames `[Unreleased]` to `[0.11.N] - <date>` and bumps the patch
+(`0.11.3` → `0.11.4`). A single urgent fix can still bump in its own PR.
 
 ## Extension channels
 
