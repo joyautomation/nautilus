@@ -19,7 +19,15 @@
 // task's copy (see diffLibraries).
 
 import * as vscode from "vscode";
-import { controllerPrelude, normalize, pouOf, splitProgram } from "./programSync";
+import {
+  controllerPrelude,
+  downloadConfirmMessage,
+  forceDownloadConfirmMessage,
+  normalize,
+  pouOf,
+  rollbackConfirmMessage,
+  splitProgram,
+} from "./programSync";
 
 /** One entry in the GET /api/program directory — every program in the
  * resource, source omitted. */
@@ -108,6 +116,14 @@ export class OnlineEdit implements vscode.Disposable {
       .getConfiguration("nautilus")
       .get<string>("runtimeUrl", "http://localhost:8080")
       .replace(/\/+$/, "");
+  }
+
+  /** Whether download() and rollback() should ask before writing to the
+   * controller (nautilus.confirmControllerWrites). Defaults on — a local
+   * tunnel can point at a real plant, so there's no "safe" URL to skip it
+   * for; people iterating against a sim turn this off deliberately. */
+  private confirmWritesEnabled(): boolean {
+    return vscode.workspace.getConfiguration("nautilus").get<boolean>("confirmControllerWrites", true);
   }
 
   /** Headers for a write request: JSON plus the bearer token when the
@@ -260,6 +276,14 @@ export class OnlineEdit implements vscode.Disposable {
       );
       return;
     }
+    if (this.confirmWritesEnabled()) {
+      const pick = await vscode.window.showWarningMessage(
+        downloadConfirmMessage(this.runtimeUrl(), composed.programFile, composed.pou, info.hash),
+        { modal: true },
+        "Download"
+      );
+      if (pick !== "Download") return;
+    }
     try {
       const res = await fetch(this.runtimeUrl() + "/api/program", {
         method: "PUT",
@@ -268,8 +292,11 @@ export class OnlineEdit implements vscode.Disposable {
       });
       const body = (await res.json()) as { hash?: string; resets?: string[]; error?: string };
       if (res.status === 409) {
+        // The "Force download" choice below is itself an explicit
+        // confirmation — no modal on top of it, but it names the target
+        // (controller URL, program file/POU) just as plainly.
         const pick = await vscode.window.showWarningMessage(
-          "nautilus: controller program changed under you — " + (body.error ?? ""),
+          forceDownloadConfirmMessage(this.runtimeUrl(), composed.programFile, composed.pou, body.error ?? ""),
           "Force download",
           "Show diff"
         );
@@ -481,6 +508,14 @@ export class OnlineEdit implements vscode.Disposable {
         `nautilus: multiple program files (${ws.programs.map((p) => p.file).join(", ")}) — open the one to roll back`
       );
       return;
+    }
+    if (this.confirmWritesEnabled()) {
+      const pick = await vscode.window.showWarningMessage(
+        rollbackConfirmMessage(this.runtimeUrl(), program?.pou ?? ""),
+        { modal: true },
+        "Roll back"
+      );
+      if (pick !== "Roll back") return;
     }
     const query = program?.pou ? "?pou=" + encodeURIComponent(program.pou) : "";
     try {

@@ -21,6 +21,19 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   side through `naut logix graph`, so a rung changed between two commits
   reads as a changed rung rather than as a wall of XML.
 
+### Changed
+
+- **Download and rollback ask before they touch a running controller.**
+  *Download Program to Controller* and *Rollback Controller Program* now
+  show a modal confirmation naming the controller URL, the program
+  file/POU, and (for download) the controller's current program hash,
+  before pushing an online edit or undoing one -- an explicit "are you
+  sure" before an online change to what may be a live process. The
+  post-conflict *Force download* prompt is unchanged (it was already a
+  confirmation) but is now just as explicit about the target. Turn this
+  off with the new `nautilus.confirmControllerWrites` setting (default
+  on) if you're iterating against a local simulator.
+
 ### Fixed
 
 - **The CLI is found when VS Code doesn't see your shell's PATH.** VS Code

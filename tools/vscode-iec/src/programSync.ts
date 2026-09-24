@@ -54,3 +54,42 @@ export function normalize(src: string): string {
     .filter((l) => l.length > 0)
     .join("\n");
 }
+
+// ── online-edit confirmation wording ────────────────────────────────────
+//
+// Pure string builders for the modal confirmations onlineEdit.ts shows
+// before it changes a running controller's program — factored out here (like
+// the rest of this file) so the wording is unit-testable without vscode.
+
+/** `<file> (<pou>)`, or just `<file>` when the POU name is unknown. */
+function targetLabel(programFile: string, pou: string): string {
+  return pou ? `${programFile} (${pou})` : programFile;
+}
+
+/** Modal text shown before download() PUTs the workspace program to a
+ * running controller, replacing what it's currently executing. Names the
+ * controller URL, the program file/POU being replaced, and the controller's
+ * current program hash, so a controls engineer knows exactly what is about
+ * to change on what may be a live process. */
+export function downloadConfirmMessage(url: string, programFile: string, pou: string, hash: string): string {
+  return `Download ${targetLabel(programFile, pou)} to the controller at ${url}, replacing its current program (${hash})?`;
+}
+
+/** Modal text shown before the "Force download" path (already itself a
+ * confirmation, offered after a 409 conflict) overwrites a controller
+ * program that changed since it was last read. Kept just as explicit about
+ * the target as downloadConfirmMessage. */
+export function forceDownloadConfirmMessage(url: string, programFile: string, pou: string, reason: string): string {
+  return (
+    `nautilus: controller program at ${url} changed under you — download ${targetLabel(programFile, pou)} ` +
+    `anyway and overwrite it?${reason ? " " + reason : ""}`
+  );
+}
+
+/** Modal text shown before rollback() undoes the last online edit on a
+ * running controller. `pou` is "" when the target program's identity isn't
+ * known (e.g. no program file in the workspace) — the message still names
+ * the controller. */
+export function rollbackConfirmMessage(url: string, pou: string): string {
+  return `Roll back ${pou || "the program"} on ${url} to the previous program?`;
+}
