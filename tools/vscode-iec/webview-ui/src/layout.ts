@@ -37,7 +37,13 @@ export type VarDecl = {
 	section: string;
 	line: number;
 };
-export type FbdModel = { name: string; nodes: FbdNode[]; edges: FbdEdge[]; vars?: VarDecl[] };
+export type FbdModel = { name: string; nodes: FbdNode[]; edges: FbdEdge[]; vars?: VarDecl[]; blank?: boolean };
+
+/** Arrays always arrays: an older CLI (or saved webview state) can carry
+ * `null` for an empty diagram's nodes/edges. */
+export function normalizeFbd(m: FbdModel): FbdModel {
+  return { ...m, nodes: m.nodes ?? [], edges: m.edges ?? [] };
+}
 
 export type Placed = FbdNode & {
   x: number;

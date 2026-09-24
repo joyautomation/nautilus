@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/joyautomation/nautilus/lang/internal/seed"
 )
 
 // Structural edits for the SFC diagram, mirroring lang/ld's posture more
@@ -29,7 +31,16 @@ var sfcIdentRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // ApplyEdit resolves op against a fresh parse of src and returns the
 // minimal text edits realizing it — the identical contract to
 // fbd.ApplyEdit/ld.ApplyEdit.
+//
+// Blank source (a 0-byte new file) seeds: the op applies to a PROGRAM
+// skeleton named op.Pou, and the result replaces the file in one edit.
 func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
+	if seed.Blank(src) {
+		return seedEdit(src, op)
+	}
+	if op.Type == "init" {
+		return nil, nil // already a POU — nothing to seed
+	}
 	m, err := Graph(src)
 	if err != nil {
 		return nil, err

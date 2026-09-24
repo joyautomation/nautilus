@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/joyautomation/nautilus/lang/internal/seed"
 )
 
 // Structural edits for the ladder view, mirroring the FBD edit seam: the
@@ -54,6 +56,8 @@ type EditOp struct {
 	ToPath  []int  `json:"toPath,omitempty"`
 	ToIndex int    `json:"toIndex,omitempty"`
 	ToCoil  bool   `json:"toCoil,omitempty"`
+	// Pou names the PROGRAM a blank file is seeded with (see ApplyEdit).
+	Pou string `json:"pou,omitempty"`
 }
 
 // TextEdit is a 1-based, end-exclusive replacement (mirrors lang/fbd).
@@ -79,12 +83,20 @@ func refValid(s string) bool {
 // ApplyEdit resolves op against source and returns the text edits. libs
 // are the project's library sources, so an inserted user block records the
 // power pins it will really compile to.
+//
+// Blank source (a 0-byte new file) seeds: the op applies to a PROGRAM
+// skeleton named op.Pou, and the result replaces the file in one edit.
 func ApplyEdit(src string, op EditOp, libs ...string) ([]TextEdit, error) {
+	if seed.Blank(src) {
+		return seedEdit(src, op, libs)
+	}
 	m, err := Graph(src, libs...)
 	if err != nil {
 		return nil, err
 	}
 	switch op.Type {
+	case "init":
+		return nil, nil // already a POU — nothing to seed
 	case "addRung":
 		return opAddRung(src, m, op)
 	case "deleteRung":
@@ -167,6 +179,11 @@ func ApplyEdit(src string, op EditOp, libs ...string) ([]TextEdit, error) {
 	case "insert":
 		if op.Element != nil {
 			uniquifyInsts(m, op.Element)
+		} else if op.Kind == "fb" && instTaken(m, r.POU, op.Inst) {
+			// Two `t1:TON` declarations are a compile error ("duplicate
+			// declaration"), not two rungs sharing a timer — refuse rather
+			// than write text that won't build.
+			return nil, fmt.Errorf("ld edit: %q is already declared — pick another instance name", op.Inst)
 		}
 		if err := opInsert(m, r, op); err != nil {
 			return nil, err
@@ -529,6 +546,24 @@ func collectInsts(els []Element, taken map[string]bool) {
 			collectInsts(leg, taken)
 		}
 	}
+}
+
+// instTaken reports whether name is already declared in the POU a rung
+// belongs to: another rung's block instance or a header variable.
+func instTaken(m *Model, pou, name string) bool {
+	taken := map[string]bool{}
+	for i := range m.Rungs {
+		if m.Rungs[i].POU == pou {
+			collectInsts(m.Rungs[i].Elements, taken)
+			collectInsts(m.Rungs[i].Coils, taken)
+		}
+	}
+	for _, v := range m.Vars {
+		if v.POU == pou {
+			taken[strings.ToLower(v.Name)] = true
+		}
+	}
+	return taken[strings.ToLower(name)]
 }
 
 // uniquifyInsts renames pasted fb instances that already exist anywhere in

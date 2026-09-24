@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/joyautomation/nautilus/lang/internal/seed"
 )
 
 // The SFC render model, per docs/design/sfc.md §4.1. Unlike FBD (a netlist
@@ -37,6 +39,9 @@ type Model struct {
 	// nil when the chart has none. Keys are the same stable ids used
 	// elsewhere in the model (st:/tr:/ac:).
 	Layout map[string]Point `json:"layout,omitempty"`
+	// Blank marks a whitespace-only source: a new file with no POU yet. The
+	// editor opens it empty and the first op writes the skeleton.
+	Blank bool `json:"blank,omitempty"`
 }
 
 // Point is one pinned x/y position.
@@ -141,12 +146,18 @@ func transID(name string, line int) string {
 }
 
 // Graph parses .sfc source and builds its render model (design doc §4.1).
+//
+// Steps and Trans are always JSON arrays ([] for an empty chart, never
+// null); blank source is an empty chart flagged Blank, not an error.
 func Graph(src string) (*Model, error) {
+	if seed.Blank(src) {
+		return &Model{Steps: []GStep{}, Trans: []GTransition{}, Blank: true}, nil
+	}
 	prog, err := Parse(src)
 	if err != nil {
 		return nil, err
 	}
-	m := &Model{Name: prog.Name}
+	m := &Model{Name: prog.Name, Steps: []GStep{}, Trans: []GTransition{}}
 
 	header, _, _, bodyLine, err := splitSFC(src)
 	if err != nil {

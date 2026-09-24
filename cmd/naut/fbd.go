@@ -24,7 +24,10 @@ Usage:
                               writes {"edits": [...]} — the minimal text edits
                               realizing the op (1-based, end-exclusive spans).
                               Ops address render-model node ids: setLiteral,
-                              toggleNot, rewire, rename, deleteNode. On a
+                              toggleNot, rewire, rename, deleteNode (one id,
+                              or "nodes": a whole selection), init. Blank
+                              source seeds a PROGRAM skeleton (named by the
+                              op's "pou") and applies the op to it. On a
                               rejected op, emits {"error": "..."} and exits 1.
 `
 
@@ -50,7 +53,7 @@ func runFBDEdit() int {
 		Op     fbd.EditOp `json:"op"`
 	}
 	enc := json.NewEncoder(os.Stdout)
-	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil || req.Source == "" {
+	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
 		_ = enc.Encode(map[string]string{"error": "expected {\"source\": ..., \"op\": {...}} on stdin"})
 		return 2
 	}

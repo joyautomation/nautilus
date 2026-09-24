@@ -184,6 +184,9 @@ type EditOp struct {
 	// comment ops
 	Comment *int   `json:"comment,omitempty"`
 	Text    string `json:"text,omitempty"`
+
+	// Pou names the PROGRAM a blank file is seeded with (see ApplyEdit).
+	Pou string `json:"pou,omitempty"`
 }
 
 // LayoutOpEntry is one node's pinned position in a batched setLayout — the

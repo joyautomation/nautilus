@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/internal/seed"
 	"github.com/joyautomation/nautilus/lang/ir"
 )
 
@@ -28,6 +29,9 @@ type Model struct {
 	// or not the netlist references them — a diagram's variables panel shows
 	// what exists, not just what's wired.
 	Vars []VarDecl `json:"vars,omitempty"`
+	// Blank marks a whitespace-only source: a new file with no POU yet. The
+	// editor opens it empty and the first op writes the skeleton.
+	Blank bool `json:"blank,omitempty"`
 }
 
 // VarDecl is one header declaration: `Name : Type [:= init];` inside a
@@ -120,12 +124,18 @@ type Edge struct {
 // and inst.pin becomes an edge from an FB output pin. userFBs (optional)
 // resolve pin lists for user-defined FB types; unknown types fall back to the
 // pins the source actually uses.
+//
+// Blank source (a new, 0-byte file) is an empty diagram flagged Blank, not
+// an error: the editor opens on it and the first op seeds the POU.
 func Graph(src string, userFBs ...map[string]*ir.FBDef) (*Model, error) {
+	if seed.Blank(src) {
+		return (&Model{Blank: true}).normalize(), nil
+	}
 	b, err := buildModel(src, userFBs...)
 	if err != nil {
 		return nil, err
 	}
-	return b.m, nil
+	return b.m.normalize(), nil
 }
 
 // buildModel is Graph exposing the builder — the edit service needs the

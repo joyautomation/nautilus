@@ -113,7 +113,7 @@ const DEBOUNCE_MS = 250;
 async function postSfcModel(webview: vscode.Webview, doc: vscode.TextDocument): Promise<void> {
   const res = await sfcGraph(doc.getText());
   if (res.error) {
-    void webview.postMessage({ type: "error", message: res.error, title: docTitle(doc) });
+    void webview.postMessage({ type: "error", message: res.error, title: docTitle(doc), lang: "sfc" });
   } else {
     void webview.postMessage({ type: "sfcModel", model: res.model, title: docTitle(doc) });
     postDiagnostics(webview, doc);
@@ -344,6 +344,7 @@ export class SfcPreview implements vscode.Disposable {
         type: "error",
         message: head.error ?? base.error,
         title: docTitle(doc),
+        lang: "sfc",
       });
       return;
     }

@@ -26,8 +26,19 @@
 	let ta = $state<HTMLTextAreaElement | null>(null);
 	let sg = $state<{ focus: () => void } | null>(null);
 
+	// Whatever held keyboard focus when the editor opened (the ladder/SFC
+	// wrapper, the flow pane) gets it back on Enter/Esc — otherwise focus
+	// falls to <body> with the removed input and Del/N/M need another click.
+	let returnFocus: HTMLElement | null = null;
 	export function open(req: EditRequest) {
+		const ae = document.activeElement;
+		returnFocus = ae instanceof HTMLElement && ae !== document.body ? ae : null;
 		edit = { ...req, value: req.init };
+	}
+	function restoreFocus() {
+		const el = returnFocus;
+		returnFocus = null;
+		if (el?.isConnected) el.focus({ preventScroll: true });
 	}
 
 	$effect(() => {
@@ -62,9 +73,11 @@
 			// edits need a value, so an empty Enter just closes the editor.
 			const allowEmpty = edit.multiline;
 			edit = null;
+			restoreFocus();
 			if (v || allowEmpty) commit(v);
 		} else if (ev.key === 'Escape') {
 			edit = null;
+			restoreFocus();
 		}
 	}
 	// Clicking away from a multi-line comment edit saves it — losing typed

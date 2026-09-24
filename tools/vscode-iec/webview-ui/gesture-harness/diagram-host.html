@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<!-- Host page for the FBD/Ladder/SFC diagram gesture tests: mounts the
+		     PRODUCTION fbd-flow bundle unmodified, with no acquireVsCodeApi,
+		     so vscodeApi.ts's fallback captures every posted message on
+		     window.__POSTED__. Models are delivered exactly as the extension
+		     host delivers them: window.postMessage. -->
+		<title>diagram gesture harness</title>
+		<link rel="stylesheet" href="./fbd-flow.css" />
+		<style>
+			html, body { margin: 0; height: 100%; }
+			#app { height: 100vh; }
+		</style>
+	</head>
+	<body>
+		<div id="app"></div>
+		<script>
+			window.__POSTED__ = [];
+			window.__errors = [];
+			window.addEventListener('error', (e) => window.__errors.push(String(e.message)));
+			window.addEventListener('unhandledrejection', (e) => window.__errors.push(String(e.reason)));
+			window.__deliver = (msg) => window.postMessage(msg, '*');
+			window.__posted = () => window.__POSTED__;
+			window.__reset = () => { window.__POSTED__.length = 0; };
+			window.__center = (sel) => {
+				const el = document.querySelector(sel);
+				if (!el) return null;
+				const r = el.getBoundingClientRect();
+				return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+			};
+		</script>
+		<script src="./fbd-flow.js"></script>
+	</body>
+</html>

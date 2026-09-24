@@ -41,8 +41,10 @@ Usage:
                               setAssoc, deleteAssoc, setActionBody,
                               insertAlternativeBranch,
                               insertSimultaneousBranch, setLayout,
-                              clearLayout, setComment. On a rejected op,
-                              emits {"error": "..."} and exits 1.
+                              clearLayout, setComment, init. Blank source
+                              seeds a PROGRAM skeleton (named by the op's
+                              "pou") and applies the op to it. On a
+                              rejected op, emits {"error": "..."} and exits 1.
 `
 
 func runSFC(args []string) int {
@@ -100,7 +102,7 @@ func runSFCEdit() int {
 		Op     sfc.EditOp `json:"op"`
 	}
 	enc := json.NewEncoder(os.Stdout)
-	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil || req.Source == "" {
+	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
 		_ = enc.Encode(map[string]string{"error": "expected {\"source\": ..., \"op\": {...}} on stdin"})
 		return 2
 	}

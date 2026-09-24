@@ -22,12 +22,12 @@
 	import FloatEditor from './FloatEditor.svelte';
 	import InstancePanel from './InstancePanel.svelte';
 	import LadderView from './LadderView.svelte';
-	import { diffLd, type LdElement, type LdModel, type RungStatus } from './ladder';
+	import { diffLd, normalizeLd, type LdElement, type LdModel, type RungStatus } from './ladder';
 	import SfcView from './SfcView.svelte';
-	import { diffSfc, type SfcModel } from './sfc';
-	import { layout, type FbdModel, type VarDecl } from './layout';
+	import { diffSfc, normalizeSfc, type SfcModel } from './sfc';
+	import { layout, normalizeFbd, type FbdModel, type VarDecl } from './layout';
 	import { mergeDiff } from './diff';
-	import { vscode, postOp } from './vscodeApi';
+	import { vscode, postOp, pouFromFile, setSeedPou, withSeed } from './vscodeApi';
 	import { setRects, updateRect } from './diagState.svelte';
 	import { live, setLive, setVarBounds } from './liveState.svelte';
 
@@ -39,6 +39,17 @@
 	let ldModel = $state<LdModel | null>(null);
 	let ldStatus = $state<Record<string, RungStatus>>({});
 	let sfcModel = $state<SfcModel | null>(null);
+	// Which editor this panel is. Set by every model message and by an
+	// error that says its language, so a broken FIRST load of a .ld/.sfc
+	// never falls back to FBD chrome.
+	type Mode = 'fbd' | 'ld' | 'sfc';
+	let mode = $state<Mode>('fbd');
+	// An L5X export renders as ladder but is never editable.
+	let readOnly = $state(false);
+	// A whitespace-only file: no POU yet. The first op seeds a PROGRAM
+	// skeleton named after the file (see vscodeApi.setSeedPou).
+	let blank = $state(false);
+	let seedName = $state('Main');
 	// The controller-sync verdict pushed by the extension's status poll —
 	// 'differs'/'edit' render a clickable pill in the toolbar.
 	let syncState = $state('unknown');
@@ -210,6 +221,7 @@
 			}
 		}));
 		setRects(placed.map((n) => [n.id, { x: n.x, y: n.y, w: n.w, h: n.h }]));
+		placedAt = new Map(placed.map((n) => [n.id, { x: n.x, y: n.y }]));
 		knownIds = new Set(placed.map((n) => n.id));
 		structureKey = placed
 			.map((n) => n.id)
@@ -221,26 +233,40 @@
 	type Msg =
 		| { type: 'model'; model: FbdModel; title?: string }
 		| { type: 'diff'; base: FbdModel; head: FbdModel; title?: string }
-		| { type: 'ldModel'; model: LdModel; title?: string }
+		| { type: 'ldModel'; model: LdModel; title?: string; readOnly?: boolean }
 		| { type: 'ldDiff'; base: LdModel; head: LdModel; title?: string }
 		| { type: 'sfcModel'; model: SfcModel; title?: string }
 		| { type: 'sfcDiff'; base: SfcModel; head: SfcModel; title?: string }
-		| { type: 'error'; message: string; title?: string };
+		| { type: 'error'; message: string; title?: string; lang?: Mode };
+
+	// Track the blank-file state from a live (non-diff) model.
+	function noteBlank(isBlank: boolean | undefined, file: string | undefined) {
+		blank = !!isBlank;
+		seedName = pouFromFile(file);
+		setSeedPou(blank ? seedName : undefined);
+	}
 
 	function show(msg: Msg) {
 		if (msg.type === 'model') {
+			mode = 'fbd';
+			readOnly = false;
+			noteBlank(msg.model.blank, msg.title);
 			title = (msg.model.name ? msg.model.name + ' — ' : '') + (msg.title ?? '');
 			error = '';
 			ldModel = null;
 			sfcModel = null;
-			render(msg.model, false);
+			render(normalizeFbd(msg.model), false);
 		} else if (msg.type === 'diff') {
+			mode = 'fbd';
 			title = (msg.head.name ? msg.head.name + ' — ' : '') + (msg.title ?? '');
 			error = '';
 			ldModel = null;
 			sfcModel = null;
-			render(mergeDiff(msg.base, msg.head), true);
+			render(mergeDiff(normalizeFbd(msg.base), normalizeFbd(msg.head)), true);
 		} else if (msg.type === 'ldModel') {
+			mode = 'ld';
+			readOnly = !!msg.readOnly;
+			noteBlank(msg.model.blank, msg.title);
 			// Ladder mode: canonical rung layout, no flow canvas. Array
 			// bounds still come from the header so indexed contacts resolve,
 			// and the header vars feed the SAME vars panel + tag-suggest
@@ -251,7 +277,7 @@
 			varList = (msg.model.vars ?? []) as VarDecl[];
 			setVarBounds(varList);
 			usedNames = collectLdUsed(msg.model);
-			ldModel = msg.model;
+			ldModel = normalizeLd(msg.model);
 			ldStatus = {};
 			diffing = false;
 			problemCount = diags.length;
@@ -260,10 +286,11 @@
 			// Ladder diff: base overlaid onto head at rung granularity —
 			// removed rungs splice back in ghosted, changed/added get status
 			// colors. Read-only until the next ldModel arrives.
+			mode = 'ld';
 			title = msg.title ?? title;
 			error = '';
 			sfcModel = null;
-			const d = diffLd(msg.base, msg.head);
+			const d = diffLd(normalizeLd(msg.base), normalizeLd(msg.head));
 			ldModel = d.model;
 			ldStatus = d.status;
 			diffing = true;
@@ -272,13 +299,16 @@
 			// SFC mode: the pure layoutSfc pass (sfc.ts) derives step/
 			// transition geometry from topology; header vars feed the same
 			// vars panel FBD/LD use.
+			mode = 'sfc';
+			readOnly = false;
+			noteBlank(msg.model.blank, msg.title);
 			title = (msg.model.name ? msg.model.name + ' — ' : '') + (msg.title ?? '');
 			error = '';
 			ldModel = null;
 			varList = (msg.model.vars ?? []) as VarDecl[];
 			setVarBounds(varList);
 			usedNames = collectSfcUsed(msg.model);
-			sfcModel = msg.model;
+			sfcModel = normalizeSfc(msg.model);
 			diffing = false;
 			problemCount = diags.length;
 			problemTip = diags.map((d) => `line ${d.line}: ${d.message}`).join('\n');
@@ -288,18 +318,31 @@
 			// changed marks, rendered by SfcView with the same
 			// --nx-added/removed/changed palette FBD/Ladder diffs use.
 			// Read-only until the next plain sfcModel arrives.
+			mode = 'sfc';
 			title = (msg.head.name ? msg.head.name + ' — ' : '') + (msg.title ?? '');
 			error = '';
 			ldModel = null;
 			varList = (msg.head.vars ?? []) as VarDecl[];
 			setVarBounds(varList);
-			sfcModel = diffSfc(msg.base, msg.head);
+			sfcModel = diffSfc(normalizeSfc(msg.base), normalizeSfc(msg.head));
 			diffing = true;
 			problemCount = 0;
 		} else {
+			// The error names its language (ld/sfc hosts), so a file that
+			// fails to parse on FIRST open keeps its own editor's chrome.
+			if (msg.lang) mode = msg.lang;
 			title = msg.title ?? title;
 			error = msg.message;
 		}
+	}
+
+	// The ld/sfc op channels; a blank file's ops carry the seed POU name.
+	const postLd = (op: Record<string, unknown>) => vscode.postMessage({ type: 'ldEdit', op: withSeed(op) });
+	const postSfc = (op: Record<string, unknown>) => vscode.postMessage({ type: 'sfcEdit', op: withSeed(op) });
+	function initBlank() {
+		if (mode === 'ld') postLd({ type: 'init' });
+		else if (mode === 'sfc') postSfc({ type: 'init' });
+		else postOp({ type: 'init' });
 	}
 
 	window.addEventListener('message', (ev) => {
@@ -342,6 +385,8 @@
 	// window.__POSTED__ via vscodeApi's headless fallback.
 	const injectedSfc = (window as unknown as { __SFC_MODEL__?: SfcModel }).__SFC_MODEL__;
 	if (injectedSfc) show({ type: 'sfcModel', model: injectedSfc, title: 'harness' });
+	const injectedLd = (window as unknown as { __LD_MODEL__?: LdModel }).__LD_MODEL__;
+	if (injectedLd) show({ type: 'ldModel', model: injectedLd, title: 'harness' });
 
 	// ── gestures → ops ──────────────────────────────────────────────────────
 	function onconnect(c: Connection) {
@@ -368,7 +413,12 @@
 	}
 
 	function onbeforedelete({ nodes: sel, edges: selEdges }: { nodes: Node[]; edges: Edge[] }) {
-		for (const n of sel) postOp({ type: 'deleteNode', node: n.id });
+		// The whole selection is ONE op: comment ids are ordinals (cm:N), so
+		// per-node ops would each resolve against text the previous delete
+		// already renumbered — select notes A,B of A/B/C and A,C would go.
+		const gone = sel.map((n) => n.id).filter((id) => id && knownIds.has(id));
+		if (gone.length) postOp({ type: 'deleteNode', nodes: gone });
+		const goneSet = new Set(gone);
 		// A selected edge deletes as a DISCONNECT: FB pins drop their named
 		// arg, extensible inputs shrink, fixed-arity pins placehold, coils
 		// revert to floating ghosts. The endpoints' live positions ride
@@ -377,9 +427,20 @@
 			const n = nodes.find((n) => n.id === id);
 			return n ? [{ node: id, x: Math.round(n.position.x), y: Math.round(n.position.y) }] : [];
 		};
-		for (const e of selEdges) {
+		// Extensible inputs are positional too (AND's IN1..INn shrink on a
+		// disconnect): take each block's pins highest-first so an earlier
+		// disconnect never renumbers a later one's target.
+		const pinNo = (e: Edge) => Number(/(\d+)$/.exec(String(e.targetHandle ?? ''))?.[1] ?? 0);
+		const ordered = [...selEdges].sort((a, b) =>
+			a.target === b.target ? pinNo(b) - pinNo(a) : a.target < b.target ? -1 : 1
+		);
+		for (const e of ordered) {
 			const d = e.data as { e?: { to: string; toPin?: string; from: string; fromPin?: string } };
 			if (!d?.e) continue;
+			// xyflow hands over every edge attached to a deleted node; those
+			// vanish with the node's statement — a disconnect would only
+			// fail ("no connection into …") once the delete has landed.
+			if (goneSet.has(d.e.from) || goneSet.has(d.e.to)) continue;
 			postOp({
 				type: 'disconnect',
 				to: d.e.to,
@@ -425,6 +486,22 @@
 		postOp({ type: 'setLayout', entries });
 	}
 
+	// Arrow keys move the selection (xyflow's keyboard a11y) — persist it
+	// like a drag, once the key presses settle, or the next render snaps
+	// the nodes back. Only nodes that actually moved are pinned.
+	let placedAt = new Map<string, { x: number; y: number }>();
+	let arrowTimer: ReturnType<typeof setTimeout> | undefined;
+	function persistKeyboardMove() {
+		const entries = nodes
+			.filter((n) => n.selected && knownIds.has(n.id))
+			.filter((n) => {
+				const at = placedAt.get(n.id);
+				return !at || Math.round(n.position.x) !== Math.round(at.x) || Math.round(n.position.y) !== Math.round(at.y);
+			})
+			.map((n) => ({ node: n.id, x: Math.round(n.position.x), y: Math.round(n.position.y) }));
+		if (entries.length) postOp({ type: 'setLayout', entries });
+	}
+
 	function onselectionchange({ nodes: sel }: { nodes: Node[]; edges: Edge[] }) {
 		selectedCount = sel.length;
 		selectedIds = sel.map((n) => n.id).filter(Boolean);
@@ -437,11 +514,16 @@
 	let selectedIds: string[] = [];
 	let clipboard: string[] = [];
 	function onkeydown(ev: KeyboardEvent) {
-		if (diffing) return;
+		if (diffing || mode !== 'fbd') return;
 		// Typing in any editor (float editor, palette field) is never a
 		// canvas shortcut.
 		const el = document.activeElement;
 		if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+		if (ev.key.startsWith('Arrow') && !ev.ctrlKey && !ev.metaKey && selectedIds.length) {
+			clearTimeout(arrowTimer);
+			arrowTimer = setTimeout(persistKeyboardMove, 350);
+			return;
+		}
 		if (!(ev.ctrlKey || ev.metaKey)) return;
 		if (ev.key === 'c' && selectedIds.length) {
 			clipboard = [...selectedIds];
@@ -462,12 +544,17 @@
 				<span><i class="sw removed"></i>removed</span>
 				<span><i class="sw changed"></i>changed</span>
 			</span>
-		{:else if ldModel}
-			<span class="hint">click: select · dblclick: retag / edit args / rename rung · ⊕: insert · Del: delete · N: NO/NC · M: coil mode · B: branch around · Ctrl+C/X/V: copy cut paste</span>
-		{:else if sfcModel}
+		{:else if readOnly}
+			<span
+				class="ropill"
+				title="An L5X is a Rockwell export: it renders as ladder here, but edits belong in Logix Designer or in the nautilus source it was generated from."
+			>read-only · Logix export</span>
+		{:else if mode === 'ld'}
+			<span class="hint">click: select · click a rung's name: select the rung · dblclick: retag / edit args / rename rung · ⊕: insert · Del: delete element or rung · N: NO/NC · M: coil mode · B: branch around · Ctrl+C/X/V: copy cut paste · Esc: cancel drag</span>
+		{:else if mode === 'sfc'}
 			<span class="hint">click: select · dblclick: rename / edit condition / edit action / edit ST body · drag a step body: pin layout · drag its ⊙ handle onto another step: connect · Del: delete (offers cascade for a step with attached transitions) · Esc: cancel connect</span>
 		{:else if hint}
-			<span class="hint">double-click: edit & rename · drag pin→pin: wire (+ adds an input) · drag node: pin layout · Del: delete / disconnect · Ctrl+C/V: copy & paste</span>
+			<span class="hint">double-click: edit & rename · drag pin→pin: wire (+ adds an input) · drag node / arrow keys: pin layout · Del: delete / disconnect · Ctrl+C/V: copy & paste</span>
 		{/if}
 		<span class="spacer"></span>
 		{#if problemCount > 0 && !diffing}
@@ -504,11 +591,11 @@
 					onclick={() => vscode.postMessage({ type: 'toggleLive' })}
 				>{live.enabled ? (live.fresh ? '● live' : '◌ offline') : '○ live off'}</button>
 			{/if}
-			{#if hasPins && !ldModel && !sfcModel}
+			{#if hasPins && mode === 'fbd'}
 				<button title="Clear all pinned positions (back to full auto-layout)" onclick={() => postOp({ type: 'clearLayout' })}>auto layout</button>
 			{/if}
 			<button title="All header declarations, including ones the logic doesn't reference yet" onclick={(e) => { e.stopPropagation(); varsOpen = !varsOpen; paletteOpen = false; }}>vars</button>
-			{#if !ldModel && !sfcModel}
+			{#if mode === 'fbd'}
 				<button title="Insert an instruction" onclick={(e) => { e.stopPropagation(); paletteOpen = !paletteOpen; varsOpen = false; }}>+ add</button>
 			{/if}
 		{/if}
@@ -516,15 +603,21 @@
 	{#if error}
 		<div class="error">{error}</div>
 	{/if}
+	{#if blank && !diffing && !readOnly && !error}
+		<div class="blank">
+			<span>Empty file — the first edit writes a <code>PROGRAM {seedName}</code> skeleton{mode === 'ld' ? ' (start with “+ rung”)' : mode === 'sfc' ? ' (start with “+ step”)' : ' (start with “+ add”)'}.</span>
+			<button title="Write the PROGRAM skeleton now" onclick={initBlank}>initialize</button>
+		</div>
+	{/if}
 	{#if ldModel}
 		<div class="flow ldscroll" class:stale={!!error}>
 			<LadderView
 				model={ldModel}
-				editable={!diffing}
+				editable={!diffing && !readOnly}
 				diags={diffing ? [] : diags}
 				status={ldStatus}
 				showLive={!diffing}
-				onOp={(op) => vscode.postMessage({ type: 'ldEdit', op })}
+				onOp={postLd}
 				onTrace={(msg) => vscode.postMessage({ type: 'ldTrace', msg })}
 				{requestInput}
 			/>
@@ -536,10 +629,14 @@
 				editable={!diffing}
 				diags={diffing ? [] : diags}
 				showLive={!diffing}
-				onOp={(op) => vscode.postMessage({ type: 'sfcEdit', op })}
+				onOp={postSfc}
 				{requestInput}
 			/>
 		</div>
+	{:else if mode !== 'fbd'}
+		<!-- a ladder/SFC file whose first parse failed: the error above
+		     says why; no FBD canvas (or its "+ add") in its place -->
+		<div class="flow"></div>
 	{:else}
 	<div class="flow" class:stale={!!error}>
 		<SvelteFlow
@@ -570,17 +667,16 @@
 		bind:open={varsOpen}
 		vars={varList}
 		used={usedNames}
-		onDeclare={ldModel
-			? (name, type, section) =>
-					vscode.postMessage({ type: 'ldEdit', op: { type: 'declareVar', name, varType: type, section } })
-			: sfcModel
-				? (name, type, section) =>
-						vscode.postMessage({ type: 'sfcEdit', op: { type: 'declareVar', name, varType: type, section } })
+		readonly={readOnly || diffing}
+		onDeclare={mode === 'ld'
+			? (name, type, section) => postLd({ type: 'declareVar', name, varType: type, section })
+			: mode === 'sfc'
+				? (name, type, section) => postSfc({ type: 'declareVar', name, varType: type, section })
 				: undefined}
-		onDelete={ldModel
-			? (name) => vscode.postMessage({ type: 'ldEdit', op: { type: 'deleteVar', name } })
-			: sfcModel
-				? (name) => vscode.postMessage({ type: 'sfcEdit', op: { type: 'deleteVar', name } })
+		onDelete={mode === 'ld'
+			? (name) => postLd({ type: 'deleteVar', name })
+			: mode === 'sfc'
+				? (name) => postSfc({ type: 'deleteVar', name })
 				: undefined}
 	/>
 	{#if inspect}
@@ -693,6 +789,34 @@
 	}
 	.legend.ld .sw.changed {
 		background: #e2b93d;
+	}
+	.ropill {
+		font-size: 11px;
+		font-weight: 600;
+		padding: 1px 8px;
+		border-radius: 999px;
+		color: var(--nx-muted);
+		border: 1px solid var(--nx-border);
+		white-space: nowrap;
+		cursor: help;
+	}
+	.blank {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 6px 10px;
+		font-size: 12px;
+		border-bottom: 1px solid var(--nx-border);
+		background: var(--nx-panel-bg);
+	}
+	.blank button {
+		background: transparent;
+		color: var(--nx-ui-ink);
+		border: 1px solid var(--nx-accent);
+		border-radius: 3px;
+		padding: 1px 8px;
+		cursor: pointer;
+		font-size: 12px;
 	}
 	.selcount {
 		font-size: 11px;
