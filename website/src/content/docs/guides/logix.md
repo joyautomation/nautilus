@@ -106,6 +106,19 @@ PLC, and so does the built-in dashboard at that address.
   *Download* explain that, and point at `naut logix drift` and
   `naut logix push`.
 
+**Run it where the controller is reachable.** If only one machine can reach
+the controller network, which is often the licensed Windows box, run
+`naut logix serve` there and point the editor at that machine. `naut` is one
+binary for Linux, macOS and Windows, and the path to the controller is still
+direct EtherNet/IP.
+
+**Why not route values through `logixd`?** The Logix Designer SDK reads and
+writes one tag per call, at roughly half a second each by Rockwell's own
+figure. It only does that with the project open and online, while the SDK
+holds its licence session. EtherNet/IP reads many tags per request, every
+250 ms, and keeps working when the licence doesn't. `logixd` stays the path
+for project work: build, download, online edits.
+
 This needs no Studio 5000, licence or Windows machine. Writes are open to
 anything that can reach the port, just as with `naut run`. Before listening
 anywhere but loopback, set `NAUTILUS_TOKEN`: a write here changes a running
