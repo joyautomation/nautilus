@@ -167,11 +167,11 @@
       },
       {
         "command": "nautilus.connect",
-        "title": "nautilus: Connect to Controller\u2026"
+        "title": "nautilus: Connect to Controller…"
       },
       {
         "command": "nautilus.setValue",
-        "title": "nautilus: Set Live Value\u2026",
+        "title": "nautilus: Set Live Value…",
         "icon": "$(edit)"
       },
       {
@@ -242,7 +242,7 @@
       },
       {
         "command": "nautilus.editComponentPorts",
-        "title": "Nautilus: Edit Component Ports\u2026"
+        "title": "Nautilus: Edit Component Ports…"
       }
     ],
     "viewsContainers": {
@@ -362,7 +362,7 @@
         "nautilus.cliPath": {
           "type": "string",
           "default": "naut",
-          "description": "Path to the nautilus CLI binary (provides the language server via `naut lsp`). The command is `naut`, not `nautilus` -- GNOME's file manager owns that name on Linux. Install with: go install github.com/joyautomation/nautilus/cmd/naut@latest"
+          "description": "The nautilus CLI, `naut` (provides the language server via `naut lsp`, and the diagram editors). The command is `naut`, not `nautilus` -- GNOME's file manager owns that name on Linux. A bare name is looked up on PATH, then in $GOBIN, $GOPATH/bin, ~/go/bin, ~/.local/bin, /usr/local/bin, /opt/homebrew/bin (%LOCALAPPDATA%\\nautilus on Windows); set a full path to skip the search."
         },
         "nautilus.runtimeUrl": {
           "type": "string",
@@ -477,15 +477,16 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "Rendering user-authored Svelte components inside the mimic/Component Editor compiles project code with esbuild and the workspace's own toolchain (svelte/compiler, node_modules). This is disabled in untrusted workspaces \u2014 the built-in kit components and placeholder chips still work fully."
+      "description": "Rendering user-authored Svelte components inside the mimic/Component Editor compiles project code with esbuild and the workspace's own toolchain (svelte/compiler, node_modules). This is disabled in untrusted workspaces — the built-in kit components and placeholder chips still work fully."
     }
   },
   "scripts": {
     "vscode:prepublish": "npm run compile && npm run build:webview",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/scan.test.js out/programSync.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js && npm --prefix webview-ui run test",
-    "build:webview": "npm --prefix webview-ui run build"
+    "test": "npm run compile && node --test out/scan.test.js out/cliResolve.test.js out/programSync.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js && npm --prefix webview-ui run test",
+    "build:webview": "npm --prefix webview-ui run build",
+    "test:e2e": "npm run compile && node out/e2e/run.js"
   },
   "dependencies": {
     "esbuild": "^0.28.1",
@@ -494,6 +495,7 @@
   "devDependencies": {
     "@types/node": "^18.19.0",
     "@types/vscode": "^1.82.0",
+    "@vscode/test-electron": "^3.1.0",
     "typescript": "^5.4.0"
   }
 }

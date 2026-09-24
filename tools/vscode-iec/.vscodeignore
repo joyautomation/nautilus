@@ -2,3 +2,6 @@ src/**
 webview-ui/**
 .gitignore
 **/*.map
+out/e2e/**
+out/**/*.test.js
+.vscode-test/**

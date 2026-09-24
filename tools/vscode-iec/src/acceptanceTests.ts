@@ -11,6 +11,7 @@
 // tree by (suite, name).
 
 import * as vscode from "vscode";
+import { cliCommand, cliMissingMessage, isMissing } from "./cli";
 import { execFile } from "node:child_process";
 import * as path from "node:path";
 
@@ -39,7 +40,7 @@ interface RunResult extends Listed {
 }
 
 function cliPath(): string {
-  return vscode.workspace.getConfiguration("nautilus").get<string>("cliPath") || "naut";
+  return cliCommand();
 }
 
 /** Run the CLI in `cwd` and return stdout, or throw with stderr attached. */
@@ -49,6 +50,7 @@ function runCli(cwd: string, args: string[]): Promise<string> {
       // `naut test` exits non-zero when tests FAIL, which is not an
       // error here — the JSON on stdout is exactly what we came for.
       if (stdout.trim()) return resolve(stdout);
+      if (isMissing(err)) return reject(new Error(cliMissingMessage(cliPath())));
       if (err) return reject(new Error(stderr.trim() || err.message));
       resolve(stdout);
     });

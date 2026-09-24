@@ -27,6 +27,7 @@ import { ComponentEditorProvider } from "./componentEditor";
 import { UserComponentManager } from "./userComponents";
 import { registerEditComponentPortsCommand } from "./editComponentPorts";
 import { AcceptanceTests } from "./acceptanceTests";
+import { resolveCliNow, showCliMissing } from "./cli";
 
 let client: LanguageClient | undefined;
 let live: LiveValues | undefined;
@@ -195,6 +196,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (e.affectsConfiguration("nautilus.runtimeUrl") || e.affectsConfiguration("nautilus.liveValues.enabled")) {
         live?.configChanged();
       }
+      if (e.affectsConfiguration("nautilus.cliPath")) {
+        void vscode.commands.executeCommand("nautilus.restartLanguageServer");
+      }
     })
   );
 
@@ -202,9 +206,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 async function startLanguageClient(context: vscode.ExtensionContext): Promise<void> {
-  const cliPath = vscode.workspace
-    .getConfiguration("nautilus")
-    .get<string>("cliPath", "naut");
+  const cli = resolveCliNow();
+  if (!cli.found) {
+    // Don't spawn a command we already know isn't there: the language
+    // client would add its own error dialog and output-channel noise on top
+    // of ours. Syntax highlighting, commands, and live values still work.
+    showCliMissing(cli.command);
+    return;
+  }
+  const cliPath = cli.command;
 
   const serverOptions: ServerOptions = {
     command: cliPath,
@@ -235,25 +245,12 @@ async function startLanguageClient(context: vscode.ExtensionContext): Promise<vo
   try {
     await client.start();
     context.subscriptions.push({ dispose: () => client?.stop() });
-  } catch {
+  } catch (err) {
     client = undefined;
     // Syntax highlighting, commands, and live values still work without the
-    // server; point the user at the one-line install instead of failing hard.
-    // Fire-and-forget: do NOT await the toast — an un-dismissed notification
-    // would otherwise leave activate() pending forever.
-    void vscode.window
-      .showWarningMessage(
-        `nautilus: couldn't start the language server ("${cliPath} lsp"). ` +
-          "Install the CLI for diagnostics and go-to-definition.",
-        "Copy install command"
-      )
-      .then((pick) => {
-        if (pick) {
-          void vscode.env.clipboard.writeText(
-            "go install github.com/joyautomation/nautilus/cmd/naut@latest"
-          );
-        }
-      });
+    // server. Found-but-won't-start is usually an explicit cliPath that's
+    // wrong, or a CLI too old to have `lsp`.
+    showCliMissing(cliPath, `"${cliPath} lsp" failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

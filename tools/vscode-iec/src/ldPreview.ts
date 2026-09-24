@@ -7,6 +7,7 @@
 
 import { execFile } from "child_process";
 import * as vscode from "vscode";
+import { cliCommand, cliMissingMessage, isMissing } from "./cli";
 import { graphArgs, isL5X } from "./l5xRouting";
 import { LiveValues } from "./liveValues";
 import {
@@ -27,7 +28,7 @@ import {
  * thing that differs is which CLI verb produces the model, and whether the
  * result is editable — it is not: you do not hand-edit a vendor export. */
 function ldGraph(source: string, at?: string): Promise<{ model?: unknown; error?: string }> {
-  const cli = vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "naut");
+  const cli = cliCommand();
   const args = graphArgs(at);
   return new Promise((resolve) => {
     const child = execFile(cli, args, { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
@@ -38,6 +39,7 @@ function ldGraph(source: string, at?: string): Promise<{ model?: unknown; error?
       } catch {
         // fall through
       }
+      if (isMissing(err)) return resolve({ error: cliMissingMessage(cli) });
       resolve({ error: err ? String(err) : "naut ld graph: empty output" });
     });
     child.stdin?.end(source);
@@ -57,7 +59,7 @@ function logLd(msg: string): void {
 
 /** Run `naut ld edit`: resolve op against source, get rung-level edits. */
 function ldEdit(source: string, op: unknown, at?: string): Promise<{ edits?: LdTextEdit[]; error?: string }> {
-  const cli = vscode.workspace.getConfiguration("nautilus").get<string>("cliPath", "naut");
+  const cli = cliCommand();
   return new Promise((resolve) => {
     const child = execFile(cli, ["ld", "edit"], { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
       try {
@@ -67,6 +69,7 @@ function ldEdit(source: string, op: unknown, at?: string): Promise<{ edits?: LdT
       } catch {
         // fall through
       }
+      if (isMissing(err)) return resolve({ error: cliMissingMessage(cli) });
       resolve({ error: err ? String(err) : "naut ld edit: empty output" });
     });
     child.stdin?.end(JSON.stringify({ source, op, file: at }));

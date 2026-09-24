@@ -11,6 +11,7 @@ build/
 # editors / os
 .DS_Store
 tools/vscode-iec/out/
+tools/vscode-iec/.vscode-test/
 
 # Local QA scaffolds from `naut new`
 /demo/
