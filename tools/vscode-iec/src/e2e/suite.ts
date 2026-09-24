@@ -6,7 +6,7 @@ import * as assert from "node:assert/strict";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { resolveCliNow } from "../cli";
+import { cliVersion, managedCliPath, resolveCliNow } from "../cli";
 import { fbdGraph } from "../fbdPreview";
 
 const FBD = "PROGRAM Main\nVAR\n  a : BOOL;\n  b : BOOL;\nEND_VAR\nb := a;\nEND_PROGRAM\n";
@@ -40,6 +40,12 @@ async function step<T>(name: string, ms: number, work: () => Thenable<T> | Promi
   }
 }
 
+/** Windows paths compare case-insensitively (VS Code hands out "c:\\"
+ * for global storage where the environment says "C:\\"). */
+function norm(p: string | undefined): string | undefined {
+  return p && process.platform === "win32" ? p.toLowerCase() : p;
+}
+
 function nautilusDiagnostics(uri: vscode.Uri): vscode.Diagnostic[] {
   return vscode.languages.getDiagnostics(uri).filter((d) => d.source?.startsWith("nautilus"));
 }
@@ -61,10 +67,16 @@ export async function run(): Promise<void> {
   console.log(`[e2e] resolved ${JSON.stringify(cli)}`);
   const commands = await step("list commands", 30_000, () => vscode.commands.getCommands(true));
   assert.ok(commands.includes("nautilus.restartLanguageServer"), "commands register with or without the CLI");
+  assert.ok(commands.includes("nautilus.installCli"), "the one-click install is there with or without the CLI");
+  const exe = process.platform === "win32" ? "naut.exe" : "naut";
+  assert.equal(norm(managedCliPath()), norm(path.join(process.env.NAUTILUS_E2E_MANAGED_BIN ?? "", exe)), "the managed install lives in global storage");
 
-  if (expect === "found") {
-    const want = path.join(os.homedir(), "go", "bin", process.platform === "win32" ? "naut.exe" : "naut");
-    assert.deepEqual([cli.command, cli.found], [want, true], "resolved the go install in ~/go/bin, not PATH");
+  if (expect === "found" || expect === "managed") {
+    const want =
+      expect === "found" ? path.join(os.homedir(), "go", "bin", exe) : path.join(process.env.NAUTILUS_E2E_MANAGED_BIN ?? "", exe);
+    assert.deepEqual([norm(cli.command), cli.found], [norm(want), true], `resolved the ${expect} CLI at ${want}`);
+    const version = await step("naut version", 30_000, () => cliVersion(cli.command));
+    assert.ok(version, "naut version answered");
 
     console.log(`[e2e +${Date.now() - t0}ms] wait for diagnostics`);
     const diags = await waitFor("a nautilus-st diagnostic on broken.st", 30_000, () => {
@@ -87,7 +99,7 @@ export async function run(): Promise<void> {
     const g = await step("fbd graph without a CLI", 30_000, () => fbdGraph(FBD));
     assert.ok("error" in g && /nautilus\.cliPath/.test(g.error), `the diagram editor says how to fix it: ${JSON.stringify(g)}`);
   } else {
-    throw new Error(`NAUTILUS_E2E_EXPECT must be found or missing, got ${expect}`);
+    throw new Error(`NAUTILUS_E2E_EXPECT must be found, missing or managed, got ${expect}`);
   }
   console.log(`[e2e +${Date.now() - t0}ms] ${expect}: all checks passed`);
 }

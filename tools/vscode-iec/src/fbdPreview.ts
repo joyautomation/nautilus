@@ -12,7 +12,7 @@
 // per-document into VS Code's editor lifecycle.
 
 import * as vscode from "vscode";
-import { cliCommand, cliMissingMessage, isMissing } from "./cli";
+import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
 import { execFile } from "child_process";
 import * as path from "path";
 import type { ProgramInfo } from "./onlineEdit";
@@ -103,7 +103,7 @@ export function fbdGraph(source: string): Promise<{ model: FbdModel } | { error:
     const child = execFile(
       cli,
       ["fbd", "graph", "-"],
-      { timeout: 10_000, maxBuffer: 16 * 1024 * 1024 },
+      cliExecOptions(),
       (err, stdout) => {
         // Exit 1 still writes {"error": ...} JSON on stdout — prefer it.
         try {
@@ -128,7 +128,7 @@ function fbdEdit(source: string, op: FbdEditOp): Promise<{ edits: FbdTextEdit[] 
     const child = execFile(
       cli,
       ["fbd", "edit"],
-      { timeout: 10_000, maxBuffer: 16 * 1024 * 1024 },
+      cliExecOptions(),
       (err, stdout) => {
         try {
           const parsed = JSON.parse(stdout) as { edits?: FbdTextEdit[]; error?: string };

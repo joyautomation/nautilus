@@ -3,6 +3,39 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Install the CLI in one click.** *nautilus: Install or Update the naut
+  CLI* downloads the latest `naut` release for your OS and CPU from GitHub,
+  verifies it against the release's `checksums.txt`, installs it into the
+  extension's own storage, and restarts the language server on it. No Go
+  toolchain needed; run it again to update. It goes through VS Code's proxy
+  support (`http.proxy`, `HTTPS_PROXY`). The resolver looks there after PATH,
+  so a `naut` you built or installed yourself still wins; an explicit
+  `nautilus.cliPath` wins over both.
+- **CLI version check.** On startup the extension logs which `naut` it
+  resolved and its version to the **nautilus** output channel, and warns
+  when it's older than the extension needs (0.11.0), with *Update naut* and
+  *Don't show again for this version*. Local development builds are assumed
+  current. *nautilus: Show CLI Info* shows the same on demand.
+
+### Changed
+
+- **The missing-CLI warning leads with *Install naut*.** It now offers
+  *Install naut*, *Locate naut…*, and *Install steps*; *Copy go install*
+  moved to the out-of-date warning, for a `naut` that came from `go
+  install`. A Flatpak VS Code is offered the install too, which puts a copy
+  inside the sandbox.
+
+### Fixed
+
+- **A hung CLI can't stall a diagram.** Every short CLI call (diagram graph
+  and edit, version) now times out after 15 seconds, and an acceptance-test
+  run after 5 minutes; the ladder and SFC edit queues previously waited
+  forever.
+
 ## [0.11.0] - 2026-09-24
 
 ### Added

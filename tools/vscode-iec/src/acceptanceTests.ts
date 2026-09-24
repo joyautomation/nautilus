@@ -11,7 +11,7 @@
 // tree by (suite, name).
 
 import * as vscode from "vscode";
-import { cliCommand, cliMissingMessage, isMissing } from "./cli";
+import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
 import { execFile } from "node:child_process";
 import * as path from "node:path";
 
@@ -43,10 +43,14 @@ function cliPath(): string {
   return cliCommand();
 }
 
+/** A whole suite runs scans on real time, so it gets far longer than a
+ * diagram call — but not forever: a hung run would pin the Test Explorer. */
+const TEST_TIMEOUT_MS = 5 * 60_000;
+
 /** Run the CLI in `cwd` and return stdout, or throw with stderr attached. */
 function runCli(cwd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(cliPath(), args, { cwd, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(cliPath(), args, cliExecOptions({ cwd, timeoutMs: TEST_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }), (err, stdout, stderr) => {
       // `naut test` exits non-zero when tests FAIL, which is not an
       // error here — the JSON on stdout is exactly what we came for.
       if (stdout.trim()) return resolve(stdout);

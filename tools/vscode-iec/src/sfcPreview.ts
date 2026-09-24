@@ -15,7 +15,7 @@
 
 import { execFile } from "child_process";
 import * as vscode from "vscode";
-import { cliCommand, cliMissingMessage, isMissing } from "./cli";
+import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
 import { LiveValues } from "./liveValues";
 import {
   addSyncTarget,
@@ -33,7 +33,7 @@ import { pickRevisions } from "./revisionPick";
 function sfcGraph(source: string): Promise<{ model?: unknown; error?: string }> {
   const cli = cliCommand();
   return new Promise((resolve) => {
-    const child = execFile(cli, ["sfc", "graph", "-"], { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
+    const child = execFile(cli, ["sfc", "graph", "-"], cliExecOptions(), (err, stdout) => {
       try {
         const parsed = JSON.parse(stdout) as { error?: string };
         if (parsed.error) return resolve({ error: parsed.error });
@@ -54,7 +54,7 @@ type SfcTextEdit = { line: number; col: number; endLine: number; endCol: number;
 function sfcEdit(source: string, op: unknown): Promise<{ edits?: SfcTextEdit[]; error?: string }> {
   const cli = cliCommand();
   return new Promise((resolve) => {
-    const child = execFile(cli, ["sfc", "edit"], { maxBuffer: 16 * 1024 * 1024 }, (err, stdout) => {
+    const child = execFile(cli, ["sfc", "edit"], cliExecOptions(), (err, stdout) => {
       try {
         const parsed = JSON.parse(stdout) as { edits?: SfcTextEdit[]; error?: string };
         if (parsed.error) return resolve({ error: parsed.error });

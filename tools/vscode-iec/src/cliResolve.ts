@@ -21,6 +21,9 @@ export interface ResolveEnv {
   home: string;
   /** True when `p` is a regular file the extension may execute. */
   isExecutable(p: string): boolean;
+  /** Where the extension's own "Install naut" puts the binary (its global
+   * storage). Searched after PATH and before the well-known dirs. */
+  managedDir?: string;
 }
 
 export interface Resolved {
@@ -73,7 +76,12 @@ export function resolveCli(configured: string | undefined, e: ResolveEnv): Resol
       : [cmd];
   const pathDirs = (e.env.PATH ?? e.env.Path ?? "").split(p.delimiter).filter(Boolean);
   const searched: string[] = [];
-  for (const dir of [...pathDirs, ...fallbackDirs(e)]) {
+  // PATH first, so a developer's own build (or a package manager's) beats
+  // the copy this extension downloaded; the managed copy next, so a
+  // one-click install works without any PATH at all and outranks a stale
+  // `go install` the user may have forgotten in ~/go/bin.
+  const managed = e.managedDir ? [e.managedDir] : [];
+  for (const dir of [...pathDirs, ...managed, ...fallbackDirs(e)]) {
     if (searched.includes(dir)) continue;
     searched.push(dir);
     for (const name of names) {

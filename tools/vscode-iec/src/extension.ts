@@ -27,12 +27,16 @@ import { ComponentEditorProvider } from "./componentEditor";
 import { UserComponentManager } from "./userComponents";
 import { registerEditComponentPortsCommand } from "./editComponentPorts";
 import { AcceptanceTests } from "./acceptanceTests";
-import { resolveCliNow, showCliMissing } from "./cli";
+import { checkCliVersion, initCli, installCliCommand, resolveCliNow, showCliInfo, showCliMissing } from "./cli";
 
 let client: LanguageClient | undefined;
 let live: LiveValues | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  // Before anything resolves the CLI: the managed install's directory is
+  // part of the search.
+  initCli(context);
+
   // Register commands and live values FIRST, independent of the language
   // client: they don't need it, and if the CLI is missing we must not let a
   // failed/slow client start block them (otherwise the toggle command is
@@ -190,6 +194,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("nautilus.program.diff", () => online.diff()),
     vscode.commands.registerCommand("nautilus.program.rollback", () => online.rollback()),
     vscode.commands.registerCommand("nautilus.program.pull", () => online.pull()),
+    vscode.commands.registerCommand("nautilus.installCli", () => installCliCommand()),
+    vscode.commands.registerCommand("nautilus.showCliInfo", () => showCliInfo()),
     vscode.commands.registerCommand("nautilus.restartLanguageServer", async () => {
       await client?.stop().catch(() => undefined);
       client = undefined;
@@ -218,6 +224,9 @@ async function startLanguageClient(context: vscode.ExtensionContext): Promise<vo
     return;
   }
   const cliPath = cli.command;
+  // Logs which naut and what version, and warns if it's too old. Not
+  // awaited: a slow `naut version` must not hold up the language server.
+  void checkCliVersion();
 
   const serverOptions: ServerOptions = {
     command: cliPath,
