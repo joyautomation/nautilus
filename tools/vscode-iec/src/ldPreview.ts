@@ -7,6 +7,7 @@
 
 import { execFile } from "child_process";
 import * as vscode from "vscode";
+import { followActiveDoc } from "./previewFollow";
 import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
 import { graphArgs, isL5X } from "./l5xRouting";
 import { LiveValues } from "./liveValues";
@@ -238,7 +239,14 @@ export class LdPreview implements vscode.Disposable {
       vscode.window.onDidChangeActiveTextEditor((ed) => {
         // Follow the active .ld file, like the markdown preview.
         if (this.panel && ed && ed.document.languageId === "iec-ld") {
+          // Diff state belongs to one document: kept when you click into
+          // the same file's text, dropped when the preview moves to another.
+          const next = followActiveDoc(
+            { docUri: this.docUri?.toString(), diffBase: this.diffBase },
+            ed.document.uri.toString()
+          );
           this.docUri = ed.document.uri;
+          this.diffBase = next.diffBase;
           this.scheduleUpdate(ed.document);
         }
       }),

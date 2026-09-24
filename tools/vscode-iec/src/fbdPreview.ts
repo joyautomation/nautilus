@@ -12,6 +12,7 @@
 // per-document into VS Code's editor lifecycle.
 
 import * as vscode from "vscode";
+import { followActiveDoc } from "./previewFollow";
 import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
 import { execFile } from "child_process";
 import * as path from "path";
@@ -356,8 +357,14 @@ export class FbdPreview implements vscode.Disposable {
       vscode.window.onDidChangeActiveTextEditor((ed) => {
         // Follow the active .fbd file, like the markdown preview.
         if (this.panel && ed && ed.document.languageId === "iec-fbd") {
+          // Diff state belongs to one document: kept when you click into
+          // the same file's text, dropped when the preview moves to another.
+          const next = followActiveDoc(
+            { docUri: this.docUri?.toString(), diffBase: this.diffBase },
+            ed.document.uri.toString()
+          );
           this.docUri = ed.document.uri;
-          this.diffBase = undefined;
+          this.diffBase = next.diffBase;
           this.scheduleUpdate(ed.document);
         }
       }),
