@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/joyautomation/nautilus/lang/internal/seed"
 )
 
 // Structural edits for the ladder view, mirroring the FBD edit seam: the
@@ -54,6 +56,8 @@ type EditOp struct {
 	ToPath  []int  `json:"toPath,omitempty"`
 	ToIndex int    `json:"toIndex,omitempty"`
 	ToCoil  bool   `json:"toCoil,omitempty"`
+	// Pou names the PROGRAM a blank file is seeded with (see ApplyEdit).
+	Pou string `json:"pou,omitempty"`
 }
 
 // TextEdit is a 1-based, end-exclusive replacement (mirrors lang/fbd).
@@ -79,12 +83,20 @@ func refValid(s string) bool {
 // ApplyEdit resolves op against source and returns the text edits. libs
 // are the project's library sources, so an inserted user block records the
 // power pins it will really compile to.
+//
+// Blank source (a 0-byte new file) seeds: the op applies to a PROGRAM
+// skeleton named op.Pou, and the result replaces the file in one edit.
 func ApplyEdit(src string, op EditOp, libs ...string) ([]TextEdit, error) {
+	if seed.Blank(src) {
+		return seedEdit(src, op, libs)
+	}
 	m, err := Graph(src, libs...)
 	if err != nil {
 		return nil, err
 	}
 	switch op.Type {
+	case "init":
+		return nil, nil // already a POU — nothing to seed
 	case "addRung":
 		return opAddRung(src, m, op)
 	case "deleteRung":

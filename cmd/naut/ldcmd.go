@@ -35,8 +35,10 @@ Usage:
                              setCoilMode, setArgs, insert, delete, addLeg,
                              wrapBranch, addRung, renameRung, deleteRung,
                              move, setComment, addComment, setRungComment,
-                             declareVar, deleteVar. On a rejected op, emits
-                             {"error": "..."} and exits 1.
+                             declareVar, deleteVar, init. Blank source seeds
+                             a PROGRAM skeleton (named by the op's "pou")
+                             and applies the op to it. On a rejected op,
+                             emits {"error": "..."} and exits 1.
 `
 
 func runLD(args []string) int {
@@ -64,7 +66,7 @@ func runLDEdit() int {
 		File string `json:"file,omitempty"`
 	}
 	enc := json.NewEncoder(os.Stdout)
-	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil || req.Source == "" {
+	if err := json.NewDecoder(os.Stdin).Decode(&req); err != nil {
 		_ = enc.Encode(map[string]string{"error": "expected {\"source\": ..., \"op\": {...}} on stdin"})
 		return 2
 	}

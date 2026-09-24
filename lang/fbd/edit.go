@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/internal/seed"
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
@@ -34,6 +35,7 @@ type TextEdit struct {
 //	deleteNode  Node (b:w.* wire, c:* coil, or f:* instance), or Nodes — a
 //	            whole selection resolved against ONE parse (comment ids are
 //	            ordinals, so per-node ops would retarget after the first)
+//	init        (blank source only) write the PROGRAM skeleton
 //	insertStatement  Text (netlist statement(s), validated before insert)
 //	setLayout   Node, X, Y — pin a dragged node's position
 //	clearLayout Node (one entry) or nothing (whole block → full auto-layout)
@@ -60,6 +62,8 @@ type EditOp struct {
 	// Nodes lists the selection for duplicate (copy/paste) and a batched
 	// deleteNode.
 	Nodes []string `json:"nodes,omitempty"`
+	// Pou names the PROGRAM a blank file is seeded with (see ApplyEdit).
+	Pou string `json:"pou,omitempty"`
 }
 
 // LayoutOpEntry is one node's pinned position in a batched setLayout.
@@ -70,7 +74,13 @@ type LayoutOpEntry struct {
 }
 
 // ApplyEdit resolves op against src and returns the text edits realizing it.
+//
+// Blank source (a 0-byte new file) seeds: the op applies to a PROGRAM
+// skeleton named op.Pou, and the result replaces the file in one edit.
 func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
+	if seed.Blank(src) {
+		return seedEdit(src, op)
+	}
 	b, err := buildModel(src)
 	if err != nil {
 		return nil, err
@@ -89,6 +99,8 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 			return b.opDeleteNodes(op.Nodes)
 		}
 		return b.opDeleteNodes([]string{op.Node})
+	case "init":
+		return nil, nil // already a POU — nothing to seed
 	case "insertStatement":
 		return b.opInsert(op)
 	case "setLayout":

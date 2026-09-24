@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/joyautomation/nautilus/lang/internal/seed"
 )
 
 var endVarRe = regexp.MustCompile(`(?i)END_VAR`)
@@ -27,6 +29,9 @@ type Model struct {
 	Rungs    []Rung    `json:"rungs"`
 	Comments []Comment `json:"comments,omitempty"`
 	Blocks   []Block   `json:"blocks,omitempty"`
+	// Blank marks a whitespace-only source: a new file with no POU yet. The
+	// editor opens it empty and the first op writes the skeleton.
+	Blank bool `json:"blank,omitempty"`
 
 	// res carries the FB signatures this parse resolved, so an edit that
 	// inserts a block places its power pins the same way the compiler will.
@@ -102,8 +107,10 @@ type Element struct {
 // Graph parses LD source into the render model. libs are project library
 // sources whose FUNCTION_BLOCK signatures are in scope, so an FB element
 // shows the pins the rung's power actually uses.
+//
+// Rungs is always a JSON array ([] for an empty body, never null).
 func Graph(src string, libs ...string) (*Model, error) {
-	m := &Model{Name: pouName(src)}
+	m := &Model{Name: pouName(src), Rungs: []Rung{}, Blank: seed.Blank(src)}
 	m.Vars = scanVars(src)
 	m.Blocks = scanBlocks(src)
 	res := newResolver(src, libs)
