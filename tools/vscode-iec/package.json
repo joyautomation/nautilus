@@ -2,7 +2,7 @@
   "name": "vscode-iec",
   "displayName": "nautilus IEC 61131-3",
   "description": "IEC 61131-3 language support for the nautilus SCADA framework: Structured Text (.st), Function Block Diagram (.fbd), Ladder Diagram (.ld) and Sequential Function Chart (.sfc) with syntax highlighting, compile diagnostics, go-to-definition, live graphical diagram editors, inline live tag values from a running controller, and a graphical HMI mimic editor for *.mimic.json P&ID documents.",
-  "version": "0.9.31",
+  "version": "0.9.33",
   "publisher": "joyauto",
   "license": "Apache-2.0",
   "icon": "icon.png",
@@ -167,11 +167,11 @@
       },
       {
         "command": "nautilus.connect",
-        "title": "nautilus: Connect to Controller\u2026"
+        "title": "nautilus: Connect to Controller…"
       },
       {
         "command": "nautilus.setValue",
-        "title": "nautilus: Set Live Value\u2026",
+        "title": "nautilus: Set Live Value…",
         "icon": "$(edit)"
       },
       {
@@ -242,7 +242,7 @@
       },
       {
         "command": "nautilus.editComponentPorts",
-        "title": "Nautilus: Edit Component Ports\u2026"
+        "title": "Nautilus: Edit Component Ports…"
       }
     ],
     "viewsContainers": {
@@ -477,7 +477,7 @@
   "capabilities": {
     "untrustedWorkspaces": {
       "supported": "limited",
-      "description": "Rendering user-authored Svelte components inside the mimic/Component Editor compiles project code with esbuild and the workspace's own toolchain (svelte/compiler, node_modules). This is disabled in untrusted workspaces \u2014 the built-in kit components and placeholder chips still work fully."
+      "description": "Rendering user-authored Svelte components inside the mimic/Component Editor compiles project code with esbuild and the workspace's own toolchain (svelte/compiler, node_modules). This is disabled in untrusted workspaces — the built-in kit components and placeholder chips still work fully."
     }
   },
   "scripts": {
@@ -485,7 +485,8 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "test": "npm run compile && node --test out/scan.test.js out/cliResolve.test.js out/programSync.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js && npm --prefix webview-ui run test",
-    "build:webview": "npm --prefix webview-ui run build"
+    "build:webview": "npm --prefix webview-ui run build",
+    "test:e2e": "npm run compile && node out/e2e/run.js"
   },
   "dependencies": {
     "esbuild": "^0.28.1",
@@ -494,6 +495,7 @@
   "devDependencies": {
     "@types/node": "^18.19.0",
     "@types/vscode": "^1.82.0",
+    "@vscode/test-electron": "^2.5.2",
     "typescript": "^5.4.0"
   }
 }

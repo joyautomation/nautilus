@@ -8,9 +8,11 @@
 // looked up on PATH first and then in the places the documented installs put
 // the binary; only an explicit path is taken as given.
 //
-// Pure (no vscode import) so node:test covers it; the filesystem and the
-// environment come in through ResolveEnv.
+// No vscode import, so node:test covers it on every CI OS. resolveCli takes
+// the filesystem and environment through ResolveEnv; isExecutableFile is the
+// real filesystem check the extension passes in.
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 export interface ResolveEnv {
@@ -80,4 +82,16 @@ export function resolveCli(configured: string | undefined, e: ResolveEnv): Resol
     }
   }
   return { command: cmd, found: false, searched };
+}
+
+/** The real-filesystem check: a regular file, and on POSIX one with an
+ * execute bit (a `go install` binary has one; a stray download may not). */
+export function isExecutableFile(p: string): boolean {
+  try {
+    if (!fs.statSync(p).isFile()) return false;
+    if (process.platform !== "win32") fs.accessSync(p, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }

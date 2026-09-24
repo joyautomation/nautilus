@@ -65,6 +65,37 @@ jobs:
       # the webview's .svelte and .ts files. Warnings (a11y) don't fail it.
       - name: Type-check the webview (svelte-check)
         run: npm --prefix webview-ui run check -- --output human
+  # A real VS Code with nothing useful on PATH, the way a desktop launcher
+  # starts it, on each OS: the extension has to find a plain `go install` in
+  # ~/go/bin (language-server diagnostics, diagram editors), and without a
+  # CLI still activate and say how to fix it. See src/e2e/run.ts.
+  vscode-iec-e2e:
+    name: VS Code extension — CLI discovery e2e (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run: {working-directory: tools/vscode-iec, shell: bash}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.24'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/cache@v4
+        with:
+          path: tools/vscode-iec/.vscode-test
+          key: vscode-test-${{ runner.os }}-${{ hashFiles('tools/vscode-iec/package-lock.json') }}
+      - run: npm ci
+      # The resolver against this OS's real filesystem (the ubuntu `npm test`
+      # above only exercises Linux paths).
+      - run: npm run compile && node --test out/cliResolve.test.js
+      - if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:e2e
+      - if: runner.os != 'Linux'
+        run: npm run test:e2e
   version-sync:
     name: Versions — repo not behind registries
     runs-on: ubuntu-latest

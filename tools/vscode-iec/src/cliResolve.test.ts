@@ -3,7 +3,10 @@
 
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { resolveCli, ResolveEnv } from "./cliResolve";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { isExecutableFile, resolveCli, ResolveEnv } from "./cliResolve";
 
 function env(files: string[], vars: Record<string, string>, platform: NodeJS.Platform = "linux"): ResolveEnv {
   const home = platform === "win32" ? "C:\\Users\\dev" : "/home/dev";
@@ -50,4 +53,54 @@ test("resolveCli: Windows finds the README install under %LOCALAPPDATA%", () => 
     env(["C:\\Users\\dev\\AppData\\Local\\nautilus\\nautilus.exe"], { Path: "C:\\Windows", LOCALAPPDATA: "C:\\Users\\dev\\AppData\\Local" }, "win32")
   );
   assert.deepEqual([r.command, r.found], ["C:\\Users\\dev\\AppData\\Local\\nautilus\\nautilus.exe", true]);
+});
+
+// ── against the real filesystem of whichever OS runs the suite ───────────────
+
+function sandbox(): { home: string; bin: string; cleanup(): void } {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "nautilus-cli-"));
+  const bin = path.join(home, "go", "bin");
+  fs.mkdirSync(bin, { recursive: true });
+  return { home, bin, cleanup: () => fs.rmSync(home, { recursive: true, force: true }) };
+}
+
+function realEnv(home: string, vars: Record<string, string>): ResolveEnv {
+  return { env: vars, platform: process.platform, home, isExecutable: isExecutableFile };
+}
+
+const exe = process.platform === "win32" ? "nautilus.exe" : "nautilus";
+
+test("real fs: a go-installed binary in ~/go/bin is found with nothing on PATH", () => {
+  const s = sandbox();
+  try {
+    const full = path.join(s.bin, exe);
+    fs.writeFileSync(full, "", { mode: 0o755 });
+    const r = resolveCli("nautilus", realEnv(s.home, { PATH: path.join(s.home, "empty") }));
+    assert.deepEqual([r.command, r.found], [full, true]);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("real fs: a directory named nautilus is not the CLI", () => {
+  const s = sandbox();
+  try {
+    fs.mkdirSync(path.join(s.bin, exe));
+    const r = resolveCli("nautilus", realEnv(s.home, { PATH: path.join(s.home, "empty") }));
+    assert.equal(r.found, false);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test("real fs: a file without the execute bit is skipped (POSIX)", { skip: process.platform === "win32" }, () => {
+  const s = sandbox();
+  try {
+    fs.writeFileSync(path.join(s.bin, "nautilus"), "", { mode: 0o644 });
+    assert.equal(isExecutableFile(path.join(s.bin, "nautilus")), false);
+    const r = resolveCli("nautilus", realEnv(s.home, { PATH: path.join(s.home, "empty") }));
+    assert.equal(r.found, false);
+  } finally {
+    s.cleanup();
+  }
 });

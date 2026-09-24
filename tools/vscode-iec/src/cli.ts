@@ -6,20 +6,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as vscode from "vscode";
-import { resolveCli, Resolved } from "./cliResolve";
+import { isExecutableFile, resolveCli, Resolved } from "./cliResolve";
 
 const INSTALL_URL = "https://github.com/joyautomation/nautilus#getting-started";
 const GO_INSTALL = "go install github.com/joyautomation/nautilus/cmd/nautilus@latest";
-
-function isExecutable(p: string): boolean {
-  try {
-    if (!fs.statSync(p).isFile()) return false;
-    if (process.platform !== "win32") fs.accessSync(p, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 function configured(): string {
   return vscode.workspace.getConfiguration("nautilus").get<string>("cliPath") || "nautilus";
@@ -36,7 +26,7 @@ export function resolveCliNow(): Resolved {
     env: process.env,
     platform: process.platform,
     home: os.homedir(),
-    isExecutable,
+    isExecutable: isExecutableFile,
   });
   if (resolved.found) cache = { key, resolved };
   return resolved;
