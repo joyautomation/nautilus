@@ -1,7 +1,9 @@
 name: release
 on:
   push:
-    tags: ["v*"]
+    # "v*" alone would also match the extension's vscode-v* tags (GitHub's
+    # filter is a prefix glob); those belong to vscode-stable.yml.
+    tags: ["v*", "!vscode-v*"]
 
 permissions:
   contents: write # create the GitHub Release and upload assets
@@ -19,6 +21,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
+      # Pin the current and previous CLI tags: a commit can also carry a
+      # vscode-v* tag, and GoReleaser would otherwise consider it for either.
+      - name: CLI tags for GoReleaser
+        run: |
+          echo "GORELEASER_CURRENT_TAG=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+          prev=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$GITHUB_REF_NAME^" 2>/dev/null || true)
+          if [ -n "$prev" ]; then echo "GORELEASER_PREVIOUS_TAG=$prev" >> "$GITHUB_ENV"; fi
       - uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
@@ -27,37 +36,23 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # A convenience VSIX attached to the Release, built at the extension's own
-  # package.json version. Registry publishing (Marketplace / Open VSX / npm)
-  # is NOT tag-driven — it happens from main via publish.yml whenever a
-  # package.json version bump lands. See RELEASING.md.
+  # package.json version. That is main's version, which is always the
+  # pre-release line (odd minor), so it is always packaged as a pre-release.
+  # Registry publishing is NOT driven by v* tags: pre-releases ship from main
+  # (publish.yml), stable from vscode-v* tags (vscode-stable.yml). See
+  # RELEASING.md.
   extension:
     name: VS Code extension (VSIX on the Release)
     runs-on: ubuntu-latest
     needs: cli # the Release must exist before we upload the VSIX to it
-    defaults:
-      run:
-        working-directory: tools/vscode-iec
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - run: npm ci
-      # vsce package runs vscode:prepublish, which builds the webview — it
-      # needs its own deps and the locally-linked hmi package's dist/.
-      - name: Build hmi (webview-ui's local dependency)
-        run: npm ci && npm run package
-        working-directory: hmi
-      - run: npm ci --prefix webview-ui
-      - run: npm run compile
-      - name: Package VSIX
-        run: |
-          # VS Code convention: odd minor = pre-release channel, even = stable.
-          minor=$(node -p "require('./package.json').version.split('.')[1]")
-          pre=""
-          if [ $((minor % 2)) -eq 1 ]; then pre="--pre-release"; fi
-          npx --yes @vscode/vsce package $pre
+      - name: Package VSIX (pre-release)
+        id: pkg
+        uses: ./.github/actions/vscode-package
+        with: {pre-release: 'true'}
       - name: Attach VSIX to the Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "$GITHUB_REF_NAME" ./*.vsix --clobber
+          VSIX: ${{ steps.pkg.outputs.vsix }}
+        run: gh release upload "$GITHUB_REF_NAME" "$VSIX" --clobber

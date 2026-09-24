@@ -1,0 +1,48 @@
+# Builds tools/vscode-iec into a VSIX, once, so every registry (and the
+# GitHub Release) gets the identical file. Used by publish.yml (pre-release),
+# vscode-stable.yml (stable) and release.yml (convenience VSIX).
+#
+# The version is whatever tools/vscode-iec/package.json says when this runs;
+# vscode-stable.yml stamps the tag's version in first.
+name: Package the VS Code extension
+description: npm ci for hmi, webview-ui and the extension, then vsce package
+inputs:
+  pre-release:
+    description: "'true' to package for the pre-release channel"
+    required: true
+outputs:
+  vsix:
+    description: Absolute path of the packaged VSIX
+    value: ${{ steps.pack.outputs.vsix }}
+  version:
+    description: The version packaged
+    value: ${{ steps.pack.outputs.version }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with: {node-version: '22'}
+    # vscode:prepublish builds the webview, which needs its own deps and the
+    # dist/ of the locally-linked hmi package (file:../../../hmi). Never
+    # package with --no-dependencies: esbuild and the language client ship.
+    - name: Build hmi (webview-ui's local dependency)
+      shell: bash
+      working-directory: hmi
+      run: npm ci && npm run package
+    - shell: bash
+      working-directory: tools/vscode-iec
+      run: npm ci --prefix webview-ui && npm ci
+    - name: vsce package
+      id: pack
+      shell: bash
+      working-directory: tools/vscode-iec
+      env:
+        PRE: ${{ inputs.pre-release }}
+      run: |
+        version=$(node -p "require('./package.json').version")
+        vsix="$RUNNER_TEMP/vscode-iec-$version.vsix"
+        flag=""
+        if [ "$PRE" = "true" ]; then flag="--pre-release"; fi
+        npx --yes @vscode/vsce package $flag -o "$vsix"
+        echo "vsix=$vsix" >> "$GITHUB_OUTPUT"
+        echo "version=$version" >> "$GITHUB_OUTPUT"

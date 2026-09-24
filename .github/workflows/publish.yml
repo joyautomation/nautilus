@@ -2,6 +2,8 @@
 # main is ahead of the registry. The repo is the source of truth: bump the
 # version in a PR, merge, and this ships it. Nothing publishes when versions
 # already match, so the workflow is idempotent and safe on every push.
+# For the extension this is the PRE-RELEASE channel only; stable releases
+# ship from vscode-v* tags (vscode-stable.yml).
 name: publish
 on:
   push:
@@ -47,66 +49,50 @@ jobs:
           fi
           npm publish --access public --provenance
 
+  # main is the extension's PRE-RELEASE line (odd minor, e.g. 0.11.x): every
+  # bump publishes with --pre-release. Stable (even minor) ships only from
+  # vscode-v* tags via vscode-stable.yml. See RELEASING.md.
   extension:
-    name: VS Code extension → Marketplace + Open VSX
+    name: VS Code extension (pre-release) → Marketplace + Open VSX
     runs-on: ubuntu-latest
-    defaults:
-      run: {working-directory: tools/vscode-iec}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: {node-version: '22'}
-      - name: Compare repo version with the Marketplace
+      # Fails on an even minor on main, on a registry pre-release ahead of the
+      # repo (out-of-band publish), and on a version below the highest stable.
+      # Outputs which registries still need this version.
+      - name: Guard — main is the pre-release line, registries not ahead
         id: v
         run: |
-          repo=$(node -p "require('./package.json').version")
-          reg=$(npx --yes @vscode/vsce show joyauto.vscode-iec --json 2>/dev/null \
-                | node -p "JSON.parse(require('fs').readFileSync(0)).versions[0].version" \
-                || echo 0.0.0)
-          echo "repo=$repo marketplace=$reg"
-          if [ "$repo" = "$reg" ]; then
-            echo "publish=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          if [ "$(printf '%s\n%s\n' "$repo" "$reg" | sort -V | tail -1)" != "$repo" ]; then
-            echo "::error::Marketplace has $reg, ahead of the repo's $repo — out-of-band publish"; exit 1
-          fi
-          # VS Code convention: odd minor = pre-release channel, even = stable.
-          minor=$(echo "$repo" | cut -d. -f2)
-          pre=""
-          if [ $((minor % 2)) -eq 1 ]; then pre="--pre-release"; fi
-          echo "publish=true" >> "$GITHUB_OUTPUT"
-          echo "pre=$pre" >> "$GITHUB_OUTPUT"
-      - if: steps.v.outputs.publish == 'true'
-        run: npm ci
-      # vscode:prepublish builds the webview, which needs its own deps and
-      # the dist/ of the locally-linked hmi package (file:../../../hmi).
-      - name: Build hmi (webview-ui's local dependency)
-        if: steps.v.outputs.publish == 'true'
-        run: npm ci && npm run package
-        working-directory: hmi
-      - if: steps.v.outputs.publish == 'true'
-        run: npm ci --prefix webview-ui
+          repo=$(node -p "require('./tools/vscode-iec/package.json').version")
+          .github/scripts/vscode-channel-guard.sh publish-pre "$repo"
+      - name: Package VSIX (pre-release)
+        id: pkg
+        if: steps.v.outputs.mkt == 'true' || steps.v.outputs.ovsx == 'true'
+        uses: ./.github/actions/vscode-package
+        with: {pre-release: 'true'}
       - name: Publish to VS Code Marketplace
-        if: steps.v.outputs.publish == 'true'
+        if: steps.v.outputs.mkt == 'true'
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          VSIX: ${{ steps.pkg.outputs.vsix }}
         run: |
           if [ -z "$VSCE_PAT" ]; then echo "VSCE_PAT not set — skipping Marketplace publish"; exit 0; fi
-          npx --yes @vscode/vsce publish ${{ steps.v.outputs.pre }} -p "$VSCE_PAT"
+          npx --yes @vscode/vsce publish --pre-release --skip-duplicate --packagePath "$VSIX" -p "$VSCE_PAT"
       # Runs even when the Marketplace step failed: its gallery API times out
       # for stretches (three runs in a row on 2026-09-13), and Open VSX should
       # not lag behind because of it. The job still fails, so a rerun retries
-      # the Marketplace; the Open VSX step is idempotent and skips itself.
+      # the Marketplace; the guard then sees Open VSX is current and skips it.
+      # The VSIX carries the pre-release flag in its manifest; ovsx reads it
+      # from there (its --pre-release only applies when ovsx packages).
       - name: Publish to Open VSX
-        if: steps.v.outputs.publish == 'true' && !cancelled()
+        if: steps.v.outputs.ovsx == 'true' && steps.pkg.outcome == 'success' && !cancelled()
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          VSIX: ${{ steps.pkg.outputs.vsix }}
         run: |
           if [ -z "$OVSX_PAT" ]; then echo "OVSX_PAT not set — skipping Open VSX publish"; exit 0; fi
-          ovsx_reg=$(curl -s https://open-vsx.org/api/joyauto/vscode-iec \
-                     | node -p "JSON.parse(require('fs').readFileSync(0)).version" || echo 0.0.0)
-          repo=$(node -p "require('./package.json').version")
-          if [ "$ovsx_reg" = "$repo" ]; then echo "Open VSX already at $repo — skipping"; exit 0; fi
           # Namespace must exist and match the VSIX publisher; idempotent.
           npx --yes ovsx create-namespace joyauto -p "$OVSX_PAT" 2>/dev/null || true
-          npx --yes ovsx publish ${{ steps.v.outputs.pre }} -p "$OVSX_PAT"
+          npx --yes ovsx publish "$VSIX" --skip-duplicate -p "$OVSX_PAT"

@@ -115,27 +115,32 @@ jobs:
           if [ "$(printf '%s\n%s\n' "$repo" "$reg" | sort -V | tail -1)" != "$repo" ]; then
             echo "::error::hmi/package.json ($repo) is behind npm ($reg)"; exit 1
           fi
-      - name: extension vs Marketplace and Open VSX
+      # The extension has two channels, checked separately (RELEASING.md):
+      #   pre-release: main's package.json vs the highest PRE-RELEASE on each
+      #                registry;
+      #   stable:      the highest vscode-v* tag vs the highest STABLE on each
+      #                registry (no tags and no stable yet → passes).
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: extension vs Marketplace and Open VSX (per channel)
+        env:
+          BASE: ${{ github.base_ref }}
         run: |
           repo=$(node -p "require('./tools/vscode-iec/package.json').version")
-          mkt=$(npx --yes @vscode/vsce show joyauto.vscode-iec --json 2>/dev/null \
-                | node -p "JSON.parse(require('fs').readFileSync(0)).versions[0].version" \
-                || echo 0.0.0)
-          ovsx=$(curl -s https://open-vsx.org/api/joyauto/vscode-iec \
-                 | node -p "JSON.parse(require('fs').readFileSync(0)).version" || echo 0.0.0)
-          echo "repo=$repo marketplace=$mkt open-vsx=$ovsx"
-          for reg in "$mkt" "$ovsx"; do
-            if [ "$(printf '%s\n%s\n' "$repo" "$reg" | sort -V | tail -1)" != "$repo" ]; then
-              echo "::error::extension package.json ($repo) is behind a registry ($reg)"; exit 1
-            fi
-          done
+          # A PR into anything but main (a stable hotfix branch cut from a
+          # vscode-v* tag) does not carry the pre-release line: skip that half.
+          if [ -n "$BASE" ] && [ "$BASE" != main ]; then repo=-; fi
+          tag=$(git ls-remote --tags --refs origin 'vscode-v*' \
+                | sed -n 's#.*refs/tags/vscode-v\([0-9]*\.[0-9]*\.[0-9]*\)$#\1#p' \
+                | sort -V | tail -1)
+          .github/scripts/vscode-channel-guard.sh sync "$repo" "${tag:-0.0.0}"
       # "Behind a registry" catches an out-of-band publish. It does NOT catch
       # shipping a feature and forgetting the bump: the repo and the registry
       # then agree, the guard passes, and publish.yml -- which only fires when
       # the repo is AHEAD -- never runs. That is how L5X support sat in main
       # for two days while the Marketplace served a build without it.
       - name: extension changed without a version bump
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.base_ref == 'main'
         run: |
           base="origin/${{ github.base_ref }}"
           git fetch --quiet --depth=1 origin "${{ github.base_ref }}"
