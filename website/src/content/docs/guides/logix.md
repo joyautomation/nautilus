@@ -75,6 +75,42 @@ exports of unchanged code compare equal:
 naut logix normalize --check controller.L5X repo.L5X
 ```
 
+### Live values from a running controller
+
+`naut logix serve` puts a running controller behind the same HTTP API a
+nautilus controller serves, over EtherNet/IP, so the editor treats the PLC as
+if it were one:
+
+```bash
+naut logix serve --host 10.0.0.20 --l5x repo.L5X
+```
+
+Then set `nautilus.runtimeUrl` to `http://localhost:8080`. Live values,
+hover, the Live Values panel and *Set Live Value…* now work against the
+PLC, and so does the built-in dashboard at that address.
+
+- **Tags are discovered, not configured.** The controller is browsed at
+  startup and every user tag it can decode is served, except module I/O
+  (`--tags` narrows it with globs such as `"Program:MainProgram.*"`).
+  Controller-scope tags keep their names. A program-scope tag is served as
+  `<Program>_<Tag>`, because two programs may each have a `Sts`.
+- **`--l5x` supplies descriptions.** A CIP browse can't read tag
+  documentation, so hover and the tag table show the descriptions from an
+  export of the running project.
+- **A write goes to the controller.** What you see afterwards is the value
+  the next poll read back, not the value you sent. A write names one value,
+  so `P101.Run` works but a whole UDT doesn't. A tag the controller refuses
+  to write returns its refusal.
+- **Program commands say what to use instead.** A Logix controller holds no
+  nautilus source and has nothing to warm-swap. *Diff with Controller* and
+  *Download* explain that, and point at `naut logix drift` and
+  `naut logix push`.
+
+This needs no Studio 5000, licence or Windows machine. Writes are open to
+anything that can reach the port, just as with `naut run`. Before listening
+anywhere but loopback, set `NAUTILUS_TOKEN`: a write here changes a running
+PLC.
+
 ## Half two: driving a project — the `logixd` agent
 
 Creating projects, compiling, downloading and online edits need the
