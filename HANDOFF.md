@@ -32,9 +32,11 @@ nautilus; copy/adapt from it.
   main, and only for the demo build (its one net diff, a Modbus case in
   `driverHealth`, still wants cherry-picking to main).
 - Releases: see `RELEASING.md`. CLI ships on `v*` tags (GoReleaser);
-  extension + HMI publish-on-bump from main (`publish.yml`); `version-sync`
-  in CI fails any push where a registry is ahead of the repo. Extension
-  channel: odd minor = pre-release, even minor = stable.
+  HMI + extension *pre-release* publish-on-bump from main (`publish.yml`;
+  main's extension version is always an odd minor, 0.11.x); extension
+  *stable* ships from `vscode-v<X.Y.Z>` tags, even minor
+  (`vscode-stable.yml`); `version-sync` in CI fails any push where a
+  registry is ahead of the repo, per channel.
 
 ## Layout
 

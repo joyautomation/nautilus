@@ -1,0 +1,90 @@
+# Stable channel of the VS Code extension. Push a tag vscode-vX.Y.Z (EVEN
+# minor) on a tested pre-release commit and this ships it as a STABLE release
+# to the Marketplace and Open VSX, plus a GitHub Release carrying the VSIX.
+#
+# The tag is the source of truth for the stable version (like the CLI's v*
+# tags): package.json on that commit carries the pre-release (odd minor)
+# version, and the tag's version is stamped over it here, never committed.
+# See RELEASING.md → "Promote to stable".
+name: vscode-stable
+on:
+  push:
+    tags: ['vscode-v*']
+concurrency: vscode-stable
+
+permissions:
+  contents: write # create the GitHub Release and upload the VSIX
+
+jobs:
+  stable:
+    name: VS Code extension (stable) → Marketplace + Open VSX + GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4 # the tagged commit
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      # Semver, even minor, not below the highest stable on either registry.
+      # Equal is allowed and skips that registry, so a rerun after a
+      # Marketplace timeout finishes the job instead of failing the guard.
+      - name: Guard — tag is a valid, new stable version
+        id: v
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          ver=${TAG#vscode-v}
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          .github/scripts/vscode-channel-guard.sh publish-stable "$ver"
+      - name: Stamp the tag's version into package.json
+        working-directory: tools/vscode-iec
+        run: npm version "${{ steps.v.outputs.version }}" --no-git-tag-version --allow-same-version
+      - name: Release notes from the CHANGELOG
+        env:
+          VER: ${{ steps.v.outputs.version }}
+        run: |
+          # The "## [X.Y.Z]" section for this version, up to the next "## [".
+          awk -v v="$VER" '
+            /^## \[/ { if (on) exit; on = index($0, "## [" v "]") == 1; next }
+            on' tools/vscode-iec/CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "::error::tools/vscode-iec/CHANGELOG.md has no '## [$VER]' entry on the tagged commit. Write the stable entry (summarizing the pre-releases it promotes), commit it, and move the tag."
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/notes.md"
+      - name: Package VSIX (stable)
+        id: pkg
+        uses: ./.github/actions/vscode-package
+        with: {pre-release: 'false'}
+      - name: Publish to VS Code Marketplace
+        if: steps.v.outputs.mkt == 'true'
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          VSIX: ${{ steps.pkg.outputs.vsix }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then echo "VSCE_PAT not set — skipping Marketplace publish"; exit 0; fi
+          npx --yes @vscode/vsce publish --skip-duplicate --packagePath "$VSIX" -p "$VSCE_PAT"
+      # Runs even when the Marketplace step failed (gallery API timeouts);
+      # see the same step in publish.yml.
+      - name: Publish to Open VSX
+        if: steps.v.outputs.ovsx == 'true' && steps.pkg.outcome == 'success' && !cancelled()
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          VSIX: ${{ steps.pkg.outputs.vsix }}
+        run: |
+          if [ -z "$OVSX_PAT" ]; then echo "OVSX_PAT not set — skipping Open VSX publish"; exit 0; fi
+          npx --yes ovsx create-namespace joyauto -p "$OVSX_PAT" 2>/dev/null || true
+          npx --yes ovsx publish "$VSIX" --skip-duplicate -p "$OVSX_PAT"
+      - name: GitHub Release
+        if: steps.pkg.outcome == 'success' && !cancelled()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          VER: ${{ steps.v.outputs.version }}
+          VSIX: ${{ steps.pkg.outputs.vsix }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$VSIX" --clobber
+          else
+            # --latest=false: "Latest release" on the repo page stays the CLI's.
+            gh release create "$TAG" "$VSIX" --verify-tag --latest=false \
+              --title "VS Code extension $VER" --notes-file "$RUNNER_TEMP/notes.md"
+          fi

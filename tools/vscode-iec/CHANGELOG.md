@@ -3,7 +3,7 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.11.0] - 2026-09-24
 
 ### Added
 
@@ -22,6 +22,20 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   reads as a changed rung rather than as a wall of XML.
 
 ### Changed
+
+- **Two release channels.** This build is the start of the `0.11.x`
+  pre-release line. Every version before it (`0.9.x`) was also a
+  pre-release; there has not been a stable release yet.
+  - **Pre-release** (odd minor, `0.11.x`): built from `main` and published
+    on every version bump, as today. Choose *Switch to Pre-Release Version*
+    on the extension page to get these.
+  - **Stable** (even minor, starting with `0.10.0`): a pre-release that has
+    run for a few days without a follow-up fix is promoted as-is and
+    published from a `vscode-v<version>` git tag. Its CHANGELOG entry
+    summarizes the pre-releases it contains.
+
+  The version jumps from `0.9.31` to `0.11.0` so the pre-release line sits
+  above the first stable release.
 
 - **Download and rollback ask before they touch a running controller.**
   *Download Program to Controller* and *Rollback Controller Program* now
