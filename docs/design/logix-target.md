@@ -543,6 +543,10 @@ of effort in the plan; start it in parallel with Phase 1 if there is capacity.**
 Six endpoints. Live from the online plane, `source` from the last normalized
 pull, `editable: false`. The extension works unmodified.
 
+> **Built 2026-09-23, online plane only — see §22.** Live values and writes
+> are served. `GET /api/program` is a 404 that names `naut logix drift`
+> rather than the normalized L5X this paragraph planned.
+
 ### Phase 5 — Tier B spike, optional and explicitly time-boxed
 
 LD → RLL first (it is the direction `l5xgen` already goes), over a **documented
@@ -2031,3 +2035,67 @@ verification-result or error-collection API next to `BuildAsync`.
 Worth doing. The gap between those two messages is the difference between a
 five-minute fix and the afternoon recorded in this section, and every user of
 `naut logix build` in CI inherits the worse one.
+
+## 22. `naut logix serve` — Phase 4, the online half (2026-09-23)
+
+`logix/facade` plus `cmd/naut/logixserve.go`. It browses the controller over
+EtherNet/IP, binds every decodable user tag through `eip/codegen` (the same
+selection and naming as `naut eip import`), and serves the result through
+the real `server` package over a runtime whose program is empty. It
+reimplements none of the endpoints, so the stream's delta and resync
+behaviour, `/api/meta`, write authorization and driver status are exactly
+what `naut run` serves.
+
+### Three decisions
+
+**Writes bypass the store.** `server.Options.TagWriter` hands an authorized
+`POST /api/tags` to the facade, which writes the device path over its own
+CIP connection. The alternative, making every tag both an input and an
+output, would have been a feedback loop. The poll can overwrite the store
+before a write lands, and the runtime's on-change output push then writes
+the PLC's own value back to it, overwriting whatever the controller's logic
+just set. With the hook, the store only mirrors the controller, and the
+value the editor shows after a write is the one the next poll read back.
+
+**`GET /api/program` is a 404 with a reason.** §4.4 planned to serve the
+last normalized L5X with `editable: false`. The extension, however, diffs
+`source` against the workspace's *IEC* files (`onlineEdit.ts` composes .st,
+.fbd, .ld and .sfc), so L5X text there would show as a whole-file mismatch.
+That is worse than no answer. The extension surfaces the error text, which
+names `naut logix drift`. Serving program state properly needs an
+extension-side notion of an L5X program and is left for later.
+
+**Program-scope tags are `<Program>_<Tag>`.** This is the name
+`eip/codegen` and `lang/l5x` already use, so a tag file from
+`naut logix import` and the served names agree, and `--l5x` descriptions
+land on the right tags.
+
+### Verified
+
+`logix/facade` tests run the facade against the in-repo emulator
+(`eip/logixserver`). They cover:
+- live values, including a nested UDT
+- controller-side changes appearing on the next poll
+- writes to a controller tag, a UDT member, a nested member and a
+  program-scope tag, each checked in the controller's store
+- refusals for an unknown tag, a whole-UDT write, a bad member and a wrong
+  type
+- every program endpoint
+- driver status
+
+The CLI was also run by hand against a standalone emulator with an L5X for
+descriptions. It was **not** run against Echo, because ECHO1's CIP port was
+unreachable that day, and it was not driven from a real VS Code session.
+
+### Open
+
+- **The ladder overlay misses program-scope operands.** A rung in
+  `MainProgram` says `Counts`, but the tag is served as
+  `MainProgram_Counts`. The overlay needs to try `<Program>_<operand>`
+  for a routine it knows the owner of. That fix is in the extension.
+- **The dashboard shows every tag read-only**, because every tag is a
+  driver input. The extension's set-value is unaffected. Honest writability
+  needs each tag's `ExternalAccess`, which is in the L5X, not in the browse.
+- **STRING writes and whole-array writes are refused.**
+- **No program plane.** See above.
+

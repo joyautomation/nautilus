@@ -57,6 +57,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"net/http"
 	"net/http/httputil"
@@ -291,6 +292,21 @@ type Options struct {
 	// It is configuration, not policy: the engine accepts any deadline in
 	// the future, and this is only what the picker suggests.
 	AlarmShelveTimes []time.Duration
+
+	// TagWriter, when set, takes over POST /api/tags: an authorized write
+	// is handed to it instead of the tag store. It is for a server fronting
+	// a controller it does not run (`naut logix serve`), where the value
+	// belongs on the device and the store only mirrors what the next poll
+	// reads back. Writing the store there would be worse than useless: the
+	// poll overwrites it within one cycle, so the editor would show a value
+	// that never reached the PLC.
+	//
+	// name and value are exactly what the request carried (a dotted member
+	// path is not split, an object payload is not merged). A returned error
+	// is the response body; its status is 502 unless the error has an
+	// HTTPStatus() int method, which is how a writer reports a request that
+	// was wrong rather than a device that failed.
+	TagWriter func(name string, value any) error
 }
 
 // DriverStatus is a field driver's or publisher's health, rendered by the
@@ -401,6 +417,7 @@ type Server struct {
 	hmi         fs.FS
 	alarms      *alarm.Engine
 	shelveTimes []time.Duration
+	tagWriter   func(name string, value any) error
 
 	resync time.Duration
 	diag   time.Duration
@@ -476,6 +493,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.hmi = opts[0].HMI
 		s.alarms = opts[0].Alarms
 		s.shelveTimes = opts[0].AlarmShelveTimes
+		s.tagWriter = opts[0].TagWriter
 	}
 	if len(s.shelveTimes) == 0 {
 		s.shelveTimes = alarm.DefaultShelveTimes
@@ -1037,6 +1055,19 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 	var req writeTagRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		http.Error(w, `expected {"name": ..., "value": ...}`, http.StatusBadRequest)
+		return
+	}
+	if s.tagWriter != nil {
+		if err := s.tagWriter(req.Name, req.Value); err != nil {
+			code := http.StatusBadGateway
+			var hs interface{ HTTPStatus() int }
+			if errors.As(err, &hs) {
+				code = hs.HTTPStatus()
+			}
+			http.Error(w, err.Error(), code)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	// A member write — a dotted name, or an object payload merging into a
