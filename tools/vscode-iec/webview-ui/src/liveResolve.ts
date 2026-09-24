@@ -35,12 +35,14 @@ export function arrayLowerBounds(typeText: string): number[] | undefined {
  * their arrays' per-dimension lower bounds (an IEC `ARRAY[1..4]` stores
  * element [1] at position 0). Unknown bounds — an index below a struct
  * member, an undeclared name — resolve to undefined rather than risk
- * showing the WRONG element's value.
+ * showing the WRONG element's value, unless `defaultLo` says what every
+ * array's lower bound is: 0 on Logix, where no other bound exists.
  */
 export function resolveLabel(
 	values: Record<string, unknown>,
 	bounds: Record<string, number[]>,
-	label: string
+	label: string,
+	defaultLo?: number
 ): unknown {
 	const head = /^([A-Za-z_][A-Za-z0-9_]*)/.exec(label);
 	if (!head) return undefined;
@@ -66,11 +68,11 @@ export function resolveLabel(
 			if (/^-?\d+$/.test(t)) {
 				idx = parseInt(t, 10);
 			} else {
-				const iv = resolveLabel(values, bounds, t);
+				const iv = resolveLabel(values, bounds, t, defaultLo);
 				if (typeof iv !== 'number' || !Number.isInteger(iv)) return undefined;
 				idx = iv;
 			}
-			const lo = dim >= 0 && dims && dim < dims.length ? dims[dim] : undefined;
+			const lo = dim >= 0 && dims && dim < dims.length ? dims[dim] : defaultLo;
 			if (lo === undefined) return undefined;
 			const at = idx - lo;
 			if (at < 0 || at >= v.length) return undefined;
@@ -82,4 +84,32 @@ export function resolveLabel(
 		}
 	}
 	return v;
+}
+
+/**
+ * Resolve a label named inside a Logix routine, whose rung says `Counts`
+ * for the program tag a served tag store holds as `MainProgram_Counts`
+ * (`naut logix serve`, and the naming of `naut logix import`).
+ *
+ * `scope` is the rung's, in Logix notation. A program tag shadows a
+ * controller tag of the same name, as it does on the controller, and the
+ * choice is made on the tag's EXISTENCE, not on whether the rest of the
+ * path resolves: a bad member path on the program tag must not fall
+ * through to an unrelated controller tag. An AOI routine resolves nothing,
+ * because its operands are the parameters of whichever instance is
+ * running, and a controller tag that happens to share a name is not one.
+ */
+export function resolveScoped(
+	values: Record<string, unknown>,
+	scope: string,
+	label: string
+): unknown {
+	if (/^AOI:/i.test(scope)) return undefined;
+	const prog = /^Program:(.+)$/i.exec(scope);
+	const head = /^([A-Za-z_][A-Za-z0-9_]*)/.exec(label);
+	if (prog && head) {
+		const scoped = prog[1] + '_' + label;
+		if ((prog[1] + '_' + head[1]).toLowerCase() in values) return resolveLabel(values, {}, scoped, 0);
+	}
+	return resolveLabel(values, {}, label, 0);
 }
