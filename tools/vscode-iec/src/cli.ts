@@ -1,4 +1,4 @@
-// The one place the extension decides which nautilus binary to run: the
+// The one place the extension decides which naut binary to run: the
 // language server, the diagram editors, and the acceptance tests all go
 // through cliCommand(). See cliResolve.ts for why a bare name is searched
 // for rather than handed to execFile.
@@ -9,10 +9,10 @@ import * as vscode from "vscode";
 import { isExecutableFile, resolveCli, Resolved } from "./cliResolve";
 
 const INSTALL_URL = "https://github.com/joyautomation/nautilus#getting-started";
-const GO_INSTALL = "go install github.com/joyautomation/nautilus/cmd/nautilus@latest";
+const GO_INSTALL = "go install github.com/joyautomation/nautilus/cmd/naut@latest";
 
 function configured(): string {
-  return vscode.workspace.getConfiguration("nautilus").get<string>("cliPath") || "nautilus";
+  return vscode.workspace.getConfiguration("nautilus").get<string>("cliPath") || "naut";
 }
 
 // Only a hit is cached: a miss is re-searched on the next call, so installing
@@ -80,7 +80,7 @@ export function showCliMissing(cli: string, why?: string): void {
       "Diagnostics and diagrams need VS Code installed from a .deb, .rpm, or tarball."
     : `nautilus: couldn't ${why ? "start" : "find"} the nautilus CLI${detail}. If it's installed, point the ` +
       "extension at it; a VS Code started from a desktop launcher doesn't see the PATH your shell sets.";
-  const LOCATE = "Locate nautilus…";
+  const LOCATE = "Locate naut…";
   const INSTALL = "Install steps";
   const COPY = "Copy go install";
   const actions = inFlatpak() ? [INSTALL] : [LOCATE, INSTALL, COPY];
@@ -88,8 +88,8 @@ export function showCliMissing(cli: string, why?: string): void {
     if (pick === LOCATE) {
       const picked = await vscode.window.showOpenDialog({
         canSelectMany: false,
-        openLabel: "Use this nautilus",
-        title: "Locate the nautilus CLI binary",
+        openLabel: "Use this naut",
+        title: "Locate the naut binary (the nautilus CLI)",
       });
       if (picked?.[0]) {
         // Global, not workspace: where the binary lives is a fact about this

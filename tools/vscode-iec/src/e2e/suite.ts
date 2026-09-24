@@ -63,7 +63,7 @@ export async function run(): Promise<void> {
   assert.ok(commands.includes("nautilus.restartLanguageServer"), "commands register with or without the CLI");
 
   if (expect === "found") {
-    const want = path.join(os.homedir(), "go", "bin", process.platform === "win32" ? "nautilus.exe" : "nautilus");
+    const want = path.join(os.homedir(), "go", "bin", process.platform === "win32" ? "naut.exe" : "naut");
     assert.deepEqual([cli.command, cli.found], [want, true], "resolved the go install in ~/go/bin, not PATH");
 
     console.log(`[e2e +${Date.now() - t0}ms] wait for diagnostics`);

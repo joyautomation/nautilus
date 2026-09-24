@@ -1,7 +1,7 @@
 // End-to-end: a real VS Code, launched the way a desktop launcher launches
 // it: nothing useful on PATH. Two runs of suite.ts:
 //
-//   found    HOME holds only ~/go/bin/nautilus (a plain `go install`), and
+//   found    HOME holds only ~/go/bin/naut (a plain `go install`), and
 //            the extension must find it: diagnostics from the language
 //            server, and the diagram editors reach the CLI.
 //   missing  no CLI anywhere, and the extension must still activate cleanly
@@ -18,7 +18,7 @@ import { runTests } from "@vscode/test-electron";
 
 const extRoot = path.resolve(__dirname, "..", "..");
 const repoRoot = path.resolve(extRoot, "..", "..");
-const exe = process.platform === "win32" ? "nautilus.exe" : "nautilus";
+const exe = process.platform === "win32" ? "naut.exe" : "naut";
 
 /** A scenario that hasn't finished in three minutes is hung (a healthy one
  * takes under a minute): show what VS Code is doing and fail now, rather
@@ -32,7 +32,7 @@ function withWatchdog(name: string, run: Promise<number>): Promise<number> {
           process.platform === "win32"
             ? execFileSync("tasklist", { encoding: "utf8" })
             : execFileSync("ps", ["-axo", "pid,etime,command"], { encoding: "utf8" });
-        console.error(ps.split("\n").filter((l) => /code|electron|nautilus/i.test(l)).join("\n"));
+        console.error(ps.split("\n").filter((l) => /code|electron|naut/i.test(l)).join("\n"));
       } catch {
         // The diagnosis is best-effort; the failure below is what matters.
       }
@@ -48,7 +48,7 @@ async function main(): Promise<void> {
     let bin = process.env.NAUTILUS_E2E_BIN;
     if (!bin) {
       bin = path.join(tmp, exe);
-      execFileSync("go", ["build", "-o", bin, "./cmd/nautilus"], { cwd: repoRoot, stdio: "inherit" });
+      execFileSync("go", ["build", "-o", bin, "./cmd/naut"], { cwd: repoRoot, stdio: "inherit" });
     }
 
     const ws = path.join(tmp, "ws");

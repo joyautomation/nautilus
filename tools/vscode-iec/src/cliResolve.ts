@@ -2,7 +2,7 @@
 //
 // A terminal and the editor disagree about PATH more often than not: VS Code
 // launched from a desktop menu or dock never reads ~/.bashrc or ~/.zshrc, so
-// the `export PATH=$PATH:~/go/bin` that makes `nautilus version` answer in a
+// the `export PATH=$PATH:~/go/bin` that makes `naut version` answer in a
 // shell is invisible to the extension. `go install` is the install most Go
 // developers reach for, and it lands exactly there. So a bare command name is
 // looked up on PATH first and then in the places the documented installs put
@@ -60,7 +60,7 @@ function expandHome(cmd: string, e: ResolveEnv): string {
 
 export function resolveCli(configured: string | undefined, e: ResolveEnv): Resolved {
   const p = e.platform === "win32" ? path.win32 : path.posix;
-  const cmd = expandHome((configured ?? "").trim() || "nautilus", e);
+  const cmd = expandHome((configured ?? "").trim() || "naut", e);
 
   // An explicit path is the user's word: use it, and let a bad one fail loudly.
   if (cmd.includes("/") || (e.platform === "win32" && cmd.includes("\\"))) {

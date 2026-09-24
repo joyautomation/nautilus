@@ -14,45 +14,50 @@ function env(files: string[], vars: Record<string, string>, platform: NodeJS.Pla
 }
 
 test("resolveCli: PATH wins when the binary is on it", () => {
-  const r = resolveCli("nautilus", env(["/usr/bin/nautilus", "/home/dev/go/bin/nautilus"], { PATH: "/usr/bin:/bin" }));
-  assert.deepEqual([r.command, r.found], ["/usr/bin/nautilus", true]);
+  const r = resolveCli("naut", env(["/usr/bin/naut", "/home/dev/go/bin/naut"], { PATH: "/usr/bin:/bin" }));
+  assert.deepEqual([r.command, r.found], ["/usr/bin/naut", true]);
 });
 
 test("resolveCli: go install's ~/go/bin is found when a desktop launch left it off PATH", () => {
-  const r = resolveCli("nautilus", env(["/home/dev/go/bin/nautilus"], { PATH: "/usr/bin:/bin" }));
-  assert.deepEqual([r.command, r.found], ["/home/dev/go/bin/nautilus", true]);
+  const r = resolveCli("naut", env(["/home/dev/go/bin/naut"], { PATH: "/usr/bin:/bin" }));
+  assert.deepEqual([r.command, r.found], ["/home/dev/go/bin/naut", true]);
 });
 
 test("resolveCli: $GOBIN and $GOPATH/bin come before ~/go/bin", () => {
-  const files = ["/opt/gobin/nautilus", "/work/gp/bin/nautilus", "/home/dev/go/bin/nautilus"];
-  assert.equal(resolveCli("nautilus", env(files, { GOBIN: "/opt/gobin" })).command, "/opt/gobin/nautilus");
-  assert.equal(resolveCli("nautilus", env(files, { GOPATH: "/work/gp" })).command, "/work/gp/bin/nautilus");
+  const files = ["/opt/gobin/naut", "/work/gp/bin/naut", "/home/dev/go/bin/naut"];
+  assert.equal(resolveCli("naut", env(files, { GOBIN: "/opt/gobin" })).command, "/opt/gobin/naut");
+  assert.equal(resolveCli("naut", env(files, { GOPATH: "/work/gp" })).command, "/work/gp/bin/naut");
 });
 
 test("resolveCli: an empty setting means the default name", () => {
-  const r = resolveCli("  ", env(["/usr/local/bin/nautilus"], {}));
-  assert.equal(r.command, "/usr/local/bin/nautilus");
+  const r = resolveCli("  ", env(["/usr/local/bin/naut"], {}));
+  assert.equal(r.command, "/usr/local/bin/naut");
+});
+
+test("resolveCli: GNOME's file manager on PATH is never taken for the CLI", () => {
+  const r = resolveCli(undefined, env(["/usr/bin/nautilus", "/home/dev/go/bin/naut"], { PATH: "/usr/bin:/bin" }));
+  assert.deepEqual([r.command, r.found], ["/home/dev/go/bin/naut", true]);
 });
 
 test("resolveCli: an explicit path is taken as given, ~ expanded", () => {
-  assert.deepEqual(resolveCli("/nope/nautilus", env([], {})), { command: "/nope/nautilus", found: true, searched: [] });
-  assert.equal(resolveCli("~/bin/nautilus", env([], {})).command, "/home/dev/bin/nautilus");
+  assert.deepEqual(resolveCli("/nope/naut", env([], {})), { command: "/nope/naut", found: true, searched: [] });
+  assert.equal(resolveCli("~/bin/naut", env([], {})).command, "/home/dev/bin/naut");
 });
 
 test("resolveCli: not found reports the bare name and every place it looked", () => {
-  const r = resolveCli("nautilus", env([], { PATH: "/usr/bin" }));
+  const r = resolveCli("naut", env([], { PATH: "/usr/bin" }));
   assert.equal(r.found, false);
-  assert.equal(r.command, "nautilus");
+  assert.equal(r.command, "naut");
   assert.ok(r.searched.includes("/usr/bin"));
   assert.ok(r.searched.includes("/home/dev/go/bin"));
 });
 
 test("resolveCli: Windows finds the README install under %LOCALAPPDATA%", () => {
   const r = resolveCli(
-    "nautilus",
-    env(["C:\\Users\\dev\\AppData\\Local\\nautilus\\nautilus.exe"], { Path: "C:\\Windows", LOCALAPPDATA: "C:\\Users\\dev\\AppData\\Local" }, "win32")
+    "naut",
+    env(["C:\\Users\\dev\\AppData\\Local\\nautilus\\naut.exe"], { Path: "C:\\Windows", LOCALAPPDATA: "C:\\Users\\dev\\AppData\\Local" }, "win32")
   );
-  assert.deepEqual([r.command, r.found], ["C:\\Users\\dev\\AppData\\Local\\nautilus\\nautilus.exe", true]);
+  assert.deepEqual([r.command, r.found], ["C:\\Users\\dev\\AppData\\Local\\nautilus\\naut.exe", true]);
 });
 
 // ── against the real filesystem of whichever OS runs the suite ───────────────
@@ -68,25 +73,25 @@ function realEnv(home: string, vars: Record<string, string>): ResolveEnv {
   return { env: vars, platform: process.platform, home, isExecutable: isExecutableFile };
 }
 
-const exe = process.platform === "win32" ? "nautilus.exe" : "nautilus";
+const exe = process.platform === "win32" ? "naut.exe" : "naut";
 
 test("real fs: a go-installed binary in ~/go/bin is found with nothing on PATH", () => {
   const s = sandbox();
   try {
     const full = path.join(s.bin, exe);
     fs.writeFileSync(full, "", { mode: 0o755 });
-    const r = resolveCli("nautilus", realEnv(s.home, { PATH: path.join(s.home, "empty") }));
+    const r = resolveCli("naut", realEnv(s.home, { PATH: path.join(s.home, "empty") }));
     assert.deepEqual([r.command, r.found], [full, true]);
   } finally {
     s.cleanup();
   }
 });
 
-test("real fs: a directory named nautilus is not the CLI", () => {
+test("real fs: a directory named naut is not the CLI", () => {
   const s = sandbox();
   try {
     fs.mkdirSync(path.join(s.bin, exe));
-    const r = resolveCli("nautilus", realEnv(s.home, { PATH: path.join(s.home, "empty") }));
+    const r = resolveCli("naut", realEnv(s.home, { PATH: path.join(s.home, "empty") }));
     assert.equal(r.found, false);
   } finally {
     s.cleanup();
@@ -96,9 +101,9 @@ test("real fs: a directory named nautilus is not the CLI", () => {
 test("real fs: a file without the execute bit is skipped (POSIX)", { skip: process.platform === "win32" }, () => {
   const s = sandbox();
   try {
-    fs.writeFileSync(path.join(s.bin, "nautilus"), "", { mode: 0o644 });
-    assert.equal(isExecutableFile(path.join(s.bin, "nautilus")), false);
-    const r = resolveCli("nautilus", realEnv(s.home, { PATH: path.join(s.home, "empty") }));
+    fs.writeFileSync(path.join(s.bin, "naut"), "", { mode: 0o644 });
+    assert.equal(isExecutableFile(path.join(s.bin, "naut")), false);
+    const r = resolveCli("naut", realEnv(s.home, { PATH: path.join(s.home, "empty") }));
     assert.equal(r.found, false);
   } finally {
     s.cleanup();
