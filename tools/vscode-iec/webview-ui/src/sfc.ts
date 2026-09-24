@@ -58,7 +58,19 @@ export type SfcModel = {
 	// User-pinned positions, keyed by the same stable ids (st:/tr:/ac:) —
 	// only step (`st:`) entries affect layout in v1 (§4.2: "drag a STEP").
 	layout?: Record<string, { x: number; y: number }>;
+	/** A whitespace-only source: no POU yet; the first op seeds one. */
+	blank?: boolean;
 };
+
+/** Arrays always arrays: an older CLI (or saved webview state) can carry
+ * `null` for an empty chart's steps/trans. */
+export function normalizeSfc(m: SfcModel): SfcModel {
+	return {
+		...m,
+		steps: m.steps ?? [],
+		trans: (m.trans ?? []).map((t) => ({ ...t, from: t.from ?? [], to: t.to ?? [] }))
+	};
+}
 
 export function stepId(name: string): string {
 	return 'st:' + name;

@@ -47,7 +47,18 @@ export type LdModel = {
 	rungs: LdRung[];
 	comments?: LdComment[];
 	blocks?: LdBlock[];
+	/** A whitespace-only source: no POU yet; the first op seeds one. */
+	blank?: boolean;
 };
+
+/** Arrays always arrays: an older CLI (or saved webview state) can carry
+ * `null` for an empty body's rungs, or a rung's elements/coils. */
+export function normalizeLd(m: LdModel): LdModel {
+	return {
+		...m,
+		rungs: (m.rungs ?? []).map((r) => ({ ...r, elements: r.elements ?? [], coils: r.coils ?? [] }))
+	};
+}
 
 /** One element annotated with its power state. */
 export type Ann = {

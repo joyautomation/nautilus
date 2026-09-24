@@ -21,6 +21,19 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   *Don't show again for this version*. Local development builds are assumed
   current. *nautilus: Show CLI Info* shows the same on demand.
 
+- **A new, empty `.fbd` / `.ld` / `.sfc` opens as an empty diagram.** A
+  0-byte file used to be a parse error with nothing to click. It now opens
+  with the palette and an *Empty file* banner; the first edit (or the
+  banner's *initialize*) writes a `PROGRAM <file name>` skeleton plus that
+  edit, in one step. (Needs the matching `naut` CLI.)
+- **Ladder: rungs can be deleted.** Click a rung's name to select the rung;
+  Del or the palette's ✕ deletes it. Deleting a rung's only coil used to
+  answer "delete the rung itself" with no way to do that from the diagram.
+- **Ladder: an `.L5X` export says it is read-only.** The toolbar shows a
+  *read-only · Logix export* pill and the palette, insert points and
+  double-click editors are gone, instead of every gesture ending in a
+  "read-only" toast.
+
 ### Changed
 
 - **The missing-CLI warning leads with *Install naut*.** It now offers
@@ -64,6 +77,36 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   `/api/state` every 2 s regardless of the setting. Now it polls only while
   live values are on, and its live pill toggles them, like the pill on the
   FBD, Ladder and SFC diagrams: ● live / ◌ offline / ○ live off.
+- **FBD: deleting several notes deletes the ones you selected.** Selecting
+  notes A and B of A/B/C and pressing Del removed A and C: each note was
+  deleted by position, one after another, so the second delete landed on
+  the renumbered list. The selection is now deleted in one edit, and pinned
+  positions of the notes after it stay with their notes.
+- **FBD: deleting a wired block no longer raises a "no connection into …"
+  warning per wire.** The wires go with the block.
+- **FBD: disconnecting two inputs of one block removes those two.**
+  Extensible inputs renumber when one is removed (`IN2` becomes `IN1`); the
+  disconnects now run from the highest pin down.
+- **FBD: moving blocks with the arrow keys sticks.** The move is saved to
+  the layout once the key presses stop, like a mouse drag; before, the
+  next re-render snapped the blocks back.
+- **Empty diagrams no longer crash.** An empty `LD` body, an `SFC` with no
+  steps, or deleting the last step or block left the view blank or broken
+  (no palette, no *+ rung*; *+ step* threw). The CLI now always sends
+  empty lists, and the view copes with an older CLI that doesn't.
+- **A ladder or SFC file that fails to parse on first open shows its own
+  toolbar**, not the FBD editor's *+ add* and hints.
+- **Ladder: palette timers and counters get a free name.** *TON* and *CTU*
+  numbered from `t1`/`c1` every session, so a second session wrote a
+  duplicate `t1:TON` that doesn't compile. They now take the first name no
+  rung or variable uses, and `naut ld edit` refuses a duplicate instance.
+- **Ladder: Esc cancels a drag** in progress.
+- **SFC: the add form takes the keyboard.** Its first field is focused,
+  Enter adds, Esc closes. A chart's first step is added as the
+  `INITIAL_STEP`.
+- **SFC: Del works right after a double-click edit.** Closing the in-place
+  editor now returns focus to the chart (the same fix applies to the
+  ladder view).
 
 ## [0.11.0] - 2026-09-24
 

@@ -41,7 +41,9 @@
 		) => void;
 	} = $props();
 
-	type Sel = { rung: string; path?: number[]; coil?: number } | null;
+	// `whole` selects the rung itself (click its name): Del / ✕ then post
+	// deleteRung instead of an element delete.
+	type Sel = { rung: string; path?: number[]; coil?: number; whole?: boolean } | null;
 	let selected = $state<Sel>(null);
 
 	// ── model → geometry ────────────────────────────────────────────────────
@@ -72,7 +74,7 @@
 	const rungs = $derived.by(() => {
 		const on = showLive && live.enabled && live.fresh;
 		const resolve = (label: string) => (on ? liveValue(label) : undefined);
-		const annotated = model.rungs.map((r) => {
+		const annotated = (model.rungs ?? []).map((r) => {
 			const all = annotate([...r.elements, ...r.coils], on ? true : undefined, resolve);
 			return { r, elems: all.slice(0, r.elements.length), coils: all.slice(r.elements.length) };
 		});
@@ -129,6 +131,7 @@
 	};
 	const isSel = (rung: string, path?: number[], coil?: number) =>
 		selected !== null &&
+		!selected.whole &&
 		selected.rung === rung &&
 		JSON.stringify(selected.path) === JSON.stringify(path) &&
 		selected.coil === coil;
@@ -143,13 +146,31 @@
 		accept: 'series' | 'coil';
 		op: (rung: string, series?: number[], index?: number) => Record<string, unknown>;
 	};
-	let fbSeq = 1;
+	// A palette block's instance name: the first `t<n>`/`c<n>` no rung
+	// instance or header variable already declares — a duplicate
+	// declaration doesn't compile, and `ld edit` refuses it.
+	function freeInst(prefix: string): string {
+		const taken = new Set<string>((model.vars ?? []).map((v) => v.name.toLowerCase()));
+		const walk = (els: LdElement[]) => {
+			for (const e of els ?? []) {
+				if (e.inst) taken.add(e.inst.toLowerCase());
+				for (const leg of e.legs ?? []) walk(leg);
+			}
+		};
+		for (const r of model.rungs ?? []) {
+			walk(r.elements);
+			walk(r.coils);
+		}
+		let n = 1;
+		while (taken.has(prefix + n)) n++;
+		return prefix + n;
+	}
 	const PALETTE: PalItem[] = [
 		{ label: '⊣ ⊢', title: 'NO contact', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'contact', path: series, index }) },
 		{ label: '⊣/⊢', title: 'NC contact', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'contact', neg: true, path: series, index }) },
 		{ label: 'FN( )', title: 'function contact — inserts GT(_, 0.0) as a placeholder; dblclick it to make it ANY function: LE, EQ, ABS(x) > 0 comparisons, etc.', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'fn', fn: 'GT', args: '_, 0.0', path: series, index }) },
-		{ label: 'TON', title: 'on-delay timer in the rung', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'fb', inst: `t${fbSeq++}`, fbType: 'TON', args: 'PT := T#1S', path: series, index }) },
-		{ label: 'CTU', title: 'up counter in the rung', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'fb', inst: `c${fbSeq++}`, fbType: 'CTU', args: 'PV := 10', path: series, index }) },
+		{ label: 'TON', title: 'on-delay timer in the rung', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'fb', inst: freeInst('t'), fbType: 'TON', args: 'PT := T#1S', path: series, index }) },
+		{ label: 'CTU', title: 'up counter in the rung', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'fb', inst: freeInst('c'), fbType: 'CTU', args: 'PV := 10', path: series, index }) },
 		{ label: '[ | ]', title: 'parallel branch (two open legs)', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'branch', path: series, index }) },
 		{ label: '( )', title: 'output coil', accept: 'coil', op: (rung, _s, index) => ({ type: 'insert', rung, kind: 'coil', index }) },
 		{ label: '(S)', title: 'set (latch) coil', accept: 'coil', op: (rung, _s, index) => ({ type: 'insert', rung, kind: 'coil', mode: 'S', index }) },
@@ -159,7 +180,10 @@
 	function paletteClick(item: PalItem) {
 		// Append at the selection's rung (after it), else the last rung's end.
 		const rungName = selected?.rung ?? (model.rungs.length ? model.rungs[model.rungs.length - 1].name : '');
-		if (!rungName) return;
+		if (!rungName) {
+			onTrace?.('palette click with no rung — add a rung first');
+			return;
+		}
 		if (item.accept === 'coil') {
 			post(item.op(rungName, undefined, 999));
 			return;
@@ -315,18 +339,33 @@
 
 	function rungNameInteract(el: Element, rung: string) {
 		let name = rung;
+		// Click selects the RUNG (Del / ✕ delete it); the element-level
+		// pointerdown path is for nodes only.
+		const onDown = (ev: Event) => {
+			if (!editable) return;
+			ev.stopPropagation();
+			(el.closest('.wrap') as HTMLElement | null)?.focus({ preventScroll: true });
+			selected = { rung: name, whole: true };
+		};
+		const onClick = (ev: Event) => {
+			if (editable) ev.stopPropagation();
+		};
 		const onDbl = (ev: Event) => {
 			if (!editable || !requestInput) return;
 			ev.stopPropagation();
 			const rect = (el as SVGTextElement).getBoundingClientRect();
 			requestInput(name, { x: rect.left, y: rect.top, w: 120 }, (v) => post({ type: 'renameRung', rung: name, name: v }));
 		};
+		el.addEventListener('pointerdown', onDown);
+		el.addEventListener('click', onClick);
 		el.addEventListener('dblclick', onDbl);
 		return {
 			update(next: string) {
 				name = next;
 			},
 			destroy() {
+				el.removeEventListener('pointerdown', onDown);
+				el.removeEventListener('click', onClick);
 				el.removeEventListener('dblclick', onDbl);
 			}
 		};
@@ -428,7 +467,7 @@
 	// DataCloneError). Snapshot the path; post() below is the backstop.
 	function selAddr(): Record<string, unknown> | null {
 		const sel = selected;
-		if (!sel) return null;
+		if (!sel || sel.whole) return null;
 		return sel.coil !== undefined
 			? { rung: sel.rung, coil: sel.coil }
 			: { rung: sel.rung, path: sel.path ? [...sel.path] : sel.path };
@@ -446,6 +485,7 @@
 
 	function doCopy(): boolean {
 		const sel = selected;
+		if (sel?.whole) return false;
 		const node = sel ? findSelected(sel) : undefined;
 		if (!sel || !node) return false;
 		clipboard = { el: JSON.parse(JSON.stringify(node.el)), coil: sel.coil !== undefined };
@@ -453,6 +493,11 @@
 	}
 
 	function doDelete(): boolean {
+		if (selected?.whole) {
+			post({ type: 'deleteRung', rung: selected.rung });
+			selected = null;
+			return true;
+		}
 		const addr = selAddr();
 		onTrace?.(`doDelete addr=${JSON.stringify(addr)}`);
 		if (!addr) return false;
@@ -496,7 +541,11 @@
 		const ctrl = ev.ctrlKey || ev.metaKey;
 		const node = selected ? findSelected(selected) : undefined;
 		let acted = false;
-		if (ctrl && ev.key === 'c') {
+		if (ev.key === 'Escape' && drag) {
+			// Esc abandons an in-flight drag: no drop, no op.
+			drag = null;
+			acted = true;
+		} else if (ctrl && ev.key === 'c') {
 			acted = doCopy();
 		} else if (ctrl && ev.key === 'x') {
 			acted = doCut();
@@ -511,7 +560,7 @@
 			const next = !node.el.mode ? 'S' : node.el.mode === 'S' ? 'R' : '';
 			post({ type: 'setCoilMode', ...selAddr(), mode: next });
 			acted = true;
-		} else if (!ctrl && (ev.key === 'b' || ev.key === 'B') && selected && selected.coil === undefined) {
+		} else if (!ctrl && (ev.key === 'b' || ev.key === 'B') && selected && !selected.whole && selected.coil === undefined) {
 			// Wrap the selection in a parallel branch (OR path around it).
 			post({ type: 'wrapBranch', ...selAddr() });
 			acted = true;
@@ -546,6 +595,7 @@
 	}
 
 	function findSelected(sel: NonNullable<Sel>): Ann | undefined {
+		if (sel.whole) return undefined;
 		for (const { r, lay } of rungs) {
 			if (r.name !== sel.rung) continue;
 			for (const n of lay.nodes) {
@@ -578,7 +628,7 @@
 			<button title="Cut the selected element (Ctrl+X)" disabled={!selected} onclick={() => doCut()}>✂</button>
 			<button title="Copy the selected element (Ctrl+C)" disabled={!selected} onclick={() => doCopy()}>⧉</button>
 			<button title="Paste after the selection (Ctrl+V)" disabled={!clipboard} onclick={() => doPaste()}>⎘</button>
-			<button title="Delete the selected element (Del)" disabled={!selected} onclick={() => doDelete()}>✕</button>
+			<button title={selected?.whole ? `Delete rung ${selected.rung} (Del)` : 'Delete the selected element — or the rung, when its name is selected (Del)'} disabled={!selected} onclick={() => doDelete()}>✕</button>
 		</div>
 	{/if}
 	<div class="ladder" onclick={() => (selected = null)}>
@@ -609,6 +659,9 @@
 					<rect x="0" y="2" width="4" height={lay.height - 4} rx="2" class="statusbar" />
 					<text x={canvasW - L.RAIL_LEFT} y="11" text-anchor="end" class="statustag">{status[r.name]}</text>
 				{/if}
+				{#if selected?.whole && selected.rung === r.name}
+					<rect x="1" y="1" width={canvasW - 2} height={lay.height - 2} rx="4" class="rungsel" />
+				{/if}
 				<line x1={L.RAIL_X} y1="0" x2={L.RAIL_X} y2={lay.height} class="rail" />
 				<line x1={canvasW - L.RAIL_X} y1="0" x2={canvasW - L.RAIL_X} y2={lay.height} class="rail" />
 				<text x={problems.length ? L.RAIL_LEFT + 14 : L.RAIL_LEFT} y="11">
@@ -616,8 +669,9 @@
 						class="rungname"
 						class:bad={problems.length > 0}
 						class:editable
+						class:selected={selected?.whole === true && selected.rung === r.name}
 						use:rungNameInteract={r.name}
-					>{r.name}</tspan>
+					>{#if editable}<title>rung {r.name} — click: select the rung (Del deletes it) · dblclick: rename</title>{/if}{r.name}</tspan>
 					{#if r.comment}
 						<tspan
 							dx="8"
@@ -908,6 +962,17 @@
 	}
 	.rungname.editable {
 		cursor: pointer;
+	}
+	.rungname.selected {
+		fill: var(--nx-accent);
+		font-weight: 700;
+		font-style: normal;
+	}
+	.rungsel {
+		fill: none;
+		stroke: var(--nx-accent);
+		stroke-width: 1.5;
+		stroke-dasharray: 4 3;
 	}
 	.rungcomment {
 		font-size: 10px;

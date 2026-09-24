@@ -148,9 +148,12 @@ function docPath(doc: vscode.TextDocument): string | undefined {
 async function postLdModel(webview: vscode.Webview, doc: vscode.TextDocument): Promise<void> {
   const res = await ldGraph(doc.getText(), docPath(doc));
   if (res.error) {
-    void webview.postMessage({ type: "error", message: res.error, title: docTitle(doc) });
+    void webview.postMessage({ type: "error", message: res.error, title: docTitle(doc), lang: "ld" });
   } else {
-    void webview.postMessage({ type: "ldModel", model: res.model, title: docTitle(doc) });
+    // readOnly: an L5X renders as ladder but never takes an edit — the
+    // webview drops the palette/hotspots and says so, rather than letting
+    // every gesture end in the refusal below.
+    void webview.postMessage({ type: "ldModel", model: res.model, title: docTitle(doc), readOnly: isL5XDoc(doc) });
     postDiagnostics(webview, doc);
   }
 }
@@ -381,6 +384,7 @@ export class LdPreview implements vscode.Disposable {
         type: "error",
         message: head.error ?? base.error,
         title: docTitle(doc),
+        lang: "ld",
       });
       return;
     }

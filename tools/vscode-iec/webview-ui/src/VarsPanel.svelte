@@ -20,9 +20,12 @@
 		used,
 		onDeclare = (name: string, type: string, section: string) =>
 			postOp({ type: 'declareVar', newName: name, value: type, text: section }),
-		onDelete = (name: string) => postOp({ type: 'deleteVar', newName: name })
+		onDelete = (name: string) => postOp({ type: 'deleteVar', newName: name }),
+		readonly = false
 	}: {
 		open?: boolean;
+		/** List only — no declare row, no delete buttons (an L5X export). */
+		readonly?: boolean;
 		vars: VarDecl[];
 		used: Set<string>;
 		onDeclare?: (name: string, type: string, section: string) => void;
@@ -58,7 +61,7 @@
 		     dropdown can overflow the card instead of being clipped. -->
 		<div class="rows">
 			{#if vars.length === 0}
-				<div class="empty">no declarations — add one below</div>
+				<div class="empty">no declarations{readonly ? '' : ' — add one below'}</div>
 			{/if}
 			{#each vars as v (v.section + ':' + v.name)}
 				{@const val = liveValue(v.name)}
@@ -79,14 +82,17 @@
 					{#if !used.has(v.name.toLowerCase())}
 						<span class="unused">unused</span>
 					{/if}
-					<button
-						class="del"
-						title="Delete this declaration (references it still has become diagnostics)"
-						onclick={() => onDelete(v.name)}
-					>×</button>
+					{#if !readonly}
+						<button
+							class="del"
+							title="Delete this declaration (references it still has become diagnostics)"
+							onclick={() => onDelete(v.name)}
+						>×</button>
+					{/if}
 				</div>
 			{/each}
 		</div>
+		{#if !readonly}
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div
 			class="addrow"
@@ -107,6 +113,7 @@
 			<Suggest cls="typefield" bind:value={newType} items={TYPES} />
 			<button class="add" disabled={!nameOk} title="Declare (Enter)" onclick={addVar}>+</button>
 		</div>
+		{/if}
 	</Popover>
 {/if}
 

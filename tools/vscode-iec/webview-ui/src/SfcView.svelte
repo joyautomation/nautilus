@@ -195,7 +195,7 @@
 	// step and Check — not the editor — is what should flag it) ───────────
 	const OTHER = '§other';
 	function stepNames(): string[] {
-		return model.steps.map((s) => s.name);
+		return (model.steps ?? []).map((s) => s.name);
 	}
 	/** The value a <select> should show for a (possibly not-yet-existing)
 	 * step name: the name itself if it's a real step, else the OTHER
@@ -232,22 +232,26 @@
 		post({ type: 'addComment', text: 'note' });
 	}
 	function nextStepName(): string {
-		const taken = new Set(model.steps.map((s) => s.name.toLowerCase()));
-		let i = model.steps.length + 1;
+		const steps = model.steps ?? [];
+		const taken = new Set(steps.map((s) => s.name.toLowerCase()));
+		let i = steps.length + 1;
 		while (taken.has('step' + i)) i++;
 		return 'Step' + i;
 	}
 	function selectedStepName(): string | undefined {
 		if (selected?.kind !== 'step') return undefined;
 		const id = selected.id;
-		return model.steps.find((s) => s.id === id)?.name;
+		return (model.steps ?? []).find((s) => s.id === id)?.name;
 	}
 	function selectedTransId(): string | undefined {
 		return selected?.kind === 'trans' ? selected.id : undefined;
 	}
 	function commitAdd() {
 		if (addKind === 'step') {
-			post({ type: 'addStep', name: fName, after: selectedStepName() ? stepId(selectedStepName()!) : undefined });
+			// A chart's first step is its INITIAL_STEP — an empty chart
+			// (or a blank file being seeded) starts runnable.
+			const first = (model.steps ?? []).length === 0;
+			post({ type: 'addStep', name: fName, initial: first || undefined, after: selectedStepName() ? stepId(selectedStepName()!) : undefined });
 		} else if (addKind === 'transition') {
 			const from = selectedStepName();
 			if (!from || !fTo) return;
@@ -345,7 +349,7 @@
 	$effect(() => {
 		if (!pendingSelectTrans) return;
 		const want = pendingSelectTrans;
-		const match = model.trans.find(
+		const match = (model.trans ?? []).find(
 			(t) =>
 				t.from.length === 1 &&
 				t.to.length === 1 &&
@@ -364,7 +368,7 @@
 			const target = connectTarget;
 			drag = null;
 			if (!target) return;
-			const fromName = model.steps.find((s) => s.id === from)?.name;
+			const fromName = (model.steps ?? []).find((s) => s.id === from)?.name;
 			const toName = target.step.name;
 			if (!fromName) return;
 			pendingSelectTrans = { from: fromName, to: toName };
@@ -397,7 +401,7 @@
 		if (!selected) return;
 		if (selected.kind === 'step') {
 			const id = selected.id;
-			const step = model.steps.find((s) => s.id === id);
+			const step = (model.steps ?? []).find((s) => s.id === id);
 			if (!step) return;
 			const attached = attachedTransitions(model, step.name);
 			if (attached.length > 0) {
@@ -422,7 +426,7 @@
 	}
 	function confirmDeleteStepCascade() {
 		if (!deleteStepConfirm) return;
-		const step = model.steps.find((s) => s.id === deleteStepConfirm!.stepId);
+		const step = (model.steps ?? []).find((s) => s.id === deleteStepConfirm!.stepId);
 		if (step) {
 			// Ordering matters: see cascadeDeleteOps's doc — an unnamed
 			// transition's id is its line number, which shifts once an
@@ -482,6 +486,11 @@
 				ev.preventDefault();
 				return;
 			}
+			if (addOpen) {
+				closeAdd();
+				ev.preventDefault();
+				return;
+			}
 		}
 		if (!editable) return;
 		const ae = document.activeElement;
@@ -506,13 +515,45 @@
 		}
 	}
 
+	// The add form: Enter submits, Esc closes, the first field takes focus.
+	let wrapEl = $state<HTMLDivElement | undefined>();
+	function closeAdd() {
+		addOpen = false;
+		wrapEl?.focus({ preventScroll: true });
+	}
+	function addFormKey(ev: KeyboardEvent) {
+		ev.stopPropagation();
+		if (ev.key === 'Enter') {
+			ev.preventDefault();
+			commitAdd();
+			if (!addOpen) wrapEl?.focus({ preventScroll: true });
+		} else if (ev.key === 'Escape') {
+			ev.preventDefault();
+			closeAdd();
+		}
+	}
+	function autofocus(el: HTMLElement) {
+		queueMicrotask(() => {
+			el.focus();
+			if (el instanceof HTMLInputElement) el.select();
+		});
+	}
+	// Keep keyboard focus on the chart after any pointer gesture on it —
+	// Del/Esc listen on .wrap, and the float editor (dblclick edits) hands
+	// focus back to whatever held it when it opened.
+	function focusWrap(ev: PointerEvent) {
+		const t = ev.target as HTMLElement | null;
+		if (t?.closest?.('input, select, textarea, button, .addform')) return;
+		wrapEl?.focus({ preventScroll: true });
+	}
+
 	const hasPins = $derived(
 		Object.keys(model.layout ?? {}).some((id) => id.startsWith('st:') || id.startsWith('cm:'))
 	);
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events a11y_no_noninteractive_tabindex -->
-<div class="wrap" tabindex={editable ? 0 : undefined} onkeydown={handleKey}>
+<div class="wrap" tabindex={editable ? 0 : undefined} onkeydown={handleKey} onpointerdowncapture={focusWrap} bind:this={wrapEl}>
 	{#if editable}
 		<div class="palette" onclick={(e) => e.stopPropagation()}>
 			<button title="Add a step (after the selected step, or at the end)" onclick={() => openAdd('step')}>+ step</button>
@@ -529,12 +570,12 @@
 	{/if}
 
 	{#if addOpen}
-		<div class="addform" onclick={(e) => e.stopPropagation()}>
+		<div class="addform" onclick={(e) => e.stopPropagation()} onkeydown={addFormKey}>
 			<div class="addtitle">
 				{addKind === 'step' ? 'Add step' : addKind === 'transition' ? `Transition from ${selectedStepName()}` : addKind === 'alt' ? 'Alternative branch' : 'Simultaneous branch'}
 			</div>
 			{#if addKind === 'step' || addKind === 'sim'}
-				<label><span>name</span><input class="nx-input" bind:value={fName} spellcheck="false" /></label>
+				<label><span>name</span><input class="nx-input" bind:value={fName} spellcheck="false" use:autofocus /></label>
 			{/if}
 			{#if addKind === 'transition' || addKind === 'alt'}
 				<label>
@@ -542,6 +583,7 @@
 					<span class="picker">
 						<select
 							class="nx-input"
+							use:autofocus
 							value={pickerSelectValue(fTo)}
 							onchange={(e) => {
 								const v = (e.currentTarget as HTMLSelectElement).value;
@@ -559,8 +601,8 @@
 				<label><span>condition</span><input class="nx-input" bind:value={fCond} spellcheck="false" /></label>
 			{/if}
 			<div class="addactions">
-				<button onclick={() => (addOpen = false)}>cancel</button>
-				<button class="primary" onclick={commitAdd}>add</button>
+				<button onclick={closeAdd}>cancel</button>
+				<button class="primary" title="Enter" onclick={commitAdd}>add</button>
 			</div>
 		</div>
 	{/if}
