@@ -72,13 +72,13 @@ func Ladder(f *File, opts LadderOptions) (*ld.Model, error) {
 	var all []owned
 	for _, p := range f.Controller.Programs {
 		for _, r := range p.Routines {
-			all = append(all, owned{p.Name, r})
+			all = append(all, owned{p.Name, "Program:" + p.Name, r})
 		}
 	}
 	if opts.AOIs {
 		for _, a := range f.Controller.AOIs {
 			for _, r := range a.Routines {
-				all = append(all, owned{a.Name, r})
+				all = append(all, owned{a.Name, "AOI:" + a.Name, r})
 			}
 		}
 	}
@@ -122,6 +122,7 @@ func Ladder(f *File, opts LadderOptions) (*ld.Model, error) {
 		}
 		for _, rg := range o.r.Rungs {
 			rung, err := rungModel(rg, pou)
+			rung.Scope = o.scope
 			if err != nil {
 				return nil, fmt.Errorf("%s/%s rung %d: %w", o.owner, o.r.Name, rg.Number, err)
 			}
@@ -142,6 +143,7 @@ func routineMatches(owner, name, sel string) bool {
 // owned pairs a routine with the program or AOI that declares it.
 type owned struct {
 	owner string
+	scope string // "Program:<owner>" or "AOI:<owner>" — see ld.Rung.Scope
 	r     *Routine
 }
 
