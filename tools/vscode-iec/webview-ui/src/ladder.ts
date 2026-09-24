@@ -35,6 +35,9 @@ export type LdRung = {
 	pou?: string;
 	/** The rung's elements sit on the RUNG header line itself. */
 	inline?: boolean;
+	/** Where a Logix rung's operands resolve — "Program:MainProgram" or
+	 * "AOI:Valve". Absent for nautilus source. */
+	scope?: string;
 };
 export type LdPin = { name: string; type: string; dir: 'in' | 'out' };
 /** A FUNCTION_BLOCK POU defined in the file: a group of rungs. */

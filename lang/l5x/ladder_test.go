@@ -158,3 +158,32 @@ func TestLadderReportsABadRung(t *testing.T) {
 		t.Errorf("err = %v, want the rung named", err)
 	}
 }
+
+// Every rung carries the scope its operands resolve in — a lone routine
+// too, which has no POU heading to recover it from — so a live overlay
+// can find a program tag the rung names bare. An AOI routine's scope says
+// AOI, because its operands are per-instance parameters, not tags.
+func TestLadderRungsCarryTheirScope(t *testing.T) {
+	m, err := Ladder(load(t, "variety.L5X"), LadderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range m.Rungs {
+		if r.Scope != "Program:MainProgram" {
+			t.Fatalf("rung %s scope = %q, want Program:MainProgram", r.Name, r.Scope)
+		}
+	}
+
+	f := load(t, "variety.L5X")
+	f.Controller.AOIs = append(f.Controller.AOIs, &AddOnInstruction{
+		Name:     "Valve",
+		Routines: []*Routine{{Name: "Logic", Type: "RLL", Rungs: []Rung{{Number: 0, Text: "XIC(Open)OTE(Cmd);"}}}},
+	})
+	m, err = Ladder(f, LadderOptions{AOIs: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Rungs[len(m.Rungs)-1].Scope; got != "AOI:Valve" {
+		t.Errorf("AOI rung scope = %q, want AOI:Valve", got)
+	}
+}

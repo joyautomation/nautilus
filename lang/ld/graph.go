@@ -77,6 +77,12 @@ type Rung struct {
 	Elements []Element `json:"elements"`
 	Coils    []Element `json:"coils"`
 	POU      string    `json:"pou,omitempty"` // owning FUNCTION_BLOCK, "" for the program
+	// Scope is where a rung's operands resolve, for a rung that is not
+	// nautilus source: "Program:MainProgram" or "AOI:Valve" on a Logix
+	// routine, in Logix's own notation. Empty for a .ld file. A live-value
+	// overlay needs it because a Logix rung names a program tag bare
+	// ("Counts") while a served tag store holds it as MainProgram_Counts.
+	Scope string `json:"scope,omitempty"`
 	// Inline marks a one-line rung — elements on the RUNG header itself.
 	// An edit rewrites it in place, keeping the author's one-line style.
 	Inline  bool `json:"inline,omitempty"`

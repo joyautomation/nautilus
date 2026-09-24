@@ -3,6 +3,20 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.32] - 2026-09-24
+
+### Fixed
+
+- **Live values on a Logix routine find program-scope tags.** A rung in
+  `MainProgram` names its tag `Counts`, but `naut logix serve` serves it
+  as `MainProgram_Counts`, so the ladder overlay showed nothing for any
+  program tag. It now looks up the program's tag first and falls back to
+  the controller tag, the order Logix itself uses. An indexed operand
+  (`Recipe[2]`) resolves too, because Logix arrays always start at 0. A
+  routine inside an Add-On Instruction shows no values: its operands are
+  the parameters of whichever instance runs, and a controller tag that
+  shares a name is not one of them. (Needs the matching `naut` CLI.)
+
 ## [0.9.31] - 2026-09-23
 
 ### Changed
