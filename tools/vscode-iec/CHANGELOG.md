@@ -3,6 +3,39 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **Install the CLI in one click.** *nautilus: Install or Update the naut
+  CLI* downloads the latest `naut` release for your OS and CPU from GitHub,
+  verifies it against the release's `checksums.txt`, installs it into the
+  extension's own storage, and restarts the language server on it. No Go
+  toolchain needed; run it again to update. It goes through VS Code's proxy
+  support (`http.proxy`, `HTTPS_PROXY`). The resolver looks there after PATH,
+  so a `naut` you built or installed yourself still wins; an explicit
+  `nautilus.cliPath` wins over both.
+- **CLI version check.** On startup the extension logs which `naut` it
+  resolved and its version to the **nautilus** output channel, and warns
+  when it's older than the extension needs (0.11.0), with *Update naut* and
+  *Don't show again for this version*. Local development builds are assumed
+  current. *nautilus: Show CLI Info* shows the same on demand.
+
+### Changed
+
+- **The missing-CLI warning leads with *Install naut*.** It now offers
+  *Install naut*, *Locate naut…*, and *Install steps*; *Copy go install*
+  moved to the out-of-date warning, for a `naut` that came from `go
+  install`. A Flatpak VS Code is offered the install too, which puts a copy
+  inside the sandbox.
+
+### Fixed
+
+- **A hung CLI can't stall a diagram.** Every short CLI call (diagram graph
+  and edit, version) now times out after 15 seconds, and an acceptance-test
+  run after 5 minutes; the ladder and SFC edit queues previously waited
+  forever.
+
 ## [0.11.0] - 2026-09-24
 
 ### Added
@@ -20,20 +53,6 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   (between git revisions…)` is offered on a Logix export and graphs each
   side through `naut logix graph`, so a rung changed between two commits
   reads as a changed rung rather than as a wall of XML.
-- **Install the CLI in one click.** *nautilus: Install or Update the naut
-  CLI* (also the **Install naut** button on the missing-CLI warning)
-  downloads the latest `naut` release for your OS and CPU from GitHub,
-  verifies it against the release's `checksums.txt`, installs it into the
-  extension's own storage, and restarts the language server on it. No Go
-  toolchain needed; run it again to update. It goes through VS Code's proxy
-  support (`http.proxy`, `HTTPS_PROXY`). The resolver looks there after PATH,
-  so a `naut` you built or installed yourself still wins; an explicit
-  `nautilus.cliPath` wins over both.
-- **CLI version check.** On startup the extension logs which `naut` it
-  resolved and its version to the **nautilus** output channel, and warns
-  when it's older than the extension needs (0.11.0), with *Update naut* and
-  *Don't show again for this version*. Local development builds are assumed
-  current. *nautilus: Show CLI Info* shows the same on demand.
 
 ### Changed
 
@@ -72,17 +91,12 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   `$GOBIN`, `$GOPATH/bin`, `~/go/bin`, `~/.local/bin`, `/usr/local/bin`,
   `/opt/homebrew/bin`, and `%LOCALAPPDATA%\nautilus` on Windows. Changing
   the setting restarts the language server.
-- **A missing CLI says what to do.** The warning offers *Install naut*,
-  *Locate naut…* (pick the binary; saved to your user settings), and
-  *Install steps*, and the **nautilus** output channel lists every
+- **A missing CLI says what to do.** The warning offers *Locate naut…*
+  (pick the binary; saved to your user settings), *Install steps*, and
+  *Copy go install*, and the **nautilus** output channel lists every
   directory searched. A Flatpak VS Code, whose sandbox can't run host
-  programs at all, is recognised and told so (the one-click install puts a
-  copy inside the sandbox). The ladder and SFC
+  programs at all, is recognised and told so instead. The ladder and SFC
   editors now report a missing CLI like the FBD editor does.
-- **A hung CLI can't stall a diagram.** Every short CLI call (diagram graph
-  and edit, version) now times out after 15 seconds, and an acceptance-test
-  run after 5 minutes; the ladder and SFC edit queues previously waited
-  forever.
 
 ## [0.9.31] - 2026-09-23
 
