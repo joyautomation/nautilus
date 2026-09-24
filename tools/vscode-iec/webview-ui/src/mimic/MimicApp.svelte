@@ -3,7 +3,7 @@
 	// the canvas, and the context props panel. Document state arrives from
 	// the extension host (mimicDoc / mimicError / mimicTags messages); every
 	// gesture goes back as an op.
-	import { announceReady, ed, reopenAsText, setSnapToGrid } from './mimicState.svelte';
+	import { announceReady, ed, reopenAsText, setSnapToGrid, toggleLive } from './mimicState.svelte';
 	import EditorCanvas from './EditorCanvas.svelte';
 	import EquipPalette from './EquipPalette.svelte';
 	import PropsPanel from './PropsPanel.svelte';
@@ -21,6 +21,7 @@
 				customComponents?: string[];
 				diagnostics?: { component: string; message: string }[];
 				snapToGrid?: boolean;
+				enabled?: boolean;
 			};
 			if (m?.type === 'mimicDoc' && m.doc) {
 				ed.doc = m.doc;
@@ -30,6 +31,7 @@
 				ed.error = m.message ?? 'invalid document';
 			} else if (m?.type === 'mimicTags') {
 				ed.tags = m.tags ?? null;
+				ed.liveEnabled = m.enabled ?? true;
 			} else if (m?.type === 'mimicManifest') {
 				ed.manifest = m.components ?? {};
 				ed.customComponents = m.customComponents ?? [];
@@ -119,9 +121,19 @@
 			Snap: {ed.snapToGrid ? 'On' : 'Off'}
 		</button>
 		<span class="spacer"></span>
-		<span class="live nx-pill" class:off={!ed.tags} title="Live tags from nautilus.runtimeUrl — bound equipment animates with the process">
-			{ed.tags ? 'live' : 'offline'}
-		</span>
+		<!-- same toggle as the diagrams' live pill and the status-bar item -->
+		<button
+			class="live nx-pill"
+			class:off={!ed.liveEnabled || !ed.tags}
+			onclick={toggleLive}
+			title={!ed.liveEnabled
+				? 'Live values are off — click to enable'
+				: ed.tags
+					? 'Live tags from nautilus.runtimeUrl — bound equipment animates with the process. Click to disable'
+					: 'Live values enabled but the controller isn\'t answering — is it running? Click to disable'}
+		>
+			{!ed.liveEnabled ? '○ live off' : ed.tags ? '● live' : '◌ offline'}
+		</button>
 	</header>
 
 	{#if ed.error && !ed.doc}
@@ -225,8 +237,11 @@
 		flex: 1;
 	}
 	.live {
+		font: inherit;
 		font-size: 11px;
+		font-weight: 600;
 		padding: 2px 8px;
+		cursor: pointer;
 	}
 	.live.off {
 		color: var(--nx-muted);
