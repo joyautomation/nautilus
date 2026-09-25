@@ -564,7 +564,7 @@ export class FbdPreview implements vscode.Disposable {
         const key: unknown = msg;
         if (isDiagramKeyMessage(key)) {
           const doc = await sourceDocument(this.docUri);
-          if (doc && this.panel) void applyDiagramKey(key.action, doc, this.panel, { diffing: this.diffing });
+          if (doc && this.panel) await applyDiagramKey(key.action, doc, this.panel, { diffing: this.diffing });
           return;
         }
         if ((msg as { type?: string }).type === "exitDiff") {

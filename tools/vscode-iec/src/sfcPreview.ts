@@ -377,7 +377,7 @@ export class SfcPreview implements vscode.Disposable {
         const doc = await sourceDocument(this.docUri);
         if (isDiagramKeyMessage(msg)) {
           if (doc && this.panel) {
-            void applyDiagramKey(msg.action, doc, this.panel, { diffing: this.diffBase !== undefined });
+            await applyDiagramKey(msg.action, doc, this.panel, { diffing: this.diffBase !== undefined });
           }
           return;
         }

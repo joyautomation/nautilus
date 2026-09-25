@@ -430,7 +430,7 @@ export class LdPreview implements vscode.Disposable {
         const doc = await sourceDocument(this.docUri);
         if (isDiagramKeyMessage(msg)) {
           if (doc && this.panel) {
-            void applyDiagramKey(msg.action, doc, this.panel, { diffing: this.diffBase !== undefined, readOnly: isL5XDoc(doc) });
+            await applyDiagramKey(msg.action, doc, this.panel, { diffing: this.diffBase !== undefined, readOnly: isL5XDoc(doc) });
           }
           return;
         }
