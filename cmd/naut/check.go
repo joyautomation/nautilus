@@ -223,6 +223,25 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		fmt.Printf("%s: %s\n", dir, err)
 		return 1, 0
 	}
+
+	// The first task's name: key is a footgun, not a choice: Load (like
+	// Sources, for a warm swap) assigns the first task runtime.MainTaskName
+	// unconditionally, so a manifest author who names it — e.g. expecting
+	// suspend: [that name] to work in an acceptance test — gets no
+	// diagnostic here, just a task whose declared name silently does
+	// nothing, and a confusing "no task \"that name\"" failure later at
+	// `naut test` or `naut run`. Flagged here instead, while it's cheap to
+	// fix — a warning, not an error: the key never changed behaviour, so a
+	// manifest that carried it kept working and must keep passing check.
+	if raw, rerr := project.ReadManifest(os.DirFS(dir), manifestName); rerr == nil &&
+		len(raw.Tasks) > 0 && raw.Tasks[0].Name != "" {
+		warns++
+		fmt.Printf("%s: warning: %s's first task names itself %q, but the first task "+
+			"is always %q — the name: key on it is ignored; drop it (or move the "+
+			"program to a later task if it should be named %q)\n",
+			dir, manifestLabel(manifestName), raw.Tasks[0].Name, runtime.MainTaskName, raw.Tasks[0].Name)
+	}
+
 	rt, err := runtime.New(proj.Runtime)
 	if err != nil {
 		// The per-file pass already reported real compile errors; reaching

@@ -179,7 +179,8 @@ func TranspileWithLines(src string, libs ...string) (string, []int, error) {
 		return nil
 	}
 
-	for i, raw := range lines {
+	for i := 0; i < len(lines); i++ {
+		raw := lines[i]
 		n := i + 1
 		stripped := strippedLines[i]
 		switch {
@@ -195,17 +196,24 @@ func TranspileWithLines(src string, libs ...string) (string, []int, error) {
 		case inLD:
 			trimmed := strings.TrimSpace(raw)
 			if rungRe.MatchString(stripped) {
-				m := rungRe.FindStringSubmatch(raw)
+				hdr, err := parseRungHeader(lines, i)
+				if err != nil {
+					return "", nil, err
+				}
 				if err := flushRung(); err != nil {
 					return "", nil, err
 				}
-				name := m[1]
+				name := hdr.name
 				if name == "" {
 					name = fmt.Sprintf("rung%d", n)
 				}
-				rung = &rungParse{name: name, line: n, text: strings.TrimSpace(m[3])}
-				// A named rung reads as a comment above its network.
+				rung = &rungParse{name: name, line: n, text: hdr.tail}
+				// A named rung reads as a comment above its network. Any
+				// lines the header's own (* … *) comment ran on to (it may
+				// span several) are consumed here as part of the header —
+				// they carry no code of their own.
 				emit("  // RUNG "+name, n)
+				i = hdr.endLine
 			} else if trimmed == "" || strings.HasPrefix(trimmed, "//") {
 				// Blank lines and comments pass through inside the block.
 				emit(raw, n)

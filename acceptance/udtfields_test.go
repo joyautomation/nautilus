@@ -133,6 +133,52 @@ tests:
 	}
 }
 
+// docs/testing.md documents `task.local` addressing (`main.integral`) right
+// alongside the ST-expression section, which reads as if an expression
+// STRING could reference one. It cannot: `main.integral` is a matcher-form
+// address only — value() resolves it (see the comment above), but the
+// expression compiler's generated VAR_EXTERNAL block (exprSource,
+// ExternalsOf) only ever covers tags, so an expression referencing a task
+// local has never worked, in any released version. This pins both halves:
+// the working spelling (a matcher, including in `expect:`'s LIST form,
+// mixed with a plain tag matcher — the doc's own "a list may mix both"),
+// and the documented limit (the same name in an expression string fails to
+// compile, clearly, rather than silently resolving to something else).
+func TestTaskLocalInListForm(t *testing.T) {
+	for _, r := range runUDT(t, `
+tests:
+  - name: a task local matcher works inside expect's list form too
+    given: { P101.Speed: 4.0 }
+    scans: 2
+    expect:
+      - Duty: 8.0
+      - main.err: 4.0
+`) {
+		if !r.Passed {
+			t.Errorf("FAIL %s\n%s", r.Name, acceptance.FormatFailure(r))
+		}
+	}
+}
+
+// Regression guard for the documented limit: a task local named from
+// INSIDE an ST expression string must fail the test with a clear compile
+// error, not a wrong-namespace message or a silent pass.
+func TestTaskLocalNotResolvedInExpression(t *testing.T) {
+	_, err := tryUDT(t, `
+tests:
+  - name: task local in an expression string
+    given: { P101.Speed: 4.0 }
+    scans: 2
+    expect: "main.err < 5.0"
+`)
+	if err == nil {
+		t.Fatal("a task local inside an ST expression string passed; docs/testing.md's documented limit no longer holds — update the doc if this is now a supported feature")
+	}
+	if !strings.Contains(err.Error(), `undeclared identifier "main"`) {
+		t.Errorf("expected the compiler's undeclared-identifier error, got:\n%s", err)
+	}
+}
+
 // A wrong field name must say so — and say what the struct does have. The
 // old code could only report that there was no such TASK.
 func TestUnknownFieldNamesTheStruct(t *testing.T) {
