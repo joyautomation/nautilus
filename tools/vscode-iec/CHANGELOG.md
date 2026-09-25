@@ -104,6 +104,20 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- **Ladder diff: the "was …" label no longer collides with a comment note.**
+  A changed rung's italic "was …" label, drawn under the changed element,
+  could overrun the rung's own box — most visibly under a changed function
+  block — and land on top of a free-standing comment note (or the next
+  rung) that followed. The rung now reserves room for the label so the
+  note or next rung moves down instead.
+- **Getting Started walkthrough steps render without stray backticks.**
+  VS Code doesn't render Markdown inline code in a walkthrough step's plain
+  description, so `naut new`, `program.fbd` and the like showed their
+  literal backticks. The step descriptions are now plain text/quotes; the
+  step titles and linked commands are unaffected.
+- **`nautilus.token`'s description now covers Set Live Value.** It said the
+  token was only needed for online-edit download/rollback, but *Set Live
+  Value* also sends it as a bearer token — the description now says so.
 - **Undo, redo and save work from the diagram previews.** In the FBD /
   Ladder / SFC preview panels, Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z / Ctrl+Y and
   Ctrl/Cmd+S did nothing, because the preview isn't an editor over the

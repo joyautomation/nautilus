@@ -496,7 +496,7 @@
         "nautilus.token": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed only for online-edit download/rollback against a controller started with a token \u2014 reads and `naut pull` never require it. Prefer setting this in workspace settings, not user settings."
+          "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed for online-edit download/rollback and Set Live Value against a controller started with a token \u2014 reads and `naut pull` never require it. Prefer setting this in workspace settings, not user settings."
         },
         "nautilus.mimic.snapToGrid": {
           "type": "boolean",
@@ -607,7 +607,7 @@
           {
             "id": "installCli",
             "title": "Install the naut CLI",
-            "description": "Install `naut` — the whole nautilus toolchain: scaffolding, the scan loop, tests, and the language server this extension uses — with no Go toolchain required.\nIf `naut` is already on your PATH (or from `go install`), the extension finds and uses it automatically; this step is a no-op for you.",
+            "description": "Install \"naut\" — the whole nautilus toolchain: scaffolding, the scan loop, tests, and the language server this extension uses — with no Go toolchain required.\nIf \"naut\" is already on your PATH (or from \"go install\"), the extension finds and uses it automatically; this step is a no-op for you.",
             "media": {
               "markdown": "walkthroughs/gettingStarted/installCli.md"
             },
@@ -618,7 +618,7 @@
           {
             "id": "createProject",
             "title": "Create a project",
-            "description": "Scaffold a runnable controller with `naut new` — a manifest, IEC program files, and an acceptance test, no Go required.\nThe default **Demo** template is a 3-task, 3-language tour with a simulated plant, so it does something the moment it runs.",
+            "description": "Scaffold a runnable controller with \"naut new\" — a manifest, IEC program files, and an acceptance test, no Go required.\nThe default **Demo** template is a 3-task, 3-language tour with a simulated plant, so it does something the moment it runs.",
             "media": {
               "markdown": "walkthroughs/gettingStarted/createProject.md"
             },
@@ -630,7 +630,7 @@
           {
             "id": "openDiagram",
             "title": "Open a diagram",
-            "description": "Open `program.fbd` — the Demo template's control logic — and switch it to the diagram view: click **Open as Diagram Editor** in the editor title bar (or right-click the file and choose **Open With → FBD Diagram**). The preview button beside it opens the diagram next to the text instead.\nLadder (`.ld`) and Sequential Function Chart (`.sfc`) files open the same way.",
+            "description": "Open \"program.fbd\" — the Demo template's control logic — and switch it to the diagram view: click **Open as Diagram Editor** in the editor title bar (or right-click the file and choose **Open With → FBD Diagram**). The preview button beside it opens the diagram next to the text instead.\nLadder (.ld) and Sequential Function Chart (.sfc) files open the same way.",
             "media": {
               "markdown": "walkthroughs/gettingStarted/openDiagram.md"
             },
@@ -644,7 +644,7 @@
           {
             "id": "runAndConnect",
             "title": "Run it",
-            "description": "In a terminal at the project root, run `naut run` — it starts the scan loop and a tag API on `http://localhost:8080`.\nThen connect the editor to it: live values render as inline pills next to every identifier, and diagrams animate power flow in real time.",
+            "description": "In a terminal at the project root, run \"naut run\" — it starts the scan loop and a tag API on http://localhost:8080.\nThen connect the editor to it: live values render as inline pills next to every identifier, and diagrams animate power flow in real time.",
             "media": {
               "image": "images/live-values.png",
               "altText": "Live tag values rendered as pills next to every tag reference in the Demo template's sim.st"
@@ -657,7 +657,7 @@
           {
             "id": "testIt",
             "title": "Test it",
-            "description": "Acceptance tests (`*_test.yaml`) assert on tag values over a virtual clock, so a 10-second alarm delay is asserted exactly, in milliseconds — no real waiting.\nOpen the **Testing** view in the Activity Bar to see the Demo project's suite, or run `naut test` from a terminal.",
+            "description": "Acceptance tests (\"*_test.yaml\") assert on tag values over a virtual clock, so a 10-second alarm delay is asserted exactly, in milliseconds — no real waiting.\nOpen the **Testing** view in the Activity Bar to see the Demo project's suite, or run \"naut test\" from a terminal.",
             "media": {
               "markdown": "walkthroughs/gettingStarted/testIt.md"
             },

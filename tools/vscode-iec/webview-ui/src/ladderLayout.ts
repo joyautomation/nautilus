@@ -32,6 +32,7 @@ export const L = {
 	EMPTY_LEG_W: 36,
 	LABEL_TOP: 6, // room above the symbol
 	LABEL_BOT: 30, // room below: operand at +12, live value at +24
+	LABEL_WAS: 34, // extra room below the box for a diff "was …"/"removed" label
 	RUNG_PAD_Y: 14,
 	MIN_WIDTH: 560,
 } as const;
@@ -98,6 +99,17 @@ function fbHeight(a: Ann): number {
 
 const halfC = L.CONTACT_H / 2;
 
+/** A changed/removed element draws a "was …" (or "removed") label under its
+ * box, LadderView-style, at local y = nodeH + 24. Grow descent so that label
+ * — and its own line height — never overruns into whatever follows the
+ * rung (a comment note, or the next rung). */
+function reserveWasLabel(a: Ann, cy: number, nodeY: number, nodeH: number, descent: number): number {
+	const showsWas = a.el._diff === 'removed' || (a.el._diff === 'changed' && !!a.el._was);
+	if (!showsWas) return descent;
+	const need = nodeY - cy + nodeH + L.LABEL_WAS;
+	return Math.max(descent, need);
+}
+
 /** Lay out one series of condition elements centered on cy, starting at x.
  * path addresses this series in the rung tree ([] = the root). */
 export function layoutSeries(anns: Ann[], x: number, cy: number, path: number[] = []): Res {
@@ -128,13 +140,17 @@ export function layoutSeries(anns: Ann[], x: number, cy: number, path: number[] 
 		const elPath = [...path, i];
 		switch (a.el.kind) {
 			case 'contact': {
-				nodes.push({ kind: 'contact', x: cursor, y: cy - halfC, w: L.CONTACT_W, h: L.CONTACT_H, ann: a, path: elPath });
+				const y = cy - halfC;
+				nodes.push({ kind: 'contact', x: cursor, y, w: L.CONTACT_W, h: L.CONTACT_H, ann: a, path: elPath });
+				descent = reserveWasLabel(a, cy, y, L.CONTACT_H, descent);
 				cursor += L.CONTACT_W;
 				break;
 			}
 			case 'fn': {
 				const w = fnWidth(a);
-				nodes.push({ kind: 'fn', x: cursor, y: cy - L.FN_H / 2, w, h: L.FN_H, ann: a, path: elPath });
+				const y = cy - L.FN_H / 2;
+				nodes.push({ kind: 'fn', x: cursor, y, w, h: L.FN_H, ann: a, path: elPath });
+				descent = reserveWasLabel(a, cy, y, L.FN_H, descent);
 				cursor += w;
 				break;
 			}
@@ -147,6 +163,7 @@ export function layoutSeries(anns: Ann[], x: number, cy: number, path: number[] 
 				nodes.push({ kind: 'fb', x: cursor, y: top, w, h, ann: a, path: elPath });
 				const below = top + h - cy;
 				if (below + L.LABEL_BOT - 12 > descent) descent = below + 6;
+				descent = reserveWasLabel(a, cy, top, h, descent);
 				if (12 + L.LABEL_TOP + 12 > ascent) ascent = 12 + L.LABEL_TOP + 12; // inst label above
 				cursor += w;
 				break;
@@ -213,7 +230,7 @@ export function rungMinWidth(elems: Ann[], coilCount: number): number {
 export function layoutRung(elems: Ann[], coils: Ann[], width: number): RungLayout {
 	const probe = layoutSeries(elems, 0, 0);
 	const ascent = Math.max(probe.ascent, halfC + L.LABEL_TOP);
-	const descent = Math.max(probe.descent, halfC + L.LABEL_BOT);
+	let descent = Math.max(probe.descent, halfC + L.LABEL_BOT);
 	const wireY = L.RUNG_PAD_Y + ascent;
 
 	const r = layoutSeries(elems, L.RAIL_LEFT, wireY);
@@ -239,7 +256,9 @@ export function layoutRung(elems: Ann[], coils: Ann[], width: number): RungLayou
 			wires.push({ x1: cx, y1: wireY, x2: cx + L.WIRE_GAP, y2: wireY, on: outPower });
 			cx += L.WIRE_GAP;
 		}
-		nodes.push({ kind: 'coil', x: cx, y: wireY - L.COIL_H / 2, w: L.COIL_W, h: L.COIL_H, ann: c, coil: i });
+		const coilY = wireY - L.COIL_H / 2;
+		nodes.push({ kind: 'coil', x: cx, y: coilY, w: L.COIL_W, h: L.COIL_H, ann: c, coil: i });
+		descent = reserveWasLabel(c, wireY, coilY, L.COIL_H, descent);
 		cx += L.COIL_W;
 	});
 	// Coil zone to the right rail, with the add-coil spot on it.
