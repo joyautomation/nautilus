@@ -223,13 +223,15 @@ func (s *Server) resolveAndReply(mr cip.MessageRouterRequest, path string) cip.M
 		return cip.MROK(mr.Service, out)
 	}
 
-	// Struct root (or array of structs / single indexed element).
+	// Struct root (or array of structs / single indexed element), else a
+	// whole array of an elementary type.
 	header, raw, ok := s.assembleStruct(path)
-	if !ok {
+	if ok {
+		if s.DenyStructRoots {
+			return cip.MRError(mr.Service, cip.StatusPrivilegeViolation)
+		}
+	} else if header, raw, ok = s.assembleElementaryArray(path); !ok {
 		return cip.MRError(mr.Service, cip.StatusPathDestUnknown)
-	}
-	if s.DenyStructRoots {
-		return cip.MRError(mr.Service, cip.StatusPrivilegeViolation)
 	}
 
 	if mr.Service == cip.ServiceReadTagFragmented {
@@ -296,23 +298,76 @@ func (s *Server) assembleStruct(path string) (header []byte, raw []byte, ok bool
 }
 
 // encodeStructInstance walks the template, filling member offsets from the
-// leaf store at dotted paths beneath prefix. Missing leaves stay zero.
+// leaf store at dotted paths beneath prefix. Missing leaves stay zero. Array
+// members read their elements at "<member>[i]"; a BOOL array is bit-packed.
 func (s *Server) encodeStructInstance(prefix string, tmpl *templateDef) []byte {
 	buf := make([]byte, tmpl.structSize)
 	for _, m := range tmpl.members {
+		path := prefix + "." + m.name
+		isArray := m.typeCode&memberArrayBit != 0
+		count := 1
+		if isArray {
+			count = int(m.typeInfo)
+		}
 		if m.typeCode&symbolTypeStructBit != 0 {
 			child, ok := s.schema.templates[uint32(m.typeCode&symbolTypeTemplateMask)]
 			if !ok {
 				continue
 			}
-			copy(buf[m.offset:], s.encodeStructInstance(prefix+"."+m.name, child))
+			if !isArray {
+				copy(buf[m.offset:], s.encodeStructInstance(path, child))
+				continue
+			}
+			for i := 0; i < count; i++ {
+				off := int(m.offset) + i*int(child.structSize)
+				if off < len(buf) {
+					copy(buf[off:], s.encodeStructInstance(path+"["+itoa(i)+"]", child))
+				}
+			}
 			continue
 		}
-		if _, v, ok := s.store.Resolve(prefix + "." + m.name); ok {
-			copy(buf[m.offset:], EncodeLeaf(m.typeCode, v))
+		code := m.typeCode &^ memberArrayBit
+		if !isArray {
+			if _, v, ok := s.store.Resolve(path); ok {
+				copy(buf[m.offset:], EncodeLeaf(code, v))
+			}
+			continue
+		}
+		for i := 0; i < count; i++ {
+			_, v, ok := s.store.Resolve(path + "[" + itoa(i) + "]")
+			if !ok {
+				continue
+			}
+			if code == cip.TypeBOOL {
+				off := int(m.offset) + i/8
+				if off < len(buf) && truthy(v) {
+					buf[off] |= 1 << (i % 8)
+				}
+				continue
+			}
+			off := int(m.offset) + i*int(sizeForCIPType(code))
+			if off < len(buf) {
+				copy(buf[off:], EncodeLeaf(code, v))
+			}
 		}
 	}
 	return buf
+}
+
+// assembleElementaryArray serves a whole-array read of an elementary array
+// symbol ("Trend" of REAL[4]): the type code, then every element from its
+// "<base>[i]" leaf, back to back.
+func (s *Server) assembleElementaryArray(path string) (header []byte, raw []byte, ok bool) {
+	sym, found := s.schema.lookupSymbol(path)
+	if !found || sym.symbolType&symbolTypeStructBit != 0 || sym.dims[0] == 0 {
+		return nil, nil, false
+	}
+	code := sym.symbolType &^ (3 << symbolTypeDimShift)
+	for i := 0; i < int(sym.dims[0]); i++ {
+		_, v, _ := s.store.Resolve(path + "[" + itoa(i) + "]")
+		raw = append(raw, EncodeLeaf(code, v)...)
+	}
+	return u16(code), raw, true
 }
 
 // writeTag serves Write Tag (0x4D): data is [u16 type][u16 count][value

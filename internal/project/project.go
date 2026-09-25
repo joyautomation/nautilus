@@ -13,10 +13,12 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"os"
 	"path"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -904,6 +906,17 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 			return nil, fmt.Errorf("driver eip: %s: %w", d.Manifest, err)
 		}
 		opts := []eip.Option{eip.WithSlot(d.Slot)}
+		// "host:port" reaches a controller (or `naut logix emulate`) off
+		// the standard 44818 — a bare host keeps the default.
+		host := d.Host
+		if h, p, err := net.SplitHostPort(host); err == nil {
+			port, err := strconv.Atoi(p)
+			if err != nil || port <= 0 || port > 65535 {
+				return nil, fmt.Errorf("driver eip: host %q: bad port %q", d.Host, p)
+			}
+			host = h
+			opts = append(opts, eip.WithPort(port))
+		}
 		if d.ScanRate != 0 {
 			opts = append(opts, eip.WithScanRate(time.Duration(d.ScanRate)))
 		}
@@ -913,7 +926,7 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		for class, patterns := range d.TagClasses {
 			opts = append(opts, eip.WithTagClass(class, patterns...))
 		}
-		return eip.New(d.Host, em, opts...)
+		return eip.New(host, em, opts...)
 	case "sparkplug-host":
 		// A Sparkplug B host application: consume a whole group of edge
 		// nodes as INPUT tags, send operator writes back as NCMD/DCMD.
