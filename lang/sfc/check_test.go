@@ -196,7 +196,7 @@ END_PROGRAM
 	wantDiag(t, Check(prog), SeverityError, "empty condition")
 }
 
-func TestCheckUnreachableStep(t *testing.T) {
+func TestCheckUnreachableStepWarns(t *testing.T) {
 	src := `PROGRAM P
 VAR END_VAR
 SFC
@@ -210,7 +210,7 @@ END_SFC
 END_PROGRAM
 `
 	prog := mustParse(t, src)
-	wantDiag(t, Check(prog), SeverityError, `step "Orphan" is unreachable`)
+	wantDiag(t, Check(prog), SeverityWarning, `step "Orphan" is unreachable`)
 }
 
 func TestCheckDeadEndStepWarns(t *testing.T) {

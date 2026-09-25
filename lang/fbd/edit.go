@@ -525,11 +525,20 @@ func (b *modelBuilder) opDeleteNodes(ids []string) ([]TextEdit, error) {
 	var drop []string
 	goneComments := map[int]bool{}
 	seen := map[string]bool{}
+	var rideAlong []string
 	for _, id := range ids {
 		if seen[id] {
 			continue
 		}
 		seen[id] = true
+		// Input chips, constants, and a coil's inline blocks own no
+		// statement of their own — they die (or survive) with whatever
+		// references them. Select-all hands them over with everything
+		// else; refusing the whole batch over them made Del a no-op.
+		if rideAlongID(id) {
+			rideAlong = append(rideAlong, id)
+			continue
+		}
 		e, d, err := b.deleteTargets(id)
 		if err != nil {
 			return nil, err
@@ -539,6 +548,12 @@ func (b *modelBuilder) opDeleteNodes(ids []string) ([]TextEdit, error) {
 		if n, ok := commentOrdinal(id); ok {
 			goneComments[n] = true
 		}
+	}
+	if len(rideAlong) > 0 && len(edits) == 0 && len(drop) == 0 {
+		// Nothing deletable in the selection: report the first id the way
+		// a lone delete always has.
+		_, _, err := b.deleteTargets(rideAlong[0])
+		return nil, err
 	}
 	dropFn := idPrefixDrop(drop...)
 	return append(mergeDeletes(edits), b.remapLayout(func(id string) (string, bool) {
@@ -557,6 +572,13 @@ func (b *modelBuilder) opDeleteNodes(ids []string) ([]TextEdit, error) {
 		}
 		return nid, keep
 	})...), nil
+}
+
+// rideAlongID reports ids that address no statement of their own: input
+// chips (v:), constant chips (k:), and the inline blocks inside a coil's
+// expression (b:c.*).
+func rideAlongID(id string) bool {
+	return strings.HasPrefix(id, "v:") || strings.HasPrefix(id, "k:") || strings.HasPrefix(id, "b:c.")
 }
 
 // mergeDeletes dedupes a batch's deletions and folds overlapping ones

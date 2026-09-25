@@ -66,7 +66,7 @@ func TestOpAddStep(t *testing.T) {
 	// flags it (both unreachable — no TO targets it — and dead-end).
 	prog := mustParse(t, applyResult(t, baseline, EditOp{Type: "addStep", Name: "C", After: "st:B"}))
 	diags := Check(prog)
-	wantDiag(t, diags, SeverityError, `step "C" is unreachable`)
+	wantDiag(t, diags, SeverityWarning, `step "C" is unreachable`)
 	wantDiag(t, diags, SeverityWarning, `step "C" is a dead end`)
 
 	wantOpErr(t, baseline, EditOp{Type: "addStep", Name: "B"}) // duplicate name

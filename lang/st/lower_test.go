@@ -512,6 +512,12 @@ END_PROGRAM`
 	lowerExpectErr(t, src, "undeclared identifier")
 }
 
+// `_` is the diagram editors' open-pin placeholder — say so, rather than
+// "undeclared identifier \"_\"" on a freshly added ladder rung.
+func TestLowerPlaceholderIdent(t *testing.T) {
+	lowerExpectErr(t, "PROGRAM p\nVAR x : REAL; END_VAR\nx := _ * 2.0;\nEND_PROGRAM", "unfilled placeholder `_`")
+}
+
 func TestLowerAssignRealToBool(t *testing.T) {
 	src := `
 PROGRAM p

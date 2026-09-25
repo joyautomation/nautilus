@@ -370,7 +370,7 @@ Layout representation decision — **recommend: structure is implied by the text
 
 The base pipeline is inherited: `.sfc` → `sfc.TranspileWithLines` → the existing ST parse+lower, with positions mapped back (the exact pattern already in `cmd/naut/check.go` for `.ld`/`.fbd`). On top, SFC-specific structural checks (in `lang/sfc/check.go`, run before transpile):
 
-- **Unreachable step** — a non-initial step that is no transition's `TO` target.
+- **Unreachable step** — a non-initial step that is no transition's `TO` target (warn; it never activates, and an in-progress edit — a step just added or pasted — is unreachable until wired).
 - **Dead-end step** — a step that is no transition's `FROM` source (warn; a terminal step may be intentional).
 - **Transition with an empty/missing condition** (`:=` with nothing) — error.
 - **Convergence/divergence arity** — a `FROM (A,B)` whose steps aren't all real; a simultaneous convergence whose sources can never be concurrently active (structurally: not reachable from a common simultaneous divergence) — warn.
