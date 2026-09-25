@@ -5,6 +5,33 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- **The ladder palette inserts any function block.** The fixed TON and CTU
+  buttons are one *FB…* action: it opens a picker listing the standard
+  blocks (TON, TOF, TP, CTU, CTD, CTUD, R_TRIG, F_TRIG, SR, RS) and every
+  user `FUNCTION_BLOCK` the file can see — its own and the project
+  libraries' (root and `lib/`, any language), the same prelude `naut check`
+  composes. A user block arrives with its pins placed per docs/functions.md:
+  the rung's power on the first free BOOL input, `_` placeholders on its
+  non-BOOL inputs and in-outs to retag, and a hint listing the outputs to
+  capture with `Pin => Tag`. Click (or drag onto a rung's `+`) to place;
+  TON is still two clicks and Enter. Requires a `naut` whose `ld graph`
+  sends the block catalog; with an older one the picker lists the standard
+  blocks and a typed type name still inserts.
+- **Name and rename a ladder FB instance.** The picker's instance field is
+  prefilled with the next free name (`t2`, `m1`, …) and is editable; double-
+  clicking an FB's header (its instance name or type) renames the instance —
+  the rung's declaration, a `VAR` declaration of it if the POU has one, and
+  every reference (`t1.Q`, `GE(t1.ET, …)`) in the owning POU, as one edit.
+  New `naut ld edit` op: `renameInst`.
+- **Declare what a retag introduced.** When a ladder rung names an
+  identifier the program doesn't declare, the palette shows an amber
+  *declare …* offer: a nautilus.yaml tag goes into `VAR_EXTERNAL` with its
+  manifest type, anything else into `VAR`. Retag suggestions now include the
+  project's manifest tags, not only the ones the file already declares.
+  (`naut ld graph` sends the manifest's tags with the model inside a project.)
+
 ### Changed
 
 - **Project libraries can live in `lib/`.** Online edits (download, diff,
@@ -25,6 +52,12 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   survives into the ladder diagram (`Rung.comment` in the graph JSON) exactly
   like a same-line comment already did, and a structural edit to another
   rung no longer disturbs it.
+- **The ladder palette row is opaque.** Scrolled rungs no longer show through
+  its buttons.
+- **Ladder zoom by keyboard or the zoom buttons keeps the left rail in
+  view.** Ctrl+= / Ctrl+- anchor at the pane's left edge instead of its
+  centre, and the diagram leaves room under its last rung for the zoom
+  controls, so that rung's first elements can always be scrolled clear.
 
 ## [0.11.1] - 2026-09-25
 

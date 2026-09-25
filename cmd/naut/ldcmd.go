@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
+	"github.com/joyautomation/nautilus/internal/lsp"
 	"github.com/joyautomation/nautilus/internal/stproject"
 	"github.com/joyautomation/nautilus/lang/ld"
 )
@@ -23,7 +25,11 @@ Usage:
                              buffer belongs to, so the project's library
                              files (a PROGRAM-less .ld/.fbd/.st holding
                              FUNCTION_BLOCKs) are in scope for a user
-                             block's power pins. On a parse error, emits
+                             block's power pins. The model also carries
+                             "fbTypes" (every block type a rung can
+                             instantiate: standard + user blocks in scope)
+                             and, inside a project, "tags" (nautilus.yaml's
+                             tags). On a parse error, emits
                              {"error": "..."} and exits 1.
   naut ld edit           Apply a structural edit op to .ld source. Reads
                              {"source": "...", "op": {...}, "file": "..."}
@@ -32,7 +38,8 @@ Usage:
                              writes {"edits": [...]} — the rung-level text
                              edits realizing the op (1-based, end-exclusive).
                              Ops address the render model: setRef, toggleNeg,
-                             setCoilMode, setArgs, insert, delete, addLeg,
+                             setCoilMode, setArgs, insert, renameInst,
+                             delete, addLeg,
                              wrapBranch, addRung, renameRung, deleteRung,
                              move, setComment, addComment, setRungComment,
                              declareVar, deleteVar, init. Blank source seeds
@@ -119,6 +126,18 @@ func runLDGraph(args []string) int {
 		_ = enc.Encode(map[string]string{"error": err.Error()})
 		return 1
 	}
-	_ = enc.Encode(model)
+	// The manifest's tags ride along (with a path to find the project by):
+	// a retag to a tag this file doesn't declare can then offer to declare
+	// it, typed, in VAR_EXTERNAL.
+	var tags []lsp.ProjectTag
+	if at != "" {
+		if abs, err := filepath.Abs(at); err == nil {
+			tags = lsp.ProjectTags(abs)
+		}
+	}
+	_ = enc.Encode(struct {
+		*ld.Model
+		Tags []lsp.ProjectTag `json:"tags,omitempty"`
+	}{model, tags})
 	return 0
 }

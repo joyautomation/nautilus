@@ -482,7 +482,12 @@ is transpiled.
 
 The ladder view renders a file's blocks as rung groups, each under its own
 `FUNCTION_BLOCK` heading with its pins, and every rung in them edits like
-any other. Two limits worth knowing: an edit op addresses a rung by
+any other. The palette's *FB…* picker lists every block a rung can call —
+the standard ones, then the file's and the project libraries' — and inserts
+one with the rung's power already on its power pin, `_` placeholders on its
+non-BOOL inputs and in-outs, and an instance name you can edit; double-click
+a block's header to rename the instance (its declaration and every
+reference in the POU follow). Two limits worth knowing: an edit op addresses a rung by
 **name**, so two rungs with the same name in different POUs of one file
 resolve to the first — name them distinctly; and `addRung` with no `after`
 appends before the file's **first** `END_LD`. The language server analyses

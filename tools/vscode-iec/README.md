@@ -48,7 +48,10 @@ controller onto both the text and the diagram.
 - **Ladder**: drag instructions from the palette onto a rung, drag elements
   between spots and rungs, ⊕ to insert, `N` for NO/NC, `M` for coil mode,
   `B` to branch around the selection, click a rung's name to select or
-  delete the rung. With a controller running, power flow paints the rung.
+  delete the rung. *FB…* places any function block — standard or one of
+  the project's library blocks — under a name you choose; double-click a
+  block's header to rename the instance. With a controller running, power
+  flow paints the rung.
 - **SFC**: steps, transitions, parallel and alternative branches, action
   tables and ACTION bodies, all editable in place; drag a step's handle
   onto another step to connect them. The active step highlights live.

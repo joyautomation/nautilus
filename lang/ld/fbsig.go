@@ -40,6 +40,7 @@ type fbSig struct {
 	name    string
 	inputs  []pin // VAR_INPUT, declaration order
 	outputs []pin // VAR_OUTPUT, declaration order
+	inouts  []pin // VAR_IN_OUT, declaration order (always bound by a call)
 }
 
 // resolver answers "which pins does a rung's power use on this block type?"
@@ -51,7 +52,7 @@ var (
 	fbEndRe   = regexp.MustCompile(`(?i)^\s*END_FUNCTION_BLOCK\s*$`)
 	// A VAR_INPUT / VAR_OUTPUT section anywhere in a block's header text,
 	// declarations and END_VAR possibly sharing its line.
-	varSectionRe = regexp.MustCompile(`(?is)\b(VAR_INPUT|VAR_OUTPUT)\b(.*?)\bEND_VAR\b`)
+	varSectionRe = regexp.MustCompile(`(?is)\b(VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT)\b(.*?)\bEND_VAR\b`)
 )
 
 // newResolver scans src plus any library sources for user FB signatures.
@@ -131,10 +132,13 @@ func scanFBBody(name, body string) fbSig {
 	body = stripComments(body)
 	for _, m := range varSectionRe.FindAllStringSubmatch(body, -1) {
 		pins := parseDecls(m[2])
-		if strings.EqualFold(m[1], "VAR_INPUT") {
+		switch strings.ToUpper(m[1]) {
+		case "VAR_INPUT":
 			sig.inputs = append(sig.inputs, pins...)
-		} else {
+		case "VAR_OUTPUT":
 			sig.outputs = append(sig.outputs, pins...)
+		default:
+			sig.inouts = append(sig.inouts, pins...)
 		}
 	}
 	return sig
@@ -189,6 +193,8 @@ func builtinPowerPins(typ string) (in, out string, ok bool) {
 		return "CU", "Q", true
 	case "CTD":
 		return "CD", "Q", true
+	case "CTUD":
+		return "CU", "QU", true
 	case "R_TRIG", "F_TRIG":
 		return "CLK", "Q", true
 	case "SR":
