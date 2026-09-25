@@ -17,6 +17,19 @@ export type ShortcutGroup = { title: string; rows: Shortcut[] };
 /** Undo / redo / save act on the source file from every diagram surface
  * (a preview panel forwards them — see keyForward.ts); in a text field
  * undo/redo are the field's own. */
+/** Ladder / SFC zoom (ZoomPane): kept per panel, never written to the file. */
+function viewGroup(fit: string): ShortcutGroup {
+	return {
+		title: 'View',
+		rows: [
+			{ keys: 'Ctrl + wheel / pinch', does: 'Zoom around the pointer' },
+			{ keys: 'Ctrl + = / Ctrl + -', does: 'Zoom in / out (the corner + and − buttons too)' },
+			{ keys: 'Ctrl + 0', does: fit },
+			{ keys: 'Middle-drag', does: 'Pan (the wheel and scrollbars scroll)' }
+		]
+	};
+}
+
 const FILE_GROUP: ShortcutGroup = {
 	title: 'File',
 	rows: [
@@ -53,7 +66,8 @@ export const FBD_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: 'Drag a node', does: 'Move it — the position is pinned in the file', hint: 'drag node / arrow keys: pin layout' },
 			{ keys: 'Arrow keys', does: 'Move the selection (pinned like a drag)' },
 			{ keys: 'Drag empty canvas', does: 'Pan' },
-			{ keys: 'Scroll / pinch', does: 'Zoom (the corner buttons zoom and fit too)' }
+			{ keys: 'Scroll / pinch', does: 'Zoom (the corner buttons zoom and fit too)' },
+			{ keys: 'Ctrl + = / Ctrl + - / Ctrl + 0', does: 'Zoom in / out / fit' }
 		]
 	},
 	FILE_GROUP
@@ -83,6 +97,7 @@ export const LD_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: 'Esc', does: 'Cancel a drag', hint: 'Esc: cancel drag' }
 		]
 	},
+	viewGroup('Fit the widest rung to the pane width (also the corner fit button)'),
 	FILE_GROUP
 ];
 
@@ -107,6 +122,7 @@ export const SFC_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: 'Esc', does: 'Cancel a connect drag, close a popover', hint: 'Esc: cancel' }
 		]
 	},
+	viewGroup('Fit the whole chart to the pane (also the corner fit button)'),
 	FILE_GROUP
 ];
 

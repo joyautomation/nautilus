@@ -9,20 +9,27 @@
 // Bundle under test: env DIAGRAM_BUNDLE, else ../media/dist (the repo build).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, copyFileSync } from 'node:fs';
+import { mkdtempSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Browser } from './cdp.mjs';
+import { applyThemeJs } from './themes.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BUNDLE = process.env.DIAGRAM_BUNDLE || join(HERE, '../../media/dist');
 const HEADLESS = process.env.HEADED !== '1';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function open() {
+async function open({ state } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), 'diagram-run-'));
-	copyFileSync(join(HERE, 'diagram-host.html'), join(dir, 'host.html'));
+	// `state` seeds the webview state (vscode.getState) the bundle reads at
+	// mount — a panel reopening with what it saved.
+	const html = readFileSync(join(HERE, 'diagram-host.html'), 'utf8').replace(
+		'window.__POSTED__ = [];',
+		`window.__POSTED__ = []; window.__STATE__ = ${JSON.stringify(state ?? null)};`
+	);
+	writeFileSync(join(dir, 'host.html'), html);
 	copyFileSync(join(BUNDLE, 'fbd-flow.js'), join(dir, 'fbd-flow.js'));
 	copyFileSync(join(BUNDLE, 'fbd-flow.css'), join(dir, 'fbd-flow.css'));
 	const b = await Browser.launch({ headless: HEADLESS });
@@ -30,8 +37,8 @@ async function open() {
 	return b;
 }
 
-async function withPage(fn) {
-	const b = await open();
+async function withPage(fn, opts) {
+	const b = await open(opts);
 	try {
 		await fn(b);
 		assert.deepEqual(await b.eval('window.__errors'), [], 'page threw');
@@ -445,7 +452,11 @@ test('"?" lists each editor’s keys; the hint line carries its full text as a t
 	const cases = [
 		[{ type: 'model', model: FBD, title: 'n.fbd' }, /Ctrl \+ A/],
 		[{ type: 'ldModel', model: LD, title: 'p.ld' }, /Cycle a coil/],
-		[{ type: 'sfcModel', model: SFC, title: 's.sfc' }, /Ctrl \/ Shift \+ click/]
+		[{ type: 'sfcModel', model: SFC, title: 's.sfc' }, /Ctrl \/ Shift \+ click/],
+		// the zoom keys are listed too (ZoomPane / FitController)
+		[{ type: 'ldModel', model: LD, title: 'p.ld' }, /Ctrl \+ 0Fit the widest rung/],
+		[{ type: 'sfcModel', model: SFC, title: 's.sfc' }, /Ctrl \+ wheel \/ pinchZoom around the pointer/],
+		[{ type: 'model', model: FBD, title: 'n.fbd' }, /Ctrl \+ = \/ Ctrl \+ - \/ Ctrl \+ 0Zoom in \/ out \/ fit/]
 	];
 	for (const [msg, want] of cases) {
 		await withPage(async (b) => {
@@ -478,5 +489,301 @@ test('SFC: the vars panel declares/deletes with the payload `naut sfc edit` acce
 		assert.equal(ops[1].name, 'Lvl');
 		assert.equal(ops[1].section, 'VAR_EXTERNAL');
 		assert.ok(ops[1].varType);
+	});
+});
+
+// ── the ready handshake ─────────────────────────────────────────────────
+test('Ready: the webview says ready on mount (the host holds its posts until then)', async () => {
+	await withPage(async (b) => {
+		assert.deepEqual((await posted(b)).filter((m) => m.type === 'ready'), [{ type: 'ready' }]);
+	});
+});
+
+// ── zoom / pan / fit (Ladder + SFC) ─────────────────────────────────────
+// ZoomPane draws the SVGs at width/height × zoom over an unscaled viewBox,
+// so every hit-test stays in screen space; these pin that the gestures
+// that do their own coordinate math (SFC drag / connect) divide the zoom
+// back out, and that Ladder's elementFromPoint drops still land.
+async function wheel(b, x, y, deltaY, modifiers = 2) {
+	await b.moveTo(x, y);
+	await b.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: 0, deltaY, modifiers });
+	await sleep(120);
+}
+const zoomPct = (b) => b.eval(`document.querySelector('.zpct')?.textContent`);
+const zoomBtn = (b, label) => center(b, `.zctl button[aria-label="${label}"]`);
+const rect = (b, sel, i = 0) =>
+	b.eval(`(() => { const el = document.querySelectorAll(${JSON.stringify(sel)})[${i}]; if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height, cx: r.left + r.width / 2, cy: r.top + r.height / 2 }; })()`);
+const stepCenter = (b, name) =>
+	b.eval(`(() => { const el = [...document.querySelectorAll('.step')].find((g) => g.querySelector('.stepname')?.textContent === ${JSON.stringify(name)}); const r = el.querySelector('.box').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width }; })()`);
+
+// Enough rungs to scroll: a zoom can only hold its anchor still when the
+// pane has room to scroll the magnified content under it.
+const LD_LONG = {
+	...LD,
+	rungs: [
+		...LD.rungs,
+		...Array.from({ length: 10 }, (_, i) => ({
+			name: `x${i}`,
+			line: 20 + 2 * i,
+			endLine: 21 + 2 * i,
+			elements: [{ kind: 'contact', ref: `i${i}` }],
+			coils: [{ kind: 'coil', ref: `o${i}` }]
+		}))
+	]
+};
+
+test('Ladder zoom: Ctrl+wheel zooms around the cursor, persists in webview state, posts no op', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'ldModel', model: LD_LONG, title: 'p.ld' });
+		assert.equal(await zoomPct(b), '100%');
+		const before = await rect(b, '.node', 1); // the TON block
+		const w0 = (await rect(b, '.rsvg')).w;
+		await reset(b);
+		for (let i = 0; i < 4; i++) await wheel(b, before.cx, before.cy, -60);
+		const after = await rect(b, '.node', 1);
+		const z = parseInt(await zoomPct(b)) / 100;
+		assert.ok(z > 1.5, `zoomed in (${z})`);
+		assert.ok(after.w / before.w > 1.5, 'the block grew');
+		// The point under the cursor stayed under the cursor.
+		assert.ok(Math.abs(after.cx - before.cx) < 3 && Math.abs(after.cy - before.cy) < 3, JSON.stringify({ before, after }));
+		assert.ok((await rect(b, '.rsvg')).w > w0, 'the canvas widened (scrolls)');
+		assert.deepEqual(await ldOps(b), []);
+		const st = await b.eval('window.__STATE__');
+		assert.ok(Math.abs(st.zoom.ld - z) < 0.01, JSON.stringify(st.zoom));
+		assert.equal(st.msg.type, 'ldModel', 'the model state survives beside the zoom');
+		// A plain wheel still scrolls instead of zooming.
+		await wheel(b, before.cx, before.cy, 100, 0);
+		assert.equal(await zoomPct(b), Math.round(z * 100) + '%');
+	});
+});
+
+test('Ladder zoom: buttons and Ctrl+= / Ctrl+- / Ctrl+0 (fit) with focus in the diagram', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'ldModel', model: LD, title: 'p.ld' });
+		await clickAt(b, await zoomBtn(b, 'zoom in'));
+		assert.equal(await zoomPct(b), '120%');
+		await clickAt(b, await zoomBtn(b, 'zoom out'));
+		assert.equal(await zoomPct(b), '100%');
+		// Focus the diagram (click a rung's background), then the keys.
+		const names = await b.eval(`[...document.querySelectorAll('.rungname')].map((el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })`);
+		await clickAt(b, names[0]);
+		await reset(b);
+		await key(b, '=', 'Equal', 187, 2);
+		await key(b, '=', 'Equal', 187, 2);
+		assert.equal(await zoomPct(b), '144%');
+		await key(b, '-', 'Minus', 189, 2);
+		assert.equal(await zoomPct(b), '120%');
+		await key(b, '0', 'Digit0', 48, 2);
+		assert.equal(await zoomPct(b), '100%', 'fit never magnifies past 100%');
+		assert.deepEqual(await ldOps(b), [], 'zoom keys are not edits');
+	});
+});
+
+test('Ladder zoom: a palette drop and a node drag still hit their spots at 173%', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'ldModel', model: LD, title: 'p.ld' });
+		for (let i = 0; i < 3; i++) await clickAt(b, await zoomBtn(b, 'zoom in'));
+		assert.equal(await zoomPct(b), '173%');
+		// Zooming about the pane centre scrolled the left edge away.
+		await b.eval(`document.querySelector('.zpane .flow').scrollTo(0, 0)`);
+		await sleep(100);
+		// The LAST spot of rung r2 (its coil slot) — dropping NC onto the
+		// FIRST insert spot of r2 must insert at r2 index 0.
+		const spots = await b.eval(`[...document.querySelectorAll('.spot')].map((el) => { const s = JSON.parse(el.getAttribute('data-spot')); const r = el.getBoundingClientRect(); return { rung: s.rung, op: s.spot.op, index: s.spot.index, x: r.left + r.width / 2, y: r.top + r.height / 2 }; })`);
+		const target = spots.find((s) => s.rung === 'r2' && s.op === 'insert' && s.index === 0);
+		assert.ok(target, JSON.stringify(spots));
+		const from = await paletteBtn(b, '⊣/⊢');
+		await reset(b);
+		await b.mouseDown(from.x, from.y);
+		await b.mouseMove(from.x + 20, from.y + 20);
+		await b.mouseMove(target.x, target.y);
+		await b.mouseUp(target.x, target.y);
+		await sleep(150);
+		const ops = await ldOps(b);
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.deepEqual({ type: ops[0].type, rung: ops[0].rung, neg: ops[0].neg, index: ops[0].index }, { type: 'insert', rung: 'r2', neg: true, index: 0 });
+		// Drag r1's contact `a` onto the same spot: a move to r2 index 0.
+		const a = await rect(b, '.node', 0);
+		await reset(b);
+		await b.mouseDown(a.cx, a.cy);
+		await b.mouseMove(a.cx + 15, a.cy + 15);
+		await b.mouseMove(target.x, target.y);
+		await b.mouseUp(target.x, target.y);
+		await sleep(150);
+		const mv = await ldOps(b);
+		assert.equal(mv.length, 1, JSON.stringify(mv));
+		assert.equal(mv[0].type, 'move');
+		assert.equal(mv[0].toRung, 'r2');
+		assert.equal(mv[0].toIndex, 0);
+	});
+});
+
+test('Ladder zoom: the float editor opens ON the element it edits', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'ldModel', model: LD, title: 'p.ld' });
+		for (let i = 0; i < 2; i++) await clickAt(b, await zoomBtn(b, 'zoom in'));
+		// Coil y hugs the right rail — past the pane's edge at 144%.
+		await b.eval(`document.querySelectorAll('.node')[2].scrollIntoView({ block: 'center', inline: 'center' })`);
+		await sleep(100);
+		const c = await rect(b, '.node', 2); // coil y
+		await b.dblclick(c.cx, c.cy);
+		await sleep(200);
+		const ed = await b.eval(`(() => { const el = document.activeElement; const r = el.getBoundingClientRect(); return { tag: el.tagName, value: el.value, x: r.left, y: r.top }; })()`);
+		assert.equal(ed.tag, 'INPUT');
+		assert.equal(ed.value, 'y');
+		assert.ok(Math.abs(ed.x - c.x) < 12 && Math.abs(ed.y - c.y) < 30, JSON.stringify({ ed, c }));
+		await esc(b);
+	});
+});
+
+// A chart tall enough to overflow the 900px harness window.
+const TALL = {
+	name: 'Long',
+	steps: Array.from({ length: 12 }, (_, i) => ({ id: `st:S${i}`, name: `S${i}`, initial: i === 0, line: 3 + 2 * i, endLine: 4 + 2 * i })),
+	trans: Array.from({ length: 11 }, (_, i) => ({ id: `tr:${40 + i}`, from: [`S${i}`], to: [`S${i + 1}`], cond: 'go', kind: 'normal', line: 40 + i, endLine: 40 + i }))
+};
+
+test('SFC zoom: an overflowing chart fits on first load; a saved zoom is restored instead', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'sfcModel', model: TALL, title: 'long.sfc' });
+		await sleep(150);
+		const z = parseInt(await zoomPct(b)) / 100;
+		assert.ok(z < 1 && z >= 0.5, `fitted, but no smaller than the legible 50% floor (${z})`);
+		assert.ok(Math.abs((await b.eval('window.__STATE__')).zoom.sfc - z) < 0.01);
+		// Ctrl+0 / the fit button go all the way: the whole chart shows.
+		await clickAt(b, await zoomBtn(b, 'fit view'));
+		const svg = await rect(b, 'svg.chart');
+		const pane = await rect(b, '.zpane .flow');
+		assert.ok(parseInt(await zoomPct(b)) / 100 <= z);
+		assert.ok(svg.y + svg.h <= pane.y + pane.h + 1, 'the whole chart is visible ' + JSON.stringify({ svg, pane, z: await zoomPct(b) }));
+	});
+	await withPage(
+		async (b) => {
+			await deliver(b, { type: 'sfcModel', model: TALL, title: 'long.sfc' });
+			await sleep(150);
+			assert.equal(await zoomPct(b), '150%', 'the saved zoom wins over fit');
+		},
+		{ state: { zoom: { sfc: 1.5 } } }
+	);
+});
+
+test('SFC zoom: step drag and connect rubber band stay under the cursor at 200%', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'sfcModel', model: SFC, title: 's.sfc' });
+		for (let i = 0; i < 4; i++) await clickAt(b, await zoomBtn(b, 'zoom in'));
+		assert.equal(await zoomPct(b), '207%');
+		const z = 2.074;
+		// Body drag: the pinned position moves by the SCREEN delta / zoom.
+		// (At 207% Spare is below the fold: scroll it in first.)
+		await b.eval(`[...document.querySelectorAll('.step')].find((g) => g.querySelector('.stepname')?.textContent === 'Spare').scrollIntoView({ block: 'center' })`);
+		await sleep(100);
+		const spare = await stepCenter(b, 'Spare');
+		const before = await b.eval(`(() => { const g = [...document.querySelectorAll('.step')].find((g) => g.querySelector('.stepname')?.textContent === 'Spare'); const m = g.transform.baseVal[0].matrix; return { e: m.e, f: m.f }; })()`);
+		await reset(b);
+		await b.mouseDown(spare.x, spare.y);
+		await b.mouseMove(spare.x + 50, spare.y + 20);
+		await b.mouseMove(spare.x + 100, spare.y + 40);
+		await b.mouseUp(spare.x + 100, spare.y + 40);
+		await sleep(150);
+		const ops = await sfcOps(b);
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.equal(ops[0].type, 'setLayout');
+		assert.ok(Math.abs(ops[0].x - (before.e + 100 / z)) <= 1.5, JSON.stringify({ op: ops[0], before }));
+		assert.ok(Math.abs(ops[0].y - (before.f + 40 / z)) <= 1.5, JSON.stringify({ op: ops[0], before }));
+		// Connect: drag Run's handle onto Idle; mid-drag the rubber band's
+		// tip sits under the cursor.
+		await deliver(b, { type: 'sfcModel', model: SFC, title: 's.sfc' });
+		await b.eval(`document.querySelector('.zpane .flow').scrollTo(0, 0)`);
+		await sleep(100);
+		const handle = await b.eval(`(() => { const g = [...document.querySelectorAll('.step')].find((g) => g.querySelector('.stepname')?.textContent === 'Run'); const r = g.querySelector('.connect-handle').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+		const idle = await stepCenter(b, 'Idle');
+		await reset(b);
+		await b.mouseDown(handle.x, handle.y);
+		await b.mouseMove(handle.x + 30, handle.y + 10);
+		await b.mouseMove(idle.x, idle.y);
+		await sleep(80);
+		const tip = await rect(b, '.rubberbandtip');
+		assert.ok(Math.abs(tip.cx - idle.x) < 2 && Math.abs(tip.cy - idle.y) < 2, JSON.stringify({ tip, idle }));
+		assert.ok(await b.eval(`!!document.querySelector('.step.connectTarget')`), 'Idle highlights as the drop target');
+		await b.mouseUp(idle.x, idle.y);
+		await sleep(150);
+		assert.deepEqual(await sfcOps(b), [{ type: 'addTransition', from: ['Run'], to: ['Idle'], cond: 'TRUE' }]);
+	});
+});
+
+// ── theme ───────────────────────────────────────────────────────────────
+const css = (b, sel, prop) => b.eval(`(() => { const el = document.querySelector(${JSON.stringify(sel)}); return el && getComputedStyle(el).getPropertyValue(${JSON.stringify(prop)}).trim(); })()`);
+
+test('Theme: xyflow colorMode follows the VS Code theme kind, live', async () => {
+	await withPage(async (b) => {
+		await b.eval(applyThemeJs('light'));
+		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
+		assert.ok(await b.eval(`document.querySelector('.svelte-flow').classList.contains('light')`));
+		await b.eval(applyThemeJs('dark'));
+		await sleep(150);
+		assert.ok(await b.eval(`document.querySelector('.svelte-flow').classList.contains('dark')`));
+		// MiniMap/Controls take the panel colours, not xyflow's white.
+		assert.equal(await css(b, '.svelte-flow__minimap', 'background-color'), 'rgb(32, 32, 32)');
+		assert.equal(await css(b, '.svelte-flow__controls-button', 'background-color'), 'rgb(32, 32, 32)');
+		await b.eval(applyThemeJs('hc'));
+		await sleep(150);
+		assert.ok(await b.eval(`document.querySelector('.svelte-flow').classList.contains('dark')`));
+	});
+});
+
+test('Theme: ladder diff colours come from theme tokens (light ≠ dark)', async () => {
+	const base = { name: 'P', rungs: [LD.rungs[0]] };
+	const head = { name: 'P', rungs: [LD.rungs[0], LD.rungs[1]] };
+	const colors = {};
+	for (const t of ['dark', 'light']) {
+		await withPage(async (b) => {
+			await b.eval(applyThemeJs(t));
+			await deliver(b, { type: 'ldDiff', base, head, title: 'p.ld' });
+			colors[t] = {
+				legend: await css(b, '.legend.ld .sw.added', 'background-color'),
+				bar: await css(b, '.rsvg.added .statusbar', 'fill')
+			};
+		});
+	}
+	assert.equal(colors.dark.legend, 'rgb(17, 168, 205)'); // terminal.ansiCyan (dark)
+	assert.equal(colors.light.legend, 'rgb(5, 152, 188)'); // terminal.ansiCyan (light)
+	assert.equal(colors.dark.bar, colors.dark.legend, 'rung bar and legend agree');
+	assert.equal(colors.light.bar, colors.light.legend);
+});
+
+test('Theme: high contrast draws focus on the diagram surface', async () => {
+	await withPage(async (b) => {
+		await b.eval(applyThemeJs('hc'));
+		await deliver(b, { type: 'ldModel', model: LD, title: 'p.ld' });
+		await clickAt(b, await center(b, '.node'));
+		assert.equal(await b.eval(`document.activeElement.classList.contains('wrap')`), true);
+		assert.equal(await css(b, '.wrap', 'outline-color'), 'rgb(243, 133, 24)'); // contrastActiveBorder
+		assert.equal(await css(b, '.wrap', 'outline-style'), 'solid');
+	});
+});
+
+test('FBD zoom: Ctrl+= / Ctrl+- / Ctrl+0 drive the xyflow viewport too', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
+		await sleep(300);
+		const scale = () => b.eval(`new DOMMatrix(getComputedStyle(document.querySelector('.svelte-flow__viewport')).transform).a`);
+		const z0 = await scale();
+		await clickAt(b, await center(b, node('c:Y')));
+		await reset(b);
+		// (A small diagram fits at the 2× max: go out first.)
+		await key(b, '-', 'Minus', 189, 2);
+		await sleep(400);
+		const z1 = await scale();
+		assert.ok(z1 < z0 * 0.95, `zoomed out ${z0} → ${z1}`);
+		await key(b, '-', 'Minus', 189, 2);
+		await sleep(400);
+		await key(b, '=', 'Equal', 187, 2);
+		await sleep(400);
+		const z2 = await scale();
+		assert.ok(z2 > z1 * 0.95 && z2 < z0, `zoomed back in ${z2}`);
+		await key(b, '0', 'Digit0', 48, 2);
+		await sleep(400);
+		assert.ok(Math.abs((await scale()) - z0) < 0.02, 'Ctrl+0 fits again');
+		assert.deepEqual(await fbdOps(b), []);
 	});
 });

@@ -33,6 +33,9 @@
 	import { readClip, typingTarget, writeClip } from './clipboard';
 	import ShortcutHelp from './ShortcutHelp.svelte';
 	import { FBD_SHORTCUTS, LD_SHORTCUTS, SFC_SHORTCUTS, hintLine } from './shortcuts';
+	import ZoomPane from './ZoomPane.svelte';
+	import { loadViewState, saveViewState } from './viewState';
+	import { themeColorMode } from './themeMode.svelte';
 
 	const nodeTypes = { fbd: FbdNode };
 	const edgeTypes = { fbd: FbdEdge };
@@ -379,11 +382,34 @@
 			}
 			return;
 		}
-		if (msg.type !== 'error') vscode.setState(msg);
+		if (msg.type !== 'error') saveViewState({ msg });
 		show(msg);
 	});
-	const saved = vscode.getState() as Msg | null;
+	const viewState = loadViewState();
+	const saved = viewState.msg as Msg | undefined;
 	if (saved) show(saved);
+	// The handshake: until this lands, the host holds its messages (a model
+	// or live frame posted before the bundle's listener exists is lost),
+	// then replays the latest of each. Sent again by every reload.
+	vscode.postMessage({ type: 'ready' });
+
+	// Ladder/SFC zoom, per panel (webview state, never the source). Unset =
+	// this panel was never zoomed: ZoomPane fits on first render.
+	let ldZoom = $state(viewState.zoom?.ld ?? 1);
+	let sfcZoom = $state(viewState.zoom?.sfc ?? 1);
+	const zoomSaved = { ld: viewState.zoom?.ld !== undefined, sfc: viewState.zoom?.sfc !== undefined };
+	let zoomTouched = false;
+	$effect(() => {
+		const z = { ld: ldZoom, sfc: sfcZoom };
+		// Skip the initial run: only a real zoom (or the first fit) persists.
+		if (!zoomTouched) {
+			zoomTouched = true;
+			return;
+		}
+		if (z.ld !== 1 || zoomSaved.ld) zoomSaved.ld = true;
+		if (z.sfc !== 1 || zoomSaved.sfc) zoomSaved.sfc = true;
+		saveViewState({ zoom: { ld: zoomSaved.ld ? z.ld : undefined, sfc: zoomSaved.sfc ? z.sfc : undefined } });
+	});
 	const injected = window.__MODEL__ as FbdModel | undefined;
 	if (injected) show({ type: 'model', model: injected, title: 'harness' });
 	// Browser-harness hook for the SFC webview (mirrors __MODEL__ above):
@@ -651,29 +677,31 @@
 		</div>
 	{/if}
 	{#if ldModel}
-		<div class="flow ldscroll" class:stale={!!error}>
+		<ZoomPane bind:zoom={ldZoom} autoFit={!zoomSaved.ld} fitAxis="width" stale={!!error} label="ladder">
 			<LadderView
 				model={ldModel}
 				editable={!diffing && !readOnly}
 				diags={diffing ? [] : diags}
 				status={ldStatus}
 				showLive={!diffing}
+				zoom={ldZoom}
 				onOp={postLd}
 				onTrace={(msg) => vscode.postMessage({ type: 'ldTrace', msg })}
 				{requestInput}
 			/>
-		</div>
+		</ZoomPane>
 	{:else if sfcModel}
-		<div class="flow ldscroll" class:stale={!!error}>
+		<ZoomPane bind:zoom={sfcZoom} autoFit={!zoomSaved.sfc} stale={!!error} label="SFC">
 			<SfcView
 				model={sfcModel}
 				editable={!diffing}
 				diags={diffing ? [] : diags}
 				showLive={!diffing}
+				zoom={sfcZoom}
 				onOp={postSfc}
 				{requestInput}
 			/>
-		</div>
+		</ZoomPane>
 	{:else if mode !== 'fbd'}
 		<!-- a ladder/SFC file whose first parse failed: the error above
 		     says why; no FBD canvas (or its "+ add") in its place -->
@@ -693,6 +721,7 @@
 			zoomOnDoubleClick={false}
 			fitView
 			minZoom={0.15}
+			colorMode={themeColorMode.mode}
 			deleteKey={['Delete', 'Backspace']}
 			proOptions={{ hideAttribution: true }}
 		>
@@ -826,10 +855,10 @@
 	}
 	/* the ladder diff uses its own palette (green means power there) */
 	.legend.ld .sw.added {
-		background: #3fc6ff;
+		background: var(--nx-ld-added);
 	}
 	.legend.ld .sw.changed {
-		background: #e2b93d;
+		background: var(--nx-ld-changed);
 	}
 	.ropill {
 		font-size: 11px;
@@ -893,9 +922,6 @@
 		flex: 1;
 		min-height: 0;
 	}
-	.flow.ldscroll {
-		overflow: auto;
-	}
 	.flow.stale {
 		opacity: 0.45;
 	}
@@ -903,16 +929,26 @@
 	.diffing :global(.svelte-flow__node:has(.same)) {
 		opacity: 0.6;
 	}
+	/* xyflow chrome from the theme tokens (colorMode follows the VS Code
+	   theme kind too, for anything not overridden here). */
 	:global(.svelte-flow) {
 		background: var(--nx-bg) !important;
+		--xy-minimap-background-color: var(--nx-panel-bg);
+		--xy-minimap-mask-background-color: color-mix(in srgb, var(--nx-bg) 55%, transparent);
+		--xy-minimap-mask-stroke-color: var(--nx-border);
+		--xy-minimap-node-background-color: color-mix(in srgb, var(--nx-ink) 38%, var(--nx-panel-bg));
+		--xy-controls-button-background-color: var(--nx-panel-bg);
+		--xy-controls-button-background-color-hover: var(--nx-ctl-hover);
+		--xy-controls-button-color: var(--nx-ui-ink);
+		--xy-controls-button-color-hover: var(--nx-ui-ink);
+		--xy-controls-button-border-color: var(--nx-border);
+		--xy-controls-box-shadow: var(--nx-shadow);
+	}
+	:global(.svelte-flow__controls) {
+		border: 1px solid var(--nx-border);
 	}
 	:global(.svelte-flow__minimap) {
-		background: var(--nx-panel-bg) !important;
-	}
-	:global(.svelte-flow__controls button) {
-		background: var(--nx-panel-bg);
-		border-bottom: 1px solid var(--nx-border);
-		fill: var(--nx-ui-ink);
+		border: 1px solid var(--nx-border);
 	}
 	:global(.svelte-flow__edge.selected .wirepath) {
 		stroke: var(--nx-accent) !important;

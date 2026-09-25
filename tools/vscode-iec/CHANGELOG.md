@@ -24,6 +24,15 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   *Show Source* (the text, beside), with *between git revisions…* and *vs
   Controller* under "…". The diffs used to be Command Palette only. Text is
   still the default editor for these files.
+- **Zoom, pan and fit for Ladder and SFC.** Ctrl/Cmd+wheel or a trackpad
+  pinch zooms around the pointer; Ctrl+= / Ctrl+- zoom and Ctrl+0 fits
+  while the diagram has focus; middle-drag pans. The +/−/fit buttons sit
+  bottom-left, where FBD's are (FBD gets the same keys). The zoom is kept
+  per panel — it survives a tab switch or reload and is never written to
+  the file. A chart that doesn't fit is fitted on first open (down to 50%;
+  the fit button goes further); a ladder fits its widest rung to the pane
+  width. Dragging, drop targets, the connect rubber band and in-place
+  editors all track the zoom.
 - **Install the CLI in one click.** *nautilus: Install or Update the naut
   CLI* downloads the latest `naut` release for your OS and CPU from GitHub,
   verifies it against the release's `checksums.txt`, installs it into the
@@ -75,6 +84,13 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Changed
 
+- **Diagrams follow light, dark and high-contrast themes.** Ladder diff
+  colours (added cyan, changed amber) come from theme tokens with light
+  variants instead of fixed dark-theme hex; FBD's MiniMap and zoom controls
+  take the editor's panel colours (xyflow's colour mode now follows the
+  VS Code theme, live), so they are no longer washed out on dark themes; a
+  ladder function-block heading uses the link colour token. In high
+  contrast, the focused diagram surface shows the theme's focus border.
 - **The missing-CLI warning leads with *Install naut*.** It now offers
   *Install naut*, *Locate naut…*, and *Install steps*; *Copy go install*
   moved to the out-of-date warning, for a `naut` that came from `go
@@ -101,6 +117,15 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   (`VAR A : BOOL; B : BOOL; END_VAR`) or several declarations on one line
   showed only the first in the FBD and SFC vars panels. Deleting one of them
   (FBD, Ladder, SFC) now removes just that declaration; Ladder used to refuse.
+- **Diagrams: the first model and live values can't be lost on open.** The
+  FBD / Ladder / SFC hosts posted the model — and the live-values stream's
+  first frame — right after setting the webview's HTML, before its script
+  was listening, so the diagram could open empty or the live pill never
+  appear. The webview now says *ready* when it mounts; until then the host
+  holds its messages, then replays the latest model/diff, error,
+  diagnostics, controller-sync state and live frame. A reloaded webview
+  says ready again and gets the current state the same way (the mimic
+  editor's handshake, now for every diagram).
 - **A hung CLI can't stall a diagram.** Every short CLI call (diagram graph
   and edit, version) now times out after 15 seconds, and an acceptance-test
   run after 5 minutes; the ladder and SFC edit queues previously waited

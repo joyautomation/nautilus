@@ -43,6 +43,11 @@
 	--nx-added: var(--vscode-gitDecoration-addedResourceForeground, #2ea043);
 	--nx-removed: var(--vscode-gitDecoration-deletedResourceForeground, #f85149);
 	--nx-changed: var(--vscode-gitDecoration-modifiedResourceForeground, #d7a021);
+	/* Ladder diffs: green means POWER there, so added is cyan (the
+	   terminal's, which every theme — light, dark, high contrast — tunes
+	   for legibility on its own background); changed is the shared amber. */
+	--nx-ld-added: var(--vscode-terminal-ansiCyan, #3fc6ff);
+	--nx-ld-changed: var(--nx-changed);
 
 	/* interaction */
 	--nx-hover: var(--vscode-list-hoverBackground, rgba(128, 128, 128, 0.15));
@@ -50,9 +55,29 @@
 	--nx-sel-ink: var(--vscode-list-activeSelectionForeground, #fff);
 	--nx-btn-bg: var(--vscode-button-background, #2ea043);
 	--nx-btn-ink: var(--vscode-button-foreground, #fff);
+	/* opaque hover for floating controls (--nx-hover is translucent and
+	   would show the canvas through the button) */
+	--nx-ctl-hover: color-mix(in srgb, var(--nx-ui-ink) 14%, var(--nx-panel-bg));
+	/* high contrast's focus ring (only themes that define it do) */
+	--nx-contrast: var(--vscode-contrastActiveBorder, var(--nx-accent));
 
 	/* effects */
 	--nx-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+/* Light themes without the VS Code variables (a harness, an old host):
+   keep the fallbacks legible on a light canvas. */
+body.vscode-light,
+body.vscode-high-contrast-light {
+	--nx-ld-added: var(--vscode-terminal-ansiCyan, #0598bc);
+}
+
+/* High contrast: focus is always drawn (VS Code's own HC rule) — the
+   diagram surfaces otherwise suppress their outline. */
+body.vscode-high-contrast [tabindex]:focus,
+body.vscode-high-contrast button:focus-visible {
+	outline: 1px solid var(--nx-contrast) !important;
+	outline-offset: -1px;
 }
 
 /* A text input, anywhere: palette fields, float editors, suggest boxes. */
