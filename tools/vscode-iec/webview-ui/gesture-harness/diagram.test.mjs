@@ -460,3 +460,23 @@ test('"?" lists each editor’s keys; the hint line carries its full text as a t
 		});
 	}
 });
+
+test('SFC: the vars panel declares/deletes with the payload `naut sfc edit` accepts', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'sfcModel', model: { ...SFC, vars: [{ name: 'go', type: 'BOOL', section: 'VAR', line: 2 }] }, title: 's.sfc' });
+		const varsBtn = await b.eval(`(() => { const el = [...document.querySelectorAll('.bar button')].find((x) => x.textContent.trim() === 'vars'); const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+		await clickAt(b, varsBtn);
+		await reset(b);
+		await clickAt(b, await center(b, '.popover .del'));
+		const nameIn = await center(b, '.addrow input.grow');
+		await clickAt(b, nameIn);
+		for (const ch of 'Lvl') await b.send('Input.insertText', { text: ch });
+		await key(b, 'Enter', 'Enter', 13);
+		const ops = await sfcOps(b);
+		assert.deepEqual(ops[0], { type: 'deleteVar', name: 'go' });
+		assert.equal(ops[1].type, 'declareVar');
+		assert.equal(ops[1].name, 'Lvl');
+		assert.equal(ops[1].section, 'VAR_EXTERNAL');
+		assert.ok(ops[1].varType);
+	});
+});
