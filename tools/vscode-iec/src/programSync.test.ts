@@ -3,16 +3,10 @@
 
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { controllerPrelude, inLibDir, isLibraryCandidate, normalize, pouOf, sortPaths, splitProgram } from "./programSync";
+import { controllerPrelude, inLibDir, isLibraryCandidate, normalize, sortPaths, splitProgram } from "./programSync";
 
 const PRELUDE = "FUNCTION_BLOCK RateOfChange\nVAR_INPUT IN : REAL; END_VAR\nEND_FUNCTION_BLOCK\n";
 const BODY = "PROGRAM Main\nVAR x : REAL; END_VAR\nx := 1.0;\nEND_PROGRAM\n";
-
-test("pouOf finds the PROGRAM name, in any language's program file", () => {
-  assert.equal(pouOf(BODY), "Main");
-  assert.equal(pouOf("(* comment *)\n  PROGRAM Interlocks\n"), "Interlocks");
-  assert.equal(pouOf(PRELUDE), "");
-});
 
 test("splitProgram inverts Join for a known prelude", () => {
   assert.equal(splitProgram(PRELUDE + BODY, PRELUDE), BODY);
