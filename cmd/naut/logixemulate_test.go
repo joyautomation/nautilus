@@ -113,6 +113,46 @@ func TestLogixEmulateBrowseAndImport(t *testing.T) {
 	}
 }
 
+// TestLogixEmulateEIPImportRenamesKeywordMember reproduces the eip codegen
+// bug this fixture exists for: variety.L5X's Analog_Input UDT has a member
+// named "retain", an IEC keyword. `naut logix import` (the L5X path) already
+// renames it; `naut eip import` (browsed from the live emulator, same as a
+// real controller) used to emit it unrenamed and fail its own compile-check
+// ("generated ST is invalid"). It must now import cleanly, escaping the
+// member the same way, while the manifest still addresses the controller by
+// its real member name.
+func TestLogixEmulateEIPImportRenamesKeywordMember(t *testing.T) {
+	em := emulateL5X(t, l5xFixture("variety.L5X"), nil, false)
+	host, port := hostPort(t, em)
+
+	dir := t.TempDir()
+	out, code := captureRun(t, func() int {
+		return runEIP([]string{"import", "--host", host, "--port", port, "--format", "yaml", "--out", dir})
+	})
+	if code != 0 {
+		t.Fatalf("import failed (%d):\n%s", code, out)
+	}
+
+	types, err := os.ReadFile(filepath.Join(dir, "eip_types.st"))
+	if err != nil {
+		t.Fatalf("eip_types.st not written: %v", err)
+	}
+	if !strings.Contains(string(types), "retain_ : BOOL;") {
+		t.Errorf("keyword member not renamed in eip_types.st:\n%s", types)
+	}
+
+	manifest, err := os.ReadFile(filepath.Join(dir, "eip_manifest.yaml"))
+	if err != nil {
+		t.Fatalf("eip_manifest.yaml not written: %v", err)
+	}
+	if !strings.Contains(string(manifest), "name: retain_") {
+		t.Errorf("manifest does not use the escaped identifier:\n%s", manifest)
+	}
+	if !strings.Contains(string(manifest), "device: retain") {
+		t.Errorf("manifest lost the controller's real member name:\n%s", manifest)
+	}
+}
+
 // The richest fixture: nested UDTs, BIT overlays, an array member, a STRING,
 // a predefined TIMER, an elementary array, a program tag — all served with
 // the export's initial values, and what cannot be served said out loud.

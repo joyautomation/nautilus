@@ -132,3 +132,70 @@ END_PROGRAM`
 		t.Errorf("manifest missing wiring hint:\n%s", out.ManifestGo)
 	}
 }
+
+// TestGenerateRenamesKeywordMembers mirrors `naut logix import`'s handling
+// of a UDT member named after an IEC keyword (lang/l5x/testdata/variety.L5X
+// has one, "retain") — the ST identifier is escaped, but the manifest keeps
+// the controller's real member name so reads still resolve.
+func TestGenerateRenamesKeywordMembers(t *testing.T) {
+	kw := &logix.Template{
+		ID: 0x201, Name: "Analog_Input", Handle: 0x2001, StructSize: 8,
+		Members: []logix.Member{
+			{Name: "Value", Type: 0x00CA, Offset: 0},
+			// "retain" and "of" are IEC keywords the nautilus ST lexer
+			// reserves — a parse error as a member name until escaped.
+			{Name: "retain", Type: 0x00C1, Offset: 4},
+			{Name: "of", Type: 0x00C1, Offset: 4},
+		},
+	}
+	br := &logix.BrowseResult{
+		Symbols: []logix.Symbol{
+			{Name: "Sensor1", Type: 0x8000 | 0x201},
+		},
+		Templates: map[uint16]*logix.Template{0x201: kw},
+	}
+
+	out, err := Generate(br, Options{Host: "192.168.1.10"})
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	if len(out.Manifest.Types) != 1 {
+		t.Fatalf("types = %+v", out.Manifest.Types)
+	}
+	fields := out.Manifest.Types[0].Fields
+	want := map[string]string{ // renamed ST identifier -> real device member
+		"retain_": "retain",
+		"of_":     "of",
+	}
+	got := map[string]string{}
+	for _, f := range fields {
+		if f.Device != "" {
+			got[f.Name] = f.Device
+		}
+	}
+	for name, device := range want {
+		if got[name] != device {
+			t.Errorf("field %q: device = %q, want %q (fields: %+v)", name, got[name], device, fields)
+		}
+	}
+	// The un-renamed field keeps no Device override.
+	for _, f := range fields {
+		if f.Name == "Value" && f.Device != "" {
+			t.Errorf("Value should not carry a Device override: %+v", f)
+		}
+	}
+
+	// The generated ST must parse — this is exactly what fails without the
+	// rename (a bare "retain :" declaration is a syntax error).
+	prog, err := st.Parse(out.TypesST)
+	if err != nil {
+		t.Fatalf("generated ST does not parse: %v\n%s", err, out.TypesST)
+	}
+	if _, err := st.Lower(prog); err != nil {
+		t.Fatalf("generated ST does not lower: %v\n%s", err, out.TypesST)
+	}
+	if !strings.Contains(out.TypesST, "retain_ : BOOL;") {
+		t.Errorf("expected the escaped identifier in the generated ST:\n%s", out.TypesST)
+	}
+}
