@@ -39,6 +39,7 @@
 		editable = false,
 		diags = [],
 		showLive = true,
+		zoom = 1,
 		onOp,
 		requestInput
 	}: {
@@ -46,6 +47,9 @@
 		editable?: boolean;
 		diags?: Diag[];
 		showLive?: boolean;
+		/** Display scale (ZoomPane): the chart draws at width/height × zoom
+		 * over an unscaled viewBox; pointer math divides it back out. */
+		zoom?: number;
 		onOp?: (op: Record<string, unknown>) => void;
 		requestInput?: (
 			init: string,
@@ -328,7 +332,7 @@
 		return posOverride(p.id, p.x, p.y);
 	}
 	function beginDrag(ev: PointerEvent, p: PlacedStep) {
-		if (!editable) return;
+		if (!editable || ev.button !== 0) return;
 		ev.stopPropagation();
 		if (additive(ev)) return; // a modifier-click toggles selection (selectStep), never drags
 		if (!isSelStep(p.id)) multi = [];
@@ -336,17 +340,18 @@
 		drag = { kind: 'move', id: p.id, startX: p.x, startY: p.y, sx: ev.clientX, sy: ev.clientY, started: false };
 	}
 	function beginNoteDrag(ev: PointerEvent, n: PlacedNote) {
-		if (!editable) return;
+		if (!editable || ev.button !== 0) return;
 		ev.stopPropagation();
 		selected = { kind: 'comment', index: n.index };
 		drag = { kind: 'move', id: commentId(n.index), startX: n.x, startY: n.y, sx: ev.clientX, sy: ev.clientY, started: false };
 	}
+	// Client px → chart (layout) units: the SVG is drawn at × zoom.
 	function svgPoint(ev: PointerEvent): { x: number; y: number } {
 		const rect = svgEl?.getBoundingClientRect();
-		return rect ? { x: ev.clientX - rect.left, y: ev.clientY - rect.top } : { x: 0, y: 0 };
+		return rect ? { x: (ev.clientX - rect.left) / zoom, y: (ev.clientY - rect.top) / zoom } : { x: 0, y: 0 };
 	}
 	function beginConnect(ev: PointerEvent, p: PlacedStep) {
-		if (!editable) return;
+		if (!editable || ev.button !== 0) return;
 		ev.stopPropagation();
 		ev.preventDefault();
 		selected = { kind: 'step', id: p.id };
@@ -366,9 +371,10 @@
 			drag = { ...drag, ...svgPoint(ev) };
 			return;
 		}
-		const dx = ev.clientX - drag.sx;
-		const dy = ev.clientY - drag.sy;
-		if (!drag.started && Math.hypot(dx, dy) < 4) return;
+		// Screen px → layout units; the threshold stays in screen px.
+		const dx = (ev.clientX - drag.sx) / zoom;
+		const dy = (ev.clientY - drag.sy) / zoom;
+		if (!drag.started && Math.hypot(dx, dy) * zoom < 4) return;
 		drag.started = true;
 		const next = new Map(overrideAt);
 		next.set(drag.id, { x: Math.round(drag.startX + dx), y: Math.round(drag.startY + dy) });
@@ -756,7 +762,15 @@
 		</div>
 	{/if}
 
-	<svg class="chart" bind:this={svgEl} width={layout.width} height={layout.height} onclick={() => (selected = null)}>
+	<svg
+		class="chart"
+		bind:this={svgEl}
+		width={layout.width * zoom}
+		height={layout.height * zoom}
+		viewBox="0 0 {layout.width} {layout.height}"
+		data-zoom-content
+		onclick={() => (selected = null)}
+	>
 		{#each layout.trans as r (r.t.id)}
 			{@const problems = problemsFor(r.t.line, r.t.endLine)}
 			<g class="trans {r.t.status ?? ''}" class:selected={isSelTrans(r.t.id)}>
@@ -937,6 +951,10 @@
 		position: sticky;
 		top: 0;
 		left: 0;
+		/* pane-wide (ZoomPane's --pane-w), so sticky-left holds when a
+		   zoomed diagram scrolls sideways */
+		box-sizing: border-box;
+		width: var(--pane-w, auto);
 		z-index: 10;
 		display: flex;
 		gap: 4px;

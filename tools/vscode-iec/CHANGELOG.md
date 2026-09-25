@@ -24,6 +24,15 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   *Show Source* (the text, beside), with *between git revisions…* and *vs
   Controller* under "…". The diffs used to be Command Palette only. Text is
   still the default editor for these files.
+- **Zoom, pan and fit for Ladder and SFC.** Ctrl/Cmd+wheel or a trackpad
+  pinch zooms around the pointer; Ctrl+= / Ctrl+- zoom and Ctrl+0 fits
+  while the diagram has focus; middle-drag pans. The +/−/fit buttons sit
+  bottom-left, where FBD's are (FBD gets the same keys). The zoom is kept
+  per panel — it survives a tab switch or reload and is never written to
+  the file. A chart that doesn't fit is fitted on first open (down to 50%;
+  the fit button goes further); a ladder fits its widest rung to the pane
+  width. Dragging, drop targets, the connect rubber band and in-place
+  editors all track the zoom.
 - **Install the CLI in one click.** *nautilus: Install or Update the naut
   CLI* downloads the latest `naut` release for your OS and CPU from GitHub,
   verifies it against the release's `checksums.txt`, installs it into the

@@ -33,6 +33,7 @@
 	import { readClip, typingTarget, writeClip } from './clipboard';
 	import ShortcutHelp from './ShortcutHelp.svelte';
 	import { FBD_SHORTCUTS, LD_SHORTCUTS, SFC_SHORTCUTS, hintLine } from './shortcuts';
+	import ZoomPane from './ZoomPane.svelte';
 	import { loadViewState, saveViewState } from './viewState';
 	import { themeColorMode } from './themeMode.svelte';
 
@@ -391,6 +392,24 @@
 	// or live frame posted before the bundle's listener exists is lost),
 	// then replays the latest of each. Sent again by every reload.
 	vscode.postMessage({ type: 'ready' });
+
+	// Ladder/SFC zoom, per panel (webview state, never the source). Unset =
+	// this panel was never zoomed: ZoomPane fits on first render.
+	let ldZoom = $state(viewState.zoom?.ld ?? 1);
+	let sfcZoom = $state(viewState.zoom?.sfc ?? 1);
+	const zoomSaved = { ld: viewState.zoom?.ld !== undefined, sfc: viewState.zoom?.sfc !== undefined };
+	let zoomTouched = false;
+	$effect(() => {
+		const z = { ld: ldZoom, sfc: sfcZoom };
+		// Skip the initial run: only a real zoom (or the first fit) persists.
+		if (!zoomTouched) {
+			zoomTouched = true;
+			return;
+		}
+		if (z.ld !== 1 || zoomSaved.ld) zoomSaved.ld = true;
+		if (z.sfc !== 1 || zoomSaved.sfc) zoomSaved.sfc = true;
+		saveViewState({ zoom: { ld: zoomSaved.ld ? z.ld : undefined, sfc: zoomSaved.sfc ? z.sfc : undefined } });
+	});
 	const injected = window.__MODEL__ as FbdModel | undefined;
 	if (injected) show({ type: 'model', model: injected, title: 'harness' });
 	// Browser-harness hook for the SFC webview (mirrors __MODEL__ above):
@@ -658,29 +677,31 @@
 		</div>
 	{/if}
 	{#if ldModel}
-		<div class="flow ldscroll" class:stale={!!error}>
+		<ZoomPane bind:zoom={ldZoom} autoFit={!zoomSaved.ld} fitAxis="width" stale={!!error} label="ladder">
 			<LadderView
 				model={ldModel}
 				editable={!diffing && !readOnly}
 				diags={diffing ? [] : diags}
 				status={ldStatus}
 				showLive={!diffing}
+				zoom={ldZoom}
 				onOp={postLd}
 				onTrace={(msg) => vscode.postMessage({ type: 'ldTrace', msg })}
 				{requestInput}
 			/>
-		</div>
+		</ZoomPane>
 	{:else if sfcModel}
-		<div class="flow ldscroll" class:stale={!!error}>
+		<ZoomPane bind:zoom={sfcZoom} autoFit={!zoomSaved.sfc} stale={!!error} label="SFC">
 			<SfcView
 				model={sfcModel}
 				editable={!diffing}
 				diags={diffing ? [] : diags}
 				showLive={!diffing}
+				zoom={sfcZoom}
 				onOp={postSfc}
 				{requestInput}
 			/>
-		</div>
+		</ZoomPane>
 	{:else if mode !== 'fbd'}
 		<!-- a ladder/SFC file whose first parse failed: the error above
 		     says why; no FBD canvas (or its "+ add") in its place -->
@@ -900,9 +921,6 @@
 	.flow {
 		flex: 1;
 		min-height: 0;
-	}
-	.flow.ldscroll {
-		overflow: auto;
 	}
 	.flow.stale {
 		opacity: 0.45;

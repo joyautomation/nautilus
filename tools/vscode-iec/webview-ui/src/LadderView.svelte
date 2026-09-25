@@ -23,6 +23,7 @@
 		diags = [],
 		status = {},
 		showLive = true,
+		zoom = 1,
 		onOp,
 		onTrace,
 		requestInput
@@ -32,6 +33,9 @@
 		diags?: Diag[];
 		status?: Record<string, RungStatus>;
 		showLive?: boolean;
+		/** Display scale (ZoomPane): the SVGs draw at width/height × zoom
+		 * over an unscaled viewBox, so layout units never change. */
+		zoom?: number;
 		onOp?: (op: Record<string, unknown>) => void;
 		onTrace?: (msg: string) => void;
 		requestInput?: (
@@ -53,7 +57,7 @@
 	// never below what the widest rung actually needs, so narrow panes
 	// fall back to horizontal scroll. The layout already right-aligns
 	// coils to whatever width it's given; this just feeds it the pane.
-	const LADDER_PAD_X = 28; // .ladder's 14px left + right padding
+	const LADDER_PAD_X = 28; // .ladder's 14px left + right padding (scales with zoom)
 	let viewW = $state(document.documentElement.clientWidth);
 
 	// Width comes from the SCROLL CONTAINER's clientWidth — the document
@@ -79,19 +83,22 @@
 			const all = annotate([...r.elements, ...r.coils], on ? true : undefined, resolve);
 			return { r, elems: all.slice(0, r.elements.length), coils: all.slice(r.elements.length) };
 		});
-		const width = Math.max(
-			L.MIN_WIDTH,
-			viewW - LADDER_PAD_X,
-			...annotated.map((a) => rungMinWidth(a.elems, a.coils.length))
-		);
-		return annotated.map((a) => ({
+		// The pane in layout units: zoomed OUT, the rails still span it;
+		// zoomed IN, the 100% width magnifies past the pane (and scrolls) —
+		// re-fitting it would just re-flow the rung, not enlarge it.
+		const mins = annotated.map((a) => rungMinWidth(a.elems, a.coils.length));
+		const width = Math.max(L.MIN_WIDTH, viewW / Math.min(zoom, 1) - LADDER_PAD_X, ...mins);
+		return annotated.map((a, i) => ({
 			r: a.r,
+			minW: mins[i],
 			lay: layoutRung(a.elems, a.coils, width),
 			width,
 			problems: diags.filter((d) => d.line >= a.r.line && d.line <= (a.r.endLine ?? a.r.line))
 		}));
 	});
 	const canvasW = $derived(rungs.length ? rungs[0].width : L.MIN_WIDTH);
+	// What "fit" fits: the widest rung's own need, not the pane-filling width.
+	const naturalW = $derived(Math.max(L.MIN_WIDTH, ...rungs.map((x) => x.minW)) + LADDER_PAD_X);
 
 	// Rungs and comment runs interleaved in document order — comments render
 	// as note blocks above whatever follows them, just like FBD's.
@@ -207,7 +214,7 @@
 	let drag = $state<Drag | null>(null);
 
 	function beginPaletteDrag(ev: PointerEvent, item: PalItem) {
-		if (!editable) return;
+		if (!editable || ev.button !== 0) return;
 		drag = { kind: 'palette', item, x: ev.clientX, y: ev.clientY, sx: ev.clientX, sy: ev.clientY, started: false };
 	}
 
@@ -282,7 +289,7 @@
 		let a = args;
 		const onDown = (ev: Event) => {
 			const pe = ev as PointerEvent;
-			if (!editable) return;
+			if (!editable || pe.button !== 0) return;
 			ev.stopPropagation();
 			// Take keyboard focus so Del/N/M/Ctrl+C land (window keydown is
 			// dead in a webview while nothing in the document has focus).
@@ -637,7 +644,13 @@
 			<button title={selected?.whole ? `Delete rung ${selected.rung} (Del)` : 'Delete the selected element — or the rung, when its name is selected (Del)'} disabled={!selected} onclick={() => doDelete()}>✕</button>
 		</div>
 	{/if}
-	<div class="ladder" onclick={() => (selected = null)}>
+	<div
+		class="ladder"
+		style:--z={zoom}
+		data-zoom-content
+		data-natural-w={naturalW}
+		onclick={() => (selected = null)}
+	>
 		{#each blocks as b (b.t === 'rung' ? 'r:' + b.x.r.name : b.t === 'pou' ? 'p:' + b.name : 'n:' + b.idx)}
 			{#if b.t === 'pou'}
 				<div class="pouhead" title="a FUNCTION_BLOCK written in ladder — callable from any language">
@@ -656,8 +669,8 @@
 			{:else}
 				{@const { r, lay, problems } = b.x}
 			<svg
-				width={canvasW}
-				height={lay.height}
+				width={canvasW * zoom}
+				height={lay.height * zoom}
 				viewBox="0 0 {canvasW} {lay.height}"
 				class="rsvg {status[r.name] ?? ''}"
 			>
@@ -821,6 +834,10 @@
 		position: sticky;
 		top: 0;
 		left: 0;
+		/* pane-wide (ZoomPane's --pane-w), so sticky-left holds when a
+		   zoomed diagram scrolls sideways */
+		box-sizing: border-box;
+		width: var(--pane-w, auto);
 		z-index: 10;
 		display: flex;
 		gap: 4px;
@@ -859,10 +876,12 @@
 		background: var(--nx-border);
 		margin: 0 4px;
 	}
+	/* Everything inside .ladder scales with --z (the SVGs through their
+	   width/height), so the zoom anchor maps exactly. */
 	.ladder {
 		display: flex;
 		flex-direction: column;
-		padding: 10px 14px;
+		padding: calc(10px * var(--z)) calc(14px * var(--z));
 		font-family: var(--nx-mono);
 		width: max-content;
 	}
@@ -997,10 +1016,10 @@
 		opacity: 0.45;
 	}
 	.pouhead {
-		margin: 14px 0 2px;
-		padding: 3px 8px;
-		border-left: 3px solid var(--nx-link);
-		font-size: 11px;
+		margin: calc(14px * var(--z)) 0 calc(2px * var(--z));
+		padding: calc(3px * var(--z)) calc(8px * var(--z));
+		border-left: calc(3px * var(--z)) solid var(--nx-link);
+		font-size: calc(11px * var(--z));
 		opacity: 0.9;
 	}
 	.poukw {
@@ -1012,25 +1031,25 @@
 	}
 	.poupins {
 		opacity: 0.7;
-		margin-left: 8px;
+		margin-left: calc(8px * var(--z));
 	}
 	.note {
 		align-self: flex-start;
-		margin: 4px 0 6px 20px;
-		padding: 3px 8px;
+		margin: calc(4px * var(--z)) 0 calc(6px * var(--z)) calc(20px * var(--z));
+		padding: calc(3px * var(--z)) calc(8px * var(--z));
 		border: 1px dashed color-mix(in srgb, var(--nx-comment) 55%, transparent);
-		border-radius: 4px;
+		border-radius: calc(4px * var(--z));
 		color: var(--nx-comment);
 		font-style: italic;
-		font-size: 11px;
-		line-height: 15px;
+		font-size: calc(11px * var(--z));
+		line-height: calc(15px * var(--z));
 		white-space: pre;
 	}
 	.note.editable {
 		cursor: text;
 	}
 	.noteline {
-		min-height: 15px;
+		min-height: calc(15px * var(--z));
 	}
 	.diagdot {
 		fill: var(--nx-err);
