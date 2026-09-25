@@ -48,7 +48,7 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   `nautilus.cliPath` wins over both.
 - **CLI version check.** On startup the extension logs which `naut` it
   resolved and its version to the **nautilus** output channel, and warns
-  when it's older than the extension needs (0.11.0), with *Update naut* and
+  when it's older than the extension needs (0.12.0), with *Update naut* and
   *Don't show again for this version*. Local development builds are assumed
   current. *nautilus: Show CLI Info* shows the same on demand.
 
@@ -95,6 +95,9 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   testing, L5X, language features), a settings and commands reference,
   troubleshooting, and the release channels. Contributor material moved to
   `CONTRIBUTING.md`.
+- **Requires naut 0.12.0**; older CLIs get the *Update naut* prompt.
+  Blank-file init, batched delete, select-all paste, SFC var/step ops, and
+  the duplicate-instance check all need it.
 - **Diagrams follow light, dark and high-contrast themes.** Ladder diff
   colours (added cyan, changed amber) come from theme tokens with light
   variants instead of fixed dark-theme hex; FBD's MiniMap and zoom controls
@@ -110,6 +113,14 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- **Preview undo-then-save no longer races.** Pressing Ctrl+Z then Ctrl+S
+  quickly in an FBD/Ladder/SFC preview (with the source text tab closed)
+  could save before the undo landed: `executeCommand("undo")` resolves once
+  the command is dispatched, not once this extension's copy of the document
+  has synced with the edit, and the save queued right behind it read the
+  pre-undo text — then the edit applied moments later and left the document
+  dirty again. Undo/redo now wait for that sync before the next queued key
+  can run.
 - **FBD diagram no longer goes permanently blank when restored.** After
   *Developer: Reload Webviews* (FBD editor and FBD preview) or *Reload
   Window* (FBD editor), re-showing the saved diagram touched state declared

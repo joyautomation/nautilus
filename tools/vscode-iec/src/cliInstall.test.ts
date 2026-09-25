@@ -120,11 +120,11 @@ test("semver: ordering, pre-releases before releases, v prefix tolerated", () =>
 });
 
 test("checkMinVersion: old, ok, and dev builds (assumed current)", () => {
-  assert.deepEqual(checkMinVersion("0.10.0", "0.11.0"), { kind: "old", version: "0.10.0", min: "0.11.0" });
-  assert.equal(checkMinVersion("0.11.0", "0.11.0").kind, "ok");
-  assert.equal(checkMinVersion("0.12.3", "0.11.0").kind, "ok");
-  assert.equal(checkMinVersion("dev", "0.11.0").kind, "dev");
-  assert.equal(checkMinVersion("(devel)", "0.11.0").kind, "dev");
+  assert.deepEqual(checkMinVersion("0.11.0", "0.12.0"), { kind: "old", version: "0.11.0", min: "0.12.0" });
+  assert.equal(checkMinVersion("0.12.0", "0.12.0").kind, "ok");
+  assert.equal(checkMinVersion("0.13.3", "0.12.0").kind, "ok");
+  assert.equal(checkMinVersion("dev", "0.12.0").kind, "dev");
+  assert.equal(checkMinVersion("(devel)", "0.12.0").kind, "dev");
 });
 
 test("parseCliVersionOutput: `naut version` output", () => {
