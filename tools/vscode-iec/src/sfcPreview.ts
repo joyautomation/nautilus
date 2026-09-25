@@ -15,7 +15,7 @@
 
 import { execFile } from "child_process";
 import * as vscode from "vscode";
-import { applyDiagramKey, isDiagramKeyMessage } from "./diagramKeys";
+import { applyDiagramKey, isDiagramKeyMessage, serialQueue, sourceDocument } from "./diagramKeys";
 import { followActiveDoc } from "./previewFollow";
 import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
 import { LiveValues } from "./liveValues";
@@ -212,15 +212,16 @@ export class SfcPreview implements vscode.Disposable {
       vscode.languages.onDidChangeDiagnostics((e) => {
         if (!this.panel || !this.docUri) return;
         if (!e.uris.some((u) => u.toString() === this.docUri?.toString())) return;
-        const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === this.docUri?.toString());
-        if (doc) postDiagnostics(this.panel.webview, doc);
+        void sourceDocument(this.docUri).then((doc) => {
+          if (doc && this.panel) postDiagnostics(this.panel.webview, doc);
+        });
       })
     );
   }
 
   /** The .sfc document the user is "in": active editor, active diagram tab,
    * the tracked one, or any open .sfc as a last resort. */
-  private activeSfcDoc(): vscode.TextDocument | undefined {
+  private async activeSfcDoc(): Promise<vscode.TextDocument | undefined> {
     const ed = vscode.window.activeTextEditor?.document;
     if (ed && ed.languageId === "iec-sfc") return ed;
     const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
@@ -230,16 +231,14 @@ export class SfcPreview implements vscode.Disposable {
       );
       if (custom) return custom;
     }
-    const tracked = vscode.workspace.textDocuments.find(
-      (d) => d.uri.toString() === this.docUri?.toString()
-    );
+    const tracked = await sourceDocument(this.docUri);
     if (tracked) return tracked;
     return vscode.workspace.textDocuments.find((d) => d.languageId === "iec-sfc");
   }
 
   /** Open (or reveal) the SFC preview for the active .sfc editor. */
   async preview(): Promise<void> {
-    const doc = this.activeSfcDoc();
+    const doc = await this.activeSfcDoc();
     if (!doc) {
       void vscode.window.showErrorMessage("nautilus: open a .sfc file to preview its chart");
       return;
@@ -252,7 +251,7 @@ export class SfcPreview implements vscode.Disposable {
 
   /** Visual diff: the working tree (current buffer) vs git HEAD. */
   async diff(): Promise<void> {
-    const doc = this.activeSfcDoc();
+    const doc = await this.activeSfcDoc();
     if (!doc) {
       void vscode.window.showErrorMessage("nautilus: open a .sfc file first");
       return;
@@ -275,7 +274,7 @@ export class SfcPreview implements vscode.Disposable {
    * controller serves each task's ORIGINAL source, so .sfc diffs as a
    * chart-vs-chart overlay, live. */
   async diffController(): Promise<void> {
-    const doc = this.activeSfcDoc();
+    const doc = await this.activeSfcDoc();
     if (!doc) {
       void vscode.window.showErrorMessage("nautilus: open a .sfc file first");
       return;
@@ -299,7 +298,7 @@ export class SfcPreview implements vscode.Disposable {
    * revision and the working tree. With two commits chosen both sides are
    * frozen, so edits leave the overlay alone. */
   async diffRevisions(): Promise<void> {
-    const doc = this.activeSfcDoc();
+    const doc = await this.activeSfcDoc();
     if (!doc) {
       void vscode.window.showErrorMessage("nautilus: open a .sfc file first");
       return;
@@ -370,10 +369,12 @@ export class SfcPreview implements vscode.Disposable {
       this.panel.webview.html = buildWebviewHtml(this.panel.webview, this.context.extensionUri, {
         forwardKeys: true,
       });
-      this.panel.webview.onDidReceiveMessage((msg: { type?: string; op?: unknown }) => {
-        const doc = vscode.workspace.textDocuments.find(
-          (d) => d.uri.toString() === this.docUri?.toString()
-        );
+      // The source resolves through sourceDocument (open in an editor or
+      // not — a closed text tab must not strand the preview's gestures),
+      // one message at a time so an edit never overtakes the one before it.
+      const inOrder = serialQueue();
+      this.panel.webview.onDidReceiveMessage((msg: { type?: string; op?: unknown }) => void inOrder(async () => {
+        const doc = await sourceDocument(this.docUri);
         if (isDiagramKeyMessage(msg)) {
           if (doc && this.panel) {
             void applyDiagramKey(msg.action, doc, this.panel, { diffing: this.diffBase !== undefined });
@@ -387,7 +388,7 @@ export class SfcPreview implements vscode.Disposable {
         }
         if (doc) handleSfcMessage(doc, msg);
         else if (msg?.type === "toggleLive") void vscode.commands.executeCommand("nautilus.liveValues.toggle");
-      });
+      }));
       attachLiveValues(this.live, this.panel);
       const sync = addSyncTarget(this.panel.webview, () => this.docUri);
       this.panel.onDidDispose(() => {

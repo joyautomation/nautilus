@@ -236,7 +236,15 @@ function howInstalled(cmd: string): string {
   const dir = path.dirname(cmd);
   const goDirs = [process.env.GOBIN, ...(process.env.GOPATH ?? "").split(path.delimiter).map((p) => p && path.join(p, "bin")), path.join(os.homedir(), "go", "bin")];
   if (goDirs.some((d) => d && samePath(dir, d))) return "a go install";
-  return "found on PATH or a well-known directory";
+  return "found on PATH or in a well-known directory";
+}
+
+/** `howInstalled` as a sentence about `cmd`: "…/naut was found on PATH or in
+ * a well-known directory", not "…/naut is found on PATH…". */
+function installedSentence(cmd: string, how: string): string {
+  if (how === "a go install") return `${cmd} was installed with go install`;
+  if (how.startsWith("found ")) return `${cmd} was ${how}`;
+  return `${cmd} is ${how}`;
 }
 
 // ── version ────────────────────────────────────────────────────────────────
@@ -292,7 +300,7 @@ export async function checkCliVersion(): Promise<void> {
     const COPY = "Copy go install";
     const actions = how === "a go install" ? [INSTALL, COPY] : [INSTALL];
     const next = await vscode.window.showInformationMessage(
-      `nautilus: ${cli.command} is ${how}. Update it the way it was installed` +
+      `nautilus: ${installedSentence(cli.command, how)}. Update it the way it was installed` +
         (how === "a go install" ? ` (${GO_INSTALL})` : "") +
         ", or install a copy the extension manages and keeps up to date.",
       ...actions

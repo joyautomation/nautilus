@@ -499,6 +499,76 @@ test('Ready: the webview says ready on mount (the host holds its posts until the
 	});
 });
 
+// ── restore from saved webview state ────────────────────────────────────
+// "Developer: Reload Webviews" / Reload Window / a hidden tab coming back:
+// the bundle mounts with vscode.getState() already holding the last model
+// message and re-shows it BEFORE the host replays. A throw on that path
+// aborts the mount — no `ready`, so the host never replays and the panel
+// stays blank for good (the FBD editor did exactly that: show() assigned
+// state declared further down the component).
+const ready = async (b) => (await posted(b)).filter((m) => m.type === 'ready');
+async function restores(saved, check, zoom) {
+	await withPage(
+		async (b) => {
+			await sleep(250);
+			assert.deepEqual(await ready(b), [{ type: 'ready' }], 'mount must still say ready');
+			await check(b);
+		},
+		{ state: { msg: saved, ...(zoom ? { zoom } : {}) } }
+	);
+}
+
+test('Restore: FBD editor mounts from a saved model (with source) and renders it', async () => {
+	await restores({ type: 'model', model: FBD, title: 'n.fbd', source: FBD_SRC }, async (b) => {
+		assert.ok(await center(b, node('c:Y')), 'saved FBD model not rendered');
+	});
+});
+
+test('Restore: legacy state (the bare model message) still restores', async () => {
+	await withPage(
+		async (b) => {
+			await sleep(250);
+			assert.equal((await ready(b)).length, 1);
+			assert.ok(await center(b, node('b:c.Y')));
+		},
+		{ state: { type: 'model', model: FBD, title: 'n.fbd' } }
+	);
+});
+
+test('Restore: FBD preview mounts from a saved diff and renders it', async () => {
+	const head = { ...FBD, nodes: FBD.nodes.filter((n) => n.id !== 'cm:2') };
+	await restores({ type: 'diff', base: FBD, head, title: 'n.fbd (HEAD ↔ working)' }, async (b) => {
+		assert.ok(await center(b, node('c:Y')), 'saved FBD diff not rendered');
+	});
+});
+
+test('Restore: Ladder mounts from a saved model (and zoom) and renders it', async () => {
+	await restores(
+		{ type: 'ldModel', model: LD, title: 'p.ld' },
+		async (b) => {
+			assert.match(await text(b), /r1/);
+			assert.equal(await zoomPct(b), '125%');
+		},
+		{ ld: 1.25 }
+	);
+});
+
+test('Restore: Ladder mounts from a saved diff', async () => {
+	const head = { ...LD, rungs: LD.rungs.slice(0, 1) };
+	await restores({ type: 'ldDiff', base: LD, head, title: 'p.ld' }, async (b) => {
+		assert.match(await text(b), /r2/);
+	});
+});
+
+test('Restore: SFC mounts from a saved model (and diff) and renders it', async () => {
+	await restores({ type: 'sfcModel', model: SFC, title: 's.sfc' }, async (b) => {
+		assert.ok(await stepCenter(b, 'Run'));
+	});
+	await restores({ type: 'sfcDiff', base: SFC, head: { ...SFC, steps: SFC.steps.slice(0, 2) }, title: 's.sfc' }, async (b) => {
+		assert.ok(await stepCenter(b, 'Spare'));
+	});
+});
+
 // ── zoom / pan / fit (Ladder + SFC) ─────────────────────────────────────
 // ZoomPane draws the SVGs at width/height × zoom over an unscaled viewBox,
 // so every hit-test stays in screen space; these pin that the gestures

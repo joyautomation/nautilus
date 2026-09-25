@@ -774,3 +774,39 @@ test('"?" lists the mimic editor’s keys', async () => {
 		assert.match(await ed.b.eval(`document.querySelector('.nx-help-pop')?.textContent ?? ''`), /Duplicate the selection/);
 	});
 });
+
+// ── restore: mount with saved webview state ────────────────────────────────
+// A restored panel (Developer: Reload Webviews, Reload Window) mounts with
+// vscode.getState() holding whatever it last had. The mimic/component
+// editors keep nothing there today — they re-handshake and the host
+// re-sends the doc — but the mount must survive a non-empty state (an
+// older build's, or a future one's) and still say ready, or the host never
+// answers and the panel stays blank (the FBD editor's failure mode).
+const exceptions = (ed) => ed.console().filter((l) => l.startsWith('[exception]'));
+const STALE_STATE = { msg: { type: 'model', model: { name: 'x', nodes: [], edges: [] } }, zoom: { ld: 2 } };
+
+test('restore: the mimic editor mounts with saved state, says ready, and renders the doc', async () => {
+	const ed = await Editor.open(BUNDLE, twoTankDoc(), { headless: HEADLESS, state: STALE_STATE });
+	try {
+		const types = (await ed.b.eval('JSON.stringify(window.__posted().map((m) => m && m.type))').then(JSON.parse));
+		assert.ok(types.includes('mimicReady'), `no mimicReady in ${types}`);
+		assert.equal((await ed.eqRects()).length, 2);
+		assert.deepEqual(exceptions(ed), []);
+	} finally {
+		await ed.close();
+	}
+});
+
+test('restore: the component editor mounts with saved state, says ready, and renders the doc', async () => {
+	const doc = { component: 'Tank', ports: [{ name: 'top', x: 0.5, y: 0 }] };
+	const ed = await Editor.open(BUNDLE, doc, { headless: HEADLESS, state: STALE_STATE, mode: 'component' });
+	try {
+		const types = (await ed.b.eval('JSON.stringify(window.__posted().map((m) => m && m.type))').then(JSON.parse));
+		assert.ok(types.includes('componentReady'), `no componentReady in ${types}`);
+		assert.equal(await ed.b.eval(`document.querySelector('.name')?.textContent`), '· Tank');
+		assert.ok(await ed.b.eval(`!!document.querySelector('circle.port')`), 'port dot not rendered');
+		assert.deepEqual(exceptions(ed), []);
+	} finally {
+		await ed.close();
+	}
+});

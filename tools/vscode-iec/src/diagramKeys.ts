@@ -13,8 +13,19 @@
 
 import * as vscode from "vscode";
 import { diagramKeyVerdict, isDiagramKeyMessage, type DiagramKeyAction } from "./diagramKeyPolicy";
+import { resolveSourceDoc } from "./sourceDoc";
 
 export { isDiagramKeyMessage };
+export { serialQueue } from "./sourceDoc";
+
+/** The TextDocument a preview shows, by URI — open in an editor or not.
+ * Never `workspace.textDocuments` alone: that forgets a document once its
+ * last editor closes, and the preview's gestures then went nowhere. */
+export function sourceDocument(uri: vscode.Uri | undefined): Promise<vscode.TextDocument | undefined> {
+  return resolveSourceDoc(uri?.toString(), vscode.workspace.textDocuments, () =>
+    vscode.workspace.openTextDocument(uri!)
+  );
+}
 
 /** Keys apply one at a time: each undo re-focuses the text and hands focus
  * back, and a held-down Ctrl+Z must not interleave two of those. */

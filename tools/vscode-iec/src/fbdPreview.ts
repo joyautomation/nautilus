@@ -20,7 +20,7 @@ import type { ProgramInfo } from "./onlineEdit";
 import type { LiveValues } from "./liveValues";
 import { gitShow } from "./gitHistory";
 import { pickRevisions } from "./revisionPick";
-import { applyDiagramKey, isDiagramKeyMessage } from "./diagramKeys";
+import { applyDiagramKey, isDiagramKeyMessage, serialQueue, sourceDocument } from "./diagramKeys";
 import { gateWebview } from "./webviewReady";
 
 /** Mirror of lang/fbd.Model — see lang/fbd/graph.go for the contract. */
@@ -387,17 +387,16 @@ export class FbdPreview implements vscode.Disposable {
       vscode.languages.onDidChangeDiagnostics((e) => {
         if (!this.panel || this.diffing || !this.docUri) return;
         if (!e.uris.some((u) => u.toString() === this.docUri?.toString())) return;
-        const doc = vscode.workspace.textDocuments.find(
-          (d) => d.uri.toString() === this.docUri?.toString()
-        );
-        if (doc) postDiagnostics(this.panel.webview, doc);
+        void sourceDocument(this.docUri).then((doc) => {
+          if (doc && this.panel) postDiagnostics(this.panel.webview, doc);
+        });
       })
     );
   }
 
   /** Open (or reveal) the preview panel for the active .fbd editor. */
   async preview(): Promise<void> {
-    const doc = this.activeFbdDoc();
+    const doc = await this.activeFbdDoc();
     if (!doc) return;
     this.docUri = doc.uri;
     this.diffBase = undefined;
@@ -407,7 +406,7 @@ export class FbdPreview implements vscode.Disposable {
 
   /** Visual diff: the working tree (current buffer) vs git HEAD. */
   async diff(): Promise<void> {
-    const doc = this.activeFbdDoc();
+    const doc = await this.activeFbdDoc();
     if (!doc) return;
     if (doc.uri.scheme !== "file") {
       void vscode.window.showErrorMessage("nautilus: FBD diff needs a file on disk");
@@ -427,7 +426,7 @@ export class FbdPreview implements vscode.Disposable {
    * is running. The controller serves its ORIGINAL program source, so an
    * .fbd program diffs as two render models — the wiring review, live. */
   async diffController(): Promise<void> {
-    const doc = this.activeFbdDoc();
+    const doc = await this.activeFbdDoc();
     if (!doc) return;
     const info = await fetchControllerProgram(doc.getText());
     if (!info) return;
@@ -449,7 +448,7 @@ export class FbdPreview implements vscode.Disposable {
    * revision and the working tree. With two commits chosen both sides are
    * frozen, so edits leave the overlay alone. */
   async diffRevisions(): Promise<void> {
-    const doc = this.activeFbdDoc();
+    const doc = await this.activeFbdDoc();
     if (!doc) return;
     if (doc.uri.scheme !== "file") {
       void vscode.window.showErrorMessage("nautilus: FBD diff needs a file on disk");
@@ -496,7 +495,7 @@ export class FbdPreview implements vscode.Disposable {
     this.post({ type: "diff", base: base.model, head: head.model, title });
   }
 
-  private activeFbdDoc(): vscode.TextDocument | undefined {
+  private async activeFbdDoc(): Promise<vscode.TextDocument | undefined> {
     const doc = vscode.window.activeTextEditor?.document;
     if (doc && doc.languageId === "iec-fbd") return doc;
     // The diagram custom editor never appears in activeTextEditor — resolve
@@ -509,9 +508,7 @@ export class FbdPreview implements vscode.Disposable {
       if (custom) return custom;
     }
     // The preview panel may have focus; fall back to the tracked document.
-    const tracked = vscode.workspace.textDocuments.find(
-      (d) => d.uri.toString() === this.docUri?.toString()
-    );
+    const tracked = await sourceDocument(this.docUri);
     if (tracked) return tracked;
     void vscode.window.showErrorMessage("nautilus: open a .fbd file first");
     return undefined;
@@ -554,32 +551,32 @@ export class FbdPreview implements vscode.Disposable {
       this.panel = undefined;
       this.diffBase = undefined;
     });
+    // The source resolves through sourceDocument (open in an editor or
+    // not — a closed text tab must not strand the preview's gestures), one
+    // message at a time so an edit never overtakes the one before it.
+    const inOrder = serialQueue();
     this.panel.webview.onDidReceiveMessage((msg: WebviewMessage) => {
       if (msg.type === "toggleLive") {
         void vscode.commands.executeCommand("nautilus.liveValues.toggle");
         return;
       }
-      const key: unknown = msg;
-      if (isDiagramKeyMessage(key)) {
-        const doc = vscode.workspace.textDocuments.find(
-          (d) => d.uri.toString() === this.docUri?.toString()
-        );
-        if (doc && this.panel) void applyDiagramKey(key.action, doc, this.panel, { diffing: this.diffing });
-        return;
-      }
-      if ((msg as { type?: string }).type === "exitDiff") {
-        this.diffBase = undefined;
-        const doc = vscode.workspace.textDocuments.find(
-          (d) => d.uri.toString() === this.docUri?.toString()
-        );
-        if (doc) void this.update(doc);
-        return;
-      }
-      if (this.diffing || !this.docUri) return;
-      const doc = vscode.workspace.textDocuments.find(
-        (d) => d.uri.toString() === this.docUri?.toString()
-      );
-      if (doc) void handleWebviewMessage(doc, msg);
+      void inOrder(async () => {
+        const key: unknown = msg;
+        if (isDiagramKeyMessage(key)) {
+          const doc = await sourceDocument(this.docUri);
+          if (doc && this.panel) void applyDiagramKey(key.action, doc, this.panel, { diffing: this.diffing });
+          return;
+        }
+        if ((msg as { type?: string }).type === "exitDiff") {
+          this.diffBase = undefined;
+          const doc = await sourceDocument(this.docUri);
+          if (doc) void this.update(doc);
+          return;
+        }
+        if (this.diffing || !this.docUri) return;
+        const doc = await sourceDocument(this.docUri);
+        if (doc) handleWebviewMessage(doc, msg);
+      });
     });
     this.panel.webview.html = buildWebviewHtml(this.panel.webview, this.context.extensionUri, {
       forwardKeys: true,
