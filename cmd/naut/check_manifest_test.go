@@ -107,9 +107,10 @@ func TestCheckFailsOnUndeclaredRead(t *testing.T) {
 // a warm swap) assigns it runtime.MainTaskName no matter what name: says.
 // Before this diagnostic, that key silently did nothing: `naut check` passed
 // clean, and the failure only surfaced later at `naut test`/`naut run` as an
-// unfamiliar "no task ..." error. It must fail the check, with a message
-// that says the first task is always "main".
-func TestCheckRejectsFirstTaskName(t *testing.T) {
+// unfamiliar "no task ..." error. It must WARN (the key never changed
+// behaviour, so a manifest carrying it still passes), with a message that
+// says the first task is always "main".
+func TestCheckWarnsOnFirstTaskName(t *testing.T) {
 	out, code := checkIn(t, map[string]string{
 		"nautilus.yaml": `
 tasks:
@@ -121,10 +122,10 @@ tags:
 `,
 		"program.st": programBinding("", ""),
 	})
-	if code == 0 {
-		t.Fatalf("naming the first task passed the check:\n%s", out)
+	if code != 0 {
+		t.Fatalf("naming the first task must warn, not fail the check (exit %d):\n%s", code, out)
 	}
-	if !strings.Contains(out, ": error:") || !strings.Contains(out, "sequence") || !strings.Contains(out, `"main"`) {
+	if !strings.Contains(out, ": warning:") || !strings.Contains(out, "sequence") || !strings.Contains(out, `"main"`) {
 		t.Errorf("output does not explain that the first task is always main:\n%s", out)
 	}
 }
