@@ -51,6 +51,28 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   double-click editors are gone, instead of every gesture ending in a
   "read-only" toast.
 
+- **Copy, cut and paste in every diagram editor.**
+  - *FBD*: Ctrl+X joins Ctrl+C/V. A cut's paste brings back the blocks with
+    their names and wiring, and a paste works in another `.fbd` too.
+    Ctrl+A selects everything.
+  - *SFC*: Ctrl/Shift-click selects several steps, Ctrl+A selects all.
+    Ctrl+C/X/V (and ✂ ⧉ ⎘ buttons) copy steps with their actions and the
+    transitions between them; a paste lands to the right of the chart under
+    the first free names (Fill → Fill2). Deleting several steps is one edit.
+  - *Mimic*: Ctrl-click selects several instances, Ctrl+A selects all.
+    Ctrl+C/X/V and Ctrl+D (duplicate) copy equipment with its props,
+    bindings and port overrides, plus the pipes running between copied
+    instances, re-anchored to the copies. Arrows and Del act on the whole
+    selection.
+  - The clipboard is the system clipboard where the webview allows it, so a
+    copy pastes into another panel of the same kind (Ladder too). Clipboard
+    keys inside a text field are left to the field. (FBD cut/cross-file
+    paste and the SFC ops need the matching `naut` CLI.)
+- **A "?" button in every diagram editor** (FBD, Ladder, SFC, Mimic,
+  Component) lists its gestures and keys. The toolbar hint is generated from
+  the same list and shows its full text as a tooltip when the pane cuts it
+  off.
+
 ### Changed
 
 - **The missing-CLI warning leads with *Install naut*.** It now offers
@@ -71,6 +93,14 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   editors, Ctrl+Z in a text field that doesn't handle its own keys (the SFC
   add-step / add-transition form, the retarget fields) undid the whole
   document; every text field in a diagram now undoes its own typing.
+- **SFC: the variables panel works.** Declaring or deleting a variable from
+  the SFC diagram's vars panel failed with "unknown op"; `naut sfc edit` now
+  has `declareVar` / `deleteVar` (same payloads as Ladder's). (Needs the
+  matching `naut` CLI.)
+- **Compact variable headers list every variable.** A one-line section
+  (`VAR A : BOOL; B : BOOL; END_VAR`) or several declarations on one line
+  showed only the first in the FBD and SFC vars panels. Deleting one of them
+  (FBD, Ladder, SFC) now removes just that declaration; Ladder used to refuse.
 - **A hung CLI can't stall a diagram.** Every short CLI call (diagram graph
   and edit, version) now times out after 15 seconds, and an acceptance-test
   run after 5 minutes; the ladder and SFC edit queues previously waited

@@ -13,6 +13,7 @@
 	import { annotate, type Ann, type LdElement, type LdModel, type RungStatus } from './ladder';
 	import { layoutRung, rungMinWidth, L, type LSpot, type LNode } from './ladderLayout';
 	import { live, liveValue, formatLive } from './liveState.svelte';
+	import { readClip, typingTarget, writeClip } from './clipboard';
 
 	type Diag = { line: number; message: string; severity: string };
 
@@ -489,6 +490,8 @@
 		const node = sel ? findSelected(sel) : undefined;
 		if (!sel || !node) return false;
 		clipboard = { el: JSON.parse(JSON.stringify(node.el)), coil: sel.coil !== undefined };
+		// Also onto the system clipboard, so another ladder panel can paste it.
+		writeClip('ld', clipboard);
 		return true;
 	}
 
@@ -511,7 +514,13 @@
 	}
 
 	function doPaste(): boolean {
-		const clip = clipboard;
+		// The system clipboard's copy (possibly from another panel) wins;
+		// readClip falls back to this panel's own when there's none.
+		void readClip<{ el: LdElement; coil: boolean }>('ld').then((c) => pasteElement(c ?? clipboard));
+		return true;
+	}
+
+	function pasteElement(clip: { el: LdElement; coil: boolean } | null): boolean {
 		if (!clip) return false;
 		const rungName = selected?.rung ?? (model.rungs.length ? model.rungs[model.rungs.length - 1].name : '');
 		if (!rungName) return false;
@@ -534,10 +543,7 @@
 	const handledKeys = new WeakSet<Event>();
 	function handleKey(ev: KeyboardEvent) {
 		if (!editable || handledKeys.has(ev)) return;
-		const ae = document.activeElement;
-		if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return;
-		const t = ev.target as HTMLElement | null;
-		if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+		if (typingTarget(ev)) return;
 		const ctrl = ev.ctrlKey || ev.metaKey;
 		const node = selected ? findSelected(selected) : undefined;
 		let acted = false;

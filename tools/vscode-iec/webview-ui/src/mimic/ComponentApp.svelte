@@ -14,6 +14,8 @@
 	// list and the host patches just that key, rewriting the whole file as
 	// one WorkspaceEdit, so text undo/redo covers the session exactly like
 	// the mimic editor.
+	import ShortcutHelp from '../ShortcutHelp.svelte';
+	import { COMPONENT_SHORTCUTS, hintLine } from '../shortcuts';
 	import { resolvedPortDir, type PortDir as HmiPortDir } from '@joyautomation/nautilus-hmi/mimic';
 	import { registry, DEMO_PROPS } from './registry';
 	import { cs, postComponentPortsOp, announceComponentReady, reopenAsText, type Port } from './componentState.svelte';
@@ -199,7 +201,7 @@
 		if (e.key === 'Escape') selected = null;
 	}
 
-	const hint = 'drag a dot to move it · double-click a dot to remove · double-click the outline to add · Esc deselects';
+	const hint = hintLine(COMPONENT_SHORTCUTS);
 </script>
 
 <svelte:window onpointermove={onmove} onpointerup={onup} {onkeydown} />
@@ -208,6 +210,8 @@
 	<header>
 		<span class="title">{cs.title}</span>
 		{#if cs.doc}<span class="name">· {cs.doc.component}</span>{/if}
+		<span class="spacer"></span>
+		<ShortcutHelp groups={COMPONENT_SHORTCUTS} />
 	</header>
 
 	{#if cs.error && !cs.doc}
@@ -304,7 +308,7 @@
 
 	{/if}
 
-	<footer>{hint}</footer>
+	<footer title={hint}>{hint}</footer>
 </div>
 
 <style>
@@ -327,6 +331,9 @@
 	}
 	.name {
 		color: var(--nx-muted);
+	}
+	.spacer {
+		flex: 1;
 	}
 	.err {
 		flex: none;

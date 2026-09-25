@@ -4,6 +4,9 @@ import assert from 'node:assert/strict';
 import {
 	attachedTransitions,
 	cascadeDeleteOps,
+	clipSteps,
+	deleteStepsOp,
+	pasteStepsOp,
 	commentId,
 	computeRanksAndColumns,
 	connectHandlePos,
@@ -383,4 +386,34 @@ test('layoutSfc: a jump glyph clears the step\'s action table', () => {
 	const tEmpty = layout.trans.find((r) => r.t.id === 'tr:t_empty')!;
 	// three rows + the "+ action" row, 16 px each
 	assert.ok(tEmpty.jump!.y - 9 >= drain.y + 4 * 16, `jump at ${tEmpty.jump!.y} overlaps Drain's action rows`);
+});
+
+// ── clipboard ────────────────────────────────────────────────────────────────
+
+test('clipSteps: steps with their associations, and only the transitions wholly inside', () => {
+	const m = linearModel();
+	m.steps[1].actions = [{ qualifier: 'L', target: 'Valve', time: 'T#2S', line: 3 }];
+	const lay = layoutSfc(m);
+	const clip = clipSteps(m, lay, ['st:Fill', 'st:Drain'])!;
+	assert.deepEqual(clip.steps.map((s) => s.name), ['Fill', 'Drain']);
+	assert.deepEqual(clip.steps[0].actions, [{ qualifier: 'L', target: 'Valve', time: 'T#2S' }]);
+	// t2 (Fill→Drain) comes along; t1/t3 each have an end outside.
+	assert.deepEqual(clip.trans, [{ from: ['Fill'], to: ['Drain'], cond: 'Full' }]);
+	assert.equal(clipSteps(m, lay, ['st:Nope']), undefined);
+});
+
+test('pasteStepsOp: relative arrangement kept, placed clear of the chart', () => {
+	const m = linearModel();
+	const lay = layoutSfc(m);
+	const clip = clipSteps(m, lay, ['st:Fill', 'st:Drain'])!;
+	const op = pasteStepsOp(clip, lay) as { type: string; steps: { x: number; y: number }[] };
+	assert.equal(op.type, 'pasteSteps');
+	const [a, b] = op.steps;
+	assert.equal(b.y - a.y, clip.steps[1].y - clip.steps[0].y);
+	for (const s of op.steps) assert.ok(s.x >= lay.width, 'lands right of the existing chart');
+});
+
+test('deleteStepsOp: the steps plus the transitions between them, one op', () => {
+	const op = deleteStepsOp(linearModel(), ['st:Fill', 'st:Drain']);
+	assert.deepEqual(op, { type: 'deleteSelection', nodes: ['st:Fill', 'st:Drain', 'tr:t2'] });
 });

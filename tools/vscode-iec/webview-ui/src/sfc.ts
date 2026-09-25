@@ -584,3 +584,72 @@ export function diffSfc(base: SfcModel, head: SfcModel): SfcModel {
 		layout: head.layout,
 	};
 }
+
+// ── clipboard (copy / cut / paste of steps) ─────────────────────────────────
+
+/** What a copy of SFC steps carries: each step's name, associations and
+ * position, plus the transitions WHOLLY inside the selection (both ends
+ * copied) — a transition to a step left behind would paste dangling. */
+export type SfcClip = {
+	steps: { name: string; actions: { qualifier: string; target: string; time?: string }[]; x: number; y: number }[];
+	trans: { name?: string; from: string[]; to: string[]; cond: string }[];
+};
+
+/** The transitions whose every FROM and TO step is in `names`. */
+export function innerTransitions(model: SfcModel, names: Set<string>): SfcTransition[] {
+	const inSet = (n: string) => names.has(n.toLowerCase());
+	return (model.trans ?? []).filter((t) => t.from.length > 0 && t.to.length > 0 && t.from.every(inSet) && t.to.every(inSet));
+}
+
+export function clipSteps(model: SfcModel, layout: SfcLayout, ids: string[]): SfcClip | undefined {
+	const placed = new Map(layout.steps.map((p) => [p.id, p]));
+	const steps: SfcClip['steps'] = [];
+	for (const id of ids) {
+		const p = placed.get(id);
+		if (!p) continue;
+		steps.push({
+			name: p.step.name,
+			actions: (p.step.actions ?? []).map((a) => (a.time ? { qualifier: a.qualifier, target: a.target, time: a.time } : { qualifier: a.qualifier, target: a.target })),
+			x: p.x,
+			y: p.y
+		});
+	}
+	if (!steps.length) return undefined;
+	const names = new Set(steps.map((s) => s.name.toLowerCase()));
+	const trans = innerTransitions(model, names).map((t) => ({
+		...(t.name ? { name: t.name } : {}),
+		from: [...t.from],
+		to: [...t.to],
+		cond: t.cond
+	}));
+	return { steps, trans };
+}
+
+/** The pasteSteps op for a clip: the copies keep their relative
+ * arrangement and land in a clear column to the right of the current
+ * chart, top-aligned with it — never on top of an existing step. */
+export function pasteStepsOp(clip: SfcClip, layout: SfcLayout): Record<string, unknown> {
+	const minX = Math.min(...clip.steps.map((s) => s.x));
+	const minY = Math.min(...clip.steps.map((s) => s.y));
+	const top = layout.steps.length ? Math.min(...layout.steps.map((p) => p.y)) : G.MARGIN;
+	// layout.width spans the action tables and notes too, not just the boxes.
+	const left = layout.steps.length ? layout.width + 20 : G.MARGIN;
+	return {
+		type: 'pasteSteps',
+		steps: clip.steps.map((s) => ({
+			name: s.name,
+			actions: s.actions,
+			x: Math.round(left + (s.x - minX)),
+			y: Math.round(top + (s.y - minY))
+		})),
+		trans: clip.trans
+	};
+}
+
+/** One deleteSelection op for a set of steps: the steps plus every
+ * transition wholly between them (what a cut copied along). */
+export function deleteStepsOp(model: SfcModel, ids: string[]): Record<string, unknown> {
+	const steps = (model.steps ?? []).filter((s) => ids.includes(s.id));
+	const names = new Set(steps.map((s) => s.name.toLowerCase()));
+	return { type: 'deleteSelection', nodes: [...steps.map((s) => s.id), ...innerTransitions(model, names).map((t) => t.id)] };
+}

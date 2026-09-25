@@ -506,6 +506,10 @@
 			</div>
 		</div>
 		<button class="del" onclick={deleteSel}>Delete label</button>
+	{:else if sel?.kind === 'multi'}
+		<h4>Equipment <span class="dim">· {sel.ids.length} selected</span></h4>
+		<p class="note">{sel.ids.join(', ')}</p>
+		<p class="note">Ctrl+C / Ctrl+X copy or cut them (with the pipes between them), Ctrl+V pastes, Ctrl+D duplicates, arrows nudge, Del deletes. Ctrl-click adds or removes one.</p>
 	{:else if sel?.kind === 'nodes'}
 		<h4>Nodes <span class="dim">· {sel.pipeId}</span></h4>
 		<p class="note">{sel.indices.length} point{sel.indices.length === 1 ? '' : 's'} selected on this pipe.</p>

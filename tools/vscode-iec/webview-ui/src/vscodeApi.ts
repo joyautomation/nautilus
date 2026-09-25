@@ -58,6 +58,9 @@ export type FbdEditOp = {
 	y?: number;
 	entries?: { node: string; x: number; y: number }[];
 	nodes?: string[];
+	/** duplicate from a clipboard snapshot: references outside the
+	 * selection stay wired (a cut's paste). */
+	keepRefs?: boolean;
 	pou?: string;
 };
 

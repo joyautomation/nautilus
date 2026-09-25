@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/internal/hdrvars"
 	"github.com/joyautomation/nautilus/lang/internal/seed"
 )
 
@@ -279,35 +280,14 @@ func scanSFCComments(lines []string, startLine, endLine int) []Comment {
 }
 
 // ── header variable scan ─────────────────────────────────────────────────
-// Line-based, mirroring lang/ld's scanVars / lang/fbd's parseVarDecls —
-// deliberately re-derived from raw text (rather than prog.VarBlocks, which
+// Deliberately re-derived from raw text (rather than prog.VarBlocks, which
 // holds parsed Expression initializers, not source text) so Init is the
-// verbatim initializer text an editor can round-trip.
-
-var sfcVarSectionRe = regexp.MustCompile(`(?i)^\s*(VAR_EXTERNAL|VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT|VAR)\s*$`)
-var sfcVarDeclLineRe = regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^;:=]+?)\s*(?::=\s*([^;]+?)\s*)?;`)
-
+// verbatim initializer text an editor can round-trip. The shared hdrvars
+// scanner (also lang/fbd's) reads compact one-line sections too.
 func scanVars(header string) []VarDecl {
 	var out []VarDecl
-	section := ""
-	for i, line := range strings.Split(header, "\n") {
-		if m := sfcVarSectionRe.FindStringSubmatch(line); m != nil {
-			section = strings.ToUpper(m[1])
-			continue
-		}
-		if strings.EqualFold(strings.TrimSpace(line), "END_VAR") {
-			section = ""
-			continue
-		}
-		if section == "" {
-			continue
-		}
-		if m := sfcVarDeclLineRe.FindStringSubmatch(line); m != nil {
-			out = append(out, VarDecl{
-				Name: m[1], Type: strings.TrimSpace(m[2]), Init: strings.TrimSpace(m[3]),
-				Section: section, Line: i + 1,
-			})
-		}
+	for _, d := range hdrvars.Scan(header) {
+		out = append(out, VarDecl{Name: d.Name, Type: d.Type, Init: d.Init, Section: d.Section, Line: d.Line})
 	}
 	return out
 }

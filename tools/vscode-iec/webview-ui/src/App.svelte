@@ -30,6 +30,9 @@
 	import { vscode, postOp, pouFromFile, setSeedPou, withSeed } from './vscodeApi';
 	import { setRects, updateRect } from './diagState.svelte';
 	import { live, setLive, setVarBounds } from './liveState.svelte';
+	import { readClip, typingTarget, writeClip } from './clipboard';
+	import ShortcutHelp from './ShortcutHelp.svelte';
+	import { FBD_SHORTCUTS, LD_SHORTCUTS, SFC_SHORTCUTS, hintLine } from './shortcuts';
 
 	const nodeTypes = { fbd: FbdNode };
 	const edgeTypes = { fbd: FbdEdge };
@@ -55,6 +58,8 @@
 	let syncState = $state('unknown');
 	let title = $state('FBD');
 	let hint = $state(true);
+	const shortcutGroups = $derived(mode === 'ld' ? LD_SHORTCUTS : mode === 'sfc' ? SFC_SHORTCUTS : FBD_SHORTCUTS);
+	const hintText = $derived(hintLine(shortcutGroups));
 	let diffing = $state(false);
 	let error = $state('');
 	let structureKey = $state('');
@@ -231,7 +236,7 @@
 	}
 
 	type Msg =
-		| { type: 'model'; model: FbdModel; title?: string }
+		| { type: 'model'; model: FbdModel; title?: string; source?: string }
 		| { type: 'diff'; base: FbdModel; head: FbdModel; title?: string }
 		| { type: 'ldModel'; model: LdModel; title?: string; readOnly?: boolean }
 		| { type: 'ldDiff'; base: LdModel; head: LdModel; title?: string }
@@ -250,6 +255,7 @@
 		if (msg.type === 'model') {
 			mode = 'fbd';
 			readOnly = false;
+			fbdSource = msg.source;
 			noteBlank(msg.model.blank, msg.title);
 			title = (msg.model.name ? msg.model.name + ' — ' : '') + (msg.title ?? '');
 			error = '';
@@ -507,31 +513,67 @@
 		selectedIds = sel.map((n) => n.id).filter(Boolean);
 	}
 
-	// ── copy / paste ────────────────────────────────────────────────────────
-	// Ctrl+C captures the selection; Ctrl+V posts ONE duplicate op — Go
-	// copies the statements behind the ids with fresh names and keeps
-	// references between them consistent.
+	// ── copy / cut / paste / select all ────────────────────────────────────
+	// Ctrl+C captures the selection's ids plus the source they resolve
+	// against (the host sends it with every model); Ctrl+V posts ONE
+	// duplicate op — Go copies the statements behind the ids with fresh
+	// names and keeps references between them consistent. Pasting into the
+	// file they came from, uncut, duplicates in place; otherwise (after a
+	// cut, or into another .fbd via the system clipboard) the snapshot is
+	// the source and the copies land at the end of the FBD block.
+	type FbdClip = { nodes: string[]; source?: string; cut?: boolean };
 	let selectedIds: string[] = [];
-	let clipboard: string[] = [];
+	let fbdSource: string | undefined;
+	function copySelection(cut = false): boolean {
+		const ids = selectedIds.filter((id) => knownIds.has(id));
+		if (!ids.length) return false;
+		writeClip('fbd', { nodes: ids, source: fbdSource, cut } satisfies FbdClip);
+		return true;
+	}
+	function cutSelection(): boolean {
+		if (!copySelection(true)) return false;
+		// The same batched delete the Del key posts (onbeforedelete).
+		postOp({ type: 'deleteNode', nodes: selectedIds.filter((id) => knownIds.has(id)) });
+		return true;
+	}
+	async function pasteClip() {
+		const clip = await readClip<FbdClip>('fbd');
+		if (!clip?.nodes?.length) return;
+		const inPlace = !clip.source || (clip.source === fbdSource && !clip.cut);
+		postOp(
+			inPlace
+				? { type: 'duplicate', nodes: clip.nodes }
+				: { type: 'duplicate', nodes: clip.nodes, text: clip.source, keepRefs: clip.cut || undefined }
+		);
+	}
+	function selectAll() {
+		nodes = nodes.map((n) => ({ ...n, selected: true }));
+		selectedIds = nodes.map((n) => n.id);
+		selectedCount = selectedIds.length;
+	}
 	function onkeydown(ev: KeyboardEvent) {
 		if (diffing || mode !== 'fbd') return;
 		// Typing in any editor (float editor, palette field) is never a
 		// canvas shortcut.
-		const el = document.activeElement;
-		if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+		if (typingTarget(ev)) return;
 		if (ev.key.startsWith('Arrow') && !ev.ctrlKey && !ev.metaKey && selectedIds.length) {
 			clearTimeout(arrowTimer);
 			arrowTimer = setTimeout(persistKeyboardMove, 350);
 			return;
 		}
-		if (!(ev.ctrlKey || ev.metaKey)) return;
-		if (ev.key === 'c' && selectedIds.length) {
-			clipboard = [...selectedIds];
-			ev.preventDefault();
-		} else if (ev.key === 'v' && clipboard.length) {
-			postOp({ type: 'duplicate', nodes: clipboard });
-			ev.preventDefault();
+		if (!(ev.ctrlKey || ev.metaKey) || ev.altKey) return;
+		const k = ev.key.toLowerCase();
+		let acted = false;
+		if (k === 'c') acted = copySelection();
+		else if (k === 'x') acted = cutSelection();
+		else if (k === 'v') {
+			void pasteClip();
+			acted = true;
+		} else if (k === 'a') {
+			selectAll();
+			acted = true;
 		}
+		if (acted) ev.preventDefault();
 	}
 </script>
 
@@ -549,12 +591,10 @@
 				class="ropill"
 				title="An L5X is a Rockwell export: it renders as ladder here, but edits belong in Logix Designer or in the nautilus source it was generated from."
 			>read-only · Logix export</span>
-		{:else if mode === 'ld'}
-			<span class="hint">click: select · click a rung's name: select the rung · dblclick: retag / edit args / rename rung · ⊕: insert · Del: delete element or rung · N: NO/NC · M: coil mode · B: branch around · Ctrl+C/X/V: copy cut paste · Esc: cancel drag</span>
-		{:else if mode === 'sfc'}
-			<span class="hint">click: select · dblclick: rename / edit condition / edit action / edit ST body · drag a step body: pin layout · drag its ⊙ handle onto another step: connect · Del: delete (offers cascade for a step with attached transitions) · Esc: cancel connect</span>
 		{:else if hint}
-			<span class="hint">double-click: edit & rename · drag pin→pin: wire (+ adds an input) · drag node / arrow keys: pin layout · Del: delete / disconnect · Ctrl+C/V: copy & paste</span>
+			<!-- Generated from the same table as the "?" popover; the full
+			     text is the tooltip when a narrow pane cuts it off. -->
+			<span class="hint" title={hintText}>{hintText}</span>
 		{/if}
 		<span class="spacer"></span>
 		{#if problemCount > 0 && !diffing}
@@ -594,6 +634,7 @@
 			{#if hasPins && mode === 'fbd'}
 				<button title="Clear all pinned positions (back to full auto-layout)" onclick={() => postOp({ type: 'clearLayout' })}>auto layout</button>
 			{/if}
+			<ShortcutHelp groups={shortcutGroups} />
 			<button title="All header declarations, including ones the logic doesn't reference yet" onclick={(e) => { e.stopPropagation(); varsOpen = !varsOpen; paletteOpen = false; }}>vars</button>
 			{#if mode === 'fbd'}
 				<button title="Insert an instruction" onclick={(e) => { e.stopPropagation(); paletteOpen = !paletteOpen; varsOpen = false; }}>+ add</button>

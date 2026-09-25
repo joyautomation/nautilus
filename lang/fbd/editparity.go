@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/joyautomation/nautilus/lang/internal/hdrvars"
 )
 
 // Editor-parity ops: comments, variable deletion, statement duplication
@@ -107,10 +109,27 @@ func (b *modelBuilder) opDeleteVar(op EditOp) ([]TextEdit, error) {
 	name := strings.TrimSpace(op.NewName)
 	for _, v := range b.m.Vars {
 		if strings.EqualFold(v.Name, name) {
-			return []TextEdit{{Line: v.Line, Col: 1, EndLine: v.Line + 1, EndCol: 1}}, nil
+			return deleteDeclEdit(b.src, v.Line, v.Name)
 		}
 	}
 	return nil, fmt.Errorf("fbd edit: no declaration named %q", name)
+}
+
+// deleteDeclEdit removes one declaration from its line: the whole line when
+// it stands alone, else just its `name : TYPE;` — a compact header
+// (`VAR A : BOOL; B : BOOL; END_VAR`) keeps its neighbours.
+func deleteDeclEdit(lines []string, line int, name string) ([]TextEdit, error) {
+	if line < 1 || line > len(lines) {
+		return nil, fmt.Errorf("fbd edit: declaration line %d out of range", line)
+	}
+	col, end, whole, ok := hdrvars.DeleteSpan(lines[line-1], name)
+	if !ok {
+		return nil, fmt.Errorf("fbd edit: can't locate the declaration of %q", name)
+	}
+	if whole {
+		return []TextEdit{{Line: line, Col: 1, EndLine: line + 1, EndCol: 1}}, nil
+	}
+	return []TextEdit{{Line: line, Col: col, EndLine: line, EndCol: end}}, nil
 }
 
 // ── duplicate (copy/paste) ──────────────────────────────────────────────────
@@ -125,6 +144,50 @@ func (b *modelBuilder) opDeleteVar(op EditOp) ([]TextEdit, error) {
 // element's configuration, not wiring. The copies land right after the
 // originals; the `_`/undeclared diagnostics are the intended breadcrumbs.
 func (b *modelBuilder) opDuplicate(op EditOp) ([]TextEdit, error) {
+	if strings.TrimSpace(op.Text) != "" {
+		return b.opPasteFrom(op)
+	}
+	text, last, err := b.duplicateText(op.Nodes, b.nameTaken, false)
+	if err != nil {
+		return nil, err
+	}
+	return []TextEdit{{Line: last + 1, Col: 1, EndLine: last + 1, EndCol: 1, NewText: text}}, nil
+}
+
+// opPasteFrom is duplicate against a SNAPSHOT: op.Text is the source the
+// node ids were copied from (this file earlier — before a cut deleted
+// them — or another .fbd entirely). The statements come from the snapshot;
+// names are freshened only where they collide with THIS file (a cut then
+// paste keeps its names), and the copies land just above END_FBD. With
+// KeepRefs (a cut) references outside the selection stay wired — the
+// originals are gone, so nothing is silently tapped; a plain copy severs
+// them exactly like duplicate.
+func (b *modelBuilder) opPasteFrom(op EditOp) ([]TextEdit, error) {
+	snap, err := buildModel(op.Text)
+	if err != nil {
+		return nil, fmt.Errorf("fbd edit: the copied source no longer parses: %v", err)
+	}
+	text, _, err := snap.duplicateText(op.Nodes, b.nameTaken, op.KeepRefs)
+	if err != nil {
+		return nil, err
+	}
+	endFBD := -1
+	for i, line := range b.srcStripped {
+		if strings.EqualFold(strings.TrimSpace(line), "END_FBD") {
+			endFBD = i + 1
+		}
+	}
+	if endFBD == -1 {
+		return nil, fmt.Errorf("fbd edit: no END_FBD to paste before")
+	}
+	return []TextEdit{{Line: endFBD, Col: 1, EndLine: endFBD, EndCol: 1, NewText: text}}, nil
+}
+
+// duplicateText renders copies of the statements behind ids (resolved in
+// b), renaming each owned name that taken reports in use to a fresh _copy
+// name; unless keepRefs, references outside the selection sever to `_`.
+// It returns the text and the last source line the originals occupy.
+func (b *modelBuilder) duplicateText(ids []string, inUse func(string) bool, keepRefs bool) (string, int, error) {
 	type stmt struct {
 		span  exprPos
 		own   []string // names this statement introduces
@@ -143,7 +206,7 @@ func (b *modelBuilder) opDuplicate(op EditOp) ([]TextEdit, error) {
 		seen[span] = s
 		stmts = append(stmts, s)
 	}
-	for _, id := range op.Nodes {
+	for _, id := range ids {
 		switch {
 		case strings.HasPrefix(id, "b:w."):
 			name := strings.TrimPrefix(id, "b:w.")
@@ -190,7 +253,7 @@ func (b *modelBuilder) opDuplicate(op EditOp) ([]TextEdit, error) {
 		// whatever references them; skipping them keeps the gesture forgiving.
 	}
 	if len(stmts) == 0 {
-		return nil, fmt.Errorf("fbd edit: nothing copyable selected (blocks, coils, and instances copy; input chips ride their consumers)")
+		return "", 0, fmt.Errorf("fbd edit: nothing copyable selected (blocks, coils, and instances copy; input chips ride their consumers)")
 	}
 	sort.Slice(stmts, func(i, j int) bool {
 		a, c := stmts[i].span, stmts[j].span
@@ -203,7 +266,7 @@ func (b *modelBuilder) opDuplicate(op EditOp) ([]TextEdit, error) {
 	// Fresh names for everything owned by the copied set.
 	renames := map[string]string{}
 	taken := func(name string) bool {
-		if b.nameTaken(name) {
+		if inUse(name) {
 			return true
 		}
 		for _, nn := range renames {
@@ -216,6 +279,10 @@ func (b *modelBuilder) opDuplicate(op EditOp) ([]TextEdit, error) {
 	for _, s := range stmts {
 		for _, own := range s.own {
 			if _, done := renames[own]; done {
+				continue
+			}
+			if !taken(own) {
+				renames[own] = own // free here (a cut, or another file): keep it
 				continue
 			}
 			fresh := own + "_copy"
@@ -234,11 +301,16 @@ func (b *modelBuilder) opDuplicate(op EditOp) ([]TextEdit, error) {
 	var out strings.Builder
 	for _, s := range stmts {
 		var cut []exprPos
-		for _, e := range s.exprs {
-			severRefs(e, owned, &cut)
+		if !keepRefs {
+			for _, e := range s.exprs {
+				severRefs(e, owned, &cut)
+			}
 		}
 		text := b.stmtLines(s.span, cut)
 		for old, fresh := range renames {
+			if old == fresh {
+				continue
+			}
 			text = regexp.MustCompile(`\b`+regexp.QuoteMeta(old)+`\b`).ReplaceAllString(text, fresh)
 		}
 		out.WriteString(text)
@@ -246,7 +318,7 @@ func (b *modelBuilder) opDuplicate(op EditOp) ([]TextEdit, error) {
 			last = s.span.endLine
 		}
 	}
-	return []TextEdit{{Line: last + 1, Col: 1, EndLine: last + 1, EndCol: 1, NewText: out.String()}}, nil
+	return out.String(), last, nil
 }
 
 // severRefs collects the spans of reference leaves (variables, wires,

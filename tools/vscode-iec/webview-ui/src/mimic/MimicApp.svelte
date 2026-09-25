@@ -3,6 +3,8 @@
 	// the canvas, and the context props panel. Document state arrives from
 	// the extension host (mimicDoc / mimicError / mimicTags messages); every
 	// gesture goes back as an op.
+	import ShortcutHelp from '../ShortcutHelp.svelte';
+	import { MIMIC_SHORTCUTS, hintLine } from '../shortcuts';
 	import { announceReady, ed, reopenAsText, setSnapToGrid, toggleLive } from './mimicState.svelte';
 	import EditorCanvas from './EditorCanvas.svelte';
 	import EquipPalette from './EquipPalette.svelte';
@@ -64,6 +66,10 @@
 				})()) ||
 			(s.kind === 'label' && !(d.labels ?? [])[s.index]);
 		if (gone) ed.selection = null;
+		else if (s.kind === 'multi') {
+			const left = s.ids.filter((id) => (d.equipment ?? []).some((e) => e.id === id));
+			if (left.length !== s.ids.length) ed.selection = left.length > 1 ? { kind: 'multi', ids: left } : left.length ? { kind: 'equipment', id: left[0] } : null;
+		}
 	});
 
 	// Ports editing is scoped to one selected equipment instance — drop it
@@ -93,7 +99,7 @@
 					? `click to place ${ed.placeComponent} · Esc cancels`
 					: ed.tool === 'label'
 						? 'click to place a label · Esc cancels'
-						: 'click selects · drag moves · drag a pipe end onto a port to attach it, off to detach · shift-click a vertex to multi-select nodes · arrows nudge (Shift = grid) · Del deletes'
+						: hintLine(MIMIC_SHORTCUTS)
 	);
 
 	function setTool(t: 'select' | 'pipe' | 'label') {
@@ -121,6 +127,7 @@
 			Snap: {ed.snapToGrid ? 'On' : 'Off'}
 		</button>
 		<span class="spacer"></span>
+		<ShortcutHelp groups={MIMIC_SHORTCUTS} />
 		<!-- same toggle as the diagrams' live pill and the status-bar item -->
 		<button
 			class="live nx-pill"
@@ -160,7 +167,7 @@
 		</div>
 	{/if}
 
-	<footer>{hint}</footer>
+	<footer title={hint}>{hint}</footer>
 
 	<datalist id="mimic-tags">
 		{#each Object.keys(ed.tags ?? {}) as t (t)}<option value={t}></option>{/each}

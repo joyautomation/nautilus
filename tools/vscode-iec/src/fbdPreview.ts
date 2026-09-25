@@ -80,6 +80,7 @@ export type FbdEditOp = {
   y?: number;
   entries?: { node: string; x: number; y: number }[];
 	nodes?: string[];
+  keepRefs?: boolean;
 };
 
 /** Mirror of lang/fbd.TextEdit: 1-based, end-exclusive. */
@@ -275,11 +276,14 @@ export function docTitle(doc: vscode.TextDocument): string {
 }
 
 async function postModel(webview: vscode.Webview, doc: vscode.TextDocument): Promise<void> {
-  const res = await fbdGraph(doc.getText());
+  const source = doc.getText();
+  const res = await fbdGraph(source);
   if ("error" in res) {
     void webview.postMessage({ type: "error", message: res.error, title: docTitle(doc) });
   } else {
-    void webview.postMessage({ type: "model", model: res.model, title: docTitle(doc) });
+    // `source` rides along for the clipboard: a copy snapshots the text its
+    // node ids resolve against, so a cut (or another file) can still paste.
+    void webview.postMessage({ type: "model", model: res.model, title: docTitle(doc), source });
     postDiagnostics(webview, doc);
   }
 }
@@ -521,11 +525,12 @@ export class FbdPreview implements vscode.Disposable {
       if (this.diffBase.headSrc === undefined) await this.postDiff(doc);
       return;
     }
-    const res = await fbdGraph(doc.getText());
+    const source = doc.getText();
+    const res = await fbdGraph(source);
     if ("error" in res) {
       this.post({ type: "error", message: res.error, title: docTitle(doc) });
     } else {
-      this.post({ type: "model", model: res.model, title: docTitle(doc) });
+      this.post({ type: "model", model: res.model, title: docTitle(doc), source });
       postDiagnostics(this.panel.webview, doc);
     }
   }

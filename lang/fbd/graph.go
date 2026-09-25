@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/internal/hdrvars"
 	"github.com/joyautomation/nautilus/lang/internal/seed"
 	"github.com/joyautomation/nautilus/lang/ir"
 )
@@ -795,42 +796,13 @@ func pouName(header string) string {
 	return ""
 }
 
-// Header declaration scanning for the variables panel. Line-based like
-// opDeclareVar (section keywords alone on a line), permissive about section
-// kinds so FUNCTION_BLOCK POUs list their pins too. One declaration per
-// line: `name : TYPE [:= init];` — comment-only and blank lines skip.
-//
-// Scanned on comment-stripped text throughout (see stripComments), so a
-// commented-out section keyword or example declaration can't be read as
-// real header structure.
-var varSectionOpenRe = regexp.MustCompile(`(?i)^\s*(VAR_EXTERNAL|VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT|VAR)\s*$`)
-var varDeclLineRe = regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^;:=]+?)\s*(?::=\s*([^;]+?)\s*)?;`)
-
+// Header declaration scanning for the variables panel — the shared
+// hdrvars scanner, which reads compact forms (several declarations on a
+// line, a whole `VAR … END_VAR` on one line) and skips comments.
 func parseVarDecls(header string) []VarDecl {
 	var out []VarDecl
-	section := ""
-	for i, line := range strings.Split(stripComments(header), "\n") {
-		if m := varSectionOpenRe.FindStringSubmatch(line); m != nil {
-			section = strings.ToUpper(m[1])
-			continue
-		}
-		trimmed := strings.ToUpper(strings.TrimSpace(line))
-		if trimmed == "END_VAR" {
-			section = ""
-			continue
-		}
-		if section == "" {
-			continue
-		}
-		if m := varDeclLineRe.FindStringSubmatch(line); m != nil {
-			out = append(out, VarDecl{
-				Name:    m[1],
-				Type:    strings.TrimSpace(m[2]),
-				Init:    strings.TrimSpace(m[3]),
-				Section: section,
-				Line:    i + 1,
-			})
-		}
+	for _, d := range hdrvars.Scan(header) {
+		out = append(out, VarDecl{Name: d.Name, Type: d.Type, Init: d.Init, Section: d.Section, Line: d.Line})
 	}
 	return out
 }

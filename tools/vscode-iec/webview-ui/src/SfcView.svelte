@@ -12,6 +12,10 @@
 	import {
 		attachedTransitions,
 		cascadeDeleteOps,
+		clipSteps,
+		deleteStepsOp,
+		pasteStepsOp,
+		type SfcClip,
 		commentId,
 		connectHandlePos,
 		layoutSfc,
@@ -26,6 +30,7 @@
 		type TransRoute
 	} from './sfc';
 	import { live, liveValue } from './liveState.svelte';
+	import { readClip, typingTarget, writeClip } from './clipboard';
 
 	type Diag = { line: number; message: string; severity: string };
 
@@ -95,14 +100,41 @@
 		| { kind: 'comment'; index: number }
 		| null;
 	let selected = $state<Sel>(null);
-	const isSelStep = (id: string) => selected?.kind === 'step' && selected.id === id;
+	// Extra steps in a multi-selection (Ctrl/Shift-click, Ctrl+A) — the
+	// primary one stays in `selected`, so every single-step gesture (add
+	// transition, the cascade delete offer) keeps working unchanged.
+	let multi = $state<string[]>([]);
+	$effect.pre(() => {
+		if (selected?.kind !== 'step' && multi.length) multi = [];
+	});
+	const selStepIds = (): string[] =>
+		selected?.kind === 'step' ? [selected.id, ...multi.filter((id) => id !== (selected as { id: string }).id)] : [];
+	const isSelStep = (id: string) => (selected?.kind === 'step' && selected.id === id) || multi.includes(id);
 	const isSelTrans = (id: string) => selected?.kind === 'trans' && selected.id === id;
 	const isSelAssoc = (step: string, i: number) => selected?.kind === 'assoc' && selected.step === step && selected.index === i;
 	const isSelComment = (i: number) => selected?.kind === 'comment' && selected.index === i;
 
+	const additive = (ev: Event) => {
+		const e = ev as MouseEvent;
+		return !!(e.ctrlKey || e.metaKey || e.shiftKey);
+	};
 	function selectStep(ev: Event, id: string) {
 		ev.stopPropagation();
+		if (additive(ev)) {
+			// Toggle this step in/out of the multi-selection.
+			const cur = selStepIds();
+			const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+			selected = next.length ? { kind: 'step', id: next[0] } : null;
+			multi = next.slice(1);
+			return;
+		}
+		multi = [];
 		selected = { kind: 'step', id };
+	}
+	function selectAllSteps() {
+		const ids = (model.steps ?? []).map((s) => s.id);
+		selected = ids.length ? { kind: 'step', id: ids[0] } : null;
+		multi = ids.slice(1);
 	}
 	function selectTrans(ev: Event, id: string) {
 		ev.stopPropagation();
@@ -298,6 +330,8 @@
 	function beginDrag(ev: PointerEvent, p: PlacedStep) {
 		if (!editable) return;
 		ev.stopPropagation();
+		if (additive(ev)) return; // a modifier-click toggles selection (selectStep), never drags
+		if (!isSelStep(p.id)) multi = [];
 		selected = { kind: 'step', id: p.id };
 		drag = { kind: 'move', id: p.id, startX: p.x, startY: p.y, sx: ev.clientX, sy: ev.clientY, started: false };
 	}
@@ -399,6 +433,14 @@
 
 	function requestDeleteSelected() {
 		if (!selected) return;
+		if (selected.kind === 'step' && multi.length) {
+			// A multi-selection deletes as ONE op: the steps and the
+			// transitions wholly between them (transitions reaching outside
+			// stay as Check breadcrumbs, like "step only").
+			post(deleteStepsOp(model, selStepIds()));
+			selected = null;
+			return;
+		}
 		if (selected.kind === 'step') {
 			const id = selected.id;
 			const step = (model.steps ?? []).find((s) => s.id === id);
@@ -467,6 +509,43 @@
 		retargetOpen = null;
 	}
 
+	// ── clipboard: copy / cut / paste selected steps ───────────────────────
+	// A copy carries each step's associations and position, plus the
+	// transitions wholly inside the selection; paste lands the copies in a
+	// clear column right of the chart under their first free names (Go's
+	// pasteSteps). Through the system clipboard, so another .sfc panel can
+	// paste them; this webview's memory otherwise.
+	function doCopy(): boolean {
+		const clip = clipSteps(model, layout, selStepIds());
+		if (!clip) return false;
+		writeClip('sfc', clip);
+		return true;
+	}
+	function doCut(): boolean {
+		if (!doCopy()) return false;
+		post(deleteStepsOp(model, selStepIds()));
+		selected = null;
+		return true;
+	}
+	async function doPaste() {
+		const clip = await readClip<SfcClip>('sfc');
+		if (!clip?.steps?.length) return;
+		post(pasteStepsOp(clip, layout));
+		// Select the copies once they round-trip: they're the new names.
+		const before = new Set((model.steps ?? []).map((s) => s.id));
+		pendingSelectNew = { before, count: clip.steps.length };
+	}
+	let pendingSelectNew = $state<{ before: Set<string>; count: number } | null>(null);
+	$effect(() => {
+		if (!pendingSelectNew) return;
+		const fresh = (model.steps ?? []).filter((s) => !pendingSelectNew!.before.has(s.id)).map((s) => s.id);
+		if (fresh.length >= pendingSelectNew.count) {
+			selected = { kind: 'step', id: fresh[0] };
+			multi = fresh.slice(1);
+			pendingSelectNew = null;
+		}
+	});
+
 	// ── keyboard: Esc cancels a connect drag / closes a popover; Del deletes
 	// the selection (offering the cascade popover for an attached step) ────
 	function handleKey(ev: KeyboardEvent) {
@@ -493,12 +572,28 @@
 			}
 		}
 		if (!editable) return;
-		const ae = document.activeElement;
-		if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return;
+		if (typingTarget(ev)) return;
 		if (ev.key === 'Delete' || ev.key === 'Backspace') {
 			if (!selected) return;
 			requestDeleteSelected();
 			ev.preventDefault();
+			return;
+		}
+		if (!(ev.ctrlKey || ev.metaKey) || ev.altKey) return;
+		const k = ev.key.toLowerCase();
+		let acted = false;
+		if (k === 'c') acted = doCopy();
+		else if (k === 'x') acted = doCut();
+		else if (k === 'v') {
+			void doPaste();
+			acted = true;
+		} else if (k === 'a') {
+			selectAllSteps();
+			acted = true;
+		}
+		if (acted) {
+			ev.preventDefault();
+			ev.stopPropagation();
 		}
 	}
 
@@ -562,6 +657,9 @@
 			<button title="Widen the selected transition into a simultaneous divergence, adding a new parallel step" disabled={!selectedTransId()} onclick={() => openAdd('sim')}>+ parallel branch</button>
 			<button title="Add a diagram note — dblclick to write it" onclick={addNote}>+ comment</button>
 			<span class="sep"></span>
+			<button title="Cut the selected step(s) (Ctrl+X)" disabled={selected?.kind !== 'step'} onclick={() => doCut()}>✂</button>
+			<button title="Copy the selected step(s) with their actions (Ctrl+C)" disabled={selected?.kind !== 'step'} onclick={() => doCopy()}>⧉</button>
+			<button title="Paste steps (Ctrl+V) — to the right of the chart, under free names" onclick={() => void doPaste()}>⎘</button>
 			<button title="Delete the selection (Del) — deleting a step with attached transitions offers a cascade choice" disabled={!selected} onclick={requestDeleteSelected}>✕ delete</button>
 			{#if hasPins}
 				<button title="Clear all pinned step positions (back to full auto-layout)" onclick={() => post({ type: 'clearLayout' })}>auto layout</button>

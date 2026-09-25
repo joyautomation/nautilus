@@ -560,7 +560,8 @@ END_PROGRAM`
 		t.Fatalf("header still parses after delete: %v", err)
 	}
 
-	// Compact one-line headers refuse whole-line deletes.
+	// Compact one-line headers delete just the one declaration, keeping
+	// its neighbours and the section keywords.
 	oneLine := `PROGRAM p
 VAR_EXTERNAL A : BOOL; Out : BOOL; END_VAR
 LD
@@ -568,8 +569,13 @@ LD
     A ( Out )
 END_LD
 END_PROGRAM`
-	if _, err := ApplyEdit(oneLine, EditOp{Type: "deleteVar", Name: "A"}); err == nil {
-		t.Fatal("compact-header delete must be refused")
+	got := step(t, oneLine, EditOp{Type: "deleteVar", Name: "A"})
+	if !strings.Contains(got, "VAR_EXTERNAL Out : BOOL; END_VAR") {
+		t.Fatalf("compact-header delete:\n%s", got)
+	}
+	m, err = Graph(got)
+	if err != nil || len(m.Vars) != 1 || m.Vars[0].Name != "Out" {
+		t.Fatalf("after compact delete: %v %+v", err, m)
 	}
 }
 

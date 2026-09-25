@@ -258,3 +258,70 @@ func TestGhostLifecycle(t *testing.T) {
 		t.Errorf("ghost entry not dropped:\n%s", out4)
 	}
 }
+
+// A compact header — several declarations on one line, or a whole section
+// on one line — lists every variable (it used to list only the first) and
+// deletes just the one declaration.
+func TestCompactHeaderVars(t *testing.T) {
+	src := "PROGRAM P\nVAR A : BOOL; B : BOOL; END_VAR\nVAR_EXTERNAL\n  C : INT; D : INT;\nEND_VAR\nFBD\n  B := AND(A, TRUE);\nEND_FBD\nEND_PROGRAM\n"
+	m, err := Graph(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, v := range m.Vars {
+		got = append(got, v.Section+":"+v.Name)
+	}
+	if strings.Join(got, ",") != "VAR:A,VAR:B,VAR_EXTERNAL:C,VAR_EXTERNAL:D" {
+		t.Fatalf("vars = %v", got)
+	}
+	out := apply(t, src, mustOp(t, src, EditOp{Type: "deleteVar", NewName: "A"}))
+	if !strings.Contains(out, "VAR B : BOOL; END_VAR") {
+		t.Fatalf("compact delete:\n%s", out)
+	}
+	out = apply(t, out, mustOp(t, out, EditOp{Type: "deleteVar", NewName: "D"}))
+	if !strings.Contains(out, "  C : INT;\n") {
+		t.Fatalf("second-on-line delete:\n%s", out)
+	}
+	if _, err := ApplyEdit(src, EditOp{Type: "declareVar", NewName: "b", Value: "BOOL"}); err == nil {
+		t.Error("a compact-line duplicate must be refused")
+	}
+}
+
+// Cut then paste: the copies come from the snapshot taken at cut time, keep
+// their names (free again once the originals are gone) and, with KeepRefs,
+// their wiring — a move, not a severed copy.
+func TestEditPasteFromSnapshot(t *testing.T) {
+	nodes := []string{"b:w.seal", "c:Run"}
+	cut := apply(t, paritySrc, mustOp(t, paritySrc, EditOp{Type: "deleteNode", Nodes: nodes}))
+	if strings.Contains(cut, "seal = OR") {
+		t.Fatalf("cut left the statement:\n%s", cut)
+	}
+	out := apply(t, cut, mustOp(t, cut, EditOp{Type: "duplicate", Nodes: nodes, Text: paritySrc, KeepRefs: true}))
+	if !strings.Contains(out, "seal = OR(Start, Run)") || !strings.Contains(out, "Run := seal") {
+		t.Fatalf("cut+paste must restore the statements, names and wiring intact:\n%s", out)
+	}
+	if strings.Index(out, "Run := seal") > strings.Index(out, "END_FBD") {
+		t.Fatalf("paste must land inside the FBD block:\n%s", out)
+	}
+	if _, err := Graph(out); err != nil {
+		t.Fatalf("pasted source no longer graphs: %v\n%s", err, out)
+	}
+
+	// A plain copy pasted into a file that still has the originals: fresh
+	// names, out-of-selection refs severed — the duplicate rules.
+	out = apply(t, paritySrc, mustOp(t, paritySrc, EditOp{Type: "duplicate", Nodes: nodes, Text: paritySrc}))
+	if !strings.Contains(out, "seal_copy = OR(_, Run_copy)") || !strings.Contains(out, "Run_copy := seal_copy") {
+		t.Fatalf("snapshot copy into the same file:\n%s", out)
+	}
+
+	// Into another file: names that don't collide there are kept.
+	other := "PROGRAM Other\nVAR_EXTERNAL\n  X : BOOL;\nEND_VAR\nFBD\n  X := TRUE\nEND_FBD\nEND_PROGRAM\n"
+	out = apply(t, other, mustOp(t, other, EditOp{Type: "duplicate", Nodes: []string{"b:w.hot"}, Text: paritySrc}))
+	if !strings.Contains(out, "hot = GT(_, 62.0)") {
+		t.Fatalf("cross-file paste:\n%s", out)
+	}
+	if _, err := ApplyEdit(other, EditOp{Type: "duplicate", Nodes: []string{"b:w.nope"}, Text: paritySrc}); err == nil {
+		t.Error("ids that resolve to nothing in the snapshot must error")
+	}
+}

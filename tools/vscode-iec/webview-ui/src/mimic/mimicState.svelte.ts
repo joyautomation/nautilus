@@ -50,7 +50,10 @@ export type Selection =
 	 * `'pipe'` selection (resolving `pipeId`), so the properties panel and
 	 * the pipe-selected highlight/handles keep working from it unchanged. */
 	| { kind: 'end'; pipeId: string; end: 'from' | 'to' }
-	| { kind: 'label'; index: number };
+	| { kind: 'label'; index: number }
+	/** Several equipment instances (Ctrl/Cmd-click, Ctrl+A, or a paste of
+	 * more than one) — copy/cut/duplicate/delete/arrow-nudge act on all. */
+	| { kind: 'multi'; ids: string[] };
 
 export type Tool = 'select' | 'pipe' | 'label' | 'place';
 
