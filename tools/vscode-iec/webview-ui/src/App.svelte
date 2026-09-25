@@ -151,7 +151,7 @@
 		init: string,
 		at: { x: number; y: number; w: number },
 		commit: (v: string) => void,
-		opts?: { multiline?: boolean; suggest?: 'tags' | 'types' | 'functions' }
+		opts?: { multiline?: boolean; suggest?: 'tags' | 'types' | 'functions' | 'assoc' }
 	) {
 		editor?.open({ init, at, commit, ...opts });
 	}
