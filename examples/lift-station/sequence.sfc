@@ -53,7 +53,11 @@ SFC
                               already draining the well keeps running for
                               the whole post-run — only the NEXT call goes
                               to the other pump (LeadIsP101 := NOT LeadIsP101) *)
-    N  SetAlternate;
+    (* No N action here: PostRun and Alternate are active together, and
+       both writing SeqStep in the same scan made the value depend on
+       action-execution order — see docs/design/examples-dogfood.md.
+       PostRun's own SetPostRun action already covers SeqStep for the
+       whole pump-down; Alternate only swaps the duty pointer. *)
   END_STEP
 
   STEP Failover:
@@ -112,10 +116,6 @@ SFC
 
   ACTION SetPostRun:
     SeqStep := 'PostRun';
-  END_ACTION
-
-  ACTION SetAlternate:
-    SeqStep := 'Alternate';
   END_ACTION
 
   ACTION SetFailover:

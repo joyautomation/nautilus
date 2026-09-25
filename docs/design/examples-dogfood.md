@@ -241,3 +241,95 @@ chased to the exact token-level cause in the time available, but the
 failure is specific to the multi-line block-comment case immediately
 after a rung name; a single-line `(* ... *)` in the same position works
 fine.
+
+**2026-09-25 · a block comment whose continuation line starts with the
+literal keyword `PROGRAM` silently breaks project-library type
+registration · bug**
+
+Adding a lockout counter to `motor.ld`'s `MotorStarter` (a project-library
+`FUNCTION_BLOCK`, no `PROGRAM`) meant rewording its header comment.
+Rewrapped it so a continuation line began "PROGRAM is a project library,
+exactly like..." — the same sentence that, worded the original way,
+never put that word first on a line. Expected a doc-comment reword to be
+inert. Got every caller in the project failing with `unknown type
+"MotorStarter"` — no error pointing at `motor.ld` itself, nothing about
+the comment at all. Isolated with a two-file, two-line repro (a
+`FUNCTION_BLOCK` with nothing but a leading block comment, instantiated
+once from a `PROGRAM`): the type registers fine with the header worded
+any other way, and stops registering the moment a wrapped continuation
+line's first word is the bare, correctly-cased keyword `PROGRAM` —
+reproduces in a project-library `.ld` file and in a plain `PROGRAM`'s own
+leading comment alike (not tested for `TYPE`/`FUNCTION`; `FUNCTION_BLOCK`
+itself in the same position did *not* trigger it). Consistent with a
+comment-unaware, line-oriented pre-scan — this project's own convention
+almost certainly relies on one ("a .ld/.st file with no PROGRAM is a
+library," per the `lib/` finding above) — misreading the commented-out
+word as a real POU boundary and mis-slicing the rest of the file. Worked
+around by rewording so no continuation line starts with `PROGRAM`. Where:
+likely the same library/prelude discovery pass as the `lib/` finding
+above (`internal/project/project.go`) — not chased past the isolated
+repro in the time available; worth its own issue, and a nastier one than
+the ladder rung-comment parser bug above since this one has zero
+symptoms pointing anywhere near the actual cause.
+
+**2026-09-25 · a trip counter reset by the same signal that permits a
+retry can never count past one · design clarification, not a bug**
+
+The review asked for `MotorStarter`'s dead `CTU` to count fail-to-run
+trips instead (`CU` on `FailToRun`'s rising edge, `R := Reset`, `PV := 3`,
+`LockedOut` after three) — reusing the same operator `Reset` pulse that
+already clears `FailToRun` for a retry. First cut wired `R := Reset`
+literally, expecting three Reset-and-retry cycles to accumulate the
+count to three. What happened: every retry needs its own `Reset` pulse
+(nothing else clears the `FailToRun` latch blocking `Run`), and that
+same pulse also zeroes the counter (`CTU`'s own `R`) right before the
+next attempt even starts — so the count is provably always 0 or 1, never
+higher, and `LockedOut` (`PV := 3`) is unreachable through any real
+operating sequence, not a timing artifact of the acceptance test itself.
+Caught by writing the three-trips test: it failed at trip two every
+time, confirmed against a minimal isolated repro before suspecting the
+test rather than the design. Fixed by gating the counter's own reset on
+`AND(Reset, LockedOut)` instead of `Reset` alone, so an ordinary
+fail-and-retry clears only `FailToRun` (the count keeps accumulating),
+and the count clears only once `LockedOut` has actually latched — which
+is also the one moment "clears on Reset" needs to be true. Worth a
+general note for anyone wiring an N-strikes lockout in ladder: don't
+share a trip tally's reset with the fault flag's own retry-reset, or the
+tally can never move past one.
+
+## CLI and extension (found while building)
+
+Cross-cutting findings from this session not specific to one
+`examples/` project.
+
+**2026-09-25 · `naut eip import` emits an IEC-keyword UDT member name
+verbatim · bug (fixed)**
+
+Ran `naut eip import` against `naut logix emulate --l5x variety.L5X`,
+expecting a valid generated types file. Got a UDT member named `retain`
+— an IEC keyword — emitted verbatim into the generated ST, which `naut
+check` then rejected as invalid ST; `naut logix import` already renames
+these on the sibling code path, `naut eip` codegen did not. A real
+controller triggers the same collision, not just the emulator. Where:
+`modbus`-adjacent EtherNet/IP codegen. Status: fixed, PR #39, merged
+2026-09-25.
+
+**2026-09-25 · the extension's manifest schema doesn't describe
+`host:port` for an EtherNet/IP driver · papercut (extension)**
+
+Wrote `host: 127.0.0.1:44818` in a manifest's `eip` driver block,
+expecting the extension's manifest schema to accept and describe the
+form. `host:port` support landed in PR #38, but the schema's field
+description still only says "IP or hostname" — the extension doesn't
+know about its own CLI's feature yet. Where: `tools/vscode-iec` manifest
+schema. Status: open, fix tracked under `[Unreleased]`.
+
+**2026-09-25 · `naut logix emulate --ramp` moves every numeric leaf,
+handshake DINTs included · papercut (CLI)**
+
+Used `naut logix emulate --ramp` for a demo carrying handshake tags,
+expecting process values to drift while handshake DINTs stayed put.
+`--ramp` ramps every numeric leaf, undiscriminated — process values and
+handshakes alike. Where: `cmd/naut/logixemulate.go`. Status: open —
+wants a `--ramp-tags <globs>` flag for when a batch skid's demo needs
+some numerics held still.

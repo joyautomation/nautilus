@@ -20,6 +20,7 @@ VAR_EXTERNAL
     P101_RunCmd    : BOOL;
     P101_InHand    : BOOL;
     P101_FailToRun : BOOL;
+    P101_LockedOut : BOOL;
     P101_Avail     : BOOL;
 
     P102_Req       : BOOL;
@@ -32,6 +33,7 @@ VAR_EXTERNAL
     P102_RunCmd    : BOOL;
     P102_InHand    : BOOL;
     P102_FailToRun : BOOL;
+    P102_LockedOut : BOOL;
     P102_Avail     : BOOL;
 
     ResetFaults : BOOL;
@@ -62,18 +64,20 @@ LD
   RUNG p101start
     m101:MotorStarter(Mode := P101_Mode, AutoReq := P101_Req, Permissive := P101_Permissive,
                        RunFb := P101_Running, Reset := ResetFaults,
-                       Run => P101_RunCmd, InHand => P101_InHand, FailToRun => P101_FailToRun)
+                       Run => P101_RunCmd, InHand => P101_InHand, FailToRun => P101_FailToRun,
+                       LockedOut => P101_LockedOut)
 
   RUNG p102start
     m102:MotorStarter(Mode := P102_Mode, AutoReq := P102_Req, Permissive := P102_Permissive,
                        RunFb := P102_Running, Reset := ResetFaults,
-                       Run => P102_RunCmd, InHand => P102_InHand, FailToRun => P102_FailToRun)
+                       Run => P102_RunCmd, InHand => P102_InHand, FailToRun => P102_FailToRun,
+                       LockedOut => P102_LockedOut)
 
-  RUNG p101avail (* Off (Mode 0) is never available, same as a failed or blocked pump *)
-    /P101_FailToRun P101_Permissive /EQ(P101_Mode, 0) ( P101_Avail )
+  RUNG p101avail (* Off (Mode 0) is never available, same as a failed, locked-out, or blocked pump *)
+    /P101_FailToRun /P101_LockedOut P101_Permissive /EQ(P101_Mode, 0) ( P101_Avail )
 
   RUNG p102avail
-    /P102_FailToRun P102_Permissive /EQ(P102_Mode, 0) ( P102_Avail )
+    /P102_FailToRun /P102_LockedOut P102_Permissive /EQ(P102_Mode, 0) ( P102_Avail )
 
   RUNG bothunavail
     /P101_Avail /P102_Avail ( BothUnavail )

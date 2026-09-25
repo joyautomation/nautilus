@@ -86,8 +86,12 @@ never asserts on `Mode = 0`. Each pump's permissive is the AND of no
 seal fail, no over-temp, no VFD fault and no low-low float; `MotorStarter`
 (`motor.ld`, a ladder-authored `FUNCTION_BLOCK`, instantiated once per
 pump) turns `(Mode, request, permissive, running-feedback)` into
-`(Run, InHand, FailToRun)`, with its own 5 s fail-to-run timer and start
-counter.
+`(Run, InHand, FailToRun, LockedOut)`, with its own 5 s fail-to-run timer
+and a trip counter: three fail-to-run trips latch `LockedOut`, blocking
+`Run` (and `Avail`) until the operator pulses `ResetFaults` — which only
+clears the trip count once `LockedOut` has actually latched, so an
+ordinary fail-and-retry in between doesn't quietly reset the tally (see
+`docs/design/examples-dogfood.md`).
 
 **Stats and totals (`stats.st`).** `RuntimeMeter` (`pump.st`, a
 `VAR_IN_OUT` `FUNCTION_BLOCK`) accumulates each pump's starts and run

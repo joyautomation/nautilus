@@ -64,6 +64,39 @@ tests:
         advance: 200ms
         expect: { P101_FailToRun: false }
 
+  - name: three fail-to-run trips lock the pump out, and a reset clears it
+    # A direct continuation of the failover test above: keep P101 as lead
+    # for all three trips by re-asserting LeadIsP101 after every reset —
+    # [main] (sequence.sfc) stays active (unlike the other open-loop
+    # tests here) because its own Failover/SwapDuty would otherwise hand
+    # the lead to P102 after the very first trip, same as the failover
+    # test above; re-given each time it fires, LeadIsP101 sticks until the
+    # next trip flips it again.
+    suspend: [sim]
+    given: { LIT101_Level: 65.0, LeadIsP101: true } # P101_Running left false throughout
+    steps:
+      - advance: 5.7s # trip 1: 5 s fail-to-run timer plus settling
+        expect: { P101_FailToRun: true, P101_LockedOut: false }
+      - advance: 300ms # let the alarm evaluator catch up to the tag
+        alarms: { active: ["P101_FailToRun"] }
+      - given: { ResetFaults: true, LeadIsP101: true }
+        advance: 200ms
+        expect: { P101_FailToRun: false, P101_LockedOut: false }
+      - given: { ResetFaults: false, LeadIsP101: true }
+        advance: 5.7s # trip 2 — an ordinary Reset-and-retry, same as the failover test's
+        expect: { P101_FailToRun: true, P101_LockedOut: false }
+      - given: { ResetFaults: true, LeadIsP101: true }
+        advance: 200ms
+        expect: { P101_FailToRun: false, P101_LockedOut: false }
+      - given: { ResetFaults: false, LeadIsP101: true }
+        advance: 5.7s # trip 3 — the third trip latches LockedOut
+        expect: { P101_FailToRun: true, P101_LockedOut: true, P101_Avail: false }
+      - advance: 300ms # let the alarm evaluator catch up to the tags
+        alarms: { active: ["P101_FailToRun", "P101_LockedOut"] }
+      - given: { ResetFaults: true } # only now does Reset also clear the trip count —
+        advance: 200ms                # see motor.ld's `lockout` rung for why
+        expect: { P101_FailToRun: false, P101_LockedOut: false }
+
   - name: the high-high float runs both pumps unless HOA is Off, and alarms critical
     suspend: [sim]
     given: { LSHH101: true, P101_Mode: 0, P102_Running: true } # Off wins over the float

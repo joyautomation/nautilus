@@ -1,0 +1,55 @@
+# Hand-authored tag file (not generated — contrast tags/modbus.yaml,
+# which `naut modbus import` writes). Holds the tags that are byte-
+# identical between the bench manifest (nautilus.yaml) and the field
+# manifest (field.yaml): operator setpoints, and every computed-state tag
+# the control programs derive themselves, regardless of which build
+# supplies the process values underneath them. See each manifest's own
+# `tags:` comment for what stays inline instead (process values,
+# bench-only inject tags, InflowLps) and why.
+#
+# Compose it into a project with:  tag-files: [tags/station.yaml]
+
+# Operator setpoints — retained (retain.file in both manifests).
+- { name: LeadOnLevel, role: setpoint, init: 60.0, unit: "%", desc: "Lead pump call" }
+- { name: LagOnLevel, role: setpoint, init: 80.0, unit: "%", desc: "Lag pump call" }
+- { name: LagOffLevel, role: setpoint, init: 55.0, unit: "%", desc: "Lag pump drop-out" }
+- { name: LeadOffLevel, role: setpoint, init: 30.0, unit: "%", desc: "Lead pump drop-out (starts post-run)" }
+- { name: PostRunSec, role: setpoint, init: 20.0, unit: "s", desc: "Pump-down time after LeadOff" }
+- { name: HighLevelAlmSP, role: setpoint, init: 90.0, unit: "%", desc: "High level alarm setpoint (LIT-101)" }
+- { name: LevelSP, role: setpoint, init: 45.0, unit: "%", desc: "Level PID setpoint (pump speed loop)" }
+- { name: Kp, role: setpoint, init: 2.0, desc: "Level PID proportional gain" }
+- { name: Ki, role: setpoint, init: 0.05, unit: "1/s", desc: "Level PID integral gain" }
+- { name: Kd, role: setpoint, init: 0.0, unit: "s", desc: "Level PID derivative gain" }
+- { name: MinSpeedHz, role: setpoint, init: 30.0, unit: "Hz", desc: "Speed command floor" }
+- { name: MaxSpeedHz, role: setpoint, init: 60.0, unit: "Hz", desc: "Speed command ceiling" }
+- { name: P101_Mode, role: setpoint, init: 2, desc: "P-101 HOA: 0 Off, 1 Hand, 2 Auto" }
+- { name: P102_Mode, role: setpoint, init: 2, desc: "P-102 HOA: 0 Off, 1 Hand, 2 Auto" }
+- { name: HandSpeedHz, role: setpoint, init: 45.0, unit: "Hz", desc: "Speed commanded in Hand" }
+- { name: ResetFaults, role: setpoint, init: false, desc: "Pulse: clear fail-to-run latches" }
+
+# Computed state — written by sequence.sfc/level.fbd/permissives.ld/
+# stats.st, identically in both manifests.
+- { name: SeqStep, role: state, init: "Idle", desc: "Active sequence step (PumpSequence)" }
+- { name: LeadIsP101, role: state, init: true, desc: "Duty pointer: true while P-101 is lead" }
+- { name: LeadReq, role: state, init: false, desc: "Sequence: lead pump called" }
+- { name: LagReq, role: state, init: false, desc: "Sequence: lag pump called" }
+- { name: SpeedRef, role: state, init: 0.0, unit: "Hz", desc: "Level PID output" }
+- { name: P101_Req, role: state, init: false, desc: "P-101 called, after duty mapping" }
+- { name: P102_Req, role: state, init: false, desc: "P-102 called, after duty mapping" }
+- { name: P101_Permissive, role: state, init: false, desc: "P-101 permissive to run" }
+- { name: P102_Permissive, role: state, init: false, desc: "P-102 permissive to run" }
+- { name: P101_InHand, role: state, init: false, desc: "P-101 in Hand mode" }
+- { name: P102_InHand, role: state, init: false, desc: "P-102 in Hand mode" }
+- { name: P101_FailToRun, role: state, init: false, desc: "P-101 commanded but never confirmed running" }
+- { name: P102_FailToRun, role: state, init: false, desc: "P-102 commanded but never confirmed running" }
+- { name: P101_LockedOut, role: state, init: false, desc: "P-101 locked out after three fail-to-run trips" }
+- { name: P102_LockedOut, role: state, init: false, desc: "P-102 locked out after three fail-to-run trips" }
+- { name: P101_Avail, role: state, init: false, desc: "P-101 available (not failed, not locked out, permissive, not Off)" }
+- { name: P102_Avail, role: state, init: false, desc: "P-102 available (not failed, not locked out, permissive, not Off)" }
+- { name: BothUnavail, role: state, init: false, desc: "Neither pump is available" }
+- { name: LeadFailed, role: state, init: false, desc: "The lead (on-duty) pump's fail-to-run" }
+- { name: HighLevelAlm, role: state, init: false, desc: "High level alarm (LIT-101, latched with hysteresis)" }
+- { name: P101_Stats, role: state, type: PumpStats, init: { Starts: 0, Hours: 0.0, LastRunSec: 0.0 }, desc: "P-101 runtime stats" }
+- { name: P102_Stats, role: state, type: PumpStats, init: { Starts: 0, Hours: 0.0, LastRunSec: 0.0 }, desc: "P-102 runtime stats" }
+- { name: StationFlowM3, role: state, init: 0.0, unit: "m3", desc: "Totalized discharge volume, today" }
+- { name: CycleCount, role: state, init: 0, desc: "Lead-call cycle count" }
