@@ -1,5 +1,7 @@
-// Where a project's IEC files live, for the extension features that read
-// them directly (online edits, "open block source", instance scanning).
+// Where a project's IEC files live, for the extension features that only
+// scan their text (live-value instance discovery). Anything that needs the
+// project's COMPOSITION — which files are libraries, the prelude — asks
+// `naut compose` instead (compose.ts).
 // The rule is internal/stproject's: programs sit in the project root, and
 // libraries are the root's PROGRAM-less files plus everything under lib/.
 // The pure half (path tests, ordering) is in programSync.ts.

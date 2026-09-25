@@ -12,7 +12,7 @@
 // per-document into VS Code's editor lifecycle.
 
 import * as vscode from "vscode";
-import { projectDirFor, projectFiles } from "./projectFiles";
+import { nautCompose } from "./compose";
 import { followActiveDoc } from "./previewFollow";
 import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
 import { execFile } from "child_process";
@@ -222,18 +222,26 @@ function handleWebviewMessage(doc: vscode.TextDocument, msg: WebviewMessage): vo
   editQueue = editQueue.then(() => applyOpMessage(doc, msg)).catch(() => undefined);
 }
 
-/** Find and reveal `FUNCTION_BLOCK <pou>` among the project's .st files —
- * the root's and lib/'s (the project's libraries). Built-in blocks have no
- * source to open. */
+/** Find and reveal `FUNCTION_BLOCK <pou>` among the project's library
+ * files — whichever `naut compose` says join the prelude: root and lib/,
+ * .st and the ladder/FBD ones alike (a block written as rungs opens at its
+ * declaration in the .ld file). Built-in blocks have no source to open. */
 async function openPouSource(doc: vscode.TextDocument, pou: string): Promise<void> {
   const re = new RegExp(String.raw`^[ \t]*FUNCTION_BLOCK[ \t]+` + pou + String.raw`\b`, "im");
+  const composed = await nautCompose(doc.uri);
+  if ("error" in composed) {
+    void vscode.window.showErrorMessage(composed.error);
+    return;
+  }
+  const root = vscode.Uri.file(composed.ok.root);
   try {
-    const root = await projectDirFor(doc.uri);
-    for (const { uri } of await projectFiles(root, /\.st$/i)) {
-      const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+    for (const rel of composed.ok.libraries) {
+      const uri = vscode.Uri.joinPath(root, ...rel.split("/"));
+      const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+      const text = open ? open.getText() : new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
       const m = re.exec(text);
       if (!m) continue;
-      const opened = await vscode.workspace.openTextDocument(uri);
+      const opened = open ?? (await vscode.workspace.openTextDocument(uri));
       const line = text.slice(0, m.index).split("\n").length - 1;
       const editor = await vscode.window.showTextDocument(opened, { preview: false });
       const pos = new vscode.Position(line, 0);
@@ -245,7 +253,7 @@ async function openPouSource(doc: vscode.TextDocument, pou: string): Promise<voi
     // fall through to the message below
   }
   void vscode.window.showInformationMessage(
-    `nautilus: no FUNCTION_BLOCK ${pou} in this project's .st files — it's a built-in block`
+    `nautilus: no FUNCTION_BLOCK ${pou} in this project's libraries — it's a built-in block`
   );
 }
 
