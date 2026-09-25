@@ -244,7 +244,7 @@ fine.
 
 **2026-09-25 · a block comment whose continuation line starts with the
 literal keyword `PROGRAM` silently breaks project-library type
-registration · bug**
+registration · bug (fixed on main)**
 
 Adding a lockout counter to `motor.ld`'s `MotorStarter` (a project-library
 `FUNCTION_BLOCK`, no `PROGRAM`) meant rewording its header comment.
@@ -271,6 +271,13 @@ above (`internal/project/project.go`) — not chased past the isolated
 repro in the time available; worth its own issue, and a nastier one than
 the ladder rung-comment parser bug above since this one has zero
 symptoms pointing anywhere near the actual cause.
+
+**Status: fixed on `main` by PR #42 (`PROGRAM` detection is lexical now,
+not a line-oriented pre-scan) — ships in v0.13.0.** This example still
+targets the released CLI (v0.12.0), where the bug is real, so `motor.ld`'s
+header keeps the reworded wording above rather than reverting to the
+original phrasing that happens to put `PROGRAM` mid-line — it has to keep
+working on v0.12.0 until v0.13.0 ships, not just on `main`.
 
 **2026-09-25 · a trip counter reset by the same signal that permits a
 retry can never count past one · design clarification, not a bug**
@@ -324,6 +331,38 @@ lint) for "this equipment's component has a sidecar with ports this
 instance doesn't repeat inline," since the failure mode (a mimic that's
 right in the editor and wrong once served) is exactly the kind of thing
 this project's own dogfooding protocol exists to catch.
+
+**2026-09-25 · `.component.json` port sidecars are read by the mimic
+editor but never reach the built HMI app — two sources of truth for one
+port list · bug (kit/extension design)**
+
+Restating the finding above as what it actually is, not just a docs gap:
+`resolvePorts()` (`tools/vscode-iec/webview-ui/src/mimic/ports.ts`) and
+the kit's own `resolveRuntimePorts()` (`hmi/src/lib/mimic.ts`) resolve a
+custom component's connection points on DIFFERENT precedence chains —
+editor: instance override -> sidecar -> built-in; runtime: instance
+override -> built-in, no sidecar tier, because a sidecar is a
+project/editor-time aggregation (`tools/vscode-iec/src/
+mimicComponentIndex.ts` + `mimicComponents.ts`; a project's own custom
+`*.svelte` components are separately discovered and bundled for the
+webview by `tools/vscode-iec/src/userComponents.ts`, which has the same
+never-ships-with-the-built-app property) that never ships with a built
+app. Both resolvers' own doc comments already say so in so many words —
+this is a known, intentional tradeoff, not an oversight anyone missed —
+but the practical effect is that a mimic authored with sidecar-only
+ports is WRONG the moment it's built and served, with no diagnostic
+anywhere (the editor shows it correctly right up until `npm run build`),
+and the only fix is keeping the same port list in two places by hand
+(the sidecar, for the editor's "Edit Component Ports…"/`p` gesture, and
+an inline `ports` override on every equipment instance, for the runtime)
+with nothing that checks they still agree after either one is edited.
+Where: `hmi/src/lib/mimic.ts` (`resolveRuntimePorts`, the `<Mimic>`
+registry) + `tools/vscode-iec/src/userComponents.ts` (and its sidecar
+neighbors `mimicComponentIndex.ts`/`mimicComponents.ts`). Status: open —
+worth either shipping the sidecar data as part of the built app (a small
+generated JSON the build step could emit) or a lint/diagnostic for a
+custom component's ports diverging between its sidecar and every mimic
+that places it.
 
 **2026-09-25 · a `.mimic.json` at the project root needs an explicit
 `server.fs.allow` for the SvelteKit app's dev server to import it ·
