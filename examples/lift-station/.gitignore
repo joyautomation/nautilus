@@ -1,0 +1,5 @@
+# Local retained state (setpoints, HOA modes) — recreated on first run.
+retain.json
+
+# `naut build` output.
+lift-station

@@ -1,0 +1,135 @@
+# lift-station — the field build: the same duty/standby lead-lag control
+# (sequence.sfc, level.fbd, permissives.ld, stats.st — byte-identical to
+# nautilus.yaml's) pointed at real VFDs and a remote-I/O rack over Modbus
+# TCP instead of the bench's simulated plant. No sim task; the field is
+# the field.
+#
+#   naut modbus serve --manifest modbus_manifest.yaml --values seed.json
+#                                         stand in for the devices
+#   naut check -m field.yaml .           validate offline
+#   naut run   -m field.yaml .           poll them for real
+#
+# tags/modbus.yaml is GENERATED from devices.yaml by
+# `naut modbus import --map devices.yaml` — never hand-edit it, re-run the
+# import instead. The importer names every tag `<instance id>_<register
+# tag>`, which lands exactly on this project's tag model for both VFDs
+# (P101_Running, P101_RunCmd, P101_SpeedCmd, ...) but not for the RIO
+# instance (LIT101_Level, LSHH101, ... aren't spellable as `RIO_<...>`).
+# field_map.st — the one program that only exists in this manifest — is
+# the glue that renames the RIO_* points onto the canonical tags every
+# other program reads. See docs/design/examples-dogfood.md for the finding
+# and devices.yaml's own header for the naming rule.
+name: lift-station
+
+server:
+  addr: "localhost:8080"
+  online-edits: true
+
+retain:
+  file: retain.json
+
+tasks:
+  - program: field_map.st   # RIO_* -> the canonical tag names, ahead of
+    scan: 100ms             # everything else; the first task is always
+                            # named "main" internally regardless of a
+                            # manifest name: key
+  - name: sequence
+    program: sequence.sfc
+    scan: 250ms
+  - name: level
+    program: level.fbd
+    scan: 100ms
+    dt-tag: LevelDtS
+  - name: permissives
+    program: permissives.ld
+    scan: 100ms
+  - name: stats
+    program: stats.st
+    scan: 1s
+    dt-tag: StatsDtS
+
+# tags/modbus.yaml supplies the VFD points under their canonical names
+# already (P101_Running, P101_RunCmd, P101_SpeedCmd, P101_SpeedHz,
+# P101_Amps, P101_VfdFault, and the P102_ twins) plus the RIO points under
+# their RIO_ prefix (RIO_Level, RIO_Flow, RIO_LSHH101, RIO_LSLL101,
+# RIO_P101_SealFail, RIO_P101_OverTemp, RIO_P102_SealFail,
+# RIO_P102_OverTemp).
+tag-files:
+  - tags/modbus.yaml
+
+tags:
+  # The canonical process values field_map.st writes from the RIO_* inputs.
+  - { name: LIT101_Level, role: state, init: 0.0, unit: "%", desc: "Wet-well level (LIT-101)" }
+  - { name: LSHH101,      role: state, init: false, desc: "High-high float (LSHH-101)" }
+  - { name: LSLL101,      role: state, init: false, desc: "Low-low float (LSLL-101)" }
+  - { name: FIT101_Flow,  role: state, init: 0.0, unit: "L/s", desc: "Discharge flow (FIT-101)" }
+  - { name: P101_SealFail, role: state, init: false, desc: "P-101 seal-leak probe" }
+  - { name: P102_SealFail, role: state, init: false, desc: "P-102 seal-leak probe" }
+  - { name: P101_OverTemp, role: state, init: false, desc: "P-101 motor over-temperature" }
+  - { name: P102_OverTemp, role: state, init: false, desc: "P-102 motor over-temperature" }
+
+  # Operator setpoints — retained.
+  - { name: LeadOnLevel, role: setpoint, init: 60.0, unit: "%", desc: "Lead pump call" }
+  - { name: LagOnLevel, role: setpoint, init: 80.0, unit: "%", desc: "Lag pump call" }
+  - { name: LagOffLevel, role: setpoint, init: 55.0, unit: "%", desc: "Lag pump drop-out" }
+  - { name: LeadOffLevel, role: setpoint, init: 30.0, unit: "%", desc: "Lead pump drop-out (starts post-run)" }
+  - { name: PostRunSec, role: setpoint, init: 20.0, unit: "s", desc: "Pump-down time after LeadOff" }
+  - { name: HighLevelAlmSP, role: setpoint, init: 90.0, unit: "%", desc: "High level alarm setpoint (LIT-101)" }
+  - { name: LevelSP, role: setpoint, init: 45.0, unit: "%", desc: "Level PID setpoint (pump speed loop)" }
+  - { name: Kp, role: setpoint, init: 2.0, desc: "Level PID proportional gain" }
+  - { name: Ki, role: setpoint, init: 0.05, unit: "1/s", desc: "Level PID integral gain" }
+  - { name: Kd, role: setpoint, init: 0.0, unit: "s", desc: "Level PID derivative gain" }
+  - { name: MinSpeedHz, role: setpoint, init: 30.0, unit: "Hz", desc: "Speed command floor" }
+  - { name: MaxSpeedHz, role: setpoint, init: 60.0, unit: "Hz", desc: "Speed command ceiling" }
+  - { name: P101_Mode, role: setpoint, init: 2, desc: "P-101 HOA: 0 Off, 1 Hand, 2 Auto" }
+  - { name: P102_Mode, role: setpoint, init: 2, desc: "P-102 HOA: 0 Off, 1 Hand, 2 Auto" }
+  - { name: HandSpeedHz, role: setpoint, init: 45.0, unit: "Hz", desc: "Speed commanded in Hand" }
+  - { name: ResetFaults, role: setpoint, init: false, desc: "Pulse: clear fail-to-run latches" }
+
+  # Computed state — identical to nautilus.yaml.
+  - { name: SeqStep, role: state, init: "Idle", desc: "Active sequence step (PumpSequence)" }
+  - { name: LeadIsP101, role: state, init: true, desc: "Duty pointer: true while P-101 is lead" }
+  - { name: LeadReq, role: state, init: false, desc: "Sequence: lead pump called" }
+  - { name: LagReq, role: state, init: false, desc: "Sequence: lag pump called" }
+  - { name: SpeedRef, role: state, init: 0.0, unit: "Hz", desc: "Level PID output" }
+  - { name: P101_Req, role: state, init: false, desc: "P-101 called, after duty mapping" }
+  - { name: P102_Req, role: state, init: false, desc: "P-102 called, after duty mapping" }
+  - { name: P101_Permissive, role: state, init: false, desc: "P-101 permissive to run" }
+  - { name: P102_Permissive, role: state, init: false, desc: "P-102 permissive to run" }
+  - { name: P101_InHand, role: state, init: false, desc: "P-101 in Hand mode" }
+  - { name: P102_InHand, role: state, init: false, desc: "P-102 in Hand mode" }
+  - { name: P101_FailToRun, role: state, init: false, desc: "P-101 commanded but never confirmed running" }
+  - { name: P102_FailToRun, role: state, init: false, desc: "P-102 commanded but never confirmed running" }
+  - { name: P101_Avail, role: state, init: false, desc: "P-101 available (not failed, permissive, not Off)" }
+  - { name: P102_Avail, role: state, init: false, desc: "P-102 available (not failed, permissive, not Off)" }
+  - { name: BothUnavail, role: state, init: false, desc: "Neither pump is available" }
+  - { name: LeadFailed, role: state, init: false, desc: "The lead (on-duty) pump's fail-to-run" }
+  - { name: HighLevelAlm, role: state, init: false, desc: "High level alarm (LIT-101, latched with hysteresis)" }
+  - { name: P101_Stats, role: state, type: PumpStats, init: { Starts: 0, Hours: 0.0, LastRunSec: 0.0 }, desc: "P-101 runtime stats" }
+  - { name: P102_Stats, role: state, type: PumpStats, init: { Starts: 0, Hours: 0.0, LastRunSec: 0.0 }, desc: "P-102 runtime stats" }
+  - { name: StationFlowM3, role: state, init: 0.0, unit: "m3", desc: "Totalized discharge volume, today" }
+  - { name: CycleCount, role: state, init: 0, desc: "Lead-call cycle count" }
+
+alarms:
+  defaults: { ack-required: true, auto-clear: true, shelve: true }
+  shelve-times: [15m, 1h, 4h]
+  journal: { keep: 500 }
+  defs:
+    - { id: LSHH101, tag: LSHH101, name: "Wet-well high-high (LSHH-101)", priority: critical, on-delay: 2s, class: process }
+    - { id: HighLevel, tag: HighLevelAlm, name: "Wet-well high level (LIT-101)", priority: high, on-delay: 10s, class: process }
+    - { id: LSLL101, tag: LSLL101, name: "Wet-well low-low (LSLL-101)", priority: medium, on-delay: 5s, class: process }
+    - { id: P101_FailToRun, tag: P101_FailToRun, name: "P-101 failed to run", priority: high, class: equipment }
+    - { id: P102_FailToRun, tag: P102_FailToRun, name: "P-102 failed to run", priority: high, class: equipment }
+    - { id: P101_VfdFault, tag: P101_VfdFault, name: "P-101 VFD fault", priority: high, on-delay: 1s, class: equipment }
+    - { id: P102_VfdFault, tag: P102_VfdFault, name: "P-102 VFD fault", priority: high, on-delay: 1s, class: equipment }
+    - { id: P101_SealFail, tag: P101_SealFail, name: "P-101 seal-leak probe", priority: medium, on-delay: 5s, class: equipment }
+    - { id: P102_SealFail, tag: P102_SealFail, name: "P-102 seal-leak probe", priority: medium, on-delay: 5s, class: equipment }
+    - { id: P101_OverTemp, tag: P101_OverTemp, name: "P-101 motor over-temperature", priority: high, on-delay: 2s, class: equipment }
+    - { id: P102_OverTemp, tag: P102_OverTemp, name: "P-102 motor over-temperature", priority: high, on-delay: 2s, class: equipment }
+    - { id: BothUnavail, tag: BothUnavail, name: "Both pumps unavailable", priority: critical, class: equipment }
+
+driver:
+  type: modbus
+  manifest: modbus_manifest.yaml
+  scan-rate: 500ms
+  scan-classes: { fast: 200ms, slow: 2s }

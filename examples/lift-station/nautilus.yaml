@@ -1,0 +1,147 @@
+# lift-station — the bench build: a duplex sewage lift station on the
+# loopback driver, with the plant itself simulated in ST (sim.st) so the
+# whole thing runs, cycles, and alarms with nothing wired up. See
+# field.yaml for the same control programs pointed at real VFDs and
+# remote I/O over Modbus instead.
+#
+#   naut check .                validate offline
+#   naut test  .                the acceptance suite (lift-station_test.yaml)
+#   naut run   .                dashboard + tag API on http://localhost:8080
+#   naut build .                one deployable controller binary
+#
+# Five tasks, four IEC languages, one tag store:
+#   sequence.sfc     duty/standby sequencing — who's called, lead/lag,
+#                    post-run, failover
+#   level.fbd        the level->speed PID and the high-level alarm
+#   permissives.ld   HOA, interlocks, the high-high override, fail-to-run
+#   stats.st         runtime hours/starts, the flow totalizer
+#   sim.st           bench only: the wet well and two pump/VFD models
+name: lift-station
+
+server:
+  addr: "localhost:8080"
+  online-edits: true
+
+retain:
+  file: retain.json   # operator setpoints + HOA modes survive a restart
+
+tasks:
+  - program: sequence.sfc   # the first task is always named "main" (reserved)
+    scan: 250ms
+  - name: level
+    program: level.fbd
+    scan: 100ms
+    dt-tag: LevelDtS
+  - name: permissives
+    program: permissives.ld
+    scan: 100ms
+  - name: stats
+    program: stats.st
+    scan: 1s
+    dt-tag: StatsDtS
+  - name: sim
+    program: sim.st
+    scan: 100ms
+    dt-tag: SimDtS
+
+tags:
+  # Process values — owned by the sim task here; field.yaml makes these
+  # role: input (or a field-mapped role: state — see field.yaml) and lets
+  # the Modbus driver supply them instead.
+  - { name: LIT101_Level, role: state, init: 20.0, unit: "%", desc: "Wet-well level (LIT-101)" }
+  - { name: LSHH101,      role: state, init: false, desc: "High-high float (LSHH-101)" }
+  - { name: LSLL101,      role: state, init: false, desc: "Low-low float (LSLL-101)" }
+  - { name: FIT101_Flow,  role: state, init: 0.0, unit: "L/s", desc: "Discharge flow (FIT-101)" }
+  - { name: P101_Running, role: state, init: false, desc: "P-101 VFD running feedback" }
+  - { name: P102_Running, role: state, init: false, desc: "P-102 VFD running feedback" }
+  - { name: P101_VfdFault, role: state, init: false, desc: "P-101 VFD fault" }
+  - { name: P102_VfdFault, role: state, init: false, desc: "P-102 VFD fault" }
+  - { name: P101_SpeedHz, role: state, init: 0.0, unit: "Hz", desc: "P-101 VFD speed feedback" }
+  - { name: P102_SpeedHz, role: state, init: 0.0, unit: "Hz", desc: "P-102 VFD speed feedback" }
+  - { name: P101_Amps, role: state, init: 0.0, unit: "A", desc: "P-101 motor current" }
+  - { name: P102_Amps, role: state, init: 0.0, unit: "A", desc: "P-102 motor current" }
+  - { name: P101_SealFail, role: state, init: false, desc: "P-101 seal-leak probe" }
+  - { name: P102_SealFail, role: state, init: false, desc: "P-102 seal-leak probe" }
+  - { name: P101_OverTemp, role: state, init: false, desc: "P-101 motor over-temperature" }
+  - { name: P102_OverTemp, role: state, init: false, desc: "P-102 motor over-temperature" }
+
+  # Commands — sent to the VFDs (loopback here; the Modbus manifest in
+  # field.yaml).
+  - { name: P101_RunCmd, role: output, init: false, desc: "P-101 run command" }
+  - { name: P102_RunCmd, role: output, init: false, desc: "P-102 run command" }
+  - { name: P101_SpeedCmd, role: output, init: 0.0, unit: "Hz", desc: "P-101 speed command" }
+  - { name: P102_SpeedCmd, role: output, init: 0.0, unit: "Hz", desc: "P-102 speed command" }
+
+  # Operator setpoints — retained (retain.file above).
+  - { name: LeadOnLevel, role: setpoint, init: 60.0, unit: "%", desc: "Lead pump call" }
+  - { name: LagOnLevel, role: setpoint, init: 80.0, unit: "%", desc: "Lag pump call" }
+  - { name: LagOffLevel, role: setpoint, init: 55.0, unit: "%", desc: "Lag pump drop-out" }
+  - { name: LeadOffLevel, role: setpoint, init: 30.0, unit: "%", desc: "Lead pump drop-out (starts post-run)" }
+  - { name: PostRunSec, role: setpoint, init: 20.0, unit: "s", desc: "Pump-down time after LeadOff" }
+  - { name: HighLevelAlmSP, role: setpoint, init: 90.0, unit: "%", desc: "High level alarm setpoint (LIT-101)" }
+  - { name: LevelSP, role: setpoint, init: 45.0, unit: "%", desc: "Level PID setpoint (pump speed loop)" }
+  - { name: Kp, role: setpoint, init: 2.0, desc: "Level PID proportional gain" }
+  - { name: Ki, role: setpoint, init: 0.05, unit: "1/s", desc: "Level PID integral gain" }
+  - { name: Kd, role: setpoint, init: 0.0, unit: "s", desc: "Level PID derivative gain" }
+  - { name: MinSpeedHz, role: setpoint, init: 30.0, unit: "Hz", desc: "Speed command floor" }
+  - { name: MaxSpeedHz, role: setpoint, init: 60.0, unit: "Hz", desc: "Speed command ceiling" }
+  - { name: P101_Mode, role: setpoint, init: 2, desc: "P-101 HOA: 0 Off, 1 Hand, 2 Auto" }
+  - { name: P102_Mode, role: setpoint, init: 2, desc: "P-102 HOA: 0 Off, 1 Hand, 2 Auto" }
+  - { name: HandSpeedHz, role: setpoint, init: 45.0, unit: "Hz", desc: "Speed commanded in Hand" }
+  - { name: ResetFaults, role: setpoint, init: false, desc: "Pulse: clear fail-to-run latches" }
+  - { name: InflowLps, role: setpoint, init: 12.0, unit: "L/s", desc: "Bench only: base inflow (a storm is 40)" }
+
+  # Bench-only fault/float injection — nothing to wire up, just tags to
+  # POST from the dashboard or the API.
+  - { name: P101_InjectFault, role: setpoint, init: false, desc: "Bench only: trip P-101's VFD fault" }
+  - { name: P101_InjectSealFail, role: setpoint, init: false, desc: "Bench only: trip P-101's seal-leak probe" }
+  - { name: P101_InjectOverTemp, role: setpoint, init: false, desc: "Bench only: trip P-101's over-temperature contact" }
+  - { name: P102_InjectFault, role: setpoint, init: false, desc: "Bench only: trip P-102's VFD fault" }
+  - { name: P102_InjectSealFail, role: setpoint, init: false, desc: "Bench only: trip P-102's seal-leak probe" }
+  - { name: P102_InjectOverTemp, role: setpoint, init: false, desc: "Bench only: trip P-102's over-temperature contact" }
+  - { name: ForceLSHH, role: setpoint, init: false, desc: "Bench only: force the high-high float regardless of level" }
+
+  # Computed state.
+  - { name: SeqStep, role: state, init: "Idle", desc: "Active sequence step (PumpSequence)" }
+  - { name: LeadIsP101, role: state, init: true, desc: "Duty pointer: true while P-101 is lead" }
+  - { name: LeadReq, role: state, init: false, desc: "Sequence: lead pump called" }
+  - { name: LagReq, role: state, init: false, desc: "Sequence: lag pump called" }
+  - { name: SpeedRef, role: state, init: 0.0, unit: "Hz", desc: "Level PID output" }
+  - { name: P101_Req, role: state, init: false, desc: "P-101 called, after duty mapping" }
+  - { name: P102_Req, role: state, init: false, desc: "P-102 called, after duty mapping" }
+  - { name: P101_Permissive, role: state, init: false, desc: "P-101 permissive to run" }
+  - { name: P102_Permissive, role: state, init: false, desc: "P-102 permissive to run" }
+  - { name: P101_InHand, role: state, init: false, desc: "P-101 in Hand mode" }
+  - { name: P102_InHand, role: state, init: false, desc: "P-102 in Hand mode" }
+  - { name: P101_FailToRun, role: state, init: false, desc: "P-101 commanded but never confirmed running" }
+  - { name: P102_FailToRun, role: state, init: false, desc: "P-102 commanded but never confirmed running" }
+  - { name: P101_Avail, role: state, init: false, desc: "P-101 available (not failed, permissive, not Off)" }
+  - { name: P102_Avail, role: state, init: false, desc: "P-102 available (not failed, permissive, not Off)" }
+  - { name: BothUnavail, role: state, init: false, desc: "Neither pump is available" }
+  - { name: LeadFailed, role: state, init: false, desc: "The lead (on-duty) pump's fail-to-run" }
+  - { name: HighLevelAlm, role: state, init: false, desc: "High level alarm (LIT-101, latched with hysteresis)" }
+  - { name: P101_Stats, role: state, type: PumpStats, init: { Starts: 0, Hours: 0.0, LastRunSec: 0.0 }, desc: "P-101 runtime stats" }
+  - { name: P102_Stats, role: state, type: PumpStats, init: { Starts: 0, Hours: 0.0, LastRunSec: 0.0 }, desc: "P-102 runtime stats" }
+  - { name: StationFlowM3, role: state, init: 0.0, unit: "m3", desc: "Totalized discharge volume, today" }
+  - { name: CycleCount, role: state, init: 0, desc: "Lead-call cycle count" }
+
+alarms:
+  defaults: { ack-required: true, auto-clear: true, shelve: true }
+  shelve-times: [15m, 1h, 4h]
+  journal: { keep: 500 }
+  defs:
+    - { id: LSHH101, tag: LSHH101, name: "Wet-well high-high (LSHH-101)", priority: critical, on-delay: 2s, class: process }
+    - { id: HighLevel, tag: HighLevelAlm, name: "Wet-well high level (LIT-101)", priority: high, on-delay: 10s, class: process }
+    - { id: LSLL101, tag: LSLL101, name: "Wet-well low-low (LSLL-101)", priority: medium, on-delay: 5s, class: process }
+    - { id: P101_FailToRun, tag: P101_FailToRun, name: "P-101 failed to run", priority: high, class: equipment }
+    - { id: P102_FailToRun, tag: P102_FailToRun, name: "P-102 failed to run", priority: high, class: equipment }
+    - { id: P101_VfdFault, tag: P101_VfdFault, name: "P-101 VFD fault", priority: high, on-delay: 1s, class: equipment }
+    - { id: P102_VfdFault, tag: P102_VfdFault, name: "P-102 VFD fault", priority: high, on-delay: 1s, class: equipment }
+    - { id: P101_SealFail, tag: P101_SealFail, name: "P-101 seal-leak probe", priority: medium, on-delay: 5s, class: equipment }
+    - { id: P102_SealFail, tag: P102_SealFail, name: "P-102 seal-leak probe", priority: medium, on-delay: 5s, class: equipment }
+    - { id: P101_OverTemp, tag: P101_OverTemp, name: "P-101 motor over-temperature", priority: high, on-delay: 2s, class: equipment }
+    - { id: P102_OverTemp, tag: P102_OverTemp, name: "P-102 motor over-temperature", priority: high, on-delay: 2s, class: equipment }
+    - { id: BothUnavail, tag: BothUnavail, name: "Both pumps unavailable", priority: critical, class: equipment }
+
+driver:
+  type: memory

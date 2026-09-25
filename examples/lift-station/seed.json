@@ -1,0 +1,18 @@
+{
+  "P101_Running": false,
+  "P101_SpeedHz": 0.0,
+  "P101_Amps": 0.0,
+  "P101_VfdFault": false,
+  "P102_Running": false,
+  "P102_SpeedHz": 0.0,
+  "P102_Amps": 0.0,
+  "P102_VfdFault": false,
+  "RIO_Level": 20.0,
+  "RIO_Flow": 0.0,
+  "RIO_LSHH101": false,
+  "RIO_LSLL101": false,
+  "RIO_P101_SealFail": false,
+  "RIO_P101_OverTemp": false,
+  "RIO_P102_SealFail": false,
+  "RIO_P102_OverTemp": false
+}
