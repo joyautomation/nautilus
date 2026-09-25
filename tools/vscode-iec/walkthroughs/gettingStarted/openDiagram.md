@@ -1,5 +1,7 @@
 [Open FBD Diagram Preview](command:nautilus.fbd.preview)
 
+![The Demo template's program.fbd in the FBD diagram editor, live values on every wire of the PI loop](../../images/fbd-diagram.png)
+
 (Works once `program.fbd` is the active editor — open it first, then run
 this or use the editor-title button.)
 

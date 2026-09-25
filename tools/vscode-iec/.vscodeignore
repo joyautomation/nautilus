@@ -5,3 +5,11 @@ webview-ui/**
 out/e2e/**
 out/**/*.test.js
 .vscode-test/**
+# README-only screenshots: vsce rewrites the README's relative image links
+# to the repository's raw URLs, so only images the walkthrough itself shows
+# (live-values, fbd-diagram, testing-view, create-project.gif) need to ship.
+images/diagram-diff.png
+images/ladder-live.png
+images/sfc-chart.png
+images/mimic-editor.png
+images/walkthrough.png
