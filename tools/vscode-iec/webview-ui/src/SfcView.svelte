@@ -297,7 +297,9 @@
 		const r = el.getBoundingClientRect();
 		const pr = pane.getBoundingClientRect();
 		const top = pr.top + (wrapEl?.querySelector('.palette')?.getBoundingClientRect().height ?? 0) + 24;
-		const bottom = pr.top + pane.clientHeight - 48;
+		// Above the bottom-left zoom controls (15 px inset + ~110 px stack),
+		// which ZoomPane's clearance strip leaves room to scroll past.
+		const bottom = pr.top + pane.clientHeight - 136;
 		const left = pr.left + 56; // the zoom controls' column
 		const right = pr.left + pane.clientWidth - 24;
 		let dy = 0;
