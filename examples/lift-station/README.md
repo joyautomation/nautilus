@@ -48,6 +48,8 @@ naut build .                     # one deployable controller binary
 | Retained state: setpoints and HOA modes survive a restart | `retain:` in both manifests | [Redundancy & retained state](https://nautilus.joyautomation.com/guides/redundancy/) |
 | Online edits: warm-swap a running program from the editor | `server.online-edits` | [Online edits](https://nautilus.joyautomation.com/guides/online-edits/) |
 | Acceptance tests: virtual time, `suspend:`, `advance:`/`until:`, alarm verbs | `lift-station_test.yaml` | [Testing](https://nautilus.joyautomation.com/reference/testing/) |
+| HMI: a P&ID mimic (`*.mimic.json`), custom components + port sidecars | `lift-station.mimic.json`, `hmi/src/lib/*.component.json` | [HMI kit](https://nautilus.joyautomation.com/guides/hmi/) |
+| HMI: faceplates, alarm banner/ack, live trend, driver status, scan diagnostics | `hmi/src/routes/+page.svelte` | [HMI kit](https://nautilus.joyautomation.com/guides/hmi/) |
 
 ## The control narrative
 
@@ -146,3 +148,93 @@ scaled speed register change.
 
 Point `devices.yaml`'s instances at real hosts and it's the same command
 against real drives.
+
+## The operator screen
+
+`hmi/` is a SvelteKit app built on the published
+[`@joyautomation/nautilus-hmi`](https://www.npmjs.com/package/@joyautomation/nautilus-hmi)
+kit (0.6.0) — one page, not a catalog: the wet-well mimic, an alarm banner
+with an ack-all button, two pump faceplates (HOA selector, running/speed/
+amps, starts/run-hours from `P101_Stats`/`P102_Stats`, fail-to-run/locked-
+out pills, a Reset faults button), the five level setpoints
+(`LeadOnLevel`/`LagOnLevel`/`LagOffLevel`/`LeadOffLevel`/`LevelSP`) as
+number fields with write-back, a level trend, the field-driver status
+panel (honestly empty here — this project runs the loopback/Modbus
+drivers, not EtherNet/IP or Sparkplug), and scan diagnostics. It follows
+`examples/hmi-demo`'s pattern; that example's README is the deeper
+reference for the mimic format, custom components, faceplates and the
+dev proxy.
+
+```sh
+cd hmi
+npm install
+npm run dev             # http://localhost:5173, proxying /api to :8080 —
+                         # run `naut run .` in the project root first
+```
+
+To see it served by the controller itself (no proxy, one origin, exactly
+how it ships):
+
+```sh
+cd hmi && npm run build      # -> hmi/build (adapter-static)
+cd .. && naut run .           # server.hmi: hmi/build serves it at "/";
+                               # the built-in dashboard moves to /_nautilus/
+```
+
+`server.hmi` tolerates the build directory being absent (`naut check`
+and a fresh `naut run` before the first `npm run build` don't fail —
+a request against a missing build just 404s), so both manifests set it
+unconditionally.
+
+### The mimic
+
+`lift-station.mimic.json` lives at the **project root**, not under
+`hmi/src/routes/` — the VS Code mimic editor discovers any `*.mimic.json`
+anywhere in the workspace, and this way the SvelteKit app and the editor
+share exactly one file (`+page.svelte` imports it three directories up).
+That import crosses `hmi/`'s own project boundary, which Vite's dev
+server refuses by default (files outside its root 403 the moment
+anything tries to read/transform them) — `hmi/vite.config.ts` adds
+`server.fs.allow` for the parent directory to fix it; see the dogfood log
+for the friction. Open the file itself with **Open With → Mimic Editor**.
+
+The wet well (`WW101`, a built-in `Tank`) is bound to `LIT101_Level`; two
+float switches (`LSHH101`/`LSLL101`, both instances of the custom
+`FloatSwitch` component below) sit at the high-high/low-low marks; P-101
+and P-102 (both instances of the custom `SubmersiblePump` component) sit
+submerged near the bottom, each with one `discharge` port on top; each
+discharge line runs through a check valve (`CV101`/`CV102`, the built-in
+`Valve`) to a `ToProcess`-style off-page connector labeled "FORCE MAIN".
+Pipe runs carry `flowing` bound to `P101_Running`/`P102_Running`; labels
+show `LIT101_Level` (%) and `FIT101_Flow` (L/s). `SeqStep` is a **string**
+tag (`'Idle'`/`'Lead'`/`'Lag'`/…) — the kit's built-in `MimicLabel.bind`
+only formats numeric tags, so it rides a small custom `SeqStepTag`
+component instead, bound the same way an equipment prop is (`bind: {
+text: "SeqStep" }`), which passes any tag value through untouched.
+
+### Custom components
+
+Two components live in `hmi/src/lib/`, each with a `{Name}.component.json`
+port sidecar so the extension's **Nautilus: Edit Component Ports…**
+command (and the mimic editor's `p` shortcut on a selected instance) has
+something to edit:
+
+- **`SubmersiblePump.svelte`** — `running`/`speedHz`-driven, one
+  `discharge` port on top (`dir: "up"`). Because a custom component's
+  ports live in its sidecar, which is an editor-time convenience that
+  never ships with the built app, the mimic doc also carries the SAME
+  port as an inline `ports` override on each `P101`/`P102` equipment
+  entry — the same trick `examples/hmi-demo` uses for `HeatExchanger`.
+  Skipping that (sidecar only, no inline override) is what a pipe with no
+  visible run looks like in the built app: leaving it out was the first
+  cut here, and the discharge pipes silently collapsed to a stub at the
+  check valve with no line down to the pump — see the dogfood log.
+- **`FloatSwitch.svelte`** — one component, two mimic instances
+  (`LSHH101`/`LSLL101`), a `tripped` prop swinging the float's pivot arm.
+  No pipe anchors it, so its sidecar's one port (`mount`) is there purely
+  so the extension has something to open, per the review's ask.
+
+`ToProcess.svelte` (the force-main connector) and `SeqStepTag.svelte` (the
+`SeqStep` readout) are custom too, but ports-free — same idiom as
+`hmi-demo`'s `Supply`/`ToProcess`, with the port declared inline in the
+doc instead of a sidecar.

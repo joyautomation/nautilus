@@ -21,6 +21,12 @@ name: lift-station
 server:
   addr: "localhost:8080"
   online-edits: true
+  # The operator screen, once built (cd hmi && npm run build). Tolerates
+  # being absent — `naut check` and `naut run` don't fail before the first
+  # `npm run build`, a request against a missing build just 404s — see the
+  # README's "The operator screen" section. Serves it at "/"; the built-in
+  # dashboard moves to "/_nautilus/".
+  hmi: hmi/build
 
 retain:
   file: retain.json   # operator setpoints + HOA modes survive a restart

@@ -24,6 +24,9 @@ name: lift-station
 server:
   addr: "localhost:8080"
   online-edits: true
+  # Same operator screen as nautilus.yaml — see its comment and the
+  # README's "The operator screen" section.
+  hmi: hmi/build
 
 retain:
   file: retain.json

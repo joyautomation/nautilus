@@ -297,6 +297,54 @@ general note for anyone wiring an N-strikes lockout in ladder: don't
 share a trip tally's reset with the fault flag's own retry-reset, or the
 tally can never move past one.
 
+**2026-09-25 · a custom component's sidecar-only ports resolve in the
+editor and silently collapse at runtime · docs gap / design constraint**
+
+`SubmersiblePump.svelte` got a `SubmersiblePump.component.json` sidecar
+(one `discharge` port) and nothing else, matching every other custom
+component in this project at first. Expected the mimic's `P101`/`P102`
+discharge pipes to route from that port up to their check valves.
+Got pipes collapsed to a two-point stub sitting at the check valve, with
+no visible line down to the pump at all — no error, no warning, just a
+wrong-looking pipe. `hmi-demo`'s own README already says why, in the
+"Pipe anchors" section: a `*.component.json` sidecar is a project/editor-
+time convenience (`mimicComponentIndex.ts` aggregates them for the
+editor), and it never ships with the built app — the runtime `<Mimic>`
+has no sidecar to read, so a pipe anchored to a sidecar-only port
+resolves to nothing at serve time even though the SAME instance looks
+correct in the VS Code mimic editor (which does read the sidecar). The
+fix (also already documented, for `HeatExchanger`/`E101`, in that same
+README section — missed the first time through here) is to also carry
+the identical `ports` array inline on the equipment entry in the
+`.mimic.json` itself, which resolves identically in both places. Where:
+inherent to the split between editor-time sidecars and the runtime
+`<Mimic>` component (`hmi/src/lib/mimic.ts`/`components/Mimic.svelte`) —
+not a bug, but worth a `naut check`-style diagnostic (or an editor
+lint) for "this equipment's component has a sidecar with ports this
+instance doesn't repeat inline," since the failure mode (a mimic that's
+right in the editor and wrong once served) is exactly the kind of thing
+this project's own dogfooding protocol exists to catch.
+
+**2026-09-25 · a `.mimic.json` at the project root needs an explicit
+`server.fs.allow` for the SvelteKit app's dev server to import it ·
+friction, worked around**
+
+Put `lift-station.mimic.json` at the project root (not `hmi/src/routes/`)
+so the VS Code mimic editor and the SvelteKit app share one file, per
+the design brief's stated preference. Expected `hmi/src/routes/
++page.svelte`'s `import mimicDoc from '../../../lift-station.mimic.json'`
+to just work, the same as any other relative import. `npm run build`
+did work (Rollup reads straight off disk, no project-root fence); `npm
+run dev` did not — Vite's dev server refuses to read/transform anything
+outside its own project root by default, so the first request touching
+that import path would have 403'd. Worked around with `server.fs.allow:
+[path.resolve(__dirname, '..')]` in `hmi/vite.config.ts`, which is a
+one-line, well-supported Vite option — this is expected Vite behavior
+for a file living outside the SvelteKit project's root, not a nautilus
+bug, but worth calling out for the next example that wants its mimic at
+the project root: `npm run build` alone will not tell you `npm run dev`
+is broken.
+
 ## CLI and extension (found while building)
 
 Cross-cutting findings from this session not specific to one

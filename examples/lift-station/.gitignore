@@ -3,3 +3,9 @@ retain.json
 
 # `naut build` output.
 lift-station
+
+# hmi/ — the SvelteKit operator screen: never commit its dependencies or
+# build output, only the source.
+hmi/node_modules
+hmi/.svelte-kit
+hmi/build
