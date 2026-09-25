@@ -216,10 +216,61 @@ function gridRoute(a: RoutePoint, b: RoutePoint, obstacles: ObstacleRect[]): Rou
 	return corners;
 }
 
+/** The face of `box` a point sits nearest to, as the direction leaving it
+ * — the exit direction a port with no `dir` of its own (and none
+ * inferPortDir() can read off an exact box edge) is given for routing. Ties
+ * go horizontal first (left, right, up, down). */
+export function faceDir(p: RoutePoint, box: ObstacleRect): PortDir {
+	const d: [PortDir, number][] = [
+		['left', p.x - box.x],
+		['right', box.x + box.w - p.x],
+		['up', p.y - box.y],
+		['down', box.y + box.h - p.y]
+	];
+	let best = d[0];
+	for (const c of d) if (c[1] < best[1] - EPS) best = c;
+	return best[0];
+}
+
+/** Where a route leaving `p` in `dir` gets clear of its own equipment's
+ * keep-out `box`: straight out of the port's face to the box's edge (never
+ * shorter than the PORT_STUB leg every directional port draws). */
+function exitPoint(p: RoutePoint, dir: PortDir, box: ObstacleRect): RoutePoint {
+	const stub = stubPoint(p, dir);
+	switch (dir) {
+		case 'left':
+			return { x: Math.min(stub.x, box.x), y: p.y };
+		case 'right':
+			return { x: Math.max(stub.x, box.x + box.w), y: p.y };
+		case 'up':
+			return { x: p.x, y: Math.min(stub.y, box.y) };
+		case 'down':
+			return { x: p.x, y: Math.max(stub.y, box.y + box.h) };
+	}
+}
+
+/** The keep-out boxes of the equipment a route STARTS and ENDS on (each
+ * already in `obstacles` too). Given, a route first leaves that port
+ * outward — its `dir`, or the face it sits on (faceDir) — to the box's
+ * edge, and only then routes around everything, its own equipment
+ * included; so a pipe off a tank's side port goes around the tank, never
+ * back through its body. */
+export interface RouteEnds {
+	start?: ObstacleRect;
+	end?: ObstacleRect;
+}
+
 /** Suggest an orthogonal route's INTERIOR vertices between two anchored
  * port positions — a pure GENERATOR, called once (the port-to-port draw
  * gesture, or the "Re-route" button), never re-derived live: the result is
  * ordinary [x, y] points a user then edits like any other pipe vertex.
+ *
+ * With `ends` (see RouteEnds), each boxed end first exits its own
+ * equipment; that leg (port -> the box edge) is the one segment not
+ * checked against the obstacles, since it necessarily starts inside its own
+ * box. Without a box for an end, the route starts at the port's PORT_STUB
+ * point (or the port itself when it has no direction) and the caller is
+ * expected to have left that end's equipment out of `obstacles`.
  *
  * Tries, in order (cheapest/simplest first): the straight/L/Z canonical
  * shapes, then hugging each obstacle's four edges, then a coarse
@@ -234,10 +285,13 @@ export function suggestRoute(
 	startDir: PortDir | undefined,
 	end: RoutePoint,
 	endDir: PortDir | undefined,
-	obstacles: ObstacleRect[]
+	obstacles: ObstacleRect[],
+	ends: RouteEnds = {}
 ): [number, number][] {
-	const a = startDir ? stubPoint(start, startDir) : start;
-	const b = endDir ? stubPoint(end, endDir) : end;
+	const sDir = startDir ?? (ends.start ? faceDir(start, ends.start) : undefined);
+	const eDir = endDir ?? (ends.end ? faceDir(end, ends.end) : undefined);
+	const a = sDir ? (ends.start ? exitPoint(start, sDir, ends.start) : stubPoint(start, sDir)) : start;
+	const b = eDir ? (ends.end ? exitPoint(end, eDir, ends.end) : stubPoint(end, eDir)) : end;
 
 	let corners: RoutePoint[] | null = null;
 	for (const shape of canonicalShapes(a, b)) {
@@ -258,8 +312,8 @@ export function suggestRoute(
 	if (!corners) corners = [{ x: b.x, y: a.y }]; // plain L, last resort — see doc comment.
 
 	const out: RoutePoint[] = [];
-	if (startDir) out.push(a);
+	if (sDir) out.push(a);
 	out.push(...corners);
-	if (endDir) out.push(b);
+	if (eDir) out.push(b);
 	return out.map((p) => [p.x, p.y]);
 }

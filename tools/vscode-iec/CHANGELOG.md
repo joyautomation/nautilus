@@ -26,6 +26,32 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   like a same-line comment already did, and a structural edit to another
   rung no longer disturbs it.
 
+- **The mimic's documented pipe gesture writes a pipe again.** *+ Pipe*,
+  click a port dot, click another, Enter (or double-click) wrote nothing: the
+  op carried the port anchors as live Svelte state, which `postMessage`
+  cannot clone, so it threw, no toast appeared, and the dashed draft stayed
+  on the canvas even after switching back to *Select*. Every mimic op is now
+  copied to plain data before it is posted. If a post still fails, the draft
+  is dropped and a warning says why. Leaving *+ Pipe* also drops an
+  unfinished draft.
+- **Re-route and port-to-port pipes go around their own equipment.** A route
+  used to ignore the two pieces of equipment it connects, so a pipe leaving
+  a tank's side port could run back through the tank. Now it leaves the port
+  outward (in the port's `dir`, or through the face it sits on) past the
+  equipment's edge, then routes around everything, its own equipment
+  included. *Re-route* also resolves ports against the boxes the canvas
+  draws, not a 100 × 80 guess, as does *detach* in the inspector.
+- **Built-in Tank, Pump and Valve ports sit on the drawings.** The default
+  ports were on the box edges, so a first pipe started in mid-air: the
+  tank's `left` floated beside the vessel and `right` sat on the level
+  scale, and the pump's `out` was beside the casing, not on its discharge
+  nozzle. They are now measured off each drawing (tank shell, pump suction
+  stub and top nozzle, valve body ends), each with its exit `dir`. A mimic
+  or component sidecar with explicit `ports` is unaffected.
+- **Port dots show while you drag a pipe end in *Select*.** They used to
+  appear only while *+ Pipe* was armed, so there was no way to see where an
+  end could land.
+
 ## [0.11.1] - 2026-09-25
 
 The stable-readiness release: everything the first stable release (0.10.0)
