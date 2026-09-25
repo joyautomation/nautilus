@@ -3,6 +3,7 @@ package fbd
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -192,26 +193,41 @@ func (b *modelBuilder) duplicateText(ids []string, inUse func(string) bool, keep
 		span  exprPos
 		own   []string // names this statement introduces
 		exprs []expr   // argument/source trees — out-of-selection leaves sever
+		from  map[string]bool
 	}
 	var stmts []*stmt
 	seen := map[exprPos]*stmt{}
-	addSpan := func(span exprPos, exprs []expr, own ...string) {
-		if s, dup := seen[span]; dup {
-			// An FB declaration-with-call arrives via both fbDecls and
-			// nodes — merge so the call's argument trees aren't lost.
-			s.exprs = append(s.exprs, exprs...)
+	// addSpan registers a statement once per span. from names the part of
+	// the statement the caller resolved (its "decl" head or its "node"
+	// body): one statement is reachable through several selected ids —
+	// c:X and its inline block b:c.X, an instance's declaration and its
+	// call — and each part's expressions must be collected exactly once,
+	// or every out-of-selection leaf is cut twice and the overlapping
+	// splices garble the copy (MUL(Ki, e, ScanDtS) → MUL(_, _0.0)).
+	addSpan := func(span exprPos, from string, exprs []expr, own ...string) {
+		s, dup := seen[span]
+		if !dup {
+			s = &stmt{span: span, from: map[string]bool{}}
+			seen[span] = s
+			stmts = append(stmts, s)
+		}
+		if s.from[from] {
 			return
 		}
-		s := &stmt{span: span, own: own, exprs: exprs}
-		seen[span] = s
-		stmts = append(stmts, s)
+		s.from[from] = true
+		s.exprs = append(s.exprs, exprs...)
+		for _, o := range own {
+			if !slices.Contains(s.own, o) {
+				s.own = append(s.own, o)
+			}
+		}
 	}
 	for _, id := range ids {
 		switch {
 		case strings.HasPrefix(id, "b:w."):
 			name := strings.TrimPrefix(id, "b:w.")
 			if span, ok := b.nl.wireSpan[name]; ok {
-				addSpan(span, []expr{b.nl.wires[name]}, name)
+				addSpan(span, "node", []expr{b.nl.wires[name]}, name)
 			}
 		case strings.HasPrefix(id, "c:"), strings.HasPrefix(id, "b:c."):
 			target := strings.TrimPrefix(strings.TrimPrefix(id, "b:c."), "c:")
@@ -229,14 +245,14 @@ func (b *modelBuilder) duplicateText(ids []string, inUse func(string) bool, keep
 			}
 			for _, n := range b.nl.nodes {
 				if !n.isCall && n.target == target {
-					addSpan(n.span, []expr{n.source}, target)
+					addSpan(n.span, "node", []expr{n.source}, target)
 				}
 			}
 		case strings.HasPrefix(id, "f:"):
 			inst := strings.TrimPrefix(id, "f:")
 			for _, d := range b.nl.fbDecls {
 				if d.name == inst {
-					addSpan(d.span, nil, inst)
+					addSpan(d.span, "decl", nil, inst)
 				}
 			}
 			for _, n := range b.nl.nodes {
@@ -245,7 +261,7 @@ func (b *modelBuilder) duplicateText(ids []string, inUse func(string) bool, keep
 					for _, a := range n.args {
 						args = append(args, a.val)
 					}
-					addSpan(n.span, args, inst)
+					addSpan(n.span, "node", args, inst)
 				}
 			}
 		}
@@ -361,7 +377,14 @@ func (b *modelBuilder) stmtLines(span exprPos, cut []exprPos) string {
 		}
 		return cut[i].col > cut[j].col
 	})
+	// Cuts are replaced right-to-left; one that overlaps the previous
+	// (already-applied) cut would splice into the `_` just written, so
+	// duplicates and nested spans are skipped defensively.
+	prevLine, prevCol := -1, 0
 	for _, p := range cut {
+		if p.line == prevLine && p.endCol > prevCol {
+			continue
+		}
 		li := p.line - span.line
 		if li < 0 || li >= len(lines) || p.line != p.endLine {
 			continue
@@ -371,6 +394,7 @@ func (b *modelBuilder) stmtLines(span exprPos, cut []exprPos) string {
 			continue
 		}
 		lines[li] = l[:p.col-1] + "_" + l[p.endCol-1:]
+		prevLine, prevCol = p.line, p.col
 	}
 	var out strings.Builder
 	for _, l := range lines {

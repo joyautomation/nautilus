@@ -1146,6 +1146,11 @@ func lowerNumberLit(n *NumberLit) (ir.Expr, error) {
 func (l *lowerer) lowerIdent(name string) (ir.Expr, error) {
 	sym, ok := l.scope[name]
 	if !ok {
+		if name == "_" {
+			// The diagram editors' placeholder: an open FBD pin, a ladder
+			// coil or contact not yet named ("+ rung" writes `( _ )`).
+			return nil, fmt.Errorf("unfilled placeholder `_`: connect this pin or name its variable")
+		}
 		return nil, fmt.Errorf("undeclared identifier %q (declare in VAR_* or VAR_GLOBAL block)", name)
 	}
 	if sym.kind == ir.VarGlobal {

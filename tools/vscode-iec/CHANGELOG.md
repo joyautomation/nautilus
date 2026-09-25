@@ -208,6 +208,31 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 - **SFC: Del works right after a double-click edit.** Closing the in-place
   editor now returns focus to the chart (the same fix applies to the
   ladder view).
+- **FBD: select-all copy → paste writes valid FBD.** Pasting a selection
+  that reached one statement twice — a coil plus its inline block, which
+  select-all and a rubber-band always do — cut each outside reference twice
+  and garbled the copy (`MUL(Ki, e, ScanDtS)` became `MUL(_, _0.0)`, which
+  `naut check` rejects). Each statement is now copied once. Needs the
+  matching `naut` CLI.
+- **FBD: select-all + Del deletes.** A selection holding input/constant
+  chips or inline blocks alongside the statements was refused whole
+  ("is not deletable"); those now ride along with the statements they
+  belong to. Needs the matching `naut` CLI.
+- **SFC: *Initialize* writes a chart `naut check` accepts.** The seeded
+  chart now has an `INITIAL_STEP Start`, like the FBD and Ladder skeletons
+  are check-clean; *+ step* on it adds an ordinary step. *+ step* or a paste
+  on a blank file makes that (entry) step the initial one, and pasting
+  after a select-all cut restores an initial step instead of leaving the
+  chart without one. Needs the matching `naut` CLI.
+- **SFC: an unreachable step is a warning, not an error.** A step just
+  added or pasted is unreachable until its first transition lands; it no
+  longer fails `naut check` (it never activates, and the chart compiles and
+  runs as wired). Needs the matching `naut` CLI.
+- **`_` placeholders say what they are.** An open FBD pin or a fresh ladder
+  rung's `( _ )` reported `undeclared identifier "_"`; it now reads
+  "unfilled placeholder `_`: connect this pin or name its variable". Still
+  an error — the rung writes nowhere until named. Needs the matching `naut`
+  CLI.
 
 ## [0.11.0] - 2026-09-24
 

@@ -325,3 +325,43 @@ func TestEditPasteFromSnapshot(t *testing.T) {
 		t.Error("ids that resolve to nothing in the snapshot must error")
 	}
 }
+
+// A statement reached through two selected ids — a coil and its inline
+// block, as select-all or a rubber-band hands over — is copied once, with
+// each out-of-selection leaf cut once. Cutting twice spliced into the `_`
+// just written: MUL(Ki, e, ScanDtS) became MUL(_, _0.0).
+func TestEditDuplicateCoilWithInlineBlock(t *testing.T) {
+	src := `PROGRAM Main
+VAR
+  Ki : REAL;
+  e : REAL;
+  Dt : REAL;
+  Out : REAL;
+END_VAR
+FBD
+  Out := LIMIT(0.0, MUL(Ki, e, Dt), 100.0)
+END_FBD
+END_PROGRAM`
+	out := apply(t, src, mustOp(t, src, EditOp{Type: "duplicate",
+		Nodes: []string{"c:Out", "b:c.Out", "b:c.Out.1", "v:Ki", "k:0"}}))
+	if !strings.Contains(out, "Out_copy := LIMIT(0.0, MUL(_, _, _), 100.0)\n") {
+		t.Errorf("coil + inline block copy garbled:\n%s", out)
+	}
+	if strings.Count(out, "Out_copy :=") != 1 {
+		t.Errorf("statement copied more than once:\n%s", out)
+	}
+}
+
+// A batched delete (select-all + Del) carries input chips, constants, and
+// inline blocks alongside the statements — they ride along instead of
+// refusing the whole batch; a batch of only those still reports.
+func TestEditDeleteBatchRideAlong(t *testing.T) {
+	out := apply(t, paritySrc, mustOp(t, paritySrc, EditOp{Type: "deleteNode",
+		Nodes: []string{"v:Start", "b:w.seal", "c:Run", "k:0", "b:w.hot", "c:Hot"}}))
+	if strings.Contains(out, ":=") || strings.Contains(out, "OR(") {
+		t.Errorf("statements survived the batched delete:\n%s", out)
+	}
+	if _, err := ApplyEdit(paritySrc, EditOp{Type: "deleteNode", Nodes: []string{"v:Start"}}); err == nil {
+		t.Error("a lone input chip delete must still be refused")
+	}
+}

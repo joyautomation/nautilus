@@ -142,11 +142,16 @@ func Check(prog *Program) []Diagnostic {
 		}
 	}
 
-	// ── unreachable (error) / dead-end (warn) steps ───────────────────────
+	// ── unreachable / dead-end steps (warn) ───────────────────────────────
+	// Both are incomplete wiring, not a malformed chart: an unreachable
+	// step simply never activates (dead code — the chart still compiles and
+	// runs exactly as wired). A step added or pasted in the editor is
+	// unreachable until its first transition lands; reading that as a hard
+	// error failed check on every in-progress edit.
 	for _, s := range prog.Steps {
 		key := strings.ToUpper(s.Name)
 		if !s.Initial && !isTarget[key] {
-			add(s.Pos, SeverityError, "step %q is unreachable: no transition's TO targets it", s.Name)
+			add(s.Pos, SeverityWarning, "step %q is unreachable: no transition's TO targets it", s.Name)
 		}
 		// A chart that is one INITIAL_STEP and nothing else is a valid
 		// degenerate chart (one continuously active step), so the dead-end

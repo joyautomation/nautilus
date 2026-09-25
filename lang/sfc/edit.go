@@ -3,6 +3,7 @@ package sfc
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -948,7 +949,7 @@ func freshName(name string, taken func(string) bool) string {
 var trailingNumRe = regexp.MustCompile(`^(.*?[A-Za-z_])(\d+)$`)
 
 // opPasteSteps inserts copied steps (never INITIAL — a chart has exactly
-// one) with their associations, each under its first free name, plus the
+// one — unless the chart has none left) with their associations, each under its first free name, plus the
 // copied transitions between them with their ends following the renames.
 // Positions ride along as layout pins. The result is one edit.
 func opPasteSteps(src string, lines []string, m *Model, op EditOp) ([]TextEdit, error) {
@@ -972,6 +973,28 @@ func opPasteSteps(src string, lines []string, m *Model, op EditOp) ([]TextEdit, 
 		}
 	}
 
+	// A chart with no INITIAL_STEP left (a select-all cut, then paste)
+	// gets one back: the copied fragment's entry — the first pasted step
+	// no pasted transition targets. Otherwise copies are never initial
+	// (a chart has exactly one).
+	entry := ""
+	if !slices.ContainsFunc(m.Steps, func(s GStep) bool { return s.Initial }) {
+		targeted := map[string]bool{}
+		for _, pt := range op.Trans {
+			for _, n := range pt.To {
+				targeted[strings.ToLower(n)] = true
+			}
+		}
+		for _, ps := range op.Steps {
+			if !targeted[strings.ToLower(ps.Name)] {
+				entry = strings.ToLower(ps.Name)
+				break
+			}
+		}
+		if entry == "" {
+			entry = strings.ToLower(op.Steps[0].Name)
+		}
+	}
 	renames := map[string]string{} // lower(old) → new
 	var stepText strings.Builder
 	pins := map[string]Point{}
@@ -980,7 +1003,7 @@ func opPasteSteps(src string, lines []string, m *Model, op EditOp) ([]TextEdit, 
 			return nil, fmt.Errorf("sfc edit: %q is not a valid step name", ps.Name)
 		}
 		if _, dup := renames[strings.ToLower(ps.Name)]; dup {
-			return nil, fmt.Errorf("sfc edit: step %q is in the paste twice", ps.Name)
+			continue // one step reached twice by the selection: paste it once
 		}
 		name := freshName(ps.Name, func(n string) bool { return stepTaken[strings.ToLower(n)] })
 		stepTaken[strings.ToLower(name)] = true
@@ -990,7 +1013,7 @@ func opPasteSteps(src string, lines []string, m *Model, op EditOp) ([]TextEdit, 
 				return nil, err
 			}
 		}
-		stepText.WriteString("\n" + printStep(&GStep{Name: name, Actions: ps.Actions}))
+		stepText.WriteString("\n" + printStep(&GStep{Name: name, Actions: ps.Actions, Initial: strings.ToLower(ps.Name) == entry}))
 		if ps.X != nil && ps.Y != nil {
 			pins[stepID(name)] = Point{X: *ps.X, Y: *ps.Y}
 		}
