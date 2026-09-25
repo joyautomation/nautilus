@@ -17,6 +17,13 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   picks a folder, a name, and a template, then runs `naut new --no-input`
   and offers to open the result. A thin wrapper around the CLI's own
   non-interactive path — no scaffolding logic lives in the extension.
+- **Title-bar buttons for the diagram editors.** A `.fbd` / `.ld` / `.sfc` /
+  `.L5X` text editor now has *Open as Diagram Editor* next to the preview
+  button, which reopens the tab as the FBD / Ladder / SFC diagram editor
+  (unsaved changes carry over). The diagram editors have *Diff vs HEAD* and
+  *Show Source* (the text, beside), with *between git revisions…* and *vs
+  Controller* under "…". The diffs used to be Command Palette only. Text is
+  still the default editor for these files.
 - **Install the CLI in one click.** *nautilus: Install or Update the naut
   CLI* downloads the latest `naut` release for your OS and CPU from GitHub,
   verifies it against the release's `checksums.txt`, installs it into the
@@ -54,6 +61,16 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- **Undo, redo and save work from the diagram previews.** In the FBD /
+  Ladder / SFC preview panels, Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z / Ctrl+Y and
+  Ctrl/Cmd+S did nothing, because the preview isn't an editor over the
+  file. They now undo, redo and save the source text and the diagram
+  re-renders from it. In a diff they don't undo (the diff is a read-only
+  review), and an L5X diagram, which is read-only, doesn't either.
+- **Ctrl+Z in a diagram's text field undoes the field.** In the diagram
+  editors, Ctrl+Z in a text field that doesn't handle its own keys (the SFC
+  add-step / add-transition form, the retarget fields) undid the whole
+  document; every text field in a diagram now undoes its own typing.
 - **A hung CLI can't stall a diagram.** Every short CLI call (diagram graph
   and edit, version) now times out after 15 seconds, and an acceptance-test
   run after 5 minutes; the ladder and SFC edit queues previously waited
