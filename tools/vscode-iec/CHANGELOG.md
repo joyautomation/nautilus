@@ -89,6 +89,12 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Changed
 
+- **README rewritten for the stable release.** The Marketplace page now
+  leads with a three-step start, then one short section per capability
+  (diagrams, visual diff, live values and online edit, mimic editor,
+  testing, L5X, language features), a settings and commands reference,
+  troubleshooting, and the release channels. Contributor material moved to
+  `CONTRIBUTING.md`.
 - **Diagrams follow light, dark and high-contrast themes.** Ladder diff
   colours (added cyan, changed amber) come from theme tokens with light
   variants instead of fixed dark-theme hex; FBD's MiniMap and zoom controls
