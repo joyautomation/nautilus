@@ -7,6 +7,11 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Added
 
+- **Walkthrough visuals.** The *Create a project*, *Open a diagram* and
+  *Test it* steps now show what they do — the Create Project flow as a
+  short GIF, the Demo's FBD with live values, and the Testing view with the
+  suite passing — and *Run it*'s live-values image is re-shot at a legible
+  size. New screenshots in `images/` for the README as well.
 - **Getting Started walkthrough.** *nautilus: Get Started* (also opened
   automatically the first time the extension activates, if the workspace
   isn't already a nautilus project) walks through installing `naut`,

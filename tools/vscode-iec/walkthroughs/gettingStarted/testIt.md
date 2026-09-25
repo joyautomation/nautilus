@@ -1,3 +1,5 @@
+![The Testing view with the Demo acceptance suite passing, 4/4, beside the suite with a pass mark on each test](../../images/testing-view.png)
+
 ```sh
 naut test
 ```

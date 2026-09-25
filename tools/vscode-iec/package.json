@@ -647,7 +647,7 @@
             "description": "In a terminal at the project root, run `naut run` — it starts the scan loop and a tag API on `http://localhost:8080`.\nThen connect the editor to it: live values render as inline pills next to every identifier, and diagrams animate power flow in real time.",
             "media": {
               "image": "images/live-values.png",
-              "altText": "Live tag values rendered as pills next to identifiers in a .st file, with the nautilus file tree alongside"
+              "altText": "Live tag values rendered as pills next to every tag reference in the Demo template's sim.st"
             },
             "completionEvents": [
               "onCommand:nautilus.connect",
