@@ -211,3 +211,33 @@ specifies for duty-mapping — a larger, un-spec'd change. Documented in
 `lift-station_test.yaml`'s "permissives block a start" test and left as
 literal-spec behavior; flagging here in case the lead session wants
 true instant failover on any availability loss as a follow-up.
+
+**2026-09-25 · a multi-line `(* ... *)` comment right after a `RUNG` name
+breaks the ladder parser · bug**
+
+First cut of `permissives.ld` wrote a rung comment the way this file's
+own header comments wrap across lines:
+
+```
+RUNG p101req (* duty mapping + high-high override, one rung: LSHH forces
+               the call regardless of the sequence or who's lead *)
+  [ LeadIsP101 LeadReq | /LeadIsP101 LagReq | LSHH101 ] ( P101_Req )
+```
+
+Expected the same block-comment wrapping every other language in this
+project uses freely (SFC/FBD/ST headers all wrap `(* ... *)` across
+several lines with no issue). Got `permissives.ld: ld: line 46: expected
+a name, got "*"` from `naut check` — a hard parse error, not a
+diagnostic pointing at the comment. Reproduced on two separate
+occurrences in the same file (both rung-trailing multi-line comments).
+Every working `.ld` example in the repo (`heated-tank-nogo/interlocks.ld`,
+`ladder-subroutines/*.ld`) only ever uses a `(* ... *)` comment that
+closes on the same line it opens, right after a `RUNG <name>` — in
+hindsight, a pattern nobody had broken yet rather than a documented
+rule. Worked around it by moving the explanation to a `//` line above
+the `RUNG` line instead of an inline block comment trailing the rung
+name. Where: the `.ld` parser's rung-header handling (`lang/ld`) — not
+chased to the exact token-level cause in the time available, but the
+failure is specific to the multi-line block-comment case immediately
+after a rung name; a single-line `(* ... *)` in the same position works
+fine.
