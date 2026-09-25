@@ -7,6 +7,7 @@
 
 import { execFile } from "child_process";
 import * as vscode from "vscode";
+import { applyDiagramKey, isDiagramKeyMessage } from "./diagramKeys";
 import { followActiveDoc } from "./previewFollow";
 import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
 import { graphArgs, isL5X } from "./l5xRouting";
@@ -419,11 +420,19 @@ export class LdPreview implements vscode.Disposable {
         // Like FBD's: selection, clipboard and scroll survive a tab switch.
         { ...webviewOptions(this.context.extensionUri), retainContextWhenHidden: true }
       );
-      this.panel.webview.html = buildWebviewHtml(this.panel.webview, this.context.extensionUri);
+      this.panel.webview.html = buildWebviewHtml(this.panel.webview, this.context.extensionUri, {
+        forwardKeys: true,
+      });
       this.panel.webview.onDidReceiveMessage((msg: { type?: string; op?: unknown }) => {
         const doc = vscode.workspace.textDocuments.find(
           (d) => d.uri.toString() === this.docUri?.toString()
         );
+        if (isDiagramKeyMessage(msg)) {
+          if (doc && this.panel) {
+            void applyDiagramKey(msg.action, doc, this.panel, { diffing: this.diffBase !== undefined, readOnly: isL5XDoc(doc) });
+          }
+          return;
+        }
         if (msg?.type === "exitDiff") {
           this.diffBase = undefined;
           if (doc) void this.update(doc);

@@ -20,6 +20,7 @@ import type { ProgramInfo } from "./onlineEdit";
 import type { LiveValues } from "./liveValues";
 import { gitShow } from "./gitHistory";
 import { pickRevisions } from "./revisionPick";
+import { applyDiagramKey, isDiagramKeyMessage } from "./diagramKeys";
 
 /** Mirror of lang/fbd.Model — see lang/fbd/graph.go for the contract. */
 export type FbdModel = {
@@ -148,7 +149,14 @@ function fbdEdit(source: string, op: FbdEditOp): Promise<{ edits: FbdTextEdit[] 
 
 // ── shared webview session logic ───────────────────────────────────────────
 
-export function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
+/** `forwardKeys`: the preview panels — a plain WebviewPanel has no document
+ * for VS Code to undo or save, so the webview posts those keys to the host
+ * (see diagramKeys.ts). The custom editors get them from VS Code natively. */
+export function buildWebviewHtml(
+  webview: vscode.Webview,
+  extensionUri: vscode.Uri,
+  opts: { forwardKeys?: boolean } = {}
+): string {
   // The Svelte Flow editor bundle (webview-ui → media/dist): one JS + one
   // CSS, fully self-contained, CSP-pinned by nonce.
   const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "dist", "fbd-flow.js"));
@@ -164,7 +172,7 @@ export function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.U
 <link rel="stylesheet" href="${styleUri}">
 <title>FBD</title>
 </head>
-<body>
+<body${opts.forwardKeys ? ' data-forward-keys="1"' : ""}>
 <div id="app"></div>
 <script nonce="${nonce}" src="${scriptUri}"></script>
 </body>
@@ -542,6 +550,14 @@ export class FbdPreview implements vscode.Disposable {
         void vscode.commands.executeCommand("nautilus.liveValues.toggle");
         return;
       }
+      const key: unknown = msg;
+      if (isDiagramKeyMessage(key)) {
+        const doc = vscode.workspace.textDocuments.find(
+          (d) => d.uri.toString() === this.docUri?.toString()
+        );
+        if (doc && this.panel) void applyDiagramKey(key.action, doc, this.panel, { diffing: this.diffing });
+        return;
+      }
       if ((msg as { type?: string }).type === "exitDiff") {
         this.diffBase = undefined;
         const doc = vscode.workspace.textDocuments.find(
@@ -556,7 +572,9 @@ export class FbdPreview implements vscode.Disposable {
       );
       if (doc) void handleWebviewMessage(doc, msg);
     });
-    this.panel.webview.html = buildWebviewHtml(this.panel.webview, this.context.extensionUri);
+    this.panel.webview.html = buildWebviewHtml(this.panel.webview, this.context.extensionUri, {
+      forwardKeys: true,
+    });
     attachLiveValues(this.live, this.panel);
     const sync = addSyncTarget(this.panel.webview, () => this.docUri);
     this.panel.onDidDispose(() => sync.dispose());
