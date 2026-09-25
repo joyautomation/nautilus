@@ -1,0 +1,49 @@
+PROGRAM LevelControl
+(* LIC-101: wet-well level to pump speed, plus the high level alarm
+   seal-in. Open the diagram: right-click -> "Open With -> FBD Diagram". *)
+VAR_EXTERNAL
+    LIT101_Level   : REAL;
+    LevelSP        : REAL;
+    Kp             : REAL;
+    Ki             : REAL;
+    Kd             : REAL;
+    MinSpeedHz     : REAL;
+    MaxSpeedHz     : REAL;
+    LevelDtS       : REAL;
+    LeadReq        : BOOL;
+    SpeedRef       : REAL;
+    HandSpeedHz    : REAL;
+    HighLevelAlmSP : REAL;
+    HighLevelAlm   : BOOL;
+
+    P101_RunCmd   : BOOL;
+    P101_InHand   : BOOL;
+    P101_SpeedCmd : REAL;
+    P102_RunCmd   : BOOL;
+    P102_InHand   : BOOL;
+    P102_SpeedCmd : REAL;
+END_VAR
+FBD
+  // LIC-101: level -> speed. AUTO free-wheels (CV tracks CV_MAN, bumpless
+  // on return) whenever no pump is called — LeadReq false parks the loop
+  // instead of integrating error for a pump that isn't running. Direct
+  // acting: level above setpoint calls for MORE speed.
+  lic : PID(AUTO := LeadReq, PV := LIT101_Level, SP := LevelSP,
+            KP := Kp, KI := Ki, KD := Kd,
+            CV_MIN := MinSpeedHz, CV_MAX := MaxSpeedHz,
+            DIRECT := TRUE, DT := LevelDtS)
+  SpeedRef := lic.CV
+
+  // Per-pump speed command: stopped -> 0 Hz; running in Auto -> the loop's
+  // output; running in Hand -> the operator's hand-speed setpoint.
+  P101_SpeedCmd := SEL(P101_RunCmd, 0.0, SEL(P101_InHand, SpeedRef, HandSpeedHz))
+  P102_SpeedCmd := SEL(P102_RunCmd, 0.0, SEL(P102_InHand, SpeedRef, HandSpeedHz))
+
+  // LAH-101: seal-in with hysteresis — latches at HighLevelAlmSP, clears
+  // 5 % below it, so a level sitting right on the setpoint doesn't chatter
+  // the alarm on and off every scan.
+  above = GE(LIT101_Level, HighLevelAlmSP)
+  below = LE(LIT101_Level, SUB(HighLevelAlmSP, 5.0))
+  HighLevelAlm := AND(OR(above, HighLevelAlm), NOT below)
+END_FBD
+END_PROGRAM
