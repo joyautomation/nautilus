@@ -71,6 +71,13 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   editors, Ctrl+Z in a text field that doesn't handle its own keys (the SFC
   add-step / add-transition form, the retarget fields) undid the whole
   document; every text field in a diagram now undoes its own typing.
+- **SFC: the variables panel works.** Declaring or deleting a variable from
+  the SFC diagram's vars panel failed with "unknown op"; `naut sfc edit` now
+  has `declareVar` / `deleteVar` (same payloads as Ladder's).
+- **Compact variable headers list every variable.** A one-line section
+  (`VAR A : BOOL; B : BOOL; END_VAR`) or several declarations on one line
+  showed only the first in the FBD and SFC vars panels. Deleting one of them
+  (FBD, Ladder, SFC) now removes just that declaration; Ladder used to refuse.
 - **A hung CLI can't stall a diagram.** Every short CLI call (diagram graph
   and edit, version) now times out after 15 seconds, and an acceptance-test
   run after 5 minutes; the ladder and SFC edit queues previously waited

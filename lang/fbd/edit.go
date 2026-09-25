@@ -931,6 +931,11 @@ func (b *modelBuilder) opDeclareVar(op EditOp) ([]TextEdit, error) {
 			}
 		}
 	}
+	for _, v := range b.m.Vars { // compact one-line sections the scan above skips
+		if strings.EqualFold(v.Name, name) {
+			return nil, fmt.Errorf("fbd edit: %q is already declared", name)
+		}
+	}
 	if b.nameTaken(name) {
 		return nil, fmt.Errorf("fbd edit: the name %q is already in use", name)
 	}

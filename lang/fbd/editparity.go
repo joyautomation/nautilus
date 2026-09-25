@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/joyautomation/nautilus/lang/internal/hdrvars"
 )
 
 // Editor-parity ops: comments, variable deletion, statement duplication
@@ -107,10 +109,27 @@ func (b *modelBuilder) opDeleteVar(op EditOp) ([]TextEdit, error) {
 	name := strings.TrimSpace(op.NewName)
 	for _, v := range b.m.Vars {
 		if strings.EqualFold(v.Name, name) {
-			return []TextEdit{{Line: v.Line, Col: 1, EndLine: v.Line + 1, EndCol: 1}}, nil
+			return deleteDeclEdit(b.src, v.Line, v.Name)
 		}
 	}
 	return nil, fmt.Errorf("fbd edit: no declaration named %q", name)
+}
+
+// deleteDeclEdit removes one declaration from its line: the whole line when
+// it stands alone, else just its `name : TYPE;` — a compact header
+// (`VAR A : BOOL; B : BOOL; END_VAR`) keeps its neighbours.
+func deleteDeclEdit(lines []string, line int, name string) ([]TextEdit, error) {
+	if line < 1 || line > len(lines) {
+		return nil, fmt.Errorf("fbd edit: declaration line %d out of range", line)
+	}
+	col, end, whole, ok := hdrvars.DeleteSpan(lines[line-1], name)
+	if !ok {
+		return nil, fmt.Errorf("fbd edit: can't locate the declaration of %q", name)
+	}
+	if whole {
+		return []TextEdit{{Line: line, Col: 1, EndLine: line + 1, EndCol: 1}}, nil
+	}
+	return []TextEdit{{Line: line, Col: col, EndLine: line, EndCol: end}}, nil
 }
 
 // ── duplicate (copy/paste) ──────────────────────────────────────────────────

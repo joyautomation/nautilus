@@ -258,3 +258,32 @@ func TestGhostLifecycle(t *testing.T) {
 		t.Errorf("ghost entry not dropped:\n%s", out4)
 	}
 }
+
+// A compact header — several declarations on one line, or a whole section
+// on one line — lists every variable (it used to list only the first) and
+// deletes just the one declaration.
+func TestCompactHeaderVars(t *testing.T) {
+	src := "PROGRAM P\nVAR A : BOOL; B : BOOL; END_VAR\nVAR_EXTERNAL\n  C : INT; D : INT;\nEND_VAR\nFBD\n  B := AND(A, TRUE);\nEND_FBD\nEND_PROGRAM\n"
+	m, err := Graph(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, v := range m.Vars {
+		got = append(got, v.Section+":"+v.Name)
+	}
+	if strings.Join(got, ",") != "VAR:A,VAR:B,VAR_EXTERNAL:C,VAR_EXTERNAL:D" {
+		t.Fatalf("vars = %v", got)
+	}
+	out := apply(t, src, mustOp(t, src, EditOp{Type: "deleteVar", NewName: "A"}))
+	if !strings.Contains(out, "VAR B : BOOL; END_VAR") {
+		t.Fatalf("compact delete:\n%s", out)
+	}
+	out = apply(t, out, mustOp(t, out, EditOp{Type: "deleteVar", NewName: "D"}))
+	if !strings.Contains(out, "  C : INT;\n") {
+		t.Fatalf("second-on-line delete:\n%s", out)
+	}
+	if _, err := ApplyEdit(src, EditOp{Type: "declareVar", NewName: "b", Value: "BOOL"}); err == nil {
+		t.Error("a compact-line duplicate must be refused")
+	}
+}

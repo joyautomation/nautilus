@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/internal/hdrvars"
 	"github.com/joyautomation/nautilus/lang/internal/seed"
 )
 
@@ -85,6 +86,10 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		edits, err = opAddComment(lines, m, op)
 	case "deleteComment":
 		edits, err = opDeleteComment(lines, m, op)
+	case "declareVar":
+		edits, err = opDeclareVar(lines, m, op)
+	case "deleteVar":
+		edits, err = opDeleteVar(lines, m, op)
 	default:
 		return nil, fmt.Errorf("sfc edit: unknown op %q", op.Type)
 	}
@@ -911,6 +916,107 @@ func renderSFCComment(text string) string {
 		b.WriteString("  // " + strings.TrimSpace(line) + "\n")
 	}
 	return b.String()
+}
+
+// ── header variables ─────────────────────────────────────────────────────
+// The vars-panel seam shared with lang/fbd and lang/ld: declarations live
+// in the ST header above the SFC body, edited textually.
+
+var sfcVarSectionRe = regexp.MustCompile(`(?i)^\s*(VAR_EXTERNAL|VAR)\s*$`)
+
+// opDeclareVar inserts "name : TYPE;" into a header section (VAR_EXTERNAL
+// default, VAR for retained locals), creating the section above SFC when
+// the header has none.
+func opDeclareVar(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
+	name := strings.TrimSpace(op.Name)
+	typ := strings.TrimSpace(op.VarType)
+	section := strings.ToUpper(strings.TrimSpace(op.Section))
+	if section == "" {
+		section = "VAR_EXTERNAL"
+	}
+	if section != "VAR" && section != "VAR_EXTERNAL" {
+		return nil, fmt.Errorf("sfc edit: unknown section %q", section)
+	}
+	if !sfcIdentRe.MatchString(name) {
+		return nil, fmt.Errorf("sfc edit: %q is not a valid identifier", name)
+	}
+	if !sfcIdentRe.MatchString(typ) {
+		return nil, fmt.Errorf("sfc edit: %q is not a valid type name", typ)
+	}
+	for _, v := range m.Vars {
+		if strings.EqualFold(v.Name, name) {
+			return nil, fmt.Errorf("sfc edit: %q is already declared", name)
+		}
+	}
+	for _, s := range m.Steps {
+		if strings.EqualFold(s.Name, name) {
+			return nil, fmt.Errorf("sfc edit: %q is already a step name", name)
+		}
+	}
+	for _, a := range m.Actions {
+		if strings.EqualFold(a.Name, name) {
+			return nil, fmt.Errorf("sfc edit: %q is already an action name", name)
+		}
+	}
+
+	// Scanned on comment-stripped text so a doc comment reading like header
+	// structure isn't mistaken for it.
+	stripped := strings.Split(hdrvars.StripComments(strings.Join(lines, "\n")), "\n")
+	sfcLine := -1
+	for i, l := range stripped {
+		if sfcStartRe.MatchString(l) {
+			sfcLine = i
+			break
+		}
+	}
+	if sfcLine == -1 {
+		return nil, fmt.Errorf("sfc edit: no SFC block")
+	}
+	insertAt, inSection := -1, ""
+	for i := 0; i < sfcLine; i++ {
+		if mm := sfcVarSectionRe.FindStringSubmatch(stripped[i]); mm != nil {
+			inSection = strings.ToUpper(mm[1])
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(stripped[i]), "END_VAR") {
+			if inSection == section {
+				insertAt = i
+			}
+			inSection = ""
+		}
+	}
+	decl := "    " + name + " : " + typ + ";\n"
+	if insertAt >= 0 {
+		at := insertAt + 1 // 1-based line of END_VAR
+		return []TextEdit{{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: decl}}, nil
+	}
+	at := sfcLine + 1
+	return []TextEdit{{Line: at, Col: 1, EndLine: at, EndCol: 1,
+		NewText: section + "\n" + decl + "END_VAR\n"}}, nil
+}
+
+// opDeleteVar removes a declaration by name — the whole line when it
+// stands alone, else just its `name : TYPE;`. References the chart still
+// holds become undeclared-variable diagnostics (the never-block posture).
+func opDeleteVar(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
+	name := strings.TrimSpace(op.Name)
+	for _, v := range m.Vars {
+		if !strings.EqualFold(v.Name, name) {
+			continue
+		}
+		if v.Line < 1 || v.Line > len(lines) {
+			break
+		}
+		col, end, whole, ok := hdrvars.DeleteSpan(lines[v.Line-1], v.Name)
+		if !ok {
+			return nil, fmt.Errorf("sfc edit: can't locate the declaration of %q", name)
+		}
+		if whole {
+			return []TextEdit{{Line: v.Line, Col: 1, EndLine: v.Line + 1, EndCol: 1}}, nil
+		}
+		return []TextEdit{{Line: v.Line, Col: col, EndLine: v.Line, EndCol: end}}, nil
+	}
+	return nil, fmt.Errorf("sfc edit: no declaration named %q", name)
 }
 
 // ── applying edits to a scratch copy (the never-block parse gate) ──────

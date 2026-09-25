@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/internal/hdrvars"
 	"github.com/joyautomation/nautilus/lang/internal/seed"
 )
 
@@ -800,7 +801,6 @@ func opSetRungComment(src string, m *Model, op EditOp) ([]TextEdit, error) {
 // header (before the LD block), so the diagram edits them textually.
 
 var ldVarSectionRe = regexp.MustCompile(`(?i)^\s*(VAR_EXTERNAL|VAR)\s*$`)
-var varKeywordRe = regexp.MustCompile(`(?i)\b(VAR|VAR_EXTERNAL|END_VAR)\b`)
 
 // opDeclareVar inserts "name : TYPE;" into a header section (VAR_EXTERNAL
 // default, VAR for retained locals), creating the section above LD if needed.
@@ -875,14 +875,16 @@ func opDeleteVar(src string, m *Model, op EditOp) ([]TextEdit, error) {
 		if !strings.EqualFold(v.Name, name) {
 			continue
 		}
-		// Whole-line removal only: the line must hold just this declaration —
-		// a compact header (several decls, or the section markers sharing
-		// the line) would lose more than the variable.
-		t := strings.TrimSpace(strings.Split(src, "\n")[v.Line-1])
-		if strings.Count(t, ";") != 1 || !strings.HasSuffix(t, ";") || varKeywordRe.MatchString(t) {
-			return nil, fmt.Errorf("ld edit: %q shares its line with other declarations — edit the header text directly", name)
+		// The whole line when the declaration stands alone on it, else just
+		// its `name : TYPE;` — a compact header keeps its neighbours.
+		col, end, whole, ok := hdrvars.DeleteSpan(strings.Split(src, "\n")[v.Line-1], v.Name)
+		if !ok {
+			return nil, fmt.Errorf("ld edit: can't locate the declaration of %q", name)
 		}
-		return []TextEdit{{Line: v.Line, Col: 1, EndLine: v.Line + 1, EndCol: 1}}, nil
+		if whole {
+			return []TextEdit{{Line: v.Line, Col: 1, EndLine: v.Line + 1, EndCol: 1}}, nil
+		}
+		return []TextEdit{{Line: v.Line, Col: col, EndLine: v.Line, EndCol: end}}, nil
 	}
 	return nil, fmt.Errorf("ld edit: no declaration named %q", name)
 }

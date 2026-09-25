@@ -185,6 +185,11 @@ type EditOp struct {
 	Comment *int   `json:"comment,omitempty"`
 	Text    string `json:"text,omitempty"`
 
+	// declareVar / deleteVar (Name is the variable) — the same payload
+	// shape as lang/ld's, so the shared vars panel posts one form.
+	VarType string `json:"varType,omitempty"`
+	Section string `json:"section,omitempty"`
+
 	// Pou names the PROGRAM a blank file is seeded with (see ApplyEdit).
 	Pou string `json:"pou,omitempty"`
 }
