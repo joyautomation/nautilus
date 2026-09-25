@@ -20,6 +20,7 @@ package lsp
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -264,6 +265,17 @@ func fingerprintProject(dir string) string {
 		}
 		fmt.Fprintf(&b, "%s:%d:%d\n", name, info.ModTime().UnixNano(), info.Size())
 	}
+	// lib/ libraries compose into every program, so an edit there must
+	// invalidate the build too.
+	_ = filepath.WalkDir(filepath.Join(dir, stproject.LibDir), func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !isProgramFile(d.Name()) {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			fmt.Fprintf(&b, "%s:%d:%d\n", p, info.ModTime().UnixNano(), info.Size())
+		}
+		return nil
+	})
 	return b.String()
 }
 

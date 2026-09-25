@@ -1,0 +1,17 @@
+TYPE TankState :
+STRUCT
+    Level : REAL;
+END_STRUCT;
+END_TYPE
+
+FUNCTION_BLOCK TankModel
+VAR_INPUT
+    Fill : BOOL;
+END_VAR
+VAR_OUTPUT
+    Level : REAL;
+END_VAR
+IF Fill THEN
+    Level := Level + 1.0;
+END_IF;
+END_FUNCTION_BLOCK

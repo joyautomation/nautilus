@@ -1,0 +1,15 @@
+# A project whose shared code lives in lib/: two ST libraries (one nested)
+# and a ladder library, consumed by a root program. Fixture for the lib/
+# composition rule — see internal/stproject/libdir.go.
+name: libdir
+tasks:
+  - program: main.st
+    scan: 100ms
+tags:
+  - { name: Start, role: setpoint, init: false }
+  - { name: Stop,  role: setpoint, init: false }
+  - { name: Run,   role: output,   init: false }
+  - { name: Level, role: state,    init: 0.0 }
+  - { name: High,  role: state,    init: false }
+driver:
+  type: memory

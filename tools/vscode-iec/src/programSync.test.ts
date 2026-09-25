@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { controllerPrelude, normalize, pouOf, splitProgram } from "./programSync";
+import { controllerPrelude, inLibDir, isLibraryCandidate, normalize, pouOf, sortPaths, splitProgram } from "./programSync";
 
 const PRELUDE = "FUNCTION_BLOCK RateOfChange\nVAR_INPUT IN : REAL; END_VAR\nEND_FUNCTION_BLOCK\n";
 const BODY = "PROGRAM Main\nVAR x : REAL; END_VAR\nx := 1.0;\nEND_PROGRAM\n";
@@ -44,4 +44,27 @@ test("controllerPrelude: unsplittable source is returned whole", () => {
 test("normalize ignores blank lines and trailing whitespace", () => {
   assert.equal(normalize("a  \n\nb\r\n"), normalize("a\nb"));
   assert.notEqual(normalize("a\nb"), normalize("a\nc"));
+});
+
+test("lib/ layout: which paths are library candidates, and in what order", () => {
+  assert.equal(inLibDir("lib/motor.ld"), true);
+  assert.equal(inLibDir("lib/physics/tank.st"), true);
+  assert.equal(inLibDir("library.st"), false);
+  assert.equal(inLibDir("hmi/lib/x.st"), false);
+
+  assert.equal(isLibraryCandidate("pump.st"), true);
+  assert.equal(isLibraryCandidate("lib/physics/tank.st"), true);
+  assert.equal(isLibraryCandidate("hmi/x.st"), false);
+  assert.equal(isLibraryCandidate("tags/x.st"), false);
+  assert.equal(isLibraryCandidate("lib/node_modules/x.st"), false);
+  assert.equal(isLibraryCandidate("lib/.cache/x.st"), false);
+
+  // Bytewise, like Go's sort.Strings: root and lib/ interleave by path.
+  assert.deepEqual(sortPaths(["types.st", "lib/z.st", "Main.st", "lib/a/b.st", "field_map.st"]), [
+    "Main.st",
+    "field_map.st",
+    "lib/a/b.st",
+    "lib/z.st",
+    "types.st",
+  ]);
 });
