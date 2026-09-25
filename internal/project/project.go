@@ -17,7 +17,6 @@ import (
 	"os"
 	"path"
 	"reflect"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -27,7 +26,6 @@ import (
 	"github.com/joyautomation/nautilus/eip"
 	"github.com/joyautomation/nautilus/internal/stproject"
 	nio "github.com/joyautomation/nautilus/io"
-	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
@@ -392,12 +390,7 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 // comments and tokenizes string literals separately from keywords, so a
 // single PROGRAM token scan is both cheap and correct without a full parse.
 func hasProgramDecl(src []byte) bool {
-	for _, tok := range st.Lex(string(src)) {
-		if tok.Type == st.TokenProgram {
-			return true
-		}
-	}
-	return false
+	return stproject.DeclaresProgram(string(src))
 }
 
 // ReadManifest decodes a manifest and stops there — no programs compiled, no
@@ -515,8 +508,9 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		return nil, fmt.Errorf("%s: at least one task (a program file) is required", ManifestName)
 	}
 
-	// Libraries: every .st in the project root without a PROGRAM — the
-	// same rule the editor, LSP, and pull use, so tooling agrees.
+	// Libraries: every PROGRAM-less .st/.ld/.fbd in the project root and
+	// under lib/ — the same rule the editor, LSP, and pull use, so tooling
+	// agrees.
 	libs, err := libraries(fsys)
 	if err != nil {
 		return nil, err
@@ -621,60 +615,62 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 }
 
 // libraries composes the project's prelude: every root-level file with no
-// PROGRAM. `.st` files join verbatim, in name order; then `.ld` and `.fbd`
-// files — libraries of ladder / netlist FUNCTION_BLOCKs, the IEC answer to
-// a JSR — transpiled to ST, also in name order. See internal/stproject for
-// why that tier order, and why it never decides whether a call resolves.
+// PROGRAM, plus every `.st`/`.ld`/`.fbd` file under lib/ at any depth (see
+// stproject.LibDir). `.st` files join verbatim, in path order; then `.ld`
+// and `.fbd` files — libraries of ladder / netlist FUNCTION_BLOCKs, the IEC
+// answer to a JSR — transpiled to ST, also in path order. See
+// internal/stproject for why that tier order, and why it never decides
+// whether a call resolves.
 //
 // Unlike the editor-side composition, a library that will not transpile is
-// an ERROR here: this is the path `naut check`, `run`, and `build` take,
-// and silently dropping a block would fail later as "unknown type".
+// an ERROR here, and so is a PROGRAM under lib/: this is the path `naut
+// check`, `run`, `build` and `test` take, and silently dropping a block
+// would fail later as "unknown type" in whichever program used it. Errors
+// name the file by its project-relative path (lib/motor.ld).
 func libraries(fsys fs.FS) ([]string, error) {
-	entries, err := fs.ReadDir(fsys, ".")
+	stNames, gNames, err := stproject.LibraryPaths(fsys)
 	if err != nil {
 		return nil, err
 	}
-	var stNames, gNames []string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		switch {
-		case strings.EqualFold(path.Ext(e.Name()), ".st"):
-			stNames = append(stNames, e.Name())
-		case stproject.IsGraphicalLibrary(e.Name()):
-			gNames = append(gNames, e.Name())
-		}
-	}
-	sort.Strings(stNames)
-	sort.Strings(gNames)
 
 	// Read every library as written first: a ladder library resolves the
 	// blocks its siblings declare, in either direction.
 	type libFile struct{ name, src string }
 	var stLibs, gLibs []libFile
 	var sources []string
-	for _, n := range stNames {
+	read := func(n string) (string, bool, error) {
 		src, err := fs.ReadFile(fsys, n)
+		if err != nil {
+			return "", false, err
+		}
+		if hasProgramDecl(src) {
+			if stproject.InLibDir(n) {
+				return "", false, fmt.Errorf("%s declares a PROGRAM, but %s/ holds libraries only — "+
+					"programs belong in the root and in `tasks:`", n, stproject.LibDir)
+			}
+			return "", false, nil
+		}
+		return string(src), true, nil
+	}
+	for _, n := range stNames {
+		src, ok, err := read(n)
 		if err != nil {
 			return nil, err
 		}
-		if hasProgramDecl(src) {
-			continue
+		if ok {
+			stLibs = append(stLibs, libFile{n, src})
+			sources = append(sources, src)
 		}
-		stLibs = append(stLibs, libFile{n, string(src)})
-		sources = append(sources, string(src))
 	}
 	for _, n := range gNames {
-		src, err := fs.ReadFile(fsys, n)
+		src, ok, err := read(n)
 		if err != nil {
 			return nil, err
 		}
-		if hasProgramDecl(src) {
-			continue
+		if ok {
+			gLibs = append(gLibs, libFile{n, src})
+			sources = append(sources, src)
 		}
-		gLibs = append(gLibs, libFile{n, string(src)})
-		sources = append(sources, string(src))
 	}
 
 	var libs []string
