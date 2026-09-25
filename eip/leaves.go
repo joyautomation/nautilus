@@ -41,9 +41,9 @@ func (d *Driver) expandLeaves(typeName, prefix string, depth int) ([]leafDesc, e
 	}
 	var out []leafDesc
 	for _, f := range td.Fields {
-		rel := f.Name
+		rel := f.deviceName()
 		if prefix != "" {
-			rel = prefix + "." + f.Name
+			rel = prefix + "." + f.deviceName()
 		}
 		if code, isElem := elementaryCode(f.Type); isElem {
 			ti, _ := logix.TypeByCode(code)
@@ -220,9 +220,9 @@ func leafValue(lv logix.Value) ir.Value {
 func (d *Driver) buildFromLeaves(td TypeDef, prefix string, vals map[string]ir.Value) (ir.Value, error) {
 	out := ir.Value{Kind: ir.TypeStruct, Struct: d.defs[td.Name], Fld: make([]ir.Value, len(td.Fields))}
 	for i, f := range td.Fields {
-		rel := f.Name
+		rel := f.deviceName()
 		if prefix != "" {
-			rel = prefix + "." + f.Name
+			rel = prefix + "." + f.deviceName()
 		}
 		if _, isElem := elementaryCode(f.Type); isElem || f.Type == "STRING" {
 			v, ok := vals[rel]
