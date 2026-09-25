@@ -626,65 +626,19 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 // an ERROR here, and so is a PROGRAM under lib/: this is the path `naut
 // check`, `run`, `build` and `test` take, and silently dropping a block
 // would fail later as "unknown type" in whichever program used it. Errors
-// name the file by its project-relative path (lib/motor.ld).
+// name the file by its project-relative path (lib/motor.ld). The rule
+// itself is stproject.Libraries, shared with `naut compose` (what the VS
+// Code extension downloads), so the two can never disagree.
 func libraries(fsys fs.FS) ([]string, error) {
-	stNames, gNames, err := stproject.LibraryPaths(fsys)
+	libs, err := stproject.Libraries(fsys, nil)
 	if err != nil {
 		return nil, err
 	}
-
-	// Read every library as written first: a ladder library resolves the
-	// blocks its siblings declare, in either direction.
-	type libFile struct{ name, src string }
-	var stLibs, gLibs []libFile
-	var sources []string
-	read := func(n string) (string, bool, error) {
-		src, err := fs.ReadFile(fsys, n)
-		if err != nil {
-			return "", false, err
-		}
-		if hasProgramDecl(src) {
-			if stproject.InLibDir(n) {
-				return "", false, fmt.Errorf("%s declares a PROGRAM, but %s/ holds libraries only — "+
-					"programs belong in the root and in `tasks:`", n, stproject.LibDir)
-			}
-			return "", false, nil
-		}
-		return string(src), true, nil
+	out := make([]string, len(libs))
+	for i, l := range libs {
+		out[i] = l.ST
 	}
-	for _, n := range stNames {
-		src, ok, err := read(n)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			stLibs = append(stLibs, libFile{n, src})
-			sources = append(sources, src)
-		}
-	}
-	for _, n := range gNames {
-		src, ok, err := read(n)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			gLibs = append(gLibs, libFile{n, src})
-			sources = append(sources, src)
-		}
-	}
-
-	var libs []string
-	for _, l := range stLibs {
-		libs = append(libs, l.src)
-	}
-	for _, l := range gLibs {
-		stSrc, err := stproject.LibraryST(l.name, l.src, sources...)
-		if err != nil {
-			return nil, err
-		}
-		libs = append(libs, stSrc)
-	}
-	return libs, nil
+	return out, nil
 }
 
 func tagDefs(tags []TagConfig) ([]runtime.TagDef, error) {

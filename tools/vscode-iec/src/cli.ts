@@ -45,6 +45,11 @@ export function initCli(context: vscode.ExtensionContext): void {
   cache = undefined;
 }
 
+/** The oldest naut this extension works with (nautilusCli.minVersion). */
+export function minCliVersionNeeded(): string {
+  return minCliVersion;
+}
+
 /** The binary the "Install naut" command writes. */
 export function managedCliPath(): string | undefined {
   return managedBinDir && path.join(managedBinDir, process.platform === "win32" ? "naut.exe" : "naut");

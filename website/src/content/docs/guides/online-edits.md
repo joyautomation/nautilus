@@ -37,6 +37,16 @@ and exits non-zero, so CI can fail a build when a controller has un-pulled
 edits. Composition is a single definition shared by the runtime, the language
 server, download, and pull, so a program round-trips losslessly.
 
+What a download sends is the program's **composition**: the project's
+library prelude — every PROGRAM-less `.st` file in the root and under `lib/`,
+verbatim, then every PROGRAM-less `.ld` / `.fbd` file transpiled to ST — then
+the program file as written (a `.ld` program stays ladder; the controller
+transpiles it and reports the original). VS Code asks the CLI for it rather
+than re-deriving it, so a program that calls a block written in ladder
+downloads with that block; it needs `naut` 0.13.0 or newer. To see exactly
+what a download of a program will send, run `naut compose <program file>`
+(`--json` splits it into prelude, program, POU, and library paths).
+
 ## Working against a remote controller
 
 All of this — live values, online edits, pull — works over the network, not

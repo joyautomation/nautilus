@@ -52,6 +52,27 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   survives into the ladder diagram (`Rung.comment` in the graph JSON) exactly
   like a same-line comment already did, and a structural edit to another
   rung no longer disturbs it.
+- **Online edits compose ladder and FBD libraries.** A program that uses a
+  block from a PROGRAM-less `.ld` or `.fbd` library (a ladder
+  `MotorStarter` in `motor.ld`, say) can now be downloaded: the prelude
+  sent to the controller carries the library's blocks, transpiled, exactly
+  as `naut run` composes them. Before, only `.st` libraries joined the
+  prelude, so the controller refused the program ("unknown type"), and
+  diff, pull, and the sync status compared against the wrong prelude. The
+  extension no longer re-implements composition: download, diff, pull,
+  rollback, the sync status, and *Open block source* all ask `naut compose`
+  (which also decides PROGRAM-ness lexically, so a comment that wraps onto a
+  line starting with "PROGRAM" no longer turns a library into a program).
+  *Open block source* now finds blocks written in `.ld`/`.fbd` libraries,
+  and live-value instance discovery reads `.ld` programs. A library that
+  won't transpile, or a PROGRAM under `lib/`, is reported the way
+  `naut check` reports it instead of being silently dropped. The sync status
+  keeps polling the controller every 3 seconds but recomposes only when a
+  project file (root, `lib/`, `nautilus.yaml`) or an unsaved buffer
+  changed.
+- **Requires naut 0.13.0** (the next CLI release, which adds
+  `naut compose`); an older `naut` gets the *Update naut* prompt, and online
+  edits say plainly that they need it.
 - **The ladder palette row is opaque.** Scrolled rungs no longer show through
   its buttons.
 - **Ladder zoom by keyboard or the zoom buttons keeps the left rail in

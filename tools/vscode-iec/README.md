@@ -158,8 +158,9 @@ server.
 ## Requirements
 
 - VS Code 1.82 or newer, on Linux, macOS or Windows.
-- The `naut` CLI, **0.12.0 or newer**, for diagnostics and the diagram
-  editors. **nautilus: Install or Update the naut CLI** installs it; a
+- The `naut` CLI, **0.13.0 or newer**, for diagnostics, the diagram
+  editors, and online edits (which ask `naut compose` for the program's
+  composition). **nautilus: Install or Update the naut CLI** installs it; a
   `naut` on your PATH (for example from `go install
   github.com/joyautomation/nautilus/cmd/naut@latest`) is used first. The
   extension warns when the one it finds is older than it needs.

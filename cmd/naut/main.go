@@ -68,6 +68,10 @@ Usage:
   naut pull           Pull a controller's online edits back into the
                           program file (--host <controller>). Inverse of the
                           VS Code "Download Program to Controller" command.
+  naut compose <f>    Print the source the controller runs for a program:
+                          the library prelude (lib/ and root, .ld/.fbd
+                          transpiled) + the program (--json for the parts).
+                          What "Download Program to Controller" sends.
   naut historian      Archive a controller's tags into Postgres and
                           serve downsampled history (-source, -db).
   naut fbd graph <f>  Emit a .fbd file's diagram render model as JSON
@@ -118,6 +122,8 @@ func main() {
 		os.Exit(runAlarms(os.Args[2:]))
 	case "pull":
 		os.Exit(runPull(os.Args[2:]))
+	case "compose":
+		os.Exit(runCompose(os.Args[2:]))
 	case "historian":
 		os.Exit(runHistorian(os.Args[2:]))
 	case "fbd":
