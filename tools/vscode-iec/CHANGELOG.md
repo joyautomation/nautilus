@@ -17,6 +17,13 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   picks a folder, a name, and a template, then runs `naut new --no-input`
   and offers to open the result. A thin wrapper around the CLI's own
   non-interactive path — no scaffolding logic lives in the extension.
+- **Title-bar buttons for the diagram editors.** A `.fbd` / `.ld` / `.sfc` /
+  `.L5X` text editor now has *Open as Diagram Editor* next to the preview
+  button, which reopens the tab as the FBD / Ladder / SFC diagram editor
+  (unsaved changes carry over). The diagram editors have *Diff vs HEAD* and
+  *Show Source* (the text, beside), with *between git revisions…* and *vs
+  Controller* under "…". The diffs used to be Command Palette only. Text is
+  still the default editor for these files.
 - **Install the CLI in one click.** *nautilus: Install or Update the naut
   CLI* downloads the latest `naut` release for your OS and CPU from GitHub,
   verifies it against the release's `checksums.txt`, installs it into the

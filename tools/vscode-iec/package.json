@@ -277,6 +277,16 @@
       {
         "command": "nautilus.getStarted",
         "title": "nautilus: Get Started"
+      },
+      {
+        "command": "nautilus.diagram.openAsDiagram",
+        "title": "nautilus: Open as Diagram Editor",
+        "icon": "$(type-hierarchy-sub)"
+      },
+      {
+        "command": "nautilus.diagram.showSource",
+        "title": "nautilus: Show Source",
+        "icon": "$(go-to-file)"
       }
     ],
     "viewsContainers": {
@@ -332,25 +342,88 @@
       ],
       "editor/title": [
         {
+          "command": "nautilus.diagram.openAsDiagram",
+          "when": "!activeCustomEditorId && resourceLangId =~ /^(iec-fbd|iec-ld|iec-sfc|logix-l5x)$/",
+          "group": "navigation@1"
+        },
+        {
           "command": "nautilus.fbd.preview",
-          "when": "resourceLangId == iec-fbd",
-          "group": "navigation"
+          "when": "!activeCustomEditorId && resourceLangId == iec-fbd",
+          "group": "navigation@2"
         },
         {
           "command": "nautilus.ld.preview",
-          "when": "resourceLangId == iec-ld",
-          "group": "navigation"
+          "when": "!activeCustomEditorId && resourceLangId == iec-ld",
+          "group": "navigation@2"
         },
         {
           "command": "nautilus.sfc.preview",
-          "when": "resourceLangId == iec-sfc",
-          "group": "navigation"
+          "when": "!activeCustomEditorId && resourceLangId == iec-sfc",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nautilus.fbd.diff",
+          "when": "activeCustomEditorId == nautilus.fbdDiagram",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nautilus.ld.diff",
+          "when": "activeCustomEditorId == nautilus.ldDiagram || activeCustomEditorId == nautilus.l5xDiagram",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nautilus.sfc.diff",
+          "when": "activeCustomEditorId == nautilus.sfcDiagram",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nautilus.diagram.showSource",
+          "when": "activeCustomEditorId =~ /^nautilus\\.(fbd|ld|l5x|sfc)Diagram$/",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nautilus.fbd.diffRevisions",
+          "when": "activeCustomEditorId == nautilus.fbdDiagram",
+          "group": "1_diff@1"
+        },
+        {
+          "command": "nautilus.fbd.diffController",
+          "when": "activeCustomEditorId == nautilus.fbdDiagram",
+          "group": "1_diff@2"
+        },
+        {
+          "command": "nautilus.ld.diffRevisions",
+          "when": "activeCustomEditorId == nautilus.ldDiagram || activeCustomEditorId == nautilus.l5xDiagram",
+          "group": "1_diff@1"
+        },
+        {
+          "command": "nautilus.ld.diffController",
+          "when": "activeCustomEditorId == nautilus.ldDiagram",
+          "group": "1_diff@2"
+        },
+        {
+          "command": "nautilus.sfc.diffRevisions",
+          "when": "activeCustomEditorId == nautilus.sfcDiagram",
+          "group": "1_diff@1"
+        },
+        {
+          "command": "nautilus.sfc.diffController",
+          "when": "activeCustomEditorId == nautilus.sfcDiagram",
+          "group": "1_diff@2"
         }
       ],
       "commandPalette": [
         {
           "command": "nautilus.liveValues.refresh",
           "when": "false"
+        },
+        {
+          "command": "nautilus.diagram.openAsDiagram",
+          "when": "!activeCustomEditorId && resourceLangId =~ /^(iec-fbd|iec-ld|iec-sfc|logix-l5x)$/"
+        },
+        {
+          "command": "nautilus.diagram.showSource",
+          "when": "activeCustomEditorId =~ /^nautilus\\.(fbd|ld|l5x|sfc)Diagram$/"
         },
         {
           "command": "nautilus.fbd.preview",
@@ -557,11 +630,12 @@
           {
             "id": "openDiagram",
             "title": "Open a diagram",
-            "description": "Open `program.fbd` — the Demo template's control logic — and switch it to the diagram view: right-click the file and choose **Open With → FBD Diagram**, or click the diagram icon in the editor title bar.\nLadder (`.ld`) and Sequential Function Chart (`.sfc`) files open the same way.",
+            "description": "Open `program.fbd` — the Demo template's control logic — and switch it to the diagram view: click **Open as Diagram Editor** in the editor title bar (or right-click the file and choose **Open With → FBD Diagram**). The preview button beside it opens the diagram next to the text instead.\nLadder (`.ld`) and Sequential Function Chart (`.sfc`) files open the same way.",
             "media": {
               "markdown": "walkthroughs/gettingStarted/openDiagram.md"
             },
             "completionEvents": [
+              "onCommand:nautilus.diagram.openAsDiagram",
               "onCommand:nautilus.fbd.preview",
               "onCommand:nautilus.ld.preview",
               "onCommand:nautilus.sfc.preview"

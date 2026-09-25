@@ -64,8 +64,16 @@ expects:
   them, click an input pin to toggle `NOT`, drag an output onto a pin to
   rewire, and insert instruction templates from the "+ add" palette — every
   gesture is a structural operation resolved by the Go compiler into
-  minimal text edits. Or right-click a `.fbd` file → "Open With → FBD
-  Diagram" to use the diagram as the editor itself.
+  minimal text edits. Or click **Open as Diagram Editor** in the text
+  editor's title bar (or "Reopen Editor With → FBD Diagram") to use the
+  diagram as the editor itself; its title bar has **Diff vs HEAD** and
+  **Show Source** (the text beside it), with the other diffs under "…".
+  Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z (or Ctrl+Y) and Ctrl/Cmd+S work from the
+  diagram in both the preview and the editor: they undo, redo and save the
+  source text, and the diagram follows. Text stays the default editor; to
+  open these files as diagrams by default, set
+  `"workbench.editorAssociations": { "*.fbd": "nautilus.fbdDiagram" }`
+  (likewise `nautilus.ldDiagram`, `nautilus.sfcDiagram`).
 - **Visual diff** — `nautilus: Diff FBD Diagram (vs git HEAD)` overlays the
   committed and working-tree diagrams, coloring added / removed / changed
   blocks and wires; `(vs Controller)` does the same against the program a

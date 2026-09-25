@@ -22,6 +22,7 @@ import { OnlineEdit } from "./onlineEdit";
 import { broadcastSyncState, FbdEditorProvider, FbdPreview } from "./fbdPreview";
 import { LdEditorProvider, LdPreview } from "./ldPreview";
 import { SfcEditorProvider, SfcPreview } from "./sfcPreview";
+import { registerDiagramCommands } from "./diagramCommands";
 import { MimicEditorProvider } from "./mimicEditor";
 import { ComponentEditorProvider } from "./componentEditor";
 import { UserComponentManager } from "./userComponents";
@@ -99,6 +100,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Rockwell L5X exports render through the same ladder editor.
   context.subscriptions.push(ldEditor.register(LdEditorProvider.l5xViewType));
   context.subscriptions.push(new SfcEditorProvider(context, live).register());
+  // Title-bar hops between the text and the diagram editor.
+  context.subscriptions.push(registerDiagramCommands());
   // User-authored Svelte components rendered for real inside the mimic/
   // Component Editor webviews — gated on workspace trust (it compiles and
   // runs the project's own code via esbuild + its svelte/compiler).
