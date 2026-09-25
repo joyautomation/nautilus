@@ -41,12 +41,32 @@ export type LdPin = { name: string; type: string; dir: 'in' | 'out' };
 export type LdBlock = { name: string; line: number; endLine: number; pins?: LdPin[] };
 export type LdVar = { name: string; type: string; init?: string; section: string; line: number; pou?: string };
 export type LdComment = { line: number; endLine: number; text: string };
+/** One insertable block type (lang/ld catalog.go): the standard blocks,
+ * then the user FUNCTION_BLOCKs in scope (this file + project libraries). */
+export type LdFbType = {
+	name: string;
+	detail?: string;
+	user?: boolean;
+	powerIn?: string;
+	powerOut?: string;
+	pins?: { name: string; type: string; dir: 'in' | 'out' | 'inout' }[];
+	/** Starting argument text for a fresh insert. */
+	args?: string;
+	/** A fresh instance is the first free <prefix><n>. */
+	prefix: string;
+};
+/** A tag nautilus.yaml declares (sent with the model inside a project). */
+export type LdTag = { name: string; type?: string; role?: string; unit?: string; desc?: string };
 export type LdModel = {
 	name: string;
 	vars?: LdVar[];
 	rungs: LdRung[];
 	comments?: LdComment[];
 	blocks?: LdBlock[];
+	/** The FB picker's catalog (absent from an older CLI). */
+	fbTypes?: LdFbType[];
+	/** The project manifest's tags, for declare-on-retag. */
+	tags?: LdTag[];
 	/** A whitespace-only source: no POU yet; the first op seeds one. */
 	blank?: boolean;
 };
