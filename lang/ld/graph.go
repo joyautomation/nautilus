@@ -170,7 +170,8 @@ func Graph(src string, libs ...string) (*Model, error) {
 			com = nil
 		}
 	}
-	for i, raw := range lines {
+	for i := 0; i < len(lines); i++ {
+		raw := lines[i]
 		n := i + 1
 		stripped := strippedLines[i]
 		switch {
@@ -188,24 +189,40 @@ func Graph(src string, libs ...string) (*Model, error) {
 			inLD = false
 		case inLD:
 			// Tested against stripped so a comment can't be mistaken for a
-			// RUNG header; the match itself (and bodyCol, which is a column
-			// offset) is re-read from the ORIGINAL line so a real header
-			// comment and the true source column both come through.
+			// RUNG header; the header itself (name, comment, bodyCol) is
+			// then re-read from the ORIGINAL lines so a real header
+			// comment — even one that runs on to further lines — and the
+			// true source column both come through.
 			if rungRe.MatchString(stripped) {
-				idx := rungRe.FindStringSubmatchIndex(raw)
+				hdr, err := parseRungHeader(lines, i)
+				if err != nil {
+					return nil, err
+				}
 				flushCom()
 				if err := flush(); err != nil {
 					return nil, err
 				}
-				mm := rungRe.FindStringSubmatch(raw)
-				name := mm[1]
+				name := hdr.name
 				if name == "" {
 					name = fmt.Sprintf("rung%d", n)
 				}
-				rung = &rungParse{name: name, comment: mm[2], line: n, pou: pou,
-					text: strings.TrimSpace(mm[3]), headText: strings.TrimSpace(mm[3]),
-					bodyCol: idx[6] + 1}
-				lastBody = n
+				// A header comment that spans more than one line already
+				// puts this rung on multiple physical lines, so it never
+				// qualifies as the "inline" (one-line) style — headText
+				// stays empty and Inline detection (in flush) stays false,
+				// even when the comment's closing line also carries
+				// elements (those still compile: they're folded into text
+				// below, just not offered as inline-editable).
+				headText := ""
+				bodyCol := 0
+				if hdr.endLine == i {
+					headText = hdr.tail
+					bodyCol = hdr.bodyCol
+				}
+				rung = &rungParse{name: name, comment: hdr.comment, line: n, pou: pou,
+					text: hdr.tail, headText: headText, bodyCol: bodyCol}
+				lastBody = hdr.endLine + 1
+				i = hdr.endLine
 			} else if t := strings.TrimSpace(raw); strings.HasPrefix(t, "//") {
 				text := strings.TrimSpace(strings.TrimPrefix(t, "//"))
 				if com == nil {

@@ -3,6 +3,19 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A ladder rung's `(* … *)` header comment can span more than one line.**
+  A single-line block comment right after `RUNG <name>` always worked; one
+  wrapped onto a second (or third) line hit a hard parse error instead — the
+  ladder preview and its structural edits picked up the unclosed comment as
+  rung element text and choked on the stray `*`. The comment's full text now
+  survives into the ladder diagram (`Rung.comment` in the graph JSON) exactly
+  like a same-line comment already did, and a structural edit to another
+  rung no longer disturbs it.
+
 ## [0.11.1] - 2026-09-25
 
 The stable-readiness release: everything the first stable release (0.10.0)
