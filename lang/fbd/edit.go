@@ -42,6 +42,7 @@ type TextEdit struct {
 //	disconnect  To/ToPin (+From/FromPin) — remove the connection into a pin
 //	addInput    Node (extensible block), Source (+SourcePin) — append an arg
 //	declareVar  NewName, Value (type), Text (section) — add a declaration
+//	duplicate   Nodes (+ Text: the source they were copied from, KeepRefs)
 type EditOp struct {
 	Type      string `json:"type"`
 	Node      string `json:"node,omitempty"`
@@ -62,6 +63,9 @@ type EditOp struct {
 	// Nodes lists the selection for duplicate (copy/paste) and a batched
 	// deleteNode.
 	Nodes []string `json:"nodes,omitempty"`
+	// KeepRefs (duplicate with a Text snapshot — a cut's paste) keeps
+	// references outside the selection wired instead of severing them.
+	KeepRefs bool `json:"keepRefs,omitempty"`
 	// Pou names the PROGRAM a blank file is seeded with (see ApplyEdit).
 	Pou string `json:"pou,omitempty"`
 }

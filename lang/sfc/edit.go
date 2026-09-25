@@ -86,6 +86,10 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		edits, err = opAddComment(lines, m, op)
 	case "deleteComment":
 		edits, err = opDeleteComment(lines, m, op)
+	case "pasteSteps":
+		edits, err = opPasteSteps(src, lines, m, op)
+	case "deleteSelection":
+		edits, err = opDeleteSelection(src, lines, m, op)
 	case "declareVar":
 		edits, err = opDeclareVar(lines, m, op)
 	case "deleteVar":
@@ -916,6 +920,228 @@ func renderSFCComment(text string) string {
 		b.WriteString("  // " + strings.TrimSpace(line) + "\n")
 	}
 	return b.String()
+}
+
+// ── clipboard: pasteSteps / deleteSelection ─────────────────────────────
+
+// freshName returns name when taken says it's free, else the first free
+// variant: a trailing number counts up (Step3 → Step4), a bare name gains
+// one (Fill → Fill2).
+func freshName(name string, taken func(string) bool) string {
+	if !taken(name) {
+		return name
+	}
+	base, n := name, 2
+	if m := trailingNumRe.FindStringSubmatch(name); m != nil {
+		base = m[1]
+		if v, err := strconv.Atoi(m[2]); err == nil {
+			n = v + 1
+		}
+	}
+	for ; ; n++ {
+		if c := base + strconv.Itoa(n); !taken(c) {
+			return c
+		}
+	}
+}
+
+var trailingNumRe = regexp.MustCompile(`^(.*?[A-Za-z_])(\d+)$`)
+
+// opPasteSteps inserts copied steps (never INITIAL — a chart has exactly
+// one) with their associations, each under its first free name, plus the
+// copied transitions between them with their ends following the renames.
+// Positions ride along as layout pins. The result is one edit.
+func opPasteSteps(src string, lines []string, m *Model, op EditOp) ([]TextEdit, error) {
+	if len(op.Steps) == 0 {
+		return nil, fmt.Errorf("sfc edit: nothing to paste")
+	}
+	stepTaken := map[string]bool{}
+	for _, s := range m.Steps {
+		stepTaken[strings.ToLower(s.Name)] = true
+	}
+	for _, a := range m.Actions {
+		stepTaken[strings.ToLower(a.Name)] = true // one namespace in the transpiled program
+	}
+	for _, v := range m.Vars {
+		stepTaken[strings.ToLower(v.Name)] = true
+	}
+	transTaken := map[string]bool{}
+	for _, t := range m.Trans {
+		if t.Name != "" {
+			transTaken[strings.ToLower(t.Name)] = true
+		}
+	}
+
+	renames := map[string]string{} // lower(old) → new
+	var stepText strings.Builder
+	pins := map[string]Point{}
+	for _, ps := range op.Steps {
+		if !sfcIdentRe.MatchString(ps.Name) {
+			return nil, fmt.Errorf("sfc edit: %q is not a valid step name", ps.Name)
+		}
+		if _, dup := renames[strings.ToLower(ps.Name)]; dup {
+			return nil, fmt.Errorf("sfc edit: step %q is in the paste twice", ps.Name)
+		}
+		name := freshName(ps.Name, func(n string) bool { return stepTaken[strings.ToLower(n)] })
+		stepTaken[strings.ToLower(name)] = true
+		renames[strings.ToLower(ps.Name)] = name
+		for _, a := range ps.Actions {
+			if err := validQualifierTargetTime(a.Qualifier, a.Target, a.Time); err != nil {
+				return nil, err
+			}
+		}
+		stepText.WriteString("\n" + printStep(&GStep{Name: name, Actions: ps.Actions}))
+		if ps.X != nil && ps.Y != nil {
+			pins[stepID(name)] = Point{X: *ps.X, Y: *ps.Y}
+		}
+	}
+	var transText strings.Builder
+	for _, pt := range op.Trans {
+		if len(pt.From) == 0 || len(pt.To) == 0 {
+			continue
+		}
+		if err := validCond(pt.Cond); err != nil {
+			return nil, err
+		}
+		t := GTransition{Cond: strings.TrimSpace(pt.Cond)}
+		if t.Cond == "" {
+			t.Cond = "TRUE"
+		}
+		ok := true
+		for _, n := range pt.From {
+			nn, in := renames[strings.ToLower(n)]
+			ok = ok && in
+			t.From = append(t.From, nn)
+		}
+		for _, n := range pt.To {
+			nn, in := renames[strings.ToLower(n)]
+			ok = ok && in
+			t.To = append(t.To, nn)
+		}
+		if !ok {
+			continue // an end outside the paste: the webview never sends one, but never dangle
+		}
+		if pt.Name != "" {
+			if !sfcIdentRe.MatchString(pt.Name) {
+				return nil, fmt.Errorf("sfc edit: %q is not a valid transition name", pt.Name)
+			}
+			t.Name = freshName(pt.Name, func(n string) bool { return transTaken[strings.ToLower(n)] })
+			transTaken[strings.ToLower(t.Name)] = true
+		}
+		transText.WriteString("\n" + printTransition(&t))
+	}
+
+	stepAt, err := insertionLine(lines, m, "", "step")
+	if err != nil {
+		return nil, err
+	}
+	var edits []TextEdit
+	if transText.Len() > 0 {
+		transAt, err := insertionLine(lines, m, "", "transition")
+		if err != nil {
+			return nil, err
+		}
+		if transAt == stepAt {
+			stepText.WriteString(transText.String())
+		} else {
+			edits = append(edits, TextEdit{Line: transAt, Col: 1, EndLine: transAt, EndCol: 1, NewText: transText.String()})
+		}
+	}
+	edits = append(edits, TextEdit{Line: stepAt, Col: 1, EndLine: stepAt, EndCol: 1, NewText: stepText.String()})
+	result := applyTextEdits(src, edits)
+
+	if len(pins) > 0 {
+		m2, err := Graph(result)
+		if err != nil {
+			return nil, fmt.Errorf("sfc edit: refused — the paste would not parse: %w", err)
+		}
+		entries := map[string]Point{}
+		for id, p := range m2.Layout {
+			entries[id] = p
+		}
+		for id, p := range pins {
+			entries[id] = p
+		}
+		le, err := writeLayoutEdit(strings.Split(result, "\n"), entries)
+		if err != nil {
+			return nil, err
+		}
+		result = applyTextEdits(result, le)
+	}
+	return collapseEdit(src, result), nil
+}
+
+// opDeleteSelection deletes several steps/transitions in ONE op — ids
+// resolve against a single parse (an unnamed transition's id is its line,
+// which per-element ops would shift) and their layout pins drop together.
+// Like deleteStep, transitions left pointing at a deleted step stay as
+// Check breadcrumbs; the webview sends the ones wholly inside a selection.
+func opDeleteSelection(src string, lines []string, m *Model, op EditOp) ([]TextEdit, error) {
+	var edits []TextEdit
+	drop := map[string]bool{}
+	for _, id := range op.Nodes {
+		if drop[id] {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(id, "st:"):
+			s, err := findStep(m, id)
+			if err != nil {
+				return nil, err
+			}
+			edits = append(edits, blockDeleteEdit(lines, s.Line, s.EndLine))
+			drop[s.ID] = true
+		case strings.HasPrefix(id, "tr:"):
+			t, err := findTransition(m, id)
+			if err != nil {
+				return nil, err
+			}
+			edits = append(edits, blockDeleteEdit(lines, t.Line, t.EndLine))
+			drop[t.ID] = true
+		default:
+			return nil, fmt.Errorf("sfc edit: deleteSelection takes step and transition ids, not %q", id)
+		}
+	}
+	if len(edits) == 0 {
+		return nil, nil
+	}
+	result := applyTextEdits(src, edits)
+	if m2, err := Graph(result); err == nil && len(m2.Layout) > 0 {
+		result = applyTextEdits(result, remapLayout(strings.Split(result, "\n"), m2, func(id string) (string, bool) {
+			return id, !drop[id]
+		}))
+	}
+	return collapseEdit(src, result), nil
+}
+
+// collapseEdit expresses src → result as ONE replacement spanning just the
+// changed lines — for ops that build their result in stages (insert, then
+// re-pin layout), where separate edits could touch or overlap.
+func collapseEdit(src, result string) []TextEdit {
+	a := strings.SplitAfter(src, "\n")
+	b := strings.SplitAfter(result, "\n")
+	p := 0
+	for p < len(a) && p < len(b) && a[p] == b[p] {
+		p++
+	}
+	q := 0
+	for q < len(a)-p && q < len(b)-p && a[len(a)-1-q] == b[len(b)-1-q] {
+		q++
+	}
+	if p == len(a) && p == len(b) {
+		return nil
+	}
+	newText := strings.Join(b[p:len(b)-q], "")
+	if p == len(a) { // pure append past the last line
+		last := a[len(a)-1]
+		return []TextEdit{{Line: len(a), Col: len(last) + 1, EndLine: len(a), EndCol: len(last) + 1, NewText: newText}}
+	}
+	endIdx := len(a) - q // first unchanged trailing element
+	if endIdx < len(a) {
+		return []TextEdit{{Line: p + 1, Col: 1, EndLine: endIdx + 1, EndCol: 1, NewText: newText}}
+	}
+	last := a[len(a)-1]
+	return []TextEdit{{Line: p + 1, Col: 1, EndLine: len(a), EndCol: len(last) + 1, NewText: newText}}
 }
 
 // ── header variables ─────────────────────────────────────────────────────

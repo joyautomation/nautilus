@@ -287,3 +287,41 @@ func TestCompactHeaderVars(t *testing.T) {
 		t.Error("a compact-line duplicate must be refused")
 	}
 }
+
+// Cut then paste: the copies come from the snapshot taken at cut time, keep
+// their names (free again once the originals are gone) and, with KeepRefs,
+// their wiring — a move, not a severed copy.
+func TestEditPasteFromSnapshot(t *testing.T) {
+	nodes := []string{"b:w.seal", "c:Run"}
+	cut := apply(t, paritySrc, mustOp(t, paritySrc, EditOp{Type: "deleteNode", Nodes: nodes}))
+	if strings.Contains(cut, "seal = OR") {
+		t.Fatalf("cut left the statement:\n%s", cut)
+	}
+	out := apply(t, cut, mustOp(t, cut, EditOp{Type: "duplicate", Nodes: nodes, Text: paritySrc, KeepRefs: true}))
+	if !strings.Contains(out, "seal = OR(Start, Run)") || !strings.Contains(out, "Run := seal") {
+		t.Fatalf("cut+paste must restore the statements, names and wiring intact:\n%s", out)
+	}
+	if strings.Index(out, "Run := seal") > strings.Index(out, "END_FBD") {
+		t.Fatalf("paste must land inside the FBD block:\n%s", out)
+	}
+	if _, err := Graph(out); err != nil {
+		t.Fatalf("pasted source no longer graphs: %v\n%s", err, out)
+	}
+
+	// A plain copy pasted into a file that still has the originals: fresh
+	// names, out-of-selection refs severed — the duplicate rules.
+	out = apply(t, paritySrc, mustOp(t, paritySrc, EditOp{Type: "duplicate", Nodes: nodes, Text: paritySrc}))
+	if !strings.Contains(out, "seal_copy = OR(_, Run_copy)") || !strings.Contains(out, "Run_copy := seal_copy") {
+		t.Fatalf("snapshot copy into the same file:\n%s", out)
+	}
+
+	// Into another file: names that don't collide there are kept.
+	other := "PROGRAM Other\nVAR_EXTERNAL\n  X : BOOL;\nEND_VAR\nFBD\n  X := TRUE\nEND_FBD\nEND_PROGRAM\n"
+	out = apply(t, other, mustOp(t, other, EditOp{Type: "duplicate", Nodes: []string{"b:w.hot"}, Text: paritySrc}))
+	if !strings.Contains(out, "hot = GT(_, 62.0)") {
+		t.Fatalf("cross-file paste:\n%s", out)
+	}
+	if _, err := ApplyEdit(other, EditOp{Type: "duplicate", Nodes: []string{"b:w.nope"}, Text: paritySrc}); err == nil {
+		t.Error("ids that resolve to nothing in the snapshot must error")
+	}
+}

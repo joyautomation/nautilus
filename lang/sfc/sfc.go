@@ -146,6 +146,9 @@ type TextEdit struct {
 //	setComment               Comment (index into Model.Comments), Text ("" deletes)
 //	addComment               Text — appends a new note just above END_SFC
 //	deleteComment            Comment (index into Model.Comments)
+//	declareVar / deleteVar   Name, VarType, Section (the vars panel; lang/ld's shape)
+//	pasteSteps               Steps (+ Trans between them) — clipboard paste; names freshened
+//	deleteSelection          Nodes (st:/tr: ids) — one op for a multi-selection or a cut
 type EditOp struct {
 	Type string `json:"type"`
 
@@ -185,6 +188,13 @@ type EditOp struct {
 	Comment *int   `json:"comment,omitempty"`
 	Text    string `json:"text,omitempty"`
 
+	// pasteSteps: the clipboard's steps (with their associations and an
+	// optional pinned position) and the transitions wholly between them.
+	Steps []PasteStep  `json:"steps,omitempty"`
+	Trans []PasteTrans `json:"trans,omitempty"`
+	// deleteSelection: st:/tr: ids, resolved against ONE parse.
+	Nodes []string `json:"nodes,omitempty"`
+
 	// declareVar / deleteVar (Name is the variable) — the same payload
 	// shape as lang/ld's, so the shared vars panel posts one form.
 	VarType string `json:"varType,omitempty"`
@@ -200,4 +210,22 @@ type LayoutOpEntry struct {
 	Node string `json:"node"`
 	X    int    `json:"x"`
 	Y    int    `json:"y"`
+}
+
+// PasteStep is one copied step: its (pre-paste) name, associations, and
+// where to pin the copy (both X and Y, or neither → auto-layout).
+type PasteStep struct {
+	Name    string   `json:"name"`
+	Actions []GAssoc `json:"actions,omitempty"`
+	X       *int     `json:"x,omitempty"`
+	Y       *int     `json:"y,omitempty"`
+}
+
+// PasteTrans is one copied transition; From/To name copied steps by their
+// pre-paste names.
+type PasteTrans struct {
+	Name string   `json:"name,omitempty"`
+	From []string `json:"from"`
+	To   []string `json:"to"`
+	Cond string   `json:"cond"`
 }
