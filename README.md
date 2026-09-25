@@ -213,19 +213,18 @@ on writes.
 
 Install **nautilus IEC 61131-3** from the
 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=joyauto.vscode-iec)
-or [Open VSX](https://open-vsx.org/extension/joyauto/vscode-iec). It
-currently ships on the **pre-release** channel, so use *Install Pre-Release
-Version* (or `code --install-extension joyauto.vscode-iec --pre-release`).
-Open your project folder — it recommends the extension — and with `go run .`
+or [Open VSX](https://open-vsx.org/extension/joyauto/vscode-iec)
+(`code --install-extension joyauto.vscode-iec`; *Switch to Pre-Release
+Version* on the extension page follows `main`). Open your project folder — it recommends the extension — and with `go run .`
 running you get compile diagnostics as you type, go-to-definition / hover /
 completion, and **live tag values as pills** next to identifiers in
 `program.st`.
 
 On macOS, VS Code launched from the Dock or Spotlight gets the login `PATH`,
 not your shell's, so it may not find `naut` even though your terminal
-does. If the extension reports it could not start the language server, set
-`nautilus.cliPath` to the full path (`which naut`), or launch VS Code
-from a terminal with `code .`.
+does. If the extension reports it could not start the language server, run
+*nautilus: Install or Update the naut CLI*, set `nautilus.cliPath` to the
+full path (`which naut`), or launch VS Code from a terminal with `code .`.
 
 **5. Make it yours**
 
