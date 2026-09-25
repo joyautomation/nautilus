@@ -875,10 +875,10 @@
 		stroke-width: 3;
 	}
 	/* diff overlay — ladder gets its OWN palette: green is power here, so
-	   added = cyan, changed = amber, removed = red. */
+	   added = cyan, changed = amber, removed = red (theme.css --nx-ld-*). */
 	.wrap {
-		--nxld-added: #3fc6ff;
-		--nxld-changed: #e2b93d;
+		--nxld-added: var(--nx-ld-added);
+		--nxld-changed: var(--nx-ld-changed);
 		--nxld-removed: var(--nx-removed);
 	}
 	.rsvg.removed {
@@ -999,7 +999,7 @@
 	.pouhead {
 		margin: 14px 0 2px;
 		padding: 3px 8px;
-		border-left: 3px solid var(--vscode-textLink-foreground, #4ea1ff);
+		border-left: 3px solid var(--nx-link);
 		font-size: 11px;
 		opacity: 0.9;
 	}

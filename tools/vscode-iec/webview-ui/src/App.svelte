@@ -34,6 +34,7 @@
 	import ShortcutHelp from './ShortcutHelp.svelte';
 	import { FBD_SHORTCUTS, LD_SHORTCUTS, SFC_SHORTCUTS, hintLine } from './shortcuts';
 	import { loadViewState, saveViewState } from './viewState';
+	import { themeColorMode } from './themeMode.svelte';
 
 	const nodeTypes = { fbd: FbdNode };
 	const edgeTypes = { fbd: FbdEdge };
@@ -699,6 +700,7 @@
 			zoomOnDoubleClick={false}
 			fitView
 			minZoom={0.15}
+			colorMode={themeColorMode.mode}
 			deleteKey={['Delete', 'Backspace']}
 			proOptions={{ hideAttribution: true }}
 		>
@@ -832,10 +834,10 @@
 	}
 	/* the ladder diff uses its own palette (green means power there) */
 	.legend.ld .sw.added {
-		background: #3fc6ff;
+		background: var(--nx-ld-added);
 	}
 	.legend.ld .sw.changed {
-		background: #e2b93d;
+		background: var(--nx-ld-changed);
 	}
 	.ropill {
 		font-size: 11px;
@@ -909,16 +911,26 @@
 	.diffing :global(.svelte-flow__node:has(.same)) {
 		opacity: 0.6;
 	}
+	/* xyflow chrome from the theme tokens (colorMode follows the VS Code
+	   theme kind too, for anything not overridden here). */
 	:global(.svelte-flow) {
 		background: var(--nx-bg) !important;
+		--xy-minimap-background-color: var(--nx-panel-bg);
+		--xy-minimap-mask-background-color: color-mix(in srgb, var(--nx-bg) 55%, transparent);
+		--xy-minimap-mask-stroke-color: var(--nx-border);
+		--xy-minimap-node-background-color: color-mix(in srgb, var(--nx-ink) 38%, var(--nx-panel-bg));
+		--xy-controls-button-background-color: var(--nx-panel-bg);
+		--xy-controls-button-background-color-hover: var(--nx-ctl-hover);
+		--xy-controls-button-color: var(--nx-ui-ink);
+		--xy-controls-button-color-hover: var(--nx-ui-ink);
+		--xy-controls-button-border-color: var(--nx-border);
+		--xy-controls-box-shadow: var(--nx-shadow);
+	}
+	:global(.svelte-flow__controls) {
+		border: 1px solid var(--nx-border);
 	}
 	:global(.svelte-flow__minimap) {
-		background: var(--nx-panel-bg) !important;
-	}
-	:global(.svelte-flow__controls button) {
-		background: var(--nx-panel-bg);
-		border-bottom: 1px solid var(--nx-border);
-		fill: var(--nx-ui-ink);
+		border: 1px solid var(--nx-border);
 	}
 	:global(.svelte-flow__edge.selected .wirepath) {
 		stroke: var(--nx-accent) !important;

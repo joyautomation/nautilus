@@ -75,6 +75,13 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Changed
 
+- **Diagrams follow light, dark and high-contrast themes.** Ladder diff
+  colours (added cyan, changed amber) come from theme tokens with light
+  variants instead of fixed dark-theme hex; FBD's MiniMap and zoom controls
+  take the editor's panel colours (xyflow's colour mode now follows the
+  VS Code theme, live), so they are no longer washed out on dark themes; a
+  ladder function-block heading uses the link colour token. In high
+  contrast, the focused diagram surface shows the theme's focus border.
 - **The missing-CLI warning leads with *Install naut*.** It now offers
   *Install naut*, *Locate naut…*, and *Install steps*; *Copy go install*
   moved to the out-of-date warning, for a `naut` that came from `go

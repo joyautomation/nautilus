@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Browser } from './cdp.mjs';
+import { applyThemeJs } from './themes.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BUNDLE = process.env.DIAGRAM_BUNDLE || join(HERE, '../../media/dist');
@@ -485,5 +486,56 @@ test('SFC: the vars panel declares/deletes with the payload `naut sfc edit` acce
 test('Ready: the webview says ready on mount (the host holds its posts until then)', async () => {
 	await withPage(async (b) => {
 		assert.deepEqual((await posted(b)).filter((m) => m.type === 'ready'), [{ type: 'ready' }]);
+	});
+});
+
+// ── theme ───────────────────────────────────────────────────────────────
+const css = (b, sel, prop) => b.eval(`(() => { const el = document.querySelector(${JSON.stringify(sel)}); return el && getComputedStyle(el).getPropertyValue(${JSON.stringify(prop)}).trim(); })()`);
+
+test('Theme: xyflow colorMode follows the VS Code theme kind, live', async () => {
+	await withPage(async (b) => {
+		await b.eval(applyThemeJs('light'));
+		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
+		assert.ok(await b.eval(`document.querySelector('.svelte-flow').classList.contains('light')`));
+		await b.eval(applyThemeJs('dark'));
+		await sleep(150);
+		assert.ok(await b.eval(`document.querySelector('.svelte-flow').classList.contains('dark')`));
+		// MiniMap/Controls take the panel colours, not xyflow's white.
+		assert.equal(await css(b, '.svelte-flow__minimap', 'background-color'), 'rgb(32, 32, 32)');
+		assert.equal(await css(b, '.svelte-flow__controls-button', 'background-color'), 'rgb(32, 32, 32)');
+		await b.eval(applyThemeJs('hc'));
+		await sleep(150);
+		assert.ok(await b.eval(`document.querySelector('.svelte-flow').classList.contains('dark')`));
+	});
+});
+
+test('Theme: ladder diff colours come from theme tokens (light ≠ dark)', async () => {
+	const base = { name: 'P', rungs: [LD.rungs[0]] };
+	const head = { name: 'P', rungs: [LD.rungs[0], LD.rungs[1]] };
+	const colors = {};
+	for (const t of ['dark', 'light']) {
+		await withPage(async (b) => {
+			await b.eval(applyThemeJs(t));
+			await deliver(b, { type: 'ldDiff', base, head, title: 'p.ld' });
+			colors[t] = {
+				legend: await css(b, '.legend.ld .sw.added', 'background-color'),
+				bar: await css(b, '.rsvg.added .statusbar', 'fill')
+			};
+		});
+	}
+	assert.equal(colors.dark.legend, 'rgb(17, 168, 205)'); // terminal.ansiCyan (dark)
+	assert.equal(colors.light.legend, 'rgb(5, 152, 188)'); // terminal.ansiCyan (light)
+	assert.equal(colors.dark.bar, colors.dark.legend, 'rung bar and legend agree');
+	assert.equal(colors.light.bar, colors.light.legend);
+});
+
+test('Theme: high contrast draws focus on the diagram surface', async () => {
+	await withPage(async (b) => {
+		await b.eval(applyThemeJs('hc'));
+		await deliver(b, { type: 'ldModel', model: LD, title: 'p.ld' });
+		await clickAt(b, await center(b, '.node'));
+		assert.equal(await b.eval(`document.activeElement.classList.contains('wrap')`), true);
+		assert.equal(await css(b, '.wrap', 'outline-color'), 'rgb(243, 133, 24)'); // contrastActiveBorder
+		assert.equal(await css(b, '.wrap', 'outline-style'), 'solid');
 	});
 });

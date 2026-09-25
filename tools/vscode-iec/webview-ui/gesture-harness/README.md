@@ -51,6 +51,7 @@ Options (env):
 | `host.html` | Stand-in for the webview shell: stamps `data-mimic-mode`, mounts `#app`, loads the bundle, and exposes `window.__*` helpers that only READ the rendered DOM (ports, handles, draft/pipe paths, canvas↔viewport mapping). |
 | `harness.mjs` | `Editor` — opens a bundle with a test doc, drives the host protocol, and offers a gesture layer (enter pipe mode, click/hover a named port, drag a handle mid-flight, press Enter). Plus `applyOpToDoc`, a tiny reducer so a committed op can be reflected back and its "materialized" render compared. |
 | `gestures.test.mjs` | The regression suite (`node:test`). |
+| `themes.mjs` | What VS Code injects per theme (body class + `--vscode-*` variables, Dark Modern / Light Modern / High Contrast values): `applyThemeJs('light')` reproduces a theme so colours can be asserted — or screenshotted — against light, dark and HC. |
 | `diagram-host.html` / `diagram.test.mjs` | The same approach for the FBD / Ladder / SFC diagram bundle (`fbd-flow.js`): models delivered by `postMessage` as the extension host does, real input, assertions on the posted `edit`/`ldEdit`/`sfcEdit` ops. `DIAGRAM_BUNDLE=…` points it at another build. |
 
 ## Adding a regression case
