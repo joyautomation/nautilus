@@ -36,6 +36,8 @@
 	import { minInteriorPoints, resolveDraftFinish, type NamedPort } from './pipeDraft';
 	import { suggestRoute, type ObstacleRect } from './autoroute';
 	import { ed, GRID, postManifestOp, postOp, snap, type MimicOp } from './mimicState.svelte';
+	import { clipEquipment, pasteOps, type MimicClip } from './mimicClip';
+	import { readClip, typingTarget, writeClip } from '../clipboard';
 	import PortsPanel from './PortsPanel.svelte';
 	import UserIsland from './UserIsland.svelte';
 
@@ -348,11 +350,12 @@
 	 * fixable; this is what keeps the EDITOR from ever creating one). Built
 	 * from the doc's state BEFORE the equipment is removed (so the anchor
 	 * still resolves), meant to run in the SAME batch as deleteEquipment. */
-	function materializeAnchorsFor(eqId: string): MimicOp[] {
+	function materializeAnchorsFor(eqId: string | string[]): MimicOp[] {
+		const gone = new Set(Array.isArray(eqId) ? eqId : [eqId]);
 		const ops: MimicOp[] = [];
 		for (const p of doc?.pipes ?? []) {
-			const fromHit = p.from?.equip === eqId;
-			const toHit = p.to?.equip === eqId;
+			const fromHit = !!p.from && gone.has(p.from.equip);
+			const toHit = !!p.to && gone.has(p.to.equip);
 			if (!fromHit && !toHit) continue;
 			const full = pipeHandlePoints(p);
 			const pts = p.points.map((q) => [...q] as [number, number]);
@@ -374,10 +377,65 @@
 	/** Delete equipment as ONE batch with any anchor materialization it
 	 * requires — so a delete gesture never leaves a dangling anchor ref
 	 * behind, per Feature 2's design rule. */
-	function deleteEquipmentWithAnchors(eqId: string) {
-		const matOps = materializeAnchorsFor(eqId);
-		const del: MimicOp = { type: 'deleteEquipment', id: eqId };
-		postOp(matOps.length ? { type: 'batch', ops: [...matOps, del] } : del);
+	function deleteEquipmentWithAnchors(eqId: string | string[]) {
+		const ids = Array.isArray(eqId) ? eqId : [eqId];
+		// One pass over the whole set: a pipe between two deleted instances
+		// materializes both ends in ONE patch (two per-instance patches would
+		// each start from the original points and the second would win).
+		const matOps = materializeAnchorsFor(ids);
+		const dels: MimicOp[] = ids.map((id) => ({ type: 'deleteEquipment', id }));
+		const ops = [...matOps, ...dels];
+		postOp(ops.length > 1 ? { type: 'batch', ops } : ops[0]);
+	}
+
+	// ── clipboard: copy / cut / paste / duplicate, select all ─────────────
+	/** The equipment ids the current selection covers. */
+	function selEquipIds(): string[] {
+		const s = ed.selection;
+		return s?.kind === 'equipment' ? [s.id] : s?.kind === 'multi' ? [...s.ids] : [];
+	}
+	function selectEquip(ids: string[]) {
+		ed.selection = ids.length > 1 ? { kind: 'multi', ids } : ids.length ? { kind: 'equipment', id: ids[0] } : null;
+	}
+	// Repeated pastes of the same clip cascade instead of stacking exactly.
+	let pasteKey = '';
+	let pasteN = 0;
+	function pasteClip(clip: MimicClip) {
+		if (!doc || !clip.equipment?.length) return;
+		const key = JSON.stringify(clip);
+		pasteN = key === pasteKey ? pasteN + 1 : 1;
+		pasteKey = key;
+		const { op, ids } = pasteOps(doc, clip, GRID * 2 * pasteN, GRID * 2 * pasteN);
+		postOp(op);
+		selectEquip(ids);
+	}
+	function copySel(): boolean {
+		if (!doc) return false;
+		const clip = clipEquipment(doc, selEquipIds());
+		if (!clip) return false;
+		writeClip('mimic', clip);
+		pasteKey = JSON.stringify(clip);
+		pasteN = 0;
+		return true;
+	}
+	function cutSel(): boolean {
+		if (!copySel()) return false;
+		const ids = selEquipIds();
+		ed.selection = null;
+		deleteEquipmentWithAnchors(ids);
+		pasteN = -1; // a cut's first paste lands where the originals were
+		return true;
+	}
+	function duplicateSel(): boolean {
+		if (!doc) return false;
+		const clip = clipEquipment(doc, selEquipIds());
+		if (!clip) return false;
+		pasteClip(clip);
+		return true;
+	}
+	async function pasteFromClipboard() {
+		const clip = await readClip<MimicClip>('mimic');
+		if (clip) pasteClip(clip);
 	}
 
 	// ── in-flight gestures ──────────────────────────────────────────────────
@@ -488,6 +546,12 @@
 		// equipment (easy when a pipe anchor sits right on its edge) must not
 		// clobber an in-progress node multi-selection on some other pipe.
 		if (e.shiftKey) return;
+		if (e.ctrlKey || e.metaKey) {
+			// Ctrl/Cmd-click toggles this instance in a multi-selection (no drag).
+			const cur = selEquipIds();
+			selectEquip(cur.includes(eq.id) ? cur.filter((id) => id !== eq.id) : [...cur, eq.id]);
+			return;
+		}
 		ed.selection = { kind: 'equipment', id: eq.id };
 		if (ed.portsEdit?.id === eq.id) return; // ports editor owns clicks on this box (see eqDblclick)
 		(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -523,6 +587,27 @@
 		}
 		postOp(ops.length > 1 ? { type: 'batch', ops } : ops[0]);
 		settle({ eq: { [eq.id]: { x: nx, y: ny } }, pipes: pipeSettle });
+	}
+
+	/** Nudge several instances as ONE batch: every move, plus each attached
+	 * pipe shifted once with ALL its attachments (a pipe between two moved
+	 * instances moves both ends in the same points list). */
+	function nudgeMany(ids: string[], dx: number, dy: number) {
+		if (!doc) return;
+		const eqs = (doc.equipment ?? []).filter((q) => ids.includes(q.id));
+		const atts = eqs.flatMap((q) => attachmentsFor(q));
+		const ops: MimicOp[] = eqs.map((q) => ({ type: 'moveEquipment', id: q.id, x: q.x + dx, y: q.y + dy }));
+		const pipeSettle: Record<string, [number, number][]> = {};
+		for (const pid of new Set(atts.map((a) => a.pipeId))) {
+			const p = (doc.pipes ?? []).find((pp) => pp.id === pid);
+			if (!p) continue;
+			const pts = shiftedPoints(p, atts, dx, dy);
+			ops.push({ type: 'setPipePoints', id: pid, points: pts });
+			pipeSettle[pid] = pts;
+		}
+		if (!ops.length) return;
+		postOp(ops.length > 1 ? { type: 'batch', ops } : ops[0]);
+		settle({ eq: Object.fromEntries(eqs.map((q) => [q.id, { x: q.x + dx, y: q.y + dy }])), pipes: pipeSettle });
 	}
 
 	function labelDown(e: PointerEvent, i: number, l: { x: number; y: number }) {
@@ -985,8 +1070,25 @@
 		// Stale canvas while the JSON doesn't parse (MimicApp locks it):
 		// no keyboard gestures either.
 		if (ed.error) return;
-		const t = e.target as HTMLElement | null;
-		if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return;
+		if (typingTarget(e)) return;
+		if ((e.ctrlKey || e.metaKey) && !e.altKey && ed.tool === 'select' && !ed.portsEdit) {
+			const k = e.key.toLowerCase();
+			let acted = false;
+			if (k === 'c') acted = copySel();
+			else if (k === 'x') acted = cutSel();
+			else if (k === 'd') acted = duplicateSel();
+			else if (k === 'v') {
+				void pasteFromClipboard();
+				acted = true;
+			} else if (k === 'a') {
+				selectEquip((doc?.equipment ?? []).map((q) => q.id));
+				acted = true;
+			}
+			if (acted) {
+				e.preventDefault();
+				return;
+			}
+		}
 		if (e.key === 'Escape') {
 			if (draft.length) {
 				draft = [];
@@ -1013,6 +1115,7 @@
 			const s = ed.selection;
 			ed.selection = null;
 			if (s.kind === 'equipment') deleteEquipmentWithAnchors(s.id);
+			else if (s.kind === 'multi') deleteEquipmentWithAnchors(s.ids);
 			else if (s.kind === 'pipe') postOp({ type: 'deletePipe', id: s.id });
 			else if (s.kind === 'end') postOp({ type: 'deletePipe', id: s.pipeId });
 			else if (s.kind === 'nodes') {
@@ -1062,6 +1165,8 @@
 			if (s.kind === 'equipment') {
 				const eq = (doc.equipment ?? []).find((q) => q.id === s.id);
 				if (eq) postEqMove(eq, attachmentsFor(eq), eq.x + dx, eq.y + dy);
+			} else if (s.kind === 'multi') {
+				nudgeMany(s.ids, dx, dy);
 			} else if (s.kind === 'label') {
 				const l = (doc.labels ?? [])[s.index];
 				if (l) {
@@ -1087,6 +1192,7 @@
 		const s = ed.selection;
 		if (!s) return false;
 		if (kind === 'pipe' && s.kind === 'end') return s.pipeId === key;
+		if (kind === 'equipment' && s.kind === 'multi') return s.ids.includes(key as string);
 		if (s.kind !== kind) return false;
 		return 'id' in s ? s.id === key : s.index === key;
 	};
