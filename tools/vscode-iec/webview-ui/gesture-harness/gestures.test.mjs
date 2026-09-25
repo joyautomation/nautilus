@@ -676,3 +676,101 @@ test('the live pill reflects nautilus.liveValues.enabled and toggles it through 
 		assert.deepEqual(posted, ['toggleLive']);
 	});
 });
+
+// ── clipboard, multi-select, shortcut help (editor parity) ────────────────
+// Headless Chrome's clipboard is a stub, so these run on the in-webview
+// fallback (readClip waits up to 400 ms on the system clipboard first).
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+async function ctrl(ed, k) {
+	await ed.b.pressKey(k, { code: 'Key' + k.toUpperCase(), keyCode: k.toUpperCase().charCodeAt(0), modifiers: 2 });
+	await sleepMs(500);
+}
+async function selectBoth(ed) {
+	await ed.selectEquipment(0);
+	const [, t2] = await ed.eqRects();
+	await ed.b.click(t2.cx, t2.cy, { modifiers: 2 });
+	await sleepMs(60);
+}
+const eqSelCount = (ed) => ed.b.eval("document.querySelectorAll('.eq.sel').length");
+function docPipeBetween() {
+	const d = twoTankDoc();
+	d.equipment[0].props = { max: 50 };
+	d.equipment[0].bind = { level: 'Level' };
+	d.pipes = [{ id: 'P1', points: [[400, 251]], from: { equip: 'T1', port: 'right' }, to: { equip: 'T2', port: 'left' }, routing: 'orthogonal' }];
+	return d;
+}
+
+test('clipboard: Ctrl-click multi-selects; Ctrl+C / Ctrl+V pastes ONE batch — fresh ids, offset, props, bindings, re-anchored pipe', async () => {
+	await withEditor(docPipeBetween(), async (ed) => {
+		await selectBoth(ed);
+		assert.equal(await eqSelCount(ed), 2);
+		await ed.resetOps();
+		await ctrl(ed, 'c');
+		assert.deepEqual(await ed.ops(), [], 'a copy posts nothing');
+		await ctrl(ed, 'v');
+		const ops = await ed.ops();
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.equal(ops[0].type, 'batch');
+		const adds = ops[0].ops.filter((o) => o.type === 'addEquipment');
+		assert.deepEqual(adds.map((o) => [o.id, o.x, o.y]), [['T3', 140, 200], ['T4', 620, 200]]);
+		const upd = ops[0].ops.find((o) => o.type === 'updateEquipment' && o.id === 'T3');
+		assert.deepEqual(upd.patch, { width: 120, label: 'T1', props: { max: 50 }, bind: { level: 'Level' } });
+		const pipe = ops[0].ops.find((o) => o.type === 'addPipe');
+		assert.deepEqual([pipe.from, pipe.to, pipe.points], [{ equip: 'T3', port: 'right' }, { equip: 'T4', port: 'left' }, [[420, 271]]]);
+	});
+});
+
+test('clipboard: Ctrl+D duplicates one instance; the copy of a lone tank brings no pipe', async () => {
+	await withEditor(docPipeBetween(), async (ed) => {
+		await ed.selectEquipment(0);
+		await ed.resetOps();
+		await ctrl(ed, 'd');
+		const ops = await ed.ops();
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.deepEqual(ops[0].ops.filter((o) => o.type === 'addEquipment').map((o) => o.id), ['T3']);
+		assert.equal(ops[0].ops.some((o) => o.type === 'addPipe'), false, 'the pipe reaches T2, which was not copied');
+	});
+});
+
+test('clipboard: Ctrl+X deletes the selection in one batch; the paste lands where the originals were', async () => {
+	await withEditor(twoTankDoc(), async (ed) => {
+		await selectBoth(ed);
+		await ed.resetOps();
+		await ctrl(ed, 'x');
+		let ops = await ed.ops();
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.deepEqual(ops[0].ops.map((o) => `${o.type} ${o.id}`), ['deleteEquipment T1', 'deleteEquipment T2']);
+		await ed.resetOps();
+		await ctrl(ed, 'v');
+		ops = await ed.ops();
+		assert.deepEqual(ops[0].ops.filter((o) => o.type === 'addEquipment').map((o) => [o.x, o.y]), [[120, 180], [600, 180]]);
+	});
+});
+
+test('clipboard: Ctrl+A selects all equipment; Del deletes it as ONE batch (pipe ends materialized once)', async () => {
+	await withEditor(docPipeBetween(), async (ed) => {
+		await ed.selectEquipment(0);
+		await ctrl(ed, 'a');
+		assert.equal(await eqSelCount(ed), 2);
+		await ed.resetOps();
+		await ed.pressDelete();
+		const ops = await ed.ops();
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		const sub = ops[0].ops;
+		const pipePatches = sub.filter((o) => o.type === 'updatePipe');
+		assert.equal(pipePatches.length, 1, 'a pipe between two deleted tanks is patched ONCE');
+		assert.equal(pipePatches[0].patch.from, null);
+		assert.equal(pipePatches[0].patch.to, null);
+		assert.equal(pipePatches[0].patch.points.length, 3, 'both ends materialized around the interior point');
+		assert.deepEqual(sub.filter((o) => o.type === 'deleteEquipment').map((o) => o.id), ['T1', 'T2']);
+	});
+});
+
+test('"?" lists the mimic editor’s keys', async () => {
+	await withEditor(twoTankDoc(), async (ed) => {
+		const r = await ed.b.eval(`(() => { const el = document.querySelector('.nx-help-btn'); const q = el.getBoundingClientRect(); return { x: q.left + q.width / 2, y: q.top + q.height / 2 }; })()`);
+		await ed.b.click(r.x, r.y);
+		await sleepMs(60);
+		assert.match(await ed.b.eval(`document.querySelector('.nx-help-pop')?.textContent ?? ''`), /Duplicate the selection/);
+	});
+});

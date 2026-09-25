@@ -322,3 +322,141 @@ test('SFC: after the float editor closes, Del works without another click', asyn
 		assert.deepEqual(await sfcOps(b), [{ type: 'deleteStep', step: 'st:Spare' }]);
 	});
 });
+
+// ── clipboard, select-all, shortcut help (editor parity) ──────────────────
+// Headless Chrome denies the system clipboard, so these exercise the
+// in-webview fallback — the path a paste must never depend on the other.
+async function ctrlKey(b, k) {
+	await key(b, k, 'Key' + k.toUpperCase(), k.toUpperCase().charCodeAt(0), 2);
+	await sleep(500); // readClip gives the system clipboard up to 400 ms
+}
+const FBD_SRC = 'PROGRAM Main\nFBD\n  Y := AND(A, B)\nEND_FBD\nEND_PROGRAM\n';
+
+test('FBD: Ctrl+C / Ctrl+V duplicates in place; Ctrl+X deletes, and its paste re-creates from the snapshot', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd', source: FBD_SRC });
+		await clickAt(b, await center(b, node('c:Y')));
+		await ctrlClick(b, await center(b, node('b:c.Y')));
+		await reset(b);
+		await ctrlKey(b, 'c');
+		assert.deepEqual(await fbdOps(b), [], 'a copy posts nothing');
+		await ctrlKey(b, 'v');
+		let ops = await fbdOps(b);
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.equal(ops[0].type, 'duplicate');
+		assert.deepEqual([...ops[0].nodes].sort(), ['b:c.Y', 'c:Y']);
+		assert.equal(ops[0].text, undefined, 'same file, not cut: plain in-place duplicate');
+
+		await reset(b);
+		await ctrlKey(b, 'x');
+		ops = await fbdOps(b);
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.equal(ops[0].type, 'deleteNode');
+		assert.deepEqual([...ops[0].nodes].sort(), ['b:c.Y', 'c:Y']);
+		await reset(b);
+		await ctrlKey(b, 'v');
+		ops = await fbdOps(b);
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.equal(ops[0].type, 'duplicate');
+		assert.equal(ops[0].text, FBD_SRC, 'a cut pastes from the snapshot');
+		assert.equal(ops[0].keepRefs, true);
+	});
+});
+
+test('FBD: Ctrl+A selects every node', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd', source: FBD_SRC });
+		await clickAt(b, await center(b, node('cm:0')));
+		await ctrlKey(b, 'a');
+		assert.equal(await b.eval(`document.querySelectorAll('.svelte-flow__node.selected').length`), FBD.nodes.length);
+		assert.match(await text(b), new RegExp(`${FBD.nodes.length} selected`));
+	});
+});
+
+test('FBD: clipboard keys inside the float editor stay the field’s', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd', source: FBD_SRC });
+		const pt = await center(b, node('c:Y'));
+		await clickAt(b, pt);
+		await ctrlKey(b, 'c'); // something IS on the clipboard
+		const note = await center(b, node('cm:0'));
+		await b.dblclick(note.x, note.y);
+		await sleep(200);
+		assert.match(await b.eval(`document.activeElement?.tagName`), /INPUT|TEXTAREA/);
+		await reset(b);
+		await ctrlKey(b, 'v');
+		await ctrlKey(b, 'x');
+		await ctrlKey(b, 'a');
+		assert.deepEqual(await fbdOps(b), []);
+	});
+});
+
+const sfcStepPt = (b, name) =>
+	b.eval(`(() => { const el = [...document.querySelectorAll('.step .stepname')].find((x) => x.textContent === ${JSON.stringify(name)}); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+
+test('SFC: Ctrl-click multi-selects steps; copy/paste posts ONE pasteSteps with the transitions between them', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'sfcModel', model: SFC, title: 's.sfc' });
+		await clickAt(b, await sfcStepPt(b, 'Idle'));
+		await ctrlClick(b, await sfcStepPt(b, 'Run'));
+		assert.equal(await b.eval(`document.querySelectorAll('.step.selected').length`), 2);
+		await reset(b);
+		await ctrlKey(b, 'c');
+		await ctrlKey(b, 'v');
+		const ops = await sfcOps(b);
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.equal(ops[0].type, 'pasteSteps');
+		assert.deepEqual(ops[0].steps.map((s) => s.name), ['Idle', 'Run']);
+		assert.ok(ops[0].steps.every((s) => Number.isFinite(s.x) && Number.isFinite(s.y)), 'copies are placed');
+		assert.deepEqual(ops[0].trans, [{ from: ['Idle'], to: ['Run'], cond: 'go' }]);
+	});
+});
+
+test('SFC: Ctrl+X cuts the selected steps (and the transitions between them) in one op; ⎘ pastes', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'sfcModel', model: SFC, title: 's.sfc' });
+		await clickAt(b, await sfcStepPt(b, 'Idle'));
+		await ctrlClick(b, await sfcStepPt(b, 'Run'));
+		await reset(b);
+		await ctrlKey(b, 'x');
+		assert.deepEqual(await sfcOps(b), [{ type: 'deleteSelection', nodes: ['st:Idle', 'st:Run', 'tr:7'] }]);
+		await reset(b);
+		await clickAt(b, await paletteBtn(b, '⎘'));
+		await sleep(500);
+		const ops = await sfcOps(b);
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.equal(ops[0].type, 'pasteSteps');
+	});
+});
+
+test('SFC: Ctrl+A then Del deletes every step and transition as ONE op', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'sfcModel', model: SFC, title: 's.sfc' });
+		await clickAt(b, await sfcStepPt(b, 'Spare'));
+		await ctrlKey(b, 'a');
+		assert.equal(await b.eval(`document.querySelectorAll('.step.selected').length`), 3);
+		await reset(b);
+		await del(b);
+		assert.deepEqual(await sfcOps(b), [{ type: 'deleteSelection', nodes: ['st:Idle', 'st:Run', 'st:Spare', 'tr:7'] }]);
+	});
+});
+
+test('"?" lists each editor’s keys; the hint line carries its full text as a tooltip', async () => {
+	const cases = [
+		[{ type: 'model', model: FBD, title: 'n.fbd' }, /Ctrl \+ A/],
+		[{ type: 'ldModel', model: LD, title: 'p.ld' }, /Cycle a coil/],
+		[{ type: 'sfcModel', model: SFC, title: 's.sfc' }, /Ctrl \/ Shift \+ click/]
+	];
+	for (const [msg, want] of cases) {
+		await withPage(async (b) => {
+			await deliver(b, msg);
+			const hint = await b.eval(`(() => { const h = document.querySelector('.bar .hint'); return h && { text: h.textContent, title: h.title }; })()`);
+			assert.ok(hint && hint.text.length > 20, 'hint rendered');
+			assert.equal(hint.title, hint.text);
+			await clickAt(b, await center(b, '.nx-help-btn'));
+			assert.match(await b.eval(`document.querySelector('.nx-help-pop')?.textContent ?? ''`), want);
+			await esc(b);
+			assert.equal(await b.eval(`document.querySelectorAll('.nx-help-pop').length`), 0, 'Esc closes it');
+		});
+	}
+});
