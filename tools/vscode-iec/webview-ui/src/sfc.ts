@@ -115,6 +115,8 @@ export type PlacedStep = {
 	y: number;
 	w: number;
 	h: number;
+	/** Width of the action table drawn right of the box (assocTableWidth). */
+	assocW: number;
 	rank: number;
 	col: number;
 	pinned: boolean;
@@ -211,10 +213,32 @@ export function stepBoxHeight(s: SfcStep): number {
 	return G.STEP_H;
 }
 
+/** Gap between a step box and its action table. */
+export const ASSOC_GAP = 12;
+// A 10 px monospace glyph's advance, generously rounded — the table sizes
+// to its longest "target(time)" so a long name never runs under the ✕ or
+// into the next column.
+const ASSOC_CHAR_W = 6.2;
+const ASSOC_MIN_W = 164;
+
+/** The action table's width: the fixed 164 px column, wider for a long
+ * target (the ✕ sits 14 px inside the right edge). */
+export function assocTableWidth(s: SfcStep): number {
+	let w = ASSOC_MIN_W;
+	for (const a of s.actions ?? []) {
+		const text = a.target + (a.time ? `(${a.time})` : '');
+		w = Math.max(w, Math.ceil(26 + text.length * ASSOC_CHAR_W + 22));
+	}
+	return w;
+}
+
 export function assocTableHeight(s: SfcStep): number {
 	const n = s.actions?.length ?? 0;
 	return n === 0 ? 0 : n * G.ASSOC_ROW_H + 6;
 }
+
+// Gap between an action table and an orphan chip beside it.
+const CHIP_GAP = 16;
 
 // Vertical spacing between the staggered bars of an alternative divergence.
 const ALT_BAR_GAP = 26;
@@ -317,10 +341,29 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 	// room, so a comment never overlaps step 0's row.
 	const notesBand = notes.length > 0 ? G.NOTE_H + 24 : 0;
 
+	// Column pitch: a box, its action table (the widest in the chart) and a
+	// clear gap — side-by-side steps never run a table into the next box.
+	// A chart with an orphan chip anchored beside a step (a FROM/TO that no
+	// longer resolves) also reserves the chip's slot right of the table, so
+	// the chip covers neither the table's "+ action" nor the next column.
+	const ids = new Set((model.steps ?? []).map((s) => s.id));
+	// (The same test the dangling pass below applies: no source or no
+	// target resolves, but one end does.)
+	const anchoredOrphan = (model.trans ?? []).some((t) => {
+		const f = t.from.some((n) => ids.has(stepId(n)));
+		const to = t.to.some((n) => ids.has(stepId(n)));
+		return f !== to;
+	});
+	const maxAssocW = Math.max(ASSOC_MIN_W, ...(model.steps ?? []).map(assocTableWidth));
+	const colW = Math.max(
+		G.COL_W,
+		G.STEP_W + ASSOC_GAP + maxAssocW + 32 + (anchoredOrphan ? CHIP_GAP + G.CHIP_W : 0)
+	);
+
 	for (const s of model.steps ?? []) {
 		const rank = rankOf.get(s.id) ?? 0;
 		const col = colOf.get(s.id) ?? 0;
-		const autoX = G.MARGIN + col * G.COL_W;
+		const autoX = G.MARGIN + col * colW;
 		const autoY = G.MARGIN + notesBand + rank * G.RANK_H;
 		const pin = model.layout?.[s.id];
 		const x = pin ? pin.x : autoX;
@@ -332,6 +375,7 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 			y,
 			w: G.STEP_W,
 			h: stepBoxHeight(s),
+			assocW: assocTableWidth(s),
 			rank,
 			col,
 			pinned: !!pin,
@@ -421,7 +465,7 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 	let width = G.MARGIN * 2 + G.STEP_W;
 	let height = G.MARGIN * 2 + G.STEP_H;
 	for (const p of steps) {
-		width = Math.max(width, p.x + p.w + G.ASSOC_W + G.MARGIN);
+		width = Math.max(width, p.x + p.w + ASSOC_GAP + p.assocW + G.MARGIN);
 		height = Math.max(height, p.y + p.h + G.MARGIN);
 	}
 	for (const r of trans) {
@@ -434,7 +478,7 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 	}
 
 	// Anchored orphan chips stack beside their surviving endpoint (right of
-	// the step box); unanchored ones (neither FROM nor TO resolves) go in a
+	// its action table); unanchored ones (neither FROM nor TO resolves) go in a
 	// left-to-right strip along the bottom edge, below everything else.
 	const stackAt = new Map<string, number>();
 	const orphans: OrphanChip[] = [];
@@ -443,7 +487,9 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 		if (d.anchor) {
 			const n = stackAt.get(d.anchor.id) ?? 0;
 			stackAt.set(d.anchor.id, n + 1);
-			const x = d.anchor.x + d.anchor.w + 16;
+			// Right of the anchor's action table (never over its rows or
+			// its "+ action"), in the slot the column pitch reserved.
+			const x = d.anchor.x + d.anchor.w + ASSOC_GAP + d.anchor.assocW + CHIP_GAP;
 			const y = d.anchor.y + n * (G.CHIP_H + 8);
 			orphans.push({ t: d.t, anchor: d.anchor, x, y, w: G.CHIP_W, h: G.CHIP_H });
 			width = Math.max(width, x + G.CHIP_W + G.MARGIN);

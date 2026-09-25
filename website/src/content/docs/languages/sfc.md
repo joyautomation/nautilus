@@ -187,7 +187,13 @@ chart's topology; drag a step to pin it, and "auto layout" clears every pin.
 Every gesture is a structural op resolved in Go into minimal text edits: add
 a step or transition, branch an alternative or simultaneous path off one,
 drag a step's connect handle onto another step to wire a transition, edit a
-condition, step name, association, or `ACTION` body in place. A transition
+condition, step name, association, or `ACTION` body in place. With a step
+selected, **+ step** adds the next step under it along with the transition
+that reaches it; with nothing selected it adds a free step. **+ transition**
+goes to an existing step, or to *other… (new step)*, which creates that step
+too. **+ alt branch** adds another transition out of the selected step, or
+out of the selected transition's source. Each add is one edit and one undo,
+and the new step scrolls into view. A transition
 whose `FROM` or `TO` no longer resolves stays on the canvas as a red chip
 with a retarget popover, and diagnostics show as you type without blocking a
 save. With a controller reachable, the active step outlines and its name

@@ -14,6 +14,22 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   server. A file opened from `lib/` resolves to its project's root, so an
   online edit started there still finds the programs. Requires a `naut`
   with `lib/` support.
+- **SFC "+ step" chains.** With a step selected, *+ step* adds the new step
+  under it together with `TRANSITION FROM <selected> TO <new>` (the form has
+  a condition field, `TRUE` by default), in one edit and one undo. With
+  nothing selected it still adds a free step. The new step is selected, so
+  *+ step* again chains the next one. Requires a `naut` with the chained
+  `addStep` op; an older one adds the step alone.
+- **SFC "+ alt branch" works from a selected step.** It adds another
+  transition out of that step (an alternative divergence); a selected
+  transition still branches off its source. The button title and the "?"
+  legend say so.
+- **SFC action fields suggest tags.** *+ action* and editing an association
+  offer the declared tags for the word after the qualifier (`N Pu` →
+  `N PumpRun`), the list the ladder's retag uses.
+- **The SFC chart reveals what you add.** A new step scrolls into view and
+  is selected. The Ladder and SFC panes leave room under the chart for the
+  zoom controls, so the lowest step or rung can be scrolled clear of them.
 
 ### Fixed
 
@@ -25,6 +41,16 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   survives into the ladder diagram (`Rung.comment` in the graph JSON) exactly
   like a same-line comment already did, and a structural edit to another
   rung no longer disturbs it.
+- **SFC "+ transition → other… (new step)" creates the step.** It wrote
+  `TO <name>` without a `STEP <name>`, which left a red orphan chip. Now the
+  empty step lands after the source step in the same edit. The alt-branch
+  form does the same. Requires a `naut` with the `newStep` edit op; an older
+  one writes the transition alone, as before.
+- **SFC orphan chips and side-by-side action tables no longer overlap.** A
+  dangling transition's chip sat on its step's action table and covered
+  *+ action*. It now sits right of the table. Columns are spaced for the
+  widest action table, which also grows to fit a long target, so a table no
+  longer runs into the step beside it.
 
 ## [0.11.1] - 2026-09-25
 

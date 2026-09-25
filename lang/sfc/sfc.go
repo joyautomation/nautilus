@@ -128,10 +128,10 @@ type TextEdit struct {
 // Resolution and printers live in edit.go; this is the wire shape shared
 // with the CLI (`naut sfc edit`) and, eventually, the diagram webview.
 //
-//	addStep                  Name, Initial, After (existing step id, optional)
+//	addStep                  Name, Initial, After (existing step id, optional); From + Cond (optional) chain it: the step lands after From's step and TRANSITION FROM <From> TO <Name> := Cond comes in the same edit
 //	deleteStep               Step
 //	renameStep               Step, NewName
-//	addTransition            Name (optional), From, To, Cond, After (optional)
+//	addTransition            Name (optional), From, To, Cond, After (optional), NewStep (optional: a TO name to create as an empty STEP after the source step, in the same edit; ignored if it already exists)
 //	deleteTransition         Transition
 //	setCondition             Transition, Cond
 //	setTransitionEnds        Transition, From (optional, keeps current if omitted), To (optional, keeps current if omitted) — re-point a transition's FROM/TO step-sets, e.g. to fix a dangling reference left by deleteStep or an orphan chip's retarget popover. Names are validated as identifiers only; they need NOT already exist (never-block: Check flags an unknown step, ApplyEdit does not refuse it).
@@ -139,7 +139,7 @@ type TextEdit struct {
 //	setAssoc                 Step, Index, Qualifier, Target, Time (optional)
 //	deleteAssoc              Step, Index
 //	setActionBody            Action (name; created if it doesn't exist yet), Body
-//	insertAlternativeBranch  From (or After to inherit its source), To, Cond, Name (optional), After (optional, priority placement)
+//	insertAlternativeBranch  From (or After to inherit its source), To, Cond, Name (optional), After (optional, priority placement), NewStep (optional, as addTransition)
 //	insertSimultaneousBranch Transition, NewStep (created; appended to the transition's TO set)
 //	setLayout                Node, X, Y — or Entries for a batched multi-node drag
 //	clearLayout              Node (one entry) or nothing (whole block)
@@ -175,7 +175,8 @@ type EditOp struct {
 	Action string `json:"action,omitempty"`
 	Body   string `json:"body,omitempty"`
 
-	// branch ops
+	// branch ops; also addTransition/insertAlternativeBranch's "create this
+	// TO step" (the diagram's "other… (new step)")
 	NewStep string `json:"newStep,omitempty"`
 
 	// layout ops (mirrors fbd.EditOp)

@@ -34,6 +34,11 @@
 		children: Snippet;
 	} = $props();
 
+	// Room under the diagram for the bottom-left controls (15 px inset +
+	// three 26 px buttons + the % row): the pane scrolls this far past the
+	// content, so the lowest step or rung can always be brought up clear
+	// of the controls instead of sitting under them.
+	const CTL_CLEAR = 120;
 	const MIN_ZOOM = 0.25;
 	const MAX_ZOOM = 3;
 	const STEP = 1.2;
@@ -93,7 +98,9 @@
 		const natH = r.height / zoom;
 		if (!natW || !natH) return;
 		const availW = scroller.clientWidth - offLeft - 4;
-		const availH = scroller.clientHeight - offTop - 4;
+		// The clearance strip is scroll room, not diagram: fitting into
+		// the pane minus it keeps a fitted chart's bottom off the controls.
+		const availH = scroller.clientHeight - offTop - CTL_CLEAR - 4;
 		let z = availW / natW;
 		if (fitAxis === 'both') z = Math.min(z, availH / natH);
 		flushSync(() => (zoom = Math.round(clamp(Math.max(floor, Math.min(1, z))) * 1000) / 1000));
@@ -186,6 +193,7 @@
 		onpointercancel={onPointerUp}
 	>
 		{@render children()}
+		<div class="zclear" style:height="{CTL_CLEAR}px" aria-hidden="true"></div>
 	</div>
 	<div class="zctl" role="toolbar" aria-label="{label} zoom">
 		<button title="Zoom in (Ctrl+= / Ctrl+wheel)" aria-label="zoom in" onclick={zoomIn} disabled={zoom >= MAX_ZOOM}>
@@ -217,6 +225,10 @@
 		min-width: 0;
 		overflow: auto;
 		outline: none;
+	}
+	.zclear {
+		width: 1px;
+		pointer-events: none;
 	}
 	.flow.stale {
 		opacity: 0.45;

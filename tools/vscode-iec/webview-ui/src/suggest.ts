@@ -73,3 +73,18 @@ export function replaceLastToken(value: string, name: string): string {
 	const i = value.lastIndexOf(',');
 	return i === -1 ? name : value.slice(0, i + 1) + ' ' + name;
 }
+
+/** The word being completed at the end of "Q target" (an SFC action
+ * association): whatever follows the last space. */
+export function tailWord(value: string): string {
+	const m = /(\S*)$/.exec(value);
+	return m ? m[1] : '';
+}
+
+/** Replace that last word, keeping the qualifier (and its space) before
+ * it; a lone word with no qualifier yet gets the default "N ". */
+export function replaceTailWord(value: string, name: string): string {
+	const i = value.search(/\S*$/);
+	const head = value.slice(0, i);
+	return (head.trim() ? head : 'N ') + name;
+}
