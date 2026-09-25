@@ -1,0 +1,44 @@
+PROGRAM Reports
+(* The 1 Hz reporting task — a second program on the same tag store, the
+   IEC resource/task model (see Tasks in main.go). Main owns field I/O at
+   10 Hz; this task ambles along computing operator-facing values.
+
+   It exists to demonstrate the newer FBD features in one place:
+     - arrays in the netlist: a shift register over TempHist[1..4]
+     - a user FUNCTION_BLOCK authored in ST (blocks.st), called like TON
+     - SEL on strings, CONCAT / TRUNC / INT_TO_STRING
+     - per-task online edits: open THIS file and "Download Program to
+       Controller" — the edit routes to the Reports task by POU name,
+       and the tasks table on the dashboard shows its health. *)
+VAR_EXTERNAL
+    TempC      : REAL;
+    RepDtS     : REAL;
+    TempLowAlm : BOOL;
+    TempAvg    : REAL;
+    TempRate   : REAL;
+    Status     : STRING;
+END_VAR
+VAR
+    TempHist : ARRAY[1..4] OF REAL; (* retained across scans and online edits *)
+END_VAR
+FBD
+  // Shift register: the last four seconds of temperature. Statement order
+  // matters, exactly like ST — oldest element first. TempHist[1]'s read
+  // draws as feedback: this scan reads what the coil below wrote last scan.
+  TempHist[4] := TempHist[3]
+  TempHist[3] := TempHist[2]
+  TempHist[2] := TempHist[1]
+  TempHist[1] := TempC
+
+  // Rolling average over the window: element reads into an extensible ADD.
+  TempAvg := MUL(ADD(TempHist[1], TempHist[2], TempHist[3], TempHist[4]), 0.25)
+
+  // Rate of change via the ST-authored block from blocks.st (°C/min).
+  r1 : RateOfChange(IN := TempC, DT := RepDtS)
+  TempRate := r1.OUT
+
+  // Operator status line: SEL selects between strings, CONCAT builds the
+  // message, TRUNC + INT_TO_STRING render the temperature.
+  Status := CONCAT('tank ', INT_TO_STRING(TRUNC(TempC)), ' degC — ', SEL(TempLowAlm, 'ok', 'LOW TEMP'))
+END_FBD
+END_PROGRAM

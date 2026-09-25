@@ -1,6 +1,6 @@
 package acceptance_test
 
-// The acceptance bar for virtual time, against examples/heated-tank-nogo:
+// The acceptance bar for virtual time, against the heated-tank fixture:
 // four tasks at four rates, three IEC languages, and the plant itself
 // simulated in ST. These are the assertions that were impossible before —
 // a ten-second on-delay and a PI loop's settling time — and they now run
@@ -19,7 +19,7 @@ import (
 	"github.com/joyautomation/nautilus/runtime"
 )
 
-const nogo = "../examples/heated-tank-nogo"
+const nogo = "../testdata/projects/heated-tank"
 
 // load builds the example exactly as `naut run` would, then puts it on
 // a virtual clock.

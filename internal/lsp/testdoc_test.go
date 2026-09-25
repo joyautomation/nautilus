@@ -10,9 +10,9 @@ import (
 	"github.com/joyautomation/nautilus/acceptance"
 )
 
-// theExample is the flagship manifest project: four tasks, three IEC
+// theExample is the flagship manifest fixture: four tasks, three IEC
 // languages, and the two ST expectation expressions this file is about.
-const theExample = "../../examples/heated-tank-nogo"
+const theExample = "../../testdata/projects/heated-tank"
 
 func exampleURI(t *testing.T, name string) (uri, text string) {
 	t.Helper()

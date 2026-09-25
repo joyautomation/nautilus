@@ -1,11 +1,18 @@
 // Tests for the user-components build harness. `customComponentNames` is
 // pure and covered directly; `buildUserComponentsBundle` is exercised for
-// real against the worked example (examples/hmi-demo/src/lib/
-// HeatExchanger.svelte, which is exactly the fixture the end-to-end
-// verification also compiles) — it uses that project's OWN node_modules
-// (svelte + esbuild's TS transpile of its `<script lang="ts">`), proving the
-// harness works against a real, unmodified user project, not a fixture
-// built to fit the compiler.
+// real against a worked example (testdata/user-components/Supply.svelte,
+// cut from the hmi-demo app's own component library) — it compiles with
+// this package's OWN node_modules (the `svelte` devDependency declared for
+// exactly this purpose, plus esbuild's TS transpile of its
+// `<script lang="ts">`), proving the harness works against a real,
+// unmodified user component, not a fixture built to fit the compiler.
+//
+// Supply.svelte (rather than HeatExchanger.svelte, the fixture's original
+// worked example) is used here because it has no bare imports beyond
+// `svelte` itself — HeatExchanger imports `@joyautomation/nautilus-hmi`,
+// which would need that package built and resolvable from this fixture's
+// node_modules too, and wiring that in is out of scope for a fixture move.
+// Both .svelte files still live in testdata/user-components/ for future use.
 
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
@@ -28,23 +35,23 @@ test("customComponentNames ignores empty/falsy names", () => {
   assert.deepEqual(customComponentNames(["", "Foo"], new Set()), ["Foo"]);
 });
 
-const HEAT_EXCHANGER = path.join(__dirname, "..", "..", "..", "examples", "hmi-demo", "src", "lib", "HeatExchanger.svelte");
-const HAS_FIXTURE = fs.existsSync(HEAT_EXCHANGER) && fs.existsSync(path.join(path.dirname(HEAT_EXCHANGER), "..", "..", "node_modules", "svelte"));
+const SUPPLY = path.join(__dirname, "..", "src", "testdata", "user-components", "Supply.svelte");
+const HAS_FIXTURE = fs.existsSync(SUPPLY) && fs.existsSync(path.join(__dirname, "..", "node_modules", "svelte"));
 
 test(
-  "buildUserComponentsBundle compiles the HeatExchanger demo with its own project's svelte, TS script and all",
-  { skip: !HAS_FIXTURE ? "examples/hmi-demo isn't checked out / npm installed here" : false },
+  "buildUserComponentsBundle compiles the Supply component with this package's svelte, TS script and all",
+  { skip: !HAS_FIXTURE ? "testdata/user-components fixture missing, or svelte isn't npm-installed here" : false },
   async () => {
     const outfile = path.join(await fs.promises.mkdtemp(path.join(os.tmpdir(), "nx-user-components-")), "user-components.js");
-    const result = await buildUserComponentsBundle({ HeatExchanger: HEAT_EXCHANGER }, outfile);
+    const result = await buildUserComponentsBundle({ Supply: SUPPLY }, outfile);
     assert.deepEqual(result.diagnostics, []);
-    assert.deepEqual(result.built, ["HeatExchanger"]);
+    assert.deepEqual(result.built, ["Supply"]);
     const code = await fs.promises.readFile(outfile, "utf8");
     assert.match(code, /__NX_USER_COMPONENTS__/);
-    assert.match(code, /HeatExchanger/);
+    assert.match(code, /Supply/);
     // The compiled output is plain JS — no TypeScript syntax should have
     // survived the <script lang="ts"> preprocessing step.
-    assert.doesNotMatch(code, /: \s*\{\s*active\?: boolean/);
+    assert.doesNotMatch(code, /: \s*\{\s*tempC\?: number/);
   }
 );
 

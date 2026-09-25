@@ -692,6 +692,7 @@
     "@types/node": "^18.19.0",
     "@types/vscode": "^1.82.0",
     "@vscode/test-electron": "^3.1.0",
+    "svelte": "^5.56.4",
     "typescript": "^5.4.0"
   }
 }
