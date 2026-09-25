@@ -7,6 +7,16 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Added
 
+- **Getting Started walkthrough.** *nautilus: Get Started* (also opened
+  automatically the first time the extension activates, if the workspace
+  isn't already a nautilus project) walks through installing `naut`,
+  scaffolding a project, opening a diagram, running the controller with
+  live values, and running the acceptance tests — zero to a running
+  controller in about five minutes, no Go toolchain.
+- **`nautilus: Create Project…`** scaffolds a project without a terminal:
+  picks a folder, a name, and a template, then runs `naut new --no-input`
+  and offers to open the result. A thin wrapper around the CLI's own
+  non-interactive path — no scaffolding logic lives in the extension.
 - **Install the CLI in one click.** *nautilus: Install or Update the naut
   CLI* downloads the latest `naut` release for your OS and CPU from GitHub,
   verifies it against the release's `checksums.txt`, installs it into the

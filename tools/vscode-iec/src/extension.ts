@@ -26,8 +26,29 @@ import { MimicEditorProvider } from "./mimicEditor";
 import { ComponentEditorProvider } from "./componentEditor";
 import { UserComponentManager } from "./userComponents";
 import { registerEditComponentPortsCommand } from "./editComponentPorts";
+import { registerNewProjectCommand } from "./newProject";
 import { AcceptanceTests } from "./acceptanceTests";
 import { checkCliVersion, initCli, installCliCommand, resolveCliNow, showCliInfo, showCliMissing } from "./cli";
+
+/** The id `workbench.action.openWalkthrough` wants: `<extension id>#<walkthrough id>`,
+ * matching this file's `contributes.walkthroughs[0].id` in package.json. */
+function walkthroughId(context: vscode.ExtensionContext): string {
+  return `${context.extension.id}#gettingStarted`;
+}
+
+/** Getting Started's "Create a project" step also completes from a
+ * terminal `naut new` (not just the nautilus.newProject command): whether
+ * the workspace has a nautilus.yaml anywhere is exposed as a `when`-clause
+ * context, live-updated as one comes or goes. */
+function watchHasProject(context: vscode.ExtensionContext): void {
+  const refresh = async () => {
+    const found = await vscode.workspace.findFiles("**/nautilus.yaml", "**/node_modules/**", 1);
+    void vscode.commands.executeCommand("setContext", "nautilus.hasProject", found.length > 0);
+  };
+  void refresh();
+  const watcher = vscode.workspace.createFileSystemWatcher("**/nautilus.yaml");
+  context.subscriptions.push(watcher, watcher.onDidCreate(refresh), watcher.onDidDelete(refresh));
+}
 
 let client: LanguageClient | undefined;
 let live: LiveValues | undefined;
@@ -97,6 +118,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // mimic editor's workspace-wide sidecar index so a sidecar created here
   // shows up in every open mimic panel immediately.
   context.subscriptions.push(registerEditComponentPortsCommand(mimic.componentIndex));
+  context.subscriptions.push(registerNewProjectCommand());
+
+  // Getting Started walkthrough: its own command (also reachable from the
+  // Command Palette any time, not just on a fresh install), and the
+  // "workspace already has a project" context its "Create a project" step
+  // completes on.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("nautilus.getStarted", () =>
+      vscode.commands.executeCommand("workbench.action.openWalkthrough", walkthroughId(context), false)
+    )
+  );
+  watchHasProject(context);
+
+  // Auto-open the walkthrough at most once ever (a globalState flag, not
+  // per-workspace), and only into a workspace that isn't already a nautilus
+  // project — someone opening an existing project for the first time with
+  // this extension doesn't need onboarding, and VS Code already offers its
+  // own "open walkthrough" prompt on a fresh extension install for anyone
+  // starting from nothing.
+  if (!context.globalState.get<boolean>("nautilus.walkthroughShown", false)) {
+    void context.globalState.update("nautilus.walkthroughShown", true);
+    void vscode.workspace.findFiles("**/nautilus.yaml", "**/node_modules/**", 1).then((found) => {
+      if (found.length === 0) {
+        void vscode.commands.executeCommand("workbench.action.openWalkthrough", walkthroughId(context), false);
+      }
+    });
+  }
 
   context.subscriptions.push(
     vscode.commands.registerCommand("nautilus.liveValues.toggle", () =>
