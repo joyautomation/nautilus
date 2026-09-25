@@ -3,7 +3,14 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.11.1] - 2026-09-25
+
+The stable-readiness release: everything the first stable release (0.10.0)
+will contain, published as a pre-release first. It adds one-click CLI install,
+a Get Started walkthrough, zoom, copy/paste and a shortcut legend in every
+diagram editor, and undo and save from the previews. It also fixes the audit's
+blockers: empty files, deleting the wrong comments, rungs that couldn't be deleted,
+L5X read-only, and component-editor data loss. Requires naut 0.12.0.
 
 ### Added
 
