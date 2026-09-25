@@ -2,7 +2,16 @@
 
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { composeArgs, composeTooOldMessage, composeUnsupported, overridesFor, parseComposeOutput } from "./composeCli";
+import {
+  composeArgs,
+  composeTooOldMessage,
+  composeUnsupported,
+  COMPOSE_ERROR_TTL_MS,
+  compositionKey,
+  overridesFor,
+  parseComposeOutput,
+  reuseComposition,
+} from "./composeCli";
 
 const OK = JSON.stringify({
   root: "/p",
@@ -61,4 +70,48 @@ test("overridesFor sends only dirty files, by absolute path", () => {
     ]),
     { "/p/lib/motor.ld": "edited" }
   );
+});
+
+const FILES = [
+  { rel: "permissives.ld", mtime: 1, size: 10 },
+  { rel: "lib/motor.ld", mtime: 2, size: 20 },
+  { rel: "nautilus.yaml", mtime: 3, size: 30 },
+];
+
+test("compositionKey: same inputs in any order give the same key", () => {
+  const a = compositionKey("/p/permissives.ld", "naut", FILES, [{ path: "/p/a.st", version: 1 }, { path: "/p/b.st", version: 4 }]);
+  const b = compositionKey("/p/permissives.ld", "naut", [...FILES].reverse(), [{ path: "/p/b.st", version: 4 }, { path: "/p/a.st", version: 1 }]);
+  assert.equal(a, b);
+});
+
+test("compositionKey: every input to composition invalidates", () => {
+  const base = compositionKey("/p/permissives.ld", "naut", FILES, []);
+  const touched = FILES.map((f) => (f.rel === "lib/motor.ld" ? { ...f, mtime: 9 } : f));
+  const resized = FILES.map((f) => (f.rel === "lib/motor.ld" ? { ...f, size: 21 } : f));
+  const variants = [
+    compositionKey("/p/stats.st", "naut", FILES, []), // another target (maybe another project)
+    compositionKey("/p/permissives.ld", "/opt/naut", FILES, []), // another CLI
+    compositionKey("/p/permissives.ld", "naut", touched, []), // saved edit
+    compositionKey("/p/permissives.ld", "naut", resized, []),
+    compositionKey("/p/permissives.ld", "naut", [...FILES, { rel: "lib/pump.fbd", mtime: 1, size: 1 }], []), // file added
+    compositionKey("/p/permissives.ld", "naut", FILES.slice(1), []), // file deleted
+    compositionKey("/p/permissives.ld", "naut", FILES, [{ path: "/p/lib/motor.ld", version: 2 }]), // unsaved edit
+  ];
+  for (const v of variants) assert.notEqual(v, base);
+  assert.notEqual(
+    compositionKey("/p/permissives.ld", "naut", FILES, [{ path: "/p/lib/motor.ld", version: 2 }]),
+    compositionKey("/p/permissives.ld", "naut", FILES, [{ path: "/p/lib/motor.ld", version: 3 }]),
+    "each keystroke in an unsaved buffer"
+  );
+});
+
+test("reuseComposition: a hit reuses, a miss or nothing cached recomposes", () => {
+  assert.equal(reuseComposition(undefined, "k", 0), false);
+  assert.equal(reuseComposition({ key: "k", at: 0, failed: false }, "k", 10 * 60_000), true);
+  assert.equal(reuseComposition({ key: "k", at: 0, failed: false }, "k2", 1), false);
+});
+
+test("reuseComposition: a failure is retried after its TTL even with the same key", () => {
+  assert.equal(reuseComposition({ key: "k", at: 0, failed: true }, "k", COMPOSE_ERROR_TTL_MS - 1), true);
+  assert.equal(reuseComposition({ key: "k", at: 0, failed: true }, "k", COMPOSE_ERROR_TTL_MS), false);
 });

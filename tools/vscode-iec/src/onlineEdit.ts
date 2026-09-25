@@ -20,7 +20,10 @@
 // the shared library text against every task's copy (see diffLibraries).
 
 import * as vscode from "vscode";
+import { cliCommand } from "./cli";
 import { nautCompose } from "./compose";
+import { compositionKey, FileStamp, reuseComposition } from "./composeCli";
+import { projectDirFor, projectFiles } from "./projectFiles";
 import {
   controllerPrelude,
   downloadConfirmMessage,
@@ -174,6 +177,40 @@ export class OnlineEdit implements vscode.Disposable {
    * status shows it instead of a misleading "program differs". */
   private composeError = "";
 
+  /** The status poll's last composition and what it was composed from —
+   * reused until an input changes (see compositionKey), so the 3-second
+   * poll doesn't spawn `naut compose` on every tick. */
+  private composeCache:
+    | { key: string; at: number; failed: boolean; res: Awaited<ReturnType<typeof nautCompose>> }
+    | undefined;
+
+  /** Everything the composition of `target` depends on: a stat sweep of the
+   * project's IEC files (root and lib/) and nautilus.yaml, the unsaved IEC
+   * buffers' versions, and which CLI runs. No file contents are read. */
+  private async compositionKeyFor(target: vscode.Uri): Promise<string> {
+    let dir = target;
+    try {
+      if ((await vscode.workspace.fs.stat(target)).type !== vscode.FileType.Directory) dir = await projectDirFor(target);
+    } catch {
+      dir = await projectDirFor(target);
+    }
+    const files: FileStamp[] = [];
+    const stamp = async (rel: string, uri: vscode.Uri) => {
+      try {
+        const st = await vscode.workspace.fs.stat(uri);
+        files.push({ rel, mtime: st.mtime, size: st.size });
+      } catch {
+        /* gone between listing and stat: its absence is in the key */
+      }
+    };
+    for (const { rel, uri } of await projectFiles(dir, IEC_FILE)) await stamp(rel, uri);
+    await stamp("nautilus.yaml", vscode.Uri.joinPath(dir, "nautilus.yaml"));
+    const dirty = vscode.workspace.textDocuments
+      .filter((d) => d.isDirty && d.uri.scheme === "file" && IEC_FILE.test(d.uri.path))
+      .map((d) => ({ path: d.uri.fsPath, version: d.version }));
+    return compositionKey(target.fsPath + "|" + dir.fsPath, cliCommand(), files, dirty);
+  }
+
   /**
    * Decompose the project the way the runtime does, by asking the CLI
    * (`naut compose --json`, the same composition `naut check`, `naut run`
@@ -181,9 +218,11 @@ export class OnlineEdit implements vscode.Disposable {
    * and under lib/ are libraries shared by every program — .ld/.fbd
    * transpiled into the prelude — and each root file with a PROGRAM (.st,
    * .fbd, .ld, or .sfc) is one program. Open editor buffers win over
-   * on-disk content. `quiet` (the status poll) suppresses the error toast.
+   * on-disk content. `quiet` (the status poll) suppresses the error toast;
+   * `cached` (also the status poll) reuses the last composition while its
+   * inputs are unchanged.
    */
-  private async composeAll(quiet = false): Promise<
+  private async composeAll(quiet = false, cached = false): Promise<
     | {
         dir: vscode.Uri;
         prelude: string;
@@ -198,7 +237,16 @@ export class OnlineEdit implements vscode.Disposable {
     const target = activeUri ?? vscode.workspace.workspaceFolders?.[0]?.uri;
     if (!target || target.scheme !== "file") return undefined;
 
-    const res = await nautCompose(target);
+    // The status poll reuses the last composition while nothing it depends
+    // on changed; explicit commands always compose fresh (and refresh it).
+    const key = await this.compositionKeyFor(target);
+    let res: Awaited<ReturnType<typeof nautCompose>>;
+    if (cached && this.composeCache && reuseComposition(this.composeCache, key, Date.now())) {
+      res = this.composeCache.res;
+    } else {
+      res = await nautCompose(target);
+      this.composeCache = { key, at: Date.now(), failed: "error" in res, res };
+    }
     if ("error" in res) {
       this.composeError = res.error;
       if (!quiet) {
@@ -552,7 +600,7 @@ export class OnlineEdit implements vscode.Disposable {
       this.status.hide();
       return;
     }
-    const ws = await this.composeAll(true);
+    const ws = await this.composeAll(true, true);
     const program =
       ws && (ws.programs.length === 1 ? ws.programs[0] : ws.programs.find((p) => p.file === ws.activeFile));
     const info = await this.fetchInfo(program?.pou);

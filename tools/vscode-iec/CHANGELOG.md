@@ -39,7 +39,10 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   *Open block source* now finds blocks written in `.ld`/`.fbd` libraries,
   and live-value instance discovery reads `.ld` programs. A library that
   won't transpile, or a PROGRAM under `lib/`, is reported the way
-  `naut check` reports it instead of being silently dropped.
+  `naut check` reports it instead of being silently dropped. The sync status
+  keeps polling the controller every 3 seconds but recomposes only when a
+  project file (root, `lib/`, `nautilus.yaml`) or an unsaved buffer
+  changed.
 - **Requires naut 0.13.0** (the next CLI release, which adds
   `naut compose`); an older `naut` gets the *Update naut* prompt, and online
   edits say plainly that they need it.

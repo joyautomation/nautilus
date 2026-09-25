@@ -86,3 +86,42 @@ export function overridesFor(docs: { fsPath: string; text: string; dirty: boolea
   for (const d of docs) if (d.dirty && d.isFile) out[d.fsPath] = d.text;
   return out;
 }
+
+// ── the status poll's composition cache ─────────────────────────────────
+//
+// The sync status polls the controller every few seconds; recomposing on
+// every tick would spawn `naut compose` constantly for nothing. It recomposes
+// only when an input to composition changed: which project the target
+// resolves to, the set and mtime/size of the project's IEC files (root, lib/,
+// and nautilus.yaml, which decides where a lib/ file's project root is), or
+// an unsaved buffer's version. Explicit commands (download, diff, pull,
+// rollback) always compose fresh and refresh the cache.
+
+/** One project file as a cheap stat sweep sees it. */
+export type FileStamp = { rel: string; mtime: number; size: number };
+
+/** An open unsaved buffer, which wins over the disk in a composition. */
+export type BufferStamp = { path: string; version: number };
+
+/** Everything a composition depends on, as one comparable string.
+ * Order-insensitive: the same inputs listed differently give the same key. */
+export function compositionKey(target: string, cli: string, files: FileStamp[], dirty: BufferStamp[]): string {
+  const f = [...files].sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0)).map((s) => `${s.rel}@${s.mtime}:${s.size}`);
+  const d = [...dirty].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)).map((b) => `${b.path}#${b.version}`);
+  return JSON.stringify([target, cli, f, d]);
+}
+
+/** A failed composition is retried after this long even with an unchanged
+ * key — the failure may be the CLI itself (updated in place), which no
+ * project file records. */
+export const COMPOSE_ERROR_TTL_MS = 30_000;
+
+/** Can the status poll reuse `cached` for `key` at time `now`? */
+export function reuseComposition(
+  cached: { key: string; at: number; failed: boolean } | undefined,
+  key: string,
+  now: number
+): boolean {
+  if (!cached || cached.key !== key) return false;
+  return !cached.failed || now - cached.at < COMPOSE_ERROR_TTL_MS;
+}
