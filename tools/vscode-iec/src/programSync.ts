@@ -1,15 +1,8 @@
 // Pure helpers for the online-edit feature (onlineEdit.ts) — vscode-free so
-// they run under plain node:test (programSync.test.ts). The composition rule
-// mirrors internal/stproject: sibling .st libraries (sorted by name) precede
-// the program body, and the same prelude joins every program in a
-// multi-program project.
-
-/** The `PROGRAM <Name>` POU name of IEC source, "" if none. Programs on a
- * multi-task controller are addressed by this name. */
-export function pouOf(src: string): string {
-  const m = /^\s*PROGRAM\s+([A-Za-z_][A-Za-z0-9_]*)/m.exec(src);
-  return m ? m[1] : "";
-}
+// they run under plain node:test (programSync.test.ts). The composition
+// itself (which files are libraries and programs, the prelude, POU names)
+// comes from the CLI — `naut compose`, see composeCli.ts; these only take a
+// composed source apart again and compare it.
 
 /** Recover the program body from composed source given the prelude Join
  * placed ahead of it — the TypeScript mirror of stproject.SplitProgram.
@@ -96,9 +89,11 @@ export function rollbackConfirmMessage(url: string, pou: string): string {
 
 // ── project library layout ──────────────────────────────────────────────
 //
-// The TypeScript mirror of internal/stproject's LibraryPaths/ProjectRoot:
-// a project's libraries are the PROGRAM-less files in its root PLUS every
-// file under lib/, at any depth. Every other subdirectory is ignored.
+// Where a project's IEC files may live — the path half of internal/
+// stproject's LibraryPaths/ProjectRoot, for features that only scan text
+// (live-value instance discovery): its root PLUS every file under lib/, at
+// any depth. Every other subdirectory is ignored. What joins a composition
+// is the CLI's call (`naut compose`), never decided here.
 
 /** The project subdirectory whose IEC files are all libraries. */
 export const LIB_DIR = "lib";

@@ -466,7 +466,9 @@ export class LiveValues implements vscode.Disposable {
         // The project's root and lib/ files: instances are declared in
         // programs (root) and inside other blocks (often lib/).
         const root = await projectDirFor(doc.uri);
-        for (const { uri } of await projectFiles(root, /\.(st|fbd)$/i)) {
+        // .ld too: a ladder program declares its block instances in the
+        // same VAR sections (permissives.ld's MotorStarter instances).
+        for (const { uri } of await projectFiles(root, /\.(st|fbd|ld)$/i)) {
           const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
           sources += (open ? open.getText() : new TextDecoder().decode(await vscode.workspace.fs.readFile(uri))) + "\n";
         }
