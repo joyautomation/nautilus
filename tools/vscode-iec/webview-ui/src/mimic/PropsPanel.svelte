@@ -8,7 +8,7 @@
 	import { BIND_HINTS, registryNames } from './registry';
 	import { suggestRoute, type ObstacleRect } from './autoroute';
 	import { minInteriorPoints } from './pipeDraft';
-	import { ed, postManifestOp, postOp, type MimicOp, type PortsEditTarget } from './mimicState.svelte';
+	import { canvasBox, ed, postManifestOp, postOp, type MimicOp, type PortsEditTarget } from './mimicState.svelte';
 
 	const doc = $derived(ed.doc);
 	const sel = $derived(ed.selection);
@@ -30,16 +30,14 @@
 	const selectedEnd = $derived(sel?.kind === 'end' ? sel.end : null);
 
 	// ── pipe end anchors (Feature 2) ─────────────────────────────────────────
-	// This panel has no DOM measurement of equipment boxes (that's
-	// EditorCanvas's domain — see its eqBox()); a detach here APPROXIMATES
-	// the freed point's position using the same unmeasured-fallback size
-	// EditorCanvas itself uses before a component's first paint (width ??
-	// 100, height 80). Good enough to land in the right neighborhood — the
-	// point is concrete and immediately visible/draggable afterward, per the
-	// "editor is never stricter than the JSON" principle; drag-to-detach on
-	// the canvas (exact, DOM-measured) is the precise alternative.
+	// This panel has no DOM of its own for the equipment boxes — it asks the
+	// canvas (canvasBox, registered by EditorCanvas from its DOM-measured
+	// eqBox()), so a detach or a Re-route here lands on the same port dots
+	// the canvas draws. Before the canvas has painted a component it falls
+	// back to the same unmeasured size EditorCanvas uses (width ?? 100,
+	// height 80).
 	function estimateBox(e: MimicEquipment): { x: number; y: number; w: number; h: number } {
-		return { x: e.x, y: e.y, w: e.width ?? 100, h: 80 };
+		return canvasBox.measure?.(e.id) ?? { x: e.x, y: e.y, w: e.width ?? 100, h: 80 };
 	}
 	function anchorAbsolute(ref: MimicPipeAnchor | undefined): [number, number] | null {
 		if (!ref || !doc) return null;
@@ -81,17 +79,24 @@
 		const full = resolved.points;
 		const start = { x: full[0][0], y: full[0][1] };
 		const end = { x: full[full.length - 1][0], y: full[full.length - 1][1] };
-		const exclude = new Set<string>();
-		if (pipe.from) exclude.add(pipe.from.equip);
-		if (pipe.to) exclude.add(pipe.to.equip);
+		// Every equipment box is an obstacle — the pipe's own end equipment
+		// too: suggestRoute's `ends` has each anchored end leave its port
+		// outward past its own box first, so a side port routes around its
+		// vessel instead of back through it.
 		const margin = 16;
-		const obstacles: ObstacleRect[] = (doc.equipment ?? [])
-			.filter((e) => !exclude.has(e.id))
-			.map((e) => {
-				const b = estimateBox(e);
-				return { x: b.x - margin, y: b.y - margin, w: b.w + 2 * margin, h: b.h + 2 * margin };
-			});
-		const points = suggestRoute(start, resolved.startDir, end, resolved.endDir, obstacles);
+		const keepOut = (e: MimicEquipment): ObstacleRect => {
+			const b = estimateBox(e);
+			return { x: b.x - margin, y: b.y - margin, w: b.w + 2 * margin, h: b.h + 2 * margin };
+		};
+		const boxOf = (id: string | undefined) => {
+			const e = id ? (doc.equipment ?? []).find((x) => x.id === id) : undefined;
+			return e ? keepOut(e) : undefined;
+		};
+		const obstacles: ObstacleRect[] = (doc.equipment ?? []).map(keepOut);
+		const points = suggestRoute(start, resolved.startDir, end, resolved.endDir, obstacles, {
+			start: boxOf(pipe.from?.equip),
+			end: boxOf(pipe.to?.equip)
+		});
 		postOp({ type: 'setPipePoints', id: pipe.id, points });
 	}
 

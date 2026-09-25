@@ -6,7 +6,7 @@
   "scripts": {
     "build": "vite build && vite build --config vite.mimic.config.ts",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "node --experimental-strip-types --test src/sfc.test.ts src/keyForward.test.ts src/ladderLayout.test.ts src/mimic/ports.test.ts src/mimic/portsGestures.test.ts src/mimic/routing.test.ts src/mimic/pipeDraft.test.ts src/mimic/autoroute.test.ts src/mimic/mimicClip.test.ts",
+    "test": "node --experimental-strip-types --test src/sfc.test.ts src/keyForward.test.ts src/ladderLayout.test.ts src/mimic/ports.test.ts src/mimic/portsGestures.test.ts src/mimic/routing.test.ts src/mimic/pipeDraft.test.ts src/mimic/autoroute.test.ts src/mimic/mimicClip.test.ts src/mimic/opPayload.test.ts",
     "test:gestures": "node --test gesture-harness/gestures.test.mjs gesture-harness/diagram.test.mjs"
   },
   "devDependencies": {

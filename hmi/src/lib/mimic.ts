@@ -61,11 +61,19 @@ export function resolvedPortDir(port: Pick<MimicPort, 'x' | 'y' | 'dir'>): PortD
  * the runtime's instance -> builtin chain, resolveRuntimePorts() below —
  * agree on the builtin tier without duplicating the data). */
 export const BUILTIN_PORTS: Record<string, MimicPort[]> = {
+	// Measured off each drawing's viewBox (the rendered box IS the svg — its
+	// label is drawn inside it), so a default port sits ON the equipment's
+	// connection, not on the box edge: Tank (220 x 260) on the vessel shell
+	// (x 34..186, y 20..222 — the right wall, not the level scale beside it);
+	// Pump (120 x 110) on the suction stub's mouth (x 0, y 58) and the
+	// discharge nozzle's top (x 58, y 6); Valve (90 x 80) on the body's flat
+	// ends (x 12 / 78, y 44). None of these sit exactly on a box edge, so
+	// inferPortDir() can't infer an exit direction — each carries its `dir`.
 	Tank: [
-		{ name: 'top', x: 0.5, y: 0 },
-		{ name: 'left', x: 0, y: 0.5 },
-		{ name: 'right', x: 1, y: 0.5 },
-		{ name: 'bottom', x: 0.5, y: 1 }
+		{ name: 'top', x: 0.5, y: 0.077, dir: 'up' },
+		{ name: 'left', x: 0.155, y: 0.465, dir: 'left' },
+		{ name: 'right', x: 0.845, y: 0.465, dir: 'right' },
+		{ name: 'bottom', x: 0.5, y: 0.854, dir: 'down' }
 	],
 	// The level-only reservoir (LevelTank) is not one of <Mimic>'s built-in
 	// components — it reaches a doc through the `registry` prop — but its
@@ -83,12 +91,12 @@ export const BUILTIN_PORTS: Record<string, MimicPort[]> = {
 		{ name: 'bottom', x: 0.5, y: 1 }
 	],
 	Pump: [
-		{ name: 'in', x: 0, y: 0.5 },
-		{ name: 'out', x: 1, y: 0.5 }
+		{ name: 'in', x: 0, y: 0.527, dir: 'left' },
+		{ name: 'out', x: 0.483, y: 0.055, dir: 'up' }
 	],
 	Valve: [
-		{ name: 'in', x: 0, y: 0.5 },
-		{ name: 'out', x: 1, y: 0.5 }
+		{ name: 'in', x: 0.133, y: 0.55, dir: 'left' },
+		{ name: 'out', x: 0.867, y: 0.55, dir: 'right' }
 	],
 	Gauge: [],
 	Sparkline: []

@@ -35,7 +35,7 @@
 	import { fmtFraction, newPortAtFreeSlot, newPortAtPoint, nudgePort, roundPort, toFraction } from './portsGestures';
 	import { minInteriorPoints, resolveDraftFinish, type NamedPort } from './pipeDraft';
 	import { suggestRoute, type ObstacleRect } from './autoroute';
-	import { ed, GRID, postManifestOp, postOp, snap, type MimicOp } from './mimicState.svelte';
+	import { canvasBox, ed, GRID, postManifestOp, postOp, snap, type MimicOp } from './mimicState.svelte';
 	import { clipEquipment, pasteOps, type MimicClip } from './mimicClip';
 	import { readClip, typingTarget, writeClip } from '../clipboard';
 	import PortsPanel from './PortsPanel.svelte';
@@ -96,6 +96,17 @@
 			h: el?.offsetHeight || 80
 		};
 	}
+
+	// PropsPanel's detach / Re-route resolve ports against these same boxes.
+	$effect(() => {
+		canvasBox.measure = (id) => {
+			const eq = (doc?.equipment ?? []).find((e) => e.id === id);
+			return eq ? eqBox(eq) : undefined;
+		};
+		return () => {
+			canvasBox.measure = null;
+		};
+	});
 
 	/** A resolved port projected into canvas pixels — name + source
 	 * fractions + effective (explicit or inferred) exit direction carried
@@ -211,18 +222,22 @@
 	);
 
 	/** Keep-out rectangles for autoroute.ts's obstacle avoidance: every
-	 * equipment box EXCEPT the ones the new pipe connects to (routing away
-	 * from your OWN endpoint equipment doesn't make sense — the port sits
-	 * ON its edge), expanded by a fixed margin so a suggested route clears
-	 * equipment by a comfortable gap rather than grazing it. */
+	 * equipment box — the pipe's OWN end equipment included (suggestRoute's
+	 * `ends` lets the route leave a port outward first, so a side port's
+	 * vessel is gone around, not through) — expanded by a fixed margin so a
+	 * suggested route clears equipment by a comfortable gap rather than
+	 * grazing it. */
 	const ROUTE_MARGIN = 16;
-	function obstaclesFor(excludeIds: Set<string>): ObstacleRect[] {
-		return (doc?.equipment ?? [])
-			.filter((eq) => !excludeIds.has(eq.id))
-			.map((eq) => {
-				const b = eqBox(eq);
-				return { x: b.x - ROUTE_MARGIN, y: b.y - ROUTE_MARGIN, w: b.w + 2 * ROUTE_MARGIN, h: b.h + 2 * ROUTE_MARGIN };
-			});
+	function keepOut(eq: MimicEquipment): ObstacleRect {
+		const b = eqBox(eq);
+		return { x: b.x - ROUTE_MARGIN, y: b.y - ROUTE_MARGIN, w: b.w + 2 * ROUTE_MARGIN, h: b.h + 2 * ROUTE_MARGIN };
+	}
+	function obstaclesFor(): ObstacleRect[] {
+		return (doc?.equipment ?? []).map(keepOut);
+	}
+	function keepOutOf(id: string): ObstacleRect | undefined {
+		const eq = (doc?.equipment ?? []).find((e) => e.id === id);
+		return eq ? keepOut(eq) : undefined;
 	}
 
 	/** How many interior points a pipe needs given its CURRENT from/to — thin
@@ -1033,8 +1048,10 @@
 			const startPort = getPort(result.from.equip, result.from.port);
 			const endPort = getPort(result.to.equip, result.to.port);
 			if (startPort && endPort) {
-				const obstacles = obstaclesFor(new Set([result.from.equip, result.to.equip]));
-				points = suggestRoute(startPort, startPort.dir, endPort, endPort.dir, obstacles);
+				points = suggestRoute(startPort, startPort.dir, endPort, endPort.dir, obstaclesFor(), {
+					start: keepOutOf(result.from.equip),
+					end: keepOutOf(result.to.equip)
+				});
 				routing = 'orthogonal';
 			}
 		}
@@ -1046,24 +1063,43 @@
 		};
 	});
 
-	/** Finish the pipe-drawing draft (Enter or double-click): commit whatever
-	 * draftSpec currently represents — identical to what the preview shows. */
-	function finishPipe() {
-		const spec = draftSpec;
-		if (spec) {
-			postOp({
-				type: 'addPipe',
-				points: spec.points,
-				...(spec.from ? { from: spec.from } : {}),
-				...(spec.to ? { to: spec.to } : {}),
-				...(spec.routing ? { routing: spec.routing } : {})
-			});
-			ed.tool = 'select';
-		}
+	/** Drop the pipe-drawing draft (points + anchors) — Esc, a finish (whether
+	 * or not its op got through), or leaving the + Pipe tool. */
+	function cancelDraft() {
 		draft = [];
 		draftFrom = null;
 		draftLastSnap = null;
 	}
+
+	/** Finish the pipe-drawing draft (Enter or double-click): commit whatever
+	 * draftSpec currently represents — identical to what the preview shows.
+	 * The draft is dropped however this ends: a finish that couldn't commit
+	 * (postOp reports — and toasts — a failed post) must not leave a dashed
+	 * draft stranded on the canvas. The anchors are `$state` proxies; postOp
+	 * copies the op to plain data before it crosses postMessage. */
+	function finishPipe() {
+		try {
+			const spec = draftSpec;
+			if (spec) {
+				const sent = postOp({
+					type: 'addPipe',
+					points: spec.points,
+					...(spec.from ? { from: spec.from } : {}),
+					...(spec.to ? { to: spec.to } : {}),
+					...(spec.routing ? { routing: spec.routing } : {})
+				});
+				if (sent) ed.tool = 'select';
+			}
+		} finally {
+			cancelDraft();
+		}
+	}
+
+	// A draft belongs to the + Pipe tool: switching tools (the toolbar, a
+	// palette pick) drops it, so it can't linger on the Select canvas.
+	$effect(() => {
+		if (ed.tool !== 'pipe' && draft.length) cancelDraft();
+	});
 
 	// ── keyboard ────────────────────────────────────────────────────────────
 	function onkeydown(e: KeyboardEvent) {
@@ -1091,9 +1127,7 @@
 		}
 		if (e.key === 'Escape') {
 			if (draft.length) {
-				draft = [];
-				draftFrom = null;
-				draftLastSnap = null;
+				cancelDraft();
 			} else if (ed.tool !== 'select') {
 				ed.tool = 'select';
 				ed.placeComponent = '';
@@ -1182,7 +1216,14 @@
 	}
 
 	const handleR = $derived(5 / scale);
-	const showPorts = $derived(ed.tool === 'pipe' || drag?.kind === 'vtx');
+	// Port dots show wherever a pipe end or vertex can land on one: while
+	// drawing (+ Pipe), and while dragging a pipe's vertex or END in Select.
+	const showPorts = $derived(ed.tool === 'pipe' || drag?.kind === 'vtx' || drag?.kind === 'anchor');
+	/** The port a live gesture would land on — the drawing cursor's, or a
+	 * dragged pipe end's snap — highlighted among the dots. */
+	const litPort = $derived(
+		drag?.kind === 'anchor' ? (drag.port ?? null) : hoverPort ? { equip: hoverPort.equip, port: hoverPort.port } : null
+	);
 	/** `kind: 'end'` (a pipe's terminal handle selected) counts as its pipe
 	 * being 'pipe'-selected for every visual/handles purpose below — it's
 	 * only a distinct Selection variant so keyboard nudge can address the
@@ -1304,7 +1345,7 @@
 				{#if showPorts}
 					{#each doc.equipment ?? [] as eq (eq.id)}
 						{#each eqPorts(eq) as port (port.name)}
-							{@const isHover = hoverPort && hoverPort.equip === eq.id && hoverPort.port === port.name}
+							{@const isHover = litPort && litPort.equip === eq.id && litPort.port === port.name}
 							{#if port.dir}
 								{@const [tx, ty] = tickEnd(port)}
 								<line class="porttick" x1={port.x} y1={port.y} x2={tx} y2={ty} style="stroke-width: {1.5 / scale}" />
