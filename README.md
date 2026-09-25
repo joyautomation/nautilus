@@ -733,8 +733,9 @@ The pieces that make this first-class rather than a convention:
   [docs/functions.md](docs/functions.md#function-blocks-in-ladder) and
   [examples/ladder-subroutines](examples/ladder-subroutines).
 - **The tooling composes the same way.** The VS Code extension, the LSP,
-  `naut check`, and `naut pull` all treat sibling library files
-  as in-scope for the program, byte-identically to `Libraries` — so
+  `naut check`, and `naut pull` all treat the project's library files
+  (PROGRAM-less files in the root and anywhere under `lib/`) as in-scope
+  for the program, byte-identically to `Libraries` — so
   online edits round-trip losslessly and CI sees what the runtime sees.
 - **Instance state is retained.** A block's `VAR` section persists
   across scans, and PLC-style online edits carry it across program swaps

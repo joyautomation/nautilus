@@ -458,10 +458,13 @@ a call on it rather than a second declaration.
 A `.ld` file with **no PROGRAM** is a project library, exactly like a
 PROGRAM-less `.st` file. Its blocks join the prelude ahead of every task,
 so any program in the project — in any language — can instantiate them.
-`.fbd` libraries work the same way.
+`.fbd` libraries work the same way. A library may sit in the project root or
+anywhere under `lib/` (e.g. `lib/motor.ld`); `lib/` holds libraries only, so
+a `PROGRAM` there is an error, and no other subdirectory composes.
 
-**Composition order.** Every `.st` library first, in file-name order, then
-every transpiled `.ld` / `.fbd` library, in file-name order. ST leads
+**Composition order.** Every `.st` library first, then every transpiled
+`.ld` / `.fbd` library, each group sorted by project-relative path (root
+files and `lib/` files interleaved: `lib/motor.ld` sorts before `pump.ld`). ST leads
 because that is where a project's `TYPE` declarations live and a graphical
 block's pin may name a UDT. Order never decides whether a call *resolves*:
 the ST front-end registers every `FUNCTION_BLOCK` signature in the composed

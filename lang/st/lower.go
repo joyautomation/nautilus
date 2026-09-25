@@ -189,7 +189,15 @@ func populateFBSignature(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[s
 			if err != nil {
 				return errAt(vd.Pos, fmt.Errorf("FUNCTION_BLOCK %s VAR %s: %w", fbDecl.Name, vd.Name, err))
 			}
-			slot := ir.FBSlot{Name: vd.Name, Type: t}
+			slot := ir.FBSlot{Name: vd.Name, Type: t, Constant: vb.Constant}
+			if vd.Initial != nil && vb.Kind != "VAR_IN_OUT" {
+				// The instance starts here (ir.NewFBInstance); dropping it
+				// left every initialised FB variable — a VAR CONSTANT most
+				// visibly — reading zero.
+				if slot.Init, err = evalConstValue(vd.Initial, t); err != nil {
+					return errAt(vd.Pos, fmt.Errorf("FUNCTION_BLOCK %s VAR %s initial: %w", fbDecl.Name, vd.Name, err))
+				}
+			}
 			switch vb.Kind {
 			case "VAR_INPUT":
 				def.Inputs = append(def.Inputs, slot)
@@ -299,7 +307,13 @@ func populateFuncSignature(decl *FunctionDecl, def *ir.FuncDef, userFBs map[stri
 			if err != nil {
 				return errAt(vd.Pos, fmt.Errorf("FUNCTION %s VAR %s: %w", decl.Name, vd.Name, err))
 			}
-			slot := ir.FBSlot{Name: vd.Name, Type: t}
+			slot := ir.FBSlot{Name: vd.Name, Type: t, Constant: vb.Constant}
+			if vd.Initial != nil {
+				// Each call's frame starts here (ir.NewFuncFrame).
+				if slot.Init, err = evalConstValue(vd.Initial, t); err != nil {
+					return errAt(vd.Pos, fmt.Errorf("FUNCTION %s VAR %s initial: %w", decl.Name, vd.Name, err))
+				}
+			}
 			switch vb.Kind {
 			case "VAR_INPUT":
 				if vd.Name == decl.Name {
@@ -622,6 +636,11 @@ func (l *lowerer) collectVars() error {
 				}
 			}
 			if kind == ir.VarGlobal {
+				if vd.Initial != nil {
+					// A tag has no slot here to start at this value; it
+					// would be silently ignored, so say so instead.
+					return errAt(vd.Pos, fmt.Errorf("%s %s: an initial value is not applied to a tag — give it an init: in the manifest instead", vb.Kind, vd.Name))
+				}
 				l.scope[vd.Name] = symbol{slot: -1, typ: t, kind: ir.VarGlobal, global: vd.Name}
 				// A global has no slot, so Slots cannot record that the
 				// program binds it; Globals is where tooling reads it.
@@ -634,6 +653,7 @@ func (l *lowerer) collectVars() error {
 				Type:     t,
 				Init:     init,
 				Retained: vb.Retain,
+				Constant: vb.Constant,
 				Kind:     kind,
 			})
 			l.irProg.SlotIndex[vd.Name] = slot

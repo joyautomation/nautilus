@@ -12,6 +12,7 @@
 // per-document into VS Code's editor lifecycle.
 
 import * as vscode from "vscode";
+import { projectDirFor, projectFiles } from "./projectFiles";
 import { followActiveDoc } from "./previewFollow";
 import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
 import { execFile } from "child_process";
@@ -221,16 +222,14 @@ function handleWebviewMessage(doc: vscode.TextDocument, msg: WebviewMessage): vo
   editQueue = editQueue.then(() => applyOpMessage(doc, msg)).catch(() => undefined);
 }
 
-/** Find and reveal `FUNCTION_BLOCK <pou>` among the document's sibling .st
- * files (the project's libraries). Built-in blocks have no source to open. */
+/** Find and reveal `FUNCTION_BLOCK <pou>` among the project's .st files —
+ * the root's and lib/'s (the project's libraries). Built-in blocks have no
+ * source to open. */
 async function openPouSource(doc: vscode.TextDocument, pou: string): Promise<void> {
-  const dir = vscode.Uri.joinPath(doc.uri, "..");
   const re = new RegExp(String.raw`^[ \t]*FUNCTION_BLOCK[ \t]+` + pou + String.raw`\b`, "im");
   try {
-    const entries = await vscode.workspace.fs.readDirectory(dir);
-    for (const [name, kind] of entries) {
-      if (kind !== vscode.FileType.File || !/\.st$/i.test(name)) continue;
-      const uri = vscode.Uri.joinPath(dir, name);
+    const root = await projectDirFor(doc.uri);
+    for (const { uri } of await projectFiles(root, /\.st$/i)) {
       const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
       const m = re.exec(text);
       if (!m) continue;

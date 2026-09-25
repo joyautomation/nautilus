@@ -53,7 +53,8 @@ The pieces that make this first-class rather than a convention:
   `.ld` or `.fbd` file holding `FUNCTION_BLOCK`s is a library, the same
   as a `.st` one (see [Ladder](/languages/ladder/)).
 - **The tooling composes the same way.** The VS Code extension, the LSP,
-  `naut check`, and `naut pull` all treat sibling library files
+  `naut check`, `naut test`, and `naut pull` all treat the project's
+  library files (the root's and `lib/`'s, [below](#where-library-files-live-the-root-and-lib))
   as in-scope for the program, byte-identically to `Libraries` — so
   online edits round-trip losslessly and CI sees what the runtime sees.
 - **Instance state is retained.** A block's `VAR` section persists
@@ -63,6 +64,56 @@ The pieces that make this first-class rather than a convention:
 
 `naut new` scaffolds this shape: the PI controller ships in
 `blocks.st`, instantiated from `program.st`.
+
+## Where library files live: the root and `lib/`
+
+In a manifest project (`nautilus.yaml`), a library file is any `.st`, `.ld`
+or `.fbd` file with **no `PROGRAM`** that sits either
+
+- in the **project root**, beside `nautilus.yaml` and the program files, or
+- anywhere under **`lib/`**, at any depth.
+
+Once a project has more than a couple of blocks, `lib/` keeps them out of
+the root, where the task programs are:
+
+```
+lift-station/
+├── nautilus.yaml
+├── sequence.sfc          # tasks: programs stay in the root
+├── permissives.ld
+├── sim.st
+└── lib/
+    ├── pump.st           # FUNCTION_BLOCKs and TYPEs
+    ├── physics.st
+    └── motor.ld          # a ladder block library
+```
+
+Folders inside `lib/` are fine too (`lib/physics/tank.st`).
+
+Every library, root or `lib/`, composes into one prelude ahead of every
+task, so any program can use any block and a block in `lib/` can use a
+`TYPE` from the root (or from elsewhere in `lib/`). The order is fixed: the
+`.st` libraries first, then the `.ld`/`.fbd` ones transpiled, each group
+sorted by project-relative path (so `lib/physics.st`, `lib/pump.st` and a
+root `units.st`, then `lib/motor.ld`). Order never decides whether a name resolves. It only decides
+which file a duplicate-name error points at, and declaring a block in both
+the root and `lib/` is the same error as declaring it in two root files.
+
+Two rules keep this predictable:
+
+- **`lib/` holds libraries only.** A file under `lib/` that declares a
+  `PROGRAM` is an error that names it (`lib/extra.st declares a PROGRAM,
+  but lib/ holds libraries only — programs belong in the root and in
+  tasks:`). A program is a scheduling unit, so it lives in the root and is
+  named by a task.
+- **No other folder composes.** `hmi/`, `tags/`, `deploy/`, `node_modules/`
+  and any other subdirectory are ignored, however many `.st` files they
+  hold, so adding `lib/` changes nothing for a project that doesn't have
+  one.
+
+`naut build` ships `lib/` inside the binary with the rest of the project,
+and error messages name library files by their project path (`lib/motor.ld`),
+so a bad library is easy to find.
 
 ## More than one program: tasks
 

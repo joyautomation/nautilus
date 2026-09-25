@@ -102,14 +102,15 @@ func Zero(t *Type) Value {
 	return Value{}
 }
 
-// NewFBInstance allocates a fresh FB instance with all slots zero-valued
-// per their declared types. Outputs and internals start at IEC default;
-// inputs are also zero until the first call binds them.
+// NewFBInstance allocates a fresh FB instance with every slot at its
+// declared initial value (`VAR Gain : REAL := 2.0;`, VAR CONSTANT
+// included), or zero for its type when it has none. Inputs start there
+// too until the first call binds them.
 func NewFBInstance(def *FBDef) *FBInstance {
 	all := def.AllSlots()
 	slots := make([]Value, len(all))
 	for i, s := range all {
-		slots[i] = Zero(s.Type)
+		slots[i] = s.initial()
 	}
 	return &FBInstance{Def: def, Slots: slots}
 }

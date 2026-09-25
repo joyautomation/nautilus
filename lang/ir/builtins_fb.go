@@ -51,9 +51,9 @@ func init() {
 func registerTON() {
 	RegisterFB(&FBDef{
 		Name:      "TON",
-		Inputs:    []FBSlot{{"IN", BoolT}, {"PT", TimeT}},
-		Outputs:   []FBSlot{{"Q", BoolT}, {"ET", TimeT}},
-		Internals: []FBSlot{{"_started", TimeT}},
+		Inputs:    []FBSlot{{Name: "IN", Type: BoolT}, {Name: "PT", Type: TimeT}},
+		Outputs:   []FBSlot{{Name: "Q", Type: BoolT}, {Name: "ET", Type: TimeT}},
+		Internals: []FBSlot{{Name: "_started", Type: TimeT}},
 		Step: func(inst *FBInstance, ctx FBStepCtx) error {
 			in := inst.Slots[0].B
 			pt := inst.Slots[1].I
@@ -90,9 +90,9 @@ func registerTON() {
 func registerTOF() {
 	RegisterFB(&FBDef{
 		Name:      "TOF",
-		Inputs:    []FBSlot{{"IN", BoolT}, {"PT", TimeT}},
-		Outputs:   []FBSlot{{"Q", BoolT}, {"ET", TimeT}},
-		Internals: []FBSlot{{"_stopped", TimeT}, {"_prevIN", BoolT}},
+		Inputs:    []FBSlot{{Name: "IN", Type: BoolT}, {Name: "PT", Type: TimeT}},
+		Outputs:   []FBSlot{{Name: "Q", Type: BoolT}, {Name: "ET", Type: TimeT}},
+		Internals: []FBSlot{{Name: "_stopped", Type: TimeT}, {Name: "_prevIN", Type: BoolT}},
 		Step: func(inst *FBInstance, ctx FBStepCtx) error {
 			in := inst.Slots[0].B
 			pt := inst.Slots[1].I
@@ -138,9 +138,9 @@ func registerTOF() {
 func registerTP() {
 	RegisterFB(&FBDef{
 		Name:      "TP",
-		Inputs:    []FBSlot{{"IN", BoolT}, {"PT", TimeT}},
-		Outputs:   []FBSlot{{"Q", BoolT}, {"ET", TimeT}},
-		Internals: []FBSlot{{"_started", TimeT}, {"_prevIN", BoolT}},
+		Inputs:    []FBSlot{{Name: "IN", Type: BoolT}, {Name: "PT", Type: TimeT}},
+		Outputs:   []FBSlot{{Name: "Q", Type: BoolT}, {Name: "ET", Type: TimeT}},
+		Internals: []FBSlot{{Name: "_started", Type: TimeT}, {Name: "_prevIN", Type: BoolT}},
 		Step: func(inst *FBInstance, ctx FBStepCtx) error {
 			in := inst.Slots[0].B
 			pt := inst.Slots[1].I
@@ -178,9 +178,9 @@ func registerTP() {
 func registerEdgeTriggers() {
 	RegisterFB(&FBDef{
 		Name:      "R_TRIG",
-		Inputs:    []FBSlot{{"CLK", BoolT}},
-		Outputs:   []FBSlot{{"Q", BoolT}},
-		Internals: []FBSlot{{"_prev", BoolT}},
+		Inputs:    []FBSlot{{Name: "CLK", Type: BoolT}},
+		Outputs:   []FBSlot{{Name: "Q", Type: BoolT}},
+		Internals: []FBSlot{{Name: "_prev", Type: BoolT}},
 		Step: func(inst *FBInstance, _ FBStepCtx) error {
 			clk := inst.Slots[0].B
 			prev := inst.Slots[2].B
@@ -191,9 +191,9 @@ func registerEdgeTriggers() {
 	})
 	RegisterFB(&FBDef{
 		Name:      "F_TRIG",
-		Inputs:    []FBSlot{{"CLK", BoolT}},
-		Outputs:   []FBSlot{{"Q", BoolT}},
-		Internals: []FBSlot{{"_prev", BoolT}},
+		Inputs:    []FBSlot{{Name: "CLK", Type: BoolT}},
+		Outputs:   []FBSlot{{Name: "Q", Type: BoolT}},
+		Internals: []FBSlot{{Name: "_prev", Type: BoolT}},
 		Step: func(inst *FBInstance, _ FBStepCtx) error {
 			clk := inst.Slots[0].B
 			prev := inst.Slots[2].B
@@ -209,9 +209,9 @@ func registerEdgeTriggers() {
 func registerCounters() {
 	RegisterFB(&FBDef{
 		Name:      "CTU",
-		Inputs:    []FBSlot{{"CU", BoolT}, {"R", BoolT}, {"PV", IntT}},
-		Outputs:   []FBSlot{{"Q", BoolT}, {"CV", IntT}},
-		Internals: []FBSlot{{"_prevCU", BoolT}},
+		Inputs:    []FBSlot{{Name: "CU", Type: BoolT}, {Name: "R", Type: BoolT}, {Name: "PV", Type: IntT}},
+		Outputs:   []FBSlot{{Name: "Q", Type: BoolT}, {Name: "CV", Type: IntT}},
+		Internals: []FBSlot{{Name: "_prevCU", Type: BoolT}},
 		Step: func(inst *FBInstance, _ FBStepCtx) error {
 			cu := inst.Slots[0].B
 			r := inst.Slots[1].B
@@ -232,9 +232,9 @@ func registerCounters() {
 	})
 	RegisterFB(&FBDef{
 		Name:      "CTD",
-		Inputs:    []FBSlot{{"CD", BoolT}, {"LD", BoolT}, {"PV", IntT}},
-		Outputs:   []FBSlot{{"Q", BoolT}, {"CV", IntT}},
-		Internals: []FBSlot{{"_prevCD", BoolT}},
+		Inputs:    []FBSlot{{Name: "CD", Type: BoolT}, {Name: "LD", Type: BoolT}, {Name: "PV", Type: IntT}},
+		Outputs:   []FBSlot{{Name: "Q", Type: BoolT}, {Name: "CV", Type: IntT}},
+		Internals: []FBSlot{{Name: "_prevCD", Type: BoolT}},
 		Step: func(inst *FBInstance, _ FBStepCtx) error {
 			cd := inst.Slots[0].B
 			ld := inst.Slots[1].B
@@ -255,9 +255,9 @@ func registerCounters() {
 	})
 	RegisterFB(&FBDef{
 		Name:      "CTUD",
-		Inputs:    []FBSlot{{"CU", BoolT}, {"CD", BoolT}, {"R", BoolT}, {"LD", BoolT}, {"PV", IntT}},
-		Outputs:   []FBSlot{{"QU", BoolT}, {"QD", BoolT}, {"CV", IntT}},
-		Internals: []FBSlot{{"_prevCU", BoolT}, {"_prevCD", BoolT}},
+		Inputs:    []FBSlot{{Name: "CU", Type: BoolT}, {Name: "CD", Type: BoolT}, {Name: "R", Type: BoolT}, {Name: "LD", Type: BoolT}, {Name: "PV", Type: IntT}},
+		Outputs:   []FBSlot{{Name: "QU", Type: BoolT}, {Name: "QD", Type: BoolT}, {Name: "CV", Type: IntT}},
+		Internals: []FBSlot{{Name: "_prevCU", Type: BoolT}, {Name: "_prevCD", Type: BoolT}},
 		Step: func(inst *FBInstance, _ FBStepCtx) error {
 			cu := inst.Slots[0].B
 			cd := inst.Slots[1].B
@@ -300,8 +300,8 @@ func registerCounters() {
 func registerLatches() {
 	RegisterFB(&FBDef{
 		Name:    "SR",
-		Inputs:  []FBSlot{{"S1", BoolT}, {"R", BoolT}},
-		Outputs: []FBSlot{{"Q1", BoolT}},
+		Inputs:  []FBSlot{{Name: "S1", Type: BoolT}, {Name: "R", Type: BoolT}},
+		Outputs: []FBSlot{{Name: "Q1", Type: BoolT}},
 		Step: func(inst *FBInstance, _ FBStepCtx) error {
 			s1 := inst.Slots[0].B
 			r := inst.Slots[1].B
@@ -312,8 +312,8 @@ func registerLatches() {
 	})
 	RegisterFB(&FBDef{
 		Name:    "RS",
-		Inputs:  []FBSlot{{"S", BoolT}, {"R1", BoolT}},
-		Outputs: []FBSlot{{"Q1", BoolT}},
+		Inputs:  []FBSlot{{Name: "S", Type: BoolT}, {Name: "R1", Type: BoolT}},
+		Outputs: []FBSlot{{Name: "Q1", Type: BoolT}},
 		Step: func(inst *FBInstance, _ FBStepCtx) error {
 			s := inst.Slots[0].B
 			r1 := inst.Slots[1].B
