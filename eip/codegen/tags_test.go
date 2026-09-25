@@ -46,8 +46,8 @@ func TestTagsYAMLDerivesRoles(t *testing.T) {
 }
 
 // A UDT binding carries type:, which is the line that replaces the prose
-// desc: examples/client60 used to need. Elementary types do not — their
-// shape comes from the value the driver delivers.
+// desc: a real client's tag list used to need. Elementary types do not —
+// their shape comes from the value the driver delivers.
 func TestTagsYAMLEmitsTypeForUDTsOnly(t *testing.T) {
 	out := render(t, tagsFixture())
 	if !strings.Contains(out, "- { name: PIT_001, role: input, type: Analog_Input }") {

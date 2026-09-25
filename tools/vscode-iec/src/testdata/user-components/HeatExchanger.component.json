@@ -1,0 +1,8 @@
+{
+	"ports": [
+		{ "name": "shellIn", "x": 0.5, "y": 0 },
+		{ "name": "tubeIn", "x": 0, "y": 0.5 },
+		{ "name": "tubeOut", "x": 1, "y": 0.5 },
+		{ "name": "shellOut", "x": 0.5, "y": 1 }
+	]
+}

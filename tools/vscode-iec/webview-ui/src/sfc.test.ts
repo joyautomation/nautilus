@@ -355,9 +355,9 @@ test('diffSfc: an identical model diffs with no added/removed/changed elements',
 	for (const t of merged.trans) assert.equal(t.status, undefined);
 });
 
-// The shipped example (examples/tank-batch-sfc): abort goes FORWARD to its
-// own Aborted step, so Fill has two forward exits — an alternative
-// divergence — and Drain carries three actions.
+// The tank-batch-sfc fixture: abort goes FORWARD to its own Aborted step,
+// so Fill has two forward exits — an alternative divergence — and Drain
+// carries three actions.
 function tankBatchWithAborted(): SfcModel {
 	const m = tankBatchModel();
 	m.steps.push({ id: 'st:Aborted', name: 'Aborted', initial: false, line: 21, endLine: 22 });

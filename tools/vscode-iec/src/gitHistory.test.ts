@@ -15,10 +15,10 @@ test("parseGitLog reads records newest first, with each commit's own path (renam
   const stdout =
     ["78858b9", "78858b9aaaa", "2026-08-18", "James A Joy", "fix: cap the integral"].join(FS) +
     RS +
-    "\n\nexamples/heated-tank-nogo/program.fbd\n\n" +
+    "\n\nplant/program.fbd\n\n" +
     ["db554bf", "db554bfbbbb", "2026-08-17", "James A Joy", "test: settled is not done — stay there"].join(FS) +
     RS +
-    "\n\nexamples/heated-tank-fbd/program.fbd\n";
+    "\n\nold/program.fbd\n";
   const commits = parseGitLog(stdout);
   assert.equal(commits.length, 2);
   assert.deepEqual(commits[0], {
@@ -27,10 +27,10 @@ test("parseGitLog reads records newest first, with each commit's own path (renam
     date: "2026-08-18",
     author: "James A Joy",
     subject: "fix: cap the integral",
-    path: "examples/heated-tank-nogo/program.fbd",
+    path: "plant/program.fbd",
   });
   assert.equal(commits[1].subject, "test: settled is not done — stay there");
-  assert.equal(commits[1].path, "examples/heated-tank-fbd/program.fbd");
+  assert.equal(commits[1].path, "old/program.fbd");
 });
 
 test("parseGitLog without --name-only output still yields commits, with an empty path", () => {

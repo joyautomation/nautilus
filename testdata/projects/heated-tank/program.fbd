@@ -1,0 +1,52 @@
+PROGRAM Main
+(* Heated surge tank control, FBD flavor: the pump hysteresis is a seal-in
+   latch, the temperature PI feeds its integral back through a retained
+   variable, and a TON delays the low-temperature alarm.
+   Open the diagram: right-click -> "Open With -> FBD Diagram". *)
+VAR_EXTERNAL
+    (* process values (sim task) *)
+    LevelPct       : REAL;
+    TempC          : REAL;
+    ScanDtS        : REAL;
+    (* operator setpoints *)
+    TempSP         : REAL;
+    TempSPEco      : REAL;
+    EcoMode        : BOOL;
+    Kp             : REAL;
+    Ki             : REAL;
+    PumpStartLevel : REAL;
+    PumpStopLevel  : REAL;
+    (* commands + alarm *)
+    PumpRun        : BOOL;
+    Heater         : REAL;
+    TempLowAlm     : BOOL;
+END_VAR
+VAR
+    integral : REAL;
+END_VAR
+FBD
+  // P-101 pump: level hysteresis as a seal-in latch — start when low,
+  // seal through PumpRun, drop out when high.
+  low  = LE(LevelPct, PumpStartLevel)
+  high = GE(LevelPct, PumpStopLevel)
+  PumpRun := AND(OR(low, PumpRun), NOT high)
+
+  // Eco mode selects the working setpoint (SEL: FALSE takes IN0). Flip
+  // the EcoMode tag from the dashboard and watch the loop retarget live.
+  spNow = SEL(EcoMode, TempSP, TempSPEco)
+
+  // TIC-101: temperature PI with anti-windup clamp; integral is retained
+  // state fed back from its own coil. The cap is sized to the loop's job:
+  // at setpoint the integral only carries the standing heat loss (~17 % of
+  // heater capacity), so letting it wind higher during a rise just stores
+  // overshoot — the settle test's stay-there step proves it.
+  e = SUB(spNow, TempC)
+  integral := LIMIT(0.0, ADD(integral, MUL(Ki, e, ScanDtS)), 30.0)
+  Heater := LIMIT(0.0, ADD(MUL(Kp, e), integral), 100.0)
+
+  // TAL-101: low-temperature alarm with a 10 s on-delay.
+  cold = LT(TempC, 62.0)
+  a1 : TON(IN := cold, PT := T#10S)
+  TempLowAlm := a1.Q
+END_FBD
+END_PROGRAM

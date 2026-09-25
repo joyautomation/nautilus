@@ -139,7 +139,7 @@ func TestCheckTreatsFieldAssignmentAsRead(t *testing.T) {
 
 // An unbound INPUT is driver-fed telemetry — the bulk of any imported tag
 // list. Warning on those would train people to ignore this warning before it
-// ever caught anything (examples/client60 has eight).
+// ever caught anything (a real client's tag list has had as many as eight).
 func TestCheckStaysQuietOnUnboundInputs(t *testing.T) {
 	out, code := checkIn(t, map[string]string{
 		"nautilus.yaml": checkManifestYAML +
@@ -359,7 +359,8 @@ END_PROGRAM`,
 }
 
 // The ladder-diagram shape: a PROGRAM-less .ld file is a library exactly
-// like a .st one (docs/design, examples/ladder-subroutines), and a
+// like a .st one (see docs/design, and the ladder-subroutines fixture, which
+// is the shipped proof of the library mechanism itself), and a
 // FUNCTION_BLOCK written as rungs declares VAR_EXTERNAL the same way an ST
 // one does. The bound set must see through the LD->FBD->ST transpile chain.
 func TestCheckSeesTagsBoundThroughLadderLibraryFB(t *testing.T) {

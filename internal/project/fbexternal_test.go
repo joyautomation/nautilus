@@ -157,8 +157,8 @@ END_PROGRAM`)},
 
 // The ladder-diagram shape: a PROGRAM-less .ld file is a project library
 // exactly like a .st one, and a FUNCTION_BLOCK written as rungs declares
-// VAR_EXTERNAL the same way an ST one does (examples/ladder-subroutines is
-// the shipped proof of the library mechanism itself; this exercises the
+// VAR_EXTERNAL the same way an ST one does (the ladder-subroutines fixture
+// is the shipped proof of the library mechanism itself; this exercises the
 // VAR_EXTERNAL binding specifically).
 func TestGlobalsSeesTagBoundThroughLadderLibraryFB(t *testing.T) {
 	fs := fstest.MapFS{

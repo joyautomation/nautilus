@@ -1,0 +1,28 @@
+PROGRAM Interlocks
+(* The annunciator as LADDER — a third language on the same tag store,
+   its own 200 ms task. Open the diagram: right-click ->
+   "Open With -> Ladder Diagram"; with live values on, power flow paints
+   the rungs as the plant runs. *)
+VAR_EXTERNAL
+    TempLowAlm : BOOL;
+    TempC      : REAL;
+    HornAck    : BOOL;
+    Horn       : BOOL;
+    HiTempAlm  : BOOL;
+END_VAR
+VAR
+    HiSecs : TIME; (* how long we've been hot — captured via ET => *)
+END_VAR
+LD
+  RUNG hitemp (* comparison as a contact, 5 s on-delay; ET captured with the standard's => output binding *)
+    GT(TempC, 90.0) t2:TON(PT := T#5S, ET => HiSecs) ( HiTempAlm )
+
+  // Comment runs like this render as notes in the ladder diagram —
+  // dblclick to edit them there.
+  RUNG horn (* either alarm sounds the horn until the operator acks *)
+    [ TempLowAlm | HiTempAlm ] /HornAck ( Horn )
+
+  RUNG ackclear (* the ack releases itself once both alarms clear *)
+    /TempLowAlm /HiTempAlm ( R HornAck )
+END_LD
+END_PROGRAM
