@@ -14,6 +14,18 @@ export type Shortcut = {
 
 export type ShortcutGroup = { title: string; rows: Shortcut[] };
 
+/** Undo / redo / save act on the source file from every diagram surface
+ * (a preview panel forwards them — see keyForward.ts); in a text field
+ * undo/redo are the field's own. */
+const FILE_GROUP: ShortcutGroup = {
+	title: 'File',
+	rows: [
+		{ keys: 'Ctrl + Z', does: 'Undo the last edit to the file' },
+		{ keys: 'Ctrl + Y / Ctrl + Shift + Z', does: 'Redo' },
+		{ keys: 'Ctrl + S', does: 'Save the file' }
+	]
+};
+
 export const FBD_SHORTCUTS: ShortcutGroup[] = [
 	{
 		title: 'Select',
@@ -43,7 +55,8 @@ export const FBD_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: 'Drag empty canvas', does: 'Pan' },
 			{ keys: 'Scroll / pinch', does: 'Zoom (the corner buttons zoom and fit too)' }
 		]
-	}
+	},
+	FILE_GROUP
 ];
 
 export const LD_SHORTCUTS: ShortcutGroup[] = [
@@ -69,7 +82,8 @@ export const LD_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: 'Ctrl + C / X / V', does: 'Copy, cut, paste an element — pastes after the selection, into another ladder too', hint: 'Ctrl+C/X/V: copy cut paste' },
 			{ keys: 'Esc', does: 'Cancel a drag', hint: 'Esc: cancel drag' }
 		]
-	}
+	},
+	FILE_GROUP
 ];
 
 export const SFC_SHORTCUTS: ShortcutGroup[] = [
@@ -92,7 +106,8 @@ export const SFC_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: 'Ctrl + C / X / V', does: 'Copy, cut, paste steps with their actions and the transitions between them — pasted to the right of the chart under free names, into another .sfc too', hint: 'Ctrl+C/X/V: copy cut paste steps' },
 			{ keys: 'Esc', does: 'Cancel a connect drag, close a popover', hint: 'Esc: cancel' }
 		]
-	}
+	},
+	FILE_GROUP
 ];
 
 export const MIMIC_SHORTCUTS: ShortcutGroup[] = [
@@ -125,7 +140,8 @@ export const MIMIC_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: 'Enter / double-click', does: 'Finish the pipe' },
 			{ keys: 'Shift', does: 'Free angle while placing a point' }
 		]
-	}
+	},
+	FILE_GROUP
 ];
 
 export const COMPONENT_SHORTCUTS: ShortcutGroup[] = [
@@ -138,7 +154,8 @@ export const COMPONENT_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: 'Click a dot or panel row', does: 'Select the port — the panel renames it and sets its exit direction' },
 			{ keys: 'Esc', does: 'Deselect', hint: 'Esc deselects' }
 		]
-	}
+	},
+	FILE_GROUP
 ];
 
 /** The one-line toolbar hint for a table. */
