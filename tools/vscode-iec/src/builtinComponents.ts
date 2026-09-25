@@ -12,19 +12,20 @@
 import type { Port } from "./mimicComponentIndex";
 
 export const BUILTIN_COMPONENT_PORTS: Record<string, Port[]> = {
+  // Measured off each drawing — see BUILTIN_PORTS in hmi/src/lib/mimic.ts.
   Tank: [
-    { name: "top", x: 0.5, y: 0 },
-    { name: "left", x: 0, y: 0.5 },
-    { name: "right", x: 1, y: 0.5 },
-    { name: "bottom", x: 0.5, y: 1 },
+    { name: "top", x: 0.5, y: 0.077, dir: "up" },
+    { name: "left", x: 0.155, y: 0.465, dir: "left" },
+    { name: "right", x: 0.845, y: 0.465, dir: "right" },
+    { name: "bottom", x: 0.5, y: 0.854, dir: "down" },
   ],
   Pump: [
-    { name: "in", x: 0, y: 0.5 },
-    { name: "out", x: 1, y: 0.5 },
+    { name: "in", x: 0, y: 0.527, dir: "left" },
+    { name: "out", x: 0.483, y: 0.055, dir: "up" },
   ],
   Valve: [
-    { name: "in", x: 0, y: 0.5 },
-    { name: "out", x: 1, y: 0.5 },
+    { name: "in", x: 0.133, y: 0.55, dir: "left" },
+    { name: "out", x: 0.867, y: 0.55, dir: "right" },
   ],
   Gauge: [],
   Sparkline: [],

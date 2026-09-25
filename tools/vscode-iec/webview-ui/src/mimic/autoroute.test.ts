@@ -5,7 +5,8 @@
 // `node --experimental-strip-types --test` — no svelte/vscode imports.
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
-import { suggestRoute, type ObstacleRect } from "./autoroute.ts";
+import { PORT_STUB } from "@joyautomation/nautilus-hmi/mimic";
+import { faceDir, suggestRoute, type ObstacleRect } from "./autoroute.ts";
 
 test("no obstacles, already aligned: straight route (zero interior corners)", () => {
   const pts = suggestRoute({ x: 0, y: 50 }, undefined, { x: 200, y: 50 }, undefined, []);
@@ -89,4 +90,59 @@ test("deterministic: identical inputs always produce the identical route", () =>
   const a = suggestRoute({ x: 0, y: 50 }, undefined, { x: 200, y: 50 }, undefined, obstacles);
   const b = suggestRoute({ x: 0, y: 50 }, undefined, { x: 200, y: 50 }, undefined, obstacles);
   assert.deepEqual(a, b);
+});
+
+// ── ends: a route leaves its own equipment before going around it ─────────
+const M = 16;
+const grow = (r: ObstacleRect): ObstacleRect => ({ x: r.x - M, y: r.y - M, w: r.w + 2 * M, h: r.h + 2 * M });
+/** True when the axis-aligned segment a->b enters the strict interior of r. */
+function crosses(a: [number, number], b: [number, number], r: ObstacleRect): boolean {
+  const [x0, x1] = [Math.min(a[0], b[0]), Math.max(a[0], b[0])];
+  const [y0, y1] = [Math.min(a[1], b[1]), Math.max(a[1], b[1])];
+  return x1 > r.x && x0 < r.x + r.w && y1 > r.y && y0 < r.y + r.h;
+}
+// A built-in Tank (220 x 260 at x 400) with its right port on the vessel
+// wall — inside its own box, as the default ports now are.
+const tank: ObstacleRect = { x: 400, y: 0, w: 220, h: 260 };
+const tankRight = { x: 586, y: 121 };
+
+test("ends: a side port's route exits its own equipment outward, then goes around it (never back through the vessel)", () => {
+  // A valve down and to the LEFT of the tank: the L that ignores the tank
+  // body (what re-route produced) runs straight back through it.
+  const valve: ObstacleRect = { x: 200, y: 360, w: 90, h: 80 };
+  const valveIn = { x: 212, y: 404 };
+  const obstacles = [grow(tank), grow(valve)];
+  const pts = suggestRoute(tankRight, "right", valveIn, "left", obstacles, { start: grow(tank), end: grow(valve) });
+  // first vertex: straight out of the right wall, past the tank's keep-out
+  assert.deepEqual(pts[0], [tank.x + tank.w + M, tankRight.y]);
+  const full: [number, number][] = [[tankRight.x, tankRight.y], ...pts, [valveIn.x, valveIn.y]];
+  // every leg after the exit clears the tank body; the last leg enters the valve from its left face
+  for (let i = 1; i < full.length - 1; i++) {
+    assert.equal(crosses(full[i], full[i + 1], tank), false, `leg ${i} ${JSON.stringify([full[i], full[i + 1]])} crosses the tank`);
+  }
+  assert.deepEqual(pts[pts.length - 1], [valve.x - M, valveIn.y]);
+});
+
+test("ends: with the old exclusion (no end boxes, tank not an obstacle) the same route cuts through the tank", () => {
+  const valveIn = { x: 212, y: 404 };
+  const pts = suggestRoute(tankRight, "right", valveIn, "left", []);
+  const full: [number, number][] = [[tankRight.x, tankRight.y], ...pts, [valveIn.x, valveIn.y]];
+  const legs = full.slice(1, -1).map((p, i) => [p, full[i + 2]] as const);
+  assert.ok(legs.some(([a, b]) => crosses(a, b, tank)));
+});
+
+test("ends: a port with no dir exits through the face it sits nearest (faceDir)", () => {
+  assert.equal(faceDir({ x: 412, y: 121 }, tank), "left");
+  assert.equal(faceDir({ x: 510, y: 250 }, tank), "down");
+  assert.equal(faceDir({ x: 510, y: 5 }, tank), "up");
+  assert.equal(faceDir(tankRight, tank), "right");
+  const pts = suggestRoute({ x: 412, y: 121 }, undefined, { x: 100, y: 121 }, undefined, [grow(tank)], { start: grow(tank) });
+  assert.deepEqual(pts, [[tank.x - M, 121]]);
+});
+
+test("ends: the exit is never shorter than the PORT_STUB leg", () => {
+  // a port right on its (unexpanded) box edge with a zero-margin box
+  const box: ObstacleRect = { x: 0, y: 0, w: 100, h: 100 };
+  const pts = suggestRoute({ x: 100, y: 50 }, "right", { x: 300, y: 50 }, undefined, [box], { start: box });
+  assert.ok(pts[0][0] >= 100 + PORT_STUB);
 });

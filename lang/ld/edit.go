@@ -118,6 +118,8 @@ func ApplyEdit(src string, op EditOp, libs ...string) ([]TextEdit, error) {
 		return opSetRungComment(src, m, op)
 	case "declareVar":
 		return opDeclareVar(src, m, op)
+	case "renameInst":
+		return opRenameInst(src, m, op)
 	case "deleteVar":
 		return opDeleteVar(src, m, op)
 	}
@@ -800,7 +802,10 @@ func opSetRungComment(src string, m *Model, op EditOp) ([]TextEdit, error) {
 // The same seam as the FBD editor's vars panel: declarations live in the ST
 // header (before the LD block), so the diagram edits them textually.
 
-var ldVarSectionRe = regexp.MustCompile(`(?i)^\s*(VAR_EXTERNAL|VAR)\s*$`)
+var (
+	ldVarSectionRe = regexp.MustCompile(`(?i)^\s*(VAR_EXTERNAL|VAR)\s*$`)
+	programLineRe  = regexp.MustCompile(`(?i)^\s*PROGRAM\s+[A-Za-z_]`)
+)
 
 // opDeclareVar inserts "name : TYPE;" into a header section (VAR_EXTERNAL
 // default, VAR for retained locals), creating the section above LD if needed.
@@ -820,19 +825,30 @@ func opDeclareVar(src string, m *Model, op EditOp) ([]TextEdit, error) {
 	if !identOnly.MatchString(typ) {
 		return nil, fmt.Errorf("ld edit: %q is not a valid type name", typ)
 	}
+	hasProgram := m.Name != ""
 	for _, v := range m.Vars {
-		if strings.EqualFold(v.Name, name) {
+		// The PROGRAM's header is the one this op writes; a FUNCTION_BLOCK
+		// defined in the same file has its own scope.
+		if (v.POU == "" || !hasProgram) && strings.EqualFold(v.Name, name) {
 			return nil, fmt.Errorf("ld edit: %q is already declared", name)
 		}
 	}
 
 	// Scanned on comment-stripped text so a `(* ... *)` doc comment whose
 	// text happens to start a line with "LD" or "VAR" isn't mistaken for
-	// real header structure.
+	// real header structure. The header is the PROGRAM's when the file has
+	// one (FUNCTION_BLOCKs may precede it), else the first POU's.
 	lines := strings.Split(stripComments(src), "\n")
-	ldLine := -1 // 0-based line of the LD block start = end of the header
+	start := 0
 	for i, l := range lines {
-		if ldStartRe.MatchString(l) {
+		if programLineRe.MatchString(l) {
+			start = i
+			break
+		}
+	}
+	ldLine := -1 // 0-based line of the LD block start = end of the header
+	for i := start; i < len(lines); i++ {
+		if ldStartRe.MatchString(lines[i]) {
 			ldLine = i
 			break
 		}
@@ -843,7 +859,7 @@ func opDeclareVar(src string, m *Model, op EditOp) ([]TextEdit, error) {
 
 	insertAt := -1 // 0-based line of the target section's END_VAR
 	inSection := ""
-	for i := 0; i < ldLine; i++ {
+	for i := start; i < ldLine; i++ {
 		if mm := ldVarSectionRe.FindStringSubmatch(lines[i]); mm != nil {
 			inSection = strings.ToUpper(mm[1])
 			continue

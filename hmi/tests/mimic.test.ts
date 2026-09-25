@@ -29,7 +29,8 @@ const pump: MimicEquipment = {
 		{ name: 'suction', x: 0, y: 0.5, dir: 'left' }
 	]
 };
-// A built-in Tank (no instance ports) — BUILTIN_PORTS supplies the cardinals.
+// A built-in Tank (no instance ports) — BUILTIN_PORTS supplies the cardinals,
+// on the vessel shell: at 80 × 60, left (412.4, 27.9), bottom (440, 51.24).
 const tank: MimicEquipment = { id: 'T1', component: 'Tank', x: 400, y: 0, width: 80, props: { height: 60 } };
 
 const docOf = (pipes: MimicDoc['pipes']): MimicDoc => ({
@@ -85,8 +86,8 @@ describe('attachPipeEnds', () => {
 	});
 
 	it('attaches both ends of a two-point pipe, leaving no interior points', () => {
-		// suction (100, 125) ← … tank left port (400, 30)
-		const doc = docOf([{ id: 'a', points: [[97, 127], [402, 31]], routing: 'orthogonal' }]);
+		// suction (100, 125) ← … tank left port (412.4, 27.9)
+		const doc = docOf([{ id: 'a', points: [[97, 127], [414, 31]], routing: 'orthogonal' }]);
 		const { doc: out, report } = attachPipeEnds(doc, { tolerance: 10 });
 		expect(report.attached).toBe(2);
 		expect(out.pipes![0].from).toEqual({ equip: 'P1', port: 'suction' });
@@ -114,12 +115,12 @@ describe('attachPipeEnds', () => {
 	});
 
 	it('uses measure() for the box height and falls back to props.height then width', () => {
-		// Without measure: T1 is 80 × 60 (props.height) → bottom port at (440, 60).
-		let r = attachPipeEnds(docOf([{ id: 'a', points: [[440, 62], [440, 200]] }]), { tolerance: 5 });
+		// Without measure: T1 is 80 × 60 (props.height) → bottom port at (440, 51.24).
+		let r = attachPipeEnds(docOf([{ id: 'a', points: [[440, 53], [440, 173]] }]), { tolerance: 5 });
 		expect(r.doc.pipes![0].from).toEqual({ equip: 'T1', port: 'bottom' });
-		// With measure saying 80 × 200: bottom port is at (440, 200) and the
+		// With measure saying 80 × 200: bottom port is at (440, 170.8) and the
 		// other end of the same pipe is what attaches.
-		r = attachPipeEnds(docOf([{ id: 'a', points: [[440, 62], [440, 200]] }]), {
+		r = attachPipeEnds(docOf([{ id: 'a', points: [[440, 53], [440, 173]] }]), {
 			tolerance: 5,
 			measure: (eq) => ({ width: eq.width!, height: eq.id === 'T1' ? 200 : 50 })
 		});
@@ -129,7 +130,7 @@ describe('attachPipeEnds', () => {
 		const sq: MimicDoc = {
 			canvas: { width: 10, height: 10 },
 			equipment: [{ id: 'S', component: 'Tank', x: 0, y: 0, width: 40 }],
-			pipes: [{ id: 'a', points: [[20, 41], [20, 90]] }]
+			pipes: [{ id: 'a', points: [[20, 35], [20, 90]] }]
 		};
 		expect(attachPipeEnds(sq, { tolerance: 2 }).doc.pipes![0].from).toEqual({ equip: 'S', port: 'bottom' });
 	});

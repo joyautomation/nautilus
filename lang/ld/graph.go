@@ -29,6 +29,9 @@ type Model struct {
 	Rungs    []Rung    `json:"rungs"`
 	Comments []Comment `json:"comments,omitempty"`
 	Blocks   []Block   `json:"blocks,omitempty"`
+	// FBTypes is the block catalog the palette's FB picker lists: the
+	// standard blocks, then every user block in scope (catalog.go).
+	FBTypes []FBType `json:"fbTypes,omitempty"`
 	// Blank marks a whitespace-only source: a new file with no POU yet. The
 	// editor opens it empty and the first op writes the skeleton.
 	Blank bool `json:"blank,omitempty"`
@@ -50,7 +53,7 @@ type Block struct {
 type Pin struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
-	Dir  string `json:"dir"` // "in" | "out"
+	Dir  string `json:"dir"` // "in" | "out" | "inout" (catalog only)
 }
 
 // Comment is a run of consecutive full-line // comments inside the LD
@@ -115,6 +118,7 @@ func Graph(src string, libs ...string) (*Model, error) {
 	m.Blocks = scanBlocks(src)
 	res := newResolver(src, libs)
 	m.res = res
+	m.FBTypes = res.catalog()
 
 	lines := strings.Split(src, "\n")
 	// Structural matches (FUNCTION_BLOCK boundaries, LD / END_LD, RUNG

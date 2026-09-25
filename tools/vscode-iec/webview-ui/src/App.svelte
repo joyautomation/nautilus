@@ -98,7 +98,18 @@
 	// The floating in-place editor (constants, renames, comments) — all the
 	// commit/cancel/suggestion mechanics live in FloatEditor.
 	let editor = $state<FloatEditor | null>(null);
-	const tagItems = $derived(varList.map((v) => ({ name: v.name, detail: v.type })));
+	// Ladder retags also offer the project's nautilus.yaml tags the file
+	// doesn't declare yet — picking one leaves the palette's "declare"
+	// offer to add it to VAR_EXTERNAL.
+	const tagItems = $derived.by(() => {
+		const items = varList.map((v) => ({ name: v.name, detail: v.type }));
+		if (mode !== 'ld' || !ldModel?.tags) return items;
+		const have = new Set(varList.map((v) => v.name.toLowerCase()));
+		for (const t of ldModel.tags) {
+			if (!have.has(t.name.toLowerCase())) items.push({ name: t.name, detail: `${t.type ?? ''} · manifest`.trim() });
+		}
+		return items;
+	});
 
 	// "Used" for the ladder = referenced by any rung: contact/coil operands
 	// (accessor bases), fb instances, and identifiers inside argument lists.

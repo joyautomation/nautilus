@@ -1,5 +1,17 @@
 # Changelog — @joyautomation/nautilus-hmi
 
+## Unreleased
+
+### Fixed
+
+- **`BUILTIN_PORTS` for `Tank`, `Pump` and `Valve` sit on the drawings.** The
+  defaults were box-edge cardinals, so a pipe anchored to one began beside
+  the equipment: off the tank's shell, on its level scale, beside the pump's
+  casing. They are now measured off each SVG (the tank shell, the pump's
+  suction stub and top discharge nozzle, the valve body's ends) and carry an
+  explicit `dir`, since `inferPortDir()` only reads directions off exact box
+  edges. An instance with its own `ports` renders as before.
+
 ## 0.6.0 — 2026-09-10 (minor: additive, no breaking changes)
 
 Everything below came out of the Riverbend WTP recreation (`riverbend/wtp/host/hmi`), which ported an

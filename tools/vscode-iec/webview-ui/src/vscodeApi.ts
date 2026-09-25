@@ -22,7 +22,10 @@ export const vscode: VsCodeApi = window.acquireVsCodeApi
 	? window.acquireVsCodeApi()
 	: {
 			postMessage: (msg) => {
-				(window.__POSTED__ ??= []).push(msg);
+				// structuredClone, as the real postMessage does — so a harness
+				// gesture that posts a $state proxy fails here as it would in
+				// VS Code (DataCloneError), instead of passing unnoticed.
+				(window.__POSTED__ ??= []).push(structuredClone(msg));
 			},
 			// In-memory stand-in so the harness can seed/inspect state.
 			getState: () => window.__STATE__ ?? null,

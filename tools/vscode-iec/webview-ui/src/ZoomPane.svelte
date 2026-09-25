@@ -62,7 +62,10 @@
 			return;
 		}
 		const sr = scroller.getBoundingClientRect();
-		const px = cx ?? sr.left + scroller.clientWidth / 2;
+		// Keys and buttons have no cursor: a ladder ('width') anchors at the
+		// pane's LEFT edge, so the left rail and each rung's first elements
+		// stay put instead of scrolling off to the left; a chart, its center.
+		const px = cx ?? (fitAxis === 'width' ? sr.left : sr.left + scroller.clientWidth / 2);
 		const py = cy ?? sr.top + scroller.clientHeight / 2;
 		const el = content();
 		const r0 = el?.getBoundingClientRect();

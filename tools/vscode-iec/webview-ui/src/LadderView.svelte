@@ -10,7 +10,9 @@
 	// pointer-based with a movement threshold (HTML5 dnd doesn't exist for
 	// SVG), resolved at pointerup via elementFromPoint with a
 	// nearest-hotspot snap fallback.
-	import { annotate, type Ann, type LdElement, type LdModel, type RungStatus } from './ladder';
+	import { annotate, type Ann, type LdElement, type LdFbType, type LdModel, type RungStatus } from './ladder';
+	import LdBlockPicker from './LdBlockPicker.svelte';
+	import { FB_TYPES } from './suggest';
 	import { layoutRung, rungMinWidth, fitArgs, L, type LSpot, type LNode } from './ladderLayout';
 	import { live, liveValue, formatLive } from './liveState.svelte';
 	import { readClip, typingTarget, writeClip } from './clipboard';
@@ -152,7 +154,9 @@
 		label: string;
 		title: string;
 		accept: 'series' | 'coil';
-		op: (rung: string, series?: number[], index?: number) => Record<string, unknown>;
+		op?: (rung: string, series?: number[], index?: number) => Record<string, unknown>;
+		/** Opens the FB picker at the target instead of inserting outright. */
+		pick?: boolean;
 	};
 	// A palette block's instance name: the first `t<n>`/`c<n>` no rung
 	// instance or header variable already declares — a duplicate
@@ -177,8 +181,7 @@
 		{ label: '⊣ ⊢', title: 'NO contact', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'contact', path: series, index }) },
 		{ label: '⊣/⊢', title: 'NC contact', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'contact', neg: true, path: series, index }) },
 		{ label: 'FN( )', title: 'function contact — inserts GT(_, 0.0) as a placeholder; dblclick it to make it ANY function: LE, EQ, ABS(x) > 0 comparisons, etc.', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'fn', fn: 'GT', args: '_, 0.0', path: series, index }) },
-		{ label: 'TON', title: 'on-delay timer in the rung', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'fb', inst: freeInst('t'), fbType: 'TON', args: 'PT := T#1S', path: series, index }) },
-		{ label: 'CTU', title: 'up counter in the rung', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'fb', inst: freeInst('c'), fbType: 'CTU', args: 'PV := 10', path: series, index }) },
+		{ label: 'FB…', title: 'function block — TON, CTU, any standard block or one of the project\'s own (library) blocks; pick the type, name the instance', accept: 'series', pick: true },
 		{ label: '[ | ]', title: 'parallel branch (two open legs)', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'branch', path: series, index }) },
 		{ label: '( )', title: 'output coil', accept: 'coil', op: (rung, _s, index) => ({ type: 'insert', rung, kind: 'coil', index }) },
 		{ label: '(S)', title: 'set (latch) coil', accept: 'coil', op: (rung, _s, index) => ({ type: 'insert', rung, kind: 'coil', mode: 'S', index }) },
@@ -193,7 +196,7 @@
 			return;
 		}
 		if (item.accept === 'coil') {
-			post(item.op(rungName, undefined, 999));
+			if (item.op) post(item.op(rungName, undefined, 999));
 			return;
 		}
 		let series: number[] = [];
@@ -202,7 +205,84 @@
 			series = selected.path.slice(0, -1);
 			index = selected.path[selected.path.length - 1] + 1;
 		}
-		post(item.op(rungName, series, index));
+		if (item.pick) picking = { rung: rungName, series, index };
+		else if (item.op) post(item.op(rungName, series, index));
+	}
+
+	// ── the FB picker ───────────────────────────────────────────────────────
+	// Where the next block lands (the palette click's or drop's target)
+	// while the picker is open.
+	let picking = $state<{ rung: string; series: number[]; index: number } | null>(null);
+	// The catalog comes with the model (`naut ld graph`); an older CLI sends
+	// none, and the standard blocks still work.
+	const STD_DEFAULTS: Record<string, { args?: string; prefix: string }> = {
+		TON: { args: 'PT := T#1S', prefix: 't' },
+		TOF: { args: 'PT := T#1S', prefix: 't' },
+		TP: { args: 'PT := T#1S', prefix: 't' },
+		CTU: { args: 'PV := 10', prefix: 'c' },
+		CTD: { args: 'PV := 10', prefix: 'c' },
+		CTUD: { args: 'PV := 10', prefix: 'c' }
+	};
+	const fbTypes = $derived<LdFbType[]>(
+		model.fbTypes?.length
+			? model.fbTypes
+			: FB_TYPES.map((t) => ({ name: t.name, detail: t.detail, ...(STD_DEFAULTS[t.name] ?? { prefix: t.name.slice(0, 2).toLowerCase() }) }))
+	);
+	let wrapEl = $state<HTMLElement | null>(null);
+	function insertBlock(v: { type: string; inst: string; args: string }) {
+		const at = picking;
+		picking = null;
+		if (!at) return;
+		post({ type: 'insert', rung: at.rung, kind: 'fb', inst: v.inst, fbType: v.type, args: v.args, path: at.series, index: at.index });
+		// Keyboard focus back to the diagram, so Del / Ctrl+C land there.
+		wrapEl?.focus({ preventScroll: true });
+	}
+
+	// ── declare what a retag introduced ─────────────────────────────────────
+	// A retag may name something the PROGRAM doesn't declare: the rung goes
+	// red and `naut check` says "undeclared identifier". Every such name is
+	// offered here — into VAR_EXTERNAL, typed from nautilus.yaml, when it is
+	// a manifest tag; into VAR (a retained local) either way.
+	const undeclared = $derived.by(() => {
+		const declared = new Set((model.vars ?? []).filter((v) => !v.pou).map((v) => v.name.toLowerCase()));
+		const insts = new Set<string>();
+		const refs = new Map<string, string>();
+		const walk = (els: LdElement[]) => {
+			for (const e of els ?? []) {
+				if (e.inst) insts.add(e.inst.toLowerCase());
+				if ((e.kind === 'contact' || e.kind === 'coil' || (e.kind as string) === 'edge') && e.ref) {
+					const base = /^[A-Za-z_][A-Za-z0-9_]*/.exec(e.ref)?.[0];
+					if (base && base !== '_' && !refs.has(base.toLowerCase())) refs.set(base.toLowerCase(), base);
+				}
+				for (const leg of e.legs ?? []) walk(leg);
+			}
+		};
+		for (const r of model.rungs ?? []) {
+			if (r.pou) continue; // a FUNCTION_BLOCK's rungs have their own header
+			walk(r.elements);
+			walk(r.coils);
+		}
+		const tags = new Map((model.tags ?? []).map((t) => [t.name.toLowerCase(), t]));
+		return [...refs]
+			.filter(([l]) => !declared.has(l) && !insts.has(l) && l !== 'true' && l !== 'false')
+			.map(([l, name]) => ({ name, tag: tags.get(l) }));
+	});
+	let declaring = $state(false);
+	$effect(() => {
+		if (!undeclared.length) declaring = false;
+	});
+	// Open, the offer closes on a press anywhere else (capture phase: node
+	// handlers stop propagation).
+	$effect(() => {
+		if (!declaring) return;
+		const away = (ev: PointerEvent) => {
+			if (!(ev.target as Element | null)?.closest?.('.declpop, button.declare')) declaring = false;
+		};
+		window.addEventListener('pointerdown', away, true);
+		return () => window.removeEventListener('pointerdown', away, true);
+	});
+	function declare(name: string, section: 'VAR_EXTERNAL' | 'VAR', varType: string) {
+		post({ type: 'declareVar', name, varType, section });
 	}
 
 	// ── pointer drags (palette items and existing nodes) ────────────────────
@@ -274,6 +354,8 @@
 		const { rung, spot } = target;
 		if (d.kind === 'palette') {
 			if (spot.op === 'leg') post({ type: 'addLeg', rung, path: spot.branch });
+			else if (d.item.pick) picking = { rung, series: spot.series ?? [], index: spot.index ?? 999 };
+			else if (!d.item.op) return;
 			else if (spot.op === 'coil') post(d.item.op(rung, undefined, spot.index));
 			else post(d.item.op(rung, spot.series, spot.index));
 		} else {
@@ -327,7 +409,18 @@
 					{ suggest: 'functions' }
 				);
 			} else if (ann.el.kind === 'fb') {
-				requestInput(ann.el.args ?? '', at, (v) => post({ type: 'setArgs', ...addr, args: v }));
+				// The header (instance name, type) renames the instance —
+				// declaration and every reference, in one edit; the body
+				// edits the call's arguments.
+				const head = (ev.target as Element | null)?.closest?.('.fbhead, .inst, .fbtype');
+				if (head) {
+					const old = ann.el.inst ?? '';
+					requestInput(old, { ...at, w: Math.max(rect.width, 110) }, (v) => {
+						if (v.trim() && v.trim() !== old) post({ type: 'renameInst', ...addr, name: v.trim() });
+					});
+				} else {
+					requestInput(ann.el.args ?? '', at, (v) => post({ type: 'setArgs', ...addr, args: v }));
+				}
 			}
 		};
 		el.addEventListener('pointerdown', onDown);
@@ -625,7 +718,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events a11y_no_noninteractive_tabindex -->
-<div class="wrap" class:dragging={drag?.started} tabindex={editable ? 0 : undefined} use:keyInteract use:measureView>
+<div class="wrap" bind:this={wrapEl} class:dragging={drag?.started} tabindex={editable ? 0 : undefined} use:keyInteract use:measureView>
 	{#if editable}
 		<div class="palette" onclick={(e) => e.stopPropagation()}>
 			{#each PALETTE as item (item.label)}
@@ -642,6 +735,43 @@
 			<button title="Copy the selected element (Ctrl+C)" disabled={!selected} onclick={() => doCopy()}>⧉</button>
 			<button title="Paste after the selection (Ctrl+V)" disabled={!clipboard} onclick={() => doPaste()}>⎘</button>
 			<button title={selected?.whole ? `Delete rung ${selected.rung} (Del)` : 'Delete the selected element — or the rung, when its name is selected (Del)'} disabled={!selected} onclick={() => doDelete()}>✕</button>
+			{#if undeclared.length}
+				<span class="sep"></span>
+				<button
+					class="declare"
+					title="{undeclared.map((u) => u.name).join(', ')} {undeclared.length === 1 ? 'is' : 'are'} used here but not declared — click to declare"
+					onclick={() => (declaring = !declaring)}
+				>⚠ declare {undeclared.length === 1 ? undeclared[0].name : undeclared.length + ' names'}…</button>
+			{/if}
+			{#if picking}
+				<LdBlockPicker types={fbTypes} {freeInst} onInsert={insertBlock} onClose={() => (picking = null)} />
+			{/if}
+			{#if declaring && undeclared.length}
+				<!-- svelte-ignore a11y_no_static_element_interactions -->
+				<div class="declpop" onpointerdown={(e) => e.stopPropagation()}>
+					{#each undeclared as u (u.name)}
+						<div class="declrow">
+							<span class="declname" title={u.tag ? `nautilus.yaml: ${u.tag.role ?? ''} ${u.tag.type ?? ''} ${u.tag.desc ?? ''}` : 'not a nautilus.yaml tag'}>{u.name}</span>
+							{#if u.tag}
+								<button
+									class="declbtn primary"
+									data-name={u.name}
+									data-section="VAR_EXTERNAL"
+									title="the project tag — add it to this program's VAR_EXTERNAL"
+									onclick={() => declare(u.name, 'VAR_EXTERNAL', u.tag?.type || 'BOOL')}
+								>VAR_EXTERNAL : {u.tag.type || 'BOOL'}</button>
+							{/if}
+							<button
+								class="declbtn"
+								data-name={u.name}
+								data-section="VAR"
+								title="a retained local of this program — add it to VAR"
+								onclick={() => declare(u.name, 'VAR', 'BOOL')}
+							>VAR : BOOL</button>
+						</div>
+					{/each}
+				</div>
+			{/if}
 		</div>
 	{/if}
 	<div
@@ -766,8 +896,9 @@
 							<rect x="0" y="0" width={n.w} height={n.h} rx="4" class="box" />
 							<text x={n.w / 2} y={n.h / 2 + 3.5} text-anchor="middle" class="fntext">{n.ann.el.fn}({n.ann.el.args})</text>
 						{:else if n.kind === 'fb'}
-							<title>{n.ann.el.inst} : {n.ann.el.type}({n.ann.el.args}){diffNote(n.ann.el)}{editable ? ' — dblclick: edit args · Del · drag to move' : ''}</title>
+							<title>{n.ann.el.inst} : {n.ann.el.type}({n.ann.el.args}){diffNote(n.ann.el)}{editable ? ' — dblclick the name: rename the instance · dblclick the body: edit args · Del · drag to move' : ''}</title>
 							<rect x="0" y="0" width={n.w} height={n.h} rx="3" class="box fbbox" />
+							<rect x="0" y={-L.LABEL_TOP - 8} width={n.w} height={L.LABEL_TOP + 28} class="fbhead" />
 							<text x={n.w / 2} y="-4" text-anchor="middle" class="operand inst">{n.ann.el.inst}</text>
 							<text x={n.w / 2} y="15" text-anchor="middle" class="fbtype">{n.ann.el.type}</text>
 							{#if n.ann.el.args}
@@ -843,7 +974,8 @@
 		gap: 4px;
 		align-items: center;
 		padding: 5px 14px;
-		background: color-mix(in srgb, var(--nx-bg) 88%, transparent);
+		/* opaque: scrolled rungs must not show through the buttons */
+		background: var(--nx-bg);
 		border-bottom: 1px solid var(--nx-border);
 		font-family: var(--nx-mono);
 	}
@@ -870,6 +1002,46 @@
 		border-color: var(--nx-border);
 		background: transparent;
 	}
+	.palette button.declare {
+		border-color: var(--nx-warn);
+		color: var(--nx-warn);
+		cursor: pointer;
+	}
+	.declpop {
+		position: absolute;
+		top: calc(100% + 2px);
+		right: 14px;
+		z-index: 30;
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+		padding: 6px;
+		background: var(--nx-panel-bg);
+		border: 1px solid var(--nx-border);
+		border-radius: 5px;
+		box-shadow: var(--nx-shadow);
+	}
+	.declrow {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+	.declname {
+		min-width: 90px;
+		font-size: 12px;
+		color: var(--nx-ui-ink);
+	}
+	.palette .declrow button {
+		cursor: pointer;
+	}
+	.palette .declrow button.primary {
+		background: var(--nx-btn-bg);
+		color: var(--nx-btn-ink);
+		border-color: transparent;
+	}
+	.fbhead {
+		fill: transparent;
+	}
 	.palette .sep {
 		width: 1px;
 		height: 16px;
@@ -882,6 +1054,10 @@
 		display: flex;
 		flex-direction: column;
 		padding: calc(10px * var(--z)) calc(14px * var(--z));
+		/* room under the last rung for the zoom controls (bottom-left,
+		   ~110px tall): its first elements can always scroll out from
+		   under them */
+		padding-bottom: calc(10px * var(--z) + 120px);
 		font-family: var(--nx-mono);
 		width: max-content;
 	}

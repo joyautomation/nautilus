@@ -5,6 +5,33 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- **The ladder palette inserts any function block.** The fixed TON and CTU
+  buttons are one *FB…* action: it opens a picker listing the standard
+  blocks (TON, TOF, TP, CTU, CTD, CTUD, R_TRIG, F_TRIG, SR, RS) and every
+  user `FUNCTION_BLOCK` the file can see — its own and the project
+  libraries' (root and `lib/`, any language), the same prelude `naut check`
+  composes. A user block arrives with its pins placed per docs/functions.md:
+  the rung's power on the first free BOOL input, `_` placeholders on its
+  non-BOOL inputs and in-outs to retag, and a hint listing the outputs to
+  capture with `Pin => Tag`. Click (or drag onto a rung's `+`) to place;
+  TON is still two clicks and Enter. Requires a `naut` whose `ld graph`
+  sends the block catalog; with an older one the picker lists the standard
+  blocks and a typed type name still inserts.
+- **Name and rename a ladder FB instance.** The picker's instance field is
+  prefilled with the next free name (`t2`, `m1`, …) and is editable; double-
+  clicking an FB's header (its instance name or type) renames the instance —
+  the rung's declaration, a `VAR` declaration of it if the POU has one, and
+  every reference (`t1.Q`, `GE(t1.ET, …)`) in the owning POU, as one edit.
+  New `naut ld edit` op: `renameInst`.
+- **Declare what a retag introduced.** When a ladder rung names an
+  identifier the program doesn't declare, the palette shows an amber
+  *declare …* offer: a nautilus.yaml tag goes into `VAR_EXTERNAL` with its
+  manifest type, anything else into `VAR`. Retag suggestions now include the
+  project's manifest tags, not only the ones the file already declares.
+  (`naut ld graph` sends the manifest's tags with the model inside a project.)
+
 ### Changed
 
 - **Project libraries can live in `lib/`.** Online edits (download, diff,
@@ -62,6 +89,39 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 - **Requires naut 0.13.0** (the next CLI release, which adds
   `naut compose`); an older `naut` gets the *Update naut* prompt, and online
   edits say plainly that they need it.
+- **The ladder palette row is opaque.** Scrolled rungs no longer show through
+  its buttons.
+- **Ladder zoom by keyboard or the zoom buttons keeps the left rail in
+  view.** Ctrl+= / Ctrl+- anchor at the pane's left edge instead of its
+  centre, and the diagram leaves room under its last rung for the zoom
+  controls, so that rung's first elements can always be scrolled clear.
+
+- **The mimic's documented pipe gesture writes a pipe again.** *+ Pipe*,
+  click a port dot, click another, Enter (or double-click) wrote nothing: the
+  op carried the port anchors as live Svelte state, which `postMessage`
+  cannot clone, so it threw, no toast appeared, and the dashed draft stayed
+  on the canvas even after switching back to *Select*. Every mimic op is now
+  copied to plain data before it is posted. If a post still fails, the draft
+  is dropped and a warning says why. Leaving *+ Pipe* also drops an
+  unfinished draft.
+- **Re-route and port-to-port pipes go around their own equipment.** A route
+  used to ignore the two pieces of equipment it connects, so a pipe leaving
+  a tank's side port could run back through the tank. Now it leaves the port
+  outward (in the port's `dir`, or through the face it sits on) past the
+  equipment's edge, then routes around everything, its own equipment
+  included. *Re-route* also resolves ports against the boxes the canvas
+  draws, not a 100 × 80 guess, as does *detach* in the inspector.
+- **Built-in Tank, Pump and Valve ports sit on the drawings.** The default
+  ports were on the box edges, so a first pipe started in mid-air: the
+  tank's `left` floated beside the vessel and `right` sat on the level
+  scale, and the pump's `out` was beside the casing, not on its discharge
+  nozzle. They are now measured off each drawing (tank shell, pump suction
+  stub and top nozzle, valve body ends), each with its exit `dir`. A mimic
+  or component sidecar with explicit `ports` is unaffected.
+- **Port dots show while you drag a pipe end in *Select*.** They used to
+  appear only while *+ Pipe* was armed, so there was no way to see where an
+  end could land.
+
 - **SFC "+ transition → other… (new step)" creates the step.** It wrote
   `TO <name>` without a `STEP <name>`, which left a red orphan chip. Now the
   empty step lands after the source step in the same edit. The alt-branch
