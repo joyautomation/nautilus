@@ -121,6 +121,10 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   middle cut that spliced half of `ET` onto the first argument. The box now
   fits the whole argument list, and a list too long for it ends in `, …`
   (the full call is in the tooltip).
+- **SFC: "+ step" makes the step initial when the chart has none.** It
+  checked for an EMPTY chart, so a chart whose initial step had been
+  deleted got another non-initial step and still didn't check. Now the new
+  step takes INITIAL_STEP whenever no step has it.
 - **"Update naut" wording.** The follow-up now reads "… was found on PATH
   or in a well-known directory" instead of "… is found on PATH or a
   well-known directory".

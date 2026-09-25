@@ -20,6 +20,7 @@
 		connectHandlePos,
 		layoutSfc,
 		stepAtPoint,
+		nextStepInitial,
 		stepId,
 		type OrphanChip,
 		type PlacedNote,
@@ -285,8 +286,9 @@
 	function commitAdd() {
 		if (addKind === 'step') {
 			// A chart's first step is its INITIAL_STEP — an empty chart
-			// (or a blank file being seeded) starts runnable.
-			const first = (model.steps ?? []).length === 0;
+			// (or a blank file being seeded, or one whose initial step was
+			// deleted) starts runnable.
+			const first = nextStepInitial(model);
 			post({ type: 'addStep', name: fName, initial: first || undefined, after: selectedStepName() ? stepId(selectedStepName()!) : undefined });
 		} else if (addKind === 'transition') {
 			const from = selectedStepName();

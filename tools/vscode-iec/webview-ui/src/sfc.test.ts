@@ -13,6 +13,7 @@ import {
 	diffSfc,
 	layoutSfc,
 	stepAtPoint,
+	nextStepInitial,
 	stepId,
 	type SfcModel
 } from './sfc.ts';
@@ -416,4 +417,13 @@ test('pasteStepsOp: relative arrangement kept, placed clear of the chart', () =>
 test('deleteStepsOp: the steps plus the transitions between them, one op', () => {
 	const op = deleteStepsOp(linearModel(), ['st:Fill', 'st:Drain']);
 	assert.deepEqual(op, { type: 'deleteSelection', nodes: ['st:Fill', 'st:Drain', 'tr:t2'] });
+});
+
+test('nextStepInitial: a new step is initial only when the chart has no initial step', () => {
+	const st = (name: string, initial: boolean) => ({ id: stepId(name), name, initial, line: 1, endLine: 1 });
+	assert.equal(nextStepInitial({ steps: [] }), true);
+	assert.equal(nextStepInitial({ steps: null as unknown as [] }), true);
+	// Steps but no INITIAL_STEP (it was deleted): the new one takes the mark.
+	assert.equal(nextStepInitial({ steps: [st('Run', false), st('Stop', false)] } as Pick<SfcModel, 'steps'>), true);
+	assert.equal(nextStepInitial({ steps: [st('Idle', true), st('Run', false)] } as Pick<SfcModel, 'steps'>), false);
 });

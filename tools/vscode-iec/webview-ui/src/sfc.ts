@@ -72,6 +72,14 @@ export function normalizeSfc(m: SfcModel): SfcModel {
 	};
 }
 
+/** Whether a step added now should be the INITIAL_STEP: when the chart has
+ * none yet — an empty chart, or one whose steps all lost the mark (its
+ * initial step deleted). Go refuses a second INITIAL_STEP, so this never
+ * makes two. */
+export function nextStepInitial(model: Pick<SfcModel, 'steps'>): boolean {
+	return !(model.steps ?? []).some((s) => s.initial);
+}
+
 export function stepId(name: string): string {
 	return 'st:' + name;
 }
