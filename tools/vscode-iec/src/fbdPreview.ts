@@ -21,6 +21,7 @@ import type { LiveValues } from "./liveValues";
 import { gitShow } from "./gitHistory";
 import { pickRevisions } from "./revisionPick";
 import { applyDiagramKey, isDiagramKeyMessage } from "./diagramKeys";
+import { gateWebview } from "./webviewReady";
 
 /** Mirror of lang/fbd.Model — see lang/fbd/graph.go for the contract. */
 export type FbdModel = {
@@ -159,7 +160,10 @@ export function buildWebviewHtml(
   opts: { forwardKeys?: boolean } = {}
 ): string {
   // The Svelte Flow editor bundle (webview-ui → media/dist): one JS + one
-  // CSS, fully self-contained, CSP-pinned by nonce.
+  // CSS, fully self-contained, CSP-pinned by nonce. The bundle speaks the
+  // ready handshake, so arm it here — before any host post can race the
+  // page's listener (webviewReady.ts).
+  gateWebview(webview);
   const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "dist", "fbd-flow.js"));
   const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, "media", "dist", "fbd-flow.css"));
   const nonce = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);

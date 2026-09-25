@@ -480,3 +480,10 @@ test('SFC: the vars panel declares/deletes with the payload `naut sfc edit` acce
 		assert.ok(ops[1].varType);
 	});
 });
+
+// ── the ready handshake ─────────────────────────────────────────────────
+test('Ready: the webview says ready on mount (the host holds its posts until then)', async () => {
+	await withPage(async (b) => {
+		assert.deepEqual((await posted(b)).filter((m) => m.type === 'ready'), [{ type: 'ready' }]);
+	});
+});

@@ -33,6 +33,7 @@
 	import { readClip, typingTarget, writeClip } from './clipboard';
 	import ShortcutHelp from './ShortcutHelp.svelte';
 	import { FBD_SHORTCUTS, LD_SHORTCUTS, SFC_SHORTCUTS, hintLine } from './shortcuts';
+	import { loadViewState, saveViewState } from './viewState';
 
 	const nodeTypes = { fbd: FbdNode };
 	const edgeTypes = { fbd: FbdEdge };
@@ -379,11 +380,16 @@
 			}
 			return;
 		}
-		if (msg.type !== 'error') vscode.setState(msg);
+		if (msg.type !== 'error') saveViewState({ msg });
 		show(msg);
 	});
-	const saved = vscode.getState() as Msg | null;
+	const viewState = loadViewState();
+	const saved = viewState.msg as Msg | undefined;
 	if (saved) show(saved);
+	// The handshake: until this lands, the host holds its messages (a model
+	// or live frame posted before the bundle's listener exists is lost),
+	// then replays the latest of each. Sent again by every reload.
+	vscode.postMessage({ type: 'ready' });
 	const injected = window.__MODEL__ as FbdModel | undefined;
 	if (injected) show({ type: 'model', model: injected, title: 'harness' });
 	// Browser-harness hook for the SFC webview (mirrors __MODEL__ above):

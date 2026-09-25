@@ -101,6 +101,15 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   (`VAR A : BOOL; B : BOOL; END_VAR`) or several declarations on one line
   showed only the first in the FBD and SFC vars panels. Deleting one of them
   (FBD, Ladder, SFC) now removes just that declaration; Ladder used to refuse.
+- **Diagrams: the first model and live values can't be lost on open.** The
+  FBD / Ladder / SFC hosts posted the model — and the live-values stream's
+  first frame — right after setting the webview's HTML, before its script
+  was listening, so the diagram could open empty or the live pill never
+  appear. The webview now says *ready* when it mounts; until then the host
+  holds its messages, then replays the latest model/diff, error,
+  diagnostics, controller-sync state and live frame. A reloaded webview
+  says ready again and gets the current state the same way (the mimic
+  editor's handshake, now for every diagram).
 - **A hung CLI can't stall a diagram.** Every short CLI call (diagram graph
   and edit, version) now times out after 15 seconds, and an acceptance-test
   run after 5 minutes; the ladder and SFC edit queues previously waited

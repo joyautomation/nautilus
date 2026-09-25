@@ -1,6 +1,7 @@
 // The webview↔extension seam, with a harness fallback: outside VS Code,
 // posted messages accumulate on window.__POSTED__ so headless tests can
-// assert the exact ops a gesture produces.
+// assert the exact ops a gesture produces, and webview state lives on
+// window.__STATE__.
 
 type VsCodeApi = {
 	postMessage(msg: unknown): void;
@@ -13,6 +14,7 @@ declare global {
 		acquireVsCodeApi?: () => VsCodeApi;
 		__POSTED__?: unknown[];
 		__MODEL__?: unknown;
+		__STATE__?: unknown;
 	}
 }
 
@@ -22,8 +24,11 @@ export const vscode: VsCodeApi = window.acquireVsCodeApi
 			postMessage: (msg) => {
 				(window.__POSTED__ ??= []).push(msg);
 			},
-			getState: () => null,
-			setState: () => {},
+			// In-memory stand-in so the harness can seed/inspect state.
+			getState: () => window.__STATE__ ?? null,
+			setState: (s) => {
+				window.__STATE__ = s;
+			},
 		};
 
 export type FbdEditOp = {
