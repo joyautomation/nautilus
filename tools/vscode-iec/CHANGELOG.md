@@ -104,6 +104,26 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- **FBD diagram no longer goes permanently blank when restored.** After
+  *Developer: Reload Webviews* (FBD editor and FBD preview) or *Reload
+  Window* (FBD editor), re-showing the saved diagram touched state declared
+  further down the webview's script; the ReferenceError aborted the mount
+  before it told the host it was ready, so nothing was ever re-sent. Ladder,
+  SFC and the mimic editors were unaffected; all of them now have a
+  restore-from-saved-state regression test.
+- **Previews keep working after the source's text tab is closed.** Undo,
+  redo, save and every edit in the FBD / Ladder / SFC preview looked up the
+  source among the documents VS Code had open — which drops a file once its
+  last editor closes — so they silently did nothing. The preview now
+  re-opens the document (without showing it) when it needs it.
+- **Ladder FB boxes cut their arguments at an argument boundary.** A TON's
+  `PT := T#5S, ET => HiSecs` drew as `PT := T#5S…T => HiSecs` — a
+  middle cut that spliced half of `ET` onto the first argument. The box now
+  fits the whole argument list, and a list too long for it ends in `, …`
+  (the full call is in the tooltip).
+- **"Update naut" wording.** The follow-up now reads "… was found on PATH
+  or in a well-known directory" instead of "… is found on PATH or a
+  well-known directory".
 - **Ladder diff: the "was …" label no longer collides with a comment note.**
   A changed rung's italic "was …" label, drawn under the changed element,
   could overrun the rung's own box — most visibly under a changed function

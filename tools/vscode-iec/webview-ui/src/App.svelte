@@ -78,6 +78,19 @@
 	let problemCount = $state(0);
 	let problemTip = $state('');
 	let lastModel: FbdModel | null = null;
+	// Everything show()/render() touches MUST be declared above the
+	// saved-state restore below (`if (saved) show(saved)`), which runs
+	// during mount: a `let` further down is still in its TDZ then, the
+	// ReferenceError aborts the mount before `ready` is posted, and a
+	// restored panel (Reload Webviews / Reload Window) stays blank forever.
+	// Node positions as last rendered — arrow-key moves persist only the
+	// nodes that actually moved.
+	let placedAt = new Map<string, { x: number; y: number }>();
+	let arrowTimer: ReturnType<typeof setTimeout> | undefined;
+	// The selection (for Ctrl+C) and the source the model came from (the
+	// host sends it with every model; the clipboard snapshot).
+	let selectedIds: string[] = [];
+	let fbdSource: string | undefined;
 
 	// The FB instance inspector: which called instance's live data is open.
 	let inspect = $state<{ name: string; type: string; ins: string[]; outs: string[] } | null>(null);
@@ -521,8 +534,7 @@
 	// Arrow keys move the selection (xyflow's keyboard a11y) — persist it
 	// like a drag, once the key presses settle, or the next render snaps
 	// the nodes back. Only nodes that actually moved are pinned.
-	let placedAt = new Map<string, { x: number; y: number }>();
-	let arrowTimer: ReturnType<typeof setTimeout> | undefined;
+	// (placedAt / arrowTimer are declared with the other state up top.)
 	function persistKeyboardMove() {
 		const entries = nodes
 			.filter((n) => n.selected && knownIds.has(n.id))
@@ -548,8 +560,7 @@
 	// cut, or into another .fbd via the system clipboard) the snapshot is
 	// the source and the copies land at the end of the FBD block.
 	type FbdClip = { nodes: string[]; source?: string; cut?: boolean };
-	let selectedIds: string[] = [];
-	let fbdSource: string | undefined;
+	// (selectedIds / fbdSource are declared with the other state up top.)
 	function copySelection(cut = false): boolean {
 		const ids = selectedIds.filter((id) => knownIds.has(id));
 		if (!ids.length) return false;

@@ -11,7 +11,7 @@
 	// SVG), resolved at pointerup via elementFromPoint with a
 	// nearest-hotspot snap fallback.
 	import { annotate, type Ann, type LdElement, type LdModel, type RungStatus } from './ladder';
-	import { layoutRung, rungMinWidth, L, type LSpot, type LNode } from './ladderLayout';
+	import { layoutRung, rungMinWidth, fitArgs, L, type LSpot, type LNode } from './ladderLayout';
 	import { live, liveValue, formatLive } from './liveState.svelte';
 	import { readClip, typingTarget, writeClip } from './clipboard';
 
@@ -771,7 +771,7 @@
 							<text x={n.w / 2} y="-4" text-anchor="middle" class="operand inst">{n.ann.el.inst}</text>
 							<text x={n.w / 2} y="15" text-anchor="middle" class="fbtype">{n.ann.el.type}</text>
 							{#if n.ann.el.args}
-								<text x={n.w / 2} y={n.h - 5} text-anchor="middle" class="fbargs">{trunc(n.ann.el.args, 22)}</text>
+								<text x={n.w / 2} y={n.h - 5} text-anchor="middle" class="fbargs">{fitArgs(n.ann.el.args)}</text>
 							{/if}
 							<text x="3" y="9" class="pin">{n.ann.el.powerIn}</text>
 							<text x={n.w - 3} y="9" text-anchor="end" class="pin">{n.ann.el.powerOut}</text>

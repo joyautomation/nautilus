@@ -82,6 +82,51 @@ type Res = {
 /** Rough monospace text width at a given font size. */
 const textW = (s: string, px: number) => s.length * px * 0.62;
 
+/** Longest FB args line drawn in the box (the box grows to fit up to this). */
+export const FB_ARGS_MAX = 40;
+
+/** Split a call's argument list on its top-level commas (a nested call's
+ * or a string literal's commas stay put). */
+export function splitArgs(args: string): string[] {
+	const out: string[] = [];
+	let depth = 0;
+	let quote = '';
+	let start = 0;
+	for (let i = 0; i < args.length; i++) {
+		const c = args[i];
+		if (quote) {
+			if (c === quote) quote = '';
+		} else if (c === "'" || c === '"') quote = c;
+		else if (c === '(' || c === '[') depth++;
+		else if (c === ')' || c === ']') depth = Math.max(0, depth - 1);
+		else if (c === ',' && depth === 0) {
+			out.push(args.slice(start, i).trim());
+			start = i + 1;
+		}
+	}
+	out.push(args.slice(start).trim());
+	return out.filter((a) => a !== '');
+}
+
+/** The FB box's args line, at most `max` chars: whole arguments only —
+ * `PT := T#5S, ET => HiSecs` never becomes `PT := T#5S…T => HiSecs` (a
+ * middle cut that splices two arguments together). Arguments that don't
+ * fit collapse to a trailing `, …`; a lone first argument too long for the
+ * line is cut at its end. The full text stays in the box's tooltip. */
+export function fitArgs(args: string | undefined, max = FB_ARGS_MAX): string {
+	const parts = splitArgs(args ?? '');
+	const full = parts.join(', ');
+	if (full.length <= max) return full;
+	let line = '';
+	for (const p of parts) {
+		const next = line ? `${line}, ${p}` : p;
+		if (next.length + 3 > max) break; // room for ", …"
+		line = next;
+	}
+	if (line) return `${line}, …`;
+	return parts[0].slice(0, max - 1).trimEnd() + '…';
+}
+
 export function fnWidth(a: Ann): number {
 	return Math.max(L.FN_MIN_W, Math.ceil(textW(`${a.el.fn}(${a.el.args ?? ''})`, 10)) + 2 * L.FN_PAD);
 }
@@ -90,7 +135,7 @@ export function fbWidth(a: Ann): number {
 		L.FB_MIN_W,
 		Math.ceil(textW(a.el.inst ?? '', 11)) + 28,
 		Math.ceil(textW(a.el.type ?? '', 10)) + 28,
-		Math.ceil(textW(a.el.args ?? '', 9)) + 20
+		Math.ceil(textW(fitArgs(a.el.args), 9)) + 20
 	);
 }
 function fbHeight(a: Ann): number {
