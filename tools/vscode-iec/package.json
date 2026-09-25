@@ -269,6 +269,14 @@
       {
         "command": "nautilus.editComponentPorts",
         "title": "Nautilus: Edit Component Ports…"
+      },
+      {
+        "command": "nautilus.newProject",
+        "title": "nautilus: Create Project…"
+      },
+      {
+        "command": "nautilus.getStarted",
+        "title": "nautilus: Get Started"
       }
     ],
     "viewsContainers": {
@@ -515,6 +523,77 @@
         "fileMatch": "alarms/*.yaml",
         "url": "./schemas/nautilus-alarms.schema.json"
       }
+    ],
+    "walkthroughs": [
+      {
+        "id": "gettingStarted",
+        "title": "Get started with nautilus",
+        "description": "Zero to a running controller with live values on a diagram — no Go toolchain, about five minutes.",
+        "icon": "icon.png",
+        "steps": [
+          {
+            "id": "installCli",
+            "title": "Install the naut CLI",
+            "description": "Install `naut` — the whole nautilus toolchain: scaffolding, the scan loop, tests, and the language server this extension uses — with no Go toolchain required.\nIf `naut` is already on your PATH (or from `go install`), the extension finds and uses it automatically; this step is a no-op for you.",
+            "media": {
+              "markdown": "walkthroughs/gettingStarted/installCli.md"
+            },
+            "completionEvents": [
+              "onCommand:nautilus.installCli"
+            ]
+          },
+          {
+            "id": "createProject",
+            "title": "Create a project",
+            "description": "Scaffold a runnable controller with `naut new` — a manifest, IEC program files, and an acceptance test, no Go required.\nThe default **Demo** template is a 3-task, 3-language tour with a simulated plant, so it does something the moment it runs.",
+            "media": {
+              "markdown": "walkthroughs/gettingStarted/createProject.md"
+            },
+            "completionEvents": [
+              "onCommand:nautilus.newProject",
+              "onContext:nautilus.hasProject"
+            ]
+          },
+          {
+            "id": "openDiagram",
+            "title": "Open a diagram",
+            "description": "Open `program.fbd` — the Demo template's control logic — and switch it to the diagram view: right-click the file and choose **Open With → FBD Diagram**, or click the diagram icon in the editor title bar.\nLadder (`.ld`) and Sequential Function Chart (`.sfc`) files open the same way.",
+            "media": {
+              "markdown": "walkthroughs/gettingStarted/openDiagram.md"
+            },
+            "completionEvents": [
+              "onCommand:nautilus.fbd.preview",
+              "onCommand:nautilus.ld.preview",
+              "onCommand:nautilus.sfc.preview"
+            ]
+          },
+          {
+            "id": "runAndConnect",
+            "title": "Run it",
+            "description": "In a terminal at the project root, run `naut run` — it starts the scan loop and a tag API on `http://localhost:8080`.\nThen connect the editor to it: live values render as inline pills next to every identifier, and diagrams animate power flow in real time.",
+            "media": {
+              "image": "images/live-values.png",
+              "altText": "Live tag values rendered as pills next to identifiers in a .st file, with the nautilus file tree alongside"
+            },
+            "completionEvents": [
+              "onCommand:nautilus.connect",
+              "onCommand:nautilus.liveValues.toggle"
+            ]
+          },
+          {
+            "id": "testIt",
+            "title": "Test it",
+            "description": "Acceptance tests (`*_test.yaml`) assert on tag values over a virtual clock, so a 10-second alarm delay is asserted exactly, in milliseconds — no real waiting.\nOpen the **Testing** view in the Activity Bar to see the Demo project's suite, or run `naut test` from a terminal.",
+            "media": {
+              "markdown": "walkthroughs/gettingStarted/testIt.md"
+            },
+            "completionEvents": [
+              "onCommand:testing.runAll",
+              "onCommand:workbench.view.testing.focus"
+            ]
+          }
+        ]
+      }
     ]
   },
   "capabilities": {
@@ -527,7 +606,7 @@
     "vscode:prepublish": "npm run compile && npm run build:webview",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/gitHistory.test.js out/programSync.test.js out/onlineEditConfirm.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js out/previewFollow.test.js && npm --prefix webview-ui run test",
+    "test": "npm run compile && node --test out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/gitHistory.test.js out/programSync.test.js out/onlineEditConfirm.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js && npm --prefix webview-ui run test",
     "build:webview": "npm --prefix webview-ui run build",
     "test:e2e": "npm run compile && node out/e2e/run.js"
   },
