@@ -12,15 +12,18 @@
 // deployed program; committing the file is what makes an edit permanent.
 //
 // Program composition mirrors the runtime and the language server's project
-// rule (internal/stproject): sibling .st files with no PROGRAM are libraries
-// and precede the program file, sorted by name. The same libraries join
+// rule (internal/stproject): .st files with no PROGRAM, in the project root
+// and anywhere under lib/, are libraries and precede the program file,
+// sorted by path. The same libraries join
 // every program in a multi-program project, so a diff from a library file
 // needs no task choice — it compares the shared library text against every
 // task's copy (see diffLibraries).
 
 import * as vscode from "vscode";
+import { projectDirFor, projectFiles } from "./projectFiles";
 import {
   controllerPrelude,
+  inLibDir,
   downloadConfirmMessage,
   forceDownloadConfirmMessage,
   normalize,
@@ -164,10 +167,10 @@ export class OnlineEdit implements vscode.Disposable {
 
   /**
    * Decompose the project directory the way the runtime does
-   * (stproject.ComposeAll): .st files with no PROGRAM (sorted by name) are
-   * libraries shared by every program; each file with a PROGRAM — .st, .fbd,
-   * .ld, or .sfc — is one program. Open editor buffers win over on-disk
-   * content.
+   * (stproject.ComposeAll): .st files with no PROGRAM in the root and under
+   * lib/ (sorted by path) are libraries shared by every program; each root
+   * file with a PROGRAM — .st, .fbd, .ld, or .sfc — is one program. Open
+   * editor buffers win over on-disk content.
    */
   private async composeAll(): Promise<
     | {
@@ -182,36 +185,41 @@ export class OnlineEdit implements vscode.Disposable {
     const activeUri = activeIecUri();
     let dir: vscode.Uri | undefined;
     if (activeUri) {
-      dir = vscode.Uri.joinPath(activeUri, "..");
+      // A file under lib/ composes against its project's root, not lib/.
+      dir = await projectDirFor(activeUri);
     } else if (vscode.workspace.workspaceFolders?.length) {
       dir = vscode.workspace.workspaceFolders[0].uri;
     }
     if (!dir) return undefined;
 
-    const entries = await vscode.workspace.fs.readDirectory(dir);
-    const iecFiles = entries
-      .filter(([name, kind]) => kind === vscode.FileType.File && IEC_FILE.test(name))
-      .map(([name]) => name)
-      .sort();
+    // Root-level files (programs and libraries) plus every file under lib/.
+    const iecFiles = await projectFiles(dir, IEC_FILE);
 
     const contents = new Map<string, string>();
-    for (const name of iecFiles) {
-      const uri = vscode.Uri.joinPath(dir, name);
+    for (const { rel, uri } of iecFiles) {
       const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
-      contents.set(name, open ? open.getText() : new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)));
+      contents.set(rel, open ? open.getText() : new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)));
     }
 
     const isProgram = (src: string) => /^\s*PROGRAM\b/m.test(src);
     const programs: { file: string; uri: vscode.Uri; body: string; pou: string }[] = [];
     const libraries: { file: string; uri: vscode.Uri }[] = [];
-    // Only .st libraries join the prelude, matching internal/stproject.
+    // Only .st libraries join the prelude here (the graphical ones need the
+    // CLI's transpiler); within that tier, path order — root and lib/
+    // interleaved exactly as stproject.LibraryPaths sorts them.
     let prelude = "";
-    for (const name of iecFiles) {
-      const src = contents.get(name) ?? "";
-      if (isProgram(src)) {
-        programs.push({ file: name, uri: vscode.Uri.joinPath(dir, name), body: src, pou: pouOf(src) });
-      } else if (/\.st$/i.test(name)) {
-        libraries.push({ file: name, uri: vscode.Uri.joinPath(dir, name) });
+    for (const { rel, uri } of iecFiles) {
+      const src = contents.get(rel) ?? "";
+      if (inLibDir(rel)) {
+        // Programs belong in the root; `naut check` reports one under lib/.
+        if (/\.st$/i.test(rel) && !isProgram(src)) {
+          libraries.push({ file: rel, uri });
+          prelude += src.endsWith("\n") ? src : src + "\n";
+        }
+      } else if (isProgram(src)) {
+        programs.push({ file: rel, uri, body: src, pou: pouOf(src) });
+      } else if (/\.st$/i.test(rel)) {
+        libraries.push({ file: rel, uri });
         prelude += src.endsWith("\n") ? src : src + "\n";
       }
     }

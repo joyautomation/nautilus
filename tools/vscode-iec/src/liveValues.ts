@@ -12,6 +12,7 @@
 import * as http from "http";
 import * as https from "https";
 import * as vscode from "vscode";
+import { projectDirFor, projectFiles } from "./projectFiles";
 import {
   formatValue,
   formatValueHover,
@@ -460,13 +461,12 @@ export class LiveValues implements vscode.Disposable {
     if (now - this.candidatesAt < 5000) return;
     this.candidatesAt = now;
     void (async () => {
-      const dir = vscode.Uri.joinPath(doc.uri, "..");
       let sources = "";
       try {
-        const entries = await vscode.workspace.fs.readDirectory(dir);
-        for (const [name, kind] of entries) {
-          if (kind !== vscode.FileType.File || !/\.(st|fbd)$/i.test(name)) continue;
-          const uri = vscode.Uri.joinPath(dir, name);
+        // The project's root and lib/ files: instances are declared in
+        // programs (root) and inside other blocks (often lib/).
+        const root = await projectDirFor(doc.uri);
+        for (const { uri } of await projectFiles(root, /\.(st|fbd)$/i)) {
           const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
           sources += (open ? open.getText() : new TextDecoder().decode(await vscode.workspace.fs.readFile(uri))) + "\n";
         }

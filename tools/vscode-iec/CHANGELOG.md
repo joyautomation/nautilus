@@ -3,6 +3,18 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- **Project libraries can live in `lib/`.** Online edits (download, diff,
+  pull, rollback), *Open block source* from a diagram, and live-value
+  instance discovery now read the project's library files from `lib/` (at any
+  depth) as well as the project root, matching `naut` and the language
+  server. A file opened from `lib/` resolves to its project's root, so an
+  online edit started there still finds the programs. Requires a `naut`
+  with `lib/` support.
+
 ## [0.11.1] - 2026-09-25
 
 The stable-readiness release: everything the first stable release (0.10.0)
