@@ -1,0 +1,42 @@
+PROGRAM Pressure
+(* PIC-1: discharge pressure -> the lead pump's speed. Reverse-acting —
+   pressure BELOW setpoint calls for MORE speed (see level.fbd's
+   direct-acting loop in examples/lift-station for the contrast). The lead
+   pump (Pump1) always runs; the lag pump (Pump2) joins on flow demand,
+   with hysteresis, and mirrors the same PID output while it's in. *)
+VAR_EXTERNAL
+    DischargePress : LREAL;
+    PressureSP     : LREAL;
+    Kp             : LREAL;
+    Ki             : LREAL;
+    Kd             : LREAL;
+    MinSpeedHz     : LREAL;
+    MaxSpeedHz     : LREAL;
+    PressDtS       : LREAL;
+
+    FM1_FlowLps    : LREAL;
+    LagOnFlow      : LREAL;
+    LagOffFlow     : LREAL;
+
+    Pump1_RunCmd   : BOOL;
+    Pump1_SpeedCmd : LREAL;
+    Pump2_RunCmd   : BOOL;
+    Pump2_SpeedCmd : LREAL;
+END_VAR
+FBD
+  Pump1_RunCmd := TRUE   // the lead always runs
+
+  pic : PID(AUTO := TRUE, PV := DischargePress, SP := PressureSP,
+            KP := Kp, KI := Ki, KD := Kd,
+            CV_MIN := MinSpeedHz, CV_MAX := MaxSpeedHz,
+            DIRECT := FALSE, DT := PressDtS)
+  Pump1_SpeedCmd := pic.CV
+
+  // Lag call: seal-in with hysteresis on flow, same idiom as the well
+  // sites' pump call and level.fbd's high-level seal-in.
+  above = GE(FM1_FlowLps, LagOnFlow)
+  below = LE(FM1_FlowLps, LagOffFlow)
+  Pump2_RunCmd := AND(OR(above, Pump2_RunCmd), NOT below)
+  Pump2_SpeedCmd := SEL(Pump2_RunCmd, 0.0, pic.CV)
+END_FBD
+END_PROGRAM

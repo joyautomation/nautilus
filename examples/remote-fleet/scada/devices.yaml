@@ -1,0 +1,16 @@
+# The SCADA host's own local field device — a chlorine analyser at the
+# plant itself, not on any Sparkplug edge node. Read directly over Modbus
+# TCP, alongside the sparkplug-host driver that consumes the fleet — see
+# nautilus.yaml's `drivers:` (two drivers, one scan).
+#
+# Regenerate the committed files with:
+#   naut modbus import --map devices.yaml
+devices:
+  analyzer:
+    description: chlorine analyser
+    registers:
+      - {tag: ResidualPpm, address: 0, table: input, format: int16, scale: 0.01, unit: "ppm", desc: "chlorine residual"}
+      - {tag: Fault, address: 0, table: discrete, desc: "analyzer fault"}
+
+instances:
+  - {id: CL1, type: analyzer, host: 127.0.0.1, port: 5022, unit-id: 1, desc: "Plant chlorine analyser"}

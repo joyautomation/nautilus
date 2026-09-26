@@ -1,0 +1,65 @@
+# The fleet this project consumes — three generic water-system edge nodes
+# (../sites/well-1, ../sites/well-2, ../sites/booster-1), all publishing
+# to the "Water" Sparkplug group. Committed here so the SCADA project's
+# generated files can be regenerated OFFLINE, in CI, with none of the
+# sites online:
+#
+#   naut sparkplug import --sites sites.yaml --out .
+#
+# A live re-import (with the three sites actually birthing on a broker)
+# uses the same generator, the other input:
+#
+#   naut sparkplug import --broker tcp://127.0.0.1:1883 \
+#       --group Water --out .
+#
+# Both paths produce byte-identical output for the metrics they share —
+# see README.md's diff proof.
+group: Water
+
+types:
+  # ONE Template, shared by all three sites — every pump in this fleet,
+  # well or booster, is the same shape on the wire. Each site's own
+  # project (types.st) carries its own copy of this TYPE, not a shared
+  # library: each site deploys alone.
+  - name: Pump
+    fields:
+      - { name: Run,     type: Boolean }
+      - { name: Fault,   type: Boolean }
+      - { name: SpeedHz, type: Double }
+      - { name: SpeedSP, type: Double }
+
+sites:
+  # Well1 / Well2 — a wet well and one pump each. Pump1.SpeedSP is a
+  # writable member: a write publishes an NCMD carrying a partial
+  # template (just SpeedSP), which the edge merges into its own Pump1
+  # tag — Run/Fault/SpeedHz, driven by the site itself, survive
+  # untouched. This is the write path fleet.st and scada_test.yaml cover:
+  # writing Well1_Pump1_SpeedSP reaches Well1's own tag.
+  - node: Well1
+    metrics:
+      - { name: WellLevel, type: Double, unit: "%", desc: "Well 1 wet-well level" }
+      - { name: Pump1,     type: Pump, writable: [SpeedSP], desc: "Well 1 pump" }
+
+  - node: Well2
+    metrics:
+      - { name: WellLevel, type: Double, unit: "%", desc: "Well 2 wet-well level" }
+      - { name: Pump1,     type: Pump, writable: [SpeedSP], desc: "Well 2 pump" }
+
+  # Booster1 — a pressure-boosting station: two pumps (the same Pump
+  # Template), node-level pressure and tank instruments, plus a `plc1`
+  # device carrying its one real field device (a Modbus flow meter).
+  # unit:/desc: below are copied verbatim from booster-1's own local
+  # tags (nautilus.yaml / tags/modbus.yaml) — see README.md's diff proof:
+  # matching them here is what makes a live `--broker` import byte-
+  # identical to this offline path, metadata included.
+  - node: Booster1
+    metrics:
+      - { name: DischargePress, type: Double, unit: "psi", desc: "Booster 1 discharge pressure" }
+      - { name: SuctionPress,   type: Double, unit: "psi", desc: "Booster 1 suction pressure" }
+      - { name: TankLevel,      type: Double, unit: "%", desc: "Distribution tank level, at the booster's suction" }
+      - { name: Pump1,          type: Pump, writable: [SpeedSP], desc: "Booster 1 lead pump" }
+      - { name: Pump2,          type: Pump, writable: [SpeedSP], desc: "Booster 1 lag pump" }
+    devices:
+      - device: plc1
+        metrics:
+          - { name: FM1_FlowLps, type: Double, unit: "L/s", desc: "Booster 1 discharge flow meter — discharge flow" }

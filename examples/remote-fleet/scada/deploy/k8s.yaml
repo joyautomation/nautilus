@@ -1,0 +1,92 @@
+# water-scada as a redundant pair — adapted from `naut new`'s
+# cmd/naut/templates/deploy_k8s.yaml.tmpl (documented here, not applied:
+# see ../README.md). Two replicas elect a scanning leader through a
+# Lease (nautilus.yaml's `redundancy: {lease: water-scada}`); retained
+# state (nautilus.yaml's `retain: {}`) rides a ConfigMap; the Service
+# hits either replica — a standby proxies API traffic to the leader.
+#
+# Point `image:` at wherever CI pushes water-scada's built image.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: water-scada
+---
+# Exactly the verbs the retain store and elector use — no delete: a
+# releasing leader expires its own lease by writing an epoch renew time,
+# which is why failover on shutdown is immediate.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: water-scada
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, create, update]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, create, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: water-scada
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: water-scada
+subjects:
+  - kind: ServiceAccount
+    name: water-scada
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: water-scada
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: water-scada}
+  template:
+    metadata:
+      labels: {app: water-scada}
+    spec:
+      serviceAccountName: water-scada
+      affinity:
+        podAntiAffinity:
+          # Prefer separate nodes, so one node loss keeps a replica.
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels: {app: water-scada}
+      containers:
+        - name: controller
+          image: ghcr.io/YOUR_ORG/water-scada:latest # CI pushes here
+          ports:
+            - {containerPort: 8080, name: api}
+          env:
+            # The elector's identity and the address standbys proxy to.
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+          readinessProbe:
+            # /api/cluster answers locally on every replica, leader or
+            # standby — a standby must stay Ready to serve the dashboard
+            # and proxy to the leader.
+            httpGet: {path: /api/cluster, port: api}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /api/cluster, port: api}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: water-scada
+spec:
+  selector: {app: water-scada}
+  ports:
+    - {port: 80, targetPort: api, name: http}

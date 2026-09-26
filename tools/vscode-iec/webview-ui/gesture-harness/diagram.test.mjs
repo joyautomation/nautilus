@@ -675,6 +675,41 @@ test('Ladder zoom: buttons and Ctrl+= / Ctrl+- / Ctrl+0 (fit) with focus in the 
 	});
 });
 
+// The smoke suite's 06-zoom-keys gesture on an SFC chart: click empty
+// canvas, then the keys — and again with a palette button holding focus
+// (the palette grew buttons in #45/#51; none may swallow the zoom keys).
+test('SFC zoom: Ctrl+= / Ctrl+- / Ctrl+0 / Ctrl+wheel with focus in the chart or on a palette button', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'sfcModel', model: SFC, title: 's.sfc' });
+		assert.equal(await zoomPct(b), '100%');
+		// The first step shows under the sticky palette on load.
+		const pal = await rect(b, '.palette');
+		const idle = await stepCenter(b, 'Idle');
+		assert.ok(idle.y - 10 > pal.y + pal.h, 'first step clear of the palette ' + JSON.stringify({ idle, pal }));
+		const pane = await rect(b, '.zpane .flow');
+		await clickAt(b, { x: pane.x + pane.w - 60, y: pane.y + pane.h - 200 });
+		await reset(b);
+		await key(b, '=', 'Equal', 187, 2);
+		await key(b, '=', 'Equal', 187, 2);
+		assert.equal(await zoomPct(b), '144%');
+		await key(b, '-', 'Minus', 189, 2);
+		assert.equal(await zoomPct(b), '120%');
+		await key(b, '0', 'Digit0', 48, 2);
+		assert.equal(await zoomPct(b), '100%', 'fit never magnifies past 100%');
+		const c = await stepCenter(b, 'Run');
+		for (let i = 0; i < 3; i++) await wheel(b, c.x, c.y, -60);
+		assert.ok(parseInt(await zoomPct(b)) > 100, 'Ctrl+wheel zoomed in: ' + (await zoomPct(b)));
+		await key(b, '0', 'Digit0', 48, 2);
+		// Focus on a palette button: the keys still reach the pane.
+		await b.eval(`[...document.querySelectorAll('.palette button')].find((x) => !x.disabled).focus()`);
+		await key(b, '=', 'Equal', 187, 2);
+		assert.equal(await zoomPct(b), '120%');
+		await key(b, '-', 'Minus', 189, 2);
+		assert.equal(await zoomPct(b), '100%');
+		assert.deepEqual(await sfcOps(b), [], 'zoom keys are not edits');
+	});
+});
+
 test('Ladder zoom: a palette drop and a node drag still hit their spots at 173%', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'ldModel', model: LD, title: 'p.ld' });
