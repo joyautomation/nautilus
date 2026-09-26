@@ -52,8 +52,15 @@ async function readText(uri: vscode.Uri): Promise<string> {
  * panel, by hand, or by git, updates them all (see MimicEditorProvider). */
 export class ComponentIndex {
   manifest: ComponentsManifest = {};
+  /** Every `{Name}.svelte` in the workspace, sidecar or not — the other
+   * half (besides `manifest`'s keys) of the mimic editor palette's custom-
+   * components list (mimicEditor.ts's manifestMessage), so a component
+   * that's neither sidecar'd nor yet placed in the open doc still shows up
+   * to be dropped onto the canvas. See discoverSvelteComponentNames. */
+  svelteNames: string[] = [];
   private winnerUris = new Map<string, vscode.Uri>();
   private watcher: vscode.FileSystemWatcher | undefined;
+  private svelteWatcher: vscode.FileSystemWatcher | undefined;
 
   async refresh(): Promise<void> {
     const uris = await vscode.workspace.findFiles(COMPONENT_GLOB, EXCLUDE_GLOB);
@@ -74,6 +81,7 @@ export class ComponentIndex {
         return uri ? [[name, uri] as const] : [];
       })
     );
+    this.svelteNames = await discoverSvelteComponentNames();
   }
 
   /** The sidecar currently backing `component`'s metadata, if any. */
@@ -81,11 +89,14 @@ export class ComponentIndex {
     return this.winnerUris.get(component);
   }
 
-  /** Rebuild on any *.component.json create/change/delete anywhere in the
-   * workspace and notify. Callers dispose the returned handle once, with
+  /** Rebuild on any *.component.json create/change/delete, or any *.svelte
+   * create/delete (a bare component appearing/disappearing changes
+   * `svelteNames` — its content changing doesn't), anywhere in the
+   * workspace, and notify. Callers dispose the returned handle once, with
    * the extension. */
   watch(onChange: () => void): vscode.Disposable {
     this.watcher = vscode.workspace.createFileSystemWatcher(COMPONENT_GLOB);
+    this.svelteWatcher = vscode.workspace.createFileSystemWatcher("**/*.svelte", false, true, false);
     const fire = () => void this.refresh().then(onChange);
     // The index reads open buffers (readText), so an unsaved edit to an open
     // sidecar — by hand or from the component editor — refreshes it too, as
@@ -101,15 +112,19 @@ export class ComponentIndex {
       this.watcher.onDidCreate(fire),
       this.watcher.onDidChange(fire),
       this.watcher.onDidDelete(fire),
+      this.svelteWatcher.onDidCreate(fire),
+      this.svelteWatcher.onDidDelete(fire),
       vscode.workspace.onDidChangeTextDocument((e) => fireSoon(e.document)),
       vscode.workspace.onDidCloseTextDocument(fireSoon),
     ];
     const watcher = this.watcher;
+    const svelteWatcher = this.svelteWatcher;
     return {
       dispose: () => {
         if (debounce) clearTimeout(debounce);
         subs.forEach((s) => s.dispose());
         watcher.dispose();
+        svelteWatcher.dispose();
       },
     };
   }

@@ -173,9 +173,9 @@ test("a malformed sidecar contributes an empty entry rather than throwing", () =
   assert.deepEqual(warnings, []);
 });
 
-test("paletteCustomComponents unions sidecar + doc-referenced names, sorted and deduped", () => {
+test("paletteCustomComponents unions sidecar + doc-referenced + bare-svelte names, sorted and deduped", () => {
   assert.deepEqual(
-    paletteCustomComponents(["HeatExchanger", "Widget"], ["Widget", "Conveyor"], new Set(["Tank", "Pump"])),
+    paletteCustomComponents(["HeatExchanger", "Widget"], ["Widget", "Conveyor"], [], new Set(["Tank", "Pump"])),
     ["Conveyor", "HeatExchanger", "Widget"]
   );
 });
@@ -184,13 +184,31 @@ test("paletteCustomComponents excludes built-ins even when a sidecar or the doc 
   // A Tank.component.json (a ports override) doesn't create a second
   // palette entry for "Tank" — it's still the one built-in.
   assert.deepEqual(
-    paletteCustomComponents(["Tank"], ["Tank", "HeatExchanger"], new Set(["Tank", "Pump"])),
+    paletteCustomComponents(["Tank"], ["Tank", "HeatExchanger"], [], new Set(["Tank", "Pump"])),
     ["HeatExchanger"]
   );
 });
 
 test("paletteCustomComponents: empty inputs resolve to an empty list", () => {
-  assert.deepEqual(paletteCustomComponents([], [], new Set()), []);
+  assert.deepEqual(paletteCustomComponents([], [], [], new Set()), []);
+});
+
+test("paletteCustomComponents lists a bare .svelte component with no sidecar and not yet placed", () => {
+  // The bug: a project's ToProcess.svelte with no ToProcess.component.json
+  // and not referenced by any equipment in the open doc must still show up
+  // so it can be placed — see discoverSvelteComponentNames.
+  assert.deepEqual(paletteCustomComponents([], [], ["ToProcess"], new Set(["Tank", "Pump"])), ["ToProcess"]);
+});
+
+test("paletteCustomComponents: bare-svelte discovery unions with sidecar + doc names, deduped", () => {
+  assert.deepEqual(
+    paletteCustomComponents(["HeatExchanger"], ["Widget"], ["HeatExchanger", "ToProcess"], new Set(["Tank"])),
+    ["HeatExchanger", "ToProcess", "Widget"]
+  );
+});
+
+test("paletteCustomComponents excludes a built-in named as a bare .svelte discovery too", () => {
+  assert.deepEqual(paletteCustomComponents([], [], ["Tank", "ToProcess"], new Set(["Tank", "Pump"])), ["ToProcess"]);
 });
 
 test("applyComponentPortsEdit sets, deletes, and preserves unrelated (future-metadata) keys", () => {

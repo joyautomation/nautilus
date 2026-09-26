@@ -172,20 +172,30 @@ export function aggregateComponentFiles(files: ComponentFile[]): AggregateResult
 
 /** The mimic editor palette's "custom components" section: every component
  * name with a project sidecar (`manifestNames` — this workspace's
- * *.component.json files) OR referenced by the open doc's equipment
- * (`docNames`), minus the kit's built-ins — sorted, deduped. A
- * *.component.json that happens to share a built-in's name (a ports
- * override, see resolvePorts()) stays out of this list; built-ins always
- * render in their own palette section regardless of whether they have a
- * sidecar. */
+ * *.component.json files), referenced by the open doc's equipment
+ * (`docNames`), OR discovered as a bare `{Name}.svelte` anywhere in the
+ * workspace with no sidecar yet (`svelteNames` —
+ * mimicComponents.ts's discoverSvelteComponentNames, the same discovery
+ * PR #50 already used for the "Edit Component Ports…" command's
+ * undiscovered-component list) — minus the kit's built-ins — sorted,
+ * deduped. A component with no sidecar lists with an empty port list (see
+ * resolvePorts()/PORTS fallback — the same "no override -> no ports" the
+ * runtime <Mimic> falls back to); dropping one onto the canvas never
+ * creates a sidecar on its own — only "Edit Component Ports…" does that,
+ * on first save. A *.component.json that happens to share a built-in's
+ * name (a ports override, see resolvePorts()) stays out of this list;
+ * built-ins always render in their own palette section regardless of
+ * whether they have a sidecar. */
 export function paletteCustomComponents(
   manifestNames: Iterable<string>,
   docNames: Iterable<string>,
+  svelteNames: Iterable<string>,
   builtins: ReadonlySet<string>
 ): string[] {
   const out = new Set<string>();
   for (const n of manifestNames) if (n && !builtins.has(n)) out.add(n);
   for (const n of docNames) if (n && !builtins.has(n)) out.add(n);
+  for (const n of svelteNames) if (n && !builtins.has(n)) out.add(n);
   return [...out].sort();
 }
 
