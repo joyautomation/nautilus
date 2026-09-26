@@ -1,17 +1,18 @@
 package ld
 
 import (
-	"sort"
 	"strings"
-	"unicode"
+
+	"github.com/joyautomation/nautilus/lang/fbcatalog"
 )
 
 // The block catalog: every FUNCTION_BLOCK type a rung in this file can
 // instantiate — the standard blocks ladder places power on, then every user
 // block in scope (this file's own and the project libraries' — the same
-// prelude `naut check` composes, in any language). The ladder palette's FB
-// picker lists it, and prefills an insert from it: the instance-name prefix
-// and a starting argument list with the rung's power left off it.
+// prelude `naut check` composes, in any language). The list itself is the
+// shared one (lang/fbcatalog, which `naut fbd graph` sends too); this file
+// adds what only ladder needs: the power pins, and a starting argument list
+// with the rung's power left off it.
 
 // FBType is one insertable block type.
 type FBType struct {
@@ -24,7 +25,7 @@ type FBType struct {
 	// may only sit where the rung's condition is the rail itself.
 	PowerIn  string `json:"powerIn,omitempty"`
 	PowerOut string `json:"powerOut,omitempty"`
-	// Pins of a user block in declaration order: dir "in" | "out" | "inout".
+	// Pins in declaration order: dir "in" | "out" | "inout".
 	Pins []Pin `json:"pins,omitempty"`
 	// Args is the starting argument text for a fresh insert.
 	Args string `json:"args,omitempty"`
@@ -32,48 +33,31 @@ type FBType struct {
 	Prefix string `json:"prefix"`
 }
 
-var standardFBs = []FBType{
-	{Name: "TON", Detail: "on-delay timer", Args: "PT := T#1S", Prefix: "t"},
-	{Name: "TOF", Detail: "off-delay timer", Args: "PT := T#1S", Prefix: "t"},
-	{Name: "TP", Detail: "pulse timer", Args: "PT := T#1S", Prefix: "t"},
-	{Name: "CTU", Detail: "count up", Args: "PV := 10", Prefix: "c"},
-	{Name: "CTD", Detail: "count down", Args: "PV := 10", Prefix: "c"},
-	{Name: "CTUD", Detail: "count up/down", Args: "PV := 10", Prefix: "c"},
-	{Name: "R_TRIG", Detail: "rising edge", Prefix: "rt"},
-	{Name: "F_TRIG", Detail: "falling edge", Prefix: "ft"},
-	{Name: "SR", Detail: "set-dominant latch", Prefix: "sr"},
-	{Name: "RS", Detail: "reset-dominant latch", Prefix: "rs"},
+// ladderArgs are the standard blocks' ladder defaults: the power pin is the
+// rung, so only the preset is left to fill.
+var ladderArgs = map[string]string{
+	"TON": "PT := T#1S", "TOF": "PT := T#1S", "TP": "PT := T#1S",
+	"CTU": "PV := 10", "CTD": "PV := 10", "CTUD": "PV := 10",
 }
 
-// catalog lists the standard blocks (fixed order) then the user blocks in
-// scope, sorted by name. A block defined in this file shadows a library
-// block of the same name, as it does in the compiler.
+// catalog lists the standard blocks a rung can power (fixed order), then
+// the user blocks in scope, sorted by name. A block defined in this file
+// shadows a library block of the same name, as it does in the compiler.
 func (r *resolver) catalog() []FBType {
-	out := make([]FBType, 0, len(standardFBs)+len(r.sigs))
-	for _, t := range standardFBs {
-		t.PowerIn, t.PowerOut, _ = builtinPowerPins(t.Name)
-		out = append(out, t)
+	var out []FBType
+	for _, t := range fbcatalog.Standard() {
+		in, pOut, ok := builtinPowerPins(t.Name)
+		if !ok {
+			continue // PID and the like: no pin means "run" — ST/FBD only
+		}
+		out = append(out, FBType{Name: t.Name, Detail: t.Detail, PowerIn: in, PowerOut: pOut,
+			Pins: t.Pins, Args: ladderArgs[t.Name], Prefix: t.Prefix})
 	}
-	names := make([]string, 0, len(r.sigs))
-	for n := range r.sigs {
-		if _, _, std := builtinPowerPins(n); !std {
-			names = append(names, n)
-		}
-	}
-	sort.Slice(names, func(i, j int) bool { return strings.ToLower(names[i]) < strings.ToLower(names[j]) })
-	for _, n := range names {
-		sig := r.sigs[n]
-		in, out2 := r.powerPins(n, "")
-		t := FBType{Name: n, User: true, PowerIn: in, PowerOut: out2, Args: defaultUserArgs(sig, in), Prefix: instPrefix(n)}
-		for _, p := range sig.inputs {
-			t.Pins = append(t.Pins, Pin{Name: p.name, Type: p.typ, Dir: "in"})
-		}
-		for _, p := range sig.inouts {
-			t.Pins = append(t.Pins, Pin{Name: p.name, Type: p.typ, Dir: "inout"})
-		}
-		for _, p := range sig.outputs {
-			t.Pins = append(t.Pins, Pin{Name: p.name, Type: p.typ, Dir: "out"})
-		}
+	for _, n := range r.scope.UserNames() {
+		sig, _ := r.scope.Lookup(n)
+		in, pOut := r.powerPins(n, "")
+		t := FBType{Name: n, User: true, PowerIn: in, PowerOut: pOut, Args: defaultUserArgs(sig, in),
+			Pins: sig.Pins(), Prefix: fbcatalog.Prefix(n)}
 		t.Detail = userDetail(t)
 		out = append(out, t)
 	}
@@ -86,16 +70,16 @@ func (r *resolver) catalog() []FBType {
 // (FALSE until someone wires them); every non-BOOL input and every in-out
 // gets a `_` placeholder to retag — the diagnostic on `_` says what is left.
 // Outputs are captured with `Pin => Tag` when the author wants them.
-func defaultUserArgs(sig fbSig, powerIn string) string {
+func defaultUserArgs(sig fbcatalog.Sig, powerIn string) string {
 	var parts []string
-	for _, p := range sig.inputs {
-		if strings.EqualFold(p.name, powerIn) || isBool(p.typ) {
+	for _, p := range sig.Inputs {
+		if strings.EqualFold(p.Name, powerIn) || isBool(p.Type) {
 			continue
 		}
-		parts = append(parts, p.name+" := _")
+		parts = append(parts, p.Name+" := _")
 	}
-	for _, p := range sig.inouts {
-		parts = append(parts, p.name+" := _")
+	for _, p := range sig.InOuts {
+		parts = append(parts, p.Name+" := _")
 	}
 	return strings.Join(parts, ", ")
 }
@@ -110,15 +94,4 @@ func userDetail(t FBType) string {
 		out = "passes through"
 	}
 	return in + " → " + out
-}
-
-// instPrefix names instances of a user block by its type's first letter,
-// lowercased: MotorStarter → m1, RateOfChange → r1.
-func instPrefix(typ string) string {
-	for _, r := range typ {
-		if unicode.IsLetter(r) {
-			return strings.ToLower(string(r))
-		}
-	}
-	return "fb"
 }

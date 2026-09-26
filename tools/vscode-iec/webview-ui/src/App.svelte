@@ -26,6 +26,7 @@
 	import SfcView from './SfcView.svelte';
 	import { diffSfc, normalizeSfc, type SfcModel } from './sfc';
 	import { layout, normalizeFbd, type FbdModel, type VarDecl } from './layout';
+	import type { FbCatalogType, FbInst } from './suggest';
 	import { mergeDiff } from './diff';
 	import { vscode, postOp, pouFromFile, setSeedPou, withSeed } from './vscodeApi';
 	import { setRects, updateRect } from './diagState.svelte';
@@ -69,6 +70,11 @@
 	let paletteOpen = $state(false);
 	let varsOpen = $state(false);
 	let varList = $state<VarDecl[]>([]);
+	// The FBD palette's block picker: the model's catalog, the instances on
+	// the diagram (their outputs are sources), and every name in use.
+	let fbTypes = $state<FbCatalogType[]>([]);
+	let fbInsts = $state<FbInst[]>([]);
+	let takenNames = $state(new Set<string>());
 	let usedNames = $state(new Set<string>());
 	let hasPins = $state(false);
 	let selectedCount = $state(0);
@@ -176,6 +182,17 @@
 			// Indexed chips (TempHist[2]) need declared array bounds to
 			// resolve their live values.
 			setVarBounds(varList);
+			fbTypes = model.fbTypes ?? [];
+			fbInsts = model.nodes
+				.filter((n) => n.kind === 'fb')
+				.map((n) => ({ name: n.label, type: n.type, outs: n.outputs ?? [] }));
+			takenNames = new Set(
+				[
+					...varList.map((v) => v.name),
+					...model.nodes.filter((n) => n.kind === 'fb' || n.kind === 'coil').map((n) => n.label),
+					...model.nodes.filter((n) => n.wire).map((n) => n.wire!)
+				].map((x) => x.toLowerCase())
+			);
 			// Referenced = it became a diagram element (chip, coil, FB instance).
 			usedNames = new Set(
 				model.nodes
@@ -754,7 +771,7 @@
 		</SvelteFlow>
 	</div>
 	{/if}
-	<Palette bind:open={paletteOpen} vars={varList} />
+	<Palette bind:open={paletteOpen} vars={varList} {fbTypes} insts={fbInsts} taken={takenNames} />
 	<VarsPanel
 		bind:open={varsOpen}
 		vars={varList}

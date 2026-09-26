@@ -6,18 +6,28 @@
 	// with the new instance's name and a starting argument list, both
 	// editable before the insert. Free text still wins: a type the catalog
 	// doesn't know inserts too, and the diagnostic says what's wrong.
+	//
+	// The FBD palette embeds the same picker (`embedded`: inside its popover,
+	// "back" instead of "cancel"), fed the same catalog by `naut fbd graph`,
+	// with its own pin hint (the instance's output references).
 	import type { LdFbType } from './ladder';
 
 	let {
 		types = [],
 		freeInst,
 		onInsert,
-		onClose
+		onClose,
+		hint,
+		embedded = false
 	}: {
 		types?: LdFbType[];
 		freeInst: (prefix: string) => string;
 		onInsert: (v: { type: string; inst: string; args: string }) => void;
 		onClose: () => void;
+		/** Replaces the ladder's power-pin hint (the chosen type, the
+		 * instance name as typed). */
+		hint?: (t: LdFbType, inst: string) => string;
+		embedded?: boolean;
 	} = $props();
 
 	let filter = $state('');
@@ -48,6 +58,7 @@
 	$effect(() => {
 		filterEl?.focus();
 	});
+
 	// A press anywhere else closes it, like any dropdown (capture phase: the
 	// ladder's own handlers stop propagation).
 	$effect(() => {
@@ -123,6 +134,7 @@
 
 	const pinHint = $derived.by(() => {
 		if (!cur) return '';
+		if (hint) return hint(cur, inst.trim());
 		const parts: string[] = [];
 		parts.push(cur.powerIn ? `power → ${cur.powerIn}` : 'takes no power (first on the rung)');
 		if (cur.powerOut) parts.push(`${cur.powerOut} → rung`);
@@ -137,7 +149,7 @@
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-<div class="fbpick" bind:this={root} onclick={(e) => e.stopPropagation()} onpointerdown={(e) => e.stopPropagation()} onkeydown={keydown}>
+<div class="fbpick" class:embedded bind:this={root} onclick={(e) => e.stopPropagation()} onpointerdown={(e) => e.stopPropagation()} onkeydown={keydown}>
 	<input
 		class="nx-input fbfilter"
 		spellcheck="false"
@@ -197,7 +209,7 @@
 	</label>
 	{#if pinHint}<div class="hint">{pinHint}</div>{/if}
 	<div class="actions">
-		<button onclick={onClose}>cancel</button>
+		<button onclick={onClose}>{embedded ? 'back' : 'cancel'}</button>
 		<button class="primary fbinsert" disabled={!canInsert} onclick={commit}>insert</button>
 	</div>
 </div>
@@ -219,6 +231,14 @@
 		box-shadow: var(--nx-shadow);
 		font-family: var(--nx-mono);
 		cursor: default;
+	}
+	.fbpick.embedded {
+		position: static;
+		width: 330px;
+		padding: 2px 4px;
+		border: none;
+		box-shadow: none;
+		background: transparent;
 	}
 	.list {
 		display: flex;

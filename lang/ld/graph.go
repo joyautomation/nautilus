@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/fbcatalog"
 	"github.com/joyautomation/nautilus/lang/internal/seed"
 )
 
@@ -49,12 +50,9 @@ type Block struct {
 	Pins    []Pin  `json:"pins,omitempty"`
 }
 
-// Pin is one VAR_INPUT / VAR_OUTPUT declaration on a Block, in order.
-type Pin struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-	Dir  string `json:"dir"` // "in" | "out" | "inout" (catalog only)
-}
+// Pin is one VAR_INPUT / VAR_OUTPUT declaration on a Block, in order:
+// dir "in" | "out" | "inout" (the shared catalog's pin).
+type Pin = fbcatalog.Pin
 
 // Comment is a run of consecutive full-line // comments inside the LD
 // block — a diagram note, rendered above whatever follows it (mirroring
@@ -322,14 +320,9 @@ func scanBlocks(src string) []Block {
 			continue
 		}
 		if fbEndRe.MatchString(l) {
-			sig := scanFBBody(name, strings.Join(lines[start+1:i], "\n"))
+			sig := fbcatalog.ScanBody(name, strings.Join(lines[start+1:i], "\n"))
 			b := Block{Name: name, Line: start + 1, EndLine: i + 1}
-			for _, p := range sig.inputs {
-				b.Pins = append(b.Pins, Pin{Name: p.name, Type: p.typ, Dir: "in"})
-			}
-			for _, p := range sig.outputs {
-				b.Pins = append(b.Pins, Pin{Name: p.name, Type: p.typ, Dir: "out"})
-			}
+			b.Pins = append(append(b.Pins, sig.Inputs...), sig.Outputs...)
 			out = append(out, b)
 			start, name = -1, ""
 		}

@@ -43,8 +43,10 @@ controller onto both the text and the diagram.
   "nautilus.fbdDiagram" }` (likewise `nautilus.ldDiagram`,
   `nautilus.sfcDiagram`).
 - **FBD**: drag pin to pin to wire, double-click to retype a constant or
-  rename, insert blocks from the *+ add* palette, box-select, arrow keys to
-  move.
+  rename, insert blocks from the *+ add* palette — *function block* places
+  any standard block (PID included) or project block with every input an
+  open pin — box-select, arrow keys to move. Double-click an FB's header to
+  rename the instance.
 - **Ladder**: drag instructions from the palette onto a rung, drag elements
   between spots and rungs, ⊕ to insert, `N` for NO/NC, `M` for coil mode,
   `B` to branch around the selection, click a rung's name to select or

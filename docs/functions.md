@@ -272,7 +272,10 @@ A block whose type nothing in the compile declares falls back to `IN`/`Q`.
 spirit — no ladder power pin (like `CTUD`, it has no single input that
 means "run"), so instantiate it from ST or an FBD diagram, the way the
 [heated-tank-nogo](../examples/heated-tank-nogo) example wires its own
-hand-rolled PI today.
+hand-rolled PI today. In the FBD editor, *+ add → function block → PID*
+places `pid1 : PID(AUTO := _, PV := _, …)` with every input an open pin to
+drag a tag onto; unwire (select the wire, Del) the ones you leave at their
+defaults.
 
 | Pin | Kind | Type | Meaning |
 | --- | --- | --- | --- |
@@ -487,7 +490,10 @@ the standard ones, then the file's and the project libraries' — and inserts
 one with the rung's power already on its power pin, `_` placeholders on its
 non-BOOL inputs and in-outs, and an instance name you can edit; double-click
 a block's header to rename the instance (its declaration and every
-reference in the POU follow). Two limits worth knowing: an edit op addresses a rung by
+reference in the POU follow). The FBD palette's *function block* picker
+lists the same catalog (`naut fbd graph` sends it too) and inserts
+`inst : TYPE(pin := _, …)`, every input an open pin; its *output reference*
+reads an instance output (`Speed := m1.Run`). Two limits worth knowing: an edit op addresses a rung by
 **name**, so two rungs with the same name in different POUs of one file
 resolve to the first — name them distinctly; and `addRung` with no `after`
 appends before the file's **first** `END_LD`. The language server analyses

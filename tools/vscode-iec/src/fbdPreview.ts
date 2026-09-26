@@ -101,13 +101,20 @@ function cliPath(): string {
   return cliCommand();
 }
 
-/** Run `naut fbd graph -` over source text. */
-export function fbdGraph(source: string): Promise<{ model: FbdModel } | { error: string }> {
+/** The file a document's buffer belongs to on disk, so `naut fbd` can put
+ * the project's library blocks in scope (untitled/virtual docs: none). */
+export function docFile(doc: vscode.TextDocument): string | undefined {
+  return doc.uri.scheme === "file" ? doc.uri.fsPath : undefined;
+}
+
+/** Run `naut fbd graph - [at]` over source text; `at` names the file the
+ * buffer belongs to (its project's libraries join the block catalog). */
+export function fbdGraph(source: string, at?: string): Promise<{ model: FbdModel } | { error: string }> {
   const cli = cliPath();
   return new Promise((resolve) => {
     const child = execFile(
       cli,
-      ["fbd", "graph", "-"],
+      at ? ["fbd", "graph", "-", at] : ["fbd", "graph", "-"],
       cliExecOptions(),
       (err, stdout) => {
         // Exit 1 still writes {"error": ...} JSON on stdout — prefer it.
@@ -127,7 +134,7 @@ export function fbdGraph(source: string): Promise<{ model: FbdModel } | { error:
 }
 
 /** Run `naut fbd edit`: resolve op against source, get minimal edits. */
-function fbdEdit(source: string, op: FbdEditOp): Promise<{ edits: FbdTextEdit[] } | { error: string }> {
+function fbdEdit(source: string, op: FbdEditOp, file?: string): Promise<{ edits: FbdTextEdit[] } | { error: string }> {
   const cli = cliPath();
   return new Promise((resolve) => {
     const child = execFile(
@@ -146,7 +153,7 @@ function fbdEdit(source: string, op: FbdEditOp): Promise<{ edits: FbdTextEdit[] 
         resolve({ error: err ? String(err) : "naut fbd edit: empty output" });
       }
     );
-    child.stdin?.end(JSON.stringify({ source, op }));
+    child.stdin?.end(JSON.stringify(file ? { source, op, file } : { source, op }));
   });
 }
 
@@ -265,7 +272,7 @@ async function applyOpMessage(doc: vscode.TextDocument, msg: WebviewMessage): Pr
     msg.op.entries = msg.op.entries.filter((e) => !!e.node);
     if (msg.op.entries.length === 0) return;
   }
-  const res = await fbdEdit(doc.getText(), msg.op);
+  const res = await fbdEdit(doc.getText(), msg.op, docFile(doc));
   if ("error" in res) {
     void vscode.window.showWarningMessage("nautilus: " + res.error);
     return;
@@ -288,7 +295,7 @@ export function docTitle(doc: vscode.TextDocument): string {
 
 async function postModel(webview: vscode.Webview, doc: vscode.TextDocument): Promise<void> {
   const source = doc.getText();
-  const res = await fbdGraph(source);
+  const res = await fbdGraph(source, docFile(doc));
   if ("error" in res) {
     void webview.postMessage({ type: "error", message: res.error, title: docTitle(doc) });
   } else {
@@ -534,7 +541,7 @@ export class FbdPreview implements vscode.Disposable {
       return;
     }
     const source = doc.getText();
-    const res = await fbdGraph(source);
+    const res = await fbdGraph(source, docFile(doc));
     if ("error" in res) {
       this.post({ type: "error", message: res.error, title: docTitle(doc) });
     } else {
