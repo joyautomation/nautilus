@@ -12,6 +12,43 @@ naut test  .   # acceptance tests, virtual time, no broker
 naut run   .   # connect to the broker + the analyser and go live
 ```
 
+**Needs naut ≥ 0.12.0.** `naut check .`/`naut test .` pass clean on the
+released CLI — the `sparkplug-host` driver, the `drivers:` list form
+(two drivers, one scan), and both `naut sparkplug import` paths are
+already released. See `../README.md` for the fleet-wide version check.
+
+## What to open first
+
+- `fleet.st` — the fleet-wide rollups (`SitesOnline`, `AnyPumpRunning`,
+  `SystemDemandLps`, `TankLevelPct`), guarded on each site's own
+  `__Online`.
+- `overview.fbd` — the informational well-dispatch flags
+  (`Well1Called`/`Well2Called`), by tank level. *Open With → Function
+  Block Diagram*.
+- `sites.yaml` — the committed description of the whole fleet: one
+  shared `Pump` Template, three sites, the write path.
+- `fleet.mimic.json` — a P&ID overview of the fleet, built entirely from
+  the HMI kit's built-in components (`Tank`, `Pump`, `Gauge`,
+  `Sparkline`) — no custom `hmi/` app in this project. Right-click →
+  *Open With → Mimic Editor*; live against `naut run .` with the three
+  sites up. Its `Pump` binds (`<site>_Pump<n>.Run`/`.SpeedHz`) address a
+  UDT member the way `naut sparkplug import`'s own docs and the write
+  path do, dotted — see `docs/design/examples-dogfood.md` for whether a
+  mimic equipment `bind` can actually resolve that dotted path today.
+
+## What it demonstrates
+
+| Feature | Where | Docs |
+|---|---|---|
+| Sparkplug host: subscribing to a whole group, presenting every site as inputs, NCMD writes | `nautilus.yaml` `drivers: [{type: sparkplug-host}]` | [Sparkplug host](https://nautilus.joyautomation.com/guides/sparkplug-host/) |
+| `naut sparkplug import`, offline (`--sites`) and live (`--broker`), agreeing byte-for-byte | `sites.yaml`, `sparkplug_manifest.yaml` | [Sparkplug](https://nautilus.joyautomation.com/guides/sparkplug/) |
+| `drivers:` list form: two drivers, one scan (the fleet + the plant's own Modbus analyser) | `nautilus.yaml` `drivers:` | [Modbus TCP](https://nautilus.joyautomation.com/guides/modbus/) |
+| Alarms: one rule expanding across a shared Template, `enable:` suppression on a dark site | `nautilus.yaml` `alarms:` | [Alarms](https://nautilus.joyautomation.com/guides/alarms/) |
+| Historian: `server.historian` pointing the dashboard at a separate daemon | `nautilus.yaml` `server.historian` | [Historian](https://nautilus.joyautomation.com/guides/historian/) |
+| Retained state + a two-replica redundancy shape, deploy scaffold | `nautilus.yaml` `retain:`/`redundancy:`, `deploy/` | [Redundancy & retained state](https://nautilus.joyautomation.com/guides/redundancy/) |
+| HMI: a P&ID mimic from the kit's built-ins alone | `fleet.mimic.json` | [HMI kit](https://nautilus.joyautomation.com/guides/hmi/) |
+| Acceptance tests: the rollups, the dispatch flags, dark-site suppression, the NCMD write path | `scada_test.yaml` | [Testing](https://nautilus.joyautomation.com/reference/testing/) |
+
 ## How the generated files were made
 
 Four files are committed, generated, and **never hand-edited**:
@@ -78,7 +115,7 @@ naut modbus import --map devices.yaml
 guarded on the target well's own `__Online` (a dark well can't
 meaningfully be "called"). These are informational only: `overview.fbd`
 deliberately does **not** also write `Well1_Pump1_SpeedSP`/
-`Well2_Pump1_SpeedSp` — those generated NCMD tags are the fleet's
+`Well2_Pump1_SpeedSP` — those generated NCMD tags are the fleet's
 operator write path (story beat 4), and a program racing it every scan
 would just fight the operator's own write on the very next tick. Writing
 `Well1_Pump1_SpeedSP` (an ordinary POST /api/tags, or an operator's own
@@ -107,11 +144,11 @@ rules:
     class: equipment
 ```
 
-`type: Pump` is the shared Template — this ONE rule expands to five
-definitions (`Well1_Pump1.Fault`, `Well2_Pump1.Fault`,
-`Booster1_Pump1.Fault`, `Booster1_Pump2.Fault`, plus one it doesn't
-generate — see `naut alarms list .`), each `{desc}` filled from that
-metric's own `desc:` in `sites.yaml`, each `enable:` interlocked on its
+`type: Pump` is the shared Template — this ONE rule expands to four
+definitions, one per pump on the wire (`Well1_Pump1.Fault`,
+`Well2_Pump1.Fault`, `Booster1_Pump1.Fault`, `Booster1_Pump2.Fault` — see
+`naut alarms list .`), each `{desc}` filled from that metric's own
+`desc:` in `sites.yaml`, each `enable:` interlocked on its
 own site's `__Online`: a site going dark moves its alarms to Suppressed
 instead of freezing them lit (`scada_test.yaml` proves the transition and
 the resumption). `TankLow`, `ResidualLow` and `AnalyzerFault` are

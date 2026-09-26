@@ -4,7 +4,7 @@ PROGRAM Overview
    Well2 is the fixed backup, joining only once the tank drops further,
    below TankLowSP. Well1Called/Well2Called are informational (an
    overview mimic or the dashboard reads them) — they do NOT drive
-   Well1_Pump1_SpeedSP/Well2_Pump1_SpeedSp directly: those generated NCMD
+   Well1_Pump1_SpeedSP/Well2_Pump1_SpeedSP directly: those generated NCMD
    tags are the operator's own write path (fleet's story beat 4), and a
    second writer racing it every scan would just fight the operator's own
    write on the very next tick. Both flags read false once their well is

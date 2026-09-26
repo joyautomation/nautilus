@@ -13,8 +13,29 @@ naut test  .    # the acceptance suite, virtual time
 naut run   .    # dashboard + tag API on http://localhost:8091
 ```
 
+**Needs naut ≥ 0.12.0.** Runs clean on the released CLI — the Sparkplug
+edge publish, `store-forward:`, and the metric classes below are all
+already released. See `../../README.md` for the fleet-wide version check.
+
 See `../../README.md` for the fleet story — bringing up a broker, the
 other two sites, and the SCADA host that consumes all three.
+
+## What to open first
+
+- `well.st` — the hysteresis call (`PumpOnLevel`/`PumpOffLevel`) and the
+  speed clamp.
+- `sim.st` — the bench-only plant: a wet-well level integrator and the
+  pump/VFD's speed response.
+- `well-1_test.yaml` — the acceptance suite, `suspend: [sim]` on every
+  test but the one closed-loop check.
+
+## What it demonstrates
+
+| Feature | Where | Docs |
+|---|---|---|
+| Sparkplug B edge node: store-and-forward, publish classes | `nautilus.yaml` `sparkplug:` | [Sparkplug](https://nautilus.joyautomation.com/guides/sparkplug/) |
+| A root `.st` `TYPE` with no `PROGRAM`, composing as a library | `types.st` | [Structured Text](https://nautilus.joyautomation.com/languages/structured-text/) |
+| Acceptance tests: virtual time, `suspend:`, a closed-loop check | `well-1_test.yaml` | [Testing](https://nautilus.joyautomation.com/reference/testing/) |
 
 ## Files
 

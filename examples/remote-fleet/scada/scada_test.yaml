@@ -107,7 +107,7 @@ tests:
   - name: overview.fbd flags which well(s) are called, by tank level, only while online
     # Well1Called/Well2Called are informational — see overview.fbd's own
     # header for why the dispatch does NOT also write
-    # Well1_Pump1_SpeedSP/Well2_Pump1_SpeedSp directly: those generated
+    # Well1_Pump1_SpeedSP/Well2_Pump1_SpeedSP directly: those generated
     # NCMD tags are the operator's own write path (the next test), and a
     # program racing it every scan would just fight the operator's write
     # on the very next tick.
@@ -134,12 +134,22 @@ tests:
         scans: 1
         expect: { Well2Called: false }
 
-  - name: an operator's write to a generated NCMD tag holds until the operator changes it again
+  - name: an operator's write to a generated NCMD tag holds while overview.fbd keeps recomputing its own flags every scan
     # The write path itself: Well1_Pump1_SpeedSP (from scada/sites.yaml's
     # `writable: [SpeedSP]` on the Pump1 metric) is a plain output tag —
     # nothing in this project writes it automatically, so a write (an
     # operator's POST /api/tags live, or `given:` here, in virtual time)
     # sticks exactly where it's put, scan after scan, until written again.
+    # Proves it against a moving target, not a no-op: Well1Called/
+    # Well2Called toggling with the tank level (below) is proof overview.fbd
+    # is genuinely running every scan while it does — reproducing, with a
+    # real assertion, the regression this project's own history hit: an
+    # earlier overview.fbd recomputed Well1_Pump1_SpeedSP from the tank
+    # level every scan, so a live write reverted 250 ms later (see
+    # docs/design/examples-dogfood.md). Delete every program and
+    # Well1Called/Well2Called would stay stuck at their init (false) —
+    # this test would fail on the first `advance:` below, where a no-op
+    # write-holds check alone would not have caught it.
     given: {
       Well1__Online: true, Well2__Online: true, Booster1__Online: true, Booster1_plc1__Online: true,
       Well1_Pump1.Run: false, Well2_Pump1.Run: false,
@@ -149,7 +159,13 @@ tests:
     steps:
       - given: { Well1_Pump1_SpeedSP: 50.0 }
         advance: 5s
-        expect: { Well1_Pump1_SpeedSP: 50.0 }
+        expect: { Well1_Pump1_SpeedSP: 50.0, Well1Called: true, Well2Called: false } # tank between TankLowSP/TankHighSP: lead only
+      - given: { Booster1_TankLevel: 20.0 } # below TankLowSP (30): both wells now called
+        advance: 5s
+        expect: { Well1Called: true, Well2Called: true, Well1_Pump1_SpeedSP: 50.0 } # still holds through the recompute
+      - given: { Booster1_TankLevel: 80.0 } # above TankHighSP (70): tank full, nobody called
+        advance: 5s
+        expect: { Well1Called: false, Well2Called: false, Well1_Pump1_SpeedSP: 50.0 } # still holds
       - given: { Well1_Pump1_SpeedSP: 30.0 }
         advance: 5s
         expect: { Well1_Pump1_SpeedSP: 30.0 }

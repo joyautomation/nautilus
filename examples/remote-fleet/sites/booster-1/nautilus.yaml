@@ -46,8 +46,8 @@ tags:
   # PIC-1: discharge pressure -> speed. Operator-writable.
   - { name: PressureSP, role: setpoint, init: 62.0, unit: "psi", desc: "Discharge pressure setpoint" }
   - { name: Kp, role: setpoint, init: 2.0, desc: "PIC-1 proportional gain" }
-  - { name: Ki, role: setpoint, init: 0.5, desc: "PIC-1 integral gain" }
-  - { name: Kd, role: setpoint, init: 0.0, desc: "PIC-1 derivative gain" }
+  - { name: Ki, role: setpoint, init: 0.5, unit: "1/s", desc: "PIC-1 integral gain" }
+  - { name: Kd, role: setpoint, init: 0.0, unit: "s", desc: "PIC-1 derivative gain" }
   - { name: MinSpeedHz, role: setpoint, init: 20.0, unit: "Hz", desc: "Pump minimum speed" }
   - { name: MaxSpeedHz, role: setpoint, init: 60.0, unit: "Hz", desc: "Pump maximum speed" }
 

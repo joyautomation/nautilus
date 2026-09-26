@@ -13,6 +13,40 @@ naut test  .    # the acceptance suite, virtual time
 naut run   .    # dashboard + tag API on http://localhost:8093
 ```
 
+**Needs naut ≥ 0.12.0.** Runs clean on the released CLI — the
+`drivers:` list form (pure sugar for this project's one Modbus driver)
+and the Sparkplug DEVICE publish are both already released. See
+`../../README.md` for the fleet-wide version check.
+
+`naut run .` alone shows the Modbus task **degraded** — `FM1_FlowLps`
+faulted, the driver panel red — until `naut modbus serve` (below) is
+brought up alongside it; this is deliberate, not a rough edge (see
+`sim.st`'s own header: "the flow meter is real either way"), the same
+choice this codebase makes everywhere a field driver has nothing to talk
+to yet. There is no memory-only `bench.yaml` here the way `field.yaml`
+elsewhere in the fleet's own family (`examples/lift-station`) swaps a
+live driver out — booster-1's whole point is the one real device, not a
+bench stand-in for it.
+
+## What to open first
+
+- `pressure.fbd` — the discharge-pressure PID (`PIC-1`) and the lag
+  pump's flow-demand call, with hysteresis. *Open With → Function Block
+  Diagram*.
+- `devices.yaml` — the one hand-written input to `naut modbus import`.
+- `booster-1_test.yaml` — the acceptance suite; every test seeds
+  `FM1_FlowLps` with `given:` since FBD can't short-circuit an unset
+  input.
+
+## What it demonstrates
+
+| Feature | Where | Docs |
+|---|---|---|
+| FBD: a `PID` closed loop, a hysteresis seal-in for the lag pump's call | `pressure.fbd` | [Function blocks](https://nautilus.joyautomation.com/languages/function-block/) |
+| Modbus TCP: a live flow meter, `naut modbus import`/`serve` | `devices.yaml`, `modbus_manifest.yaml` | [Modbus TCP](https://nautilus.joyautomation.com/guides/modbus/) |
+| Sparkplug B: a Modbus driver's own tags riding along as a DEVICE | `nautilus.yaml` `sparkplug: {device: plc1}` | [Sparkplug](https://nautilus.joyautomation.com/guides/sparkplug/) |
+| Acceptance tests: virtual time, a live device seeded with `given:` | `booster-1_test.yaml` | [Testing](https://nautilus.joyautomation.com/reference/testing/) |
+
 ## Files
 
 | File | What |

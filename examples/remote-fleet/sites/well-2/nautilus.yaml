@@ -36,8 +36,8 @@ tags:
   - { name: MinSpeedHz, role: setpoint, init: 25.0, unit: "Hz", desc: "Pump minimum speed" }
   - { name: MaxSpeedHz, role: setpoint, init: 55.0, unit: "Hz", desc: "Pump maximum speed" }
 
-  - { name: PumpStarts, role: state, init: 0, desc: "Pump 2 start count" }
-  - { name: PumpHours, role: state, init: 0.0, unit: "h", desc: "Pump 2 run hours" }
+  - { name: PumpStarts, role: state, init: 0, desc: "Well 2 pump start count" }
+  - { name: PumpHours, role: state, init: 0.0, unit: "h", desc: "Well 2 pump run hours" }
 
   - { name: InflowLps, role: setpoint, init: 2.0, unit: "L/s", desc: "Bench only: base inflow to the well" }
 

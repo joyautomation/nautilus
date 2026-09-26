@@ -473,3 +473,84 @@ tank level, guarded on `__Online`), and leaves
 nothing in the project writes them. Reproduced live after the fix
 (`scada/README.md`'s "Reading the fleet" section) and covered in
 `scada/scada_test.yaml`.
+
+**2026-09-25 · the fleet's live walkthrough, as actually run · session
+narrative (see `../../examples/remote-fleet/README.md`'s "Live
+walkthrough" for the generic, reproducible form)**
+
+Port 1883 was already taken by another broker on this machine, so the
+broker for this session ran on an alternate host port (`docker run --rm
+-d --name fleet-mosquitto -p <port>:1883 eclipse-mosquitto`, `sites/*`
+and `scada`'s own `nautilus.yaml` `broker:` lines pointed at it for the
+run) — same recipe as the README's, just a different port. With the
+broker, the three sites, and `booster-1`'s `naut modbus serve` all up:
+`curl localhost:8080/api/state` showed `SitesOnline: 3`, live values
+moving, `AnyPumpRunning: true`. The NCMD write path
+(`POST /api/tags -d '{"name":"Well1_Pump1_SpeedSP","value":50.0}'`
+against `scada`) reached `well-1` and the pump ramped to it. Killing
+`well-2`'s `naut run` dropped `SitesOnline` to 2 and moved its pump-fault
+alarm to Suppressed, alongside the chlorine analyser's own alarm (its
+Modbus source was never connected in this session either — the alarm
+engine treats that the same way: not evaluated). `docker pause
+fleet-mosquitto` for 65 s while `well-1` kept running, then unpause:
+`well-1`'s log drained a `store-forward` buffer of ~219 messages back to
+0 within one scan of reconnecting, and `scada`'s own driver panel showed
+`seq gaps: 0` for the replay. The historian recipe (`naut historian`
+against Postgres) was **not** run live this session — `compose.yaml`'s
+`postgres` service and the recipe in the README are documented, not
+exercised.
+
+**2026-09-25 · `naut sparkplug import`'s own `--sites` help text claims
+`desc:` never survives a `--broker` import — it does · docs gap (stale
+help text)**
+
+Building the fleet README's "Proof: offline and live agree" section
+(and resolving an apparent contradiction between two draft paragraphs
+about whether `desc:` is recoverable from the wire) meant actually
+running both `naut sparkplug import --sites` and `naut sparkplug import
+--broker` against the same live fleet and diffing the output. Both the
+released v0.12.0 CLI and this branch's build recovered every `desc:`
+field correctly from a live broker import — `tags/sparkplug.yaml` came
+back byte-identical to the offline `--sites` generation, no `desc:`
+differences at all. This contradicts `naut sparkplug --help`'s own
+`--sites` section ("desc: ... The `--broker` path cannot supply one — a
+metric's Properties/description does not survive payload decoding — so
+an import from live births leaves every `desc:` empty"). Either the CLI
+help text is stale (the decoding was fixed and the doc wasn't updated),
+or there is some other live-import condition under which `desc:` really
+is dropped that this fleet's narrow test (one broker, three healthy
+nodes, an unfiltered and a narrowed import) didn't hit. Not chased
+further — out of scope for an examples PR — but worth a platform-side
+look: `naut sparkplug import --help`'s own text (searched from
+`sparkplug` package's flag/usage strings), or a repro against a node that
+publishes a metric with no `desc:` at all (to see if empty and "not
+supplied" are being conflated).
+
+**2026-09-25 · a mimic equipment `bind` can't address a UDT struct
+member the way `tagAt()`/faceplates can · design gap**
+
+Building `scada/fleet.mimic.json`, wanted each site's pump bound to its
+own `Run`/`SpeedHz` fields — `Well1_Pump1.Run`, `Well1_Pump1.SpeedHz` —
+the same dotted-path addressing `hmi/src/lib/tags.ts`'s `tagAt()` (used
+by faceplates, trend, `numericLeaves`) and the write path
+(`P101.Drive.Speed`) both support for a struct/UDT tag. `MimicEquipment.
+bind`/`resolveBindings()` (`hmi/src/lib/mimic.ts`) do not: it is a flat
+`tag in tags` lookup, and a live frame renders a struct tag as a NESTED
+object (`runtime/tags.go`'s `plain()` — `Plain(v)` for `ir.TypeStruct`
+returns `map[string]any`, not a flattened `"Tag.Member"` key), so a bind
+value containing a `.` never resolves — silently: `resolveBindings` just
+skips the unmatched key, and the component renders its own prop default
+instead of erroring. `MimicLabel.bind` has the same flat-lookup
+limitation, and additionally only ever renders a *numeric* live value
+(`labelValue()` falls back to `—` for anything not `typeof === 'number'`)
+— a label bound to a `BOOL` (`Well1__Online`, in this fleet's mimic)
+never shows anything but `—`. Kept the dotted binds and the bool-tag
+label binds in `scada/fleet.mimic.json` anyway, since they're valid
+JSON, `naut check` doesn't validate a mimic's bindings against the tag
+model at all, and there's no rig here to prove the render live — but a
+project that DOES have a rig should not copy this pattern expecting it
+to work. Where: `hmi/src/lib/mimic.ts`'s `resolveBindings()`; a fix
+would need either a `tagAt()`-style dotted resolve for equipment/pipe/
+label binds, or a documented convention (e.g. the sites.yaml-side
+generator emitting a flat per-member read tag the way `writable:`
+already does for writes).

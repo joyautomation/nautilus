@@ -1,0 +1,143 @@
+{
+	"name": "Water fleet — three sites and a distribution tank",
+	"canvas": { "width": 960, "height": 590 },
+	"equipment": [
+		{
+			"id": "WELL1_TANK",
+			"component": "Tank",
+			"x": 40,
+			"y": 40,
+			"width": 140,
+			"label": "WELL-1",
+			"bind": { "levelPct": "Well1_WellLevel" }
+		},
+		{
+			"id": "WELL1_PUMP1",
+			"component": "Pump",
+			"x": 70,
+			"y": 230,
+			"width": 90,
+			"label": "P-1",
+			"bind": { "running": "Well1_Pump1.Run", "speedPct": "Well1_Pump1.SpeedHz" }
+		},
+		{
+			"id": "WELL2_TANK",
+			"component": "Tank",
+			"x": 40,
+			"y": 340,
+			"width": 140,
+			"label": "WELL-2",
+			"bind": { "levelPct": "Well2_WellLevel" }
+		},
+		{
+			"id": "WELL2_PUMP1",
+			"component": "Pump",
+			"x": 70,
+			"y": 470,
+			"width": 90,
+			"label": "P-1",
+			"bind": { "running": "Well2_Pump1.Run", "speedPct": "Well2_Pump1.SpeedHz" }
+		},
+		{
+			"id": "DISTTANK",
+			"component": "Tank",
+			"x": 400,
+			"y": 220,
+			"width": 170,
+			"label": "DIST TANK",
+			"bind": { "levelPct": "TankLevelPct" }
+		},
+		{
+			"id": "BOOSTER1_PUMP1",
+			"component": "Pump",
+			"x": 680,
+			"y": 90,
+			"width": 90,
+			"label": "B1-P1",
+			"bind": { "running": "Booster1_Pump1.Run", "speedPct": "Booster1_Pump1.SpeedHz" }
+		},
+		{
+			"id": "BOOSTER1_PUMP2",
+			"component": "Pump",
+			"x": 680,
+			"y": 310,
+			"width": 90,
+			"label": "B1-P2",
+			"bind": { "running": "Booster1_Pump2.Run", "speedPct": "Booster1_Pump2.SpeedHz" }
+		},
+		{
+			"id": "BOOSTER1_GAUGE",
+			"component": "Gauge",
+			"x": 820,
+			"y": 30,
+			"width": 170,
+			"label": "DISCH PSI",
+			"props": { "min": 0, "max": 100, "unit": "psi", "decimals": 1 },
+			"bind": { "value": "Booster1_DischargePress" }
+		},
+		{
+			"id": "BOOSTER1_FLOW",
+			"component": "Sparkline",
+			"x": 820,
+			"y": 340,
+			"width": 170,
+			"props": { "values": [], "height": 44, "yMin": 0, "yMax": 20 }
+		}
+	],
+	"pipes": [
+		{
+			"id": "well1-dist",
+			"points": [],
+			"routing": "orthogonal",
+			"from": { "equip": "WELL1_TANK", "port": "right" },
+			"to": { "equip": "DISTTANK", "port": "left" },
+			"bind": { "flowing": "Well1__Online" }
+		},
+		{
+			"id": "well2-dist",
+			"points": [],
+			"routing": "orthogonal",
+			"from": { "equip": "WELL2_TANK", "port": "right" },
+			"to": { "equip": "DISTTANK", "port": "left" },
+			"bind": { "flowing": "Well2__Online" }
+		},
+		{
+			"id": "dist-booster1pump1",
+			"points": [],
+			"routing": "orthogonal",
+			"from": { "equip": "DISTTANK", "port": "right" },
+			"to": { "equip": "BOOSTER1_PUMP1", "port": "in" },
+			"bind": { "flowing": "Booster1__Online" }
+		},
+		{
+			"id": "dist-booster1pump2",
+			"points": [],
+			"routing": "orthogonal",
+			"from": { "equip": "DISTTANK", "port": "right" },
+			"to": { "equip": "BOOSTER1_PUMP2", "port": "in" },
+			"bind": { "flowing": "Booster1__Online" }
+		},
+		{
+			"id": "booster1pump1-out",
+			"points": [[930, 60]],
+			"routing": "orthogonal",
+			"from": { "equip": "BOOSTER1_PUMP1", "port": "out" },
+			"bind": { "flowing": "Booster1__Online" }
+		},
+		{
+			"id": "booster1pump2-out",
+			"points": [[930, 60]],
+			"routing": "orthogonal",
+			"from": { "equip": "BOOSTER1_PUMP2", "port": "out" },
+			"bind": { "flowing": "Booster1__Online" }
+		}
+	],
+	"labels": [
+		{ "text": "SITES ONLINE ", "x": 400, "y": 40, "bind": "SitesOnline", "decimals": 0 },
+		{ "text": "SYSTEM DEMAND ", "x": 400, "y": 65, "bind": "SystemDemandLps", "unit": "L/s", "decimals": 1 },
+		{ "text": "WELL-1 ", "x": 200, "y": 60, "bind": "Well1__Online" },
+		{ "text": "WELL-2 ", "x": 200, "y": 360, "bind": "Well2__Online" },
+		{ "text": "BOOSTER-1 ", "x": 680, "y": 60, "bind": "Booster1__Online" },
+		{ "text": "TO SYSTEM", "x": 900, "y": 45 }
+	]
+}

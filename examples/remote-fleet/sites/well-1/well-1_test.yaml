@@ -60,7 +60,7 @@ tests:
         expect: { PumpStarts: 2 }
 
   - name: closed loop rides out a storm inflow and settles once it passes
-    suspend: [] # override the file default: sim runs, closed loop
+    suspend: [] # no file-level suspend is set here: sim runs, closed loop
     given: { WellLevel: 40.0, InflowLps: 8.0 } # a storm
     steps:
       - advance: 120s
