@@ -78,8 +78,9 @@ is four projects, not one — `naut run sites/well-1`, `sites/well-2`,
 | HMI: a mimic built entirely from the kit's built-in components | batch-skid, remote-fleet | `batch-skid.mimic.json`, `scada/fleet.mimic.json` |
 | The SDK path: a custom `io.Driver`, no manifest | go-sdk | `plant.go` |
 
-**Needs naut ≥ 0.13.0** (`lib/` composition, a `FUNCTION_BLOCK`'s declared
-initial values, `naut compose`), **except `remote-fleet`, which needs only
+**Needs naut ≥ 0.13.1** (`lib/` composition, a `FUNCTION_BLOCK`'s declared
+initial values, `naut compose`; 0.13.1 adds the dashboard fallback when a
+project's HMI is not built yet), **except `remote-fleet`, which needs only
 ≥ 0.12.0**. Install or update with
 `go install github.com/joyautomation/nautilus/cmd/naut@latest`, or take a
 binary from the [releases page](https://github.com/joyautomation/nautilus/releases).
