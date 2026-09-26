@@ -30,9 +30,10 @@ of that fails `naut check`, not `naut run`, because **`New` never
 dials**: it decodes the manifest, resolves every type reference, rejects
 duplicate names and partitions the bindings into scan classes, all offline.
 The connection is `Start`'s job, so `naut check` and
-`naut build` pass in CI with no controller in sight. `examples/client60`
-is a complete manifest project driving a Logix controller with a ladder
-program, an HMI, and Sparkplug retransmission on top.
+`naut build` pass in CI with no controller in sight. `examples/batch-skid`
+(`line.yaml`) is a complete manifest project driving an "existing" Logix
+line controller over this driver — see its README for the read/write
+handshake and `naut logix emulate`, the hardware-free way to run it.
 
 ## Generating the manifest: `naut eip import`
 

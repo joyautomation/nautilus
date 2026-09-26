@@ -27,7 +27,7 @@ PROGRAM Main
    temperature. VAR_EXTERNAL tags are bound by the runtime each scan —
    field inputs written before, outputs collected after. VAR is retained. *)
 VAR_EXTERNAL
-    LevelPct       : REAL;   (* field inputs *)
+    LevelPct       : REAL;   (* field inputs, from Plant.ReadInputs *)
     TempC          : REAL;
     ScanDtS        : REAL;
     TempSP         : REAL;   (* operator setpoints *)
@@ -35,7 +35,7 @@ VAR_EXTERNAL
     Ki             : REAL;
     PumpStartLevel : REAL;
     PumpStopLevel  : REAL;
-    PumpRun        : BOOL;   (* field outputs *)
+    PumpRun        : BOOL;   (* field outputs, to Plant.WriteOutputs *)
     Heater         : REAL;
 END_VAR
 VAR
@@ -43,7 +43,7 @@ VAR
     err      : REAL;
 END_VAR
 
-(* P-101: level hysteresis latch *)
+(* P-101: level hysteresis latch (the seal-in) *)
 IF LevelPct <= PumpStartLevel THEN
     PumpRun := TRUE;
 ELSIF LevelPct >= PumpStopLevel THEN
@@ -52,12 +52,17 @@ END_IF;
 
 (* TIC-101: temperature PI with anti-windup clamp *)
 err := TempSP - TempC;
-integral := LIMIT(0.0, integral + Ki * err * ScanDtS, 100.0);
+integral := integral + Ki * err * ScanDtS;
+integral := LIMIT(0.0, integral, 100.0);
 Heater := LIMIT(0.0, Kp * err + integral, 100.0);
 END_PROGRAM
 ```
 
-That is `examples/heated-tank/program.st`, abridged. `PROGRAM Main …
+That is `examples/go-sdk/program.st`, abridged — nautilus's one Go-tier
+example; everywhere else in `examples/` the plant is a manifest project,
+no Go, and this same hysteresis-plus-PI shape shows up again as
+`examples/lift-station`'s `permissives.ld`/`level.fbd` split across two
+graphical languages instead. `PROGRAM Main …
 END_PROGRAM` names the POU, and that name is the program's identity for
 download, diff, and pull. `VAR` holds program-local state that persists between
 scans. Statements evaluate top to bottom, so the `integral` written on one line
@@ -176,30 +181,51 @@ round-trips through the tag store as one whole-struct write. Every
 pin's type.
 
 ```iecst
-FUNCTION_BLOCK RateOfChange
-(* Rate of change of IN in units/minute, from the previous scan's value.
-   Each instance retains its own prev — across scans and online edits. *)
+TYPE
+  PumpStats : STRUCT
+    Starts     : INT;   (* start count *)
+    Hours      : REAL;  (* run hours *)
+    LastRunSec : REAL;  (* length of the most recently completed run *)
+  END_STRUCT;
+END_TYPE
+
+FUNCTION_BLOCK RuntimeMeter
+(* Counts a start on Running's rising edge, accumulates run hours while
+   Running, and captures the length of the run that just ended. Bound to
+   the UDT tag by VAR_IN_OUT so two calls (P101_Stats, P102_Stats) each
+   read and write their own copy. *)
 VAR_INPUT
-    IN : REAL;
-    DT : REAL; (* seconds since last scan *)
+    Running : BOOL;
+    Dt      : REAL; (* seconds since the last call *)
 END_VAR
-VAR_OUTPUT
-    OUT : REAL; (* units per minute *)
+VAR_IN_OUT
+    Stats : PumpStats;
 END_VAR
 VAR
-    prev   : REAL;
-    primed : BOOL;
+    edgeUp   : R_TRIG;
+    edgeDown : F_TRIG;
+    runSec   : REAL;
 END_VAR
-IF NOT primed THEN
-    prev := IN;
-    primed := TRUE;
+edgeUp(CLK := Running);
+edgeDown(CLK := Running);
+IF edgeUp.Q THEN
+    Stats.Starts := Stats.Starts + 1;
+    runSec := 0.0;
 END_IF;
-IF DT > 0.0 THEN
-    OUT := (IN - prev) / DT * 60.0;
+IF Running THEN
+    Stats.Hours := Stats.Hours + Dt / 3600.0;
+    runSec := runSec + Dt;
 END_IF;
-prev := IN;
+IF edgeDown.Q THEN
+    Stats.LastRunSec := runSec;
+END_IF;
 END_FUNCTION_BLOCK
 ```
+
+That is `examples/lift-station/lib/pump.st`'s `RuntimeMeter`, complete —
+called once per pump from `stats.st` (`RuntimeMeter(Running := P101_Running,
+Dt := StatsDtS, Stats := P101_Stats)`), each call's `Stats` a `VAR_EXTERNAL`
+UDT tag round-tripped whole through the `VAR_IN_OUT` pin.
 
 A `.st` file with no `PROGRAM` keyword is a library: `TYPE`, `FUNCTION`, and
 `FUNCTION_BLOCK` declarations, in scope for every program in the same

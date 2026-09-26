@@ -24,83 +24,135 @@ operations the process engineer wrote down. Continuous control belongs in
 
 ## A chart, in text
 
-`examples/tank-batch-sfc/program.sfc`, trimmed of commentary. It fills a
-tank, heats and mixes concurrently, drains, and counts the batch, with an
-abort path off `Fill`.
+`examples/batch-skid/phases.sfc`, trimmed of its CIP branch, its Hold/Resume
+detour through `Held`, and its comments. It picks a recipe, charges two
+dosing lines and runs the agitator simultaneously, converges once all three
+are done, heats and holds at temperature, and transfers — with an abort
+path off `Heat`.
 
 ```iecsfc
-PROGRAM TankBatch
+PROGRAM BatchSequence
 VAR_EXTERNAL
-    Level : REAL; TempC : REAL; Start : BOOL; Abort : BOOL;
-    FillSP : REAL; EmptySP : REAL; HeatSP : REAL;
-    FillValve : BOOL; DrainValve : BOOL; Heater : BOOL; Mixer : BOOL;
-    RunLamp : BOOL; AbortLamp : BOOL; BatchCount : INT;
+    RecipeSel  : INT;  Start : BOOL;  Abort : BOOL;
+    Active     : Recipe;  Batch : BatchStatus;
+    TT201_Temp : REAL;
+    XV201A_Cmd : BOOL;  XV201B_Cmd : BOOL;
+    AgitateReq : BOOL;  HeatingActive : BOOL;  TransferReq : BOOL;
+    IdleLamp   : BOOL;  AbortLamp : BOOL;  PhaseName : STRING;
+    DoseTimeoutA : BOOL;
 END_VAR
 VAR
-    mixT : TON;
+    recipes : RecipeTable;
+    holdTmr : TON;
 END_VAR
 SFC
 
   INITIAL_STEP Idle:
-    N  RunLamp;
+    N  IdleLamp;
     R  AbortLamp;              (* clear the latch on return to Idle *)
+    N  SetIdle;
   END_STEP
 
-  STEP Fill:
-    N  RunLamp;
-    N  FillValve;
+  STEP Prep:
+    P  LoadRecipe;              (* plain P — the same edge as P1 *)
+    N  SetPrep;
   END_STEP
+
+  STEP ChargeA:
+    N  XV201A_Cmd;
+    N  CheckDoseATimeout;       (* ACTION block, below *)
+    N  SetCharging;
+  END_STEP
+
+  STEP ChargeB:
+    N  XV201B_Cmd;
+    N  SetCharging;
+  END_STEP
+
+  STEP Agitate:
+    N  AgitateReq;
+    N  SetCharging;
+  END_STEP
+
+  STEP ChargeADone: END_STEP
+  STEP ChargeBDone: END_STEP
 
   STEP Heat:
-    N  RunLamp;
-    N  HeatCtrl;               (* ACTION block, below *)
+    N  HeatingActive;
+    N  AgitateReq;
+    N  SetHeat;
   END_STEP
 
-  STEP Mix:
-    N  RunLamp;
-    N  Stir;
+  STEP Hold:
+    N  HeatingActive;
+    N  HoldTmr;                 (* ACTION: holdTmr(IN := Hold.X, PT := ...) *)
+    N  SetHold;
   END_STEP
 
-  STEP Drain:
-    N   RunLamp;
-    N   DrainValve;
-    P1  CountBatch;            (* body runs once, on activation *)
+  STEP Transfer:
+    N  TransferReq;
+    N  SetTransfer;
   END_STEP
 
   STEP Aborted:
     S  AbortLamp;              (* latched until Idle resets it *)
+    N  SetAborted;
   END_STEP
 
-  TRANSITION t_start FROM Idle TO Fill := Start AND NOT Abort;
+  TRANSITION t_start FROM Idle TO Prep := Start AND RecipeValid(RecipeSel);
   END_TRANSITION
 
-  (* alternative divergence: abort is declared first, so it has priority *)
-  TRANSITION t_abort FROM Fill TO Aborted := Abort;
-  END_TRANSITION
-  TRANSITION t_full FROM Fill TO (Heat, Mix) := Level >= FillSP;
+  (* simultaneous divergence: charge both lines and agitate together *)
+  TRANSITION t_prep FROM Prep TO (ChargeA, ChargeB, Agitate) := TRUE;
   END_TRANSITION
 
-  (* simultaneous convergence: both sources must be active *)
-  TRANSITION t_done FROM (Heat, Mix) TO Drain := (TempC >= HeatSP) AND mixT.Q;
+  TRANSITION t_abort_a FROM ChargeA TO Aborted := Abort;
+  END_TRANSITION
+  TRANSITION t_a_done FROM ChargeA TO ChargeADone := Batch.ChargedA_L >= Active.AmountA_L;
+  END_TRANSITION
+  TRANSITION t_b_done FROM ChargeB TO ChargeBDone := Batch.ChargedB_L >= Active.AmountB_L;
   END_TRANSITION
 
-  TRANSITION t_empty  FROM Drain   TO Idle := Level <= EmptySP;
+  (* simultaneous convergence: fires only once all three branches are done *)
+  TRANSITION t_charged FROM (ChargeADone, ChargeBDone, Agitate) TO Heat := TRUE;
+  END_TRANSITION
+
+  (* alternative divergence: abort is declared first, so it has priority
+     over the normal Heat -> Hold progression *)
+  TRANSITION t_abort_heat FROM Heat TO Aborted := Abort;
+  END_TRANSITION
+  TRANSITION t_heat FROM Heat TO Hold := TT201_Temp >= Active.TempSP_C - 1.0;
+  END_TRANSITION
+
+  TRANSITION t_settled FROM Hold TO Transfer := holdTmr.Q;
+  END_TRANSITION
+
+  TRANSITION t_transferred FROM Transfer TO Idle := TRUE;
   END_TRANSITION
   TRANSITION t_resume FROM Aborted TO Idle := NOT Abort;
   END_TRANSITION
 
-  ACTION HeatCtrl:
-    Heater := Heat.X AND (TempC < HeatSP);
+  ACTION LoadRecipe:
+    recipes();                  (* first call loads the table; every call after is a no-op *)
+    Active := recipes.Recipes[RecipeSel];
+    Batch.Count := Batch.Count + 1;
   END_ACTION
 
-  ACTION Stir:
-    Mixer := Mix.X;
-    mixT(IN := Mix.X, PT := T#3S);
+  ACTION CheckDoseATimeout:
+    DoseTimeoutA := ChargeA.T >= T#5M;
   END_ACTION
 
-  ACTION CountBatch:
-    BatchCount := BatchCount + 1;
+  ACTION HoldTmr:
+    holdTmr(IN := Hold.X, PT := REAL_TO_TIME(Active.HoldSec * 1000.0));
   END_ACTION
+
+  ACTION SetIdle:     PhaseName := 'Idle';     END_ACTION
+  ACTION SetPrep:     PhaseName := 'Prep';     END_ACTION
+  ACTION SetCharging: PhaseName := 'Charge';   END_ACTION
+  ACTION SetHeat:     PhaseName := 'Heat';     END_ACTION
+  ACTION SetHold:     PhaseName := 'Hold';     END_ACTION
+  ACTION SetTransfer: PhaseName := 'Transfer'; END_ACTION
+  ACTION SetAborted:  PhaseName := 'Aborted';  END_ACTION
 
 END_SFC
 END_PROGRAM
@@ -109,10 +161,10 @@ END_PROGRAM
 | Element | Form | Notes |
 | --- | --- | --- |
 | Initial step | `INITIAL_STEP Idle: … END_STEP` | Exactly one per chart; active on the first scan |
-| Step | `STEP Fill: … END_STEP` | Owns a retained BOOL, `Fill.X`, and a `Fill.T` elapsed time |
+| Step | `STEP ChargeA: … END_STEP` | Owns a retained BOOL, `ChargeA.X`, and a `ChargeA.T` elapsed time |
 | Transition | `TRANSITION [name] FROM a TO b := <ST expr>; END_TRANSITION` | `FROM`/`TO` take one step or a parenthesised list; the name is optional |
-| Action block | `ACTION Stir: <ST statements> END_ACTION` | The body is Structured Text |
-| Association | `N FillValve;` | A qualifier plus either an `ACTION` name or a declared BOOL variable |
+| Action block | `ACTION LoadRecipe: <ST statements> END_ACTION` | The body is Structured Text |
+| Association | `N XV201A_Cmd;` | A qualifier plus either an `ACTION` name or a declared BOOL variable |
 
 ## How a chart executes
 
@@ -145,8 +197,9 @@ once, on the scan its step activates, which is the abort/reset pattern above.
 `P1` and `P` fire once on the rising edge, `P0` once on the falling edge.
 `N` and pulse associations targeting the same BOOL variable are OR-combined:
 the variable is held `TRUE` while any of them is active and written `FALSE`
-once, on the scan the last one drops, so `RunLamp` goes out when the chart
-reaches `Aborted`.
+once, on the scan the last one drops, so `HeatingActive` — `N`-qualified
+from both `Heat` and `Hold` above — only goes low the scan the chart leaves
+both of them, for `Transfer` or `Aborted`.
 
 An association writes its variable only on the scans it acts. A step that is
 not active never touches it, and between those scans the variable belongs to
@@ -160,8 +213,8 @@ the one scan of a pulse. The `ACTION` owns it the rest of the time, so an
 Action bodies are ST, and only ST. A body driven by a level qualifier runs
 one extra scan on the falling edge of its active signal, so a body written
 against step activity shuts its outputs down: on that final scan
-`Mixer := Mix.X` writes `FALSE` and `mixT(IN := Mix.X, …)` resets, clean for
-re-entry. A `P1` body has no final scan.
+`holdTmr(IN := Hold.X, …)` runs once more with `Hold.X` false, resetting the
+timer, clean for re-entry. A `P1` body has no final scan.
 
 `Step.T` compiles to a hidden `TON`, and only for steps whose `.T` is read.
 Both `.X` and `.T` are legal in conditions and action bodies.

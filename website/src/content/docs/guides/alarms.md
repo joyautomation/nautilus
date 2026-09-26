@@ -43,14 +43,21 @@ alarm-files:                         # generated sets, in their own artifact
   - alarms/rtu9.yaml
 ```
 
-`examples/alarms` is this, complete and runnable:
+`examples/lift-station` is this, complete and runnable — fourteen explicit
+`defs:`, no rule expansion needed at that size:
 
 ```sh
-naut check examples/alarms         # validate the rules, offline
-naut alarms list examples/alarms   # see what they expanded to
-naut test examples/alarms          # the acceptance suite
-naut run examples/alarms           # dashboard + /api/alarms
+naut check examples/lift-station         # validate the rules, offline
+naut alarms list examples/lift-station   # see what they expanded to
+naut test examples/lift-station          # the acceptance suite
+naut run examples/lift-station           # dashboard + /api/alarms
 ```
+
+`examples/remote-fleet/scada` is the `rules:` half of the same feature:
+**one** rule (`match: { type: Pump, member: Fault }`) expands across every
+pump on all three sites' shared `Pump` Template, with `enable:
+"{site}__Online"` suppressing a dark site's alarms instead of leaving them
+lit on their last-known reading.
 
 ## Rules versus definitions
 
@@ -311,7 +318,7 @@ tag and the conditions are its members.
 But the same engine runs on a single controller: point a definition at a
 BOOL your own ladder computes and it works on a one-box `driver: memory`
 project. That is the design's own smoke test, and it is what
-`examples/alarms` is.
+`examples/lift-station` is.
 
 Evaluation happens once per main scan, on the runtime's post-scan hook —
 inside the scan lock, after outputs are written, when the tag store is
