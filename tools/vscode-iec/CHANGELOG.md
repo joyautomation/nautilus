@@ -3,6 +3,34 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Mimic palette tiles show the whole component.** Each thumbnail used to
+  collapse to a sliver at the top of its tile (a Tank ~26 px wide in an
+  84 px box): the kit's `max-width: 100%` svgs sat in a shrink-to-fit
+  wrapper. Thumbnails now render at their real width and scale to fit the
+  tile, centered, so a tall Tank and a wide Gauge both fill it with the
+  label right under them; a custom component refits when it resizes. The
+  palette column also keeps its width when its scrollbar appears (arming
+  *+ Pipe* no longer nudges the canvas).
+- **A port-to-port pipe draws as an L, not a staircase.** The route
+  suggestion (the draw gesture and *Re-route*) took the first clear shape,
+  and for a pump outlet facing up into a tank nozzle facing left that was
+  the horizontal-first L — a turn straight off the pump and another at the
+  tank. It now takes the clear shape with the fewest bends, counting the
+  turns off and onto the ports, so the pipe continues out of the pump and
+  turns once.
+- **Dragging equipment no longer selects its caption.** Moving a pump
+  highlighted its "P-101" caption as selected text for the rest of the
+  drag; canvas text is no longer selectable (it's edited in the inspector).
+- **Bound labels show their live value in the mimic editor.** A label with
+  a `bind` rendered its text only, so "LT-101" sat still on an otherwise
+  live canvas. It now reads like the runtime `<Mimic>`'s readout — text,
+  the value to `decimals` places, the unit — whenever the tag resolves to a
+  number, and its text alone otherwise.
+
 ## [0.11.2] - 2026-09-25
 
 The dogfood release: everything found while building the new example plants
