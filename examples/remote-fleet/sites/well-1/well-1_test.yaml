@@ -1,0 +1,70 @@
+# Acceptance tests for well-1's local control — no broker, no toolchain,
+# virtual time.
+#
+#   naut test .       run them
+#   naut test -v .    with virtual elapsed time per test
+#
+# Every test but the closed-loop one suspends [sim] — driving WellLevel and
+# Pump1.Run directly is how an open-loop test gets an exact, repeatable
+# answer out of closed-loop control (same convention as
+# examples/lift-station's lift-station_test.yaml).
+tolerance: 0.5
+
+tests:
+  - name: the pump starts at PumpOnLevel and drops at PumpOffLevel
+    suspend: [sim]
+    given: { WellLevel: 20.0 }
+    steps:
+      - advance: 1s
+        expect: { Pump1_RunCmd: false }
+      - given: { WellLevel: 65.0 } # above PumpOnLevel (60)
+        advance: 1s
+        expect: { Pump1_RunCmd: true }
+      - given: { WellLevel: 40.0 } # between PumpOffLevel (30) and PumpOnLevel: stays running
+        advance: 1s
+        expect: { Pump1_RunCmd: true }
+      - given: { WellLevel: 25.0 } # below PumpOffLevel
+        advance: 1s
+        expect: { Pump1_RunCmd: false }
+
+  - name: the speed command follows Pump1.SpeedSP clamped to [MinSpeedHz, MaxSpeedHz]
+    suspend: [sim]
+    given: { WellLevel: 65.0, Pump1.SpeedSP: 45.0 }
+    steps:
+      - advance: 1s
+        expect: { Pump1_SpeedCmd: 45.0 }
+      - given: { Pump1.SpeedSP: 5.0 } # below MinSpeedHz (20)
+        advance: 1s
+        expect: { Pump1_SpeedCmd: 20.0 }
+      - given: { Pump1.SpeedSP: 90.0 } # above MaxSpeedHz (60)
+        advance: 1s
+        expect: { Pump1_SpeedCmd: 60.0 }
+      - given: { WellLevel: 10.0 } # the pump drops: no command regardless of setpoint
+        advance: 1s
+        expect: { Pump1_SpeedCmd: 0.0 }
+
+  - name: the run-hours meter counts a start and accumulates hours while running
+    suspend: [sim]
+    given: { WellLevel: 20.0, Pump1.Run: false }
+    steps:
+      - given: { Pump1.Run: true }
+        advance: 1s
+        expect: { PumpStarts: 1 }
+      - advance: 3600s
+        expect: { PumpHours: { near: 1.0, tol: 0.01 } }
+      - given: { Pump1.Run: false }
+        advance: 1s
+        expect: { PumpHours: { near: 1.0, tol: 0.01 } } # no off-delay to accumulate against
+      - given: { Pump1.Run: true } # a second start
+        advance: 1s
+        expect: { PumpStarts: 2 }
+
+  - name: closed loop rides out a storm inflow and settles once it passes
+    suspend: [] # override the file default: sim runs, closed loop
+    given: { WellLevel: 40.0, InflowLps: 8.0 } # a storm
+    steps:
+      - advance: 120s
+        expect: { WellLevel: { lt: 90.0 } }
+      - given: { InflowLps: 1.0 } # the storm passes: a quiet base flow
+        until: 300s
+        expect: { Pump1_RunCmd: false }

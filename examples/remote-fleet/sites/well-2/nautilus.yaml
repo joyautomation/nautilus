@@ -1,0 +1,57 @@
+# well-2 — the same pattern as ../well-1, deliberately not a shared
+# library: a second, standalone copy with different setpoints and well
+# geometry, publishing to the "Water" group as "Well2". Each site in this
+# fleet deploys alone. See ../../README.md for the fleet story.
+#
+#   naut check .    validate offline
+#   naut test  .    the acceptance suite (well-2_test.yaml), virtual time
+#   naut run   .    dashboard + tag API on http://localhost:8092
+name: well-2
+
+server:
+  addr: "localhost:8092"
+  online-edits: true
+
+tasks:
+  - program: well.st
+    scan: 250ms
+    dt-tag: WellDtS
+  - name: sim
+    program: sim.st
+    scan: 100ms
+    dt-tag: SimDtS
+
+tags:
+  - { name: WellLevel, role: state, init: 15.0, unit: "%", desc: "Well 2 wet-well level" }
+
+  - { name: Pump1, role: state, type: Pump, init: { Run: false, Fault: false, SpeedHz: 0.0, SpeedSP: 40.0 }, desc: "Well 2 pump" }
+
+  - { name: Pump1_RunCmd, role: output, init: false, desc: "Well 2 pump run command" }
+  - { name: Pump1_SpeedCmd, role: output, init: 0.0, unit: "Hz", desc: "Well 2 pump speed command" }
+
+  # A smaller, more sensitive well than well-1: narrower hysteresis band,
+  # a lower speed ceiling.
+  - { name: PumpOnLevel, role: setpoint, init: 70.0, unit: "%", desc: "Level to call the pump" }
+  - { name: PumpOffLevel, role: setpoint, init: 35.0, unit: "%", desc: "Level to drop the pump" }
+  - { name: MinSpeedHz, role: setpoint, init: 25.0, unit: "Hz", desc: "Pump minimum speed" }
+  - { name: MaxSpeedHz, role: setpoint, init: 55.0, unit: "Hz", desc: "Pump maximum speed" }
+
+  - { name: PumpStarts, role: state, init: 0, desc: "Pump 2 start count" }
+  - { name: PumpHours, role: state, init: 0.0, unit: "h", desc: "Pump 2 run hours" }
+
+  - { name: InflowLps, role: setpoint, init: 2.0, unit: "L/s", desc: "Bench only: base inflow to the well" }
+
+driver:
+  type: memory
+
+sparkplug:
+  broker: "tcp://127.0.0.1:1883"   # temporary local broker — see ../../README.md
+  group-id: Water
+  edge-node: Well2
+  bdseq-file: .bdseq
+  store-forward: 2000
+  default-class: { deadband: 0.1, max-interval: 30s }
+  classes:
+    fast: { deadband: 0.0, max-interval: 5s }
+  metric-classes:
+    fast: ["WellLevel"]

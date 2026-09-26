@@ -1,0 +1,29 @@
+PROGRAM Overview
+(* Demand-based well dispatch, by the distribution tank's level: Well1 is
+   the fixed lead — called whenever the tank is below TankHighSP — and
+   Well2 is the fixed backup, joining only once the tank drops further,
+   below TankLowSP. Well1Called/Well2Called are informational (an
+   overview mimic or the dashboard reads them) — they do NOT drive
+   Well1_Pump1_SpeedSP/Well2_Pump1_SpeedSp directly: those generated NCMD
+   tags are the operator's own write path (fleet's story beat 4), and a
+   second writer racing it every scan would just fight the operator's own
+   write on the very next tick. Both flags read false once their well is
+   dark — a site that can't be reached can't meaningfully be "called". *)
+VAR_EXTERNAL
+    TankLevelPct  : LREAL;
+    TankHighSP    : LREAL;
+    TankLowSP     : LREAL;
+
+    Well1__Online : BOOL;
+    Well2__Online : BOOL;
+    Well1Called   : BOOL;
+    Well2Called   : BOOL;
+END_VAR
+FBD
+  belowHigh = LE(TankLevelPct, TankHighSP)
+  belowLow  = LE(TankLevelPct, TankLowSP)
+
+  Well1Called := AND(belowHigh, Well1__Online)
+  Well2Called := AND(belowLow, Well2__Online)
+END_FBD
+END_PROGRAM

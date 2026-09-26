@@ -1,0 +1,173 @@
+# Acceptance tests for the SCADA host — no broker, no toolchain, virtual
+# time. Every site's data tag and the analyser's tags are role: input, so
+# `given:` writes the driver's input image directly — exactly what a real
+# NBIRTH/NDATA/NDEATH (or a live Modbus poll) would leave behind, without
+# a broker or a device in sight.
+#
+# fleet.st reads every site's data tag unconditionally every scan (ST's
+# AND does not short-circuit), so every test seeds a full baseline before
+# its first scan — the "first birth" rule examples/sparkplug-host's
+# fleet_test.yaml documents.
+tolerance: 0.5
+
+tests:
+  - name: SitesOnline counts exactly the sites currently online
+    given: {
+      Well1_Pump1.Run: false, Well2_Pump1.Run: false,
+      Booster1_Pump1.Run: false, Booster1_Pump2.Run: false,
+      Booster1_plc1_FM1_FlowLps: 0.0, Booster1_TankLevel: 50.0, CL1_ResidualPpm: 0.5,
+    }
+    steps:
+      - given: { Well1__Online: true, Well2__Online: false, Booster1__Online: true, Booster1_plc1__Online: true }
+        scans: 1
+        expect: { SitesOnline: 2 }
+      - given: { Well2__Online: true }
+        scans: 1
+        expect: { SitesOnline: 3 }
+      - given: { Well1__Online: false, Well2__Online: false, Booster1__Online: false }
+        scans: 1
+        expect: { SitesOnline: 0 }
+
+  - name: AnyPumpRunning follows any site's pump, guarded on __Online
+    given: {
+      Well1__Online: true, Well2__Online: true, Booster1__Online: true, Booster1_plc1__Online: true,
+      Well1_Pump1.Run: false, Well2_Pump1.Run: false,
+      Booster1_Pump1.Run: false, Booster1_Pump2.Run: false,
+      Booster1_plc1_FM1_FlowLps: 0.0, Booster1_TankLevel: 50.0, CL1_ResidualPpm: 0.5,
+    }
+    steps:
+      - given: { Well1_Pump1.Run: true }
+        scans: 1
+        expect: { AnyPumpRunning: true }
+      - given: { Well1_Pump1.Run: false }
+        scans: 1
+        expect: { AnyPumpRunning: false }
+      - given: { Booster1_Pump2.Run: true }
+        scans: 1
+        expect: { AnyPumpRunning: true }
+      # Sparkplug keeps the last value through a death — a companion tag's
+      # data never resets on its own — so it is __Online that must gate
+      # it, not the value.
+      - given: { Well1__Online: false, Booster1__Online: false, Well1_Pump1.Run: true }
+        scans: 1
+        expect: { AnyPumpRunning: false }
+
+  - name: SystemDemandLps forwards the flow meter, guarded on the device's own __Online
+    given: {
+      Well1__Online: true, Well2__Online: true, Booster1__Online: true, Booster1_plc1__Online: true,
+      Well1_Pump1.Run: false, Well2_Pump1.Run: false,
+      Booster1_Pump1.Run: false, Booster1_Pump2.Run: false,
+      Booster1_TankLevel: 50.0, CL1_ResidualPpm: 0.5,
+    }
+    steps:
+      - given: { Booster1_plc1_FM1_FlowLps: 12.5 }
+        scans: 1
+        expect: { SystemDemandLps: 12.5 }
+      # A device attached to a node has its own __Online, distinct from
+      # the node's — the flow meter can go dark while Booster1 stays up.
+      - given: { Booster1_plc1__Online: false }
+        scans: 1
+        expect: { SystemDemandLps: 0.0 }
+
+  - name: the tank rollup reads 0 (not the last-known level) once Booster1 goes dark
+    given: {
+      Well1__Online: true, Well2__Online: true, Booster1__Online: true, Booster1_plc1__Online: true,
+      Well1_Pump1.Run: false, Well2_Pump1.Run: false,
+      Booster1_Pump1.Run: false, Booster1_Pump2.Run: false,
+      Booster1_plc1_FM1_FlowLps: 0.0, CL1_ResidualPpm: 0.5,
+    }
+    steps:
+      - given: { Booster1_TankLevel: 20.0 } # below TankLowSP (30)
+        scans: 1
+        expect: { TankLevelPct: 20.0, TankLowAlm: true }
+      - advance: 10.5s # the alarm's own 10 s on-delay
+        alarms: { active: ["TankLow"] }
+      - given: { Booster1__Online: false }
+        scans: 1
+        expect: { TankLevelPct: 0.0, TankLowAlm: true } # 0 < TankLowSP too — still low, honestly
+
+  - name: chlorine residual low, from the plant's own local Modbus device
+    given: {
+      Well1__Online: true, Well2__Online: true, Booster1__Online: true, Booster1_plc1__Online: true,
+      Well1_Pump1.Run: false, Well2_Pump1.Run: false,
+      Booster1_Pump1.Run: false, Booster1_Pump2.Run: false,
+      Booster1_plc1_FM1_FlowLps: 0.0, Booster1_TankLevel: 50.0, CL1_ResidualPpm: 0.5,
+    }
+    steps:
+      - given: { CL1_ResidualPpm: 0.1 } # below ResidualLowSP (0.2)
+        advance: 30.5s # the def's own on-delay
+        alarms: { active: ["ResidualLow"] }
+      - ack: { ids: ["ResidualLow"], by: test }
+        scans: 1
+        alarms: { state: { ResidualLow: ack-active } }
+      - given: { CL1_ResidualPpm: 0.5 }
+        advance: 1s
+        alarms: { active: [], state: { ResidualLow: normal } }
+
+  - name: overview.fbd flags which well(s) are called, by tank level, only while online
+    # Well1Called/Well2Called are informational — see overview.fbd's own
+    # header for why the dispatch does NOT also write
+    # Well1_Pump1_SpeedSP/Well2_Pump1_SpeedSp directly: those generated
+    # NCMD tags are the operator's own write path (the next test), and a
+    # program racing it every scan would just fight the operator's write
+    # on the very next tick.
+    given: {
+      Well1__Online: true, Well2__Online: true, Booster1__Online: true, Booster1_plc1__Online: true,
+      Well1_Pump1.Run: false, Well2_Pump1.Run: false,
+      Booster1_Pump1.Run: false, Booster1_Pump2.Run: false,
+      Booster1_plc1_FM1_FlowLps: 0.0, CL1_ResidualPpm: 0.5,
+    }
+    steps:
+      - given: { Booster1_TankLevel: 80.0 } # above TankHighSP (70): tank is full, nobody called
+        scans: 1
+        expect: { Well1Called: false, Well2Called: false }
+      - given: { Booster1_TankLevel: 50.0 } # between TankLowSP (30) and TankHighSP: lead only
+        scans: 1
+        expect: { Well1Called: true, Well2Called: false }
+      - given: { Booster1_TankLevel: 20.0 } # below TankLowSP: both called
+        scans: 1
+        expect: { Well1Called: true, Well2Called: true }
+      # A dark well can't meaningfully be "called" — it reads false
+      # regardless of the tank, same online-guard rule as every other
+      # fleet value in this project.
+      - given: { Well2__Online: false }
+        scans: 1
+        expect: { Well2Called: false }
+
+  - name: an operator's write to a generated NCMD tag holds until the operator changes it again
+    # The write path itself: Well1_Pump1_SpeedSP (from scada/sites.yaml's
+    # `writable: [SpeedSP]` on the Pump1 metric) is a plain output tag —
+    # nothing in this project writes it automatically, so a write (an
+    # operator's POST /api/tags live, or `given:` here, in virtual time)
+    # sticks exactly where it's put, scan after scan, until written again.
+    given: {
+      Well1__Online: true, Well2__Online: true, Booster1__Online: true, Booster1_plc1__Online: true,
+      Well1_Pump1.Run: false, Well2_Pump1.Run: false,
+      Booster1_Pump1.Run: false, Booster1_Pump2.Run: false,
+      Booster1_plc1_FM1_FlowLps: 0.0, Booster1_TankLevel: 50.0, CL1_ResidualPpm: 0.5,
+    }
+    steps:
+      - given: { Well1_Pump1_SpeedSP: 50.0 }
+        advance: 5s
+        expect: { Well1_Pump1_SpeedSP: 50.0 }
+      - given: { Well1_Pump1_SpeedSP: 30.0 }
+        advance: 5s
+        expect: { Well1_Pump1_SpeedSP: 30.0 }
+
+  - name: a dark site suppresses its own pump-fault alarm instead of leaving it active
+    given: {
+      Well1__Online: true, Well2__Online: true, Booster1__Online: true, Booster1_plc1__Online: true,
+      Well1_Pump1.Run: false, Well1_Pump1.Fault: false,
+      Well2_Pump1.Run: false, Booster1_Pump1.Run: false, Booster1_Pump2.Run: false,
+      Booster1_plc1_FM1_FlowLps: 0.0, Booster1_TankLevel: 50.0, CL1_ResidualPpm: 0.5,
+    }
+    steps:
+      - given: { Well1_Pump1.Fault: true }
+        advance: 1.5s # the rule's own 1 s on-delay
+        alarms: { active: ["Well1_Pump1.Fault"] }
+      - given: { Well1__Online: false }
+        scans: 1
+        alarms: { active: [], state: { Well1_Pump1.Fault: suppressed } }
+      - given: { Well1__Online: true } # back online: the on-delay re-arms, then the fault (still latched true) resumes
+        advance: 1.5s
+        alarms: { active: ["Well1_Pump1.Fault"] }
