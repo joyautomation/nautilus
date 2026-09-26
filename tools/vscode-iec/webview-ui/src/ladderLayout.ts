@@ -85,6 +85,22 @@ const textW = (s: string, px: number) => s.length * px * 0.62;
 /** Longest FB args line drawn in the box (the box grows to fit up to this). */
 export const FB_ARGS_MAX = 40;
 
+/** Longest operand label a contact/coil box sizes itself to fit — beyond
+ * this, LadderView.svelte's `trunc()` still shows a middle-ellipsis and the
+ * full name in a `<title>` tooltip, but the box itself stops growing (an
+ * ISA-style tag like `P101_Permissive` fits readably; a much longer one
+ * doesn't blow the rung layout up further). */
+export const OPERAND_LABEL_MAX = 20;
+
+/** A contact/coil box's width: fixed `min` (the symbol needs at least this
+ * much), grown to fit its operand label up to OPERAND_LABEL_MAX chars so an
+ * ISA-style tag (`P101_Permissive`) isn't crushed under a box the label is
+ * wider than. */
+function operandBoxWidth(ref: string | undefined, min: number): number {
+	const s = (ref ?? '').slice(0, OPERAND_LABEL_MAX);
+	return Math.max(min, Math.ceil(textW(s, 10)) + 8);
+}
+
 /** Split a call's argument list on its top-level commas (a nested call's
  * or a string literal's commas stay put). */
 export function splitArgs(args: string): string[] {
@@ -185,10 +201,11 @@ export function layoutSeries(anns: Ann[], x: number, cy: number, path: number[] 
 		const elPath = [...path, i];
 		switch (a.el.kind) {
 			case 'contact': {
+				const w = operandBoxWidth(a.el.ref, L.CONTACT_W);
 				const y = cy - halfC;
-				nodes.push({ kind: 'contact', x: cursor, y, w: L.CONTACT_W, h: L.CONTACT_H, ann: a, path: elPath });
+				nodes.push({ kind: 'contact', x: cursor, y, w, h: L.CONTACT_H, ann: a, path: elPath });
 				descent = reserveWasLabel(a, cy, y, L.CONTACT_H, descent);
-				cursor += L.CONTACT_W;
+				cursor += w;
 				break;
 			}
 			case 'fn': {
@@ -263,9 +280,10 @@ export function layoutSeries(anns: Ann[], x: number, cy: number, path: number[] 
 }
 
 /** Measure a rung's natural width (logic + coil zone) for the canvas pass. */
-export function rungMinWidth(elems: Ann[], coilCount: number): number {
+export function rungMinWidth(elems: Ann[], coils: Ann[]): number {
 	const probe = layoutSeries(elems, 0, 0);
-	const coilsW = coilCount * L.COIL_W + Math.max(0, coilCount - 1) * L.WIRE_GAP;
+	const coilsW =
+		coils.reduce((sum, c) => sum + operandBoxWidth(c.el.ref, L.COIL_W), 0) + Math.max(0, coils.length - 1) * L.WIRE_GAP;
 	return L.RAIL_LEFT + probe.width + L.WIRE_GAP + coilsW + L.RAIL_RIGHT_MARGIN;
 }
 
@@ -289,7 +307,8 @@ export function layoutRung(elems: Ann[], coils: Ann[], width: number): RungLayou
 	spots.push({ x: (L.RAIL_X + L.RAIL_LEFT) / 2, y: wireY, op: 'insert', series: [], index: 0 });
 
 	const outPower = elems.length ? elems[elems.length - 1].out : (coils[0]?.in ?? undefined);
-	const coilsW = coils.length * L.COIL_W + Math.max(0, coils.length - 1) * L.WIRE_GAP;
+	const coilWidths = coils.map((c) => operandBoxWidth(c.el.ref, L.COIL_W));
+	const coilsW = coilWidths.reduce((sum, w) => sum + w, 0) + Math.max(0, coils.length - 1) * L.WIRE_GAP;
 	const coilsX = Math.max(width - L.RAIL_RIGHT_MARGIN - coilsW, L.RAIL_LEFT + r.width + L.WIRE_GAP);
 
 	// The stretch wire from the logic to the coil zone.
@@ -301,10 +320,11 @@ export function layoutRung(elems: Ann[], coils: Ann[], width: number): RungLayou
 			wires.push({ x1: cx, y1: wireY, x2: cx + L.WIRE_GAP, y2: wireY, on: outPower });
 			cx += L.WIRE_GAP;
 		}
+		const w = coilWidths[i];
 		const coilY = wireY - L.COIL_H / 2;
-		nodes.push({ kind: 'coil', x: cx, y: coilY, w: L.COIL_W, h: L.COIL_H, ann: c, coil: i });
+		nodes.push({ kind: 'coil', x: cx, y: coilY, w, h: L.COIL_H, ann: c, coil: i });
 		descent = reserveWasLabel(c, wireY, coilY, L.COIL_H, descent);
-		cx += L.COIL_W;
+		cx += w;
 	});
 	// Coil zone to the right rail, with the add-coil spot on it.
 	wires.push({ x1: cx, y1: wireY, x2: width - L.RAIL_X, y2: wireY, on: outPower });

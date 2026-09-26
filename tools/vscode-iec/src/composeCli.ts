@@ -125,3 +125,28 @@ export function reuseComposition(
   if (!cached || cached.key !== key) return false;
   return !cached.failed || now - cached.at < COMPOSE_ERROR_TTL_MS;
 }
+
+// ── resolving Download/Pull's target when the active file is a library ──
+//
+// A library (a PROGRAM-less .st/.ld/.fbd file) has no program of its own to
+// route by, but naut compose <program> already knows which program(s)
+// instantiate its blocks — onlineEdit.ts asks the same question by reading
+// the library's declared names and text-searching each program's own body,
+// rather than refusing outright the way it used to (see PENDING.md finding
+// "Download from a library file").
+
+/** Every `FUNCTION_BLOCK`/`FUNCTION` name a library declares — the
+ * candidates a consuming program's own source might instantiate or call. */
+export function declaredBlockNames(librarySource: string): string[] {
+  const names = new Set<string>();
+  for (const m of librarySource.matchAll(/\b(?:FUNCTION_BLOCK|FUNCTION)\s+([A-Za-z_][A-Za-z0-9_]*)/g)) {
+    names.add(m[1]);
+  }
+  return [...names];
+}
+
+/** Does `programBody` reference any of `blockNames` (a whole-word match —
+ * "roc2 : RateOfChange(...)", "MotorStarter(...)", ...)? */
+export function referencesAnyBlock(programBody: string, blockNames: string[]): boolean {
+  return blockNames.some((n) => new RegExp(`\\b${n}\\b`).test(programBody));
+}

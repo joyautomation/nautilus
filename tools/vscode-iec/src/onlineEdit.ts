@@ -32,6 +32,7 @@ import {
   rollbackConfirmMessage,
   splitProgram,
 } from "./programSync";
+import { declaredBlockNames, referencesAnyBlock } from "./composeCli";
 
 /** One entry in the GET /api/program directory — every program in the
  * resource, source omitted. */
@@ -94,6 +95,21 @@ function iecSurfaceVisible(): boolean {
 function under(p: string, dir: string): boolean {
   const norm = (x: string) => (process.platform === "win32" ? x.toLowerCase() : x);
   return norm(p).startsWith(norm(dir) + "/");
+}
+
+/** A file's CURRENT text: the open buffer's (unsaved edits included) when
+ * VS Code has it open, the disk copy otherwise — same pattern as
+ * mimicComponents.ts's readText, needed here to read a library's own source
+ * (naut compose --json's prelude is every library joined, not this one
+ * alone) when resolving Download/Rollback from a library file. */
+async function readCurrentText(uri: vscode.Uri): Promise<string> {
+  const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+  if (open) return open.getText();
+  try {
+    return new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+  } catch {
+    return "";
+  }
 }
 
 /** How the workspace relates to the running controller — broadcast to the
@@ -296,14 +312,38 @@ export class OnlineEdit implements vscode.Disposable {
     let program = ws.programs[0];
     if (ws.programs.length > 1) {
       const match = ws.programs.find((p) => p.file === ws.activeFile);
-      if (!match) {
-        if (!quiet)
-          void vscode.window.showErrorMessage(
-            `nautilus: multiple program files (${ws.programs.map((p) => p.file).join(", ")}) — open the one to ${action}`
+      if (match) {
+        program = match;
+      } else {
+        // The active file may be a LIBRARY (motor.ld, blocks.st, ...) — no
+        // program of its own to route by, but not necessarily ambiguous
+        // either: whichever program(s) actually instantiate one of its
+        // FUNCTION_BLOCKs is the real target, the same way `naut compose
+        // <program>` already resolves it (naut compose <library> itself
+        // refuses, same as here). Only a library with more than one
+        // consumer — or none at all — still needs a human choice/refusal.
+        const library = ws.libraries.find((l) => l.file === ws.activeFile);
+        const names = library ? declaredBlockNames(await readCurrentText(library.uri)) : [];
+        const consumers = names.length ? ws.programs.filter((p) => referencesAnyBlock(p.body, names)) : [];
+        if (consumers.length === 1) {
+          program = consumers[0];
+        } else if (consumers.length > 1) {
+          const pick = await vscode.window.showQuickPick(
+            consumers.map((p) => ({ label: p.file, description: p.pou, program: p })),
+            { title: `nautilus: choose the program to ${action} (${ws.activeFile} is a shared library)` }
           );
-        return undefined;
+          if (!pick) return undefined;
+          program = pick.program;
+        } else {
+          if (!quiet)
+            void vscode.window.showErrorMessage(
+              library
+                ? `nautilus: no program in this workspace instantiates a block from ${ws.activeFile} — open the one to ${action}`
+                : `nautilus: multiple program files (${ws.programs.map((p) => p.file).join(", ")}) — open the one to ${action}`
+            );
+          return undefined;
+        }
       }
-      program = match;
     }
     return {
       source: ws.prelude + program.body,
