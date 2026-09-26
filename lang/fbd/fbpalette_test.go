@@ -106,15 +106,38 @@ func TestInsertPIDAllPinsOpen(t *testing.T) {
 	if len(lic.Inputs) != 13 || len(lic.Outputs) != 7 {
 		t.Errorf("lic pins = %v / %v", lic.Inputs, lic.Outputs)
 	}
-	// Every input is an open pin: an edge from the `_` chip.
-	open := 0
+	// Every input is an open pin, each fed by its OWN `_` chip (one chip
+	// per hole, drawn beside its pin — not one chip fanning out to all).
+	chips := map[string]int{}
 	for _, e := range m.Edges {
-		if e.To == "f:lic" && e.From == "v:_" {
-			open++
+		if e.To == "f:lic" && (e.From == "v:_" || strings.HasPrefix(e.From, "v:_#")) {
+			chips[e.From]++
 		}
 	}
-	if open != 13 {
-		t.Errorf("want 13 open pins, got %d", open)
+	if len(chips) != 13 {
+		t.Errorf("want 13 open-pin chips, got %d: %v", len(chips), chips)
+	}
+	for id, n := range chips {
+		if n != 1 {
+			t.Errorf("chip %s feeds %d pins, want 1", id, n)
+		}
+	}
+	placeholders := 0
+	for _, n := range m.Nodes {
+		if n.Label == "_" {
+			placeholders++
+		}
+	}
+	if placeholders != 13 {
+		t.Errorf("want 13 `_` nodes, got %d", placeholders)
+	}
+	// Retargeting one open pin fills that pin alone.
+	edits, err := ApplyEdit(out, EditOp{Type: "retarget", Node: "v:_#2", NewName: "LevelPV"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := apply(t, out, edits); !strings.Contains(got, "lic : PID(AUTO := _, PV := LevelPV, SP := _, KP := _,") {
+		t.Errorf("retarget v:_#2 must fill PV only:\n%s", got)
 	}
 	// It transpiles; the compiler names what is left — the placeholders.
 	if _, err := Transpile(out); err != nil {

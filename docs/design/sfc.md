@@ -355,6 +355,7 @@ Addressed by render-model ids, resolved against a fresh parse in Go, returning m
 | `setActionBody` | replace an `ACTION` block body |
 | `insertAlternativeBranch` | add a second `TRANSITION FROM <same source>` (priority = insertion order) |
 | `insertSimultaneousBranch` | turn a `TO x` into `TO (x, y)` and add step `y` |
+| `joinSimultaneousBranch` | turn a `FROM x` into `FROM (x, y)` for an existing step `y` — a simultaneous convergence (Check, not the op, verifies the sources share a divergence) |
 | `setLayout` / `clearLayout` | reuse FBD's layout ops verbatim |
 | `setComment` | reuse FBD's comment op verbatim |
 

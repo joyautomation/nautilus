@@ -53,6 +53,13 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   an FB's header (instance name or type) renames the instance — its
   declaration and every `inst.pin` read in the file, as one edit — the way
   ladder's does; the body still opens the instance inspector.
+- **SFC "+ join" makes a simultaneous convergence.** With a transition
+  selected, *+ join* adds another step to its `FROM` — `FROM PostRun TO
+  Idle` becomes `FROM (PostRun, Alternate) TO Idle`, which fires once every
+  source is active — the mirror of *+ parallel branch*, which widens `TO`.
+  The picker lists the steps not already sources. Whether the joined steps
+  are legs of one divergence stays a `naut check` warning, not a refusal.
+  New `naut sfc edit` op: `joinSimultaneousBranch`.
 
 ### Changed
 
@@ -82,6 +89,21 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- **Delete a rung's last coil when the rung calls a block.** A rung that
+  ends in a function block call is valid with no coil (the block is what it
+  drives), so deleting its only coil — the `( _ )` a placed block arrives
+  with, or a real one — removes it instead of refusing with "a rung needs a
+  coil". A rung of bare contacts still turns its last coil into `( _ )`,
+  and deleting that says to add a coil or a block, or delete the rung.
+- **One `_` chip per open FBD pin.** A block placed with open inputs (*+ add
+  → function block*, PID's thirteen) drew every `_` from one shared chip;
+  each open pin now has its own chip beside it, and retagging one fills
+  that pin alone (it rewrote every pin the shared chip fed). The text is unchanged.
+- **`naut check` on an empty `.ld` speaks ladder.** It reported the FBD
+  hop's "source must contain an FBD ... END_FBD body"; it now says
+  `ld: empty file — a ladder source must contain an LD ... END_LD body`
+  (or, for a file with no `LD` block, `ld: source must contain an LD ...
+  END_LD body`), after the file's name. From the next naut release.
 - **A ladder rung's `(* … *)` header comment can span more than one line.**
   A single-line block comment right after `RUNG <name>` always worked; one
   wrapped onto a second (or third) line hit a hard parse error instead — the

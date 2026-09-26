@@ -636,13 +636,16 @@ func opDelete(r *Rung, op EditOp) error {
 		if *op.Coil < 0 || *op.Coil >= len(r.Coils) {
 			return fmt.Errorf("ld edit: coil %d out of range", *op.Coil)
 		}
-		if len(r.Coils) == 1 {
-			// The grammar needs one coil per rung, but a delete gesture must
-			// never dead-end (the never-block philosophy): the last coil
-			// becomes the `_` placeholder, and the diagnostic on `_` guides.
+		if len(r.Coils) == 1 && !elementsHaveFB(r.Elements) {
+			// A rung of bare contacts needs a coil to drive, but a delete
+			// gesture must never dead-end (the never-block philosophy): the
+			// last coil becomes the `_` placeholder, and the diagnostic on
+			// `_` guides. A rung with a function block anywhere skips this —
+			// the block is what the rung drives (docs/functions.md), so the
+			// coil simply goes.
 			c := &r.Coils[0]
 			if c.Ref == "_" && c.Mode == "" {
-				return fmt.Errorf("ld edit: a rung needs a coil — delete the rung itself to remove it")
+				return fmt.Errorf("ld edit: a rung of contacts needs a coil or a function block to drive — add one, or delete the rung itself")
 			}
 			c.Ref, c.Mode = "_", ""
 			return nil
@@ -663,6 +666,23 @@ func opDelete(r *Rung, op EditOp) error {
 	}
 	*series = append((*series)[:i], (*series)[i+1:]...)
 	return nil
+}
+
+// elementsHaveFB reports whether a rung's condition holds a function block
+// call anywhere, branch legs included — the parser's rule for a rung that
+// may end without a coil (hasFB in ld.go, on the edit model).
+func elementsHaveFB(es []Element) bool {
+	for i := range es {
+		if es[i].Kind == "fb" {
+			return true
+		}
+		for _, leg := range es[i].Legs {
+			if elementsHaveFB(leg) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func opAddRung(src string, m *Model, op EditOp) ([]TextEdit, error) {

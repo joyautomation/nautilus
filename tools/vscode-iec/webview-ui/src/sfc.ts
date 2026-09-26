@@ -530,6 +530,19 @@ export function connectHandlePos(p: PlacedStep): { x: number; y: number } {
 	return { x: p.x + p.w / 2, y: p.y + p.h };
 }
 
+// ── simultaneous convergence ("+ join") ─────────────────────────────────
+
+/** Steps "+ join" can add to a transition's FROM set (joinSimultaneousBranch):
+ * every step not already one of its sources, in chart order. Whether the
+ * sources then share a simultaneous divergence is `naut sfc check`'s call,
+ * not the picker's — a chart is often wired one leg at a time. */
+export function joinCandidates(model: SfcModel, transId: string | undefined): SfcStep[] {
+	const t = (model.trans ?? []).find((x) => x.id === transId);
+	if (!t) return [];
+	const from = new Set(t.from.map((n) => n.toLowerCase()));
+	return (model.steps ?? []).filter((s) => !from.has(s.name.toLowerCase()));
+}
+
 // ── delete-step cascade ──────────────────────────────────────────────────
 
 /** Transitions "attached" to a step: its name appears (case-insensitive) in
