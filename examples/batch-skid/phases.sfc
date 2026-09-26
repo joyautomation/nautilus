@@ -93,7 +93,8 @@ SFC
   END_STEP
 
   STEP Cip:
-    N  CipCtl;        (* ACTION: flush water via XV201A, run cipTmr *)
+    N  XV201A_Cmd;    (* flush water via XV201A — the same bare N as ChargeA's, OR-combined *)
+    N  CipCtl;        (* ACTION: run cipTmr only, see below *)
     N  SetCip;
   END_STEP
 
@@ -103,7 +104,7 @@ SFC
 
   STEP Aborted:
     S  AbortLamp;
-    P1 StopAgitator; (* NOT a bare `R AG201_Cmd`: see the ACTION below *)
+    R  AG201_Cmd;
     P1 LogAbort;
     N  SetAborted;
   END_STEP
@@ -130,17 +131,17 @@ SFC
   TRANSITION t_b_done FROM ChargeB TO ChargeBDone := Batch.ChargedB_L >= Active.AmountB_L;
   END_TRANSITION
 
-  (* No abort transition out of ChargeADone/ChargeBDone: each shares a
-     source with t_charged (the convergence below) AND with Agitate's own
-     abort transition below, and adding both produced a three-way
-     non-transitive alternative-priority group naut check warns about
-     (see docs/design/examples-dogfood.md) that deadlocked the
-     convergence — it never fired, even with Abort permanently FALSE.
-     Agitate keeps a single abort transition (declared first, so it has
-     priority over t_charged, a plain two-way alternative with no
-     ambiguity); an abort from ChargeADone/ChargeBDone specifically —
-     after one line finishes, before the other and the agitator settle —
-     is not one of the acceptance suite's abort points. *)
+  (* Abort out of every branch of the simultaneous charge/agitate, each
+     declared ahead of t_charged (the convergence they share sources
+     with) so abort has priority — a non-transitive three-way overlap
+     (t_charged shares ChargeADone with one, ChargeBDone with another,
+     Agitate with the third, but no two of the three share a source with
+     each other) that naut check once warned was ambiguous. It isn't:
+     see docs/design/examples-dogfood.md for the corrected finding. *)
+  TRANSITION t_abort_adone FROM ChargeADone TO Aborted := Abort;
+  END_TRANSITION
+  TRANSITION t_abort_bdone FROM ChargeBDone TO Aborted := Abort;
+  END_TRANSITION
   TRANSITION t_abort_agitate FROM Agitate TO Aborted := Abort;
   END_TRANSITION
 
@@ -197,22 +198,21 @@ SFC
     DoseTimeoutB := ChargeB.T >= T#5M;
   END_ACTION
 
+  (* AG201_Cmd is driven two ways: this ACTION's conditional set (an
+     unconditional S can't express "only for recipes that agitate") and
+     Aborted's bare `R AG201_Cmd` above. naut check warns about exactly
+     this pair — a variable targeted by both a qualifier association and
+     an ACTION body — and the warning is accepted here rather than
+     designed around: moving the Active.Agitate check onto a transition
+     would mean splitting the simultaneous divergence's Agitate branch
+     into two conditional paths for no behavioral gain, since the
+     documented rule (§2.5) already makes the two writers' precedence
+     exact — R wins on Aborted's one activation scan, the ACTION's writes
+     stand otherwise. See docs/design/examples-dogfood.md. *)
   ACTION SetAgitate:
     IF Active.Agitate THEN
         AG201_Cmd := TRUE;
     END_IF;
-  END_ACTION
-
-  (* A bare `R AG201_Cmd` here reproduces a compiler bug: once ANY bare
-     S/N/R qualifier association targets a variable ANYWHERE in the
-     chart, every OTHER write to that same variable from an ACTION
-     block (SetAgitate's conditional set, above) is silently discarded
-     on the very next scan — even from a step (Aborted) that has never
-     been active. Minimal repro and the isolation that found this fix
-     (an ACTION-block write on both ends avoids it) are in
-     docs/design/examples-dogfood.md. *)
-  ACTION StopAgitator:
-    AG201_Cmd := FALSE;
   END_ACTION
 
   ACTION HoldTmr:
@@ -220,7 +220,6 @@ SFC
   END_ACTION
 
   ACTION CipCtl:
-    XV201A_Cmd := Cip.X;
     cipTmr(IN := Cip.X, PT := T#30S);
   END_ACTION
 

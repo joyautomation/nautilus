@@ -160,6 +160,26 @@ tests:
         advance: 2s
         always: { AG201_Cmd: false }
 
+  - name: recipe 1 keeps the agitator on through Heat, and Abort clears it
+    suspend: [sim]
+    given: { RecipeSel: 1 } # A-STD — Agitate is TRUE
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        scans: 1 # Prep's simultaneous divergence into ChargeA/ChargeB/Agitate
+        expect: { AG201_Cmd: true } # SetAgitate's one-scan pulse, Active.Agitate TRUE
+      - advance: 2s
+        always: { AG201_Cmd: true } # stays commanded while Agitate waits on the charges
+      - given: { Batch.ChargedA_L: 25.0, Batch.ChargedB_L: 25.0 }
+        scans: 2 # both charges done, then the convergence into Heat
+        expect: { PhaseName: "Heat", AG201_Cmd: true }
+      - advance: 2s
+        always: { AG201_Cmd: true } # no step re-asserts it in Heat — it's just never cleared
+      - given: { Abort: true }
+        scans: 1
+        expect: { PhaseName: "Aborted", AG201_Cmd: false } # bare R AG201_Cmd, on Aborted's activation
+
   - name: RecipeValid(0) blocks Start
     suspend: [sim]
     given: { RecipeSel: 0, Start: true }

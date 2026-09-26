@@ -427,50 +427,85 @@ qualifier and an ACTION body — undefined which wins") since this is
 exactly the kind of thing that looks fine in every test and is wrong on
 the running plant.
 
-**2026-09-25 · a three-way non-transitive alternative-priority group
-(an abort out of every simultaneous branch plus their shared
-convergence) deadlocks the convergence permanently · BUG, worked
-around**
+**Status: fixed on `main` by PR #54.** Associations now write their
+target only on the scans they act (every scan an `N`/pulse step is
+active, plus the one scan it drops; once, on an `S`/`R` step's own
+activation), after the ACTION bodies run — so the association wins while
+it acts and the ACTION owns the variable otherwise, and `naut check` now
+warns whenever a variable is targeted both ways, naming the step,
+qualifier and ACTION(s) so the precedence is visible rather than
+inferred. Reverted the workaround: `Aborted` is back to a bare `R
+AG201_Cmd` (the design's own literal spelling), `SetAgitate`'s ACTION is
+unchanged, and `naut check` shows exactly the one expected warning —
+accepted rather than designed around, since avoiding it would mean
+splitting the simultaneous divergence's `Agitate` branch into two
+conditional paths for no behavioral gain now that the precedence is
+exact. `naut test` — still 10/10 with no changes needed.
+
+**2026-09-25 · what looked like a permanent three-way convergence
+deadlock was a test-authoring bug, not the platform — plus one real,
+narrower scheduling flaw PR #54 found and fixed while checking ·
+CORRECTED (see the original, wrong write-up this replaces, below)**
 
 First cut of the simultaneous charge/agitate branch gave every one of
 its three steps (`ChargeADone`, `ChargeBDone`, `Agitate`) its own abort
 transition to `Aborted`, alongside the simultaneous convergence
 `(ChargeADone, ChargeBDone, Agitate) -> Heat`. `naut check` passed with
-one **warning** ("ambiguous alternative-priority group (non-transitive
-shared-source overlap) ... priority is resolved pairwise ... consider
-reordering or restructuring") naming exactly those four transitions.
-Expected — per `docs/design/sfc.md` §2.3's own stated algorithm, which
-guards on `enabled` (all sources active) rather than the raw condition
-specifically so a suppressed lower-priority branch can never deadlock a
-convergence — the convergence to fire normally once both charges
-finished, `Abort` FALSE throughout. What happened: it never fired, for
-any number of additional scans (checked up to 4 beyond what timing alone
-would need) — the chart got permanently stuck with `ChargeADone`,
-`ChargeBDone`, and `Agitate` all active and `Heat` never reached, purely
-from `Abort` sitting at `FALSE` the whole time. This is the "genuinely
-ambiguous three-way overlap" the warning's own text hedges about, and
-the implementation's pairwise resolution does not appear to handle it
-correctly when 3+ transitions overlap non-transitively (`t_charged`
-shares `ChargeADone` with one abort transition, `ChargeBDone` with a
-second, `Agitate` with a third, but no two of the three abort
-transitions share a source with each other). Not chased into `lang/sfc`
-in the time available. Worked around by dropping the abort transitions
-on `ChargeADone` and `ChargeBDone` specifically (keeping one on
-`Agitate`, which by itself is an ordinary two-transition alternative
-group with `t_charged` — no ambiguity, no warning, and it resolves
-correctly): an abort still works everywhere the acceptance suite tests
-it (mid-charge, `Heat`, `Hold`, `Held`), just not in the brief window
-after one dosing line finishes and before the other/the agitator settle.
-Restructuring so the group is transitive (one shared "any-branch-abort"
-tag feeding a single 3-way convergence to `Aborted`, matching
-`t_charged`'s own shape) is a reasonable follow-up; not done here since
-it changes the abort's granularity (all-or-nothing across the three
-branches rather than per-branch) and the acceptance suite doesn't need
-it. Either way: **this warning should not be "just" a warning** — a
-chart that trips it can be silently, permanently wrong at runtime with
-zero errors and zero test failures pointing at the cause (the acceptance
-test that would have caught it needed the exact "abort during the
-one-line-already-done window" scenario nobody happened to write yet).
+a warning naming exactly those four transitions as a non-transitive
+alternative-priority group. Several acceptance tests then got stuck:
+`PhaseName` stayed `"Charge"` no matter how many additional scans a step
+budgeted, even with `Abort` FALSE throughout. **This write-up first
+concluded the convergence itself was deadlocked** — a real bug in the
+alternative-priority engine — and worked around it by dropping the abort
+transitions on `ChargeADone`/`ChargeBDone`, keeping only `Agitate`'s.
+That conclusion was wrong, and the fix was cosmetic: those tests set
+`Batch.ChargedA_L`/`ChargedB_L` (via `given:`) in the **same test step**
+as `Start: false` — the step whose one scan fires `Prep`'s own
+simultaneous divergence into `(ChargeA, ChargeB, Agitate)`. `Prep`'s `N
+ResetTotals` is still active during that scan (it self-clears once
+`Prep` itself clears, which happens in the very same scan the
+divergence fires — see `docs/languages/sfc.md`'s "Set-dominates-clear"
+rule), and `dosing.fbd` — a separate 100 ms task — was ticking somewhere
+in the same virtual-time window and saw `ResetTotals` still `TRUE`,
+zeroing the totals the `given:` had just set before the SFC's own
+`t_a_done`/`t_b_done` transitions ever got a chance to see them cross
+the threshold. The charges never actually finished; nothing downstream
+of that was ever going to fire, convergence included, independent of
+which abort transitions existed. Splitting the `given:` into its own,
+later step (after `Prep`'s divergence has already run once) is the real
+fix, and it was already sitting in this file for unrelated reasons by
+the time this was caught — the wrong conclusion above got written
+against an earlier, since-corrected version of these tests.
+
+What the review that caught this **did** find, checking the same
+scenario properly: on `main`, the convergence fires correctly, in either
+declaration order, once the charges actually complete — no deadlock, and
+no restructuring needed. It also found a real, narrower flaw one layer
+down, now fixed by PR #54: the alternative-priority guard suppressed a
+lower-priority transition whenever a higher-priority sharer was merely
+*enabled*, not only when it actually *fired* — so a non-transitive group
+like this one (`t1 FROM A`, `t2 FROM (A,B)`, `t3 FROM B`, all enabled)
+could suppress `t3` for one extra scan even though `t1`'s firing that
+scan had nothing to do with `B`'s token. The guard now reads whether the
+higher-priority sharer *fired* (`_f_`, resolved in declaration order)
+instead of whether it was merely enabled (`_en_`), so `t1` and `t3` fire
+together, exactly once. This is a genuine, previously-existing
+scheduling imprecision — one scan, not a deadlock — and it's the reason
+`naut check`'s "ambiguous alternative-priority group" warning is gone
+entirely now rather than narrowed: the fixed guard makes every such
+group exact, with one well-defined outcome, so there is nothing left to
+warn about.
+
+Reverted the workaround: the abort transitions on `ChargeADone` and
+`ChargeBDone` are back (`t_abort_adone`, `t_abort_bdone`, alongside
+`t_abort_agitate`), the acceptance suite's `given:`/`scans:` steps are
+unchanged from the already-correct split, and all ten tests pass with no
+other edits. The lesson, restated: a test that looks stuck deserves a
+minimal repro of the *engine* behavior in isolation (no totalizers, no
+`ResetTotals`, just the steps and transitions in question) before
+concluding the compiler is wrong — the SFC-only repro that would have
+shown the convergence firing fine was never actually built for this one,
+only for the separate (and real) `R`/ACTION bug above.
 
 **2026-09-25 · no struct/array literal initializer, and no way to
 declare data outside a POU · docs gap / design constraint**
