@@ -15,6 +15,28 @@
 	import { ed } from './mimicState.svelte';
 	import UserIsland from './UserIsland.svelte';
 
+	// Thumbnails render each component at its real THUMB_W width (its own
+	// `max-width: 100%` svg needs a sized parent — a shrink-to-fit one
+	// collapses it to a sliver), then scale the result to fit the tile's
+	// box, centered. Measured, not a fixed factor: a tall Tank and a wide
+	// Gauge both fill the box, and a custom component (whose size is its
+	// own business, and which may paint late) refits when it resizes.
+	const THUMB_W = 120;
+	const BOX_W = 84;
+	const BOX_H = 64;
+	function fit(node: HTMLElement) {
+		const apply = () => {
+			const w = node.offsetWidth, h = node.offsetHeight;
+			if (!w || !h) return;
+			const k = Math.min(BOX_W / w, BOX_H / h, 1.5);
+			node.style.transform = `translate(-50%, -50%) scale(${k})`;
+		};
+		const ro = new ResizeObserver(apply);
+		ro.observe(node);
+		apply();
+		return { destroy: () => ro.disconnect() };
+	}
+
 	function arm(name: string) {
 		if (ed.tool === 'place' && ed.placeComponent === name) {
 			ed.tool = 'select';
@@ -36,7 +58,7 @@
 			onclick={() => arm(name)}
 			title="Place a {name}"
 		>
-			<span class="thumb"><span class="inner"><C width={120} {...DEMO_PROPS[name] ?? {}} /></span></span>
+			<span class="thumb"><span class="inner" use:fit><C width={THUMB_W} {...DEMO_PROPS[name] ?? {}} /></span></span>
 			<span class="label">{name}</span>
 		</button>
 	{/each}
@@ -51,7 +73,7 @@
 				title="Place a {name}"
 			>
 				<span class="thumb"
-					><span class="inner"><UserIsland {name} props={{ width: 120 }} /></span></span
+					><span class="inner" use:fit><UserIsland {name} props={{ width: THUMB_W }} /></span></span
 				>
 				<span class="label">{name}</span>
 			</button>
@@ -62,8 +84,11 @@
 <style>
 	aside {
 		flex: none;
-		width: 108px;
+		width: 118px; /* 84 thumb + 8 item + 16 padding, + the stable scrollbar gutter */
 		overflow-y: auto;
+		/* the column keeps its width when the scrollbar comes and goes (arming
+		   + Pipe grows the list), so the canvas beside it never shifts */
+		scrollbar-gutter: stable;
 		border-right: 1px solid var(--nx-border);
 		padding: 8px;
 		display: flex;
@@ -95,7 +120,7 @@
 	}
 	.thumb {
 		width: 84px;
-		height: 56px;
+		height: 64px;
 		overflow: hidden;
 		display: block;
 		position: relative;
@@ -103,11 +128,13 @@
 	}
 	.inner {
 		position: absolute;
-		top: 0;
+		top: 50%;
 		left: 50%;
-		transform: translateX(-50%) scale(0.62);
-		transform-origin: top center;
+		width: 120px; /* THUMB_W */
+		transform: translate(-50%, -50%) scale(0.5); /* until fit() measures */
+		transform-origin: center;
 		display: block;
+		line-height: 0;
 	}
 	.label {
 		font-size: 11px;

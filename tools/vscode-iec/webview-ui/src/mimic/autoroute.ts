@@ -260,6 +260,52 @@ export interface RouteEnds {
 	end?: ObstacleRect;
 }
 
+/** Direction changes along a -> ...shape -> b, INCLUDING the turn off the
+ * start port (the pipe arrives at `a` travelling `sDir`) and onto the end
+ * port (it leaves `b` travelling against `eDir`, into the port). Counting
+ * those two is what separates the Ls: from a pump's "up" outlet to a
+ * tank's "left" nozzle, the vertical-first L is one bend, while the
+ * horizontal-first L turns right at once and again at the tank — three,
+ * a staircase, though both are clear. */
+function bends(pts: RoutePoint[], sDir: PortDir | undefined, eDir: PortDir | undefined): number {
+	const dirs: string[] = [];
+	if (sDir) dirs.push(sDir);
+	for (let i = 0; i < pts.length - 1; i++) {
+		const dx = pts[i + 1].x - pts[i].x, dy = pts[i + 1].y - pts[i].y;
+		if (Math.abs(dx) < EPS && Math.abs(dy) < EPS) continue;
+		dirs.push(Math.abs(dx) >= Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : dy > 0 ? 'down' : 'up');
+	}
+	if (eDir) dirs.push({ left: 'right', right: 'left', up: 'down', down: 'up' }[eDir]);
+	let n = 0;
+	for (let i = 1; i < dirs.length; i++) if (dirs[i] !== dirs[i - 1]) n++;
+	return n;
+}
+
+/** Of the obstacle-clear shapes, the one with the fewest bends (see
+ * bends()); ties keep the given order, so without port directions the
+ * dominant-axis-first L still wins. Null when none clears. */
+function fewestBends(
+	shapes: RoutePoint[][],
+	a: RoutePoint,
+	b: RoutePoint,
+	sDir: PortDir | undefined,
+	eDir: PortDir | undefined,
+	obstacles: ObstacleRect[]
+): RoutePoint[] | null {
+	let best: RoutePoint[] | null = null;
+	let bestN = Infinity;
+	for (const shape of shapes) {
+		const pts = [a, ...shape, b];
+		if (!pathClear(pts, obstacles)) continue;
+		const n = bends(pts, sDir, eDir);
+		if (n < bestN) {
+			best = shape;
+			bestN = n;
+		}
+	}
+	return best;
+}
+
 /** Suggest an orthogonal route's INTERIOR vertices between two anchored
  * port positions — a pure GENERATOR, called once (the port-to-port draw
  * gesture, or the "Re-route" button), never re-derived live: the result is
@@ -273,7 +319,9 @@ export interface RouteEnds {
  * expected to have left that end's equipment out of `obstacles`.
  *
  * Tries, in order (cheapest/simplest first): the straight/L/Z canonical
- * shapes, then hugging each obstacle's four edges, then a coarse
+ * shapes, then hugging each obstacle's four edges — within each tier the
+ * clear shape with the fewest bends, counting the turns off and onto the
+ * ports (fewestBends), not merely the first clear one — then a coarse
  * visibility-graph search (gridRoute) minimizing corners, and finally —
  * only if literally nothing else clears — the plain L regardless of
  * collision, so this NEVER throws or returns an unusable empty route; it
@@ -293,21 +341,8 @@ export function suggestRoute(
 	const a = sDir ? (ends.start ? exitPoint(start, sDir, ends.start) : stubPoint(start, sDir)) : start;
 	const b = eDir ? (ends.end ? exitPoint(end, eDir, ends.end) : stubPoint(end, eDir)) : end;
 
-	let corners: RoutePoint[] | null = null;
-	for (const shape of canonicalShapes(a, b)) {
-		if (pathClear([a, ...shape, b], obstacles)) {
-			corners = shape;
-			break;
-		}
-	}
-	if (!corners) {
-		for (const shape of aroundShapes(a, b, obstacles)) {
-			if (pathClear([a, ...shape, b], obstacles)) {
-				corners = shape;
-				break;
-			}
-		}
-	}
+	let corners = fewestBends(canonicalShapes(a, b), a, b, sDir, eDir, obstacles);
+	if (!corners) corners = fewestBends(aroundShapes(a, b, obstacles), a, b, sDir, eDir, obstacles);
 	if (!corners) corners = gridRoute(a, b, obstacles);
 	if (!corners) corners = [{ x: b.x, y: a.y }]; // plain L, last resort — see doc comment.
 
