@@ -500,6 +500,34 @@ a `host:port` form reaches a nonstandard EtherNet/IP port (`naut logix
 emulate` off 44818, or a real controller on one). Where: `cmd/naut/
 eip.go` (`eipUsage`, `runEIPImport`, `runEIPBrowse`). Status: open.
 
+**2026-09-25 · suspending `main` in a test silently stops every alarm
+from ever qualifying · papercut (runtime/testing)**
+
+Hit rewriting the shelved-high-level-alarm test to drive `LIT101_Level`
+through the real seal-in instead of setting `HighLevelAlm` directly:
+suspending `main` alongside `level` (to keep the sequence/permissives
+from also reacting to the driven level) left `HighLevelAlm` computing
+correctly and holding `true` for the whole step, but `alarms: { active:
+["HighLevel"] }` never matched — the alarm never raised at all, on-delay
+or no on-delay, no matter how long the test advanced. `naut check` and
+`naut test` both said nothing was wrong. Where: `internal/project/
+alarms.go` wires the alarm engine's `Evaluate()` to `rt.OnScan(...)`, and
+`runtime/runtime.go`'s `OnScan` doc comment says plainly "only the main
+task fires OnScan" — every other task shares the tag store but never
+triggers the alarm evaluator. So a test (or a real project) that
+suspends `main` doesn't just freeze the sequence logic, it freezes alarm
+evaluation entirely: an on-delay timer that would otherwise qualify
+never gets sampled, and the alarm silently never raises, with no
+diagnostic anywhere pointing at `suspend: [main, ...]` as the reason.
+Worked around here by leaving `main` unsuspended and suspending
+`permissives` instead. Two fixes worth considering, either fixes the
+silence: have the alarm engine tick on any task's `OnScan` (or off the
+virtual clock directly, since it already only cares about `now`, not
+which program ran) rather than main-task-only; or have `naut test` warn
+when a suite's or a test's `suspend:` list includes `main` and the
+project declares an `alarms:` section, the same shape as the
+first-task-`name:` warning PR #43 added. Status: open.
+
 ## Built in the rig (ex01)
 
 The `lift-station` example doubled as the subject of `content/assets/
