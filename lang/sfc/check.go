@@ -196,8 +196,9 @@ func Check(prog *Program) []Diagnostic {
 	// simultaneous divergence (warn) ───────────────────────────────────────
 	diags = append(diags, checkConvergenceReachability(prog)...)
 
-	// ── ambiguous (non-transitive) alternative-priority groups (warn) ────
-	diags = append(diags, checkAltGroups(prog)...)
+	// ── a variable written both by a qualifier association and inside an
+	// ACTION body (warn) ──────────────────────────────────────────────────
+	diags = append(diags, checkAssocBodyWrites(prog, actionByName)...)
 
 	sort.SliceStable(diags, func(i, j int) bool {
 		if diags[i].Pos.Line != diags[j].Pos.Line {
@@ -344,78 +345,114 @@ func bipartiteCovers(sources []string, reachSets []map[string]bool) bool {
 	return matched == len(sources)
 }
 
-// checkAltGroups implements the §2.3/§5.1 warning for an ambiguous
-// alternative-priority group: alt-groups are defined by "shares any
-// source" (§2.3), which is not transitive, so a 3+ group where some pair
-// doesn't directly share a source is flagged for the author to
-// disambiguate by reordering or restructuring.
-func checkAltGroups(prog *Program) []Diagnostic {
-	n := len(prog.Transitions)
-	shares := func(a, b *Transition) bool {
-		for _, x := range a.From {
-			for _, y := range b.From {
-				if strings.EqualFold(x, y) {
-					return true
-				}
-			}
-		}
-		return false
-	}
-	adj := make([][]bool, n)
-	for i := range adj {
-		adj[i] = make([]bool, n)
-	}
-	for i := 0; i < n; i++ {
-		for j := i + 1; j < n; j++ {
-			if shares(prog.Transitions[i], prog.Transitions[j]) {
-				adj[i][j], adj[j][i] = true, true
-			}
-		}
-	}
+// Non-transitive alternative-priority groups (A shares a step with B, B with
+// C, A and C nothing) used to be flagged here as ambiguous. They are not: the
+// §2.3 guard resolves firing in declaration order and suppresses a transition
+// only by a higher-priority transition sharing a source that itself FIRES, so
+// every such group has one well-defined outcome and needs no diagnostic.
 
-	visited := make([]bool, n)
+// checkAssocBodyWrites warns when a boolean variable is the target of a bare
+// qualifier association (N/S/R/P/P1/P0 X) AND is assigned inside an ACTION
+// body. Both are legal and the rule is fixed (§2.5): the association writes
+// the variable last in the scan, but only on the scans it acts — N while its
+// step is active (plus the one final scan), S/R once on its step's activation,
+// a pulse on its one edge scan — and the variable is the ACTION's otherwise.
+// It is worth a warning because it reads as "two owners" and a test that only
+// samples a few scans can't tell which one produced a value.
+func checkAssocBodyWrites(prog *Program, actionByName map[string]*ActionBlock) []Diagnostic {
+	if len(prog.Actions) == 0 {
+		return nil
+	}
+	// Which ACTION bodies assign which identifiers.
+	assigned := map[string][]string{} // upper var name -> ACTION names, in declaration order
+	for _, a := range prog.Actions {
+		for _, v := range assignedIdents(a.Body.Text) {
+			assigned[v] = append(assigned[v], a.Name)
+		}
+	}
 	var diags []Diagnostic
-	for i := 0; i < n; i++ {
-		if visited[i] {
-			continue
-		}
-		comp := []int{i}
-		visited[i] = true
-		queue := []int{i}
-		for len(queue) > 0 {
-			cur := queue[0]
-			queue = queue[1:]
-			for j := 0; j < n; j++ {
-				if adj[cur][j] && !visited[j] {
-					visited[j] = true
-					comp = append(comp, j)
-					queue = append(queue, j)
-				}
+	for _, s := range prog.Steps {
+		for _, a := range s.Actions {
+			key := strings.ToUpper(a.Target)
+			if actionByName[key] != nil {
+				continue // an ACTION-block association, not a variable
 			}
-		}
-		if len(comp) < 3 {
-			continue
-		}
-		clique := true
-	outer:
-		for _, a := range comp {
-			for _, b := range comp {
-				if a != b && !adj[a][b] {
-					clique = false
-					break outer
-				}
+			writers := assigned[key]
+			if len(writers) == 0 {
+				continue
 			}
+			var rule string
+			switch a.Qualifier {
+			case "N":
+				rule = fmt.Sprintf("the association wins while %s is active (and on the scan it deactivates, when it writes FALSE); the ACTION's writes stand otherwise", s.Name)
+			case "S", "R":
+				verb := "sets"
+				if a.Qualifier == "R" {
+					verb = "resets"
+				}
+				rule = fmt.Sprintf("the association %s it once, on the scan %s activates; the ACTION's writes stand otherwise", verb, s.Name)
+			default:
+				rule = "the association wins on its one pulse scan (and writes FALSE the scan after); the ACTION's writes stand otherwise"
+			}
+			diags = append(diags, Diagnostic{Pos: a.Pos, Severity: SeverityWarning,
+				Message: fmt.Sprintf("%s is driven by a qualifier association (%s) on step %s and assigned in ACTION %s — %s",
+					a.Target, a.Qualifier, s.Name, strings.Join(writers, ", "), rule)})
 		}
-		if clique {
-			continue // every pair shares a source directly — unambiguous pairwise priority
-		}
-		var names []string
-		for _, idx := range comp {
-			names = append(names, trName(prog.Transitions[idx]))
-		}
-		sort.Strings(names)
-		diags = append(diags, Diagnostic{Pos: prog.Transitions[comp[0]].Pos, Severity: SeverityWarning,
-			Message: fmt.Sprintf("ambiguous alternative-priority group (non-transitive shared-source overlap) among transitions %s — priority is resolved pairwise per docs/design/sfc.md §2.3; consider reordering or restructuring", strings.Join(names, ", "))})
 	}
 	return diags
+}
+
+var (
+	blockCommentRe = regexp.MustCompile(`(?s)\(\*.*?\*\)`)
+	lineCommentRe  = regexp.MustCompile(`//[^\n]*`)
+	stringLitRe    = regexp.MustCompile(`'(?:[^'$]|\$.)*'|"(?:[^"$]|\$.)*"`)
+	assignRe       = regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)\s*:=`)
+)
+
+// assignedIdents returns the (upper-cased, de-duplicated) plain identifiers
+// an ST statement list assigns: `X := ...` at statement level, outside
+// comments and string literals. Named arguments of a call (`fb(IN := X)`,
+// inside parentheses) and member/element targets (`s.X :=`, `a[i] :=`) are
+// not variable assignments and are skipped.
+func assignedIdents(body string) []string {
+	blank := func(re *regexp.Regexp, s string) string {
+		return re.ReplaceAllStringFunc(s, func(m string) string { return strings.Repeat(" ", len(m)) })
+	}
+	text := blank(blockCommentRe, body)
+	text = blank(lineCommentRe, text)
+	text = blank(stringLitRe, text)
+	// Parenthesis depth at every byte, so a named call argument is skipped.
+	depth := make([]int, len(text)+1)
+	d := 0
+	for i := 0; i < len(text); i++ {
+		depth[i] = d
+		switch text[i] {
+		case '(':
+			d++
+		case ')':
+			if d > 0 {
+				d--
+			}
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, loc := range assignRe.FindAllStringSubmatchIndex(text, -1) {
+		start := loc[2]
+		if depth[start] != 0 {
+			continue
+		}
+		if start > 0 {
+			switch text[start-1] {
+			case '.', ']':
+				continue
+			}
+		}
+		key := strings.ToUpper(text[loc[2]:loc[3]])
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, key)
+		}
+	}
+	return out
 }

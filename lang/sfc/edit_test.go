@@ -369,8 +369,7 @@ func TestOpInsertAlternativeBranch(t *testing.T) {
 		t.Errorf("t_overflow should be inserted immediately after t_full (priority = insertion order): got line %d, t_full ends at %d", nt.Line, findTransT(t, m, "tr:t_full").EndLine)
 	}
 	// t_abort/t_full stay alt/simDiverge; a 3-way alt group sharing "Fill"
-	// forms — not flagged ambiguous here since all three pairwise share
-	// the same single source (a clique, per checkAltGroups).
+	// forms (all three share the same single source).
 	if kind := findTransT(t, m, "tr:t_abort").Kind; kind != "alt" {
 		t.Errorf("t_abort.Kind = %q, want alt", kind)
 	}
