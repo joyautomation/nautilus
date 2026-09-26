@@ -27,10 +27,10 @@ naut build .                     # one deployable controller binary
   and the simultaneous divergence into `(PostRun, Alternate)`.
 - `level.fbd` — the level→speed PID and the high-level alarm seal-in.
   *Open With → FBD Diagram*.
-- `permissives.ld` and `motor.ld` — HOA, interlocks, the high-high
+- `permissives.ld` and `lib/motor.ld` — HOA, interlocks, the high-high
   override, and the `MotorStarter` ladder library block, instantiated
   once per pump. *Open With → Ladder Diagram*.
-- `sim.st` / `physics.st` — the bench-only plant: a wet-well level
+- `sim.st` / `lib/physics.st` — the bench-only plant: a wet-well level
   integrator and two pump/VFD models, in Structured Text.
 
 ## What it demonstrates
@@ -39,9 +39,9 @@ naut build .                     # one deployable controller binary
 |---|---|---|
 | SFC: alternative + simultaneous divergence, `N`/`S`/`R`/`P1`/`P0` qualifiers, a timer in an action body | `sequence.sfc` | [SFC](https://nautilus.joyautomation.com/languages/sfc/) |
 | FBD: a `PID` closed loop, `SEL` chains, a hysteresis seal-in | `level.fbd` | [Function blocks](https://nautilus.joyautomation.com/languages/function-block/) |
-| Ladder: interlocks, branches, a ladder-authored `FUNCTION_BLOCK` library called twice | `permissives.ld`, `motor.ld` | [Ladder](https://nautilus.joyautomation.com/languages/ladder/) |
-| ST: `TYPE`/`STRUCT` UDTs, a `VAR_IN_OUT` function block, plant physics | `pump.st`, `physics.st`, `sim.st` | [Structured Text](https://nautilus.joyautomation.com/languages/structured-text/) |
-| Multiple tasks/scan rates, a project library composed at the root | `nautilus.yaml` tasks: | [Function blocks, libraries, and tasks](https://nautilus.joyautomation.com/guides/blocks-and-tasks/) |
+| Ladder: interlocks, branches, a ladder-authored `FUNCTION_BLOCK` library called twice | `permissives.ld`, `lib/motor.ld` | [Ladder](https://nautilus.joyautomation.com/languages/ladder/) |
+| ST: `TYPE`/`STRUCT` UDTs, a `VAR_IN_OUT` function block, plant physics | `lib/pump.st`, `lib/physics.st`, `sim.st` | [Structured Text](https://nautilus.joyautomation.com/languages/structured-text/) |
+| Multiple tasks/scan rates, a project library in `lib/` | `nautilus.yaml` tasks: | [Function blocks, libraries, and tasks](https://nautilus.joyautomation.com/guides/blocks-and-tasks/) |
 | Tag model: roles, units, descriptions, a UDT tag | `nautilus.yaml`/`field.yaml` tags: | [The tag model](https://nautilus.joyautomation.com/guides/tag-model/) |
 | Modbus TCP: a device map, `naut modbus import`, a writable single bit | `devices.yaml`, `modbus_manifest.yaml`, `tags/modbus.yaml` | [Modbus TCP](https://nautilus.joyautomation.com/guides/modbus/) |
 | Alarms: ISA-18.2 states, priorities, ack/shelve, explicit `defs:` | `alarms:` in both manifests | [Alarms](https://nautilus.joyautomation.com/guides/alarms/) |
@@ -79,14 +79,14 @@ is zero when stopped, `SpeedRef` when running in Auto, and the operator's
 PID. A second seal-in latches `HighLevelAlm` at `HighLevelAlmSP` (90 %)
 with 5 % of hysteresis, so it doesn't chatter sitting on the setpoint.
 
-**Permissives and HOA (`permissives.ld`, `motor.ld`).** Duty mapping
+**Permissives and HOA (`permissives.ld`, `lib/motor.ld`).** Duty mapping
 turns `LeadReq`/`LagReq` into a request per physical pump
 (`P101_Req`/`P102_Req`) via the `LeadIsP101` pointer, with the high-high
 float (`LSHH101`) OR'd into both regardless of the sequence or HOA mode
 — except HOA **Off** still wins, because `MotorStarter`'s own `run` rung
 never asserts on `Mode = 0`. Each pump's permissive is the AND of no
 seal fail, no over-temp, no VFD fault and no low-low float; `MotorStarter`
-(`motor.ld`, a ladder-authored `FUNCTION_BLOCK`, instantiated once per
+(`lib/motor.ld`, a ladder-authored `FUNCTION_BLOCK`, instantiated once per
 pump) turns `(Mode, request, permissive, running-feedback)` into
 `(Run, InHand, FailToRun, LockedOut)`, with its own 5 s fail-to-run timer
 and a trip counter: three fail-to-run trips latch `LockedOut`, blocking
@@ -95,13 +95,13 @@ clears the trip count once `LockedOut` has actually latched, so an
 ordinary fail-and-retry in between doesn't quietly reset the tally (see
 `docs/design/examples-dogfood.md`).
 
-**Stats and totals (`stats.st`).** `RuntimeMeter` (`pump.st`, a
+**Stats and totals (`stats.st`).** `RuntimeMeter` (`lib/pump.st`, a
 `VAR_IN_OUT` `FUNCTION_BLOCK`) accumulates each pump's starts and run
 hours into a retained `PumpStats` UDT tag, called once per pump. A
 running station flow totalizer integrates `FIT101_Flow` into
 `StationFlowM3`.
 
-**The bench plant (`sim.st`, `physics.st`).** `WetWellModel` integrates
+**The bench plant (`sim.st`, `lib/physics.st`).** `WetWellModel` integrates
 the wet well's level from an inflow/outflow balance (small on purpose —
 5 m³ over the 4 m span, so a full cycle takes minutes); `VfdModel`
 (instantiated twice) turns a run command and speed command into a
@@ -121,6 +121,12 @@ map's importer can't produce a few of the tag model's bare names (see
 `devices.yaml`'s header and `docs/design/examples-dogfood.md`), so this
 small program renames the Modbus-imported `RIO_*` tags onto the
 canonical ones every other program reads.
+
+`retain: { file: retain.json }` means a stray `retain.json` left over from
+an earlier run changes the bench's (or field's) start state on the next
+`naut run`/`naut test` — setpoints and HOA modes load from it, not from
+the manifest's `init:` values, the moment it exists. `.gitignore` already
+excludes it; delete it to get back to the manifest's declared start state.
 
 ## Run it on real VFDs
 
@@ -148,6 +154,18 @@ scaled speed register change.
 
 Point `devices.yaml`'s instances at real hosts and it's the same command
 against real drives.
+
+The slave stood up by `naut modbus serve` doesn't emulate the drive — it
+just holds whatever registers `seed.json` gives it, so writing `RunCmd`
+doesn't make `Running` come back true on its own. `MotorStarter`'s own
+fail-to-run timer (`motor.ld` → `lib/motor.ld`) doesn't know the
+difference: if a pump is called (by the sequence, or Hand) and the slave's
+`Running` bit hasn't gone true within 5 s, `FailToRun` latches, same as a
+real stuck pump. Two ways to keep that 5 s window from tripping on a
+bench: put P-101 in Hand and write its `Running` register back with
+`naut modbus browse` before the timer elapses, or start it already true —
+`seed.json` seeds `P101_Running: true` for exactly this, a static bench
+where the point is exercising reads/writes, not a full run simulation.
 
 ## The operator screen
 
@@ -214,10 +232,15 @@ text: "SeqStep" }`), which passes any tag value through untouched.
 
 ### Custom components
 
-Two components live in `hmi/src/lib/`, each with a `{Name}.component.json`
-port sidecar so the extension's **Nautilus: Edit Component Ports…**
-command (and the mimic editor's `p` shortcut on a selected instance) has
-something to edit:
+Three components live in `hmi/src/lib/`, each with a
+`{Name}.component.json` port sidecar so the extension's **Nautilus: Edit
+Component Ports…** command (and the mimic editor's `p` shortcut on a
+selected instance) has something to edit — and, for `ToProcess`, so the
+mimic editor's equipment palette lists it at all: the palette only offers
+a custom component that has a sidecar, even a ports-free one, so a
+sidecar-less `ToProcess` (this project's first cut) is a component you
+can place by editing the doc's JSON directly but never by dragging it
+from the palette:
 
 - **`SubmersiblePump.svelte`** — `running`/`speedHz`-driven, one
   `discharge` port on top (`dir: "up"`). Because a custom component's
@@ -233,8 +256,10 @@ something to edit:
   (`LSHH101`/`LSLL101`), a `tripped` prop swinging the float's pivot arm.
   No pipe anchors it, so its sidecar's one port (`mount`) is there purely
   so the extension has something to open, per the review's ask.
+- **`ToProcess.svelte`** (the force-main connector) — one `in` port on
+  its left edge (`dir: "left"`), matching the same port the mimic doc
+  already carries inline on the `TOPROC` equipment entry. Same idiom as
+  `examples/hmi-demo`'s `Supply`/`ToProcess`.
 
-`ToProcess.svelte` (the force-main connector) and `SeqStepTag.svelte` (the
-`SeqStep` readout) are custom too, but ports-free — same idiom as
-`hmi-demo`'s `Supply`/`ToProcess`, with the port declared inline in the
-doc instead of a sidecar.
+`SeqStepTag.svelte` (the `SeqStep` readout) is custom too, but ports-free
+and unanchored — nothing pipes to a text label, so it has no sidecar.

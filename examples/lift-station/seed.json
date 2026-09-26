@@ -1,5 +1,5 @@
 {
-  "P101_Running": false,
+  "P101_Running": true,
   "P101_SpeedHz": 0.0,
   "P101_Amps": 0.0,
   "P101_VfdFault": false,

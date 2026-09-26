@@ -150,6 +150,13 @@ past "naming the constant is the trigger" — worth a minimal, single-file
 repro (a two-line FUNCTION_BLOCK with one `VAR CONSTANT` and one
 `VAR_OUTPUT`) in the issue.
 
+**Status: fixed on `main` by PR #41 (`var-constant-writeback`) —
+`FUNCTION_BLOCK`/`FUNCTION` variables now start at their declared initial
+value instead of reading zero.** The final pass restores the named
+`VAR CONSTANT` form in `lib/physics.st` (`LPerPercent`, `RampHzPerS`,
+`FullLoadA`, `MaxHz`) and drops the workaround comments above; `naut
+check`/`naut test` stay clean with the named constants back in.
+
 **2026-09-25 · library files must sit at the project root — a `lib/`
 subdirectory does not compose · docs gap / design constraint**
 
@@ -170,6 +177,14 @@ check` diagnostic when a project has a `lib/`-shaped subdirectory of
 name like `lib/` invites exactly this layout, and the failure mode
 (three unrelated-looking "unknown type" errors, one per file that
 happens to use the library) doesn't point at the real cause.
+
+**Status: fixed on `main` by PR #42 (`project: a lib/ directory composes
+into the library prelude`) — a project's libraries are now the
+PROGRAM-less files at the root PLUS every such file under `lib/`, at any
+depth.** The final pass moves `pump.st`, `physics.st` and `motor.ld` back
+into `lib/`, matching the design's original intent; `naut check .`,
+`naut check -m field.yaml .` and `naut test` (11/11) stay clean with them
+there.
 
 **2026-09-25 · a level-PID-modulated duty pump doesn't fully stop just
 because inflow drops · design tuning, not a bug**
@@ -273,11 +288,12 @@ the ladder rung-comment parser bug above since this one has zero
 symptoms pointing anywhere near the actual cause.
 
 **Status: fixed on `main` by PR #42 (`PROGRAM` detection is lexical now,
-not a line-oriented pre-scan) — ships in v0.13.0.** This example still
-targets the released CLI (v0.12.0), where the bug is real, so `motor.ld`'s
-header keeps the reworded wording above rather than reverting to the
-original phrasing that happens to put `PROGRAM` mid-line — it has to keep
-working on v0.12.0 until v0.13.0 ships, not just on `main`.
+not a line-oriented pre-scan) — ships in v0.13.0.** The final pass merges
+`main` and moves the library files into `lib/` (PR #42's other half), so
+this example now targets v0.13.0 rather than the released v0.12.0 either
+way; `motor.ld`'s header keeps the reworded wording above regardless
+(it's the clearer sentence, not just a workaround) rather than reverting
+to the original phrasing that happens to put `PROGRAM` mid-line.
 
 **2026-09-25 · a trip counter reset by the same signal that permits a
 retry can never count past one · design clarification, not a bug**
@@ -420,3 +436,53 @@ expecting process values to drift while handshake DINTs stayed put.
 handshakes alike. Where: `cmd/naut/logixemulate.go`. Status: open —
 wants a `--ramp-tags <globs>` flag for when a batch skid's demo needs
 some numerics held still.
+
+## Built in the rig (ex01)
+
+The `lift-station` example doubled as the subject of `content/assets/
+capture/ex01-lift-station`'s video rig — VS Code driven by gesture in an
+`incus`-provisioned container, building `sequence.sfc`, `permissives.ld`,
+`level.fbd` and `lift-station.mimic.json` by real editor interactions
+(diagram gestures, palette/FB-picker use, the mimic editor) rather than
+pasted text, to prove the extension's authoring path end to end. That
+session logged 59 numbered findings in `GESTURE-FINDINGS.md`, on top of
+this file's own entries above. Rough breakdown by class (a finding
+sometimes straddles two; counted once, by its primary tag):
+
+| Class | Count | Notes |
+|---|---|---|
+| Bug | ~12 | Parser/compiler/runtime defects and extension hit-testing bugs — the kind that need a real fix, not a workaround. |
+| Papercut | ~26 | Works, but rougher than it should be — wrong error, missing flag, awkward gesture path. |
+| Gap | ~13 | No gesture/API reaches a state the file format supports (e.g. no gesture for an SFC simultaneous convergence). |
+| Docs / design | ~5 | The tool behaved correctly; the brief, doc or test needed to catch up. |
+| Not a finding | 3 | Confirmed-working behavior worth recording, not an issue. |
+
+Findings from this pass fixed by a merged PR:
+
+| PR | Fixed |
+|---|---|
+| #43 | `lang/ld`: a multi-line `(* … *)` rung-header comment was a hard parse error. `internal/project`: a manifest's first task's `name:` key was silently ignored — `naut check` now rejects it. `docs/testing.md`: reworded the `task.local` section (it never reached the ST-expression compiler; matcher form only). |
+| #44 | `naut compose` + online edits: composition now folds in ladder/FBD libraries, not just `.st`. |
+| #45 | SFC editor: "+ step" chains and "new step" actually create the step; orphan-transition and action-table layout fixes. |
+| #46 | Mimic editor: pipes attach on the documented gesture and route around their own equipment; default ports sit on the drawings. |
+| #47 | Ladder palette: inserts any `FUNCTION_BLOCK`, names the instance, offers to declare a retagged identifier. |
+| #48 | FBD palette: places any function block (PID and user blocks) with named pins; renames instances. |
+| #50 | Nine further papercuts surfaced building this project (extension). |
+| #51 | SFC simultaneous-convergence gesture; delete a rung's last coil when a block remains; one FBD chip per open pin; `naut check` names the ladder file in its errors. |
+| #54 | SFC S/R semantics: an association acts once on activation, not every scan; a suppressed transition must itself be enabled to suppress another; `naut check` warns on association-vs-`ACTION`-write conflicts. |
+
+(PR #41 and #42 — the `VAR CONSTANT` write-back bug and `lib/` directory
+support — are covered above, in their own dated entries.)
+
+**Still open**, from both this file and `GESTURE-FINDINGS.md`:
+the extension manifest schema doesn't describe `host:port` for `eip`
+(papercut); `naut logix emulate --ramp` has no way to hold handshake tags
+still (papercut); a custom component's ports have two sources of truth
+(sidecar for the editor, inline `ports` for the runtime — findings above);
+and two mimic-editor coordinate hit-testing bugs (`GESTURE-FINDINGS.md`
+#58/#59 — a click resolves to whatever is visually topmost at that pixel,
+not necessarily the element the gesture reasoned about; worked around in
+the rig with an off-center click, not fixed in the editor).
+
+Full record, gesture by gesture, beat by beat: `content/assets/capture/
+ex01-lift-station/GESTURE-FINDINGS.md` (private content repo).

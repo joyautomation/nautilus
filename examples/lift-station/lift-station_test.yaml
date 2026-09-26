@@ -94,7 +94,7 @@ tests:
       - advance: 300ms # let the alarm evaluator catch up to the tags
         alarms: { active: ["P101_FailToRun", "P101_LockedOut"] }
       - given: { ResetFaults: true } # only now does Reset also clear the trip count —
-        advance: 200ms                # see motor.ld's `lockout` rung for why
+        advance: 200ms                # see lib/motor.ld's `lockout` rung for why
         expect: { P101_FailToRun: false, P101_LockedOut: false }
 
   - name: the high-high float runs both pumps unless HOA is Off, and alarms critical
