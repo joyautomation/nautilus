@@ -15,6 +15,13 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   label right under them; a custom component refits when it resizes. The
   palette column also keeps its width when its scrollbar appears (arming
   *+ Pipe* no longer nudges the canvas).
+- **A port-to-port pipe draws as an L, not a staircase.** The route
+  suggestion (the draw gesture and *Re-route*) took the first clear shape,
+  and for a pump outlet facing up into a tank nozzle facing left that was
+  the horizontal-first L — a turn straight off the pump and another at the
+  tank. It now takes the clear shape with the fewest bends, counting the
+  turns off and onto the ports, so the pipe continues out of the pump and
+  turns once.
 - **Bound labels show their live value in the mimic editor.** A label with
   a `bind` rendered its text only, so "LT-101" sat still on an otherwise
   live canvas. It now reads like the runtime `<Mimic>`'s readout — text,

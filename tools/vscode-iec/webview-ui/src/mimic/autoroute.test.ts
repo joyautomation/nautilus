@@ -146,3 +146,14 @@ test("ends: the exit is never shorter than the PORT_STUB leg", () => {
   const pts = suggestRoute({ x: 100, y: 50 }, "right", { x: 300, y: 50 }, undefined, [box], { start: box });
   assert.ok(pts[0][0] >= 100 + PORT_STUB);
 });
+
+test("directional ends: of two clear Ls, the one that continues out of both ports (fewest bends counting the port turns)", () => {
+  // A pump outlet exiting UP at (100, 300), a tank nozzle exiting LEFT at
+  // (400, 100): dx > dy, so the dominant-axis L alone would run horizontal
+  // first — turning right straight off the outlet and again at the nozzle
+  // (a staircase, three bends). Vertical-first continues up out of the
+  // pump and turns once into the nozzle.
+  const pts = suggestRoute({ x: 100, y: 300 }, "up", { x: 400, y: 100 }, "left", []);
+  const s = PORT_STUB;
+  assert.deepEqual(pts, [[100, 300 - s], [100, 100], [400 - s, 100]]);
+});
