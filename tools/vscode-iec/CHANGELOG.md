@@ -3,9 +3,151 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.10.0] - 2026-09-25
+
+The first stable release. There is no earlier stable version to compare
+against: everything below shipped first as the three pre-releases
+`0.11.0`, `0.11.1` and `0.11.2` (kept in full further down this file) and is
+consolidated here for readers on the stable channel. Highlights: a Getting
+Started walkthrough with one-click CLI install, diagram diffs between any
+two git revisions, zoom/pan/copy/paste and a shortcut legend in every
+diagram editor, undo and save from the previews, the ladder and FBD
+palettes placing any function block (including your own and PID), new SFC
+branching and joining gestures, project libraries in `lib/`, and dozens of
+fixes across the Ladder, FBD, SFC and Mimic editors. Requires naut 0.13.0.
+
+### Added
+
+- **The ladder and FBD palettes place any function block, not just the
+  built-ins.** The ladder's *FB…* action and FBD's *+ add → function
+  block* open a picker listing the standard blocks (TON, TOF, TP, CTU,
+  CTD, CTUD, R_TRIG, F_TRIG, SR, RS, and FBD's PID) plus every user
+  `FUNCTION_BLOCK` in scope — the file's own and the project libraries'.
+  A placed block arrives pre-wired per docs/functions.md, with an
+  editable, auto-numbered instance name.
+- **Rename a ladder or FBD instance from its header.** Double-clicking an
+  FB's header renames it everywhere — its declaration and every reference
+  in the file — as one edit.
+- **Declare what a retag introduced.** A ladder rung that names an
+  undeclared identifier offers an amber *declare …* action, filing it
+  under `VAR_EXTERNAL` (for a manifest tag) or `VAR`, and now suggests the
+  project's manifest tags too.
+- **An FBD output reference can name its source**, so `SpeedRef :=
+  lic.CV` is one gesture instead of a bare wire target.
+- **SFC gains "+ join" alongside "+ parallel branch."** It converges
+  several steps into one — the transition fires once every source step is
+  active — mirroring the branch gesture that widens a transition's
+  target.
+- **A Getting Started walkthrough**, opened automatically the first time
+  the extension activates in a non-nautilus workspace (or via *nautilus:
+  Get Started*), takes you from installing `naut` through scaffolding a
+  project (*nautilus: Create Project…*), opening a diagram, running the
+  controller with live values, and running the acceptance tests.
+- **Install or update the `naut` CLI in one click.** *nautilus: Install or
+  Update the naut CLI* downloads the right build for your OS, verifies it
+  against the release checksums, and installs it — no Go toolchain
+  needed. The extension also logs the resolved CLI's version on startup
+  and warns when it's older than required.
+- **Diagram diffs between any two git revisions**, reachable from each
+  diagram editor's title bar (*Diff vs HEAD*, *between git revisions…*,
+  *vs Controller*) as well as the command palette. The newer side can be
+  the working tree, re-diffing live as you edit. Works on Ladder, FBD,
+  SFC, and on `.L5X` exports.
+- **Zoom, pan and fit for every diagram editor.** Ctrl/Cmd+wheel or a
+  trackpad pinch zooms around the pointer, Ctrl+= / Ctrl+- / Ctrl+0 zoom
+  and fit, middle-drag pans; the zoom is remembered per panel.
+- **Copy, cut and paste in every diagram editor** (FBD, Ladder, SFC,
+  Mimic), including multi-select, duplicate, and cross-file paste through
+  the system clipboard where the webview allows it.
+- **A "?" button in every diagram editor** lists its gestures and
+  keyboard shortcuts.
+- **A new, empty `.fbd` / `.ld` / `.sfc` file opens as an empty diagram**
+  with an *Empty file* banner instead of a parse error; the first edit
+  writes a starter skeleton.
+- **Ladder rungs can be deleted**, including a rung whose only element is
+  its coil.
+- **A ladder `.L5X` export shows itself as read-only** — a toolbar pill,
+  palette and editors disabled — instead of every gesture ending in a
+  "read-only" toast.
+
+### Changed
+
+- **Project libraries can live in `lib/`** (any depth), for online edits,
+  *Open block source*, and live-value instance discovery, matching `naut`
+  and the language server.
+- **SFC step and branch gestures got faster.** *+ step* on a selected
+  step chains a transition to it in one edit, so repeated clicks build a
+  chain; *+ alt branch* now also works from a selected step, not only a
+  transition; action and retag fields suggest the program's declared
+  tags; a new step scrolls into view and is selected.
+- **Diagrams follow light, dark and high-contrast themes** instead of
+  fixed dark-theme colors, and the focused diagram surface shows the
+  theme's focus border in high contrast.
+- **Download and rollback ask before touching a running controller**,
+  with a modal naming the controller URL, program, and current hash.
+  Turn it off with `nautilus.confirmControllerWrites` when iterating
+  against a local simulator.
+- **The missing-CLI warning leads with *Install naut***, then *Locate
+  naut…* and *Install steps* (*Copy go install* moved to the out-of-date
+  warning). The Marketplace README was rewritten around a three-step
+  start, one section per capability, and a settings/commands reference.
 
 ### Fixed
+
+- **Deleting a rung's last coil when the rung calls a function block**
+  removes it instead of refusing — the block is what drives the rung. A
+  rung of bare contacts still turns its last coil into `( _ )`.
+- **A ladder block can reuse an instance its header already declares**
+  instead of refusing with "already declared."
+- **The "declare …" offer covers block and function arguments**, not just
+  contact/coil retags.
+- **Ladder FB boxes no longer cut an argument list in half.** The box
+  grows to fit the whole call, ending in `, …` when it still doesn't (the
+  full call is in the tooltip).
+- **Ladder operand labels stop truncating at 12 characters** — they now
+  size to their label up to 20, with a tooltip for anything longer.
+- **A ladder rung's block comment can span more than one line** without a
+  hard parse error.
+- **Ladder timers and counters get a free instance name** instead of
+  colliding across sessions.
+- **Ladder zoom keeps the left rail in view**, and the palette row stays
+  opaque over scrolled rungs.
+- **Ladder: Esc cancels an in-progress drag.**
+
+- **Deleting a wired FBD block removes its wires cleanly**, instead of
+  one "no connection" warning per wire.
+- **Disconnecting two extensible inputs removes the ones you selected**,
+  not the renumbered survivors.
+- **Dragging an FBD block with arrow keys sticks**, instead of snapping
+  back on the next render.
+- **Deleting several FBD notes deletes the ones you selected**, in one
+  edit, instead of the wrong set once positions renumber.
+- **Every open FBD pin gets its own retag chip** instead of several pins
+  sharing one.
+- **Select-all copy → paste writes valid FBD** — a statement referenced
+  twice used to be copied twice and garbled.
+- **Select-all + Del deletes the whole selection**, including chips and
+  inline blocks riding along with it.
+- **The FBD "+ add" form's Esc always closes an open suggestion list
+  first**, then the form, on every field.
+- **FBD no longer goes permanently blank after a webview reload.**
+
+- **"+ step" always makes the new step initial when the chart has none**,
+  even after the original initial step was deleted.
+- **"+ transition → other… (new step)" creates the step**, instead of
+  leaving a red orphan chip.
+- **A third parallel branch joins its convergence** instead of leaving a
+  dead end.
+- **Orphan chips and side-by-side action tables no longer overlap.**
+- **The SFC variables panel works** — declaring or deleting a variable no
+  longer fails with "unknown op."
+- **Named actions are readable** on themes whose focus-border color
+  clashes with body text.
+- **Initialize writes a check-clean chart**, an unreachable step is a
+  warning rather than an error, and the add-step/add-transition form's
+  first field is focused with Enter/Esc wired up; its Ctrl+Z restores what
+  you typed instead of undoing the whole document.
+- **Del works right after a double-click edit.**
 
 - **Mimic palette tiles show the whole component.** Each thumbnail used to
   collapse to a sliver at the top of its tile (a Tank ~26 px wide in an
@@ -30,6 +172,70 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   live canvas. It now reads like the runtime `<Mimic>`'s readout — text,
   the value to `decimals` places, the unit — whenever the tag resolves to a
   number, and its text alone otherwise.
+- **The mimic palette lists custom components with no port sidecar yet**,
+  not only ones already placed; a sidecar is created on first "Edit
+  Component Ports…," never automatically.
+- **The pipe-drawing gesture writes a pipe again** — a clipboard-cloning
+  error used to silently drop it with no toast.
+- **Pipes route around their own equipment** instead of cutting back
+  through it, and resolve ports against the actual drawn boxes.
+- **Built-in Tank, Pump and Valve ports sit on the drawings** instead of
+  floating beside them.
+- **Port dots show while dragging a pipe end in Select**, not only while
+  placing a new one.
+- **The Component Editor no longer wipes a half-typed sidecar** when its
+  JSON doesn't parse; the canvas locks and dims instead.
+- **A mimic or component file that fails to parse says so**, with a
+  *Reopen as Text Editor* button.
+- **Renaming an equipment id keeps its pipes attached.**
+- **The mimic editor respects `nautilus.liveValues.enabled`** instead of
+  always polling.
+- **"Edit Component Ports…" reaches a component before it has a
+  sidecar**, and is lower-case in the command palette like every other
+  nautilus command.
+
+- **Undo, redo and save work from the diagram previews**, not only from
+  the source text editor; a diff or an `.L5X` preview stays read-only.
+- **Ctrl+Z inside a diagram's text field undoes the field**, not the
+  whole document.
+- **Previews keep working after the source's text tab is closed.**
+- **The first model and live-values frame can't be lost on open** — the
+  webview tells its host when it's ready, and the host replays the latest
+  state.
+- **Diagram diffs stay in diff mode while you click into the same file's
+  text editor**, and leave it when the preview moves to another file.
+- **Ladder and SFC previews keep selection, clipboard and scroll position
+  across tab switches**, matching FBD's.
+- **A hung CLI can't stall a diagram** — every short CLI call times out
+  (15s; 5 minutes for an acceptance-test run).
+- **Empty diagrams no longer crash** — an empty ladder body, an SFC with
+  no steps, or deleting the last step or block.
+- **A ladder or SFC file that fails to parse on first open shows its own
+  toolbar**, not FBD's.
+- **`_` placeholders explain themselves**: "unfilled placeholder `_`:
+  connect this pin or name its variable."
+- **Compact one-line variable sections list every declared variable**,
+  and deleting one removes just that declaration.
+- **Online edits compose ladder and FBD libraries, not only `.st`** — a
+  program using a block from a library with no `PROGRAM` of its own now
+  downloads correctly.
+- **Download/Pull from a library file offers the programs that use it**
+  instead of refusing outright, when a small number of candidates can be
+  found.
+- **`naut check` on an empty `.ld` file speaks ladder**, not FBD, in its
+  error.
+- **Quick-open no longer traps a retyped "Open as Diagram Editor" onto
+  the wrong command** once the file is already open as that diagram.
+- **The whole webview no longer scrolls 8px**, clipping the toolbar.
+- **The CLI is found even when VS Code doesn't see your shell's PATH** —
+  a bare `nautilus.cliPath` is now looked up on PATH and the common
+  Go/user install locations.
+- **The eip driver manifest's `host` field documents the `host:port`
+  form.**
+- **Getting Started steps render without stray backticks.**
+- **`nautilus.token`'s description covers Set Live Value**, not only
+  online-edit download/rollback.
+- **"Update naut" wording corrected.**
 
 ## [0.11.2] - 2026-09-25
 
