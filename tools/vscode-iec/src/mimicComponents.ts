@@ -130,6 +130,24 @@ export async function locateComponentSource(component: string): Promise<vscode.U
   )[0];
 }
 
+/** Every `{Name}.svelte` in the workspace, by component name — the full set
+ * a custom component could be, independent of whether any open document
+ * references it yet or a sidecar already exists for it. Used to offer
+ * "Edit Component Ports…" on a component the user has only just authored
+ * (no *.mimic.json equipment references it yet, so userComponents.ts's
+ * request()-driven discovery has never seen it, and no sidecar exists
+ * either — see editComponentPorts.ts). Built-ins are excluded by the
+ * caller (they have no .svelte source in the workspace anyway). */
+export async function discoverSvelteComponentNames(): Promise<string[]> {
+  const uris = await vscode.workspace.findFiles("**/*.svelte", EXCLUDE_GLOB);
+  const names = new Set<string>();
+  for (const uri of uris) {
+    const base = uri.fsPath.split(/[/\\]/).pop() ?? "";
+    if (base.endsWith(".svelte")) names.add(base.slice(0, -".svelte".length));
+  }
+  return [...names].sort();
+}
+
 async function newSidecarLocation(docUri: vscode.Uri, component: string): Promise<vscode.Uri> {
   const source = await locateComponentSource(component);
   const dir = source ? vscode.Uri.joinPath(source, "..") : vscode.Uri.joinPath(docUri, "..");

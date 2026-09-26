@@ -2,11 +2,12 @@
 // components (Tank, Pump, ...), reusing the same Component Editor a
 // project's own custom components get. Built-ins have no *.component.json
 // of their own until the user asks to override one; this command is that
-// ask: pick a component (built-in or already-discovered custom), then open
-// its sidecar — creating one, prefilled with the component's current
-// default ports, if it doesn't exist yet.
+// ask: pick a component (built-in, already-discovered custom, or any bare
+// .svelte component in the workspace with no sidecar yet), then open its
+// sidecar — creating one, prefilled with the component's current default
+// ports, if it doesn't exist yet.
 import * as vscode from "vscode";
-import { ComponentIndex, EXCLUDE_GLOB, writeComponentPortsEdit } from "./mimicComponents";
+import { ComponentIndex, EXCLUDE_GLOB, discoverSvelteComponentNames, writeComponentPortsEdit } from "./mimicComponents";
 import { BUILTIN_COMPONENT_NAMES, BUILTIN_COMPONENT_PORTS } from "./builtinComponents";
 
 /** Where a brand-new sidecar lands when there's no natural anchor yet
@@ -32,6 +33,17 @@ export function registerEditComponentPortsCommand(index: ComponentIndex): vscode
       .filter((n) => !BUILTIN_COMPONENT_NAMES.includes(n))
       .sort();
 
+    // Also offer a custom component that has no sidecar yet at all — a
+    // .svelte file just authored, with no *.component.json and (often) no
+    // *.mimic.json referencing it yet either, so it wouldn't otherwise show
+    // up here (see mimicComponents.ts's discoverSvelteComponentNames doc
+    // comment). A sidecar for it is created, prefilled with empty ports,
+    // the first time it's picked below.
+    const svelteNames = await discoverSvelteComponentNames();
+    const undiscoveredNames = svelteNames
+      .filter((n) => !BUILTIN_COMPONENT_NAMES.includes(n) && !customNames.includes(n))
+      .sort();
+
     const items: Item[] = [
       ...BUILTIN_COMPONENT_NAMES.map(
         (name): Item => ({
@@ -44,6 +56,9 @@ export function registerEditComponentPortsCommand(index: ComponentIndex): vscode
       ...customNames.map(
         (name): Item => ({ name, label: name, description: "custom component", detail: "has a ports override" })
       ),
+      ...undiscoveredNames.map(
+        (name): Item => ({ name, label: name, description: "custom component", detail: "no ports override yet" })
+      ),
     ];
 
     if (!items.length) {
@@ -52,7 +67,7 @@ export function registerEditComponentPortsCommand(index: ComponentIndex): vscode
     }
 
     const pick = await vscode.window.showQuickPick(items, {
-      title: "Nautilus: Edit Component Ports…",
+      title: "nautilus: Edit Component Ports…",
       placeHolder: "Choose a component to edit its connection points",
       matchOnDescription: true,
     });
@@ -71,11 +86,10 @@ export function registerEditComponentPortsCommand(index: ComponentIndex): vscode
     }
 
     // Prefill with the component's current defaults: the built-in table for
-    // a built-in, or an empty list for a custom component this command's
-    // QuickPick somehow offered without a sidecar (not reachable today,
-    // since customNames above only lists sidecar-discovered names, but
-    // harmless either way — the Component Editor lets ports be added from
-    // there).
+    // a built-in, or an empty list for a custom component (sidecar-
+    // discovered, or a bare .svelte file with no sidecar yet — see
+    // undiscoveredNames above). Either way the Component Editor lets ports
+    // be added from there.
     const defaults = BUILTIN_COMPONENT_PORTS[pick.name] ?? [];
     const res = await writeComponentPortsEdit(index, anchor, pick.name, defaults);
     if (!res.ok) {
