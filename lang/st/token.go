@@ -3,6 +3,8 @@
 // Phase 3 replaces that with ST → internal/plc/ir (typed tree-walk evaluator).
 package st
 
+import "strings"
+
 // TokenType identifies a token kind.
 type TokenType int
 
@@ -232,4 +234,26 @@ func ScalarTypeNames() []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// IsKeyword reports whether name collides (case-insensitively) with an IEC
+// 61131-3 keyword the lexer reserves.
+func IsKeyword(name string) bool {
+	_, ok := keywords[strings.ToUpper(name)]
+	return ok
+}
+
+// EscapeKeyword returns name unchanged, unless it collides
+// (case-insensitively) with an IEC 61131-3 keyword, in which case it
+// appends a trailing underscore. A source (Logix UDT member, tag, etc.)
+// may be named "retain" or "of" — both valid there, both parse errors as
+// an ST identifier — so an importer that mirrors that source's field names
+// one-for-one needs a deterministic escape. `naut logix import` and
+// `naut eip import` both call this so a name renames the same way no
+// matter which importer produced it.
+func EscapeKeyword(name string) string {
+	if IsKeyword(name) {
+		return name + "_"
+	}
+	return name
 }

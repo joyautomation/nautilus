@@ -13,7 +13,7 @@
 
 import * as vscode from "vscode";
 import { diagramKeyVerdict, isDiagramKeyMessage, type DiagramKeyAction } from "./diagramKeyPolicy";
-import { resolveSourceDoc } from "./sourceDoc";
+import { resolveSourceDoc, serialQueue } from "./sourceDoc";
 
 export { isDiagramKeyMessage };
 export { serialQueue } from "./sourceDoc";
@@ -27,9 +27,14 @@ export function sourceDocument(uri: vscode.Uri | undefined): Promise<vscode.Text
   );
 }
 
-/** Keys apply one at a time: each undo re-focuses the text and hands focus
- * back, and a held-down Ctrl+Z must not interleave two of those. */
-let queue: Promise<void> = Promise.resolve();
+/** Keys apply strictly one at a time, in arrival order: each undo/redo
+ * re-focuses the text, runs the command, waits for the edit to actually
+ * land, and hands focus back — and the NEXT press (a held-down Ctrl+Z, or
+ * a save right behind it) must not start until all of that has finished.
+ * Built on the same serialQueue() the preview panels use for their own
+ * message ordering, so callers awaiting the returned promise really do
+ * wait for the action to be fully applied, not just scheduled. */
+const runInOrder = serialQueue();
 
 export function applyDiagramKey(
   action: DiagramKeyAction,
@@ -37,8 +42,7 @@ export function applyDiagramKey(
   panel: vscode.WebviewPanel,
   state: { diffing: boolean; readOnly?: boolean }
 ): Promise<void> {
-  queue = queue.then(() => apply(action, doc, panel, state)).catch(() => undefined);
-  return queue;
+  return runInOrder(() => apply(action, doc, panel, state));
 }
 
 async function apply(
@@ -74,8 +78,37 @@ async function apply(
   try {
     // Never undo some other file because focus didn't land where expected.
     if (vscode.window.activeTextEditor?.document.uri.toString() !== uri) return;
+    const versionBeforeCommand = doc.version;
     await vscode.commands.executeCommand(action);
+    // `executeCommand` resolves once the command has been dispatched to the
+    // editor, not once this extension-host TextDocument's own copy has
+    // caught up with the edit — that arrives separately, as an
+    // onDidChangeTextDocument sync. Without this wait, a save queued right
+    // behind (through this same queue) could call doc.save() before the
+    // sync lands and write the PRE-undo text, while the edit still applies
+    // moments later and leaves the document dirty again.
+    await waitForDocSync(doc, versionBeforeCommand);
   } finally {
     panel.reveal(panel.viewColumn, false);
   }
+}
+
+/** Resolves once `doc`'s version has moved past `before` (the edit has
+ * synced to this extension host), or after `timeoutMs` if nothing changed
+ * — an undo/redo with an empty stack is a legitimate no-op, so this must
+ * not stall every empty-stack press waiting for a sync that never comes. */
+function waitForDocSync(doc: vscode.TextDocument, before: number, timeoutMs = 300): Promise<void> {
+  if (doc.version !== before) return Promise.resolve();
+  const uri = doc.uri.toString();
+  return new Promise((resolve) => {
+    const finish = () => {
+      sub.dispose();
+      clearTimeout(timer);
+      resolve();
+    };
+    const sub = vscode.workspace.onDidChangeTextDocument((e) => {
+      if (e.document.uri.toString() === uri && e.document.version !== before) finish();
+    });
+    const timer = setTimeout(finish, timeoutMs);
+  });
 }

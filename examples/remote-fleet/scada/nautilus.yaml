@@ -1,0 +1,115 @@
+# water-scada — a plant SCADA on the OTHER side of the wire from the
+# three edge nodes in ../sites: it subscribes to the whole "Water" group
+# and presents every site's data as INPUT tags, sends operator writes
+# back out as NCMD, and reads its own local field device (a chlorine
+# analyser) directly. See ../README.md for the fleet story.
+#
+#   naut check .   compile + verify the generated tags agree with fleet.st
+#   naut test  .   acceptance tests, virtual time, no broker
+#   naut run   .   connect to the broker + the analyser and go live
+name: water-scada
+
+server:
+  addr: "localhost:8080"
+  online-edits: true
+  # naut historian -source http://localhost:8080 -db postgres://... — a
+  # separate daemon; documented in README.md, not brought up by the live
+  # walkthrough there (postgres is optional). Pointing this at it is
+  # harmless with nothing listening: /history* just proxies an error.
+  historian: "http://localhost:8081"
+
+tasks:
+  - program: fleet.st   # the fleet-wide rollups and the operator's NCMD write path
+    scan: 250ms
+  - name: overview
+    program: overview.fbd   # dispatch: which well(s) run, by tank level
+    scan: 250ms
+
+# sparkplug_types.st (the Pump template as an ST TYPE) is a root-level .st
+# with no PROGRAM, so it composes as a library automatically — no entry
+# needed here, same as every generated *_types.st in this codebase.
+#
+# tags/sparkplug.yaml and tags/modbus.yaml are GENERATED — see sites.yaml,
+# devices.yaml and README.md. Do not hand-edit; re-run the imports instead.
+tag-files:
+  - tags/sparkplug.yaml
+  - tags/modbus.yaml
+
+# Fleet-wide rollups and setpoints fleet.st/overview.fbd compute — hand
+# written because they exist only in this project, not on any site's own
+# birth certificate.
+tags:
+  - { name: SitesOnline, role: state, init: 0, desc: "Edge nodes currently online, of 3" }
+  - { name: AnyPumpRunning, role: state, init: false, desc: "Any fleet pump running (either well or either booster pump)" }
+  - { name: SystemDemandLps, role: state, init: 0.0, unit: "L/s", desc: "System flow demand (Booster 1's flow meter), while online" }
+
+  - { name: TankLevelPct, role: state, init: 0.0, unit: "%", desc: "Distribution tank level (from Booster 1), while online" }
+  - { name: TankHighSP, role: setpoint, init: 70.0, unit: "%", desc: "Tank level below which the lead well is called" }
+  - { name: TankLowSP, role: setpoint, init: 30.0, unit: "%", desc: "Tank level below which the lag well joins" }
+  - { name: TankLowAlm, role: state, init: false, desc: "Distribution tank low, 10 s proven" }
+  - { name: Well1Called, role: state, init: false, desc: "Well 1 (lead) called, by tank level — informational; see overview.fbd" }
+  - { name: Well2Called, role: state, init: false, desc: "Well 2 (backup) called, by tank level — informational; see overview.fbd" }
+
+  - { name: ResidualLowSP, role: setpoint, init: 0.2, unit: "ppm", desc: "Chlorine residual low-alarm setpoint" }
+  - { name: ChlorineResidualLowAlm, role: state, init: false, desc: "Chlorine residual below setpoint" }
+
+# Two drivers, one scan: the fleet (Sparkplug B) and the plant's own local
+# Modbus device (the chlorine analyser). io.Multi fans reads across both
+# every scan; a tag owned by two drivers would refuse to load, but
+# nothing here overlaps. Each gets its own DriverStatusPanel row.
+drivers:
+  - type: sparkplug-host
+    broker: "tcp://127.0.0.1:1883"   # temporary local broker — see ../README.md
+    group-id: Water
+    host-id: water-scada
+    manifest: sparkplug_manifest.yaml
+    primary: true                    # publish STATE (default; explicit here)
+    state-form: both                 # 3.0 JSON + legacy STATE/<host>
+    reorder-timeout: 5s               # unfilled seq gap this long -> NCMD Rebirth
+    stale-after: 2m                   # silence this long -> node marked stale
+    on-unknown: log                   # metrics the manifest never bound: logged, never dropped silently
+  - type: modbus
+    manifest: modbus_manifest.yaml
+    scan-rate: 1s
+
+# retain: setpoints (TankHighSP/TankLowSP/ResidualLowSP, every alarm
+# limit, and every operator-written pump speed setpoint) survive a
+# restart. {} takes every default (file: retain.json).
+retain: {}
+
+# One replica in this bench walkthrough, but the shape a k8s Deployment
+# with replicas: 2 needs is here: only the elected leader's drivers dial
+# out or publish. See deploy/k8s.yaml.
+redundancy:
+  lease: water-scada
+
+alarms:
+  # Site comes from the tag NAME, by regexp: Well1_Pump1_SpeedSP -> site
+  # Well1, Booster1_Pump1 -> site Booster1. See the Alarms guide.
+  site-from: "^([A-Za-z]+[0-9]+)_"
+
+  defaults: { ack-required: true, auto-clear: true, shelve: true }
+  shelve-times: [15m, 1h, 4h]
+  journal: { keep: 500 }
+
+  # ONE rule covers every pump's Fault member, across all three sites —
+  # the shared Pump Template is exactly what makes this a rule instead of
+  # five hand-written defs (Well1/Well2/Booster1 x their pumps). enable:
+  # "{site}__Online" is the suppression: a dark site's alarms move to
+  # Suppressed instead of freezing lit (see the fleet's own "dark site"
+  # story beat, in this project's README).
+  rules:
+    - match: { type: Pump, member: Fault }
+      name: "{desc} fault"
+      priority: high
+      on-delay: 1s
+      enable: "{site}__Online"
+      class: equipment
+
+  # Hand-written: nothing on the wire carries these as a Template member,
+  # so there's no rule to write them as — the tank rollup and the plant's
+  # own local analyser.
+  defs:
+    - { id: TankLow, tag: TankLowAlm, name: "Distribution tank low", priority: high, on-delay: 10s, class: process }
+    - { id: ResidualLow, tag: ChlorineResidualLowAlm, name: "Chlorine residual low", priority: high, on-delay: 30s, class: process }
+    - { id: AnalyzerFault, tag: CL1_Fault, name: "Chlorine analyser fault", priority: medium, on-delay: 5s, class: equipment }

@@ -18,6 +18,10 @@ type VarSlot struct {
 	Type     *Type
 	Init     Value // zero-valued Value.Kind means "use Zero(Type)"
 	Retained bool
+	// Constant marks a VAR CONSTANT declaration: its value is always Init,
+	// so an online edit (MigrateFrame) takes the new declaration's value
+	// instead of carrying the old frame's.
+	Constant bool
 	Kind     VarKind
 	Global   string // Kind == VarGlobal: PLC variable name passed to Host
 }
@@ -79,15 +83,17 @@ type Frame struct {
 }
 
 // NewFuncFrame allocates a fresh per-call frame for a user FUNCTION,
-// zero-initialised against each slot's declared type. The caller writes
-// argument values into the input slots before invoking def.Run.
+// each slot at its declared initial value (IEC: a FUNCTION's variables are
+// re-initialised on every call), or zero for its type when it has none.
+// The caller writes argument values into the input slots before invoking
+// def.Run.
 func NewFuncFrame(def *FuncDef) *Frame {
 	slots := make([]Value, def.FrameSize)
 	for i, s := range def.Inputs {
-		slots[i] = Zero(s.Type)
+		slots[i] = s.initial()
 	}
 	for i, s := range def.Locals {
-		slots[len(def.Inputs)+i] = Zero(s.Type)
+		slots[len(def.Inputs)+i] = s.initial()
 	}
 	slots[def.ReturnSlot] = Zero(def.ReturnType)
 	return &Frame{Slots: slots}

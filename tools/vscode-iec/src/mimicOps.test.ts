@@ -245,6 +245,24 @@ test("pipes: from/to anchors — addPipe accepts fewer interior points per ancho
   );
 });
 
+test("pipes: the port-to-port addPipe the + Pipe gesture posts is structured-clone-safe and applies as received", () => {
+  // The webview builds this op from Svelte $state anchors (Proxies), which
+  // postMessage's structured clone refuses; it copies the op to plain data
+  // first (webview-ui/src/mimic/opPayload.ts). Stand in for that here: a
+  // Proxy-built op must NOT clone, its JSON copy must, and what arrives
+  // applies — both ends anchored, suggested orthogonal corners.
+  const from = new Proxy({ equip: "pump1", port: "out" }, {});
+  const to = new Proxy({ equip: "tank1", port: "left" }, {});
+  const raw = { type: "addPipe" as const, points: [[358, 150], [60, 150]] as [number, number][], from, to, routing: "orthogonal" as const };
+  assert.throws(() => structuredClone(raw), (e: Error) => e.name === "DataCloneError");
+  const received = structuredClone(JSON.parse(JSON.stringify(raw))) as MimicOp;
+  const p = doc(apply(BASE, received)).pipes!.find((q) => q.from)!;
+  assert.deepEqual(p.from, { equip: "pump1", port: "out" });
+  assert.deepEqual(p.to, { equip: "tank1", port: "left" });
+  assert.equal(p.routing, "orthogonal");
+  assert.deepEqual(p.points, [[358, 150], [60, 150]]);
+});
+
 test("pipes: addPipe accepts an optional routing (the route-suggestion gesture's port-to-port default)", () => {
   const out = apply(BASE, {
     type: "addPipe",

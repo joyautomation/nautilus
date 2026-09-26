@@ -35,9 +35,25 @@ type TypeDef struct {
 // "BOOL", ...), "STRING" for string-shaped templates, or another TypeDef
 // name. ArrayLen > 0 marks a fixed array member.
 type FieldDef struct {
-	Name     string
+	Name string
+	// Device is the controller's real member name, when it differs from
+	// Name. `naut eip import` sets this when Name was escaped away from an
+	// IEC keyword (a UDT member called "retain" declares as Name: "retain_",
+	// Device: "retain") — the ST identifier changes, but reads and writes
+	// still address the controller by its real member name. Empty means
+	// Device is the same as Name.
+	Device   string `yaml:"device,omitempty"`
 	Type     string
 	ArrayLen int
+}
+
+// deviceName returns the controller's real member name for this field:
+// Device when set, otherwise Name.
+func (f FieldDef) deviceName() string {
+	if f.Device != "" {
+		return f.Device
+	}
+	return f.Name
 }
 
 // TagBinding maps one controller tag to one nautilus tag.

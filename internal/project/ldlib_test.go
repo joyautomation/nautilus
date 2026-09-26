@@ -132,10 +132,10 @@ END_FUNCTION_BLOCK`)}
 	}
 }
 
-// The shipped example is the end-to-end proof: two instances of one
-// ladder block, each with its own retained state.
+// The ladder-subroutines fixture is the end-to-end proof: two instances of
+// one ladder block, each with its own retained state.
 func TestLadderSubroutinesExampleLoads(t *testing.T) {
-	proj, err := Load(os.DirFS("../../examples/ladder-subroutines"), "")
+	proj, err := Load(os.DirFS("../../testdata/projects/ladder-subroutines"), "")
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}

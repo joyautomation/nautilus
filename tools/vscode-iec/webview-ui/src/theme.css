@@ -65,6 +65,24 @@
 	--nx-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
 }
 
+/* The browser's own UA stylesheet gives <body> an 8px margin; App.svelte's
+   .host already fills the viewport (height: 100vh) on top of that, so the
+   document was ~8px taller than the viewport and the page itself (not any
+   pane) scrolled that far once a chart grew tall enough to be the tallest
+   thing on it — cutting the toolbar's own top edge off-screen. Zeroing the
+   margin and pinning html/body to the viewport's exact size, with the
+   overflow that's left over ONLY on the pane that wants to scroll
+   (ZoomPane's .flow, SvelteFlow's own canvas), keeps the toolbar always
+   fully in view. */
+html,
+body,
+#app {
+	height: 100%;
+	margin: 0;
+	padding: 0;
+	overflow: hidden;
+}
+
 /* Light themes without the VS Code variables (a harness, an old host):
    keep the fallbacks legible on a light canvas. */
 body.vscode-light,

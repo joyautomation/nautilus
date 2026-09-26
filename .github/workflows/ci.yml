@@ -21,6 +21,42 @@ jobs:
       - run: go build ./...
       - name: naut check (examples)
         run: go run ./cmd/naut check examples
+      - name: naut check + naut test (every example project's every manifest)
+        # Discovers project roots by their nautilus.yaml (so go-sdk, which
+        # has none, is skipped automatically) and, in each one, every
+        # sibling *.yaml with a top-level `tasks:` key — nautilus.yaml
+        # itself plus a field/line/site variant (field.yaml, line.yaml,
+        # ...) — skipping generated tag/device files. A new example project
+        # is covered the moment it gets a nautilus.yaml; nothing here names
+        # lift-station/batch-skid/remote-fleet by hand.
+        run: |
+          set -u
+          fail=0
+          while IFS= read -r -d '' root_manifest; do
+            root=$(dirname "$root_manifest")
+            for manifest in "$root"/*.yaml; do
+              [ -e "$manifest" ] || continue
+              name=$(basename "$manifest")
+              case "$name" in
+                *_manifest.yaml|devices.yaml|sites.yaml) continue ;;
+              esac
+              grep -q '^tasks:' "$manifest" || continue
+              if [ "$name" = nautilus.yaml ]; then
+                echo "::group::naut check $root"
+                go run ./cmd/naut check "$root" || fail=1
+              else
+                echo "::group::naut check -m $name $root"
+                go run ./cmd/naut check -m "$name" "$root" || fail=1
+              fi
+              echo "::endgroup::"
+            done
+            if ls "$root"/*_test.yaml >/dev/null 2>&1; then
+              echo "::group::naut test $root"
+              go run ./cmd/naut test "$root" || fail=1
+              echo "::endgroup::"
+            fi
+          done < <(find examples -name nautilus.yaml -print0 | sort -z)
+          exit $fail
   sparkplug-tck:
     name: Sparkplug B — TCK conformance
     runs-on: ubuntu-latest

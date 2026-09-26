@@ -25,32 +25,43 @@ one tag store.
 
 ## A rung, in text
 
-`interlocks.ld` from the heated-tank example, the annunciator running as its
-own 200 ms task:
+A trimmed slice of `examples/lift-station/permissives.ld` — the duty
+mapping and one pump's permissive/start rungs; `P102`'s mirror the same
+shape:
 
 ```iecld
-PROGRAM Interlocks
+PROGRAM Permissives
 VAR_EXTERNAL
-    TempLowAlm : BOOL;
-    TempC      : REAL;
-    HornAck    : BOOL;
-    Horn       : BOOL;
-    HiTempAlm  : BOOL;
+    LeadIsP101 : BOOL;  LeadReq : BOOL;  LSHH101 : BOOL;  LSLL101 : BOOL;
+    P101_Req        : BOOL;
+    P101_SealFail   : BOOL;  P101_OverTemp : BOOL;  P101_VfdFault : BOOL;
+    P101_Permissive : BOOL;
+    P101_Mode       : INT;   P101_Running  : BOOL;
+    P101_RunCmd     : BOOL;  P101_FailToRun: BOOL;  P101_LockedOut: BOOL;
+    P101_Avail      : BOOL;  ResetFaults   : BOOL;
 END_VAR
 VAR
-    HiSecs : TIME; (* how long we've been hot — captured via ET => *)
+    m101 : MotorStarter;
 END_VAR
 LD
-  RUNG hitemp (* comparison as a contact, 5 s on-delay; ET captured with the standard's => output binding *)
-    GT(TempC, 90.0) t2:TON(PT := T#5S, ET => HiSecs) ( HiTempAlm )
+  // duty mapping + high-high override, one rung: LSHH forces the call
+  // regardless of the sequence or who's lead
+  RUNG p101req
+    [ LeadIsP101 LeadReq | LSHH101 ] ( P101_Req )
 
-  // Comment runs like this render as notes in the ladder diagram —
-  // dblclick to edit them there.
-  RUNG horn (* either alarm sounds the horn until the operator acks *)
-    [ TempLowAlm | HiTempAlm ] /HornAck ( Horn )
+  RUNG p101perm (* a dry well (LSLL) blocks both pumps, not just the lead *)
+    /P101_SealFail /P101_OverTemp /P101_VfdFault /LSLL101 ( P101_Permissive )
 
-  RUNG ackclear (* the ack releases itself once both alarms clear *)
-    /TempLowAlm /HiTempAlm ( R HornAck )
+  // every BOOL input bound by name: no free input for rung power, so the
+  // call sits alone on the rail — see docs/functions.md "Power pins in ladder"
+  RUNG p101start
+    m101:MotorStarter(Mode := P101_Mode, AutoReq := P101_Req, Permissive := P101_Permissive,
+                       RunFb := P101_Running, Reset := ResetFaults,
+                       Run => P101_RunCmd, FailToRun => P101_FailToRun,
+                       LockedOut => P101_LockedOut)
+
+  RUNG p101avail (* Off (Mode 0) is never available, same as a failed, locked-out, or blocked pump *)
+    /P101_FailToRun /P101_LockedOut P101_Permissive /EQ(P101_Mode, 0) ( P101_Avail )
 END_LD
 END_PROGRAM
 ```
@@ -64,10 +75,10 @@ Every element the grammar accepts:
 | Rising-edge contact | `+Tag` | one scan of power on `Tag`'s 0→1 transition (an implicit `R_TRIG`) |
 | Falling-edge contact | `-Tag` | one scan of power on `Tag`'s 1→0 transition (an implicit `F_TRIG`) |
 | Parallel branch | `[ a \| b ]` | OR of its legs; each leg is a series, and branches nest |
-| Function contact | `GT(TempC, 90.0)` | passes power when the call returns TRUE |
-| Negated function contact | `/GT(TempC, 90.0)` | passes power when the call returns FALSE; `/` negates any BOOL term, `/t1.Q` included |
-| Block in the rung | `t2:TON(PT := T#5S)` | power drives its power-in pin, and continues from its power-out pin |
-| Output capture | `ET => HiSecs` | binds a non-BOOL output pin to a variable, inside the block's parentheses |
+| Function contact | `EQ(P101_Mode, 0)` | passes power when the call returns TRUE |
+| Negated function contact | `/EQ(P101_Mode, 0)` | passes power when the call returns FALSE; `/` negates any BOOL term, `/t1.Q` included |
+| Block in the rung | `m101:MotorStarter(Mode := P101_Mode, …)` | power drives its power-in pin, and continues from its power-out pin |
+| Output capture | `Run => P101_RunCmd` | binds an output pin to a variable, inside the block's parentheses; the standard's own `=>` form, for a BOOL pin exactly as for a timer's elapsed time |
 | Output coil | `( Tag )` | `Tag :=` the rung condition, every scan |
 | Set coil | `( S Tag )` | latch: `Tag := Tag OR condition` |
 | Reset coil | `( R Tag )` | unlatch: `Tag := Tag AND NOT condition` |
@@ -106,9 +117,10 @@ output pin; every other pin is named in the parentheses. `TON`, `TOF` and
 power pin yourself (`t1:TON(IN := x)`) is an error, because power owns it.
 
 Coils assign BOOL only. To store a timer's elapsed time or a counter's
-value, use the standard's output binding at the call site, `ET => HiSecs`
-above. Any instance output is also readable as `inst.Pin` anywhere,
-including as a contact: `GE(t2.ET, T#2S)`.
+value, use the standard's output binding at the call site, `Run =>
+P101_RunCmd` above. Any instance output is also readable as `inst.Pin`
+anywhere, including as a contact: `m101.FailToRun` reads the same way a
+plain BOOL tag would, without needing a `=>` capture first.
 
 Edge contacts and edge coils are unnamed in the text. The compiler derives
 a stable instance name from the rung name, the tag, and the position among
@@ -136,13 +148,26 @@ Blocks can be written in ladder, too. A `.ld` file may hold
 `.st` one:
 
 ```iecld
-FUNCTION_BLOCK PumpSeq
-VAR_INPUT  Start : BOOL; Stop : BOOL; Level : REAL; StopLevel : REAL; END_VAR
-VAR_OUTPUT Run : BOOL; Warm : BOOL; END_VAR
-VAR        t1 : TON; END_VAR
+FUNCTION_BLOCK MotorStarter
+VAR_INPUT
+    Mode       : INT;  (* 0 Off, 1 Hand, 2 Auto *)
+    AutoReq    : BOOL;
+    Permissive : BOOL;
+    RunFb      : BOOL;
+    Reset      : BOOL;
+END_VAR
+VAR_OUTPUT
+    Run       : BOOL;
+    FailToRun : BOOL;
+END_VAR
+VAR t1 : TON; END_VAR
 LD
-  RUNG seal  [ Start | Run ] /Stop /GE(Level, StopLevel) ( Run )
-  RUNG warm  Run t1:TON(PT := T#5S) ( Warm )
+  RUNG run
+    [ EQ(Mode, 2) AutoReq | EQ(Mode, 1) ] Permissive /FailToRun ( Run )
+  RUNG fail
+    Run /RunFb t1:TON(PT := T#5S) ( S FailToRun )
+  RUNG reset
+    Reset ( R FailToRun )
 END_LD
 END_FUNCTION_BLOCK
 ```
@@ -151,13 +176,14 @@ This is what ladder has instead of a JSR: a subroutine with pins rather
 than shared tags, and retained state per instance. Two pumps are two
 instances of one block, each with its own seal-in and its own `t1`. The
 `VAR_*` sections are ordinary POU declarations, `VAR_IN_OUT` included, so
-a ladder block can take a UDT by reference. `examples/ladder-subroutines`
-is the whole feature in four files. See [Function blocks, libraries, and
-tasks](/guides/blocks-and-tasks/).
+a ladder block can take a UDT by reference. `examples/lift-station/lib/motor.ld`
+is the whole feature (this listing trims its lockout counter) —
+instantiated twice, once per pump, from `permissives.ld` above. See
+[Function blocks, libraries, and tasks](/guides/blocks-and-tasks/).
 
 ## In the editor
 
-![interlocks.ld as text on the left with live values inline, and the same rungs as a ladder diagram on the right, with power flow painted green from the running controller](../../../assets/editors/ladder.png)
+![permissives.ld as text on the left with live values inline, and the same rungs as a ladder diagram on the right, with power flow painted green from the running controller](../../../assets/editors/ladder.png)
 
 Right-click a `.ld` file and choose **Open With → Ladder Diagram** to use
 the diagram as the editor, or run **nautilus: Open Ladder Diagram Preview**
@@ -199,7 +225,7 @@ edits. The git diffs work on a Rockwell `.L5X` export as well.
 ```sh
 naut check                      # compile every .st/.fbd/.ld/.sfc; errors land on the rung
 naut test                       # acceptance tests, on the virtual clock
-naut ld graph interlocks.ld     # the ladder render model as JSON
+naut ld graph permissives.ld    # the ladder render model as JSON
 naut ld edit                    # apply one structural edit op, from JSON on stdin
 ```
 
@@ -215,9 +241,9 @@ edits](/guides/online-edits/).
 A rung change reviews as a rung:
 
 ```diff
-   RUNG horn (* either alarm sounds the horn until the operator acks *)
--    [ TempLowAlm | HiTempAlm ] /HornAck ( Horn )
-+    [ TempLowAlm | HiTempAlm | Overfill ] /HornAck ( Horn )
+   RUNG p101req
+-    [ LeadIsP101 LeadReq | LSHH101 ] ( P101_Req )
++    [ LeadIsP101 LeadReq | LSHH101 | ManualCall ] ( P101_Req )
 ```
 
 `naut new my-plant --template minimal --language ld` scaffolds a project

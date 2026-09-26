@@ -158,10 +158,11 @@ func TestTranspileShape(t *testing.T) {
 		"_S_Idle_X : BOOL := TRUE;",                                            // cold-start initial step
 		"_S_Fill_X : BOOL;",                                                    // other steps default FALSE
 		"_en_t_full := _S_Fill_X AND (Level >= FillSP)",                        // enabled = source .X AND cond
-		"_f_t_full := _en_t_full AND NOT (_en_t_abort);",                       // enabled-based alt guard
+		"_f_t_full := _en_t_full AND NOT (_f_t_abort);",                        // firing-based alt guard
 		"_en_t_done := _S_Heat_X AND _S_Mix_X AND ((TempC >= HeatSP) AND mixT.Q)", // convergence: both sources ANDed
-		"RunLamp := _S_Idle_X OR _S_Fill_X OR _S_Heat_X OR _S_Mix_X OR _S_Drain_X;", // boolean OR-combine
-		"FillValve := _S_Fill_X;",
+		"IF _S_Idle_X OR _S_Fill_X OR _S_Heat_X OR _S_Mix_X OR _S_Drain_X THEN RunLamp := TRUE; END_IF;", // N OR-combine, held while active
+		"IF _act_FillValve_lvl AND NOT (_S_Fill_X) THEN FillValve := FALSE; END_IF;",                   // N final scan
+		"IF (_S_Idle_X AND NOT _S_Idle_prev) THEN AbortLamp := FALSE; END_IF;",                          // R acts once, on activation
 		"_act_Stir_prev THEN",                     // final-scan wrapper
 		"Mixer := _S_Mix_X;",                      // body .X rewrite
 		"mixT(IN := _S_Mix_X, PT := T#30S);",      // body .X rewrite in FB call

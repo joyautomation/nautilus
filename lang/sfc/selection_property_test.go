@@ -14,7 +14,7 @@ import (
 // parse; a copy never adds a check error; select-all cut + paste gives
 // back a chart that compiles (its entry step becomes initial again).
 func TestSelectionOpsProperty(t *testing.T) {
-	b, err := os.ReadFile("../../examples/tank-batch-sfc/program.sfc")
+	b, err := os.ReadFile("../../testdata/projects/tank-batch-sfc/program.sfc")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,13 +7,14 @@
 	// highlighted), Enter accepts only a highlighted item (otherwise it
 	// falls through to the caller's commit), Escape dismisses the list
 	// first and only then reaches the caller.
-	import { filterItems, lastToken, leadingIdent, replaceLastToken, replaceLeadingIdent, type SuggestItem } from './suggest';
+	import { filterItems, lastToken, leadingIdent, replaceLastToken, replaceLeadingIdent, replaceTailWord, tailWord, type SuggestItem } from './suggest';
 
 	let {
 		value = $bindable(''),
 		items = [],
 		multi = false,
 		call = false,
+		tail = false,
 		cls = '',
 		style = '',
 		onkeydown,
@@ -25,6 +26,9 @@
 		/** call mode: complete the leading FUNCTION NAME of "FN(args)",
 		 * never touching the argument list. */
 		call?: boolean;
+		/** tail mode: complete the LAST word ("N Pu" → "N PumpRun"),
+		 * keeping what comes before it (an SFC action's qualifier). */
+		tail?: boolean;
 		cls?: string;
 		style?: string;
 		onkeydown?: (ev: KeyboardEvent) => void;
@@ -39,7 +43,7 @@
 	// whole vocabulary; the first keystroke switches it to filtering.
 	let typed = $state(false);
 	let active = $state(-1);
-	const token = $derived(call ? leadingIdent(value) : multi ? lastToken(value) : value);
+	const token = $derived(call ? leadingIdent(value) : tail ? tailWord(value) : multi ? lastToken(value) : value);
 	const filtered = $derived.by(() => {
 		if (!focused || dismissed) return [];
 		return typed ? filterItems(items, token.trim()) : items;
@@ -63,7 +67,7 @@
 	function accept(i: number) {
 		const it = filtered[i];
 		if (!it) return;
-		value = call ? replaceLeadingIdent(value, it.name) : multi ? replaceLastToken(value, it.name) : it.name;
+		value = call ? replaceLeadingIdent(value, it.name) : tail ? replaceTailWord(value, it.name) : multi ? replaceLastToken(value, it.name) : it.name;
 		dismissed = true;
 		active = -1;
 		el?.focus();

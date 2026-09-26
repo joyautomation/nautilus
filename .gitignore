@@ -18,10 +18,3 @@ tools/vscode-iec/.vscode-test/
 
 # Locally built binaries
 /nautilus
-examples/heated-tank-fbd/heated-tank-fbd
-
-# Live-site test project (real client hostname + tag names) — local only
-/examples/client60/
-# (the whole tree above is already ignored; called out explicitly since the
-# HMI here carries client-specific tag names, valve labels, and view content)
-/examples/client60/hmi/

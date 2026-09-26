@@ -30,9 +30,10 @@ of that fails `naut check`, not `naut run`, because **`New` never
 dials**: it decodes the manifest, resolves every type reference, rejects
 duplicate names and partitions the bindings into scan classes, all offline.
 The connection is `Start`'s job, so `naut check` and
-`naut build` pass in CI with no controller in sight. `examples/client60`
-is a complete manifest project driving a Logix controller with a ladder
-program, an HMI, and Sparkplug retransmission on top.
+`naut build` pass in CI with no controller in sight. `examples/batch-skid`
+(`line.yaml`) is a complete manifest project driving an "existing" Logix
+line controller over this driver — see its README for the read/write
+handshake and `naut logix emulate`, the hardware-free way to run it.
 
 ## Generating the manifest: `naut eip import`
 
@@ -226,11 +227,53 @@ from. Reconnects back off from 1s to roughly 30s, reset on success.
 
 ## No PLC? The Logix emulator
 
-`eip/logixserver` is an in-repo ControlLogix target: Forward_Open, symbolic
-Read/Write Tag (plain and fragmented), Multiple Service Packet batches,
-tag-list upload, the Template services, and the Identity and Program Name
-objects — the surface both nautilus's own client and pycomm3 speak. It is a Go
-package, not a CLI, so you run it from a few lines:
+`naut logix emulate` stands a ControlLogix up on your laptop from the
+project's own L5X export — the same file `naut logix import` reads:
+
+```sh
+naut logix emulate --l5x UpstreamLine.L5X --ramp
+# emulating ControlLogix "UpstreamLine" on 127.0.0.1:44818 — 4 tags (1 programs), 1 templates, 9 leaves
+```
+
+Every DataType and Add-On Instruction becomes a template (a UDT's BIT
+overlays are served as the BOOLs they were authored as; `STRING`, `TIMER` and
+`COUNTER` are supplied when used), every controller tag becomes a symbol, and
+every program tag is served as `Program:<prog>.<tag>`, exactly as the real
+controller lists it. Initial values come from the export's decorated `<Data>`.
+Aliases, multi-dimensional arrays, and types with no public shape (`MESSAGE`,
+`AXIS_*`) are left out, and the emulator prints each one it skipped.
+
+| Flag | |
+|---|---|
+| `--l5x <file.L5X>` | Derive the tag surface from an export (whole controller or a partial program export) |
+| `--surface <file.json>` | Or serve a hand-written surface: the JSON `logixserver.LoadTagSurface` reads (`naut logix emulate -h` shows its shape) |
+| `--listen` | Address to serve on (default `127.0.0.1:44818`; port `0` picks a free one) |
+| `--values seed.json` | `{"path": value}` seeds applied after load, paths as a client reads them: `{"Line_Rate": 12.5, "Handshake.Ready": true, "Program:MainProgram.Step": 3}`. An object seeds members, an array elements, a string a `STRING` tag |
+| `--ramp` | Drift every numeric leaf slowly so the HMI visibly moves; a leaf a client writes stops drifting and keeps the write |
+| `--name` | Controller name to report (default: the export's) |
+
+Client writes land in the emulator, so a project's outputs read back on the
+next poll. Point the tools and the project at it — a non-default port goes on
+`host:` as `host:port`:
+
+```sh
+naut eip browse --host 127.0.0.1
+naut eip import --host 127.0.0.1 --format yaml --writable 'Batch_Ack'
+```
+
+```yaml
+driver:
+  type: eip
+  host: 127.0.0.1          # or 127.0.0.1:44819 for a second emulator
+  manifest: eip_manifest.yaml
+tag-files: [tags/eip.yaml]
+```
+
+Under the CLI is `eip/logixserver`, an in-repo ControlLogix target:
+Forward_Open, symbolic Read/Write Tag (plain and fragmented), Multiple Service
+Packet batches, tag-list upload, the Template services, and the Identity and
+Program Name objects — the surface both nautilus's own client and pycomm3
+speak. As a library it runs from a few lines, which is how tests drive it:
 
 ```go
 package main
@@ -267,8 +310,9 @@ func main() {
 }
 ```
 
-Point `host:`/`--port` at it and the whole browse → import → poll → write path
-runs with nothing on the network. CI exercises exactly this — `go test ./...`
+`ls.SurfaceFromL5X` is the L5X derivation the CLI uses, and `ls.SeedValue`
+its seeding. Either way the whole browse → import → poll → write path runs
+with nothing on the network. CI exercises exactly this — `go test ./...`
 runs the driver, the `logix` client and the codegen against the emulator on
 every push, no build tags, no env gating — and its `DenyStructRoots` switch
 refuses struct roots the way a real controller refuses an AOI backing tag,

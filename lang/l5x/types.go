@@ -260,16 +260,6 @@ func memberType(m Member) (stgen.Type, string) {
 	return t, ref
 }
 
-// stKeyword is every IEC keyword the nautilus ST lexer reserves, derived
-// from the compiler's own table so the two cannot drift.
-var stKeyword = func() map[string]bool {
-	m := map[string]bool{}
-	for _, k := range st.KeywordNames() {
-		m[strings.ToUpper(k)] = true
-	}
-	return m
-}()
-
 // ident sanitizes a Logix name into an IEC identifier. Two things need
 // fixing, and both were found by compiling the output rather than by
 // reading the spec:
@@ -302,9 +292,5 @@ func ident(name string) string {
 	if b.Len() == 0 {
 		return "_"
 	}
-	out := b.String()
-	if stKeyword[strings.ToUpper(out)] {
-		return out + "_"
-	}
-	return out
+	return st.EscapeKeyword(b.String())
 }

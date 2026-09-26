@@ -40,7 +40,8 @@ Usage:
                               setCondition, setTransitionEnds, addAssoc,
                               setAssoc, deleteAssoc, setActionBody,
                               insertAlternativeBranch,
-                              insertSimultaneousBranch, setLayout,
+                              insertSimultaneousBranch,
+                              joinSimultaneousBranch, setLayout,
                               clearLayout, setComment, init. Blank source
                               seeds a PROGRAM skeleton (named by the op's
                               "pou") and applies the op to it. On a

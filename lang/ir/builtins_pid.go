@@ -84,18 +84,18 @@ func registerPID() {
 	RegisterFB(&FBDef{
 		Name: "PID",
 		Inputs: []FBSlot{
-			{"AUTO", BoolT}, {"PV", RealT}, {"SP", RealT},
-			{"KP", RealT}, {"KI", RealT}, {"KD", RealT},
-			{"CV_MAN", RealT}, {"CV_MIN", RealT}, {"CV_MAX", RealT},
-			{"DIRECT", BoolT}, {"DT", RealT}, {"DB", RealT}, {"RESET", BoolT},
+			{Name: "AUTO", Type: BoolT}, {Name: "PV", Type: RealT}, {Name: "SP", Type: RealT},
+			{Name: "KP", Type: RealT}, {Name: "KI", Type: RealT}, {Name: "KD", Type: RealT},
+			{Name: "CV_MAN", Type: RealT}, {Name: "CV_MIN", Type: RealT}, {Name: "CV_MAX", Type: RealT},
+			{Name: "DIRECT", Type: BoolT}, {Name: "DT", Type: RealT}, {Name: "DB", Type: RealT}, {Name: "RESET", Type: BoolT},
 		},
 		Outputs: []FBSlot{
-			{"CV", RealT}, {"ERR", RealT}, {"SAT_HI", BoolT}, {"SAT_LO", BoolT},
-			{"P_TERM", RealT}, {"I_TERM", RealT}, {"D_TERM", RealT},
+			{Name: "CV", Type: RealT}, {Name: "ERR", Type: RealT}, {Name: "SAT_HI", Type: BoolT}, {Name: "SAT_LO", Type: BoolT},
+			{Name: "P_TERM", Type: RealT}, {Name: "I_TERM", Type: RealT}, {Name: "D_TERM", Type: RealT},
 		},
 		Internals: []FBSlot{
-			{"_lastMs", TimeT}, {"_integral", RealT}, {"_prevPV", RealT},
-			{"_dFilt", RealT}, {"_havePrev", BoolT}, {"_prevAuto", BoolT},
+			{Name: "_lastMs", Type: TimeT}, {Name: "_integral", Type: RealT}, {Name: "_prevPV", Type: RealT},
+			{Name: "_dFilt", Type: RealT}, {Name: "_havePrev", Type: BoolT}, {Name: "_prevAuto", Type: BoolT},
 		},
 		Step: func(inst *FBInstance, ctx FBStepCtx) error {
 			auto := inst.Slots[iAUTO].B

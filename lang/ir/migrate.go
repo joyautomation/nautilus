@@ -28,6 +28,9 @@ func MigrateFrame(next *Program, prev *Program, prevFrame *Frame) (*Frame, []str
 		if s.Kind == VarGlobal {
 			continue // canonical value lives in the tag store, nothing to carry
 		}
+		if s.Constant {
+			continue // a constant is its declaration: NewFrame already set it
+		}
 		j, ok := prevByName[strings.ToLower(s.Name)]
 		if !ok {
 			resets = append(resets, s.Name)
@@ -140,6 +143,12 @@ func carryValue(t *Type, v Value) Value {
 		for i, s := range v.FB.Slots {
 			var st *Type
 			if i < len(all) {
+				if all[i].Constant {
+					// A constant is its declaration, not state: take the
+					// new compile's value so an edit to it lands.
+					inst.Slots[i] = all[i].initial()
+					continue
+				}
 				st = all[i].Type
 			}
 			inst.Slots[i] = carryValue(st, s)

@@ -180,7 +180,16 @@ project's library files — the same composition your logic already uses, so
 they're callable from FBD and ladder too.
 
 Program locals are addressable as `task.local` — `main.integral` — for the
-retained state a program keeps but never publishes as a tag.
+retained state a program keeps but never publishes as a tag, the same way a
+struct tag's field is: as a matcher, `main.integral: { gt: 0.0 }`, or bare
+for exact equality, `main.integral: 3.0`. Name resolution is tag-first and
+falls back task-local only when the head isn't a tag: an exact tag wins,
+then `<tag>.<field>`, then `<task>.<local>`, then an error naming both
+namespaces. `task.local` is this matcher-form address only — it is not
+(yet) a name an **ST expression** string can reference; `main.integral` in
+an expression like `main.integral < 5.0` fails to compile with `undeclared
+identifier "main"`, because the generated `VAR_EXTERNAL` block an
+expression compiles against only ever covers tags.
 
 One assertion is implicit: **a scan that faults fails the test that ran
 it**, with the error and the virtual timestamp. You never write that one.
@@ -235,7 +244,8 @@ machine.
 
 `alarms:` is checked at the end of a step, so it does not combine with
 `until:` — a step that waits and then asserts alarms is two steps, and
-reads better as two. `examples/alarms` is the whole thing working.
+reads better as two. `examples/lift-station`'s and `examples/batch-skid`'s
+`*_test.yaml` alarm ack/shelve checks are the whole thing working.
 
 ## Freezing tasks
 

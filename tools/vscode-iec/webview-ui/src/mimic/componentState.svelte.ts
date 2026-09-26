@@ -9,6 +9,7 @@
 // one thing it currently edits.
 import { vscode } from '../vscodeApi';
 import type { Port } from './portsGestures';
+import { cloneSafe } from './opPayload';
 
 export type { Port };
 export type ComponentDoc = { component: string; ports: Port[] };
@@ -25,7 +26,7 @@ export const cs = $state({
  * an op anyway rather than overwrite the half-typed text. */
 export function postComponentPortsOp(ports: Port[]): void {
 	if (cs.error) return;
-	vscode.postMessage({ type: 'componentOp', ports });
+	vscode.postMessage({ type: 'componentOp', ports: cloneSafe(ports) });
 }
 
 /** Leave the graphical editor for VS Code's text editor on this file. */

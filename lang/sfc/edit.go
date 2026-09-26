@@ -77,6 +77,8 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		edits, err = opInsertAlternativeBranch(lines, m, op)
 	case "insertSimultaneousBranch":
 		edits, err = opInsertSimultaneousBranch(lines, m, op)
+	case "joinSimultaneousBranch":
+		edits, err = opJoinSimultaneousBranch(lines, m, op)
 	case "setLayout":
 		edits, err = opSetLayout(lines, m, op)
 	case "clearLayout":
@@ -334,12 +336,102 @@ func opAddStep(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
 			}
 		}
 	}
-	at, err := insertionLine(lines, m, op.After, "step")
+	after := op.After
+	if after == "" && len(op.From) == 1 {
+		// Chained: the new step lands right under the step it follows.
+		if s, err := findStep(m, stepID(op.From[0])); err == nil {
+			after = s.ID
+		}
+	}
+	at, err := insertionLine(lines, m, after, "step")
 	if err != nil {
 		return nil, err
 	}
 	ns := &GStep{Name: name, Initial: op.Initial}
-	return []TextEdit{{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: "\n" + printStep(ns)}}, nil
+	stepEdit := TextEdit{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: "\n" + printStep(ns)}
+	if len(op.From) == 0 {
+		return []TextEdit{stepEdit}, nil
+	}
+	// "+ step" with a step selected CHAINS: the step plus the transition
+	// that reaches it (FROM <selected> TO <new> := cond), in one edit so a
+	// single undo takes both back.
+	tr, err := newTransitionEdit(lines, m, op.From, []string{name}, "", op.Cond)
+	if err != nil {
+		return nil, err
+	}
+	return mergeInserts(stepEdit, tr), nil
+}
+
+// newTransitionEdit is the insertion of a fresh TRANSITION FROM from TO to
+// := cond, placed as the lowest-priority member of its source's group (after
+// the last transition sharing that single source), else after the last
+// transition — the placement insertAlternativeBranch uses without an anchor.
+func newTransitionEdit(lines []string, m *Model, from, to []string, name, cond string) (TextEdit, error) {
+	for _, n := range append(append([]string{}, from...), to...) {
+		if !sfcIdentRe.MatchString(n) {
+			return TextEdit{}, fmt.Errorf("sfc edit: %q is not a valid step name", n)
+		}
+	}
+	if name != "" {
+		if !sfcIdentRe.MatchString(name) {
+			return TextEdit{}, fmt.Errorf("sfc edit: %q is not a valid transition name", name)
+		}
+		if _, err := findTransition(m, "tr:"+name); err == nil {
+			return TextEdit{}, fmt.Errorf("sfc edit: a transition named %q already exists", name)
+		}
+	}
+	cond = strings.TrimSpace(cond)
+	if err := validCond(cond); err != nil {
+		return TextEdit{}, err
+	}
+	at := 0
+	if len(from) == 1 {
+		for _, t := range m.Trans {
+			if len(t.From) == 1 && strings.EqualFold(t.From[0], from[0]) {
+				at = t.EndLine + 1
+			}
+		}
+	}
+	if at == 0 {
+		var err error
+		if at, err = insertionLine(lines, m, "", "transition"); err != nil {
+			return TextEdit{}, err
+		}
+	}
+	nt := &GTransition{Name: name, From: from, To: to, Cond: cond}
+	return TextEdit{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: "\n" + printTransition(nt)}, nil
+}
+
+// newStepEdit inserts an empty STEP name: right after the step `after`
+// (by id or name) when it exists, else after the last step.
+func newStepEdit(lines []string, m *Model, name, after string) (TextEdit, error) {
+	if !sfcIdentRe.MatchString(name) {
+		return TextEdit{}, fmt.Errorf("sfc edit: %q is not a valid step name", name)
+	}
+	if _, err := findStep(m, stepID(name)); err == nil {
+		return TextEdit{}, fmt.Errorf("sfc edit: a step named %q already exists", name)
+	}
+	anchor := ""
+	if s, err := findStep(m, after); err == nil {
+		anchor = s.ID
+	}
+	at, err := insertionLine(lines, m, anchor, "step")
+	if err != nil {
+		return TextEdit{}, err
+	}
+	return TextEdit{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: "\n" + printStep(&GStep{Name: name})}, nil
+}
+
+// mergeInserts returns a step insertion and a transition insertion as
+// non-overlapping edits: two empty-range inserts at the SAME point have no
+// defined order across edit consumers, so they become one edit, the step
+// first (steps before transitions, the file's section order).
+func mergeInserts(step, trans TextEdit) []TextEdit {
+	if step.Line == trans.Line && step.Col == trans.Col {
+		step.NewText += trans.NewText
+		return []TextEdit{step}
+	}
+	return []TextEdit{step, trans}
 }
 
 func opDeleteStep(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
@@ -439,7 +531,42 @@ func opAddTransition(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
 		return nil, err
 	}
 	nt := &GTransition{Name: name, From: op.From, To: op.To, Cond: cond}
-	return []TextEdit{{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: "\n" + printTransition(nt)}}, nil
+	trEdit := TextEdit{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: "\n" + printTransition(nt)}
+	return withNewStep(lines, m, op, trEdit)
+}
+
+// withNewStep adds the "other… (new step)" half of a transition op: when
+// op.NewStep names one of the transition's TO steps that does not exist
+// yet, an empty STEP of that name lands right after the transition's
+// (first) source step, in the same edit as the transition. A NewStep that
+// already exists is just a transition to it (the name picker's "other…"
+// with a typed existing name).
+func withNewStep(lines []string, m *Model, op EditOp, trEdit TextEdit) ([]TextEdit, error) {
+	ns := strings.TrimSpace(op.NewStep)
+	if ns == "" {
+		return []TextEdit{trEdit}, nil
+	}
+	if _, err := findStep(m, stepID(ns)); err == nil {
+		return []TextEdit{trEdit}, nil
+	}
+	if !slices.ContainsFunc(op.To, func(n string) bool { return strings.EqualFold(n, ns) }) {
+		return nil, fmt.Errorf("sfc edit: newStep %q is not one of the transition's TO steps", ns)
+	}
+	from := op.From
+	if len(from) == 0 && op.After != "" {
+		if t, err := findTransition(m, op.After); err == nil {
+			from = t.From
+		}
+	}
+	after := ""
+	if len(from) > 0 {
+		after = stepID(from[0])
+	}
+	stEdit, err := newStepEdit(lines, m, ns, after)
+	if err != nil {
+		return nil, err
+	}
+	return mergeInserts(stEdit, trEdit), nil
 }
 
 func opDeleteTransition(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
@@ -637,7 +764,9 @@ func opInsertAlternativeBranch(lines []string, m *Model, op EditOp) ([]TextEdit,
 		}
 	}
 	nt := &GTransition{Name: name, From: from, To: op.To, Cond: cond}
-	return []TextEdit{{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: "\n" + printTransition(nt)}}, nil
+	trEdit := TextEdit{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: "\n" + printTransition(nt)}
+	op.From = from
+	return withNewStep(lines, m, op, trEdit)
 }
 
 // opInsertSimultaneousBranch turns a transition's TO x into TO (x, y),
@@ -696,6 +825,33 @@ func opInsertSimultaneousBranch(lines []string, m *Model, op EditOp) ([]TextEdit
 		}
 	}
 	return edits, nil
+}
+
+// opJoinSimultaneousBranch is insertSimultaneousBranch's mirror: it widens
+// a transition's FROM x into FROM (x, y), so the transition becomes (or
+// grows) a simultaneous convergence that fires only once every source step
+// is active (§2.4). Step y must exist and not already be a source.
+//
+// Never-block: whether the sources are the legs of one simultaneous
+// divergence is `naut sfc check`'s call (checkConvergenceReachability
+// warns), not the editor's — a chart is often wired a leg at a time, and
+// refusing a join because the matching divergence isn't drawn yet would
+// dead-end the gesture. Only the step-set is rewritten, in place.
+func opJoinSimultaneousBranch(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
+	t, err := findTransition(m, op.Transition)
+	if err != nil {
+		return nil, err
+	}
+	s, err := findStep(m, op.Step)
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range t.From {
+		if strings.EqualFold(n, s.Name) {
+			return nil, fmt.Errorf("sfc edit: %q is already a source of this transition", s.Name)
+		}
+	}
+	return []TextEdit{stepSetEdit(lines, t, "FROM", append(append([]string{}, t.From...), s.Name))}, nil
 }
 
 func containsAllFold(set, want []string) bool {

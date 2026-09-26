@@ -1,5 +1,7 @@
 package ld
 
+import "github.com/joyautomation/nautilus/lang/fbcatalog"
+
 // stripComments returns src with every comment's body blanked to spaces —
 // `(* ... *)` block comments (which nest, IEC 61131-3 3rd edition) and
 // `//` line comments — while leaving line and column positions untouched:
@@ -20,48 +22,4 @@ package ld
 // rung's `(* ... *)` header comment, a `//` diagram note — is still read
 // from the ORIGINAL source: stripComments exists only to decide what's
 // real code, never to supply the text a caller actually wants to keep.
-func stripComments(src string) string {
-	out := []byte(src)
-	inString := false
-	for i := 0; i < len(out); {
-		switch {
-		case inString:
-			if out[i] == '\'' {
-				inString = false
-			}
-			i++
-		case out[i] == '\'':
-			inString = true
-			i++
-		case out[i] == '/' && i+1 < len(out) && out[i+1] == '/':
-			for i < len(out) && out[i] != '\n' {
-				out[i] = ' '
-				i++
-			}
-		case out[i] == '(' && i+1 < len(out) && out[i+1] == '*':
-			depth := 1
-			out[i], out[i+1] = ' ', ' '
-			i += 2
-			for i < len(out) && depth > 0 {
-				switch {
-				case out[i] == '(' && i+1 < len(out) && out[i+1] == '*':
-					depth++
-					out[i], out[i+1] = ' ', ' '
-					i += 2
-				case out[i] == '*' && i+1 < len(out) && out[i+1] == ')':
-					depth--
-					out[i], out[i+1] = ' ', ' '
-					i += 2
-				case out[i] == '\n':
-					i++ // keep newlines so line numbers stay aligned
-				default:
-					out[i] = ' '
-					i++
-				}
-			}
-		default:
-			i++
-		}
-	}
-	return string(out)
-}
+func stripComments(src string) string { return fbcatalog.StripComments(src) }

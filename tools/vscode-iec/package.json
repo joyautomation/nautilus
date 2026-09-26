@@ -2,7 +2,7 @@
   "name": "vscode-iec",
   "displayName": "nautilus IEC 61131-3",
   "description": "IEC 61131-3 language support for the nautilus SCADA framework: Structured Text (.st), Function Block Diagram (.fbd), Ladder Diagram (.ld) and Sequential Function Chart (.sfc) with syntax highlighting, compile diagnostics, go-to-definition, live graphical diagram editors, inline live tag values from a running controller, and a graphical HMI mimic editor for *.mimic.json P&ID documents.",
-  "version": "0.11.0",
+  "version": "0.11.2",
   "publisher": "joyauto",
   "license": "Apache-2.0",
   "icon": "icon.png",
@@ -36,7 +36,7 @@
   },
   "main": "./out/extension.js",
   "nautilusCli": {
-    "minVersion": "0.11.0"
+    "minVersion": "0.13.0"
   },
   "activationEvents": [
     "onLanguage:iec-st",
@@ -268,7 +268,7 @@
       },
       {
         "command": "nautilus.editComponentPorts",
-        "title": "Nautilus: Edit Component Ports…"
+        "title": "nautilus: Edit Component Ports…"
       },
       {
         "command": "nautilus.newProject",
@@ -419,7 +419,7 @@
         },
         {
           "command": "nautilus.diagram.openAsDiagram",
-          "when": "!activeCustomEditorId && resourceLangId =~ /^(iec-fbd|iec-ld|iec-sfc|logix-l5x)$/"
+          "when": "resourceLangId =~ /^(iec-fbd|iec-ld|iec-sfc|logix-l5x)$/"
         },
         {
           "command": "nautilus.diagram.showSource",
@@ -680,7 +680,7 @@
     "vscode:prepublish": "npm run compile && npm run build:webview",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/gitHistory.test.js out/programSync.test.js out/onlineEditConfirm.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js && npm --prefix webview-ui run test",
+    "test": "npm run compile && node --test out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js && npm --prefix webview-ui run test",
     "build:webview": "npm --prefix webview-ui run build",
     "test:e2e": "npm run compile && node out/e2e/run.js"
   },
@@ -692,6 +692,7 @@
     "@types/node": "^18.19.0",
     "@types/vscode": "^1.82.0",
     "@vscode/test-electron": "^3.1.0",
+    "svelte": "^5.56.4",
     "typescript": "^5.4.0"
   }
 }

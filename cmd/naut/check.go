@@ -82,6 +82,15 @@ func runCheck(args []string) int {
 			return 2
 		}
 		source := string(src)
+		// lib/ holds libraries only. A PROGRAM there would be silently
+		// dropped from every composition (it is neither a library nor a
+		// task), so it is refused here, by its project-relative path.
+		if inLibDir(f) && stproject.DeclaresProgram(source) {
+			bad++
+			fmt.Printf("%s: declares a PROGRAM, but %s/ holds libraries only — "+
+				"programs belong in the root and in `tasks:`\n", f, stproject.LibDir)
+			continue
+		}
 		// Sibling library files (TYPE/FB/FUNCTION-only .st, and .ld/.fbd
 		// files with no PROGRAM) are in scope, exactly as the LSP and a
 		// runtime that composes sources see it. They are resolved BEFORE the
@@ -214,6 +223,25 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		fmt.Printf("%s: %s\n", dir, err)
 		return 1, 0
 	}
+
+	// The first task's name: key is a footgun, not a choice: Load (like
+	// Sources, for a warm swap) assigns the first task runtime.MainTaskName
+	// unconditionally, so a manifest author who names it — e.g. expecting
+	// suspend: [that name] to work in an acceptance test — gets no
+	// diagnostic here, just a task whose declared name silently does
+	// nothing, and a confusing "no task \"that name\"" failure later at
+	// `naut test` or `naut run`. Flagged here instead, while it's cheap to
+	// fix — a warning, not an error: the key never changed behaviour, so a
+	// manifest that carried it kept working and must keep passing check.
+	if raw, rerr := project.ReadManifest(os.DirFS(dir), manifestName); rerr == nil &&
+		len(raw.Tasks) > 0 && raw.Tasks[0].Name != "" {
+		warns++
+		fmt.Printf("%s: warning: %s's first task names itself %q, but the first task "+
+			"is always %q — the name: key on it is ignored; drop it (or move the "+
+			"program to a later task if it should be named %q)\n",
+			dir, manifestLabel(manifestName), raw.Tasks[0].Name, runtime.MainTaskName, raw.Tasks[0].Name)
+	}
+
 	rt, err := runtime.New(proj.Runtime)
 	if err != nil {
 		// The per-file pass already reported real compile errors; reaching
@@ -411,4 +439,15 @@ func compileErr(src, prelude string, preludeLines int) (string, st.Pos, bool) {
 		return msg, pos, true
 	}
 	return "", st.Pos{}, false
+}
+
+// inLibDir reports whether f lies under the lib/ directory of a manifest
+// project.
+func inLibDir(f string) bool {
+	abs, err := filepath.Abs(f)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(stproject.ProjectRoot(abs), abs)
+	return err == nil && stproject.InLibDir(filepath.ToSlash(rel))
 }

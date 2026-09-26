@@ -1,0 +1,21 @@
+# The fleet's bench dependencies: a broker every project in this fleet
+# needs, and a historian database that's genuinely optional (see
+# README.md's "The historian" — the walkthrough runs without it).
+#
+#   docker compose -f compose.yaml up -d mosquitto     # what the walkthrough needs
+#   docker compose -f compose.yaml up -d               # + postgres, for the historian recipe
+#   docker compose -f compose.yaml down
+services:
+  mosquitto:
+    image: eclipse-mosquitto
+    ports:
+      - "1883:1883"
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: historian
+      POSTGRES_PASSWORD: historian
+      POSTGRES_DB: historian
+    ports:
+      - "5432:5432"

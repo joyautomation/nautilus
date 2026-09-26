@@ -1,0 +1,44 @@
+# Acceptance tests for booster-1 — no broker, no live flow meter, virtual
+# time. FM1_FlowLps is role: input (tags/modbus.yaml) and pressure.fbd
+# reads it every scan (FBD has no short-circuiting) so every test seeds it
+# in `given`, same "reads fault until first birth" rule
+# ../../scada/scada_test.yaml documents for its own consumed inputs.
+tolerance: 0.5
+
+tests:
+  - name: the lead pump always runs, and the PID raises or lowers its speed with pressure
+    suspend: [sim]
+    given: { FM1_FlowLps: 0.0 }
+    steps:
+      - given: { DischargePress: 50.0 } # well below PressureSP (62): call for more speed
+        advance: 25s
+        expect: { Pump1_RunCmd: true, Pump1_SpeedCmd: { gt: 40.0 } }
+      - given: { DischargePress: 70.0 } # above setpoint: back off toward the floor
+        advance: 60s
+        expect: { Pump1_SpeedCmd: { near: 20.0, tol: 2.0 } }
+
+  - name: the lag pump joins on high flow and drops on low flow, mirroring the lead's speed
+    suspend: [sim]
+    given: { DischargePress: 62.0, FM1_FlowLps: 5.0 }
+    steps:
+      - advance: 1s
+        expect: { Pump2_RunCmd: false }
+      - given: { FM1_FlowLps: 13.0 } # above LagOnFlow (12)
+        advance: 1s
+        expect: { Pump2_RunCmd: true }
+      - given: { FM1_FlowLps: 9.0 } # between LagOffFlow (8) and LagOnFlow: stays on
+        advance: 1s
+        expect: { Pump2_RunCmd: true }
+      - given: { FM1_FlowLps: 7.0 } # below LagOffFlow
+        advance: 1s
+        expect: { Pump2_RunCmd: false }
+      - given: { FM1_FlowLps: 13.0, DischargePress: 45.0 } # rejoins; a low pressure drives the shared PID output up
+        advance: 30s
+        expect: { Pump2_SpeedCmd: { gt: 40.0 } } # mirrors Pump1_SpeedCmd — same pic.CV
+
+  - name: closed loop settles the discharge pressure near its setpoint
+    suspend: [] # sim runs, closed loop
+    given: { DischargePress: 40.0, FM1_FlowLps: 5.0 }
+    steps:
+      - advance: 120s
+        expect: { DischargePress: { near: 62.0, tol: 3.0 } }

@@ -103,6 +103,57 @@ func TestCheckFailsOnUndeclaredRead(t *testing.T) {
 	}
 }
 
+// A manifest's first task is always the main task — Load (and Sources, for
+// a warm swap) assigns it runtime.MainTaskName no matter what name: says.
+// Before this diagnostic, that key silently did nothing: `naut check` passed
+// clean, and the failure only surfaced later at `naut test`/`naut run` as an
+// unfamiliar "no task ..." error. It must WARN (the key never changed
+// behaviour, so a manifest carrying it still passes), with a message that
+// says the first task is always "main".
+func TestCheckWarnsOnFirstTaskName(t *testing.T) {
+	out, code := checkIn(t, map[string]string{
+		"nautilus.yaml": `
+tasks:
+  - name: sequence
+    program: program.st
+tags:
+  - { name: Sensor, role: input }
+  - { name: Actuator, role: output }
+`,
+		"program.st": programBinding("", ""),
+	})
+	if code != 0 {
+		t.Fatalf("naming the first task must warn, not fail the check (exit %d):\n%s", code, out)
+	}
+	if !strings.Contains(out, ": warning:") || !strings.Contains(out, "sequence") || !strings.Contains(out, `"main"`) {
+		t.Errorf("output does not explain that the first task is always main:\n%s", out)
+	}
+}
+
+// The second (and later) tasks' name: keys are honored as always — only the
+// first task's is ignored.
+func TestCheckAllowsLaterTaskNames(t *testing.T) {
+	out, code := checkIn(t, map[string]string{
+		"nautilus.yaml": `
+tasks:
+  - program: program.st
+  - name: sequence
+    program: second.st
+tags:
+  - { name: Sensor, role: input }
+  - { name: Actuator, role: output }
+`,
+		"program.st": programBinding("", ""),
+		"second.st":  "PROGRAM Seq\nEND_PROGRAM",
+	})
+	if code != 0 {
+		t.Errorf("naming a later task failed the check (%d):\n%s", code, out)
+	}
+	if strings.Contains(out, "sequence") {
+		t.Errorf("a later task's own name must not trigger the first-task diagnostic:\n%s", out)
+	}
+}
+
 // Writing one is survivable, so it must not fail the build — the controller
 // runs, the tag just reaches an HMI undocumented.
 func TestCheckWarnsOnUndeclaredWrite(t *testing.T) {
@@ -139,7 +190,7 @@ func TestCheckTreatsFieldAssignmentAsRead(t *testing.T) {
 
 // An unbound INPUT is driver-fed telemetry — the bulk of any imported tag
 // list. Warning on those would train people to ignore this warning before it
-// ever caught anything (examples/client60 has eight).
+// ever caught anything (a real client's tag list has had as many as eight).
 func TestCheckStaysQuietOnUnboundInputs(t *testing.T) {
 	out, code := checkIn(t, map[string]string{
 		"nautilus.yaml": checkManifestYAML +
@@ -359,7 +410,8 @@ END_PROGRAM`,
 }
 
 // The ladder-diagram shape: a PROGRAM-less .ld file is a library exactly
-// like a .st one (docs/design, examples/ladder-subroutines), and a
+// like a .st one (see docs/design, and the ladder-subroutines fixture, which
+// is the shipped proof of the library mechanism itself), and a
 // FUNCTION_BLOCK written as rungs declares VAR_EXTERNAL the same way an ST
 // one does. The bound set must see through the LD->FBD->ST transpile chain.
 func TestCheckSeesTagsBoundThroughLadderLibraryFB(t *testing.T) {

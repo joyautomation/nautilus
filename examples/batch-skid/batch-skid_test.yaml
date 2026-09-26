@@ -1,0 +1,313 @@
+# Acceptance tests for the batch skid's control narrative — no Go, no
+# toolchain, run on the bench manifest (nautilus.yaml) in virtual time.
+#
+#   naut test              run them
+#   naut test -v           with virtual elapsed time per test
+#   naut test -run "cip"   only tests whose name matches
+#
+# File-level suspend: [sim] — driving the process values directly is how
+# an open-loop test gets an exact, repeatable answer out of closed-loop
+# control logic, and every test but the two closed-loop ones below wants
+# that. A per-test `suspend: []` DOES override a file-level default (it
+# unmarshals to a non-nil empty slice, distinct from an absent key, and
+# the test runner only falls back to the file default when the key is
+# absent) — an earlier revision of this file claimed otherwise and set no
+# file-level default at all rather than risk it; that claim didn't hold up
+# under inspection, so the two closed-loop tests below opt out explicitly
+# instead.
+tolerance: 0.5
+suspend: [sim]
+
+tests:
+  - name: a full batch of recipe 1 runs Idle to Idle and totalizes within tolerance
+    suspend: [] # closed loop: sim drives the dosing lines and the tank for real
+    given: { RecipeSel: 1 }
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        until: 900s
+        expect:
+          - Batch.Count: 1
+          - PhaseName: "Idle"
+          - Batch.ChargedA_L: { near: 20.0, tol: 0.5 } # recipe 1's AmountA_L
+          - Batch.ChargedB_L: { near: 15.0, tol: 0.5 } # recipe 1's AmountB_L
+
+  - name: ChargeA and ChargeB run simultaneously, and Heat waits for both
+    given: { RecipeSel: 1 }
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        scans: 1
+        expect: { XV201A_Cmd: true, XV201B_Cmd: true } # both valves open, one scan
+      - given: { Batch.ChargedA_L: 25.0 } # >= AmountA_L (20) — A is done, B is not
+        scans: 1
+        expect: { PhaseName: "Charge", XV201A_Cmd: false, XV201B_Cmd: true }
+      - given: { Batch.ChargedB_L: 25.0 } # >= AmountB_L (15) — now both are done
+        scans: 2 # one for ChargeB's own token, one for the convergence
+        expect: { PhaseName: "Heat" }
+
+  - name: Hold pauses Heat (TCV to zero) and Resume returns without recharging
+    given: { RecipeSel: 1 }
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        scans: 1 # Prep's simultaneous divergence into ChargeA/ChargeB/Agitate
+      - given: { Batch.ChargedA_L: 25.0, Batch.ChargedB_L: 25.0 }
+        scans: 2 # both charges done, then the convergence into Heat
+        expect: { PhaseName: "Heat" }
+      - given: { Hold: true }
+        scans: 1
+        expect: { PhaseName: "Held" }
+      - advance: 1s # dosing (100 ms) catches up to HeatingActive going false
+        expect: { TCV201_Pos: 0.0 } # manual, CV_MAN's default — parked, bumpless
+      - given: { Hold: false, Resume: true }
+        scans: 2
+        expect:
+          - PhaseName: "Heat"
+          - Batch.ChargedA_L: { near: 25.0 } # unchanged — no recharge on resume
+          - Batch.ChargedB_L: { near: 25.0 }
+
+  - name: Abort from Charge closes both valves within one scan and latches AbortLamp
+    given: { RecipeSel: 1 }
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        scans: 1
+        expect: { XV201A_Cmd: true, XV201B_Cmd: true }
+      - given: { Abort: true }
+        scans: 1
+        expect:
+          - XV201A_Cmd: false
+          - XV201B_Cmd: false
+          - AbortLamp: true
+          - PhaseName: "Aborted"
+      - advance: 0.5s # AgitateReq (phases.sfc, 250ms) then AG201_Cmd (transfer.ld, 100ms) settle
+        expect: { AG201_Cmd: false } # see "recipe 1 keeps the agitator on..." below for the full story
+      - given: { Abort: false, LT201_Level: 1.0 } # drained
+        scans: 2
+        expect: { PhaseName: "Idle" }
+
+  - name: Transfer waits for Line_Accept, and a 30 s handshake timeout alarms
+    given: { RecipeSel: 1 }
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        scans: 1 # Prep's simultaneous divergence into ChargeA/ChargeB/Agitate
+      - given: { Batch.ChargedA_L: 25.0, Batch.ChargedB_L: 25.0 }
+        scans: 2 # both charges done, then the convergence into Heat
+        expect: { PhaseName: "Heat" }
+      - given: { TT201_Temp: 46.0 } # >= TempSP_C (45) - 1.0, below the +5 Overtemp threshold
+        scans: 1
+        expect: { PhaseName: "Hold" }
+      - advance: 31s # HoldSec (30 s) elapses
+        expect: { PhaseName: "Transfer", Line_Request: true }
+      - advance: 31s # Line_Accept never given — the 30 s handshake timeout trips
+        alarms: { active: ["HandshakeTimeout"] }
+      - given: { Line_Accept: true, LT201_Level: 1.0 }
+        advance: 1s
+        expect: { PhaseName: "Idle" } # not due for a CIP (Batch.Count == 1)
+
+  - name: CIP runs after every 3rd batch
+    given: { RecipeSel: 1, Batch.Count: 2 } # LoadRecipe's own +1 makes this batch #3
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        scans: 1 # Prep's simultaneous divergence into ChargeA/ChargeB/Agitate
+      - given: { Batch.ChargedA_L: 25.0, Batch.ChargedB_L: 25.0 }
+        scans: 2 # both charges done, then the convergence into Heat
+        expect: { PhaseName: "Heat", Batch.Count: 3 }
+      - given: { TT201_Temp: 46.0 }
+        scans: 1
+        expect: { PhaseName: "Hold" }
+      - advance: 31s
+        expect: { PhaseName: "Transfer" }
+      - given: { Line_Accept: true, LT201_Level: 1.0 }
+        advance: 1s
+        expect: { PhaseName: "Cip", XV201A_Cmd: true } # flushing, not idle
+      - advance: 31s # the 30 s CIP timer elapses
+        expect: { PhaseName: "Idle" }
+
+  - name: status.st accumulates Batch.ElapsedSec since leaving Idle, resets it on the next batch, and stamps Line_BatchId only on Line_Request's own rising edge
+    given: { RecipeSel: 1 }
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        advance: 5s
+        expect: { Batch.ElapsedSec: { gt: 4.0 } } # running since Start — accumulating at ~StatusDtS per status.st scan
+      - given: { Batch.ChargedA_L: 25.0, Batch.ChargedB_L: 25.0 }
+        scans: 2
+        expect: { PhaseName: "Heat" }
+      - given: { TT201_Temp: 46.0 }
+        scans: 1
+        expect: { PhaseName: "Hold" }
+      - advance: 31s # HoldSec elapses -> Transfer, Line_Request's own rising edge
+        expect: { PhaseName: "Transfer", Line_Request: true, Line_BatchId: 1 } # stamped with Batch.Count at the edge
+      - given: { Line_Accept: true, LT201_Level: 1.0 }
+        advance: 1s
+        expect: { PhaseName: "Idle" }
+      - advance: 2s
+        always: { Line_BatchId: 1 } # unchanged — Line_Request has been low, no fresh edge to re-stamp on
+      - given: { Start: true, Line_Accept: false, LT201_Level: 20.0 } # batch #2 — reset the line/level so its own Transfer waits properly instead of falling straight through on batch #1's leftovers
+        advance: 0.6s # status.st's own 500ms scan catches running's rising edge
+        expect: { Batch.ElapsedSec: { lt: 1.0 } } # reset, not left at batch #1's accumulated value
+      - given: { Start: false }
+        scans: 1
+      - given: { Batch.ChargedA_L: 25.0, Batch.ChargedB_L: 25.0 }
+        scans: 2
+        expect: { PhaseName: "Heat", Batch.Count: 2 }
+      - given: { TT201_Temp: 46.0 }
+        scans: 1
+      - advance: 31s
+        expect: { PhaseName: "Transfer", Line_BatchId: 2 } # a fresh Line_Request edge re-stamps with the new count
+
+  - name: the jacket PID holds temperature within 1 degree of setpoint through Hold
+    suspend: [] # closed loop: the PID needs the real plant to prove it settles
+    given: { RecipeSel: 1 }
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        until: 400s
+        expect: { PhaseName: "Hold" }
+      - expect: { TT201_Temp: { between: [44.0, 46.0] } } # SP (45) +- 1
+      - advance: 5s
+        expect: { TT201_Temp: { between: [44.0, 46.0] } }
+
+  - name: recipe 2 never commands the agitator
+    given: { RecipeSel: 2 } # B-NOMIX — Agitate is FALSE
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        advance: 2s
+        always: { AG201_Cmd: false }
+      - given: { Batch.ChargedA_L: 20.0, Batch.ChargedB_L: 25.0 }
+        advance: 2s
+        always: { AG201_Cmd: false }
+
+  - name: recipe 1 keeps the agitator on through Charge/Heat/Hold, and it stops after Transfer
+    # Regression test for the bug this replaces: AG201_Cmd used to be SET
+    # once (SetAgitate's P1 ACTION) and only ever RESET on Aborted's bare
+    # `R` — so a normal batch (Charge -> Heat -> Hold -> Transfer -> Idle)
+    # left it latched TRUE forever, and the next batch ran agitated
+    # regardless of its own recipe's Agitate flag. A good acceptance test
+    # for "stops after the batch" has to run a batch to completion WITHOUT
+    # aborting and check AG201_Cmd goes false — the old test only ever
+    # exercised the Abort path, where the bug's own reset happened to give
+    # the right externally observable answer either way. This one also
+    # checks recipe 2 (Agitate FALSE) never sees it turn on at all — see
+    # the adjacent test for the same check from a colder start.
+    given: { RecipeSel: 1 } # A-STD — Agitate is TRUE
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        scans: 1 # Prep's simultaneous divergence into ChargeA/ChargeB/Agitate
+        expect: { AG201_Cmd: true } # AgitateReq (N-qualified on Agitate) ANDed with Active.Agitate
+      - advance: 2s
+        always: { AG201_Cmd: true } # stays commanded while Agitate waits on the charges
+      - given: { Batch.ChargedA_L: 25.0, Batch.ChargedB_L: 25.0 }
+        scans: 2 # both charges done, then the convergence into Heat
+        expect: { PhaseName: "Heat", AG201_Cmd: true } # AgitateReq is N-qualified on Heat too
+      - advance: 2s
+        always: { AG201_Cmd: true }
+      - given: { TT201_Temp: 46.0 } # >= TempSP_C (45) - 1.0
+        scans: 1
+        expect: { PhaseName: "Hold", AG201_Cmd: true } # AgitateReq is N-qualified on Hold too
+      - advance: 2s
+        always: { AG201_Cmd: true }
+      - advance: 31s # HoldSec (30 s) elapses -> Transfer, where AgitateReq is NOT asserted
+        expect: { PhaseName: "Transfer" }
+      - advance: 0.5s # AgitateReq (phases.sfc) then AG201_Cmd (transfer.ld) settle
+        expect: { AG201_Cmd: false } # the fix: off the moment Agitate/Heat/Hold all stop
+      - given: { Line_Accept: true, LT201_Level: 1.0 }
+        advance: 1s
+        expect: { PhaseName: "Idle" }
+      - advance: 2s
+        always: { AG201_Cmd: false } # stays off in Idle — no latch left to relapse on the next recipe
+
+  - name: recipe 2 never agitates even right after recipe 1 left it running
+    # The bug this catches: AG201_Cmd used to persist across batches (see
+    # the test above), so a no-agitate recipe run right after an agitate
+    # one would inherit the previous batch's TRUE. AgitateReq/AG201_Cmd
+    # are recomputed every scan from step activity + Active.Agitate, so
+    # there is nothing left to inherit.
+    given: { RecipeSel: 1 }
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        scans: 1
+        expect: { AG201_Cmd: true }
+      - given: { Abort: true }
+        scans: 1
+      - given: { Abort: false, LT201_Level: 1.0 }
+        advance: 1s
+        expect: { PhaseName: "Idle" }
+      - given: { RecipeSel: 2, Start: true } # B-NOMIX — Agitate is FALSE
+        scans: 1
+      - given: { Start: false }
+        advance: 2s
+        always: { AG201_Cmd: false }
+      - given: { Batch.ChargedA_L: 20.0, Batch.ChargedB_L: 25.0 }
+        advance: 2s
+        always: { AG201_Cmd: false }
+
+  - name: RecipeValid(0) blocks Start
+    given: { RecipeSel: 0, Start: true }
+    scans: 1
+    expect: { PhaseName: "Idle" }
+
+  - name: transfer.ld's P202 permissive blocks the transfer pump on a line fault
+    # suspend: [sim, main] freezes the plant AND phases.sfc — TransferReq is
+    # only N-qualified from phases.sfc's own Transfer step, so freezing it
+    # lets this test drive TransferReq directly and have it stick, in
+    # isolation from the sequence, to exercise transfer.ld's own permissive
+    # rung on its own.
+    suspend: [sim, main]
+    given: { Line_Ready: true, Line_Fault: true, XV203_Open: true, LT201_Level: 20.0 } # fault already present
+    steps:
+      - given: { TransferReq: true }
+        advance: 150ms # main is suspended, so use advance (transfer.ld's own 100 ms scan) instead of scans
+        expect: { P202_Permissive: false, P202_Cmd: false } # /Line_Fault blocks it from ever starting
+      - given: { Line_Fault: false }
+        advance: 150ms
+        expect: { P202_Permissive: true }
+      - advance: 150ms
+        expect: { P202_Cmd: true } # now that the permissive is true, TransferReq seals it in
+
+  - name: an alarm ack/shelve check on Overtemp, tripped by the hysteresis logic itself
+    # suspend: [sim] only — dosing.fbd must stay live so it's dosing.fbd's
+    # own hysteresis (hiTemp/loTemp seal-in) that trips and clears
+    # OvertempAlm, not a value this test pokes in directly. A test that
+    # instead drove OvertempAlm as a given would still pass if
+    # dosing.fbd's hysteresis were broken outright (e.g. OvertempAlm hard-
+    # coded FALSE) — this one fails in that case, since the alarm would
+    # never assert from TT201_Temp alone.
+    given: { TT201_Temp: 20.0 } # Active's default TempSP_C is 45.0 (init in tags/skid.yaml) without ever starting a batch
+    steps:
+      - given: { TT201_Temp: 51.0 } # >= TempSP_C (45) + 5 — hiTemp seals OvertempAlm in
+        advance: 3s # past the 2 s on-delay
+        alarms: { active: ["Overtemp"] }
+      - ack: { ids: ["Overtemp"], by: test }
+        scans: 1
+        alarms: { state: { Overtemp: ack-active } }
+      - shelve: { id: "Overtemp", for: 15m, by: test }
+        scans: 1
+        alarms: { active: [], shelved: ["Overtemp"], state: { Overtemp: shelved } }
+      - given: { TT201_Temp: 46.0 } # below the +5 trip point but still above SP (45) — loTemp hasn't fired
+        advance: 1s
+        alarms: { shelved: ["Overtemp"] } # still latched TRUE underneath the shelve — hysteresis, not a plain compare
+      - unshelve: { id: "Overtemp", by: test }
+        scans: 1
+        alarms: { active: ["Overtemp"] } # unshelving reveals the still-latched alarm
+      - given: { TT201_Temp: 44.0 } # <= TempSP_C (45) — loTemp clears the seal-in
+        advance: 1s
+        alarms: { active: [], state: { Overtemp: normal } }

@@ -1,284 +1,253 @@
 # nautilus IEC 61131-3
 
-VS Code language support for **IEC 61131-3 Structured Text** (`.st`),
-**Function Block Diagram** (`.fbd`), **Ladder Diagram** (`.ld`) and
-**Sequential Function Chart** (`.sfc`) as used by the
-[nautilus](https://github.com/joyautomation/nautilus) Go + SvelteKit SCADA
-framework: develop SCADA in VS Code like a real software developer.
+Develop PLC logic like software: IEC 61131-3 in VS Code, in git, with live
+values from a running controller.
 
-![Live tag values rendered as pills next to identifiers in a .st file, with the nautilus file tree alongside](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/live-values.png)
+Structured Text (`.st`), Function Block Diagram (`.fbd`), Ladder (`.ld`) and
+Sequential Function Chart (`.sfc`) are plain text files that diff and merge
+in git. This extension opens them as diagrams you can edit, shows what
+changed between any two revisions as a diagram, and paints live values and
+power flow from a running [nautilus](https://github.com/joyautomation/nautilus)
+controller onto both the text and the diagram.
 
-## Features
+![A ladder diagram with live power flow from a running controller](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/ladder-live.png)
 
-### Syntax highlighting (no setup)
+## Get started in 3 steps
 
-Purely declarative — opening any `.st` file lights up comments, strings,
-numeric/typed/time literals, keywords, `VAR…END_VAR` sections, elementary
-types, operators, built-in functions, and standard FBs. All keyword lists are
-derived **directly from the nautilus Go compiler** (`lang/st`, `lang/ir`), so
-they match what the compiler actually accepts.
+1. **Install this extension.**
+2. **Install the `naut` CLI.** Click **Install naut** when the extension
+   asks, or run **nautilus: Install or Update the naut CLI**. It downloads
+   the release for your OS and CPU from GitHub, checks it against
+   `checksums.txt`, and keeps it in the extension's storage. No Go
+   toolchain needed.
+3. **Create a project.** Run **nautilus: Create Project…**, or follow the
+   **nautilus: Get Started** walkthrough (install, create, open a diagram,
+   run, test; about five minutes). The default *Demo* template is a
+   three-task, three-language tour with a simulated plant. Then run
+   `naut run` in the project folder and the editor goes live.
 
-### Language intelligence (needs the nautilus CLI)
+![Creating a project from the Command Palette](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/create-project.gif)
 
-The extension spawns **`naut lsp`** — the nautilus CLI's language-server
-subcommand, which runs the *real* `lang/st` compiler over stdio:
+## Diagrams: FBD, Ladder and SFC
 
-- **Diagnostics as you type** — parse errors and typed lowering errors
-  (undeclared identifiers, unknown FB fields, type mismatches) with precise
-  line/column squiggles.
-- **Go-to-definition** — jump from an identifier to its `VAR` /
-  `VAR_EXTERNAL` declaration; POU-scoped (FB locals resolve before globals).
-- **Hover** — declared type and var-section for any identifier.
-- **Completion** — in-scope variables, keywords, elementary types, and the
-  compiler's actual builtin function/FB registries.
+![A Function Block Diagram open in the diagram editor](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/fbd-diagram.png)
 
-Install the CLI once: click **Install naut** when the extension says it's
-missing, or run **nautilus: Install or Update the naut CLI** from the Command
-Palette. It downloads the latest release for your OS from GitHub, checks it
-against the release's `checksums.txt`, and keeps it in the extension's own
-storage — no Go toolchain needed, and the same command updates it. Behind a
-proxy, it uses VS Code's `http.proxy` setting (or `HTTPS_PROXY`).
+- **The text is the source of truth.** Every gesture on the diagram is a
+  structural edit that the Go compiler turns into a minimal text change, so
+  the file stays small and reviewable. Layout comes from the logic; a node
+  you drag is pinned in the file.
+- **Open as Diagram Editor** in a text editor's title bar turns the tab into
+  the diagram; **Show Source** opens the text beside it. The preview button
+  opens the diagram next to the text instead. To open these files as
+  diagrams by default, set `"workbench.editorAssociations": { "*.fbd":
+  "nautilus.fbdDiagram" }` (likewise `nautilus.ldDiagram`,
+  `nautilus.sfcDiagram`).
+- **FBD**: drag pin to pin to wire, double-click to retype a constant or
+  rename, insert blocks from the *+ add* palette — *function block* places
+  any standard block (PID included) or project block with every input an
+  open pin — box-select, arrow keys to move. Double-click an FB's header to
+  rename the instance.
+- **Ladder**: drag instructions from the palette onto a rung, drag elements
+  between spots and rungs, ⊕ to insert, `N` for NO/NC, `M` for coil mode,
+  `B` to branch around the selection, click a rung's name to select or
+  delete the rung. *FB…* places any function block — standard or one of
+  the project's library blocks — under a name you choose; double-click a
+  block's header to rename the instance. With a controller running, power
+  flow paints the rung.
+- **SFC**: steps, transitions, parallel and alternative branches, action
+  tables and ACTION bodies, all editable in place; drag a step's handle
+  onto another step to connect them. The active step highlights live.
+- **In every diagram**: copy, cut and paste (into another file of the same
+  kind too), undo / redo / save with the usual keys, zoom and fit
+  (Ctrl+wheel, Ctrl+= / Ctrl+- / Ctrl+0), and a **?** button that lists
+  every gesture and key for that editor.
 
-If you have Go, `go install` works too:
+![A Sequential Function Chart with the active step highlighted](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/sfc-chart.png)
 
-```sh
-go install github.com/joyautomation/nautilus/cmd/naut@latest
-```
+## Visual diff
 
-A `naut` on PATH wins over the extension's copy; set `nautilus.cliPath` to a
-full path to pick one explicitly. **nautilus: Show CLI Info** says which one
-is in use, and the extension warns when it's older than it needs.
+![A ladder diff: added, removed and changed elements marked on the rungs](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/diagram-diff.png)
 
-### FBD diagram preview & visual diff (needs the nautilus CLI)
+Review a logic change as a diagram, not as text.
 
-nautilus's Function Block Diagram source (`.fbd`) is a git-diffable text
-netlist; the extension projects it into the diagram a controls engineer
-expects:
+- **vs git HEAD**: the diff button in the diagram editor's title bar
+  overlays your working copy on the last commit.
+- **Between git revisions…** (under "…"): pick any two commits from the
+  file's history (renames followed), or one commit and the working tree.
+- **vs Controller** (under "…"): compare against the program a running
+  controller is executing.
+- Added, removed and changed blocks, wires, rungs, steps and transitions are
+  marked in place; removed elements come back ghosted. Works for FBD,
+  Ladder, SFC and Rockwell `.L5X`.
 
-- **Live diagram preview** — `nautilus: Open FBD Diagram Preview` (or the
-  editor-title button) renders blocks, pins, variable chips, wire fan-out
-  with signal names, IEC negation circles, and seal-in feedback wires. It
-  re-renders as you type; the text stays the source of truth, and layout is
-  computed from topology so no coordinates pollute your diffs. Edit from
-  the diagram: double-click constants to retype them and blocks to rename
-  them, click an input pin to toggle `NOT`, drag an output onto a pin to
-  rewire, and insert instruction templates from the "+ add" palette — every
-  gesture is a structural operation resolved by the Go compiler into
-  minimal text edits. Or click **Open as Diagram Editor** in the text
-  editor's title bar (or "Reopen Editor With → FBD Diagram") to use the
-  diagram as the editor itself; its title bar has **Diff vs HEAD** and
-  **Show Source** (the text beside it), with the other diffs under "…".
-  Ctrl/Cmd+Z, Ctrl/Cmd+Shift+Z (or Ctrl+Y) and Ctrl/Cmd+S work from the
-  diagram in both the preview and the editor: they undo, redo and save the
-  source text, and the diagram follows. Text stays the default editor; to
-  open these files as diagrams by default, set
-  `"workbench.editorAssociations": { "*.fbd": "nautilus.fbdDiagram" }`
-  (likewise `nautilus.ldDiagram`, `nautilus.sfcDiagram`).
-- **Visual diff** — `nautilus: Diff FBD Diagram (vs git HEAD)` overlays the
-  committed and working-tree diagrams, coloring added / removed / changed
-  blocks and wires; `(vs Controller)` does the same against the program a
-  live controller is running; `(between git revisions…)` picks any two
-  commits from the file's history (or one commit and the working tree)
-  and overlays those. Review a logic change the way you'd review the
-  wiring, not the text.
-- **Online edits speak `.fbd`** — a controller running an FBD program
-  serves and accepts the `.fbd` source itself, so download / text diff /
-  pull and the sync status bar work exactly as they do for `.st`.
-- `.fbd` files get the same **diagnostics-as-you-type** as `.st` — the
-  netlist compiles through the identical `lang/fbd` → `lang/st` pipeline the
-  runtime uses, with errors mapped back to the exact `.fbd` line.
+## Live values and online edit
 
-### SFC (Sequential Function Chart) diagram preview & editor (needs the nautilus CLI)
+![Live tag values as pills next to identifiers, with the Live Values panel](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/live-values.png)
 
-nautilus's SFC source (`.sfc`) is a git-diffable ST POU with an
-`SFC…END_SFC` body — steps, transitions and actions in the IEC standard's
-own textual grammar; the extension projects it into the classic chart view:
+- **Inline values**: with a controller running, every identifier in your
+  source gets its current value as a pill, and the diagrams animate. Values
+  gray out when the stream goes stale. Point at a controller with
+  **nautilus: Connect to Controller…** (default `http://localhost:8080`).
+- **Live Values panel** (nautilus in the Activity Bar): every tag and
+  program local with its value; the pencil on a tag sets it.
+- **Set Live Value…**: right-click an identifier to write a new value.
+- **Online edit**: **Download Program to Controller** swaps the running
+  program without a restart; **Diff Program with Controller**, **Pull
+  Program from Controller** and **Rollback Controller Program** do what
+  they say. A status-bar item shows whether the file matches the controller.
+- Download and Rollback ask for confirmation, naming the controller URL and
+  program, before changing what a controller runs
+  (`nautilus.confirmControllerWrites`). For a token-protected controller,
+  set `nautilus.token` in workspace settings.
 
-- **Live chart preview** — `nautilus: Open SFC Diagram Preview` (or
-  right-click a `.sfc` file → "Open With → SFC Diagram" to use the chart as
-  the editor itself) renders steps as boxes (double border = the initial
-  step) with their action associations as a table beside the box,
-  transitions as bars across the flow line — a single bar for a normal or
-  alternative transition, a double bar for a simultaneous divergence or
-  convergence — with the condition text beside the bar. A transition that
-  loops back to an earlier step (an abort, a return to Idle) draws as a
-  compact "↩" jump glyph instead of a long line back up the chart. Layout is
-  computed from the chart's topology (steps flow top-to-bottom, parallel
-  branches fan into columns); drag a step to pin its position, "auto
-  layout" clears every pin.
-- **Edit from the diagram** — every gesture is a structural operation
-  resolved by the Go compiler into minimal text edits, exactly like FBD:
-  add a step or transition from the toolbar, branch an alternative or
-  simultaneous path off a selected transition, double-click a transition's
-  condition or a step's name to edit it, add/edit/delete action
-  associations directly in a step's table, double-click a body action
-  (one backed by an `ACTION` block, shown underlined) to edit its ST body
-  in place, and add/edit/delete/drag a `//` comment note (rendered in a
-  strip along the top edge, same as FBD/Ladder): "+ comment" on the
-  toolbar, dblclick to write it, drag to pin its position, Del to remove.
-- **Drag-to-connect** — hover a step to reveal a small connect handle on
-  its bottom edge (a body-drag still pins layout, exactly like dragging a
-  step anywhere else); drag the handle onto another step to add a
-  transition between them, live rubber-band line and drop-target highlight
-  included, Esc to cancel mid-drag.
-- **Orphaned transitions stay visible and fixable** — a transition whose
-  FROM or TO no longer resolves (typically left by deleting a step) renders
-  as a red "problem" chip instead of vanishing from the canvas: selectable,
-  Del-deletable, condition-editable, and retargetable via a ⚙ popover
-  (dropdowns of existing steps, plus an "other…" escape hatch for a
-  not-yet-existing name) backed by the `setTransitionEnds` edit op.
-  Deleting a step that still has attached transitions offers an in-canvas
-  choice — flag them (the default) or cascade-delete them too — never a
-  silent cascade and never a native confirm dialog.
-- **Live step highlighting** — with a controller reachable, the ACTIVE step
-  outlines and its name highlights, reading the same retained `_S_<Step>_X`
-  slot the runtime already exposes for every step (no new controller API).
-- `.sfc` files get the same **diagnostics-as-you-type** as `.st`/`.fbd` —
-  errors surface as a non-modal "N problems" pill plus a badge on the
-  offending step or transition, never blocking a save; a structurally
-  incomplete chart (a step with no transitions yet) is a diagnostic
-  breadcrumb, not a rejected edit.
-- **Visual diff** — `nautilus: Diff SFC Diagram (vs git HEAD)` / `(vs
-  Controller)` / `(between git revisions…)`, the same commands and
-  added/removed/changed visual language FBD/Ladder use: added/removed/changed steps, transitions,
-  action associations and comments overlay on the chart, a removed
-  element spliced back in ghosted, read-only until "exit diff".
+## HMI mimic editor
 
-### HMI mimic editor (`*.mimic.json`)
+![The mimic editor: tanks, pumps and valves with pipes, bound to live tags](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/mimic-editor.png)
 
-P&ID mimic documents for the `@joyautomation/nautilus-hmi` `<Mimic>`
-component open as a **graphical editor** by default (the JSON stays the
-canonical, diffable artifact — "Open With → Text Editor" any time):
+`*.mimic.json` P&ID documents for the
+[`@joyautomation/nautilus-hmi`](https://www.npmjs.com/package/@joyautomation/nautilus-hmi)
+`<Mimic>` component open in a graphical editor. The JSON stays the file you
+commit (*Open With → Text Editor* any time).
 
-- **WYSIWYG canvas**: equipment renders with the real kit components
-  (Tank, Pump, Valve, Gauge, Sparkline), pipes with the kit's animated
-  flow — what you see is what the HMI ships.
-- **Drag-and-drop authoring**: place equipment from the palette, drag on
-  a snap grid (toggle **Snap: On/Off** in the toolbar for free-pixel
-  dragging instead — persisted as `nautilus.mimic.snapToGrid`; Shift-arrow
-  nudging always snaps), draw pipe runs orthogonal-by-default (Shift for
-  free angles), drag / insert / double-click-remove pipe vertices, shift-click
-  to multi-select vertices for a batch delete, drop free labels.
-- **Props panel**: ids, component type, position/size, static props,
-  **tag bindings** (prop ← tag, `!` negates a boolean) with prop
-  suggestions per component, and — for a selected pipe — **routing**
-  (direct straight segments, or orthogonal 90°-corner segments; a document
-  property, so the editor and the shipped `<Mimic>` always draw it the
-  same way).
-- **Live while you edit**: with a controller reachable at
-  `nautilus.runtimeUrl`, bound equipment animates with the real process
-  on the editor canvas and tag names autocomplete in the binding editor.
-- Every gesture becomes one text edit — **undo/redo is text undo**, and
-  editing the JSON side by side updates the canvas live.
-- **Custom components**: your own `*.svelte` equipment (referenced by
-  `component` in the doc) compiles as a live "island" with your project's
-  own Svelte/dependencies and renders for real on the canvas and in the
-  palette, right alongside the kit's built-ins — no code change to the
-  extension needed.
-- **Connection points (ports)**: press `p` on a selected piece of equipment
-  to drag, add, or remove its pipe-snap ports graphically. An edit writes a
-  `{Component}.component.json` sidecar shared by every instance of that
-  component in the project (or just the one instance, if you toggle the
-  edit's target) — the same file a custom component's own ports live in.
-  **Run "Nautilus: Edit Component Ports…" from the Command Palette** to
-  override a **built-in's** ports (Tank, Pump, Valve, Gauge, Sparkline) the
-  same way: pick one, and it opens (creating if needed) that sidecar in the
-  graphical Component Editor, prefilled with the built-in's current
-  defaults. Each port also has an **exit direction** (the side a pipe
-  leaves it from) — inferred automatically from its edge position, or set
-  explicitly in the ports panel (auto/left/right/up/down) when a port sits
-  on a corner or you want to override the inferred side.
-- **Pipe port anchors**: start or end a pipe draw ON a port dot to attach
-  that end to it (instead of a raw point) — the pipe end then tracks the
-  port for as long as it's anchored, so moving the equipment moves the
-  pipe with it. Drag an existing pipe's end onto a port to attach it, off
-  a port to detach it (dropping a concrete point where you let go); the
-  props panel shows each end's anchor with a × to detach or dropdowns to
-  attach. An anchored end honors its port's exit direction with a short
-  straight stub before any corner. Deleting equipment with anchored pipes
-  materializes those ends as concrete points in the same edit — nothing
-  is ever left pointing at equipment that no longer exists. An anchored
-  end's handle renders as a **ring** (distinct from a plain vertex dot) and
-  is clickable/draggable even sitting right on top of its equipment;
-  clicking it selects that specific end (Arrow keys nudge it — detaching
-  it first if it's anchored, so a nudge is never a dead end) and Enter
-  completes a draw as soon as it's resting on the second port, with no
-  second click required.
-- **Route suggestion**: drawing a pipe port-to-port with no interior
-  clicks (click port A, then port B — or A, then Enter while resting on
-  B) auto-generates an orthogonal route around any equipment in the way,
-  defaulting that pipe's `routing` to `orthogonal`; the suggested vertices
-  are ordinary, editable points from then on — routing is a one-shot
-  generator, never live state. A **Re-route** button in the props panel
-  (any pipe with at least one anchored end) replaces the interior points
-  with a fresh suggestion at any time — a normal, undoable edit.
+- Equipment renders with the real HMI components (Tank, Pump, Valve, Gauge,
+  Sparkline), and your own `*.svelte` components render next to them.
+- Place equipment from the palette, draw pipes that snap to ports and follow
+  the equipment when it moves, and get an orthogonal route suggested around
+  whatever is in the way.
+- Bind props to tags in the props panel; with a controller running, the
+  canvas animates with the real process.
+- Every gesture is one text edit, so undo is text undo. Press `p` to edit an
+  equipment's ports; **Nautilus: Edit Component Ports…** does the same for
+  the built-ins.
 
-### Inline live tag values (needs a running controller)
+## Testing
 
-When a nautilus controller is running (any program using the `server`
-package — the scaffold wires it by default), the extension subscribes to its
-tag stream (`GET /api/stream`, SSE) and renders **live values next to every
-identifier** in your `.st` source — the watch window, inline. Values gray out
-when the stream goes stale; the status-bar item shows connection state and
-toggles the feature. Set `nautilus.runtimeUrl` (default
-`http://localhost:8080`) to point at your controller.
+![Acceptance tests in the Testing view, with a failure shown on the assertion](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/testing-view.png)
+
+- `*_test.yaml` acceptance suites appear in VS Code's **Testing** view,
+  run through `naut test`.
+- Tests run on a virtual clock, so a ten-second alarm delay is asserted
+  exactly, in milliseconds, without waiting.
+- Run one test from the gutter; a failure shows the step and tag value that
+  broke, inline on the assertion.
+- `nautilus.yaml` (including `drivers:`), tag, alarm and test files get
+  completion and validation from bundled JSON schemas, in any YAML editor
+  that honors schema associations (for example Red Hat's YAML extension).
+
+## Rockwell L5X
+
+- A Logix `.L5X` export opens as ladder: **Open as Diagram Editor**, or
+  **nautilus: Open Ladder Diagram Preview**. No Rockwell software, licence
+  or Windows; the file is parsed, not executed.
+- The diagram is read-only (the controller is the source of truth), marked
+  with a *read-only · Logix export* pill.
+- Diff vs HEAD and between git revisions work on `.L5X`, so a changed rung
+  reads as a changed rung rather than a wall of XML.
+
+## Language intelligence
+
+The extension runs `naut lsp`, the real nautilus compiler as a language
+server.
+
+- **Diagnostics as you type** in `.st`, `.fbd`, `.ld` and `.sfc`: parse
+  errors, undeclared identifiers, unknown FB fields and type mismatches, on
+  the exact line (on the rung or step in a diagram).
+- **Go to definition**, **hover** (type, var section, a tag's unit and
+  description) and **completion** (in-scope variables, keywords, types, and
+  the compiler's own function and function-block registries).
+- Syntax highlighting works with no CLI at all.
 
 ## Requirements
 
-- **Syntax highlighting** works with no setup.
-- **Language features** (diagnostics, go-to-definition, hover, completion)
-  need the nautilus CLI, `naut` 0.11.0 or newer — **nautilus: Install or
-  Update the naut CLI** installs it in one click (or `go install
-  github.com/joyautomation/nautilus/cmd/naut@latest`). Point
-  `nautilus.cliPath` at it if it's installed somewhere the extension doesn't
-  look.
-- **Inline live values** need a running nautilus controller exposing the tag
-  API; set `nautilus.runtimeUrl` (default `http://localhost:8080`).
+- VS Code 1.82 or newer, on Linux, macOS or Windows.
+- The `naut` CLI, **0.13.0 or newer**, for diagnostics, the diagram
+  editors, and online edits (which ask `naut compose` for the program's
+  composition). **nautilus: Install or Update the naut CLI** installs it; a
+  `naut` on your PATH (for example from `go install
+  github.com/joyautomation/nautilus/cmd/naut@latest`) is used first. The
+  extension warns when the one it finds is older than it needs.
+- A running nautilus controller (`naut run`) for live values, online edit
+  and the controller diff.
 
-## Roadmap
+## Settings
 
-**Graphical editors are complete for all four IEC languages** — FBD, Ladder,
-and SFC diagrams all write back to the *same* text that lowers to the *same*
-nautilus IR, and all three now share visual diff and comment gesture parity.
-Remaining diagram-side work: continued gesture parity as each language
-editor matures.
+| Setting | Default | Description |
+|---|---|---|
+| `nautilus.cliPath` | `naut` | The `naut` CLI. A bare name is looked up on PATH, then the copy the install command manages, then `$GOBIN`, `$GOPATH/bin`, `~/go/bin`, `~/.local/bin`, `/usr/local/bin`, `/opt/homebrew/bin` (`%LOCALAPPDATA%\nautilus` on Windows). A full path skips the search. |
+| `nautilus.runtimeUrl` | `http://localhost:8080` | Base URL of the controller for live values, online edit and the controller diff. |
+| `nautilus.liveValues.enabled` | `true` | Show live values inline and on diagrams when a controller is reachable. |
+| `nautilus.token` | `""` | Bearer token for writes to a controller started with `NAUTILUS_TOKEN`. Set it in workspace settings. |
+| `nautilus.confirmControllerWrites` | `true` | Confirm before Download or Rollback changes what a controller runs. Leave it on for anything that might be live. |
+| `nautilus.mimic.snapToGrid` | `true` | Snap dragged equipment, labels and pipe points to the grid in the mimic editor. |
 
-## Development
+## Commands
 
-Tests: `npm test` (extension host + webview pure logic — browser-free, CI-safe).
-The mimic editor also has a **browser gesture harness**
-(`webview-ui/gesture-harness/`, run with `npm --prefix webview-ui run
-test:gestures`) that drives the real webview bundle in headless Chrome with
-real pointer/keyboard input — it covers focus, hit-testing and
-preview-vs-commit geometry the pure-logic tests can't reach. It needs a
-Chrome/Chromium on `PATH` and is deliberately kept out of `npm test`/CI. See
-that folder's README.
+The most used; all are under **nautilus:** in the Command Palette.
 
-## Source & license
+| Command | What it does |
+|---|---|
+| Install or Update the naut CLI | Download and verify the latest `naut` release |
+| Create Project… | Scaffold a project with `naut new` |
+| Get Started | Open the walkthrough |
+| Open as Diagram Editor / Show Source | Switch a file between text and diagram |
+| Open FBD / Ladder / SFC Diagram Preview | Diagram beside the text |
+| Diff … Diagram (vs git HEAD / between git revisions… / vs Controller) | Visual diff |
+| Connect to Controller… | Set `nautilus.runtimeUrl` for this workspace |
+| Set Live Value… | Write a tag on the controller |
+| Download Program to Controller | Online edit |
+| Diff / Pull / Rollback Program | Compare with, bring back, or undo on the controller |
+| Show CLI Info | Which `naut` is in use, and its version |
 
-Part of the [nautilus](https://github.com/joyautomation/nautilus) monorepo
-(`tools/vscode-iec`). Issues and contributions welcome there. Licensed under
-the Apache License 2.0.
+## Troubleshooting
 
-## Packaging a VSIX locally
+- **"Couldn't find the nautilus CLI."** Run **Install or Update the naut
+  CLI**. VS Code started from a desktop launcher or the macOS Dock doesn't
+  see a PATH set in your shell profile; the extension searches the usual
+  install directories, and the **nautilus** output channel lists every one
+  it tried. **Show CLI Info** says which `naut` it picked.
+- **Flatpak VS Code.** Its sandbox can't run programs installed on the
+  host, so a `naut` on your PATH is invisible. The install command puts a
+  copy inside the sandbox; or use VS Code from a `.deb`, `.rpm` or tarball.
+- **Closing the Show Source tab asks to save.** A diagram editor and the
+  text editor share one document. Closing a dirty text tab prompts *Save /
+  Don't Save*, and *Don't Save* discards unsaved diagram edits too, not
+  just the text tab's — so save first (Ctrl+S) or close with *Cancel*.
+  This is VS Code behaviour for custom text editors, not something the
+  extension can opt out of.
+- **No live values / "no controller at …".** Check that `naut run` is
+  running and that its URL matches `nautilus.runtimeUrl`. The status-bar
+  item shows the connection state and toggles live values.
+- **The controller URL setting seems ignored.** A scaffolded project's
+  `.vscode/settings.json` sets `nautilus.runtimeUrl` to
+  `http://localhost:8080`, and workspace settings win over user settings.
+  Use **Connect to Controller…** (it writes the workspace setting) or edit
+  that file.
+- **`.st` files have someone else's highlighting and no diagnostics.**
+  Another extension claimed `.st`. Add `"files.associations": { "*.st":
+  "iec-st" }` (scaffolded projects already have it).
+- **Commands appear but do nothing (local VSIX).** A VSIX built with
+  `vsce package --no-dependencies` can't load its language client. Build
+  without that flag; see [CONTRIBUTING.md](https://github.com/joyautomation/nautilus/blob/main/tools/vscode-iec/CONTRIBUTING.md).
 
-```sh
-npm ci
-npx @vscode/vsce package -o /tmp/vscode-iec.vsix
-```
+## Release channels
 
-**Do not pass `--no-dependencies`.** It produces a VSIX that installs
-cleanly and then fails at activation with
+- **Stable** (even minor versions, `0.10.x`, `0.12.x`, …): what you get by
+  default. Each stable release is a pre-release that ran for a few days
+  without a follow-up fix.
+- **Pre-release** (odd minor versions, `0.11.x`, …): built from `main` on
+  every version bump. Choose **Switch to Pre-Release Version** on the
+  extension page, or `code --install-extension joyauto.vscode-iec
+  --pre-release`.
 
-```
-Activating extension joyauto.vscode-iec failed due to an error:
-Error: Cannot find module 'vscode-languageclient/node'
-```
+The [CHANGELOG](https://github.com/joyautomation/nautilus/blob/main/tools/vscode-iec/CHANGELOG.md)
+lists every change on both channels.
 
-Nothing surfaces in the UI: the commands still appear in the palette,
-because the palette is built from `package.json` and needs no activation.
-Selecting one silently does nothing. The only evidence is the Extension Host
-log under the user-data-dir.
+## Links
 
-`publish.yml` runs `npm ci` and packages with dependencies, so releases are
-unaffected -- this only bites a local build.
+- [nautilus on GitHub](https://github.com/joyautomation/nautilus): the
+  runtime, the `naut` CLI and this extension (`tools/vscode-iec`)
+- [Documentation](https://nautilus.joyautomation.com)
+- [Issues](https://github.com/joyautomation/nautilus/issues)
+- [Contributing to the extension](https://github.com/joyautomation/nautilus/blob/main/tools/vscode-iec/CONTRIBUTING.md)
+
+Licensed under the Apache License 2.0.

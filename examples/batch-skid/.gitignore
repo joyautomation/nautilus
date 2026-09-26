@@ -1,0 +1,5 @@
+# Local retained state (recipe select, tuning) — recreated on first run.
+retain.json
+
+# `naut build` output.
+/batch-skid

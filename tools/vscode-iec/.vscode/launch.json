@@ -4,14 +4,15 @@
     {
       // Press F5 to launch a second VS Code window (the Extension
       // Development Host) with this extension loaded and the heated-tank
-      // example opened as the workspace, so program.st is right there to
-      // test diagnostics, go-to-definition, and live values against.
+      // test fixture opened as the workspace, so program.fbd is right
+      // there to test diagnostics, go-to-definition, and live values
+      // against.
       "name": "Run Extension (heated-tank)",
       "type": "extensionHost",
       "request": "launch",
       "args": [
         "--extensionDevelopmentPath=${workspaceFolder}",
-        "${workspaceFolder}/../../examples/heated-tank"
+        "${workspaceFolder}/../../testdata/projects/heated-tank"
       ],
       "outFiles": ["${workspaceFolder}/out/**/*.js"]
     }

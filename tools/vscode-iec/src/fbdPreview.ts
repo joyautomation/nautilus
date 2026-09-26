@@ -12,6 +12,7 @@
 // per-document into VS Code's editor lifecycle.
 
 import * as vscode from "vscode";
+import { nautCompose } from "./compose";
 import { followActiveDoc } from "./previewFollow";
 import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
 import { execFile } from "child_process";
@@ -100,13 +101,20 @@ function cliPath(): string {
   return cliCommand();
 }
 
-/** Run `naut fbd graph -` over source text. */
-export function fbdGraph(source: string): Promise<{ model: FbdModel } | { error: string }> {
+/** The file a document's buffer belongs to on disk, so `naut fbd` can put
+ * the project's library blocks in scope (untitled/virtual docs: none). */
+export function docFile(doc: vscode.TextDocument): string | undefined {
+  return doc.uri.scheme === "file" ? doc.uri.fsPath : undefined;
+}
+
+/** Run `naut fbd graph - [at]` over source text; `at` names the file the
+ * buffer belongs to (its project's libraries join the block catalog). */
+export function fbdGraph(source: string, at?: string): Promise<{ model: FbdModel } | { error: string }> {
   const cli = cliPath();
   return new Promise((resolve) => {
     const child = execFile(
       cli,
-      ["fbd", "graph", "-"],
+      at ? ["fbd", "graph", "-", at] : ["fbd", "graph", "-"],
       cliExecOptions(),
       (err, stdout) => {
         // Exit 1 still writes {"error": ...} JSON on stdout — prefer it.
@@ -126,7 +134,7 @@ export function fbdGraph(source: string): Promise<{ model: FbdModel } | { error:
 }
 
 /** Run `naut fbd edit`: resolve op against source, get minimal edits. */
-function fbdEdit(source: string, op: FbdEditOp): Promise<{ edits: FbdTextEdit[] } | { error: string }> {
+function fbdEdit(source: string, op: FbdEditOp, file?: string): Promise<{ edits: FbdTextEdit[] } | { error: string }> {
   const cli = cliPath();
   return new Promise((resolve) => {
     const child = execFile(
@@ -145,7 +153,7 @@ function fbdEdit(source: string, op: FbdEditOp): Promise<{ edits: FbdTextEdit[] 
         resolve({ error: err ? String(err) : "naut fbd edit: empty output" });
       }
     );
-    child.stdin?.end(JSON.stringify({ source, op }));
+    child.stdin?.end(JSON.stringify(file ? { source, op, file } : { source, op }));
   });
 }
 
@@ -221,20 +229,26 @@ function handleWebviewMessage(doc: vscode.TextDocument, msg: WebviewMessage): vo
   editQueue = editQueue.then(() => applyOpMessage(doc, msg)).catch(() => undefined);
 }
 
-/** Find and reveal `FUNCTION_BLOCK <pou>` among the document's sibling .st
- * files (the project's libraries). Built-in blocks have no source to open. */
+/** Find and reveal `FUNCTION_BLOCK <pou>` among the project's library
+ * files — whichever `naut compose` says join the prelude: root and lib/,
+ * .st and the ladder/FBD ones alike (a block written as rungs opens at its
+ * declaration in the .ld file). Built-in blocks have no source to open. */
 async function openPouSource(doc: vscode.TextDocument, pou: string): Promise<void> {
-  const dir = vscode.Uri.joinPath(doc.uri, "..");
   const re = new RegExp(String.raw`^[ \t]*FUNCTION_BLOCK[ \t]+` + pou + String.raw`\b`, "im");
+  const composed = await nautCompose(doc.uri);
+  if ("error" in composed) {
+    void vscode.window.showErrorMessage(composed.error);
+    return;
+  }
+  const root = vscode.Uri.file(composed.ok.root);
   try {
-    const entries = await vscode.workspace.fs.readDirectory(dir);
-    for (const [name, kind] of entries) {
-      if (kind !== vscode.FileType.File || !/\.st$/i.test(name)) continue;
-      const uri = vscode.Uri.joinPath(dir, name);
-      const text = new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+    for (const rel of composed.ok.libraries) {
+      const uri = vscode.Uri.joinPath(root, ...rel.split("/"));
+      const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+      const text = open ? open.getText() : new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
       const m = re.exec(text);
       if (!m) continue;
-      const opened = await vscode.workspace.openTextDocument(uri);
+      const opened = open ?? (await vscode.workspace.openTextDocument(uri));
       const line = text.slice(0, m.index).split("\n").length - 1;
       const editor = await vscode.window.showTextDocument(opened, { preview: false });
       const pos = new vscode.Position(line, 0);
@@ -246,7 +260,7 @@ async function openPouSource(doc: vscode.TextDocument, pou: string): Promise<voi
     // fall through to the message below
   }
   void vscode.window.showInformationMessage(
-    `nautilus: no FUNCTION_BLOCK ${pou} in this project's .st files — it's a built-in block`
+    `nautilus: no FUNCTION_BLOCK ${pou} in this project's libraries — it's a built-in block`
   );
 }
 
@@ -258,7 +272,7 @@ async function applyOpMessage(doc: vscode.TextDocument, msg: WebviewMessage): Pr
     msg.op.entries = msg.op.entries.filter((e) => !!e.node);
     if (msg.op.entries.length === 0) return;
   }
-  const res = await fbdEdit(doc.getText(), msg.op);
+  const res = await fbdEdit(doc.getText(), msg.op, docFile(doc));
   if ("error" in res) {
     void vscode.window.showWarningMessage("nautilus: " + res.error);
     return;
@@ -281,7 +295,7 @@ export function docTitle(doc: vscode.TextDocument): string {
 
 async function postModel(webview: vscode.Webview, doc: vscode.TextDocument): Promise<void> {
   const source = doc.getText();
-  const res = await fbdGraph(source);
+  const res = await fbdGraph(source, docFile(doc));
   if ("error" in res) {
     void webview.postMessage({ type: "error", message: res.error, title: docTitle(doc) });
   } else {
@@ -527,7 +541,7 @@ export class FbdPreview implements vscode.Disposable {
       return;
     }
     const source = doc.getText();
-    const res = await fbdGraph(source);
+    const res = await fbdGraph(source, docFile(doc));
     if ("error" in res) {
       this.post({ type: "error", message: res.error, title: docTitle(doc) });
     } else {
@@ -564,7 +578,7 @@ export class FbdPreview implements vscode.Disposable {
         const key: unknown = msg;
         if (isDiagramKeyMessage(key)) {
           const doc = await sourceDocument(this.docUri);
-          if (doc && this.panel) void applyDiagramKey(key.action, doc, this.panel, { diffing: this.diffing });
+          if (doc && this.panel) await applyDiagramKey(key.action, doc, this.panel, { diffing: this.diffing });
           return;
         }
         if ((msg as { type?: string }).type === "exitDiff") {

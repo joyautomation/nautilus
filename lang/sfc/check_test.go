@@ -397,10 +397,12 @@ END_PROGRAM
 	wantNoDiag(t, Check(prog), "not structurally reachable")
 }
 
-// TestCheckAmbiguousAltGroupWarns: three transitions t1/t2/t3 where t1-t2
-// share a source and t2-t3 share a (different) source, but t1-t3 share
-// none — a non-transitive three-way overlap (§2.3/§5.1).
-func TestCheckAmbiguousAltGroupWarns(t *testing.T) {
+// TestCheckNonTransitiveAltGroupIsClean: three transitions t1/t2/t3 where
+// t1-t2 share a source and t2-t3 share a (different) source, but t1-t3 share
+// none — a non-transitive three-way overlap. The §2.3 guard (suppressed only
+// by a higher-priority sharer that itself fires) resolves it exactly, so it is
+// no longer flagged (it used to be, as "ambiguous alternative-priority group").
+func TestCheckNonTransitiveAltGroupIsClean(t *testing.T) {
 	src := `PROGRAM P
 VAR END_VAR
 SFC
@@ -426,11 +428,11 @@ END_SFC
 END_PROGRAM
 `
 	prog := mustParse(t, src)
-	wantDiag(t, Check(prog), SeverityWarning, "ambiguous alternative-priority group")
+	wantNoDiag(t, Check(prog), "alternative-priority")
 }
 
 // TestCheckCliqueAltGroupIsClean: three transitions that all pairwise share
-// a source (a real clique) — priority is well-defined pairwise, no warning.
+// a source (a real clique) — no warning.
 func TestCheckCliqueAltGroupIsClean(t *testing.T) {
 	src := `PROGRAM P
 VAR
@@ -461,7 +463,7 @@ END_SFC
 END_PROGRAM
 `
 	prog := mustParse(t, src)
-	wantNoDiag(t, Check(prog), "ambiguous alternative-priority group")
+	wantNoDiag(t, Check(prog), "alternative-priority")
 }
 
 func TestCheckSingleStepChartIsNotADeadEnd(t *testing.T) {
@@ -502,4 +504,63 @@ END_PROGRAM
 `
 	prog := mustParse(t, src)
 	wantDiag(t, Check(prog), SeverityError, "does not take a time argument")
+}
+
+// TestCheckAssocVsActionWrite: a variable targeted by a bare qualifier
+// association and also assigned in an ACTION body is flagged (warning), with
+// the rule that decides between them; a named call argument or a member
+// assignment of the same spelling is not an assignment of the variable.
+func TestCheckAssocVsActionWrite(t *testing.T) {
+	src := `PROGRAM P
+VAR X : BOOL; Y : BOOL; Z : BOOL; tm : TON; s : Rec; END_VAR
+SFC
+INITIAL_STEP Idle:
+  P1 SetX;
+END_STEP
+STEP Dead:
+  R X;
+  N Y;
+  S Z;
+END_STEP
+TRANSITION FROM Idle TO Dead := FALSE;
+END_TRANSITION
+TRANSITION FROM Dead TO Idle := TRUE;
+END_TRANSITION
+ACTION SetX:
+  X := TRUE; (* Z := TRUE; in a comment is not a write *)
+  tm(IN := Y, PT := T#1S);
+  s.Z := TRUE;
+END_ACTION
+END_SFC
+END_PROGRAM
+`
+	prog := mustParse(t, src)
+	diags := Check(prog)
+	wantDiag(t, diags, SeverityWarning, "X is driven by a qualifier association (R) on step Dead and assigned in ACTION SetX — the association resets it once, on the scan Dead activates")
+	wantNoDiag(t, diags, "Y is driven")
+	wantNoDiag(t, diags, "Z is driven")
+}
+
+func TestCheckAssocVsActionWriteN(t *testing.T) {
+	src := `PROGRAM P
+VAR X : BOOL; END_VAR
+SFC
+INITIAL_STEP A:
+  N X;
+END_STEP
+STEP B:
+  N Clear;
+END_STEP
+TRANSITION FROM A TO B := TRUE;
+END_TRANSITION
+TRANSITION FROM B TO A := TRUE;
+END_TRANSITION
+ACTION Clear:
+  IF B.X THEN X := FALSE; END_IF;
+END_ACTION
+END_SFC
+END_PROGRAM
+`
+	prog := mustParse(t, src)
+	wantDiag(t, Check(prog), SeverityWarning, "X is driven by a qualifier association (N) on step A and assigned in ACTION Clear — the association wins while A is active")
 }

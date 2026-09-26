@@ -81,11 +81,14 @@ type LayoutOpEntry struct {
 //
 // Blank source (a 0-byte new file) seeds: the op applies to a PROGRAM
 // skeleton named op.Pou, and the result replaces the file in one edit.
-func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
+//
+// libs (optional) are the project's library sources, so a library block's
+// pins are known the way GraphWithLibs draws them.
+func ApplyEdit(src string, op EditOp, libs ...string) ([]TextEdit, error) {
 	if seed.Blank(src) {
 		return seedEdit(src, op)
 	}
-	b, err := buildModel(src)
+	b, err := buildModelIn(src, libs)
 	if err != nil {
 		return nil, err
 	}

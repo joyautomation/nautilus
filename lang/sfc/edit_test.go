@@ -1,6 +1,7 @@
 package sfc
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -368,8 +369,7 @@ func TestOpInsertAlternativeBranch(t *testing.T) {
 		t.Errorf("t_overflow should be inserted immediately after t_full (priority = insertion order): got line %d, t_full ends at %d", nt.Line, findTransT(t, m, "tr:t_full").EndLine)
 	}
 	// t_abort/t_full stay alt/simDiverge; a 3-way alt group sharing "Fill"
-	// forms — not flagged ambiguous here since all three pairwise share
-	// the same single source (a clique, per checkAltGroups).
+	// forms (all three share the same single source).
 	if kind := findTransT(t, m, "tr:t_abort").Kind; kind != "alt" {
 		t.Errorf("t_abort.Kind = %q, want alt", kind)
 	}
@@ -424,6 +424,60 @@ func TestOpInsertSimultaneousBranchWidensJoin(t *testing.T) {
 			t.Errorf("unexpected diagnostic: %s", d.Message)
 		}
 	}
+}
+
+// joinSimultaneousBranch widens a FROM into a convergence — the gesture
+// the lift station's PostRun/Alternate join needs. Two legs of one
+// divergence, with only one of them wired onward so far: joining the other
+// leaves the chart check-clean, and the transition keeps its comment.
+const halfJoined = `PROGRAM P
+VAR
+  Go : BOOL;
+  Done : BOOL;
+END_VAR
+SFC
+INITIAL_STEP Idle:
+END_STEP
+STEP PostRun:
+END_STEP
+STEP Alternate:
+END_STEP
+TRANSITION t_split FROM Idle TO (PostRun, Alternate) := Go;
+END_TRANSITION
+TRANSITION t_back FROM PostRun TO Idle := Done;   (* the join *)
+END_TRANSITION
+END_SFC
+END_PROGRAM
+`
+
+func TestOpJoinSimultaneousBranch(t *testing.T) {
+	wantDiag(t, Check(mustParse(t, halfJoined)), SeverityWarning, `step "Alternate" is a dead end`)
+
+	result, m := applyOp(t, halfJoined, EditOp{Type: "joinSimultaneousBranch", Transition: "tr:t_back", Step: "st:Alternate"})
+	tb := findTransT(t, m, "tr:t_back")
+	if !equalStrings(tb.From, []string{"PostRun", "Alternate"}) || tb.Kind != "simConverge" {
+		t.Errorf("t_back = %+v, want From=[PostRun Alternate] Kind=simConverge", tb)
+	}
+	if !strings.Contains(result, "TRANSITION t_back FROM (PostRun, Alternate) TO Idle := Done;   (* the join *)") {
+		t.Errorf("only the FROM set should change:\n%s", result)
+	}
+	if diags := Check(mustParse(t, result)); len(diags) != 0 {
+		t.Errorf("Check after the join = %v, want none", diags)
+	}
+	// One edit, one undo: undoing it is the same one-line span.
+	edits, _ := ApplyEdit(halfJoined, EditOp{Type: "joinSimultaneousBranch", Transition: "tr:t_back", Step: "st:Alternate"})
+	if len(edits) != 1 || edits[0].Line != edits[0].EndLine {
+		t.Errorf("want a single in-line edit, got %+v", edits)
+	}
+
+	// Never-block: joining a step no divergence shares with the other
+	// source is allowed; Check, not the editor, says so.
+	result, _ = applyOp(t, workedExample, EditOp{Type: "joinSimultaneousBranch", Transition: "tr:t_done", Step: "st:Idle"})
+	wantDiag(t, Check(mustParse(t, result)), SeverityWarning, "not structurally reachable from a common simultaneous divergence")
+
+	wantOpErr(t, halfJoined, EditOp{Type: "joinSimultaneousBranch", Transition: "tr:t_back", Step: "st:PostRun"}) // already a source
+	wantOpErr(t, halfJoined, EditOp{Type: "joinSimultaneousBranch", Transition: "tr:t_back", Step: "st:Nope"})    // no such step
+	wantOpErr(t, halfJoined, EditOp{Type: "joinSimultaneousBranch", Transition: "tr:nope", Step: "st:Alternate"}) // no such transition
 }
 
 // ── layout ────────────────────────────────────────────────────────────
@@ -616,4 +670,152 @@ func TestDeleteMiddleStepNoDoubleBlank(t *testing.T) {
 
 func TestApplyEditUnknownOp(t *testing.T) {
 	wantOpErr(t, baseline, EditOp{Type: "frobnicate"})
+}
+
+// ── "new step" transitions and chained steps (the diagram's "+ transition →
+// other… (new step)" and "+ step" with a step selected): the step and the
+// transition arrive in ONE op — one edit, one undo — and the result checks
+// clean of unknown-step errors. ─────────────────────────────────────────
+
+// noErrors fails on any error-severity Check diagnostic.
+func noErrors(t *testing.T, src string) {
+	t.Helper()
+	for _, d := range Check(mustParse(t, src)) {
+		if d.Severity == SeverityError {
+			t.Errorf("Check error: %v\n%s", d, src)
+		}
+	}
+}
+
+func TestOpAddTransitionNewStep(t *testing.T) {
+	result, m := applyOp(t, baseline, EditOp{Type: "addTransition", From: []string{"B"}, To: []string{"C"}, NewStep: "C", Cond: "X"})
+	c := findStepT(t, m, "st:C")
+	if c.Initial || len(c.Actions) != 0 {
+		t.Errorf("new step = %+v, want a plain empty STEP", c)
+	}
+	// Right after its source step in the file, before the transitions.
+	if b := findStepT(t, m, "st:B"); c.Line != b.EndLine+2 {
+		t.Errorf("STEP C at line %d, want right after B (ends %d)", c.Line, b.EndLine)
+	}
+	var tr *GTransition
+	for i := range m.Trans {
+		if equalStrings(m.Trans[i].From, []string{"B"}) && equalStrings(m.Trans[i].To, []string{"C"}) {
+			tr = &m.Trans[i]
+		}
+	}
+	if tr == nil || tr.Cond != "X" {
+		t.Fatalf("no TRANSITION FROM B TO C := X:\n%s", result)
+	}
+	noErrors(t, result)
+	if !strings.Contains(result, "  STEP C:\n  END_STEP\n") {
+		t.Errorf("STEP C not printed canonically:\n%s", result)
+	}
+
+	// A NewStep that already exists is just the transition (no second STEP).
+	_, m2 := applyOp(t, baseline, EditOp{Type: "addTransition", From: []string{"B"}, To: []string{"A"}, NewStep: "A", Cond: "X"})
+	if len(m2.Steps) != 2 || len(m2.Trans) != 3 {
+		t.Errorf("existing NewStep: steps=%d trans=%d, want 2 and 3", len(m2.Steps), len(m2.Trans))
+	}
+	// NewStep must be a TO member.
+	wantOpErr(t, baseline, EditOp{Type: "addTransition", From: []string{"B"}, To: []string{"A"}, NewStep: "C", Cond: "X"})
+	wantOpErr(t, baseline, EditOp{Type: "addTransition", From: []string{"B"}, To: []string{"1C"}, NewStep: "1C", Cond: "X"})
+
+	// Round trip: one op in, deleteSelection of both out → byte-identical.
+	got := roundTrip(t, workedExample,
+		EditOp{Type: "addTransition", From: []string{"Drain"}, To: []string{"Rinse"}, NewStep: "Rinse", Cond: "TRUE", Name: "t_rinse"},
+		EditOp{Type: "deleteSelection", Nodes: []string{"st:Rinse", "tr:t_rinse"}})
+	if got != workedExample {
+		t.Fatalf("new-step transition + delete not byte-identical:\n%q", got)
+	}
+}
+
+func TestOpAddTransitionNewStepSameInsertionPoint(t *testing.T) {
+	// No transitions yet: the step and the transition both want the line
+	// after the last step — they must land as one edit, step first.
+	src := "PROGRAM P\nVAR\n  X : BOOL;\nEND_VAR\nSFC\n  INITIAL_STEP A:\n  END_STEP\nEND_SFC\nEND_PROGRAM\n"
+	edits, err := ApplyEdit(src, EditOp{Type: "addTransition", From: []string{"A"}, To: []string{"B"}, NewStep: "B", Cond: "X"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(edits) != 1 {
+		t.Fatalf("got %d edits, want 1 merged insert: %+v", len(edits), edits)
+	}
+	result, m := applyOp(t, src, EditOp{Type: "addTransition", From: []string{"A"}, To: []string{"B"}, NewStep: "B", Cond: "X"})
+	if findStepT(t, m, "st:B").Line > m.Trans[0].Line {
+		t.Errorf("STEP B after its transition:\n%s", result)
+	}
+	noErrors(t, result)
+}
+
+func TestOpInsertAlternativeBranchNewStep(t *testing.T) {
+	// Branch out of a STEP (From, no After) to a new step.
+	result, m := applyOp(t, workedExample, EditOp{Type: "insertAlternativeBranch", From: []string{"Fill"}, To: []string{"Overflow"}, NewStep: "Overflow", Cond: "Level > 99.0"})
+	findStepT(t, m, "st:Overflow")
+	var alt *GTransition
+	for i := range m.Trans {
+		if equalStrings(m.Trans[i].To, []string{"Overflow"}) {
+			alt = &m.Trans[i]
+		}
+	}
+	if alt == nil || !equalStrings(alt.From, []string{"Fill"}) || alt.Kind != "alt" {
+		t.Fatalf("alt branch = %+v\n%s", alt, result)
+	}
+	noErrors(t, result)
+	// From a transition (After) to a new step: the source is inherited.
+	_, m2 := applyOp(t, workedExample, EditOp{Type: "insertAlternativeBranch", After: "tr:t_full", To: []string{"Overflow"}, NewStep: "Overflow", Cond: "TRUE"})
+	if s := findStepT(t, m2, "st:Overflow"); s.Line != findStepT(t, m2, "st:Fill").EndLine+2 {
+		t.Errorf("Overflow should land right after Fill (the inherited source)")
+	}
+}
+
+func TestOpAddStepChained(t *testing.T) {
+	result, m := applyOp(t, baseline, EditOp{Type: "addStep", Name: "C", From: []string{"A"}, Cond: "TRUE"})
+	c := findStepT(t, m, "st:C")
+	if a := findStepT(t, m, "st:A"); c.Line != a.EndLine+2 {
+		t.Errorf("chained step at line %d, want right after A (ends %d)", c.Line, a.EndLine)
+	}
+	var tr *GTransition
+	for i := range m.Trans {
+		if equalStrings(m.Trans[i].From, []string{"A"}) && equalStrings(m.Trans[i].To, []string{"C"}) {
+			tr = &m.Trans[i]
+		}
+	}
+	if tr == nil || tr.Cond != "TRUE" {
+		t.Fatalf("no TRANSITION FROM A TO C := TRUE:\n%s", result)
+	}
+	// Lowest priority of A's group: after A's existing transition.
+	if tr.Line <= m.Trans[0].EndLine || !equalStrings(m.Trans[0].To, []string{"B"}) {
+		t.Errorf("chained transition should follow A's existing one:\n%s", result)
+	}
+	noErrors(t, result)
+
+	// Without From: today's free step, one edit, no transition.
+	_, m2 := applyOp(t, baseline, EditOp{Type: "addStep", Name: "C", After: "st:A"})
+	if len(m2.Trans) != 2 {
+		t.Errorf("free step added %d transitions", len(m2.Trans)-2)
+	}
+	wantOpErr(t, baseline, EditOp{Type: "addStep", Name: "C", From: []string{"A"}, Cond: "a; b"})
+	wantOpErr(t, baseline, EditOp{Type: "addStep", Name: "B", From: []string{"A"}, Cond: "TRUE"}) // exists
+
+	got := roundTrip(t, workedExample,
+		EditOp{Type: "addStep", Name: "Rinse", From: []string{"Drain"}, Cond: "TRUE"},
+		EditOp{Type: "deleteSelection", Nodes: []string{"st:Rinse", "tr:" + itoa(transLineTo(t, workedExample, EditOp{Type: "addStep", Name: "Rinse", From: []string{"Drain"}, Cond: "TRUE"}, "Rinse"))}})
+	if got != workedExample {
+		t.Fatalf("chained step + delete not byte-identical:\n%q", got)
+	}
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
+
+// transLineTo applies op and returns the line of the transition reaching `to`.
+func transLineTo(t *testing.T, src string, op EditOp, to string) int {
+	t.Helper()
+	_, m := applyOp(t, src, op)
+	for _, tr := range m.Trans {
+		if equalStrings(tr.To, []string{to}) {
+			return tr.Line
+		}
+	}
+	t.Fatalf("no transition to %s", to)
+	return 0
 }

@@ -4,9 +4,10 @@
 // `createRequire`, so bare imports (svelte, @joyautomation/nautilus-hmi,
 // anything else) come from wherever the component actually lives. No vscode
 // import here — this module is pure Node + esbuild + the resolved svelte
-// compiler, so it's directly unit-testable (see userComponentBuild.test.ts)
-// and is the exact function the end-to-end verification script calls
-// directly against examples/hmi-demo/src/lib/HeatExchanger.svelte.
+// compiler, so it's directly unit-testable end to end against a real,
+// unmodified `.svelte` fixture (see userComponentBuild.test.ts, which
+// compiles testdata/user-components/Supply.svelte through this exact
+// function).
 //
 // Failure handling is per-component: a component that fails to resolve its
 // project's svelte/compiler, or fails to compile, is EXCLUDED from the
