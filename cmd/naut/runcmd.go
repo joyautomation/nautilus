@@ -20,7 +20,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -194,11 +193,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		banner += " (" + label + ")"
 	}
 	if apiUp {
-		if proj.HMIDir != "" {
-			banner += " — hmi (" + proj.HMIDir + ") + tag API on http://" + addr
-		} else {
-			banner += " — dashboard + tag API on http://" + addr
-		}
+		banner += hmiBannerSuffix(proj, addr, os.Stderr)
 	}
 	if sparkplugUp {
 		banner += " — sparkplug up"
@@ -215,6 +210,32 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	fmt.Println(banner + " — Ctrl+C to stop")
 	<-ctx.Done()
 	return 0
+}
+
+// hmiBannerSuffix decides what runProject's banner says about the
+// HMI/dashboard, printing a one-line warning to stderr when server.hmi is
+// configured but not built yet. Split out of runProject (which blocks on
+// Ctrl+C, so it isn't a convenient thing to unit test directly) so this
+// decision — the same one `naut build` makes about its own warning — has
+// a testable entry point of its own.
+func hmiBannerSuffix(proj *project.Project, addr string, stderr io.Writer) string {
+	switch {
+	case proj.HMIDir != "" && proj.HMIMissing:
+		// project.Load already left Server.HMI nil for this — the
+		// built-in dashboard has "/", exactly as if server.hmi were
+		// unset — but a dev who set server.hmi and expects to see their
+		// own HMI deserves to know why they're not.
+		fmt.Fprintf(stderr,
+			"naut run: server.hmi: %s is not built yet — serving the "+
+				"built-in dashboard instead; run the HMI's own build "+
+				"(npm run build in %s) and restart to serve it\n",
+			proj.HMIDir, project.HMIBuildHint(proj.HMIDir))
+		return " — dashboard + tag API on http://" + addr
+	case proj.HMIDir != "":
+		return " — hmi (" + proj.HMIDir + ") + tag API on http://" + addr
+	default:
+		return " — dashboard + tag API on http://" + addr
+	}
 }
 
 // selfAddr is what a standby needs to reach this replica: the pod IP from
@@ -314,30 +335,21 @@ func runBuild(args []string) int {
 		return 1
 	}
 	// server.hmi naming a directory that hasn't been built yet is not a
-	// build error: `naut check`/`naut run` already tolerate it (the
-	// built-in dashboard stays at "/"), and the HMI's own build lives in a
+	// build error: `naut run` already falls back to the built-in
+	// dashboard for the exact same reason (project.Load leaves Server.HMI
+	// nil — see Project.HMIMissing), and the HMI's own build lives in a
 	// separate project (npm run build) most devs haven't run before their
 	// first `naut build`. Warn and ship the binary without an embedded
 	// HMI — emitBinary's walk of dir simply won't find a directory that
 	// isn't there, so nothing further needs to change to make that true.
-	// A path that exists but isn't a directory, or one project.Load
-	// already rejected as escaping the project, stays a hard error.
-	if proj.HMIDir != "" {
-		st, statErr := os.Stat(filepath.Join(dir, proj.HMIDir))
-		switch {
-		case statErr != nil && os.IsNotExist(statErr):
-			fmt.Fprintf(os.Stderr,
-				"naut build: server.hmi: %s is not built yet — the binary will serve "+
-					"the built-in dashboard; run the HMI's own build (npm run build in "+
-					"%s) and rebuild to embed it\n",
-				proj.HMIDir, hmiBuildHint(proj.HMIDir))
-		case statErr != nil:
-			fmt.Fprintln(os.Stderr, "naut build: server.hmi:", statErr)
-			return 1
-		case !st.IsDir():
-			fmt.Fprintf(os.Stderr, "naut build: server.hmi: %s: not a directory (run the HMI's own build first, e.g. `npm run build` in its project)\n", proj.HMIDir)
-			return 1
-		}
+	// A path that exists but isn't a directory, or one that escapes the
+	// project, is already a hard error out of project.Load, above.
+	if proj.HMIMissing {
+		fmt.Fprintf(os.Stderr,
+			"naut build: server.hmi: %s is not built yet — the binary will serve "+
+				"the built-in dashboard; run the HMI's own build (npm run build in "+
+				"%s) and rebuild to embed it\n",
+			proj.HMIDir, project.HMIBuildHint(proj.HMIDir))
 	}
 
 	name := *out
@@ -368,18 +380,6 @@ func runBuild(args []string) int {
 			float64(archiveBytes)/(1024*1024), embedSizeWarning/(1024*1024))
 	}
 	return 0
-}
-
-// hmiBuildHint names where to run the HMI's own build for the "not built
-// yet" warning: server.hmi points at a build's OUTPUT (e.g. hmi/build),
-// one level under the HMI's own project (hmi/), which is where `npm run
-// build` actually runs. Falls back to "its project" when hmiDir has no
-// parent to name (server.hmi at the project root, an unusual layout).
-func hmiBuildHint(hmiDir string) string {
-	if parent := path.Dir(hmiDir); parent != "." && parent != "" && parent != "/" {
-		return parent + "/"
-	}
-	return "its project"
 }
 
 // embedSizeWarning is where `naut build` starts saying something: a

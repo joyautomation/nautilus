@@ -929,22 +929,31 @@ when a suite's or a test's `suspend:` list includes `main` and the
 project declares an `alarms:` section, the same shape as the
 first-task-`name:` warning PR #43 added. Status: open.
 
-**2026-09-25 · `naut build` hard-fails on a fresh clone's un-built
-`server.hmi` directory · papercut (CLI)**
+**2026-09-25 · `naut build` hard-fails, and `naut run` silently 404s, on a
+fresh clone's un-built `server.hmi` directory · papercut (CLI)**
 
 Found by the stable-gate run of the ex01 tapes: `naut build . -o
 lift-station` in `examples/lift-station` (a fresh clone, no `npm run
 build` run yet) failed with `server.hmi: hmi/build: not a directory (run
 the HMI's own build first, e.g. npm run build in hmi/)`, because
 `nautilus.yaml` sets `server: { hmi: hmi/build }` and the SvelteKit
-output is gitignored. `naut check` and `naut run` both tolerate the
-missing directory (the built-in dashboard stays at `/`), so `build` was
-the odd one out — and the flagship README's four-line `naut check / test
-/ run / build` block broke on the last line for anyone who hadn't built
-the HMI first. Where: `cmd/naut/runcmd.go` (`runBuild`). Status: fixed by
-this PR — a missing `server.hmi` directory now warns and ships the
-binary with the built-in dashboard instead of failing; the hard error is
-now reserved for a path that exists but isn't a directory.
+output is gitignored — and the flagship README's four-line `naut check /
+test / run / build` block broke on the last line for anyone who hadn't
+built the HMI first. `naut check` was fine (it never touches the
+filesystem for server.hmi), but chasing "build was the odd one out" past
+the first fix turned up that `naut run`'s claimed tolerance was itself
+false: `project.Load` set `Server.HMI` to an `fs.FS` over the configured
+directory whether or not it existed, so once `server.hmi` was configured
+at all, `GET /` 404ed on a fresh clone instead of falling back to the
+built-in dashboard — the README's *third* command was silently broken
+too, just without an error to notice. Where: `internal/project/
+project.go` (the `server.hmi` branch of `Load`) and `cmd/naut/runcmd.go`
+(`runBuild`, `runProject`). Status: fixed by this PR at the source —
+`Load` now leaves `Server.HMI` nil and sets `Project.HMIMissing` when the
+directory doesn't exist, so the dashboard's fallback is real for both
+`run` and `build`; each prints its own one-line warning naming the
+missing directory. The hard error stays for a path that exists but isn't
+a directory, or one that escapes the project.
 
 ## Built in the rig (ex01)
 
