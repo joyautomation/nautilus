@@ -1,0 +1,256 @@
+PROGRAM BatchSequence
+(* MT-201 batch phases: pick a recipe, charge both dosing lines and start
+   the agitator together, heat and hold at temperature, transfer to the
+   line PLC, and CIP every CipEveryN batches. This program only ever
+   asks — it sets TransferReq, the valve/CIP command bits, and an
+   AgitateReq flag directly from step activity, but the actual
+   permissive-gated commands to the line and the transfer pump live in
+   transfer.ld, the same division lift-station's sequence.sfc/
+   permissives.ld keep. AG201_Cmd itself isn't written here at all:
+   transfer.ld ANDs AgitateReq with the recipe's own Agitate flag — the
+   same "N-qualify it from every step that wants it active, combine
+   downstream" shape dosing.fbd's HeatingActive gate already uses. Open
+   the diagram: right-click -> "Open With -> SFC Diagram". *)
+VAR_EXTERNAL
+    RecipeSel   : INT;
+    Start       : BOOL;
+    Hold        : BOOL;
+    Resume      : BOOL;
+    Abort       : BOOL;
+    Active      : Recipe;
+    Batch       : BatchStatus;
+    TT201_Temp  : REAL;
+    LT201_Level : REAL;
+    Line_Accept : BOOL;
+    CipDue      : BOOL;
+
+    XV201A_Cmd    : BOOL;
+    XV201B_Cmd    : BOOL;
+    AgitateReq    : BOOL;
+    HeatingActive : BOOL;
+    TransferReq   : BOOL;
+    ResetTotals   : BOOL;
+    IdleLamp      : BOOL;
+    AbortLamp     : BOOL;
+    HoldDone      : BOOL;
+    PhaseName     : STRING;
+    DoseTimeoutA  : BOOL;
+    DoseTimeoutB  : BOOL;
+END_VAR
+VAR
+    recipes : RecipeTable;
+    holdTmr : TON;
+    cipTmr  : TON;
+END_VAR
+SFC
+
+  INITIAL_STEP Idle:
+    N  IdleLamp;
+    R  AbortLamp;
+    N  SetIdle;
+  END_STEP
+
+  STEP Prep:
+    P  LoadRecipe; (* plain P — same edge as P1, see docs/languages/sfc.md *)
+    N  ResetTotals; (* Prep is one scan, so N self-clears — no separate reset needed *)
+    N  SetPrep;
+  END_STEP
+
+  STEP ChargeA:
+    N  XV201A_Cmd;
+    N  CheckDoseATimeout;
+    N  SetCharging;
+  END_STEP
+
+  STEP ChargeB:
+    N  XV201B_Cmd;
+    N  CheckDoseBTimeout;
+    N  SetCharging;
+  END_STEP
+
+  STEP Agitate:
+    N  AgitateReq; (* combined with Active.Agitate in status.st — an unconditional S can't express "only for recipes that agitate" *)
+    N  SetCharging;
+  END_STEP
+
+  STEP ChargeADone:
+  END_STEP
+
+  STEP ChargeBDone:
+  END_STEP
+
+  STEP Heat:
+    N  HeatingActive;
+    N  AgitateReq;
+    N  SetHeat;
+  END_STEP
+
+  STEP Hold:
+    N  HeatingActive;
+    N  AgitateReq;
+    N  HoldTmr;      (* ACTION: holdTmr(IN := Hold.X, PT := ...) *)
+    N  SetHold;
+    P0 HoldDone;      (* fires once, on Hold's deactivation *)
+  END_STEP
+
+  STEP Transfer:
+    N  TransferReq;
+    N  SetTransfer;
+  END_STEP
+
+  STEP Cip:
+    N  XV201A_Cmd;    (* flush water via XV201A — the same bare N as ChargeA's, OR-combined *)
+    N  CipCtl;        (* ACTION: run cipTmr only, see below *)
+    N  SetCip;
+  END_STEP
+
+  STEP Held:
+    N  SetHeld;
+  END_STEP
+
+  STEP Aborted:
+    S  AbortLamp;
+    P1 LogAbort;
+    N  SetAborted;
+  END_STEP
+
+  (* --- transitions --- *)
+
+  TRANSITION t_start FROM Idle TO Prep := Start AND RecipeValid(RecipeSel);
+  END_TRANSITION
+
+  (* simultaneous divergence: charge both lines and agitate together *)
+  TRANSITION t_prep FROM Prep TO (ChargeA, ChargeB, Agitate) := TRUE;
+  END_TRANSITION
+
+  TRANSITION t_abort_prep FROM Prep TO Aborted := Abort;
+  END_TRANSITION
+
+  TRANSITION t_abort_a FROM ChargeA TO Aborted := Abort;
+  END_TRANSITION
+  TRANSITION t_a_done FROM ChargeA TO ChargeADone := Batch.ChargedA_L >= Active.AmountA_L;
+  END_TRANSITION
+
+  TRANSITION t_abort_b FROM ChargeB TO Aborted := Abort;
+  END_TRANSITION
+  TRANSITION t_b_done FROM ChargeB TO ChargeBDone := Batch.ChargedB_L >= Active.AmountB_L;
+  END_TRANSITION
+
+  (* Abort out of every branch of the simultaneous charge/agitate, each
+     declared ahead of t_charged (the convergence they share sources
+     with) so abort has priority — a non-transitive three-way overlap
+     (t_charged shares ChargeADone with one, ChargeBDone with another,
+     Agitate with the third, but no two of the three share a source with
+     each other) that naut check once warned was ambiguous. It isn't:
+     see docs/design/examples-dogfood.md for the corrected finding. *)
+  TRANSITION t_abort_adone FROM ChargeADone TO Aborted := Abort;
+  END_TRANSITION
+  TRANSITION t_abort_bdone FROM ChargeBDone TO Aborted := Abort;
+  END_TRANSITION
+  TRANSITION t_abort_agitate FROM Agitate TO Aborted := Abort;
+  END_TRANSITION
+
+  (* simultaneous convergence: only once both charges AND the agitate
+     branch have all reached this point *)
+  TRANSITION t_charged FROM (ChargeADone, ChargeBDone, Agitate) TO Heat := TRUE;
+  END_TRANSITION
+
+  (* alternative divergence out of Heat: Hold (the operator command) has
+     priority over the normal Heat -> Hold progression *)
+  TRANSITION t_hold_heat FROM Heat TO Held := Hold;
+  END_TRANSITION
+  TRANSITION t_abort_heat FROM Heat TO Aborted := Abort;
+  END_TRANSITION
+  TRANSITION t_heat FROM Heat TO Hold := TT201_Temp >= Active.TempSP_C - 1.0;
+  END_TRANSITION
+
+  TRANSITION t_hold_hold FROM Hold TO Held := Hold;
+  END_TRANSITION
+  TRANSITION t_abort_hold FROM Hold TO Aborted := Abort;
+  END_TRANSITION
+  TRANSITION t_settled FROM Hold TO Transfer := holdTmr.Q;
+  END_TRANSITION
+
+  TRANSITION t_resume FROM Held TO Heat := Resume;
+  END_TRANSITION
+  TRANSITION t_abort_held FROM Held TO Aborted := Abort;
+  END_TRANSITION
+
+  TRANSITION t_cip FROM Transfer TO Cip := Line_Accept AND (LT201_Level <= 2.0) AND CipDue;
+  END_TRANSITION
+  TRANSITION t_transferred FROM Transfer TO Idle := Line_Accept AND (LT201_Level <= 2.0) AND NOT CipDue;
+  END_TRANSITION
+
+  TRANSITION t_cipped FROM Cip TO Idle := cipTmr.Q;
+  END_TRANSITION
+
+  TRANSITION t_resume_idle FROM Aborted TO Idle := (NOT Abort) AND (LT201_Level <= 2.0);
+  END_TRANSITION
+
+  (* --- action blocks --- *)
+
+  ACTION LoadRecipe:
+    recipes(); (* first call loads the table; every call after is a no-op *)
+    Active := recipes.Recipes[RecipeSel];
+    Batch.Count := Batch.Count + 1;
+  END_ACTION
+
+  ACTION CheckDoseATimeout:
+    DoseTimeoutA := ChargeA.T >= T#5M;
+  END_ACTION
+
+  ACTION CheckDoseBTimeout:
+    DoseTimeoutB := ChargeB.T >= T#5M;
+  END_ACTION
+
+  ACTION HoldTmr:
+    holdTmr(IN := Hold.X, PT := REAL_TO_TIME(Active.HoldSec * 1000.0));
+  END_ACTION
+
+  ACTION CipCtl:
+    cipTmr(IN := Cip.X, PT := T#30S);
+  END_ACTION
+
+  ACTION LogAbort:
+    Batch.ChargedA_L := 0.0;
+    Batch.ChargedB_L := 0.0;
+  END_ACTION
+
+  ACTION SetIdle:
+    PhaseName := 'Idle';
+  END_ACTION
+
+  ACTION SetPrep:
+    PhaseName := 'Prep';
+  END_ACTION
+
+  ACTION SetCharging:
+    PhaseName := 'Charge';
+  END_ACTION
+
+  ACTION SetHeat:
+    PhaseName := 'Heat';
+  END_ACTION
+
+  ACTION SetHold:
+    PhaseName := 'Hold';
+  END_ACTION
+
+  ACTION SetTransfer:
+    PhaseName := 'Transfer';
+  END_ACTION
+
+  ACTION SetCip:
+    PhaseName := 'Cip';
+  END_ACTION
+
+  ACTION SetHeld:
+    PhaseName := 'Held';
+  END_ACTION
+
+  ACTION SetAborted:
+    PhaseName := 'Aborted';
+  END_ACTION
+
+END_SFC
+END_PROGRAM

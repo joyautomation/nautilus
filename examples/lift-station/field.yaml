@@ -1,0 +1,106 @@
+# lift-station — the field build: the same duty/standby lead-lag control
+# (sequence.sfc, level.fbd, permissives.ld, stats.st — byte-identical to
+# nautilus.yaml's) pointed at real VFDs and a remote-I/O rack over Modbus
+# TCP instead of the bench's simulated plant. No sim task; the field is
+# the field.
+#
+#   naut modbus serve --manifest modbus_manifest.yaml --values seed.json
+#                                         stand in for the devices
+#   naut check -m field.yaml .           validate offline
+#   naut run   -m field.yaml .           poll them for real
+#
+# tags/modbus.yaml is GENERATED from devices.yaml by
+# `naut modbus import --map devices.yaml` — never hand-edit it, re-run the
+# import instead. The importer names every tag `<instance id>_<register
+# tag>`, which lands exactly on this project's tag model for both VFDs
+# (P101_Running, P101_RunCmd, P101_SpeedCmd, ...) but not for the RIO
+# instance (LIT101_Level, LSHH101, ... aren't spellable as `RIO_<...>`).
+# field_map.st — the one program that only exists in this manifest — is
+# the glue that renames the RIO_* points onto the canonical tags every
+# other program reads. See docs/design/examples-dogfood.md for the finding
+# and devices.yaml's own header for the naming rule.
+name: lift-station
+
+server:
+  addr: "localhost:8080"
+  online-edits: true
+  # Same operator screen as nautilus.yaml — see its comment and the
+  # README's "The operator screen" section.
+  hmi: hmi/build
+
+retain:
+  file: retain.json
+
+tasks:
+  - program: field_map.st   # RIO_* -> the canonical tag names, ahead of
+    scan: 100ms             # everything else; the first task is always
+                            # the runtime's "main" task, whatever it's
+                            # called here — naming it (a name: key) is a
+                            # no-op `naut check` warns on
+  - name: sequence
+    program: sequence.sfc
+    scan: 250ms
+  - name: level
+    program: level.fbd
+    scan: 100ms
+    dt-tag: LevelDtS
+  - name: permissives
+    program: permissives.ld
+    scan: 100ms
+  - name: stats
+    program: stats.st
+    scan: 1s
+    dt-tag: StatsDtS
+
+# tags/modbus.yaml supplies the VFD points under their canonical names
+# already (P101_Running, P101_RunCmd, P101_SpeedCmd, P101_SpeedHz,
+# P101_Amps, P101_VfdFault, and the P102_ twins) plus the RIO points under
+# their RIO_ prefix (RIO_Level, RIO_Flow, RIO_LSHH101, RIO_LSLL101,
+# RIO_P101_SealFail, RIO_P101_OverTemp, RIO_P102_SealFail,
+# RIO_P102_OverTemp). tags/station.yaml supplies every operator setpoint
+# and computed-state tag that's byte-identical to nautilus.yaml's — the
+# tags: list below keeps only the canonical process values field_map.st
+# writes (the field's role: state twin of the bench's sim-owned ones).
+tag-files:
+  - tags/modbus.yaml
+  - tags/station.yaml
+
+tags:
+  # The canonical process values field_map.st writes from the RIO_* inputs.
+  - { name: LIT101_Level, role: state, init: 0.0, unit: "%", desc: "Wet-well level (LIT-101)" }
+  - { name: LSHH101,      role: state, init: false, desc: "High-high float (LSHH-101)" }
+  - { name: LSLL101,      role: state, init: false, desc: "Low-low float (LSLL-101)" }
+  - { name: FIT101_Flow,  role: state, init: 0.0, unit: "L/s", desc: "Discharge flow (FIT-101)" }
+  - { name: P101_SealFail, role: state, init: false, desc: "P-101 seal-leak probe" }
+  - { name: P102_SealFail, role: state, init: false, desc: "P-102 seal-leak probe" }
+  - { name: P101_OverTemp, role: state, init: false, desc: "P-101 motor over-temperature" }
+  - { name: P102_OverTemp, role: state, init: false, desc: "P-102 motor over-temperature" }
+
+  # Operator setpoints and computed state both live in tags/station.yaml
+  # (byte-identical to nautilus.yaml's — see its header).
+
+alarms:
+  defaults: { ack-required: true, auto-clear: true, shelve: true }
+  shelve-times: [15m, 1h, 4h]
+  journal: { keep: 500 }
+  defs:
+    - { id: LSHH101, tag: LSHH101, name: "Wet-well high-high (LSHH-101)", priority: critical, on-delay: 2s, class: process }
+    - { id: HighLevel, tag: HighLevelAlm, name: "Wet-well high level (LIT-101)", priority: high, on-delay: 10s, class: process }
+    - { id: LSLL101, tag: LSLL101, name: "Wet-well low-low (LSLL-101)", priority: medium, on-delay: 5s, class: process }
+    - { id: P101_FailToRun, tag: P101_FailToRun, name: "P-101 failed to run", priority: high, class: equipment }
+    - { id: P102_FailToRun, tag: P102_FailToRun, name: "P-102 failed to run", priority: high, class: equipment }
+    - { id: P101_LockedOut, tag: P101_LockedOut, name: "P-101 locked out (3 fail-to-run trips)", priority: high, class: equipment }
+    - { id: P102_LockedOut, tag: P102_LockedOut, name: "P-102 locked out (3 fail-to-run trips)", priority: high, class: equipment }
+    - { id: P101_VfdFault, tag: P101_VfdFault, name: "P-101 VFD fault", priority: high, on-delay: 1s, class: equipment }
+    - { id: P102_VfdFault, tag: P102_VfdFault, name: "P-102 VFD fault", priority: high, on-delay: 1s, class: equipment }
+    - { id: P101_SealFail, tag: P101_SealFail, name: "P-101 seal-leak probe", priority: medium, on-delay: 5s, class: equipment }
+    - { id: P102_SealFail, tag: P102_SealFail, name: "P-102 seal-leak probe", priority: medium, on-delay: 5s, class: equipment }
+    - { id: P101_OverTemp, tag: P101_OverTemp, name: "P-101 motor over-temperature", priority: high, on-delay: 2s, class: equipment }
+    - { id: P102_OverTemp, tag: P102_OverTemp, name: "P-102 motor over-temperature", priority: high, on-delay: 2s, class: equipment }
+    - { id: BothUnavail, tag: BothUnavail, name: "Both pumps unavailable", priority: critical, class: equipment }
+
+driver:
+  type: modbus
+  manifest: modbus_manifest.yaml
+  scan-rate: 500ms
+  scan-classes: { fast: 200ms, slow: 2s }

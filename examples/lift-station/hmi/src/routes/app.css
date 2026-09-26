@@ -1,0 +1,12 @@
+/* App-level ground. The kit's theme.css defines the --bg/--surface/--ink/…
+   tokens (light + dark); this just paints the page with them. */
+:global(html, body) {
+	margin: 0;
+	background: var(--bg);
+	color: var(--ink);
+	font-family: var(--font, ui-sans-serif, system-ui, sans-serif);
+	-webkit-font-smoothing: antialiased;
+}
+:global(*) {
+	box-sizing: border-box;
+}

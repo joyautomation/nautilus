@@ -1,0 +1,109 @@
+# batch-skid — the line build: the same control programs (phases.sfc,
+# dosing.fbd, transfer.ld, status.st — byte-identical to nautilus.yaml's)
+# pointed at a real Logix line controller over EtherNet/IP instead of
+# sim.st's own stand-in. No sim task; `naut logix emulate --l5x
+# line/Line.L5X` stands in for the real one and `naut eip import` browsed
+# it to write eip_manifest.yaml/eip_types.st/tags/eip.yaml — never
+# hand-edited, re-run the import instead. host: 127.0.0.1:44818 is the
+# emulator; point it at a real controller by changing the host.
+#
+#   naut logix emulate --l5x line/Line.L5X --listen 127.0.0.1:44818
+#                                         stand in for the line controller
+#   naut check -m line.yaml .            validate offline
+#   naut run   -m line.yaml .            poll it for real
+#
+# The skid's OWN field values (LT201_Level, TT201_Temp, FIT201*_Flow,
+# AG201_Running, P202_Running, XV20*_Open) stay role: state here, same as
+# nautilus.yaml, with no driver behind them — this example's EtherNet/IP
+# story is the line handshake specifically (see README.md's "Bench vs.
+# line"); a local I/O driver for the skid's own instruments is a
+# reasonable follow-up, not built here.
+name: batch-skid
+
+server:
+  addr: "localhost:8080"
+  online-edits: true
+
+retain:
+  file: retain.json
+
+tasks:
+  - program: phases.sfc   # the first task is always named "main" (reserved)
+    scan: 250ms
+  - name: dosing
+    program: dosing.fbd
+    scan: 100ms
+    dt-tag: DosingDtS
+  - name: transfer
+    program: transfer.ld
+    scan: 100ms
+  - name: status
+    program: status.st
+    scan: 500ms
+    dt-tag: StatusDtS
+
+# tags/eip.yaml supplies the line's own tags (Line_Ready, Line_Accept,
+# Line_TankLevel, Line_Fault as role: input; Line_Request, Line_BatchId
+# as role: output; Line_Status as a role: input LineStatus struct).
+# tags/skid.yaml supplies every operator setpoint and computed-state tag
+# that's byte-identical to nautilus.yaml's.
+tag-files:
+  - tags/eip.yaml
+  - tags/skid.yaml
+
+# tags/eip.yaml is generated (naut eip import) and carries no unit/desc —
+# a Logix controller keeps tag descriptions in its own offline project
+# file, which the import can't recover from the wire. Documented here
+# instead, layered onto the generated tags without redeclaring them —
+# units/descriptions mirror nautilus.yaml's own inline entries for the
+# same names (sim.st's bench stand-in for the line).
+tag-meta:
+  Line_Ready: { desc: "Line ready for a transfer (receiving tank has headroom)" }
+  Line_Accept: { desc: "Line has accepted the transfer request" }
+  Line_TankLevel: { unit: "%", desc: "Line's receiving tank level" }
+  Line_Fault: { desc: "Line-side fault — blocks Line_Accept" }
+  Line_Request: { desc: "Skid requests a transfer" }
+  Line_BatchId: { desc: "Batch count stamped onto the line on each request" }
+  Line_Status: { desc: "Line status/alarm struct (Mode, Alarm) read from the line controller" }
+
+tags:
+  # The skid's own field values that a control program actually reads —
+  # see this file's header for why these stay static here rather than
+  # driven. AG201_Running/P202_Running/XV201A_Open/XV201B_Open aren't
+  # bound by any program in this manifest (no sim task to produce them,
+  # no local I/O driver to consume them) and naut check flags an unbound
+  # declared tag, so they're left undeclared here rather than declared
+  # dead — nautilus.yaml still carries them, for the bench's HMI-ready feel.
+  - { name: FIT201A_Flow, role: state, init: 0.0, unit: "L/min", desc: "Dosing-line A flow (FIT-201A)" }
+  - { name: FIT201B_Flow, role: state, init: 0.0, unit: "L/min", desc: "Dosing-line B flow (FIT-201B)" }
+  - { name: LT201_Level, role: state, init: 0.0, unit: "%", desc: "Mix tank level (LT-201, 500 L span)" }
+  - { name: TT201_Temp, role: state, init: 20.0, unit: "degC", desc: "Mix tank temperature (TT-201)" }
+  - { name: XV203_Open, role: state, init: false, desc: "Transfer valve open feedback (XV-203)" }
+
+  - { name: XV201A_Cmd, role: output, init: false, desc: "Dosing valve A command" }
+  - { name: XV201B_Cmd, role: output, init: false, desc: "Dosing valve B command" }
+  - { name: AG201_Cmd, role: output, init: false, desc: "Agitator run command" }
+  - { name: TCV201_Pos, role: output, init: 0.0, unit: "%", desc: "Jacket water control valve position" }
+  - { name: P202_Cmd, role: output, init: false, desc: "Transfer pump run command" }
+  - { name: XV203_Cmd, role: output, init: false, desc: "Transfer valve command" }
+
+alarms:
+  defaults: { ack-required: true, auto-clear: true, shelve: true }
+  shelve-times: [15m, 1h, 4h]
+  journal: { keep: 500 }
+  defs:
+    - { id: Overtemp, tag: OvertempAlm, name: "MT-201 jacket overtemperature", priority: high, on-delay: 2s, class: process }
+    - { id: HandshakeTimeout, tag: HandshakeTimeout, name: "Line handshake timeout", priority: high, on-delay: 1s, class: process }
+    - { id: LineFault, tag: Line_Fault, name: "Line-side fault", priority: medium, on-delay: 2s, class: equipment, enable: Running }
+    - { id: DoseTimeoutA, tag: DoseTimeoutA, name: "Dosing line A charging longer than 5 min", priority: medium, class: process }
+    - { id: DoseTimeoutB, tag: DoseTimeoutB, name: "Dosing line B charging longer than 5 min", priority: medium, class: process }
+    - { id: AbortLamp, tag: AbortLamp, name: "Batch aborted", priority: low, ack-required: false, class: process }
+
+driver:
+  type: eip
+  host: 127.0.0.1:44818
+  manifest: eip_manifest.yaml
+  scan-rate: 1s
+  scan-classes: { fast: 200ms }
+  tag-classes:
+    fast: [Line_Accept, Line_Ready]
