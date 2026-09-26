@@ -1,0 +1,90 @@
+# booster-1 — a pressure-boosting station: two pumps under one PID
+# (pressure.fbd), a live Modbus discharge flow meter, and a Sparkplug B
+# publish where the flow meter's tags ride along as a Sparkplug DEVICE
+# ("plc1") — DBIRTH/DDEATH tracking the Modbus driver's own connection
+# health. Everything else (the pumps, pressure, the shared tank level) is
+# simulated (sim.st). Publishes to the "Water" group as "Booster1".
+#
+#   naut check .    validate offline
+#   naut test  .    the acceptance suite (booster-1_test.yaml), virtual time
+#   naut run   .    dashboard + tag API on http://localhost:8093
+name: booster-1
+
+server:
+  addr: "localhost:8093"
+  online-edits: true
+
+tasks:
+  - program: pressure.fbd
+    scan: 250ms
+    dt-tag: PressDtS
+  - name: sim
+    program: sim.st
+    scan: 100ms
+    dt-tag: SimDtS
+
+tags:
+  # Process values — sim-owned here (see sim.st).
+  - { name: DischargePress, role: state, init: 58.0, unit: "psi", desc: "Booster 1 discharge pressure" }
+  - { name: SuctionPress, role: state, init: 40.0, unit: "psi", desc: "Booster 1 suction pressure" }
+  - { name: TankLevel, role: state, init: 55.0, unit: "%", desc: "Distribution tank level, at the booster's suction" }
+
+  # The two pumps, the SAME Pump Template scada/sites.yaml declares for
+  # all three sites (types.st). SpeedSP rides along for shape parity with
+  # the well sites but isn't wired into this site's own control (a
+  # writable field with nothing local binding it is expected — see
+  # examples/sparkplug-host's README, "naut check warnings, explained").
+  - { name: Pump1, role: state, type: Pump, init: { Run: false, Fault: false, SpeedHz: 0.0, SpeedSP: 0.0 }, desc: "Booster 1 lead pump" }
+  - { name: Pump2, role: state, type: Pump, init: { Run: false, Fault: false, SpeedHz: 0.0, SpeedSP: 0.0 }, desc: "Booster 1 lag pump" }
+
+  # Commands (loopback here; a field build would point these at real VFDs).
+  - { name: Pump1_RunCmd, role: output, init: true, desc: "Booster 1 lead pump run command — the lead always runs" }
+  - { name: Pump2_RunCmd, role: output, init: false, desc: "Booster 1 lag pump run command" }
+  - { name: Pump1_SpeedCmd, role: output, init: 0.0, unit: "Hz", desc: "Booster 1 lead pump speed command" }
+  - { name: Pump2_SpeedCmd, role: output, init: 0.0, unit: "Hz", desc: "Booster 1 lag pump speed command" }
+
+  # PIC-1: discharge pressure -> speed. Operator-writable.
+  - { name: PressureSP, role: setpoint, init: 62.0, unit: "psi", desc: "Discharge pressure setpoint" }
+  - { name: Kp, role: setpoint, init: 2.0, desc: "PIC-1 proportional gain" }
+  - { name: Ki, role: setpoint, init: 0.5, unit: "1/s", desc: "PIC-1 integral gain" }
+  - { name: Kd, role: setpoint, init: 0.0, unit: "s", desc: "PIC-1 derivative gain" }
+  - { name: MinSpeedHz, role: setpoint, init: 20.0, unit: "Hz", desc: "Pump minimum speed" }
+  - { name: MaxSpeedHz, role: setpoint, init: 60.0, unit: "Hz", desc: "Pump maximum speed" }
+
+  # Lag pump call, on flow demand (not pressure — the lead's PID already
+  # owns pressure; a second pump on the same loop just gives the PID more
+  # authority instead of genuinely adding capacity for a small demand rise).
+  - { name: LagOnFlow, role: setpoint, init: 12.0, unit: "L/s", desc: "Flow to call the lag pump" }
+  - { name: LagOffFlow, role: setpoint, init: 8.0, unit: "L/s", desc: "Flow to drop the lag pump" }
+
+# FM1_FlowLps (tags/modbus.yaml) is GENERATED from devices.yaml — see
+# README.md. Do not hand-edit; re-run `naut modbus import --map
+# devices.yaml` instead.
+tag-files:
+  - tags/modbus.yaml
+
+# The flow meter is this site's one real field device — everything else
+# is simulated. `drivers:` (list form) is pure sugar for one entry here;
+# see ../../scada/nautilus.yaml for the two-driver case this syntax
+# exists for.
+drivers:
+  - type: modbus
+    manifest: modbus_manifest.yaml
+    scan-rate: 1s
+
+# Sparkplug B: publishes this node's tags to the "Water" group as
+# "Booster1". `device: plc1` rides the Modbus driver's own tags
+# (FM1_FlowLps) along as a Sparkplug DEVICE, DBIRTH/DDEATH tracking the
+# driver's connection health.
+sparkplug:
+  broker: "tcp://127.0.0.1:1883"   # temporary local broker — see ../../README.md
+  group-id: Water
+  edge-node: Booster1
+  bdseq-file: .bdseq
+  store-forward: 2000
+  device: plc1
+  default-class: { deadband: 0.5, max-interval: 30s }
+  classes:
+    fast: { deadband: 0.0, max-interval: 5s }   # the tank level: the dispatch's own input
+  metric-classes:
+    fast: ["TankLevel"]

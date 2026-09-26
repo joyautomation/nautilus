@@ -1,0 +1,16 @@
+# The device map for booster-1's one piece of real field hardware: a
+# discharge flow meter over Modbus TCP. Everything else at this site
+# (the two pumps, the pressure instruments, the tank level) is simulated
+# (sim.st) — this is the fleet's one site that also carries a live field
+# protocol, alongside its Sparkplug B publish.
+#
+# Regenerate the committed files with:
+#   naut modbus import --map devices.yaml
+devices:
+  flowmeter:
+    description: discharge flow meter
+    registers:
+      - {tag: FlowLps, address: 0, table: input, format: int16, scale: 0.1, unit: "L/s", desc: "discharge flow"}
+
+instances:
+  - {id: FM1, type: flowmeter, host: 127.0.0.1, port: 5021, unit-id: 1, desc: "Booster 1 discharge flow meter"}

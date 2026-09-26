@@ -1,0 +1,71 @@
+# well-1 — a Sparkplug B edge node: one well pump, called on rising wet-
+# well level with hysteresis, publishing to the "Water" group as "Well1".
+# The plant itself is simulated (sim.st) so this runs standalone with
+# nothing wired up; see ../booster-1 for the same fleet's Modbus-backed
+# site. See ../../README.md for the fleet story.
+#
+#   naut check .    validate offline
+#   naut test  .    the acceptance suite (well-1_test.yaml), virtual time
+#   naut run   .    dashboard + tag API on http://localhost:8091
+name: well-1
+
+server:
+  addr: "localhost:8091"
+  online-edits: true
+
+tasks:
+  - program: well.st   # the first task is always named "main" internally
+    scan: 250ms
+    dt-tag: WellDtS
+  - name: sim
+    program: sim.st
+    scan: 100ms
+    dt-tag: SimDtS
+
+tags:
+  # Process value — sim-owned here; a field build would make this
+  # role: input and let a level transmitter's driver supply it instead.
+  - { name: WellLevel, role: state, init: 20.0, unit: "%", desc: "Well 1 wet-well level" }
+
+  # The pump, as the SAME Pump Template scada/sites.yaml declares for all
+  # three sites (see the TYPE at the top of well.st) — Run/Fault/SpeedHz
+  # are process values sim.st drives; SpeedSP is the setpoint the SCADA
+  # host commands over a Sparkplug NCMD member write (or an operator can
+  # set it here directly — both paths write the same struct member).
+  - { name: Pump1, role: state, type: Pump, init: { Run: false, Fault: false, SpeedHz: 0.0, SpeedSP: 45.0 }, desc: "Well 1 pump" }
+
+  # Commands to the VFD (loopback here; a field build would point these at
+  # a real drive over Modbus, same shape as lift-station's field.yaml).
+  - { name: Pump1_RunCmd, role: output, init: false, desc: "Well 1 pump run command" }
+  - { name: Pump1_SpeedCmd, role: output, init: 0.0, unit: "Hz", desc: "Well 1 pump speed command" }
+
+  # Hysteresis setpoints and speed limits, operator-writable.
+  - { name: PumpOnLevel, role: setpoint, init: 60.0, unit: "%", desc: "Level to call the pump" }
+  - { name: PumpOffLevel, role: setpoint, init: 30.0, unit: "%", desc: "Level to drop the pump" }
+  - { name: MinSpeedHz, role: setpoint, init: 20.0, unit: "Hz", desc: "Pump minimum speed" }
+  - { name: MaxSpeedHz, role: setpoint, init: 60.0, unit: "Hz", desc: "Pump maximum speed" }
+
+  # Run-hours meter (well.st).
+  - { name: PumpStarts, role: state, init: 0, desc: "Pump 1 start count" }
+  - { name: PumpHours, role: state, init: 0.0, unit: "h", desc: "Pump 1 run hours" }
+
+  # Bench-only base inflow (a "storm" is higher) — nothing to wire up.
+  - { name: InflowLps, role: setpoint, init: 3.0, unit: "L/s", desc: "Bench only: base inflow to the well" }
+
+driver:
+  type: memory
+
+# Sparkplug B: publishes this node's tags to the "Water" group as "Well1".
+# store-forward buffers data through a broker outage, replayed as
+# historical on reconnect — see the README's store-and-forward demo.
+sparkplug:
+  broker: "tcp://127.0.0.1:1883"   # temporary local broker — see README.md
+  group-id: Water
+  edge-node: Well1
+  bdseq-file: .bdseq
+  store-forward: 2000
+  default-class: { deadband: 0.1, max-interval: 30s }
+  classes:
+    fast: { deadband: 0.0, max-interval: 5s }   # level: no deadband, tight heartbeat
+  metric-classes:
+    fast: ["WellLevel"]
