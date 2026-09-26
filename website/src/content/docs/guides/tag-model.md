@@ -226,6 +226,13 @@ not the HMI build itself); `naut run` serves it straight off disk. Set
 it once, and `go build`-style "one file to ship" applies to the operator
 screen too.
 
+`build/` is normally gitignored — it's the HMI's own build output, not a
+source file — so a fresh clone that hasn't run `npm run build` in the HMI
+project yet has no `server.hmi` directory. `naut build` doesn't fail on
+that: it warns (`server.hmi: ... is not built yet`) and ships the binary
+anyway, with the built-in dashboard at `/` instead of the HMI. Run the
+HMI's own build and `naut build` again to embed it.
+
 ## Adding a field input end to end
 
 Adding a **new field input** is three lines in three places, all by the

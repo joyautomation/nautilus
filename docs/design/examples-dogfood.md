@@ -929,6 +929,23 @@ when a suite's or a test's `suspend:` list includes `main` and the
 project declares an `alarms:` section, the same shape as the
 first-task-`name:` warning PR #43 added. Status: open.
 
+**2026-09-25 · `naut build` hard-fails on a fresh clone's un-built
+`server.hmi` directory · papercut (CLI)**
+
+Found by the stable-gate run of the ex01 tapes: `naut build . -o
+lift-station` in `examples/lift-station` (a fresh clone, no `npm run
+build` run yet) failed with `server.hmi: hmi/build: not a directory (run
+the HMI's own build first, e.g. npm run build in hmi/)`, because
+`nautilus.yaml` sets `server: { hmi: hmi/build }` and the SvelteKit
+output is gitignored. `naut check` and `naut run` both tolerate the
+missing directory (the built-in dashboard stays at `/`), so `build` was
+the odd one out — and the flagship README's four-line `naut check / test
+/ run / build` block broke on the last line for anyone who hadn't built
+the HMI first. Where: `cmd/naut/runcmd.go` (`runBuild`). Status: fixed by
+this PR — a missing `server.hmi` directory now warns and ships the
+binary with the built-in dashboard instead of failing; the hard error is
+now reserved for a path that exists but isn't a directory.
+
 ## Built in the rig (ex01)
 
 The `lift-station` example doubled as the subject of `content/assets/

@@ -15,6 +15,143 @@ import (
 	"github.com/joyautomation/nautilus/server"
 )
 
+// buildIn runs runBuild against a temp project and returns its combined
+// stdout+stderr and exit code — the same shape checkIn (check_manifest_test.go)
+// uses for runCheck.
+func buildIn(t *testing.T, dir string, args ...string) (string, int) {
+	t.Helper()
+	oldOut, oldErr := os.Stdout, os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	os.Stderr = w
+	code := runBuild(append(args, dir))
+	w.Close()
+	os.Stdout, os.Stderr = oldOut, oldErr
+	var sb strings.Builder
+	buf := make([]byte, 4096)
+	for {
+		n, err := r.Read(buf)
+		sb.Write(buf[:n])
+		if err != nil {
+			break
+		}
+	}
+	r.Close()
+	return sb.String(), code
+}
+
+func writeProjectFiles(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+	for name, body := range files {
+		p := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+const buildHMIManifest = "name: t\n" +
+	"server:\n  hmi: hmi/build\n" +
+	"tasks:\n  - program: p.st\n"
+
+// A server.hmi directory that hasn't been built yet (the gitignored
+// SvelteKit output, absent on a fresh clone) must warn, not fail — `naut
+// check`/`naut run` already tolerate it, and `build` was the odd one out.
+func TestRunBuildWarnsOnMissingHMIDir(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectFiles(t, dir, map[string]string{
+		"nautilus.yaml": buildHMIManifest,
+		"p.st":          "PROGRAM P\nEND_PROGRAM",
+	})
+	out := filepath.Join(dir, "out-bin")
+
+	output, code := buildIn(t, dir, "-o", out)
+	if code != 0 {
+		t.Fatalf("runBuild code = %d, want 0 (a missing hmi/build warns, it does not fail); output:\n%s", code, output)
+	}
+	if !strings.Contains(output, "server.hmi: hmi/build is not built yet") ||
+		!strings.Contains(output, "built-in dashboard") ||
+		!strings.Contains(output, "npm run build in hmi/") {
+		t.Fatalf("output missing the expected warning: %q", output)
+	}
+	if st, err := os.Stat(out); err != nil || st.Size() == 0 {
+		t.Fatalf("naut build must still produce a binary: stat(%s) = %v", out, err)
+	}
+}
+
+// A server.hmi directory that HAS been built embeds normally, with no
+// warning.
+func TestRunBuildEmbedsHMIWhenPresent(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectFiles(t, dir, map[string]string{
+		"nautilus.yaml":        buildHMIManifest,
+		"p.st":                 "PROGRAM P\nEND_PROGRAM",
+		"hmi/build/index.html": "<html>hmi shell</html>",
+	})
+	out := filepath.Join(dir, "out-bin")
+
+	output, code := buildIn(t, dir, "-o", out)
+	if code != 0 {
+		t.Fatalf("runBuild code = %d, want 0; output:\n%s", code, output)
+	}
+	if strings.Contains(output, "not built yet") {
+		t.Fatalf("a present hmi/build must not warn: %q", output)
+	}
+
+	f, err := os.Open(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	st, _ := f.Stat()
+	off, ok := embeddedOffset(f, st.Size())
+	if !ok {
+		t.Fatal("no embedded project")
+	}
+	zr, err := zip.NewReader(io.NewSectionReader(f, off, st.Size()-16-off), st.Size()-16-off)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, zf := range zr.File {
+		if zf.Name == "hmi/build/index.html" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the built hmi/build must be embedded")
+	}
+}
+
+// server.hmi naming a FILE instead of a directory is still a hard error —
+// only "not there yet" gets the warning treatment.
+func TestRunBuildErrorsWhenHMIPathIsAFile(t *testing.T) {
+	dir := t.TempDir()
+	writeProjectFiles(t, dir, map[string]string{
+		"nautilus.yaml": buildHMIManifest,
+		"p.st":          "PROGRAM P\nEND_PROGRAM",
+		"hmi/build":     "not a directory, just a file",
+	})
+	out := filepath.Join(dir, "out-bin")
+
+	output, code := buildIn(t, dir, "-o", out)
+	if code == 0 {
+		t.Fatalf("runBuild code = 0, want a hard error when server.hmi is a file, not a directory; output:\n%s", output)
+	}
+	if !strings.Contains(output, "not a directory") {
+		t.Fatalf("output missing the not-a-directory error: %q", output)
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Fatal("no binary should be produced on a hard error")
+	}
+}
+
 // emitBinary must produce runner-bytes + zip + footer, be readable back via
 // embeddedOffset, and — building FROM a built binary — replace the old
 // archive rather than stacking a second one.
