@@ -72,9 +72,9 @@ drivers:
     manifest: modbus_manifest.yaml
     scan-rate: 1s
 
-# retain: setpoints (TankHighSP/TankLowSP/WellDemandHz/ResidualLowSP, every
-# alarm limit) and HOA-style modes survive a restart. {} takes every
-# default (file: retain.json).
+# retain: setpoints (TankHighSP/TankLowSP/ResidualLowSP, every alarm
+# limit, and every operator-written pump speed setpoint) survive a
+# restart. {} takes every default (file: retain.json).
 retain: {}
 
 # One replica in this bench walkthrough, but the shape a k8s Deployment

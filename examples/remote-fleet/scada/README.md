@@ -137,7 +137,8 @@ rationale). Zero *errors* is the bar that must hold — same shape
 ## Redundancy, retain, and the historian
 
 `retain: {}` persists every setpoint (`TankHighSP`/`TankLowSP`/
-`WellDemandHz`/`ResidualLowSP`, every alarm limit) across a restart —
+`ResidualLowSP`, every alarm limit, every operator-written pump speed
+setpoint) across a restart —
 `file: retain.json` by default. `redundancy: {lease: water-scada}` is the
 shape a two-replica deployment needs: only the elected leader's drivers
 dial out or publish; a standby answers the API by proxying to the leader.
