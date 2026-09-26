@@ -182,11 +182,10 @@ func ApplyEdit(src string, op EditOp, libs ...string) ([]TextEdit, error) {
 	case "insert":
 		if op.Element != nil {
 			uniquifyInsts(m, op.Element)
-		} else if op.Kind == "fb" && instTaken(m, r.POU, op.Inst) {
-			// Two `t1:TON` declarations are a compile error ("duplicate
-			// declaration"), not two rungs sharing a timer — refuse rather
-			// than write text that won't build.
-			return nil, fmt.Errorf("ld edit: %q is already declared — pick another instance name", op.Inst)
+		} else if op.Kind == "fb" {
+			if err := insertInstConflict(m, r.POU, op.Inst, op.FbType); err != nil {
+				return nil, err
+			}
 		}
 		if err := opInsert(m, r, op); err != nil {
 			return nil, err
@@ -567,6 +566,35 @@ func instTaken(m *Model, pou, name string) bool {
 		}
 	}
 	return taken[strings.ToLower(name)]
+}
+
+// insertInstConflict decides whether a palette insert may use inst. Another
+// rung's `t1:TON` is a second declaration — a compile error, not two rungs
+// sharing a timer — so it is refused. A header declaration (`m101 :
+// MotorStarter;` in VAR) is different: the in-rung call reuses it (the
+// transpiler skips redeclaring a declared instance; permissives.ld does
+// exactly this), so the insert goes ahead when the types agree and is
+// refused, naming both, when they don't.
+func insertInstConflict(m *Model, pou, inst, typ string) error {
+	taken := map[string]bool{}
+	for i := range m.Rungs {
+		if m.Rungs[i].POU == pou {
+			collectInsts(m.Rungs[i].Elements, taken)
+			collectInsts(m.Rungs[i].Coils, taken)
+		}
+	}
+	if taken[strings.ToLower(inst)] {
+		return fmt.Errorf("ld edit: %q is already declared — pick another instance name", inst)
+	}
+	for _, v := range m.Vars {
+		if v.POU == pou && strings.EqualFold(v.Name, inst) {
+			if strings.EqualFold(strings.TrimSpace(v.Type), typ) {
+				return nil
+			}
+			return fmt.Errorf("ld edit: %q is declared as %s, not %s — pick another instance name", inst, v.Type, typ)
+		}
+	}
+	return nil
 }
 
 // uniquifyInsts renames pasted fb instances that already exist anywhere in

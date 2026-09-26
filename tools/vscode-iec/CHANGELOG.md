@@ -95,6 +95,16 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   with, or a real one — removes it instead of refusing with "a rung needs a
   coil". A rung of bare contacts still turns its last coil into `( _ )`,
   and deleting that says to add a coil or a block, or delete the rung.
+- **A ladder block can use an instance the header declares.** Inserting
+  `m101:MotorStarter(...)` from the FB picker when the program's `VAR`
+  already declares `m101 : MotorStarter;` (the lift station's
+  permissives.ld) refused with "already declared"; the call now goes in and
+  reuses that declaration. A declaration of another type is still refused,
+  and the message names both types.
+- **"declare …" covers block and function arguments.** The amber offer
+  listed only names a contact or coil retag introduced; an undeclared name
+  in a block call's or function contact's arguments — `Reset :=
+  ResetFaults`, a `Run => MotorRun` target — is offered too.
 - **One `_` chip per open FBD pin.** A block placed with open inputs (*+ add
   → function block*, PID's thirteen) drew every `_` from one shared chip;
   each open pin now has its own chip beside it, and retagging one fills
