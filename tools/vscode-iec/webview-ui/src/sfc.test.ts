@@ -11,7 +11,9 @@ import {
 	computeRanksAndColumns,
 	connectHandlePos,
 	diffSfc,
+	joinCandidates,
 	layoutSfc,
+	ASSOC_GAP,
 	stepAtPoint,
 	nextStepInitial,
 	stepId,
@@ -426,4 +428,72 @@ test('nextStepInitial: a new step is initial only when the chart has no initial 
 	// Steps but no INITIAL_STEP (it was deleted): the new one takes the mark.
 	assert.equal(nextStepInitial({ steps: [st('Run', false), st('Stop', false)] } as Pick<SfcModel, 'steps'>), true);
 	assert.equal(nextStepInitial({ steps: [st('Idle', true), st('Run', false)] } as Pick<SfcModel, 'steps'>), false);
+});
+
+// ── finding 8/13: action tables and orphan chips keep their own space ──
+
+// Fill fans out to Empty and Overflow, side by side one rank down.
+function fanModel(): SfcModel {
+	return {
+		name: 'Fan',
+		steps: [
+			{ id: 'st:Fill', name: 'Fill', initial: true, line: 1, endLine: 2, actions: [{ qualifier: 'N', target: 'PumpRun', line: 2 }] },
+			{ id: 'st:Empty', name: 'Empty', initial: false, line: 3, endLine: 4, actions: [{ qualifier: 'S', target: 'AlarmHorn', line: 4 }] },
+			{ id: 'st:Overflow', name: 'Overflow', initial: false, line: 5, endLine: 6 }
+		],
+		trans: [
+			{ id: 'tr:10', from: ['Fill'], to: ['Empty'], cond: 'a', kind: 'alt', line: 10, endLine: 11 },
+			{ id: 'tr:12', from: ['Fill'], to: ['Overflow'], cond: 'b', kind: 'alt', line: 12, endLine: 13 }
+		]
+	};
+}
+const tableRight = (p: { x: number; w: number; assocW: number }) => p.x + p.w + ASSOC_GAP + p.assocW;
+
+test('layoutSfc: a step\'s action table ends before the step in the next column', () => {
+	const layout = layoutSfc(fanModel());
+	const empty = layout.steps.find((p) => p.id === 'st:Empty')!;
+	const over = layout.steps.find((p) => p.id === 'st:Overflow')!;
+	assert.equal(empty.rank, over.rank);
+	assert.ok(tableRight(empty) < over.x, `table ends ${tableRight(empty)}, next step at ${over.x}`);
+});
+
+test('layoutSfc: a long action target widens its table and the column pitch with it', () => {
+	const m = fanModel();
+	m.steps[1].actions = [{ qualifier: 'N', target: 'AVeryLongDischargeValveOpenCommand', time: 'T#5S', line: 4 }];
+	const layout = layoutSfc(m);
+	const empty = layout.steps.find((p) => p.id === 'st:Empty')!;
+	const over = layout.steps.find((p) => p.id === 'st:Overflow')!;
+	assert.ok(empty.assocW > 164);
+	assert.ok(tableRight(empty) < over.x);
+});
+
+test('layoutSfc: an orphan chip sits right of its anchor\'s action table, clear of the next column', () => {
+	const m = fanModel();
+	m.trans.push({ id: 'tr:20', from: ['Empty'], to: ['Drain'], cond: 'c', kind: 'normal', line: 20, endLine: 21 });
+	const layout = layoutSfc(m);
+	const chip = layout.orphans[0];
+	const empty = layout.steps.find((p) => p.id === 'st:Empty')!;
+	const over = layout.steps.find((p) => p.id === 'st:Overflow')!;
+	assert.equal(chip.anchor?.id, 'st:Empty');
+	// not over the table rows or its "+ action" row
+	assert.ok(chip.x >= tableRight(empty), `chip at ${chip.x}, table ends ${tableRight(empty)}`);
+	// and not over the neighbouring step
+	assert.ok(chip.x + chip.w < over.x, `chip ends ${chip.x + chip.w}, next step at ${over.x}`);
+});
+
+// ── "+ join": steps a transition's FROM can grow by ─────────────────────
+
+test('joinCandidates lists every step not already a source, in chart order', () => {
+	const st = (name: string, line: number) => ({ id: 'st:' + name, name, initial: name === 'Idle', line, endLine: line });
+	const model: SfcModel = {
+		name: 'P',
+		steps: [st('Idle', 1), st('PostRun', 3), st('Alternate', 5)],
+		trans: [
+			{ id: 'tr:t_split', from: ['Idle'], to: ['PostRun', 'Alternate'], cond: 'Go', kind: 'simDiverge', line: 7, endLine: 8 },
+			{ id: 'tr:t_back', from: ['postrun'], to: ['Idle'], cond: 'Done', kind: 'normal', line: 9, endLine: 10 }
+		]
+	};
+	assert.deepEqual(joinCandidates(model, 'tr:t_back').map((s) => s.name), ['Idle', 'Alternate']);
+	assert.deepEqual(joinCandidates(model, 'tr:nope'), []);
+	assert.deepEqual(joinCandidates(model, undefined), []);
 });

@@ -3,6 +3,8 @@ package ld
 import (
 	"regexp"
 	"strings"
+
+	"github.com/joyautomation/nautilus/lang/fbcatalog"
 )
 
 // User FUNCTION_BLOCKs in ladder.
@@ -32,145 +34,34 @@ import (
 // declarations out of ST **or** LD source, so the same scan serves the
 // file being compiled and the library prelude joined ahead of it.
 
-// pin is one declared FUNCTION_BLOCK pin, in declaration order.
-type pin struct{ name, typ string }
-
-// fbSig is a user FUNCTION_BLOCK's ladder-relevant signature.
-type fbSig struct {
-	name    string
-	inputs  []pin // VAR_INPUT, declaration order
-	outputs []pin // VAR_OUTPUT, declaration order
-}
-
 // resolver answers "which pins does a rung's power use on this block type?"
-// It knows the standard blocks outright and the user blocks it scanned.
-type resolver struct{ sigs map[string]fbSig }
+// It knows the standard blocks outright and the user blocks the shared
+// catalog scan (lang/fbcatalog) found in this file and its libraries.
+type resolver struct{ scope *fbcatalog.Scope }
 
 var (
 	fbStartRe = regexp.MustCompile(`(?i)^\s*FUNCTION_BLOCK\s+([A-Za-z_][A-Za-z0-9_]*)`)
 	fbEndRe   = regexp.MustCompile(`(?i)^\s*END_FUNCTION_BLOCK\s*$`)
-	// A VAR_INPUT / VAR_OUTPUT section anywhere in a block's header text,
-	// declarations and END_VAR possibly sharing its line.
-	varSectionRe = regexp.MustCompile(`(?is)\b(VAR_INPUT|VAR_OUTPUT)\b(.*?)\bEND_VAR\b`)
 )
 
 // newResolver scans src plus any library sources for user FB signatures.
 // Later sources win, so the file being compiled shadows a library — the
 // same precedence the ST compiler's in-file FB table has.
 func newResolver(src string, libs []string) *resolver {
-	r := &resolver{sigs: map[string]fbSig{}}
-	for _, l := range libs {
-		for _, s := range scanFBSigs(l) {
-			r.sigs[s.name] = s
-		}
-	}
-	for _, s := range scanFBSigs(src) {
-		r.sigs[s.name] = s
-	}
-	return r
+	return &resolver{scope: fbcatalog.NewScope(src, libs)}
 }
 
-// lookup finds a user FB signature by type name (case-insensitively, the
-// way IEC treats identifiers).
-func (r *resolver) lookup(typ string) (fbSig, bool) {
+// lookup finds a user FB signature by type name (case-insensitively).
+func (r *resolver) lookup(typ string) (fbcatalog.Sig, bool) {
 	if r == nil {
-		return fbSig{}, false
+		return fbcatalog.Sig{}, false
 	}
-	if s, ok := r.sigs[typ]; ok {
-		return s, true
-	}
-	for name, s := range r.sigs {
-		if strings.EqualFold(name, typ) {
-			return s, true
-		}
-	}
-	return fbSig{}, false
+	return r.scope.Lookup(typ)
 }
 
-// scanFBSigs reads every `FUNCTION_BLOCK … END_FUNCTION_BLOCK` in source and
-// returns its VAR_INPUT / VAR_OUTPUT pins. It is deliberately textual: it
-// runs before any parse, over ST and LD alike, and a shape it cannot read
-// simply yields no signature (the caller falls back to the IN/Q default and
-// the real compiler reports whatever is wrong).
-//
-// The FUNCTION_BLOCK / END_FUNCTION_BLOCK boundaries are found on the
-// COMMENT-STRIPPED text, so a `(* ... *)` block comment whose text happens
-// to start a line with one of those keywords (documentation showing example
-// ladder, say) is never mistaken for a real declaration. Bodies are sliced
-// from the ORIGINAL source — scanFBBody strips comments itself before
-// reading pins, since a rung's own header comment or a diagram note may
-// legitimately sit inside a block's body text.
-func scanFBSigs(src string) []fbSig {
-	var out []fbSig
-	lines := strings.Split(src, "\n")
-	stripped := strings.Split(stripComments(src), "\n")
-	name, start := "", -1
-	for i := range lines {
-		if start == -1 {
-			if m := fbStartRe.FindStringSubmatch(stripped[i]); m != nil {
-				name, start = m[1], i+1
-			}
-			continue
-		}
-		if fbEndRe.MatchString(stripped[i]) {
-			out = append(out, scanFBBody(name, strings.Join(lines[start:i], "\n")))
-			name, start = "", -1
-		}
-	}
-	if start != -1 {
-		out = append(out, scanFBBody(name, strings.Join(lines[start:], "\n")))
-	}
-	return out
-}
-
-func scanFBBody(name, body string) fbSig {
-	sig := fbSig{name: name}
-	// A block's body may itself be ladder; the pin sections precede it, and
-	// stripping comments first keeps a commented-out END_VAR (or a VAR_INPUT
-	// mentioned only in prose) out of the way.
-	body = stripComments(body)
-	for _, m := range varSectionRe.FindAllStringSubmatch(body, -1) {
-		pins := parseDecls(m[2])
-		if strings.EqualFold(m[1], "VAR_INPUT") {
-			sig.inputs = append(sig.inputs, pins...)
-		} else {
-			sig.outputs = append(sig.outputs, pins...)
-		}
-	}
-	return sig
-}
-
-var declNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-
-// parseDecls reads `a, b : TYPE := init;` declarations out of one VAR
-// section's text — several to a line, or several lines to a declaration.
-func parseDecls(text string) []pin {
-	var out []pin
-	for _, d := range strings.Split(text, ";") {
-		d = strings.TrimSpace(d)
-		if d == "" {
-			continue
-		}
-		names, typ, ok := strings.Cut(d, ":")
-		if !ok {
-			continue
-		}
-		if i := strings.Index(typ, ":="); i >= 0 {
-			typ = typ[:i]
-		}
-		typ = strings.TrimSpace(typ)
-		if typ == "" {
-			continue
-		}
-		for _, n := range strings.Split(names, ",") {
-			n = strings.TrimSpace(n)
-			if declNameRe.MatchString(n) {
-				out = append(out, pin{name: n, typ: typ})
-			}
-		}
-	}
-	return out
-}
+// scanFBSigs reads every FUNCTION_BLOCK's pins out of ST or LD source
+// (fbcatalog.ScanSigs: textual, comment-aware, runs before any parse).
+func scanFBSigs(src string) []fbcatalog.Sig { return fbcatalog.ScanSigs(src) }
 
 // bindsPin reports whether an argument list already binds pin, with either
 // `:=` (an input) or `=>` (an output capture).
@@ -189,6 +80,8 @@ func builtinPowerPins(typ string) (in, out string, ok bool) {
 		return "CU", "Q", true
 	case "CTD":
 		return "CD", "Q", true
+	case "CTUD":
+		return "CU", "QU", true
 	case "R_TRIG", "F_TRIG":
 		return "CLK", "Q", true
 	case "SR":
@@ -224,30 +117,30 @@ func (r *resolver) powerPins(typ, args string) (in, out string) {
 	if !ok {
 		return "IN", "Q"
 	}
-	for _, p := range sig.inputs {
-		if strings.EqualFold(p.name, "EN") && isBool(p.typ) {
-			in = p.name
+	for _, p := range sig.Inputs {
+		if strings.EqualFold(p.Name, "EN") && isBool(p.Type) {
+			in = p.Name
 			break
 		}
 	}
 	if in == "" {
-		for _, p := range sig.inputs {
-			if isBool(p.typ) && !bindsPin(args, p.name) {
-				in = p.name
+		for _, p := range sig.Inputs {
+			if isBool(p.Type) && !bindsPin(args, p.Name) {
+				in = p.Name
 				break
 			}
 		}
 	}
-	for _, p := range sig.outputs {
-		if strings.EqualFold(p.name, "ENO") && isBool(p.typ) {
-			out = p.name
+	for _, p := range sig.Outputs {
+		if strings.EqualFold(p.Name, "ENO") && isBool(p.Type) {
+			out = p.Name
 			break
 		}
 	}
 	if out == "" {
-		for _, p := range sig.outputs {
-			if isBool(p.typ) {
-				out = p.name
+		for _, p := range sig.Outputs {
+			if isBool(p.Type) {
+				out = p.Name
 				break
 			}
 		}

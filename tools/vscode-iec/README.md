@@ -43,12 +43,17 @@ controller onto both the text and the diagram.
   "nautilus.fbdDiagram" }` (likewise `nautilus.ldDiagram`,
   `nautilus.sfcDiagram`).
 - **FBD**: drag pin to pin to wire, double-click to retype a constant or
-  rename, insert blocks from the *+ add* palette, box-select, arrow keys to
-  move.
+  rename, insert blocks from the *+ add* palette — *function block* places
+  any standard block (PID included) or project block with every input an
+  open pin — box-select, arrow keys to move. Double-click an FB's header to
+  rename the instance.
 - **Ladder**: drag instructions from the palette onto a rung, drag elements
   between spots and rungs, ⊕ to insert, `N` for NO/NC, `M` for coil mode,
   `B` to branch around the selection, click a rung's name to select or
-  delete the rung. With a controller running, power flow paints the rung.
+  delete the rung. *FB…* places any function block — standard or one of
+  the project's library blocks — under a name you choose; double-click a
+  block's header to rename the instance. With a controller running, power
+  flow paints the rung.
 - **SFC**: steps, transitions, parallel and alternative branches, action
   tables and ACTION bodies, all editable in place; drag a step's handle
   onto another step to connect them. The active step highlights live.
@@ -155,8 +160,9 @@ server.
 ## Requirements
 
 - VS Code 1.82 or newer, on Linux, macOS or Windows.
-- The `naut` CLI, **0.12.0 or newer**, for diagnostics and the diagram
-  editors. **nautilus: Install or Update the naut CLI** installs it; a
+- The `naut` CLI, **0.13.0 or newer**, for diagnostics, the diagram
+  editors, and online edits (which ask `naut compose` for the program's
+  composition). **nautilus: Install or Update the naut CLI** installs it; a
   `naut` on your PATH (for example from `go install
   github.com/joyautomation/nautilus/cmd/naut@latest`) is used first. The
   extension warns when the one it finds is older than it needs.

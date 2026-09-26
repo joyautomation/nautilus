@@ -26,6 +26,7 @@
 	import SfcView from './SfcView.svelte';
 	import { diffSfc, normalizeSfc, type SfcModel } from './sfc';
 	import { layout, normalizeFbd, type FbdModel, type VarDecl } from './layout';
+	import type { FbCatalogType, FbInst } from './suggest';
 	import { mergeDiff } from './diff';
 	import { vscode, postOp, pouFromFile, setSeedPou, withSeed } from './vscodeApi';
 	import { setRects, updateRect } from './diagState.svelte';
@@ -69,6 +70,11 @@
 	let paletteOpen = $state(false);
 	let varsOpen = $state(false);
 	let varList = $state<VarDecl[]>([]);
+	// The FBD palette's block picker: the model's catalog, the instances on
+	// the diagram (their outputs are sources), and every name in use.
+	let fbTypes = $state<FbCatalogType[]>([]);
+	let fbInsts = $state<FbInst[]>([]);
+	let takenNames = $state(new Set<string>());
 	let usedNames = $state(new Set<string>());
 	let hasPins = $state(false);
 	let selectedCount = $state(0);
@@ -98,7 +104,18 @@
 	// The floating in-place editor (constants, renames, comments) — all the
 	// commit/cancel/suggestion mechanics live in FloatEditor.
 	let editor = $state<FloatEditor | null>(null);
-	const tagItems = $derived(varList.map((v) => ({ name: v.name, detail: v.type })));
+	// Ladder retags also offer the project's nautilus.yaml tags the file
+	// doesn't declare yet — picking one leaves the palette's "declare"
+	// offer to add it to VAR_EXTERNAL.
+	const tagItems = $derived.by(() => {
+		const items = varList.map((v) => ({ name: v.name, detail: v.type }));
+		if (mode !== 'ld' || !ldModel?.tags) return items;
+		const have = new Set(varList.map((v) => v.name.toLowerCase()));
+		for (const t of ldModel.tags) {
+			if (!have.has(t.name.toLowerCase())) items.push({ name: t.name, detail: `${t.type ?? ''} · manifest`.trim() });
+		}
+		return items;
+	});
 
 	// "Used" for the ladder = referenced by any rung: contact/coil operands
 	// (accessor bases), fb instances, and identifiers inside argument lists.
@@ -140,7 +157,7 @@
 		init: string,
 		at: { x: number; y: number; w: number },
 		commit: (v: string) => void,
-		opts?: { multiline?: boolean; suggest?: 'tags' | 'types' | 'functions' }
+		opts?: { multiline?: boolean; suggest?: 'tags' | 'types' | 'functions' | 'assoc' }
 	) {
 		editor?.open({ init, at, commit, ...opts });
 	}
@@ -165,6 +182,17 @@
 			// Indexed chips (TempHist[2]) need declared array bounds to
 			// resolve their live values.
 			setVarBounds(varList);
+			fbTypes = model.fbTypes ?? [];
+			fbInsts = model.nodes
+				.filter((n) => n.kind === 'fb')
+				.map((n) => ({ name: n.label, type: n.type, outs: n.outputs ?? [] }));
+			takenNames = new Set(
+				[
+					...varList.map((v) => v.name),
+					...model.nodes.filter((n) => n.kind === 'fb' || n.kind === 'coil').map((n) => n.label),
+					...model.nodes.filter((n) => n.wire).map((n) => n.wire!)
+				].map((x) => x.toLowerCase())
+			);
 			// Referenced = it became a diagram element (chip, coil, FB instance).
 			usedNames = new Set(
 				model.nodes
@@ -743,7 +771,7 @@
 		</SvelteFlow>
 	</div>
 	{/if}
-	<Palette bind:open={paletteOpen} vars={varList} />
+	<Palette bind:open={paletteOpen} vars={varList} {fbTypes} insts={fbInsts} taken={takenNames} />
 	<VarsPanel
 		bind:open={varsOpen}
 		vars={varList}

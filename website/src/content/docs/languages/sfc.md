@@ -130,18 +130,32 @@ condition is true. That one rule covers both branch forms:
 
 - **Alternative divergence** is two or more transitions sharing a source
   step. Priority is declaration order, first highest, and a lower branch is
-  suppressed only when a higher one sharing a source is itself enabled, so a
+  suppressed only when a higher one sharing a source actually fires, so a
   convergence waiting on an inactive source cannot deadlock the branch below.
+  Groups that overlap in a chain (a convergence sharing one leg each with
+  several abort transitions) resolve the same way, one well-defined outcome
+  per scan.
 - **Simultaneous divergence** is `TO (Heat, Mix)`: one transition sets both
   targets and the token splits. **Simultaneous convergence** is
   `FROM (Heat, Mix)`, enabled only when both sources are active.
 
 Qualifiers that compile today are `N`, `S`, `R`, `P1`, `P`, and `P0`. `N` is
-active exactly while the step is. `S` latches the target on the step's rising
-edge and `R` clears it, which is the abort/reset pattern above. `P1` and `P`
-fire once on the rising edge, `P0` once on the falling edge. Associations
-targeting the same BOOL variable are OR-combined, so `RunLamp` drops to
-`FALSE` once no step drives it.
+active exactly while the step is. `S` sets the target and `R` clears it, each
+once, on the scan its step activates, which is the abort/reset pattern above.
+`P1` and `P` fire once on the rising edge, `P0` once on the falling edge.
+`N` and pulse associations targeting the same BOOL variable are OR-combined:
+the variable is held `TRUE` while any of them is active and written `FALSE`
+once, on the scan the last one drops, so `RunLamp` goes out when the chart
+reaches `Aborted`.
+
+An association writes its variable only on the scans it acts. A step that is
+not active never touches it, and between those scans the variable belongs to
+whoever else writes it. When an `ACTION` body assigns the same variable, the
+association wins while it acts (it is applied after the bodies in the scan):
+every scan its `N` step is active, the one activation scan of an `S` or `R`,
+the one scan of a pulse. The `ACTION` owns it the rest of the time, so an
+`R X` on an abort step and an `ACTION` that sets `X` on a normal step coexist.
+`naut check` warns on every such pair.
 
 Action bodies are ST, and only ST. A body driven by a level qualifier runs
 one extra scan on the falling edge of its active signal, so a body written
@@ -159,14 +173,15 @@ Both `.X` and `.T` are legal in conditions and action bodies.
 
 Errors: duplicate step, action, or transition names; no `INITIAL_STEP`, or
 more than one; a `FROM`/`TO` naming a step that does not exist; an empty
-condition; a non-initial step that no transition targets (unreachable); an
-association naming neither an `ACTION` block nor a declared variable; a
-`.X`/`.T` reference to an unknown step; an unsupported qualifier.
+condition; an association naming neither an `ACTION` block nor a declared
+variable; a `.X`/`.T` reference to an unknown step; an unsupported qualifier.
 
-Warnings: a dead-end step that no transition sources, which a terminal step
-may be on purpose; a simultaneous convergence whose sources are not reachable from a
-common simultaneous divergence; an alternative priority group whose
-shared-source overlap is not transitive.
+Warnings: a non-initial step that no transition targets (unreachable); a
+dead-end step that no transition sources, which a terminal step may be on
+purpose; a simultaneous convergence whose sources are not reachable from a
+common simultaneous divergence; a variable driven by a qualifier association
+and also assigned in an `ACTION` body, with the rule that decides between
+them.
 
 The chart then transpiles to ST and compiles like any other program, the line
 map putting a type error in a condition on its `TRANSITION` line and one in a
@@ -187,7 +202,18 @@ chart's topology; drag a step to pin it, and "auto layout" clears every pin.
 Every gesture is a structural op resolved in Go into minimal text edits: add
 a step or transition, branch an alternative or simultaneous path off one,
 drag a step's connect handle onto another step to wire a transition, edit a
-condition, step name, association, or `ACTION` body in place. A transition
+condition, step name, association, or `ACTION` body in place. With a step
+selected, **+ step** adds the next step under it along with the transition
+that reaches it; with nothing selected it adds a free step. **+ transition**
+goes to an existing step, or to *other… (new step)*, which creates that step
+too. **+ alt branch** adds another transition out of the selected step, or
+out of the selected transition's source. **+ parallel branch** widens the
+selected transition's `TO` with a new step (a simultaneous divergence), and
+**+ join** adds another step to its `FROM`, making it a simultaneous
+convergence: `TRANSITION FROM (PostRun, Alternate) TO Idle`. Whether the
+joined steps are legs of one divergence is a `naut check` warning, not a
+refusal. Each add is one edit and one undo,
+and the new step scrolls into view. A transition
 whose `FROM` or `TO` no longer resolves stays on the canvas as a red chip
 with a retarget popover, and diagnostics show as you type without blocking a
 save. With a controller reachable, the active step outlines and its name

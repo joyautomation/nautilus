@@ -109,10 +109,28 @@ type FBDef struct {
 	Uses GlobalUse
 }
 
-// FBSlot is a single named slot on a function block instance.
+// FBSlot is a single named slot on a function block instance (or a
+// FUNCTION's frame).
 type FBSlot struct {
 	Name string
 	Type *Type
+	// Init is the declared initial value (`x : REAL := 2.0`); a zero
+	// Value.Kind means "use Zero(Type)", as on VarSlot. NewFBInstance and
+	// NewFuncFrame start the slot here.
+	Init Value
+	// Constant marks a VAR CONSTANT slot: its value is always Init, so an
+	// online edit rebinding an instance (MigrateFrame) never carries the
+	// old value over the new declaration.
+	Constant bool
+}
+
+// initial is the slot's starting value: Init when declared, else the
+// type's zero.
+func (s FBSlot) initial() Value {
+	if s.Init.Kind != TypeVoid {
+		return CopyValue(s.Init)
+	}
+	return Zero(s.Type)
 }
 
 // FBStepCtx is the per-cycle context handed to an FB's Step. Built-in FBs

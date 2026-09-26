@@ -1,13 +1,14 @@
 <script lang="ts" module>
 	// One in-place edit on the canvas: where it floats, what it starts with,
 	// what to do with the committed text, and which completion vocabulary
-	// (if any) it offers. `multiline` selects the comment textarea.
+	// (if any) it offers. 'assoc' is an SFC action association ("N
+	// PumpRun"): tags, completing the word after the qualifier. `multiline` selects the comment textarea.
 	export type EditRequest = {
 		init: string;
 		at: { x: number; y: number; w: number };
 		commit: (v: string) => void;
 		multiline?: boolean;
-		suggest?: 'tags' | 'types' | 'functions';
+		suggest?: 'tags' | 'types' | 'functions' | 'assoc';
 	};
 </script>
 
@@ -52,7 +53,7 @@
 	});
 
 	const items = $derived(
-		edit?.suggest === 'tags'
+		edit?.suggest === 'tags' || edit?.suggest === 'assoc'
 			? tagItems
 			: edit?.suggest === 'types'
 				? TYPES
@@ -115,6 +116,7 @@
 			bind:value={edit.value}
 			{items}
 			call={edit.suggest === 'functions'}
+			tail={edit.suggest === 'assoc'}
 			onkeydown={keydown}
 			onblur={blur}
 		/>

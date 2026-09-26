@@ -22,6 +22,10 @@ const (
 	symbolTypeStructBit    uint16 = 0x8000 // bit 15: 1=struct, 0=atomic
 	symbolTypeDimShift            = 13     // bits 13-14: number of array dimensions
 	symbolTypeTemplateMask uint16 = 0x0FFF
+
+	// memberArrayBit marks a template member as a fixed array (bit 13 of
+	// the member type); the member's typeInfo then carries the length.
+	memberArrayBit uint16 = 0x2000
 )
 
 // symbolDef is one Symbol-class (0x6B) instance the controller exposes within a

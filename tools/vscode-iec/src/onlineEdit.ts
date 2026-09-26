@@ -11,23 +11,28 @@
 // controllers keep it off. Edits are ephemeral: a restart reverts to the
 // deployed program; committing the file is what makes an edit permanent.
 //
-// Program composition mirrors the runtime and the language server's project
-// rule (internal/stproject): sibling .st files with no PROGRAM are libraries
-// and precede the program file, sorted by name. The same libraries join
-// every program in a multi-program project, so a diff from a library file
-// needs no task choice — it compares the shared library text against every
-// task's copy (see diffLibraries).
+// Program composition is the runtime's, asked of the CLI (`naut compose`,
+// see compose.ts) rather than re-implemented here: the PROGRAM-less .st,
+// .ld and .fbd files in the project root and anywhere under lib/ are
+// libraries — .st verbatim, then .ld/.fbd transpiled — and precede the
+// program file. The same libraries join every program in a multi-program
+// project, so a diff from a library file needs no task choice — it compares
+// the shared library text against every task's copy (see diffLibraries).
 
 import * as vscode from "vscode";
+import { cliCommand } from "./cli";
+import { nautCompose } from "./compose";
+import { compositionKey, FileStamp, reuseComposition } from "./composeCli";
+import { projectDirFor, projectFiles } from "./projectFiles";
 import {
   controllerPrelude,
   downloadConfirmMessage,
   forceDownloadConfirmMessage,
   normalize,
-  pouOf,
   rollbackConfirmMessage,
   splitProgram,
 } from "./programSync";
+import { declaredBlockNames, referencesAnyBlock } from "./composeCli";
 
 /** One entry in the GET /api/program directory — every program in the
  * resource, source omitted. */
@@ -83,6 +88,28 @@ function iecSurfaceVisible(): boolean {
   return vscode.window.tabGroups.all.some((g) =>
     g.tabs.some((t) => t.input instanceof vscode.TabInputCustom && t.input.viewType.startsWith("nautilus."))
   );
+}
+
+/** Is URI path `p` inside directory path `dir`? (Windows drive letters and
+ * paths compare case-insensitively.) */
+function under(p: string, dir: string): boolean {
+  const norm = (x: string) => (process.platform === "win32" ? x.toLowerCase() : x);
+  return norm(p).startsWith(norm(dir) + "/");
+}
+
+/** A file's CURRENT text: the open buffer's (unsaved edits included) when
+ * VS Code has it open, the disk copy otherwise — same pattern as
+ * mimicComponents.ts's readText, needed here to read a library's own source
+ * (naut compose --json's prelude is every library joined, not this one
+ * alone) when resolving Download/Rollback from a library file. */
+async function readCurrentText(uri: vscode.Uri): Promise<string> {
+  const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
+  if (open) return open.getText();
+  try {
+    return new TextDecoder().decode(await vscode.workspace.fs.readFile(uri));
+  } catch {
+    return "";
+  }
 }
 
 /** How the workspace relates to the running controller — broadcast to the
@@ -162,14 +189,56 @@ export class OnlineEdit implements vscode.Disposable {
     return vscode.Uri.parse(`${scheme}:${path}?${Date.now()}`);
   }
 
+  /** Why the last composition failed ("" when it didn't) — the sync
+   * status shows it instead of a misleading "program differs". */
+  private composeError = "";
+
+  /** The status poll's last composition and what it was composed from —
+   * reused until an input changes (see compositionKey), so the 3-second
+   * poll doesn't spawn `naut compose` on every tick. */
+  private composeCache:
+    | { key: string; at: number; failed: boolean; res: Awaited<ReturnType<typeof nautCompose>> }
+    | undefined;
+
+  /** Everything the composition of `target` depends on: a stat sweep of the
+   * project's IEC files (root and lib/) and nautilus.yaml, the unsaved IEC
+   * buffers' versions, and which CLI runs. No file contents are read. */
+  private async compositionKeyFor(target: vscode.Uri): Promise<string> {
+    let dir = target;
+    try {
+      if ((await vscode.workspace.fs.stat(target)).type !== vscode.FileType.Directory) dir = await projectDirFor(target);
+    } catch {
+      dir = await projectDirFor(target);
+    }
+    const files: FileStamp[] = [];
+    const stamp = async (rel: string, uri: vscode.Uri) => {
+      try {
+        const st = await vscode.workspace.fs.stat(uri);
+        files.push({ rel, mtime: st.mtime, size: st.size });
+      } catch {
+        /* gone between listing and stat: its absence is in the key */
+      }
+    };
+    for (const { rel, uri } of await projectFiles(dir, IEC_FILE)) await stamp(rel, uri);
+    await stamp("nautilus.yaml", vscode.Uri.joinPath(dir, "nautilus.yaml"));
+    const dirty = vscode.workspace.textDocuments
+      .filter((d) => d.isDirty && d.uri.scheme === "file" && IEC_FILE.test(d.uri.path))
+      .map((d) => ({ path: d.uri.fsPath, version: d.version }));
+    return compositionKey(target.fsPath + "|" + dir.fsPath, cliCommand(), files, dirty);
+  }
+
   /**
-   * Decompose the project directory the way the runtime does
-   * (stproject.ComposeAll): .st files with no PROGRAM (sorted by name) are
-   * libraries shared by every program; each file with a PROGRAM — .st, .fbd,
-   * .ld, or .sfc — is one program. Open editor buffers win over on-disk
-   * content.
+   * Decompose the project the way the runtime does, by asking the CLI
+   * (`naut compose --json`, the same composition `naut check`, `naut run`
+   * and the controller use): the PROGRAM-less .st/.ld/.fbd files in the root
+   * and under lib/ are libraries shared by every program — .ld/.fbd
+   * transpiled into the prelude — and each root file with a PROGRAM (.st,
+   * .fbd, .ld, or .sfc) is one program. Open editor buffers win over
+   * on-disk content. `quiet` (the status poll) suppresses the error toast;
+   * `cached` (also the status poll) reuses the last composition while its
+   * inputs are unchanged.
    */
-  private async composeAll(): Promise<
+  private async composeAll(quiet = false, cached = false): Promise<
     | {
         dir: vscode.Uri;
         prelude: string;
@@ -179,43 +248,47 @@ export class OnlineEdit implements vscode.Disposable {
       }
     | undefined
   > {
+    this.composeError = "";
     const activeUri = activeIecUri();
-    let dir: vscode.Uri | undefined;
-    if (activeUri) {
-      dir = vscode.Uri.joinPath(activeUri, "..");
-    } else if (vscode.workspace.workspaceFolders?.length) {
-      dir = vscode.workspace.workspaceFolders[0].uri;
+    const target = activeUri ?? vscode.workspace.workspaceFolders?.[0]?.uri;
+    if (!target || target.scheme !== "file") return undefined;
+
+    // The status poll reuses the last composition while nothing it depends
+    // on changed; explicit commands always compose fresh (and refresh it).
+    const key = await this.compositionKeyFor(target);
+    let res: Awaited<ReturnType<typeof nautCompose>>;
+    if (cached && this.composeCache && reuseComposition(this.composeCache, key, Date.now())) {
+      res = this.composeCache.res;
+    } else {
+      res = await nautCompose(target);
+      this.composeCache = { key, at: Date.now(), failed: "error" in res, res };
     }
-    if (!dir) return undefined;
-
-    const entries = await vscode.workspace.fs.readDirectory(dir);
-    const iecFiles = entries
-      .filter(([name, kind]) => kind === vscode.FileType.File && IEC_FILE.test(name))
-      .map(([name]) => name)
-      .sort();
-
-    const contents = new Map<string, string>();
-    for (const name of iecFiles) {
-      const uri = vscode.Uri.joinPath(dir, name);
-      const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
-      contents.set(name, open ? open.getText() : new TextDecoder().decode(await vscode.workspace.fs.readFile(uri)));
-    }
-
-    const isProgram = (src: string) => /^\s*PROGRAM\b/m.test(src);
-    const programs: { file: string; uri: vscode.Uri; body: string; pou: string }[] = [];
-    const libraries: { file: string; uri: vscode.Uri }[] = [];
-    // Only .st libraries join the prelude, matching internal/stproject.
-    let prelude = "";
-    for (const name of iecFiles) {
-      const src = contents.get(name) ?? "";
-      if (isProgram(src)) {
-        programs.push({ file: name, uri: vscode.Uri.joinPath(dir, name), body: src, pou: pouOf(src) });
-      } else if (/\.st$/i.test(name)) {
-        libraries.push({ file: name, uri: vscode.Uri.joinPath(dir, name) });
-        prelude += src.endsWith("\n") ? src : src + "\n";
+    if ("error" in res) {
+      this.composeError = res.error;
+      if (!quiet) {
+        if (res.tooOld) {
+          const UPDATE = "Install or Update naut";
+          void vscode.window.showErrorMessage(res.error, UPDATE).then((pick) => {
+            if (pick === UPDATE) void vscode.commands.executeCommand("nautilus.installCli");
+          });
+        } else {
+          void vscode.window.showErrorMessage(res.error);
+        }
       }
+      return undefined;
     }
-    return { dir, prelude, activeFile: activeUri ? activeUri.path.split("/").pop() ?? "" : "", programs, libraries };
+    this.composeError = "";
+    const c = res.ok;
+    const dir = vscode.Uri.file(c.root);
+    const at = (rel: string) => vscode.Uri.joinPath(dir, ...rel.split("/"));
+    return {
+      dir,
+      prelude: c.prelude,
+      // Project-relative, like the program files: a lib/ file never names one.
+      activeFile: activeUri && under(activeUri.path, dir.path) ? activeUri.path.slice(dir.path.length + 1) : "",
+      programs: c.programs.map((p) => ({ file: p.file, uri: at(p.file), body: p.program, pou: p.pou })),
+      libraries: c.libraries.map((file) => ({ file, uri: at(file) })),
+    };
   }
 
   /**
@@ -229,7 +302,7 @@ export class OnlineEdit implements vscode.Disposable {
     | { source: string; prelude: string; programFile: string; programUri: vscode.Uri; programBody: string; pou: string }
     | undefined
   > {
-    const ws = await this.composeAll();
+    const ws = await this.composeAll(quiet);
     if (!ws) return undefined;
     if (ws.programs.length === 0) {
       if (!quiet)
@@ -239,14 +312,38 @@ export class OnlineEdit implements vscode.Disposable {
     let program = ws.programs[0];
     if (ws.programs.length > 1) {
       const match = ws.programs.find((p) => p.file === ws.activeFile);
-      if (!match) {
-        if (!quiet)
-          void vscode.window.showErrorMessage(
-            `nautilus: multiple program files (${ws.programs.map((p) => p.file).join(", ")}) — open the one to ${action}`
+      if (match) {
+        program = match;
+      } else {
+        // The active file may be a LIBRARY (motor.ld, blocks.st, ...) — no
+        // program of its own to route by, but not necessarily ambiguous
+        // either: whichever program(s) actually instantiate one of its
+        // FUNCTION_BLOCKs is the real target, the same way `naut compose
+        // <program>` already resolves it (naut compose <library> itself
+        // refuses, same as here). Only a library with more than one
+        // consumer — or none at all — still needs a human choice/refusal.
+        const library = ws.libraries.find((l) => l.file === ws.activeFile);
+        const names = library ? declaredBlockNames(await readCurrentText(library.uri)) : [];
+        const consumers = names.length ? ws.programs.filter((p) => referencesAnyBlock(p.body, names)) : [];
+        if (consumers.length === 1) {
+          program = consumers[0];
+        } else if (consumers.length > 1) {
+          const pick = await vscode.window.showQuickPick(
+            consumers.map((p) => ({ label: p.file, description: p.pou, program: p })),
+            { title: `nautilus: choose the program to ${action} (${ws.activeFile} is a shared library)` }
           );
-        return undefined;
+          if (!pick) return undefined;
+          program = pick.program;
+        } else {
+          if (!quiet)
+            void vscode.window.showErrorMessage(
+              library
+                ? `nautilus: no program in this workspace instantiates a block from ${ws.activeFile} — open the one to ${action}`
+                : `nautilus: multiple program files (${ws.programs.map((p) => p.file).join(", ")}) — open the one to ${action}`
+            );
+          return undefined;
+        }
       }
-      program = match;
     }
     return {
       source: ws.prelude + program.body,
@@ -343,6 +440,7 @@ export class OnlineEdit implements vscode.Disposable {
    * — so diff the shared library text against every task instead. */
   async diff(): Promise<void> {
     const ws = await this.composeAll();
+    if (!ws && this.composeError) return; // already said why
     const program =
       ws && (ws.programs.length === 1 ? ws.programs[0] : ws.programs.find((p) => p.file === ws.activeFile));
     if (ws && !program) return this.diffLibraries(ws);
@@ -425,12 +523,12 @@ export class OnlineEdit implements vscode.Disposable {
     for (const g of groups.values()) {
       const tasks = groups.size > 1 ? ` (${g.tasks.join(", ")})` : "";
       const remote = this.setDoc(REMOTE_SCHEME, `/controller-libraries-${n}.st`, g.prelude);
-      // With a single library file the workspace side IS that file — use it
+      // With a single .st library the workspace side IS that file — use it
       // directly so the diff stays editable, like any working-tree diff.
-      // Several library files compose into one prelude, so that side can
-      // only be shown read-only.
+      // Several library files compose into one prelude, and a ladder/FBD
+      // library joins it transpiled, so those can only be shown read-only.
       const local =
-        ws.libraries.length === 1
+        ws.libraries.length === 1 && /\.st$/i.test(ws.libraries[0].file)
           ? ws.libraries[0].uri
           : this.setDoc(LOCAL_SCHEME, `/workspace-libraries-${n}.st`, ws.prelude);
       n++;
@@ -499,6 +597,9 @@ export class OnlineEdit implements vscode.Disposable {
    * active file names, on a multi-task controller. */
   async rollback(): Promise<void> {
     const ws = await this.composeAll();
+    // Without the composition the target program is unknown, and falling
+    // through to main could undo the wrong task.
+    if (!ws && this.composeError) return;
     const program =
       ws && (ws.programs.length === 1 ? ws.programs[0] : ws.programs.find((p) => p.file === ws.activeFile));
     if (ws && ws.programs.length > 1 && !program) {
@@ -539,13 +640,21 @@ export class OnlineEdit implements vscode.Disposable {
       this.status.hide();
       return;
     }
-    const ws = await this.composeAll();
+    const ws = await this.composeAll(true, true);
     const program =
       ws && (ws.programs.length === 1 ? ws.programs[0] : ws.programs.find((p) => p.file === ws.activeFile));
     const info = await this.fetchInfo(program?.pou);
     if (!info) {
       this.status.hide();
       this.onState?.("offline", program?.uri);
+      return;
+    }
+    if (!ws && this.composeError) {
+      // The workspace doesn't compose (a broken library, a PROGRAM in lib/,
+      // a naut without `compose`): there is nothing honest to compare.
+      this.status.text = "$(warning) nautilus: can't compose the program";
+      this.status.tooltip = this.composeError;
+      this.status.show();
       return;
     }
     let inSync = false;

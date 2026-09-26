@@ -5,6 +5,7 @@
 import { vscode } from '../vscodeApi';
 import type { MimicDoc, MimicPipeAnchor } from '@joyautomation/nautilus-hmi';
 import type { ComponentsManifest, Port } from './ports';
+import { cloneSafe, opFailureMessage } from './opPayload';
 
 /** Mirror of src/mimicOps.ts (extension host). Patch semantics: a key set
  * to null DELETES the optional field; a present value sets it. */
@@ -101,19 +102,50 @@ export const ed = $state({
 	snapToGrid: true
 });
 
+/** The canvas's DOM-measured box for an equipment id (EditorCanvas's
+ * eqBox(), registered while it is mounted) — for panels that need port
+ * positions (PropsPanel's detach / Re-route) without a DOM of their own.
+ * Deliberately not reactive: it is read inside gestures, never rendered. */
+export const canvasBox: {
+	measure: ((id: string) => { x: number; y: number; w: number; h: number } | undefined) | null;
+} = { measure: null };
+
+/** Post to the host with the op copied to plain data first (cloneSafe — a
+ * `$state` proxy anywhere in it would otherwise make postMessage throw
+ * DataCloneError and silently drop the op). Should the post still fail, the
+ * user hears about it (the host shows it as a warning toast, like an op it
+ * refuses) and the caller learns it through the `false` return — a gesture
+ * must never be left half-committed on the canvas. */
+function send(type: 'mimicOp' | 'manifestOp', op: { type: string }): boolean {
+	try {
+		vscode.postMessage({ type, op: cloneSafe(op) });
+		return true;
+	} catch (err) {
+		const msg = opFailureMessage(op.type, err);
+		try {
+			vscode.postMessage({ type: 'mimicError', msg });
+		} catch {
+			// nothing left to tell
+		}
+		console.error('nautilus mimic: ' + msg);
+		return false;
+	}
+}
+
 /** While the document doesn't parse (ed.error), the canvas is a stale
  * read-only picture — MimicApp locks it, and ops are dropped here as a
  * backstop (a gesture already in flight, a keyboard nudge) so the host
- * isn't asked to edit text it would refuse with a warning toast apiece. */
-export function postOp(op: MimicOp): void {
-	if (ed.error) return;
-	vscode.postMessage({ type: 'mimicOp', op });
+ * isn't asked to edit text it would refuse with a warning toast apiece.
+ * Returns whether the op reached the host. */
+export function postOp(op: MimicOp): boolean {
+	if (ed.error) return false;
+	return send('mimicOp', op);
 }
 
 /** Commit a component-level ports edit to the project manifest. */
-export function postManifestOp(op: ManifestOp): void {
-	if (ed.error) return;
-	vscode.postMessage({ type: 'manifestOp', op });
+export function postManifestOp(op: ManifestOp): boolean {
+	if (ed.error) return false;
+	return send('manifestOp', op);
 }
 
 /** The live pill: the same `nautilus.liveValues.toggle` as the diagrams'

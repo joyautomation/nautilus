@@ -1,0 +1,10 @@
+FUNCTION_BLOCK HiAlarm
+VAR_INPUT
+    PV : REAL;
+    Limit : REAL;
+END_VAR
+VAR_OUTPUT
+    Alm : BOOL;
+END_VAR
+Alm := PV > Limit;
+END_FUNCTION_BLOCK

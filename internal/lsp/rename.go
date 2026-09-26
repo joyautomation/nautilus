@@ -144,11 +144,19 @@ func (s *Server) renameTagAcrossProject(uri, name, newName string, edits *Worksp
 	}
 	dir := filepath.Dir(mpath)
 
-	// Open buffers win over disk, keyed by base name as ComposeAll expects.
+	// Open buffers win over disk, keyed by project-relative path as
+	// ComposeAll expects: a root file's base name, or lib/… for a library.
 	overrides := map[string]string{}
 	for otherURI, otherDoc := range s.docs {
-		if p, ok := uriToPath(otherURI); ok && filepath.Dir(p) == dir {
-			overrides[filepath.Base(p)] = otherDoc.text
+		p, ok := uriToPath(otherURI)
+		if !ok {
+			continue
+		}
+		if rel, err := filepath.Rel(dir, p); err == nil {
+			rel = filepath.ToSlash(rel)
+			if !strings.Contains(rel, "/") || stproject.InLibDir(rel) {
+				overrides[rel] = otherDoc.text
+			}
 		}
 	}
 	comp, err := stproject.ComposeAll(dir, overrides)

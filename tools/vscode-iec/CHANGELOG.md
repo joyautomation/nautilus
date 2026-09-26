@@ -3,6 +3,239 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **The ladder palette inserts any function block.** The fixed TON and CTU
+  buttons are one *FB…* action: it opens a picker listing the standard
+  blocks (TON, TOF, TP, CTU, CTD, CTUD, R_TRIG, F_TRIG, SR, RS) and every
+  user `FUNCTION_BLOCK` the file can see — its own and the project
+  libraries' (root and `lib/`, any language), the same prelude `naut check`
+  composes. A user block arrives with its pins placed per docs/functions.md:
+  the rung's power on the first free BOOL input, `_` placeholders on its
+  non-BOOL inputs and in-outs to retag, and a hint listing the outputs to
+  capture with `Pin => Tag`. Click (or drag onto a rung's `+`) to place;
+  TON is still two clicks and Enter. Requires a `naut` whose `ld graph`
+  sends the block catalog; with an older one the picker lists the standard
+  blocks and a typed type name still inserts.
+- **Name and rename a ladder FB instance.** The picker's instance field is
+  prefilled with the next free name (`t2`, `m1`, …) and is editable; double-
+  clicking an FB's header (its instance name or type) renames the instance —
+  the rung's declaration, a `VAR` declaration of it if the POU has one, and
+  every reference (`t1.Q`, `GE(t1.ET, …)`) in the owning POU, as one edit.
+  New `naut ld edit` op: `renameInst`.
+- **Declare what a retag introduced.** When a ladder rung names an
+  identifier the program doesn't declare, the palette shows an amber
+  *declare …* offer: a nautilus.yaml tag goes into `VAR_EXTERNAL` with its
+  manifest type, anything else into `VAR`. Retag suggestions now include the
+  project's manifest tags, not only the ones the file already declares.
+  (`naut ld graph` sends the manifest's tags with the model inside a project.)
+
+- **The FBD palette places any function block — PID and user blocks.**
+  *+ add → function block* opens the same picker the ladder palette uses,
+  fed the same catalog: the standard blocks (TON, TOF, TP, CTU, CTD, CTUD,
+  R_TRIG, F_TRIG, SR, RS and **PID**) and every user `FUNCTION_BLOCK` in
+  scope — the file's own and the project libraries' (root and `lib/`, any
+  language). A block goes in as `inst : TYPE(pin := _, …)` with every input
+  an open `_` pin, ready for the usual "drag a tag onto the pin" gesture,
+  under an instance name prefilled with the next free one (`pid1`, `s1`, …)
+  and editable; the hint lists the outputs it will offer (`lic.CV`,
+  `lic.SAT_HI`, …). A library block now draws with all of its pins, read
+  or not. The timer and counter templates stay as shortcuts. Requires a
+  `naut` whose `fbd graph` sends the catalog (`fbTypes`); with an older one
+  the picker lists the standard names and a typed type still inserts.
+- **An FBD output reference can name its source.** The palette's *output
+  reference* (and *coil*) source field completes FB outputs as well as
+  tags, so `SpeedRef := lic.CV` is one gesture; left empty, it is the bare
+  chip to drop a wire on, as before.
+- **Rename an FBD instance from its header.** Double-clicking anywhere on
+  an FB's header (instance name or type) renames the instance — its
+  declaration and every `inst.pin` read in the file, as one edit — the way
+  ladder's does; the body still opens the instance inspector.
+- **SFC "+ join" makes a simultaneous convergence.** With a transition
+  selected, *+ join* adds another step to its `FROM` — `FROM PostRun TO
+  Idle` becomes `FROM (PostRun, Alternate) TO Idle`, which fires once every
+  source is active — the mirror of *+ parallel branch*, which widens `TO`.
+  The picker lists the steps not already sources. Whether the joined steps
+  are legs of one divergence stays a `naut check` warning, not a refusal.
+  New `naut sfc edit` op: `joinSimultaneousBranch`.
+
+### Changed
+
+- **Project libraries can live in `lib/`.** Online edits (download, diff,
+  pull, rollback), *Open block source* from a diagram, and live-value
+  instance discovery now read the project's library files from `lib/` (at any
+  depth) as well as the project root, matching `naut` and the language
+  server. A file opened from `lib/` resolves to its project's root, so an
+  online edit started there still finds the programs. Requires a `naut`
+  with `lib/` support.
+- **SFC "+ step" chains.** With a step selected, *+ step* adds the new step
+  under it together with `TRANSITION FROM <selected> TO <new>` (the form has
+  a condition field, `TRUE` by default), in one edit and one undo. With
+  nothing selected it still adds a free step. The new step is selected, so
+  *+ step* again chains the next one. Requires a `naut` with the chained
+  `addStep` op; an older one adds the step alone.
+- **SFC "+ alt branch" works from a selected step.** It adds another
+  transition out of that step (an alternative divergence); a selected
+  transition still branches off its source. The button title and the "?"
+  legend say so.
+- **SFC action fields suggest tags.** *+ action* and editing an association
+  offer the declared tags for the word after the qualifier (`N Pu` →
+  `N PumpRun`), the list the ladder's retag uses.
+- **The SFC chart reveals what you add.** A new step scrolls into view and
+  is selected. The Ladder and SFC panes leave room under the chart for the
+  zoom controls, so the lowest step or rung can be scrolled clear of them.
+
+### Fixed
+
+- **Delete a rung's last coil when the rung calls a block.** A rung that
+  ends in a function block call is valid with no coil (the block is what it
+  drives), so deleting its only coil — the `( _ )` a placed block arrives
+  with, or a real one — removes it instead of refusing with "a rung needs a
+  coil". A rung of bare contacts still turns its last coil into `( _ )`,
+  and deleting that says to add a coil or a block, or delete the rung.
+- **A ladder block can use an instance the header declares.** Inserting
+  `m101:MotorStarter(...)` from the FB picker when the program's `VAR`
+  already declares `m101 : MotorStarter;` (the lift station's
+  permissives.ld) refused with "already declared"; the call now goes in and
+  reuses that declaration. A declaration of another type is still refused,
+  and the message names both types.
+- **"declare …" covers block and function arguments.** The amber offer
+  listed only names a contact or coil retag introduced; an undeclared name
+  in a block call's or function contact's arguments — `Reset :=
+  ResetFaults`, a `Run => MotorRun` target — is offered too.
+- **One `_` chip per open FBD pin.** A block placed with open inputs (*+ add
+  → function block*, PID's thirteen) drew every `_` from one shared chip;
+  each open pin now has its own chip beside it, and retagging one fills
+  that pin alone (it rewrote every pin the shared chip fed). The text is unchanged.
+- **`naut check` on an empty `.ld` speaks ladder.** It reported the FBD
+  hop's "source must contain an FBD ... END_FBD body"; it now says
+  `ld: empty file — a ladder source must contain an LD ... END_LD body`
+  (or, for a file with no `LD` block, `ld: source must contain an LD ...
+  END_LD body`), after the file's name. From the next naut release.
+- **A ladder rung's `(* … *)` header comment can span more than one line.**
+  A single-line block comment right after `RUNG <name>` always worked; one
+  wrapped onto a second (or third) line hit a hard parse error instead — the
+  ladder preview and its structural edits picked up the unclosed comment as
+  rung element text and choked on the stray `*`. The comment's full text now
+  survives into the ladder diagram (`Rung.comment` in the graph JSON) exactly
+  like a same-line comment already did, and a structural edit to another
+  rung no longer disturbs it.
+- **Online edits compose ladder and FBD libraries.** A program that uses a
+  block from a PROGRAM-less `.ld` or `.fbd` library (a ladder
+  `MotorStarter` in `motor.ld`, say) can now be downloaded: the prelude
+  sent to the controller carries the library's blocks, transpiled, exactly
+  as `naut run` composes them. Before, only `.st` libraries joined the
+  prelude, so the controller refused the program ("unknown type"), and
+  diff, pull, and the sync status compared against the wrong prelude. The
+  extension no longer re-implements composition: download, diff, pull,
+  rollback, the sync status, and *Open block source* all ask `naut compose`
+  (which also decides PROGRAM-ness lexically, so a comment that wraps onto a
+  line starting with "PROGRAM" no longer turns a library into a program).
+  *Open block source* now finds blocks written in `.ld`/`.fbd` libraries,
+  and live-value instance discovery reads `.ld` programs. A library that
+  won't transpile, or a PROGRAM under `lib/`, is reported the way
+  `naut check` reports it instead of being silently dropped. The sync status
+  keeps polling the controller every 3 seconds but recomposes only when a
+  project file (root, `lib/`, `nautilus.yaml`) or an unsaved buffer
+  changed.
+- **Requires naut 0.13.0** (the next CLI release, which adds
+  `naut compose`); an older `naut` gets the *Update naut* prompt, and online
+  edits say plainly that they need it.
+- **The ladder palette row is opaque.** Scrolled rungs no longer show through
+  its buttons.
+- **Ladder zoom by keyboard or the zoom buttons keeps the left rail in
+  view.** Ctrl+= / Ctrl+- anchor at the pane's left edge instead of its
+  centre, and the diagram leaves room under its last rung for the zoom
+  controls, so that rung's first elements can always be scrolled clear.
+
+- **The mimic's documented pipe gesture writes a pipe again.** *+ Pipe*,
+  click a port dot, click another, Enter (or double-click) wrote nothing: the
+  op carried the port anchors as live Svelte state, which `postMessage`
+  cannot clone, so it threw, no toast appeared, and the dashed draft stayed
+  on the canvas even after switching back to *Select*. Every mimic op is now
+  copied to plain data before it is posted. If a post still fails, the draft
+  is dropped and a warning says why. Leaving *+ Pipe* also drops an
+  unfinished draft.
+- **Re-route and port-to-port pipes go around their own equipment.** A route
+  used to ignore the two pieces of equipment it connects, so a pipe leaving
+  a tank's side port could run back through the tank. Now it leaves the port
+  outward (in the port's `dir`, or through the face it sits on) past the
+  equipment's edge, then routes around everything, its own equipment
+  included. *Re-route* also resolves ports against the boxes the canvas
+  draws, not a 100 × 80 guess, as does *detach* in the inspector.
+- **Built-in Tank, Pump and Valve ports sit on the drawings.** The default
+  ports were on the box edges, so a first pipe started in mid-air: the
+  tank's `left` floated beside the vessel and `right` sat on the level
+  scale, and the pump's `out` was beside the casing, not on its discharge
+  nozzle. They are now measured off each drawing (tank shell, pump suction
+  stub and top nozzle, valve body ends), each with its exit `dir`. A mimic
+  or component sidecar with explicit `ports` is unaffected.
+- **Port dots show while you drag a pipe end in *Select*.** They used to
+  appear only while *+ Pipe* was armed, so there was no way to see where an
+  end could land.
+
+- **SFC "+ transition → other… (new step)" creates the step.** It wrote
+  `TO <name>` without a `STEP <name>`, which left a red orphan chip. Now the
+  empty step lands after the source step in the same edit. The alt-branch
+  form does the same. Requires a `naut` with the `newStep` edit op; an older
+  one writes the transition alone, as before.
+- **SFC orphan chips and side-by-side action tables no longer overlap.** A
+  dangling transition's chip sat on its step's action table and covered
+  *+ action*. It now sits right of the table. Columns are spaced for the
+  widest action table, which also grows to fit a long target, so a table no
+  longer runs into the step beside it.
+- **`nautilus: Edit Component Ports…` reaches a custom component before it
+  has a sidecar.** The picker used to list built-ins and only the custom
+  components already discovered via a `*.component.json`; a `.svelte`
+  component just authored, with no sidecar yet, wasn't reachable. It now
+  also lists every `.svelte` component found in the workspace with no
+  sidecar, and creates one next to it, prefilled with empty ports, the
+  first time it's picked.
+- **Ladder operand labels no longer truncate at 12 characters.** An
+  ISA-style tag (`P101_Permissive`) was cut to a middle ellipsis around 12
+  characters regardless of how much room the rung had. Contacts and coils
+  now size themselves to their label up to 20 characters (with the rung's
+  spacing growing to match); a label longer than that still gets the
+  ellipsis, with the full name always in the element's tooltip.
+- **Download/Pull from a library file offers the programs that use it,**
+  instead of refusing outright. A library (`motor.ld`, `blocks.st`, …) has
+  no program of its own to route by; the CLI's `naut compose --json` names
+  the project's programs, and a text search for the library's own
+  `FUNCTION_BLOCK`/`FUNCTION` names finds which of them actually
+  instantiate it — one match downloads directly, more than one is a quick
+  pick, and only a library with no consumer at all still refuses.
+- **`Nautilus: Edit Component Ports…` is lower-case in the command
+  palette**, like every other nautilus command.
+- **The eip driver manifest schema's `host` field describes `host:port`.**
+  The description still said "IP or hostname" after PR #38 added the
+  `host:port` form (for `naut logix emulate` off the standard 44818, or a
+  controller on a nonstandard port); it now says so.
+- **The FBD "+ add" form's Esc is the same key everywhere.** Esc used to
+  throw the whole form away from a plain field (the name) but only close
+  the suggestion list from a suggesting one (function, inputs) — same key,
+  two meanings depending on which field had focus. Esc now always closes an
+  open suggestion list first; only once none is open does it close the
+  form, on every field.
+- **The whole webview no longer scrolls 8px once a chart overflows,**
+  cutting the diagram toolbar's top edge off-screen. The browser's default
+  `<body>` margin, left un-reset in the FBD/Ladder/SFC webview (unlike the
+  mimic editor's), made the page a few pixels taller than the viewport;
+  only the pane that wants to scroll does now.
+- **Quick-open reopening a file as its diagram no longer traps a retyped
+  command onto the wrong one.** `nautilus: Open as Diagram Editor` used to
+  drop out of the command palette once a file was already open as that
+  diagram, so retyping it let the palette's fuzzy match land on `Open …
+  Diagram Preview` instead (which splits the editor area — a surprise).
+  The command now stays in the palette and is a no-op with a status message
+  when the active tab is already that exact diagram.
+- **The SFC "+ step"/"+ parallel branch" name field's Ctrl+Z restores what
+  was typed before the last edit**, instead of leaving whatever's currently
+  there in place. The field was a controlled input rewriting its own
+  `value` on every keystroke, which resets a browser's native undo/redo for
+  that element; it's now seeded once at mount and left alone.
+
 ## [0.11.1] - 2026-09-25
 
 The stable-readiness release: everything the first stable release (0.10.0)

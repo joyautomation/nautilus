@@ -176,16 +176,20 @@ Each step `S` owns a retained `BOOL` slot `S.X` (its activity). A step is active
 
 All transitions are evaluated in step 1 from the pre-scan snapshot, so evaluation order does **not** affect *which conditions are read* — every transition sees the same consistent snapshot. Order matters only for **alternative divergence** (multiple transitions competing for the same token), where the standard requires mutual exclusion (a single token cannot take two paths).
 
-**Alt-group definition (recommended: share-any-source).** Two transitions are in the same priority group iff their source sets **share at least one step**. Rationale: the invariant SFC must protect is that a single active step's token is consumed by at most one transition per scan. A step shared between two transitions is exactly a token that two transitions contend for — whether or not their *full* source sets are identical — so grouping on any shared source is the safe superset. Grouping only on *identical* source sets would miss a genuine contention: a plain `FROM S` transition competing with a convergence `FROM (S, other)` both want `S`'s token, but their source sets differ. Share-any-source catches it; identical-sets would not. (This makes the grouping relation non-transitive in principle; slice 1 resolves priority pairwise against each *higher-priority* transition that shares a source, which is well-defined for the flat charts v1 supports. A chart where this produces a genuinely ambiguous three-way overlap is flagged — see §5.)
+**Alt-group definition (recommended: share-any-source).** Two transitions are in the same priority group iff their source sets **share at least one step**. Rationale: the invariant SFC must protect is that a single active step's token is consumed by at most one transition per scan. A step shared between two transitions is exactly a token that two transitions contend for — whether or not their *full* source sets are identical — so grouping on any shared source is the safe superset. Grouping only on *identical* source sets would miss a genuine contention: a plain `FROM S` transition competing with a convergence `FROM (S, other)` both want `S`'s token, but their source sets differ. Share-any-source catches it; identical-sets would not. (This makes the grouping relation non-transitive: A can share a step with B and B with C while A and C share nothing. That is not ambiguous, because firing is resolved in declaration order and a transition is suppressed only by a higher-priority sharer that itself **fires** — see the rule below. Such groups therefore need no diagnostic; until 2026-09 they drew an "ambiguous alternative-priority group" warning.)
 
-**Priority rule (= standard default):** within a group, transitions are prioritised **in source order, first = highest**. A transition `tᵢ` *fires* only if it is **enabled** and **no higher-priority transition sharing a source with it is enabled**. Crucially the guard uses `enabled`, not the raw condition:
+**Priority rule (= standard default):** within a group, transitions are prioritised **in source order, first = highest**. A transition `tᵢ` *fires* only if it is **enabled** and **no higher-priority transition sharing a source with it fires**. Crucially the guard never reads the raw condition — only `enabled` (and, through `fire`, `enabled`) of the higher-priority sharers:
 
 ```
 enabled(tⱼ) = (AND over s in Src(tⱼ): s.X) AND cond(tⱼ)          (* all sources active AND condition true *)
-fire(tᵢ)    = enabled(tᵢ) AND NOT( OR over j<i, Src(tⱼ)∩Src(tᵢ)≠∅ : enabled(tⱼ) )
+fire(tᵢ)    = enabled(tᵢ) AND NOT( OR over j<i, Src(tⱼ)∩Src(tᵢ)≠∅ : fire(tⱼ) )
 ```
 
+`fire` is computed in declaration order, so every `fire(tⱼ)` a guard reads is already final. Mutual exclusion is exact: of two transitions sharing a step, the later one is guarded by the earlier one's `fire`, so at most one takes that step's token per scan.
+
 **Why `enabled`, not `cond`.** If a higher-priority transition in the group is a simultaneous **convergence** (its source set is this step plus others), its `cond` can be TRUE while the transition is *not enabled* because its other sources are inactive. Guarding on the raw `cond` would then suppress every lower-priority branch even though the convergence cannot fire — deadlocking the token at the step forever. Guarding on `enabled` (which ANDs in every source's `.X`) suppresses a lower-priority branch only when the higher-priority one can actually take the token. This is the difference that makes mixed alt-divergence/convergence groups correct.
+
+**Why `fire`, not just `enabled`.** Slice 1 guarded on `enabled(tⱼ)`. That is right for two transitions, but in a non-transitive group it can suppress `tᵢ` because of a `tⱼ` that is enabled yet does not fire (a still-higher sharer took *its* token). Example: `t1 FROM A`, `t2 FROM (A, B)`, `t3 FROM B`, all enabled. `t1` takes A; `t2` is suppressed by `t1`; an `enabled` guard would still suppress `t3` because of `t2`, leaving B's token uncontested but untaken for one scan. The `fire` guard lets `t3` take it in the same scan. (Nothing could deadlock under the old guard either: whenever `t2` is enabled, `t1` or `t2` fires and empties A, so `t3` fires a scan later.)
 
 The standard permits explicit numeric priorities; slice 1 uses source order only (numeric-priority annotation is a documented non-goal, §7). This is deterministic and diffable — reordering the text reorders priority, visible in the diagram as top-to-bottom branch order.
 
@@ -201,7 +205,7 @@ General firing for any transition `t` with source set `Src(t)` and target set `T
 ```
 enabled(t) = (AND over s in Src(t): s.X) AND cond(t)
 fire(t)    = enabled(t) AND altGuard(t)
-             (* altGuard(t) = NOT( OR of enabled(t') for every higher-priority t'
+             (* altGuard(t) = NOT( OR of fire(t') for every higher-priority t'
                 sharing a source with t ) — see §2.3; identically TRUE when no
                 other transition shares a source with t *)
 ```
@@ -217,8 +221,8 @@ fire(t)    = enabled(t) AND altGuard(t)
 | Qualifier | Meaning | Slice |
 |-----------|---------|-------|
 | `N` | Non-stored: action active exactly while the step is active. | 1 |
-| `R` | Reset: deactivates a stored (`S`) action. | 1 |
-| `S` | Set (stored): action becomes active and **stays** active until an `R` on the same target. | 1 |
+| `R` | Reset: deactivates a stored (`S`) action. Acts **once**, on the step's activation. | 1 |
+| `S` | Set (stored): action becomes active and **stays** active until an `R` on the same target. Acts **once**, on the step's activation. | 1 |
 | `P1` | Pulse on rising activation: body runs **once**, the scan the step becomes active. | 1 |
 | `P` / `P0` | Pulse (P ≡ P1 in most vendors) / pulse on deactivation. | 1 if cheap, else 1b |
 | `L` `D` `SD` `DS` `SL` | Time-limited / delayed / stored-delayed variants. | **later slice** |
@@ -227,9 +231,14 @@ Rationale for staging: `N`/`S`/`R`/`P1` cover the overwhelming majority of real 
 
 **Action-control model (simplified conformant subset).** The standard defines an "action control" function block per action with a `Q` output. nautilus computes, for each *(step, action, qualifier)* association, a Boolean "active" signal, then combines per action:
 
-- **Boolean-variable action** `Q Var`: the action target `Var` is assigned the **OR of the active signals of every association that targets it**. (The standard combines multiple actions on one Boolean variable by OR.) So `N RunLamp` on all five steps compiles to `RunLamp := Idle.X OR Fill.X OR Heat.X OR Mix.X OR Drain.X;`.
+- **Boolean-variable action** `Q Var`: each association writes `Var` **only on the scans it acts**, never recomputing it from scratch every scan, so an association on an inactive step never touches the variable:
+  - `N` (and the pulses `P`/`P1`/`P0`): every association's active signal is OR-combined (the standard combines multiple actions on one Boolean variable by OR). While that OR is TRUE, `Var := TRUE` every scan; on the one scan it falls (the final scan), `Var := FALSE` — or `Var :=` the `S`/`R` stored value, when the variable also carries `S`/`R` associations (the standard's `Q = N OR stored`). So `N RunLamp` on all five steps holds `RunLamp` TRUE while any of them is active and drops it once when the chart leaves them (e.g. into `Aborted`).
+  - `S` / `R`: `Var := TRUE` / `Var := FALSE` **once**, on the scan the step activates. A reset dominates a set on the same scan. An `N` that is active on that scan still wins over a reset (N is applied last).
+  - Outside those scans the variable is not written by the chart's associations: an ACTION body, another task, or an HMI write stands.
 - **Body action** `Q ActName` (an `ACTION` block): the body executes each scan the association's active signal is TRUE, **plus one final scan on the falling edge** (the final-scan rule, §2.5.1). For `N`, the active signal is "while the step is active"; for `P1`, "the one scan the step just activated" (a pulse, no final scan — see §2.5.1).
-- **`S`/`R`**: `S Act` on step `Sa` sets a retained `_act_<Act>_stored := TRUE` when `Sa` becomes active; `R Act` on step `Sb` sets it FALSE. The action's `N`-equivalent active signal is then `_act_<Act>_stored`. (Store/reset combine across steps; last write in the fixed scan order wins, which for disjoint `S`/`R` steps is unambiguous.)
+- **`S`/`R` on a body action**: `S Act` on step `Sa` sets a retained `_act_<Act>_stored := TRUE` when `Sa` becomes active; `R Act` on step `Sb` sets it FALSE. The action's `N`-equivalent active signal is then `_act_<Act>_stored`. (Store/reset combine across steps; a reset dominates a set on the same scan.)
+
+**Association vs ACTION writes to the same variable.** A variable can be both an association target (`N X`, `S X`, `R X`, …) and assigned inside an `ACTION` body. The rule: within a scan, body actions run first and boolean-variable associations are applied last, and an association only writes on the scans it acts (above). So **the association wins while it acts** — every scan its `N` step is active plus that step's final scan, the one activation scan of an `S`/`R`, the one scan of a pulse — **and the variable is the ACTION's otherwise.** IEC 61131-3 has the action-control block's `Q` drive the variable outright; this is the same while the association is active, and keeps the variable free (instead of pinned FALSE) when it is not — which is what lets an `R X` on a never-reached abort step coexist with an ACTION that sets `X`. `naut check` warns on every such pairing (§5.1) because it reads as two owners, and a test sampling a few scans cannot tell which one produced a value.
 
 #### 2.5.1 The final-scan rule (body actions)
 
@@ -247,7 +256,7 @@ Rationale for staging: `N`/`S`/`R`/`P1` cover the overwhelming majority of real 
 ### 2.7 First scan and warm restart
 
 - **Cold start / cold `Swap`.** `ir.NewFrame` zero-inits every slot except those with a declared `Init`. The transpiler emits the **initial step's** activity slot with `:= TRUE` (`_S_Idle_X : BOOL := TRUE;`) and all other step slots default FALSE. So the first scan finds exactly the initial step active — the standard's cold-start rule — with no "first scan" flag needed.
-- **Warm restart / online edit (`SwapWarm`).** Step activity, `S/R` stored flags, `P1` (and any pulse) edge memories, body-action final-scan memories (`_act_<A>_prev`, §2.5.1), and step `TON`s are all retained VAR slots; `ir.MigrateFrame` carries them across by name+type. So an online edit **preserves the live token** and every timer — the running batch does not restart. Renaming a step is the honest exception: the renamed step's slot is a new name, so its token resets to FALSE (surfaced in the `SwapReport.Resets` list the UI already shows). This matches how renaming an FB instance resets its state today.
+- **Warm restart / online edit (`SwapWarm`).** Step activity, `S/R` stored flags, `P1` (and any pulse) edge memories, body-action final-scan memories (`_act_<A>_prev`, §2.5.1), boolean-variable drive memories (`_act_<Var>_lvl`, §2.5), and step `TON`s are all retained VAR slots; `ir.MigrateFrame` carries them across by name+type. So an online edit **preserves the live token** and every timer — the running batch does not restart. Renaming a step is the honest exception: the renamed step's slot is a new name, so its token resets to FALSE (surfaced in the `SwapReport.Resets` list the UI already shows). This matches how renaming an FB instance resets its state today.
 - **Redundancy takeover.** `Program.ResetFrame` re-inits to the initial step — the existing behaviour, correct for SFC.
 
 ---
@@ -272,15 +281,15 @@ VAR
   _S_Mix_X   : BOOL;           _S_Drain_X: BOOL;
   _drain_p1  : BOOL;           (* P1 edge memory: previous Drain.X *)
   _act_Stir_prev : BOOL;       (* final-scan memory for the N Stir body (§2.5.1) *)
+  _act_RunLamp_lvl : BOOL;     (* final-scan memory for RunLamp's N drive (§2.5) *)
 END_VAR
 (* 1. evaluate transitions from the pre-scan snapshot *)
   _f_start := _S_Idle_X AND (Start AND NOT Abort);
   _f_abort := _S_Fill_X AND (Abort);
-  _f_full  := _S_Fill_X AND (Level >= FillSP) AND NOT (_S_Fill_X AND Abort);
-             (* alt-guard = NOT enabled(t_abort); t_abort is single-source {Fill},
-                so this reduces to NOT Abort here — but the general form ANDs in
-                every source's .X, which is what makes a higher-priority
-                convergence guard correct (§2.3) *)
+  _f_full  := _S_Fill_X AND (Level >= FillSP) AND NOT (_f_abort);
+             (* alt-guard = NOT fire(t_abort), resolved in declaration order;
+                fire ANDs in every source's .X through enabled, which is what
+                makes a higher-priority convergence guard correct (§2.3) *)
   _f_done  := _S_Heat_X AND _S_Mix_X AND ((TempC >= HeatSP) AND mixT.Q);  (* sim. convergence: both sources *)
   _f_empty := _S_Drain_X AND (Level <= EmptySP);
 (* 3. clear sources *)
@@ -295,17 +304,22 @@ END_VAR
   IF _f_full  THEN _S_Heat_X := TRUE; _S_Mix_X := TRUE; END_IF;
   IF _f_done  THEN _S_Drain_X := TRUE; END_IF;
   IF _f_empty THEN _S_Idle_X := TRUE; END_IF;
-(* 6. actions — boolean vars combined by OR; bodies gated by active signal *)
-  RunLamp    := _S_Idle_X OR _S_Fill_X OR _S_Heat_X OR _S_Mix_X OR _S_Drain_X;
-  FillValve  := _S_Fill_X;
-  Heater     := _S_Heat_X;
-  DrainValve := _S_Drain_X;
+(* 6. actions — bodies first (gated by their active signal), then boolean
+      variables, each written only on the scans its associations act *)
   (* N Stir body — final-scan wrapper (§2.5.1): while Mix active + one falling-edge scan *)
   IF _S_Mix_X OR _act_Stir_prev THEN Mixer := _S_Mix_X; mixT(IN := _S_Mix_X, PT := T#30S); END_IF;
   _act_Stir_prev := _S_Mix_X;
   IF _S_Drain_X AND NOT _drain_p1 THEN BatchCount := BatchCount + 1; END_IF; (* P1 CountBatch: pulse, no final scan *)
-  _drain_p1 := _S_Drain_X;
-  IF _f_empty THEN AbortLamp := FALSE; END_IF;   (* R AbortLamp on return to Idle *)
+  (* N RunLamp on five steps: held TRUE while any is active, FALSE once on the scan they all drop *)
+  IF _act_RunLamp_lvl AND NOT (_S_Idle_X OR _S_Fill_X OR _S_Heat_X OR _S_Mix_X OR _S_Drain_X) THEN RunLamp := FALSE; END_IF;
+  IF _S_Idle_X OR _S_Fill_X OR _S_Heat_X OR _S_Mix_X OR _S_Drain_X THEN RunLamp := TRUE; END_IF;
+  _act_RunLamp_lvl := _S_Idle_X OR _S_Fill_X OR _S_Heat_X OR _S_Mix_X OR _S_Drain_X;
+  IF _act_FillValve_lvl AND NOT (_S_Fill_X) THEN FillValve := FALSE; END_IF;
+  IF _S_Fill_X THEN FillValve := TRUE; END_IF;
+  _act_FillValve_lvl := _S_Fill_X;
+  (* … Heater, DrainValve likewise … *)
+  IF _S_Idle_X AND NOT _idle_prev THEN AbortLamp := FALSE; END_IF;   (* R AbortLamp: once, on Idle's activation *)
+  _drain_p1 := _S_Drain_X;  _idle_prev := _S_Idle_X;
 ```
 
 The `_f_*` transition flags are `VAR_TEMP`-style scratch (compiled as ordinary locals — nautilus has no temp class, so they are locals reset by assignment before use each scan, never read stale). Because the `_f_*` values are computed entirely from the pre-scan `_S_*_X` snapshot before any clear/set, the evolution is atomic within the scan.
@@ -355,6 +369,7 @@ Addressed by render-model ids, resolved against a fresh parse in Go, returning m
 | `setActionBody` | replace an `ACTION` block body |
 | `insertAlternativeBranch` | add a second `TRANSITION FROM <same source>` (priority = insertion order) |
 | `insertSimultaneousBranch` | turn a `TO x` into `TO (x, y)` and add step `y` |
+| `joinSimultaneousBranch` | turn a `FROM x` into `FROM (x, y)` for an existing step `y` — a simultaneous convergence (Check, not the op, verifies the sources share a divergence) |
 | `setLayout` / `clearLayout` | reuse FBD's layout ops verbatim |
 | `setComment` | reuse FBD's comment op verbatim |
 
@@ -378,7 +393,8 @@ The base pipeline is inherited: `.sfc` → `sfc.TranspileWithLines` → the exis
 - **Action reference to an undefined action or variable** — an association naming neither an `ACTION` block nor a declared variable → error (the variable case is *also* caught by ST lowering; catching it structurally gives a better message).
 - **Unsupported qualifier** (e.g. `L`, `SD` in slice 1) — clear "not yet supported" diagnostic, never silent.
 - **Reference to `Step.X`/`Step.T` of an unknown step** — error.
-- **Ambiguous alternative-priority group** — because alt-groups are defined by *sharing any source* (§2.3), the grouping relation can be non-transitive: three transitions where A shares a source with B and B with C but A and C are disjoint. Slice 1 resolves priority pairwise (each transition guarded against higher-priority transitions it *directly* shares a source with), which is well-defined for the flat charts v1 supports; a topology where this produces a genuinely order-dependent three-way overlap is flagged as a **warning** so the author can disambiguate by reordering or restructuring.
+- **Association vs ACTION write** — a variable targeted by a bare qualifier association (`N X`, `S X`, `R X`, `P1 X`, …) and also assigned (`X := …`, at statement level) inside an `ACTION` body → warning, naming the step, the qualifier, the ACTION(s), and the rule that decides between them (§2.5: the association wins while it acts, the ACTION otherwise).
+- *(Removed 2026-09: "ambiguous alternative-priority group" for a non-transitive shared-source group. With the `fire`-based guard of §2.3 such a group has one well-defined outcome, so the warning only ever flagged correct charts.)*
 
 All emitted through the same gcc-style `path:line:col: message` channel, positions on the offending `.sfc` construct via the line map.
 
@@ -497,7 +513,7 @@ Assume `FillSP=100`, `HeatSP=80`, `EmptySP=5`, `mixT` PT `30s`.
 | 6 | `TempC=85`; `mixT.Q=F` (still <30s) | none (`mixT.Q` still false) | `Heat`, `Mix` | Temp reached but mixer timer not done — convergence correctly waits for **all** conditions, not just both steps active. (Transitions read `mixT.Q` from the prior scan's action call — a one-scan pipeline.) |
 | 7 | `TempC=85`; `mixT.Q=T` (≥30s) | `t_done` (`Heat.X ∧ Mix.X ∧ 85≥80 ∧ mixT.Q`) | `Drain` | **Simultaneous convergence**: both sources clear (step 3), single target sets (step 4). Tokens merge. `Heater:=Heat.X=FALSE` (N boolean drops). **Stir final scan** (`Mix.X=F` but `_act_Stir_prev=T`): body runs once more → `Mixer:=Mix.X=FALSE`, `mixT(IN:=Mix.X=FALSE)` **resets** (`ET=0, Q=F`); `_act_Stir_prev:=FALSE`. `DrainValve:=Drain.X=TRUE`. `P1 CountBatch` fires (`Drain.X ∧ ¬_drain_p1(F)`) → `BatchCount:=1`; `_drain_p1:=TRUE`. |
 | 8 | `Level=60` | none | `Drain` | Draining. `CountBatch` does **not** re-run (`Drain.X ∧ ¬_drain_p1(T)` = FALSE — pulse fired once). Stir wrapper idle (`Mix.X=F, _act_Stir_prev=F`); `Mixer` stays FALSE, `mixT` stays reset. |
-| 9 | `Level=4` (≤5) | `t_empty` (`Drain.X ∧ Level≤5`) | `Idle` | Token Drain→Idle. `DrainValve:=Drain.X=FALSE`. `R AbortLamp` runs (`_f_empty` true → `AbortLamp:=FALSE`). `_drain_p1` recomputed to FALSE (Drain now inactive) — re-armed for the next batch's pulse. Cycle complete; `BatchCount=1`, `mixT` clean for re-entry. |
+| 9 | `Level=4` (≤5) | `t_empty` (`Drain.X ∧ Level≤5`) | `Idle` | Token Drain→Idle. `DrainValve:=Drain.X=FALSE`. `R AbortLamp` acts once, on Idle's activation (`Idle.X ∧ ¬Idle_prev` → `AbortLamp:=FALSE`). `_drain_p1` recomputed to FALSE (Drain now inactive) — re-armed for the next batch's pulse. Cycle complete; `BatchCount=1`, `mixT` clean for re-entry. |
 
 Every output claimed above now follows from the §3.1 compilation: `Heater`/`FillValve`/`DrainValve`/`RunLamp` are `N` boolean actions (OR of step activity, so they drop to FALSE automatically), while `Mixer` and `mixT` are driven by the `Stir` body whose final-scan execution (scan 7) drives them FALSE on the falling edge — closing the re-entry hazard of §2.5.1.
 
@@ -510,7 +526,7 @@ Every output claimed above now follows from the §3.1 compilation: `Heater`/`Fil
 ## 10. Summary of recommendations
 
 1. **Format:** new `.sfc` extension, ST POU with an `SFC…END_SFC` body using standard `STEP`/`TRANSITION`/`ACTION` keywords; `FROM/TO` lists for simultaneous branches; alternative divergence = shared-source transitions in priority order.
-2. **Semantics:** atomic per-scan evolution from a pre-scan snapshot; source-order alternative priority guarded on `enabled` (not raw `cond`, so a higher-priority convergence can't deadlock the group), alt-groups defined by shared source; simultaneous split/merge via source/target sets; set-dominates-clear; slice-1 qualifiers `N/S/R/P1` (P/P0 if cheap) with the body-action final-scan rule (§2.5.1) so outputs shut down on a step's falling edge; `Step.T` via a reused `TON`; cold start via `INITIAL_STEP := TRUE`; warm restart preserves the token through frame migration.
+2. **Semantics:** atomic per-scan evolution from a pre-scan snapshot; source-order alternative priority guarded on the higher-priority sharers' `fire` (never raw `cond`, so a higher-priority convergence can't deadlock the group), alt-groups defined by shared source; simultaneous split/merge via source/target sets; set-dominates-clear; slice-1 qualifiers `N/S/R/P1` (P/P0 if cheap) with the body-action final-scan rule (§2.5.1) so outputs shut down on a step's falling edge; `Step.T` via a reused `TON`; cold start via `INITIAL_STEP := TRUE`; warm restart preserves the token through frame migration.
 3. **Compilation:** transpile SFC→ST and reuse `st.Parse`/`st.Lower`; step state is retained VAR slots — **no VM or runtime-core change**.
 4. **Render/edit:** derived render model (structure canonical in text, LD-style) + optional reused FBD `@layout` pins; slice-1 ops for step/transition/action/branch edits; the step+its-outgoing-transition is the LD-rung-analog minimal unit.
 5. **LSP/CLI/validation:** `analyzeSFC` transpile-and-remap like `analyzeFBD`; conditions/actions are ST so hover/completion/diagnostics come free; SFC-structural checks in `check.go`; `naut sfc graph|edit` verbs mirroring `naut fbd`.

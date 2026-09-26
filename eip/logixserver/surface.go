@@ -28,10 +28,14 @@ type TemplateSpec struct {
 }
 
 // MemberSpec is one struct member. Datatype is an elementary name (BOOL, DINT,
-// REAL, ...) or the name of another template (nested struct).
+// REAL, ...) or the name of another template (nested struct). Dimension > 0
+// makes it a fixed array member (elements 0..Dimension-1); its leaves are
+// "<member>[i]". A BOOL array member is bit-packed into DWORDs, as Logix
+// lays it out.
 type MemberSpec struct {
-	Name     string `json:"name"`
-	Datatype string `json:"datatype"`
+	Name      string `json:"name"`
+	Datatype  string `json:"datatype"`
+	Dimension int    `json:"dimension,omitempty"`
 }
 
 // SymbolSpec is one tag-list symbol. Scope "" is controller; "Program:<prog>"
@@ -159,19 +163,38 @@ func CompileSurface(spec *TagSurfaceSpec) (*Schema, []TagConfig, string, error) 
 		handle++
 		var offset uint32
 		for _, m := range t.Members {
+			if m.Dimension < 0 || m.Dimension > 0xFFFF {
+				return nil, nil, "", fmt.Errorf("template %q member %q: dimension %d out of range", t.Name, m.Name, m.Dimension)
+			}
+			n := uint32(m.Dimension)
 			tm := templateMember{name: m.Name, offset: offset}
 			if code, ok := cipTypeForName(m.Datatype); ok {
 				tm.typeCode = code
-				offset += sizeForCIPType(code)
+				switch {
+				case n == 0:
+					offset += sizeForCIPType(code)
+				case code == cip.TypeBOOL:
+					offset += (n + 31) / 32 * 4 // packed bits, whole DWORDs
+				default:
+					offset += sizeForCIPType(code) * n
+				}
 			} else if childID, ok := tmplID[m.Datatype]; ok {
 				child, built := templates[childID]
 				if !built {
 					return nil, nil, "", fmt.Errorf("template %q member %q: nested template %q must be declared first", t.Name, m.Name, m.Datatype)
 				}
 				tm.typeCode = symbolTypeStructBit | uint16(childID)
-				offset += child.structSize
+				if n == 0 {
+					offset += child.structSize
+				} else {
+					offset += child.structSize * n
+				}
 			} else {
 				return nil, nil, "", fmt.Errorf("template %q member %q: unknown datatype %q", t.Name, m.Name, m.Datatype)
+			}
+			if n > 0 {
+				tm.typeCode |= memberArrayBit
+				tm.typeInfo = uint16(n)
 			}
 			def.members = append(def.members, tm)
 		}

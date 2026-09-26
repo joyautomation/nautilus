@@ -30,9 +30,9 @@ package stproject
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -83,16 +83,38 @@ type Composition struct {
 	Libraries   []string
 }
 
-var pouRe = regexp.MustCompile(`(?im)^\s*PROGRAM\s+([A-Za-z_][A-Za-z0-9_]*)`)
-
 // POU extracts the `PROGRAM <Name>` POU name from IEC source, "" if none.
 // On a multi-task controller the POU name is a program's identity — pull
 // and online edits match programs to files by it.
+//
+// It reads lexical tokens, not lines: a comment that happens to wrap onto a
+// line beginning "PROGRAM is a project library…" must not name a POU "is"
+// (and, in a library's prelude, give every task that name).
 func POU(src string) string {
-	if m := pouRe.FindStringSubmatch(src); m != nil {
-		return m[1]
+	toks := st.Lex(src)
+	for i, t := range toks {
+		if t.Type != st.TokenProgram {
+			continue
+		}
+		if i+1 < len(toks) && toks[i+1].Type == st.TokenIdent {
+			return toks[i+1].Literal
+		}
+		return ""
 	}
 	return ""
+}
+
+// DeclaresProgram reports whether src contains a PROGRAM declaration,
+// deciding by lexical token: the word in a comment or a string does not
+// count. Works on every IEC language's source — .ld and .fbd open their
+// POUs with the same keywords ST does.
+func DeclaresProgram(src string) bool {
+	for _, t := range st.Lex(src) {
+		if t.Type == st.TokenProgram {
+			return true
+		}
+	}
+	return false
 }
 
 // ProgramFile is one program file in a (possibly multi-program) project.
@@ -111,59 +133,49 @@ type MultiComposition struct {
 	Programs  []ProgramFile // sorted by file name
 }
 
-// ComposeAll reads a project directory and decomposes it: the .st files
-// with no PROGRAM (sorted by name) are libraries shared by every program;
-// each file with a PROGRAM — .st, .fbd, .ld, or .sfc — is one program.
-// override maps a base file name to in-editor content so unsaved buffers
-// win over disk.
+// ComposeAll reads a project directory and decomposes it: the root-level
+// files with a PROGRAM — .st, .fbd, .ld, or .sfc — are the programs (sorted
+// by name); the PROGRAM-less .st/.ld/.fbd files in the root and anywhere
+// under lib/ are the libraries shared by every program, in the order
+// LibraryPaths gives. override maps a project-relative slash path (for a
+// root file, just its base name) to in-editor content so unsaved buffers win
+// over disk.
+//
+// A PROGRAM under lib/ is neither: it is skipped here, and `naut check` /
+// project loading report it.
 func ComposeAll(dir string, override map[string]string) (MultiComposition, error) {
-	entries, err := os.ReadDir(dir)
+	read := overrideReader(dir, override)
+	var m MultiComposition
+	progs, err := Programs(dir, override)
 	if err != nil {
 		return MultiComposition{}, err
 	}
-	type stFile struct {
-		name string
-		src  string
-	}
-	var files []stFile
-	for _, e := range entries {
-		ext := strings.ToLower(filepath.Ext(e.Name()))
-		if e.IsDir() || (ext != ".st" && ext != ".fbd" && ext != ".ld" && ext != ".sfc") {
-			continue
-		}
-		src, ok := override[e.Name()]
-		if !ok {
-			raw, err := os.ReadFile(filepath.Join(dir, e.Name()))
-			if err != nil {
-				continue
-			}
-			src = string(raw)
-		}
-		files = append(files, stFile{name: e.Name(), src: src})
-	}
-	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
+	m.Programs = progs
 
-	var m MultiComposition
-	var graphical []stFile // .ld / .fbd libraries, transpiled below
-	var raw []string       // every library's ORIGINAL text, for FB signatures
-	for _, f := range files {
-		if hasProgram(f.src) {
-			m.Programs = append(m.Programs, ProgramFile{File: f.name, Body: f.src, POU: POU(f.src)})
+	stRel, gRel, err := LibraryPaths(os.DirFS(dir))
+	if err != nil {
+		return MultiComposition{}, err
+	}
+	type libFile struct{ name, src string }
+	var graphical []libFile // .ld / .fbd libraries, transpiled below
+	var raw []string        // every library's ORIGINAL text, for FB signatures
+	for _, rel := range stRel {
+		src, ok := read(rel)
+		if !ok || hasProgram(src) || !IsLibrary(src) {
 			continue
 		}
-		if strings.EqualFold(filepath.Ext(f.name), ".st") {
-			if IsLibrary(f.src) {
-				m.Libraries = append(m.Libraries, f.src)
-				raw = append(raw, f.src)
-			}
+		m.Libraries = append(m.Libraries, src)
+		raw = append(raw, src)
+	}
+	// A PROGRAM-less .ld/.fbd is a library of graphical blocks. (A .sfc is
+	// a chart, never a library: it has no declaration form.)
+	for _, rel := range gRel {
+		src, ok := read(rel)
+		if !ok || hasProgram(src) {
 			continue
 		}
-		// A PROGRAM-less .ld/.fbd is a library of graphical blocks. (A
-		// .sfc is a chart, never a library: it has no declaration form.)
-		if IsGraphicalLibrary(f.name) {
-			graphical = append(graphical, f)
-			raw = append(raw, f.src)
-		}
+		graphical = append(graphical, libFile{rel, src})
+		raw = append(raw, src)
 	}
 	// ST libraries lead; the graphical ones follow, transpiled. A file that
 	// won't transpile is skipped here and reports its own error when it is
@@ -177,6 +189,126 @@ func ComposeAll(dir string, override map[string]string) (MultiComposition, error
 	}
 	m.Prelude = Join(m.Libraries, "")
 	return m, nil
+}
+
+// overrideReader reads a project-relative slash path from dir, preferring
+// override's in-editor content.
+func overrideReader(dir string, override map[string]string) func(rel string) (string, bool) {
+	return func(rel string) (string, bool) {
+		if src, ok := override[rel]; ok {
+			return src, true
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			return "", false
+		}
+		return string(raw), true
+	}
+}
+
+// Programs lists a project's program files: the root-level .st, .fbd, .ld
+// and .sfc files that declare a PROGRAM, sorted by name. override is as for
+// ComposeAll.
+func Programs(dir string, override map[string]string) ([]ProgramFile, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	read := overrideReader(dir, override)
+	var names []string
+	for _, e := range entries {
+		ext := strings.ToLower(filepath.Ext(e.Name()))
+		if e.IsDir() || (ext != ".st" && ext != ".fbd" && ext != ".ld" && ext != ".sfc") {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	var out []ProgramFile
+	for _, n := range names {
+		if src, ok := read(n); ok && hasProgram(src) {
+			out = append(out, ProgramFile{File: n, Body: src, POU: POU(src)})
+		}
+	}
+	return out, nil
+}
+
+// Library is one project library file as it joins the prelude.
+type Library struct {
+	Path string // project-relative slash path (lib/motor.ld)
+	ST   string // what it contributes: .st verbatim, .ld/.fbd transpiled
+}
+
+// Libraries is the runtime's library set for a project, strictly: every
+// PROGRAM-less .st/.ld/.fbd file in the root and under lib/, .st verbatim in
+// path order, then .ld/.fbd transpiled in path order (see the package doc).
+// Unlike ComposeAll, which is forgiving because it serves an editor mid-edit,
+// a library that will not transpile is an error, and so is a PROGRAM under
+// lib/ — this is the composition `naut check`, `run`, `build`, `test` and
+// the controller use, and silently dropping a block would fail later as
+// "unknown type" in whichever program used it. Errors name the file by its
+// project-relative path.
+//
+// override maps a project-relative slash path to in-editor content; nil
+// reads fsys only.
+func Libraries(fsys fs.FS, override map[string]string) ([]Library, error) {
+	stNames, gNames, err := LibraryPaths(fsys)
+	if err != nil {
+		return nil, err
+	}
+	type libFile struct{ name, src string }
+	var stLibs, gLibs []libFile
+	var sources []string // every library as written: a ladder file resolves its siblings' blocks
+	read := func(n string) (string, bool, error) {
+		src, ok := override[n]
+		if !ok {
+			raw, err := fs.ReadFile(fsys, n)
+			if err != nil {
+				return "", false, err
+			}
+			src = string(raw)
+		}
+		if DeclaresProgram(src) {
+			if InLibDir(n) {
+				return "", false, fmt.Errorf("%s declares a PROGRAM, but %s/ holds libraries only — "+
+					"programs belong in the root and in `tasks:`", n, LibDir)
+			}
+			return "", false, nil
+		}
+		return src, true, nil
+	}
+	for _, n := range stNames {
+		src, ok, err := read(n)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			stLibs = append(stLibs, libFile{n, src})
+			sources = append(sources, src)
+		}
+	}
+	for _, n := range gNames {
+		src, ok, err := read(n)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			gLibs = append(gLibs, libFile{n, src})
+			sources = append(sources, src)
+		}
+	}
+	var libs []Library
+	for _, l := range stLibs {
+		libs = append(libs, Library{l.name, l.src})
+	}
+	for _, l := range gLibs {
+		stSrc, err := LibraryST(l.name, l.src, sources...)
+		if err != nil {
+			return nil, err
+		}
+		libs = append(libs, Library{l.name, stSrc})
+	}
+	return libs, nil
 }
 
 // LibraryST is the ST text a project library file contributes to the
@@ -245,18 +377,14 @@ func Compose(dir string, override map[string]string) (Composition, error) {
 }
 
 // hasProgram reports whether src declares a PROGRAM (parses to a PROGRAM top,
-// with a text fallback so a program that doesn't parse mid-edit is still
-// recognized as the program file rather than skipped).
+// with a lexical fallback so a program that doesn't parse mid-edit — or a
+// graphical source, which the ST parser can't read — is still recognized
+// without mistaking a comment that mentions PROGRAM for one).
 func hasProgram(src string) bool {
 	if prog, err := st.Parse(src); err == nil {
 		return prog.TopKeyword == "PROGRAM"
 	}
-	for _, line := range strings.Split(src, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "PROGRAM ") {
-			return true
-		}
-	}
-	return false
+	return DeclaresProgram(src)
 }
 
 // Prelude gathers the library sources that should precede file when
@@ -282,26 +410,21 @@ func PreludeSources(file string, override map[string]string) (prelude string, so
 	if err != nil {
 		return "", nil, 0
 	}
-	dir := filepath.Dir(abs)
-	entries, err := os.ReadDir(dir)
+	root := ProjectRoot(abs)
+	stRel, gRel, err := LibraryPaths(os.DirFS(root))
 	if err != nil {
 		return "", nil, 0
 	}
-	var stNames, gNames []string
-	for _, e := range entries {
-		p := filepath.Join(dir, e.Name())
-		if e.IsDir() || p == abs {
-			continue
+	toAbs := func(rels []string) []string {
+		var out []string
+		for _, r := range rels {
+			if p := filepath.Join(root, filepath.FromSlash(r)); p != abs {
+				out = append(out, p)
+			}
 		}
-		switch {
-		case strings.EqualFold(filepath.Ext(e.Name()), ".st"):
-			stNames = append(stNames, p)
-		case IsGraphicalLibrary(e.Name()):
-			gNames = append(gNames, p)
-		}
+		return out
 	}
-	sort.Strings(stNames)
-	sort.Strings(gNames)
+	stNames, gNames := toAbs(stRel), toAbs(gRel)
 
 	read := func(p string) (string, bool) {
 		if src, ok := override[p]; ok {

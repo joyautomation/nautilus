@@ -518,8 +518,8 @@ func (d *Driver) validate(sess *session) error {
 			live[m.Name] = m
 		}
 		for _, f := range td.Fields {
-			if _, ok := live[f.Name]; !ok {
-				problems = append(problems, fmt.Sprintf("type %q lost member %q on the controller", td.Name, f.Name))
+			if _, ok := live[f.deviceName()]; !ok {
+				problems = append(problems, fmt.Sprintf("type %q lost member %q on the controller", td.Name, f.deviceName()))
 			}
 		}
 		sess.liveType[td.Name] = tmpl
@@ -779,7 +779,7 @@ func (d *Driver) writeStructLeaves(ctx context.Context, sess *session, devPath s
 		if prev != nil && i < len(prev.Fld) {
 			pv = &prev.Fld[i]
 		}
-		leaf := devPath + "." + f.Name
+		leaf := devPath + "." + f.deviceName()
 		if code, isElem := elementaryCode(f.Type); isElem && f.ArrayLen == 0 {
 			if pv != nil && scalarEqual(fv, *pv) {
 				continue
@@ -847,9 +847,9 @@ func (d *Driver) toIR(typeName string, arrayLen int, lv logix.Value) (any, error
 	}
 	out := ir.Value{Kind: ir.TypeStruct, Struct: sd, Fld: make([]ir.Value, len(td.Fields))}
 	for i, f := range td.Fields {
-		fv, ok := byName[f.Name]
+		fv, ok := byName[f.deviceName()]
 		if !ok {
-			return nil, fmt.Errorf("device value for %s missing member %s", typeName, f.Name)
+			return nil, fmt.Errorf("device value for %s missing member %s", typeName, f.deviceName())
 		}
 		conv, err := d.toIR(f.Type, f.ArrayLen, fv)
 		if err != nil {

@@ -39,6 +39,17 @@ Usage:
                                        exports of unchanged code compare equal.
                                        The basis of drift detection.
   naut logix info <file.L5X>       Summarize what the export contains.
+  naut logix emulate --l5x <file.L5X> [--listen 127.0.0.1:44818]
+                   [--values seed.json] [--ramp] [--name <controller>]
+  naut logix emulate --surface <surface.json> [...]
+                                       Serve the export's tags as a
+                                       ControlLogix over EtherNet/IP — no PLC
+                                       needed for naut eip browse|import or a
+                                       driver: {type: eip} project. UDTs and
+                                       AOIs become templates, program tags
+                                       read as Program:<prog>.<tag>, initial
+                                       values come from the export.
+                                       "naut logix emulate -h" for the flags.
 
 Everything above is pure Go and works on an L5X already on disk. The verbs
 below drive a Logix PROJECT, which needs the Studio 5000 SDK — so they talk
@@ -108,6 +119,8 @@ func runLogix(args []string) int {
 		return runLogixNormalize(args[1:])
 	case "info":
 		return runLogixInfo(args[1:])
+	case "emulate":
+		return runLogixEmulate(args[1:])
 	case "probe":
 		return runLogixProbe(args[1:])
 	case "agent":

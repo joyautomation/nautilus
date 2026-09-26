@@ -77,9 +77,11 @@
 					suggest: 'tags'
 				});
 			} else if (n.kind === 'fb' && data.editable) {
-				// PLC-IDE split: the NAME renames; anywhere else on the block
-				// opens the instance inspector (this instance's live data).
-				if ((ev.target as HTMLElement).closest?.('.name')) {
+				// PLC-IDE split, as in ladder: the HEADER (instance name and
+				// type) renames — one edit covering the declaration and every
+				// inst.pin read; the body opens the instance inspector (this
+				// instance's live data).
+				if ((ev.target as HTMLElement).closest?.('.title')) {
 					data.requestInput(n.label, at, (v) => data.onEdit({ type: 'rename', node: n.id, value: v }));
 				} else {
 					data.onInspect?.({ name: n.label, type: n.type ?? '', ins: n.ins, outs: n.outs });
@@ -134,7 +136,7 @@
 		if (retargetable) return `${base} — ${retargetHint}`;
 		if (editableConst) return `${base} — double-click to edit`;
 		if (n.kind === 'fb' && data.editable)
-			return `${base} — double-click to inspect the instance (its name to rename)`;
+			return `${base} — double-click the header to rename the instance, the body to inspect it`;
 		if (renameable) return `${base} — double-click to rename`;
 		return base;
 	});

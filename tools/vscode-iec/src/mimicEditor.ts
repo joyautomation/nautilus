@@ -257,6 +257,13 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
           logMimic("webview: " + String((msg as { msg?: unknown }).msg ?? ""));
           return;
         }
+        if (msg?.type === "mimicError") {
+          // An op the webview could not even send (see its mimicState send()).
+          const text = String((msg as { msg?: unknown }).msg ?? "");
+          logMimic("webview error: " + text);
+          void vscode.window.showWarningMessage("nautilus: " + text);
+          return;
+        }
         if (msg?.type === "toggleLive") {
           void vscode.commands.executeCommand("nautilus.liveValues.toggle");
           return;

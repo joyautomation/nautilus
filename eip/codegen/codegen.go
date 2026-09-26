@@ -12,6 +12,7 @@ import (
 
 	"github.com/joyautomation/nautilus/eip"
 	"github.com/joyautomation/nautilus/eip/logix"
+	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/lang/stgen"
 )
 
@@ -186,9 +187,17 @@ func orderTemplates(ts map[uint16]*logix.Template) []*logix.Template {
 	return order
 }
 
-// fieldDef maps a template member to a manifest FieldDef.
+// fieldDef maps a template member to a manifest FieldDef. A member named
+// after an IEC keyword ("retain", "of", "to", ...) is not a valid ST field
+// identifier, so its Name is escaped the same way `naut logix import`
+// escapes an L5X UDT member (lang/l5x.ident, both backed by
+// st.EscapeKeyword); Device records the controller's real member name so
+// reads and writes still address it correctly.
 func fieldDef(br *logix.BrowseResult, m logix.Member) (eip.FieldDef, bool) {
-	f := eip.FieldDef{Name: m.Name}
+	f := eip.FieldDef{Name: st.EscapeKeyword(m.Name)}
+	if f.Name != m.Name {
+		f.Device = m.Name
+	}
 	if m.IsArray() {
 		f.ArrayLen = int(m.Info)
 	}
@@ -387,11 +396,14 @@ func renderManifestGo(m eip.Manifest, opts Options) string {
 		for _, t := range m.Types {
 			fmt.Fprintf(&sb, "\t\t{Name: %q, Fields: []eip.FieldDef{\n", t.Name)
 			for _, f := range t.Fields {
-				if f.ArrayLen > 0 {
-					fmt.Fprintf(&sb, "\t\t\t{Name: %q, Type: %q, ArrayLen: %d},\n", f.Name, f.Type, f.ArrayLen)
-				} else {
-					fmt.Fprintf(&sb, "\t\t\t{Name: %q, Type: %q},\n", f.Name, f.Type)
+				fmt.Fprintf(&sb, "\t\t\t{Name: %q, Type: %q", f.Name, f.Type)
+				if f.Device != "" {
+					fmt.Fprintf(&sb, ", Device: %q", f.Device)
 				}
+				if f.ArrayLen > 0 {
+					fmt.Fprintf(&sb, ", ArrayLen: %d", f.ArrayLen)
+				}
+				sb.WriteString("},\n")
 			}
 			sb.WriteString("\t\t}},\n")
 		}

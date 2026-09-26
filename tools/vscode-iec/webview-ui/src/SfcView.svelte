@@ -19,9 +19,10 @@
 		commentId,
 		connectHandlePos,
 		layoutSfc,
+		ASSOC_GAP,
 		stepAtPoint,
 		nextStepInitial,
-		stepId,
+		joinCandidates,
 		type OrphanChip,
 		type PlacedNote,
 		type PlacedStep,
@@ -56,7 +57,7 @@
 			init: string,
 			at: { x: number; y: number; w: number },
 			commit: (v: string) => void,
-			opts?: { multiline?: boolean; suggest?: 'tags' | 'types' | 'functions' }
+			opts?: { multiline?: boolean; suggest?: 'tags' | 'types' | 'functions' | 'assoc' }
 		) => void;
 	} = $props();
 
@@ -194,17 +195,19 @@
 		requestInput(assocText(a), { x: rect.left, y: rect.top, w: Math.max(rect.width, 140) }, (v) => {
 			const parsed = parseAssoc(v);
 			if (parsed) post({ type: 'setAssoc', step: step.id, index, ...parsed });
-		});
+		}, { suggest: 'assoc' });
 	}
 
 	function addAssoc(ev: Event, step: SfcStep) {
 		ev.stopPropagation();
 		if (!editable || !requestInput) return;
 		const rect = (ev.currentTarget as Element).getBoundingClientRect();
+		// Tags complete the word after the qualifier ("N Pu" → "N PumpRun"),
+		// the vocabulary the ladder's retag offers.
 		requestInput('N Output', { x: rect.left, y: rect.bottom, w: 140 }, (v) => {
 			const parsed = parseAssoc(v);
 			if (parsed) post({ type: 'addAssoc', step: step.id, ...parsed });
-		});
+		}, { suggest: 'assoc' });
 	}
 
 	function deleteAssoc(ev: Event, step: SfcStep, index: number) {
@@ -249,17 +252,23 @@
 
 	// ── add step / transition / branches (a small popover form) ────────────
 	let addOpen = $state(false);
-	type AddKind = 'step' | 'transition' | 'alt' | 'sim';
+	type AddKind = 'step' | 'transition' | 'alt' | 'sim' | 'join';
 	let addKind = $state<AddKind>('step');
 	let fName = $state('');
 	let fTo = $state('');
 	let fCond = $state('TRUE');
+	// The step the form adds FROM, captured when it opens: "+ step" with a
+	// step selected chains the new one under it; "+ transition" and
+	// "+ alt branch" leave it.
+	let fFrom = $state<string | undefined>(undefined);
 
 	function openAdd(kind: AddKind) {
 		addKind = kind;
 		fName = nextStepName();
 		fTo = '';
 		fCond = 'TRUE';
+		fFrom = selectedStepName();
+		if (kind === 'join') fTo = joinCandidates(model, selectedTransId())[0]?.name ?? '';
 		addOpen = true;
 	}
 	// Placeholder-text note, landing just above END_SFC — dblclick edits,
@@ -280,31 +289,111 @@
 		const id = selected.id;
 		return (model.steps ?? []).find((s) => s.id === id)?.name;
 	}
+	/** Scroll the nearest scrolling ancestor (ZoomPane's pane) just enough
+	 * to show `el` with its action table, clear of the sticky palette on
+	 * top and the zoom controls in the bottom-left — never the page. */
+	function revealInPane(el: Element) {
+		let pane: HTMLElement | null = el.parentElement;
+		while (pane && !(pane.scrollHeight > pane.clientHeight || pane.scrollWidth > pane.clientWidth)) pane = pane.parentElement;
+		if (!pane || pane === document.body || pane === document.documentElement) return;
+		const r = el.getBoundingClientRect();
+		const pr = pane.getBoundingClientRect();
+		const top = pr.top + (wrapEl?.querySelector('.palette')?.getBoundingClientRect().height ?? 0) + 24;
+		// Above the bottom-left zoom controls (15 px inset + ~110 px stack),
+		// which ZoomPane's clearance strip leaves room to scroll past.
+		const bottom = pr.top + pane.clientHeight - 136;
+		const left = pr.left + 56; // the zoom controls' column
+		const right = pr.left + pane.clientWidth - 24;
+		let dy = 0;
+		let dx = 0;
+		if (r.bottom > bottom) dy = r.bottom - bottom;
+		if (r.top - dy < top) dy = r.top - top;
+		if (r.right > right) dx = r.right - right;
+		if (r.left - dx < left) dx = r.left - left;
+		if (dx || dy) pane.scrollBy({ left: dx, top: dy });
+	}
+	/** The selected transition's current FROM set (the "+ join" title). */
+	function joinFrom(): string[] {
+		const id = selectedTransId();
+		return (model.trans ?? []).find((t) => t.id === id)?.from ?? [];
+	}
 	function selectedTransId(): string | undefined {
 		return selected?.kind === 'trans' ? selected.id : undefined;
 	}
+	/** The "to step" picker's name when it names no step yet — the
+	 * "other… (new step)" case, which the op creates along with the
+	 * transition (addTransition/insertAlternativeBranch `newStep`). */
+	function newTarget(name: string): string | undefined {
+		const n = name.trim();
+		return n && !stepNames().some((s) => s.toLowerCase() === n.toLowerCase()) ? n : undefined;
+	}
 	function commitAdd() {
+		let added: string | undefined;
 		if (addKind === 'step') {
-			// A chart's first step is its INITIAL_STEP — an empty chart
-			// (or a blank file being seeded, or one whose initial step was
-			// deleted) starts runnable.
-			const first = nextStepInitial(model);
-			post({ type: 'addStep', name: fName, initial: first || undefined, after: selectedStepName() ? stepId(selectedStepName()!) : undefined });
+			const name = fName.trim();
+			if (!name) return;
+			if (fFrom) {
+				// Chained: the step AND `TRANSITION FROM <selected> TO
+				// <new> := <cond>` in one op (one undo).
+				post({ type: 'addStep', name, from: [fFrom], cond: fCond });
+			} else {
+				// A chart's first step is its INITIAL_STEP — an empty chart
+				// (or a blank file being seeded, or one whose initial step
+				// was deleted) starts runnable.
+				const first = nextStepInitial(model);
+				post({ type: 'addStep', name, initial: first || undefined });
+			}
+			added = name;
 		} else if (addKind === 'transition') {
-			const from = selectedStepName();
-			if (!from || !fTo) return;
-			post({ type: 'addTransition', from: [from], to: [fTo], cond: fCond });
+			const from = fFrom;
+			const to = fTo.trim();
+			if (!from || !to) return;
+			added = newTarget(to);
+			post({ type: 'addTransition', from: [from], to: [to], cond: fCond, newStep: added });
 		} else if (addKind === 'alt') {
+			// Out of a selected step (a second transition from it), or off
+			// a selected transition's source (priority after it).
 			const after = selectedTransId();
-			if (!after || !fTo) return;
-			post({ type: 'insertAlternativeBranch', after, to: [fTo], cond: fCond });
+			const to = fTo.trim();
+			if ((!after && !fFrom) || !to) return;
+			added = newTarget(to);
+			post(after ? { type: 'insertAlternativeBranch', after, to: [to], cond: fCond, newStep: added } : { type: 'insertAlternativeBranch', from: [fFrom], to: [to], cond: fCond, newStep: added });
+		} else if (addKind === 'join') {
+			// A simultaneous convergence: FROM x becomes FROM (x, y). No
+			// new step — the transition stays selected.
+			const transition = selectedTransId();
+			const step = joinCandidates(model, transition).find((s) => s.name === fTo);
+			if (!transition || !step) return;
+			post({ type: 'joinSimultaneousBranch', transition, step: step.id });
 		} else if (addKind === 'sim') {
 			const transition = selectedTransId();
-			if (!transition || !fName) return;
-			post({ type: 'insertSimultaneousBranch', transition, newStep: fName });
+			if (!transition || !fName.trim()) return;
+			added = fName.trim();
+			post({ type: 'insertSimultaneousBranch', transition, newStep: added });
 		}
+		// Select the new step once it round-trips and bring it into view —
+		// a text editor reveals the line it just added. Selected, "+ step"
+		// again chains the next one under it.
+		if (added) pendingReveal = added;
 		addOpen = false;
 	}
+
+	// ── reveal a newly added step ─────────────────────────────────────────
+	let pendingReveal = $state<string | undefined>(undefined);
+	$effect(() => {
+		const want = pendingReveal?.toLowerCase();
+		if (!want) return;
+		const s = (model.steps ?? []).find((x) => x.name.toLowerCase() === want);
+		if (!s) return;
+		pendingReveal = undefined;
+		multi = [];
+		selected = { kind: 'step', id: s.id };
+		// After the DOM has the new box.
+		requestAnimationFrame(() => {
+			const el = svgEl?.querySelector<SVGGElement>(`g.step[data-id="${CSS.escape(s.id)}"]`);
+			if (el) revealInPane(el);
+		});
+	});
 
 	// ── drag a step: body-drag PINS its layout (setLayout on release); the
 	// small connect handle on its bottom edge instead DRAGS OUT A WIRE that
@@ -641,6 +730,28 @@
 			if (el instanceof HTMLInputElement) el.select();
 		});
 	}
+	/** The add-step/add-branch name field: an UNCONTROLLED input, unlike the
+	 * form's other fields. `fName` seeds it once at mount (and is read back
+	 * on every keystroke, so commitAdd still sees what was typed), but
+	 * nothing ever reassigns the element's `.value` after that — a
+	 * `bind:value` here would (harmlessly, same string) write `.value` back
+	 * on every keystroke, and a JS-driven write to `.value`, even a no-op
+	 * one, resets the browser's native undo/redo stack for that field —
+	 * dropping whatever was typed before the last edit. Ctrl+Z in this field
+	 * is deliberately left to the browser (see keyForward.ts's "native"
+	 * decision); this is what keeps it working across more than one edit in
+	 * the same form session. Folds in `autofocus`'s focus+select — both act
+	 * once, at mount. */
+	function nameField(el: HTMLInputElement) {
+		el.value = fName;
+		queueMicrotask(() => {
+			el.focus();
+			el.select();
+		});
+		const oninput = () => (fName = el.value);
+		el.addEventListener('input', oninput);
+		return { destroy: () => el.removeEventListener('input', oninput) };
+	}
 	// Keep keyboard focus on the chart after any pointer gesture on it —
 	// Del/Esc listen on .wrap, and the float editor (dblclick edits) hands
 	// focus back to whatever held it when it opened.
@@ -659,10 +770,21 @@
 <div class="wrap" tabindex={editable ? 0 : undefined} onkeydown={handleKey} onpointerdowncapture={focusWrap} bind:this={wrapEl}>
 	{#if editable}
 		<div class="palette" onclick={(e) => e.stopPropagation()}>
-			<button title="Add a step (after the selected step, or at the end)" onclick={() => openAdd('step')}>+ step</button>
-			<button title="Add a transition from the selected step to another (existing or new)" disabled={!selectedStepName()} onclick={() => openAdd('transition')}>+ transition</button>
-			<button title="Add an alternative branch off the selected transition's source (priority = insertion order)" disabled={!selectedTransId()} onclick={() => openAdd('alt')}>+ alt branch</button>
+			<button
+				title={selectedStepName()
+					? `Add a step after ${selectedStepName()}, chained to it by a transition`
+					: 'Add a free step (select a step first to chain the new one after it)'}
+				onclick={() => openAdd('step')}>+ step</button>
+			<button title="Add a transition from the selected step to another step — an existing one, or a new one it creates" disabled={!selectedStepName()} onclick={() => openAdd('transition')}>+ transition</button>
+			<button
+				title="Add an alternative branch: another transition out of the selected step, or out of the selected transition's source (priority = order in the file)"
+				disabled={!selectedTransId() && !selectedStepName()}
+				onclick={() => openAdd('alt')}>+ alt branch</button>
 			<button title="Widen the selected transition into a simultaneous divergence, adding a new parallel step" disabled={!selectedTransId()} onclick={() => openAdd('sim')}>+ parallel branch</button>
+			<button
+				title="Join another step into the selected transition's FROM — a simultaneous convergence that fires once every source step is active"
+				disabled={!selectedTransId() || !joinCandidates(model, selectedTransId()).length}
+				onclick={() => openAdd('join')}>+ join</button>
 			<button title="Add a diagram note — dblclick to write it" onclick={addNote}>+ comment</button>
 			<span class="sep"></span>
 			<button title="Cut the selected step(s) (Ctrl+X)" disabled={selected?.kind !== 'step'} onclick={() => doCut()}>✂</button>
@@ -678,10 +800,31 @@
 	{#if addOpen}
 		<div class="addform" onclick={(e) => e.stopPropagation()} onkeydown={addFormKey}>
 			<div class="addtitle">
-				{addKind === 'step' ? 'Add step' : addKind === 'transition' ? `Transition from ${selectedStepName()}` : addKind === 'alt' ? 'Alternative branch' : 'Simultaneous branch'}
+				{addKind === 'step'
+					? fFrom
+						? `Add step after ${fFrom}`
+						: 'Add step'
+					: addKind === 'transition'
+						? `Transition from ${fFrom}`
+						: addKind === 'alt'
+							? `Alternative branch${selectedTransId() ? '' : fFrom ? ` out of ${fFrom}` : ''}`
+							: addKind === 'join'
+								? `Join into FROM (${joinFrom().join(', ')})`
+								: 'Simultaneous branch'}
 			</div>
+			{#if addKind === 'join'}
+				<label title="The step to add to this transition's FROM set — the transition then waits for every source step">
+					<span>join step</span>
+					<select class="nx-input" use:autofocus bind:value={fTo}>
+						{#each joinCandidates(model, selectedTransId()) as s (s.id)}<option value={s.name}>{s.name}</option>{/each}
+					</select>
+				</label>
+			{/if}
 			{#if addKind === 'step' || addKind === 'sim'}
-				<label><span>name</span><input class="nx-input" bind:value={fName} spellcheck="false" use:autofocus /></label>
+				<label><span>name</span><input class="nx-input" spellcheck="false" use:nameField /></label>
+			{/if}
+			{#if addKind === 'step' && fFrom}
+				<label title="The transition from {fFrom} to the new step"><span>condition</span><input class="nx-input" bind:value={fCond} spellcheck="false" /></label>
 			{/if}
 			{#if addKind === 'transition' || addKind === 'alt'}
 				<label>
@@ -822,6 +965,7 @@
 			{@const active = stepActive(p.step.name)}
 			<g
 				class="step {p.step.status ?? ''}"
+				data-id={p.id}
 				transform="translate({pos.x}, {pos.y})"
 				class:selected={isSelStep(p.id)}
 				class:active
@@ -858,7 +1002,7 @@
 				{/if}
 
 				{#if (p.step.actions?.length ?? 0) > 0 || editable}
-					<g class="assoctable" transform="translate({p.w + 12}, 0)">
+					<g class="assoctable" transform="translate({p.w + ASSOC_GAP}, 0)">
 						{#each p.step.actions ?? [] as a, i (i)}
 							{@const isAction = !!actionFor(a.target)}
 							<!-- An ACTION block has no box of its own on the chart, so a
@@ -872,11 +1016,11 @@
 								ondblclick={(e) => (isAction ? editActionBody(e, a.target) : editAssoc(e, p.step, i))}
 							>
 								<title>{isAction ? `ACTION ${a.target} — dblclick to edit its ST body` : `${a.qualifier} ${a.target}${a.time ? '(' + a.time + ')' : ''}`}</title>
-								<rect x="0" y="1" width="164" height="15" class="assocbg" />
+								<rect x="0" y="1" width={p.assocW} height="15" class="assocbg" />
 								<text x="4" y="11" class="assocq">{a.qualifier}</text>
 								<text x="26" y="11" class="assoctarget" class:isaction={isAction}>{a.target}{a.time ? `(${a.time})` : ''}</text>
 								{#if editable}
-									<text x="150" y="11" class="assocdel" onclick={(e) => deleteAssoc(e, p.step, i)}>✕</text>
+									<text x={p.assocW - 14} y="11" class="assocdel" onclick={(e) => deleteAssoc(e, p.step, i)}>✕</text>
 								{/if}
 							</g>
 						{/each}

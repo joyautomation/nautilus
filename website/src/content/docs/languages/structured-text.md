@@ -72,7 +72,11 @@ tag`. See [the tag model](/guides/tag-model/) for which role fits which name.
 The sections are `VAR`, `VAR_INPUT`, `VAR_OUTPUT`, `VAR_IN_OUT`, `VAR_TEMP`,
 `VAR_GLOBAL`, and `VAR_EXTERNAL`, each closed by `END_VAR`, with `RETAIN` or
 `CONSTANT` allowed after the section keyword. `VAR_GLOBAL` and `VAR_EXTERNAL`
-resolve identically: both name a tag in the store.
+resolve identically: both name a tag in the store. A declared initial value
+(`Gain : REAL := 2.0;`) is where the variable starts, in a `PROGRAM`, in every
+`FUNCTION_BLOCK` instance, and on every `FUNCTION` call. A tag has no such
+start in the source: `:=` on a `VAR_GLOBAL` or `VAR_EXTERNAL` is a compile
+error, and the tag's `init:` in the manifest sets it instead.
 
 ```iecst
 TYPE

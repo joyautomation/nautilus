@@ -66,6 +66,11 @@ func findManifest(path string) (string, bool) {
 	return "", false
 }
 
+// ProjectTags is projectTags for callers outside the server: `naut ld
+// graph` hands the manifest's tags to the ladder editor, so a retag to a
+// tag the file doesn't declare can offer the declaration.
+func ProjectTags(path string) []ProjectTag { return projectTags(path) }
+
 // projectTags returns the tags declared by the manifest governing path, or
 // nil when there is no manifest (a bare .st file outside a project, which
 // is a perfectly good thing to edit).

@@ -30,6 +30,8 @@ export type FbdEdge = {
   feedback?: boolean;
   status?: 'added' | 'removed' | 'changed' | 'same';
 };
+import type { FbCatalogType } from './suggest';
+
 export type VarDecl = {
 	name: string;
 	type: string;
@@ -37,7 +39,15 @@ export type VarDecl = {
 	section: string;
 	line: number;
 };
-export type FbdModel = { name: string; nodes: FbdNode[]; edges: FbdEdge[]; vars?: VarDecl[]; blank?: boolean };
+export type FbdModel = {
+  name: string;
+  nodes: FbdNode[];
+  edges: FbdEdge[];
+  vars?: VarDecl[];
+  blank?: boolean;
+  /** The palette's block catalog (lang/fbcatalog via `naut fbd graph`). */
+  fbTypes?: FbCatalogType[];
+};
 
 /** Arrays always arrays: an older CLI (or saved webview state) can carry
  * `null` for an empty diagram's nodes/edges. */

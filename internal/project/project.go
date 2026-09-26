@@ -13,10 +13,11 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"net"
 	"os"
 	"path"
 	"reflect"
-	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,7 +26,6 @@ import (
 	"github.com/joyautomation/nautilus/eip"
 	"github.com/joyautomation/nautilus/internal/stproject"
 	nio "github.com/joyautomation/nautilus/io"
-	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
@@ -390,12 +390,7 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 // comments and tokenizes string literals separately from keywords, so a
 // single PROGRAM token scan is both cheap and correct without a full parse.
 func hasProgramDecl(src []byte) bool {
-	for _, tok := range st.Lex(string(src)) {
-		if tok.Type == st.TokenProgram {
-			return true
-		}
-	}
-	return false
+	return stproject.DeclaresProgram(string(src))
 }
 
 // ReadManifest decodes a manifest and stops there — no programs compiled, no
@@ -513,8 +508,9 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		return nil, fmt.Errorf("%s: at least one task (a program file) is required", ManifestName)
 	}
 
-	// Libraries: every .st in the project root without a PROGRAM — the
-	// same rule the editor, LSP, and pull use, so tooling agrees.
+	// Libraries: every PROGRAM-less .st/.ld/.fbd in the project root and
+	// under lib/ — the same rule the editor, LSP, and pull use, so tooling
+	// agrees.
 	libs, err := libraries(fsys)
 	if err != nil {
 		return nil, err
@@ -619,74 +615,30 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 }
 
 // libraries composes the project's prelude: every root-level file with no
-// PROGRAM. `.st` files join verbatim, in name order; then `.ld` and `.fbd`
-// files — libraries of ladder / netlist FUNCTION_BLOCKs, the IEC answer to
-// a JSR — transpiled to ST, also in name order. See internal/stproject for
-// why that tier order, and why it never decides whether a call resolves.
+// PROGRAM, plus every `.st`/`.ld`/`.fbd` file under lib/ at any depth (see
+// stproject.LibDir). `.st` files join verbatim, in path order; then `.ld`
+// and `.fbd` files — libraries of ladder / netlist FUNCTION_BLOCKs, the IEC
+// answer to a JSR — transpiled to ST, also in path order. See
+// internal/stproject for why that tier order, and why it never decides
+// whether a call resolves.
 //
 // Unlike the editor-side composition, a library that will not transpile is
-// an ERROR here: this is the path `naut check`, `run`, and `build` take,
-// and silently dropping a block would fail later as "unknown type".
+// an ERROR here, and so is a PROGRAM under lib/: this is the path `naut
+// check`, `run`, `build` and `test` take, and silently dropping a block
+// would fail later as "unknown type" in whichever program used it. Errors
+// name the file by its project-relative path (lib/motor.ld). The rule
+// itself is stproject.Libraries, shared with `naut compose` (what the VS
+// Code extension downloads), so the two can never disagree.
 func libraries(fsys fs.FS) ([]string, error) {
-	entries, err := fs.ReadDir(fsys, ".")
+	libs, err := stproject.Libraries(fsys, nil)
 	if err != nil {
 		return nil, err
 	}
-	var stNames, gNames []string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		switch {
-		case strings.EqualFold(path.Ext(e.Name()), ".st"):
-			stNames = append(stNames, e.Name())
-		case stproject.IsGraphicalLibrary(e.Name()):
-			gNames = append(gNames, e.Name())
-		}
+	out := make([]string, len(libs))
+	for i, l := range libs {
+		out[i] = l.ST
 	}
-	sort.Strings(stNames)
-	sort.Strings(gNames)
-
-	// Read every library as written first: a ladder library resolves the
-	// blocks its siblings declare, in either direction.
-	type libFile struct{ name, src string }
-	var stLibs, gLibs []libFile
-	var sources []string
-	for _, n := range stNames {
-		src, err := fs.ReadFile(fsys, n)
-		if err != nil {
-			return nil, err
-		}
-		if hasProgramDecl(src) {
-			continue
-		}
-		stLibs = append(stLibs, libFile{n, string(src)})
-		sources = append(sources, string(src))
-	}
-	for _, n := range gNames {
-		src, err := fs.ReadFile(fsys, n)
-		if err != nil {
-			return nil, err
-		}
-		if hasProgramDecl(src) {
-			continue
-		}
-		gLibs = append(gLibs, libFile{n, string(src)})
-		sources = append(sources, string(src))
-	}
-
-	var libs []string
-	for _, l := range stLibs {
-		libs = append(libs, l.src)
-	}
-	for _, l := range gLibs {
-		stSrc, err := stproject.LibraryST(l.name, l.src, sources...)
-		if err != nil {
-			return nil, err
-		}
-		libs = append(libs, stSrc)
-	}
-	return libs, nil
+	return out, nil
 }
 
 func tagDefs(tags []TagConfig) ([]runtime.TagDef, error) {
@@ -904,6 +856,17 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 			return nil, fmt.Errorf("driver eip: %s: %w", d.Manifest, err)
 		}
 		opts := []eip.Option{eip.WithSlot(d.Slot)}
+		// "host:port" reaches a controller (or `naut logix emulate`) off
+		// the standard 44818 — a bare host keeps the default.
+		host := d.Host
+		if h, p, err := net.SplitHostPort(host); err == nil {
+			port, err := strconv.Atoi(p)
+			if err != nil || port <= 0 || port > 65535 {
+				return nil, fmt.Errorf("driver eip: host %q: bad port %q", d.Host, p)
+			}
+			host = h
+			opts = append(opts, eip.WithPort(port))
+		}
 		if d.ScanRate != 0 {
 			opts = append(opts, eip.WithScanRate(time.Duration(d.ScanRate)))
 		}
@@ -913,7 +876,7 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		for class, patterns := range d.TagClasses {
 			opts = append(opts, eip.WithTagClass(class, patterns...))
 		}
-		return eip.New(d.Host, em, opts...)
+		return eip.New(host, em, opts...)
 	case "sparkplug-host":
 		// A Sparkplug B host application: consume a whole group of edge
 		// nodes as INPUT tags, send operator writes back as NCMD/DCMD.

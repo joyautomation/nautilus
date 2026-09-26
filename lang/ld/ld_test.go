@@ -266,8 +266,45 @@ END_PROGRAM`
 	if !strings.Contains(out, "[ Start | Run ] /Stop ( _ )") {
 		t.Fatalf("last-coil delete must placeholder:\n%s", out)
 	}
-	if _, err := ApplyEdit(out, EditOp{Type: "delete", Rung: "seal", Coil: coilIdx(0)}); err == nil {
-		t.Fatal("deleting the placeholder coil must point at the rung")
+	if _, err := ApplyEdit(out, EditOp{Type: "delete", Rung: "seal", Coil: coilIdx(0)}); err == nil || !strings.Contains(err.Error(), "a coil or a function block") {
+		t.Fatalf("deleting a contacts-only rung's placeholder coil must point at the rung: %v", err)
+	}
+
+	// A rung that calls a function block is valid with no coil at all
+	// (docs/functions.md, permissives.ld's p101start): its last coil — the
+	// `( _ )` a placed block arrives with, or a real one — just goes. Also
+	// when the block sits in a branch leg.
+	fbSrc := `PROGRAM p
+VAR_EXTERNAL Start : BOOL; Run : BOOL; Alm : BOOL; END_VAR
+VAR t1 : TON; END_VAR
+LD
+  RUNG start
+    Start t1:TON(PT := T#5S) ( _ )
+  RUNG real
+    Start t1:TON(PT := T#5S) ( Run )
+  RUNG leg
+    [ Start t1:TON(PT := T#5S) | Alm ] ( Run )
+END_LD
+END_PROGRAM`
+	for _, rung := range []string{"start", "real", "leg"} {
+		out = step(t, fbSrc, EditOp{Type: "delete", Rung: rung, Coil: coilIdx(0)})
+		if _, err := Transpile(out); err != nil {
+			t.Fatalf("delete %s's last coil: result must compile: %v\n%s", rung, err, out)
+		}
+		m, err := Graph(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, err := findRung(m, rung)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(r.Coils) != 0 {
+			t.Fatalf("delete %s's last coil: want no coil, got %+v\n%s", rung, r.Coils, out)
+		}
+	}
+	if !strings.Contains(step(t, fbSrc, EditOp{Type: "delete", Rung: "start", Coil: coilIdx(0)}), "Start t1:TON(PT := T#5S)\n") {
+		t.Fatal("the rung should end at its block call")
 	}
 
 	// Rung lifecycle.
@@ -851,5 +888,18 @@ END_PROGRAM`
 	}
 	if _, err := fbd.Compile(out); err != nil {
 		t.Fatalf("does not compile: %v\n%s", err, out)
+	}
+}
+
+// Without an LD block the error is ladder-worded; blank source says empty.
+func TestTranspileNoLDBody(t *testing.T) {
+	for src, want := range map[string]string{
+		"":                         "ld: empty file — a ladder source must contain an LD ... END_LD body",
+		" \n":                      "ld: empty file",
+		"PROGRAM p\nEND_PROGRAM\n": "ld: source must contain an LD ... END_LD body",
+	} {
+		if _, err := Transpile(src); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Transpile(%q) = %v, want %q", src, err, want)
+		}
 	}
 }

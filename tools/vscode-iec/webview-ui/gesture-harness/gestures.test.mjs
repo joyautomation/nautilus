@@ -253,6 +253,53 @@ test('Enter completes a single-click pipe onto a hovered port', async () => {
 	});
 });
 
+// ── the documented gesture: + Pipe, port dot, port dot, Enter ───────────────
+// The harness's postMessage structured-clones like VS Code's (vscodeApi.ts),
+// so an op carrying a $state anchor proxy fails here as it did in VS Code
+// (DataCloneError: nothing written, the draft stuck on the canvas).
+test('port dot -> port dot -> Enter commits an anchored pipe and clears the draft', async () => {
+	await withEditor(twoTankDoc(), async (ed) => {
+		await ed.enterPipeMode();
+		await ed.clickPort(0, 'right');
+		await ed.clickPort(1, 'left');
+		await ed.resetOps();
+		await ed.pressEnter();
+		const ap = addPipe(await ed.ops());
+		assert.ok(ap, 'a pipe should be created');
+		assert.deepEqual(ap.from, { equip: 'T1', port: 'right' });
+		assert.deepEqual(ap.to, { equip: 'T2', port: 'left' });
+		assert.equal((await ed.draft()).count, 0, 'no draft left on the canvas');
+		const errs = (await ed.console()).filter((m) => /DataCloneError|could not be cloned/.test(JSON.stringify(m)));
+		assert.deepEqual(errs, [], 'no clone error');
+	});
+});
+
+test('leaving + Pipe mid-draft drops the draft', async () => {
+	await withEditor(twoTankDoc(), async (ed) => {
+		await ed.enterPipeMode();
+		await ed.clickPort(0, 'right');
+		assert.equal((await ed.draft()).count, 1);
+		await ed.selectMode();
+		assert.equal((await ed.draft()).count, 0, 'the dashed draft must not stay on the Select canvas');
+	});
+});
+
+test('dragging a pipe END in Select shows the port dots it can land on', async () => {
+	await withEditor(docWithPipe(), async (ed) => {
+		await ed.selectMode();
+		assert.equal((await ed.ports()).length, 0, 'no dots at rest in Select');
+		await ed.clickPoint(...(await ed.toVp(400, 185))); // select pipe
+		const handles = await ed.vtx();
+		const endH = handles[handles.length - 1];
+		await ed.b.mouseDown(endH.cx, endH.cy);
+		await ed.b.mouseMove(endH.cx + 20, endH.cy + 10);
+		await new Promise((r) => setTimeout(r, 60));
+		const mid = (await ed.ports()).length;
+		await ed.b.mouseUp(endH.cx + 20, endH.cy + 10);
+		assert.ok(mid > 0, 'port dots render during an end drag');
+	});
+});
+
 test('floating control: two clicks + Enter over empty canvas completes as clicked', async () => {
 	await withEditor(twoTankDoc(), async (ed) => {
 		await ed.enterPipeMode();

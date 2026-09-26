@@ -54,6 +54,21 @@ func (s *TagStore) UpdateValue(path string, value any) bool {
 	return true
 }
 
+// CompareAndSwap sets path to value only if it still holds old — how a
+// simulator drives a leaf without clobbering a client's write that landed in
+// between. Returns false if the tag is unknown or its value moved.
+func (s *TagStore) CompareAndSwap(path string, old, value any) bool {
+	key := strings.ToUpper(path)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.tags[key]
+	if !ok || e.value != old {
+		return false
+	}
+	e.value = value
+	return true
+}
+
 // Resolve returns the leaf type and current value for a canonical path.
 func (s *TagStore) Resolve(path string) (leafType uint16, value any, ok bool) {
 	key := strings.ToUpper(path)

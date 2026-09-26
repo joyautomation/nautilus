@@ -1,0 +1,16 @@
+tests:
+  - name: the ladder seal-in from lib/ runs the pump
+    steps:
+      - given: { Start: true }
+        scans: 1
+        expect: { Run: true }
+      - given: { Start: false }
+        scans: 1
+        expect: { Run: true }
+  - name: the tank model and alarm from lib/ follow the pump
+    steps:
+      - given: { Start: true }
+        scans: 5
+        expect: { High: false }
+      - scans: 2
+        expect: { High: true }

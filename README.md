@@ -330,6 +330,11 @@ changed outputs back on change — the runtime behaves like a PLC peer on the
 network. Pure Go, no cgo; tested against an in-repo ControlLogix emulator
 (`eip/logixserver`).
 
+No PLC on the bench? `naut logix emulate --l5x UpstreamLine.L5X` serves a
+Logix Designer export's tags — UDTs, program tags, initial values — as a
+ControlLogix on 127.0.0.1:44818 (`--ramp` makes the numbers move), so
+browse, import and a `driver: {type: eip}` project all run against it.
+
 ### Talking to Modbus TCP devices
 
 Field devices that aren't a Logix PLC — PID loops behind a gateway, VFDs,
@@ -728,8 +733,9 @@ The pieces that make this first-class rather than a convention:
   [docs/functions.md](docs/functions.md#function-blocks-in-ladder) and
   [examples/ladder-subroutines](examples/ladder-subroutines).
 - **The tooling composes the same way.** The VS Code extension, the LSP,
-  `naut check`, and `naut pull` all treat sibling library files
-  as in-scope for the program, byte-identically to `Libraries` — so
+  `naut check`, and `naut pull` all treat the project's library files
+  (PROGRAM-less files in the root and anywhere under `lib/`) as in-scope
+  for the program, byte-identically to `Libraries` — so
   online edits round-trip losslessly and CI sees what the runtime sees.
 - **Instance state is retained.** A block's `VAR` section persists
   across scans, and PLC-style online edits carry it across program swaps
@@ -821,7 +827,8 @@ pre-release channel, the HMI kit on npm. What ships today:
   cgo) CIP client with connected messaging and batched reads, tag-list + UDT
   template upload, `naut eip import` codegen (ST TYPE block + Go tag
   manifest), write-on-change outputs, and a Logix controller emulator
-  (`eip/logixserver`) for hermetic integration tests
+  (`eip/logixserver`, `naut logix emulate`) for hermetic integration tests
+  and PLC-free demos
 - ✅ `modbus` — Modbus TCP driver: block-read planner (one request per device
   instead of one per variable), per-source word/byte order, scan classes,
   per-tag quality that tells a refused register (exception → that block bad,
