@@ -120,11 +120,12 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
   private readonly portsReady: Promise<void>;
   private readonly portsWatcher: vscode.Disposable;
   private readonly panels = new Set<vscode.WebviewPanel>();
-  /** Each open panel's doc's referenced equipment component names — the
-   * other half (besides sidecars) of the palette's "custom components"
-   * list (see paletteCustomComponents). Updated every postDoc(); read back
-   * in broadcastPorts() so a sidecar-index change re-broadcasts the right
-   * list for EACH panel's own doc, not just whichever panel last edited. */
+  /** Each open panel's doc's referenced equipment component names — one of
+   * three sources (besides sidecars and bare-svelte discovery) feeding the
+   * palette's "custom components" list (see paletteCustomComponents).
+   * Updated every postDoc(); read back in broadcastPorts() so a
+   * sidecar-index change re-broadcasts the right list for EACH panel's own
+   * doc, not just whichever panel last edited. */
   private readonly panelDocNames = new Map<vscode.WebviewPanel, string[]>();
 
   constructor(
@@ -137,7 +138,10 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
 
   /** The `mimicManifest` payload for one panel: the shared sidecar index
    * plus THAT panel's own custom-components palette list (its doc's
-   * equipment names union the sidecar index, minus built-ins). */
+   * equipment names union the sidecar index union every bare `.svelte`
+   * component discovered in the workspace, minus built-ins — a project
+   * component needs neither a sidecar nor to be already placed to show up
+   * in the palette). */
   private manifestMessage(panel: vscode.WebviewPanel): { type: "mimicManifest"; components: unknown; customComponents: string[] } {
     return {
       type: "mimicManifest",
@@ -145,6 +149,7 @@ export class MimicEditorProvider implements vscode.CustomTextEditorProvider {
       customComponents: paletteCustomComponents(
         Object.keys(this.componentIndex.manifest),
         this.panelDocNames.get(panel) ?? [],
+        this.componentIndex.svelteNames,
         BUILTIN_COMPONENTS
       ),
     };

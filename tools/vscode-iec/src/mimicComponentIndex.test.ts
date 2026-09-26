@@ -8,6 +8,7 @@ import {
   applyComponentPortsEdit,
   componentNameFromFilename,
   formatComponentEntry,
+  isCandidateComponentSveltePath,
   paletteCustomComponents,
   parseComponentEntry,
   parseComponentEntryStrict,
@@ -23,6 +24,34 @@ test("componentNameFromFilename extracts the name, or null for a non-match", () 
   assert.equal(componentNameFromFilename(".component.json"), null);
   assert.equal(componentNameFromFilename("Tank.svelte"), null);
   assert.equal(componentNameFromFilename("Tank.ports.json"), null);
+});
+
+test("isCandidateComponentSveltePath accepts an ordinary project component", () => {
+  assert.equal(isCandidateComponentSveltePath("/proj/hmi/src/lib/ToProcess.svelte"), true);
+  assert.equal(isCandidateComponentSveltePath("/proj/hmi/src/lib/components/Tank.svelte"), true);
+  assert.equal(isCandidateComponentSveltePath("HeatExchanger.svelte"), true);
+});
+
+test("isCandidateComponentSveltePath rejects SvelteKit route/layout special files by basename", () => {
+  assert.equal(isCandidateComponentSveltePath("/proj/src/routes/+page.svelte"), false);
+  assert.equal(isCandidateComponentSveltePath("/proj/src/lib/+layout.svelte"), false);
+  assert.equal(isCandidateComponentSveltePath("/proj/src/lib/+error.svelte"), false);
+  assert.equal(isCandidateComponentSveltePath("/proj/src/lib/+page.server.svelte"), false);
+});
+
+test("isCandidateComponentSveltePath rejects anything under a src/routes/ directory, any depth, any basename", () => {
+  assert.equal(isCandidateComponentSveltePath("/proj/hmi/src/routes/+page.svelte"), false);
+  assert.equal(isCandidateComponentSveltePath("/proj/hmi/src/routes/dashboard/+page.svelte"), false);
+  // A route's own local helper component (no leading +) is still route
+  // structure, not a mimic component — excluded by directory, not basename.
+  assert.equal(isCandidateComponentSveltePath("/proj/hmi/src/routes/Widget.svelte"), false);
+  assert.equal(isCandidateComponentSveltePath("/proj/hmi/src/routes/dashboard/deep/Widget.svelte"), false);
+  // Windows-style separators work the same way.
+  assert.equal(isCandidateComponentSveltePath("C:\\proj\\hmi\\src\\routes\\+page.svelte"), false);
+});
+
+test("isCandidateComponentSveltePath: a \"routes\" directory NOT under src is not SvelteKit's and is not excluded", () => {
+  assert.equal(isCandidateComponentSveltePath("/proj/hmi/lib/routes/Widget.svelte"), true);
 });
 
 test("parseComponentEntry is forgiving: missing/empty/malformed/non-object all read as {}", () => {
@@ -173,9 +202,9 @@ test("a malformed sidecar contributes an empty entry rather than throwing", () =
   assert.deepEqual(warnings, []);
 });
 
-test("paletteCustomComponents unions sidecar + doc-referenced names, sorted and deduped", () => {
+test("paletteCustomComponents unions sidecar + doc-referenced + bare-svelte names, sorted and deduped", () => {
   assert.deepEqual(
-    paletteCustomComponents(["HeatExchanger", "Widget"], ["Widget", "Conveyor"], new Set(["Tank", "Pump"])),
+    paletteCustomComponents(["HeatExchanger", "Widget"], ["Widget", "Conveyor"], [], new Set(["Tank", "Pump"])),
     ["Conveyor", "HeatExchanger", "Widget"]
   );
 });
@@ -184,13 +213,31 @@ test("paletteCustomComponents excludes built-ins even when a sidecar or the doc 
   // A Tank.component.json (a ports override) doesn't create a second
   // palette entry for "Tank" — it's still the one built-in.
   assert.deepEqual(
-    paletteCustomComponents(["Tank"], ["Tank", "HeatExchanger"], new Set(["Tank", "Pump"])),
+    paletteCustomComponents(["Tank"], ["Tank", "HeatExchanger"], [], new Set(["Tank", "Pump"])),
     ["HeatExchanger"]
   );
 });
 
 test("paletteCustomComponents: empty inputs resolve to an empty list", () => {
-  assert.deepEqual(paletteCustomComponents([], [], new Set()), []);
+  assert.deepEqual(paletteCustomComponents([], [], [], new Set()), []);
+});
+
+test("paletteCustomComponents lists a bare .svelte component with no sidecar and not yet placed", () => {
+  // The bug: a project's ToProcess.svelte with no ToProcess.component.json
+  // and not referenced by any equipment in the open doc must still show up
+  // so it can be placed — see discoverSvelteComponentNames.
+  assert.deepEqual(paletteCustomComponents([], [], ["ToProcess"], new Set(["Tank", "Pump"])), ["ToProcess"]);
+});
+
+test("paletteCustomComponents: bare-svelte discovery unions with sidecar + doc names, deduped", () => {
+  assert.deepEqual(
+    paletteCustomComponents(["HeatExchanger"], ["Widget"], ["HeatExchanger", "ToProcess"], new Set(["Tank"])),
+    ["HeatExchanger", "ToProcess", "Widget"]
+  );
+});
+
+test("paletteCustomComponents excludes a built-in named as a bare .svelte discovery too", () => {
+  assert.deepEqual(paletteCustomComponents([], [], ["Tank", "ToProcess"], new Set(["Tank", "Pump"])), ["ToProcess"]);
 });
 
 test("applyComponentPortsEdit sets, deletes, and preserves unrelated (future-metadata) keys", () => {
