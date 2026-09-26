@@ -123,6 +123,33 @@ export function splitArgs(args: string): string[] {
 	return out;
 }
 
+const ST_WORDS = new Set(['and', 'or', 'xor', 'not', 'mod', 'true', 'false']);
+
+/** The variables a function contact's or block's argument text reads or
+ * writes, as written (base names: `t1.Q` → `t1`, `Levels[i]` → `Levels`,
+ * `i`): the right side of every `pin := expr` and `pin => target`, and each
+ * positional argument. Pin names, function names (`LIMIT(`), typed literals
+ * (`T#5S`, `16#FF`), numbers, strings and ST operators are not variables. */
+export function argIdents(args: string): string[] {
+	const out: string[] = [];
+	const seen = new Set<string>();
+	for (const part of splitArgs(args ?? '')) {
+		const m = /^\s*[A-Za-z_][A-Za-z0-9_]*\s*(:=|=>)([\s\S]*)$/.exec(part);
+		const expr = m ? m[2] : part;
+		const tok = /'[^']*'|"[^"]*"|[A-Za-z_][A-Za-z0-9_]*#[A-Za-z0-9_.:+-]*|\d[\w.#]*|\.\s*[A-Za-z_][A-Za-z0-9_]*|[A-Za-z_][A-Za-z0-9_]*(?=\s*(\()?)/g;
+		for (let t: RegExpExecArray | null; (t = tok.exec(expr)); ) {
+			const w = t[0];
+			if (!/^[A-Za-z_]/.test(w) || w.includes('#') || t[1] === '(') continue;
+			if (ST_WORDS.has(w.toLowerCase()) || w === '_') continue;
+			if (!seen.has(w.toLowerCase())) {
+				seen.add(w.toLowerCase());
+				out.push(w);
+			}
+		}
+	}
+	return out;
+}
+
 /** Resolve one operand: a numeric literal, TRUE/FALSE, or a live label. */
 function operand(text: string, resolve: Resolve): unknown {
 	const t = text.trim();

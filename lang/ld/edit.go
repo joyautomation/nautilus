@@ -182,11 +182,10 @@ func ApplyEdit(src string, op EditOp, libs ...string) ([]TextEdit, error) {
 	case "insert":
 		if op.Element != nil {
 			uniquifyInsts(m, op.Element)
-		} else if op.Kind == "fb" && instTaken(m, r.POU, op.Inst) {
-			// Two `t1:TON` declarations are a compile error ("duplicate
-			// declaration"), not two rungs sharing a timer — refuse rather
-			// than write text that won't build.
-			return nil, fmt.Errorf("ld edit: %q is already declared — pick another instance name", op.Inst)
+		} else if op.Kind == "fb" {
+			if err := insertInstConflict(m, r.POU, op.Inst, op.FbType); err != nil {
+				return nil, err
+			}
 		}
 		if err := opInsert(m, r, op); err != nil {
 			return nil, err
@@ -569,6 +568,35 @@ func instTaken(m *Model, pou, name string) bool {
 	return taken[strings.ToLower(name)]
 }
 
+// insertInstConflict decides whether a palette insert may use inst. Another
+// rung's `t1:TON` is a second declaration — a compile error, not two rungs
+// sharing a timer — so it is refused. A header declaration (`m101 :
+// MotorStarter;` in VAR) is different: the in-rung call reuses it (the
+// transpiler skips redeclaring a declared instance; permissives.ld does
+// exactly this), so the insert goes ahead when the types agree and is
+// refused, naming both, when they don't.
+func insertInstConflict(m *Model, pou, inst, typ string) error {
+	taken := map[string]bool{}
+	for i := range m.Rungs {
+		if m.Rungs[i].POU == pou {
+			collectInsts(m.Rungs[i].Elements, taken)
+			collectInsts(m.Rungs[i].Coils, taken)
+		}
+	}
+	if taken[strings.ToLower(inst)] {
+		return fmt.Errorf("ld edit: %q is already declared — pick another instance name", inst)
+	}
+	for _, v := range m.Vars {
+		if v.POU == pou && strings.EqualFold(v.Name, inst) {
+			if strings.EqualFold(strings.TrimSpace(v.Type), typ) {
+				return nil
+			}
+			return fmt.Errorf("ld edit: %q is declared as %s, not %s — pick another instance name", inst, v.Type, typ)
+		}
+	}
+	return nil
+}
+
 // uniquifyInsts renames pasted fb instances that already exist anywhere in
 // the program — a paste duplicates state, it never aliases the original.
 func uniquifyInsts(m *Model, el *Element) {
@@ -636,13 +664,16 @@ func opDelete(r *Rung, op EditOp) error {
 		if *op.Coil < 0 || *op.Coil >= len(r.Coils) {
 			return fmt.Errorf("ld edit: coil %d out of range", *op.Coil)
 		}
-		if len(r.Coils) == 1 {
-			// The grammar needs one coil per rung, but a delete gesture must
-			// never dead-end (the never-block philosophy): the last coil
-			// becomes the `_` placeholder, and the diagnostic on `_` guides.
+		if len(r.Coils) == 1 && !elementsHaveFB(r.Elements) {
+			// A rung of bare contacts needs a coil to drive, but a delete
+			// gesture must never dead-end (the never-block philosophy): the
+			// last coil becomes the `_` placeholder, and the diagnostic on
+			// `_` guides. A rung with a function block anywhere skips this —
+			// the block is what the rung drives (docs/functions.md), so the
+			// coil simply goes.
 			c := &r.Coils[0]
 			if c.Ref == "_" && c.Mode == "" {
-				return fmt.Errorf("ld edit: a rung needs a coil — delete the rung itself to remove it")
+				return fmt.Errorf("ld edit: a rung of contacts needs a coil or a function block to drive — add one, or delete the rung itself")
 			}
 			c.Ref, c.Mode = "_", ""
 			return nil
@@ -663,6 +694,23 @@ func opDelete(r *Rung, op EditOp) error {
 	}
 	*series = append((*series)[:i], (*series)[i+1:]...)
 	return nil
+}
+
+// elementsHaveFB reports whether a rung's condition holds a function block
+// call anywhere, branch legs included — the parser's rule for a rung that
+// may end without a coil (hasFB in ld.go, on the edit model).
+func elementsHaveFB(es []Element) bool {
+	for i := range es {
+		if es[i].Kind == "fb" {
+			return true
+		}
+		for _, leg := range es[i].Legs {
+			if elementsHaveFB(leg) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func opAddRung(src string, m *Model, op EditOp) ([]TextEdit, error) {

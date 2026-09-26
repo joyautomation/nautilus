@@ -10,7 +10,7 @@
 	// pointer-based with a movement threshold (HTML5 dnd doesn't exist for
 	// SVG), resolved at pointerup via elementFromPoint with a
 	// nearest-hotspot snap fallback.
-	import { annotate, type Ann, type LdElement, type LdFbType, type LdModel, type RungStatus } from './ladder';
+	import { annotate, argIdents, type Ann, type LdElement, type LdFbType, type LdModel, type RungStatus } from './ladder';
 	import LdBlockPicker from './LdBlockPicker.svelte';
 	import { FB_TYPES } from './suggest';
 	import { layoutRung, rungMinWidth, fitArgs, L, OPERAND_LABEL_MAX, type LSpot, type LNode } from './ladderLayout';
@@ -239,7 +239,8 @@
 	}
 
 	// ── declare what a retag introduced ─────────────────────────────────────
-	// A retag may name something the PROGRAM doesn't declare: the rung goes
+	// A retag (or a block's or function's arguments) may name something the
+	// PROGRAM doesn't declare: the rung goes
 	// red and `naut check` says "undeclared identifier". Every such name is
 	// offered here — into VAR_EXTERNAL, typed from nautilus.yaml, when it is
 	// a manifest tag; into VAR (a retained local) either way.
@@ -253,6 +254,11 @@
 				if ((e.kind === 'contact' || e.kind === 'coil' || (e.kind as string) === 'edge') && e.ref) {
 					const base = /^[A-Za-z_][A-Za-z0-9_]*/.exec(e.ref)?.[0];
 					if (base && base !== '_' && !refs.has(base.toLowerCase())) refs.set(base.toLowerCase(), base);
+				}
+				// A function contact's or block's arguments, `=>` targets
+				// included (`m101:MotorStarter(Reset := ResetFaults, …)`).
+				if ((e.kind === 'fn' || e.kind === 'fb') && e.args) {
+					for (const name of argIdents(e.args)) if (!refs.has(name.toLowerCase())) refs.set(name.toLowerCase(), name);
 				}
 				for (const leg of e.legs ?? []) walk(leg);
 			}

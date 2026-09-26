@@ -248,9 +248,10 @@ type modelBuilder struct {
 	fbs                    map[string]*Node  // fb node per instance name
 	wireOut                map[string]outRef // memoized wire resolutions (fan-out shares them)
 	userFBs                map[string]*ir.FBDef
-	scope                  *fbcatalog.Scope // user FB signatures: this file + libraries
+	scope                  *fbcatalog.Scope    // user FB signatures: this file + libraries
 	exprOf                 map[string]callExpr // block node id -> the call that produced it
 	litSeq                 int
+	openSeq                int          // `_` open pins seen so far (openChip)
 	comments               []commentRun // full-line // comment runs in the body
 
 }
@@ -484,6 +485,9 @@ func (b *modelBuilder) source(e expr, baseID string, visited []string) (outRef, 
 			// feedback wire, drawn from the coil back into the logic.
 			return outRef{node: c.ID, feedback: true}, nil
 		}
+		if x.name == "_" {
+			return outRef{node: b.openChip(x.line).ID}, nil
+		}
 		return outRef{node: b.inputChip(x.name, x.line).ID}, nil
 	case accExpr:
 		// An array-element/member read: a chip labeled with the accessor.
@@ -531,6 +535,22 @@ func (b *modelBuilder) inputChip(name string, line int) *Node {
 	n := b.add(&Node{ID: "v:" + name, Kind: "input", Label: name, Line: line})
 	b.inputs[name] = n
 	return n
+}
+
+// openChip returns a fresh chip for one `_` open pin. `_` is no variable
+// — each placeholder is its own hole — so it is never shared the way a
+// tag's chip is: a block inserted with thirteen open pins draws thirteen `_`
+// chips, one beside each pin, and retargeting one fills that pin alone.
+// Ids run v:_, v:_#2, v:_#3, … in source order (the fan-out copies'
+// v:Name#k shape; a per-use chip lives in one network, so splitByNetwork
+// never copies it and the two schemes cannot collide).
+func (b *modelBuilder) openChip(line int) *Node {
+	b.openSeq++
+	id := "v:_"
+	if b.openSeq > 1 {
+		id = fmt.Sprintf("v:_#%d", b.openSeq)
+	}
+	return b.add(&Node{ID: id, Kind: "input", Label: "_", Line: line})
 }
 
 // layer assigns longest-path layers: inputs at 0, every other node one past
