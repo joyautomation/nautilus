@@ -21,7 +21,7 @@ naut run .                       # dashboard + tag API on http://localhost:8080
 naut build .                     # one deployable controller binary
 ```
 
-**Needs naut >= 0.13.0.** `naut eip` shipped in v0.12.0 already; it's
+**Needs naut >= 0.13.1.** `naut eip` shipped in v0.12.0 already; it's
 `naut logix emulate` and `lib/` composition that are on `main` but not in
 that release — build the CLI from source until 0.13.0 ships.
 

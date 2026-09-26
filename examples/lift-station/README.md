@@ -19,7 +19,7 @@ naut run .                       # dashboard + tag API on http://localhost:8080
 naut build .                     # one deployable controller binary
 ```
 
-**Needs naut >= 0.13.0.** `lib/` composition, a `FUNCTION_BLOCK`'s
+**Needs naut >= 0.13.1.** `lib/` composition, a `FUNCTION_BLOCK`'s
 declared initial values, and `naut compose` are on `main` but not in the
 released v0.12.0 — build the CLI from source until 0.13.0 ships.
 
