@@ -80,8 +80,9 @@ is four projects, not one — `naut run sites/well-1`, `sites/well-2`,
 
 **Needs naut ≥ 0.13.0** (`lib/` composition, a `FUNCTION_BLOCK`'s declared
 initial values, `naut compose`), **except `remote-fleet`, which needs only
-≥ 0.12.0** — build the CLI from source until 0.13.0 ships if you want the
-other three running.
+≥ 0.12.0**. Install or update with
+`go install github.com/joyautomation/nautilus/cmd/naut@latest`, or take a
+binary from the [releases page](https://github.com/joyautomation/nautilus/releases).
 
 ## In VS Code
 
