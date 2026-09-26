@@ -3,6 +3,14 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.13.0] - 2026-09-25
+
+The pre-release line after the first stable release. Same contents as
+[0.10.0]; pre-release builds from `main` carry new work under
+`[Unreleased]` from here on. Requires naut 0.13.0 (0.13.1 recommended:
+`naut run`/`naut build` fall back to the built-in dashboard when the
+project's HMI is not built yet).
+
 ## [0.10.0] - 2026-09-25
 
 The first stable release. There is no earlier stable version to compare
