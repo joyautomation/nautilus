@@ -2,7 +2,7 @@
 # time. FM1_FlowLps is role: input (tags/modbus.yaml) and pressure.fbd
 # reads it every scan (FBD has no short-circuiting) so every test seeds it
 # in `given`, same "reads fault until first birth" rule
-# examples/sparkplug-host's fleet_test.yaml documents for its own inputs.
+# ../../scada/scada_test.yaml documents for its own consumed inputs.
 tolerance: 0.5
 
 tests:

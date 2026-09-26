@@ -244,7 +244,8 @@ machine.
 
 `alarms:` is checked at the end of a step, so it does not combine with
 `until:` — a step that waits and then asserts alarms is two steps, and
-reads better as two. `examples/alarms` is the whole thing working.
+reads better as two. `examples/lift-station`'s and `examples/batch-skid`'s
+`*_test.yaml` alarm ack/shelve checks are the whole thing working.
 
 ## Freezing tasks
 

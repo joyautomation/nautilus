@@ -67,7 +67,7 @@ naut modbus import --map devices.yaml   # regenerate the committed files
 
 Generates `FM1_FlowLps` (`role: input`), which `pressure.fbd` reads every
 scan for the lag pump's call — FBD has no short-circuiting, so (like
-`examples/sparkplug-host`'s host-side inputs) it must be seeded before the
+`scada`'s own consumed Sparkplug inputs) it must be seeded before the
 first scan; `booster-1_test.yaml` does this with `given:` in every test,
 no live device required.
 
@@ -88,8 +88,9 @@ up alongside the broker and the three sites.
 
 `sparkplug: {device: plc1}` attaches the Modbus driver's own tags
 (`FM1_FlowLps`) to the edge node as a Sparkplug DEVICE — its DBIRTH/DDEATH
-track the driver's connection health, the same mechanism
-`examples/alarms`'s `client60` retransmit uses for its EIP-polled tags.
+track the driver's connection health, the same mechanism a Sparkplug
+retransmit of EIP-polled tags would use (see `examples/batch-skid`'s
+`eip_manifest.yaml` for an EtherNet/IP-polled project).
 `Pump1`/`Pump2` (the shared `Pump` Template) and `TankLevel` publish at
 node level, same as the two well sites' `Pump1`/`WellLevel` — the shape
 `scada/sites.yaml` and a live `--broker` import agree on byte-for-byte.

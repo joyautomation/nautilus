@@ -1,6 +1,21 @@
 # Examples, rebuilt: real projects that show the whole product
 
-Status: **brief**, not started (2026-09-25). This is written for the session that
+Status: **done (2026-09-25).** Four projects shipped: `lift-station` (#40,
+the flagship — SFC/FBD/LD/ST, Modbus, alarms, retain, online edits, a
+custom-component HMI), `batch-skid` (#53 — SFC/FBD/LD, an EtherNet/IP line
+handshake, a read-only `.L5X` diffed between revisions), `remote-fleet`
+(#52 — three Sparkplug B edge sites and a Sparkplug host SCADA), and
+`go-sdk` (the trimmed former `heated-tank`, the one remaining Go-tier
+example). The nine superseded feature demos and the client-specific
+`client60` gitignore carve-out are gone, the root README/website docs/CI
+point at the new projects, and `naut check`/`naut test` cover every
+project's every manifest in CI. See `examples/README.md` for the
+start-here index and `docs/design/examples-dogfood.md` for the friction
+log kept while building all four.
+
+---
+
+Status (original brief): **brief**, not started (2026-09-25). This is written for the session that
 picks the work up.
 
 ## Why

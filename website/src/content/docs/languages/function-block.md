@@ -29,52 +29,56 @@ usually uses more than one.
 
 ## A netlist, line by line
 
-This is `examples/heated-tank-nogo/program.fbd`, complete:
+This is `examples/lift-station/level.fbd`, complete:
 
 ```iecfbd
-PROGRAM Main
-(* Heated surge tank control, FBD flavor: the pump hysteresis is a seal-in
-   latch, the temperature PI feeds its integral back through a retained
-   variable, and a TON delays the low-temperature alarm.
-   Open the diagram: right-click -> "Open With -> FBD Diagram". *)
+PROGRAM LevelControl
+(* LIC-101: wet-well level to pump speed, plus the high level alarm
+   seal-in. Open the diagram: right-click -> "Open With -> FBD Diagram". *)
 VAR_EXTERNAL
-    LevelPct       : REAL;
-    TempC          : REAL;
-    ScanDtS        : REAL;
-    TempSP         : REAL;
-    TempSPEco      : REAL;
-    EcoMode        : BOOL;
+    LIT101_Level   : REAL;
+    LevelSP        : REAL;
     Kp             : REAL;
     Ki             : REAL;
-    PumpStartLevel : REAL;
-    PumpStopLevel  : REAL;
-    PumpRun        : BOOL;
-    Heater         : REAL;
-    TempLowAlm     : BOOL;
-END_VAR
-VAR
-    integral : REAL;
+    Kd             : REAL;
+    MinSpeedHz     : REAL;
+    MaxSpeedHz     : REAL;
+    LevelDtS       : REAL;
+    LeadReq        : BOOL;
+    SpeedRef       : REAL;
+    HandSpeedHz    : REAL;
+    HighLevelAlmSP : REAL;
+    HighLevelAlm   : BOOL;
+
+    P101_RunCmd   : BOOL;
+    P101_InHand   : BOOL;
+    P101_SpeedCmd : REAL;
+    P102_RunCmd   : BOOL;
+    P102_InHand   : BOOL;
+    P102_SpeedCmd : REAL;
 END_VAR
 FBD
-  // P-101 pump: level hysteresis as a seal-in latch — start when low,
-  // seal through PumpRun, drop out when high.
-  low  = LE(LevelPct, PumpStartLevel)
-  high = GE(LevelPct, PumpStopLevel)
-  PumpRun := AND(OR(low, PumpRun), NOT high)
+  // LIC-101: level -> speed. AUTO free-wheels (CV tracks CV_MAN, bumpless
+  // on return) whenever no pump is called — LeadReq false parks the loop
+  // instead of integrating error for a pump that isn't running. Direct
+  // acting: level above setpoint calls for MORE speed.
+  lic : PID(AUTO := LeadReq, PV := LIT101_Level, SP := LevelSP,
+            KP := Kp, KI := Ki, KD := Kd,
+            CV_MIN := MinSpeedHz, CV_MAX := MaxSpeedHz,
+            DIRECT := TRUE, DT := LevelDtS)
+  SpeedRef := lic.CV
 
-  // Eco mode selects the working setpoint (SEL: FALSE takes IN0).
-  spNow = SEL(EcoMode, TempSP, TempSPEco)
+  // Per-pump speed command: stopped -> 0 Hz; running in Auto -> the loop's
+  // output; running in Hand -> the operator's hand-speed setpoint.
+  P101_SpeedCmd := SEL(P101_RunCmd, 0.0, SEL(P101_InHand, SpeedRef, HandSpeedHz))
+  P102_SpeedCmd := SEL(P102_RunCmd, 0.0, SEL(P102_InHand, SpeedRef, HandSpeedHz))
 
-  // TIC-101: temperature PI with anti-windup clamp; integral is retained
-  // state fed back from its own coil.
-  e = SUB(spNow, TempC)
-  integral := LIMIT(0.0, ADD(integral, MUL(Ki, e, ScanDtS)), 30.0)
-  Heater := LIMIT(0.0, ADD(MUL(Kp, e), integral), 100.0)
-
-  // TAL-101: low-temperature alarm with a 10 s on-delay.
-  cold = LT(TempC, 62.0)
-  a1 : TON(IN := cold, PT := T#10S)
-  TempLowAlm := a1.Q
+  // LAH-101: seal-in with hysteresis — latches at HighLevelAlmSP, clears
+  // 5 % below it, so a level sitting right on the setpoint doesn't chatter
+  // the alarm on and off every scan.
+  above = GE(LIT101_Level, HighLevelAlmSP)
+  below = LE(LIT101_Level, SUB(HighLevelAlmSP, 5.0))
+  HighLevelAlm := AND(OR(above, HighLevelAlm), NOT below)
 END_FBD
 END_PROGRAM
 ```
@@ -85,13 +89,13 @@ accepts these forms.
 
 | Element | Written as | What it is |
 | --- | --- | --- |
-| Wire | `low = LE(LevelPct, PumpStartLevel)` | a named block output, defined once |
-| Coil | `Heater := LIMIT(...)` | writes a variable; the target may be an array element or struct member, as in `TempHist[1] := TempC` |
-| FB instance | `a1 : TON(IN := cold, PT := T#10S)` | declares the instance and calls it in one statement; `a1 : TON` alone declares it, `a1(IN := ...)` calls it later |
-| Pin read | `a1.Q` | an output pin of an FB instance |
+| Wire | `above = GE(LIT101_Level, HighLevelAlmSP)` | a named block output, defined once |
+| Coil | `SpeedRef := lic.CV` | writes a variable; the target may be an array element or struct member, as in `TempHist[1] := TempC` |
+| FB instance | `lic : PID(AUTO := LeadReq, PV := LIT101_Level, ...)` | declares the instance and calls it in one statement; `lic : PID` alone declares it, `lic(PV := ...)` calls it later |
+| Pin read | `lic.CV` | an output pin of an FB instance |
 | Output binding | `ET => Elapsed` | IEC's formal-call output form, for capturing a non-BOOL pin such as `ET` or `CV` into a variable |
 | Negation | `NOT high` | inline pin negation, drawn as the IEC circle on the pin |
-| Constant | `62.0`, `T#10S`, `TRUE`, `'ok'` | a literal input chip |
+| Constant | `5.0`, `T#10S`, `TRUE`, `'ok'` | a literal input chip |
 | Accessor | `TempHist[2]`, `M.Speed` | array element or struct member, as an input or a coil target |
 
 Full-line `//` comments inside the body render as notes on the diagram.
@@ -108,17 +112,18 @@ it is read, so fan-out duplicates an expression rather than creating shared
 state, and wires must be acyclic: a wire that reads itself, directly or
 through another wire, is a compile error ("combinational loop through wire").
 
-Variables carry state. That is where feedback lives. `PumpRun := AND(OR(low,
-PumpRun), NOT high)` reads the same variable the coil writes, which is a
-seal-in latch and evaluates exactly as a PLC evaluates one. The same
-mechanism retains the PI `integral` across scans, and gives `reports.fbd` its
-four-element shift register: a variable read early in the body carries the
-value its coil wrote on the previous scan.
+Variables carry state. That is where feedback lives. `HighLevelAlm :=
+AND(OR(above, HighLevelAlm), NOT below)` reads the same variable the coil
+writes, which is a seal-in latch and evaluates exactly as a PLC evaluates
+one. The same mechanism is what a shift register or any other "read early
+in the body, write later" pattern rests on: a variable read early in the
+body carries the value its coil wrote on the previous scan.
 
 Statements evaluate in source order, with one adjustment: a function-block
-call is emitted ahead of any statement that reads its output pins, so `a1.Q`
-reads this scan's result no matter where `a1` sits in the file. Ties keep
-source order. There is no other reordering and no way to override it.
+call is emitted ahead of any statement that reads its output pins, so
+`lic.CV` reads this scan's result no matter where `lic` sits in the file.
+Ties keep source order. There is no other reordering and no way to override
+it.
 
 ## Types, functions, and blocks
 
@@ -138,11 +143,14 @@ A `FUNCTION_BLOCK` you write yourself instantiates the same way a `TON` does:
   TempRate := r1.OUT
 ```
 
-`RateOfChange` is authored in an ST library file (`blocks.st`) and composed
-ahead of the program. A `FUNCTION_BLOCK` can carry an FBD body as well: a
-`.fbd` file with no `PROGRAM` is a project library, and its blocks
-instantiate from any language. Write a block once, call it from whichever
-language fits the logic. See [function blocks, libraries, and
+`RateOfChange` is authored in an ST library file and composed ahead of the
+program, the same way `examples/lift-station/lib/pump.st`'s `RuntimeMeter`
+is. A `FUNCTION_BLOCK` can carry an FBD body as well, or even a ladder one —
+`examples/lift-station/lib/motor.ld`'s `MotorStarter` is authored as rungs
+and instantiated once per pump — because a `.fbd`/`.ld`/`.st` file with no
+`PROGRAM` is a project library, and its blocks instantiate from any
+language. Write a block once, call it from whichever language fits the
+logic. See [function blocks, libraries, and
 tasks](/guides/blocks-and-tasks/).
 
 ## In the editor
@@ -190,15 +198,16 @@ naut fbd edit           # apply one structural edit op; stdin/stdout JSON
 A controller running an FBD program serves and accepts the `.fbd` text
 itself, so download, text diff, `naut pull` and the sync status bar work
 as they do for `.st`. A warm swap migrates retained state by name and type,
-so a PI integral or a running `TON` keeps its value through the edit; see
-[online edits](/guides/online-edits/). An edit routes to a task by `PROGRAM` name,
-so `reports.fbd` downloads without disturbing `Main`.
+so a PID's integral or a running `TON` keeps its value through the edit; see
+[online edits](/guides/online-edits/). An edit routes to a task by `PROGRAM`
+name, so a task's own `.fbd` downloads without disturbing another task's
+program running alongside it.
 
 Because the source is text, a wiring change reviews as a diff:
 
 ```diff
--  cold = LT(TempC, 62.0)
-+  cold = LT(TempC, 55.0)
+-  above = GE(LIT101_Level, HighLevelAlmSP)
++  above = GE(LIT101_Level, SUB(HighLevelAlmSP, 2.0))
 ```
 
 ## Not supported

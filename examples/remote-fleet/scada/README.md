@@ -125,9 +125,9 @@ live walkthrough does it from `/api/tags` and watches the site.
 
 ### The `__Online` guard rule
 
-Same rule `examples/sparkplug-host` calls out loudly, extended to the
-plant's own local device: **guard every read of a site's (or a device's)
-data on its own online companion.** `scada_test.yaml`'s baseline `given:`
+Same rule the [Sparkplug host guide](https://nautilus.joyautomation.com/guides/sparkplug-host/)
+calls out loudly, extended to the plant's own local device: **guard every
+read of a site's (or a device's) data on its own online companion.** `scada_test.yaml`'s baseline `given:`
 blocks always seed every `__Online` and data tag `fleet.st`/`overview.fbd`
 touch before the first scan — dropping any one of them reproduces exactly
 the fault the guard rule exists to prevent.
@@ -168,8 +168,8 @@ fleet's operator/NCMD write path, meant for `/api/tags` or an HMI, not a
 program; see "Reading the fleet" above for why `overview.fbd`
 deliberately leaves them alone) and `Well1__Rebirth`/`Well2__Rebirth`/
 `Booster1__Rebirth` (the operator's forced-resync buttons, same
-rationale). Zero *errors* is the bar that must hold — same shape
-`examples/sparkplug-host`'s README documents for its own five warnings.
+rationale). Zero *errors* is the bar that must hold; warnings on
+generated, intentionally-unbound tags like these are expected.
 
 ## Redundancy, retain, and the historian
 

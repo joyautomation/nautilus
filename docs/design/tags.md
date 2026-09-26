@@ -46,7 +46,7 @@ committed files, each carrying a *"Do not edit — re-run the import"* header:
 
 | generated | contains |
 |---|---|
-| `eip_manifest.yaml` | the driver's tag bindings + UDT `TypeDef`s (230 entries in `examples/client60`) |
+| `eip_manifest.yaml` | the driver's tag bindings + UDT `TypeDef`s (230 entries in `client60`, a private integration project never committed here; 7 in the public `examples/batch-skid/eip_manifest.yaml`) |
 | `eip_types.st` | the same UDTs as ST `TYPE ... STRUCT` declarations, so programs can declare them |
 
 So "generate a file, commit it, review the diff" is not a proposal. It is how
@@ -59,9 +59,11 @@ carries its `StructDef` (`eip/driver_test.go:226`).
 
 **1.5 The gap is exactly one file.** `naut eip import` generates the driver
 manifest and the ST types, and then stops. The `tags:` block of `nautilus.yaml`
-is still hand-written. `examples/client60/nautilus.yaml` transcribes 14 of the
-230 by hand — and two of them are UDT tags with **no `init:`**, whose structure
-is documented in an English prose `desc:` string:
+is still hand-written. `client60/nautilus.yaml` (private; not committed here)
+transcribes 14 of the 230 by hand — and two of them are UDT tags with **no
+`init:`**, whose structure is documented in an English prose `desc:` string —
+the same shape `examples/batch-skid/nautilus.yaml` demonstrates publicly, at
+a scale (7 tags) small enough to read on one screen:
 
 ```yaml
 - { name: RTU60_13XFR9_GLV_001, role: input, desc: "Gate valve equipment descriptor
@@ -521,7 +523,7 @@ both, since setting a field reads the aggregate.
 
 The other direction needed narrowing to stay useful: an unbound **input** is
 not reported at all. Driver-fed telemetry that no program binds is the bulk of
-any imported tag list — `examples/client60` has eight — and warning on all of
+any imported tag list — `client60` (private) has eight — and warning on all of
 them would have taught people to ignore this warning before it ever caught
 anything. Unbound setpoints, states, and outputs still warn, because those
 exist to be read or written by logic. A task's `dt-tag` counts as declared:
@@ -820,9 +822,9 @@ regression 3.1's guard tests exist to catch.
 
 ## 5. Acceptance bar
 
-1. `examples/client60` declares its imported tags by generation, not
-   transcription, and its two UDT tags carry a real `type:` instead of a prose
-   `desc:`.
+1. `client60` (private) and `examples/batch-skid` (public) declare their
+   imported tags by generation, not transcription, and their UDT tags carry
+   a real `type:` instead of a prose `desc:`.
 2. A project with 40 instances of one `Motor` UDT is expressible in a manifest a
    person can read on one screen.
 3. `naut check` fails a project whose program reads a tag the manifest never
@@ -848,7 +850,7 @@ regression 3.1's guard tests exist to catch.
 | Tag defs → flat options | `runtime/tagdef.go` (`TagDef`, `expandTags`) |
 | Struct/array values | `lang/ir/types.go`, `lang/ir/value.go` (`Value.Fld`, `Value.Struct`) |
 | Struct assembly from a bus | `eip/driver.go:848`, `eip/leaves.go` (`expandLeaves`) |
-| Existing generator | `cmd/naut/eip.go` (`import`), `examples/client60/*` |
+| Existing generator | `cmd/naut/eip.go` (`import`), `examples/batch-skid/eip_manifest.yaml` |
 | What `check` does today | `cmd/naut/check.go` (`runCheck`) |
 | Schema + guard precedent | `tools/vscode-iec/schemas/nautilus-test.schema.json`, `acceptance/schema_test.go` |
 | Tags the programs bind | `runtime.Runtime.Globals`, `lang/ir/program.go` (`Program.Globals`) |

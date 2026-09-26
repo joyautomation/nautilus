@@ -33,7 +33,7 @@ tags:
   # all three sites (types.st). SpeedSP rides along for shape parity with
   # the well sites but isn't wired into this site's own control (a
   # writable field with nothing local binding it is expected — see
-  # examples/sparkplug-host's README, "naut check warnings, explained").
+  # ../../scada/README.md, "naut check warnings, explained").
   - { name: Pump1, role: state, type: Pump, init: { Run: false, Fault: false, SpeedHz: 0.0, SpeedSP: 0.0 }, desc: "Booster 1 lead pump" }
   - { name: Pump2, role: state, type: Pump, init: { Run: false, Fault: false, SpeedHz: 0.0, SpeedSP: 0.0 }, desc: "Booster 1 lag pump" }
 

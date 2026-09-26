@@ -144,9 +144,9 @@ curl -X POST localhost:8080/api/tags -d '{"name":"Well1_Pump1_SpeedSP","value":5
 ```
 
 and watch `well-1`'s own `Pump1.SpeedSP` (`curl localhost:8091/api/state`)
-change — the same partial-template NCMD mechanism
-`examples/sparkplug-host` documents, writing one struct member without
-touching `Run`/`Fault`/`SpeedHz`.
+change — the same partial-template NCMD mechanism the
+[Sparkplug host guide](https://nautilus.joyautomation.com/guides/sparkplug-host/)
+documents, writing one struct member without touching `Run`/`Fault`/`SpeedHz`.
 
 **5. Leader election and retained state, documented.** `scada/nautilus.yaml`
 carries `retain: {}` and `redundancy: {lease: water-scada}`;

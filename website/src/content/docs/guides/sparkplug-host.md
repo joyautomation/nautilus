@@ -75,10 +75,11 @@ sites:
 `naut sparkplug browse --broker ... --group ...` prints what's on the
 wire without generating anything; `naut sparkplug tags
 sparkplug_manifest.yaml` re-derives just the tag file from an
-already-committed manifest, no broker needed. `examples/sparkplug-host`
-is a complete three-site fleet built this way — its README walks both
-generation paths and how to point a real edge node (`heated-tank-nogo` +
-a local broker) at it.
+already-committed manifest, no broker needed. `examples/remote-fleet/scada`
+is a complete host project built this way, subscribing to the fleet's
+three edge sites (`examples/remote-fleet/sites/*`) — its README ("Proof:
+offline and live agree") walks both generation paths side by side, and
+`docs/design/examples-dogfood.md` has the walkthrough as actually run.
 
 ## The `__Online`/`__Rebirth` companions
 
