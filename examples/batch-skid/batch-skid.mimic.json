@@ -1,0 +1,107 @@
+{
+	"name": "batch-skid — mix tank MT-201",
+	"canvas": { "width": 860, "height": 420 },
+	"equipment": [
+		{
+			"id": "XV201A",
+			"component": "Valve",
+			"x": 40,
+			"y": 50,
+			"width": 70,
+			"label": "XV-201A",
+			"bind": { "openPct": "XV201A_Open" }
+		},
+		{
+			"id": "XV201B",
+			"component": "Valve",
+			"x": 40,
+			"y": 220,
+			"width": 70,
+			"label": "XV-201B",
+			"bind": { "openPct": "XV201B_Open" }
+		},
+		{
+			"id": "MT201",
+			"component": "Tank",
+			"x": 190,
+			"y": 40,
+			"width": 220,
+			"label": "MT-201",
+			"bind": { "levelPct": "LT201_Level", "tempC": "TT201_Temp" }
+		},
+		{
+			"id": "AG201",
+			"component": "Pump",
+			"x": 260,
+			"y": 320,
+			"width": 70,
+			"label": "AG-201",
+			"bind": { "running": "AG201_Running" }
+		},
+		{
+			"id": "P202",
+			"component": "Pump",
+			"x": 490,
+			"y": 150,
+			"width": 70,
+			"label": "P-202",
+			"bind": { "running": "P202_Running" }
+		},
+		{
+			"id": "XV203",
+			"component": "Valve",
+			"x": 610,
+			"y": 150,
+			"width": 70,
+			"label": "XV-203",
+			"bind": { "openPct": "XV203_Open" }
+		}
+	],
+	"pipes": [
+		{
+			"id": "a-tank",
+			"points": [],
+			"routing": "orthogonal",
+			"from": { "equip": "XV201A", "port": "out" },
+			"to": { "equip": "MT201", "port": "left" },
+			"bind": { "flowing": "XV201A_Open" }
+		},
+		{
+			"id": "b-tank",
+			"points": [],
+			"routing": "orthogonal",
+			"from": { "equip": "XV201B", "port": "out" },
+			"to": { "equip": "MT201", "port": "right" },
+			"bind": { "flowing": "XV201B_Open" }
+		},
+		{
+			"id": "tank-p202",
+			"points": [],
+			"routing": "orthogonal",
+			"from": { "equip": "MT201", "port": "bottom" },
+			"to": { "equip": "P202", "port": "in" },
+			"bind": { "flowing": "P202_Running" }
+		},
+		{
+			"id": "p202-xv203",
+			"points": [],
+			"routing": "orthogonal",
+			"from": { "equip": "P202", "port": "out" },
+			"to": { "equip": "XV203", "port": "in" },
+			"bind": { "flowing": "P202_Running" }
+		},
+		{
+			"id": "xv203-line",
+			"points": [[760, 175]],
+			"routing": "orthogonal",
+			"from": { "equip": "XV203", "port": "out" },
+			"bind": { "flowing": "XV203_Open" }
+		}
+	],
+	"labels": [
+		{ "text": "TO LINE", "x": 770, "y": 165 },
+		{ "text": "Recipe", "x": 40, "y": 10, "bind": "Active.Name" },
+		{ "text": "Phase", "x": 250, "y": 10, "bind": "Batch.Phase" },
+		{ "text": "Batch", "x": 450, "y": 10, "bind": "Batch.Count", "decimals": 0 }
+	]
+}

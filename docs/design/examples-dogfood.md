@@ -540,14 +540,61 @@ The design's FBD section wanted the jacket PID's `AUTO` pin driven by
 locals (`docs/languages/sfc.md`: "Each step owns a retained BOOL slot"),
 never tags, so there is no `VAR_EXTERNAL` spelling for another task's
 step activity — consistent with lift-station's own finding that
-`task.local` doesn't resolve even inside the **same** program's test
-expressions. Worked around the same way lift-station's `RunLamp` already
-demonstrates the fix for: `HeatingActive` is a state tag, `N`-qualified
-identically from both `STEP Heat` and `STEP Hold` in `phases.sfc` — two
-associations targeting the same BOOL OR-combine, so it reads exactly
-`Heat.X OR Hold.X` a cross-task reader needs, with no new mechanism.
-Documented here mainly to save the next session from re-discovering
-`task.local`'s scope the hard way.
+`task.local` doesn't reach the ST-expression compiler (an acceptance
+test's matcher form, `task.local: value`, does resolve it fine; it's
+only unavailable as a value inside a program's own ST/FBD/LD
+expressions). **Status: `docs/testing.md`'s `task.local` section was
+reworded by PR #43** to say exactly that, rather than leaving it
+ambiguous. Worked around the same way `examples/tank-batch-sfc`'s
+`RunLamp` already demonstrates the fix for: `HeatingActive` is a state
+tag, `N`-qualified identically from both `STEP Heat` and `STEP Hold` in
+`phases.sfc` — two associations targeting the same BOOL OR-combine, so
+it reads exactly `Heat.X OR Hold.X` a cross-task reader needs, with no
+new mechanism. (`AgitateReq`, added when the agitator-never-stops bug
+below was fixed, uses the identical combine across `Agitate`/`Heat`/
+`Hold`.) Documented here mainly to save the next session from
+re-discovering `task.local`'s scope the hard way.
+
+**2026-09-25 · the agitator never stopped: a bare qualifier's RESET and an
+ACTION's SET, on the same variable, don't compose the way "R wins on
+Aborted, the ACTION owns it otherwise" reads · BUG, found by running the
+plant, not by the acceptance suite**
+
+`phases.sfc`'s original design commanded `AG201_Cmd` two ways: `Agitate`'s
+`P1 SetAgitate` ACTION set it TRUE once, conditionally on
+`Active.Agitate`; `Aborted`'s bare `R AG201_Cmd` reset it, once, on
+Abort's own activation scan. `naut check` warned about exactly this pair
+(a variable targeted by both a qualifier association and an ACTION body)
+and PR #54's own fix made the precedence exact — but exact precedence
+between two writers is not the same as **correct** behavior when the
+design never gives the RESET writer a reason to fire on the path that
+needed it. A normal batch never visits `Aborted` at all: Charge -> Heat
+-> Hold -> Transfer -> Idle, so the ACTION's one-scan SET was the only
+write `AG201_Cmd` ever saw across a whole batch, and it stayed TRUE —
+through `Transfer`, through `Idle`, into the next batch, agitated or not.
+Every acceptance test in this file happened to pass anyway: the tests
+that check the agitator turns off all abort out of `Charge`/`Heat`
+first, so they exercise exactly the one path where the bare `R` does
+fire — none of them ran a batch to completion without aborting and then
+checked `AG201_Cmd` afterward. A **good** acceptance test for "the
+agitator stops after the batch" has to do that specifically: run recipe
+1 (agitates) through a real `Transfer` and back to `Idle` with no abort
+anywhere, and check `AG201_Cmd` is `FALSE` once it gets there — see
+"recipe 1 keeps the agitator on through Charge/Heat/Hold, and it stops
+after Transfer" in `batch-skid_test.yaml`, which fails against the
+original design and passes against the fix below. A second test starts
+recipe 2 (no agitate) immediately after recipe 1 aborts, to check nothing
+is left latched to relapse onto the next, unrelated batch. **Fix:** drop
+`AG201_Cmd` as something `phases.sfc` writes at all. Add a state tag
+`AgitateReq`, `N`-qualified on `Agitate`, `Heat`, and `Hold` — the same
+OR-combine `HeatingActive` already uses, so it's true exactly while an
+agitate-relevant step is active and self-clears everywhere else,
+`Transfer`/`Cip`/`Held`/`Aborted` included, with nothing to reset
+explicitly. `transfer.ld` ANDs it with `Active.Agitate` to produce
+`AG201_Cmd` — the same "the sequence only ever asks, a permissive/command
+program decides" division `TransferReq`/`P202_Cmd` already keep. The
+`naut check` warning is gone (nothing targets `AG201_Cmd` two ways
+anymore), and there's no more RESET writer that needs a reason to fire.
 
 **2026-09-25 · `naut logix emulate` serves the tag surface; it does not
 execute the L5X's own ladder · significant docs gap**

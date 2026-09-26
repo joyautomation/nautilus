@@ -21,9 +21,9 @@ naut run .                       # dashboard + tag API on http://localhost:8080
 naut build .                     # one deployable controller binary
 ```
 
-**Needs naut >= 0.13.0.** `naut logix emulate`, `naut eip`, and `lib/`
-composition are on `main` but not in the released v0.12.0 — build the
-CLI from source until 0.13.0 ships.
+**Needs naut >= 0.13.0.** `naut eip` shipped in v0.12.0 already; it's
+`naut logix emulate` and `lib/` composition that are on `main` but not in
+that release — build the CLI from source until 0.13.0 ships.
 
 ## What to open first
 
@@ -42,6 +42,22 @@ CLI from source until 0.13.0 ships.
   it between revisions.
 - `lib/recipes.st` / `lib/physics.st` — the recipe/batch UDTs and the
   bench-only plant model, in Structured Text.
+- `batch-skid.mimic.json` — the P&ID: MT-201, both dosing valves, the
+  agitator, the transfer pump and valve, and labels for the recipe name,
+  phase, and batch count, built entirely from the HMI kit's built-in
+  components (no `hmi/` app here — see lift-station for that shape
+  instead). Right-click → *Open With → Mimic Editor*; run `naut run .`
+  alongside it and the bindings go live. Kit labels only format a
+  *numeric* bind (`Mimic.svelte`'s own `toFixed`), so the `Active.Name`
+  and `Batch.Phase` labels — both `STRING` tags — render as the kit's
+  usual `—` rather than the text today; `Batch.Count` (an `INT`) reads
+  live. Left the two string binds in anyway, since the tags genuinely
+  exist and the gap is in the kit's `Label`, not this project — drop them
+  if that's confusing before the kit grows a text-bind mode. `IdleLamp`,
+  `HoldDone`, and `Line_Status` (a struct, and line-only — it isn't
+  declared on the bench build at all) aren't represented here; everything
+  else the skid's own field values cover is bound to something on the
+  canvas.
 
 ## What it demonstrates
 
@@ -54,7 +70,7 @@ CLI from source until 0.13.0 ships.
 | Multiple tasks/scan rates, `lib/` shared code | `nautilus.yaml`/`line.yaml` tasks:, `lib/` | [Function blocks, libraries, and tasks](https://nautilus.joyautomation.com/guides/blocks-and-tasks/) |
 | Tag model: roles, units, a UDT tag, shared tag files | `nautilus.yaml`/`line.yaml` tags:, `tags/` | [The tag model](https://nautilus.joyautomation.com/guides/tag-model/) |
 | EtherNet/IP: `naut eip import` against a live Logix controller, UDTs as ST types, scan classes | `line.yaml`, `eip_manifest.yaml`, `eip_types.st`, `tags/eip.yaml` | [EtherNet/IP](https://nautilus.joyautomation.com/guides/ethernet-ip/) |
-| Rockwell `.L5X`: a hand-written export, opened read-only, diffed between two git revisions | `line/Line.L5X` | [EtherNet/IP](https://nautilus.joyautomation.com/guides/ethernet-ip/) |
+| Rockwell `.L5X`: a hand-written export, opened read-only, diffed between two git revisions | `line/Line.L5X` | [Logix](https://nautilus.joyautomation.com/guides/logix/), [diffing between revisions](https://nautilus.joyautomation.com/guides/program-history/) |
 | Alarms: ISA-18.2 states, priorities, `enable:`, explicit `defs:` | `alarms:` in both manifests | [Alarms](https://nautilus.joyautomation.com/guides/alarms/) |
 | Retained state: recipe select and tuning survive a restart | `retain:` in both manifests | [Redundancy & retained state](https://nautilus.joyautomation.com/guides/redundancy/) |
 | Acceptance tests: virtual time, `suspend:`, `advance:`/`until:`, alarm verbs | `batch-skid_test.yaml` | [Testing](https://nautilus.joyautomation.com/reference/testing/) |
@@ -65,23 +81,28 @@ CLI from source until 0.13.0 ships.
 (`Active := recipes.Recipes[RecipeSel]`) and counts the batch on `Start`,
 then diverges into three simultaneous branches: `ChargeA` and `ChargeB`
 (each opens its own dosing valve; `dosing.fbd` totalizes the flow into
-`Batch.ChargedA_L`/`ChargedB_L`) and `Agitate` (a `P1`-qualified `ACTION`
-commands `AG201_Cmd` only when the recipe's `Agitate` flag is set — an
-unconditional `S` can't express that). Each dosing branch waits in a
-"done" step once its target volume is reached; the convergence back to
-one token — `Heat` — fires only once both charges and the agitate branch
-have all reached that point. `Heat` runs until the jacket reaches
-setpoint, `Hold` runs a fixed dwell, and `Transfer` asks for a transfer
-(`TransferReq`) without ever commanding the pump or the line directly —
-the same division lift-station keeps between its sequence and its
-permissives. `Hold` (the operator command, not the step) diverts either
-active phase to `Held`, ahead of the normal progression in declaration
-order, and parks there until `Resume`; `Abort` similarly diverts every
-active phase (excepting the brief window between one dosing line
-finishing and the other/the agitator settling — see
-`docs/design/examples-dogfood.md` for why) straight to `Aborted`, which
-latches `AbortLamp`, stops the agitator, and waits for the tank to drain
-before returning to `Idle`.
+`Batch.ChargedA_L`/`ChargedB_L`) and `Agitate` (bare `N AgitateReq` —
+true only while `Agitate`, and later `Heat`/`Hold`, are active; an
+unconditional `S` can't express "only for recipes that agitate", so
+`transfer.ld` ANDs `AgitateReq` with the recipe's own `Active.Agitate`
+flag to get `AG201_Cmd`, rather than commanding it from here at all).
+Each dosing branch waits in a "done" step once its target volume is
+reached; the convergence back to one token — `Heat` — fires only once
+both charges and the agitate branch have all reached that point. `Heat`
+runs until the jacket reaches setpoint, `Hold` runs a fixed dwell, and
+`Transfer` asks for a transfer (`TransferReq`) without ever commanding
+the pump, the agitator, or the line directly — the same division
+lift-station keeps between its sequence and its permissives.
+`AgitateReq` isn't asserted in `Transfer`, `Cip`, `Held`, or `Aborted`,
+so `AG201_Cmd` drops the moment the batch leaves `Heat`/`Hold`, with
+nothing left to reset explicitly. `Hold` (the operator command, not the
+step) diverts either active phase to `Held`, ahead of the normal
+progression in declaration order, and parks there until `Resume`;
+`Abort` similarly diverts every active phase (excepting the brief window
+between one dosing line finishing and the other/the agitator settling —
+see `docs/design/examples-dogfood.md` for why) straight to `Aborted`,
+which latches `AbortLamp` and waits for the tank to drain before
+returning to `Idle`.
 
 **Dosing and temperature (`dosing.fbd`).** Two totalizers integrate
 `FIT201A_Flow`/`FIT201B_Flow` into `Batch.ChargedA_L`/`ChargedB_L`,
@@ -89,10 +110,13 @@ held at zero for the one scan `Prep` sets `ResetTotals`. A single `PID`
 (TIC-201) turns jacket temperature into `TCV201_Pos`, reverse acting (the
 PID doc's own "heater" case) and gated `AUTO` on `HeatingActive` — a
 state tag `N`-qualified identically from both `Heat` and `Hold` in
-`phases.sfc`, which OR-combine onto one tag the same way lift-station's
-`RunLamp` does, since a step's activity flag isn't otherwise readable
-from another task. A hysteresis seal-in latches `OvertempAlm` five
-degrees above setpoint, clearing five below it.
+`phases.sfc`, which OR-combine onto one tag the same way an SFC's own
+N-qualified "running" lamp does (see `examples/tank-batch-sfc`'s
+`RunLamp`), since a step's activity flag isn't otherwise readable from
+another task. `AgitateReq` (also on `Agitate`, `Heat`, and `Hold`) uses
+the same combine to gate `AG201_Cmd` in `transfer.ld`. A hysteresis
+seal-in latches `OvertempAlm` five degrees above setpoint, clearing five
+below it.
 
 **The line handshake (`transfer.ld`).** `P202_Permissive` is the line
 ready, not faulted, and the transfer valve confirmed open; `P202_Cmd`

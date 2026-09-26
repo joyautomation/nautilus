@@ -29,7 +29,9 @@ FBD
   // TCV opens further as temperature falls below setpoint, the PID doc's
   // own "heater" case. AUTO tracks Heat and Hold together — HeatingActive
   // is written N-qualified from both steps in phases.sfc, which OR-combine
-  // onto one tag exactly the way lift-station's RunLamp does.
+  // onto one tag the same way an SFC's own N-qualified "running" lamp
+  // does — several steps writing the same tag, true whenever any one of
+  // them is active (see examples/tank-batch-sfc's RunLamp).
   tic : PID(AUTO := HeatingActive, PV := TT201_Temp, SP := Active.TempSP_C,
             KP := Kp, KI := Ki, KD := Kd, CV_MIN := 0.0, CV_MAX := 100.0,
             DIRECT := FALSE, DT := DosingDtS)

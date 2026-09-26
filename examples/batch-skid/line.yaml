@@ -51,6 +51,21 @@ tag-files:
   - tags/eip.yaml
   - tags/skid.yaml
 
+# tags/eip.yaml is generated (naut eip import) and carries no unit/desc —
+# a Logix controller keeps tag descriptions in its own offline project
+# file, which the import can't recover from the wire. Documented here
+# instead, layered onto the generated tags without redeclaring them —
+# units/descriptions mirror nautilus.yaml's own inline entries for the
+# same names (sim.st's bench stand-in for the line).
+tag-meta:
+  Line_Ready: { desc: "Line ready for a transfer (receiving tank has headroom)" }
+  Line_Accept: { desc: "Line has accepted the transfer request" }
+  Line_TankLevel: { unit: "%", desc: "Line's receiving tank level" }
+  Line_Fault: { desc: "Line-side fault — blocks Line_Accept" }
+  Line_Request: { desc: "Skid requests a transfer" }
+  Line_BatchId: { desc: "Batch count stamped onto the line on each request" }
+  Line_Status: { desc: "Line status/alarm struct (Mode, Alarm) read from the line controller" }
+
 tags:
   # The skid's own field values that a control program actually reads —
   # see this file's header for why these stay static here rather than
