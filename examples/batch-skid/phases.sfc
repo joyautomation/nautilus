@@ -103,7 +103,7 @@ SFC
 
   STEP Aborted:
     S  AbortLamp;
-    R  AG201_Cmd;
+    P1 StopAgitator; (* NOT a bare `R AG201_Cmd`: see the ACTION below *)
     P1 LogAbort;
     N  SetAborted;
   END_STEP
@@ -201,6 +201,18 @@ SFC
     IF Active.Agitate THEN
         AG201_Cmd := TRUE;
     END_IF;
+  END_ACTION
+
+  (* A bare `R AG201_Cmd` here reproduces a compiler bug: once ANY bare
+     S/N/R qualifier association targets a variable ANYWHERE in the
+     chart, every OTHER write to that same variable from an ACTION
+     block (SetAgitate's conditional set, above) is silently discarded
+     on the very next scan — even from a step (Aborted) that has never
+     been active. Minimal repro and the isolation that found this fix
+     (an ACTION-block write on both ends avoids it) are in
+     docs/design/examples-dogfood.md. *)
+  ACTION StopAgitator:
+    AG201_Cmd := FALSE;
   END_ACTION
 
   ACTION HoldTmr:
