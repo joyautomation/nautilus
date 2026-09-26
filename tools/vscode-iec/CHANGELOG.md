@@ -3,6 +3,24 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Mimic palette tiles show the whole component.** Each thumbnail used to
+  collapse to a sliver at the top of its tile (a Tank ~26 px wide in an
+  84 px box): the kit's `max-width: 100%` svgs sat in a shrink-to-fit
+  wrapper. Thumbnails now render at their real width and scale to fit the
+  tile, centered, so a tall Tank and a wide Gauge both fill it with the
+  label right under them; a custom component refits when it resizes. The
+  palette column also keeps its width when its scrollbar appears (arming
+  *+ Pipe* no longer nudges the canvas).
+- **Bound labels show their live value in the mimic editor.** A label with
+  a `bind` rendered its text only, so "LT-101" sat still on an otherwise
+  live canvas. It now reads like the runtime `<Mimic>`'s readout — text,
+  the value to `decimals` places, the unit — whenever the tag resolves to a
+  number, and its text alone otherwise.
+
 ## [0.11.2] - 2026-09-25
 
 The dogfood release: everything found while building the new example plants

@@ -537,6 +537,16 @@
 		drag?.kind === 'label' && drag.index === i
 			? { x: drag.x, y: drag.y }
 			: (settled?.labels[i] ?? { x: l.x, y: l.y });
+	// A bound label's live value, formatted the way the runtime <Mimic>'s
+	// labelValue() does (same resolveBindings() path, `decimals` default 1),
+	// or null when the label has no bind or its tag hasn't resolved to a
+	// finite number — then the label is its text alone, as it always was
+	// here, rather than the runtime's '—' placeholder on a dead canvas.
+	const labelLive = (l: { bind?: string; decimals?: number }): string | null => {
+		if (!l.bind) return null;
+		const v = resolveBindings({ value: l.bind }, ed.tags ?? {}).value;
+		return typeof v === 'number' && isFinite(v) ? v.toFixed(l.decimals ?? 1) : null;
+	};
 	const dispPts = (p: MimicPipe): [number, number][] => {
 		if (drag?.kind === 'vtx' && drag.id === p.id) return drag.pts;
 		if (drag?.kind === 'eq' && drag.atts.some((a) => a.pipeId === p.id)) {
@@ -1551,12 +1561,16 @@
 
 			{#each doc.labels ?? [] as l, i (i)}
 				{@const pos = dispLabel(i, l)}
+				{@const live = labelLive(l)}
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<span
 					class="lbl"
+					class:readout={live !== null}
 					class:sel={selected('label', i)}
 					style="left: {pos.x}px; top: {pos.y}px"
-					onpointerdown={(e) => labelDown(e, i, l)}>{l.text}</span
+					onpointerdown={(e) => labelDown(e, i, l)}
+					>{#if live !== null}{#if l.text}{l.text}{/if}<b class="num">{live}</b
+						>{#if l.unit}<span>{l.unit}</span>{/if}{:else}{l.text}{/if}</span
 				>
 			{/each}
 
@@ -1799,6 +1813,22 @@
 		white-space: nowrap;
 		cursor: grab;
 		padding: 1px 2px;
+	}
+	/* A bound label with a live value reads as the runtime's readout chip
+	   (Mimic.svelte's .lbl.readout): muted text, the value in ink on a pill. */
+	.lbl.readout {
+		display: inline-flex;
+		align-items: baseline;
+		gap: 0.35em;
+		padding: 2px 7px;
+		background: var(--nx-panel-bg);
+		border: 1px solid var(--nx-border);
+		border-radius: 6px;
+	}
+	.lbl.readout .num {
+		color: var(--nx-ui-ink);
+		font-weight: 650;
+		font-variant-numeric: tabular-nums;
 	}
 	.lbl.sel {
 		outline: 2px solid var(--nx-accent);
