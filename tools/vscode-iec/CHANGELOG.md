@@ -22,6 +22,9 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   tank. It now takes the clear shape with the fewest bends, counting the
   turns off and onto the ports, so the pipe continues out of the pump and
   turns once.
+- **Dragging equipment no longer selects its caption.** Moving a pump
+  highlighted its "P-101" caption as selected text for the rest of the
+  drag; canvas text is no longer selectable (it's edited in the inspector).
 - **Bound labels show their live value in the mimic editor.** A label with
   a `bind` rendered its text only, so "LT-101" sat still on an otherwise
   live canvas. It now reads like the runtime `<Mimic>`'s readout — text,

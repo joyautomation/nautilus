@@ -1609,6 +1609,10 @@
 	.canvas {
 		position: relative;
 		transform-origin: top left;
+		/* a drag that starts on equipment would otherwise also select its
+		   caption text (the "P-101" under a pump turns into a blue
+		   highlight mid-move); every canvas text is edited in the inspector */
+		user-select: none;
 		background-image:
 			linear-gradient(to right, var(--grid) 1px, transparent 1px),
 			linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
