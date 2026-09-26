@@ -2,7 +2,8 @@
 
 Status: **built** on the `modbus` branch — `modbus/` (wire, encode, plan,
 driver, status, `slave/`, `codegen/`), `naut modbus import|browse|serve|tags`,
-project wiring and schema, `examples/modbus`. Verified against its own
+project wiring and schema, `examples/lift-station` (`devices.yaml`/
+`modbus_manifest.yaml`). Verified against its own
 in-process slave and, as a foreign implementation, against a pymodbus server
 run as a CI job (§7.5). A run against real hardware is still pending; §9's
 device quirks are argued, not yet measured.
@@ -264,9 +265,9 @@ health") becomes **all drivers healthy**. ≈1 day; unblocks any second bus.
 | `serve --manifest modbus_manifest.yaml [--listen :5020] [--source id] [--values tags.json] [--ramp]` | the in-repo slave: serves every source in a manifest as a Modbus TCP server (multi-unit-id on one port, or one port per source); values from a JSON file or built-in ramps — hardware-in-the-loop without hardware |
 | `tags` | regenerate the tag file only (mirrors `eip tags`) |
 
-The device map is ordinary content when written for generic devices (an Omron
-E5CC, an ADAM-4018, a Lenze i550 — all public register maps) and lives in
-`examples/modbus/`.
+The device map is ordinary content when written for generic devices (a
+submersible-pump VFD, a remote-I/O rack — public register-map shapes) and
+lives in `examples/lift-station/devices.yaml`.
 
 ## 7. Testing
 
@@ -285,9 +286,9 @@ E5CC, an ADAM-4018, a Lenze i550 — all public register maps) and lives in
 3. **Golden generator test** (`cmd/naut/modbus_test.go`):
    `testdata/devices.yaml` → the three files byte-for-byte; `st.Parse` +
    `st.Lower` the generated `modbus_types.st`.
-4. **`examples/modbus/`** — a generic three-device project (temperature
-   controllers, VFD, analyser) with its `*_test.yaml` in virtual time, covered
-   by `check_manifest_test.go`.
+4. **`examples/lift-station`'s field build** (`field.yaml`) — a two-VFD,
+   one-remote-I/O-rack project, `naut check -m field.yaml` in CI on every
+   push (see `.github/workflows/ci.yml`).
 5. **A foreign implementation, in CI.** Everything above tests our encoder
    against our decoder. A pymodbus server seeded with known raw words for every
    format in both word orders, plus an unimplemented range answering exception

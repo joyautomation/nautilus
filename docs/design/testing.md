@@ -1,7 +1,7 @@
 # Design: acceptance testing for manifest projects
 
 Status: **built and running.** `naut test` executes `*_test.yaml` suites in virtual
-time; `examples/heated-tank-nogo/heated-tank_test.yaml` is the worked example and passes.
+time; `examples/lift-station/lift-station_test.yaml` is the worked example and passes.
 §1–§2 are the original feasibility findings, kept because they are why any of this exists.
 The format is deliberately small and meant to be tweaked in use, not frozen by this document.
 Author: feasibility spike, 2026-08-05; design, 2026-08-05
@@ -33,7 +33,7 @@ There are two independent clocks, both wall-clock:
 
 Consequence: a test that loops `rt.Scan()` 100 times simulates a few hundred microseconds of process time, not 10 seconds. So none of the following can be asserted today, in either tier:
 
-- the 10-second `TempLowAlm` delay in `examples/heated-tank-nogo`
+- the 10-second `HighLevel` alarm on-delay in `examples/lift-station`
 - PI settling (measured: a `TempSP` 65 → 72 °C step settles in ~32 s, heater saturating at 100 % for ~26 s before backing off)
 - any `TON`/`TOF`/`TP`, i.e. most real interlock logic
 
@@ -139,7 +139,7 @@ blur driver inputs and tag writes because they are different seams. They are —
 manifest **already declares which is which**, per tag, by role. Making the test restate it
 duplicates knowledge that has exactly one source of truth, and it breaks on the most common
 refactor there is: a tag flips `role: state` → `role: input` at commissioning when the sim
-task is deleted and a real driver takes over (`examples/heated-tank-nogo/nautilus.yaml`
+task is deleted and a real driver takes over (`examples/lift-station/nautilus.yaml`
 says this in a comment). Under role-routing that refactor changes no test. Under an
 explicit `inputs:` / `tags:` split, it silently changes what every test means.
 
@@ -293,70 +293,54 @@ is the honest unit for everything time-dependent.
 
 ## 6. The acceptance bar, written out
 
-Against `examples/heated-tank-nogo`, both tests from §9 of the brief, deterministic and
-instant:
+Against `examples/lift-station`, deterministic and instant:
 
 ```yaml
-# examples/heated-tank-nogo/heated-tank_test.yaml
+# examples/lift-station/lift-station_test.yaml
 tolerance: 0.5
+suspend: [sim]
 
 tests:
-  - name: pump seals in below the start level and drops out above it
-    suspend: [sim]                     # level is driven by the test, not the plant
-    given:  { LevelPct: 35.0 }
+  - name: lead pump starts at LeadOn and post-runs after LeadOff
+    given: { LIT101_Level: 65.0, P101_Running: true } # RunFb, so the starter doesn't fail-to-run
     steps:
-      - scans: 1
-        expect: { PumpRun: true }
-      - given:  { LevelPct: 60.0 }     # between the bands — seal-in holds
-        scans:  1
-        expect: { PumpRun: true }
-      - given:  { LevelPct: 80.0 }
-        scans:  1
-        expect: { PumpRun: false }
-
-  - name: low-temp alarm waits its full 10 s
-    suspend: [sim]                     # freeze the plant; drive TempC directly
-    given:  { TempC: 45.0 }            # below the 62 °C cold threshold
-    steps:
-      - advance: 9.5s
-        expect: { TempLowAlm: false }  # TON has not elapsed
       - advance: 1s
-        expect: { TempLowAlm: true }   # ... and now it has
-      - given:  { TempC: 70.0 }
-        scans:  1
-        expect: { TempLowAlm: false }  # TON drops out with no off-delay
-
-  - name: PI settles a 65 → 72 °C setpoint step within 45 s
-    # closed loop: sim.st runs, so this exercises control against the plant
-    steps:
-      - advance: 120s                  # reach steady state at the 65 °C setpoint
-        expect: { TempC: { near: 65.0, tol: 0.5 } }
-      - given:  { TempSP: 72.0 }
-        until:  45s                    # ~32 s measured; 45 s is the contract
-        hold:   5s                     # settled, not merely passing through
-        expect: { TempC: { near: 72.0, tol: 0.5 } }
-        always: { Heater: { le: 100.0 } }   # anti-windup clamp never breached
-
-  - name: high-temp interlock sounds the horn until acked
-    suspend: [sim]
-    given:  { TempC: 95.0 }
-    steps:
-      - advance: 4s
-        expect: { HiTempAlm: false }   # interlocks.ld runs a 5 s TON at 200 ms
-      - advance: 1.5s
-        expect: { HiTempAlm: true, Horn: true }
-      - given:  { HornAck: true }
-        scans:  1
-        expect: { Horn: false, HiTempAlm: true }
-      - given:  { TempC: 60.0 }        # both alarms clear → ack self-releases
+        expect: { P101_RunCmd: true, LeadIsP101: true }
+      - given: { LIT101_Level: 25.0 } # below LeadOffLevel (30) — PostRun, still running
         advance: 1s
-        expect: { HiTempAlm: false, HornAck: false }
+        expect: { P101_RunCmd: true }
+      - advance: 21s # PostRunSec (20 s) elapses — pump drops, duty alternates
+        expect: { P101_RunCmd: false, LeadIsP101: false }
+
+  - name: a shelved high-level alarm is silent and always expires
+    suspend: [sim, permissives]
+    given: { LIT101_Level: 95.0 }       # above HighLevelAlmSP (90)
+    steps:
+      - advance: 11s                    # past the 10 s on-delay
+        alarms: { active: ["HighLevel"] }
+      - shelve: { id: HighLevel, for: 15m, by: test }
+        scans: 1
+        alarms: { shelved: ["HighLevel"], active: [] }
+      - advance: 16m
+        alarms: { shelved: [], active: ["HighLevel"] }
+
+  - name: closed loop rides out a storm inflow and settles once it passes
+    suspend: []                         # override the file default: the sim runs, closed loop
+    given: { LIT101_Level: 45.0, InflowLps: 40.0 }
+    steps:
+      - advance: 300s
+        expect:
+          LIT101_Level: { lt: 90.0 }
+          CycleCount: { ge: 1 }
+      - given: { InflowLps: 2.0 }        # the storm passes; a quiet night flow
+        until: 900s
+        expect: { P101_RunCmd: false, P102_RunCmd: false }
 ```
 
-The third test is the one that decides the design: it needs virtual `dt` (the PI integral and
-the plant integration), a closed loop across two tasks at two rates, a tolerance, and an
-eventually-with-hold assertion. If it passes deterministically in milliseconds, the hole in
-§1 is closed.
+The third test is the one that decides the design: it needs virtual `dt` (the level PID's
+integral and the plant integration), a closed loop across two tasks at two rates, and an
+`until:`-style eventually assertion spanning several sequencer cycles. If it passes
+deterministically in milliseconds, the hole in §1 is closed.
 
 **Result: it does.** `acceptance/heated_tank_test.go` is the Go form of these tests against
 the real example, and the whole file runs in ~40 ms of wall time. The measurements in §1
@@ -384,7 +368,7 @@ have gone looking for it at wall-clock speed.
    first (a compile error is a suite failure carrying the diagnostic); `naut build`
    excludes `*_test.yaml` from the embedded archive.
 4. ✅ **Done.** Scaffolding: every manifest template writes a `<name>_test.yaml`, the
-   manifest CI template runs `naut test`, and `examples/heated-tank-nogo` carries a worked
+   manifest CI template runs `naut test`, and every project in `examples/` carries a worked
    suite.
 5. ✅ **Done.** Editor integration, in three layers:
    - **JSON Schema** (`tools/vscode-iec/schemas/nautilus-test.schema.json`) over the keys,

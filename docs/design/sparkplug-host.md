@@ -451,7 +451,7 @@ new codegen dir); {D1, D3}.
    asks. `rebirth-on-start: true` is the fix; stagger the 60 requests.
 7. **Open: how does `sparkplug_types.st` get compiled?** `eip_types.st` is picked up because
    `project.go:415` treats every root-level `.st` without a `PROGRAM` as a library. Confirm the
-   generated file lands in the project root (as `examples/client60` does), not a subdirectory, or
+   generated file lands in the project root (as `examples/remote-fleet/scada` does), not a subdirectory, or
    `type:` references won't resolve.
 8. **Verified: host-as-edge.** A project with both `driver: {type: sparkplug-host}` and a
    `sparkplug:` section consumes group A as INPUT tags and republishes its OWN tags as an edge
@@ -466,7 +466,9 @@ new codegen dir); {D1, D3}.
      everything publishes at node level") — including the sparkplug-host driver's own INPUT tags,
      which would otherwise echo group A's truths back into group B. The existing
      `metric-classes: {none: [...]}` glob (`sparkplug/classes.go`'s `NoPublish` class — the same
-     knob `examples/client60/nautilus.yaml` uses) excludes them, and is NOT clumsy at 54 sites: one
+     knob `client60/nautilus.yaml` uses, a private host-as-edge project not committed here; none
+     of the public `examples/` projects combine `driver: sparkplug-host` with a `sparkplug:`
+     section) excludes them, and is NOT clumsy at 54 sites: one
      pattern (`none: ["TWIN_*"]`) covers every truth a site consumes, because they all share the
      twin's single edge-node prefix — no per-metric enumeration, same line verbatim on every site.
      Confirmed against the LIVE broker with `naut sparkplug browse`: W6's NBIRTH carries

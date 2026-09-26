@@ -270,12 +270,15 @@ A block whose type nothing in the compile declares falls back to `IN`/`Q`.
 
 `PID` is a positional (non-velocity) three-term controller in the IEC/OSCAT
 spirit — no ladder power pin (like `CTUD`, it has no single input that
-means "run"), so instantiate it from ST or an FBD diagram, the way the
-[heated-tank-nogo](../examples/heated-tank-nogo) example wires its own
-hand-rolled PI today. In the FBD editor, *+ add → function block → PID*
-places `pid1 : PID(AUTO := _, PV := _, …)` with every input an open pin to
-drag a tag onto; unwire (select the wire, Del) the ones you leave at their
-defaults.
+means "run"), so instantiate it from ST or an FBD diagram, the way
+[`examples/lift-station`](../examples/lift-station)'s `level.fbd` wires a
+direct-acting level loop (`lic : PID(AUTO := LeadReq, …, DIRECT := TRUE, …)`)
+and [`examples/batch-skid`](../examples/batch-skid)'s `dosing.fbd` wires a
+reverse-acting one (`tic : PID(AUTO := HeatingActive, …, DIRECT := FALSE,
+…)`, the "heater" case below). In the FBD editor, *+ add → function block →
+PID* places `pid1 : PID(AUTO := _, PV := _, …)` with every input an open pin
+to drag a tag onto; unwire (select the wire, Del) the ones you leave at
+their defaults.
 
 | Pin | Kind | Type | Meaning |
 | --- | --- | --- | --- |
@@ -479,7 +482,8 @@ Two names, one error: declaring the same `FUNCTION_BLOCK` twice in one
 `.ld` file is refused with the second declaration's line, before anything
 is transpiled.
 
-`examples/ladder-subroutines` is the whole feature in four small files.
+`examples/lift-station`'s `lib/motor.ld` (a `MotorStarter` block,
+instantiated twice from `permissives.ld`) is the whole feature.
 
 ### What the editors do
 
