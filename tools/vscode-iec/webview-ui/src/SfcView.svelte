@@ -22,6 +22,7 @@
 		ASSOC_GAP,
 		stepAtPoint,
 		nextStepInitial,
+		joinCandidates,
 		type OrphanChip,
 		type PlacedNote,
 		type PlacedStep,
@@ -251,7 +252,7 @@
 
 	// ── add step / transition / branches (a small popover form) ────────────
 	let addOpen = $state(false);
-	type AddKind = 'step' | 'transition' | 'alt' | 'sim';
+	type AddKind = 'step' | 'transition' | 'alt' | 'sim' | 'join';
 	let addKind = $state<AddKind>('step');
 	let fName = $state('');
 	let fTo = $state('');
@@ -267,6 +268,7 @@
 		fTo = '';
 		fCond = 'TRUE';
 		fFrom = selectedStepName();
+		if (kind === 'join') fTo = joinCandidates(model, selectedTransId())[0]?.name ?? '';
 		addOpen = true;
 	}
 	// Placeholder-text note, landing just above END_SFC — dblclick edits,
@@ -310,6 +312,11 @@
 		if (r.left - dx < left) dx = r.left - left;
 		if (dx || dy) pane.scrollBy({ left: dx, top: dy });
 	}
+	/** The selected transition's current FROM set (the "+ join" title). */
+	function joinFrom(): string[] {
+		const id = selectedTransId();
+		return (model.trans ?? []).find((t) => t.id === id)?.from ?? [];
+	}
 	function selectedTransId(): string | undefined {
 		return selected?.kind === 'trans' ? selected.id : undefined;
 	}
@@ -351,6 +358,13 @@
 			if ((!after && !fFrom) || !to) return;
 			added = newTarget(to);
 			post(after ? { type: 'insertAlternativeBranch', after, to: [to], cond: fCond, newStep: added } : { type: 'insertAlternativeBranch', from: [fFrom], to: [to], cond: fCond, newStep: added });
+		} else if (addKind === 'join') {
+			// A simultaneous convergence: FROM x becomes FROM (x, y). No
+			// new step — the transition stays selected.
+			const transition = selectedTransId();
+			const step = joinCandidates(model, transition).find((s) => s.name === fTo);
+			if (!transition || !step) return;
+			post({ type: 'joinSimultaneousBranch', transition, step: step.id });
 		} else if (addKind === 'sim') {
 			const transition = selectedTransId();
 			if (!transition || !fName.trim()) return;
@@ -716,6 +730,28 @@
 			if (el instanceof HTMLInputElement) el.select();
 		});
 	}
+	/** The add-step/add-branch name field: an UNCONTROLLED input, unlike the
+	 * form's other fields. `fName` seeds it once at mount (and is read back
+	 * on every keystroke, so commitAdd still sees what was typed), but
+	 * nothing ever reassigns the element's `.value` after that — a
+	 * `bind:value` here would (harmlessly, same string) write `.value` back
+	 * on every keystroke, and a JS-driven write to `.value`, even a no-op
+	 * one, resets the browser's native undo/redo stack for that field —
+	 * dropping whatever was typed before the last edit. Ctrl+Z in this field
+	 * is deliberately left to the browser (see keyForward.ts's "native"
+	 * decision); this is what keeps it working across more than one edit in
+	 * the same form session. Folds in `autofocus`'s focus+select — both act
+	 * once, at mount. */
+	function nameField(el: HTMLInputElement) {
+		el.value = fName;
+		queueMicrotask(() => {
+			el.focus();
+			el.select();
+		});
+		const oninput = () => (fName = el.value);
+		el.addEventListener('input', oninput);
+		return { destroy: () => el.removeEventListener('input', oninput) };
+	}
 	// Keep keyboard focus on the chart after any pointer gesture on it —
 	// Del/Esc listen on .wrap, and the float editor (dblclick edits) hands
 	// focus back to whatever held it when it opened.
@@ -745,6 +781,10 @@
 				disabled={!selectedTransId() && !selectedStepName()}
 				onclick={() => openAdd('alt')}>+ alt branch</button>
 			<button title="Widen the selected transition into a simultaneous divergence, adding a new parallel step" disabled={!selectedTransId()} onclick={() => openAdd('sim')}>+ parallel branch</button>
+			<button
+				title="Join another step into the selected transition's FROM — a simultaneous convergence that fires once every source step is active"
+				disabled={!selectedTransId() || !joinCandidates(model, selectedTransId()).length}
+				onclick={() => openAdd('join')}>+ join</button>
 			<button title="Add a diagram note — dblclick to write it" onclick={addNote}>+ comment</button>
 			<span class="sep"></span>
 			<button title="Cut the selected step(s) (Ctrl+X)" disabled={selected?.kind !== 'step'} onclick={() => doCut()}>✂</button>
@@ -768,10 +808,20 @@
 						? `Transition from ${fFrom}`
 						: addKind === 'alt'
 							? `Alternative branch${selectedTransId() ? '' : fFrom ? ` out of ${fFrom}` : ''}`
-							: 'Simultaneous branch'}
+							: addKind === 'join'
+								? `Join into FROM (${joinFrom().join(', ')})`
+								: 'Simultaneous branch'}
 			</div>
+			{#if addKind === 'join'}
+				<label title="The step to add to this transition's FROM set — the transition then waits for every source step">
+					<span>join step</span>
+					<select class="nx-input" use:autofocus bind:value={fTo}>
+						{#each joinCandidates(model, selectedTransId()) as s (s.id)}<option value={s.name}>{s.name}</option>{/each}
+					</select>
+				</label>
+			{/if}
 			{#if addKind === 'step' || addKind === 'sim'}
-				<label><span>name</span><input class="nx-input" bind:value={fName} spellcheck="false" use:autofocus /></label>
+				<label><span>name</span><input class="nx-input" spellcheck="false" use:nameField /></label>
 			{/if}
 			{#if addKind === 'step' && fFrom}
 				<label title="The transition from {fFrom} to the new step"><span>condition</span><input class="nx-input" bind:value={fCond} spellcheck="false" /></label>

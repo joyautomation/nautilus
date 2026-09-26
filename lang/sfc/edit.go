@@ -77,6 +77,8 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		edits, err = opInsertAlternativeBranch(lines, m, op)
 	case "insertSimultaneousBranch":
 		edits, err = opInsertSimultaneousBranch(lines, m, op)
+	case "joinSimultaneousBranch":
+		edits, err = opJoinSimultaneousBranch(lines, m, op)
 	case "setLayout":
 		edits, err = opSetLayout(lines, m, op)
 	case "clearLayout":
@@ -823,6 +825,33 @@ func opInsertSimultaneousBranch(lines []string, m *Model, op EditOp) ([]TextEdit
 		}
 	}
 	return edits, nil
+}
+
+// opJoinSimultaneousBranch is insertSimultaneousBranch's mirror: it widens
+// a transition's FROM x into FROM (x, y), so the transition becomes (or
+// grows) a simultaneous convergence that fires only once every source step
+// is active (§2.4). Step y must exist and not already be a source.
+//
+// Never-block: whether the sources are the legs of one simultaneous
+// divergence is `naut sfc check`'s call (checkConvergenceReachability
+// warns), not the editor's — a chart is often wired a leg at a time, and
+// refusing a join because the matching divergence isn't drawn yet would
+// dead-end the gesture. Only the step-set is rewritten, in place.
+func opJoinSimultaneousBranch(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
+	t, err := findTransition(m, op.Transition)
+	if err != nil {
+		return nil, err
+	}
+	s, err := findStep(m, op.Step)
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range t.From {
+		if strings.EqualFold(n, s.Name) {
+			return nil, fmt.Errorf("sfc edit: %q is already a source of this transition", s.Name)
+		}
+	}
+	return []TextEdit{stepSetEdit(lines, t, "FROM", append(append([]string{}, t.From...), s.Name))}, nil
 }
 
 func containsAllFold(set, want []string) bool {

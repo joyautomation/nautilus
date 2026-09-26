@@ -116,6 +116,8 @@ export const SFC_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: '+ step', does: 'With a step selected: a new step under it, joined by a transition (condition in the form); nothing selected: a free step' },
 			{ keys: '+ transition', does: 'From the selected step to an existing step, or "other… (new step)" to create the target too' },
 			{ keys: '+ alt branch', does: 'Another transition out of the selected step (or the selected transition’s source) — an alternative divergence; priority is file order' },
+			{ keys: '+ parallel branch', does: 'Widen the selected transition’s TO with a new step — a simultaneous divergence (a join after it waits for the new leg too)' },
+			{ keys: '+ join', does: 'Add another step to the selected transition’s FROM — a simultaneous convergence that fires once every source is active' },
 			{ keys: 'Double-click', does: 'Rename a step, edit a condition, an action or its ST body', hint: 'dblclick: rename / edit condition / edit action' },
 			{ keys: 'Enter / Esc', does: 'Commit / cancel an in-place edit or the add form' },
 			{ keys: 'Drag a step body', does: 'Move it — the position is pinned in the file', hint: 'drag a step: pin layout' },

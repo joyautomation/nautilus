@@ -15,14 +15,16 @@ import (
 // evolution of §2.1:
 //
 //  1. evaluate every transition's `enabled` from the PRE-scan step-activity
-//     snapshot (_en_<t>), then resolve firing (_f_<t>) with the enabled-based
-//     alternative-priority guard of §2.3;
+//     snapshot (_en_<t>), then resolve firing (_f_<t>) in declaration order
+//     with the alternative-priority guard of §2.3 (suppressed only by a
+//     higher-priority transition sharing a source that itself fires);
 //  2. clear the sources of every firing transition (all clears first);
 //  3. set the targets of every firing transition (all sets after all clears,
 //     so set-dominates-clear per §2.4);
 //  4. update hidden Step.T timers from the new activity (§2.6);
-//  5. compute actions — S/R stored flags, boolean-variable OR-combine, and
-//     body actions with the final-scan rule (§2.5, §2.5.1);
+//  5. compute actions — S/R stored flags, body actions with the final-scan
+//     rule, then boolean-variable associations, each written only on the
+//     scans it acts (§2.5, §2.5.1);
 //  6. advance per-step edge memories (used by P/P1/P0 pulses and S/R edges).
 //
 // All SFC state (step activity, stored flags, edge memories, final-scan
@@ -39,6 +41,8 @@ import (
 //	_f_<tid>         transition "fire" scratch (enabled AND alt-priority guard)
 //	_act_<Tgt>_stored   retained S/R stored flag
 //	_act_<Act>_prev     retained final-scan memory for a level body action
+//	_act_<Var>_lvl      retained final-scan memory for a boolean variable's
+//	                    N/P/P1/P0 drive signal
 //
 // where <tid> is the transition's declared name, or t<line> when unnamed.
 func transpileProgram(prog *Program, src string) (string, []int, error) {
@@ -163,6 +167,7 @@ func (g *gen) stored(name string) string {
 	return "_act_" + g.canon(name) + "_stored"
 }
 func (g *gen) prevMem(name string) string { return "_act_" + g.canon(name) + "_prev" }
+func (g *gen) lvlMem(name string) string  { return "_act_" + g.canon(name) + "_lvl" }
 
 // canon returns a step/action's canonical spelling (the declaration's spelling)
 // so a slot name is stable regardless of how a condition/body cased a reference.
@@ -309,6 +314,28 @@ func (g *gen) buildVarBlock() {
 	for _, name := range g.levelBodyActions() {
 		g.decls = append(g.decls, decl{fmt.Sprintf("%s : BOOL;", g.prevMem(name)), g.bodyLine})
 	}
+	for _, name := range g.drivenBoolTargets() {
+		g.decls = append(g.decls, decl{fmt.Sprintf("%s : BOOL;", g.lvlMem(name)), g.bodyLine})
+	}
+}
+
+// drivenBoolTargets returns the canonical names of boolean-variable targets
+// carrying at least one N/P/P1/P0 association, which need a one-scan memory of
+// their drive signal for the final-scan write (§2.5).
+func (g *gen) drivenBoolTargets() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, sa := range g.assocs() {
+		if g.actionSet[strings.ToUpper(sa.a.Target)] || sa.a.Qualifier == "S" || sa.a.Qualifier == "R" {
+			continue
+		}
+		key := strings.ToUpper(sa.a.Target)
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, g.canon(sa.a.Target))
+		}
+	}
+	return out
 }
 
 // storedTargets returns, in first-encounter order, the canonical names of every
@@ -371,7 +398,7 @@ func (g *gen) emitTransitions() {
 	for _, t := range g.prog.Transitions {
 		g.emit(fmt.Sprintf("_en_%s := %s;", g.transID[t], g.enabledExpr(t)), t.Pos.Line)
 	}
-	g.comment("2. resolve firing (enabled-based alternative-priority guard, §2.3)")
+	g.comment("2. resolve firing in declaration order (alternative-priority guard, §2.3)")
 	for i, t := range g.prog.Transitions {
 		guard := g.altGuard(i)
 		if guard == "" {
@@ -397,16 +424,21 @@ func (g *gen) enabledExpr(t *Transition) string {
 	return strings.Join(parts, " AND ")
 }
 
-// altGuard renders NOT(...) content for transition index i: the OR of enabled()
+// altGuard renders NOT(...) content for transition index i: the OR of fire()
 // of every HIGHER-priority (earlier) transition sharing a source with it
-// (§2.3). Uses _en_ (not _f_) so a higher-priority convergence that cannot fire
-// — its other sources inactive — does not suppress this branch.
+// (§2.3). _f_ is resolved in declaration order, so every term is already
+// final when this one is computed. A transition is therefore suppressed only
+// by a higher-priority transition that actually takes the contended token:
+// neither a convergence whose other sources are inactive (not enabled) nor an
+// enabled transition that is itself suppressed by a still-higher one — which
+// makes a non-transitive shared-source group (A-B share a step, B-C share
+// another, A-C nothing) resolve exactly instead of one scan late.
 func (g *gen) altGuard(i int) string {
 	ti := g.prog.Transitions[i]
 	var terms []string
 	for j := 0; j < i; j++ {
 		if sharesSource(g.prog.Transitions[j], ti) {
-			terms = append(terms, "_en_"+g.transID[g.prog.Transitions[j]])
+			terms = append(terms, "_f_"+g.transID[g.prog.Transitions[j]])
 		}
 	}
 	return strings.Join(terms, " OR ")
@@ -472,7 +504,7 @@ func (g *gen) emitStepTimers() {
 // ─── phase 6: actions ────────────────────────────────────────────────────────
 
 func (g *gen) emitActions() error {
-	g.comment("6. actions — S/R stored flags, boolean-var OR-combine, body actions")
+	g.comment("6. actions — S/R stored flags, body actions, then boolean-variable associations")
 
 	// 6a. stored-flag updates. All sets before all resets so a reset dominates a
 	// simultaneous set (disjoint S/R steps are unambiguous either way, §2.5).
@@ -487,19 +519,82 @@ func (g *gen) emitActions() error {
 		}
 	}
 
-	// 6b. boolean-variable targets: OR of every association's active signal.
-	for _, name := range g.boolTargets() {
-		expr, line := g.boolExpr(name)
-		g.emit(fmt.Sprintf("%s := %s;", g.canon(name), expr), line)
-	}
-
-	// 6c. body actions (ACTION blocks) gated by their active signal.
+	// 6b. body actions (ACTION blocks) gated by their active signal.
 	for _, name := range g.bodyTargets() {
 		if err := g.emitBodyAction(name); err != nil {
 			return err
 		}
 	}
+
+	// 6c. boolean-variable targets, written LAST so an association's write
+	// wins over an ACTION body's write to the same variable in the scans the
+	// association acts (§2.5 "association vs ACTION writes"), and written ONLY
+	// on the scans it acts — never recomputed from scratch every scan — so an
+	// association on an inactive step never touches the variable.
+	for _, name := range g.boolTargets() {
+		g.emitBoolTarget(name)
+	}
 	return nil
+}
+
+// emitBoolTarget lowers every association on one boolean variable (§2.5):
+//
+//   - level/pulse drive (N while its step is active; P/P1 the scan its step
+//     activates; P0 the scan it deactivates): the variable is held TRUE every
+//     scan the OR of those signals is TRUE, and written back once on the scan
+//     it falls (the final scan) — to FALSE, or to the S/R stored value when
+//     the variable also carries S/R associations (IEC: Q = N OR stored);
+//   - S / R: the variable is set / reset ONCE, on the scan the step activates.
+//
+// Outside those scans the variable is not written, so another writer (an
+// ACTION body, another task, an HMI) owns it. Order within the scan: final
+// scan, then S/R edges (so a store on the scan another step's N drops still
+// leaves it set), then the N hold (so an active N wins over a reset).
+func (g *gen) emitBoolTarget(name string) {
+	key := strings.ToUpper(name)
+	v := g.canon(name)
+	var drive []string
+	var stores []stepAssoc
+	line := 0
+	for _, sa := range g.assocs() {
+		if strings.ToUpper(sa.a.Target) != key {
+			continue
+		}
+		if line == 0 {
+			line = sa.a.Pos.Line
+		}
+		switch sa.a.Qualifier {
+		case "S", "R":
+			stores = append(stores, sa)
+		default:
+			drive = append(drive, g.activeSignal(sa))
+		}
+	}
+	if line == 0 {
+		line = g.bodyLine
+	}
+	lvl := strings.Join(drive, " OR ")
+	if len(drive) > 0 {
+		final := "FALSE"
+		if len(stores) > 0 {
+			final = g.stored(name)
+		}
+		g.emit(fmt.Sprintf("IF %s AND NOT (%s) THEN %s := %s; END_IF;", g.lvlMem(name), lvl, v, final), line)
+	}
+	for _, sa := range stores {
+		if sa.a.Qualifier == "S" {
+			g.emit(fmt.Sprintf("IF %s THEN %s := TRUE; END_IF;", g.riseEdge(sa.step.Name), v), sa.a.Pos.Line)
+		}
+	}
+	for _, sa := range stores {
+		if sa.a.Qualifier == "R" {
+			g.emit(fmt.Sprintf("IF %s THEN %s := FALSE; END_IF;", g.riseEdge(sa.step.Name), v), sa.a.Pos.Line)
+		}
+	}
+	if len(drive) > 0 {
+		g.emit(fmt.Sprintf("IF %s THEN %s := TRUE; END_IF;", lvl, v), line)
+		g.emit(fmt.Sprintf("%s := %s;", g.lvlMem(name), lvl), line)
+	}
 }
 
 // assocs flattens all (step, association) pairs in source order.
@@ -551,38 +646,6 @@ func (g *gen) targetsWhere(body bool) []string {
 		}
 	}
 	return out
-}
-
-// boolExpr builds the OR-combined active expression for a boolean-variable
-// target, and the source line to anchor it (its first association's step).
-func (g *gen) boolExpr(name string) (string, int) {
-	key := strings.ToUpper(name)
-	var terms []string
-	line := g.bodyLine
-	storedAdded := false
-	first := true
-	for _, sa := range g.assocs() {
-		if strings.ToUpper(sa.a.Target) != key {
-			continue
-		}
-		if first {
-			line = sa.a.Pos.Line
-			first = false
-		}
-		switch sa.a.Qualifier {
-		case "S", "R":
-			if !storedAdded {
-				terms = append(terms, g.stored(name))
-				storedAdded = true
-			}
-		default:
-			terms = append(terms, g.activeSignal(sa))
-		}
-	}
-	if len(terms) == 0 {
-		return "FALSE", line
-	}
-	return strings.Join(terms, " OR "), line
 }
 
 // emitBodyAction renders an ACTION block's body gated by its combined active

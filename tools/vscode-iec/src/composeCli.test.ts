@@ -8,8 +8,10 @@ import {
   composeUnsupported,
   COMPOSE_ERROR_TTL_MS,
   compositionKey,
+  declaredBlockNames,
   overridesFor,
   parseComposeOutput,
+  referencesAnyBlock,
   reuseComposition,
 } from "./composeCli";
 
@@ -114,4 +116,20 @@ test("reuseComposition: a hit reuses, a miss or nothing cached recomposes", () =
 test("reuseComposition: a failure is retried after its TTL even with the same key", () => {
   assert.equal(reuseComposition({ key: "k", at: 0, failed: true }, "k", COMPOSE_ERROR_TTL_MS - 1), true);
   assert.equal(reuseComposition({ key: "k", at: 0, failed: true }, "k", COMPOSE_ERROR_TTL_MS), false);
+});
+
+// Resolving Download/Pull's target when the active file is a library
+// (PENDING.md: "Download from a library file").
+
+test("declaredBlockNames: every FUNCTION_BLOCK/FUNCTION name, deduped", () => {
+  const src = "FUNCTION_BLOCK MotorStarter\nEND_FUNCTION_BLOCK\nFUNCTION RateOfChange\nEND_FUNCTION\n" +
+    "FUNCTION_BLOCK MotorStarter\nEND_FUNCTION_BLOCK\n";
+  assert.deepEqual(declaredBlockNames(src), ["MotorStarter", "RateOfChange"]);
+  assert.deepEqual(declaredBlockNames("PROGRAM Main\nEND_PROGRAM\n"), []);
+});
+
+test("referencesAnyBlock: a whole-word match, not a substring of another identifier", () => {
+  assert.equal(referencesAnyBlock("m1 : MotorStarter(Start := Go);", ["MotorStarter"]), true);
+  assert.equal(referencesAnyBlock("m1 : MotorStarterExtended(Start := Go);", ["MotorStarter"]), false);
+  assert.equal(referencesAnyBlock("PROGRAM Main\nEND_PROGRAM\n", ["MotorStarter"]), false);
 });

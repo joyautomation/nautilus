@@ -10,10 +10,10 @@
 	// pointer-based with a movement threshold (HTML5 dnd doesn't exist for
 	// SVG), resolved at pointerup via elementFromPoint with a
 	// nearest-hotspot snap fallback.
-	import { annotate, type Ann, type LdElement, type LdFbType, type LdModel, type RungStatus } from './ladder';
+	import { annotate, argIdents, type Ann, type LdElement, type LdFbType, type LdModel, type RungStatus } from './ladder';
 	import LdBlockPicker from './LdBlockPicker.svelte';
 	import { FB_TYPES } from './suggest';
-	import { layoutRung, rungMinWidth, fitArgs, L, type LSpot, type LNode } from './ladderLayout';
+	import { layoutRung, rungMinWidth, fitArgs, L, OPERAND_LABEL_MAX, type LSpot, type LNode } from './ladderLayout';
 	import { live, liveValue, formatLive } from './liveState.svelte';
 	import { readClip, typingTarget, writeClip } from './clipboard';
 
@@ -88,7 +88,7 @@
 		// The pane in layout units: zoomed OUT, the rails still span it;
 		// zoomed IN, the 100% width magnifies past the pane (and scrolls) —
 		// re-fitting it would just re-flow the rung, not enlarge it.
-		const mins = annotated.map((a) => rungMinWidth(a.elems, a.coils.length));
+		const mins = annotated.map((a) => rungMinWidth(a.elems, a.coils));
 		const width = Math.max(L.MIN_WIDTH, viewW / Math.min(zoom, 1) - LADDER_PAD_X, ...mins);
 		return annotated.map((a, i) => ({
 			r: a.r,
@@ -135,7 +135,7 @@
 		const v = liveValue(ref);
 		return v === undefined ? '' : formatLive(v);
 	};
-	const trunc = (s: string | undefined, n = 12) => {
+	const trunc = (s: string | undefined, n = OPERAND_LABEL_MAX) => {
 		const t = s ?? '';
 		return t.length <= n ? t : t.slice(0, Math.ceil(n / 2) - 1) + '…' + t.slice(t.length - Math.floor(n / 2));
 	};
@@ -239,7 +239,8 @@
 	}
 
 	// ── declare what a retag introduced ─────────────────────────────────────
-	// A retag may name something the PROGRAM doesn't declare: the rung goes
+	// A retag (or a block's or function's arguments) may name something the
+	// PROGRAM doesn't declare: the rung goes
 	// red and `naut check` says "undeclared identifier". Every such name is
 	// offered here — into VAR_EXTERNAL, typed from nautilus.yaml, when it is
 	// a manifest tag; into VAR (a retained local) either way.
@@ -253,6 +254,11 @@
 				if ((e.kind === 'contact' || e.kind === 'coil' || (e.kind as string) === 'edge') && e.ref) {
 					const base = /^[A-Za-z_][A-Za-z0-9_]*/.exec(e.ref)?.[0];
 					if (base && base !== '_' && !refs.has(base.toLowerCase())) refs.set(base.toLowerCase(), base);
+				}
+				// A function contact's or block's arguments, `=>` targets
+				// included (`m101:MotorStarter(Reset := ResetFaults, …)`).
+				if ((e.kind === 'fn' || e.kind === 'fb') && e.args) {
+					for (const name of argIdents(e.args)) if (!refs.has(name.toLowerCase())) refs.set(name.toLowerCase(), name);
 				}
 				for (const leg of e.legs ?? []) walk(leg);
 			}

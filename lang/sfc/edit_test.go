@@ -369,8 +369,7 @@ func TestOpInsertAlternativeBranch(t *testing.T) {
 		t.Errorf("t_overflow should be inserted immediately after t_full (priority = insertion order): got line %d, t_full ends at %d", nt.Line, findTransT(t, m, "tr:t_full").EndLine)
 	}
 	// t_abort/t_full stay alt/simDiverge; a 3-way alt group sharing "Fill"
-	// forms — not flagged ambiguous here since all three pairwise share
-	// the same single source (a clique, per checkAltGroups).
+	// forms (all three share the same single source).
 	if kind := findTransT(t, m, "tr:t_abort").Kind; kind != "alt" {
 		t.Errorf("t_abort.Kind = %q, want alt", kind)
 	}
@@ -425,6 +424,60 @@ func TestOpInsertSimultaneousBranchWidensJoin(t *testing.T) {
 			t.Errorf("unexpected diagnostic: %s", d.Message)
 		}
 	}
+}
+
+// joinSimultaneousBranch widens a FROM into a convergence — the gesture
+// the lift station's PostRun/Alternate join needs. Two legs of one
+// divergence, with only one of them wired onward so far: joining the other
+// leaves the chart check-clean, and the transition keeps its comment.
+const halfJoined = `PROGRAM P
+VAR
+  Go : BOOL;
+  Done : BOOL;
+END_VAR
+SFC
+INITIAL_STEP Idle:
+END_STEP
+STEP PostRun:
+END_STEP
+STEP Alternate:
+END_STEP
+TRANSITION t_split FROM Idle TO (PostRun, Alternate) := Go;
+END_TRANSITION
+TRANSITION t_back FROM PostRun TO Idle := Done;   (* the join *)
+END_TRANSITION
+END_SFC
+END_PROGRAM
+`
+
+func TestOpJoinSimultaneousBranch(t *testing.T) {
+	wantDiag(t, Check(mustParse(t, halfJoined)), SeverityWarning, `step "Alternate" is a dead end`)
+
+	result, m := applyOp(t, halfJoined, EditOp{Type: "joinSimultaneousBranch", Transition: "tr:t_back", Step: "st:Alternate"})
+	tb := findTransT(t, m, "tr:t_back")
+	if !equalStrings(tb.From, []string{"PostRun", "Alternate"}) || tb.Kind != "simConverge" {
+		t.Errorf("t_back = %+v, want From=[PostRun Alternate] Kind=simConverge", tb)
+	}
+	if !strings.Contains(result, "TRANSITION t_back FROM (PostRun, Alternate) TO Idle := Done;   (* the join *)") {
+		t.Errorf("only the FROM set should change:\n%s", result)
+	}
+	if diags := Check(mustParse(t, result)); len(diags) != 0 {
+		t.Errorf("Check after the join = %v, want none", diags)
+	}
+	// One edit, one undo: undoing it is the same one-line span.
+	edits, _ := ApplyEdit(halfJoined, EditOp{Type: "joinSimultaneousBranch", Transition: "tr:t_back", Step: "st:Alternate"})
+	if len(edits) != 1 || edits[0].Line != edits[0].EndLine {
+		t.Errorf("want a single in-line edit, got %+v", edits)
+	}
+
+	// Never-block: joining a step no divergence shares with the other
+	// source is allowed; Check, not the editor, says so.
+	result, _ = applyOp(t, workedExample, EditOp{Type: "joinSimultaneousBranch", Transition: "tr:t_done", Step: "st:Idle"})
+	wantDiag(t, Check(mustParse(t, result)), SeverityWarning, "not structurally reachable from a common simultaneous divergence")
+
+	wantOpErr(t, halfJoined, EditOp{Type: "joinSimultaneousBranch", Transition: "tr:t_back", Step: "st:PostRun"}) // already a source
+	wantOpErr(t, halfJoined, EditOp{Type: "joinSimultaneousBranch", Transition: "tr:t_back", Step: "st:Nope"})    // no such step
+	wantOpErr(t, halfJoined, EditOp{Type: "joinSimultaneousBranch", Transition: "tr:nope", Step: "st:Alternate"}) // no such transition
 }
 
 // ── layout ────────────────────────────────────────────────────────────

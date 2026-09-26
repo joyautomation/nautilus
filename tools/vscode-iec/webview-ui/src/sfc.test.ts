@@ -11,6 +11,7 @@ import {
 	computeRanksAndColumns,
 	connectHandlePos,
 	diffSfc,
+	joinCandidates,
 	layoutSfc,
 	ASSOC_GAP,
 	stepAtPoint,
@@ -478,4 +479,21 @@ test('layoutSfc: an orphan chip sits right of its anchor\'s action table, clear 
 	assert.ok(chip.x >= tableRight(empty), `chip at ${chip.x}, table ends ${tableRight(empty)}`);
 	// and not over the neighbouring step
 	assert.ok(chip.x + chip.w < over.x, `chip ends ${chip.x + chip.w}, next step at ${over.x}`);
+});
+
+// ── "+ join": steps a transition's FROM can grow by ─────────────────────
+
+test('joinCandidates lists every step not already a source, in chart order', () => {
+	const st = (name: string, line: number) => ({ id: 'st:' + name, name, initial: name === 'Idle', line, endLine: line });
+	const model: SfcModel = {
+		name: 'P',
+		steps: [st('Idle', 1), st('PostRun', 3), st('Alternate', 5)],
+		trans: [
+			{ id: 'tr:t_split', from: ['Idle'], to: ['PostRun', 'Alternate'], cond: 'Go', kind: 'simDiverge', line: 7, endLine: 8 },
+			{ id: 'tr:t_back', from: ['postrun'], to: ['Idle'], cond: 'Done', kind: 'normal', line: 9, endLine: 10 }
+		]
+	};
+	assert.deepEqual(joinCandidates(model, 'tr:t_back').map((s) => s.name), ['Idle', 'Alternate']);
+	assert.deepEqual(joinCandidates(model, 'tr:nope'), []);
+	assert.deepEqual(joinCandidates(model, undefined), []);
 });

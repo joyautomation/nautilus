@@ -236,6 +236,32 @@ test('Ladder: TON from the palette takes the first free instance name', async ()
 	});
 });
 
+test('Ladder: the declare offer covers a block call\'s arguments and => targets', async () => {
+	await withPage(async (b) => {
+		const model = {
+			name: 'P',
+			vars: [{ name: 'm101', type: 'MotorStarter', section: 'VAR', line: 3 }, { name: 'Start', type: 'BOOL', section: 'VAR', line: 4 }],
+			rungs: [
+				{
+					name: 'p101start',
+					line: 6,
+					endLine: 7,
+					elements: [
+						{ kind: 'contact', ref: 'Start' },
+						{ kind: 'fb', inst: 'm101', type: 'MotorStarter', args: 'Reset := ResetFaults, Run => MotorRun, T := T#5S', powerIn: 'Start', powerOut: 'Run' }
+					],
+					coils: []
+				}
+			]
+		};
+		await deliver(b, { type: 'ldModel', model, title: 'permissives.ld' });
+		const title = await b.eval(`document.querySelector('.palette button.declare')?.getAttribute('title') ?? ''`);
+		assert.match(title, /ResetFaults/);
+		assert.match(title, /MotorRun/);
+		assert.doesNotMatch(title, /m101|Start\b|T#5S|Reset\b/);
+	});
+});
+
 test('Ladder: Esc cancels an in-flight palette drag', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'ldModel', model: LD, title: 'p.ld' });

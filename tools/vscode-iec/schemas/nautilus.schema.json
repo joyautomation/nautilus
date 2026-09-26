@@ -284,7 +284,7 @@
         "host": {
           "type": "string",
           "minLength": 1,
-          "description": "eip: controller IP or hostname."
+          "description": "eip: controller IP or hostname, optionally \"host:port\" to reach it off the standard EtherNet/IP port 44818 (e.g. `naut logix emulate` running on 127.0.0.1:44818, or a nonstandard port on a real controller). A bare host keeps the default port."
         },
         "slot": {
           "type": "integer",

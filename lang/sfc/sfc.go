@@ -141,6 +141,7 @@ type TextEdit struct {
 //	setActionBody            Action (name; created if it doesn't exist yet), Body
 //	insertAlternativeBranch  From (or After to inherit its source), To, Cond, Name (optional), After (optional, priority placement), NewStep (optional, as addTransition)
 //	insertSimultaneousBranch Transition, NewStep (created; appended to the transition's TO set)
+//	joinSimultaneousBranch   Transition, Step (an existing step id, appended to the transition's FROM set — a simultaneous convergence; Check, not the op, judges whether the sources share a divergence)
 //	setLayout                Node, X, Y — or Entries for a batched multi-node drag
 //	clearLayout              Node (one entry) or nothing (whole block)
 //	setComment               Comment (index into Model.Comments), Text ("" deletes)

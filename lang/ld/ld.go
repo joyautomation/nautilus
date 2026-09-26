@@ -162,7 +162,7 @@ func TranspileWithLines(src string, libs ...string) (string, []int, error) {
 		lineOf = append(lineOf, srcLine)
 	}
 
-	inLD := false
+	inLD, sawLD := false, false
 	var rung *rungParse
 	flushRung := func() error {
 		if rung == nil {
@@ -185,7 +185,7 @@ func TranspileWithLines(src string, libs ...string) (string, []int, error) {
 		stripped := strippedLines[i]
 		switch {
 		case !inLD && ldStartRe.MatchString(stripped):
-			inLD = true
+			inLD, sawLD = true, true
 			emit("FBD", n)
 		case inLD && ldEndRe.MatchString(stripped):
 			if err := flushRung(); err != nil {
@@ -234,6 +234,14 @@ func TranspileWithLines(src string, libs ...string) (string, []int, error) {
 	}
 	if inLD {
 		return "", nil, fmt.Errorf("ld: missing END_LD")
+	}
+	// Say it in ladder terms: without an LD block the FBD hop would fail
+	// next and name ITS body, which is not what the author wrote.
+	if !sawLD {
+		if strings.TrimSpace(src) == "" {
+			return "", nil, fmt.Errorf("ld: empty file — a ladder source must contain an LD ... END_LD body")
+		}
+		return "", nil, fmt.Errorf("ld: source must contain an LD ... END_LD body")
 	}
 	return strings.Join(out, "\n"), lineOf, nil
 }

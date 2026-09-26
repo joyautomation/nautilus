@@ -203,9 +203,16 @@
 	function keydown(ev: KeyboardEvent) {
 		ev.stopPropagation();
 		if (ev.key === 'Enter') commit();
+		// Reaching here at all means no suggestion list swallowed this Escape
+		// first (Suggest.svelte stops propagation when its own dropdown is
+		// open) — so on every field, plain or suggesting, an Escape that gets
+		// this far closes the form outright, same as Escape does one level up
+		// while still browsing templates. Stepping back to the template list
+		// without losing the popover is still available via the explicit
+		// "back" button.
 		if (ev.key === 'Escape') {
-			if (active) active = null;
-			else open = false;
+			open = false;
+			active = null;
 		}
 	}
 </script>
