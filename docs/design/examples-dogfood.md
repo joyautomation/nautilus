@@ -412,6 +412,273 @@ bug, but worth calling out for the next example that wants its mimic at
 the project root: `npm run build` alone will not tell you `npm run dev`
 is broken.
 
+## examples/batch-skid
+
+**2026-09-25 · a bare S/N/R qualifier association silently discards an
+ACTION block's write to the same variable, from anywhere else in the
+chart · BUG**
+
+`phases.sfc`'s `Agitate` step conditionally commands the agitator —
+`P1 SetAgitate` runs an `ACTION` body (`IF Active.Agitate THEN
+AG201_Cmd := TRUE; END_IF;`), since an unconditional `S` can't express
+"only for recipes that agitate." The design's own `Aborted` step also
+resets it, first written the literal way the design phrases it: a bare
+`R AG201_Cmd`. `naut check` passed with 0 errors. Expected `naut run .`
+to show `AG201_Cmd` staying `TRUE` through `Charge`/`Heat`/`Hold` on an
+agitate recipe. What happened: the pulse fired correctly — `AG201_Cmd`
+read `TRUE` for exactly the one scan `SetAgitate` ran — and then reverted
+to `FALSE` on the very next scan, forever, even though `Aborted` had
+never been active (`Abort` stays `FALSE` the whole run). Isolated with a
+minimal repro — one `INITIAL_STEP`, one step with a `P1` ACTION doing
+`X := TRUE`, a second, **never-reached** step (`FROM ... TO Aborted :=
+FALSE`, structurally dead) with nothing but a bare `R X` — reproduces in
+3 scans: `X` goes `TRUE` once, then `FALSE` forever after. Replacing the
+bare `R X` with an equivalent ACTION (`ClearX: X := FALSE;`) makes the
+repro pass; replacing the *other* side's ACTION with a bare `S X` also
+avoids it. So the trigger is specifically **one write via a bare
+qualifier and the other via an ACTION**, targeting the same variable,
+anywhere in the same chart — not simultaneity, not reachability
+(the repro's `Aborted` is provably dead per `naut check`'s own "dead
+end" warning, and it still corrupts `X`). Consistent with a compiler
+pass that, once it sees ANY bare qualifier for a variable, treats that
+variable as fully SFC-owned and recomputes it every scan from the bare
+associations alone, blind to an ACTION block's independent write to the
+same name. Not chased past the isolation (`lang/sfc`, the ST lowering
+that combines qualifier associations, most likely). Worked around here
+by making `Aborted`'s reset an ACTION too (`StopAgitator: AG201_Cmd :=
+FALSE;`) — no bare qualifier touches `AG201_Cmd` anywhere now. Caught by
+watching `naut run .` rather than the acceptance suite (which happened
+to pass either way, since the buggy reset produced the same *externally
+observable* FALSE the fix does in every test's exact scan windows) —
+worth a `naut check` diagnostic ("variable X is targeted by both a bare
+qualifier and an ACTION body — undefined which wins") since this is
+exactly the kind of thing that looks fine in every test and is wrong on
+the running plant.
+
+**Status: fixed on `main` by PR #54.** Associations now write their
+target only on the scans they act (every scan an `N`/pulse step is
+active, plus the one scan it drops; once, on an `S`/`R` step's own
+activation), after the ACTION bodies run — so the association wins while
+it acts and the ACTION owns the variable otherwise, and `naut check` now
+warns whenever a variable is targeted both ways, naming the step,
+qualifier and ACTION(s) so the precedence is visible rather than
+inferred. Reverted the workaround: `Aborted` is back to a bare `R
+AG201_Cmd` (the design's own literal spelling), `SetAgitate`'s ACTION is
+unchanged, and `naut check` shows exactly the one expected warning —
+accepted rather than designed around, since avoiding it would mean
+splitting the simultaneous divergence's `Agitate` branch into two
+conditional paths for no behavioral gain now that the precedence is
+exact. `naut test` — still 10/10 with no changes needed.
+
+**2026-09-25 · what looked like a permanent three-way convergence
+deadlock was a test-authoring bug, not the platform — plus one real,
+narrower scheduling flaw PR #54 found and fixed while checking ·
+CORRECTED (see the original, wrong write-up this replaces, below)**
+
+First cut of the simultaneous charge/agitate branch gave every one of
+its three steps (`ChargeADone`, `ChargeBDone`, `Agitate`) its own abort
+transition to `Aborted`, alongside the simultaneous convergence
+`(ChargeADone, ChargeBDone, Agitate) -> Heat`. `naut check` passed with
+a warning naming exactly those four transitions as a non-transitive
+alternative-priority group. Several acceptance tests then got stuck:
+`PhaseName` stayed `"Charge"` no matter how many additional scans a step
+budgeted, even with `Abort` FALSE throughout. **This write-up first
+concluded the convergence itself was deadlocked** — a real bug in the
+alternative-priority engine — and worked around it by dropping the abort
+transitions on `ChargeADone`/`ChargeBDone`, keeping only `Agitate`'s.
+That conclusion was wrong, and the fix was cosmetic: those tests set
+`Batch.ChargedA_L`/`ChargedB_L` (via `given:`) in the **same test step**
+as `Start: false` — the step whose one scan fires `Prep`'s own
+simultaneous divergence into `(ChargeA, ChargeB, Agitate)`. `Prep`'s `N
+ResetTotals` is still active during that scan (it self-clears once
+`Prep` itself clears, which happens in the very same scan the
+divergence fires — see `docs/languages/sfc.md`'s "Set-dominates-clear"
+rule), and `dosing.fbd` — a separate 100 ms task — was ticking somewhere
+in the same virtual-time window and saw `ResetTotals` still `TRUE`,
+zeroing the totals the `given:` had just set before the SFC's own
+`t_a_done`/`t_b_done` transitions ever got a chance to see them cross
+the threshold. The charges never actually finished; nothing downstream
+of that was ever going to fire, convergence included, independent of
+which abort transitions existed. Splitting the `given:` into its own,
+later step (after `Prep`'s divergence has already run once) is the real
+fix, and it was already sitting in this file for unrelated reasons by
+the time this was caught — the wrong conclusion above got written
+against an earlier, since-corrected version of these tests.
+
+What the review that caught this **did** find, checking the same
+scenario properly: on `main`, the convergence fires correctly, in either
+declaration order, once the charges actually complete — no deadlock, and
+no restructuring needed. It also found a real, narrower flaw one layer
+down, now fixed by PR #54: the alternative-priority guard suppressed a
+lower-priority transition whenever a higher-priority sharer was merely
+*enabled*, not only when it actually *fired* — so a non-transitive group
+like this one (`t1 FROM A`, `t2 FROM (A,B)`, `t3 FROM B`, all enabled)
+could suppress `t3` for one extra scan even though `t1`'s firing that
+scan had nothing to do with `B`'s token. The guard now reads whether the
+higher-priority sharer *fired* (`_f_`, resolved in declaration order)
+instead of whether it was merely enabled (`_en_`), so `t1` and `t3` fire
+together, exactly once. This is a genuine, previously-existing
+scheduling imprecision — one scan, not a deadlock — and it's the reason
+`naut check`'s "ambiguous alternative-priority group" warning is gone
+entirely now rather than narrowed: the fixed guard makes every such
+group exact, with one well-defined outcome, so there is nothing left to
+warn about.
+
+Reverted the workaround: the abort transitions on `ChargeADone` and
+`ChargeBDone` are back (`t_abort_adone`, `t_abort_bdone`, alongside
+`t_abort_agitate`), the acceptance suite's `given:`/`scans:` steps are
+unchanged from the already-correct split, and all ten tests pass with no
+other edits. The lesson, restated: a test that looks stuck deserves a
+minimal repro of the *engine* behavior in isolation (no totalizers, no
+`ResetTotals`, just the steps and transitions in question) before
+concluding the compiler is wrong — the SFC-only repro that would have
+shown the convergence firing fine was never actually built for this one,
+only for the separate (and real) `R`/ACTION bug above.
+
+**2026-09-25 · no struct/array literal initializer, and no way to
+declare data outside a POU · docs gap / design constraint**
+
+The design's plan for the three ship-with recipes — `Recipes : ARRAY
+[1..3] OF Recipe` "declared in `lib/recipes.st` with three initialised
+entries (constants)" — assumes some IEC literal-initializer syntax for a
+struct or an array of structs. `docs/languages/structured-text.md` is
+explicit that there isn't one ("An initial value after `:=` must be a
+single literal constant"), and there is no `VAR_GLOBAL`-with-initializer
+outside a POU either (`VAR_GLOBAL` and `VAR_EXTERNAL` both just resolve a
+tag-store name — a real initial value comes from the manifest's `init:`,
+which in turn has no array-of-struct literal form beyond per-member
+nesting for a single struct tag, per `docs/guides/tag-model.md`). Worked
+around with a `FUNCTION_BLOCK RecipeTable` (`lib/recipes.st`) whose
+`VAR_OUTPUT Recipes : ARRAY[1..3] OF Recipe` is populated by plain field
+assignment on its own first call (an internal `loaded` latch), called
+once from `phases.sfc`'s `LoadRecipe` action. Not a bug — the language's
+"a value is either a tag with a manifest `init:` or a POU-scoped
+declaration with a scalar literal, nothing in between" is a deliberate,
+documented boundary — but it's exactly the kind of thing a design
+written before touching the compiler gets wrong, and worth a
+`docs/design/examples.md`-style callout for the next session that reads
+for "constants" in a design brief.
+
+**2026-09-25 · cross-task step-activity flags don't exist as a thing to
+read, even by convention · design clarification, not a bug**
+
+The design's FBD section wanted the jacket PID's `AUTO` pin driven by
+`Heat.X OR Hold.X` — `dosing.fbd` and `phases.sfc` are different tasks
+(100 ms and 250 ms), and a step's `.X`/`.T` are retained **program**
+locals (`docs/languages/sfc.md`: "Each step owns a retained BOOL slot"),
+never tags, so there is no `VAR_EXTERNAL` spelling for another task's
+step activity — consistent with lift-station's own finding that
+`task.local` doesn't reach the ST-expression compiler (an acceptance
+test's matcher form, `task.local: value`, does resolve it fine; it's
+only unavailable as a value inside a program's own ST/FBD/LD
+expressions). **Status: `docs/testing.md`'s `task.local` section was
+reworded by PR #43** to say exactly that, rather than leaving it
+ambiguous. Worked around the same way `examples/tank-batch-sfc`'s
+`RunLamp` already demonstrates the fix for: `HeatingActive` is a state
+tag, `N`-qualified identically from both `STEP Heat` and `STEP Hold` in
+`phases.sfc` — two associations targeting the same BOOL OR-combine, so
+it reads exactly `Heat.X OR Hold.X` a cross-task reader needs, with no
+new mechanism. (`AgitateReq`, added when the agitator-never-stops bug
+below was fixed, uses the identical combine across `Agitate`/`Heat`/
+`Hold`.) Documented here mainly to save the next session from
+re-discovering `task.local`'s scope the hard way.
+
+**2026-09-25 · the agitator never stopped: a bare qualifier's RESET and an
+ACTION's SET, on the same variable, don't compose the way "R wins on
+Aborted, the ACTION owns it otherwise" reads · BUG, found by running the
+plant, not by the acceptance suite**
+
+`phases.sfc`'s original design commanded `AG201_Cmd` two ways: `Agitate`'s
+`P1 SetAgitate` ACTION set it TRUE once, conditionally on
+`Active.Agitate`; `Aborted`'s bare `R AG201_Cmd` reset it, once, on
+Abort's own activation scan. `naut check` warned about exactly this pair
+(a variable targeted by both a qualifier association and an ACTION body)
+and PR #54's own fix made the precedence exact — but exact precedence
+between two writers is not the same as **correct** behavior when the
+design never gives the RESET writer a reason to fire on the path that
+needed it. A normal batch never visits `Aborted` at all: Charge -> Heat
+-> Hold -> Transfer -> Idle, so the ACTION's one-scan SET was the only
+write `AG201_Cmd` ever saw across a whole batch, and it stayed TRUE —
+through `Transfer`, through `Idle`, into the next batch, agitated or not.
+Every acceptance test in this file happened to pass anyway: the tests
+that check the agitator turns off all abort out of `Charge`/`Heat`
+first, so they exercise exactly the one path where the bare `R` does
+fire — none of them ran a batch to completion without aborting and then
+checked `AG201_Cmd` afterward. A **good** acceptance test for "the
+agitator stops after the batch" has to do that specifically: run recipe
+1 (agitates) through a real `Transfer` and back to `Idle` with no abort
+anywhere, and check `AG201_Cmd` is `FALSE` once it gets there — see
+"recipe 1 keeps the agitator on through Charge/Heat/Hold, and it stops
+after Transfer" in `batch-skid_test.yaml`, which fails against the
+original design and passes against the fix below. A second test starts
+recipe 2 (no agitate) immediately after recipe 1 aborts, to check nothing
+is left latched to relapse onto the next, unrelated batch. **Fix:** drop
+`AG201_Cmd` as something `phases.sfc` writes at all. Add a state tag
+`AgitateReq`, `N`-qualified on `Agitate`, `Heat`, and `Hold` — the same
+OR-combine `HeatingActive` already uses, so it's true exactly while an
+agitate-relevant step is active and self-clears everywhere else,
+`Transfer`/`Cip`/`Held`/`Aborted` included, with nothing to reset
+explicitly. `transfer.ld` ANDs it with `Active.Agitate` to produce
+`AG201_Cmd` — the same "the sequence only ever asks, a permissive/command
+program decides" division `TransferReq`/`P202_Cmd` already keep. The
+`naut check` warning is gone (nothing targets `AG201_Cmd` two ways
+anymore), and there's no more RESET writer that needs a reason to fire.
+
+**2026-09-25 · `naut logix emulate` serves the tag surface; it does not
+execute the L5X's own ladder · significant docs gap**
+
+The design's plan for `line/Line.L5X` was a `Receive` routine (ready/
+accept handshake, a `TON`) that the bench could point `naut logix
+emulate` at and watch answer requests autonomously, the same way a real
+line's own PLC would. `naut eip import`/`naut logix import` both parsed
+it cleanly, and `naut run -m line.yaml .` connected, polled, and read
+back `Line_Ready`/`Line_TankLevel` correctly from the emulator. What did
+NOT happen: writing `Line_Request` never advanced `AcceptTmr.ACC` (read
+directly off the emulator, independent of this project's own driver —
+stayed `0` indefinitely) and `Line_Accept` never went `TRUE` — because
+the emulator never runs `Receive` at all. `docs/guides/ethernet-ip.md`
+does say the emulator "stands a ControlLogix up ... from the project's
+own L5X export" and describes tag serving, seeding, and `--ramp`, but
+never states outright that program logic is not executed — a reasonable
+reading of "stands a ControlLogix up" is "runs the program," and it does
+not. Confirmed by reading a tag directly off the emulator with a
+throwaway CIP client (bypassing this project's own driver entirely):
+`Line_Request` correctly read back `TRUE` after the skid wrote it (the
+protocol round trip genuinely works), while `AcceptTmr`'s `ACC` member
+stayed `0` and `Line_Accept` stayed `FALSE` no matter how long
+`Line_Request` held. Not a bug — `docs/guides/ethernet-ip.md`'s own
+"Under the CLI is `eip/logixserver`, an in-repo ControlLogix **target**"
+and the CI section's framing ("driver conformance," "no build tags, no
+env gating") describes a CIP-protocol conformance target, never a logic
+simulator, and nothing elsewhere claims otherwise — but a design brief
+planning an autonomous emulated-line demo is an easy way to arrive at the
+wrong expectation, and the guide's "No PLC?" section would benefit from
+one sentence saying so explicitly. Consequence for this project:
+`nautilus.yaml`'s `sim.st` answers the handshake itself (the same 2 s
+settling shape `Receive` uses) so the bench demo is fully autonomous;
+against the real emulator (`line.yaml`), demonstrating `Line_Accept`
+responding means either running a real controller, or writing it
+directly on the emulator to stand in for what `Receive` would have done
+— both documented in `line/README.md`.
+
+**2026-09-25 · `naut eip import --host` does not take a combined
+`host:port` · papercut, docs-adjacent**
+
+Tried `naut eip import --host 127.0.0.1:44818 --format yaml ...` against
+`naut logix emulate --l5x line/Line.L5X --listen 127.0.0.1:44818`,
+expecting the same `host:port` form `docs/guides/ethernet-ip.md`
+documents for a manifest's `driver.host:` field to also work on the CLI
+flag. Got `dial tcp: lookup 127.0.0.1:44818: no such host` — the
+combined string was passed straight to DNS resolution as a hostname,
+port included. The guide's own examples are consistent (`--host
+127.0.0.1` with no port suffix, `--port` separate, when a non-default
+port is needed) — this is a real distinction between the CLI flag and
+the manifest field, just one this session's own initial phrasing
+("`naut eip import --host 127.0.0.1:<port>`") glossed over. Fixed by
+using `--host 127.0.0.1 --port 44818` instead. Worth a one-line note in
+the CLI's own `--host` flag help text, since the manifest's `host:port`
+form is documented prominently enough to invite the same shorthand here.
+
 ## examples/remote-fleet
 
 **2026-09-25 · a root `.st` file's `TYPE` is invisible project-wide once

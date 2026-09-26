@@ -1,0 +1,48 @@
+# Hand-authored tag file (not generated — contrast tags/eip.yaml, which
+# `naut eip import` writes). Holds the tags that are byte-identical
+# between the bench manifest (nautilus.yaml) and the line manifest
+# (line.yaml): operator setpoints and every computed-state tag the control
+# programs derive themselves. See each manifest's own `tags:` comment for
+# what stays inline instead (the skid's own field values and the line's
+# process tags — see each manifest's header for why).
+#
+# Compose it into a project with:  tag-files: [tags/skid.yaml]
+
+# Operator setpoints — retained (retain.file in both manifests).
+- { name: RecipeSel, role: setpoint, init: 1, desc: "Recipe select (1..3)" }
+- { name: Kp, role: setpoint, init: 4.0, desc: "Jacket PID proportional gain" }
+- { name: Ki, role: setpoint, init: 0.05, unit: "1/s", desc: "Jacket PID integral gain" }
+- { name: Kd, role: setpoint, init: 0.0, unit: "s", desc: "Jacket PID derivative gain" }
+- { name: CipEveryN, role: setpoint, init: 3, desc: "Run a CIP flush after every Nth batch" }
+- { name: Start, role: setpoint, init: false, desc: "Pulse: start a batch with the selected recipe" }
+- { name: Hold, role: setpoint, init: false, desc: "Operator hold — pauses Heat/Hold, agitator keeps running" }
+- { name: Resume, role: setpoint, init: false, desc: "Resume from Held back into Heat" }
+- { name: Abort, role: setpoint, init: false, desc: "Abort the batch: valves close, agitator stops, AbortLamp latches" }
+
+# Computed state — written by phases.sfc/dosing.fbd/transfer.ld/status.st,
+# identically in both manifests.
+- name: Active
+  role: state
+  type: Recipe
+  desc: "The recipe copied in at Prep"
+  init: { Name: "A-STD", AmountA_L: 20.0, AmountB_L: 15.0, TempSP_C: 45.0, HoldSec: 30.0, Agitate: true }
+- name: Batch
+  role: state
+  type: BatchStatus
+  desc: "Batch phase, count, dosing totals, elapsed time"
+  init: { Phase: "Idle", Count: 0, ChargedA_L: 0.0, ChargedB_L: 0.0, ElapsedSec: 0.0 }
+- { name: PhaseName, role: state, init: "Idle", desc: "Active sequence step (BatchSequence)" }
+- { name: Running, role: state, init: false, desc: "A batch is running (not Idle) — gates the Line_Fault alarm" }
+- { name: TransferReq, role: state, init: false, desc: "Sequence asks for a transfer — transfer.ld decides whether it happens" }
+- { name: ResetTotals, role: state, init: false, desc: "One-scan pulse (Prep): zero the dosing totalizers" }
+- { name: HeatingActive, role: state, init: false, desc: "Heat or Hold active — jacket PID AUTO" }
+- { name: AgitateReq, role: state, init: false, desc: "Agitate, Heat or Hold active — ANDed with Active.Agitate in transfer.ld to command AG201_Cmd" }
+- { name: CipDue, role: state, init: false, desc: "This batch's transfer is followed by a CIP flush" }
+- { name: P202_Permissive, role: state, init: false, desc: "Transfer pump permissive: line ready, no fault, valve confirmed open" }
+- { name: HandshakeTimeout, role: state, init: false, desc: "Line requested but not accepted for 30 s" }
+- { name: OvertempAlm, role: state, init: false, desc: "Jacket temperature 5 degrees over setpoint" }
+- { name: DoseTimeoutA, role: state, init: false, desc: "Dosing line A charging longer than 5 minutes" }
+- { name: DoseTimeoutB, role: state, init: false, desc: "Dosing line B charging longer than 5 minutes" }
+- { name: AbortLamp, role: state, init: false, desc: "Latched abort indicator" }
+- { name: IdleLamp, role: state, init: false, desc: "Idle indicator lamp" }
+- { name: HoldDone, role: state, init: false, desc: "Diagnostic: fires once when Hold deactivates normally" }
