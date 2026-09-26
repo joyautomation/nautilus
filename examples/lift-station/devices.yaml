@@ -1,0 +1,47 @@
+# The device map for the field deployment of this plant — the ONE
+# hand-written input to `naut modbus import`. Two generic device types: a
+# submersible-pump VFD (used for both P-101 and P-102) and a remote-I/O
+# rack carrying the wet-well instruments and the pump-skid contacts. The
+# schema is documented in modbus/codegen/devicemap.go.
+#
+# Regenerate the committed files with:
+#   naut modbus import --map devices.yaml
+#
+# The importer names every tag `<instance id>_<register tag>`, with no way
+# to suppress the prefix (modbus/codegen/devicemap.go). That's exact for
+# both VFDs (id P101/P102 + Running/VfdFault/SpeedHz/Amps/RunCmd/SpeedCmd
+# reproduces the tag model's names precisely), but the RIO instance's
+# points can't land on their bare canonical names (LIT101_Level, LSHH101,
+# ...) that way — see field_map.st, the one field-only program that
+# renames RIO_* onto them, and docs/design/examples-dogfood.md for the
+# finding.
+#
+# RunCmd is a writable single bit of the VFD's control word: the driver
+# read-modify-writes it (modbus/driver.go), so it never disturbs any other
+# bit a real drive's control word might carry.
+devices:
+  vfd:
+    description: submersible pump VFD
+    registers:
+      - {tag: Status,   address: 2000, desc: "status word"}
+      - {tag: Running,  address: 2000, format: "bit:0", desc: "running bit of the status word"}
+      - {tag: VfdFault, address: 2000, format: "bit:3", desc: "fault bit of the status word"}
+      - {tag: SpeedHz,  address: 2001, format: int16, scale: 0.01, unit: Hz, desc: "actual speed"}
+      - {tag: Amps,     address: 2002, format: int16, scale: 0.1, unit: A, desc: "motor current"}
+      - {tag: RunCmd,   address: 2100, format: "bit:0", writable: true, desc: "run command — control word bit 0"}
+      - {tag: SpeedCmd, address: 2101, format: int16, scale: 0.01, writable: true, rewrite: 1s, init: 0.0, unit: Hz, desc: "speed command"}
+  rio:
+    description: remote I/O — wet-well instruments and pump-skid contacts
+    registers:
+      - {tag: Level,         address: 0, table: input, format: int16, scale: 0.01, unit: "%", desc: "wet-well level"}
+      - {tag: Flow,          address: 1, table: input, format: int16, scale: 0.1, unit: "L/s", desc: "force-main discharge flow"}
+      - {tag: LSHH101,       address: 0, table: discrete, desc: "high-high float"}
+      - {tag: LSLL101,       address: 1, table: discrete, desc: "low-low float"}
+      - {tag: P101_SealFail, address: 2, table: discrete, desc: "P101 seal-leak probe"}
+      - {tag: P101_OverTemp, address: 3, table: discrete, desc: "P101 motor over-temperature"}
+      - {tag: P102_SealFail, address: 4, table: discrete, desc: "P102 seal-leak probe"}
+      - {tag: P102_OverTemp, address: 5, table: discrete, desc: "P102 motor over-temperature"}
+instances:
+  - {id: P101, type: vfd, host: 192.168.20.11, unit-id: 1, desc: "P-101 VFD"}
+  - {id: P102, type: vfd, host: 192.168.20.12, unit-id: 2, desc: "P-102 VFD"}
+  - {id: RIO,  type: rio, host: 192.168.20.20, unit-id: 3, desc: "wet-well remote I/O"}

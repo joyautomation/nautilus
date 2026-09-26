@@ -1,0 +1,126 @@
+PROGRAM PumpSequence
+(* Duty/standby sequencing: which pump(s) are called, who's lead, the
+   post-run pump-down, and failover on a fail-to-run. Level and float
+   logic only — the fault sensing, permissives and the actual RunCmd/
+   SpeedCmd outputs live in permissives.ld and level.fbd; this program
+   only ever asks for a pump ("LeadReq"/"LagReq"), never commands one
+   directly. Open the diagram: right-click -> "Open With -> SFC Diagram". *)
+VAR_EXTERNAL
+    LIT101_Level : REAL;
+    LSLL101      : BOOL;
+    LeadOnLevel  : REAL;
+    LagOnLevel   : REAL;
+    LagOffLevel  : REAL;
+    LeadOffLevel : REAL;
+    PostRunSec   : REAL;
+    LeadFailed   : BOOL; (* the lead pump's FailToRun, from permissives.ld *)
+    LeadReq      : BOOL;
+    LagReq       : BOOL;
+    LeadIsP101   : BOOL;
+    CycleCount   : INT;
+    SeqStep      : STRING;
+END_VAR
+VAR
+    postRunTmr : TON;
+END_VAR
+SFC
+
+  INITIAL_STEP Idle:
+    R  LeadReq;
+    R  LagReq;
+    N  SetIdle;
+  END_STEP
+
+  STEP Lead:
+    S  LeadReq;
+    R  LagReq;           (* dropping back from Lag: the lag pump stands down *)
+    N  SetLead;
+    P1 CountCycle;      (* one new cycle counted per lead call *)
+  END_STEP
+
+  STEP Lag:
+    S  LagReq;           (* LeadReq is already set; now both pumps are called *)
+    N  SetLag;
+  END_STEP
+
+  STEP PostRun:
+    N  RunDownTmr;        (* ACTION: pump-down timer, PT from PostRunSec *)
+    N  SetPostRun;
+  END_STEP
+
+  STEP Alternate:
+    P0 SwapDuty;           (* on deactivation, not activation: the pump
+                              already draining the well keeps running for
+                              the whole post-run — only the NEXT call goes
+                              to the other pump (LeadIsP101 := NOT LeadIsP101) *)
+    (* No N action here: PostRun and Alternate are active together, and
+       both writing SeqStep in the same scan made the value depend on
+       action-execution order — see docs/design/examples-dogfood.md.
+       PostRun's own SetPostRun action already covers SeqStep for the
+       whole pump-down; Alternate only swaps the duty pointer. *)
+  END_STEP
+
+  STEP Failover:
+    P1 SwapDuty;            (* hand the lead call to the other pump *)
+    N  SetFailover;
+  END_STEP
+
+  (* --- transitions --- *)
+
+  TRANSITION t_call FROM Idle TO Lead := LIT101_Level >= LeadOnLevel AND NOT LSLL101;
+  END_TRANSITION
+
+  (* alternative divergence out of Lead: priority by declaration order *)
+  TRANSITION t_failover FROM Lead TO Failover := LeadFailed;
+  END_TRANSITION
+  TRANSITION t_lag FROM Lead TO Lag := LIT101_Level >= LagOnLevel;
+  END_TRANSITION
+  TRANSITION t_done FROM Lead TO (PostRun, Alternate) := LIT101_Level <= LeadOffLevel OR LSLL101;
+  END_TRANSITION
+
+  TRANSITION t_drop FROM Lag TO Lead := LIT101_Level <= LagOffLevel;
+  END_TRANSITION
+
+  TRANSITION t_resume FROM Failover TO Lead := TRUE; (* one scan, then straight back in *)
+  END_TRANSITION
+
+  (* simultaneous convergence: fires only once BOTH branches are done *)
+  TRANSITION t_idle FROM (PostRun, Alternate) TO Idle := postRunTmr.Q;
+  END_TRANSITION
+
+  (* --- action blocks --- *)
+
+  ACTION CountCycle:
+    CycleCount := CycleCount + 1;
+  END_ACTION
+
+  ACTION SwapDuty:
+    LeadIsP101 := NOT LeadIsP101;
+  END_ACTION
+
+  ACTION RunDownTmr:
+    postRunTmr(IN := PostRun.X, PT := REAL_TO_TIME(PostRunSec * 1000.0));
+  END_ACTION
+
+  ACTION SetIdle:
+    SeqStep := 'Idle';
+  END_ACTION
+
+  ACTION SetLead:
+    SeqStep := 'Lead';
+  END_ACTION
+
+  ACTION SetLag:
+    SeqStep := 'Lag';
+  END_ACTION
+
+  ACTION SetPostRun:
+    SeqStep := 'PostRun';
+  END_ACTION
+
+  ACTION SetFailover:
+    SeqStep := 'Failover';
+  END_ACTION
+
+END_SFC
+END_PROGRAM
