@@ -36,6 +36,7 @@
 - { name: TransferReq, role: state, init: false, desc: "Sequence asks for a transfer — transfer.ld decides whether it happens" }
 - { name: ResetTotals, role: state, init: false, desc: "One-scan pulse (Prep): zero the dosing totalizers" }
 - { name: HeatingActive, role: state, init: false, desc: "Heat or Hold active — jacket PID AUTO" }
+- { name: AgitateReq, role: state, init: false, desc: "Agitate, Heat or Hold active — ANDed with Active.Agitate in transfer.ld to command AG201_Cmd" }
 - { name: CipDue, role: state, init: false, desc: "This batch's transfer is followed by a CIP flush" }
 - { name: P202_Permissive, role: state, init: false, desc: "Transfer pump permissive: line ready, no fault, valve confirmed open" }
 - { name: HandshakeTimeout, role: state, init: false, desc: "Line requested but not accepted for 30 s" }

@@ -1,10 +1,16 @@
 PROGRAM Transfer
 (* Handshake interlocks with the line PLC, the transfer pump's permissive
    and seal-in, the CIP-due check, and the handshake timeout alarm.
-   phases.sfc only ever asks (TransferReq); this program decides whether
-   the pump and the line request actually assert — the same split
-   lift-station keeps between sequence.sfc and permissives.ld. Open the
-   diagram: right-click -> "Open With -> Ladder Diagram". *)
+   phases.sfc only ever asks (TransferReq, AgitateReq); this program
+   decides whether the pump, the line request, and the agitator command
+   actually assert — the same split lift-station keeps between
+   sequence.sfc and permissives.ld. AG201_Cmd is AgitateReq ANDed with
+   the recipe's own Agitate flag: AgitateReq is N-qualified true only
+   while Agitate/Heat/Hold are active in phases.sfc (self-clearing
+   everywhere else, including Transfer/Idle and every non-agitate
+   recipe), so this rung is the only writer AG201_Cmd ever has — no
+   separate reset on Abort is needed. Open the diagram: right-click ->
+   "Open With -> Ladder Diagram". *)
 VAR_EXTERNAL
     TransferReq      : BOOL;
     Line_Ready       : BOOL;
@@ -17,6 +23,9 @@ VAR_EXTERNAL
     P202_Permissive  : BOOL;
     LT201_Level      : REAL;
     Batch            : BatchStatus;
+    Active           : Recipe;
+    AgitateReq       : BOOL;
+    AG201_Cmd        : BOOL;
     CipEveryN        : INT;
     CipDue           : BOOL;
     HandshakeTimeout : BOOL;
@@ -39,6 +48,9 @@ LD
 
   RUNG cipdue (* every CipEveryN-th batch needs a flush after this transfer *)
     EQ(MOD(Batch.Count, CipEveryN), 0) ( CipDue )
+
+  RUNG agitate (* AgitateReq (phases.sfc: on while Agitate/Heat/Hold are active) ANDed with the recipe's own flag — off in Transfer/Idle and every non-agitate recipe, with no separate reset *)
+    AgitateReq Active.Agitate ( AG201_Cmd )
 
   RUNG handshaketmo (* requested, not yet accepted, for 30 s straight *)
     Line_Request /Line_Accept tmo:TON(PT := T#30S) ( HandshakeTimeout )

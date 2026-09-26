@@ -2,11 +2,15 @@ PROGRAM BatchSequence
 (* MT-201 batch phases: pick a recipe, charge both dosing lines and start
    the agitator together, heat and hold at temperature, transfer to the
    line PLC, and CIP every CipEveryN batches. This program only ever
-   asks — it sets TransferReq and the valve/agitator/CIP command bits
-   directly from step activity, but the actual permissive-gated commands
-   to the line and the transfer pump live in transfer.ld, the same
-   division lift-station's sequence.sfc/permissives.ld keep. Open the
-   diagram: right-click -> "Open With -> SFC Diagram". *)
+   asks — it sets TransferReq, the valve/CIP command bits, and an
+   AgitateReq flag directly from step activity, but the actual
+   permissive-gated commands to the line and the transfer pump live in
+   transfer.ld, the same division lift-station's sequence.sfc/
+   permissives.ld keep. AG201_Cmd itself isn't written here at all:
+   transfer.ld ANDs AgitateReq with the recipe's own Agitate flag — the
+   same "N-qualify it from every step that wants it active, combine
+   downstream" shape dosing.fbd's HeatingActive gate already uses. Open
+   the diagram: right-click -> "Open With -> SFC Diagram". *)
 VAR_EXTERNAL
     RecipeSel   : INT;
     Start       : BOOL;
@@ -22,7 +26,7 @@ VAR_EXTERNAL
 
     XV201A_Cmd    : BOOL;
     XV201B_Cmd    : BOOL;
-    AG201_Cmd     : BOOL;
+    AgitateReq    : BOOL;
     HeatingActive : BOOL;
     TransferReq   : BOOL;
     ResetTotals   : BOOL;
@@ -65,7 +69,7 @@ SFC
   END_STEP
 
   STEP Agitate:
-    P1 SetAgitate; (* conditional on Active.Agitate — an unconditional S can't do that *)
+    N  AgitateReq; (* combined with Active.Agitate in status.st — an unconditional S can't express "only for recipes that agitate" *)
     N  SetCharging;
   END_STEP
 
@@ -77,11 +81,13 @@ SFC
 
   STEP Heat:
     N  HeatingActive;
+    N  AgitateReq;
     N  SetHeat;
   END_STEP
 
   STEP Hold:
     N  HeatingActive;
+    N  AgitateReq;
     N  HoldTmr;      (* ACTION: holdTmr(IN := Hold.X, PT := ...) *)
     N  SetHold;
     P0 HoldDone;      (* fires once, on Hold's deactivation *)
@@ -104,7 +110,6 @@ SFC
 
   STEP Aborted:
     S  AbortLamp;
-    R  AG201_Cmd;
     P1 LogAbort;
     N  SetAborted;
   END_STEP
@@ -196,23 +201,6 @@ SFC
 
   ACTION CheckDoseBTimeout:
     DoseTimeoutB := ChargeB.T >= T#5M;
-  END_ACTION
-
-  (* AG201_Cmd is driven two ways: this ACTION's conditional set (an
-     unconditional S can't express "only for recipes that agitate") and
-     Aborted's bare `R AG201_Cmd` above. naut check warns about exactly
-     this pair — a variable targeted by both a qualifier association and
-     an ACTION body — and the warning is accepted here rather than
-     designed around: moving the Active.Agitate check onto a transition
-     would mean splitting the simultaneous divergence's Agitate branch
-     into two conditional paths for no behavioral gain, since the
-     documented rule (§2.5) already makes the two writers' precedence
-     exact — R wins on Aborted's one activation scan, the ACTION's writes
-     stand otherwise. See docs/design/examples-dogfood.md. *)
-  ACTION SetAgitate:
-    IF Active.Agitate THEN
-        AG201_Cmd := TRUE;
-    END_IF;
   END_ACTION
 
   ACTION HoldTmr:
