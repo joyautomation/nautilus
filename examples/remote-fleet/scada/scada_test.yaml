@@ -6,8 +6,8 @@
 #
 # fleet.st reads every site's data tag unconditionally every scan (ST's
 # AND does not short-circuit), so every test seeds a full baseline before
-# its first scan — the "first birth" rule examples/sparkplug-host's
-# fleet_test.yaml documents.
+# its first scan — the "first birth" rule fleet.st's own header comment
+# documents.
 tolerance: 0.5
 
 tests:

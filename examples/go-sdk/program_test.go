@@ -94,7 +94,7 @@ func TestPumpSealIn(t *testing.T) {
 // the seeded 65°C setpoint, then a step to 72°C, both required to settle
 // AND stay settled — a loop that merely passes through its target on the
 // way to an overshoot has not settled. The level is frozen mid-band (the
-// pump-station's job is proven separately, by TestPumpSealIn) so the
+// pump's own seal-in is proven separately, by TestPumpSealIn) so the
 // cold-inflow mixing a running pump would inject doesn't fight the
 // temperature loop this test is about.
 func TestPISettles(t *testing.T) {

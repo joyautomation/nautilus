@@ -1,9 +1,9 @@
 (* fleet.st — rollups over the whole consumed fleet, plus the plant's own
    local chlorine analyser. Every site's data tag reads "fault until first
-   birth": __Online guards every one of them below, which is the rule
-   examples/sparkplug-host's fleet.st (and the guide) call out loudly. A
-   never-birthed site would otherwise fault this program's scan on its
-   very first reference to that site's data. *)
+   birth": __Online guards every one of them below, which the Sparkplug
+   host guide (nautilus.joyautomation.com/guides/sparkplug-host/) calls
+   out loudly. A never-birthed site would otherwise fault this program's
+   scan on its very first reference to that site's data. *)
 PROGRAM Main
 VAR_EXTERNAL
     Well1__Online     : BOOL;

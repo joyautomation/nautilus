@@ -84,9 +84,8 @@ redundancy:
   lease: water-scada
 
 alarms:
-  # Site comes from the tag NAME, by regexp — same idiom as
-  # examples/alarms: Well1_Pump1_SpeedSP -> site Well1, Booster1_Pump1 ->
-  # site Booster1.
+  # Site comes from the tag NAME, by regexp: Well1_Pump1_SpeedSP -> site
+  # Well1, Booster1_Pump1 -> site Booster1. See the Alarms guide.
   site-from: "^([A-Za-z]+[0-9]+)_"
 
   defaults: { ack-required: true, auto-clear: true, shelve: true }
@@ -97,8 +96,8 @@ alarms:
   # the shared Pump Template is exactly what makes this a rule instead of
   # five hand-written defs (Well1/Well2/Booster1 x their pumps). enable:
   # "{site}__Online" is the suppression: a dark site's alarms move to
-  # Suppressed instead of freezing lit (see examples/alarms and the
-  # fleet's "dark site" story beat).
+  # Suppressed instead of freezing lit (see the fleet's own "dark site"
+  # story beat, in this project's README).
   rules:
     - match: { type: Pump, member: Fault }
       name: "{desc} fault"
