@@ -3,7 +3,16 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.11.2] - 2026-09-25
+
+The dogfood release: everything found while building the new example plants
+through the editors in the container rig. The ladder and FBD palettes place
+any function block (PID and your own blocks) with a named instance, SFC
+"+ step" chains and "+ join" makes a simultaneous convergence, project
+libraries can live in `lib/`, online edits compose exactly what the runtime
+runs (ladder and FBD libraries included), and the mimic's documented pipe
+gesture writes a pipe again. Plus fifteen smaller fixes from the same pass.
+Requires naut 0.13.0.
 
 ### Added
 
@@ -89,6 +98,20 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- **The mimic palette lists custom components that have no port sidecar
+  yet.** A project's own `{Name}.svelte` (e.g. `hmi/src/lib/ToProcess.svelte`)
+  showed up in the equipment palette only once it had a
+  `{Name}.component.json` sidecar or was already placed in the open
+  `*.mimic.json` — a bare component authored but never placed had no way
+  into the canvas, and no way to reach "Edit Component Ports…" from the
+  palette either. Every `.svelte` component discovered anywhere in the
+  workspace now lists, sidecar or not, with the sidecar's ports when one
+  exists and an empty port list otherwise (the same fallback the runtime
+  `<Mimic>` uses for an unknown component); placing one never creates a
+  sidecar on its own — "Edit Component Ports…" still does that, on first
+  save. The discovery skips a SvelteKit project's own `+page.svelte`/
+  `+layout.svelte`/`+error.svelte` and anything under `src/routes/` —
+  those are framework structure, never equipment.
 - **Delete a rung's last coil when the rung calls a block.** A rung that
   ends in a function block call is valid with no coil (the block is what it
   drives), so deleting its only coil — the `( _ )` a placed block arrives
@@ -140,7 +163,7 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   keeps polling the controller every 3 seconds but recomposes only when a
   project file (root, `lib/`, `nautilus.yaml`) or an unsaved buffer
   changed.
-- **Requires naut 0.13.0** (the next CLI release, which adds
+- **Requires naut 0.13.0** (released alongside; it adds
   `naut compose`); an older `naut` gets the *Update naut* prompt, and online
   edits say plainly that they need it.
 - **The ladder palette row is opaque.** Scrolled rungs no longer show through

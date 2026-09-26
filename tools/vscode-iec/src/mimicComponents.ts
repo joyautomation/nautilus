@@ -23,6 +23,7 @@
 import * as vscode from "vscode";
 import {
   aggregateComponentFiles,
+  isCandidateComponentSveltePath,
   patchComponentPortsText,
   validatePortList,
   type ComponentFile,
@@ -52,8 +53,15 @@ async function readText(uri: vscode.Uri): Promise<string> {
  * panel, by hand, or by git, updates them all (see MimicEditorProvider). */
 export class ComponentIndex {
   manifest: ComponentsManifest = {};
+  /** Every `{Name}.svelte` in the workspace, sidecar or not — the other
+   * half (besides `manifest`'s keys) of the mimic editor palette's custom-
+   * components list (mimicEditor.ts's manifestMessage), so a component
+   * that's neither sidecar'd nor yet placed in the open doc still shows up
+   * to be dropped onto the canvas. See discoverSvelteComponentNames. */
+  svelteNames: string[] = [];
   private winnerUris = new Map<string, vscode.Uri>();
   private watcher: vscode.FileSystemWatcher | undefined;
+  private svelteWatcher: vscode.FileSystemWatcher | undefined;
 
   async refresh(): Promise<void> {
     const uris = await vscode.workspace.findFiles(COMPONENT_GLOB, EXCLUDE_GLOB);
@@ -74,6 +82,7 @@ export class ComponentIndex {
         return uri ? [[name, uri] as const] : [];
       })
     );
+    this.svelteNames = await discoverSvelteComponentNames();
   }
 
   /** The sidecar currently backing `component`'s metadata, if any. */
@@ -81,11 +90,14 @@ export class ComponentIndex {
     return this.winnerUris.get(component);
   }
 
-  /** Rebuild on any *.component.json create/change/delete anywhere in the
-   * workspace and notify. Callers dispose the returned handle once, with
+  /** Rebuild on any *.component.json create/change/delete, or any *.svelte
+   * create/delete (a bare component appearing/disappearing changes
+   * `svelteNames` — its content changing doesn't), anywhere in the
+   * workspace, and notify. Callers dispose the returned handle once, with
    * the extension. */
   watch(onChange: () => void): vscode.Disposable {
     this.watcher = vscode.workspace.createFileSystemWatcher(COMPONENT_GLOB);
+    this.svelteWatcher = vscode.workspace.createFileSystemWatcher("**/*.svelte", false, true, false);
     const fire = () => void this.refresh().then(onChange);
     // The index reads open buffers (readText), so an unsaved edit to an open
     // sidecar — by hand or from the component editor — refreshes it too, as
@@ -101,15 +113,19 @@ export class ComponentIndex {
       this.watcher.onDidCreate(fire),
       this.watcher.onDidChange(fire),
       this.watcher.onDidDelete(fire),
+      this.svelteWatcher.onDidCreate(fire),
+      this.svelteWatcher.onDidDelete(fire),
       vscode.workspace.onDidChangeTextDocument((e) => fireSoon(e.document)),
       vscode.workspace.onDidCloseTextDocument(fireSoon),
     ];
     const watcher = this.watcher;
+    const svelteWatcher = this.svelteWatcher;
     return {
       dispose: () => {
         if (debounce) clearTimeout(debounce);
         subs.forEach((s) => s.dispose());
         watcher.dispose();
+        svelteWatcher.dispose();
       },
     };
   }
@@ -136,12 +152,18 @@ export async function locateComponentSource(component: string): Promise<vscode.U
  * "Edit Component Ports…" on a component the user has only just authored
  * (no *.mimic.json equipment references it yet, so userComponents.ts's
  * request()-driven discovery has never seen it, and no sidecar exists
- * either — see editComponentPorts.ts). Built-ins are excluded by the
- * caller (they have no .svelte source in the workspace anyway). */
+ * either — see editComponentPorts.ts), and (ComponentIndex.svelteNames) to
+ * list one in the mimic editor's palette the same way. Built-ins are
+ * excluded by the caller (they have no .svelte source in the workspace
+ * anyway); SvelteKit route/layout files (`+page.svelte`, anything under a
+ * `src/routes/` directory) are excluded here — see
+ * isCandidateComponentSveltePath — since those are framework structure,
+ * never a mimic component. */
 export async function discoverSvelteComponentNames(): Promise<string[]> {
   const uris = await vscode.workspace.findFiles("**/*.svelte", EXCLUDE_GLOB);
   const names = new Set<string>();
   for (const uri of uris) {
+    if (!isCandidateComponentSveltePath(uri.fsPath)) continue;
     const base = uri.fsPath.split(/[/\\]/).pop() ?? "";
     if (base.endsWith(".svelte")) names.add(base.slice(0, -".svelte".length));
   }

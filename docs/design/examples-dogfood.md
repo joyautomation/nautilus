@@ -68,6 +68,10 @@ instead of a `naut test` failure with an unfamiliar task name in the
 error. Fixed by dropping the `name:` key on the first task in both
 manifests and using `main` in the test file's `suspend:` lists.
 
+**Status: fixed on `main` by PR #43** — `naut check` now warns when a
+manifest's first task names itself, naming the ignored key and the
+task's real name.
+
 **2026-09-25 · `task.local` addressing (docs/testing.md) doesn't resolve
 · bug or docs gap**
 
@@ -83,6 +87,11 @@ reach the acceptance-test expression compiler (a bug) or the doc's
 example needs a working one (a docs gap) — not chased further; the
 acceptance suite doesn't rely on it, but the dogfooding brief asked to
 try each `docs/testing.md` verb.
+
+**Status: fixed on `main` by PR #43** — `task.local` was never meant to
+resolve as an ST expression identifier; it's a matcher-form key
+(`expect: { task.local: ... }`), and `docs/testing.md` is reworded to
+say so.
 
 **2026-09-25 · SFC `Pn` pulse qualifier timing: activation vs.
 deactivation matters for a duty-swap that must outlive a post-run ·
@@ -150,6 +159,13 @@ past "naming the constant is the trigger" — worth a minimal, single-file
 repro (a two-line FUNCTION_BLOCK with one `VAR CONSTANT` and one
 `VAR_OUTPUT`) in the issue.
 
+**Status: fixed on `main` by PR #41 (`var-constant-writeback`) —
+`FUNCTION_BLOCK`/`FUNCTION` variables now start at their declared initial
+value instead of reading zero.** The final pass restores the named
+`VAR CONSTANT` form in `lib/physics.st` (`LPerPercent`, `RampHzPerS`,
+`FullLoadA`, `MaxHz`) and drops the workaround comments above; `naut
+check`/`naut test` stay clean with the named constants back in.
+
 **2026-09-25 · library files must sit at the project root — a `lib/`
 subdirectory does not compose · docs gap / design constraint**
 
@@ -170,6 +186,14 @@ check` diagnostic when a project has a `lib/`-shaped subdirectory of
 name like `lib/` invites exactly this layout, and the failure mode
 (three unrelated-looking "unknown type" errors, one per file that
 happens to use the library) doesn't point at the real cause.
+
+**Status: fixed on `main` by PR #42 (`project: a lib/ directory composes
+into the library prelude`) — a project's libraries are now the
+PROGRAM-less files at the root PLUS every such file under `lib/`, at any
+depth.** The final pass moves `pump.st`, `physics.st` and `motor.ld` back
+into `lib/`, matching the design's original intent; `naut check .`,
+`naut check -m field.yaml .` and `naut test` (11/11) stay clean with them
+there.
 
 **2026-09-25 · a level-PID-modulated duty pump doesn't fully stop just
 because inflow drops · design tuning, not a bug**
@@ -242,6 +266,9 @@ failure is specific to the multi-line block-comment case immediately
 after a rung name; a single-line `(* ... *)` in the same position works
 fine.
 
+**Status: fixed on `main` by PR #43** — a multi-line `(* … *)` rung-header
+comment now parses (`lang/ld`, `rungheader.go`'s `joinCommentLines`).
+
 **2026-09-25 · a block comment whose continuation line starts with the
 literal keyword `PROGRAM` silently breaks project-library type
 registration · bug (fixed on main)**
@@ -273,11 +300,12 @@ the ladder rung-comment parser bug above since this one has zero
 symptoms pointing anywhere near the actual cause.
 
 **Status: fixed on `main` by PR #42 (`PROGRAM` detection is lexical now,
-not a line-oriented pre-scan) — ships in v0.13.0.** This example still
-targets the released CLI (v0.12.0), where the bug is real, so `motor.ld`'s
-header keeps the reworded wording above rather than reverting to the
-original phrasing that happens to put `PROGRAM` mid-line — it has to keep
-working on v0.12.0 until v0.13.0 ships, not just on `main`.
+not a line-oriented pre-scan) — ships in v0.13.0.** The final pass merges
+`main` and moves the library files into `lib/` (PR #42's other half), so
+this example now targets v0.13.0 rather than the released v0.12.0 either
+way; `motor.ld`'s header keeps the reworded wording above regardless
+(it's the clearer sentence, not just a workaround) rather than reverting
+to the original phrasing that happens to put `PROGRAM` mid-line.
 
 **2026-09-25 · a trip counter reset by the same signal that permits a
 retry can never count past one · design clarification, not a bug**
@@ -651,6 +679,140 @@ using `--host 127.0.0.1 --port 44818` instead. Worth a one-line note in
 the CLI's own `--host` flag help text, since the manifest's `host:port`
 form is documented prominently enough to invite the same shorthand here.
 
+## examples/remote-fleet
+
+**2026-09-25 · a root `.st` file's `TYPE` is invisible project-wide once
+that same file also declares a `PROGRAM` · papercut (error message)**
+
+Wrote `sites/well-1/well.st` with the `TYPE Pump : STRUCT ... END_TYPE`
+declaration at the top of the file, immediately followed by
+`PROGRAM Well`, expecting the type to compose the same way
+`examples/lift-station`'s `pump.st` (a `TYPE` + a `FUNCTION_BLOCK`, no
+`PROGRAM`) does. Expected `naut check .` to either accept it or explain
+why not. Got `sim.st:10:5: VAR Pump1: unknown type "Pump"` — a plausible-
+sounding error that names the wrong file and gives no hint that the real
+cause is `well.st`'s own `PROGRAM` declaration disqualifying it as a
+library, per `internal/project/project.go`'s `hasProgramDecl` (a file is
+composed as a library only when it declares no `PROGRAM` at all — the
+same rule documented for `.ld` in `lang/ld/ld.go` and for `.st` in
+`lang/st/parser.go`, but nothing in the check output traces an "unknown
+type" back to it). Where: `internal/project/project.go` /
+`internal/project/sources.go`. Worked around it by splitting the `TYPE`
+into its own `types.st` (no `PROGRAM`), one per site (not shared — see
+`sites/well-1/README.md`). A `naut check` diagnostic that named which
+file declared the type and why it was excluded ("`Pump` declared in
+well.st, which has a PROGRAM — not composed as a library") would have
+saved the trip through three files to find it.
+
+**2026-09-25 · a program that recomputes a Sparkplug-host-generated
+writable tag every scan silently overwrites any external write to it ·
+design lesson, not a bug**
+
+First cut of `scada/overview.fbd` wrote `WellDemandHz` into
+`Well1_Pump1_SpeedSP`/`Well2_Pump1_SpeedSP` every scan, computed from the
+tank level — the same "dispatch owns the setpoint" pattern
+`examples/sparkplug-host`'s `fleet.st` uses for its one setpoint
+(`PumpSpeedCmd` -> `W6_Pump1_Speed`). Wanted the SAME generated tag to
+also be the fleet's live NCMD write-path demo (`POST /api/tags` from the
+SCADA, watch the site's tag change). Live-tested it (`curl -X POST
+localhost:8080/api/tags -d '{"name":"Well1_Pump1_SpeedSP","value":50.0}'`)
+and — 1.5 s later — found the write reverted to whatever the tank level
+called for, not 50.0: `overview.fbd` had simply run again in the
+meantime (250 ms scan) and recomputed the same tag, last-writer-wins,
+exactly as any two writers of one tag would. Not a platform bug — the
+runtime does exactly what a program that unconditionally assigns a tag
+every scan should do — but a genuine design trap for an example meant to
+demonstrate an *operator's* write reaching a site: a program that owns
+the same tag as the write-path demo makes the demo non-deterministic
+depending on scan timing. Fixed by splitting the concerns: `overview.fbd`
+now only computes informational `Well1Called`/`Well2Called` flags (by
+tank level, guarded on `__Online`), and leaves
+`Well1_Pump1_SpeedSP`/`Well2_Pump1_SpeedSP` genuinely operator-owned —
+nothing in the project writes them. Reproduced live after the fix
+(`scada/README.md`'s "Reading the fleet" section) and covered in
+`scada/scada_test.yaml`.
+
+**2026-09-25 · the fleet's live walkthrough, as actually run · session
+narrative (see `../../examples/remote-fleet/README.md`'s "Live
+walkthrough" for the generic, reproducible form)**
+
+Port 1883 was already taken by another broker on this machine, so the
+broker for this session ran on an alternate host port (`docker run --rm
+-d --name fleet-mosquitto -p <port>:1883 eclipse-mosquitto`, `sites/*`
+and `scada`'s own `nautilus.yaml` `broker:` lines pointed at it for the
+run) — same recipe as the README's, just a different port. With the
+broker, the three sites, and `booster-1`'s `naut modbus serve` all up:
+`curl localhost:8080/api/state` showed `SitesOnline: 3`, live values
+moving, `AnyPumpRunning: true`. The NCMD write path
+(`POST /api/tags -d '{"name":"Well1_Pump1_SpeedSP","value":50.0}'`
+against `scada`) reached `well-1` and the pump ramped to it. Killing
+`well-2`'s `naut run` dropped `SitesOnline` to 2 and moved its pump-fault
+alarm to Suppressed, alongside the chlorine analyser's own alarm (its
+Modbus source was never connected in this session either — the alarm
+engine treats that the same way: not evaluated). `docker pause
+fleet-mosquitto` for 65 s while `well-1` kept running, then unpause:
+`well-1`'s log drained a `store-forward` buffer of ~219 messages back to
+0 within one scan of reconnecting, and `scada`'s own driver panel showed
+`seq gaps: 0` for the replay. The historian recipe (`naut historian`
+against Postgres) was **not** run live this session — `compose.yaml`'s
+`postgres` service and the recipe in the README are documented, not
+exercised.
+
+**2026-09-25 · `naut sparkplug import`'s own `--sites` help text claims
+`desc:` never survives a `--broker` import — it does · docs gap (stale
+help text)**
+
+Building the fleet README's "Proof: offline and live agree" section
+(and resolving an apparent contradiction between two draft paragraphs
+about whether `desc:` is recoverable from the wire) meant actually
+running both `naut sparkplug import --sites` and `naut sparkplug import
+--broker` against the same live fleet and diffing the output. Both the
+released v0.12.0 CLI and this branch's build recovered every `desc:`
+field correctly from a live broker import — `tags/sparkplug.yaml` came
+back byte-identical to the offline `--sites` generation, no `desc:`
+differences at all. This contradicts `naut sparkplug --help`'s own
+`--sites` section ("desc: ... The `--broker` path cannot supply one — a
+metric's Properties/description does not survive payload decoding — so
+an import from live births leaves every `desc:` empty"). Either the CLI
+help text is stale (the decoding was fixed and the doc wasn't updated),
+or there is some other live-import condition under which `desc:` really
+is dropped that this fleet's narrow test (one broker, three healthy
+nodes, an unfiltered and a narrowed import) didn't hit. Not chased
+further — out of scope for an examples PR — but worth a platform-side
+look: `naut sparkplug import --help`'s own text (searched from
+`sparkplug` package's flag/usage strings), or a repro against a node that
+publishes a metric with no `desc:` at all (to see if empty and "not
+supplied" are being conflated).
+
+**2026-09-25 · a mimic equipment `bind` can't address a UDT struct
+member the way `tagAt()`/faceplates can · design gap**
+
+Building `scada/fleet.mimic.json`, wanted each site's pump bound to its
+own `Run`/`SpeedHz` fields — `Well1_Pump1.Run`, `Well1_Pump1.SpeedHz` —
+the same dotted-path addressing `hmi/src/lib/tags.ts`'s `tagAt()` (used
+by faceplates, trend, `numericLeaves`) and the write path
+(`P101.Drive.Speed`) both support for a struct/UDT tag. `MimicEquipment.
+bind`/`resolveBindings()` (`hmi/src/lib/mimic.ts`) do not: it is a flat
+`tag in tags` lookup, and a live frame renders a struct tag as a NESTED
+object (`runtime/tags.go`'s `plain()` — `Plain(v)` for `ir.TypeStruct`
+returns `map[string]any`, not a flattened `"Tag.Member"` key), so a bind
+value containing a `.` never resolves — silently: `resolveBindings` just
+skips the unmatched key, and the component renders its own prop default
+instead of erroring. `MimicLabel.bind` has the same flat-lookup
+limitation, and additionally only ever renders a *numeric* live value
+(`labelValue()` falls back to `—` for anything not `typeof === 'number'`)
+— a label bound to a `BOOL` (`Well1__Online`, in this fleet's mimic)
+never shows anything but `—`. Kept the dotted binds and the bool-tag
+label binds in `scada/fleet.mimic.json` anyway, since they're valid
+JSON, `naut check` doesn't validate a mimic's bindings against the tag
+model at all, and there's no rig here to prove the render live — but a
+project that DOES have a rig should not copy this pattern expecting it
+to work. Where: `hmi/src/lib/mimic.ts`'s `resolveBindings()`; a fix
+would need either a `tagAt()`-style dotted resolve for equipment/pipe/
+label binds, or a documented convention (e.g. the sites.yaml-side
+generator emitting a flat per-member read tag the way `writable:`
+already does for writes).
+
 ## CLI and extension (found while building)
 
 Cross-cutting findings from this session not specific to one
@@ -676,7 +838,10 @@ expecting the extension's manifest schema to accept and describe the
 form. `host:port` support landed in PR #38, but the schema's field
 description still only says "IP or hostname" — the extension doesn't
 know about its own CLI's feature yet. Where: `tools/vscode-iec` manifest
-schema. Status: open, fix tracked under `[Unreleased]`.
+schema.
+
+**Status: fixed on `main` by PR #50 (`ext-papercuts`)** — the `eip`
+driver's `host` field now describes the `host:port` form.
 
 **2026-09-25 · `naut logix emulate --ramp` moves every numeric leaf,
 handshake DINTs included · papercut (CLI)**
@@ -684,6 +849,139 @@ handshake DINTs included · papercut (CLI)**
 Used `naut logix emulate --ramp` for a demo carrying handshake tags,
 expecting process values to drift while handshake DINTs stayed put.
 `--ramp` ramps every numeric leaf, undiscriminated — process values and
-handshakes alike. Where: `cmd/naut/logixemulate.go`. Status: open —
-wants a `--ramp-tags <globs>` flag for when a batch skid's demo needs
-some numerics held still.
+handshakes alike. Where: `cmd/naut/logixemulate.go`.
+
+**Amended:** a leaf a client writes stops drifting and keeps the write
+(the ramp treats any value that no longer matches what it last wrote as
+client-owned from then on) — so a handshake DINT the client actually
+writes during the exchange is already fine. What's still undiscriminated
+is a leaf the client only ever *reads*: a pure process-value input with
+no client write of its own drifts right along with everything else, and
+there's no way to hold a specific one still without writing to it. Status:
+open — still wants a `--ramp-tags <globs>` flag (or the inverse, a
+hold-still list) for a demo that needs some never-written numerics
+static.
+
+**2026-09-25 · a `TYPE` sharing a file with a `PROGRAM` reports "unknown
+type" · papercut (CLI), found on `remote-fleet`**
+
+Hit while building the sibling `remote-fleet` example: a `TYPE`/`STRUCT`
+UDT declared in the same file as the `PROGRAM` that uses it (rather than
+in a separate library file) failed `naut check` with `unknown type
+"<Name>"`, pointing at the consumer, not the declaration — the same
+unhelpful shape as the `lib/`-subdirectory finding above, and just as
+easy to trip over the first time a project author reaches for a `TYPE`
+before it occurs to them it needs its own file. Where: likely the same
+library/type-registration pass (`internal/project/project.go`). Status:
+open.
+
+**2026-09-25 · the EtherNet/IP guide never says the emulator doesn't
+execute ladder · docs gap**
+
+`naut logix emulate` stands in for a real Logix controller convincingly
+enough (tag browsing, reads/writes, a `.L5X`'s data types and structure)
+that nothing in the EtherNet/IP guide (`website/src/content/docs/guides/
+ethernet-ip.md`, "No PLC? The Logix emulator") flags the one thing it
+does not do: run the controller's actual ladder logic. A reader who
+wires a
+manifest at the emulator expecting `.L5X`-authored rungs to execute
+against it (rather than just holding whatever value the emulator seeded
+or a client last wrote, the same static-slave model `naut modbus serve`
+uses) has no warning anywhere in the guide. Status: open.
+
+**2026-09-25 · `naut eip import --host` help still says "IP or hostname"
+· papercut (CLI)**
+
+The `eip` driver's `host` field grew `host:port` support (PR #38) and the
+extension's manifest schema now documents the form (PR #50 — see above),
+but `naut eip`'s own CLI help (`cmd/naut/eip.go`) still reads "controller
+IP or hostname" everywhere `--host` is described — the shared usage
+banner, `import`'s flag, and `browse`'s flag alike — with no mention that
+a `host:port` form reaches a nonstandard EtherNet/IP port (`naut logix
+emulate` off 44818, or a real controller on one). Where: `cmd/naut/
+eip.go` (`eipUsage`, `runEIPImport`, `runEIPBrowse`). Status: open.
+
+**2026-09-25 · suspending `main` in a test silently stops every alarm
+from ever qualifying · papercut (runtime/testing)**
+
+Hit rewriting the shelved-high-level-alarm test to drive `LIT101_Level`
+through the real seal-in instead of setting `HighLevelAlm` directly:
+suspending `main` alongside `level` (to keep the sequence/permissives
+from also reacting to the driven level) left `HighLevelAlm` computing
+correctly and holding `true` for the whole step, but `alarms: { active:
+["HighLevel"] }` never matched — the alarm never raised at all, on-delay
+or no on-delay, no matter how long the test advanced. `naut check` and
+`naut test` both said nothing was wrong. Where: `internal/project/
+alarms.go` wires the alarm engine's `Evaluate()` to `rt.OnScan(...)`, and
+`runtime/runtime.go`'s `OnScan` doc comment says plainly "only the main
+task fires OnScan" — every other task shares the tag store but never
+triggers the alarm evaluator. So a test (or a real project) that
+suspends `main` doesn't just freeze the sequence logic, it freezes alarm
+evaluation entirely: an on-delay timer that would otherwise qualify
+never gets sampled, and the alarm silently never raises, with no
+diagnostic anywhere pointing at `suspend: [main, ...]` as the reason.
+Worked around here by leaving `main` unsuspended and suspending
+`permissives` instead. Two fixes worth considering, either fixes the
+silence: have the alarm engine tick on any task's `OnScan` (or off the
+virtual clock directly, since it already only cares about `now`, not
+which program ran) rather than main-task-only; or have `naut test` warn
+when a suite's or a test's `suspend:` list includes `main` and the
+project declares an `alarms:` section, the same shape as the
+first-task-`name:` warning PR #43 added. Status: open.
+
+## Built in the rig (ex01)
+
+The `lift-station` example doubled as the subject of `content/assets/
+capture/ex01-lift-station`'s video rig — VS Code driven by gesture in an
+`incus`-provisioned container, building `sequence.sfc`, `permissives.ld`,
+`level.fbd` and `lift-station.mimic.json` by real editor interactions
+(diagram gestures, palette/FB-picker use, the mimic editor) rather than
+pasted text, to prove the extension's authoring path end to end. That
+session logged 59 numbered findings in `GESTURE-FINDINGS.md`, on top of
+this file's own entries above. Rough breakdown by class (a finding
+sometimes straddles two; counted once, by its primary tag):
+
+| Class | Count | Notes |
+|---|---|---|
+| Bug | ~12 | Parser/compiler/runtime defects and extension hit-testing bugs — the kind that need a real fix, not a workaround. |
+| Papercut | ~26 | Works, but rougher than it should be — wrong error, missing flag, awkward gesture path. |
+| Gap | ~13 | No gesture/API reaches a state the file format supports (e.g. no gesture for an SFC simultaneous convergence). |
+| Docs / design | ~5 | The tool behaved correctly; the brief, doc or test needed to catch up. |
+| Not a finding | 3 | Confirmed-working behavior worth recording, not an issue. |
+
+Findings from this pass fixed by a merged PR:
+
+| PR | Fixed |
+|---|---|
+| #43 | `lang/ld`: a multi-line `(* … *)` rung-header comment was a hard parse error. `internal/project`: a manifest's first task's `name:` key was silently ignored — `naut check` now rejects it. `docs/testing.md`: reworded the `task.local` section (it never reached the ST-expression compiler; matcher form only). |
+| #44 | `naut compose` + online edits: composition now folds in ladder/FBD libraries, not just `.st`. |
+| #45 | SFC editor: "+ step" chains and "new step" actually create the step; orphan-transition and action-table layout fixes. |
+| #46 | Mimic editor: pipes attach on the documented gesture and route around their own equipment; default ports sit on the drawings. |
+| #47 | Ladder palette: inserts any `FUNCTION_BLOCK`, names the instance, offers to declare a retagged identifier. |
+| #48 | FBD palette: places any function block (PID and user blocks) with named pins; renames instances. |
+| #50 | Nine further papercuts surfaced building this project (extension). |
+| #51 | SFC simultaneous-convergence gesture; delete a rung's last coil when a block remains; one FBD chip per open pin; `naut check` names the ladder file in its errors. |
+| #54 | SFC S/R semantics: an association acts once on activation, not every scan; a suppressed transition must itself be enabled to suppress another; `naut check` warns on association-vs-`ACTION`-write conflicts. |
+| #55 | Mimic editor palette: lists a custom component that has no port sidecar yet, instead of hiding it. |
+
+(PR #41 and #42 — the `VAR CONSTANT` write-back bug and `lib/` directory
+support — are covered above, in their own dated entries.)
+
+**Still open**, from both this file and `GESTURE-FINDINGS.md`:
+`naut logix emulate --ramp` has no way to hold a never-written numeric
+leaf still (papercut — a leaf a client writes is already fine, see the
+amended entry above); a custom component's ports have two sources of
+truth (sidecar for the editor, inline `ports` for the runtime — findings
+above); a `TYPE` sharing a file with a `PROGRAM` reports "unknown type"
+pointing at the consumer, not the declaration (papercut, found on
+`remote-fleet`); the EtherNet/IP guide never says the Logix emulator
+doesn't execute ladder logic (docs gap); `naut eip import`/`browse
+--host` help still says "IP or hostname" with no mention of `host:port`
+(papercut); and two mimic-editor coordinate hit-testing bugs
+(`GESTURE-FINDINGS.md` #58/#59 — a click resolves to whatever is
+visually topmost at that pixel, not necessarily the element the gesture
+reasoned about; worked around in the rig with an off-center click, not
+fixed in the editor).
+
+Full record, gesture by gesture, beat by beat: `content/assets/capture/
+ex01-lift-station/GESTURE-FINDINGS.md` (private content repo).

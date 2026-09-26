@@ -1,0 +1,140 @@
+{
+	"name": "Lift station — wet well WW-101",
+	"canvas": { "width": 900, "height": 400 },
+	"equipment": [
+		{
+			"id": "WW101",
+			"component": "Tank",
+			"x": 60,
+			"y": 90,
+			"width": 220,
+			"label": "WW-101",
+			"ports": [
+				{ "name": "top", "x": 0.503, "y": 0.1 },
+				{ "name": "left", "x": 0.15, "y": 0.516 },
+				{ "name": "right", "x": 0.829, "y": 0.732 },
+				{ "name": "bottom", "x": 0.516, "y": 0.836 }
+			],
+			"bind": { "levelPct": "LIT101_Level" }
+		},
+		{
+			"id": "LSHH101",
+			"component": "FloatSwitch",
+			"x": 65,
+			"y": 110,
+			"width": 40,
+			"label": "LSHH",
+			"bind": { "tripped": "LSHH101" }
+		},
+		{
+			"id": "LSLL101",
+			"component": "FloatSwitch",
+			"x": 65,
+			"y": 290,
+			"width": 40,
+			"label": "LSLL",
+			"bind": { "tripped": "LSLL101" }
+		},
+		{
+			"id": "P101",
+			"component": "SubmersiblePump",
+			"x": 100,
+			"y": 210,
+			"width": 70,
+			"label": "P-101",
+			"ports": [{ "name": "discharge", "x": 0.5, "y": 0, "dir": "up" }],
+			"bind": { "running": "P101_Running", "speedHz": "P101_SpeedHz" }
+		},
+		{
+			"id": "P102",
+			"component": "SubmersiblePump",
+			"x": 190,
+			"y": 210,
+			"width": 70,
+			"label": "P-102",
+			"ports": [{ "name": "discharge", "x": 0.5, "y": 0, "dir": "up" }],
+			"bind": { "running": "P102_Running", "speedHz": "P102_SpeedHz" }
+		},
+		{
+			"id": "CV101",
+			"component": "Valve",
+			"x": 100,
+			"y": 10,
+			"width": 70,
+			"label": "CV-101",
+			"props": { "openPct": 100 },
+			"ports": [
+				{ "name": "in", "x": 0, "y": 0.5, "dir": "left" },
+				{ "name": "out", "x": 1, "y": 0.5, "dir": "right" }
+			]
+		},
+		{
+			"id": "CV102",
+			"component": "Valve",
+			"x": 210,
+			"y": 10,
+			"width": 70,
+			"label": "CV-102",
+			"props": { "openPct": 100 },
+			"ports": [
+				{ "name": "in", "x": 0, "y": 0.5, "dir": "left" },
+				{ "name": "out", "x": 1, "y": 0.5, "dir": "right" }
+			]
+		},
+		{
+			"id": "TOPROC",
+			"component": "ToProcess",
+			"x": 360,
+			"y": 25,
+			"width": 130,
+			"props": { "label": "FORCE MAIN" },
+			"ports": [{ "name": "in", "x": 0, "y": 0.5, "dir": "left" }]
+		},
+		{
+			"id": "SEQ",
+			"component": "SeqStepTag",
+			"x": 420,
+			"y": 110,
+			"width": 130,
+			"bind": { "text": "SeqStep" }
+		}
+	],
+	"pipes": [
+		{
+			"id": "p101-cv101",
+			"points": [],
+			"routing": "orthogonal",
+			"from": { "equip": "P101", "port": "discharge" },
+			"to": { "equip": "CV101", "port": "in" },
+			"bind": { "flowing": "P101_Running" }
+		},
+		{
+			"id": "cv101-header",
+			"points": [],
+			"routing": "orthogonal",
+			"from": { "equip": "CV101", "port": "out" },
+			"to": { "equip": "TOPROC", "port": "in" },
+			"bind": { "flowing": "P101_Running" }
+		},
+		{
+			"id": "p102-cv102",
+			"points": [],
+			"routing": "orthogonal",
+			"from": { "equip": "P102", "port": "discharge" },
+			"to": { "equip": "CV102", "port": "in" },
+			"bind": { "flowing": "P102_Running" }
+		},
+		{
+			"id": "cv102-header",
+			"points": [],
+			"routing": "orthogonal",
+			"from": { "equip": "CV102", "port": "out" },
+			"to": { "equip": "TOPROC", "port": "in" },
+			"bind": { "flowing": "P102_Running" }
+		}
+	],
+	"labels": [
+		{ "text": "LIT-101", "x": 650, "y": 100, "bind": "LIT101_Level", "unit": "%", "decimals": 1 },
+		{ "text": "FIT-101", "x": 650, "y": 130, "bind": "FIT101_Flow", "unit": "L/s", "decimals": 2 }
+	]
+}

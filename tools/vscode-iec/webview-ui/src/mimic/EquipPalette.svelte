@@ -1,9 +1,12 @@
 <script lang="ts">
 	// Equipment palette: live thumbnails of the kit's built-ins, plus (below a
 	// divider) this project's own custom components — anything with a
-	// *.component.json sidecar or already placed somewhere in the open doc
-	// (ed.customComponents, posted by the host's mimicManifest message; see
-	// mimicEditor.ts's paletteCustomComponents). Click one to arm placement,
+	// *.component.json sidecar, already placed somewhere in the open doc, or
+	// just a bare `{Name}.svelte` discovered anywhere in the workspace with
+	// neither yet (ed.customComponents, posted by the host's mimicManifest
+	// message; see mimicEditor.ts's paletteCustomComponents). A bare one
+	// lists with no ports until "Edit Component Ports…" creates its sidecar
+	// on first save — dropping it here never creates one. Click one to arm placement,
 	// then click the canvas to drop it — same addEquipment op path either
 	// way, so a custom component's default size is whatever ITS OWN Svelte
 	// component defaults to (no width override), exactly like a built-in

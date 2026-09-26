@@ -1,0 +1,63 @@
+# Acceptance tests for well-2 — same shape as ../well-1/well-1_test.yaml,
+# against this site's own setpoints (PumpOnLevel 70, PumpOffLevel 35,
+# MinSpeedHz 25, MaxSpeedHz 55).
+tolerance: 0.5
+
+tests:
+  - name: the pump starts at PumpOnLevel and drops at PumpOffLevel
+    suspend: [sim]
+    given: { WellLevel: 20.0 }
+    steps:
+      - advance: 1s
+        expect: { Pump1_RunCmd: false }
+      - given: { WellLevel: 75.0 } # above PumpOnLevel (70)
+        advance: 1s
+        expect: { Pump1_RunCmd: true }
+      - given: { WellLevel: 50.0 } # between PumpOffLevel (35) and PumpOnLevel: stays running
+        advance: 1s
+        expect: { Pump1_RunCmd: true }
+      - given: { WellLevel: 30.0 } # below PumpOffLevel
+        advance: 1s
+        expect: { Pump1_RunCmd: false }
+
+  - name: the speed command follows Pump1.SpeedSP clamped to [MinSpeedHz, MaxSpeedHz]
+    suspend: [sim]
+    given: { WellLevel: 75.0, Pump1.SpeedSP: 40.0 }
+    steps:
+      - advance: 1s
+        expect: { Pump1_SpeedCmd: 40.0 }
+      - given: { Pump1.SpeedSP: 5.0 } # below MinSpeedHz (25)
+        advance: 1s
+        expect: { Pump1_SpeedCmd: 25.0 }
+      - given: { Pump1.SpeedSP: 90.0 } # above MaxSpeedHz (55)
+        advance: 1s
+        expect: { Pump1_SpeedCmd: 55.0 }
+      - given: { WellLevel: 10.0 }
+        advance: 1s
+        expect: { Pump1_SpeedCmd: 0.0 }
+
+  - name: the run-hours meter counts a start and accumulates hours while running
+    suspend: [sim]
+    given: { WellLevel: 20.0, Pump1.Run: false }
+    steps:
+      - given: { Pump1.Run: true }
+        advance: 1s
+        expect: { PumpStarts: 1 }
+      - advance: 3600s
+        expect: { PumpHours: { near: 1.0, tol: 0.01 } }
+      - given: { Pump1.Run: false }
+        advance: 1s
+        expect: { PumpHours: { near: 1.0, tol: 0.01 } }
+      - given: { Pump1.Run: true }
+        advance: 1s
+        expect: { PumpStarts: 2 }
+
+  - name: closed loop rides out a storm inflow and settles once it passes
+    suspend: []
+    given: { WellLevel: 45.0, InflowLps: 4.5 }
+    steps:
+      - advance: 180s
+        expect: { WellLevel: { lt: 90.0 } }
+      - given: { InflowLps: 0.8 }
+        until: 300s
+        expect: { Pump1_RunCmd: false }

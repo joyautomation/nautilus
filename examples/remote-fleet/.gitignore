@@ -1,0 +1,11 @@
+# Local retained state (setpoints) — recreated on first run.
+**/retain.json
+
+# Sparkplug bdSeq persistence — a bench artifact, not part of the design.
+**/.bdseq
+
+# `naut build` output.
+sites/well-1/well-1
+sites/well-2/well-2
+sites/booster-1/booster-1
+scada/water-scada

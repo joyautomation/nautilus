@@ -1,0 +1,228 @@
+# Acceptance tests for the lift station's control narrative — no Go, no
+# toolchain, run on the bench manifest (nautilus.yaml) in virtual time.
+#
+#   naut test              run them
+#   naut test -v           with virtual elapsed time per test
+#   naut test -run "storm"  only tests whose name matches
+#
+# File-level suspend: [sim] below is the default for every test — driving
+# the process values directly is how an open-loop test gets an exact,
+# repeatable answer out of closed-loop control logic. A test only states
+# its own `suspend:` when it needs something OTHER than that default (an
+# empty `suspend: []` to run the sim closed-loop, or an extra task
+# suspended alongside it) — Test.Suspend REPLACES the file's list rather
+# than adding to it, so such a test must repeat `sim` itself.
+tolerance: 0.5
+suspend: [sim]
+
+tests:
+  - name: lead pump starts at LeadOn and post-runs after LeadOff
+    given: { LIT101_Level: 65.0, P101_Running: true } # RunFb, so the starter doesn't fail-to-run
+    steps:
+      - advance: 1s
+        expect: { P101_RunCmd: true, LeadIsP101: true }
+      - given: { LIT101_Level: 25.0 } # below LeadOffLevel (30) — PostRun, still running
+        advance: 1s
+        expect: { P101_RunCmd: true }
+      - advance: 21s # PostRunSec (20 s) elapses — pump drops, duty alternates
+        expect: { P101_RunCmd: false, LeadIsP101: false }
+
+  - name: lag joins at LagOn and drops at LagOff
+    given: { LIT101_Level: 65.0, P101_Running: true, P102_Running: true }
+    steps:
+      - advance: 1s
+        expect: { P101_RunCmd: true, P102_RunCmd: false }
+      - given: { LIT101_Level: 85.0 } # above LagOnLevel (80)
+        advance: 1s
+        expect: { P101_RunCmd: true, P102_RunCmd: true }
+      - given: { LIT101_Level: 50.0 } # below LagOffLevel (55), still above LeadOffLevel
+        advance: 1s
+        expect: { P101_RunCmd: true, P102_RunCmd: false }
+
+  - name: duty alternates every completed cycle
+    steps:
+      - given: { LIT101_Level: 65.0, P101_Running: true }
+        advance: 1s
+        expect: { P101_RunCmd: true, P102_RunCmd: false, LeadIsP101: true }
+      - given: { LIT101_Level: 25.0 }
+        advance: 22s # through PostRun and Alternate, back to Idle
+        expect: { CycleCount: 1, LeadIsP101: false }
+      - given: { LIT101_Level: 65.0, P102_Running: true } # second cycle: P102 is lead now
+        advance: 1s
+        expect: { P101_RunCmd: false, P102_RunCmd: true, CycleCount: 2 }
+
+  - name: failover on fail-to-run — the standby takes the call and the fault latches an alarm
+    given: { LIT101_Level: 65.0 } # P101_Running left false: never confirms it started
+    steps:
+      - advance: 5.5s # 5 s fail-to-run timer plus settling
+        expect: { P101_FailToRun: true, P102_RunCmd: true }
+        alarms: { active: ["P101_FailToRun"] }
+      - given: { ResetFaults: true }
+        advance: 200ms
+        expect: { P101_FailToRun: false }
+
+  - name: three fail-to-run trips lock the pump out, and a reset clears it
+    # A direct continuation of the failover test above: keep P101 as lead
+    # for all three trips by re-asserting LeadIsP101 after every reset —
+    # [main] (sequence.sfc) stays active (unlike the other open-loop
+    # tests here) because its own Failover/SwapDuty would otherwise hand
+    # the lead to P102 after the very first trip, same as the failover
+    # test above; re-given each time it fires, LeadIsP101 sticks until the
+    # next trip flips it again.
+    given: { LIT101_Level: 65.0, LeadIsP101: true } # P101_Running left false throughout
+    steps:
+      - advance: 5.7s # trip 1: 5 s fail-to-run timer plus settling
+        expect: { P101_FailToRun: true, P101_LockedOut: false }
+      - advance: 300ms # let the alarm evaluator catch up to the tag
+        alarms: { active: ["P101_FailToRun"] }
+      - given: { ResetFaults: true, LeadIsP101: true }
+        advance: 200ms
+        expect: { P101_FailToRun: false, P101_LockedOut: false }
+      - given: { ResetFaults: false, LeadIsP101: true }
+        advance: 5.7s # trip 2 — an ordinary Reset-and-retry, same as the failover test's
+        expect: { P101_FailToRun: true, P101_LockedOut: false }
+      - given: { ResetFaults: true, LeadIsP101: true }
+        advance: 200ms
+        expect: { P101_FailToRun: false, P101_LockedOut: false }
+      - given: { ResetFaults: false, LeadIsP101: true }
+        advance: 5.7s # trip 3 — the third trip latches LockedOut
+        expect: { P101_FailToRun: true, P101_LockedOut: true, P101_Avail: false }
+      - advance: 300ms # let the alarm evaluator catch up to the tags
+        alarms: { active: ["P101_FailToRun", "P101_LockedOut"] }
+      - given: { ResetFaults: true } # only now does Reset also clear the trip count —
+        advance: 200ms                # see lib/motor.ld's `lockout` rung for why
+        expect: { P101_FailToRun: false, P101_LockedOut: false }
+
+  - name: the high-high float runs both pumps unless HOA is Off, and alarms critical
+    given: { LSHH101: true, P101_Mode: 0, P102_Running: true } # Off wins over the float
+    steps:
+      - advance: 2.5s
+        expect: { P101_RunCmd: false, P102_RunCmd: true }
+        alarms: { active: ["LSHH101"] }
+      - ack: { ids: ["LSHH101"], by: test }
+        scans: 1
+        alarms: { state: { LSHH101: ack-active } }
+      - given: { LSHH101: false }
+        advance: 2.5s
+        alarms: { active: [], state: { LSHH101: normal } }
+
+  - name: a seal fail blocks the lead's permissive; the standby still answers a further rise
+    # A seal fail blocks the lead pump's permissive outright, so it never
+    # gets a chance to run — the fail-to-run timer (gated on Run itself,
+    # not the call) never starts, and this design does not fail over on a
+    # permissive block alone (see lib/motor.ld's `fail` rung and
+    # docs/design/examples-dogfood.md). The well keeps rising, and the
+    # standby still answers once the level justifies its own call.
+    given: { LIT101_Level: 65.0, P101_SealFail: true }
+    steps:
+      - advance: 1s
+        expect: { P101_Permissive: false, P101_RunCmd: false, P102_RunCmd: false }
+      - given: { LIT101_Level: 85.0, P102_Running: true } # LagOnLevel
+        advance: 1s
+        expect: { P101_RunCmd: false, P102_RunCmd: true }
+
+  - name: a low-low float blocks the lead's permissive, same as a seal fail
+    # permissives.ld's p101perm rung ANDs in /LSLL101 — a dry well blocks
+    # BOTH pumps, not just the lead, so P102's permissive drops too even
+    # though nothing else is wrong with it.
+    given: { LIT101_Level: 65.0, LSLL101: true }
+    steps:
+      - advance: 1s
+        expect: { P101_Permissive: false, P102_Permissive: false, P101_RunCmd: false }
+
+  - name: a VFD fault blocks the lead's permissive, same as a seal fail
+    given: { LIT101_Level: 65.0, P101_VfdFault: true }
+    steps:
+      - advance: 1s
+        expect: { P101_Permissive: false, P101_RunCmd: false }
+      - advance: 500ms # P101_VfdFault's 1 s on-delay
+        alarms: { active: ["P101_VfdFault"] }
+
+  - name: hand mode runs at HandSpeedHz regardless of level
+    given: { P101_Mode: 1, LIT101_Level: 10.0 } # well below LeadOnLevel
+    advance: 1s
+    expect:
+      - P101_RunCmd: true
+      - P101_SpeedCmd: { near: 45.0, tol: 0.5 }
+
+  - name: the level PID raises speed above setpoint and lowers it below
+    suspend: [sim, main] # drive LeadReq and the level directly; the first
+                         # task (sequence.sfc, unnamed in the manifest) is
+                         # always the runtime's "main" task regardless —
+                         # see nautilus.yaml's first task comment
+    given: { LeadReq: true }
+    steps:
+      - given: { LIT101_Level: 55.0 } # above LevelSP (45): direct-acting, speed climbs
+        advance: 25s
+        expect: { SpeedRef: { gt: 40.0 } }
+      - given: { LIT101_Level: 35.0 } # below LevelSP: speed backs down toward the floor
+        advance: 60s
+        expect: { SpeedRef: { near: 30.0, tol: 2.0 } }
+
+  - name: the high-level alarm latches at 90% and clears only at or below 85%
+    # level.fbd's seal-in: above/below straddle a 5-point hysteresis band
+    # around HighLevelAlmSP (90). Without the hysteresis, a naive
+    # `HighLevelAlm := GE(Level, 90)` would already read false once the
+    # level ticks back down from 90 to 87 — this proves the seal-in holds
+    # through that band and only releases at the 85 floor.
+    given: { LIT101_Level: 60.0 }
+    steps:
+      - advance: 1s
+        expect: { HighLevelAlm: false }
+      - given: { LIT101_Level: 90.0 } # at HighLevelAlmSP — latches
+        advance: 1s
+        expect: { HighLevelAlm: true }
+      - given: { LIT101_Level: 87.0 } # inside the hysteresis band — still on
+        advance: 1s
+        expect: { HighLevelAlm: true }
+      - given: { LIT101_Level: 85.0 } # at the hysteresis floor — clears
+        advance: 1s
+        expect: { HighLevelAlm: false }
+
+  - name: stats.st accumulates runtime, starts, and station flow
+    suspend: [sim, main, level, permissives] # only stats.st runs; drive its
+                                              # inputs directly
+    given: { P101_Running: false, FIT101_Flow: 10.0 }
+    steps:
+      - given: { P101_Running: true } # rising edge — one start
+        advance: 1s
+        expect: { P101_Stats.Starts: 1 }
+      - advance: 3600s # about an hour running
+        expect:
+          - P101_Stats.Starts: 1 # no further starts while it just keeps running
+          - P101_Stats.Hours: { near: 1.0, tol: 0.05 }
+          - StationFlowM3: { near: 36.0, tol: 2.0 } # 10 L/s * ~3601 s / 1000
+
+  - name: closed loop rides out a storm inflow and settles once it passes
+    suspend: [] # override the file default: the sim runs, closed loop
+    given: { LIT101_Level: 45.0, InflowLps: 40.0 } # a storm from mid-level
+    steps:
+      - advance: 300s
+        expect:
+          LIT101_Level: { lt: 90.0 }
+          CycleCount: { ge: 1 }
+      - given: { InflowLps: 2.0 } # the storm passes; a quiet night flow.
+        # (Below MinSpeedHz's ~3.6 L/s floor on purpose: at or above that
+        # floor the level PID just finds a new equilibrium near LevelSP and
+        # idles the pump there forever, which is correct variable-speed
+        # behavior but means the "storm passes" test needs an inflow the
+        # minimum speed can outrun, or a full stop is never reached.)
+        until: 900s
+        expect: { P101_RunCmd: false, P102_RunCmd: false }
+
+  - name: a shelved high-level alarm is silent and always expires
+    # Drives the level, not HighLevelAlm itself — level is left running
+    # (only permissives is suspended beyond the file default, sim), so
+    # this exercises the same hysteresis seal-in as the test above rather
+    # than bypassing it. main must stay unsuspended too: the alarm engine
+    # only re-evaluates on the main task's own scan (see runtime.OnScan).
+    suspend: [sim, permissives]
+    given: { LIT101_Level: 95.0 } # above HighLevelAlmSP (90)
+    steps:
+      - advance: 11s # past the 10 s on-delay
+        alarms: { active: ["HighLevel"] }
+      - shelve: { id: HighLevel, for: 15m, by: test }
+        scans: 1
+        alarms: { shelved: ["HighLevel"], active: [] }
+      - advance: 16m
+        alarms: { shelved: [], active: ["HighLevel"] }

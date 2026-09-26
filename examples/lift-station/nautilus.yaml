@@ -1,0 +1,129 @@
+# lift-station — the bench build: a duplex sewage lift station on the
+# loopback driver, with the plant itself simulated in ST (sim.st) so the
+# whole thing runs, cycles, and alarms with nothing wired up. See
+# field.yaml for the same control programs pointed at real VFDs and
+# remote I/O over Modbus instead.
+#
+#   naut check .                validate offline
+#   naut test  .                the acceptance suite (lift-station_test.yaml)
+#   naut run   .                dashboard + tag API on http://localhost:8080
+#   naut build .                one deployable controller binary
+#
+# Five tasks, four IEC languages, one tag store:
+#   sequence.sfc     duty/standby sequencing — who's called, lead/lag,
+#                    post-run, failover
+#   level.fbd        the level->speed PID and the high-level alarm
+#   permissives.ld   HOA, interlocks, the high-high override, fail-to-run
+#   stats.st         runtime hours/starts, the flow totalizer
+#   sim.st           bench only: the wet well and two pump/VFD models
+name: lift-station
+
+server:
+  addr: "localhost:8080"
+  online-edits: true
+  # The operator screen, once built (cd hmi && npm run build). Tolerates
+  # being absent — `naut check` and `naut run` don't fail before the first
+  # `npm run build`, a request against a missing build just 404s — see the
+  # README's "The operator screen" section. Serves it at "/"; the built-in
+  # dashboard moves to "/_nautilus/".
+  hmi: hmi/build
+
+retain:
+  file: retain.json   # operator setpoints + HOA modes survive a restart
+
+# tags/station.yaml holds every operator setpoint and computed-state tag
+# that's byte-identical between this manifest and field.yaml — the
+# tags: list below keeps only what's bench-specific: the process values
+# owned by the sim task (LIT101_Level, LSHH101, LSLL101, FIT101_Flow, the
+# VFD feedback/command tags, the seal/over-temp probes), the bench-only
+# fault/float injection tags, and InflowLps.
+tag-files:
+  - tags/station.yaml
+
+tasks:
+  - program: sequence.sfc   # the first task is always the runtime's "main"
+                            # task, whatever it's called here — naming it
+                            # (a name: key) is a no-op `naut check` warns on
+    scan: 250ms
+  - name: level
+    program: level.fbd
+    scan: 100ms
+    dt-tag: LevelDtS
+  - name: permissives
+    program: permissives.ld
+    scan: 100ms
+  - name: stats
+    program: stats.st
+    scan: 1s
+    dt-tag: StatsDtS
+  - name: sim
+    program: sim.st
+    scan: 100ms
+    dt-tag: SimDtS
+
+tags:
+  # Process values — owned by the sim task here; field.yaml makes these
+  # role: input (or a field-mapped role: state — see field.yaml) and lets
+  # the Modbus driver supply them instead.
+  - { name: LIT101_Level, role: state, init: 20.0, unit: "%", desc: "Wet-well level (LIT-101)" }
+  - { name: LSHH101,      role: state, init: false, desc: "High-high float (LSHH-101)" }
+  - { name: LSLL101,      role: state, init: false, desc: "Low-low float (LSLL-101)" }
+  - { name: FIT101_Flow,  role: state, init: 0.0, unit: "L/s", desc: "Discharge flow (FIT-101)" }
+  - { name: P101_Running, role: state, init: false, desc: "P-101 VFD running feedback" }
+  - { name: P102_Running, role: state, init: false, desc: "P-102 VFD running feedback" }
+  - { name: P101_VfdFault, role: state, init: false, desc: "P-101 VFD fault" }
+  - { name: P102_VfdFault, role: state, init: false, desc: "P-102 VFD fault" }
+  - { name: P101_SpeedHz, role: state, init: 0.0, unit: "Hz", desc: "P-101 VFD speed feedback" }
+  - { name: P102_SpeedHz, role: state, init: 0.0, unit: "Hz", desc: "P-102 VFD speed feedback" }
+  - { name: P101_Amps, role: state, init: 0.0, unit: "A", desc: "P-101 motor current" }
+  - { name: P102_Amps, role: state, init: 0.0, unit: "A", desc: "P-102 motor current" }
+  - { name: P101_SealFail, role: state, init: false, desc: "P-101 seal-leak probe" }
+  - { name: P102_SealFail, role: state, init: false, desc: "P-102 seal-leak probe" }
+  - { name: P101_OverTemp, role: state, init: false, desc: "P-101 motor over-temperature" }
+  - { name: P102_OverTemp, role: state, init: false, desc: "P-102 motor over-temperature" }
+
+  # Commands — sent to the VFDs (loopback here; the Modbus manifest in
+  # field.yaml).
+  - { name: P101_RunCmd, role: output, init: false, desc: "P-101 run command" }
+  - { name: P102_RunCmd, role: output, init: false, desc: "P-102 run command" }
+  - { name: P101_SpeedCmd, role: output, init: 0.0, unit: "Hz", desc: "P-101 speed command" }
+  - { name: P102_SpeedCmd, role: output, init: 0.0, unit: "Hz", desc: "P-102 speed command" }
+
+  # Bench-only setpoint (tags/station.yaml has the rest — every other
+  # operator setpoint is byte-identical to field.yaml's).
+  - { name: InflowLps, role: setpoint, init: 12.0, unit: "L/s", desc: "Bench only: base inflow (a storm is 40)" }
+
+  # Bench-only fault/float injection — nothing to wire up, just tags to
+  # POST from the dashboard or the API.
+  - { name: P101_InjectFault, role: setpoint, init: false, desc: "Bench only: trip P-101's VFD fault" }
+  - { name: P101_InjectSealFail, role: setpoint, init: false, desc: "Bench only: trip P-101's seal-leak probe" }
+  - { name: P101_InjectOverTemp, role: setpoint, init: false, desc: "Bench only: trip P-101's over-temperature contact" }
+  - { name: P102_InjectFault, role: setpoint, init: false, desc: "Bench only: trip P-102's VFD fault" }
+  - { name: P102_InjectSealFail, role: setpoint, init: false, desc: "Bench only: trip P-102's seal-leak probe" }
+  - { name: P102_InjectOverTemp, role: setpoint, init: false, desc: "Bench only: trip P-102's over-temperature contact" }
+  - { name: ForceLSHH, role: setpoint, init: false, desc: "Bench only: force the high-high float regardless of level" }
+
+  # Computed state lives in tags/station.yaml — identical to field.yaml's.
+
+alarms:
+  defaults: { ack-required: true, auto-clear: true, shelve: true }
+  shelve-times: [15m, 1h, 4h]
+  journal: { keep: 500 }
+  defs:
+    - { id: LSHH101, tag: LSHH101, name: "Wet-well high-high (LSHH-101)", priority: critical, on-delay: 2s, class: process }
+    - { id: HighLevel, tag: HighLevelAlm, name: "Wet-well high level (LIT-101)", priority: high, on-delay: 10s, class: process }
+    - { id: LSLL101, tag: LSLL101, name: "Wet-well low-low (LSLL-101)", priority: medium, on-delay: 5s, class: process }
+    - { id: P101_FailToRun, tag: P101_FailToRun, name: "P-101 failed to run", priority: high, class: equipment }
+    - { id: P102_FailToRun, tag: P102_FailToRun, name: "P-102 failed to run", priority: high, class: equipment }
+    - { id: P101_LockedOut, tag: P101_LockedOut, name: "P-101 locked out (3 fail-to-run trips)", priority: high, class: equipment }
+    - { id: P102_LockedOut, tag: P102_LockedOut, name: "P-102 locked out (3 fail-to-run trips)", priority: high, class: equipment }
+    - { id: P101_VfdFault, tag: P101_VfdFault, name: "P-101 VFD fault", priority: high, on-delay: 1s, class: equipment }
+    - { id: P102_VfdFault, tag: P102_VfdFault, name: "P-102 VFD fault", priority: high, on-delay: 1s, class: equipment }
+    - { id: P101_SealFail, tag: P101_SealFail, name: "P-101 seal-leak probe", priority: medium, on-delay: 5s, class: equipment }
+    - { id: P102_SealFail, tag: P102_SealFail, name: "P-102 seal-leak probe", priority: medium, on-delay: 5s, class: equipment }
+    - { id: P101_OverTemp, tag: P101_OverTemp, name: "P-101 motor over-temperature", priority: high, on-delay: 2s, class: equipment }
+    - { id: P102_OverTemp, tag: P102_OverTemp, name: "P-102 motor over-temperature", priority: high, on-delay: 2s, class: equipment }
+    - { id: BothUnavail, tag: BothUnavail, name: "Both pumps unavailable", priority: critical, class: equipment }
+
+driver:
+  type: memory
