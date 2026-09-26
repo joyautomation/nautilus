@@ -283,6 +283,15 @@ type Project struct {
 	// on a large embed; Server.HMI (above) is the fs.FS actually served.
 	HMIDir string
 
+	// HMIMissing is true when server.hmi names a directory (HMIDir) that
+	// does not exist on fsys — the normal state of a fresh clone, since
+	// an HMI's own build output is gitignored. Load leaves Server.HMI nil
+	// in that case, so the built-in dashboard keeps "/" instead of the
+	// server 404ing every request once the HMI it can't find claims the
+	// route; `naut run` and `naut build` each check this to print their
+	// own one-line "not built yet" warning naming HMIDir.
+	HMIMissing bool
+
 	// Retain/Redundancy carry the manifest's sections for `naut run`
 	// to wire; Load itself constructs nothing — check, build, and the LSP
 	// load projects too, and must not touch a cluster to do it.
@@ -440,6 +449,19 @@ func projectPath(p string) (string, error) {
 	return c, nil
 }
 
+// HMIBuildHint names where to run the HMI's own build for a "not built
+// yet" warning (see Project.HMIMissing): server.hmi points at a build's
+// OUTPUT (e.g. "hmi/build"), one level under the HMI's own project
+// ("hmi/"), which is where `npm run build` actually runs. Falls back to
+// "its project" when hmiDir has no parent to name (server.hmi at the
+// project root, an unusual layout).
+func HMIBuildHint(hmiDir string) string {
+	if parent := path.Dir(hmiDir); parent != "." && parent != "" && parent != "/" {
+		return parent + "/"
+	}
+	return "its project"
+}
+
 // composeTags folds tag-files into m.Tags: each file in listed order, then
 // the manifest's own tags last.
 //
@@ -579,20 +601,34 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	}
 	var hmiFS fs.FS
 	var hmiDir string
+	var hmiMissing bool
 	if m.Server.HMI != "" {
 		hmiPath, err := projectPath(m.Server.HMI)
 		if err != nil {
 			return nil, fmt.Errorf("server.hmi: %w", err)
 		}
 		hmiDir = hmiPath
-		// fs.Sub only wraps a path prefix — it does not require hmiPath to
-		// exist yet, so `naut check`/a language server reading the
-		// manifest before `npm run build` has run doesn't fail here. A
-		// request against a missing build 404s at serve time instead (see
-		// server.handleHMI); `naut run`'s banner and `naut build`'s
-		// output both name the configured directory either way.
-		if hmiFS, err = fs.Sub(fsys, hmiPath); err != nil {
-			return nil, fmt.Errorf("server.hmi: %w", err)
+		// Check existence up front (rather than deferring to serve time,
+		// as an earlier version of this did) so the caller can decide
+		// what "not built yet" means for it: `naut check`/the language
+		// server say nothing (HMIMissing is just metadata to them);
+		// `naut run` and `naut build` each print their own one-line
+		// warning and fall back to the built-in dashboard instead of
+		// leaving Server.HMI set to an fs.FS that 404s every request —
+		// see server.handleHMI, which has no way to know "no files here"
+		// means "give '/' back to the dashboard" instead of "the HMI's
+		// own build is just an empty SPA."
+		switch st, statErr := fs.Stat(fsys, hmiPath); {
+		case statErr != nil && errors.Is(statErr, fs.ErrNotExist):
+			hmiMissing = true
+		case statErr != nil:
+			return nil, fmt.Errorf("server.hmi: %w", statErr)
+		case !st.IsDir():
+			return nil, fmt.Errorf("server.hmi: %s: not a directory (run the HMI's own build first, e.g. `npm run build` in its project)", hmiPath)
+		default:
+			if hmiFS, err = fs.Sub(fsys, hmiPath); err != nil {
+				return nil, fmt.Errorf("server.hmi: %w", err)
+			}
 		}
 	}
 	return &Project{
@@ -611,6 +647,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		Redundancy: m.Redundancy,
 		Alarms:     m.Alarms,
 		HMIDir:     hmiDir,
+		HMIMissing: hmiMissing,
 	}, nil
 }
 
