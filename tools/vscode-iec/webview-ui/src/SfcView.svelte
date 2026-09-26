@@ -730,6 +730,28 @@
 			if (el instanceof HTMLInputElement) el.select();
 		});
 	}
+	/** The add-step/add-branch name field: an UNCONTROLLED input, unlike the
+	 * form's other fields. `fName` seeds it once at mount (and is read back
+	 * on every keystroke, so commitAdd still sees what was typed), but
+	 * nothing ever reassigns the element's `.value` after that — a
+	 * `bind:value` here would (harmlessly, same string) write `.value` back
+	 * on every keystroke, and a JS-driven write to `.value`, even a no-op
+	 * one, resets the browser's native undo/redo stack for that field —
+	 * dropping whatever was typed before the last edit. Ctrl+Z in this field
+	 * is deliberately left to the browser (see keyForward.ts's "native"
+	 * decision); this is what keeps it working across more than one edit in
+	 * the same form session. Folds in `autofocus`'s focus+select — both act
+	 * once, at mount. */
+	function nameField(el: HTMLInputElement) {
+		el.value = fName;
+		queueMicrotask(() => {
+			el.focus();
+			el.select();
+		});
+		const oninput = () => (fName = el.value);
+		el.addEventListener('input', oninput);
+		return { destroy: () => el.removeEventListener('input', oninput) };
+	}
 	// Keep keyboard focus on the chart after any pointer gesture on it —
 	// Del/Esc listen on .wrap, and the float editor (dblclick edits) hands
 	// focus back to whatever held it when it opened.
@@ -799,7 +821,7 @@
 				</label>
 			{/if}
 			{#if addKind === 'step' || addKind === 'sim'}
-				<label><span>name</span><input class="nx-input" bind:value={fName} spellcheck="false" use:autofocus /></label>
+				<label><span>name</span><input class="nx-input" spellcheck="false" use:nameField /></label>
 			{/if}
 			{#if addKind === 'step' && fFrom}
 				<label title="The transition from {fFrom} to the new step"><span>condition</span><input class="nx-input" bind:value={fCond} spellcheck="false" /></label>

@@ -29,6 +29,20 @@ async function openAsDiagram(arg: unknown): Promise<void> {
     return;
   }
   const active = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+  // The command stays in the palette even when the active tab is already
+  // this exact diagram (see package.json's commandPalette `when`) — hiding
+  // it there left the palette's fuzzy matcher landing on "Open … Diagram
+  // Preview" instead when a user re-typed the command by habit (it splits
+  // the editor area, a surprise). A no-op with a status message beats that
+  // trap without reintroducing it.
+  if (
+    active instanceof vscode.TabInputCustom &&
+    active.viewType === viewType &&
+    active.uri.toString() === uri.toString()
+  ) {
+    void vscode.window.setStatusBarMessage("nautilus: already open as a diagram", 3000);
+    return;
+  }
   if (active instanceof vscode.TabInputText && active.uri.toString() === uri.toString()) {
     try {
       // Replaces the active text tab rather than opening a second one.

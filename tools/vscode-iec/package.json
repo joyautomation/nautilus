@@ -268,7 +268,7 @@
       },
       {
         "command": "nautilus.editComponentPorts",
-        "title": "Nautilus: Edit Component Ports…"
+        "title": "nautilus: Edit Component Ports…"
       },
       {
         "command": "nautilus.newProject",
@@ -419,7 +419,7 @@
         },
         {
           "command": "nautilus.diagram.openAsDiagram",
-          "when": "!activeCustomEditorId && resourceLangId =~ /^(iec-fbd|iec-ld|iec-sfc|logix-l5x)$/"
+          "when": "resourceLangId =~ /^(iec-fbd|iec-ld|iec-sfc|logix-l5x)$/"
         },
         {
           "command": "nautilus.diagram.showSource",

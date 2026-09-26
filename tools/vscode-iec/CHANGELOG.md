@@ -186,6 +186,55 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   *+ action*. It now sits right of the table. Columns are spaced for the
   widest action table, which also grows to fit a long target, so a table no
   longer runs into the step beside it.
+- **`nautilus: Edit Component Ports…` reaches a custom component before it
+  has a sidecar.** The picker used to list built-ins and only the custom
+  components already discovered via a `*.component.json`; a `.svelte`
+  component just authored, with no sidecar yet, wasn't reachable. It now
+  also lists every `.svelte` component found in the workspace with no
+  sidecar, and creates one next to it, prefilled with empty ports, the
+  first time it's picked.
+- **Ladder operand labels no longer truncate at 12 characters.** An
+  ISA-style tag (`P101_Permissive`) was cut to a middle ellipsis around 12
+  characters regardless of how much room the rung had. Contacts and coils
+  now size themselves to their label up to 20 characters (with the rung's
+  spacing growing to match); a label longer than that still gets the
+  ellipsis, with the full name always in the element's tooltip.
+- **Download/Pull from a library file offers the programs that use it,**
+  instead of refusing outright. A library (`motor.ld`, `blocks.st`, …) has
+  no program of its own to route by; the CLI's `naut compose --json` names
+  the project's programs, and a text search for the library's own
+  `FUNCTION_BLOCK`/`FUNCTION` names finds which of them actually
+  instantiate it — one match downloads directly, more than one is a quick
+  pick, and only a library with no consumer at all still refuses.
+- **`Nautilus: Edit Component Ports…` is lower-case in the command
+  palette**, like every other nautilus command.
+- **The eip driver manifest schema's `host` field describes `host:port`.**
+  The description still said "IP or hostname" after PR #38 added the
+  `host:port` form (for `naut logix emulate` off the standard 44818, or a
+  controller on a nonstandard port); it now says so.
+- **The FBD "+ add" form's Esc is the same key everywhere.** Esc used to
+  throw the whole form away from a plain field (the name) but only close
+  the suggestion list from a suggesting one (function, inputs) — same key,
+  two meanings depending on which field had focus. Esc now always closes an
+  open suggestion list first; only once none is open does it close the
+  form, on every field.
+- **The whole webview no longer scrolls 8px once a chart overflows,**
+  cutting the diagram toolbar's top edge off-screen. The browser's default
+  `<body>` margin, left un-reset in the FBD/Ladder/SFC webview (unlike the
+  mimic editor's), made the page a few pixels taller than the viewport;
+  only the pane that wants to scroll does now.
+- **Quick-open reopening a file as its diagram no longer traps a retyped
+  command onto the wrong one.** `nautilus: Open as Diagram Editor` used to
+  drop out of the command palette once a file was already open as that
+  diagram, so retyping it let the palette's fuzzy match land on `Open …
+  Diagram Preview` instead (which splits the editor area — a surprise).
+  The command now stays in the palette and is a no-op with a status message
+  when the active tab is already that exact diagram.
+- **The SFC "+ step"/"+ parallel branch" name field's Ctrl+Z restores what
+  was typed before the last edit**, instead of leaving whatever's currently
+  there in place. The field was a controlled input rewriting its own
+  `value` on every keystroke, which resets a browser's native undo/redo for
+  that element; it's now seeded once at mount and left alone.
 
 ## [0.11.1] - 2026-09-25
 

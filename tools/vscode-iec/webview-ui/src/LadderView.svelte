@@ -13,7 +13,7 @@
 	import { annotate, argIdents, type Ann, type LdElement, type LdFbType, type LdModel, type RungStatus } from './ladder';
 	import LdBlockPicker from './LdBlockPicker.svelte';
 	import { FB_TYPES } from './suggest';
-	import { layoutRung, rungMinWidth, fitArgs, L, type LSpot, type LNode } from './ladderLayout';
+	import { layoutRung, rungMinWidth, fitArgs, L, OPERAND_LABEL_MAX, type LSpot, type LNode } from './ladderLayout';
 	import { live, liveValue, formatLive } from './liveState.svelte';
 	import { readClip, typingTarget, writeClip } from './clipboard';
 
@@ -88,7 +88,7 @@
 		// The pane in layout units: zoomed OUT, the rails still span it;
 		// zoomed IN, the 100% width magnifies past the pane (and scrolls) —
 		// re-fitting it would just re-flow the rung, not enlarge it.
-		const mins = annotated.map((a) => rungMinWidth(a.elems, a.coils.length));
+		const mins = annotated.map((a) => rungMinWidth(a.elems, a.coils));
 		const width = Math.max(L.MIN_WIDTH, viewW / Math.min(zoom, 1) - LADDER_PAD_X, ...mins);
 		return annotated.map((a, i) => ({
 			r: a.r,
@@ -135,7 +135,7 @@
 		const v = liveValue(ref);
 		return v === undefined ? '' : formatLive(v);
 	};
-	const trunc = (s: string | undefined, n = 12) => {
+	const trunc = (s: string | undefined, n = OPERAND_LABEL_MAX) => {
 		const t = s ?? '';
 		return t.length <= n ? t : t.slice(0, Math.ceil(n / 2) - 1) + '…' + t.slice(t.length - Math.floor(n / 2));
 	};
