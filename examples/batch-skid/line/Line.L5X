@@ -113,6 +113,14 @@
 <![CDATA[XIC(Line_Fault)OTE(Line_Status.Alarm);]]>
 </Text>
 </Rung>
+<Rung Number="4" Type="N">
+<Comment>
+<![CDATA[Interlock, added after commissioning: force the accept off if the receiving tank creeps to a high level after the handshake already settled]]>
+</Comment>
+<Text>
+<![CDATA[GE(Line_TankLevel,95.0)OTU(Line_Accept);]]>
+</Text>
+</Rung>
 </RLLContent>
 </Routine>
 </Routines>
