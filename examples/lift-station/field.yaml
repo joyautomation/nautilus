@@ -34,8 +34,9 @@ retain:
 tasks:
   - program: field_map.st   # RIO_* -> the canonical tag names, ahead of
     scan: 100ms             # everything else; the first task is always
-                            # named "main" internally regardless of a
-                            # manifest name: key
+                            # the runtime's "main" task, whatever it's
+                            # called here — naming it (a name: key) is a
+                            # no-op `naut check` warns on
   - name: sequence
     program: sequence.sfc
     scan: 250ms

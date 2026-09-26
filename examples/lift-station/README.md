@@ -19,6 +19,10 @@ naut run .                       # dashboard + tag API on http://localhost:8080
 naut build .                     # one deployable controller binary
 ```
 
+**Needs naut >= 0.13.0.** `lib/` composition, a `FUNCTION_BLOCK`'s
+declared initial values, and `naut compose` are on `main` but not in the
+released v0.12.0 — build the CLI from source until 0.13.0 ships.
+
 ## What to open first
 
 - `sequence.sfc` — the duty/standby state machine. Right-click →
@@ -32,6 +36,69 @@ naut build .                     # one deployable controller binary
   once per pump. *Open With → Ladder Diagram*.
 - `sim.st` / `lib/physics.st` — the bench-only plant: a wet-well level
   integrator and two pump/VFD models, in Structured Text.
+
+## Tour the editor
+
+Ten minutes against a running project — start `naut run .` in a terminal
+and leave it running for all of this.
+
+**Live values.** Open each of the four diagram files (`sequence.sfc`,
+`level.fbd`, `permissives.ld`, `lib/motor.ld`) with *Open With → \<Diagram\>*
+— every one shows live values on its pins/rungs/steps while `naut run .`
+is up. Open `sim.st` as plain text (not a diagram — it has none) and the
+same live values show as inline pills next to each variable.
+
+**Set Live Value.** With `sim.st` open, find `InflowLps`, run *nautilus:
+Set Live Value*, and set it to `60` — the "storm" inflow the file's own
+comment describes. Watch `P102_RunCmd` (or `sequence.sfc`'s diagram) go
+true within a few minutes: the well fills past `LagOnLevel` and the lag
+pump joins.
+
+**The Testing view.** Open the Testing view and *Test: Run All Tests* —
+`lift-station_test.yaml`'s whole suite, green, in well under a second of
+wall time (it's virtual time underneath). Now open `tags/station.yaml`,
+change `LeadOnLevel`'s `init: 60.0` to `70.0`, save, and run all tests
+again: 5 of 15 turn red, starting with "lead pump starts at LeadOn and
+post-runs after LeadOff" — it drives the level to 65 %, which no longer
+reaches the new 70 % call point. Click a failing test to see why it
+failed. Revert the `70.0` back to `60.0`, save, and run once more —
+green again.
+
+**Download Program to Controller.** Open `lib/motor.ld` and change the
+fail-to-run timer's preset — `t1`'s `PT := T#5S` — to `T#8S`. Notice the
+toolbar's `≠ controller` pill (and the status bar's "nautilus: program
+differs"): the workspace and the running controller have diverged.
+`motor.ld` has no `PROGRAM` of its own (it's a library, instantiated by
+`permissives.ld`), so running *nautilus: Download Program to Controller*
+from here refuses — it names every program file in the project and asks
+you to open one of them instead. Open `permissives.ld` (the program that
+instantiates `MotorStarter`) and run *Download Program to Controller*
+there instead: it composes `motor.ld`'s edit into `permissives.ld`'s
+prelude, shows a confirmation naming what's about to ship, and the pill
+clears once it's sent.
+
+**Diff Ladder Diagram (vs Controller).** With `permissives.ld` still
+active, run *nautilus: Diff Ladder Diagram (vs Controller)* — a diagram
+overlay, not a text diff, showing exactly what changed between the
+workspace and what the controller is running (nothing, right after a
+download — edit the timer again to see it highlight the changed rung).
+
+**Rollback.** Run *nautilus: Rollback Controller Program* (with
+`permissives.ld` active — like Download, it resolves its target from the
+active editor) to send the controller back to what it was running before
+the download; the `≠ controller` pill returns to match.
+
+**Diff … (vs git HEAD).** Make an edit and don't save it — e.g. rename a
+step in `sequence.sfc`'s diagram — then run *nautilus: Diff SFC Diagram
+(vs git HEAD)*: an overlay of the unsaved buffer against the last
+committed revision, no controller involved.
+
+**Diff Ladder Diagram (between git revisions…).** Commit a small change
+to `permissives.ld`, make and commit another, then run *nautilus: Diff
+Ladder Diagram (between git revisions…)*: two sequential quick-picks,
+newest-first — type to filter down to the older side, then the newer —
+and the diagram overlay shows what changed between exactly those two
+commits, independent of both the working tree and the controller.
 
 ## What it demonstrates
 
@@ -48,8 +115,8 @@ naut build .                     # one deployable controller binary
 | Retained state: setpoints and HOA modes survive a restart | `retain:` in both manifests | [Redundancy & retained state](https://nautilus.joyautomation.com/guides/redundancy/) |
 | Online edits: warm-swap a running program from the editor | `server.online-edits` | [Online edits](https://nautilus.joyautomation.com/guides/online-edits/) |
 | Acceptance tests: virtual time, `suspend:`, `advance:`/`until:`, alarm verbs | `lift-station_test.yaml` | [Testing](https://nautilus.joyautomation.com/reference/testing/) |
-| HMI: a P&ID mimic (`*.mimic.json`), custom components + port sidecars | `lift-station.mimic.json`, `hmi/src/lib/*.component.json` | [HMI kit](https://nautilus.joyautomation.com/guides/hmi/) |
-| HMI: faceplates, alarm banner/ack, live trend, driver status, scan diagnostics | `hmi/src/routes/+page.svelte` | [HMI kit](https://nautilus.joyautomation.com/guides/hmi/) |
+| HMI: a P&ID mimic (`*.mimic.json`), custom components + port sidecars | `lift-station.mimic.json`, `hmi/src/lib/*.component.json` | [HMI kit](https://nautilus.joyautomation.com/reference/hmi/) |
+| HMI: faceplates, alarm banner/ack, live trend, driver status, scan diagnostics | `hmi/src/routes/+page.svelte` | [HMI kit](https://nautilus.joyautomation.com/reference/hmi/) |
 
 ## The control narrative
 
@@ -235,12 +302,11 @@ text: "SeqStep" }`), which passes any tag value through untouched.
 Three components live in `hmi/src/lib/`, each with a
 `{Name}.component.json` port sidecar so the extension's **Nautilus: Edit
 Component Ports…** command (and the mimic editor's `p` shortcut on a
-selected instance) has something to edit — and, for `ToProcess`, so the
-mimic editor's equipment palette lists it at all: the palette only offers
-a custom component that has a sidecar, even a ports-free one, so a
-sidecar-less `ToProcess` (this project's first cut) is a component you
-can place by editing the doc's JSON directly but never by dragging it
-from the palette:
+selected instance) has something to edit. The mimic editor's equipment
+palette lists a custom component whether or not it has a sidecar — a
+sidecar is still what gives an instance ports to wire a pipe to, so a
+ports-free drop from the palette is a component with nothing to connect
+until one is added:
 
 - **`SubmersiblePump.svelte`** — `running`/`speedHz`-driven, one
   `discharge` port on top (`dir: "up"`). Because a custom component's
@@ -249,13 +315,13 @@ from the palette:
   port as an inline `ports` override on each `P101`/`P102` equipment
   entry — the same trick `examples/hmi-demo` uses for `HeatExchanger`.
   Skipping that (sidecar only, no inline override) is what a pipe with no
-  visible run looks like in the built app: leaving it out was the first
-  cut here, and the discharge pipes silently collapsed to a stub at the
-  check valve with no line down to the pump — see the dogfood log.
+  visible run looks like in the built app: the discharge pipes silently
+  collapse to a stub at the check valve with no line down to the pump —
+  see the dogfood log.
 - **`FloatSwitch.svelte`** — one component, two mimic instances
   (`LSHH101`/`LSLL101`), a `tripped` prop swinging the float's pivot arm.
-  No pipe anchors it, so its sidecar's one port (`mount`) is there purely
-  so the extension has something to open, per the review's ask.
+  No pipe anchors it, so its sidecar's one port (`mount`) exists only so
+  the extension has something to open — nothing binds to it.
 - **`ToProcess.svelte`** (the force-main connector) — one `in` port on
   its left edge (`dir: "left"`), matching the same port the mimic doc
   already carries inline on the `TOPROC` equipment entry. Same idiom as

@@ -68,6 +68,10 @@ instead of a `naut test` failure with an unfamiliar task name in the
 error. Fixed by dropping the `name:` key on the first task in both
 manifests and using `main` in the test file's `suspend:` lists.
 
+**Status: fixed on `main` by PR #43** — `naut check` now warns when a
+manifest's first task names itself, naming the ignored key and the
+task's real name.
+
 **2026-09-25 · `task.local` addressing (docs/testing.md) doesn't resolve
 · bug or docs gap**
 
@@ -83,6 +87,11 @@ reach the acceptance-test expression compiler (a bug) or the doc's
 example needs a working one (a docs gap) — not chased further; the
 acceptance suite doesn't rely on it, but the dogfooding brief asked to
 try each `docs/testing.md` verb.
+
+**Status: fixed on `main` by PR #43** — `task.local` was never meant to
+resolve as an ST expression identifier; it's a matcher-form key
+(`expect: { task.local: ... }`), and `docs/testing.md` is reworded to
+say so.
 
 **2026-09-25 · SFC `Pn` pulse qualifier timing: activation vs.
 deactivation matters for a duty-swap that must outlive a post-run ·
@@ -257,6 +266,9 @@ failure is specific to the multi-line block-comment case immediately
 after a rung name; a single-line `(* ... *)` in the same position works
 fine.
 
+**Status: fixed on `main` by PR #43** — a multi-line `(* … *)` rung-header
+comment now parses (`lang/ld`, `rungheader.go`'s `joinCommentLines`).
+
 **2026-09-25 · a block comment whose continuation line starts with the
 literal keyword `PROGRAM` silently breaks project-library type
 registration · bug (fixed on main)**
@@ -425,7 +437,10 @@ expecting the extension's manifest schema to accept and describe the
 form. `host:port` support landed in PR #38, but the schema's field
 description still only says "IP or hostname" — the extension doesn't
 know about its own CLI's feature yet. Where: `tools/vscode-iec` manifest
-schema. Status: open, fix tracked under `[Unreleased]`.
+schema.
+
+**Status: fixed on `main` by PR #50 (`ext-papercuts`)** — the `eip`
+driver's `host` field now describes the `host:port` form.
 
 **2026-09-25 · `naut logix emulate --ramp` moves every numeric leaf,
 handshake DINTs included · papercut (CLI)**
@@ -433,9 +448,57 @@ handshake DINTs included · papercut (CLI)**
 Used `naut logix emulate --ramp` for a demo carrying handshake tags,
 expecting process values to drift while handshake DINTs stayed put.
 `--ramp` ramps every numeric leaf, undiscriminated — process values and
-handshakes alike. Where: `cmd/naut/logixemulate.go`. Status: open —
-wants a `--ramp-tags <globs>` flag for when a batch skid's demo needs
-some numerics held still.
+handshakes alike. Where: `cmd/naut/logixemulate.go`.
+
+**Amended:** a leaf a client writes stops drifting and keeps the write
+(the ramp treats any value that no longer matches what it last wrote as
+client-owned from then on) — so a handshake DINT the client actually
+writes during the exchange is already fine. What's still undiscriminated
+is a leaf the client only ever *reads*: a pure process-value input with
+no client write of its own drifts right along with everything else, and
+there's no way to hold a specific one still without writing to it. Status:
+open — still wants a `--ramp-tags <globs>` flag (or the inverse, a
+hold-still list) for a demo that needs some never-written numerics
+static.
+
+**2026-09-25 · a `TYPE` sharing a file with a `PROGRAM` reports "unknown
+type" · papercut (CLI), found on `remote-fleet`**
+
+Hit while building the sibling `remote-fleet` example: a `TYPE`/`STRUCT`
+UDT declared in the same file as the `PROGRAM` that uses it (rather than
+in a separate library file) failed `naut check` with `unknown type
+"<Name>"`, pointing at the consumer, not the declaration — the same
+unhelpful shape as the `lib/`-subdirectory finding above, and just as
+easy to trip over the first time a project author reaches for a `TYPE`
+before it occurs to them it needs its own file. Where: likely the same
+library/type-registration pass (`internal/project/project.go`). Status:
+open.
+
+**2026-09-25 · the EtherNet/IP guide never says the emulator doesn't
+execute ladder · docs gap**
+
+`naut logix emulate` stands in for a real Logix controller convincingly
+enough (tag browsing, reads/writes, a `.L5X`'s data types and structure)
+that nothing in the EtherNet/IP guide (`website/src/content/docs/guides/
+ethernet-ip.md`, "No PLC? The Logix emulator") flags the one thing it
+does not do: run the controller's actual ladder logic. A reader who
+wires a
+manifest at the emulator expecting `.L5X`-authored rungs to execute
+against it (rather than just holding whatever value the emulator seeded
+or a client last wrote, the same static-slave model `naut modbus serve`
+uses) has no warning anywhere in the guide. Status: open.
+
+**2026-09-25 · `naut eip import --host` help still says "IP or hostname"
+· papercut (CLI)**
+
+The `eip` driver's `host` field grew `host:port` support (PR #38) and the
+extension's manifest schema now documents the form (PR #50 — see above),
+but `naut eip`'s own CLI help (`cmd/naut/eip.go`) still reads "controller
+IP or hostname" everywhere `--host` is described — the shared usage
+banner, `import`'s flag, and `browse`'s flag alike — with no mention that
+a `host:port` form reaches a nonstandard EtherNet/IP port (`naut logix
+emulate` off 44818, or a real controller on one). Where: `cmd/naut/
+eip.go` (`eipUsage`, `runEIPImport`, `runEIPBrowse`). Status: open.
 
 ## Built in the rig (ex01)
 
@@ -470,19 +533,26 @@ Findings from this pass fixed by a merged PR:
 | #50 | Nine further papercuts surfaced building this project (extension). |
 | #51 | SFC simultaneous-convergence gesture; delete a rung's last coil when a block remains; one FBD chip per open pin; `naut check` names the ladder file in its errors. |
 | #54 | SFC S/R semantics: an association acts once on activation, not every scan; a suppressed transition must itself be enabled to suppress another; `naut check` warns on association-vs-`ACTION`-write conflicts. |
+| #55 | Mimic editor palette: lists a custom component that has no port sidecar yet, instead of hiding it. |
 
 (PR #41 and #42 — the `VAR CONSTANT` write-back bug and `lib/` directory
 support — are covered above, in their own dated entries.)
 
 **Still open**, from both this file and `GESTURE-FINDINGS.md`:
-the extension manifest schema doesn't describe `host:port` for `eip`
-(papercut); `naut logix emulate --ramp` has no way to hold handshake tags
-still (papercut); a custom component's ports have two sources of truth
-(sidecar for the editor, inline `ports` for the runtime — findings above);
-and two mimic-editor coordinate hit-testing bugs (`GESTURE-FINDINGS.md`
-#58/#59 — a click resolves to whatever is visually topmost at that pixel,
-not necessarily the element the gesture reasoned about; worked around in
-the rig with an off-center click, not fixed in the editor).
+`naut logix emulate --ramp` has no way to hold a never-written numeric
+leaf still (papercut — a leaf a client writes is already fine, see the
+amended entry above); a custom component's ports have two sources of
+truth (sidecar for the editor, inline `ports` for the runtime — findings
+above); a `TYPE` sharing a file with a `PROGRAM` reports "unknown type"
+pointing at the consumer, not the declaration (papercut, found on
+`remote-fleet`); the EtherNet/IP guide never says the Logix emulator
+doesn't execute ladder logic (docs gap); `naut eip import`/`browse
+--host` help still says "IP or hostname" with no mention of `host:port`
+(papercut); and two mimic-editor coordinate hit-testing bugs
+(`GESTURE-FINDINGS.md` #58/#59 — a click resolves to whatever is
+visually topmost at that pixel, not necessarily the element the gesture
+reasoned about; worked around in the rig with an off-center click, not
+fixed in the editor).
 
 Full record, gesture by gesture, beat by beat: `content/assets/capture/
 ex01-lift-station/GESTURE-FINDINGS.md` (private content repo).

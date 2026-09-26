@@ -41,7 +41,9 @@ tag-files:
   - tags/station.yaml
 
 tasks:
-  - program: sequence.sfc   # the first task is always named "main" (reserved)
+  - program: sequence.sfc   # the first task is always the runtime's "main"
+                            # task, whatever it's called here — naming it
+                            # (a name: key) is a no-op `naut check` warns on
     scan: 250ms
   - name: level
     program: level.fbd
