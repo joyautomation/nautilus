@@ -1,0 +1,180 @@
+# Acceptance tests for the batch skid's control narrative — no Go, no
+# toolchain, run on the bench manifest (nautilus.yaml) in virtual time.
+#
+#   naut test              run them
+#   naut test -v           with virtual elapsed time per test
+#   naut test -run "cip"   only tests whose name matches
+#
+# Every test but the closed-loop ones suspends [sim] — driving the
+# process values directly is how an open-loop test gets an exact,
+# repeatable answer out of closed-loop control logic. Each test says so
+# explicitly rather than relying on a file-level default — an empty
+# `suspend: []` override did not appear to un-suspend a file-level default
+# in lift-station's own testing (docs/design/examples-dogfood.md), so a
+# file default plus one opted-out test is a trap this file avoids by never
+# setting one.
+tolerance: 0.5
+
+tests:
+  - name: a full batch of recipe 1 runs Idle to Idle and totalizes within tolerance
+    suspend: [] # closed loop: sim drives the dosing lines and the tank for real
+    given: { RecipeSel: 1 }
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        until: 900s
+        expect:
+          - Batch.Count: 1
+          - PhaseName: "Idle"
+          - Batch.ChargedA_L: { near: 20.0, tol: 0.5 } # recipe 1's AmountA_L
+          - Batch.ChargedB_L: { near: 15.0, tol: 0.5 } # recipe 1's AmountB_L
+
+  - name: ChargeA and ChargeB run simultaneously, and Heat waits for both
+    suspend: [sim]
+    given: { RecipeSel: 1 }
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        scans: 1
+        expect: { XV201A_Cmd: true, XV201B_Cmd: true } # both valves open, one scan
+      - given: { Batch.ChargedA_L: 25.0 } # >= AmountA_L (20) — A is done, B is not
+        scans: 1
+        expect: { PhaseName: "Charge", XV201A_Cmd: false, XV201B_Cmd: true }
+      - given: { Batch.ChargedB_L: 25.0 } # >= AmountB_L (15) — now both are done
+        scans: 2 # one for ChargeB's own token, one for the convergence
+        expect: { PhaseName: "Heat" }
+
+  - name: Hold pauses Heat (TCV to zero) and Resume returns without recharging
+    suspend: [sim]
+    given: { RecipeSel: 1 }
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        scans: 1 # Prep's simultaneous divergence into ChargeA/ChargeB/Agitate
+      - given: { Batch.ChargedA_L: 25.0, Batch.ChargedB_L: 25.0 }
+        scans: 2 # both charges done, then the convergence into Heat
+        expect: { PhaseName: "Heat" }
+      - given: { Hold: true }
+        scans: 1
+        expect: { PhaseName: "Held" }
+      - advance: 1s # dosing (100 ms) catches up to HeatingActive going false
+        expect: { TCV201_Pos: 0.0 } # manual, CV_MAN's default — parked, bumpless
+      - given: { Hold: false, Resume: true }
+        scans: 2
+        expect:
+          - PhaseName: "Heat"
+          - Batch.ChargedA_L: { near: 25.0 } # unchanged — no recharge on resume
+          - Batch.ChargedB_L: { near: 25.0 }
+
+  - name: Abort from Charge closes both valves within one scan and latches AbortLamp
+    suspend: [sim]
+    given: { RecipeSel: 1 }
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        scans: 1
+        expect: { XV201A_Cmd: true, XV201B_Cmd: true }
+      - given: { Abort: true }
+        scans: 1
+        expect:
+          - XV201A_Cmd: false
+          - XV201B_Cmd: false
+          - AG201_Cmd: false
+          - AbortLamp: true
+          - PhaseName: "Aborted"
+      - given: { Abort: false, LT201_Level: 1.0 } # drained
+        scans: 2
+        expect: { PhaseName: "Idle" }
+
+  - name: Transfer waits for Line_Accept, and a 30 s handshake timeout alarms
+    suspend: [sim]
+    given: { RecipeSel: 1 }
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        scans: 1 # Prep's simultaneous divergence into ChargeA/ChargeB/Agitate
+      - given: { Batch.ChargedA_L: 25.0, Batch.ChargedB_L: 25.0 }
+        scans: 2 # both charges done, then the convergence into Heat
+        expect: { PhaseName: "Heat" }
+      - given: { TT201_Temp: 46.0 } # >= TempSP_C (45) - 1.0, below the +5 Overtemp threshold
+        scans: 1
+        expect: { PhaseName: "Hold" }
+      - advance: 31s # HoldSec (30 s) elapses
+        expect: { PhaseName: "Transfer", Line_Request: true }
+      - advance: 31s # Line_Accept never given — the 30 s handshake timeout trips
+        alarms: { active: ["HandshakeTimeout"] }
+      - given: { Line_Accept: true, LT201_Level: 1.0 }
+        advance: 1s
+        expect: { PhaseName: "Idle" } # not due for a CIP (Batch.Count == 1)
+
+  - name: CIP runs after every 3rd batch
+    suspend: [sim]
+    given: { RecipeSel: 1, Batch.Count: 2 } # LoadRecipe's own +1 makes this batch #3
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        scans: 1 # Prep's simultaneous divergence into ChargeA/ChargeB/Agitate
+      - given: { Batch.ChargedA_L: 25.0, Batch.ChargedB_L: 25.0 }
+        scans: 2 # both charges done, then the convergence into Heat
+        expect: { PhaseName: "Heat", Batch.Count: 3 }
+      - given: { TT201_Temp: 46.0 }
+        scans: 1
+        expect: { PhaseName: "Hold" }
+      - advance: 31s
+        expect: { PhaseName: "Transfer" }
+      - given: { Line_Accept: true, LT201_Level: 1.0 }
+        advance: 1s
+        expect: { PhaseName: "Cip", XV201A_Cmd: true } # flushing, not idle
+      - advance: 31s # the 30 s CIP timer elapses
+        expect: { PhaseName: "Idle" }
+
+  - name: the jacket PID holds temperature within 1 degree of setpoint through Hold
+    suspend: [] # closed loop: the PID needs the real plant to prove it settles
+    given: { RecipeSel: 1 }
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        until: 400s
+        expect: { PhaseName: "Hold" }
+      - expect: { TT201_Temp: { between: [44.0, 46.0] } } # SP (45) +- 1
+      - advance: 5s
+        expect: { TT201_Temp: { between: [44.0, 46.0] } }
+
+  - name: recipe 2 never commands the agitator
+    suspend: [sim]
+    given: { RecipeSel: 2 } # B-NOMIX — Agitate is FALSE
+    steps:
+      - given: { Start: true }
+        scans: 1
+      - given: { Start: false }
+        advance: 2s
+        always: { AG201_Cmd: false }
+      - given: { Batch.ChargedA_L: 20.0, Batch.ChargedB_L: 25.0 }
+        advance: 2s
+        always: { AG201_Cmd: false }
+
+  - name: RecipeValid(0) blocks Start
+    suspend: [sim]
+    given: { RecipeSel: 0, Start: true }
+    scans: 1
+    expect: { PhaseName: "Idle" }
+
+  - name: an alarm ack/shelve check on Overtemp
+    suspend: [sim, dosing] # drive the alarm's own tag directly
+    given: { OvertempAlm: true }
+    steps:
+      - advance: 3s # past the 2 s on-delay
+        alarms: { active: ["Overtemp"] }
+      - ack: { ids: ["Overtemp"], by: test }
+        scans: 1
+        alarms: { state: { Overtemp: ack-active } }
+      - given: { OvertempAlm: false }
+        advance: 1s
+        alarms: { active: [], state: { Overtemp: normal } }

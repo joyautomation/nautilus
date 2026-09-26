@@ -1,0 +1,107 @@
+# batch-skid — the bench build: a two-ingredient batch mixing skid on the
+# loopback driver, with the plant itself simulated in ST (sim.st) so the
+# whole thing runs, cycles, and alarms with nothing wired up — the line
+# PLC included, stood in by sim.st's own small receiving-tank model. See
+# line.yaml for the same control programs pointed at a real (or emulated)
+# Logix line controller over EtherNet/IP instead.
+#
+#   naut check .                validate offline
+#   naut test  .                the acceptance suite (batch-skid_test.yaml)
+#   naut run   .                dashboard + tag API on http://localhost:8080
+#   naut build .                one deployable controller binary
+#
+# Five tasks, four IEC languages, one tag store:
+#   phases.sfc     recipe phases — charge/agitate, heat, hold, transfer, CIP
+#   dosing.fbd     dosing-line totalizers and the jacket temperature PID
+#   transfer.ld    line handshake, transfer-pump permissive, CIP-due, alarm
+#   status.st      Batch UDT upkeep, phase string, elapsed time
+#   sim.st         bench only: the tank, both dosing lines, and the line
+name: batch-skid
+
+server:
+  addr: "localhost:8080"
+  online-edits: true
+
+retain:
+  file: retain.json   # recipe select + tuning survive a restart
+
+# tags/skid.yaml holds every operator setpoint and computed-state tag
+# that's byte-identical between this manifest and line.yaml — the tags:
+# list below keeps only what's bench-specific: the skid's own field
+# values (owned by the sim task here) and the line's process tags, which
+# sim.st also simulates on the bench so the whole batch narrative closes
+# the loop with nothing wired up.
+tag-files:
+  - tags/skid.yaml
+
+tasks:
+  - program: phases.sfc   # the first task is always named "main" (reserved)
+    scan: 250ms
+  - name: dosing
+    program: dosing.fbd
+    scan: 100ms
+    dt-tag: DosingDtS
+  - name: transfer
+    program: transfer.ld
+    scan: 100ms
+  - name: status
+    program: status.st
+    scan: 500ms
+    dt-tag: StatusDtS
+  - name: sim
+    program: sim.st
+    scan: 100ms
+    dt-tag: SimDtS
+
+tags:
+  # The skid's own field values — owned by the sim task here; line.yaml
+  # declares these the same way (role: state), since this example's scope
+  # is the EtherNet/IP line handshake, not a second local-I/O driver — see
+  # line.yaml's own header and README.md's "Bench vs. line".
+  - { name: FIT201A_Flow, role: state, init: 0.0, unit: "L/min", desc: "Dosing-line A flow (FIT-201A)" }
+  - { name: FIT201B_Flow, role: state, init: 0.0, unit: "L/min", desc: "Dosing-line B flow (FIT-201B)" }
+  - { name: LT201_Level, role: state, init: 0.0, unit: "%", desc: "Mix tank level (LT-201, 500 L span)" }
+  - { name: TT201_Temp, role: state, init: 20.0, unit: "degC", desc: "Mix tank temperature (TT-201)" }
+  - { name: AG201_Running, role: state, init: false, desc: "Agitator running feedback (AG-201)" }
+  - { name: P202_Running, role: state, init: false, desc: "Transfer pump running feedback (P-202)" }
+  - { name: XV201A_Open, role: state, init: false, desc: "Dosing valve A open feedback (XV-201A)" }
+  - { name: XV201B_Open, role: state, init: false, desc: "Dosing valve B open feedback (XV-201B)" }
+  - { name: XV203_Open, role: state, init: false, desc: "Transfer valve open feedback (XV-203)" }
+
+  # Commands — sent to the field devices (loopback here; real outputs once
+  # a local I/O driver is added).
+  - { name: XV201A_Cmd, role: output, init: false, desc: "Dosing valve A command" }
+  - { name: XV201B_Cmd, role: output, init: false, desc: "Dosing valve B command" }
+  - { name: AG201_Cmd, role: output, init: false, desc: "Agitator run command" }
+  - { name: TCV201_Pos, role: output, init: 0.0, unit: "%", desc: "Jacket water control valve position" }
+  - { name: P202_Cmd, role: output, init: false, desc: "Transfer pump run command" }
+  - { name: XV203_Cmd, role: output, init: false, desc: "Transfer valve command" }
+
+  # The line PLC — role: state here, simulated by sim.st's own small
+  # receiving-tank model; line.yaml's tags/eip.yaml supplies the same
+  # names as role: input/output from `naut eip import` instead.
+  - { name: Line_Ready, role: state, init: true, desc: "Line ready for a transfer (receiving tank has headroom)" }
+  - { name: Line_Accept, role: state, init: false, desc: "Line has accepted the transfer request" }
+  - { name: Line_TankLevel, role: state, init: 20.0, unit: "%", desc: "Line's receiving tank level" }
+  - { name: Line_Fault, role: state, init: false, desc: "Line-side fault — blocks Line_Accept" }
+  - { name: Line_Request, role: state, init: false, desc: "Skid requests a transfer" }
+  - { name: Line_BatchId, role: state, init: 0, desc: "Batch count stamped onto the line on each request" }
+
+  # Bench-only fault injection — nothing to wire up, just a tag to POST
+  # from the dashboard or the API.
+  - { name: InjectLineFault, role: setpoint, init: false, desc: "Bench only: trip the line's fault contact" }
+
+alarms:
+  defaults: { ack-required: true, auto-clear: true, shelve: true }
+  shelve-times: [15m, 1h, 4h]
+  journal: { keep: 500 }
+  defs:
+    - { id: Overtemp, tag: OvertempAlm, name: "MT-201 jacket overtemperature", priority: high, on-delay: 2s, class: process }
+    - { id: HandshakeTimeout, tag: HandshakeTimeout, name: "Line handshake timeout", priority: high, on-delay: 1s, class: process }
+    - { id: LineFault, tag: Line_Fault, name: "Line-side fault", priority: medium, on-delay: 2s, class: equipment, enable: Running }
+    - { id: DoseTimeoutA, tag: DoseTimeoutA, name: "Dosing line A charging longer than 5 min", priority: medium, class: process }
+    - { id: DoseTimeoutB, tag: DoseTimeoutB, name: "Dosing line B charging longer than 5 min", priority: medium, class: process }
+    - { id: AbortLamp, tag: AbortLamp, name: "Batch aborted", priority: low, ack-required: false, class: process }
+
+driver:
+  type: memory
