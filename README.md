@@ -43,7 +43,7 @@ server/      tag API over HTTP: JSON snapshot, SSE stream, tag writes, alarms, p
 cmd/naut the developer CLI: new · run · test · check · build · pull · lsp · eip · sparkplug · historian · alarms
 hmi/         SvelteKit digital-twin component kit + realtime SSE client
 tools/vscode-iec/   VS Code extension: syntax, diagnostics, go-to-def, live values, diagram editors
-examples/    heated-tank-nogo (manifest project, four tasks, three languages), hmi-demo, tank-batch-sfc, …
+examples/    four real plant projects — lift-station, batch-skid, remote-fleet, go-sdk — see examples/README.md
 ```
 
 **The public API is the seams.** You implement interfaces to bring your world:
@@ -273,18 +273,22 @@ one rule that bites (reads fault, writes create) — is spelled out in
 Or, from a clone of this repo, run the worked example:
 
 ```sh
-go run ./examples/heated-tank
+go run ./examples/go-sdk
 ```
 
 ```
-nautilus · heated-tank — Ctrl+C to stop
+nautilus · go-sdk (heated tank) — tag API on http://localhost:8080 — Ctrl+C to stop
 level  60.0%  temp  60.0°C  pump off  heater  61%  scans 9
-level  59.9%  temp  60.4°C  pump off  heater  63%  scans 20
-...
+level  59.9%  temp  60.0°C  pump off  heater  62%  scans 19
+level  59.9%  temp  60.0°C  pump off  heater  62%  scans 29
 ```
 
-The control logic itself lives in [`examples/heated-tank/program.st`](examples/heated-tank/program.st) —
-pump hysteresis and a PI temperature loop, in plain Structured Text.
+The control logic itself lives in [`examples/go-sdk/program.st`](examples/go-sdk/program.st) —
+pump hysteresis and a PI temperature loop, in plain Structured Text. The
+plant physics (`plant.go`) shows the shape a real field-bus driver takes —
+see [`examples/go-sdk/README.md`](examples/go-sdk/README.md) for the whole
+SDK story. Everywhere else in `examples/` the plant is a manifest
+project — no Go — starting with [`examples/lift-station`](examples/lift-station).
 
 ### Talking to a real PLC (EtherNet/IP)
 
@@ -365,7 +369,8 @@ order are per source, because the same hardware ships both ways. A Modbus
 exception marks just that block bad and keeps polling; a transport failure
 reconnects with backoff while values hold and `<source>__Online` goes false.
 `naut modbus serve` stands in for the whole plant on one listener, so
-the bench needs no hardware. `examples/modbus` is a complete plant, and the
+the bench needs no hardware. `examples/lift-station` runs a whole plant
+against it (`devices.yaml`, `modbus_manifest.yaml`), and the
 [Modbus TCP guide](https://nautilus.joyautomation.com/guides/modbus/) covers
 the rest.
 
@@ -455,7 +460,8 @@ through `retain`, so a restart or a failover cannot resurrect four hundred
 acked alarms as unacked. Acceptance tests get an `alarms:` key and
 `ack:`/`shelve:` verbs, and the engine reads the runtime's clock, so a
 five-minute on-delay is asserted exactly in virtual time. See
-`examples/alarms` and the [Alarms guide](https://nautilus.joyautomation.com/guides/alarms/).
+`examples/lift-station` (and `examples/remote-fleet`'s rule expanded across
+a shared Template) and the [Alarms guide](https://nautilus.joyautomation.com/guides/alarms/).
 
 ### Publishing to MQTT (Sparkplug B)
 
@@ -513,7 +519,8 @@ birth already reports that value. A UDT is never written as a whole — bind its
 controls per member (`member: Speed`, or `--writable 'Motor1.START,*.HSP'`)
 and each write goes out as a partial template the edge merges, leaving the
 members the site is driving untouched. Both the edge-node and host-application **TCK
-profiles** pass in CI. See `examples/sparkplug-host` and the
+profiles** pass in CI. See `examples/remote-fleet` (three edge sites and a
+`scada` host) and the
 [host guide](https://nautilus.joyautomation.com/guides/sparkplug-host/).
 
 ## Four languages, one program model
@@ -731,7 +738,8 @@ The pieces that make this first-class rather than a convention:
   `FUNCTION_BLOCK`s whose bodies are rungs, with pins and per-instance
   retained state, which is what IEC gives you instead of a JSR. See
   [docs/functions.md](docs/functions.md#function-blocks-in-ladder) and
-  [examples/ladder-subroutines](examples/ladder-subroutines).
+  [examples/lift-station's `lib/motor.ld`](examples/lift-station/lib/motor.ld),
+  a `MotorStarter` block instantiated once per pump.
 - **The tooling composes the same way.** The VS Code extension, the LSP,
   `naut check`, and `naut pull` all treat the project's library files
   (PROGRAM-less files in the root and anywhere under `lib/`) as in-scope
@@ -846,22 +854,18 @@ pre-release channel, the HMI kit on npm. What ships today:
   check for CI, and the ST language server
 - ✅ `tools/vscode-iec/` — VS Code extension: syntax, compile diagnostics,
   go-to-definition, hover, completion, inline live tag values
-- ✅ `examples/heated-tank` — a runnable controller serving the tag API
-- ✅ `examples/heated-tank-nogo` — the same plant as a manifest project:
-  four tasks in three IEC languages (physics simulated in ST), zero Go,
-  `naut run` / `naut build`
-- ✅ `examples/hmi-demo` — a SvelteKit operator screen on the HMI kit:
-  tank faceplate, trends, setpoint write-back, driver-connection cards,
-  and scan diagnostics from one SSE stream
 - ✅ `hmi/` — [`@joyautomation/nautilus-hmi`](https://www.npmjs.com/package/@joyautomation/nautilus-hmi)
   on npm: Svelte 5 SCADA faceplates (Tank, Gauge, Trend, Pump, Valve…), app
   primitives, a generic SSE realtime client, and a themeable token layer
 - ✅ `lang/sfc` — Sequential Function Chart: steps, transitions, and actions
-  on the same IR, with LSP support, a graphical VS Code editor, and a batch
-  example (`examples/tank-batch-sfc`)
-- ✅ `examples/ladder-subroutines` — `FUNCTION_BLOCK`s written as rungs in a
-  PROGRAM-less `.ld` library, instantiated per pump from a ladder program
-  and callable from ST/FBD — ladder's answer to a JSR
+  on the same IR, with LSP support and a graphical VS Code editor
+- ✅ `examples/` — four real plant projects covering every language and
+  driver: `lift-station` (the flagship — SFC/FBD/LD/ST, Modbus, alarms,
+  online edits, a custom-component HMI), `batch-skid` (SFC/FBD/LD, an
+  EtherNet/IP line handshake, a read-only `.L5X` diffed between
+  revisions), `remote-fleet` (three Sparkplug B edge sites and a
+  Sparkplug host SCADA), and `go-sdk` (the one Go-tier example, for the
+  SDK story) — see [`examples/README.md`](examples/README.md)
 
 ## Roadmap
 
