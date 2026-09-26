@@ -107,10 +107,10 @@ func TestLibraryDocCommentDoesNotTripStructuralScan(t *testing.T) {
 	if len(sigs) != 1 {
 		t.Fatalf("want exactly 1 real FUNCTION_BLOCK signature, got %d: %+v", len(sigs), sigs)
 	}
-	if sigs[0].name != "PumpSeq" {
-		t.Fatalf("sig name = %q, want PumpSeq", sigs[0].name)
+	if sigs[0].Name != "PumpSeq" {
+		t.Fatalf("sig name = %q, want PumpSeq", sigs[0].Name)
 	}
-	if len(sigs[0].inputs) != 2 || len(sigs[0].outputs) != 1 {
+	if len(sigs[0].Inputs) != 2 || len(sigs[0].Outputs) != 1 {
 		t.Fatalf("PumpSeq pins wrong: %+v", sigs[0])
 	}
 

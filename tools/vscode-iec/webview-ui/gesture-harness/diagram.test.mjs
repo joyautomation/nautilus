@@ -857,3 +857,86 @@ test('FBD zoom: Ctrl+= / Ctrl+- / Ctrl+0 drive the xyflow viewport too', async (
 		assert.deepEqual(await fbdOps(b), []);
 	});
 });
+
+// ── FBD palette: the function-block picker ──────────────────────────────────
+// A diagram with one PID instance already on it, and the catalog `naut fbd
+// graph` sends (PID with its pins, a project block).
+const PID_PINS = [
+	...['AUTO', 'PV', 'SP'].map((name) => ({ name, type: name === 'AUTO' ? 'BOOL' : 'REAL', dir: 'in' })),
+	...['CV', 'SAT_HI'].map((name) => ({ name, type: name === 'CV' ? 'REAL' : 'BOOL', dir: 'out' }))
+];
+const FBD_PID = {
+	...FBD,
+	nodes: [
+		...FBD.nodes,
+		{ id: 'f:pid1', kind: 'fb', label: 'pid1', type: 'PID', inputs: ['AUTO', 'PV', 'SP'], outputs: ['CV', 'SAT_HI'], layer: 1, line: 12 }
+	],
+	fbTypes: [
+		{ name: 'TON', detail: 'on-delay timer', prefix: 't', pins: [{ name: 'IN', type: 'BOOL', dir: 'in' }, { name: 'PT', type: 'TIME', dir: 'in' }, { name: 'Q', type: 'BOOL', dir: 'out' }], args: 'IN := _, PT := _' },
+		{ name: 'PID', detail: 'closed-loop control', prefix: 'pid', pins: PID_PINS, args: 'AUTO := _, PV := _, SP := _' },
+		{ name: 'Starter', user: true, prefix: 's', pins: [{ name: 'Req', type: 'BOOL', dir: 'in' }, { name: 'Run', type: 'BOOL', dir: 'out' }], args: 'Req := _' }
+	]
+};
+const btnByText = (b, sel, label) =>
+	b.eval(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(sel)})].find((x) => (x.querySelector('span')?.textContent ?? x.textContent).trim() === ${JSON.stringify(label)}); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+const typeText = async (b, s) => {
+	for (const ch of s) await b.send('Input.insertText', { text: ch });
+	await sleep(80);
+};
+
+test('FBD palette: "function block" places a PID with every input open, next free name, output refs in the hint', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'model', model: FBD_PID, title: 'n.fbd' });
+		await clickAt(b, await btnByText(b, '.bar button', '+ add'));
+		await clickAt(b, await btnByText(b, 'button.item', 'function block'));
+		assert.equal(await b.eval(`document.activeElement?.classList.contains('fbfilter')`), true, 'filter focused');
+		// The catalog, grouped: standard then project.
+		assert.deepEqual(await b.eval(`[...document.querySelectorAll('.fbpick button.fbitem')].map((x) => x.dataset.type)`), ['TON', 'PID', 'Starter']);
+		await typeText(b, 'PID');
+		await key(b, 'Enter', 'Enter', 13); // picks PID, focus → instance
+		assert.equal(await b.eval(`document.querySelector('.fbpick input.fbinst').value`), 'pid2', 'pid1 is taken');
+		assert.equal(await b.eval(`document.querySelector('.fbpick input.fbargs').value`), 'AUTO := _, PV := _, SP := _');
+		await b.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+		await typeText(b, 'lic');
+		assert.match(await b.eval(`document.querySelector('.fbpick .hint').textContent`), /outputs: lic\.CV, lic\.SAT_HI/);
+		await reset(b);
+		await key(b, 'Enter', 'Enter', 13);
+		assert.deepEqual(await fbdOps(b), [{ type: 'insertStatement', text: 'lic : PID(AUTO := _, PV := _, SP := _)' }]);
+		assert.equal(await b.eval(`document.querySelectorAll('.fbpick').length`), 0, 'palette closes');
+	});
+});
+
+test('FBD palette: output reference takes an FB output as its source — one statement', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'model', model: FBD_PID, title: 'n.fbd' });
+		await clickAt(b, await btnByText(b, '.bar button', '+ add'));
+		await clickAt(b, await btnByText(b, 'button.item', 'output reference'));
+		const field = (k) => `[...document.querySelectorAll('label.field')].find((l) => l.querySelector('span')?.textContent.trim() === '${k}')?.querySelector('input')`;
+		await clickAt(b, await b.eval(`(() => { const r = ${field('name')}.getBoundingClientRect(); return { x: r.left + 10, y: r.top + r.height / 2 }; })()`));
+		await b.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+		await typeText(b, 'SpeedRef');
+		await clickAt(b, await b.eval(`(() => { const r = ${field('source')}.getBoundingClientRect(); return { x: r.left + 10, y: r.top + r.height / 2 }; })()`));
+		await typeText(b, 'pid1.C');
+		// The instance's outputs are offered as sources.
+		assert.ok((await b.eval(`[...document.querySelectorAll('.suggest .list button, .suggest .list .item')].map((x) => x.textContent)`)).some((t) => t.includes('pid1.CV')));
+		await b.eval(`(${field('source')}).value = 'pid1.CV', (${field('source')}).dispatchEvent(new Event('input', { bubbles: true }))`);
+		await reset(b);
+		await clickAt(b, await btnByText(b, '.actions button', 'insert'));
+		assert.deepEqual(await fbdOps(b), [{ type: 'insertStatement', text: 'SpeedRef := pid1.CV' }]);
+	});
+});
+
+test('FBD: double-clicking an FB header renames the instance; the body inspects it', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'model', model: FBD_PID, title: 'n.fbd' });
+		const typePt = await center(b, `${node('f:pid1')} .title .type`);
+		await b.dblclick(typePt.x, typePt.y);
+		await sleep(200);
+		assert.match(await b.eval(`document.activeElement?.tagName`), /INPUT/);
+		await b.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+		await typeText(b, 'lic');
+		await reset(b);
+		await key(b, 'Enter', 'Enter', 13);
+		assert.deepEqual(await fbdOps(b), [{ type: 'rename', node: 'f:pid1', newName: 'lic' }]);
+	});
+});

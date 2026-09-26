@@ -32,6 +32,28 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   project's manifest tags, not only the ones the file already declares.
   (`naut ld graph` sends the manifest's tags with the model inside a project.)
 
+- **The FBD palette places any function block — PID and user blocks.**
+  *+ add → function block* opens the same picker the ladder palette uses,
+  fed the same catalog: the standard blocks (TON, TOF, TP, CTU, CTD, CTUD,
+  R_TRIG, F_TRIG, SR, RS and **PID**) and every user `FUNCTION_BLOCK` in
+  scope — the file's own and the project libraries' (root and `lib/`, any
+  language). A block goes in as `inst : TYPE(pin := _, …)` with every input
+  an open `_` pin, ready for the usual "drag a tag onto the pin" gesture,
+  under an instance name prefilled with the next free one (`pid1`, `s1`, …)
+  and editable; the hint lists the outputs it will offer (`lic.CV`,
+  `lic.SAT_HI`, …). A library block now draws with all of its pins, read
+  or not. The timer and counter templates stay as shortcuts. Requires a
+  `naut` whose `fbd graph` sends the catalog (`fbTypes`); with an older one
+  the picker lists the standard names and a typed type still inserts.
+- **An FBD output reference can name its source.** The palette's *output
+  reference* (and *coil*) source field completes FB outputs as well as
+  tags, so `SpeedRef := lic.CV` is one gesture; left empty, it is the bare
+  chip to drop a wire on, as before.
+- **Rename an FBD instance from its header.** Double-clicking anywhere on
+  an FB's header (instance name or type) renames the instance — its
+  declaration and every `inst.pin` read in the file, as one edit — the way
+  ladder's does; the body still opens the instance inspector.
+
 ### Changed
 
 - **Project libraries can live in `lib/`.** Online edits (download, diff,

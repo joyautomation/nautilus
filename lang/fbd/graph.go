@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/fbcatalog"
 	"github.com/joyautomation/nautilus/lang/internal/hdrvars"
 	"github.com/joyautomation/nautilus/lang/internal/seed"
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -33,6 +34,12 @@ type Model struct {
 	// Blank marks a whitespace-only source: a new file with no POU yet. The
 	// editor opens it empty and the first op writes the skeleton.
 	Blank bool `json:"blank,omitempty"`
+	// FBTypes is the block catalog the palette's function-block picker
+	// lists (lang/fbcatalog, the same list `naut ld graph` sends): the
+	// standard blocks, then every user FUNCTION_BLOCK in scope — this
+	// file's own, plus the project libraries' when GraphWithLibs is given
+	// them — each with its pins.
+	FBTypes []fbcatalog.Type `json:"fbTypes,omitempty"`
 }
 
 // VarDecl is one header declaration: `Name : Type [:= init];` inside a
@@ -129,10 +136,19 @@ type Edge struct {
 // Blank source (a new, 0-byte file) is an empty diagram flagged Blank, not
 // an error: the editor opens on it and the first op seeds the POU.
 func Graph(src string, userFBs ...map[string]*ir.FBDef) (*Model, error) {
+	return GraphWithLibs(src, nil, userFBs...)
+}
+
+// GraphWithLibs is Graph with the project's library sources in scope
+// (stproject.PreludeSources): a user FUNCTION_BLOCK a library defines
+// draws with all of its pins — so an instance fresh from the palette shows
+// the outputs nothing reads yet — and joins the palette's block catalog.
+func GraphWithLibs(src string, libs []string, userFBs ...map[string]*ir.FBDef) (*Model, error) {
 	if seed.Blank(src) {
-		return (&Model{Blank: true}).normalize(), nil
+		m := &Model{Blank: true, FBTypes: fbcatalog.NewScope("", libs).Catalog()}
+		return m.normalize(), nil
 	}
-	b, err := buildModel(src, userFBs...)
+	b, err := buildModelIn(src, libs, userFBs...)
 	if err != nil {
 		return nil, err
 	}
@@ -142,6 +158,10 @@ func Graph(src string, userFBs ...map[string]*ir.FBDef) (*Model, error) {
 // buildModel is Graph exposing the builder — the edit service needs the
 // netlist and node index behind the model, not just the JSON shape.
 func buildModel(src string, userFBs ...map[string]*ir.FBDef) (*modelBuilder, error) {
+	return buildModelIn(src, nil, userFBs...)
+}
+
+func buildModelIn(src string, libs []string, userFBs ...map[string]*ir.FBDef) (*modelBuilder, error) {
 	header, body, _, bodyLine, err := splitFBD(src)
 	if err != nil {
 		return nil, err
@@ -161,7 +181,9 @@ func buildModel(src string, userFBs ...map[string]*ir.FBDef) (*modelBuilder, err
 		coils:       map[string]*Node{},
 		fbs:         map[string]*Node{},
 		wireOut:     map[string]outRef{},
+		scope:       fbcatalog.NewScope(src, libs),
 	}
+	b.m.FBTypes = b.scope.Catalog()
 	for _, reg := range userFBs {
 		for name, def := range reg {
 			if b.userFBs == nil {
@@ -226,6 +248,7 @@ type modelBuilder struct {
 	fbs                    map[string]*Node  // fb node per instance name
 	wireOut                map[string]outRef // memoized wire resolutions (fan-out shares them)
 	userFBs                map[string]*ir.FBDef
+	scope                  *fbcatalog.Scope // user FB signatures: this file + libraries
 	exprOf                 map[string]callExpr // block node id -> the call that produced it
 	litSeq                 int
 	comments               []commentRun // full-line // comment runs in the body
@@ -378,6 +401,19 @@ func (b *modelBuilder) fbPins(n *Node) {
 		def = d
 	}
 	if def == nil {
+		// A user block known only by its text (this file or a library):
+		// its declared pins, so a fresh instance shows every one.
+		if sig, ok := b.scope.Lookup(n.Type); ok {
+			for _, p := range sig.Inputs {
+				ensurePin(&n.Inputs, p.Name)
+			}
+			for _, p := range sig.InOuts {
+				ensurePin(&n.Inputs, p.Name)
+			}
+			for _, p := range sig.Outputs {
+				ensurePin(&n.Outputs, p.Name)
+			}
+		}
 		return
 	}
 	for _, s := range def.Inputs {
