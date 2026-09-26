@@ -21,7 +21,11 @@
 
 # Computed state — written by phases.sfc/dosing.fbd/transfer.ld/status.st,
 # identically in both manifests.
-- { name: Active, role: state, type: Recipe, desc: "The recipe copied in at Prep" }
+- name: Active
+  role: state
+  type: Recipe
+  desc: "The recipe copied in at Prep"
+  init: { Name: "A-STD", AmountA_L: 20.0, AmountB_L: 15.0, TempSP_C: 45.0, HoldSec: 30.0, Agitate: true }
 - name: Batch
   role: state
   type: BatchStatus

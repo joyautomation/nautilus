@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="36.00" TargetName="LineController" TargetType="Controller" ContainsContext="false" ExportDate="Thu Sep 25 09:00:00 2026" ExportOptions="NoRawData L5KData DecoratedData ForceProtectedEncoding AllProjDocTrans">
+<Controller Use="Target" Name="LineController" ProcessorType="1769-L33ER" MajorRev="36" MinorRev="11">
+<DataTypes>
+<DataType Name="LineStatus" Family="NoFamily" Class="User">
+<Description>
+<![CDATA[Mode/alarm summary the skid polls alongside the handshake tags]]>
+</Description>
+<Members>
+<Member Name="Mode" DataType="DINT" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Alarm" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write"/>
+</Members>
+</DataType>
+</DataTypes>
+<Tags>
+<Tag Name="Line_Ready" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Receiving tank has headroom for a transfer]]>
+</Description>
+<Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="1"/></Data>
+</Tag>
+<Tag Name="Line_Accept" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Line has accepted the skid's transfer request]]>
+</Description>
+<Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data>
+</Tag>
+<Tag Name="Line_TankLevel" TagType="Base" DataType="REAL" Radix="Float" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Receiving tank level, percent of span]]>
+</Description>
+<Data Format="Decorated"><DataValue DataType="REAL" Radix="Float" Value="20.0"/></Data>
+</Tag>
+<Tag Name="Line_Fault" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Line-side fault — blocks Line_Accept regardless of level]]>
+</Description>
+<Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data>
+</Tag>
+<Tag Name="Line_Request" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Skid requests a transfer — written by the skid over EtherNet/IP]]>
+</Description>
+<Data Format="Decorated"><DataValue DataType="BOOL" Radix="Decimal" Value="0"/></Data>
+</Tag>
+<Tag Name="Line_BatchId" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Batch count stamped onto the line by the skid on each request]]>
+</Description>
+<Data Format="Decorated"><DataValue DataType="DINT" Radix="Decimal" Value="0"/></Data>
+</Tag>
+<Tag Name="Line_Status" TagType="Base" DataType="LineStatus" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Mode/alarm summary]]>
+</Description>
+<Data Format="Decorated">
+<Structure DataType="LineStatus">
+<DataValueMember Name="Mode" DataType="DINT" Radix="Decimal" Value="1"/>
+<DataValueMember Name="Alarm" DataType="BOOL" Value="0"/>
+</Structure>
+</Data>
+</Tag>
+<Tag Name="AcceptTmr" TagType="Base" DataType="TIMER" Constant="false" ExternalAccess="Read/Write">
+<Description>
+<![CDATA[Accept-handshake settling delay]]>
+</Description>
+<Data Format="Decorated">
+<Structure DataType="TIMER">
+<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="2000"/>
+<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>
+<DataValueMember Name="EN" DataType="BOOL" Value="0"/>
+<DataValueMember Name="TT" DataType="BOOL" Value="0"/>
+<DataValueMember Name="DN" DataType="BOOL" Value="0"/>
+</Structure>
+</Data>
+</Tag>
+</Tags>
+<Programs>
+<Program Name="MainProgram" TestEdits="false" MainRoutineName="Receive" Disabled="false" UseAsFolder="false">
+<Tags/>
+<Routines>
+<Routine Name="Receive" Type="RLL">
+<RLLContent>
+<Rung Number="0" Type="N">
+<Comment>
+<![CDATA[LT-line: ready for a transfer while the receiving tank isn't full]]>
+</Comment>
+<Text>
+<![CDATA[LES(Line_TankLevel,80.0)OTE(Line_Ready);]]>
+</Text>
+</Rung>
+<Rung Number="1" Type="N">
+<Comment>
+<![CDATA[A request, no fault, and a ready tank starts the accept-handshake timer]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Line_Request)XIC(Line_Ready)XIO(Line_Fault)TON(AcceptTmr,?,?);]]>
+</Text>
+</Rung>
+<Rung Number="2" Type="N">
+<Comment>
+<![CDATA[Accept once the handshake timer has settled]]>
+</Comment>
+<Text>
+<![CDATA[XIC(AcceptTmr.DN)OTE(Line_Accept);]]>
+</Text>
+</Rung>
+<Rung Number="3" Type="N">
+<Comment>
+<![CDATA[Alarm summary bit tracks the line fault]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Line_Fault)OTE(Line_Status.Alarm);]]>
+</Text>
+</Rung>
+</RLLContent>
+</Routine>
+</Routines>
+</Program>
+</Programs>
+<Tasks>
+<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500" DisableUpdateOutputs="false" InhibitTask="false">
+<ScheduledPrograms>
+<ScheduledProgram Name="MainProgram"/>
+</ScheduledPrograms>
+</Task>
+</Tasks>
+</Controller>
+</RSLogix5000Content>
