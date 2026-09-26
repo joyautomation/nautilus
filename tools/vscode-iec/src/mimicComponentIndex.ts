@@ -82,6 +82,27 @@ export function componentNameFromFilename(basename: string): string | null {
   return m && m[1] ? m[1] : null;
 }
 
+/** True when a discovered `.svelte` path is a real candidate mimic
+ * component — never a SvelteKit route/layout special file (`+page.svelte`,
+ * `+layout.svelte`, `+error.svelte`, `+page.server.svelte`, ...: any
+ * basename starting with `+`) or anything under a `src/routes/` directory
+ * (a route's own local helper components, not equipment) — those are
+ * framework structure, not something a project would ever place on a
+ * mimic. Shared by mimicComponents.ts's discoverSvelteComponentNames, the
+ * one workspace-wide bare-`.svelte` discovery behind both the mimic
+ * editor's palette and "Edit Component Ports…" (PR #50), so both benefit
+ * from the exclusion. `path` is a filesystem path (fsPath), forward- or
+ * back-slashed. */
+export function isCandidateComponentSveltePath(path: string): boolean {
+  const parts = path.split(/[/\\]/).filter((p) => p !== "");
+  const basename = parts[parts.length - 1] ?? "";
+  if (basename.startsWith("+")) return false;
+  for (let i = 0; i + 1 < parts.length; i++) {
+    if (parts[i] === "src" && parts[i + 1] === "routes") return false;
+  }
+  return true;
+}
+
 /** Parse one sidecar's text, forgivingly: missing/empty/malformed/
  * non-object all read back as {} — never throws, so one bad file (a
  * hand-edit mid-keystroke) doesn't take down the whole aggregated index.

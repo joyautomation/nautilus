@@ -8,6 +8,7 @@ import {
   applyComponentPortsEdit,
   componentNameFromFilename,
   formatComponentEntry,
+  isCandidateComponentSveltePath,
   paletteCustomComponents,
   parseComponentEntry,
   parseComponentEntryStrict,
@@ -23,6 +24,34 @@ test("componentNameFromFilename extracts the name, or null for a non-match", () 
   assert.equal(componentNameFromFilename(".component.json"), null);
   assert.equal(componentNameFromFilename("Tank.svelte"), null);
   assert.equal(componentNameFromFilename("Tank.ports.json"), null);
+});
+
+test("isCandidateComponentSveltePath accepts an ordinary project component", () => {
+  assert.equal(isCandidateComponentSveltePath("/proj/hmi/src/lib/ToProcess.svelte"), true);
+  assert.equal(isCandidateComponentSveltePath("/proj/hmi/src/lib/components/Tank.svelte"), true);
+  assert.equal(isCandidateComponentSveltePath("HeatExchanger.svelte"), true);
+});
+
+test("isCandidateComponentSveltePath rejects SvelteKit route/layout special files by basename", () => {
+  assert.equal(isCandidateComponentSveltePath("/proj/src/routes/+page.svelte"), false);
+  assert.equal(isCandidateComponentSveltePath("/proj/src/lib/+layout.svelte"), false);
+  assert.equal(isCandidateComponentSveltePath("/proj/src/lib/+error.svelte"), false);
+  assert.equal(isCandidateComponentSveltePath("/proj/src/lib/+page.server.svelte"), false);
+});
+
+test("isCandidateComponentSveltePath rejects anything under a src/routes/ directory, any depth, any basename", () => {
+  assert.equal(isCandidateComponentSveltePath("/proj/hmi/src/routes/+page.svelte"), false);
+  assert.equal(isCandidateComponentSveltePath("/proj/hmi/src/routes/dashboard/+page.svelte"), false);
+  // A route's own local helper component (no leading +) is still route
+  // structure, not a mimic component — excluded by directory, not basename.
+  assert.equal(isCandidateComponentSveltePath("/proj/hmi/src/routes/Widget.svelte"), false);
+  assert.equal(isCandidateComponentSveltePath("/proj/hmi/src/routes/dashboard/deep/Widget.svelte"), false);
+  // Windows-style separators work the same way.
+  assert.equal(isCandidateComponentSveltePath("C:\\proj\\hmi\\src\\routes\\+page.svelte"), false);
+});
+
+test("isCandidateComponentSveltePath: a \"routes\" directory NOT under src is not SvelteKit's and is not excluded", () => {
+  assert.equal(isCandidateComponentSveltePath("/proj/hmi/lib/routes/Widget.svelte"), true);
 });
 
 test("parseComponentEntry is forgiving: missing/empty/malformed/non-object all read as {}", () => {

@@ -100,7 +100,9 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   exists and an empty port list otherwise (the same fallback the runtime
   `<Mimic>` uses for an unknown component); placing one never creates a
   sidecar on its own — "Edit Component Ports…" still does that, on first
-  save.
+  save. The discovery skips a SvelteKit project's own `+page.svelte`/
+  `+layout.svelte`/`+error.svelte` and anything under `src/routes/` —
+  those are framework structure, never equipment.
 - **Delete a rung's last coil when the rung calls a block.** A rung that
   ends in a function block call is valid with no coil (the block is what it
   drives), so deleting its only coil — the `( _ )` a placed block arrives

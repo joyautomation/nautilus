@@ -23,6 +23,7 @@
 import * as vscode from "vscode";
 import {
   aggregateComponentFiles,
+  isCandidateComponentSveltePath,
   patchComponentPortsText,
   validatePortList,
   type ComponentFile,
@@ -151,12 +152,18 @@ export async function locateComponentSource(component: string): Promise<vscode.U
  * "Edit Component Ports…" on a component the user has only just authored
  * (no *.mimic.json equipment references it yet, so userComponents.ts's
  * request()-driven discovery has never seen it, and no sidecar exists
- * either — see editComponentPorts.ts). Built-ins are excluded by the
- * caller (they have no .svelte source in the workspace anyway). */
+ * either — see editComponentPorts.ts), and (ComponentIndex.svelteNames) to
+ * list one in the mimic editor's palette the same way. Built-ins are
+ * excluded by the caller (they have no .svelte source in the workspace
+ * anyway); SvelteKit route/layout files (`+page.svelte`, anything under a
+ * `src/routes/` directory) are excluded here — see
+ * isCandidateComponentSveltePath — since those are framework structure,
+ * never a mimic component. */
 export async function discoverSvelteComponentNames(): Promise<string[]> {
   const uris = await vscode.workspace.findFiles("**/*.svelte", EXCLUDE_GLOB);
   const names = new Set<string>();
   for (const uri of uris) {
+    if (!isCandidateComponentSveltePath(uri.fsPath)) continue;
     const base = uri.fsPath.split(/[/\\]/).pop() ?? "";
     if (base.endsWith(".svelte")) names.add(base.slice(0, -".svelte".length));
   }
