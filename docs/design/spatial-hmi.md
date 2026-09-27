@@ -421,6 +421,184 @@ schema does it as you type. A sync test on each side reads the schema's
 channel enum and the built-in kind names so the three cannot drift apart
 silently.
 
+## 3d. Components define, documents place
+
+Two readings of the same scene are wanted, and they are not in tension
+once one rule is fixed: **a Svelte component may define a kind; a
+`*.scene.json` places nodes of it.** Hand-written Svelte scenes are
+welcome, and the built-in models work standalone; but anything that must
+be checked (`naut check`), generated (`naut scene init`), listed (the
+palette), dragged (item 2) or anchored (AR) lives in the document, because
+those tools read data and none of them runs Svelte. The mimic already
+draws this line: a `*.mimic.json` names a component, the app's `<Mimic
+registry>` provides it, and the extension finds `{Name}.svelte` and builds
+it for the editor. §3d is that precedent, spelled for 3D and extended by
+one composition primitive.
+
+**Svelte authoring: `<Scene3D>` and `<Node>`.** A scene composed the way
+a SvelteKit page is composed:
+
+```svelte
+<SceneView {rt} {alarms} camera={{ pos: [2.2, 1.6, 2.6], target: [0.9, 0.1, 0] }} environment={env}>
+  <Fixture3D fixture={{ kind: 'box', pos: [0.35, -0.01, 0.1], size: [0.9, 0.02, 0.6] }} />
+  <Node id="T101" tag="T101" kind="tank" label="T-101" pos={[1.0, -0.75, 0.4]} />
+  <Node id="XV101" tag="XV101" kind="valve" pos={[1.8, 0.85, 0]} bind={{ cmd: 'Demand' }} />
+  <Pipe points={fill} flowing="P101.Running" />
+  <Node id="P101" tag="P101" label="P-101" pos={[0.3, 0, 0.2]}>
+    {#snippet children(p)}<Pump3D {...p} />{/snippet}
+  </Node>
+  <Node id="SK101" tag="SK101" kind="skid" pos={[-0.3, -0.75, 1.1]} />
+</SceneView>
+```
+
+- `SceneView` (and `Scene3D`, for an app that owns its `<Canvas>`) take a
+  `doc`, children, or both; `camera`, `grid` and `environment` props
+  stand in for the document's blocks. `Scene3D` provides the scene by
+  context (`hmi3d:scene`: the frame's tags, quality, the alarm fold, the
+  effective registry, the selection and `pick`), so nothing below it is
+  handed a client.
+- **`<Node>` is the document's node object as a component, prop for
+  prop** (`id kind tag label pos rot scale props bind`). It resolves the
+  value and quality, applies `bind`, and wraps whatever it renders in the
+  group, the alarm halo, the selection box and the label — the same code
+  path a document node takes, because `Scene3D` renders document nodes
+  *through* `<Node>`. With `kind` it renders the registry's component;
+  with `children`, the snippet receives `NodeProps` and renders anything
+  (a built-in with a twist, a hand-built group, a `<T.Mesh>`).
+- **A `<Node>` inside a `<Node>` is a part.** Its `tag` is a **member
+  path of the enclosing node's struct** (`Pump` inside `SK101` reads
+  `SK101.Pump`), its refs resolve from that struct, it has no label
+  unless given one, no halo and no pick of its own. That is how a
+  component composes kinds, and it is the Svelte form of an assembly.
+- **`<Pipe>`** takes `points`, `radius` and `flowing`, a ref resolved by
+  the same rule as a `bind` (`P101.Running` at the top level, `Pump.Running`
+  inside a node). `Pipe3D` stays the geometry with a boolean.
+- The built-ins stay usable bare: `<Pump3D value={tags.P101} good />`.
+
+What Svelte authoring gives up is exactly the tools' half: no `naut
+check`, no generator, no palette entry, no drag-to-place, no AR anchor
+for a node that exists only in a template. That is the trade, stated
+once and not softened.
+
+**A kind defined by a component file.** The `kinds` block may name a
+Svelte file instead of a model:
+
+```json
+"kinds": {
+  "skid": { "type": "Skid", "members": ["Pump", "Valve", "Fault"], "component": "hmi/src/lib/Skid.svelte" }
+}
+```
+
+```svelte
+<script lang="ts" module>
+  import type { KindMeta } from '@joyautomation/nautilus-hmi-3d';
+  export const kind: KindMeta = {
+    type: 'Skid', members: ['Pump', 'Valve', 'Fault'],
+    bounds: { size: [0.6, 0.3, 0.3], center: [0.2, 0.15, 0] }, labelAt: [0.2, 0.32, 0],
+    status: (v, good) => (good ? (member(member(v, 'Pump'), 'Running') === true ? 'running' : 'standby') : 'stale')
+  };
+</script>
+<script lang="ts">
+  import { Node, Pipe, type NodeProps } from '@joyautomation/nautilus-hmi-3d';
+  let { value, good }: NodeProps = $props();   // the whole struct; parts read members
+</script>
+<Node tag="Pump" kind="pump" pos={[0, 0.02, 0]} />
+<Node tag="Valve" kind="valve" pos={[0.42, 0.14, 0]} rot={[0, 0, 90]} />
+<Pipe points={[[0.16, 0.1, 0], [0.42, 0.1, 0]]} flowing="Pump.Running" />
+```
+
+- **What the file must provide.** Its default export is the component,
+  taking `NodeProps` (§3). Its `<script module>` exports **`kind`**, a
+  `KindMeta`: `type?`, `members?`, `bounds`, `labelAt?`, `status?`,
+  `panel?` — `NodeKindDef` (§4) minus the component itself. The `kind`
+  export is also the marker a tool recognises a kind component by: a
+  regular expression over the module script, no compile.
+- **`component` is a source path relative to the scene file** (the
+  project root), not a URL path from the app root like `model`: nobody
+  serves it. It ends in `.svelte`, has no scheme and no `..`.
+- **Built by the app, described to the extension.** The app builds the
+  component with Vite like any of its own; the page hands `SceneView` the
+  modules Vite found (`modules={import.meta.glob('/src/**/*.svelte', { eager: true })}`)
+  and `componentRegistry(doc, modules)` pairs each `component` path with
+  the module whose key it ends with, taking the default export and
+  `kind`. The extension does **not** build 3D components: the mimic's
+  harness compiles user components into the editor's webview bundle, but
+  a 3D kind depends on Threlte and three, which the webview does not
+  carry, and a second bundle apart from the app is the two-copies-of-three
+  failure (§7). The extension reads the `kinds` entry, lists the kind in
+  the palette, and the editor (item 2) draws a component kind as its
+  `bounds` box with its label — the placeholder chip the mimic editor
+  shows for an un-built user component, in 3D.
+- **What `naut check` sees, without running Svelte:** that the file
+  exists next to the scene; the node contract from the entry's `type`
+  and `members`, as for any declared kind (§3b); and a warning when a
+  component kind declares neither, since its nodes are then unchecked.
+  The document's `type` is the project's, so it wins over the export's
+  (re-pointing, as for a built-in). In the browser `componentRegistry`
+  holds the two to each other the other way round: a member the
+  component's `kind` export reads that the document does not list is an
+  error in `SceneView`'s error list, because `naut check` would have
+  under-checked every node of it.
+- **The three-place rule** (§3c) extends to these fields: `component` and
+  `assembly` on `SceneKind`, on `internal/scene.Kind` and in the schema's
+  `kindContract`; a kind has **at most one** of `model`, `component`,
+  `assembly`; each side's sync test reads the schema's property list.
+
+**Assemblies.** A kind made of kinds, in both worlds:
+
+```json
+"skid": {
+  "type": "Skid", "members": ["Fault"], "status": "{Fault?FAULT:ok}",
+  "assembly": {
+    "nodes": [
+      { "id": "pump",  "kind": "pump",  "tag": "Pump",  "pos": [0, 0.02, 0] },
+      { "id": "valve", "kind": "valve", "tag": "Valve", "pos": [0.42, 0.14, 0], "rot": [0, 0, 90] }
+    ],
+    "pipes": [{ "points": [[0.16, 0.1, 0], [0.42, 0.1, 0]], "bind": { "flowing": "Pump.Running" } }]
+  }
+}
+```
+
+- **Children are nodes in the kind's own frame** (metres from the placed
+  node's origin), and a child's `tag` is a **member of the assembly's
+  struct**: the UDT nests (`Skid.Pump : Motor`, `Skid.Valve : Valve`), the
+  placed node binds one tag (`SK101`), and the parts read `SK101.Pump`,
+  `SK101.Valve`. Refs inside the assembly — a child's `bind`, a pipe's
+  `flowing` — are paths from that struct. **This is the whole parameter
+  mechanism.** No templates, no string prefixes, no conditionals: the
+  struct is the parameter, the way it already is for a kind. A placed
+  node whose project keeps flat tags supplies a part explicitly
+  (`bind: { "pump": "P101" }`), which is §3b's one escape hatch and no
+  new rule. The day a JSON assembly wants a conditional is the day it
+  should have been a Svelte component.
+- **Parts are parts.** One node in the document, one `id`, one alarm
+  asset, one pick: a child has no label unless given, no halo, and a
+  click on it selects the assembly. Alarm rules match one level of
+  members today, so what should halo an assembly is a member of its own
+  UDT (the rig's `Skid.Fault`, folded from its parts in control).
+- **Flat, deliberately.** A child's kind is a built-in, a data kind or a
+  component kind, never another assembly.
+- **The contract** a node is held to is `members` ∪ the status template's
+  ∪ every child's `tag` ∪ every inner ref's root. `naut check` holds
+  `SK101` to `Skid`, then each child's member to the child kind's type:
+  `/kinds/skid/assembly/nodes/0/tag: Skid.Pump is a Valve, but kind
+  "pump" expects a Motor`. `bounds` may be given; otherwise it is the
+  union of the children's boxes, which is enough for a halo.
+- `Skid.svelte` above and this entry are **the same skid written twice**.
+  A project keeps one. They differ where they should: the component can
+  do anything Svelte can, the data assembly needs no app build and the
+  editor can draw its parts.
+
+**What stays out, on purpose:** logic in JSON (expressions, conditionals,
+templates beyond `status`); nested assemblies; the extension compiling 3D
+components; per-part labels by default; a `component` without a `kinds`
+entry (a Svelte file the document never names is the app's business and
+no tool's). And the palette UI itself, which lands with item 2's editor —
+this item delivers the list it shows: `paletteKinds(doc)` in the
+extension, every built-in and every `kinds` entry with how it is defined,
+plus `isKindComponent(text)` for discovering component files by their
+`kind` export, the way the mimic discovers `{Name}.svelte`.
+
 ## 4. The node registry
 
 ```ts
