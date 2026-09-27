@@ -566,6 +566,22 @@ Proposed order, each with an exit and the capture moment it produces
    three kinds from `models/*.glb` with drives, an HDRI ground-projected
    onto a concrete floor, soft shadows, at 60 fps / 33 ms (§9); the take
    is `content/assets/capture/n57/out/01-grey-to-lit.mp4`.*
+1b. **Components define, documents place** (decided 2026-09-27; design as
+   §3d before code, its own PR). Two readings, both wanted: a developer
+   composes a scene in Svelte the way a SvelteKit page composes
+   (`<Scene3D {rt}>` providing tags, alarms and the palette by context, a
+   `<Node tag kind pos>` wrapper that gives any child its value, quality,
+   label and halo, the built-in models usable standalone); and a kind may
+   be **defined by a Svelte component file** named from the `kinds` block,
+   built the way the extension builds a mimic's user components, so a
+   non-developer places it from a palette into a document that `naut
+   check`, drag-to-place and AR still understand. The composition
+   primitive for both is an **assembly**: a kind made of kinds with
+   relative positions and a tag prefix (a skid = pump + valve + pipes), one
+   node in the document and one component in Svelte. Exit: the rig as a
+   hand-written Svelte page and, separately, a `Skid` component placed as
+   one node in `rig.scene.json` with `naut check` clean. Capture: the same
+   skid written twice (N-63).
 2. **Place equipment by dragging.** Locating things is the one authoring
    step `naut scene init` cannot finish, and a number typed into `pos` is
    the tedium to remove. An edit mode on `SceneView`: click an asset,
@@ -580,6 +596,8 @@ Proposed order, each with an exit and the capture moment it produces
    - **In the browser**, `npm run dev` gets a Vite plugin endpoint that
      writes the file back, and a built app offers "copy scene JSON" /
      download, so a phone on the rig can still place a prop.
+   The palette that adds a node (built-in, data and component kinds,
+   item 1b) lands here.
    Exit: the rig's three nodes placed by dragging, the diff showing only
    `pos` lines. Capture: the drag, then `git diff`.
 3. **Overlays.** Labels declutter by distance and by importance (alarmed
