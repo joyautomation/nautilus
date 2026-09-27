@@ -106,6 +106,15 @@
           "pattern": "^(?![a-zA-Z]+:)(?!.*(^|/)\\.\\.(/|$)).+\\.(glb|gltf)$",
           "description": "A glTF/GLB as a URL path from the app root (`models/pump.glb` → `/models/pump.glb`; `hmi/static/` in source). Metres, +y up; the node's pos/rot/scale place the model's origin. A data kind under a built-in's name keeps that built-in's contract, status text and faceplate and replaces only the geometry."
         },
+        "component": {
+          "type": "string",
+          "pattern": "^(?![a-zA-Z]+:)(?!/)(?!.*(^|/)\\.\\.(/|$)).+\\.svelte$",
+          "description": "A kind defined by a Svelte component file (docs/design/spatial-hmi.md §3d), as a source path relative to this scene file (`hmi/src/lib/Skid.svelte`). Its default export takes the node's props; its `<script module>` exports `kind` (type, members, bounds, labelAt, status). The app builds it and hands SceneView its modules; the extension lists it in the palette; `naut check` sees the file and holds its nodes to `type`/`members` here."
+        },
+        "assembly": {
+          "$ref": "#/definitions/assembly",
+          "description": "A kind made of kinds (docs/design/spatial-hmi.md §3d): parts and pipes in the kind's own frame. A part's `tag` is a MEMBER of the assembly's struct (`Pump` inside `SK101` reads `SK101.Pump`), and a ref inside is a path from that struct. Parts are never assemblies."
+        },
         "bounds": {
           "oneOf": [
             {
@@ -146,7 +155,31 @@
           "description": "What live values do to named meshes in the model. Each drive names one mesh and one channel."
         }
       },
-      "description": "The UDT ↔ members contract for one kind, and — with `model` — a data kind: a glTF whose named meshes the `drive` list moves from the node's struct (docs/design/spatial-hmi.md §3c)."
+      "description": "The UDT ↔ members contract for one kind, and how the document defines it, one way at most: with `model`, a data kind — a glTF whose named meshes the `drive` list moves from the node's struct (docs/design/spatial-hmi.md §3c); with `component`, a kind defined by a Svelte file the app builds (§3d); with `assembly`, a kind made of kinds (§3d)."
+    },
+    "assembly": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodes"
+      ],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/node"
+          },
+          "description": "The parts, as nodes in the kind's own frame (metres from the placed node's origin). A part's `tag` is one member name of the assembly's struct; it has no label unless given, no halo, and a click on it picks the placed node."
+        },
+        "pipes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/pipe"
+          },
+          "description": "Pipes in the kind's own frame; `bind.flowing` is a path from the assembly's struct (`Pump.Running`)."
+        }
+      },
+      "description": "An assembly's parts and pipes (docs/design/spatial-hmi.md §3d)."
     },
     "camera": {
       "type": "object",

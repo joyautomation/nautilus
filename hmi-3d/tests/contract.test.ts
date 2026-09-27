@@ -29,8 +29,15 @@ describe('the drive vocabulary matches the extension schema', () => {
 	it('the environment block has the fields scene.ts reads', () => {
 		expect(Object.keys(schema.definitions.environment.properties).sort()).toEqual(['backdrop', 'background', 'floor', 'fog', 'hdri', 'intensity', 'shadows']);
 	});
-	it('the kind contract has the data-kind fields', () => {
-		expect(Object.keys(schema.definitions.kindContract.properties).sort()).toEqual(['bounds', 'drive', 'labelAt', 'members', 'model', 'status', 'type']);
+	it('the kind contract has the data-kind, component and assembly fields (§3c, §3d)', () => {
+		expect(Object.keys(schema.definitions.kindContract.properties).sort()).toEqual(['assembly', 'bounds', 'component', 'drive', 'labelAt', 'members', 'model', 'status', 'type']);
+		expect(Object.keys(schema.definitions.assembly.properties).sort()).toEqual(['nodes', 'pipes']);
+	});
+	it('the schema accepts what validateScene accepts for a component kind and an assembly', () => {
+		// The schema's component pattern and validateScene's isComponentPath agree.
+		const re = new RegExp(schema.definitions.kindContract.properties.component.pattern);
+		for (const [p, ok] of [['hmi/src/lib/Skid.svelte', true], ['Skid.svelte', true], ['/abs/Skid.svelte', false], ['../Skid.svelte', false], ['http://x/S.svelte', false], ['a/b.ts', false]] as const)
+			expect(re.test(p)).toBe(ok);
 	});
 });
 

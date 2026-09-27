@@ -105,6 +105,12 @@ func (p *Project) CheckScenes(fsys fs.FS, rt *runtime.Runtime) (reports []SceneR
 		}
 		e, w := scene.Check(doc, tags)
 		e = append(e, scene.CheckAssets(doc, p.assetExists(fsys))...)
+		// A component path is relative to the scene file, which sits at the
+		// project root (SceneFiles).
+		e = append(e, scene.CheckComponents(doc, func(c string) bool {
+			st, err := fs.Stat(fsys, path.Clean(c))
+			return err == nil && !st.IsDir()
+		})...)
 		for _, m := range e {
 			errs = append(errs, fmt.Sprintf("scene %s %s", f, m))
 		}
