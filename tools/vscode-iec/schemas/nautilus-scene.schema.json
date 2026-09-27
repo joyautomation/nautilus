@@ -635,6 +635,11 @@
           "pattern": "^(?![a-zA-Z]+:)(?!.*(^|/)\\.\\.(/|$)).+\\.(hdr|exr)$",
           "description": "An equirectangular .hdr or .exr as a URL path from the app root (`env/workshop_1k.hdr`). CC0 1k files from Poly Haven are the size the brief allows in git."
         },
+        "backdrop": {
+          "type": "string",
+          "pattern": "^(?![a-zA-Z]+:)(?!.*(^|/)\\.\\.(/|$)).+\\.(jpe?g|png|webp|hdr|exr)$",
+          "description": "What you SEE when `background` is on: a larger equirect image (a tonemapped .jpg/.png, or another .hdr/.exr) in place of the HDRI, so lighting comes from a small file and the backdrop from a sharp one."
+        },
         "background": {
           "enum": [
             "none",
@@ -646,6 +651,27 @@
         "floor": {
           "type": "number",
           "description": "The floor's y for `ground`, metres. Default 0."
+        },
+        "fog": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "color": {
+              "type": "string",
+              "description": "CSS colour the distance fades toward. Default: a neutral grey."
+            },
+            "near": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Metres at which the fade starts. Default 4."
+            },
+            "far": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Metres at which it is fully the colour. Default 14."
+            }
+          },
+          "description": "Distance fade toward a colour, so the far backdrop and the projected floor soften deliberately instead of reading as a low-res photo."
         },
         "intensity": {
           "type": "number",

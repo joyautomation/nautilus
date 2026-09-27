@@ -171,7 +171,7 @@ describe('validateScene: kinds as data, environment, textures (§3c)', () => {
 					c: { drive: [] },
 					d: { model: 'models/d.glb', drive: [{ mesh: 'M', tint: { bind: 'Running' } }] }
 				},
-				environment: { hdri: 'env/x.png', background: 'wall', floor: 'low', intensity: -1, shadows: 'yes' },
+				environment: { hdri: 'env/x.png', backdrop: 'env/x.hdr.txt', background: 'wall', floor: 'low', intensity: -1, shadows: 'yes', fog: { near: 5, far: 2 } },
 				fixtures: [
 					{ kind: 'box', pos: [0, 0, 0], texture: { map: 'a.jpg' } },
 					{ kind: 'plane', pos: [0, 0, 0], texture: { map: '../a.jpg', repeat: [1] } }
@@ -192,6 +192,8 @@ describe('validateScene: kinds as data, environment, textures (§3c)', () => {
 			'/kinds/c',
 			'/kinds/d/drive/0/tint/on',
 			'/environment/hdri',
+			'/environment/backdrop',
+			'/environment/fog/far',
 			'/environment/background',
 			'/environment/floor',
 			'/environment/intensity',

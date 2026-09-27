@@ -114,10 +114,19 @@ var DriveChannels = []string{"spin", "turn", "scale", "tint", "emissive", "visib
 // Environment is the surroundings (§3c): an HDRI, the backdrop, shadows.
 type Environment struct {
 	HDRI       string   `json:"hdri,omitempty"`
+	Backdrop   string   `json:"backdrop,omitempty"`
 	Background string   `json:"background,omitempty"`
+	Fog        *Fog     `json:"fog,omitempty"`
 	Floor      *float64 `json:"floor,omitempty"`
 	Intensity  *float64 `json:"intensity,omitempty"`
 	Shadows    *bool    `json:"shadows,omitempty"`
+}
+
+// Fog fades the far backdrop toward a colour.
+type Fog struct {
+	Color string   `json:"color,omitempty"`
+	Near  *float64 `json:"near,omitempty"`
+	Far   *float64 `json:"far,omitempty"`
 }
 
 // Texture is a plane fixture's PBR maps.
@@ -310,6 +319,7 @@ func validStatusTemplate(tpl string) bool {
 }
 
 var memberRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var imageRe = regexp.MustCompile(`(?i)\.(jpe?g|png|webp|hdr|exr)$`)
 
 // assetPath: a URL path from the app root — no scheme, no `..`.
 func assetPath(p string) bool {
@@ -440,6 +450,9 @@ func (d *Doc) Assets() (paths [][2]string) {
 	if d.Environment != nil && d.Environment.HDRI != "" {
 		paths = append(paths, [2]string{"/environment/hdri", d.Environment.HDRI})
 	}
+	if d.Environment != nil && d.Environment.Backdrop != "" {
+		paths = append(paths, [2]string{"/environment/backdrop", d.Environment.Backdrop})
+	}
 	for i, f := range d.Fixtures {
 		if f.Texture == nil {
 			continue
@@ -513,6 +526,21 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 	if e := d.Environment; e != nil {
 		if e.HDRI != "" && !(assetPath(e.HDRI) && (strings.HasSuffix(strings.ToLower(e.HDRI), ".hdr") || strings.HasSuffix(strings.ToLower(e.HDRI), ".exr"))) {
 			errf("/environment/hdri", "must be a URL path to an .hdr or .exr (env/workshop_1k.hdr)")
+		}
+		if e.Backdrop != "" && !(assetPath(e.Backdrop) && imageRe.MatchString(e.Backdrop)) {
+			errf("/environment/backdrop", "must be a URL path to an equirect image (.jpg, .png, .webp, .hdr, .exr)")
+		}
+		if f := e.Fog; f != nil {
+			if f.Near != nil && *f.Near < 0 {
+				errf("/environment/fog/near", "must be ≥ 0 metres")
+			}
+			near := 0.0
+			if f.Near != nil {
+				near = *f.Near
+			}
+			if f.Far != nil && *f.Far <= near {
+				errf("/environment/fog/far", "must be greater than near")
+			}
 		}
 		switch e.Background {
 		case "", "none", "sky", "ground":

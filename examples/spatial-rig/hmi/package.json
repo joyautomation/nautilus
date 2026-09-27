@@ -4,7 +4,10 @@
 	"version": "0.0.0",
 	"type": "module",
 	"scripts": {
+		"assets": "node fetch-assets.mjs",
+		"predev": "node fetch-assets.mjs",
 		"dev": "vite dev --host",
+		"prebuild": "node fetch-assets.mjs",
 		"build": "vite build",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"

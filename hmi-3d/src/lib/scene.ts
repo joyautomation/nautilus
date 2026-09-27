@@ -49,9 +49,17 @@ export interface SceneTexture {
 export interface SceneEnvironment {
 	/** An equirectangular .hdr or .exr, as a URL path from the app root. */
 	hdri?: string;
-	/** `none` lights only (default); `sky` shows the HDRI; `ground` projects
-	 * it onto a floor at `floor` so a desk-scale scene stands in it. */
+	/** What you SEE when `background` is on: a larger equirect image (a
+	 * tonemapped .jpg/.png, or another .hdr/.exr) in place of the HDRI, so
+	 * lighting can come from a small file and the backdrop from a sharp one. */
+	backdrop?: string;
+	/** `none` lights only (default); `sky` shows the backdrop (or the HDRI);
+	 * `ground` projects it onto a floor at `floor` so a desk-scale scene
+	 * stands in it. */
 	background?: 'none' | 'sky' | 'ground';
+	/** Distance fade toward a colour: the far backdrop and the projected
+	 * floor soften deliberately instead of reading as a low-res photo. */
+	fog?: { color?: string; near?: number; far?: number };
 	/** The floor's y for `ground`, metres. Default 0. */
 	floor?: number;
 	/** Environment light multiplier. Default 1. */
@@ -273,6 +281,17 @@ export function validateScene(doc: unknown, kinds?: Iterable<string>): { ok: boo
 			const e = doc.environment;
 			if (e.hdri !== undefined && !(isAssetPath(e.hdri) && /\.(hdr|exr)$/i.test(e.hdri)))
 				err('/environment/hdri', 'must be a URL path to an .hdr or .exr (env/workshop_1k.hdr)');
+			if (e.backdrop !== undefined && !(isAssetPath(e.backdrop) && /\.(jpe?g|png|webp|hdr|exr)$/i.test(e.backdrop)))
+				err('/environment/backdrop', 'must be a URL path to an equirect image (.jpg, .png, .webp, .hdr, .exr)');
+			if (e.fog !== undefined) {
+				if (!isObj(e.fog)) err('/environment/fog', 'must be { color?, near?, far? }');
+				else {
+					if (e.fog.color !== undefined && !isStr(e.fog.color)) err('/environment/fog/color', 'must be a CSS colour');
+					if (e.fog.near !== undefined && !(isNum(e.fog.near) && e.fog.near >= 0)) err('/environment/fog/near', 'must be ≥ 0 metres');
+					if (e.fog.far !== undefined && !(isNum(e.fog.far) && e.fog.far > (isNum(e.fog.near) ? e.fog.near : 0)))
+						err('/environment/fog/far', 'must be greater than near');
+				}
+			}
 			if (e.background !== undefined && e.background !== 'none' && e.background !== 'sky' && e.background !== 'ground')
 				err('/environment/background', "must be 'none', 'sky' or 'ground'");
 			if (e.floor !== undefined && !isNum(e.floor)) err('/environment/floor', 'must be a number of metres');

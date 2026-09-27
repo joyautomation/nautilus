@@ -193,7 +193,7 @@ A kind's component receives `value` (the struct), `good`, `label`,
 ## Surroundings and the look
 
 ```json
-"environment": { "hdri": "env/workshop_1k.hdr", "background": "ground", "floor": -0.75, "intensity": 0.45, "shadows": true },
+"environment": { "hdri": "env/workshop_1k.hdr", "backdrop": "env/workshop_6k.jpg", "background": "ground", "floor": -0.75, "intensity": 0.45, "shadows": true, "fog": { "near": 4, "far": 14 } },
 "fixtures": [{ "kind": "plane", "pos": [0.9, -0.749, 0.2], "size": [4, 3],
 	"texture": { "map": "textures/concrete_diff_1k.jpg", "normalMap": "textures/concrete_nor_gl_1k.jpg", "roughnessMap": "textures/concrete_rough_1k.jpg", "repeat": [4, 3] } }]
 ```
@@ -203,7 +203,12 @@ file from Poly Haven is ~1.7 MB) — `background` `none` (default), `sky`,
 or `ground` (projected onto a floor at `floor`, so a desk-scale scene stands
 in the room); `intensity` scales its light on the models (a bright HDRI at 1
 swamps the key light; turn it down for visible shadows); `shadows` adds a
-shadow-casting key light with soft shadows. A `plane` fixture takes PBR
+shadow-casting key light with soft shadows. `backdrop` is a separate,
+sharper equirect for what the eye sees (a tonemapped 4k–6k JPG of the
+same photo; the 1k HDR only lights), and `fog` fades the far backdrop and
+the projected floor toward a colour so their softness is deliberate.
+Keep the big files out of git: the example fetches them from a GitHub
+release by a manifest with a sha256 per file. A `plane` fixture takes PBR
 maps. The built-ins get metalness/roughness in this look, colours unchanged.
 
 `<SceneView look="flat">` renders the same document as Milestone 1 did —

@@ -25,8 +25,9 @@ rig.scene.json   the scene: 3 nodes bound to the struct tags, 2 pipes, a desk, a
                  the three kinds as glTF models with drives, an HDRI, a concrete floor
 assets.yaml      marker id → asset → tag, and surveyed positions (for AR, later)
 hmi/             the 3D view: a SvelteKit app on the package, one page
-hmi/static/      what the scene refers to: models/*.glb (the package's built-ins),
-                 env/*.hdr and textures/*.jpg (CC0, Poly Haven — see CREDITS.md)
+hmi/static/      what the scene refers to: models/*.glb (the package's built-ins, in git);
+                 env/ and textures/ (CC0, Poly Haven) are fetched from a GitHub release
+                 by hmi/fetch-assets.mjs against hmi/assets.json — see static/CREDITS.md
 ```
 
 ## The 3D view
@@ -37,6 +38,8 @@ build the package once first:
 ```sh
 cd ../../hmi-3d && npm install && npm run package && cd -
 cd hmi && npm install
+npm run assets          # the HDRI, backdrop and floor textures (≈ 7 MB) from the
+                        # spatial-assets release into static/ — dev and build do this too
 npm run dev             # http://localhost:5173, proxying /api to :8080 —
                         # run `naut run .` in the project root first
 ```

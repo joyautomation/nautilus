@@ -232,7 +232,7 @@ const dataKinds = `{
 		},
 		"beacon": {"type": "Switch", "model": "models/beacon.glb", "drive": [{"mesh": "Lamp", "visible": {"bind": "Fault"}}]}
 	},
-	"environment": {"hdri": "env/workshop_1k.hdr", "background": "ground", "floor": -0.75, "shadows": true},
+	"environment": {"hdri": "env/workshop_1k.hdr", "backdrop": "env/workshop_6k.jpg", "background": "ground", "floor": -0.75, "shadows": true, "fog": {"color": "#8d8a84", "near": 4, "far": 14}},
 	"fixtures": [{"kind": "plane", "pos": [0, 0, 0], "size": [4, 3], "texture": {"map": "textures/floor_diff.jpg", "normalMap": "textures/floor_nor.jpg", "repeat": [4, 3]}}],
 	"nodes": [
 		{"id": "P101", "kind": "pump", "tag": "P101", "pos": [0, 0, 0]},
@@ -263,7 +263,7 @@ func TestCheckDataKindsAcceptsTheModelledRig(t *testing.T) {
 	for _, a := range d.Assets() {
 		paths = append(paths, a[1])
 	}
-	if got := strings.Join(paths, " "); got != "models/beacon.glb models/pump.glb models/tank.glb env/workshop_1k.hdr textures/floor_diff.jpg textures/floor_nor.jpg" {
+	if got := strings.Join(paths, " "); got != "models/beacon.glb models/pump.glb models/tank.glb env/workshop_1k.hdr env/workshop_6k.jpg textures/floor_diff.jpg textures/floor_nor.jpg" {
 		t.Errorf("assets: %s", got)
 	}
 }
@@ -298,7 +298,7 @@ func TestCheckDataKindsStructural(t *testing.T) {
 			{"mesh": "M", "tint": {"bind": "Running"}},
 			{"mesh": "M", "emissive": {"bind": "Fault", "on": "critical", "intensity": -1}}
 		]}},
-		"environment": {"hdri": "env/x.png", "background": "wall", "intensity": -1},
+		"environment": {"hdri": "env/x.png", "backdrop": "env/x.txt", "background": "wall", "intensity": -1, "fog": {"near": 5, "far": 2}},
 		"fixtures": [{"kind": "box", "pos": [0, 0, 0], "texture": {"map": "a.jpg"}}],
 		"nodes": []}`)
 	errs, _ := Check(d, rigTags)
@@ -309,7 +309,7 @@ func TestCheckDataKindsStructural(t *testing.T) {
 		"/kinds/e/drive/0/mesh:", "/kinds/e/drive/0/spin/axis:", "/kinds/e/drive/0/spin/revPerS/bind:",
 		"/kinds/e/drive/1: a drive has exactly one of spin, turn, scale, tint, emissive, visible",
 		"/kinds/e/drive/3/tint/on:", "/kinds/e/drive/4/emissive/intensity:",
-		"/environment/hdri:", "/environment/background:", "/environment/intensity:",
+		"/environment/hdri:", "/environment/backdrop:", "/environment/fog/far:", "/environment/background:", "/environment/intensity:",
 		"/fixtures/0/texture: only a plane",
 	} {
 		if !strings.Contains(got, want) {
@@ -327,7 +327,7 @@ func TestCheckDataKindsStructural(t *testing.T) {
 
 func TestCheckAssets(t *testing.T) {
 	d := parse(t, dataKinds)
-	have := map[string]bool{"models/pump.glb": true, "env/workshop_1k.hdr": true, "textures/floor_diff.jpg": true, "textures/floor_nor.jpg": true}
+	have := map[string]bool{"models/pump.glb": true, "env/workshop_1k.hdr": true, "env/workshop_6k.jpg": true, "textures/floor_diff.jpg": true, "textures/floor_nor.jpg": true}
 	errs := CheckAssets(d, func(p string) bool { return have[p] })
 	if len(errs) != 2 || !strings.Contains(errs[0], `/kinds/beacon/model: "models/beacon.glb" was not found`) || !strings.Contains(errs[1], "/kinds/tank/model:") {
 		t.Fatalf("got %v", errs)
@@ -370,7 +370,7 @@ func TestDriveVocabularyMatchesTheSchema(t *testing.T) {
 			t.Errorf("schema drive has no property %q", c)
 		}
 	}
-	for _, f := range []string{"hdri", "background", "floor", "intensity", "shadows"} {
+	for _, f := range []string{"hdri", "backdrop", "background", "floor", "fog", "intensity", "shadows"} {
 		if _, ok := schema.Definitions.Environment.Properties[f]; !ok {
 			t.Errorf("schema environment has no property %q", f)
 		}

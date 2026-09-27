@@ -27,7 +27,7 @@ describe('the drive vocabulary matches the extension schema', () => {
 		for (const c of DRIVE_CHANNELS) expect(Object.keys(drive.properties)).toContain(c);
 	});
 	it('the environment block has the fields scene.ts reads', () => {
-		expect(Object.keys(schema.definitions.environment.properties).sort()).toEqual(['background', 'floor', 'hdri', 'intensity', 'shadows']);
+		expect(Object.keys(schema.definitions.environment.properties).sort()).toEqual(['backdrop', 'background', 'floor', 'fog', 'hdri', 'intensity', 'shadows']);
 	});
 	it('the kind contract has the data-kind fields', () => {
 		expect(Object.keys(schema.definitions.kindContract.properties).sort()).toEqual(['bounds', 'drive', 'labelAt', 'members', 'model', 'status', 'type']);

@@ -8,8 +8,8 @@ vocabulary (`spin`, `turn`, `scale`, `tint`, `emissive`, `visible`), a
 `status` template, `bounds: "auto"`. The built-ins ship as models
 (`models/`, from a Blender script) and as `models/kinds.json`; without a
 model, or when one fails to load, the Svelte kind of that name renders.
-An `environment` block (HDRI, `sky`/`ground` backdrop, `intensity`,
-`shadows`) and PBR maps on a `plane` fixture make the surroundings real
+An `environment` block (HDRI, a separate sharper `backdrop`, `sky`/`ground`
+projection, `intensity`, `fog`, `shadows`) and PBR maps on a `plane` fixture make the surroundings real
 while the process state keeps its greys; the built-ins get PBR values in
 the lit look. `SceneView look="flat"` is the asset-free Milestone 1 look.
 The glTF and HDRI loaders are dynamic imports. `registryFor`, `drives.ts`,
