@@ -1,0 +1,22 @@
+{
+    "@odata.type": "#Sensor.v1_7_0.Sensor",
+    "Id": "temperature_Peripheral_Temp",
+    "Name": "Peripheral Temp",
+    "Reading": 36,
+    "ReadingUnits": "Cel",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "ReadingType": "Temperature",
+    "PhysicalContext": "SystemBoard",
+    "Thresholds": {
+        "UpperCaution": {
+            "Reading": 80
+        },
+        "UpperCritical": {
+            "Reading": 85
+        }
+    },
+    "@odata.id": "/redfish/v1/Chassis/1/Sensors/temperature_Peripheral_Temp"
+}

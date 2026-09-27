@@ -1,0 +1,14 @@
+{
+    "@odata.type": "#Fan.v1_3_0.Fan",
+    "Id": "FAN1",
+    "Name": "FAN1",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "SpeedPercent": {
+        "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/fan_tach_FAN1",
+        "SpeedRPM": 7200
+    },
+    "@odata.id": "/redfish/v1/Chassis/1/ThermalSubsystem/Fans/FAN1"
+}
