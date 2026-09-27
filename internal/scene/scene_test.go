@@ -3,6 +3,8 @@ package scene
 import (
 	"encoding/json"
 	"os"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -305,7 +307,7 @@ func TestCheckDataKindsStructural(t *testing.T) {
 	got := joined(errs)
 	for _, want := range []string{
 		"/kinds/a/model:", "/kinds/b/model:", "/kinds/c/bounds:", "/kinds/c/labelAt:", "/kinds/c/status:",
-		"/kinds/d: drive, bounds and labelAt need a model",
+		"/kinds/d/drive: drives need a model",
 		"/kinds/e/drive/0/mesh:", "/kinds/e/drive/0/spin/axis:", "/kinds/e/drive/0/spin/revPerS/bind:",
 		"/kinds/e/drive/1: a drive has exactly one of spin, turn, scale, tint, emissive, visible",
 		"/kinds/e/drive/3/tint/on:", "/kinds/e/drive/4/emissive/intensity:",
@@ -405,5 +407,192 @@ func TestBuiltinMatchesTheDataKinds(t *testing.T) {
 	}
 	if len(kinds) != len(Builtin) {
 		t.Errorf("kinds.json has %d kinds, Builtin %d", len(kinds), len(Builtin))
+	}
+}
+
+// ---- item 1b: components define, documents place (§3d) ----
+
+// nested builds a UDT whose fields may themselves be UDTs: "Pump=Motor".
+func nested(name string, fields ...any) *ir.StructDef {
+	sd := &ir.StructDef{Name: name, FieldIndex: map[string]int{}}
+	for i, f := range fields {
+		switch f := f.(type) {
+		case string:
+			n, kind, _ := strings.Cut(f, ":")
+			t := ir.RealT
+			if kind == "bool" {
+				t = ir.BoolT
+			}
+			sd.Fields = append(sd.Fields, ir.StructField{Name: n, Type: t})
+			sd.FieldIndex[n] = i
+		case [2]any:
+			sd.Fields = append(sd.Fields, ir.StructField{Name: f[0].(string), Type: &ir.Type{Kind: ir.TypeStruct, Struct: f[1].(*ir.StructDef)}})
+			sd.FieldIndex[f[0].(string)] = i
+		}
+	}
+	return sd
+}
+
+var motor = udt("Motor", "Run:bool", "Running:bool", "Fault:bool", "Speed", "Hours")
+var valveT = udt("Valve", "Cmd", "Pos", "Fault:bool")
+var skidTags = append(append([]TagInfo(nil), rigTags...),
+	TagInfo{Name: "SK101", TypeName: "Skid", Struct: nested("Skid", [2]any{"Pump", motor}, [2]any{"Valve", valveT}, "Fault:bool")},
+	TagInfo{Name: "SK9", TypeName: "OddSkid", Struct: nested("OddSkid", [2]any{"Pump", valveT}, "Valve", "Fault:bool")},
+)
+
+const skidScene = `{
+	"kinds": {
+		"skid": {"type": "Skid", "members": ["Fault"], "status": "{Fault?FAULT:ok}", "component": "hmi/src/lib/Skid.svelte"},
+		"skid-data": {"type": "Skid", "members": ["Fault"], "assembly": {
+			"nodes": [
+				{"id": "pump", "kind": "pump", "tag": "Pump", "pos": [0, 0.02, 0]},
+				{"id": "valve", "kind": "valve", "tag": "Valve", "pos": [0.42, 0.14, 0], "rot": [0, 0, 90], "bind": {"cmd": "Valve.Cmd"}}
+			],
+			"pipes": [{"points": [[0.16, 0.1, 0], [0.42, 0.1, 0]], "bind": {"flowing": "Pump.Running"}}]
+		}}
+	},
+	"nodes": [
+		{"id": "SK101", "kind": "skid", "tag": "SK101", "pos": [0, 0, 0]},
+		{"id": "SK102", "kind": "skid-data", "tag": "SK101", "pos": [1, 0, 0]}
+	]
+}`
+
+func TestCheckAcceptsAComponentKindAndAnAssembly(t *testing.T) {
+	d := parse(t, skidScene)
+	errs, warns := Check(d, skidTags)
+	if len(errs) != 0 || len(warns) != 0 {
+		t.Fatalf("want clean, got errs %v warns %v", errs, warns)
+	}
+	k := d.EffectiveKinds()
+	if got := strings.Join(k["skid-data"].Members, ","); got != "Fault,Pump,Valve" {
+		t.Errorf("assembly members: %s", got)
+	}
+	if k["skid"].DefinedBy() != "component" || k["skid-data"].DefinedBy() != "assembly" || k["pump"].DefinedBy() != "" {
+		t.Errorf("DefinedBy: %s %s %s", k["skid"].DefinedBy(), k["skid-data"].DefinedBy(), k["pump"].DefinedBy())
+	}
+	if got := d.Components(); len(got) != 1 || got[0][1] != "hmi/src/lib/Skid.svelte" || got[0][0] != "/kinds/skid/component" {
+		t.Errorf("components: %v", got)
+	}
+	if errs := CheckComponents(d, func(string) bool { return false }); len(errs) != 1 || !strings.Contains(errs[0], "next to the scene file") {
+		t.Errorf("CheckComponents: %v", errs)
+	}
+	if errs := CheckComponents(d, func(p string) bool { return p == "hmi/src/lib/Skid.svelte" }); len(errs) != 0 {
+		t.Errorf("CheckComponents with the file: %v", errs)
+	}
+}
+
+func TestCheckHoldsAnAssemblyToTheNestedUDT(t *testing.T) {
+	// The part's member must be the part kind's UDT.
+	d := parse(t, `{"kinds": {"skid": {"type": "OddSkid", "assembly": {"nodes": [
+			{"id": "pump", "kind": "pump", "tag": "Pump", "pos": [0, 0, 0]},
+			{"id": "valve", "kind": "valve", "tag": "Valve", "pos": [0, 0, 0]}
+		], "pipes": [{"points": [[0, 0, 0], [1, 0, 0]], "bind": {"flowing": "Pump.Running"}}]}}},
+		"nodes": [{"id": "SK9", "kind": "skid", "tag": "SK9", "pos": [0, 0, 0]}]}`)
+	errs, _ := Check(d, skidTags)
+	want := []string{
+		`/nodes/0/tag: OddSkid.Pump is a Valve, but part "pump" (kind "pump") expects a Motor — see /kinds/skid/assembly/nodes/0/tag`,
+		`/nodes/0/tag: OddSkid.Valve is not a struct, but part "valve" (kind "valve") expects a Valve — see /kinds/skid/assembly/nodes/1/tag`,
+		`/nodes/0/tag: "Pump.Running" (/kinds/skid/assembly/pipes/0/bind/flowing): Valve has no member "Running" (it has Cmd, Pos, Fault)`,
+	}
+	if joined(errs) != joined(want) {
+		t.Errorf("got:\n%s\nwant:\n%s", joined(errs), joined(want))
+	}
+	// A tag that is the wrong UDT altogether is the ordinary contract error.
+	d = parse(t, `{"kinds": {"skid": {"type": "Skid", "assembly": {"nodes": [{"id": "pump", "kind": "pump", "tag": "Pump", "pos": [0, 0, 0]}]}}},
+		"nodes": [{"id": "P101", "kind": "skid", "tag": "P101", "pos": [0, 0, 0]}]}`)
+	errs, _ = Check(d, skidTags)
+	if len(errs) != 1 || !strings.Contains(errs[0], `"P101" is a Motor, but kind "skid" expects a Skid`) {
+		t.Errorf("got %v", errs)
+	}
+	// ...unless the part is bound explicitly: the flat-tag escape hatch.
+	d = parse(t, `{"kinds": {"skid": {"assembly": {"nodes": [{"id": "pump", "kind": "pump", "tag": "Pump", "pos": [0, 0, 0]}]}}},
+		"nodes": [{"id": "S", "kind": "skid", "pos": [0, 0, 0], "bind": {"pump": "P101"}}]}`)
+	if errs, warns := Check(d, skidTags); len(errs) != 0 || len(warns) != 0 {
+		t.Errorf("bound part should satisfy the assembly, got %v %v", errs, warns)
+	}
+}
+
+func TestCheckComponentsAndAssembliesStructural(t *testing.T) {
+	d := parse(t, `{"kinds": {
+		"a": {"component": "/abs/A.svelte"},
+		"b": {"component": "hmi/B.ts"},
+		"c": {"component": "hmi/C.svelte", "model": "models/c.glb"},
+		"d": {"component": "hmi/D.svelte"},
+		"e": {"bounds": "auto"},
+		"twin": {"assembly": {"nodes": [
+			{"id": "x", "kind": "skid", "tag": "Left", "pos": [0, 0, 0]},
+			{"id": "x", "kind": "pump", "tag": "Pump.Motor", "pos": [0, 0], "bind": {"speed": "1bad"}},
+			{"id": "y", "kind": "nope", "pos": [0, 0, 0]}
+		], "pipes": [{"points": [[0, 0, 0]], "bind": {"flow": "X", "flowing": "!!X"}}]}},
+		"skid": {"assembly": {"nodes": []}}
+	}, "nodes": []}`)
+	errs, warns := Check(d, skidTags)
+	for _, want := range []string{
+		"/kinds/a/component: must be a .svelte file as a path relative to the scene file",
+		"/kinds/b/component: must be a .svelte file",
+		"/kinds/c: a kind is defined one way, not model and component",
+		"/kinds/e: bounds and labelAt need a model, a component or an assembly",
+		`/kinds/twin/assembly/nodes/0/kind: "skid" is an assembly; a part is a built-in`,
+		`/kinds/twin/assembly/nodes/1/id: duplicate id "x" (also /kinds/twin/assembly/nodes/0)`,
+		"/kinds/twin/assembly/nodes/1/pos: must be [x, y, z] metres",
+		`/kinds/twin/assembly/nodes/1/tag: a part's tag is one member of the assembly's struct (Pump), not "Pump.Motor"`,
+		`/kinds/twin/assembly/nodes/1/bind/speed: "1bad" is not a ref`,
+		`/kinds/twin/assembly/nodes/2/kind: unknown kind "nope"`,
+		"/kinds/twin/assembly/pipes/0/points: needs at least two points",
+		"/kinds/twin/assembly/pipes/0/bind/flow: a pipe binds only 'flowing'",
+		`/kinds/twin/assembly/pipes/0/bind/flowing: "!!X" is not a ref`,
+	} {
+		if !strings.Contains(joined(errs), want) {
+			t.Errorf("missing %q in:\n%s", want, joined(errs))
+		}
+	}
+	if !strings.Contains(joined(warns), "/kinds/d: declares a component but no type or members") {
+		t.Errorf("want the no-contract warning, got %v", warns)
+	}
+	if n := len(errs); n != 13 {
+		t.Errorf("want 13 errors, got %d:\n%s", n, joined(errs))
+	}
+}
+
+// The kind contract in three places (§3c, §3d): the schema's kindContract
+// lists exactly the fields Kind carries, and an assembly is a definition
+// the schema knows.
+func TestKindContractMatchesTheSchema(t *testing.T) {
+	data, err := os.ReadFile("../../tools/vscode-iec/schemas/nautilus-scene.schema.json")
+	if err != nil {
+		t.Skip("schema not in this checkout:", err)
+	}
+	var schema struct {
+		Definitions struct {
+			KindContract struct {
+				Properties map[string]any `json:"properties"`
+			} `json:"kindContract"`
+			Assembly struct {
+				Properties map[string]any `json:"properties"`
+			} `json:"assembly"`
+		} `json:"definitions"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	var fromGo []string
+	rt := reflect.TypeOf(Kind{})
+	for i := 0; i < rt.NumField(); i++ {
+		name, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+		fromGo = append(fromGo, name)
+	}
+	sort.Strings(fromGo)
+	var fromSchema []string
+	for k := range schema.Definitions.KindContract.Properties {
+		fromSchema = append(fromSchema, k)
+	}
+	sort.Strings(fromSchema)
+	if strings.Join(fromGo, ",") != strings.Join(fromSchema, ",") {
+		t.Errorf("Kind fields %v, schema kindContract %v", fromGo, fromSchema)
+	}
+	for _, f := range []string{"nodes", "pipes"} {
+		if _, ok := schema.Definitions.Assembly.Properties[f]; !ok {
+			t.Errorf("schema assembly has no property %q", f)
+		}
 	}
 }

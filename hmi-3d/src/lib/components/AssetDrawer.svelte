@@ -3,7 +3,7 @@
 	// member of its struct, its quality and its alarms, in the kit's Drawer.
 	// Read-only: no writes leave this panel until the write path ships.
 	import { Drawer } from '@joyautomation/nautilus-hmi';
-	import type { SceneNode } from '../scene.js';
+	import type { PlacedNode } from '../context.js';
 	import type { NodeKindDef } from '../registry.js';
 	import type { AlarmLike } from '../alarms.js';
 
@@ -16,7 +16,7 @@
 		alarms = []
 	}: {
 		open?: boolean;
-		node: SceneNode | undefined;
+		node: PlacedNode | undefined;
 		def: NodeKindDef | undefined;
 		value: unknown;
 		quality?: string;
@@ -26,11 +26,11 @@
 	let members = $derived(value && typeof value === 'object' ? Object.entries(value as Record<string, unknown>) : []);
 </script>
 
-<Drawer bind:open side="right" title={node?.label ?? node?.id ?? ''} label="Asset details">
+<Drawer bind:open side="right" title={node?.label || node?.id || ''} label="Asset details">
 	{#if node}
 		{#if def?.panel}
 			{@const Panel = def.panel}
-			<Panel {value} label={node.label ?? node.id} good={quality === 'good'} />
+			<Panel {value} label={node.label || node.id} good={quality === 'good'} />
 		{/if}
 		<p class="q">Quality: {quality}</p>
 		{#if members.length}

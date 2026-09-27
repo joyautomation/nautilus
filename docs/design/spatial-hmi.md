@@ -2,7 +2,9 @@
 
 Status: **Milestone 1 built** on the `spatial-hmi` branch, PR #65 (2026-09-26);
 the panel-PC measurement is the one exit criterion still open. **Milestone 2
-item 1 (kinds as data, surroundings) in progress** on `spatial-kinds`, §3c.
+item 1 (kinds as data, surroundings)** on `spatial-kinds`, PR #66, §3c;
+**item 1b (components define, documents place) in progress** on
+`spatial-components`, §3d.
 The R&D plan, device research and the office-rig spike this ports live in
 `~/Development/joyautomation/randd/` (`spatial-hmi.md`,
 `spatial-hmi-devices.md`, `spatial-rig/`); this brief is the repo's record of
@@ -45,13 +47,17 @@ hmi-3d/
     scene.ts              SceneDoc types, validateScene(), sceneTags()      (pure)
     bindings.ts           the binding grammar: resolveNodeBindings(), refRoot() (pure)
     alarms.ts             worstAlarmByAsset(): alarm instances → per-node worst  (pure)
-    registry.ts           NodeKindDef, NodeRegistry, builtinRegistry, registryFor()
+    registry.ts           NodeKindDef, NodeRegistry, builtinRegistry, registryFor(),
+                          KindMeta, kindOf(), componentRegistry(), assemblyBounds()  (§3d)
+    context.ts            the scene and node contexts <Node> reads             (§3d)
     drives.ts             data kinds: the drive vocabulary, evaluated from the doc  (pure)
     palette.ts            colours read from the kit's theme tokens, with fallbacks
     perf.ts               fps + ts→pixel latency sampling                    (pure-ish)
     components/
       SceneView.svelte    the whole view: <Canvas>, Scene3D, HUD, inspector drawer
-      Scene3D.svelte      renders a SceneDoc inside a Threlte <Canvas>
+      Scene3D.svelte      renders a SceneDoc and/or children inside a Threlte <Canvas>
+      Node.svelte         the document's node as a component; parts inside parts (§3d)
+      Pipe.svelte         a pipe by ref (`flowing="P101.Running"`)               (§3d)
       AssetDrawer.svelte  click-to-inspect: the kit's 2D faceplate, members, quality, alarms
       PerfHud.svelte      the measurement HUD (fps, p95 ts→pixel), opt-in
       Tank3D.svelte  Pump3D.svelte  Valve3D.svelte   the built-in kinds
@@ -72,6 +78,7 @@ Public API (`index.ts`):
 ```ts
 // Components
 export { SceneView, Scene3D, AssetDrawer, PerfHud, Halo, Label, Pipe3D, Tank3D, Pump3D, Valve3D };
+export { Node, Pipe, Fixture3D };                       // Svelte authoring (§3d)
 // Scene document
 export type { SceneDoc, SceneNode, ScenePipe, SceneFixture, SceneCamera, Vec3 };
 export { validateScene, sceneTags };                 // pure: validation + the ?tags= list
@@ -81,6 +88,8 @@ export { resolveNodeBindings, refRoot, member, num, flowing };
 // Registry
 export type { NodeKindDef, NodeProps, NodeRegistry };
 export { builtinRegistry, registryFor, BUILTIN_CONTRACT };
+export type { KindMeta, SceneAssembly };                // components define, documents place (§3d)
+export { kindOf, componentRegistry, matchModule, assemblyBounds, assemblyMembers };
 // Kinds as data (§3c): the drive vocabulary, evaluated from the document
 export { DRIVE_CHANNELS, evalDrives, driveMembers, validateDrives, formatStatus, kindMembers };
 export type { Drive, MeshState, SceneEnvironment, SceneTexture };
@@ -115,7 +124,7 @@ type Vec3 = [number, number, number];
 
 interface SceneDoc {
   name?: string;
-  /** Kind contracts and data kinds (§3b, §3c). */
+  /** Kind contracts, data kinds, component kinds and assemblies (§3b, §3c, §3d). */
   kinds?: Record<string, SceneKind>;
   /** The surroundings: an HDRI and shadows (§3c). Absent = the flat look. */
   environment?: SceneEnvironment;
@@ -421,6 +430,184 @@ schema does it as you type. A sync test on each side reads the schema's
 channel enum and the built-in kind names so the three cannot drift apart
 silently.
 
+## 3d. Components define, documents place
+
+Two readings of the same scene are wanted, and they are not in tension
+once one rule is fixed: **a Svelte component may define a kind; a
+`*.scene.json` places nodes of it.** Hand-written Svelte scenes are
+welcome, and the built-in models work standalone; but anything that must
+be checked (`naut check`), generated (`naut scene init`), listed (the
+palette), dragged (item 2) or anchored (AR) lives in the document, because
+those tools read data and none of them runs Svelte. The mimic already
+draws this line: a `*.mimic.json` names a component, the app's `<Mimic
+registry>` provides it, and the extension finds `{Name}.svelte` and builds
+it for the editor. §3d is that precedent, spelled for 3D and extended by
+one composition primitive.
+
+**Svelte authoring: `<Scene3D>` and `<Node>`.** A scene composed the way
+a SvelteKit page is composed:
+
+```svelte
+<SceneView {rt} {alarms} camera={{ pos: [2.2, 1.6, 2.6], target: [0.9, 0.1, 0] }} environment={env}>
+  <Fixture3D fixture={{ kind: 'box', pos: [0.35, -0.01, 0.1], size: [0.9, 0.02, 0.6] }} />
+  <Node id="T101" tag="T101" kind="tank" label="T-101" pos={[1.0, -0.75, 0.4]} />
+  <Node id="XV101" tag="XV101" kind="valve" pos={[1.8, 0.85, 0]} bind={{ cmd: 'Demand' }} />
+  <Pipe points={fill} flowing="P101.Running" />
+  <Node id="P101" tag="P101" label="P-101" pos={[0.3, 0, 0.2]}>
+    {#snippet children(p)}<Pump3D {...p} />{/snippet}
+  </Node>
+  <Node id="SK101" tag="SK101" kind="skid" pos={[-0.3, -0.75, 1.1]} />
+</SceneView>
+```
+
+- `SceneView` (and `Scene3D`, for an app that owns its `<Canvas>`) take a
+  `doc`, children, or both; `camera`, `grid` and `environment` props
+  stand in for the document's blocks. `Scene3D` provides the scene by
+  context (`hmi3d:scene`: the frame's tags, quality, the alarm fold, the
+  effective registry, the selection and `pick`), so nothing below it is
+  handed a client.
+- **`<Node>` is the document's node object as a component, prop for
+  prop** (`id kind tag label pos rot scale props bind`). It resolves the
+  value and quality, applies `bind`, and wraps whatever it renders in the
+  group, the alarm halo, the selection box and the label — the same code
+  path a document node takes, because `Scene3D` renders document nodes
+  *through* `<Node>`. With `kind` it renders the registry's component;
+  with `children`, the snippet receives `NodeProps` and renders anything
+  (a built-in with a twist, a hand-built group, a `<T.Mesh>`).
+- **A `<Node>` inside a `<Node>` is a part.** Its `tag` is a **member
+  path of the enclosing node's struct** (`Pump` inside `SK101` reads
+  `SK101.Pump`), its refs resolve from that struct, it has no label
+  unless given one, no halo and no pick of its own. That is how a
+  component composes kinds, and it is the Svelte form of an assembly.
+- **`<Pipe>`** takes `points`, `radius` and `flowing`, a ref resolved by
+  the same rule as a `bind` (`P101.Running` at the top level, `Pump.Running`
+  inside a node). `Pipe3D` stays the geometry with a boolean.
+- The built-ins stay usable bare: `<Pump3D value={tags.P101} good />`.
+
+What Svelte authoring gives up is exactly the tools' half: no `naut
+check`, no generator, no palette entry, no drag-to-place, no AR anchor
+for a node that exists only in a template. That is the trade, stated
+once and not softened.
+
+**A kind defined by a component file.** The `kinds` block may name a
+Svelte file instead of a model:
+
+```json
+"kinds": {
+  "skid": { "type": "Skid", "members": ["Pump", "Valve", "Fault"], "component": "hmi/src/lib/Skid.svelte" }
+}
+```
+
+```svelte
+<script lang="ts" module>
+  import type { KindMeta } from '@joyautomation/nautilus-hmi-3d';
+  export const kind: KindMeta = {
+    type: 'Skid', members: ['Pump', 'Valve', 'Fault'],
+    bounds: { size: [0.6, 0.3, 0.3], center: [0.2, 0.15, 0] }, labelAt: [0.2, 0.32, 0],
+    status: (v, good) => (good ? (member(member(v, 'Pump'), 'Running') === true ? 'running' : 'standby') : 'stale')
+  };
+</script>
+<script lang="ts">
+  import { Node, Pipe, type NodeProps } from '@joyautomation/nautilus-hmi-3d';
+  let { value, good }: NodeProps = $props();   // the whole struct; parts read members
+</script>
+<Node tag="Pump" kind="pump" pos={[0, 0.02, 0]} />
+<Node tag="Valve" kind="valve" pos={[0.42, 0.14, 0]} rot={[0, 0, 90]} />
+<Pipe points={[[0.16, 0.1, 0], [0.42, 0.1, 0]]} flowing="Pump.Running" />
+```
+
+- **What the file must provide.** Its default export is the component,
+  taking `NodeProps` (§3). Its `<script module>` exports **`kind`**, a
+  `KindMeta`: `type?`, `members?`, `bounds`, `labelAt?`, `status?`,
+  `panel?` — `NodeKindDef` (§4) minus the component itself. The `kind`
+  export is also the marker a tool recognises a kind component by: a
+  regular expression over the module script, no compile.
+- **`component` is a source path relative to the scene file** (the
+  project root), not a URL path from the app root like `model`: nobody
+  serves it. It ends in `.svelte`, has no scheme and no `..`.
+- **Built by the app, described to the extension.** The app builds the
+  component with Vite like any of its own; the page hands `SceneView` the
+  modules Vite found (`modules={import.meta.glob('/src/**/*.svelte', { eager: true })}`)
+  and `componentRegistry(doc, modules)` pairs each `component` path with
+  the module whose key it ends with, taking the default export and
+  `kind`. The extension does **not** build 3D components: the mimic's
+  harness compiles user components into the editor's webview bundle, but
+  a 3D kind depends on Threlte and three, which the webview does not
+  carry, and a second bundle apart from the app is the two-copies-of-three
+  failure (§7). The extension reads the `kinds` entry, lists the kind in
+  the palette, and the editor (item 2) draws a component kind as its
+  `bounds` box with its label — the placeholder chip the mimic editor
+  shows for an un-built user component, in 3D.
+- **What `naut check` sees, without running Svelte:** that the file
+  exists next to the scene; the node contract from the entry's `type`
+  and `members`, as for any declared kind (§3b); and a warning when a
+  component kind declares neither, since its nodes are then unchecked.
+  The document's `type` is the project's, so it wins over the export's
+  (re-pointing, as for a built-in). In the browser `componentRegistry`
+  holds the two to each other the other way round: a member the
+  component's `kind` export reads that the document does not list is an
+  error in `SceneView`'s error list, because `naut check` would have
+  under-checked every node of it.
+- **The three-place rule** (§3c) extends to these fields: `component` and
+  `assembly` on `SceneKind`, on `internal/scene.Kind` and in the schema's
+  `kindContract`; a kind has **at most one** of `model`, `component`,
+  `assembly`; each side's sync test reads the schema's property list.
+
+**Assemblies.** A kind made of kinds, in both worlds:
+
+```json
+"skid": {
+  "type": "Skid", "members": ["Fault"], "status": "{Fault?FAULT:ok}",
+  "assembly": {
+    "nodes": [
+      { "id": "pump",  "kind": "pump",  "tag": "Pump",  "pos": [0, 0.02, 0] },
+      { "id": "valve", "kind": "valve", "tag": "Valve", "pos": [0.42, 0.14, 0], "rot": [0, 0, 90] }
+    ],
+    "pipes": [{ "points": [[0.16, 0.1, 0], [0.42, 0.1, 0]], "bind": { "flowing": "Pump.Running" } }]
+  }
+}
+```
+
+- **Children are nodes in the kind's own frame** (metres from the placed
+  node's origin), and a child's `tag` is a **member of the assembly's
+  struct**: the UDT nests (`Skid.Pump : Motor`, `Skid.Valve : Valve`), the
+  placed node binds one tag (`SK101`), and the parts read `SK101.Pump`,
+  `SK101.Valve`. Refs inside the assembly — a child's `bind`, a pipe's
+  `flowing` — are paths from that struct. **This is the whole parameter
+  mechanism.** No templates, no string prefixes, no conditionals: the
+  struct is the parameter, the way it already is for a kind. A placed
+  node whose project keeps flat tags supplies a part explicitly
+  (`bind: { "pump": "P101" }`), which is §3b's one escape hatch and no
+  new rule. The day a JSON assembly wants a conditional is the day it
+  should have been a Svelte component.
+- **Parts are parts.** One node in the document, one `id`, one alarm
+  asset, one pick: a child has no label unless given, no halo, and a
+  click on it selects the assembly. Alarm rules match one level of
+  members today, so what should halo an assembly is a member of its own
+  UDT (the rig's `Skid.Fault`, folded from its parts in control).
+- **Flat, deliberately.** A child's kind is a built-in, a data kind or a
+  component kind, never another assembly.
+- **The contract** a node is held to is `members` ∪ the status template's
+  ∪ every child's `tag` ∪ every inner ref's root. `naut check` holds
+  `SK101` to `Skid`, then each child's member to the child kind's type:
+  `/kinds/skid/assembly/nodes/0/tag: Skid.Pump is a Valve, but kind
+  "pump" expects a Motor`. `bounds` may be given; otherwise it is the
+  union of the children's boxes, which is enough for a halo.
+- `Skid.svelte` above and this entry are **the same skid written twice**.
+  A project keeps one. They differ where they should: the component can
+  do anything Svelte can, the data assembly needs no app build and the
+  editor can draw its parts.
+
+**What stays out, on purpose:** logic in JSON (expressions, conditionals,
+templates beyond `status`); nested assemblies; the extension compiling 3D
+components; per-part labels by default; a `component` without a `kinds`
+entry (a Svelte file the document never names is the app's business and
+no tool's). And the palette UI itself, which lands with item 2's editor —
+this item delivers the list it shows: `paletteKinds(doc)` in the
+extension, every built-in and every `kinds` entry with how it is defined,
+plus `isKindComponent(text)` for discovering component files by their
+`kind` export, the way the mimic discovers `{Name}.svelte`.
+
 ## 4. The node registry
 
 ```ts
@@ -439,11 +626,16 @@ type NodeRegistry = Record<string, NodeKindDef>;
 export const builtinRegistry: NodeRegistry = { tank, pump, valve };
 ```
 
-An app extends by spreading: `registry={{ ...builtinRegistry, server, switch, 'switch-port': port }}`.
+An app extends by spreading: `registry={{ ...builtinRegistry, server, switch, 'switch-port': port }}`,
+or, for a component kind (§3d), by `kindOf(Skid, kind)` — or by handing
+`SceneView` its Vite modules and letting `componentRegistry(doc, modules)`
+do that for every `kinds` entry with a `component`.
 `registryFor(doc, registry)` then lays the document's data kinds (§3c) on
 top: a kind with a `model` becomes a `GltfNode` entry whose bounds are
 `'auto'` until the model reports them, and it inherits `status`/`panel`
-from the registry entry of the same name if there is one.
+from the registry entry of the same name if there is one; a kind with an
+`assembly` becomes an entry with no component and the assembly, which
+`<Node>` renders as parts (§3d).
 Nothing in `Scene3D` names a kind; it looks every node up. That is how the
 IT-hardware kinds from the drivers session (`it-drivers` branch,
 `docs/design/it-drivers.md`) arrive without touching the core, and the
@@ -523,16 +715,26 @@ the hardware, and until then the ≥ 30 fps target is unverified.
 The office rig from `randd/spatial-rig/`, unchanged on the controller side:
 
 ```
-nautilus.yaml    3 struct tags (T101 Tank, P101 Motor, XV101 Valve), setpoints,
-                 fault-injection switches, 4 alarm rules, server.hmi: hmi/build
-types.st         the Tank / Motor / Valve UDTs — the contract a scene binds to
-control.st       pump seal-in on level, valve follows demand, limit bits
+nautilus.yaml    5 struct tags (T101 Tank, P101 Motor, XV101 Valve, SK101/SK102 Skid),
+                 setpoints, fault-injection switches, 5 alarm rules, server.hmi: hmi/build
+types.st         the Tank / Motor / Valve UDTs — the contract a scene binds to —
+                 and Skid, a UDT of UDTs (item 1b's assembly)
+control.st       pump seal-in on level, valve follows demand, limit bits,
+                 the duty/standby transfer skids
 sim.st           the process, plus fault injection
-rig_test.yaml    4 acceptance tests, virtual time (naut test)
+rig_test.yaml    5 acceptance tests, virtual time (naut test)
 assets.yaml      marker id → asset → tag, surveyed positions (AR, later)
-rig.scene.json   the scene: 3 nodes, 2 pipes, fixtures, camera
-hmi/             SvelteKit app: +page.svelte is the §1 snippet
+rig.scene.json   the scene: 3 props, 2 skids (one a component kind, one a data
+                 assembly — the same skid written twice, §3d), 2 pipes, fixtures, camera
+hmi/             SvelteKit app: +page.svelte is the §1 snippet; /composed is the
+                 same rig hand-written in Svelte (§3d); src/lib/Skid.svelte the kind
 ```
+
+The two skids are simulated, not props: a duty/standby transfer pair on
+the floor beside the desk, the standby taking over when the duty pump's
+fault is injected. They exist so the example places an assembly both ways
+(`skid` is `Skid.svelte`, `skid-data` the JSON assembly); a real project
+keeps one.
 
 `hmi/` depends on `@joyautomation/nautilus-hmi-3d` by `file:../../hmi-3d`
 (the same way `tools/vscode-iec/webview-ui` depends on `hmi/`), so the
@@ -582,6 +784,14 @@ Proposed order, each with an exit and the capture moment it produces
    hand-written Svelte page and, separately, a `Skid` component placed as
    one node in `rig.scene.json` with `naut check` clean. Capture: the same
    skid written twice (N-63).
+   *Designed as §3d and built on `spatial-components`, PR #67, 2026-09-27:
+   `<Node>`/`<Pipe>` with parts inside parts; `kinds.x.component` (built
+   by the app, described to the extension) and `kinds.x.assembly` (the
+   nested UDT as the only parameter) in TS, Go and the schema with the
+   sync tests extended; `paletteKinds()` in the extension for item 2. The
+   rig gained two simulated transfer skids, `Skid.svelte` and the JSON
+   assembly, and a `/composed` route; 60 fps / 34 ms with five nodes (§9);
+   the takes are `content/assets/capture/n63/out/`.*
 2. **Place equipment by dragging.** Locating things is the one authoring
    step `naut scene init` cannot finish, and a number typed into `pos` is
    the tedium to remove. An edit mode on `SceneView`: click an asset,
@@ -639,6 +849,8 @@ AMD Radeon RX 7900 XT, Chrome).
 | 2026-09-27 | same desktop, Chrome headed 2560×1440 | rig, `look: flat` (M1 primitives, three lights) | 60 | rx→pixel 33 ms, ctrl→pixel 34 ms (n=50) | 254 kB base | item 1 build; `naut run` serving `hmi/build`; recipe `content/assets/capture/n57/browser/01-grey-to-lit.mjs`, first half |
 | 2026-09-27 | same | rig, `look: lit`: 3 glTF kinds (pump 96 kB, tank 74 kB, valve 47 kB), HDRI 1k for light (1.7 MB) with a 6k tonemapped backdrop (3.5 MB) ground-projected, fog, concrete floor (3 × 1k JPG, 1.3 MB), soft shadows | 60 | rx→pixel 33 ms, ctrl→pixel 34 ms (n=191), unchanged through the cut and a fault | 254 kB base + 48 kB on demand (glTF chunk 14 kB, HDRI + shadows chunk 34 kB) = 302 kB | same take, second half (taken with the 1k HDRI as backdrop; the 6k backdrop added afterwards costs a one-off decode hitch on load and no steady-state change); 0 console errors; the draco/basis decoders Vite emits (1.9 MB) are never fetched — no model uses them |
 
+| 2026-09-27 | same | rig + two skids (item 1b): 5 nodes — 3 props, `Skid.svelte` and the JSON assembly, 9 kind instances in all — 2 pipes + the skids' 4 | 60 | rx→pixel 34 ms, ctrl→pixel 74 ms (n=57, the first minute after load); after the fault and the route change, on `/composed`: rx→pixel 38 ms, ctrl→pixel 39 ms (n=53) | 278 kB base + 14 kB glTF chunk on demand = 292 kB | `naut run` serving `hmi/build`; recipe `content/assets/capture/n63/browser/01-skid-twice.mjs`; 0 console errors. A first take with a VSIX build running on the same machine read ctrl→pixel 131 ms and rx→pixel 35 ms — the render cost does not move, the controller's stamp does. **Base is up 24 kB on item 1**: with two routes (`/` and `/composed`) both reaching `Surroundings` through the same dynamic import, the bundler hoists the HDRI/shadows chunk (33 kB) into the shared base; with one route it splits out as before (checked by building without `/composed`). Naming chunks by hand (`manualChunks`, `advancedChunks`) made every chunk eager, so it is left as is and noted in §10. |
+
 Bundle figures from 2026-09-27 on are the sum of gzipped JS under the
 built app's `_app/immutable` (excluding the on-demand decoder assets),
 which is what a browser downloads for a first paint; the 438 kB Milestone
@@ -673,6 +885,13 @@ are the same 254 kB, because the loaders sit behind dynamic imports.
   (the scene's `pos` and the survey's `pos`). When AR lands, a node gains
   `marker:` and the survey moves into the scene file; until then the
   scene is authoritative for rendering and `assets.yaml` for the survey.
+- **The on-demand chunks with two routes.** A second route that reaches
+  the same `import('./Surroundings.svelte')` makes the bundler (Vite 8 on
+  Rolldown) hoist that chunk into the shared base (§9, item 1b: +24 kB);
+  the glTF chunk is not hoisted. `manualChunks` and `advancedChunks`
+  groups both turned the chunks eager, which is worse. Open: a Rolldown
+  option that keeps a shared dynamic import lazy, or the package
+  importing the two loaders from one place so there is one dynamic edge.
 - **Editor.** Nothing in VS Code knows `*.scene.json` yet. A JSON schema
   in the extension (the `mimic` precedent) is the cheap first step; a 3D
   editor is not planned.

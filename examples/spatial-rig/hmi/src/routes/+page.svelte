@@ -10,6 +10,10 @@
 	// drives) do not overlap SceneDoc closely enough for a direct cast;
 	// SceneView validates the document at run time, which is the real check.
 	const doc = rig as unknown as SceneDoc;
+	// The document's `kinds` may name component files (kinds.skid.component
+	// → src/lib/Skid.svelte, design §3d). Vite builds every .svelte under
+	// src/ into the app; the view pairs each path with its module.
+	const modules = import.meta.glob('/src/lib/**/*.svelte', { eager: true });
 	// One subscription, filtered to exactly the struct tags the scene reads.
 	const rt = new RealtimeClient<NautilusFrame>({ url: '/api/stream', tags: sceneTags(doc) });
 	const alarms = createAlarmClient(rt);
@@ -35,11 +39,12 @@
 <svelte:head><title>{doc.name ?? 'Rig'} · 3D</title></svelte:head>
 
 <div class="stage">
-	<SceneView {doc} {rt} {alarms} perf bind:look>
+	<SceneView {doc} {rt} {alarms} {modules} perf bind:look>
 		{#snippet hud()}
 			<button class="look" onclick={() => (look = look === 'lit' ? 'flat' : 'lit')} title="Switch between the lit scene and the flat, asset-free look">
 				{look === 'lit' ? 'lit' : 'flat'}
 			</button>
+			<a class="look" href="/composed" title="The same rig, hand-written in Svelte (design §3d)">composed →</a>
 		{/snippet}
 	</SceneView>
 </div>
@@ -51,6 +56,7 @@
 	}
 	.look {
 		align-self: flex-start;
+		text-decoration: none;
 		font: 12px/1 system-ui, sans-serif;
 		padding: 4px 10px;
 		border-radius: 999px;

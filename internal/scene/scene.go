@@ -54,6 +54,34 @@ type Kind struct {
 	LabelAt Vec             `json:"labelAt,omitempty"`
 	Status  string          `json:"status,omitempty"`
 	Drive   []Drive         `json:"drive,omitempty"`
+	// A component kind (§3d): a Svelte file as a source path relative to
+	// the scene file. The app builds it; the checker sees the file and the
+	// contract above, and never runs Svelte.
+	Component string `json:"component,omitempty"`
+	// An assembly (§3d): a kind made of kinds. Parts and pipes sit in the
+	// kind's own frame, and a part's Tag is a MEMBER of the assembly's
+	// struct — the nested UDT is the only parameter.
+	Assembly *Assembly `json:"assembly,omitempty"`
+}
+
+// Assembly is a kind's parts and pipes (§3d).
+type Assembly struct {
+	Nodes []Node `json:"nodes"`
+	Pipes []Pipe `json:"pipes,omitempty"`
+}
+
+// DefinedBy says how a `kinds` entry defines its kind: "model",
+// "component", "assembly", or "" for a contract-only entry.
+func (k Kind) DefinedBy() string {
+	switch {
+	case k.Model != "":
+		return "model"
+	case k.Component != "":
+		return "component"
+	case k.Assembly != nil:
+		return "assembly"
+	}
+	return ""
 }
 
 // Drive is one mesh, one channel. Exactly one of the channel fields is
@@ -248,9 +276,13 @@ func (d *Doc) EffectiveKinds() map[string]Kind {
 			cur.Members = v.Members
 		}
 		cur.Model, cur.Bounds, cur.LabelAt, cur.Status, cur.Drive = v.Model, v.Bounds, v.LabelAt, v.Status, v.Drive
-		// The members a kind reads are `members` plus whatever its drives
-		// and status template name, so a drive never repeats the list.
-		for _, m := range append(driveMembers(v.Drive), statusMembers(v.Status)...) {
+		cur.Component, cur.Assembly = v.Component, v.Assembly
+		// The members a kind reads are `members` plus whatever its drives,
+		// its status template and its assembly name, so nothing repeats
+		// the list.
+		more := append(driveMembers(v.Drive), statusMembers(v.Status)...)
+		more = append(more, assemblyMembers(v.Assembly)...)
+		for _, m := range more {
 			if !contains(cur.Members, m) {
 				cur.Members = append(cur.Members, m)
 			}
@@ -298,6 +330,40 @@ func driveMembers(drives []Drive) []string {
 	return out
 }
 
+// assemblyMembers lists what an assembly reads off its struct: every
+// part's tag and the root of every ref inside it, deduplicated, in order.
+func assemblyMembers(a *Assembly) []string {
+	if a == nil {
+		return nil
+	}
+	var out []string
+	add := func(ref string) {
+		m, _, _ := strings.Cut(strings.TrimPrefix(ref, "!"), ".")
+		if m != "" && !contains(out, m) {
+			out = append(out, m)
+		}
+	}
+	for _, n := range a.Nodes {
+		add(n.Tag)
+		for _, k := range sortedKeys(n.Bind) {
+			add(n.Bind[k])
+		}
+	}
+	for _, p := range a.Pipes {
+		add(p.Bind["flowing"])
+	}
+	return out
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 // statusRe matches one field of a status template: {Level}, {Level:1},
 // {Running?run:stopped}. The same grammar as hmi-3d's formatStatus.
 var statusRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)(?::(\d))?(?:\?([^:}]*):([^}]*))?\}`)
@@ -334,11 +400,34 @@ func assetPath(p string) bool {
 	return true
 }
 
-// checkKind holds a `kinds` entry's data-kind fields to the §3c rules.
+// componentPath: a source path relative to the scene file — a .svelte
+// file, no scheme, no `..`, not absolute.
+func componentPath(p string) bool {
+	return assetPath(p) && strings.HasSuffix(p, ".svelte") && !strings.HasPrefix(p, "/")
+}
+
+// checkKind holds a `kinds` entry's data-kind fields to the §3c rules and
+// its component / assembly fields to §3d's; the parts' kinds and tags
+// need the kind table and are checked in Check.
 func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
 	p := "/kinds/" + k
 	if v.Model != "" && !(assetPath(v.Model) && (strings.HasSuffix(v.Model, ".glb") || strings.HasSuffix(v.Model, ".gltf"))) {
 		errf(p+"/model", "must be a URL path to a .glb or .gltf (models/pump.glb)")
+	}
+	if v.Component != "" && !componentPath(v.Component) {
+		errf(p+"/component", "must be a .svelte file as a path relative to the scene file (hmi/src/lib/Skid.svelte)")
+	}
+	var ways []string
+	for _, w := range []struct {
+		name string
+		set  bool
+	}{{"model", v.Model != ""}, {"component", v.Component != ""}, {"assembly", v.Assembly != nil}} {
+		if w.set {
+			ways = append(ways, w.name)
+		}
+	}
+	if len(ways) > 1 {
+		errf(p, "a kind is defined one way, not %s", strings.Join(ways, " and "))
 	}
 	if v.Bounds != nil {
 		var auto string
@@ -360,8 +449,11 @@ func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
 	if v.Status != "" && !validStatusTemplate(v.Status) {
 		errf(p+"/status", `must be a template over members: "{Level:1} %%", "{Running?run:stopped}"`)
 	}
-	if v.Model == "" && (v.Drive != nil || v.Bounds != nil || v.LabelAt != nil) {
-		errf(p, "drive, bounds and labelAt need a model — without one the Svelte kind of this name renders")
+	if v.Model == "" && v.Drive != nil {
+		errf(p+"/drive", "drives need a model — without one the Svelte kind of this name renders")
+	}
+	if len(ways) == 0 && (v.Bounds != nil || v.LabelAt != nil) {
+		errf(p, "bounds and labelAt need a model, a component or an assembly — without one the registry's kind of this name renders")
 	}
 	num := func(path string, e NumExpr) {
 		if !memberRe.MatchString(e.Bind) {
@@ -469,6 +561,34 @@ func (d *Doc) Assets() (paths [][2]string) {
 	return paths
 }
 
+// Components lists every component file the document names, with the
+// JSON path that names it — source paths relative to the scene file (§3d),
+// so they are held to a different root than Assets.
+func (d *Doc) Components() (paths [][2]string) {
+	names := make([]string, 0, len(d.Kinds))
+	for k := range d.Kinds {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		if c := d.Kinds[k].Component; c != "" {
+			paths = append(paths, [2]string{"/kinds/" + k + "/component", c})
+		}
+	}
+	return paths
+}
+
+// CheckComponents holds every component path to `exists`, which the
+// caller builds from the scene file's own directory.
+func CheckComponents(d *Doc, exists func(path string) bool) (errs []string) {
+	for _, c := range d.Components() {
+		if !exists(c[1]) {
+			errs = append(errs, fmt.Sprintf("%s: %q was not found next to the scene file — a component path is relative to it", c[0], c[1]))
+		}
+	}
+	return errs
+}
+
 // CheckAssets holds every asset path to `exists`, which the caller builds
 // from where the app serves files (next to the scene, the HMI's static/,
 // the build). Separate from Check so the structural pass stays pure.
@@ -521,6 +641,9 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 			}
 		}
 		checkKind(k, v, errf)
+		if v.Component != "" && v.Type == "" && len(v.Members) == 0 {
+			warnf("/kinds/"+k, "declares a component but no type or members, so its nodes are not checked — add the UDT it reads (kinds.%s.type) and the members", k)
+		}
 	}
 
 	if e := d.Environment; e != nil {
@@ -606,6 +729,28 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 		}
 	}
 
+	// walk follows a member path down from a struct; the error names what
+	// went wrong, or the leaf type comes back (nil for a struct member's
+	// own struct, which comes back as `last`).
+	walk := func(sd *ir.StructDef, from string, members []string) (leaf *ir.Type, err string) {
+		t := sd
+		for i, m := range members {
+			if t == nil {
+				return nil, fmt.Sprintf("%s is not a struct, so it has no member %q", strings.Join(append([]string{from}, members[:i]...), "."), m)
+			}
+			idx, ok := t.FieldIndex[m]
+			if !ok {
+				return nil, fmt.Sprintf("%s has no member %q (it has %s)", t.Name, m, memberList(t))
+			}
+			leaf = t.Fields[idx].Type
+			t = nil
+			if leaf != nil && leaf.Kind == ir.TypeStruct {
+				t = leaf.Struct
+			}
+		}
+		return leaf, ""
+	}
+
 	// A ref is checked the same way wherever it appears: syntax, then the
 	// root tag, then the member path through the struct.
 	checkRef := func(path, ref string) {
@@ -621,23 +766,10 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 			warnf(path, "%q: the manifest declares no tag %q — fine on a Sparkplug host, where it arrives from the field; a typo anywhere else", ref, parts[0])
 			return
 		}
-		t := info.Struct
-		var leaf *ir.Type
-		for i, m := range parts[1:] {
-			if t == nil {
-				errf(path, "%q: %s is not a struct, so it has no member %q", ref, strings.Join(parts[:i+1], "."), m)
-				return
-			}
-			idx, ok := t.FieldIndex[m]
-			if !ok {
-				errf(path, "%q: %s has no member %q (it has %s)", ref, t.Name, m, memberList(t))
-				return
-			}
-			leaf = t.Fields[idx].Type
-			t = nil
-			if leaf != nil && leaf.Kind == ir.TypeStruct {
-				t = leaf.Struct
-			}
+		leaf, werr := walk(info.Struct, parts[0], parts[1:])
+		if werr != "" {
+			errf(path, "%q: %s", ref, werr)
+			return
 		}
 		if negate && leaf != nil && leaf.Kind != ir.TypeBool {
 			warnf(path, "%q negates a %s member; `!` reads `value !== true`, which is always true here", ref, leaf.Kind)
@@ -647,13 +779,21 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 		}
 	}
 
-	ids := make(map[string]int, len(d.Nodes))
-	for i, n := range d.Nodes {
-		p := fmt.Sprintf("/nodes/%d", i)
+	// A ref inside an assembly is a path from the assembly's struct (§3d):
+	// syntax here, the member walk per placed node below.
+	checkInnerRef := func(path, ref string) {
+		if !refRe.MatchString(ref) {
+			errf(path, "%q is not a ref (Member, Member.Member, !Member)", ref)
+		}
+	}
+
+	// A node's shape, wherever it sits: a document node, or an assembly's
+	// part in the kind's own frame.
+	checkNodeShape := func(p string, n Node, ids map[string]int, i int) (kind Kind, known bool) {
 		if n.ID == "" {
 			errf(p+"/id", "must be a non-empty string")
 		} else if j, dup := ids[n.ID]; dup {
-			errf(p+"/id", "duplicate id %q (also /nodes/%d)", n.ID, j)
+			errf(p+"/id", "duplicate id %q (also %s/%d)", n.ID, p[:strings.LastIndex(p, "/")], j)
 		} else {
 			ids[n.ID] = i
 		}
@@ -664,18 +804,60 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 		if n.Scale < 0 {
 			errf(p+"/scale", "must be > 0")
 		}
-		kind, known := kinds[n.Kind]
+		kind, known = kinds[n.Kind]
 		if n.Kind == "" {
 			errf(p+"/kind", "must be a non-empty string")
 		} else if !known {
 			errf(p+"/kind", "unknown kind %q (built in: %s; declare the app's own under kinds:)", n.Kind, kindList(kinds))
 		}
-		bindKeys := make([]string, 0, len(n.Bind))
-		for prop := range n.Bind {
-			bindKeys = append(bindKeys, prop)
+		return kind, known
+	}
+
+	// Assemblies: parts are nodes in the kind's frame, tags are members,
+	// refs are inner, and an assembly is flat.
+	for _, k := range kindNames {
+		a := d.Kinds[k].Assembly
+		if a == nil {
+			continue
 		}
-		sort.Strings(bindKeys)
-		for _, prop := range bindKeys {
+		ap := "/kinds/" + k + "/assembly"
+		ids := make(map[string]int, len(a.Nodes))
+		for i, n := range a.Nodes {
+			p := fmt.Sprintf("%s/nodes/%d", ap, i)
+			part, known := checkNodeShape(p, n, ids, i)
+			if known && part.Assembly != nil {
+				errf(p+"/kind", "%q is an assembly; a part is a built-in, a data kind or a component kind", n.Kind)
+			}
+			if n.Tag != "" && !memberRe.MatchString(n.Tag) {
+				errf(p+"/tag", "a part's tag is one member of the assembly's struct (Pump), not %q", n.Tag)
+			}
+			for _, prop := range sortedKeys(n.Bind) {
+				checkInnerRef(p+"/bind/"+prop, n.Bind[prop])
+			}
+		}
+		for i, pipe := range a.Pipes {
+			p := fmt.Sprintf("%s/pipes/%d", ap, i)
+			if len(pipe.Points) < 2 {
+				errf(p+"/points", "needs at least two points")
+			}
+			for j, pt := range pipe.Points {
+				vec3(fmt.Sprintf("%s/points/%d", p, j), pt, "metres")
+			}
+			for key, ref := range pipe.Bind {
+				if key != "flowing" {
+					errf(p+"/bind/"+key, "a pipe binds only 'flowing'")
+					continue
+				}
+				checkInnerRef(p+"/bind/flowing", ref)
+			}
+		}
+	}
+
+	ids := make(map[string]int, len(d.Nodes))
+	for i, n := range d.Nodes {
+		p := fmt.Sprintf("/nodes/%d", i)
+		kind, known := checkNodeShape(p, n, ids, i)
+		for _, prop := range sortedKeys(n.Bind) {
 			checkRef(p+"/bind/"+prop, n.Bind[prop])
 		}
 		if n.Tag == "" {
@@ -705,6 +887,44 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 		}
 		switch {
 		case len(missing) == 0:
+			// An assembly's parts: each member is the part kind's UDT, and
+			// each inner ref walks from the struct (§3d).
+			if kind.Assembly != nil && info.Struct != nil {
+				for j, part := range kind.Assembly.Nodes {
+					pp := fmt.Sprintf("/kinds/%s/assembly/nodes/%d", n.Kind, j)
+					if part.Tag == "" {
+						continue
+					}
+					if _, bound := n.Bind[lower(part.Tag)]; bound {
+						continue
+					}
+					pk, ok := kinds[part.Kind]
+					if !ok || pk.Type == "" {
+						continue
+					}
+					idx := info.Struct.FieldIndex[part.Tag]
+					ft := info.Struct.Fields[idx].Type
+					switch {
+					case ft == nil || ft.Kind != ir.TypeStruct:
+						errf(p+"/tag", "%s.%s is not a struct, but part %q (kind %q) expects a %s — see %s", info.TypeName, part.Tag, part.ID, part.Kind, pk.Type, pp+"/tag")
+					case ft.Struct.Name != pk.Type:
+						errf(p+"/tag", "%s.%s is a %s, but part %q (kind %q) expects a %s — see %s", info.TypeName, part.Tag, ft.Struct.Name, part.ID, part.Kind, pk.Type, pp+"/tag")
+					}
+					for _, prop := range sortedKeys(part.Bind) {
+						ref := strings.TrimPrefix(part.Bind[prop], "!")
+						if _, werr := walk(info.Struct, n.Tag, strings.Split(ref, ".")); werr != "" {
+							errf(p+"/tag", "%q (%s/bind/%s): %s", part.Bind[prop], pp, prop, werr)
+						}
+					}
+				}
+				for j, pipe := range kind.Assembly.Pipes {
+					if ref, ok := pipe.Bind["flowing"]; ok && refRe.MatchString(ref) {
+						if _, werr := walk(info.Struct, n.Tag, strings.Split(strings.TrimPrefix(ref, "!"), ".")); werr != "" {
+							errf(p+"/tag", "%q (/kinds/%s/assembly/pipes/%d/bind/flowing): %s", ref, n.Kind, j, werr)
+						}
+					}
+				}
+			}
 		case info.Struct == nil:
 			errf(p+"/tag", "%q is a scalar, but kind %q reads %s off a %s — bind a struct tag, or bind the members explicitly", n.Tag, n.Kind, strings.Join(kind.Members, ", "), kind.Type)
 		case kind.Type != "" && info.TypeName != kind.Type:
