@@ -1,6 +1,7 @@
 package hw
 
 import (
+	"github.com/joyautomation/nautilus/lang/ir"
 	"testing"
 	"time"
 )
@@ -41,5 +42,30 @@ func TestCounterWrap32(t *testing.T) {
 	c.Reset()
 	if _, ok := c.Observe(5, 32, t0.Add(2*time.Second)); ok {
 		t.Fatal("after Reset the next sample is a first sample")
+	}
+}
+
+func TestCounterFloat(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	var c Counter
+	if _, ok := c.ObserveFloat(10.25, t0); ok {
+		t.Fatal("first sample")
+	}
+	r, ok := c.ObserveFloat(12.75, t0.Add(10*time.Second))
+	if !ok || r != 0.25 {
+		t.Fatalf("rate = %v %v; the fraction must survive", r, ok)
+	}
+	if _, ok := c.ObserveFloat(1, t0.Add(20*time.Second)); ok {
+		t.Fatal("any decrease is a reset")
+	}
+	// Through a binding: a RawFloat counter uses the float path, a RawUint
+	// the wire-width one.
+	b := Binding{Rate: true}
+	f := field("X", ir.TypeReal)
+	c.Reset()
+	b.Apply(f, RawFloatVal(100.5), &c, t0)
+	v, ok, _ := b.Apply(f, RawFloatVal(101.5), &c, t0.Add(time.Second))
+	if !ok || v.F != 1 {
+		t.Fatalf("float rate = %+v %v", v, ok)
 	}
 }

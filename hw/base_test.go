@@ -559,3 +559,206 @@ END_PROGRAM`,
 		t.Fatalf("SW1_Port01.OperUp = %v", v)
 	}
 }
+
+// The fixes the protocol builders asked for (2026-09-26 review round).
+
+func TestBaseOnlineMemberAndRequests(t *testing.T) {
+	w := newFakeWire()
+	cfg := Config{
+		Kind:    "test",
+		Sources: []SourceConfig{{ID: "SW1", Interval: 20 * time.Millisecond, RetryMin: 10 * time.Millisecond, RetryMax: 20 * time.Millisecond, StaleAfter: 60 * time.Millisecond}},
+		Tags: []TagDecl{{Name: "SW1", Type: "Switch", Source: "SW1", Members: map[string]Binding{
+			"Name": {}, "PortsTotal": {Const: 28},
+		}}},
+		Poll: w.poll,
+	}
+	b, err := NewBase(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.set("SW1", DefaultClass, Result{Updates: []Update{{"SW1", "Name", ir.StringVal("sw1")}}, Requests: 7})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b.Start(ctx)
+	defer b.Stop()
+	w.waitPoll(t, "SW1/default")
+	w.waitPoll(t, "SW1/default")
+	vals, _ := b.ReadInputs()
+	sw := vals["SW1"].(ir.Value)
+	get := func(v ir.Value, m string) ir.Value { return v.Fld[v.Struct.FieldIndex[m]] }
+	if !get(sw, "Online").B || get(sw, "PortsTotal").I != 28 {
+		t.Fatalf("Switch = %+v", sw)
+	}
+	if h := b.Health(); h.Sources[0].Requests != 7 {
+		t.Fatalf("Requests = %d", h.Sources[0].Requests)
+	}
+	// The same value is handed out while nothing changed (no copy).
+	vals2, _ := b.ReadInputs()
+	if sw2 := vals2["SW1"].(ir.Value); &sw2.Fld[0] != &sw.Fld[0] {
+		t.Fatal("unchanged struct was copied between reads")
+	}
+	// The source goes silent: Online flips false, values hold.
+	w.setErr("SW1", DefaultClass, errors.New("timeout"))
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		vals, _ = b.ReadInputs()
+		if !get(vals["SW1"].(ir.Value), "Online").B {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	sw = vals["SW1"].(ir.Value)
+	if get(sw, "Online").B || get(sw, "Name").S != "sw1" || vals["SW1__Online"] != false {
+		t.Fatalf("after outage: %+v online=%v", sw, vals["SW1__Online"])
+	}
+	// A manifest that binds Online itself is left alone.
+	cfg.Tags[0].Members["Online"] = Binding{Const: true}
+	b2, err := NewBase(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b2.tags["SW1"].onlineIdx != -1 {
+		t.Fatal("a bound Online member must not be reconciled by Base")
+	}
+}
+
+func TestBaseBadBeforeFirstDelivery(t *testing.T) {
+	w := newFakeWire()
+	b, _ := NewBase(switchConfig(w))
+	// Port02's requests are refused from the very first poll: the source is
+	// fresh and answering, so the tag is Bad, not NotConnected.
+	w.set("SW1", DefaultClass, Result{Updates: up("SW1_Port01", true, true, 0), Bad: []string{"SW1_Port02"}})
+	w.set("SW1", "slow", Result{Bad: []string{"SW1_Port02"}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b.Start(ctx)
+	defer b.Stop()
+	w.waitPoll(t, "SW1/default")
+	w.waitPoll(t, "SW1/slow")
+	w.waitPoll(t, "SW1/default")
+	if q := b.Quality(); q["SW1_Port02"] != nio.Bad || q["SW1_Port01"] != nio.Good {
+		t.Fatalf("quality = %v", q)
+	}
+	if vals, _ := b.ReadInputs(); vals["SW1_Port02"] != nil {
+		t.Fatal("a never-delivered tag must not be handed out")
+	}
+}
+
+func TestBaseWriteKindNoWriteAndLatch(t *testing.T) {
+	w := newFakeWire()
+	var got []string
+	var mu sync.Mutex
+	write := func(ctx context.Context, source string, d WriteDecl, v ir.Value) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if v.Kind == ir.TypeInt && v.I == 0 {
+			return ErrNoWrite
+		}
+		if d.Name == "REFUSE_Cmd" {
+			return errors.New("refused")
+		}
+		got = append(got, fmt.Sprintf("%s=%v/%d", d.Name, v.Kind, v.I))
+		return nil
+	}
+	cfg := Config{
+		Kind:    "test",
+		Sources: []SourceConfig{{ID: "N1", Interval: 20 * time.Millisecond, RetryMin: 10 * time.Millisecond, RetryMax: 20 * time.Millisecond}},
+		Tags:    []TagDecl{{Name: "N1", Type: "Server", Source: "N1", Members: map[string]Binding{"PowerOn": {}}}},
+		Writes: []WriteDecl{
+			{Name: "N1_PowerCmd", Tag: "N1", Member: "PowerOn", Kind: ir.TypeInt},
+			{Name: "REFUSE_Cmd", Tag: "N1", Member: "PowerOn"},
+		},
+		Poll:  w.poll,
+		Write: write,
+	}
+	b, err := NewBase(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewBase(Config{Kind: "x", Sources: cfg.Sources, Tags: cfg.Tags, Poll: w.poll, Write: write,
+		Writes: []WriteDecl{{Name: "C", Tag: "N1", Member: "PowerOn", Kind: ir.TypeStruct}}}); err == nil {
+		t.Fatal("a non-scalar write kind must be refused")
+	}
+	w.set("N1", DefaultClass, Result{Updates: []Update{{"N1", "PowerOn", ir.BoolVal(true)}}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b.Start(ctx)
+	defer b.Stop()
+	w.waitPoll(t, "N1/default")
+	_ = b.WriteOutputs(nio.Values{"N1_PowerCmd": int64(0), "REFUSE_Cmd": false}) // baselines
+	_ = b.WriteOutputs(nio.Values{"N1_PowerCmd": int64(3)})                      // ForceOff, as an INT
+	_ = b.WriteOutputs(nio.Values{"N1_PowerCmd": int64(0)})                      // back to idle: nothing on the wire
+	_ = b.WriteOutputs(nio.Values{"REFUSE_Cmd": true})
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(got)
+		mu.Unlock()
+		if n >= 1 && b.Health().Sources[0].LastWriteError != "" {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	mu.Lock()
+	s := strings.Join(got, ",")
+	mu.Unlock()
+	if s != "N1_PowerCmd=INT/3" {
+		t.Fatalf("writes = %q (the INT must not be flattened to the member's BOOL)", s)
+	}
+	h := b.Health()
+	if h.Writes != 1 {
+		t.Fatalf("Writes = %d; ErrNoWrite must not count", h.Writes)
+	}
+	if !strings.Contains(h.Sources[0].LastWriteError, "refused") {
+		t.Fatalf("LastWriteError = %q", h.Sources[0].LastWriteError)
+	}
+	// The latch survives good polls and clears on the next accepted write.
+	w.waitPoll(t, "N1/default")
+	w.waitPoll(t, "N1/default")
+	if b.Health().Sources[0].LastWriteError == "" {
+		t.Fatal("a refused command must stay on the row across good polls")
+	}
+	_ = b.WriteOutputs(nio.Values{"N1_PowerCmd": int64(1)})
+	deadline = time.Now().Add(time.Second)
+	for b.Health().Sources[0].LastWriteError != "" && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if b.Health().Sources[0].LastWriteError != "" {
+		t.Fatal("an accepted command must clear the latch")
+	}
+}
+
+func TestBaseOnReconnect(t *testing.T) {
+	w := newFakeWire()
+	cfg := switchConfig(w)
+	cfg.Sources[0].Enable = "EN"
+	var mu sync.Mutex
+	var calls []string
+	cfg.OnReconnect = func(src string) { mu.Lock(); calls = append(calls, src); mu.Unlock() }
+	b, _ := NewBase(cfg)
+	w.set("SW1", DefaultClass, Result{Updates: up("SW1_Port01", true, true, 0)})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b.Start(ctx)
+	defer b.Stop()
+	deadline := time.Now().Add(time.Second)
+	for b.Health().Sources[0].State != "parked" && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	_ = b.WriteOutputs(nio.Values{"EN": true}) // parked → polling: one reconnect
+	w.waitPoll(t, "SW1/default")
+	_ = b.WriteOutputs(nio.Values{"EN": false})
+	deadline = time.Now().Add(time.Second)
+	for b.Health().Sources[0].State != "parked" && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	_ = b.WriteOutputs(nio.Values{"EN": true}) // second reconnect
+	w.waitPoll(t, "SW1/default")
+	w.waitPoll(t, "SW1/default") // steady polling: no more calls
+	mu.Lock()
+	n := len(calls)
+	mu.Unlock()
+	if n != 2 {
+		t.Fatalf("OnReconnect calls = %d, want 2", n)
+	}
+}

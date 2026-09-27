@@ -86,6 +86,11 @@ type WriteDecl struct {
 	Name   string
 	Tag    string
 	Member string
+	// Kind is the command tag's own IEC kind when it differs from the
+	// member it targets: a Server power command is an INT (0 none, 1 on,
+	// 2 graceful off, 3 force off, 4 restart) whose read-back is the BOOL
+	// PowerOn. TypeVoid (the zero value) means the target member's kind.
+	Kind ir.TypeKind
 }
 
 // Update is one member value that came back from a poll.
@@ -102,6 +107,10 @@ type Update struct {
 type Result struct {
 	Updates []Update
 	Bad     []string
+	// Requests is how many wire requests the poll cost (SNMP PDUs, HTTP
+	// GETs, one scrape) — summed per source onto the health row so a poll
+	// budget is measured, not guessed.
+	Requests int
 }
 
 // PollFunc fetches one scan class of one source. A non-nil error is a
@@ -109,8 +118,13 @@ type Result struct {
 // source's failure ladder; per-tag trouble goes in Result.Bad instead.
 type PollFunc func(ctx context.Context, source, class string) (Result, error)
 
-// WriteFunc performs one command on the wire.
+// WriteFunc performs one command on the wire. Returning ErrNoWrite says
+// the value called for nothing on the wire (a power command returning to
+// 0): not a failure, not counted as a write.
 type WriteFunc func(ctx context.Context, source string, w WriteDecl, v ir.Value) error
+
+// ErrNoWrite is a WriteFunc's "nothing to send" — see WriteFunc.
+var ErrNoWrite = errors.New("hw: nothing to write")
 
 // ClassAssignment maps glob patterns (over "Tag.Member" paths and bare tag
 // names) to a scan class; applied in order, the last match wins — exactly
@@ -131,6 +145,11 @@ type Config struct {
 	Assignments []ClassAssignment
 	Poll        PollFunc
 	Write       WriteFunc // nil when the driver has no writable bindings
+	// OnReconnect is called on the source's loop goroutine each time a
+	// source starts polling again after the error or parked state: the
+	// moment a protocol resets its counters, so no rate is computed across
+	// a gap it never observed.
+	OnReconnect func(source string)
 	Log         *slog.Logger
 	Now         func() time.Time // tests; nil = time.Now
 }
@@ -140,11 +159,12 @@ type Config struct {
 // it — either way the runtime sees one Driver with the modbus-shaped surface
 // (New never dials, Start polls, Stop waits).
 type Base struct {
-	kind  string
-	log   *slog.Logger
-	poll  PollFunc
-	write WriteFunc
-	now   func() time.Time
+	kind        string
+	log         *slog.Logger
+	poll        PollFunc
+	write       WriteFunc
+	onReconnect func(source string)
+	now         func() time.Time
 
 	sources  []*Source
 	bySource map[string]*Source
@@ -171,12 +191,21 @@ type tagRun struct {
 	classOf map[string]string // polled member → class
 	derived []derivedMember
 	initial ir.Value // zero-of-type with const members applied
+	// onlineIdx is the slot of an UNBOUND Online member (Server, Switch,
+	// PDU, UPS), which Base keeps equal to the source's freshness; -1 when
+	// the type has none or the manifest bound it to something on the wire.
+	onlineIdx int
 }
 
 type derivedMember struct {
 	idx   int
 	field Field
 	expr  *Expr
+}
+
+type queuedWrite struct {
+	name string
+	v    ir.Value
 }
 
 type writeRun struct {
@@ -211,9 +240,15 @@ type Source struct {
 	answered  bool // some poll succeeded since the last error state
 	failures  int  // consecutive failed polls
 	enabled   bool
-	pending   map[string]ir.Value // write outputs queued (last value per tag)
-	written   map[string]ir.Value // baseline / last value handed to Write
-	kick      chan struct{}
+	requests  map[string]int // last poll's request count per class
+	lastWrite error          // the last refused command, latched until one succeeds
+	// pending is the command queue, in order. Commands are rare and each
+	// change matters — a power command of 3 followed by its reset to 0 on
+	// the next scan must still send the 3 — so unlike modbus' last-value
+	// map every distinct change is delivered, in the order it was made.
+	pending []queuedWrite
+	written map[string]ir.Value // baseline / last value handed to Write
+	kick    chan struct{}
 }
 
 // NewBase validates the whole configuration offline and builds the driver
@@ -223,16 +258,17 @@ func NewBase(c Config) (*Base, error) {
 		return nil, errors.New("hw: Config.Poll is required")
 	}
 	b := &Base{
-		kind:     c.Kind,
-		log:      c.Log,
-		poll:     c.Poll,
-		write:    c.Write,
-		now:      c.Now,
-		bySource: map[string]*Source{},
-		tags:     map[string]*tagRun{},
-		writes:   map[string]*writeRun{},
-		enables:  map[string][]*Source{},
-		classes:  map[string][]string{},
+		kind:        c.Kind,
+		log:         c.Log,
+		poll:        c.Poll,
+		write:       c.Write,
+		onReconnect: c.OnReconnect,
+		now:         c.Now,
+		bySource:    map[string]*Source{},
+		tags:        map[string]*tagRun{},
+		writes:      map[string]*writeRun{},
+		enables:     map[string][]*Source{},
+		classes:     map[string][]string{},
 	}
 	if b.log == nil {
 		b.log = slog.Default()
@@ -296,8 +332,8 @@ func NewBase(c Config) (*Base, error) {
 			bad:       map[string]map[string]bool{},
 			state:     "connecting",
 			enabled:   sc.Enable == "",
-			pending:   map[string]ir.Value{},
 			written:   map[string]ir.Value{},
+			requests:  map[string]int{},
 			kick:      make(chan struct{}, 1),
 		}
 		b.sources = append(b.sources, s)
@@ -327,7 +363,12 @@ func NewBase(c Config) (*Base, error) {
 		}
 		initial, _ := Zero(td.Type)
 		initial.Fld = append([]ir.Value(nil), initial.Fld...)
-		t := &tagRun{decl: td, sd: StructDef(td.Type), src: src, classOf: map[string]string{}, initial: initial}
+		t := &tagRun{decl: td, sd: StructDef(td.Type), src: src, classOf: map[string]string{}, initial: initial, onlineIdx: -1}
+		if idx, _, ok := FieldOf(td.Type, "Online"); ok {
+			if _, bound := td.Members["Online"]; !bound {
+				t.onlineIdx = idx
+			}
+		}
 		members := make([]string, 0, len(td.Members))
 		for m := range td.Members {
 			members = append(members, m)
@@ -406,6 +447,14 @@ func NewBase(c Config) (*Base, error) {
 		_, f, ok := FieldOf(t.decl.Type, w.Member)
 		if !ok {
 			return nil, fmt.Errorf("%s: write %q: type %s has no member %q", b.kind, w.Name, t.decl.Type, w.Member)
+		}
+		if w.Kind != ir.TypeVoid {
+			switch w.Kind {
+			case ir.TypeBool, ir.TypeInt, ir.TypeReal, ir.TypeString:
+				f = Field{Name: w.Member, Kind: w.Kind}
+			default:
+				return nil, fmt.Errorf("%s: write %q: kind %s is not a scalar", b.kind, w.Name, w.Kind)
+			}
 		}
 		if b.write == nil {
 			return nil, fmt.Errorf("%s: write %q declared but the driver has no write path", b.kind, w.Name)
@@ -542,10 +591,21 @@ func (b *Base) ReadInputsInto(dst nio.Values) error {
 			lp = s.lastPoll.UnixMilli()
 		}
 		dst[LastPollTagName(s.cfg.ID)] = lp
+		fresh := dst[OnlineTagName(s.cfg.ID)].(bool)
 		for name, v := range s.values {
-			if s.delivered[name] {
-				dst[name] = v
+			if !s.delivered[name] {
+				continue
 			}
+			// An unbound Online member mirrors the source's freshness. It
+			// is reconciled here, lazily, and copy-on-write only when it
+			// flips — so the value handed to the store is unchanged (no
+			// generation bump) for as long as nothing changed.
+			if t := b.tags[name]; t.onlineIdx >= 0 && v.Fld[t.onlineIdx].B != fresh {
+				v.Fld = append([]ir.Value(nil), v.Fld...)
+				v.Fld[t.onlineIdx] = ir.BoolVal(fresh)
+				s.values[name] = v
+			}
+			dst[name] = v
 		}
 		s.mu.Unlock()
 	}
@@ -590,7 +650,16 @@ func (b *Base) Quality() map[string]nio.Quality {
 		for name := range s.values {
 			switch {
 			case !s.delivered[name]:
-				mark(name, nio.NotConnected)
+				// Never delivered — but a fresh source that is actively
+				// refusing this tag's requests (a noSuchInstance row, a
+				// 404 resource, a metric the exporter never carried) is
+				// Bad, not "not started": the connection is fine, this
+				// binding is not.
+				if fresh && s.badLocked(name) {
+					mark(name, nio.Bad)
+				} else {
+					mark(name, nio.NotConnected)
+				}
 			case !fresh:
 				mark(name, nio.Stale)
 			case s.badLocked(name):
@@ -655,7 +724,7 @@ func (b *Base) WriteOutputs(vals nio.Values) error {
 			continue
 		}
 		s.written[name] = v
-		s.pending[name] = v
+		s.pending = append(s.pending, queuedWrite{name, v})
 		s.mu.Unlock()
 		s.wake()
 	}
@@ -691,10 +760,11 @@ func (s *Source) wake() {
 func (b *Base) run(ctx context.Context, s *Source) {
 	backoff := s.cfg.RetryMin
 	prime := true
+	broke := false // the next prime follows an error or a park
 	for ctx.Err() == nil {
 		if !s.isEnabled() {
 			s.setState("parked", nil, b.now())
-			prime = true
+			prime, broke = true, true
 			select {
 			case <-ctx.Done():
 				return
@@ -708,6 +778,10 @@ func (b *Base) run(ctx context.Context, s *Source) {
 				c.next = now
 			}
 			prime = false
+			if broke && b.onReconnect != nil {
+				b.onReconnect(s.cfg.ID)
+			}
+			broke = false
 		}
 		failed := false
 		for _, c := range s.classes {
@@ -744,6 +818,7 @@ func (b *Base) run(ctx context.Context, s *Source) {
 			s.answered = true
 			s.lastPoll = done
 			s.lastErr = nil
+			s.requests[c.name] = res.Requests
 			if s.rttMs == 0 {
 				s.rttMs = float64(rtt.Milliseconds())
 			} else {
@@ -773,7 +848,7 @@ func (b *Base) run(ctx context.Context, s *Source) {
 			if backoff *= 2; backoff > s.cfg.RetryMax {
 				backoff = s.cfg.RetryMax
 			}
-			prime = true
+			prime, broke = true, true
 			continue
 		}
 		b.flushWrites(ctx, s)
@@ -892,27 +967,28 @@ func (b *Base) flushWrites(ctx context.Context, s *Source) {
 		s.mu.Unlock()
 		return
 	}
-	batch := make(map[string]ir.Value, len(s.pending))
-	for k, v := range s.pending {
-		batch[k] = v
-	}
-	s.pending = map[string]ir.Value{}
+	batch := s.pending
+	s.pending = nil
 	s.mu.Unlock()
-	names := make([]string, 0, len(batch))
-	for k := range batch {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	for _, name := range names {
+	for _, q := range batch {
+		name := q.name
 		w := b.writes[name]
-		if err := b.write(ctx, s.cfg.ID, w.decl, batch[name]); err != nil {
+		err := b.write(ctx, s.cfg.ID, w.decl, q.v)
+		if errors.Is(err, ErrNoWrite) {
+			continue
+		}
+		if err != nil {
 			b.errs.Add(1)
 			s.mu.Lock()
 			s.lastErr = fmt.Errorf("write %s: %w", name, err)
+			s.lastWrite = s.lastErr
 			s.mu.Unlock()
 			b.log.Warn(b.kind+": write failed", "source", s.cfg.ID, "tag", name, "error", err)
 			continue
 		}
+		s.mu.Lock()
+		s.lastWrite = nil
+		s.mu.Unlock()
 		b.writesN.Add(1)
 	}
 }
@@ -957,15 +1033,20 @@ type SourceHealth struct {
 	State string `json:"state"` // connected | connecting | error | parked
 	// Fresh is the __Online verdict: connected and heard from within
 	// StaleAfter. A connected-but-silent source is the case it separates.
-	Fresh        bool    `json:"fresh"`
-	SinceMs      int64   `json:"sinceMs"`
-	LastError    string  `json:"lastError,omitempty"`
-	Retries      uint64  `json:"retries"`
-	RTTMs        float64 `json:"rttMs"`
-	LastPollMs   int64   `json:"lastPollMs"`
-	Tags         int     `json:"tags"`
-	BadTags      int     `json:"badTags"`
-	QueuedWrites int     `json:"queuedWrites"`
+	Fresh      bool    `json:"fresh"`
+	SinceMs    int64   `json:"sinceMs"`
+	LastError  string  `json:"lastError,omitempty"`
+	Retries    uint64  `json:"retries"`
+	RTTMs      float64 `json:"rttMs"`
+	LastPollMs int64   `json:"lastPollMs"`
+	Requests   int     `json:"requests"` // wire requests in the last poll, all classes
+	// LastWriteError is the last refused command, latched until a later
+	// command succeeds — LastError is cleared by the next good poll, which
+	// on a 10 s interval would make a refusal vanish before anyone read it.
+	LastWriteError string `json:"lastWriteError,omitempty"`
+	Tags           int    `json:"tags"`
+	BadTags        int    `json:"badTags"`
+	QueuedWrites   int    `json:"queuedWrites"`
 }
 
 // Health returns the current per-source states and counters.
@@ -990,6 +1071,12 @@ func (b *Base) Health() Health {
 		}
 		if s.lastErr != nil {
 			row.LastError = s.lastErr.Error()
+		}
+		if s.lastWrite != nil {
+			row.LastWriteError = s.lastWrite.Error()
+		}
+		for _, n := range s.requests {
+			row.Requests += n
 		}
 		for name := range s.bad {
 			if s.badLocked(name) {

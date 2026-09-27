@@ -184,30 +184,39 @@ func (b Binding) Apply(f Field, raw Raw, c *Counter, now time.Time) (v ir.Value,
 		if !isRaw {
 			return ir.Value{}, false, fmt.Errorf("member %s: rate: over a mapped value", f.Name)
 		}
-		var u uint64
-		switch r.Kind {
-		case RawUint:
-			u = r.U
-		case RawInt:
-			if r.I < 0 {
-				return ir.Value{}, false, fmt.Errorf("member %s: rate: negative counter %d", f.Name, r.I)
-			}
-			u = uint64(r.I)
-		default: // a float, or a counter that arrived as text
-			fv, ok := r.float()
-			if !ok || fv < 0 || fv > math.MaxUint64 {
-				return ir.Value{}, false, fmt.Errorf("member %s: rate: counter %q is not a non-negative number", f.Name, r.Key())
-			}
-			u = uint64(fv)
-		}
 		if c == nil {
 			return ir.Value{}, false, fmt.Errorf("member %s: rate: no counter state", f.Name)
 		}
-		width := b.Width
-		if width == 0 {
-			width = 64
+		var rate float64
+		var ok bool
+		switch r.Kind {
+		case RawUint, RawInt:
+			// A wire-width register: wraps at Width, resets past it.
+			var u uint64
+			if r.Kind == RawUint {
+				u = r.U
+			} else {
+				if r.I < 0 {
+					return ir.Value{}, false, fmt.Errorf("member %s: rate: negative counter %d", f.Name, r.I)
+				}
+				u = uint64(r.I)
+			}
+			width := b.Width
+			if width == 0 {
+				width = 64
+			}
+			rate, ok = c.Observe(u, width, now)
+		default:
+			// A float, or a counter that arrived as text (an exposition
+			// format): no width, no wrap, any decrease is a reset, and the
+			// fraction is kept — truncating a seconds accumulator would
+			// throw away up to a second per sample.
+			fv, isNum := r.float()
+			if !isNum || fv < 0 {
+				return ir.Value{}, false, fmt.Errorf("member %s: rate: counter %q is not a non-negative number", f.Name, r.Key())
+			}
+			rate, ok = c.ObserveFloat(fv, now)
 		}
-		rate, ok := c.Observe(u, width, now)
 		if !ok {
 			return ir.Value{}, false, nil
 		}

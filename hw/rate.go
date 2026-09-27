@@ -14,9 +14,10 @@ import "time"
 // rebooted or the exporter restarted — and no honest rate exists for that
 // interval: Observe reports ok=false and the caller keeps the last rate.
 type Counter struct {
-	seen bool
-	last uint64
-	at   time.Time
+	seen  bool
+	last  uint64
+	lastF float64
+	at    time.Time
 }
 
 // Observe records one sample and returns the rate since the previous one.
@@ -40,6 +41,22 @@ func (c *Counter) Observe(v uint64, width int, now time.Time) (rate float64, ok 
 		return 0, false // 64-bit went backwards: a reset, not a wrap
 	}
 	return delta / dt, true
+}
+
+// ObserveFloat is Observe for a counter that is already a float with no
+// wire width — a Prometheus *_total, an accumulator of fractional seconds.
+// Such a counter never wraps; the ecosystem rule is that ANY decrease means
+// the process or exporter restarted, so a step backwards is a reset.
+func (c *Counter) ObserveFloat(v float64, now time.Time) (rate float64, ok bool) {
+	defer func() { c.seen, c.lastF, c.at = true, v, now }()
+	if !c.seen {
+		return 0, false
+	}
+	dt := now.Sub(c.at).Seconds()
+	if dt <= 0 || v < c.lastF {
+		return 0, false
+	}
+	return (v - c.lastF) / dt, true
 }
 
 // Reset forgets the previous sample — a source that reconnected after an

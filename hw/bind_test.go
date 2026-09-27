@@ -64,13 +64,17 @@ func TestBindingRate(t *testing.T) {
 	if err != nil || !ok || v.F != 800 {
 		t.Fatalf("rate = %+v ok=%v err=%v; want 800 bit/s", v, ok, err)
 	}
-	// A string counter off a text exposition format is fine too.
+	// A counter off a text exposition format is a float counter: no width,
+	// no wrap, a decrease is a reset.
 	c.Reset()
 	b32 := Binding{Rate: true, Width: 32}
 	b32.Apply(f, RawStringVal("4294967000"), &c, t0)
-	v, ok, _ = b32.Apply(f, RawStringVal("200"), &c, t0.Add(time.Second))
-	if !ok || v.F != 496 {
-		t.Fatalf("32-bit wrap from strings: %+v %v", v, ok)
+	if _, ok, _ := b32.Apply(f, RawStringVal("200"), &c, t0.Add(time.Second)); ok {
+		t.Fatal("a text counter stepping backwards is a reset, not a wrap")
+	}
+	v, ok, _ = b32.Apply(f, RawStringVal("200.5"), &c, t0.Add(2*time.Second))
+	if !ok || v.F != 0.5 {
+		t.Fatalf("text counter rate = %+v %v", v, ok)
 	}
 	if _, _, err := b.Apply(f, RawIntVal(-1), &c, t0); err == nil {
 		t.Fatal("negative counter must error")
