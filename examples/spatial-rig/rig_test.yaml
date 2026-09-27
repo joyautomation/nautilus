@@ -27,6 +27,20 @@ tests:
       - advance: 2s
         alarms: { active: ["XV101.Fault"] }
 
+  - name: the standby skid takes over when the duty pump faults
+    # The drain valve starts at its command, so its stroke does not raise
+    # the position alarm on the way.
+    given: { Demand: 90.0, XV101.Pos: 90.0 }
+    steps:
+      - advance: 6s
+        expect: { SK101.Pump.Running: true, SK102.Pump.Run: false }
+      - given: { InjectPumpFault: true }
+        advance: 1s
+        expect: { SK101.Pump.Running: false, SK101.Fault: true, SK102.Pump.Running: true }
+        alarms: { active: ["P101.Fault"] }
+      - advance: 3s
+        alarms: { active: ["P101.Fault", "SK101.Fault"] }
+
   - name: the process keeps cycling on its own
     # With the sim running, level stays inside the pump's band plus margin.
     advance: 600s

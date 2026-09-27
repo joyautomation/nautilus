@@ -5,6 +5,8 @@ VAR_EXTERNAL
     T101 : Tank;
     P101 : Motor;
     XV101 : Valve;
+    SK101 : Skid;
+    SK102 : Skid;
     Demand : REAL;
     StartLevel : REAL;
     StopLevel : REAL;
@@ -31,4 +33,21 @@ XV101.Fault := ABS(XV101.Cmd - XV101.Pos) > 10.0;
 
 T101.HH := T101.Level > LevelHH;
 T101.LL := T101.Level < LevelLL;
+
+(* transfer skids: the duty skid runs while the drain passes flow, its valve
+   opens with its pump; the standby takes over when the duty pump faults *)
+SK101.Pump.Run := XV101.Pos > 5.0 AND NOT SK101.Pump.Fault;
+SK102.Pump.Run := XV101.Pos > 5.0 AND SK101.Pump.Fault AND NOT SK102.Pump.Fault;
+IF SK101.Pump.Run THEN
+    SK101.Valve.Cmd := 100.0;
+ELSE
+    SK101.Valve.Cmd := 0.0;
+END_IF;
+IF SK102.Pump.Run THEN
+    SK102.Valve.Cmd := 100.0;
+ELSE
+    SK102.Valve.Cmd := 0.0;
+END_IF;
+SK101.Fault := SK101.Pump.Fault;
+SK102.Fault := SK102.Pump.Fault;
 END_PROGRAM

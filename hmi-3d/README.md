@@ -169,26 +169,115 @@ node's struct:
   name; `naut check` holds every node to that, and checks the files exist.
   A drive naming a mesh the model lacks is a console warning.
 
-### A kind as a component
+### A kind as a component file
 
-The escape hatch for behaviour the vocabulary cannot express — extend the
-registry; nothing in the renderer names a kind:
+The other front door (design §3d): a Svelte file defines the kind, the
+document names it, and the same node is checked, listed and placed like
+any other:
 
-```ts
-import { builtinRegistry, type NodeKindDef, type NodeProps } from '@joyautomation/nautilus-hmi-3d';
-import Switch3D from '$lib/Switch3D.svelte';
-
-const switchKind: NodeKindDef = {
-	component: Switch3D as Component<NodeProps>,
-	bounds: { size: [0.45, 0.05, 0.3], center: [0, 0.025, 0] },
-	labelAt: [0, 0.1, 0],
-	status: (v, good) => (good ? `${(v as { PortsUp?: number })?.PortsUp ?? 0} up` : 'stale')
-};
-<SceneView {doc} {rt} {alarms} registry={{ ...builtinRegistry, switch: switchKind }} />
+```json
+"kinds": { "skid": { "type": "Skid", "members": ["Pump", "Valve", "Fault"], "component": "hmi/src/lib/Skid.svelte" } }
 ```
 
-A kind's component receives `value` (the struct), `good`, `label`,
-`selected`, then the node's static `props` and resolved `bind` props.
+```svelte
+<!-- hmi/src/lib/Skid.svelte -->
+<script lang="ts" module>
+	import { member, type KindMeta } from '@joyautomation/nautilus-hmi-3d';
+	export const kind: KindMeta = {
+		type: 'Skid', members: ['Pump', 'Valve', 'Fault'],
+		bounds: { size: [0.8, 0.36, 0.26], center: [0.2, 0.15, 0] }, labelAt: [0.2, 0.36, 0],
+		status: (v, good) => (good ? (member(v, 'Fault') ? 'FAULT' : 'ok') : 'stale')
+	};
+</script>
+<script lang="ts">
+	import { Node, Pipe, type NodeProps } from '@joyautomation/nautilus-hmi-3d';
+	let { value, good }: NodeProps = $props();
+</script>
+<Node tag="Pump" kind="pump" pos={[0, 0.06, 0]} />
+<Node tag="Valve" kind="valve" pos={[0.5, 0.2, 0]} rot={[0, 0, -90]} />
+<Pipe points={[[0.1, 0.16, 0], [0.1, 0.2, 0], [0.42, 0.2, 0]]} flowing="Pump.Running" />
+```
+
+- The file's default export is the component (it receives `NodeProps`);
+  its `<script module>` exports **`kind`** — `type`, `members`, `bounds`,
+  `labelAt`, `status`, `panel` — which is also how tooling recognises a
+  kind's file.
+- `component` is a **source path relative to the scene file** (the
+  project root), not a URL path: nobody serves it. The app builds it like
+  any of its components; the page hands `SceneView` the modules Vite found
+  and the view pairs each path with its module:
+
+```svelte
+<SceneView {doc} {rt} {alarms} modules={import.meta.glob('/src/**/*.svelte', { eager: true })} />
+```
+
+- `naut check` sees the file and holds the kind's nodes to `type` and
+  `members` as declared in the document (it never runs Svelte); the view
+  holds the document to the export the other way: a member the export
+  reads that the document does not list is an error in the scene's error
+  list. The VS Code extension lists the kind in the palette and, in the
+  editor, draws it as its `bounds` box.
+- Without `kinds` in the document — an app that simply registers a kind —
+  `kindOf(Skid, kind)` makes the registry entry:
+  `registry={{ ...builtinRegistry, skid: kindOf(Skid, kind) }}`.
+
+### An assembly: a kind made of kinds
+
+The composition primitive in both worlds. In the document, parts and
+pipes sit in the kind's own frame, and a part's `tag` is a **member of
+the assembly's struct** — the UDT nests (`Skid.Pump : Motor`), the placed
+node binds one tag, and the parts read `SK101.Pump`, `SK101.Valve`:
+
+```json
+"skid-data": {
+	"type": "Skid", "members": ["Fault"], "status": "{Fault?FAULT:ok}",
+	"assembly": {
+		"nodes": [
+			{ "id": "pump",  "kind": "pump",  "tag": "Pump",  "pos": [0, 0.06, 0] },
+			{ "id": "valve", "kind": "valve", "tag": "Valve", "pos": [0.5, 0.2, 0], "rot": [0, 0, -90] }
+		],
+		"pipes": [{ "points": [[0.1, 0.16, 0], [0.42, 0.2, 0]], "bind": { "flowing": "Pump.Running" } }]
+	}
+}
+```
+
+That nesting is the whole parameter mechanism: no templates, no string
+prefixes, no conditionals. A project with flat tags supplies a part on
+the placed node (`"bind": { "pump": "P101" }`), the same escape hatch a
+member has always had. Parts are parts: no label unless given, no halo,
+and a click on one picks the placed node. Parts are built-in, data or
+component kinds, never assemblies. `naut check` holds `SK101` to `Skid`
+and each part's member to the part kind's UDT. In Svelte the same
+assembly is `Skid.svelte` above: a `<Node>` inside a component that
+defines a kind is a part, reading a member of that node's struct.
+
+## Composing a scene in Svelte
+
+A scene can also be written the way a SvelteKit page is written, with
+the same components a document renders through (design §3d):
+
+```svelte
+<SceneView {rt} {alarms} camera={{ pos: [2.2, 1.6, 2.6], target: [0.9, 0.1, 0] }}>
+	<Fixture3D fixture={{ kind: 'box', pos: [0.35, -0.01, 0.1], size: [0.9, 0.02, 0.6] }} />
+	<Node id="T101" tag="T101" kind="tank" label="T-101" pos={[1.0, -0.75, 0.4]} />
+	<Node id="XV101" tag="XV101" kind="valve" pos={[1.8, 0.85, 0]} bind={{ cmd: 'Demand' }} />
+	<Pipe points={[[0.46, 0.08, 0.2], [1.0, 0.08, 0.4]]} flowing="P101.Running" />
+	<Node id="P101" tag="P101" label="P-101" pos={[0.3, 0, 0.2]}>
+		{#snippet children(p)}<Pump3D {...p} />{/snippet}
+	</Node>
+</SceneView>
+```
+
+`<Node>` is the document's node object as a component, prop for prop; it
+resolves the value and quality, applies `bind`, and wraps what it renders
+in the label, halo and selection box. With `kind` it renders the
+registry's kind; with children, the snippet receives `NodeProps`. `<Pipe>`
+takes a ref. `SceneView` (or `Scene3D`, inside your own `<Canvas>`) takes
+a `doc`, children, or both — the example's `/composed` route keeps the
+document's `kinds` and `environment` (they are data) and writes its nodes
+by hand. What a hand-written node gives up is the tools' half: `naut
+check`, `naut scene init`, the palette, drag-to-place and AR anchors all
+read the document.
 
 ## Surroundings and the look
 

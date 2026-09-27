@@ -87,8 +87,8 @@ acked (from the dashboard's alarm list).
 
 ### Nobody types a scene
 
-`rig.scene.json` was written by hand for the spike, but a new project
-starts from the manifest instead:
+`rig.scene.json` was written by hand for the spike (the skids were added
+by hand too), but a new project starts from the manifest instead:
 
 ```sh
 naut scene init .          # one node per struct tag a kind can draw, on a grid
@@ -109,6 +109,28 @@ a Sparkplug Template or a Logix UDT arrives in. `bind` adds explicit props
 in the mimic's grammar with dotted paths: the valve's `"cmd": "Demand"`
 reads the operator setpoint, and a pipe's `"flowing": "P101.Running"`
 animates it. See the package README for the document format.
+
+### The same skid written twice
+
+Two transfer skids sit on the floor beside the desk (simulated, not
+props): a duty/standby pair, each **one struct tag** of the `Skid` UDT in
+`types.st`, which nests a `Motor` and a `Valve`. They are the same
+equipment defined both ways (design §3d), and a real project keeps one:
+
+- **SK-101** is `hmi/src/lib/Skid.svelte`, a component file the scene
+  names under `kinds.skid.component`. Its parts are `<Node>`s reading
+  `Pump` and `Valve` off the skid's struct; its frame is plain Threlte.
+- **SK-102** is `kinds.skid-data`, a JSON assembly: the same parts and
+  pipes as data, no app code, drawable by the editor.
+
+`naut check` holds both nodes to the `Skid` UDT and each part's member to
+the part's own UDT (`Skid.Pump` is a `Motor`). Inject the pump fault and
+the duty skid trips, the standby takes over, and the skid's own `Fault`
+bit raises its alarm — a halo on one node.
+
+`/composed` is the rig again, hand-written in Svelte: every node a
+`<Node>` in the page, the Skid component used as a component, and the
+document's `kinds` and `environment` imported because those are data.
 
 ## The physical side
 

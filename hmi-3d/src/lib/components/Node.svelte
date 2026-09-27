@@ -36,6 +36,7 @@
 		scale = 1,
 		props,
 		bind,
+		status,
 		children
 	}: {
 		id?: string;
@@ -47,6 +48,9 @@
 		scale?: number;
 		props?: Record<string, unknown>;
 		bind?: Record<string, string>;
+		/** The label's value text when there is no kind to supply it (a
+		 * component used as a component: pass its `kind` export's status). */
+		status?: (value: unknown, good: boolean) => string;
 		/** Render anything with the node's props instead of the kind's component. */
 		children?: Snippet<[NodeProps]>;
 	} = $props();
@@ -141,7 +145,7 @@
 			</T.Mesh>
 		{/if}
 		{#if title}
-			<Label at={labelAt} title={title} value={def?.status?.(value, good) ?? ''} {good} />
+			<Label at={labelAt} title={title} value={(status ?? def?.status)?.(value, good) ?? ''} {good} />
 		{/if}
 	</T.Group>
 {/if}

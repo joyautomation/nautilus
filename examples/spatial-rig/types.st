@@ -25,4 +25,14 @@ TYPE
     Pos    : REAL;  (* % open feedback *)
     Fault  : BOOL;  (* position disagrees with command *)
   END_STRUCT;
+
+  (* A UDT of UDTs: a transfer skid is a pump and a valve. The 3D scene's
+     assembly kind binds one Skid tag and its parts read the members
+     (SK101.Pump, SK101.Valve) — docs/design/spatial-hmi.md §3d. Fault is
+     the skid's own bit, because alarm rules match one level of members. *)
+  Skid : STRUCT
+    Pump  : Motor;
+    Valve : Valve;
+    Fault : BOOL;
+  END_STRUCT;
 END_TYPE
