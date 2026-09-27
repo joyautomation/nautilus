@@ -86,7 +86,8 @@ func WithFetcher(f Fetcher) Option { return func(d *Driver) { d.fetch = f } }
 // hw/doc.go for the split: Base owns the poll loop and snapshots, this file
 // owns fetching a body and turning it into hw.Updates.
 type Driver struct {
-	base *hw.Base
+	manifest Manifest
+	base     *hw.Base
 
 	scanRate    time.Duration
 	classRates  map[string]time.Duration
@@ -103,10 +104,13 @@ type Driver struct {
 	classOf map[string]string
 }
 
+// Warnings are the manifest's non-fatal findings (an unset credential
+// variable, a missing file) for `naut check`.
+func (d *Driver) Warnings() []string { return d.manifest.Warnings() }
+
 // sourceRuntime is one source's resolved transport settings plus its own
-// rate-counter store and "was the last poll of each class down" tracking —
-// see rate.go for why prom keeps float64 counters instead of hw.Counter,
-// and the doc comment on resetIfReconnected below for the reconnect rule.
+// rate-counter store (hw.Counter's float form) and "was the last poll of
+// each class down" tracking — see resetIfReconnected below.
 type sourceRuntime struct {
 	cfg     Source
 	headers map[string]string
@@ -142,6 +146,7 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 		return nil, err
 	}
 	d := &Driver{
+		manifest:   m,
 		scanRate:   defaultInterval,
 		classRates: map[string]time.Duration{},
 		log:        slog.Default(),

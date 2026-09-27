@@ -133,6 +133,10 @@ type memberPlan struct {
 	path        *Path
 }
 
+// Warnings are the manifest's non-fatal findings (unset credential
+// variables, TLS verification off) for `naut check`.
+func (d *Driver) Warnings() []string { return d.m.Warnings() }
+
 // New validates the manifest offline and builds the driver. It never dials.
 func New(m Manifest, opts ...Option) (*Driver, error) {
 	d := &Driver{
