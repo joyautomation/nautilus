@@ -603,23 +603,39 @@ the `Down` alarm arriving (phone on the switch, screen on the alarm table);
 phone photos of the switch and cabling while working. Any bug the foreign
 tests catch is a war-story beat: write it down when it happens. Ideas:
 **N-60** ("Your server rack is just another PLC"), part of N-59. Office and
-home hardware only — nothing from GB.
+home hardware freely; the customer cluster captured now and anonymised
+before publishing (§12.3).
 
 ## 12. Risks & open questions
 
 1. **FS S3900 vendor MIB.** IF-MIB gives ports; CPU/memory/temperature/PSU
-   need FS's private MIB (Broadcom-based `1.3.6.1.4.1.52642`?). Confirm on
-   the bench with `browse`; if absent, `Switch.CpuPct/MemPct/TempC` stay 0
-   on that model and the doc says so. Also confirm SNMP is enabled, which
-   version, and the management address — **unknown as of 2026-09-26.**
+   would need FS's private MIB (enterprise `1.3.6.1.4.1.52642`). A read-only
+   walk of one S3900 on FSOS 2.2.0F found `.3507.1.1` (version string,
+   serial, hardware revision), `.3507.1.2` (four integers that look like
+   memory total/used/free/percent — unconfirmed) and `.9.225.1` (model,
+   serial, MAC, version), and no CPU, temperature, PSU or fan objects;
+   without FS's MIB pack `Switch.CpuPct/MemPct/TempC` stay 0 on that model.
+   SNMP on FSOS: v3 authPriv works with SHA-256 + AES-128
+   (`snmp-server view V 1.3.6.1 included` / `group G v3 priv read V` /
+   `user U G v3 priv aes128 auth sha256 <priv> <auth>`, priv password
+   first). Live targets: the only S3900s cabled today are the customer
+   cluster's three (read-only polling, no cable pulls); spare Joy-owned
+   S3900s are on the shelf for the cable-pull capture once one is racked.
 2. **CyberPower MIBs.** The PDU41001 and OR1500PFCRT2U are not in the office
    yet (BOM, 09-23). Profiles are written from the published CPS-MIB and
    RFC 1628 and verified against recorded walks when the hardware arrives;
    until then their foreign tests use walks from public sources, marked so.
-3. **Redfish with no BMC in the office.** The Rev E boards have none; GB's
-   Supermicro BMCs are off limits. The Redfish driver ships verified only
-   against DMTF mockups. State it in the guide; the first customer BMC run
-   is a follow-up, like modbus' real-device checklist was.
+3. **Redfish real hardware = a customer cluster's BMCs, read-only.** The
+   Rev E boards have none, so the real target is a cluster being built in
+   the office: three Supermicro X14SBW-F boards with OpenBMC-based BMC
+   firmware 01.06.07.00, whose Redfish trees were recorded read-only before
+   power-on. Rules: **polling is read-only** — no power or reset writes,
+   ever, on a customer's production system; fixtures derived from the
+   recordings are **sanitised** (serials, UUIDs, MACs, hostnames, IPs and
+   any customer name replaced); the live run uses the BMCs' read-only
+   monitoring user, supplied as an env var from the integrator's session.
+   Anything captured is anonymised before it is published, and photos of
+   that rack are decided per shot under `content/sourcing.md`.
 4. **BMC polling budget.** A Supermicro BMC answers `Thermal` in ~1s and
    rate-limits sessions; 10s default, one session per source, `Retries`
    cheap. Record measured RTTs per BMC family in the guide as they appear.
