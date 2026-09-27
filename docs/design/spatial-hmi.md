@@ -2,7 +2,9 @@
 
 Status: **Milestone 1 built** on the `spatial-hmi` branch, PR #65 (2026-09-26);
 the panel-PC measurement is the one exit criterion still open. **Milestone 2
-item 1 (kinds as data, surroundings) in progress** on `spatial-kinds`, §3c.
+item 1 (kinds as data, surroundings)** on `spatial-kinds`, PR #66, §3c;
+**item 1b (components define, documents place) in progress** on
+`spatial-components`, §3d.
 The R&D plan, device research and the office-rig spike this ports live in
 `~/Development/joyautomation/randd/` (`spatial-hmi.md`,
 `spatial-hmi-devices.md`, `spatial-rig/`); this brief is the repo's record of
@@ -45,13 +47,17 @@ hmi-3d/
     scene.ts              SceneDoc types, validateScene(), sceneTags()      (pure)
     bindings.ts           the binding grammar: resolveNodeBindings(), refRoot() (pure)
     alarms.ts             worstAlarmByAsset(): alarm instances → per-node worst  (pure)
-    registry.ts           NodeKindDef, NodeRegistry, builtinRegistry, registryFor()
+    registry.ts           NodeKindDef, NodeRegistry, builtinRegistry, registryFor(),
+                          KindMeta, kindOf(), componentRegistry(), assemblyBounds()  (§3d)
+    context.ts            the scene and node contexts <Node> reads             (§3d)
     drives.ts             data kinds: the drive vocabulary, evaluated from the doc  (pure)
     palette.ts            colours read from the kit's theme tokens, with fallbacks
     perf.ts               fps + ts→pixel latency sampling                    (pure-ish)
     components/
       SceneView.svelte    the whole view: <Canvas>, Scene3D, HUD, inspector drawer
-      Scene3D.svelte      renders a SceneDoc inside a Threlte <Canvas>
+      Scene3D.svelte      renders a SceneDoc and/or children inside a Threlte <Canvas>
+      Node.svelte         the document's node as a component; parts inside parts (§3d)
+      Pipe.svelte         a pipe by ref (`flowing="P101.Running"`)               (§3d)
       AssetDrawer.svelte  click-to-inspect: the kit's 2D faceplate, members, quality, alarms
       PerfHud.svelte      the measurement HUD (fps, p95 ts→pixel), opt-in
       Tank3D.svelte  Pump3D.svelte  Valve3D.svelte   the built-in kinds
@@ -72,6 +78,7 @@ Public API (`index.ts`):
 ```ts
 // Components
 export { SceneView, Scene3D, AssetDrawer, PerfHud, Halo, Label, Pipe3D, Tank3D, Pump3D, Valve3D };
+export { Node, Pipe, Fixture3D };                       // Svelte authoring (§3d)
 // Scene document
 export type { SceneDoc, SceneNode, ScenePipe, SceneFixture, SceneCamera, Vec3 };
 export { validateScene, sceneTags };                 // pure: validation + the ?tags= list
@@ -81,6 +88,8 @@ export { resolveNodeBindings, refRoot, member, num, flowing };
 // Registry
 export type { NodeKindDef, NodeProps, NodeRegistry };
 export { builtinRegistry, registryFor, BUILTIN_CONTRACT };
+export type { KindMeta, SceneAssembly };                // components define, documents place (§3d)
+export { kindOf, componentRegistry, matchModule, assemblyBounds, assemblyMembers };
 // Kinds as data (§3c): the drive vocabulary, evaluated from the document
 export { DRIVE_CHANNELS, evalDrives, driveMembers, validateDrives, formatStatus, kindMembers };
 export type { Drive, MeshState, SceneEnvironment, SceneTexture };
@@ -115,7 +124,7 @@ type Vec3 = [number, number, number];
 
 interface SceneDoc {
   name?: string;
-  /** Kind contracts and data kinds (§3b, §3c). */
+  /** Kind contracts, data kinds, component kinds and assemblies (§3b, §3c, §3d). */
   kinds?: Record<string, SceneKind>;
   /** The surroundings: an HDRI and shadows (§3c). Absent = the flat look. */
   environment?: SceneEnvironment;
@@ -617,11 +626,16 @@ type NodeRegistry = Record<string, NodeKindDef>;
 export const builtinRegistry: NodeRegistry = { tank, pump, valve };
 ```
 
-An app extends by spreading: `registry={{ ...builtinRegistry, server, switch, 'switch-port': port }}`.
+An app extends by spreading: `registry={{ ...builtinRegistry, server, switch, 'switch-port': port }}`,
+or, for a component kind (§3d), by `kindOf(Skid, kind)` — or by handing
+`SceneView` its Vite modules and letting `componentRegistry(doc, modules)`
+do that for every `kinds` entry with a `component`.
 `registryFor(doc, registry)` then lays the document's data kinds (§3c) on
 top: a kind with a `model` becomes a `GltfNode` entry whose bounds are
 `'auto'` until the model reports them, and it inherits `status`/`panel`
-from the registry entry of the same name if there is one.
+from the registry entry of the same name if there is one; a kind with an
+`assembly` becomes an entry with no component and the assembly, which
+`<Node>` renders as parts (§3d).
 Nothing in `Scene3D` names a kind; it looks every node up. That is how the
 IT-hardware kinds from the drivers session (`it-drivers` branch,
 `docs/design/it-drivers.md`) arrive without touching the core, and the
@@ -701,16 +715,26 @@ the hardware, and until then the ≥ 30 fps target is unverified.
 The office rig from `randd/spatial-rig/`, unchanged on the controller side:
 
 ```
-nautilus.yaml    3 struct tags (T101 Tank, P101 Motor, XV101 Valve), setpoints,
-                 fault-injection switches, 4 alarm rules, server.hmi: hmi/build
-types.st         the Tank / Motor / Valve UDTs — the contract a scene binds to
-control.st       pump seal-in on level, valve follows demand, limit bits
+nautilus.yaml    5 struct tags (T101 Tank, P101 Motor, XV101 Valve, SK101/SK102 Skid),
+                 setpoints, fault-injection switches, 5 alarm rules, server.hmi: hmi/build
+types.st         the Tank / Motor / Valve UDTs — the contract a scene binds to —
+                 and Skid, a UDT of UDTs (item 1b's assembly)
+control.st       pump seal-in on level, valve follows demand, limit bits,
+                 the duty/standby transfer skids
 sim.st           the process, plus fault injection
-rig_test.yaml    4 acceptance tests, virtual time (naut test)
+rig_test.yaml    5 acceptance tests, virtual time (naut test)
 assets.yaml      marker id → asset → tag, surveyed positions (AR, later)
-rig.scene.json   the scene: 3 nodes, 2 pipes, fixtures, camera
-hmi/             SvelteKit app: +page.svelte is the §1 snippet
+rig.scene.json   the scene: 3 props, 2 skids (one a component kind, one a data
+                 assembly — the same skid written twice, §3d), 2 pipes, fixtures, camera
+hmi/             SvelteKit app: +page.svelte is the §1 snippet; /composed is the
+                 same rig hand-written in Svelte (§3d); src/lib/Skid.svelte the kind
 ```
+
+The two skids are simulated, not props: a duty/standby transfer pair on
+the floor beside the desk, the standby taking over when the duty pump's
+fault is injected. They exist so the example places an assembly both ways
+(`skid` is `Skid.svelte`, `skid-data` the JSON assembly); a real project
+keeps one.
 
 `hmi/` depends on `@joyautomation/nautilus-hmi-3d` by `file:../../hmi-3d`
 (the same way `tools/vscode-iec/webview-ui` depends on `hmi/`), so the
