@@ -25,14 +25,15 @@ import (
 // Doc is a *.scene.json. Field names and meaning mirror hmi-3d's scene.ts,
 // which is the renderer's view of the same file.
 type Doc struct {
-	Name     string          `json:"name,omitempty"`
-	Kinds    map[string]Kind `json:"kinds,omitempty"`
-	Camera   *Camera         `json:"camera,omitempty"`
-	Fixtures []Fixture       `json:"fixtures,omitempty"`
-	Grid     *Grid           `json:"grid,omitempty"`
-	Nodes    []Node          `json:"nodes"`
-	Pipes    []Pipe          `json:"pipes,omitempty"`
-	Writable []string        `json:"writable,omitempty"`
+	Name        string          `json:"name,omitempty"`
+	Kinds       map[string]Kind `json:"kinds,omitempty"`
+	Environment *Environment    `json:"environment,omitempty"`
+	Camera      *Camera         `json:"camera,omitempty"`
+	Fixtures    []Fixture       `json:"fixtures,omitempty"`
+	Grid        *Grid           `json:"grid,omitempty"`
+	Nodes       []Node          `json:"nodes"`
+	Pipes       []Pipe          `json:"pipes,omitempty"`
+	Writable    []string        `json:"writable,omitempty"`
 }
 
 // Vec is a numeric array — a position, a rotation, a size. Encode keeps
@@ -46,6 +47,94 @@ type Vec []float64
 type Kind struct {
 	Type    string   `json:"type,omitempty"`
 	Members []string `json:"members,omitempty"`
+	// A data kind (docs/design/spatial-hmi.md §3c): a glTF as a URL path
+	// from the app root, and what live values do to its named meshes.
+	Model   string          `json:"model,omitempty"`
+	Bounds  json.RawMessage `json:"bounds,omitempty"` // "auto" | {size, center}
+	LabelAt Vec             `json:"labelAt,omitempty"`
+	Status  string          `json:"status,omitempty"`
+	Drive   []Drive         `json:"drive,omitempty"`
+}
+
+// Drive is one mesh, one channel. Exactly one of the channel fields is
+// set; Parse rejects a field outside the vocabulary.
+type Drive struct {
+	Mesh     string         `json:"mesh"`
+	Spin     *SpinDrive     `json:"spin,omitempty"`
+	Turn     *TurnDrive     `json:"turn,omitempty"`
+	Scale    *ScaleDrive    `json:"scale,omitempty"`
+	Tint     *TintDrive     `json:"tint,omitempty"`
+	Emissive *EmissiveDrive `json:"emissive,omitempty"`
+	Visible  *BoolExpr      `json:"visible,omitempty"`
+}
+
+// NumExpr is member × Scale + Offset, clamped to [Min, Max].
+type NumExpr struct {
+	Bind   string   `json:"bind"`
+	Scale  *float64 `json:"scale,omitempty"`
+	Offset *float64 `json:"offset,omitempty"`
+	Min    *float64 `json:"min,omitempty"`
+	Max    *float64 `json:"max,omitempty"`
+}
+
+// BoolExpr is true, or a number above Threshold; a leading `!` negates.
+type BoolExpr struct {
+	Bind      string   `json:"bind"`
+	Threshold *float64 `json:"threshold,omitempty"`
+}
+
+type SpinDrive struct {
+	Axis    string  `json:"axis"`
+	RevPerS NumExpr `json:"revPerS"`
+}
+type TurnDrive struct {
+	Axis string  `json:"axis"`
+	Deg  NumExpr `json:"deg"`
+}
+type ScaleDrive struct {
+	Axis string  `json:"axis"`
+	To   NumExpr `json:"to"`
+}
+type TintDrive struct {
+	BoolExpr
+	On  string `json:"on"`
+	Off string `json:"off,omitempty"`
+}
+type EmissiveDrive struct {
+	BoolExpr
+	On        string   `json:"on"`
+	Intensity *float64 `json:"intensity,omitempty"`
+}
+
+// DriveChannels is the vocabulary, in the schema's order. hmi-3d's
+// DRIVE_CHANNELS and the extension schema carry the same list; a test on
+// each side reads the schema so the three cannot drift.
+var DriveChannels = []string{"spin", "turn", "scale", "tint", "emissive", "visible"}
+
+// Environment is the surroundings (§3c): an HDRI, the backdrop, shadows.
+type Environment struct {
+	HDRI       string   `json:"hdri,omitempty"`
+	Backdrop   string   `json:"backdrop,omitempty"`
+	Background string   `json:"background,omitempty"`
+	Fog        *Fog     `json:"fog,omitempty"`
+	Floor      *float64 `json:"floor,omitempty"`
+	Intensity  *float64 `json:"intensity,omitempty"`
+	Shadows    *bool    `json:"shadows,omitempty"`
+}
+
+// Fog fades the far backdrop toward a colour.
+type Fog struct {
+	Color string   `json:"color,omitempty"`
+	Near  *float64 `json:"near,omitempty"`
+	Far   *float64 `json:"far,omitempty"`
+}
+
+// Texture is a plane fixture's PBR maps.
+type Texture struct {
+	Map          string `json:"map"`
+	NormalMap    string `json:"normalMap,omitempty"`
+	RoughnessMap string `json:"roughnessMap,omitempty"`
+	Repeat       Vec    `json:"repeat,omitempty"`
 }
 
 type Camera struct {
@@ -61,6 +150,7 @@ type Fixture struct {
 	Rot     Vec      `json:"rot,omitempty"`
 	Color   string   `json:"color,omitempty"`
 	Opacity *float64 `json:"opacity,omitempty"`
+	Texture *Texture `json:"texture,omitempty"`
 }
 
 type Grid struct {
@@ -157,9 +247,238 @@ func (d *Doc) EffectiveKinds() map[string]Kind {
 		if v.Members != nil {
 			cur.Members = v.Members
 		}
+		cur.Model, cur.Bounds, cur.LabelAt, cur.Status, cur.Drive = v.Model, v.Bounds, v.LabelAt, v.Status, v.Drive
+		// The members a kind reads are `members` plus whatever its drives
+		// and status template name, so a drive never repeats the list.
+		for _, m := range append(driveMembers(v.Drive), statusMembers(v.Status)...) {
+			if !contains(cur.Members, m) {
+				cur.Members = append(cur.Members, m)
+			}
+		}
 		out[k] = cur
 	}
 	return out
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+// driveMembers lists the members a drive list reads, without negation,
+// deduplicated, in order.
+func driveMembers(drives []Drive) []string {
+	var out []string
+	add := func(bind string) {
+		m := strings.TrimPrefix(bind, "!")
+		if m != "" && !contains(out, m) {
+			out = append(out, m)
+		}
+	}
+	for _, d := range drives {
+		switch {
+		case d.Spin != nil:
+			add(d.Spin.RevPerS.Bind)
+		case d.Turn != nil:
+			add(d.Turn.Deg.Bind)
+		case d.Scale != nil:
+			add(d.Scale.To.Bind)
+		case d.Tint != nil:
+			add(d.Tint.Bind)
+		case d.Emissive != nil:
+			add(d.Emissive.Bind)
+		case d.Visible != nil:
+			add(d.Visible.Bind)
+		}
+	}
+	return out
+}
+
+// statusRe matches one field of a status template: {Level}, {Level:1},
+// {Running?run:stopped}. The same grammar as hmi-3d's formatStatus.
+var statusRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)(?::(\d))?(?:\?([^:}]*):([^}]*))?\}`)
+
+func statusMembers(tpl string) []string {
+	var out []string
+	for _, m := range statusRe.FindAllStringSubmatch(tpl, -1) {
+		if !contains(out, m[1]) {
+			out = append(out, m[1])
+		}
+	}
+	return out
+}
+
+// validStatusTemplate: braces balanced and every field a member.
+func validStatusTemplate(tpl string) bool {
+	rest := statusRe.ReplaceAllString(tpl, "")
+	return !strings.ContainsAny(rest, "{}")
+}
+
+var memberRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var imageRe = regexp.MustCompile(`(?i)\.(jpe?g|png|webp|hdr|exr)$`)
+
+// assetPath: a URL path from the app root — no scheme, no `..`.
+func assetPath(p string) bool {
+	if p == "" || strings.Contains(p, ":") {
+		return false
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// checkKind holds a `kinds` entry's data-kind fields to the §3c rules.
+func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
+	p := "/kinds/" + k
+	if v.Model != "" && !(assetPath(v.Model) && (strings.HasSuffix(v.Model, ".glb") || strings.HasSuffix(v.Model, ".gltf"))) {
+		errf(p+"/model", "must be a URL path to a .glb or .gltf (models/pump.glb)")
+	}
+	if v.Bounds != nil {
+		var auto string
+		var box struct {
+			Size   Vec `json:"size"`
+			Center Vec `json:"center"`
+		}
+		if err := json.Unmarshal(v.Bounds, &auto); err == nil {
+			if auto != "auto" {
+				errf(p+"/bounds", "must be 'auto' or { size: [w, h, d], center: [x, y, z] }")
+			}
+		} else if err := json.Unmarshal(v.Bounds, &box); err != nil || len(box.Size) != 3 || len(box.Center) != 3 || !finite(box.Size) || !finite(box.Center) {
+			errf(p+"/bounds", "must be 'auto' or { size: [w, h, d], center: [x, y, z] }")
+		}
+	}
+	if v.LabelAt != nil && (len(v.LabelAt) != 3 || !finite(v.LabelAt)) {
+		errf(p+"/labelAt", "must be [x, y, z] metres")
+	}
+	if v.Status != "" && !validStatusTemplate(v.Status) {
+		errf(p+"/status", `must be a template over members: "{Level:1} %%", "{Running?run:stopped}"`)
+	}
+	if v.Model == "" && (v.Drive != nil || v.Bounds != nil || v.LabelAt != nil) {
+		errf(p, "drive, bounds and labelAt need a model — without one the Svelte kind of this name renders")
+	}
+	num := func(path string, e NumExpr) {
+		if !memberRe.MatchString(e.Bind) {
+			errf(path+"/bind", "must name a member of the struct")
+		}
+	}
+	boolean := func(path string, e BoolExpr) {
+		if !memberRe.MatchString(strings.TrimPrefix(e.Bind, "!")) {
+			errf(path+"/bind", "must name a member of the struct (a leading ! negates)")
+		}
+	}
+	axis := func(path, a string, xyz bool) {
+		switch a {
+		case "x", "y", "z":
+		case "xyz":
+			if xyz {
+				return
+			}
+			fallthrough
+		default:
+			if xyz {
+				errf(path, "must be 'x', 'y', 'z' or 'xyz'")
+			} else {
+				errf(path, "must be 'x', 'y' or 'z'")
+			}
+		}
+	}
+	for i, d := range v.Drive {
+		dp := fmt.Sprintf("%s/drive/%d", p, i)
+		if d.Mesh == "" {
+			errf(dp+"/mesh", "must name a mesh in the model")
+		}
+		n := 0
+		for _, set := range []bool{d.Spin != nil, d.Turn != nil, d.Scale != nil, d.Tint != nil, d.Emissive != nil, d.Visible != nil} {
+			if set {
+				n++
+			}
+		}
+		if n != 1 {
+			errf(dp, "a drive has exactly one of %s", strings.Join(DriveChannels, ", "))
+			continue
+		}
+		switch {
+		case d.Spin != nil:
+			axis(dp+"/spin/axis", d.Spin.Axis, false)
+			num(dp+"/spin/revPerS", d.Spin.RevPerS)
+		case d.Turn != nil:
+			axis(dp+"/turn/axis", d.Turn.Axis, false)
+			num(dp+"/turn/deg", d.Turn.Deg)
+		case d.Scale != nil:
+			axis(dp+"/scale/axis", d.Scale.Axis, true)
+			num(dp+"/scale/to", d.Scale.To)
+		case d.Tint != nil:
+			boolean(dp+"/tint", d.Tint.BoolExpr)
+			if d.Tint.On == "" {
+				errf(dp+"/tint/on", "must be a palette slot or a CSS colour")
+			}
+		case d.Emissive != nil:
+			boolean(dp+"/emissive", d.Emissive.BoolExpr)
+			if d.Emissive.On == "" {
+				errf(dp+"/emissive/on", "must be a palette slot or a CSS colour")
+			}
+			if d.Emissive.Intensity != nil && *d.Emissive.Intensity < 0 {
+				errf(dp+"/emissive/intensity", "must be ≥ 0")
+			}
+		case d.Visible != nil:
+			boolean(dp+"/visible", *d.Visible)
+		}
+	}
+}
+
+// Assets lists every file the document refers to — models, the HDRI,
+// texture maps — each with the JSON path that names it, so CheckAssets and
+// a packager see the same list.
+func (d *Doc) Assets() (paths [][2]string) {
+	names := make([]string, 0, len(d.Kinds))
+	for k := range d.Kinds {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		if m := d.Kinds[k].Model; m != "" {
+			paths = append(paths, [2]string{"/kinds/" + k + "/model", m})
+		}
+	}
+	if d.Environment != nil && d.Environment.HDRI != "" {
+		paths = append(paths, [2]string{"/environment/hdri", d.Environment.HDRI})
+	}
+	if d.Environment != nil && d.Environment.Backdrop != "" {
+		paths = append(paths, [2]string{"/environment/backdrop", d.Environment.Backdrop})
+	}
+	for i, f := range d.Fixtures {
+		if f.Texture == nil {
+			continue
+		}
+		p := fmt.Sprintf("/fixtures/%d/texture", i)
+		paths = append(paths, [2]string{p + "/map", f.Texture.Map})
+		if f.Texture.NormalMap != "" {
+			paths = append(paths, [2]string{p + "/normalMap", f.Texture.NormalMap})
+		}
+		if f.Texture.RoughnessMap != "" {
+			paths = append(paths, [2]string{p + "/roughnessMap", f.Texture.RoughnessMap})
+		}
+	}
+	return paths
+}
+
+// CheckAssets holds every asset path to `exists`, which the caller builds
+// from where the app serves files (next to the scene, the HMI's static/,
+// the build). Separate from Check so the structural pass stays pure.
+func CheckAssets(d *Doc, exists func(path string) bool) (errs []string) {
+	for _, a := range d.Assets() {
+		if !exists(a[1]) {
+			errs = append(errs, fmt.Sprintf("%s: %q was not found (next to the scene file, under the HMI app's static/, or in its build) — paths are URL paths from the app root", a[0], a[1]))
+		}
+	}
+	return errs
 }
 
 var refRe = regexp.MustCompile(`^!?[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$`)
@@ -186,7 +505,13 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 		}
 	}
 
-	for k, v := range d.Kinds {
+	kindNames := make([]string, 0, len(d.Kinds))
+	for k := range d.Kinds {
+		kindNames = append(kindNames, k)
+	}
+	sort.Strings(kindNames)
+	for _, k := range kindNames {
+		v := d.Kinds[k]
 		if strings.TrimSpace(k) == "" {
 			errf("/kinds", "a kind name is empty")
 		}
@@ -194,6 +519,36 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 			if m == "" {
 				errf(fmt.Sprintf("/kinds/%s/members/%d", k, i), "empty member name")
 			}
+		}
+		checkKind(k, v, errf)
+	}
+
+	if e := d.Environment; e != nil {
+		if e.HDRI != "" && !(assetPath(e.HDRI) && (strings.HasSuffix(strings.ToLower(e.HDRI), ".hdr") || strings.HasSuffix(strings.ToLower(e.HDRI), ".exr"))) {
+			errf("/environment/hdri", "must be a URL path to an .hdr or .exr (env/workshop_1k.hdr)")
+		}
+		if e.Backdrop != "" && !(assetPath(e.Backdrop) && imageRe.MatchString(e.Backdrop)) {
+			errf("/environment/backdrop", "must be a URL path to an equirect image (.jpg, .png, .webp, .hdr, .exr)")
+		}
+		if f := e.Fog; f != nil {
+			if f.Near != nil && *f.Near < 0 {
+				errf("/environment/fog/near", "must be ≥ 0 metres")
+			}
+			near := 0.0
+			if f.Near != nil {
+				near = *f.Near
+			}
+			if f.Far != nil && *f.Far <= near {
+				errf("/environment/fog/far", "must be greater than near")
+			}
+		}
+		switch e.Background {
+		case "", "none", "sky", "ground":
+		default:
+			errf("/environment/background", "must be 'none', 'sky' or 'ground', not %q", e.Background)
+		}
+		if e.Intensity != nil && *e.Intensity < 0 {
+			errf("/environment/intensity", "must be ≥ 0")
 		}
 	}
 
@@ -231,6 +586,23 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 		}
 		if f.Opacity != nil && (*f.Opacity < 0 || *f.Opacity > 1) {
 			errf(p+"/opacity", "must be between 0 and 1")
+		}
+		if t := f.Texture; t != nil {
+			if f.Kind != "plane" {
+				errf(p+"/texture", "only a plane takes a texture")
+			}
+			if !assetPath(t.Map) {
+				errf(p+"/texture/map", "must be a URL path to an image")
+			}
+			if t.NormalMap != "" && !assetPath(t.NormalMap) {
+				errf(p+"/texture/normalMap", "must be a URL path to an image")
+			}
+			if t.RoughnessMap != "" && !assetPath(t.RoughnessMap) {
+				errf(p+"/texture/roughnessMap", "must be a URL path to an image")
+			}
+			if t.Repeat != nil && (len(t.Repeat) != 2 || !finite(t.Repeat)) {
+				errf(p+"/texture/repeat", "must be [w, d] tiles")
+			}
 		}
 	}
 

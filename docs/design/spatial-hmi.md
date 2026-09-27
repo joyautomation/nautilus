@@ -1,7 +1,8 @@
 # Design brief: the spatial HMI package (`@joyautomation/nautilus-hmi-3d`)
 
 Status: **Milestone 1 built** on the `spatial-hmi` branch, PR #65 (2026-09-26);
-the panel-PC measurement is the one exit criterion still open.
+the panel-PC measurement is the one exit criterion still open. **Milestone 2
+item 1 (kinds as data, surroundings) in progress** on `spatial-kinds`, §3c.
 The R&D plan, device research and the office-rig spike this ports live in
 `~/Development/joyautomation/randd/` (`spatial-hmi.md`,
 `spatial-hmi-devices.md`, `spatial-rig/`); this brief is the repo's record of
@@ -44,7 +45,8 @@ hmi-3d/
     scene.ts              SceneDoc types, validateScene(), sceneTags()      (pure)
     bindings.ts           the binding grammar: resolveNodeBindings(), refRoot() (pure)
     alarms.ts             worstAlarmByAsset(): alarm instances → per-node worst  (pure)
-    registry.ts           NodeKindDef, NodeRegistry, builtinRegistry
+    registry.ts           NodeKindDef, NodeRegistry, builtinRegistry, registryFor()
+    drives.ts             data kinds: the drive vocabulary, evaluated from the doc  (pure)
     palette.ts            colours read from the kit's theme tokens, with fallbacks
     perf.ts               fps + ts→pixel latency sampling                    (pure-ish)
     components/
@@ -54,6 +56,12 @@ hmi-3d/
       PerfHud.svelte      the measurement HUD (fps, p95 ts→pixel), opt-in
       Tank3D.svelte  Pump3D.svelte  Valve3D.svelte   the built-in kinds
       Pipe3D.svelte  Halo.svelte  Label.svelte  Fixture3D.svelte
+      GltfNode.svelte     a data kind: a glTF whose named meshes the drives move  (dynamic import)
+      Surroundings.svelte HDRI environment, shadows                                (dynamic import)
+  models/
+    build.py              Blender script that generates the built-ins' glTF
+    tank.glb pump.glb valve.glb   the built-in kinds as data (ships in the package)
+    kinds.json            their `kinds` block: models + drives, ready to paste
   tests/
     harness.ts            the kit's 60-line describe/it/expect subset, copied
     scene.test.ts  bindings.test.ts  alarms.test.ts
@@ -72,7 +80,10 @@ export type { SceneError };
 export { resolveNodeBindings, refRoot, member, num, flowing };
 // Registry
 export type { NodeKindDef, NodeProps, NodeRegistry };
-export { builtinRegistry };
+export { builtinRegistry, registryFor, BUILTIN_CONTRACT };
+// Kinds as data (§3c): the drive vocabulary, evaluated from the document
+export { DRIVE_CHANNELS, evalDrives, driveMembers, validateDrives, formatStatus, kindMembers };
+export type { Drive, MeshState, SceneEnvironment, SceneTexture };
 // Alarms
 export { worstAlarmByAsset };  export type { AssetAlarm };
 // Measurement
@@ -104,6 +115,10 @@ type Vec3 = [number, number, number];
 
 interface SceneDoc {
   name?: string;
+  /** Kind contracts and data kinds (§3b, §3c). */
+  kinds?: Record<string, SceneKind>;
+  /** The surroundings: an HDRI and shadows (§3c). Absent = the flat look. */
+  environment?: SceneEnvironment;
   /** Initial camera. Positions in scene metres. */
   camera?: { pos: Vec3; target: Vec3; fov?: number };
   /** Static, unbound geometry: the desk, a floor slab, the origin marker. */
@@ -139,6 +154,8 @@ interface SceneFixture {
   kind: 'box' | 'plane' | 'marker';
   pos: Vec3; size?: Vec3 | [number, number]; rot?: Vec3;
   color?: string; opacity?: number;
+  /** plane only: PBR maps, so the ground is concrete rather than a colour (§3c). */
+  texture?: { map: string; normalMap?: string; roughnessMap?: string; repeat?: [number, number] };
 }
 ```
 
@@ -255,6 +272,155 @@ file (item 2), and kinds defined as data (a glTF and a few bindings, no
 Svelte) so a new kind is a file and ten lines of JSON (item 1). Those two
 remove the last hand-authoring: placement and geometry.
 
+## 3c. Kinds as data: a glTF and a few drives
+
+A kind was a Svelte component (§4). That is the right escape hatch for
+genuinely new behaviour and the wrong front door: a new pump should be a
+model file and ten lines of JSON, authored by the same person who places
+the node, checked by the same `naut check`. So a kind may instead be
+**data**, declared in the scene file's `kinds` block (§3b) alongside its
+UDT contract:
+
+```json
+"kinds": {
+  "pump": {
+    "type": "Motor", "members": ["Running", "Fault", "Speed"],
+    "model": "models/pump.glb",
+    "bounds": "auto",
+    "status": "{Speed:0} %",
+    "drive": [
+      { "mesh": "Coupling", "spin": { "axis": "x", "revPerS": { "bind": "Speed", "scale": 0.02 } } },
+      { "mesh": "Motor",    "tint": { "bind": "Running", "on": "running" } },
+      { "mesh": "Volute",   "tint": { "bind": "Running", "on": "running" } }
+    ]
+  },
+  "tank": {
+    "model": "models/tank.glb",
+    "drive": [{ "mesh": "Fluid", "scale": { "axis": "y", "to": { "bind": "Level", "scale": 0.01, "min": 0.01 } } }]
+  }
+}
+```
+
+**The shape.** A data kind is `SceneKind` (§3b) plus:
+
+| field | meaning |
+|---|---|
+| `model` | a glTF/GLB, as a URL path from the app root (`models/pump.glb` → `/models/pump.glb`). Units are metres, +y up; the node's `pos`/`rot`/`scale` place the model's origin. |
+| `bounds` | `"auto"` (default: the loaded model's box) or `{ size, center }` — the halo and selection box. |
+| `labelAt` | where the label floats; default the top centre of the bounds. |
+| `status` | the label's value text as a template over members: `{Level:1} %` → `48.3 %`; `{Running?run:stopped}`. `stale` when quality is bad. |
+| `drive` | the list of drives below. |
+
+A data kind that names a **built-in** (`pump` with a `model`) keeps the
+built-in's contract, status text and faceplate and replaces only the
+geometry; a data kind under a new name gets the drawer's member table.
+When a kind has no `model`, or its model fails to load, the built-in
+Svelte kind of that name renders — so a project with no assets still
+renders, and a bad path is a console warning and a grey pump, not a hole.
+
+**Drives** are the small, fixed vocabulary of things a live value can do to
+a **named mesh** in the model, evaluated from the document the way bindings
+are (§3). Each drive names one mesh and one channel:
+
+| channel | shape | does |
+|---|---|---|
+| `spin` | `{ axis, revPerS: Num }` | turns the mesh continuously about its local axis |
+| `turn` | `{ axis, deg: Num }` | sets the mesh's rotation about its local axis |
+| `scale` | `{ axis: x\|y\|z\|xyz, to: Num }` | sets the mesh's scale on that axis (a fluid whose origin is its base) |
+| `tint` | `{ bind, on, off? }` | the mesh's colour is `on` while the value is true, else `off` or the model's own |
+| `emissive` | `{ bind, on, intensity? }` | the mesh glows `on` while true |
+| `visible` | `{ bind }` | the mesh is shown while true |
+
+`Num` is `{ bind, scale?, offset?, min?, max? }`: the member, times `scale`,
+plus `offset`, clamped. A boolean channel's `bind` is `true`, or a number
+above `threshold` (default 0); a leading `!` negates, as everywhere else. A
+`bind` names a **member of the node's struct** (the relative form a
+component reads, §3), and the node's own `bind` map overrides it by the
+same rule the built-ins use (`level` overrides `Level`). Colours (`on`,
+`off`) are palette slots (`running`, `fluid`, `handle`, `stale`, a
+priority name) or CSS colours; ISA-101 restraint is kept by using the
+palette: equipment is its own grey until a state worth noticing.
+
+**The members a kind reads** are `members` plus whatever its drives and
+status template name, so a drive never repeats the list; `naut check`
+holds every node to that union (§3b), and reports a drive whose `mesh`
+the model does not contain when the model is loaded (in the browser, a
+warning; offline the file is only checked to exist). Quality is
+whole-model: a bad node renders every mesh in the stale grey, translucent,
+with its drives frozen — the same rule as the built-ins.
+
+**What is not in the vocabulary, on purpose:** arithmetic between members,
+colour ramps (item 4's `thermal` mode is a view mode, not a drive), and
+animation clips. A kind that needs those is a Svelte component in the
+registry (§4), which is unchanged.
+
+**Surroundings** are document data too. `environment` sets an HDRI for
+image-based lighting and, optionally, the backdrop and shadows:
+
+```json
+"environment": {
+  "hdri": "env/industrial_workshop_foundry_1k.hdr",
+  "backdrop": "env/industrial_workshop_foundry_backdrop_6k.jpg",
+  "background": "none | sky | ground",
+  "floor": -0.75,
+  "intensity": 0.45,
+  "shadows": true,
+  "fog": { "color": "#8d8a84", "near": 4, "far": 14 }
+}
+```
+
+**Lighting and backdrop are two files.** A 1k HDR is plenty for light and
+reflections; what the eye looks at is a 360° photo, and at 1k that is
+under 3 pixels per degree — a blur. `backdrop` names a separate, larger
+equirect (a tonemapped 4k–6k JPG of the same photo, 1.6–3.5 MB, where the
+HDR at that size would be 25–100 MB) for the skybox alone. `fog` fades the
+far backdrop and the projected floor toward a colour, so their softness is
+a choice rather than a resolution.
+
+`intensity` scales the HDRI's light on the models (not the backdrop); a
+bright workshop HDRI at 1 swamps any key light, so a scene that wants
+visible shadows turns it down (the rig uses 0.45) and the key light is
+sized to show against it. `background: "ground"` projects the HDRI onto a floor at `floor` metres
+(three's `GroundedSkybox`), so a desk-scale rig stands in the workshop
+rather than floating in it; `sky` is the plain equirect backdrop; `none`
+(default) lights and reflects only. `shadows` turns on a shadow-casting
+key light with soft (PCSS) shadows on the desktop tier; item 8 makes that
+tier a detected one. A `plane` fixture takes `texture` (PBR maps, tiled by
+`repeat`), which is how the floor becomes concrete. The built-in Svelte
+kinds get PBR materials (metalness/roughness) with their colours unchanged,
+so the same greys read as painted steel under the HDRI.
+
+**Look.** `SceneView` takes `look: 'lit' | 'flat'` (default `lit`). `flat`
+renders the document as Milestone 1 did — built-in primitives, the three
+lights, no environment, no textures — which is the fallback for a project
+with no assets, the low tier until item 8, and the "before" half of the
+N-57 cut, switched live from the HUD.
+
+**Assets and paths.** Model, HDRI and texture paths are URL paths from the
+app root, which is `hmi/static/` in source and the built app's root when
+the controller serves it (`server.hmi`). `naut check` resolves each path
+next to the scene file, then under the HMI app's `static/`, then in the
+build output, and names all three when it finds nothing. Loaders are
+**dynamic imports** (`GltfNode`, `Surroundings`), so the base bundle stays
+at the Milestone 1 size and a scene with no models or environment never
+fetches them (§6). The package ships the built-ins' models
+(`hmi-3d/models/`, generated by a Blender script kept next to them) and
+the `kinds.json` that declares them; an app copies the models it uses into
+its `static/`. **Large assets do not live in git:** the example's HDRI,
+backdrop and textures are in a GitHub release (`spatial-assets-v1`, not a
+software release), listed in `hmi/assets.json` with a size and sha256
+each, and `fetch-assets.mjs` pulls them into `static/` before `dev`,
+`build` and CI's `naut check`; `static/env` and `static/textures` are
+gitignored. The models (≈ 200 kB) stay in git.
+
+**In three places, one contract.** `internal/scene` (Go) validates the
+block offline with the same rules — a channel from the vocabulary, one per
+drive, a `mesh` name, a `bind` member, files that exist — `hmi-3d`'s
+`validateScene` does it in the browser and in tests, and the extension's
+schema does it as you type. A sync test on each side reads the schema's
+channel enum and the built-in kind names so the three cannot drift apart
+silently.
+
 ## 4. The node registry
 
 ```ts
@@ -274,6 +440,10 @@ export const builtinRegistry: NodeRegistry = { tank, pump, valve };
 ```
 
 An app extends by spreading: `registry={{ ...builtinRegistry, server, switch, 'switch-port': port }}`.
+`registryFor(doc, registry)` then lays the document's data kinds (§3c) on
+top: a kind with a `model` becomes a `GltfNode` entry whose bounds are
+`'auto'` until the model reports them, and it inherits `status`/`panel`
+from the registry entry of the same name if there is one.
 Nothing in `Scene3D` names a kind; it looks every node up. That is how the
 IT-hardware kinds from the drivers session (`it-drivers` branch,
 `docs/design/it-drivers.md`) arrive without touching the core, and the
@@ -338,6 +508,11 @@ frames while `document.hidden`, because a hidden tab throttles rAF to
 `PerfHud` shows fps, both p95s and active alarms; `perf` on `SceneView`
 turns it on.
 
+The base bundle carries neither the glTF loader nor the HDRI loaders: both
+live behind dynamic imports that only a document with a `model` or an
+`environment` triggers, so the §6 JS figure is measured twice, base and
+with the item 1 chunks loaded (§9).
+
 **Results** are recorded in §9 as they are taken. The desktop passes with
 room to spare: 60 fps is the display's refresh, and 33 ms is one SSE frame
 plus two animation frames. The low-end panel PC run is still to do; it needs
@@ -384,6 +559,29 @@ Proposed order, each with an exit and the capture moment it produces
    materials on the built-ins; the ground becomes a textured plane. Exit:
    the rig scene with one CAD-derived pump model and an HDRI, at the §6
    budgets. Capture: before/after, grey spike vs lit scene.
+   *Designed as §3c (the `kinds` block grows `model`/`drive`, not a
+   `gltf` kind with `spin:Impeller` bind keys: a kind's geometry and its
+   drives belong to the kind, and the node keeps placing and binding);
+   built on `spatial-kinds`, PR #66, 2026-09-27: the rig renders its
+   three kinds from `models/*.glb` with drives, an HDRI ground-projected
+   onto a concrete floor, soft shadows, at 60 fps / 33 ms (§9); the take
+   is `content/assets/capture/n57/out/01-grey-to-lit.mp4`.*
+1b. **Components define, documents place** (decided 2026-09-27; design as
+   §3d before code, its own PR). Two readings, both wanted: a developer
+   composes a scene in Svelte the way a SvelteKit page composes
+   (`<Scene3D {rt}>` providing tags, alarms and the palette by context, a
+   `<Node tag kind pos>` wrapper that gives any child its value, quality,
+   label and halo, the built-in models usable standalone); and a kind may
+   be **defined by a Svelte component file** named from the `kinds` block,
+   built the way the extension builds a mimic's user components, so a
+   non-developer places it from a palette into a document that `naut
+   check`, drag-to-place and AR still understand. The composition
+   primitive for both is an **assembly**: a kind made of kinds with
+   relative positions and a tag prefix (a skid = pump + valve + pipes), one
+   node in the document and one component in Svelte. Exit: the rig as a
+   hand-written Svelte page and, separately, a `Skid` component placed as
+   one node in `rig.scene.json` with `naut check` clean. Capture: the same
+   skid written twice (N-63).
 2. **Place equipment by dragging.** Locating things is the one authoring
    step `naut scene init` cannot finish, and a number typed into `pos` is
    the tedium to remove. An edit mode on `SceneView`: click an asset,
@@ -398,6 +596,8 @@ Proposed order, each with an exit and the capture moment it produces
    - **In the browser**, `npm run dev` gets a Vite plugin endpoint that
      writes the file back, and a built app offers "copy scene JSON" /
      download, so a phone on the rig can still place a prop.
+   The palette that adds a node (built-in, data and component kinds,
+   item 1b) lands here.
    Exit: the rig's three nodes placed by dragging, the diff showing only
    `pos` lines. Capture: the drag, then `git diff`.
 3. **Overlays.** Labels declutter by distance and by importance (alarmed
@@ -436,6 +636,15 @@ AMD Radeon RX 7900 XT, Chrome).
 | Date | Machine | Scene | fps | p95 ts→pixel | Bundle (gz) | Notes |
 |---|---|---|---|---|---|---|
 | 2026-09-26 | mira1 desktop, Radeon RX 7900 XT, Chrome (headed, 2560×1440) | rig: 3 nodes, 2 pipes, desk, grid | 60 (vsync) | ctrl→pixel 33 ms (n=197); 34 ms (n=200) on a second take | 438 kB | controller on the same machine (shared clock); 0 console errors; recipe `content/assets/capture/n56/browser/01-first-render.mjs` |
+| 2026-09-27 | same desktop, Chrome headed 2560×1440 | rig, `look: flat` (M1 primitives, three lights) | 60 | rx→pixel 33 ms, ctrl→pixel 34 ms (n=50) | 254 kB base | item 1 build; `naut run` serving `hmi/build`; recipe `content/assets/capture/n57/browser/01-grey-to-lit.mjs`, first half |
+| 2026-09-27 | same | rig, `look: lit`: 3 glTF kinds (pump 96 kB, tank 74 kB, valve 47 kB), HDRI 1k for light (1.7 MB) with a 6k tonemapped backdrop (3.5 MB) ground-projected, fog, concrete floor (3 × 1k JPG, 1.3 MB), soft shadows | 60 | rx→pixel 33 ms, ctrl→pixel 34 ms (n=191), unchanged through the cut and a fault | 254 kB base + 48 kB on demand (glTF chunk 14 kB, HDRI + shadows chunk 34 kB) = 302 kB | same take, second half (taken with the 1k HDRI as backdrop; the 6k backdrop added afterwards costs a one-off decode hitch on load and no steady-state change); 0 console errors; the draco/basis decoders Vite emits (1.9 MB) are never fetched — no model uses them |
+
+Bundle figures from 2026-09-27 on are the sum of gzipped JS under the
+built app's `_app/immutable` (excluding the on-demand decoder assets),
+which is what a browser downloads for a first paint; the 438 kB Milestone
+1 figure was taken from Vite's build report and is not directly
+comparable — measured this way, the Milestone 1 base and the item 1 base
+are the same 254 kB, because the loaders sit behind dynamic imports.
 
 ## 10. Risks & open questions
 
@@ -452,8 +661,14 @@ AMD Radeon RX 7900 XT, Chrome).
   package; the dedupe in §7 covers the example, and the README says so for
   anyone else linking the package locally.
 - **Bundle weight.** three + Threlte + the kit is ~450 kB gzipped in the
-  spike; glTF loaders, HDRI and post-processing will push it. Milestone 2
-  splits those behind dynamic imports so the base view stays under budget.
+  spike; glTF loaders, HDRI and post-processing will push it. Item 1 put
+  the glTF and HDRI loaders behind dynamic imports (§3c) so the base view
+  stays where it was; post-processing (item 8) gets the same treatment.
+- **Asset weight in git — decided 2026-09-27: releases, not git.** A 1k
+  HDRI is ~1.7 MB, a 1k PBR texture set ~1.3 MB and a sharp 6k backdrop
+  ~3.5 MB; none of it is committed. The example fetches them from a
+  GitHub release by manifest (§3c). Only the ~200 kB of built-in models
+  are in git.
 - **`assets.yaml` vs the scene file** hold the same positions twice today
   (the scene's `pos` and the survey's `pos`). When AR lands, a node gains
   `marker:` and the survey moves into the scene file; until then the

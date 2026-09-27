@@ -21,9 +21,13 @@ types.st         the Tank / Motor / Valve UDTs: the contract a scene binds to
 control.st       pump seal-in on level, valve follows demand, limit bits
 sim.st           the process, plus fault injection
 rig_test.yaml    the acceptance suite
-rig.scene.json   the scene: 3 nodes bound to the struct tags, 2 pipes, a desk, a camera
+rig.scene.json   the scene: 3 nodes bound to the struct tags, 2 pipes, a desk, a camera,
+                 the three kinds as glTF models with drives, an HDRI, a concrete floor
 assets.yaml      marker id → asset → tag, and surveyed positions (for AR, later)
 hmi/             the 3D view: a SvelteKit app on the package, one page
+hmi/static/      what the scene refers to: models/*.glb (the package's built-ins, in git);
+                 env/ and textures/ (CC0, Poly Haven) are fetched from a GitHub release
+                 by hmi/fetch-assets.mjs against hmi/assets.json — see static/CREDITS.md
 ```
 
 ## The 3D view
@@ -34,6 +38,8 @@ build the package once first:
 ```sh
 cd ../../hmi-3d && npm install && npm run package && cd -
 cd hmi && npm install
+npm run assets          # the HDRI, backdrop and floor textures (≈ 7 MB) from the
+                        # spatial-assets release into static/ — dev and build do this too
 npm run dev             # http://localhost:5173, proxying /api to :8080 —
                         # run `naut run .` in the project root first
 ```
@@ -48,9 +54,14 @@ cd .. && naut run .           # server.hmi: hmi/build serves it at "/"
 The controller caches `_app/immutable/*` for a year, so after a rebuild
 hard-refresh (or open `/?v=2`) or you will be looking at the old bundle.
 
-What you see: the tank fills and drains with `T101.Level`, the pump's
-coupling turns at `P101.Speed` and the pump goes green while running, the
-valve handle follows `XV101.Pos`, the pipes show flow. Orbit with the
+What you see: the rig on a desk in a workshop (an HDRI projected onto the
+floor, a concrete slab, soft shadows), the tank filling and draining with
+`T101.Level`, the pump's coupling turning at `P101.Speed` and the pump going
+green while running, the valve handle following `XV101.Pos`, the pipes
+showing flow. The three models are glTF files driven by the scene file's
+`kinds` block — no Svelte names a pump. The `lit`/`flat` button in the HUD
+(or `?look=flat`) shows the same document as grey primitives under three
+lights: what a project with no assets gets, and the "before" of the pair. Orbit with the
 mouse; click an asset for its 2D faceplate, every member of its struct,
 its quality and its alarms. The HUD shows the frame rate and the p95 of
 tag-change → pixel two ways (arrival in the browser to the pixel, and the

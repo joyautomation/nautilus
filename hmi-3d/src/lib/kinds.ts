@@ -6,6 +6,16 @@ import { member, num } from './bindings.js';
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
+/** The built-in kinds' contract (docs/design/spatial-hmi.md §3b): the UDT
+ * each reads by default and the members it reads. registry.ts carries it
+ * into the registry; internal/scene's Builtin must match. Pure, so a test
+ * can hold models/kinds.json to it without loading a component. */
+export const BUILTIN_CONTRACT: Record<string, { type: string; members: string[] }> = {
+	tank: { type: 'Tank', members: ['Level', 'TempC'] },
+	pump: { type: 'Motor', members: ['Running', 'Fault', 'Speed'] },
+	valve: { type: 'Valve', members: ['Pos', 'Cmd'] }
+};
+
 export interface TankState {
 	level: number;
 	tempC: number;

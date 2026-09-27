@@ -9,6 +9,8 @@
 // the desktop view is therefore also the file that places AR overlays.
 // Brief: docs/design/spatial-hmi.md.
 
+import { validateDrives, validStatusTemplate, driveMembers, statusMembers, type Drive } from './drives.js';
+
 export type Vec3 = [number, number, number];
 
 export interface SceneCamera {
@@ -28,6 +30,42 @@ export interface SceneFixture {
 	rot?: Vec3;
 	color?: string;
 	opacity?: number;
+	/** plane only: PBR maps, so a floor is concrete rather than a colour.
+	 * Paths are URL paths from the app root (`textures/floor_diff.jpg`). */
+	texture?: SceneTexture;
+}
+
+export interface SceneTexture {
+	map: string;
+	normalMap?: string;
+	roughnessMap?: string;
+	/** Tiles across [w, d]. Default [1, 1]. */
+	repeat?: [number, number];
+}
+
+/** The surroundings (docs/design/spatial-hmi.md §3c): an HDRI for
+ * image-based lighting, optionally as the backdrop, and shadows. Absent =
+ * the flat look: three lights, no environment. */
+export interface SceneEnvironment {
+	/** An equirectangular .hdr or .exr, as a URL path from the app root. */
+	hdri?: string;
+	/** What you SEE when `background` is on: a larger equirect image (a
+	 * tonemapped .jpg/.png, or another .hdr/.exr) in place of the HDRI, so
+	 * lighting can come from a small file and the backdrop from a sharp one. */
+	backdrop?: string;
+	/** `none` lights only (default); `sky` shows the backdrop (or the HDRI);
+	 * `ground` projects it onto a floor at `floor` so a desk-scale scene
+	 * stands in it. */
+	background?: 'none' | 'sky' | 'ground';
+	/** Distance fade toward a colour: the far backdrop and the projected
+	 * floor soften deliberately instead of reading as a low-res photo. */
+	fog?: { color?: string; near?: number; far?: number };
+	/** The floor's y for `ground`, metres. Default 0. */
+	floor?: number;
+	/** Environment light multiplier. Default 1. */
+	intensity?: number;
+	/** A shadow-casting key light with soft shadows (desktop tier). */
+	shadows?: boolean;
 }
 
 /** A reference grid on a horizontal plane. */
@@ -82,12 +120,32 @@ export interface SceneKind {
 	type?: string;
 	/** The members the kind's component reads off the struct. */
 	members?: string[];
+	/** A data kind (§3c): a glTF/GLB, as a URL path from the app root.
+	 * Absent = the registry's Svelte component of this name. */
+	model?: string;
+	/** The halo / selection box: the loaded model's box, or an explicit one. */
+	bounds?: 'auto' | { size: Vec3; center: Vec3 };
+	/** Where the label floats. Default: the top centre of the bounds. */
+	labelAt?: Vec3;
+	/** The label's value text as a template: `{Level:1} %`, `{Running?run:stopped}`. */
+	status?: string;
+	/** What live values do to named meshes in the model. */
+	drive?: Drive[];
+}
+
+/** Every member a kind reads: `members`, plus what its drives and status
+ * template name — so a drive never repeats the list (§3c). */
+export function kindMembers(k: SceneKind | undefined): string[] {
+	const out = [...(k?.members ?? [])];
+	for (const m of [...driveMembers(k?.drive), ...statusMembers(k?.status)]) if (!out.includes(m)) out.push(m);
+	return out;
 }
 
 export interface SceneDoc {
 	name?: string;
-	/** Kind contracts: overrides for the built-ins, declarations for the app's own. */
+	/** Kind contracts: overrides for the built-ins, declarations for the app's own, data kinds. */
 	kinds?: Record<string, SceneKind>;
+	environment?: SceneEnvironment;
 	camera?: SceneCamera;
 	fixtures?: SceneFixture[];
 	grid?: SceneGrid;
@@ -111,6 +169,11 @@ const isVec2 = (v: unknown): v is [number, number] => Array.isArray(v) && v.leng
 const isStr = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
+/** An asset path: a URL path from the app root, no scheme, no `..`. */
+export function isAssetPath(p: unknown): p is string {
+	return isStr(p) && !/^[a-z]+:/i.test(p) && !p.split('/').includes('..');
+}
+
 /** Is `ref` a well-formed binding ref? `!` may lead; then a dotted path of
  * non-empty segments. (The grammar is the mimic's plus dots; bindings.ts.) */
 export function isBindingRef(ref: unknown): boolean {
@@ -132,6 +195,9 @@ export function validateScene(doc: unknown, kinds?: Iterable<string>): { ok: boo
 	const errors: SceneError[] = [];
 	const err = (path: string, message: string) => errors.push({ path, message });
 	const known = kinds ? new Set(kinds) : null;
+	// A data kind (a `kinds` entry with a model) is a kind the document brings.
+	if (known && isObj(doc) && isObj(doc.kinds))
+		for (const [k, def] of Object.entries(doc.kinds)) if (isObj(def) && def.model !== undefined) known.add(k);
 
 	if (!isObj(doc)) return { ok: false, errors: [{ path: '', message: 'scene must be an object' }] };
 
@@ -168,6 +234,16 @@ export function validateScene(doc: unknown, kinds?: Iterable<string>): { ok: boo
 				if (f.rot !== undefined && !isVec3(f.rot)) err(`${p}/rot`, 'must be [x, y, z] degrees');
 				if (f.opacity !== undefined && !(isNum(f.opacity) && f.opacity >= 0 && f.opacity <= 1))
 					err(`${p}/opacity`, 'must be between 0 and 1');
+				if (f.texture !== undefined) {
+					if (f.kind !== 'plane') err(`${p}/texture`, 'only a plane takes a texture');
+					if (!isObj(f.texture)) err(`${p}/texture`, 'must be { map, normalMap?, roughnessMap?, repeat? }');
+					else {
+						if (!isAssetPath(f.texture.map)) err(`${p}/texture/map`, 'must be a URL path to an image');
+						for (const k of ['normalMap', 'roughnessMap'])
+							if (f.texture[k] !== undefined && !isAssetPath(f.texture[k])) err(`${p}/texture/${k}`, 'must be a URL path to an image');
+						if (f.texture.repeat !== undefined && !isVec2(f.texture.repeat)) err(`${p}/texture/repeat`, 'must be [w, d] tiles');
+					}
+				}
 			});
 	}
 
@@ -182,8 +258,46 @@ export function validateScene(doc: unknown, kinds?: Iterable<string>): { ok: boo
 				if (def.type !== undefined && !isStr(def.type)) err(`/kinds/${k}/type`, 'must be a UDT name');
 				if (def.members !== undefined && !(Array.isArray(def.members) && def.members.every(isStr)))
 					err(`/kinds/${k}/members`, 'must be an array of member names');
-				if (known && !known.has(k)) err(`/kinds/${k}`, `"${k}" is declared but the app registers no such kind`);
+				if (def.model !== undefined && !isAssetPath(def.model)) err(`/kinds/${k}/model`, 'must be a URL path to a .glb or .gltf (models/pump.glb)');
+				if (def.bounds !== undefined && def.bounds !== 'auto') {
+					if (!isObj(def.bounds) || !isVec3(def.bounds.size) || !isVec3(def.bounds.center))
+						err(`/kinds/${k}/bounds`, "must be 'auto' or { size: [w, h, d], center: [x, y, z] }");
+				}
+				if (def.labelAt !== undefined && !isVec3(def.labelAt)) err(`/kinds/${k}/labelAt`, 'must be [x, y, z] metres');
+				if (def.status !== undefined && !validStatusTemplate(def.status))
+					err(`/kinds/${k}/status`, 'must be a template over members: "{Level:1} %", "{Running?run:stopped}"');
+				if (def.drive !== undefined) errors.push(...validateDrives(def.drive, `/kinds/${k}/drive`));
+				if (def.model === undefined && (def.drive !== undefined || def.bounds !== undefined || def.labelAt !== undefined))
+					err(`/kinds/${k}`, 'drive, bounds and labelAt need a model — without one the Svelte kind of this name renders');
+				// A data kind under a new name is complete on its own; one without
+				// a model must be something the app registers.
+				if (known && !known.has(k) && def.model === undefined) err(`/kinds/${k}`, `"${k}" is declared but the app registers no such kind`);
 			}
+	}
+
+	if (doc.environment !== undefined) {
+		if (!isObj(doc.environment)) err('/environment', 'must be an object');
+		else {
+			const e = doc.environment;
+			if (e.hdri !== undefined && !(isAssetPath(e.hdri) && /\.(hdr|exr)$/i.test(e.hdri)))
+				err('/environment/hdri', 'must be a URL path to an .hdr or .exr (env/workshop_1k.hdr)');
+			if (e.backdrop !== undefined && !(isAssetPath(e.backdrop) && /\.(jpe?g|png|webp|hdr|exr)$/i.test(e.backdrop)))
+				err('/environment/backdrop', 'must be a URL path to an equirect image (.jpg, .png, .webp, .hdr, .exr)');
+			if (e.fog !== undefined) {
+				if (!isObj(e.fog)) err('/environment/fog', 'must be { color?, near?, far? }');
+				else {
+					if (e.fog.color !== undefined && !isStr(e.fog.color)) err('/environment/fog/color', 'must be a CSS colour');
+					if (e.fog.near !== undefined && !(isNum(e.fog.near) && e.fog.near >= 0)) err('/environment/fog/near', 'must be ≥ 0 metres');
+					if (e.fog.far !== undefined && !(isNum(e.fog.far) && e.fog.far > (isNum(e.fog.near) ? e.fog.near : 0)))
+						err('/environment/fog/far', 'must be greater than near');
+				}
+			}
+			if (e.background !== undefined && e.background !== 'none' && e.background !== 'sky' && e.background !== 'ground')
+				err('/environment/background', "must be 'none', 'sky' or 'ground'");
+			if (e.floor !== undefined && !isNum(e.floor)) err('/environment/floor', 'must be a number of metres');
+			if (e.intensity !== undefined && !(isNum(e.intensity) && e.intensity >= 0)) err('/environment/intensity', 'must be ≥ 0');
+			if (e.shadows !== undefined && typeof e.shadows !== 'boolean') err('/environment/shadows', 'must be true or false');
+		}
 	}
 
 	if (!Array.isArray(doc.nodes)) err('/nodes', 'must be an array');

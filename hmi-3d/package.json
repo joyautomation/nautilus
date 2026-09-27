@@ -1,7 +1,7 @@
 {
   "name": "@joyautomation/nautilus-hmi-3d",
   "version": "0.1.0",
-  "description": "The spatial layer of the nautilus HMI kit — a live 3D process view rendered from a *.scene.json document bound to struct tags, on Threlte (Svelte 5 + three.js).",
+  "description": "The spatial layer of the nautilus HMI kit \u2014 a live 3D process view rendered from a *.scene.json document bound to struct tags, on Threlte (Svelte 5 + three.js).",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -19,13 +19,14 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "models"
   ],
   "scripts": {
     "package": "svelte-kit sync && svelte-package && publint",
     "prepublishOnly": "npm run package",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "test": "svelte-kit sync && esbuild tests/*.test.ts --bundle --format=esm --platform=node --outdir=.svelte-kit/tests --log-level=warning && node .svelte-kit/tests/scene.test.js && node .svelte-kit/tests/bindings.test.js && node .svelte-kit/tests/alarms.test.js && node .svelte-kit/tests/kinds.test.js"
+    "test": "svelte-kit sync && esbuild tests/*.test.ts --bundle --format=esm --platform=node --outdir=.svelte-kit/tests --log-level=warning && node .svelte-kit/tests/scene.test.js && node .svelte-kit/tests/bindings.test.js && node .svelte-kit/tests/alarms.test.js && node .svelte-kit/tests/kinds.test.js && node .svelte-kit/tests/drives.test.js && node .svelte-kit/tests/contract.test.js"
   },
   "peerDependencies": {
     "@threlte/core": "^8.0.0",

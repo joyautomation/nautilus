@@ -19,6 +19,11 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
       - run: go build ./...
+      # The spatial rig's HDRI, backdrop and floor textures live in a GitHub
+      # release, not in git (examples/spatial-rig/hmi/assets.json); naut
+      # check holds the scene file to files that exist, so fetch them first.
+      - name: fetch the spatial rig's assets
+        run: node examples/spatial-rig/hmi/fetch-assets.mjs
       - name: naut check (examples)
         run: go run ./cmd/naut check examples
       - name: naut check + naut test (every example project's every manifest)

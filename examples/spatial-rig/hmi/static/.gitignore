@@ -1,0 +1,4 @@
+# Fetched by ../fetch-assets.mjs from the spatial-assets release (../assets.json).
+# models/ is small and committed; the HDRI, backdrop and textures are not.
+env/
+textures/

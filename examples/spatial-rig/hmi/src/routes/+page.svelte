@@ -6,10 +6,21 @@
 	import { SceneView, sceneTags, type SceneDoc } from '@joyautomation/nautilus-hmi-3d';
 	import rig from '../../../rig.scene.json';
 
-	const doc = rig as SceneDoc;
+	// The JSON import's literal types (number[] for a Vec3, a union for the
+	// drives) do not overlap SceneDoc closely enough for a direct cast;
+	// SceneView validates the document at run time, which is the real check.
+	const doc = rig as unknown as SceneDoc;
 	// One subscription, filtered to exactly the struct tags the scene reads.
 	const rt = new RealtimeClient<NautilusFrame>({ url: '/api/stream', tags: sceneTags(doc) });
 	const alarms = createAlarmClient(rt);
+
+	// The look: `lit` is the scene as authored (models, HDRI, shadows);
+	// `flat` is the same document as grey primitives under three lights —
+	// what a project with no assets gets, and the "before" of the pair.
+	// `?look=flat` starts there; the HUD button flips it live.
+	let look = $state<'lit' | 'flat'>(
+		typeof location !== 'undefined' && new URLSearchParams(location.search).get('look') === 'flat' ? 'flat' : 'lit'
+	);
 
 	onMount(() => {
 		rt.start();
@@ -24,12 +35,28 @@
 <svelte:head><title>{doc.name ?? 'Rig'} · 3D</title></svelte:head>
 
 <div class="stage">
-	<SceneView {doc} {rt} {alarms} perf />
+	<SceneView {doc} {rt} {alarms} perf bind:look>
+		{#snippet hud()}
+			<button class="look" onclick={() => (look = look === 'lit' ? 'flat' : 'lit')} title="Switch between the lit scene and the flat, asset-free look">
+				{look === 'lit' ? 'lit' : 'flat'}
+			</button>
+		{/snippet}
+	</SceneView>
 </div>
 
 <style>
 	.stage {
 		position: fixed;
 		inset: 0;
+	}
+	.look {
+		align-self: flex-start;
+		font: 12px/1 system-ui, sans-serif;
+		padding: 4px 10px;
+		border-radius: 999px;
+		border: 1px solid var(--axis, #383835);
+		background: color-mix(in srgb, var(--surface, #1a1a19) 85%, transparent);
+		color: var(--ink, #e8e6e1);
+		cursor: pointer;
 	}
 </style>
