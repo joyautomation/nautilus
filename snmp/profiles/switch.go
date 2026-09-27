@@ -80,8 +80,14 @@ func switchProfile() Profile {
 }
 
 // buildSwitch expands a walk into one Switch root, one SwitchPort per
-// selected interface (named by ifIndex, zero-padded to the widest selected
-// index), and one TempSensor per ENTITY-SENSOR-MIB celsius row.
+// selected interface, and one TempSensor per ENTITY-SENSOR-MIB celsius row.
+//
+// Ports are named by POSITION among the selected interfaces in ifIndex
+// order (Port01 … PortN, zero-padded to at least two digits), not by
+// ifIndex: a real FS S3900 numbers its 28 physical ports ifIndex 165…192,
+// which would have made the front panel's first port SW1_Port165. The
+// ifIndex itself is the Index member, so nothing is lost, and a fixed-port
+// switch's positions are exactly its front-panel numbering.
 func buildSwitch(w walk.Walk, o Options) (Result, error) {
 	b := &builder{w: w}
 	res := Result{Profile: "switch"}
@@ -110,10 +116,10 @@ func buildSwitch(w walk.Walk, o Options) (Result, error) {
 		}
 		return res, fmt.Errorf("no ethernet ports (ifType 6) in the walk — pass --ports to pick interfaces by ifIndex")
 	}
-	width := max(2, padWidth(ports[len(ports)-1]))
+	width := max(2, padWidth(len(ports)))
 
 	missing := map[string]int{} // note once per object, not once per port
-	for _, idx := range ports {
+	for pos, idx := range ports {
 		i := strconv.Itoa(idx)
 		m := map[string]snmp.Member{
 			"Index":   cnst(idx),
@@ -154,7 +160,7 @@ func buildSwitch(w walk.Walk, o Options) (Result, error) {
 		if poe := pethPsePortDetectionStatus + ".1." + i; has(w, poe) {
 			m["PoeOn"] = bind(poe, hw.Binding{Eq: poeDelivering})
 		}
-		res.Instances = append(res.Instances, Instance{Suffix: "_Port" + padded(idx, width), Type: "SwitchPort", Members: m})
+		res.Instances = append(res.Instances, Instance{Suffix: "_Port" + padded(pos+1, width), Type: "SwitchPort", Members: m})
 	}
 	for _, k := range sortedKeys(missing) {
 		b.notes = append(b.notes, fmt.Sprintf("SwitchPort.%s (%d port(s))", k, missing[k]))

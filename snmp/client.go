@@ -172,12 +172,38 @@ func (s *session) Close() error {
 	return s.g.Conn.Close()
 }
 
+// resync answers a v3 reply gosnmp could not decode. Seen on a real FSOS
+// switch on the very first exchange of a session: the reply was a
+// usmStats Report (the agent's clock window had not been agreed yet) that
+// gosnmp tried to decrypt as an authPriv scopedPDU, and the walk died with
+// "error parsing SNMPV3 contextEngineID: unknown field type". The next
+// session worked, because a fresh Connect re-runs engine discovery. So a
+// decode error on a v3 session is answered ONCE by exactly that: close,
+// reconnect (discovery again), retry. A second failure is the caller's.
+func (s *session) resync(ctx context.Context, err error) bool {
+	if s.g.Version != gosnmp.Version3 || err == nil {
+		return false
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "error parsing SNMPV3") && !strings.Contains(msg, "unknown field type") {
+		return false
+	}
+	if s.g.Conn != nil {
+		_ = s.g.Conn.Close()
+	}
+	s.g.Context = ctx
+	return s.g.Connect() == nil
+}
+
 func (s *session) Get(ctx context.Context, oids []string) ([]walk.Varbind, error) {
 	var out []walk.Varbind
 	for start := 0; start < len(oids); start += s.g.MaxOids {
 		end := min(start+s.g.MaxOids, len(oids))
 		s.g.Context = ctx
 		pkt, err := s.g.Get(dotted(oids[start:end]))
+		if err != nil && s.resync(ctx, err) {
+			pkt, err = s.g.Get(dotted(oids[start:end]))
+		}
 		if err != nil {
 			return nil, s.explain(ctx, err)
 		}
@@ -198,6 +224,9 @@ func (s *session) Get(ctx context.Context, oids []string) ([]walk.Varbind, error
 func (s *session) GetBulk(ctx context.Context, oid string, maxRep int) ([]walk.Varbind, error) {
 	s.g.Context = ctx
 	pkt, err := s.g.GetBulk([]string{"." + oid}, 0, uint32(maxRep))
+	if err != nil && s.resync(ctx, err) {
+		pkt, err = s.g.GetBulk([]string{"." + oid}, 0, uint32(maxRep))
+	}
 	if err != nil {
 		return nil, s.explain(ctx, err)
 	}

@@ -702,6 +702,14 @@ apart from the first two, which are additive):
 - **Companion tags** (`<id>__Online`, `<id>__LastPollMs`) are declared in
   every generated tag file (the sparkplug-host rule; modbus omits them and
   makes projects declare them by hand).
+- **Switch ports are named by position** in ifIndex order (`Port01…PortN`),
+  not by ifIndex: the office S3900 numbers its 28 front-panel ports
+  ifIndex 165…192. `SwitchPort.Index` still carries the ifIndex. (First live
+  switch, 2026-09-26; answers §12.11.)
+- **An undecodable SNMPv3 reply is answered by one reconnect** (engine
+  discovery again) and a retry: the first exchange with the S3900 returned
+  a reply gosnmp could not parse (its usmStats Report, taken for an
+  encrypted PDU), and the next session was fine.
 - Manifest keys beyond §6.1: snmp `context:` (v3 contextName; snmpsim
   needs it), redfish `exists:` (a BOOL for "the path is present") and
   `agg:` over `[*]` paths, prom `label:` (a label as a STRING member) and

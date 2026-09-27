@@ -89,8 +89,11 @@ func TestSwitchPorts(t *testing.T) {
 			got = append(got, in.Suffix)
 		}
 	}
-	// Explicit selection includes the VLAN interface and pads to 4 digits.
-	if strings.Join(got, ",") != "_Port0001,_Port0002,_Port0003,_Port1001" {
+	// Explicit selection includes the VLAN interface; ports are named by
+	// position in ifIndex order (the VLAN interface at ifIndex 1001 is the
+	// fourth selected), never by ifIndex — a real S3900 numbers its front
+	// panel ifIndex 165…192.
+	if strings.Join(got, ",") != "_Port01,_Port02,_Port03,_Port04" {
 		t.Errorf("--ports 1-3,1001 = %v", got)
 	}
 	none, _ := ParseIndexSet("500-600")
