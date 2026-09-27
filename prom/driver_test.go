@@ -169,6 +169,67 @@ func TestDriverAgainstStandIn(t *testing.T) {
 	}
 }
 
+// The exporter going away and coming back on the same address: the source
+// goes Stale with __Online false, then recovers to connected with
+// __Online true and Good quality, and the rate member resumes. That the
+// first post-reconnect scrape resets the rate counters instead of
+// computing a rate across the gap is pinned deterministically by
+// TestPollReconnectResetsRateCounters (poll.go driven directly); this is
+// the recovery path end to end, through hw.Base's poll loop and a real
+// socket.
+func TestDriverRecoversAfterStandInRestart(t *testing.T) {
+	srv := startStandIn(t, baseBody)
+	addr := srv.Addr()
+	d, err := prom.New(testManifest(srv.URL()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d.Start(ctx)
+	defer d.Stop()
+	get := func(v ir.Value, m string) ir.Value { return v.Fld[v.Struct.FieldIndex[m]] }
+	cpuPct := func() float64 {
+		v, _ := d.ReadInputs()
+		sv, ok := v["NODE1"].(ir.Value)
+		if !ok {
+			return 0
+		}
+		return get(sv, "CpuPct").F
+	}
+
+	if err := srv.Bump("node_cpu_seconds_total", map[string]string{"cpu": "0", "mode": "idle"}, 5); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "a rate before the outage", func() bool { return cpuPct() != 0 })
+
+	srv.Stop()
+	waitFor(t, "source goes stale", func() bool { return d.Quality()["NODE1"] == nio.Stale })
+	if v, _ := d.ReadInputs(); v["NODE1__Online"] != false {
+		t.Fatalf("NODE1__Online while stopped = %v", v["NODE1__Online"])
+	}
+	if err := srv.Start(addr); err != nil {
+		t.Fatalf("restart the stand-in on %s: %v", addr, err)
+	}
+
+	waitFor(t, "source reconnects", func() bool {
+		return d.Health().Sources[0].State == "connected"
+	})
+	waitFor(t, "Good quality and __Online true again", func() bool {
+		v, _ := d.ReadInputs()
+		_, notGood := d.Quality()["NODE1"]
+		return v["NODE1__Online"] == true && !notGood
+	})
+	// The rate member resumes: let a flat interval settle CpuPct at 100
+	// (idle's rate 0), then advance idle again — CpuPct can only move off
+	// 100 if a fresh rate is computed after the reconnect.
+	waitFor(t, "a flat post-reconnect rate", func() bool { return cpuPct() == 100 })
+	if err := srv.Bump("node_cpu_seconds_total", map[string]string{"cpu": "0", "mode": "idle"}, 5); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "a fresh post-reconnect rate", func() bool { return cpuPct() < 100 })
+}
+
 // One failing member (a metric absent from the scrape) leaves its siblings
 // Good — the tag as a whole still delivers, and Quality never marks it Bad
 // for a merely-missing optional sensor.
