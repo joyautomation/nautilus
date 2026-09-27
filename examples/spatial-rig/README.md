@@ -53,9 +53,9 @@ coupling turns at `P101.Speed` and the pump goes green while running, the
 valve handle follows `XV101.Pos`, the pipes show flow. Orbit with the
 mouse; click an asset for its 2D faceplate, every member of its struct,
 its quality and its alarms. The HUD shows the frame rate and the p95 of
-tag-change → pixel (the controller's frame timestamp to the animation
-frame after the one that drew it), which is what the package's
-performance budget is judged on.
+tag-change → pixel two ways (arrival in the browser to the pixel, and the
+controller's timestamp to the pixel when the clocks agree), which is what
+the package's performance budget is judged on.
 
 ### Make something happen
 

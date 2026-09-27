@@ -326,13 +326,17 @@ Targets (from the R&D plan's Phase 1 exit):
 
 Measurement is built in: `PerfSampler` counts `requestAnimationFrame` per
 second and, per SSE frame, schedules two animation frames after the frame
-arrived and records `Date.now() − frame.ts` (an upper bound: the frame after
-the one that drew it). It ignores frames while `document.hidden`, because a
-hidden tab throttles rAF to ~1 Hz and Threlte does not mount canvas
-children until a frame is drawn, so a background tab's numbers are
-nonsense. `PerfHud` shows fps, p95 and active alarms; `perf` on `SceneView`
-turns it on. Browser and controller must share a clock (same machine, or
-NTP) for the latency figure to mean anything.
+arrived and records two latencies. **rx→pixel** is arrival in the browser
+to the frame after the one that drew it, on the browser's own clock, so it
+is honest from any device; it is the render cost and the primary figure.
+**ctrl→pixel** is `Date.now() − frame.ts`, the controller's stamp to the
+pixel, which adds the network hop but only means anything when the two
+clocks agree (same machine, or NTP); the HUD shows it only while it is
+plausible and otherwise reports the clock offset instead. Both ignore
+frames while `document.hidden`, because a hidden tab throttles rAF to
+~1 Hz and Threlte does not mount canvas children until a frame is drawn.
+`PerfHud` shows fps, both p95s and active alarms; `perf` on `SceneView`
+turns it on.
 
 **Results** are recorded in §9 as they are taken. The desktop passes with
 room to spare: 60 fps is the display's refresh, and 33 ms is one SSE frame
@@ -431,14 +435,17 @@ AMD Radeon RX 7900 XT, Chrome).
 
 | Date | Machine | Scene | fps | p95 ts→pixel | Bundle (gz) | Notes |
 |---|---|---|---|---|---|---|
-| 2026-09-26 | mira1 desktop, Radeon RX 7900 XT, Chrome (headed, 2560×1440) | rig: 3 nodes, 2 pipes, desk, grid | 60 (vsync) | 33 ms (n=197); 34 ms (n=200) on a second take | 438 kB | controller on the same machine (shared clock); 0 console errors; recipe `content/assets/capture/n56/browser/01-first-render.mjs` |
+| 2026-09-26 | mira1 desktop, Radeon RX 7900 XT, Chrome (headed, 2560×1440) | rig: 3 nodes, 2 pipes, desk, grid | 60 (vsync) | ctrl→pixel 33 ms (n=197); 34 ms (n=200) on a second take | 438 kB | controller on the same machine (shared clock); 0 console errors; recipe `content/assets/capture/n56/browser/01-first-render.mjs` |
 
 ## 10. Risks & open questions
 
-- **Publishing.** `publish.yml` publishes the 2D kit on a version bump on
-  main. Whether `hmi-3d` joins that flow (a second job, a second
-  `PUBLISH_*` variable, `version-sync` for it) is a release-model decision
-  for the PR review; the package is versioned `0.1.0` and private until then.
+- **Publishing — decided 2026-09-26: wait until it is baked.** `hmi-3d`
+  stays in-repo (consumed by `file:` link) through Milestone 2's first
+  item, so the first npm version already carries kinds-as-data. Joining
+  `publish.yml`'s publish-on-bump flow then means a second job and
+  `PUBLISH_*` variable, a `version-sync` line, a one-time manual first
+  publish to create the package for npm's trusted publishing, and the
+  example moving from `file:` to a version range.
 - **HTTPS.** Not needed for the desktop 3D view; required for WebXR and
   camera access later (R&D plan, Phase 4b). Nothing here changes `server/`.
 - **Two copies of three.js** is the classic failure of a symlinked

@@ -155,11 +155,13 @@ and build the package first (`npm run package` → `dist/`).
 
 ## Measuring
 
-`<SceneView perf>` shows the frame rate and the p95 of controller frame
-timestamp → the animation frame after the one that drew it. Measure in a
-**visible** window: a hidden tab throttles `requestAnimationFrame` to ~1 Hz
-and the numbers mean nothing. The controller and the browser must share a
-clock for the latency figure to be real.
+`<SceneView perf>` shows the frame rate and two p95 latencies: **rx→pixel**,
+a frame's arrival in the browser to the animation frame after the one that
+drew it (the render cost, honest from any device), and **ctrl→pixel**, the
+controller's timestamp to the same pixel, which adds the network hop but
+needs the two clocks to agree; when they don't, the HUD says by how much
+instead. Measure in a **visible** window: a hidden tab throttles
+`requestAnimationFrame` to ~1 Hz and the numbers mean nothing.
 
 ## Development
 

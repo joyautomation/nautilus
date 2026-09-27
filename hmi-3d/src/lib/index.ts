@@ -39,4 +39,4 @@ export type { AssetAlarm, AlarmLike } from './alarms.js';
 // Colours from the theme, and the measurement sampler behind PerfHud.
 export { DEFAULT_PALETTE, paletteFromTheme } from './palette.js';
 export type { Palette } from './palette.js';
-export { PerfSampler } from './perf.svelte.js';
+export { PerfSampler, PLAUSIBLE_E2E_MS } from './perf.svelte.js';
