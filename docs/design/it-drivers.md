@@ -1,6 +1,8 @@
 # Design brief: IT hardware drivers for nautilus (SNMP, Redfish, Prometheus)
 
-Status: **design, 2026-09-26.** Nothing built yet. Written on the `it-drivers`
+Status: **design 2026-09-26; `hw/` built the same day** (types table +
+`hw_types.st`, `Binding`/`Expr`/`Counter`, `Base` with tests through the real
+runtime). Protocol packages, codegen and the example are next. Written on the `it-drivers`
 branch from `randd/handoffs/IT-DRIVERS-HANDOFF.md`; the UDT set in §2 is the
 contract the `spatial-hmi` branch binds its `server`, `switch` and
 `switch-port` scene nodes to, so §2 is frozen once this brief merges and every
@@ -229,7 +231,11 @@ guessed. Rates are per second and `Pct` members are 0–100.
 | `PDUOutlet.Name` | STRING | | outlet label |
 | `PDUOutlet.On` | BOOL | | read-back of the outlet state |
 | `PDUOutlet.Amps`, `Watts` | REAL | A, W | metered outlets only, else 0 |
-| `PDUOutlet.Cmd` | BOOL | | **write, opt-in (§7):** desired state; read-back is `On` |
+
+A command is **not** a member: it is a separate scalar output tag
+(`PDU1_Outlet03_Cmd : BOOL`, §7), the sparkplug-host rule for writable UDT
+members, so the struct tag stays an input and `On` reads back what the
+device holds.
 
 ### `UPS` (SNMP; RFC 1628 UPS-MIB, CyberPower CPS-MIB)
 
@@ -356,6 +362,9 @@ parked ──(Enable tag true / none)──▶ connecting ──first full poll 
   poll is older than this reports Stale even while "connected" — a hung
   agent that accepts the socket and never answers is the Modbus lesson
   ("connected" and "heard from" are different facts).
+- Bad is tracked **per tag per scan class**: a port whose counters (fast
+  class) came back but whose status row (slow class) failed is Bad as a
+  whole, and clears once every class that touches it has answered.
 - A member absent from an answered resource (a sensor the BMC lists but
   gives `Reading: null`, an OID answering `noSuchInstance`) is **zero-of-field
   and `Present: false`/`Fault: true`** where the UDT has such a member, and
@@ -505,10 +514,13 @@ becomes `output`. Then:
   baseline never written back (no `Rewrite` here — a PDU that reverts an
   outlet is a fault to alarm on, not a keep-alive to feed). A write to a
   parked source is queued (last value per tag) and delivered on reconnect.
-- **`Server.PowerCmd : INT`** (0 none, 1 on, 2 graceful shutdown, 3 force
-  off, 4 restart) posts `Actions/ComputerSystem.Reset` once on change to a
-  non-zero value; the program is responsible for returning it to 0. It is
-  listed in the UDT for the contract's sake and generated with no binding.
+- **Commands are scalar output tags, never UDT members** — `hw.WriteDecl`
+  binds `<tag>_Cmd` (a BOOL for an outlet, an INT for server power: 0 none,
+  1 on, 2 graceful shutdown, 3 force off, 4 restart, posted as
+  `Actions/ComputerSystem.Reset` once on change to non-zero, the program
+  returning it to 0) to a (struct tag, member) target. This is the
+  sparkplug-host rule for writable template members and keeps the struct an
+  input whose member reads back the device's truth.
 - **Fencing is not this driver's job.** The home cluster's fence path is
   its own script with its own SNMP credentials and an "error is a failure,
   never probably-off" rule; a Nautilus controller that can power-cycle the
