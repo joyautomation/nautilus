@@ -12,7 +12,7 @@ tags:
     members:
       CpuPct:      {expr: "100 - 100 * idle / cpus", from: {cpus: {metric: node_cpu_seconds_total, labels: {mode: "idle"}, agg: count}, idle: {metric: node_cpu_seconds_total, labels: {mode: "idle"}, agg: sum, rate: true}}}
       FanCount:    {const: 1}
-      Fault:       {expr: "maxtemp >= crit", from: {crit: {metric: node_hwmon_temp_crit_celsius, agg: min}, maxtemp: {metric: node_hwmon_temp_celsius, agg: max}}}
+      Fault:       {expr: "maxtemp >= crit", from: {crit: {metric: node_hwmon_temp_crit_celsius, agg: max}, maxtemp: {metric: node_hwmon_temp_celsius, agg: max}}}
       InletTempC:  {const: 0}
       Load1:       {metric: node_load1}
       MaxTempC:    {metric: node_hwmon_temp_celsius, agg: max}
@@ -24,12 +24,12 @@ tags:
       Serial:      {metric: node_dmi_info, label: product_serial}
       TempCount:   {const: 2}
       UptimeS:     {expr: "__now - boot", from: {boot: {metric: node_boot_time_seconds}}}
-      Warning:     {expr: "maxtemp >= warn", from: {maxtemp: {metric: node_hwmon_temp_celsius, agg: max}, warn: {metric: node_hwmon_temp_max_celsius, agg: min}}}
+      Warning:     {expr: "maxtemp >= warn", from: {maxtemp: {metric: node_hwmon_temp_celsius, agg: max}, warn: {metric: node_hwmon_temp_max_celsius, agg: max}}}
   - name: BENCH1_Fan1
     type: Fan
     source: BENCH1
     members:
-      Fault:   {expr: "rpm == 0", from: {rpm: {metric: node_hwmon_fan_rpm, labels: {chip: "platform_coretemp_0", sensor: "fan1"}}}}
+      Fault:   {const: false}
       Name:    {const: "platform_coretemp_0 fan1"}
       Pct:     {const: 0}
       Present: {const: true}

@@ -72,19 +72,36 @@ func generateNode(scrape prom.Scrape, opts Options) (Output, error) {
 
 	if len(temps) > 0 {
 		serverMembers["MaxTempC"] = prom.Binding{Metric: "node_hwmon_temp_celsius", Agg: "max"}
-		if crit, ok := minMetric(scrape, "node_hwmon_temp_crit_celsius", nil); ok {
+		// Fault / Warning: the chip's own alarm bits when the exporter has
+		// them (node_hwmon_temp_crit_alarm / node_hwmon_temp_alarm, one per
+		// sensor, max over the box), else the hottest reading against the
+		// HIGHEST threshold on the box. A selector cannot pair each sensor
+		// with its own threshold, and comparing the hottest reading with the
+		// LOWEST threshold (a 55 °C wifi module against an 85 °C CPU) faulted
+		// a healthy workstation at rest. The per-sensor TempSensor children
+		// carry the precise verdict (HighHigh/High per sensor); this member
+		// is the coarse one for the Server card.
+		switch {
+		case hasMetric(scrape, "node_hwmon_temp_crit_alarm"):
+			serverMembers["Fault"] = prom.Binding{Expr: "alarm >= 1", From: map[string]prom.Selector{
+				"alarm": {Metric: "node_hwmon_temp_crit_alarm", Agg: "max"},
+			}}
+		case hasMetric(scrape, "node_hwmon_temp_crit_celsius"):
 			serverMembers["Fault"] = prom.Binding{Expr: "maxtemp >= crit", From: map[string]prom.Selector{
 				"maxtemp": {Metric: "node_hwmon_temp_celsius", Agg: "max"},
-				"crit":    {Metric: "node_hwmon_temp_crit_celsius", Agg: "min"},
+				"crit":    {Metric: "node_hwmon_temp_crit_celsius", Agg: "max"},
 			}}
-			_ = crit
 		}
-		if warn, ok := minMetric(scrape, "node_hwmon_temp_max_celsius", nil); ok {
+		switch {
+		case hasMetric(scrape, "node_hwmon_temp_alarm"):
+			serverMembers["Warning"] = prom.Binding{Expr: "alarm >= 1", From: map[string]prom.Selector{
+				"alarm": {Metric: "node_hwmon_temp_alarm", Agg: "max"},
+			}}
+		case hasMetric(scrape, "node_hwmon_temp_max_celsius"):
 			serverMembers["Warning"] = prom.Binding{Expr: "maxtemp >= warn", From: map[string]prom.Selector{
 				"maxtemp": {Metric: "node_hwmon_temp_celsius", Agg: "max"},
-				"warn":    {Metric: "node_hwmon_temp_max_celsius", Agg: "min"},
+				"warn":    {Metric: "node_hwmon_temp_max_celsius", Agg: "max"},
 			}}
-			_ = warn
 		}
 	}
 	inletKey, inletFound := findInlet(temps, labels)
@@ -114,9 +131,7 @@ func generateNode(scrape prom.Scrape, opts Options) (Output, error) {
 				"Present": {Binding: hw.Binding{Const: true}},
 				"RPM":     {Metric: "node_hwmon_fan_rpm", Labels: map[string]string{"chip": k.chip, "sensor": k.sensor}},
 				"Pct":     {Binding: hw.Binding{Const: 0.0}},
-				"Fault": {Expr: "rpm == 0", From: map[string]prom.Selector{
-					"rpm": {Metric: "node_hwmon_fan_rpm", Labels: map[string]string{"chip": k.chip, "sensor": k.sensor}},
-				}},
+				"Fault":   fanFault(scrape, k),
 			},
 		})
 		out.Desc[name] = "fan " + labelOr(labels, k, k.chip+"/"+k.sensor)
@@ -376,4 +391,27 @@ func digits(n int) int {
 		n = 1
 	}
 	return len(strconv.Itoa(n))
+}
+
+// fanFault is a fan's Fault binding, from what the chip actually says. A
+// stopped fan is not a failed fan: a GPU or a case fan idles at 0 rpm when
+// the box is cool (a real workstation showed four of five at 0 at rest), so
+// "rpm == 0" would alarm a healthy machine. The chip's alarm bit when the
+// exporter has one; else below the chip's own minimum (a min of 0 means
+// the fan is allowed to stop); else no verdict at all — false, not a
+// guess.
+func fanFault(scrape prom.Scrape, k hwmonKey) prom.Binding {
+	sel := func(metric string) prom.Selector {
+		return prom.Selector{Metric: metric, Labels: map[string]string{"chip": k.chip, "sensor": k.sensor}}
+	}
+	if _, ok := findSample(scrape, "node_hwmon_fan_alarm", map[string]string{"chip": k.chip, "sensor": k.sensor}); ok {
+		return prom.Binding{Expr: "alarm >= 1", From: map[string]prom.Selector{"alarm": sel("node_hwmon_fan_alarm")}}
+	}
+	if _, ok := findSample(scrape, "node_hwmon_fan_min_rpm", map[string]string{"chip": k.chip, "sensor": k.sensor}); ok {
+		return prom.Binding{Expr: "min > 0 && rpm < min", From: map[string]prom.Selector{
+			"rpm": sel("node_hwmon_fan_rpm"),
+			"min": sel("node_hwmon_fan_min_rpm"),
+		}}
+	}
+	return prom.Binding{Binding: hw.Binding{Const: false}}
 }

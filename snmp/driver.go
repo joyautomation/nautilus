@@ -170,6 +170,9 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 	for _, t := range m.Tags {
 		ty, _ := hw.TypeByName(t.Type)
 		for _, f := range ty.Fields {
+			if f.Name == "Online" {
+				continue // hw.Base mirrors the source's freshness into an unbound Online
+			}
 			if _, ok := t.Members[f.Name]; !ok {
 				if unbound[t.Source] == nil {
 					unbound[t.Source] = map[string]map[string]bool{}

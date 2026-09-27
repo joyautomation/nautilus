@@ -1,0 +1,118 @@
+# it-rack — the office rack as a controller project: a 28-port switch over
+# SNMP and this workstation over node_exporter, every port, fan and sensor a
+# UDT tag, alarmed by rules, rolled up by rack.st. The bench build: both
+# devices are stand-ins replaying the recordings in fixtures/, so the whole
+# thing runs on a laptop with nothing racked. live.yaml points the SAME tags
+# at the real devices.
+#
+#   naut check .                                  validate offline
+#   naut test  .                                  the acceptance suite (it-rack_test.yaml)
+#   naut snmp serve --walk fixtures/switch.snmpwalk --ramp &        # the "switch"
+#   naut prometheus serve --file fixtures/workstation.prom --ramp & # the "host"
+#   SNMP_SW1_COMMUNITY=public naut run .          dashboard + tag API on http://localhost:8080
+#
+# Regenerate the committed files (byte-identical) with:
+#   naut snmp import --tag SW1 --host 127.0.0.1 --port 1161 --walk fixtures/switch.snmpwalk
+#   naut prometheus import --tag MIRA1 --url http://127.0.0.1:9100/metrics --file fixtures/workstation.prom
+name: it-rack
+
+server:
+  addr: "localhost:8080"
+  online-edits: true
+
+tasks:
+  - program: rack.st
+    scan: 500ms       # rollups over values that move every few seconds
+
+# hw_types.st (the IT-hardware UDT set) is a root-level .st with no PROGRAM,
+# so it composes as a library automatically — same as every generated
+# *_types.st in this codebase. Both importers write the same file.
+#
+# tags/snmp.yaml and tags/prometheus.yaml are GENERATED. Do not hand-edit;
+# re-run the imports (header above).
+tag-files:
+  - tags/snmp.yaml
+  - tags/prometheus.yaml
+
+# The rollups rack.st computes — hand-written because they exist only in
+# this project, not on any device.
+tags:
+  - { name: PortsUp, role: state, init: 0, desc: "Switch ports with link" }
+  - { name: PortsDown, role: state, init: 0, desc: "Switch ports enabled but without link" }
+  - { name: DevicesOnline, role: state, init: 0, desc: "Devices answering their polls, of 2" }
+  - { name: RackFault, role: state, init: false, desc: "Any device faulted or dark" }
+  - { name: RackMaxTempC, role: state, init: 0.0, unit: "°C", desc: "Hottest reading in the rack" }
+
+# Two drivers, one scan: SNMP for the switch, node_exporter for the host.
+# Intervals are seconds — a switch's counters move every few seconds and
+# an exporter is scraped every 15 s; the 500 ms scan above reads the same
+# snapshot in between. The community is NEVER here: the manifest names
+# SNMP_SW1_COMMUNITY and the driver reads it where it runs.
+drivers:
+  - type: snmp
+    manifest: snmp_manifest.yaml
+    scan-rate: 5s
+    scan-classes: { slow: 60s }
+    tag-classes: { slow: ["*.Name", "*.Alias", "*.Model", "*.Serial"] }   # inventory strings
+  - type: prometheus
+    manifest: prometheus_manifest.yaml
+    scan-rate: 15s
+
+alarms:
+  # The device is the site: SW1_Port03 -> SW1, MIRA1_Fan2 -> MIRA1, and the
+  # root tag SW1 -> SW1 — which is what `enable: "{site}__Online"` needs, so
+  # a dark device's alarms move to Suppressed instead of freezing lit on
+  # their last-known reading.
+  site-from: "^([A-Za-z0-9]+?)(?:_|$)"
+
+  defaults: { ack-required: true, auto-clear: true, shelve: true }
+  shelve-times: [15m, 1h, 4h]
+  journal: { keep: 500 }
+
+  # Rules, not definitions: one line per (type, member) covers every port,
+  # fan and sensor on every device, now and after the next import. A PDU
+  # or UPS added later is alarmed the moment its tags exist — add
+  #   - { match: { type: PSU, member: Fault }, priority: high, enable: "{site}__Online" }
+  #   - { match: { type: UPS, member: OnBattery }, priority: high, enable: "{site}__Online" }
+  # when a device with those types is imported (a rule matching nothing
+  # is a `naut check` warning, so they are not listed yet).
+  rules:
+    - match: { type: SwitchPort, member: Down }
+      name: "{tag} link down"
+      priority: medium
+      on-delay: 15s
+      enable: "{site}__Online"
+      class: network
+    - match: { type: Fan, member: Fault }
+      name: "{desc} fan fault"
+      priority: high
+      on-delay: 30s
+      enable: "{site}__Online"
+      class: equipment
+    - match: { type: TempSensor, member: HighHigh }
+      name: "{desc} temperature critical"
+      priority: critical
+      on-delay: 10s
+      enable: "{site}__Online"
+      class: equipment
+    - match: { type: TempSensor, member: High }
+      name: "{desc} temperature high"
+      priority: medium
+      on-delay: 60s
+      enable: "{site}__Online"
+      class: equipment
+    - match: { type: Server, member: Fault }
+      name: "{desc} health critical"
+      priority: high
+      on-delay: 5s
+      enable: "{site}__Online"
+      class: equipment
+    - match: { type: Switch, member: Fault }
+      name: "{desc} chassis fault"
+      priority: high
+      on-delay: 5s
+      enable: "{site}__Online"
+      class: equipment
+
+  defs:
+    - { id: RackFault, tag: RackFault, name: "Rack: a device is faulted or dark", priority: high, on-delay: 30s, class: equipment }
