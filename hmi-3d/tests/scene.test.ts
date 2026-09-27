@@ -188,7 +188,7 @@ describe('validateScene: kinds as data, environment, textures (§3c)', () => {
 			'/kinds/b/bounds',
 			'/kinds/b/labelAt',
 			'/kinds/b/status',
-			'/kinds/c',
+			'/kinds/c/drive',
 			'/kinds/c',
 			'/kinds/d/drive/0/tint/on',
 			'/environment/hdri',

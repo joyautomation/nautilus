@@ -5,11 +5,12 @@
 //
 //   registry={{ ...builtinRegistry, server: serverKind, 'switch-port': portKind }}
 //
-// which is how the IT-hardware kinds arrive without touching this package.
+// which is how the IT-hardware kinds arrive without touching this package —
+// or, for a kind a component file defines (§3d), with kindOf() or by
+// handing SceneView its modules. The pure half lives in defs.ts.
 import type { Component } from 'svelte';
-import type { SceneDoc, SceneKind, Vec3 } from './scene.js';
-import { formatStatus } from './drives.js';
 import { tankStatus, pumpStatus, valveStatus, BUILTIN_CONTRACT } from './kinds.js';
+import type { NodeKindDef, NodeProps, NodeRegistry } from './defs.js';
 import Tank3D from './components/Tank3D.svelte';
 import Pump3D from './components/Pump3D.svelte';
 import Valve3D from './components/Valve3D.svelte';
@@ -17,49 +18,8 @@ import TankPanel from './components/TankPanel.svelte';
 import PumpPanel from './components/PumpPanel.svelte';
 import ValvePanel from './components/ValvePanel.svelte';
 
-/** What every kind's component receives. Static `props` and resolved `bind`
- * props are spread on top (bind wins), so a component declares the extras
- * it understands and ignores the rest. */
-export interface NodeProps {
-	/** The node's struct tag, whole, or undefined (no tag, or not yet received). */
-	value: unknown;
-	/** Quality of the node's tag AND of every bound ref's root. */
-	good: boolean;
-	label: string;
-	selected: boolean;
-	[prop: string]: unknown;
-}
-
-export interface PanelProps {
-	value: unknown;
-	label: string;
-	good: boolean;
-}
-
-export interface NodeKindDef {
-	component: Component<NodeProps>;
-	/** A data kind (docs/design/spatial-hmi.md §3c): the document's entry,
-	 * handed to the component that loads the model and applies the drives. */
-	data?: SceneKind;
-	/** The UDT this kind reads by default, and the members it reads — the
-	 * contract `naut check` and `naut scene init` work from. A scene's
-	 * `kinds` block re-points `type` for a project whose UDT is named
-	 * differently. */
-	type?: string;
-	members?: string[];
-	/** Local-space box for the alarm halo and the selection outline.
-	 * `'auto'` on a data kind: the model reports its box once loaded. */
-	bounds: { size: Vec3; center: Vec3 } | 'auto';
-	/** Where the floating label sits, local space; on a data kind, absent =
-	 * the top centre of the bounds. */
-	labelAt?: Vec3;
-	/** The label's value text. Pure, so it is testable and matches the panel. */
-	status?: (value: unknown, good: boolean) => string;
-	/** The 2D faceplate the inspector drawer shows; absent = the member table only. */
-	panel?: Component<PanelProps>;
-}
-
-export type NodeRegistry = Record<string, NodeKindDef>;
+export type { NodeProps, PanelProps, NodeKindDef, NodeRegistry, Box, KindMeta } from './defs.js';
+export { kindOf, matchModule, componentRegistry, assemblyBounds, registryFor } from './defs.js';
 
 export const tankKind: NodeKindDef = {
 	component: Tank3D as Component<NodeProps>,
@@ -89,32 +49,3 @@ export const valveKind: NodeKindDef = {
 };
 
 export const builtinRegistry: NodeRegistry = { tank: tankKind, pump: pumpKind, valve: valveKind };
-
-/**
- * The registry a document renders with: the given registry, with the
- * document's data kinds (a `kinds` entry with a `model`) laid on top. A
- * data kind under a built-in's name keeps that built-in's contract, status
- * text and faceplate and replaces the geometry; a new name gets the
- * drawer's member table and, if it has a `status` template, that text.
- * `GltfNode` is the component for every one of them; it is passed in so
- * this module never imports it (it is a dynamic import, §3c).
- */
-export function registryFor(doc: SceneDoc, registry: NodeRegistry, gltf: Component<NodeProps>): NodeRegistry {
-	const out: NodeRegistry = { ...registry };
-	for (const [name, k] of Object.entries(doc.kinds ?? {})) {
-		if (!k.model) continue;
-		const base = registry[name];
-		const tpl = k.status;
-		out[name] = {
-			component: gltf,
-			data: k,
-			type: k.type ?? base?.type,
-			members: k.members ?? base?.members,
-			bounds: k.bounds && k.bounds !== 'auto' ? k.bounds : 'auto',
-			labelAt: k.labelAt,
-			status: tpl ? (value, good) => formatStatus(tpl, value, good) : base?.status,
-			panel: base?.panel
-		};
-	}
-	return out;
-}

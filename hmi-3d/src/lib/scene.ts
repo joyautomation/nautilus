@@ -111,10 +111,22 @@ export interface ScenePipe {
 	bind?: { flowing?: string };
 }
 
+/** An assembly (docs/design/spatial-hmi.md §3d): a kind made of kinds.
+ * Parts are nodes in the kind's own frame, and a part's `tag` is a MEMBER
+ * of the assembly's struct (`Pump` inside `SK101` reads `SK101.Pump`); a
+ * ref inside (a part's `bind`, a pipe's `flowing`) is a path from that
+ * struct. That nesting is the whole parameter mechanism. */
+export interface SceneAssembly {
+	nodes: SceneNode[];
+	pipes?: ScenePipe[];
+}
+
 /** The kind ↔ struct-type contract for a kind (docs/design/spatial-hmi.md
  * §3b). The built-in kinds carry defaults; a project re-points one with
  * `type`, and declares its own kinds with `type` and the `members` their
- * component reads, so `naut check` can hold every node to it. */
+ * component reads, so `naut check` can hold every node to it. A kind is
+ * then defined ONE of three ways, or by the app's registry: a `model`
+ * (§3c), a `component` file or an `assembly` (§3d). */
 export interface SceneKind {
 	/** The UDT a node of this kind binds. */
 	type?: string;
@@ -123,6 +135,13 @@ export interface SceneKind {
 	/** A data kind (§3c): a glTF/GLB, as a URL path from the app root.
 	 * Absent = the registry's Svelte component of this name. */
 	model?: string;
+	/** A component kind (§3d): a Svelte file, as a source path relative to
+	 * the scene file (`hmi/src/lib/Skid.svelte`). The app builds it and
+	 * hands SceneView its modules; the extension lists it and `naut check`
+	 * holds its nodes to `type`/`members`. */
+	component?: string;
+	/** An assembly (§3d): parts and pipes in the kind's own frame. */
+	assembly?: SceneAssembly;
 	/** The halo / selection box: the loaded model's box, or an explicit one. */
 	bounds?: 'auto' | { size: Vec3; center: Vec3 };
 	/** Where the label floats. Default: the top centre of the bounds. */
@@ -133,12 +152,39 @@ export interface SceneKind {
 	drive?: Drive[];
 }
 
-/** Every member a kind reads: `members`, plus what its drives and status
- * template name — so a drive never repeats the list (§3c). */
+/** The members an assembly reads off its struct: every part's `tag`, and
+ * the root of every ref inside it, deduplicated, in order (§3d). */
+export function assemblyMembers(a: SceneAssembly | undefined): string[] {
+	const out: string[] = [];
+	const add = (ref: string | undefined) => {
+		if (!ref) return;
+		const m = refRoot(ref);
+		if (m && !out.includes(m)) out.push(m);
+	};
+	for (const n of a?.nodes ?? []) {
+		add(n.tag);
+		for (const ref of Object.values(n.bind ?? {})) add(ref);
+	}
+	for (const p of a?.pipes ?? []) add(p.bind?.flowing);
+	return out;
+}
+
+/** Every member a kind reads: `members`, plus what its drives, its status
+ * template and its assembly name — so nothing repeats the list (§3c, §3d). */
 export function kindMembers(k: SceneKind | undefined): string[] {
 	const out = [...(k?.members ?? [])];
-	for (const m of [...driveMembers(k?.drive), ...statusMembers(k?.status)]) if (!out.includes(m)) out.push(m);
+	for (const m of [...driveMembers(k?.drive), ...statusMembers(k?.status), ...assemblyMembers(k?.assembly)])
+		if (!out.includes(m)) out.push(m);
 	return out;
+}
+
+/** How a `kinds` entry defines its kind, if it does. */
+export function kindDefinedBy(k: SceneKind | undefined): 'model' | 'component' | 'assembly' | undefined {
+	if (!k) return undefined;
+	if (k.model !== undefined) return 'model';
+	if (k.component !== undefined) return 'component';
+	if (k.assembly !== undefined) return 'assembly';
+	return undefined;
 }
 
 export interface SceneDoc {
@@ -174,12 +220,63 @@ export function isAssetPath(p: unknown): p is string {
 	return isStr(p) && !/^[a-z]+:/i.test(p) && !p.split('/').includes('..');
 }
 
+/** A component path (§3d): a source path relative to the scene file, a
+ * `.svelte` file, no scheme, no `..`, not absolute. */
+export function isComponentPath(p: unknown): p is string {
+	return isAssetPath(p) && p.endsWith('.svelte') && !p.startsWith('/');
+}
+
+const MEMBER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** A part's tag inside an assembly: one member name of the assembly's struct. */
+export function isMemberName(s: unknown): s is string {
+	return isStr(s) && MEMBER_RE.test(s);
+}
+
 /** Is `ref` a well-formed binding ref? `!` may lead; then a dotted path of
  * non-empty segments. (The grammar is the mimic's plus dots; bindings.ts.) */
 export function isBindingRef(ref: unknown): boolean {
 	if (!isStr(ref)) return false;
 	const path = ref.startsWith('!') ? ref.slice(1) : ref;
 	return path.length > 0 && path.split('.').every((s) => s.length > 0);
+}
+
+type Err = (path: string, message: string) => void;
+
+/** One node's structural rules — a document node or an assembly's part. */
+function checkNode(n: unknown, p: string, err: Err, known: Set<string> | null, ids: Set<string>): void {
+	if (!isObj(n)) return err(p, 'must be an object');
+	if (!isStr(n.id)) err(`${p}/id`, 'must be a non-empty string');
+	else if (ids.has(n.id)) err(`${p}/id`, `duplicate id "${n.id}"`);
+	else ids.add(n.id);
+	if (!isStr(n.kind)) err(`${p}/kind`, 'must be a non-empty string');
+	else if (known && !known.has(n.kind)) err(`${p}/kind`, `unknown kind "${n.kind}" (registered: ${[...known].join(', ')})`);
+	if (n.tag !== undefined && !isStr(n.tag)) err(`${p}/tag`, 'must be a non-empty tag name');
+	if (n.label !== undefined && typeof n.label !== 'string') err(`${p}/label`, 'must be a string');
+	if (!isVec3(n.pos)) err(`${p}/pos`, 'must be [x, y, z] metres');
+	if (n.rot !== undefined && !isVec3(n.rot)) err(`${p}/rot`, 'must be [x, y, z] degrees');
+	if (n.scale !== undefined && !(isNum(n.scale) && n.scale > 0)) err(`${p}/scale`, 'must be > 0');
+	if (n.props !== undefined && !isObj(n.props)) err(`${p}/props`, 'must be an object');
+	if (n.bind !== undefined) {
+		if (!isObj(n.bind)) err(`${p}/bind`, 'must be an object of prop -> ref');
+		else
+			for (const [prop, ref] of Object.entries(n.bind))
+				if (!isBindingRef(ref)) err(`${p}/bind/${prop}`, `"${String(ref)}" is not a tag ref (Tag, Tag.Member, !Tag)`);
+	}
+}
+
+function checkPipe(pipe: unknown, p: string, err: Err): void {
+	if (!isObj(pipe)) return err(p, 'must be an object');
+	if (!Array.isArray(pipe.points) || pipe.points.length < 2) err(`${p}/points`, 'needs at least two points');
+	else pipe.points.forEach((pt, j) => isVec3(pt) || err(`${p}/points/${j}`, 'must be [x, y, z] metres'));
+	if (pipe.radius !== undefined && !(isNum(pipe.radius) && pipe.radius > 0)) err(`${p}/radius`, 'must be > 0');
+	if (pipe.bind !== undefined) {
+		if (!isObj(pipe.bind)) err(`${p}/bind`, 'must be an object');
+		else {
+			for (const k of Object.keys(pipe.bind)) if (k !== 'flowing') err(`${p}/bind/${k}`, "a pipe binds only 'flowing'");
+			if (pipe.bind.flowing !== undefined && !isBindingRef(pipe.bind.flowing))
+				err(`${p}/bind/flowing`, `"${String(pipe.bind.flowing)}" is not a tag ref`);
+		}
+	}
 }
 
 /**
@@ -195,9 +292,15 @@ export function validateScene(doc: unknown, kinds?: Iterable<string>): { ok: boo
 	const errors: SceneError[] = [];
 	const err = (path: string, message: string) => errors.push({ path, message });
 	const known = kinds ? new Set(kinds) : null;
-	// A data kind (a `kinds` entry with a model) is a kind the document brings.
-	if (known && isObj(doc) && isObj(doc.kinds))
-		for (const [k, def] of Object.entries(doc.kinds)) if (isObj(def) && def.model !== undefined) known.add(k);
+	// A kind the document defines — a model, a component file or an
+	// assembly — is a kind the document brings (§3c, §3d).
+	const assemblies = new Set<string>();
+	if (isObj(doc) && isObj(doc.kinds))
+		for (const [k, def] of Object.entries(doc.kinds)) {
+			if (!isObj(def)) continue;
+			if (def.model !== undefined || def.component !== undefined || def.assembly !== undefined) known?.add(k);
+			if (def.assembly !== undefined) assemblies.add(k);
+		}
 
 	if (!isObj(doc)) return { ok: false, errors: [{ path: '', message: 'scene must be an object' }] };
 
@@ -259,6 +362,27 @@ export function validateScene(doc: unknown, kinds?: Iterable<string>): { ok: boo
 				if (def.members !== undefined && !(Array.isArray(def.members) && def.members.every(isStr)))
 					err(`/kinds/${k}/members`, 'must be an array of member names');
 				if (def.model !== undefined && !isAssetPath(def.model)) err(`/kinds/${k}/model`, 'must be a URL path to a .glb or .gltf (models/pump.glb)');
+				if (def.component !== undefined && !isComponentPath(def.component))
+					err(`/kinds/${k}/component`, 'must be a .svelte file as a path relative to the scene file (hmi/src/lib/Skid.svelte)');
+				const ways = ['model', 'component', 'assembly'].filter((w) => def[w] !== undefined);
+				if (ways.length > 1) err(`/kinds/${k}`, `a kind is defined one way, not ${ways.join(' and ')}`);
+				if (def.assembly !== undefined) {
+					const ap = `/kinds/${k}/assembly`;
+					if (!isObj(def.assembly) || !Array.isArray(def.assembly.nodes)) err(ap, 'must be { nodes: [...], pipes?: [...] }');
+					else {
+						const ids = new Set<string>();
+						def.assembly.nodes.forEach((n, i) => {
+							checkNode(n, `${ap}/nodes/${i}`, err, known, ids);
+							if (!isObj(n)) return;
+							if (n.tag !== undefined && !isMemberName(n.tag)) err(`${ap}/nodes/${i}/tag`, "a part's tag is one member of the assembly's struct (Pump)");
+							if (isStr(n.kind) && assemblies.has(n.kind)) err(`${ap}/nodes/${i}/kind`, `"${n.kind}" is an assembly; a part is a built-in, a data kind or a component kind`);
+						});
+						if (def.assembly.pipes !== undefined) {
+							if (!Array.isArray(def.assembly.pipes)) err(`${ap}/pipes`, 'must be an array');
+							else def.assembly.pipes.forEach((pipe, i) => checkPipe(pipe, `${ap}/pipes/${i}`, err));
+						}
+					}
+				}
 				if (def.bounds !== undefined && def.bounds !== 'auto') {
 					if (!isObj(def.bounds) || !isVec3(def.bounds.size) || !isVec3(def.bounds.center))
 						err(`/kinds/${k}/bounds`, "must be 'auto' or { size: [w, h, d], center: [x, y, z] }");
@@ -267,11 +391,12 @@ export function validateScene(doc: unknown, kinds?: Iterable<string>): { ok: boo
 				if (def.status !== undefined && !validStatusTemplate(def.status))
 					err(`/kinds/${k}/status`, 'must be a template over members: "{Level:1} %", "{Running?run:stopped}"');
 				if (def.drive !== undefined) errors.push(...validateDrives(def.drive, `/kinds/${k}/drive`));
-				if (def.model === undefined && (def.drive !== undefined || def.bounds !== undefined || def.labelAt !== undefined))
-					err(`/kinds/${k}`, 'drive, bounds and labelAt need a model — without one the Svelte kind of this name renders');
-				// A data kind under a new name is complete on its own; one without
-				// a model must be something the app registers.
-				if (known && !known.has(k) && def.model === undefined) err(`/kinds/${k}`, `"${k}" is declared but the app registers no such kind`);
+				if (def.model === undefined && def.drive !== undefined) err(`/kinds/${k}/drive`, 'drives need a model — without one the Svelte kind of this name renders');
+				if (ways.length === 0 && (def.bounds !== undefined || def.labelAt !== undefined))
+					err(`/kinds/${k}`, 'bounds and labelAt need a model, a component or an assembly — without one the registry\'s kind of this name renders');
+				// A kind the document defines is complete on its own; one it only
+				// declares must be something the app registers.
+				if (known && !known.has(k)) err(`/kinds/${k}`, `"${k}" is declared but the app registers no such kind`);
 			}
 	}
 
@@ -303,47 +428,12 @@ export function validateScene(doc: unknown, kinds?: Iterable<string>): { ok: boo
 	if (!Array.isArray(doc.nodes)) err('/nodes', 'must be an array');
 	else {
 		const ids = new Set<string>();
-		doc.nodes.forEach((n, i) => {
-			const p = `/nodes/${i}`;
-			if (!isObj(n)) return err(p, 'must be an object');
-			if (!isStr(n.id)) err(`${p}/id`, 'must be a non-empty string');
-			else if (ids.has(n.id)) err(`${p}/id`, `duplicate id "${n.id}"`);
-			else ids.add(n.id);
-			if (!isStr(n.kind)) err(`${p}/kind`, 'must be a non-empty string');
-			else if (known && !known.has(n.kind)) err(`${p}/kind`, `unknown kind "${n.kind}" (registered: ${[...known].join(', ')})`);
-			if (n.tag !== undefined && !isStr(n.tag)) err(`${p}/tag`, 'must be a non-empty tag name');
-			if (n.label !== undefined && typeof n.label !== 'string') err(`${p}/label`, 'must be a string');
-			if (!isVec3(n.pos)) err(`${p}/pos`, 'must be [x, y, z] metres');
-			if (n.rot !== undefined && !isVec3(n.rot)) err(`${p}/rot`, 'must be [x, y, z] degrees');
-			if (n.scale !== undefined && !(isNum(n.scale) && n.scale > 0)) err(`${p}/scale`, 'must be > 0');
-			if (n.props !== undefined && !isObj(n.props)) err(`${p}/props`, 'must be an object');
-			if (n.bind !== undefined) {
-				if (!isObj(n.bind)) err(`${p}/bind`, 'must be an object of prop -> ref');
-				else
-					for (const [prop, ref] of Object.entries(n.bind))
-						if (!isBindingRef(ref)) err(`${p}/bind/${prop}`, `"${String(ref)}" is not a tag ref (Tag, Tag.Member, !Tag)`);
-			}
-		});
+		doc.nodes.forEach((n, i) => checkNode(n, `/nodes/${i}`, err, known, ids));
 	}
 
 	if (doc.pipes !== undefined) {
 		if (!Array.isArray(doc.pipes)) err('/pipes', 'must be an array');
-		else
-			doc.pipes.forEach((pipe, i) => {
-				const p = `/pipes/${i}`;
-				if (!isObj(pipe)) return err(p, 'must be an object');
-				if (!Array.isArray(pipe.points) || pipe.points.length < 2) err(`${p}/points`, 'needs at least two points');
-				else pipe.points.forEach((pt, j) => isVec3(pt) || err(`${p}/points/${j}`, 'must be [x, y, z] metres'));
-				if (pipe.radius !== undefined && !(isNum(pipe.radius) && pipe.radius > 0)) err(`${p}/radius`, 'must be > 0');
-				if (pipe.bind !== undefined) {
-					if (!isObj(pipe.bind)) err(`${p}/bind`, 'must be an object');
-					else {
-						for (const k of Object.keys(pipe.bind)) if (k !== 'flowing') err(`${p}/bind/${k}`, "a pipe binds only 'flowing'");
-						if (pipe.bind.flowing !== undefined && !isBindingRef(pipe.bind.flowing))
-							err(`${p}/bind/flowing`, `"${String(pipe.bind.flowing)}" is not a tag ref`);
-					}
-				}
-			});
+		else doc.pipes.forEach((pipe, i) => checkPipe(pipe, `/pipes/${i}`, err));
 	}
 
 	if (doc.writable !== undefined) {
