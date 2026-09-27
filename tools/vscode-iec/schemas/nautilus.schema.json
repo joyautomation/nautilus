@@ -277,9 +277,12 @@
             "memory",
             "eip",
             "sparkplug-host",
-            "modbus"
+            "modbus",
+            "snmp",
+            "redfish",
+            "prometheus"
           ],
-          "description": "memory: loopback for bring-up, so logic and HMI run before hardware exists. eip: polls an Allen-Bradley Logix controller. sparkplug-host: consumes a Sparkplug B group as a host application, presenting every edge node's metrics as tags. modbus: polls a set of Modbus TCP sources with coalesced block reads. Custom buses are the Go tier."
+          "description": "memory: loopback for bring-up, so logic and HMI run before hardware exists. eip: polls an Allen-Bradley Logix controller. sparkplug-host: consumes a Sparkplug B group as a host application, presenting every edge node's metrics as tags. modbus: polls a set of Modbus TCP sources with coalesced block reads. snmp / redfish / prometheus: IT hardware as tags — switches, PDUs and UPSes over SNMP, server BMCs over Redfish, hosts over node_exporter — generated manifests, credentials from the environment. Custom buses are the Go tier."
         },
         "host": {
           "type": "string",
@@ -442,6 +445,57 @@
             "properties": {
               "type": {
                 "const": "modbus"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "manifest"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "snmp"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "manifest"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "redfish"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "required": [
+              "manifest"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "prometheus"
               }
             },
             "required": [

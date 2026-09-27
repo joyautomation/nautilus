@@ -1,0 +1,14 @@
+{
+    "@odata.type": "#Sensor.v1_7_0.Sensor",
+    "Id": "TotalEnergy",
+    "Name": "Total Energy",
+    "Reading": 1234567,
+    "ReadingUnits": "kW.h",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "ReadingType": "EnergykWh",
+    "PhysicalContext": "Chassis",
+    "@odata.id": "/redfish/v1/Chassis/1/Sensors/TotalEnergy"
+}

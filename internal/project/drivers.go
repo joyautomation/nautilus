@@ -8,7 +8,10 @@ import (
 	"github.com/joyautomation/nautilus/eip"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/prom"
+	"github.com/joyautomation/nautilus/redfish"
 	"github.com/joyautomation/nautilus/server"
+	"github.com/joyautomation/nautilus/snmp"
 	"github.com/joyautomation/nautilus/sparkplug"
 	sphost "github.com/joyautomation/nautilus/sparkplug/host"
 )
@@ -46,6 +49,12 @@ func driverStatusFuncs(d nio.Driver) []func() server.DriverStatus {
 		return []func() server.DriverStatus{func() server.DriverStatus { return hostStatus(drv.Status()) }}
 	case *modbus.Driver:
 		return []func() server.DriverStatus{func() server.DriverStatus { return modbusStatus(drv.Health()) }}
+	case *snmp.Driver:
+		return []func() server.DriverStatus{func() server.DriverStatus { return hwStatus(drv.Health()) }}
+	case *redfish.Driver:
+		return []func() server.DriverStatus{func() server.DriverStatus { return hwStatus(drv.Health()) }}
+	case *prom.Driver:
+		return []func() server.DriverStatus{func() server.DriverStatus { return hwStatus(drv.Health()) }}
 	case *nio.Multi:
 		var out []func() server.DriverStatus
 		for _, c := range drv.Children() {

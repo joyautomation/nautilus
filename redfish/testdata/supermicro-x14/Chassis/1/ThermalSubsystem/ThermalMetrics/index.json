@@ -1,0 +1,43 @@
+{
+    "@odata.type": "#ThermalMetrics.v1_0_0.ThermalMetrics",
+    "Id": "ThermalMetrics",
+    "Name": "Thermal Metrics",
+    "TemperatureReadingsCelsius": [
+        {
+            "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/temperature_CPU_Temp",
+            "DeviceName": "CPU Temp",
+            "Reading": 49
+        },
+        {
+            "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/temperature_Inlet_Temp",
+            "DeviceName": "Inlet Temp",
+            "Reading": 23
+        },
+        {
+            "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/temperature_System_Temp",
+            "DeviceName": "System Temp",
+            "Reading": 31
+        },
+        {
+            "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/temperature_Peripheral_Temp",
+            "DeviceName": "Peripheral Temp",
+            "Reading": 36
+        },
+        {
+            "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/temperature_VRM_CPU_Temp",
+            "DeviceName": "VRM CPU Temp",
+            "Reading": 42
+        },
+        {
+            "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/temperature_DIMM_Temp",
+            "DeviceName": "DIMM Temp",
+            "Reading": 34
+        },
+        {
+            "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/temperature_NVMe_SSD_Temp",
+            "DeviceName": "NVMe SSD Temp",
+            "Reading": 38
+        }
+    ],
+    "@odata.id": "/redfish/v1/Chassis/1/ThermalSubsystem/ThermalMetrics"
+}
