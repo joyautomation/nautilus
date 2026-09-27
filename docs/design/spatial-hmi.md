@@ -784,6 +784,14 @@ Proposed order, each with an exit and the capture moment it produces
    hand-written Svelte page and, separately, a `Skid` component placed as
    one node in `rig.scene.json` with `naut check` clean. Capture: the same
    skid written twice (N-63).
+   *Designed as §3d and built on `spatial-components`, PR #67, 2026-09-27:
+   `<Node>`/`<Pipe>` with parts inside parts; `kinds.x.component` (built
+   by the app, described to the extension) and `kinds.x.assembly` (the
+   nested UDT as the only parameter) in TS, Go and the schema with the
+   sync tests extended; `paletteKinds()` in the extension for item 2. The
+   rig gained two simulated transfer skids, `Skid.svelte` and the JSON
+   assembly, and a `/composed` route; 60 fps / 34 ms with five nodes (§9);
+   the takes are `content/assets/capture/n63/out/`.*
 2. **Place equipment by dragging.** Locating things is the one authoring
    step `naut scene init` cannot finish, and a number typed into `pos` is
    the tedium to remove. An edit mode on `SceneView`: click an asset,
@@ -841,6 +849,8 @@ AMD Radeon RX 7900 XT, Chrome).
 | 2026-09-27 | same desktop, Chrome headed 2560×1440 | rig, `look: flat` (M1 primitives, three lights) | 60 | rx→pixel 33 ms, ctrl→pixel 34 ms (n=50) | 254 kB base | item 1 build; `naut run` serving `hmi/build`; recipe `content/assets/capture/n57/browser/01-grey-to-lit.mjs`, first half |
 | 2026-09-27 | same | rig, `look: lit`: 3 glTF kinds (pump 96 kB, tank 74 kB, valve 47 kB), HDRI 1k for light (1.7 MB) with a 6k tonemapped backdrop (3.5 MB) ground-projected, fog, concrete floor (3 × 1k JPG, 1.3 MB), soft shadows | 60 | rx→pixel 33 ms, ctrl→pixel 34 ms (n=191), unchanged through the cut and a fault | 254 kB base + 48 kB on demand (glTF chunk 14 kB, HDRI + shadows chunk 34 kB) = 302 kB | same take, second half (taken with the 1k HDRI as backdrop; the 6k backdrop added afterwards costs a one-off decode hitch on load and no steady-state change); 0 console errors; the draco/basis decoders Vite emits (1.9 MB) are never fetched — no model uses them |
 
+| 2026-09-27 | same | rig + two skids (item 1b): 5 nodes — 3 props, `Skid.svelte` and the JSON assembly, 9 kind instances in all — 2 pipes + the skids' 4 | 60 | rx→pixel 34 ms, ctrl→pixel 74 ms (n=57, the first minute after load); after the fault and the route change, on `/composed`: rx→pixel 38 ms, ctrl→pixel 39 ms (n=53) | 278 kB base + 14 kB glTF chunk on demand = 292 kB | `naut run` serving `hmi/build`; recipe `content/assets/capture/n63/browser/01-skid-twice.mjs`; 0 console errors. A first take with a VSIX build running on the same machine read ctrl→pixel 131 ms and rx→pixel 35 ms — the render cost does not move, the controller's stamp does. **Base is up 24 kB on item 1**: with two routes (`/` and `/composed`) both reaching `Surroundings` through the same dynamic import, the bundler hoists the HDRI/shadows chunk (33 kB) into the shared base; with one route it splits out as before (checked by building without `/composed`). Naming chunks by hand (`manualChunks`, `advancedChunks`) made every chunk eager, so it is left as is and noted in §10. |
+
 Bundle figures from 2026-09-27 on are the sum of gzipped JS under the
 built app's `_app/immutable` (excluding the on-demand decoder assets),
 which is what a browser downloads for a first paint; the 438 kB Milestone
@@ -875,6 +885,13 @@ are the same 254 kB, because the loaders sit behind dynamic imports.
   (the scene's `pos` and the survey's `pos`). When AR lands, a node gains
   `marker:` and the survey moves into the scene file; until then the
   scene is authoritative for rendering and `assets.yaml` for the survey.
+- **The on-demand chunks with two routes.** A second route that reaches
+  the same `import('./Surroundings.svelte')` makes the bundler (Vite 8 on
+  Rolldown) hoist that chunk into the shared base (§9, item 1b: +24 kB);
+  the glTF chunk is not hoisted. `manualChunks` and `advancedChunks`
+  groups both turned the chunks eager, which is worse. Open: a Rolldown
+  option that keeps a shared dynamic import lazy, or the package
+  importing the two loaders from one place so there is one dynamic edge.
 - **Editor.** Nothing in VS Code knows `*.scene.json` yet. A JSON schema
   in the extension (the `mimic` precedent) is the cheap first step; a 3D
   editor is not planned.

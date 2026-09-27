@@ -13,7 +13,7 @@
 	// The document's `kinds` may name component files (kinds.skid.component
 	// → src/lib/Skid.svelte, design §3d). Vite builds every .svelte under
 	// src/ into the app; the view pairs each path with its module.
-	const modules = import.meta.glob('/src/**/*.svelte', { eager: true });
+	const modules = import.meta.glob('/src/lib/**/*.svelte', { eager: true });
 	// One subscription, filtered to exactly the struct tags the scene reads.
 	const rt = new RealtimeClient<NautilusFrame>({ url: '/api/stream', tags: sceneTags(doc) });
 	const alarms = createAlarmClient(rt);

@@ -19,7 +19,7 @@
 	const src = rig as unknown as SceneDoc;
 	// Only the document's kinds and surroundings; the nodes are below.
 	const doc: SceneDoc = { name: 'Office rig, composed', kinds: src.kinds, environment: src.environment, camera: src.camera, grid: src.grid, nodes: [] };
-	const modules = import.meta.glob('/src/**/*.svelte', { eager: true });
+	const modules = import.meta.glob('/src/lib/**/*.svelte', { eager: true });
 	// A page that lists its own tags: the scene subscribes to what it shows.
 	const rt = new RealtimeClient<NautilusFrame>({ url: '/api/stream', tags: ['T101', 'P101', 'XV101', 'SK101', 'SK102', 'Demand'] });
 	const alarms = createAlarmClient(rt);
