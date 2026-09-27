@@ -342,6 +342,22 @@ decoder keeps properties and `naut sparkplug import` fills `unit:`/
 outage, not only a primary-host outage. Handover + Outcome:
 `docs/handover/2026-09-19-sparkplug-edge-findings.md`. Content idea N-34.
 
+Done 2026-09-26 (`spatial-hmi`, PR #65, open): **the 3D HMI package** —
+`hmi-3d/` (`@joyautomation/nautilus-hmi-3d`, unpublished by decision until
+Milestone 2's kinds-as-data lands) renders a `*.scene.json` on Threlte:
+nodes in metres bound to struct tags, the mimic's binding grammar plus
+dotted paths, an extensible kind registry, picking, alarm halos, quality
+greying, a perf HUD. `examples/spatial-rig` is the office rig (measured on
+the desktop: 60 fps, rx→pixel p95 32 ms, 438 kB gz). The kind ↔ UDT
+contract lives in the scene file's `kinds` block; `internal/scene` holds
+every scene file to the manifest under `naut check`, `naut scene init`
+generates a starter from the struct tags, and the extension ships a JSON
+Schema for `*.scene.json` under `[Unreleased]`. Design record
+`docs/design/spatial-hmi.md`; Milestone 2 (kinds as data + surroundings,
+then drag-to-place as a VS Code custom editor) is briefed in
+`~/Development/joyautomation/randd/handoffs/SPATIAL-3D-M2-HANDOFF.md`,
+one session per item.
+
 Next, in rough priority:
 
 1. **Modbus real-device run** — when the bench devices are available:
