@@ -722,11 +722,25 @@ bench build of `examples/it-rack` ran on this workstation against the two
 stand-ins; the Prometheus half ran against the workstation's real
 node_exporter (recorded: `content/assets/capture/it-rack/`).
 
-**Not verified yet:** any real switch, PDU, UPS or BMC. The switch run
-waits on credentials for the only S3900s cabled today (read-only), the
-BMC run on a customer cluster's read-only user; the CyberPower units are
-not bought. Their profiles are written from the published MIBs and the
-recorded X14 trees, and say so in the generated notes.
+**Live, 2026-09-27, read-only:** an FS S3900-24T4S-R (FSOS 2.2.0F) over
+SNMPv3 authPriv — 29 tags, all 28 ports, model and serial from the chassis
+row, ~152 ms per poll for ~24 PDUs, one real alarm (an enabled port with no
+link) — and a Supermicro X14SBW-F BMC (OpenBMC-based, SYS-112B-WR) over
+Redfish sessions — 21 tags: 6 fans, 2 PSUs (input V, output W, capacity),
+12 temperature sensors with critical thresholds, inlet, power, ~1.1 s per
+poll for ~20 GETs; the read-only account gets 403 on Bios, SecureBoot and
+the dump/crashdump services, recorded as "not there". Both recordings
+(client data) live in the customer repo's inventory, the sanitised casts
+in `content/assets/capture/it-rack/screen/`. What the two devices
+corrected, all now in the code: FSOS reports copper ports as
+gigabitEthernet(117) and only SFP+ as ethernetCsmacd(6), so the physical
+port filter is {6, 62, 69, 117}; FSOS has no `entPhysicalModelName` column
+(model comes from `entPhysicalName`, then `entPhysicalDescr`, and the serial
+is taken whichever named it); ports are named by position; an undecodable
+first v3 reply is retried after a reconnect. The X14 exposes only critical
+thresholds, so `TempSensor.HighSP` reads 0 there and `High` never trips —
+the per-sensor `HighHigh` is the live signal. **Still unverified:** the
+CyberPower PDU and UPS profiles (units not bought).
 
 **Open, in priority order:**
 

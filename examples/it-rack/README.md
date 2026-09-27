@@ -80,7 +80,10 @@ stop the stand-in — `prometheus_manifest.yaml` already points at `:9100`.
 
 - The synthetic switch has no vendor MIB, so `SW1.CpuPct/MemPct` stay 0 and
   `Switch.Fault` has nothing to bind; the FS S3900 the office runs exposes
-  no CPU, temperature or fan objects without FS's MIB pack either.
+  no CPU, temperature or fan objects without FS's MIB pack either. It does
+  answer the live build cleanly (2026-09-27: 28 ports, model and serial,
+  ~150 ms per poll over SNMPv3) — its copper ports are ifType 117, which
+  the profile now treats as ethernet.
 - A workstation is a zoo of hwmon sensors (48 here, some with chip-id names
   such as `MIRA1_Temp_i2c_10_10_0050_temp1`). A server with a BMC is the
   cleaner story (`naut redfish import`); a naming/filter pass for hwmon is

@@ -36,12 +36,20 @@ const (
 	ifAlias       = ifXTable + ".18" // ifAlias
 
 	ethernetCsmacd = 6
+	// The IANAifType values a physical ethernet port shows up as. FSOS
+	// (an FS S3900 on the office bench) reports its 24 copper ports as
+	// gigabitEthernet(117) and only the four SFP+ ports as
+	// ethernetCsmacd(6); other agents use fastEther(62) / fastEtherFX(69).
+	fastEther       = 62
+	fastEtherFX     = 69
+	gigabitEthernet = 117
 )
 
 // ENTITY-MIB (RFC 6933) entPhysicalTable.
 const (
 	entPhysicalTable     = "1.3.6.1.2.1.47.1.1.1.1"
 	entPhysicalClass     = entPhysicalTable + ".5"  // chassis(3) … sensor(8)
+	entPhysicalDescr     = entPhysicalTable + ".2"  // entPhysicalDescr
 	entPhysicalName      = entPhysicalTable + ".7"  // entPhysicalName
 	entPhysicalSerialNum = entPhysicalTable + ".11" // entPhysicalSerialNum
 	entPhysicalModelName = entPhysicalTable + ".13" // entPhysicalModelName
@@ -105,7 +113,7 @@ func buildSwitch(w walk.Walk, o Options) (Result, error) {
 			}
 			continue
 		}
-		if t, ok := intAt(w, ifType+"."+suffix); ok && t == ethernetCsmacd {
+		if t, ok := intAt(w, ifType+"."+suffix); ok && isEthernetType(t) {
 			ports = append(ports, idx)
 		}
 	}
@@ -114,7 +122,7 @@ func buildSwitch(w walk.Walk, o Options) (Result, error) {
 		if o.Ports != nil {
 			return res, fmt.Errorf("--ports %s selects no ifIndex in the walk", o.Ports)
 		}
-		return res, fmt.Errorf("no ethernet ports (ifType 6) in the walk — pass --ports to pick interfaces by ifIndex")
+		return res, fmt.Errorf("no ethernet ports (ifType 6/62/69/117) in the walk — pass --ports to pick interfaces by ifIndex")
 	}
 	width := max(2, padWidth(len(ports)))
 
@@ -174,8 +182,19 @@ func buildSwitch(w walk.Walk, o Options) (Result, error) {
 	}
 	b.opt(root, "Name", sysName, hw.Binding{}, "sysName.0")
 	b.opt(root, "UptimeS", sysUpTime, hw.Binding{Scale: 0.01}, "sysUpTime.0")
-	if c, ok := chassisRow(w); ok && nonEmpty(w, entPhysicalModelName+"."+c) {
-		root["Model"] = bind(entPhysicalModelName+"."+c, hw.Binding{})
+	// The chassis row: model from entPhysicalModelName, else entPhysicalName,
+	// else entPhysicalDescr — FSOS has no ModelName column at all, and its
+	// Name and Descr both read "S3900-24T4S-R" — and the serial from the same
+	// row whichever of those named it.
+	if c, ok := chassisRow(w); ok && (nonEmpty(w, entPhysicalModelName+"."+c) || nonEmpty(w, entPhysicalName+"."+c) || nonEmpty(w, entPhysicalDescr+"."+c)) {
+		switch {
+		case nonEmpty(w, entPhysicalModelName+"."+c):
+			root["Model"] = bind(entPhysicalModelName+"."+c, hw.Binding{})
+		case nonEmpty(w, entPhysicalName+"."+c):
+			root["Model"] = bind(entPhysicalName+"."+c, hw.Binding{})
+		default:
+			root["Model"] = bind(entPhysicalDescr+"."+c, hw.Binding{})
+		}
 		if nonEmpty(w, entPhysicalSerialNum+"."+c) {
 			root["Serial"] = bind(entPhysicalSerialNum+"."+c, hw.Binding{})
 		} else {
@@ -312,4 +331,13 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// isEthernetType reports whether an IANAifType is a physical ethernet port.
+func isEthernetType(t int64) bool {
+	switch t {
+	case ethernetCsmacd, fastEther, fastEtherFX, gigabitEthernet:
+		return true
+	}
+	return false
 }
