@@ -1,6 +1,7 @@
 # Design brief: the spatial HMI package (`@joyautomation/nautilus-hmi-3d`)
 
-Status: **Milestone 1 in progress** on the `spatial-hmi` branch (2026-09-26).
+Status: **Milestone 1 built** on the `spatial-hmi` branch, PR #65 (2026-09-26);
+the panel-PC measurement is the one exit criterion still open.
 The R&D plan, device research and the office-rig spike this ports live in
 `~/Development/joyautomation/randd/` (`spatial-hmi.md`,
 `spatial-hmi-devices.md`, `spatial-rig/`); this brief is the repo's record of
@@ -274,7 +275,10 @@ nonsense. `PerfHud` shows fps, p95 and active alarms; `perf` on `SceneView`
 turns it on. Browser and controller must share a clock (same machine, or
 NTP) for the latency figure to mean anything.
 
-**Results** are recorded in §9 as they are taken.
+**Results** are recorded in §9 as they are taken. The desktop passes with
+room to spare: 60 fps is the display's refresh, and 33 ms is one SSE frame
+plus two animation frames. The low-end panel PC run is still to do; it needs
+the hardware, and until then the ≥ 30 fps target is unverified.
 
 ## 7. Example: `examples/spatial-rig/`
 
@@ -352,6 +356,7 @@ AMD Radeon RX 7900 XT, Chrome).
 
 | Date | Machine | Scene | fps | p95 ts→pixel | Bundle (gz) | Notes |
 |---|---|---|---|---|---|---|
+| 2026-09-26 | mira1 desktop, Radeon RX 7900 XT, Chrome (headed, 2560×1440) | rig: 3 nodes, 2 pipes, desk, grid | 60 (vsync) | 33 ms (n=197); 34 ms (n=200) on a second take | 438 kB | controller on the same machine (shared clock); 0 console errors; recipe `content/assets/capture/n56/browser/01-first-render.mjs` |
 
 ## 10. Risks & open questions
 
