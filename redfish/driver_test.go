@@ -360,16 +360,33 @@ func TestDriverPowerCommand(t *testing.T) {
 	})
 	// An out-of-range command is refused with its error on the row, and
 	// nothing is posted.
+	refused := func() bool { return strings.Contains(d.Health().Sources[0].LastError, "want 0 (none)") }
 	_ = d.WriteOutputs(nio.Values{"NODE1_PowerCmd": int64(9)})
-	waitFor(t, "refusal on the row", func() bool { return strings.Contains(d.Health().Sources[0].LastError, "want 0 (none)") })
+	waitFor(t, "refusal on the row", refused)
 	if len(srv.Actions()) != 1 {
 		t.Fatal("an invalid command reached the wire")
 	}
+	// The refusal is latched: good polls after it must not wipe it off
+	// the row before an operator has looked.
+	n := srv.Gets("/redfish/v1/Systems/1")
+	waitFor(t, "three more polls", func() bool { return srv.Gets("/redfish/v1/Systems/1") >= n+3 })
+	if !refused() {
+		t.Fatalf("a refused command left the row after good polls: %+v", d.Health().Sources[0])
+	}
+	// A return to 0 sends nothing and does not clear it either.
+	_ = d.WriteOutputs(nio.Values{"NODE1_PowerCmd": int64(0)})
+	n = srv.Gets("/redfish/v1/Systems/1")
+	waitFor(t, "two more polls", func() bool { return srv.Gets("/redfish/v1/Systems/1") >= n+2 })
+	if !refused() {
+		t.Fatalf("a return to 0 cleared the refusal: %+v", d.Health().Sources[0])
+	}
+	// The next accepted command clears it.
 	_ = d.WriteOutputs(nio.Values{"NODE1_PowerCmd": int64(1)})
 	waitFor(t, "On", func() bool { return len(srv.Actions()) == 2 })
 	if a := srv.Actions(); a[1].Body["ResetType"] != "On" {
 		t.Fatalf("second action = %+v", a[1])
 	}
+	waitFor(t, "row cleared by an accepted command", func() bool { return d.Health().Sources[0].LastError == "" })
 }
 
 // ── no socket: the poll through a fake Fetcher ──────────────────────────

@@ -105,11 +105,16 @@ type source struct {
 	reset    bool            // a transport failure happened: forget counter history
 	logged   map[string]bool // one log line per (source, condition)
 
-	// mu guards what other goroutines read: the fetcher (AuthMode, Stop)
-	// and the absent set (Absent).
+	// mu guards what other goroutines read: the fetcher (AuthMode, Stop),
+	// the absent set (Absent) and the latched write refusal (Health).
 	mu      sync.Mutex
 	fetcher Fetcher
 	absent  map[string]bool // "Tag.Member" whose path resolved to nothing last poll
+	// writeErr is the last refused command, latched until a later command
+	// on this BMC is accepted. hw.Base clears its row error on the next
+	// good poll, so without the latch a refusal can vanish from Health()
+	// within one interval, before a dashboard or `naut check` looks.
+	writeErr error
 }
 
 // classPlan is one (source, class) poll: the resources to fetch, in
@@ -288,8 +293,28 @@ func (d *Driver) SetWriteGate(g func() bool) { d.base.SetWriteGate(g) }
 // StructDefs is the contract type set.
 func (d *Driver) StructDefs() map[string]*ir.StructDef { return d.base.StructDefs() }
 
-// Health is one row per BMC plus driver totals.
-func (d *Driver) Health() hw.Health { return d.base.Health() }
+// Health is one row per BMC plus driver totals. A row with no current
+// error carries the last refused command instead (see source.writeErr):
+// a poll or transport error is the more pressing news, and it wins.
+func (d *Driver) Health() hw.Health {
+	h := d.base.Health()
+	for i := range h.Sources {
+		row := &h.Sources[i]
+		if row.LastError != "" {
+			continue
+		}
+		s, ok := d.srcs[row.ID]
+		if !ok {
+			continue
+		}
+		s.mu.Lock()
+		if s.writeErr != nil {
+			row.LastError = s.writeErr.Error()
+		}
+		s.mu.Unlock()
+	}
+	return h
+}
 
 // Manifest returns the manifest the driver was built from.
 func (d *Driver) Manifest() Manifest { return d.m }
@@ -526,25 +551,38 @@ func aggregate(vals []any, agg string) (hw.Raw, bool) {
 // write is the hw.WriteFunc: a PowerCmd change reaches the wire as ONE
 // ComputerSystem.Reset POST, and only for a non-zero value — the program
 // returns the command to 0 afterwards, and that return is not a command.
+// A refusal is latched on the source for Health(); an accepted POST
+// clears it. A return to 0 sends nothing and leaves the latch alone.
 func (d *Driver) write(ctx context.Context, sourceID string, w hw.WriteDecl, v ir.Value) error {
+	sent, err := d.sendWrite(ctx, sourceID, w, v)
+	if s, ok := d.srcs[sourceID]; ok && (err != nil || sent) {
+		s.mu.Lock()
+		s.writeErr = err
+		s.mu.Unlock()
+	}
+	return err
+}
+
+// sendWrite does write's work; sent reports that a POST was accepted.
+func (d *Driver) sendWrite(ctx context.Context, sourceID string, w hw.WriteDecl, v ir.Value) (sent bool, err error) {
 	wb, ok := d.writes[w.Name]
 	if !ok {
-		return fmt.Errorf("no write binding %q", w.Name)
+		return false, fmt.Errorf("no write binding %q", w.Name)
 	}
 	if v.I == 0 {
-		return nil
+		return false, nil
 	}
 	rt, ok := ResetTypes[v.I]
 	if !ok {
-		return fmt.Errorf("%s = %d: want 0 (none), 1 On, 2 GracefulShutdown, 3 ForceOff or 4 GracefulRestart", w.Name, v.I)
+		return false, fmt.Errorf("%s = %d: want 0 (none), 1 On, 2 GracefulShutdown, 3 ForceOff or 4 GracefulRestart", w.Name, v.I)
 	}
 	f, err := d.transport(d.srcs[sourceID])
 	if err != nil {
-		return err
+		return false, err
 	}
 	resp, err := f.Post(ctx, wb.Target, map[string]string{"ResetType": rt})
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !resp.OK() {
 		msg := redfishMessage(resp.Body)
@@ -554,10 +592,10 @@ func (d *Driver) write(ctx context.Context, sourceID string, w hw.WriteDecl, v i
 				msg = msg[:200]
 			}
 		}
-		return fmt.Errorf("POST %s ResetType=%s: HTTP %d: %s", wb.Target, rt, resp.Status, msg)
+		return false, fmt.Errorf("POST %s ResetType=%s: HTTP %d: %s", wb.Target, rt, resp.Status, msg)
 	}
 	d.log.Info("redfish: reset sent", "source", sourceID, "tag", w.Name, "resetType", rt, "target", wb.Target)
-	return nil
+	return true, nil
 }
 
 // AuthMode reports what a source's client is using (session, basic, none)
