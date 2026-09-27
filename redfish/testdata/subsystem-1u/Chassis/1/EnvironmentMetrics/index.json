@@ -1,0 +1,14 @@
+{
+    "@odata.type": "#EnvironmentMetrics.v1_3_0.EnvironmentMetrics",
+    "Id": "EnvironmentMetrics",
+    "Name": "Chassis Environment Metrics",
+    "PowerWatts": {
+        "Reading": 187,
+        "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/TotalPower"
+    },
+    "EnergykWh": {
+        "Reading": 1234567,
+        "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/TotalEnergy"
+    },
+    "@odata.id": "/redfish/v1/Chassis/1/EnvironmentMetrics"
+}

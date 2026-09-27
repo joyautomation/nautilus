@@ -1,0 +1,7 @@
+{
+    "@odata.type": "#SessionCollection.SessionCollection",
+    "Name": "Session Collection",
+    "Members@odata.count": 0,
+    "Members": [],
+    "@odata.id": "/redfish/v1/SessionService/Sessions"
+}

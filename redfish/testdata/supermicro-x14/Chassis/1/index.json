@@ -1,0 +1,79 @@
+{
+    "@odata.id": "/redfish/v1/Chassis/1",
+    "@odata.type": "#Chassis.v1_27_0.Chassis",
+    "Actions": {
+        "#Chassis.Reset": {
+            "@Redfish.ActionInfo": "/redfish/v1/Chassis/1/ResetActionInfo",
+            "target": "/redfish/v1/Chassis/1/Actions/Chassis.Reset"
+        }
+    },
+    "Assembly": {
+        "@odata.id": "/redfish/v1/Chassis/1/Assembly"
+    },
+    "AssetTag": "",
+    "ChassisType": "RackMount",
+    "Controls": {
+        "@odata.id": "/redfish/v1/Chassis/1/Controls"
+    },
+    "EnvironmentMetrics": {
+        "@odata.id": "/redfish/v1/Chassis/1/EnvironmentMetrics"
+    },
+    "Id": "1",
+    "IndicatorLED": "Off",
+    "Links": {
+        "ComputerSystems": [
+            {
+                "@odata.id": "/redfish/v1/Systems/1"
+            }
+        ],
+        "ManagedBy": [
+            {
+                "@odata.id": "/redfish/v1/Managers/1"
+            }
+        ]
+    },
+    "LocationIndicatorActive": false,
+    "Manufacturer": "Supermicro",
+    "Model": "X14SBW-F",
+    "Name": "1",
+    "NetworkAdapters": {
+        "@odata.id": "/redfish/v1/Chassis/1/NetworkAdapters"
+    },
+    "Oem": {
+        "Supermicro": {
+            "@odata.type": "#SmcChassisExtensions.v1_0_2.Chassis",
+            "BoardID": "0x1d49",
+            "BoardSerialNumber": "WM000S000001",
+            "GUID": "00000000-0000-0000-0000-000000000001"
+        }
+    },
+    "PCIeDevices": {
+        "@odata.id": "/redfish/v1/Chassis/1/PCIeDevices"
+    },
+    "PCIeSlots": {
+        "@odata.id": "/redfish/v1/Chassis/1/PCIeSlots"
+    },
+    "PartNumber": "CSE-116BTS-R000WNP",
+    "PhysicalSecurity": {
+        "IntrusionSensor": "Normal",
+        "IntrusionSensorNumber": 1,
+        "IntrusionSensorReArm": "Manual"
+    },
+    "PowerState": "On",
+    "PowerSubsystem": {
+        "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem"
+    },
+    "Sensors": {
+        "@odata.id": "/redfish/v1/Chassis/1/Sensors"
+    },
+    "SerialNumber": "C0000000000001",
+    "Status": {
+        "Health": "OK",
+        "HealthRollup": "OK",
+        "State": "Enabled"
+    },
+    "ThermalSubsystem": {
+        "@odata.id": "/redfish/v1/Chassis/1/ThermalSubsystem"
+    },
+    "UUID": "00000000-0000-4000-8000-000000000001"
+}
