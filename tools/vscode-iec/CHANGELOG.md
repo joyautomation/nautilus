@@ -3,6 +3,14 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **A JSON Schema for `*.scene.json`**, the 3D HMI scene documents
+  `@joyautomation/nautilus-hmi-3d` renders — completion and validation in
+  the editor, matching `naut check`'s scene pass.
+
 ## [0.13.0] - 2026-09-25
 
 The pre-release line after the first stable release. Same contents as

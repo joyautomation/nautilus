@@ -77,6 +77,23 @@ jobs:
       - name: Host-application profile
         run: NAUTILUS_TCK=1 go test ./sparkplug/host/ -run TestTCKHostConformance -v -timeout 120s
 
+  hmi-3d:
+    name: HMI 3D package — test, check, package; build the example
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      # The pure logic (scene validation, bindings, the alarm fold) has unit
+      # tests on the same 60-line harness hmi/ uses; svelte-check covers the
+      # components; svelte-package + publint prove it publishes.
+      - run: npm ci && npm test && npm run check && npm run package
+        working-directory: hmi-3d
+      # examples/spatial-rig/hmi consumes the package by file: link, so it
+      # builds against the dist/ the step above just produced — the same
+      # arrangement as webview-ui and hmi/.
+      - run: npm ci && npm run check && npm run build
+        working-directory: examples/spatial-rig/hmi
   vscode-iec:
     name: VS Code extension — compile, test
     runs-on: ubuntu-latest

@@ -344,6 +344,27 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		// of alarms": `naut alarms list` dumps what they became.
 		fmt.Printf("%s: %d alarm definitions\n", dir, len(defs))
 	}
+
+	// Scenes: every *.scene.json at the root really binds struct tags the
+	// manifest declares, and every kind really finds its members on them.
+	// Same offline discipline as alarms; docs/design/spatial-hmi.md §3b.
+	reports, serrs, swarns, err := proj.CheckScenes(os.DirFS(dir), rt)
+	if err != nil {
+		errs++
+		fmt.Printf("%s: error: scenes: %s\n", dir, err)
+		return errs, warns
+	}
+	for _, m := range serrs {
+		errs++
+		fmt.Printf("%s: error: %s\n", dir, m)
+	}
+	for _, m := range swarns {
+		warns++
+		fmt.Printf("%s: warning: %s\n", dir, m)
+	}
+	for _, r := range reports {
+		fmt.Printf("%s: scene %s: %d nodes, %d pipes\n", dir, r.File, r.Nodes, r.Pipes)
+	}
 	return errs, warns
 }
 
