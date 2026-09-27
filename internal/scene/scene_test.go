@@ -1,6 +1,8 @@
 package scene
 
 import (
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -208,5 +210,200 @@ func TestEncodeKeepsVectorsOnOneLine(t *testing.T) {
 	}
 	if _, err := Parse(out); err != nil {
 		t.Fatalf("round trip: %v", err)
+	}
+}
+
+// ── kinds as data (docs/design/spatial-hmi.md §3c) ────────────────────────
+
+const dataKinds = `{
+	"kinds": {
+		"pump": {
+			"model": "models/pump.glb",
+			"status": "{Running?run:stopped} {Speed:0} %",
+			"drive": [
+				{"mesh": "Coupling", "spin": {"axis": "x", "revPerS": {"bind": "Speed", "scale": 0.02}}},
+				{"mesh": "Motor", "tint": {"bind": "Running", "on": "running"}},
+				{"mesh": "Beacon", "emissive": {"bind": "!Fault", "on": "critical", "intensity": 2}}
+			]
+		},
+		"tank": {
+			"model": "models/tank.glb", "bounds": {"size": [0.4, 0.4, 0.4], "center": [0, 0.2, 0]}, "labelAt": [0, 0.5, 0],
+			"drive": [{"mesh": "Fluid", "scale": {"axis": "y", "to": {"bind": "Level", "scale": 0.01, "min": 0.01}}}]
+		},
+		"beacon": {"type": "Switch", "model": "models/beacon.glb", "drive": [{"mesh": "Lamp", "visible": {"bind": "Fault"}}]}
+	},
+	"environment": {"hdri": "env/workshop_1k.hdr", "background": "ground", "floor": -0.75, "shadows": true},
+	"fixtures": [{"kind": "plane", "pos": [0, 0, 0], "size": [4, 3], "texture": {"map": "textures/floor_diff.jpg", "normalMap": "textures/floor_nor.jpg", "repeat": [4, 3]}}],
+	"nodes": [
+		{"id": "P101", "kind": "pump", "tag": "P101", "pos": [0, 0, 0]},
+		{"id": "T101", "kind": "tank", "tag": "T101", "pos": [1, 0, 0]},
+		{"id": "SW1", "kind": "beacon", "tag": "SW1", "pos": [2, 0, 0]}
+	]
+}`
+
+func TestCheckDataKindsAcceptsTheModelledRig(t *testing.T) {
+	d := parse(t, dataKinds)
+	errs, warns := Check(d, rigTags)
+	if len(errs) != 0 || len(warns) != 0 {
+		t.Fatalf("want clean, got errs %v warns %v", errs, warns)
+	}
+	// The members a data kind reads are the drives' and the status'.
+	k := d.EffectiveKinds()
+	if got := strings.Join(k["pump"].Members, ","); got != "Running,Fault,Speed" {
+		t.Errorf("pump members (built-in defaults, drives add nothing new): %s", got)
+	}
+	if got := strings.Join(k["beacon"].Members, ","); got != "Fault" {
+		t.Errorf("beacon members from its drive: %s", got)
+	}
+	if k["tank"].Model != "models/tank.glb" || len(k["tank"].Drive) != 1 {
+		t.Errorf("model and drives should carry through: %+v", k["tank"])
+	}
+	// The asset list, in path order, is what CheckAssets holds to the files.
+	var paths []string
+	for _, a := range d.Assets() {
+		paths = append(paths, a[1])
+	}
+	if got := strings.Join(paths, " "); got != "models/beacon.glb models/pump.glb models/tank.glb env/workshop_1k.hdr textures/floor_diff.jpg textures/floor_nor.jpg" {
+		t.Errorf("assets: %s", got)
+	}
+}
+
+func TestCheckDataKindsHoldsTheNodeToTheDriveMembers(t *testing.T) {
+	// A drive that reads a member the UDT lacks is the same contract error
+	// as a component member: the type is right there.
+	d := parse(t, `{"kinds": {"pump": {"model": "models/pump.glb", "drive": [{"mesh": "Coupling", "spin": {"axis": "x", "revPerS": {"bind": "Rpm"}}}]}},
+		"nodes": [{"id": "P101", "kind": "pump", "tag": "P101", "pos": [0, 0, 0]}]}`)
+	errs, _ := Check(d, rigTags)
+	if len(errs) != 1 || !strings.Contains(errs[0], `has no member Rpm`) {
+		t.Fatalf("got %v", errs)
+	}
+	// ...unless the node binds it explicitly, the flat-tag escape hatch.
+	d = parse(t, `{"kinds": {"pump": {"model": "models/pump.glb", "drive": [{"mesh": "Coupling", "spin": {"axis": "x", "revPerS": {"bind": "Rpm"}}}]}},
+		"nodes": [{"id": "P101", "kind": "pump", "tag": "P101", "pos": [0, 0, 0], "bind": {"rpm": "P101.Speed"}}]}`)
+	if errs, _ = Check(d, rigTags); len(errs) != 0 {
+		t.Fatalf("bound member should satisfy the drive, got %v", errs)
+	}
+}
+
+func TestCheckDataKindsStructural(t *testing.T) {
+	d := parse(t, `{"kinds": {
+		"a": {"model": "http://x/a.glb"},
+		"b": {"model": "../a.glb"},
+		"c": {"model": "models/c.glb", "bounds": "big", "labelAt": [0, 1], "status": "{Level %"},
+		"d": {"drive": [{"mesh": "M", "visible": {"bind": "X"}}]},
+		"e": {"model": "models/e.glb", "drive": [
+			{"spin": {"axis": "w", "revPerS": {"bind": "1bad"}}},
+			{"mesh": "M", "spin": {"axis": "x", "revPerS": {"bind": "Speed"}}, "tint": {"bind": "Running", "on": "running"}},
+			{"mesh": "M", "scale": {"axis": "xyz", "to": {"bind": "Level"}}},
+			{"mesh": "M", "tint": {"bind": "Running"}},
+			{"mesh": "M", "emissive": {"bind": "Fault", "on": "critical", "intensity": -1}}
+		]}},
+		"environment": {"hdri": "env/x.png", "background": "wall", "intensity": -1},
+		"fixtures": [{"kind": "box", "pos": [0, 0, 0], "texture": {"map": "a.jpg"}}],
+		"nodes": []}`)
+	errs, _ := Check(d, rigTags)
+	got := joined(errs)
+	for _, want := range []string{
+		"/kinds/a/model:", "/kinds/b/model:", "/kinds/c/bounds:", "/kinds/c/labelAt:", "/kinds/c/status:",
+		"/kinds/d: drive, bounds and labelAt need a model",
+		"/kinds/e/drive/0/mesh:", "/kinds/e/drive/0/spin/axis:", "/kinds/e/drive/0/spin/revPerS/bind:",
+		"/kinds/e/drive/1: a drive has exactly one of spin, turn, scale, tint, emissive, visible",
+		"/kinds/e/drive/3/tint/on:", "/kinds/e/drive/4/emissive/intensity:",
+		"/environment/hdri:", "/environment/background:", "/environment/intensity:",
+		"/fixtures/0/texture: only a plane",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "/kinds/e/drive/2") {
+		t.Errorf("xyz is a valid scale axis:\n%s", got)
+	}
+	// A channel outside the vocabulary is an unknown field at parse time.
+	if _, err := Parse([]byte(`{"kinds": {"x": {"model": "m.glb", "drive": [{"mesh": "M", "wobble": {}}]}}, "nodes": []}`)); err == nil || !strings.Contains(err.Error(), "wobble") {
+		t.Fatalf("want an unknown-field error naming wobble, got %v", err)
+	}
+}
+
+func TestCheckAssets(t *testing.T) {
+	d := parse(t, dataKinds)
+	have := map[string]bool{"models/pump.glb": true, "env/workshop_1k.hdr": true, "textures/floor_diff.jpg": true, "textures/floor_nor.jpg": true}
+	errs := CheckAssets(d, func(p string) bool { return have[p] })
+	if len(errs) != 2 || !strings.Contains(errs[0], `/kinds/beacon/model: "models/beacon.glb" was not found`) || !strings.Contains(errs[1], "/kinds/tank/model:") {
+		t.Fatalf("got %v", errs)
+	}
+}
+
+// The vocabulary lives in three places — here, hmi-3d's DRIVE_CHANNELS and
+// the extension's schema. This reads the schema so a channel added on one
+// side without the others fails a test rather than a user.
+func TestDriveVocabularyMatchesTheSchema(t *testing.T) {
+	data, err := os.ReadFile("../../tools/vscode-iec/schemas/nautilus-scene.schema.json")
+	if err != nil {
+		t.Skip("schema not in this checkout:", err)
+	}
+	var schema struct {
+		Definitions struct {
+			Drive struct {
+				Properties map[string]any `json:"properties"`
+				OneOf      []struct {
+					Required []string `json:"required"`
+				} `json:"oneOf"`
+			} `json:"drive"`
+			Environment struct {
+				Properties map[string]any `json:"properties"`
+			} `json:"environment"`
+		} `json:"definitions"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatal(err)
+	}
+	var fromSchema []string
+	for _, o := range schema.Definitions.Drive.OneOf {
+		fromSchema = append(fromSchema, o.Required...)
+	}
+	if strings.Join(fromSchema, ",") != strings.Join(DriveChannels, ",") {
+		t.Errorf("schema drive channels %v, Go %v", fromSchema, DriveChannels)
+	}
+	for _, c := range DriveChannels {
+		if _, ok := schema.Definitions.Drive.Properties[c]; !ok {
+			t.Errorf("schema drive has no property %q", c)
+		}
+	}
+	for _, f := range []string{"hdri", "background", "floor", "intensity", "shadows"} {
+		if _, ok := schema.Definitions.Environment.Properties[f]; !ok {
+			t.Errorf("schema environment has no property %q", f)
+		}
+	}
+}
+
+// Builtin must match hmi-3d's registry AND the models/kinds.json that
+// declares the same kinds as data.
+func TestBuiltinMatchesTheDataKinds(t *testing.T) {
+	data, err := os.ReadFile("../../hmi-3d/models/kinds.json")
+	if err != nil {
+		t.Skip("hmi-3d not in this checkout:", err)
+	}
+	var kinds map[string]Kind
+	if err := json.Unmarshal(data, &kinds); err != nil {
+		t.Fatal(err)
+	}
+	for name, k := range kinds {
+		b, ok := Builtin[name]
+		if !ok {
+			t.Errorf("kinds.json declares %q, which is not a built-in", name)
+			continue
+		}
+		for _, m := range driveMembers(k.Drive) {
+			if !contains(b.Members, m) {
+				t.Errorf("%s's drives read %s, which the built-in contract (%v) does not list", name, m, b.Members)
+			}
+		}
+		if k.Model != "models/"+name+".glb" {
+			t.Errorf("%s model: %s", name, k.Model)
+		}
+	}
+	if len(kinds) != len(Builtin) {
+		t.Errorf("kinds.json has %d kinds, Builtin %d", len(kinds), len(Builtin))
 	}
 }

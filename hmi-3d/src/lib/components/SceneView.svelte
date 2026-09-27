@@ -12,6 +12,7 @@
 	import { worstAlarmByAsset, alarmAsset } from '../alarms.js';
 	import { DEFAULT_PALETTE, paletteFromTheme, type Palette } from '../palette.js';
 	import { PerfSampler } from '../perf.svelte.js';
+	import type { ViewState } from './view.js';
 	import Scene3D from './Scene3D.svelte';
 	import AssetDrawer from './AssetDrawer.svelte';
 	import PerfHud from './PerfHud.svelte';
@@ -23,6 +24,7 @@
 		registry = builtinRegistry,
 		perf = false,
 		inspector = true,
+		look = $bindable('lit'),
 		selected = $bindable(null),
 		onselect,
 		hud
@@ -35,6 +37,11 @@
 		perf?: boolean;
 		/** Open the asset drawer on a pick. */
 		inspector?: boolean;
+		/** `lit` (default): data kinds, PBR materials, textures and the
+		 * document's environment. `flat`: the Milestone 1 look — built-in
+		 * primitives and three lights — for a project with no assets, a
+		 * low-end tier, or the before half of a before/after. */
+		look?: 'lit' | 'flat';
 		selected?: string | null;
 		onselect?: (id: string) => void;
 		/** Extra HUD content, rendered after the built-in strip. */
@@ -45,6 +52,9 @@
 	// It starts as the defaults and is re-read from the DOM once mounted.
 	let palette = $state<Palette>(DEFAULT_PALETTE);
 	setContext('hmi3d:palette', palette);
+	// The look, read by every model for its material values (view.ts).
+	const view = $state<ViewState>({ lit: true });
+	setContext('hmi3d:view', view);
 
 	let check = $derived(validateScene(doc, Object.keys(registry)));
 	let tags = $derived((rt.frame?.tags ?? {}) as Record<string, unknown>);
@@ -88,7 +98,7 @@
 		</div>
 	{:else}
 		<Canvas>
-			<Scene3D {doc} {registry} {tags} isGood={(t) => rt.isGood(t)} alarms={byAsset} {selected} onpick={pick} />
+			<Scene3D {doc} {registry} {tags} isGood={(t) => rt.isGood(t)} alarms={byAsset} {selected} {look} onpick={pick} />
 		</Canvas>
 	{/if}
 

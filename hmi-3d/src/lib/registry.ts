@@ -7,8 +7,9 @@
 //
 // which is how the IT-hardware kinds arrive without touching this package.
 import type { Component } from 'svelte';
-import type { Vec3 } from './scene.js';
-import { tankStatus, pumpStatus, valveStatus } from './kinds.js';
+import type { SceneDoc, SceneKind, Vec3 } from './scene.js';
+import { formatStatus } from './drives.js';
+import { tankStatus, pumpStatus, valveStatus, BUILTIN_CONTRACT } from './kinds.js';
 import Tank3D from './components/Tank3D.svelte';
 import Pump3D from './components/Pump3D.svelte';
 import Valve3D from './components/Valve3D.svelte';
@@ -37,16 +38,21 @@ export interface PanelProps {
 
 export interface NodeKindDef {
 	component: Component<NodeProps>;
+	/** A data kind (docs/design/spatial-hmi.md §3c): the document's entry,
+	 * handed to the component that loads the model and applies the drives. */
+	data?: SceneKind;
 	/** The UDT this kind reads by default, and the members it reads — the
 	 * contract `naut check` and `naut scene init` work from. A scene's
 	 * `kinds` block re-points `type` for a project whose UDT is named
 	 * differently. */
 	type?: string;
 	members?: string[];
-	/** Local-space box for the alarm halo and the selection outline. */
-	bounds: { size: Vec3; center: Vec3 };
-	/** Where the floating label sits, local space. */
-	labelAt: Vec3;
+	/** Local-space box for the alarm halo and the selection outline.
+	 * `'auto'` on a data kind: the model reports its box once loaded. */
+	bounds: { size: Vec3; center: Vec3 } | 'auto';
+	/** Where the floating label sits, local space; on a data kind, absent =
+	 * the top centre of the bounds. */
+	labelAt?: Vec3;
 	/** The label's value text. Pure, so it is testable and matches the panel. */
 	status?: (value: unknown, good: boolean) => string;
 	/** The 2D faceplate the inspector drawer shows; absent = the member table only. */
@@ -57,8 +63,7 @@ export type NodeRegistry = Record<string, NodeKindDef>;
 
 export const tankKind: NodeKindDef = {
 	component: Tank3D as Component<NodeProps>,
-	type: 'Tank',
-	members: ['Level', 'TempC'],
+	...BUILTIN_CONTRACT.tank,
 	bounds: { size: [0.5, 0.52, 0.5], center: [0, 0.2, 0] },
 	labelAt: [0, 0.5, 0],
 	status: tankStatus,
@@ -67,8 +72,7 @@ export const tankKind: NodeKindDef = {
 
 export const pumpKind: NodeKindDef = {
 	component: Pump3D as Component<NodeProps>,
-	type: 'Motor',
-	members: ['Running', 'Fault', 'Speed'],
+	...BUILTIN_CONTRACT.pump,
 	bounds: { size: [0.42, 0.24, 0.2], center: [0, 0.09, 0] },
 	labelAt: [0, 0.24, 0],
 	status: pumpStatus,
@@ -77,8 +81,7 @@ export const pumpKind: NodeKindDef = {
 
 export const valveKind: NodeKindDef = {
 	component: Valve3D as Component<NodeProps>,
-	type: 'Valve',
-	members: ['Pos', 'Cmd'],
+	...BUILTIN_CONTRACT.valve,
 	bounds: { size: [0.16, 0.22, 0.22], center: [0, 0, 0.03] },
 	labelAt: [0, 0.16, 0],
 	status: valveStatus,
@@ -86,3 +89,32 @@ export const valveKind: NodeKindDef = {
 };
 
 export const builtinRegistry: NodeRegistry = { tank: tankKind, pump: pumpKind, valve: valveKind };
+
+/**
+ * The registry a document renders with: the given registry, with the
+ * document's data kinds (a `kinds` entry with a `model`) laid on top. A
+ * data kind under a built-in's name keeps that built-in's contract, status
+ * text and faceplate and replaces the geometry; a new name gets the
+ * drawer's member table and, if it has a `status` template, that text.
+ * `GltfNode` is the component for every one of them; it is passed in so
+ * this module never imports it (it is a dynamic import, §3c).
+ */
+export function registryFor(doc: SceneDoc, registry: NodeRegistry, gltf: Component<NodeProps>): NodeRegistry {
+	const out: NodeRegistry = { ...registry };
+	for (const [name, k] of Object.entries(doc.kinds ?? {})) {
+		if (!k.model) continue;
+		const base = registry[name];
+		const tpl = k.status;
+		out[name] = {
+			component: gltf,
+			data: k,
+			type: k.type ?? base?.type,
+			members: k.members ?? base?.members,
+			bounds: k.bounds && k.bounds !== 'auto' ? k.bounds : 'auto',
+			labelAt: k.labelAt,
+			status: tpl ? (value, good) => formatStatus(tpl, value, good) : base?.status,
+			panel: base?.panel
+		};
+	}
+	return out;
+}

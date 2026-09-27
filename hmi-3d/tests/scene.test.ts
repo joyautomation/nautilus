@@ -4,7 +4,7 @@
 //
 // Same harness as the kit's: ./harness.ts, a strict subset of vitest's API.
 import { describe, expect, it } from './harness.js';
-import { validateScene, sceneTags, isBindingRef, refRoot, type SceneDoc } from '../src/lib/scene.js';
+import { validateScene, sceneTags, isBindingRef, refRoot, kindMembers, type SceneDoc } from '../src/lib/scene.js';
 
 const rig: SceneDoc = {
 	name: 'Office rig',
@@ -146,5 +146,60 @@ describe('sceneTags', () => {
 	});
 	it('is empty for an empty scene', () => {
 		expect(sceneTags({ nodes: [] })).toEqual([]);
+	});
+});
+
+describe('validateScene: kinds as data, environment, textures (§3c)', () => {
+	const kinds = {
+		pump: { model: 'models/pump.glb', drive: [{ mesh: 'Coupling', spin: { axis: 'x', revPerS: { bind: 'Speed', scale: 0.02 } } }] },
+		beacon: { type: 'Switch', model: 'models/beacon.glb', status: '{Fault?FAULT:ok}', bounds: 'auto' }
+	};
+	it('a data kind under a new name is a kind the document brings', () => {
+		const doc = { kinds, nodes: [{ id: 'b', kind: 'beacon', pos: [0, 0, 0] }] };
+		expect(validateScene(doc, KINDS)).toEqual({ ok: true, errors: [] });
+	});
+	it('a kind without a model still needs the app to register it', () => {
+		const r = validateScene({ kinds: { switch: { type: 'Switch' } }, nodes: [] }, KINDS);
+		expect(r.errors.map((e) => e.path)).toEqual(['/kinds/switch']);
+	});
+	it('names the path of each problem', () => {
+		const r = validateScene(
+			{
+				kinds: {
+					a: { model: 'http://x/a.glb' },
+					b: { model: 'models/b.glb', bounds: 'big', labelAt: [0, 1], status: '{Level %' },
+					c: { drive: [] },
+					d: { model: 'models/d.glb', drive: [{ mesh: 'M', tint: { bind: 'Running' } }] }
+				},
+				environment: { hdri: 'env/x.png', background: 'wall', floor: 'low', intensity: -1, shadows: 'yes' },
+				fixtures: [
+					{ kind: 'box', pos: [0, 0, 0], texture: { map: 'a.jpg' } },
+					{ kind: 'plane', pos: [0, 0, 0], texture: { map: '../a.jpg', repeat: [1] } }
+				],
+				nodes: []
+			},
+			KINDS
+		);
+		expect(r.errors.map((e) => e.path)).toEqual([
+			'/fixtures/0/texture',
+			'/fixtures/1/texture/map',
+			'/fixtures/1/texture/repeat',
+			'/kinds/a/model',
+			'/kinds/b/bounds',
+			'/kinds/b/labelAt',
+			'/kinds/b/status',
+			'/kinds/c',
+			'/kinds/c',
+			'/kinds/d/drive/0/tint/on',
+			'/environment/hdri',
+			'/environment/background',
+			'/environment/floor',
+			'/environment/intensity',
+			'/environment/shadows'
+		]);
+	});
+	it('kindMembers unions members, drives and the status template', () => {
+		expect(kindMembers(kinds.pump as never)).toEqual(['Speed']);
+		expect(kindMembers({ members: ['PortsUp'], status: '{Fault?FAULT:ok} {PortsUp}' })).toEqual(['PortsUp', 'Fault']);
 	});
 });

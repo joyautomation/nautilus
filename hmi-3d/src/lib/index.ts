@@ -19,18 +19,37 @@ export { default as Pipe3D } from './components/Pipe3D.svelte';
 export { default as Halo } from './components/Halo.svelte';
 export { default as Label } from './components/Label.svelte';
 export { default as Fixture3D } from './components/Fixture3D.svelte';
+// GltfNode and Surroundings are deliberately NOT exported here: Scene3D
+// dynamic-imports them, and a static export would fold the glTF and HDRI
+// loaders back into the base bundle (§3c, §6).
 
 // The scene document: types, the validator, and the subscription list.
-export { validateScene, sceneTags, isBindingRef, refRoot } from './scene.js';
-export type { SceneDoc, SceneKind, SceneNode, ScenePipe, SceneFixture, SceneGrid, SceneCamera, SceneError, Vec3 } from './scene.js';
+export { validateScene, sceneTags, isBindingRef, isAssetPath, refRoot, kindMembers } from './scene.js';
+export type {
+	SceneDoc,
+	SceneKind,
+	SceneNode,
+	ScenePipe,
+	SceneFixture,
+	SceneTexture,
+	SceneEnvironment,
+	SceneGrid,
+	SceneCamera,
+	SceneError,
+	Vec3
+} from './scene.js';
+
+// Kinds as data: the drive vocabulary, evaluated from the document.
+export { DRIVE_CHANNELS, evalDrives, evalNum, evalBool, driveMembers, validateDrives, formatStatus, statusMembers, propFor } from './drives.js';
+export type { Drive, DriveChannel, MeshState, NumExpr, BoolExpr, Axis } from './drives.js';
 
 // Bindings: the mimic's grammar plus dotted paths, evaluated from the doc.
 export { resolveNodeBindings, bindingsGood, readPath, member, num, flowing } from './bindings.js';
 
 // The registry: extend `builtinRegistry` with your own kinds.
-export { builtinRegistry, tankKind, pumpKind, valveKind } from './registry.js';
+export { builtinRegistry, registryFor, tankKind, pumpKind, valveKind } from './registry.js';
 export type { NodeKindDef, NodeProps, PanelProps, NodeRegistry } from './registry.js';
-export { tankState, tankStatus, pumpState, pumpStatus, valveState, valveStatus } from './kinds.js';
+export { BUILTIN_CONTRACT, tankState, tankStatus, pumpState, pumpStatus, valveState, valveStatus } from './kinds.js';
 
 // Alarms in space: one worst-priority entry per asset.
 export { worstAlarmByAsset, alarmAsset } from './alarms.js';

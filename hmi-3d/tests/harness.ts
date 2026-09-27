@@ -101,6 +101,8 @@ function deepEqual(a: unknown, b: unknown): boolean {
 export interface Matchers {
 	toBe(want: unknown): void;
 	toEqual(want: unknown): void;
+	/** An array holds the item (by deep equality), or a string the substring. */
+	toContain(item: unknown): void;
 	toBeNull(): void;
 	readonly not: Pick<Matchers, 'toBe' | 'toEqual'>;
 }
@@ -109,6 +111,10 @@ export function expect(got: unknown): Matchers {
 	return {
 		toBe(want) {
 			if (!Object.is(got, want)) throw new Error(`toBe: got ${show(got)}, want ${show(want)}`);
+		},
+		toContain(item) {
+			const ok = typeof got === 'string' ? typeof item === 'string' && got.includes(item) : Array.isArray(got) && got.some((x) => deepEqual(x, item));
+			if (!ok) throw new Error(`toContain: ${show(got)} does not contain ${show(item)}`);
 		},
 		toEqual(want) {
 			if (!deepEqual(got, want)) throw new Error(`toEqual: got ${show(got)}, want ${show(want)}`);

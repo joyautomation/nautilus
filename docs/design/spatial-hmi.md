@@ -80,7 +80,10 @@ export type { SceneError };
 export { resolveNodeBindings, refRoot, member, num, flowing };
 // Registry
 export type { NodeKindDef, NodeProps, NodeRegistry };
-export { builtinRegistry };
+export { builtinRegistry, registryFor, BUILTIN_CONTRACT };
+// Kinds as data (§3c): the drive vocabulary, evaluated from the document
+export { DRIVE_CHANNELS, evalDrives, driveMembers, validateDrives, formatStatus, kindMembers };
+export type { Drive, MeshState, SceneEnvironment, SceneTexture };
 // Alarms
 export { worstAlarmByAsset };  export type { AssetAlarm };
 // Measurement
@@ -364,7 +367,10 @@ image-based lighting and, optionally, the backdrop and shadows:
 }
 ```
 
-`background: "ground"` projects the HDRI onto a floor at `floor` metres
+`intensity` scales the HDRI's light on the models (not the backdrop); a
+bright workshop HDRI at 1 swamps any key light, so a scene that wants
+visible shadows turns it down (the rig uses 0.45) and the key light is
+sized to show against it. `background: "ground"` projects the HDRI onto a floor at `floor` metres
 (three's `GroundedSkybox`), so a desk-scale rig stands in the workshop
 rather than floating in it; `sky` is the plain equirect backdrop; `none`
 (default) lights and reflects only. `shadows` turns on a shadow-casting
@@ -541,7 +547,10 @@ Proposed order, each with an exit and the capture moment it produces
    *Designed as §3c (the `kinds` block grows `model`/`drive`, not a
    `gltf` kind with `spin:Impeller` bind keys: a kind's geometry and its
    drives belong to the kind, and the node keeps placing and binding);
-   built on `spatial-kinds`, 2026-09-27.*
+   built on `spatial-kinds`, PR #66, 2026-09-27: the rig renders its
+   three kinds from `models/*.glb` with drives, an HDRI ground-projected
+   onto a concrete floor, soft shadows, at 60 fps / 33 ms (§9); the take
+   is `content/assets/capture/n57/out/01-grey-to-lit.mp4`.*
 2. **Place equipment by dragging.** Locating things is the one authoring
    step `naut scene init` cannot finish, and a number typed into `pos` is
    the tedium to remove. An edit mode on `SceneView`: click an asset,
@@ -594,6 +603,15 @@ AMD Radeon RX 7900 XT, Chrome).
 | Date | Machine | Scene | fps | p95 ts→pixel | Bundle (gz) | Notes |
 |---|---|---|---|---|---|---|
 | 2026-09-26 | mira1 desktop, Radeon RX 7900 XT, Chrome (headed, 2560×1440) | rig: 3 nodes, 2 pipes, desk, grid | 60 (vsync) | ctrl→pixel 33 ms (n=197); 34 ms (n=200) on a second take | 438 kB | controller on the same machine (shared clock); 0 console errors; recipe `content/assets/capture/n56/browser/01-first-render.mjs` |
+| 2026-09-27 | same desktop, Chrome headed 2560×1440 | rig, `look: flat` (M1 primitives, three lights) | 60 | rx→pixel 33 ms, ctrl→pixel 34 ms (n=50) | 254 kB base | item 1 build; `naut run` serving `hmi/build`; recipe `content/assets/capture/n57/browser/01-grey-to-lit.mjs`, first half |
+| 2026-09-27 | same | rig, `look: lit`: 3 glTF kinds (pump 96 kB, tank 74 kB, valve 47 kB), HDRI 1k ground-projected (1.7 MB), concrete floor (3 × 1k JPG, 1.3 MB), soft shadows | 60 | rx→pixel 33 ms, ctrl→pixel 34 ms (n=191), unchanged through the cut and a fault | 254 kB base + 48 kB on demand (glTF chunk 14 kB, HDRI + shadows chunk 34 kB) = 302 kB | same take, second half; 0 console errors; the draco/basis decoders Vite emits (1.9 MB) are never fetched — no model uses them |
+
+Bundle figures from 2026-09-27 on are the sum of gzipped JS under the
+built app's `_app/immutable` (excluding the on-demand decoder assets),
+which is what a browser downloads for a first paint; the 438 kB Milestone
+1 figure was taken from Vite's build report and is not directly
+comparable — measured this way, the Milestone 1 base and the item 1 base
+are the same 254 kB, because the loaders sit behind dynamic imports.
 
 ## 10. Risks & open questions
 

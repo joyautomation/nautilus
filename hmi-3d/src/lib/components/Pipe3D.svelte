@@ -6,6 +6,7 @@
 	import { getContext } from 'svelte';
 	import { DEFAULT_PALETTE, type Palette } from '../palette.js';
 	import type { Vec3 } from '../scene.js';
+	import type { ViewState } from './view.js';
 
 	let {
 		points,
@@ -14,6 +15,8 @@
 		good = true
 	}: { points: Vec3[]; radius?: number; flowing?: boolean; good?: boolean } = $props();
 	const palette = getContext<Palette>('hmi3d:palette') ?? DEFAULT_PALETTE;
+	const view = getContext<ViewState>('hmi3d:view') ?? { lit: false };
+	let pbr = $derived(view.lit ? { metalness: 0.7, roughness: 0.4 } : { metalness: 0, roughness: 0.6 });
 
 	const up = new Vector3(0, 1, 0);
 	let segments = $derived(
@@ -30,14 +33,14 @@
 </script>
 
 {#each segments as s}
-	<T.Mesh position={s.pos} quaternion={s.quat}>
+	<T.Mesh position={s.pos} quaternion={s.quat} castShadow>
 		<T.CylinderGeometry args={[radius, radius, s.len, 12]} />
-		<T.MeshStandardMaterial {color} />
+		<T.MeshStandardMaterial {color} {...pbr} />
 	</T.Mesh>
 {/each}
 {#each points.slice(1, -1) as p}
-	<T.Mesh position={p}>
+	<T.Mesh position={p} castShadow>
 		<T.SphereGeometry args={[radius, 12, 8]} />
-		<T.MeshStandardMaterial {color} />
+		<T.MeshStandardMaterial {color} {...pbr} />
 	</T.Mesh>
 {/each}

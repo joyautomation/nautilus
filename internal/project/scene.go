@@ -3,6 +3,7 @@ package project
 import (
 	"fmt"
 	"io/fs"
+	"path"
 	"sort"
 	"strings"
 
@@ -51,6 +52,27 @@ func SceneFiles(fsys fs.FS) ([]string, error) {
 	return out, nil
 }
 
+// assetExists resolves a scene's asset path (a URL path from the app
+// root, docs/design/spatial-hmi.md §3c) the way the app will serve it:
+// next to the scene file at the project root, then under the HMI app's
+// `static/` (the sibling of the manifest's `server.hmi` build directory,
+// the SvelteKit layout every example uses), then in that build.
+func (p *Project) assetExists(fsys fs.FS) func(string) bool {
+	roots := []string{"."}
+	if p.HMIDir != "" {
+		build := path.Clean(p.HMIDir)
+		roots = append(roots, path.Join(path.Dir(build), "static"), build)
+	}
+	return func(asset string) bool {
+		for _, r := range roots {
+			if st, err := fs.Stat(fsys, path.Join(r, asset)); err == nil && !st.IsDir() {
+				return true
+			}
+		}
+		return false
+	}
+}
+
 // SceneReport is one checked scene file.
 type SceneReport struct {
 	File  string
@@ -82,6 +104,7 @@ func (p *Project) CheckScenes(fsys fs.FS, rt *runtime.Runtime) (reports []SceneR
 			continue
 		}
 		e, w := scene.Check(doc, tags)
+		e = append(e, scene.CheckAssets(doc, p.assetExists(fsys))...)
 		for _, m := range e {
 			errs = append(errs, fmt.Sprintf("scene %s %s", f, m))
 		}
