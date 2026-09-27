@@ -400,6 +400,56 @@ counts as healthy only when every child bus is. The `memory` loopback cannot
 join a list — it owns whatever is written to it, which is exactly what makes
 it unroutable next to another driver.
 
+### IT hardware as tags (SNMP, Redfish, node_exporter)
+
+A switch port is a UDT, a failed PSU is an ISA-18.2 alarm, and a rack
+publishes Sparkplug B like any plant asset: three drivers deliver one shared
+UDT set — `Server`, `Fan`, `PSU`, `TempSensor`, `Switch`, `SwitchPort`,
+`PDU`, `PDUOutlet`, `UPS` — so the 3D view, alarms, history and Sparkplug
+work on a server rack with no special cases.
+
+```sh
+naut snmp import --tag SW1 --host 192.168.1.2 --version 3 --user mon --auth sha256 --priv aes128
+naut redfish import --tag NODE1 --host https://bmc1 --user mon --password-env BMC_NODE1_PASSWORD --insecure
+naut prometheus import --tag HOST1 --url http://host1:9100/metrics
+```
+
+Each writes `<proto>_manifest.yaml` + `tags/<proto>.yaml` (generated, byte-
+identical on re-run) and the same `hw_types.st`; `browse --record` captures
+a device so the import, the bench stand-in (`naut <proto> serve`) and the
+tests all run from the recording. Credentials are never in a file: the
+manifest names the variable (`SNMP_SW1_COMMUNITY`, `SNMP_SW1_AUTH`,
+`BMC_NODE1_PASSWORD`) the driver reads where it runs, and `naut check` warns
+when it is unset. Intervals are seconds, not scan rates:
+
+```yaml
+drivers:
+  - type: snmp
+    manifest: snmp_manifest.yaml
+    scan-rate: 5s
+    scan-classes: { slow: 60s }
+    tag-classes: { slow: ["*.Name", "*.Alias", "*.Serial"] }
+  - type: prometheus
+    manifest: prometheus_manifest.yaml
+    scan-rate: 15s
+alarms:
+  site-from: "^([A-Za-z0-9]+?)(?:_|$)"
+  rules:
+    - { match: { type: SwitchPort, member: Down }, priority: medium, on-delay: 15s, enable: "{site}__Online" }
+    - { match: { type: Fan, member: Fault }, priority: high, on-delay: 30s, enable: "{site}__Online" }
+```
+
+Counters become rates (`InBps`, `ErrorRate`) with 32-bit wrap and 64-bit
+reset handled; a device that stops answering keeps its last values (Stale)
+with `<id>__Online` false; a refused OID or 404 resource marks just that tag
+Bad. Writes are off unless a person adds one: a PDU outlet or a server power
+command is its own scalar output tag, leader-only, confirmed, never
+generated. `examples/it-rack` runs a switch and a host against the stand-ins
+and against real devices with the same tags; the
+[IT hardware guide](https://nautilus.joyautomation.com/guides/it-hardware/)
+covers the rest. Each driver is tested in CI against a foreign stack:
+snmpsim, DMTF's Redfish mockup server, a real node_exporter release.
+
 ### Online edits — change logic while it runs
 
 nautilus has two planes. The **cold plane** — connections, the tag manifest,
@@ -843,6 +893,14 @@ stable channel (pre-release tracks `main` for early fixes), the HMI kit on npm. 
   keep-alive `rewrite:` outputs, `naut modbus import|browse|serve|tags`
   codegen and commissioning tools, and an in-process slave plus a pymodbus
   foreign-stack run in CI
+- ✅ `snmp`, `redfish`, `prom` on `hw` — IT hardware as tags: one UDT set
+  (Server, Fan, PSU, TempSensor, Switch, SwitchPort, PDU, PDUOutlet, UPS)
+  delivered by three drivers on a shared poll base (intervals, stale-after
+  freshness, counter→rate, per-tag Bad, `__Online` companions), profiles
+  for IF-MIB/ENTITY/UPS-MIB/CyberPower, legacy and current Redfish, and
+  node_exporter; `naut snmp|redfish|prometheus import|browse|serve|tags`
+  with recordings that make the bench and the tests hardware-free; foreign
+  stacks in CI (snmpsim, DMTF Redfish-Mockup-Server, node_exporter)
 - ✅ `server` — tag API: JSON snapshot, SSE stream, tag writes (HMI + editor),
   a gated program API for online edits (`GET/PUT /api/program`, rollback),
   and (`server.hmi`) serving a built HMI at "/" with SPA fallback, so the
