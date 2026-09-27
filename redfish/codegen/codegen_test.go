@@ -252,8 +252,10 @@ func TestImportEdges(t *testing.T) {
 	if got := strings.Join(tagNames(out.Manifest), ","); got != "NODE1,NODE1_Temp_Ambient" {
 		t.Fatalf("tags = %s", got)
 	}
-	if b := out.Manifest.Tags[0].Members["InletTempC"]; b.Resource != "/redfish/v1/Chassis/1/Sensors/t" {
-		t.Fatalf("the Room sensor is the inlet: %+v", b)
+	// The effective resource: the member's own, or the one build() hoisted
+	// to the tag when it was the most used.
+	if b, tg := out.Manifest.Tags[0].Members["InletTempC"], out.Manifest.Tags[0]; b.Resource != "/redfish/v1/Chassis/1/Sensors/t" && !(b.Resource == "" && tg.Resource == "/redfish/v1/Chassis/1/Sensors/t") {
+		t.Fatalf("the Room sensor is the inlet: %+v (tag resource %s)", b, tg.Resource)
 	}
 	if !strings.Contains(strings.Join(out.Notes, "\n"), "2 system resources; took /redfish/v1/Systems/A") {
 		t.Fatalf("notes = %v", out.Notes)

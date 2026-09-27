@@ -279,8 +279,8 @@ func TestPollComposition(t *testing.T) {
 	if strings.Join(g.calls, "|") != strings.Join(want, "|") {
 		t.Fatalf("requests:\n%s\nwant:\n%s", strings.Join(g.calls, "\n"), strings.Join(want, "\n"))
 	}
-	if d.Requests()["SW1"] != 7 {
-		t.Errorf("Requests = %v", d.Requests())
+	if res.Requests != 7 {
+		t.Errorf("Requests = %v", res.Requests)
 	}
 	if len(res.Bad) != 0 {
 		t.Errorf("Bad = %v", res.Bad)

@@ -27,7 +27,6 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/joyautomation/nautilus/hw"
@@ -95,14 +94,13 @@ type Driver struct {
 
 // source is one agent's poll-side state. Base runs a source's polls and
 // its writes on ONE goroutine (the source loop), so sess and counters need
-// no lock; requests is read by Requests() from elsewhere.
+// no lock.
 type source struct {
 	cfg      Source
 	plans    map[string]*classPlan
 	sess     Getter
 	counters map[string]*hw.Counter // "Tag.Member" of every rate binding
 	warned   map[string]bool
-	requests atomic.Int64 // PDUs in the last complete poll cycle, per class summed
 	perClass map[string]int
 	// unbound summarises, per contract type, the members no binding of
 	// this source fills — logged once, at the first poll, so "why is
@@ -321,17 +319,6 @@ func (d *Driver) Health() hw.Health { return d.base.Health() }
 // variables, missing credential files, MD5/DES.
 func (d *Driver) Warnings() []string { return d.manifest.Warnings() }
 
-// Requests reports, per source, the PDUs its last poll of every class sent
-// — the number brief §12.5 wants measured on the S3900 before
-// max-repetitions and the interval are frozen.
-func (d *Driver) Requests() map[string]int {
-	out := make(map[string]int, len(d.sources))
-	for id, s := range d.sources {
-		out[id] = int(s.requests.Load())
-	}
-	return out
-}
-
 // Plan describes the requests one poll of each (source, class) sends, for
 // `naut snmp import --plan` and the tests.
 func (d *Driver) Plan() string {
@@ -442,13 +429,8 @@ func (d *Driver) poll(ctx context.Context, sourceID, class string) (hw.Result, e
 	}
 
 	s.perClass[class] = requests
-	total := 0
-	for _, n := range s.perClass {
-		total += n
-	}
-	s.requests.Store(int64(total))
 
-	var res hw.Result
+	res := hw.Result{Requests: requests}
 	for _, oid := range sortedKeys(plan.uses) {
 		uses := plan.uses[oid]
 		smp, present := got[oid]

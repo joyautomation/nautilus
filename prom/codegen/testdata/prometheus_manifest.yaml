@@ -18,7 +18,6 @@ tags:
       MaxTempC:   {metric: node_hwmon_temp_celsius, agg: max}
       MemPct:     {expr: "100 * (1 - avail / total)", from: {avail: {metric: node_memory_MemAvailable_bytes}, total: {metric: node_memory_MemTotal_bytes}}}
       Model:      {metric: node_uname_info, label: nodename}
-      Online:     {const: true}
       PowerOn:    {const: true}
       PsuCount:   {const: 0}
       TempCount:  {const: 2}

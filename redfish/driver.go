@@ -133,14 +133,6 @@ type memberPlan struct {
 	path        *Path
 }
 
-// powerCmdCarrier: hw.WriteDecl coerces a command value to its target
-// member's kind, and Server's read-back member PowerOn is a BOOL — which
-// would flatten ForceOff(3) to true. The INT reset command therefore rides
-// on an INT member's slot kind; the member itself is never written (the
-// struct tag is an input). See the report to the integrator: hw.WriteDecl
-// wants its own Kind.
-const powerCmdCarrier = "Health"
-
 // New validates the manifest offline and builds the driver. It never dials.
 func New(m Manifest, opts ...Option) (*Driver, error) {
 	d := &Driver{
@@ -195,7 +187,13 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 	}
 	for _, w := range m.Writes {
 		d.writes[w.Name] = w
-		cfg.Writes = append(cfg.Writes, hw.WriteDecl{Name: w.Name, Tag: w.Tag, Member: powerCmdCarrier})
+		member := w.Member
+		if member == "" {
+			member = "PowerOn"
+		}
+		// The command is an INT (0 none … 4 restart) whose read-back is
+		// the BOOL PowerOn: WriteDecl.Kind keeps it an INT on the way in.
+		cfg.Writes = append(cfg.Writes, hw.WriteDecl{Name: w.Name, Tag: w.Tag, Member: member, Kind: ir.TypeInt})
 	}
 	base, err := hw.NewBase(cfg)
 	if err != nil {
@@ -559,6 +557,9 @@ func (d *Driver) write(ctx context.Context, sourceID string, w hw.WriteDecl, v i
 		s.mu.Lock()
 		s.writeErr = err
 		s.mu.Unlock()
+	}
+	if err == nil && !sent {
+		return hw.ErrNoWrite // a return to 0: nothing on the wire, not a write
 	}
 	return err
 }

@@ -291,5 +291,13 @@ func TagsYAML(out Output) ([]byte, error) {
 	for _, t := range out.Manifest.Tags {
 		tags = append(tags, tagfile.Tag{Name: t.Name, Role: "input", Type: t.Type, Desc: out.Desc[t.Name]})
 	}
+	// The driver-synthesised companions, declared so a program can read
+	// them — a host's values hold (Stale) when the exporter stops
+	// answering, so interlock on __Online (the snmp/redfish rule).
+	for _, s := range out.Manifest.Sources {
+		tags = append(tags,
+			tagfile.Tag{Name: hw.OnlineTagName(s.ID), Role: "input", Desc: "exporter " + s.ID + " answered within stale-after — interlock on this (driver-synthesised)"},
+			tagfile.Tag{Name: hw.LastPollTagName(s.ID), Role: "input", Unit: "ms", Desc: "epoch ms of " + s.ID + "'s last complete scrape, 0 before the first (driver-synthesised)"})
+	}
 	return tagfile.Render(header, tags)
 }

@@ -182,7 +182,9 @@ func (im *importer) run() (Output, error) {
 	server := newTag(im.o.Tag, "Server", im.o.Tag)
 	server.Desc = strings.TrimSpace(str(sys, "Manufacturer") + " " + str(sys, "Model"))
 	im.names[im.o.Tag] = "the system " + sysURI
-	server.bind("Online", sysURI, "Id", func(b *redfish.MemberBinding) { b.Exists = boolPtr(true) })
+	// Online is not bound: hw.Base keeps an unbound Online member equal to
+	// the source's freshness, so it goes false when the BMC stops answering
+	// instead of holding its last true.
 	if has(sys, "PowerState") {
 		server.bind("PowerOn", sysURI, "PowerState", func(b *redfish.MemberBinding) { b.Eq = "On" })
 	}

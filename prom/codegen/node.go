@@ -36,7 +36,6 @@ func generateNode(scrape prom.Scrape, opts Options) (Output, error) {
 	prefix := opts.Tag
 
 	serverMembers := map[string]prom.Binding{
-		"Online":  {Binding: hw.Binding{Const: true}},
 		"PowerOn": {Binding: hw.Binding{Const: true}},
 		"UptimeS": {Expr: "__now - boot", From: map[string]prom.Selector{
 			"boot": {Metric: "node_boot_time_seconds"},

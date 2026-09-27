@@ -1,8 +1,9 @@
 // poll.go is the Poll function hw.Base calls for one (source, class): fetch
 // the body, parse it, and resolve every member due in that class against
-// the parsed samples. See driver.go for New/the transport and rate.go for
-// why the actual rate arithmetic is prom's own counterF rather than
-// hw.Counter.
+// the parsed samples. See driver.go for New/the transport. Rates use
+// hw.Counter's float form: a Prometheus counter is an already-float64
+// accumulator that never wraps, where any decrease means the exporter
+// restarted.
 package prom
 
 import (
@@ -130,13 +131,13 @@ func (d *Driver) resolveMember(tr *tagRuntime, member string, cb compiledBinding
 	if applied.Rate {
 		c := tr.src.counterFor(tr.decl.Name + "." + member)
 		if reconnected {
-			c.reset()
+			c.Reset()
 		}
-		rate, ok := c.observe(val, now)
+		rate, ok := c.ObserveFloat(val, now)
 		if !ok {
 			return ir.Value{}, outcomeSkip // "reads 0.0 for exactly one interval" (§5)
 		}
-		applied.Rate = false // counterF already produced the rate; Apply only scales/maps it now
+		applied.Rate = false // the counter already produced the rate; Apply only scales/maps it now
 		raw = hw.RawFloatVal(rate)
 	}
 	v, ok, err := applied.Apply(cb.field, raw, nil, now)
@@ -228,9 +229,9 @@ func (d *Driver) resolveSelector(tr *tagRuntime, member, name string, sel Select
 	if sel.Rate {
 		c := tr.src.counterFor(tr.decl.Name + "." + member + "." + name)
 		if reconnected {
-			c.reset()
+			c.Reset()
 		}
-		rate, ok := c.observe(val, now)
+		rate, ok := c.ObserveFloat(val, now)
 		if !ok {
 			return ir.Value{}, errRateWarm
 		}
@@ -324,12 +325,12 @@ func aggregate(agg string, matches []Sample) (float64, error) {
 // ── per-source runtime state ────────────────────────────────────────────
 
 // counterFor returns key's counter, creating it on first use.
-func (sr *sourceRuntime) counterFor(key string) *counterF {
+func (sr *sourceRuntime) counterFor(key string) *hw.Counter {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 	c, ok := sr.counters[key]
 	if !ok {
-		c = &counterF{}
+		c = &hw.Counter{}
 		sr.counters[key] = c
 	}
 	return c

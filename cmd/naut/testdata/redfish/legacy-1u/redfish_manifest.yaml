@@ -16,7 +16,6 @@ tags:
     desc: "Example Systems R1U-L"
     resource: /redfish/v1/Systems/1
     members:
-      Online: {path: Id, exists: true}
       PowerOn: {path: PowerState, eq: "On"}
       Health: {path: Status.Health, map: {Critical: 2, OK: 0, Warning: 1}}
       Fault: {derived: "Health == 2"}

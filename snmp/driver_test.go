@@ -224,7 +224,7 @@ func TestDriverDeliversTypedTags(t *testing.T) {
 	// 11 ifTable/ifXTable column walks of two PDUs each (rows 1..28 of 30,
 	// max-repetitions 20, each walk stopping at its last bound row), one PDU
 	// for the 8 PoE rows, and one Get for the scalars and single rows.
-	if n := d.Requests()["SW1"]; n != 24 {
+	if n := d.Health().Sources[0].Requests; n != 24 {
 		t.Errorf("requests per poll = %d\n%s", n, d.Plan())
 	}
 }

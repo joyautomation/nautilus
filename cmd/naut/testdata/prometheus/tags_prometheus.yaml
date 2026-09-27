@@ -7,3 +7,5 @@
 - { name: BENCH1_Fan1, role: input, type: Fan, desc: "fan platform_coretemp_0/fan1" }
 - { name: BENCH1_Temp_platform_coretemp_0_temp1, role: input, type: TempSensor, desc: "temperature platform_coretemp_0_temp1" }
 - { name: BENCH1_Temp_platform_coretemp_0_temp2, role: input, type: TempSensor, desc: "temperature platform_coretemp_0_temp2" }
+- { name: BENCH1__LastPollMs, role: input, unit: "ms", desc: "epoch ms of BENCH1's last complete scrape, 0 before the first (driver-synthesised)" }
+- { name: BENCH1__Online, role: input, desc: "exporter BENCH1 answered within stale-after — interlock on this (driver-synthesised)" }

@@ -44,8 +44,8 @@ func (f *fakeScrape) setDown(down bool) {
 // A source that reconnects after an outage must not compute a rate across
 // the gap it never observed (docs/design/it-drivers.md §5): the first
 // successful scrape after a transport failure resets every rate counter of
-// that (source, class) — both a plain Rate: binding (counterF via
-// resolveMember) and an expr's rate selector (counterF via resolveSelector)
+// that (source, class) — both a plain Rate: binding (hw.Counter via
+// resolveMember) and an expr's rate selector (hw.Counter via resolveSelector)
 // — so that scrape is a warm-up that delivers nothing for those members,
 // and only the one after it yields a rate, computed from post-outage
 // samples alone. poll is driven directly (no Start, no poll loop) so every

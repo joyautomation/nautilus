@@ -113,9 +113,9 @@ type sourceRuntime struct {
 	logger  *slog.Logger
 
 	mu       sync.Mutex
-	counters map[string]*counterF // key: "tag.member" or "tag.member.selector"
-	wasDown  map[string]bool      // key: class name
-	warned   map[string]bool      // "member absent" logged once per source
+	counters map[string]*hw.Counter // key: "tag.member" or "tag.member.selector"
+	wasDown  map[string]bool        // key: class name
+	warned   map[string]bool        // "member absent" logged once per source
 }
 
 // tagRuntime is one struct tag's compiled bindings: the parsed Expr per
@@ -175,7 +175,7 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 		}
 		sr := &sourceRuntime{
 			cfg: s, headers: hdr, logger: d.log,
-			counters: map[string]*counterF{},
+			counters: map[string]*hw.Counter{},
 			wasDown:  map[string]bool{},
 			warned:   map[string]bool{},
 		}
