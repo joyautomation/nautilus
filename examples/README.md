@@ -30,6 +30,11 @@ to see what the VS Code extension does against a real project.
   hand-written Go instead of a manifest, for the SDK story (a custom
   `io.Driver`, or plant physics too rich for `sim.st`). Everything else here
   is manifest-first, no Go.
+- **[`spatial-rig/`](spatial-rig/)** — the office rig behind the **3D
+  operator view**: three struct-tagged props with a simulated process, and a
+  `rig.scene.json` rendered live by `@joyautomation/nautilus-hmi-3d` (orbit,
+  click-to-inspect, alarm halos, quality greying). The test bed for the
+  spatial HMI; the process is deliberately tiny.
 
 Each project runs the same way:
 
@@ -76,6 +81,7 @@ is four projects, not one — `naut run sites/well-1`, `sites/well-2`,
 | Acceptance tests: virtual time, `suspend:`, alarm `ack:`/`shelve:` | all four | `*_test.yaml` |
 | HMI: a mimic with custom Svelte components and port overrides | lift-station | `hmi/`, `lift-station.mimic.json` |
 | HMI: a mimic built entirely from the kit's built-in components | batch-skid, remote-fleet | `batch-skid.mimic.json`, `scada/fleet.mimic.json` |
+| HMI: a 3D scene bound to struct tags (`@joyautomation/nautilus-hmi-3d`) | spatial-rig | `rig.scene.json`, `hmi/` |
 | The SDK path: a custom `io.Driver`, no manifest | go-sdk | `plant.go` |
 
 **Needs naut ≥ 0.13.1** (`lib/` composition, a `FUNCTION_BLOCK`'s declared

@@ -1,0 +1,34 @@
+# Acceptance tests for the rig controller, in virtual time.
+tolerance: 0.5
+
+tests:
+  - name: pump starts below the start level and stops above the stop level
+    suspend: [sim]
+    steps:
+      - given: { T101.Level: 30.0 }
+        scans: 1
+        expect: { P101.Run: true }
+      - given: { T101.Level: 80.0 }
+        scans: 1
+        expect: { P101.Run: false }
+
+  - name: an injected pump fault stops the pump and raises its alarm
+    given: { InjectPumpFault: true, T101.Level: 30.0 }
+    advance: 1s
+    expect: { P101.Fault: true, P101.Run: false, P101.Running: false }
+    alarms: { active: ["P101.Fault"] }
+
+  - name: a stuck valve raises the position alarm after its on-delay
+    given: { InjectValveStick: true, Demand: 90.0 }
+    steps:
+      - advance: 2s
+        expect: { XV101.Fault: true }
+        alarms: { active: [] }
+      - advance: 2s
+        alarms: { active: ["XV101.Fault"] }
+
+  - name: the process keeps cycling on its own
+    # With the sim running, level stays inside the pump's band plus margin.
+    advance: 600s
+    always:
+      T101.Level: { between: [20.0, 90.0] }
