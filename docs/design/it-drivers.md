@@ -1,8 +1,9 @@
 # Design brief: IT hardware drivers for nautilus (SNMP, Redfish, Prometheus)
 
-Status: **design 2026-09-26; `hw/` built the same day** (types table +
-`hw_types.st`, `Binding`/`Expr`/`Counter`, `Base` with tests through the real
-runtime). Protocol packages, codegen and the example are next. Written on the `it-drivers`
+Status: **built, 2026-09-26** — `hw/`, `snmp/`, `redfish/`, `prom/`,
+`naut snmp|redfish|prometheus import|browse|serve|tags`, the loader/schema/
+`naut check` wiring, three foreign-stack CI jobs and `examples/it-rack`; see
+§13 for what the build changed and what is still open. PR #64. Written on the `it-drivers`
 branch from `randd/handoffs/IT-DRIVERS-HANDOFF.md`; the UDT set in §2 is the
 contract the `spatial-hmi` branch binds its `server`, `switch` and
 `switch-port` scene nodes to, so §2 is frozen once this brief merges and every
@@ -664,3 +665,75 @@ before publishing (§12.3).
     `Switch.PortsTotal` says how many; the scene binds a `switch-port` node
     to one tag each. If the spatial session prefers to enumerate by prefix,
     `SW1_Port*` is stable too. Decide together before either side hardcodes.
+
+## 13. Outcome (2026-09-26)
+
+Built in one day on PR #64: `hw/` by the integrating session; `snmp/`,
+`redfish/` and `prom/` by one build agent each in isolated worktrees, each
+reviewed adversarially and (redfish, prometheus) fixed once, then merged
+and reconciled here. All three foreign stacks ran locally and run in CI:
+snmpsim 1.2.2 (v2c and v3 authPriv), DMTF Redfish-Mockup-Server 1.3.0 with
+the DSP2043 `public-localstorage` and `public-rackmount1` mockups, and a
+checksum-verified node_exporter 1.12.1.
+
+**What the build changed in this brief** (the §2 contract is unchanged
+apart from the first two, which are additive):
+
+- **Commands are scalar output tags**, never UDT members (§7): `PDUOutlet`
+  has no `Cmd`, `Server` no `PowerCmd`; a manifest `writes:` list binds
+  `<tag>_Cmd` to (tag, member), with `hw.WriteDecl.Kind` keeping an INT
+  power command an INT. §6.1's `Cmd:` example is superseded by the
+  `writes:` shape in `snmp/manifest.go` and `redfish/manifest.go`.
+- **`Online` members are filled by `hw.Base`**, not bound: an unbound
+  `Online` mirrors the source's freshness and goes false when the device
+  stops answering. Importers do not bind it.
+- **`InPct`/`OutPct` are percent** (`100·Bps/(SpeedMbps·1e6)`), and
+  **`ErrorRate` is the rate of `ifInErrors` only** — a rate over in+out
+  would need a hidden member the contract does not have; `OutErrors`
+  carries the other counter. `Switch.PortsUp` is not derivable inside the
+  driver (a struct cannot read its siblings); the example's ST computes it.
+- **Bad is per tag per scan class**, and a tag refused from its very first
+  poll on a fresh source reads Bad, not NotConnected.
+- **Health rows carry `Requests`** per source and a latched
+  `LastWriteError`; commands are queued in order (a 3-then-0 power pulse
+  still sends the 3); a WriteFunc may answer `hw.ErrNoWrite`.
+- **Float counters** (exposition formats) never wrap: any decrease is a
+  reset and the fraction is kept.
+- **Companion tags** (`<id>__Online`, `<id>__LastPollMs`) are declared in
+  every generated tag file (the sparkplug-host rule; modbus omits them and
+  makes projects declare them by hand).
+- Manifest keys beyond §6.1: snmp `context:` (v3 contextName; snmpsim
+  needs it), redfish `exists:` (a BOOL for "the path is present") and
+  `agg:` over `[*]` paths, prom `label:` (a label as a STRING member) and
+  the `__now` selector for uptime.
+
+**Verified:** everything in §9.1–9.5 — unit, driver-against-stand-in,
+golden codegen (byte-identical, both importers agree on `hw_types.st`),
+`examples/it-rack` check + test in CI, and the three foreign stacks. The
+bench build of `examples/it-rack` ran on this workstation against the two
+stand-ins; the Prometheus half ran against the workstation's real
+node_exporter (recorded: `content/assets/capture/it-rack/`).
+
+**Not verified yet:** any real switch, PDU, UPS or BMC. The switch run
+waits on credentials for the only S3900s cabled today (read-only), the
+BMC run on a customer cluster's read-only user; the CyberPower units are
+not bought. Their profiles are written from the published MIBs and the
+recorded X14 trees, and say so in the generated notes.
+
+**Open, in priority order:**
+
+1. hwmon naming and filtering in the `node` profile — a workstation
+   exposes 48 sensors, some named `Temp_i2c_10_10_0050_temp1`.
+2. `Server.Health` from node_exporter cannot be expressed (no ternary in
+   `Expr`, no BOOL→number coercion): `Fault`/`Warning` are bound, `Health`
+   stays 0 there. Either a `Health` derivation in `hw` or a small `Expr`
+   extension (`cond ? a : b`).
+3. gosnmp discards the agent's usmStats Report on wrong credentials before
+   reading which one it was; the driver diagnoses "wrong credentials" with
+   a follow-up noAuthNoPriv probe rather than from the report itself.
+4. The AES-256 naming ambiguity (`aes256` Blumenthal vs `aes256c` Reeder):
+   identical under SHA-256, different under SHA-1/MD5; FSOS's meaning is
+   unconfirmed.
+5. Measured poll budgets on real devices (§12.4, §12.5) before the
+   defaults are frozen: ~24 PDUs per poll on a 28-port switch, ~20 GETs
+   per poll on a modeled X14 BMC.
