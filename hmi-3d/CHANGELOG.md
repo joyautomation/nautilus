@@ -9,4 +9,5 @@ to struct tags, pipes, fixtures, a grid, a camera) with the built-in
 the mimic's grammar plus dotted paths; click-to-inspect with the kit's 2D
 faceplates in a drawer; alarm halos by priority; quality greying; theme
 colours from the kit's tokens; and a `perf` HUD for fps and tag-change →
-pixel latency. Brief: `docs/design/spatial-hmi.md`.
+pixel latency. The scene file's `kinds` block is the kind ↔ UDT contract
+`naut check` and `naut scene init` work from. Brief: `docs/design/spatial-hmi.md`.

@@ -22,7 +22,7 @@ export { default as Fixture3D } from './components/Fixture3D.svelte';
 
 // The scene document: types, the validator, and the subscription list.
 export { validateScene, sceneTags, isBindingRef, refRoot } from './scene.js';
-export type { SceneDoc, SceneNode, ScenePipe, SceneFixture, SceneGrid, SceneCamera, SceneError, Vec3 } from './scene.js';
+export type { SceneDoc, SceneKind, SceneNode, ScenePipe, SceneFixture, SceneGrid, SceneCamera, SceneError, Vec3 } from './scene.js';
 
 // Bindings: the mimic's grammar plus dotted paths, evaluated from the doc.
 export { resolveNodeBindings, bindingsGood, readPath, member, num, flowing } from './bindings.js';

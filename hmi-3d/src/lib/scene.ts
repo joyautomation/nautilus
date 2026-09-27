@@ -73,8 +73,21 @@ export interface ScenePipe {
 	bind?: { flowing?: string };
 }
 
+/** The kind ↔ struct-type contract for a kind (docs/design/spatial-hmi.md
+ * §3b). The built-in kinds carry defaults; a project re-points one with
+ * `type`, and declares its own kinds with `type` and the `members` their
+ * component reads, so `naut check` can hold every node to it. */
+export interface SceneKind {
+	/** The UDT a node of this kind binds. */
+	type?: string;
+	/** The members the kind's component reads off the struct. */
+	members?: string[];
+}
+
 export interface SceneDoc {
 	name?: string;
+	/** Kind contracts: overrides for the built-ins, declarations for the app's own. */
+	kinds?: Record<string, SceneKind>;
 	camera?: SceneCamera;
 	fixtures?: SceneFixture[];
 	grid?: SceneGrid;
@@ -156,6 +169,21 @@ export function validateScene(doc: unknown, kinds?: Iterable<string>): { ok: boo
 				if (f.opacity !== undefined && !(isNum(f.opacity) && f.opacity >= 0 && f.opacity <= 1))
 					err(`${p}/opacity`, 'must be between 0 and 1');
 			});
+	}
+
+	if (doc.kinds !== undefined) {
+		if (!isObj(doc.kinds)) err('/kinds', 'must be an object of kind -> { type, members }');
+		else
+			for (const [k, def] of Object.entries(doc.kinds)) {
+				if (!isObj(def)) {
+					err(`/kinds/${k}`, 'must be an object with type and/or members');
+					continue;
+				}
+				if (def.type !== undefined && !isStr(def.type)) err(`/kinds/${k}/type`, 'must be a UDT name');
+				if (def.members !== undefined && !(Array.isArray(def.members) && def.members.every(isStr)))
+					err(`/kinds/${k}/members`, 'must be an array of member names');
+				if (known && !known.has(k)) err(`/kinds/${k}`, `"${k}" is declared but the app registers no such kind`);
+			}
 	}
 
 	if (!Array.isArray(doc.nodes)) err('/nodes', 'must be an array');

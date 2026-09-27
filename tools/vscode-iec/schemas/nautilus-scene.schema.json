@@ -1,0 +1,348 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "nautilus scene document",
+  "description": "A 3D process view as data — the spatial sibling of a *.mimic.json P&ID: nodes placed in space, pipes run between them, live tag bindings. Rendered by @joyautomation/nautilus-hmi-3d's <SceneView>, edited as text, diffed and reviewed like the program it belongs to. Positions are METRES in the site frame (the origin marker at [0, 0, 0], +y up), so the file that drives the desktop view is also the file that will place AR overlays. `naut check` runs the same structural rules as this schema, plus the kind ↔ tag-type contract a schema cannot express. Brief: docs/design/spatial-hmi.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "nodes"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Display name for the scene."
+    },
+    "kinds": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/kindContract"
+      },
+      "description": "The kind ↔ struct-type contract (docs/design/spatial-hmi.md §3b): overrides for the built-in kinds (tank → Tank, pump → Motor, valve → Valve) and declarations for kinds the app registers itself. Keyed by kind name. `naut check` holds every node of a declared kind to its `type` and `members`."
+    },
+    "camera": {
+      "$ref": "#/definitions/camera",
+      "description": "Initial camera. Positions in scene metres."
+    },
+    "fixtures": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/fixture"
+      },
+      "description": "Static, unbound geometry: the desk, a floor slab, the origin marker."
+    },
+    "grid": {
+      "$ref": "#/definitions/grid",
+      "description": "A reference grid on a horizontal plane."
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/node"
+      },
+      "description": "Equipment placed in the scene, each optionally bound to a live tag."
+    },
+    "pipes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/pipe"
+      },
+      "description": "Polylines run between nodes, optionally showing flow state."
+    },
+    "writable": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "maxItems": 0,
+      "description": "Reserved: tags an operator may write from this scene. The view is read-only until the write path ships, so a non-empty list is an error rather than a silent no-op — this list must stay empty."
+    }
+  },
+  "definitions": {
+    "vec3": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "vec2": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "bindingRef": {
+      "type": "string",
+      "pattern": "^!?[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$",
+      "description": "A tag reference: an absolute name or dotted path, read from the frame's tag map (`Demand`, `P101.Speed`; no indexing). A leading `!` negates a boolean prop: the prop is `value !== true`. An absent path leaves the prop unset, so the component's default holds."
+    },
+    "kindContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The UDT a node of this kind binds. The built-ins default to tank → Tank, pump → Motor, valve → Valve; re-point one here if the project's UDT is named differently."
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The members the kind's component reads off the struct, so `naut check` can hold every node of this kind to the same standard."
+        }
+      },
+      "description": "The UDT ↔ members contract for one kind."
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pos",
+        "target"
+      ],
+      "properties": {
+        "pos": {
+          "$ref": "#/definitions/vec3",
+          "description": "Camera position, [x, y, z] metres, site frame."
+        },
+        "target": {
+          "$ref": "#/definitions/vec3",
+          "description": "Look-at point, [x, y, z] metres, site frame."
+        },
+        "fov": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 180,
+          "description": "Vertical field of view, degrees. Default 45."
+        }
+      }
+    },
+    "grid": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pos": {
+          "$ref": "#/definitions/vec3",
+          "description": "Grid origin, [x, y, z] metres, site frame."
+        },
+        "size": {
+          "$ref": "#/definitions/vec2",
+          "description": "[w, d] in metres. Default [4, 4]."
+        },
+        "cell": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Cell pitch, metres. Default 0.1."
+        },
+        "section": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Heavier line every this many metres. Default 1."
+        }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "pos"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "box",
+            "plane",
+            "marker"
+          ],
+          "description": "Fixture shape: box, plane, or the origin marker."
+        },
+        "pos": {
+          "$ref": "#/definitions/vec3",
+          "description": "[x, y, z] metres, site frame."
+        },
+        "size": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/vec3"
+            },
+            {
+              "$ref": "#/definitions/vec2"
+            }
+          ],
+          "description": "box: [w, h, d] metres; plane / marker: [w, d] metres."
+        },
+        "rot": {
+          "$ref": "#/definitions/vec3",
+          "description": "Degrees, XYZ order."
+        },
+        "color": {
+          "type": "string",
+          "description": "CSS color."
+        },
+        "opacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "0 (transparent) to 1 (opaque)."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "box"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "size": {
+                "$ref": "#/definitions/vec3"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "plane"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "size": {
+                "$ref": "#/definitions/vec2"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "marker"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "size": {
+                "$ref": "#/definitions/vec2"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "pos"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique in the document; what a pick reports."
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Registry key: 'tank' | 'pump' | 'valve' | one the app registered, or one declared under the document's `kinds`."
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The struct tag this node binds; the kind's component reads its members."
+        },
+        "label": {
+          "type": "string",
+          "description": "Display name; defaults to id."
+        },
+        "pos": {
+          "$ref": "#/definitions/vec3",
+          "description": "Metres, site frame."
+        },
+        "rot": {
+          "$ref": "#/definitions/vec3",
+          "description": "Degrees, XYZ order; [0, yaw, 0] turns the node on the spot."
+        },
+        "scale": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "props": {
+          "type": "object",
+          "description": "Static props passed straight through to the component."
+        },
+        "bind": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/bindingRef"
+          },
+          "description": "Live props: component prop -> ref. Same map and rules as a mimic equipment's `bind`, plus dotted paths for struct members (`P101.Speed`)."
+        }
+      }
+    },
+    "pipe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "points"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "points": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/definitions/vec3"
+          },
+          "description": "Polyline in scene metres, at least two points."
+        },
+        "radius": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Metres. Default 0.012."
+        },
+        "bind": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "flowing": {
+              "$ref": "#/definitions/bindingRef",
+              "description": "The one live prop a pipe has, the same key the mimic's pipe binds. Booleans as-is; a number is flowing above 2 (%)."
+            }
+          },
+          "description": "A pipe binds only 'flowing'."
+        }
+      }
+    }
+  }
+}

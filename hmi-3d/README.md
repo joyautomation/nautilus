@@ -89,9 +89,28 @@ alarms by priority, greys anything whose tag is not good quality, and with
 - **`writable`** is reserved and must be empty: the view is read-only until
   the write path ships through the kit's `writeTag` + `confirm()`.
 
+- **`kinds`** is the kind ↔ UDT contract: `"kinds": { "pump": { "type": "VfdPump" } }`
+  re-points a built-in kind at this project's UDT (members kept), and
+  `"switch": { "type": "Switch", "members": ["PortsUp", "Fault"] }` declares
+  a kind the app registers so `naut check` can hold it to its members.
+
 `validateScene(doc, Object.keys(registry))` is pure and returns
 `{ ok, errors: [{ path, message }] }`; `sceneTags(doc)` is the root-tag
 list for the subscription.
+
+## Nobody types a scene
+
+The CLI generates and checks scene files against the manifest, the way it
+does tag files:
+
+```sh
+naut scene init .    # one node per struct tag a kind can draw, on a grid, camera fitted
+naut check .         # every *.scene.json at the project root: kinds, UDT types, members, refs
+```
+
+The VS Code extension ships a JSON Schema for `*.scene.json`, so completion
+and the structural checks are there as you type. A person, a script or an
+AI agent works the same loop: generate, check, fix the paths it is told.
 
 ## Kinds and the registry
 

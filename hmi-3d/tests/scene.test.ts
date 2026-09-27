@@ -97,6 +97,22 @@ describe('validateScene', () => {
 	});
 });
 
+describe('validateScene: kinds', () => {
+	it('accepts a re-pointed built-in and a declared custom kind', () => {
+		const doc = { kinds: { pump: { type: 'VfdPump' }, switch: { type: 'Switch', members: ['PortsUp'] } }, nodes: [] };
+		expect(validateScene(doc, [...KINDS, 'switch'])).toEqual({ ok: true, errors: [] });
+	});
+	it('a declared kind the app does not register is an error only against a registry', () => {
+		const doc = { kinds: { switch: { type: 'Switch' } }, nodes: [] };
+		expect(validateScene(doc).ok).toBe(true);
+		expect(validateScene(doc, KINDS).errors.map((e) => e.path)).toEqual(['/kinds/switch']);
+	});
+	it('checks the shape', () => {
+		const r = validateScene({ kinds: { a: 'Tank', b: { type: 3 }, c: { members: 'Level' } }, nodes: [] });
+		expect(r.errors.map((e) => e.path)).toEqual(['/kinds/a', '/kinds/b/type', '/kinds/c/members']);
+	});
+});
+
 describe('isBindingRef / refRoot', () => {
 	it('accepts a tag, a dotted path and a negation', () => {
 		expect(isBindingRef('Demand')).toBe(true);

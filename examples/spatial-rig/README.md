@@ -74,6 +74,22 @@ T-101 from 35 % to 75 %, the drain takes it back). From the dashboard at
 A halo pulses while the alarm is unacknowledged and holds steady once
 acked (from the dashboard's alarm list).
 
+### Nobody types a scene
+
+`rig.scene.json` was written by hand for the spike, but a new project
+starts from the manifest instead:
+
+```sh
+naut scene init .          # one node per struct tag a kind can draw, on a grid
+naut check .               # holds every *.scene.json to the tags and UDTs
+```
+
+`init` names the struct tags it could not place and the `--kind Type=kind`
+that would; `check` reports unknown kinds, a tag whose UDT is not the kind's
+type, a member the struct does not have, and a malformed ref, each with a
+JSON path. In VS Code the extension's schema gives completion and the same
+structural checks as you type. Design: `docs/design/spatial-hmi.md` §3b.
+
 ### How the scene binds
 
 Each prop is **one struct tag**, so a node binds `P101` and the pump model

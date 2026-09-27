@@ -37,6 +37,12 @@ export interface PanelProps {
 
 export interface NodeKindDef {
 	component: Component<NodeProps>;
+	/** The UDT this kind reads by default, and the members it reads — the
+	 * contract `naut check` and `naut scene init` work from. A scene's
+	 * `kinds` block re-points `type` for a project whose UDT is named
+	 * differently. */
+	type?: string;
+	members?: string[];
 	/** Local-space box for the alarm halo and the selection outline. */
 	bounds: { size: Vec3; center: Vec3 };
 	/** Where the floating label sits, local space. */
@@ -51,6 +57,8 @@ export type NodeRegistry = Record<string, NodeKindDef>;
 
 export const tankKind: NodeKindDef = {
 	component: Tank3D as Component<NodeProps>,
+	type: 'Tank',
+	members: ['Level', 'TempC'],
 	bounds: { size: [0.5, 0.52, 0.5], center: [0, 0.2, 0] },
 	labelAt: [0, 0.5, 0],
 	status: tankStatus,
@@ -59,6 +67,8 @@ export const tankKind: NodeKindDef = {
 
 export const pumpKind: NodeKindDef = {
 	component: Pump3D as Component<NodeProps>,
+	type: 'Motor',
+	members: ['Running', 'Fault', 'Speed'],
 	bounds: { size: [0.42, 0.24, 0.2], center: [0, 0.09, 0] },
 	labelAt: [0, 0.24, 0],
 	status: pumpStatus,
@@ -67,6 +77,8 @@ export const pumpKind: NodeKindDef = {
 
 export const valveKind: NodeKindDef = {
 	component: Valve3D as Component<NodeProps>,
+	type: 'Valve',
+	members: ['Pos', 'Cmd'],
 	bounds: { size: [0.16, 0.22, 0.22], center: [0, 0, 0.03] },
 	labelAt: [0, 0.16, 0],
 	status: valveStatus,

@@ -61,6 +61,8 @@ alarm/               ISA-18.2 alarm engine: defs/rules, state machine, journal,
 examples/            heated-tank (Go tier), heated-tank-nogo (manifest flagship:
                      4 tasks, 3 IEC languages, sim in ST), alarms, FBD + SFC
 hmi/                 @joyautomation/nautilus-hmi (Svelte 5): realtime SSE, Mimic
+hmi-3d/              @joyautomation/nautilus-hmi-3d (Threlte): *.scene.json 3D view;
+                     internal/scene is its offline half (`naut check`, `naut scene init`)
 tools/vscode-iec/    VS Code extension: grammar, LSP client, inline live values,
                      Test Explorer for *_test.yaml, JSON schemas
 website/, docs/      docs site (deploys from main); design briefs in docs/design/

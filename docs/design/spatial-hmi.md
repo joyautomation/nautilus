@@ -196,6 +196,65 @@ interface NodeProps {
 }
 ```
 
+## 3b. The contract, and the tooling that fills it in
+
+The worry to design against: nobody should hand-type a scene. Tags already
+have the answer in this repo — the UDT is the contract, and generators
+(`naut sparkplug import`, `naut modbus import`, `naut tags import-csv`)
+fill in the tag files while `naut check` catches what is wrong offline.
+Scenes get the same shape, so a person, a script or an AI agent can build
+one against a contract and get told, with a path, what does not fit.
+
+**The contract is kind ↔ struct type.** A kind reads named members off a
+UDT; that is what alarm rules match on and what a Sparkplug Template
+publishes. It is spelled out in the scene file's `kinds` block:
+
+```json
+"kinds": {
+  "pump":   { "type": "VfdPump" },
+  "switch": { "type": "Switch", "members": ["PortsUp", "Fault"] }
+}
+```
+
+- The built-in kinds carry defaults: `tank` → `Tank` (`Level`, `TempC`),
+  `pump` → `Motor` (`Running`, `Fault`, `Speed`), `valve` → `Valve`
+  (`Pos`, `Cmd`). A project whose UDT is named differently re-points a
+  built-in kind with `type:` and keeps its members.
+- A kind the app registers itself declares `type` and the `members` its
+  component reads, so the checker can hold it to the same standard.
+- A node needs `tag` and `kind`; a `bind` entry satisfies a member the
+  tag lacks (the flat-tag case), which is the one escape hatch.
+
+**`naut check` checks scene files** (`*.scene.json` at the project root)
+the way it checks alarm rules, offline, against the composed project:
+
+| Finding | Severity | Why |
+|---|---|---|
+| node `kind` unknown (not built-in, not in `kinds`) | error | it would never render |
+| node `tag` declared, but its type is not the kind's `type` and the missing members are not bound | error | the type is right there; nothing at run time makes `.Level` appear |
+| a `bind` / pipe ref names a member the struct does not have | error | same |
+| `!ref` on a member that is not a BOOL | warning | almost always a mistake |
+| a root tag the manifest does not declare | warning | on a Sparkplug host, tags arrive from the field |
+| duplicate id, malformed position, pipe with one point, non-empty `writable` | error | structural |
+
+**`naut scene init` generates a starter scene.** It walks the composed
+project's struct tags, gives every tag whose type maps to a kind one node
+(built-in defaults plus `--kind Type=kind` for the rest), lays them out on
+a grid labelled by tag name, fits the camera, and writes `kinds` for
+any remaps. It refuses to overwrite without `--force`, and names the
+struct tags it could not place so the next run can. The person then moves
+things; nobody types a node.
+
+**A JSON Schema** for `*.scene.json` ships in the VS Code extension (the
+mimic precedent), so autocomplete and red squiggles exist before any
+custom tooling does. The schema plus `naut check` are also the loop an AI
+agent works in: generate, check, fix the paths it is told about.
+
+**Then, in Milestone 2 (§8):** placement by dragging, written back to the
+file (item 2), and kinds defined as data (a glTF and a few bindings, no
+Svelte) so a new kind is a file and ten lines of JSON (item 1). Those two
+remove the last hand-authoring: placement and geometry.
+
 ## 4. The node registry
 
 ```ts
@@ -321,30 +380,46 @@ Proposed order, each with an exit and the capture moment it produces
    materials on the built-ins; the ground becomes a textured plane. Exit:
    the rig scene with one CAD-derived pump model and an HDRI, at the §6
    budgets. Capture: before/after, grey spike vs lit scene.
-2. **Overlays.** Labels declutter by distance and by importance (alarmed
+2. **Place equipment by dragging.** Locating things is the one authoring
+   step `naut scene init` cannot finish, and a number typed into `pos` is
+   the tedium to remove. An edit mode on `SceneView`: click an asset,
+   drag it on the ground plane (Threlte's `TransformControls`, snapped to
+   the grid cell, Shift for free), rotate with a handle, and the document
+   updates in memory with the new `pos`/`rot`. Where the numbers go:
+   - **In VS Code**, a `*.scene.json` custom editor on the mimic editor's
+     precedent, hosting this same package in a webview; a drag edits the
+     document text, undo/redo and diff come for free, and the live values
+     come from the running controller as the mimic's do. This is the real
+     answer, and the reason the renderer is a package.
+   - **In the browser**, `npm run dev` gets a Vite plugin endpoint that
+     writes the file back, and a built app offers "copy scene JSON" /
+     download, so a phone on the rig can still place a prop.
+   Exit: the rig's three nodes placed by dragging, the diff showing only
+   `pos` lines. Capture: the drag, then `git diff`.
+3. **Overlays.** Labels declutter by distance and by importance (alarmed
    first); flow animation along pipes (a moving dash texture, direction
    from point order); a sparkline in space on hover. Exit: 40 labelled
    nodes readable at three zoom levels.
-3. **Filters and view modes.** `alarm-only` (everything else at 15 %),
+4. **Filters and view modes.** `alarm-only` (everything else at 15 %),
    `quality` (stale/bad only in colour), `thermal` (a bound member mapped
    to a colour ramp, `TempC` on the rig), `x-ray` (shells wireframe, contents
    visible), `maintenance` (run hours, faults). One `mode` prop on
    `SceneView`, a mode strip in the HUD. Exit: modes toggle without a
    reload and are recorded on video (N-57's beat).
-4. **Cutaways.** A section box per node (`props.section`) and a global
+5. **Cutaways.** A section box per node (`props.section`) and a global
    clipping plane on a slider, using three's `clippingPlanes` with capped
    materials where it matters (a tank's fluid). Exit: the rig tank cut open
    with its level visible; a cabinet with its door cut away once a glTF
    cabinet exists.
-5. **Navigation.** `views:` in the document (named camera bookmarks per
+6. **Navigation.** `views:` in the document (named camera bookmarks per
    area), click-to-fly to a node, a walk mode for the AR rehearsal. Exit:
    a bookmark list in the HUD, fly-to on double-click.
-6. **Gaussian-splat backdrop** (N-58). Research first (a side subagent
+7. **Gaussian-splat backdrop** (N-58). Research first (a side subagent
    compares the currently maintained three.js splat renderers and their
    Threlte fit), then a `splat` fixture kind with the scan placed by the
    surveyed origin. View-only, office only. Exit: the office scan behind
    the live rig, at ≥ 30 fps on the desktop.
-7. **Quality tiers.** Post-processing (SSAO, bloom, outlines) and splats
+8. **Quality tiers.** Post-processing (SSAO, bloom, outlines) and splats
    switch off below a GPU tier detected at start (`WEBGL_debug_renderer_info`
    plus a 1 s fps probe), with a manual override. Exit: the panel-PC
    budget holds with tiers on.

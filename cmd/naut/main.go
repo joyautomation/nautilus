@@ -58,6 +58,11 @@ Usage:
                           tag file, offline), browse (read a live register
                           range raw + decoded), serve (bench slave for a
                           manifest), tags (re-derive the tag file).
+  naut scene <cmd>    3D HMI scene tools: init (generate a starter
+                          *.scene.json from the manifest's struct tags —
+                          one node per UDT tag a kind can draw, laid out
+                          on a grid; nobody types a node). naut check
+                          holds every scene file to the tags and UDTs.
   naut tags <cmd>     Generate a tag file from a spreadsheet export
                           (import-csv). Commit the output and compose it
                           with tag-files:.
@@ -118,6 +123,8 @@ func main() {
 		os.Exit(runModbus(os.Args[2:]))
 	case "tags":
 		os.Exit(runTags(os.Args[2:]))
+	case "scene":
+		os.Exit(runScene(os.Args[2:]))
 	case "alarms":
 		os.Exit(runAlarms(os.Args[2:]))
 	case "pull":

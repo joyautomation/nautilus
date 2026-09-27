@@ -597,6 +597,12 @@
         "url": "./schemas/nautilus-alarms.schema.json"
       }
     ],
+    "jsonValidation": [
+      {
+        "fileMatch": "*.scene.json",
+        "url": "./schemas/nautilus-scene.schema.json"
+      }
+    ],
     "walkthroughs": [
       {
         "id": "gettingStarted",
