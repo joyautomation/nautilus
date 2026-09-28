@@ -1,6 +1,6 @@
 <script lang="ts">
 	// The chassis a profile describes: floor, side walls, front ears, the
-	// board plate and the drive backplane, a removable lid, and the QR label
+	// board plate and the drive backplane, a removable lid behind a fixed front cover, fixed internals, and the QR label
 	// where the profile's `qr` anchor puts it. Metres, in the profile's
 	// frame (origin at the bottom centre of the front face, +z out of the
 	// front). Only the floor and an opaque lid take clicks — a wall seen
@@ -42,6 +42,8 @@
 	let shell = $derived({ color: '#6f7377', metalness: 0.6, roughness: 0.45, transparent: opacity < 1, opacity, depthWrite: opacity >= 1 });
 	let hit = $derived(xray ? noRaycast : Mesh.prototype.raycast);
 	let board = $derived(profile.boardPlate ? { pos: mm(profile.boardPlate.pos), size: mm(profile.boardPlate.size) } : undefined);
+	let cover = $derived((profile.shell?.frontCover ?? 0) / 1000);
+	let fixtures = $derived((profile.fixtures ?? []).map((f) => ({ pos: mm(f.pos), size: mm(f.size) })));
 	let backplane = $derived(profile.backplane ? { pos: mm(profile.backplane.pos), size: mm(profile.backplane.size) } : undefined);
 
 	// The label, as the AR layer will see it: a square on the anchor's plane,
@@ -86,26 +88,40 @@
 		<T.MeshStandardMaterial color="#1d4a2e" roughness={0.6} />
 	</T.Mesh>
 {/if}
+{#each fixtures as f}
+	<T.Mesh position={f.pos} raycast={noRaycast}>
+		<T.BoxGeometry args={f.size} />
+		<T.MeshStandardMaterial color="#8a8d91" metalness={0.6} roughness={0.4} transparent={opacity < 1} {opacity} />
+	</T.Mesh>
+{/each}
+<!-- the fixed cover over the drive cage: stays when the lid comes off -->
+{#if cover > 0}
+	<T.Mesh position={[0, H - lidT / 2, -cover / 2]} raycast={hit}>
+		<T.BoxGeometry args={[W, lidT, cover]} />
+		<T.MeshStandardMaterial {...shell} />
+	</T.Mesh>
+{/if}
+<!-- the QR label, where the profile's anchor puts it -->
+{#if anchor && qr}
+	{@const s = qr.size / 1000}
+	<T.Group position={[qr.pos[0] / 1000, qr.pos[1] / 1000 + 0.0006, qr.pos[2] / 1000]} rotation={qrQuat}>
+		<T.Mesh raycast={noRaycast}>
+			<T.PlaneGeometry args={[s, s]} />
+			<T.MeshBasicMaterial color="#f4f4f0" transparent={xray} opacity={xray ? 0.5 : 1} />
+		</T.Mesh>
+		{#each [[-1, 1], [1, 1], [-1, -1]] as [fx, fy]}
+			<T.Mesh position={[fx * s * 0.34, fy * s * 0.34, 0.0003]} raycast={noRaycast}>
+				<T.PlaneGeometry args={[s * 0.24, s * 0.24]} />
+				<T.MeshBasicMaterial color="#111" transparent={xray} opacity={xray ? 0.5 : 1} />
+			</T.Mesh>
+		{/each}
+	</T.Group>
+{/if}
 {#if lid === 'on' || xray}
 	<T.Group position={lidOffset}>
-		<T.Mesh position={[0, H - lidT / 2, -D / 2]} raycast={hit}>
-			<T.BoxGeometry args={[W, lidT, D]} />
+		<T.Mesh position={[0, H - lidT / 2, -cover - (D - cover) / 2]} raycast={hit}>
+			<T.BoxGeometry args={[W, lidT, D - cover]} />
 			<T.MeshStandardMaterial {...shell} />
 		</T.Mesh>
-		{#if anchor && qr}
-			{@const s = qr.size / 1000}
-			<T.Group position={[qr.pos[0] / 1000, qr.pos[1] / 1000 + 0.0006, qr.pos[2] / 1000]} rotation={qrQuat}>
-				<T.Mesh raycast={noRaycast}>
-					<T.PlaneGeometry args={[s, s]} />
-					<T.MeshBasicMaterial color="#f4f4f0" transparent={xray} opacity={xray ? 0.5 : 1} />
-				</T.Mesh>
-				{#each [[-1, 1], [1, 1], [-1, -1]] as [fx, fy]}
-					<T.Mesh position={[(fx * s * 0.34), (fy * s * 0.34), 0.0003]} raycast={noRaycast}>
-						<T.PlaneGeometry args={[s * 0.24, s * 0.24]} />
-						<T.MeshBasicMaterial color="#111" transparent={xray} opacity={xray ? 0.5 : 1} />
-					</T.Mesh>
-				{/each}
-			</T.Group>
-		{/if}
 	</T.Group>
 {/if}

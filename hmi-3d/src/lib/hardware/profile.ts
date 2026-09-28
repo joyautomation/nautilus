@@ -50,8 +50,12 @@ export interface ChassisProfile {
 	frame?: string;
 	/** Outer [width, height, depth], mm. */
 	size: Vec3;
-	shell?: { wall?: number; lid?: number; floor?: number; bezel?: number };
+	/** `frontCover`: depth of the fixed top cover over the drive cage, mm;
+	 * the removable lid is the rest. */
+	shell?: { wall?: number; lid?: number; floor?: number; bezel?: number; frontCover?: number };
 	boardPlate?: { pos: Vec3; size: Vec3 };
+	/** Fixed internals drawn as plain boxes (a power distribution cage). */
+	fixtures?: { id: string; name?: string; pos: Vec3; size: Vec3 }[];
 	backplane?: { pos: Vec3; size: Vec3 };
 	explodeLid?: Vec3;
 	/** Registration points for AR: `qr` is where the label sits. */
