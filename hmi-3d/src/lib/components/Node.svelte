@@ -37,6 +37,7 @@
 		props,
 		bind,
 		status,
+		bounds: box,
 		children
 	}: {
 		id?: string;
@@ -51,6 +52,9 @@
 		/** The label's value text when there is no kind to supply it (a
 		 * component used as a component: pass its `kind` export's status). */
 		status?: (value: unknown, good: boolean) => string;
+		/** The halo and selection box when no kind supplies one, or when this
+		 * node's size is its own (a part sized by a chassis profile). */
+		bounds?: Box;
 		/** Render anything with the node's props instead of the kind's component. */
 		children?: Snippet<[NodeProps]>;
 	} = $props();
@@ -75,7 +79,7 @@
 	let title = $derived(label ?? (parent ? '' : (id ?? tag ?? '')));
 	let alarm = $derived(!parent && tag ? scene?.alarms.get(tag) : undefined);
 	let isSel = $derived(!parent && id !== undefined && scene?.selected === id);
-	let bounds = $derived<Box>(def && scene ? scene.boundsOf(id, def.bounds) : { size: [0.3, 0.3, 0.3], center: [0, 0.15, 0] });
+	let bounds = $derived<Box>(box ?? (def && scene ? scene.boundsOf(id, def.bounds) : { size: [0.3, 0.3, 0.3], center: [0, 0.15, 0] }));
 	let labelAt = $derived<Vec3>(def?.labelAt ?? [bounds.center[0], bounds.center[1] + bounds.size[1] / 2 + 0.02, bounds.center[2]]);
 	let nodeProps = $derived<NodeProps>({ value, good, label: title, selected: isSel, ...props, ...over });
 	let pickable = $derived(!parent && id !== undefined);

@@ -608,6 +608,54 @@ extension, every built-in and every `kinds` entry with how it is defined,
 plus `isKindComponent(text)` for discovering component files by their
 `kind` export, the way the mimic discovers `{Name}.svelte`.
 
+## 3e. Servers from chassis profiles
+
+A server is the first kind whose **geometry is data and whose contents are
+tags**: which bays hold drives, which slots hold cards, which DIMM sockets
+are filled all come from the node's inventory, and where those positions
+are comes from the chassis model. So a server is drawn from a **chassis
+profile** crossed with its tags, and populated and empty positions are
+right by construction.
+
+- **The profile** (`hmi-3d/profiles/<vendor>-<model>.json`, exported as
+  `@joyautomation/nautilus-hmi-3d/profiles/*`) is millimetres in one frame:
+  origin at the bottom centre of the front face, +x right looking at the
+  front, +y up, +z out of the front. It lists every position a part can
+  occupy (`parts`: id, kind, slot name, centre, extents, explode offset,
+  extras such as `bus` or `form`), the shell, board and backplane,
+  `anchors.qr` (where the label sits, for AR registration), `types` (the
+  UDT and members each part kind reads — the contract with the drivers)
+  and `bindings` (part id → tag name with `{node}` for the node's prefix:
+  `bay0 → {node}_Drive_NVMe0`). `validateProfile` checks it; the tape
+  measure is the source of truth, the vendor spec the first draft.
+- **The part library** is glTF (`hmi-3d/models/hardware/*.glb`, built by
+  `models/hardware.py` in Blender): drive carrier, M.2, DIMM, PCIe card,
+  fan, PSU, CPU + heatsink, modelled at nominal size and **stretched to the
+  profile's extents** — the library is the look, the profile the truth.
+  Named meshes are the contract: `Led` lights by state, `Accent` tints,
+  `Rotor` spins with RPM, `Port1…4` show by the card's port count.
+- **Components.** `<Server profile node>` (the `/hardware` entry point,
+  so the glTF loader stays out of the base bundle) renders the chassis as
+  one node (`{node}`, the Server UDT) and every profile position as a
+  sibling node `{node}/{part}` through `<Drive>`, `<Dimm>`, `<PcieCard>`,
+  `<Fan>`, `<Psu>`, `<Cpu>`. Siblings, not parts (§3d): a part inside a
+  node picks the node, and here each drive must pick, halo and grey on its
+  own. `<Node>` gained one prop for this, `bounds`, the box of a node sized
+  by its profile rather than its kind.
+- **State**, one ladder (`partState`): no binding → empty; binding, no tag
+  → empty (drivers publish a slot only when fitted); `Present = false` →
+  **absent**, a red outline where the part was; bad quality → stale;
+  `Fault` / `Health = 2` → critical; `PredictedFailure` / `Health = 1|3` →
+  warning; else ok (grey, green LED). A profile `static` value marks a part
+  known to be fitted that no driver reports yet: drawn translucent,
+  labelled unverified, never healthy.
+- **Views:** lid on/off, x-ray (shell at 20 %, clicks pass through it),
+  exploded (each part tweens by its profile offset), camera presets in the
+  app. Picking opens `PartFaceplate` on the kit's `FaceplateShell`.
+- **Open:** a server placed from a `*.scene.json` (a `server` kind with a
+  `profile` prop) needs parts that pick on their own inside a node — a
+  change to §3d's rule, deferred until the AR layer needs the document.
+
 ## 4. The node registry
 
 ```ts

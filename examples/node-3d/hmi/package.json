@@ -1,0 +1,33 @@
+{
+	"name": "node-3d-hmi",
+	"private": true,
+	"version": "0.0.0",
+	"type": "module",
+	"scripts": {
+		"models": "node copy-models.mjs",
+		"predev": "node copy-models.mjs",
+		"dev": "vite dev --host",
+		"prebuild": "node copy-models.mjs",
+		"build": "vite build",
+		"preview": "vite preview",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
+	},
+	"dependencies": {
+		"@joyautomation/nautilus-hmi": "^0.6.0",
+		"@joyautomation/nautilus-hmi-3d": "file:../../../hmi-3d",
+		"@threlte/core": "^8.6.1",
+		"@threlte/extras": "^9.22.0",
+		"three": "^0.186.1"
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-static": "^3.0.10",
+		"@sveltejs/kit": "^2.70.3",
+		"@sveltejs/vite-plugin-svelte": "^7.3.1",
+		"@types/node": "^26.6.3",
+		"@types/three": "^0.186.0",
+		"svelte": "^5.57.1",
+		"svelte-check": "^4.7.6",
+		"typescript": "^6.0.3",
+		"vite": "^8.3.1"
+	}
+}

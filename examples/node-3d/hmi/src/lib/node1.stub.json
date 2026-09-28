@@ -1,0 +1,163 @@
+{
+	"source": "BMC capture 2026-09-27, stubbed until the drivers publish these tags (workstream A); serials redacted",
+	"tags": {
+		"NODE1_Drive_Boot0": {
+			"Bay": 0,
+			"Name": "Disk.Bay.0",
+			"Model": "SSDSCKKB240GZ",
+			"Serial": "(redacted)",
+			"CapacityGB": 240,
+			"Protocol": "SATA",
+			"MediaType": "SSD",
+			"Health": 0,
+			"Fault": false,
+			"PredictedFailure": false,
+			"TempC": 23,
+			"Present": true
+		},
+		"NODE1_Drive_Boot4": {
+			"Bay": 4,
+			"Name": "Disk.Bay.4",
+			"Model": "SSDSCKKB240GZ",
+			"Serial": "(redacted)",
+			"CapacityGB": 240,
+			"Protocol": "SATA",
+			"MediaType": "SSD",
+			"Health": 0,
+			"Fault": false,
+			"PredictedFailure": false,
+			"TempC": 23,
+			"Present": true
+		},
+		"NODE1_Drive_NVMe0": {
+			"Bay": 0,
+			"Name": "Disk.Bay.0",
+			"Model": "MZQL21T9HCJR-00A07",
+			"Serial": "(redacted)",
+			"CapacityGB": 1920,
+			"Protocol": "NVMe",
+			"MediaType": "SSD",
+			"Health": 0,
+			"Fault": false,
+			"PredictedFailure": false,
+			"TempC": 32,
+			"Present": true
+		},
+		"NODE1_Drive_NVMe1": {
+			"Bay": 1,
+			"Name": "Disk.Bay.1",
+			"Model": "MZQL21T9HCJR-00A07",
+			"Serial": "(redacted)",
+			"CapacityGB": 1920,
+			"Protocol": "NVMe",
+			"MediaType": "SSD",
+			"Health": 0,
+			"Fault": false,
+			"PredictedFailure": false,
+			"TempC": 31,
+			"Present": true
+		},
+		"NODE1_Drive_NVMe2": {
+			"Bay": 2,
+			"Name": "Disk.Bay.2",
+			"Model": "MZQL21T9HCJR-00A07",
+			"Serial": "(redacted)",
+			"CapacityGB": 1920,
+			"Protocol": "NVMe",
+			"MediaType": "SSD",
+			"Health": 0,
+			"Fault": false,
+			"PredictedFailure": false,
+			"TempC": 33,
+			"Present": true
+		},
+		"NODE1_Drive_NVMe3": {
+			"Bay": 3,
+			"Name": "Disk.Bay.3",
+			"Model": "MZQL21T9HCJR-00A07",
+			"Serial": "(redacted)",
+			"CapacityGB": 1920,
+			"Protocol": "NVMe",
+			"MediaType": "SSD",
+			"Health": 0,
+			"Fault": false,
+			"PredictedFailure": false,
+			"TempC": 31,
+			"Present": true
+		},
+		"NODE1_Pcie_Slot2": {
+			"Slot": 2,
+			"Name": "NIC1 System Slot2 AOC-S25G6-M2S",
+			"Model": "AOC-S25G6-M2S",
+			"Manufacturer": "Supermicro",
+			"Firmware": "26.47.1026",
+			"Health": 0,
+			"Fault": false,
+			"Ports": 2,
+			"TempC": 52
+		},
+		"NODE1_Pcie_Slot3": {
+			"Slot": 3,
+			"Name": "NIC2 System Slot3 AOC-S25G6-M2S",
+			"Model": "AOC-S25G6-M2S",
+			"Manufacturer": "Supermicro",
+			"Firmware": "26.47.1026",
+			"Health": 0,
+			"Fault": false,
+			"Ports": 2,
+			"TempC": 64
+		},
+		"NODE1_Dimm_A1": {
+			"Locator": "DIMMA1",
+			"CapacityGB": 64,
+			"Manufacturer": "Samsung",
+			"PartNumber": "MDRR644QDBC2-3D000",
+			"Health": 0,
+			"Fault": false,
+			"TempC": 40
+		},
+		"NODE1_Dimm_C1": {
+			"Locator": "DIMMC1",
+			"CapacityGB": 64,
+			"Manufacturer": "Samsung",
+			"PartNumber": "MDRR644QDBC2-3D000",
+			"Health": 0,
+			"Fault": false,
+			"TempC": 40
+		},
+		"NODE1_Dimm_E1": {
+			"Locator": "DIMME1",
+			"CapacityGB": 64,
+			"Manufacturer": "Samsung",
+			"PartNumber": "MDRR644QDBC2-3D000",
+			"Health": 0,
+			"Fault": false,
+			"TempC": 39
+		},
+		"NODE1_Dimm_G1": {
+			"Locator": "DIMMG1",
+			"CapacityGB": 64,
+			"Manufacturer": "Samsung",
+			"PartNumber": "MDRR644QDBC2-3D000",
+			"Health": 0,
+			"Fault": false,
+			"TempC": 39
+		},
+		"NODE1_Cpu1": {
+			"Model": "Xeon 6505P",
+			"Cores": 12,
+			"Health": 0,
+			"Fault": false,
+			"TempC": 58,
+			"Pct": 0
+		}
+	},
+	"live": {
+		"NODE1_Dimm_A1.TempC": "NODE1_Temp_DIMM.Value",
+		"NODE1_Dimm_C1.TempC": "NODE1_Temp_DIMM.Value",
+		"NODE1_Dimm_E1.TempC": "NODE1_Temp_DIMM.Value",
+		"NODE1_Dimm_G1.TempC": "NODE1_Temp_DIMM.Value",
+		"NODE1_Cpu1.TempC": "NODE1_Temp_CPU.Value",
+		"NODE1_Cpu1.Pct": "NODE1.CpuPct"
+	}
+}
