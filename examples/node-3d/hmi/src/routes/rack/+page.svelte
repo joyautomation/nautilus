@@ -14,6 +14,7 @@
 		Server,
 		Rack,
 		Cable,
+		NetworkMesh,
 		PartFaceplate,
 		resolveParts,
 		OVERLAYS,
@@ -84,6 +85,28 @@
 		checks.reduce<Record<Verdict, number>>((n, c) => ({ ...n, [c.check.verdict]: n[c.check.verdict] + 1 }), { confirmed: 0, consistent: 0, contradicted: 0, down: 0, unverified: 0 })
 	);
 
+	// ── mesh: the same devices and links as a network ─────────────────
+	let mesh = $state(params.has('mesh'));
+	let edgeLabels = $state(true);
+	const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+	// A line under each device in the mesh: ports with link on a switch,
+	// power on a server — or that nothing reports.
+	let summary = $derived(
+		Object.fromEntries(
+			devices.map((d) => {
+				const v = tags[d.tag] as Record<string, unknown> | undefined;
+				if (d.kind === 'switch') {
+					const ports = d.parts.filter((p) => p.tag && tags[p.tag] !== undefined);
+					if (!ports.length) return [d.id, 'not reported'];
+					return [d.id, `${ports.filter((p) => portReading(tags[p.tag!]).up === true).length}/${ports.length} ports up`];
+				}
+				const w = num(v?.PowerW);
+				return [d.id, v ? (w !== undefined ? `${Math.round(w)} W · ${v.Online === false ? 'BMC dark' : 'online'}` : 'online') : 'not reported'];
+			})
+		)
+	);
+	const MESH: SceneCamera = { pos: [1.55, 2.3, 2.1], target: [0, 0.7, 0], fov: 40 };
+
 	// ── focus: the rack, or one device in it ──────────────────────────
 	let focus = $state<string | null>(params.get('focus'));
 	let focused = $derived(focus ? byTag.get(focus) : undefined);
@@ -121,7 +144,7 @@
 		const k = Math.max(1, 1.2 / aspect);
 		return { ...c, pos: c.pos.map((v, i) => c.target[i] + (v - c.target[i]) * k) as Vec3 };
 	};
-	let goal = $derived(framed(focused ? closeUp(focused) : RACK[view]));
+	let goal = $derived(framed(mesh ? MESH : focused ? closeUp(focused) : RACK[view]));
 	const cam = Tween.of(() => [...goal.pos, ...goal.target, goal.fov ?? 40], { duration: 900, easing: cubicOut });
 	let camera = $derived<SceneCamera>({ pos: cam.current.slice(0, 3) as Vec3, target: cam.current.slice(3, 6) as Vec3, fov: cam.current[6] });
 
@@ -131,6 +154,14 @@
 	const deviceOf = (id: string) => id.split('/')[0];
 	function pick(id: string) {
 		const dev = deviceOf(id);
+		// In the mesh a device is a node: picking it goes to it in the rack.
+		if (mesh) {
+			mesh = false;
+			focus = dev;
+			open = false;
+			selected = null;
+			return;
+		}
 		if (focus !== dev) {
 			// First click on a device zooms to it; the next opens a faceplate.
 			focus = dev;
@@ -178,6 +209,9 @@
 <div class="stage">
 	<SceneView {rt} {alarms} {camera} grid={{ pos: [0, 0, -D / 2], cell: 0.1, section: 0.5, size: [4, 4] }} inspector={false} bind:selected onselect={pick} perf={params.has('perf') || aspect > 1}>
 		<Studio />
+		{#if mesh}
+			<NetworkMesh {topology} {checks} {colors} {summary} labels={edgeLabels} />
+		{:else}
 		<Rack {layout} label={layout.name} />
 		{#each devices as d (d.id)}
 			{@const on = focus === d.tag}
@@ -203,9 +237,15 @@
 				{/if}
 			{/each}
 		{/if}
+		{/if}
 		{#snippet hud()}
 			<div class="bar" role="toolbar" aria-label="Views">
-				{#if focused}
+				<button class:on={!mesh} onclick={() => (mesh = false)}>physical</button>
+				<button class:on={mesh} onclick={() => ((mesh = true), back())}>mesh</button>
+				<span class="sep"></span>
+				{#if mesh}
+					<button class:on={edgeLabels} onclick={() => (edgeLabels = !edgeLabels)}>port labels</button>
+				{:else if focused}
 					<button onclick={back}>← rack</button>
 					<b class="where">{focused.hostname ?? focused.id}</b>
 					{#if focused.kind === 'server'}
@@ -231,7 +271,7 @@
 </div>
 
 <aside class="legend" aria-label="Links">
-	{#if focused && overlay && legendCtx && overlay.id !== 'cables'}
+	{#if !mesh && focused && overlay && legendCtx && overlay.id !== 'cables'}
 		<b>{overlay.name} · {focused.hostname ?? focused.id}</b>
 		<ul>
 			{#each overlay.legend(legendCtx) as item}
@@ -258,7 +298,7 @@
 				{#each checks as c}
 					<li title={c.check.reasons.join('; ')}>
 						<i style:background={verdictColor(c.check.verdict, colors)}></i>
-						<button class="link" onclick={() => c.check.a.device && (focus = c.check.a.device.tag)}>
+						<button class="link" onclick={() => c.check.a.device && ((mesh = false), (focus = c.check.a.device.tag))}>
 							{VERDICT_MARK[c.check.verdict]} {c.check.a.label} ↔ {c.check.b.label}
 						</button>
 					</li>

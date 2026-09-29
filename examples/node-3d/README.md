@@ -27,6 +27,10 @@ exploded and camera presets in the toolbar.
   `?view=cables|rear|front`. The switches are live only where the controller
   polls them (hq-sw1 on `:8081` today): serve with
   `CONTROLLER_URL=http://localhost:8081`.
+- `/rack?mesh` (or **mesh** in the toolbar): the same devices and links as a
+  network floating in space — switches on a ring, each server under the two
+  switches it is cabled to, every link an arc labelled with its two ports and
+  coloured by the same check. Click a device to go to it in the rack.
 
 ```sh
 (cd ../../hmi-3d && npm run package)

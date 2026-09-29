@@ -14,6 +14,7 @@ export { default as PartModel, loadPart } from './PartModel.svelte';
 export { default as PartFaceplate } from './PartFaceplate.svelte';
 export { default as Rack } from './Rack.svelte';
 export { default as Cable } from './Cable.svelte';
+export { default as NetworkMesh } from './NetworkMesh.svelte';
 export {
 	PART_KINDS,
 	validateProfile,
@@ -42,3 +43,5 @@ export { checkLink, checkAll, linkTags, linkAt, linkFacts, resolveEnd, readEnd, 
 export type { Topology, TopoDevice, TopoLink, Plant, PortRef, End, Reading, Verdict, LinkCheck } from './topology.js';
 export { RACK_U_MM, uY, placeDevice, toRack, portMouth, endInRack, cablePath } from './rack.js';
 export type { RackLayout, RackDevice, Placement } from './rack.js';
+export { meshLayout } from './mesh.js';
+export type { MeshNode, MeshEdge } from './mesh.js';

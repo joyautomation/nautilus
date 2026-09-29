@@ -10,6 +10,7 @@ import hq from '../../examples/node-3d/hmi/src/lib/hq.topology.json';
 import { validateProfile, resolveParts, type ChassisProfile } from '../src/lib/hardware/profile.js';
 import { checkLink, linkAt, linkTags, portPart, resolveEnd, readEnd, linkFacts, type Plant, type Topology } from '../src/lib/hardware/topology.js';
 import { cablesOverlay, interfacesOverlay, type OverlayColors } from '../src/lib/hardware/overlay.js';
+import { meshLayout } from '../src/lib/hardware/mesh.js';
 import { placeDevice, endInRack, cablePath, RACK_U_MM, type RackLayout } from '../src/lib/hardware/rack.js';
 
 const server = sys112b as unknown as ChassisProfile;
@@ -168,5 +169,28 @@ describe('the rack', () => {
 		expect(p[2][0]).toBe(-0.226);
 		expect(p[3][0]).toBe(-0.226);
 		expect(cablePath(layout, a, undefined).length).toBe(4);
+	});
+});
+
+describe('the mesh', () => {
+	const { nodes, edges } = meshLayout(topology);
+	const deg = (id: string) => {
+		const p = nodes.find((n) => n.id === id)!.pos;
+		return Math.round(((Math.atan2(p[0], p[2]) * 180) / Math.PI + 360) % 360);
+	};
+	it('puts the switches on a ring and each server under the two switches it is cabled to', () => {
+		expect([deg('sw1'), deg('sw2'), deg('sw3')]).toEqual([0, 120, 240]);
+		expect([deg('node1'), deg('node2'), deg('node3')]).toEqual([60, 180, 300]);
+	});
+	it('puts the site, outside the model, above the switch it hangs off', () => {
+		const site = nodes.find((n) => n.id === 'site')!;
+		expect(site.kind).toBe('outside');
+		expect(deg('site')).toBe(0);
+	});
+	it('draws every link, parallel links between one pair bowed apart', () => {
+		expect(edges.length).toBe(16);
+		const pair = edges.filter((e) => e.a === 'node1' && e.b === 'sw1');
+		expect(pair.length).toBe(2);
+		expect(pair[0].points[1][0] !== pair[1].points[1][0]).toBe(true);
 	});
 });

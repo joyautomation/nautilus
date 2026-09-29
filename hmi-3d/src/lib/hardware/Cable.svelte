@@ -8,7 +8,22 @@
 	import { CurvePath, LineCurve3, QuadraticBezierCurve3, TubeGeometry, Vector3 } from 'three';
 	import type { Vec3 } from '../scene.js';
 
-	let { points, color, radius = 0.0022, bend = 0.025, faint = false }: { points: Vec3[]; color: string; radius?: number; bend?: number; faint?: boolean } = $props();
+	let {
+		points,
+		color,
+		radius = 0.0022,
+		bend = 0.025,
+		arc = false,
+		faint = false
+	}: {
+		points: Vec3[];
+		color: string;
+		radius?: number;
+		bend?: number;
+		/** Three points: one smooth arc from the first to the last, the middle its control point (a mesh edge). */
+		arc?: boolean;
+		faint?: boolean;
+	} = $props();
 
 	function route(pts: Vector3[]): CurvePath<Vector3> {
 		const path = new CurvePath<Vector3>();
@@ -25,7 +40,8 @@
 		path.add(new LineCurve3(from, pts[pts.length - 1]));
 		return path;
 	}
-	let geometry = $derived(new TubeGeometry(route(points.map((p) => new Vector3(...p))) as never, points.length * 32, faint ? radius * 0.7 : radius, 6, false));
+	const curveOf = (pts: Vector3[]) => (arc && pts.length === 3 ? new QuadraticBezierCurve3(pts[0], pts[1], pts[2]) : route(pts));
+	let geometry = $derived(new TubeGeometry(curveOf(points.map((p) => new Vector3(...p))) as never, points.length * 32, faint ? radius * 0.7 : radius, 6, false));
 	$effect(() => {
 		const g = geometry;
 		return () => g.dispose();
