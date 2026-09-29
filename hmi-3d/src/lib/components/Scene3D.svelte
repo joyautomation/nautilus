@@ -11,7 +11,7 @@
 	// renders through, and Surroundings, the HDRI and shadows. A document
 	// without a model or an environment never fetches them, and the base
 	// bundle holds at its Milestone 1 size.
-	import { T } from '@threlte/core';
+	import { T, useThrelte } from '@threlte/core';
 	import { Grid, OrbitControls, interactivity } from '@threlte/extras';
 	import { getContext, setContext, type Component, type Snippet } from 'svelte';
 	import type { SceneCamera, SceneDoc, SceneEnvironment, SceneGrid, Vec3 } from '../scene.js';
@@ -88,9 +88,12 @@
 	let effective = $derived(doc ? registryFor(doc, registry, lit ? GltfNode : null) : registry);
 
 	// The pickable node under the pointer; Node draws its hover outline.
+	// The cursor goes on the canvas itself: OrbitControls writes `cursor:
+	// auto` on the canvas's wrapper, which would override one set on body.
 	let hovered = $state<string | null>(null);
+	const { canvas } = useThrelte();
 	$effect(() => () => {
-		if (typeof document !== 'undefined') document.body.style.cursor = '';
+		canvas.style.cursor = '';
 	});
 
 	// Bounds a data kind reports once its model is loaded.
@@ -117,7 +120,7 @@
 		hover(id) {
 			hovered = id;
 			// The cursor says a click will do something.
-			if (typeof document !== 'undefined') document.body.style.cursor = id ? 'pointer' : '';
+			canvas.style.cursor = id ? 'pointer' : '';
 		},
 		defFor(id, kind) {
 			const d = effective[kind];
