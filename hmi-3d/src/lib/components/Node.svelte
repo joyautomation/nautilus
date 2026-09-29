@@ -14,6 +14,7 @@
 	// node. That is how a component composes kinds, and how a data
 	// assembly's parts render.
 	import { T } from '@threlte/core';
+	import { BoxGeometry } from 'three';
 	import type { IntersectionEvent } from '@threlte/extras';
 	import { getContext, setContext, type Snippet } from 'svelte';
 	import { SCENE, NODE, type SceneContext, type NodeContext } from '../context.js';
@@ -79,6 +80,7 @@
 	let title = $derived(label ?? (parent ? '' : (id ?? tag ?? '')));
 	let alarm = $derived(!parent && tag ? scene?.alarms.get(tag) : undefined);
 	let isSel = $derived(!parent && id !== undefined && scene?.selected === id);
+	let isHover = $derived(!parent && id !== undefined && scene?.hovered === id);
 	let bounds = $derived<Box>(box ?? (def && scene ? scene.boundsOf(id, def.bounds) : { size: [0.3, 0.3, 0.3], center: [0, 0.15, 0] }));
 	let labelAt = $derived<Vec3>(def?.labelAt ?? [bounds.center[0], bounds.center[1] + bounds.size[1] / 2 + 0.02, bounds.center[2]]);
 	let nodeProps = $derived<NodeProps>({ value, good, label: title, selected: isSel, ...props, ...over });
@@ -103,6 +105,10 @@
 		if (parent || !scene || id === undefined) return;
 		return scene.register({ id, tag, kind, label: title });
 	});
+	// A node that goes away while hovered must not leave the cursor behind.
+	$effect(() => () => {
+		if (scene && id !== undefined && scene.hovered === id) scene.hover(null);
+	});
 </script>
 
 {#if scene}
@@ -110,6 +116,19 @@
 		position={pos}
 		rotation={rad(rot)}
 		{scale}
+		onpointerenter={pickable
+			? (e: IntersectionEvent<PointerEvent>) => {
+					// Only the frontmost node under the pointer: whatever is
+					// behind it gets its leave.
+					e.stopPropagation();
+					scene.hover(id!);
+				}
+			: undefined}
+		onpointerleave={pickable
+			? () => {
+					if (scene.hovered === id) scene.hover(null);
+				}
+			: undefined}
 		onclick={pickable
 			? (e: IntersectionEvent<MouseEvent>) => {
 					if (e.delta > DRAG_PX) return;
@@ -139,6 +158,19 @@
 			{:else}
 				<Model {...nodeProps} />
 			{/if}
+		{/if}
+		{#if isHover}
+			<!-- Hover: the node a click would pick glows — edges plus a faint
+			     fill in the accent colour. Neither takes a raycast (a line is
+			     picked within 1 m of the ray). -->
+			<T.LineSegments position={bounds.center} raycast={() => {}}>
+				<T.EdgesGeometry args={[new BoxGeometry(...bounds.size.map((v) => v * 1.04))]} />
+				<T.LineBasicMaterial color={palette.hover} />
+			</T.LineSegments>
+			<T.Mesh position={bounds.center} raycast={() => {}}>
+				<T.BoxGeometry args={bounds.size.map((v) => v * 1.04) as Vec3} />
+				<T.MeshBasicMaterial color={palette.hover} transparent opacity={0.18} depthWrite={false} />
+			</T.Mesh>
 		{/if}
 		{#if alarm}
 			<Halo size={bounds.size} center={bounds.center} priority={alarm.priority} unacked={alarm.unacked} />

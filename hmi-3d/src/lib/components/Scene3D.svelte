@@ -87,6 +87,12 @@
 	let failed = $state<Record<string, boolean>>({});
 	let effective = $derived(doc ? registryFor(doc, registry, lit ? GltfNode : null) : registry);
 
+	// The pickable node under the pointer; Node draws its hover outline.
+	let hovered = $state<string | null>(null);
+	$effect(() => () => {
+		if (typeof document !== 'undefined') document.body.style.cursor = '';
+	});
+
 	// Bounds a data kind reports once its model is loaded.
 	let autoBounds = $state<Record<string, Box>>({});
 	const FALLBACK: Box = { size: [0.3, 0.3, 0.3], center: [0, 0.15, 0] };
@@ -104,6 +110,14 @@
 		},
 		get selected() {
 			return selected;
+		},
+		get hovered() {
+			return hovered;
+		},
+		hover(id) {
+			hovered = id;
+			// The cursor says a click will do something.
+			if (typeof document !== 'undefined') document.body.style.cursor = id ? 'pointer' : '';
 		},
 		defFor(id, kind) {
 			const d = effective[kind];
