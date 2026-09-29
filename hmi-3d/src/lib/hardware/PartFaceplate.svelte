@@ -4,7 +4,7 @@
 	// (capacity and temperature for a drive, speed for a fan…) as the hero,
 	// then every fact the part's UDT carries. Read-only.
 	import { FaceplateShell, type Quality } from '@joyautomation/nautilus-hmi';
-	import { partFacts, partState, partStatus, serverFacts, type Fact, type ServerPart, type PartState } from './profile.js';
+	import { partFacts, partState, partStatus, serverFacts, switchFacts, type Fact, type ServerPart, type PartState } from './profile.js';
 
 	let {
 		part,
@@ -18,7 +18,7 @@
 		/** The part picked, or undefined for the chassis. */
 		part?: ServerPart;
 		/** The chassis: its label and tag, when `part` is undefined. */
-		server?: { label: string; tag?: string; model?: string };
+		server?: { label: string; tag?: string; model?: string; kind?: 'server' | 'switch'; portsUp?: number };
 		value: unknown;
 		quality?: Quality;
 		/** A line under the facts, e.g. where a stubbed value came from. */
@@ -41,7 +41,7 @@
 
 	let shown = $derived(value ?? part?.static);
 	let state = $derived<PartState>(part ? partState(part, value, quality === 'good') : value ? 'ok' : 'missing');
-	let facts = $derived([...(part ? partFacts(part.kind, shown) : serverFacts(shown)), ...extra]);
+	let facts = $derived([...(part ? partFacts(part.kind, shown) : server?.kind === 'switch' ? switchFacts(shown, server.portsUp) : serverFacts(shown)), ...extra]);
 	let headline = $derived(part ? partStatus(part.kind, shown, state === 'assumed' ? 'ok' : state) : '');
 	let title = $derived(part ? part.slot : (server?.label ?? ''));
 	let tag = $derived(part ? (part.tag ?? '') : (server?.tag ?? ''));

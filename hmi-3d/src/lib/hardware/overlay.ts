@@ -63,7 +63,7 @@ export interface Overlay {
  * rows so labels closer than `gap` along x never share one. Returns each
  * label's position and the port mouth its leader starts from.
  */
-export function fanOutLabels(items: { id: string; at: [number, number, number]; out: 1 | -1 }[], gap = 0.07, rows = 4, first = 0.025, step = 0.022): Map<string, { from: [number, number, number]; to: [number, number, number] }> {
+export function fanOutLabels(items: { id: string; at: [number, number, number]; out: 1 | -1; up?: 1 | -1 }[], gap = 0.07, rows = 4, first = 0.025, step = 0.022): Map<string, { from: [number, number, number]; to: [number, number, number] }> {
 	const res = new Map<string, { from: [number, number, number]; to: [number, number, number] }>();
 	const last: number[] = [];
 	for (const it of [...items].sort((a, b) => a.at[0] - b.at[0])) {
@@ -71,7 +71,9 @@ export function fanOutLabels(items: { id: string; at: [number, number, number]; 
 		if (r < 0) r = last.length < rows ? last.length : last.indexOf(Math.min(...last));
 		last[r] = it.at[0];
 		const d = first + r * step;
-		res.set(it.id, { from: it.at, to: [it.at[0], it.at[1] + r * 0.01, it.at[2] + it.out * d] });
+		// Rows step out from the face and away from the ports (up, or down
+		// for a panel's lower row), so a head-on view separates them too.
+		res.set(it.id, { from: it.at, to: [it.at[0], it.at[1] + (it.up ?? 1) * (0.006 + r * 0.013), it.at[2] + it.out * d] });
 	}
 	return res;
 }
@@ -285,7 +287,7 @@ export function cablesOverlay(plant: Plant): Overlay {
 		id: 'cables',
 		name: 'Cables',
 		fanOut: true,
-		caption: 'Each port’s far end from the site topology, checked live: ✓ an end names the other (LLDP / MAC), = both ends up at the same speed, ✗ the ends disagree, ↓ neither has link, ? an end is not reported.',
+		caption: 'Each port’s far end from the site topology, checked live: ✓ an end names the other (LLDP / MAC), = both ends up at the same speed, ✗ the ends disagree, ↓ no end that reports has link, ? an end is not reported.',
 		paint(part, value, ctx) {
 			if (part.kind !== 'port') return DIM;
 			const at = linkOnPort(plant, ctx.node, part.partId, ctx.profile, ctx.tags);
@@ -299,7 +301,7 @@ export function cablesOverlay(plant: Plant): Overlay {
 				{ color: verdictColor('confirmed', c), label: '✓ confirmed: an end names the other' },
 				{ color: verdictColor('consistent', c), label: '= consistent: both up, same speed' },
 				{ color: verdictColor('contradicted', c), label: '✗ contradicted' },
-				{ color: verdictColor('down', c), label: '↓ declared, neither end linked' },
+				{ color: verdictColor('down', c), label: '↓ declared, no link' },
 				{ color: verdictColor('unverified', c), label: '? an end not reported' },
 				{ color: c.warning, label: '! linked, not in the plan' }
 			];

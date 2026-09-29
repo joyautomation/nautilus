@@ -8,7 +8,7 @@
 // - `consistent`    both ends up, at the same speed (and the declared rate)
 // - `contradicted`  the evidence disagrees: one end up and the other down,
 //                   the speeds differ, or LLDP names a different neighbour
-// - `down`          both ends reported, neither linked
+// - `down`          no end that reports has link
 // - `unverified`    an end is not reported, so nothing can be said
 //
 // Pure: no Svelte, no three, like profile.ts.
@@ -203,7 +203,9 @@ export function checkLink(plant: Plant, link: TopoLink, tags: Record<string, unk
 		reasons.push(`not reported: ${silent.join(', ')}`);
 		const other = a.reported ? a : b.reported ? b : undefined;
 		if (other?.up !== undefined) reasons.push(`${other.label} ${other.up ? `up${other.gbps ? ` at ${gtext(other.gbps)}` : ''}` : 'down'}`);
-		return done('unverified');
+		// The end we can see has no link: whatever the other end says, this
+		// cable is not carrying anything.
+		return done(other?.up === false ? 'down' : 'unverified');
 	}
 	if (a.up === false && b.up === false) {
 		reasons.push('neither end has link');

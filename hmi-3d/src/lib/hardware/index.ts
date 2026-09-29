@@ -12,6 +12,8 @@ export { default as Cpu } from './Cpu.svelte';
 export { default as Port } from './Port.svelte';
 export { default as PartModel, loadPart } from './PartModel.svelte';
 export { default as PartFaceplate } from './PartFaceplate.svelte';
+export { default as Rack } from './Rack.svelte';
+export { default as Cable } from './Cable.svelte';
 export {
 	PART_KINDS,
 	validateProfile,
@@ -24,6 +26,7 @@ export {
 	portReading,
 	partFacts,
 	serverFacts,
+	switchFacts,
 	isFitted,
 	capacity,
 	mm,
@@ -37,3 +40,5 @@ export type { PartLook } from './look.js';
 export type { PartProps } from './types.js';
 export { checkLink, checkAll, linkTags, linkAt, linkFacts, resolveEnd, readEnd, parseEnd, portPart, portName, deviceById, deviceByTag, VERDICT_MARK } from './topology.js';
 export type { Topology, TopoDevice, TopoLink, Plant, PortRef, End, Reading, Verdict, LinkCheck } from './topology.js';
+export { RACK_U_MM, uY, placeDevice, toRack, portMouth, endInRack, cablePath } from './rack.js';
+export type { RackLayout, RackDevice, Placement } from './rack.js';

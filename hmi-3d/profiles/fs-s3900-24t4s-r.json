@@ -19,7 +19,8 @@
 		"lid": 1,
 		"floor": 1,
 		"bezel": 18,
-		"color": "#2b2d30"
+		"color": "#2b2d30",
+		"metalness": 0.25
 	},
 	"types": {
 		"switch": {

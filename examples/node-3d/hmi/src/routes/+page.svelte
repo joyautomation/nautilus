@@ -133,6 +133,8 @@
 				{#each Object.keys(CAMERAS) as v}
 					<button class:on={view === v} onclick={() => (view = v as keyof typeof CAMERAS)}>{v}</button>
 				{/each}
+				<span class="sep"></span>
+				<a class="btn" href="/rack">rack →</a>
 			</div>
 		{/snippet}
 	</SceneView>
@@ -182,8 +184,10 @@
 	.sep {
 		width: 8px;
 	}
-	button {
+	button,
+	.btn {
 		font: 12px/1 system-ui, sans-serif;
+		text-decoration: none;
 		padding: 5px 10px;
 		border-radius: 999px;
 		border: 1px solid var(--axis, #383835);

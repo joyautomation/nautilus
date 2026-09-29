@@ -1,0 +1,389 @@
+<script lang="ts">
+	// The office cluster as it is racked: three SYS-112B-WR nodes and three
+	// S3900 switches, each drawn from its profile, placed by the rack layout
+	// ($lib/hq.rack.json), with every declared cable from the topology drawn
+	// between its exact ports and coloured by its live check (topology.ts).
+	// Click a device to zoom into it — the node view's lid, x-ray, exploded
+	// and overlays, for that device — and a part for its faceplate.
+	import { onMount } from 'svelte';
+	import { Tween } from 'svelte/motion';
+	import { cubicOut } from 'svelte/easing';
+	import { RealtimeClient, createAlarmClient, type NautilusFrame } from '@joyautomation/nautilus-hmi';
+	import { SceneView, DEFAULT_PALETTE, paletteFromTheme, type SceneCamera, type Palette, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
+	import {
+		Server,
+		Rack,
+		Cable,
+		PartFaceplate,
+		resolveParts,
+		OVERLAYS,
+		cablesOverlay,
+		linkOnPort,
+		linkFacts,
+		checkAll,
+		overlayColors,
+		verdictColor,
+		placeDevice,
+		toRack,
+		endInRack,
+		cablePath,
+		parseEnd,
+		portReading,
+		VERDICT_MARK,
+		type RackLayout,
+		type ServerPart,
+		type Verdict,
+		type OverlayContext
+	} from '@joyautomation/nautilus-hmi-3d/hardware';
+	import { stubbed, isStubTag } from '$lib/stub';
+	import { plant, allStubs, plantPatterns, topology } from '$lib/plant';
+	import hqRack from '$lib/hq.rack.json';
+	import Studio from '$lib/Studio.svelte';
+
+	const layout = hqRack as RackLayout;
+	const stub = allStubs();
+	const real = new RealtimeClient<NautilusFrame>({ url: '/api/stream', tags: plantPatterns() });
+	const rt = stubbed(real, stub);
+	const alarms = createAlarmClient(real);
+
+	// Every racked device with its profile, placement and parts.
+	const devices = layout.devices.flatMap((r) => {
+		const d = topology.devices.find((x) => x.id === r.id);
+		const profile = d && plant.profileOf(d);
+		if (!d || !profile) return [];
+		return [{ ...d, profile, place: placeDevice(layout, r), parts: resolveParts(profile, d.tag) }];
+	});
+	const byTag = new Map(devices.map((d) => [d.tag, d]));
+	const partById = new Map<string, ServerPart>(devices.flatMap((d) => d.parts.map((p) => [p.id, p] as [string, ServerPart])));
+	const profileOfId = (id: string) => devices.find((d) => d.id === id)?.profile;
+
+	const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
+	let tags = $derived((rt.frame?.tags ?? {}) as Record<string, unknown>);
+	let palette = $state<Palette>(DEFAULT_PALETTE);
+	let colors = $derived(overlayColors(palette));
+
+	// ── cables ────────────────────────────────────────────────────────
+	let showCables = $state(!params.has('nocables'));
+	let checks = $derived(checkAll(plant, tags));
+	// The drawn path of each link, fixed by the layout: lanes numbered per
+	// side so cables down the same side sit apart.
+	const paths = (() => {
+		const lanes: Record<string, number> = {};
+		return topology.links.map((link) => {
+			const a = parseEnd(link.a);
+			const b = parseEnd(link.b);
+			const ea = a.port ? endInRack(layout, profileOfId, a.device, a.port) : undefined;
+			const eb = b.port ? endInRack(layout, profileOfId, b.device, b.port) : undefined;
+			if (!ea) return undefined;
+			const side = (ea.at[0] + (eb?.at[0] ?? ea.at[0]) >= 0 ? 'r' : 'l') + (eb ? '' : 'up');
+			const lane = (lanes[side] = (lanes[side] ?? -1) + 1);
+			return cablePath(layout, ea, eb, lane);
+		});
+	})();
+	let counts = $derived(
+		checks.reduce<Record<Verdict, number>>((n, c) => ({ ...n, [c.check.verdict]: n[c.check.verdict] + 1 }), { confirmed: 0, consistent: 0, contradicted: 0, down: 0, unverified: 0 })
+	);
+
+	// ── focus: the rack, or one device in it ──────────────────────────
+	let focus = $state<string | null>(params.get('focus'));
+	let focused = $derived(focus ? byTag.get(focus) : undefined);
+	let lid = $state<'on' | 'off'>('off');
+	let xray = $state(false);
+	let exploded = $state(false);
+	const overlays = [...OVERLAYS, cablesOverlay(plant)];
+	let overlayId = $state<string | null>(params.get('overlay') ?? 'cables');
+	let overlay = $derived(overlays.find((o) => o.id === overlayId));
+
+	const top = layout.base! / 1000 + (layout.units * 44.45) / 1000;
+	const D = layout.depth / 1000;
+	const RACK: Record<string, SceneCamera> = {
+		cables: { pos: [-1.25, top + 0.25, -D - 1.35], target: [0, top * 0.62, -D / 2], fov: 40 },
+		rear: { pos: [0, top * 0.75, -D - 2.1], target: [0, top * 0.55, -D / 2], fov: 40 },
+		front: { pos: [0.5, top * 0.8, 1.9], target: [0, top * 0.55, -D / 2], fov: 40 }
+	};
+	const firstView = params.get('view') ?? 'cables';
+	let view = $state(firstView in RACK ? firstView : 'cables');
+	// Zoomed in: a server from above its rear I/O (lid off, the ports and
+	// their cables in view); a switch square to its port face.
+	const closeUp = (d: (typeof devices)[number]): SceneCamera => {
+		if (d.kind === 'switch') {
+			const t = toRack(d.place, [0, 0.022, 0]);
+			return { pos: [t[0] + 0.12, t[1] + 0.16, t[2] + (d.place.rotY === 180 ? -0.62 : 0.62)], target: t, fov: 40 };
+		}
+		// Below the switches, off the rear corner: the parts through the open
+		// lid and the rear I/O with its cables.
+		const t = toRack(d.place, [0, 0.02, -0.4]);
+		const back = d.place.rotY === 180 ? 1 : -1;
+		return { pos: [t[0] - 0.38, t[1] + 0.2, t[2] + back * 0.72], target: t, fov: 40 };
+	};
+	let aspect = $state(typeof window !== 'undefined' ? window.innerWidth / window.innerHeight : 1.6);
+	const framed = (c: SceneCamera): SceneCamera => {
+		const k = Math.max(1, 1.2 / aspect);
+		return { ...c, pos: c.pos.map((v, i) => c.target[i] + (v - c.target[i]) * k) as Vec3 };
+	};
+	let goal = $derived(framed(focused ? closeUp(focused) : RACK[view]));
+	const cam = Tween.of(() => [...goal.pos, ...goal.target, goal.fov ?? 40], { duration: 900, easing: cubicOut });
+	let camera = $derived<SceneCamera>({ pos: cam.current.slice(0, 3) as Vec3, target: cam.current.slice(3, 6) as Vec3, fov: cam.current[6] });
+
+	// ── picking ───────────────────────────────────────────────────────
+	let selected = $state<string | null>(null);
+	let open = $state(false);
+	const deviceOf = (id: string) => id.split('/')[0];
+	function pick(id: string) {
+		const dev = deviceOf(id);
+		if (focus !== dev) {
+			// First click on a device zooms to it; the next opens a faceplate.
+			focus = dev;
+			open = false;
+			selected = null;
+			return;
+		}
+		open = true;
+	}
+	let part = $derived(selected ? partById.get(selected) : undefined);
+	let pickedDevice = $derived(selected ? byTag.get(deviceOf(selected)) : undefined);
+	let tag = $derived(part ? part.tag : selected && byTag.has(selected) ? selected : undefined);
+	let value = $derived(tag ? tags[tag] : undefined);
+	let cable = $derived.by(() => {
+		if (part?.kind !== 'port' || !pickedDevice) return [];
+		const at = linkOnPort(plant, pickedDevice.tag, part.partId, pickedDevice.profile, tags);
+		return at ? linkFacts(at.check, at.near, at.link) : [{ label: 'Cable', value: 'none declared' }];
+	});
+	let portsUp = $derived(
+		pickedDevice?.kind === 'switch' ? pickedDevice.parts.filter((p) => p.tag && portReading(tags[p.tag]).up === true).length : undefined
+	);
+	let legendCtx = $derived<OverlayContext | undefined>(focused ? { node: focused.tag, profile: focused.profile, tags, colors } : undefined);
+
+	function back() {
+		focus = null;
+		open = false;
+		selected = null;
+	}
+
+	onMount(() => {
+		palette = paletteFromTheme(document.body);
+		real.start();
+		alarms.start();
+		return () => {
+			alarms.stop();
+			real.stop();
+		};
+	});
+</script>
+
+<svelte:window onresize={() => (aspect = window.innerWidth / window.innerHeight)} onkeydown={(e) => e.key === 'Escape' && !open && back()} />
+
+<svelte:head><title>HQ rack · 3D</title></svelte:head>
+
+<div class="stage">
+	<SceneView {rt} {alarms} {camera} grid={{ pos: [0, 0, -D / 2], cell: 0.1, section: 0.5, size: [4, 4] }} inspector={false} bind:selected onselect={pick} perf={params.has('perf') || aspect > 1}>
+		<Studio />
+		<Rack {layout} label={layout.name} />
+		{#each devices as d (d.id)}
+			{@const on = focus === d.tag}
+			<Server
+				profile={d.profile}
+				node={d.tag}
+				kind={d.kind}
+				label={d.hostname ?? d.id}
+				pos={d.place.pos}
+				rot={[0, d.place.rotY, 0]}
+				lid={on && d.kind === 'server' ? lid : 'on'}
+				xray={on && xray}
+				exploded={on && exploded}
+				anchor={false}
+				overlay={on ? overlay : undefined}
+			/>
+		{/each}
+		{#if showCables}
+			{#each checks as c, i (i)}
+				{@const pts = paths[i]}
+				{#if pts}
+					<Cable points={pts} color={verdictColor(c.check.verdict, colors)} faint={c.check.verdict === 'unverified'} />
+				{/if}
+			{/each}
+		{/if}
+		{#snippet hud()}
+			<div class="bar" role="toolbar" aria-label="Views">
+				{#if focused}
+					<button onclick={back}>← rack</button>
+					<b class="where">{focused.hostname ?? focused.id}</b>
+					{#if focused.kind === 'server'}
+						<button class:on={lid === 'on'} onclick={() => (lid = lid === 'on' ? 'off' : 'on')}>lid {lid}</button>
+						<button class:on={xray} onclick={() => (xray = !xray)}>x-ray</button>
+						<button class:on={exploded} onclick={() => (exploded = !exploded)}>exploded</button>
+						<span class="sep"></span>
+					{/if}
+					{#each overlays.filter((o) => focused?.kind === 'server' || o.id === 'cables' || o.id === 'interfaces') as o}
+						<button class:on={overlayId === o.id} onclick={() => (overlayId = overlayId === o.id ? null : o.id)}>{o.name.toLowerCase()}</button>
+					{/each}
+				{:else}
+					{#each Object.keys(RACK) as v}
+						<button class:on={view === v} onclick={() => (view = v)}>{v}</button>
+					{/each}
+					<span class="sep"></span>
+					<button class:on={showCables} onclick={() => (showCables = !showCables)}>cables</button>
+					<a class="btn" href="/">node1 →</a>
+				{/if}
+			</div>
+		{/snippet}
+	</SceneView>
+</div>
+
+<aside class="legend" aria-label="Links">
+	{#if focused && overlay && legendCtx && overlay.id !== 'cables'}
+		<b>{overlay.name} · {focused.hostname ?? focused.id}</b>
+		<ul>
+			{#each overlay.legend(legendCtx) as item}
+				<li>
+					{#if item.color}<i style:background={item.color}></i>{/if}
+					<span>{item.label}</span>
+				</li>
+			{/each}
+		</ul>
+		<p>{overlay.caption}</p>
+	{:else}
+		<b>Cables · {topology.links.length} declared</b>
+		<ul>
+			{#each ['confirmed', 'consistent', 'contradicted', 'down', 'unverified'] as Verdict[] as v}
+				<li class:none={counts[v] === 0}>
+					<i style:background={verdictColor(v, colors)}></i>
+					<span>{VERDICT_MARK[v]} {v} <em>{counts[v]}</em></span>
+				</li>
+			{/each}
+		</ul>
+		<details>
+			<summary>every link</summary>
+			<ol>
+				{#each checks as c}
+					<li title={c.check.reasons.join('; ')}>
+						<i style:background={verdictColor(c.check.verdict, colors)}></i>
+						<button class="link" onclick={() => c.check.a.device && (focus = c.check.a.device.tag)}>
+							{VERDICT_MARK[c.check.verdict]} {c.check.a.label} ↔ {c.check.b.label}
+						</button>
+					</li>
+				{/each}
+			</ol>
+		</details>
+		<p>Declared in the site topology, checked live: ✓ an end names the other (LLDP / MAC), = both ends up at the same speed, ✗ the ends disagree, ↓ no end that reports has link, ? an end not reported (faint). Rack positions are assumed until measured.</p>
+	{/if}
+</aside>
+
+{#if open && selected && pickedDevice}
+	<PartFaceplate
+		{part}
+		server={{ label: `${pickedDevice.hostname ?? pickedDevice.id} · ${pickedDevice.profile.name}`, tag: pickedDevice.tag, kind: pickedDevice.kind === 'switch' ? 'switch' : 'server', portsUp }}
+		{value}
+		quality={tag ? rt.quality(tag) : 'good'}
+		note={isStubTag(stub, tag) ? `Stub: ${stub.source}.` : undefined}
+		extra={cable}
+		onclose={() => {
+			open = false;
+			selected = null;
+		}}
+	/>
+{/if}
+
+<style>
+	.stage {
+		position: fixed;
+		inset: 0;
+	}
+	.bar {
+		display: flex;
+		gap: 6px;
+		align-items: center;
+		flex-wrap: wrap;
+	}
+	.sep {
+		width: 8px;
+	}
+	.where {
+		font: 600 13px/1 system-ui, sans-serif;
+		margin: 0 6px;
+	}
+	button,
+	.btn {
+		font: 12px/1 system-ui, sans-serif;
+		padding: 5px 10px;
+		border-radius: 999px;
+		border: 1px solid var(--axis, #383835);
+		background: color-mix(in srgb, var(--surface, #1a1a19) 85%, transparent);
+		color: var(--ink, #e8e6e1);
+		cursor: pointer;
+		text-decoration: none;
+	}
+	button.on {
+		border-color: var(--accent, #6aa5e8);
+		color: var(--accent, #6aa5e8);
+	}
+	.legend {
+		position: fixed;
+		left: 12px;
+		bottom: 12px;
+		max-width: 320px;
+		max-height: 55vh;
+		overflow: auto;
+		padding: 10px 12px;
+		border-radius: 8px;
+		border: 1px solid var(--axis, #383835);
+		background: color-mix(in srgb, var(--surface, #1a1a19) 90%, transparent);
+		color: var(--ink, #e8e6e1);
+		font: 12px/1.4 system-ui, sans-serif;
+	}
+	.legend ul,
+	.legend ol {
+		list-style: none;
+		margin: 6px 0;
+		padding: 0;
+		display: grid;
+		gap: 3px;
+	}
+	.legend li {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+	.legend li.none {
+		opacity: 0.45;
+	}
+	.legend em {
+		font-style: normal;
+		font-family: ui-monospace, monospace;
+		color: var(--ink-2, #a8a6a1);
+		margin-left: 4px;
+	}
+	.legend i {
+		width: 12px;
+		height: 12px;
+		border-radius: 3px;
+		flex: none;
+	}
+	.legend .link {
+		all: unset;
+		cursor: pointer;
+		font: 11px/1.3 ui-monospace, monospace;
+	}
+	.legend .link:hover {
+		color: var(--accent, #6aa5e8);
+	}
+	.legend summary {
+		cursor: pointer;
+		color: var(--ink-2, #a8a6a1);
+	}
+	.legend p {
+		margin: 6px 0 0;
+		color: var(--ink-2, #a8a6a1);
+		font-size: 11px;
+	}
+	@media (max-width: 600px) {
+		.legend {
+			max-width: none;
+			right: 12px;
+			max-height: 30vh;
+		}
+		.legend p {
+			display: none;
+		}
+	}
+</style>

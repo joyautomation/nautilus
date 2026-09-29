@@ -15,6 +15,19 @@ exploded and camera presets in the toolbar.
 - `?pull=NODE1_Drive_NVMe2` shows a pulled drive; `?view=top|front|rear`,
   `?lid=on`, `?xray`, `?exploded`, `?codes` (the printed AR codes, off by default) and `?overlay=heat|interfaces|free` set the view.
 
+- `?overlay=cables` labels every port with its far end from the site
+  topology (`hmi/src/lib/hq.topology.json`) and checks each declared link
+  live: ✓ confirmed (LLDP / MAC), = consistent (both up, same speed),
+  ✗ contradicted, ↓ down, ? unverified.
+- `/rack`: the whole cluster racked — three nodes and three S3900 switches
+  (`hmi-3d/profiles/fs-s3900-24t4s-r.json`) placed by `hmi/src/lib/hq.rack.json`
+  (units and faces **assumed** until measured), every cable drawn between its
+  exact ports and coloured by its check. Click a device to zoom in (lid,
+  x-ray, exploded, overlays), a part for its faceplate; `?focus=NODE2`,
+  `?view=cables|rear|front`. The switches are live only where the controller
+  polls them (hq-sw1 on `:8081` today): serve with
+  `CONTROLLER_URL=http://localhost:8081`.
+
 ```sh
 (cd ../../hmi-3d && npm run package)
 cd hmi && npm install && npm run build && npx vite preview --port 8097

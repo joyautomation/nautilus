@@ -1,7 +1,8 @@
 // Unit tests for cabling (src/lib/hardware/topology.ts): the office
 // cluster's declared links resolve to exact profile ports and tags, and
 // the live check says confirmed / consistent / contradicted / down /
-// unverified for the right reasons.
+// unverified for the right reasons; the rack puts ports and cables where
+// they are.
 import { describe, expect, it } from './harness.js';
 import sys112b from '../profiles/supermicro-sys-112b-wr.json';
 import s3900 from '../profiles/fs-s3900-24t4s-r.json';
@@ -9,6 +10,7 @@ import hq from '../../examples/node-3d/hmi/src/lib/hq.topology.json';
 import { validateProfile, resolveParts, type ChassisProfile } from '../src/lib/hardware/profile.js';
 import { checkLink, linkAt, linkTags, portPart, resolveEnd, readEnd, linkFacts, type Plant, type Topology } from '../src/lib/hardware/topology.js';
 import { cablesOverlay, interfacesOverlay, type OverlayColors } from '../src/lib/hardware/overlay.js';
+import { placeDevice, endInRack, cablePath, RACK_U_MM, type RackLayout } from '../src/lib/hardware/rack.js';
 
 const server = sys112b as unknown as ChassisProfile;
 const sw = s3900 as unknown as ChassisProfile;
@@ -78,6 +80,11 @@ describe('the live check', () => {
 		expect(c.reasons).toEqual(['not reported: node1 slot2 p2', 'sw1 te0/25 up at 10G']);
 		expect(checkLink(plant, link('sw1/g0/1'), { SW1_Port01: swUp(1000) }).verdict).toBe('unverified');
 	});
+	it('down: the only end that reports has no link', () => {
+		const c = checkLink(plant, link('sw1/g0/1'), { SW1_Port01: { OperUp: false, SpeedMbps: 1000 } });
+		expect(c.verdict).toBe('down');
+		expect(c.reasons).toEqual(['not reported: site (outside the model)', 'sw1 g0/1 down']);
+	});
 	it('confirmed: LLDP names the declared neighbour; contradicted when it names another', () => {
 		const ring = link('sw1/te0/27');
 		const ok = checkLink(plant, ring, { SW1_Port27: { ...swUp(10000), LldpSystem: 'hq-sw2', LldpPort: 'TGigaEthernet0/28' }, SW2_Port28: swUp(10000) });
@@ -133,5 +140,33 @@ describe('the cables overlay', () => {
 		const swParts = resolveParts(sw, 'SW1');
 		const te25 = swParts.find((p) => p.partId === 'te25')!;
 		expect(interfacesOverlay.paint(te25, swUp(10000), { node: 'SW1', profile: sw, tags: {}, colors }).text).toBe('10G');
+	});
+});
+
+describe('the rack', () => {
+	const layout: RackLayout = { units: 24, depth: 700, base: 60, devices: [{ id: 'sw1', u: 22, face: 'rear' }, { id: 'node1', u: 14, face: 'front' }] };
+	const profileOf = (id: string) => (id.startsWith('sw') ? sw : server);
+	it('places a device by its unit and face', () => {
+		expect(placeDevice(layout, layout.devices[1])).toEqual({ pos: [0, (60 + 13 * RACK_U_MM) / 1000, 0], rotY: 0 });
+		expect(placeDevice(layout, layout.devices[0]).rotY).toBe(180);
+	});
+	it('a server port faces the rack rear; a rear-mounted switch port faces it too', () => {
+		const n = endInRack(layout, profileOf, 'node1', 'nicSlot2p2')!;
+		expect(n.out).toEqual([0, 0, -1]);
+		expect(Math.abs(n.at[2] - -0.595) < 1e-9).toBe(true);
+		const s = endInRack(layout, profileOf, 'sw1', 'te0/25')!;
+		expect(s.out).toEqual([0, 0, -1]);
+		// Turned round: the port face is on the rear posts, x mirrored.
+		expect(Math.abs(s.at[2] - -0.7) < 1e-9).toBe(true);
+		expect(Math.abs(s.at[0] - -0.12) < 1e-9).toBe(true);
+	});
+	it('a cable leaves each port straight, then runs down the nearer side', () => {
+		const a = endInRack(layout, profileOf, 'node1', 'nicSlot2p2')!;
+		const b = endInRack(layout, profileOf, 'sw1', 'te0/25')!;
+		const p = cablePath(layout, a, b);
+		expect(p.length).toBe(6);
+		expect(p[2][0]).toBe(-0.226);
+		expect(p[3][0]).toBe(-0.226);
+		expect(cablePath(layout, a, undefined).length).toBe(4);
 	});
 });

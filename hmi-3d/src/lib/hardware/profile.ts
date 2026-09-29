@@ -56,7 +56,7 @@ export interface ChassisProfile {
 	size: Vec3;
 	/** `frontCover`: depth of the fixed top cover over the drive cage, mm;
 	 * the removable lid is the rest. */
-	shell?: { wall?: number; lid?: number; floor?: number; bezel?: number; frontCover?: number; color?: string };
+	shell?: { wall?: number; lid?: number; floor?: number; bezel?: number; frontCover?: number; color?: string; metalness?: number };
 	boardPlate?: { pos: Vec3; size: Vec3 };
 	/** Fixed internals drawn as plain boxes (a power distribution cage). */
 	fixtures?: { id: string; name?: string; pos: Vec3; size: Vec3 }[];
@@ -383,6 +383,30 @@ export function serverFacts(value: unknown): Fact[] {
 	add('Power', n('PowerW', ' W'));
 	add('Inlet', n('InletTempC', ' °C'));
 	add('Hottest sensor', n('MaxTempC', ' °C'));
+	add('Serial', str(member(value, 'Serial')));
+	return rows;
+}
+
+/** A switch chassis's rows (the it-drivers Switch UDT). `PortsUp` is
+ * the caller's count when it has the ports' tags. */
+export function switchFacts(value: unknown, portsUp?: number): Fact[] {
+	const rows: Fact[] = [];
+	const add = (label: string, v: string | undefined) => v !== undefined && rows.push({ label, value: v });
+	const n = (k: string, unit: string) => {
+		const x = num(member(value, k));
+		return x === undefined ? undefined : `${Math.round(x)}${unit}`;
+	};
+	const online = member(value, 'Online');
+	const total = num(member(value, 'PortsTotal'));
+	const up = portsUp ?? num(member(value, 'PortsUp'));
+	const uptime = num(member(value, 'UptimeS'));
+	add('Model', str(member(value, 'Model')));
+	add('Name', str(member(value, 'Name')));
+	add('Online', typeof online === 'boolean' ? (online ? 'yes' : 'no') : undefined);
+	add('Ports with link', up !== undefined ? `${up}${total !== undefined ? ` of ${total}` : ''}` : undefined);
+	add('Uptime', uptime !== undefined ? `${Math.floor(uptime / 86400)} d ${Math.floor((uptime % 86400) / 3600)} h` : undefined);
+	add('Temperature', n('TempC', ' °C'));
+	add('Fault', typeof member(value, 'Fault') === 'boolean' ? (member(value, 'Fault') ? 'yes' : 'no') : undefined);
 	add('Serial', str(member(value, 'Serial')));
 	return rows;
 }

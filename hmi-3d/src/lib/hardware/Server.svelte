@@ -125,7 +125,9 @@
 						.map((part) => {
 							const out = Math.abs((part.rot?.[1] ?? 0) % 360) === 180 ? 1 : -1;
 							const p = at(part.pos, part.explode, t.current);
-							return { id: part.id, at: [p[0], p[1], p[2] + (out * part.size[2]) / 2] as Vec3, out: out as 1 | -1 };
+							// A front panel's ports (a switch) are in two rows: the lower row's labels go down.
+							const up = part.props.panel && part.pos[1] < size[1] / 2 ? -1 : 1;
+							return { id: part.id, at: [p[0], p[1], p[2] + (out * part.size[2]) / 2] as Vec3, out: out as 1 | -1, up: up as 1 | -1 };
 						})
 				)
 			: new Map<string, { from: Vec3; to: Vec3 }>()

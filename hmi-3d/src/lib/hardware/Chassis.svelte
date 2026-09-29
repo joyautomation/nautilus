@@ -43,7 +43,7 @@
 	let lidT = $derived((profile.shell?.lid ?? 1) / 1000);
 	let ear = $derived((profile.shell?.bezel ?? 20) / 1000);
 	let opacity = $derived(xray ? 0.2 : good ? 1 : 0.5);
-	let shell = $derived({ color: profile.shell?.color ?? '#6f7377', metalness: 0.6, roughness: 0.45, transparent: opacity < 1, opacity, depthWrite: opacity >= 1 });
+	let shell = $derived({ color: profile.shell?.color ?? '#6f7377', metalness: profile.shell?.metalness ?? 0.6, roughness: 0.45, transparent: opacity < 1, opacity, depthWrite: opacity >= 1 });
 	let hit = $derived(xray ? noRaycast : Mesh.prototype.raycast);
 	let board = $derived(profile.boardPlate ? { pos: mm(profile.boardPlate.pos), size: mm(profile.boardPlate.size) } : undefined);
 	let cover = $derived((profile.shell?.frontCover ?? 0) / 1000);
