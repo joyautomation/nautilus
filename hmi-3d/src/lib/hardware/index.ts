@@ -21,6 +21,7 @@ export {
 	anchorPayload,
 	partState,
 	partStatus,
+	portReading,
 	partFacts,
 	serverFacts,
 	isFitted,
@@ -30,7 +31,9 @@ export {
 } from './profile.js';
 export type { ChassisProfile, ProfilePart, ProfileAnchor, ServerPart, PartKind, PartState, Fact } from './profile.js';
 export { partLook, DEFAULT_MODELS } from './look.js';
-export { OVERLAYS, heatOverlay, interfacesOverlay, freeOverlay, heatPaint, limitsFor, inletC, nextDimms, placeLabels, overlayColors, HEAT_RAMP } from './overlay.js';
+export { OVERLAYS, cablesOverlay, linkOnPort, verdictColor, heatOverlay, interfacesOverlay, freeOverlay, heatPaint, limitsFor, inletC, nextDimms, placeLabels, fanOutLabels, overlayColors, HEAT_RAMP } from './overlay.js';
 export type { Overlay, OverlayContext, OverlayColors, PartPaint, LegendItem } from './overlay.js';
 export type { PartLook } from './look.js';
 export type { PartProps } from './types.js';
+export { checkLink, checkAll, linkTags, linkAt, linkFacts, resolveEnd, readEnd, parseEnd, portPart, portName, deviceById, deviceByTag, VERDICT_MARK } from './topology.js';
+export type { Topology, TopoDevice, TopoLink, Plant, PortRef, End, Reading, Verdict, LinkCheck } from './topology.js';

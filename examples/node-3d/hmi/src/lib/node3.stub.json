@@ -1,0 +1,205 @@
+{
+	"source": "BMC capture, stubbed until the drivers publish these tags (workstream A); serials redacted",
+	"tags": {
+		"NODE3_Drive_Boot0": {
+			"Bay": 0,
+			"Name": "Disk.Bay.0",
+			"Model": "SSDSCKKB240GZ",
+			"Serial": "(redacted)",
+			"CapacityGB": 240,
+			"Protocol": "SATA",
+			"MediaType": "SSD",
+			"Health": 0,
+			"Fault": false,
+			"PredictedFailure": false,
+			"TempC": 24,
+			"Present": true
+		},
+		"NODE3_Drive_Boot4": {
+			"Bay": 4,
+			"Name": "Disk.Bay.4",
+			"Model": "SSDSCKKB240GZ",
+			"Serial": "(redacted)",
+			"CapacityGB": 240,
+			"Protocol": "SATA",
+			"MediaType": "SSD",
+			"Health": 0,
+			"Fault": false,
+			"PredictedFailure": false,
+			"TempC": 24,
+			"Present": true
+		},
+		"NODE3_Drive_NVMe0": {
+			"Bay": 0,
+			"Name": "Disk.Bay.0",
+			"Model": "MZQL21T9HCJR-00A07",
+			"Serial": "(redacted)",
+			"CapacityGB": 1920,
+			"Protocol": "NVMe",
+			"MediaType": "SSD",
+			"Health": 0,
+			"Fault": false,
+			"PredictedFailure": false,
+			"TempC": 32,
+			"Present": true
+		},
+		"NODE3_Drive_NVMe1": {
+			"Bay": 1,
+			"Name": "Disk.Bay.1",
+			"Model": "MZQL21T9HCJR-00A07",
+			"Serial": "(redacted)",
+			"CapacityGB": 1920,
+			"Protocol": "NVMe",
+			"MediaType": "SSD",
+			"Health": 0,
+			"Fault": false,
+			"PredictedFailure": false,
+			"TempC": 30,
+			"Present": true
+		},
+		"NODE3_Drive_NVMe2": {
+			"Bay": 2,
+			"Name": "Disk.Bay.2",
+			"Model": "MZQL21T9HCJR-00A07",
+			"Serial": "(redacted)",
+			"CapacityGB": 1920,
+			"Protocol": "NVMe",
+			"MediaType": "SSD",
+			"Health": 0,
+			"Fault": false,
+			"PredictedFailure": false,
+			"TempC": 33,
+			"Present": true
+		},
+		"NODE3_Drive_NVMe3": {
+			"Bay": 3,
+			"Name": "Disk.Bay.3",
+			"Model": "MZQL21T9HCJR-00A07",
+			"Serial": "(redacted)",
+			"CapacityGB": 1920,
+			"Protocol": "NVMe",
+			"MediaType": "SSD",
+			"Health": 0,
+			"Fault": false,
+			"PredictedFailure": false,
+			"TempC": 31,
+			"Present": true
+		},
+		"NODE3_Pcie_Slot2": {
+			"Slot": 2,
+			"Name": "NIC1 System Slot2 AOC-S25G6-M2S",
+			"Model": "AOC-S25G6-M2S",
+			"Manufacturer": "Supermicro",
+			"Firmware": "26.47.1026",
+			"Health": 0,
+			"Fault": false,
+			"Ports": 2,
+			"TempC": 55
+		},
+		"NODE3_Pcie_Slot3": {
+			"Slot": 3,
+			"Name": "NIC2 System Slot3 AOC-S25G6-M2S",
+			"Model": "AOC-S25G6-M2S",
+			"Manufacturer": "Supermicro",
+			"Firmware": "26.47.1026",
+			"Health": 0,
+			"Fault": false,
+			"Ports": 2,
+			"TempC": 65
+		},
+		"NODE3_Dimm_A1": {
+			"Locator": "DIMMA1",
+			"CapacityGB": 64,
+			"Manufacturer": "Samsung",
+			"PartNumber": "MDRR644QDBC2-3D000",
+			"Health": 0,
+			"Fault": false,
+			"TempC": 41
+		},
+		"NODE3_Dimm_C1": {
+			"Locator": "DIMMC1",
+			"CapacityGB": 64,
+			"Manufacturer": "Samsung",
+			"PartNumber": "MDRR644QDBC2-3D000",
+			"Health": 0,
+			"Fault": false,
+			"TempC": 41
+		},
+		"NODE3_Dimm_E1": {
+			"Locator": "DIMME1",
+			"CapacityGB": 64,
+			"Manufacturer": "Samsung",
+			"PartNumber": "MDRR644QDBC2-3D000",
+			"Health": 0,
+			"Fault": false,
+			"TempC": 38
+		},
+		"NODE3_Dimm_G1": {
+			"Locator": "DIMMG1",
+			"CapacityGB": 64,
+			"Manufacturer": "Samsung",
+			"PartNumber": "MDRR644QDBC2-3D000",
+			"Health": 0,
+			"Fault": false,
+			"TempC": 38
+		},
+		"NODE3_Cpu1": {
+			"Model": "Xeon 6505P",
+			"Cores": 12,
+			"Health": 0,
+			"Fault": false,
+			"TempC": 55,
+			"Pct": 0
+		},
+		"NODE3_Nic_Slot2_P1": {
+			"Name": "AOC-S25G6-M2S port 1",
+			"LinkUp": true,
+			"SpeedGbps": 25,
+			"MAC": "(redacted)"
+		},
+		"NODE3_Nic_Slot2_P2": {
+			"Name": "AOC-S25G6-M2S port 2",
+			"LinkUp": true,
+			"SpeedGbps": 10,
+			"MAC": "(redacted)"
+		},
+		"NODE3_Nic_Slot3_P1": {
+			"Name": "AOC-S25G6-M2S port 1",
+			"LinkUp": true,
+			"SpeedGbps": 25,
+			"MAC": "(redacted)"
+		},
+		"NODE3_Nic_Slot3_P2": {
+			"Name": "AOC-S25G6-M2S port 2",
+			"LinkUp": true,
+			"SpeedGbps": 10,
+			"MAC": "(redacted)"
+		},
+		"NODE3_Nic_LAN1": {
+			"Name": "Onboard LAN1",
+			"LinkUp": false,
+			"SpeedGbps": 0,
+			"MAC": "(redacted)"
+		},
+		"NODE3_Nic_LAN2": {
+			"Name": "Onboard LAN2",
+			"LinkUp": false,
+			"SpeedGbps": 0,
+			"MAC": "(redacted)"
+		},
+		"NODE3_Nic_BMC": {
+			"Name": "BMC LAN",
+			"LinkUp": true,
+			"SpeedGbps": 1,
+			"MAC": "(redacted)"
+		}
+	},
+	"live": {
+		"NODE3_Dimm_A1.TempC": "NODE3_Temp_DIMM.Value",
+		"NODE3_Dimm_C1.TempC": "NODE3_Temp_DIMM.Value",
+		"NODE3_Dimm_E1.TempC": "NODE3_Temp_DIMM.Value",
+		"NODE3_Dimm_G1.TempC": "NODE3_Temp_DIMM.Value",
+		"NODE3_Cpu1.TempC": "NODE3_Temp_CPU.Value",
+		"NODE3_Cpu1.Pct": "NODE3.CpuPct"
+	}
+}

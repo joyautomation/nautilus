@@ -5,8 +5,9 @@
 // only paints what it returns. Parts an overlay has nothing to say about
 // are dimmed, so the answer stands out.
 import type { ChassisProfile, ServerPart } from './profile.js';
-import { member, partState, tagFor } from './profile.js';
+import { member, partState, portReading, tagFor } from './profile.js';
 import type { Palette } from '../palette.js';
+import { checkLink, deviceByTag, linkAt, readEnd, VERDICT_MARK, type LinkCheck, type Plant, type TopoLink, type Verdict } from './topology.js';
 
 export interface PartPaint {
 	/** Tint for the part (or the outline of an empty position). */
@@ -51,6 +52,28 @@ export interface Overlay {
 	legend(ctx: OverlayContext): LegendItem[];
 	/** Also draw the profile's standalone sensors (inlet, VRM…). */
 	sensors?: boolean;
+	/** Set port labels out from the port face on leader lines, in rows,
+	 * instead of on the parts: a cable's far end is too long to sit on a
+	 * cage 16 mm wide. */
+	fanOut?: boolean;
+}
+
+/**
+ * Where fanned-out port labels go: straight out from each port's face, in
+ * rows so labels closer than `gap` along x never share one. Returns each
+ * label's position and the port mouth its leader starts from.
+ */
+export function fanOutLabels(items: { id: string; at: [number, number, number]; out: 1 | -1 }[], gap = 0.07, rows = 4, first = 0.025, step = 0.022): Map<string, { from: [number, number, number]; to: [number, number, number] }> {
+	const res = new Map<string, { from: [number, number, number]; to: [number, number, number] }>();
+	const last: number[] = [];
+	for (const it of [...items].sort((a, b) => a.at[0] - b.at[0])) {
+		let r = last.findIndex((x) => it.at[0] - x >= gap);
+		if (r < 0) r = last.length < rows ? last.length : last.indexOf(Math.min(...last));
+		last[r] = it.at[0];
+		const d = first + r * step;
+		res.set(it.id, { from: it.at, to: [it.at[0], it.at[1] + r * 0.01, it.at[2] + it.out * d] });
+	}
+	return res;
 }
 
 /** The validated dark-surface ordinal ramp (blue 600 → 200), low → high. */
@@ -137,8 +160,9 @@ export const interfacesOverlay: Overlay = {
 			const name = typeof part.props.short === 'string' ? `${part.props.short} ` : '';
 			const said = (p: PartPaint): PartPaint => ({ ...p, text: `${name}${p.text}` });
 			if (value === undefined) return said({ color: c.neutral, text: 'not reported', dim: true });
-			if (member(value, 'LinkUp') !== true) return said({ color: c.neutral, text: 'no link' });
-			const speed = num(member(value, 'SpeedGbps'));
+			const link = portReading(value);
+			if (link.up !== true) return said({ color: c.neutral, text: 'no link' });
+			const speed = link.gbps;
 			const rated = num(part.props.ratedGbps);
 			// Short: ports sit 16 mm apart. `25G`, below rated `10/25G`.
 			const g = (x: number) => (x >= 1 ? `${+x.toFixed(1)}` : `${+x.toFixed(2)}`);
@@ -233,5 +257,54 @@ export const freeOverlay: Overlay = {
 		];
 	}
 };
+
+// ── cables ─────────────────────────────────────────────────────────────
+
+/** A verdict's colour: confirmed and consistent are both fine, told apart
+ * by hue (green: an end named the other; blue: both up, nothing named). */
+export function verdictColor(v: Verdict, c: OverlayColors): string {
+	return { confirmed: c.good, consistent: c.ramp[2], contradicted: c.critical, down: c.warning, unverified: c.neutral }[v];
+}
+
+/** The link on one of this device's ports, checked — for the faceplate. */
+export function linkOnPort(plant: Plant, node: string, partId: string, profile: OverlayContext['profile'], tags: Record<string, unknown>): { check: LinkCheck; near: 'a' | 'b'; link: TopoLink } | undefined {
+	const device = deviceByTag(plant.topology, node);
+	const part = profile.parts.find((q) => q.id === partId);
+	const at = device && part ? linkAt(plant.topology, device.id, part) : undefined;
+	return at ? { check: checkLink(plant, at.link, tags), near: at.near, link: at.link } : undefined;
+}
+
+/**
+ * Every port labelled with its far end (`sw1 te0/25`, `node2 slot3 p1`)
+ * from the site's topology, coloured by the live check of that declared
+ * link (topology.ts). A port with link that the plan does not mention is
+ * called out: a cable nobody wrote down.
+ */
+export function cablesOverlay(plant: Plant): Overlay {
+	return {
+		id: 'cables',
+		name: 'Cables',
+		fanOut: true,
+		caption: 'Each port’s far end from the site topology, checked live: ✓ an end names the other (LLDP / MAC), = both ends up at the same speed, ✗ the ends disagree, ↓ neither has link, ? an end is not reported.',
+		paint(part, value, ctx) {
+			if (part.kind !== 'port') return DIM;
+			const at = linkOnPort(plant, ctx.node, part.partId, ctx.profile, ctx.tags);
+			if (!at) return readEnd(value).up ? { color: ctx.colors.warning, text: '! not in plan' } : DIM;
+			const far = at.near === 'a' ? at.check.b : at.check.a;
+			return { color: verdictColor(at.check.verdict, ctx.colors), text: `${VERDICT_MARK[at.check.verdict]} ${far.label}` };
+		},
+		legend(ctx) {
+			const c = ctx.colors;
+			return [
+				{ color: verdictColor('confirmed', c), label: '✓ confirmed: an end names the other' },
+				{ color: verdictColor('consistent', c), label: '= consistent: both up, same speed' },
+				{ color: verdictColor('contradicted', c), label: '✗ contradicted' },
+				{ color: verdictColor('down', c), label: '↓ declared, neither end linked' },
+				{ color: verdictColor('unverified', c), label: '? an end not reported' },
+				{ color: c.warning, label: '! linked, not in the plan' }
+			];
+		}
+	};
+}
 
 export const OVERLAYS: Overlay[] = [heatOverlay, interfacesOverlay, freeOverlay];

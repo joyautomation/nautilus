@@ -7,21 +7,21 @@
 	import { onMount } from 'svelte';
 	import { RealtimeClient, createAlarmClient, type NautilusFrame } from '@joyautomation/nautilus-hmi';
 	import { SceneView, DEFAULT_PALETTE, paletteFromTheme, type SceneCamera, type Palette } from '@joyautomation/nautilus-hmi-3d';
-	import { Server, PartFaceplate, resolveParts, serverTags, validateProfile, anchorPayload, OVERLAYS, overlayColors, type ChassisProfile, type OverlayContext } from '@joyautomation/nautilus-hmi-3d/hardware';
+	import { Server, PartFaceplate, resolveParts, validateProfile, anchorPayload, OVERLAYS, cablesOverlay, linkOnPort, linkFacts, overlayColors, type ChassisProfile, type OverlayContext } from '@joyautomation/nautilus-hmi-3d/hardware';
 	import QRCode from 'qrcode';
 	import sys112b from '@joyautomation/nautilus-hmi-3d/profiles/supermicro-sys-112b-wr.json';
-	import stubJson from '$lib/node1.stub.json';
-	import { stubbed, isStubTag, type Stub } from '$lib/stub';
+		import { stubbed, isStubTag } from '$lib/stub';
+	import { plant, allStubs, plantPatterns } from '$lib/plant';
 	import Studio from '$lib/Studio.svelte';
 
 	const NODE = 'NODE1';
 	const profile = sys112b as unknown as ChassisProfile;
-	const stub = structuredClone(stubJson) as Stub;
+	const stub = allStubs();
 	const problems = validateProfile(profile);
 	const parts = resolveParts(profile, NODE);
 	const byId = new Map(parts.map((p) => [p.id, p]));
 
-	const real = new RealtimeClient<NautilusFrame>({ url: '/api/stream', tags: [...serverTags(profile, NODE), `${NODE}_Temp_*`] });
+	const real = new RealtimeClient<NautilusFrame>({ url: '/api/stream', tags: plantPatterns() });
 	const rt = stubbed(real, stub);
 	const alarms = createAlarmClient(real);
 
@@ -37,9 +37,10 @@
 	// default (they are a placement guide, not part of the server), drawn
 	// from the same payloads as ../../labels.mjs so the model matches the sheet.
 	let codes = $state(params.has('codes'));
-	// One overlay at a time: heat, interfaces, what's free (overlay.ts).
+	// One overlay at a time: heat, interfaces, what's free, cables (overlay.ts).
+	const overlays = [...OVERLAYS, cablesOverlay(plant)];
 	let overlayId = $state<string | null>(params.get('overlay'));
-	let overlay = $derived(OVERLAYS.find((o) => o.id === overlayId));
+	let overlay = $derived(overlays.find((o) => o.id === overlayId));
 	// The same theme read SceneView makes for the 3D parts.
 	let palette = $state<Palette>(DEFAULT_PALETTE);
 	// The legend's context: the same tags and colours the parts are painted
@@ -89,6 +90,12 @@
 	let part = $derived(selected ? byId.get(selected) : undefined);
 	let tag = $derived(part ? part.tag : selected === NODE ? NODE : undefined);
 	let value = $derived(tag ? (rt.frame?.tags as Record<string, unknown> | undefined)?.[tag] : undefined);
+	// A port's cable: where it goes and the live check, under its facts.
+	let cable = $derived.by(() => {
+		if (part?.kind !== 'port') return [];
+		const at = linkOnPort(plant, NODE, part.partId, profile, (rt.frame?.tags ?? {}) as Record<string, unknown>);
+		return at ? linkFacts(at.check, at.near, at.link) : [{ label: 'Cable', value: 'none declared' }];
+	});
 
 	onMount(() => {
 		palette = paletteFromTheme(document.body);
@@ -119,7 +126,7 @@
 				<button class:on={exploded} onclick={() => (exploded = !exploded)}>exploded</button>
 				<button class:on={codes} onclick={() => (codes = !codes)} title="Where the printed AR codes go">codes</button>
 				<span class="sep"></span>
-				{#each OVERLAYS as o}
+				{#each overlays as o}
 					<button class:on={overlayId === o.id} onclick={() => (overlayId = overlayId === o.id ? null : o.id)}>{o.name.toLowerCase()}</button>
 				{/each}
 				<span class="sep"></span>
@@ -153,6 +160,7 @@
 		{value}
 		quality={tag ? rt.quality(tag) : 'good'}
 		note={isStubTag(stub, tag) ? `Stub: ${stub.source}.` : undefined}
+		extra={cable}
 		onclose={() => {
 			open = false;
 			selected = null;

@@ -16,7 +16,7 @@
 	import { SCENE, type SceneContext } from '../context.js';
 	import { DEFAULT_PALETTE, type Palette } from '../palette.js';
 	import { member } from './profile.js';
-	import { overlayColors, heatPaint, placeLabels, type Overlay, type OverlayColors, type OverlayContext, type PartPaint } from './overlay.js';
+	import { overlayColors, heatPaint, placeLabels, fanOutLabels, type Overlay, type OverlayColors, type OverlayContext, type PartPaint } from './overlay.js';
 	import { Tween } from 'svelte/motion';
 	import { cubicOut } from 'svelte/easing';
 	import type { Component } from 'svelte';
@@ -45,6 +45,7 @@
 		anchor = true,
 		codeImages,
 		overlay,
+		kind = 'server',
 		models = DEFAULT_MODELS
 	}: {
 		profile: ChassisProfile;
@@ -65,6 +66,8 @@
 		 * colour and text paint the parts, the rest go faint (overlay.ts).
 		 * The shell turns see-through while one is on: the answer is inside. */
 		overlay?: Overlay;
+		/** The chassis node's kind (`server`, `switch`). */
+		kind?: string;
 		/** Where the part library (models/hardware/*.glb) is served. */
 		models?: string;
 	} = $props();
@@ -111,21 +114,40 @@
 		return typeof v === 'number' ? v : 25;
 	};
 	const top = (p: Vec3, s: Vec3): Vec3 => [p[0], p[1] + s[1] / 2 + 0.006, p[2]];
-	// Each part's overlay label, placed so neighbours do not overprint.
-	let labels = $derived(
-		placeLabels(
-			parts.flatMap((part) => {
-				const paint = paints[part.id];
-				return paint?.text && !paint.dim ? [{ id: part.id, at: top(at(part.pos, part.explode, t.current), part.size), text: paint.text }] : [];
-			})
-		)
+	// Each part's overlay label, placed so neighbours do not overprint —
+	// or, for an overlay that fans out, set out from the port face on a leader.
+	let said = $derived(parts.filter((part) => paints[part.id]?.text && !paints[part.id]?.dim));
+	let fanned = $derived(
+		overlay?.fanOut
+			? fanOutLabels(
+					said
+						.filter((part) => part.kind === 'port')
+						.map((part) => {
+							const out = Math.abs((part.rot?.[1] ?? 0) % 360) === 180 ? 1 : -1;
+							const p = at(part.pos, part.explode, t.current);
+							return { id: part.id, at: [p[0], p[1], p[2] + (out * part.size[2]) / 2] as Vec3, out: out as 1 | -1 };
+						})
+				)
+			: new Map<string, { from: Vec3; to: Vec3 }>()
 	);
+	let labels = $derived(
+		new Map([
+			...placeLabels(said.filter((part) => !fanned.has(part.id)).map((part) => ({ id: part.id, at: top(at(part.pos, part.explode, t.current), part.size), text: paints[part.id]!.text! }))),
+			...[...fanned].map(([id, f]) => [id, f.to] as [string, Vec3])
+		])
+	);
+	// A leader from a port mouth to its label: a thin bar, turned about x.
+	const leader = (f: { from: Vec3; to: Vec3 }) => {
+		const dy = f.to[1] - f.from[1];
+		const dz = f.to[2] - f.from[2];
+		return { pos: [f.from[0], f.from[1] + dy / 2, f.from[2] + dz / 2] as Vec3, len: Math.hypot(dy, dz), rx: Math.atan2(-dy, dz) };
+	};
 
 	let lidOffset = $derived(mm(profile.explodeLid ?? [0, 160, 0]).map((v) => v * t.current) as Vec3);
 </script>
 
 <T.Group position={pos} rotation={rot ? [rot[0] * deg, rot[1] * deg, rot[2] * deg] : [0, 0, 0]}>
-	<Node id={node} tag={chassisTag} kind="server" label={label ?? node} pos={[0, 0, 0]} bounds={chassisBox}>
+	<Node id={node} tag={chassisTag} {kind} label={label ?? node} pos={[0, 0, 0]} bounds={chassisBox}>
 		{#snippet children(p)}
 			<Chassis {profile} {lid} xray={xray || !!overlay} {lidOffset} {anchor} {codeImages} good={p.good} />
 		{/snippet}
@@ -148,6 +170,14 @@
 		</Node>
 		{@const paint = paints[part.id]}
 		{@const where = labels.get(part.id)}
+		{@const fan = fanned.get(part.id)}
+		{#if fan && paint?.color}
+			{@const l = leader(fan)}
+			<T.Mesh position={l.pos} rotation={[l.rx, 0, 0]} raycast={() => {}}>
+				<T.BoxGeometry args={[0.0007, 0.0007, l.len]} />
+				<T.MeshBasicMaterial color={paint.color} />
+			</T.Mesh>
+		{/if}
 		{#if paint?.text && where}
 			<HTML position={where} center pointerEvents="none">
 				<span class="ov" style:--c={paint.color ?? '#8a8d91'}>{paint.text}</span>

@@ -33,7 +33,7 @@
 		"package": "svelte-kit sync && svelte-package && publint",
 		"prepublishOnly": "npm run package",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-		"test": "svelte-kit sync && esbuild tests/*.test.ts --bundle --format=esm --platform=node --outdir=.svelte-kit/tests --log-level=warning && node .svelte-kit/tests/scene.test.js && node .svelte-kit/tests/bindings.test.js && node .svelte-kit/tests/alarms.test.js && node .svelte-kit/tests/kinds.test.js && node .svelte-kit/tests/drives.test.js && node .svelte-kit/tests/contract.test.js && node .svelte-kit/tests/components.test.js && node .svelte-kit/tests/hardware.test.js"
+		"test": "svelte-kit sync && esbuild tests/*.test.ts --bundle --format=esm --platform=node --outdir=.svelte-kit/tests --log-level=warning && node .svelte-kit/tests/scene.test.js && node .svelte-kit/tests/bindings.test.js && node .svelte-kit/tests/alarms.test.js && node .svelte-kit/tests/kinds.test.js && node .svelte-kit/tests/drives.test.js && node .svelte-kit/tests/contract.test.js && node .svelte-kit/tests/components.test.js && node .svelte-kit/tests/hardware.test.js && node .svelte-kit/tests/topology.test.js"
 	},
 	"peerDependencies": {
 		"@threlte/core": "^8.0.0",

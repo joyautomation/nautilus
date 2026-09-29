@@ -56,7 +56,7 @@ export interface ChassisProfile {
 	size: Vec3;
 	/** `frontCover`: depth of the fixed top cover over the drive cage, mm;
 	 * the removable lid is the rest. */
-	shell?: { wall?: number; lid?: number; floor?: number; bezel?: number; frontCover?: number };
+	shell?: { wall?: number; lid?: number; floor?: number; bezel?: number; frontCover?: number; color?: string };
 	boardPlate?: { pos: Vec3; size: Vec3 };
 	/** Fixed internals drawn as plain boxes (a power distribution cage). */
 	fixtures?: { id: string; name?: string; pos: Vec3; size: Vec3 }[];
@@ -202,6 +202,16 @@ export function member(v: unknown, k: string): unknown {
 	return v && typeof v === 'object' ? (v as Record<string, unknown>)[k] : undefined;
 }
 
+/** A port's link from either UDT: a server's NetPort (LinkUp, SpeedGbps)
+ * or a switch's SwitchPort (OperUp, SpeedMbps). */
+export function portReading(v: unknown): { up?: boolean; gbps?: number } {
+	const up = member(v, 'LinkUp') ?? member(v, 'OperUp');
+	const g = member(v, 'SpeedGbps');
+	const m = member(v, 'SpeedMbps');
+	const gbps = typeof g === 'number' ? g : typeof m === 'number' ? m / 1000 : undefined;
+	return { up: typeof up === 'boolean' ? up : undefined, gbps };
+}
+
 export function partState(part: Pick<ServerPart, 'tag' | 'static'>, value: unknown, good: boolean): PartState {
 	if (!part.tag) return part.static ? 'assumed' : 'unbound';
 	if (value === undefined || value === null) return 'missing';
@@ -261,8 +271,9 @@ export function partStatus(kind: PartKind, value: unknown, state: PartState): st
 		case 'pcie-card':
 			return `${str(member(value, 'Model')) ?? 'card'}${temp}${flag}`;
 		case 'port': {
-			if (member(value, 'LinkUp') !== true) return 'no link';
-			const g = num(member(value, 'SpeedGbps'));
+			const r = portReading(value);
+			if (r.up !== true) return 'no link';
+			const g = r.gbps;
 			return g === undefined ? 'link up' : g >= 1 ? `${+g.toFixed(1)} Gb/s` : `${Math.round(g * 1000)} Mb/s`;
 		}
 	}
@@ -323,12 +334,19 @@ export function partFacts(kind: PartKind, value: unknown): Fact[] {
 			add('Present', b('Present'));
 			break;
 		case 'port': {
-			const up = member(value, 'LinkUp');
+			const { up, gbps: g } = portReading(value);
 			add('Link', typeof up === 'boolean' ? (up ? 'up' : 'down') : undefined);
-			const g = num(member(value, 'SpeedGbps'));
 			add('Speed', g === undefined ? undefined : g >= 1 ? `${+g.toFixed(1)} Gb/s` : `${Math.round(g * 1000)} Mb/s`);
 			add('Name', s('Name'));
 			add('MAC', s('MAC'));
+			add('Alias', s('Alias'));
+			const bps = (k: string) => {
+				const x = num(member(value, k));
+				return x === undefined ? undefined : x >= 1e9 ? `${(x / 1e9).toFixed(2)} Gb/s` : x >= 1e6 ? `${(x / 1e6).toFixed(1)} Mb/s` : `${(x / 1e3).toFixed(1)} kb/s`;
+			};
+			add('In', bps('InBps'));
+			add('Out', bps('OutBps'));
+			add('Errors / s', n('ErrorRate', '', 2));
 			break;
 		}
 		case 'psu':
