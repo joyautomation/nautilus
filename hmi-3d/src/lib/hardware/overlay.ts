@@ -5,7 +5,7 @@
 // only paints what it returns. Parts an overlay has nothing to say about
 // are dimmed, so the answer stands out.
 import type { ChassisProfile, ServerPart } from './profile.js';
-import { member, partState, portReading, tagFor } from './profile.js';
+import { capacity, member, partState, portReading, tagFor } from './profile.js';
 import type { Palette } from '../palette.js';
 import { checkLink, deviceByTag, linkAt, readEnd, VERDICT_MARK, type LinkCheck, type Plant, type TopoLink, type Verdict } from './topology.js';
 
@@ -260,6 +260,69 @@ export const freeOverlay: Overlay = {
 	}
 };
 
+// ── identify ───────────────────────────────────────────────────────────
+
+/** One colour per kind of part: categorical, and clear of the status hues
+ * (no red, amber or green), since this overlay says what, not how. */
+export const KIND_COLORS: Record<string, string> = {
+	drive: '#3987e5',
+	dimm: '#9b6ee0',
+	cpu: '#4cc3d9',
+	'pcie-card': '#2fa38f',
+	fan: '#8a94a6',
+	psu: '#c9a86a',
+	port: '#d46aa8'
+};
+const KIND_NAMES: Record<string, string> = { drive: 'drive', dimm: 'memory', cpu: 'CPU', 'pcie-card': 'expansion card', fan: 'fan', psu: 'power supply', port: 'network port' };
+
+/** What a part is, in a few words: where it sits and what the inventory
+ * (or the profile, for a fitted part no driver reports) says it is. */
+export function identify(part: ServerPart, value: unknown): string | undefined {
+	const v = value ?? part.static;
+	const s = (k: string) => {
+		const x = member(v, k);
+		return typeof x === 'string' && x ? x : undefined;
+	};
+	const n = (k: string) => num(member(v, k));
+	switch (part.kind) {
+		case 'drive': {
+			const bay = /bay\s*(\d+)/i.exec(part.slot)?.[1];
+			const where = part.props.form === 'm2' ? 'M.2' : bay !== undefined ? `bay ${bay}` : part.slot;
+			return [where, [capacity(member(v, 'CapacityGB')), s('Protocol')].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
+		}
+		case 'dimm': {
+			const cap = capacity(member(v, 'CapacityGB'));
+			return `${part.partId.replace(/^dimm/, '')}${cap ? ` · ${cap}` : ''}`;
+		}
+		case 'cpu':
+			return [s('Model') ?? 'CPU', n('Cores') !== undefined ? `${n('Cores')}c` : undefined].filter(Boolean).join(' · ');
+		case 'pcie-card':
+			return s('Model') ?? s('Name') ?? part.slot;
+		case 'fan':
+			return part.slot;
+		case 'psu':
+			return `${part.slot}${n('CapacityW') !== undefined ? ` · ${n('CapacityW')} W` : ''}`;
+		case 'port':
+			return typeof part.props.port === 'string' ? part.props.port : typeof part.props.short === 'string' ? part.props.short : (s('Name') ?? part.partId);
+	}
+}
+
+export const identifyOverlay: Overlay = {
+	id: 'identify',
+	name: 'Identify',
+	fanOut: true,
+	caption: 'What each part is and where it sits, coloured by kind. Empty positions are left faint: the free overlay names them.',
+	paint(part, value, ctx) {
+		const state = partState(part, value, true);
+		if (state === 'unbound' || state === 'missing' || state === 'absent') return DIM;
+		const text = identify(part, value);
+		return text ? { color: KIND_COLORS[part.kind], text } : DIM;
+	},
+	legend() {
+		return Object.entries(KIND_COLORS).map(([k, color]) => ({ color, label: KIND_NAMES[k] }));
+	}
+};
+
 // ── cables ─────────────────────────────────────────────────────────────
 
 /** A verdict's colour: confirmed and consistent are both fine, told apart
@@ -309,4 +372,4 @@ export function cablesOverlay(plant: Plant): Overlay {
 	};
 }
 
-export const OVERLAYS: Overlay[] = [heatOverlay, interfacesOverlay, freeOverlay];
+export const OVERLAYS: Overlay[] = [identifyOverlay, heatOverlay, interfacesOverlay, freeOverlay];

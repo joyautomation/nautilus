@@ -8,8 +8,8 @@ import sys112b from '../profiles/supermicro-sys-112b-wr.json';
 import s3900 from '../profiles/fs-s3900-24t4s-r.json';
 import hq from '../../examples/node-3d/hmi/src/lib/hq.topology.json';
 import { validateProfile, resolveParts, type ChassisProfile } from '../src/lib/hardware/profile.js';
-import { checkLink, linkAt, linkTags, portPart, resolveEnd, readEnd, linkFacts, type Plant, type Topology } from '../src/lib/hardware/topology.js';
-import { cablesOverlay, interfacesOverlay, type OverlayColors } from '../src/lib/hardware/overlay.js';
+import { checkLink, neighbourhood, focusFade, linkAt, linkTags, portPart, resolveEnd, readEnd, linkFacts, type Plant, type Topology } from '../src/lib/hardware/topology.js';
+import { cablesOverlay, interfacesOverlay, identifyOverlay, identify, type OverlayColors } from '../src/lib/hardware/overlay.js';
 import { meshLayout } from '../src/lib/hardware/mesh.js';
 import { placeDevice, endInRack, cablePath, RACK_U_MM, type RackLayout } from '../src/lib/hardware/rack.js';
 
@@ -192,5 +192,39 @@ describe('the mesh', () => {
 		const pair = edges.filter((e) => e.a === 'node1' && e.b === 'sw1');
 		expect(pair.length).toBe(2);
 		expect(pair[0].points[1][0] !== pair[1].points[1][0]).toBe(true);
+	});
+});
+
+describe('focus', () => {
+	it('a device’s neighbourhood: what its cables reach, and those links', () => {
+		const n = neighbourhood(topology, 'node2');
+		expect([...n.neighbours].sort()).toEqual(['node1', 'node3', 'sw2', 'sw3']);
+		expect(n.links.size).toBe(5);
+		expect([...neighbourhood(topology, 'sw1').neighbours].sort()).toEqual(['node1', 'node3', 'site', 'sw2', 'sw3']);
+	});
+	it('fades in three steps: the focus, its neighbours, the rest', () => {
+		expect(focusFade(topology, undefined, 'sw1')).toBe(1);
+		expect(focusFade(topology, 'node2', 'node2')).toBe(1);
+		expect(focusFade(topology, 'node2', 'sw2')).toBe(0.4);
+		expect(focusFade(topology, 'node2', 'sw1')).toBe(0.1);
+	});
+});
+
+describe('the identify overlay', () => {
+	const parts = resolveParts(server, 'NODE1');
+	const byId = (id: string) => parts.find((p) => p.partId === id)!;
+	const ctx = { node: 'NODE1', profile: server, tags: {}, colors };
+	it('says what each part is and where it sits', () => {
+		expect(identify(byId('bay0'), { CapacityGB: 1920, Protocol: 'NVMe' })).toBe('bay 0 · 1.92 TB NVMe');
+		expect(identify(byId('boot0'), { CapacityGB: 240, Protocol: 'SATA' })).toBe('M.2 · 240 GB SATA');
+		expect(identify(byId('dimmA1'), { CapacityGB: 64 })).toBe('A1 · 64 GB');
+		expect(identify(byId('cpu1'), { Model: 'Xeon 6505P', Cores: 12 })).toBe('Xeon 6505P · 12c');
+		expect(identify(byId('psu1'), { CapacityW: 860 })).toBe('PSU1 · 860 W');
+		expect(identify(byId('nicSlot2p2'), {})).toBe('slot2 p2');
+		expect(identify(byId('bmc'), {})).toBe('BMC');
+	});
+	it('a fitted part no driver reports is named from the profile; empty positions stay faint', () => {
+		expect(identifyOverlay.paint(byId('slot1'), undefined, ctx)).toEqual({ color: '#2fa38f', text: 'AOC-SLG4-2H8M2' });
+		expect(identifyOverlay.paint(byId('bay5'), undefined, ctx).dim).toBe(true);
 	});
 });

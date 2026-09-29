@@ -34,7 +34,14 @@ exploded and camera presets in the toolbar.
 - `/rack?mesh` (or **mesh** in the toolbar): the same devices and links as a
   network floating in space — switches on a ring, each server under the two
   switches it is cabled to, every link an arc labelled with its two ports and
-  coloured by the same check. Click a device to go to it in the rack.
+  coloured by the same check. Click a device to focus it in place (its
+  links and what they reach stand out, the rest fades); click again, or
+  **show in rack**, to go to it in the rack (`?mesh=node2`).
+- Focus in the rack fades the same way — the device in full, what its
+  cables reach at 40 %, the rest at 10 % and unpickable — and a server
+  slides out 45 cm on its rails, lid off, so its parts have room.
+- `?overlay=identify`: every part named and coloured by kind (drive,
+  memory, CPU, card, fan, PSU, port).
 
 ```sh
 (cd ../../hmi-3d && npm run package)

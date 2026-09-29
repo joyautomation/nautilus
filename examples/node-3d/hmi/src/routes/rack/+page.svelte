@@ -27,6 +27,11 @@
 		placeDevice,
 		toRack,
 		endInRack,
+		portMouth,
+		portPart,
+		focusFade,
+		neighbourhood,
+		type Placement,
 		cablePath,
 		parseEnd,
 		portReading,
@@ -66,27 +71,59 @@
 	// ── cables ────────────────────────────────────────────────────────
 	let showCables = $state(!params.has('nocables'));
 	let checks = $derived(checkAll(plant, tags));
-	// The drawn path of each link, fixed by the layout: lanes numbered per
-	// side so cables down the same side sit apart.
-	const paths = (() => {
-		const lanes: Record<string, number> = {};
+	// ── focus: the rack, or one device in it ──────────────────────────
+	// (mesh first: the slides read it.)
+	let mesh = $state(params.has('mesh'));
+	let focus = $state<string | null>(params.get('focus'));
+	let focused = $derived(focus ? byTag.get(focus) : undefined);
+	let hood = $derived(focused ? neighbourhood(topology, focused.id) : undefined);
+	// The focused server slides out on its rails, the way it is pulled to
+	// be serviced: its parts get room, it stays in its slot and on its cables.
+	const SLIDE = 0.45;
+	const slides = new Map(devices.map((d) => [d.id, Tween.of(() => (!mesh && focus === d.tag && d.kind === 'server' ? SLIDE : 0), { duration: 700, easing: cubicOut })]));
+	const slid = (p: Placement, s: number): Placement => ({ ...p, pos: [p.pos[0], p.pos[1], p.pos[2] + (p.rotY === 180 ? -s : s)] });
+	const placeOf = (d: (typeof devices)[number]) => slid(d.place, slides.get(d.id)?.current ?? 0);
+
+	// The drawn path of each link, following its ends: lanes numbered per
+	// side (fixed by the layout) so cables down the same side sit apart. A
+	// path is only rebuilt when an end moves.
+	const mouth = (s: string) => {
+		const e = parseEnd(s);
+		const d = devices.find((x) => x.id === e.device);
+		const part = d && e.port ? portPart(d.profile, e.port) : undefined;
+		return d && part ? portMouth(placeOf(d), d.profile, part) : undefined;
+	};
+	const lanes = (() => {
+		const n: Record<string, number> = {};
 		return topology.links.map((link) => {
 			const a = parseEnd(link.a);
 			const b = parseEnd(link.b);
 			const ea = a.port ? endInRack(layout, profileOfId, a.device, a.port) : undefined;
 			const eb = b.port ? endInRack(layout, profileOfId, b.device, b.port) : undefined;
-			if (!ea) return undefined;
+			if (!ea) return 0;
 			const side = (ea.at[0] + (eb?.at[0] ?? ea.at[0]) >= 0 ? 'r' : 'l') + (eb ? '' : 'up');
-			const lane = (lanes[side] = (lanes[side] ?? -1) + 1);
-			return cablePath(layout, ea, eb, lane);
+			return (n[side] = (n[side] ?? -1) + 1);
 		});
 	})();
+	const memo = new Map<number, { key: string; pts: Vec3[] }>();
+	let paths = $derived(
+		topology.links.map((link, i) => {
+			const ea = mouth(link.a);
+			if (!ea) return undefined;
+			const eb = mouth(link.b);
+			const pts = cablePath(layout, ea, eb, lanes[i]);
+			const key = pts.flat().map((v) => v.toFixed(4)).join();
+			const m = memo.get(i);
+			if (m?.key === key) return m.pts;
+			memo.set(i, { key, pts });
+			return pts;
+		})
+	);
 	let counts = $derived(
 		checks.reduce<Record<Verdict, number>>((n, c) => ({ ...n, [c.check.verdict]: n[c.check.verdict] + 1 }), { confirmed: 0, consistent: 0, contradicted: 0, down: 0, unverified: 0 })
 	);
 
 	// ── mesh: the same devices and links as a network ─────────────────
-	let mesh = $state(params.has('mesh'));
 	let edgeLabels = $state(true);
 	const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 	// A line under each device in the mesh: ports with link on a switch,
@@ -105,16 +142,16 @@
 			})
 		)
 	);
+	// Focus in the mesh stays in the mesh: the device, its links and what
+	// they reach stand out; "show in rack" (or a second click) goes physical.
+	let meshFocus = $state<string | null>(params.get('mesh') || null);
 	const MESH: SceneCamera = { pos: [1.55, 2.3, 2.1], target: [0, 0.7, 0], fov: 40 };
 
-	// ── focus: the rack, or one device in it ──────────────────────────
-	let focus = $state<string | null>(params.get('focus'));
-	let focused = $derived(focus ? byTag.get(focus) : undefined);
 	let lid = $state<'on' | 'off'>('off');
 	let xray = $state(false);
 	let exploded = $state(false);
 	const overlays = [...OVERLAYS, cablesOverlay(plant)];
-	let overlayId = $state<string | null>(params.get('overlay') ?? 'cables');
+	let overlayId = $state<string | null>(params.get('overlay'));
 	let overlay = $derived(overlays.find((o) => o.id === overlayId));
 
 	const top = layout.base! / 1000 + (layout.units * 44.45) / 1000;
@@ -133,11 +170,12 @@
 			const t = toRack(d.place, [0, 0.022, 0]);
 			return { pos: [t[0] + 0.12, t[1] + 0.16, t[2] + (d.place.rotY === 180 ? -0.62 : 0.62)], target: t, fov: 40 };
 		}
-		// Below the switches, off the rear corner: the parts through the open
-		// lid and the rear I/O with its cables.
-		const t = toRack(d.place, [0, 0.02, -0.4]);
-		const back = d.place.rotY === 180 ? 1 : -1;
-		return { pos: [t[0] - 0.38, t[1] + 0.2, t[2] + back * 0.72], target: t, fov: 40 };
+		// From the front and above: slid out on its rails, nothing is over
+		// it, so the open lid shows every part; the rear I/O and its cables
+		// run back into the rack behind.
+		const t = toRack(slid(d.place, SLIDE), [0, 0.02, -0.25]);
+		const front = d.place.rotY === 180 ? -1 : 1;
+		return { pos: [t[0] + 0.3, t[1] + 0.62, t[2] + front * 0.62], target: t, fov: 40 };
 	};
 	let aspect = $state(typeof window !== 'undefined' ? window.innerWidth / window.innerHeight : 1.6);
 	const framed = (c: SceneCamera): SceneCamera => {
@@ -154,12 +192,13 @@
 	const deviceOf = (id: string) => id.split('/')[0];
 	function pick(id: string) {
 		const dev = deviceOf(id);
-		// In the mesh a device is a node: picking it goes to it in the rack.
+		// In the mesh the first pick focuses the device there; a second
+		// takes it to the rack.
 		if (mesh) {
-			mesh = false;
-			focus = dev;
-			open = false;
+			const id = byTag.get(dev)?.id ?? null;
 			selected = null;
+			if (meshFocus !== id) meshFocus = id;
+			else showInRack();
 			return;
 		}
 		if (focus !== dev) {
@@ -185,6 +224,18 @@
 	);
 	let legendCtx = $derived<OverlayContext | undefined>(focused ? { node: focused.tag, profile: focused.profile, tags, colors } : undefined);
 
+	function showInRack() {
+		const d = devices.find((x) => x.id === meshFocus);
+		mesh = false;
+		meshFocus = null;
+		if (d) focus = d.tag;
+	}
+	function toMesh() {
+		// Keep the context: the device in focus stays in focus in the mesh.
+		meshFocus = focused?.id ?? null;
+		mesh = true;
+		back();
+	}
 	function back() {
 		focus = null;
 		open = false;
@@ -202,7 +253,7 @@
 	});
 </script>
 
-<svelte:window onresize={() => (aspect = window.innerWidth / window.innerHeight)} onkeydown={(e) => e.key === 'Escape' && !open && back()} />
+<svelte:window onresize={() => (aspect = window.innerWidth / window.innerHeight)} onkeydown={(e) => e.key === 'Escape' && !open && (mesh ? (meshFocus = null) : back())} />
 
 <svelte:head><title>HQ rack · 3D</title></svelte:head>
 
@@ -210,17 +261,19 @@
 	<SceneView {rt} {alarms} {camera} grid={{ pos: [0, 0, -D / 2], cell: 0.1, section: 0.5, size: [4, 4] }} inspector={false} bind:selected onselect={pick} perf={params.has('perf') || aspect > 1}>
 		<Studio />
 		{#if mesh}
-			<NetworkMesh {topology} {checks} {colors} {summary} labels={edgeLabels} />
+			<NetworkMesh {topology} {checks} {colors} {summary} labels={edgeLabels} focus={meshFocus ?? undefined} />
 		{:else}
 		<Rack {layout} label={layout.name} />
 		{#each devices as d (d.id)}
 			{@const on = focus === d.tag}
+			{@const fade = focusFade(topology, focused?.id, d.id)}
 			<Server
 				profile={d.profile}
 				node={d.tag}
 				kind={d.kind}
-				label={d.hostname ?? d.id}
-				pos={d.place.pos}
+				label={fade > 0.2 ? (d.hostname ?? d.id) : ''}
+				pos={placeOf(d).pos}
+				{fade}
 				rot={[0, d.place.rotY, 0]}
 				lid={on && d.kind === 'server' ? lid : 'on'}
 				xray={on && xray}
@@ -233,17 +286,23 @@
 			{#each checks as c, i (i)}
 				{@const pts = paths[i]}
 				{#if pts}
-					<Cable points={pts} color={verdictColor(c.check.verdict, colors)} faint={c.check.verdict === 'unverified'} />
+					<Cable points={pts} color={verdictColor(c.check.verdict, colors)} faint={c.check.verdict === 'unverified'} opacity={!hood || hood.links.has(i) ? 1 : 0.08} />
 				{/if}
 			{/each}
 		{/if}
 		{/if}
 		{#snippet hud()}
 			<div class="bar" role="toolbar" aria-label="Views">
-				<button class:on={!mesh} onclick={() => (mesh = false)}>physical</button>
-				<button class:on={mesh} onclick={() => ((mesh = true), back())}>mesh</button>
+				<button class:on={!mesh} onclick={() => (meshFocus ? showInRack() : (mesh = false))}>physical</button>
+				<button class:on={mesh} onclick={toMesh}>mesh</button>
 				<span class="sep"></span>
 				{#if mesh}
+					{#if meshFocus}
+						<button onclick={() => (meshFocus = null)}>← all</button>
+						<b class="where">{topology.devices.find((d) => d.id === meshFocus)?.hostname ?? meshFocus}</b>
+						<button onclick={showInRack}>show in rack →</button>
+						<span class="sep"></span>
+					{/if}
 					<button class:on={edgeLabels} onclick={() => (edgeLabels = !edgeLabels)}>port labels</button>
 				{:else if focused}
 					<button onclick={back}>← rack</button>
@@ -298,7 +357,7 @@
 				{#each checks as c}
 					<li title={c.check.reasons.join('; ')}>
 						<i style:background={verdictColor(c.check.verdict, colors)}></i>
-						<button class="link" onclick={() => c.check.a.device && ((mesh = false), (focus = c.check.a.device.tag))}>
+						<button class="link" onclick={() => c.check.a.device && (mesh ? (meshFocus = c.check.a.device.id) : (focus = c.check.a.device.tag))}>
 							{VERDICT_MARK[c.check.verdict]} {c.check.a.label} ↔ {c.check.b.label}
 						</button>
 					</li>

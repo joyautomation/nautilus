@@ -14,6 +14,7 @@ export { default as PerfHud } from './components/PerfHud.svelte';
 // and pipe as components, inside <Scene3D> or inside a component that
 // defines a kind. A <Node> inside a <Node> is a part.
 export { default as Node } from './components/Node.svelte';
+export { default as Fade } from './components/Fade.svelte';
 export { default as Pipe } from './components/Pipe.svelte';
 export { SCENE, NODE } from './context.js';
 export type { SceneContext, NodeContext, PlacedNode } from './context.js';

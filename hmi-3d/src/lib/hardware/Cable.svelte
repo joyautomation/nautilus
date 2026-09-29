@@ -14,7 +14,8 @@
 		radius = 0.0022,
 		bend = 0.025,
 		arc = false,
-		faint = false
+		faint = false,
+		opacity = 1
 	}: {
 		points: Vec3[];
 		color: string;
@@ -23,7 +24,10 @@
 		/** Three points: one smooth arc from the first to the last, the middle its control point (a mesh edge). */
 		arc?: boolean;
 		faint?: boolean;
+		/** Fade the whole cable (a focused view's background). */
+		opacity?: number;
 	} = $props();
+	let alpha = $derived((faint ? 0.45 : 1) * opacity);
 
 	function route(pts: Vector3[]): CurvePath<Vector3> {
 		const path = new CurvePath<Vector3>();
@@ -49,5 +53,5 @@
 </script>
 
 <T.Mesh {geometry} raycast={() => {}}>
-	<T.MeshStandardMaterial {color} roughness={0.7} transparent={faint} opacity={faint ? 0.45 : 1} />
+	<T.MeshStandardMaterial {color} roughness={0.7} transparent={alpha < 1} opacity={alpha} depthWrite={alpha >= 1} />
 </T.Mesh>

@@ -267,3 +267,27 @@ export function linkFacts(check: LinkCheck, near: 'a' | 'b', link: TopoLink): { 
 	if (link.evidence) rows.push({ label: 'Declared from', value: link.evidence });
 	return rows;
 }
+
+/** A device's neighbourhood, for a focused view: the devices its cables
+ * reach and the indices of those links. Far ends outside the model (the
+ * site) count as neighbours by name. */
+export function neighbourhood(t: Topology, device: string): { neighbours: Set<string>; links: Set<number> } {
+	const neighbours = new Set<string>();
+	const links = new Set<number>();
+	t.links.forEach((l, i) => {
+		const a = parseEnd(l.a).device;
+		const b = parseEnd(l.b).device;
+		if (a !== device && b !== device) return;
+		links.add(i);
+		neighbours.add(a === device ? b : a);
+	});
+	neighbours.delete(device);
+	return { neighbours, links };
+}
+
+/** How strongly to draw a device while `focus` has the focus: itself in
+ * full, what its cables reach readable, the rest very faint. */
+export function focusFade(t: Topology, focus: string | undefined, device: string): number {
+	if (!focus || focus === device) return 1;
+	return neighbourhood(t, focus).neighbours.has(device) ? 0.4 : 0.1;
+}

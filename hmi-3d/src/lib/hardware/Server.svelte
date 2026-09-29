@@ -21,6 +21,7 @@
 	import { cubicOut } from 'svelte/easing';
 	import type { Component } from 'svelte';
 	import Node from '../components/Node.svelte';
+	import Fade from '../components/Fade.svelte';
 	import type { Vec3 } from '../scene.js';
 	import { mm, resolveParts, type ChassisProfile, type PartKind, tagFor } from './profile.js';
 	import { DEFAULT_MODELS } from './look.js';
@@ -46,6 +47,7 @@
 		codeImages,
 		overlay,
 		kind = 'server',
+		fade = 1,
 		models = DEFAULT_MODELS
 	}: {
 		profile: ChassisProfile;
@@ -66,6 +68,9 @@
 		 * colour and text paint the parts, the rest go faint (overlay.ts).
 		 * The shell turns see-through while one is on: the answer is inside. */
 		overlay?: Overlay;
+		/** Draw the whole server at this opacity (1 = as it is): the rest of a
+		 * rack while one device has the focus. Faint ones do not pick. */
+		fade?: number;
 		/** The chassis node's kind (`server`, `switch`). */
 		kind?: string;
 		/** Where the part library (models/hardware/*.glb) is served. */
@@ -149,7 +154,8 @@
 </script>
 
 <T.Group position={pos} rotation={rot ? [rot[0] * deg, rot[1] * deg, rot[2] * deg] : [0, 0, 0]}>
-	<Node id={node} tag={chassisTag} {kind} label={label ?? node} pos={[0, 0, 0]} bounds={chassisBox}>
+<Fade amount={fade}>
+	<Node id={node} tag={chassisTag} {kind} label={overlay ? '' : (label ?? node)} pos={[0, 0, 0]} bounds={chassisBox}>
 		{#snippet children(p)}
 			<Chassis {profile} {lid} xray={xray || !!overlay} {lidOffset} {anchor} {codeImages} good={p.good} />
 		{/snippet}
@@ -195,6 +201,7 @@
 			<span class="ov sensor" style:--c={q.paint?.color ?? '#6b6b68'}>{q.name} {q.paint?.text ?? '—'}</span>
 		</HTML>
 	{/each}
+</Fade>
 </T.Group>
 
 <style>
