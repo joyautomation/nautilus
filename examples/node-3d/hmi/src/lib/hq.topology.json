@@ -159,7 +159,14 @@
 			"a": "sw1/g0/1",
 			"b": "site",
 			"rateGbps": 1,
-			"evidence": "site.json (office / SITE core uplink)"
+			"evidence": "site.json: the office uplink (trunk VLANs 20/21/22); unplugged after the VLAN cutover, 2026-09-29"
+		},
+		{
+			"kind": "bench",
+			"a": "sw1/g0/23",
+			"b": "mira1",
+			"rateGbps": 1,
+			"evidence": "cluster-hq, 2026-09-29: mira1's bring-up trunk (bench gateway, VLANs 20/21/22); removed at delivery"
 		}
 	],
 	"note": "From randd/node-3d-sim (build-topology.py) over cluster-hq's network design; MACs and subnets removed for the repo."

@@ -21,7 +21,7 @@ exploded and camera presets in the toolbar.
   ✗ contradicted, ↓ down, ? unverified.
 - `/rack`: the whole cluster racked — three nodes and three S3900 switches
   (`hmi-3d/profiles/fs-s3900-24t4s-r.json`) placed by `hmi/src/lib/hq.rack.json`
-  (units and faces **assumed** until measured), every cable drawn between its
+  (not racked yet: a default of switches on top, ports front, nodes below), every cable drawn between its
   exact ports and coloured by its check. Click a device to zoom in (lid,
   x-ray, exploded, overlays), a part for its faceplate; `?focus=NODE2`,
   `?view=cables|rear|front`. The switches are live only where the controller

@@ -69,14 +69,20 @@ export function meshLayout(t: Topology, opts: { radius?: number; serverRadius?: 
 		...switches.map((d) => ({ id: d.id, kind: d.kind, pos: on(radius, switchY, angle.get(d.id)!) })),
 		...servers.map((d) => ({ id: d.id, kind: d.kind, pos: on(serverRadius, serverY, angle.get(d.id)!) }))
 	];
-	// Far ends outside the model, above the device they hang off.
+	// Far ends outside the model, above the device they hang off — a second
+	// one on the same device turned aside, so they never overlap.
+	const hung = new Map<string, number>();
 	for (const l of t.links) {
 		for (const s of [l.a, l.b]) {
 			const id = parseEnd(s).device;
 			if (deviceById(t, id) || nodes.some((n) => n.id === id)) continue;
 			const other = parseEnd(s === l.a ? l.b : l.a).device;
 			const near = nodes.find((n) => n.id === other);
-			nodes.push({ id, kind: 'outside', pos: near ? [near.pos[0] * 1.3, outsideY, near.pos[2] * 1.3] : [0, outsideY, 0] });
+			const k = hung.get(other) ?? 0;
+			hung.set(other, k + 1);
+			const a = near ? Math.atan2(near.pos[0], near.pos[2]) + k * 0.6 : 0;
+			const r = near ? Math.hypot(near.pos[0], near.pos[2]) * 1.3 : 0;
+			nodes.push({ id, kind: 'outside', pos: on(r, outsideY, a) });
 		}
 	}
 

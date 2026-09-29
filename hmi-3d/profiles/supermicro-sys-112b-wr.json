@@ -10,7 +10,7 @@
 		"inventory": "BMC capture 2026-09-27 (cluster-hq inventory/redfish-20260927-live/node1)",
 		"measured": "2026-09-28 from a top-down photo with the lid off: fan wall, board, CPU, DIMM banks, riser (M.2 RAID card AOC-SLG4-2H8M2 + NICs), PSUs, power distribution cage, fixed front cover.",
 		"manuals": "MNL-2688 (SYS-112B-WR): front bays 2 x 5 numbered up the columns, rear slots and PSU order. MNL-2675 (X14SBW-F): DIMM and fan-header layout.",
-		"unverified": "Which four front bays are NVMe (0-3 assumed); FAN numbering (inferred from the board headers)."
+		"unverified": "FAN numbering (inferred from the board headers); NIC port 1 = the lower MAC of each card (convention, not checked at the cage). Bays 0-3 as the NVMe bays is confirmed from the Redfish inventory (cluster-hq, 2026-09-29)."
 	},
 	"size": [437, 43.0, 597],
 	"shell": {"wall": 1, "lid": 1, "floor": 1, "bezel": 20, "frontCover": 150},

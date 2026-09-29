@@ -49,7 +49,7 @@ describe('declared links', () => {
 	});
 	it('every link end in the office topology is a real port', () => {
 		for (const l of topology.links) for (const s of [l.a, l.b]) if (s.includes('/')) expect(resolveEnd(plant, s).tag !== undefined).toBe(true);
-		expect(linkTags(plant).length).toBe(31);
+		expect(linkTags(plant).length).toBe(32);
 	});
 	it('find the link on a port from either side', () => {
 		expect(linkAt(topology, 'node1', portPart(server, 'nicSlot2p2')!)?.near).toBe('a');
@@ -182,13 +182,14 @@ describe('the mesh', () => {
 		expect([deg('sw1'), deg('sw2'), deg('sw3')]).toEqual([0, 120, 240]);
 		expect([deg('node1'), deg('node2'), deg('node3')]).toEqual([60, 180, 300]);
 	});
-	it('puts the site, outside the model, above the switch it hangs off', () => {
+	it('puts far ends outside the model above the switch they hang off, apart', () => {
 		const site = nodes.find((n) => n.id === 'site')!;
 		expect(site.kind).toBe('outside');
 		expect(deg('site')).toBe(0);
+		expect(deg('mira1')).toBe(34);
 	});
 	it('draws every link, parallel links between one pair bowed apart', () => {
-		expect(edges.length).toBe(16);
+		expect(edges.length).toBe(17);
 		const pair = edges.filter((e) => e.a === 'node1' && e.b === 'sw1');
 		expect(pair.length).toBe(2);
 		expect(pair[0].points[1][0] !== pair[1].points[1][0]).toBe(true);
@@ -200,7 +201,7 @@ describe('focus', () => {
 		const n = neighbourhood(topology, 'node2');
 		expect([...n.neighbours].sort()).toEqual(['node1', 'node3', 'sw2', 'sw3']);
 		expect(n.links.size).toBe(5);
-		expect([...neighbourhood(topology, 'sw1').neighbours].sort()).toEqual(['node1', 'node3', 'site', 'sw2', 'sw3']);
+		expect([...neighbourhood(topology, 'sw1').neighbours].sort()).toEqual(['mira1', 'node1', 'node3', 'site', 'sw2', 'sw3']);
 	});
 	it('fades in three steps: the focus, its neighbours, the rest', () => {
 		expect(focusFade(topology, undefined, 'sw1')).toBe(1);
