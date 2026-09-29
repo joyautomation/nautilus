@@ -96,7 +96,20 @@
 			z-index: 20;
 			overflow: auto;
 			overscroll-behavior: contain;
-			background: var(--surface, #161615);
+			/* Mildly see-through, so the server stays in view behind the
+			   faceplate; the blur keeps the text readable over it. */
+			background: transparent;
+			backdrop-filter: blur(3px);
+			-webkit-backdrop-filter: blur(3px);
+		}
+		.host :global(.fp.page) {
+			background: transparent;
+		}
+		.host :global(.fp.page > .box) {
+			background: color-mix(in srgb, var(--surface, #1a1a19) 86%, transparent);
+		}
+		.host :global(.fp.page header) {
+			background: color-mix(in srgb, var(--surface, #1a1a19) 92%, transparent);
 		}
 	}
 	.hero {
