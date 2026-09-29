@@ -9,6 +9,7 @@ import {
 	resolveParts,
 	serverTags,
 	tagFor,
+	anchorPayload,
 	partState,
 	partStatus,
 	partFacts,
@@ -39,8 +40,16 @@ describe('the SYS-112B-WR profile', () => {
 		for (const t of ['NODE1', 'NODE1_Drive_NVMe0', 'NODE1_Drive_NVMe3', 'NODE1_Drive_Boot0', 'NODE1_Drive_Boot4', 'NODE1_Pcie_Slot2', 'NODE1_Pcie_Slot3', 'NODE1_Dimm_A1', 'NODE1_Dimm_G1', 'NODE1_Cpu1', 'NODE1_Fan6', 'NODE1_PSU2'])
 			expect(tags).toContain(t);
 	});
-	it('carries a QR anchor on the chassis', () => {
-		expect(profile.anchors?.qr?.size).toBe(100);
+	it('carries its AR anchors: the bench label and the racked pair 154 mm apart', () => {
+		expect(profile.anchors?.lid?.size).toBe(100);
+		const l = profile.anchors!['blanks-left'].pos, r = profile.anchors!['blanks-right'].pos;
+		expect(r[0] - l[0]).toBe(154);
+		expect(anchorPayload(profile.anchors!['blanks-left'], 'NODE1')).toBe('NAUT:NODE1/L');
+	});
+	it('wants an anchor\'s up perpendicular to its normal', () => {
+		const p = clone();
+		p.anchors!.lid.up = [0, 1, 0];
+		expect(validateProfile(p).map((e) => e.path)).toEqual(['/anchors/lid/up']);
 	});
 });
 

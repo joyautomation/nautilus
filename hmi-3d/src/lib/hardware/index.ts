@@ -17,6 +17,7 @@ export {
 	resolveParts,
 	serverTags,
 	tagFor,
+	anchorPayload,
 	partState,
 	partStatus,
 	partFacts,

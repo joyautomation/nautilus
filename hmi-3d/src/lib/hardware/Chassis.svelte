@@ -1,13 +1,13 @@
 <script lang="ts">
 	// The chassis a profile describes: floor, side walls, front ears, the
-	// board plate and the drive backplane, a removable lid behind a fixed front cover, fixed internals, and the QR label
-	// where the profile's `qr` anchor puts it. Metres, in the profile's
+	// board plate and the drive backplane, a removable lid behind a fixed front cover, fixed internals, and the
+	// printed codes where the profile's anchors put them. Metres, in the profile's
 	// frame (origin at the bottom centre of the front face, +z out of the
 	// front). Only the floor and an opaque lid take clicks — a wall seen
 	// edge-on must not steal a pick from the part behind it, and in x-ray
 	// nothing of the shell does.
 	import { T } from '@threlte/core';
-	import { Mesh } from 'three';
+	import { Euler, Matrix4, Mesh, Vector3 } from 'three';
 	import { mm, type ChassisProfile } from './profile.js';
 	import type { Vec3 } from '../scene.js';
 
@@ -24,7 +24,7 @@
 		xray?: boolean;
 		/** The lid's exploded offset, metres. */
 		lidOffset?: Vec3;
-		/** Draw the QR label at the profile's `qr` anchor. */
+		/** Draw the printed codes at the profile's anchors. */
 		anchor?: boolean;
 		good?: boolean;
 	} = $props();
@@ -46,17 +46,20 @@
 	let fixtures = $derived((profile.fixtures ?? []).map((f) => ({ pos: mm(f.pos), size: mm(f.size) })));
 	let backplane = $derived(profile.backplane ? { pos: mm(profile.backplane.pos), size: mm(profile.backplane.size) } : undefined);
 
-	// The label, as the AR layer will see it: a square on the anchor's plane,
-	// its three finder patterns at the corners away from the bottom right.
-	let qr = $derived(profile.anchors?.qr);
-	let qrQuat = $derived.by(() => {
-		if (!qr) return [0, 0, 0] as Vec3;
-		// Plane lies in xy facing +z; turn it to face `normal` with `up` up.
-		const [nx, ny, nz] = qr.normal;
-		if (ny > 0.9) return [-Math.PI / 2, 0, Math.atan2(-qr.up[0], -qr.up[2])] as Vec3;
-		if (ny < -0.9) return [Math.PI / 2, 0, 0] as Vec3;
-		return [0, Math.atan2(nx, nz), 0] as Vec3;
-	});
+	// The printed codes, as the AR layer will see them: a square on each
+	// anchor's plane, turned so its top edge points along `up`, its three
+	// finder patterns at the corners away from the bottom right.
+	let codes = $derived(
+		Object.entries(profile.anchors ?? {}).map(([id, a]) => {
+			const n = new Vector3(...a.normal).normalize();
+			const up = new Vector3(...a.up).normalize();
+			const right = new Vector3().crossVectors(up, n);
+			const e = new Euler().setFromRotationMatrix(new Matrix4().makeBasis(right, up, n));
+			// Lift it off its surface along the normal, so it never z-fights.
+			const p = mm(a.pos).map((v, i) => v + [n.x, n.y, n.z][i] * 0.0006) as Vec3;
+			return { id, pos: p, rot: [e.x, e.y, e.z] as Vec3, s: a.size / 1000 };
+		})
+	);
 </script>
 
 <!-- floor -->
@@ -101,21 +104,22 @@
 		<T.MeshStandardMaterial {...shell} />
 	</T.Mesh>
 {/if}
-<!-- the QR label, where the profile's anchor puts it -->
-{#if anchor && qr}
-	{@const s = qr.size / 1000}
-	<T.Group position={[qr.pos[0] / 1000, qr.pos[1] / 1000 + 0.0006, qr.pos[2] / 1000]} rotation={qrQuat}>
-		<T.Mesh raycast={noRaycast}>
-			<T.PlaneGeometry args={[s, s]} />
-			<T.MeshBasicMaterial color="#f4f4f0" transparent={xray} opacity={xray ? 0.5 : 1} />
-		</T.Mesh>
-		{#each [[-1, 1], [1, 1], [-1, -1]] as [fx, fy]}
-			<T.Mesh position={[fx * s * 0.34, fy * s * 0.34, 0.0003]} raycast={noRaycast}>
-				<T.PlaneGeometry args={[s * 0.24, s * 0.24]} />
-				<T.MeshBasicMaterial color="#111" transparent={xray} opacity={xray ? 0.5 : 1} />
+<!-- the printed codes, where the profile's anchors put them -->
+{#if anchor}
+	{#each codes as c (c.id)}
+		<T.Group position={c.pos} rotation={c.rot}>
+			<T.Mesh raycast={noRaycast}>
+				<T.PlaneGeometry args={[c.s, c.s]} />
+				<T.MeshBasicMaterial color="#f4f4f0" transparent={xray} opacity={xray ? 0.5 : 1} />
 			</T.Mesh>
-		{/each}
-	</T.Group>
+			{#each [[-1, 1], [1, 1], [-1, -1]] as [fx, fy]}
+				<T.Mesh position={[fx * c.s * 0.34, fy * c.s * 0.34, 0.0003]} raycast={noRaycast}>
+					<T.PlaneGeometry args={[c.s * 0.24, c.s * 0.24]} />
+					<T.MeshBasicMaterial color="#111" transparent={xray} opacity={xray ? 0.5 : 1} />
+				</T.Mesh>
+			{/each}
+		</T.Group>
+	{/each}
 {/if}
 {#if lid === 'on' || xray}
 	<T.Group position={lidOffset}>

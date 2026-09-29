@@ -25,6 +25,7 @@
 		"@sveltejs/vite-plugin-svelte": "^7.3.1",
 		"@types/node": "^26.6.3",
 		"@types/three": "^0.186.0",
+		"qrcode": "^1.5.4",
 		"svelte": "^5.57.1",
 		"svelte-check": "^4.7.6",
 		"typescript": "^6.0.3",

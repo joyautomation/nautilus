@@ -21,12 +21,29 @@
 	"backplane": {"pos": [0, 21.5, -146], "size": [415, 38, 2]},
 	"explodeLid": [0, 160, 0],
 	"anchors": {
-		"qr": {
+		"lid": {
 			"pos": [-110, 43.0, -75],
 			"normal": [0, 1, 0],
 			"up": [0, 0, -1],
 			"size": 100,
-			"note": "Proposed: a 100 mm label on the fixed front cover, left of the Supermicro label, top edge toward the rear: it stays put when the lid comes off. Hidden in a rack; decide with the AR workstream."
+			"payload": "url",
+			"note": "Bench: a 100 mm label on the fixed front cover, left of the Supermicro label, top edge toward the rear. Hidden once racked."
+		},
+		"blanks-left": {
+			"pos": [-26, 21, 0.5],
+			"normal": [0, 0, 1],
+			"up": [0, 1, 0],
+			"size": 34,
+			"payload": "NAUT:{node}/L",
+			"note": "Racked: a 34 mm code across the blanks of bays 4 and 5 (the third column), centred on the seam. Needs both bays empty."
+		},
+		"blanks-right": {
+			"pos": [128, 21, 0.5],
+			"normal": [0, 0, 1],
+			"up": [0, 1, 0],
+			"size": 34,
+			"payload": "NAUT:{node}/R",
+			"note": "Racked: the pair's other half, across the blanks of bays 8 and 9 (the fifth column); 154 mm from blanks-left."
 		}
 	},
 	"types": {

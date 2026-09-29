@@ -48,7 +48,7 @@
 		lid?: 'on' | 'off';
 		xray?: boolean;
 		exploded?: boolean;
-		/** Draw the QR label at the profile's anchor. */
+		/** Draw the printed codes at the profile's anchors. */
 		anchor?: boolean;
 		/** Where the part library (models/hardware/*.glb) is served. */
 		models?: string;

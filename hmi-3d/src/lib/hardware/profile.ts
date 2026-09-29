@@ -40,6 +40,10 @@ export interface ProfileAnchor {
 	up: Vec3;
 	/** Printed edge length of the code, mm. */
 	size: number;
+	/** What the code encodes: `url` (the asset page, readable by any
+	 * camera app) or a short text with `{node}` — `NAUT:{node}/L` — which
+	 * fits the smallest QR version, for codes too small for a URL. */
+	payload?: string;
 	note?: string;
 }
 
@@ -58,7 +62,8 @@ export interface ChassisProfile {
 	fixtures?: { id: string; name?: string; pos: Vec3; size: Vec3 }[];
 	backplane?: { pos: Vec3; size: Vec3 };
 	explodeLid?: Vec3;
-	/** Registration points for AR: `qr` is where the label sits. */
+	/** Registration points for AR: where each printed code sits. Several
+	 * codes far apart hold a steadier pose than one large one. */
 	anchors?: Record<string, ProfileAnchor>;
 	/** The contract each part kind reads: the UDT and its members. */
 	types?: Record<string, { type: string; members: string[] }>;
@@ -134,8 +139,10 @@ export function validateProfile(p: unknown): { path: string; message: string }[]
 		if (k !== 'chassis' && !ids.has(k)) e(`/bindings/${k}`, `no part "${k}"`);
 		if (typeof t !== 'string' || !t.includes('{node}')) e(`/bindings/${k}`, 'a tag name with {node} for the node prefix');
 	}
-	const qr = o.anchors?.qr;
-	if (qr && (!isVec3(qr.pos) || !isVec3(qr.normal) || !isVec3(qr.up) || !(qr.size > 0))) e('/anchors/qr', 'pos, normal, up (vectors) and size (mm)');
+	for (const [k, a] of Object.entries(o.anchors ?? {})) {
+		if (!a || !isVec3(a.pos) || !isVec3(a.normal) || !isVec3(a.up) || !(a.size > 0)) e(`/anchors/${k}`, 'pos, normal, up (vectors) and size (mm)');
+		else if (Math.abs(a.normal[0] * a.up[0] + a.normal[1] * a.up[1] + a.normal[2] * a.up[2]) > 1e-6) e(`/anchors/${k}/up`, 'must be perpendicular to normal');
+	}
 	return errs;
 }
 
@@ -336,6 +343,12 @@ export function serverFacts(value: unknown): Fact[] {
 	add('Hottest sensor', n('MaxTempC', ' °C'));
 	add('Serial', str(member(value, 'Serial')));
 	return rows;
+}
+
+/** An anchor's payload for one node: `{node}` filled in; `url` stays `url`
+ * (the caller knows its HMI's address). */
+export function anchorPayload(a: ProfileAnchor, node: string): string {
+	return tagFor(a.payload ?? 'url', node);
 }
 
 /** Millimetres → the metres a scene uses. */
