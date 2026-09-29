@@ -75,16 +75,17 @@ def mats():
 
 
 def build_drive():
-    """A 2.5in hot-swap carrier, 40 x 38 x 128, bezel at +z."""
+    """A 2.5in hot-swap carrier lying flat, 74 x 18.5 x 140, bezel at +z."""
     reset()
     M = mats()
-    b("Body", M["dark"], (38, 34, 120), (0, 0, -4))
-    b("Bezel", M["plastic"], (40, 38, 6), (0, 0, 61))
-    # The latch strip across the bezel: the colour a carrier's tab shows.
-    b("Accent", M["accent"], (30, 6, 1.5), (0, -11, 64.5))
-    vents = [b(f"Vent{i}", M["dark"], (2, 18, 1), (-12 + i * 4, 6, 64.2)) for i in range(7)]
+    b("Body", M["dark"], (72, 16, 132), (0, 0, -4))
+    b("Bezel", M["plastic"], (74, 18.5, 6), (0, 0, 67))
+    # The release latch across the right of the bezel: the tab colour.
+    b("Accent", M["accent"], (22, 5, 1.5), (22, -3, 70.5))
+    vents = [b(f"Vent{i}", M["dark"], (2.2, 11, 1), (-32 + i * 4.4, 0, 70.2)) for i in range(9)]
     join("Vents", vents)
-    b("Led", M["led"], (4, 3, 1.5), (14, 13, 64.5))
+    b("Led", M["led"], (3, 3, 1.5), (-34, 5.5, 70.5))
+    b("Led2", M["led"], (3, 3, 1.5), (-34, -5.5, 70.5))
     export(os.path.join(OUT, "drive.glb"))
 
 

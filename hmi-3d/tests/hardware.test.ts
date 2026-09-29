@@ -54,7 +54,7 @@ describe('resolveParts', () => {
 	});
 	it('converts millimetres to metres and keeps extras as props', () => {
 		const bay0 = parts.find((p) => p.partId === 'bay0')!;
-		expect(bay0.size).toEqual([0.04, 0.038, 0.14]);
+		expect(bay0.size).toEqual([0.074, 0.0185, 0.14]);
 		expect(bay0.props.bus).toBe('nvme');
 		expect(bay0.props.id).toBe(undefined);
 	});
