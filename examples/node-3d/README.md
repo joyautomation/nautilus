@@ -27,6 +27,10 @@ exploded and camera presets in the toolbar.
   `?view=cables|rear|front`. The switches are live only where the controller
   polls them (hq-sw1 on `:8081` today): serve with
   `CONTROLLER_URL=http://localhost:8081`.
+- **Simulation mode**: the whole cluster with no hardware —
+  `randd/node-3d-sim/sim` replays the recorded switches and BMCs through
+  `naut snmp serve` / `naut redfish serve` into a controller on `:8085`;
+  serve with `CONTROLLER_URL=http://localhost:8085`.
 - `/rack?mesh` (or **mesh** in the toolbar): the same devices and links as a
   network floating in space — switches on a ring, each server under the two
   switches it is cabled to, every link an arc labelled with its two ports and
