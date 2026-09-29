@@ -150,6 +150,48 @@
 			"Fault": false,
 			"TempC": 58,
 			"Pct": 0
+		},
+		"NODE1_Nic_Slot2_P1": {
+			"Name": "AOC-S25G6-M2S port 1",
+			"LinkUp": true,
+			"SpeedGbps": 25,
+			"MAC": "(redacted)"
+		},
+		"NODE1_Nic_Slot2_P2": {
+			"Name": "AOC-S25G6-M2S port 2",
+			"LinkUp": true,
+			"SpeedGbps": 10,
+			"MAC": "(redacted)"
+		},
+		"NODE1_Nic_Slot3_P1": {
+			"Name": "AOC-S25G6-M2S port 1",
+			"LinkUp": true,
+			"SpeedGbps": 25,
+			"MAC": "(redacted)"
+		},
+		"NODE1_Nic_Slot3_P2": {
+			"Name": "AOC-S25G6-M2S port 2",
+			"LinkUp": true,
+			"SpeedGbps": 10,
+			"MAC": "(redacted)"
+		},
+		"NODE1_Nic_LAN1": {
+			"Name": "Onboard LAN1",
+			"LinkUp": false,
+			"SpeedGbps": 0,
+			"MAC": "(redacted)"
+		},
+		"NODE1_Nic_LAN2": {
+			"Name": "Onboard LAN2",
+			"LinkUp": false,
+			"SpeedGbps": 0,
+			"MAC": "(redacted)"
+		},
+		"NODE1_Nic_BMC": {
+			"Name": "BMC LAN",
+			"LinkUp": true,
+			"SpeedGbps": 1,
+			"MAC": "(redacted)"
 		}
 	},
 	"live": {

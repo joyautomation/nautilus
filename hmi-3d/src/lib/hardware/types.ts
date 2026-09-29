@@ -2,6 +2,7 @@
 // what <Server> knows from the profile.
 import type { NodeProps } from '../defs.js';
 import type { Vec3 } from '../scene.js';
+import type { PartPaint } from './overlay.js';
 
 export interface PartProps extends NodeProps {
 	/** Extents, metres, from the profile. */
@@ -14,4 +15,6 @@ export interface PartProps extends NodeProps {
 	models?: string;
 	/** Chassis x-ray view is on. */
 	xray?: boolean;
+	/** What the active overlay says about this part, if one is on. */
+	paint?: PartPaint;
 }

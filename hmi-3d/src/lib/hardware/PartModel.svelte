@@ -34,6 +34,7 @@
 		opacity = 1,
 		spin = 0,
 		ports,
+		tint,
 		fallback = '#55585c'
 	}: {
 		src: string;
@@ -49,12 +50,17 @@
 		spin?: number;
 		/** Show `Port1`…`PortN`, hide the rest. */
 		ports?: number;
+		/** An overlay's colour: blended into every material and lit a little,
+		 * so the part reads as that colour whatever it is made of. */
+		tint?: string;
 		/** The box colour until the model arrives (or if it cannot). */
 		fallback?: string;
 	} = $props();
 
 	let root = $state.raw<Object3D | null>(null);
 	const mats: MeshStandardMaterial[] = [];
+	/** Each material's modelled colour, so a tint can be taken off again. */
+	const base = new Map<MeshStandardMaterial, Color>();
 	let ledMats: MeshStandardMaterial[] = [];
 	let accentMats: MeshStandardMaterial[] = [];
 	let rotor: Object3D | undefined;
@@ -75,6 +81,7 @@
 					const m = src.clone();
 					n.material = m;
 					mats.push(m);
+					base.set(m, m.color.clone());
 					if (n.name.startsWith('Led')) ledMats.push(m);
 					if (n.name.startsWith('Accent')) accentMats.push(m);
 					if (/^Port\d/.test(n.name)) portMeshes.push(n);
@@ -102,12 +109,20 @@
 
 	$effect(() => {
 		if (!root) return;
+		const t = tint ? new Color(tint) : undefined;
+		for (const m of mats) {
+			m.color.copy(base.get(m) ?? m.color);
+			if (t) m.color.lerp(t, 0.7);
+			m.emissive = t ? t.clone().multiplyScalar(0.35) : new Color(0);
+			m.emissiveIntensity = t ? 1 : 0;
+		}
 		for (const m of ledMats) {
+			if (t) continue;
 			m.color.set(led ?? '#111');
 			m.emissive = new Color(led ?? '#000');
 			m.emissiveIntensity = led ? 1.6 : 0;
 		}
-		for (const m of accentMats) if (accent) m.color.set(accent);
+		if (!t) for (const m of accentMats) if (accent) m.color.set(accent);
 		for (const m of mats) {
 			m.transparent = opacity < 1;
 			m.opacity = opacity;
@@ -134,6 +149,6 @@
 {:else}
 	<T.Mesh>
 		<T.BoxGeometry args={size} />
-		<T.MeshStandardMaterial color={fallback} transparent={opacity < 1 || failed} opacity={failed ? 0.5 : opacity} />
+		<T.MeshStandardMaterial color={tint ?? fallback} transparent={opacity < 1 || failed} opacity={failed ? 0.5 : opacity} />
 	</T.Mesh>
 {/if}

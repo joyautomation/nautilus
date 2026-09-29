@@ -17,6 +17,7 @@ import {
 	isFitted,
 	type ChassisProfile
 } from '../src/lib/hardware/profile.js';
+import { heatPaint, limitsFor, heatOverlay, interfacesOverlay, freeOverlay, nextDimms, placeLabels, HEAT_RAMP } from '../src/lib/hardware/overlay.js';
 
 const profile = sys112b as unknown as ChassisProfile;
 const clone = (): ChassisProfile => JSON.parse(JSON.stringify(profile));
@@ -126,5 +127,52 @@ describe('part state', () => {
 	});
 	it('substitutes {node}', () => {
 		expect(tagFor('{node}_Fan1', 'NODE2')).toBe('NODE2_Fan1');
+	});
+});
+
+describe('overlays', () => {
+	const colors = { ramp: HEAT_RAMP, good: 'good', warning: 'warn', critical: 'crit', neutral: 'neutral', accent: 'accent' };
+	const parts = resolveParts(profile, 'NODE1');
+	const byId = (id: string) => parts.find((p) => p.partId === id)!;
+	const ctx = (tags: Record<string, unknown>) => ({ node: 'NODE1', profile, tags: { NODE1: { InletTempC: 23 }, ...tags }, colors });
+
+	it('heat: headroom from the inlet to the warning limit, then status past it', () => {
+		expect(heatPaint(23, 70, 75, 23, colors)).toEqual({ color: HEAT_RAMP[0], text: '23°' });
+		expect(heatPaint(69, 70, 75, 23, colors).color).toBe(HEAT_RAMP[4]);
+		expect(heatPaint(71, 70, 75, 23, colors)).toEqual({ color: 'warn', text: '71° HIGH' });
+		expect(heatPaint(80, 70, 75, 23, colors)).toEqual({ color: 'crit', text: '80° CRIT' });
+	});
+	it('heat: limits by kind:bus, and a part with no temperature goes faint', () => {
+		expect(limitsFor(profile, byId('bay0'))).toEqual([70, 75]);
+		expect(limitsFor(profile, byId('boot0'))).toEqual([60, 70]);
+		expect(heatOverlay.paint(byId('fan1'), { RPM: 9000 }, ctx({})).dim).toBe(true);
+		expect(heatOverlay.paint(byId('bay0'), { TempC: 32 }, ctx({})).text).toBe('32°');
+	});
+	it('interfaces: rated speed green, slower amber, no link grey', () => {
+		const p1 = byId('nicSlot2p1');
+		expect(interfacesOverlay.paint(p1, { LinkUp: true, SpeedGbps: 25 }, ctx({}))).toEqual({ color: 'good', text: '25G' });
+		expect(interfacesOverlay.paint(p1, { LinkUp: true, SpeedGbps: 10 }, ctx({}))).toEqual({ color: 'warn', text: '10/25G' });
+		expect(interfacesOverlay.paint(byId('lan1'), { LinkUp: false, SpeedGbps: 0 }, ctx({}))).toEqual({ color: 'neutral', text: 'no link' });
+		expect(interfacesOverlay.paint(byId('psu1'), { InputOk: false }, ctx({})).color).toBe('crit');
+		expect(interfacesOverlay.paint(byId('cpu1'), {}, ctx({})).dim).toBe(true);
+	});
+	it('labels: the same text nearby is said once, a different one steps down', () => {
+		const m = placeLabels([
+			{ id: 'a', at: [0, 0.05, 0], text: 'next' },
+			{ id: 'b', at: [0.006, 0.05, 0], text: 'next' },
+			{ id: 'c', at: [0.016, 0.05, 0], text: '10/25G' },
+			{ id: 'd', at: [0.2, 0.05, 0], text: 'next' }
+		]);
+		expect([...m.keys()]).toEqual(['a', 'c', 'd']);
+		expect(m.get('c')![1] < 0.05).toBe(true);
+		expect(m.get('d')![1]).toBe(0.05);
+	});
+	it('free: the DIMMs to fill next follow the population order', () => {
+		expect([...nextDimms(profile, new Set(['A1']))].sort()).toEqual(['C1', 'E1', 'G1']);
+		expect([...nextDimms(profile, new Set(['A1', 'C1', 'E1', 'G1']))].sort()).toEqual(['B1', 'D1', 'F1', 'H1']);
+		const fitted = { NODE1_Dimm_A1: {}, NODE1_Dimm_C1: {}, NODE1_Dimm_E1: {}, NODE1_Dimm_G1: {} };
+		expect(freeOverlay.paint(byId('dimmB1'), undefined, ctx(fitted))).toEqual({ color: 'accent', text: 'next' });
+		expect(freeOverlay.paint(byId('bay5'), undefined, ctx(fitted))).toEqual({ color: 'accent', text: 'free SATA' });
+		expect(freeOverlay.paint(byId('dimmA1'), {}, ctx(fitted)).dim).toBe(true);
 	});
 });

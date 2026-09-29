@@ -11,6 +11,12 @@
 	// on or off, `xray` (the shell at 20 %, clicks pass through it),
 	// `exploded` (each part moves by its profile offset).
 	import { T } from '@threlte/core';
+	import { HTML } from '@threlte/extras';
+	import { getContext } from 'svelte';
+	import { SCENE, type SceneContext } from '../context.js';
+	import { DEFAULT_PALETTE, type Palette } from '../palette.js';
+	import { member } from './profile.js';
+	import { overlayColors, heatPaint, placeLabels, type Overlay, type OverlayColors, type OverlayContext, type PartPaint } from './overlay.js';
 	import { Tween } from 'svelte/motion';
 	import { cubicOut } from 'svelte/easing';
 	import type { Component } from 'svelte';
@@ -25,6 +31,7 @@
 	import Fan from './Fan.svelte';
 	import Psu from './Psu.svelte';
 	import Cpu from './Cpu.svelte';
+	import Port from './Port.svelte';
 
 	let {
 		profile,
@@ -37,6 +44,7 @@
 		exploded = false,
 		anchor = true,
 		codeImages,
+		overlay,
 		models = DEFAULT_MODELS
 	}: {
 		profile: ChassisProfile;
@@ -53,11 +61,14 @@
 		anchor?: boolean;
 		/** Anchor id → an image of its printed code; see Chassis. */
 		codeImages?: Record<string, string>;
+		/** One question asked of every part (heat, interfaces, free…): its
+		 * colour and text paint the parts, the rest go faint (overlay.ts). */
+		overlay?: Overlay;
 		/** Where the part library (models/hardware/*.glb) is served. */
 		models?: string;
 	} = $props();
 
-	const COMPONENTS: Record<PartKind, Component<any>> = { drive: Drive, dimm: Dimm, 'pcie-card': PcieCard, fan: Fan, psu: Psu, cpu: Cpu };
+	const COMPONENTS: Record<PartKind, Component<any>> = { drive: Drive, dimm: Dimm, 'pcie-card': PcieCard, fan: Fan, psu: Psu, cpu: Cpu, port: Port };
 	const deg = Math.PI / 180;
 
 	let parts = $derived(resolveParts(profile, node));
@@ -67,6 +78,48 @@
 
 	const t = Tween.of(() => (exploded ? 1 : 0), { duration: 700, easing: cubicOut });
 	const at = (p: Vec3, o: Vec3, f: number): Vec3 => [p[0] + o[0] * f, p[1] + o[1] * f, p[2] + o[2] * f];
+	// The overlay reads the frame the scene provides, like every <Node>.
+	const scene = getContext<SceneContext | undefined>(SCENE);
+	const palette = getContext<Palette>('hmi3d:palette') ?? DEFAULT_PALETTE;
+	let colors = $derived<OverlayColors>(overlayColors(palette));
+	let octx = $derived<OverlayContext>({ node, profile, tags: scene?.tags ?? {}, colors });
+	let paints = $derived.by(() => {
+		const out: Record<string, PartPaint | undefined> = {};
+		if (!overlay) return out;
+		for (const part of parts) out[part.id] = overlay.paint(part, part.tag ? octx.tags[part.tag] : undefined, octx);
+		return out;
+	});
+	// Standalone sensors (inlet, VRM…), painted against their own setpoints.
+	let sensors = $derived(
+		overlay?.sensors
+			? (profile.sensors ?? []).map((q) => {
+					const v = octx.tags[tagFor(q.tag, node)];
+					const t = member(v, 'Value');
+					const warn = member(v, 'HighSP');
+					const crit = member(v, 'HighHighSP');
+					const paint =
+						typeof t === 'number' && typeof warn === 'number' && typeof crit === 'number'
+							? heatPaint(t, warn, crit, typeof t === 'number' && q.id === 'inlet' ? t : inletOf(), colors)
+							: undefined;
+					return { ...q, pos: mm(q.pos), paint };
+				})
+			: []
+	);
+	const inletOf = () => {
+		const v = member(octx.tags[node], 'InletTempC');
+		return typeof v === 'number' ? v : 25;
+	};
+	const top = (p: Vec3, s: Vec3): Vec3 => [p[0], p[1] + s[1] / 2 + 0.006, p[2]];
+	// Each part's overlay label, placed so neighbours do not overprint.
+	let labels = $derived(
+		placeLabels(
+			parts.flatMap((part) => {
+				const paint = paints[part.id];
+				return paint?.text && !paint.dim ? [{ id: part.id, at: top(at(part.pos, part.explode, t.current), part.size), text: paint.text }] : [];
+			})
+		)
+	);
+
 	let lidOffset = $derived(mm(profile.explodeLid ?? [0, 160, 0]).map((v) => v * t.current) as Vec3);
 </script>
 
@@ -86,11 +139,55 @@
 			pos={at(part.pos, part.explode, t.current)}
 			rot={part.rot}
 			bounds={{ size: part.size, center: [0, 0, 0] }}
-			props={{ ...part.props, size: part.size, bound: part.tag !== undefined, static: part.static, models, xray }}
+			props={{ ...part.props, size: part.size, bound: part.tag !== undefined, static: part.static, models, xray, paint: paints[part.id] }}
 		>
 			{#snippet children(p)}
 				<Part {...p} />
 			{/snippet}
 		</Node>
+		{@const paint = paints[part.id]}
+		{@const where = labels.get(part.id)}
+		{#if paint?.text && where}
+			<HTML position={where} center pointerEvents="none">
+				<span class="ov" style:--c={paint.color ?? '#8a8d91'}>{paint.text}</span>
+			</HTML>
+		{/if}
+	{/each}
+	{#each sensors as q (q.id)}
+		<T.Mesh position={q.pos} raycast={() => {}}>
+			<T.SphereGeometry args={[0.005, 16, 12]} />
+			<T.MeshBasicMaterial color={q.paint?.color ?? '#6b6b68'} />
+		</T.Mesh>
+		<HTML position={[q.pos[0], q.pos[1] + 0.012, q.pos[2]]} center pointerEvents="none">
+			<span class="ov sensor" style:--c={q.paint?.color ?? '#6b6b68'}>{q.name} {q.paint?.text ?? '—'}</span>
+		</HTML>
 	{/each}
 </T.Group>
+
+<style>
+	/* An overlay's value on a part: small, the text in ink, the colour a
+	   swatch beside it — colour never carries the meaning alone. */
+	.ov {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		padding: 1px 5px;
+		border-radius: 4px;
+		font: 600 10px/1.3 ui-monospace, monospace;
+		white-space: nowrap;
+		color: var(--ink, #e8e6e1);
+		background: color-mix(in srgb, var(--surface, #1a1a19) 82%, transparent);
+		border: 1px solid color-mix(in srgb, var(--c) 70%, transparent);
+	}
+	.ov::before {
+		content: '';
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--c);
+	}
+	.sensor {
+		font-weight: 500;
+		opacity: 0.9;
+	}
+</style>

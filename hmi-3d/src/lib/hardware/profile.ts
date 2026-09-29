@@ -7,7 +7,7 @@
 import type { Vec3 } from '../scene.js';
 
 /** The part kinds a profile places; each has a component and a UDT. */
-export const PART_KINDS = ['drive', 'dimm', 'pcie-card', 'fan', 'psu', 'cpu'] as const;
+export const PART_KINDS = ['drive', 'dimm', 'pcie-card', 'fan', 'psu', 'cpu', 'port'] as const;
 export type PartKind = (typeof PART_KINDS)[number];
 
 export interface ProfilePart {
@@ -71,6 +71,12 @@ export interface ChassisProfile {
 	 * tag prefix: the agreed names the drivers publish. */
 	bindings: Record<string, string>;
 	parts: ProfilePart[];
+	/** [warning, critical] °C by `kind:bus` or `kind` — the heat overlay's limits. */
+	limits?: Record<string, [number, number]>;
+	/** Standalone temperature sensors (TempSensor tags) and where they sit, mm. */
+	sensors?: { id: string; name: string; tag: string; pos: Vec3 }[];
+	/** Population order, e.g. `dimm`: the vendor's sets, smallest first. */
+	population?: Record<string, string[][]>;
 	[key: string]: unknown;
 }
 
@@ -139,6 +145,10 @@ export function validateProfile(p: unknown): { path: string; message: string }[]
 		if (k !== 'chassis' && !ids.has(k)) e(`/bindings/${k}`, `no part "${k}"`);
 		if (typeof t !== 'string' || !t.includes('{node}')) e(`/bindings/${k}`, 'a tag name with {node} for the node prefix');
 	}
+	(o.sensors ?? []).forEach((q, i) => {
+		if (!q || typeof q.tag !== 'string' || !q.tag.includes('{node}')) e(`/sensors/${i}/tag`, 'a tag name with {node}');
+		if (!q || !isVec3(q.pos)) e(`/sensors/${i}/pos`, '[x, y, z], mm');
+	});
 	for (const [k, a] of Object.entries(o.anchors ?? {})) {
 		if (!a || !isVec3(a.pos) || !isVec3(a.normal) || !isVec3(a.up) || !(a.size > 0)) e(`/anchors/${k}`, 'pos, normal, up (vectors) and size (mm)');
 		else if (Math.abs(a.normal[0] * a.up[0] + a.normal[1] * a.up[1] + a.normal[2] * a.up[2]) > 1e-6) e(`/anchors/${k}/up`, 'must be perpendicular to normal');
@@ -250,6 +260,11 @@ export function partStatus(kind: PartKind, value: unknown, state: PartState): st
 			return `${str(member(value, 'Model')) ?? 'CPU'}${temp}${flag}`;
 		case 'pcie-card':
 			return `${str(member(value, 'Model')) ?? 'card'}${temp}${flag}`;
+		case 'port': {
+			if (member(value, 'LinkUp') !== true) return 'no link';
+			const g = num(member(value, 'SpeedGbps'));
+			return g === undefined ? 'link up' : g >= 1 ? `${+g.toFixed(1)} Gb/s` : `${Math.round(g * 1000)} Mb/s`;
+		}
 	}
 }
 
@@ -307,6 +322,15 @@ export function partFacts(kind: PartKind, value: unknown): Fact[] {
 			add('Duty', n('Pct', ' %'));
 			add('Present', b('Present'));
 			break;
+		case 'port': {
+			const up = member(value, 'LinkUp');
+			add('Link', typeof up === 'boolean' ? (up ? 'up' : 'down') : undefined);
+			const g = num(member(value, 'SpeedGbps'));
+			add('Speed', g === undefined ? undefined : g >= 1 ? `${+g.toFixed(1)} Gb/s` : `${Math.round(g * 1000)} Mb/s`);
+			add('Name', s('Name'));
+			add('MAC', s('MAC'));
+			break;
+		}
 		case 'psu':
 			add('Output', n('OutputW', ' W'));
 			add('Capacity', n('CapacityW', ' W'));

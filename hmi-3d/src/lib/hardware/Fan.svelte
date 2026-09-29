@@ -18,7 +18,7 @@
 	import PartModel from './PartModel.svelte';
 	import EmptySlot from './EmptySlot.svelte';
 
-	let { value, good, size, bound, static: fixed, models = DEFAULT_MODELS, xray = false }: PartProps = $props();
+	let { value, good, size, bound, static: fixed, models = DEFAULT_MODELS, xray = false, paint }: PartProps = $props();
 	const palette = getContext<Palette>('hmi3d:palette') ?? DEFAULT_PALETTE;
 	let state = $derived(partState({ tag: bound ? 'fan' : undefined, static: fixed }, value, good));
 	let look = $derived(partLook(state, palette, xray));
@@ -31,7 +31,7 @@
 </script>
 
 {#if look.fitted}
-	<PartModel src={models + SRC} {size} led={look.led} accent={look.accent} opacity={look.opacity} {spin} />
+	<PartModel src={models + SRC} {size} led={look.led} accent={look.accent} opacity={paint?.dim ? 0.15 : look.opacity} tint={paint?.dim ? undefined : paint?.color} {spin} />
 {:else}
-	<EmptySlot {size} wire={look.wire} />
+	<EmptySlot {size} wire={paint?.dim ? undefined : (paint?.color ?? look.wire)} faint={paint?.dim} />
 {/if}

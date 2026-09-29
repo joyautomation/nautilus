@@ -16,7 +16,7 @@
 	"shell": {"wall": 1, "lid": 1, "floor": 1, "bezel": 20, "frontCover": 150},
 	"boardPlate": {"pos": [-5, 5, -431], "size": [165, 1.6, 326]},
 	"fixtures": [
-		{"id": "pdb", "name": "Power distribution", "pos": [144, 20, -234], "size": [100, 38, 135]}
+		{"id": "pdb", "name": "Power distribution", "pos": [158, 20, -234], "size": [100, 38, 135]}
 	],
 	"backplane": {"pos": [0, 21.5, -146], "size": [415, 38, 2]},
 	"explodeLid": [0, 160, 0],
@@ -53,8 +53,19 @@
 		"dimm": {"type": "DIMM", "members": ["Locator", "CapacityGB", "Manufacturer", "PartNumber", "Health", "Fault", "TempC"]},
 		"cpu": {"type": "CPU", "members": ["Model", "Cores", "Health", "Fault", "TempC", "Pct"]},
 		"fan": {"type": "Fan", "members": ["Name", "Present", "RPM", "Pct", "Fault"]},
-		"psu": {"type": "PSU", "members": ["Name", "Present", "Fault", "InputOk", "InputV", "OutputW", "CapacityW"]}
+		"psu": {"type": "PSU", "members": ["Name", "Present", "Fault", "InputOk", "InputV", "OutputW", "CapacityW"]},
+		"port": {"type": "NetPort", "members": ["Name", "LinkUp", "SpeedGbps", "MAC"]}
 	},
+	"limits": {"drive:nvme": [70, 75], "drive:sata": [60, 70], "dimm": [80, 85], "cpu": [95, 100], "pcie-card": [90, 100]},
+	"limitsNote": "DIMM, CPU and NVMe from the BMC's own setpoints (NODE1_Temp_* HighSP / HighHighSP); SATA SSD and NIC are conservative defaults until the drivers report theirs.",
+	"sensors": [
+		{"id": "inlet", "name": "Inlet", "tag": "{node}_Temp_Inlet", "pos": [200, 30, -25]},
+		{"id": "system", "name": "System", "tag": "{node}_Temp_System", "pos": [60, 8, -300]},
+		{"id": "peripheral", "name": "Peripheral", "tag": "{node}_Temp_Peripheral", "pos": [-100, 38, -440]},
+		{"id": "vrm", "name": "CPU VRM", "tag": "{node}_Temp_VRM_CPU", "pos": [35, 10, -440]}
+	],
+	"sensorsNote": "Standalone sensor positions are approximate (the manuals do not place them).",
+	"population": {"dimm": [["A1"], ["A1", "C1", "E1", "G1"], ["A1", "B1", "C1", "D1", "E1", "F1", "G1", "H1"]]},
 	"bindings": {
 		"chassis": "{node}",
 		"bay0": "{node}_Drive_NVMe0",
@@ -81,7 +92,14 @@
 		"boot0": "{node}_Drive_Boot0",
 		"boot4": "{node}_Drive_Boot4",
 		"psu1": "{node}_PSU1",
-		"psu2": "{node}_PSU2"
+		"psu2": "{node}_PSU2",
+		"nicSlot2p1": "{node}_Nic_Slot2_P1",
+		"nicSlot2p2": "{node}_Nic_Slot2_P2",
+		"nicSlot3p1": "{node}_Nic_Slot3_P1",
+		"nicSlot3p2": "{node}_Nic_Slot3_P2",
+		"lan1": "{node}_Nic_LAN1",
+		"lan2": "{node}_Nic_LAN2",
+		"bmc": "{node}_Nic_BMC"
 	},
 	"parts": [
 		{"id": "bay0", "kind": "drive", "slot": "Front bay 0 (NVMe)", "pos": [-180, 11.5, -72], "size": [74, 18.5, 140], "explode": [0, 0, 180], "bus": "nvme"},
@@ -124,7 +142,14 @@
 		{"id": "slot3", "kind": "pcie-card", "slot": "System slot 3 (SXB2, low profile)", "pos": [-49, 22, -511], "size": [69, 12, 168], "explode": [0, 95, 0], "lanes": 8, "height": "low"},
 		{"id": "boot0", "kind": "drive", "slot": "Boot M.2 (RAID bay 0)", "pos": [-157, 37.5, -505], "size": [22, 3, 80], "explode": [0, 135, 0], "bus": "sata", "form": "m2"},
 		{"id": "boot4", "kind": "drive", "slot": "Boot M.2 (RAID bay 4)", "pos": [-127, 37.5, -505], "size": [22, 3, 80], "explode": [0, 135, 0], "bus": "sata", "form": "m2"},
-		{"id": "psu1", "kind": "psu", "slot": "PSU1", "pos": [157, 21, -450], "size": [52, 40, 290], "explode": [0, 0, -240]},
-		{"id": "psu2", "kind": "psu", "slot": "PSU2", "pos": [104, 21, -450], "size": [50, 40, 290], "explode": [0, 0, -240]}
+		{"id": "psu1", "kind": "psu", "slot": "PSU1", "pos": [188, 21, -450], "size": [56, 40, 290], "explode": [0, 0, -240]},
+		{"id": "psu2", "kind": "psu", "slot": "PSU2", "pos": [130, 21, -450], "size": [56, 40, 290], "explode": [0, 0, -240]},
+		{"id": "nicSlot2p1", "kind": "port", "slot": "NIC1 port 1 (system slot 2)", "pos": [-166, 13.5, -589], "size": [14, 9, 12], "explode": [0, 60, 0], "ratedGbps": 25, "jack": "sfp28"},
+		{"id": "nicSlot2p2", "kind": "port", "slot": "NIC1 port 2 (system slot 2)", "pos": [-150, 13.5, -589], "size": [14, 9, 12], "explode": [0, 60, 0], "ratedGbps": 25, "jack": "sfp28"},
+		{"id": "nicSlot3p1", "kind": "port", "slot": "NIC2 port 1 (system slot 3)", "pos": [-73, 22.5, -589], "size": [14, 9, 12], "explode": [0, 95, 0], "ratedGbps": 25, "jack": "sfp28"},
+		{"id": "nicSlot3p2", "kind": "port", "slot": "NIC2 port 2 (system slot 3)", "pos": [-57, 22.5, -589], "size": [14, 9, 12], "explode": [0, 95, 0], "ratedGbps": 25, "jack": "sfp28"},
+		{"id": "lan1", "kind": "port", "slot": "LAN1 (onboard)", "pos": [10, 16, -591], "size": [14, 12, 10], "ratedGbps": 1, "jack": "rj45"},
+		{"id": "lan2", "kind": "port", "slot": "LAN2 (onboard)", "pos": [-10, 16, -591], "size": [14, 12, 10], "ratedGbps": 1, "jack": "rj45"},
+		{"id": "bmc", "kind": "port", "slot": "BMC LAN (dedicated)", "pos": [45, 34, -591], "size": [14, 12, 10], "ratedGbps": 1, "jack": "rj45"}
 	]
 }

@@ -100,6 +100,29 @@ for (const c of members('Systems/1/Processors').map(read)) {
 	live[`${node}_Cpu${i}.Pct`] = `${node}.CpuPct`;
 }
 
+// Network ports (NetPort): each NIC's ports, by the system slot its PCIe
+// device names; the onboard pair; the dedicated BMC port. MACs redacted.
+const port = (name, linkUp, mbps) => ({ Name: name, LinkUp: linkUp, SpeedGbps: linkUp ? mbps / 1000 : 0, MAC: '(redacted)' });
+if (existsSync(join(dir, 'Chassis/1/NetworkAdapters/index.json'))) {
+	for (const a of members('Chassis/1/NetworkAdapters').map(read)) {
+		const dev = a.Controllers?.[0]?.Links?.PCIeDevices?.[0]?.['@odata.id'];
+		const slot = dev ? Number(/System Slot(\d+)/.exec(read(dev.replace(/^\/redfish\/v1\//, '')).Name)?.[1]) : undefined;
+		if (!slot) continue;
+		for (const p of members(`Chassis/1/NetworkAdapters/${a.Id}/Ports`).map(read)) {
+			const up = p.LinkStatus === 'LinkUp';
+			tags[`${node}_Nic_Slot${slot}_P${p.Id}`] = port(`${a.Model} port ${p.Id}`, up, (p.CurrentSpeedGbps ?? 0) * 1000);
+		}
+	}
+}
+for (const e of members('Systems/1/EthernetInterfaces').map(read)) {
+	const n = /OnBoard #(\d+)/.exec(e.Description ?? '')?.[1];
+	if (n) tags[`${node}_Nic_LAN${n}`] = port(`Onboard LAN${n}`, e.LinkStatus === 'LinkUp', e.SpeedMbps ?? 0);
+}
+if (existsSync(join(dir, 'Managers/1/EthernetInterfaces/1/index.json'))) {
+	const b = read('Managers/1/EthernetInterfaces/1');
+	tags[`${node}_Nic_BMC`] = port('BMC LAN', b.LinkStatus === 'LinkUp', b.SpeedMbps ?? 0);
+}
+
 const captured = /redfish-(\d{4})(\d{2})(\d{2})/.exec(dir);
 process.stdout.write(
 	JSON.stringify(
