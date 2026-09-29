@@ -7,7 +7,7 @@
 	// edge-on must not steal a pick from the part behind it, and in x-ray
 	// nothing of the shell does.
 	import { T } from '@threlte/core';
-	import { Euler, Matrix4, Mesh, Vector3 } from 'three';
+	import { Euler, Matrix4, Mesh, NearestFilter, SRGBColorSpace, TextureLoader, Vector3, type Texture } from 'three';
 	import { mm, type ChassisProfile } from './profile.js';
 	import type { Vec3 } from '../scene.js';
 
@@ -17,6 +17,7 @@
 		xray = false,
 		lidOffset = [0, 0, 0],
 		anchor = true,
+		codeImages = {},
 		good = true
 	}: {
 		profile: ChassisProfile;
@@ -26,6 +27,9 @@
 		lidOffset?: Vec3;
 		/** Draw the printed codes at the profile's anchors. */
 		anchor?: boolean;
+		/** Anchor id → an image of its printed code (a data URL). Without
+		 * one, the code is drawn as a placeholder: white, three finders. */
+		codeImages?: Record<string, string>;
 		good?: boolean;
 	} = $props();
 
@@ -45,6 +49,25 @@
 	let cover = $derived((profile.shell?.frontCover ?? 0) / 1000);
 	let fixtures = $derived((profile.fixtures ?? []).map((f) => ({ pos: mm(f.pos), size: mm(f.size) })));
 	let backplane = $derived(profile.backplane ? { pos: mm(profile.backplane.pos), size: mm(profile.backplane.size) } : undefined);
+
+	// The real codes, when the app supplies them: crisp modules, no smoothing.
+	const loader = new TextureLoader();
+	let textures = $derived.by(() => {
+		const out: Record<string, Texture> = {};
+		for (const [id, url] of Object.entries(codeImages)) {
+			const t = loader.load(url);
+			t.magFilter = NearestFilter;
+			t.minFilter = NearestFilter;
+			t.generateMipmaps = false;
+			t.colorSpace = SRGBColorSpace;
+			out[id] = t;
+		}
+		return out;
+	});
+	$effect(() => {
+		const t = textures;
+		return () => Object.values(t).forEach((x) => x.dispose());
+	});
 
 	// The printed codes, as the AR layer will see them: a square on each
 	// anchor's plane, turned so its top edge points along `up`, its three
@@ -108,16 +131,23 @@
 {#if anchor}
 	{#each codes as c (c.id)}
 		<T.Group position={c.pos} rotation={c.rot}>
-			<T.Mesh raycast={noRaycast}>
-				<T.PlaneGeometry args={[c.s, c.s]} />
-				<T.MeshBasicMaterial color="#f4f4f0" transparent={xray} opacity={xray ? 0.5 : 1} />
-			</T.Mesh>
-			{#each [[-1, 1], [1, 1], [-1, -1]] as [fx, fy]}
-				<T.Mesh position={[fx * c.s * 0.34, fy * c.s * 0.34, 0.0003]} raycast={noRaycast}>
-					<T.PlaneGeometry args={[c.s * 0.24, c.s * 0.24]} />
-					<T.MeshBasicMaterial color="#111" transparent={xray} opacity={xray ? 0.5 : 1} />
+			{#if textures[c.id]}
+				<T.Mesh raycast={noRaycast}>
+					<T.PlaneGeometry args={[c.s, c.s]} />
+					<T.MeshBasicMaterial map={textures[c.id]} transparent={xray} opacity={xray ? 0.5 : 1} />
 				</T.Mesh>
-			{/each}
+			{:else}
+				<T.Mesh raycast={noRaycast}>
+					<T.PlaneGeometry args={[c.s, c.s]} />
+					<T.MeshBasicMaterial color="#f4f4f0" transparent={xray} opacity={xray ? 0.5 : 1} />
+				</T.Mesh>
+				{#each [[-1, 1], [1, 1], [-1, -1]] as [fx, fy]}
+					<T.Mesh position={[fx * c.s * 0.34, fy * c.s * 0.34, 0.0003]} raycast={noRaycast}>
+						<T.PlaneGeometry args={[c.s * 0.24, c.s * 0.24]} />
+						<T.MeshBasicMaterial color="#111" transparent={xray} opacity={xray ? 0.5 : 1} />
+					</T.Mesh>
+				{/each}
+			{/if}
 		</T.Group>
 	{/each}
 {/if}

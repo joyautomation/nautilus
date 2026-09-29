@@ -17,7 +17,8 @@
 		"@joyautomation/nautilus-hmi-3d": "file:../../../hmi-3d",
 		"@threlte/core": "^8.6.1",
 		"@threlte/extras": "^9.22.0",
-		"three": "^0.186.1"
+		"three": "^0.186.1",
+		"qrcode": "^1.5.4"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-static": "^3.0.10",
@@ -25,10 +26,10 @@
 		"@sveltejs/vite-plugin-svelte": "^7.3.1",
 		"@types/node": "^26.6.3",
 		"@types/three": "^0.186.0",
-		"qrcode": "^1.5.4",
 		"svelte": "^5.57.1",
 		"svelte-check": "^4.7.6",
 		"typescript": "^6.0.3",
-		"vite": "^8.3.1"
+		"vite": "^8.3.1",
+		"@types/qrcode": "^1.5.5"
 	}
 }

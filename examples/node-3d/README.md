@@ -13,7 +13,7 @@ exploded and camera presets in the toolbar.
   `hmi/src/lib/node1.stub.json` (serials redacted), laid under the
   controller's frame by `hmi/src/lib/stub.ts`. A real tag always wins.
 - `?pull=NODE1_Drive_NVMe2` shows a pulled drive; `?view=top|front|rear`,
-  `?lid=on`, `?xray`, `?exploded` set the view.
+  `?lid=on`, `?xray`, `?exploded`, `?codes` (the printed AR codes, off by default) set the view.
 
 ```sh
 (cd ../../hmi-3d && npm run package)

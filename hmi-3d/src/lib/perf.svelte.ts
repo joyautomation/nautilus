@@ -15,8 +15,11 @@
 //
 // A hidden or background tab throttles requestAnimationFrame to ~1 Hz or
 // stops it, and Threlte does not mount canvas children until a frame is
-// drawn, so a background tab's numbers are nonsense. Frames that arrive
-// while `document.hidden` are not sampled. Measure in a visible window.
+// drawn, so a background tab's numbers are nonsense. A sample is dropped
+// if the page was hidden at ANY point between the frame's arrival and its
+// pixel — not only at either end: a frame that arrives just before the tab
+// is switched away waits, paused, for the tab to come back, and would
+// otherwise record the whole time away as latency. Measure in a visible window.
 
 /** Above this, a ctrl→pixel sample is clock offset, not latency. */
 export const PLAUSIBLE_E2E_MS = 5000;
@@ -33,6 +36,11 @@ export class PerfSampler {
 	#window: number;
 	#raf = 0;
 	#running = false;
+	/** performance.now() of the last visibility change (either way). */
+	#lastVisibilityChange = -Infinity;
+	#onVisibility = () => {
+		this.#lastVisibilityChange = performance.now();
+	};
 
 	constructor(window = 200) {
 		this.#window = window;
@@ -61,7 +69,8 @@ export class PerfSampler {
 		const rx = performance.now();
 		requestAnimationFrame(() =>
 			requestAnimationFrame(() => {
-				if (document.hidden) return;
+				// Hidden now, or hidden (and back) since the frame arrived.
+				if (document.hidden || this.#lastVisibilityChange >= rx) return;
 				const keep = this.#window - 1;
 				this.latency = [...this.latency.slice(-keep), performance.now() - rx];
 				const e2e = Date.now() - ts;
@@ -78,6 +87,7 @@ export class PerfSampler {
 	start() {
 		if (this.#running) return;
 		this.#running = true;
+		if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.#onVisibility);
 		let frames = 0;
 		let last = performance.now();
 		const tick = (now: number) => {
@@ -94,6 +104,7 @@ export class PerfSampler {
 
 	stop() {
 		this.#running = false;
+		if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.#onVisibility);
 		cancelAnimationFrame(this.#raf);
 	}
 

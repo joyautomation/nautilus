@@ -36,6 +36,7 @@
 		xray = false,
 		exploded = false,
 		anchor = true,
+		codeImages,
 		models = DEFAULT_MODELS
 	}: {
 		profile: ChassisProfile;
@@ -50,6 +51,8 @@
 		exploded?: boolean;
 		/** Draw the printed codes at the profile's anchors. */
 		anchor?: boolean;
+		/** Anchor id → an image of its printed code; see Chassis. */
+		codeImages?: Record<string, string>;
 		/** Where the part library (models/hardware/*.glb) is served. */
 		models?: string;
 	} = $props();
@@ -70,7 +73,7 @@
 <T.Group position={pos} rotation={rot ? [rot[0] * deg, rot[1] * deg, rot[2] * deg] : [0, 0, 0]}>
 	<Node id={node} tag={chassisTag} kind="server" label={label ?? node} pos={[0, 0, 0]} bounds={chassisBox}>
 		{#snippet children(p)}
-			<Chassis {profile} {lid} {xray} {lidOffset} {anchor} good={p.good} />
+			<Chassis {profile} {lid} {xray} {lidOffset} {anchor} {codeImages} good={p.good} />
 		{/snippet}
 	</Node>
 	{#each parts as part (part.id)}
