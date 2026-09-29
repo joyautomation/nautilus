@@ -171,8 +171,11 @@ describe('overlays', () => {
 		expect([...nextDimms(profile, new Set(['A1']))].sort()).toEqual(['C1', 'E1', 'G1']);
 		expect([...nextDimms(profile, new Set(['A1', 'C1', 'E1', 'G1']))].sort()).toEqual(['B1', 'D1', 'F1', 'H1']);
 		const fitted = { NODE1_Dimm_A1: {}, NODE1_Dimm_C1: {}, NODE1_Dimm_E1: {}, NODE1_Dimm_G1: {} };
-		expect(freeOverlay.paint(byId('dimmB1'), undefined, ctx(fitted))).toEqual({ color: 'accent', text: 'next' });
-		expect(freeOverlay.paint(byId('bay5'), undefined, ctx(fitted))).toEqual({ color: 'accent', text: 'free SATA' });
+		expect(freeOverlay.paint(byId('dimmB1'), undefined, ctx(fitted))).toEqual({ color: 'accent', text: 'B1 next' });
+		expect(freeOverlay.paint(byId('bay5'), undefined, ctx(fitted))).toEqual({ color: 'accent', text: 'bay 5 SATA' });
 		expect(freeOverlay.paint(byId('dimmA1'), {}, ctx(fitted)).dim).toBe(true);
+		// Six empty front bays on node1, each with its own label.
+		const free = parts.filter((p) => p.kind === 'drive' && p.props.form !== 'm2').map((p) => freeOverlay.paint(p, p.tag ? {} : undefined, ctx(fitted)).text).filter(Boolean);
+		expect(free).toEqual(['bay 4 SATA', 'bay 5 SATA', 'bay 6 SATA', 'bay 7 SATA', 'bay 8 SATA', 'bay 9 SATA']);
 	});
 });

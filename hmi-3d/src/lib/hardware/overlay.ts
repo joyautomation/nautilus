@@ -213,15 +213,17 @@ export const freeOverlay: Overlay = {
 					.map((q) => q.id.replace(/^dimm/, ''))
 			);
 			const loc = part.partId.replace(/^dimm/, '');
-			return nextDimms(ctx.profile, fitted).has(loc) ? { color: c.accent, text: 'next' } : { color: c.neutral };
+			return nextDimms(ctx.profile, fitted).has(loc) ? { color: c.accent, text: `${loc} next` } : { color: c.neutral };
 		}
-		const bus = part.props.bus;
-		return { color: c.accent, text: typeof bus === 'string' ? `free ${bus.toUpperCase()}` : 'free' };
+		// Name the position, so stacked bays each get their own label.
+		const bay = /bay\s*(\d+)/i.exec(part.slot)?.[1];
+		const bus = typeof part.props.bus === 'string' ? ` ${part.props.bus.toUpperCase()}` : '';
+		return { color: c.accent, text: bay !== undefined ? `bay ${bay}${bus}` : `free${bus}` };
 	},
 	legend(ctx) {
 		const c = ctx.colors;
 		return [
-			{ color: c.accent, label: 'free (DIMM: fill next)' },
+			{ color: c.accent, label: 'free bay or slot (DIMM: fill next)' },
 			{ color: c.neutral, label: 'free DIMM, later in the order' },
 			{ label: 'PSU: load / capacity, W' }
 		];
