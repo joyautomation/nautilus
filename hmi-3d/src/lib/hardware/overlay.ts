@@ -122,6 +122,19 @@ export function heatPaint(t: number, warn: number, crit: number, inlet: number, 
 	return { color: c.ramp[Math.floor(r * c.ramp.length)], text: deg };
 }
 
+/**
+ * A standalone sensor's [warning, critical] from its own setpoints. BMCs
+ * often set only the critical one and report the warning as 0: an unset
+ * warning is the critical limit, never 0 °C (which would flag every
+ * reading HIGH).
+ */
+export function sensorLimits(v: unknown): [number, number] | undefined {
+	const crit = num(member(v, 'HighHighSP'));
+	const warn = num(member(v, 'HighSP'));
+	if (crit === undefined || crit <= 0) return warn !== undefined && warn > 0 ? [warn, warn] : undefined;
+	return [warn !== undefined && warn > 0 && warn < crit ? warn : crit, crit];
+}
+
 export const heatOverlay: Overlay = {
 	id: 'heat',
 	name: 'Heat',

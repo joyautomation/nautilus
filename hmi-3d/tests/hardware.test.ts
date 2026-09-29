@@ -17,7 +17,7 @@ import {
 	isFitted,
 	type ChassisProfile
 } from '../src/lib/hardware/profile.js';
-import { heatPaint, limitsFor, heatOverlay, interfacesOverlay, freeOverlay, nextDimms, placeLabels, HEAT_RAMP } from '../src/lib/hardware/overlay.js';
+import { heatPaint, sensorLimits, limitsFor, heatOverlay, interfacesOverlay, freeOverlay, nextDimms, placeLabels, HEAT_RAMP } from '../src/lib/hardware/overlay.js';
 
 const profile = sys112b as unknown as ChassisProfile;
 const clone = (): ChassisProfile => JSON.parse(JSON.stringify(profile));
@@ -178,5 +178,14 @@ describe('overlays', () => {
 		// Six empty front bays on node1, each with its own label.
 		const free = parts.filter((p) => p.kind === 'drive' && p.props.form !== 'm2').map((p) => freeOverlay.paint(p, p.tag ? {} : undefined, ctx(fitted)).text).filter(Boolean);
 		expect(free).toEqual(['bay 4 SATA', 'bay 5 SATA', 'bay 6 SATA', 'bay 7 SATA', 'bay 8 SATA', 'bay 9 SATA']);
+	});
+});
+
+describe('sensor limits', () => {
+	it('an unset warning (0) is the critical limit, never 0 °C', () => {
+		expect(sensorLimits({ HighSP: 0, HighHighSP: 50 })).toEqual([50, 50]);
+		expect(sensorLimits({ HighSP: 45, HighHighSP: 50 })).toEqual([45, 50]);
+		expect(sensorLimits({ HighSP: 0, HighHighSP: 0 })).toBe(undefined);
+		expect(sensorLimits({})).toBe(undefined);
 	});
 });

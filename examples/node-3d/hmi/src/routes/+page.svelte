@@ -13,6 +13,7 @@
 		import { stubbed, isStubTag } from '$lib/stub';
 	import { plant, allStubs, plantPatterns } from '$lib/plant';
 	import Studio from '$lib/Studio.svelte';
+	import ReplayClock from '$lib/ReplayClock.svelte';
 
 	const NODE = 'NODE1';
 	const profile = sys112b as unknown as ChassisProfile;
@@ -111,6 +112,8 @@
 <svelte:window onresize={() => (aspect = window.innerWidth / window.innerHeight)} />
 
 <svelte:head><title>node1 · 3D</title></svelte:head>
+
+<ReplayClock replay={(rt.frame as { replay?: any } | null)?.replay} />
 
 <div class="stage">
 	{#if problems.length}

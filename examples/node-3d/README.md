@@ -30,7 +30,12 @@ exploded and camera presets in the toolbar.
 - **Simulation mode**: the whole cluster with no hardware —
   `randd/node-3d-sim/sim` replays the recorded switches and BMCs through
   `naut snmp serve` / `naut redfish serve` into a controller on `:8085`;
-  serve with `CONTROLLER_URL=http://localhost:8085`.
+  serve with `CONTROLLER_URL=http://localhost:8085`. For motion, serve
+  with `CONTROLLER_URL=http://localhost:8086` instead: `sim/replay.mjs`
+  lays 68 h of recorded history (MON01's Prometheus: port traffic and
+  link, fans, temperatures, PSUs, power, mesh-port link) over the
+  controller's frames on a looping clock; the replay clock (bottom right)
+  shows the recorded time, sets the speed and scrubs.
 - `/rack?mesh` (or **mesh** in the toolbar): the same devices and links as a
   network floating in space — switches on a ring, each server under the two
   switches it is cabled to, every link an arc labelled with its two ports and

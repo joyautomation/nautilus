@@ -62,7 +62,7 @@
 		{"id": "inlet", "name": "Inlet", "tag": "{node}_Temp_Inlet", "pos": [200, 30, -25]},
 		{"id": "system", "name": "System", "tag": "{node}_Temp_System", "pos": [60, 8, -300]},
 		{"id": "peripheral", "name": "Peripheral", "tag": "{node}_Temp_Peripheral", "pos": [-100, 38, -440]},
-		{"id": "vrm", "name": "CPU VRM", "tag": "{node}_Temp_VRM_CPU", "pos": [35, 10, -440]}
+		{"id": "vrm", "name": "CPU VRM", "tag": "{node}_Temp_CPU_VRMIN", "pos": [35, 10, -440]}
 	],
 	"sensorsNote": "Standalone sensor positions are approximate (the manuals do not place them).",
 	"population": {"dimm": [["A1"], ["A1", "C1", "E1", "G1"], ["A1", "B1", "C1", "D1", "E1", "F1", "G1", "H1"]]},

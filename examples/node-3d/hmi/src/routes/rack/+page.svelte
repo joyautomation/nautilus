@@ -45,6 +45,7 @@
 	import { plant, allStubs, plantPatterns, topology } from '$lib/plant';
 	import hqRack from '$lib/hq.rack.json';
 	import Studio from '$lib/Studio.svelte';
+	import ReplayClock from '$lib/ReplayClock.svelte';
 
 	const layout = hqRack as RackLayout;
 	const stub = allStubs();
@@ -256,6 +257,8 @@
 <svelte:window onresize={() => (aspect = window.innerWidth / window.innerHeight)} onkeydown={(e) => e.key === 'Escape' && !open && (mesh ? (meshFocus = null) : back())} />
 
 <svelte:head><title>HQ rack · 3D</title></svelte:head>
+
+<ReplayClock replay={(rt.frame as { replay?: any } | null)?.replay} />
 
 <div class="stage">
 	<SceneView {rt} {alarms} {camera} grid={{ pos: [0, 0, -D / 2], cell: 0.1, section: 0.5, size: [4, 4] }} inspector={false} bind:selected onselect={pick} perf={params.has('perf') || aspect > 1}>
