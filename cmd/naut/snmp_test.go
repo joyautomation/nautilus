@@ -247,10 +247,35 @@ func TestSnmpUsageErrors(t *testing.T) {
 		{"import", "--walk", "x"},
 		{"browse"},
 		{"serve"},
+		{"serve", "--walk", "x", "--from", "http://127.0.0.1:8087"}, // --from without --manifest
 		{"tags"},
 	} {
 		if _, code := captureSnmp(t, args...); code != 2 {
 			t.Errorf("%v exited %d, want 2", args, code)
 		}
+	}
+}
+
+// --manifest/--source pick the source a plant-fed agent stands in for, and
+// its address is where the monitoring project polls.
+func TestSnmpServePlantSource(t *testing.T) {
+	p, err := loadServePlant(snmpTestdata("snmp_manifest.yaml"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.source != "SW1" || p.addr == "" {
+		t.Fatalf("source %q addr %q", p.source, p.addr)
+	}
+	if _, err := loadServePlant(snmpTestdata("snmp_manifest.yaml"), "SW9"); err == nil {
+		t.Fatal("an unknown --source must be an error")
+	}
+	two := filepath.Join(t.TempDir(), "two.yaml")
+	raw, _ := os.ReadFile(snmpTestdata("snmp_manifest.yaml"))
+	s := strings.Replace(string(raw), "sources:\n", "sources:\n  - id: SW2\n    host: 127.0.0.1\n    community-env: X\n", 1)
+	if err := os.WriteFile(two, []byte(s), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadServePlant(two, ""); err == nil || !strings.Contains(err.Error(), "--source") {
+		t.Fatalf("two sources and no --source: %v", err)
 	}
 }

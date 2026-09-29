@@ -49,6 +49,11 @@ Usage:
   naut snmp serve --walk file.snmpwalk [--listen 127.0.0.1:1161]
         Stand in for the device from its recording: a v2c agent answering
         Get/GetNext/GetBulk/Set, for naut run on a laptop and for tests.
+  naut snmp serve --walk file.snmpwalk --manifest snmp_manifest.yaml
+        --source SW1 --from http://127.0.0.1:8087
+        Stand in for the device from a plant simulation: every OID the
+        manifest binds answers the plant's live tag (SW1_Port25.OperUp),
+        read backwards through the binding; the rest from the recording.
   naut snmp tags <snmp_manifest.yaml> [-o tags/snmp.yaml] [--skip globs]
         Re-derive the tag file from a committed manifest — no device needed.
 
@@ -85,6 +90,14 @@ Serve flags:
                serves recordings, not secrets)
   --ramp       Move every non-zero ifHCInOctets/ifHCOutOctets counter at a
                few Mb/s, so InBps/OutBps read live on a bench
+  --from       A plant controller's URL: serve its tags (polls /api/state)
+  --manifest   The snmp_manifest.yaml the monitoring project polls with
+               (required with --from: the bindings, read backwards)
+  --source     The manifest source this agent is (default: the only one);
+               --listen defaults to its host:port
+  --every      How often to read the plant (default 1s)
+               Rate members (InBps) steer counters; the root tag's Online
+               false stops the agent answering (a dark switch).
 `
 
 func runSnmp(args []string) int {
@@ -435,12 +448,34 @@ func runSnmpServe(args []string) int {
 	listen := fs.String("listen", "127.0.0.1:1161", "listen address")
 	community := fs.String("community", "public", "community to answer to")
 	ramp := fs.Bool("ramp", false, "move the 64-bit octet counters")
+	from := fs.String("from", "", "plant controller URL to serve tags from")
+	manifestPath := fs.String("manifest", "", "the monitoring project's snmp_manifest.yaml")
+	sourceID := fs.String("source", "", "which manifest source this agent is")
+	every := fs.Duration("every", time.Second, "plant poll period")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *walkPath == "" {
 		fmt.Fprintln(os.Stderr, "naut snmp serve: --walk is required")
 		return 2
+	}
+	var plant *servePlant
+	if *from != "" || *manifestPath != "" {
+		if *from == "" || *manifestPath == "" {
+			fmt.Fprintln(os.Stderr, "naut snmp serve: --from and --manifest go together")
+			return 2
+		}
+		p, err := loadServePlant(*manifestPath, *sourceID)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut snmp serve:", err)
+			return 1
+		}
+		plant = p
+		listenSet := false
+		fs.Visit(func(f *flag.Flag) { listenSet = listenSet || f.Name == "listen" })
+		if !listenSet {
+			*listen = p.addr
+		}
 	}
 	raw, err := os.ReadFile(*walkPath)
 	if err != nil {
@@ -458,11 +493,59 @@ func runSnmpServe(args []string) int {
 		return 1
 	}
 	defer stop()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if plant != nil {
+		pl, err := agent.NewPlant(a, plant.m, plant.source)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut snmp serve:", err)
+			return 1
+		}
+		pl.Log = slog.New(slog.NewTextHandler(os.Stdout, nil))
+		fmt.Printf("serving %d bound OID(s) of %s from %s (every %s)\n", len(pl.Feeds), plant.source, *from, *every)
+		go pl.Run(ctx, agent.StateFetcher(*from, plant.m.TagPatterns(plant.source)), *every)
+	}
 	fmt.Printf("listening on %s (v2c, community %q) — ctrl-c to stop\n", a.Addr(), *community)
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
-	<-ch
+	<-ctx.Done()
 	return 0
+}
+
+// servePlant is --manifest/--source resolved: the manifest and the source
+// this agent stands in for.
+type servePlant struct {
+	m      snmp.Manifest
+	source string
+	addr   string
+}
+
+func loadServePlant(path, source string) (*servePlant, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	m, err := snmp.ParseManifest(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := m.Validate(); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if source == "" {
+		if len(m.Sources) != 1 {
+			ids := make([]string, len(m.Sources))
+			for i, s := range m.Sources {
+				ids[i] = s.ID
+			}
+			return nil, fmt.Errorf("%s has %d sources (%s): name one with --source", path, len(m.Sources), strings.Join(ids, ", "))
+		}
+		source = m.Sources[0].ID
+	}
+	for _, s := range m.Sources {
+		if s.ID == source {
+			return &servePlant{m: m, source: source, addr: s.Addr()}, nil
+		}
+	}
+	return nil, fmt.Errorf("%s: no source %q", path, source)
 }
 
 // startSnmpServe stands the agent up over a walk. Package-level so the test
