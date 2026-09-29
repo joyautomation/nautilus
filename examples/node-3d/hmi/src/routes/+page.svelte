@@ -70,6 +70,17 @@
 		rear: { pos: [0, 0.08, -0.8], target: [0, 0.02, 0], fov: 40 },
 		top: { pos: [0, 1.05, 0.001], target: [0, 0, 0], fov: 40 }
 	};
+	// A portrait phone sees a narrow slice of the same field of view, so the
+	// presets pull back in proportion (the scene stays framed, not cropped).
+	let aspect = $state(typeof window !== 'undefined' ? window.innerWidth / window.innerHeight : 1.6);
+	const framed = (c: SceneCamera): SceneCamera => {
+		const k = Math.max(1, 1.2 / aspect);
+		const pos = c.pos.map((v, i) => c.target[i] + (v - c.target[i]) * k) as [number, number, number];
+		return { ...c, pos };
+	};
+	// The fps / latency strip is a measuring tool; on a phone it crowds the
+	// view, so it shows on wide screens (or with ?perf).
+	let perf = $derived(params.has('perf') || aspect > 1);
 	const first = params.get('view') ?? 'iso';
 	let view = $state<keyof typeof CAMERAS>(first in CAMERAS ? first : 'iso');
 
@@ -90,13 +101,15 @@
 	});
 </script>
 
+<svelte:window onresize={() => (aspect = window.innerWidth / window.innerHeight)} />
+
 <svelte:head><title>node1 · 3D</title></svelte:head>
 
 <div class="stage">
 	{#if problems.length}
 		<pre class="err">{JSON.stringify(problems, null, 2)}</pre>
 	{/if}
-	<SceneView {rt} {alarms} camera={CAMERAS[view]} grid={{ pos: [0, -0.0005, 0], cell: 0.05, section: 0.25, size: [2, 2] }} inspector={false} bind:selected onselect={() => (open = true)} perf>
+	<SceneView {rt} {alarms} camera={framed(CAMERAS[view])} grid={{ pos: [0, -0.0005, 0], cell: 0.05, section: 0.25, size: [2, 2] }} inspector={false} bind:selected onselect={() => (open = true)} {perf}>
 		<Studio />
 		<Server {profile} node={NODE} label="node1" pos={[0, 0, D / 2]} {lid} {xray} {exploded} anchor={codes} {codeImages} {overlay} />
 		{#snippet hud()}

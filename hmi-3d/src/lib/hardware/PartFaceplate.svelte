@@ -44,12 +44,24 @@
 	let tag = $derived(part ? (part.tag ?? '') : (server?.tag ?? ''));
 </script>
 
-<FaceplateShell label={title} {tag} {quality} present={state !== 'missing' || !part} size="md" chips={[CHIP[state]]} {onclose}>
-	{#snippet hero()}
-		{#if headline && state !== 'unbound' && state !== 'missing'}
-			<p class="hero">{headline}</p>
-		{/if}
-	{/snippet}
+<!-- Below the shell's breakpoint it is a page, not a dialog, and a page
+     sits in the document flow — under a 3D view that fills the screen. The
+     host lifts it into its own full-screen layer there; above the
+     breakpoint the dialog is in the top layer and the host steps aside. -->
+<div class="host">
+{#snippet heroLine()}
+	<p class="hero">{headline}</p>
+{/snippet}
+<FaceplateShell
+	label={title}
+	{tag}
+	{quality}
+	present={state !== 'missing' || !part}
+	size="md"
+	chips={[CHIP[state]]}
+	hero={headline && state !== 'unbound' && state !== 'missing' ? heroLine : undefined}
+	{onclose}
+>
 	{#if state === 'unbound'}
 		<p class="muted">Nothing is fitted here, and the profile binds no tag to this position.</p>
 	{:else if state === 'missing'}
@@ -70,8 +82,23 @@
 		<p class="muted">{note}</p>
 	{/if}
 </FaceplateShell>
+</div>
 
 <style>
+	.host {
+		display: contents;
+	}
+	@media (max-width: 899.98px) {
+		.host {
+			display: block;
+			position: fixed;
+			inset: 0;
+			z-index: 20;
+			overflow: auto;
+			overscroll-behavior: contain;
+			background: var(--surface, #161615);
+		}
+	}
 	.hero {
 		margin: 0;
 		font: 600 22px/1.2 system-ui, sans-serif;
