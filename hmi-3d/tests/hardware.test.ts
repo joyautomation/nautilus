@@ -152,7 +152,8 @@ describe('overlays', () => {
 		const p1 = byId('nicSlot2p1');
 		expect(interfacesOverlay.paint(p1, { LinkUp: true, SpeedGbps: 25 }, ctx({}))).toEqual({ color: 'good', text: '25G' });
 		expect(interfacesOverlay.paint(p1, { LinkUp: true, SpeedGbps: 10 }, ctx({}))).toEqual({ color: 'warn', text: '10/25G' });
-		expect(interfacesOverlay.paint(byId('lan1'), { LinkUp: false, SpeedGbps: 0 }, ctx({}))).toEqual({ color: 'neutral', text: 'no link' });
+		expect(interfacesOverlay.paint(byId('lan1'), { LinkUp: false, SpeedGbps: 0 }, ctx({}))).toEqual({ color: 'neutral', text: 'LAN1 no link' });
+		expect(interfacesOverlay.paint(byId('bmc'), { LinkUp: true, SpeedGbps: 1 }, ctx({}))).toEqual({ color: 'good', text: 'BMC 1G' });
 		expect(interfacesOverlay.paint(byId('psu1'), { InputOk: false }, ctx({})).color).toBe('crit');
 		expect(interfacesOverlay.paint(byId('cpu1'), {}, ctx({})).dim).toBe(true);
 	});

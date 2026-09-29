@@ -148,8 +148,8 @@
 		{"id": "nicSlot2p2", "kind": "port", "slot": "NIC1 port 2 (system slot 2)", "pos": [-150, 13.5, -589], "size": [14, 9, 12], "explode": [0, 60, 0], "ratedGbps": 25, "jack": "sfp28"},
 		{"id": "nicSlot3p1", "kind": "port", "slot": "NIC2 port 1 (system slot 3)", "pos": [-73, 22.5, -589], "size": [14, 9, 12], "explode": [0, 95, 0], "ratedGbps": 25, "jack": "sfp28"},
 		{"id": "nicSlot3p2", "kind": "port", "slot": "NIC2 port 2 (system slot 3)", "pos": [-57, 22.5, -589], "size": [14, 9, 12], "explode": [0, 95, 0], "ratedGbps": 25, "jack": "sfp28"},
-		{"id": "lan1", "kind": "port", "slot": "LAN1 (onboard)", "pos": [10, 16, -591], "size": [14, 12, 10], "ratedGbps": 1, "jack": "rj45"},
-		{"id": "lan2", "kind": "port", "slot": "LAN2 (onboard)", "pos": [-10, 16, -591], "size": [14, 12, 10], "ratedGbps": 1, "jack": "rj45"},
-		{"id": "bmc", "kind": "port", "slot": "BMC LAN (dedicated)", "pos": [45, 34, -591], "size": [14, 12, 10], "ratedGbps": 1, "jack": "rj45"}
+		{"id": "lan1", "kind": "port", "slot": "LAN1 (onboard)", "pos": [10, 16, -591], "size": [14, 12, 10], "ratedGbps": 1, "jack": "rj45", "short": "LAN1"},
+		{"id": "lan2", "kind": "port", "slot": "LAN2 (onboard)", "pos": [-10, 16, -591], "size": [14, 12, 10], "ratedGbps": 1, "jack": "rj45", "short": "LAN2"},
+		{"id": "bmc", "kind": "port", "slot": "BMC LAN (dedicated)", "pos": [45, 34, -591], "size": [14, 12, 10], "ratedGbps": 1, "jack": "rj45", "short": "BMC", "role": "management"}
 	]
 }

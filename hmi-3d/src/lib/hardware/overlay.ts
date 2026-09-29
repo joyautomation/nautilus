@@ -132,15 +132,19 @@ export const interfacesOverlay: Overlay = {
 	paint(part, value, ctx) {
 		const c = ctx.colors;
 		if (part.kind === 'port') {
-			if (value === undefined) return { color: c.neutral, text: 'not reported', dim: true };
-			if (member(value, 'LinkUp') !== true) return { color: c.neutral, text: 'no link' };
+			// A port with a name in the profile says it (BMC, LAN1); the NIC
+			// cages, 16 mm apart, keep to the speed alone.
+			const name = typeof part.props.short === 'string' ? `${part.props.short} ` : '';
+			const said = (p: PartPaint): PartPaint => ({ ...p, text: `${name}${p.text}` });
+			if (value === undefined) return said({ color: c.neutral, text: 'not reported', dim: true });
+			if (member(value, 'LinkUp') !== true) return said({ color: c.neutral, text: 'no link' });
 			const speed = num(member(value, 'SpeedGbps'));
 			const rated = num(part.props.ratedGbps);
 			// Short: ports sit 16 mm apart. `25G`, below rated `10/25G`.
 			const g = (x: number) => (x >= 1 ? `${+x.toFixed(1)}` : `${+x.toFixed(2)}`);
-			if (speed === undefined) return { color: c.good, text: 'up' };
-			if (rated !== undefined && speed < rated) return { color: c.warning, text: `${g(speed)}/${rated}G` };
-			return { color: c.good, text: `${g(speed)}G` };
+			if (speed === undefined) return said({ color: c.good, text: 'up' });
+			if (rated !== undefined && speed < rated) return said({ color: c.warning, text: `${g(speed)}/${rated}G` });
+			return said({ color: c.good, text: `${g(speed)}G` });
 		}
 		if (part.kind === 'psu') {
 			if (value === undefined) return DIM;
