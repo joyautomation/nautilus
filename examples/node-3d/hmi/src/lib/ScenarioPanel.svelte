@@ -6,6 +6,8 @@
 	// Scenario := normal. Right-click a part in the 3D for its own faults.
 	import { activeFaults, since } from './faults';
 	import type { PlantFaults } from './faults.svelte';
+	import Sheet from './Sheet.svelte';
+	import { sheets } from './sheets.svelte';
 
 	let { faults }: { faults: PlantFaults } = $props();
 	let open = $state(true);
@@ -15,13 +17,19 @@
 </script>
 
 {#if faults.up}
+	<Sheet id="scenarios" label="Scenarios (simulation)" flush>
+		{#snippet chip()}
+			<span class="sim">SIM</span> Scenarios{#if active.length}<b class="n">{active.length}</b>{/if}
+		{/snippet}
 	<section class="panel" aria-label="Scenarios (simulation)">
 		<header>
 			<span class="sim">SIMULATION</span>
 			<b>Scenarios</b>
-			<button class="toggle" aria-expanded={open} onclick={() => (open = !open)}>{open ? '▾' : '▸'}</button>
+			{#if !sheets.phone}
+				<button class="toggle" aria-expanded={open} onclick={() => (open = !open)}>{open ? '▾' : '▸'}</button>
+			{/if}
 		</header>
-		{#if open}
+		{#if open || sheets.phone}
 			<div class="now">
 				{#if running}
 					<span class="dot"></span>
@@ -62,23 +70,30 @@
 			</ul>
 		{/if}
 	</section>
+	</Sheet>
 {/if}
 
 <style>
 	.panel {
 		width: min(320px, calc(100vw - 24px));
-		max-height: 100%;
 		min-height: 0;
 		flex: 0 1 auto;
 		display: flex;
 		flex-direction: column;
-		border-radius: 8px;
-		border: 1px solid var(--axis, #383835);
-		background: color-mix(in srgb, var(--surface, #1a1a19) 92%, transparent);
-		color: var(--ink, #e8e6e1);
 		font: 12px/1.35 system-ui, sans-serif;
-		overflow: hidden;
-		pointer-events: auto;
+	}
+	@media (max-width: 600px) {
+		.panel {
+			width: auto;
+		}
+	}
+	.n {
+		min-width: 16px;
+		padding: 1px 5px;
+		border-radius: 999px;
+		background: var(--warn, #d9a441);
+		color: var(--surface, #1a1a19);
+		text-align: center;
 	}
 	header {
 		display: flex;

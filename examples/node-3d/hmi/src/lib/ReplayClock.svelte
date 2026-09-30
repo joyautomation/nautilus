@@ -143,11 +143,13 @@
 		accent-color: var(--accent, #6aa5e8);
 	}
 	@media (max-width: 600px) {
+		/* along the bottom, under the chip row (sheets.svelte.ts) */
 		.clock {
 			left: 12px;
 			right: 12px;
-			bottom: auto;
-			top: 96px;
+		}
+		.muted {
+			display: none;
 		}
 	}
 </style>

@@ -9,7 +9,7 @@
 	import { Tween } from 'svelte/motion';
 	import { cubicOut } from 'svelte/easing';
 	import { RealtimeClient, createAlarmClient, type NautilusFrame } from '@joyautomation/nautilus-hmi';
-	import { SceneView, AlarmKey, DEFAULT_PALETTE, paletteFromTheme, type SceneCamera, type Palette, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
+	import { SceneView, DEFAULT_PALETTE, paletteFromTheme, type SceneCamera, type Palette, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
 	import {
 		Server,
 		Rack,
@@ -46,6 +46,8 @@
 	import Studio from '$lib/Studio.svelte';
 	import ReplayClock from '$lib/ReplayClock.svelte';
 	import ScenarioPanel from '$lib/ScenarioPanel.svelte';
+	import AlarmBox from '$lib/AlarmBox.svelte';
+	import Sheet from '$lib/Sheet.svelte';
 	import PartMenu from '$lib/PartMenu.svelte';
 	import { PlantFaults } from '$lib/faults.svelte';
 
@@ -231,6 +233,10 @@
 	let portsUp = $derived(
 		pickedDevice?.kind === 'switch' ? pickedDevice.parts.filter((p) => p.tag && portReading(tags[p.tag]).up === true).length : undefined
 	);
+	// The legend folded to a chip on a phone: what it is and the count that matters.
+	let legendChip = $derived(
+		!mesh && focused && overlay && overlay.id !== 'cables' ? overlay.name : `Cables · ${counts.contradicted + counts.down} ✗/↓`
+	);
 	let legendCtx = $derived<OverlayContext | undefined>(focused ? { node: focused.tag, profile: focused.profile, tags, colors } : undefined);
 
 	function showInRack() {
@@ -270,12 +276,7 @@
 
 <ReplayClock />
 <div class="side">
-	{#if (alarms.summary?.active ?? 0) > 0}
-		<aside class="alarmkey" aria-label="What the alarm signs mean">
-			<b>{alarms.summary?.active} in alarm</b>
-			<AlarmKey {palette} />
-		</aside>
-	{/if}
+	<AlarmBox active={alarms.summary?.active ?? 0} {palette} />
 	<ScenarioPanel {faults} />
 </div>
 {#if menu}
@@ -355,6 +356,8 @@
 </div>
 
 <aside class="legend" aria-label="Links">
+	<Sheet id="legend" label="Legend">
+	{#snippet chip()}{legendChip}{/snippet}
 	{#if !mesh && focused && overlay && legendCtx && overlay.id !== 'cables'}
 		<b>{overlay.name} · {focused.hostname ?? focused.id}</b>
 		<ul>
@@ -391,6 +394,7 @@
 		</details>
 		<p>Declared in the site topology, checked live: ✓ an end names the other (LLDP / MAC), = both ends up at the same speed, ✗ the ends disagree, ↓ no end that reports has link, ? an end not reported (faint). Not racked yet: the units are a default (switches on top, nodes below).</p>
 	{/if}
+	</Sheet>
 </aside>
 
 {#if open && selected && pickedDevice}
@@ -446,13 +450,10 @@
 		bottom: 12px;
 		max-width: 320px;
 		max-height: 55vh;
-		overflow: auto;
-		padding: 10px 12px;
-		border-radius: 8px;
-		border: 1px solid var(--axis, #383835);
-		background: color-mix(in srgb, var(--surface, #1a1a19) 90%, transparent);
-		color: var(--ink, #e8e6e1);
+		display: flex;
+		flex-direction: column;
 		font: 12px/1.4 system-ui, sans-serif;
+		z-index: 5;
 	}
 	.legend ul,
 	.legend ol {
@@ -500,18 +501,13 @@
 		font-size: 11px;
 	}
 	@media (max-width: 600px) {
+		/* a chip at the left of the chip row */
 		.legend {
-			max-width: none;
-			right: 12px;
-			max-height: 30vh;
-		}
-		.legend p {
-			display: none;
+			bottom: 104px;
 		}
 	}
-	/* The alarm signs' key, while anything is in alarm: top right, clear of
-	   the toolbar and the overlay legend. */
-	/* Top right: the alarm key, then the simulation's scenarios. */
+	/* Top right: the alarm signs' key while anything is in alarm, then the
+	   simulation's scenarios; on a phone, chips above the replay clock. */
 	.side {
 		position: fixed;
 		top: 12px;
@@ -525,15 +521,14 @@
 		gap: 8px;
 		pointer-events: none;
 	}
-	.alarmkey {
-		pointer-events: auto;
-		display: grid;
-		gap: 6px;
-		padding: 8px 10px;
-		border-radius: 8px;
-		border: 1px solid var(--axis, #383835);
-		background: color-mix(in srgb, var(--surface, #1a1a19) 90%, transparent);
-		color: var(--ink, #e8e6e1);
-		font: 12px/1.3 system-ui, sans-serif;
+	@media (max-width: 600px) {
+		.side {
+			top: auto;
+			bottom: 104px;
+			left: 12px;
+			flex-direction: row;
+			align-items: flex-end;
+			justify-content: flex-end;
+		}
 	}
 </style>

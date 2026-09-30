@@ -6,7 +6,7 @@
 	// redfish import's part tags). Pull a drive with the plant's fault tags.
 	import { onMount } from 'svelte';
 	import { RealtimeClient, createAlarmClient, type NautilusFrame } from '@joyautomation/nautilus-hmi';
-	import { SceneView, AlarmKey, DEFAULT_PALETTE, paletteFromTheme, type SceneCamera, type Palette } from '@joyautomation/nautilus-hmi-3d';
+	import { SceneView, DEFAULT_PALETTE, paletteFromTheme, type SceneCamera, type Palette } from '@joyautomation/nautilus-hmi-3d';
 	import { Server, PartFaceplate, resolveParts, validateProfile, anchorPayload, OVERLAYS, cablesOverlay, linkOnPort, linkFacts, overlayColors, type ChassisProfile, type OverlayContext } from '@joyautomation/nautilus-hmi-3d/hardware';
 	import QRCode from 'qrcode';
 	import sys112b from '@joyautomation/nautilus-hmi-3d/profiles/supermicro-sys-112b-wr.json';
@@ -14,6 +14,7 @@
 	import Studio from '$lib/Studio.svelte';
 	import ReplayClock from '$lib/ReplayClock.svelte';
 	import ScenarioPanel from '$lib/ScenarioPanel.svelte';
+	import AlarmBox from '$lib/AlarmBox.svelte';
 	import PartMenu from '$lib/PartMenu.svelte';
 	import { PlantFaults } from '$lib/faults.svelte';
 
@@ -121,12 +122,7 @@
 
 <ReplayClock />
 <div class="side">
-	{#if (alarms.summary?.active ?? 0) > 0}
-		<aside class="alarmkey" aria-label="What the alarm signs mean">
-			<b>{alarms.summary?.active} in alarm</b>
-			<AlarmKey {palette} />
-		</aside>
-	{/if}
+	<AlarmBox active={alarms.summary?.active ?? 0} {palette} />
 	<ScenarioPanel {faults} />
 </div>
 {#if menu}
@@ -261,9 +257,8 @@
 		z-index: 2;
 		color: var(--crit, #d03b3b);
 	}
-	/* The alarm signs' key, while anything is in alarm: top right, clear of
-	   the toolbar and the overlay legend. */
-	/* Top right: the alarm key, then the simulation's scenarios. */
+	/* Top right: the alarm signs' key while anything is in alarm, then the
+	   simulation's scenarios; on a phone, chips above the replay clock. */
 	.side {
 		position: fixed;
 		top: 12px;
@@ -277,15 +272,14 @@
 		gap: 8px;
 		pointer-events: none;
 	}
-	.alarmkey {
-		pointer-events: auto;
-		display: grid;
-		gap: 6px;
-		padding: 8px 10px;
-		border-radius: 8px;
-		border: 1px solid var(--axis, #383835);
-		background: color-mix(in srgb, var(--surface, #1a1a19) 90%, transparent);
-		color: var(--ink, #e8e6e1);
-		font: 12px/1.3 system-ui, sans-serif;
+	@media (max-width: 600px) {
+		.side {
+			top: auto;
+			bottom: 104px;
+			left: 12px;
+			flex-direction: row;
+			align-items: flex-end;
+			justify-content: flex-end;
+		}
 	}
 </style>
