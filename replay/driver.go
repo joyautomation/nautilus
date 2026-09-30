@@ -97,18 +97,23 @@ func (d *Driver) loadLocked() {
 		return
 	}
 	d.matched = map[string]int{}
+	complete := 0 // the first sample by which every replayed series is real
 	for _, t := range d.m.Tags {
 		ht, _ := hw.TypeByName(t.Type)
 		for _, f := range ht.Fields {
 			if _, ok := d.h.Series[t.Series+"."+f.Name]; ok {
 				d.matched[t.Name]++
+				complete = max(complete, d.h.First[t.Series+"."+f.Name])
 			}
 		}
 		if d.matched[t.Name] == 0 {
 			d.log.Warn("replay: no series in the recording for this tag; it delivers its constants only", "tag", t.Name, "series", t.Series)
 		}
 	}
-	from, to := float64(d.h.T0), float64(d.h.End())
+	// By default the loop starts where the recording is complete: a series
+	// that began late is back-filled before that, and a baseline that
+	// opens on hours of flat lines is not the one that was recorded.
+	from, to := float64(d.h.T0+int64(complete)*d.h.Step), float64(d.h.End())
 	if !d.m.From.IsZero() {
 		from = math.Max(from, float64(d.m.From.Unix()))
 	}

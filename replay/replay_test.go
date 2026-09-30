@@ -138,7 +138,8 @@ func TestDriverDelivers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if v[TagAt] != int64(1000) || v[TagFrom] != int64(1000) || v[TagTo] != int64(1180) {
+	// InBps is back-filled before its first sample (1060): the loop starts there.
+	if v[TagAt] != int64(1060) || v[TagFrom] != int64(1060) || v[TagTo] != int64(1180) {
 		t.Fatalf("clock tags: %v %v %v", v[TagAt], v[TagFrom], v[TagTo])
 	}
 	p := v["Rec_SW1_Port25"]
@@ -152,11 +153,11 @@ func TestDriverDelivers(t *testing.T) {
 		t.Fatal("a member neither recorded nor constant is zero")
 	}
 
-	// Steer it: 60× for 2 s lands on the link-down sample.
+	// Steer it: 60× for 1 s lands on the link-down sample.
 	if err := d.WriteOutputs(nio.Values{TagSpeed: 60.0, TagPause: false}); err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(2 * time.Second)
+	now = now.Add(time.Second)
 	v, _ = d.ReadInputs()
 	if v[TagAt] != int64(1120) || member(t, v["Rec_SW1_Port25"], "OperUp").B {
 		t.Fatalf("at %v: OperUp %v", v[TagAt], member(t, v["Rec_SW1_Port25"], "OperUp").B)

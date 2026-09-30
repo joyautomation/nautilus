@@ -41,7 +41,8 @@ type Manifest struct {
 	// History is the recording, relative to the project (it may be a
 	// symlink out of it, for data that is not committed).
 	History string
-	// From and To bound the loop; zero = the recording's own ends.
+	// From and To bound the loop; zero = from the first moment every
+	// replayed series has a real sample, to the recording's end.
 	From, To time.Time
 	// Start is where the clock begins; zero = From.
 	Start time.Time

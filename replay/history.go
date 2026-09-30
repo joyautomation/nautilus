@@ -20,6 +20,9 @@ type History struct {
 	N      int
 	Series map[string][]float64
 	Bool   map[string]bool
+	// First is each series' first real sample: before it the series is
+	// back-filled, a flat line the recording never saw.
+	First map[string]int
 }
 
 type historyJSON struct {
@@ -49,7 +52,7 @@ func LoadHistory(r io.Reader) (*History, error) {
 	if y.Step <= 0 || y.N <= 0 {
 		return nil, fmt.Errorf("history: step %d, n %d: nothing to replay", y.Step, y.N)
 	}
-	h := &History{T0: y.T0, Step: y.Step, N: y.N, Series: map[string][]float64{}, Bool: map[string]bool{}}
+	h := &History{T0: y.T0, Step: y.Step, N: y.N, Series: map[string][]float64{}, Bool: map[string]bool{}, First: map[string]int{}}
 	for _, b := range y.Bool {
 		h.Bool[b] = true
 	}
@@ -65,6 +68,7 @@ func LoadHistory(r io.Reader) (*History, error) {
 				last = *v
 				if math.IsNaN(first) {
 					first = *v
+					h.First[name] = i
 				}
 			}
 			out[i] = last
