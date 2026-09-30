@@ -279,3 +279,31 @@ func TestSnmpServePlantSource(t *testing.T) {
 		t.Fatalf("two sources and no --source: %v", err)
 	}
 }
+
+// read is the manifest applied to a walk with no device: the same values
+// the driver delivers from the switch the walk was recorded on.
+func TestSnmpReadOffline(t *testing.T) {
+	raw, err := os.ReadFile(snmpTestdata("switch.snmpwalk"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := walk.ParseBytes(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := loadServePlant(snmpTestdata("snmp_manifest.yaml"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags, err := readSnmpOffline(w, p.m, p.source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _ := tags["SW1"].(map[string]any)
+	if root["Name"] != "sw1-lab" || root["Serial"] != "SN-TEST-0001" {
+		t.Fatalf("SW1 = %v", root)
+	}
+	if _, ok := tags["SW1_Port01"].(map[string]any)["OperUp"]; !ok {
+		t.Fatalf("SW1_Port01 = %v", tags["SW1_Port01"])
+	}
+}

@@ -1,0 +1,51 @@
+# The plant's fault logic, in virtual time: each fault input bends only
+# what it should, faults compose, clearing one restores the baseline, and
+# the baseline is the recording while it plays and the snapshot when it
+# does not. No recording is needed: the replay driver's tags are given.
+#   naut test .
+tolerance: 0.01
+
+tests:
+  - name: without the recording, the snapshot holds
+    steps:
+      - advance: 2s
+        expect: { SW1_Port25.OperUp: true, SW1_Port25.InBps: 36400.0, SW1_Port25.SpeedMbps: 10000.0, SW1_Port25.Name: "TGigaEthernet0/25", SW1.Online: true }
+
+  - name: while the recording plays, the port follows it and keeps its identity
+    given: { Replay_At: 1790460000, Rec_SW1_Port25.OperUp: true, Rec_SW1_Port25.AdminUp: true, Rec_SW1_Port25.SpeedMbps: 10000.0, Rec_SW1_Port25.InBps: 5000000.0 }
+    steps:
+      - advance: 1s
+        expect: { SW1_Port25.InBps: 5000000.0, SW1_Port25.InPct: 0.05, SW1_Port25.Name: "TGigaEthernet0/25", SW1_Port25.Index: 189 }
+      - given: { Rec_SW1_Port25.OperUp: false }
+        advance: 1s
+        expect: { SW1_Port25.OperUp: false, SW1_Port25.Down: true, SW1_Port25.InBps: 0.0 }
+
+  - name: port down drops link and traffic, admin stays up
+    steps:
+      - given: { Sim_SW1_Port25.Down: true }
+        advance: 1s
+        expect: { SW1_Port25.OperUp: false, SW1_Port25.AdminUp: true, SW1_Port25.Down: true, SW1_Port25.InBps: 0.0, SW1_Port26.OperUp: true, SW1.PortsUp: 5 }
+      - given: { Sim_SW1_Port25.Down: false }
+        advance: 1s
+        expect: { SW1_Port25.OperUp: true, SW1_Port25.InBps: 36400.0, SW1.PortsUp: 6 }
+
+  - name: admin down is not a link-down
+    steps:
+      - given: { Sim_SW1_Port25.AdminDown: true }
+        advance: 1s
+        expect: { SW1_Port25.AdminUp: false, SW1_Port25.OperUp: false, SW1_Port25.Down: false }
+
+  - name: speed degrade and error burst compose, and clear
+    steps:
+      - given: { Sim_SW1_Port25.SpeedMbps: 1000.0, Sim_SW1_Port25.ErrorRate: 5.0 }
+        advance: 1s
+        expect: { SW1_Port25.OperUp: true, SW1_Port25.SpeedMbps: 1000.0, SW1_Port25.ErrorRate: 5.0, SW1_Port25.InBps: 36400.0 }
+      - given: { Sim_SW1_Port25.SpeedMbps: 0.0, Sim_SW1_Port25.ErrorRate: 0.0 }
+        advance: 1s
+        expect: { SW1_Port25.SpeedMbps: 10000.0, SW1_Port25.ErrorRate: 0.0 }
+
+  - name: a dark switch takes every port down, and only its own
+    steps:
+      - given: { Sim_SW1.Dark: true }
+        advance: 1s
+        expect: { SW1.Online: false, SW1_Port25.OperUp: false, SW1_Port01.OperUp: false, SW1.PortsUp: 0, SW2_Port25.OperUp: true }
