@@ -1,0 +1,173 @@
+{
+	"site": "hq",
+	"generated": "2026-09-29T05:13:09Z",
+	"devices": [
+		{
+			"id": "node1",
+			"kind": "server",
+			"profile": "supermicro-sys-112b-wr",
+			"tag": "NODE1"
+		},
+		{
+			"id": "node2",
+			"kind": "server",
+			"profile": "supermicro-sys-112b-wr",
+			"tag": "NODE2"
+		},
+		{
+			"id": "node3",
+			"kind": "server",
+			"profile": "supermicro-sys-112b-wr",
+			"tag": "NODE3"
+		},
+		{
+			"id": "sw1",
+			"kind": "switch",
+			"model": "FS S3900-24T4S-R",
+			"hostname": "hq-sw1",
+			"tag": "SW1"
+		},
+		{
+			"id": "sw2",
+			"kind": "switch",
+			"model": "FS S3900-24T4S-R",
+			"hostname": "hq-sw2",
+			"tag": "SW2"
+		},
+		{
+			"id": "sw3",
+			"kind": "switch",
+			"model": "FS S3900-24T4S-R",
+			"hostname": "hq-sw3",
+			"tag": "SW3"
+		}
+	],
+	"links": [
+		{
+			"kind": "uplink",
+			"a": "node1/nicSlot2p2",
+			"b": "sw1/te0/25",
+			"rateGbps": 10,
+			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)"
+		},
+		{
+			"kind": "uplink",
+			"a": "node3/nicSlot2p2",
+			"b": "sw1/te0/26",
+			"rateGbps": 10,
+			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)"
+		},
+		{
+			"kind": "bmc",
+			"a": "node1/bmc",
+			"b": "sw1/g0/24",
+			"rateGbps": 1,
+			"evidence": "switch MAC table (BMC MAC on g0/24)"
+		},
+		{
+			"kind": "uplink",
+			"a": "node2/nicSlot2p2",
+			"b": "sw2/te0/25",
+			"rateGbps": 10,
+			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)"
+		},
+		{
+			"kind": "uplink",
+			"a": "node1/nicSlot3p2",
+			"b": "sw2/te0/26",
+			"rateGbps": 10,
+			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)"
+		},
+		{
+			"kind": "bmc",
+			"a": "node2/bmc",
+			"b": "sw2/g0/24",
+			"rateGbps": 1,
+			"evidence": "switch MAC table (BMC MAC on g0/24)"
+		},
+		{
+			"kind": "uplink",
+			"a": "node3/nicSlot3p2",
+			"b": "sw3/te0/25",
+			"rateGbps": 10,
+			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)"
+		},
+		{
+			"kind": "uplink",
+			"a": "node2/nicSlot3p2",
+			"b": "sw3/te0/26",
+			"rateGbps": 10,
+			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)"
+		},
+		{
+			"kind": "bmc",
+			"a": "node3/bmc",
+			"b": "sw3/g0/24",
+			"rateGbps": 1,
+			"evidence": "switch MAC table (BMC MAC on g0/24)"
+		},
+		{
+			"kind": "mesh",
+			"a": "node1/nicSlot2p1",
+			"b": "node2/nicSlot3p1",
+			"rateGbps": 25,
+			"evidence": "host-side discovery + ping across the /29 (mesh-discover.py)",
+			"name": "mesh12"
+		},
+		{
+			"kind": "mesh",
+			"a": "node2/nicSlot2p1",
+			"b": "node3/nicSlot3p1",
+			"rateGbps": 25,
+			"evidence": "host-side discovery + ping across the /29 (mesh-discover.py)",
+			"name": "mesh23"
+		},
+		{
+			"kind": "mesh",
+			"a": "node1/nicSlot3p1",
+			"b": "node3/nicSlot2p1",
+			"rateGbps": 25,
+			"evidence": "host-side discovery + ping across the /29 (mesh-discover.py)",
+			"name": "mesh13"
+		},
+		{
+			"kind": "ring",
+			"a": "sw1/te0/27",
+			"b": "sw2/te0/28",
+			"rateGbps": 10,
+			"evidence": "LLDP, both ends (2026-09-28)",
+			"rpl": false
+		},
+		{
+			"kind": "ring",
+			"a": "sw2/te0/27",
+			"b": "sw3/te0/28",
+			"rateGbps": 10,
+			"evidence": "LLDP, both ends (2026-09-28)",
+			"rpl": false
+		},
+		{
+			"kind": "ring",
+			"a": "sw3/te0/27",
+			"b": "sw1/te0/28",
+			"rateGbps": 10,
+			"evidence": "LLDP, both ends (2026-09-28)",
+			"rpl": true
+		},
+		{
+			"kind": "site-uplink",
+			"a": "sw1/g0/1",
+			"b": "site",
+			"rateGbps": 1,
+			"evidence": "site.json: the office uplink (trunk VLANs 20/21/22); unplugged after the VLAN cutover, 2026-09-29"
+		},
+		{
+			"kind": "bench",
+			"a": "sw1/g0/23",
+			"b": "mira1",
+			"rateGbps": 1,
+			"evidence": "cluster-hq, 2026-09-29: mira1's bring-up trunk (bench gateway, VLANs 20/21/22); removed at delivery"
+		}
+	],
+	"note": "From randd/node-3d-sim (build-topology.py) over cluster-hq's network design; MACs and subnets removed for the repo."
+}

@@ -14,6 +14,7 @@ export { default as PerfHud } from './components/PerfHud.svelte';
 // and pipe as components, inside <Scene3D> or inside a component that
 // defines a kind. A <Node> inside a <Node> is a part.
 export { default as Node } from './components/Node.svelte';
+export { default as Fade } from './components/Fade.svelte';
 export { default as Pipe } from './components/Pipe.svelte';
 export { SCENE, NODE } from './context.js';
 export type { SceneContext, NodeContext, PlacedNode } from './context.js';
@@ -61,8 +62,11 @@ export type { NodeKindDef, NodeProps, PanelProps, NodeRegistry, KindMeta, Box } 
 export { BUILTIN_CONTRACT, tankState, tankStatus, pumpState, pumpStatus, valveState, valveStatus } from './kinds.js';
 
 // Alarms in space: one worst-priority entry per asset.
-export { worstAlarmByAsset, alarmAsset } from './alarms.js';
-export type { AssetAlarm, AlarmLike } from './alarms.js';
+export { worstAlarmByAsset, alarmAsset, worstUnder, PRIORITY_SIGN, PRIORITIES } from './alarms.js';
+export type { AssetAlarm, AlarmLike, PrioritySign } from './alarms.js';
+export { default as AlarmMarker } from './components/AlarmMarker.svelte';
+export { default as AlarmSign } from './components/AlarmSign.svelte';
+export { default as AlarmKey } from './components/AlarmKey.svelte';
 
 // Colours from the theme, and the measurement sampler behind PerfHud.
 export { DEFAULT_PALETTE, paletteFromTheme } from './palette.js';

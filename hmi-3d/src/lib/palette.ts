@@ -15,6 +15,8 @@ export interface Palette {
 	running: string;
 	stale: string;
 	selected: string;
+	/** The node under the pointer: the one a click would pick. */
+	hover: string;
 	handle: string;
 	label: { bg: string; ink: string; border: string };
 	/** Alarm priority -> colour, keyed by the kit's Priority names. */
@@ -30,6 +32,7 @@ export const DEFAULT_PALETTE: Palette = {
 	running: '#5aa469',
 	stale: '#6b6b6b',
 	selected: '#e8e6e1',
+	hover: '#6aa5e8',
 	handle: '#c9a227',
 	label: { bg: '#1a1a19', ink: '#e8e6e1', border: '#383835' },
 	priority: {
@@ -70,6 +73,8 @@ export function paletteFromTheme(el: Element): Palette {
 		p.selected = ink;
 		p.label.ink = ink;
 	}
+	const accent = get('--accent');
+	if (accent) p.hover = accent;
 	const surface = get('--surface');
 	if (surface) p.label.bg = surface;
 	const axis = get('--axis');

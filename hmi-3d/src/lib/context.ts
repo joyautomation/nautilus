@@ -27,6 +27,9 @@ export interface SceneContext {
 	/** The registry with the document's kinds laid on (registryFor). */
 	readonly registry: NodeRegistry;
 	readonly selected: string | null;
+	/** The pickable node under the pointer (the frontmost one), or null. */
+	readonly hovered: string | null;
+	hover(id: string | null): void;
 	/** The kind a node renders with: its registry entry, or the Svelte kind
 	 * of the same name once its model has failed to load. */
 	defFor(id: string | undefined, kind: string): NodeKindDef | undefined;

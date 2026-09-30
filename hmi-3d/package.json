@@ -1,67 +1,74 @@
 {
-  "name": "@joyautomation/nautilus-hmi-3d",
-  "version": "0.1.0",
-  "description": "The spatial layer of the nautilus HMI kit \u2014 a live 3D process view rendered from a *.scene.json document bound to struct tags, on Threlte (Svelte 5 + three.js).",
-  "license": "Apache-2.0",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/joyautomation/nautilus.git",
-    "directory": "hmi-3d"
-  },
-  "type": "module",
-  "svelte": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "svelte": "./dist/index.js",
-      "default": "./dist/index.js"
-    }
-  },
-  "files": [
-    "dist",
-    "models"
-  ],
-  "scripts": {
-    "package": "svelte-kit sync && svelte-package && publint",
-    "prepublishOnly": "npm run package",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "test": "svelte-kit sync && esbuild tests/*.test.ts --bundle --format=esm --platform=node --outdir=.svelte-kit/tests --log-level=warning && node .svelte-kit/tests/scene.test.js && node .svelte-kit/tests/bindings.test.js && node .svelte-kit/tests/alarms.test.js && node .svelte-kit/tests/kinds.test.js && node .svelte-kit/tests/drives.test.js && node .svelte-kit/tests/contract.test.js && node .svelte-kit/tests/components.test.js"
-  },
-  "peerDependencies": {
-    "@threlte/core": "^8.0.0",
-    "@threlte/extras": "^9.0.0",
-    "svelte": "^5.0.0",
-    "three": ">=0.170.0"
-  },
-  "dependencies": {
-    "@joyautomation/nautilus-hmi": "^0.6.0"
-  },
-  "devDependencies": {
-    "@sveltejs/adapter-static": "^3.0.10",
-    "@sveltejs/kit": "^2.70.3",
-    "@sveltejs/package": "^2.5.8",
-    "@sveltejs/vite-plugin-svelte": "^7.3.1",
-    "@threlte/core": "^8.6.1",
-    "@threlte/extras": "^9.22.0",
-    "@types/three": "^0.186.0",
-    "esbuild": "^0.27.7",
-    "publint": "^0.3.0",
-    "svelte": "^5.57.1",
-    "svelte-check": "^4.7.6",
-    "three": "^0.186.1",
-    "typescript": "^6.0.3",
-    "vite": "^8.3.1"
-  },
-  "keywords": [
-    "svelte",
-    "threlte",
-    "three",
-    "scada",
-    "hmi",
-    "3d",
-    "digital-twin",
-    "nautilus",
-    "joyautomation"
-  ]
+	"name": "@joyautomation/nautilus-hmi-3d",
+	"version": "0.1.0",
+	"description": "The spatial layer of the nautilus HMI kit — a live 3D process view rendered from a *.scene.json document bound to struct tags, on Threlte (Svelte 5 + three.js).",
+	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/joyautomation/nautilus.git",
+		"directory": "hmi-3d"
+	},
+	"type": "module",
+	"svelte": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"svelte": "./dist/index.js",
+			"default": "./dist/index.js"
+		},
+		"./hardware": {
+			"types": "./dist/hardware/index.d.ts",
+			"svelte": "./dist/hardware/index.js",
+			"default": "./dist/hardware/index.js"
+		},
+		"./profiles/*": "./profiles/*"
+	},
+	"files": [
+		"dist",
+		"models",
+		"profiles"
+	],
+	"scripts": {
+		"package": "svelte-kit sync && svelte-package && publint",
+		"prepublishOnly": "npm run package",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"test": "svelte-kit sync && esbuild tests/*.test.ts --bundle --format=esm --platform=node --outdir=.svelte-kit/tests --log-level=warning && node .svelte-kit/tests/scene.test.js && node .svelte-kit/tests/bindings.test.js && node .svelte-kit/tests/alarms.test.js && node .svelte-kit/tests/kinds.test.js && node .svelte-kit/tests/drives.test.js && node .svelte-kit/tests/contract.test.js && node .svelte-kit/tests/components.test.js && node .svelte-kit/tests/hardware.test.js && node .svelte-kit/tests/topology.test.js"
+	},
+	"peerDependencies": {
+		"@threlte/core": "^8.0.0",
+		"@threlte/extras": "^9.0.0",
+		"svelte": "^5.0.0",
+		"three": ">=0.170.0"
+	},
+	"dependencies": {
+		"@joyautomation/nautilus-hmi": "^0.6.0"
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-static": "^3.0.10",
+		"@sveltejs/kit": "^2.70.3",
+		"@sveltejs/package": "^2.5.8",
+		"@sveltejs/vite-plugin-svelte": "^7.3.1",
+		"@threlte/core": "^8.6.1",
+		"@threlte/extras": "^9.22.0",
+		"@types/three": "^0.186.0",
+		"esbuild": "^0.27.7",
+		"publint": "^0.3.0",
+		"svelte": "^5.57.1",
+		"svelte-check": "^4.7.6",
+		"three": "^0.186.1",
+		"typescript": "^6.0.3",
+		"vite": "^8.3.1"
+	},
+	"keywords": [
+		"svelte",
+		"threlte",
+		"three",
+		"scada",
+		"hmi",
+		"3d",
+		"digital-twin",
+		"nautilus",
+		"joyautomation"
+	]
 }
