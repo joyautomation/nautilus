@@ -7,7 +7,7 @@
 	import { onMount } from 'svelte';
 	import { RealtimeClient, createAlarmClient, type NautilusFrame } from '@joyautomation/nautilus-hmi';
 	import { SceneView, DEFAULT_PALETTE, paletteFromTheme, type SceneCamera, type Palette } from '@joyautomation/nautilus-hmi-3d';
-	import { Server, PartFaceplate, resolveParts, validateProfile, anchorPayload, OVERLAYS, cablesOverlay, linkOnPort, linkFacts, overlayColors, type ChassisProfile, type OverlayContext } from '@joyautomation/nautilus-hmi-3d/hardware';
+	import { Server, PartFaceplate, resolveParts, partForSensor, validateProfile, anchorPayload, OVERLAYS, cablesOverlay, linkOnPort, linkFacts, overlayColors, type ChassisProfile, type OverlayContext } from '@joyautomation/nautilus-hmi-3d/hardware';
 	import QRCode from 'qrcode';
 	import sys112b from '@joyautomation/nautilus-hmi-3d/profiles/supermicro-sys-112b-wr.json';
 	import { plant, plantPatterns, faultTargets } from '$lib/plant';
@@ -15,6 +15,8 @@
 	import ReplayClock from '$lib/ReplayClock.svelte';
 	import ScenarioPanel from '$lib/ScenarioPanel.svelte';
 	import AlarmBox from '$lib/AlarmBox.svelte';
+	import { whereIs, alarmFacts, type Alarm } from '$lib/alarmlist';
+	import { topology } from '$lib/plant';
 	import PartMenu from '$lib/PartMenu.svelte';
 	import { PlantFaults } from '$lib/faults.svelte';
 
@@ -103,6 +105,20 @@
 		return at ? linkFacts(at.check, at.near, at.link) : [{ label: 'Cable', value: 'none declared' }];
 	});
 
+	// An alarm in the list, tapped: on node1, its part's faceplate; on
+	// anything else, the rack, focused on that device.
+	function showAlarm(a: Alarm) {
+		const { device, asset } = whereIs(a, topology.devices.map((d) => d.tag));
+		if (!device) return;
+		if (device !== NODE) {
+			location.href = `/rack?focus=${device}`;
+			return;
+		}
+		const p = parts.find((x) => x.tag === asset) ?? partForSensor(parts, asset);
+		selected = p ? p.id : NODE;
+		open = true;
+	}
+
 	onMount(() => {
 		palette = paletteFromTheme(document.body);
 		rt.start();
@@ -122,7 +138,7 @@
 
 <ReplayClock />
 <div class="side">
-	<AlarmBox active={alarms.summary?.active ?? 0} {palette} />
+	<AlarmBox {alarms} {palette} onshow={showAlarm} />
 	<ScenarioPanel {faults} />
 </div>
 {#if menu}
@@ -178,7 +194,7 @@
 		server={{ label: 'node1 · Supermicro SYS-112B-WR', tag: NODE }}
 		{value}
 		quality={tag ? rt.quality(tag) : 'good'}
-		extra={cable}
+		extra={[...alarmFacts(alarms.instances as Alarm[], tag ?? NODE, !part), ...cable]}
 		onclose={() => {
 			open = false;
 			selected = null;

@@ -35,6 +35,7 @@
 		cablePath,
 		parseEnd,
 		portReading,
+		partForSensor,
 		VERDICT_MARK,
 		type RackLayout,
 		type ServerPart,
@@ -47,6 +48,7 @@
 	import ReplayClock from '$lib/ReplayClock.svelte';
 	import ScenarioPanel from '$lib/ScenarioPanel.svelte';
 	import AlarmBox from '$lib/AlarmBox.svelte';
+	import { whereIs, alarmFacts, type Alarm } from '$lib/alarmlist';
 	import Sheet from '$lib/Sheet.svelte';
 	import PartMenu from '$lib/PartMenu.svelte';
 	import { PlantFaults } from '$lib/faults.svelte';
@@ -239,6 +241,19 @@
 	);
 	let legendCtx = $derived<OverlayContext | undefined>(focused ? { node: focused.tag, profile: focused.profile, tags, colors } : undefined);
 
+	// An alarm in the list, tapped: its device in focus, its part's faceplate
+	// open (the device's own when the alarm is not on a part).
+	function showAlarm(a: Alarm) {
+		const { device, asset } = whereIs(a, devices.map((d) => d.tag));
+		const d = device ? byTag.get(device) : undefined;
+		if (!d) return;
+		mesh = false;
+		meshFocus = null;
+		focus = d.tag;
+		const p = d.parts.find((x) => x.tag === asset) ?? partForSensor(d.parts, asset);
+		selected = p ? p.id : d.tag;
+		open = true;
+	}
 	function showInRack() {
 		const d = devices.find((x) => x.id === meshFocus);
 		mesh = false;
@@ -276,7 +291,7 @@
 
 <ReplayClock />
 <div class="side">
-	<AlarmBox active={alarms.summary?.active ?? 0} {palette} />
+	<AlarmBox {alarms} {palette} onshow={showAlarm} />
 	<ScenarioPanel {faults} />
 </div>
 {#if menu}
@@ -403,7 +418,7 @@
 		server={{ label: `${pickedDevice.hostname ?? pickedDevice.id} · ${pickedDevice.profile.name}`, tag: pickedDevice.tag, kind: pickedDevice.kind === 'switch' ? 'switch' : 'server', portsUp }}
 		{value}
 		quality={tag ? rt.quality(tag) : 'good'}
-		extra={cable}
+		extra={[...alarmFacts(alarms.instances as Alarm[], tag ?? pickedDevice.tag, !part), ...cable]}
 		onclose={() => {
 			open = false;
 			selected = null;
