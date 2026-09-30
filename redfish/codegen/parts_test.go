@@ -130,3 +130,25 @@ func TestSlotNumber(t *testing.T) {
 		t.Error("a bay is not a slot")
 	}
 }
+
+// A fan whose BMC reports no Health (the X14) is at fault when it is there
+// and stopped: the contract's own definition, so a stopped fan can alarm.
+func TestFanWithoutHealth(t *testing.T) {
+	tr := tree(nil)
+	tr["/redfish/v1/Chassis/1/ThermalSubsystem"] = json.RawMessage(`{"Fans":{"@odata.id":"/redfish/v1/Chassis/1/ThermalSubsystem/Fans"}}`)
+	tr["/redfish/v1/Chassis/1/ThermalSubsystem/Fans"] = json.RawMessage(`{"Members":[{"@odata.id":"/redfish/v1/Chassis/1/ThermalSubsystem/Fans/FAN1"}]}`)
+	tr["/redfish/v1/Chassis/1/ThermalSubsystem/Fans/FAN1"] = json.RawMessage(`{"Name":"FAN1","SpeedPercent":{"SpeedRPM":9800},"Status":{"State":"Enabled"}}`)
+	out, err := Import(context.Background(), TreeGetter(tr), opts())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tg := range out.Manifest.Tags {
+		if tg.Name == "NODE1_Fan1" {
+			if got := tg.Members["Fault"].Derived; got != "Present && RPM < 1" {
+				t.Fatalf("Fault = %+v", tg.Members["Fault"])
+			}
+			return
+		}
+	}
+	t.Fatal("no NODE1_Fan1")
+}

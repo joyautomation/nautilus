@@ -383,6 +383,14 @@ func (im *importer) newFans(tsub map[string]any, have bool) ([]*tagB, error) {
 		if has(fan, "SpeedPercent", "Reading") {
 			t.bind("Pct", u, "SpeedPercent.Reading", nil)
 		}
+		// A BMC that reports no Health on a fan (the X14 omits it) still
+		// says a fan stopped: Fault is the contract's "present and stopped".
+		_, fault := t.members["Fault"]
+		_, present := t.members["Present"]
+		_, rpm := t.members["RPM"]
+		if !fault && present && rpm {
+			t.derived("Fault", "Present && RPM < 1")
+		}
 		out = append(out, t)
 	}
 	return out, nil
