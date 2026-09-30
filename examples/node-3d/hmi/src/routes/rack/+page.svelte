@@ -36,12 +36,14 @@
 		parseEnd,
 		portReading,
 		partForSensor,
+		anchorPayload,
 		VERDICT_MARK,
 		type RackLayout,
 		type ServerPart,
 		type Verdict,
 		type OverlayContext
 	} from '@joyautomation/nautilus-hmi-3d/hardware';
+	import QRCode from 'qrcode';
 	import { plant, plantPatterns, topology, faultTargets } from '$lib/plant';
 	import hqRack from '$lib/hq.rack.json';
 	import Studio from '$lib/Studio.svelte';
@@ -90,10 +92,13 @@
 	let focus = $state<string | null>(params.get('focus'));
 	let focused = $derived(focus ? byTag.get(focus) : undefined);
 	let hood = $derived(focused ? neighbourhood(topology, focused.id) : undefined);
-	// The focused server slides out on its rails, the way it is pulled to
-	// be serviced: its parts get room, it stays in its slot and on its cables.
-	const SLIDE = 0.45;
-	const slides = new Map(devices.map((d) => [d.id, Tween.of(() => (!mesh && focus === d.tag && d.kind === 'server' ? SLIDE : 0), { duration: 700, easing: cubicOut })]));
+	// The focused device slides out of the front of the rack, all the way
+	// and a little more, the way it is pulled to be serviced: clear of the
+	// rack, it can be looked at from every side, still on its cables; the
+	// rest of the rack fades behind it.
+	const CLEAR = 0.3;
+	const slideOf = (d: (typeof devices)[number]) => d.profile.size[2] / 1000 + CLEAR;
+	const slides = new Map(devices.map((d) => [d.id, Tween.of(() => (!mesh && focus === d.tag ? slideOf(d) : 0), { duration: 800, easing: cubicOut })]));
 	const slid = (p: Placement, s: number): Placement => ({ ...p, pos: [p.pos[0], p.pos[1], p.pos[2] + (p.rotY === 180 ? -s : s)] });
 	const placeOf = (d: (typeof devices)[number]) => slid(d.place, slides.get(d.id)?.current ?? 0);
 
@@ -160,9 +165,29 @@
 	let meshFocus = $state<string | null>(params.get('mesh') || null);
 	const MESH: SceneCamera = { pos: [1.55, 2.3, 2.1], target: [0, 0.7, 0], fov: 40 };
 
-	let lid = $state<'on' | 'off'>('off');
-	let xray = $state(false);
-	let exploded = $state(false);
+	let lid = $state<'on' | 'off'>(params.get('lid') === 'on' ? 'on' : 'off');
+	// The printed AR codes, where the focused server's profile anchors put
+	// them: off by default (a placement guide, not part of the server),
+	// drawn from the same payloads as ../../labels.mjs so the model matches
+	// the sheet.
+	const AR_HMI = 'https://mira1.tail913f1.ts.net:9446';
+	let codes = $state(params.has('codes'));
+	let codeImages = $state<Record<string, string>>({});
+	let codesFor = '';
+	$effect(() => {
+		const d = focused;
+		if (!codes || !d || d.kind !== 'server' || codesFor === d.tag) return;
+		codesFor = d.tag;
+		Promise.all(
+			Object.entries(d.profile.anchors ?? {}).map(async ([id, a]) => {
+				const p = anchorPayload(a, d.tag);
+				const text = p === 'url' ? `${AR_HMI}/a/${d.tag}` : p;
+				return [id, await QRCode.toDataURL(text, { errorCorrectionLevel: 'M', margin: 1, scale: 8 })] as const;
+			})
+		).then((all) => (codeImages = Object.fromEntries(all)));
+	});
+	let xray = $state(params.has('xray'));
+	let exploded = $state(params.has('exploded'));
 	const overlays = [...OVERLAYS, cablesOverlay(plant)];
 	let overlayId = $state<string | null>(params.get('overlay'));
 	let overlay = $derived(overlays.find((o) => o.id === overlayId));
@@ -170,25 +195,23 @@
 	const top = layout.base! / 1000 + (layout.units * 44.45) / 1000;
 	const D = layout.depth / 1000;
 	const RACK: Record<string, SceneCamera> = {
-		cables: { pos: [-1.25, top + 0.25, -D - 1.35], target: [0, top * 0.62, -D / 2], fov: 40 },
+		iso: { pos: [1.05, top + 0.3, 1.3], target: [0, top * 0.66, -D / 2], fov: 40 },
 		rear: { pos: [0, top * 0.75, -D - 2.1], target: [0, top * 0.55, -D / 2], fov: 40 },
 		front: { pos: [0.5, top * 0.8, 1.9], target: [0, top * 0.55, -D / 2], fov: 40 }
 	};
-	const firstView = params.get('view') ?? 'cables';
-	let view = $state(firstView in RACK ? firstView : 'cables');
-	// Zoomed in: a server from above its rear I/O (lid off, the ports and
-	// their cables in view); a switch square to its port face.
+	const firstView = params.get('view') ?? 'iso';
+	let view = $state(firstView in RACK ? firstView : 'iso');
+	// Zoomed in: the device out of the rack, from its front, to the right
+	// and above (the same iso as the rack's), at a distance that fits it;
+	// the camera orbits its centre, so every side is a drag away.
 	const closeUp = (d: (typeof devices)[number]): SceneCamera => {
-		if (d.kind === 'switch') {
-			const t = toRack(d.place, [0, 0.022, 0]);
-			return { pos: [t[0] + 0.12, t[1] + 0.16, t[2] + (d.place.rotY === 180 ? -0.62 : 0.62)], target: t, fov: 40 };
-		}
-		// From the front and above: slid out on its rails, nothing is over
-		// it, so the open lid shows every part; the rear I/O and its cables
-		// run back into the rack behind.
-		const t = toRack(slid(d.place, SLIDE), [0, 0.02, -0.25]);
+		const [w, h, depth] = d.profile.size.map((v) => v / 1000);
+		const t = toRack(slid(d.place, slideOf(d)), [0, h / 2, -depth / 2]);
 		const front = d.place.rotY === 180 ? -1 : 1;
-		return { pos: [t[0] + 0.3, t[1] + 0.62, t[2] + front * 0.62], target: t, fov: 40 };
+		const r = 2.3 * Math.max(w, depth);
+		const dir = [0.5, 0.55, 1];
+		const n = Math.hypot(...dir);
+		return { pos: [t[0] + (r * dir[0]) / n, t[1] + (r * dir[1]) / n, t[2] + (front * r * dir[2]) / n], target: t, fov: 40 };
 	};
 	let aspect = $state(typeof window !== 'undefined' ? window.innerWidth / window.innerHeight : 1.6);
 	const framed = (c: SceneCamera): SceneCamera => {
@@ -319,7 +342,8 @@
 				lid={on && d.kind === 'server' ? lid : 'on'}
 				xray={on && xray}
 				exploded={on && exploded}
-				anchor={false}
+				anchor={on && codes}
+				codeImages={on ? codeImages : undefined}
 				overlay={on ? overlay : undefined}
 				signs={on ? 'parts' : 'device'}
 			/>
@@ -353,6 +377,7 @@
 						<button class:on={lid === 'on'} onclick={() => (lid = lid === 'on' ? 'off' : 'on')}>lid {lid}</button>
 						<button class:on={xray} onclick={() => (xray = !xray)}>x-ray</button>
 						<button class:on={exploded} onclick={() => (exploded = !exploded)}>exploded</button>
+						<button class:on={codes} onclick={() => (codes = !codes)} title="Where the printed AR codes go">codes</button>
 						<span class="sep"></span>
 					{/if}
 					{#each overlays.filter((o) => focused?.kind === 'server' || o.id === 'cables' || o.id === 'interfaces') as o}
@@ -364,7 +389,6 @@
 					{/each}
 					<span class="sep"></span>
 					<button class:on={showCables} onclick={() => (showCables = !showCables)}>cables</button>
-					<a class="btn" href="/">node1 →</a>
 				{/if}
 			</div>
 		{/snippet}
@@ -445,8 +469,7 @@
 		font: 600 13px/1 system-ui, sans-serif;
 		margin: 0 6px;
 	}
-	button,
-	.btn {
+	button {
 		font: 12px/1 system-ui, sans-serif;
 		padding: 5px 10px;
 		border-radius: 999px;
