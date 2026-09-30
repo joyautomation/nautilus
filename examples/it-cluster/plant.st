@@ -1112,7 +1112,7 @@ END_VAR
   NODE1_Temp_Peripheral_M(Rec := Rec_NODE1_Temp_Peripheral, RiseTarget := NODE1_M.RiseTarget, Weight := 0.3, RoomC := Sim_Room.InletDeltaC, InletC := NODE1.InletTempC, Off := NODE1_M.Off, Dt := PlantDtS, Live := Live, P := NODE1_Temp_Peripheral);
   NODE1_Temp_System_M(Rec := Rec_NODE1_Temp_System, RiseTarget := NODE1_M.RiseTarget, Weight := 0.3, RoomC := Sim_Room.InletDeltaC, InletC := NODE1.InletTempC, Off := NODE1_M.Off, Dt := PlantDtS, Live := Live, P := NODE1_Temp_System);
   NODE1.MaxTempC := MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(NODE1_Temp_AOC_NIC2.Value, NODE1_Temp_AOC_NIC3.Value), NODE1_Temp_AOC_SAS1.Value), NODE1_Temp_AOC_SSD1.Value), NODE1_Temp_CPU.Value), NODE1_Temp_CPU_VRMIN.Value), NODE1_Temp_DIMMA_D.Value), NODE1_Temp_DIMME_H.Value), NODE1_Temp_Inlet.Value), NODE1_Temp_NVMe_SSDA.Value), NODE1_Temp_Peripheral.Value), NODE1_Temp_System.Value);
-  NODE1_Psu_M(Rec1 := Rec_NODE1_PSU1, Rec2 := Rec_NODE1_PSU2, F1 := Sim_NODE1_PSU1, F2 := Sim_NODE1_PSU2, LoadW := NODE1_M.LoadW, Live := Live, P1 := NODE1_PSU1, P2 := NODE1_PSU2);
+  NODE1_Psu_M(Rec1 := Rec_NODE1_PSU1, Rec2 := Rec_NODE1_PSU2, F1 := Sim_NODE1_PSU1, F2 := Sim_NODE1_PSU2, LoadW := NODE1_M.LoadW, Live := Live AND Live, P1 := NODE1_PSU1, P2 := NODE1_PSU2);
   NODE1_Drive_SATA0_M(F := Sim_NODE1_Drive_SATA0, P := NODE1_Drive_SATA0);
   NODE1_Drive_SATA4_M(F := Sim_NODE1_Drive_SATA4, P := NODE1_Drive_SATA4);
   NODE1_Drive_NVMe0_M(F := Sim_NODE1_Drive_NVMe0, P := NODE1_Drive_NVMe0);
@@ -1120,12 +1120,12 @@ END_VAR
   NODE1_Drive_NVMe2_M(F := Sim_NODE1_Drive_NVMe2, P := NODE1_Drive_NVMe2);
   NODE1_Drive_NVMe3_M(F := Sim_NODE1_Drive_NVMe3, P := NODE1_Drive_NVMe3);
   NODE1_Nic_Slot2_P1_M(Rec := Rec_NODE1_Nic_Slot2_P1, LinkOk := Cable_NODE1_Nic_Slot2_P1, SpeedGbps := 0.0, Live := Live, P := NODE1_Nic_Slot2_P1);
-  NODE1_Nic_Slot2_P2_M(Rec := NODE1_Nic_Slot2_P2, LinkOk := Cable_SW1_Port25, SpeedGbps := Sim_SW1_Port25.SpeedMbps / 1000.0, Live := Live, P := NODE1_Nic_Slot2_P2);
+  NODE1_Nic_Slot2_P2_M(Rec := NODE1_Nic_Slot2_P2, LinkOk := Cable_SW1_Port25, SpeedGbps := Sim_SW1_Port25.SpeedMbps / 1000.0, Live := FALSE, P := NODE1_Nic_Slot2_P2);
   NODE1_Nic_Slot3_P1_M(Rec := Rec_NODE1_Nic_Slot3_P1, LinkOk := Cable_NODE1_Nic_Slot3_P1, SpeedGbps := 0.0, Live := Live, P := NODE1_Nic_Slot3_P1);
-  NODE1_Nic_Slot3_P2_M(Rec := NODE1_Nic_Slot3_P2, LinkOk := Cable_SW2_Port26, SpeedGbps := Sim_SW2_Port26.SpeedMbps / 1000.0, Live := Live, P := NODE1_Nic_Slot3_P2);
-  NODE1_Nic_LAN1_M(Rec := NODE1_Nic_LAN1, LinkOk := NOT (Sim_NODE1_Nic_LAN1.Down OR NODE1_M.Off), SpeedGbps := 0.0, Live := Live, P := NODE1_Nic_LAN1);
-  NODE1_Nic_LAN2_M(Rec := NODE1_Nic_LAN2, LinkOk := NOT (Sim_NODE1_Nic_LAN2.Down OR NODE1_M.Off), SpeedGbps := 0.0, Live := Live, P := NODE1_Nic_LAN2);
-  NODE1_Nic_BMC_M(Rec := NODE1_Nic_BMC, LinkOk := Cable_SW1_Port24, SpeedGbps := Sim_SW1_Port24.SpeedMbps / 1000.0, Live := Live, P := NODE1_Nic_BMC);
+  NODE1_Nic_Slot3_P2_M(Rec := NODE1_Nic_Slot3_P2, LinkOk := Cable_SW2_Port26, SpeedGbps := Sim_SW2_Port26.SpeedMbps / 1000.0, Live := FALSE, P := NODE1_Nic_Slot3_P2);
+  NODE1_Nic_LAN1_M(Rec := NODE1_Nic_LAN1, LinkOk := NOT (Sim_NODE1_Nic_LAN1.Down OR NODE1_M.Off), SpeedGbps := 0.0, Live := FALSE, P := NODE1_Nic_LAN1);
+  NODE1_Nic_LAN2_M(Rec := NODE1_Nic_LAN2, LinkOk := NOT (Sim_NODE1_Nic_LAN2.Down OR NODE1_M.Off), SpeedGbps := 0.0, Live := FALSE, P := NODE1_Nic_LAN2);
+  NODE1_Nic_BMC_M(Rec := NODE1_Nic_BMC, LinkOk := Cable_SW1_Port24, SpeedGbps := Sim_SW1_Port24.SpeedMbps / 1000.0, Live := FALSE, P := NODE1_Nic_BMC);
   NODE2_Fan1_M(Rec := Rec_NODE2_Fan1, F := Sim_NODE2_Fan1, Boost := NODE2_M.FanBoost, Off := NODE2_M.Off, Live := Live, P := NODE2_Fan1);
   NODE2_Fan2_M(Rec := Rec_NODE2_Fan2, F := Sim_NODE2_Fan2, Boost := NODE2_M.FanBoost, Off := NODE2_M.Off, Live := Live, P := NODE2_Fan2);
   NODE2_Fan3_M(Rec := Rec_NODE2_Fan3, F := Sim_NODE2_Fan3, Boost := NODE2_M.FanBoost, Off := NODE2_M.Off, Live := Live, P := NODE2_Fan3);
@@ -1145,7 +1145,7 @@ END_VAR
   NODE2_Temp_Peripheral_M(Rec := Rec_NODE2_Temp_Peripheral, RiseTarget := NODE2_M.RiseTarget, Weight := 0.3, RoomC := Sim_Room.InletDeltaC, InletC := NODE2.InletTempC, Off := NODE2_M.Off, Dt := PlantDtS, Live := Live, P := NODE2_Temp_Peripheral);
   NODE2_Temp_System_M(Rec := Rec_NODE2_Temp_System, RiseTarget := NODE2_M.RiseTarget, Weight := 0.3, RoomC := Sim_Room.InletDeltaC, InletC := NODE2.InletTempC, Off := NODE2_M.Off, Dt := PlantDtS, Live := Live, P := NODE2_Temp_System);
   NODE2.MaxTempC := MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(NODE2_Temp_AOC_NIC2.Value, NODE2_Temp_AOC_NIC3.Value), NODE2_Temp_AOC_SAS1.Value), NODE2_Temp_AOC_SSD1.Value), NODE2_Temp_CPU.Value), NODE2_Temp_CPU_VRMIN.Value), NODE2_Temp_DIMMA_D.Value), NODE2_Temp_DIMME_H.Value), NODE2_Temp_Inlet.Value), NODE2_Temp_NVMe_SSDA.Value), NODE2_Temp_Peripheral.Value), NODE2_Temp_System.Value);
-  NODE2_Psu_M(Rec1 := Rec_NODE2_PSU1, Rec2 := Rec_NODE2_PSU2, F1 := Sim_NODE2_PSU1, F2 := Sim_NODE2_PSU2, LoadW := NODE2_M.LoadW, Live := Live, P1 := NODE2_PSU1, P2 := NODE2_PSU2);
+  NODE2_Psu_M(Rec1 := Rec_NODE2_PSU1, Rec2 := Rec_NODE2_PSU2, F1 := Sim_NODE2_PSU1, F2 := Sim_NODE2_PSU2, LoadW := NODE2_M.LoadW, Live := Live AND Live, P1 := NODE2_PSU1, P2 := NODE2_PSU2);
   NODE2_Drive_SATA0_M(F := Sim_NODE2_Drive_SATA0, P := NODE2_Drive_SATA0);
   NODE2_Drive_SATA4_M(F := Sim_NODE2_Drive_SATA4, P := NODE2_Drive_SATA4);
   NODE2_Drive_NVMe0_M(F := Sim_NODE2_Drive_NVMe0, P := NODE2_Drive_NVMe0);
@@ -1153,12 +1153,12 @@ END_VAR
   NODE2_Drive_NVMe2_M(F := Sim_NODE2_Drive_NVMe2, P := NODE2_Drive_NVMe2);
   NODE2_Drive_NVMe3_M(F := Sim_NODE2_Drive_NVMe3, P := NODE2_Drive_NVMe3);
   NODE2_Nic_Slot2_P1_M(Rec := Rec_NODE2_Nic_Slot2_P1, LinkOk := Cable_NODE2_Nic_Slot2_P1, SpeedGbps := 0.0, Live := Live, P := NODE2_Nic_Slot2_P1);
-  NODE2_Nic_Slot2_P2_M(Rec := NODE2_Nic_Slot2_P2, LinkOk := Cable_SW2_Port25, SpeedGbps := Sim_SW2_Port25.SpeedMbps / 1000.0, Live := Live, P := NODE2_Nic_Slot2_P2);
+  NODE2_Nic_Slot2_P2_M(Rec := NODE2_Nic_Slot2_P2, LinkOk := Cable_SW2_Port25, SpeedGbps := Sim_SW2_Port25.SpeedMbps / 1000.0, Live := FALSE, P := NODE2_Nic_Slot2_P2);
   NODE2_Nic_Slot3_P1_M(Rec := Rec_NODE2_Nic_Slot3_P1, LinkOk := Cable_NODE1_Nic_Slot2_P1, SpeedGbps := 0.0, Live := Live, P := NODE2_Nic_Slot3_P1);
-  NODE2_Nic_Slot3_P2_M(Rec := NODE2_Nic_Slot3_P2, LinkOk := Cable_SW3_Port26, SpeedGbps := Sim_SW3_Port26.SpeedMbps / 1000.0, Live := Live, P := NODE2_Nic_Slot3_P2);
-  NODE2_Nic_LAN1_M(Rec := NODE2_Nic_LAN1, LinkOk := NOT (Sim_NODE2_Nic_LAN1.Down OR NODE2_M.Off), SpeedGbps := 0.0, Live := Live, P := NODE2_Nic_LAN1);
-  NODE2_Nic_LAN2_M(Rec := NODE2_Nic_LAN2, LinkOk := NOT (Sim_NODE2_Nic_LAN2.Down OR NODE2_M.Off), SpeedGbps := 0.0, Live := Live, P := NODE2_Nic_LAN2);
-  NODE2_Nic_BMC_M(Rec := NODE2_Nic_BMC, LinkOk := Cable_SW2_Port24, SpeedGbps := Sim_SW2_Port24.SpeedMbps / 1000.0, Live := Live, P := NODE2_Nic_BMC);
+  NODE2_Nic_Slot3_P2_M(Rec := NODE2_Nic_Slot3_P2, LinkOk := Cable_SW3_Port26, SpeedGbps := Sim_SW3_Port26.SpeedMbps / 1000.0, Live := FALSE, P := NODE2_Nic_Slot3_P2);
+  NODE2_Nic_LAN1_M(Rec := NODE2_Nic_LAN1, LinkOk := NOT (Sim_NODE2_Nic_LAN1.Down OR NODE2_M.Off), SpeedGbps := 0.0, Live := FALSE, P := NODE2_Nic_LAN1);
+  NODE2_Nic_LAN2_M(Rec := NODE2_Nic_LAN2, LinkOk := NOT (Sim_NODE2_Nic_LAN2.Down OR NODE2_M.Off), SpeedGbps := 0.0, Live := FALSE, P := NODE2_Nic_LAN2);
+  NODE2_Nic_BMC_M(Rec := NODE2_Nic_BMC, LinkOk := Cable_SW2_Port24, SpeedGbps := Sim_SW2_Port24.SpeedMbps / 1000.0, Live := FALSE, P := NODE2_Nic_BMC);
   NODE3_Fan1_M(Rec := Rec_NODE3_Fan1, F := Sim_NODE3_Fan1, Boost := NODE3_M.FanBoost, Off := NODE3_M.Off, Live := Live, P := NODE3_Fan1);
   NODE3_Fan2_M(Rec := Rec_NODE3_Fan2, F := Sim_NODE3_Fan2, Boost := NODE3_M.FanBoost, Off := NODE3_M.Off, Live := Live, P := NODE3_Fan2);
   NODE3_Fan3_M(Rec := Rec_NODE3_Fan3, F := Sim_NODE3_Fan3, Boost := NODE3_M.FanBoost, Off := NODE3_M.Off, Live := Live, P := NODE3_Fan3);
@@ -1178,7 +1178,7 @@ END_VAR
   NODE3_Temp_Peripheral_M(Rec := Rec_NODE3_Temp_Peripheral, RiseTarget := NODE3_M.RiseTarget, Weight := 0.3, RoomC := Sim_Room.InletDeltaC, InletC := NODE3.InletTempC, Off := NODE3_M.Off, Dt := PlantDtS, Live := Live, P := NODE3_Temp_Peripheral);
   NODE3_Temp_System_M(Rec := Rec_NODE3_Temp_System, RiseTarget := NODE3_M.RiseTarget, Weight := 0.3, RoomC := Sim_Room.InletDeltaC, InletC := NODE3.InletTempC, Off := NODE3_M.Off, Dt := PlantDtS, Live := Live, P := NODE3_Temp_System);
   NODE3.MaxTempC := MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(MAX(NODE3_Temp_AOC_NIC2.Value, NODE3_Temp_AOC_NIC3.Value), NODE3_Temp_AOC_SAS1.Value), NODE3_Temp_AOC_SSD1.Value), NODE3_Temp_CPU.Value), NODE3_Temp_CPU_VRMIN.Value), NODE3_Temp_DIMMA_D.Value), NODE3_Temp_DIMME_H.Value), NODE3_Temp_Inlet.Value), NODE3_Temp_NVMe_SSDA.Value), NODE3_Temp_Peripheral.Value), NODE3_Temp_System.Value);
-  NODE3_Psu_M(Rec1 := Rec_NODE3_PSU1, Rec2 := Rec_NODE3_PSU2, F1 := Sim_NODE3_PSU1, F2 := Sim_NODE3_PSU2, LoadW := NODE3_M.LoadW, Live := Live, P1 := NODE3_PSU1, P2 := NODE3_PSU2);
+  NODE3_Psu_M(Rec1 := Rec_NODE3_PSU1, Rec2 := Rec_NODE3_PSU2, F1 := Sim_NODE3_PSU1, F2 := Sim_NODE3_PSU2, LoadW := NODE3_M.LoadW, Live := Live AND Live, P1 := NODE3_PSU1, P2 := NODE3_PSU2);
   NODE3_Drive_SATA0_M(F := Sim_NODE3_Drive_SATA0, P := NODE3_Drive_SATA0);
   NODE3_Drive_SATA4_M(F := Sim_NODE3_Drive_SATA4, P := NODE3_Drive_SATA4);
   NODE3_Drive_NVMe0_M(F := Sim_NODE3_Drive_NVMe0, P := NODE3_Drive_NVMe0);
@@ -1186,10 +1186,10 @@ END_VAR
   NODE3_Drive_NVMe2_M(F := Sim_NODE3_Drive_NVMe2, P := NODE3_Drive_NVMe2);
   NODE3_Drive_NVMe3_M(F := Sim_NODE3_Drive_NVMe3, P := NODE3_Drive_NVMe3);
   NODE3_Nic_Slot2_P1_M(Rec := Rec_NODE3_Nic_Slot2_P1, LinkOk := Cable_NODE1_Nic_Slot3_P1, SpeedGbps := 0.0, Live := Live, P := NODE3_Nic_Slot2_P1);
-  NODE3_Nic_Slot2_P2_M(Rec := NODE3_Nic_Slot2_P2, LinkOk := Cable_SW1_Port26, SpeedGbps := Sim_SW1_Port26.SpeedMbps / 1000.0, Live := Live, P := NODE3_Nic_Slot2_P2);
+  NODE3_Nic_Slot2_P2_M(Rec := NODE3_Nic_Slot2_P2, LinkOk := Cable_SW1_Port26, SpeedGbps := Sim_SW1_Port26.SpeedMbps / 1000.0, Live := FALSE, P := NODE3_Nic_Slot2_P2);
   NODE3_Nic_Slot3_P1_M(Rec := Rec_NODE3_Nic_Slot3_P1, LinkOk := Cable_NODE2_Nic_Slot2_P1, SpeedGbps := 0.0, Live := Live, P := NODE3_Nic_Slot3_P1);
-  NODE3_Nic_Slot3_P2_M(Rec := NODE3_Nic_Slot3_P2, LinkOk := Cable_SW3_Port25, SpeedGbps := Sim_SW3_Port25.SpeedMbps / 1000.0, Live := Live, P := NODE3_Nic_Slot3_P2);
-  NODE3_Nic_LAN1_M(Rec := NODE3_Nic_LAN1, LinkOk := NOT (Sim_NODE3_Nic_LAN1.Down OR NODE3_M.Off), SpeedGbps := 0.0, Live := Live, P := NODE3_Nic_LAN1);
-  NODE3_Nic_LAN2_M(Rec := NODE3_Nic_LAN2, LinkOk := NOT (Sim_NODE3_Nic_LAN2.Down OR NODE3_M.Off), SpeedGbps := 0.0, Live := Live, P := NODE3_Nic_LAN2);
-  NODE3_Nic_BMC_M(Rec := NODE3_Nic_BMC, LinkOk := Cable_SW3_Port24, SpeedGbps := Sim_SW3_Port24.SpeedMbps / 1000.0, Live := Live, P := NODE3_Nic_BMC);
+  NODE3_Nic_Slot3_P2_M(Rec := NODE3_Nic_Slot3_P2, LinkOk := Cable_SW3_Port25, SpeedGbps := Sim_SW3_Port25.SpeedMbps / 1000.0, Live := FALSE, P := NODE3_Nic_Slot3_P2);
+  NODE3_Nic_LAN1_M(Rec := NODE3_Nic_LAN1, LinkOk := NOT (Sim_NODE3_Nic_LAN1.Down OR NODE3_M.Off), SpeedGbps := 0.0, Live := FALSE, P := NODE3_Nic_LAN1);
+  NODE3_Nic_LAN2_M(Rec := NODE3_Nic_LAN2, LinkOk := NOT (Sim_NODE3_Nic_LAN2.Down OR NODE3_M.Off), SpeedGbps := 0.0, Live := FALSE, P := NODE3_Nic_LAN2);
+  NODE3_Nic_BMC_M(Rec := NODE3_Nic_BMC, LinkOk := Cable_SW3_Port24, SpeedGbps := Sim_SW3_Port24.SpeedMbps / 1000.0, Live := FALSE, P := NODE3_Nic_BMC);
 END_PROGRAM

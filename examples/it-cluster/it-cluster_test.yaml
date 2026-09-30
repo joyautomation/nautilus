@@ -72,6 +72,14 @@ tests:
       - given: { Scenario: "speed-degrade" }
         advance: 2s
         expect: { SW1_Port25.SpeedMbps: 1000.0, NODE1_Nic_Slot2_P2.SpeedGbps: 1.0, NODE1_Nic_Slot2_P2.LinkUp: true }
+      # while the recording plays, too: a part it lacks holds its snapshot,
+      # so clearing the fault restores it
+      - given: { Replay_At: 1790460000, Rec_NODE1.PowerOn: true, Rec_SW1_Port25.OperUp: true, Rec_SW1_Port25.AdminUp: true, Rec_SW1_Port25.SpeedMbps: 10000.0 }
+        advance: 2s
+        expect: { NODE1_Nic_Slot2_P2.SpeedGbps: 1.0 }
+      - given: { Scenario: "normal" }
+        advance: 2s
+        expect: { SW1_Port25.SpeedMbps: 10000.0, NODE1_Nic_Slot2_P2.SpeedGbps: 10.0 }
 
   - name: switch-reboot goes dark for 90 s and comes back with its uptime reset
     steps:

@@ -29,8 +29,8 @@ import (
 func (im *importer) parts(root, sys map[string]any, temps []*tagB) ([]*tagB, error) {
 	var out []*tagB
 	for _, step := range []func() ([]*tagB, error){
-		func() ([]*tagB, error) { return im.drives(root) },
-		func() ([]*tagB, error) { return im.dimms(sys) },
+		func() ([]*tagB, error) { return im.drives(root, temps) },
+		func() ([]*tagB, error) { return im.dimms(sys, temps) },
 		func() ([]*tagB, error) { return im.cpus(sys, temps) },
 		func() ([]*tagB, error) { return im.pcie(root, temps) },
 		func() ([]*tagB, error) { return im.netPorts(root, sys) },
@@ -89,8 +89,14 @@ func partStatus(t *tagB, uri string, doc map[string]any, present bool) {
 	}
 }
 
-func (im *importer) drives(root map[string]any) ([]*tagB, error) {
+func (im *importer) drives(root map[string]any, temps []*tagB) ([]*tagB, error) {
 	var out []*tagB
+	// One NVMe temperature sensor on the chassis ("NVMe_SSDA Temp"): the
+	// NVMe drives' temperature. Several, or none, and it stays unbound.
+	var nvme *tagB
+	if ss := sensorsLike(temps, `^NVMe_SSD`); len(ss) == 1 {
+		nvme = ss[0]
+	}
 	err := im.each(link(root, "Chassis"), "chassis", func(chURI string, ch map[string]any) error {
 		return im.each(link(ch, "Drives"), "drive", func(u string, d map[string]any) error {
 			bay, ok := ordinal(d)
@@ -120,6 +126,9 @@ func (im *importer) drives(root map[string]any) ([]*tagB, error) {
 			if has(d, "FailurePredicted") {
 				t.bind("PredictedFailure", u, "FailurePredicted", nil)
 			}
+			if nvme != nil && str(d, "Protocol") == "NVMe" {
+				t.bind("TempC", nvme.valueRes, nvme.valuePath, nil)
+			}
 			partStatus(t, u, d, true)
 			out = append(out, t)
 			return nil
@@ -128,7 +137,7 @@ func (im *importer) drives(root map[string]any) ([]*tagB, error) {
 	return out, err
 }
 
-func (im *importer) dimms(sys map[string]any) ([]*tagB, error) {
+func (im *importer) dimms(sys map[string]any, temps []*tagB) ([]*tagB, error) {
 	var out []*tagB
 	err := im.each(link(sys, "Memory"), "DIMM", func(u string, d map[string]any) error {
 		loc := firstStr(d, "DeviceLocator", "Id")
@@ -148,6 +157,9 @@ func (im *importer) dimms(sys map[string]any) ([]*tagB, error) {
 		}
 		if has(d, "CapacityMiB") {
 			t.bind("CapacityGB", u, "CapacityMiB", func(b *redfish.MemberBinding) { b.Scale = 1.0 / 1024 })
+		}
+		if s := dimmSensor(temps, loc); s != nil {
+			t.bind("TempC", s.valueRes, s.valuePath, nil)
 		}
 		partStatus(t, u, d, false)
 		out = append(out, t)
@@ -337,6 +349,48 @@ func (im *importer) ethPort(name, label, u string, e map[string]any) (*tagB, err
 		t.constant("MAC", m)
 	}
 	return t, nil
+}
+
+// dimmGroup reads a DIMM temperature sensor's name: "DIMMA~D Temp" covers
+// channels A to D, "DIMM Temp" every DIMM.
+var dimmGroup = regexp.MustCompile(`^DIMM(?:([A-Z])(?:~([A-Z]))?)?\b`)
+
+// dimmSensor is the sensor that covers the DIMM at locator (DIMMA1).
+func dimmSensor(temps []*tagB, locator string) *tagB {
+	ch := strings.TrimPrefix(strings.ToUpper(locator), "DIMM")
+	if ch == "" {
+		return nil
+	}
+	var hit *tagB
+	for _, t := range temps {
+		m := dimmGroup.FindStringSubmatch(t.Desc)
+		if m == nil {
+			continue
+		}
+		lo, hi := m[1], m[2]
+		if hi == "" {
+			hi = lo
+		}
+		if lo == "" || (ch[:1] >= lo && ch[:1] <= hi) {
+			if hit != nil {
+				return nil // two sensors claim it: bind neither
+			}
+			hit = t
+		}
+	}
+	return hit
+}
+
+// sensorsLike are the TempSensor tags whose sanitised name matches pattern.
+func sensorsLike(temps []*tagB, pattern string) []*tagB {
+	re := regexp.MustCompile(pattern)
+	var out []*tagB
+	for _, t := range temps {
+		if re.MatchString(Sanitise(t.Desc)) {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // sensor finds the TempSensor tag whose own name sanitises to label.
