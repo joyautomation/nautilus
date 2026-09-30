@@ -29,6 +29,7 @@ import (
 	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/prom"
 	"github.com/joyautomation/nautilus/redfish"
+	"github.com/joyautomation/nautilus/replay"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
 	"github.com/joyautomation/nautilus/snmp"
@@ -1073,7 +1074,23 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 			}
 			return prom.New(m, opts...)
 		}
+	case "replay":
+		// A recording played back as live tags at a steerable clock: the
+		// baseline of a plant simulation. The recording itself is read on
+		// Start, so check and build pass where it is absent.
+		if d.Manifest == "" {
+			return nil, fmt.Errorf("driver replay: manifest (the replay_manifest.yaml) is required")
+		}
+		raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
+		if err != nil {
+			return nil, fmt.Errorf("driver replay: %w", err)
+		}
+		m, err := replay.ParseManifest(raw)
+		if err != nil {
+			return nil, fmt.Errorf("driver replay: %s: %w", d.Manifest, err)
+		}
+		return replay.New(m, fsys, replay.WithLogger(slog.Default().With("driver", "replay")))
 	default:
-		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, snmp, redfish and prometheus — custom buses are the Go tier (io.Driver)", d.Type)
+		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, snmp, redfish, prometheus and replay — custom buses are the Go tier (io.Driver)", d.Type)
 	}
 }

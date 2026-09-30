@@ -414,3 +414,46 @@ func (s *Server) Sessions() []string {
 	sort.Strings(out)
 	return out
 }
+
+// Edit rewrites one resource in place: fn gets the decoded body (numbers
+// as json.Number, as the driver decodes them) and changes it; the result
+// is what the next GET serves. A stand-in serving a plant simulation
+// edits through the manifest's paths (redfish.Plant).
+func (s *Server) Edit(uri string, fn func(doc map[string]any) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	uri = Normalize(uri)
+	raw, ok := s.tree[uri]
+	if !ok {
+		return fmt.Errorf("%s: %w", uri, ErrNotFound)
+	}
+	doc, err := Decode(raw)
+	if err != nil {
+		return err
+	}
+	if err := fn(doc); err != nil {
+		return err
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return err
+	}
+	s.tree[uri] = out
+	return nil
+}
+
+// SetDark takes the BMC off the network (the listener closes: connection
+// refused, as a powered-off or unplugged BMC answers) or brings it back on
+// the same address.
+func (s *Server) SetDark(dark bool) error {
+	s.mu.Lock()
+	up := s.srv != nil
+	s.mu.Unlock()
+	switch {
+	case dark && up:
+		s.Stop()
+	case !dark && !up:
+		return s.Start("")
+	}
+	return nil
+}

@@ -16,18 +16,24 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/joyautomation/nautilus/hw"
+	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/snmp"
 	"github.com/joyautomation/nautilus/snmp/agent"
 	"github.com/joyautomation/nautilus/snmp/codegen"
@@ -49,6 +55,17 @@ Usage:
   naut snmp serve --walk file.snmpwalk [--listen 127.0.0.1:1161]
         Stand in for the device from its recording: a v2c agent answering
         Get/GetNext/GetBulk/Set, for naut run on a laptop and for tests.
+  naut snmp serve --walk file.snmpwalk --manifest snmp_manifest.yaml
+        --source SW1 --from http://127.0.0.1:8087
+        Stand in for the device from a plant simulation: every OID the
+        manifest binds answers the plant's live tag (SW1_Port25.OperUp),
+        read backwards through the binding; the rest from the recording.
+  naut snmp read --walk file.snmpwalk --manifest snmp_manifest.yaml
+        [--source SW1]
+        The manifest read forwards over a recording, offline: the real
+        driver polls the walk once and prints the source's tags as JSON
+        (rate members read 0 — one poll has no rate). The twin of
+        serve --from; a plant simulation's device identities come from it.
   naut snmp tags <snmp_manifest.yaml> [-o tags/snmp.yaml] [--skip globs]
         Re-derive the tag file from a committed manifest — no device needed.
 
@@ -85,6 +102,14 @@ Serve flags:
                serves recordings, not secrets)
   --ramp       Move every non-zero ifHCInOctets/ifHCOutOctets counter at a
                few Mb/s, so InBps/OutBps read live on a bench
+  --from       A plant controller's URL: serve its tags (polls /api/state)
+  --manifest   The snmp_manifest.yaml the monitoring project polls with
+               (required with --from: the bindings, read backwards)
+  --source     The manifest source this agent is (default: the only one);
+               --listen defaults to its host:port
+  --every      How often to read the plant (default 1s)
+               Rate members (InBps) steer counters; the root tag's Online
+               false stops the agent answering (a dark switch).
 `
 
 func runSnmp(args []string) int {
@@ -101,6 +126,8 @@ func runSnmp(args []string) int {
 		return runSnmpServe(args[1:])
 	case "tags":
 		return runSnmpTags(args[1:])
+	case "read":
+		return runSnmpRead(args[1:])
 	case "-h", "--help", "help":
 		fmt.Print(snmpUsage)
 		return 0
@@ -435,12 +462,34 @@ func runSnmpServe(args []string) int {
 	listen := fs.String("listen", "127.0.0.1:1161", "listen address")
 	community := fs.String("community", "public", "community to answer to")
 	ramp := fs.Bool("ramp", false, "move the 64-bit octet counters")
+	from := fs.String("from", "", "plant controller URL to serve tags from")
+	manifestPath := fs.String("manifest", "", "the monitoring project's snmp_manifest.yaml")
+	sourceID := fs.String("source", "", "which manifest source this agent is")
+	every := fs.Duration("every", time.Second, "plant poll period")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 	if *walkPath == "" {
 		fmt.Fprintln(os.Stderr, "naut snmp serve: --walk is required")
 		return 2
+	}
+	var plant *servePlant
+	if *from != "" || *manifestPath != "" {
+		if *from == "" || *manifestPath == "" {
+			fmt.Fprintln(os.Stderr, "naut snmp serve: --from and --manifest go together")
+			return 2
+		}
+		p, err := loadServePlant(*manifestPath, *sourceID)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut snmp serve:", err)
+			return 1
+		}
+		plant = p
+		listenSet := false
+		fs.Visit(func(f *flag.Flag) { listenSet = listenSet || f.Name == "listen" })
+		if !listenSet {
+			*listen = p.addr
+		}
 	}
 	raw, err := os.ReadFile(*walkPath)
 	if err != nil {
@@ -458,11 +507,59 @@ func runSnmpServe(args []string) int {
 		return 1
 	}
 	defer stop()
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if plant != nil {
+		pl, err := agent.NewPlant(a, plant.m, plant.source)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut snmp serve:", err)
+			return 1
+		}
+		pl.Log = slog.New(slog.NewTextHandler(os.Stdout, nil))
+		fmt.Printf("serving %d bound OID(s) of %s from %s (every %s)\n", len(pl.Feeds), plant.source, *from, *every)
+		go pl.Run(ctx, agent.StateFetcher(*from, plant.m.TagPatterns(plant.source)), *every)
+	}
 	fmt.Printf("listening on %s (v2c, community %q) — ctrl-c to stop\n", a.Addr(), *community)
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
-	<-ch
+	<-ctx.Done()
 	return 0
+}
+
+// servePlant is --manifest/--source resolved: the manifest and the source
+// this agent stands in for.
+type servePlant struct {
+	m      snmp.Manifest
+	source string
+	addr   string
+}
+
+func loadServePlant(path, source string) (*servePlant, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	m, err := snmp.ParseManifest(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if err := m.Validate(); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if source == "" {
+		if len(m.Sources) != 1 {
+			ids := make([]string, len(m.Sources))
+			for i, s := range m.Sources {
+				ids[i] = s.ID
+			}
+			return nil, fmt.Errorf("%s has %d sources (%s): name one with --source", path, len(m.Sources), strings.Join(ids, ", "))
+		}
+		source = m.Sources[0].ID
+	}
+	for _, s := range m.Sources {
+		if s.ID == source {
+			return &servePlant{m: m, source: source, addr: s.Addr()}, nil
+		}
+	}
+	return nil, fmt.Errorf("%s: no source %q", path, source)
 }
 
 // startSnmpServe stands the agent up over a walk. Package-level so the test
@@ -496,4 +593,99 @@ func startSnmpServe(w walk.Walk, listen, community string, ramp bool, out io.Wri
 	}
 	fmt.Fprintf(out, "serving %d varbind(s) of %s\n", len(w), name)
 	return a, a.Stop, nil
+}
+
+// ── read ─────────────────────────────────────────────────────────────────
+
+func runSnmpRead(args []string) int {
+	fs := flag.NewFlagSet("snmp read", flag.ContinueOnError)
+	walkPath := fs.String("walk", "", "the recording to read")
+	manifestPath := fs.String("manifest", "", "the snmp_manifest.yaml to read it through")
+	sourceID := fs.String("source", "", "which manifest source the walk is")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *walkPath == "" || *manifestPath == "" {
+		fmt.Fprintln(os.Stderr, "naut snmp read: --walk and --manifest are required")
+		return 2
+	}
+	raw, err := os.ReadFile(*walkPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut snmp read:", err)
+		return 1
+	}
+	w, err := walk.ParseBytes(raw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "naut snmp read: %s: %v\n", *walkPath, err)
+		return 1
+	}
+	p, err := loadServePlant(*manifestPath, *sourceID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut snmp read:", err)
+		return 1
+	}
+	tags, err := readSnmpOffline(w, p.m, p.source)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut snmp read:", err)
+		return 1
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(tags)
+	return 0
+}
+
+// readSnmpOffline stands the walk up on a loopback agent, points ONE
+// source of the manifest at it, and returns that source's tags after one
+// complete poll — the same bytes the driver would deliver from the device.
+func readSnmpOffline(w walk.Walk, m snmp.Manifest, source string) (map[string]any, error) {
+	const env = "NAUT_SNMP_READ_COMMUNITY"
+	a := agent.New(w, "public")
+	a.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := a.Start("127.0.0.1:0"); err != nil {
+		return nil, err
+	}
+	defer a.Stop()
+	host, portS, _ := net.SplitHostPort(a.Addr())
+	port, _ := strconv.Atoi(portS)
+	one := snmp.Manifest{}
+	for _, s := range m.Sources {
+		if s.ID == source {
+			s.Host, s.Port, s.Version, s.CommunityEnv, s.CommunityFile = host, port, snmp.V2c, env, ""
+			s.User, s.Auth, s.AuthEnv, s.AuthFile, s.Priv, s.PrivEnv, s.PrivFile, s.Context = "", "", "", "", "", "", "", ""
+			s.Enable, s.Interval = "", 200*time.Millisecond
+			one.Sources = append(one.Sources, s)
+		}
+	}
+	for _, t := range m.Tags {
+		if t.Source == source {
+			one.Tags = append(one.Tags, t)
+		}
+	}
+	os.Setenv(env, "public")
+	d, err := snmp.New(one, snmp.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	d.Start(ctx)
+	defer d.Stop()
+	for {
+		v, _ := d.ReadInputs()
+		if n, _ := v[hw.LastPollTagName(source)].(int64); n > 0 {
+			out := map[string]any{}
+			for _, t := range one.Tags {
+				if iv, ok := v[t.Name].(ir.Value); ok {
+					out[t.Name] = runtime.Plain(iv)
+				}
+			}
+			return out, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("source %s: no complete poll of the walk in 30s", source)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }

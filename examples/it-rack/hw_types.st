@@ -7,12 +7,60 @@
 *)
 
 TYPE
+  CPU : STRUCT
+    Model : STRING;
+    Cores : DINT;
+    Health : DINT;
+    Fault : BOOL;
+    TempC : REAL;
+    Pct : REAL;
+  END_STRUCT;
+  DIMM : STRUCT
+    Locator : STRING;
+    CapacityGB : REAL;
+    Manufacturer : STRING;
+    PartNumber : STRING;
+    Health : DINT;
+    Fault : BOOL;
+    TempC : REAL;
+  END_STRUCT;
+  Drive : STRUCT
+    Bay : DINT;
+    Name : STRING;
+    Model : STRING;
+    Serial : STRING;
+    CapacityGB : REAL;
+    Protocol : STRING;
+    MediaType : STRING;
+    Health : DINT;
+    Fault : BOOL;
+    PredictedFailure : BOOL;
+    TempC : REAL;
+    Present : BOOL;
+  END_STRUCT;
   Fan : STRUCT
     Name : STRING;
     Present : BOOL;
     RPM : REAL;
     Pct : REAL;
     Fault : BOOL;
+  END_STRUCT;
+  NetPort : STRUCT
+    Name : STRING;
+    LinkUp : BOOL;
+    SpeedGbps : REAL;
+    MAC : STRING;
+  END_STRUCT;
+  PCIeDevice : STRUCT
+    Slot : DINT;
+    Name : STRING;
+    Model : STRING;
+    Manufacturer : STRING;
+    Firmware : STRING;
+    Health : DINT;
+    Fault : BOOL;
+    Ports : DINT;
+    TempC : REAL;
   END_STRUCT;
   PDU : STRUCT
     Online : BOOL;
@@ -92,6 +140,8 @@ TYPE
     ErrorRate : REAL;
     PoeOn : BOOL;
     PoeW : REAL;
+    InBroadcastPps : REAL;
+    InMulticastPps : REAL;
   END_STRUCT;
   TempSensor : STRUCT
     Name : STRING;

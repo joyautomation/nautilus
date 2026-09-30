@@ -30,7 +30,11 @@ const (
 
 	ifXTable      = "1.3.6.1.2.1.31.1.1.1"
 	ifName        = ifXTable + ".1"  // ifName
+	ifInMcast     = ifXTable + ".2"  // ifInMulticastPkts, Counter32
+	ifInBcast     = ifXTable + ".3"  // ifInBroadcastPkts, Counter32
 	ifHCInOctets  = ifXTable + ".6"  // ifHCInOctets, Counter64
+	ifHCInMcast   = ifXTable + ".8"  // ifHCInMulticastPkts, Counter64
+	ifHCInBcast   = ifXTable + ".9"  // ifHCInBroadcastPkts, Counter64
 	ifHCOutOctets = ifXTable + ".10" // ifHCOutOctets, Counter64
 	ifHighSpeed   = ifXTable + ".15" // ifHighSpeed, Gauge32 Mb/s
 	ifAlias       = ifXTable + ".18" // ifAlias
@@ -162,6 +166,9 @@ func buildSwitch(w walk.Walk, o Options) (Result, error) {
 		// contract does not have, so out-errors are visible in OutErrors
 		// (counter) and not in this rate. Recorded in the notes.
 		pick("ErrorRate", ifInErrors, "", hw.Binding{Rate: true, Width: 32}, hw.Binding{}, "ifInErrors absent")
+		// Broadcast and multicast received: what a storm moves first.
+		pick("InBroadcastPps", ifHCInBcast, ifInBcast, hw.Binding{Rate: true, Width: 64}, hw.Binding{Rate: true, Width: 32}, "ifHCInBroadcastPkts absent")
+		pick("InMulticastPps", ifHCInMcast, ifInMcast, hw.Binding{Rate: true, Width: 64}, hw.Binding{Rate: true, Width: 32}, "ifHCInMulticastPkts absent")
 		// PoE: RFC 3621 indexes ports by {group, port}; the ifIndex mapping
 		// is not standardised. Bound only when group 1 has a row whose port
 		// index equals this ifIndex — the common single-unit layout.

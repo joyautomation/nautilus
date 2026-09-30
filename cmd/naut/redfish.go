@@ -20,6 +20,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -28,9 +30,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joyautomation/nautilus/hw"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/redfish"
 	"github.com/joyautomation/nautilus/redfish/codegen"
 	"github.com/joyautomation/nautilus/redfish/mockup"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 const redfishUsage = `naut redfish — Redfish tools (server BMCs)
@@ -48,6 +53,16 @@ Usage:
         addresses: review it before committing).
   naut redfish serve --mockup dir [flags]
         Serve a recording (or any DMTF mockup) as a stand-in BMC.
+  naut redfish serve --mockup dir --manifest redfish_manifest.yaml
+        --source NODE1 --from http://127.0.0.1:8087
+        Stand in for the BMC from a plant simulation: every member the
+        manifest binds is written into its resource from the plant's live
+        tag (NODE1_Fan3.RPM), read backwards; the rest from the recording.
+  naut redfish read --mockup dir --manifest redfish_manifest.yaml
+        [--source NODE1]
+        The manifest read forwards over a recording, offline: the real
+        driver polls the mockup once and prints the source's tags as JSON.
+        The twin of serve --from.
   naut redfish tags <redfish_manifest.yaml> [-o tags/redfish.yaml]
         Re-derive the tag file from a committed manifest.
 
@@ -82,6 +97,13 @@ Serve flags:
   --auth          none (default) | session | basic — what the stand-in demands
   --user          account the stand-in accepts (with --auth)
   --password-env  variable holding the password it accepts
+  --from          a plant controller's URL: serve its tags (polls /api/state)
+  --manifest      the redfish_manifest.yaml the monitoring project polls with
+                  (required with --from: the bindings, read backwards)
+  --source        the manifest source this BMC is (default: the only one);
+                  --listen defaults to its host
+  --every         how often to read the plant (default 1s)
+                  The root tag's Online false takes the BMC off the network.
 `
 
 func runRedfish(args []string) int {
@@ -96,6 +118,8 @@ func runRedfish(args []string) int {
 		return runRedfishBrowse(args[1:])
 	case "serve":
 		return runRedfishServe(args[1:])
+	case "read":
+		return runRedfishRead(args[1:])
 	case "tags":
 		return runRedfishTags(args[1:])
 	case "-h", "--help", "help":
@@ -385,6 +409,10 @@ func runRedfishServe(args []string) int {
 	auth := fs.String("auth", "none", "none | session | basic")
 	user := fs.String("user", "", "account the stand-in accepts")
 	passEnv := fs.String("password-env", "", "variable holding the password it accepts")
+	from := fs.String("from", "", "plant controller URL to serve tags from")
+	manifestPath := fs.String("manifest", "", "the monitoring project's redfish_manifest.yaml")
+	sourceID := fs.String("source", "", "which manifest source this BMC is")
+	every := fs.Duration("every", time.Second, "plant poll period")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -392,16 +420,78 @@ func runRedfishServe(args []string) int {
 		fmt.Fprintln(os.Stderr, "naut redfish serve: --mockup is required")
 		return 2
 	}
+	var plantM *redfish.Manifest
+	var plantSrc string
+	if *from != "" || *manifestPath != "" {
+		if *from == "" || *manifestPath == "" {
+			fmt.Fprintln(os.Stderr, "naut redfish serve: --from and --manifest go together")
+			return 2
+		}
+		m, src, host, err := loadRedfishPlant(*manifestPath, *sourceID)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut redfish serve:", err)
+			return 1
+		}
+		plantM, plantSrc = &m, src
+		listenSet := false
+		fs.Visit(func(f *flag.Flag) { listenSet = listenSet || f.Name == "listen" })
+		if !listenSet {
+			*listen = host
+		}
+	}
 	srv, err := startRedfishServe(*dir, *listen, *auth, *user, *passEnv, os.Stdout)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut redfish serve:", err)
 		return 1
 	}
 	defer srv.Stop()
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
-	<-ch
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if plantM != nil {
+		p, err := redfish.NewPlant(srv, *plantM, plantSrc)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut redfish serve:", err)
+			return 1
+		}
+		p.Log = slog.New(slog.NewTextHandler(os.Stdout, nil))
+		fmt.Printf("serving %d bound member(s) of %s from %s (every %s)\n", len(p.Feeds), plantSrc, *from, *every)
+		go p.Run(ctx, redfish.StateFetcher(*from, plantM.TagPatterns(plantSrc)), *every)
+	}
+	<-ctx.Done()
 	return 0
+}
+
+// loadRedfishPlant reads --manifest and resolves --source (default: the
+// only one) and the address its host: names, which --listen defaults to.
+func loadRedfishPlant(path, source string) (redfish.Manifest, string, string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return redfish.Manifest{}, "", "", err
+	}
+	m, err := redfish.ParseManifest(raw)
+	if err != nil {
+		return redfish.Manifest{}, "", "", fmt.Errorf("%s: %w", path, err)
+	}
+	if source == "" {
+		if len(m.Sources) != 1 {
+			ids := make([]string, len(m.Sources))
+			for i, s := range m.Sources {
+				ids[i] = s.ID
+			}
+			return m, "", "", fmt.Errorf("%s has %d sources (%s): name one with --source", path, len(m.Sources), strings.Join(ids, ", "))
+		}
+		source = m.Sources[0].ID
+	}
+	for _, s := range m.Sources {
+		if s.ID == source {
+			u, err := url.Parse(s.Host)
+			if err != nil || u.Host == "" {
+				return m, "", "", fmt.Errorf("%s: source %s: host %q is not a URL", path, source, s.Host)
+			}
+			return m, source, u.Host, nil
+		}
+	}
+	return m, "", "", fmt.Errorf("%s: no source %q", path, source)
 }
 
 // startRedfishServe stands the mockup up; package-level so the test drives
@@ -437,4 +527,88 @@ func startRedfishServe(dir, listen, auth, user, passEnv string, out io.Writer) (
 	}
 	fmt.Fprintf(out, "serving %s (%d resources) at %s — a source's host: %s\n", dir, len(tree), srv.URL(), srv.URL())
 	return srv, nil
+}
+
+// ── read ─────────────────────────────────────────────────────────────────
+
+func runRedfishRead(args []string) int {
+	fs := flag.NewFlagSet("redfish read", flag.ContinueOnError)
+	dir := fs.String("mockup", "", "the recording to read")
+	manifestPath := fs.String("manifest", "", "the redfish_manifest.yaml to read it through")
+	sourceID := fs.String("source", "", "which manifest source the recording is")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *dir == "" || *manifestPath == "" {
+		fmt.Fprintln(os.Stderr, "naut redfish read: --mockup and --manifest are required")
+		return 2
+	}
+	tree, err := mockup.LoadDir(*dir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut redfish read:", err)
+		return 1
+	}
+	m, src, _, err := loadRedfishPlant(*manifestPath, *sourceID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut redfish read:", err)
+		return 1
+	}
+	tags, err := readRedfishOffline(tree, m, src)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut redfish read:", err)
+		return 1
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(tags)
+	return 0
+}
+
+// readRedfishOffline serves the recording on a loopback stand-in, points
+// ONE source of the manifest at it, and returns that source's tags after
+// one complete poll.
+func readRedfishOffline(tree mockup.Tree, m redfish.Manifest, source string) (map[string]any, error) {
+	srv := mockup.New(tree, mockup.Options{})
+	if err := srv.Start("127.0.0.1:0"); err != nil {
+		return nil, err
+	}
+	defer srv.Stop()
+	one := redfish.Manifest{}
+	for _, s := range m.Sources {
+		if s.ID == source {
+			s.Host, s.User, s.PasswordEnv, s.PasswordFile, s.Auth = srv.URL(), "", "", "", ""
+			s.TLS, s.Enable, s.Interval = redfish.TLS{}, "", 200*time.Millisecond
+			one.Sources = append(one.Sources, s)
+		}
+	}
+	for _, t := range m.Tags {
+		if t.Source == source {
+			one.Tags = append(one.Tags, t)
+		}
+	}
+	d, err := redfish.New(one, redfish.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	d.Start(ctx)
+	defer d.Stop()
+	for {
+		v, _ := d.ReadInputs()
+		if n, _ := v[hw.LastPollTagName(source)].(int64); n > 0 {
+			out := map[string]any{}
+			for _, t := range one.Tags {
+				if iv, ok := v[t.Name].(ir.Value); ok {
+					out[t.Name] = runtime.Plain(iv)
+				}
+			}
+			return out, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("source %s: no complete poll of the recording in 30s", source)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }

@@ -77,6 +77,7 @@ is four projects, not one — `naut run sites/well-1`, `sites/well-2`,
 | HMI: a mimic with custom Svelte components and port overrides | lift-station | `hmi/`, `lift-station.mimic.json` |
 | HMI: a mimic built entirely from the kit's built-in components | batch-skid, remote-fleet | `batch-skid.mimic.json`, `scada/fleet.mimic.json` |
 | The SDK path: a custom `io.Driver`, no manifest | go-sdk | `plant.go` |
+| A plant simulation of IT hardware: a `replay` driver, fault inputs as tags, `naut snmp serve --from` | it-cluster | `lib/switch.st`, `replay_manifest.yaml` |
 
 **Needs naut ≥ 0.13.1** (`lib/` composition, a `FUNCTION_BLOCK`'s declared
 initial values, `naut compose`; 0.13.1 adds the dashboard fallback when a

@@ -141,8 +141,10 @@ func (a *Agent) SetValue(v walk.Varbind) {
 }
 
 // Ramp makes the counter at oid grow by perSec every second from its
-// current value (Counter32 wraps at 2^32, as the real thing does). A Set or
-// SetValue on the OID stops the ramp.
+// current value (Counter32 wraps at 2^32, as the real thing does). Ramping
+// a counter that is already ramping changes its slope from where it has
+// got to — never a step — so a plant can steer a rate second by second and
+// the counter stays monotonic. A Set or SetValue on the OID stops the ramp.
 func (a *Agent) Ramp(oid string, perSec float64) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -150,7 +152,7 @@ func (a *Agent) Ramp(oid string, perSec float64) error {
 	if !ok || (v.Type != walk.Counter32 && v.Type != walk.Counter64) {
 		return fmt.Errorf("ramp %s: not a counter in the walk", oid)
 	}
-	a.ramps[oid] = ramp{base: v.Uint, perSec: perSec, t0: time.Now()}
+	a.ramps[oid] = ramp{base: a.current(v).Uint, perSec: max(perSec, 0), t0: time.Now()}
 	return nil
 }
 

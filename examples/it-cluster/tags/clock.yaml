@@ -1,0 +1,9 @@
+# The replay clock (driver: replay). The outputs steer it: the HMI's
+# ReplayClock writes them, and so can `curl .../api/tags` or a test. The
+# inputs are where it is, so a scrubber can draw itself.
+- { name: Replay_Speed, role: output, init: 60.0, desc: "Recorded seconds per wall second (1 = real time; 60, the default, plays the 68 h in 68 min)" }
+- { name: Replay_Pause, role: output, init: false, desc: "Hold the replay clock" }
+- { name: Replay_SeekS, role: output, init: 0, desc: "Unix seconds: a change jumps the replay there" }
+- { name: Replay_At, role: input, init: 0, desc: "Unix seconds of the recorded moment being played, 0 until the recording loads" }
+- { name: Replay_From, role: input, init: 0, desc: "Unix seconds where the replay loop starts" }
+- { name: Replay_To, role: input, init: 0, desc: "Unix seconds where the replay loop wraps" }

@@ -111,6 +111,8 @@ var Types = []Type{
 		{Name: "ErrorRate", Kind: ir.TypeReal, Unit: "1/s", Desc: "errors per second, in plus out"},
 		{Name: "PoeOn", Kind: ir.TypeBool, Desc: "delivering power"},
 		{Name: "PoeW", Kind: ir.TypeReal, Unit: "W"},
+		{Name: "InBroadcastPps", Kind: ir.TypeReal, Unit: "1/s", Desc: "broadcast packets received per second"},
+		{Name: "InMulticastPps", Kind: ir.TypeReal, Unit: "1/s", Desc: "multicast packets received per second"},
 	}},
 	{Name: "PDU", Desc: "a switched rack PDU", Fields: []Field{
 		{Name: "Online", Kind: ir.TypeBool},
@@ -144,6 +146,58 @@ var Types = []Type{
 		{Name: "InputV", Kind: ir.TypeReal, Unit: "V"},
 		{Name: "OutputV", Kind: ir.TypeReal, Unit: "V"},
 		{Name: "BatteryTempC", Kind: ir.TypeReal, Unit: "°C"},
+	}},
+	// The server's inside, one tag per part (Redfish Drives, Memory,
+	// Processors, PCIeDevices, network ports): what a 3D chassis binds its
+	// bays, sockets and slots to. A part that is pulled keeps its tag with
+	// Present false; an empty bay has none.
+	{Name: "Drive", Desc: "one drive in a bay or on a riser", Fields: []Field{
+		{Name: "Bay", Kind: ir.TypeInt, Desc: "the bay's number on its enclosure"},
+		{Name: "Name", Kind: ir.TypeString},
+		{Name: "Model", Kind: ir.TypeString},
+		{Name: "Serial", Kind: ir.TypeString},
+		{Name: "CapacityGB", Kind: ir.TypeReal, Unit: "GB"},
+		{Name: "Protocol", Kind: ir.TypeString, Desc: "NVMe, SATA, SAS"},
+		{Name: "MediaType", Kind: ir.TypeString, Desc: "SSD, HDD"},
+		{Name: "Health", Kind: ir.TypeInt, Desc: "0 ok, 1 warning, 2 critical"},
+		{Name: "Fault", Kind: ir.TypeBool, Desc: "health warning or critical, or pulled"},
+		{Name: "PredictedFailure", Kind: ir.TypeBool, Desc: "the drive predicts its own failure (SMART)"},
+		{Name: "TempC", Kind: ir.TypeReal, Unit: "°C"},
+		{Name: "Present", Kind: ir.TypeBool, Desc: "false: pulled from its bay"},
+	}},
+	{Name: "DIMM", Desc: "one memory module", Fields: []Field{
+		{Name: "Locator", Kind: ir.TypeString, Desc: "the slot's silkscreen: DIMMA1"},
+		{Name: "CapacityGB", Kind: ir.TypeReal, Unit: "GB"},
+		{Name: "Manufacturer", Kind: ir.TypeString},
+		{Name: "PartNumber", Kind: ir.TypeString},
+		{Name: "Health", Kind: ir.TypeInt, Desc: "0 ok, 1 warning, 2 critical"},
+		{Name: "Fault", Kind: ir.TypeBool, Desc: "health warning or critical"},
+		{Name: "TempC", Kind: ir.TypeReal, Unit: "°C"},
+	}},
+	{Name: "CPU", Desc: "one processor socket", Fields: []Field{
+		{Name: "Model", Kind: ir.TypeString},
+		{Name: "Cores", Kind: ir.TypeInt},
+		{Name: "Health", Kind: ir.TypeInt, Desc: "0 ok, 1 warning, 2 critical"},
+		{Name: "Fault", Kind: ir.TypeBool, Desc: "health warning or critical"},
+		{Name: "TempC", Kind: ir.TypeReal, Unit: "°C"},
+		{Name: "Pct", Kind: ir.TypeReal, Unit: "%", Desc: "busy"},
+	}},
+	{Name: "PCIeDevice", Desc: "one card in a PCIe slot", Fields: []Field{
+		{Name: "Slot", Kind: ir.TypeInt, Desc: "the system's slot number"},
+		{Name: "Name", Kind: ir.TypeString},
+		{Name: "Model", Kind: ir.TypeString},
+		{Name: "Manufacturer", Kind: ir.TypeString},
+		{Name: "Firmware", Kind: ir.TypeString},
+		{Name: "Health", Kind: ir.TypeInt, Desc: "0 ok, 1 warning, 2 critical"},
+		{Name: "Fault", Kind: ir.TypeBool, Desc: "health warning or critical"},
+		{Name: "Ports", Kind: ir.TypeInt, Desc: "network ports, on a NIC"},
+		{Name: "TempC", Kind: ir.TypeReal, Unit: "°C"},
+	}},
+	{Name: "NetPort", Desc: "one network port on a server: a NIC's, the onboard LAN's, the BMC's", Fields: []Field{
+		{Name: "Name", Kind: ir.TypeString},
+		{Name: "LinkUp", Kind: ir.TypeBool},
+		{Name: "SpeedGbps", Kind: ir.TypeReal, Unit: "Gb/s", Desc: "negotiated, while the link is up"},
+		{Name: "MAC", Kind: ir.TypeString},
 	}},
 }
 

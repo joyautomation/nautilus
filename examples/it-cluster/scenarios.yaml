@@ -1,0 +1,116 @@
+# The named scenarios. gen.py compiles this into scenarios.st; nothing else
+# reads it. Add a scenario here and re-run gen.py.
+#
+# A scenario only SETS fault inputs (tags/faults.yaml), so scenarios
+# compose: writing fan-fail, then hot-room, is both. "normal" is built in
+# and clears every fault. Each scenario either sets its inputs at once
+# (set:), or runs a timeline (steps:, each at: seconds from the write,
+# optionally repeating every repeat: seconds until another scenario is
+# written). A timeline stops when another scenario is written; whatever it
+# last set stays set, like any other fault, until normal.
+#
+#   - name: my-scenario
+#     about: one line for the scenario panel
+#     set: { Sim_SW1_Port03.Down: true }
+#
+# Values: true/false for BOOL inputs, numbers for REAL ones.
+
+scenarios:
+  # ── the network ──
+  - name: port-down
+    about: "A switch port loses link (SW2 te0/26); node1's slot 3 port 2, at the far end, loses it too."
+    set: { Sim_SW2_Port26.Down: true }
+
+  - name: port-flap
+    about: "SW2 te0/26 flaps, down 10 s in every 30 s: never long enough for a link-down alarm."
+    repeat: 30
+    steps:
+      - { at: 0, set: { Sim_SW2_Port26.Down: true } }
+      - { at: 10, set: { Sim_SW2_Port26.Down: false } }
+
+  - name: cable-pull
+    about: "The cable between SW3 te0/25 and node3's slot 3 port 2 is pulled."
+    set: { Sim_Cable_SW3_Port25.Pulled: true }
+
+  - name: mesh-cable-pull
+    about: "A server-to-server link (node1 slot 2 port 1 to node2 slot 3 port 1) is pulled."
+    set: { Sim_Cable_NODE1_Nic_Slot2_P1.Pulled: true }
+
+  - name: speed-degrade
+    about: "node1's uplink (SW1 te0/25) renegotiates at 1G."
+    set: { Sim_SW1_Port25.SpeedMbps: 1000 }
+
+  - name: error-burst
+    about: "SW2 te0/25 starts counting 50 errors a second."
+    set: { Sim_SW2_Port25.ErrorRate: 50 }
+
+  - name: broadcast-storm
+    about: "A broadcast storm (a loop, say) floods every port in the layer-2 domain; the 1G ports saturate and drop."
+    set: { Sim_Net.BroadcastPps: 1000000 }
+
+  - name: multicast-storm
+    about: "A multicast flood with no IGMP snooping to stop it reaches every port."
+    set: { Sim_Net.MulticastPps: 300000 }
+
+  - name: switch-down
+    about: "SW3 goes dark: its ports and every cable to it go down, and it stops answering."
+    set: { Sim_SW3.Dark: true }
+
+  - name: switch-reboot
+    about: "SW3 reboots, dark for 90 s, and comes back with its uptime reset."
+    set: { Sim_SW3.Reboot: true }
+
+  # ── the servers ──
+  - name: cpu-overheat
+    about: "node2 runs flat out with two fans gone; its CPU climbs past HighHigh in a few minutes."
+    set: { Sim_NODE2.CpuLoad: 100, Sim_NODE2_Fan3.Fail: true, Sim_NODE2_Fan4.Fail: true }
+
+  - name: fan-fail
+    about: "node1's FAN3 stops; the others ramp and the CPU warms."
+    set: { Sim_NODE1_Fan3.Fail: true }
+
+  - name: psu-loss
+    about: "node1's PSU2 loses its input; PSU1 carries the load and the server stays up."
+    set: { Sim_NODE1_PSU2.InputLost: true }
+
+  - name: drive-pull
+    about: "node3's NVMe bay 2 is pulled."
+    set: { Sim_NODE3_Drive_NVMe2.Pulled: true }
+
+  - name: drive-failing
+    about: "node3's NVMe bay 1 predicts its own failure."
+    set: { Sim_NODE3_Drive_NVMe1.Failing: true }
+
+  - name: node-off
+    about: "node2 powers off; its links drop and the switches alarm."
+    set: { Sim_NODE2.PowerOff: true }
+
+  - name: bmc-dark
+    about: "node3's BMC stops answering."
+    set: { Sim_NODE3.Dark: true }
+
+  - name: bmc-reboot
+    about: "node3's BMC reboots, dark for two minutes, then back."
+    steps:
+      - { at: 0, set: { Sim_NODE3.Dark: true } }
+      - { at: 120, set: { Sim_NODE3.Dark: false } }
+
+  # ── the room ──
+  - name: hot-room
+    about: "The room runs 15 °C hot; every inlet, and everything behind it, rises."
+    set: { Sim_Room.InletDeltaC: 15 }
+
+  - name: cooling-failure
+    about: "The room's cooling fails; the inlets climb 2 °C a minute for ten minutes."
+    steps:
+      - { at: 0, set: { Sim_Room.InletDeltaC: 0 } }
+      - { at: 60, set: { Sim_Room.InletDeltaC: 2 } }
+      - { at: 120, set: { Sim_Room.InletDeltaC: 4 } }
+      - { at: 180, set: { Sim_Room.InletDeltaC: 6 } }
+      - { at: 240, set: { Sim_Room.InletDeltaC: 8 } }
+      - { at: 300, set: { Sim_Room.InletDeltaC: 10 } }
+      - { at: 360, set: { Sim_Room.InletDeltaC: 12 } }
+      - { at: 420, set: { Sim_Room.InletDeltaC: 14 } }
+      - { at: 480, set: { Sim_Room.InletDeltaC: 16 } }
+      - { at: 540, set: { Sim_Room.InletDeltaC: 18 } }
+      - { at: 600, set: { Sim_Room.InletDeltaC: 20 } }

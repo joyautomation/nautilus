@@ -208,3 +208,79 @@ func scalarString(v any) string {
 	}
 	return fmt.Sprint(v)
 }
+
+// Deleted, returned from a Map function, removes the property.
+var Deleted = &struct{ deleted bool }{true}
+
+// ErrNoTarget is Map's answer when the path's container is not there to
+// write into: a selector matching no element, a parent that is not an
+// object.
+var ErrNoTarget = errors.New("path reaches nothing to write")
+
+// Map is Eval's inverse, for a stand-in serving a plant: it replaces every
+// value the path reaches with fn(i, old) — i counts the reached values in
+// Eval's order, old is nil for a property that is missing (and is then
+// created: a sensor whose Reading went null gets it back). fn returning
+// Deleted removes the property. Selectors must match exactly as Eval's do;
+// a missing intermediate object is ErrNoTarget, never invented.
+func (p *Path) Map(doc any, fn func(i int, old any) any) error {
+	n := 0
+	var walk func(cur any, segs []segment) error
+	walk = func(cur any, segs []segment) error {
+		obj, ok := cur.(map[string]any)
+		if !ok {
+			return fmt.Errorf("path %q: %w", p.src, ErrNoTarget)
+		}
+		s := segs[0]
+		last := len(segs) == 1
+		if !s.sel {
+			if last {
+				v := fn(n, obj[s.name])
+				n++
+				if v == Deleted {
+					delete(obj, s.name)
+				} else {
+					obj[s.name] = v
+				}
+				return nil
+			}
+			return walk(obj[s.name], segs[1:])
+		}
+		arr, ok := obj[s.name].([]any)
+		if !ok {
+			return fmt.Errorf("path %q: %s is not an array: %w", p.src, s.name, ErrNoTarget)
+		}
+		var hits []int
+		for i, e := range arr {
+			if s.wildcard {
+				if e != nil {
+					hits = append(hits, i)
+				}
+				continue
+			}
+			if eo, ok := e.(map[string]any); ok {
+				if kv, ok := eo[s.key]; ok && scalarString(kv) == s.val {
+					hits = append(hits, i)
+				}
+			}
+		}
+		switch {
+		case !s.wildcard && len(hits) > 1:
+			return fmt.Errorf("path %q: [%s=%s]: %w", p.src, s.key, s.val, ErrAmbiguous)
+		case len(hits) == 0:
+			return fmt.Errorf("path %q: [%s]: %w", p.src, s.key+"="+s.val, ErrNoTarget)
+		}
+		for _, i := range hits {
+			if last {
+				// A selector names an element, not a value in it: replacing
+				// the whole element is never what a binding means.
+				return fmt.Errorf("path %q ends in a selector: %w", p.src, ErrNoTarget)
+			}
+			if err := walk(arr[i], segs[1:]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return walk(doc, p.segs)
+}
