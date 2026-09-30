@@ -38,7 +38,7 @@ describe('the SYS-112B-WR profile', () => {
 	});
 	it('binds the tag names agreed with the drivers workstream', () => {
 		const tags = serverTags(profile, 'NODE1');
-		for (const t of ['NODE1', 'NODE1_Drive_NVMe0', 'NODE1_Drive_NVMe3', 'NODE1_Drive_Boot0', 'NODE1_Drive_Boot4', 'NODE1_Pcie_Slot2', 'NODE1_Pcie_Slot3', 'NODE1_Dimm_A1', 'NODE1_Dimm_G1', 'NODE1_Cpu1', 'NODE1_Fan6', 'NODE1_PSU2'])
+		for (const t of ['NODE1', 'NODE1_Drive_NVMe0', 'NODE1_Drive_NVMe3', 'NODE1_Drive_SATA0', 'NODE1_Drive_SATA4', 'NODE1_Pcie_Slot2', 'NODE1_Pcie_Slot3', 'NODE1_Dimm_A1', 'NODE1_Dimm_G1', 'NODE1_Cpu1', 'NODE1_Fan6', 'NODE1_PSU2'])
 			expect(tags).toContain(t);
 	});
 	it('carries its AR anchors: the bench label and the racked pair 154 mm apart', () => {

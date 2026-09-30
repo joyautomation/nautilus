@@ -2,35 +2,29 @@
 	// node1, opened up: the Supermicro SYS-112B-WR drawn from its chassis
 	// profile crossed with its tags (docs/design/spatial-hmi.md §3e). Click
 	// any part for its faceplate. Fans, PSUs and temperatures come from the
-	// controller; drives, DIMMs, cards and the CPU are stubbed from the BMC
-	// capture until the drivers publish them (../lib/stub.ts).
+	// controller; so do drives, DIMMs, cards, the CPU and NIC ports (the
+	// redfish import's part tags). Pull a drive with the plant's fault tags.
 	import { onMount } from 'svelte';
 	import { RealtimeClient, createAlarmClient, type NautilusFrame } from '@joyautomation/nautilus-hmi';
 	import { SceneView, DEFAULT_PALETTE, paletteFromTheme, type SceneCamera, type Palette } from '@joyautomation/nautilus-hmi-3d';
 	import { Server, PartFaceplate, resolveParts, validateProfile, anchorPayload, OVERLAYS, cablesOverlay, linkOnPort, linkFacts, overlayColors, type ChassisProfile, type OverlayContext } from '@joyautomation/nautilus-hmi-3d/hardware';
 	import QRCode from 'qrcode';
 	import sys112b from '@joyautomation/nautilus-hmi-3d/profiles/supermicro-sys-112b-wr.json';
-		import { stubbed, isStubTag } from '$lib/stub';
-	import { plant, allStubs, plantPatterns } from '$lib/plant';
+	import { plant, plantPatterns } from '$lib/plant';
 	import Studio from '$lib/Studio.svelte';
 	import ReplayClock from '$lib/ReplayClock.svelte';
 
 	const NODE = 'NODE1';
 	const profile = sys112b as unknown as ChassisProfile;
-	const stub = allStubs();
 	const problems = validateProfile(profile);
 	const parts = resolveParts(profile, NODE);
 	const byId = new Map(parts.map((p) => [p.id, p]));
 
-	const real = new RealtimeClient<NautilusFrame>({ url: '/api/stream', tags: plantPatterns() });
-	const rt = stubbed(real, stub);
-	const alarms = createAlarmClient(real);
+	const rt = new RealtimeClient<NautilusFrame>({ url: '/api/stream', tags: plantPatterns() });
+	const alarms = createAlarmClient(rt);
 
 	// Views. The server sits with its centre on the origin.
 	const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
-	// `?pull=NODE1_Drive_NVMe2` shows a pulled drive (Present = false) until
-	// the real tags exist to pull one on the bench.
-	for (const t of params.getAll('pull')) if (stub.tags[t]) stub.tags[t].Present = false;
 	let lid = $state<'on' | 'off'>(params.get('lid') === 'on' ? 'on' : 'off');
 	let xray = $state(params.has('xray'));
 	let exploded = $state(params.has('exploded'));
@@ -100,11 +94,11 @@
 
 	onMount(() => {
 		palette = paletteFromTheme(document.body);
-		real.start();
+		rt.start();
 		alarms.start();
 		return () => {
 			alarms.stop();
-			real.stop();
+			rt.stop();
 		};
 	});
 </script>
@@ -164,7 +158,6 @@
 		server={{ label: 'node1 · Supermicro SYS-112B-WR', tag: NODE }}
 		{value}
 		quality={tag ? rt.quality(tag) : 'good'}
-		note={isStubTag(stub, tag) ? `Stub: ${stub.source}.` : undefined}
 		extra={cable}
 		onclose={() => {
 			open = false;

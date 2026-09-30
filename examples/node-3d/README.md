@@ -5,14 +5,11 @@ profile (`hmi-3d/profiles/supermicro-sys-112b-wr.json`) crossed with its
 tags (design doc §3e). Click any part for its faceplate; lid, x-ray,
 exploded and camera presets in the toolbar.
 
-- Fans, PSUs, temperatures and the chassis come from a controller with
-  NODE1's it-drivers tags: the phone-AR bench on `:8080` (the recorded X14),
-  or `CONTROLLER_URL=http://localhost:8081` for the live rack.
-- Drives, DIMMs, cards and the CPU are **stubbed** until the drivers publish
-  them (workstream A): `stub-inventory.mjs` turns a Redfish capture into
-  `hmi/src/lib/node1.stub.json` (serials redacted), laid under the
-  controller's frame by `hmi/src/lib/stub.ts`. A real tag always wins.
-- `?pull=NODE1_Drive_NVMe2` shows a pulled drive; `?view=top|front|rear`,
+- Every part comes from a controller with NODE1's it-drivers tags: fans,
+  PSUs, temperatures, and the part tags `naut redfish import` generates
+  (drives, DIMMs, the CPU, PCIe cards, NIC ports). A controller imported
+  before the part tags existed shows those parts without values: re-import.
+- `?view=top|front|rear`,
   `?lid=on`, `?xray`, `?exploded`, `?codes` (the printed AR codes, off by default) and `?overlay=heat|interfaces|free` set the view.
 
 - `?overlay=cables` labels every port with its far end from the site
@@ -27,15 +24,14 @@ exploded and camera presets in the toolbar.
   `?view=cables|rear|front`. The switches are live only where the controller
   polls them (hq-sw1 on `:8081` today): serve with
   `CONTROLLER_URL=http://localhost:8081`.
-- **Simulation mode**: the whole cluster with no hardware —
-  `randd/node-3d-sim/sim` replays the recorded switches and BMCs through
-  `naut snmp serve` / `naut redfish serve` into a controller on `:8085`;
-  serve with `CONTROLLER_URL=http://localhost:8085`. For motion, serve
-  with `CONTROLLER_URL=http://localhost:8086` instead: `sim/replay.mjs`
-  lays 68 h of recorded history (MON01's Prometheus: port traffic and
-  link, fans, temperatures, PSUs, power, mesh-port link) over the
-  controller's frames on a looping clock; the replay clock (bottom right)
-  shows the recorded time, sets the speed and scrubs.
+- **Simulation mode**: the whole cluster with no hardware. A plant
+  (`examples/it-cluster`: 68 h of recorded history as the baseline, faults
+  as tags) on `:8087`; stand-ins that answer from it
+  (`naut snmp serve --from`, `naut redfish serve --from`); the monitoring
+  controller polling them on `:8085` (`randd/node-3d-sim/sim`). Serve with
+  `CONTROLLER_URL=http://localhost:8085 PLANT_URL=http://localhost:8087`:
+  the replay clock (bottom right, marked SIMULATION) reads and steers the
+  plant's `Replay_*` tags.
 - `/rack?mesh` (or **mesh** in the toolbar): the same devices and links as a
   network floating in space — switches on a ring, each server under the two
   switches it is cabled to, every link an arc labelled with its two ports and
@@ -51,5 +47,4 @@ exploded and camera presets in the toolbar.
 ```sh
 (cd ../../hmi-3d && npm run package)
 cd hmi && npm install && npm run build && npx vite preview --port 8097
-node stub-inventory.mjs <capture dir>/node1 > hmi/src/lib/node1.stub.json
 ```

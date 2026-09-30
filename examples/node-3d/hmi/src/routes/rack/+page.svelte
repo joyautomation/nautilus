@@ -41,17 +41,14 @@
 		type Verdict,
 		type OverlayContext
 	} from '@joyautomation/nautilus-hmi-3d/hardware';
-	import { stubbed, isStubTag } from '$lib/stub';
-	import { plant, allStubs, plantPatterns, topology } from '$lib/plant';
+	import { plant, plantPatterns, topology } from '$lib/plant';
 	import hqRack from '$lib/hq.rack.json';
 	import Studio from '$lib/Studio.svelte';
 	import ReplayClock from '$lib/ReplayClock.svelte';
 
 	const layout = hqRack as RackLayout;
-	const stub = allStubs();
-	const real = new RealtimeClient<NautilusFrame>({ url: '/api/stream', tags: plantPatterns() });
-	const rt = stubbed(real, stub);
-	const alarms = createAlarmClient(real);
+	const rt = new RealtimeClient<NautilusFrame>({ url: '/api/stream', tags: plantPatterns() });
+	const alarms = createAlarmClient(rt);
 
 	// Every racked device with its profile, placement and parts.
 	const devices = layout.devices.flatMap((r) => {
@@ -245,11 +242,11 @@
 
 	onMount(() => {
 		palette = paletteFromTheme(document.body);
-		real.start();
+		rt.start();
 		alarms.start();
 		return () => {
 			alarms.stop();
-			real.stop();
+			rt.stop();
 		};
 	});
 </script>
@@ -377,7 +374,6 @@
 		server={{ label: `${pickedDevice.hostname ?? pickedDevice.id} · ${pickedDevice.profile.name}`, tag: pickedDevice.tag, kind: pickedDevice.kind === 'switch' ? 'switch' : 'server', portsUp }}
 		{value}
 		quality={tag ? rt.quality(tag) : 'good'}
-		note={isStubTag(stub, tag) ? `Stub: ${stub.source}.` : undefined}
 		extra={cable}
 		onclose={() => {
 			open = false;
