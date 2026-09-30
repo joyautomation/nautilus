@@ -113,7 +113,7 @@
 
 <svelte:head><title>node1 · 3D</title></svelte:head>
 
-<ReplayClock replay={(rt.frame as { replay?: any } | null)?.replay} />
+<ReplayClock />
 
 <div class="stage">
 	{#if problems.length}

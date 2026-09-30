@@ -258,7 +258,7 @@
 
 <svelte:head><title>HQ rack · 3D</title></svelte:head>
 
-<ReplayClock replay={(rt.frame as { replay?: any } | null)?.replay} />
+<ReplayClock />
 
 <div class="stage">
 	<SceneView {rt} {alarms} {camera} grid={{ pos: [0, 0, -D / 2], cell: 0.1, section: 0.5, size: [4, 4] }} inspector={false} bind:selected onselect={pick} perf={params.has('perf') || aspect > 1}>
