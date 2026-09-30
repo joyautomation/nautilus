@@ -34,6 +34,7 @@
 		look = $bindable('lit'),
 		selected = $bindable(null),
 		onselect,
+		oncontext,
 		hud,
 		children
 	}: {
@@ -59,6 +60,9 @@
 		look?: 'lit' | 'flat';
 		selected?: string | null;
 		onselect?: (id: string) => void;
+		/** A node was right-clicked (a context menu's cue); `event` is the
+		 * browser's, for clientX / clientY. Picks nothing. */
+		oncontext?: (id: string, event: MouseEvent) => void;
 		/** Extra HUD content, rendered after the built-in strip. */
 		hud?: Snippet;
 		/** Svelte authoring: <Node>, <Pipe>, <Fixture3D>, anything Threlte. */
@@ -139,6 +143,7 @@
 				{environment}
 				bind:placed
 				onpick={pick}
+				{oncontext}
 			>
 				{@render children?.()}
 			</Scene3D>

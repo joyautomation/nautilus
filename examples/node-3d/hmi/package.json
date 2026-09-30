@@ -10,7 +10,8 @@
 		"prebuild": "node copy-models.mjs",
 		"build": "vite build",
 		"preview": "vite preview",
-		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"test": "node --test tests/*.test.ts"
 	},
 	"dependencies": {
 		"@joyautomation/nautilus-hmi": "^0.6.0",

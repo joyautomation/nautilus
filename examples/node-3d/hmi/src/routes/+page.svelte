@@ -10,9 +10,12 @@
 	import { Server, PartFaceplate, resolveParts, validateProfile, anchorPayload, OVERLAYS, cablesOverlay, linkOnPort, linkFacts, overlayColors, type ChassisProfile, type OverlayContext } from '@joyautomation/nautilus-hmi-3d/hardware';
 	import QRCode from 'qrcode';
 	import sys112b from '@joyautomation/nautilus-hmi-3d/profiles/supermicro-sys-112b-wr.json';
-	import { plant, plantPatterns } from '$lib/plant';
+	import { plant, plantPatterns, faultTargets } from '$lib/plant';
 	import Studio from '$lib/Studio.svelte';
 	import ReplayClock from '$lib/ReplayClock.svelte';
+	import ScenarioPanel from '$lib/ScenarioPanel.svelte';
+	import PartMenu from '$lib/PartMenu.svelte';
+	import { PlantFaults } from '$lib/faults.svelte';
 
 	const NODE = 'NODE1';
 	const profile = sys112b as unknown as ChassisProfile;
@@ -22,6 +25,13 @@
 
 	const rt = new RealtimeClient<NautilusFrame>({ url: '/api/stream', tags: plantPatterns() });
 	const alarms = createAlarmClient(rt);
+	// The plant's fault inputs: the scenario panel and a part's right-click.
+	const faults = new PlantFaults();
+	let menu = $state<{ x: number; y: number; title: string; simTags: string[] } | null>(null);
+	function context(id: string, e: MouseEvent) {
+		if (!faults.up) return;
+		menu = { x: e.clientX, y: e.clientY, ...faultTargets(id, profile, parts, (rt.frame?.tags ?? {}) as Record<string, unknown>) };
+	}
 
 	// Views. The server sits with its centre on the origin.
 	const params = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
@@ -96,7 +106,9 @@
 		palette = paletteFromTheme(document.body);
 		rt.start();
 		alarms.start();
+		faults.start();
 		return () => {
+			faults.stop();
 			alarms.stop();
 			rt.stop();
 		};
@@ -108,18 +120,24 @@
 <svelte:head><title>node1 · 3D</title></svelte:head>
 
 <ReplayClock />
-{#if (alarms.summary?.active ?? 0) > 0}
-	<aside class="alarmkey" aria-label="What the alarm signs mean">
-		<b>{alarms.summary?.active} in alarm</b>
-		<AlarmKey {palette} />
-	</aside>
+<div class="side">
+	{#if (alarms.summary?.active ?? 0) > 0}
+		<aside class="alarmkey" aria-label="What the alarm signs mean">
+			<b>{alarms.summary?.active} in alarm</b>
+			<AlarmKey {palette} />
+		</aside>
+	{/if}
+	<ScenarioPanel {faults} />
+</div>
+{#if menu}
+	<PartMenu {faults} {...menu} onclose={() => (menu = null)} />
 {/if}
 
 <div class="stage">
 	{#if problems.length}
 		<pre class="err">{JSON.stringify(problems, null, 2)}</pre>
 	{/if}
-	<SceneView {rt} {alarms} camera={framed(CAMERAS[view])} grid={{ pos: [0, -0.0005, 0], cell: 0.05, section: 0.25, size: [2, 2] }} inspector={false} bind:selected onselect={() => (open = true)} {perf}>
+	<SceneView {rt} {alarms} camera={framed(CAMERAS[view])} grid={{ pos: [0, -0.0005, 0], cell: 0.05, section: 0.25, size: [2, 2] }} inspector={false} bind:selected onselect={() => (open = true)} oncontext={context} {perf}>
 		<Studio />
 		<Server {profile} node={NODE} label="node1" pos={[0, 0, D / 2]} {lid} {xray} {exploded} anchor={codes} {codeImages} {overlay} />
 		{#snippet hud()}
@@ -245,11 +263,22 @@
 	}
 	/* The alarm signs' key, while anything is in alarm: top right, clear of
 	   the toolbar and the overlay legend. */
-	.alarmkey {
+	/* Top right: the alarm key, then the simulation's scenarios. */
+	.side {
 		position: fixed;
 		top: 12px;
 		right: 12px;
+		/* clear of the replay clock */
+		bottom: 96px;
 		z-index: 5;
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 8px;
+		pointer-events: none;
+	}
+	.alarmkey {
+		pointer-events: auto;
 		display: grid;
 		gap: 6px;
 		padding: 8px 10px;

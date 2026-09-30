@@ -142,6 +142,13 @@
 					scene.pick(id!);
 				}
 			: undefined}
+		oncontextmenu={pickable
+			? (e: IntersectionEvent<MouseEvent>) => {
+					e.stopPropagation();
+					e.nativeEvent.preventDefault();
+					scene.contextPick(id!, e.nativeEvent);
+				}
+			: undefined}
 	>
 		{#if children}
 			{@render children(nodeProps)}

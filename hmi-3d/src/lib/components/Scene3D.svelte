@@ -36,6 +36,7 @@
 		environment,
 		placed = $bindable({}),
 		onpick,
+		oncontext,
 		children
 	}: {
 		doc?: SceneDoc;
@@ -58,6 +59,8 @@
 		placed?: Record<string, PlacedNode>;
 		/** A node was clicked (not dragged). Never fires for a click on nothing. */
 		onpick?: (id: string) => void;
+		/** A node was right-clicked; `event` is the browser's (clientX/Y). */
+		oncontext?: (id: string, event: MouseEvent) => void;
 		/** Svelte authoring: <Node>, <Pipe>, <Fixture3D>, anything Threlte. */
 		children?: Snippet;
 	} = $props();
@@ -134,6 +137,7 @@
 			if (id !== undefined) failed[id] = true;
 		},
 		pick: (id) => onpick?.(id),
+		contextPick: (id, e) => oncontext?.(id, e),
 		register(node) {
 			placed[node.id] = node;
 			return () => {

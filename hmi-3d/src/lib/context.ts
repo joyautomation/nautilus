@@ -38,6 +38,9 @@ export interface SceneContext {
 	reportBounds(id: string | undefined, box: Box): void;
 	reportFailed(id: string | undefined): void;
 	pick(id: string): void;
+	/** A right-click on a pickable node, with the browser's event (for
+	 * where to put a menu). */
+	contextPick(id: string, event: MouseEvent): void;
 	/** Announce a placed node (for the drawer); returns the unregister. */
 	register(node: PlacedNode): () => void;
 }

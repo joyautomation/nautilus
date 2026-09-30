@@ -41,14 +41,25 @@
 		type Verdict,
 		type OverlayContext
 	} from '@joyautomation/nautilus-hmi-3d/hardware';
-	import { plant, plantPatterns, topology } from '$lib/plant';
+	import { plant, plantPatterns, topology, faultTargets } from '$lib/plant';
 	import hqRack from '$lib/hq.rack.json';
 	import Studio from '$lib/Studio.svelte';
 	import ReplayClock from '$lib/ReplayClock.svelte';
+	import ScenarioPanel from '$lib/ScenarioPanel.svelte';
+	import PartMenu from '$lib/PartMenu.svelte';
+	import { PlantFaults } from '$lib/faults.svelte';
 
 	const layout = hqRack as RackLayout;
 	const rt = new RealtimeClient<NautilusFrame>({ url: '/api/stream', tags: plantPatterns() });
 	const alarms = createAlarmClient(rt);
+	// The plant's fault inputs: the scenario panel and a part's right-click.
+	const faults = new PlantFaults();
+	let menu = $state<{ x: number; y: number; title: string; simTags: string[] } | null>(null);
+	function context(id: string, e: MouseEvent) {
+		const d = byTag.get(deviceOf(id));
+		if (!faults.up || !d) return;
+		menu = { x: e.clientX, y: e.clientY, ...faultTargets(id, d.profile, d.parts, tags) };
+	}
 
 	// Every racked device with its profile, placement and parts.
 	const devices = layout.devices.flatMap((r) => {
@@ -244,7 +255,9 @@
 		palette = paletteFromTheme(document.body);
 		rt.start();
 		alarms.start();
+		faults.start();
 		return () => {
+			faults.stop();
 			alarms.stop();
 			rt.stop();
 		};
@@ -256,15 +269,21 @@
 <svelte:head><title>HQ rack · 3D</title></svelte:head>
 
 <ReplayClock />
-{#if (alarms.summary?.active ?? 0) > 0}
-	<aside class="alarmkey" aria-label="What the alarm signs mean">
-		<b>{alarms.summary?.active} in alarm</b>
-		<AlarmKey {palette} />
-	</aside>
+<div class="side">
+	{#if (alarms.summary?.active ?? 0) > 0}
+		<aside class="alarmkey" aria-label="What the alarm signs mean">
+			<b>{alarms.summary?.active} in alarm</b>
+			<AlarmKey {palette} />
+		</aside>
+	{/if}
+	<ScenarioPanel {faults} />
+</div>
+{#if menu}
+	<PartMenu {faults} {...menu} onclose={() => (menu = null)} />
 {/if}
 
 <div class="stage">
-	<SceneView {rt} {alarms} {camera} grid={{ pos: [0, 0, -D / 2], cell: 0.1, section: 0.5, size: [4, 4] }} inspector={false} bind:selected onselect={pick} perf={params.has('perf') || aspect > 1}>
+	<SceneView {rt} {alarms} {camera} grid={{ pos: [0, 0, -D / 2], cell: 0.1, section: 0.5, size: [4, 4] }} inspector={false} bind:selected onselect={pick} oncontext={context} perf={params.has('perf') || aspect > 1}>
 		<Studio />
 		{#if mesh}
 			<NetworkMesh {topology} {checks} {colors} {summary} labels={edgeLabels} focus={meshFocus ?? undefined} />
@@ -492,11 +511,22 @@
 	}
 	/* The alarm signs' key, while anything is in alarm: top right, clear of
 	   the toolbar and the overlay legend. */
-	.alarmkey {
+	/* Top right: the alarm key, then the simulation's scenarios. */
+	.side {
 		position: fixed;
 		top: 12px;
 		right: 12px;
+		/* clear of the replay clock */
+		bottom: 96px;
 		z-index: 5;
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 8px;
+		pointer-events: none;
+	}
+	.alarmkey {
+		pointer-events: auto;
 		display: grid;
 		gap: 6px;
 		padding: 8px 10px;

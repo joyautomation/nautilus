@@ -4,6 +4,8 @@
 		"strict": true,
 		"moduleResolution": "bundler",
 		"resolveJsonModule": true,
-		"skipLibCheck": true
+		"skipLibCheck": true,
+		"allowImportingTsExtensions": true,
+		"noEmit": true
 	}
 }
