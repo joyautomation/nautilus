@@ -332,9 +332,12 @@
 		{#each devices as d (d.id)}
 			{@const on = focus === d.tag}
 			{@const fade = focusFade(topology, focused?.id, d.id)}
+			<!-- servers ride out on slide rails; a switch is on its ears alone -->
+			{#if d.kind === 'server'}
 			<Fade amount={fade}>
 				<SlideRails place={d.place} size={d.profile.size.map((v) => v / 1000) as Vec3} depth={D} slide={slides.get(d.id)?.current ?? 0} />
 			</Fade>
+			{/if}
 			<Server
 				profile={d.profile}
 				node={d.tag}
