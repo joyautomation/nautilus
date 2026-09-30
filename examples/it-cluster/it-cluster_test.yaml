@@ -97,7 +97,7 @@ tests:
         advance: 2s
         expect: { NODE1_Fan3.RPM: 0.0, NODE1_Fan3.Fault: true }
       - advance: 300s
-        expect: { NODE1_Fan1.RPM: { gt: 9940 }, NODE1_Temp_CPU.Value: { between: [66, 75] }, NODE1_Temp_CPU.HighHigh: false }
+        expect: { NODE1_Fan1.RPM: { gt: 9940 }, NODE1_Temp_CPU.Value: { between: [64, 72] }, NODE1_Temp_CPU.HighHigh: false }
 
   - name: cpu-overheat climbs (never jumps) past HighHigh within five minutes
     steps:
@@ -153,3 +153,61 @@ tests:
       - given: { Scenario: "normal" }
         advance: 2s
         expect: { NODE1_Fan3.Fault: false, NODE3.Online: true, Sim_NODE1_Fan3.Fail: false, Sim_NODE3.Dark: false, ClearFaults: false }
+
+  # ── timelines and the storm (scenarios.yaml) ──
+
+  - name: port-flap is down 5 s in every 20 s, until another scenario is written
+    steps:
+      - given: { Scenario: "port-flap" }
+        advance: 2s
+        expect: { SW2_Port26.OperUp: false }
+      - advance: 6s
+        expect: { SW2_Port26.OperUp: true }
+      - advance: 15s
+        expect: { SW2_Port26.OperUp: false }
+      - advance: 5s
+        expect: { SW2_Port26.OperUp: true }
+      - given: { Scenario: "fan-fail" }
+        advance: 30s
+        always: { SW2_Port26.OperUp: true }
+
+  - name: bmc-reboot is dark for two minutes, then back
+    steps:
+      - given: { Scenario: "bmc-reboot" }
+        advance: 2s
+        expect: { NODE3.Online: false, ScenarioS: { between: [1, 3] } }
+      - until: 130s
+        expect: { NODE3.Online: true }
+
+  - name: broadcast-storm floods every up port; the 1G ports saturate and drop
+    steps:
+      - given: { Scenario: "broadcast-storm" }
+        advance: 10s
+        expect: { SW1_Port24.InBroadcastPps: 1000000.0, SW1_Port24.OutBps: 1000000000.0, SW1_Port24.OutDiscards: { gt: 100000 },
+                  SW2_Port25.InBroadcastPps: 1000000.0, SW2_Port25.OutBps: { between: [1024000000, 1100000000] }, SW2_Port25.OutDiscards: 0,
+                  SW1_Port01.InBroadcastPps: 0.0 }
+      - given: { Scenario: "normal" }
+        advance: 2s
+        expect: { SW1_Port24.InBroadcastPps: 0.0, SW1_Port24.OutBps: { lt: 1000000 } }
+
+  - name: multicast-storm reaches every port too
+    steps:
+      - given: { Scenario: "multicast-storm" }
+        advance: 2s
+        expect: { SW3_Port25.InMulticastPps: 300000.0, SW3_Port25.InBroadcastPps: 0.0 }
+
+  - name: cooling-failure ramps the room over ten minutes
+    steps:
+      - given: { Scenario: "cooling-failure" }
+        advance: 30s
+        expect: { Sim_Room.InletDeltaC: 0.0 }
+      - advance: 300s
+        expect: { Sim_Room.InletDeltaC: 10.0 }
+      - advance: 300s
+        expect: { Sim_Room.InletDeltaC: 20.0, NODE1.InletTempC: { gt: 44 } }
+
+  - name: an unknown scenario is flagged, and changes nothing
+    steps:
+      - given: { Scenario: "meteor-strike" }
+        advance: 2s
+        expect: { ScenarioUnknown: true, SW1_Port25.OperUp: true }

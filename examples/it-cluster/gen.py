@@ -178,7 +178,8 @@ fl = [head + "# Every fault input of the plant: write any of them, from the HMI,
       "# They compose; ClearFaults (or Scenario 'normal') clears them all.",
       "- { name: Scenario, role: state, init: \"normal\", desc: \"A named preset of faults (scenarios.st); normal clears them all\" }",
       "- { name: ClearFaults, role: state, init: false, desc: \"A pulse: clear every fault input\" }",
-      "- { name: Sim_Room, role: state, type: SimRoom, desc: \"The room (SIMULATION)\" }"]
+      "- { name: Sim_Room, role: state, type: SimRoom, desc: \"The room (SIMULATION)\" }",
+      "- { name: Sim_Net, role: state, type: SimNet, desc: \"The layer-2 domain: storms (SIMULATION)\" }"]
 for n in faultable:
     fl.append(f"- {{ name: Sim_{n}, role: state, type: {SIM_OF[types[n]]}, desc: \"{n} fault inputs (SIMULATION)\" }}")
 for name, a, b in cables:
@@ -205,6 +206,11 @@ def weight(sensor):
         if re.match(pat, s):
             return w
     return 0.3
+
+
+def cap(sensor):
+    """The CPU throttles a little past its BMC's critical (lib/server.st CapC)."""
+    return ", CapC := 105.0" if weight(sensor) == 1.0 else ""
 
 
 def children(node, typ):
@@ -248,6 +254,8 @@ def end_faults(t):
 
 body.append("  IF ClearFaults THEN")
 body.append("    Sim_Room.InletDeltaC := 0.0;")
+body.append("    Sim_Net.BroadcastPps := 0.0;")
+body.append("    Sim_Net.MulticastPps := 0.0;")
 clear = {"SimSwitch": ["Dark", "Reboot"], "SimPort": ["Down", "AdminDown", "SpeedMbps", "ErrorRate"],
          "SimServer": ["Dark", "PowerOff", "CpuLoad"], "SimFan": ["Fail"], "SimPSU": ["InputLost", "Fail"],
          "SimDrive": ["Pulled", "Failing"], "SimNetPort": ["Down"]}
@@ -270,7 +278,10 @@ for node in servers:
     fbs.append(f"  {node}_M : ServerPlant;")
     failed = " + ".join(f"BOOL_TO_INT(Sim_{f}.Fail)" for f in fans) or "0"
     rise = f"{cpu[0]}_M.Rise" if cpu else "0.0"
-    body.append(f"  {node}_M(Rec := {rec(node)}, F := Sim_{node}, Room := Sim_Room, FansFailed := {failed}, CpuRiseNow := {rise}, Live := {live(node)}, P := {node});")
+    inlet = [t for t in children(node, "TempSensor") if weight(t) == 0.0]
+    over = f"{cpu[0]}_M.Base - {inlet[0]}_M.Base" if cpu and inlet else "35.0"
+    body.append(f"  {node}_M(Rec := {rec(node)}, F := Sim_{node}, Room := Sim_Room, FansFailed := {failed}, CpuRiseNow := {rise}, "
+                f"CpuOverInlet := {over}, Live := {live(node)}, P := {node});")
 
 body.append("  (* every cable, from both ends' faults: down at one end is down at both *)")
 for name, a, b in cables:
@@ -282,7 +293,7 @@ for s in switches:
     for p in [p for p in ports if p.startswith(s + "_")]:
         fbs.append(f"  {p}_M : PortPlant;")
         link = f", LinkOk := {peer[p]}" if p in peer else ""
-        body.append(f"  {p}_M(Rec := {rec(p)}, F := Sim_{p}, Dark := {s}_M.Down, Live := {live(p)}{link}, P := {p});")
+        body.append(f"  {p}_M(Rec := {rec(p)}, F := Sim_{p}, Dark := {s}_M.Down, Live := {live(p)}{link}, Net := Sim_Net, Dt := PlantDtS, P := {p});")
         body.append(f"  IF {p}.OperUp THEN {s}.PortsUp := {s}.PortsUp + 1; END_IF;")
 
 body.append("  (* the servers: lib/server.st *)")
@@ -295,7 +306,7 @@ for node in servers:
     for t in temps:
         fbs.append(f"  {t}_M : TempPlant;")
         body.append(f"  {t}_M(Rec := {rec(t)}, RiseTarget := {m}.RiseTarget, Weight := {weight(t)}, RoomC := Sim_Room.InletDeltaC, "
-                    f"InletC := {node}.InletTempC, Off := {m}.Off, Dt := PlantDtS, Live := {live(t)}, P := {t});")
+                    f"InletC := {node}.InletTempC, Off := {m}.Off, Dt := PlantDtS, Live := {live(t)}{cap(t)}, P := {t});")
     if temps:
         mx = temps[0] + ".Value"
         for t in temps[1:]:
@@ -329,7 +340,7 @@ PROGRAM Plant
 VAR_EXTERNAL
   (* the replay clock: the HMI steers the outputs, the driver reports At *)
   Replay_At : DINT; Replay_Speed : REAL; Replay_Pause : BOOL; Replay_SeekS : DINT;
-  PlantDtS : REAL; ClearFaults : BOOL; Sim_Room : SimRoom;
+  PlantDtS : REAL; ClearFaults : BOOL; Sim_Room : SimRoom; Sim_Net : SimNet;
 {nl.join(ext)}
 END_VAR
 VAR
@@ -341,6 +352,123 @@ END_VAR
 END_PROGRAM
 """
 open(os.path.join(HERE, "plant.st"), "w").write(st)
+
+# ── scenarios.st, compiled from scenarios.yaml ───────────────────────────
+
+import yaml  # noqa: E402  (only the scenario compiler needs it)
+
+
+def sim_types():
+    """The fault-input STRUCTs of lib/*.st: type → {member: BOOL|REAL}."""
+    out = {}
+    for f in ("lib/switch.st", "lib/server.st"):
+        src = re.sub(r"\(\*.*?\*\)", "", open(os.path.join(HERE, f)).read(), flags=re.S)
+        for name, body in re.findall(r"(\w+)\s*:\s*STRUCT(.*?)END_STRUCT", src, flags=re.S):
+            out[name] = dict(re.findall(r"(\w+)\s*:\s*(BOOL|REAL)\s*;", body))
+    return out
+
+
+def st_ident(name):
+    return re.sub(r"[^A-Za-z0-9]", "_", name)
+
+
+spec = yaml.safe_load(open(os.path.join(HERE, "scenarios.yaml")))["scenarios"]
+stypes = sim_types()
+sim_tag_type = {f"Sim_{n}": SIM_OF[types[n]] for n in faultable}
+sim_tag_type.update({f"Sim_{c}": "SimCable" for c, _, _ in cables})
+sim_tag_type.update({"Sim_Room": "SimRoom", "Sim_Net": "SimNet"})
+
+problems, used = [], set()
+names = set()
+for sc in spec:
+    n = sc.get("name", "")
+    if not re.match(r"^[a-z][a-z0-9-]*$", n) or n == "normal" or n in names:
+        problems.append(f"scenario {n!r}: a unique lowercase name, not 'normal'")
+    names.add(n)
+    if ("set" in sc) == ("steps" in sc):
+        problems.append(f"scenario {n}: set: or steps:, one of them")
+    sc["steps"] = sc.get("steps") or [{"at": 0, "set": sc.get("set") or {}}]
+    for st in sc["steps"]:
+        for key, v in (st.get("set") or {}).items():
+            tag, _, member = key.partition(".")
+            typ = sim_tag_type.get(tag)
+            kind = stypes.get(typ, {}).get(member)
+            if not kind:
+                problems.append(f"scenario {n}: {key} is not a fault input (tags/faults.yaml)")
+                continue
+            if (kind == "BOOL") != isinstance(v, bool):
+                problems.append(f"scenario {n}: {key} is {kind}, got {v!r}")
+            used.add((tag, typ))
+if problems:
+    raise SystemExit("scenarios.yaml:\n  " + "\n  ".join(problems))
+
+
+def st_value(v):
+    return ("TRUE" if v else "FALSE") if isinstance(v, bool) else f"{float(v)}"
+
+
+ext = sorted(f"  {t} : {typ};" for t, typ in used)
+flags, resets, select, run = [], [], [], []
+for i, sc in enumerate(spec, 1):
+    select.append(f"  ELSIF Scenario = '{sc['name']}' THEN\n    Active := {i};")
+    body = [f"  {'IF' if i == 1 else 'ELSIF'} Active = {i} THEN (* {sc['name']}: {sc.get('about', '')} *)"]
+    for j, st in enumerate(sc["steps"], 1):
+        f = f"S{i}_{j}"
+        flags.append(f"  {f} : BOOL;")
+        resets.append(f"    {f} := FALSE;")
+        sets = " ".join(f"{k} := {st_value(v)};" for k, v in st["set"].items())
+        body.append(f"    IF NOT {f} AND Phase >= {float(st['at'])} THEN {sets} {f} := TRUE; END_IF;")
+    if sc.get("repeat"):
+        cyc = " ".join(f"S{i}_{j} := FALSE;" for j in range(1, len(sc["steps"]) + 1))
+        body.append(f"    IF Phase >= {float(sc['repeat'])} THEN Phase := Phase - {float(sc['repeat'])}; {cyc} END_IF;")
+    run += body
+run.append("  END_IF;")
+nl = "\n"
+st = f"""(* scenarios.st: compiled by gen.py from scenarios.yaml. Do not edit:
+   add or change a scenario there. Writing Scenario starts it: a set: at
+   once, a timeline step by step (Phase, seconds from the write, wrapping
+   every repeat:). "normal" clears every fault. *)
+PROGRAM Scenarios
+VAR_EXTERNAL
+  Scenario : STRING; ClearFaults : BOOL; ScenarioUnknown : BOOL;
+  ScenarioCatalog : STRING; (* for the scenario panel: every name and what it does *)
+  ScenarioS : REAL; ScenarioDtS : REAL;
+{nl.join(ext)}
+END_VAR
+VAR
+  Last   : STRING;
+  Active : INT;  (* the scenario running its timeline; 0 none *)
+  Phase  : REAL; (* seconds into its cycle *)
+{nl.join(flags)}
+END_VAR
+IF Scenario <> Last THEN
+  Last := Scenario;
+  ScenarioS := 0.0;
+  Phase := 0.0;
+  ScenarioUnknown := FALSE;
+{nl.join(resets)}
+  IF Scenario = 'normal' THEN
+    Active := 0;
+    ClearFaults := TRUE;
+{nl.join(select)}
+  ELSE
+    Active := 0;
+    ScenarioUnknown := TRUE;
+  END_IF;
+END_IF;
+{nl.join(run)}
+ScenarioS := ScenarioS + ScenarioDtS;
+Phase := Phase + ScenarioDtS;
+END_PROGRAM
+"""
+open(os.path.join(HERE, "scenarios.st"), "w").write(st)
+
+catalog = json.dumps([{"name": "normal", "about": "Every fault cleared: the recording as it was."}]
+                     + [{"name": sc["name"], "about": sc.get("about", "")} for sc in spec], ensure_ascii=False)
+with open(os.path.join(HERE, "tags", "faults.yaml"), "a") as fh:
+    fh.write(f"- {{ name: ScenarioCatalog, role: state, init: {json.dumps(catalog)}, desc: \"Every named scenario and what it does, as JSON (scenarios.yaml)\" }}\n")
+    fh.write("- { name: ScenarioS, role: state, init: 0.0, desc: \"Seconds since the Scenario was written\" }\n")
+    fh.write("- { name: ScenarioUnknown, role: state, init: false, desc: \"The Scenario written is not one of scenarios.yaml's\" }\n")
 
 link = os.path.join(HERE, "data")
 if not os.path.lexists(link):

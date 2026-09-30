@@ -111,6 +111,8 @@ var Types = []Type{
 		{Name: "ErrorRate", Kind: ir.TypeReal, Unit: "1/s", Desc: "errors per second, in plus out"},
 		{Name: "PoeOn", Kind: ir.TypeBool, Desc: "delivering power"},
 		{Name: "PoeW", Kind: ir.TypeReal, Unit: "W"},
+		{Name: "InBroadcastPps", Kind: ir.TypeReal, Unit: "1/s", Desc: "broadcast packets received per second"},
+		{Name: "InMulticastPps", Kind: ir.TypeReal, Unit: "1/s", Desc: "multicast packets received per second"},
 	}},
 	{Name: "PDU", Desc: "a switched rack PDU", Fields: []Field{
 		{Name: "Online", Kind: ir.TypeBool},

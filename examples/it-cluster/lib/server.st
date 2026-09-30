@@ -6,14 +6,30 @@
    The thermal model is deliberately small, and every number that shapes it
    is a named constant below, to tune against what a real box does:
 
-     rise target  = KLoad * (CpuLoad - RecLoadPct)     extra load
-                  + KFan  * failed fans                 lost airflow
+     load rise    = KLoad * (CpuLoad - RecLoadPct)
+     rise target  = load rise
+                  + KFanFrac * failed fans * (CPU over inlet + load rise)
                   - KBoostCool * (FanBoost - 1)         the others ramping
      each sensor  = recorded + Weight * rise + room offset, approached
                     with time constant TauS (first order), so a failure
                     makes temperatures CLIMB rather than jump
      fan boost    = 1 + KBoost * (CPU rise now), capped at MaxBoost: the
-                    BMC's fan curve answering the temperature it reads *)
+                    BMC's fan curve answering the temperature it reads
+
+   Where the numbers come from (the node is a Supermicro 1U with one
+   Xeon 6505P: 150 W TDP, 97 °C DTS max; its BMC calls 102 °C critical):
+     WPerPct   150 W TDP over an idle package of about 35 W, across 90 %
+               of load: about 1.3 W per %
+     KLoad     that power through a 1U heatsink at about 0.3 °C/W:
+               about 0.35 °C per %
+     KFanFrac  one of six fans gone costs the heatsink about a fifth of its
+               airflow; its thermal resistance, and so the CPU's rise over
+               the inlet, grows by about as much: small at idle, large
+               under load, which is how a lost fan really behaves
+     TauS      a 1U heatsink under forced air settles in about a minute
+               (vendors give 60 s to swap a fan before cooling is lost)
+     CapC      the CPU throttles near its limit rather than running away:
+               held a little past the BMC's critical, so the alarm trips *)
 
 TYPE
   SimServer : STRUCT
@@ -52,6 +68,7 @@ VAR_INPUT
   Room       : SimRoom;
   FansFailed : DINT;
   CpuRiseNow : REAL; (* the CPU sensor's current rise over the recording, for the fan curve *)
+  CpuOverInlet : REAL := 35.0; (* the recorded CPU temperature above the recorded inlet *)
   Live       : BOOL;
 END_VAR
 VAR_IN_OUT
@@ -64,13 +81,14 @@ VAR_OUTPUT
   LoadW      : REAL; (* the power the PSUs deliver *)
 END_VAR
 VAR
-  B    : Server;
-  Init : BOOL;
+  B        : Server;
+  Init     : BOOL;
+  LoadRise : REAL;
 END_VAR
 VAR CONSTANT
   RecLoadPct : REAL := 10.0;  (* the recording's CPU busy: an idle cluster *)
   KLoad      : REAL := 0.35;  (* °C per % of extra load *)
-  KFan       : REAL := 12.0;  (* °C per failed fan *)
+  KFanFrac   : REAL := 0.2;   (* per failed fan: the share by which the CPU's rise over the inlet grows *)
   KBoost     : REAL := 0.03;  (* fan speed-up per °C of CPU rise *)
   MaxBoost   : REAL := 1.6;   (* fans at their ceiling *)
   KBoostCool : REAL := 10.0;  (* °C the ramped fans take back at full boost - 1 *)
@@ -96,9 +114,13 @@ IF Off THEN
   LoadW := StandbyW;
   P.CpuPct := 0.0;
 ELSE
-  RiseTarget := KFan * INT_TO_REAL(FansFailed) - KBoostCool * (FanBoost - 1.0);
+  LoadRise := 0.0;
   IF F.CpuLoad > 0.0 THEN
-    RiseTarget := RiseTarget + KLoad * (F.CpuLoad - RecLoadPct);
+    LoadRise := KLoad * (F.CpuLoad - RecLoadPct);
+  END_IF;
+  RiseTarget := LoadRise + KFanFrac * INT_TO_REAL(FansFailed) * MAX(CpuOverInlet + LoadRise, 0.0)
+    - KBoostCool * (FanBoost - 1.0);
+  IF F.CpuLoad > 0.0 THEN
     LoadW := B.PowerW + WPerPct * (F.CpuLoad - RecLoadPct);
     P.CpuPct := F.CpuLoad;
   ELSE
@@ -122,12 +144,14 @@ VAR_INPUT
   Off        : BOOL;
   Dt         : REAL;
   Live       : BOOL;
+  CapC       : REAL := 110.0; (* where the part throttles or trips; the CPU's is lower *)
 END_VAR
 VAR_IN_OUT
   P : TempSensor;
 END_VAR
 VAR_OUTPUT
   Rise : REAL; (* now, over the recording *)
+  Base : REAL; (* the recording (or snapshot) *)
 END_VAR
 VAR
   B     : TempSensor;
@@ -138,7 +162,6 @@ END_VAR
 VAR CONSTANT
   TauS    : REAL := 60.0;  (* heating and cooling time constant *)
   OffTauS : REAL := 300.0; (* cooling to the inlet, host off *)
-  MaxC    : REAL := 110.0; (* past this the part throttles or trips *)
 END_VAR
 IF NOT Init THEN
   B := P;
@@ -154,8 +177,9 @@ ELSE
   Goal := Weight * RiseTarget + RoomC;
   State := State + (Goal - State) * MIN(Dt / TauS, 1.0);
 END_IF;
-P.Value := MIN(B.Value + State, MaxC);
+P.Value := MIN(B.Value + State, CapC);
 Rise := P.Value - B.Value;
+Base := B.Value;
 P.High := P.HighSP > 0.0 AND P.Value >= P.HighSP;
 P.HighHigh := P.HighHighSP > 0.0 AND P.Value >= P.HighHighSP;
 END_FUNCTION_BLOCK

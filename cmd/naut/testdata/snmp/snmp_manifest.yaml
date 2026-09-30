@@ -6,6 +6,8 @@
 # Commands are opt-in: add a `writes:` section by hand, in a reviewed diff.
 #
 # Import notes:
+#   - SwitchPort.InBroadcastPps: ifHCInBroadcastPkts absent (28 port(s))
+#   - SwitchPort.InMulticastPps: ifHCInMulticastPkts absent (28 port(s))
 #   - SwitchPort.ErrorRate is the rate of ifInErrors only — out-errors are in OutErrors (a rate over a sum needs a member the contract does not have)
 #   - TempSensor.HighSP/HighHighSP: ENTITY-SENSOR-MIB carries no thresholds — 0 (High/HighHigh stay false) until the manifest sets const: values
 #   - Switch.TempC reads the first celsius sensor (Temp_CPU)

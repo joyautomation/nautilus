@@ -22,6 +22,7 @@ tasks:
   - name: scenarios
     program: scenarios.st
     scan: 1s
+    dt-tag: ScenarioDtS
 
 drivers:
   - type: replay

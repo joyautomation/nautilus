@@ -140,6 +140,8 @@ TYPE
     ErrorRate : REAL;
     PoeOn : BOOL;
     PoeW : REAL;
+    InBroadcastPps : REAL;
+    InMulticastPps : REAL;
   END_STRUCT;
   TempSensor : STRUCT
     Name : STRING;

@@ -13,6 +13,12 @@ TYPE
     SpeedMbps : REAL; (* negotiated speed override, 0 = as recorded (10000 to 1000: degraded) *)
     ErrorRate : REAL; (* extra errors per second on top of the recording *)
   END_STRUCT;
+  SimNet : STRUCT
+    (* the layer-2 domain, all three switches trunked on their ring: a storm
+       floods every port that has link *)
+    BroadcastPps : REAL; (* a broadcast storm: packets per second flooded out of every up port *)
+    MulticastPps : REAL; (* a multicast flood, the same way (no IGMP snooping to stop it) *)
+  END_STRUCT;
   SimSwitch : STRUCT
     Dark   : BOOL; (* the switch stops answering: every port down, the agent silent *)
     Reboot : BOOL; (* a pulse: dark for RebootS, then back with its uptime reset; clears itself *)
@@ -31,13 +37,21 @@ VAR_INPUT
   Dark : BOOL;       (* the switch's *)
   Live : BOOL;       (* the recording is playing *)
   LinkOk : BOOL := TRUE; (* its cable, from both ends' faults (plant.st); TRUE unwired *)
+  Net  : SimNet;     (* a storm in the layer-2 domain *)
+  Dt   : REAL;       (* seconds since the last scan, for the discard counter *)
 END_VAR
 VAR_IN_OUT
   P : SwitchPort;
 END_VAR
 VAR
-  B    : SwitchPort; (* the baseline: recording or snapshot, never a fault *)
-  Init : BOOL;
+  B        : SwitchPort; (* the baseline: recording or snapshot, never a fault *)
+  Init     : BOOL;
+  FloodBps : REAL;
+  LineBps  : REAL;
+  Dropped  : REAL; (* discards not yet whole, so the counter never loses a fraction *)
+END_VAR
+VAR CONSTANT
+  FloodBytes : REAL := 128.0; (* a storm's frames are small: ARP, discovery, a looped packet *)
 END_VAR
 IF NOT Init THEN
   B := P;
@@ -65,6 +79,25 @@ END_IF;
 IF NOT P.OperUp THEN
   P.InBps := 0.0;
   P.OutBps := 0.0;
+  P.InBroadcastPps := 0.0;
+  P.InMulticastPps := 0.0;
+ELSE
+  (* a storm: every up port receives the flood and sends it on; what the
+     line cannot carry is dropped, and counted *)
+  P.InBroadcastPps := B.InBroadcastPps + Net.BroadcastPps;
+  P.InMulticastPps := B.InMulticastPps + Net.MulticastPps;
+  FloodBps := (Net.BroadcastPps + Net.MulticastPps) * FloodBytes * 8.0;
+  LineBps := P.SpeedMbps * 1000000.0;
+  P.InBps := MIN(P.InBps + FloodBps, LineBps);
+  P.OutBps := P.OutBps + FloodBps;
+  IF LineBps > 0.0 AND P.OutBps > LineBps THEN
+    Dropped := Dropped + (P.OutBps - LineBps) / (FloodBytes * 8.0) * Dt;
+    P.OutBps := LineBps;
+  END_IF;
+  IF Dropped >= 1.0 THEN
+    P.OutDiscards := P.OutDiscards + REAL_TO_INT(Dropped - 0.5);
+    Dropped := Dropped - INT_TO_REAL(REAL_TO_INT(Dropped - 0.5));
+  END_IF;
 END_IF;
 P.ErrorRate := B.ErrorRate + F.ErrorRate;
 P.Down := P.AdminUp AND NOT P.OperUp;
