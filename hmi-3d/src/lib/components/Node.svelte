@@ -41,6 +41,8 @@
 		status,
 		bounds: box,
 		marker = true,
+		labelAt: labelAtProp,
+		labelAnchor = 'center',
 		children
 	}: {
 		id?: string;
@@ -62,6 +64,10 @@
 		 * shows either way). Off where a wider marker speaks for it: a
 		 * server's chassis, whose marker rolls up every part. */
 		marker?: boolean;
+		/** Where the label goes, in the node's frame, and which of its edges
+		 * sits there (Label): by default centred over the node's box. */
+		labelAt?: Vec3;
+		labelAnchor?: 'center' | 'left' | 'right';
 		/** Render anything with the node's props instead of the kind's component. */
 		children?: Snippet<[NodeProps]>;
 	} = $props();
@@ -88,7 +94,7 @@
 	let isSel = $derived(!parent && id !== undefined && scene?.selected === id);
 	let isHover = $derived(!parent && id !== undefined && scene?.hovered === id);
 	let bounds = $derived<Box>(box ?? (def && scene ? scene.boundsOf(id, def.bounds) : { size: [0.3, 0.3, 0.3], center: [0, 0.15, 0] }));
-	let labelAt = $derived<Vec3>(def?.labelAt ?? [bounds.center[0], bounds.center[1] + bounds.size[1] / 2 + 0.02, bounds.center[2]]);
+	let labelAt = $derived<Vec3>(labelAtProp ?? def?.labelAt ?? [bounds.center[0], bounds.center[1] + bounds.size[1] / 2 + 0.02, bounds.center[2]]);
 	let nodeProps = $derived<NodeProps>({ value, good, label: title, selected: isSel, ...props, ...over });
 	let pickable = $derived(!parent && id !== undefined);
 
@@ -197,7 +203,7 @@
 			</T.Mesh>
 		{/if}
 		{#if title}
-			<Label at={labelAt} title={title} value={(status ?? def?.status)?.(value, good) ?? ''} {good} />
+			<Label at={labelAt} anchor={labelAnchor} title={title} value={(status ?? def?.status)?.(value, good) ?? ''} {good} />
 		{/if}
 	</T.Group>
 {/if}

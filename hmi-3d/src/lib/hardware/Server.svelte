@@ -189,7 +189,9 @@
 
 <T.Group position={pos} rotation={rot ? [rot[0] * deg, rot[1] * deg, rot[2] * deg] : [0, 0, 0]}>
 <Fade amount={fade}>
-	<Node id={node} tag={chassisTag} {kind} label={overlay ? '' : (label ?? node)} pos={[0, 0, 0]} bounds={chassisBox} marker={false}>
+	<!-- Its name beside its front's left end, level with it: a rack of 1U
+	     devices reads like an elevation drawing, each name on its row. -->
+	<Node id={node} tag={chassisTag} {kind} label={overlay ? '' : (label ?? node)} pos={[0, 0, 0]} bounds={chassisBox} marker={false} labelAt={[-size[0] / 2 - 0.05, size[1] / 2, 0]} labelAnchor="right">
 		{#snippet children(p)}
 			<Chassis {profile} {lid} xray={xray || !!overlay} {lidOffset} {anchor} {codeImages} good={p.good} />
 		{/snippet}
@@ -228,7 +230,10 @@
 		{/if}
 	{/each}
 	{#if deviceAlarm}
-		<AlarmMarker at={[size[0] / 2 - 0.03, size[1] + 0.03, -0.02]} priority={deviceAlarm.priority} unacked={deviceAlarm.unacked} active={deviceAlarm.active} count={deviceAlarm.count} device />
+		<!-- on its front, at the right end, level with it: the sign is on the
+		     device (above the lid, a 1U device's sign sat in front of the
+		     device over it) -->
+		<AlarmMarker at={[size[0] / 2 - 0.035, size[1] / 2, 0.005]} priority={deviceAlarm.priority} unacked={deviceAlarm.unacked} active={deviceAlarm.active} count={deviceAlarm.count} device onFace />
 	{/if}
 	{#each sensorAlarms as s (s.id)}
 		<AlarmMarker at={[s.at[0], s.at[1] + 0.02, s.at[2]]} priority={s.a.priority} unacked={s.a.unacked} active={s.a.active} />

@@ -11,14 +11,26 @@
 		at,
 		title,
 		value = '',
-		good = true
-	}: { at: Vec3; title: string; value?: string; good?: boolean } = $props();
+		good = true,
+		anchor = 'center'
+	}: {
+		at: Vec3;
+		title: string;
+		value?: string;
+		good?: boolean;
+		/** Which of the label's edges sits on `at`: its middle (over a node),
+		 * or its right or left end, vertically centred (a tag beside a
+		 * device in a rack, level with it). */
+		anchor?: 'center' | 'left' | 'right';
+	} = $props();
 	const palette = getContext<Palette>('hmi3d:palette') ?? DEFAULT_PALETTE;
 </script>
 
 <HTML position={at} center pointerEvents="none">
 	<div
 		class="lbl"
+		class:toLeft={anchor === 'right'}
+		class:toRight={anchor === 'left'}
 		class:bad={!good}
 		style:background="color-mix(in srgb, {palette.label.bg} 85%, transparent)"
 		style:color={palette.label.ink}
@@ -37,6 +49,14 @@
 		font: 12px/1.3 system-ui, sans-serif;
 		white-space: nowrap;
 		border: 1px solid;
+	}
+	/* `center` on the HTML centres the box on the point; shift it by half
+	   its width so an end sits there instead */
+	.toLeft {
+		transform: translateX(-50%);
+	}
+	.toRight {
+		transform: translateX(50%);
 	}
 	.bad {
 		opacity: 0.6;

@@ -19,16 +19,27 @@
 		unacked,
 		active = true,
 		count = 1,
-		device = false
-	}: { at: Vec3; priority: string; unacked: boolean; active?: boolean; count?: number; device?: boolean } = $props();
+		device = false,
+		onFace = false
+	}: {
+		at: Vec3;
+		priority: string;
+		unacked: boolean;
+		active?: boolean;
+		count?: number;
+		device?: boolean;
+		/** Centred on `at` (a sign on a device's face, inside its row)
+		 * rather than floating just above it, and a size that fits a 1U row. */
+		onFace?: boolean;
+	} = $props();
 	const palette = getContext<Palette>('hmi3d:palette') ?? DEFAULT_PALETTE;
 	let color = $derived(palette.priority[priority] ?? palette.priority.high);
 	let title = $derived(`${count > 1 ? `${count} alarms, worst ` : ''}${priority}: ${PRIORITY_SIGN[priority]?.urgency ?? ''}${active ? '' : ' (returned to normal)'}${unacked ? ' (unacknowledged)' : ''}`);
 </script>
 
 <HTML position={at} center pointerEvents="none" zIndexRange={[60, 50]}>
-	<span class="mark" class:device class:unacked style:--c={color} title={title}>
-		<AlarmSign {priority} {color} size={device ? 30 : 20} hollow={!active} />
+	<span class="mark" class:device class:unacked class:onFace style:--c={color} title={title}>
+		<AlarmSign {priority} {color} size={onFace ? 22 : device ? 30 : 20} hollow={!active} />
 		{#if device && count > 1}<b>{count}</b>{/if}
 	</span>
 </HTML>
@@ -40,6 +51,9 @@
 		place-items: center;
 		filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.6));
 		transform: translateY(-50%);
+	}
+	.mark.onFace {
+		transform: none;
 	}
 	/* Unacknowledged: a ring pulses out from the sign (ISA-18.2: an alarm
 	   that has not been acknowledged keeps asking). */
