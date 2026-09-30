@@ -108,6 +108,8 @@ tags:
   - { name: Rec_NODE1_Temp_NVMe_SSDA, type: TempSensor, series: NODE1_Temp_NVMe_SSDA }
   - { name: Rec_NODE1_Temp_Peripheral, type: TempSensor, series: NODE1_Temp_Peripheral }
   - { name: Rec_NODE1_Temp_System, type: TempSensor, series: NODE1_Temp_System }
+  - { name: Rec_NODE1_Nic_Slot2_P1, type: NetPort, series: NODE1_Nic_Slot2_P1 }
+  - { name: Rec_NODE1_Nic_Slot3_P1, type: NetPort, series: NODE1_Nic_Slot3_P1 }
   - { name: Rec_NODE2, type: Server, series: NODE2 }
   - { name: Rec_NODE2_Fan1, type: Fan, series: NODE2_Fan1 }
   - { name: Rec_NODE2_Fan2, type: Fan, series: NODE2_Fan2 }
@@ -129,6 +131,8 @@ tags:
   - { name: Rec_NODE2_Temp_NVMe_SSDA, type: TempSensor, series: NODE2_Temp_NVMe_SSDA }
   - { name: Rec_NODE2_Temp_Peripheral, type: TempSensor, series: NODE2_Temp_Peripheral }
   - { name: Rec_NODE2_Temp_System, type: TempSensor, series: NODE2_Temp_System }
+  - { name: Rec_NODE2_Nic_Slot2_P1, type: NetPort, series: NODE2_Nic_Slot2_P1 }
+  - { name: Rec_NODE2_Nic_Slot3_P1, type: NetPort, series: NODE2_Nic_Slot3_P1 }
   - { name: Rec_NODE3, type: Server, series: NODE3 }
   - { name: Rec_NODE3_Fan1, type: Fan, series: NODE3_Fan1 }
   - { name: Rec_NODE3_Fan2, type: Fan, series: NODE3_Fan2 }
@@ -150,3 +154,5 @@ tags:
   - { name: Rec_NODE3_Temp_NVMe_SSDA, type: TempSensor, series: NODE3_Temp_NVMe_SSDA }
   - { name: Rec_NODE3_Temp_Peripheral, type: TempSensor, series: NODE3_Temp_Peripheral }
   - { name: Rec_NODE3_Temp_System, type: TempSensor, series: NODE3_Temp_System }
+  - { name: Rec_NODE3_Nic_Slot2_P1, type: NetPort, series: NODE3_Nic_Slot2_P1 }
+  - { name: Rec_NODE3_Nic_Slot3_P1, type: NetPort, series: NODE3_Nic_Slot3_P1 }

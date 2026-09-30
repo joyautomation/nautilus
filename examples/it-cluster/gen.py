@@ -13,6 +13,7 @@ writes.
               the recording is absent
   --naut      the naut binary (default: naut on PATH)
   --walk      each switch's walk under <dataset>/snmp (default {tag}.snmpwalk)
+  --mockup    each BMC's mockup under <dataset>/redfish (default {tag})
 
 Per recorded device tag X (SW1_Port25, NODE1_Fan3, ...):
 
@@ -23,7 +24,7 @@ Per recorded device tag X (SW1_Port25, NODE1_Fan3, ...):
                   members bent by the faults (plant.st); the stand-ins serve
                   it through the monitoring project's own manifest
 """
-import argparse, datetime, gzip, json, os, re, subprocess
+import argparse, datetime, gzip, hashlib, json, os, re, subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -33,6 +34,7 @@ ap.add_argument("--monitor", required=True)
 ap.add_argument("--at", default="2026-09-28T18:00Z")
 ap.add_argument("--naut", default="naut")
 ap.add_argument("--walk", default="{tag}.snmpwalk", help="walk file name under <dataset>/snmp, {tag} = sw1")
+ap.add_argument("--mockup", default="{tag}", help="mockup dir under <dataset>/redfish, {tag} = node1")
 args = ap.parse_args()
 
 
@@ -52,6 +54,8 @@ def manifest_tags(path):
 snmp_tags = manifest_tags(os.path.join(args.monitor, "snmp_manifest.yaml"))
 redfish_tags = manifest_tags(os.path.join(args.monitor, "redfish_manifest.yaml"))
 switches = [n for n, t, _ in snmp_tags if t == "Switch"]
+servers = [n for n, t, _ in redfish_tags if t == "Server"]
+node_tags = [n for n, _, _ in redfish_tags]
 ports = [n for n, t, _ in snmp_tags if t == "SwitchPort"]
 types = {n: t for n, t, _ in snmp_tags + redfish_tags}
 
@@ -69,11 +73,28 @@ for sw in switches:
                           "--manifest", os.path.join(args.monitor, "snmp_manifest.yaml")],
                          check=True, capture_output=True, text=True).stdout
     walks.update(json.loads(out))
+for node in servers:
+    mock = os.path.join(args.dataset, "redfish", args.mockup.format(tag=node.lower()))
+    out = subprocess.run([args.naut, "redfish", "read", "--mockup", mock, "--source", node,
+                          "--manifest", os.path.join(args.monitor, "redfish_manifest.yaml")],
+                         check=True, capture_output=True, text=True).stdout
+    walks.update(json.loads(out))
 
 
 # This project is public: no hostnames, no serials (docs: sourcing). Models
 # and port names are the commodity hardware's own and stay.
-SCRUB = {"Switch": lambda n: {"Name": n.lower(), "Serial": f"SIM-{n}"}}
+def mac(n):
+    """A locally administered MAC, fixed per tag: 02:xx:xx:xx:xx:xx."""
+    h = hashlib.sha256(n.encode()).hexdigest()
+    return "02:" + ":".join(h[i:i + 2].upper() for i in range(0, 10, 2))
+
+
+SCRUB = {
+    "Switch": lambda n: {"Name": n.lower(), "Serial": f"SIM-{n}"},
+    "Server": lambda n: {"Serial": f"SIM-{n}"},
+    "Drive": lambda n: {"Serial": f"SIM-{n}"},
+    "NetPort": lambda n: {"MAC": mac(n)},
+}
 
 
 def snapshot(name):
@@ -122,11 +143,33 @@ for n in switches + ports:
     sw.append(f"- {{ name: {n}, role: state, type: {typ}, init: {init(snapshot(n))}, desc: \"{n} as the plant reports it\" }}")
 open(os.path.join(HERE, "tags", "switches.yaml"), "w").write("\n".join(sw) + "\n")
 
+nd = [head + f"# The servers and their parts as the plant reports them, starting at the recording's {stamp}."]
+for n in node_tags:
+    nd.append(f"- {{ name: {n}, role: state, type: {types[n]}, init: {init(snapshot(n))}, desc: \"{n} as the plant reports it\" }}")
+open(os.path.join(HERE, "tags", "nodes.yaml"), "w").write("\n".join(nd) + "\n")
+
+# The recorded members of each node tag, copied while the recording plays.
+rec_members = {}
+for k in h["series"]:
+    t, m = k.split(".", 1)
+    if t in node_tags:
+        rec_members.setdefault(t, []).append(m)
+
 ext, fbs, body = [], [], []
 for n in switches + ports:
     typ, sim = ("Switch", "SimSwitch") if n in switches else ("SwitchPort", "SimPort")
     r = f" Rec_{n} : {typ};" if n in recorded else ""
     ext.append(f"  Sim_{n} : {sim}; {n} : {typ};{r}")
+for n in node_tags:
+    r = f" Rec_{n} : {types[n]};" if n in recorded else ""
+    ext.append(f"  {n} : {types[n]};{r}")
+body.append("  (* the servers: the recording, member by member, while it plays *)")
+body.append("  IF Live THEN")
+for n in node_tags:
+    for m in sorted(rec_members.get(n, [])):
+        body.append(f"    {n}.{m} := Rec_{n}.{m};")
+body.append("  END_IF;")
+body.append("  (* the switches: the recording bent by the faults, lib/switch.st *)")
 for s in switches:
     body.append(f"  {s}.Online := NOT Sim_{s}.Dark;")
     body.append(f"  {s}.PortsUp := 0;")

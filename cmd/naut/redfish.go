@@ -30,9 +30,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joyautomation/nautilus/hw"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/redfish"
 	"github.com/joyautomation/nautilus/redfish/codegen"
 	"github.com/joyautomation/nautilus/redfish/mockup"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 const redfishUsage = `naut redfish — Redfish tools (server BMCs)
@@ -55,6 +58,11 @@ Usage:
         Stand in for the BMC from a plant simulation: every member the
         manifest binds is written into its resource from the plant's live
         tag (NODE1_Fan3.RPM), read backwards; the rest from the recording.
+  naut redfish read --mockup dir --manifest redfish_manifest.yaml
+        [--source NODE1]
+        The manifest read forwards over a recording, offline: the real
+        driver polls the mockup once and prints the source's tags as JSON.
+        The twin of serve --from.
   naut redfish tags <redfish_manifest.yaml> [-o tags/redfish.yaml]
         Re-derive the tag file from a committed manifest.
 
@@ -110,6 +118,8 @@ func runRedfish(args []string) int {
 		return runRedfishBrowse(args[1:])
 	case "serve":
 		return runRedfishServe(args[1:])
+	case "read":
+		return runRedfishRead(args[1:])
 	case "tags":
 		return runRedfishTags(args[1:])
 	case "-h", "--help", "help":
@@ -517,4 +527,88 @@ func startRedfishServe(dir, listen, auth, user, passEnv string, out io.Writer) (
 	}
 	fmt.Fprintf(out, "serving %s (%d resources) at %s — a source's host: %s\n", dir, len(tree), srv.URL(), srv.URL())
 	return srv, nil
+}
+
+// ── read ─────────────────────────────────────────────────────────────────
+
+func runRedfishRead(args []string) int {
+	fs := flag.NewFlagSet("redfish read", flag.ContinueOnError)
+	dir := fs.String("mockup", "", "the recording to read")
+	manifestPath := fs.String("manifest", "", "the redfish_manifest.yaml to read it through")
+	sourceID := fs.String("source", "", "which manifest source the recording is")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *dir == "" || *manifestPath == "" {
+		fmt.Fprintln(os.Stderr, "naut redfish read: --mockup and --manifest are required")
+		return 2
+	}
+	tree, err := mockup.LoadDir(*dir)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut redfish read:", err)
+		return 1
+	}
+	m, src, _, err := loadRedfishPlant(*manifestPath, *sourceID)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut redfish read:", err)
+		return 1
+	}
+	tags, err := readRedfishOffline(tree, m, src)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut redfish read:", err)
+		return 1
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(tags)
+	return 0
+}
+
+// readRedfishOffline serves the recording on a loopback stand-in, points
+// ONE source of the manifest at it, and returns that source's tags after
+// one complete poll.
+func readRedfishOffline(tree mockup.Tree, m redfish.Manifest, source string) (map[string]any, error) {
+	srv := mockup.New(tree, mockup.Options{})
+	if err := srv.Start("127.0.0.1:0"); err != nil {
+		return nil, err
+	}
+	defer srv.Stop()
+	one := redfish.Manifest{}
+	for _, s := range m.Sources {
+		if s.ID == source {
+			s.Host, s.User, s.PasswordEnv, s.PasswordFile, s.Auth = srv.URL(), "", "", "", ""
+			s.TLS, s.Enable, s.Interval = redfish.TLS{}, "", 200*time.Millisecond
+			one.Sources = append(one.Sources, s)
+		}
+	}
+	for _, t := range m.Tags {
+		if t.Source == source {
+			one.Tags = append(one.Tags, t)
+		}
+	}
+	d, err := redfish.New(one, redfish.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	d.Start(ctx)
+	defer d.Stop()
+	for {
+		v, _ := d.ReadInputs()
+		if n, _ := v[hw.LastPollTagName(source)].(int64); n > 0 {
+			out := map[string]any{}
+			for _, t := range one.Tags {
+				if iv, ok := v[t.Name].(ir.Value); ok {
+					out[t.Name] = runtime.Plain(iv)
+				}
+			}
+			return out, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("source %s: no complete poll of the recording in 30s", source)
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
 }

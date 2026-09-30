@@ -105,6 +105,8 @@
 - { name: Rec_NODE1_Temp_NVMe_SSDA, role: input, type: TempSensor, init: {}, desc: "NODE1_Temp_NVMe_SSDA as recorded" }
 - { name: Rec_NODE1_Temp_Peripheral, role: input, type: TempSensor, init: {}, desc: "NODE1_Temp_Peripheral as recorded" }
 - { name: Rec_NODE1_Temp_System, role: input, type: TempSensor, init: {}, desc: "NODE1_Temp_System as recorded" }
+- { name: Rec_NODE1_Nic_Slot2_P1, role: input, type: NetPort, init: {}, desc: "NODE1_Nic_Slot2_P1 as recorded" }
+- { name: Rec_NODE1_Nic_Slot3_P1, role: input, type: NetPort, init: {}, desc: "NODE1_Nic_Slot3_P1 as recorded" }
 - { name: Rec_NODE2, role: input, type: Server, init: {}, desc: "NODE2 as recorded" }
 - { name: Rec_NODE2_Fan1, role: input, type: Fan, init: {}, desc: "NODE2_Fan1 as recorded" }
 - { name: Rec_NODE2_Fan2, role: input, type: Fan, init: {}, desc: "NODE2_Fan2 as recorded" }
@@ -126,6 +128,8 @@
 - { name: Rec_NODE2_Temp_NVMe_SSDA, role: input, type: TempSensor, init: {}, desc: "NODE2_Temp_NVMe_SSDA as recorded" }
 - { name: Rec_NODE2_Temp_Peripheral, role: input, type: TempSensor, init: {}, desc: "NODE2_Temp_Peripheral as recorded" }
 - { name: Rec_NODE2_Temp_System, role: input, type: TempSensor, init: {}, desc: "NODE2_Temp_System as recorded" }
+- { name: Rec_NODE2_Nic_Slot2_P1, role: input, type: NetPort, init: {}, desc: "NODE2_Nic_Slot2_P1 as recorded" }
+- { name: Rec_NODE2_Nic_Slot3_P1, role: input, type: NetPort, init: {}, desc: "NODE2_Nic_Slot3_P1 as recorded" }
 - { name: Rec_NODE3, role: input, type: Server, init: {}, desc: "NODE3 as recorded" }
 - { name: Rec_NODE3_Fan1, role: input, type: Fan, init: {}, desc: "NODE3_Fan1 as recorded" }
 - { name: Rec_NODE3_Fan2, role: input, type: Fan, init: {}, desc: "NODE3_Fan2 as recorded" }
@@ -147,3 +151,5 @@
 - { name: Rec_NODE3_Temp_NVMe_SSDA, role: input, type: TempSensor, init: {}, desc: "NODE3_Temp_NVMe_SSDA as recorded" }
 - { name: Rec_NODE3_Temp_Peripheral, role: input, type: TempSensor, init: {}, desc: "NODE3_Temp_Peripheral as recorded" }
 - { name: Rec_NODE3_Temp_System, role: input, type: TempSensor, init: {}, desc: "NODE3_Temp_System as recorded" }
+- { name: Rec_NODE3_Nic_Slot2_P1, role: input, type: NetPort, init: {}, desc: "NODE3_Nic_Slot2_P1 as recorded" }
+- { name: Rec_NODE3_Nic_Slot3_P1, role: input, type: NetPort, init: {}, desc: "NODE3_Nic_Slot3_P1 as recorded" }

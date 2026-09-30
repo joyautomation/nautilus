@@ -27,3 +27,4 @@ tag-files:
   - tags/clock.yaml
   - tags/recorded.yaml
   - tags/switches.yaml
+  - tags/nodes.yaml

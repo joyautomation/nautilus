@@ -10,6 +10,7 @@ package main
 // --record` writes a recording that imports the same again.
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,8 @@ import (
 
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/redfish"
+	"github.com/joyautomation/nautilus/redfish/codegen"
+	"github.com/joyautomation/nautilus/redfish/mockup"
 )
 
 var redfishFixtures = []string{"supermicro-x14", "legacy-1u", "subsystem-1u"}
@@ -214,5 +217,25 @@ tags:
 	}
 	if _, _, _, err := loadRedfishPlant(path, "NODE9"); err == nil {
 		t.Fatal("an unknown --source must be an error")
+	}
+}
+
+// read is the manifest applied to a recording with no BMC: the values the
+// driver delivers from it.
+func TestRedfishReadOffline(t *testing.T) {
+	tree, err := mockup.LoadDir(filepath.Join("..", "..", "redfish", "testdata", "subsystem-1u"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := codegen.Import(context.Background(), codegen.TreeGetter(tree), codegen.Options{Tag: "NODE1", Host: "https://bmc1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags, err := readRedfishOffline(tree, out.Manifest, "NODE1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := tags["NODE1"].(map[string]any)["PowerW"].(float64); n != 187 {
+		t.Fatalf("NODE1 = %v", tags["NODE1"])
 	}
 }
