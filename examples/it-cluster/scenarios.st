@@ -148,10 +148,10 @@ IF Scenario <> Last THEN
 END_IF;
   IF Active = 1 THEN (* port-down: A switch port loses link (SW2 te0/26); node1's slot 3 port 2, at the far end, loses it too. *)
     IF NOT S1_1 AND Phase >= 0.0 THEN Sim_SW2_Port26.Down := TRUE; S1_1 := TRUE; END_IF;
-  ELSIF Active = 2 THEN (* port-flap: SW2 te0/26 flaps, down 5 s in every 20 s. *)
+  ELSIF Active = 2 THEN (* port-flap: SW2 te0/26 flaps, down 10 s in every 30 s: never long enough for a link-down alarm. *)
     IF NOT S2_1 AND Phase >= 0.0 THEN Sim_SW2_Port26.Down := TRUE; S2_1 := TRUE; END_IF;
-    IF NOT S2_2 AND Phase >= 5.0 THEN Sim_SW2_Port26.Down := FALSE; S2_2 := TRUE; END_IF;
-    IF Phase >= 20.0 THEN Phase := Phase - 20.0; S2_1 := FALSE; S2_2 := FALSE; END_IF;
+    IF NOT S2_2 AND Phase >= 10.0 THEN Sim_SW2_Port26.Down := FALSE; S2_2 := TRUE; END_IF;
+    IF Phase >= 30.0 THEN Phase := Phase - 30.0; S2_1 := FALSE; S2_2 := FALSE; END_IF;
   ELSIF Active = 3 THEN (* cable-pull: The cable between SW3 te0/25 and node3's slot 3 port 2 is pulled. *)
     IF NOT S3_1 AND Phase >= 0.0 THEN Sim_Cable_SW3_Port25.Pulled := TRUE; S3_1 := TRUE; END_IF;
   ELSIF Active = 4 THEN (* mesh-cable-pull: A server-to-server link (node1 slot 2 port 1 to node2 slot 3 port 1) is pulled. *)

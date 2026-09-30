@@ -156,16 +156,16 @@ tests:
 
   # ── timelines and the storm (scenarios.yaml) ──
 
-  - name: port-flap is down 5 s in every 20 s, until another scenario is written
+  - name: port-flap is down 10 s in every 30 s, until another scenario is written
     steps:
       - given: { Scenario: "port-flap" }
         advance: 2s
         expect: { SW2_Port26.OperUp: false }
-      - advance: 6s
+      - advance: 11s
         expect: { SW2_Port26.OperUp: true }
-      - advance: 15s
+      - advance: 20s
         expect: { SW2_Port26.OperUp: false }
-      - advance: 5s
+      - advance: 10s
         expect: { SW2_Port26.OperUp: true }
       - given: { Scenario: "fan-fail" }
         advance: 30s

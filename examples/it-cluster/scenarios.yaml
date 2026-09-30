@@ -22,11 +22,11 @@ scenarios:
     set: { Sim_SW2_Port26.Down: true }
 
   - name: port-flap
-    about: "SW2 te0/26 flaps, down 5 s in every 20 s."
-    repeat: 20
+    about: "SW2 te0/26 flaps, down 10 s in every 30 s: never long enough for a link-down alarm."
+    repeat: 30
     steps:
       - { at: 0, set: { Sim_SW2_Port26.Down: true } }
-      - { at: 5, set: { Sim_SW2_Port26.Down: false } }
+      - { at: 10, set: { Sim_SW2_Port26.Down: false } }
 
   - name: cable-pull
     about: "The cable between SW3 te0/25 and node3's slot 3 port 2 is pulled."
