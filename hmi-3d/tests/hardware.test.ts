@@ -16,8 +16,10 @@ import {
 	capacity,
 	isFitted,
 	partForSensor,
+	faceHoles,
 	type ChassisProfile
 } from '../src/lib/hardware/profile.js';
+import s3900 from '../profiles/fs-s3900-24t4s-r.json';
 import { heatPaint, sensorLimits, limitsFor, heatOverlay, interfacesOverlay, freeOverlay, nextDimms, placeLabels, HEAT_RAMP } from '../src/lib/hardware/overlay.js';
 
 const profile = sys112b as unknown as ChassisProfile;
@@ -204,5 +206,36 @@ describe('partForSensor', () => {
 	it('leaves a sensor that measures no one part to the server', () => {
 		expect(partForSensor(parts, 'NODE1_Temp_Inlet')).toBe(undefined);
 		expect(partForSensor(parts, 'NODE1_Fan3')).toBe(undefined);
+	});
+});
+
+describe('faceplates', () => {
+	const sw = s3900 as unknown as ChassisProfile;
+	const overlap = (h: ReturnType<typeof faceHoles>) =>
+		h.some((a, i) => h.some((b, j) => i !== j && Math.abs(a.x - b.x) * 2 < a.w + b.w && Math.abs(a.y - b.y) * 2 < a.h + b.h));
+	it('a server is open at the front where its drive bays are', () => {
+		const f = faceHoles(profile, 'front');
+		expect(f.length).toBe(10);
+		expect(f.every((o) => Math.abs(o.w - 0.0734) < 1e-6)).toBe(true);
+	});
+	it('its rear where the PSUs, ports and card brackets are; a port in its card’s bracket is one opening', () => {
+		expect(faceHoles(profile, 'rear').length).toBe(7);
+	});
+	it('a switch at the front, one opening per jack, none at the rear', () => {
+		expect(faceHoles(sw, 'front').length).toBe(28);
+		expect(faceHoles(sw, 'rear')).toEqual([]);
+	});
+	it('no two openings overlap, and each stays inside the face', () => {
+		for (const [p, face] of [[profile, 'front'], [profile, 'rear'], [sw, 'front']] as const) {
+			const h = faceHoles(p, face);
+			expect(overlap(h)).toBe(false);
+			const [W, H] = [p.size[0] / 1000, p.size[1] / 1000];
+			expect(h.every((o) => o.x - o.w / 2 > -W / 2 && o.x + o.w / 2 < W / 2 && o.y - o.h / 2 > 0 && o.y + o.h / 2 < H)).toBe(true);
+		}
+	});
+	it('a part deep inside reaches neither face', () => {
+		const p = clone();
+		p.parts = [{ id: 'x', kind: 'fan', slot: 'x', pos: [0, 20, -300], size: [40, 40, 28] }] as ChassisProfile['parts'];
+		expect([faceHoles(p, 'front'), faceHoles(p, 'rear')]).toEqual([[], []]);
 	});
 });

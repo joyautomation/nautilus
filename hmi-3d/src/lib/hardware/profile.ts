@@ -445,3 +445,52 @@ export function partForSensor(parts: ServerPart[], sensorTag: string): ServerPar
 	if (/^NVMe/i.test(name)) return parts.find((p) => p.kind === 'drive' && /NVMe/i.test(p.tag ?? ''));
 	return undefined;
 }
+
+// ── faceplates ─────────────────────────────────────────────────────────
+
+/** A hole in a faceplate, metres, in the profile's x (across) and y (up). */
+export interface FaceHole {
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+}
+
+/**
+ * Where a face of the chassis is cut open: every part that reaches it (a
+ * drive bay at the front, a PSU or a port at the rear), as a rectangle,
+ * with a sliver of metal left between neighbours and overlapping ones
+ * merged — what a triangulated plate with holes needs. `reach` (mm) is
+ * how far inside the face a part may end and still show through it.
+ */
+export function faceHoles(p: ChassisProfile, face: 'front' | 'rear', reach = 15): FaceHole[] {
+	const [W, H, D] = p.size;
+	const LAND = 0.3; // mm of metal kept around each opening
+	let rects = p.parts.flatMap((q) => {
+		const turned = Math.abs((q.rot?.[1] ?? 0) % 180) === 90;
+		const [sx, sy, sz] = turned ? [q.size[2], q.size[1], q.size[0]] : q.size;
+		const near = q.pos[2] + sz / 2; // toward the front (z = 0)
+		const far = q.pos[2] - sz / 2; // toward the rear (z = -D)
+		if (face === 'front' ? near < -reach : far > -D + reach) return [];
+		const x0 = Math.max(-W / 2 + LAND, q.pos[0] - sx / 2 + LAND);
+		const x1 = Math.min(W / 2 - LAND, q.pos[0] + sx / 2 - LAND);
+		const y0 = Math.max(LAND, q.pos[1] - sy / 2 + LAND);
+		const y1 = Math.min(H - LAND, q.pos[1] + sy / 2 - LAND);
+		return x1 > x0 && y1 > y0 ? [[x0, y0, x1, y1]] : [];
+	});
+	// Merge what still overlaps (a triangulator cannot take crossing holes).
+	for (let merged = true; merged; ) {
+		merged = false;
+		outer: for (let i = 0; i < rects.length; i++)
+			for (let j = i + 1; j < rects.length; j++) {
+				const [a, b] = [rects[i], rects[j]];
+				if (a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]) {
+					rects[i] = [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];
+					rects.splice(j, 1);
+					merged = true;
+					break outer;
+				}
+			}
+	}
+	return rects.map(([x0, y0, x1, y1]) => ({ x: (x0 + x1) / 2000, y: (y0 + y1) / 2000, w: (x1 - x0) / 1000, h: (y1 - y0) / 1000 }));
+}

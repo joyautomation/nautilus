@@ -32,9 +32,10 @@ export {
 	capacity,
 	mm,
 	partForSensor,
+	faceHoles,
 	HEALTH_TEXT
 } from './profile.js';
-export type { ChassisProfile, ProfilePart, ProfileAnchor, ServerPart, PartKind, PartState, Fact } from './profile.js';
+export type { ChassisProfile, ProfilePart, ProfileAnchor, ServerPart, PartKind, PartState, Fact, FaceHole } from './profile.js';
 export { partLook, DEFAULT_MODELS } from './look.js';
 export { OVERLAYS, identifyOverlay, identify, KIND_COLORS, cablesOverlay, linkOnPort, verdictColor, heatOverlay, interfacesOverlay, freeOverlay, heatPaint, sensorLimits, limitsFor, inletC, nextDimms, placeLabels, fanOutLabels, overlayColors, HEAT_RAMP } from './overlay.js';
 export type { Overlay, OverlayContext, OverlayColors, PartPaint, LegendItem } from './overlay.js';

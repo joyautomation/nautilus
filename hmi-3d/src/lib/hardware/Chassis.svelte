@@ -1,14 +1,15 @@
 <script lang="ts">
-	// The chassis a profile describes: floor, side walls, front ears, the
-	// board plate and the drive backplane, a removable lid behind a fixed front cover, fixed internals, and the
+	// The chassis a profile describes: floor, side walls, front ears, a
+	// faceplate front and rear cut open wherever a part reaches that face
+	// (faceHoles: drive bays, ports, PSUs), the board plate and the drive backplane, a removable lid behind a fixed front cover, fixed internals, and the
 	// printed codes where the profile's anchors put them. Metres, in the profile's
 	// frame (origin at the bottom centre of the front face, +z out of the
 	// front). Only the floor and an opaque lid take clicks — a wall seen
 	// edge-on must not steal a pick from the part behind it, and in x-ray
 	// nothing of the shell does.
 	import { T } from '@threlte/core';
-	import { Euler, Matrix4, Mesh, NearestFilter, SRGBColorSpace, TextureLoader, Vector3, type Texture } from 'three';
-	import { mm, type ChassisProfile } from './profile.js';
+	import { Euler, ExtrudeGeometry, Matrix4, Mesh, NearestFilter, Path, SRGBColorSpace, Shape, TextureLoader, Vector3, type Texture } from 'three';
+	import { faceHoles, mm, type ChassisProfile } from './profile.js';
 	import type { Vec3 } from '../scene.js';
 
 	let {
@@ -49,6 +50,30 @@
 	let cover = $derived((profile.shell?.frontCover ?? 0) / 1000);
 	let fixtures = $derived((profile.fixtures ?? []).map((f) => ({ pos: mm(f.pos), size: mm(f.size) })));
 	let backplane = $derived(profile.backplane ? { pos: mm(profile.backplane.pos), size: mm(profile.backplane.size) } : undefined);
+
+	// The faceplates: a plate the size of the face, its openings cut out,
+	// extruded one wall thick. The front sits just behind the ears (whose
+	// flanges stay in front of it), the rear flush with the back.
+	const plate = (w: number, h: number, holes: ReturnType<typeof faceHoles>, t: number) => {
+		const s = new Shape();
+		s.moveTo(-w / 2, 0).lineTo(w / 2, 0).lineTo(w / 2, h).lineTo(-w / 2, h).lineTo(-w / 2, 0);
+		for (const o of holes) {
+			const p = new Path();
+			p.moveTo(o.x - o.w / 2, o.y - o.h / 2).lineTo(o.x - o.w / 2, o.y + o.h / 2).lineTo(o.x + o.w / 2, o.y + o.h / 2).lineTo(o.x + o.w / 2, o.y - o.h / 2).lineTo(o.x - o.w / 2, o.y - o.h / 2);
+			s.holes.push(p);
+		}
+		return new ExtrudeGeometry(s, { depth: t, bevelEnabled: false });
+	};
+	let front = $derived(plate(W, H - 0.0002, faceHoles(profile, 'front'), wall));
+	let rear = $derived(plate(W - 2 * wall, H - 0.0002, faceHoles(profile, 'rear'), wall));
+	$effect(() => {
+		const f = front;
+		const r = rear;
+		return () => {
+			f.dispose();
+			r.dispose();
+		};
+	});
 
 	// The real codes, when the app supplies them: crisp modules, no smoothing.
 	const loader = new TextureLoader();
@@ -102,6 +127,13 @@
 		<T.MeshStandardMaterial color="#2a2b2d" metalness={0.4} roughness={0.5} transparent={opacity < 1} {opacity} />
 	</T.Mesh>
 {/each}
+<!-- faceplates: parts show through their openings; the plates take no pick -->
+<T.Mesh geometry={front} position={[0, 0, -0.004 - wall]} raycast={noRaycast}>
+	<T.MeshStandardMaterial {...shell} />
+</T.Mesh>
+<T.Mesh geometry={rear} position={[0, 0, -D]} raycast={noRaycast}>
+	<T.MeshStandardMaterial {...shell} />
+</T.Mesh>
 {#if board}
 	<T.Mesh position={board.pos} raycast={noRaycast}>
 		<T.BoxGeometry args={board.size} />
