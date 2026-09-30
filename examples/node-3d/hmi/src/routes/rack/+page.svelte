@@ -408,7 +408,7 @@
 				{/each}
 			</ol>
 		</details>
-		<p>Declared in the site topology, checked live: ✓ an end names the other (LLDP / MAC), = both ends up at the same speed, ✗ the ends disagree, ↓ no end that reports has link, ? an end not reported (faint). Not racked yet: the units are a default (switches on top, nodes below).</p>
+		<p>Declared in the site topology, checked live: ✓ an end names the other (LLDP / MAC), = both ends up at the same speed, ✗ the ends disagree, ↓ no end that reports has link, ? an end not reported (faint); a far end outside the model (the site) is taken on the end in it. Not racked yet: the units are a default (switches on top, nodes below).</p>
 	{/if}
 	</Sheet>
 </aside>

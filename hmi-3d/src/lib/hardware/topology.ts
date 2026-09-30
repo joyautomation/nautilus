@@ -211,7 +211,28 @@ export function checkLink(plant: Plant, link: TopoLink, tags: Record<string, unk
 		}
 	}
 
-	// 2. Both ends' link state and speed.
+	// 2. One end outside the model (the site's uplink, a provider's
+	// hand-off) can never report: the end we model is the whole evidence.
+	// Up at the declared rate is all a declared link can be asked for.
+	const outside = [a, b].filter((e) => !e.device);
+	const inside = [a, b].find((e) => e.device);
+	if (outside.length === 1 && inside?.reported) {
+		reasons.push(`${outside[0].label} is outside the model`);
+		if (inside.up === false) {
+			reasons.push(`${inside.label} has no link`);
+			return done('down');
+		}
+		if (inside.up === true) {
+			if (inside.gbps !== undefined && link.rateGbps !== undefined && Math.abs(inside.gbps - link.rateGbps) > 1e-6) {
+				reasons.push(`${inside.label} up at ${gtext(inside.gbps)}, declared ${gtext(link.rateGbps)}`);
+				return done('contradicted');
+			}
+			reasons.push(`${inside.label} up${inside.gbps !== undefined ? ` at ${gtext(inside.gbps)}` : ''}`);
+			return done('consistent');
+		}
+	}
+
+	// 3. Both ends' link state and speed.
 	if (!a.reported || !b.reported) {
 		const silent = [a, b].filter((e) => !e.reported).map((e) => (e.ref.port ? e.label : `${e.label} (outside the model)`));
 		reasons.push(`not reported: ${silent.join(', ')}`);

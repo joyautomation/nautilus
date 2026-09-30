@@ -365,7 +365,7 @@ export function cablesOverlay(plant: Plant): Overlay {
 		id: 'cables',
 		name: 'Cables',
 		fanOut: true,
-		caption: 'Each port’s far end from the site topology, checked live: ✓ an end names the other (LLDP / MAC), = both ends up at the same speed, ✗ the ends disagree, ↓ no end that reports has link, ? an end is not reported.',
+		caption: 'Each port’s far end from the site topology, checked live: ✓ an end names the other (LLDP / MAC), = both ends up at the same speed, ✗ the ends disagree, ↓ no end that reports has link, ? an end is not reported (a far end outside the model, like the site, is taken on the end in it).',
 		paint(part, value, ctx) {
 			if (part.kind !== 'port') return DIM;
 			const at = linkOnPort(plant, ctx.node, part.partId, ctx.profile, ctx.tags);

@@ -81,16 +81,20 @@ describe('the live check', () => {
 	it('down: both ends reported, neither linked', () => {
 		expect(checkLink(plant, l, { NODE1_Nic_Slot2_P2: { LinkUp: false }, SW1_Port25: { OperUp: false } }).verdict).toBe('down');
 	});
-	it('unverified: an end is not reported (and a site uplink never is)', () => {
+	it('unverified: an end in the model is not reported', () => {
 		const c = checkLink(plant, l, { SW1_Port25: swUp(10000) });
 		expect(c.verdict).toBe('unverified');
 		expect(c.reasons).toEqual(['not reported: node1 slot2 p2', 'sw1 te0/25 up at 10G']);
-		expect(checkLink(plant, link('sw1/g0/1'), { SW1_Port01: swUp(1000) }).verdict).toBe('unverified');
+		expect(checkLink(plant, link('sw1/g0/1'), {}).verdict).toBe('unverified');
 	});
-	it('down: the only end that reports has no link', () => {
+	it('an end outside the model never reports: the end in it is the evidence', () => {
+		const up = checkLink(plant, link('sw1/g0/1'), { SW1_Port01: swUp(1000) });
+		expect(up.verdict).toBe('consistent');
+		expect(up.reasons).toEqual(['site is outside the model', 'sw1 g0/1 up at 1G']);
+		expect(checkLink(plant, link('sw1/g0/1'), { SW1_Port01: swUp(100) }).verdict).toBe('contradicted');
 		const c = checkLink(plant, link('sw1/g0/1'), { SW1_Port01: { OperUp: false, SpeedMbps: 1000 } });
 		expect(c.verdict).toBe('down');
-		expect(c.reasons).toEqual(['not reported: site (outside the model)', 'sw1 g0/1 down']);
+		expect(c.reasons).toEqual(['site is outside the model', 'sw1 g0/1 has no link']);
 	});
 	it('confirmed: LLDP names the declared neighbour; contradicted when it names another', () => {
 		const ring = link('sw1/te0/27');
