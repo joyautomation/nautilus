@@ -181,7 +181,7 @@
 		{#if alarm}
 			<Halo size={bounds.size} center={bounds.center} priority={alarm.priority} unacked={alarm.unacked} />
 			{#if marker}
-				<AlarmMarker at={[bounds.center[0], bounds.center[1] + bounds.size[1] / 2 + 0.012, bounds.center[2]]} priority={alarm.priority} unacked={alarm.unacked} />
+				<AlarmMarker at={[bounds.center[0], bounds.center[1] + bounds.size[1] / 2 + 0.012, bounds.center[2]]} priority={alarm.priority} unacked={alarm.unacked} active={alarm.active} />
 			{/if}
 		{:else if isSel}
 			<T.Mesh position={bounds.center}>

@@ -12,6 +12,9 @@ export interface AssetAlarm {
 	unacked: boolean;
 	/** How many alarms are active on the asset. */
 	count: number;
+	/** True while any of them is still in alarm; false when all have
+	 * returned to normal and only wait to be acknowledged (unack-rtn). */
+	active: boolean;
 }
 
 /** The subset of the kit's AlarmInstance this fold reads. */
@@ -40,15 +43,17 @@ export function worstAlarmByAsset(instances: Iterable<AlarmLike>): Map<string, A
 		const asset = alarmAsset(a.tag);
 		const cur = out.get(asset);
 		const unacked = a.state.startsWith('unack');
+		const active = a.state.endsWith('-active');
 		if (!cur) {
-			out.set(asset, { priority: a.priority, unacked, count: 1 });
+			out.set(asset, { priority: a.priority, unacked, count: 1, active });
 			continue;
 		}
 		const worse = (PRIORITY_RANK[a.priority] ?? -1) > (PRIORITY_RANK[cur.priority] ?? -1);
 		out.set(asset, {
 			priority: worse ? a.priority : cur.priority,
 			unacked: cur.unacked || unacked,
-			count: cur.count + 1
+			count: cur.count + 1,
+			active: cur.active || active
 		});
 	}
 	return out;
@@ -92,7 +97,7 @@ export function worstUnder(alarms: Map<string, AssetAlarm>, device: string): Ass
 			continue;
 		}
 		const worse = (PRIORITY_RANK[a.priority] ?? -1) > (PRIORITY_RANK[out.priority] ?? -1);
-		out = { priority: worse ? a.priority : out.priority, unacked: out.unacked || a.unacked, count: out.count + a.count };
+		out = { priority: worse ? a.priority : out.priority, unacked: out.unacked || a.unacked, count: out.count + a.count, active: out.active || a.active };
 	}
 	return out;
 }

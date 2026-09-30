@@ -214,10 +214,10 @@
 		{/if}
 	{/each}
 	{#if deviceAlarm}
-		<AlarmMarker at={[size[0] / 2 - 0.03, size[1] + 0.03, -0.02]} priority={deviceAlarm.priority} unacked={deviceAlarm.unacked} count={deviceAlarm.count} device />
+		<AlarmMarker at={[size[0] / 2 - 0.03, size[1] + 0.03, -0.02]} priority={deviceAlarm.priority} unacked={deviceAlarm.unacked} active={deviceAlarm.active} count={deviceAlarm.count} device />
 	{/if}
 	{#each sensorAlarms as s (s.id)}
-		<AlarmMarker at={[s.at[0], s.at[1] + 0.02, s.at[2]]} priority={s.a.priority} unacked={s.a.unacked} />
+		<AlarmMarker at={[s.at[0], s.at[1] + 0.02, s.at[2]]} priority={s.a.priority} unacked={s.a.unacked} active={s.a.active} />
 	{/each}
 	{#each sensors as q (q.id)}
 		<T.Mesh position={q.pos} raycast={() => {}}>

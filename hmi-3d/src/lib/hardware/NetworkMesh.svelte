@@ -74,7 +74,7 @@
 		{@const worst = d?.tag && scene ? worstUnder(scene.alarms, d.tag) : undefined}
 		{#if worst}
 			<!-- never faded: an alarm on a device out of focus still asks -->
-			<AlarmMarker at={[n.pos[0] + size[0] / 2 + 0.03, n.pos[1] + size[1] / 2 + 0.03, n.pos[2]]} priority={worst.priority} unacked={worst.unacked} count={worst.count} device />
+			<AlarmMarker at={[n.pos[0] + size[0] / 2 + 0.03, n.pos[1] + size[1] / 2 + 0.03, n.pos[2]]} priority={worst.priority} unacked={worst.unacked} active={worst.active} count={worst.count} device />
 		{/if}
 		<HTML position={[n.pos[0], n.pos[1] + size[1] / 2 + 0.05, n.pos[2]]} center pointerEvents="none">
 			<span class="dev" style:opacity={k < 1 ? Math.max(k, 0.25) : 1}>

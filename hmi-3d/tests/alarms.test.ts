@@ -22,11 +22,11 @@ describe('worstAlarmByAsset', () => {
 			inst('T101.LL', 'critical', 'ack-active'),
 			inst('T101.Temp', 'low', 'unack-active')
 		]);
-		expect(m.get('T101')).toEqual({ priority: 'critical', unacked: true, count: 3 });
+		expect(m.get('T101')).toEqual({ priority: 'critical', unacked: true, count: 3, active: true });
 	});
 	it('unack-rtn still counts (it is on the operator’s list until acked)', () => {
 		const m = worstAlarmByAsset([inst('P101.Fault', 'medium', 'unack-rtn')]);
-		expect(m.get('P101')).toEqual({ priority: 'medium', unacked: true, count: 1 });
+		expect(m.get('P101')).toEqual({ priority: 'medium', unacked: true, count: 1, active: false });
 	});
 	it('an unknown priority never outranks a known one', () => {
 		const m = worstAlarmByAsset([inst('P101.A', 'low', 'ack-active'), inst('P101.B', 'weird', 'ack-active')]);
@@ -48,8 +48,8 @@ describe('worstUnder', () => {
 		inst('SW1_Storm', 'critical', 'unack-active')
 	]);
 	it('rolls a device up: its own tag and every part under it, worst first, counts summed', () => {
-		expect(worstUnder(m, 'NODE1')).toEqual({ priority: 'critical', unacked: true, count: 2 });
-		expect(worstUnder(m, 'SW1')).toEqual({ priority: 'critical', unacked: true, count: 1 });
+		expect(worstUnder(m, 'NODE1')).toEqual({ priority: 'critical', unacked: true, count: 2, active: true });
+		expect(worstUnder(m, 'SW1')).toEqual({ priority: 'critical', unacked: true, count: 1, active: true });
 	});
 	it('does not take a device whose name merely starts the same (NODE10 is not NODE1)', () => {
 		expect(worstUnder(m, 'NODE10')?.count).toBe(1);
@@ -62,5 +62,14 @@ describe('PRIORITY_SIGN', () => {
 		const shapes = PRIORITIES.map((p) => PRIORITY_SIGN[p].shape);
 		expect(new Set(shapes).size).toBe(PRIORITIES.length);
 		expect(PRIORITY_SIGN.critical.urgency).toBe('act now');
+	});
+});
+
+describe('returned to normal, not yet acknowledged', () => {
+	it('stays on the list, and says it is no longer active', () => {
+		const m = worstAlarmByAsset([inst('NODE1_Fan3.Fault', 'high', 'unack-rtn')]);
+		expect(m.get('NODE1_Fan3')).toEqual({ priority: 'high', unacked: true, count: 1, active: false });
+		const both = worstAlarmByAsset([inst('NODE1_Fan3.Fault', 'high', 'unack-rtn'), inst('NODE1_Fan3.Fault2', 'low', 'ack-active')]);
+		expect(both.get('NODE1_Fan3')?.active).toBe(true);
 	});
 });

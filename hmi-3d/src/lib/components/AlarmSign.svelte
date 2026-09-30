@@ -4,7 +4,7 @@
 	// the scene; the key lists it. Pure SVG, no scene needed.
 	import { PRIORITY_SIGN } from '../alarms.js';
 
-	let { priority, color, size = 22 }: { priority: string; color: string; size?: number } = $props();
+	let { priority, color, size = 22, hollow = false }: { priority: string; color: string; size?: number; hollow?: boolean } = $props();
 	let sign = $derived(PRIORITY_SIGN[priority] ?? PRIORITY_SIGN.high);
 	// Every shape in a 24-unit box, drawn a little inside it for the stroke.
 	const SHAPES: Record<string, string> = {
@@ -18,6 +18,7 @@
 </script>
 
 <svg width={size} height={size} viewBox="0 0 24 24" role="img" aria-label={`${priority}: ${sign.urgency}`}>
-	<path d={SHAPES[sign.shape]} fill={color} stroke="#111" stroke-width="1.2" stroke-linejoin="round" />
-	<text x="12" y={ty} text-anchor="middle" font-family="system-ui, sans-serif" font-weight="800" font-size={sign.glyph.length > 1 ? 10 : 12} fill="#111">{sign.glyph}</text>
+	<!-- hollow: returned to normal, waiting to be acknowledged -->
+	<path d={SHAPES[sign.shape]} fill={hollow ? 'rgb(17 17 17 / 0.55)' : color} stroke={hollow ? color : '#111'} stroke-width={hollow ? 2 : 1.2} stroke-linejoin="round" />
+	<text x="12" y={ty} text-anchor="middle" font-family="system-ui, sans-serif" font-weight="800" font-size={sign.glyph.length > 1 ? 10 : 12} fill={hollow ? color : '#111'}>{sign.glyph}</text>
 </svg>

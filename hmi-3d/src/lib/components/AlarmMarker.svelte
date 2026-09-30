@@ -3,7 +3,9 @@
 	// baseline can be missed: the priority's sign (AlarmSign) above the part
 	// or device, always facing the viewer, never faded with the rest of a
 	// rack, pulsing until the alarm is acknowledged. A device's marker is
-	// larger and carries how many alarms it has.
+	// larger and carries how many alarms it has. An alarm that has returned
+	// to normal but is not yet acknowledged is drawn hollow: it happened,
+	// it is over, and it still asks to be acknowledged.
 	import { HTML } from '@threlte/extras';
 	import { getContext } from 'svelte';
 	import { DEFAULT_PALETTE, type Palette } from '../palette.js';
@@ -15,17 +17,18 @@
 		at,
 		priority,
 		unacked,
+		active = true,
 		count = 1,
 		device = false
-	}: { at: Vec3; priority: string; unacked: boolean; count?: number; device?: boolean } = $props();
+	}: { at: Vec3; priority: string; unacked: boolean; active?: boolean; count?: number; device?: boolean } = $props();
 	const palette = getContext<Palette>('hmi3d:palette') ?? DEFAULT_PALETTE;
 	let color = $derived(palette.priority[priority] ?? palette.priority.high);
-	let title = $derived(`${count > 1 ? `${count} alarms, worst ` : ''}${priority}: ${PRIORITY_SIGN[priority]?.urgency ?? ''}${unacked ? ' (unacknowledged)' : ''}`);
+	let title = $derived(`${count > 1 ? `${count} alarms, worst ` : ''}${priority}: ${PRIORITY_SIGN[priority]?.urgency ?? ''}${active ? '' : ' (returned to normal)'}${unacked ? ' (unacknowledged)' : ''}`);
 </script>
 
 <HTML position={at} center pointerEvents="none" zIndexRange={[60, 50]}>
 	<span class="mark" class:device class:unacked style:--c={color} title={title}>
-		<AlarmSign {priority} {color} size={device ? 30 : 20} />
+		<AlarmSign {priority} {color} size={device ? 30 : 20} hollow={!active} />
 		{#if device && count > 1}<b>{count}</b>{/if}
 	</span>
 </HTML>
