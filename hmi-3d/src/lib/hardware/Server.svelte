@@ -21,9 +21,11 @@
 	import { cubicOut } from 'svelte/easing';
 	import type { Component } from 'svelte';
 	import Node from '../components/Node.svelte';
+	import AlarmMarker from '../components/AlarmMarker.svelte';
+	import { worstUnder, type AssetAlarm } from '../alarms.js';
 	import Fade from '../components/Fade.svelte';
 	import type { Vec3 } from '../scene.js';
-	import { mm, resolveParts, type ChassisProfile, type PartKind, tagFor } from './profile.js';
+	import { mm, resolveParts, partForSensor, type ChassisProfile, type PartKind, tagFor } from './profile.js';
 	import { DEFAULT_MODELS } from './look.js';
 	import Chassis from './Chassis.svelte';
 	import Drive from './Drive.svelte';
@@ -146,12 +148,35 @@
 		return { pos: [f.from[0], f.from[1] + dy / 2, f.from[2] + dz / 2] as Vec3, len: Math.hypot(dy, dz), rx: Math.atan2(-dy, dz) };
 	};
 
+	// The device's worst alarm, over the chassis: what a rack of them shows
+	// from across the room. Parts carry their own signs (<Node>), and so
+	// does a sensor in alarm.
+	let deviceAlarm = $derived(scene ? worstUnder(scene.alarms, node) : undefined);
+	let sensorAlarms = $derived.by(() => {
+		const out: { id: string; at: Vec3; a: AssetAlarm }[] = [];
+		const placed = new Set<string>();
+		for (const q of profile.sensors ?? []) {
+			const tag = tagFor(q.tag, node);
+			const a = scene?.alarms.get(tag);
+			placed.add(tag);
+			if (a) out.push({ id: q.id, at: mm(q.pos), a });
+		}
+		// A sensor the profile does not place (the CPU's, a card's) is
+		// signed on the part it measures.
+		for (const [asset, a] of scene?.alarms ?? []) {
+			if (placed.has(asset) || !asset.startsWith(`${node}_Temp_`)) continue;
+			const part = partForSensor(parts, asset);
+			if (part) out.push({ id: asset, at: [part.pos[0], part.pos[1] + part.size[1] / 2, part.pos[2]], a });
+		}
+		return out;
+	});
+
 	let lidOffset = $derived(mm(profile.explodeLid ?? [0, 160, 0]).map((v) => v * t.current) as Vec3);
 </script>
 
 <T.Group position={pos} rotation={rot ? [rot[0] * deg, rot[1] * deg, rot[2] * deg] : [0, 0, 0]}>
 <Fade amount={fade}>
-	<Node id={node} tag={chassisTag} {kind} label={overlay ? '' : (label ?? node)} pos={[0, 0, 0]} bounds={chassisBox}>
+	<Node id={node} tag={chassisTag} {kind} label={overlay ? '' : (label ?? node)} pos={[0, 0, 0]} bounds={chassisBox} marker={false}>
 		{#snippet children(p)}
 			<Chassis {profile} {lid} xray={xray || !!overlay} {lidOffset} {anchor} {codeImages} good={p.good} />
 		{/snippet}
@@ -187,6 +212,12 @@
 				<span class="ov" style:--c={paint.color ?? '#8a8d91'}>{paint.text}</span>
 			</HTML>
 		{/if}
+	{/each}
+	{#if deviceAlarm}
+		<AlarmMarker at={[size[0] / 2 - 0.03, size[1] + 0.03, -0.02]} priority={deviceAlarm.priority} unacked={deviceAlarm.unacked} count={deviceAlarm.count} device />
+	{/if}
+	{#each sensorAlarms as s (s.id)}
+		<AlarmMarker at={[s.at[0], s.at[1] + 0.02, s.at[2]]} priority={s.a.priority} unacked={s.a.unacked} />
 	{/each}
 	{#each sensors as q (q.id)}
 		<T.Mesh position={q.pos} raycast={() => {}}>

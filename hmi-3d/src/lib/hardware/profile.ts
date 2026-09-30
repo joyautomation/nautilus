@@ -419,3 +419,29 @@ export function anchorPayload(a: ProfileAnchor, node: string): string {
 
 /** Millimetres → the metres a scene uses. */
 export const mm = m;
+
+/**
+ * The part a temperature sensor measures, by the sensor's name — so an
+ * alarm on `NODE2_Temp_CPU` is signed on the CPU, not only rolled up into
+ * the server. The names are the BMC's (the redfish import keeps them):
+ * CPU → the CPU; AOC_NIC3 → the card in slot 3; DIMMA_D → the first DIMM
+ * of channels A to D; NVMe_SSD… → the first NVMe drive. None: undefined.
+ */
+export function partForSensor(parts: ServerPart[], sensorTag: string): ServerPart | undefined {
+	const name = sensorTag.split('_Temp_')[1];
+	if (!name) return undefined;
+	if (/^CPU$/i.test(name)) return parts.find((p) => p.kind === 'cpu');
+	const nic = /^AOC_NIC(\d+)$/i.exec(name);
+	if (nic) return parts.find((p) => p.kind === 'pcie-card' && p.tag?.endsWith(`_Pcie_Slot${nic[1]}`));
+	const dimm = /^DIMM([A-Z])(?:_([A-Z]))?$/i.exec(name);
+	if (dimm) {
+		const lo = dimm[1].toUpperCase();
+		const hi = (dimm[2] ?? dimm[1]).toUpperCase();
+		return parts.find((p) => {
+			const ch = /_Dimm_([A-Z])/i.exec(p.tag ?? '')?.[1]?.toUpperCase();
+			return p.kind === 'dimm' && !!ch && ch >= lo && ch <= hi;
+		});
+	}
+	if (/^NVMe/i.test(name)) return parts.find((p) => p.kind === 'drive' && /NVMe/i.test(p.tag ?? ''));
+	return undefined;
+}

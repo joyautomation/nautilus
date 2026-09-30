@@ -62,8 +62,11 @@ export type { NodeKindDef, NodeProps, PanelProps, NodeRegistry, KindMeta, Box } 
 export { BUILTIN_CONTRACT, tankState, tankStatus, pumpState, pumpStatus, valveState, valveStatus } from './kinds.js';
 
 // Alarms in space: one worst-priority entry per asset.
-export { worstAlarmByAsset, alarmAsset } from './alarms.js';
-export type { AssetAlarm, AlarmLike } from './alarms.js';
+export { worstAlarmByAsset, alarmAsset, worstUnder, PRIORITY_SIGN, PRIORITIES } from './alarms.js';
+export type { AssetAlarm, AlarmLike, PrioritySign } from './alarms.js';
+export { default as AlarmMarker } from './components/AlarmMarker.svelte';
+export { default as AlarmSign } from './components/AlarmSign.svelte';
+export { default as AlarmKey } from './components/AlarmKey.svelte';
 
 // Colours from the theme, and the measurement sampler behind PerfHud.
 export { DEFAULT_PALETTE, paletteFromTheme } from './palette.js';

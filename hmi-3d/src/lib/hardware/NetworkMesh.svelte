@@ -8,6 +8,10 @@
 	import { HTML } from '@threlte/extras';
 	import Node from '../components/Node.svelte';
 	import Fade from '../components/Fade.svelte';
+	import AlarmMarker from '../components/AlarmMarker.svelte';
+	import { worstUnder } from '../alarms.js';
+	import { getContext } from 'svelte';
+	import { SCENE, type SceneContext } from '../context.js';
 	import Cable from './Cable.svelte';
 	import { meshLayout } from './mesh.js';
 	import { VERDICT_MARK, deviceById, focusFade, neighbourhood, type LinkCheck, type Topology } from './topology.js';
@@ -36,6 +40,7 @@
 		focus?: string;
 		pos?: Vec3;
 	} = $props();
+	const scene = getContext<SceneContext | undefined>(SCENE);
 
 	let layout = $derived(meshLayout(topology));
 	const SIZE: Record<string, Vec3> = { server: [0.2, 0.045, 0.13], switch: [0.22, 0.03, 0.1], outside: [0.06, 0.06, 0.06] };
@@ -51,7 +56,7 @@
 		{@const k = focusFade(topology, focus, n.id)}
 		{#if d}
 			<Fade amount={k}>
-			<Node id={d.tag} tag={d.tag} kind={d.kind} label="" pos={n.pos} bounds={{ size, center: [0, 0, 0] }}>
+			<Node id={d.tag} tag={d.tag} kind={d.kind} label="" pos={n.pos} bounds={{ size, center: [0, 0, 0] }} marker={false}>
 				{#snippet children()}
 					<T.Mesh>
 						<T.BoxGeometry args={size} />
@@ -65,6 +70,11 @@
 				<T.SphereGeometry args={[0.03, 24, 16]} />
 				<T.MeshStandardMaterial color={COLOR.outside} transparent={k < 1} opacity={k} />
 			</T.Mesh>
+		{/if}
+		{@const worst = d?.tag && scene ? worstUnder(scene.alarms, d.tag) : undefined}
+		{#if worst}
+			<!-- never faded: an alarm on a device out of focus still asks -->
+			<AlarmMarker at={[n.pos[0] + size[0] / 2 + 0.03, n.pos[1] + size[1] / 2 + 0.03, n.pos[2]]} priority={worst.priority} unacked={worst.unacked} count={worst.count} device />
 		{/if}
 		<HTML position={[n.pos[0], n.pos[1] + size[1] / 2 + 0.05, n.pos[2]]} center pointerEvents="none">
 			<span class="dev" style:opacity={k < 1 ? Math.max(k, 0.25) : 1}>

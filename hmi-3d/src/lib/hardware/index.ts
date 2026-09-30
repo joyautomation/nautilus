@@ -31,6 +31,7 @@ export {
 	isFitted,
 	capacity,
 	mm,
+	partForSensor,
 	HEALTH_TEXT
 } from './profile.js';
 export type { ChassisProfile, ProfilePart, ProfileAnchor, ServerPart, PartKind, PartState, Fact } from './profile.js';

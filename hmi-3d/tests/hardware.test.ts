@@ -15,6 +15,7 @@ import {
 	partFacts,
 	capacity,
 	isFitted,
+	partForSensor,
 	type ChassisProfile
 } from '../src/lib/hardware/profile.js';
 import { heatPaint, sensorLimits, limitsFor, heatOverlay, interfacesOverlay, freeOverlay, nextDimms, placeLabels, HEAT_RAMP } from '../src/lib/hardware/overlay.js';
@@ -189,5 +190,19 @@ describe('sensor limits', () => {
 		expect(sensorLimits({ HighSP: 45, HighHighSP: 50 })).toEqual([45, 50]);
 		expect(sensorLimits({ HighSP: 0, HighHighSP: 0 })).toBe(undefined);
 		expect(sensorLimits({})).toBe(undefined);
+	});
+});
+
+describe('partForSensor', () => {
+	const parts = resolveParts(profile, 'NODE1');
+	it('signs a sensor alarm on the part it measures', () => {
+		expect(partForSensor(parts, 'NODE1_Temp_CPU')?.kind).toBe('cpu');
+		expect(partForSensor(parts, 'NODE1_Temp_AOC_NIC3')?.tag).toBe('NODE1_Pcie_Slot3');
+		expect(/^NODE1_Dimm_[E-H]1$/.test(partForSensor(parts, 'NODE1_Temp_DIMME_H')?.tag ?? '')).toBe(true);
+		expect(partForSensor(parts, 'NODE1_Temp_NVMe_SSDA')?.kind).toBe('drive');
+	});
+	it('leaves a sensor that measures no one part to the server', () => {
+		expect(partForSensor(parts, 'NODE1_Temp_Inlet')).toBe(undefined);
+		expect(partForSensor(parts, 'NODE1_Fan3')).toBe(undefined);
 	});
 });

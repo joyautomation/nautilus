@@ -9,7 +9,7 @@
 	import { Tween } from 'svelte/motion';
 	import { cubicOut } from 'svelte/easing';
 	import { RealtimeClient, createAlarmClient, type NautilusFrame } from '@joyautomation/nautilus-hmi';
-	import { SceneView, DEFAULT_PALETTE, paletteFromTheme, type SceneCamera, type Palette, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
+	import { SceneView, AlarmKey, DEFAULT_PALETTE, paletteFromTheme, type SceneCamera, type Palette, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
 	import {
 		Server,
 		Rack,
@@ -256,6 +256,12 @@
 <svelte:head><title>HQ rack · 3D</title></svelte:head>
 
 <ReplayClock />
+{#if (alarms.summary?.active ?? 0) > 0}
+	<aside class="alarmkey" aria-label="What the alarm signs mean">
+		<b>{alarms.summary?.active} in alarm</b>
+		<AlarmKey {palette} />
+	</aside>
+{/if}
 
 <div class="stage">
 	<SceneView {rt} {alarms} {camera} grid={{ pos: [0, 0, -D / 2], cell: 0.1, section: 0.5, size: [4, 4] }} inspector={false} bind:selected onselect={pick} perf={params.has('perf') || aspect > 1}>
@@ -483,5 +489,21 @@
 		.legend p {
 			display: none;
 		}
+	}
+	/* The alarm signs' key, while anything is in alarm: top right, clear of
+	   the toolbar and the overlay legend. */
+	.alarmkey {
+		position: fixed;
+		top: 12px;
+		right: 12px;
+		z-index: 5;
+		display: grid;
+		gap: 6px;
+		padding: 8px 10px;
+		border-radius: 8px;
+		border: 1px solid var(--axis, #383835);
+		background: color-mix(in srgb, var(--surface, #1a1a19) 90%, transparent);
+		color: var(--ink, #e8e6e1);
+		font: 12px/1.3 system-ui, sans-serif;
 	}
 </style>

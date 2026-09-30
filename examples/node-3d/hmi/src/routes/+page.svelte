@@ -6,7 +6,7 @@
 	// redfish import's part tags). Pull a drive with the plant's fault tags.
 	import { onMount } from 'svelte';
 	import { RealtimeClient, createAlarmClient, type NautilusFrame } from '@joyautomation/nautilus-hmi';
-	import { SceneView, DEFAULT_PALETTE, paletteFromTheme, type SceneCamera, type Palette } from '@joyautomation/nautilus-hmi-3d';
+	import { SceneView, AlarmKey, DEFAULT_PALETTE, paletteFromTheme, type SceneCamera, type Palette } from '@joyautomation/nautilus-hmi-3d';
 	import { Server, PartFaceplate, resolveParts, validateProfile, anchorPayload, OVERLAYS, cablesOverlay, linkOnPort, linkFacts, overlayColors, type ChassisProfile, type OverlayContext } from '@joyautomation/nautilus-hmi-3d/hardware';
 	import QRCode from 'qrcode';
 	import sys112b from '@joyautomation/nautilus-hmi-3d/profiles/supermicro-sys-112b-wr.json';
@@ -108,6 +108,12 @@
 <svelte:head><title>node1 · 3D</title></svelte:head>
 
 <ReplayClock />
+{#if (alarms.summary?.active ?? 0) > 0}
+	<aside class="alarmkey" aria-label="What the alarm signs mean">
+		<b>{alarms.summary?.active} in alarm</b>
+		<AlarmKey {palette} />
+	</aside>
+{/if}
 
 <div class="stage">
 	{#if problems.length}
@@ -236,5 +242,21 @@
 		top: 12px;
 		z-index: 2;
 		color: var(--crit, #d03b3b);
+	}
+	/* The alarm signs' key, while anything is in alarm: top right, clear of
+	   the toolbar and the overlay legend. */
+	.alarmkey {
+		position: fixed;
+		top: 12px;
+		right: 12px;
+		z-index: 5;
+		display: grid;
+		gap: 6px;
+		padding: 8px 10px;
+		border-radius: 8px;
+		border: 1px solid var(--axis, #383835);
+		background: color-mix(in srgb, var(--surface, #1a1a19) 90%, transparent);
+		color: var(--ink, #e8e6e1);
+		font: 12px/1.3 system-ui, sans-serif;
 	}
 </style>

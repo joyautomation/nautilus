@@ -23,6 +23,7 @@
 	import type { NodeProps, Box } from '../registry.js';
 	import { DEFAULT_PALETTE, type Palette } from '../palette.js';
 	import Halo from './Halo.svelte';
+	import AlarmMarker from './AlarmMarker.svelte';
 	import Label from './Label.svelte';
 	import Pipe from './Pipe.svelte';
 	import Self from './Node.svelte';
@@ -39,6 +40,7 @@
 		bind,
 		status,
 		bounds: box,
+		marker = true,
 		children
 	}: {
 		id?: string;
@@ -56,6 +58,10 @@
 		/** The halo and selection box when no kind supplies one, or when this
 		 * node's size is its own (a part sized by a chassis profile). */
 		bounds?: Box;
+		/** Float the alarm sign over the node while it is in alarm (the halo
+		 * shows either way). Off where a wider marker speaks for it: a
+		 * server's chassis, whose marker rolls up every part. */
+		marker?: boolean;
 		/** Render anything with the node's props instead of the kind's component. */
 		children?: Snippet<[NodeProps]>;
 	} = $props();
@@ -174,6 +180,9 @@
 		{/if}
 		{#if alarm}
 			<Halo size={bounds.size} center={bounds.center} priority={alarm.priority} unacked={alarm.unacked} />
+			{#if marker}
+				<AlarmMarker at={[bounds.center[0], bounds.center[1] + bounds.size[1] / 2 + 0.012, bounds.center[2]]} priority={alarm.priority} unacked={alarm.unacked} />
+			{/if}
 		{:else if isSel}
 			<T.Mesh position={bounds.center}>
 				<T.BoxGeometry args={bounds.size} />
