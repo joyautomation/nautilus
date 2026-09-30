@@ -11,7 +11,7 @@ import { validateProfile, resolveParts, type ChassisProfile } from '../src/lib/h
 import { checkLink, neighbourhood, focusFade, linkAt, linkTags, portPart, resolveEnd, readEnd, linkFacts, type Plant, type Topology } from '../src/lib/hardware/topology.js';
 import { cablesOverlay, interfacesOverlay, identifyOverlay, identify, type OverlayColors } from '../src/lib/hardware/overlay.js';
 import { meshLayout } from '../src/lib/hardware/mesh.js';
-import { placeDevice, endInRack, cablePath, RACK_U_MM, type RackLayout } from '../src/lib/hardware/rack.js';
+import { placeDevice, endInRack, cablePath, holeYs, uY, RACK_U_MM, EAR_X, RAIL_X, HOLE_X, type RackLayout } from '../src/lib/hardware/rack.js';
 
 const server = sys112b as unknown as ChassisProfile;
 const sw = s3900 as unknown as ChassisProfile;
@@ -241,5 +241,21 @@ describe('the identify overlay', () => {
 	it('a fitted part no driver reports is named from the profile; empty positions stay faint', () => {
 		expect(identifyOverlay.paint(byId('slot1'), undefined, ctx)).toEqual({ color: '#2fa38f', text: 'AOC-SLG4-2H8M2' });
 		expect(identifyOverlay.paint(byId('bay5'), undefined, ctx).dim).toBe(true);
+	});
+});
+
+describe('mounting', () => {
+	const r = { units: 24, depth: 700, base: 60, devices: [] } as RackLayout;
+	it('three holes per unit, at the EIA-310 heights, from U1 up', () => {
+		const h = holeYs(r);
+		expect(h.length).toBe(72);
+		expect(h.slice(0, 3).map((y) => +(y * 1000).toFixed(3))).toEqual([66.35, 82.225, 98.1]);
+		expect(+((h[3] - h[0]) * 1000).toFixed(2)).toBe(RACK_U_MM);
+		expect(h[71] < uY(r, 25)).toBe(true);
+	});
+	it('19-inch: the ears reach past the rails’ opening, the holes between', () => {
+		expect(+(EAR_X * 2000).toFixed(1)).toBe(482.6);
+		expect(RAIL_X < HOLE_X && HOLE_X < EAR_X).toBe(true);
+		expect(RAIL_X * 2 > 0.44).toBe(true); // a 440 mm switch slides through
 	});
 });

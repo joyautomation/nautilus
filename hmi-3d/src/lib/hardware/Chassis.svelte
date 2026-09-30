@@ -10,6 +10,7 @@
 	import { T } from '@threlte/core';
 	import { Euler, ExtrudeGeometry, Matrix4, Mesh, NearestFilter, Path, SRGBColorSpace, Shape, TextureLoader, Vector3, type Texture } from 'three';
 	import { faceHoles, mm, type ChassisProfile } from './profile.js';
+	import { EAR_T, EAR_X, HOLE_X, RACK_U_MM, U_HOLES } from './rack.js';
 	import type { Vec3 } from '../scene.js';
 
 	let {
@@ -50,6 +51,15 @@
 	let cover = $derived((profile.shell?.frontCover ?? 0) / 1000);
 	let fixtures = $derived((profile.fixtures ?? []).map((f) => ({ pos: mm(f.pos), size: mm(f.size) })));
 	let backplane = $derived(profile.backplane ? { pos: mm(profile.backplane.pos), size: mm(profile.backplane.size) } : undefined);
+
+	// The rack ears: a 19-inch device's flanges reach past its body to
+	// 482.6 mm across, in front of the rack's mounting rails, bolted
+	// through the first and last hole of its units.
+	let rackEar = $derived(W < 2 * EAR_X - 0.001 ? EAR_X - W / 2 : 0);
+	let bolts = $derived.by(() => {
+		const units = Math.max(1, Math.round((H * 1000) / RACK_U_MM));
+		return [U_HOLES[0], (units - 1) * RACK_U_MM + U_HOLES[2]].map((y) => y / 1000);
+	});
 
 	// The faceplates: a plate the size of the face, its openings cut out,
 	// extruded one wall thick. The front sits just behind the ears (whose
@@ -134,6 +144,21 @@
 <T.Mesh geometry={rear} position={[0, 0, -D]} raycast={noRaycast}>
 	<T.MeshStandardMaterial {...shell} />
 </T.Mesh>
+<!-- rack ears and their bolts -->
+{#if rackEar > 0}
+	{#each [-1, 1] as side}
+		<T.Mesh position={[side * (W / 2 + rackEar / 2), H / 2, -EAR_T / 2]} raycast={noRaycast}>
+			<T.BoxGeometry args={[rackEar, H, EAR_T]} />
+			<T.MeshStandardMaterial {...shell} />
+		</T.Mesh>
+		{#each bolts as y}
+			<T.Mesh position={[side * HOLE_X, y, 0.0012]} rotation={[Math.PI / 2, 0, 0]} raycast={noRaycast}>
+				<T.CylinderGeometry args={[0.0045, 0.0045, 0.0024, 16]} />
+				<T.MeshStandardMaterial color="#b9bcc0" metalness={0.8} roughness={0.3} transparent={opacity < 1} {opacity} />
+			</T.Mesh>
+		{/each}
+	{/each}
+{/if}
 {#if board}
 	<T.Mesh position={board.pos} raycast={noRaycast}>
 		<T.BoxGeometry args={board.size} />

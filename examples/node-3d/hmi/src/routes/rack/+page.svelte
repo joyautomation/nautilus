@@ -9,10 +9,11 @@
 	import { Tween } from 'svelte/motion';
 	import { cubicOut } from 'svelte/easing';
 	import { RealtimeClient, createAlarmClient, type NautilusFrame } from '@joyautomation/nautilus-hmi';
-	import { SceneView, DEFAULT_PALETTE, paletteFromTheme, type SceneCamera, type Palette, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
+	import { SceneView, Fade, DEFAULT_PALETTE, paletteFromTheme, type SceneCamera, type Palette, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
 	import {
 		Server,
 		Rack,
+		SlideRails,
 		Cable,
 		NetworkMesh,
 		PartFaceplate,
@@ -331,6 +332,9 @@
 		{#each devices as d (d.id)}
 			{@const on = focus === d.tag}
 			{@const fade = focusFade(topology, focused?.id, d.id)}
+			<Fade amount={fade}>
+				<SlideRails place={d.place} size={d.profile.size.map((v) => v / 1000) as Vec3} depth={D} slide={slides.get(d.id)?.current ?? 0} />
+			</Fade>
 			<Server
 				profile={d.profile}
 				node={d.tag}

@@ -46,6 +46,21 @@ export interface Placement {
 
 export const uY = (r: RackLayout, u: number) => ((r.base ?? 60) + (u - 1) * RACK_U_MM) / 1000;
 
+// The 19-inch mounting geometry (EIA-310), metres from the rack's centre.
+/** A rack-mount device's ears reach this far out (482.6 mm across). */
+export const EAR_X = 0.2413;
+/** The mounting rails' inner edge: the opening a chassis slides through (450.8 mm). */
+export const RAIL_X = 0.2254;
+/** The rails' hole centres (465.1 mm apart). */
+export const HOLE_X = 0.23255;
+/** The ears are this thick, in front of the rails (z from -EAR_T to 0). */
+export const EAR_T = 0.003;
+/** A unit's three holes, mm above the unit's bottom. */
+export const U_HOLES = [6.35, 22.225, 38.1];
+/** Every mounting hole's height in the rack, metres: three per unit. */
+export const holeYs = (r: RackLayout): number[] =>
+	Array.from({ length: r.units }, (_, i) => U_HOLES.map((h) => uY(r, i + 1) + h / 1000)).flat();
+
 export function placeDevice(r: RackLayout, d: RackDevice): Placement {
 	return d.face === 'rear' ? { pos: [0, uY(r, d.u), -r.depth / 1000], rotY: 180 } : { pos: [0, uY(r, d.u), 0], rotY: 0 };
 }

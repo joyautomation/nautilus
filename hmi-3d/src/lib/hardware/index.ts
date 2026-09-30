@@ -13,6 +13,7 @@ export { default as Port } from './Port.svelte';
 export { default as PartModel, loadPart } from './PartModel.svelte';
 export { default as PartFaceplate } from './PartFaceplate.svelte';
 export { default as Rack } from './Rack.svelte';
+export { default as SlideRails } from './SlideRails.svelte';
 export { default as Cable } from './Cable.svelte';
 export { default as NetworkMesh } from './NetworkMesh.svelte';
 export {
@@ -43,7 +44,7 @@ export type { PartLook } from './look.js';
 export type { PartProps } from './types.js';
 export { checkLink, checkAll, neighbourhood, focusFade, linkTags, linkAt, linkFacts, resolveEnd, readEnd, parseEnd, portPart, portName, deviceById, deviceByTag, VERDICT_MARK } from './topology.js';
 export type { Topology, TopoDevice, TopoLink, Plant, PortRef, End, Reading, Verdict, LinkCheck } from './topology.js';
-export { RACK_U_MM, uY, placeDevice, toRack, portMouth, endInRack, cablePath } from './rack.js';
+export { RACK_U_MM, uY, placeDevice, toRack, portMouth, endInRack, cablePath, holeYs, EAR_X, RAIL_X, HOLE_X, EAR_T, U_HOLES } from './rack.js';
 export type { RackLayout, RackDevice, Placement } from './rack.js';
 export { meshLayout } from './mesh.js';
 export type { MeshNode, MeshEdge } from './mesh.js';
