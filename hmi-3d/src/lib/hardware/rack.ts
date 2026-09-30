@@ -92,22 +92,36 @@ export function endInRack(r: RackLayout, profileOf: (id: string) => ChassisProfi
 
 const add = (a: Vec3, b: Vec3, k = 1): Vec3 => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
 
+/** Cable lanes run this far out from the rack's centre: outside the posts. */
+export const LANE_X = EAR_X + 0.026;
+
 /**
- * A cable's path between two port mouths: straight out of each port, then
- * along a lane down the side of the rack (the side nearer both ends), so
- * cables run where a tidy rack runs them instead of through the chassis.
- * `lane` spreads cables in the same lane apart. `b` undefined leaves the
- * rack through the top (a site uplink).
+ * A cable's path between two port mouths, the way a tidy rack is cabled:
+ * straight out of each port until it clears the rack's frame (in front of
+ * the front posts, or behind the rear ones), across to a lane outside the
+ * posts on the side nearer both ends, and along the outside of the rack to
+ * the other end — never through the rack. A port already clear of the
+ * rack (on a device slid out) just comes straight out of it. `lane`
+ * spreads cables in the same lane apart. `b` undefined leaves up the side
+ * and out of the top (a site uplink).
  */
-export function cablePath(r: RackLayout, a: { at: Vec3; out: Vec3 }, b: { at: Vec3; out: Vec3 } | undefined, lane = 0, halfWidth = 0.226): Vec3[] {
+export function cablePath(r: RackLayout, a: { at: Vec3; out: Vec3 }, b: { at: Vec3; out: Vec3 } | undefined, lane = 0, halfWidth = LANE_X): Vec3[] {
+	const D = r.depth / 1000;
 	const reach = 0.035 + lane * 0.004;
-	const a1 = add(a.at, a.out, reach);
+	const clear = (e: { at: Vec3; out: Vec3 }): Vec3 => {
+		const z = e.at[2];
+		const inside = z < 0.001 && z > -D - 0.001;
+		if (!inside) return add(e.at, e.out, reach);
+		const to = e.out[2] > 0 ? reach : -D - reach;
+		return [e.at[0], e.at[1], to];
+	};
+	const a1 = clear(a);
 	if (!b) {
 		const top = uY(r, r.units + 1) + 0.15;
-		const side = (a.at[0] >= 0 ? 1 : -1) * (halfWidth + lane * 0.003);
+		const side = (a.at[0] >= 0 ? 1 : -1) * (halfWidth + lane * 0.005);
 		return [a.at, a1, [side, a1[1], a1[2]], [side, top, a1[2]]];
 	}
-	const b1 = add(b.at, b.out, reach);
-	const side = (a.at[0] + b.at[0] >= 0 ? 1 : -1) * (halfWidth + lane * 0.003);
+	const b1 = clear(b);
+	const side = (a.at[0] + b.at[0] >= 0 ? 1 : -1) * (halfWidth + lane * 0.005);
 	return [a.at, a1, [side, a1[1], a1[2]], [side, b1[1], b1[2]], b1, b.at];
 }

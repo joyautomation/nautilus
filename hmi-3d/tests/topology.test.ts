@@ -11,7 +11,7 @@ import { validateProfile, resolveParts, type ChassisProfile } from '../src/lib/h
 import { checkLink, neighbourhood, focusFade, linkAt, linkTags, portPart, resolveEnd, readEnd, linkFacts, type Plant, type Topology } from '../src/lib/hardware/topology.js';
 import { cablesOverlay, interfacesOverlay, identifyOverlay, identify, type OverlayColors } from '../src/lib/hardware/overlay.js';
 import { meshLayout } from '../src/lib/hardware/mesh.js';
-import { placeDevice, endInRack, cablePath, holeYs, uY, RACK_U_MM, EAR_X, RAIL_X, HOLE_X, type RackLayout } from '../src/lib/hardware/rack.js';
+import { placeDevice, endInRack, cablePath, LANE_X, holeYs, uY, RACK_U_MM, EAR_X, RAIL_X, HOLE_X, type RackLayout } from '../src/lib/hardware/rack.js';
 
 const server = sys112b as unknown as ChassisProfile;
 const sw = s3900 as unknown as ChassisProfile;
@@ -171,14 +171,26 @@ describe('the rack', () => {
 		expect(Math.abs(s.at[2] - -0.7) < 1e-9).toBe(true);
 		expect(Math.abs(s.at[0] - -0.12) < 1e-9).toBe(true);
 	});
-	it('a cable leaves each port straight, then runs down the nearer side', () => {
+	it('a cable goes round the rack, never through it', () => {
 		const a = endInRack(layout, profileOf, 'node1', 'nicSlot2p2')!;
 		const b = endInRack(layout, profileOf, 'sw1', 'te0/25')!;
 		const p = cablePath(layout, a, b);
 		expect(p.length).toBe(6);
-		expect(p[2][0]).toBe(-0.226);
-		expect(p[3][0]).toBe(-0.226);
+		// out of the server's rear port until behind the rear posts
+		expect(p[1][0]).toBe(a.at[0]);
+		expect(p[1][2] < -0.7).toBe(true);
+		// the side run is outside the posts
+		expect(p[2][0]).toBe(-LANE_X);
+		expect(p[3][0]).toBe(-LANE_X);
+		expect(LANE_X > EAR_X + 0.006).toBe(true);
 		expect(cablePath(layout, a, undefined).length).toBe(4);
+	});
+	it('a front port clears the front of the rack; one on a device slid out just comes straight out', () => {
+		const front = { at: [0.1, 1, 0] as [number, number, number], out: [0, 0, 1] as [number, number, number] };
+		const rear = { at: [0.1, 1, -0.6] as [number, number, number], out: [0, 0, -1] as [number, number, number] };
+		expect(cablePath(layout, front, rear)[1][2] > 0).toBe(true);
+		const slid = { at: [0.1, 1, 0.3] as [number, number, number], out: [0, 0, -1] as [number, number, number] };
+		expect(+cablePath(layout, slid, rear)[1][2].toFixed(3)).toBe(0.265);
 	});
 });
 
