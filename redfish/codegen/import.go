@@ -278,8 +278,13 @@ func (im *importer) run() (Output, error) {
 	server.constant("PsuCount", len(psus))
 	server.constant("TempCount", len(temps))
 
+	parts, err := im.parts(root, sys, temps)
+	if err != nil {
+		return Output{}, err
+	}
+
 	im.add(server)
-	for _, list := range [][]*tagB{fans, psus, temps} {
+	for _, list := range [][]*tagB{fans, psus, temps, parts} {
 		for _, t := range list {
 			im.add(t)
 		}
