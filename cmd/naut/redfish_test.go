@@ -176,6 +176,7 @@ func TestRedfishUsageErrors(t *testing.T) {
 		{"import", "--host", "https://bmc1"},
 		{"browse"},
 		{"serve"},
+		{"serve", "--mockup", "x", "--from", "http://127.0.0.1:8087"}, // --from without --manifest
 		{"tags"},
 	} {
 		_, code := captureRun(t, func() int { return runRedfish(args) })
@@ -189,5 +190,29 @@ func TestRedfishUsageErrors(t *testing.T) {
 	})
 	if code != 1 {
 		t.Errorf("bad tag: code %d", code)
+	}
+}
+
+// --manifest/--source pick the BMC a plant-fed stand-in is, and it listens
+// where the monitoring project polls it.
+func TestRedfishServePlantSource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m.yaml")
+	two := `sources:
+  - {id: NODE1, host: "http://127.0.0.1:8001"}
+  - {id: NODE2, host: "http://127.0.0.1:8002"}
+tags:
+  - {name: NODE2, type: Server, source: NODE2, resource: /redfish/v1/Systems/1, members: {PowerOn: {path: PowerState, eq: "On"}}}
+`
+	if err := os.WriteFile(path, []byte(two), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, src, host, err := loadRedfishPlant(path, "NODE2"); err != nil || src != "NODE2" || host != "127.0.0.1:8002" {
+		t.Fatalf("NODE2: %q %q %v", src, host, err)
+	}
+	if _, _, _, err := loadRedfishPlant(path, ""); err == nil || !strings.Contains(err.Error(), "--source") {
+		t.Fatalf("two sources and no --source: %v", err)
+	}
+	if _, _, _, err := loadRedfishPlant(path, "NODE9"); err == nil {
+		t.Fatal("an unknown --source must be an error")
 	}
 }

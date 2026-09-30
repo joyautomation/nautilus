@@ -108,3 +108,51 @@ func TestPathParseErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestPathMap(t *testing.T) {
+	doc := func() any {
+		var d any
+		dec := json.NewDecoder(strings.NewReader(`{"Status":{"Health":"OK"},
+		  "Temps":[{"Name":"CPU","Reading":50},{"Name":"Inlet","Reading":24},{"Name":"DIMM","Reading":40}]}`))
+		dec.UseNumber()
+		_ = dec.Decode(&d)
+		return d
+	}
+	set := func(src string, v any) []any {
+		t.Helper()
+		d := doc()
+		p, err := ParsePath(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Map(d, func(int, any) any { return v }); err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		got, err := p.Eval(d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := set("Status.Health", "Critical"); len(got) != 1 || got[0] != any("Critical") {
+		t.Fatalf("plain: %v", got)
+	}
+	if got := set("Temps[Name=Inlet].Reading", 35.5); len(got) != 1 || got[0] != 35.5 {
+		t.Fatalf("selector: %v", got)
+	}
+	if got := set("Status.State", "Enabled"); len(got) != 1 {
+		t.Fatalf("a missing leaf is created: %v", got)
+	}
+	if got := set("Temps[*].Reading", 1); len(got) != 3 {
+		t.Fatalf("wildcard: %v", got)
+	}
+	if got := set("Temps[Name=CPU].Reading", Deleted); len(got) != 0 {
+		t.Fatalf("delete: %v", got)
+	}
+	for _, bad := range []string{"Temps[Name=GPU].Reading", "Missing.Reading", "Status.Health.Deeper"} {
+		p, _ := ParsePath(bad)
+		if err := p.Map(doc(), func(int, any) any { return 1 }); !errors.Is(err, ErrNoTarget) {
+			t.Errorf("%s: want ErrNoTarget, got %v", bad, err)
+		}
+	}
+}

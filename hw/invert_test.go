@@ -92,7 +92,10 @@ func TestInvertRefuses(t *testing.T) {
 	if _, err := (Binding{Map: map[string]any{"1": 0}}).Invert(Field{Name: "Health", Kind: ir.TypeInt}, ir.IntVal(2), RawIntVal(1)); err == nil {
 		t.Fatal("a value no map key reads must be an error")
 	}
-	if _, err := (Binding{Eq: "On"}).Invert(boolF, ir.BoolVal(false), RawStringVal("On")); err == nil {
-		t.Fatal("eq on a string cannot invent the false value")
+	if _, err := (Binding{Eq: "Rebooting"}).Invert(boolF, ir.BoolVal(false), RawStringVal("Rebooting")); err == nil {
+		t.Fatal("eq on an unknown string cannot invent the false value")
+	}
+	if r, err := (Binding{Eq: "On"}).Invert(boolF, ir.BoolVal(false), RawStringVal("On")); err != nil || r.S != "Off" {
+		t.Fatalf("PowerState On, false: %+v %v", r, err)
 	}
 }

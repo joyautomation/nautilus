@@ -54,6 +54,9 @@ func (b Binding) Invert(f Field, v ir.Value, cur Raw) (Raw, error) {
 		case bool:
 			return rawLike(cur, strconv.FormatBool(!x))
 		case string:
+			if not, ok := complements[x]; ok {
+				return rawLike(cur, not)
+			}
 			return Raw{}, fmt.Errorf("member %s: eq %q: no wire value is known to read false", f.Name, x)
 		}
 		if n, err := strconv.ParseInt(eq, 10, 64); err == nil {
@@ -106,6 +109,16 @@ func (b Binding) Invert(f Field, v ir.Value, cur Raw) (Raw, error) {
 		return RawFloatVal(fv), nil
 	}
 	return rawLike(cur, strconv.FormatFloat(fv, 'g', -1, 64))
+}
+
+// complements are the string enums eq: is used on, with the value a device
+// reports for "not that": DMTF PowerState and State, link and presence.
+var complements = map[string]string{
+	"On": "Off", "Off": "On",
+	"Enabled": "Disabled", "Disabled": "Enabled",
+	"LinkUp": "LinkDown", "LinkDown": "LinkUp",
+	"Up": "Down", "Down": "Up",
+	"Present": "Absent", "Absent": "Present",
 }
 
 // rawLike parses key into cur's kind: the wire value a device of this

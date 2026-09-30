@@ -20,6 +20,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -48,6 +50,11 @@ Usage:
         addresses: review it before committing).
   naut redfish serve --mockup dir [flags]
         Serve a recording (or any DMTF mockup) as a stand-in BMC.
+  naut redfish serve --mockup dir --manifest redfish_manifest.yaml
+        --source NODE1 --from http://127.0.0.1:8087
+        Stand in for the BMC from a plant simulation: every member the
+        manifest binds is written into its resource from the plant's live
+        tag (NODE1_Fan3.RPM), read backwards; the rest from the recording.
   naut redfish tags <redfish_manifest.yaml> [-o tags/redfish.yaml]
         Re-derive the tag file from a committed manifest.
 
@@ -82,6 +89,13 @@ Serve flags:
   --auth          none (default) | session | basic — what the stand-in demands
   --user          account the stand-in accepts (with --auth)
   --password-env  variable holding the password it accepts
+  --from          a plant controller's URL: serve its tags (polls /api/state)
+  --manifest      the redfish_manifest.yaml the monitoring project polls with
+                  (required with --from: the bindings, read backwards)
+  --source        the manifest source this BMC is (default: the only one);
+                  --listen defaults to its host
+  --every         how often to read the plant (default 1s)
+                  The root tag's Online false takes the BMC off the network.
 `
 
 func runRedfish(args []string) int {
@@ -385,6 +399,10 @@ func runRedfishServe(args []string) int {
 	auth := fs.String("auth", "none", "none | session | basic")
 	user := fs.String("user", "", "account the stand-in accepts")
 	passEnv := fs.String("password-env", "", "variable holding the password it accepts")
+	from := fs.String("from", "", "plant controller URL to serve tags from")
+	manifestPath := fs.String("manifest", "", "the monitoring project's redfish_manifest.yaml")
+	sourceID := fs.String("source", "", "which manifest source this BMC is")
+	every := fs.Duration("every", time.Second, "plant poll period")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -392,16 +410,78 @@ func runRedfishServe(args []string) int {
 		fmt.Fprintln(os.Stderr, "naut redfish serve: --mockup is required")
 		return 2
 	}
+	var plantM *redfish.Manifest
+	var plantSrc string
+	if *from != "" || *manifestPath != "" {
+		if *from == "" || *manifestPath == "" {
+			fmt.Fprintln(os.Stderr, "naut redfish serve: --from and --manifest go together")
+			return 2
+		}
+		m, src, host, err := loadRedfishPlant(*manifestPath, *sourceID)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut redfish serve:", err)
+			return 1
+		}
+		plantM, plantSrc = &m, src
+		listenSet := false
+		fs.Visit(func(f *flag.Flag) { listenSet = listenSet || f.Name == "listen" })
+		if !listenSet {
+			*listen = host
+		}
+	}
 	srv, err := startRedfishServe(*dir, *listen, *auth, *user, *passEnv, os.Stdout)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut redfish serve:", err)
 		return 1
 	}
 	defer srv.Stop()
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
-	<-ch
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if plantM != nil {
+		p, err := redfish.NewPlant(srv, *plantM, plantSrc)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut redfish serve:", err)
+			return 1
+		}
+		p.Log = slog.New(slog.NewTextHandler(os.Stdout, nil))
+		fmt.Printf("serving %d bound member(s) of %s from %s (every %s)\n", len(p.Feeds), plantSrc, *from, *every)
+		go p.Run(ctx, redfish.StateFetcher(*from, plantM.TagPatterns(plantSrc)), *every)
+	}
+	<-ctx.Done()
 	return 0
+}
+
+// loadRedfishPlant reads --manifest and resolves --source (default: the
+// only one) and the address its host: names, which --listen defaults to.
+func loadRedfishPlant(path, source string) (redfish.Manifest, string, string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return redfish.Manifest{}, "", "", err
+	}
+	m, err := redfish.ParseManifest(raw)
+	if err != nil {
+		return redfish.Manifest{}, "", "", fmt.Errorf("%s: %w", path, err)
+	}
+	if source == "" {
+		if len(m.Sources) != 1 {
+			ids := make([]string, len(m.Sources))
+			for i, s := range m.Sources {
+				ids[i] = s.ID
+			}
+			return m, "", "", fmt.Errorf("%s has %d sources (%s): name one with --source", path, len(m.Sources), strings.Join(ids, ", "))
+		}
+		source = m.Sources[0].ID
+	}
+	for _, s := range m.Sources {
+		if s.ID == source {
+			u, err := url.Parse(s.Host)
+			if err != nil || u.Host == "" {
+				return m, "", "", fmt.Errorf("%s: source %s: host %q is not a URL", path, source, s.Host)
+			}
+			return m, source, u.Host, nil
+		}
+	}
+	return m, "", "", fmt.Errorf("%s: no source %q", path, source)
 }
 
 // startRedfishServe stands the mockup up; package-level so the test drives
