@@ -78,6 +78,9 @@ func TestImportParts(t *testing.T) {
 				res = tg.Resource
 			}
 			tags[tg.Name][m] = res + "#" + b.Path
+			if b.Derived != "" {
+				tags[tg.Name][m] = "#"
+			}
 			if b.Const != nil {
 				tags[tg.Name][m] = "const"
 			}
@@ -87,6 +90,7 @@ func TestImportParts(t *testing.T) {
 		{"NODE1_Drive_NVMe0", "Present", "/redfish/v1/Chassis/BP/Drives/0#Status.State"},
 		{"NODE1_Drive_NVMe0", "CapacityGB", "/redfish/v1/Chassis/BP/Drives/0#CapacityBytes"},
 		{"NODE1_Drive_NVMe0", "Bay", "const"},
+		{"NODE1_Drive_NVMe0", "Fault", "#"}, // derived
 		{"NODE1_Cpu1", "TempC", "/redfish/v1/Chassis/1/Sensors/CPUTemp#Reading"},
 		{"NODE1_Pcie_Slot3", "TempC", "/redfish/v1/Chassis/1/Sensors/NIC3#Reading"},
 		{"NODE1_Nic_Slot3_P1", "SpeedGbps", "/redfish/v1/Chassis/1/NetworkAdapters/2/Ports/1#CurrentSpeedGbps"},
@@ -97,8 +101,10 @@ func TestImportParts(t *testing.T) {
 			t.Errorf("%s.%s = %q, want %q", c.tag, c.member, got, c.want)
 		}
 	}
-	// The generated bindings resolve against the tree they came from.
 	for _, tg := range out.Manifest.Tags {
+		if tg.Name == "NODE1_Drive_NVMe0" && tg.Members["Fault"].Derived != "Health > 0 || !Present" {
+			t.Errorf("a pulled drive is a fault: %q", tg.Members["Fault"].Derived)
+		}
 		if tg.Name == "NODE1_Nic_LAN1" {
 			if _, ok := tg.Members["LinkUp"]; ok {
 				t.Error("an interface with no LinkStatus has no LinkUp binding")

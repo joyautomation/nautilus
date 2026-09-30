@@ -33,20 +33,63 @@ naut run .     # the plant on http://localhost:8087
 
 ## Faults are tags
 
-Each is an input: it bends what it should, composes with the others, and
-clearing it restores the recording.
+Each is an input (all in `tags/faults.yaml`): it bends what it should,
+composes with the others, and clearing it restores the recording. A cable is
+worked out from both ends, so a fault at either end, or the cable itself,
+takes both ends down.
 
 | Tag | Effect |
 |---|---|
-| `Sim_SW1_Port25.Down` | link lost: `OperUp` false, no traffic, `AdminUp` stays true, so the monitor raises "link down" |
-| `Sim_SW1_Port25.AdminDown` | shut by an operator: `AdminUp` and `OperUp` false, no alarm |
-| `Sim_SW1_Port25.SpeedMbps` | negotiated speed override (10000 → 1000), traffic capped to the line; 0 = as recorded |
+| `Sim_SW1_Port25.Down` | link lost: `OperUp` false, no traffic, `AdminUp` stays true (the monitor raises "link down"), and the server port at the other end loses link too |
+| `Sim_SW1_Port25.AdminDown` | shut by an operator: `AdminUp` and `OperUp` false, no alarm; the far end loses link |
+| `Sim_SW1_Port25.SpeedMbps` | negotiated speed override (10000 → 1000) at both ends, traffic capped to the line; 0 = as recorded |
 | `Sim_SW1_Port25.ErrorRate` | errors per second added to the recording |
-| `Sim_SW1.Dark` | the switch goes dark: every port down, and its stand-in stops answering |
+| `Sim_Cable_SW3_Port25.Pulled` | the cable itself: both ends down |
+| `Sim_SW1.Dark` / `.Reboot` | the switch goes dark (its stand-in stops answering) / reboots: dark for 90 s, back with its uptime reset |
+| `Sim_NODE2.CpuLoad` | % busy, 0 = as recorded: power and the thermal model follow |
+| `Sim_NODE2.PowerOff` / `.Dark` | host off (standby power, fans stop, temperatures fall to the inlet, links drop) / the BMC stops answering |
+| `Sim_NODE1_Fan3.Fail` | the fan stops; the others ramp; temperatures climb |
+| `Sim_NODE1_PSU2.InputLost` / `.Fail` | output 0, the other supply carries the load, the server stays up |
+| `Sim_NODE3_Drive_NVMe2.Pulled` / `.Failing` | `Present` false / `PredictedFailure` and health Warning |
+| `Sim_NODE1_Nic_Slot2_P1.Down` | the server's port loses link (and the far end) |
+| `Sim_Room.InletDeltaC` | the room runs hot: every inlet, and everything behind it, rises |
 
 ```sh
 curl -X POST localhost:8087/api/tags -d '{"name":"Sim_SW1_Port25.Down","value":true}'
 ```
+
+The thermal model (`lib/server.st`) is first order: each sensor heads for its
+recording plus its share of the CPU's rise (load, failed fans, less what the
+ramping fans take back) plus the room, with a 60 s time constant, so a
+failure makes temperatures climb rather than jump. Every number that shapes
+it is a named constant there, to tune against a real box.
+
+## Named scenarios
+
+`Scenario` (a STRING) sets a preset of fault inputs, so a demo is one write
+(`scenarios.st`). Presets only set inputs, so they compose; `normal` clears
+every fault (so does the `ClearFaults` pulse).
+
+| Scenario | Sets |
+|---|---|
+| `port-down` | `Sim_SW2_Port26.Down` (node1 slot 3 port 2 at the far end) |
+| `cable-pull` | `Sim_Cable_SW3_Port25.Pulled` |
+| `mesh-cable-pull` | `Sim_Cable_NODE1_Nic_Slot2_P1.Pulled` (node1 to node2) |
+| `speed-degrade` | `Sim_SW1_Port25.SpeedMbps := 1000` |
+| `error-burst` | `Sim_SW2_Port25.ErrorRate := 50` |
+| `switch-down` / `switch-reboot` | `Sim_SW3.Dark` / `Sim_SW3.Reboot` |
+| `cpu-overheat` | `Sim_NODE2.CpuLoad := 100`, fans 3 and 4 fail: HighHigh in about 3 min |
+| `fan-fail` | `Sim_NODE1_Fan3.Fail` |
+| `psu-loss` | `Sim_NODE1_PSU2.InputLost` |
+| `drive-pull` / `drive-failing` | `Sim_NODE3_Drive_NVMe2.Pulled` / `Sim_NODE3_Drive_NVMe1.Failing` |
+| `hot-room` | `Sim_Room.InletDeltaC := 15` |
+| `node-off` / `bmc-dark` | `Sim_NODE2.PowerOff` / `Sim_NODE3.Dark` |
+
+```sh
+curl -X POST localhost:8087/api/tags -d '{"name":"Scenario","value":"cpu-overheat"}'
+```
+
+`it-cluster_test.yaml` runs every scenario in virtual time.
 
 ## The replay clock is tags too
 
@@ -78,6 +121,5 @@ through the manifest, offline); hostnames and serials are replaced.
 python3 gen.py --dataset <dataset> --monitor <monitoring project>
 ```
 
-Servers, fans, PSUs and temperatures are recorded (`Rec_NODE1_Fan3`, …) but
-not yet served: `naut redfish serve --from` is next, then a thermal model and
-the named scenarios.
+`naut redfish serve --from` serves the servers the same way, through the
+monitoring project's `redfish_manifest.yaml`.

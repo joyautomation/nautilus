@@ -14,7 +14,8 @@ TYPE
     ErrorRate : REAL; (* extra errors per second on top of the recording *)
   END_STRUCT;
   SimSwitch : STRUCT
-    Dark : BOOL; (* the switch stops answering: every port down, the agent silent *)
+    Dark   : BOOL; (* the switch stops answering: every port down, the agent silent *)
+    Reboot : BOOL; (* a pulse: dark for RebootS, then back with its uptime reset; clears itself *)
   END_STRUCT;
 END_TYPE
 
@@ -29,6 +30,7 @@ VAR_INPUT
   F    : SimPort;    (* this port's faults *)
   Dark : BOOL;       (* the switch's *)
   Live : BOOL;       (* the recording is playing *)
+  LinkOk : BOOL := TRUE; (* its cable, from both ends' faults (plant.st); TRUE unwired *)
 END_VAR
 VAR_IN_OUT
   P : SwitchPort;
@@ -50,7 +52,7 @@ IF Live THEN
   B.ErrorRate := Rec.ErrorRate;
 END_IF;
 P.AdminUp := B.AdminUp AND NOT F.AdminDown;
-P.OperUp := B.OperUp AND NOT (F.Down OR F.AdminDown OR Dark);
+P.OperUp := B.OperUp AND LinkOk AND NOT (F.Down OR F.AdminDown OR Dark);
 P.SpeedMbps := B.SpeedMbps;
 P.InBps := B.InBps;
 P.OutBps := B.OutBps;
@@ -73,4 +75,47 @@ ELSE
   P.InPct := 0.0;
   P.OutPct := 0.0;
 END_IF;
+END_FUNCTION_BLOCK
+
+FUNCTION_BLOCK SwitchPlant
+(* The chassis: dark, rebooting, and its uptime, which counts while it is
+   up and starts again from 0 after a reboot. *)
+VAR_INPUT
+  Dt : REAL;
+END_VAR
+VAR_IN_OUT
+  F : SimSwitch;
+  P : Switch;
+END_VAR
+VAR_OUTPUT
+  Down : BOOL; (* dark or rebooting: its ports and their cables are down *)
+END_VAR
+VAR
+  T         : TON;
+  Rebooting : BOOL;
+  Up        : REAL;
+  Init      : BOOL;
+END_VAR
+VAR CONSTANT
+  RebootS : TIME := T#90S;
+END_VAR
+IF NOT Init THEN
+  Up := INT_TO_REAL(P.UptimeS);
+  Init := TRUE;
+END_IF;
+IF F.Reboot THEN
+  Rebooting := TRUE;
+  F.Reboot := FALSE;
+END_IF;
+T(IN := Rebooting, PT := RebootS);
+IF T.Q THEN
+  Rebooting := FALSE;
+  Up := 0.0;
+END_IF;
+Down := F.Dark OR Rebooting;
+IF NOT Down THEN
+  Up := Up + Dt;
+END_IF;
+P.Online := NOT Down;
+P.UptimeS := REAL_TO_INT(Up);
 END_FUNCTION_BLOCK

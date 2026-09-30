@@ -67,14 +67,25 @@ func (im *importer) each(collURI, what string, fn func(uri string, doc map[strin
 }
 
 // partStatus binds Health, Fault and (where the part can be pulled)
-// Present from Status.
+// Present from Status. A part that can be pulled is at fault when it is:
+// an alarm fires on a member going true, and "the drive is gone" is the
+// fault an operator most needs to see.
 func partStatus(t *tagB, uri string, doc map[string]any, present bool) {
-	if has(doc, "Status", "Health") {
+	health := has(doc, "Status", "Health")
+	pull := present && has(doc, "Status", "State")
+	if health {
 		t.bind("Health", uri, "Status.Health", func(b *redfish.MemberBinding) { b.Map = healthMap() })
-		t.derived("Fault", "Health > 0")
 	}
-	if present && has(doc, "Status", "State") {
+	if pull {
 		t.bind("Present", uri, "Status.State", func(b *redfish.MemberBinding) { b.Map = presentMap() })
+	}
+	switch {
+	case health && pull:
+		t.derived("Fault", "Health > 0 || !Present")
+	case health:
+		t.derived("Fault", "Health > 0")
+	case pull:
+		t.derived("Fault", "!Present")
 	}
 }
 

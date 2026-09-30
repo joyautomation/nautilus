@@ -12,7 +12,7 @@ tests:
         expect: { SW1_Port25.OperUp: true, SW1_Port25.InBps: 36400.0, SW1_Port25.SpeedMbps: 10000.0, SW1_Port25.Name: "TGigaEthernet0/25", SW1.Online: true }
 
   - name: while the recording plays, the port follows it and keeps its identity
-    given: { Replay_At: 1790460000, Rec_SW1_Port25.OperUp: true, Rec_SW1_Port25.AdminUp: true, Rec_SW1_Port25.SpeedMbps: 10000.0, Rec_SW1_Port25.InBps: 5000000.0 }
+    given: { Replay_At: 1790460000, Rec_NODE1.PowerOn: true, Rec_SW1_Port25.OperUp: true, Rec_SW1_Port25.AdminUp: true, Rec_SW1_Port25.SpeedMbps: 10000.0, Rec_SW1_Port25.InBps: 5000000.0 }
     steps:
       - advance: 1s
         expect: { SW1_Port25.InBps: 5000000.0, SW1_Port25.InPct: 0.05, SW1_Port25.Name: "TGigaEthernet0/25", SW1_Port25.Index: 189 }
@@ -49,3 +49,99 @@ tests:
       - given: { Sim_SW1.Dark: true }
         advance: 1s
         expect: { SW1.Online: false, SW1_Port25.OperUp: false, SW1_Port01.OperUp: false, SW1.PortsUp: 0, SW2_Port25.OperUp: true }
+
+  # ── the scenarios (scenarios.st): each a write of Scenario, each undone by "normal" ──
+
+  - name: port-down takes the switch port and the server port at the far end down
+    steps:
+      - given: { Scenario: "port-down" }
+        advance: 2s
+        expect: { SW2_Port26.OperUp: false, SW2_Port26.Down: true, NODE1_Nic_Slot3_P2.LinkUp: false, NODE1_Nic_Slot3_P2.SpeedGbps: 0.0 }
+      - given: { Scenario: "normal" }
+        advance: 2s
+        expect: { SW2_Port26.OperUp: true, NODE1_Nic_Slot3_P2.LinkUp: true, Sim_SW2_Port26.Down: false }
+
+  - name: cable-pull drops both ends; the switch end alarms, admin stays up
+    steps:
+      - given: { Scenario: "cable-pull" }
+        advance: 2s
+        expect: { SW3_Port25.OperUp: false, SW3_Port25.AdminUp: true, SW3_Port25.Down: true, NODE3_Nic_Slot3_P2.LinkUp: false, SW3_Port26.OperUp: true }
+
+  - name: speed-degrade renegotiates both ends of the cable
+    steps:
+      - given: { Scenario: "speed-degrade" }
+        advance: 2s
+        expect: { SW1_Port25.SpeedMbps: 1000.0, NODE1_Nic_Slot2_P2.SpeedGbps: 1.0, NODE1_Nic_Slot2_P2.LinkUp: true }
+
+  - name: switch-reboot goes dark for 90 s and comes back with its uptime reset
+    steps:
+      - given: { Scenario: "switch-reboot" }
+        advance: 2s
+        expect: { SW3.Online: false, SW3_Port25.OperUp: false, NODE3_Nic_Slot3_P2.LinkUp: false, Sim_SW3.Reboot: false }
+      - until: 120s
+        expect: { SW3.Online: true }
+      - advance: 1s
+        expect: { SW3_Port25.OperUp: true, NODE3_Nic_Slot3_P2.LinkUp: true, SW3.UptimeS: { lt: 10 } }
+
+  - name: fan-fail stops the fan, the others ramp, the CPU warms but holds
+    steps:
+      - given: { Scenario: "fan-fail" }
+        advance: 2s
+        expect: { NODE1_Fan3.RPM: 0.0, NODE1_Fan3.Fault: true }
+      - advance: 300s
+        expect: { NODE1_Fan1.RPM: { gt: 9940 }, NODE1_Temp_CPU.Value: { between: [66, 75] }, NODE1_Temp_CPU.HighHigh: false }
+
+  - name: cpu-overheat climbs (never jumps) past HighHigh within five minutes
+    steps:
+      - given: { Scenario: "cpu-overheat" }
+        advance: 30s
+        expect: { NODE2_Temp_CPU.Value: { between: [60, 85] }, NODE2_Temp_CPU.HighHigh: false, NODE2.CpuPct: 100.0, NODE2.PowerW: { gt: 300 } }
+      - until: 300s
+        expect: { NODE2_Temp_CPU.HighHigh: true }
+      - advance: 1s
+        expect: { NODE2.MaxTempC: { ge: 102 }, NODE2_Fan1.RPM: { gt: 8960 } }
+      - given: { Scenario: "normal" }
+        until: 600s
+        expect: { NODE2_Temp_CPU.HighHigh: false, NODE2_Temp_CPU.Value: { lt: 60 } }
+
+  - name: psu-loss moves the load to the other supply; the server stays up
+    steps:
+      - given: { Scenario: "psu-loss" }
+        advance: 2s
+        expect: { NODE1_PSU2.InputOk: false, NODE1_PSU2.InputV: 0.0, NODE1_PSU2.OutputW: 0.0, NODE1_PSU2.Fault: true, NODE1_PSU1.OutputW: 199.0, NODE1_PSU1.Fault: false, NODE1.PowerOn: true }
+
+  - name: drive-pull and drive-failing
+    steps:
+      - given: { Scenario: "drive-pull" }
+        advance: 2s
+        expect: { NODE3_Drive_NVMe2.Present: false, NODE3_Drive_NVMe2.Fault: true, NODE3_Drive_NVMe1.Present: true }
+      - given: { Scenario: "drive-failing" }
+        advance: 2s
+        expect: { NODE3_Drive_NVMe1.PredictedFailure: true, NODE3_Drive_NVMe1.Health: 1, NODE3_Drive_NVMe1.Fault: true, NODE3_Drive_NVMe2.Present: false }
+
+  - name: node-off drops its links and cools to the inlet
+    steps:
+      - given: { Scenario: "node-off" }
+        advance: 2s
+        expect: { NODE2.PowerOn: false, NODE2.PowerW: 12.0, NODE2_Fan1.RPM: 0.0, SW2_Port25.OperUp: false, SW2_Port25.Down: true, NODE2_Nic_BMC.LinkUp: false }
+      - advance: 1200s
+        expect: { NODE2_Temp_CPU.Value: { lt: 30 }, NODE2.Online: true }
+
+  - name: hot-room raises every inlet, and everything behind it (less the fans that ramp)
+    steps:
+      - given: { Scenario: "hot-room" }
+        advance: 2s
+        expect: { NODE1.InletTempC: 40.0, NODE3.InletTempC: { gt: 39 } }
+      - advance: 400s
+        expect: { NODE1_Temp_Inlet.Value: { gt: 39 }, NODE1_Temp_CPU.Value: { between: [70, 80] } }
+
+  - name: scenarios compose, and normal clears them all
+    steps:
+      - given: { Scenario: "fan-fail" }
+        advance: 2s
+      - given: { Scenario: "bmc-dark" }
+        advance: 2s
+        expect: { NODE1_Fan3.Fault: true, NODE3.Online: false }
+      - given: { Scenario: "normal" }
+        advance: 2s
+        expect: { NODE1_Fan3.Fault: false, NODE3.Online: true, Sim_NODE1_Fan3.Fail: false, Sim_NODE3.Dark: false, ClearFaults: false }

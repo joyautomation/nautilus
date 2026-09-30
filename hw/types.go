@@ -158,7 +158,7 @@ var Types = []Type{
 		{Name: "Protocol", Kind: ir.TypeString, Desc: "NVMe, SATA, SAS"},
 		{Name: "MediaType", Kind: ir.TypeString, Desc: "SSD, HDD"},
 		{Name: "Health", Kind: ir.TypeInt, Desc: "0 ok, 1 warning, 2 critical"},
-		{Name: "Fault", Kind: ir.TypeBool, Desc: "health warning or critical"},
+		{Name: "Fault", Kind: ir.TypeBool, Desc: "health warning or critical, or pulled"},
 		{Name: "PredictedFailure", Kind: ir.TypeBool, Desc: "the drive predicts its own failure (SMART)"},
 		{Name: "TempC", Kind: ir.TypeReal, Unit: "°C"},
 		{Name: "Present", Kind: ir.TypeBool, Desc: "false: pulled from its bay"},

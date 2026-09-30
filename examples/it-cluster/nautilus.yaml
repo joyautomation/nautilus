@@ -18,6 +18,10 @@ server:
 tasks:
   - program: plant.st
     scan: 1s
+    dt-tag: PlantDtS
+  - name: scenarios
+    program: scenarios.st
+    scan: 1s
 
 drivers:
   - type: replay
@@ -28,3 +32,4 @@ tag-files:
   - tags/recorded.yaml
   - tags/switches.yaml
   - tags/nodes.yaml
+  - tags/faults.yaml
