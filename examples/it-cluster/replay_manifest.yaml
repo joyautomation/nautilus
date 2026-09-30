@@ -3,7 +3,7 @@
 # The replay driver's recording: ./data is a link to the dataset (not committed).
 history: data/history.json.gz
 tags:
-  - { name: Rec_SW1_Port01, type: SwitchPort, series: SW1_Port01 }
+  - { name: Rec_SW1_Port01, type: SwitchPort, series: SW1_Port23 }
   - { name: Rec_SW1_Port02, type: SwitchPort, series: SW1_Port02 }
   - { name: Rec_SW1_Port03, type: SwitchPort, series: SW1_Port03 }
   - { name: Rec_SW1_Port04, type: SwitchPort, series: SW1_Port04 }
@@ -25,7 +25,7 @@ tags:
   - { name: Rec_SW1_Port20, type: SwitchPort, series: SW1_Port20 }
   - { name: Rec_SW1_Port21, type: SwitchPort, series: SW1_Port21 }
   - { name: Rec_SW1_Port22, type: SwitchPort, series: SW1_Port22 }
-  - { name: Rec_SW1_Port23, type: SwitchPort, series: SW1_Port23 }
+  - { name: Rec_SW1_Port23, type: SwitchPort, series: SW1_Port22 }
   - { name: Rec_SW1_Port24, type: SwitchPort, series: SW1_Port24 }
   - { name: Rec_SW1_Port25, type: SwitchPort, series: SW1_Port25 }
   - { name: Rec_SW1_Port26, type: SwitchPort, series: SW1_Port26 }

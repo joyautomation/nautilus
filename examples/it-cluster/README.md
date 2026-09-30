@@ -31,6 +31,14 @@ naut test .    # the fault logic, virtual time (it-cluster_test.yaml)
 naut run .     # the plant on http://localhost:8087
 ```
 
+### Where the recording is not the plan
+
+The plant's normal is the site as planned, so a fault-free plant raises no
+alarm. Where the recording differs (while it ran, the bench trunk was in
+SW1 g0/23 and the site uplink's g0/1 sat with no link), `baseline.yaml`
+has a port play another port's series; `gen.py` applies it to the replay
+manifest and the snapshot. The recording itself is untouched.
+
 ## Faults are tags
 
 Each is an input (all in `tags/faults.yaml`): it bends what it should,

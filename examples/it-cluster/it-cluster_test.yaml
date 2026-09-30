@@ -185,7 +185,7 @@ tests:
         advance: 10s
         expect: { SW1_Port24.InBroadcastPps: 1000000.0, SW1_Port24.OutBps: 1000000000.0, SW1_Port24.OutDiscards: { gt: 100000 },
                   SW2_Port25.InBroadcastPps: 1000000.0, SW2_Port25.OutBps: { between: [1024000000, 1100000000] }, SW2_Port25.OutDiscards: 0,
-                  SW1_Port01.InBroadcastPps: 0.0 }
+                  SW1_Port05.InBroadcastPps: 0.0 }
       - given: { Scenario: "normal" }
         advance: 2s
         expect: { SW1_Port24.InBroadcastPps: 0.0, SW1_Port24.OutBps: { lt: 1000000 } }
