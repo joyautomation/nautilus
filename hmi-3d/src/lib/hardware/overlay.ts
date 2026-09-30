@@ -143,7 +143,9 @@ export const heatOverlay: Overlay = {
 	paint(part, value, ctx) {
 		const t = num(member(value, 'TempC'));
 		const lim = limitsFor(ctx.profile, part);
-		if (t === undefined || !lim) return DIM;
+		// A driver delivers a member it has no binding for as zero; no part
+		// inside a running server reads 0 °C, so 0 is "not reported".
+		if (t === undefined || t === 0 || !lim) return DIM;
 		return heatPaint(t, lim[0], lim[1], inletC(ctx), ctx.colors);
 	},
 	legend(ctx) {

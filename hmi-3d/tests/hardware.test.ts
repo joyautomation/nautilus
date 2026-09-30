@@ -147,6 +147,8 @@ describe('overlays', () => {
 		expect(limitsFor(profile, byId('boot0'))).toEqual([60, 70]);
 		expect(heatOverlay.paint(byId('fan1'), { RPM: 9000 }, ctx({})).dim).toBe(true);
 		expect(heatOverlay.paint(byId('bay0'), { TempC: 32 }, ctx({})).text).toBe('32°');
+		// an unbound member arrives as 0: not a reading
+		expect(heatOverlay.paint(byId('bay0'), { TempC: 0 }, ctx({})).dim).toBe(true);
 	});
 	it('interfaces: rated speed green, slower amber, no link grey', () => {
 		const p1 = byId('nicSlot2p1');
