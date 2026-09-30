@@ -49,7 +49,7 @@ describe('declared links', () => {
 	});
 	it('every link end in the office topology is a real port', () => {
 		for (const l of topology.links) for (const s of [l.a, l.b]) if (s.includes('/')) expect(resolveEnd(plant, s).tag !== undefined).toBe(true);
-		expect(linkTags(plant).length).toBe(32);
+		expect(linkTags(plant).length).toBe(31);
 	});
 	it('find the link on a port from either side', () => {
 		expect(linkAt(topology, 'node1', portPart(server, 'nicSlot2p2')!)?.near).toBe('a');
@@ -192,10 +192,14 @@ describe('the mesh', () => {
 		const site = nodes.find((n) => n.id === 'site')!;
 		expect(site.kind).toBe('outside');
 		expect(deg('site')).toBe(0);
-		expect(deg('mira1')).toBe(34);
+		// a second far end on the same switch (the bring-up bench trunk) sits apart
+		const bench = meshLayout({ ...topology, links: [...topology.links, { kind: 'bench', a: 'sw1/g0/23', b: 'mira1', rateGbps: 1 }] } as Topology);
+		const at = (id: string) => bench.nodes.find((n) => n.id === id)!.pos;
+		const angle = (p: number[]) => Math.round(((Math.atan2(p[0], p[2]) * 180) / Math.PI + 360) % 360);
+		expect([angle(at('site')), angle(at('mira1'))]).toEqual([0, 34]);
 	});
 	it('draws every link, parallel links between one pair bowed apart', () => {
-		expect(edges.length).toBe(17);
+		expect(edges.length).toBe(16);
 		const pair = edges.filter((e) => e.a === 'node1' && e.b === 'sw1');
 		expect(pair.length).toBe(2);
 		expect(pair[0].points[1][0] !== pair[1].points[1][0]).toBe(true);
@@ -207,7 +211,7 @@ describe('focus', () => {
 		const n = neighbourhood(topology, 'node2');
 		expect([...n.neighbours].sort()).toEqual(['node1', 'node3', 'sw2', 'sw3']);
 		expect(n.links.size).toBe(5);
-		expect([...neighbourhood(topology, 'sw1').neighbours].sort()).toEqual(['mira1', 'node1', 'node3', 'site', 'sw2', 'sw3']);
+		expect([...neighbourhood(topology, 'sw1').neighbours].sort()).toEqual(['node1', 'node3', 'site', 'sw2', 'sw3']);
 	});
 	it('fades in three steps: the focus, its neighbours, the rest', () => {
 		expect(focusFade(topology, undefined, 'sw1')).toBe(1);
