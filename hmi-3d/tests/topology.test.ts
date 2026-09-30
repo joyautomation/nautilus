@@ -71,6 +71,12 @@ describe('the live check', () => {
 		expect(c.verdict).toBe('contradicted');
 		expect(c.reasons).toEqual(['node1 slot2 p2 at 10G, sw1 te0/25 at 1G']);
 		expect(checkLink(plant, l, { NODE1_Nic_Slot2_P2: up(1), SW1_Port25: swUp(1000) }).reasons).toEqual(['both up at 1G, declared 10G']);
+		// A dark switch holds its last "up": the server end's lost link is the
+		// truth, so the cable reads down, not contradicted.
+		const dark = checkLink(plant, l, { NODE1_Nic_Slot2_P2: { LinkUp: false }, SW1_Port25: swUp(10000), SW1__Online: false });
+		expect(dark.verdict).toBe('down');
+		expect(dark.reasons[0]).toContain('SW1 is offline');
+		expect(checkLink(plant, l, { NODE1_Nic_Slot2_P2: up(10), SW1_Port25: swUp(10000), SW1__Online: false }).verdict).toBe('unverified');
 	});
 	it('down: both ends reported, neither linked', () => {
 		expect(checkLink(plant, l, { NODE1_Nic_Slot2_P2: { LinkUp: false }, SW1_Port25: { OperUp: false } }).verdict).toBe('down');

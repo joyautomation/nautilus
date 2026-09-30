@@ -11,6 +11,11 @@
 // - `down`          no end that reports has link
 // - `unverified`    an end is not reported, so nothing can be said
 //
+// An end whose device is offline (`<device>__Online` false) is not
+// reported: its tags hold their last values, which say nothing about now.
+// A dark switch's cables read down (the far end has no link) or
+// unverified, never contradicted by the switch's stale "up".
+//
 // Pure: no Svelte, no three, like profile.ts.
 import type { ChassisProfile, ProfilePart } from './profile.js';
 import { member, portReading, tagFor } from './profile.js';
@@ -167,9 +172,18 @@ const names = (seen: { system: string; port?: string }, e: End) => {
 export function checkLink(plant: Plant, link: TopoLink, tags: Record<string, unknown>): LinkCheck {
 	const ea = resolveEnd(plant, link.a);
 	const eb = resolveEnd(plant, link.b);
-	const a = { ...ea, ...readEnd(ea.tag ? tags[ea.tag] : undefined) };
-	const b = { ...eb, ...readEnd(eb.tag ? tags[eb.tag] : undefined) };
 	const reasons: string[] = [];
+	const offline = (e: End) => !!e.device?.tag && tags[`${e.device.tag}__Online`] === false;
+	const read = (e: End) => {
+		if (!e.tag) return readEnd(undefined);
+		if (offline(e)) {
+			reasons.push(`${e.device!.tag} is offline: ${e.label}'s last values say nothing about now`);
+			return readEnd(undefined);
+		}
+		return readEnd(tags[e.tag]);
+	};
+	const a = { ...ea, ...read(ea) };
+	const b = { ...eb, ...read(eb) };
 	const done = (verdict: Verdict): LinkCheck => ({ verdict, reasons, a, b });
 
 	// 1. An end that names its neighbour settles it, either way.
