@@ -3,8 +3,12 @@
 	// below `pickable` nothing inside takes a pick — so a device in the
 	// background of a focused view can be seen but not hit by accident.
 	// Materials are restored exactly when the fade lifts. Children mount
-	// late (a glTF part loads after its node), so while faded the subtree is
-	// re-swept a few times a second; unfaded it costs nothing.
+	// late (a glTF part loads after its node) and write their own materials
+	// (a part repaints its LED, tint and opacity when its data changes), so
+	// while faded the subtree is re-swept every frame, before it is drawn:
+	// swept less often, a repainted part shows at full opacity until the
+	// next sweep — a flicker. A value a part wrote is its new own opacity.
+	// Unfaded it costs nothing.
 	import { T, useTask } from '@threlte/core';
 	import { Mesh, type Group, type Material, type Object3D } from 'three';
 	import type { Snippet } from 'svelte';
@@ -17,6 +21,8 @@
 		opacity: number;
 		transparent: boolean;
 		depthWrite: boolean;
+		/** What the fade last wrote, to tell a part's own write from it. */
+		wrote: number;
 	}
 	const SAVED = 'fade:saved';
 
@@ -46,30 +52,34 @@
 					continue;
 				}
 				if (!s) {
-					s = { opacity: m.opacity, transparent: m.transparent, depthWrite: m.depthWrite };
+					s = { opacity: m.opacity, transparent: m.transparent, depthWrite: m.depthWrite, wrote: NaN };
 					m.userData[SAVED] = s;
+				} else if (m.opacity !== s.wrote) {
+					// the part repainted itself: that is its own opacity now
+					s.opacity = m.opacity;
+					s.transparent = m.transparent;
+					s.depthWrite = m.depthWrite;
 				}
 				const want = s.opacity * k;
-				if (m.opacity !== want || !m.transparent) {
+				if (m.opacity !== want || !m.transparent || m.depthWrite) {
+					const recompile = !m.transparent;
 					m.opacity = want;
 					m.transparent = true;
 					m.depthWrite = false;
-					m.needsUpdate = true;
+					if (recompile) m.needsUpdate = true;
 				}
+				s.wrote = want;
 			}
 		});
 	}
 
-	let since = 0;
 	let last = 1;
-	useTask((dt) => {
+	useTask(() => {
 		if (!group) return;
-		since += dt;
-		// Sweep on every change, then while faded four times a second.
-		if (amount !== last || (amount < 1 && since > 0.25)) {
+		// Sweep on every change, then every frame while faded.
+		if (amount !== last || amount < 1) {
 			apply(group, amount, amount >= pickable);
 			last = amount;
-			since = 0;
 		}
 	});
 </script>

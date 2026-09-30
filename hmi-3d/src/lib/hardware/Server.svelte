@@ -50,7 +50,8 @@
 		overlay,
 		kind = 'server',
 		fade = 1,
-		models = DEFAULT_MODELS
+		models = DEFAULT_MODELS,
+		signs = 'parts'
 	}: {
 		profile: ChassisProfile;
 		/** The node's tag prefix, e.g. `NODE1`: the chassis tag and every
@@ -77,6 +78,12 @@
 		kind?: string;
 		/** Where the part library (models/hardware/*.glb) is served. */
 		models?: string;
+		/** Which alarm signs: `parts` (default), each part and sensor its own,
+		 * and over the chassis only the alarms none of them shows (a flap,
+		 * the device going dark) — for a view where its parts are in sight;
+		 * `device`, one sign over the chassis for its worst, what a rack of
+		 * them shows from across the room. */
+		signs?: 'parts' | 'device';
 	} = $props();
 
 	const COMPONENTS: Record<PartKind, Component<any>> = { drive: Drive, dimm: Dimm, 'pcie-card': PcieCard, fan: Fan, psu: Psu, cpu: Cpu, port: Port };
@@ -151,24 +158,30 @@
 	// The device's worst alarm, over the chassis: what a rack of them shows
 	// from across the room. Parts carry their own signs (<Node>), and so
 	// does a sensor in alarm.
-	let deviceAlarm = $derived(scene ? worstUnder(scene.alarms, node) : undefined);
 	let sensorAlarms = $derived.by(() => {
-		const out: { id: string; at: Vec3; a: AssetAlarm }[] = [];
+		const out: { id: string; asset: string; at: Vec3; a: AssetAlarm }[] = [];
+		if (signs === 'device') return out;
 		const placed = new Set<string>();
 		for (const q of profile.sensors ?? []) {
 			const tag = tagFor(q.tag, node);
 			const a = scene?.alarms.get(tag);
 			placed.add(tag);
-			if (a) out.push({ id: q.id, at: mm(q.pos), a });
+			if (a) out.push({ id: q.id, asset: tag, at: mm(q.pos), a });
 		}
 		// A sensor the profile does not place (the CPU's, a card's) is
 		// signed on the part it measures.
 		for (const [asset, a] of scene?.alarms ?? []) {
 			if (placed.has(asset) || !asset.startsWith(`${node}_Temp_`)) continue;
 			const part = partForSensor(parts, asset);
-			if (part) out.push({ id: asset, at: [part.pos[0], part.pos[1] + part.size[1] / 2, part.pos[2]], a });
+			if (part) out.push({ id: asset, asset, at: [part.pos[0], part.pos[1] + part.size[1] / 2, part.pos[2]], a });
 		}
 		return out;
+	});
+	let deviceAlarm = $derived.by(() => {
+		if (!scene) return undefined;
+		if (signs === 'device') return worstUnder(scene.alarms, node);
+		const signed = new Set<string>([...parts.flatMap((p) => (p.tag ? [p.tag] : [])), ...sensorAlarms.map((s) => s.asset)]);
+		return worstUnder(new Map([...scene.alarms].filter(([asset]) => !signed.has(asset))), node);
 	});
 
 	let lidOffset = $derived(mm(profile.explodeLid ?? [0, 160, 0]).map((v) => v * t.current) as Vec3);
@@ -191,6 +204,7 @@
 			pos={at(part.pos, part.explode, t.current)}
 			rot={part.rot}
 			bounds={{ size: part.size, center: [0, 0, 0] }}
+			marker={signs === 'parts'}
 			props={{ ...part.props, size: part.size, bound: part.tag !== undefined, static: part.static, models, xray, paint: paints[part.id] }}
 		>
 			{#snippet children(p)}

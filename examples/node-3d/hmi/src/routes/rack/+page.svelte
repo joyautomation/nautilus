@@ -321,6 +321,7 @@
 				exploded={on && exploded}
 				anchor={false}
 				overlay={on ? overlay : undefined}
+				signs={on ? 'parts' : 'device'}
 			/>
 		{/each}
 		{#if showCables}
