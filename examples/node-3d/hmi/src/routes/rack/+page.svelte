@@ -470,7 +470,7 @@
 						<button class:on={codes} onclick={() => (codes = !codes)} title="Where the printed AR codes go">codes</button>
 						<span class="sep"></span>
 					{/if}
-					{#each overlays.filter((o) => focused?.kind === 'server' || o.id === 'cables' || o.id === 'interfaces') as o}
+					{#each overlays.filter((o) => focused?.kind === 'server' || o.id === 'cables' || o.id === 'interfaces' || o.id === 'vlans') as o}
 						<button class:on={overlayId === o.id} onclick={() => (overlayId = overlayId === o.id ? null : o.id)}>{o.name.toLowerCase()}</button>
 					{/each}
 				{:else}
