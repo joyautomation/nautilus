@@ -199,6 +199,8 @@ func buildSwitch(w walk.Walk, o Options) (Result, error) {
 		// contract does not have, so out-errors are visible in OutErrors
 		// (counter) and not in this rate. Recorded in the notes.
 		pick("ErrorRate", ifInErrors, "", hw.Binding{Rate: true, Width: 32}, hw.Binding{}, "ifInErrors absent")
+		// Saturation's evidence: frames the egress queue had no room for.
+		pick("DiscardRate", ifOutDiscards, "", hw.Binding{Rate: true, Width: 32}, hw.Binding{}, "ifOutDiscards absent")
 		// Broadcast and multicast received: what a storm moves first.
 		pick("InBroadcastPps", ifHCInBcast, ifInBcast, hw.Binding{Rate: true, Width: 64}, hw.Binding{Rate: true, Width: 32}, "ifHCInBroadcastPkts absent")
 		pick("InMulticastPps", ifHCInMcast, ifInMcast, hw.Binding{Rate: true, Width: 64}, hw.Binding{Rate: true, Width: 32}, "ifHCInMulticastPkts absent")

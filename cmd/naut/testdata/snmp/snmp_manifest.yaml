@@ -51,6 +51,7 @@ tags:
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.1}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.1, rate: true, width: 32}
       PoeOn:       {oid: 1.3.6.1.2.1.105.1.1.1.6.1.1, eq: 3}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.1, rate: true, width: 32}
   - name: SW1_Port02
     type: SwitchPort
     source: SW1
@@ -72,6 +73,7 @@ tags:
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.2}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.2, rate: true, width: 32}
       PoeOn:       {oid: 1.3.6.1.2.1.105.1.1.1.6.1.2, eq: 3}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.2, rate: true, width: 32}
   - name: SW1_Port03
     type: SwitchPort
     source: SW1
@@ -93,6 +95,7 @@ tags:
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.3}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.3, rate: true, width: 32}
       PoeOn:       {oid: 1.3.6.1.2.1.105.1.1.1.6.1.3, eq: 3}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.3, rate: true, width: 32}
   - name: SW1_Port04
     type: SwitchPort
     source: SW1
@@ -114,6 +117,7 @@ tags:
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.4}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.4, rate: true, width: 32}
       PoeOn:       {oid: 1.3.6.1.2.1.105.1.1.1.6.1.4, eq: 3}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.4, rate: true, width: 32}
   - name: SW1_Port05
     type: SwitchPort
     source: SW1
@@ -135,6 +139,7 @@ tags:
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.5}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.5, rate: true, width: 32}
       PoeOn:       {oid: 1.3.6.1.2.1.105.1.1.1.6.1.5, eq: 3}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.5, rate: true, width: 32}
   - name: SW1_Port06
     type: SwitchPort
     source: SW1
@@ -156,6 +161,7 @@ tags:
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.6}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.6, rate: true, width: 32}
       PoeOn:       {oid: 1.3.6.1.2.1.105.1.1.1.6.1.6, eq: 3}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.6, rate: true, width: 32}
   - name: SW1_Port07
     type: SwitchPort
     source: SW1
@@ -177,6 +183,7 @@ tags:
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.7}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.7, rate: true, width: 32}
       PoeOn:       {oid: 1.3.6.1.2.1.105.1.1.1.6.1.7, eq: 3}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.7, rate: true, width: 32}
   - name: SW1_Port08
     type: SwitchPort
     source: SW1
@@ -198,6 +205,7 @@ tags:
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.8}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.8, rate: true, width: 32}
       PoeOn:       {oid: 1.3.6.1.2.1.105.1.1.1.6.1.8, eq: 3}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.8, rate: true, width: 32}
   - name: SW1_Port09
     type: SwitchPort
     source: SW1
@@ -218,6 +226,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.9}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.9}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.9, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.9, rate: true, width: 32}
   - name: SW1_Port10
     type: SwitchPort
     source: SW1
@@ -238,6 +247,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.10}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.10}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.10, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.10, rate: true, width: 32}
   - name: SW1_Port11
     type: SwitchPort
     source: SW1
@@ -258,6 +268,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.11}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.11}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.11, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.11, rate: true, width: 32}
   - name: SW1_Port12
     type: SwitchPort
     source: SW1
@@ -278,6 +289,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.12}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.12}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.12, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.12, rate: true, width: 32}
   - name: SW1_Port13
     type: SwitchPort
     source: SW1
@@ -298,6 +310,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.13}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.13}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.13, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.13, rate: true, width: 32}
   - name: SW1_Port14
     type: SwitchPort
     source: SW1
@@ -318,6 +331,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.14}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.14}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.14, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.14, rate: true, width: 32}
   - name: SW1_Port15
     type: SwitchPort
     source: SW1
@@ -338,6 +352,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.15}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.15}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.15, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.15, rate: true, width: 32}
   - name: SW1_Port16
     type: SwitchPort
     source: SW1
@@ -358,6 +373,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.16}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.16}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.16, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.16, rate: true, width: 32}
   - name: SW1_Port17
     type: SwitchPort
     source: SW1
@@ -378,6 +394,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.17}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.17}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.17, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.17, rate: true, width: 32}
   - name: SW1_Port18
     type: SwitchPort
     source: SW1
@@ -398,6 +415,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.18}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.18}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.18, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.18, rate: true, width: 32}
   - name: SW1_Port19
     type: SwitchPort
     source: SW1
@@ -418,6 +436,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.19}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.19}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.19, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.19, rate: true, width: 32}
   - name: SW1_Port20
     type: SwitchPort
     source: SW1
@@ -438,6 +457,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.20}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.20}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.20, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.20, rate: true, width: 32}
   - name: SW1_Port21
     type: SwitchPort
     source: SW1
@@ -458,6 +478,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.21}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.21}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.21, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.21, rate: true, width: 32}
   - name: SW1_Port22
     type: SwitchPort
     source: SW1
@@ -478,6 +499,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.22}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.22}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.22, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.22, rate: true, width: 32}
   - name: SW1_Port23
     type: SwitchPort
     source: SW1
@@ -498,6 +520,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.23}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.23}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.23, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.23, rate: true, width: 32}
   - name: SW1_Port24
     type: SwitchPort
     source: SW1
@@ -518,6 +541,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.24}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.24}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.24, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.24, rate: true, width: 32}
   - name: SW1_Port25
     type: SwitchPort
     source: SW1
@@ -538,6 +562,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.25}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.25}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.25, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.25, rate: true, width: 32}
   - name: SW1_Port26
     type: SwitchPort
     source: SW1
@@ -558,6 +583,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.26}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.26}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.26, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.26, rate: true, width: 32}
   - name: SW1_Port27
     type: SwitchPort
     source: SW1
@@ -578,6 +604,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.27}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.27}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.27, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.27, rate: true, width: 32}
   - name: SW1_Port28
     type: SwitchPort
     source: SW1
@@ -598,6 +625,7 @@ tags:
       InDiscards:  {oid: 1.3.6.1.2.1.2.2.1.13.28}
       OutDiscards: {oid: 1.3.6.1.2.1.2.2.1.19.28}
       ErrorRate:   {oid: 1.3.6.1.2.1.2.2.1.14.28, rate: true, width: 32}
+      DiscardRate: {oid: 1.3.6.1.2.1.2.2.1.19.28, rate: true, width: 32}
   - name: SW1_Temp_CPU
     type: TempSensor
     source: SW1

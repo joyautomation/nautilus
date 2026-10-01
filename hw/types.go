@@ -114,6 +114,7 @@ var Types = []Type{
 		{Name: "InBroadcastPps", Kind: ir.TypeReal, Unit: "1/s", Desc: "broadcast packets received per second"},
 		{Name: "InMulticastPps", Kind: ir.TypeReal, Unit: "1/s", Desc: "multicast packets received per second"},
 		{Name: "Pvid", Kind: ir.TypeInt, Desc: "native VLAN: the one untagged frames arriving here join (Q-BRIDGE dot1qPvid)"},
+		{Name: "DiscardRate", Kind: ir.TypeReal, Unit: "1/s", Desc: "frames dropped on the way out per second (ifOutDiscards): a port pushed past its line rate"},
 	}},
 	{Name: "Vlan", Desc: "one VLAN on a switch (Q-BRIDGE-MIB dot1qVlanStaticTable)", Fields: []Field{
 		{Name: "Id", Kind: ir.TypeInt, Desc: "VLAN ID"},

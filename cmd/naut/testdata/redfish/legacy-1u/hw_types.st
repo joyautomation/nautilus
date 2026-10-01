@@ -143,6 +143,7 @@ TYPE
     InBroadcastPps : REAL;
     InMulticastPps : REAL;
     Pvid : DINT;
+    DiscardRate : REAL;
   END_STRUCT;
   TempSensor : STRUCT
     Name : STRING;
