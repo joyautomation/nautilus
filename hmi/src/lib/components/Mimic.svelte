@@ -255,6 +255,15 @@
 		font: inherit;
 		text-align: inherit;
 	}
+	/* A bare <svg> root is inline by default, reserving a few px of
+	   descender space below it inside `.eq` — so eqBox()'s offsetHeight came
+	   out taller than the drawing, and every anchored pipe end landed a
+	   little low (a jog into a pump's inlet, a tilt out of a valve). The
+	   mimic editor's EditorCanvas.svelte has had this same rule; with it the
+	   runtime measures the box the editor does, and anchors agree. */
+	.eq :global(svg) {
+		display: block;
+	}
 	.eq.clickable {
 		cursor: pointer;
 		border-radius: 8px;

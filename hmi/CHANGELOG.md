@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- **Anchored pipe ends land where the mimic editor draws them.** `<Mimic>`
+  measures each equipment's box to place its ports, and a bare inline
+  `<svg>` leaves a few pixels of descender space under it, so the measured
+  box was taller than the drawing and every anchored end sat a little low:
+  a jog into a pump's inlet, a tilt out of a valve, where the editor drew a
+  straight run. Equipment SVGs now render `display: block` inside `<Mimic>`,
+  the rule the editor already had.
 - **`BUILTIN_PORTS` for `Tank`, `Pump` and `Valve` sit on the drawings.** The
   defaults were box-edge cardinals, so a pipe anchored to one began beside
   the equipment: off the tank's shell, on its level scale, beside the pump's
