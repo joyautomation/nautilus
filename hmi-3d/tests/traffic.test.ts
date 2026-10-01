@@ -25,7 +25,8 @@ describe('a port’s traffic', () => {
 		expect(trafficText(t)).toBe('↓3.2G ↑410M · 32%');
 		expect(bitsText(26124)).toBe('26k');
 		expect(bitsText(999.99e6)).toBe('1G');
-		expect(bitsText(999e3)).toBe('999k');
+		expect(bitsText(999e3)).toBe('1M');
+		expect(bitsText(950e3)).toBe('950k');
 		expect(bitsText(512)).toBe('512');
 		expect(portTraffic(undefined)).toBe(undefined);
 	});
