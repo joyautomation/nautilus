@@ -16,10 +16,25 @@
 		SlideRails,
 		Cable,
 		NetworkMesh,
+		VlanFloors,
 		PartFaceplate,
 		resolveParts,
 		OVERLAYS,
 		cablesOverlay,
+		vlanOverlay,
+		vlansOnPort,
+		vlanVerdictColor,
+		checkAllVlans,
+		vlanDomains,
+		vlanFloors,
+		vlanFacts,
+		vlanColors,
+		vlanText,
+		readPortVlans,
+		siteVlans,
+		domainDevices,
+		VLAN_MARK,
+		type VlanVerdict,
 		linkOnPort,
 		linkFacts,
 		checkAll,
@@ -166,6 +181,37 @@
 	let meshFocus = $state<string | null>(params.get('mesh') || null);
 	const MESH: SceneCamera = { pos: [1.55, 2.3, 2.1], target: [0, 0.7, 0], fov: 40 };
 
+	// ── VLANs: what each link carries, declared and checked (vlan.ts) ──
+	// The overlay paints every switch port in the rack; `?vlans` is the
+	// logical view, a floor per VLAN; a picked VLAN (`?vlan=21`) lights its
+	// ports, cables and devices in both.
+	let vlans = $state(params.has('vlans'));
+	const pickParam = Number(params.get('vlan'));
+	let vlanPick = $state<number | undefined>(Number.isInteger(pickParam) && pickParam > 0 ? pickParam : undefined);
+	let vlanChecks = $derived(checkAllVlans(plant, tags));
+	let site = $derived(siteVlans(topology, tags));
+	let vcolors = $derived(vlanColors(site.map((v) => v.id)));
+	// A VLAN no planned link carries and the plan does not name (VLAN 1,
+	// native on every trunk) gets no floor.
+	let domains = $derived(vlanDomains(plant, vlanChecks, tags, checks).filter((d) => d.declared || d.devices.length));
+	let floors = $derived(vlanFloors(topology, domains));
+	let picked = $derived(vlanPick !== undefined ? domains.find((d) => d.id === vlanPick) : undefined);
+	let pickedDevices = $derived(picked ? domainDevices(topology, picked) : undefined);
+	let vlanCounts = $derived(
+		vlanChecks.reduce<Record<VlanVerdict, number>>((n, c) => ({ ...n, [c.verdict]: n[c.verdict] + 1 }), { consistent: 0, contradicted: 0, unverified: 0, none: 0 })
+	);
+	const VLANS_CAM: SceneCamera = { pos: [1.7, 2.35, 2.75], target: [0, 0.85, 0], fov: 40 };
+	function pickVlan(id: number) {
+		// First pick lights it here; a second goes to the rack with it lit.
+		if (vlanPick !== id) vlanPick = id;
+		else vlansInRack();
+	}
+	function vlansInRack() {
+		vlans = false;
+		mesh = false;
+		overlayId = 'vlans';
+	}
+
 	let lid = $state<'on' | 'off'>(params.get('lid') === 'on' ? 'on' : 'off');
 	// The printed AR codes, where the focused server's profile anchors put
 	// them: off by default (a placement guide, not part of the server),
@@ -189,8 +235,9 @@
 	});
 	let xray = $state(params.has('xray'));
 	let exploded = $state(params.has('exploded'));
-	const overlays = [...OVERLAYS, cablesOverlay(plant)];
-	let overlayId = $state<string | null>(params.get('overlay'));
+	let overlays = $derived([...OVERLAYS, cablesOverlay(plant), vlanOverlay(plant, vlanPick)]);
+	let overlayId = $state<string | null>(params.get('overlay') ?? (params.has('vlan') ? 'vlans' : null));
+	let vlanMode = $derived(!mesh && !vlans && overlayId === 'vlans');
 	let overlay = $derived(overlays.find((o) => o.id === overlayId));
 
 	const top = layout.base! / 1000 + (layout.units * 44.45) / 1000;
@@ -219,7 +266,7 @@
 		const k = Math.max(1, 1.2 / aspect);
 		return { ...c, pos: c.pos.map((v, i) => c.target[i] + (v - c.target[i]) * k) as Vec3 };
 	};
-	let goal = $derived(framed(mesh ? MESH : focused ? closeUp(focused) : RACK[view]));
+	let goal = $derived(framed(vlans ? VLANS_CAM : mesh ? MESH : focused ? closeUp(focused) : RACK[view]));
 	const cam = Tween.of(() => [...goal.pos, ...goal.target, goal.fov ?? 40], { duration: 900, easing: cubicOut });
 	let camera = $derived<SceneCamera>({ pos: cam.current.slice(0, 3) as Vec3, target: cam.current.slice(3, 6) as Vec3, fov: cam.current[6] });
 
@@ -254,14 +301,21 @@
 	let cable = $derived.by(() => {
 		if (part?.kind !== 'port' || !pickedDevice) return [];
 		const at = linkOnPort(plant, pickedDevice.tag, part.partId, pickedDevice.profile, tags);
-		return at ? linkFacts(at.check, at.near, at.link) : [{ label: 'Cable', value: 'none declared' }];
+		const vat = vlansOnPort(plant, pickedDevice.tag, part.partId, pickedDevice.profile, tags);
+		const own = pickedDevice.kind === 'switch' ? readPortVlans(tags, pickedDevice.tag, part.tag) : undefined;
+		const vrows = vat && vat.check.declared !== null ? vlanFacts(vat.check, vat.near) : own?.reported ? [{ label: 'VLANs', value: vlanText(own) }] : [];
+		return [...(at ? linkFacts(at.check, at.near, at.link) : [{ label: 'Cable', value: 'none declared' }]), ...vrows];
 	});
 	let portsUp = $derived(
 		pickedDevice?.kind === 'switch' ? pickedDevice.parts.filter((p) => p.tag && portReading(tags[p.tag]).up === true).length : undefined
 	);
 	// The legend folded to a chip on a phone: what it is and the count that matters.
 	let legendChip = $derived(
-		!mesh && focused && overlay && overlay.id !== 'cables' ? overlay.name : `Cables · ${counts.contradicted + counts.down} ✗/↓`
+		vlans || vlanMode
+			? `VLANs · ${vlanCounts.contradicted} ✗`
+			: !mesh && focused && overlay && overlay.id !== 'cables'
+				? overlay.name
+				: `Cables · ${counts.contradicted + counts.down} ✗/↓`
 	);
 	let legendCtx = $derived<OverlayContext | undefined>(focused ? { node: focused.tag, profile: focused.profile, tags, colors } : undefined);
 
@@ -281,6 +335,7 @@
 	function showInRack() {
 		const d = devices.find((x) => x.id === meshFocus);
 		mesh = false;
+		vlans = false;
 		meshFocus = null;
 		if (d) focus = d.tag;
 	}
@@ -288,6 +343,12 @@
 		// Keep the context: the device in focus stays in focus in the mesh.
 		meshFocus = focused?.id ?? null;
 		mesh = true;
+		vlans = false;
+		back();
+	}
+	function toVlans() {
+		vlans = true;
+		mesh = false;
 		back();
 	}
 	function back() {
@@ -309,7 +370,7 @@
 	});
 </script>
 
-<svelte:window onresize={() => (aspect = window.innerWidth / window.innerHeight)} onkeydown={(e) => e.key === 'Escape' && !open && (mesh ? (meshFocus = null) : back())} />
+<svelte:window onresize={() => (aspect = window.innerWidth / window.innerHeight)} onkeydown={(e) => e.key === 'Escape' && !open && (vlans ? (vlanPick = undefined) : mesh ? (meshFocus = null) : back())} />
 
 <svelte:head><title>HQ rack · 3D</title></svelte:head>
 
@@ -325,13 +386,15 @@
 <div class="stage">
 	<SceneView {rt} {alarms} {camera} grid={{ pos: [0, 0, -D / 2], cell: 0.1, section: 0.5, size: [4, 4] }} inspector={false} bind:selected onselect={pick} oncontext={context} perf={params.has('perf') || aspect > 1}>
 		<Studio />
-		{#if mesh}
+		{#if vlans}
+			<VlanFloors {topology} {floors} {colors} vlanColor={vcolors} pick={vlanPick} onpick={pickVlan} />
+		{:else if mesh}
 			<NetworkMesh {topology} {checks} {colors} {summary} labels={edgeLabels} focus={meshFocus ?? undefined} />
 		{:else}
 		<Rack {layout} label={layout.name} />
 		{#each devices as d (d.id)}
 			{@const on = focus === d.tag}
-			{@const fade = focusFade(topology, focused?.id, d.id)}
+			{@const fade = Math.min(focusFade(topology, focused?.id, d.id), vlanMode && pickedDevices && !pickedDevices.has(d.id) ? 0.15 : 1)}
 			<!-- servers ride out on slide rails; a switch is on its ears alone -->
 			{#if d.kind === 'server'}
 			<Fade amount={fade}>
@@ -351,7 +414,7 @@
 				exploded={on && exploded}
 				anchor={on && codes}
 				codeImages={on ? codeImages : undefined}
-				overlay={on ? overlay : undefined}
+				overlay={on || (vlanMode && !focused && d.kind === 'switch') ? overlay : undefined}
 				signs={on ? 'parts' : 'device'}
 			/>
 		{/each}
@@ -359,17 +422,37 @@
 			{#each checks as c, i (i)}
 				{@const pts = paths[i]}
 				{#if pts}
-					<Cable points={pts} color={verdictColor(c.check.verdict, colors)} faint={c.check.verdict === 'unverified'} opacity={!hood || hood.links.has(i) ? 1 : 0.08} />
+					{#if vlanMode}
+						{@const vc = vlanChecks[i]}
+						{@const lit = vlanPick === undefined || vc.carries.includes(vlanPick)}
+						<Cable
+							points={pts}
+							color={vlanPick !== undefined && lit ? (vcolors.get(vlanPick) ?? colors.neutral) : vlanVerdictColor(vc.verdict, colors)}
+							faint={vc.verdict === 'none' || vc.verdict === 'unverified' || !lit}
+							opacity={(!hood || hood.links.has(i)) && lit ? 1 : 0.08}
+						/>
+					{:else}
+						<Cable points={pts} color={verdictColor(c.check.verdict, colors)} faint={c.check.verdict === 'unverified'} opacity={!hood || hood.links.has(i) ? 1 : 0.08} />
+					{/if}
 				{/if}
 			{/each}
 		{/if}
 		{/if}
 		{#snippet hud()}
 			<div class="bar" role="toolbar" aria-label="Views">
-				<button class:on={!mesh} onclick={() => (meshFocus ? showInRack() : (mesh = false))}>physical</button>
+				<button class:on={!mesh && !vlans} onclick={() => (meshFocus ? showInRack() : ((mesh = false), (vlans = false)))}>physical</button>
 				<button class:on={mesh} onclick={toMesh}>mesh</button>
+				<button class:on={vlans} onclick={toVlans}>vlans</button>
 				<span class="sep"></span>
-				{#if mesh}
+				{#if vlans}
+					{#if vlanPick !== undefined}
+						<button onclick={() => (vlanPick = undefined)}>← all</button>
+						<b class="where">VLAN {vlanPick} {picked?.name ?? ''}</b>
+						<button onclick={vlansInRack}>show in rack →</button>
+					{:else}
+						<span class="hint">a floor per VLAN: pick one</span>
+					{/if}
+				{:else if mesh}
 					{#if meshFocus}
 						<button onclick={() => (meshFocus = null)}>← all</button>
 						<b class="where">{topology.devices.find((d) => d.id === meshFocus)?.hostname ?? meshFocus}</b>
@@ -396,6 +479,10 @@
 					{/each}
 					<span class="sep"></span>
 					<button class:on={showCables} onclick={() => (showCables = !showCables)}>cables</button>
+					<button class:on={overlayId === 'vlans'} onclick={() => (overlayId = overlayId === 'vlans' ? null : 'vlans')}>vlans</button>
+					{#if vlanMode && vlanPick !== undefined}
+						<button onclick={() => (vlanPick = undefined)}>VLAN {vlanPick} ✕</button>
+					{/if}
 				{/if}
 			</div>
 		{/snippet}
@@ -405,7 +492,42 @@
 <aside class="legend" aria-label="Links">
 	<Sheet id="legend" label="Legend">
 	{#snippet chip()}{legendChip}{/snippet}
-	{#if !mesh && focused && overlay && legendCtx && overlay.id !== 'cables'}
+	{#if vlans || vlanMode}
+		<b>VLANs · {vlanChecks.filter((c) => c.verdict !== 'none').length} links declared</b>
+		<ul>
+			{#each site as v (v.id)}
+				{@const d = domains.find((x) => x.id === v.id)}
+				<li class:none={!d}>
+					<i style:background={vcolors.get(v.id)}></i>
+					<button class="link" class:on={vlanPick === v.id} onclick={() => (vlanPick = vlanPick === v.id ? undefined : v.id)}>
+						{v.id} {v.name ?? ''}{v.declared ? '' : ' (not in the plan)'}
+						{#if d && d.islands.length > 1}<em class="bad">✗ {d.islands.length} islands</em>{/if}
+					</button>
+				</li>
+			{/each}
+		</ul>
+		<ul>
+			{#each ['consistent', 'contradicted', 'unverified'] as VlanVerdict[] as v}
+				<li class:none={vlanCounts[v] === 0}>
+					<i style:background={vlanVerdictColor(v, colors)}></i>
+					<span>{VLAN_MARK[v]} {v} <em>{vlanCounts[v]}</em></span>
+				</li>
+			{/each}
+		</ul>
+		{#if vlanCounts.contradicted}
+			<ol>
+				{#each vlanChecks.filter((c) => c.verdict === 'contradicted') as c}
+					<li title={c.reasons.join('; ')}>
+						<i style:background={colors.critical}></i>
+						<button class="link" onclick={() => ((vlans = false), (mesh = false), (overlayId = 'vlans'), (focus = (c.a.switchPort ? c.a : c.b).device?.tag ?? null))}>
+							✗ {c.reasons[0]}
+						</button>
+					</li>
+				{/each}
+			</ol>
+		{/if}
+		<p>Each link’s VLANs as the site topology declares them, checked against what the switches report (Q-BRIDGE-MIB): = as declared, ✗ a switch carries other than declared, or two ends disagree on the native VLAN; ? nothing reports. Servers tag in their OS, which their BMCs cannot see: a server end is the plan’s word.</p>
+	{:else if !mesh && focused && overlay && legendCtx && overlay.id !== 'cables'}
 		<b>{overlay.name} · {focused.hostname ?? focused.id}</b>
 		<ul>
 			{#each overlay.legend(legendCtx) as item}
@@ -534,8 +656,16 @@
 		cursor: pointer;
 		font: 11px/1.3 ui-monospace, monospace;
 	}
-	.legend .link:hover {
+	.legend .link:hover,
+	.legend .link.on {
 		color: var(--accent, #6aa5e8);
+	}
+	.legend em.bad {
+		color: var(--critical, #e5484d);
+	}
+	.hint {
+		font: 12px/1 system-ui, sans-serif;
+		color: var(--ink-2, #a8a6a1);
 	}
 	.legend summary {
 		cursor: pointer;

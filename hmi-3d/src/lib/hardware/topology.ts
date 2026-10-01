@@ -43,7 +43,27 @@ export interface TopoLink {
 	/** The server port's MAC, as the declaration saw it. */
 	mac?: string;
 	name?: string;
+	/** What the link should carry (vlan.ts): `null` for a link with no
+	 * VLAN at all (a storage mesh), absent when the plan does not say. */
+	vlans?: LinkVlans | null;
 	[k: string]: unknown;
+}
+
+/** A link's VLANs as the plan declares them: the VLANs it carries tagged
+ * (a trunk) and, when the plan says, its native (untagged) VLAN — an
+ * access port is `{ native: 22 }` and carries nothing tagged. */
+export interface LinkVlans {
+	tagged?: number[];
+	native?: number;
+	/** Where the declaration came from, when not the topology's own. */
+	evidence?: string;
+}
+
+/** A VLAN the site plans for. */
+export interface TopoVlan {
+	id: number;
+	name: string;
+	note?: string;
 }
 
 export interface Topology {
@@ -51,6 +71,7 @@ export interface Topology {
 	generated?: string;
 	devices: TopoDevice[];
 	links: TopoLink[];
+	vlans?: TopoVlan[];
 }
 
 /** A topology with each device's profile to hand. */

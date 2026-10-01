@@ -48,63 +48,96 @@
 			"a": "node1/nicSlot2p2",
 			"b": "sw1/te0/25",
 			"rateGbps": 10,
-			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)"
+			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)",
+			"vlans": {
+				"tagged": [20, 21, 22],
+				"evidence": "network-design §2 says 20,21; 22 added for MON01's out-of-band NIC (site.json, 2026-09-26)"
+			}
 		},
 		{
 			"kind": "uplink",
 			"a": "node3/nicSlot2p2",
 			"b": "sw1/te0/26",
 			"rateGbps": 10,
-			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)"
+			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)",
+			"vlans": {
+				"tagged": [20, 21, 22],
+				"evidence": "network-design §2 says 20,21; 22 added for MON01's out-of-band NIC (site.json, 2026-09-26)"
+			}
 		},
 		{
 			"kind": "bmc",
 			"a": "node1/bmc",
 			"b": "sw1/g0/24",
 			"rateGbps": 1,
-			"evidence": "switch MAC table (BMC MAC on g0/24)"
+			"evidence": "switch MAC table (BMC MAC on g0/24)",
+			"vlans": {
+				"native": 22
+			}
 		},
 		{
 			"kind": "uplink",
 			"a": "node2/nicSlot2p2",
 			"b": "sw2/te0/25",
 			"rateGbps": 10,
-			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)"
+			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)",
+			"vlans": {
+				"tagged": [20, 21, 22],
+				"evidence": "network-design §2 says 20,21; 22 added for MON01's out-of-band NIC (site.json, 2026-09-26)"
+			}
 		},
 		{
 			"kind": "uplink",
 			"a": "node1/nicSlot3p2",
 			"b": "sw2/te0/26",
 			"rateGbps": 10,
-			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)"
+			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)",
+			"vlans": {
+				"tagged": [20, 21, 22],
+				"evidence": "network-design §2 says 20,21; 22 added for MON01's out-of-band NIC (site.json, 2026-09-26)"
+			}
 		},
 		{
 			"kind": "bmc",
 			"a": "node2/bmc",
 			"b": "sw2/g0/24",
 			"rateGbps": 1,
-			"evidence": "switch MAC table (BMC MAC on g0/24)"
+			"evidence": "switch MAC table (BMC MAC on g0/24)",
+			"vlans": {
+				"native": 22
+			}
 		},
 		{
 			"kind": "uplink",
 			"a": "node3/nicSlot3p2",
 			"b": "sw3/te0/25",
 			"rateGbps": 10,
-			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)"
+			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)",
+			"vlans": {
+				"tagged": [20, 21, 22],
+				"evidence": "network-design §2 says 20,21; 22 added for MON01's out-of-band NIC (site.json, 2026-09-26)"
+			}
 		},
 		{
 			"kind": "uplink",
 			"a": "node2/nicSlot3p2",
 			"b": "sw3/te0/26",
 			"rateGbps": 10,
-			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)"
+			"evidence": "switch MAC table, 2026-09-25 (uplink-map.py)",
+			"vlans": {
+				"tagged": [20, 21, 22],
+				"evidence": "network-design §2 says 20,21; 22 added for MON01's out-of-band NIC (site.json, 2026-09-26)"
+			}
 		},
 		{
 			"kind": "bmc",
 			"a": "node3/bmc",
 			"b": "sw3/g0/24",
 			"rateGbps": 1,
-			"evidence": "switch MAC table (BMC MAC on g0/24)"
+			"evidence": "switch MAC table (BMC MAC on g0/24)",
+			"vlans": {
+				"native": 22
+			}
 		},
 		{
 			"kind": "mesh",
@@ -112,7 +145,8 @@
 			"b": "node2/nicSlot3p1",
 			"rateGbps": 25,
 			"evidence": "host-side discovery + ping across the /29 (mesh-discover.py)",
-			"name": "mesh12"
+			"name": "mesh12",
+			"vlans": null
 		},
 		{
 			"kind": "mesh",
@@ -120,7 +154,8 @@
 			"b": "node3/nicSlot3p1",
 			"rateGbps": 25,
 			"evidence": "host-side discovery + ping across the /29 (mesh-discover.py)",
-			"name": "mesh23"
+			"name": "mesh23",
+			"vlans": null
 		},
 		{
 			"kind": "mesh",
@@ -128,7 +163,8 @@
 			"b": "node3/nicSlot2p1",
 			"rateGbps": 25,
 			"evidence": "host-side discovery + ping across the /29 (mesh-discover.py)",
-			"name": "mesh13"
+			"name": "mesh13",
+			"vlans": null
 		},
 		{
 			"kind": "ring",
@@ -136,7 +172,10 @@
 			"b": "sw2/te0/28",
 			"rateGbps": 10,
 			"evidence": "LLDP, both ends (2026-09-28)",
-			"rpl": false
+			"rpl": false,
+			"vlans": {
+				"tagged": [20, 21, 22, 251]
+			}
 		},
 		{
 			"kind": "ring",
@@ -144,7 +183,10 @@
 			"b": "sw3/te0/28",
 			"rateGbps": 10,
 			"evidence": "LLDP, both ends (2026-09-28)",
-			"rpl": false
+			"rpl": false,
+			"vlans": {
+				"tagged": [20, 21, 22, 251]
+			}
 		},
 		{
 			"kind": "ring",
@@ -152,15 +194,43 @@
 			"b": "sw1/te0/28",
 			"rateGbps": 10,
 			"evidence": "LLDP, both ends (2026-09-28)",
-			"rpl": true
+			"rpl": true,
+			"vlans": {
+				"tagged": [20, 21, 22, 251]
+			}
 		},
 		{
 			"kind": "site-uplink",
 			"a": "sw1/g0/1",
 			"b": "site",
 			"rateGbps": 1,
-			"evidence": "site.json: the office uplink (trunk VLANs 20/21/22); unplugged after the VLAN cutover, 2026-09-29"
+			"evidence": "site.json: the office uplink (trunk VLANs 20/21/22); unplugged after the VLAN cutover, 2026-09-29",
+			"vlans": {
+				"tagged": [20, 21, 22]
+			}
 		}
 	],
-	"note": "From randd/node-3d-sim (build-topology.py) over cluster-hq's network design; MACs and subnets removed for the repo. The site as delivered: the bring-up bench trunk (sw1 g0/23 to mira1) is left out."
+	"note": "From randd/node-3d-sim (build-topology.py) over cluster-hq's network design; MACs and subnets removed for the repo. The site as delivered: the bring-up bench trunk (sw1 g0/23 to mira1) is left out. VLANs from cluster-hq network-design §2-3 (each link's `vlans`: tagged, and the native where the plan says).",
+	"vlans": [
+		{
+			"id": 20,
+			"name": "host-mgmt",
+			"note": "host management: the SET team's vNIC"
+		},
+		{
+			"id": 21,
+			"name": "vm-data",
+			"note": "VM traffic: the Hyper-V switch"
+		},
+		{
+			"id": 22,
+			"name": "oob-mgmt",
+			"note": "out of band: the BMCs"
+		},
+		{
+			"id": 251,
+			"name": "erps-raps",
+			"note": "the ring's R-APS control: L2 between the switches only, never to the site"
+		}
+	]
 }

@@ -8,6 +8,7 @@ import type { ChassisProfile, ServerPart } from './profile.js';
 import { capacity, member, partState, portReading, tagFor } from './profile.js';
 import type { Palette } from '../palette.js';
 import { checkLink, deviceByTag, linkAt, readEnd, VERDICT_MARK, type LinkCheck, type Plant, type TopoLink, type Verdict } from './topology.js';
+import { checkVlans, declaredText, readPortVlans, siteVlans, vlanColors, vlanText, type VlanCheck, type VlanVerdict } from './vlan.js';
 
 export interface PartPaint {
 	/** Tint for the part (or the outline of an empty position). */
@@ -382,6 +383,73 @@ export function cablesOverlay(plant: Plant): Overlay {
 				{ color: verdictColor('down', c), label: '↓ declared, no link' },
 				{ color: verdictColor('unverified', c), label: '? an end not reported' },
 				{ color: c.warning, label: '! linked, not in the plan' }
+			];
+		}
+	};
+}
+
+// ── VLANs ──────────────────────────────────────────────────────────────
+
+/** A VLAN verdict's colour, the cable verdicts' hues: = blue, ✗ red, ? grey. */
+export function vlanVerdictColor(v: VlanVerdict, c: OverlayColors): string {
+	return { consistent: c.ramp[2], contradicted: c.critical, unverified: c.neutral, none: c.neutral }[v];
+}
+
+/** The VLAN check of the link on one of this device's ports. */
+export function vlansOnPort(plant: Plant, node: string, partId: string, profile: OverlayContext['profile'], tags: Record<string, unknown>): { check: VlanCheck; near: 'a' | 'b'; link: TopoLink } | undefined {
+	const device = deviceByTag(plant.topology, node);
+	const part = profile.parts.find((q) => q.id === partId);
+	const at = device && part ? linkAt(plant.topology, device.id, part) : undefined;
+	return at ? { check: checkVlans(plant, at.link, tags), near: at.near, link: at.link } : undefined;
+}
+
+/**
+ * Every switch port by its VLANs as the switch reports them — coloured by
+ * its native VLAN, labelled `20 · T 21,22` (native, then tagged) — and red
+ * where the port's link carries other than the topology declares (vlan.ts).
+ * A server port says what the plan puts on it: hosts tag in their OS,
+ * which a BMC cannot see. `pick` lights one VLAN: the ports carrying it in
+ * its colour, the rest faint.
+ */
+export function vlanOverlay(plant: Plant, pick?: number): Overlay {
+	const colorsFor = (tags: Record<string, unknown>) => vlanColors(siteVlans(plant.topology, tags).map((v) => v.id));
+	return {
+		id: 'vlans',
+		name: 'VLANs',
+		caption:
+			pick !== undefined
+				? `The ports that carry VLAN ${pick}, tagged or as their native VLAN.`
+				: 'Each switch port’s VLANs as the switch reports them: native, then T and the tagged ones; coloured by the native VLAN. ✗ red: the link carries other than the site topology declares. A server port shows the plan (hosts tag in their OS).',
+		paint(part, value, ctx) {
+			if (part.kind !== 'port') return DIM;
+			const device = deviceByTag(plant.topology, ctx.node);
+			const at = vlansOnPort(plant, ctx.node, part.partId, ctx.profile, ctx.tags);
+			const vc = colorsFor(ctx.tags);
+			if (device?.kind !== 'switch') {
+				const d = at?.check.declared;
+				if (!d) return DIM;
+				const ids = [...(d.native !== undefined ? [d.native] : []), ...(d.tagged ?? [])];
+				if (pick !== undefined) return ids.includes(pick) ? { color: vc.get(pick), text: `${pick} (plan)` } : DIM;
+				return { color: vc.get(ids[0]), text: `${declaredText(d)} (plan)` };
+			}
+			const pv = readPortVlans(ctx.tags, ctx.node, part.tag);
+			if (!pv.reported) return DIM;
+			const text = vlanText(pv);
+			if (pick !== undefined) {
+				const carries = pv.tagged.includes(pick) || (pv.native === pick && pv.untagged.includes(pick));
+				return carries ? { color: vc.get(pick), text } : DIM;
+			}
+			if (at?.check.verdict === 'contradicted') return { color: ctx.colors.critical, text: `✗ ${text}` };
+			// A port in the default VLAN alone, with no link the plan names:
+			// unconfigured, nothing to say.
+			if (!at && !pv.tagged.length && (pv.native ?? 1) === 1) return DIM;
+			return { color: pv.native !== undefined ? vc.get(pv.native) : ctx.colors.neutral, text };
+		},
+		legend(ctx) {
+			const vc = colorsFor(ctx.tags);
+			return [
+				...siteVlans(plant.topology, ctx.tags).map((v) => ({ color: vc.get(v.id), label: `${v.id} ${v.name ?? ''}${v.declared ? '' : ' (not in the plan)'}` })),
+				...(pick === undefined ? [{ color: ctx.colors.critical, label: '✗ carries other than declared' }, { label: 'faint: VLAN 1 only, no planned link' }] : [])
 			];
 		}
 	};
