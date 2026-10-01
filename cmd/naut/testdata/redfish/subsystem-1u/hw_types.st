@@ -142,6 +142,7 @@ TYPE
     PoeW : REAL;
     InBroadcastPps : REAL;
     InMulticastPps : REAL;
+    Pvid : DINT;
   END_STRUCT;
   TempSensor : STRUCT
     Name : STRING;
@@ -167,5 +168,11 @@ TYPE
     InputV : REAL;
     OutputV : REAL;
     BatteryTempC : REAL;
+  END_STRUCT;
+  Vlan : STRUCT
+    Id : DINT;
+    Name : STRING;
+    Ports : STRING;
+    Untagged : STRING;
   END_STRUCT;
 END_TYPE

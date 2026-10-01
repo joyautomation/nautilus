@@ -1,8 +1,11 @@
 package hw
 
 import (
+	"encoding/hex"
 	"fmt"
 	"math"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +46,13 @@ type Binding struct {
 	// Derived computes the member from its siblings (an Expr), instead of
 	// polling anything: "AdminUp && !OperUp".
 	Derived string `yaml:"derived,omitempty"`
+	// Ports reads a port bitmap (BRIDGE-MIB PortList: an OCTET STRING, the
+	// first byte's top bit port 1) into a STRING member listing the ports
+	// whose bits are set, by the number each bit maps to — a bridge port
+	// mapped to its front-panel position: {"165": 1, "166": 2}. Bits with
+	// no entry are dropped. Q-BRIDGE VLAN membership is one such bitmap per
+	// VLAN.
+	Ports map[string]int `yaml:"ports,omitempty"`
 }
 
 // Validate checks a binding against the member it feeds, offline, so `naut
@@ -54,6 +64,20 @@ func (b Binding) Validate(f Field) error {
 		}
 		if _, err := ParseExpr(b.Derived); err != nil {
 			return fmt.Errorf("member %s: %w", f.Name, err)
+		}
+		return nil
+	}
+	if b.Ports != nil {
+		if f.Kind != ir.TypeString {
+			return fmt.Errorf("member %s: ports: makes a STRING, but the member is %s", f.Name, f.Kind)
+		}
+		if b.Const != nil || b.Map != nil || b.Eq != nil || b.Rate || b.Scale != 0 || b.Offset != 0 {
+			return fmt.Errorf("member %s: ports: takes no other value keys", f.Name)
+		}
+		for k, n := range b.Ports {
+			if bit, err := strconv.Atoi(k); err != nil || bit < 1 || n < 1 {
+				return fmt.Errorf("member %s: ports[%s]: %d: bits and ports count from 1", f.Name, k, n)
+			}
 		}
 		return nil
 	}
@@ -168,6 +192,9 @@ func (b Binding) Apply(f Field, raw Raw, c *Counter, now time.Time) (v ir.Value,
 	if b.Const != nil {
 		v, err := coerce(b.Const, f)
 		return v, err == nil, err
+	}
+	if b.Ports != nil {
+		return ir.StringVal(b.portList(PortBits(raw))), true, nil
 	}
 	var val any = raw
 	if b.Map != nil {
@@ -375,3 +402,42 @@ func coerce(v any, f Field) (ir.Value, error) {
 // Coerce is coerce for the protocol packages: a manifest literal or an
 // ir.Value into the member's kind.
 func Coerce(v any, f Field) (ir.Value, error) { return coerce(v, f) }
+
+// PortBits reads a PortList off the wire: the bits set, numbered from 1 at
+// the first byte's top bit. The SNMP decoder delivers a binary OCTET
+// STRING as colon hex ("00:00:0F:FF"), a printable one as its text with
+// trailing NULs dropped (an all-zero list arrives as ""): both are read.
+func PortBits(raw Raw) []int {
+	s := raw.Key()
+	b := []byte(s)
+	if hexList.MatchString(s) {
+		b, _ = hex.DecodeString(strings.ReplaceAll(s, ":", ""))
+	}
+	var out []int
+	for i, c := range b {
+		for j := 0; j < 8; j++ {
+			if c&(0x80>>j) != 0 {
+				out = append(out, i*8+j+1)
+			}
+		}
+	}
+	return out
+}
+
+var hexList = regexp.MustCompile(`^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2})*$`)
+
+// portList maps bits to ports and lists them in order: "24,25,26".
+func (b Binding) portList(bits []int) string {
+	var ports []int
+	for _, bit := range bits {
+		if p, ok := b.Ports[strconv.Itoa(bit)]; ok {
+			ports = append(ports, p)
+		}
+	}
+	sort.Ints(ports)
+	parts := make([]string, len(ports))
+	for i, p := range ports {
+		parts[i] = strconv.Itoa(p)
+	}
+	return strings.Join(parts, ",")
+}

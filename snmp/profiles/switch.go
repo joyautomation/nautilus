@@ -49,6 +49,16 @@ const (
 	gigabitEthernet = 117
 )
 
+// BRIDGE-MIB (RFC 4188) and Q-BRIDGE-MIB (RFC 4363): VLANs. Q-BRIDGE
+// numbers ports by BRIDGE port, which dot1dBasePortIfIndex maps to ifIndex.
+const (
+	dot1dBasePortIfIndex       = "1.3.6.1.2.1.17.1.4.1.2"
+	dot1qVlanStaticName        = "1.3.6.1.2.1.17.7.1.4.3.1.1" // .<vid>
+	dot1qVlanStaticEgressPorts = "1.3.6.1.2.1.17.7.1.4.3.1.2" // .<vid>, PortList
+	dot1qVlanStaticUntagged    = "1.3.6.1.2.1.17.7.1.4.3.1.4" // .<vid>, PortList
+	dot1qPvid                  = "1.3.6.1.2.1.17.7.1.4.5.1.1" // .<bridge port>
+)
+
 // ENTITY-MIB (RFC 6933) entPhysicalTable.
 const (
 	entPhysicalTable     = "1.3.6.1.2.1.47.1.1.1.1"
@@ -130,6 +140,29 @@ func buildSwitch(w walk.Walk, o Options) (Result, error) {
 	}
 	width := max(2, padWidth(len(ports)))
 
+	// VLANs: each selected port's bridge port, and the PortList bit that
+	// stands for it, mapped to its front-panel position.
+	bridgeOf := map[int]int{}
+	for _, bp := range rows(w, dot1dBasePortIfIndex) {
+		n, err := strconv.Atoi(bp)
+		if ifx, ok := intAt(w, dot1dBasePortIfIndex+"."+bp); err == nil && ok {
+			bridgeOf[int(ifx)] = n
+		}
+	}
+	vlans := rows(w, dot1qVlanStaticEgressPorts)
+	if len(vlans) > 0 && len(bridgeOf) == 0 {
+		for _, idx := range ports {
+			bridgeOf[idx] = idx
+		}
+		b.notes = append(b.notes, "Vlan: no dot1dBasePortIfIndex — bridge ports taken to be ifIndex")
+	}
+	bits := map[string]int{}
+	for pos, idx := range ports {
+		if bp, ok := bridgeOf[idx]; ok {
+			bits[strconv.Itoa(bp)] = pos + 1
+		}
+	}
+
 	missing := map[string]int{} // note once per object, not once per port
 	for pos, idx := range ports {
 		i := strconv.Itoa(idx)
@@ -175,7 +208,28 @@ func buildSwitch(w walk.Walk, o Options) (Result, error) {
 		if poe := pethPsePortDetectionStatus + ".1." + i; has(w, poe) {
 			m["PoeOn"] = bind(poe, hw.Binding{Eq: poeDelivering})
 		}
+		if bp, ok := bridgeOf[idx]; ok && has(w, dot1qPvid+"."+strconv.Itoa(bp)) {
+			m["Pvid"] = bind(dot1qPvid+"."+strconv.Itoa(bp), hw.Binding{})
+		}
 		res.Instances = append(res.Instances, Instance{Suffix: "_Port" + padded(pos+1, width), Type: "SwitchPort", Members: m})
+	}
+	// One Vlan per static VLAN: its member ports as front-panel positions.
+	for _, vid := range vlans {
+		id, err := strconv.Atoi(vid)
+		if err != nil {
+			continue
+		}
+		m := map[string]snmp.Member{
+			"Id":    cnst(id),
+			"Ports": bind(dot1qVlanStaticEgressPorts+"."+vid, hw.Binding{Ports: bits}),
+		}
+		if has(w, dot1qVlanStaticName+"."+vid) {
+			m["Name"] = bind(dot1qVlanStaticName+"."+vid, hw.Binding{})
+		}
+		if has(w, dot1qVlanStaticUntagged+"."+vid) {
+			m["Untagged"] = bind(dot1qVlanStaticUntagged+"."+vid, hw.Binding{Ports: bits})
+		}
+		res.Instances = append(res.Instances, Instance{Suffix: "_Vlan" + vid, Type: "Vlan", Members: m})
 	}
 	for _, k := range sortedKeys(missing) {
 		b.notes = append(b.notes, fmt.Sprintf("SwitchPort.%s (%d port(s))", k, missing[k]))

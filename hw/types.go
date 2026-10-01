@@ -113,6 +113,13 @@ var Types = []Type{
 		{Name: "PoeW", Kind: ir.TypeReal, Unit: "W"},
 		{Name: "InBroadcastPps", Kind: ir.TypeReal, Unit: "1/s", Desc: "broadcast packets received per second"},
 		{Name: "InMulticastPps", Kind: ir.TypeReal, Unit: "1/s", Desc: "multicast packets received per second"},
+		{Name: "Pvid", Kind: ir.TypeInt, Desc: "native VLAN: the one untagged frames arriving here join (Q-BRIDGE dot1qPvid)"},
+	}},
+	{Name: "Vlan", Desc: "one VLAN on a switch (Q-BRIDGE-MIB dot1qVlanStaticTable)", Fields: []Field{
+		{Name: "Id", Kind: ir.TypeInt, Desc: "VLAN ID"},
+		{Name: "Name", Kind: ir.TypeString},
+		{Name: "Ports", Kind: ir.TypeString, Desc: "member ports, tagged or untagged, by front-panel position: \"24,25,26\""},
+		{Name: "Untagged", Kind: ir.TypeString, Desc: "the member ports sending it untagged, the same way"},
 	}},
 	{Name: "PDU", Desc: "a switched rack PDU", Fields: []Field{
 		{Name: "Online", Kind: ir.TypeBool},

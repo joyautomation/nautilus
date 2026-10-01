@@ -2,9 +2,14 @@ package profiles
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/joyautomation/nautilus/hw"
+	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/snmp"
 	"github.com/joyautomation/nautilus/snmp/walk"
 )
 
@@ -225,5 +230,67 @@ func TestObjectName(t *testing.T) {
 		if got := ObjectName(oid); got != want {
 			t.Errorf("ObjectName(%s) = %s, want %s", oid, got, want)
 		}
+	}
+}
+
+// Q-BRIDGE: one Vlan per static VLAN, its PortLists read by front-panel
+// position through dot1dBasePortIfIndex, and each port's PVID.
+func TestSwitchVlans(t *testing.T) {
+	w := walk.Walk{}
+	list := func(bridgePorts ...int) []byte {
+		b := make([]byte, 32)
+		for _, p := range bridgePorts {
+			b[(p-1)/8] |= 0x80 >> ((p - 1) % 8)
+		}
+		return b
+	}
+	for i, idx := range []int{501, 502, 503} {
+		s := strconv.Itoa(idx)
+		bp := strconv.Itoa(165 + i) // bridge ports are not ifIndexes here
+		w = append(w,
+			walk.Varbind{OID: ifIndexCol + "." + s, Type: walk.Integer, Int: int64(idx)},
+			walk.Varbind{OID: ifType + "." + s, Type: walk.Integer, Int: ethernetCsmacd},
+			walk.Varbind{OID: dot1dBasePortIfIndex + "." + bp, Type: walk.Integer, Int: int64(idx)},
+			walk.Varbind{OID: dot1qPvid + "." + bp, Type: walk.Gauge32, Uint: map[int]uint64{0: 1, 1: 22, 2: 1}[i]},
+		)
+	}
+	w = append(w,
+		walk.Varbind{OID: dot1qVlanStaticName + ".22", Type: walk.OctetString, Bytes: []byte("oob-mgmt\x00")},
+		walk.Varbind{OID: dot1qVlanStaticEgressPorts + ".22", Type: walk.OctetString, Bytes: list(166, 167)},
+		walk.Varbind{OID: dot1qVlanStaticUntagged + ".22", Type: walk.OctetString, Bytes: list(166)},
+	)
+	w.Sort()
+	res, err := buildSwitch(w, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vlan *Instance
+	for i, in := range res.Instances {
+		if in.Suffix == "_Vlan22" {
+			vlan = &res.Instances[i]
+		}
+		if in.Suffix == "_Port02" && in.Members["Pvid"].OID != dot1qPvid+".166" {
+			t.Errorf("Port02 Pvid = %+v", in.Members["Pvid"])
+		}
+	}
+	if vlan == nil || vlan.Type != "Vlan" || vlan.Members["Id"].Const != 22 {
+		t.Fatalf("vlan = %+v", vlan)
+	}
+	read := func(member string, b []byte) string {
+		raw, _, _ := snmp.RawOf(walk.Varbind{Type: walk.OctetString, Bytes: b})
+		v, _, err := vlan.Members[member].Apply(hw.Field{Name: member, Kind: ir.TypeString}, raw, nil, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.S
+	}
+	if got := read("Ports", list(166, 167)); got != "2,3" {
+		t.Errorf("Ports = %q", got)
+	}
+	if got := read("Untagged", list(166)); got != "2" {
+		t.Errorf("Untagged = %q", got)
+	}
+	if vlan.Members["Name"].OID != dot1qVlanStaticName+".22" {
+		t.Errorf("Name = %+v", vlan.Members["Name"])
 	}
 }

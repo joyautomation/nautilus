@@ -6,6 +6,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -32,6 +33,9 @@ var ErrStatic = errors.New("static member: no wire value")
 func (b Binding) Invert(f Field, v ir.Value, cur Raw) (Raw, error) {
 	if b.IsStatic() {
 		return Raw{}, ErrStatic
+	}
+	if b.Ports != nil {
+		return b.invertPorts(f, v, cur)
 	}
 	if !b.Rate {
 		if got, ok, err := b.Apply(f, cur, nil, time.Time{}); err == nil && ok && sameValue(got, v) {
@@ -201,4 +205,50 @@ func sortKeys(keys []string) {
 		}
 		return keys[i] < keys[j]
 	})
+}
+
+// invertPorts is the PortList for a port list: each listed port's bit set,
+// as colon hex at least as long as the recorded list (a device's PortList
+// has a fixed length; the stand-in pads it to the recording's).
+func (b Binding) invertPorts(f Field, v ir.Value, cur Raw) (Raw, error) {
+	if v.Kind != ir.TypeString {
+		return Raw{}, fmt.Errorf("member %s: ports: wants a STRING, got %s", f.Name, v.Kind)
+	}
+	bitOf := map[int]int{}
+	for k, p := range b.Ports {
+		bit, _ := strconv.Atoi(k)
+		if old, dup := bitOf[p]; !dup || bit < old {
+			bitOf[p] = bit
+		}
+	}
+	n := 0
+	if hexList.MatchString(cur.Key()) {
+		n = (len(cur.Key()) + 1) / 3
+	}
+	var bits []int
+	for _, s := range strings.Split(v.S, ",") {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		p, err := strconv.Atoi(s)
+		if err != nil {
+			return Raw{}, fmt.Errorf("member %s: ports: %q is not a port number", f.Name, s)
+		}
+		bit, ok := bitOf[p]
+		if !ok {
+			return Raw{}, fmt.Errorf("member %s: ports: port %d has no bit", f.Name, p)
+		}
+		bits = append(bits, bit)
+		n = max(n, (bit+7)/8)
+	}
+	out := make([]byte, n)
+	for _, bit := range bits {
+		out[(bit-1)/8] |= 0x80 >> ((bit - 1) % 8)
+	}
+	parts := make([]string, n)
+	for i, c := range out {
+		parts[i] = fmt.Sprintf("%02X", c)
+	}
+	return RawStringVal(strings.Join(parts, ":")), nil
 }

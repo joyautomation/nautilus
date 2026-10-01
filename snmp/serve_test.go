@@ -132,6 +132,19 @@ func TestVarbindOf(t *testing.T) {
 	if err != nil || string(vb.Bytes) != string([]byte{0, 0x1a, 0x2b, 0x3c, 0x4d, 0x5f}) {
 		t.Fatalf("MAC: %x %v", vb.Bytes, err)
 	}
+	// A PortList recorded empty (all zero bytes) is binary, and keeps its length.
+	empty := walk.Varbind{OID: "1.3.6.1.2.1.17.7.1.4.3.1.4.20", Type: walk.OctetString, Bytes: make([]byte, 4)}
+	if vb, err := snmp.VarbindOf(empty, hw.RawStringVal("00:40")); err != nil || string(vb.Bytes) != string([]byte{0, 0x40, 0, 0}) {
+		t.Fatalf("PortList: %x %v", vb.Bytes, err)
+	}
+	if vb, _ := snmp.VarbindOf(empty, hw.RawStringVal("")); string(vb.Bytes) != string(make([]byte, 4)) {
+		t.Fatalf("empty PortList: %x", vb.Bytes)
+	}
+	// A printable name stays text.
+	name := walk.Varbind{OID: "1.3.6.1.2.1.17.7.1.4.3.1.1.20", Type: walk.OctetString, Bytes: []byte("vm-data\x00")}
+	if vb, _ := snmp.VarbindOf(name, hw.RawStringVal("vm-data")); string(vb.Bytes) != "vm-data" {
+		t.Fatalf("name: %q", vb.Bytes)
+	}
 	c32 := walk.Varbind{OID: "1.3.6.1.2.1.2.2.1.14.1", Type: walk.Counter32}
 	if vb, _ := snmp.VarbindOf(c32, hw.RawUintVal(1<<32+5)); vb.Uint != 5 {
 		t.Fatalf("Counter32 wraps: %d", vb.Uint)

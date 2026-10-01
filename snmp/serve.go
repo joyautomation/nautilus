@@ -194,9 +194,15 @@ func VarbindOf(cur walk.Varbind, raw hw.Raw) (walk.Varbind, error) {
 		}
 	case walk.OctetString, walk.Opaque:
 		out.Bytes = []byte(raw.Key())
-		if len(cur.Bytes) > 0 && !walk.Printable(cur.Bytes) {
-			// A binary string (a MAC) is delivered as "00:1A:…": parse it back.
+		if len(cur.Bytes) > 0 && (!walk.Printable(cur.Bytes) || allZero(cur.Bytes)) {
+			// A binary string (a MAC, a PortList) is delivered as "00:1A:…":
+			// parse it back, padded to the recorded length (a PortList's is
+			// fixed). An all-zero recording is binary too: an empty PortList
+			// reads as "" off the wire, but it is not text.
 			if b, err := hex.DecodeString(strings.ReplaceAll(raw.Key(), ":", "")); err == nil {
+				if len(b) < len(cur.Bytes) {
+					b = append(b, make([]byte, len(cur.Bytes)-len(b))...)
+				}
 				out.Bytes = b
 			}
 		}
@@ -206,4 +212,13 @@ func VarbindOf(cur walk.Varbind, raw hw.Raw) (walk.Varbind, error) {
 		return out, fmt.Errorf("%s: cannot serve a %s", cur.OID, cur.Type)
 	}
 	return out, nil
+}
+
+func allZero(b []byte) bool {
+	for _, c := range b {
+		if c != 0 {
+			return false
+		}
+	}
+	return true
 }
