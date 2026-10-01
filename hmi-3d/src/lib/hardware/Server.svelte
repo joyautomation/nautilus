@@ -135,9 +135,14 @@
 						.map((part) => {
 							const out = Math.abs((part.rot?.[1] ?? 0) % 360) === 180 ? 1 : -1;
 							const p = at(part.pos, part.explode, t.current);
-							// A front panel's ports (a switch) are in two rows: the lower row's labels go down.
-							const up = part.props.panel && part.pos[1] < size[1] / 2 ? -1 : 1;
-							return { id: part.id, at: [p[0], p[1], p[2] + (out * part.size[2]) / 2] as Vec3, out: out as 1 | -1, up: up as 1 | -1 };
+							// A front panel's ports (a switch): a port with another right above
+							// it (the lower RJ45 row) labels downwards; the rest, up.
+							const above = part.props.panel && parts.some((q) => q !== part && q.props.panel && Math.abs(q.pos[0] - part.pos[0]) < part.size[0] / 2 && q.pos[1] > part.pos[1]);
+							const up = above ? -1 : 1;
+							// Up from the panel's top row, down from its bottom row.
+							const ys = part.props.panel ? parts.filter((q) => q.props.panel).map((q) => at(q.pos, q.explode, t.current)[1]) : [];
+							const baseY = ys.length ? (up > 0 ? Math.max(...ys) : Math.min(...ys)) : undefined;
+							return { id: part.id, at: [p[0], p[1], p[2] + (out * part.size[2]) / 2] as Vec3, out: out as 1 | -1, up: up as 1 | -1, baseY };
 						})
 				)
 			: new Map<string, { from: Vec3; to: Vec3 }>()

@@ -66,10 +66,12 @@ export interface Overlay {
  * rows. Each row steps mostly away from the ports (up, or down) and only a
  * little out from the face: from an elevated view, out from the face moves
  * a label down the screen, so equal steps would cancel and stack two rows
- * on one spot. Returns each label's position and the port mouth its leader
- * starts from.
+ * on one spot. `baseY` is where a label's rows start from instead of its
+ * port (a panel's top or bottom row), so labels going up and down from
+ * ports at one height never meet. Returns each label's position and the
+ * port mouth its leader starts from.
  */
-export function fanOutLabels(items: { id: string; at: [number, number, number]; out: 1 | -1; up?: 1 | -1 }[], gap = 0.07, rows = 4, first = 0.025, step = 0.01, rise = 0.028): Map<string, { from: [number, number, number]; to: [number, number, number] }> {
+export function fanOutLabels(items: { id: string; at: [number, number, number]; out: 1 | -1; up?: 1 | -1; baseY?: number }[], gap = 0.07, rows = 6, first = 0.025, step = 0.01, rise = 0.028): Map<string, { from: [number, number, number]; to: [number, number, number] }> {
 	const res = new Map<string, { from: [number, number, number]; to: [number, number, number] }>();
 	const lastBy = new Map<number, number[]>();
 	for (const it of [...items].sort((a, b) => a.at[0] - b.at[0])) {
@@ -79,7 +81,7 @@ export function fanOutLabels(items: { id: string; at: [number, number, number]; 
 		let r = last.findIndex((x) => it.at[0] - x >= gap);
 		if (r < 0) r = last.length < rows ? last.length : last.indexOf(Math.min(...last));
 		last[r] = it.at[0];
-		res.set(it.id, { from: it.at, to: [it.at[0], it.at[1] + up * (0.006 + r * rise), it.at[2] + it.out * (first + r * step)] });
+		res.set(it.id, { from: it.at, to: [it.at[0], (it.baseY ?? it.at[1]) + up * (0.006 + r * rise), it.at[2] + it.out * (first + r * step)] });
 	}
 	return res;
 }

@@ -244,22 +244,30 @@ describe('the VLAN overlay', () => {
 		expect(o.paint(te27, tags[te27.tag!], ctx('SW1', sw, tags)).dim).toBe(undefined);
 		expect(o.paint(te25, tags[te25.tag!], ctx('SW1', sw, tags)).dim).toBe(true);
 	});
-	it('gives each of a 2 x 2 cage block its own label, rows apart on screen', () => {
-		// te0/25, te0/27 on top (labels up), te0/26, te0/28 below (labels down), 17 mm apart.
+	it('gives ports side by side their own label, rows apart on screen', () => {
+		// The SFP+ cages in one row, 14.5 mm apart, labels up; two RJ45 below them going down.
 		const at = (x: number, y: number): [number, number, number] => [x, y, 0];
 		const f = fanOutLabels([
-			{ id: 'te25', at: at(0.12, 0.029), out: 1, up: 1 },
-			{ id: 'te26', at: at(0.12, 0.015), out: 1, up: -1 },
-			{ id: 'te27', at: at(0.137, 0.029), out: 1, up: 1 },
-			{ id: 'te28', at: at(0.137, 0.015), out: 1, up: -1 }
+			{ id: 'te25', at: at(0.0965, 0.015), out: 1, up: 1 },
+			{ id: 'te26', at: at(0.111, 0.015), out: 1, up: 1 },
+			{ id: 'te27', at: at(0.1255, 0.015), out: 1, up: 1 },
+			{ id: 'g22', at: at(0.0765, 0.015), out: 1, up: -1 }
 		]);
 		const to = (id: string) => f.get(id)!.to;
-		// The top pair in rows 0 and 1, not 0 and 2: the lower pair fills its own.
-		expect(Math.abs(to('te27')[1] - to('te25')[1] - 0.028) < 1e-9).toBe(true);
-		expect(to('te26')[1] < 0.015 && to('te28')[1] < to('te26')[1]).toBe(true);
+		// Neighbours closer than the gap take the next row; a label going down fills its own rows.
+		expect(Math.abs(to('te26')[1] - to('te25')[1] - 0.028) < 1e-9).toBe(true);
+		expect(Math.abs(to('te27')[1] - to('te26')[1] - 0.028) < 1e-9).toBe(true);
+		expect(to('g22')[1] < 0.015).toBe(true);
+		// Rows started from the panel's top and bottom rows clear each other.
+		const g = fanOutLabels([
+			{ id: 'te25', at: at(0.0965, 0.015), out: 1, up: 1, baseY: 0.029 },
+			{ id: 'g24', at: at(0.0765, 0.015), out: 1, up: -1, baseY: 0.015 }
+		]);
+		expect(g.get('te25')!.to[1] - g.get('g24')!.to[1] > 0.02).toBe(true);
+		expect(g.get('te25')!.from[1]).toBe(0.015);
 		// Up more than out: seen from 30° above, a row still sits higher.
 		const screenY = (p: [number, number, number]) => p[1] * Math.cos(Math.PI / 6) - p[2] * Math.sin(Math.PI / 6);
-		expect(screenY(to('te27')) - screenY(to('te25')) > 0.01).toBe(true);
+		expect(screenY(to('te26')) - screenY(to('te25')) > 0.01).toBe(true);
 	});
 	it('agrees with the cable check on which links exist', () => {
 		const tags = planned();

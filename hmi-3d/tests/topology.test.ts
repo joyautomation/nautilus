@@ -169,7 +169,7 @@ describe('the rack', () => {
 		expect(s.out).toEqual([0, 0, -1]);
 		// Turned round: the port face is on the rear posts, x mirrored.
 		expect(Math.abs(s.at[2] - -0.7) < 1e-9).toBe(true);
-		expect(Math.abs(s.at[0] - -0.12) < 1e-9).toBe(true);
+		expect(Math.abs(s.at[0] - -0.0965) < 1e-9).toBe(true);
 	});
 	it('a cable goes round the rack, never through it', () => {
 		const a = endInRack(layout, profileOf, 'node1', 'nicSlot2p2')!;
