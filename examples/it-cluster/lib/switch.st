@@ -53,6 +53,7 @@ VAR
   FloodBps : REAL;
   LineBps  : REAL;
   Dropped  : REAL; (* discards not yet whole, so the counter never loses a fraction *)
+  DropPps  : REAL; (* frames the line cannot carry, per second *)
 END_VAR
 VAR CONSTANT
   FloodBytes : REAL := 128.0; (* a storm's frames are small: ARP, discovery, a looped packet *)
@@ -80,6 +81,7 @@ IF F.SpeedMbps > 0.0 AND P.OperUp THEN
   P.InBps := MIN(P.InBps, F.SpeedMbps * 1000000.0);
   P.OutBps := MIN(P.OutBps, F.SpeedMbps * 1000000.0);
 END_IF;
+DropPps := 0.0;
 IF NOT P.OperUp THEN
   P.InBps := 0.0;
   P.OutBps := 0.0;
@@ -95,7 +97,8 @@ ELSE
   P.InBps := MIN(P.InBps + FloodBps, LineBps);
   P.OutBps := P.OutBps + FloodBps;
   IF LineBps > 0.0 AND P.OutBps > LineBps THEN
-    Dropped := Dropped + (P.OutBps - LineBps) / (FloodBytes * 8.0) * Dt;
+    DropPps := (P.OutBps - LineBps) / (FloodBytes * 8.0);
+    Dropped := Dropped + DropPps * Dt;
     P.OutBps := LineBps;
   END_IF;
   IF Dropped >= 1.0 THEN
@@ -104,6 +107,7 @@ ELSE
   END_IF;
 END_IF;
 P.ErrorRate := B.ErrorRate + F.ErrorRate;
+P.DiscardRate := DropPps; (* the stand-in integrates ifOutDiscards from it *)
 P.Down := P.AdminUp AND NOT P.OperUp;
 IF P.SpeedMbps > 0.0 THEN
   P.InPct := 100.0 * P.InBps / (P.SpeedMbps * 1000000.0);
