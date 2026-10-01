@@ -472,4 +472,115 @@ export function vlanOverlay(plant: Plant, pick?: number): Overlay {
 	};
 }
 
+// ── traffic ────────────────────────────────────────────────────────────
+
+/** Load bands (% of line rate, the busier direction): ramp steps 0..3 end at
+ * these, step 4 beyond. Bands, not a straight %: a working port at 2% and
+ * an idle one at 0.001% must not look the same. */
+export const LOAD_BANDS = [1, 10, 40, 70];
+/** Over this, a port with no drops yet is close to saturating. */
+export const LOAD_WARN = 90;
+
+/** `26k`, `340M`, `3.2G`: bits per second, short enough for a port label. */
+export function bitsText(v: number): string {
+	const f = (x: number) => (x >= 10 ? Math.round(x) : +x.toFixed(1));
+	// Pick the unit after rounding, so 999.9M reads 1G, not 1000M.
+	for (const [k, u] of [[1e9, 'G'], [1e6, 'M'], [1e3, 'k']] as const) if (f(v / k) >= 1 && (u === 'G' || f(v / k) < 1000)) return `${f(v / k)}${u}`;
+	return `${Math.round(v)}`;
+}
+
+/** A port's traffic from its SwitchPort: in and out, the load as a share of
+ * its line rate (the busier direction) and the drops per second. */
+export interface PortTraffic {
+	up: boolean;
+	inBps: number;
+	outBps: number;
+	load: number;
+	drops: number;
+	broadcastPps: number;
+	multicastPps: number;
+}
+
+export function portTraffic(v: unknown): PortTraffic | undefined {
+	if (v === undefined || v === null) return undefined;
+	const { up } = portReading(v);
+	const inBps = num(member(v, 'InBps')) ?? 0;
+	const outBps = num(member(v, 'OutBps')) ?? 0;
+	const mbps = num(member(v, 'SpeedMbps')) ?? 0;
+	const load = mbps > 0 ? (100 * Math.max(inBps, outBps)) / (mbps * 1e6) : 0;
+	return { up: up === true, inBps, outBps, load, drops: num(member(v, 'DiscardRate')) ?? 0, broadcastPps: num(member(v, 'InBroadcastPps')) ?? 0, multicastPps: num(member(v, 'InMulticastPps')) ?? 0 };
+}
+
+/** A load's colour: dropping is red, nearly full amber, else its band. */
+export function trafficColor(t: PortTraffic, c: OverlayColors): string {
+	if (t.drops >= 1) return c.critical;
+	if (t.load >= LOAD_WARN) return c.warning;
+	const i = LOAD_BANDS.findIndex((b) => t.load < b);
+	return c.ramp[i < 0 ? c.ramp.length - 1 : i];
+}
+
+const pct = (x: number) => (x >= 10 ? `${Math.round(x)}%` : x >= 1 ? `${x.toFixed(1)}%` : x > 0 ? '<1%' : '0%');
+
+/** `↓3.2G ↑410M · 32%`, then `· drops 120/s` when dropping. `↓` is what
+ * arrives at the port, `↑` what it sends. */
+export function trafficText(t: PortTraffic): string {
+	return `↓${bitsText(t.inBps)} ↑${bitsText(t.outBps)} · ${pct(t.load)}${t.drops >= 1 ? ` · drops ${Math.round(t.drops)}/s` : ''}`;
+}
+
+/** A server port's traffic, read off the switch port its cable reaches —
+ * a BMC sees link, not traffic — turned round: what the switch sends, the
+ * server receives. */
+export function peerTraffic(plant: Plant, node: string, partId: string, profile: OverlayContext['profile'], tags: Record<string, unknown>): { traffic: PortTraffic; peer: string } | undefined {
+	const at = linkOnPort(plant, node, partId, profile, tags);
+	const far = at && (at.near === 'a' ? at.check.b : at.check.a);
+	if (!far?.tag || far.device?.kind !== 'switch' || tags[`${far.device.tag}__Online`] === false) return undefined;
+	const t = portTraffic(tags[far.tag]);
+	return t ? { traffic: { ...t, inBps: t.outBps, outBps: t.inBps }, peer: far.label } : undefined;
+}
+
+/**
+ * Every port by its traffic: in and out, the load on its line (banded,
+ * blue light → heavy), red where it drops frames — saturation's evidence,
+ * which a 5 s average can hide — amber close to full. A server port shows
+ * its switch peer's numbers, turned round. Fans out like cables.
+ */
+export function trafficOverlay(plant: Plant): Overlay {
+	return {
+		id: 'traffic',
+		name: 'Traffic',
+		fanOut: true,
+		caption: `Each port's traffic, ↓ in and ↑ out, and its load: the busier direction as a share of its line rate, in bands (<1%, <10%, <40%, <70%, more). Red: dropping frames, the line saturated. Amber: over ${LOAD_WARN}%. A server port shows its switch peer's numbers (its BMC sees no traffic).`,
+		paint(part, value, ctx) {
+			if (part.kind !== 'port') return DIM;
+			const name = portLabel(part);
+			const device = deviceByTag(plant.topology, ctx.node);
+			if (device?.kind !== 'switch') {
+				const p = peerTraffic(plant, ctx.node, part.partId, ctx.profile, ctx.tags);
+				if (!p || !p.traffic.up) return DIM;
+				return { color: trafficColor(p.traffic, ctx.colors), text: `${name}: ${trafficText(p.traffic)} (${p.peer})` };
+			}
+			const t = portTraffic(value);
+			if (!t || !t.up) return DIM;
+			return { color: trafficColor(t, ctx.colors), text: `${name}: ${trafficText(t)}` };
+		},
+		legend(ctx) {
+			const c = ctx.colors;
+			const edges = [0, ...LOAD_BANDS];
+			return [
+				...c.ramp.map((color, i) => ({ color, label: i < LOAD_BANDS.length ? `${edges[i]}–${edges[i + 1]}% of line rate` : `over ${edges[i]}%` })),
+				{ color: c.warning, label: `over ${LOAD_WARN}%: close to full` },
+				{ color: c.critical, label: 'dropping frames: saturated' },
+				{ label: 'faint: no link' }
+			];
+		}
+	};
+}
+
+/** An overlay's colours without its labels: for many devices at once (a
+ * rack of switches 1U apart), where every port's label would pile onto the
+ * next device's. The legend, or a focus, says the rest. */
+export function mute(o: Overlay): Overlay {
+	return { ...o, fanOut: false, paint: (part, value, ctx) => ({ ...o.paint(part, value, ctx), text: undefined }) };
+}
+
 export const OVERLAYS: Overlay[] = [identifyOverlay, heatOverlay, interfacesOverlay, freeOverlay];

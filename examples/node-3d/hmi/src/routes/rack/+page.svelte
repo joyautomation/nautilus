@@ -22,6 +22,12 @@
 		OVERLAYS,
 		cablesOverlay,
 		vlanOverlay,
+		trafficOverlay,
+		mute,
+		portTraffic,
+		trafficColor,
+		trafficText,
+		LOAD_WARN,
 		vlansOnPort,
 		vlanVerdictColor,
 		checkAllVlans,
@@ -235,9 +241,32 @@
 	});
 	let xray = $state(params.has('xray'));
 	let exploded = $state(params.has('exploded'));
-	let overlays = $derived([...OVERLAYS, cablesOverlay(plant), vlanOverlay(plant, vlanPick)]);
+	let overlays = $derived([...OVERLAYS, cablesOverlay(plant), vlanOverlay(plant, vlanPick), trafficOverlay(plant)]);
 	let overlayId = $state<string | null>(params.get('overlay') ?? (params.has('vlan') ? 'vlans' : null));
 	let vlanMode = $derived(!mesh && !vlans && overlayId === 'vlans');
+	let trafficMode = $derived(!mesh && !vlans && overlayId === 'traffic');
+	// Overlays that read across the rack: every switch painted, not just the focused device.
+	let rackWide = $derived(vlanMode || trafficMode);
+	// The ports that need a look, rack-wide: dropping, then nearly full.
+	let hot = $derived(
+		trafficMode
+			? devices
+					.filter((d) => d.kind === 'switch' && tags[`${d.tag}__Online`] !== false)
+					.flatMap((d) => d.parts.flatMap((p) => {
+						const t = p.kind === 'port' && p.tag ? portTraffic(tags[p.tag]) : undefined;
+						return t?.up && (t.drops >= 1 || t.load >= LOAD_WARN) ? [{ d, p, t }] : [];
+					}))
+					.sort((x, y) => y.t.drops - x.t.drops || y.t.load - x.t.load)
+			: []
+	);
+	// A cable's traffic: its switch end's port (a link between two switches
+	// takes the busier end).
+	const cableTraffic = (i: number) => {
+		const c = checks[i]?.check;
+		const ends = c ? [c.a, c.b].filter((e) => e.device?.kind === 'switch' && e.tag && tags[`${e.device.tag}__Online`] !== false) : [];
+		const ts = ends.map((e) => portTraffic(tags[e.tag!])).filter((t) => t !== undefined);
+		return ts.sort((x, y) => y.drops - x.drops || y.load - x.load)[0];
+	};
 	let overlay = $derived(overlays.find((o) => o.id === overlayId));
 
 	const top = layout.base! / 1000 + (layout.units * 44.45) / 1000;
@@ -313,11 +342,12 @@
 	let legendChip = $derived(
 		vlans || vlanMode
 			? `VLANs · ${vlanCounts.contradicted} ✗`
-			: !mesh && focused && overlay && overlay.id !== 'cables'
+			: !mesh && (focused || trafficMode) && overlay && overlay.id !== 'cables'
 				? overlay.name
 				: `Cables · ${counts.contradicted + counts.down} ✗/↓`
 	);
-	let legendCtx = $derived<OverlayContext | undefined>(focused ? { node: focused.tag, profile: focused.profile, tags, colors } : undefined);
+	let legendDevice = $derived(focused ?? (trafficMode ? devices.find((d) => d.kind === 'switch') : undefined));
+	let legendCtx = $derived<OverlayContext | undefined>(legendDevice ? { node: legendDevice.tag, profile: legendDevice.profile, tags, colors } : undefined);
 
 	// An alarm in the list, tapped: its device in focus, its part's faceplate
 	// open (the device's own when the alarm is not on a part).
@@ -414,7 +444,7 @@
 				exploded={on && exploded}
 				anchor={on && codes}
 				codeImages={on ? codeImages : undefined}
-				overlay={on || (vlanMode && !focused && d.kind === 'switch') ? overlay : undefined}
+				overlay={on ? overlay : rackWide && !focused && d.kind === 'switch' && overlay ? mute(overlay) : undefined}
 				signs={on ? 'parts' : 'device'}
 			/>
 		{/each}
@@ -422,7 +452,10 @@
 			{#each checks as c, i (i)}
 				{@const pts = paths[i]}
 				{#if pts}
-					{#if vlanMode}
+					{#if trafficMode}
+						{@const t = cableTraffic(i)}
+						<Cable points={pts} color={t?.up ? trafficColor(t, colors) : colors.neutral} faint={!t?.up} opacity={!hood || hood.links.has(i) ? 1 : 0.08} />
+					{:else if vlanMode}
 						{@const vc = vlanChecks[i]}
 						{@const lit = vlanPick === undefined || vc.carries.includes(vlanPick)}
 						<Cable
@@ -470,7 +503,7 @@
 						<button class:on={codes} onclick={() => (codes = !codes)} title="Where the printed AR codes go">codes</button>
 						<span class="sep"></span>
 					{/if}
-					{#each overlays.filter((o) => focused?.kind === 'server' || o.id === 'cables' || o.id === 'interfaces' || o.id === 'vlans') as o}
+					{#each overlays.filter((o) => focused?.kind === 'server' || o.id === 'cables' || o.id === 'interfaces' || o.id === 'vlans' || o.id === 'traffic') as o}
 						<button class:on={overlayId === o.id} onclick={() => (overlayId = overlayId === o.id ? null : o.id)}>{o.name.toLowerCase()}</button>
 					{/each}
 				{:else}
@@ -480,6 +513,7 @@
 					<span class="sep"></span>
 					<button class:on={showCables} onclick={() => (showCables = !showCables)}>cables</button>
 					<button class:on={overlayId === 'vlans'} onclick={() => (overlayId = overlayId === 'vlans' ? null : 'vlans')}>vlans</button>
+					<button class:on={overlayId === 'traffic'} onclick={() => (overlayId = overlayId === 'traffic' ? null : 'traffic')}>traffic</button>
 					{#if vlanMode && vlanPick !== undefined}
 						<button onclick={() => (vlanPick = undefined)}>VLAN {vlanPick} ✕</button>
 					{/if}
@@ -527,8 +561,8 @@
 			</ol>
 		{/if}
 		<p>Each link’s VLANs as the site topology declares them, checked against what the switches report (Q-BRIDGE-MIB): = as declared, ✗ a switch carries other than declared, or two ends disagree on the native VLAN; ? nothing reports. Servers tag in their OS, which their BMCs cannot see: a server end is the plan’s word.</p>
-	{:else if !mesh && focused && overlay && legendCtx && overlay.id !== 'cables'}
-		<b>{overlay.name} · {focused.hostname ?? focused.id}</b>
+	{:else if !mesh && (focused || trafficMode) && overlay && legendCtx && overlay.id !== 'cables'}
+		<b>{overlay.name} · {focused ? (focused.hostname ?? focused.id) : 'the rack'}</b>
 		<ul>
 			{#each overlay.legend(legendCtx) as item}
 				<li>
@@ -537,6 +571,21 @@
 				</li>
 			{/each}
 		</ul>
+		{#if trafficMode && !focused}
+			{#if hot.length}
+				<b>{hot.length} port{hot.length === 1 ? '' : 's'} to look at</b>
+				<ol>
+					{#each hot.slice(0, 8) as h (h.p.id)}
+						<li>
+							<i style:background={trafficColor(h.t, colors)}></i>
+							<button class="link" onclick={() => (focus = h.d.tag)}>{h.d.hostname ?? h.d.id} {h.p.props.port ?? h.p.partId}: {trafficText(h.t)}</button>
+						</li>
+					{/each}
+				</ol>
+			{:else}
+				<p>No port dropping frames or over {LOAD_WARN}%.</p>
+			{/if}
+		{/if}
 		<p>{overlay.caption}</p>
 	{:else}
 		<b>Cables · {topology.links.length} declared</b>

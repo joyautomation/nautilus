@@ -347,6 +347,9 @@ export function partFacts(kind: PartKind, value: unknown): Fact[] {
 			add('In', bps('InBps'));
 			add('Out', bps('OutBps'));
 			add('Errors / s', n('ErrorRate', '', 2));
+			add('Drops / s', n('DiscardRate'));
+			add('Broadcast in / s', n('InBroadcastPps'));
+			add('Multicast in / s', n('InMulticastPps'));
 			break;
 		}
 		case 'psu':

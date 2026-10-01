@@ -38,8 +38,8 @@ export {
 } from './profile.js';
 export type { ChassisProfile, ProfilePart, ProfileAnchor, ServerPart, PartKind, PartState, Fact, FaceHole } from './profile.js';
 export { partLook, DEFAULT_MODELS } from './look.js';
-export { OVERLAYS, identifyOverlay, identify, KIND_COLORS, cablesOverlay, linkOnPort, verdictColor, vlanOverlay, vlansOnPort, vlanVerdictColor, heatOverlay, interfacesOverlay, freeOverlay, heatPaint, sensorLimits, limitsFor, inletC, nextDimms, placeLabels, fanOutLabels, overlayColors, HEAT_RAMP } from './overlay.js';
-export type { Overlay, OverlayContext, OverlayColors, PartPaint, LegendItem } from './overlay.js';
+export { OVERLAYS, identifyOverlay, identify, KIND_COLORS, cablesOverlay, linkOnPort, verdictColor, vlanOverlay, vlansOnPort, vlanVerdictColor, trafficOverlay, mute, portTraffic, peerTraffic, trafficColor, trafficText, bitsText, LOAD_BANDS, LOAD_WARN, heatOverlay, interfacesOverlay, freeOverlay, heatPaint, sensorLimits, limitsFor, inletC, nextDimms, placeLabels, fanOutLabels, overlayColors, HEAT_RAMP } from './overlay.js';
+export type { Overlay, OverlayContext, OverlayColors, PartPaint, LegendItem, PortTraffic } from './overlay.js';
 export type { PartLook } from './look.js';
 export type { PartProps } from './types.js';
 export { checkLink, checkAll, neighbourhood, focusFade, linkTags, linkAt, linkFacts, resolveEnd, readEnd, parseEnd, portPart, portName, deviceById, deviceByTag, VERDICT_MARK } from './topology.js';
