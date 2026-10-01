@@ -129,7 +129,7 @@ func Generate(w walk.Walk, o Options) (Output, error) {
 // ── rendering ────────────────────────────────────────────────────────────
 
 // memberKeyOrder is the order binding keys render in a flow map.
-var memberKeyOrder = []string{"oid", "const", "map", "eq", "rate", "width", "scale", "offset", "scan-class", "derived"}
+var memberKeyOrder = []string{"oid", "const", "map", "eq", "ports", "rate", "width", "scale", "offset", "scan-class", "derived"}
 
 // ManifestYAML renders the manifest by hand: block style for sources and
 // tags, one flow map per member binding, members in contract order (the
@@ -263,6 +263,23 @@ func memberFlow(mb snmp.Member) string {
 		case "eq":
 			if mb.Eq != nil {
 				parts = append(parts, "eq: "+yamlScalar(mb.Eq))
+			}
+		case "ports":
+			if mb.Ports != nil {
+				keys := make([]string, 0, len(mb.Ports))
+				for key := range mb.Ports {
+					keys = append(keys, key)
+				}
+				sort.Slice(keys, func(i, j int) bool {
+					a, _ := strconv.Atoi(keys[i])
+					b, _ := strconv.Atoi(keys[j])
+					return a < b
+				})
+				kv := make([]string, len(keys))
+				for i, key := range keys {
+					kv[i] = strconv.Quote(key) + ": " + strconv.Itoa(mb.Ports[key])
+				}
+				parts = append(parts, "ports: {"+strings.Join(kv, ", ")+"}")
 			}
 		case "rate":
 			if mb.Rate {

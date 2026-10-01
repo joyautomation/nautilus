@@ -13,7 +13,8 @@
 #     about: one line for the scenario panel
 #     set: { Sim_SW1_Port03.Down: true }
 #
-# Values: true/false for BOOL inputs, numbers for REAL ones.
+# Values: true/false for BOOL inputs, numbers for REAL ones, whole numbers
+# for DINT ones (a VLAN ID).
 
 scenarios:
   # ── the network ──
@@ -59,6 +60,19 @@ scenarios:
   - name: switch-reboot
     about: "SW3 reboots, dark for 90 s, and comes back with its uptime reset."
     set: { Sim_SW3.Reboot: true }
+
+  # ── VLANs: the switches' config against the site's plan ──
+  - name: vlan-pruned
+    about: "VLAN 21 (vm-data) is taken off SW2 te0/28, the ring link to SW1. The ring's protection link stays blocked (no link is down), so VLAN 21 splits in two."
+    set: { Sim_SW2_Port28.Prune: 21 }
+
+  - name: native-vlan-mismatch
+    about: "SW1 te0/27's native VLAN is set to 20; SW2 te0/28 at the far end keeps 1, so untagged frames cross into the wrong VLAN."
+    set: { Sim_SW1_Port27.Pvid: 20 }
+
+  - name: wrong-access-vlan
+    about: "SW3 g0/24, node3's BMC port, is put in VLAN 20 instead of 22: the BMC drops off out-of-band management."
+    set: { Sim_SW3_Port24.Access: 20 }
 
   # ── the servers ──
   - name: cpu-overheat

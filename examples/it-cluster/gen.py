@@ -62,6 +62,7 @@ switches = [n for n, t, _ in snmp_tags if t == "Switch"]
 servers = [n for n, t, _ in redfish_tags if t == "Server"]
 node_tags = [n for n, _, _ in redfish_tags]
 ports = [n for n, t, _ in snmp_tags if t == "SwitchPort"]
+vlan_tags = [n for n, t, _ in snmp_tags if t == "Vlan"]
 types = {n: t for n, t, _ in snmp_tags + redfish_tags}
 
 h = json.load(gzip.open(os.path.join(args.dataset, "history.json.gz")))
@@ -111,6 +112,12 @@ SCRUB = {
 def snapshot(name):
     """The device at --at: identity from the walk, recorded members from history."""
     v = dict(walks[name])
+    sw_ = name.split("_")[0]
+    if types[name] == "Vlan":
+        mem, unt = vlan_cfg[sw_]["vlans"][int(v["Id"])]
+        v.update({"Ports": csv(mem), "Untagged": csv(unt)})
+    if types[name] == "SwitchPort" and "Pvid" in v:
+        v["Pvid"] = vlan_cfg[sw_]["pvid"][pos_of(name)]
     v.update(SCRUB.get(types[name], lambda n: {})(name))
     for k in list(v):
         key = f"{series_of(name)}.{k}"
@@ -118,6 +125,34 @@ def snapshot(name):
         if s and s[idx] is not None:
             v[k] = bool(s[idx]) if key in h["bool"] else s[idx]
     return v
+
+
+# ── VLANs: each switch's static VLAN config, as recorded, corrected by
+# baseline.yaml's vlans: (a port takes another's whole config: every VLAN
+# it is in, tagged or not, and its PVID). Positions are the ports' numbers.
+corrections = (yaml.safe_load(open(os.path.join(HERE, "baseline.yaml"))) or {}).get("vlans") or {}
+pos_of = lambda port: int(re.search(r"_Port(\d+)$", port).group(1))
+vlan_cfg = {}  # switch -> {"vlans": {vid: (members, untagged)}, "pvid": {pos: vid}, "ports": [pos]}
+for sw_ in switches:
+    vs = {}
+    for v in [v for v in vlan_tags if v.startswith(sw_ + "_Vlan")]:
+        w = walks[v]
+        lst = lambda x: {int(p) for p in str(x or "").split(",") if p.strip()}
+        vs[int(w["Id"])] = (lst(w.get("Ports")), lst(w.get("Untagged")))
+    sp = [p for p in ports if p.startswith(sw_ + "_")]
+    vlan_cfg[sw_] = {"vlans": vs, "pvid": {pos_of(p): int(walks[p].get("Pvid") or 1) for p in sp}, "ports": [pos_of(p) for p in sp]}
+for dst, src in corrections.items():
+    sw_, s_ = dst.split("_")[0], src.split("_")[0]
+    if sw_ != s_ or dst not in types or src not in types:
+        raise SystemExit(f"baseline.yaml vlans: {dst} takes {src}: both ports of one switch")
+    c, d, f = vlan_cfg[sw_], pos_of(dst), pos_of(src)
+    for vid, (mem, unt) in c["vlans"].items():
+        for st_ in (mem, unt):
+            st_.discard(d)
+            if f in st_:
+                st_.add(d)
+    c["pvid"][d] = c["pvid"][f]
+csv = lambda xs: ",".join(str(x) for x in sorted(xs))
 
 
 def lit(v):
@@ -199,7 +234,7 @@ for name, a, b in cables:
 open(os.path.join(HERE, "tags", "faults.yaml"), "w").write("\n".join(fl) + "\n")
 
 sw = [head + f"# The switches as the plant reports them, starting at the recording's {stamp}."]
-for n in switches + ports:
+for n in switches + ports + vlan_tags:
     sw.append(f"- {{ name: {n}, role: state, type: {types[n]}, init: {init(snapshot(n))}, desc: \"{n} as the plant reports it\" }}")
 open(os.path.join(HERE, "tags", "switches.yaml"), "w").write("\n".join(sw) + "\n")
 
@@ -238,7 +273,7 @@ def var(n):
     ext.append(f"  {n} : {types[n]};{sim}{r}")
 
 
-for n in switches + ports + node_tags:
+for n in switches + ports + vlan_tags + node_tags:
     var(n)
 for name, _, _ in cables:
     ext.append(f"  Sim_{name} : SimCable;")
@@ -268,12 +303,12 @@ body.append("  IF ClearFaults THEN")
 body.append("    Sim_Room.InletDeltaC := 0.0;")
 body.append("    Sim_Net.BroadcastPps := 0.0;")
 body.append("    Sim_Net.MulticastPps := 0.0;")
-clear = {"SimSwitch": ["Dark", "Reboot"], "SimPort": ["Down", "AdminDown", "SpeedMbps", "ErrorRate"],
+clear = {"SimSwitch": ["Dark", "Reboot"], "SimPort": ["Down", "AdminDown", "SpeedMbps", "ErrorRate", "Pvid", "Prune", "Access"],
          "SimServer": ["Dark", "PowerOff", "CpuLoad"], "SimFan": ["Fail"], "SimPSU": ["InputLost", "Fail"],
          "SimDrive": ["Pulled", "Failing"], "SimNetPort": ["Down"]}
 for n in faultable:
     for m in clear[SIM_OF[types[n]]]:
-        zero = "0.0" if m in ("SpeedMbps", "ErrorRate", "CpuLoad") else "FALSE"
+        zero = "0.0" if m in ("SpeedMbps", "ErrorRate", "CpuLoad") else "0" if m in ("Pvid", "Prune", "Access") else "FALSE"
         body.append(f"    Sim_{n}.{m} := {zero};")
 for name, _, _ in cables:
     body.append(f"    Sim_{name}.Pulled := FALSE;")
@@ -307,6 +342,25 @@ for s in switches:
         link = f", LinkOk := {peer[p]}" if p in peer else ""
         body.append(f"  {p}_M(Rec := {rec(p)}, F := Sim_{p}, Dark := {s}_M.Down, Live := {live(p)}{link}, Net := Sim_Net, Dt := PlantDtS, P := {p});")
         body.append(f"  IF {p}.OperUp THEN {s}.PortsUp := {s}.PortsUp + 1; END_IF;")
+
+body.append("  (* VLANs: the configured membership, bent by the ports' VLAN faults: Access")
+body.append("     moves a port to one access VLAN, Prune takes one VLAN off it, Pvid")
+body.append("     overrides its native VLAN. A member list is built a port at a time. *)")
+for s_ in switches:
+    c = vlan_cfg[s_]
+    sim = lambda pos: f"Sim_{s_}_Port{pos:02d}"
+    for vid, (mem, unt) in sorted(c["vlans"].items()):
+        tag = f"{s_}_Vlan{vid}"
+        for member, base in (("Ports", mem), ("Untagged", unt)):
+            terms = []
+            for pos in c["ports"]:
+                keep = f" OR ({sim(pos)}.Access = 0 AND {sim(pos)}.Prune <> {vid})" if pos in base else ""
+                terms.append(f"SEL(({sim(pos)}.Access = {vid}){keep}, '', '{pos},')")
+            body.append(f"  {tag}.{member} := CONCAT({', '.join(terms)});")
+            body.append(f"  IF LEN({tag}.{member}) > 0 THEN {tag}.{member} := LEFT({tag}.{member}, LEN({tag}.{member}) - 1); END_IF;")
+    for pos in c["ports"]:
+        p = f"{s_}_Port{pos:02d}"
+        body.append(f"  {p}.Pvid := SEL({sim(pos)}.Access > 0, SEL({sim(pos)}.Pvid > 0, {c['pvid'][pos]}, {sim(pos)}.Pvid), {sim(pos)}.Access);")
 
 body.append("  (* the servers: lib/server.st *)")
 for node in servers:
@@ -375,7 +429,7 @@ def sim_types():
     for f in ("lib/switch.st", "lib/server.st"):
         src = re.sub(r"\(\*.*?\*\)", "", open(os.path.join(HERE, f)).read(), flags=re.S)
         for name, body in re.findall(r"(\w+)\s*:\s*STRUCT(.*?)END_STRUCT", src, flags=re.S):
-            out[name] = dict(re.findall(r"(\w+)\s*:\s*(BOOL|REAL)\s*;", body))
+            out[name] = dict(re.findall(r"(\w+)\s*:\s*(BOOL|REAL|DINT)\s*;", body))
     return out
 
 
@@ -407,15 +461,22 @@ for sc in spec:
             if not kind:
                 problems.append(f"scenario {n}: {key} is not a fault input (tags/faults.yaml)")
                 continue
-            if (kind == "BOOL") != isinstance(v, bool):
+            if (kind == "BOOL") != isinstance(v, bool) or (kind == "DINT" and not isinstance(v, int)):
                 problems.append(f"scenario {n}: {key} is {kind}, got {v!r}")
             used.add((tag, typ))
 if problems:
     raise SystemExit("scenarios.yaml:\n  " + "\n  ".join(problems))
 
 
-def st_value(v):
-    return ("TRUE" if v else "FALSE") if isinstance(v, bool) else f"{float(v)}"
+def st_value(v, kind):
+    if kind == "BOOL":
+        return "TRUE" if v else "FALSE"
+    return str(int(v)) if kind == "DINT" else f"{float(v)}"
+
+
+def kind_of(key):
+    tag, _, member = key.partition(".")
+    return stypes[sim_tag_type[tag]][member]
 
 
 ext = sorted(f"  {t} : {typ};" for t, typ in used)
@@ -427,7 +488,7 @@ for i, sc in enumerate(spec, 1):
         f = f"S{i}_{j}"
         flags.append(f"  {f} : BOOL;")
         resets.append(f"    {f} := FALSE;")
-        sets = " ".join(f"{k} := {st_value(v)};" for k, v in st["set"].items())
+        sets = " ".join(f"{k} := {st_value(v, kind_of(k))};" for k, v in st["set"].items())
         body.append(f"    IF NOT {f} AND Phase >= {float(st['at'])} THEN {sets} {f} := TRUE; END_IF;")
     if sc.get("repeat"):
         cyc = " ".join(f"S{i}_{j} := FALSE;" for j in range(1, len(sc["steps"]) + 1))

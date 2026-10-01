@@ -133,15 +133,18 @@ func Pick(w walk.Walk, name string) (Profile, error) {
 // see the same varbinds.
 func Subtrees() []string {
 	return []string{
-		"1.3.6.1.2.1.1",        // SNMPv2-MIB system
-		"1.3.6.1.2.1.2",        // IF-MIB interfaces (ifNumber, ifTable)
-		"1.3.6.1.2.1.31.1.1",   // IF-MIB ifXTable
-		"1.3.6.1.2.1.33",       // UPS-MIB (RFC 1628)
-		"1.3.6.1.2.1.47.1.1.1", // ENTITY-MIB entPhysicalTable
-		"1.3.6.1.2.1.99.1.1",   // ENTITY-SENSOR-MIB entPhySensorTable
-		"1.3.6.1.2.1.105.1.1",  // POWER-ETHERNET-MIB pethPsePortTable
-		"1.3.6.1.4.1.3808.1.1", // CPS-MIB hardware (CyberPower UPS, ePDU)
-		"1.3.6.1.4.1.52642",    // FS.COM enterprise (vendor hook; see fs.go)
+		"1.3.6.1.2.1.1",          // SNMPv2-MIB system
+		"1.3.6.1.2.1.2",          // IF-MIB interfaces (ifNumber, ifTable)
+		"1.3.6.1.2.1.17.1.4.1",   // BRIDGE-MIB dot1dBasePortTable (bridge port → ifIndex)
+		"1.3.6.1.2.1.17.7.1.4.3", // Q-BRIDGE-MIB dot1qVlanStaticTable (not the FDB: it is big)
+		"1.3.6.1.2.1.17.7.1.4.5", // Q-BRIDGE-MIB dot1qPortVlanTable (PVID)
+		"1.3.6.1.2.1.31.1.1",     // IF-MIB ifXTable
+		"1.3.6.1.2.1.33",         // UPS-MIB (RFC 1628)
+		"1.3.6.1.2.1.47.1.1.1",   // ENTITY-MIB entPhysicalTable
+		"1.3.6.1.2.1.99.1.1",     // ENTITY-SENSOR-MIB entPhySensorTable
+		"1.3.6.1.2.1.105.1.1",    // POWER-ETHERNET-MIB pethPsePortTable
+		"1.3.6.1.4.1.3808.1.1",   // CPS-MIB hardware (CyberPower UPS, ePDU)
+		"1.3.6.1.4.1.52642",      // FS.COM enterprise (vendor hook; see fs.go)
 	}
 }
 

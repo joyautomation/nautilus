@@ -14,3 +14,13 @@ series:
   SW1_Port01: SW1_Port23
   # ...and g0/23 reads as a spare: shut, like g0/2 to g0/22.
   SW1_Port23: SW1_Port22
+
+#   vlans:   a switch port takes another port's VLAN config: every VLAN it
+#            is in, tagged or untagged, and its native VLAN (PVID).
+
+vlans:
+  # The same move for the VLANs: the trunk the bench used on g0/23 is the
+  # site uplink's on g0/1 (trunk 20, 21, 22)...
+  SW1_Port01: SW1_Port23
+  # ...and g0/23 is a spare in VLAN 1, like g0/22.
+  SW1_Port23: SW1_Port22

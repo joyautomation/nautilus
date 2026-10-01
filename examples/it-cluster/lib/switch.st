@@ -12,6 +12,10 @@ TYPE
     AdminDown : BOOL; (* shut by an operator: AdminUp and OperUp false, not an alarm *)
     SpeedMbps : REAL; (* negotiated speed override, 0 = as recorded (10000 to 1000: degraded) *)
     ErrorRate : REAL; (* extra errors per second on top of the recording *)
+    (* VLANs, applied in plant.st over the configured membership: *)
+    Pvid      : DINT; (* native VLAN override, 0 = as configured (a native mismatch) *)
+    Prune     : DINT; (* a VLAN taken off the port, 0 = none (a trunk missing a VLAN) *)
+    Access    : DINT; (* the port moved to this access VLAN alone, 0 = as configured *)
   END_STRUCT;
   SimNet : STRUCT
     (* the layer-2 domain, all three switches trunked on their ring: a storm

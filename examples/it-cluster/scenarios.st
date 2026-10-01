@@ -20,9 +20,12 @@ VAR_EXTERNAL
   Sim_Net : SimNet;
   Sim_Room : SimRoom;
   Sim_SW1_Port25 : SimPort;
+  Sim_SW1_Port27 : SimPort;
   Sim_SW2_Port25 : SimPort;
   Sim_SW2_Port26 : SimPort;
+  Sim_SW2_Port28 : SimPort;
   Sim_SW3 : SimSwitch;
+  Sim_SW3_Port24 : SimPort;
 END_VAR
 VAR
   Last   : STRING;
@@ -47,19 +50,22 @@ VAR
   S16_1 : BOOL;
   S17_1 : BOOL;
   S18_1 : BOOL;
-  S18_2 : BOOL;
   S19_1 : BOOL;
   S20_1 : BOOL;
-  S20_2 : BOOL;
-  S20_3 : BOOL;
-  S20_4 : BOOL;
-  S20_5 : BOOL;
-  S20_6 : BOOL;
-  S20_7 : BOOL;
-  S20_8 : BOOL;
-  S20_9 : BOOL;
-  S20_10 : BOOL;
-  S20_11 : BOOL;
+  S21_1 : BOOL;
+  S21_2 : BOOL;
+  S22_1 : BOOL;
+  S23_1 : BOOL;
+  S23_2 : BOOL;
+  S23_3 : BOOL;
+  S23_4 : BOOL;
+  S23_5 : BOOL;
+  S23_6 : BOOL;
+  S23_7 : BOOL;
+  S23_8 : BOOL;
+  S23_9 : BOOL;
+  S23_10 : BOOL;
+  S23_11 : BOOL;
 END_VAR
 IF Scenario <> Last THEN
   Last := Scenario;
@@ -85,19 +91,22 @@ IF Scenario <> Last THEN
     S16_1 := FALSE;
     S17_1 := FALSE;
     S18_1 := FALSE;
-    S18_2 := FALSE;
     S19_1 := FALSE;
     S20_1 := FALSE;
-    S20_2 := FALSE;
-    S20_3 := FALSE;
-    S20_4 := FALSE;
-    S20_5 := FALSE;
-    S20_6 := FALSE;
-    S20_7 := FALSE;
-    S20_8 := FALSE;
-    S20_9 := FALSE;
-    S20_10 := FALSE;
-    S20_11 := FALSE;
+    S21_1 := FALSE;
+    S21_2 := FALSE;
+    S22_1 := FALSE;
+    S23_1 := FALSE;
+    S23_2 := FALSE;
+    S23_3 := FALSE;
+    S23_4 := FALSE;
+    S23_5 := FALSE;
+    S23_6 := FALSE;
+    S23_7 := FALSE;
+    S23_8 := FALSE;
+    S23_9 := FALSE;
+    S23_10 := FALSE;
+    S23_11 := FALSE;
   IF Scenario = 'normal' THEN
     Active := 0;
     ClearFaults := TRUE;
@@ -121,26 +130,32 @@ IF Scenario <> Last THEN
     Active := 9;
   ELSIF Scenario = 'switch-reboot' THEN
     Active := 10;
-  ELSIF Scenario = 'cpu-overheat' THEN
+  ELSIF Scenario = 'vlan-pruned' THEN
     Active := 11;
-  ELSIF Scenario = 'fan-fail' THEN
+  ELSIF Scenario = 'native-vlan-mismatch' THEN
     Active := 12;
-  ELSIF Scenario = 'psu-loss' THEN
+  ELSIF Scenario = 'wrong-access-vlan' THEN
     Active := 13;
-  ELSIF Scenario = 'drive-pull' THEN
+  ELSIF Scenario = 'cpu-overheat' THEN
     Active := 14;
-  ELSIF Scenario = 'drive-failing' THEN
+  ELSIF Scenario = 'fan-fail' THEN
     Active := 15;
-  ELSIF Scenario = 'node-off' THEN
+  ELSIF Scenario = 'psu-loss' THEN
     Active := 16;
-  ELSIF Scenario = 'bmc-dark' THEN
+  ELSIF Scenario = 'drive-pull' THEN
     Active := 17;
-  ELSIF Scenario = 'bmc-reboot' THEN
+  ELSIF Scenario = 'drive-failing' THEN
     Active := 18;
-  ELSIF Scenario = 'hot-room' THEN
+  ELSIF Scenario = 'node-off' THEN
     Active := 19;
-  ELSIF Scenario = 'cooling-failure' THEN
+  ELSIF Scenario = 'bmc-dark' THEN
     Active := 20;
+  ELSIF Scenario = 'bmc-reboot' THEN
+    Active := 21;
+  ELSIF Scenario = 'hot-room' THEN
+    Active := 22;
+  ELSIF Scenario = 'cooling-failure' THEN
+    Active := 23;
   ELSE
     Active := 0;
     ScenarioUnknown := TRUE;
@@ -168,37 +183,43 @@ END_IF;
     IF NOT S9_1 AND Phase >= 0.0 THEN Sim_SW3.Dark := TRUE; S9_1 := TRUE; END_IF;
   ELSIF Active = 10 THEN (* switch-reboot: SW3 reboots, dark for 90 s, and comes back with its uptime reset. *)
     IF NOT S10_1 AND Phase >= 0.0 THEN Sim_SW3.Reboot := TRUE; S10_1 := TRUE; END_IF;
-  ELSIF Active = 11 THEN (* cpu-overheat: node2 runs flat out with two fans gone; its CPU climbs past HighHigh in a few minutes. *)
-    IF NOT S11_1 AND Phase >= 0.0 THEN Sim_NODE2.CpuLoad := 100.0; Sim_NODE2_Fan3.Fail := TRUE; Sim_NODE2_Fan4.Fail := TRUE; S11_1 := TRUE; END_IF;
-  ELSIF Active = 12 THEN (* fan-fail: node1's FAN3 stops; the others ramp and the CPU warms. *)
-    IF NOT S12_1 AND Phase >= 0.0 THEN Sim_NODE1_Fan3.Fail := TRUE; S12_1 := TRUE; END_IF;
-  ELSIF Active = 13 THEN (* psu-loss: node1's PSU2 loses its input; PSU1 carries the load and the server stays up. *)
-    IF NOT S13_1 AND Phase >= 0.0 THEN Sim_NODE1_PSU2.InputLost := TRUE; S13_1 := TRUE; END_IF;
-  ELSIF Active = 14 THEN (* drive-pull: node3's NVMe bay 2 is pulled. *)
-    IF NOT S14_1 AND Phase >= 0.0 THEN Sim_NODE3_Drive_NVMe2.Pulled := TRUE; S14_1 := TRUE; END_IF;
-  ELSIF Active = 15 THEN (* drive-failing: node3's NVMe bay 1 predicts its own failure. *)
-    IF NOT S15_1 AND Phase >= 0.0 THEN Sim_NODE3_Drive_NVMe1.Failing := TRUE; S15_1 := TRUE; END_IF;
-  ELSIF Active = 16 THEN (* node-off: node2 powers off; its links drop and the switches alarm. *)
-    IF NOT S16_1 AND Phase >= 0.0 THEN Sim_NODE2.PowerOff := TRUE; S16_1 := TRUE; END_IF;
-  ELSIF Active = 17 THEN (* bmc-dark: node3's BMC stops answering. *)
-    IF NOT S17_1 AND Phase >= 0.0 THEN Sim_NODE3.Dark := TRUE; S17_1 := TRUE; END_IF;
-  ELSIF Active = 18 THEN (* bmc-reboot: node3's BMC reboots, dark for two minutes, then back. *)
-    IF NOT S18_1 AND Phase >= 0.0 THEN Sim_NODE3.Dark := TRUE; S18_1 := TRUE; END_IF;
-    IF NOT S18_2 AND Phase >= 120.0 THEN Sim_NODE3.Dark := FALSE; S18_2 := TRUE; END_IF;
-  ELSIF Active = 19 THEN (* hot-room: The room runs 15 °C hot; every inlet, and everything behind it, rises. *)
-    IF NOT S19_1 AND Phase >= 0.0 THEN Sim_Room.InletDeltaC := 15.0; S19_1 := TRUE; END_IF;
-  ELSIF Active = 20 THEN (* cooling-failure: The room's cooling fails; the inlets climb 2 °C a minute for ten minutes. *)
-    IF NOT S20_1 AND Phase >= 0.0 THEN Sim_Room.InletDeltaC := 0.0; S20_1 := TRUE; END_IF;
-    IF NOT S20_2 AND Phase >= 60.0 THEN Sim_Room.InletDeltaC := 2.0; S20_2 := TRUE; END_IF;
-    IF NOT S20_3 AND Phase >= 120.0 THEN Sim_Room.InletDeltaC := 4.0; S20_3 := TRUE; END_IF;
-    IF NOT S20_4 AND Phase >= 180.0 THEN Sim_Room.InletDeltaC := 6.0; S20_4 := TRUE; END_IF;
-    IF NOT S20_5 AND Phase >= 240.0 THEN Sim_Room.InletDeltaC := 8.0; S20_5 := TRUE; END_IF;
-    IF NOT S20_6 AND Phase >= 300.0 THEN Sim_Room.InletDeltaC := 10.0; S20_6 := TRUE; END_IF;
-    IF NOT S20_7 AND Phase >= 360.0 THEN Sim_Room.InletDeltaC := 12.0; S20_7 := TRUE; END_IF;
-    IF NOT S20_8 AND Phase >= 420.0 THEN Sim_Room.InletDeltaC := 14.0; S20_8 := TRUE; END_IF;
-    IF NOT S20_9 AND Phase >= 480.0 THEN Sim_Room.InletDeltaC := 16.0; S20_9 := TRUE; END_IF;
-    IF NOT S20_10 AND Phase >= 540.0 THEN Sim_Room.InletDeltaC := 18.0; S20_10 := TRUE; END_IF;
-    IF NOT S20_11 AND Phase >= 600.0 THEN Sim_Room.InletDeltaC := 20.0; S20_11 := TRUE; END_IF;
+  ELSIF Active = 11 THEN (* vlan-pruned: VLAN 21 (vm-data) is taken off SW2 te0/28, the ring link to SW1. The ring's protection link stays blocked (no link is down), so VLAN 21 splits in two. *)
+    IF NOT S11_1 AND Phase >= 0.0 THEN Sim_SW2_Port28.Prune := 21; S11_1 := TRUE; END_IF;
+  ELSIF Active = 12 THEN (* native-vlan-mismatch: SW1 te0/27's native VLAN is set to 20; SW2 te0/28 at the far end keeps 1, so untagged frames cross into the wrong VLAN. *)
+    IF NOT S12_1 AND Phase >= 0.0 THEN Sim_SW1_Port27.Pvid := 20; S12_1 := TRUE; END_IF;
+  ELSIF Active = 13 THEN (* wrong-access-vlan: SW3 g0/24, node3's BMC port, is put in VLAN 20 instead of 22: the BMC drops off out-of-band management. *)
+    IF NOT S13_1 AND Phase >= 0.0 THEN Sim_SW3_Port24.Access := 20; S13_1 := TRUE; END_IF;
+  ELSIF Active = 14 THEN (* cpu-overheat: node2 runs flat out with two fans gone; its CPU climbs past HighHigh in a few minutes. *)
+    IF NOT S14_1 AND Phase >= 0.0 THEN Sim_NODE2.CpuLoad := 100.0; Sim_NODE2_Fan3.Fail := TRUE; Sim_NODE2_Fan4.Fail := TRUE; S14_1 := TRUE; END_IF;
+  ELSIF Active = 15 THEN (* fan-fail: node1's FAN3 stops; the others ramp and the CPU warms. *)
+    IF NOT S15_1 AND Phase >= 0.0 THEN Sim_NODE1_Fan3.Fail := TRUE; S15_1 := TRUE; END_IF;
+  ELSIF Active = 16 THEN (* psu-loss: node1's PSU2 loses its input; PSU1 carries the load and the server stays up. *)
+    IF NOT S16_1 AND Phase >= 0.0 THEN Sim_NODE1_PSU2.InputLost := TRUE; S16_1 := TRUE; END_IF;
+  ELSIF Active = 17 THEN (* drive-pull: node3's NVMe bay 2 is pulled. *)
+    IF NOT S17_1 AND Phase >= 0.0 THEN Sim_NODE3_Drive_NVMe2.Pulled := TRUE; S17_1 := TRUE; END_IF;
+  ELSIF Active = 18 THEN (* drive-failing: node3's NVMe bay 1 predicts its own failure. *)
+    IF NOT S18_1 AND Phase >= 0.0 THEN Sim_NODE3_Drive_NVMe1.Failing := TRUE; S18_1 := TRUE; END_IF;
+  ELSIF Active = 19 THEN (* node-off: node2 powers off; its links drop and the switches alarm. *)
+    IF NOT S19_1 AND Phase >= 0.0 THEN Sim_NODE2.PowerOff := TRUE; S19_1 := TRUE; END_IF;
+  ELSIF Active = 20 THEN (* bmc-dark: node3's BMC stops answering. *)
+    IF NOT S20_1 AND Phase >= 0.0 THEN Sim_NODE3.Dark := TRUE; S20_1 := TRUE; END_IF;
+  ELSIF Active = 21 THEN (* bmc-reboot: node3's BMC reboots, dark for two minutes, then back. *)
+    IF NOT S21_1 AND Phase >= 0.0 THEN Sim_NODE3.Dark := TRUE; S21_1 := TRUE; END_IF;
+    IF NOT S21_2 AND Phase >= 120.0 THEN Sim_NODE3.Dark := FALSE; S21_2 := TRUE; END_IF;
+  ELSIF Active = 22 THEN (* hot-room: The room runs 15 °C hot; every inlet, and everything behind it, rises. *)
+    IF NOT S22_1 AND Phase >= 0.0 THEN Sim_Room.InletDeltaC := 15.0; S22_1 := TRUE; END_IF;
+  ELSIF Active = 23 THEN (* cooling-failure: The room's cooling fails; the inlets climb 2 °C a minute for ten minutes. *)
+    IF NOT S23_1 AND Phase >= 0.0 THEN Sim_Room.InletDeltaC := 0.0; S23_1 := TRUE; END_IF;
+    IF NOT S23_2 AND Phase >= 60.0 THEN Sim_Room.InletDeltaC := 2.0; S23_2 := TRUE; END_IF;
+    IF NOT S23_3 AND Phase >= 120.0 THEN Sim_Room.InletDeltaC := 4.0; S23_3 := TRUE; END_IF;
+    IF NOT S23_4 AND Phase >= 180.0 THEN Sim_Room.InletDeltaC := 6.0; S23_4 := TRUE; END_IF;
+    IF NOT S23_5 AND Phase >= 240.0 THEN Sim_Room.InletDeltaC := 8.0; S23_5 := TRUE; END_IF;
+    IF NOT S23_6 AND Phase >= 300.0 THEN Sim_Room.InletDeltaC := 10.0; S23_6 := TRUE; END_IF;
+    IF NOT S23_7 AND Phase >= 360.0 THEN Sim_Room.InletDeltaC := 12.0; S23_7 := TRUE; END_IF;
+    IF NOT S23_8 AND Phase >= 420.0 THEN Sim_Room.InletDeltaC := 14.0; S23_8 := TRUE; END_IF;
+    IF NOT S23_9 AND Phase >= 480.0 THEN Sim_Room.InletDeltaC := 16.0; S23_9 := TRUE; END_IF;
+    IF NOT S23_10 AND Phase >= 540.0 THEN Sim_Room.InletDeltaC := 18.0; S23_10 := TRUE; END_IF;
+    IF NOT S23_11 AND Phase >= 600.0 THEN Sim_Room.InletDeltaC := 20.0; S23_11 := TRUE; END_IF;
   END_IF;
 ScenarioS := ScenarioS + ScenarioDtS;
 Phase := Phase + ScenarioDtS;

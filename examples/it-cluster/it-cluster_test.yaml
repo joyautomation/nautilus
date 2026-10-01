@@ -211,3 +211,30 @@ tests:
       - given: { Scenario: "meteor-strike" }
         advance: 2s
         expect: { ScenarioUnknown: true, SW1_Port25.OperUp: true }
+
+  # ── VLANs ──
+  - name: the VLAN config is the site as planned, g0/1 the site trunk
+    steps:
+      - advance: 1s
+        expect: { SW1_Vlan20.Ports: "1,25,26,27,28", SW1_Vlan22.Untagged: "24", SW1_Port24.Pvid: 22, SW1_Port01.Pvid: 1, SW2_Vlan251.Ports: "27,28", SW2_Vlan20.Untagged: "" }
+
+  - name: a VLAN pruned from a ring port leaves that port alone, and clears
+    steps:
+      - given: { Scenario: "vlan-pruned" }
+        advance: 2s
+        expect: { SW2_Vlan21.Ports: "25,26,27", SW2_Vlan20.Ports: "25,26,27,28", SW1_Vlan21.Ports: "1,25,26,27,28" }
+      - given: { Scenario: "normal" }
+        advance: 2s
+        expect: { SW2_Vlan21.Ports: "25,26,27,28" }
+
+  - name: a native VLAN override moves the PVID only
+    steps:
+      - given: { Scenario: "native-vlan-mismatch" }
+        advance: 2s
+        expect: { SW1_Port27.Pvid: 20, SW2_Port28.Pvid: 1, SW1_Vlan20.Ports: "1,25,26,27,28" }
+
+  - name: an access port moved to another VLAN leaves its own
+    steps:
+      - given: { Scenario: "wrong-access-vlan" }
+        advance: 2s
+        expect: { SW3_Port24.Pvid: 20, SW3_Vlan20.Untagged: "24", SW3_Vlan20.Ports: "24,25,26,27,28", SW3_Vlan22.Ports: "25,26,27,28", SW3_Vlan22.Untagged: "" }

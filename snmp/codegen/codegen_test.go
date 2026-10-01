@@ -3,6 +3,7 @@ package codegen
 import (
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -116,5 +117,43 @@ func TestTagsYAML(t *testing.T) {
 	}
 	if _, err := TagsYAML(m, []string{"NOPE*"}); err == nil || !strings.Contains(err.Error(), "stale exclusion") {
 		t.Errorf("stale skip = %v", err)
+	}
+}
+
+// A switch with VLANs: the ports: maps render and decode back too.
+func TestManifestRoundTripsVlans(t *testing.T) {
+	w := fixture(t, "switch.snmpwalk")
+	var first string
+	for _, vb := range w {
+		if strings.HasPrefix(vb.OID, "1.3.6.1.2.1.2.2.1.1.") {
+			first = strings.TrimPrefix(vb.OID, "1.3.6.1.2.1.2.2.1.1.")
+			break
+		}
+	}
+	idx, _ := strconv.Atoi(first)
+	list := make([]byte, 4)
+	list[0] = 0x40 // bridge port 2
+	w = append(w,
+		walk.Varbind{OID: "1.3.6.1.2.1.17.1.4.1.2.2", Type: walk.Integer, Int: int64(idx)},
+		walk.Varbind{OID: "1.3.6.1.2.1.17.7.1.4.5.1.1.2", Type: walk.Gauge32, Uint: 20},
+		walk.Varbind{OID: "1.3.6.1.2.1.17.7.1.4.3.1.1.20", Type: walk.OctetString, Bytes: []byte("host-mgmt")},
+		walk.Varbind{OID: "1.3.6.1.2.1.17.7.1.4.3.1.2.20", Type: walk.OctetString, Bytes: list},
+		walk.Varbind{OID: "1.3.6.1.2.1.17.7.1.4.3.1.4.20", Type: walk.OctetString, Bytes: list},
+	)
+	w.Sort()
+	out, err := Generate(w, Options{Tag: "SW1", Host: "192.0.2.2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := ManifestYAML(out, "naut snmp import --tag SW1")
+	if !strings.Contains(string(body), `ports: {"2": 1}`) {
+		t.Fatalf("no ports: map rendered:\n%s", body)
+	}
+	back, err := snmp.ParseManifest(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(back, out.Manifest) {
+		t.Fatal("round trip differs")
 	}
 }
