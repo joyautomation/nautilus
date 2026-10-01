@@ -61,20 +61,25 @@ export interface Overlay {
 
 /**
  * Where fanned-out port labels go: straight out from each port's face, in
- * rows so labels closer than `gap` along x never share one. Returns each
- * label's position and the port mouth its leader starts from.
+ * rows so labels closer than `gap` along x never share one. Ports whose
+ * labels go up (a panel's top row) and down (its lower row) fill their own
+ * rows. Each row steps mostly away from the ports (up, or down) and only a
+ * little out from the face: from an elevated view, out from the face moves
+ * a label down the screen, so equal steps would cancel and stack two rows
+ * on one spot. Returns each label's position and the port mouth its leader
+ * starts from.
  */
-export function fanOutLabels(items: { id: string; at: [number, number, number]; out: 1 | -1; up?: 1 | -1 }[], gap = 0.07, rows = 4, first = 0.025, step = 0.022): Map<string, { from: [number, number, number]; to: [number, number, number] }> {
+export function fanOutLabels(items: { id: string; at: [number, number, number]; out: 1 | -1; up?: 1 | -1 }[], gap = 0.07, rows = 4, first = 0.025, step = 0.01, rise = 0.028): Map<string, { from: [number, number, number]; to: [number, number, number] }> {
 	const res = new Map<string, { from: [number, number, number]; to: [number, number, number] }>();
-	const last: number[] = [];
+	const lastBy = new Map<number, number[]>();
 	for (const it of [...items].sort((a, b) => a.at[0] - b.at[0])) {
+		const up = it.up ?? 1;
+		const last = lastBy.get(up) ?? [];
+		lastBy.set(up, last);
 		let r = last.findIndex((x) => it.at[0] - x >= gap);
 		if (r < 0) r = last.length < rows ? last.length : last.indexOf(Math.min(...last));
 		last[r] = it.at[0];
-		const d = first + r * step;
-		// Rows step out from the face and away from the ports (up, or down
-		// for a panel's lower row), so a head-on view separates them too.
-		res.set(it.id, { from: it.at, to: [it.at[0], it.at[1] + (it.up ?? 1) * (0.006 + r * 0.013), it.at[2] + it.out * d] });
+		res.set(it.id, { from: it.at, to: [it.at[0], it.at[1] + up * (0.006 + r * rise), it.at[2] + it.out * (first + r * step)] });
 	}
 	return res;
 }
@@ -395,6 +400,9 @@ export function vlanVerdictColor(v: VlanVerdict, c: OverlayColors): string {
 	return { consistent: c.ramp[2], contradicted: c.critical, unverified: c.neutral, none: c.neutral }[v];
 }
 
+/** A port as a label names it: its plan name (te0/25), else its short name. */
+const portLabel = (part: ServerPart) => (typeof part.props.port === 'string' ? part.props.port : typeof part.props.short === 'string' ? part.props.short : part.partId);
+
 /** The VLAN check of the link on one of this device's ports. */
 export function vlansOnPort(plant: Plant, node: string, partId: string, profile: OverlayContext['profile'], tags: Record<string, unknown>): { check: VlanCheck; near: 'a' | 'b'; link: TopoLink } | undefined {
 	const device = deviceByTag(plant.topology, node);
@@ -413,6 +421,30 @@ export function vlansOnPort(plant: Plant, node: string, partId: string, profile:
  */
 export function vlanOverlay(plant: Plant, pick?: number): Overlay {
 	const colorsFor = (tags: Record<string, unknown>) => vlanColors(siteVlans(plant.topology, tags).map((v) => v.id));
+	const paintPort = (part: ServerPart, ctx: OverlayContext): PartPaint => {
+		const device = deviceByTag(plant.topology, ctx.node);
+		const at = vlansOnPort(plant, ctx.node, part.partId, ctx.profile, ctx.tags);
+		const vc = colorsFor(ctx.tags);
+		if (device?.kind !== 'switch') {
+			const d = at?.check.declared;
+			if (!d) return DIM;
+			const ids = [...(d.native !== undefined ? [d.native] : []), ...(d.tagged ?? [])];
+			if (pick !== undefined) return ids.includes(pick) ? { color: vc.get(pick), text: `${pick} (plan)` } : DIM;
+			return { color: vc.get(ids[0]), text: `${declaredText(d)} (plan)` };
+		}
+		const pv = readPortVlans(ctx.tags, ctx.node, part.tag);
+		if (!pv.reported) return DIM;
+		const text = vlanText(pv);
+		if (pick !== undefined) {
+			const carries = pv.tagged.includes(pick) || (pv.native === pick && pv.untagged.includes(pick));
+			return carries ? { color: vc.get(pick), text } : DIM;
+		}
+		if (at?.check.verdict === 'contradicted') return { color: ctx.colors.critical, text: `✗ ${text}` };
+		// A port in the default VLAN alone, with no link the plan names:
+		// unconfigured, nothing to say.
+		if (!at && !pv.tagged.length && (pv.native ?? 1) === 1) return DIM;
+		return { color: pv.native !== undefined ? vc.get(pv.native) : ctx.colors.neutral, text };
+	};
 	return {
 		id: 'vlans',
 		name: 'VLANs',
@@ -420,30 +452,13 @@ export function vlanOverlay(plant: Plant, pick?: number): Overlay {
 			pick !== undefined
 				? `The ports that carry VLAN ${pick}, tagged or as their native VLAN.`
 				: 'Each switch port’s VLANs as the switch reports them: native, then T and the tagged ones; coloured by the native VLAN. ✗ red: the link carries other than the site topology declares. A server port shows the plan (hosts tag in their OS).',
+		// One label per port on a leader, named: neighbours often carry the
+		// same VLANs, and a shared label would not say which port it means.
+		fanOut: true,
 		paint(part, value, ctx) {
 			if (part.kind !== 'port') return DIM;
-			const device = deviceByTag(plant.topology, ctx.node);
-			const at = vlansOnPort(plant, ctx.node, part.partId, ctx.profile, ctx.tags);
-			const vc = colorsFor(ctx.tags);
-			if (device?.kind !== 'switch') {
-				const d = at?.check.declared;
-				if (!d) return DIM;
-				const ids = [...(d.native !== undefined ? [d.native] : []), ...(d.tagged ?? [])];
-				if (pick !== undefined) return ids.includes(pick) ? { color: vc.get(pick), text: `${pick} (plan)` } : DIM;
-				return { color: vc.get(ids[0]), text: `${declaredText(d)} (plan)` };
-			}
-			const pv = readPortVlans(ctx.tags, ctx.node, part.tag);
-			if (!pv.reported) return DIM;
-			const text = vlanText(pv);
-			if (pick !== undefined) {
-				const carries = pv.tagged.includes(pick) || (pv.native === pick && pv.untagged.includes(pick));
-				return carries ? { color: vc.get(pick), text } : DIM;
-			}
-			if (at?.check.verdict === 'contradicted') return { color: ctx.colors.critical, text: `✗ ${text}` };
-			// A port in the default VLAN alone, with no link the plan names:
-			// unconfigured, nothing to say.
-			if (!at && !pv.tagged.length && (pv.native ?? 1) === 1) return DIM;
-			return { color: pv.native !== undefined ? vc.get(pv.native) : ctx.colors.neutral, text };
+			const p = paintPort(part, ctx);
+			return p.text ? { ...p, text: `${portLabel(part)}: ${p.text}` } : p;
 		},
 		legend(ctx) {
 			const vc = colorsFor(ctx.tags);

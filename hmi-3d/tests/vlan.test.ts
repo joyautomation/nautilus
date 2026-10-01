@@ -10,7 +10,7 @@ import s3900 from '../profiles/fs-s3900-24t4s-r.json';
 import hq from '../../examples/node-3d/hmi/src/lib/hq.topology.json';
 import { resolveParts, type ChassisProfile } from '../src/lib/hardware/profile.js';
 import { checkAll, type LinkCheck, type Plant, type Topology } from '../src/lib/hardware/topology.js';
-import { vlanOverlay, type OverlayColors } from '../src/lib/hardware/overlay.js';
+import { vlanOverlay, fanOutLabels, type OverlayColors } from '../src/lib/hardware/overlay.js';
 import {
 	parseList,
 	portPosition,
@@ -215,14 +215,15 @@ describe('VLAN domains', () => {
 describe('the VLAN overlay', () => {
 	const ctx = (node: string, profile: ChassisProfile, tags: Record<string, unknown>) => ({ node, profile, tags, colors });
 	const part = (node: string, profile: ChassisProfile, id: string) => resolveParts(profile, node).find((p) => p.partId === id)!;
-	it('labels a switch port native · tagged, in its native VLAN’s colour', () => {
+	it('labels a switch port by name, native · tagged, in its native VLAN’s colour', () => {
+		expect(vlanOverlay(plant).fanOut).toBe(true);
 		const tags = planned();
 		const o = vlanOverlay(plant);
 		const vc = vlanColors(siteVlans(topology, tags).map((v) => v.id));
 		const te25 = part('SW1', sw, 'te25');
-		expect(o.paint(te25, tags[te25.tag!], ctx('SW1', sw, tags))).toEqual({ color: vc.get(1), text: '1 · T 20,21,22' });
+		expect(o.paint(te25, tags[te25.tag!], ctx('SW1', sw, tags))).toEqual({ color: vc.get(1), text: 'te0/25: 1 · T 20,21,22' });
 		const g24 = part('SW1', sw, 'g24');
-		expect(o.paint(g24, tags[g24.tag!], ctx('SW1', sw, tags))).toEqual({ color: vc.get(22), text: '22' });
+		expect(o.paint(g24, tags[g24.tag!], ctx('SW1', sw, tags))).toEqual({ color: vc.get(22), text: 'g0/24: 22' });
 		// An unconfigured copper port: nothing to say.
 		const g5 = part('SW1', sw, 'g5');
 		expect(o.paint(g5, tags[g5.tag!], ctx('SW1', sw, tags)).dim).toBe(true);
@@ -231,17 +232,34 @@ describe('the VLAN overlay', () => {
 		const tags = planned();
 		prune(tags, 'SW2_Vlan21', 28);
 		const te28 = part('SW2', sw, 'te28');
-		expect(vlanOverlay(plant).paint(te28, tags[te28.tag!], ctx('SW2', sw, tags))).toEqual({ color: 'critical', text: '✗ 1 · T 20,22,251' });
+		expect(vlanOverlay(plant).paint(te28, tags[te28.tag!], ctx('SW2', sw, tags))).toEqual({ color: 'critical', text: 'te0/28: ✗ 1 · T 20,22,251' });
 	});
 	it('gives a server port the plan, and a picked VLAN only the ports carrying it', () => {
 		const tags = planned();
 		const p = part('NODE1', server, 'nicSlot2p2');
-		expect(vlanOverlay(plant).paint(p, undefined, ctx('NODE1', server, tags)).text).toBe('T 20,21,22 (plan)');
+		expect(vlanOverlay(plant).paint(p, undefined, ctx('NODE1', server, tags)).text).toBe('slot2 p2: T 20,21,22 (plan)');
 		const o = vlanOverlay(plant, 251);
 		const te27 = part('SW1', sw, 'te27');
 		const te25 = part('SW1', sw, 'te25');
 		expect(o.paint(te27, tags[te27.tag!], ctx('SW1', sw, tags)).dim).toBe(undefined);
 		expect(o.paint(te25, tags[te25.tag!], ctx('SW1', sw, tags)).dim).toBe(true);
+	});
+	it('gives each of a 2 x 2 cage block its own label, rows apart on screen', () => {
+		// te0/25, te0/27 on top (labels up), te0/26, te0/28 below (labels down), 17 mm apart.
+		const at = (x: number, y: number): [number, number, number] => [x, y, 0];
+		const f = fanOutLabels([
+			{ id: 'te25', at: at(0.12, 0.029), out: 1, up: 1 },
+			{ id: 'te26', at: at(0.12, 0.015), out: 1, up: -1 },
+			{ id: 'te27', at: at(0.137, 0.029), out: 1, up: 1 },
+			{ id: 'te28', at: at(0.137, 0.015), out: 1, up: -1 }
+		]);
+		const to = (id: string) => f.get(id)!.to;
+		// The top pair in rows 0 and 1, not 0 and 2: the lower pair fills its own.
+		expect(Math.abs(to('te27')[1] - to('te25')[1] - 0.028) < 1e-9).toBe(true);
+		expect(to('te26')[1] < 0.015 && to('te28')[1] < to('te26')[1]).toBe(true);
+		// Up more than out: seen from 30° above, a row still sits higher.
+		const screenY = (p: [number, number, number]) => p[1] * Math.cos(Math.PI / 6) - p[2] * Math.sin(Math.PI / 6);
+		expect(screenY(to('te27')) - screenY(to('te25')) > 0.01).toBe(true);
 	});
 	it('agrees with the cable check on which links exist', () => {
 		const tags = planned();
