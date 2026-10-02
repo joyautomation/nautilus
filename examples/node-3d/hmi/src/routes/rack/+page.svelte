@@ -449,7 +449,7 @@
 {/if}
 
 <div class="stage">
-	<SceneView {rt} {alarms} {camera} grid={params.has('nogrid') ? undefined : { pos: [0, 0, -D / 2], cell: 0.1, section: 0.5, size: [4, 4] }} inspector={false} bind:selected onselect={pick} oncontext={context} perf={params.has('perf') || aspect > 1}>
+	<SceneView {rt} {alarms} {camera} grid={params.has('nogrid') ? { pos: [0, 0, -D / 2], cell: 1, section: 1, size: [0, 0] } : { pos: [0, 0, -D / 2], cell: 0.1, section: 0.5, size: [4, 4] }} inspector={false} bind:selected onselect={pick} oncontext={context} perf={params.has('perf') || aspect > 1}>
 		<Studio />
 		{#if vlans}
 			<VlanFloors {topology} {floors} {colors} vlanColor={vcolors} pick={vlanPick} onpick={pickVlan} spread={spread.current} visible={!opening} />
