@@ -5,9 +5,9 @@
 	// between its exact ports and coloured by its live check (topology.ts).
 	// Click a device to zoom into it — the node view's lid, x-ray, exploded
 	// and overlays, for that device — and a part for its faceplate.
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import { Tween } from 'svelte/motion';
-	import { cubicOut } from 'svelte/easing';
+	import { cubicOut, cubicInOut } from 'svelte/easing';
 	import { RealtimeClient, createAlarmClient, type NautilusFrame } from '@joyautomation/nautilus-hmi';
 	import { SceneView, Fade, DEFAULT_PALETTE, paletteFromTheme, type SceneCamera, type Palette, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
 	import {
@@ -200,7 +200,17 @@
 	// A VLAN no planned link carries and the plan does not name (VLAN 1,
 	// native on every trunk) gets no floor.
 	let domains = $derived(vlanDomains(plant, vlanChecks, tags, checks).filter((d) => d.declared || d.devices.length));
-	let floors = $derived(vlanFloors(topology, domains));
+	// The view opens out of one layer: every floor on one plane, the mesh's
+	// layout, then spreading up and down to its own height.
+	const spread = new Tween(1, { duration: 1700, easing: cubicInOut });
+	$effect(() => {
+		if (!vlans) return;
+		untrack(() => {
+			if (typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches) return void spread.set(1, { duration: 0 });
+			spread.set(0, { duration: 0 }).then(() => spread.set(1, { delay: 350 }));
+		});
+	});
+	let floors = $derived(vlanFloors(topology, domains, { spread: spread.current }));
 	let picked = $derived(vlanPick !== undefined ? domains.find((d) => d.id === vlanPick) : undefined);
 	let pickedDevices = $derived(picked ? domainDevices(topology, picked) : undefined);
 	let vlanCounts = $derived(
@@ -417,7 +427,7 @@
 	<SceneView {rt} {alarms} {camera} grid={{ pos: [0, 0, -D / 2], cell: 0.1, section: 0.5, size: [4, 4] }} inspector={false} bind:selected onselect={pick} oncontext={context} perf={params.has('perf') || aspect > 1}>
 		<Studio />
 		{#if vlans}
-			<VlanFloors {topology} {floors} {colors} vlanColor={vcolors} pick={vlanPick} onpick={pickVlan} />
+			<VlanFloors {topology} {floors} {colors} vlanColor={vcolors} pick={vlanPick} onpick={pickVlan} spread={spread.current} />
 		{:else if mesh}
 			<NetworkMesh {topology} {checks} {colors} {summary} labels={edgeLabels} focus={meshFocus ?? undefined} />
 		{:else}

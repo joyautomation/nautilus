@@ -209,6 +209,15 @@ describe('VLAN domains', () => {
 		expect([at(0, 'sw1')[0], at(0, 'sw1')[2]]).toEqual([at(1, 'sw1')[0], at(1, 'sw1')[2]]);
 		expect(at(0, 'sw1')[1]).toBe(fl[0].y);
 		expect(fl[3].nodes.map((n) => n.id)).toEqual(['sw1', 'sw2', 'sw3']);
+		// Spread 0: one plane at the stack's middle, each device where it is.
+		const flat = vlanFloors(topology, ds, { spread: 0 });
+		const mid = (fl[0].y + fl[fl.length - 1].y) / 2;
+		expect(flat.every((f) => Math.abs(f.y - mid) < 1e-9)).toBe(true);
+		expect(flat[2].nodes.every((n) => Math.abs(n.pos[1] - mid) < 1e-9)).toBe(true);
+		const at0 = flat[0].nodes.find((n) => n.id === 'sw1')!.pos;
+		expect([at0[0], at0[2]]).toEqual([at(0, 'sw1')[0], at(0, 'sw1')[2]]);
+		// Halfway: halfway.
+		expect(Math.abs(vlanFloors(topology, ds, { spread: 0.5 })[0].y - (mid + fl[0].y) / 2) < 1e-9).toBe(true);
 	});
 });
 

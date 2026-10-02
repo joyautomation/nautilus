@@ -371,14 +371,17 @@ export interface VlanFloor {
  * layout (switches on the inner ring, servers outside, the site beyond)
  * flattened to the floor, holding only the devices and links of that
  * VLAN — so the same device sits at the same place on every floor, and a
- * device missing from a floor reads as a gap.
+ * device missing from a floor reads as a gap. `spread` (0..1) draws the
+ * floors that far apart: 0 is every floor on one plane at the stack's
+ * middle (the view opening out of a single layer), 1 the stack.
  */
-export function vlanFloors(t: Topology, domains: VlanDomain[], opts: { gap?: number; top?: number } = {}): VlanFloor[] {
-	const { gap = 0.42, top = 1.75 } = opts;
+export function vlanFloors(t: Topology, domains: VlanDomain[], opts: { gap?: number; top?: number; spread?: number } = {}): VlanFloor[] {
+	const { gap = 0.42, top = 1.75, spread = 1 } = opts;
+	const mid = top - ((domains.length - 1) * gap) / 2;
 	const mesh = meshLayout(t);
 	const at = new Map(mesh.nodes.map((n) => [n.id, n]));
 	return domains.map((domain, i) => {
-		const y = top - i * gap;
+		const y = mid + (top - i * gap - mid) * spread;
 		const flat = (p: Vec3, lift = 0): Vec3 => [p[0], y + lift, p[2]];
 		const nodes = domain.devices.flatMap((id) => {
 			const n = at.get(id);

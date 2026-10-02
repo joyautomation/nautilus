@@ -23,6 +23,7 @@
 		vlanColor,
 		pick,
 		onpick,
+		spread = 1,
 		pos = [0, 0, 0]
 	}: {
 		topology: Topology;
@@ -33,6 +34,9 @@
 		/** A picked VLAN: its floor in full, the rest faint. */
 		pick?: number;
 		onpick?: (id: number) => void;
+		/** How far the floors have opened out (vlanFloors' spread): the
+		 * labels fade in as they do, so they never pile up on one plane. */
+		spread?: number;
 		pos?: Vec3;
 	} = $props();
 
@@ -75,7 +79,7 @@
 					<T.BoxGeometry args={size} />
 					<T.MeshStandardMaterial color={!split || (isl.length === 1 && isl[0] === 0) ? c : isl.includes(0) ? colors.warning : colors.critical} metalness={0.2} roughness={0.6} />
 				</T.Mesh>
-				{#if i === 0 || pick === f.domain.id}
+				{#if (i === 0 || pick === f.domain.id) && spread > 0.6}
 					<HTML position={[n.pos[0], n.pos[1] + 0.05, n.pos[2]]} center pointerEvents="none">
 						<span class="dev" style:opacity={k < 1 ? 0.3 : 1}>{name(n.id)}</span>
 					</HTML>
@@ -86,7 +90,7 @@
 			<Cable points={e.points} color={edgeColor(e.link, c)} arc radius={0.004} faint={e.link.blocked || !e.link.carried} opacity={k} />
 		{/each}
 		<HTML position={[-1.3, f.y, 0]} center>
-			<button class="floor" class:on={pick === f.domain.id} style:--c={c} style:opacity={k < 1 ? 0.55 : 1} onclick={() => onpick?.(f.domain.id)}>
+			<button class="floor" class:on={pick === f.domain.id} style:--c={c} style:opacity={(k < 1 ? 0.55 : 1) * Math.min(1, Math.max(0, (spread - 0.6) / 0.4))} onclick={() => onpick?.(f.domain.id)}>
 				<i></i>
 				<b>{f.domain.id}</b>
 				<span>{f.domain.name ?? ''}{f.domain.declared ? '' : ' · not in the plan'}</span>
