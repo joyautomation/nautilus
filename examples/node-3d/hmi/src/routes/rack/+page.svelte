@@ -202,12 +202,15 @@
 	let domains = $derived(vlanDomains(plant, vlanChecks, tags, checks).filter((d) => d.declared || d.devices.length));
 	// The view opens out of one layer: every floor on one plane, the mesh's
 	// layout, then spreading up and down to its own height.
-	const spread = new Tween(1, { duration: 1700, easing: cubicInOut });
+	// It rests at 0 whenever the view is closed, so the view's first frame is
+	// already the single layer (resetting on open painted the stack once).
+	const spread = new Tween(0, { duration: 1700, easing: cubicInOut });
 	$effect(() => {
-		if (!vlans) return;
+		const open = vlans;
 		untrack(() => {
-			if (typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches) return void spread.set(1, { duration: 0 });
-			spread.set(0, { duration: 0 }).then(() => spread.set(1, { delay: 350 }));
+			if (!open) return void spread.set(0, { duration: 0 });
+			const still = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+			spread.set(1, still ? { duration: 0 } : { delay: 350 });
 		});
 	});
 	let floors = $derived(vlanFloors(topology, domains, { spread: spread.current }));
