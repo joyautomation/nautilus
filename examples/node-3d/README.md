@@ -12,7 +12,7 @@ cable drawn between its exact ports and coloured by its live check.
   and the rest fades: what its cables reach at 40 %, the rest at 10 % and
   unpickable. Click a part for its faceplate. A server has lid, x-ray,
   exploded and `codes` (the printed AR codes, off by default); every device
-  has overlays. `?focus=NODE2`, `?view=iso|rear|front`, `?lid=on`, `?xray`,
+  has overlays. `?focus=NODE2`, `?view=iso|rear|front`, `?nogrid` (stills), `?lid=on`, `?xray`,
   `?exploded`, `?codes`, `?overlay=heat|interfaces|free|cables|identify`.
 - Every part comes from a controller with the it-drivers tags: fans, PSUs,
   temperatures, and the part tags `naut redfish import` generates (drives,
