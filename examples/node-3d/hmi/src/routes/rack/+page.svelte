@@ -205,12 +205,32 @@
 	// It rests at 0 whenever the view is closed, so the view's first frame is
 	// already the single layer (resetting on open painted the stack once).
 	const spread = new Tween(0, { duration: 1700, easing: cubicInOut });
+	// Mounting the floors (and dropping the rack) stalls the page for a
+	// moment, and a tween's clock runs through a stall: the camera drew one
+	// frame from the rack's position (the floors close up), then jumped to
+	// the end. So while the view opens, the camera holds, the floors are
+	// hidden, and every clock starts two frames after the mount has painted.
+	let opening = $state(false);
 	$effect(() => {
 		const open = vlans;
-		untrack(() => {
-			if (!open) return void spread.set(0, { duration: 0 });
-			const still = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-			spread.set(1, still ? { duration: 0 } : { delay: 350 });
+		return untrack(() => {
+			if (!open) {
+				opening = false;
+				spread.set(0, { duration: 0 });
+				return;
+			}
+			// Frame 1 after the mount: the camera straight to the view's framing,
+			// floors still hidden (a glide from the rack's camera would open on
+			// the floors close up). Frame 2: show them, start the spread.
+			let id = requestAnimationFrame(() => {
+				cam.set([...goal.pos, ...goal.target, goal.fov ?? 40], { duration: 0 });
+				id = requestAnimationFrame(() => {
+					opening = false;
+					const still = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+					spread.set(1, still ? { duration: 0 } : { delay: 350 });
+				});
+			});
+			return () => cancelAnimationFrame(id);
 		});
 	});
 	let floors = $derived(vlanFloors(topology, domains, { spread: spread.current }));
@@ -309,7 +329,8 @@
 		return { ...c, pos: c.pos.map((v, i) => c.target[i] + (v - c.target[i]) * k) as Vec3 };
 	};
 	let goal = $derived(framed(vlans ? VLANS_CAM : mesh ? MESH : focused ? closeUp(focused) : RACK[view]));
-	const cam = Tween.of(() => [...goal.pos, ...goal.target, goal.fov ?? 40], { duration: 900, easing: cubicOut });
+	// While the VLAN view opens, the camera holds where it is (see `opening`).
+	const cam: Tween<number[]> = Tween.of((): number[] => (opening ? untrack(() => cam.target) : [...goal.pos, ...goal.target, goal.fov ?? 40]), { duration: 900, easing: cubicOut });
 	let camera = $derived<SceneCamera>({ pos: cam.current.slice(0, 3) as Vec3, target: cam.current.slice(3, 6) as Vec3, fov: cam.current[6] });
 
 	// ── picking ───────────────────────────────────────────────────────
@@ -390,6 +411,7 @@
 		back();
 	}
 	function toVlans() {
+		if (!vlans) opening = true;
 		vlans = true;
 		mesh = false;
 		back();
@@ -430,7 +452,7 @@
 	<SceneView {rt} {alarms} {camera} grid={{ pos: [0, 0, -D / 2], cell: 0.1, section: 0.5, size: [4, 4] }} inspector={false} bind:selected onselect={pick} oncontext={context} perf={params.has('perf') || aspect > 1}>
 		<Studio />
 		{#if vlans}
-			<VlanFloors {topology} {floors} {colors} vlanColor={vcolors} pick={vlanPick} onpick={pickVlan} spread={spread.current} />
+			<VlanFloors {topology} {floors} {colors} vlanColor={vcolors} pick={vlanPick} onpick={pickVlan} spread={spread.current} visible={!opening} />
 		{:else if mesh}
 			<NetworkMesh {topology} {checks} {colors} {summary} labels={edgeLabels} focus={meshFocus ?? undefined} />
 		{:else}

@@ -24,6 +24,7 @@
 		pick,
 		onpick,
 		spread = 1,
+		visible = true,
 		pos = [0, 0, 0]
 	}: {
 		topology: Topology;
@@ -37,6 +38,8 @@
 		/** How far the floors have opened out (vlanFloors' spread): the
 		 * labels fade in as they do, so they never pile up on one plane. */
 		spread?: number;
+		/** Drawn at all: false keeps it mounted but unseen (the view opening). */
+		visible?: boolean;
 		pos?: Vec3;
 	} = $props();
 
@@ -56,7 +59,7 @@
 	const edgeColor = (l: VlanFloor['edges'][number]['link'], c: string) => (l.blocked ? colors.neutral : !l.carried ? colors.critical : !l.declared ? colors.warning : c);
 </script>
 
-<T.Group position={pos}>
+<T.Group position={pos} {visible}>
 	{#each posts as [id, s] (id)}
 		<T.Mesh position={[s.at[0], (s.lo + s.hi) / 2, s.at[2]]} raycast={() => {}}>
 			<T.CylinderGeometry args={[0.0025, 0.0025, s.hi - s.lo, 6]} />
