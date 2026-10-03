@@ -11,7 +11,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/joyautomation/nautilus/internal/stproject"
 	"github.com/joyautomation/nautilus/lang/l5x"
+	"github.com/joyautomation/nautilus/logix/writer"
 )
 
 const logixUsage = `naut logix — Allen-Bradley Logix project tools
@@ -39,6 +41,13 @@ Usage:
                                        exports of unchanged code compare equal.
                                        The basis of drift detection.
   naut logix info <file.L5X>       Summarize what the export contains.
+  naut logix write <program.ld>    Write a nautilus ladder program as a
+                                       Logix L5X project (experimental:
+                                       docs/design/logix-authoring.md). The
+                                       v1 subset is enforced; a construct it
+                                       lacks is a diagnostic naming the
+                                       alternative, and nothing is written.
+                                       "naut logix write -h" for the flags.
   naut logix emulate --l5x <file.L5X> [--listen 127.0.0.1:44818]
                    [--values seed.json] [--ramp] [--name <controller>]
   naut logix emulate --surface <surface.json> [...]
@@ -123,6 +132,8 @@ func runLogix(args []string) int {
 		return runLogixNormalize(args[1:])
 	case "info":
 		return runLogixInfo(args[1:])
+	case "write":
+		return runLogixWrite(args[1:])
 	case "emulate":
 		return runLogixEmulate(args[1:])
 	case "serve":
@@ -449,5 +460,63 @@ func runLogixInfo(args []string) int {
 		fmt.Printf("program %s: %d tags, %s, %d rungs\n",
 			p.Name, len(p.Tags), strings.Join(kinds, ", "), rungs)
 	}
+	return 0
+}
+
+// runLogixWrite is the nautilus → Logix writer: one ladder program in,
+// one L5X controller project out. The flags are the project envelope the
+// program lands in; a hardware.L5X merge replaces them in a later phase.
+func runLogixWrite(args []string) int {
+	fs := flag.NewFlagSet("logix write", flag.ContinueOnError)
+	out := fs.String("o", "", "write the L5X here (default: stdout)")
+	controller := fs.String("controller", "", "controller (project) name (default: the PROGRAM name)")
+	program := fs.String("program", "", "Logix program name (default: the PROGRAM name)")
+	routine := fs.String("routine", "MainRoutine", "ladder routine name")
+	task := fs.String("task", "MainTask", "task name")
+	period := fs.Int("period", 0, "periodic task rate in ms (0: continuous)")
+	processor := fs.String("processor", "1756-L85E", "controller catalog number")
+	revision := fs.String("revision", "38.11", "firmware revision, major.minor")
+	software := fs.String("software", "38.01", "Logix Designer version the export claims")
+	date := fs.String("date", "", "ExportDate attribute (default: \"(pinned)\", so a regeneration of unchanged logic is byte-identical)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: naut logix write [flags] <program.ld>")
+		return 2
+	}
+	path := fs.Arg(0)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut logix write:", err)
+		return 2
+	}
+	major, minor, _ := strings.Cut(*revision, ".")
+	_, libs, _ := stproject.PreludeSources(path, nil)
+	doc, diags, err := writer.Write(string(raw), writer.Options{
+		Controller: *controller, Program: *program, Routine: *routine, Task: *task,
+		PeriodMs: *period, ProcessorType: *processor, MajorRev: major, MinorRev: minor,
+		SoftwareRevision: *software, ExportDate: *date, Libs: libs,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
+		return 2
+	}
+	if len(diags) > 0 {
+		for _, d := range diags {
+			fmt.Printf("%s:%d:1: logix target: %s [%s]\n", path, d.Line, d.Message, d.Rule)
+		}
+		fmt.Fprintf(os.Stderr, "naut logix write: %d construct(s) outside the Logix v1 subset; nothing written\n", len(diags))
+		return 1
+	}
+	if *out == "" {
+		os.Stdout.Write(doc)
+		return 0
+	}
+	if err := os.WriteFile(*out, doc, 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "naut logix write:", err)
+		return 2
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s\n", *out)
 	return 0
 }
