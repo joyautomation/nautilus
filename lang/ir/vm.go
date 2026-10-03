@@ -469,9 +469,15 @@ func evalBin(op BinKind, l, r Value, t *Type) Value {
 		}
 		return BoolVal(l.I >= r.I)
 	case OpAnd:
-		return BoolVal(l.B && r.B)
+		if t.Kind == TypeBool {
+			return BoolVal(l.B && r.B)
+		}
+		return Value{Kind: t.Kind, I: l.I & r.I}
 	case OpOr:
-		return BoolVal(l.B || r.B)
+		if t.Kind == TypeBool {
+			return BoolVal(l.B || r.B)
+		}
+		return Value{Kind: t.Kind, I: l.I | r.I}
 	case OpXor:
 		if t.Kind == TypeBool {
 			return BoolVal(l.B != r.B)
@@ -489,7 +495,10 @@ func evalUn(op UnKind, x Value, t *Type) Value {
 		}
 		return Value{Kind: t.Kind, I: -x.I}
 	case OpNot:
-		return BoolVal(!x.B)
+		if t.Kind == TypeBool {
+			return BoolVal(!x.B)
+		}
+		return Value{Kind: t.Kind, I: ^x.I}
 	}
 	return Value{}
 }

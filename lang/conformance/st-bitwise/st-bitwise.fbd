@@ -1,0 +1,13 @@
+PROGRAM BitwiseFbd
+(* The same four operators as FBD blocks wired to the fbd_ tags. *)
+VAR_EXTERNAL
+    X, Y : INT;
+    fbd_AND, fbd_OR, fbd_XOR, fbd_NOT : INT;
+END_VAR
+FBD
+  fbd_AND := AND(X, Y)
+  fbd_OR  := OR(X, Y)
+  fbd_XOR := XOR(X, Y)
+  fbd_NOT := NOT(X)
+END_FBD
+END_PROGRAM

@@ -22,13 +22,10 @@ tests:
       - advance: 10s
         expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
 
-  # KNOWN DEVIATION (pinned, lang/ir/builtins_fb.go registerTP): IEC 61131-3
-  # says a rising edge while the pulse runs is ignored. Here the edge
-  # restarts the pulse: ET drops to 0 and Q is extended by a full PT from
-  # the new edge. This test pins the actual behaviour so a fix fails it
-  # on purpose; the standard's expectation would be ET 2002 here and Q
-  # FALSE at t = original start + PT.
-  - name: "KNOWN DEVIATION: retrigger during the pulse restarts it (standard: ignored)"
+  # IEC 61131-3 TP timing diagram: a rising edge while the pulse runs is
+  # ignored. Q stays TRUE exactly PT after the first edge, ET keeps counting
+  # from that edge, and with IN still TRUE afterwards ET holds at PT.
+  - name: a retrigger during the pulse is ignored - Q falls PT after the first edge
     given: { IN: true }
     steps:
       - scans: 1
@@ -37,12 +34,14 @@ tests:
       - given: { IN: false }
         scans: 1
         expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 2001, ld_ET: 2001, fbd_ET: 2001 }
-      - given: { IN: true }
+      - given: { IN: true } # the retrigger: ignored, ET does not restart
         scans: 1
-        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
-      - advance: 4.999s
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 2002, ld_ET: 2002, fbd_ET: 2002 }
+      - advance: 2.997s # PT-1ms after the first edge
         expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 4999, ld_ET: 4999, fbd_ET: 4999 }
-      - advance: 1ms
+      - advance: 1ms # exactly PT after the first edge: the pulse is not extended
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+      - advance: 5s # IN still TRUE: ET holds at PT, no second pulse
         expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
 
   - name: IN falling mid-pulse does not shorten it
@@ -59,8 +58,8 @@ tests:
       - advance: 1ms # IN FALSE and pulse over: ET clears
         expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
 
-  # Note the one-scan ET lag after IN falls (see the step comment): ET reads
-  # PT on the scan IN is first FALSE and 0 on the next.
+  # IEC 61131-3: once the pulse is over, ET resets to 0 in the very scan IN
+  # is seen FALSE (no one-scan lag), and the next rising edge starts afresh.
   - name: a new rising edge after the pulse ended starts a fresh pulse
     given: { IN: true }
     steps:
@@ -68,9 +67,9 @@ tests:
       - advance: 5s
         expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
       - given: { IN: false }
-        scans: 1 # DEVIATION: the standard clears ET here; the impl holds PT one more scan
-        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
-      - scans: 1
+        scans: 1 # the scan IN falls: ET clears at once
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - scans: 1 # and stays clear
         expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
       - given: { IN: true }
         scans: 1
@@ -78,6 +77,20 @@ tests:
       - advance: 4.999s
         expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 4999, ld_ET: 4999, fbd_ET: 4999 }
       - advance: 1ms
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+
+  - name: IN fell during the pulse - the next rising edge after it starts a new one
+    given: { IN: true }
+    steps:
+      - scans: 1
+      - given: { IN: false }
+        scans: 1
+      - advance: 4.999s # exactly PT: the pulse ends with IN already FALSE
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+      - given: { IN: true } # the very next scan: a fresh edge, a fresh pulse
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - advance: 5s
         expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
 
   - name: IN FALSE from power-up never pulses
