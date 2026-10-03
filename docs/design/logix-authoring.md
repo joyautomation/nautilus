@@ -462,6 +462,18 @@ under the 2-minute §7a limit. Tags visible over EtherNet/IP afterwards.
 Studio 5000 will not open an ACD from the Y: virtiofs share ("does not
 exist"); copy to C: first.
 
+**Live values against the real controller:** `naut logix serve --project
+logix/writer/testdata/project` browses 6 tags over EtherNet/IP at the
+Tailscale address, serves them (HiLevelSP reads 85, the writer's initial
+value), and GET /api/program answers with the ladder source, `language:
+ld`, a hash and `editable: true` — the extension needs nothing new.
+
+**Not yet run:** the online-edit leg (`naut logix deploy --online` on a
+one-contact rung change, scratch copy of the fixture) and the Download
+button from VS Code. The session's permission policy classes deploys to
+the controller as production writes, so James runs them. Controller still
+in Program mode; Run is James's to set from the Echo dashboard.
+
 ## 8. The demo this enables
 
 James's target demo (2026-10-03), which replaces the Tier A `ab01` draft in the
