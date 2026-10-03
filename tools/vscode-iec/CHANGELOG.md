@@ -23,6 +23,10 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   id, label index, port name) and `data-kind`, so a test finds P101 by name
   instead of by its position in the file. No visible change.
 
+### Changed
+
+- **The webview gesture harness runs in CI** (`vscode-iec-gestures`), and its Ladder palette test now drives the `FB…` block picker it went stale against. Chrome's `--no-sandbox` is opt-in via `GESTURE_NO_SANDBOX=1`.
+
 ### Fixed
 
 - **Live values on a Logix routine find program-scope tags.** A rung in
