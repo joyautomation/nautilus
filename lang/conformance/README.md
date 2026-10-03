@@ -155,11 +155,27 @@ Current table:
 <!-- go run ./lang/conformance -matrix -->
 | Feature | ST | LD | FBD | SFC | Tests |
 |---|:-:|:-:|:-:|:-:|--:|
+| `fb-ctd` | ✓ | ✓ | ✓ |   | 7 |
+| `fb-ctud` | ✓ | ✓ | ✓ |   | 8 |
+| `fb-f-trig` | ✓ | ✓ | ✓ |   | 5 |
+| `fb-rs` | ✓ | ✓ | ✓ |   | 7 |
+| `fb-sr` | ✓ | ✓ | ✓ |   | 7 |
+| `fb-tof` | ✓ | ✓ | ✓ |   | 7 |
 | `fb-ton` | ✓ | ✓ | ✓ |   | 6 |
+| `fb-tp` | ✓ | ✓ | ✓ |   | 7 |
 | `fn-conversions` | ✓ |   |   |   | 8 |
 | `fn-trig-log` | ✓ |   |   |   | 8 |
+| `ld-coils` | ✓ | ✓ |   |   | 9 |
+| `sfc-alt-priority` |   |   |   | ✓ | 7 |
+| `sfc-final-scan` |   |   |   | ✓ | 4 |
+| `sfc-jump-back` |   |   |   | ✓ | 4 |
+| `sfc-qualifiers` |   |   |   | ✓ | 7 |
+| `sfc-sim-div-conv` |   |   |   | ✓ | 6 |
+| `sfc-step-t` |   |   |   | ✓ | 5 |
 | `st-div-zero` | ✓ |   |   |   | 4 |
 | `st-int-width` | ✓ |   |   |   | 5 |
 | `st-mux-fault` | ✓ |   |   |   | 2 |
 | `st-string-clamp` | ✓ |   |   |   | 8 |
 | `st-xor` | ✓ |   |   |   | 3 |
+
+22 features, 134 tests.

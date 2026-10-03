@@ -1,0 +1,41 @@
+# tank-batch — a batch sequence in SFC, no Go required.
+#   naut run     scan loop + dashboard + tag API
+#
+# The sequence from nautilus examples/tank-batch-sfc, with its Go plant
+# replaced by an ST sim task so the whole thing is a manifest project:
+# Idle -> Fill -> (Heat || Mix) -> Drain -> Idle, forever.
+name: tank-batch
+
+server:
+  addr: "localhost:8080"
+  online-edits: true
+
+tasks:
+  - program: batch.sfc     # the sequence
+    scan: 100ms
+  - name: plant            # the tank, simulated in IEC (delete for real I/O)
+    program: plant.st
+    scan: 100ms
+    dt-tag: PlantDtS
+
+tags:
+  # process values — owned by the plant task
+  - { name: Level, role: state, init: 10.0, unit: "%",  desc: "Tank level" }
+  - { name: TempC, role: state, init: 20.0, unit: "°C", desc: "Tank temperature" }
+  - { name: Start, role: state, init: false, desc: "Auto-operator: start a batch when idle" }
+  # operator
+  - { name: Abort,   role: setpoint, init: false, desc: "Abort the batch" }
+  - { name: FillSP,  role: setpoint, init: 80.0, unit: "%",  desc: "Fill to" }
+  - { name: EmptySP, role: setpoint, init: 10.0, unit: "%",  desc: "Drain to" }
+  - { name: HeatSP,  role: setpoint, init: 45.0, unit: "°C", desc: "Heat to" }
+  # commands
+  - { name: FillValve,  role: output, init: false }
+  - { name: DrainValve, role: output, init: false }
+  - { name: Heater,     role: output, init: false }
+  - { name: Mixer,      role: output, init: false }
+  - { name: RunLamp,    role: output, init: false }
+  - { name: AbortLamp,  role: output, init: false }
+  - { name: BatchCount, role: state,  init: 0, desc: "Batches completed" }
+
+driver:
+  type: memory

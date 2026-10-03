@@ -1,0 +1,29 @@
+# sfc-sim-div-conv — simultaneous divergence (one transition TO several
+# steps) and simultaneous convergence (one transition FROM several steps,
+# enabled only when all are active). Single sfc task (SFC-only feature).
+#
+#   go test ./lang/conformance/ -run 'TestConformance/sfc-sim-div-conv'
+name: sfc-sim-div-conv
+
+tasks:
+  - program: sfc-sim-div-conv.sfc
+    scan: 1ms
+
+tags:
+  - { name: Go,    role: state, init: false, desc: "Idle -> (L, M, R)" }
+  - { name: DoneL, role: state, init: false }
+  - { name: DoneM, role: state, init: false }
+  - { name: DoneR, role: state, init: false }
+  - { name: Back,  role: state, init: false, desc: "Join -> Idle" }
+
+  - { name: sfc_Idle, role: state, init: false }
+  - { name: sfc_L,    role: state, init: false }
+  - { name: sfc_M,    role: state, init: false }
+  - { name: sfc_R,    role: state, init: false }
+  - { name: sfc_LD,   role: state, init: false }
+  - { name: sfc_MD,   role: state, init: false }
+  - { name: sfc_RD,   role: state, init: false }
+  - { name: sfc_Join, role: state, init: false }
+
+driver:
+  type: memory

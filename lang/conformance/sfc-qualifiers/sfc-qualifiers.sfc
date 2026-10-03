@@ -1,0 +1,43 @@
+PROGRAM SfcQualifiers
+VAR_EXTERNAL
+    Go : BOOL;  Next : BOOL;  Back : BOOL;
+    sfc_N : BOOL;  sfc_S : BOOL;  sfc_R : BOOL;
+    sfc_P1 : BOOL;  sfc_P : BOOL;  sfc_P0 : BOOL;
+    sfc_CntP1 : INT;  sfc_CntP : INT;  sfc_CntP0 : INT;
+    sfc_Level : INT;
+END_VAR
+SFC
+
+  INITIAL_STEP Idle:
+  END_STEP
+
+  STEP A:
+    N  sfc_N;
+    S  sfc_S;
+    R  sfc_R;
+    P1 sfc_P1;
+    P  sfc_P;
+    P0 sfc_P0;
+    P1 BumpP1;
+    P  BumpP;
+    P0 BumpP0;
+    N  BumpLevel;
+  END_STEP
+
+  STEP B:
+  END_STEP
+
+  TRANSITION t_go   FROM Idle TO A    := Go;
+  END_TRANSITION
+  TRANSITION t_next FROM A    TO B    := Next;
+  END_TRANSITION
+  TRANSITION t_back FROM B    TO Idle := Back;
+  END_TRANSITION
+
+  ACTION BumpP1:    sfc_CntP1 := sfc_CntP1 + 1;  END_ACTION
+  ACTION BumpP:     sfc_CntP  := sfc_CntP  + 1;  END_ACTION
+  ACTION BumpP0:    sfc_CntP0 := sfc_CntP0 + 1;  END_ACTION
+  ACTION BumpLevel: sfc_Level := sfc_Level + 1;  END_ACTION
+
+END_SFC
+END_PROGRAM

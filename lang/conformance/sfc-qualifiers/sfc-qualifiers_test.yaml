@@ -1,0 +1,83 @@
+# SFC action qualifier conformance (IEC 61131-3 Table 59 subset: N S R P1 P
+# P0). Each association is on step A; Idle and B carry none. Scans are 1ms.
+tests:
+  - name: nothing acts while A is inactive
+    steps:
+      - scans: 5
+        expect: { sfc_N: false, sfc_S: false, sfc_R: true, sfc_P1: false, sfc_P: false, sfc_P0: false, sfc_CntP1: 0, sfc_CntP: 0, sfc_CntP0: 0, sfc_Level: 0 }
+
+  - name: N is high exactly while the step is active
+    steps:
+      - given: { Go: true }
+        scans: 1
+        expect: { sfc_N: true, sfc_Level: 1 }
+      - given: { Go: false }
+        scans: 3
+        expect: { sfc_N: true, sfc_Level: 4 } # level body runs every active scan
+      - given: { Next: true }
+        scans: 1
+        expect: { sfc_N: false }
+
+  - name: S sets once and the chart never clears it
+    steps:
+      - given: { Go: true }
+        scans: 1
+        expect: { sfc_S: true }
+      - given: { Next: true, Go: false }
+        scans: 1 # A deactivates
+        expect: { sfc_S: true }
+      - given: { Next: false, Back: true }
+        scans: 3 # back through Idle
+        expect: { sfc_S: true }
+
+  - name: R clears once on activation
+    steps:
+      - expect: { sfc_R: true }
+      - given: { Go: true }
+        scans: 1
+        expect: { sfc_R: false }
+
+  - name: P1 and P are one scan wide on the rising edge, and fire once per entry
+    steps:
+      - given: { Go: true }
+        scans: 1
+        expect: { sfc_P1: true, sfc_P: true, sfc_CntP1: 1, sfc_CntP: 1 }
+      - given: { Go: false }
+        scans: 1 # still active, edge is over
+        expect: { sfc_P1: false, sfc_P: false, sfc_CntP1: 1, sfc_CntP: 1 }
+      - scans: 20
+        expect: { sfc_P1: false, sfc_P: false, sfc_CntP1: 1, sfc_CntP: 1 }
+
+  - name: P0 fires on the falling edge only, once, after the step has been left
+    steps:
+      - given: { Go: true }
+        scans: 1
+        expect: { sfc_P0: false, sfc_CntP0: 0 }
+      - given: { Go: false }
+        scans: 10 # long stay in A: no P0
+        expect: { sfc_P0: false, sfc_CntP0: 0 }
+      - given: { Next: true }
+        scans: 1 # the scan A deactivates
+        expect: { sfc_P0: true, sfc_CntP0: 1 }
+      - given: { Next: false }
+        scans: 1
+        expect: { sfc_P0: false, sfc_CntP0: 1 }
+      - scans: 10
+        expect: { sfc_P0: false, sfc_CntP0: 1 }
+
+  - name: every re-entry re-fires P1 and P (P0 counts only its own exits)
+    steps:
+      - given: { Go: true }
+        scans: 1
+        expect: { sfc_CntP1: 1, sfc_CntP: 1 }
+      - given: { Go: false, Next: true }
+        scans: 1
+        expect: { sfc_CntP0: 1 }
+      - given: { Next: false, Back: true }
+        scans: 1 # B -> Idle
+      - given: { Back: false, Go: true }
+        scans: 1 # Idle -> A again
+        expect: { sfc_P1: true, sfc_P: true, sfc_CntP1: 2, sfc_CntP: 2, sfc_CntP0: 1 }
+      - given: { Go: false }
+        scans: 2
+        expect: { sfc_P1: false, sfc_P: false, sfc_CntP1: 2, sfc_CntP: 2 }

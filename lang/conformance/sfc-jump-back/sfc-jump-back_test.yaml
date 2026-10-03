@@ -1,0 +1,46 @@
+# Jump-back (loop) and self-loop behaviour.
+tests:
+  - name: a backward transition re-enters the earlier step, once per lap
+    given: { Go: true, Loop: true }
+    steps:
+      - scans: 1
+        expect: { sfc_S1: true, sfc_Laps: 1 }
+      - scans: 1
+        expect: { sfc_S2: true, sfc_S1: false }
+      - scans: 1
+        expect: { sfc_S3: true, sfc_S2: false }
+      - scans: 1 # the jump: S3 -> S1
+        expect: { sfc_S1: true, sfc_S3: false, sfc_Laps: 2 }
+      - scans: 3
+        expect: { sfc_S1: true, sfc_Laps: 3 }
+      - scans: 30 # ten more laps, three scans each
+        expect: { sfc_Laps: 13 }
+
+  - name: dropping the loop condition exits at the bottom of the lap
+    given: { Go: true, Loop: true }
+    steps:
+      - scans: 3 # S1, S2, S3
+        expect: { sfc_S3: true, sfc_Laps: 1 }
+      - given: { Loop: false, Go: false }
+        scans: 1
+        expect: { sfc_Idle: true, sfc_S3: false, sfc_S1: false, sfc_Laps: 1 }
+      - scans: 10
+        expect: { sfc_Idle: true, sfc_Laps: 1 }
+
+  - name: the jump back outranks the exit declared after it
+    given: { Go: true, Loop: true, Park: true }
+    steps:
+      - scans: 4
+        expect: { sfc_S1: true, sfc_Hold: false, sfc_Idle: false, sfc_Laps: 2 }
+
+  - name: a self-loop leaves the step active and does not re-fire its entry pulse
+    given: { Go: true, Park: true, Tick: true }
+    steps:
+      - scans: 3 # S1, S2, S3
+      - scans: 1 # S3 -> Hold (Loop is FALSE)
+        expect: { sfc_Hold: true, sfc_HoldEntries: 1, sfc_S3: false }
+      - scans: 10 # Tick keeps firing Hold -> Hold every scan
+        expect: { sfc_Hold: true, sfc_Idle: false, sfc_HoldEntries: 1 }
+      - given: { Tick: false }
+        scans: 1 # t_rel
+        expect: { sfc_Hold: false, sfc_Idle: true }

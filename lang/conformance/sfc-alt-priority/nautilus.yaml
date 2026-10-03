@@ -1,0 +1,26 @@
+# sfc-alt-priority — alternative divergence resolves by declaration order,
+# first highest. A lower branch is suppressed only by a higher one that
+# actually fires, so a dead simultaneous convergence declared first does not
+# starve the branch below it. Single sfc task (SFC-only feature).
+#
+#   go test ./lang/conformance/ -run 'TestConformance/sfc-alt-priority'
+name: sfc-alt-priority
+
+tasks:
+  - program: sfc-alt-priority.sfc
+    scan: 1ms
+
+tags:
+  - { name: A,     role: state, init: false, desc: "Selects X (highest declared priority)" }
+  - { name: B,     role: state, init: false, desc: "Selects Y" }
+  - { name: C,     role: state, init: false, desc: "Selects W (lowest declared priority)" }
+  - { name: Reset, role: state, init: false, desc: "X, Y, W -> Idle" }
+
+  - { name: sfc_Idle, role: state, init: false }
+  - { name: sfc_X,    role: state, init: false }
+  - { name: sfc_Y,    role: state, init: false }
+  - { name: sfc_W,    role: state, init: false }
+  - { name: sfc_Z,    role: state, init: false, desc: "never entered: its convergence needs Ghost" }
+
+driver:
+  type: memory

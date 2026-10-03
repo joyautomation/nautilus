@@ -54,6 +54,8 @@
 		{@const C = registry[name]}
 		<button
 			class="item"
+			data-id={name}
+			data-kind="palette-item"
 			class:armed={ed.tool === 'place' && ed.placeComponent === name}
 			onclick={() => arm(name)}
 			title="Place a {name}"
@@ -68,6 +70,8 @@
 		{#each ed.customComponents as name (name)}
 			<button
 				class="item"
+				data-id={name}
+				data-kind="palette-item"
 				class:armed={ed.tool === 'place' && ed.placeComponent === name}
 				onclick={() => arm(name)}
 				title="Place a {name}"

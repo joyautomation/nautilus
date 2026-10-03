@@ -1,0 +1,47 @@
+# ld-coils — ladder coils and contacts, with Structured Text as the
+# reference path. The ladder constructs (S/R/P/N coils, +/- edge contacts,
+# an FB-only rung, a negated function contact, a nested branch holding a
+# function block) have no FBD file: FBD has no coil vocabulary, so the
+# honest columns are ST and LD.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/ld-coils'
+name: ld-coils
+
+tasks:
+  - program: ld-coils.st
+    scan: 1ms
+  - name: ld
+    program: ld-coils.ld
+    scan: 1ms
+
+tags:
+  # Shared inputs.
+  - { name: A,   role: state, init: false }
+  - { name: B,   role: state, init: false }
+  - { name: SetIn, role: state, init: false }
+  - { name: RstIn, role: state, init: false }
+  - { name: CLK, role: state, init: false }
+  - { name: N,   role: state, init: 0 }
+
+  # Outputs, one set per language.
+  - { name: st_Latch,   role: state, init: false }
+  - { name: st_P,       role: state, init: false }
+  - { name: st_N,       role: state, init: false }
+  - { name: st_RiseC,   role: state, init: false }
+  - { name: st_FallC,   role: state, init: false }
+  - { name: st_Cnt,     role: state, init: 0 }
+  - { name: st_CntDone, role: state, init: false }
+  - { name: st_NotZero, role: state, init: false }
+  - { name: st_Br,      role: state, init: false }
+  - { name: ld_Latch,   role: state, init: false }
+  - { name: ld_P,       role: state, init: false }
+  - { name: ld_N,       role: state, init: false }
+  - { name: ld_RiseC,   role: state, init: false }
+  - { name: ld_FallC,   role: state, init: false }
+  - { name: ld_Cnt,     role: state, init: 0 }
+  - { name: ld_CntDone, role: state, init: false }
+  - { name: ld_NotZero, role: state, init: false }
+  - { name: ld_Br,      role: state, init: false }
+
+driver:
+  type: memory
