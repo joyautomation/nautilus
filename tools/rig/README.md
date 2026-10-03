@@ -248,3 +248,9 @@ EP=ex01-lift-station NAUT=… VSIX=… ./record-vscode.sh 06-ld
 Pin the checkout (a tag, or the commit the VSIX was built from) when an episode
 has to re-render the way it was shot. The verbs follow the extension, so a beat
 filmed against 0.11.x drives 0.11.x's editors.
+
+## Nightly
+
+`.github/workflows/rig-nightly.yml` runs the smoke suite and the self-test
+(`G_PACE=fast`) every night at 06:00 UTC on a self-hosted runner and keeps a
+rolling "rig nightly red" issue. Registering a box: [RUNNER.md](RUNNER.md).
