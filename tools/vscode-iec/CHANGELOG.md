@@ -5,6 +5,12 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`nautilus.fb.monitor` is now declared.** The CodeLens command was
+  registered but missing from `contributes.commands`; it is declared and
+  hidden from the command palette.
+
 ### Added
 
 - **Test hooks for the VS Code rig.** With `NAUTILUS_TEST_STATE=<file>` set,

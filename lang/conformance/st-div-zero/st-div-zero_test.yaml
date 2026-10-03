@@ -1,7 +1,7 @@
-# PINS A DEVIATION (docs/functions.md "Operators": "integer ÷0 yields 0
-# (scan keeps running)"; the VM, lang/ir/vm.go evalBin). The implementation
+# PINS A DEVIATION (docs/functions.md "Operators": "integer and REAL ÷0
+# yield 0, scan keeps running"; the VM, lang/ir/vm.go evalBin). The implementation
 # never faults on division by zero: INT / and MOD return 0, and REAL / also
-# returns 0 (the docs name only the integer case). The standard leaves
+# returns 0 (docs/functions.md says so too). The standard leaves
 # division by zero an error; Logix sets an arithmetic overflow flag and
 # yields 0/Inf, Codesys yields Inf/NaN for REAL and faults the task for
 # integers. Changing this means editing this pin on purpose.

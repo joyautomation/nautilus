@@ -135,7 +135,7 @@ means the block accepts 2+ inputs (the `+` pin in the FBD editor).
 | `ADD` | n-ary numeric | common type | sum |
 | `SUB` | 2 numeric | common type | difference |
 | `MUL` | n-ary numeric | common type | product |
-| `DIV` | 2 numeric | common type | quotient; integer ÷0 yields 0 (scan keeps running) |
+| `DIV` | 2 numeric | common type | quotient; integer and REAL ÷0 yield 0 and the scan keeps running. This is a deliberate deviation (the standard calls it an error; Codesys and TIA yield IEEE ±Inf) so a bad divisor cannot propagate Inf/NaN through a control loop |
 | `MOD` | 2 INT | INT | remainder; ÷0 yields 0 |
 | `MOVE` | 1 any | same | pass-through assignment (FBD wiring aid) |
 | `GT`, `GE`, `LT`, `LE` | 2 comparable | **BOOL** | ordering (numeric or TIME) |
@@ -206,6 +206,7 @@ conversions across kinds:
 | --- | --- |
 | `INT_TO_REAL`, `REAL_TO_INT` | REAL→INT rounds to nearest, ties to even (IEC 60559: 2.5 → 2, 3.5 → 4) |
 | `BOOL_TO_INT`, `INT_TO_BOOL` | 0 ↔ FALSE, nonzero → TRUE |
+| `BOOL_TO_REAL`, `REAL_TO_BOOL` | 0.0 ↔ FALSE, nonzero → TRUE |
 | `INT_TO_TIME`, `TIME_TO_INT` | the INT is **milliseconds** |
 | `REAL_TO_TIME`, `TIME_TO_REAL` | milliseconds, rounded to nearest, ties to even |
 | `INT_TO_STRING`, `REAL_TO_STRING`, `BOOL_TO_STRING`, `TIME_TO_STRING` | formatting |
