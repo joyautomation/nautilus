@@ -236,6 +236,7 @@ type ScanStats struct {
 	// values) and program scans that errored.
 	IOErrors    uint64 `json:"ioErrors"`
 	LogicErrors uint64 `json:"logicErrors"`
+	LastError   string `json:"lastError,omitempty"` // message of the last main-task fault
 	IOHealthy   bool   `json:"ioHealthy"`
 	LastIOError string `json:"lastIOError,omitempty"`
 
@@ -873,6 +874,7 @@ func (r *Runtime) recordScan(t0, t1, t2, t3 time.Time, periodS float64, first bo
 	}
 	if logicErr != nil {
 		s.LogicErrors++
+		s.LastError = logicErr.Error()
 	}
 }
 

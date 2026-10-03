@@ -484,3 +484,19 @@ func TestStatsReturnsCopies(t *testing.T) {
 		t.Error("Stats must return copies, not aliases")
 	}
 }
+
+// A main-task fault keeps its message in ScanStats, as a named task's does.
+func TestMainTaskFaultKeepsMessage(t *testing.T) {
+	rt, err := runtime.New(runtime.Options{
+		Program: "PROGRAM P\nVAR_EXTERNAL K : INT; Out : INT; END_VAR\nOut := MUX(K, 10, 20);\nEND_PROGRAM\n",
+		Tags:    []runtime.TagDef{runtime.State("K", int64(5)), runtime.State("Out", int64(0))},
+	})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	rt.Scan()
+	st := rt.Stats()
+	if st.LogicErrors != 1 || !strings.Contains(st.LastError, "MUX selector 5 out of range") {
+		t.Fatalf("want 1 logic error with the MUX message, got %d %q", st.LogicErrors, st.LastError)
+	}
+}
