@@ -1,0 +1,19 @@
+PROGRAM CtudFbd
+(* CTUD in FBD: one block, its outputs wired to the fbd_ tags. *)
+VAR_EXTERNAL
+    CU      : BOOL;
+    CD      : BOOL;
+    R       : BOOL;
+    LOAD    : BOOL;
+    PV      : INT;
+    fbd_QU  : BOOL;
+    fbd_QD  : BOOL;
+    fbd_CV  : INT;
+END_VAR
+FBD
+  c : CTUD(CU := CU, CD := CD, R := R, LD := LOAD, PV := PV)
+  fbd_QU := c.QU
+  fbd_QD := c.QD
+  fbd_CV := c.CV
+END_FBD
+END_PROGRAM

@@ -1,0 +1,30 @@
+# fb-rs - the standard RS latch (reset-dominant) in every language that
+# can express it. One task per language; outputs are prefixed st_/ld_/fbd_ so one
+# assertion in fb-rs_test.yaml checks all three paths at once.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/fb-rs'
+#   go run ./cmd/naut test lang/conformance/fb-rs
+name: fb-rs
+
+tasks:
+  - program: fb-rs.st      # the first task is always "main"; its prefix is still st_
+    scan: 10ms
+  - name: ld
+    program: fb-rs.ld
+    scan: 10ms
+  - name: fbd
+    program: fb-rs.fbd
+    scan: 10ms
+
+tags:
+  # Shared inputs - plain tags every task reads.
+  - { name: S, role: state, init: false, desc: "Set request" }
+  - { name: R, role: state, init: false, desc: "Reset request" }
+
+  # Outputs, one set per language.
+  - { name: st_Q,  role: state, init: false }
+  - { name: ld_Q,  role: state, init: false }
+  - { name: fbd_Q, role: state, init: false }
+
+driver:
+  type: memory

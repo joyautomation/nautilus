@@ -1,0 +1,111 @@
+# CTUD conformance. CU and CD count rising edges; QU is CV >= PV and QD is
+# CV <= 0; R dominates LD, which dominates the count inputs. Every step
+# asserts st_, ld_ and fbd_ together.
+tests:
+  - name: at power-up CV is 0, QD is TRUE and QU is FALSE
+    steps:
+      - scans: 2
+        expect:
+          st_QU: false
+          ld_QU: false
+          fbd_QU: false
+          st_QD: true
+          ld_QD: true
+          fbd_QD: true
+          st_CV: 0
+          ld_CV: 0
+          fbd_CV: 0
+
+  - name: CU counts up per rising edge and QU rises at PV
+    steps:
+      - given: { CU: true }
+        scans: 1
+        expect: { st_CV: 1, ld_CV: 1, fbd_CV: 1, st_QU: false, ld_QU: false, fbd_QU: false, st_QD: false, ld_QD: false, fbd_QD: false }
+      - scans: 5 # CU held: no further counts
+        expect: { st_CV: 1, ld_CV: 1, fbd_CV: 1 }
+      - given: { CU: false }
+        scans: 1
+      - given: { CU: true }
+        scans: 1
+        expect: { st_CV: 2, ld_CV: 2, fbd_CV: 2, st_QU: false, ld_QU: false, fbd_QU: false }
+      - given: { CU: false }
+        scans: 1
+      - given: { CU: true } # CV reaches PV = 3
+        scans: 1
+        expect: { st_CV: 3, ld_CV: 3, fbd_CV: 3, st_QU: true, ld_QU: true, fbd_QU: true }
+
+  - name: CD counts down per rising edge and QD rises at 0
+    given: { LOAD: true }
+    steps:
+      - scans: 1
+        expect: { st_CV: 3, ld_CV: 3, fbd_CV: 3, st_QD: false, ld_QD: false, fbd_QD: false, st_QU: true, ld_QU: true, fbd_QU: true }
+      - given: { LOAD: false, CD: true }
+        scans: 1
+        expect: { st_CV: 2, ld_CV: 2, fbd_CV: 2, st_QU: false, ld_QU: false, fbd_QU: false }
+      - given: { CD: false }
+        scans: 1
+      - given: { CD: true }
+        scans: 1
+        expect: { st_CV: 1, ld_CV: 1, fbd_CV: 1, st_QD: false, ld_QD: false, fbd_QD: false }
+      - given: { CD: false }
+        scans: 1
+      - given: { CD: true }
+        scans: 1
+        expect: { st_CV: 0, ld_CV: 0, fbd_CV: 0, st_QD: true, ld_QD: true, fbd_QD: true }
+
+  - name: CU and CD rising on the same scan cancel (net zero)
+    given: { PV: 10, LOAD: true }
+    steps:
+      - scans: 1
+        expect: { st_CV: 10, ld_CV: 10, fbd_CV: 10 }
+      - given: { LOAD: false, CU: true, CD: true }
+        scans: 1
+        expect: { st_CV: 10, ld_CV: 10, fbd_CV: 10 }
+      - scans: 3 # both held: still no new edges
+        expect: { st_CV: 10, ld_CV: 10, fbd_CV: 10 }
+
+  - name: CU and CD rising on the same scan from a counted value cancel too
+    given: { PV: 10 }
+    steps:
+      - given: { CU: true }
+        scans: 1
+        expect: { st_CV: 1, ld_CV: 1, fbd_CV: 1 }
+      - given: { CU: false }
+        scans: 1
+      - given: { CU: true, CD: true }
+        scans: 1
+        expect: { st_CV: 1, ld_CV: 1, fbd_CV: 1 }
+
+  - name: R resets CV to 0 and dominates a CU edge on the same scan
+    given: { PV: 10 }
+    steps:
+      - given: { CU: true }
+        scans: 1
+      - given: { CU: false }
+        scans: 1
+      - given: { CU: true }
+        scans: 1
+        expect: { st_CV: 2, ld_CV: 2, fbd_CV: 2 }
+      - given: { CU: false }
+        scans: 1
+      - given: { CU: true, R: true } # CU rises while R is TRUE
+        scans: 1
+        expect: { st_CV: 0, ld_CV: 0, fbd_CV: 0, st_QD: true, ld_QD: true, fbd_QD: true }
+
+  - name: R dominates LD when both are TRUE
+    steps:
+      - given: { R: true, LOAD: true }
+        scans: 1
+        expect: { st_CV: 0, ld_CV: 0, fbd_CV: 0, st_QU: false, ld_QU: false, fbd_QU: false }
+      - given: { R: false } # R released with LD still TRUE: now it loads
+        scans: 1
+        expect: { st_CV: 3, ld_CV: 3, fbd_CV: 3, st_QU: true, ld_QU: true, fbd_QU: true }
+
+  - name: LD dominates CU and CD edges on the same scan
+    steps:
+      - given: { LOAD: true, CU: true }
+        scans: 1
+        expect: { st_CV: 3, ld_CV: 3, fbd_CV: 3 }
+      - given: { CU: false, CD: true }
+        scans: 1
+        expect: { st_CV: 3, ld_CV: 3, fbd_CV: 3 }

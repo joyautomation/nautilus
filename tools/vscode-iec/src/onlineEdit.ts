@@ -20,6 +20,8 @@
 // the shared library text against every task's copy (see diffLibraries).
 
 import * as vscode from "vscode";
+import { mirrorStatus, notifyError, notifyInfo, notifyWarning } from "./testHooks";
+import { STATUS_SYNC, testState } from "./testState";
 import { cliCommand } from "./cli";
 import { nautCompose } from "./compose";
 import { compositionKey, FileStamp, reuseComposition } from "./composeCli";
@@ -125,6 +127,7 @@ export class OnlineEdit implements vscode.Disposable {
   private disposables: vscode.Disposable[] = [];
 
   constructor(private readonly onState?: (state: SyncState, programUri?: vscode.Uri) => void) {
+    this.status.name = STATUS_SYNC;
     this.status.command = "nautilus.program.diff";
     this.timer = setInterval(() => void this.refreshStatus(), POLL_MS);
 
@@ -268,11 +271,11 @@ export class OnlineEdit implements vscode.Disposable {
       if (!quiet) {
         if (res.tooOld) {
           const UPDATE = "Install or Update naut";
-          void vscode.window.showErrorMessage(res.error, UPDATE).then((pick) => {
+          void notifyError(res.error, UPDATE).then((pick) => {
             if (pick === UPDATE) void vscode.commands.executeCommand("nautilus.installCli");
           });
         } else {
-          void vscode.window.showErrorMessage(res.error);
+          void notifyError(res.error);
         }
       }
       return undefined;
@@ -306,7 +309,7 @@ export class OnlineEdit implements vscode.Disposable {
     if (!ws) return undefined;
     if (ws.programs.length === 0) {
       if (!quiet)
-        void vscode.window.showErrorMessage("nautilus: no IEC file with a PROGRAM found in " + ws.dir.fsPath);
+        void notifyError("nautilus: no IEC file with a PROGRAM found in " + ws.dir.fsPath);
       return undefined;
     }
     let program = ws.programs[0];
@@ -336,7 +339,7 @@ export class OnlineEdit implements vscode.Disposable {
           program = pick.program;
         } else {
           if (!quiet)
-            void vscode.window.showErrorMessage(
+            void notifyError(
               library
                 ? `nautilus: no program in this workspace instantiates a block from ${ws.activeFile} — open the one to ${action}`
                 : `nautilus: multiple program files (${ws.programs.map((p) => p.file).join(", ")}) — open the one to ${action}`
@@ -364,17 +367,17 @@ export class OnlineEdit implements vscode.Disposable {
     // from the same program or every task download would 409.
     const info = await this.fetchInfo(composed.pou);
     if (!info) {
-      void vscode.window.showErrorMessage(`nautilus: no controller at ${this.runtimeUrl()}`);
+      void notifyError(`nautilus: no controller at ${this.runtimeUrl()}`);
       return;
     }
     if (!info.editable) {
-      void vscode.window.showErrorMessage(
+      void notifyError(
         "nautilus: this controller has online edits disabled (server.Options.OnlineEdits)"
       );
       return;
     }
     if (this.confirmWritesEnabled()) {
-      const pick = await vscode.window.showWarningMessage(
+      const pick = await notifyWarning(
         downloadConfirmMessage(this.runtimeUrl(), composed.programFile, composed.pou, info.hash),
         { modal: true },
         "Download"
@@ -392,7 +395,7 @@ export class OnlineEdit implements vscode.Disposable {
         // The "Force download" choice below is itself an explicit
         // confirmation — no modal on top of it, but it names the target
         // (controller URL, program file/POU) just as plainly.
-        const pick = await vscode.window.showWarningMessage(
+        const pick = await notifyWarning(
           forceDownloadConfirmMessage(this.runtimeUrl(), composed.programFile, composed.pou, body.error ?? ""),
           "Force download",
           "Show diff"
@@ -405,15 +408,15 @@ export class OnlineEdit implements vscode.Disposable {
         return;
       }
       if (!res.ok) {
-        void vscode.window.showErrorMessage("nautilus: download rejected — " + (body.error ?? res.statusText));
+        void notifyError("nautilus: download rejected — " + (body.error ?? res.statusText));
         return;
       }
       const resets = body.resets?.length ? ` · reset: ${body.resets.join(", ")}` : " · all state carried";
-      void vscode.window.showInformationMessage(
+      void notifyInfo(
         `nautilus: online edit live (${body.hash})${resets} — commit the file to keep it`
       );
     } catch (e) {
-      void vscode.window.showErrorMessage("nautilus: download failed — " + String(e));
+      void notifyError("nautilus: download failed — " + String(e));
     }
     void this.refreshStatus();
   }
@@ -426,9 +429,9 @@ export class OnlineEdit implements vscode.Disposable {
     });
     const body = (await res.json()) as { hash?: string; error?: string };
     if (res.ok) {
-      void vscode.window.showInformationMessage(`nautilus: online edit live (${body.hash})`);
+      void notifyInfo(`nautilus: online edit live (${body.hash})`);
     } else {
-      void vscode.window.showErrorMessage("nautilus: download rejected — " + (body.error ?? res.statusText));
+      void notifyError("nautilus: download rejected — " + (body.error ?? res.statusText));
     }
     void this.refreshStatus();
   }
@@ -447,7 +450,7 @@ export class OnlineEdit implements vscode.Disposable {
 
     const info = await this.fetchInfo(program?.pou);
     if (!info) {
-      void vscode.window.showErrorMessage(`nautilus: no controller at ${this.runtimeUrl()}`);
+      void notifyError(`nautilus: no controller at ${this.runtimeUrl()}`);
       return;
     }
     const title = `nautilus: controller (${info.hash}${info.dirty ? " · online edit" : ""}) ↔ workspace`;
@@ -499,7 +502,7 @@ export class OnlineEdit implements vscode.Disposable {
   }): Promise<void> {
     const main = await this.fetchInfo();
     if (!main) {
-      void vscode.window.showErrorMessage(`nautilus: no controller at ${this.runtimeUrl()}`);
+      void notifyError(`nautilus: no controller at ${this.runtimeUrl()}`);
       return;
     }
     const infos = await this.fetchAllPrograms(main);
@@ -514,7 +517,7 @@ export class OnlineEdit implements vscode.Disposable {
       groups.set(key, g);
     }
     if (groups.size > 1) {
-      void vscode.window.showWarningMessage(
+      void notifyWarning(
         "nautilus: controller tasks disagree about the shared libraries — an online edit changed one task's copy: " +
           [...groups.values()].map((g) => g.tasks.join("+")).join(" vs ")
       );
@@ -552,20 +555,20 @@ export class OnlineEdit implements vscode.Disposable {
     if (!composed) return;
     const info = await this.fetchInfo(composed.pou);
     if (!info) {
-      void vscode.window.showErrorMessage(`nautilus: no controller at ${this.runtimeUrl()}`);
+      void notifyError(`nautilus: no controller at ${this.runtimeUrl()}`);
       return;
     }
 
     const program = splitProgram(info.source, composed.prelude);
     if (program === undefined) {
-      void vscode.window.showErrorMessage(
+      void notifyError(
         "nautilus: the controller's type/library sources differ from this project — " +
           "re-run `naut eip import` to reconcile the generated types before pulling the program."
       );
       return;
     }
     if (program === composed.programBody) {
-      void vscode.window.showInformationMessage(`nautilus: ${composed.programFile} already matches the controller`);
+      void notifyInfo(`nautilus: ${composed.programFile} already matches the controller`);
       return;
     }
 
@@ -579,7 +582,7 @@ export class OnlineEdit implements vscode.Disposable {
       remote,
       `nautilus: ${composed.programFile} (workspace ↔ controller ${info.hash})`
     );
-    const pick = await vscode.window.showWarningMessage(
+    const pick = await notifyWarning(
       `Overwrite ${composed.programFile} with the controller's program?`,
       { modal: true },
       "Pull and overwrite"
@@ -587,7 +590,7 @@ export class OnlineEdit implements vscode.Disposable {
     if (pick !== "Pull and overwrite") return;
 
     await vscode.workspace.fs.writeFile(composed.programUri, new TextEncoder().encode(program));
-    void vscode.window.showInformationMessage(
+    void notifyInfo(
       `nautilus: pulled ${composed.programFile} from controller — review the diff and commit to keep it`
     );
     void this.refreshStatus();
@@ -605,13 +608,13 @@ export class OnlineEdit implements vscode.Disposable {
     if (ws && ws.programs.length > 1 && !program) {
       // Rolling back is per-task — falling through to main would undo the
       // wrong program.
-      void vscode.window.showErrorMessage(
+      void notifyError(
         `nautilus: multiple program files (${ws.programs.map((p) => p.file).join(", ")}) — open the one to roll back`
       );
       return;
     }
     if (this.confirmWritesEnabled()) {
-      const pick = await vscode.window.showWarningMessage(
+      const pick = await notifyWarning(
         rollbackConfirmMessage(this.runtimeUrl(), program?.pou ?? ""),
         { modal: true },
         "Roll back"
@@ -623,12 +626,12 @@ export class OnlineEdit implements vscode.Disposable {
       const res = await fetch(this.runtimeUrl() + "/api/program/rollback" + query, { method: "POST", headers: this.writeHeaders() });
       const body = (await res.json()) as { hash?: string; error?: string };
       if (res.ok) {
-        void vscode.window.showInformationMessage(`nautilus: rolled back to ${body.hash}`);
+        void notifyInfo(`nautilus: rolled back to ${body.hash}`);
       } else {
-        void vscode.window.showWarningMessage("nautilus: rollback — " + (body.error ?? res.statusText));
+        void notifyWarning("nautilus: rollback — " + (body.error ?? res.statusText));
       }
     } catch (e) {
-      void vscode.window.showErrorMessage("nautilus: rollback failed — " + String(e));
+      void notifyError("nautilus: rollback failed — " + String(e));
     }
     void this.refreshStatus();
   }
@@ -636,8 +639,16 @@ export class OnlineEdit implements vscode.Disposable {
   // ── sync status ─────────────────────────────────────────────────────────
 
   private async refreshStatus(): Promise<void> {
+    try {
+      await this.refreshStatusInner();
+    } finally {
+      mirrorStatus(this.status, STATUS_SYNC, this.statusShown);
+    }
+  }
+
+  private async refreshStatusInner(): Promise<void> {
     if (!iecSurfaceVisible()) {
-      this.status.hide();
+      this.hideStatus();
       return;
     }
     const ws = await this.composeAll(true, true);
@@ -645,8 +656,8 @@ export class OnlineEdit implements vscode.Disposable {
       ws && (ws.programs.length === 1 ? ws.programs[0] : ws.programs.find((p) => p.file === ws.activeFile));
     const info = await this.fetchInfo(program?.pou);
     if (!info) {
-      this.status.hide();
-      this.onState?.("offline", program?.uri);
+      this.hideStatus();
+      this.reportState("offline", program?.uri);
       return;
     }
     if (!ws && this.composeError) {
@@ -654,7 +665,7 @@ export class OnlineEdit implements vscode.Disposable {
       // a naut without `compose`): there is nothing honest to compare.
       this.status.text = "$(warning) nautilus: can't compose the program";
       this.status.tooltip = this.composeError;
-      this.status.show();
+      this.showStatus();
       return;
     }
     let inSync = false;
@@ -676,8 +687,8 @@ export class OnlineEdit implements vscode.Disposable {
       dirty = infos.some((i) => i.dirty);
     }
     if (inSync && !dirty) {
-      this.status.hide(); // running exactly what was deployed — nothing to say
-      this.onState?.("sync", program?.uri);
+      this.hideStatus(); // running exactly what was deployed — nothing to say
+      this.reportState("sync", program?.uri);
       return;
     }
     if (inSync && dirty) {
@@ -685,15 +696,30 @@ export class OnlineEdit implements vscode.Disposable {
       this.status.tooltip =
         "The controller runs your latest download (matches the workspace) but not what it booted with.\n" +
         "Commit the file to keep it — a controller restart reverts. Click to diff.";
-      this.onState?.("edit", program?.uri);
+      this.reportState("edit", program?.uri);
     } else {
       this.status.text = "$(cloud-upload) nautilus: program differs";
       this.status.tooltip =
         "The controller is running a different program than the workspace. Click to diff, " +
         "then Download Program to Controller to push.";
-      this.onState?.("differs", program?.uri);
+      this.reportState("differs", program?.uri);
     }
+    this.showStatus();
+  }
+
+  private reportState(state: SyncState, programUri?: vscode.Uri): void {
+    testState()?.update({ syncState: state });
+    this.onState?.(state, programUri);
+  }
+
+  private statusShown = false;
+  private hideStatus(): void {
+    this.status.hide();
+    this.statusShown = false;
+  }
+  private showStatus(): void {
     this.status.show();
+    this.statusShown = true;
   }
 
   dispose(): void {
