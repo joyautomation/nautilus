@@ -443,9 +443,16 @@ one asked, upload again and verify. Build-only deploy of the DemoLine
 project fixture (`logix/writer/testdata/project`) measured at **31 s**
 end to end through the tunnel (the SDK open/convert dominates).
 
+**Also built:** `logix/deploy` (the flow as a package, shared by the CLI
+verb and the facade) and the editor's Download button: `naut logix serve
+--project <dir>` turns on a program plane where GET /api/program serves the
+task's ladder source and PUT /api/program runs the deploy as an online
+edit; a change that needs a download is refused with the command that does
+it. Tested against a fake agent and the in-repo emulator.
+
 **Waiting on:** an Echo controller (1756-L85E v38, name DemoLine) and its
-FactoryTalk Linx comm path, for the online-edit and download legs, and the
-editor's Download button (facade PUT /api/program → deploy --online).
+FactoryTalk Linx comm path, for the online-edit and download legs on real
+hardware and the edit→live timing (§7a DX criterion).
 
 ## 8. The demo this enables
 
