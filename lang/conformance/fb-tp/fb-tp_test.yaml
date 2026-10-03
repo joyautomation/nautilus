@@ -1,0 +1,95 @@
+# TP conformance. Every step asserts st_, ld_ and fbd_ together. Tasks scan at
+# 1ms; TIME values are compared in ms. The first scan is at t=1ms, so "the
+# scan IN changed on" is given + `scans: 1`, and PT-1ms / PT are `advance:`
+# steps from there.
+tests:
+  - name: IN rising starts a pulse - Q true at once, falls at PT
+    given: { IN: true }
+    steps:
+      - scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - advance: 4.999s # PT-1ms
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 4999, ld_ET: 4999, fbd_ET: 4999 }
+      - advance: 1ms # exactly PT
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+
+  - name: ET holds at PT while IN stays TRUE and no new pulse starts
+    given: { IN: true }
+    steps:
+      - scans: 1
+      - advance: 5s
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+      - advance: 10s
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+
+  # KNOWN DEVIATION (pinned, lang/ir/builtins_fb.go registerTP): IEC 61131-3
+  # says a rising edge while the pulse runs is ignored. Here the edge
+  # restarts the pulse: ET drops to 0 and Q is extended by a full PT from
+  # the new edge. This test pins the actual behaviour so a fix fails it
+  # on purpose; the standard's expectation would be ET 2002 here and Q
+  # FALSE at t = original start + PT.
+  - name: "KNOWN DEVIATION: retrigger during the pulse restarts it (standard: ignored)"
+    given: { IN: true }
+    steps:
+      - scans: 1
+      - advance: 2s
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 2000, ld_ET: 2000, fbd_ET: 2000 }
+      - given: { IN: false }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 2001, ld_ET: 2001, fbd_ET: 2001 }
+      - given: { IN: true }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - advance: 4.999s
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 4999, ld_ET: 4999, fbd_ET: 4999 }
+      - advance: 1ms
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+
+  - name: IN falling mid-pulse does not shorten it
+    given: { IN: true }
+    steps:
+      - scans: 1
+      - given: { IN: false }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 1, ld_ET: 1, fbd_ET: 1 }
+      - advance: 4.998s
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 4999, ld_ET: 4999, fbd_ET: 4999 }
+      - advance: 1ms
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+      - advance: 1ms # IN FALSE and pulse over: ET clears
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+
+  # Note the one-scan ET lag after IN falls (see the step comment): ET reads
+  # PT on the scan IN is first FALSE and 0 on the next.
+  - name: a new rising edge after the pulse ended starts a fresh pulse
+    given: { IN: true }
+    steps:
+      - scans: 1
+      - advance: 5s
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+      - given: { IN: false }
+        scans: 1 # DEVIATION: the standard clears ET here; the impl holds PT one more scan
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+      - scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - given: { IN: true }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - advance: 4.999s
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 4999, ld_ET: 4999, fbd_ET: 4999 }
+      - advance: 1ms
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+
+  - name: IN FALSE from power-up never pulses
+    steps:
+      - advance: 10s
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+
+  - name: a shorter PT given mid-run is honoured
+    given: { IN: true, PT: 100 }
+    steps:
+      - scans: 1
+      - advance: 99ms
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 99, ld_ET: 99, fbd_ET: 99 }
+      - advance: 1ms
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 100, ld_ET: 100, fbd_ET: 100 }

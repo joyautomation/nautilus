@@ -1,0 +1,86 @@
+# TOF conformance. Every step asserts st_, ld_ and fbd_ together. Tasks scan at
+# 1ms; TIME values are compared in ms. The first scan is at t=1ms, so "the
+# scan IN changed on" is given + `scans: 1`, and PT-1ms / PT are `advance:`
+# steps from there.
+tests:
+  - name: IN rising sets Q at once with ET 0
+    given: { IN: true }
+    steps:
+      - scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - advance: 10s # while IN stays TRUE nothing changes
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+
+  - name: Q holds for PT after IN falls, drops at PT, ET clamps at PT
+    given: { IN: true }
+    steps:
+      - scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - given: { IN: false }
+        scans: 1 # the scan IN is first seen FALSE: the off-delay starts
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - advance: 4.999s # PT-1ms
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 4999, ld_ET: 4999, fbd_ET: 4999 }
+      - advance: 1ms # exactly PT
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+      - advance: 3s # ET holds at PT while IN stays FALSE
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+
+  - name: IN re-rising during PT keeps Q TRUE and resets ET to 0
+    given: { IN: true }
+    steps:
+      - scans: 1
+      - given: { IN: false }
+        scans: 1
+      - advance: 3s
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 3000, ld_ET: 3000, fbd_ET: 3000 }
+      - given: { IN: true }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - advance: 10s # never times out while IN is TRUE
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+
+  - name: after a re-rise the next fall times a full PT again
+    given: { IN: true }
+    steps:
+      - scans: 1
+      - given: { IN: false }
+        scans: 1
+      - advance: 3s
+      - given: { IN: true }
+        scans: 1
+      - given: { IN: false }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - advance: 4.999s
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 4999, ld_ET: 4999, fbd_ET: 4999 }
+      - advance: 1ms
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+
+  - name: IN rising after the timeout sets Q again and clears ET
+    given: { IN: true }
+    steps:
+      - scans: 1
+      - given: { IN: false }
+        scans: 1
+      - advance: 5s
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+      - given: { IN: true }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+
+  - name: IN FALSE from power-up leaves Q FALSE and ET 0
+    steps:
+      - advance: 10s
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+
+  - name: a shorter PT given mid-run is honoured
+    given: { IN: true, PT: 100 }
+    steps:
+      - scans: 1
+      - given: { IN: false }
+        scans: 1
+      - advance: 99ms
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 99, ld_ET: 99, fbd_ET: 99 }
+      - advance: 1ms
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 100, ld_ET: 100, fbd_ET: 100 }
