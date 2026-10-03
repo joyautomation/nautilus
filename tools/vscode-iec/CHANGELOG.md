@@ -15,6 +15,14 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   `[name]` tooltip prefix; the SFC delete-step confirm has `data-testid`s.
   Inert unless the variable is set.
 
+### Changed
+
+- **Mimic and component editors carry testability attributes.** Equipment,
+  pipes (and their vertex and segment handles), labels, ports, palette
+  items and the ports panel rows now render `data-id` (equipment id, pipe
+  id, label index, port name) and `data-kind`, so a test finds P101 by name
+  instead of by its position in the file. No visible change.
+
 ### Fixed
 
 - **Live values on a Logix routine find program-scope tags.** A rung in
