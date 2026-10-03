@@ -1,0 +1,11 @@
+PROGRAM FTrigFbd
+(* F_TRIG in FBD: one block, its output wired to the fbd_ tag. *)
+VAR_EXTERNAL
+    CLK   : BOOL;
+    fbd_Q : BOOL;
+END_VAR
+FBD
+  t : F_TRIG(CLK := CLK)
+  fbd_Q := t.Q
+END_FBD
+END_PROGRAM

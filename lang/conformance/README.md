@@ -151,4 +151,7 @@ Current table:
 <!-- go run ./lang/conformance -matrix -->
 | Feature | ST | LD | FBD | SFC | Tests |
 |---|:-:|:-:|:-:|:-:|--:|
+| `fb-ctd` | ✓ | ✓ | ✓ |   | 7 |
+| `fb-ctud` | ✓ | ✓ | ✓ |   | 8 |
+| `fb-f-trig` | ✓ | ✓ | ✓ |   | 5 |
 | `fb-ton` | ✓ | ✓ | ✓ |   | 6 |
