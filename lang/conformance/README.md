@@ -152,3 +152,9 @@ Current table:
 | Feature | ST | LD | FBD | SFC | Tests |
 |---|:-:|:-:|:-:|:-:|--:|
 | `fb-ton` | ✓ | ✓ | ✓ |   | 6 |
+| `sfc-alt-priority` |   |   |   | ✓ | 7 |
+| `sfc-final-scan` |   |   |   | ✓ | 4 |
+| `sfc-jump-back` |   |   |   | ✓ | 4 |
+| `sfc-qualifiers` |   |   |   | ✓ | 7 |
+| `sfc-sim-div-conv` |   |   |   | ✓ | 6 |
+| `sfc-step-t` |   |   |   | ✓ | 5 |

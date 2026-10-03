@@ -1,0 +1,52 @@
+# The final-scan rule (docs: languages/sfc, "How a chart executes"): a body
+# driven by a level qualifier runs once more after its step is left, with
+# Step.X false. A P1 body does not. Run activates on scan 1 (Go given from
+# the start), so the N body has run n times after scan n; the scan Stop
+# takes effect is the body's final scan.
+tests:
+  - name: the N body runs every active scan with X true
+    given: { Go: true }
+    steps:
+      - scans: 1
+        expect: { sfc_Runs: 1, sfc_InX: true, sfc_PulseRuns: 1 }
+      - scans: 9
+        expect: { sfc_Runs: 10, sfc_InX: true, sfc_PulseRuns: 1 }
+
+  - name: leaving the step runs the N body once more, with X false
+    given: { Go: true }
+    steps:
+      - scans: 10
+        expect: { sfc_Runs: 10, sfc_InX: true }
+      - given: { Go: false, Stop: true }
+        scans: 1 # Run -> Idle; the body's final scan
+        expect: { sfc_Runs: 11, sfc_InX: false }
+      - scans: 20 # and then it stops running
+        expect: { sfc_Runs: 11, sfc_InX: false }
+
+  - name: the P1 body has no final scan
+    given: { Go: true }
+    steps:
+      - scans: 5
+        expect: { sfc_PulseRuns: 1 }
+      - given: { Go: false, Stop: true }
+        scans: 5
+        expect: { sfc_PulseRuns: 1 }
+
+  - name: the final scan resets a TON called with Step.X, so re-entry starts clean
+    given: { Go: true }
+    steps:
+      - scans: 1
+      - advance: 49ms # scan 50: ET = 49
+        expect: { sfc_Q: false, sfc_ET: 49 }
+      - advance: 1ms
+        expect: { sfc_Q: true, sfc_ET: 50 }
+      - given: { Go: false, Stop: true }
+        scans: 1 # the final scan calls the TON with IN false
+        expect: { sfc_Q: false, sfc_ET: 0, sfc_InX: false }
+      - given: { Stop: false, Go: true }
+        scans: 1 # Idle -> Run again; the timer is fresh, not still at PT
+        expect: { sfc_Q: false, sfc_ET: 0, sfc_InX: true }
+      - advance: 49ms
+        expect: { sfc_Q: false, sfc_ET: 49 }
+      - advance: 1ms
+        expect: { sfc_Q: true, sfc_ET: 50 }
