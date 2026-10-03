@@ -29,7 +29,9 @@ import { UserComponentManager } from "./userComponents";
 import { registerEditComponentPortsCommand } from "./editComponentPorts";
 import { registerNewProjectCommand } from "./newProject";
 import { AcceptanceTests } from "./acceptanceTests";
-import { checkCliVersion, initCli, installCliCommand, resolveCliNow, showCliInfo, showCliMissing } from "./cli";
+import { cliVersion, checkCliVersion, initCli, installCliCommand, resolveCliNow, showCliInfo, showCliMissing } from "./cli";
+import { initTestState } from "./testState";
+import { notifyInfo, notifyWarning, openEditors } from "./testHooks";
 
 /** The id `workbench.action.openWalkthrough` wants: `<extension id>#<walkthrough id>`,
  * matching this file's `contributes.walkthroughs[0].id` in package.json. */
@@ -51,6 +53,29 @@ function watchHasProject(context: vscode.ExtensionContext): void {
   context.subscriptions.push(watcher, watcher.onDidCreate(refresh), watcher.onDidDelete(refresh));
 }
 
+/** NAUTILUS_TEST_STATE=<file>: keep a JSON snapshot of the extension's
+ * observable state for the test rig. Off (and free) otherwise. */
+function wireTestState(context: vscode.ExtensionContext): void {
+  const t = initTestState();
+  if (!t) return;
+  const refresh = () => {
+    const cli = resolveCliNow();
+    t.update({
+      cliPath: cli.found ? cli.command : "",
+      runtimeUrl: vscode.workspace.getConfiguration("nautilus").get<string>("runtimeUrl", "http://localhost:8080"),
+      liveValuesEnabled: vscode.workspace.getConfiguration("nautilus").get<boolean>("liveValues.enabled", true),
+      openEditors: openEditors(),
+    });
+  };
+  refresh();
+  const cli = resolveCliNow();
+  if (cli.found) void cliVersion(cli.command).then((v) => t.update({ cliVersion: v ?? "" }));
+  context.subscriptions.push(
+    vscode.window.tabGroups.onDidChangeTabs(refresh),
+    vscode.workspace.onDidChangeConfiguration(refresh)
+  );
+}
+
 let client: LanguageClient | undefined;
 let live: LiveValues | undefined;
 
@@ -58,6 +83,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Before anything resolves the CLI: the managed install's directory is
   // part of the search.
   initCli(context);
+  wireTestState(context);
 
   // Register commands and live values FIRST, independent of the language
   // client: they don't need it, and if the CLI is missing we must not let a
@@ -233,9 +259,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       try {
         const res = await fetch(url + "/api/state", { signal: AbortSignal.timeout(3000) });
         if (!res.ok) throw new Error(res.statusText);
-        void vscode.window.showInformationMessage(`nautilus: connected — following ${url}`);
+        void notifyInfo(`nautilus: connected — following ${url}`);
       } catch {
-        void vscode.window.showWarningMessage(
+        void notifyWarning(
           `nautilus: no controller answering at ${url} yet — live values will keep retrying`
         );
       }
