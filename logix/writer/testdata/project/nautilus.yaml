@@ -1,0 +1,14 @@
+# DemoLine as a nautilus project with a Logix deploy target: the fixture
+# `naut logix deploy` and `naut check` are tested against, and the project
+# the Echo demo deploys (docs/design/logix-authoring.md §8).
+name: demoline
+tasks:
+  - program: MainProgram.ld
+    scan: 100ms
+target:
+  logix:
+    controller: DemoLine
+    processor: 1756-L85E
+    revision: "38.11"
+    # comm-path: AB_ETH-1\10.154.92.210\Backplane\0
+    host: 10.154.92.210

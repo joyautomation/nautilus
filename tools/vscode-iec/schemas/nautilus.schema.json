@@ -105,6 +105,70 @@
         "minLength": 1
       },
       "description": "Files holding additional alarm definitions and rules, each a bare YAML list. Mirrors `tag-files:` exactly, and for the same reason: a GENERATED alarm set stays a separate reviewable artifact. Read in order, then `alarms:` last. An id declared twice in any two sources is an error naming both."
+    },
+    "target": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "A controller this project is DEPLOYED to instead of being run by the nautilus runtime. With a target set, `naut check` also runs that target's rules. Experimental: docs/design/logix-authoring.md.",
+      "additionalProperties": false,
+      "properties": {
+        "logix": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "An Allen-Bradley Logix controller, written as an L5X project by `naut logix deploy` and reached through a logixd agent on the licensed Studio 5000 machine.",
+          "additionalProperties": false,
+          "properties": {
+            "controller": {
+              "type": "string",
+              "description": "Logix controller (project) name. Default: the task program's POU name."
+            },
+            "processor": {
+              "type": "string",
+              "description": "Catalog number, e.g. 1756-L85E."
+            },
+            "revision": {
+              "type": "string",
+              "description": "Firmware revision, major.minor, e.g. \"38.11\"."
+            },
+            "comm-path": {
+              "type": "string",
+              "description": "FactoryTalk Linx path logixd uses to reach the controller, e.g. AB_ETH-1\\10.0.0.5\\Backplane\\0. Required to deploy."
+            },
+            "host": {
+              "type": "string",
+              "description": "The controller's EtherNet/IP address, for live values (`naut logix serve`)."
+            },
+            "slot": {
+              "type": "integer",
+              "description": "Processor backplane slot (default 0)."
+            },
+            "port": {
+              "type": "integer",
+              "description": "EtherNet/IP TCP port (default 44818)."
+            },
+            "agent": {
+              "type": "string",
+              "description": "logixd URL. NAUTILUS_LOGIXD_URL overrides it; the token is never in the manifest (NAUTILUS_LOGIXD_TOKEN)."
+            },
+            "program": {
+              "type": "string",
+              "description": "Logix program name (default: the POU name)."
+            },
+            "routine": {
+              "type": "string",
+              "description": "Ladder routine name (default MainRoutine)."
+            },
+            "task": {
+              "type": "string",
+              "description": "Task the program is scheduled in (default MainTask)."
+            }
+          }
+        }
+      }
     }
   },
   "definitions": {

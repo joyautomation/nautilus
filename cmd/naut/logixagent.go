@@ -564,6 +564,7 @@ func runLogixDrift(args []string) int {
 	agent, token := agentFlags(fs)
 	commPath := fs.String("comm-path", "", "controller to upload from (required)")
 	keep := fs.String("keep", "", "also write the controller's L5X here")
+	logic := fs.Bool("logic", false, "compare logic only — programs, routines, rungs and tag shapes, never tag values, which move on a running controller")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -622,6 +623,24 @@ func runLogixDrift(args []string) int {
 		}
 	}
 	_ = res
+
+	if *logic {
+		ctrlFile, err := l5x.Parse(ctrlRaw)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut logix drift: controller export:", err)
+			return 1
+		}
+		diffs := l5x.LogicDiff(l5x.LogicOf(repoFile), l5x.LogicOf(ctrlFile))
+		if len(diffs) == 0 {
+			fmt.Printf("no logic drift — the controller at %s runs the logic in %s\n", *commPath, repoPath)
+			return 0
+		}
+		fmt.Printf("LOGIC DRIFT — %d difference(s) between %s (first) and the controller at %s (second)\n", len(diffs), repoPath, *commPath)
+		for _, d := range diffs {
+			fmt.Println("  " + d)
+		}
+		return 1
+	}
 
 	// Normalization is what makes this a comparison rather than a diff of
 	// timestamps: every export stamps a new ExportDate.

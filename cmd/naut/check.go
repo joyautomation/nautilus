@@ -37,6 +37,20 @@ func runCheck(args []string) int {
 		fmt.Fprintf(os.Stderr, "naut check: unknown target %q (the targets are: logix)\n", *target)
 		return 2
 	}
+	paths0 := fset.Args()
+	if len(paths0) == 0 {
+		paths0 = []string{"."}
+	}
+	// A project that declares a deploy target is checked against it
+	// without being asked: the point of the target's rules is to fire on
+	// the keystroke, not on the flag.
+	if *target == "" {
+		if dir, ok := manifestDir(paths0, *manifest); ok {
+			if m, err := project.ReadManifest(os.DirFS(dir), *manifest); err == nil && m.Target != nil && m.Target.Logix != nil {
+				*target = "logix"
+			}
+		}
+	}
 	paths := fset.Args()
 	if len(paths) == 0 {
 		paths = []string{"."}

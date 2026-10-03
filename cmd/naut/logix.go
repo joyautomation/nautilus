@@ -87,7 +87,17 @@ to a logixd agent on the licensed Windows machine (tools/logixd):
   naut logix download <proj.ACD>   Download a project to a controller.
                                        STOPS it and resets tags; needs --yes.
   naut logix drift <repo.L5X>      Does the controller still match the
-                                       repo? --comm-path names the controller.
+                                       repo? --comm-path names the controller;
+                                       --logic compares logic only, never
+                                       the tag values a running controller
+                                       keeps changing.
+  naut logix deploy [dir]          Write the project's ladder program as a
+                                       Logix project, build it, and put it
+                                       on the controller named by
+                                       target: logix — as an online edit
+                                       (--online) or a download
+                                       (--download --yes). Experimental.
+                                       "naut logix deploy -h" for the flags.
 
 Import flags:
   --out         Output directory (default ".")
@@ -134,6 +144,8 @@ func runLogix(args []string) int {
 		return runLogixInfo(args[1:])
 	case "write":
 		return runLogixWrite(args[1:])
+	case "deploy":
+		return runLogixDeploy(args[1:])
 	case "emulate":
 		return runLogixEmulate(args[1:])
 	case "serve":

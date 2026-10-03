@@ -81,6 +81,48 @@ type Manifest struct {
 	// ReadManifest, so check, run and the language server see one set.
 	Alarms     *AlarmsConfig `yaml:"alarms"`
 	AlarmFiles []string      `yaml:"alarm-files"`
+	// Target names a controller this project is DEPLOYED to instead of
+	// being run by the nautilus runtime: today, an Allen-Bradley Logix
+	// controller (docs/design/logix-authoring.md). With a target set,
+	// `naut check` also runs that target's rules, so a construct the
+	// target cannot take is a diagnostic on the keystroke that wrote it.
+	Target *TargetConfig `yaml:"target"`
+}
+
+// TargetConfig is the deploy target. One kind at a time; logix is the
+// only one so far.
+type TargetConfig struct {
+	Logix *LogixTarget `yaml:"logix"`
+}
+
+// LogixTarget is an Allen-Bradley Logix controller as a deploy target:
+// what the L5X writer puts in the project envelope, where logixd reaches
+// the controller, and where live values come from.
+type LogixTarget struct {
+	// Controller is the Logix controller (project) name. Default: the
+	// task program's POU name.
+	Controller string `yaml:"controller"`
+	// Processor is the catalog number (1756-L85E); Revision the firmware
+	// "major.minor" (38.11). Defaults match ECHO1.
+	Processor string `yaml:"processor"`
+	Revision  string `yaml:"revision"`
+	// CommPath is the FactoryTalk Linx path logixd uses to reach the
+	// controller (AB_ETH-1\10.0.0.5\Backplane\0). Required to deploy.
+	CommPath string `yaml:"comm-path"`
+	// Host and Slot are the controller's EtherNet/IP address for live
+	// values (`naut logix serve`); Port 0 is 44818.
+	Host string `yaml:"host"`
+	Slot int    `yaml:"slot"`
+	Port int    `yaml:"port"`
+	// Agent is the logixd URL. NAUTILUS_LOGIXD_URL overrides it, and the
+	// token is NEVER in the manifest — set NAUTILUS_LOGIXD_TOKEN.
+	Agent string `yaml:"agent"`
+	// Program, Routine and Task name the Logix program, its ladder
+	// routine and the task it is scheduled in. Defaults: the POU name,
+	// MainRoutine, MainTask.
+	Program string `yaml:"program"`
+	Routine string `yaml:"routine"`
+	Task    string `yaml:"task"`
 }
 
 // RetainConfig says where retained state lives. In a cluster the ConfigMap
