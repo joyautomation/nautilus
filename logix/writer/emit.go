@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/joyautomation/nautilus/lang/ld"
 )
 
 // The L5X itself. Written by hand rather than through encoding/xml so the
@@ -233,4 +235,94 @@ func attr(s string) string {
 // two sections so it cannot end the block early.
 func cdata(s string) string {
 	return "<![CDATA[" + strings.ReplaceAll(s, "]]>", "]]]]><![CDATA[>") + "]]>"
+}
+
+// WriteRungs lowers ladder source to a Rung-target partial export: the
+// shape the SDK's import-rungs takes, and what an online edit sends to a
+// running controller. Every rung is Use="Target"; the tags the rungs name
+// ride along as Use="Context", exactly as Logix exports them, so the
+// importer can resolve operands without creating anything. New tags are
+// not an online edit's to create — a program whose tag set changed needs
+// a download, which deploy decides by comparing tag sets.
+func WriteRungs(src string, opts Options) ([]byte, []Diag, error) {
+	m, err := ld.Graph(src, opts.Libs...)
+	if err != nil {
+		return nil, nil, err
+	}
+	if m.Name == "" {
+		return nil, nil, fmt.Errorf("logix writer: source declares no PROGRAM")
+	}
+	opts = opts.withDefaults(m.Name)
+	lw := lower(m, opts)
+	if len(lw.diags) > 0 {
+		return nil, lw.diags, nil
+	}
+	return emitRungs(lw, opts), nil, nil
+}
+
+func emitRungs(lw *lowered, o Options) []byte {
+	var b strings.Builder
+	w := func(format string, a ...any) {
+		fmt.Fprintf(&b, format, a...)
+		b.WriteByte('\n')
+	}
+	w(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	w(`<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="%s" TargetType="Rung" TargetCount="%d" ContainsContext="true" ExportDate="%s" ExportOptions="References NoRawData L5KData DecoratedData Context ProductDefinedTypes RoutineLabels AliasExtras IOTags NoStringData ForceProtectedEncoding AllProjDocTrans">`,
+		attr(o.SoftwareRevision), len(lw.rungs), attr(o.ExportDate))
+	w(`<Controller Use="Context" Name="%s">`, attr(o.Controller))
+	w(`<DataTypes Use="Context">`)
+	for _, dt := range usedTypes(lw) {
+		w(`<DataType Name="%s" Family="NoFamily" Class="ProductDefined"/>`, dt)
+	}
+	w(`</DataTypes>`)
+	if len(lw.ctrlTags) > 0 {
+		emitContextTags(&b, lw.ctrlTags)
+	}
+	w(`<Programs Use="Context">`)
+	w(`<Program Use="Context" Name="%s">`, attr(o.Program))
+	if len(lw.progTags) > 0 {
+		emitContextTags(&b, lw.progTags)
+	}
+	w(`<Routines Use="Context">`)
+	w(`<Routine Use="Context" Name="%s">`, attr(o.Routine))
+	w(`<RLLContent Use="Context">`)
+	for i, r := range lw.rungs {
+		w(`<Rung Use="Target" Number="%d" Type="N">`, i)
+		if r.Comment != "" {
+			w(`<Comment>`)
+			w(`%s`, cdata(r.Comment))
+			w(`</Comment>`)
+		}
+		w(`<Text>`)
+		w(`%s`, cdata(r.Text+";"))
+		w(`</Text>`)
+		w(`</Rung>`)
+	}
+	w(`</RLLContent>`)
+	w(`</Routine>`)
+	w(`</Routines>`)
+	w(`</Program>`)
+	w(`</Programs>`)
+	w(`</Controller>`)
+	w(`</RSLogix5000Content>`)
+	return []byte(b.String())
+}
+
+// emitContextTags writes a tag list marked Use="Context": the exporter's
+// form for tags a partial export references but does not carry.
+func emitContextTags(b *strings.Builder, tags []tagDef) {
+	var inner strings.Builder
+	emitTags(&inner, tags)
+	s := strings.Replace(inner.String(), "<Tags>", `<Tags Use="Context">`, 1)
+	b.WriteString(s)
+}
+
+// usedTypes lists the atomic types the tags use, sorted, for the partial
+// export's DataTypes context.
+func usedTypes(lw *lowered) []string {
+	seen := map[string]bool{}
+	for _, t := range append(append([]tagDef{}, lw.ctrlTags...), lw.progTags...) {
+		seen[t.DataType] = true
+	}
+	return sortedKeys(seen)
 }

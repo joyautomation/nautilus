@@ -329,3 +329,43 @@ func joinDiags(ds []Diag) string {
 	}
 	return strings.Join(out, "\n")
 }
+
+// The rungs form is what an online edit sends: a Rung-target partial
+// export the reader parses, with every rung a target and the tags as
+// context only.
+func TestWriteRungsIsAPartialExport(t *testing.T) {
+	doc, diags, err := WriteRungs(fixture(t, "demoline.ld"), demoOpts())
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("%v %v", err, diags)
+	}
+	f, err := l5x.Parse(doc)
+	if err != nil {
+		t.Fatalf("does not parse: %v\n%s", err, doc)
+	}
+	if f.TargetType != "Rung" || !f.Partial() || !f.ContainsContext {
+		t.Errorf("envelope: TargetType=%q partial=%v context=%v", f.TargetType, f.Partial(), f.ContainsContext)
+	}
+	s := string(doc)
+	for _, want := range []string{
+		`TargetCount="2"`,
+		`<Controller Use="Context" Name="DemoLine">`,
+		`<Tags Use="Context">`,
+		`<Rung Use="Target" Number="0" Type="N">`,
+		`<Rung Use="Target" Number="1" Type="N">`,
+		`<DataType Name="BOOL" Family="NoFamily" Class="ProductDefined"/>`,
+		`<DataType Name="REAL" Family="NoFamily" Class="ProductDefined"/>`,
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %s", want)
+		}
+	}
+	if strings.Contains(s, "<Tasks>") || strings.Contains(s, "<Modules>") {
+		t.Error("a rung export must not carry tasks or modules")
+	}
+	// The exporter's rung partial carries the routine as context without
+	// a Type, so the reader keeps the rungs but does not render them.
+	rungs := f.Controller.Programs[0].Routines[0].Rungs
+	if len(rungs) != 2 || rungs[0].Text != "[XIC(StartPB) ,XIC(RunCmd) ]XIO(StopPB)OTE(RunCmd);" {
+		t.Errorf("rungs = %+v", rungs)
+	}
+}
