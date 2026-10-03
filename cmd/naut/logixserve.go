@@ -99,14 +99,25 @@ func runLogixServe(args []string) int {
 			return 2
 		}
 		client := logixd.New(agentURL, os.Getenv("NAUTILUS_LOGIXD_TOKEN"))
-		target := p.target
+		dopts := deploy.Options{
+			Client: client, Target: p.target, Mode: deploy.Online,
+			Log: func(format string, a ...any) { fmt.Fprintf(os.Stderr, "deploy: "+format+"\n", a...) },
+		}
+		// The Download button is the warm path: one project held open and
+		// online, an edit is one rung import. The session opens on the
+		// first edit and reopens itself if the agent drops it.
+		var sess *deploy.Session
 		plane = &facade.ProgramPlane{
 			Source: p.source,
 			Deploy: func(ctx context.Context, src string) (*deploy.Report, error) {
-				return deploy.Run(ctx, src, deploy.Options{
-					Client: client, Target: target, Mode: deploy.Online,
-					Log: func(format string, a ...any) { fmt.Fprintf(os.Stderr, "deploy: "+format+"\n", a...) },
-				})
+				if sess == nil {
+					s, err := deploy.Connect(ctx, dopts)
+					if err != nil {
+						return &deploy.Report{}, err
+					}
+					sess = s
+				}
+				return sess.Edit(ctx, src)
 			},
 		}
 	}

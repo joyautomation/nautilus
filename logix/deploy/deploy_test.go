@@ -96,9 +96,23 @@ func (f *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 		ok(map[string]any{"connected": "Online", "commPath": "x"})
 	case strings.HasSuffix(r.URL.Path, "/mode"):
 		ok(map[string]any{"mode": f.mode})
+	case strings.HasSuffix(r.URL.Path, "/partial-export"):
+		f.files[body["output"].(string)] = f.running
+		ok(map[string]any{})
 	case strings.HasSuffix(r.URL.Path, "/import-rungs"):
 		f.imports = append(f.imports, body)
-		f.running = f.generated()
+		// The controller now runs the imported rungs. The cold path staged
+		// the whole generated project beside the rung partial, and a later
+		// upload shows that; the warm path staged only the partial, which
+		// carries the routine a later export shows.
+		file := body["file"].(string)
+		f.running = f.files[file]
+		dir := file[:strings.LastIndex(file, "/")+1]
+		for name, raw := range f.files {
+			if strings.HasPrefix(name, dir) && strings.HasSuffix(name, ".L5X") && !strings.HasSuffix(name, ".rungs.L5X") {
+				f.running = raw
+			}
+		}
 		ok(map[string]any{"insertPosition": body["insertPosition"], "replaceCount": body["replaceCount"], "onlineOption": body["onlineOption"], "elapsedMs": 3})
 	case strings.HasSuffix(r.URL.Path, "/download"):
 		f.running = f.generated()
@@ -260,5 +274,80 @@ func TestEmptyControllerNeedsADownload(t *testing.T) {
 	}
 	if len(f.imports) != 0 {
 		t.Error("a download must not import rungs")
+	}
+}
+
+// The warm path: one session, several edits, one upload.
+func TestSessionEditsWithoutReopening(t *testing.T) {
+	src := demoSource(t)
+	same, _, _ := writer.Write(src, writer.Options{Controller: "DemoLine"})
+	f, c := newFakeAgent(t, same)
+	s, err := Connect(context.Background(), Options{Client: c, Target: target()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(context.Background())
+	uploads := func() int {
+		n := 0
+		for _, call := range f.calls {
+			if strings.HasSuffix(call, "/upload-to-new") {
+				n++
+			}
+		}
+		return n
+	}
+	if uploads() != 1 {
+		t.Fatalf("%d uploads at connect", uploads())
+	}
+	rep, err := s.Edit(context.Background(), src)
+	if err != nil || !rep.Same {
+		t.Fatalf("same program: err=%v report=%+v", err, rep)
+	}
+	edited := strings.Replace(src, "/StopPB ( RunCmd )", "/StopPB /HiLevelAlm ( RunCmd )", 1)
+	rep, err = s.Edit(context.Background(), edited)
+	if err != nil || rep.Applied != Online || !rep.Verified || rep.Replaced != 2 {
+		t.Fatalf("edit: err=%v report=%+v", err, rep)
+	}
+	// A second edit replaces what the first left, still on the same session.
+	again := strings.Replace(src, "/StopPB ( RunCmd )", "/StopPB /HiLevelAlm /LevelPct ( RunCmd )", 1)
+	again = strings.Replace(again, "    LevelPct   : REAL;", "    LevelPct   : REAL;", 1)
+	rep, err = s.Edit(context.Background(), strings.Replace(edited, "RUNG alarm", "RUNG alarm2", 1))
+	if err != nil || !rep.Same {
+		// a rung rename changes no logic
+		t.Fatalf("rename: err=%v report=%+v", err, rep)
+	}
+	rep, err = s.Edit(context.Background(), src)
+	if err != nil || rep.Applied != Online || !rep.Verified {
+		t.Fatalf("revert: err=%v report=%+v", err, rep)
+	}
+	if uploads() != 1 || len(f.imports) != 2 {
+		t.Errorf("uploads=%d imports=%d, want 1 and 2", uploads(), len(f.imports))
+	}
+	_ = again
+}
+
+func TestSessionRefusesATagChange(t *testing.T) {
+	src := demoSource(t)
+	same, _, _ := writer.Write(src, writer.Options{Controller: "DemoLine"})
+	_, c := newFakeAgent(t, same)
+	s, err := Connect(context.Background(), Options{Client: c, Target: target()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(context.Background())
+	edited := strings.Replace(src, "    HiLevelAlm : BOOL;", "    HiLevelAlm : BOOL;\n    Extra : DINT;", 1)
+	_, err = s.Edit(context.Background(), edited)
+	var nd *NeedsDownloadError
+	if !errors.As(err, &nd) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestSessionOnAnEmptyControllerNeedsADownload(t *testing.T) {
+	_, c := newFakeAgent(t, nil)
+	_, err := Connect(context.Background(), Options{Client: c, Target: target()})
+	var nd *NeedsDownloadError
+	if !errors.As(err, &nd) || !nd.RoutineMissing {
+		t.Fatalf("err = %v", err)
 	}
 }
