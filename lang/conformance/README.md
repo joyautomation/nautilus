@@ -152,3 +152,6 @@ Current table:
 | Feature | ST | LD | FBD | SFC | Tests |
 |---|:-:|:-:|:-:|:-:|--:|
 | `fb-ton` | ✓ | ✓ | ✓ |   | 6 |
+| `ld-coils` | ✓ | ✓ |   |   | 9 |
+
+2 features, 15 tests.
