@@ -10,5 +10,7 @@ target:
     controller: DemoLine
     processor: 1756-L85E
     revision: "38.11"
-    # comm-path: AB_ETH-1\10.154.92.210\Backplane\0
-    host: 10.154.92.210
+    # ECHO1's Echo controller, reached by logixd through FactoryTalk Linx
+    # and by live values over EtherNet/IP; both on the VM's Tailscale address.
+    comm-path: AB_ETH-1\100.93.56.45\Backplane\0
+    host: 100.93.56.45

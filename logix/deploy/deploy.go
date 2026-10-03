@@ -239,7 +239,14 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 	}
 	before, err := upload("before")
 	if err != nil {
-		return done(err)
+		if !controllerEmpty(err) {
+			return done(err)
+		}
+		// A controller with no project in it cannot be uploaded from
+		// (RxE_NOT_FOUND). That is not a failure: it is the first
+		// download, and the comparison below is against nothing.
+		logf("the controller at %s has no project in it", t.CommPath)
+		before = &l5x.File{Controller: &l5x.Controller{}}
 	}
 	want := l5x.LogicOf(gen)
 	have := l5x.LogicOf(before)
@@ -326,6 +333,12 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 	rep.Verified = true
 	logf("verified: the controller at %s runs what was sent", t.CommPath)
 	return done(nil)
+}
+
+// controllerEmpty recognizes the SDK's answer to uploading from a
+// controller that has never been downloaded to.
+func controllerEmpty(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "RxE_NOT_FOUND")
 }
 
 // withEvents keeps the SDK's own event stream on an error: a failed

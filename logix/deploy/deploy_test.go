@@ -78,6 +78,12 @@ func (f *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		ok(map[string]any{"input": in, "output": out, "bytes": len(f.files[out])})
 	case r.URL.Path == "/v1/upload-to-new":
+		if f.running == nil {
+			w.WriteHeader(500)
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "error": map[string]any{
+				"kind": "operation_failed", "message": "RxE_NOT_FOUND - Requested item could not be found.", "fatal": false}})
+			return
+		}
 		f.files[body["output"].(string)] = []byte("UPLOADED")
 		ok(map[string]any{})
 	case r.URL.Path == "/v1/sessions" && r.Method == http.MethodPost:
@@ -230,5 +236,29 @@ func TestSubsetDiagnosticsStopEverything(t *testing.T) {
 	}
 	if len(f.calls) != 0 {
 		t.Errorf("the agent was called despite the diagnostic: %v", f.calls)
+	}
+}
+
+// A controller that has never been downloaded to cannot be uploaded from;
+// the deploy treats that as "needs a download", and after the download the
+// verification upload works.
+func TestEmptyControllerNeedsADownload(t *testing.T) {
+	src := demoSource(t)
+	f, c := newFakeAgent(t, nil)
+	rep, err := Run(context.Background(), src, Options{Client: c, Target: target(), Mode: BuildOnly})
+	if err != nil || !rep.RoutineMissing || rep.Same {
+		t.Fatalf("err = %v, report = %+v", err, rep)
+	}
+	_, err = Run(context.Background(), src, Options{Client: c, Target: target(), Mode: Online})
+	var nd *NeedsDownloadError
+	if !errors.As(err, &nd) || !nd.RoutineMissing {
+		t.Fatalf("online on an empty controller: err = %v", err)
+	}
+	rep, err = Run(context.Background(), src, Options{Client: c, Target: target(), Mode: Download})
+	if err != nil || rep.Applied != Download || !rep.Verified {
+		t.Fatalf("download: err = %v, report = %+v", err, rep)
+	}
+	if len(f.imports) != 0 {
+		t.Error("a download must not import rungs")
 	}
 }
