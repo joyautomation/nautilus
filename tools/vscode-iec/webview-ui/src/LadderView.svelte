@@ -729,6 +729,8 @@
 		<div class="palette" onclick={(e) => e.stopPropagation()}>
 			{#each PALETTE as item (item.label)}
 				<button
+					data-kind="chip"
+					data-id={item.label}
 					title="{item.title} — click to append at the selection, or drag onto a rung"
 					onpointerdown={(e) => beginPaletteDrag(e, item)}
 				>{item.label}</button>
@@ -796,6 +798,8 @@
 			{:else if b.t === 'note'}
 				<div
 					class="note"
+					data-kind="comment"
+					data-id={`note:${b.idx}`}
 					class:editable
 					title={editable ? 'comment — double-click to edit (Ctrl+Enter saves); empty text deletes' : undefined}
 					use:noteInteract={{ idx: b.idx, text: b.text }}
@@ -809,6 +813,8 @@
 				height={lay.height * zoom}
 				viewBox="0 0 {canvasW} {lay.height}"
 				class="rsvg {status[r.name] ?? ''}"
+				data-kind="rung"
+				data-id={r.name}
 			>
 				{#if status[r.name]}
 					<rect x="0" y="2" width="4" height={lay.height - 4} rx="2" class="statusbar" />
@@ -822,6 +828,8 @@
 				<text x={problems.length ? L.RAIL_LEFT + 14 : L.RAIL_LEFT} y="11">
 					<tspan
 						class="rungname"
+						data-kind="chip"
+						data-id={r.name}
 						class:bad={problems.length > 0}
 						class:editable
 						class:selected={selected?.whole === true && selected.rung === r.name}
@@ -831,6 +839,8 @@
 						<tspan
 							dx="8"
 							class="rungcomment"
+							data-kind="comment"
+							data-id={`rungcomment:${r.name}`}
 							class:editable
 							use:rungCommentInteract={{ rung: r.name, comment: r.comment }}
 						>(* {r.comment} *)</tspan>
@@ -838,6 +848,8 @@
 						<tspan
 							dx="8"
 							class="rungcomment ghosttext"
+							data-kind="comment"
+							data-id={`rungcomment:${r.name}`}
 							use:rungCommentInteract={{ rung: r.name, comment: '' }}
 						><title>dblclick to add a rung comment</title>(* … *)</tspan>
 					{/if}
@@ -861,6 +873,10 @@
 					<g
 						transform="translate({n.x}, {n.y})"
 						class="node"
+						data-kind={n.kind}
+						data-id={n.ann.el.ref ?? n.ann.el.inst ?? n.ann.el.fn}
+						data-rung={r.name}
+						data-path={n.path?.join('.')}
 						class:on={n.ann.val === true}
 						class:off={n.ann.val === false}
 						class:dadd={n.ann.el._diff === 'added'}
@@ -935,6 +951,8 @@
 					{#each lay.spots as s, i (i)}
 						<g
 							class="spot"
+							data-kind="chip"
+							data-id={`spot:${r.name}:${i}`}
 							data-spot={spotData(r.name, s)}
 							transform="translate({s.x}, {s.y})"
 							use:spotInteract={{ rung: r.name, spot: s }}

@@ -221,7 +221,7 @@
 	<Popover onkeydown={keydown}>
 		{#if !active}
 			{#each TEMPLATES as t (t.label)}
-				<button class="item" onclick={() => pick(t)}>
+				<button class="item" data-kind="chip" data-id={t.label} onclick={() => pick(t)}>
 					<span>{t.label}</span>
 					<code>{t.preview}</code>
 				</button>

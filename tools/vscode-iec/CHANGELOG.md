@@ -5,6 +5,15 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Changed
+
+- **Testability ids in the FBD, ladder and SFC editors.** Every clickable,
+  draggable or selectable element (nodes, pins, edges, rungs, contacts,
+  coils, FBs, steps, transitions, action rows, comments, palette and vars
+  chips) now carries `data-id` (the model's identity) and `data-kind`, and
+  pins carry `data-pin`, so UI tests no longer depend on CSS or DOM order.
+  No behaviour change.
+
 ### Fixed
 
 - **Live values on a Logix routine find program-scope tags.** A rung in
