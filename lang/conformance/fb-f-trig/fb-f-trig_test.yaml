@@ -1,0 +1,59 @@
+# F_TRIG conformance. Q is TRUE for exactly the one scan in which CLK is
+# seen FALSE after having been TRUE on the scan before. Every step asserts
+# st_, ld_ and fbd_ together.
+#
+# Not covered here: the edge detector's state across a warm swap (the
+# acceptance harness has no swap step); only first-scan behaviour is pinned.
+tests:
+  - name: CLK FALSE from power-up never pulses
+    steps:
+      - scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
+      - scans: 5
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
+
+  - name: first scan with CLK already TRUE does not pulse (it is a rise, not a fall)
+    given: { CLK: true }
+    steps:
+      - scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
+      - scans: 3 # CLK held TRUE
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
+
+  - name: a falling edge pulses for exactly one scan
+    given: { CLK: true }
+    steps:
+      - scans: 2 # the scan before the fall: CLK TRUE
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
+      - given: { CLK: false }
+        scans: 1 # the scan of the fall
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true }
+      - scans: 1 # the scan after: CLK still FALSE, pulse is over
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
+      - scans: 4
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
+
+  - name: the rising edge itself does not pulse
+    steps:
+      - scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
+      - given: { CLK: true }
+        scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
+
+  - name: each fall of a toggling CLK pulses once
+    given: { CLK: true }
+    steps:
+      - scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
+      - given: { CLK: false }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true }
+      - given: { CLK: true }
+        scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
+      - given: { CLK: false }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true }
+      - scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
