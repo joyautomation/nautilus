@@ -151,10 +151,20 @@ Current table:
 <!-- go run ./lang/conformance -matrix -->
 | Feature | ST | LD | FBD | SFC | Tests |
 |---|:-:|:-:|:-:|:-:|--:|
+| `fb-ctd` | ✓ | ✓ | ✓ |   | 7 |
+| `fb-ctud` | ✓ | ✓ | ✓ |   | 8 |
+| `fb-f-trig` | ✓ | ✓ | ✓ |   | 5 |
+| `fb-rs` | ✓ | ✓ | ✓ |   | 7 |
+| `fb-sr` | ✓ | ✓ | ✓ |   | 7 |
+| `fb-tof` | ✓ | ✓ | ✓ |   | 7 |
 | `fb-ton` | ✓ | ✓ | ✓ |   | 6 |
+| `fb-tp` | ✓ | ✓ | ✓ |   | 7 |
+| `ld-coils` | ✓ | ✓ |   |   | 9 |
 | `sfc-alt-priority` |   |   |   | ✓ | 7 |
 | `sfc-final-scan` |   |   |   | ✓ | 4 |
 | `sfc-jump-back` |   |   |   | ✓ | 4 |
 | `sfc-qualifiers` |   |   |   | ✓ | 7 |
 | `sfc-sim-div-conv` |   |   |   | ✓ | 6 |
 | `sfc-step-t` |   |   |   | ✓ | 5 |
+
+15 features, 96 tests.

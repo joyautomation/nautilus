@@ -1,0 +1,84 @@
+# CTD conformance. CTD counts rising CD edges down from the loaded PV;
+# Q is TRUE while CV <= 0; LD loads CV := PV and dominates a CD edge on the
+# same scan. Every step asserts st_, ld_ and fbd_ together.
+tests:
+  - name: before any load CV is 0 and Q is already TRUE (CV <= 0)
+    steps:
+      - scans: 2
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_CV: 0, ld_CV: 0, fbd_CV: 0 }
+
+  - name: LD loads PV into CV and clears Q
+    steps:
+      - given: { LOAD: true }
+        scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_CV: 3, ld_CV: 3, fbd_CV: 3 }
+      - given: { LOAD: false }
+        scans: 3 # releasing LD leaves CV alone
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_CV: 3, ld_CV: 3, fbd_CV: 3 }
+
+  - name: counts down one per rising CD edge and Q rises when CV reaches 0
+    given: { LOAD: true }
+    steps:
+      - scans: 1
+        expect: { st_CV: 3, ld_CV: 3, fbd_CV: 3 }
+      - given: { LOAD: false, CD: true } # edge 1
+        scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_CV: 2, ld_CV: 2, fbd_CV: 2 }
+      - given: { CD: false }
+        scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_CV: 2, ld_CV: 2, fbd_CV: 2 }
+      - given: { CD: true } # edge 2
+        scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_CV: 1, ld_CV: 1, fbd_CV: 1 }
+      - given: { CD: false }
+        scans: 1
+      - given: { CD: true } # edge 3: CV = 0, Q rises on the scan of the edge
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_CV: 0, ld_CV: 0, fbd_CV: 0 }
+
+  - name: CD held TRUE counts once, not every scan
+    given: { LOAD: true }
+    steps:
+      - scans: 1
+      - given: { LOAD: false, CD: true }
+        scans: 1
+        expect: { st_CV: 2, ld_CV: 2, fbd_CV: 2 }
+      - scans: 10
+        expect: { st_CV: 2, ld_CV: 2, fbd_CV: 2 }
+
+  - name: a CD edge after several idle scans counts normally
+    given: { LOAD: true }
+    steps:
+      - scans: 1
+        expect: { st_CV: 3, ld_CV: 3, fbd_CV: 3 }
+      - given: { LOAD: false } # CD was seeded FALSE; raise it now
+        scans: 1
+        expect: { st_CV: 3, ld_CV: 3, fbd_CV: 3 }
+      - given: { CD: true }
+        scans: 1
+        expect: { st_CV: 2, ld_CV: 2, fbd_CV: 2 }
+
+  - name: LD dominates a CD edge on the same scan
+    given: { LOAD: true }
+    steps:
+      - scans: 1
+      - given: { LOAD: false, CD: true }
+        scans: 1
+        expect: { st_CV: 2, ld_CV: 2, fbd_CV: 2 }
+      - given: { CD: false }
+        scans: 1
+      - given: { LOAD: true, CD: true } # CD rises while LD is TRUE: reload wins
+        scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_CV: 3, ld_CV: 3, fbd_CV: 3 }
+
+  - name: LD while at zero reloads PV and drops Q
+    given: { PV: 1, LOAD: true }
+    steps:
+      - scans: 1
+        expect: { st_CV: 1, ld_CV: 1, fbd_CV: 1, st_Q: false, ld_Q: false, fbd_Q: false }
+      - given: { LOAD: false, CD: true }
+        scans: 1
+        expect: { st_CV: 0, ld_CV: 0, fbd_CV: 0, st_Q: true, ld_Q: true, fbd_Q: true }
+      - given: { LOAD: true, CD: false }
+        scans: 1
+        expect: { st_CV: 1, ld_CV: 1, fbd_CV: 1, st_Q: false, ld_Q: false, fbd_Q: false }

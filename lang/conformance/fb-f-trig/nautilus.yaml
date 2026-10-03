@@ -1,0 +1,26 @@
+# fb-f-trig — the standard F_TRIG (falling-edge detector) in ST, LD and FBD.
+# One task per language, outputs prefixed st_/ld_/fbd_ so one assertion
+# checks all three paths.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/fb-f-trig'
+name: fb-f-trig
+
+tasks:
+  - program: fb-f-trig.st
+    scan: 1ms
+  - name: ld
+    program: fb-f-trig.ld
+    scan: 1ms
+  - name: fbd
+    program: fb-f-trig.fbd
+    scan: 1ms
+
+tags:
+  - { name: CLK, role: state, init: false, desc: "Edge detector input (F_TRIG.CLK)" }
+
+  - { name: st_Q,  role: state, init: false }
+  - { name: ld_Q,  role: state, init: false }
+  - { name: fbd_Q, role: state, init: false }
+
+driver:
+  type: memory

@@ -158,7 +158,8 @@ Operator precedence runs, tightest first: unary `NOT` and `-`; then `*`, `/`,
 `MOD`; then `+` and `-`; then the comparisons `<`, `<=`, `>`, `>=`, `=`, `<>`;
 then `AND`; then `XOR`; then `OR`. An `INT` widens to `REAL` where one is
 expected; the other direction is a compile error, so narrowing goes through
-`REAL_TO_INT`.
+`REAL_TO_INT`, which rounds to nearest with ties to even (`2.5` becomes `2`,
+`3.5` becomes `4`, as on Codesys, Logix and TIA). `TRUNC` truncates toward zero.
 
 A function block instance is declared like a variable (`dwell : TON;`) and
 invoked as its own statement with named arguments. `=>` copies an output into a

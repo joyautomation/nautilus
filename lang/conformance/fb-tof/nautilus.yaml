@@ -1,0 +1,35 @@
+# fb-tof — the standard TOF (off-delay timer) in every language that can
+# express it. One task per language; each writes outputs under its own
+# prefix (st_, ld_, fbd_) so one assertion in fb-tof_test.yaml checks all
+# three paths at once. The 1ms scan is the timer's own resolution: a test
+# can then land exactly on PT-1ms and PT.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/fb-tof'
+#   go run ./cmd/naut test lang/conformance/fb-tof
+name: fb-tof
+
+tasks:
+  - program: fb-tof.st      # the first task is always "main"; its prefix is still st_
+    scan: 1ms
+  - name: ld
+    program: fb-tof.ld
+    scan: 1ms
+  - name: fbd
+    program: fb-tof.fbd
+    scan: 1ms
+
+tags:
+  # Shared inputs — plain tags every task reads.
+  - { name: IN, role: state, init: false, desc: "Timer input (TOF.IN)" }
+  - { name: PT, role: state, init: 5000, unit: ms, desc: "Preset time (TOF.PT), in ms" }
+
+  # Outputs, one set per language.
+  - { name: st_Q,   role: state, init: false }
+  - { name: st_ET,  role: state, init: 0, unit: ms }
+  - { name: ld_Q,   role: state, init: false }
+  - { name: ld_ET,  role: state, init: 0, unit: ms }
+  - { name: fbd_Q,  role: state, init: false }
+  - { name: fbd_ET, role: state, init: 0, unit: ms }
+
+driver:
+  type: memory

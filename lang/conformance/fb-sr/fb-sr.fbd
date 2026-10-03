@@ -1,0 +1,12 @@
+PROGRAM SrFbd
+(* SR in FBD: one block, its output wired to the fbd_ tag. *)
+VAR_EXTERNAL
+    S     : BOOL;
+    R     : BOOL;
+    fbd_Q : BOOL;
+END_VAR
+FBD
+  l : SR(S1 := S, R := R)
+  fbd_Q := l.Q1
+END_FBD
+END_PROGRAM

@@ -1,0 +1,121 @@
+# Ladder coil and contact conformance. ST is the reference; every step
+# asserts st_ and ld_ together. FBD has no coil vocabulary, so it is not a
+# column here. Tasks scan at 1ms; main (ST) scans first, then ld.
+tests:
+  - name: S coil latches, R coil unlatches, R wins a same-scan tie
+    steps:
+      - given: { SetIn: true }
+        scans: 1
+        expect: { st_Latch: true, ld_Latch: true }
+      - given: { SetIn: false }
+        scans: 2
+        expect: { st_Latch: true, ld_Latch: true } # holds with no power
+      - given: { RstIn: true }
+        scans: 1
+        expect: { st_Latch: false, ld_Latch: false }
+      - given: { RstIn: false }
+        scans: 1
+        expect: { st_Latch: false, ld_Latch: false }
+      - given: { SetIn: true, RstIn: true } # R is the later rung
+        scans: 1
+        expect: { st_Latch: false, ld_Latch: false }
+
+  - name: P coil is TRUE for exactly one scan on the rising edge
+    steps:
+      - scans: 1
+        expect: { st_P: false, ld_P: false }
+      - given: { A: true }
+        scans: 1
+        expect: { st_P: true, ld_P: true }
+      - scans: 1 # A still TRUE: no second pulse
+        expect: { st_P: false, ld_P: false }
+      - scans: 3
+        expect: { st_P: false, ld_P: false }
+
+  - name: first scan with A already TRUE counts as a rising edge
+    given: { A: true }
+    steps:
+      - scans: 1
+        expect: { st_P: true, ld_P: true }
+      - scans: 1
+        expect: { st_P: false, ld_P: false }
+
+  - name: N coil is TRUE for exactly one scan on the falling edge
+    given: { A: true }
+    steps:
+      - scans: 2
+        expect: { st_N: false, ld_N: false }
+      - given: { A: false }
+        scans: 1
+        expect: { st_N: true, ld_N: true }
+      - scans: 1
+        expect: { st_N: false, ld_N: false }
+
+  - name: "+ contact passes one scan on the rise, - contact one scan on the fall"
+    steps:
+      - given: { B: true }
+        scans: 1
+        expect: { st_RiseC: true, ld_RiseC: true, st_FallC: false, ld_FallC: false }
+      - scans: 1
+        expect: { st_RiseC: false, ld_RiseC: false, st_FallC: false, ld_FallC: false }
+      - given: { B: false }
+        scans: 1
+        expect: { st_RiseC: false, ld_RiseC: false, st_FallC: true, ld_FallC: true }
+      - scans: 1
+        expect: { st_RiseC: false, ld_RiseC: false, st_FallC: false, ld_FallC: false }
+
+  - name: FB-only rung (no coil) still runs, its outputs read elsewhere
+    steps:
+      - scans: 1
+        expect: { st_Cnt: 0, ld_Cnt: 0, st_CntDone: false, ld_CntDone: false }
+      - given: { CLK: true }
+        scans: 1
+        expect: { st_Cnt: 1, ld_Cnt: 1, st_CntDone: false, ld_CntDone: false }
+      - scans: 2 # held high: one edge, one count
+        expect: { st_Cnt: 1, ld_Cnt: 1 }
+      - given: { CLK: false }
+        scans: 1
+      - given: { CLK: true }
+        scans: 1
+        expect: { st_Cnt: 2, ld_Cnt: 2, st_CntDone: false, ld_CntDone: false }
+      - given: { CLK: false }
+        scans: 1
+      - given: { CLK: true }
+        scans: 1
+        expect: { st_Cnt: 3, ld_Cnt: 3, st_CntDone: true, ld_CntDone: true }
+
+  - name: negated function contact passes power when the call returns FALSE
+    steps:
+      - scans: 1 # N = 0, so EQ is TRUE and /EQ blocks
+        expect: { st_NotZero: false, ld_NotZero: false }
+      - given: { N: 5 }
+        scans: 1
+        expect: { st_NotZero: true, ld_NotZero: true }
+      - given: { N: -1 }
+        scans: 1
+        expect: { st_NotZero: true, ld_NotZero: true }
+      - given: { N: 0 }
+        scans: 1
+        expect: { st_NotZero: false, ld_NotZero: false }
+
+  - name: nested branch, bare leg passes at once
+    steps:
+      - given: { A: true }
+        scans: 1
+        expect: { st_Br: true, ld_Br: true }
+      - given: { A: false }
+        scans: 1
+        expect: { st_Br: false, ld_Br: false }
+
+  - name: nested branch, FB leg is Q false at PT-1ms, true at PT, drop resets
+    steps:
+      - given: { B: true }
+        scans: 1
+        expect: { st_Br: false, ld_Br: false }
+      - advance: 2ms
+        expect: { st_Br: false, ld_Br: false }
+      - advance: 1ms
+        expect: { st_Br: true, ld_Br: true }
+      - given: { B: false }
+        scans: 1
+        expect: { st_Br: false, ld_Br: false }
