@@ -5,6 +5,28 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- **Test hooks for the VS Code rig.** With `NAUTILUS_TEST_STATE=<file>` set,
+  the extension writes a JSON snapshot (CLI path and version, runtime URL,
+  connection and sync state, open editors, status-bar items, last
+  notification and error) on activation and on every change. Status-bar
+  items carry stable names (`nautilus.live`, `nautilus.sync`) and a
+  `[name]` tooltip prefix; the SFC delete-step confirm has `data-testid`s.
+  Inert unless the variable is set.
+
+### Changed
+
+- **Mimic and component editors carry testability attributes.** Equipment,
+  pipes (and their vertex and segment handles), labels, ports, palette
+  items and the ports panel rows now render `data-id` (equipment id, pipe
+  id, label index, port name) and `data-kind`, so a test finds P101 by name
+  instead of by its position in the file. No visible change.
+
+### Changed
+
+- **The webview gesture harness runs in CI** (`vscode-iec-gestures`), and its Ladder palette test now drives the `FB…` block picker it went stale against. Chrome's `--no-sandbox` is opt-in via `GESTURE_NO_SANDBOX=1`.
+
 ### Changed
 
 - **Testability ids in the FBD, ladder and SFC editors.** Every clickable,

@@ -152,11 +152,16 @@ test('FBD: arrow-key moves persist as ONE setLayout once the keys settle', async
 	await withPage(async (b) => {
 		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
 		await clickAt(b, await center(b, node('cm:2')));
+		// A loaded CI runner can lag the selection; the keys only move a
+		// selected node, so wait for it rather than racing it.
+		for (let i = 0; i < 50 && !(await b.eval(`!!document.querySelector(${JSON.stringify(node('cm:2'))})?.classList.contains('selected')`)); i++) await sleep(100);
 		await reset(b);
 		await key(b, 'ArrowRight', 'ArrowRight', 39);
 		await key(b, 'ArrowRight', 'ArrowRight', 39);
 		await key(b, 'ArrowDown', 'ArrowDown', 40);
-		await sleep(600);
+		// The move persists 350 ms after the last key; poll instead of a fixed sleep.
+		for (let i = 0; i < 50 && (await fbdOps(b)).length === 0; i++) await sleep(100);
+		await sleep(600); // and let any (wrong) second batch show up
 		const ops = await fbdOps(b);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.equal(ops[0].type, 'setLayout');
@@ -229,15 +234,17 @@ test('Ladder: click a rung name, Del deletes the rung', async () => {
 test('Ladder: the FB… picker names a TON / CTU instance with the first free name', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'ldModel', model: LD, title: 'p.ld' });
-		const pickInst = async (type) => {
-			await clickAt(b, await center(b, byId('chip', 'FB…')));
-			await clickAt(b, await center(b, `.fbpick button.fbitem[data-type="${type}"]`));
-			const inst = await b.eval(`document.querySelector('.fbpick input.fbinst')?.value`);
-			await esc(b);
-			return inst;
-		};
-		assert.equal(await pickInst('TON'), 't2'); // t1 is taken by rung r1
-		assert.equal(await pickInst('CTU'), 'c2'); // c1 is a header variable
+		await reset(b);
+		// The palette's "FB…" opens the block picker (filter, then instance).
+		for (const type of ['TON', 'CTU']) {
+			await clickAt(b, await paletteBtn(b, 'FB…'));
+			await typeText(b, type);
+			await key(b, 'Enter', 'Enter', 13); // picks the type, focus → instance
+			await key(b, 'Enter', 'Enter', 13); // inserts
+		}
+		const ops = await ldOps(b);
+		assert.equal(ops[0].inst, 't2'); // t1 is taken by rung r1
+		assert.equal(ops[1].inst, 'c2'); // c1 is a header variable
 	});
 });
 

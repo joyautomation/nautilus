@@ -204,10 +204,10 @@ conversions across kinds:
 
 | Conversion | Notes |
 | --- | --- |
-| `INT_TO_REAL`, `REAL_TO_INT` | REAL→INT rounds to nearest |
+| `INT_TO_REAL`, `REAL_TO_INT` | REAL→INT rounds to nearest, ties to even (IEC 60559: 2.5 → 2, 3.5 → 4) |
 | `BOOL_TO_INT`, `INT_TO_BOOL` | 0 ↔ FALSE, nonzero → TRUE |
 | `INT_TO_TIME`, `TIME_TO_INT` | the INT is **milliseconds** |
-| `REAL_TO_TIME`, `TIME_TO_REAL` | milliseconds, rounded to nearest |
+| `REAL_TO_TIME`, `TIME_TO_REAL` | milliseconds, rounded to nearest, ties to even |
 | `INT_TO_STRING`, `REAL_TO_STRING`, `BOOL_TO_STRING`, `TIME_TO_STRING` | formatting |
 | `STRING_TO_INT`, `STRING_TO_REAL`, `STRING_TO_BOOL` | parse; a non-parsing string is a runtime scan fault, so validate upstream |
 

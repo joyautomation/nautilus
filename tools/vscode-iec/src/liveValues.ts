@@ -12,6 +12,8 @@
 import * as http from "http";
 import * as https from "https";
 import * as vscode from "vscode";
+import { mirrorStatus, notifyError, notifyInfo, notifyWarning } from "./testHooks";
+import { STATUS_LIVE, testState } from "./testState";
 import { projectDirFor, projectFiles } from "./projectFiles";
 import {
   formatValue,
@@ -95,6 +97,7 @@ export class LiveValues implements vscode.Disposable {
 
   constructor() {
     this.enabled = this.configEnabled();
+    this.status.name = STATUS_LIVE;
     this.status.command = "nautilus.liveValues.toggle";
     this.staleTimer = setInterval(() => this.onStaleCheck(), 1000);
     this.disposables.push(
@@ -163,7 +166,7 @@ export class LiveValues implements vscode.Disposable {
     const tag = typeof arg === "string" ? arg : arg?.tag ?? arg?.name;
     const name = tag ?? this.identifierAtCursor();
     if (!name) {
-      void vscode.window.showWarningMessage("nautilus: put the cursor on a tag, then Set Live Value");
+      void notifyWarning("nautilus: put the cursor on a tag, then Set Live Value");
       return;
     }
     const current = this.valueFor(name);
@@ -188,13 +191,13 @@ export class LiveValues implements vscode.Disposable {
         body: JSON.stringify({ name, value }),
       });
       if (res.status === 204 || res.ok) {
-        void vscode.window.showInformationMessage(`nautilus: set ${name} = ${formatValue(value)}`);
+        void notifyInfo(`nautilus: set ${name} = ${formatValue(value)}`);
         return;
       }
       const body = await res.text();
-      void vscode.window.showErrorMessage(`nautilus: set ${name} rejected — ${body.trim() || res.statusText}`);
+      void notifyError(`nautilus: set ${name} rejected — ${body.trim() || res.statusText}`);
     } catch (e) {
-      void vscode.window.showErrorMessage(`nautilus: could not reach ${this.runtimeUrl()} — ${String(e)}`);
+      void notifyError(`nautilus: could not reach ${this.runtimeUrl()} — ${String(e)}`);
     }
   }
 
@@ -502,7 +505,7 @@ export class LiveValues implements vscode.Disposable {
     const current = this.monitorFor(fbType);
     const names = this.candidatesFor(fbType);
     if (names.length === 0) {
-      void vscode.window.showInformationMessage(
+      void notifyInfo(
         `nautilus: no declared instances of ${fbType} found in this project's sources`
       );
       return;
@@ -522,6 +525,8 @@ export class LiveValues implements vscode.Disposable {
     // webview (the diagram's toolbar toggle drives the same command).
     if (this.stEditors().length === 0 && this.listeners.size === 0) {
       this.status.hide();
+      mirrorStatus(this.status, STATUS_LIVE, false);
+      testState()?.update({ connected: this.enabled && this.fresh(), liveValuesEnabled: this.enabled });
       return;
     }
     if (!this.enabled) {
@@ -535,6 +540,8 @@ export class LiveValues implements vscode.Disposable {
       this.status.tooltip = `No frames from ${this.runtimeUrl()}/api/stream — is the controller running?`;
     }
     this.status.show();
+    mirrorStatus(this.status, STATUS_LIVE, true);
+    testState()?.update({ connected: this.enabled && this.fresh(), liveValuesEnabled: this.enabled });
   }
 
   dispose(): void {
