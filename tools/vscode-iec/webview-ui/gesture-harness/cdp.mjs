@@ -59,10 +59,14 @@ export class Browser {
 			'about:blank'
 		];
 		const proc = spawn(chrome, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+		let chromeErr = '';
+		proc.stderr?.on('data', (d) => (chromeErr = (chromeErr + d).slice(-2000)));
 		// Chrome writes the chosen debugging port to DevToolsActivePort.
 		const portFile = join(userDataDir, 'DevToolsActivePort');
 		let port = null;
-		for (let i = 0; i < 100; i++) {
+		// 30 s: two test files launch Chrome at once, and a loaded CI runner
+		// can take well over 5 s to start the first one.
+		for (let i = 0; i < 600; i++) {
 			if (existsSync(portFile)) {
 				const txt = readFileSync(portFile, 'utf8').split('\n')[0].trim();
 				if (txt) {
@@ -74,11 +78,11 @@ export class Browser {
 		}
 		if (!port) {
 			proc.kill('SIGKILL');
-			throw new Error('Chrome never reported a DevTools port');
+			throw new Error('Chrome never reported a DevTools port' + (chromeErr ? `: ${chromeErr}` : ''));
 		}
 		// Find the page target's WebSocket URL.
 		let wsUrl = null;
-		for (let i = 0; i < 40; i++) {
+		for (let i = 0; i < 200; i++) {
 			try {
 				const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
 				const page = list.find((t) => t.type === 'page');
