@@ -59,6 +59,11 @@ type Options struct {
 	// Server is passed through to server.New. Its TagWriter is replaced.
 	Server server.Options
 	Log    *slog.Logger
+	// Program, when set, answers the program endpoints for a ladder
+	// program deployed to the controller (program.go): GET returns its
+	// source, PUT deploys an online edit. Without it the endpoints say
+	// the program lives in Logix Designer.
+	Program *ProgramPlane
 }
 
 // Facade is a running Logix-backed nautilus API.
@@ -70,6 +75,7 @@ type Facade struct {
 	srv     *server.Server
 	w       *writer
 	skipped []string
+	prog    *programPlane
 }
 
 // emptyProgram is the runtime's program: the controller runs the logic.
@@ -127,6 +133,9 @@ func New(ctx context.Context, o Options) (*Facade, error) {
 	sopts.TagWriter = f.w.write
 	sopts.Drivers = f.driverStatus
 	f.srv = server.New(rt, sopts)
+	if o.Program != nil {
+		f.prog = &programPlane{cfg: *o.Program, source: o.Program.Source, auth: f.srv.AuthorizeWrite}
+	}
 	return f, nil
 }
 
@@ -161,9 +170,14 @@ func (f *Facade) Handler() http.Handler {
 	api := f.srv.Handler()
 	mux := http.NewServeMux()
 	mux.Handle("/", api)
-	mux.HandleFunc("GET /api/program", programGone)
+	if f.prog != nil {
+		mux.HandleFunc("GET /api/program", f.prog.get)
+		mux.HandleFunc("PUT /api/program", f.prog.put)
+	} else {
+		mux.HandleFunc("GET /api/program", programGone)
+		mux.HandleFunc("PUT /api/program", programLocked)
+	}
 	mux.HandleFunc("GET /api/program/history", programGone)
-	mux.HandleFunc("PUT /api/program", programLocked)
 	mux.HandleFunc("POST /api/program/rollback", programLocked)
 	mux.HandleFunc("POST /api/program/activate", programLocked)
 	return mux

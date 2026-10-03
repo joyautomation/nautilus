@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/lang/l5x"
+	"github.com/joyautomation/nautilus/logix/deploy"
 	"github.com/joyautomation/nautilus/logix/facade"
+	"github.com/joyautomation/nautilus/logix/logixd"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
 )
@@ -45,6 +47,13 @@ Flags:
   --listen    API address (default :8080)
   --l5x       An L5X export of the running project: its tag descriptions
               are served on /api/meta, which a live browse cannot recover.
+  --project   A nautilus project directory with a target: logix section.
+              Turns on the program plane: GET /api/program serves the
+              task's ladder source, and the editor's Download button
+              (PUT /api/program) deploys it as an ONLINE EDIT through
+              logixd ($NAUTILUS_LOGIXD_URL / _TOKEN, or target.logix.agent).
+              A change that needs a download is refused with the command
+              that does it. --host defaults to target.logix.host.
 
 Writes are open to non-browser clients and same-origin pages, like
 ` + "`naut run`" + `. Set NAUTILUS_TOKEN to require a bearer token — and do,
@@ -61,8 +70,45 @@ func runLogixServe(args []string) int {
 	poll := fs.Duration("poll", 0, "poll rate")
 	listen := fs.String("listen", ":8080", "API address")
 	l5xPath := fs.String("l5x", "", "L5X export for tag descriptions")
+	projectDir := fs.String("project", "", "nautilus project with a target: logix section")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	var plane *facade.ProgramPlane
+	if *projectDir != "" {
+		p, err := loadLogixProject(*projectDir)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut logix serve:", err)
+			return 2
+		}
+		if *host == "" {
+			*host = p.host
+		}
+		if *slot == 0 {
+			*slot = p.slot
+		}
+		if *port == 0 {
+			*port = p.port
+		}
+		agentURL := os.Getenv("NAUTILUS_LOGIXD_URL")
+		if agentURL == "" {
+			agentURL = p.agent
+		}
+		if p.target.CommPath == "" {
+			fmt.Fprintln(os.Stderr, "naut logix serve: --project needs target.logix.comm-path, the FactoryTalk Linx path logixd deploys to")
+			return 2
+		}
+		client := logixd.New(agentURL, os.Getenv("NAUTILUS_LOGIXD_TOKEN"))
+		target := p.target
+		plane = &facade.ProgramPlane{
+			Source: p.source,
+			Deploy: func(ctx context.Context, src string) (*deploy.Report, error) {
+				return deploy.Run(ctx, src, deploy.Options{
+					Client: client, Target: target, Mode: deploy.Online,
+					Log: func(format string, a ...any) { fmt.Fprintf(os.Stderr, "deploy: "+format+"\n", a...) },
+				})
+			},
+		}
 	}
 	if *host == "" {
 		fmt.Fprint(os.Stderr, "naut logix serve: --host is required\n\n", logixServeUsage)
@@ -84,13 +130,14 @@ func runLogixServe(args []string) int {
 	fmt.Fprintf(os.Stderr, "browsing %s (slot %d)...\n", *host, *slot)
 	bctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	f, err := facade.New(bctx, facade.Options{
-		Host:   *host,
-		Slot:   *slot,
-		Port:   *port,
-		Tags:   splitPatterns(*tags),
-		Poll:   *poll,
-		Meta:   meta,
-		Server: server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN")},
+		Host:    *host,
+		Slot:    *slot,
+		Port:    *port,
+		Tags:    splitPatterns(*tags),
+		Poll:    *poll,
+		Meta:    meta,
+		Server:  server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN")},
+		Program: plane,
 	})
 	cancel()
 	if err != nil {
