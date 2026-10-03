@@ -1,0 +1,34 @@
+# st-bitwise — AND, OR, XOR and NOT on INTs are bitwise over the 64-bit
+# value (IEC 61131-3; docs/functions.md "Operators"). The ST operators and
+# the FBD blocks AND/OR/XOR/NOT must agree. Outputs carry their language
+# prefix like every corpus feature; BOOL behaviour of the same operators is
+# covered by st-xor and ld-coils.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/st-bitwise'
+#   go run ./cmd/naut test lang/conformance/st-bitwise
+name: st-bitwise
+
+tasks:
+  - program: st-bitwise.st   # the first task is always "main"; its prefix is still st_
+    scan: 10ms
+  - name: fbd
+    program: st-bitwise.fbd
+    scan: 10ms
+
+tags:
+  # Shared inputs.
+  - { name: X, role: state, init: 0 }
+  - { name: Y, role: state, init: 0 }
+
+  # Outputs, one set per language.
+  - { name: st_AND,  role: state, init: 0, desc: "X AND Y, bitwise" }
+  - { name: st_OR,   role: state, init: 0, desc: "X OR Y, bitwise" }
+  - { name: st_XOR,  role: state, init: 0, desc: "X XOR Y, bitwise" }
+  - { name: st_NOT,  role: state, init: 0, desc: "NOT X, bitwise complement" }
+  - { name: fbd_AND, role: state, init: 0 }
+  - { name: fbd_OR,  role: state, init: 0 }
+  - { name: fbd_XOR, role: state, init: 0 }
+  - { name: fbd_NOT, role: state, init: 0 }
+
+driver:
+  type: memory

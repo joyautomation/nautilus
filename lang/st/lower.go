@@ -610,6 +610,9 @@ func evalConstValue(e Expression, t *ir.Type) (ir.Value, error) {
 			if v.Kind == ir.TypeBool {
 				return ir.BoolVal(!v.B), nil
 			}
+			if v.Kind == ir.TypeInt {
+				return ir.Value{Kind: ir.TypeInt, I: ^v.I}, nil
+			}
 		}
 	}
 	return ir.Value{}, fmt.Errorf("initial value must be a literal constant: %T", e)
@@ -1292,10 +1295,14 @@ func (l *lowerer) lowerUnary(u *UnaryExpr) (ir.Expr, error) {
 		}
 		return &ir.UnOp{Op: ir.OpNeg, X: x, T: x.ExprType()}, nil
 	case "NOT":
-		if x.ExprType().Kind != ir.TypeBool {
-			return nil, fmt.Errorf("NOT on non-BOOL %s", x.ExprType())
+		// Logical on BOOL, bitwise complement (of the 64-bit value) on INT.
+		switch x.ExprType().Kind {
+		case ir.TypeBool:
+			return &ir.UnOp{Op: ir.OpNot, X: x, T: ir.BoolT}, nil
+		case ir.TypeInt:
+			return &ir.UnOp{Op: ir.OpNot, X: x, T: ir.IntT}, nil
 		}
-		return &ir.UnOp{Op: ir.OpNot, X: x, T: ir.BoolT}, nil
+		return nil, fmt.Errorf("NOT requires a BOOL or INT operand, got %s", x.ExprType())
 	}
 	return nil, fmt.Errorf("unknown unary operator %q", u.Op)
 }
