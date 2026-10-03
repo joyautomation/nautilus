@@ -150,11 +150,16 @@ test('FBD: arrow-key moves persist as ONE setLayout once the keys settle', async
 	await withPage(async (b) => {
 		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
 		await clickAt(b, await center(b, node('cm:2')));
+		// A loaded CI runner can lag the selection; the keys only move a
+		// selected node, so wait for it rather than racing it.
+		for (let i = 0; i < 50 && !(await b.eval(`!!document.querySelector(${JSON.stringify(node('cm:2'))})?.classList.contains('selected')`)); i++) await sleep(100);
 		await reset(b);
 		await key(b, 'ArrowRight', 'ArrowRight', 39);
 		await key(b, 'ArrowRight', 'ArrowRight', 39);
 		await key(b, 'ArrowDown', 'ArrowDown', 40);
-		await sleep(600);
+		// The move persists 350 ms after the last key; poll instead of a fixed sleep.
+		for (let i = 0; i < 50 && (await fbdOps(b)).length === 0; i++) await sleep(100);
+		await sleep(600); // and let any (wrong) second batch show up
 		const ops = await fbdOps(b);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.equal(ops[0].type, 'setLayout');
