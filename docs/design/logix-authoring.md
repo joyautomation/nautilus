@@ -405,6 +405,48 @@ array form; `MOVE` into a `.PRE` member.
 
 **James's call (2026-10-03): continue to Phase B.**
 
+### Phase B — in progress (2026-10-03)
+
+**ECHO1 was a fresh VM** (created 2026-09-27, rebooted 09:04 with
+"before-grace" snapshots): Studio 5000 v38.01 and SDK 2.02 installed and
+the SDK service up, but no .NET SDK, no `logixd`, no Echo controller, no
+FactoryTalk activation listed. Set up again, all reversible:
+
+- .NET 10.0.401 x64 SDK at `C:\dotnet10` (dotnet-install, `-NoPath`).
+- `logixd` from `tools/logixd` via `install.ps1 -Listen 0.0.0.0 -Port 8188
+  -DotnetRoot C:\dotnet10`; every probe gate green, including
+  create-project. Token at `C:\ProgramData\logixd\logixd.token`; a copy for
+  nautilus lives OUTSIDE the repo in `~/.config/nautilus/logixd.env`.
+- The installer's firewall rule covers Private/Domain profiles only and the
+  VM's NIC is Public, so port 8188 is unreachable from the LAN. Rather than
+  widen the rule, nautilus reaches the agent over an SSH local forward:
+  `ssh -f -N -L 18188:127.0.0.1:8188 echo1`, URL `http://127.0.0.1:18188`.
+  James decides whether the rule should change.
+- `tools/logixd` is also staged on the Y: share as `Y:\logixd`.
+
+**§5.4 measured:** both fixtures (DemoLine, the full v1 subset) convert to
+an ACD and build on the real SDK: `TestSDKConvertAndBuild`, 26 s per fixture
+end to end, build itself under 1 s warm (5–9 s on the first build after the
+service starts). One import warning, `ShareUnusedTimeSlice`, fixed by
+mirroring the L85E export. **Every assumption Phase A listed is retired:**
+`OSR`/`OSF` operand order, the L5K `[0,PRE,0]` spelling, the envelope, the
+BOOL array form, `MOVE` into `.PRE` — all accepted by import and build.
+
+**Built so far:** `WriteRungs` (the Rung-target partial export an online
+edit sends — shape taken from an SDK partial export of a rung);
+`target: logix` in `nautilus.yaml` (+ schema), which makes `naut check` run
+the writer's rules unasked; `naut logix drift --logic` (§5.7's logic-only
+mode: programs, routines, rung text, tag shapes, never values);
+`naut logix deploy` — write, import, build, then upload the running
+controller and decide online edit vs download from the logic diff, do the
+one asked, upload again and verify. Build-only deploy of the DemoLine
+project fixture (`logix/writer/testdata/project`) measured at **31 s**
+end to end through the tunnel (the SDK open/convert dominates).
+
+**Waiting on:** an Echo controller (1756-L85E v38, name DemoLine) and its
+FactoryTalk Linx comm path, for the online-edit and download legs, and the
+editor's Download button (facade PUT /api/program → deploy --online).
+
 ## 8. The demo this enables
 
 James's target demo (2026-10-03), which replaces the Tier A `ab01` draft in the
