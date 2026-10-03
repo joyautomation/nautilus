@@ -154,4 +154,10 @@ Current table:
 | `fb-ctd` | ✓ | ✓ | ✓ |   | 7 |
 | `fb-ctud` | ✓ | ✓ | ✓ |   | 8 |
 | `fb-f-trig` | ✓ | ✓ | ✓ |   | 5 |
+| `fb-rs` | ✓ | ✓ | ✓ |   | 7 |
+| `fb-sr` | ✓ | ✓ | ✓ |   | 7 |
+| `fb-tof` | ✓ | ✓ | ✓ |   | 7 |
 | `fb-ton` | ✓ | ✓ | ✓ |   | 6 |
+| `fb-tp` | ✓ | ✓ | ✓ |   | 7 |
+
+8 features, 54 tests.

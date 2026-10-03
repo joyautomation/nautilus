@@ -55,9 +55,11 @@
 	{/if}
 	{#each ports as port, i (i)}
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
-		<div class="row" class:sel={selected === i} onpointerdown={() => onSelect(i)}>
+		<div class="row" class:sel={selected === i} data-id={port.name} data-kind="port" onpointerdown={() => onSelect(i)}>
 			<input
 				class="nx-input name"
+				data-id={port.name}
+				data-kind="port-name"
 				value={port.name}
 				onchange={(e) => rename(i, e)}
 				onclick={(e) => e.stopPropagation()}
@@ -65,6 +67,8 @@
 			<span class="coord">{fmtFraction(port.x, port.y)}</span>
 			<button
 				class="del"
+				data-id={port.name}
+				data-kind="port-delete"
 				title="Delete {port.name}"
 				onclick={(e) => {
 					e.stopPropagation();
@@ -87,7 +91,7 @@
 			</select>
 		</div>
 	{/each}
-	<button class="addbtn" onclick={onAdd}>+ Add port</button>
+	<button class="addbtn" data-kind="port-add" onclick={onAdd}>+ Add port</button>
 </aside>
 
 <style>

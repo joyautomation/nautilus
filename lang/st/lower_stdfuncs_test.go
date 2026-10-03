@@ -245,3 +245,50 @@ END_PROGRAM`)
 		t.Error("STRING_TO_INT('nope') must fault")
 	}
 }
+
+// REAL_TO_INT and REAL_TO_TIME round to nearest, ties to even (IEC 60559).
+func TestBuiltinRealRoundingTiesToEven(t *testing.T) {
+	cases := []struct {
+		in   float64
+		want int64
+	}{
+		{2.5, 2}, {3.5, 4}, {-2.5, -2}, {0.5, 0}, {1.4999, 1}, {1.5, 2}, {-0.5, 0}, {-3.5, -4},
+	}
+	src := `
+PROGRAM p
+VAR_GLOBAL
+    x : REAL;
+    asInt : INT;
+    asTime : TIME;
+END_VAR
+asInt := REAL_TO_INT(x);
+asTime := REAL_TO_TIME(x);
+END_PROGRAM`
+	for _, c := range cases {
+		host := newFakeHost()
+		host.vals["x"] = ir.RealVal(c.in)
+		compileAndRun(t, src, host)
+		if got := host.vals["asInt"].I; got != c.want {
+			t.Errorf("REAL_TO_INT(%v) = %d, want %d", c.in, got, c.want)
+		}
+		if got := host.vals["asTime"].I; got != c.want {
+			t.Errorf("REAL_TO_TIME(%v) = %d ms, want %d", c.in, got, c.want)
+		}
+	}
+}
+
+func TestBuiltinTruncStaysTruncation(t *testing.T) {
+	host := newFakeHost()
+	host.vals["x"] = ir.RealVal(2.9)
+	compileAndRun(t, `
+PROGRAM p
+VAR_GLOBAL
+    x : REAL;
+    t : INT;
+END_VAR
+t := TRUNC(x);
+END_PROGRAM`, host)
+	if got := host.vals["t"].I; got != 2 {
+		t.Errorf("TRUNC(2.9) = %d, want 2", got)
+	}
+}

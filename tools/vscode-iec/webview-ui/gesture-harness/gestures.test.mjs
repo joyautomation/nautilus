@@ -228,7 +228,7 @@ test('Enter completes a BENT pipe onto a hovered port (port not dropped)', async
 	// short of the port. Now it connects.
 	await withEditor(twoTankDoc(), async (ed) => {
 		await ed.enterPipeMode();
-		await ed.clickPort(0, 'right');
+		await ed.clickPort('T1', 'right');
 		await ed.clickCanvas(...(await ed.toVp(400, 120)));
 		await ed.hoverPort(1, 'left');
 		await ed.resetOps();
@@ -413,7 +413,7 @@ test('clicking an anchored end selects the END, not the equipment underneath', a
 
 test('ports-edit: ArrowRight nudges the selected port, equipment stays put', async () => {
 	await withEditor(twoTankDoc(), async (ed) => {
-		await ed.enterPortsMode(0); // select T1, 'p' -> ports-edit
+		await ed.enterPortsMode('T1'); // select T1, 'p' -> ports-edit
 		const before = (await ed.portHandles()).find((p) => p.name === 'top'); // (0.5, 0) — not edge-clamped on x
 		assert.ok(before, 'T1.top ports-edit dot should render');
 		await ed.clickPortHandle('top');
@@ -733,7 +733,7 @@ async function ctrl(ed, k) {
 	await sleepMs(500);
 }
 async function selectBoth(ed) {
-	await ed.selectEquipment(0);
+	await ed.selectEquipment('T1');
 	const [, t2] = await ed.eqRects();
 	await ed.b.click(t2.cx, t2.cy, { modifiers: 2 });
 	await sleepMs(60);
