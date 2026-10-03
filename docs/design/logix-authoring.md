@@ -291,7 +291,119 @@ James before more time goes in, whatever the criteria above say.
 Record each phase-end check here: date, each criterion measured with its
 number, and James's call (continue / re-scope / stop).
 
-*(empty)*
+### Phase A — 2026-10-03
+
+Built: `logix/writer` (the LD → L5X writer and its rule table), `naut
+check --target logix`, `naut logix write`, and the §5.1–5.3 verification:
+DemoLine written as nautilus ladder produces **the same rung text, byte for
+byte**, as Studio 5000's export of the same logic (`lang/l5x/testdata/
+demoline.L5X`); a structural round trip through the `lang/l5x` reader;
+golden L5X snapshots; and an instruction-name allowlist from the export
+corpus. Estimate was about a week; it took one session. Timebox not hit.
+
+**Stop criteria**
+
+- *Studio GUI needed in the demo loop* — not measurable until Phase B
+  (nothing in Phase A touches the SDK). Untested.
+- *SDK cannot online-edit generated rungs* — untested (Phase B). The
+  writer's rung text being byte-identical to Studio's own export removes
+  the most likely cause of a refusal.
+- *Licence terms prohibit this use* — **checked; no prohibition found, two
+  clauses need a written answer before this is sold.** Read: the Rockwell
+  Automation End User License Agreement (Rev 7/2019, `Rockwell-EULA-and-
+  Addendum_English-Final2019.pdf`) and the current Software and Cloud
+  Services Agreement (Rev April 2026, rockwellautomation.com → legal
+  notices), which the SDK's own guide (LDSDK-GR001) points to. Neither
+  prohibits headless, unattended, service or CI use. The clauses that
+  matter, quoted from the April 2026 agreement:
+  - §1.4.10 (2019 §4.3.d): "You may not use the automation interface or
+    other programmatic interfaces contained within the Software in
+    conjunction with any third-party software not authorized by Rockwell
+    Automation in writing, including, but not limited to, change
+    management systems." The Logix Designer SDK is a separately licensed
+    product whose documented purpose is "programmatic access for
+    third-party applications" (LDSDK-GR001), so the SDK licence is the
+    written authorization for the licensee's own tooling. The clause names
+    change-management systems, and nautilus-plus-`logixd` is one. **Get a
+    reseller or Rockwell confirmation in writing before selling.**
+  - §1.4.7 (2019 §4.3.b): no pooling or multiplexing "to reduce the number
+    of required licenses that directly access or use the Software." One
+    `logixd` serving many nautilus developers from one SDK activation is
+    this. Mitigation: one SDK activation per concurrent `logixd` user, and
+    say so in the docs.
+  - §3.4.1 (2019 §4.2.a): no hosting "as an application service provider
+    or the like for other third parties." `logixd` runs on the customer's
+    own licensed machine, never as a JoyAutomation-hosted service.
+  - §1.3.1: the grant is for "Your own internal business purposes" — the
+    licensee is the plant; nautilus is their tool. Fine.
+  - Not read: the SDK's own `license.rtf` in its install folder on ECHO1.
+    It needs a read over ssh (James's call; the rule is ask before touching
+    Echo) or James can paste it.
+
+**Re-scope / stop criteria**
+
+- *Special cases instead of rules* — **0** per-program fixes, **0**
+  per-firmware branches. The mapping is 17 rules (`rules.go`) and one
+  positional exception (a rising edge at the head of a rung inlines as
+  `ONS`; anywhere else it is a helper rung, because `ONS`/`OSR`/`OSF` act
+  on the rung-in condition).
+- *Subset vs the yardstick* (batch-skid `line/Line.L5X`) — assessed after
+  Phase C; measured now for the trend. 5 rungs, 12 instruction uses, 7
+  mnemonics: `XIC XIO OTE OTU TON GE LES`. **11 of 12 uses (6 of 7
+  mnemonics) are in the emit set.** The seventh, `LES`, is the editor
+  caption, not neutral text (§21 of `logix-target.md`: it is `LT`), so
+  that fixture would fail an SDK build exactly as DemoProgram's `GEQ` did —
+  worth a one-token fix in `examples/`. The real gap is the data model:
+  `Line.L5X` has one UDT (`Line_Status`) and a coil on its member, and v1
+  has no UDTs. **Instruction set: covered. Types: not yet.**
+- *An instruction not equivalent and not rejectable* — none in v1. The two
+  semantic differences found were closed with rules, not special cases: a
+  Logix timer/counter passes rung-in through, so power continues as
+  `XIC(t.DN)` (and a `TOF`, whose DN can be true with its input false,
+  ends its rung and the rest moves to a continuation rung); a one-shot
+  acts on the rung-in condition, so an edge away from the rung head takes
+  a helper rung. `OSF`'s storage bit is the previous rung-in, initially 0,
+  so a falling edge does not fire on the first scan — the same as
+  nautilus's `F_TRIG`. Open for the harness: compares with NaN, a `TOF`
+  reset while timing, counter overflow.
+- *Verification trustworthy* — pure-Go suite: 14 writer tests + 3 CLI
+  tests, **25 consecutive runs, 0 failures**, 0.3 s. No Echo or `logixd`
+  runs yet, so the flake and interruption rates are unmeasured.
+
+**DX criteria** — edit → online edit: Phase B. `naut logix write` and
+`naut check --target logix` on DemoLine: **under 10 ms** each (0.00 s
+wall). Errors surfacing at SDK import/build: **0 of 0** attempts; the
+first SDK build is Phase B's first test.
+
+**Decisions taken in Phase A**, recorded so they don't get reopened:
+
+1. The writer emits a **controller-target** export, not a Program partial
+   export: a partial import cannot create controller tags (`VAR_EXTERNAL`),
+   and `naut logix convert` already turns a controller L5X into an ACD.
+   Phase B's online path uses `import-rungs`, which takes the per-rung
+   text the writer already produces.
+2. A Logix rung comment is the `//` note run directly above the rung plus
+   the header's `(* … *)` text.
+3. The "moves, arithmetic → MOV/math" row of §4 is vacuous for ladder:
+   nautilus LD has no move or arithmetic element (a function contact must
+   yield BOOL). `MOVE` is emitted only for a variable preset
+   (`PT := tvar` → a helper rung `MOVE(tvar,t.PRE)`, `tvar` carried as DINT
+   milliseconds). Arithmetic arrives with ST routines (Phase D).
+4. `( P X )` / `( N X )` coils are rejected in v1 (they are not in the §4
+   table); `+Name` / `-Name` contacts are the edge form.
+5. Generated tags mirror `lang/ld`'s implicit edge-instance names
+   (`rt_<rung>_<ref>`, `ft_…`, output bit `…_Q`): stable across
+   regenerations and the same string on both runtimes (§6, decision 5).
+6. `ExportDate` defaults to `(pinned)`, so regenerating unchanged logic is
+   byte-identical and `naut logix normalize --check` compares equal.
+
+**Assumptions Phase B's first SDK import + build retires:** `OSR`/`OSF`
+operand order (StorageBit, OutputBit — from the instruction reference);
+the L5K spelling `[0,PRE,0]` for TIMER and COUNTER; the hand-written
+envelope (`Owner="nautilus"`, the `Local` module block); the Decorated BOOL
+array form; `MOVE` into a `.PRE` member.
+
+**James's call:** *(pending)*
 
 ## 8. The demo this enables
 
