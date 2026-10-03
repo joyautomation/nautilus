@@ -95,14 +95,16 @@ const FBD = {
 	],
 	vars: []
 };
+/** Locate by the testability attributes (data-kind + data-id), not CSS/DOM order. */
+const byId = (kind, id) => `[data-kind="${kind}"][data-id="${id}"]`;
 const node = (id) => `.svelte-flow__node[data-id="${id}"]`;
 const fbdOps = async (b) => (await posted(b)).filter((m) => m.type === 'edit').map((m) => m.op);
 
 test('FBD: deleting two selected notes posts ONE batched deleteNode (ordinal ids)', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
-		await clickAt(b, await center(b, node('cm:0')));
-		await ctrlClick(b, await center(b, node('cm:1')));
+		await clickAt(b, await center(b, byId('comment', 'cm:0')));
+		await ctrlClick(b, await center(b, byId('comment', 'cm:1')));
 		await reset(b);
 		await del(b);
 		const ops = await fbdOps(b);
@@ -115,7 +117,7 @@ test('FBD: deleting two selected notes posts ONE batched deleteNode (ordinal ids
 test('FBD: deleting a wired coil posts no disconnects for its own edges', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
-		await clickAt(b, await center(b, node('c:Y')));
+		await clickAt(b, await center(b, byId('chip', 'c:Y')));
 		await reset(b);
 		await del(b);
 		const ops = await fbdOps(b);
@@ -229,7 +231,7 @@ test('Ladder: click a rung name, Del deletes the rung', async () => {
 	});
 });
 
-test('Ladder: TON from the palette takes the first free instance name', async () => {
+test('Ladder: the FB… picker names a TON / CTU instance with the first free name', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'ldModel', model: LD, title: 'p.ld' });
 		await reset(b);
@@ -355,7 +357,7 @@ test('SFC: Esc closes the add form', async () => {
 test('SFC: after the float editor closes, Del works without another click', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'sfcModel', model: SFC, title: 's.sfc' });
-		const pt = await b.eval(`(() => { const el = [...document.querySelectorAll('.step .stepname')].find((x) => x.textContent === 'Spare'); const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+		const pt = await b.eval(`(() => { const el = document.querySelector('[data-kind="step"][data-id="st:Spare"] .stepname'); const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
 		await b.dblclick(pt.x, pt.y);
 		await sleep(200);
 		assert.equal(await b.eval(`document.activeElement?.tagName`), 'INPUT', 'float editor should hold focus');

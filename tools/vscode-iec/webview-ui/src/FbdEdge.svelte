@@ -89,7 +89,7 @@
 	}
 </script>
 
-<g class="fbd-edge {d.e.status ?? ''}" class:feedback={d.e.feedback || backward}>
+<g class="fbd-edge {d.e.status ?? ''}" data-kind="edge" data-id="{d.e.from}->{d.e.to}:{d.e.toPin ?? ''}" class:feedback={d.e.feedback || backward}>
 	<!-- wide invisible twin of the wire: the click/selection target -->
 	<path class="interaction" d={path} fill="none" stroke="transparent" stroke-width="11" />
 	<path class="wirepath" d={path} fill="none" />
@@ -100,6 +100,9 @@
 		<!-- input-pin hit target: toggle NOT (also highlights as a drop hint) -->
 		<circle
 			class="not-hit"
+			data-kind="chip"
+			data-id="not:{d.e.to}:{d.e.toPin ?? ''}"
+			data-pin={d.e.toPin ?? ''}
 			cx={targetX - 4.5}
 			cy={targetY}
 			r="8"

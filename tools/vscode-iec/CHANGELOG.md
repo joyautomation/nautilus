@@ -27,6 +27,15 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 - **The webview gesture harness runs in CI** (`vscode-iec-gestures`), and its Ladder palette test now drives the `FB…` block picker it went stale against. Chrome's `--no-sandbox` is opt-in via `GESTURE_NO_SANDBOX=1`.
 
+### Changed
+
+- **Testability ids in the FBD, ladder and SFC editors.** Every clickable,
+  draggable or selectable element (nodes, pins, edges, rungs, contacts,
+  coils, FBs, steps, transitions, action rows, comments, palette and vars
+  chips) now carries `data-id` (the model's identity) and `data-kind`, and
+  pins carry `data-pin`, so UI tests no longer depend on CSS or DOM order.
+  No behaviour change.
+
 ### Fixed
 
 - **Live values on a Logix routine find program-scope tags.** A rung in

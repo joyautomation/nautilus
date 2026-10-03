@@ -144,12 +144,14 @@
 
 {#if note}
 	<!-- svelte-ignore a11y_no_static_element_interactions -->
-	<div class="note {n.status ?? ''}" style="width: {n.w}px; height: {n.h}px; line-height: {NOTE_LINE_H}px" {title} use:dblEdit>
+	<div class="note {n.status ?? ''}" data-id={n.id} data-kind="comment" style="width: {n.w}px; height: {n.h}px; line-height: {NOTE_LINE_H}px" {title} use:dblEdit>
 		{#each n.label.split('\n') as line, i (i)}<div class="noteline">{line}</div>{/each}
 	</div>
 {:else if chip}
 	<div
 		class="chip {n.kind} {n.status ?? ''}"
+		data-id={n.id}
+		data-kind="chip"
 		class:ghost={n.ghost}
 		class:editable={editableConst || retargetable}
 		class:missing={missingTag}
@@ -159,10 +161,10 @@
 		use:dblEdit
 	>
 		{#if n.kind === 'coil'}
-			<Handle type="target" position={Position.Left} id="" style="top: {n.h / 2}px" isConnectable={data.editable} />
+			<Handle type="target" position={Position.Left} id="" data-kind="pin" data-pin="" style="top: {n.h / 2}px" isConnectable={data.editable} />
 		{/if}
 		<span>{n.label}</span>
-		<Handle type="source" position={Position.Right} id="" style="top: {n.h / 2}px" isConnectable={data.editable} />
+		<Handle type="source" position={Position.Right} id="" data-kind="pin" data-pin="" style="top: {n.h / 2}px" isConnectable={data.editable} />
 		{#if problems.length}<span class="badge">!</span>{/if}
 		{#if chipVal !== undefined}
 			<span class="nx-pill val below" class:off={!live.fresh} title="{n.label} = {formatLive(chipVal)} (live)">{formatLive(chipVal)}</span>
@@ -171,6 +173,8 @@
 {:else}
 	<div
 		class="block {n.status ?? ''}"
+		data-id={n.id}
+		data-kind={n.kind === 'fb' ? 'fb' : 'node'}
 		class:editable={renameable}
 		class:problem={problems.length > 0}
 		style="width: {n.w}px; height: {n.h}px"
@@ -182,11 +186,11 @@
 			{#if n.kind === 'fb'}<span class="type">{n.type ?? '?'}</span>{/if}
 		</div>
 		{#each n.ins as pin (pin)}
-			<Handle type="target" position={Position.Left} id={pin} style="top: {pinOffset(n, pin, 'in')}px" isConnectable={data.editable} />
+			<Handle type="target" position={Position.Left} id={pin} data-kind="pin" data-pin={pin} style="top: {pinOffset(n, pin, 'in')}px" isConnectable={data.editable} />
 			<span class="pin in" style="top: {pinOffset(n, pin, 'in') - 7}px">{pin}</span>
 		{/each}
 		{#each n.outs as pin (pin)}
-			<Handle type="source" position={Position.Right} id={pin} style="top: {pinOffset(n, pin, 'out')}px" isConnectable={data.editable} />
+			<Handle type="source" position={Position.Right} id={pin} data-kind="pin" data-pin={pin} style="top: {pinOffset(n, pin, 'out')}px" isConnectable={data.editable} />
 			<span class="pin out" style="top: {pinOffset(n, pin, 'out') - 7}px">{pin}</span>
 			{#if fbStruct !== undefined && member(fbStruct, pin) !== undefined}
 				<span
@@ -199,7 +203,7 @@
 		{/each}
 		{#if plusPin}
 			<!-- drop a wire here to ADD an input: the pin exists because it's wired -->
-			<Handle type="target" class="plus-handle" position={Position.Left} id="+" style="top: {plusTop}px" isConnectable={true} />
+			<Handle type="target" class="plus-handle" position={Position.Left} id="+" data-kind="pin" data-pin="+" style="top: {plusTop}px" isConnectable={true} />
 			<span class="pin in plus" style="top: {plusTop - 7}px" title="drop a wire here to add an input">+</span>
 		{/if}
 		{#if n.wire}<span class="wire">{n.wire}</span>{/if}
