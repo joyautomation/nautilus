@@ -1,0 +1,24 @@
+# sfc-final-scan — an ACTION body driven by a level qualifier (N) runs one
+# extra scan on the falling edge of its step, so a body written against
+# step activity shuts its outputs down (a TON called with Step.X resets).
+# A P1 body has no final scan. Single sfc task (SFC-only feature).
+#
+#   go test ./lang/conformance/ -run 'TestConformance/sfc-final-scan'
+name: sfc-final-scan
+
+tasks:
+  - program: sfc-final-scan.sfc
+    scan: 1ms
+
+tags:
+  - { name: Go,   role: state, init: false, desc: "Idle -> Run" }
+  - { name: Stop, role: state, init: false, desc: "Run -> Idle" }
+
+  - { name: sfc_Runs,    role: state, init: 0, desc: "scans the N body executed" }
+  - { name: sfc_InX,     role: state, init: false, desc: "Run.X as the N body last saw it" }
+  - { name: sfc_Q,       role: state, init: false, desc: "TON.Q from the N body (IN := Run.X, PT := 50ms)" }
+  - { name: sfc_ET,      role: state, init: 0, unit: ms, desc: "TON.ET from the N body" }
+  - { name: sfc_PulseRuns, role: state, init: 0, desc: "scans the P1 body executed" }
+
+driver:
+  type: memory

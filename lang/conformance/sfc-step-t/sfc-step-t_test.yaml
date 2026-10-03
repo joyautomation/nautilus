@@ -1,0 +1,65 @@
+# Step.T / Step.X. Wait.T is the time since Wait was activated.
+#
+# Timing, pinned (docs: languages/sfc, "How a chart executes"): every
+# transition reads the pre-scan activity snapshot and step timers update
+# after the transitions, so a `Step.T >= PT` condition is first seen true on
+# the scan AFTER the timer reaches PT. Wait activates on scan 1 (T = 0);
+# its body sees T = 100ms on scan 101; the transition fires on scan 102.
+# That is the same one-scan latency every SFC transition has; the tests pin
+# it so a change to the evaluation order fails here by name.
+#
+# The final-scan rule (sfc-final-scan) is visible too: Wait's N body runs
+# one extra scan after the step is left, with Wait.X false and Wait.T reset
+# to 0, so sfc_X and sfc_T read false / 0 afterwards.
+tests:
+  - name: T starts at 0 on the activation scan and counts the scan interval
+    given: { Go: true }
+    steps:
+      - scans: 1
+        expect: { sfc_Wait: true, sfc_X: true, sfc_T: 0 }
+      - scans: 1
+        expect: { sfc_T: 1 }
+      - advance: 97ms
+        expect: { sfc_T: 98, sfc_Wait: true, sfc_Done: false }
+
+  - name: a Step.T condition fires one scan after T reaches PT
+    given: { Go: true }
+    steps:
+      - scans: 1
+      - advance: 99ms # scan 100: T = 99
+        expect: { sfc_T: 99, sfc_Wait: true, sfc_Done: false }
+      - advance: 1ms # scan 101: T = 100, the condition not yet seen
+        expect: { sfc_T: 100, sfc_Wait: true, sfc_Done: false }
+      - advance: 1ms # scan 102: fires
+        expect: { sfc_Wait: false, sfc_Done: true }
+
+  - name: leaving the step resets T and drops X on the body's final scan
+    given: { Go: true }
+    steps:
+      - advance: 101ms # scan 101
+        expect: { sfc_T: 100, sfc_X: true }
+      - advance: 1ms
+        expect: { sfc_T: 0, sfc_X: false, sfc_Done: true }
+      - advance: 50ms # the body no longer runs
+        expect: { sfc_T: 0, sfc_X: false, sfc_Done: true }
+
+  - name: re-entry restarts T from zero
+    given: { Go: true }
+    steps:
+      - advance: 102ms
+        expect: { sfc_Done: true }
+      - given: { Go: false, Back: true }
+        scans: 1 # Done -> Idle
+        expect: { sfc_Done: false }
+      - given: { Back: false, Go: true }
+        scans: 1 # Idle -> Wait
+        expect: { sfc_Wait: true, sfc_T: 0, sfc_X: true }
+      - advance: 100ms # scan 101 of the second visit
+        expect: { sfc_T: 100, sfc_Wait: true }
+      - advance: 1ms
+        expect: { sfc_Done: true, sfc_Wait: false }
+
+  - name: T does not run while the step is inactive
+    steps:
+      - advance: 1s
+        expect: { sfc_Wait: false, sfc_T: 0, sfc_X: false }

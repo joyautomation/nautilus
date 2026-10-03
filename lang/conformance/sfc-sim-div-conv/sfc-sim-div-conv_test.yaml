@@ -1,0 +1,61 @@
+# Simultaneous divergence/convergence (IEC 61131-3 SFC; docs: languages/sfc).
+tests:
+  - name: the initial token waits in Idle
+    steps:
+      - scans: 3
+        expect: { sfc_Idle: true, sfc_L: false, sfc_M: false, sfc_R: false, sfc_Join: false }
+
+  - name: divergence activates every target in the same scan and clears the source
+    given: { Go: true }
+    steps:
+      - scans: 1
+        expect: { sfc_Idle: false, sfc_L: true, sfc_M: true, sfc_R: true, sfc_LD: false, sfc_MD: false, sfc_RD: false }
+
+  - name: each leg advances independently
+    given: { Go: true }
+    steps:
+      - scans: 1
+      - given: { Go: false, DoneM: true }
+        scans: 1
+        expect: { sfc_L: true, sfc_M: false, sfc_R: true, sfc_MD: true, sfc_LD: false, sfc_RD: false }
+
+  - name: convergence does not fire until every source is active
+    given: { Go: true }
+    steps:
+      - scans: 1
+      - given: { Go: false, DoneL: true, DoneM: true }
+        scans: 1
+        expect: { sfc_LD: true, sfc_MD: true, sfc_R: true, sfc_RD: false }
+      - scans: 10 # two of three legs done: the join waits
+        expect: { sfc_LD: true, sfc_MD: true, sfc_R: true, sfc_RD: false, sfc_Join: false }
+
+  - name: the last leg arriving releases the join one scan later, clearing all three sources
+    given: { Go: true }
+    steps:
+      - scans: 1
+      - given: { Go: false, DoneL: true, DoneM: true }
+        scans: 1
+      - given: { DoneR: true }
+        scans: 1 # R -> RD; the join reads the pre-scan snapshot, so not yet
+        expect: { sfc_RD: true, sfc_Join: false, sfc_LD: true, sfc_MD: true }
+      - scans: 1
+        expect: { sfc_Join: true, sfc_LD: false, sfc_MD: false, sfc_RD: false }
+
+  - name: a single token returns and the whole chart is reusable
+    given: { Go: true, DoneL: true, DoneM: true, DoneR: true }
+    steps:
+      - scans: 1 # fork
+        expect: { sfc_L: true, sfc_M: true, sfc_R: true }
+      - scans: 1 # legs complete
+        expect: { sfc_LD: true, sfc_MD: true, sfc_RD: true, sfc_L: false }
+      - scans: 1 # join
+        expect: { sfc_Join: true, sfc_LD: false }
+      - given: { Go: false, Back: true }
+        scans: 1
+        expect: { sfc_Idle: true, sfc_Join: false }
+      - given: { Back: false }
+        scans: 5 # Go is false: no second fork
+        expect: { sfc_Idle: true, sfc_L: false }
+      - given: { Go: true }
+        scans: 1 # forks again; Done* are still true so the legs finish next
+        expect: { sfc_L: true, sfc_M: true, sfc_R: true, sfc_Idle: false }

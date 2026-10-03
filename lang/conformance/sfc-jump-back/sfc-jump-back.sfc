@@ -1,0 +1,50 @@
+PROGRAM SfcJumpBack
+VAR_EXTERNAL
+    Go : BOOL;  Loop : BOOL;  Tick : BOOL;  Park : BOOL;
+    sfc_S1 : BOOL;  sfc_S2 : BOOL;  sfc_S3 : BOOL;  sfc_Idle : BOOL;  sfc_Hold : BOOL;
+    sfc_Laps : INT;  sfc_HoldEntries : INT;
+END_VAR
+SFC
+
+  INITIAL_STEP Idle:
+    N sfc_Idle;
+  END_STEP
+  STEP S1:
+    N  sfc_S1;
+    P1 CountLap;
+  END_STEP
+  STEP S2:
+    N sfc_S2;
+  END_STEP
+  STEP S3:
+    N sfc_S3;
+  END_STEP
+  STEP Hold:
+    N  sfc_Hold;
+    P1 CountHold;
+  END_STEP
+
+  TRANSITION t_go   FROM Idle TO S1 := Go;
+  END_TRANSITION
+  TRANSITION t_s12  FROM S1 TO S2 := TRUE;
+  END_TRANSITION
+  TRANSITION t_s23  FROM S2 TO S3 := TRUE;
+  END_TRANSITION
+  (* the jump back, declared before the exit: priority is declaration order *)
+  TRANSITION t_loop FROM S3 TO S1 := Loop;
+  END_TRANSITION
+  TRANSITION t_park FROM S3 TO Hold := Park;
+  END_TRANSITION
+  TRANSITION t_exit FROM S3 TO Idle := NOT Loop;
+  END_TRANSITION
+  (* a self-loop *)
+  TRANSITION t_tick FROM Hold TO Hold := Tick;
+  END_TRANSITION
+  TRANSITION t_rel  FROM Hold TO Idle := NOT Tick;
+  END_TRANSITION
+
+  ACTION CountLap:  sfc_Laps := sfc_Laps + 1;  END_ACTION
+  ACTION CountHold: sfc_HoldEntries := sfc_HoldEntries + 1;  END_ACTION
+
+END_SFC
+END_PROGRAM

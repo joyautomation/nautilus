@@ -1,0 +1,23 @@
+# sfc-step-t — Step.T, the elapsed time a step has been active (a hidden
+# TON per step whose .T is read), and Step.X, its activity flag. Both are
+# legal in transition conditions and action bodies. Single sfc task
+# (SFC-only feature). 1ms scan so ET is exact.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/sfc-step-t'
+name: sfc-step-t
+
+tasks:
+  - program: sfc-step-t.sfc
+    scan: 1ms
+
+tags:
+  - { name: Go,   role: state, init: false, desc: "Idle -> Wait" }
+  - { name: Back, role: state, init: false, desc: "Done -> Idle" }
+
+  - { name: sfc_T,    role: state, init: 0, unit: ms, desc: "Wait.T as seen by an ACTION body (N)" }
+  - { name: sfc_X,    role: state, init: false, desc: "Wait.X as seen by the same body" }
+  - { name: sfc_Wait, role: state, init: false }
+  - { name: sfc_Done, role: state, init: false }
+
+driver:
+  type: memory

@@ -160,5 +160,11 @@ Current table:
 | `fb-ton` | ✓ | ✓ | ✓ |   | 6 |
 | `fb-tp` | ✓ | ✓ | ✓ |   | 7 |
 | `ld-coils` | ✓ | ✓ |   |   | 9 |
+| `sfc-alt-priority` |   |   |   | ✓ | 7 |
+| `sfc-final-scan` |   |   |   | ✓ | 4 |
+| `sfc-jump-back` |   |   |   | ✓ | 4 |
+| `sfc-qualifiers` |   |   |   | ✓ | 7 |
+| `sfc-sim-div-conv` |   |   |   | ✓ | 6 |
+| `sfc-step-t` |   |   |   | ✓ | 5 |
 
-9 features, 63 tests.
+15 features, 96 tests.
