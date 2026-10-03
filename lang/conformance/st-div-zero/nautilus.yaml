@@ -1,0 +1,23 @@
+# st-div-zero — DIV and MOD by zero yield 0 and the scan keeps running.
+# ST only. Outputs carry the st_ prefix like every corpus feature.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/st-div-zero'
+#   go run ./cmd/naut test lang/conformance/st-div-zero
+name: st-div-zero
+
+tasks:
+  - program: st-div-zero.st
+    scan: 10ms
+
+tags:
+  - { name: N,  role: state, init: 7 }
+  - { name: D,  role: state, init: 2 }
+  - { name: RN, role: state, init: 7.0 }
+  - { name: RD, role: state, init: 2.0 }
+  - { name: st_Q,     role: state, init: 0,   desc: "N / D" }
+  - { name: st_M,     role: state, init: 0,   desc: "N MOD D" }
+  - { name: st_RQ,    role: state, init: 0.0, desc: "RN / RD" }
+  - { name: st_Scans, role: state, init: 0,   desc: "Written after the divisions: proves the scan ran to its end" }
+
+driver:
+  type: memory

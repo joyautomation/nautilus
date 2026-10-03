@@ -1,0 +1,20 @@
+# MUX(K, IN0, IN1, IN2): K is 0-based. K outside 0..n faults the scan
+# (docs/functions.md "Selection"): selecting nothing is a logic error, not
+# a boundary. The fault is asserted by TestMuxOutOfRangeFaults in
+# ../faults_test.go — the harness fails a YAML test whose scan faulted, so
+# a "this must fault" case cannot be written here. What this file pins is
+# the in-range selection and the LIMIT guard the docs recommend.
+tests:
+  - name: K picks the K-th input, 0-based
+    steps:
+      - { given: { K: 0 }, scans: 1, expect: { st_Pick: 10 } }
+      - { given: { K: 1 }, scans: 1, expect: { st_Pick: 20 } }
+      - { given: { K: 2 }, scans: 1, expect: { st_Pick: 30 } }
+      - { given: { K: 1 }, scans: 1, expect: { st_Pick: 20 } }
+
+  - name: LIMIT keeps a wandering selector in range, so the scan never faults
+    steps:
+      - { given: { W: -5 }, scans: 1, expect: { st_Safe: 10 } } # below: clamps to IN0
+      - { given: { W: 1 },  scans: 1, expect: { st_Safe: 20 } }
+      - { given: { W: 9 },  scans: 1, expect: { st_Safe: 30 } } # above: clamps to the last input
+      - { given: { W: 3 },  scans: 1, expect: { st_Safe: 30, st_Scans: 4 } }

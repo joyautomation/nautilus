@@ -1,0 +1,36 @@
+# PINS A DEVIATION (docs/functions.md "Operators": "integer ÷0 yields 0
+# (scan keeps running)"; the VM, lang/ir/vm.go evalBin). The implementation
+# never faults on division by zero: INT / and MOD return 0, and REAL / also
+# returns 0 (the docs name only the integer case). The standard leaves
+# division by zero an error; Logix sets an arithmetic overflow flag and
+# yields 0/Inf, Codesys yields Inf/NaN for REAL and faults the task for
+# integers. Changing this means editing this pin on purpose.
+tolerance: 0.00001
+tests:
+  - name: ordinary division truncates toward zero, MOD keeps the dividend's sign
+    steps:
+      - { given: { N: 7, D: 2 },  scans: 1, expect: { st_Q: 3, st_M: 1 } }
+      - { given: { N: -7, D: 2 }, scans: 1, expect: { st_Q: -3, st_M: -1 } }
+      - { given: { N: 7, D: -2 }, scans: 1, expect: { st_Q: -3, st_M: 1 } }
+      - { given: { N: 6, D: 3 },  scans: 1, expect: { st_Q: 2, st_M: 0 } }
+
+  - name: integer divide and MOD by zero give 0 and the scan keeps running
+    given: { N: 7, D: 0 }
+    steps:
+      - scans: 1
+        expect: { st_Q: 0, st_M: 0, st_Scans: 1 }
+      - scans: 3
+        expect: { st_Q: 0, st_M: 0, st_Scans: 4 } # still counting after the divide
+
+  - name: a zero divisor replaces an earlier quotient, it does not leave it stale
+    steps:
+      - { given: { N: 9, D: 3 }, scans: 1, expect: { st_Q: 3, st_M: 0 } }
+      - { given: { D: 0 },       scans: 1, expect: { st_Q: 0, st_M: 0 } }
+      - { given: { D: 2 },       scans: 1, expect: { st_Q: 4, st_M: 1 } } # recovers
+
+  - name: REAL divide by zero is also 0, not Inf or NaN
+    steps:
+      - { given: { RN: 7.0, RD: 2.0 }, scans: 1, expect: { st_RQ: { near: 3.5 } } }
+      - { given: { RN: 7.0, RD: 0.0 }, scans: 1, expect: { st_RQ: 0.0 } }
+      - { given: { RN: -7.0, RD: 0.0 }, scans: 1, expect: { st_RQ: 0.0 } }
+      - { given: { RN: 0.0, RD: 0.0 }, scans: 1, expect: { st_RQ: 0.0 } }

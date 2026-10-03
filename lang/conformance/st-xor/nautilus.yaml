@@ -1,0 +1,23 @@
+# st-xor — XOR on BOOLs (two and three operands) and on INTs (bitwise).
+# ST only. Outputs carry the st_ prefix like every corpus feature.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/st-xor'
+#   go run ./cmd/naut test lang/conformance/st-xor
+name: st-xor
+
+tasks:
+  - program: st-xor.st
+    scan: 10ms
+
+tags:
+  - { name: A, role: state, init: false }
+  - { name: B, role: state, init: false }
+  - { name: C, role: state, init: false }
+  - { name: X, role: state, init: 0 }
+  - { name: Y, role: state, init: 0 }
+  - { name: st_AB,  role: state, init: false, desc: "A XOR B" }
+  - { name: st_ABC, role: state, init: false, desc: "A XOR B XOR C" }
+  - { name: st_XY,  role: state, init: 0,     desc: "X XOR Y, bitwise" }
+
+driver:
+  type: memory

@@ -1,0 +1,25 @@
+# XOR: TRUE when an odd number of BOOL operands are TRUE; on INT it is the
+# bitwise exclusive-or of the 64-bit values.
+tests:
+  - name: two-input truth table
+    steps:
+      - { given: { A: false, B: false }, scans: 1, expect: { st_AB: false } }
+      - { given: { A: true,  B: false }, scans: 1, expect: { st_AB: true } }
+      - { given: { A: false, B: true },  scans: 1, expect: { st_AB: true } }
+      - { given: { A: true,  B: true },  scans: 1, expect: { st_AB: false } }
+
+  - name: three inputs are TRUE when an odd number are TRUE (not "exactly one")
+    steps:
+      - { given: { A: false, B: false, C: false }, scans: 1, expect: { st_ABC: false } }
+      - { given: { A: true,  B: false, C: false }, scans: 1, expect: { st_ABC: true } }
+      - { given: { A: true,  B: true,  C: false }, scans: 1, expect: { st_ABC: false } }
+      - { given: { A: true,  B: true,  C: true },  scans: 1, expect: { st_ABC: true } }
+      - { given: { A: false, B: true,  C: true },  scans: 1, expect: { st_ABC: false } }
+
+  - name: INT XOR is bitwise
+    steps:
+      - { given: { X: 12, Y: 10 }, scans: 1, expect: { st_XY: 6 } }      # 1100 ^ 1010
+      - { given: { X: 255, Y: 255 }, scans: 1, expect: { st_XY: 0 } }    # x ^ x
+      - { given: { X: 123, Y: 0 }, scans: 1, expect: { st_XY: 123 } }    # identity
+      - { given: { X: -1, Y: 5 }, scans: 1, expect: { st_XY: -6 } }      # -1 is all ones: complement of 5
+      - { given: { X: 1099511627776, Y: 1 }, scans: 1, expect: { st_XY: 1099511627777 } } # bit 40 and bit 0

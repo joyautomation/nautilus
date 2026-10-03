@@ -1,0 +1,31 @@
+# fn-trig-log — SQRT LN LOG EXP SIN COS TAN ASIN ACOS ATAN ATAN2 EXPT at known values.
+# ST only: the behaviour lives in the VM's built-in table, below the
+# language front ends. Outputs carry the st_ prefix like every corpus feature.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/fn-trig-log'
+#   go run ./cmd/naut test lang/conformance/fn-trig-log
+name: fn-trig-log
+
+tasks:
+  - program: fn-trig-log.st
+    scan: 10ms
+
+tags:
+  - { name: X, role: state, init: 4.0, desc: "Argument of the one-argument functions" }
+  - { name: Y, role: state, init: 3.0, desc: "Second argument of ATAN2 (Y, X) and EXPT (X, Y)" }
+  - { name: A, role: state, init: 0.5, desc: "Argument of ASIN/ACOS, which are only defined on -1..1" }
+  - { name: st_SQRT, role: state, init: 0.0 }
+  - { name: st_LN, role: state, init: 0.0 }
+  - { name: st_LOG, role: state, init: 0.0 }
+  - { name: st_EXP, role: state, init: 0.0 }
+  - { name: st_SIN, role: state, init: 0.0 }
+  - { name: st_COS, role: state, init: 0.0 }
+  - { name: st_TAN, role: state, init: 0.0 }
+  - { name: st_ASIN, role: state, init: 0.0 }
+  - { name: st_ACOS, role: state, init: 0.0 }
+  - { name: st_ATAN, role: state, init: 0.0 }
+  - { name: st_ATAN2, role: state, init: 0.0 }
+  - { name: st_EXPT, role: state, init: 0.0 }
+
+driver:
+  type: memory

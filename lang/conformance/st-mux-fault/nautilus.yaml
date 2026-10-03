@@ -1,0 +1,20 @@
+# st-mux-fault — MUX picks the K-th input; an out-of-range K faults (see faults_test.go).
+# ST only. Outputs carry the st_ prefix like every corpus feature.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/st-mux-fault'
+#   go run ./cmd/naut test lang/conformance/st-mux-fault
+name: st-mux-fault
+
+tasks:
+  - program: st-mux-fault.st
+    scan: 10ms
+
+tags:
+  - { name: K, role: state, init: 0, desc: "Selector, kept in range by the suite" }
+  - { name: W, role: state, init: 0, desc: "A selector that may wander; clamped with LIMIT before it reaches MUX" }
+  - { name: st_Pick,  role: state, init: 0 }
+  - { name: st_Safe,  role: state, init: 0 }
+  - { name: st_Scans, role: state, init: 0 }
+
+driver:
+  type: memory

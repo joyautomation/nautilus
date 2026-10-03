@@ -102,9 +102,13 @@ is the house style. What matters here:
   `init:` (a `state`/`setpoint` tag must be seeded), written straight to
   the tag store by `given:`. Use `role: input` only when the feature is
   about the driver image.
-- **A scan fault fails the test** without being asked for — that is the
-  assertion for `st-mux-fault`-style features. Read the failure text to
-  see how the harness reports it before writing the suite.
+- **A scan fault fails the test** without being asked for, so a "this input
+  must fault" case cannot live in a `*_test.yaml`. Those are Go tests in
+  `faults_test.go`: they build a small project in memory, run it through the
+  harness and assert the test fails with the fault's message (`MUX` out of
+  range, unparseable `STRING_TO_*`). The program under test runs as a
+  *second* task there, because the runtime keeps a fault's text only for
+  additional tasks; a main-task fault reports only "1 logic error(s)".
 
 ## Pinning a deviation
 
@@ -159,6 +163,8 @@ Current table:
 | `fb-tof` | ✓ | ✓ | ✓ |   | 7 |
 | `fb-ton` | ✓ | ✓ | ✓ |   | 6 |
 | `fb-tp` | ✓ | ✓ | ✓ |   | 7 |
+| `fn-conversions` | ✓ |   |   |   | 8 |
+| `fn-trig-log` | ✓ |   |   |   | 8 |
 | `ld-coils` | ✓ | ✓ |   |   | 9 |
 | `sfc-alt-priority` |   |   |   | ✓ | 7 |
 | `sfc-final-scan` |   |   |   | ✓ | 4 |
@@ -166,5 +172,10 @@ Current table:
 | `sfc-qualifiers` |   |   |   | ✓ | 7 |
 | `sfc-sim-div-conv` |   |   |   | ✓ | 6 |
 | `sfc-step-t` |   |   |   | ✓ | 5 |
+| `st-div-zero` | ✓ |   |   |   | 4 |
+| `st-int-width` | ✓ |   |   |   | 5 |
+| `st-mux-fault` | ✓ |   |   |   | 2 |
+| `st-string-clamp` | ✓ |   |   |   | 8 |
+| `st-xor` | ✓ |   |   |   | 3 |
 
-15 features, 96 tests.
+22 features, 134 tests.
