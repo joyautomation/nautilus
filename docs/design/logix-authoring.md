@@ -468,11 +468,22 @@ Tailscale address, serves them (HiLevelSP reads 85, the writer's initial
 value), and GET /api/program answers with the ladder source, `language:
 ld`, a hash and `editable: true` — the extension needs nothing new.
 
-**Not yet run:** the online-edit leg (`naut logix deploy --online` on a
-one-contact rung change, scratch copy of the fixture) and the Download
-button from VS Code. The session's permission policy classes deploys to
-the controller as production writes, so James runs them. Controller still
-in Program mode; Run is James's to set from the Echo dashboard.
+**Online edit of writer-generated rungs (2026-10-03):** a one-contact
+change (`/HiLevelAlm` added to the seal rung) on a scratch copy of the
+fixture, `naut logix deploy --online`: both rungs replaced in
+MainProgram/MainRoutine with `FinalizeEdits`, controller mode unchanged
+(Program), verified by upload. **The §7a premise criterion "the SDK cannot
+online-edit generated rungs" is cleared.** Measured **2 m 23 s** from
+command to verified: import + build 35 s, then upload-before, the online
+session (open, comm path, go online, import) and upload-after at roughly
+30 s each, because every SDK project open costs 15–20 s. The §7a DX target
+is 30 s median save → live. The warm path is the facade holding one
+correlated project open and online across edits, so an edit is one
+`ImportRungs` (1.1 s in logix-target.md §20) plus a routine partial export
+to verify. Not built yet; the cold path is what `naut logix deploy` does.
+
+**Not yet run:** the Download button from VS Code against Echo (the facade
+path is tested against the emulator and a fake agent).
 
 ## 8. The demo this enables
 
