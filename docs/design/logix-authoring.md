@@ -482,8 +482,62 @@ correlated project open and online across edits, so an edit is one
 `ImportRungs` (1.1 s in logix-target.md §20) plus a routine partial export
 to verify. Not built yet; the cold path is what `naut logix deploy` does.
 
-**Not yet run:** the Download button from VS Code against Echo (the facade
-path is tested against the emulator and a fake agent).
+**The warm path, measured (2026-10-03):** `logix/deploy.Session` keeps one
+project uploaded from the controller open and online; an edit is one
+`ImportRungs` with `FinalizeEdits` plus a partial export of the routine to
+verify. Driven through `naut logix serve --project` with the exact
+`PUT /api/program {source, baseHash}` the extension sends:
+
+| edit | wall time | result |
+|---|---|---|
+| first after start (opens the session: upload, open, go online) | 62.9 s | 2 rungs replaced, verified |
+| second | 2.1 s | 2 rungs replaced, verified |
+| third | 2.1 s | 2 rungs replaced, verified |
+
+**§7a DX criterion (edit → live on the controller under 30 s): met on the
+warm path at about 2 s**, with a one-time session cost at startup. The
+stale-base 409 and the refusals (tags changed → "needs a download", a
+construct outside the subset) are what the extension shows verbatim.
+
+### Phase B — check (2026-10-03)
+
+Estimate about a week; one session (same day as Phase A). Timebox not hit.
+
+**Stop criteria**
+- *Studio GUI needed in the demo loop:* **no.** Create (writer), download,
+  online edit and live values all ran headless through logixd and
+  EtherNet/IP. One-time commissioning outside Studio: FactoryTalk Linx had
+  no device browsed, and the comm path resolved anyway.
+- *SDK cannot online-edit generated rungs:* **cleared** — writer-generated
+  rungs imported online with `FinalizeEdits`, controller mode unchanged,
+  verified by export, four times.
+- *Licence:* unchanged from Phase A; still owed a reseller confirmation.
+
+**Re-scope / stop criteria**
+- *Special cases:* **0** per-program fixes, **0** per-firmware branches.
+  One new rule from an SDK message (`ShareUnusedTimeSlice`), fixed by
+  mirroring the export, and one new behaviour (an empty controller is a
+  first download, not an error).
+- *Errors surfacing late:* **1 of 2** first-time SDK imports warned on
+  something the writer should have known (the time-slice attribute); none
+  since. Zero build failures across every SDK build run.
+- *Verification trustworthy:* every real-controller deploy verified; no
+  flake seen across 1 download, 1 cold online edit, 3 warm online edits and
+  3 SDK builds. Too few runs to quote a rate; Phase C's harness measures it.
+
+**DX criteria**
+- Edit → live, warm path: **~2 s** (3 edits). Cold path (`naut logix
+  deploy --online`): 2 m 23 s.
+- Full generate → import → build → download: **1 m 37 s** (target 2 min).
+
+**Done?** The definition was "a rung edit in VS Code lands as an online
+edit on Echo with live values on throughout." The edit went through the
+extension's own API call, not a click in VS Code, with live values served
+throughout; the controller was in Program mode (Run is James's to set).
+Left for later phases: `logix/hardware.L5X` merge (§6.1) and tag-value
+preservation across downloads (§6.4), neither needed for the demo.
+
+**James's call:** *(pending)*
 
 ## 8. The demo this enables
 
