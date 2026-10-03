@@ -266,6 +266,8 @@
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<circle
 								class="port"
+								data-id={port.name}
+								data-kind="port"
 								class:sel={selected === i}
 								cx={port.x}
 								cy={port.y}

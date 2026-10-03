@@ -202,7 +202,21 @@ export class Editor {
 	/** Viewport center of equipment `eqIndex`'s port named `name` — the .port
 	 * dot nearest that equipment's box (disambiguates two boxes' same-named
 	 * ports). Requires pipe mode (ports only render then). */
+	/** Viewport center of the element `[data-kind=kind][data-id=id]` (plus an
+	 * optional extra attribute filter) — locates through the testability
+	 * attributes the editor renders, not CSS classes or DOM order. */
+	locate(kind, id, extra = '') {
+		const sel = `[data-kind="${kind}"][data-id="${id}"]${extra}`;
+		return this.b
+			.eval(`(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) return null; const q = el.getBoundingClientRect(); return { cx: q.left + q.width / 2, cy: q.top + q.height / 2 }; })()`)
+			.then((r) => {
+				if (!r) throw new Error(`nothing matches ${sel}`);
+				return r;
+			});
+	}
+
 	async portXY(eqIndex, name) {
+		if (typeof eqIndex === 'string') return this.locate('port', name, `[data-equip="${eqIndex}"]`);
 		const [ports, rects] = await Promise.all([this.ports(), this.eqRects()]);
 		const box = rects[eqIndex];
 		const bx = box.cx;
@@ -246,6 +260,12 @@ export class Editor {
 	 * selection). */
 	async selectEquipment(eqIndex) {
 		await this.selectMode();
+		if (typeof eqIndex === 'string') {
+			const r = await this.locate('equipment', eqIndex);
+			await this.b.click(r.cx, r.cy);
+			await sleep(40);
+			return;
+		}
 		const rects = await this.eqRects();
 		const r = rects[eqIndex];
 		await this.b.click(r.cx, r.cy);
@@ -273,9 +293,7 @@ export class Editor {
 	 * pipe anchors, so this no longer needs to nudge off-center to land on
 	 * the dot instead of the box underneath it. */
 	async clickPortHandle(name) {
-		const handles = await this.portHandles();
-		const h = handles.find((p) => p.name === name);
-		if (!h) throw new Error(`no ports-edit dot named ${name} rendered`);
+		const h = await this.locate('port', name, '.porthandle');
 		await this.b.click(h.cx, h.cy);
 		await sleep(40);
 	}

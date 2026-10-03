@@ -1330,7 +1330,7 @@
 				{#each PIPE_LAYERS as layer (layer)}
 					{#each doc.pipes ?? [] as p (p.id)}
 						{@const d = pointsToPath(routedPoints(pipeRouteInput(p), getPort))}
-						<g class="piperun" class:sel={selected('pipe', p.id)} class:flagged={pipeFlagged(p)}>
+						<g class="piperun" class:sel={selected('pipe', p.id)} class:flagged={pipeFlagged(p)} data-id={p.id} data-kind="pipe">
 							{#if layer === 'wall' && selected('pipe', p.id)}
 								<path class="pipesel" {d} style="stroke-width: {10 / scale}" />
 							{/if}
@@ -1348,7 +1348,7 @@
 					{@const d = pointsToPath(routedPoints(pipeRouteInput(p), getPort))}
 					<g class="piperun" class:flagged={pipeFlagged(p)}>
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<path class="hit" {d} style="stroke-width: {14 / scale}" onpointerdown={(e) => pipeDown(e, p)} />
+						<path class="hit" {d} data-id={p.id} data-kind="pipe" style="stroke-width: {14 / scale}" onpointerdown={(e) => pipeDown(e, p)} />
 					</g>
 				{/each}
 
@@ -1360,7 +1360,7 @@
 								{@const [tx, ty] = tickEnd(port)}
 								<line class="porttick" x1={port.x} y1={port.y} x2={tx} y2={ty} style="stroke-width: {1.5 / scale}" />
 							{/if}
-							<circle class="port" class:hover={isHover} cx={port.x} cy={port.y} r={(isHover ? 6 : 4) / scale}
+							<circle class="port" class:hover={isHover} data-id={port.name} data-kind="port" data-equip={eq.id} cx={port.x} cy={port.y} r={(isHover ? 6 : 4) / scale}
 								><title>{port.name} · {fmtFraction(port.fx, port.fy)}{port.dir ? ` · exits ${port.dir}` : ''}</title></circle
 							>
 						{/each}
@@ -1412,6 +1412,8 @@
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<div
 					class="eq"
+					data-id={eq.id}
+					data-kind="equipment"
 					class:sel={selected('equipment', eq.id)}
 					class:dragging={drag?.kind === 'eq' && drag.id === eq.id}
 					class:portsedit={ed.portsEdit?.id === eq.id}
@@ -1450,6 +1452,8 @@
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<rect
 								class="mid"
+								data-id={p.id}
+								data-kind="segment"
 								x={(x1 + x2) / 2 - handleR * 0.7}
 								y={(y1 + y2) / 2 - handleR * 0.7}
 								width={handleR * 1.4}
@@ -1474,6 +1478,9 @@
 								<!-- svelte-ignore a11y_no_static_element_interactions -->
 								<circle
 									class="vtx anchor"
+									data-id={p.id}
+									data-kind="vertex"
+									data-end={endKey}
 									class:sel={endSelected(p.id, endKey)}
 									cx={x}
 									cy={y}
@@ -1499,6 +1506,8 @@
 								<!-- svelte-ignore a11y_no_static_element_interactions -->
 								<circle
 									class="vtx"
+									data-id={p.id}
+									data-kind="vertex"
 									class:sel={isTerminal ? endSelected(p.id, endKey) : nodeSelected(p.id, interiorIdx)}
 									cx={x}
 									cy={y}
@@ -1543,6 +1552,9 @@
 							<!-- svelte-ignore a11y_no_static_element_interactions -->
 							<circle
 								class="porthandle"
+								data-id={port.name}
+								data-kind="port"
+								data-equip={peq.id}
 								class:sel={portsSelected === i}
 								cx={port.x}
 								cy={port.y}
@@ -1565,6 +1577,8 @@
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<span
 					class="lbl"
+					data-id={i}
+					data-kind="label"
 					class:readout={live !== null}
 					class:sel={selected('label', i)}
 					style="left: {pos.x}px; top: {pos.y}px"

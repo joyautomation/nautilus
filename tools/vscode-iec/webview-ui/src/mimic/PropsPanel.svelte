@@ -271,7 +271,7 @@
 		<h4>{eq.component} <span class="dim">· {eq.id}</span></h4>
 		<div class="field">
 			<span>id</span>
-			<input class="nx-input" value={eq.id} onchange={(e) => renameEq(e.currentTarget.value)} />
+			<input class="nx-input" data-id={eq.id} data-kind="equipment-id" value={eq.id} onchange={(e) => renameEq(e.currentTarget.value)} />
 		</div>
 		<div class="field">
 			<span>component</span>

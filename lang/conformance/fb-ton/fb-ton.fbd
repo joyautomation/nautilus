@@ -1,0 +1,14 @@
+PROGRAM TonFbd
+(* TON in FBD: one block, its outputs wired to the fbd_ tags. *)
+VAR_EXTERNAL
+    IN     : BOOL;
+    PT     : TIME;
+    fbd_Q  : BOOL;
+    fbd_ET : TIME;
+END_VAR
+FBD
+  t : TON(IN := IN, PT := PT)
+  fbd_Q  := t.Q
+  fbd_ET := t.ET
+END_FBD
+END_PROGRAM
