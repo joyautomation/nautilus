@@ -1,0 +1,42 @@
+# fn-conversions — every X_TO_Y conversion in docs/functions.md, plus TRUNC.
+# ST only: the table lives in the VM's built-ins, below the front ends.
+# Inputs are plain tags; every output carries the st_ prefix.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/fn-conversions'
+#   go run ./cmd/naut test lang/conformance/fn-conversions
+name: fn-conversions
+
+tasks:
+  - program: fn-conversions.st
+    scan: 10ms
+
+tags:
+  - { name: R,  role: state, init: 0.0,   desc: "REAL input" }
+  - { name: I,  role: state, init: 0,     desc: "INT input" }
+  - { name: B,  role: state, init: false, desc: "BOOL input" }
+  - { name: T,  role: state, init: 0,     unit: ms, desc: "TIME input, in ms" }
+  - { name: SI, role: state, init: "0",   desc: "STRING fed to STRING_TO_INT" }
+  - { name: SR, role: state, init: "0",   desc: "STRING fed to STRING_TO_REAL" }
+  - { name: SB, role: state, init: "FALSE", desc: "STRING fed to STRING_TO_BOOL" }
+
+  - { name: st_INT_TO_REAL,   role: state, init: 0.0 }
+  - { name: st_REAL_TO_INT,   role: state, init: 0 }
+  - { name: st_BOOL_TO_INT,   role: state, init: 0 }
+  - { name: st_INT_TO_BOOL,   role: state, init: false }
+  - { name: st_INT_TO_TIME,   role: state, init: 0, unit: ms }
+  - { name: st_TIME_TO_INT,   role: state, init: 0 }
+  - { name: st_REAL_TO_TIME,  role: state, init: 0, unit: ms }
+  - { name: st_TIME_TO_REAL,  role: state, init: 0.0 }
+  - { name: st_BOOL_TO_REAL,  role: state, init: 0.0 }
+  - { name: st_REAL_TO_BOOL,  role: state, init: false }
+  - { name: st_INT_TO_STRING,  role: state, init: "" }
+  - { name: st_REAL_TO_STRING, role: state, init: "" }
+  - { name: st_BOOL_TO_STRING, role: state, init: "" }
+  - { name: st_TIME_TO_STRING, role: state, init: "" }
+  - { name: st_STRING_TO_INT,  role: state, init: 0 }
+  - { name: st_STRING_TO_REAL, role: state, init: 0.0 }
+  - { name: st_STRING_TO_BOOL, role: state, init: false }
+  - { name: st_TRUNC,          role: state, init: 0 }
+
+driver:
+  type: memory
