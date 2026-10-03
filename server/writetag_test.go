@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -229,5 +230,51 @@ func TestMetaAdvertisesMemberWrites(t *testing.T) {
 	}
 	if len(meta.Inputs) != 1 || meta.Inputs[0] != "Feed" {
 		t.Errorf("meta.inputs = %v — the root-role rule needs them", meta.Inputs)
+	}
+}
+
+// statusErr is a TagWriter refusal that names its own HTTP status.
+type statusErr struct {
+	code int
+	msg  string
+}
+
+func (e statusErr) Error() string   { return e.msg }
+func (e statusErr) HTTPStatus() int { return e.code }
+
+// With a TagWriter the write goes to it, not the store — including a member
+// of a driver-owned input, which the store path refuses because the next
+// poll would discard it. That refusal is about the store; a writer that
+// sends the value to the device has no such problem.
+func TestTagWriterTakesOverWrites(t *testing.T) {
+	rt := newUDTRuntime(t)
+	type write struct {
+		name  string
+		value any
+	}
+	var got []write
+	var fail error
+	srv := New(rt, Options{TagWriter: func(name string, value any) error {
+		got = append(got, write{name, value})
+		return fail
+	}})
+
+	if rec := postTag(t, srv, `{"name": "Feed.Speed", "value": 12.5}`); rec.Code != 204 {
+		t.Fatalf("input member write = %d, body %s", rec.Code, rec.Body)
+	}
+	if len(got) != 1 || got[0].name != "Feed.Speed" || got[0].value != 12.5 {
+		t.Fatalf("writer saw %+v", got)
+	}
+	if feed, ok := rt.Tags().All()["Feed"].(map[string]any); ok && feed["Speed"] == 12.5 {
+		t.Errorf("the store took the write too; it must only mirror the device")
+	}
+
+	fail = statusErr{400, "no tag named Nope"}
+	if rec := postTag(t, srv, `{"name": "Nope", "value": 1}`); rec.Code != 400 || !strings.Contains(rec.Body.String(), "no tag named Nope") {
+		t.Errorf("refusal = %d %q, want 400 with the writer's message", rec.Code, rec.Body)
+	}
+	fail = errors.New("controller unreachable")
+	if rec := postTag(t, srv, `{"name": "SP", "value": 1}`); rec.Code != 502 {
+		t.Errorf("device failure = %d, want 502", rec.Code)
 	}
 }
