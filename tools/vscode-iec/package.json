@@ -207,6 +207,10 @@
         "title": "nautilus: Pull Program from Controller"
       },
       {
+        "command": "nautilus.fb.monitor",
+        "title": "nautilus: Choose Function Block Instance to Monitor"
+      },
+      {
         "command": "nautilus.fbd.preview",
         "title": "nautilus: Open FBD Diagram Preview",
         "icon": "$(open-preview)"
@@ -413,6 +417,10 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "nautilus.fb.monitor",
+          "when": "false"
+        },
         {
           "command": "nautilus.liveValues.refresh",
           "when": "false"
