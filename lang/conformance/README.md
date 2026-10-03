@@ -159,5 +159,6 @@ Current table:
 | `fb-tof` | ✓ | ✓ | ✓ |   | 7 |
 | `fb-ton` | ✓ | ✓ | ✓ |   | 6 |
 | `fb-tp` | ✓ | ✓ | ✓ |   | 7 |
+| `ld-coils` | ✓ | ✓ |   |   | 9 |
 
-8 features, 54 tests.
+9 features, 63 tests.
