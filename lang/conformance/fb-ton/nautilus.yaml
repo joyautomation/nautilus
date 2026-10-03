@@ -1,0 +1,35 @@
+# fb-ton — the standard TON (on-delay timer) in every language that can
+# express it. One task per language; each writes outputs under its own
+# prefix (st_, ld_, fbd_) so one assertion in fb-ton_test.yaml checks all
+# three paths at once. The 1ms scan is the timer's own resolution: a test
+# can then land exactly on PT-1ms and PT.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/fb-ton'
+#   go run ./cmd/naut test lang/conformance/fb-ton
+name: fb-ton
+
+tasks:
+  - program: fb-ton.st      # the first task is always "main"; its prefix is still st_
+    scan: 1ms
+  - name: ld
+    program: fb-ton.ld
+    scan: 1ms
+  - name: fbd
+    program: fb-ton.fbd
+    scan: 1ms
+
+tags:
+  # Shared inputs — plain tags every task reads.
+  - { name: IN, role: state, init: false, desc: "Timer input (TON.IN)" }
+  - { name: PT, role: state, init: 5000, unit: ms, desc: "Preset time (TON.PT), in ms" }
+
+  # Outputs, one set per language.
+  - { name: st_Q,   role: state, init: false }
+  - { name: st_ET,  role: state, init: 0, unit: ms }
+  - { name: ld_Q,   role: state, init: false }
+  - { name: ld_ET,  role: state, init: 0, unit: ms }
+  - { name: fbd_Q,  role: state, init: false }
+  - { name: fbd_ET, role: state, init: 0, unit: ms }
+
+driver:
+  type: memory

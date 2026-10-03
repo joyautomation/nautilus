@@ -857,15 +857,15 @@
 	{/if}
 
 	{#if deleteStepConfirm}
-		<div class="addform confirm" onclick={(e) => e.stopPropagation()}>
+		<div class="addform confirm" data-testid="confirm-delete-step" onclick={(e) => e.stopPropagation()}>
 			<div class="addtitle">Delete step "{deleteStepConfirm.stepName}"?</div>
 			<div class="confirmbody">
 				{deleteStepConfirm.attached.length} attached transition{deleteStepConfirm.attached.length === 1 ? '' : 's'} reference this step.
 			</div>
 			<div class="addactions">
-				<button onclick={() => (deleteStepConfirm = null)}>cancel</button>
-				<button onclick={confirmDeleteStepCascade}>step + {deleteStepConfirm.attached.length} transition{deleteStepConfirm.attached.length === 1 ? '' : 's'}</button>
-				<button class="primary" onclick={confirmDeleteStepOnly}>step only (flag {deleteStepConfirm.attached.length})</button>
+				<button data-testid="confirm-cancel" onclick={() => (deleteStepConfirm = null)}>cancel</button>
+				<button data-testid="confirm-cascade" onclick={confirmDeleteStepCascade}>step + {deleteStepConfirm.attached.length} transition{deleteStepConfirm.attached.length === 1 ? '' : 's'}</button>
+				<button class="primary" data-testid="confirm-step-only" onclick={confirmDeleteStepOnly}>step only (flag {deleteStepConfirm.attached.length})</button>
 			</div>
 		</div>
 	{/if}

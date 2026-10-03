@@ -1,0 +1,69 @@
+# TON conformance. Every step asserts st_, ld_ and fbd_ together: the
+# three languages must agree with each other and with the standard's
+# timing diagram. Tasks scan at 1ms, so `advance:` lands exactly on the
+# timer's own resolution; TIME values are compared in ms.
+#
+# The resource's first scan is at t=1ms (not t=0), so a test that needs
+# "the scan IN rose on" runs `scans: 1` first and counts PT from there.
+tests:
+  - name: Q false at PT-1ms, true at PT, ET clamps at PT
+    given: { IN: true }
+    steps:
+      - scans: 1 # the scan IN is first seen TRUE: the timer starts, nothing else
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - advance: 4.999s # PT-1ms since the starting scan
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 4999, ld_ET: 4999, fbd_ET: 4999 }
+      - advance: 1ms # exactly PT
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+      - advance: 3s # ET holds at PT while IN stays TRUE
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+
+  - name: IN dropping resets Q and ET, and a new rise times from scratch
+    given: { IN: true }
+    steps:
+      - advance: 7s
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true }
+      - given: { IN: false }
+        scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - given: { IN: true }
+        scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - advance: 4.999s
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 4999, ld_ET: 4999, fbd_ET: 4999 }
+      - advance: 1ms
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+
+  - name: IN dropping mid-delay resets ET before Q ever rose
+    given: { IN: true }
+    steps:
+      - advance: 2s
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 1999, ld_ET: 1999, fbd_ET: 1999 }
+      - given: { IN: false }
+        scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - advance: 10s # with IN FALSE nothing ever times out
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+
+  - name: first scan with IN already TRUE counts from that scan, not from power-up
+    given: { IN: true }
+    steps:
+      - scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - scans: 1
+        expect: { st_ET: 1, ld_ET: 1, fbd_ET: 1 }
+
+  - name: IN FALSE from power-up never starts the timer
+    steps:
+      - advance: 10s
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+
+  - name: a shorter PT given mid-run is honoured on the next scan
+    given: { IN: true, PT: 100 }
+    steps:
+      - scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
+      - advance: 99ms
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 99, ld_ET: 99, fbd_ET: 99 }
+      - advance: 1ms
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 100, ld_ET: 100, fbd_ET: 100 }

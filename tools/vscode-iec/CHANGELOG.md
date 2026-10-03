@@ -5,6 +5,16 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- **Test hooks for the VS Code rig.** With `NAUTILUS_TEST_STATE=<file>` set,
+  the extension writes a JSON snapshot (CLI path and version, runtime URL,
+  connection and sync state, open editors, status-bar items, last
+  notification and error) on activation and on every change. Status-bar
+  items carry stable names (`nautilus.live`, `nautilus.sync`) and a
+  `[name]` tooltip prefix; the SFC delete-step confirm has `data-testid`s.
+  Inert unless the variable is set.
+
 ### Changed
 
 - **Mimic and component editors carry testability attributes.** Equipment,
