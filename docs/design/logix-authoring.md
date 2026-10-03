@@ -450,9 +450,17 @@ task's ladder source and PUT /api/program runs the deploy as an online
 edit; a change that needs a download is refused with the command that does
 it. Tested against a fake agent and the in-repo emulator.
 
-**Waiting on:** an Echo controller (1756-L85E v38, name DemoLine) and its
-FactoryTalk Linx comm path, for the online-edit and download legs on real
-hardware and the edit→live timing (§7a DX criterion).
+**On the controller (2026-10-03, James created it):** Echo 5580 v38 in
+slot 0, bound to the VM's Tailscale address; comm path
+`AB_ETH-1\100.93.56.45\Backplane\0`, found by probing slots over
+EtherNet/IP and reading FT Linx's driver list (no device had been browsed;
+the path resolves anyway). An upload from a never-downloaded controller
+fails with `RxE_NOT_FOUND`; deploy now reads that as "first download".
+**`naut logix deploy --download --yes` of DemoLine: 1 m 37 s** from command
+to verified (write, import + build 29 s, download, upload, logic compare),
+under the 2-minute §7a limit. Tags visible over EtherNet/IP afterwards.
+Studio 5000 will not open an ACD from the Y: virtiofs share ("does not
+exist"); copy to C: first.
 
 ## 8. The demo this enables
 
