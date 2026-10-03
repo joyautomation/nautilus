@@ -1,0 +1,35 @@
+# sfc-qualifiers — the action qualifiers that compile today (N S R P1 P P0)
+# on a BOOL variable and on an ACTION body. SFC is the only language that
+# can express a step, so this feature has a single sfc task (README rule 3:
+# a blank LD/FBD/ST cell is honest).
+#
+#   go test ./lang/conformance/ -run 'TestConformance/sfc-qualifiers'
+#   go run ./cmd/naut test lang/conformance/sfc-qualifiers
+name: sfc-qualifiers
+
+tasks:
+  - program: sfc-qualifiers.sfc   # the first task is always "main"
+    scan: 1ms
+
+tags:
+  # Shared inputs.
+  - { name: Go,   role: state, init: false, desc: "Idle -> A" }
+  - { name: Next, role: state, init: false, desc: "A -> B" }
+  - { name: Back, role: state, init: false, desc: "B -> Idle" }
+
+  # Outputs, sfc_ prefix. Bool variables driven by associations on step A.
+  - { name: sfc_N,  role: state, init: false, desc: "N: high while A is active" }
+  - { name: sfc_S,  role: state, init: false, desc: "S: set once on A's activation, never cleared by the chart" }
+  - { name: sfc_R,  role: state, init: true,  desc: "R: cleared once on A's activation" }
+  - { name: sfc_P1, role: state, init: false, desc: "P1: one scan on A's rising edge" }
+  - { name: sfc_P,  role: state, init: false, desc: "P: same edge as P1" }
+  - { name: sfc_P0, role: state, init: false, desc: "P0: one scan on A's falling edge" }
+  # Edge counters, bumped by ACTION bodies under P1 / P / P0.
+  - { name: sfc_CntP1, role: state, init: 0 }
+  - { name: sfc_CntP,  role: state, init: 0 }
+  - { name: sfc_CntP0, role: state, init: 0 }
+  # A level ACTION body (N) writes this every scan it runs.
+  - { name: sfc_Level, role: state, init: 0 }
+
+driver:
+  type: memory
