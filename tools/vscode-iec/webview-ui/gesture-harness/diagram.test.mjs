@@ -228,8 +228,13 @@ test('Ladder: TON from the palette takes the first free instance name', async ()
 	await withPage(async (b) => {
 		await deliver(b, { type: 'ldModel', model: LD, title: 'p.ld' });
 		await reset(b);
-		await clickAt(b, await paletteBtn(b, 'TON'));
-		await clickAt(b, await paletteBtn(b, 'CTU'));
+		// The palette's "FB…" opens the block picker (filter, then instance).
+		for (const type of ['TON', 'CTU']) {
+			await clickAt(b, await paletteBtn(b, 'FB…'));
+			await typeText(b, type);
+			await key(b, 'Enter', 'Enter', 13); // picks the type, focus → instance
+			await key(b, 'Enter', 'Enter', 13); // inserts
+		}
 		const ops = await ldOps(b);
 		assert.equal(ops[0].inst, 't2'); // t1 is taken by rung r1
 		assert.equal(ops[1].inst, 'c2'); // c1 is a header variable

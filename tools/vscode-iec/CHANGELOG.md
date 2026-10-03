@@ -5,6 +5,10 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Changed
+
+- **The webview gesture harness runs in CI** (`vscode-iec-gestures`), and its Ladder palette test now drives the `FB…` block picker it went stale against. Chrome's `--no-sandbox` is opt-in via `GESTURE_NO_SANDBOX=1`.
+
 ### Fixed
 
 - **Live values on a Logix routine find program-scope tags.** A rung in

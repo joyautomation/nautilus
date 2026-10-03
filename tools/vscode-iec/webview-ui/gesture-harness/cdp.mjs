@@ -52,7 +52,9 @@ export class Browser {
 			'--no-default-browser-check',
 			'--disable-gpu',
 			'--disable-dev-shm-usage',
-			'--no-sandbox',
+			// Off by default; GitHub's ubuntu-24.04 runners refuse Chrome's
+			// sandbox (AppArmor blocks unprivileged user namespaces), so CI sets this.
+			...(process.env.GESTURE_NO_SANDBOX ? ['--no-sandbox'] : []),
 			`--window-size=${width},${height}`,
 			'about:blank'
 		];
