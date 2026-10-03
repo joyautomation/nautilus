@@ -1,0 +1,70 @@
+# SR conformance (set-dominant). Every step asserts st_, ld_ and fbd_
+# together. The latch is level-sensitive and memoryless apart from Q1, so the
+# edges are: power-up clear, set, hold, reset, and BOTH inputs TRUE - where
+# the dominant input wins whether Q1 was clear or already latched.
+# Tasks scan at 10ms; each `scans: 1` is one pass of all three languages.
+tests:
+  - name: power-up with both inputs FALSE leaves Q clear
+    steps:
+      - scans: 3
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
+
+  - name: set latches and holds after the set input drops
+    steps:
+      - given: { S: true, R: false }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true } # set
+      - given: { S: false, R: false }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true } # holds with both FALSE
+      - given: { S: false, R: false }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true } # still holds
+
+  - name: reset clears a latched Q and stays cleared
+    steps:
+      - given: { S: true, R: false }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true }
+      - given: { S: false, R: true }
+        scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false } # reset
+      - given: { S: false, R: false }
+        scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false } # stays clear
+
+  - name: reset with Q already clear is a no-op
+    steps:
+      - given: { S: false, R: true }
+        scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
+      - given: { S: false, R: false }
+        scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false }
+
+  - name: both inputs TRUE from a clear Q (set wins)
+    steps:
+      - given: { S: true, R: true }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true } # S and R together
+      - given: { S: false, R: false }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true } # holds after both drop
+
+  - name: both inputs TRUE with Q already latched (set wins)
+    steps:
+      - given: { S: true, R: false }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true }
+      - given: { S: true, R: true }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true }
+
+  - name: both TRUE then the dominant input drops, the other decides
+    steps:
+      - given: { S: true, R: true }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true }
+      - given: { S: false, R: true }
+        scans: 1
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false } # set drops, reset left: cleared

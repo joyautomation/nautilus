@@ -151,4 +151,8 @@ Current table:
 <!-- go run ./lang/conformance -matrix -->
 | Feature | ST | LD | FBD | SFC | Tests |
 |---|:-:|:-:|:-:|:-:|--:|
+| `fb-rs` | ✓ | ✓ | ✓ |   | 7 |
+| `fb-sr` | ✓ | ✓ | ✓ |   | 7 |
 | `fb-ton` | ✓ | ✓ | ✓ |   | 6 |
+
+3 features, 20 tests.
