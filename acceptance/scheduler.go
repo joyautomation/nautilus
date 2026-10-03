@@ -193,7 +193,7 @@ func (s *Scheduler) AdvanceUntil(limit, hold time.Duration, pred func() bool) (b
 // the test that ran it — you never have to ask for that assertion.
 func (s *Scheduler) LogicErrors() (uint64, string) {
 	st := s.rt.Stats()
-	total, last := st.LogicErrors, ""
+	total, last := st.LogicErrors, st.LastError
 	for _, t := range st.Tasks {
 		total += t.LogicErrors
 		if t.LastError != "" {

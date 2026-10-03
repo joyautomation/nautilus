@@ -23,19 +23,11 @@ import (
 	"github.com/joyautomation/nautilus/internal/project"
 )
 
-// idle is the main task of runFaulting's project: the program under test
-// runs as a second task, because the runtime keeps the text of a fault only
-// for additional tasks (ScanStats counts a main-task fault but drops its
-// message, so a main-task fault reads as "1 logic error(s)" with no detail).
-const idle = "PROGRAM Idle\nEND_PROGRAM\n"
-
-// runFaulting runs the ST program as a second task beside an idle main
-// task and returns the first failing result, or nil when every test passed.
+// runFaulting runs the ST program as the main task and returns the first failing result, or nil when every test passed.
 func runFaulting(t *testing.T, tags, program, suite string) *acceptance.Result {
 	t.Helper()
 	fsys := fstest.MapFS{
-		"nautilus.yaml": {Data: []byte("name: faults\ntasks:\n  - program: idle.st\n    scan: 10ms\n  - name: t\n    program: p.st\n    scan: 10ms\ntags:\n" + tags + "\ndriver:\n  type: memory\n")},
-		"idle.st":       {Data: []byte(idle)},
+		"nautilus.yaml": {Data: []byte("name: faults\ntasks:\n  - program: p.st\n    scan: 10ms\ntags:\n" + tags + "\ndriver:\n  type: memory\n")},
 		"p.st":          {Data: []byte(program)},
 		"p_test.yaml":   {Data: []byte(suite)},
 	}
