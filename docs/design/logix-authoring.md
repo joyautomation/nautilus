@@ -403,7 +403,7 @@ the L5K spelling `[0,PRE,0]` for TIMER and COUNTER; the hand-written
 envelope (`Owner="nautilus"`, the `Local` module block); the Decorated BOOL
 array form; `MOVE` into a `.PRE` member.
 
-**James's call:** *(pending)*
+**James's call (2026-10-03): continue to Phase B.**
 
 ## 8. The demo this enables
 
