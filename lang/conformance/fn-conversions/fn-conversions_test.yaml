@@ -16,7 +16,7 @@ tests:
       - { given: { R: 0.5 },    scans: 1, expect: { st_REAL_TO_INT: 0 } }
       - { given: { R: 1.5 },    scans: 1, expect: { st_REAL_TO_INT: 2 } }
       - { given: { R: 1.4999 }, scans: 1, expect: { st_REAL_TO_INT: 1 } }
-      - { given: { R: 2.5001 }, scans: 1, expect: { st_REAL_TO_INT: 2 } }
+      - { given: { R: 2.5001 }, scans: 1, expect: { st_REAL_TO_INT: 3 } }
       - { given: { R: -0.4 },   scans: 1, expect: { st_REAL_TO_INT: 0 } }
       - { given: { R: 7.0 },    scans: 1, expect: { st_REAL_TO_INT: 7 } }
 

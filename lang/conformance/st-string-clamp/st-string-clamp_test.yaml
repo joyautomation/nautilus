@@ -1,0 +1,84 @@
+# PINS A DEVIATION (docs/functions.md "Strings", header of
+# lang/ir/builtins_std.go): positions are 1-based like the standard, but a
+# length or position outside the string CLAMPS to the string instead of
+# faulting the scan. The standard calls these out-of-range cases errors;
+# Codesys returns an empty string, Logix truncates, TIA sets ENO false.
+# Clamping is the documented choice here; changing it means editing this
+# pin on purpose. The strings are bytes, not characters.
+#
+# S is "HELLO" unless a test says otherwise.
+tests:
+  - name: in-range arguments behave as the standard says (1-based)
+    steps:
+      - given: { L: 2, P: 2 }
+        scans: 1
+        expect:
+          st_Left: "HE"
+          st_Right: "LO"
+          st_Mid: "EL"      # 2 characters starting at position 2
+          st_Ins: "HEXYLLO" # inserted AFTER position 2
+          st_Del: "HLO"     # 2 characters removed from position 2
+          st_Rep: "HabLO"   # 2 characters at position 2 replaced
+          st_Len: 5
+          st_Cat: "HELLO-HELLO"
+
+  - name: LEFT and RIGHT clamp a long or negative length
+    steps:
+      - { given: { L: 99 }, scans: 1, expect: { st_Left: "HELLO", st_Right: "HELLO" } }
+      - { given: { L: 5 },  scans: 1, expect: { st_Left: "HELLO", st_Right: "HELLO" } }
+      - { given: { L: 0 },  scans: 1, expect: { st_Left: "", st_Right: "" } }
+      - { given: { L: -3 }, scans: 1, expect: { st_Left: "", st_Right: "" } }
+
+  - name: MID clamps both the start and the length
+    steps:
+      - { given: { L: 99, P: 2 }, scans: 1, expect: { st_Mid: "ELLO" } }  # length runs off the end
+      - { given: { L: 2, P: 0 },  scans: 1, expect: { st_Mid: "HE" } }    # position 0 acts like 1
+      - { given: { L: 2, P: -4 }, scans: 1, expect: { st_Mid: "HE" } }
+      - { given: { L: 2, P: 99 }, scans: 1, expect: { st_Mid: "" } }      # position past the end
+      - { given: { L: -1, P: 2 }, scans: 1, expect: { st_Mid: "" } }
+
+  - name: INSERT clamps the position - past the end appends, at or before 0 prepends
+    steps:
+      - { given: { P: 0 },  scans: 1, expect: { st_Ins: "XYHELLO" } }
+      - { given: { P: -2 }, scans: 1, expect: { st_Ins: "XYHELLO" } }
+      - { given: { P: 5 },  scans: 1, expect: { st_Ins: "HELLOXY" } }
+      - { given: { P: 99 }, scans: 1, expect: { st_Ins: "HELLOXY" } }
+
+  - name: DELETE clamps the length and the position
+    steps:
+      - { given: { L: 99, P: 2 }, scans: 1, expect: { st_Del: "H" } }      # everything from 2 on
+      - { given: { L: 2, P: 99 }, scans: 1, expect: { st_Del: "HELLO" } }  # nothing to delete
+      - { given: { L: 2, P: 0 },  scans: 1, expect: { st_Del: "LLO" } }    # position 0 acts like 1
+      - { given: { L: -1, P: 2 }, scans: 1, expect: { st_Del: "HELLO" } }
+
+  - name: REPLACE clamps the length and the position
+    steps:
+      - { given: { L: 99, P: 2 }, scans: 1, expect: { st_Rep: "Hab" } }      # replaces to the end
+      - { given: { L: 1, P: 99 }, scans: 1, expect: { st_Rep: "HELLOab" } }  # past the end appends
+      - { given: { L: 0, P: 2 },  scans: 1, expect: { st_Rep: "HabELLO" } }  # zero length inserts
+
+  - name: an empty string never faults
+    given: { S: "" }
+    steps:
+      - given: { L: 3, P: 3 }
+        scans: 2
+        expect:
+          st_Left: ""
+          st_Right: ""
+          st_Mid: ""
+          st_Del: ""
+          st_Ins: "XY"
+          st_Rep: "ab"
+          st_Len: 0
+          st_Cat: "-"
+          st_Scans: 2 # the scan ran to its end both times
+
+  - name: FIND is 1-based and gives 0 when absent or when the needle is empty
+    steps:
+      - { given: { F: "LL" },    scans: 1, expect: { st_Find: 3 } }
+      - { given: { F: "H" },     scans: 1, expect: { st_Find: 1 } }
+      - { given: { F: "O" },     scans: 1, expect: { st_Find: 5 } }
+      - { given: { F: "L" },     scans: 1, expect: { st_Find: 3 } } # first occurrence
+      - { given: { F: "ZZ" },    scans: 1, expect: { st_Find: 0 } }
+      - { given: { F: "" },      scans: 1, expect: { st_Find: 0 } }
+      - { given: { F: "HELLOO" }, scans: 1, expect: { st_Find: 0 } } # needle longer than the string
