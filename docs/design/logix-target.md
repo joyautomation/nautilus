@@ -452,6 +452,12 @@ genuinely low, and Tier A is the part with a market.
 
 ## 8. Recommendation
 
+> **Superseded 2026-10-03 for Allen-Bradley development** by
+> [`logix-authoring.md`](logix-authoring.md): nautilus is the only authoring
+> surface and Studio 5000 runs headless as middleware. The reasoning below is
+> kept because its cost analysis still applies; the answer to it is
+> verification (logix-authoring.md §5).
+
 **Build Tier A. Spike Tier B behind it. Do not promise runtime parity.**
 
 The framing that works is not "nautilus replaces Studio 5000." It is:
