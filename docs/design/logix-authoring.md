@@ -1149,6 +1149,55 @@ writer and the importer all have one definition. "Within reason" is the
 list; MSG, JSR with parameters and string manipulation stay out.
 Not built; needs James's list.
 
+### Phase E — dialects and I/O aliases (2026-10-04, early)
+
+**James's call:** both proposals approved, the dialect generalized —
+`dialect: logix | siemens | codesys`, the default being the nautilus
+runtime itself.
+
+**Built: `dialect:`.** A manifest key (`internal/dialect`): a dialect is a
+library of blocks with the vendor's semantics, written in nautilus ST and
+embedded in the binary, joined to every program of the project ahead of
+its own libraries by both composition paths (the runtime's `Libraries`,
+the editor's and checker's `PreludeSources`). One definition, three uses:
+the nautilus runtime runs the block, the Logix writer emits the native
+instruction for it, the L5X importer folds the native idiom back into
+it. `nautilus` adds nothing; `siemens` and `codesys` are accepted and
+empty. The first `logix` block is **`TONR`** — a TON with a `Reset` pin,
+the `RES(t)` idiom: the writer emits `<Reset>RES(t)` ahead of the timer's
+rung (ladder) or `t.Reset := NOT(IN) OR (Reset)` with `TONR(t)` (ST); the
+importer folds `XIC(x)RES(t)` on a TON-run timer into `t:TONR(Reset :=
+x)` and sets `dialect: logix` in the manifest it writes.
+
+**Built: tag aliases.** A manifest tag may carry `alias:` — the Logix
+alias tag's target, how a Logix program names a rack point or another
+tag. The writer emits the tag as `TagType="Alias" AliasFor="…"`; the
+importer turns an export's alias tags, and rack points the logic names
+directly (`Local:1:I.Data.3`), into tags with `alias:` (a trailing bit
+index types the guess BOOL, else DINT; the module gives the real type on
+the controller). The nautilus runtime ignores the binding. Controller
+status flags (`S:FS`, first scan) are not rack points: refused by name,
+113 rungs — a first-scan block is the obvious next dialect entry.
+
+**Measured on Echo:** the `dialect` conformance project (a free-running
+TONR pulse counted by edge; a TONR an input resets while it runs) — 2 of
+2 on both runtimes, download 1 m 45 s. Aliases cannot be exercised on
+Echo without a module in the project (the hardware `.L5X` merge deferred
+since Phase B); they are tested through the writer and the reader.
+
+**Corpus:** 97.2 % of rungs (29,537 of 30,397), 70.4 % of routines; 53
+identical + 15 equivalent write-backs of 68 complete program routines, 0
+refused. The "io" bucket (161) is gone; "RES" fell to 162 (timers run by
+TOF or RTO, or reset in a routine that does not run them); "status" is
+113. The equivalent-not-identical count rose with TONR: the writer puts
+the RES rung directly ahead of the timer's rung, where the export may have
+had it elsewhere — semantically the block's definition (reset dominates
+at the call), textually a move.
+
+**Open:** the dialect list beyond TONR (first scan, `GSV` wall clock and
+scan time, `COP`); the hardware configuration for aliases to land on;
+whether the alias binding belongs in the manifest or a sibling I/O file.
+
 ## 8. The demo this enables
 
 James's target demo (2026-10-03), which replaces the Tier A `ab01` draft in the
