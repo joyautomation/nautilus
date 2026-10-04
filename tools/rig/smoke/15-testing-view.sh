@@ -210,7 +210,7 @@ else
   if [[ $WT == *"$FD"* ]]; then
     pass "the inline message carries the tag value: '$FD'" "$png"
   else
-    warn "the inline message reads '$WT' — the tag value ('$FD') is not in it, only in the peek; and it sits on the step's line $WL, not the expect on line $EL (README: 'a failure shows the step and tag value that broke, inline on the assertion')" "$png"
+    warn "the inline message reads '$WT' — the tag value ('$FD') is not in it, only in the peek; and it sits on the step's line $WL, not the expect on line $EL (README: 'a failure shows the step and tag value that broke, inline on the assertion'; #145)" "$png"
   fi
   click_page "$WIDGET_JS" 2
   wait_for 8 peek_up || true
