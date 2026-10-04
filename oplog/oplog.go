@@ -590,6 +590,15 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) {
 	}
 	last := n.lastLocked()
 	n.mu.Unlock()
+	// The most advanced peer is Raft's "up to date": the higher term on its
+	// last entry wins, then the longer log, so an older term's uncommitted
+	// leftovers never outrank a committed suffix.
+	lastTerm := func(r afterResp) uint64 {
+		if len(r.Entries) == 0 {
+			return 0
+		}
+		return r.Entries[len(r.Entries)-1].Term
+	}
 	var best afterResp
 	found := false
 	for _, p := range n.o.Peers {
@@ -600,7 +609,7 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) {
 		if err := n.call(ctx, p, fmt.Sprintf("/api/oplog?after=%d", last), nil, &got); err != nil {
 			continue
 		}
-		if !found || len(got.Entries) > len(best.Entries) || got.Commit > best.Commit {
+		if !found || lastTerm(got) > lastTerm(best) || (lastTerm(got) == lastTerm(best) && len(got.Entries) > len(best.Entries)) {
 			best, found = got, true
 		}
 	}
