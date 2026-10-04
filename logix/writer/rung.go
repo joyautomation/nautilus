@@ -23,6 +23,9 @@ type rungCtx struct {
 	// segments collects the rung texts a TOF split produces; the first is
 	// the rung itself, each later one is headed by XIC(t.DN).
 	segments []string
+	// legHead is set while lowering the legs of a branch that takes power
+	// from the rail: an edge at such a leg's head inlines as ONS.
+	legHead bool
 }
 
 func (lw *lowered) rung(r ld.Rung, notes string) {
@@ -62,12 +65,17 @@ func (c *rungCtx) series(elems []ld.Element, top bool) string {
 				parts = append(parts, t)
 			}
 		case "edge":
-			parts = append(parts, c.edge(e, top && i == 0 && len(c.segments) == 0))
+			// At the rung's head, or at the head of a leg of a branch that
+			// is itself at the head: the one-shot sees that contact alone.
+			parts = append(parts, c.edge(e, top && i == 0 && len(c.segments) == 0 || !top && c.legHead && i == 0))
 		case "branch":
+			inherited := c.legHead
+			c.legHead = top && i == 0 && len(c.segments) == 0 || !top && inherited && i == 0
 			var legs []string
 			for _, leg := range e.Legs {
 				legs = append(legs, c.series(leg, false))
 			}
+			c.legHead = inherited
 			parts = append(parts, "["+strings.Join(legs, " ,")+" ]")
 		case "fb":
 			if c.lw.blockType(e.Type) == "" && c.lw.blockSourceExists(e.Type) {
@@ -134,7 +142,25 @@ func (c *rungCtx) coils(coils []ld.Element) string {
 		case "R":
 			out = append(out, "OTU("+ref+")")
 		case "P", "N":
-			c.lw.diag(ruleCoilEdge, c.r.Line, c.r.Name, "( %s %s ): edge coils are not in the v1 subset; put the edge on the condition side as +Name / -Name, or latch with ( S %s ) and clear elsewhere", e.Mode, e.Ref, e.Ref)
+			// An edge coil is a one-shot of the rung condition: the Logix
+			// idiom <cond>ONS(st)OTE(x) for the rising edge, <cond>OSF(st,x)
+			// for the falling one. Alone on its rung, so the one-shot sees
+			// exactly the rung condition.
+			if len(coils) != 1 {
+				c.lw.diag(ruleCoilEdge, c.r.Line, c.r.Name, "( %s %s ): an edge coil must be its rung's only coil (the one-shot acts on the whole rung condition); split the rung", e.Mode, e.Ref)
+				continue
+			}
+			kind := "rt"
+			if e.Mode == "N" {
+				kind = "ft"
+			}
+			st := c.edgeName(kind, e.Ref)
+			c.lw.genTag(st, c.r.Line, c.r.Name)
+			if e.Mode == "P" {
+				out = append(out, "ONS("+st+")OTE("+ref+")")
+			} else {
+				out = append(out, "OSF("+st+","+ref+")")
+			}
 		}
 	}
 	switch len(out) {
@@ -204,6 +230,20 @@ func (c *rungCtx) ref(ref string) (string, bool) {
 			return "", false
 		}
 		return ref, true
+	}
+	if c.lw.blockType(typ) == "" && c.lw.blockSourceExists(typ) {
+		// A user block's pin, read as Logix reads an Add-On Instruction's
+		// parameter: inst.Out. The brownfield import writes outputs this
+		// way, as the export had them.
+		if a, ok := c.lw.resolveAOI(v.Type, c.r.Line); ok {
+			member := strings.TrimPrefix(rest, ".")
+			if p := a.param(member); p != nil && !strings.Contains(member, ".") && !strings.Contains(member, "[") {
+				return base + "." + p.Name, true
+			}
+			c.lw.diag(ruleMember, c.r.Line, c.r.Name, "%s: %s has no parameter %s", ref, v.Type, member)
+			return "", false
+		}
+		return "", false
 	}
 	c.lw.diag(ruleMember, c.r.Line, c.r.Name, "%s: member access into a %s has no Logix shape; a structure's type must be a STRUCT declared in a library", ref, v.Type)
 	return "", false

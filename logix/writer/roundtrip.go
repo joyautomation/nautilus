@@ -80,6 +80,9 @@ type cmp struct {
 	resets  []string // RES rungs expected after, as "ref|inst"
 	seen    map[string]int
 	genTags map[string]bool
+	// legHead mirrors the writer's: set while inside the legs of a branch
+	// that takes power from the rail.
+	legHead bool
 }
 
 func (c *cmp) problemf(rung, format string, a ...any) {
@@ -163,11 +166,14 @@ func (c *cmp) helpers(r ld.Rung, elems []ld.Element, top bool) {
 	for i, e := range elems {
 		switch e.Kind {
 		case "branch":
+			inherited := c.legHead
+			c.legHead = top && i == 0 || !top && inherited && i == 0
 			for _, leg := range e.Legs {
 				c.helpers(r, leg, false)
 			}
+			c.legHead = inherited
 		case "edge":
-			if e.Mode == "P" && top && i == 0 {
+			if e.Mode == "P" && (top && i == 0 || !top && c.legHead && i == 0) {
 				c.seen["rt_"+sanitizeIdent(r.Name)+"_"+sanitizeIdent(e.Ref)]++
 				continue
 			}
@@ -263,7 +269,7 @@ func (c *cmp) series(r ld.Rung, elems []ld.Element, top, noCoils bool) {
 				c.problemf(r.Name, "element %+v, want %s(%s)", g, fn, want)
 			}
 		case "edge":
-			if e.Mode == "P" && top && i == 0 && c.idx == 0 && c.pos > 0 {
+			if e.Mode == "P" && (top && i == 0 && c.idx == 0 && c.pos > 0 || !top && c.legHead && i == 0) {
 				g1, ok := c.next(r)
 				if !ok {
 					return
@@ -301,6 +307,8 @@ func (c *cmp) series(r ld.Rung, elems []ld.Element, top, noCoils bool) {
 				continue
 			}
 			saved, savedIdx := c.cur, c.idx
+			inherited := c.legHead
+			c.legHead = top && i == 0 && savedIdx == 1 && c.pos > 0 || !top && inherited && i == 0
 			for li, leg := range e.Legs {
 				c.cur, c.idx = g.Legs[li], 0
 				c.series(r, leg, false, noCoils)
@@ -308,6 +316,7 @@ func (c *cmp) series(r ld.Rung, elems []ld.Element, top, noCoils bool) {
 					c.problemf(r.Name, "branch leg %d has %d extra element(s)", li, len(c.cur)-c.idx)
 				}
 			}
+			c.legHead = inherited
 			c.cur, c.idx = saved, savedIdx
 		case "fb":
 			g, ok := c.next(r)

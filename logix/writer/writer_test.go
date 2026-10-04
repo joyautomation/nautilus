@@ -276,7 +276,7 @@ func TestRejections(t *testing.T) {
 		{"CTU in branch", wrap("c : CTU; X : BOOL; Y : BOOL; Z : BOOL;", "RUNG r [ X c:CTU(PV := 2) | Z ] ( Y )"), ruleTOFPosition, "c:CTU"},
 		{"fn not compare", wrap("X : BOOL; Y : BOOL; N : INT;", "RUNG r X ODD(N) ( Y )"), ruleFn, "ODD"},
 		{"operand expression", wrap("X : BOOL; Y : BOOL; N : INT;", "RUNG r GT(N + 1, 5) ( Y )"), ruleOperand, "N + 1"},
-		{"edge coil", wrap("X : BOOL; Y : BOOL;", "RUNG r X ( P Y )"), ruleCoilEdge, "( P Y )"},
+		{"edge coil beside another", wrap("X : BOOL; Y : BOOL; Z : BOOL;", "RUNG r X ( P Y ) ( Z )"), ruleCoilEdge, "( P Y )"},
 		{"member of scalar", wrap("X : BOOL; Y : BOOL; N : INT;", "RUNG r N.Hi ( Y )"), ruleMember, "N.Hi"},
 		{"member of timer", wrap("t : TON; X : BOOL; Y : BOOL;", "RUNG r t.TT ( Y )"), ruleMember, "TT"},
 	}
@@ -887,4 +887,111 @@ func grepLine(doc, needle string) string {
 		}
 	}
 	return ""
+}
+
+// A user block's output read as inst.Out — the way Logix reads an Add-On
+// Instruction's parameter, and the way the brownfield import writes it.
+func TestAOIOutputReadAsMember(t *testing.T) {
+	motor, err := os.ReadFile(filepath.Join("..", "..", "examples", "lift-station", "lib", "motor.ld"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := `PROGRAM P
+VAR_EXTERNAL
+    Mode : INT; Req : BOOL; Perm : BOOL; Fb : BOOL; Rst : BOOL; RunCmd : BOOL;
+END_VAR
+VAR
+    m : MotorStarter;
+END_VAR
+LD
+  RUNG call
+    m:MotorStarter(Mode := Mode, AutoReq := Req, Permissive := Perm, RunFb := Fb, Reset := Rst)
+  RUNG out
+    m.Run ( RunCmd )
+  RUNG bad
+    m.Nope ( RunCmd )
+END_LD
+END_PROGRAM
+`
+	_, diags, err := Write(src, Options{Libs: []string{string(motor)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) != 1 || !strings.Contains(diags[0].String(), "no parameter Nope") {
+		t.Fatalf("diags = %v", diags)
+	}
+	src = strings.Replace(src, "  RUNG bad\n    m.Nope ( RunCmd )\n", "", 1)
+	f := mustWrite(t, src, Options{Libs: []string{string(motor)}})
+	got := f.Controller.Programs[0].Routines[0].Rungs[1].Text
+	if got != "XIC(m.Run)OTE(RunCmd);" {
+		t.Errorf("rung = %s", got)
+	}
+}
+
+// Edge coils: ( P x ) is the one-shot of the rung condition, which Logix
+// writes <cond>ONS(st)OTE(x); ( N x ) is <cond>OSF(st,x). Alone on the rung.
+func TestEdgeCoils(t *testing.T) {
+	src := `PROGRAM P
+VAR_EXTERNAL
+    a : BOOL; b : BOOL; x : BOOL; y : BOOL; z : BOOL;
+END_VAR
+LD
+  RUNG rise
+    a b ( P x )
+  RUNG fall
+    a ( N y )
+END_LD
+END_PROGRAM
+`
+	f := mustWrite(t, src, Options{})
+	rungs := f.Controller.Programs[0].Routines[0].Rungs
+	if got := rungs[0].Text; got != "XIC(a)XIC(b)ONS(rt_rise_x)OTE(x);" {
+		t.Errorf("rise = %s", got)
+	}
+	if got := rungs[1].Text; got != "XIC(a)OSF(ft_fall_y,y);" {
+		t.Errorf("fall = %s", got)
+	}
+	_, diags, err := Write(strings.Replace(src, "a b ( P x )", "a b ( P x ) ( z )", 1), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) != 1 || !strings.Contains(diags[0].String(), "only coil") {
+		t.Errorf("diags = %v", diags)
+	}
+}
+
+// An edge at the head of a leg of the rung's first branch takes power
+// from the rail, so it inlines as ONS like an edge at the rung's head;
+// one deeper in a leg still takes a helper rung.
+func TestEdgeAtBranchLegHead(t *testing.T) {
+	src := `PROGRAM P
+VAR_EXTERNAL
+    a : BOOL; b : BOOL; c : BOOL; x : BOOL; y : BOOL;
+END_VAR
+LD
+  RUNG head
+    [ +a | b ] ( x )
+  RUNG deep
+    c [ b +a | c ] ( y )
+END_LD
+END_PROGRAM
+`
+	f := mustWrite(t, src, Options{})
+	rungs := f.Controller.Programs[0].Routines[0].Rungs
+	if got := rungs[0].Text; got != "[XIC(a)ONS(rt_head_a) ,XIC(b) ]OTE(x);" {
+		t.Errorf("head = %s", got)
+	}
+	if got := rungs[1].Text; got != "XIC(a)OSR(rt_deep_a,rt_deep_a_Q);" {
+		t.Errorf("deep helper = %s", got)
+	}
+	if got := rungs[2].Text; got != "XIC(c)[XIC(b) XIC(rt_deep_a_Q) ,XIC(c) ]OTE(y);" {
+		t.Errorf("deep = %s", got)
+	}
+	_, problems, err := RoundTrip(src, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range problems {
+		t.Error(p)
+	}
 }
