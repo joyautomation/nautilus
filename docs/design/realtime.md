@@ -486,19 +486,26 @@ comparison (slot lateness, both):
 | **Rust (`rt/fastloop`)** | unpinned, normal | 59 997 / 60 000 | 5.9 µs | 33 µs | 504 µs | 2.44 ms |
 | Go | pinned cpu 2, normal | 59 998 / 60 011 | 6 µs | 312 µs | 1.22 ms | 2.89 ms |
 | **Rust** | pinned cpu 2, normal | 59 986 / 60 000 | 3.8 µs | 304 µs | 1.50 ms | 2.58 ms |
+| Go | unpinned, FIFO 50 | 60 016 / 60 017 | 7.9 µs | 26.5 µs | 59 µs | 460 µs |
+| **Rust** | unpinned, FIFO 50 | 59 999 / 60 000 | 2.4 µs | 16 µs | 26 µs | 217 µs |
 | Go | pinned cpu 2, FIFO 50 | 60 001 / 60 001 | 4.5 µs | 20 µs | 56 µs | 319 µs |
-| Rust | pinned cpu 2, FIFO 50 | *needs `setcap` on the Rust binary* | | | | |
+| **Rust** | pinned cpu 2, FIFO 50 | 59 999 / 60 000 | **2.1 µs** | **15 µs** | **28 µs** | **232 µs** |
 
 Reading: **on a stock kernel the OS floor dominates and the runtime
-underneath barely shows** — Rust is a few microseconds better at p50 and
-p99, identical at p99.9 and max, and affinity-alone hurts it exactly as
-it hurts Go. What Rust removes is the thing these rows cannot show on a
+underneath shows only in the tail.** At normal priority the two are
+indistinguishable, and affinity-alone hurts Rust exactly as it hurts Go.
+Under `SCHED_FIFO`, Rust is about 2× better at p50 and p99.9 (2 µs and
+28 µs against 4.5 µs and 56 µs), a quarter better at p99 (15 against
+20 µs), and its worst case is 230 µs against 320 µs — the same order of
+magnitude, set by the stock kernel's preemption latency, not by either
+runtime. What Rust removes is what these rows still cannot show on a
 busy desktop: the Go collector's stop-the-world (worst seen in Phase 2:
 5 ms under a churning task, 0.2 ms after item 3) and the possibility of a
-Go runtime thread (GC worker, poller) landing on the loop's core. Those
-are the rows to get on an isolated core and on PREEMPT_RT, where the
-kernel's own floor drops to tens of microseconds and the runtime's tail
-becomes the tail.
+Go runtime thread landing on the loop's core. Those are the rows to get
+on an isolated core and on PREEMPT_RT, where the kernel's own floor drops
+to tens of microseconds and the runtime's tail becomes the tail. Until
+then the honest summary is: **Go with Phase 2 gives a 1 ms task 20 µs at
+p99; Rust gives 15 µs; the kernel gives both a 0.2–0.3 ms worst case.**
 
 The exchange: 0 torn reads in 55 000 supervisor reads, 0–2 stale input
 reads on the loop side in 60 000 scans, and the loop's counter advancing
@@ -613,6 +620,12 @@ each against the 5-minute idle-box runs before quoting it.
   p99 20 µs, p99.9 56 µs and a worst case of 0.32 ms — and needs one
   `setcap` to do it"** — evidence: item 4's second table. The video shot:
   that row against "unpinned, normal priority" (p99 55 µs, worst 2.3 ms).
+- **"A Rust loop with no runtime underneath, same box, same priority, is
+  15 µs at p99 against Go's 20 µs and 28 µs at p99.9 against 56 µs; the
+  worst case is the kernel's either way, 0.2–0.3 ms on a stock kernel"**
+  — evidence: the Phase 3 table. This is the number that answers the
+  poll's "Rust process" option honestly: a real but modest gain on a
+  stock kernel, whose value shows on PREEMPT_RT.
 - **"The scan loop allocates nothing: a 1 000-iteration loop with two
   builtin calls per iteration makes zero allocations per scan, and a
   loop-heavy task beside a 1 ms task went from 3 889 collections a minute
