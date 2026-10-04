@@ -32,7 +32,7 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 153 rows. **14 rows have no coverage at all** (no webview test,
+Totals: 153 rows. **12 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
@@ -43,7 +43,7 @@ no rig verb, no smoke check); per section below.
 | SFC `?` | 22 | 0 |
 | Mimic `?` | 18 | 0 |
 | Component `?` | 8 | 0 |
-| Other claims | 39 | 8 |
+| Other claims | 39 | 6 |
 
 ## Commands (package.json `contributes.commands`)
 
@@ -210,9 +210,9 @@ no rig verb, no smoke check); per section below.
 | X15 | Extension | Missing-CLI prompt Install naut; min-version warning (Update naut / Don't show again) | README Get started | — | — | 01, 02 |
 | X16 | Extension | Walkthrough opens once, outside a nautilus project | README Get started | — | — | 01 |
 | X17 | Extension | Diagnostics as you type in .st/.fbd/.ld/.sfc (naut lsp) | README Language intelligence | — | — | 01 |
-| X18 | Extension | Go to definition, hover and completion in ST | README Language intelligence | — | — | — |
+| X18 | Extension | Go to definition, hover and completion in ST | README Language intelligence | — | — | 14 |
 | X19 | Extension | *_test.yaml suites in the Testing view; run one from the gutter; failure inline on the assertion | README Testing | — | — | — |
-| X20 | Extension | JSON-schema completion and validation for nautilus.yaml, tag, alarm and test files | README Testing | — | — | — |
+| X20 | Extension | JSON-schema completion and validation for nautilus.yaml, tag, alarm and test files | README Testing | — | — | 14 (nautilus.yaml and *_test.yaml; tag and alarm files not exercised) |
 | X21 | Extension | Hidden command nautilus.fb.monitor (registered in extension.ts, not contributed in package.json) | src/extension.ts:158 | — | — | — |
 | X22 | Ladder | L5X opens read-only: pill, no palette, edits do nothing | README Rockwell L5X | diagram.test.mjs: Ladder: an L5X model is read-only | — | 10 |
 | X23 | Ladder | Declare offer (amber declare …) files an undeclared identifier under VAR_EXTERNAL or VAR | CHANGELOG 0.10.0 | diagram.test.mjs: Ladder: the declare offer covers a block call's arguments | ld_declare | — |
@@ -235,8 +235,8 @@ no rig verb, no smoke check); per section below.
 
 ## Count of rows with no coverage at all
 
-**14 of 153.** The commands are the thinnest area: only the online-edit
-commands (download / rollback 08, diff / pull 16), the title-bar buttons (04) and the previews (03, 07, 10)
+**12 of 153.** The commands are the thinnest area: only the download /
+rollback pair (08), the title-bar buttons (04) and the previews (03, 07, 10)
 are touched by any smoke check, and no webview test can reach a command because
 commands live in the extension host (that is what the E3 test-state hooks are
 for). Of the editors the FBD now has no uncovered row and the SFC is well covered; the ladder single-key shortcuts
