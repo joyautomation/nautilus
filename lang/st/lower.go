@@ -719,7 +719,7 @@ func (l *lowerer) lowerStmt(s Statement) (ir.Stmt, error) {
 			return nil, err
 		}
 		if cond.ExprType().Kind != ir.TypeBool {
-			return nil, fmt.Errorf("IF condition must be BOOL, got %s", cond.ExprType())
+			return nil, errNode(n.Condition, fmt.Errorf("IF condition must be BOOL, got %s", cond.ExprType()))
 		}
 		thenB, err := l.lowerStmts(n.Then)
 		if err != nil {
@@ -736,7 +736,7 @@ func (l *lowerer) lowerStmt(s Statement) (ir.Stmt, error) {
 				return nil, err
 			}
 			if ec.ExprType().Kind != ir.TypeBool {
-				return nil, fmt.Errorf("ELSIF condition must be BOOL, got %s", ec.ExprType())
+				return nil, errNode(n.ElsIfs[i].Condition, fmt.Errorf("ELSIF condition must be BOOL, got %s", ec.ExprType()))
 			}
 			eb, err := l.lowerStmts(n.ElsIfs[i].Body)
 			if err != nil {
@@ -784,7 +784,7 @@ func (l *lowerer) lowerStmt(s Statement) (ir.Stmt, error) {
 			return nil, err
 		}
 		if cond.ExprType().Kind != ir.TypeBool {
-			return nil, fmt.Errorf("WHILE condition must be BOOL, got %s", cond.ExprType())
+			return nil, errNode(n.Condition, fmt.Errorf("WHILE condition must be BOOL, got %s", cond.ExprType()))
 		}
 		body, err := l.lowerStmts(n.Body)
 		if err != nil {
@@ -802,7 +802,7 @@ func (l *lowerer) lowerStmt(s Statement) (ir.Stmt, error) {
 			return nil, err
 		}
 		if cond.ExprType().Kind != ir.TypeBool {
-			return nil, fmt.Errorf("UNTIL condition must be BOOL, got %s", cond.ExprType())
+			return nil, errNode(n.Condition, fmt.Errorf("UNTIL condition must be BOOL, got %s", cond.ExprType()))
 		}
 		return &ir.Repeat{Body: body, Cond: cond}, nil
 
@@ -874,7 +874,7 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 	}
 	sym, ok := l.scope[n.Call.Name]
 	if !ok {
-		return nil, fmt.Errorf("call to undeclared name %q", n.Call.Name)
+		return nil, errName(n.Call.Pos, n.Call.Name, fmt.Errorf("call to undeclared name %q", n.Call.Name))
 	}
 	if sym.typ == nil || sym.typ.Kind != ir.TypeFB {
 		return nil, fmt.Errorf("%q is not a function-block instance (declare e.g. `t1 : TON;`)", n.Call.Name)
@@ -897,7 +897,7 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 	for _, na := range n.Call.NamedArgs {
 		idx, ok := def.SlotIndex[na.Name]
 		if !ok {
-			return nil, fmt.Errorf("FB %s has no input %q", def.Name, na.Name)
+			return nil, errName(na.Pos, na.Name, fmt.Errorf("FB %s has no input %q", def.Name, na.Name))
 		}
 		if def.IsInOut(idx) {
 			target, err := l.lowerInOutArg(def, na)
@@ -906,9 +906,9 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 			}
 			slotT := def.Slot(idx).Type
 			if !slotT.Equal(target.ExprType()) {
-				return nil, fmt.Errorf("FB %s VAR_IN_OUT %q: needs a %s variable, got %s "+
+				return nil, errNode(na.Value, fmt.Errorf("FB %s VAR_IN_OUT %q: needs a %s variable, got %s "+
 					"(an IN_OUT is passed by reference, so no conversion happens)",
-					def.Name, na.Name, slotT, target.ExprType())
+					def.Name, na.Name, slotT, target.ExprType()))
 			}
 			nth := idx - len(def.Inputs) - len(def.Outputs)
 			if boundInOut[nth] {
@@ -920,7 +920,7 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 			continue
 		}
 		if !def.IsInput(idx) {
-			return nil, fmt.Errorf("FB %s field %q is not an input", def.Name, na.Name)
+			return nil, errName(na.Pos, na.Name, fmt.Errorf("FB %s field %q is not an input", def.Name, na.Name))
 		}
 		v, err := l.lowerExpr(na.Value)
 		if err != nil {
@@ -942,14 +942,14 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 	for _, ob := range n.Call.OutputBindings {
 		idx, ok := def.SlotIndex[ob.Name]
 		if !ok {
-			return nil, fmt.Errorf("FB %s has no member %q", def.Name, ob.Name)
+			return nil, errName(ob.Pos, ob.Name, fmt.Errorf("FB %s has no member %q", def.Name, ob.Name))
 		}
 		if def.IsInOut(idx) {
 			return nil, fmt.Errorf("FB %s field %q is a VAR_IN_OUT — bind it with %q := <variable>, "+
 				"which already writes back to the caller", def.Name, ob.Name, ob.Name)
 		}
 		if !def.IsOutput(idx) {
-			return nil, fmt.Errorf("FB %s field %q is not an output (=> binds outputs only)", def.Name, ob.Name)
+			return nil, errName(ob.Pos, ob.Name, fmt.Errorf("FB %s field %q is not an output (=> binds outputs only)", def.Name, ob.Name))
 		}
 		target, err := l.lowerLValue(ob.Target)
 		if err != nil {
@@ -1013,7 +1013,7 @@ func (l *lowerer) lowerExpr(e Expression) (ir.Expr, error) {
 	case *TypedLit:
 		return l.lowerExpr(n.Inner)
 	case *IdentExpr:
-		return l.lowerIdent(n.Name)
+		return l.lowerIdent(n)
 	case *MemberExpr:
 		return l.lowerMember(n)
 	case *IndexExpr:
@@ -1043,9 +1043,9 @@ func (l *lowerer) lowerCallExpr(n *CallExpr) (ir.Expr, error) {
 		// are read via member access (t1.Q), and bare `t1(...)` produces
 		// no value. Surface a clearer message when this is the case.
 		if sym, defined := l.scope[n.Name]; defined && sym.typ != nil && sym.typ.Kind == ir.TypeFB {
-			return nil, fmt.Errorf("FB instance %q can't be used as an expression — invoke it as a statement and read outputs (e.g. %s.Q)", n.Name, n.Name)
+			return nil, errName(n.Pos, n.Name, fmt.Errorf("FB instance %q can't be used as an expression — invoke it as a statement and read outputs (e.g. %s.Q)", n.Name, n.Name))
 		}
-		return nil, fmt.Errorf("unknown function %q", n.Name)
+		return nil, errName(n.Pos, n.Name, fmt.Errorf("unknown function %q", n.Name))
 	}
 	if len(n.NamedArgs) > 0 {
 		return nil, fmt.Errorf("function %s does not accept named args", sig.Name)
@@ -1080,7 +1080,7 @@ func (l *lowerer) lowerCallExpr(n *CallExpr) (ir.Expr, error) {
 		}
 		args[i] = coerce(args[i], p)
 		if !assignable(p, args[i].ExprType()) {
-			return nil, fmt.Errorf("function %s arg %d: cannot pass %s as %s", sig.Name, i+1, args[i].ExprType(), p)
+			return nil, errNode(n.Args[i], fmt.Errorf("function %s arg %d: cannot pass %s as %s", sig.Name, i+1, args[i].ExprType(), p))
 		}
 	}
 	return &ir.Call{Name: sig.Name, Args: args, Fn: sig.Fn, T: resultT}, nil
@@ -1106,7 +1106,7 @@ func (l *lowerer) lowerUserFuncCall(n *CallExpr, def *ir.FuncDef) (ir.Expr, erro
 				}
 			}
 			if idx < 0 {
-				return nil, fmt.Errorf("FUNCTION %s has no input %q", def.Name, na.Name)
+				return nil, errName(na.Pos, na.Name, fmt.Errorf("FUNCTION %s has no input %q", def.Name, na.Name))
 			}
 			if have[idx] {
 				return nil, fmt.Errorf("FUNCTION %s: input %q given twice", def.Name, na.Name)
@@ -1117,7 +1117,7 @@ func (l *lowerer) lowerUserFuncCall(n *CallExpr, def *ir.FuncDef) (ir.Expr, erro
 			}
 			v = coerce(v, def.Inputs[idx].Type)
 			if !assignable(def.Inputs[idx].Type, v.ExprType()) {
-				return nil, fmt.Errorf("FUNCTION %s arg %s: cannot pass %s as %s", def.Name, na.Name, v.ExprType(), def.Inputs[idx].Type)
+				return nil, errNode(na.Value, fmt.Errorf("FUNCTION %s arg %s: cannot pass %s as %s", def.Name, na.Name, v.ExprType(), def.Inputs[idx].Type))
 			}
 			bound[idx] = v
 			have[idx] = true
@@ -1138,7 +1138,7 @@ func (l *lowerer) lowerUserFuncCall(n *CallExpr, def *ir.FuncDef) (ir.Expr, erro
 			}
 			v = coerce(v, def.Inputs[i].Type)
 			if !assignable(def.Inputs[i].Type, v.ExprType()) {
-				return nil, fmt.Errorf("FUNCTION %s arg %d: cannot pass %s as %s", def.Name, i+1, v.ExprType(), def.Inputs[i].Type)
+				return nil, errNode(a, fmt.Errorf("FUNCTION %s arg %d: cannot pass %s as %s", def.Name, i+1, v.ExprType(), def.Inputs[i].Type))
 			}
 			bound[i] = v
 		}
@@ -1165,15 +1165,16 @@ func lowerNumberLit(n *NumberLit) (ir.Expr, error) {
 	return &ir.Lit{V: ir.IntVal(v), T: ir.IntT}, nil
 }
 
-func (l *lowerer) lowerIdent(name string) (ir.Expr, error) {
+func (l *lowerer) lowerIdent(n *IdentExpr) (ir.Expr, error) {
+	name := n.Name
 	sym, ok := l.scope[name]
 	if !ok {
 		if name == "_" {
 			// The diagram editors' placeholder: an open FBD pin, a ladder
 			// coil or contact not yet named ("+ rung" writes `( _ )`).
-			return nil, fmt.Errorf("unfilled placeholder `_`: connect this pin or name its variable")
+			return nil, errName(n.Pos, name, fmt.Errorf("unfilled placeholder `_`: connect this pin or name its variable"))
 		}
-		return nil, fmt.Errorf("undeclared identifier %q (declare in VAR_* or VAR_GLOBAL block)", name)
+		return nil, errName(n.Pos, name, fmt.Errorf("undeclared identifier %q (declare in VAR_* or VAR_GLOBAL block)", name))
 	}
 	if sym.kind == ir.VarGlobal {
 		return &ir.GlobalRef{Name: sym.global, T: sym.typ}, nil
@@ -1195,18 +1196,18 @@ func (l *lowerer) lowerMember(m *MemberExpr) (ir.Expr, error) {
 			if label == "" {
 				label = "STRUCT"
 			}
-			return nil, fmt.Errorf("field %q not found on %s", m.Member, label)
+			return nil, errName(m.MemberPos, m.Member, fmt.Errorf("field %q not found on %s", m.Member, label))
 		}
 		return &ir.MemberRef{Object: obj, FieldIdx: idx, T: ot.Struct.Fields[idx].Type}, nil
 	case ir.TypeFB:
 		idx, ok := ot.FB.SlotIndex[m.Member]
 		if !ok {
-			return nil, fmt.Errorf("FB %s has no field %q", ot.FB.Name, m.Member)
+			return nil, errName(m.MemberPos, m.Member, fmt.Errorf("FB %s has no field %q", ot.FB.Name, m.Member))
 		}
 		all := ot.FB.AllSlots()
 		return &ir.MemberRef{Object: obj, FieldIdx: idx, T: all[idx].Type}, nil
 	}
-	return nil, fmt.Errorf("member access on non-struct type %s", ot)
+	return nil, errName(m.MemberPos, m.Member, fmt.Errorf("member access on non-struct type %s", ot))
 }
 
 func (l *lowerer) lowerIndex(n *IndexExpr) (ir.Expr, error) {
@@ -1225,7 +1226,7 @@ func (l *lowerer) lowerIndex(n *IndexExpr) (ir.Expr, error) {
 			return nil, err
 		}
 		if idx.ExprType().Kind != ir.TypeInt {
-			return nil, fmt.Errorf("array index must be integer, got %s", idx.ExprType())
+			return nil, errNode(idxExpr, fmt.Errorf("array index must be integer, got %s", idx.ExprType()))
 		}
 		zero := ir.Expr(idx)
 		if curT.ArrLoBound != 0 {
@@ -1269,7 +1270,7 @@ func (l *lowerer) lowerBinary(b *BinaryExpr) (ir.Expr, error) {
 	}
 	resultT, err := resolveBinType(op, left.ExprType(), right.ExprType())
 	if err != nil {
-		return nil, fmt.Errorf("operator %s on %s and %s: %w", b.Op, left.ExprType(), right.ExprType(), err)
+		return nil, errNode(b, fmt.Errorf("operator %s on %s and %s: %w", b.Op, left.ExprType(), right.ExprType(), err))
 	}
 	if resultT.Kind == ir.TypeReal {
 		if left.ExprType().Kind == ir.TypeInt {
@@ -1290,7 +1291,7 @@ func (l *lowerer) lowerUnary(u *UnaryExpr) (ir.Expr, error) {
 	switch u.Op {
 	case "-":
 		if !x.ExprType().IsNumeric() {
-			return nil, fmt.Errorf("unary - on non-numeric %s", x.ExprType())
+			return nil, errNode(u.Operand, fmt.Errorf("unary - on non-numeric %s", x.ExprType()))
 		}
 		return &ir.UnOp{Op: ir.OpNeg, X: x, T: x.ExprType()}, nil
 	case "NOT":
@@ -1301,7 +1302,7 @@ func (l *lowerer) lowerUnary(u *UnaryExpr) (ir.Expr, error) {
 		case ir.TypeInt:
 			return &ir.UnOp{Op: ir.OpNot, X: x, T: ir.IntT}, nil
 		}
-		return nil, fmt.Errorf("NOT requires a BOOL or INT operand, got %s", x.ExprType())
+		return nil, errNode(u.Operand, fmt.Errorf("NOT requires a BOOL or INT operand, got %s", x.ExprType()))
 	}
 	return nil, fmt.Errorf("unknown unary operator %q", u.Op)
 }
