@@ -23,6 +23,23 @@ type EvalCtx struct {
 	continueLoop bool // CONTINUE — skip to the next iteration
 }
 
+// DivZeroCounter is an optional Host extension. A host that implements it
+// is told about every integer or REAL division (and MOD) by zero the VM
+// evaluates, wherever it happens — program body, FUNCTION, or FB body —
+// because they all share the host. The VM yields 0 and keeps going (see
+// docs/functions.md, "Operators"); the counter is how a controller surfaces
+// the fault without faulting the scan, the way Logix raises S:V.
+type DivZeroCounter interface {
+	DivZero()
+}
+
+func isZeroDivisor(v Value) bool {
+	if v.Kind == TypeReal {
+		return v.F == 0
+	}
+	return v.I == 0
+}
+
 // Run executes one scan of the program body against the frame.
 func Run(prog *Program, frame *Frame, host Host) error {
 	ctx := &EvalCtx{Program: prog, Frame: frame, Host: host}
@@ -341,6 +358,11 @@ func evalExpr(ctx *EvalCtx, e Expr) (Value, error) {
 		r, err := evalExpr(ctx, n.R)
 		if err != nil {
 			return Value{}, err
+		}
+		if (n.Op == OpDiv || n.Op == OpMod) && isZeroDivisor(r) {
+			if c, ok := ctx.Host.(DivZeroCounter); ok {
+				c.DivZero()
+			}
 		}
 		return evalBin(n.Op, l, r, n.T), nil
 	case *UnOp:

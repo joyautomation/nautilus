@@ -4,7 +4,9 @@
 # returns 0 (docs/functions.md says so too). The standard leaves
 # division by zero an error; Logix sets an arithmetic overflow flag and
 # yields 0/Inf, Codesys yields Inf/NaN for REAL and faults the task for
-# integers. Changing this means editing this pin on purpose.
+# integers. Changing this means editing this pin on purpose. The fault is
+# not silent: each ÷0 bumps ScanStats.DivZero (runtime_test.go pins that;
+# the suite format has no stats assertion).
 tolerance: 0.00001
 tests:
   - name: ordinary division truncates toward zero, MOD keeps the dividend's sign
