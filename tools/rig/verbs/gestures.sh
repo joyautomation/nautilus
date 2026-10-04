@@ -38,14 +38,16 @@
 #         ld_add_coil <rung> <tag> [set|reset] · ld_add_block <rung> <TYPE> [inst] [args]
 #         ld_rename_block <rung> <old> <new> · ld_declare <name> [VAR_EXTERNAL|VAR]
 #         ld_add_branch <rung> <around-tag> [leg-tag]
+#         ld_move_element <rung> <element> <target-rung> [before-element]   (drag)
 #   FBD   fbd_add_block <FN|FB TYPE> <name> [inputs|args] [x y] · fbd_zoom_to <node> [notches]
 #         fbd_wire <node.PIN> <node.PIN> · fbd_add_tag_ref <tag> [node.PIN]
-#         fbd_add_comment <text>
+#         fbd_add_comment <text> · fbd_move_node <node> <dx> <dy>   (drag; pins it)
 #   Mimic mimic_drop <Component> <x> <y> [id] · mimic_bind <id> <prop> <tag>
 #         mimic_pipe <id.port> <id.port>  (mimic_pipe_direct: the documented
 #         gesture, broken in 0.11.1 — see the content repo's
 #         ex01-lift-station/GESTURE-FINDINGS.md)
 #   Ports component_edit_ports <Component> · component_add_port <name>
+#         component_move_port <name> <dx> <dy>   (drag the dot)
 #   assert_file_contains <file> <ERE>         save, then grep
 #   LD+   ld_select_node · ld_add_contact_after · ld_wrap_branch · ld_add_leg
 #         ld_toggle_nc · ld_retag_fb_args · ld_edit_fb_args · ld_retag_placeholder
@@ -774,6 +776,125 @@ ld_delete_last_coil() {
   ! grep -Eq '(^| )\( *([SRPN] +)?[A-Za-z_][A-Za-z0-9_.]* *\) *$' <<<"$t" || { g_err "rung $rung still ends in a coil: $t"; return 1; }
 }
 
+# ld_move_element <rung> <element> <target-rung> [before-element] — drag a
+# contact or coil (named by its tag) out of <rung> and drop it on an insert
+# spot of <target-rung>: in front of [before-element] (any element of that
+# rung, named by its tag, instance or function: the spot in the same series,
+# at its index), or at the end of the rung's top-level series (a contact) or
+# of its coils (a coil: the coil zone has one spot, so coils only append).
+# <target-rung> = <rung> reorders within the rung.
+# LadderView.svelte's node drag: pointerdown on the node, more than 5 px of
+# travel, release on (or within 55 px of) a `g.spot` whose data-spot accepts
+# that kind → ONE `move` op (lang/ld/edit.go opMove). A person can only make
+# this drag with both ends on screen, so the ladder is scrolled and, if that
+# is not enough, zoomed out (Ctrl+-) until they are.
+# Read back from the saved rung texts: the element left the source rung (a
+# reorder: it is still there once), and the target has it, written as
+# before (NC / S / R kept), right in front of [before-element], or last in
+# its series (a contact: followed by a coil or nothing; a coil: the last).
+_ld_el_js() {  # <rung> <data-id> — the g.node, by its data-* (not the truncated operand)
+  printf '[...doc.querySelectorAll("svg.rsvg g.node")].find(g => g.dataset.rung === %s && g.dataset.id === %s)' "$(_q "$1")" "$(_q "$2")"
+}
+_ld_el_count_js() { printf '[...doc.querySelectorAll("svg.rsvg g.node")].filter(g => g.dataset.rung === %s && g.dataset.id === %s).length' "$(_q "$1")" "$(_q "$2")"; }
+_ld_el_count() { js "$(_ld_el_count_js "$1" "$2")"; }
+# _ld_spot_js <rung> <insert|coil> <series as JSON> <index|max>
+_ld_spot_js() {
+  local want=$4; [[ $want == max ]] && want='"max"'
+  printf '(() => { const m = [...doc.querySelectorAll("g.spot")].map(g => { try { return [g, JSON.parse(g.dataset.spot)]; } catch { return null; } }).filter(x => x && x[1].rung === %s && x[1].spot.op === %s && (x[1].spot.op === "coil" || JSON.stringify(x[1].spot.series ?? []) === %s)); const want = %s; if (!m.length) return null; if (want === "max") return m.reduce((a, b) => (b[1].spot.index > a[1].spot.index ? b : a))[0]; return m.find(x => x[1].spot.index === want)?.[0] ?? null; })()' \
+    "$(_q "$1")" "$(_q "$2")" "$(_q "$3")" "$want"
+}
+# _ld_both_on_screen <js a> <js b> — scroll each into view; zoom out until
+# both are (a drag cannot scroll the pane on the way).
+_ld_both_on_screen() {
+  local i va vb
+  for i in 1 2 3 4 5 6; do
+    g_reveal "$1" 2>/dev/null; va=$(el_box "$1" | awk '{print $5}'); vb=$(el_box "$2" | awk '{print $5}')
+    [[ $va == 1 && $vb == 1 ]] && return 0
+    g_reveal "$2" 2>/dev/null; va=$(el_box "$1" | awk '{print $5}'); vb=$(el_box "$2" | awk '{print $5}')
+    [[ $va == 1 && $vb == 1 ]] && return 0
+    diagram_zoom out 1 2>/dev/null || break
+  done
+  g_err "the two ends of the drag are never on screen together"
+}
+ld_move_element() {
+  local rung=$1 el=$2 to=$3 before=${4:-} node kind path spot src0 to0 n0 p series idx
+  G_WHAT="move $el from $rung to $to${before:+ before $before}"
+  node=$(_ld_el_js "$rung" "$el")
+  read -r kind path <<<"$(js "(() => { const g = $node; return g ? g.dataset.kind + ' ' + (g.dataset.path ?? '') : ''; })()" | tr -d '"')"
+  [[ -n $kind ]] || { g_err "no element $el on rung $rung"; return 1; }
+  [[ $kind == contact || $kind == coil ]] || { g_err "$el on $rung is a $kind — this verb moves contacts and coils"; return 1; }
+  if [[ $kind == coil ]]; then
+    [[ -z $before ]] || { g_err "a coil only appends (the coil zone has one drop spot)"; return 1; }
+    spot=$(_ld_spot_js "$to" coil '[]' max)
+  elif [[ -n $before ]]; then
+    local bpath
+    bpath=$(js "(() => { const g = $(_ld_el_js "$to" "$before"); return g && g.dataset.kind !== 'coil' ? (g.dataset.path ?? '') : ''; })()" | tr -d '"')
+    [[ -n $bpath ]] || { g_err "no series element $before on rung $to"; return 1; }
+    idx=${bpath##*.}
+    series=$([[ $bpath == *.* ]] && echo "[${bpath%.*}]" | tr '.' ',' || echo '[]')
+    spot=$(_ld_spot_js "$to" insert "$series" "$idx")
+  else
+    spot=$(_ld_spot_js "$to" insert '[]' max)
+  fi
+  js_true "$spot" || { g_err "no drop spot on rung $to for $G_WHAT"; return 1; }
+  g_save
+  src0=$(ld_rung_text "$rung"); to0=$(ld_rung_text "$to")
+  n0=$(_ld_el_count "$to" "$el")
+  _ld_both_on_screen "($node)?.querySelector('rect.hit')" "$spot" || return 1
+  p=$(el_at "($node)?.querySelector('rect.hit')") || { g_err "$el is not on screen"; return 1; }
+  g_drag_to $p "$spot" || return 1
+  if [[ $to != "$rung" ]]; then
+    ld_wait "$(_ld_el_count_js "$to" "$el") > $n0" || return 1
+  else
+    ld_wait "($node)?.dataset.path !== $(_q "$path")" || return 1
+  fi
+  g_save
+  python3 - "$src0" "$(ld_rung_text "$rung")" "$to0" "$(ld_rung_text "$to")" "$([[ $to == "$rung" ]] && echo same)" "$kind" "$el" "$before" <<'PY' >"$HOME/.g-why" || { g_err "$(cat "$HOME/.g-why")"; return 1; }
+import re, sys
+src0, src1, to0, to1, same, kind, el, before = sys.argv[1:9]
+def toks(t):
+    """A rung's text → its elements in order: (kind, name, text)."""
+    t = re.sub(r"\(\*.*?\*\)", " ", t)
+    t = re.sub(r"^\s*RUNG\s+\S+", "", t)
+    out, i = [], 0
+    while i < len(t):
+        if t[i].isspace(): i += 1; continue
+        if t[i] in "[|]": out.append(("br", t[i], t[i])); i += 1; continue
+        m = re.match(r"\(\s*(?:[SRPN]\s+)?([A-Za-z_][\w.]*)\s*\)", t[i:])
+        if m: out.append(("coil", m.group(1), re.sub(r"\s+", " ", m.group(0))));  i += m.end(); continue
+        m = re.match(r"(?:([A-Za-z_]\w*)\s*:\s*)?([A-Za-z_]\w*)\(", t[i:])
+        if m:
+            j, d = i + m.end(), 1
+            while j < len(t) and d: d += {"(": 1, ")": -1}.get(t[j], 0); j += 1
+            out.append(("call", m.group(1) or m.group(2), t[i:j])); i = j; continue
+        m = re.match(r"/?([A-Za-z_][\w.]*)", t[i:])
+        if m: out.append(("contact", m.group(1), m.group(0))); i += m.end(); continue
+        i += 1
+    return out
+def fail(msg): print(msg); sys.exit(1)
+def mine(ts): return [k for k, x in enumerate(ts) if x[0] == kind and x[1] == el]
+S0, S1, T0, T1 = toks(src0), toks(src1), toks(to0), toks(to1)
+if not mine(S0): fail((f"{el} was not on the source rung before the drag: {src0.strip()}"))
+was = S0[mine(S0)[0]][2]
+if same:
+    if len(mine(T1)) != len(mine(T0)): fail((f"{el} count changed on the rung: {to1.strip()}"))
+    if T1 == T0: fail((f"the rung did not change: {to1.strip()}"))
+else:
+    if len(mine(S1)) != len(mine(S0)) - 1: fail((f"{el} is still on the source rung: {src1.strip()}"))
+    if len(mine(T1)) != len(mine(T0)) + 1: fail((f"{el} did not arrive on the target rung: {to1.strip()}"))
+at = [k for k in mine(T1) if T1[k][2] == was]
+if not at: fail((f"{was} arrived changed: {to1.strip()}"))
+ok = False
+for k in at:
+    nxt = T1[k + 1] if k + 1 < len(T1) else None
+    if before: ok |= nxt is not None and nxt[0] != "br" and nxt[1] == before
+    elif kind == "coil": ok |= nxt is None
+    else: ok |= nxt is None or nxt[0] == "coil"
+if not ok:
+    fail((f"{was} is not {'in front of ' + before if before else 'last in its series'}: {to1.strip()}"))
+PY
+}
+
 # ── FBD ─────────────────────────────────────────────────────────────────────
 # App.svelte on @xyflow/svelte: every block, chip and note is a
 # <div class="svelte-flow__node" data-id=…>, ids from `naut fbd graph`:
@@ -957,6 +1078,69 @@ fbd_add_comment() {
   _fbd_palette "comment" "text=$1" || return 1
   fbd_wait "[...doc.querySelectorAll('.svelte-flow__node')].some(n => n.dataset.id.startsWith('cm:') && n.textContent.includes($(_q "$1")))" || return 1
   assert_file_contains "$G_FILE" "// *$(printf '%s' "$1" | sed 's/[][\.*^$()+?{}|]/\\&/g')"
+}
+
+# fbd_move_node <node> <dx> <dy> — drag a block (by its title bar) or a
+# chip (by its body) <dx>,<dy> WINDOW pixels in the diagram editor. xyflow
+# moves it, and App.svelte's onnodedragstop posts ONE setLayout op, which
+# pins the node in the file's `(* @layout … *)` block under its render id,
+# one `<id> <x>,<y>` line each, in FLOW units (lang/fbd/layout.go):
+#     (* @layout
+#       b:w.both 312,96
+#     *)
+# Read back two ways: on screen, the node's box moved by about the delta and
+# stayed there (an unpinned node snaps back to auto-layout on the next
+# render); on disk, its layout entry is its old flow position plus the delta
+# in flow units (window px ÷ window px per flow px, measured off its box).
+fbd_move_node() {
+  local node=$1 dx=$2 dy=$3 el id grip p px py b x0 y0 w0 h0 v x1 y1 w1 h1 fx fy cw i
+  G_WHAT="move $node by $dx,$dy"
+  el=$(fbd_node_el "$node")
+  js_true "$el" || { g_err "no FBD node $node"; return 1; }
+  id=$(js "($el).dataset.id" | tr -d '"')
+  grip="(($el).querySelector('.title') ?? ($el))"
+  p=$(el_settled "$grip") || { g_err "$id is not on screen"; return 1; }
+  b=$(el_box "$el") || return 1
+  read -r x0 y0 w0 h0 v <<<"$b"
+  # its flow position (xyflow's translate on the node) and flow width
+  # (offsetWidth ignores the viewport's scale)
+  read -r fx fy cw <<<"$(js "(() => { const e = $el; const m = /translate\\(([-0-9.e]+)px, *([-0-9.e]+)px\\)/.exec(e.style.transform); return m ? m[1] + ' ' + m[2] + ' ' + e.offsetWidth : ''; })()" | tr -d '"')"
+  [[ -n $cw && $cw != 0 ]] || { g_err "no flow position on $id"; return 1; }
+  read -r px py <<<"$p"
+  g_drag "$px" "$py" $((px + dx)) $((py + dy))
+  # the op round-trips (the network re-renders from the text): give it
+  # time, then the node must still be where it was dropped
+  sleep 1.5
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    b=$(el_box "$el") || { g_err "$id vanished after the drag"; return 1; }
+    read -r x1 y1 w1 h1 v <<<"$b"
+    python3 -c 'import sys; a = list(map(float, sys.argv[1:])); x0, y0, x1, y1, dx, dy = a; t = lambda d: 8 + abs(d) / 10; sys.exit(0 if abs(x1 - x0 - dx) <= t(dx) and abs(y1 - y0 - dy) <= t(dy) else 1)' \
+      "$x0" "$y0" "$x1" "$y1" "$dx" "$dy" && break
+    sleep 0.5
+  done
+  (( i < 10 )) || { g_err "$id is at $x1,$y1 on screen after the drag, not ≈ $((x0 + dx)),$((y0 + dy)) (it was at $x0,$y0)"; return 1; }
+  local f=$G_FILE; [[ $f == /* ]] || f=$PROJ/$f
+  for i in 1 2 3; do
+    g_save
+    python3 - "$f" "$id" "$fx" "$fy" "$cw" "$w0" "$dx" "$dy" <<'PY' >"$HOME/.g-why" && return 0
+import re, sys
+text, nid = open(sys.argv[1]).read(), sys.argv[2]
+fx, fy, cw, w0, dx, dy = map(float, sys.argv[3:9])
+k = w0 / cw  # window px per flow px
+ex, ey = fx + dx / k, fy + dy / k
+tol = lambda d: (8 + abs(d) / 10) / k
+m = re.search(r"\(\*\s*@layout\b(.*?)\*\)", text, re.S)
+if not m: print(f"no (* @layout *) block — {nid} was not pinned"); sys.exit(1)
+parts = m.group(1).split()
+got = dict(zip(parts[0::2], parts[1::2]))
+if nid not in got: print(f"the @layout block has no {nid} ({' '.join(got) or 'empty'})"); sys.exit(1)
+x, y = map(int, got[nid].split(","))
+if abs(x - ex) > tol(dx) or abs(y - ey) > tol(dy):
+    print(f"{nid} is pinned at {x},{y}, not ≈ {ex:.0f},{ey:.0f} (was at {fx:.0f},{fy:.0f}, moved {dx / k:.0f},{dy / k:.0f} flow px)"); sys.exit(1)
+PY
+    sleep 1
+  done
+  g_err "$(cat "$HOME/.g-why")"
 }
 
 # ── Mimic ───────────────────────────────────────────────────────────────────
@@ -1180,6 +1364,56 @@ component_add_port() {
 import json, sys
 sys.exit(0 if any(p.get("name") == sys.argv[2] for p in json.load(open(sys.argv[1])).get("ports", [])) else 1)
 PY
+}
+
+# component_move_port <name> <dx> <dy> — in the Component Editor (after
+# component_edit_ports), drag port <name>'s dot <dx>,<dy> WINDOW pixels.
+# ComponentApp.svelte: pointerdown on the dot captures the pointer, the
+# move tracks it as a fraction of the component's box (clamped to [0, 1]:
+# a port can sit inside the box, never outside), and the release commits
+# the whole port list through the same op as the ports panel.
+# Read back from the saved *.component.json: the port's x/y moved by about
+# the drag (as a fraction of the box's on-screen size, clamped), every
+# other port is unchanged, and an explicit `dir` (the direction a pipe
+# leaves the port) survives the move, as it does in the mimic editor's
+# ports mode (EditorCanvas.svelte) and the arrow-key nudge (nudgePort).
+component_move_port() {
+  local name=$1 dx=$2 dy=$3 dot before b bx by bw bh v p px py i
+  G_WHAT="move port $name by $dx,$dy"
+  [[ -n ${G_FILE:-} && $G_FILE == *.component.json ]] || { g_err "no Component Editor open (component_edit_ports first)"; return 1; }
+  dot="[...doc.querySelectorAll('circle.port')].find(c => c.dataset.id === $(_q "$name"))"
+  js_true "$dot" || { g_err "no port dot $name"; return 1; }
+  b=$(el_box 'doc.querySelector(".canvas .box")') || { g_err "no component box on the stage"; return 1; }
+  read -r bx by bw bh v <<<"$b"
+  g_save
+  before=$(cat "$G_FILE")
+  p=$(el_at "$dot") || { g_err "port $name is not on screen"; return 1; }
+  read -r px py <<<"$p"
+  g_drag "$px" "$py" $((px + dx)) $((py + dy))
+  sleep 1
+  for i in 1 2 3; do
+    g_save
+    python3 - "$G_FILE" "$before" "$name" "$dx" "$dy" "$bw" "$bh" <<'PY' >"$HOME/.g-why" && return 0
+import json, sys
+after = json.load(open(sys.argv[1])).get("ports", [])
+before = json.loads(sys.argv[2]).get("ports", [])
+name, dx, dy, bw, bh = sys.argv[3], *map(float, sys.argv[4:8])
+b = {p["name"]: p for p in before}; a = {p["name"]: p for p in after}
+if name not in a: print(f"port {name} is gone from the sidecar"); sys.exit(1)
+p0, p1 = b[name], a[name]
+clamp = lambda v: max(0.0, min(1.0, v))
+ex, ey = clamp(p0["x"] + dx / bw), clamp(p0["y"] + dy / bh)
+tol = lambda d, s: 0.02 + abs(d / s) * 0.15
+if abs(p1["x"] - ex) > tol(dx, bw) or abs(p1["y"] - ey) > tol(dy, bh):
+    print(f"port {name} is at {p1['x']},{p1['y']}, not ≈ {ex:.3f},{ey:.3f} (was {p0['x']},{p0['y']})"); sys.exit(1)
+others = [n for n in b if n != name and b[n] != a.get(n)]
+if others: print(f"the drag changed other ports too: {', '.join(others)}"); sys.exit(1)
+if "dir" in p0 and p1.get("dir") != p0["dir"]:
+    print(f"the move dropped port {name}'s dir \"{p0['dir']}\" (now {p1.get('dir', 'absent')}): x/y moved to {p1['x']},{p1['y']}"); sys.exit(1)
+PY
+    sleep 1
+  done
+  g_err "$(cat "$HOME/.g-why")"
 }
 
 # ── Ladder: series, branch and polarity edits ───────────────────────────────
