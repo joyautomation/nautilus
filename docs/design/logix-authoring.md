@@ -1049,6 +1049,106 @@ controller.
 one-shot-with-coils leg; the alias/I-O map; RTO/CTD; `( P x )` in the
 round-trip comparator is checked by shape only.
 
+### Phase E — bit access and arrays of instances (2026-10-03, night)
+
+**James's calls:** bit access — "super helpful and common in PLC IDEs so
+I'm for it"; arrays of instances — "pretty for that too, it's
+convenient"; module I/O — "we'll need to figure out how to handle I/O";
+the long tail — tempted by a nautilus setting "I'm using an A-B PLC as a
+runtime" that enables Allen-Bradley-like instructions within reason,
+since refusing them "seems a little hostile to users".
+
+**Built: bit access.** `Word.3` is bit 3 of an integer as a BOOL, in all
+three languages: a `BitRef` lvalue in the IR, read as a shift-and-mask and
+written as a read-modify-write of the word; the ST parser takes a number
+after the dot, the FBD netlist and the ladder reference grammar likewise;
+the live overlay reads the bit out of the streamed word. Found on the way:
+the type checker accepted `INT AND INT` as a bitwise integer while the VM
+evaluated AND and OR as booleans only — fixed, the VM is bitwise on
+integers now. The writer passes `Word.3` through (it is Logix's own
+spelling, on scalars, array elements and UDT members alike); the importer
+no longer refuses it (917 corpus rungs).
+
+**Built: arrays of instances.** `Timers : ARRAY [0..3] OF TON;` — each
+element its own instance with its own retained state, called by index in
+ST (`Timers[2](IN := …)`) and in a rung (`Timers[2]:TON(PT := …)`), read
+by index; the index may be a variable. The IR's call carries an instance
+lvalue; frame migration already carried arrays recursively. The writer
+emits one `TIMER[4]` / `COUNTER[2]` tag with per-element presets in its
+data; the reader now decodes arrays of structures. The importer declares
+the array once and maps `TON(T[3],?,?)` to `T[3]:TON(PT := …)` with the
+element's preset (179 corpus rungs).
+
+**Two findings from Echo, both now rules or code:**
+
+- **A Logix MOVE takes no BOOL.** `{ Cmd.7 := Status.1 }` built to
+  `RxCMP_E_AUDIT_INVALIDOPTYPE`. The writer refuses an assignment to a
+  BOOL or a bit at check time and names the coil to use (`( S x )` /
+  `( R x )`); the bits conformance project writes the bit copy as two
+  set/reset rungs.
+- **A MOVE to `.PRE` is sticky; a nautilus call binds PT every time.** The
+  arrays project presets `Timers[0]` by literal and `Timers[Sel]` by a
+  MOVE. One scan with `Sel = 0` (the harness reseeding inputs) overwrote
+  `Timers[0].PRE` for good on the controller; on nautilus the next call
+  bound PT back. Exact rule: when any call indexes an array of blocks
+  with a variable, every call on that array presets through a MOVE ahead
+  of its rung. The importer folds those MOVEs back into `PT :=`.
+
+**Measured on Echo:** `bits` 4 of 4 (contacts and coils on bits, a bit
+latched into another word, a masked compare), `arrays` 2 of 2 (four
+timers in one array, literal and computed index, a counter element
+counting a timer element's edges). Both pass on nautilus too. Downloads
+1 m 50 s – 2 m 24 s.
+
+**Measured on the corpus** (same 52 exports):
+
+| | start of Phase E | after data primitives | now |
+|---|---|---|---|
+| rungs imported | 55.9 % | 93.9 % | **97.0 %** (29,472 of 30,397) |
+| routines complete | 13.3 % | 66.1 % | **70.1 %** (676 of 964) |
+| complete program routines written back | 15 of 15 | 17 + 9 of 26 | **53 identical + 12 equivalent of 65**, 0 refused |
+
+**What still does not fit (3.0 % of rungs), and why:**
+
+- **Opaque types** — 187. MESSAGE control blocks (the MSG instruction's
+  tag) and alias tags whose export carries no type. Comes with the I/O
+  story below and with the dialect question.
+- **RES on a timer** — 179. `XIC(t.DN)RES(t)` restarts a running timer,
+  free-running pulse idiom. An IEC TON has no reset input; it restarts
+  when IN drops. Candidate for the dialect setting: a `TONR`-style block
+  with a Reset pin that the writer emits as TON + RES and the importer
+  folds the RES into.
+- **Module I/O operands** — 161. `Local:1:I.Data.3`. Proposal below.
+- **GSV / SSV** — 153. Controller system values. Dialect candidate.
+- **One-shots inside a leg that also carries coils** — 54; **mixed arrays
+  of blocks** (one array driven by TON in one rung and TOF in another) —
+  54; JSR with parameters 30; COP 35, MSG 21, TND 12, BTD, string ops.
+
+**Proposal: I/O as alias tags.** Logix already has the mechanism: an
+alias tag (`TagType="Alias" AliasFor="Local:1:I.Data.3"`) is how a Logix
+program names a rack point. A nautilus manifest tag would carry the
+binding — `- { name: StartPB, role: input, alias: "Local:1:I.Data.3" }`
+— the writer would emit the tag as an alias, and the importer would turn
+an export's alias tags into manifest tags with `alias:` and rewrite
+direct `Local:…` operands into generated alias tags. nautilus source
+never sees a rack address; the manifest is the one place the hardware
+binding lives; the nautilus runtime treats the tag as any other. What it
+needs that we do not have: the module configuration itself (the rack) in
+the project, which is the hardware `.L5X` merge deferred since Phase B,
+and which Echo cannot exercise without a module. Not built; one question
+is whether the binding belongs in the manifest or in a sibling `io.yaml`.
+
+**Proposal: the dialect setting.** `target: logix:` is already the place
+a project says it runs on Logix. A `dialect: logix` (or the target's
+presence) could enable a library of blocks with Logix semantics that
+nautilus implements natively — `TONR` (timer with a Reset pin), a
+free-running pulse block, `GSV`-style reads of a small set of system
+values (wall clock, scan time), `COP` for arrays and structures — each
+written as a FUNCTION_BLOCK in a nautilus library so the runtime, the
+writer and the importer all have one definition. "Within reason" is the
+list; MSG, JSR with parameters and string manipulation stay out.
+Not built; needs James's list.
+
 ## 8. The demo this enables
 
 James's target demo (2026-10-03), which replaces the Tier A `ab01` draft in the
