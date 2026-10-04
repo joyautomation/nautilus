@@ -121,20 +121,6 @@ if [[ -n $pid0 && -n $pid1 && $pid1 != "$pid0" ]] && ! grep -qw -- "$pid0" <<<"$
 else
   fail "C04 Restart Language Server: naut lsp pid(s) before '$pid0', after '$pid1'; '$EXITED' logged $exits0 → $exits1 time(s)" "$png"
 fi
-# Each restart builds a new LanguageClient, which makes a new output channel
-# of the same name and never disposes the old one: count them in the Output
-# view's channel picker.
-vs_cmd "Output: Show Output Channels" 2
-chans=$(pg '[...document.querySelectorAll(".quick-input-list .monaco-list-row")].map(r => r.getAttribute("aria-label")).join(" ; ")')
-png=$(shot output-channels)
-key Escape
-n=$(grep -o 'nautilus Structured Text' <<<"$chans" | wc -l)
-if (( n > 1 )); then
-  warn "C04 after one restart the Output picker lists $n 'nautilus Structured Text' channels (the old client's is never disposed; one more per restart)" "$png"
-else
-  info "C04 Output picker: $n 'nautilus Structured Text' channel(s) ($chans)" "$png"
-fi
-
 # A typo made AFTER the restart: only a live server can flag it.
 text_replace "$PROJ/sim.st" "LevelPct := LIMIT" "LevelPct := LIMIT_TYPO"
 has_errors() { (( $(errors) > 0 )); }
@@ -148,6 +134,23 @@ else
 fi
 vs_cmd "File: Revert File" 2
 clear_toasts
+
+# Each restart builds a new LanguageClient, and a client makes its output
+# channel lazily, on its first log line, and never disposes it on stop(). So
+# the first restart's new client has no channel yet; a second restart makes
+# it log its own server's exit, and the picker then has two of the name.
+vs_cmd "nautilus: Restart Language Server" 4
+wait_for 15 test -n "$(lsp_pids)" || true
+vs_cmd "Output: Show Output Channels" 2
+chans=$(pg '[...document.querySelectorAll(".quick-input-list .monaco-list-row")].map(r => r.getAttribute("aria-label")).join(" ; ")')
+png=$(shot output-channels)
+key Escape
+n=$(grep -o 'nautilus Structured Text' <<<"$chans" | wc -l)
+if (( n > 1 )); then
+  warn "C04 after two restarts the Output picker lists $n 'nautilus Structured Text' channels (each restart's client makes its own on first log and none is disposed: issue #137)" "$png"
+else
+  info "C04 after two restarts, Output picker: $n 'nautilus Structured Text' channel(s) ($chans)" "$png"
+fi
 
 # ── C05 Connect to Controller ───────────────────────────────────────────────
 # connect <url> — the palette command, the URL typed into its quick pick.
@@ -209,7 +212,7 @@ info "C07 note: the tree also follows the stream (~500 ms), so this row proves t
 # its whole title, in text.
 cb=$(pg "(() => { const a = [...document.querySelectorAll('.action-label')].find(a => /Connect to Controller/.test(a.getAttribute('aria-label') || '') && a.offsetParent !== null); return a ? Math.round(a.getBoundingClientRect().width) + 'px ' + JSON.stringify(a.textContent.trim()) + ' codicon=' + /codicon/.test(a.className) : ''; })()")
 if [[ $cb == *codicon=false* ]]; then
-  warn "C05/C07 the Live Values title bar's Connect button has no icon: it renders as text, $cb, and squeezes the view title (package.json nautilus.connect has no \"icon\")" "$png"
+  warn "C05/C07 the Live Values title bar's Connect button has no icon: it renders as text, $cb, and squeezes the view title (package.json nautilus.connect has no \"icon\": issue #138)" "$png"
 else
   info "C05/C07 the Live Values title bar's Connect button: ${cb:-not found}" "$png"
 fi
