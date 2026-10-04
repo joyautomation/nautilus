@@ -1,0 +1,39 @@
+tests:
+  - name: contacts on bits
+    steps:
+      - given: { Status: 1 }
+        scans: 2
+        expect: { Ready: true }
+      - given: { Status: 32769 }
+        scans: 2
+        expect: { Ready: false }
+      - given: { Status: 0 }
+        scans: 2
+        expect: { Ready: false }
+
+  - name: coils on bits set and clear the word
+    steps:
+      - given: { Go: true, Status: 0 }
+        scans: 2
+        expect: { Cmd: 48 }
+      - given: { Go: false }
+        scans: 2
+        expect: { Cmd: 0 }
+
+  - name: a bit moved into another word
+    steps:
+      - given: { Go: true, Status: 3 }
+        scans: 2
+        expect: { Cmd: 176, Word2: 8 }
+      - given: { Status: 0 }
+        scans: 2
+        expect: { Cmd: 48, Word2: 0 }
+
+  - name: the masked compare
+    steps:
+      - given: { Status: 11 }
+        scans: 2
+        expect: { Low3: true }
+      - given: { Status: 12 }
+        scans: 2
+        expect: { Low3: false }

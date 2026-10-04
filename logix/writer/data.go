@@ -139,6 +139,10 @@ func (c *rungCtx) assign(e ld.Element) ([]string, bool) {
 		if !ok {
 			return nil, false
 		}
+		if c.boolTarget(a.Target) {
+			c.lw.diag(ruleDataOp, c.r.Line, c.r.Name, "{ %s := %s }: Logix data instructions take no BOOL; drive %s with a coil — ( %s ), ( S %s ) / ( R %s )", a.Target, a.Value.IEC(), a.Target, a.Target, a.Target, a.Target)
+			return nil, false
+		}
 		if hasBoolOp(a.Value) {
 			c.lw.diag(ruleDataOp, c.r.Line, c.r.Name, "{ %s := %s }: a comparison or boolean operator in an assignment has no Logix data instruction; drive the BOOL with a coil", a.Target, a.Value.IEC())
 			return nil, false
@@ -247,4 +251,23 @@ func (c *rungCtx) cmpExpr(fn string, args []string, e ld.Element) (string, bool)
 		sides = append(sides, stripOuter(s))
 	}
 	return "CMP(" + sides[0] + " " + cmpOp[fn] + " " + sides[1] + ")", true
+}
+
+// boolTarget reports an assignment target that is a BOOL: a bit of an
+// integer, or a variable declared BOOL. A Logix MOVE has no BOOL operand
+// (RxCMP_E_AUDIT_INVALIDOPTYPE at build), so the rule fires at check time.
+func (c *rungCtx) boolTarget(target string) bool {
+	if _, bit := splitBit(target); bit != "" {
+		return true
+	}
+	base, rest := splitRef(target)
+	v, ok := c.lw.vars[strings.ToLower(base)]
+	if !ok {
+		return false
+	}
+	typ := strings.ToUpper(strings.TrimSpace(v.Type))
+	if i := strings.LastIndex(typ, " OF "); strings.HasPrefix(typ, "ARRAY") && i >= 0 && !strings.Contains(rest, ".") {
+		typ = strings.TrimSpace(typ[i+4:])
+	}
+	return typ == "BOOL" && !strings.Contains(rest, ".")
 }

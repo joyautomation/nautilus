@@ -1,0 +1,26 @@
+tests:
+  - name: each element times on its own preset
+    steps:
+      - given: { Go: true, Sel: 2 }
+        advance: 0.3s
+        expect: { Done0: false, Done1: false, DoneSel: false }
+      - advance: 0.4s
+        expect: { Done0: true, Done1: false, DoneSel: false }
+      - advance: 0.5s
+        expect: { Done0: true, Done1: false, DoneSel: true }
+      - advance: 1.0s
+        expect: { Done1: true }
+      - given: { Go: false }
+        scans: 2
+        expect: { Done0: false, Done1: false, DoneSel: false }
+
+  - name: the counter element counts the first timer's edges
+    steps:
+      - given: { Go: true, Sel: 3 }
+        advance: 0.7s
+        expect: { Hits: 1 }
+      - given: { Go: false }
+        scans: 2
+      - given: { Go: true }
+        advance: 0.7s
+        expect: { Hits: 1 }

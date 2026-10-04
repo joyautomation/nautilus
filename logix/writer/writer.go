@@ -195,7 +195,14 @@ type lowered struct {
 	// presetVars are TIME/integer variables that feed a preset (the only
 	// place a TIME is allowed); genNames guards generated tag names.
 	presetVars map[string]bool
-	genNames   map[string]bool
+	// computedIdx names the arrays of blocks some call indexes with a
+	// variable. Their elements' presets go through MOVE helpers at every
+	// call, literal index or not: a preset in the tag's data is set once,
+	// while a nautilus call binds PT each time — and a MOVE for the
+	// variable-indexed call would otherwise overwrite a literal-indexed
+	// element's preset for good (found on Echo, 2026-10-03).
+	computedIdx map[string]bool
+	genNames    map[string]bool
 	// types are the UDTs resolved so far (nil: known bad); rawTypes the
 	// TYPE declarations found in the libraries (types.go).
 	types    map[string]*udt
@@ -230,9 +237,12 @@ type tagDef struct {
 	Dim      int    // 0 scalar, n = Dimensions="n"
 	Value    string // scalar initial value in Logix spelling ("0", "85.0"); "" = zero
 	Preset   int64  // TIMER.PRE / COUNTER.PRE
-	Scope    string // "" controller, else the program
-	Desc     string
-	Line     int
+	// Presets holds per-element presets for an array of timers or counters
+	// (Dim > 0), keyed by index; elements not present preset to 0.
+	Presets map[int]int64
+	Scope   string // "" controller, else the program
+	Desc    string
+	Line    int
 	// Struct is set for a tag of a user-defined type; Init its manifest
 	// initial value (a map of members), when any.
 	Struct *udt
@@ -255,7 +265,7 @@ func lower(m *ld.Model, opts Options) *lowered {
 
 func lowerSrc(m *ld.Model, src string, opts Options) *lowered {
 	lw := &lowered{model: m, opts: opts, vars: map[string]ld.VarDecl{},
-		presetVars: map[string]bool{}, genNames: map[string]bool{}, aois: map[string]*aoiDef{}}
+		presetVars: map[string]bool{}, computedIdx: map[string]bool{}, genNames: map[string]bool{}, aois: map[string]*aoiDef{}}
 	lw.loadTypes()
 	lw.src = src
 	for _, v := range m.Vars {
@@ -404,15 +414,11 @@ func (lw *lowered) declare(v ld.VarDecl) {
 		}
 		lw.addTag(tagDef{Name: v.Name, DataType: "DINT", Value: strconv.FormatInt(ms, 10), Scope: scope, Line: v.Line})
 	case lw.blockType(u) != "":
-		if dim > 0 {
-			lw.diag(ruleArrayShape, v.Line, "", "%s: an array of %s is not in the v1 subset; declare one instance per element", v.Name, u)
-			return
-		}
 		if v.Init != "" {
 			lw.diag(ruleInit, v.Line, "", "%s: a %s instance takes no initializer; the preset comes from the rung (PT := / PV :=)", v.Name, u)
 			return
 		}
-		lw.addTag(tagDef{Name: v.Name, DataType: lw.blockType(u), Scope: scope, Line: v.Line})
+		lw.addTag(tagDef{Name: v.Name, DataType: lw.blockType(u), Dim: dim, Scope: scope, Line: v.Line})
 	case lw.rawTypes[strings.ToLower(u)] != nil:
 		udt, ok := lw.resolveType(typ, v.Line, v.Name)
 		if !ok {

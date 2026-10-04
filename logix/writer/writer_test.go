@@ -1035,3 +1035,130 @@ END_PROGRAM
 		t.Errorf("rungs\n got %s\nwant %s", strings.Join(got, "\n     "), strings.Join(want, "\n     "))
 	}
 }
+
+// Word.3 is Logix's own spelling for a bit of an integer, so it passes
+// through: as a contact, a coil, an assignment target, a UDT member's bit.
+func TestBitAccessPassesThrough(t *testing.T) {
+	src := `PROGRAM P
+VAR_EXTERNAL
+    Status : DINT; Cmd : INT; Words : ARRAY [0..3] OF DINT; Run : BOOL; r : REAL;
+END_VAR
+LD
+  RUNG r0
+    Status.0 /Words[2].15 ( Cmd.4 )
+  RUNG r1
+    Run { Cmd := Status.1 } ( S Cmd.5 )
+END_LD
+END_PROGRAM
+`
+	f := mustWrite(t, src, Options{})
+	rungs := f.Controller.Programs[0].Routines[0].Rungs
+	if got := rungs[0].Text; got != "XIC(Status.0)XIO(Words[2].15)OTE(Cmd.4);" {
+		t.Errorf("r0 = %s", got)
+	}
+	if got := rungs[1].Text; got != "XIC(Run)MOVE(Status.1,Cmd)OTL(Cmd.5);" {
+		t.Errorf("r1 = %s", got)
+	}
+	_, diags, err := Write(strings.Replace(src, "Status.0 /Words[2].15", "r.3", 1), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) == 0 {
+		t.Errorf("a bit of a REAL should be refused")
+	}
+	// A BOOL has no MOVE in Logix: a bit, or a BOOL variable, as an
+	// assignment target is refused with the coil to use instead.
+	for _, bad := range []string{"{ Cmd.7 := Status.1 }", "{ Run := Status.1 }"} {
+		_, diags, err := Write(strings.Replace(src, "{ Cmd := Status.1 }", bad, 1), Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(diags) != 1 || !strings.Contains(diags[0].String(), "coil") {
+			t.Errorf("%s: diags = %v", bad, diags)
+		}
+	}
+}
+
+// An array of timers or counters is one Logix tag with Dimensions, each
+// element preset from the rung that runs it; a computed index takes a
+// MOVE ahead of the rung; members of an element rewrite like any timer's.
+func TestArraysOfBlocks(t *testing.T) {
+	src := `PROGRAM P
+VAR_EXTERNAL
+    a : BOOL; b : BOOL; c : BOOL; d : BOOL; i : DINT;
+END_VAR
+VAR
+    Timers : ARRAY [0..2] OF TON;
+    Counts : ARRAY [0..1] OF CTU;
+END_VAR
+LD
+  RUNG r0
+    a Timers[0]:TON(PT := T#2S) ( b )
+  RUNG r1
+    a Timers[2]:TON(PT := T#500MS) ( c )
+  RUNG r2
+    a Timers[i]:TON(PT := T#1S)
+  RUNG r3
+    Timers[1].Q GT(Timers[0].ET, 100) ( d )
+  RUNG r4
+    +a Counts[1]:CTU(PV := 3) ( d )
+END_LD
+END_PROGRAM
+`
+	f := mustWrite(t, src, Options{})
+	var got []string
+	for _, rg := range f.Controller.Programs[0].Routines[0].Rungs {
+		got = append(got, rg.Text)
+	}
+	// Timers is indexed by a variable somewhere, so every call on it
+	// presets through a MOVE (see lowered.computedIdx); Counts is not, so
+	// its element's preset lives in the tag's data.
+	want := []string{
+		"MOVE(2000,Timers[0].PRE);",
+		"XIC(a)TON(Timers[0],?,?)XIC(Timers[0].DN)OTE(b);",
+		"MOVE(500,Timers[2].PRE);",
+		"XIC(a)TON(Timers[2],?,?)XIC(Timers[2].DN)OTE(c);",
+		"MOVE(1000,Timers[i].PRE);",
+		"XIC(a)TON(Timers[i],?,?);",
+		"XIC(Timers[1].DN)GT(Timers[0].ACC,100)OTE(d);",
+		"XIC(a)ONS(rt_r4_a)CTU(Counts[1],?,?);",
+		"XIC(Counts[1].DN)OTE(d);",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("rungs\n got %s\nwant %s", strings.Join(got, "\n     "), strings.Join(want, "\n     "))
+	}
+	var timers, counts *l5x.Tag
+	for _, tg := range f.Controller.Programs[0].Tags {
+		switch tg.Name {
+		case "Timers":
+			timers = tg
+		case "Counts":
+			counts = tg
+		}
+	}
+	if timers == nil || timers.DataType != "TIMER" || timers.Dimensions != "3" {
+		t.Fatalf("Timers tag = %+v", timers)
+	}
+	arr, _ := timers.Value.([]any)
+	pre := func(i int) any {
+		if i < len(arr) {
+			if m, ok := arr[i].(map[string]any); ok {
+				return m["PRE"]
+			}
+		}
+		return nil
+	}
+	if pre(0) != int64(0) || pre(1) != int64(0) || pre(2) != int64(0) {
+		t.Errorf("presets = %v %v %v (a variable-indexed array presets by MOVE, not data)", pre(0), pre(1), pre(2))
+	}
+	if counts == nil || counts.DataType != "COUNTER" || counts.Dimensions != "2" {
+		t.Fatalf("Counts tag = %+v", counts)
+	}
+	carr, _ := counts.Value.([]any)
+	if len(carr) != 2 {
+		t.Fatalf("Counts value = %#v", counts.Value)
+	}
+	if m, _ := carr[1].(map[string]any); m["PRE"] != int64(3) {
+		t.Errorf("Counts[1].PRE = %v, want 3", m["PRE"])
+	}
+}

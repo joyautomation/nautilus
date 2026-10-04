@@ -213,6 +213,37 @@ func (c *rungCtx) ref(ref string) (string, bool) {
 	if rest == "" || strings.HasPrefix(rest, "[") && !strings.Contains(rest, ".") {
 		return ref, true
 	}
+	// Timers[2].Q — a member of an element of an array of blocks.
+	if st := blockTypes[strings.ToUpper(elemType(v.Type))]; st != "" && strings.HasPrefix(rest, "[") && strings.HasPrefix(strings.ToUpper(strings.TrimSpace(v.Type)), "ARRAY") {
+		i := strings.Index(rest, ".")
+		if i < 0 {
+			return ref, true
+		}
+		member := rest[i+1:]
+		if to, ok := memberRewrite[st][strings.ToUpper(member)]; ok {
+			return base + rest[:i] + "." + to, true
+		}
+		c.lw.diag(ruleMember, c.r.Line, c.r.Name, "%s: %s has no %s member the Logix %s carries; the readable members are %s", ref, elemType(v.Type), member, st, membersOf(st))
+		return "", false
+	}
+	// Word.3 — a bit of an integer — is Logix's own spelling: verbatim.
+	if base2, bit := splitBit(ref); bit != "" {
+		if isIntType(typ) && (base2 == base || strings.HasPrefix(strings.TrimPrefix(base2, base), "[")) {
+			return ref, true
+		}
+		if u, ok := c.lw.types[strings.ToLower(typ)]; ok && u != nil {
+			// a bit of an integer member: check the member path without it
+			path := strings.TrimPrefix(base2[len(base):], ".")
+			if i := strings.Index(path, "."); strings.HasPrefix(base2[len(base):], "[") && i >= 0 {
+				path = path[i+1:]
+			}
+			if _, msg := u.memberPath(path); msg != "" {
+				c.lw.diag(ruleMember, c.r.Line, c.r.Name, "%s: %s", ref, msg)
+				return "", false
+			}
+			return ref, true
+		}
+	}
 	if st := blockTypes[typ]; st != "" {
 		member := strings.TrimPrefix(rest, ".")
 		if to, ok := memberRewrite[st][strings.ToUpper(member)]; ok {
@@ -485,7 +516,8 @@ func (c *rungCtx) block(e ld.Element, top, isLast bool) (text, cont string, ok b
 		c.lw.diag(ruleFB, c.r.Line, c.r.Name, "%s:%s: not in the Logix v1 subset; %s", e.Inst, e.Type, alt)
 		return "", "", false
 	}
-	if v, declared := c.lw.vars[strings.ToLower(e.Inst)]; !declared || !strings.EqualFold(strings.TrimSpace(v.Type), typ) {
+	instBase, instIdx := splitRef(e.Inst)
+	if v, declared := c.lw.vars[strings.ToLower(instBase)]; !declared || !strings.EqualFold(elemType(v.Type), typ) || (instIdx != "" && !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(v.Type)), "ARRAY")) {
 		// The compiler reports an undeclared or mistyped instance; the
 		// writer only needs to know it cannot type the tag.
 		return "", "", false
@@ -612,17 +644,38 @@ func (c *rungCtx) boolCond(expr string, e ld.Element) (string, bool) {
 // variable gets a MOVE helper rung before this one, so the structure's
 // PRE always holds the variable's current value.
 func (c *rungCtx) preset(e ld.Element, st, val string) bool {
-	tag := c.lw.findTag(e.Inst)
+	instBase, instIdx := splitRef(e.Inst)
+	tag := c.lw.findTag(instBase)
 	if tag == nil {
 		return false
 	}
-	if st == "TIMER" {
-		if ms, ok := parseTime(val); ok {
-			tag.Preset = ms
-			return true
+	// An element of an array of blocks: a literal index gets its preset
+	// in the tag's data; a computed index takes a MOVE ahead of the rung.
+	idx, literalIdx := -1, false
+	if instIdx != "" {
+		inner := strings.TrimSuffix(strings.TrimPrefix(instIdx, "["), "]")
+		if n, ok := parseInt(inner); ok {
+			idx, literalIdx = int(n), true
 		}
-	} else if n, ok := parseInt(val); ok {
-		tag.Preset = n
+	}
+	lit, isLit := int64(0), false
+	if st == "TIMER" {
+		lit, isLit = parseTime(val)
+	} else {
+		lit, isLit = parseInt(val)
+	}
+	if isLit {
+		switch {
+		case instIdx == "":
+			tag.Preset = lit
+		case literalIdx && !c.lw.computedIdx[strings.ToLower(instBase)]:
+			if tag.Presets == nil {
+				tag.Presets = map[int]int64{}
+			}
+			tag.Presets[idx] = lit
+		default:
+			c.pre = append(c.pre, rungOut{Text: "MOVE(" + strconv.FormatInt(lit, 10) + "," + e.Inst + ".PRE)", Source: c.r.Name, Line: c.r.Line})
+		}
 		return true
 	}
 	if isRef(val) && !strings.ContainsAny(val, ".[") {
@@ -652,6 +705,12 @@ func (lw *lowered) scanPresets(elems []ld.Element) {
 				lw.scanPresets(leg)
 			}
 		case "fb":
+			if base, idx := splitRef(e.Inst); idx != "" {
+				inner := strings.TrimSuffix(strings.TrimPrefix(idx, "["), "]")
+				if _, lit := parseInt(inner); !lit {
+					lw.computedIdx[strings.ToLower(base)] = true
+				}
+			}
 			for _, a := range splitArgs(e.Args) {
 				pin, val, isOut, ok := splitBinding(a)
 				if !ok || isOut {
@@ -725,4 +784,40 @@ func splitBinding(a string) (pin, val string, isOut, ok bool) {
 		}
 	}
 	return "", "", false, false
+}
+
+// splitBit separates a trailing bit index: "Word.3" → "Word", "3";
+// "P.Status.12" → "P.Status", "12". Anything else → ref, "".
+func splitBit(ref string) (string, string) {
+	i := strings.LastIndex(ref, ".")
+	if i < 0 || i == len(ref)-1 {
+		return ref, ""
+	}
+	for _, c := range ref[i+1:] {
+		if c < '0' || c > '9' {
+			return ref, ""
+		}
+	}
+	return ref[:i], ref[i+1:]
+}
+
+func isIntType(typ string) bool {
+	up := strings.ToUpper(strings.TrimSpace(typ))
+	if i := strings.LastIndex(up, " OF "); strings.HasPrefix(up, "ARRAY") && i >= 0 {
+		up = strings.TrimSpace(up[i+4:])
+	}
+	switch up {
+	case "SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "ULINT":
+		return true
+	}
+	return false
+}
+
+// elemType strips an ARRAY [..] OF wrapper: "ARRAY [0..3] OF TON" → "TON".
+func elemType(typ string) string {
+	up := strings.TrimSpace(typ)
+	if i := strings.LastIndex(strings.ToUpper(up), " OF "); strings.HasPrefix(strings.ToUpper(up), "ARRAY") && i >= 0 {
+		return strings.TrimSpace(up[i+4:])
+	}
+	return up
 }

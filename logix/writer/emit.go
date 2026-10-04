@@ -223,6 +223,24 @@ func emitTags(b *strings.Builder, tags []tagDef) {
 		w(`</Data>`)
 		w(`<Data Format="Decorated">`)
 		switch {
+		case (t.DataType == "TIMER" || t.DataType == "COUNTER") && t.Dim > 0:
+			w(`<Array DataType="%s" Dimensions="%d">`, t.DataType, t.Dim)
+			for i := 0; i < t.Dim; i++ {
+				w(`<Element Index="[%d]">`, i)
+				w(`<Structure DataType="%s">`, t.DataType)
+				w(`<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="%d"/>`, t.Presets[i])
+				w(`<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>`)
+				members := []string{"EN", "TT", "DN"}
+				if t.DataType == "COUNTER" {
+					members = []string{"CU", "CD", "DN", "OV", "UN"}
+				}
+				for _, m := range members {
+					w(`<DataValueMember Name="%s" DataType="BOOL" Value="0"/>`, m)
+				}
+				w(`</Structure>`)
+				w(`</Element>`)
+			}
+			w(`</Array>`)
 		case t.DataType == "TIMER":
 			w(`<Structure DataType="TIMER">`)
 			w(`<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="%d"/>`, t.Preset)
@@ -286,6 +304,13 @@ func decoratedValue(t tagDef) string {
 func l5kValue(t tagDef) string {
 	switch t.DataType {
 	case "TIMER", "COUNTER":
+		if t.Dim > 0 {
+			elems := make([]string, t.Dim)
+			for i := range elems {
+				elems[i] = fmt.Sprintf("[0,%d,0]", t.Presets[i])
+			}
+			return "[" + strings.Join(elems, ",") + "]"
+		}
 		return fmt.Sprintf("[0,%d,0]", t.Preset)
 	}
 	one := func() string {
