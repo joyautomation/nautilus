@@ -42,7 +42,11 @@ nautilus; copy/adapt from it.
 
 ```
 lang/st, lang/ir     IEC 61131-3 ST compiler + VM (shared substrate)
-runtime/             scan loop, Tags bus, program host; injectable Clock (virtual time)
+runtime/             scan loop (absolute schedule, clock_nanosleep on Linux, per-task
+                     isolation, cpu:/priority: placement, Lateness stats), Tags bus,
+                     program host; injectable Clock (virtual time)
+tools/jitter/        scan lateness harness; rt/ holds the Rust fast-loop spike.
+                     docs/design/realtime.md = every measurement + what we can claim
 acceptance/          deterministic virtual-time test harness; runs *_test.yaml suites
 internal/project     manifest loader — builds exactly what `naut run` runs
 internal/lsp         LSP: ST diagnostics/hover/completion, manifest-aware tags,

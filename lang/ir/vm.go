@@ -23,6 +23,23 @@ type EvalCtx struct {
 	continueLoop bool // CONTINUE — skip to the next iteration
 }
 
+// DivZeroCounter is an optional Host extension. A host that implements it
+// is told about every integer or REAL division (and MOD) by zero the VM
+// evaluates, wherever it happens — program body, FUNCTION, or FB body —
+// because they all share the host. The VM yields 0 and keeps going (see
+// docs/functions.md, "Operators"); the counter is how a controller surfaces
+// the fault without faulting the scan, the way Logix raises S:V.
+type DivZeroCounter interface {
+	DivZero()
+}
+
+func isZeroDivisor(v Value) bool {
+	if v.Kind == TypeReal {
+		return v.F == 0
+	}
+	return v.I == 0
+}
+
 // Run executes one scan of the program body against the frame.
 func Run(prog *Program, frame *Frame, host Host) error {
 	ctx := &EvalCtx{Program: prog, Frame: frame, Host: host}
@@ -342,6 +359,11 @@ func evalExpr(ctx *EvalCtx, e Expr) (Value, error) {
 		if err != nil {
 			return Value{}, err
 		}
+		if (n.Op == OpDiv || n.Op == OpMod) && isZeroDivisor(r) {
+			if c, ok := ctx.Host.(DivZeroCounter); ok {
+				c.DivZero()
+			}
+		}
 		return evalBin(n.Op, l, r, n.T), nil
 	case *UnOp:
 		x, err := evalExpr(ctx, n.X)
@@ -378,34 +400,50 @@ func evalExpr(ctx *EvalCtx, e Expr) (Value, error) {
 		}
 		return obj.Fld[n.FieldIdx], nil
 	case *Call:
-		args := make([]Value, len(n.Args))
-		for i, a := range n.Args {
-			v, err := evalExpr(ctx, a)
-			if err != nil {
-				return Value{}, err
-			}
-			args[i] = v
-		}
 		if n.Fn == nil {
 			return Value{}, fmt.Errorf("call %q has no resolved Fn", n.Name)
 		}
-		return n.Fn(args)
+		// Arguments go on the frame's scratch stack, not a fresh slice:
+		// reserve a window, fill it (a nested call stacks above it, so the
+		// window is re-sliced after each argument in case the stack grew),
+		// call, pop. Builtins never retain their args slice.
+		fr := ctx.Frame
+		base := len(fr.scratch)
+		for range n.Args {
+			fr.scratch = append(fr.scratch, Value{})
+		}
+		for i, a := range n.Args {
+			v, err := evalExpr(ctx, a)
+			if err != nil {
+				fr.scratch = fr.scratch[:base]
+				return Value{}, err
+			}
+			fr.scratch[base+i] = v
+		}
+		res, err := n.Fn(fr.scratch[base : base+len(n.Args) : base+len(n.Args)])
+		clear(fr.scratch[base:])
+		fr.scratch = fr.scratch[:base]
+		return res, err
 	case *UserCall:
 		if n.Def == nil || n.Def.Run == nil {
 			return Value{}, fmt.Errorf("user function call has no resolved Def")
 		}
-		frame := NewFuncFrame(n.Def)
+		frame := n.Def.acquireFrame()
 		for i, a := range n.Args {
 			v, err := evalExpr(ctx, a)
 			if err != nil {
+				n.Def.releaseFrame(frame)
 				return Value{}, err
 			}
 			frame.Slots[i] = CopyValue(coerceValue(v, n.Def.Inputs[i].Type))
 		}
 		if err := n.Def.Run(frame, ctx.Host); err != nil {
+			n.Def.releaseFrame(frame)
 			return Value{}, err
 		}
-		return frame.Slots[n.Def.ReturnSlot], nil
+		ret := frame.Slots[n.Def.ReturnSlot]
+		n.Def.releaseFrame(frame)
+		return ret, nil
 	}
 	return Value{}, fmt.Errorf("unknown expr %T", e)
 }
@@ -469,9 +507,15 @@ func evalBin(op BinKind, l, r Value, t *Type) Value {
 		}
 		return BoolVal(l.I >= r.I)
 	case OpAnd:
-		return BoolVal(l.B && r.B)
+		if t.Kind == TypeBool {
+			return BoolVal(l.B && r.B)
+		}
+		return Value{Kind: t.Kind, I: l.I & r.I}
 	case OpOr:
-		return BoolVal(l.B || r.B)
+		if t.Kind == TypeBool {
+			return BoolVal(l.B || r.B)
+		}
+		return Value{Kind: t.Kind, I: l.I | r.I}
 	case OpXor:
 		if t.Kind == TypeBool {
 			return BoolVal(l.B != r.B)
@@ -489,7 +533,10 @@ func evalUn(op UnKind, x Value, t *Type) Value {
 		}
 		return Value{Kind: t.Kind, I: -x.I}
 	case OpNot:
-		return BoolVal(!x.B)
+		if t.Kind == TypeBool {
+			return BoolVal(!x.B)
+		}
+		return Value{Kind: t.Kind, I: ^x.I}
 	}
 	return Value{}
 }

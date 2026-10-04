@@ -1,6 +1,16 @@
 # Changelog — @joyautomation/nautilus-hmi
 
-## Unreleased
+## 0.7.0 — 2026-10-04 (minor: additive, no breaking changes)
+
+### Added
+
+- **Scan lateness and task placement on `ScanDiagnostics`.** `ScanStats`
+  and each `TaskStats` carry a `lateness` block (late/overrun/missed
+  counters, p50/p99/p99.9/max, a log-spaced histogram) and a `sched` block
+  (requested CPUs and SCHED_FIFO priority, whether the OS granted them).
+  The panel shows late-scan, p99 and max tiles, a lateness histogram, and
+  late/p99/max columns plus placement (`cpu 2 · fifo 50`, flagged REFUSED)
+  on the tasks table. New `Lateness` and `SchedStats` types.
 
 ### Fixed
 

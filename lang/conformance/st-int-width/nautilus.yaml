@@ -1,0 +1,29 @@
+# st-int-width — every integer kind is int64: no wrap at declared widths, 64-bit ROL/ROR.
+# ST only. Outputs carry the st_ prefix like every corpus feature.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/st-int-width'
+#   go run ./cmd/naut test lang/conformance/st-int-width
+name: st-int-width
+
+tasks:
+  - program: st-int-width.st
+    scan: 10ms
+
+tags:
+  - { name: I16, role: state, init: 0, desc: "INT" }
+  - { name: D32, role: state, init: 0, desc: "DINT" }
+  - { name: U16, role: state, init: 0, desc: "UINT" }
+  - { name: W16, role: state, init: 0, desc: "WORD" }
+  - { name: N,   role: state, init: 1, desc: "Shift / rotate count" }
+  - { name: st_I16, role: state, init: 0 }
+  - { name: st_D32, role: state, init: 0 }
+  - { name: st_U16, role: state, init: 0 }
+  - { name: st_W16, role: state, init: 0 }
+  - { name: st_Mul, role: state, init: 0, desc: "D32 * D32" }
+  - { name: st_Shl, role: state, init: 0 }
+  - { name: st_Shr, role: state, init: 0 }
+  - { name: st_Rol, role: state, init: 0 }
+  - { name: st_Ror, role: state, init: 0 }
+
+driver:
+  type: memory

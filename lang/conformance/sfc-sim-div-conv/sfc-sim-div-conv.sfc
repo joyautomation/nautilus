@@ -1,0 +1,53 @@
+PROGRAM SfcSimDivConv
+VAR_EXTERNAL
+    Go : BOOL;  DoneL : BOOL;  DoneM : BOOL;  DoneR : BOOL;  Back : BOOL;
+    sfc_Idle : BOOL;  sfc_L : BOOL;  sfc_M : BOOL;  sfc_R : BOOL;
+    sfc_LD : BOOL;  sfc_MD : BOOL;  sfc_RD : BOOL;  sfc_Join : BOOL;
+END_VAR
+SFC
+
+  INITIAL_STEP Idle:
+    N sfc_Idle;
+  END_STEP
+  STEP L:
+    N sfc_L;
+  END_STEP
+  STEP M:
+    N sfc_M;
+  END_STEP
+  STEP R:
+    N sfc_R;
+  END_STEP
+  STEP LD:
+    N sfc_LD;
+  END_STEP
+  STEP MD:
+    N sfc_MD;
+  END_STEP
+  STEP RD:
+    N sfc_RD;
+  END_STEP
+  STEP Join:
+    N sfc_Join;
+  END_STEP
+
+  (* simultaneous divergence: one token becomes three *)
+  TRANSITION t_fork FROM Idle TO (L, M, R) := Go;
+  END_TRANSITION
+
+  TRANSITION t_l FROM L TO LD := DoneL;
+  END_TRANSITION
+  TRANSITION t_m FROM M TO MD := DoneM;
+  END_TRANSITION
+  TRANSITION t_r FROM R TO RD := DoneR;
+  END_TRANSITION
+
+  (* simultaneous convergence: fires only when all three legs are done *)
+  TRANSITION t_join FROM (LD, MD, RD) TO Join := TRUE;
+  END_TRANSITION
+
+  TRANSITION t_back FROM Join TO Idle := Back;
+  END_TRANSITION
+
+END_SFC
+END_PROGRAM

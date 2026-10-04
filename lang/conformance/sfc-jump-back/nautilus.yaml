@@ -1,0 +1,28 @@
+# sfc-jump-back — a transition back up the chart (the editor's jump glyph)
+# forms a loop; each lap re-enters the target step. Also pins the self-loop
+# (FROM S TO S): the step stays active and no new entry edge is produced.
+# Single sfc task (SFC-only feature).
+#
+#   go test ./lang/conformance/ -run 'TestConformance/sfc-jump-back'
+name: sfc-jump-back
+
+tasks:
+  - program: sfc-jump-back.sfc
+    scan: 1ms
+
+tags:
+  - { name: Go,    role: state, init: false, desc: "Idle -> S1" }
+  - { name: Loop,  role: state, init: false, desc: "S3 jumps back to S1 while TRUE, else on to Idle" }
+  - { name: Tick,  role: state, init: false, desc: "Hold self-loop condition" }
+  - { name: Park,  role: state, init: false, desc: "S3 -> Hold when TRUE (checked after Loop)" }
+
+  - { name: sfc_S1,    role: state, init: false }
+  - { name: sfc_S2,    role: state, init: false }
+  - { name: sfc_S3,    role: state, init: false }
+  - { name: sfc_Idle,  role: state, init: false }
+  - { name: sfc_Hold,  role: state, init: false }
+  - { name: sfc_Laps,  role: state, init: 0, desc: "P1 entries into S1" }
+  - { name: sfc_HoldEntries, role: state, init: 0, desc: "P1 entries into Hold" }
+
+driver:
+  type: memory

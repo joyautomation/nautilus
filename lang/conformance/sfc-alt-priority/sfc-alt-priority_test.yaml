@@ -1,0 +1,58 @@
+# Alternative divergence priority = declaration order (docs: languages/sfc,
+# "How a chart executes"). Out of Idle: t_x (A), t_y (B), t_w (C) in that
+# order, behind a dead convergence t_dead FROM (Idle, Ghost).
+tests:
+  - name: with every condition true the first declared branch wins alone
+    given: { A: true, B: true, C: true }
+    steps:
+      - scans: 1
+        expect: { sfc_X: true, sfc_Y: false, sfc_W: false, sfc_Idle: false, sfc_Z: false }
+      - scans: 5 # Reset is false: X holds, the losers never fire later
+        expect: { sfc_X: true, sfc_Y: false, sfc_W: false, sfc_Idle: false }
+
+  - name: a lower branch fires when the higher ones are false
+    given: { B: true, C: true }
+    steps:
+      - scans: 1
+        expect: { sfc_Y: true, sfc_X: false, sfc_W: false }
+
+  - name: the lowest branch fires when it is the only one true
+    given: { C: true }
+    steps:
+      - scans: 1
+        expect: { sfc_W: true, sfc_X: false, sfc_Y: false }
+
+  - name: a dead convergence declared first does not starve the branches below it
+    given: { B: true }
+    steps:
+      - scans: 1
+        expect: { sfc_Y: true, sfc_Z: false }
+
+  - name: with no condition true the token waits in Idle
+    steps:
+      - scans: 5
+        expect: { sfc_Idle: true, sfc_X: false, sfc_Y: false, sfc_W: false, sfc_Z: false }
+
+  - name: the token advances one step per scan (X to Idle to X again)
+    given: { A: true, Reset: true }
+    steps:
+      - scans: 1
+        expect: { sfc_X: true, sfc_Idle: false }
+      - scans: 1 # X -> Idle, and Idle's own transition reads the pre-scan snapshot
+        expect: { sfc_X: false, sfc_Idle: true }
+      - scans: 1
+        expect: { sfc_X: true, sfc_Idle: false }
+      - scans: 1
+        expect: { sfc_X: false, sfc_Idle: true }
+
+  - name: priority is re-evaluated on every visit to Idle
+    given: { A: true, B: true }
+    steps:
+      - scans: 1
+        expect: { sfc_X: true, sfc_Y: false }
+      - given: { A: false, Reset: true }
+        scans: 1 # X -> Idle
+        expect: { sfc_Idle: true }
+      - given: { Reset: false }
+        scans: 1 # now only B is true
+        expect: { sfc_Y: true, sfc_X: false }

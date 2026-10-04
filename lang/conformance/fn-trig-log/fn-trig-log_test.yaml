@@ -1,0 +1,118 @@
+# SQRT LN LOG EXP SIN COS TAN ASIN ACOS ATAN ATAN2 EXPT at known values
+# (docs/functions.md "Numeric"). Angles are radians; LOG is base 10; ATAN2
+# is (Y, X). Answers are compared to 1e-5.
+#
+# Not asserted: the domain errors (SQRT of a negative, LN of 0, ASIN
+# outside -1..1, EXPT of a negative base to a fractional power). The VM
+# returns Go's NaN/Inf for those without faulting, and NaN cannot be
+# matched by `near`, so they are left out rather than pinned half-way.
+tolerance: 0.00001
+tests:
+  - name: arbitrary argument X=4, Y=3, A=0.5
+    given: { X: 4.0, Y: 3.0, A: 0.5 }
+    steps:
+      - scans: 1
+        expect:
+          st_SQRT:  { near: 2.0 }
+          st_LN:    { near: 1.3862944 }
+          st_LOG:   { near: 0.6020600 }
+          st_EXP:   { near: 54.5981500 }
+          st_SIN:   { near: -0.7568025 }
+          st_COS:   { near: -0.6536436 }
+          st_TAN:   { near: 1.1578213 }
+          st_ASIN:  { near: 0.5235988 }
+          st_ACOS:  { near: 1.0471976 }
+          st_ATAN:  { near: 1.3258177 }
+          st_ATAN2: { near: 0.6435011 }
+          st_EXPT:  { near: 64.0 }
+
+  - name: zero - SIN 0, COS 1, SQRT 0, EXP 1, ATAN 0
+    given: { X: 0.0, Y: 0.0, A: 0.0 }
+    steps:
+      - scans: 1
+        expect:
+          st_SQRT: { near: 0.0 }
+          st_EXP:  { near: 1.0 }
+          st_SIN:  { near: 0.0 }
+          st_COS:  { near: 1.0 }
+          st_TAN:  { near: 0.0 }
+          st_ASIN: { near: 0.0 }
+          st_ACOS: { near: 1.5707963 }
+          st_ATAN: { near: 0.0 }
+          st_EXPT: { near: 1.0 } # 0 ^ 0
+
+  - name: one - LN 0, LOG 0, EXP e, SQRT 1
+    given: { X: 1.0, Y: 1.0, A: 1.0 }
+    steps:
+      - scans: 1
+        expect:
+          st_SQRT: { near: 1.0 }
+          st_LN:   { near: 0.0 }
+          st_LOG:  { near: 0.0 }
+          st_EXP:  { near: 2.7182818 }
+          st_ASIN: { near: 1.5707963 }
+          st_ACOS: { near: 0.0 }
+          st_ATAN: { near: 0.7853982 }
+          st_EXPT: { near: 1.0 }
+
+  - name: powers of ten - LOG is base 10, not natural
+    given: { X: 1000.0, Y: 0.5 }
+    steps:
+      - scans: 1
+        expect:
+          st_LOG:  { near: 3.0 }
+          st_LN:   { near: 6.9077553 }
+          st_SQRT: { near: 31.6227766 }
+          st_EXPT: { near: 31.6227766 } # x ^ 0.5 is the root
+
+  - name: ASIN and ACOS at the ends of their domain
+    given: { A: -1.0 }
+    steps:
+      - scans: 1
+        expect:
+          st_ASIN: { near: -1.5707963 }
+          st_ACOS: { near: 3.1415927 }
+
+  - name: pi/2 - SIN 1, COS 0
+    given: { X: 1.5707963 }
+    steps:
+      - scans: 1
+        expect:
+          st_SIN: { near: 1.0 }
+          st_COS: { near: 0.0 }
+
+  - name: ATAN2 is quadrant-correct where ATAN is not
+    steps:
+      - given: { Y: 1.0, X: 1.0 } # quadrant I
+        scans: 1
+        expect: { st_ATAN2: { near: 0.7853982 } }
+      - given: { Y: 1.0, X: -1.0 } # quadrant II; ATAN(-1.0) would say -pi/4
+        scans: 1
+        expect: { st_ATAN2: { near: 2.3561945 }, st_ATAN: { near: -0.7853982 } }
+      - given: { Y: -1.0, X: -1.0 } # quadrant III
+        scans: 1
+        expect: { st_ATAN2: { near: -2.3561945 } }
+      - given: { Y: -1.0, X: 1.0 } # quadrant IV
+        scans: 1
+        expect: { st_ATAN2: { near: -0.7853982 } }
+      - given: { Y: 1.0, X: 0.0 } # straight up: no division by zero
+        scans: 1
+        expect: { st_ATAN2: { near: 1.5707963 } }
+      - given: { Y: 0.0, X: -1.0 } # negative x axis
+        scans: 1
+        expect: { st_ATAN2: { near: 3.1415927 } }
+
+  - name: EXPT with a negative base and whole exponents keeps the sign
+    steps:
+      - given: { X: -2.0, Y: 3.0 }
+        scans: 1
+        expect: { st_EXPT: { near: -8.0 } }
+      - given: { X: -2.0, Y: 2.0 }
+        scans: 1
+        expect: { st_EXPT: { near: 4.0 } }
+      - given: { X: 2.0, Y: -1.0 }
+        scans: 1
+        expect: { st_EXPT: { near: 0.5 } }
+      - given: { X: 2.0, Y: 10.0 }
+        scans: 1
+        expect: { st_EXPT: { near: 1024.0 } }

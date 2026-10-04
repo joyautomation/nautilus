@@ -80,8 +80,8 @@
 	}
 	const rungs = $derived.by(() => {
 		const on = showLive && live.enabled && live.fresh;
-		const resolve = (label: string) => (on ? liveValue(label) : undefined);
 		const annotated = (model.rungs ?? []).map((r) => {
+			const resolve = (label: string) => (on ? liveValue(label, r.scope) : undefined);
 			const all = annotate([...r.elements, ...r.coils], on ? true : undefined, resolve);
 			return { r, elems: all.slice(0, r.elements.length), coils: all.slice(r.elements.length) };
 		});
@@ -130,9 +130,9 @@
 	// Diff-overlay note appended to an element's tooltip.
 	const diffNote = (el: { _diff?: string; _was?: string }) =>
 		el._diff === 'changed' ? ` — changed${el._was ? ` (was ${el._was})` : ''}` : el._diff ? ` — ${el._diff}` : '';
-	const valText = (ref: string | undefined) => {
+	const valText = (ref: string | undefined, scope?: string) => {
 		if (!showVal || !ref) return '';
-		const v = liveValue(ref);
+		const v = liveValue(ref, scope);
 		return v === undefined ? '' : formatLive(v);
 	};
 	const trunc = (s: string | undefined, n = OPERAND_LABEL_MAX) => {
@@ -729,6 +729,8 @@
 		<div class="palette" onclick={(e) => e.stopPropagation()}>
 			{#each PALETTE as item (item.label)}
 				<button
+					data-kind="chip"
+					data-id={item.label}
 					title="{item.title} — click to append at the selection, or drag onto a rung"
 					onpointerdown={(e) => beginPaletteDrag(e, item)}
 				>{item.label}</button>
@@ -796,6 +798,8 @@
 			{:else if b.t === 'note'}
 				<div
 					class="note"
+					data-kind="comment"
+					data-id={`note:${b.idx}`}
 					class:editable
 					title={editable ? 'comment — double-click to edit (Ctrl+Enter saves); empty text deletes' : undefined}
 					use:noteInteract={{ idx: b.idx, text: b.text }}
@@ -809,6 +813,8 @@
 				height={lay.height * zoom}
 				viewBox="0 0 {canvasW} {lay.height}"
 				class="rsvg {status[r.name] ?? ''}"
+				data-kind="rung"
+				data-id={r.name}
 			>
 				{#if status[r.name]}
 					<rect x="0" y="2" width="4" height={lay.height - 4} rx="2" class="statusbar" />
@@ -822,6 +828,8 @@
 				<text x={problems.length ? L.RAIL_LEFT + 14 : L.RAIL_LEFT} y="11">
 					<tspan
 						class="rungname"
+						data-kind="chip"
+						data-id={r.name}
 						class:bad={problems.length > 0}
 						class:editable
 						class:selected={selected?.whole === true && selected.rung === r.name}
@@ -831,6 +839,8 @@
 						<tspan
 							dx="8"
 							class="rungcomment"
+							data-kind="comment"
+							data-id={`rungcomment:${r.name}`}
 							class:editable
 							use:rungCommentInteract={{ rung: r.name, comment: r.comment }}
 						>(* {r.comment} *)</tspan>
@@ -838,6 +848,8 @@
 						<tspan
 							dx="8"
 							class="rungcomment ghosttext"
+							data-kind="comment"
+							data-id={`rungcomment:${r.name}`}
 							use:rungCommentInteract={{ rung: r.name, comment: '' }}
 						><title>dblclick to add a rung comment</title>(* … *)</tspan>
 					{/if}
@@ -861,6 +873,10 @@
 					<g
 						transform="translate({n.x}, {n.y})"
 						class="node"
+						data-kind={n.kind}
+						data-id={n.ann.el.ref ?? n.ann.el.inst ?? n.ann.el.fn}
+						data-rung={r.name}
+						data-path={n.path?.join('.')}
 						class:on={n.ann.val === true}
 						class:off={n.ann.val === false}
 						class:dadd={n.ann.el._diff === 'added'}
@@ -872,7 +888,7 @@
 					>
 						<rect class="hit" x="-2" y={-L.LABEL_TOP} width={n.w + 4} height={n.h + L.LABEL_TOP + L.LABEL_BOT - 4} rx="3" />
 						{#if n.kind === 'contact'}
-							<title>{n.ann.el.ref}{n.ann.el.neg ? ' (NC)' : ''} = {formatLive(liveValue(n.ann.el.ref ?? ''))}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag · N: NO/NC · B: branch around · Del · drag to move' : ''}</title>
+							<title>{n.ann.el.ref}{n.ann.el.neg ? ' (NC)' : ''} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope))}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag · N: NO/NC · B: branch around · Del · drag to move' : ''}</title>
 							<line x1="0" y1={n.h / 2} x2={n.w / 2 - 5} y2={n.h / 2} class="w {wcls(n.ann.in)}" />
 							<line x1={n.w / 2 + 5} y1={n.h / 2} x2={n.w} y2={n.h / 2} class="w {wcls(n.ann.out)}" />
 							<line x1={n.w / 2 - 5} y1="2" x2={n.w / 2 - 5} y2={n.h - 2} class="post" />
@@ -881,11 +897,11 @@
 								<line x1={n.w / 2 - 9} y1={n.h - 1} x2={n.w / 2 + 9} y2="1" class="post" />
 							{/if}
 							<text x={n.w / 2} y={n.h + 12} text-anchor="middle" class="operand">{trunc(n.ann.el.ref)}</text>
-							{#if valText(n.ann.el.ref)}
-								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true}>{valText(n.ann.el.ref)}</text>
+							{#if valText(n.ann.el.ref, r.scope)}
+								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true}>{valText(n.ann.el.ref, r.scope)}</text>
 							{/if}
 						{:else if n.kind === 'coil'}
-							<title>{n.ann.el.mode ? n.ann.el.mode + ' ' : ''}{n.ann.el.ref} = {formatLive(liveValue(n.ann.el.ref ?? ''))}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag · M: mode · Del · drag to reorder' : ''}</title>
+							<title>{n.ann.el.mode ? n.ann.el.mode + ' ' : ''}{n.ann.el.ref} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope))}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag · M: mode · Del · drag to reorder' : ''}</title>
 							<line x1="0" y1={n.h / 2} x2={n.w / 2 - 12} y2={n.h / 2} class="w {wcls(n.ann.in)}" />
 							<line x1={n.w / 2 + 12} y1={n.h / 2} x2={n.w} y2={n.h / 2} class="w {wcls(n.ann.val)}" />
 							<path d="M {n.w / 2 - 8} 2 Q {n.w / 2 - 16} {n.h / 2} {n.w / 2 - 8} {n.h - 2}" fill="none" class="post" />
@@ -894,8 +910,8 @@
 								<text x={n.w / 2} y={n.h / 2 + 4} text-anchor="middle" class="mark">{n.ann.el.mode}</text>
 							{/if}
 							<text x={n.w / 2} y={n.h + 12} text-anchor="middle" class="operand">{trunc(n.ann.el.ref)}</text>
-							{#if valText(n.ann.el.ref)}
-								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true}>{valText(n.ann.el.ref)}</text>
+							{#if valText(n.ann.el.ref, r.scope)}
+								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true}>{valText(n.ann.el.ref, r.scope)}</text>
 							{/if}
 						{:else if n.kind === 'fn'}
 							<title>{n.ann.el.fn}({n.ann.el.args}){diffNote(n.ann.el)}{editable ? ' — dblclick: edit the call (any function) · Del · drag to move' : ''}</title>
@@ -935,6 +951,8 @@
 					{#each lay.spots as s, i (i)}
 						<g
 							class="spot"
+							data-kind="chip"
+							data-id={`spot:${r.name}:${i}`}
 							data-spot={spotData(r.name, s)}
 							transform="translate({s.x}, {s.y})"
 							use:spotInteract={{ rung: r.name, spot: s }}

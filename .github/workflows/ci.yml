@@ -123,6 +123,44 @@ jobs:
       # the webview's .svelte and .ts files. Warnings (a11y) don't fail it.
       - name: Type-check the webview (svelte-check)
         run: npm --prefix webview-ui run check -- --output human
+  # The webview's real-input gesture harness (CDP-driven headless Chrome over
+  # the production bundles: mimic, FBD, LD, SFC). ubuntu-latest ships Chrome.
+  vscode-iec-gestures:
+    name: VS Code extension — webview gesture harness
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run: {working-directory: tools/vscode-iec}
+    env:
+      # Chrome's sandbox is refused on the runner (unprivileged user namespaces
+      # are restricted); the harness only adds --no-sandbox when this is set.
+      GESTURE_NO_SANDBOX: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - name: Build hmi (webview-ui's local dependency)
+        run: npm ci && npm run package
+        working-directory: hmi
+      - run: npm ci
+      - run: npm ci --prefix webview-ui
+      - run: npm --prefix webview-ui run build
+      # Every test records a clip of its run (gesture-harness/clips.mjs);
+      # the runner image may not carry ffmpeg, so make sure of it.
+      - name: ffmpeg (for the clips)
+        run: command -v ffmpeg || { sudo apt-get update -qq && sudo apt-get install -yqq --no-install-recommends ffmpeg; }
+      - run: npm --prefix webview-ui run test:gestures
+        env:
+          GESTURE_CLIPS: ${{ github.workspace }}/gesture-clips
+      # index.html in the artifact plays every clip beside its PASS/FAIL.
+      - name: Upload clips
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gesture-clips
+          path: gesture-clips
+          if-no-files-found: warn
+          retention-days: 14
   # A real VS Code with nothing useful on PATH, the way a desktop launcher
   # starts it, on each OS: the extension has to find a plain `go install` in
   # ~/go/bin (language-server diagnostics, diagram editors), and without a

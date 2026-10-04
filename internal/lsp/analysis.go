@@ -35,6 +35,10 @@ type analysis struct {
 	// typeMembers maps lowercased UDT names to their members, for member
 	// completion after a dot.
 	typeMembers map[string][]TypeMember
+	// indexed reports that Symbols/types/typeMembers came from a parse —
+	// of this text, of its declaration skeleton, or (carryDeclarations) of
+	// the document's previous version.
+	indexed bool
 }
 
 // TypeMember is one member of a UDT, as declared.
@@ -77,10 +81,58 @@ func analyze(text, prelude string, preludeLines int) analysis {
 			Source:   "nautilus-st",
 			Message:  err.Error(),
 		})
+		// The text is mid-edit, but its declarations are usually whole:
+		// index those so hover and member completion ("settle.") keep
+		// working. The parse error above stays the only diagnostic.
+		skel := declSkeleton(text)
+		if sp, err := st.Parse(skel); err == nil {
+			a.index(sp, skel, prelude, preludeLines)
+		}
 		return a
 	}
 
+	lowerProg, preludeLines := a.index(prog, text, prelude, preludeLines)
+
+	if _, err := st.Lower(lowerProg); err != nil {
+		pos := st.Pos{Line: 1, Col: 1}
+		var end st.Pos
+		msg := err.Error()
+		if le, ok := st.AsLowerError(err); ok && le.Pos.Line > 0 {
+			// The squiggle already marks the line; drop the "line N:"
+			// prefix LowerError.Error() adds. Pos/End are the offending
+			// name when the compiler knew it (an undeclared identifier, an
+			// unknown member), else the statement start.
+			pos, end, msg = le.Pos, le.End, le.Err.Error()
+		}
+		if pos.Line > preludeLines {
+			pos.Line -= preludeLines
+			if end.Line > 0 {
+				end.Line -= preludeLines
+			}
+		} else if preludeLines > 0 {
+			// The error sits inside a sibling library file (duplicate type,
+			// broken FB, ...). Surface it here at 1:1 so it isn't silently
+			// swallowed, but say where it came from.
+			pos, end = st.Pos{Line: 1, Col: 1}, st.Pos{}
+			msg = "in project library files: " + msg
+		}
+		a.Diags = append(a.Diags, Diagnostic{
+			Range:    spanRange(text, pos, end),
+			Severity: SeverityError,
+			Source:   "nautilus-st",
+			Message:  msg,
+		})
+	}
+	return a
+}
+
+// index fills the symbol table and the type indexes from prog (parsed from
+// text). Types come from the project prelude too, so it returns the program
+// to lower — prelude+text when that combination parses — and the prelude
+// line count that applies to it (0 when the prelude is not part of it).
+func (a *analysis) index(prog *st.Program, text, prelude string, preludeLines int) (*st.Program, int) {
 	a.Symbols = collectSymbols(prog)
+	a.indexed = true
 
 	lowerProg := prog
 	if prelude != "" {
@@ -97,32 +149,7 @@ func analyze(text, prelude string, preludeLines int) analysis {
 	}
 	a.types = typeIndex(lowerProg.TypeDecls)
 	a.typeMembers = typeMemberIndex(lowerProg.TypeDecls)
-
-	if _, err := st.Lower(lowerProg); err != nil {
-		pos := st.Pos{Line: 1, Col: 1}
-		msg := err.Error()
-		if le, ok := st.AsLowerError(err); ok && le.Pos.Line > 0 {
-			// The squiggle already marks the line; drop the "line N:"
-			// prefix LowerError.Error() adds.
-			pos, msg = le.Pos, le.Err.Error()
-		}
-		if pos.Line > preludeLines {
-			pos.Line -= preludeLines
-		} else if preludeLines > 0 {
-			// The error sits inside a sibling library file (duplicate type,
-			// broken FB, ...). Surface it here at 1:1 so it isn't silently
-			// swallowed, but say where it came from.
-			pos = st.Pos{Line: 1, Col: 1}
-			msg = "in project library files: " + msg
-		}
-		a.Diags = append(a.Diags, Diagnostic{
-			Range:    posRange(text, pos),
-			Severity: SeverityError,
-			Source:   "nautilus-st",
-			Message:  msg,
-		})
-	}
-	return a
+	return lowerProg, preludeLines
 }
 
 // analyzeLD compiles a Ladder Diagram document: LD → FBD netlist → the FBD
@@ -661,6 +688,21 @@ func lineRange(text string, line int) Range {
 		Start: Position{Line: line - 1, Character: start},
 		End:   Position{Line: line - 1, Character: len(l)},
 	}
+}
+
+// spanRange covers [pos, end) when the compiler reported the offending
+// token's extent (same line, inside the line's text), else falls back to
+// posRange's identifier scan from pos.
+func spanRange(text string, pos, end st.Pos) Range {
+	if end.Line == pos.Line && pos.Col >= 1 && end.Col > pos.Col {
+		if l := lineText(text, pos.Line); end.Col-1 <= len(l) {
+			return Range{
+				Start: Position{Line: pos.Line - 1, Character: pos.Col - 1},
+				End:   Position{Line: pos.Line - 1, Character: end.Col - 1},
+			}
+		}
+	}
+	return posRange(text, pos)
 }
 
 // posRange spans the identifier starting at a 1-based compiler position,

@@ -857,15 +857,15 @@
 	{/if}
 
 	{#if deleteStepConfirm}
-		<div class="addform confirm" onclick={(e) => e.stopPropagation()}>
+		<div class="addform confirm" data-testid="confirm-delete-step" onclick={(e) => e.stopPropagation()}>
 			<div class="addtitle">Delete step "{deleteStepConfirm.stepName}"?</div>
 			<div class="confirmbody">
 				{deleteStepConfirm.attached.length} attached transition{deleteStepConfirm.attached.length === 1 ? '' : 's'} reference this step.
 			</div>
 			<div class="addactions">
-				<button onclick={() => (deleteStepConfirm = null)}>cancel</button>
-				<button onclick={confirmDeleteStepCascade}>step + {deleteStepConfirm.attached.length} transition{deleteStepConfirm.attached.length === 1 ? '' : 's'}</button>
-				<button class="primary" onclick={confirmDeleteStepOnly}>step only (flag {deleteStepConfirm.attached.length})</button>
+				<button data-testid="confirm-cancel" onclick={() => (deleteStepConfirm = null)}>cancel</button>
+				<button data-testid="confirm-cascade" onclick={confirmDeleteStepCascade}>step + {deleteStepConfirm.attached.length} transition{deleteStepConfirm.attached.length === 1 ? '' : 's'}</button>
+				<button class="primary" data-testid="confirm-step-only" onclick={confirmDeleteStepOnly}>step only (flag {deleteStepConfirm.attached.length})</button>
 			</div>
 		</div>
 	{/if}
@@ -918,9 +918,9 @@
 	>
 		{#each layout.trans as r (r.t.id)}
 			{@const problems = problemsFor(r.t.line, r.t.endLine)}
-			<g class="trans {r.t.status ?? ''}" class:selected={isSelTrans(r.t.id)}>
+			<g class="trans {r.t.status ?? ''}" data-kind="transition" data-id={r.t.id} class:selected={isSelTrans(r.t.id)}>
 				{#if r.jump}
-					<g class="jump" transform="translate({r.jump.x}, {r.jump.y})" onclick={(e) => selectTrans(e, r.t.id)}>
+					<g class="jump" data-kind="transition" data-id={r.t.id} transform="translate({r.jump.x}, {r.jump.y})" onclick={(e) => selectTrans(e, r.t.id)}>
 						<title>{r.t.name ? r.t.name + ': ' : ''}{r.t.cond} — jumps to {r.t.to.join(', ')} (a loop back, drawn compact rather than as a long line){editable ? ' — click to select, dblclick condition to edit' : ''}</title>
 						<rect x="-9" y="-9" width="18" height="18" rx="3" class="jumpbox" class:double={r.double} />
 						<text y="4" text-anchor="middle" class="jumpmark">↩</text>
@@ -966,6 +966,7 @@
 			<g
 				class="step {p.step.status ?? ''}"
 				data-id={p.id}
+				data-kind="step"
 				transform="translate({pos.x}, {pos.y})"
 				class:selected={isSelStep(p.id)}
 				class:active
@@ -987,6 +988,8 @@
 						cy={p.h}
 						r="6"
 						class="connect-handle"
+						data-kind="pin"
+						data-id={p.id}
 						onpointerdown={(e) => beginConnect(e, p)}
 					><title>drag onto another step to add a transition</title></circle>
 				{/if}
@@ -1010,6 +1013,8 @@
 							     every row that runs it; otherwise it marks nothing. -->
 							<g
 								class="assocrow {actionFor(a.target)?.status ?? ''}"
+								data-kind="assoc"
+								data-id="{p.id}:{i}"
 								class:selected={isSelAssoc(p.id, i)}
 								transform="translate(0, {i * 16})"
 								onclick={(e) => selectAssoc(e, p.id, i)}
@@ -1025,7 +1030,7 @@
 							</g>
 						{/each}
 						{#if editable}
-							<g class="assocadd" transform="translate(0, {(p.step.actions?.length ?? 0) * 16})" onclick={(e) => addAssoc(e, p.step)}>
+							<g class="assocadd" data-kind="chip" data-id="addassoc:{p.id}" transform="translate(0, {(p.step.actions?.length ?? 0) * 16})" onclick={(e) => addAssoc(e, p.step)}>
 								<title>add an action association</title>
 								<text x="4" y="11">+ action</text>
 							</g>
@@ -1047,7 +1052,7 @@
 
 		{#each layout.orphans as o (o.t.id)}
 			{@const problems = problemsFor(o.t.line, o.t.endLine)}
-			<g class="orphan" class:selected={isSelTrans(o.t.id)} transform="translate({o.x}, {o.y})">
+			<g class="orphan" data-kind="transition" data-id={o.t.id} class:selected={isSelTrans(o.t.id)} transform="translate({o.x}, {o.y})">
 				<title>{o.t.name ? o.t.name + ': ' : ''}orphaned transition — FROM {fmtEnds(o.t.from)} → TO {fmtEnds(o.t.to)}{editable ? ' — click: select · dblclick: edit condition · Del: delete · ⚙: retarget' : ''}</title>
 				<rect width={o.w} height={o.h} rx="4" class="orphanbox" onclick={(e) => selectTrans(e, o.t.id)} />
 				<text x="8" y="15" class="orphanlabel">FROM {fmtEnds(o.t.from)} → TO {fmtEnds(o.t.to)}</text>
@@ -1072,7 +1077,7 @@
 
 		{#each layout.notes as n (n.index)}
 			{@const npos = posOverride(commentId(n.index), n.x, n.y)}
-			<g class="note {n.c.status ?? ''}" class:editable class:selected={isSelComment(n.index)} transform="translate({npos.x}, {npos.y})" onpointerdown={(e) => beginNoteDrag(e, n)} onclick={(e) => selectComment(e, n.index)}>
+			<g class="note {n.c.status ?? ''}" data-kind="comment" data-id={commentId(n.index)} class:editable class:selected={isSelComment(n.index)} transform="translate({npos.x}, {npos.y})" onpointerdown={(e) => beginNoteDrag(e, n)} onclick={(e) => selectComment(e, n.index)}>
 				<title>comment{editable ? ' — click: select · dblclick: edit (empty text deletes) · drag: pin position · Del: delete' : ''}</title>
 				<rect width={n.w} height={n.h} rx="3" class="notebox" ondblclick={(e) => editComment(e, n)} />
 				<text x="8" y="19" class="notetext">{n.c.text.split('\n')[0]}</text>

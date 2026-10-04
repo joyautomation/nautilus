@@ -1,0 +1,15 @@
+PROGRAM CtdFbd
+(* CTD in FBD: one block, its outputs wired to the fbd_ tags. *)
+VAR_EXTERNAL
+    CD     : BOOL;
+    LOAD   : BOOL;
+    PV     : INT;
+    fbd_Q  : BOOL;
+    fbd_CV : INT;
+END_VAR
+FBD
+  c : CTD(CD := CD, LD := LOAD, PV := PV)
+  fbd_Q  := c.Q
+  fbd_CV := c.CV
+END_FBD
+END_PROGRAM

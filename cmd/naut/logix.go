@@ -50,6 +50,10 @@ Usage:
                                        read as Program:<prog>.<tag>, initial
                                        values come from the export.
                                        "naut logix emulate -h" for the flags.
+  naut logix serve --host <plc>    Serve a running controller's tags on the
+                                       nautilus runtime API: live values and
+                                       set-value in VS Code, over EtherNet/IP.
+                                       "naut logix serve -h" for flags.
 
 Everything above is pure Go and works on an L5X already on disk. The verbs
 below drive a Logix PROJECT, which needs the Studio 5000 SDK — so they talk
@@ -121,6 +125,8 @@ func runLogix(args []string) int {
 		return runLogixInfo(args[1:])
 	case "emulate":
 		return runLogixEmulate(args[1:])
+	case "serve":
+		return runLogixServe(args[1:])
 	case "probe":
 		return runLogixProbe(args[1:])
 	case "agent":

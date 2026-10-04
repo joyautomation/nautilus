@@ -1,0 +1,108 @@
+# TP conformance. Every step asserts st_, ld_ and fbd_ together. Tasks scan at
+# 1ms; TIME values are compared in ms. The first scan is at t=1ms, so "the
+# scan IN changed on" is given + `scans: 1`, and PT-1ms / PT are `advance:`
+# steps from there.
+tests:
+  - name: IN rising starts a pulse - Q true at once, falls at PT
+    given: { IN: true }
+    steps:
+      - scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - advance: 4.999s # PT-1ms
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 4999, ld_ET: 4999, fbd_ET: 4999 }
+      - advance: 1ms # exactly PT
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+
+  - name: ET holds at PT while IN stays TRUE and no new pulse starts
+    given: { IN: true }
+    steps:
+      - scans: 1
+      - advance: 5s
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+      - advance: 10s
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+
+  # IEC 61131-3 TP timing diagram: a rising edge while the pulse runs is
+  # ignored. Q stays TRUE exactly PT after the first edge, ET keeps counting
+  # from that edge, and with IN still TRUE afterwards ET holds at PT.
+  - name: a retrigger during the pulse is ignored - Q falls PT after the first edge
+    given: { IN: true }
+    steps:
+      - scans: 1
+      - advance: 2s
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 2000, ld_ET: 2000, fbd_ET: 2000 }
+      - given: { IN: false }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 2001, ld_ET: 2001, fbd_ET: 2001 }
+      - given: { IN: true } # the retrigger: ignored, ET does not restart
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 2002, ld_ET: 2002, fbd_ET: 2002 }
+      - advance: 2.997s # PT-1ms after the first edge
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 4999, ld_ET: 4999, fbd_ET: 4999 }
+      - advance: 1ms # exactly PT after the first edge: the pulse is not extended
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+      - advance: 5s # IN still TRUE: ET holds at PT, no second pulse
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+
+  - name: IN falling mid-pulse does not shorten it
+    given: { IN: true }
+    steps:
+      - scans: 1
+      - given: { IN: false }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 1, ld_ET: 1, fbd_ET: 1 }
+      - advance: 4.998s
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 4999, ld_ET: 4999, fbd_ET: 4999 }
+      - advance: 1ms
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+      - advance: 1ms # IN FALSE and pulse over: ET clears
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+
+  # IEC 61131-3: once the pulse is over, ET resets to 0 in the very scan IN
+  # is seen FALSE (no one-scan lag), and the next rising edge starts afresh.
+  - name: a new rising edge after the pulse ended starts a fresh pulse
+    given: { IN: true }
+    steps:
+      - scans: 1
+      - advance: 5s
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+      - given: { IN: false }
+        scans: 1 # the scan IN falls: ET clears at once
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - scans: 1 # and stays clear
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - given: { IN: true }
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - advance: 4.999s
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 4999, ld_ET: 4999, fbd_ET: 4999 }
+      - advance: 1ms
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+
+  - name: IN fell during the pulse - the next rising edge after it starts a new one
+    given: { IN: true }
+    steps:
+      - scans: 1
+      - given: { IN: false }
+        scans: 1
+      - advance: 4.999s # exactly PT: the pulse ends with IN already FALSE
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+      - given: { IN: true } # the very next scan: a fresh edge, a fresh pulse
+        scans: 1
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+      - advance: 5s
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 5000, ld_ET: 5000, fbd_ET: 5000 }
+
+  - name: IN FALSE from power-up never pulses
+    steps:
+      - advance: 10s
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 0, ld_ET: 0, fbd_ET: 0 }
+
+  - name: a shorter PT given mid-run is honoured
+    given: { IN: true, PT: 100 }
+    steps:
+      - scans: 1
+      - advance: 99ms
+        expect: { st_Q: true, ld_Q: true, fbd_Q: true, st_ET: 99, ld_ET: 99, fbd_ET: 99 }
+      - advance: 1ms
+        expect: { st_Q: false, ld_Q: false, fbd_Q: false, st_ET: 100, ld_ET: 100, fbd_ET: 100 }

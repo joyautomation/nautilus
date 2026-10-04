@@ -1,0 +1,32 @@
+PROGRAM SfcStepT
+VAR_EXTERNAL
+    Go : BOOL;  Back : BOOL;
+    sfc_T : TIME;  sfc_X : BOOL;  sfc_Wait : BOOL;  sfc_Done : BOOL;
+END_VAR
+SFC
+
+  INITIAL_STEP Idle:
+  END_STEP
+  STEP Wait:
+    N sfc_Wait;
+    N Observe;
+  END_STEP
+  STEP Done:
+    N sfc_Done;
+  END_STEP
+
+  (* leaves Wait once it has been active for 100ms *)
+  TRANSITION t_go   FROM Idle TO Wait := Go;
+  END_TRANSITION
+  TRANSITION t_wait FROM Wait TO Done := Wait.T >= T#100ms;
+  END_TRANSITION
+  TRANSITION t_back FROM Done TO Idle := Back;
+  END_TRANSITION
+
+  ACTION Observe:
+    sfc_T := Wait.T;
+    sfc_X := Wait.X;
+  END_ACTION
+
+END_SFC
+END_PROGRAM

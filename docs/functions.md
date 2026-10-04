@@ -130,13 +130,13 @@ means the block accepts 2+ inputs (the `+` pin in the FBD editor).
 
 | Name | Arguments | Result | Behavior |
 | --- | --- | --- | --- |
-| `AND`, `OR`, `XOR` | n-ary BOOL (or INT for bitwise) | same | logical/bitwise |
-| `NOT` | 1 BOOL/INT | same | negation/complement |
+| `AND`, `OR`, `XOR` | n-ary BOOL (or INT for bitwise) | same | logical on BOOL; bitwise on INT, over all 64 bits (`-8 AND 6` = 0) |
+| `NOT` | 1 BOOL/INT | same | negation on BOOL; bitwise complement on INT (`NOT 0` = -1, `NOT 12` = -13) |
 | `ADD` | n-ary numeric | common type | sum |
 | `SUB` | 2 numeric | common type | difference |
 | `MUL` | n-ary numeric | common type | product |
-| `DIV` | 2 numeric | common type | quotient; integer ÷0 yields 0 (scan keeps running) |
-| `MOD` | 2 INT | INT | remainder; ÷0 yields 0 |
+| `DIV` | 2 numeric | common type | quotient; integer and REAL ÷0 yield 0 and the scan keeps running. This is a deliberate deviation (the standard calls it an error; Codesys and TIA yield IEEE ±Inf) so a bad divisor cannot propagate Inf/NaN through a control loop — and because every seam on the tag bus (`/api/state`, the SSE stream, retained state, `*_test.yaml`) is JSON, which cannot carry Inf or NaN. The fault is not silent: every ÷0 bumps the program's **`divZero`** counter in the scan stats (`/api/state` → `stats.divZero`, controller-wide, counted since start), the way Logix raises `S:V` and keeps running |
+| `MOD` | 2 INT | INT | remainder; ÷0 yields 0 and counts in `divZero` |
 | `MOVE` | 1 any | same | pass-through assignment (FBD wiring aid) |
 | `GT`, `GE`, `LT`, `LE` | 2 comparable | **BOOL** | ordering (numeric or TIME) |
 | `EQ`, `NE` | 2 comparable | **BOOL** | equality |
@@ -204,10 +204,11 @@ conversions across kinds:
 
 | Conversion | Notes |
 | --- | --- |
-| `INT_TO_REAL`, `REAL_TO_INT` | REAL→INT rounds to nearest |
+| `INT_TO_REAL`, `REAL_TO_INT` | REAL→INT rounds to nearest, ties to even (IEC 60559: 2.5 → 2, 3.5 → 4) |
 | `BOOL_TO_INT`, `INT_TO_BOOL` | 0 ↔ FALSE, nonzero → TRUE |
+| `BOOL_TO_REAL`, `REAL_TO_BOOL` | 0.0 ↔ FALSE, nonzero → TRUE |
 | `INT_TO_TIME`, `TIME_TO_INT` | the INT is **milliseconds** |
-| `REAL_TO_TIME`, `TIME_TO_REAL` | milliseconds, rounded to nearest |
+| `REAL_TO_TIME`, `TIME_TO_REAL` | milliseconds, rounded to nearest, ties to even |
 | `INT_TO_STRING`, `REAL_TO_STRING`, `BOOL_TO_STRING`, `TIME_TO_STRING` | formatting |
 | `STRING_TO_INT`, `STRING_TO_REAL`, `STRING_TO_BOOL` | parse; a non-parsing string is a runtime scan fault, so validate upstream |
 
@@ -221,7 +222,7 @@ scans. Outputs read as `inst.Pin` from any language.
 | --- | --- | --- | --- |
 | `TON` | `IN: BOOL, PT: TIME` | `Q: BOOL, ET: TIME` | on-delay: Q rises after IN has been TRUE for PT; ET is elapsed |
 | `TOF` | `IN, PT` | `Q, ET` | off-delay: Q stays TRUE for PT after IN drops |
-| `TP` | `IN, PT` | `Q, ET` | pulse: rising IN produces a PT-wide TRUE pulse |
+| `TP` | `IN, PT` | `Q, ET` | pulse: rising IN produces a PT-wide TRUE pulse; a rising edge during the pulse is ignored; afterwards ET holds at PT while IN stays TRUE and returns to 0 the scan IN is FALSE |
 | `CTU` | `CU: BOOL, R: BOOL, PV: INT` | `Q: BOOL, CV: INT` | count rising CU edges; Q when CV ≥ PV; R resets |
 | `CTD` | `CD: BOOL, LD: BOOL, PV: INT` | `Q, CV` | count down from PV (LD loads); Q when CV ≤ 0 |
 | `CTUD` | `CU, CD, R, LD, PV` | `QU, QD, CV` | up/down counter |

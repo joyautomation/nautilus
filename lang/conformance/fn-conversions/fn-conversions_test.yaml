@@ -1,0 +1,88 @@
+# Every X_TO_Y in docs/functions.md "Type conversions", plus TRUNC.
+#
+# REAL_TO_INT and REAL_TO_TIME round ties to even (IEC 60559, decision 4
+# in the test plan: the same as Codesys, Logix REAL->DINT and TIA ROUND);
+# TRUNC stays toward zero. BOOL_TO_REAL and REAL_TO_BOOL are registered
+# but missing from the docs table; they are pinned here anyway.
+# TIME is milliseconds everywhere.
+tolerance: 0.00001
+tests:
+  - name: REAL_TO_INT rounds half to even, not half away from zero
+    steps:
+      - { given: { R: 2.5 },    scans: 1, expect: { st_REAL_TO_INT: 2 } }
+      - { given: { R: 3.5 },    scans: 1, expect: { st_REAL_TO_INT: 4 } }
+      - { given: { R: -2.5 },   scans: 1, expect: { st_REAL_TO_INT: -2 } }
+      - { given: { R: -3.5 },   scans: 1, expect: { st_REAL_TO_INT: -4 } }
+      - { given: { R: 0.5 },    scans: 1, expect: { st_REAL_TO_INT: 0 } }
+      - { given: { R: 1.5 },    scans: 1, expect: { st_REAL_TO_INT: 2 } }
+      - { given: { R: 1.4999 }, scans: 1, expect: { st_REAL_TO_INT: 1 } }
+      - { given: { R: 2.5001 }, scans: 1, expect: { st_REAL_TO_INT: 3 } }
+      - { given: { R: -0.4 },   scans: 1, expect: { st_REAL_TO_INT: 0 } }
+      - { given: { R: 7.0 },    scans: 1, expect: { st_REAL_TO_INT: 7 } }
+
+  - name: REAL_TO_TIME rounds milliseconds half to even
+    steps:
+      - { given: { R: 2.5 },      scans: 1, expect: { st_REAL_TO_TIME: 2 } }
+      - { given: { R: 3.5 },      scans: 1, expect: { st_REAL_TO_TIME: 4 } }
+      - { given: { R: 1500.5 },   scans: 1, expect: { st_REAL_TO_TIME: 1500 } }
+      - { given: { R: 1501.5 },   scans: 1, expect: { st_REAL_TO_TIME: 1502 } }
+      - { given: { R: 0.4 },      scans: 1, expect: { st_REAL_TO_TIME: 0 } }
+      - { given: { R: 5000.0 },   scans: 1, expect: { st_REAL_TO_TIME: 5000 } }
+
+  - name: TRUNC goes toward zero for both signs
+    steps:
+      - { given: { R: 2.9 },  scans: 1, expect: { st_TRUNC: 2 } }
+      - { given: { R: -2.9 }, scans: 1, expect: { st_TRUNC: -2 } }
+      - { given: { R: 2.5 },  scans: 1, expect: { st_TRUNC: 2 } }
+      - { given: { R: -0.9 }, scans: 1, expect: { st_TRUNC: 0 } }
+
+  - name: INT and REAL
+    steps:
+      - { given: { I: 42 },  scans: 1, expect: { st_INT_TO_REAL: { near: 42.0 } } }
+      - { given: { I: -7 },  scans: 1, expect: { st_INT_TO_REAL: { near: -7.0 } } }
+      - { given: { I: 0 },   scans: 1, expect: { st_INT_TO_REAL: { near: 0.0 } } }
+
+  - name: BOOL to INT and REAL, INT and REAL to BOOL
+    steps:
+      - { given: { B: true },  scans: 1, expect: { st_BOOL_TO_INT: 1, st_BOOL_TO_REAL: { near: 1.0 } } }
+      - { given: { B: false }, scans: 1, expect: { st_BOOL_TO_INT: 0, st_BOOL_TO_REAL: { near: 0.0 } } }
+      - { given: { I: 0 },  scans: 1, expect: { st_INT_TO_BOOL: false } }
+      - { given: { I: 1 },  scans: 1, expect: { st_INT_TO_BOOL: true } }
+      - { given: { I: -5 }, scans: 1, expect: { st_INT_TO_BOOL: true } } # any nonzero
+      - { given: { R: 0.0 },  scans: 1, expect: { st_REAL_TO_BOOL: false } }
+      - { given: { R: 0.25 }, scans: 1, expect: { st_REAL_TO_BOOL: true } }
+      - { given: { R: -3.0 }, scans: 1, expect: { st_REAL_TO_BOOL: true } }
+
+  - name: TIME is milliseconds in both directions
+    steps:
+      - { given: { I: 1500 }, scans: 1, expect: { st_INT_TO_TIME: 1500 } }
+      - { given: { T: 5000 }, scans: 1, expect: { st_TIME_TO_INT: 5000, st_TIME_TO_REAL: { near: 5000.0 } } }
+      - { given: { T: 0 },    scans: 1, expect: { st_TIME_TO_INT: 0, st_TIME_TO_REAL: { near: 0.0 } } }
+      - { given: { I: 0 },    scans: 1, expect: { st_INT_TO_TIME: 0 } }
+
+  - name: formatting to STRING
+    steps:
+      - { given: { I: 42 },    scans: 1, expect: { st_INT_TO_STRING: "42" } }
+      - { given: { I: -7 },    scans: 1, expect: { st_INT_TO_STRING: "-7" } }
+      - { given: { I: 0 },     scans: 1, expect: { st_INT_TO_STRING: "0" } }
+      - { given: { R: 21.5 },  scans: 1, expect: { st_REAL_TO_STRING: "21.5" } }
+      - { given: { R: 3.0 },   scans: 1, expect: { st_REAL_TO_STRING: "3" } } # shortest form, no trailing .0
+      - { given: { R: -0.25 }, scans: 1, expect: { st_REAL_TO_STRING: "-0.25" } }
+      - { given: { B: true },  scans: 1, expect: { st_BOOL_TO_STRING: "TRUE" } }
+      - { given: { B: false }, scans: 1, expect: { st_BOOL_TO_STRING: "FALSE" } }
+      - { given: { T: 5000 },  scans: 1, expect: { st_TIME_TO_STRING: "T#5000ms" } }
+      - { given: { T: 0 },     scans: 1, expect: { st_TIME_TO_STRING: "T#0ms" } }
+
+  - name: parsing from STRING
+    steps:
+      - { given: { SI: "42" },    scans: 1, expect: { st_STRING_TO_INT: 42 } }
+      - { given: { SI: "-17" },   scans: 1, expect: { st_STRING_TO_INT: -17 } }
+      - { given: { SI: " 8 " },   scans: 1, expect: { st_STRING_TO_INT: 8 } } # surrounding blanks are trimmed
+      - { given: { SR: "2.5" },   scans: 1, expect: { st_STRING_TO_REAL: { near: 2.5 } } }
+      - { given: { SR: "-0.125" }, scans: 1, expect: { st_STRING_TO_REAL: { near: -0.125 } } }
+      - { given: { SR: "7" },     scans: 1, expect: { st_STRING_TO_REAL: { near: 7.0 } } }
+      - { given: { SB: "TRUE" },  scans: 1, expect: { st_STRING_TO_BOOL: true } }
+      - { given: { SB: "true" },  scans: 1, expect: { st_STRING_TO_BOOL: true } } # case-insensitive
+      - { given: { SB: "1" },     scans: 1, expect: { st_STRING_TO_BOOL: true } }
+      - { given: { SB: "FALSE" }, scans: 1, expect: { st_STRING_TO_BOOL: false } }
+      - { given: { SB: "0" },     scans: 1, expect: { st_STRING_TO_BOOL: false } }

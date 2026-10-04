@@ -34,7 +34,10 @@ import (
 // Expect is a conjunction of terms — all must hold.
 type Expect struct {
 	Terms []Term
-	Line  int
+	Line  int // the value node's line
+	// KeyLine is the line of the `expect:` / `always:` key itself, stamped
+	// by the step that owns it (a node cannot see its own key).
+	KeyLine int
 }
 
 // Term is either one tag's matcher or one ST expression.
@@ -42,7 +45,19 @@ type Term struct {
 	Tag     string // "" when this is an expression
 	Matcher Matcher
 	Expr    string // "" when this is a tag matcher
-	Line    int
+	Line    int    // the tag key's line, or the expression's
+}
+
+// line is where a failure of this term points: the term itself, else the
+// key that holds it.
+func (e *Expect) line(t Term) int {
+	switch {
+	case t.Line > 0:
+		return t.Line
+	case e.KeyLine > 0:
+		return e.KeyLine
+	}
+	return e.Line
 }
 
 // UnmarshalYAML accepts a mapping of tag→matcher, a single expression

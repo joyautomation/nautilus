@@ -65,7 +65,7 @@
 			{/if}
 			{#each vars as v (v.section + ':' + v.name)}
 				{@const val = liveValue(v.name)}
-				<div class="row" title="line {v.line}{used.has(v.name.toLowerCase()) ? '' : ' — declared but not referenced by the logic; it appears in the diagram once something reads or writes it'}">
+				<div class="row" data-kind="chip" data-id={v.name} data-section={v.section} title="line {v.line}{used.has(v.name.toLowerCase()) ? '' : ' — declared but not referenced by the logic; it appears in the diagram once something reads or writes it'}">
 					<span class="badge {v.section === 'VAR_EXTERNAL' ? 'ext' : ''}">{SECTION_BADGE[v.section] ?? v.section}</span>
 					<span class="name">{v.name}</span>
 					<span class="type">: {v.type}{v.init ? ` := ${v.init}` : ''}</span>
@@ -85,6 +85,8 @@
 					{#if !readonly}
 						<button
 							class="del"
+			data-kind="chip"
+			data-id="del:{v.name}"
 							title="Delete this declaration (references it still has become diagnostics)"
 							onclick={() => onDelete(v.name)}
 						>×</button>

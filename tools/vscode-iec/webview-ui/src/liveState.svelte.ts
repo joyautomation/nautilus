@@ -5,7 +5,7 @@
 // frame rate without rebuilding the Svelte Flow node array, so drags,
 // selections, and open inputs are never disturbed by a data update.
 
-import { resolveLabel, arrayLowerBounds, member } from './liveResolve';
+import { resolveLabel, resolveScoped, arrayLowerBounds, member } from './liveResolve';
 import type { VarDecl } from './layout';
 
 export { member };
@@ -44,9 +44,11 @@ export function setVarBounds(vars: VarDecl[]): void {
 
 /** Resolve a diagram label — "PumpRun", "Motor.Speed", "TempHist[2]",
  * "m[1][2]", "tbl[i].val" (variable indexes follow their own live value) —
- * against the value map. undefined = no pill. */
-export function liveValue(label: string): unknown {
+ * against the value map. undefined = no pill. `scope` is a Logix rung's
+ * (see resolveScoped); nautilus source has none. */
+export function liveValue(label: string, scope?: string): unknown {
 	if (!live.enabled || !label) return undefined;
+	if (scope) return resolveScoped(live.values, scope, label);
 	return resolveLabel(live.values, live.bounds, label);
 }
 

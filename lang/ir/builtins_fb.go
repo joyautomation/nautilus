@@ -132,8 +132,15 @@ func registerTOF() {
 
 // ─── TP: pulse timer ────────────────────────────────────────────────
 //
-// On rising edge of IN, Q goes high for exactly PT (regardless of
-// whether IN stays true). _started is the rising-edge timestamp.
+// IEC 61131-3 timing diagram: a rising edge of IN while the timer is idle
+// starts a pulse; Q is TRUE for exactly PT from that edge, whatever IN
+// does meanwhile — a further rising edge during the pulse is ignored (ET
+// keeps counting from the first edge). When the pulse ends, ET holds at
+// PT for as long as IN stays TRUE and returns to 0 in the scan IN is seen
+// FALSE; only then can a new edge start a new pulse. (If IN fell during
+// the pulse, ET reads PT in the scan the pulse ends and 0 from the next.)
+// _started is the rising-edge timestamp (0 = idle); Q doubles as the
+// "pulse was running last scan" state, as in the vendors' TP.
 
 func registerTP() {
 	RegisterFB(&FBDef{
@@ -147,25 +154,30 @@ func registerTP() {
 			startedIdx, prevIdx := 4, 5
 			prev := inst.Slots[prevIdx].B
 			started := inst.Slots[startedIdx].I
-			if in && !prev {
+			if started == 0 && in && !prev {
 				started = ctx.NowMs
 				inst.Slots[startedIdx] = TimeVal(started)
 			}
-			if started > 0 {
-				elapsed := ctx.NowMs - started
-				if elapsed >= pt {
-					inst.Slots[2] = BoolVal(false)
-					inst.Slots[3] = TimeVal(pt)
-					if !in {
-						inst.Slots[startedIdx] = TimeVal(0)
-					}
-				} else {
-					inst.Slots[2] = BoolVal(true)
-					inst.Slots[3] = TimeVal(elapsed)
-				}
-			} else {
+			wasPulsing := inst.Slots[2].B
+			switch elapsed := ctx.NowMs - started; {
+			case started == 0: // idle
 				inst.Slots[2] = BoolVal(false)
 				inst.Slots[3] = TimeVal(0)
+			case elapsed < pt: // pulsing
+				inst.Slots[2] = BoolVal(true)
+				inst.Slots[3] = TimeVal(elapsed)
+			case in: // pulse over, IN still TRUE: ET holds at PT
+				inst.Slots[2] = BoolVal(false)
+				inst.Slots[3] = TimeVal(pt)
+			case wasPulsing: // pulse ends this scan with IN already FALSE: ET
+				// reads PT for this scan, and the timer is idle from the next
+				inst.Slots[2] = BoolVal(false)
+				inst.Slots[3] = TimeVal(pt)
+				inst.Slots[startedIdx] = TimeVal(0)
+			default: // pulse over and IN now FALSE: back to idle this scan
+				inst.Slots[2] = BoolVal(false)
+				inst.Slots[3] = TimeVal(0)
+				inst.Slots[startedIdx] = TimeVal(0)
 			}
 			inst.Slots[prevIdx] = BoolVal(in)
 			return nil

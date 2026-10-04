@@ -172,7 +172,7 @@ func registerConversionBuiltins() {
 		fn   BuiltinFn
 	}{
 		{"INT_TO_REAL", IntT, RealT, func(a []Value) (Value, error) { return RealVal(float64(a[0].I)), nil }},
-		{"REAL_TO_INT", RealT, IntT, func(a []Value) (Value, error) { return IntVal(int64(math.Round(a[0].F))), nil }},
+		{"REAL_TO_INT", RealT, IntT, func(a []Value) (Value, error) { return IntVal(int64(math.RoundToEven(a[0].F))), nil }},
 		{"BOOL_TO_INT", BoolT, IntT, func(a []Value) (Value, error) {
 			if a[0].B {
 				return IntVal(1), nil
@@ -182,7 +182,7 @@ func registerConversionBuiltins() {
 		{"INT_TO_BOOL", IntT, BoolT, func(a []Value) (Value, error) { return BoolVal(a[0].I != 0), nil }},
 		{"INT_TO_TIME", IntT, TimeT, func(a []Value) (Value, error) { return TimeVal(a[0].I), nil }},
 		{"TIME_TO_INT", TimeT, IntT, func(a []Value) (Value, error) { return IntVal(a[0].I), nil }},
-		{"REAL_TO_TIME", RealT, TimeT, func(a []Value) (Value, error) { return TimeVal(int64(math.Round(a[0].F))), nil }},
+		{"REAL_TO_TIME", RealT, TimeT, func(a []Value) (Value, error) { return TimeVal(int64(math.RoundToEven(a[0].F))), nil }},
 		{"TIME_TO_REAL", TimeT, RealT, func(a []Value) (Value, error) { return RealVal(float64(a[0].I)), nil }},
 	}
 	for _, c := range conv {

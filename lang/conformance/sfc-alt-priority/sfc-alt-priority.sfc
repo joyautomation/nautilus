@@ -1,0 +1,51 @@
+PROGRAM SfcAltPriority
+VAR_EXTERNAL
+    A : BOOL;  B : BOOL;  C : BOOL;  Reset : BOOL;
+    sfc_Idle : BOOL;  sfc_X : BOOL;  sfc_Y : BOOL;  sfc_W : BOOL;  sfc_Z : BOOL;
+END_VAR
+SFC
+
+  INITIAL_STEP Idle:
+    N sfc_Idle;
+  END_STEP
+  STEP X:
+    N sfc_X;
+  END_STEP
+  STEP Y:
+    N sfc_Y;
+  END_STEP
+  STEP W:
+    N sfc_W;
+  END_STEP
+  STEP Z:
+    N sfc_Z;
+  END_STEP
+  STEP Ghost:
+  END_STEP
+
+  (* Declared first, shares Idle, but Ghost is never active: this
+     convergence never fires and must not suppress t_x / t_y / t_w. *)
+  TRANSITION t_dead FROM (Idle, Ghost) TO Z := TRUE;
+  END_TRANSITION
+
+  (* The alternative divergence out of Idle: priority is declaration order. *)
+  TRANSITION t_x FROM Idle TO X := A;
+  END_TRANSITION
+  TRANSITION t_y FROM Idle TO Y := B;
+  END_TRANSITION
+  TRANSITION t_w FROM Idle TO W := C;
+  END_TRANSITION
+
+  TRANSITION t_xr FROM X TO Idle := Reset;
+  END_TRANSITION
+  TRANSITION t_yr FROM Y TO Idle := Reset;
+  END_TRANSITION
+  TRANSITION t_wr FROM W TO Idle := Reset;
+  END_TRANSITION
+  TRANSITION t_zg FROM Z TO Ghost := TRUE;
+  END_TRANSITION
+  TRANSITION t_gi FROM Ghost TO Idle := TRUE;
+  END_TRANSITION
+
+END_SFC
+END_PROGRAM

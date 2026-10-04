@@ -22,6 +22,10 @@ type Values map[string]any
 // and the first scan after a redundancy takeover. A driver that needs a
 // per-scan call regardless (a watchdog to re-arm, a bus whose outputs decay)
 // asks for it with runtime.Options.AlwaysWriteOutputs.
+//
+// The map handed to WriteOutputs belongs to the caller and is REUSED on
+// the next call: a driver that keeps values past the call copies them out
+// (every driver in tree does) and never stores the map itself.
 type Driver interface {
 	ReadInputs() (Values, error)
 	WriteOutputs(Values) error

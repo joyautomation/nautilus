@@ -30,6 +30,10 @@ function findChrome() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export class Browser {
+	/** Set by clips.mjs when GESTURE_CLIPS is on: { attach(b), detach(b) },
+	 * called after every launch and before every close. Null = no recording. */
+	static recorder = null;
+
 	constructor(proc, userDataDir, ws) {
 		this.proc = proc;
 		this.userDataDir = userDataDir;
@@ -38,6 +42,7 @@ export class Browser {
 		this._pending = new Map();
 		this._sessionId = undefined;
 		this.consoleLines = [];
+		this._listeners = new Map();
 		ws.addEventListener('message', (ev) => this._onMessage(ev));
 	}
 
@@ -52,15 +57,21 @@ export class Browser {
 			'--no-default-browser-check',
 			'--disable-gpu',
 			'--disable-dev-shm-usage',
-			'--no-sandbox',
+			// Off by default; GitHub's ubuntu-24.04 runners refuse Chrome's
+			// sandbox (AppArmor blocks unprivileged user namespaces), so CI sets this.
+			...(process.env.GESTURE_NO_SANDBOX ? ['--no-sandbox'] : []),
 			`--window-size=${width},${height}`,
 			'about:blank'
 		];
 		const proc = spawn(chrome, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+		let chromeErr = '';
+		proc.stderr?.on('data', (d) => (chromeErr = (chromeErr + d).slice(-2000)));
 		// Chrome writes the chosen debugging port to DevToolsActivePort.
 		const portFile = join(userDataDir, 'DevToolsActivePort');
 		let port = null;
-		for (let i = 0; i < 100; i++) {
+		// 30 s: two test files launch Chrome at once, and a loaded CI runner
+		// can take well over 5 s to start the first one.
+		for (let i = 0; i < 600; i++) {
 			if (existsSync(portFile)) {
 				const txt = readFileSync(portFile, 'utf8').split('\n')[0].trim();
 				if (txt) {
@@ -72,11 +83,11 @@ export class Browser {
 		}
 		if (!port) {
 			proc.kill('SIGKILL');
-			throw new Error('Chrome never reported a DevTools port');
+			throw new Error('Chrome never reported a DevTools port' + (chromeErr ? `: ${chromeErr}` : ''));
 		}
 		// Find the page target's WebSocket URL.
 		let wsUrl = null;
-		for (let i = 0; i < 40; i++) {
+		for (let i = 0; i < 200; i++) {
 			try {
 				const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
 				const page = list.find((t) => t.type === 'page');
@@ -102,6 +113,7 @@ export class Browser {
 		await b.send('Page.enable');
 		await b.send('Runtime.enable');
 		await b.send('Log.enable');
+		if (Browser.recorder) await Browser.recorder.attach(b);
 		return b;
 	}
 
@@ -114,6 +126,9 @@ export class Browser {
 			else resolve(msg.result);
 			return;
 		}
+		if (msg.method && this._listeners.has(msg.method)) {
+			for (const fn of this._listeners.get(msg.method)) fn(msg.params);
+		}
 		// Events: capture console output for debugging instrumented builds.
 		if (msg.method === 'Runtime.consoleAPICalled') {
 			const text = (msg.params.args || []).map((a) => a.value ?? a.description ?? '').join(' ');
@@ -124,6 +139,12 @@ export class Browser {
 			const d = msg.params.exceptionDetails;
 			this.consoleLines.push(`[exception] ${d.exception?.description ?? d.text}`);
 		}
+	}
+
+	/** Subscribe to a CDP event (e.g. 'Page.screencastFrame'). */
+	on(method, fn) {
+		if (!this._listeners.has(method)) this._listeners.set(method, []);
+		this._listeners.get(method).push(fn);
 	}
 
 	send(method, params = {}) {
@@ -219,6 +240,9 @@ export class Browser {
 	}
 
 	async close() {
+		// The clip recorder (clips.mjs, GESTURE_CLIPS) grabs a last frame and
+		// stops the screencast while the page is still up.
+		if (Browser.recorder) await Browser.recorder.detach(this);
 		try {
 			this.ws.close();
 		} catch {

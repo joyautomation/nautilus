@@ -1,0 +1,31 @@
+# fb-ctd — the standard CTD (down counter) in ST, LD and FBD. LD in the
+# block is the load input; the shared tag is called LOAD so it does not
+# collide with the LD keyword or the ld task.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/fb-ctd'
+name: fb-ctd
+
+tasks:
+  - program: fb-ctd.st
+    scan: 1ms
+  - name: ld
+    program: fb-ctd.ld
+    scan: 1ms
+  - name: fbd
+    program: fb-ctd.fbd
+    scan: 1ms
+
+tags:
+  - { name: CD,   role: state, init: false, desc: "Count-down input (CTD.CD), counts rising edges" }
+  - { name: LOAD, role: state, init: false, desc: "Load input (CTD.LD): CV := PV" }
+  - { name: PV,   role: state, init: 3,     desc: "Preset value (CTD.PV)" }
+
+  - { name: st_Q,   role: state, init: false }
+  - { name: st_CV,  role: state, init: 0 }
+  - { name: ld_Q,   role: state, init: false }
+  - { name: ld_CV,  role: state, init: 0 }
+  - { name: fbd_Q,  role: state, init: false }
+  - { name: fbd_CV, role: state, init: 0 }
+
+driver:
+  type: memory

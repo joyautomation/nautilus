@@ -541,7 +541,33 @@ END_PROGRAM`
 	lowerExpectErr(t, src, "TIME")
 }
 
+// NOT on an INT is the bitwise complement of the 64-bit value (IEC
+// 61131-3, docs/functions.md); AND and OR on INTs are bitwise like XOR.
 func TestLowerNotOnInt(t *testing.T) {
+	src := `
+PROGRAM p
+VAR
+    i : INT := 1;
+    k : INT := NOT 0;
+    n, a, o : INT;
+END_VAR
+n := NOT i;
+a := 12 AND i + 9;
+o := 12 OR 10;
+END_PROGRAM`
+	prog := lowerSource(t, src)
+	frame := ir.NewFrame(prog)
+	if err := ir.Run(prog, frame, newStubHost()); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]int64{"n": -2, "k": -1, "a": 8, "o": 14} {
+		if got := frame.Slots[prog.SlotIndex[name]].I; got != want {
+			t.Errorf("%s = %d, want %d", name, got, want)
+		}
+	}
+}
+
+func TestLowerNotOnIntToBool(t *testing.T) {
 	src := `
 PROGRAM p
 VAR
@@ -550,7 +576,19 @@ VAR
 END_VAR
 b := NOT i;
 END_PROGRAM`
-	lowerExpectErr(t, src, "NOT on non-BOOL")
+	lowerExpectErr(t, src, "cannot assign")
+}
+
+func TestLowerNotOnReal(t *testing.T) {
+	src := `
+PROGRAM p
+VAR
+    r : REAL := 1.0;
+    b : BOOL;
+END_VAR
+b := NOT r;
+END_PROGRAM`
+	lowerExpectErr(t, src, "NOT requires a BOOL or INT")
 }
 
 func TestLowerIndexNonArray(t *testing.T) {

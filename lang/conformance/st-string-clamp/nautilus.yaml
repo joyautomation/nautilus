@@ -1,0 +1,29 @@
+# st-string-clamp — string positions and lengths clamp instead of faulting.
+# ST only. Outputs carry the st_ prefix like every corpus feature.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/st-string-clamp'
+#   go run ./cmd/naut test lang/conformance/st-string-clamp
+name: st-string-clamp
+
+tasks:
+  - program: st-string-clamp.st
+    scan: 10ms
+
+tags:
+  - { name: S, role: state, init: "HELLO", desc: "The string under test" }
+  - { name: F, role: state, init: "LL",    desc: "FIND's needle" }
+  - { name: L, role: state, init: 0,       desc: "Length argument" }
+  - { name: P, role: state, init: 0,       desc: "Position argument (1-based)" }
+  - { name: st_Left,  role: state, init: "" }
+  - { name: st_Right, role: state, init: "" }
+  - { name: st_Mid,   role: state, init: "" }
+  - { name: st_Ins,   role: state, init: "" }
+  - { name: st_Del,   role: state, init: "" }
+  - { name: st_Rep,   role: state, init: "" }
+  - { name: st_Find,  role: state, init: 0 }
+  - { name: st_Len,   role: state, init: 0 }
+  - { name: st_Cat,   role: state, init: "" }
+  - { name: st_Scans, role: state, init: 0 }
+
+driver:
+  type: memory

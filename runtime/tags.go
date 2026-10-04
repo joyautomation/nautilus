@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -53,6 +54,10 @@ import (
 type Tags struct {
 	mu   sync.RWMutex
 	vals map[string]*tagVal
+	// divZero counts every integer or REAL division (or MOD) by zero the
+	// VM has evaluated against this store, controller-wide, since start
+	// (ir.DivZeroCounter). Surfaced as ScanStats.DivZero.
+	divZero atomic.Uint64
 	// gen is the store's write generation: bumped once per write that
 	// actually changes a value, and stamped into that tag's tagVal.
 	gen uint64
@@ -717,3 +722,10 @@ func plain(v ir.Value) any {
 		return nil
 	}
 }
+
+// DivZero implements ir.DivZeroCounter: the VM calls it once per division
+// by zero. Atomic, because tasks scan on their own goroutines.
+func (t *Tags) DivZero() { t.divZero.Add(1) }
+
+// DivZeroCount is the number of divisions by zero evaluated since start.
+func (t *Tags) DivZeroCount() uint64 { return t.divZero.Load() }

@@ -1,5 +1,7 @@
 package ir
 
+import "sync"
+
 // TypeKind identifies the runtime representation of a value.
 type TypeKind uint8
 
@@ -206,6 +208,8 @@ type FuncDef struct {
 	// per-call Frame.Slots slice without reaching into Inputs/Locals.
 	FrameSize int
 	Run       FuncRunFn
+	// frames recycles per-call frames — see acquireFrame.
+	frames sync.Pool
 }
 
 // FuncRunFn executes one call of a user function. The caller supplies a

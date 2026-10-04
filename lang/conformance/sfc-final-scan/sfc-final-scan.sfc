@@ -1,0 +1,37 @@
+PROGRAM SfcFinalScan
+VAR_EXTERNAL
+    Go : BOOL;  Stop : BOOL;
+    sfc_Runs : INT;  sfc_InX : BOOL;  sfc_Q : BOOL;  sfc_ET : TIME;
+    sfc_PulseRuns : INT;
+END_VAR
+VAR
+    tmr : TON;
+END_VAR
+SFC
+
+  INITIAL_STEP Idle:
+  END_STEP
+  STEP Run:
+    N  Level;
+    P1 Pulse;
+  END_STEP
+
+  TRANSITION t_go   FROM Idle TO Run := Go;
+  END_TRANSITION
+  TRANSITION t_stop FROM Run TO Idle := Stop;
+  END_TRANSITION
+
+  ACTION Level:
+    sfc_Runs := sfc_Runs + 1;
+    sfc_InX := Run.X;
+    tmr(IN := Run.X, PT := T#50ms);
+    sfc_Q := tmr.Q;
+    sfc_ET := tmr.ET;
+  END_ACTION
+
+  ACTION Pulse:
+    sfc_PulseRuns := sfc_PulseRuns + 1;
+  END_ACTION
+
+END_SFC
+END_PROGRAM

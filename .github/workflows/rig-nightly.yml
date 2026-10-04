@@ -1,0 +1,114 @@
+# Nightly run of the VS Code rig (tools/rig) on a self-hosted box: builds naut
+# and the VSIX from this checkout, runs the smoke suite and the verb
+# self-test in throwaway Incus containers, uploads the TSVs + PNGs + clips
+# (one mp4 per check and per verb; clips.html in each folder is the review
+# index), and keeps ONE rolling "rig nightly red" issue current.
+#
+# Needs a registered runner with labels `self-hosted linux rig` — see
+# tools/rig/RUNNER.md. First test after registering one: Actions → rig-nightly
+# → Run workflow (workflow_dispatch).
+name: rig-nightly
+on:
+  schedule:
+    - cron: '0 6 * * *' # 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write # the rolling "rig nightly red" issue
+
+concurrency:
+  group: rig-nightly
+  cancel-in-progress: false
+
+jobs:
+  rig:
+    name: rig (smoke + verb self-test)
+    runs-on: [self-hosted, linux, rig]
+    timeout-minutes: 120
+    env:
+      RIG_OUT: ${{ github.workspace }}/tools/rig/out
+      G_PACE: fast
+    steps:
+      - uses: actions/checkout@v4
+
+      # One container name per box AND per run, so a stale container from a
+      # killed run never collides and two boxes sharing an incus remote do not
+      # delete each other's. Smoke and self-test get their own names.
+      - name: Container names
+        run: |
+          h=$(hostname -s | tr -c 'a-zA-Z0-9\n' '-')
+          echo "SMOKE_NAME=nautilus-smoke-$h" >> "$GITHUB_ENV"
+          echo "VERBS_NAME=nautilus-verbs-$h" >> "$GITHUB_ENV"
+
+      - name: Build naut + VSIX from this checkout
+        run: |
+          tools/rig/smoke/build.sh | tee "$RUNNER_TEMP/build.env"
+
+      - name: Smoke suite
+        id: smoke
+        continue-on-error: true
+        run: |
+          eval "$(cat "$RUNNER_TEMP/build.env")"
+          export NAUT VSIX NAUTILUS_SHA
+          RIG_NAME=$SMOKE_NAME tools/rig/smoke/run.sh
+
+      - name: Verb self-test
+        id: selftest
+        continue-on-error: true
+        run: |
+          eval "$(cat "$RUNNER_TEMP/build.env")"
+          export NAUT VSIX NAUTILUS_SHA
+          RIG_NAME=$VERBS_NAME tools/rig/selftest.sh
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rig-out-${{ github.run_id }}
+          path: |
+            tools/rig/out/smoke
+            tools/rig/out/selftest
+            tools/rig/out/build/build.log
+            tools/rig/out/build/SHA
+          if-no-files-found: warn
+          retention-days: 14
+
+      # Red: open the rolling issue or add a comment to it. Green: close it.
+      # Only scheduled runs touch the issue; a manual dispatch just reports.
+      - name: Rolling issue
+        if: always() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SMOKE: ${{ steps.smoke.outcome }}
+          SELFTEST: ${{ steps.selftest.outcome }}
+          BUILD: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="rig nightly red"
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number,title --jq "[.[]|select(.title==\"$title\")][0].number // empty")
+          if [[ $SMOKE == success && $SELFTEST == success ]]; then
+            [[ -z $num ]] || gh issue close "$num" --repo "$GITHUB_REPOSITORY" --comment "Green again: $RUN_URL"
+            exit 0
+          fi
+          body=$RUNNER_TEMP/issue.md
+          {
+            echo "Nightly rig run **${GITHUB_SHA::8}** — smoke: \`$SMOKE\`, self-test: \`$SELFTEST\` — $RUN_URL"
+            echo
+            for f in tools/rig/out/smoke/results.tsv tools/rig/out/selftest/verbs-selftest.tsv; do
+              echo "### $f"; echo '```'
+              if [[ -f $f ]]; then head -c 20000 "$f"; else echo "(not produced — the run died before its table)"; fi
+              echo '```'
+            done
+            echo "PNGs, clips and logs are in the run's \`rig-out-*\` artifact: open \`smoke/clips.html\` / \`selftest/clips.html\` in it."
+          } >"$body"
+          if [[ -n $num ]]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body"
+          fi
+
+      - name: Fail if red
+        if: always()
+        run: |
+          [[ ${{ steps.smoke.outcome }} == success && ${{ steps.selftest.outcome }} == success ]] || { echo "smoke=${{ steps.smoke.outcome }} selftest=${{ steps.selftest.outcome }}"; exit 1; }

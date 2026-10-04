@@ -9,100 +9,16 @@
 // Bundle under test: env DIAGRAM_BUNDLE, else ../media/dist (the repo build).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { Browser } from './cdp.mjs';
-import { applyThemeJs } from './themes.mjs';
+import { recordClips, applyThemeJs, Browser, sleep, open, withPage, deliver, posted, reset, center, text, key, del, esc, clickAt, ctrlClick, FBD, byId, node, fbdOps, edgePoint, LD, ldOps, paletteBtn, SFC, sfcOps, ctrlKey, FBD_SRC, sfcStepPt, ready, restores, wheel, zoomPct, zoomBtn, rect, stepCenter, LD_LONG, TALL, css, FBD_PID, btnByText, typeText } from './diagram-helpers.mjs';
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const BUNDLE = process.env.DIAGRAM_BUNDLE || join(HERE, '../../media/dist');
-const HEADLESS = process.env.HEADED !== '1';
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function open({ state } = {}) {
-	const dir = mkdtempSync(join(tmpdir(), 'diagram-run-'));
-	// `state` seeds the webview state (vscode.getState) the bundle reads at
-	// mount — a panel reopening with what it saved.
-	const html = readFileSync(join(HERE, 'diagram-host.html'), 'utf8').replace(
-		'window.__POSTED__ = [];',
-		`window.__POSTED__ = []; window.__STATE__ = ${JSON.stringify(state ?? null)};`
-	);
-	writeFileSync(join(dir, 'host.html'), html);
-	copyFileSync(join(BUNDLE, 'fbd-flow.js'), join(dir, 'fbd-flow.js'));
-	copyFileSync(join(BUNDLE, 'fbd-flow.css'), join(dir, 'fbd-flow.css'));
-	const b = await Browser.launch({ headless: HEADLESS });
-	await b.navigate('file://' + join(dir, 'host.html'));
-	return b;
-}
-
-async function withPage(fn, opts) {
-	const b = await open(opts);
-	try {
-		await fn(b);
-		assert.deepEqual(await b.eval('window.__errors'), [], 'page threw');
-	} finally {
-		await b.close();
-	}
-}
-
-const deliver = async (b, msg) => {
-	await b.eval(`window.__deliver(${JSON.stringify(msg)})`);
-	await sleep(250);
-};
-const posted = (b) => b.eval('window.__POSTED__');
-const reset = (b) => b.eval('window.__reset()');
-const center = (b, sel) => b.eval(`window.__center(${JSON.stringify(sel)})`);
-const text = (b) => b.eval('document.body.innerText');
-async function key(b, k, code, keyCode, modifiers = 0) {
-	await b.pressKey(k, { code, keyCode, modifiers });
-	await sleep(120);
-}
-const del = (b) => key(b, 'Delete', 'Delete', 46);
-const esc = (b) => key(b, 'Escape', 'Escape', 27);
-async function clickAt(b, pt) {
-	assert.ok(pt, 'target not rendered');
-	await b.click(pt.x, pt.y);
-	await sleep(120);
-}
-/** Click with Control held the way xyflow sees it (it tracks keydown, not
- * the event's modifier bits). */
-async function ctrlClick(b, pt) {
-	const base = { key: 'Control', code: 'ControlLeft', windowsVirtualKeyCode: 17, modifiers: 2 };
-	await b.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...base });
-	await b.click(pt.x, pt.y, { modifiers: 2 });
-	await b.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
-	await sleep(120);
-}
-
-// `naut fbd graph` of a coil fed by AND(A, B) plus three comment notes.
-const FBD = {
-	name: 'Main',
-	nodes: [
-		{ id: 'c:Y', kind: 'coil', label: 'Y', layer: 2, line: 8 },
-		{ id: 'b:c.Y', kind: 'block', label: 'AND', inputs: ['IN1', 'IN2'], outputs: ['OUT'], layer: 1, line: 8 },
-		{ id: 'v:A', kind: 'input', label: 'A', layer: 0, line: 8 },
-		{ id: 'v:B', kind: 'input', label: 'B', layer: 0, line: 8 },
-		{ id: 'cm:0', kind: 'comment', label: 'note A', layer: 0, line: 6 },
-		{ id: 'cm:1', kind: 'comment', label: 'note B', layer: 0, line: 9 },
-		{ id: 'cm:2', kind: 'comment', label: 'note C', layer: 0, line: 11 }
-	],
-	edges: [
-		{ from: 'v:A', to: 'b:c.Y', toPin: 'IN1' },
-		{ from: 'v:B', to: 'b:c.Y', toPin: 'IN2' },
-		{ from: 'b:c.Y', fromPin: 'OUT', to: 'c:Y' }
-	],
-	vars: []
-};
-const node = (id) => `.svelte-flow__node[data-id="${id}"]`;
-const fbdOps = async (b) => (await posted(b)).filter((m) => m.type === 'edit').map((m) => m.op);
+// GESTURE_CLIPS=<dir> records each test's run as <dir>/diagram/NN-<slug>.mp4.
+recordClips('diagram');
 
 test('FBD: deleting two selected notes posts ONE batched deleteNode (ordinal ids)', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
-		await clickAt(b, await center(b, node('cm:0')));
-		await ctrlClick(b, await center(b, node('cm:1')));
+		await clickAt(b, await center(b, byId('comment', 'cm:0')));
+		await ctrlClick(b, await center(b, byId('comment', 'cm:1')));
 		await reset(b);
 		await del(b);
 		const ops = await fbdOps(b);
@@ -115,24 +31,13 @@ test('FBD: deleting two selected notes posts ONE batched deleteNode (ordinal ids
 test('FBD: deleting a wired coil posts no disconnects for its own edges', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
-		await clickAt(b, await center(b, node('c:Y')));
+		await clickAt(b, await center(b, byId('chip', 'c:Y')));
 		await reset(b);
 		await del(b);
 		const ops = await fbdOps(b);
 		assert.deepEqual(ops, [{ type: 'deleteNode', nodes: ['c:Y'] }]);
 	});
 });
-
-// A point ON an edge's path (its bbox center can miss a bent wire).
-const edgePoint = (b, to, toPin) =>
-	b.eval(`(() => {
-		const g = [...document.querySelectorAll('.svelte-flow__edge')].find((el) => (el.getAttribute('data-id') ?? '').includes('|${to}|${toPin}|'));
-		const path = g && (g.querySelector('path.svelte-flow__edge-interaction') ?? g.querySelector('path'));
-		if (!path) return null;
-		const p = path.getPointAtLength(path.getTotalLength() * 0.6);
-		const m = path.getScreenCTM();
-		return { x: p.x * m.a + p.y * m.c + m.e, y: p.x * m.b + p.y * m.d + m.f };
-	})()`);
 
 test('FBD: disconnecting two inputs of one block goes highest pin first', async () => {
 	await withPage(async (b) => {
@@ -150,11 +55,16 @@ test('FBD: arrow-key moves persist as ONE setLayout once the keys settle', async
 	await withPage(async (b) => {
 		await deliver(b, { type: 'model', model: FBD, title: 'n.fbd' });
 		await clickAt(b, await center(b, node('cm:2')));
+		// A loaded CI runner can lag the selection; the keys only move a
+		// selected node, so wait for it rather than racing it.
+		for (let i = 0; i < 50 && !(await b.eval(`!!document.querySelector(${JSON.stringify(node('cm:2'))})?.classList.contains('selected')`)); i++) await sleep(100);
 		await reset(b);
 		await key(b, 'ArrowRight', 'ArrowRight', 39);
 		await key(b, 'ArrowRight', 'ArrowRight', 39);
 		await key(b, 'ArrowDown', 'ArrowDown', 40);
-		await sleep(600);
+		// The move persists 350 ms after the last key; poll instead of a fixed sleep.
+		for (let i = 0; i < 50 && (await fbdOps(b)).length === 0; i++) await sleep(100);
+		await sleep(600); // and let any (wrong) second batch show up
 		const ops = await fbdOps(b);
 		assert.equal(ops.length, 1, JSON.stringify(ops));
 		assert.equal(ops[0].type, 'setLayout');
@@ -172,28 +82,6 @@ test('FBD: null arrays (older CLI) render without crashing; blank file offers in
 		assert.deepEqual(await fbdOps(b), [{ type: 'init', pou: 'heater_2' }]);
 	});
 });
-
-// ── Ladder ──────────────────────────────────────────────────────────────
-const LD = {
-	name: 'P',
-	vars: [{ name: 'c1', type: 'BOOL', section: 'VAR', line: 3 }],
-	rungs: [
-		{
-			name: 'r1',
-			line: 5,
-			endLine: 6,
-			elements: [
-				{ kind: 'contact', ref: 'a' },
-				{ kind: 'fb', inst: 't1', type: 'TON', args: 'PT := T#1S', powerIn: 'IN', powerOut: 'Q' }
-			],
-			coils: [{ kind: 'coil', ref: 'y' }]
-		},
-		{ name: 'r2', line: 7, endLine: 8, elements: [{ kind: 'contact', ref: 'b' }], coils: [{ kind: 'coil', ref: 'z' }] }
-	]
-};
-const ldOps = async (b) => (await posted(b)).filter((m) => m.type === 'ldEdit').map((m) => m.op);
-const paletteBtn = (b, label) =>
-	b.eval(`(() => { const el = [...document.querySelectorAll('.palette button')].find((x) => x.textContent.trim() === ${JSON.stringify(label)}); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
 
 test('Ladder: empty body (rungs null) renders the palette; + rung works', async () => {
 	await withPage(async (b) => {
@@ -224,12 +112,17 @@ test('Ladder: click a rung name, Del deletes the rung', async () => {
 	});
 });
 
-test('Ladder: TON from the palette takes the first free instance name', async () => {
+test('Ladder: the FB… picker names a TON / CTU instance with the first free name', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'ldModel', model: LD, title: 'p.ld' });
 		await reset(b);
-		await clickAt(b, await paletteBtn(b, 'TON'));
-		await clickAt(b, await paletteBtn(b, 'CTU'));
+		// The palette's "FB…" opens the block picker (filter, then instance).
+		for (const type of ['TON', 'CTU']) {
+			await clickAt(b, await paletteBtn(b, 'FB…'));
+			await typeText(b, type);
+			await key(b, 'Enter', 'Enter', 13); // picks the type, focus → instance
+			await key(b, 'Enter', 'Enter', 13); // inserts
+		}
 		const ops = await ldOps(b);
 		assert.equal(ops[0].inst, 't2'); // t1 is taken by rung r1
 		assert.equal(ops[1].inst, 'c2'); // c1 is a header variable
@@ -306,18 +199,6 @@ test('Ladder/SFC: a broken FIRST load keeps its own chrome (no FBD "+ add")', as
 	}
 });
 
-// ── SFC ─────────────────────────────────────────────────────────────────
-const SFC = {
-	name: 'Seq',
-	steps: [
-		{ id: 'st:Idle', name: 'Idle', initial: true, line: 3, endLine: 4 },
-		{ id: 'st:Run', name: 'Run', initial: false, line: 5, endLine: 6 },
-		{ id: 'st:Spare', name: 'Spare', initial: false, line: 9, endLine: 10 }
-	],
-	trans: [{ id: 'tr:7', from: ['Idle'], to: ['Run'], cond: 'go', kind: 'normal', line: 7, endLine: 8 }]
-};
-const sfcOps = async (b) => (await posted(b)).filter((m) => m.type === 'sfcEdit').map((m) => m.op);
-
 test('SFC: empty chart (null arrays) — + step, first field focused, Enter adds the INITIAL step', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'sfcModel', model: { name: 'Seq', steps: null, trans: null }, title: 's.sfc' });
@@ -345,7 +226,7 @@ test('SFC: Esc closes the add form', async () => {
 test('SFC: after the float editor closes, Del works without another click', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'sfcModel', model: SFC, title: 's.sfc' });
-		const pt = await b.eval(`(() => { const el = [...document.querySelectorAll('.step .stepname')].find((x) => x.textContent === 'Spare'); const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
+		const pt = await b.eval(`(() => { const el = document.querySelector('[data-kind="step"][data-id="st:Spare"] .stepname'); const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
 		await b.dblclick(pt.x, pt.y);
 		await sleep(200);
 		assert.equal(await b.eval(`document.activeElement?.tagName`), 'INPUT', 'float editor should hold focus');
@@ -355,15 +236,6 @@ test('SFC: after the float editor closes, Del works without another click', asyn
 		assert.deepEqual(await sfcOps(b), [{ type: 'deleteStep', step: 'st:Spare' }]);
 	});
 });
-
-// ── clipboard, select-all, shortcut help (editor parity) ──────────────────
-// Headless Chrome denies the system clipboard, so these exercise the
-// in-webview fallback — the path a paste must never depend on the other.
-async function ctrlKey(b, k) {
-	await key(b, k, 'Key' + k.toUpperCase(), k.toUpperCase().charCodeAt(0), 2);
-	await sleep(500); // readClip gives the system clipboard up to 400 ms
-}
-const FBD_SRC = 'PROGRAM Main\nFBD\n  Y := AND(A, B)\nEND_FBD\nEND_PROGRAM\n';
 
 test('FBD: Ctrl+C / Ctrl+V duplicates in place; Ctrl+X deletes, and its paste re-creates from the snapshot', async () => {
 	await withPage(async (b) => {
@@ -423,9 +295,6 @@ test('FBD: clipboard keys inside the float editor stay the field’s', async () 
 		assert.deepEqual(await fbdOps(b), []);
 	});
 });
-
-const sfcStepPt = (b, name) =>
-	b.eval(`(() => { const el = [...document.querySelectorAll('.step .stepname')].find((x) => x.textContent === ${JSON.stringify(name)}); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
 
 test('SFC: Ctrl-click multi-selects steps; copy/paste posts ONE pasteSteps with the transitions between them', async () => {
 	await withPage(async (b) => {
@@ -525,25 +394,6 @@ test('Ready: the webview says ready on mount (the host holds its posts until the
 	});
 });
 
-// ── restore from saved webview state ────────────────────────────────────
-// "Developer: Reload Webviews" / Reload Window / a hidden tab coming back:
-// the bundle mounts with vscode.getState() already holding the last model
-// message and re-shows it BEFORE the host replays. A throw on that path
-// aborts the mount — no `ready`, so the host never replays and the panel
-// stays blank for good (the FBD editor did exactly that: show() assigned
-// state declared further down the component).
-const ready = async (b) => (await posted(b)).filter((m) => m.type === 'ready');
-async function restores(saved, check, zoom) {
-	await withPage(
-		async (b) => {
-			await sleep(250);
-			assert.deepEqual(await ready(b), [{ type: 'ready' }], 'mount must still say ready');
-			await check(b);
-		},
-		{ state: { msg: saved, ...(zoom ? { zoom } : {}) } }
-	);
-}
-
 test('Restore: FBD editor mounts from a saved model (with source) and renders it', async () => {
 	await restores({ type: 'model', model: FBD, title: 'n.fbd', source: FBD_SRC }, async (b) => {
 		assert.ok(await center(b, node('c:Y')), 'saved FBD model not rendered');
@@ -594,39 +444,6 @@ test('Restore: SFC mounts from a saved model (and diff) and renders it', async (
 		assert.ok(await stepCenter(b, 'Spare'));
 	});
 });
-
-// ── zoom / pan / fit (Ladder + SFC) ─────────────────────────────────────
-// ZoomPane draws the SVGs at width/height × zoom over an unscaled viewBox,
-// so every hit-test stays in screen space; these pin that the gestures
-// that do their own coordinate math (SFC drag / connect) divide the zoom
-// back out, and that Ladder's elementFromPoint drops still land.
-async function wheel(b, x, y, deltaY, modifiers = 2) {
-	await b.moveTo(x, y);
-	await b.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x, y, deltaX: 0, deltaY, modifiers });
-	await sleep(120);
-}
-const zoomPct = (b) => b.eval(`document.querySelector('.zpct')?.textContent`);
-const zoomBtn = (b, label) => center(b, `.zctl button[aria-label="${label}"]`);
-const rect = (b, sel, i = 0) =>
-	b.eval(`(() => { const el = document.querySelectorAll(${JSON.stringify(sel)})[${i}]; if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height, cx: r.left + r.width / 2, cy: r.top + r.height / 2 }; })()`);
-const stepCenter = (b, name) =>
-	b.eval(`(() => { const el = [...document.querySelectorAll('.step')].find((g) => g.querySelector('.stepname')?.textContent === ${JSON.stringify(name)}); const r = el.querySelector('.box').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width }; })()`);
-
-// Enough rungs to scroll: a zoom can only hold its anchor still when the
-// pane has room to scroll the magnified content under it.
-const LD_LONG = {
-	...LD,
-	rungs: [
-		...LD.rungs,
-		...Array.from({ length: 10 }, (_, i) => ({
-			name: `x${i}`,
-			line: 20 + 2 * i,
-			endLine: 21 + 2 * i,
-			elements: [{ kind: 'contact', ref: `i${i}` }],
-			coils: [{ kind: 'coil', ref: `o${i}` }]
-		}))
-	]
-};
 
 test('Ladder zoom: Ctrl+wheel zooms around the cursor, persists in webview state, posts no op', async () => {
 	await withPage(async (b) => {
@@ -767,13 +584,6 @@ test('Ladder zoom: the float editor opens ON the element it edits', async () => 
 	});
 });
 
-// A chart tall enough to overflow the 900px harness window.
-const TALL = {
-	name: 'Long',
-	steps: Array.from({ length: 12 }, (_, i) => ({ id: `st:S${i}`, name: `S${i}`, initial: i === 0, line: 3 + 2 * i, endLine: 4 + 2 * i })),
-	trans: Array.from({ length: 11 }, (_, i) => ({ id: `tr:${40 + i}`, from: [`S${i}`], to: [`S${i + 1}`], cond: 'go', kind: 'normal', line: 40 + i, endLine: 40 + i }))
-};
-
 test('SFC zoom: an overflowing chart fits on first load; a saved zoom is restored instead', async () => {
 	await withPage(async (b) => {
 		await deliver(b, { type: 'sfcModel', model: TALL, title: 'long.sfc' });
@@ -841,9 +651,6 @@ test('SFC zoom: step drag and connect rubber band stay under the cursor at 200%'
 		assert.deepEqual(await sfcOps(b), [{ type: 'addTransition', from: ['Run'], to: ['Idle'], cond: 'TRUE' }]);
 	});
 });
-
-// ── theme ───────────────────────────────────────────────────────────────
-const css = (b, sel, prop) => b.eval(`(() => { const el = document.querySelector(${JSON.stringify(sel)}); return el && getComputedStyle(el).getPropertyValue(${JSON.stringify(prop)}).trim(); })()`);
 
 test('Theme: xyflow colorMode follows the VS Code theme kind, live', async () => {
 	await withPage(async (b) => {
@@ -918,32 +725,6 @@ test('FBD zoom: Ctrl+= / Ctrl+- / Ctrl+0 drive the xyflow viewport too', async (
 		assert.deepEqual(await fbdOps(b), []);
 	});
 });
-
-// ── FBD palette: the function-block picker ──────────────────────────────────
-// A diagram with one PID instance already on it, and the catalog `naut fbd
-// graph` sends (PID with its pins, a project block).
-const PID_PINS = [
-	...['AUTO', 'PV', 'SP'].map((name) => ({ name, type: name === 'AUTO' ? 'BOOL' : 'REAL', dir: 'in' })),
-	...['CV', 'SAT_HI'].map((name) => ({ name, type: name === 'CV' ? 'REAL' : 'BOOL', dir: 'out' }))
-];
-const FBD_PID = {
-	...FBD,
-	nodes: [
-		...FBD.nodes,
-		{ id: 'f:pid1', kind: 'fb', label: 'pid1', type: 'PID', inputs: ['AUTO', 'PV', 'SP'], outputs: ['CV', 'SAT_HI'], layer: 1, line: 12 }
-	],
-	fbTypes: [
-		{ name: 'TON', detail: 'on-delay timer', prefix: 't', pins: [{ name: 'IN', type: 'BOOL', dir: 'in' }, { name: 'PT', type: 'TIME', dir: 'in' }, { name: 'Q', type: 'BOOL', dir: 'out' }], args: 'IN := _, PT := _' },
-		{ name: 'PID', detail: 'closed-loop control', prefix: 'pid', pins: PID_PINS, args: 'AUTO := _, PV := _, SP := _' },
-		{ name: 'Starter', user: true, prefix: 's', pins: [{ name: 'Req', type: 'BOOL', dir: 'in' }, { name: 'Run', type: 'BOOL', dir: 'out' }], args: 'Req := _' }
-	]
-};
-const btnByText = (b, sel, label) =>
-	b.eval(`(() => { const el = [...document.querySelectorAll(${JSON.stringify(sel)})].find((x) => (x.querySelector('span')?.textContent ?? x.textContent).trim() === ${JSON.stringify(label)}); if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`);
-const typeText = async (b, s) => {
-	for (const ch of s) await b.send('Input.insertText', { text: ch });
-	await sleep(80);
-};
 
 test('FBD palette: "function block" places a PID with every input open, next free name, output refs in the hint', async () => {
 	await withPage(async (b) => {

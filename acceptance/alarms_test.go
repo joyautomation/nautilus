@@ -203,6 +203,10 @@ tests:
 	if !strings.Contains(d, "missing: FIT_001.HH") || !strings.Contains(d, "unexpected: FIT_001.L") {
 		t.Errorf("failure detail should say what is missing and what is extra, got:\n%s", d)
 	}
+	// ...and it points at the `alarms:` key, not the top of the test.
+	if f := results[0].Failure; f.Line != 6 || f.StepLine != 3 {
+		t.Errorf("failure at line %d (step line %d), want the alarms: key on 6 (step on 3)", f.Line, f.StepLine)
+	}
 }
 
 // A test that talks about alarms against a project with no `alarms:`

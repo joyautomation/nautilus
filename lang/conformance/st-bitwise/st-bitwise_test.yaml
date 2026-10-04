@@ -1,0 +1,37 @@
+# AND, OR, XOR and NOT on INT operate on every bit of the 64-bit value
+# (two's complement), as in Codesys, Studio 5000 and TIA Portal. BOOL
+# operands keep their logical meaning (st-xor, ld-coils). Every step
+# asserts the ST operators and the FBD blocks together.
+tests:
+  - name: small positive values - 12 (1100) against 10 (1010)
+    steps:
+      - given: { X: 12, Y: 10 }
+        scans: 1
+        expect: { st_AND: 8, fbd_AND: 8, st_OR: 14, fbd_OR: 14, st_XOR: 6, fbd_XOR: 6, st_NOT: -13, fbd_NOT: -13 }
+
+  - name: zero - AND clears, OR and XOR are the identity, NOT 0 is -1 (all ones)
+    steps:
+      - given: { X: 0, Y: 123 }
+        scans: 1
+        expect: { st_AND: 0, fbd_AND: 0, st_OR: 123, fbd_OR: 123, st_XOR: 123, fbd_XOR: 123, st_NOT: -1, fbd_NOT: -1 }
+
+  - name: -1 is all ones - AND is the identity, OR saturates, XOR and NOT complement
+    steps:
+      - given: { X: -1, Y: 5 }
+        scans: 1
+        expect: { st_AND: 5, fbd_AND: 5, st_OR: -1, fbd_OR: -1, st_XOR: -6, fbd_XOR: -6, st_NOT: 0, fbd_NOT: 0 }
+
+  - name: negative operands - -8 (...11000) against 6 (00110)
+    steps:
+      - given: { X: -8, Y: 6 }
+        scans: 1
+        expect: { st_AND: 0, fbd_AND: 0, st_OR: -2, fbd_OR: -2, st_XOR: -2, fbd_XOR: -2, st_NOT: 7, fbd_NOT: 7 }
+      - given: { X: -6, Y: -3 } # ...1010 against ...1101
+        scans: 1
+        expect: { st_AND: -8, fbd_AND: -8, st_OR: -1, fbd_OR: -1, st_XOR: 7, fbd_XOR: 7, st_NOT: 5, fbd_NOT: 5 }
+
+  - name: bits above 32 survive - the width is 64 bits
+    steps:
+      - given: { X: 1099511627777, Y: 1099511627776 } # bit 40 + bit 0, bit 40
+        scans: 1
+        expect: { st_AND: 1099511627776, fbd_AND: 1099511627776, st_OR: 1099511627777, fbd_OR: 1099511627777, st_XOR: 1, fbd_XOR: 1, st_NOT: -1099511627778, fbd_NOT: -1099511627778 }

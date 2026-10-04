@@ -486,11 +486,15 @@
           <div class="tile"><span class="k">min / max</span><span class="v" id="d-minmax">—</span></div>
           <div class="tile"><span class="k">period jitter</span><span class="v" id="d-jitter">—</span></div>
           <div class="tile"><span class="k">scan count</span><span class="v" id="d-count">—</span></div>
+          <div class="tile"><span class="k" id="d-late-k">late scans</span><span class="v" id="d-late">—</span></div>
+          <div class="tile"><span class="k">p99 lateness</span><span class="v" id="d-p99">—</span></div>
+          <div class="tile"><span class="k">max lateness</span><span class="v" id="d-maxlate">—</span></div>
         </div>
         <div class="charts">
           <div class="chart"><span class="k" id="d-recent-k">scan time</span><svg id="d-recent" viewBox="0 0 240 48" preserveAspectRatio="none"></svg></div>
           <div class="chart"><span class="k" id="d-periods-k">scan period</span><svg id="d-periods" viewBox="0 0 240 48" preserveAspectRatio="none"></svg></div>
           <div class="chart"><span class="k">scan time distribution</span><svg id="d-hist" viewBox="0 0 240 48" preserveAspectRatio="none"></svg></div>
+          <div class="chart"><span class="k" id="d-latehist-k">lateness distribution</span><svg id="d-latehist" viewBox="0 0 240 48" preserveAspectRatio="none"></svg></div>
         </div>
         <div class="chart" style="margin-top: 0.6rem">
           <span class="k">last scan phase breakdown</span>
@@ -510,7 +514,7 @@
         <div id="d-tasks-wrap" style="display: none; margin-top: 0.6rem">
           <span class="k">tasks</span>
           <table>
-            <thead><tr><th>task</th><th style="text-align:right">target</th><th style="text-align:right">last</th><th style="text-align:right">scans</th><th style="text-align:right">faults</th><th>last error</th></tr></thead>
+            <thead><tr><th>task</th><th style="text-align:right">target</th><th style="text-align:right">last</th><th style="text-align:right">scans</th><th style="text-align:right">late</th><th style="text-align:right">p99 late</th><th style="text-align:right">max late</th><th style="text-align:right">faults</th><th>last error</th></tr></thead>
             <tbody id="d-tasks"></tbody>
           </table>
         </div>
@@ -947,6 +951,13 @@
 
       // ── scan diagnostics ─────────────────────────────────────────────
       const fmtMs = (v, d = 1) => (typeof v === "number" && isFinite(v) ? v.toFixed(d) : "—");
+      // A microsecond quantity with whichever unit keeps it readable; the
+      // HTML form wraps the unit in <small> like the other tiles.
+      const fmtUsText = (us) => {
+        if (typeof us !== "number" || !isFinite(us)) return "—";
+        return us >= 1000 ? (us / 1000).toFixed(2) + " ms" : us.toFixed(us >= 100 ? 0 : 1) + " µs";
+      };
+      const fmtUs = (us) => fmtUsText(us).replace(/ (ms|µs)$/, "<small>$1</small>");
 
       // sparkline draws a scrolling window: each sample is plotted at its
       // ABSOLUTE scan index (endIndex anchors the newest sample), and a
@@ -1017,6 +1028,19 @@
         $("d-minmax").innerHTML = fmtMs(s.minMs) + " / " + fmtMs(s.maxMs) + "<small>ms</small>";
         $("d-jitter").innerHTML = fmtMs(s.jitterMs, 2) + "<small>ms</small>";
         $("d-count").textContent = (s.count ?? 0).toLocaleString();
+        // Lateness: how late each scan STARTED against its period, cumulative
+        // since start — the soft-real-time view, beside the live sparklines.
+        const lt = s.lateness;
+        if (lt) {
+          $("d-late-k").textContent = `late scans — > ${fmtUsText(lt.thresholdMs * 1000)}`;
+          const pct = s.count ? (100 * lt.late / s.count) : 0;
+          $("d-late").innerHTML = (lt.late ?? 0).toLocaleString() + `<small>${pct.toFixed(2)}%</small>` +
+            (lt.missed ? ` <small class="io bad">${lt.missed.toLocaleString()} missed</small>` : "");
+          $("d-p99").innerHTML = fmtUs(lt.p99Us);
+          $("d-maxlate").innerHTML = fmtUs(lt.maxUs);
+          $("d-latehist-k").textContent = `lateness distribution — < ${fmtUsText(lt.bucketsUs?.[0] ?? 1)} to ≥ ${fmtUsText(lt.bucketsUs?.at(-1) ?? 1e5)}, log`;
+          histogram($("d-latehist"), lt.histogram);
+        }
         $("d-recent-k").textContent = `scan time — last ${(s.recent ?? []).length} scans`;
         $("d-periods-k").textContent = `scan period — target ${fmtMs(s.targetMs, 0)} ms`;
         // The scan count anchors the newest sample so the window scrolls.
@@ -1048,11 +1072,21 @@
         const tw = $("d-tasks-wrap");
         if (s.tasks && s.tasks.length) {
           tw.style.display = "";
+          // Thread placement, when asked for: "cpu 3 · fifo 50", flagged
+          // when the OS refused it (the task is then running unpinned).
+          const sched = (s) => {
+            if (!s || (!s.cpus?.length && !s.priority)) return "";
+            const what = [s.cpus?.length ? "cpu " + s.cpus.join(",") : "", s.priority ? "fifo " + s.priority : ""].filter(Boolean).join(" · ");
+            return s.error ? ` <small class="io bad" title="${esc(s.error)}">${what} REFUSED</small>` : ` <small>${what}</small>`;
+          };
           const row = (t) =>
-            `<tr><td>${esc(t.name)}</td>` +
+            `<tr><td>${esc(t.name)}${sched(t.sched)}</td>` +
             `<td style="text-align:right">${fmtMs(t.targetMs, 0)} ms</td>` +
             `<td style="text-align:right">${fmtMs(t.lastMs, 2)} ms</td>` +
             `<td style="text-align:right">${(t.count ?? 0).toLocaleString()}</td>` +
+            `<td style="text-align:right">${(t.lateness?.late ?? 0).toLocaleString()}</td>` +
+            `<td style="text-align:right">${fmtUsText(t.lateness?.p99Us)}</td>` +
+            `<td style="text-align:right">${fmtUsText(t.lateness?.maxUs)}</td>` +
             `<td style="text-align:right"${t.logicErrors ? ' class="io bad"' : ""}>${t.logicErrors ?? 0}</td>` +
             `<td class="desc">${t.logicErrors ? esc(t.lastError || "") : ""}</td></tr>`;
           const main = {
@@ -1060,6 +1094,8 @@
             targetMs: s.targetMs,
             lastMs: s.lastMs,
             count: s.count,
+            lateness: s.lateness,
+            sched: s.sched,
             logicErrors: s.logicErrors,
             lastError: s.lastError,
           };

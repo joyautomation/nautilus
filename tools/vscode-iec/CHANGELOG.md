@@ -12,6 +12,85 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   the editor, matching `naut check`'s scene pass. Covers kinds as data
   (`model`, `drive`, `status`, `bounds`), the `environment` block and
   textured `plane` fixtures (`docs/design/spatial-hmi.md` §3c).
+### Fixed
+
+- **A diagnostic about a name squiggles that name.** An undeclared
+  identifier, an unknown FB member or input (`settle.Qx`), an unknown
+  function, or a mistyped operand used to be reported at the statement's
+  first token, so `IF Heatr THEN` underlined `IF` and hovering `Heatr`
+  showed nothing. The squiggle now covers the name itself, and `naut check`
+  prints its column (`plant.st:28:4`, not `plant.st:28:1`). Diagrams still
+  land on the rung or netlist line. Comes from `naut lsp`, so it needs the
+  matching `naut` CLI. (#141)
+
+- **Testing view: a failing acceptance test shows the tag value that broke, inline on the assertion.** The inline message used to read only `step 3, t=0.300s of virtual time` and sat on the step's `- given:` line; it now leads with `PumpRun = false, want true`, puts the step, its line and the virtual time on the line below, and sits on the failing tag inside `expect:` (or the `always:` term, or the `alarms:` key). Needs a `naut` that reports the assertion's line in `naut test -json` (`failure.line`, with the step's line now in `failure.stepLine`); an older CLI still gets the value-first message, anchored on the step. (#145)
+
+## [0.13.1] - 2026-10-04
+
+### Added
+
+- **Manifest schema: `late-threshold`, `cpu` and `priority` per task.**
+  How late a scan may start before the runtime counts it late; pin the
+  task's thread to a core; run it under SCHED_FIFO. Hover text says what
+  each needs from the kernel.
+
+### Fixed
+
+- **Component editor: dragging a port dot keeps the port's explicit exit direction.** The drag rebuilt the port from name and position only, so a `dir` set in the sidecar vanished on the first move. Found by the rig self-test's `component_move_port-dir` row. (#130)
+
+- **Closing the Show Source text tab no longer loses the diagram's unsaved edits.** The diagram editor and the text view share one document, so VS Code asks Save / Don't Save when the text tab closes dirty — and *Don't Save* used to revert the file under a diagram that was still open. The extension now puts the diagram's edits back (status bar: "the diagram keeps its unsaved edits"); only the text view goes away. (#117)
+
+- **`nautilus.fb.monitor` is now declared.** The CodeLens command was
+  registered but missing from `contributes.commands`; it is declared and
+  hidden from the command palette.
+
+### Added
+
+- **Test hooks for the VS Code rig.** With `NAUTILUS_TEST_STATE=<file>` set,
+  the extension writes a JSON snapshot (CLI path and version, runtime URL,
+  connection and sync state, open editors, status-bar items, last
+  notification and error) on activation and on every change. Status-bar
+  items carry stable names (`nautilus.live`, `nautilus.sync`) and a
+  `[name]` tooltip prefix; the SFC delete-step confirm has `data-testid`s.
+  Inert unless the variable is set.
+- **Clips of the webview gesture harness.** With `GESTURE_CLIPS=<dir>` set,
+  `npm run test:gestures` records every test's run (CDP screencast, then
+  ffmpeg) as `<dir>/<suite>/NN-<test>.mp4`, with `index.html`/`index.md`
+  listing each clip and its PASS/FAIL. CI uploads them as the
+  `gesture-clips` artifact. Unset, nothing changes.
+
+### Changed
+
+- **Mimic and component editors carry testability attributes.** Equipment,
+  pipes (and their vertex and segment handles), labels, ports, palette
+  items and the ports panel rows now render `data-id` (equipment id, pipe
+  id, label index, port name) and `data-kind`, so a test finds P101 by name
+  instead of by its position in the file. No visible change.
+
+### Changed
+
+- **The webview gesture harness runs in CI** (`vscode-iec-gestures`), and its Ladder palette test now drives the `FB…` block picker it went stale against. Chrome's `--no-sandbox` is opt-in via `GESTURE_NO_SANDBOX=1`.
+
+### Changed
+
+- **Testability ids in the FBD, ladder and SFC editors.** Every clickable,
+  draggable or selectable element (nodes, pins, edges, rungs, contacts,
+  coils, FBs, steps, transitions, action rows, comments, palette and vars
+  chips) now carries `data-id` (the model's identity) and `data-kind`, and
+  pins carry `data-pin`, so UI tests no longer depend on CSS or DOM order.
+  No behaviour change.
+
+### Fixed
+
+- **Live values on a Logix routine find program-scope tags.** A rung in
+  `MainProgram` names its tag `Counts`, but `naut logix serve` serves it
+  as `MainProgram_Counts`, so the ladder overlay showed nothing for any
+  program tag. It now looks up the program's tag first and falls back to
+  the controller tag, the order Logix itself uses. An indexed operand
+  (`Recipe[2]`) resolves too, because Logix arrays always start at 0. A
+  routine inside an Add-On Instruction shows no values: its operands are
+  the parameters of whichever instance runs, and a controller tag that
+  shares a name is not one of them. (Needs the matching `naut` CLI.)
 
 ## [0.13.0] - 2026-09-25
 
