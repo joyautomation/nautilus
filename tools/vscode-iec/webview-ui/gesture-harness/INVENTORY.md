@@ -32,14 +32,14 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 153 rows. **32 rows have no coverage at all** (no webview test,
+Totals: 153 rows. **28 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
 |---|---|---|
 | Commands | 28 | 8 |
 | FBD `?` | 18 | 4 |
-| Ladder `?` | 20 | 4 |
+| Ladder `?` | 20 | 0 |
 | SFC `?` | 22 | 1 |
 | Mimic `?` | 18 | 3 |
 | Component `?` | 8 | 3 |
@@ -111,19 +111,19 @@ no rig verb, no smoke check); per section below.
 | L04 | LD | Commit / cancel an in-place edit | "?" list LD / Edit / `Enter / Esc` | — | float_edit | — |
 | L05 | LD | Click ⊕ to insert an element at that spot | "?" list LD / Edit / `⊕` | — | ld_add_contact, ld_add_coil, ld_add_block | — |
 | L06 | LD | Drag a palette item onto a rung spot | "?" list LD / Edit / `Drag a palette item` | diagram.test.mjs: Ladder: TON from the palette takes the first free instance name | ld_palette, g_drag_to | — |
-| L07 | LD | Drag an element to another spot or rung | "?" list LD / Edit / `Drag an element` | diagram.test.mjs: Ladder zoom: a palette drop and a node drag still hit their spots at 173% | g_drag_to | — |
+| L07 | LD | Drag an element to another spot or rung | "?" list LD / Edit / `Drag an element` | diagram.test.mjs: Ladder zoom: a palette drop and a node drag still hit their spots at 173%; ld-keys.test.mjs: a contact dragged into another rung / to a later spot in its own rung post one `move` op (L07) | g_drag_to | — |
 | L08 | LD | Delete the element, or the rung when its name is selected | "?" list LD / Edit / `Del / Backspace` | diagram.test.mjs: Ladder: click a rung name, Del deletes the rung | ld_delete_last_coil | — |
-| L09 | LD | Press N to toggle a contact between NO and NC | "?" list LD / Edit / `N` | — | — | — |
-| L10 | LD | Press M to cycle a coil normal → set → reset | "?" list LD / Edit / `M` | — | — | — |
+| L09 | LD | Press N to toggle a contact between NO and NC | "?" list LD / Edit / `N` | ld-keys.test.mjs: N on a selected contact posts toggleNeg, again flips it back | — | — |
+| L10 | LD | Press M to cycle a coil normal → set → reset | "?" list LD / Edit / `M` | ld-keys.test.mjs: M on a selected coil cycles normal -> set -> reset -> normal | — | — |
 | L11 | LD | Press B to wrap the selection in a parallel branch | "?" list LD / Edit / `B` | — | ld_add_branch | — |
 | L12 | LD | Copy, cut, paste an element (into another ladder too) | "?" list LD / Edit / `Ctrl + C / X / V` | — | — | 05 (cut / paste) |
 | L13 | LD | Esc cancels a drag | "?" list LD / Edit / `Esc` | diagram.test.mjs: Ladder: Esc cancels an in-flight palette drag | — | — |
 | L14 | LD | Zoom around the pointer | "?" list LD / View / `Ctrl + wheel / pinch` | diagram.test.mjs: Ladder zoom: Ctrl+wheel zooms around the cursor | diagram_zoom | 06 |
 | L15 | LD | Zoom in / out (corner buttons too) | "?" list LD / View / `Ctrl + = / Ctrl + -` | diagram.test.mjs: Ladder zoom: buttons and Ctrl+= / Ctrl+- / Ctrl+0 | diagram_zoom | 06 |
 | L16 | LD | Fit the widest rung to the pane width | "?" list LD / View / `Ctrl + 0` | diagram.test.mjs: Ladder zoom: buttons and Ctrl+= / Ctrl+- / Ctrl+0 | diagram_zoom | 06 |
-| L17 | LD | Pan by middle-dragging (wheel and scrollbars scroll) | "?" list LD / View / `Middle-drag` | — | — | — |
+| L17 | LD | Pan by middle-dragging (wheel and scrollbars scroll) | "?" list LD / View / `Middle-drag` | ld-keys.test.mjs: a middle-button drag scrolls the pane by the drag delta and posts no op; the wheel scrolls too | — | — |
 | L18 | LD | Undo the last edit to the file from the diagram | "?" list LD / File / `Ctrl + Z` | — | g_key (ctrl+z in takes) | — |
-| L19 | LD | Redo | "?" list LD / File / `Ctrl + Y / Ctrl + Shift + Z` | — | — | — |
+| L19 | LD | Redo | "?" list LD / File / `Ctrl + Y / Ctrl + Shift + Z` | ld-keys.test.mjs: Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y post diagramKey undo / redo / redo | — | — |
 | L20 | LD | Save the file from the diagram | "?" list LD / File / `Ctrl + S` | — | g_save | — |
 
 ## SFC editor (`?` list)
@@ -235,13 +235,13 @@ no rig verb, no smoke check); per section below.
 
 ## Count of rows with no coverage at all
 
-**32 of 153.** The commands are the thinnest area: only the download /
+**28 of 153.** The commands are the thinnest area: only the download /
 rollback pair (08), the title-bar buttons (04) and the previews (03, 07, 10)
 are touched by any smoke check, and no webview test can reach a command because
 commands live in the extension host (that is what the E3 test-state hooks are
-for). Of the editors the SFC is best covered; the ladder single-key shortcuts
-(`N`, `M`) and every pan gesture (middle-drag, drag empty canvas) have no test
-of any kind.
+for). Of the editors the SFC is best covered; the ladder's `N` / `M` keys, redo and
+middle-drag pan are now pinned by `ld-keys.test.mjs`, while drag-on-empty-canvas
+pan (mimic) still has no test of any kind.
 
 Notes for the next pass:
 
