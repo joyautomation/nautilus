@@ -174,3 +174,25 @@ func captureStdout(t *testing.T, fn func() int) string {
 	r.Close()
 	return sb.String()
 }
+
+// --project writes the export as a whole nautilus project: manifest,
+// tags, the program as ladder source — and the project checks clean for
+// the Logix target, which is the point of a brownfield import.
+func TestLogixImportProject(t *testing.T) {
+	dir := t.TempDir()
+	if code := runLogixImport([]string{"--project", dir, filepath.Join("..", "..", "lang", "l5x", "testdata", "demoline.L5X")}); code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	for _, name := range []string{"nautilus.yaml", "tags/logix.yaml", "MainProgram.ld"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	src, _ := os.ReadFile(filepath.Join(dir, "MainProgram.ld"))
+	if !strings.Contains(string(src), "[ StartPB | RunCmd ] /StopPB ( RunCmd )") {
+		t.Errorf("program:\n%s", src)
+	}
+	if code := runCheck([]string{"--target", "logix", dir}); code != 0 {
+		t.Errorf("naut check --target logix exit %d", code)
+	}
+}

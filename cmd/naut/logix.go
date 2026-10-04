@@ -13,6 +13,7 @@ import (
 
 	"github.com/joyautomation/nautilus/internal/stproject"
 	"github.com/joyautomation/nautilus/lang/l5x"
+	"github.com/joyautomation/nautilus/logix/importer"
 	"github.com/joyautomation/nautilus/logix/writer"
 )
 
@@ -27,6 +28,14 @@ Usage:
                                        file WITH the controller's own tag
                                        descriptions — which a live CIP browse
                                        cannot recover.
+  naut logix import --project <dir> <file.L5X>
+                                       Brownfield: the whole export as a
+                                       nautilus project — manifest, tags,
+                                       types, every ladder routine as a
+                                       PROGRAM, every Add-On Instruction as
+                                       a FUNCTION_BLOCK in lib/. Rungs with
+                                       no nautilus form are kept as comments
+                                       and reported, never guessed at.
   naut logix graph <file.L5X|-> [routine]
                                        Emit an RLL routine's ladder render
                                        model as JSON: the same shape
@@ -189,6 +198,10 @@ func runLogixImport(args []string) int {
 	skip := fs.String("skip", "", "comma-separated globs to leave OUT of the tag file")
 	constants := fs.Bool("constants", false, "include Logix Constant tags")
 	allTypes := fs.Bool("all-types", false, "also emit module- and product-defined shapes")
+	projectDir := fs.String("project", "", "write the export as a whole nautilus project into this directory")
+	programs := fs.String("programs", "", "with --project: comma-separated Logix programs to import (default all)")
+	commPath := fs.String("comm-path", "", "with --project: the FactoryTalk Linx path for the manifest's target")
+	host := fs.String("host", "", "with --project: the controller's EtherNet/IP address for the manifest's target")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -200,6 +213,11 @@ func runLogixImport(args []string) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut logix import:", err)
 		return 1
+	}
+	if *projectDir != "" {
+		return runLogixImportProject(f, *projectDir, importer.Options{
+			Programs: splitPatterns(*programs), CommPath: *commPath, Host: *host,
+		})
 	}
 
 	// The types the tags actually bind are the roots, so the generated
@@ -246,6 +264,40 @@ func runLogixImport(args []string) int {
 	fmt.Printf("wrote %s (%d types) and %s (%d tags)\n",
 		typesPath, len(known), tagsPath, countTags(raw))
 	fmt.Printf("compose the tags with `tag-files: [%s]`\n", *tagsOut)
+	return 0
+}
+
+// runLogixImportProject writes the brownfield import and its report.
+func runLogixImportProject(f *l5x.File, dir string, opts importer.Options) int {
+	p, err := importer.Import(f, opts)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut logix import:", err)
+		return 1
+	}
+	names := make([]string, 0, len(p.Files))
+	for name := range p.Files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := writeUnder(filepath.Join(dir, filepath.FromSlash(name)), p.Files[name]); err != nil {
+			fmt.Fprintln(os.Stderr, "naut logix import:", err)
+			return 1
+		}
+		fmt.Println("wrote", filepath.Join(dir, filepath.FromSlash(name)))
+	}
+	fmt.Printf("%d ladder routines, %d complete; %d rungs, %d carried\n", p.Routines, p.Complete, p.Rungs, p.Imported)
+	if rs := p.Reasons(); len(rs) > 0 {
+		fmt.Println("rungs not carried, by reason:", strings.Join(rs, ", "))
+	}
+	for _, n := range p.Notes {
+		if n.Rung < 0 {
+			fmt.Println("  note:", n)
+		}
+	}
+	if p.Complete < p.Routines {
+		fmt.Printf("%d routine(s) are incomplete: their files say so in the header, and `naut logix deploy` of one would leave logic out.\n", p.Routines-p.Complete)
+	}
 	return 0
 }
 
