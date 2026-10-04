@@ -95,23 +95,29 @@ func analyze(text, prelude string, preludeLines int) analysis {
 
 	if _, err := st.Lower(lowerProg); err != nil {
 		pos := st.Pos{Line: 1, Col: 1}
+		var end st.Pos
 		msg := err.Error()
 		if le, ok := st.AsLowerError(err); ok && le.Pos.Line > 0 {
 			// The squiggle already marks the line; drop the "line N:"
-			// prefix LowerError.Error() adds.
-			pos, msg = le.Pos, le.Err.Error()
+			// prefix LowerError.Error() adds. Pos/End are the offending
+			// name when the compiler knew it (an undeclared identifier, an
+			// unknown member), else the statement start.
+			pos, end, msg = le.Pos, le.End, le.Err.Error()
 		}
 		if pos.Line > preludeLines {
 			pos.Line -= preludeLines
+			if end.Line > 0 {
+				end.Line -= preludeLines
+			}
 		} else if preludeLines > 0 {
 			// The error sits inside a sibling library file (duplicate type,
 			// broken FB, ...). Surface it here at 1:1 so it isn't silently
 			// swallowed, but say where it came from.
-			pos = st.Pos{Line: 1, Col: 1}
+			pos, end = st.Pos{Line: 1, Col: 1}, st.Pos{}
 			msg = "in project library files: " + msg
 		}
 		a.Diags = append(a.Diags, Diagnostic{
-			Range:    posRange(text, pos),
+			Range:    spanRange(text, pos, end),
 			Severity: SeverityError,
 			Source:   "nautilus-st",
 			Message:  msg,
@@ -682,6 +688,21 @@ func lineRange(text string, line int) Range {
 		Start: Position{Line: line - 1, Character: start},
 		End:   Position{Line: line - 1, Character: len(l)},
 	}
+}
+
+// spanRange covers [pos, end) when the compiler reported the offending
+// token's extent (same line, inside the line's text), else falls back to
+// posRange's identifier scan from pos.
+func spanRange(text string, pos, end st.Pos) Range {
+	if end.Line == pos.Line && pos.Col >= 1 && end.Col > pos.Col {
+		if l := lineText(text, pos.Line); end.Col-1 <= len(l) {
+			return Range{
+				Start: Position{Line: pos.Line - 1, Character: pos.Col - 1},
+				End:   Position{Line: pos.Line - 1, Character: end.Col - 1},
+			}
+		}
+	}
+	return posRange(text, pos)
 }
 
 // posRange spans the identifier starting at a 1-based compiler position,
