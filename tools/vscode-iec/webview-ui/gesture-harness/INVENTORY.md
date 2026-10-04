@@ -92,7 +92,7 @@ no rig verb, no smoke check); per section below.
 | F08 | FBD | Drag from an output pin to an input pin to wire; drop on + to add an input | "?" list FBD / Edit / `Drag pin → pin` | diagram.test.mjs: FBD: disconnecting two inputs of one block goes highest pin first (disconnect, not wire); fbd-drag.test.mjs: FBD drag: output pin → input pin posts a rewire naming exactly those pins; dropping a wire on a block's + posts addInput; a wire released on empty canvas posts nothing | fbd_wire | — |
 | F09 | FBD | Delete the selection; a selected wire disconnects | "?" list FBD / Edit / `Del / Backspace` | diagram.test.mjs: FBD: deleting a wired coil posts no disconnects for its own edges | fbd_wire (asserts) | — |
 | F10 | FBD | Copy, cut, paste; pastes into another .fbd too | "?" list FBD / Edit / `Ctrl + C / X / V` | diagram.test.mjs: FBD: Ctrl+C / Ctrl+V duplicates in place; Ctrl+X deletes | — | 05 |
-| F11 | FBD | Move a node; the position is pinned in the file | "?" list FBD / Layout & view / `Drag a node` | fbd-drag.test.mjs: FBD drag: dragging a node posts ONE setLayout per drag, with the new coordinates (F11) | — | — |
+| F11 | FBD | Move a node; the position is pinned in the file | "?" list FBD / Layout & view / `Drag a node` | fbd-drag.test.mjs: FBD drag: dragging a node posts ONE setLayout per drag, with the new coordinates (F11) | fbd_move_node (selftest: reads the `@layout` entry back) | — |
 | F12 | FBD | Move the selection with the arrow keys (pinned like a drag) | "?" list FBD / Layout & view / `Arrow keys` | diagram.test.mjs: FBD: arrow-key moves persist as ONE setLayout | — | — |
 | F13 | FBD | Pan the canvas by dragging empty space | "?" list FBD / Layout & view / `Drag empty canvas` | fbd-drag.test.mjs: FBD drag: dragging empty canvas pans the viewport and posts no edit (F13) | — | — |
 | F14 | FBD | Scroll or pinch to zoom (corner buttons zoom and fit too) | "?" list FBD / Layout & view / `Scroll / pinch` | diagram.test.mjs: FBD zoom: Ctrl+= / Ctrl+- / Ctrl+0 drive the xyflow viewport too (keys only) | fbd_zoom_to | 06 (ladder and SFC only) |
@@ -111,7 +111,7 @@ no rig verb, no smoke check); per section below.
 | L04 | LD | Commit / cancel an in-place edit | "?" list LD / Edit / `Enter / Esc` | — | float_edit | — |
 | L05 | LD | Click ⊕ to insert an element at that spot | "?" list LD / Edit / `⊕` | — | ld_add_contact, ld_add_coil, ld_add_block | — |
 | L06 | LD | Drag a palette item onto a rung spot | "?" list LD / Edit / `Drag a palette item` | diagram.test.mjs: Ladder: TON from the palette takes the first free instance name | ld_palette, g_drag_to | — |
-| L07 | LD | Drag an element to another spot or rung | "?" list LD / Edit / `Drag an element` | diagram.test.mjs: Ladder zoom: a palette drop and a node drag still hit their spots at 173%; ld-keys.test.mjs: a contact dragged into another rung / to a later spot in its own rung post one `move` op (L07) | g_drag_to | — |
+| L07 | LD | Drag an element to another spot or rung | "?" list LD / Edit / `Drag an element` | diagram.test.mjs: Ladder zoom: a palette drop and a node drag still hit their spots at 173%; ld-keys.test.mjs: a contact dragged into another rung / to a later spot in its own rung post one `move` op (L07) | ld_move_element (selftest: another rung, the same rung, a coil) | — |
 | L08 | LD | Delete the element, or the rung when its name is selected | "?" list LD / Edit / `Del / Backspace` | diagram.test.mjs: Ladder: click a rung name, Del deletes the rung | ld_delete_last_coil | — |
 | L09 | LD | Press N to toggle a contact between NO and NC | "?" list LD / Edit / `N` | ld-keys.test.mjs: N on a selected contact posts toggleNeg, again flips it back | — | — |
 | L10 | LD | Press M to cycle a coil normal → set → reset | "?" list LD / Edit / `M` | ld-keys.test.mjs: M on a selected coil cycles normal -> set -> reset -> normal | — | — |
@@ -180,7 +180,7 @@ no rig verb, no smoke check); per section below.
 
 | id | area | gesture | source of the claim | webview test | rig verb | smoke |
 |---|---|---|---|---|---|---|
-| P01 | Component | Drag a port dot to move the port | "?" list COMP / Ports / `Drag a dot` | component-ports.test.mjs: P01 component: dragging a port dot posts the port at its new fraction, and the dot renders there | — | — |
+| P01 | Component | Drag a port dot to move the port | "?" list COMP / Ports / `Drag a dot` | component-ports.test.mjs: P01 component: dragging a port dot posts the port at its new fraction, and the dot renders there | component_move_port (selftest; an explicit `dir` is dropped by the drag: XFAIL, #130) | — |
 | P02 | Component | Double-click a port dot to remove the port | "?" list COMP / Ports / `Double-click a dot` | — | component_add_port (add side only) | — |
 | P03 | Component | Double-click the outline to add a port there | "?" list COMP / Ports / `Double-click the outline` | — | component_add_port | — |
 | P04 | Component | Click a port dot or panel row to select the port | "?" list COMP / Ports / `Click a dot or panel row` | gestures.test.mjs: ports-edit: a DEAD-CENTER click on a port dot selects the port; VISUAL: ports-edit dot selection (in the mimic editor's ports mode) | — | — |
