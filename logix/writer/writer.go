@@ -199,6 +199,19 @@ type lowered struct {
 	// TYPE declarations found in the libraries (types.go).
 	types    map[string]*udt
 	rawTypes map[string]*st.TypeDecl
+	// st marks a Structured Text program: block instances are FBD
+	// structures, TIME is a DINT, and the routine is stLines.
+	st      bool
+	stLines []string
+}
+
+// blockType is the Logix structure behind a block instance: TIMER and
+// COUNTER on a ladder rung, FBD_TIMER and FBD_COUNTER in an ST routine.
+func (lw *lowered) blockType(typ string) string {
+	if lw.st {
+		return stBlockTypes[strings.ToUpper(typ)]
+	}
+	return blockTypes[strings.ToUpper(typ)]
 }
 
 // tagDef is one Logix tag to emit.
@@ -360,7 +373,7 @@ func (lw *lowered) declare(v ld.VarDecl) {
 		}
 		lw.addTag(tagDef{Name: v.Name, DataType: scalarTypes[u], Dim: dim, Value: val, Scope: scope, Line: v.Line})
 	case u == "TIME":
-		if !lw.presetVars[strings.ToLower(v.Name)] {
+		if !lw.presetVars[strings.ToLower(v.Name)] && !lw.st {
 			lw.diag(ruleTime, v.Line, "", "%s: TIME has no Logix type; a TIME variable is carried as DINT milliseconds only where it feeds a timer preset (PT := %s)", v.Name, v.Name)
 			return
 		}
@@ -377,7 +390,7 @@ func (lw *lowered) declare(v ld.VarDecl) {
 			}
 		}
 		lw.addTag(tagDef{Name: v.Name, DataType: "DINT", Value: strconv.FormatInt(ms, 10), Scope: scope, Line: v.Line})
-	case blockTypes[u] != "":
+	case lw.blockType(u) != "":
 		if dim > 0 {
 			lw.diag(ruleArrayShape, v.Line, "", "%s: an array of %s is not in the v1 subset; declare one instance per element", v.Name, u)
 			return
@@ -386,7 +399,7 @@ func (lw *lowered) declare(v ld.VarDecl) {
 			lw.diag(ruleInit, v.Line, "", "%s: a %s instance takes no initializer; the preset comes from the rung (PT := / PV :=)", v.Name, u)
 			return
 		}
-		lw.addTag(tagDef{Name: v.Name, DataType: blockTypes[u], Scope: scope, Line: v.Line})
+		lw.addTag(tagDef{Name: v.Name, DataType: lw.blockType(u), Scope: scope, Line: v.Line})
 	case lw.rawTypes[strings.ToLower(u)] != nil:
 		udt, ok := lw.resolveType(typ, v.Line, v.Name)
 		if !ok {

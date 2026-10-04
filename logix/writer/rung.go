@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/ld"
+	"github.com/joyautomation/nautilus/lang/st"
 )
 
 // Rung lowering: the ladder graph's elements to Logix neutral text.
@@ -413,7 +414,7 @@ func (c *rungCtx) block(e ld.Element, top, isLast bool) (text, cont string, ok b
 		case "SR", "RS":
 			alt = "write the latch as ( S X ) and ( R X ) coils"
 		default:
-			if _, user := c.lw.userBlock(e.Type); user {
+			if c.lw.userBlock(e.Type) {
 				alt = "user blocks become Add-On Instructions in a later phase; inline its rungs here"
 			}
 		}
@@ -553,15 +554,38 @@ func (lw *lowered) findTag(name string) *tagDef {
 	return nil
 }
 
-// userBlock reports whether a type is a user FUNCTION_BLOCK the model's
-// catalog knows.
-func (lw *lowered) userBlock(typ string) (ld.FBType, bool) {
+// userBlock reports whether a name is a user FUNCTION_BLOCK the model's
+// catalog or a library declares.
+func (lw *lowered) userBlock(typ string) bool {
 	for _, t := range lw.model.FBTypes {
 		if t.User && strings.EqualFold(t.Name, typ) {
-			return t, true
+			return true
 		}
 	}
-	return ld.FBType{}, false
+	for _, lib := range lw.opts.Libs {
+		if prog, err := st.Parse(lib); err == nil {
+			for _, fb := range prog.FBDecls {
+				if strings.EqualFold(fb.Name, typ) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// userFunction reports whether a name is a user FUNCTION a library declares.
+func (lw *lowered) userFunction(name string) bool {
+	for _, lib := range lw.opts.Libs {
+		if prog, err := st.Parse(lib); err == nil {
+			for _, fn := range prog.FuncDecls {
+				if strings.EqualFold(fn.Name, name) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // splitBinding reads `PIN := value` or `PIN => target`.

@@ -68,22 +68,34 @@ func emit(lw *lowered, o Options) []byte {
 	w(`<Program Name="%s" TestEdits="false" MainRoutineName="%s" Disabled="false" UseAsFolder="false">`, attr(o.Program), attr(o.Routine))
 	emitTags(&b, lw.progTags)
 	w(`<Routines>`)
-	w(`<Routine Name="%s" Type="RLL">`, attr(o.Routine))
-	w(`<RLLContent>`)
-	for i, r := range lw.rungs {
-		w(`<Rung Number="%d" Type="N">`, i)
-		if r.Comment != "" {
-			w(`<Comment>`)
-			w(`%s`, cdata(r.Comment))
-			w(`</Comment>`)
+	if lw.st {
+		w(`<Routine Name="%s" Type="ST">`, attr(o.Routine))
+		w(`<STContent>`)
+		for i, line := range lw.stLines {
+			w(`<Line Number="%d">`, i)
+			w(`%s`, cdata(line))
+			w(`</Line>`)
 		}
-		w(`<Text>`)
-		w(`%s`, cdata(r.Text+";"))
-		w(`</Text>`)
-		w(`</Rung>`)
+		w(`</STContent>`)
+		w(`</Routine>`)
+	} else {
+		w(`<Routine Name="%s" Type="RLL">`, attr(o.Routine))
+		w(`<RLLContent>`)
+		for i, r := range lw.rungs {
+			w(`<Rung Number="%d" Type="N">`, i)
+			if r.Comment != "" {
+				w(`<Comment>`)
+				w(`%s`, cdata(r.Comment))
+				w(`</Comment>`)
+			}
+			w(`<Text>`)
+			w(`%s`, cdata(r.Text+";"))
+			w(`</Text>`)
+			w(`</Rung>`)
+		}
+		w(`</RLLContent>`)
+		w(`</Routine>`)
 	}
-	w(`</RLLContent>`)
-	w(`</Routine>`)
 	w(`</Routines>`)
 	w(`</Program>`)
 	if len(lw.sideRungs) > 0 {
@@ -195,6 +207,10 @@ func emitTags(b *strings.Builder, tags []tagDef) {
 			w(`%s`, cdata(t.Desc))
 			w(`</Description>`)
 		}
+		if strings.HasPrefix(t.DataType, "FBD_") {
+			w(`</Tag>`)
+			continue
+		}
 		w(`<Data Format="L5K">`)
 		w(`%s`, cdata(l5kValue(t)))
 		w(`</Data>`)
@@ -235,7 +251,7 @@ func radixOf(dt string) string {
 	switch dt {
 	case "REAL", "LREAL":
 		return "Float"
-	case "TIMER", "COUNTER":
+	case "TIMER", "COUNTER", "FBD_TIMER", "FBD_COUNTER":
 		return ""
 	default:
 		return "Decimal"

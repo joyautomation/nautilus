@@ -675,7 +675,12 @@ over EtherNet/IP that the controller's logic then acts on.
 **The yardstick, written:** `logix/writer/testdata/conformance/yardstick`
 is batch-skid's `line/Line.L5X` Receive routine as a nautilus project. The
 writer emits the export's rung text, with `LES` spelled `LT`
-(`TestYardstickMatchesLineL5X`); 3 scenarios pass on nautilus.
+(`TestYardstickMatchesLineL5X`). **Downloaded to Echo and run there: 3 of
+3 scenarios pass on both runtimes** (ready below 80 %, the 2 s settle
+before accept with a fault dropping it and raising the structure's alarm
+member, the high-level cutoff unlatching an accept the same scan the OTE
+re-asserts it). The §7a yardstick criterion is closed on both halves:
+instructions and types.
 
 ## 8. The demo this enables
 
