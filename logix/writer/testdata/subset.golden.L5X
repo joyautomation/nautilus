@@ -495,6 +495,22 @@ seal-in with a stop]]>
 <![CDATA[XIC(Fault)TON(t3,?,?);]]>
 </Text>
 </Rung>
+<Rung Number="18" Type="N">
+<Comment>
+<![CDATA[assignments: one instruction per shape, CPT for the rest]]>
+</Comment>
+<Text>
+<![CDATA[XIC(Run)ADD(Counts,1,Counts)MOVE(5,Target)ABS(Big,Big)CPT(Level,(Level + HiSP) / 2.0)OTE(Ready);]]>
+</Text>
+</Rung>
+<Rung Number="19" Type="N">
+<Comment>
+<![CDATA[a compare with an expression operand is a CMP]]>
+</Comment>
+<Text>
+<![CDATA[CMP(Level + 1.0 > HiSP)CMP(Counts MOD 2 <> 0)MOVE(0,Steps);]]>
+</Text>
+</Rung>
 </RLLContent>
 </Routine>
 </Routines>

@@ -275,7 +275,9 @@ func TestRejections(t *testing.T) {
 		{"TOF in branch", wrap("t : TOF; X : BOOL; Y : BOOL; Z : BOOL;", "RUNG r [ X t:TOF(PT := T#1S) | Z ] ( Y )"), ruleTOFPosition, "t:TOF"},
 		{"CTU in branch", wrap("c : CTU; X : BOOL; Y : BOOL; Z : BOOL;", "RUNG r [ X c:CTU(PV := 2) | Z ] ( Y )"), ruleTOFPosition, "c:CTU"},
 		{"fn not compare", wrap("X : BOOL; Y : BOOL; N : INT;", "RUNG r X ODD(N) ( Y )"), ruleFn, "ODD"},
-		{"operand expression", wrap("X : BOOL; Y : BOOL; N : INT;", "RUNG r GT(N + 1, 5) ( Y )"), ruleOperand, "N + 1"},
+		{"operand Logix cannot spell", wrap("X : BOOL; Y : BOOL; N : INT;", "RUNG r GT(MIN(N, 1), 5) ( Y )"), ruleOperand, "MIN"},
+		{"assignment of a comparison", wrap("X : BOOL; Y : BOOL; N : INT;", "RUNG r X { Y := N > 1 }"), ruleDataOp, "coil"},
+		{"assignment Logix cannot spell", wrap("X : BOOL; N : INT; M : INT;", "RUNG r X { N := MAX(N, M) }"), ruleDataOp, "MAX"},
 		{"edge coil beside another", wrap("X : BOOL; Y : BOOL; Z : BOOL;", "RUNG r X ( P Y ) ( Z )"), ruleCoilEdge, "( P Y )"},
 		{"member of scalar", wrap("X : BOOL; Y : BOOL; N : INT;", "RUNG r N.Hi ( Y )"), ruleMember, "N.Hi"},
 		{"member of timer", wrap("t : TON; X : BOOL; Y : BOOL;", "RUNG r t.TT ( Y )"), ruleMember, "TT"},
@@ -993,5 +995,43 @@ END_PROGRAM
 	}
 	for _, p := range problems {
 		t.Error(p)
+	}
+}
+
+// Assignments become the Logix data instruction their shape names, or a
+// CPT; an expression operand in a compare becomes a CMP.
+func TestAssignmentsAndExpressionCompares(t *testing.T) {
+	src := `PROGRAM P
+VAR_EXTERNAL
+    a : BOOL; b : BOOL; n : DINT; m : DINT; r : REAL; q : REAL;
+END_VAR
+LD
+  RUNG move
+    a { n := m; r := 1.5; n := 16#FF }
+  RUNG math
+    a { n := n + 1; m := n - m; r := r * 2.0; q := r / q; r := ABS(q) }
+  RUNG cpt
+    a { n := (n + 3) * m - 7; r := SQRT(q) + ABS(r) ** 2.0; n := -m; n := n MOD 4; r := TRUNC(q) }
+  RUNG cmp
+    GT(n + 1, m) /LE(r * 2.0, q) EQ(n MOD 2, 0) ( b )
+  RUNG time
+    a { n := T#1500MS }
+END_LD
+END_PROGRAM
+`
+	f := mustWrite(t, src, Options{})
+	var got []string
+	for _, rg := range f.Controller.Programs[0].Routines[0].Rungs {
+		got = append(got, rg.Text)
+	}
+	want := []string{
+		"XIC(a)MOVE(m,n)MOVE(1.5,r)MOVE(16#FF,n);",
+		"XIC(a)ADD(n,1,n)SUB(n,m,m)MUL(r,2.0,r)DIV(r,q,q)ABS(q,r);",
+		"XIC(a)CPT(n,((n + 3) * m) - 7)CPT(r,SQR(q) + (ABS(r) ** 2.0))CPT(n,-m)CPT(n,n MOD 4)CPT(r,TRN(q));",
+		"CMP(n + 1 > m)CMP(r * 2.0 > q)CMP(n MOD 2 = 0)OTE(b);",
+		"XIC(a)MOVE(1500,n);",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("rungs\n got %s\nwant %s", strings.Join(got, "\n     "), strings.Join(want, "\n     "))
 	}
 }

@@ -10,8 +10,8 @@ var Mnemonics = []string{
 	"ONS", "OSR", "OSF",
 	"GT", "GE", "LT", "LE", "EQ", "NE",
 	"TON", "TOF", "CTU", "RES",
-	"MOVE",
-	"ADD", // side code: the heartbeat
+	"MOVE", "ADD", "SUB", "MUL", "DIV", "ABS", "CPT", // assignments
+	"CMP", // a compare with an expression operand
 }
 
 // CorpusVocabulary is every instruction mnemonic found across the 52 real

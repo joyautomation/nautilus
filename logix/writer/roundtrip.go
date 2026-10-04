@@ -260,9 +260,20 @@ func (c *cmp) series(r ld.Rung, elems []ld.Element, top, noCoils bool) {
 			if e.Neg {
 				fn = compareComplement[fn]
 			}
+			expr := false
 			var args []string
 			for _, a := range splitArgs(e.Args) {
+				a = strings.TrimSpace(a)
+				if !numRe.MatchString(a) && !isRef(a) {
+					expr = true
+				}
 				args = append(args, c.logixRef(a))
+			}
+			if expr {
+				if g.Kind != "fn" || g.Fn != "CMP" || !strings.Contains(g.Args, cmpOp[fn]) {
+					c.problemf(r.Name, "element %+v, want CMP(… %s …)", g, cmpOp[fn])
+				}
+				continue
 			}
 			want := strings.Join(args, ", ")
 			if g.Kind != "fn" || g.Fn != fn || g.Args != want {
@@ -296,6 +307,22 @@ func (c *cmp) series(r ld.Rung, elems []ld.Element, top, noCoils bool) {
 			}
 			if g.Kind != "contact" || g.Ref != out || g.Neg {
 				c.problemf(r.Name, "element %+v, want the edge output XIC(%s)", g, out)
+			}
+		case "assign":
+			as, err := ld.ParseAssignments(e.Text)
+			if err != nil {
+				c.problemf(r.Name, "assignment %q: %v", e.Text, err)
+				continue
+			}
+			for _, a := range as {
+				g, ok := c.next(r)
+				if !ok {
+					return
+				}
+				target := c.logixRef(a.Target)
+				if g.Kind != "fn" || !dataInstr[g.Fn] || !containsOperand(g.Args, target) {
+					c.problemf(r.Name, "element %+v, want a data instruction writing %s", g, target)
+				}
 			}
 		case "branch":
 			g, ok := c.next(r)
@@ -515,4 +542,17 @@ func roundTripAgainst(src string, opts Options, doc []byte) ([]byte, []string, e
 	}
 	c.tags()
 	return doc, c.problems, nil
+}
+
+var dataInstr = map[string]bool{"MOVE": true, "ADD": true, "SUB": true, "MUL": true, "DIV": true, "ABS": true, "CPT": true}
+
+// containsOperand reports whether a comma-separated operand list names
+// target as one operand.
+func containsOperand(args, target string) bool {
+	for _, a := range strings.Split(args, ",") {
+		if strings.TrimSpace(a) == target {
+			return true
+		}
+	}
+	return false
 }

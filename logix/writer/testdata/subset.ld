@@ -65,5 +65,11 @@ LD
 
   RUNG tail (* a block as the rung's last element *)
     Fault t3:TON(PT := T#500MS)
+
+  RUNG data (* assignments: one instruction per shape, CPT for the rest *)
+    Run { Counts := Counts + 1; Target := 5; Big := ABS(Big); Level := (Level + HiSP) / 2.0 } ( Ready )
+
+  RUNG cmp (* a compare with an expression operand is a CMP *)
+    GT(Level + 1.0, HiSP) /EQ(Counts MOD 2, 0) { Steps := 0 }
 END_LD
 END_PROGRAM

@@ -28,6 +28,7 @@ const (
 	ruleCoilEdge      = "logix/coil-edge"      // ( P X ) / ( N X )
 	ruleMember        = "logix/member"         // an accessor into a type with no Logix shape
 	ruleST            = "logix/st"             // an ST statement or function with no Logix form
+	ruleDataOp        = "logix/data-op"        // an assignment with no Logix data instruction or expression
 )
 
 // Rules lists every rule with a one-line description, for documentation
@@ -47,8 +48,9 @@ var Rules = []struct{ ID, Description string }{
 	{ruleReset, "a counter reset is a plain BOOL reference"},
 	{ruleTOFPosition, "a TOF or CTU sits on the rung itself, not inside a branch: its done bit outlives its rung-in"},
 	{ruleFn, "function contacts are the compares GT GE LT LE EQ NE"},
-	{ruleOperand, "compare operands are tag references or numeric literals"},
+	{ruleOperand, "a compare operand must be a reference, a literal, or an expression Logix can spell (CMP)"},
 	{ruleCoilEdge, "an edge coil ( P X ) / ( N X ) must be its rung's only coil"},
 	{ruleMember, "member access is only into timer and counter instances and declared STRUCT types"},
 	{ruleST, "ST: RETURN, CONTINUE, STRING, MIN/MAX/LIMIT/SEL/MUX, ATAN2 and user calls have no Logix form"},
+	{ruleDataOp, "an assignment is MOVE/ADD/SUB/MUL/DIV/ABS or a CPT expression; no comparisons, booleans, or functions Logix cannot spell"},
 }

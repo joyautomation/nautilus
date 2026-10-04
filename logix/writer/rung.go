@@ -111,6 +111,12 @@ func (c *rungCtx) series(elems []ld.Element, top bool) string {
 				continue
 			}
 			parts = append(parts, cont)
+		case "assign":
+			// Data instructions in series: each passes its rung-in on.
+			texts, ok := c.assign(e)
+			if ok {
+				parts = append(parts, texts...)
+			}
 		case "coil":
 			// Unreachable: lang/ld keeps coils in Rung.Coils.
 		}
@@ -285,16 +291,21 @@ func (c *rungCtx) compare(e ld.Element) (string, bool) {
 		c.lw.diag(ruleOperand, c.r.Line, c.r.Name, "%s(%s): a Logix compare takes exactly two operands", e.Fn, e.Args)
 		return "", false
 	}
+	if e.Neg {
+		fn = compareComplement[fn]
+	}
 	var ops []string
 	for _, a := range args {
+		a = strings.TrimSpace(a)
+		if !numRe.MatchString(a) && !isRef(a) {
+			// An expression operand: the whole compare is a CMP.
+			return c.cmpExpr(fn, args, e)
+		}
 		op, ok := c.operand(a, e)
 		if !ok {
 			return "", false
 		}
 		ops = append(ops, op)
-	}
-	if e.Neg {
-		fn = compareComplement[fn]
 	}
 	return fn + "(" + strings.Join(ops, ",") + ")", true
 }

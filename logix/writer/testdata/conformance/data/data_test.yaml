@@ -1,0 +1,60 @@
+# REAL arithmetic on the controller is 32-bit: 60.0 / 100.0 * 100.0 lands
+# a few ULPs off 60; nautilus computes in 64 bits and lands on it.
+tolerance: 0.001
+tests:
+  - name: edges count and the sum follows
+    steps:
+      - given: { Go: true, Step: false }
+        scans: 2
+      - given: { Step: true }
+        scans: 2
+        expect: { Count: 1, Total: 5 }
+      - given: { Step: false }
+        scans: 2
+      - given: { Step: true }
+        scans: 2
+        expect: { Count: 2, Total: 15 }
+      - given: { Go: false }
+        scans: 2
+        expect: { Count: 0, Total: 0 }
+
+  - name: scaling, magnitude and the expression compare
+    steps:
+      - given: { Go: true, Raw: -25.0, Span: 100.0 }
+        scans: 2
+        expect: { Scaled: { near: -25.0 }, Mag: { near: 25.0 }, Hi: false }
+      - given: { Raw: 60.0 }
+        scans: 2
+        expect: { Scaled: { near: 60.0 }, Mag: { near: 60.0 }, Hi: true }
+
+  - name: parallel boxes each take their own leg
+    steps:
+      - given: { Go: true, Mode: 0 }
+        scans: 2
+        expect: { SetA: 0, SetB: 0 }
+      - given: { Mode: 1 }
+        scans: 2
+        expect: { SetA: 1, SetB: 0 }
+      - given: { Mode: 2 }
+        scans: 2
+        expect: { SetA: 1, SetB: 2 }
+
+  - name: the one-shot of a compound condition pulses once
+    steps:
+      - given: { Go: true, Step: false }
+        scans: 2
+      - given: { Step: true }
+        scans: 2
+      - given: { Step: false }
+        scans: 2
+      - given: { Step: true }
+        scans: 2
+      - given: { Step: false }
+        scans: 2
+        expect: { Count: 2, Seen: false }
+      - given: { Step: true }
+        scans: 3
+        expect: { Count: 3, Seen: true, Armed: false }
+      - given: { Go: false }
+        scans: 2
+        expect: { Seen: false }
