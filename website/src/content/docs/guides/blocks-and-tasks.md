@@ -142,5 +142,14 @@ outputs; additional tasks compute against the store at their own pace,
 each with its own measured-`dt` tag and its own health in `Stats().Tasks`
 (rendered in the built-in dashboard and the HMI kit's `ScanDiagnostics`).
 
+A task can also be placed: `cpu: 2` pins its thread to a core and
+`priority: 50` runs it under `SCHED_FIFO` (Linux; needs `CAP_SYS_NICE`).
+A request the OS refuses is logged and shown on the task's row as
+REFUSED, and the task runs normally — never a silent fallback. Measured
+honestly: pinning alone on a stock kernel with nothing else changed makes
+a fast task *worse*, because it can no longer move off a busy core; pin
+only together with an isolated core (`isolcpus=`) or a real-time
+priority. See `docs/design/realtime.md`.
+
 The full language reference — evaluation semantics and every built-in — is
 in the [language reference](/reference/functions/).

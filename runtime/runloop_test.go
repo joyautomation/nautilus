@@ -32,7 +32,7 @@ func TestRunLoopHoldsScheduleAndCountsMissed(t *testing.T) {
 		mu.Lock()
 		missed += k
 		mu.Unlock()
-	})
+	}, nil)
 	mu.Lock()
 	defer mu.Unlock()
 	// 150 slots minus the ~5 lost to the stall; loose bounds for a shared
@@ -56,7 +56,7 @@ func TestRunLoopStopsOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
-		runLoop(ctx, time.Hour, func(time.Time) { t.Error("scan ran") }, func(uint64) {})
+		runLoop(ctx, time.Hour, func(time.Time) { t.Error("scan ran") }, func(uint64) {}, nil)
 		close(done)
 	}()
 	cancel()

@@ -11,8 +11,17 @@ thread with reduced timer slack — a 1 ms task's p99 start lateness went from
 about a millisecond to 32 µs, and no ticks are dropped. Phase 2 item 2 (per-
 task scan isolation) is done on top of that: a 20 ms task beside the 1 ms
 task no longer delays it (p99 72 µs, 99.95 % of scans run, versus 59 % with
-the old global scan lock). Baselines on the spare industrial PCs and an ARM
-board are pending (see "Open items").
+the old global scan lock). Phase 2 item 3 (allocation-free scan path) is done
+on top of that: the VM makes no allocation per builtin call, user-function
+call or FB step, so a loop-heavy task no longer drives the collector (3 889
+collections a minute → 5; worst pause 2.1 ms → 0.2 ms). Phase 2 item 4
+(pinning) is done: per-task `cpu:` / `priority:` with a loud, visible
+refusal when the OS says no. Measured: affinity alone on a busy,
+non-isolated desktop makes the fast task WORSE (p99 55 → 312–408 µs);
+`SCHED_FIFO` is what pays — p99 55 → 20 µs, worst 2.3 ms → 0.3 ms, every
+scan run, on the stock kernel. The isolated-core and PREEMPT_RT rows need a
+dedicated box. Baselines on the spare industrial PCs and an ARM board are
+pending; an Arduino UNO Q arrives for Phase 3 the week of 2026-10-06.
 
 ## Why this exists
 
@@ -55,9 +64,11 @@ claim without a measurement, on stated hardware, with the method written down.**
   clock every period is exactly the target, so the lateness tracker records
   zeros and the acceptance path is unchanged (`TestLatenessUnderVirtualClock`).
 - Benchmarks: `runtime/scan_bench_test.go`, `hostdriver_bench_test.go`,
-  `bigstore_bench_test.go`. On the desktop below: a full `Scan()` on the
-  heated-tank program is 2.3 µs and **5 allocations (1 KB)**; the VM alone
-  (`ProgramRun`) is 1.2 µs and 2 allocations.
+  `bigstore_bench_test.go`, `loop_bench_test.go`. On the desktop below,
+  after item 3: a full `Scan()` on the heated-tank program is 1.6 µs and
+  **1 allocation (8 bytes)**; the VM alone (`ProgramRun`) is 1.1 µs and 0
+  allocations. Before item 3 it was 2.3 µs / 5 allocations (1 KB) and
+  1.2 µs / 2.
 - The core is **stdlib only** (HANDOFF.md). Linux syscalls go through `syscall`
   (or a justified, reviewed addition), behind build tags; `naut build`
   cross-compiles, so Windows/macOS must still build with no-ops.
@@ -312,14 +323,144 @@ the harness.
    The isolation test (`TestFastTaskDoesNotWaitForSlowTask`) pins the
    property directly: a 1 ms task scanned while a ~70 ms main scan is in
    flight returns in a fraction of that time.
-3. **Allocation-free scan path (F4):** profile allocations in the VM on the
-   `FOR … SQRT()` loop and the string task; drive the per-call allocations to
-   0; then `GOGC`/`GOMEMLIMIT` guidance. Report GC pause count and max before/after.
-4. **Pinning:** `runtime.LockOSThread` + `sched_setaffinity` per task, optional
-   `SCHED_FIFO` (needs `CAP_SYS_NICE`; fail loudly, not silently), manifest
-   `cpu:` / `priority:` per task, docs for `isolcpus` / `nohz_full` /
-   `irqaffinity`. Measure on stock and PREEMPT_RT kernels. Estimate: pinning
-   itself 1–2 days; a demonstrable before/after histogram about a week.
+3. **Allocation-free scan path (F4) — done, branch `rt-alloc-free`.** The
+   profile said it all: every builtin call allocated its argument slice
+   (`evalExpr`, 2 per loop iteration in the slow task, 224 KB per scan),
+   every user-FUNCTION call allocated a frame, every user-FB step wrapped
+   its slots in a fresh frame, and `CONCAT` grew its builder piecemeal.
+   Now: arguments go on a scratch stack kept on the executing `Frame`
+   (reserve a window, fill, call, pop; it grows to the deepest nesting once);
+   user-function frames are recycled through a `sync.Pool` per `FuncDef`
+   with locals re-initialised in place (recursion and concurrent callers
+   still get distinct frames); a user FB's body frame is cached on the
+   instance (`FBInstance.StepFrame`, rebuilt only if a migration replaced
+   the slots); `CONCAT` sizes its result once; and the main task reuses its
+   output map (the `io.Driver` contract now says the map is the caller's,
+   which every driver in tree already honoured).
+
+   | benchmark (per scan) | before | after |
+   |---|---:|---:|
+   | `LoopScan`, 1000 iterations of `SQRT(INT_TO_REAL(i))` | 328 µs, 2 000 allocs, 224 KB | **144 µs, 0 allocs** |
+   | `UserFBScan`, one user FB calling `LIMIT` | — | 0.64 µs, 0 allocs |
+   | `ProgramRun` (heated tank) | 1.24 µs, 2 allocs | 1.08 µs, 0 allocs |
+   | `Scan` (heated tank, loopback I/O) | 2.3 µs, 5 allocs, 1 KB | 1.6 µs, 1 alloc, 8 B |
+   | `StringsScan`, 200 × `CONCAT(RIGHT(s,48), INT_TO_STRING(i))` | 91 µs, 1 078 allocs | 40 µs, 301 allocs (the strings themselves) |
+
+   The one allocation left in `Scan` is boxing a float into the driver
+   seam's `map[string]any`; it is 8 bytes and constant, and removing it
+   means a typed output path on the seam, not worth it yet.
+
+   **Before/after on the harness (mira1 in use, 60 s, items 1–2 already in):**
+
+   | run | GC before | GC after | main 1 ms task before | after |
+   |---|---:|---:|---:|---:|
+   | A fast alone | 25 collections, worst pause 115 µs | **1 collection**, 49 µs | p99 28 µs, p99.9 312 µs | p99 60 µs, p99.9 656 µs (desktop noise: nothing allocates in A either way) |
+   | B full mix | **3 889 collections**, 317 ms stop-the-world, worst 2.10 ms | **5 collections**, 0.6 ms, worst 197 µs | p99 72 µs, p99.9 624 µs | **p99 32 µs, p99.9 368 µs** |
+   | C fast + alloc | 82 collections, worst 262 µs | 5 collections, worst 131 µs | p99 32 µs | p99 37 µs |
+
+   Run B's fast task now matches run A's: nothing the slow or allocation
+   task does reaches it any more. Raw reports:
+   `docs/design/realtime/2026-10-03-mira1-prelim-after-item3/`.
+
+   **`GOGC` / `GOMEMLIMIT` guidance.** With the scan path allocation-free,
+   the collector runs for whatever else the process does (the tag API,
+   Sparkplug, a historian). Measured with 50 MB/s of such churn added
+   (`-churn-mb 50`, full mix, 60 s):
+
+   | setting | collections | stop-the-world total | worst pause | heap | main task p99 / p99.9 / max |
+   |---|---:|---:|---:|---:|---:|
+   | `GOGC=100` (default) | 448 | 37 ms | 2.10 ms | 12 MB | 28 µs / 256 µs / 3.2 ms |
+   | `GOGC=off GOMEMLIMIT=256MiB` | 12 | 0.7 ms | 82 µs | 134 MB | 29 µs / 336 µs / 2.3 ms |
+
+   So: the fast task's p99 does not care; the worst pause and the CPU the
+   collector burns do. On a controller with memory to spare, set
+   `GOMEMLIMIT` to what it can have and `GOGC=off` (or a high `GOGC`): the
+   collector then runs only when the heap reaches the limit. On a small
+   box, leave the default — the scan loop itself no longer feeds it.
+4. **Pinning — implemented, branch `rt-pinning`; measured in part.** Each
+   task's loop thread is already its own locked OS thread (item 1). Now
+   `Options.CPUs` / `Task.CPUs` pin it with `sched_setaffinity`, and
+   `Options.Priority` / `Task.Priority` (1–99) move it to `SCHED_FIFO`
+   with `sched_setscheduler`; the manifest keys are `cpu:` and `priority:`
+   per task (`runtime/sched_linux.go`, `sched_other.go`; `syscall` only).
+   **A refused request is loud:** `slog.Error` with the fix, and
+   `ScanStats.Sched` / `TaskStats.Sched` carry `applied: false` and the
+   refusal text, which the dashboards show as "cpu 3 · fifo 50 REFUSED" on
+   the task row. The task then runs unpinned at normal priority — never a
+   silent fallback. `SCHED_FIFO` needs `CAP_SYS_NICE` (`setcap
+   cap_sys_nice+ep` on the binary, or root) or an rtprio rlimit
+   (`ulimit -r`, `/etc/security/limits.conf`). Off Linux both keys are
+   refused the same way. The harness takes `-cpu` / `-priority` for the
+   main task and exits rather than produce a report that looks pinned when
+   the OS refused.
+
+   **What affinity alone does on a busy, non-isolated box** (mira1 in use,
+   stock kernel, 60 s, fast tasks alone, items 1–3 in):
+
+   | main task thread | scans ran | late > 100 µs | p50 | p99 | p99.9 | max |
+   |---|---:|---:|---:|---:|---:|---:|
+   | unpinned | 60 017 / 60 018 | 0.61 % | 10 µs | **55 µs** | 608 µs | 2.27 ms |
+   | pinned to P-core 2 | 59 998 / 60 011 | 2.78 % | 6 µs | 312 µs | 1.22 ms | 2.89 ms |
+   | pinned to E-core 20 | 60 000 / 60 003 | 3.27 % | 13 µs | 392 µs | 1.06 ms | 2.47 ms |
+   | pinned to the idlest core at launch (25, 9 % busy) | 60 011 / 60 018 | 2.66 % | 13 µs | 408 µs | 1.06 ms | 1.98 ms |
+   | full mix, pinned to P-core 2 | 59 940 / 60 001 | 3.24 % | 6.5 µs | 424 µs | 1.41 ms | 3.41 ms |
+
+   Pinning alone made it **worse**, p99 by 6–7×: unpinned, the scheduler
+   moves the task to an idle core the instant something lands on its
+   current one; pinned, it waits behind whatever the desktop put there (a
+   VM, an encoder), and at normal priority it has no claim to go first.
+   Affinity buys cache locality and nothing else. It only pays when the
+   core is kept EMPTY (kernel isolation) or the task can PREEMPT what is
+   there (`SCHED_FIFO`) — and ideally both. So the manifest doc says: do
+   not set `cpu:` without one of the two. Raw reports:
+   `docs/design/realtime/2026-10-03-mira1-prelim-item4/`.
+
+   **What the kernel must be told, for a pinned core to be quiet** (write
+   these into the docs page when the measurements exist):
+
+   - `isolcpus=managed_irq,domain,2-3` (or the cpuset/cgroup `isolated`
+     partition on a systemd box) keeps the scheduler's load balancer off
+     cores 2–3; only threads pinned there run there.
+   - `nohz_full=2-3` stops the periodic scheduler tick on those cores while
+     a single thread runs; `rcu_nocbs=2-3` moves RCU callbacks off them.
+   - `irqaffinity=0-1` (and per-device `/proc/irq/*/smp_affinity`) keeps
+     interrupt handling off the pinned cores; the fieldbus NIC's IRQ is
+     the one exception worth putting NEAR the task's core.
+   - Go's own threads (GC workers, the poller, every other goroutine) are
+     not pinned and will use the isolated cores only if something pins
+     them there — but the GC's stop-the-world still stops the pinned
+     thread, pinned or not. That ceiling stands.
+   - Hybrid CPUs (this i9: 8 P-cores with SMT, 16 E-cores): pin to a
+     P-core, and its SMT sibling should be isolated too or the sibling's
+     load halves the core.
+   - `SCHED_FIFO` at priority 50 with the default `sched_rt_runtime_us`
+     (950 ms of every second) leaves 5 % for everything else, which is the
+     kernel's protection against a runaway real-time loop; a task that
+     overruns its period continuously will be throttled, which shows up
+     as missed slots.
+
+   **With `SCHED_FIFO`** (James granted `cap_sys_nice` to the harness
+   binary; same desktop, same load, 60 s, items 1–3 in):
+
+   | main task thread | scans ran | late > 100 µs | p50 | p99 | p99.9 | max |
+   |---|---:|---:|---:|---:|---:|---:|
+   | unpinned, normal priority (from above) | 60 017 / 60 018 | 0.61 % | 10 µs | 55 µs | 608 µs | 2.27 ms |
+   | unpinned, FIFO 50 | 60 016 / 60 017 | 0.02 % | 7.9 µs | 26.5 µs | 59 µs | 460 µs |
+   | pinned to P-core 2, FIFO 50 | **60 001 / 60 001** | 0.03 % | 4.5 µs | **20 µs** | **56 µs** | **319 µs** |
+   | full mix, pinned to P-core 2, FIFO 50 | 60 000 / 60 001 | 0.01 % | 2.4 µs | 14.8 µs | 27 µs | 1.92 ms |
+
+   The priority is what pays: p99.9 drops ten-fold and the worst case
+   from milliseconds to hundreds of microseconds, because the task now
+   preempts the desktop's load instead of queueing behind it. Pinning on
+   top of FIFO adds a little (cache locality, no migration) and costs
+   nothing once the task can take the core. The full mix's one 1.9 ms
+   outlier in 60 000 scans is the kind of thing an isolated core or
+   PREEMPT_RT is for. This is the before/after the handoff wanted for a
+   video, on a stock kernel, with no reboot: "unpinned, normal priority"
+   against "pinned, FIFO 50". Raw reports in the same directory.
+
+   **Still to measure:** the same rows on a spare box booted with
+   `isolcpus`/`nohz_full`, then on a PREEMPT_RT kernel.
 
 Honest ceiling to keep in the docs: Go's GC briefly stops every thread,
 pinned or not (worst pause seen above: 5.2 ms, under an allocation-heavy
@@ -406,8 +547,22 @@ each against the 5-minute idle-box runs before quoting it.
   item 2's table (and run B before item 1 for the 59 % / 27 ms). The second
   before/after story (N-73). State the shared-globals rule honestly: last
   commit wins, as on any PLC.
-- **Do not claim** anything about GC yet: a loop-heavy task still costs the
-  fast task its p99.9 (item 3).
+- **"Pinning a task to a core on a stock kernel, with nothing else
+  changed, makes it worse — p99 went from 55 µs to 300–400 µs on a busy
+  desktop — and Nautilus tells you when a pin or priority was refused
+  instead of pretending"** — evidence: item 4's first table. A useful,
+  honest thing to say in the poll follow-up: "pinned cores" is not a
+  setting, it is a setting plus a kernel configuration.
+- **"With `priority: 50` and `cpu: 2` in the manifest, on a stock Linux
+  kernel on a busy desktop, a 1 ms task ran 60 001 of 60 001 scans with
+  p99 20 µs, p99.9 56 µs and a worst case of 0.32 ms — and needs one
+  `setcap` to do it"** — evidence: item 4's second table. The video shot:
+  that row against "unpinned, normal priority" (p99 55 µs, worst 2.3 ms).
+- **"The scan loop allocates nothing: a 1 000-iteration loop with two
+  builtin calls per iteration makes zero allocations per scan, and a
+  loop-heavy task beside a 1 ms task went from 3 889 collections a minute
+  to 5"** — evidence: item 3's tables. Say "the scan path"; the rest of the
+  process (API, MQTT) still allocates, which is what `GOMEMLIMIT` is for.
 
 ## Open items
 
@@ -418,8 +573,9 @@ each against the 5-minute idle-box runs before quoting it.
   PREEMPT_RT kernel since they are not shared. ARM waits for an ARM Linux
   board. A Mac mini (Apple silicon) is available: useful as a quick arm64
   check of F1 (Go's ticker behaviour), not as a deployment baseline.
-- The PREEMPT_RT comparison needs a kernel on a machine James nominates
-  (the spare boxes are candidates; nobody else runs on them).
+- The isolated-core and PREEMPT_RT comparisons need a box booted with
+  `isolcpus=`/`nohz_full=` and then a PREEMPT_RT kernel — the spare boxes
+  are the candidates; nobody else runs on them.
 - A `jitter.yml` workflow runs the harness on a hosted runner nightly and on
   demand (relative numbers only, plus a ≥ 99 % scans-ran guard on the fast
   task) and uploads the reports; add the self-hosted boxes' labels to its
