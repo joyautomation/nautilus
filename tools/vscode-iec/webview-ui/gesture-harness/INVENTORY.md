@@ -32,12 +32,12 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 153 rows. **16 rows have no coverage at all** (no webview test,
+Totals: 153 rows. **14 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
 |---|---|---|
-| Commands | 28 | 8 |
+| Commands | 28 | 6 |
 | FBD `?` | 18 | 0 |
 | Ladder `?` | 20 | 0 |
 | SFC `?` | 22 | 0 |
@@ -57,9 +57,9 @@ no rig verb, no smoke check); per section below.
 | C06 | Extension (Palette; editor context menu; Live Values item inline) | Write a new value to a tag (right-click an identifier, or the pencil in the Live Values panel) | package.json command `nautilus.setValue` | — | — | — |
 | C07 | Extension (Live Values view title (hidden from palette)) | Refresh the Live Values panel | package.json command `nautilus.liveValues.refresh` | — | — | — |
 | C08 | Extension (Palette) | Download the program to the controller (online edit, with confirmation) | package.json command `nautilus.program.download` | — | — | 08 |
-| C09 | Extension (Palette) | Diff the program with the controller | package.json command `nautilus.program.diff` | — | — | — |
+| C09 | Extension (Palette) | Diff the program with the controller | package.json command `nautilus.program.diff` | — | — | 16 |
 | C10 | Extension (Palette) | Roll back the controller program | package.json command `nautilus.program.rollback` | — | — | 08 |
-| C11 | Extension (Palette) | Pull the program from the controller | package.json command `nautilus.program.pull` | — | — | — |
+| C11 | Extension (Palette) | Pull the program from the controller | package.json command `nautilus.program.pull` | — | — | 16 |
 | C12 | Extension (Text editor title; Palette) | Open the FBD diagram beside the text | package.json command `nautilus.fbd.preview` | — | — | 03, 07 |
 | C13 | Extension (Text editor title; Palette) | Open the ladder diagram beside the text (also an L5X) | package.json command `nautilus.ld.preview` | — | — | 10 |
 | C14 | Extension (Text editor title; Palette) | Open the SFC diagram beside the text | package.json command `nautilus.sfc.preview` | — | — | 03 |
@@ -235,8 +235,8 @@ no rig verb, no smoke check); per section below.
 
 ## Count of rows with no coverage at all
 
-**16 of 153.** The commands are the thinnest area: only the download /
-rollback pair (08), the title-bar buttons (04) and the previews (03, 07, 10)
+**14 of 153.** The commands are the thinnest area: only the online-edit
+commands (download / rollback 08, diff / pull 16), the title-bar buttons (04) and the previews (03, 07, 10)
 are touched by any smoke check, and no webview test can reach a command because
 commands live in the extension host (that is what the E3 test-state hooks are
 for). Of the editors the FBD now has no uncovered row and the SFC is well covered; the ladder single-key shortcuts

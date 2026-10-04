@@ -29,7 +29,8 @@
 set -euo pipefail
 CHECK=16-diff-pull
 source "$HOME/smoke/lib.sh"
-G_PACE=fast source "$HOME/fixtures/gestures.sh"
+export G_PACE=fast
+source "$HOME/fixtures/gestures.sh"
 rm -rf "$PROFILE"
 
 TSTATE=$OUT_DIR/$CHECK-state.json
@@ -216,8 +217,12 @@ vs_cmd "nautilus: Pull Program from Controller" 4
 png=$(shot pull-confirm)
 n=$(last_note)
 if dialog_up; then
-  msg=$(page_text 'document.querySelector(".monaco-dialog-box .dialog-message-text")' 2>/dev/null || echo "")
-  pass "Pull: a preview diff and a modal before writing ($msg)" "$png"
+  msg=$(page_text 'document.querySelector(".monaco-dialog-box .dialog-message-row")' 2>/dev/null || echo "")
+  if [[ $msg == *"Overwrite plant.st"* ]]; then
+    pass "Pull: a preview diff and a modal before writing ('$msg')" "$png"
+  else
+    fail "Pull: a modal, but not the overwrite confirmation ('$msg')" "$png"
+  fi
 else
   fail "Pull: no confirmation modal (last notification '$n')" "$png"
 fi
@@ -267,12 +272,12 @@ dirty=$(cdp page 'document.querySelector(".editor-group-container.active .tab.ac
 vs_cmd "nautilus: Pull Program from Controller" 4
 png=$(shot pull-unsaved-confirm)
 if dialog_up; then
-  msg=$(page_text 'document.querySelector(".monaco-dialog-box .dialog-message-text")' 2>/dev/null || echo "")
+  msg=$(page_text 'document.querySelector(".monaco-dialog-box .dialog-message-row")' 2>/dev/null || echo "")
   pass "Pull over unsaved edits asks first ($msg)" "$png"
   if [[ $msg == *nsaved* || $msg == *dirty* ]]; then
     pass "the confirmation mentions the unsaved edits" "$png"
   else
-    warn "the confirmation does not mention the unsaved edits — it reads the same as a clean pull ($msg)" "$png"
+    warn "the confirmation does not mention the unsaved edits — it reads the same as a clean pull ($msg, #140)" "$png"
   fi
   p=$(diff_probe)
   info "the preview diffs against the BUFFER: tab '$(pj "$p" 'd["tab"]')', workspace side marked $(pj "$p" '(d["original"] or {}).get("marked", [])')"
@@ -293,7 +298,18 @@ info "after the pull: disk has the controller's 9.0: $ondisk_new, the user's 3.5
 if [[ $buf == *'3.5 * PlantDtS'* && $dirty == true ]]; then
   pass "the unsaved edit survives the pull (still in the editor, tab still dirty)" "$png"
   if [[ $buf != *'9.0 * PlantDtS'* && $ondisk_new == 1 ]]; then
-    warn "works-but-wrong: Pull wrote the controller's program to disk UNDER the dirty buffer — the editor still shows the pre-pull text (8.0), the pulled 9.0 is invisible, and the next save hits VS Code's 'file is newer' conflict (overwrite there silently undoes the pull)" "$png"
+    warn "works-but-wrong: Pull wrote the controller's program to disk UNDER the dirty buffer — the editor still shows the pre-pull text (8.0) plus the unsaved edit, and the pulled 9.0 is nowhere in it (#140)" "$png"
+    # What the person's next Ctrl+S does with that.
+    key ctrl+s; sleep 2
+    png=$(shot save-after-pull)
+    msg=$(cdp page '[...document.querySelectorAll(".notification-list-item-message")].map((e) => e.textContent.trim()).join(" | ")' 2>/dev/null || echo "")
+    if grep -q '9.0 \* PlantDtS' "$F"; then
+      info "the next save does not overwrite the pull: VS Code says '$msg'" "$png"
+    elif grep -q '3.5 \* PlantDtS' "$F"; then
+      warn "the next Ctrl+S silently wrote the stale buffer over the pull (disk is back to 8.0 + 3.5; the controller's 9.0 is gone from the file, issue #140; notification '$msg')" "$png"
+    else
+      info "after Ctrl+S the file has neither 9.0 nor 3.5 (notification '$msg')" "$png"
+    fi
   fi
 elif [[ $ondisk_user == 1 ]]; then
   pass "the unsaved edit was kept (merged into the pulled file)" "$png"
