@@ -1091,9 +1091,13 @@ fbd_add_comment() {
 # Read back two ways: on screen, the node's box moved by about the delta and
 # stayed there (an unpinned node snaps back to auto-layout on the next
 # render); on disk, its layout entry is its old flow position plus the delta
-# in flow units (window px ÷ window px per flow px, measured off its box).
+# in flow units (window px ÷ window px per flow px, measured off its box),
+# less however far the viewport panned meanwhile: a drag that ends within
+# ~40 px of the pane's edge AUTO-PANS (xyflow), and the node rides along —
+# where it lands on screen is where it was dropped, but further in flow.
+_FBD_VP_JS='(() => { const m = /translate\(([-0-9.e]+)px, *([-0-9.e]+)px\) *scale\(([-0-9.e]+)\)/.exec(doc.querySelector(".svelte-flow__viewport")?.style.transform ?? ""); return m ? m.slice(1, 4).join(" ") : "0 0 1"; })()'
 fbd_move_node() {
-  local node=$1 dx=$2 dy=$3 el id grip p px py b x0 y0 w0 h0 v x1 y1 w1 h1 fx fy cw i
+  local node=$1 dx=$2 dy=$3 el id grip p px py b x0 y0 w0 h0 v x1 y1 w1 h1 fx fy cw i vp0 vp1
   G_WHAT="move $node by $dx,$dy"
   el=$(fbd_node_el "$node")
   js_true "$el" || { g_err "no FBD node $node"; return 1; }
@@ -1106,8 +1110,20 @@ fbd_move_node() {
   # (offsetWidth ignores the viewport's scale)
   read -r fx fy cw <<<"$(js "(() => { const e = $el; const m = /translate\\(([-0-9.e]+)px, *([-0-9.e]+)px\\)/.exec(e.style.transform); return m ? m[1] + ' ' + m[2] + ' ' + e.offsetWidth : ''; })()" | tr -d '"')"
   [[ -n $cw && $cw != 0 ]] || { g_err "no flow position on $id"; return 1; }
+  vp0=$(js "$_FBD_VP_JS" | tr -d '"')
   read -r px py <<<"$p"
-  g_drag "$px" "$py" $((px + dx)) $((py + dy))
+  if [[ $G_PACE == human ]]; then g_drag "$px" "$py" $((px + dx)) $((py + dy))
+  else
+    # xyflow measures a node drag from where it STARTED (past its 1 px
+    # threshold), so g_drag's first 10 % step would be lost: start it with a
+    # 2 px nudge, as a hand does, then carry
+    xdotool mousemove --window "$WIN" "$px" "$py"; sleep 0.2; xdotool mousedown 1; sleep 0.2
+    xdotool mousemove --window "$WIN" $((px + (dx > 0 ? 2 : dx < 0 ? -2 : 0))) $((py + (dy > 0 ? 2 : dy < 0 ? -2 : 0))); sleep 0.1
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      xdotool mousemove --window "$WIN" $((px + dx * i / 10)) $((py + dy * i / 10)); sleep 0.04
+    done
+    sleep 0.2; xdotool mouseup 1; sleep 0.6
+  fi
   # the op round-trips (the network re-renders from the text): give it
   # time, then the node must still be where it was dropped
   sleep 1.5
@@ -1119,15 +1135,17 @@ fbd_move_node() {
     sleep 0.5
   done
   (( i < 10 )) || { g_err "$id is at $x1,$y1 on screen after the drag, not ≈ $((x0 + dx)),$((y0 + dy)) (it was at $x0,$y0)"; return 1; }
+  vp1=$(js "$_FBD_VP_JS" | tr -d '"')
   local f=$G_FILE; [[ $f == /* ]] || f=$PROJ/$f
   for i in 1 2 3; do
     g_save
-    python3 - "$f" "$id" "$fx" "$fy" "$cw" "$w0" "$dx" "$dy" <<'PY' >"$HOME/.g-why" && return 0
+    python3 - "$f" "$id" "$fx" "$fy" "$cw" "$w0" "$dx" "$dy" $vp0 $vp1 <<'PY' >"$HOME/.g-why" && return 0
 import re, sys
 text, nid = open(sys.argv[1]).read(), sys.argv[2]
-fx, fy, cw, w0, dx, dy = map(float, sys.argv[3:9])
+fx, fy, cw, w0, dx, dy, tx0, ty0, s0, tx1, ty1, s1 = map(float, sys.argv[3:15])
 k = w0 / cw  # window px per flow px
-ex, ey = fx + dx / k, fy + dy / k
+# the drag's own travel, less the auto-pan (CSS px ÷ scale = flow px)
+ex, ey = fx + dx / k - (tx1 - tx0) / s1, fy + dy / k - (ty1 - ty0) / s1
 tol = lambda d: (8 + abs(d) / 10) / k
 m = re.search(r"\(\*\s*@layout\b(.*?)\*\)", text, re.S)
 if not m: print(f"no (* @layout *) block — {nid} was not pinned"); sys.exit(1)
@@ -1136,7 +1154,7 @@ got = dict(zip(parts[0::2], parts[1::2]))
 if nid not in got: print(f"the @layout block has no {nid} ({' '.join(got) or 'empty'})"); sys.exit(1)
 x, y = map(int, got[nid].split(","))
 if abs(x - ex) > tol(dx) or abs(y - ey) > tol(dy):
-    print(f"{nid} is pinned at {x},{y}, not ≈ {ex:.0f},{ey:.0f} (was at {fx:.0f},{fy:.0f}, moved {dx / k:.0f},{dy / k:.0f} flow px)"); sys.exit(1)
+    print(f"{nid} is pinned at {x},{y}, not ≈ {ex:.0f},{ey:.0f} (was at {fx:.0f},{fy:.0f}, dragged {dx / k:.0f},{dy / k:.0f} flow px, auto-panned {(tx1 - tx0) / s1:.0f},{(ty1 - ty0) / s1:.0f})"); sys.exit(1)
 PY
     sleep 1
   done

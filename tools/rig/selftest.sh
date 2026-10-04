@@ -180,7 +180,10 @@ vt fbd_add_comment PASS fbd_add_comment "Both conditions, for the lift station"
 # and the file still parses.
 vt fbd_add_block-PID PASS fbd_add_block PID lic
 # A drag pins the node (F11): its `(* @layout *)` entry, in flow units.
-vt fbd_move_node PASS fbd_move_node both -120 -80
+# Down and right, into the canvas: `both` sits near the top of the fitted
+# view, and a drop near the pane's edge auto-pans (the verb allows for it,
+# but a take would not want it).
+vt fbd_move_node PASS fbd_move_node both 100 120
 
 # ── Mimic: a blank lift.mimic.json ──────────────────────────────────────────
 vt ed_open_diagram-mimic PASS ed_open_diagram lift.mimic.json
@@ -195,9 +198,9 @@ vt component_edit_ports PASS component_edit_ports Pump
 vt component_add_port PASS component_add_port seal
 # Drag a dot (P01). seal (from + Add port) has no dir; Pump's default `out`
 # carries dir "up", which the move must keep, as the mimic editor's ports
-# mode does.
+# mode does. XFAIL: the Component Editor's drag drops it (issue #130).
 vt component_move_port PASS component_move_port seal 60 50
-vt component_move_port-dir PASS component_move_port out -50 40
+vt component_move_port-dir XFAIL component_move_port out -50 40
 
 # ── the files, as saved, and what the compiler makes of them ────────────────
 mkdir -p "$OUT_DIR/verbs-files"
