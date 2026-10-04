@@ -384,3 +384,25 @@ func (w *writer) close() {
 		w.ctrl = nil
 	}
 }
+
+// Runtime is the mirror store the controller's values are polled into —
+// what a live acceptance run reads (acceptance.Live).
+func (f *Facade) Runtime() *runtime.Runtime { return f.rt }
+
+// Write sends one value to the controller, the way an authorized POST
+// /api/tags does.
+func (f *Facade) Write(name string, value any) error { return f.w.write(name, value) }
+
+// Ready blocks until the first poll has landed, or ctx ends.
+func (f *Facade) Ready(ctx context.Context) error {
+	for {
+		if h := f.drv.Health(); h.Connected && len(f.rt.Tags().Snapshot()) > 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}

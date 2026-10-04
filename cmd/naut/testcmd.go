@@ -12,10 +12,59 @@ import (
 	"os"
 	"regexp"
 
+	"context"
+	"time"
+
 	"github.com/joyautomation/nautilus/acceptance"
 	"github.com/joyautomation/nautilus/internal/project"
+	"github.com/joyautomation/nautilus/logix/facade"
 	"github.com/joyautomation/nautilus/runtime"
 )
+
+// liveTarget is the facade a `--target logix` run reads and writes
+// through; opened once per invocation, on the first suite.
+var liveTarget *acceptance.Live
+
+// liveLogix browses the project's Logix controller and returns the live
+// resource the scenarios run against. The program's tags are served as
+// <Program>_<Tag>, which Resolve maps scenario names onto.
+func liveLogix(dir string, proj *project.Project) (*acceptance.Live, error) {
+	if liveTarget != nil {
+		return liveTarget, nil
+	}
+	p, err := loadLogixProject(dir)
+	if err != nil {
+		return nil, err
+	}
+	if p.host == "" {
+		return nil, fmt.Errorf("target.logix.host is not set: the controller's EtherNet/IP address")
+	}
+	poll := 100 * time.Millisecond
+	fmt.Fprintf(os.Stderr, "browsing %s (slot %d)...\n", p.host, p.slot)
+	bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	f, err := facade.New(bctx, facade.Options{Host: p.host, Slot: p.slot, Port: p.port, Poll: poll})
+	if err != nil {
+		return nil, err
+	}
+	go f.Run(context.Background())
+	rctx, rcancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer rcancel()
+	if err := f.Ready(rctx); err != nil {
+		return nil, fmt.Errorf("the controller at %s answered no poll in 30 s", p.host)
+	}
+	program := p.target.Program
+	if program == "" {
+		program = runtime.POUOf(p.source)
+	}
+	fmt.Fprintf(os.Stderr, "live: %d tags, program %s, poll %s\n", f.Tags(), program, poll)
+	scan := time.Duration(p.target.PeriodMs) * time.Millisecond
+	liveTarget = &acceptance.Live{
+		Runtime: f.Runtime(), Write: f.Write, Poll: poll, Scan: scan,
+		Resolve: acceptance.ResolveLogix(f.Runtime(), program), Libraries: proj.Runtime.Libraries,
+	}
+	return liveTarget, nil
+}
 
 func runTest(args []string) int {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
@@ -24,7 +73,12 @@ func runTest(args []string) int {
 	asJSON := fs.Bool("json", false, "emit one NDJSON event per test (for editors and CI tooling)")
 	list := fs.Bool("list", false, "list the tests (suite, name, line) without running them")
 	manifest := fs.String("m", "", manifestFlagUsage)
+	target := fs.String("target", "", "run the scenarios against the deployed controller instead of the nautilus runtime: \"logix\" drives the project's target: logix controller over EtherNet/IP, in real time")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *target != "" && *target != "logix" {
+		fmt.Fprintf(os.Stderr, "naut test: unknown target %q (the targets are: logix)\n", *target)
 		return 2
 	}
 	dir := "."
@@ -91,10 +145,20 @@ func runTest(args []string) int {
 			listSuite(suite)
 			continue
 		}
-		// The manifest's own alarms, over each test's own runtime and
-		// virtual clock, with an in-memory journal and no notifiers — a
-		// test must never write to the site's alarm database.
-		rs, err := acceptance.RunSuite(suite, proj.Runtime, acceptance.WithAlarms(proj.AlarmEngine))
+		var rs []acceptance.Result
+		if *target == "logix" {
+			live, lerr := liveLogix(dir, proj)
+			if lerr != nil {
+				fmt.Fprintln(os.Stderr, "naut test:", lerr)
+				return 1
+			}
+			rs, err = acceptance.RunSuiteLive(suite, *live)
+		} else {
+			// The manifest's own alarms, over each test's own runtime and
+			// virtual clock, with an in-memory journal and no notifiers — a
+			// test must never write to the site's alarm database.
+			rs, err = acceptance.RunSuite(suite, proj.Runtime, acceptance.WithAlarms(proj.AlarmEngine))
+		}
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "naut test:", err)
 			return 1
