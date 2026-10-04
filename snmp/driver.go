@@ -158,6 +158,13 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 		Assignments: d.assignments,
 		Poll:        d.poll,
 		Log:         d.log,
+		// Back from an outage or a park: every rate restarts, none is
+		// computed across a gap the driver never saw.
+		OnReconnect: func(id string) {
+			for _, c := range d.sources[id].counters {
+				c.Reset()
+			}
+		},
 	}
 	for _, s := range m.Sources {
 		cfg.Sources = append(cfg.Sources, hw.SourceConfig{
@@ -343,8 +350,10 @@ func (d *Driver) Plan() string {
 // ── poll ─────────────────────────────────────────────────────────────────
 
 // session returns the source's session, dialling on first use or after a
-// transport failure — and a fresh session resets every rate counter of the
-// source, because a rate across a gap the driver never observed is a lie.
+// transport failure. Dialling resets no rate counter: a redial after one
+// class failed is no gap for the classes that answered meanwhile. The class
+// that failed resets its own (resetClass); a whole source back from an
+// outage or a park resets all (Config.OnReconnect).
 func (d *Driver) session(ctx context.Context, s *source) (Getter, error) {
 	if s.sess != nil {
 		return s.sess, nil
@@ -353,11 +362,20 @@ func (d *Driver) session(ctx context.Context, s *source) (Getter, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, c := range s.counters {
-		c.Reset()
-	}
 	s.sess = g
 	return g, nil
+}
+
+// resetClass restarts the rates of one class whose poll failed: its next
+// sample follows a gap it never observed.
+func resetClass(plan *classPlan) {
+	for _, uses := range plan.uses {
+		for _, u := range uses {
+			if u.counter != nil {
+				u.counter.Reset()
+			}
+		}
+	}
 }
 
 // drop closes a session after a transport failure, so the next poll dials
@@ -409,6 +427,7 @@ func (d *Driver) poll(ctx context.Context, sourceID, class string) (hw.Result, e
 				continue
 			}
 			s.drop()
+			resetClass(plan)
 			return hw.Result{}, err
 		}
 	}
@@ -420,6 +439,7 @@ func (d *Driver) poll(ctx context.Context, sourceID, class string) (hw.Result, e
 			var se *StatusError
 			if !errors.As(err, &se) {
 				s.drop()
+				resetClass(plan)
 				return hw.Result{}, err
 			}
 			markBad(plan.gets, err)

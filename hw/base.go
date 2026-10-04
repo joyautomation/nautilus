@@ -220,6 +220,11 @@ type classRun struct {
 	interval time.Duration
 	next     time.Time
 	tags     map[string]bool // tags with at least one member in this class
+	// failures counts this class's own consecutive failed polls. The
+	// source's count resets on ANY class's success, so a class that always
+	// fails (a big walk that times out) next to one that answers would
+	// otherwise hold its tags' last values at Good forever.
+	failures int
 }
 
 // Source is one polled device's live state. Health reads it under mu from
@@ -821,22 +826,46 @@ func (b *Base) run(ctx context.Context, s *Source) {
 			b.polls.Add(1)
 			if err != nil {
 				b.errs.Add(1)
+				c.failures++
 				s.mu.Lock()
 				s.retries++
 				s.failures++
 				s.lastErr = err
 				answered := s.answered
 				failures := s.failures
+				if c.failures >= failuresToError {
+					// The device answers other classes, never this one: its
+					// tags are Bad, not their last values at Good — those with
+					// no member in a class that still answers (a port whose
+					// Name is in a slow class keeps its live OperUp Good).
+					// The next good poll of the class clears it (mergeLocked).
+					for name := range c.tags {
+						live := false
+						for _, o := range s.classes {
+							if o != c && o.tags[name] && o.failures < failuresToError {
+								live = true
+							}
+						}
+						if live {
+							continue
+						}
+						if s.bad[name] == nil {
+							s.bad[name] = map[string]bool{}
+						}
+						s.bad[name][c.name] = true
+					}
+				}
 				s.mu.Unlock()
 				c.next = b.now().Add(c.interval)
 				if !answered || failures >= failuresToError {
 					failed = true
 					break
 				}
-				b.log.Warn(b.kind+": poll failed", "source", s.cfg.ID, "class", c.name, "error", err, "failures", failures)
+				b.log.Warn(b.kind+": poll failed", "source", s.cfg.ID, "class", c.name, "error", err, "failures", c.failures)
 				continue
 			}
 			done := b.now()
+			c.failures = 0
 			s.mu.Lock()
 			s.failures = 0
 			s.answered = true

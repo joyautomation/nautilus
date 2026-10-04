@@ -842,3 +842,48 @@ func TestBaseStaleCommandsDropped(t *testing.T) {
 		t.Fatalf("fresh command: %q", got)
 	}
 }
+
+// A class that never answers, next to one that does, does not hide: its
+// tags go Bad after failuresToError of its own failures, while the device
+// stays online for the class that answers; a good poll brings them back.
+func TestBaseFailingClassGoesBad(t *testing.T) {
+	w := newFakeWire()
+	cfg := switchConfig(w)
+	cfg.Assignments = []ClassAssignment{{Class: "slow", Patterns: []string{"SW1_Port02"}}}
+	cfg.ClassRates = map[string]time.Duration{"slow": 20 * time.Millisecond}
+	b, err := NewBase(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.set("SW1", DefaultClass, Result{Updates: up("SW1_Port01", true, true, 0)})
+	w.set("SW1", "slow", Result{Updates: up("SW1_Port02", true, true, 0)})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b.Start(ctx)
+	defer b.Stop()
+	w.waitPoll(t, "SW1/slow")
+	w.waitPoll(t, "SW1/default")
+	if q := b.Quality(); q["SW1_Port02"] != nio.Good {
+		t.Fatalf("before: %v", q)
+	}
+	w.setErr("SW1", "slow", errors.New("timeout"))
+	deadline := time.Now().Add(2 * time.Second)
+	for b.Quality()["SW1_Port02"] != nio.Bad && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	q := b.Quality()
+	if q["SW1_Port02"] != nio.Bad || q["SW1_Port01"] != nio.Good {
+		t.Fatalf("a failing class hid behind an answering one: %v", q)
+	}
+	if v, _ := b.ReadInputs(); v["SW1__Online"] == false {
+		t.Fatal("the device still answers: online")
+	}
+	w.setErr("SW1", "slow", nil)
+	deadline = time.Now().Add(2 * time.Second)
+	for b.Quality()["SW1_Port02"] != nio.Good && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if q := b.Quality(); q["SW1_Port02"] != nio.Good {
+		t.Fatalf("recovered class: %v", q)
+	}
+}
