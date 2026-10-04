@@ -222,6 +222,26 @@ describe('the mesh', () => {
 	});
 });
 
+describe('ends that say less', () => {
+	it('an end with no link member says nothing about link', () => {
+		const l = link('sw1/te0/25');
+		// Both tags exist, neither carries LinkUp/OperUp.
+		const none = checkLink(plant, l, { NODE1_Nic_Slot2_P2: { MAC: 'x' }, SW1_Port25: { Name: 'te0/25' } });
+		expect(none.verdict).toBe('unverified');
+		expect(none.reasons[0].startsWith('no link state from')).toBe(true);
+		// One end up, the other silent on link: unknown, not a contradiction.
+		expect(checkLink(plant, l, { NODE1_Nic_Slot2_P2: { MAC: 'x' }, SW1_Port25: swUp(10000) }).verdict).toBe('unverified');
+		// The end that speaks has no link: down, whatever the other.
+		expect(checkLink(plant, l, { NODE1_Nic_Slot2_P2: { MAC: 'x' }, SW1_Port25: { OperUp: false } }).verdict).toBe('down');
+	});
+	it('LLDP on a link to the outside neither confirms nor contradicts', () => {
+		const l = topology.links.find((x) => x.b === 'site')!;
+		const c = checkLink(plant, l, { SW1_Port01: { OperUp: true, SpeedMbps: 1000, LldpSystem: 'isp-edge-rtr' } });
+		expect(c.verdict).toBe('consistent');
+		expect(c.reasons[0]).toBe('sw1 g0/1 sees isp-edge-rtr over LLDP');
+	});
+});
+
 describe('the mesh at scale', () => {
 	it('lays out many servers on few switches without hanging, each apart', () => {
 		// 30 servers all on the same two switches: every one wants the same angle.

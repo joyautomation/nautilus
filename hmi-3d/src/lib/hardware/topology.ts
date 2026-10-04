@@ -213,6 +213,12 @@ export function checkLink(plant: Plant, link: TopoLink, tags: Record<string, unk
 		[b, a]
 	] as const) {
 		if (!near.lldp) continue;
+		if (!far.device) {
+			// A far end outside the model has no name we know: its LLDP can
+			// neither confirm nor contradict. Said, then judged on the end in it.
+			reasons.push(`${near.label} sees ${near.lldp.system}${near.lldp.port ? ` ${near.lldp.port}` : ''} over LLDP`);
+			continue;
+		}
 		if (names(near.lldp, far)) {
 			reasons.push(`${near.label} sees ${near.lldp.system}${near.lldp.port ? ` ${near.lldp.port}` : ''} over LLDP`);
 			return done('confirmed');
@@ -263,13 +269,22 @@ export function checkLink(plant: Plant, link: TopoLink, tags: Record<string, unk
 		// cable is not carrying anything.
 		return done(other?.up === false ? 'down' : 'unverified');
 	}
+	// An end that reports but carries no link member (no LinkUp/OperUp)
+	// says nothing about link: never "both up", never a contradiction.
+	if (a.up === undefined || b.up === undefined) {
+		const mute = [a, b].filter((e) => e.up === undefined);
+		reasons.push(`no link state from ${mute.map((e) => e.label).join(', ')}`);
+		const other = [a, b].find((e) => e.up !== undefined);
+		if (other) reasons.push(`${other.label} ${other.up ? 'up' : 'down'}`);
+		return done(other?.up === false ? 'down' : 'unverified');
+	}
 	if (a.up === false && b.up === false) {
 		reasons.push('neither end has link');
 		return done('down');
 	}
 	if (a.up !== b.up) {
 		const [up, dn] = a.up ? [a, b] : [b, a];
-		reasons.push(`${up.label} is up, ${dn.label} is ${dn.up === false ? 'down' : 'not saying'}`);
+		reasons.push(`${up.label} is up, ${dn.label} is down`);
 		return done('contradicted');
 	}
 	if (a.gbps !== undefined && b.gbps !== undefined && Math.abs(a.gbps - b.gbps) > 1e-6) {
