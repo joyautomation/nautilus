@@ -64,7 +64,8 @@ type Test struct {
 	Shelve   *ShelveStep   `yaml:"shelve"`
 	Unshelve *UnshelveStep `yaml:"unshelve"`
 
-	Line int `yaml:"-"`
+	Line       int `yaml:"-"`
+	AlarmsLine int `yaml:"-"` // the single-step shorthand's `alarms:` key
 }
 
 // Step is one segment of a test: optional writes, a span of virtual time,
@@ -89,6 +90,10 @@ type Step struct {
 	Alarms   *AlarmExpect  `yaml:"alarms"`
 
 	Line int `yaml:"-"`
+	// AlarmsLine is the line of the `alarms:` key, where a failed alarm
+	// assertion points. (A failed `expect:`/`always:` points at the term
+	// that broke; see Term.Line.)
+	AlarmsLine int `yaml:"-"`
 }
 
 // UnmarshalYAML records the source line so a failure can point at it.
@@ -100,6 +105,7 @@ func (s *Step) UnmarshalYAML(node *yaml.Node) error {
 	}
 	*s = Step(r)
 	s.Line = node.Line
+	s.AlarmsLine = keyLines(node, s.Expect, s.Always)
 	return nil
 }
 
@@ -112,7 +118,35 @@ func (t *Test) UnmarshalYAML(node *yaml.Node) error {
 	}
 	*t = Test(r)
 	t.Line = node.Line
+	t.AlarmsLine = keyLines(node, t.Expect, t.Always)
 	return nil
+}
+
+// keyLines stamps the line of each assertion KEY in a step's mapping onto
+// what it decoded into — `expect:` and `always:` on their Expect, and
+// returns the `alarms:` key's line. A failure points at the assertion that
+// broke, not at the top of the step it sits in: the step's first line is
+// usually its `given:`, which is the one line that did nothing wrong.
+func keyLines(node *yaml.Node, expect, always *Expect) (alarms int) {
+	if node.Kind != yaml.MappingNode {
+		return 0
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		k := node.Content[i]
+		switch k.Value {
+		case "expect":
+			if expect != nil {
+				expect.KeyLine = k.Line
+			}
+		case "always":
+			if always != nil {
+				always.KeyLine = k.Line
+			}
+		case "alarms":
+			alarms = k.Line
+		}
+	}
+	return alarms
 }
 
 // strictDecode decodes node into v and rejects any key the struct does not
@@ -191,7 +225,7 @@ func (t *Test) steps() ([]*Step, error) {
 		Scans: t.Scans, Advance: t.Advance, Until: t.Until, Hold: t.Hold,
 		Expect: t.Expect, Always: t.Always,
 		Ack: t.Ack, Shelve: t.Shelve, Unshelve: t.Unshelve, Alarms: t.Alarms,
-		Line: t.Line,
+		Line: t.Line, AlarmsLine: t.AlarmsLine,
 	}}, nil
 }
 
