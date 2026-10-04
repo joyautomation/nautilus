@@ -431,6 +431,7 @@ func (c *rungCtx) block(e ld.Element, top, isLast bool) (text, cont string, ok b
 		return "", "", false
 	}
 	var preset, reset string
+	var captures []rungOut // output copies, after the reset
 	for _, a := range splitArgs(e.Args) {
 		pin, val, isOut, ok := splitBinding(a)
 		if !ok {
@@ -440,8 +441,23 @@ func (c *rungCtx) block(e ld.Element, top, isLast bool) (text, cont string, ok b
 		up := strings.ToUpper(pin)
 		switch {
 		case isOut:
-			c.lw.diag(ruleFBPin, c.r.Line, c.r.Name, "%s:%s: output capture %s => %s has no Logix form; read %s.%s as a contact or operand where it is needed", e.Inst, e.Type, pin, val, e.Inst, pin)
-			return "", "", false
+			// An output capture is a copy after the block runs: a BOOL
+			// output latches into its tag with OTE, a count or time
+			// moves into a DINT.
+			member, ok := memberRewrite[st][up]
+			if !ok {
+				c.lw.diag(ruleFBPin, c.r.Line, c.r.Name, "%s:%s: output %s has no Logix member", e.Inst, e.Type, pin)
+				return "", "", false
+			}
+			target, ok := c.ref(val)
+			if !ok {
+				return "", "", false
+			}
+			if up == "Q" {
+				captures = append(captures, rungOut{Text: "XIC(" + e.Inst + "." + member + ")OTE(" + target + ")", Source: c.r.Name, Line: c.r.Line})
+			} else {
+				captures = append(captures, rungOut{Text: "MOVE(" + e.Inst + "." + member + "," + target + ")", Source: c.r.Name, Line: c.r.Line})
+			}
 		case up == "PT" && st == "TIMER", up == "PV" && st == "COUNTER":
 			preset = val
 		case up == "R" && st == "COUNTER":
@@ -466,19 +482,66 @@ func (c *rungCtx) block(e ld.Element, top, isLast bool) (text, cont string, ok b
 		return "", "", false
 	}
 	if reset != "" {
-		if !isRef(reset) || strings.ContainsAny(reset, ".[") {
-			c.lw.diag(ruleReset, c.r.Line, c.r.Name, "%s:CTU: R := %s must be a plain BOOL tag; compute the condition into a tag first", e.Inst, reset)
+		cond, ok := c.boolCond(reset, e)
+		if !ok {
 			return "", "", false
 		}
 		// After the count, so a reset in the same scan as a count edge
 		// wins — R is dominant in the IEC block.
-		c.post = append(c.post, rungOut{Text: "XIC(" + reset + ")RES(" + e.Inst + ")", Source: c.r.Name, Line: c.r.Line})
+		c.post = append(c.post, rungOut{Text: cond + "RES(" + e.Inst + ")", Source: c.r.Name, Line: c.r.Line})
 	}
+	// Captures copy the block's state as the IEC call leaves it: after
+	// the reset has had its say.
+	c.post = append(c.post, captures...)
 	text = typ + "(" + e.Inst + ",?,?)"
 	if !isLast {
 		cont = "XIC(" + e.Inst + ".DN)"
 	}
 	return text, cont, true
+}
+
+// boolCond renders a BOOL pin value as rung condition text: a plain tag,
+// a negated tag, or AND(...) / OR(...) / NOT(...) of those — the shapes a
+// ladder author writes on a pin. Anything else is a rule: compute it
+// into a tag first.
+func (c *rungCtx) boolCond(expr string, e ld.Element) (string, bool) {
+	expr = strings.TrimSpace(expr)
+	up := strings.ToUpper(expr)
+	switch {
+	case strings.HasPrefix(up, "NOT ") || strings.HasPrefix(up, "NOT("):
+		inner := strings.TrimSpace(expr[3:])
+		inner = strings.TrimSuffix(strings.TrimPrefix(inner, "("), ")")
+		if isRef(inner) {
+			ref, ok := c.ref(inner)
+			if !ok {
+				return "", false
+			}
+			return "XIO(" + ref + ")", true
+		}
+	case strings.HasPrefix(up, "AND(") || strings.HasPrefix(up, "OR("):
+		open := strings.Index(expr, "(")
+		args := splitArgs(expr[open+1 : len(expr)-1])
+		var parts []string
+		for _, a := range args {
+			t, ok := c.boolCond(a, e)
+			if !ok {
+				return "", false
+			}
+			parts = append(parts, t)
+		}
+		if strings.HasPrefix(up, "AND(") {
+			return strings.Join(parts, ""), true
+		}
+		return "[" + strings.Join(parts, " ,") + " ]", true
+	case isRef(expr):
+		ref, ok := c.ref(expr)
+		if !ok {
+			return "", false
+		}
+		return "XIC(" + ref + ")", true
+	}
+	c.lw.diag(ruleReset, c.r.Line, c.r.Name, "%s:%s: %q must be a BOOL tag, NOT tag, or AND/OR of those; compute anything else into a tag first", e.Inst, e.Type, expr)
+	return "", false
 }
 
 // preset records a block's preset: a literal lands in the tag's PRE; a

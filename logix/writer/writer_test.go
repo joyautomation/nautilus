@@ -266,12 +266,12 @@ func TestRejections(t *testing.T) {
 		{"name underscores", wrap("Bad__Name : BOOL; Y : BOOL;", "RUNG r Bad__Name ( Y )"), ruleName, "consecutive"},
 		{"TP block", wrap("tp : TP; X : BOOL; Y : BOOL;", "RUNG r X tp:TP(PT := T#1S) ( Y )"), ruleFB, "tp:TP"},
 		{"CTUD block", wrap("c : CTUD; X : BOOL; Y : BOOL;", "RUNG r X c:CTUD(PV := 3) ( Y )"), ruleFB, "CTUD"},
-		{"output capture", wrap("t1 : TON; X : BOOL; Y : BOOL; E : TIME;", "RUNG r X t1:TON(PT := T#1S, ET => E) ( Y )"), ruleFBPin, "ET => E"},
+		{"output capture of a member that is not there", wrap("t1 : TON; X : BOOL; Y : BOOL; E : DINT;", "RUNG r X t1:TON(PT := T#1S, TT => E) ( Y )"), ruleFBPin, "TT"},
 		{"IN bound", wrap("t1 : TON; X : BOOL; Y : BOOL;", "RUNG r t1:TON(IN := X, PT := T#1S) ( Y )"), ruleFBPin, "IN"},
 		{"missing preset", wrap("t1 : TON; X : BOOL; Y : BOOL;", "RUNG r X t1:TON() ( Y )"), rulePreset, "PT"},
 		{"preset expression", wrap("t1 : TON; X : BOOL; Y : BOOL; N : INT;", "RUNG r X t1:TON(PT := T#1S + T#2S) ( Y )"), rulePreset, "T#1S + T#2S"},
 		{"preset wrong type", wrap("c : CTU; X : BOOL; Y : BOOL; F : REAL;", "RUNG r X c:CTU(PV := F) ( Y )"), rulePreset, "F"},
-		{"reset expression", wrap("c : CTU; X : BOOL; Y : BOOL; A : BOOL;", "RUNG r X c:CTU(PV := 3, R := A.Q) ( Y )"), ruleReset, "A.Q"},
+		{"reset expression", wrap("c : CTU; X : BOOL; Y : BOOL; A : INT;", "RUNG r X c:CTU(PV := 3, R := GT(A, 1)) ( Y )"), ruleReset, "GT(A, 1)"},
 		{"TOF in branch", wrap("t : TOF; X : BOOL; Y : BOOL; Z : BOOL;", "RUNG r [ X t:TOF(PT := T#1S) | Z ] ( Y )"), ruleTOFPosition, "t:TOF"},
 		{"CTU in branch", wrap("c : CTU; X : BOOL; Y : BOOL; Z : BOOL;", "RUNG r [ X c:CTU(PV := 2) | Z ] ( Y )"), ruleTOFPosition, "c:CTU"},
 		{"fn not compare", wrap("X : BOOL; Y : BOOL; N : INT;", "RUNG r X ODD(N) ( Y )"), ruleFn, "ODD"},
@@ -731,5 +731,28 @@ func TestWriteRoutineForST(t *testing.T) {
 	}
 	if !strings.Contains(string(doc), `<Tags Use="Context">`) || strings.Contains(string(doc), "<Tasks>") {
 		t.Error("context tags missing or tasks present")
+	}
+}
+
+// Output captures become copy rungs after the block; a counter's reset
+// pin takes AND / OR / NOT of tags through the condition text.
+func TestOutputCapturesAndResetConditions(t *testing.T) {
+	src := "PROGRAM P\nVAR\n  X : BOOL; Y : BOOL; L : BOOL; R1 : BOOL; R2 : BOOL; N : DINT; E : DINT;\n  t : TON; c : CTU;\nEND_VAR\nLD\n  RUNG a X t:TON(PT := T#1S, Q => Y, ET => E)\n  RUNG b +Y c:CTU(PV := 3, R := AND(R1, NOT R2), Q => L, CV => N)\nEND_LD\nEND_PROGRAM\n"
+	f := mustWrite(t, src, Options{})
+	var texts []string
+	for _, r := range f.Controller.Programs[0].Routines[0].Rungs {
+		texts = append(texts, r.Text)
+	}
+	want := []string{
+		"XIC(X)TON(t,?,?);",
+		"XIC(t.DN)OTE(Y);",
+		"MOVE(t.ACC,E);",
+		"XIC(Y)ONS(rt_b_Y)CTU(c,?,?);",
+		"XIC(R1)XIO(R2)RES(c);",
+		"XIC(c.DN)OTE(L);",
+		"MOVE(c.ACC,N);",
+	}
+	if strings.Join(texts, "|") != strings.Join(want, "|") {
+		t.Errorf("rungs:\n  got  %s\n  want %s", strings.Join(texts, " "), strings.Join(want, " "))
 	}
 }
