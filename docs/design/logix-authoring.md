@@ -578,9 +578,38 @@ stops is reported as "is the controller in Run?". Downloaded to Echo
 (2 m 20 s, verified: the new program and tag are the whole logic diff);
 the scenarios pass with scan counts reported from the controller.
 
-Next in Phase C: the per-instruction conformance projects (timers,
-counters, edges, the §5.5 edge cases) as ordinary test projects for the
-same two commands, then the version matrix.
+**Conformance projects (2026-10-03):** `logix/writer/testdata/conformance/`
+— timers, counters, edges, logic — one ordinary nautilus project per
+instruction family, each with a `target: logix` section and scenarios
+that assert only what EtherNet/IP can see (edges latch what they saw; a
+0.5 s margin around every 2 s preset). Writing the counter scenarios
+found a writer bug on paper before it ran anywhere: a Logix CTU's done
+bit stays true at the preset with no pulse present, so an inline
+`XIC(c.DN)` after the CTU would have made Done = Pulse AND DN. A CTU now
+ends its rung like a TOF; the rule table says so.
+
+All four, each downloaded to Echo (2 m 16 – 2 m 23 s, verified), put in
+Run, and run against the controller with the heartbeat:
+
+| project | scenarios | nautilus | Echo (controller as runtime) |
+|---|---|---|---|
+| timers (TON/TOF: delay, reset while timing, re-arm during the off delay) | 4 | pass | pass, 3.1–4.9 s each |
+| counters (CTU: edge counting, held pulse, reset, done outliving the pulse, gated) | 3 | pass | pass, 2.2–2.6 s |
+| edges (+/− at the head and after a contact; the edge is the tag's own, not the rung's) | 2 | pass | pass, 1.3–2.0 s |
+| logic (series, parallel, nested, compares and a negated compare, latch, two coils) | 4 | pass | pass, 0.9–1.4 s |
+
+**13 of 13 pass on both runtimes.** The scan counts reported are
+heartbeat counts: a `scans: 2` step spends at least 2 controller scans
+and then one poll, and a 10 ms task runs about ten scans per 100 ms poll,
+so a step reads as ~10 scans. That is the semantics (at least n), stated.
+
+**Version matrix — a constraint found, not a matrix run.** ECHO1 has Echo
+firmware v33–v38 for the 5580 installed, but only Logix Designer v38.01.
+The SDK creates and builds projects at the installed Designer version, so
+a v33 project needs a v33 Designer beside it (each a separate install and
+activation). The matrix across revisions is therefore an install question
+for ECHO1 before it is a harness question; the harness itself is
+revision-agnostic (`target.logix.revision`).
 
 ## 8. The demo this enables
 
