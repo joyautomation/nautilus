@@ -99,6 +99,8 @@ export interface ScanStats {
 	writeMs: number;
 	periodMs: number;
 	jitterMs: number;
+	/** Wake-up timing of the main task, cumulative since start. */
+	lateness: Lateness;
 	ioErrors: number;
 	logicErrors: number;
 	ioHealthy: boolean;
@@ -123,6 +125,32 @@ export interface TaskStats {
 	lastMs: number;
 	logicErrors: number;
 	lastError?: string;
+	/** This task's wake-up timing — see Lateness. */
+	lateness: Lateness;
+}
+
+/**
+ * How late a task's scans START against their period — the soft-real-time
+ * view of the loop, cumulative since the runtime started. A sample is
+ * period − target; positive is late. Mirrors runtime.Lateness in Go.
+ */
+export interface Lateness {
+	/** Lateness beyond which a scan counts in `late`, ms. */
+	thresholdMs: number;
+	/** Scans that started more than thresholdMs late. */
+	late: number;
+	/** Scans whose execution outran the period (a tick was dropped). */
+	overruns: number;
+	lastUs: number;
+	maxUs: number;
+	/** Percentiles over every scan so far, as bucket upper edges (≤ 3.2 % high). */
+	p50Us: number;
+	p99Us: number;
+	p999Us: number;
+	/** 1-2-5 log-spaced buckets: [i] counts bucketsUs[i-1] ≤ lateness < bucketsUs[i];
+	 * [0] is below the first edge (and early scans), the last is ≥ the last edge. */
+	histogram: number[];
+	bucketsUs: number[];
 }
 
 /** The nautilus server's frame shape (GET /api/state, SSE /api/stream). */
