@@ -149,7 +149,8 @@ REFUSED, and the task runs normally — never a silent fallback. Measured
 honestly: pinning alone on a stock kernel with nothing else changed makes
 a fast task *worse*, because it can no longer move off a busy core; pin
 only together with an isolated core (`isolcpus=`) or a real-time
-priority. See `docs/design/realtime.md`.
+priority. The [scan timing guide](/guides/real-time/) has the diagnostics,
+the settings, and the numbers.
 
 The full language reference — evaluation semantics and every built-in — is
 in the [language reference](/reference/functions/).

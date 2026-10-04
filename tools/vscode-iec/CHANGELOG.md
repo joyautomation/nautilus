@@ -5,6 +5,13 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- **Manifest schema: `late-threshold`, `cpu` and `priority` per task.**
+  How late a scan may start before the runtime counts it late; pin the
+  task's thread to a core; run it under SCHED_FIFO. Hover text says what
+  each needs from the kernel.
+
 ### Fixed
 
 - **Closing the Show Source text tab no longer loses the diagram's unsaved edits.** The diagram editor and the text view share one document, so VS Code asks Save / Don't Save when the text tab closes dirty — and *Don't Save* used to revert the file under a diagram that was still open. The extension now puts the diagram's edits back (status bar: "the diagram keeps its unsaved edits"); only the text view goes away. (#117)

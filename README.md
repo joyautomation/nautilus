@@ -43,6 +43,8 @@ server/      tag API over HTTP: JSON snapshot, SSE stream, tag writes, alarms, p
 cmd/naut the developer CLI: new · run · test · check · build · pull · lsp · eip · sparkplug · historian · alarms
 hmi/         SvelteKit digital-twin component kit + realtime SSE client
 tools/vscode-iec/   VS Code extension: syntax, diagnostics, go-to-def, live values, diagram editors
+tools/jitter/       scan-loop lateness harness: the numbers behind docs/design/realtime.md
+rt/          harder real-time spikes beside the Go build (a Rust fast loop + shared-memory tag exchange)
 examples/    four real plant projects — lift-station, batch-skid, remote-fleet, go-sdk — see examples/README.md
 ```
 
@@ -796,7 +798,10 @@ REFUSED, and the task runs normally — never a silent fallback. Measured
 honestly: pinning alone on a stock kernel with nothing else changed makes
 a fast task *worse*, because it can no longer move off a busy core; pin
 only together with an isolated core (`isolcpus=`) or a real-time
-priority. See `docs/design/realtime.md`.
+priority. The dashboard's lateness block (late, overruns, missed,
+p50/p99/p99.9/max per task) is how you know. See the [scan timing
+guide](website/src/content/docs/guides/real-time.md) and
+`docs/design/realtime.md` for the measurements.
 
 **Every program online-edits, both directions.** Programs are addressed by
 POU name — `PROGRAM <Name>` is a program's identity. `GET /api/program`

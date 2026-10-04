@@ -2,7 +2,10 @@
 
 Working document for making Nautilus's soft real-time measurably better and
 for choosing a harder real-time path with evidence. Started 2026-10-03 from a
-content-planning handoff; kept current on branch `rt-explore`.
+content-planning handoff. Phase 1, Phase 2 (items 1–4) and the Phase 3 Rust
+spike merged to `main` on 2026-10-04 (PRs #113, #115, #118, #122; #114, #116
+and #120 were their stacked predecessors). The user-facing version of this is
+the website guide `guides/real-time.md`.
 
 **Status (2026-10-03):** Phase 1 (measure) is implemented with preliminary
 numbers from one desktop (PR #113). Phase 2 item 1 (wake-up) is done on top
@@ -653,7 +656,8 @@ each against the 5-minute idle-box runs before quoting it.
 
 ## How to work
 
-- Worktree `../nautilus-rt`, branch `rt-explore`, off `origin/main`.
+- Everything above is on `main`; branch off it per item (worktree
+  `../nautilus-rt` is the working checkout).
 - Ask James before buying hardware (a UNO Q, a logic analyzer) or installing an
   RT kernel on a shared machine, or running load on an in-service node.
 - Report back in plain terms: what you measured, what changed, what it means.
