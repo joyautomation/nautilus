@@ -48,6 +48,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -151,6 +152,7 @@ type Node struct {
 	entries     []Entry
 	commit      uint64 // applied up to here
 	term        uint64 // highest term seen
+	syncedTerm  uint64 // the term this leader last caught up for
 	file        *os.File
 	lastContact map[string]time.Time
 }
@@ -242,6 +244,16 @@ func (n *Node) open() error {
 			}
 		case l.C != nil:
 			n.commit = *l.C
+		default:
+			// The first format wrote one bare Entry per line, every one
+			// applied as written: load it as committed.
+			var e Entry
+			if err := json.Unmarshal(line, &e); err == nil && e.Seq > 0 {
+				n.entries = append(n.entries, e)
+				n.commit = e.Seq
+				continue
+			}
+			return fmt.Errorf("oplog: %s: unrecognised line %q", n.o.File, truncateStr(string(line), 80))
 		}
 	}
 	if good < len(data) {
@@ -348,26 +360,70 @@ func (n *Node) writeLine(l fileLine) error {
 	return n.file.Sync()
 }
 
-// rewrite replaces the file with the current entries and commit mark.
-// Caller holds mu.
+// rewrite replaces the file with the current entries and commit mark,
+// atomically: a temp file beside it, synced, renamed over it, the
+// directory synced. A crash anywhere leaves either the old file or the
+// new one. Caller holds mu.
 func (n *Node) rewrite() error {
 	if n.file == nil {
 		return nil
 	}
-	if err := n.file.Truncate(0); err != nil {
+	dir := filepath.Dir(n.o.File)
+	tmp, err := os.CreateTemp(dir, filepath.Base(n.o.File)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	if _, err := n.file.Seek(0, io.SeekStart); err != nil {
+	tmpName := tmp.Name()
+	fail := func(err error) error {
+		tmp.Close()
+		os.Remove(tmpName)
 		return err
 	}
+	w := bufio.NewWriter(tmp)
 	for i := range n.entries {
 		e := n.entries[i]
-		if err := n.writeLine(fileLine{E: &e}); err != nil {
-			return err
+		b, _ := json.Marshal(fileLine{E: &e})
+		if _, err := w.Write(append(b, '\n')); err != nil {
+			return fail(err)
 		}
 	}
 	c := n.commit
-	return n.writeLine(fileLine{C: &c})
+	b, _ := json.Marshal(fileLine{C: &c})
+	if _, err := w.Write(append(b, '\n')); err != nil {
+		return fail(err)
+	}
+	if err := w.Flush(); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Sync(); err != nil {
+		return fail(err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fail(err)
+	}
+	if err := os.Rename(tmpName, n.o.File); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+	// The old handle points at the unlinked file: reopen the new one.
+	n.file.Close()
+	f, err := os.OpenFile(n.o.File, os.O_RDWR|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	n.file = f
+	return nil
+}
+
+func truncateStr(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
 
 var errGap = errors.New("gap")
@@ -519,6 +575,47 @@ func (n *Node) Propose(ctx context.Context, e Entry) (Entry, error) {
 	return out.Entry, nil
 }
 
+// leaderCatchUp is what a new leader does before its first write of a
+// term: fetch from every peer whatever is after our last entry and take
+// the most advanced answer, so an instance that lost its file (a
+// reschedule) and then took the lease does not number its first write
+// over entries its peers already committed. Raft restricts votes to the
+// most advanced log; here the leader is elected elsewhere, so it catches
+// up instead. Caller holds seqMu.
+func (n *Node) leaderCatchUp(ctx context.Context, term uint64) {
+	n.mu.Lock()
+	if n.syncedTerm == term {
+		n.mu.Unlock()
+		return
+	}
+	last := n.lastLocked()
+	n.mu.Unlock()
+	var best afterResp
+	found := false
+	for _, p := range n.o.Peers {
+		if p == n.o.Self {
+			continue
+		}
+		var got afterResp
+		if err := n.call(ctx, p, fmt.Sprintf("/api/oplog?after=%d", last), nil, &got); err != nil {
+			continue
+		}
+		if !found || len(got.Entries) > len(best.Entries) || got.Commit > best.Commit {
+			best, found = got, true
+		}
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if found && len(best.Entries) > 0 {
+		if _, err := n.acceptLocked(best.Entries); err != nil {
+			n.log.Warn("oplog: leader catch-up", "error", err)
+			return
+		}
+		n.commitTo(best.Commit)
+	}
+	n.syncedTerm = term
+}
+
 // sequence is the leader's path, one proposal at a time: number, store,
 // replicate to a majority, commit, apply. A proposal that misses the
 // majority is removed again and the client is told no.
@@ -529,6 +626,7 @@ func (n *Node) sequence(ctx context.Context, e Entry) (Entry, error) {
 		return Entry{}, fmt.Errorf("%w: no longer the leader", ErrReadOnly)
 	}
 	term := n.currentTerm()
+	n.leaderCatchUp(ctx, term)
 	n.mu.Lock()
 	e.Seq = n.lastLocked() + 1
 	e.Term = term
@@ -557,6 +655,7 @@ func (n *Node) sequence(ctx context.Context, e Entry) (Entry, error) {
 	if stored < n.majority() {
 		n.mu.Lock()
 		n.truncateLocked(e.Seq)
+		n.syncedTerm = 0 // a peer may know more than we do: catch up before the next write
 		n.mu.Unlock()
 		return Entry{}, fmt.Errorf("%w: %d of %d stored (%s)", ErrReadOnly, stored, len(n.o.Peers), strings.Join(errs, "; "))
 	}
