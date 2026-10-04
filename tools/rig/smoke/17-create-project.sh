@@ -29,7 +29,8 @@
 set -euo pipefail
 CHECK=17-create-project
 source "$HOME/smoke/lib.sh"
-G_PACE=fast source "$HOME/fixtures/gestures.sh"
+export G_PACE=fast
+source "$HOME/fixtures/gestures.sh"
 rm -rf "$PROFILE"
 
 # ── workbench-page helpers ──────────────────────────────────────────────────
@@ -143,7 +144,7 @@ fi
 # A fresh window on another empty folder (the walkthrough flag is already
 # set, so open it with nautilus.getStarted), then the "Create a project"
 # step, then the link in its markdown media.
-smoke_open "$HOME/c25-walk"
+EXTRA_SETTINGS='"files.simpleDialog.enable": true' smoke_open "$HOME/c25-walk"
 key Escape; vs_cmd "Notifications: Clear All Notifications" 1
 vs_cmd "nautilus: Get Started" 4
 STEP_JS="[...document.querySelectorAll('.getting-started-step')].find(s => /Create a project/.test(s.textContent))"
@@ -191,8 +192,8 @@ open(p, "w").write(json.dumps(d, indent=2) + "\n")
 PY
 }
 # editor_kind — what the active editor group shows: "diagram" (no text
-# editor, a visible joyauto.vscode-iec webview) / "text" / "?"; the details
-# go to $OUT_DIR/<check>-<label>.json.
+# editor, a visible joyauto.vscode-iec webview) / "text" / "?", then the
+# tab's resource name; the raw page answer is in $KIND_RAW.
 KIND_JS='(() => {
   const g = document.querySelector(".editor-group-container.active");
   const tab = g && g.querySelector(".tab.active");
@@ -201,7 +202,7 @@ KIND_JS='(() => {
   return { tab: tab && tab.getAttribute("aria-label"), resource: tab && tab.getAttribute("data-resource-name"), textEditor: !!te, webviews: wv.map(s => s.replace(/^.*?\?/, "")) };
 })()'
 editor_kind() {
-  local j; j=$(pg "$KIND_JS"); echo "$j" >"$OUT_DIR/$CHECK-$1.json"
+  local j; j=$(pg "$KIND_JS"); KIND_RAW=$j
   python3 -c '
 import json, sys
 d = json.loads(sys.argv[1] or "null") or {}
@@ -215,24 +216,30 @@ assoc on
 smoke_open "$PROJ"
 key Escape; vs_cmd "Notifications: Clear All Notifications" 1
 open_file interlocks.ld 6
-kind=$(editor_kind x01-assoc)
+kind=$(editor_kind)
 png=$(shot x01-assoc-on)
 if [[ $kind == "diagram interlocks.ld" ]]; then
   pass "X01: with editorAssociations *.ld → nautilus.ldDiagram, Quick Open gives the Ladder diagram editor (tab interlocks.ld, webview, no text editor)" "$png"
 else
-  fail "X01: with the association set, interlocks.ld opened as '$kind' (want diagram; see $CHECK-x01-assoc.json)" "$png"
+  fail "X01: with the association set, interlocks.ld opened as '$kind' (want diagram; page: $(pg "$KIND_JS"))" "$png"
 fi
 
 assoc off
 sleep 2
 vs_cmd "View: Close All Editors" 1.5
+# Quick Open lists interlocks.ld under "recently opened", and a history
+# entry reopens in the editor it was last shown in (the diagram) whatever
+# the associations now say — so clear the history first, or this half
+# tests VS Code's history instead of the setting.
+vs_cmd "Clear Editor History" 1.5
+dialog_up && page_click_button 'Clear' 1.5 || true
 open_file interlocks.ld 4
-kind=$(editor_kind x01-noassoc)
+kind=$(editor_kind)
 png=$(shot x01-assoc-off)
 if [[ $kind == "text interlocks.ld" ]]; then
-  pass "X01: association removed (settings.json edited live) → interlocks.ld opens as text again" "$png"
+  pass "X01: association removed (settings.json edited live, editor history cleared) → interlocks.ld opens as text again" "$png"
 else
-  fail "X01: without the association interlocks.ld opened as '$kind' (want text; see $CHECK-x01-noassoc.json)" "$png"
+  fail "X01: without the association interlocks.ld opened as '$kind' (want text; page: $(pg "$KIND_JS"))" "$png"
 fi
 
 # prep.sh says the association was ignored for a file passed on the COMMAND
@@ -240,7 +247,7 @@ fi
 assoc on
 smoke_open "$PROJ" interlocks.ld
 sleep 3
-kind=$(editor_kind x01-cmdline)
+kind=$(editor_kind)
 png=$(shot x01-cmdline)
 info "X01: association set, interlocks.ld passed on the command line → '$kind'" "$png"
 assoc off
@@ -259,7 +266,7 @@ l=$(lens)
 # Above the header: the lens's bottom edge sits on the FUNCTION_BLOCK line's top.
 ABOVE_JS='(() => {
   const a = [...document.querySelectorAll(".codelens-decoration")].find(e => /live values/.test(e.textContent));
-  const h = [...document.querySelectorAll(".view-line")].find(e => /^\s*FUNCTION_BLOCK RateOfChange/.test(e.textContent));
+  const h = [...document.querySelectorAll(".view-line")].find(e => /^\s*FUNCTION_BLOCK\s+RateOfChange/.test(e.textContent));
   if (!a || !h) return null;
   const ra = a.getBoundingClientRect(), rh = h.getBoundingClientRect();
   return Math.round(rh.top - ra.bottom);
@@ -308,8 +315,10 @@ if [[ -n $l ]] && pg_click "$LENS_A" 1.5; then
     else
       fail "X21: no live-value pills in the body after monitoring roc2 (before: $before; after: $after)" "$png"
     fi
-    r2=$(api /api/state | python3 -c 'import json,sys; t=json.load(sys.stdin)["tags"]; print({k: t[k] for k in t if k.lower() in ("roc","roc2")})' 2>/dev/null || true)
-    info "X21: controller /api/state instances: ${r2:-unreadable}"
+    # roc2 is fed LevelPct, whose rate is ±90–102 %/min while the pump
+    # cycles; roc (TempC) moves a few °C/min. The OUT pill says which.
+    info "X21: body pills after the pick (roc2 = LevelPct's rate, ≈ -90 or +102 /min on OUT): ${after#* }" "$png"
+    [[ $l == *"monitoring roc2 — 1 of 2"* ]] && warn "X21: the lens says \"1 of 2\" while monitoring roc2, the SECOND declared instance — the count is hard-coded \"1 of \${n}\" (liveValues.ts FbMonitorLenses), so it reads as a position (#146)" "$png"
   else
     fail "X21: the lens click opened no instance quick pick (quick input '$t'; rows: $rows; toasts: $(pg "$TOASTS"))" "$png"
   fi
