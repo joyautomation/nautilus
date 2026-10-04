@@ -1065,8 +1065,15 @@
         const tw = $("d-tasks-wrap");
         if (s.tasks && s.tasks.length) {
           tw.style.display = "";
+          // Thread placement, when asked for: "cpu 3 · fifo 50", flagged
+          // when the OS refused it (the task is then running unpinned).
+          const sched = (s) => {
+            if (!s || (!s.cpus?.length && !s.priority)) return "";
+            const what = [s.cpus?.length ? "cpu " + s.cpus.join(",") : "", s.priority ? "fifo " + s.priority : ""].filter(Boolean).join(" · ");
+            return s.error ? ` <small class="io bad" title="${esc(s.error)}">${what} REFUSED</small>` : ` <small>${what}</small>`;
+          };
           const row = (t) =>
-            `<tr><td>${esc(t.name)}</td>` +
+            `<tr><td>${esc(t.name)}${sched(t.sched)}</td>` +
             `<td style="text-align:right">${fmtMs(t.targetMs, 0)} ms</td>` +
             `<td style="text-align:right">${fmtMs(t.lastMs, 2)} ms</td>` +
             `<td style="text-align:right">${(t.count ?? 0).toLocaleString()}</td>` +
@@ -1081,6 +1088,7 @@
             lastMs: s.lastMs,
             count: s.count,
             lateness: s.lateness,
+            sched: s.sched,
             logicErrors: s.logicErrors,
             lastError: s.lastError,
           };

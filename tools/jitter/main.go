@@ -132,6 +132,8 @@ type config struct {
 	Threshold  time.Duration `json:"threshold"`
 	Note       string        `json:"note,omitempty"`
 	Listen     bool          `json:"listen"`
+	CPU        int           `json:"cpu"`      // main task pinned here when ≥ 0
+	Priority   int           `json:"priority"` // main task SCHED_FIFO priority when > 0
 }
 
 type env struct {
@@ -191,6 +193,8 @@ func main() {
 	flag.Float64Var(&c.ChurnMBps, "churn-mb", 0, "extra Go-side allocation churn, MB/s (0 = off)")
 	flag.DurationVar(&c.Threshold, "threshold", 0, "late threshold (0 = a tenth of each task's period)")
 	flag.StringVar(&c.Note, "note", "", "free text recorded in the report (what the box was doing)")
+	flag.IntVar(&c.CPU, "cpu", -1, "pin the main (fast) task's thread to this CPU (Linux; -1 = unpinned)")
+	flag.IntVar(&c.Priority, "priority", 0, "run the main task's thread under SCHED_FIFO at this priority (Linux; needs CAP_SYS_NICE)")
 	out := flag.String("out", "", "directory for report.json and report.md (default: stdout only)")
 	listen := flag.Bool("listen", true, "hold a loopback TCP listener open, so the Go poller is live as it is under naut run")
 	flag.Parse()
@@ -236,7 +240,7 @@ func main() {
 	if c.Alloc > 0 {
 		tasks = append(tasks, runtime.Task{Name: "alloc", Program: allocST, Scan: c.Alloc})
 	}
-	rt, err := runtime.New(runtime.Options{
+	opts := runtime.Options{
 		Program:       fastST,
 		Driver:        drv,
 		Scan:          c.Fast,
@@ -246,10 +250,26 @@ func main() {
 		DtTag:         "DtS",
 		Tasks:         tasks,
 		LateThreshold: c.Threshold,
-	})
+		Priority:      c.Priority,
+	}
+	if c.CPU >= 0 {
+		opts.CPUs = []int{c.CPU}
+	}
+	rt, err := runtime.New(opts)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "jitter:", err)
 		os.Exit(1)
+	}
+	if c.CPU >= 0 || c.Priority > 0 {
+		// A refused placement must not produce a report that looks pinned:
+		// check it as soon as the loop has started and stop if it was.
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			if s := rt.Stats().Sched; s.Error != "" {
+				fmt.Fprintln(os.Stderr, "jitter: placement refused:", s.Error)
+				os.Exit(2)
+			}
+		}()
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -483,6 +503,12 @@ func markdown(r *report, elapsed time.Duration) string {
 	}
 	if c.ChurnMBps > 0 {
 		fmt.Fprintf(&b, "; Go-side churn %.0f MB/s", c.ChurnMBps)
+	}
+	if c.CPU >= 0 {
+		fmt.Fprintf(&b, "; main task pinned to cpu %d", c.CPU)
+	}
+	if c.Priority > 0 {
+		fmt.Fprintf(&b, "; main task SCHED_FIFO %d", c.Priority)
 	}
 	b.WriteString(".\n\n")
 	b.WriteString("| task | target | scans (ran / due) | late (> target + thr) | overruns | missed | p50 | p99 | p99.9 | max |\n")
