@@ -86,3 +86,10 @@ func (v *scanView) WriteGlobal(name string, val ir.Value) error {
 }
 
 func (v *scanView) NowMs() int64 { return v.store.NowMs() }
+
+// DivZero forwards the VM's optional ir.DivZeroCounter to the store, so a
+// division by zero inside a task still shows in ScanStats.DivZero. Any
+// optional Host extension the VM looks for must be forwarded here: the
+// view is the Host now, and a type assertion on it finds only what it
+// implements.
+func (v *scanView) DivZero() { v.store.DivZero() }
