@@ -86,10 +86,11 @@ to a logixd agent on the licensed Windows machine (tools/logixd):
                                        --accept/--finalize sends it back.
   naut logix download <proj.ACD>   Download a project to a controller.
                                        STOPS it and resets tags; needs --yes.
-  naut logix mode --comm-path <p> [--yes run|program]
+  naut logix mode [--yes run|program] (<project-dir> | --comm-path <p>)
                                        Read the controller's mode, or
                                        change it (--yes: Program stops the
-                                       logic, Run starts it).
+                                       logic, Run starts it). The project's
+                                       target: logix names the controller.
   naut logix drift <repo.L5X>      Does the controller still match the
                                        repo? --comm-path names the controller;
                                        --logic compares logic only, never

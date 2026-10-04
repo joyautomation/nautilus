@@ -694,13 +694,23 @@ func runLogixMode(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if fs.NArg() > 1 || *commPath == "" {
-		fmt.Fprintln(os.Stderr, "usage: naut logix mode --comm-path <path> [--yes run|program|test]")
+	// Either --comm-path, or a project directory whose target: logix names
+	// the controller — the form with no quoting at all, which is what a
+	// shell permission rule can match.
+	args = fs.Args()
+	if *commPath == "" && len(args) > 0 {
+		if p, err := loadLogixProject(args[len(args)-1]); err == nil {
+			*commPath = p.target.CommPath
+			args = args[:len(args)-1]
+		}
+	}
+	if len(args) > 1 || *commPath == "" {
+		fmt.Fprintln(os.Stderr, "usage: naut logix mode [--yes run|program|test] (--comm-path <path> | <project-dir>)")
 		return 2
 	}
 	var want logixd.RequestedMode
-	if fs.NArg() == 1 {
-		switch strings.ToLower(fs.Arg(0)) {
+	if len(args) == 1 {
+		switch strings.ToLower(args[0]) {
 		case "run":
 			want = logixd.ModeRun
 		case "program":
