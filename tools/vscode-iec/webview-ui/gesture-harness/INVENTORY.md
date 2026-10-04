@@ -32,7 +32,7 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 153 rows. **32 rows have no coverage at all** (no webview test,
+Totals: 153 rows. **28 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
@@ -41,9 +41,9 @@ no rig verb, no smoke check); per section below.
 | FBD `?` | 18 | 4 |
 | Ladder `?` | 20 | 4 |
 | SFC `?` | 22 | 1 |
-| Mimic `?` | 18 | 3 |
+| Mimic `?` | 18 | 0 |
 | Component `?` | 8 | 3 |
-| Other claims | 39 | 9 |
+| Other claims | 39 | 8 |
 
 ## Commands (package.json `contributes.commands`)
 
@@ -98,7 +98,7 @@ no rig verb, no smoke check); per section below.
 | F14 | FBD | Scroll or pinch to zoom (corner buttons zoom and fit too) | "?" list FBD / Layout & view / `Scroll / pinch` | diagram.test.mjs: FBD zoom: Ctrl+= / Ctrl+- / Ctrl+0 drive the xyflow viewport too (keys only) | fbd_zoom_to | 06 (ladder and SFC only) |
 | F15 | FBD | Zoom in / out / fit | "?" list FBD / Layout & view / `Ctrl + = / Ctrl + - / Ctrl + 0` | diagram.test.mjs: FBD zoom: Ctrl+= / Ctrl+- / Ctrl+0 | fbd_zoom_to | 06 (ladder and SFC only) |
 | F16 | FBD | Undo the last edit to the file from the diagram | "?" list FBD / File / `Ctrl + Z` | — | g_key (ctrl+z in takes) | 03 (preview panel) |
-| F17 | FBD | Redo | "?" list FBD / File / `Ctrl + Y / Ctrl + Shift + Z` | — | — | 03 (preview panel) |
+| F17 | FBD | Redo | "?" list FBD / File / `Ctrl + Y / Ctrl + Shift + Z` | mimic-more.test.mjs: M17 Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z post no message and are not preventDefault-ed (undo/redo is VS Code's text undo over the host's WorkspaceEdit; the webview owns no stack, so that is all that is observable) | — | 03 (preview panel) |
 | F18 | FBD | Save the file from the diagram | "?" list FBD / File / `Ctrl + S` | — | g_save | 03 (preview panel) |
 
 ## Ladder editor (`?` list)
@@ -123,7 +123,7 @@ no rig verb, no smoke check); per section below.
 | L16 | LD | Fit the widest rung to the pane width | "?" list LD / View / `Ctrl + 0` | diagram.test.mjs: Ladder zoom: buttons and Ctrl+= / Ctrl+- / Ctrl+0 | diagram_zoom | 06 |
 | L17 | LD | Pan by middle-dragging (wheel and scrollbars scroll) | "?" list LD / View / `Middle-drag` | — | — | — |
 | L18 | LD | Undo the last edit to the file from the diagram | "?" list LD / File / `Ctrl + Z` | — | g_key (ctrl+z in takes) | — |
-| L19 | LD | Redo | "?" list LD / File / `Ctrl + Y / Ctrl + Shift + Z` | — | — | — |
+| L19 | LD | Redo | "?" list LD / File / `Ctrl + Y / Ctrl + Shift + Z` | mimic-more.test.mjs: M17 Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z post no message and are not preventDefault-ed (undo/redo is VS Code's text undo over the host's WorkspaceEdit; the webview owns no stack, so that is all that is observable) | — | — |
 | L20 | LD | Save the file from the diagram | "?" list LD / File / `Ctrl + S` | — | g_save | — |
 
 ## SFC editor (`?` list)
@@ -150,7 +150,7 @@ no rig verb, no smoke check); per section below.
 | S18 | SFC | Fit the whole chart to the pane | "?" list SFC / View / `Ctrl + 0` | diagram.test.mjs: SFC zoom: an overflowing chart fits on first load; SFC zoom: Ctrl+0 | diagram_zoom | 06 |
 | S19 | SFC | Pan by middle-dragging (wheel and scrollbars scroll) | "?" list SFC / View / `Middle-drag` | — | — | — |
 | S20 | SFC | Undo the last edit to the file from the diagram | "?" list SFC / File / `Ctrl + Z` | — | g_key (ctrl+z in takes) | 03 (field undo only) |
-| S21 | SFC | Redo | "?" list SFC / File / `Ctrl + Y / Ctrl + Shift + Z` | — | — | 03 (field undo only) |
+| S21 | SFC | Redo | "?" list SFC / File / `Ctrl + Y / Ctrl + Shift + Z` | mimic-more.test.mjs: M17 Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z post no message and are not preventDefault-ed (undo/redo is VS Code's text undo over the host's WorkspaceEdit; the webview owns no stack, so that is all that is observable) | — | 03 (field undo only) |
 | S22 | SFC | Save the file from the diagram | "?" list SFC / File / `Ctrl + S` | — | g_save | 03 (field undo only) |
 
 ## Mimic editor (`?` list)
@@ -161,19 +161,19 @@ no rig verb, no smoke check); per section below.
 | M02 | Mimic | Add equipment to or remove it from the selection | "?" list MIMIC / Select / `Ctrl + click` | gestures.test.mjs: clipboard: Ctrl-click multi-selects | — | — |
 | M03 | Mimic | Select all equipment | "?" list MIMIC / Select / `Ctrl + A` | gestures.test.mjs: clipboard: Ctrl+A selects all equipment; Del deletes it as ONE batch | — | — |
 | M04 | Mimic | Shift-click a pipe vertex to multi-select pipe points | "?" list MIMIC / Select / `Shift + click a vertex` | gestures.test.mjs: shift-click node multi-select + Delete (x3), shift-click MISSING a vertex (x2), shift-click a node TWICE, VISUAL: shift-click a vertex | — | — |
-| M05 | Mimic | Esc cancels the tool, leaves the ports editor, or deselects | "?" list MIMIC / Select / `Esc` | — | — | — |
+| M05 | Mimic | Esc cancels the tool, leaves the ports editor, or deselects | "?" list MIMIC / Select / `Esc` | mimic-more.test.mjs: M05 Esc in pipe mode (draft discarded, then Select), in the ports editor, with equipment selected | — | — |
 | M06 | Mimic | Drag to move equipment, labels, pipe points | "?" list MIMIC / Edit / `Drag` | gestures.test.mjs: interior VERTEX drag — preview == commit; a parse error mid-edit locks the stale canvas: dragging equipment posts no op | g_drag, mimic_drop | — |
 | M07 | Mimic | Drag a pipe end onto a port to attach it, or off to detach | "?" list MIMIC / Edit / `Drag a pipe end` | gestures.test.mjs: terminal ATTACH; terminal DETACH; drag re-anchor; dragging a pipe END in Select shows the port dots | — | — |
-| M08 | Mimic | Nudge the selection (Shift = one grid step) | "?" list MIMIC / Edit / `Arrow keys` | gestures.test.mjs: ports-edit: ArrowRight nudges the selected port (ports only; equipment nudge uncovered) | — | — |
+| M08 | Mimic | Nudge the selection (Shift = one grid step) | "?" list MIMIC / Edit / `Arrow keys` | gestures.test.mjs: ports-edit: ArrowRight nudges the selected port; mimic-more.test.mjs: M08 ArrowRight nudges the equipment by 1 px, Shift+ArrowRight by one grid step | — | — |
 | M09 | Mimic | Delete the selection (attached pipe ends kept, detached) | "?" list MIMIC / Edit / `Del / Backspace` | gestures.test.mjs: clipboard: Ctrl+A ... Del deletes it as ONE batch | — | — |
 | M10 | Mimic | Copy, cut, paste equipment with props, bindings and pipes (into another mimic too) | "?" list MIMIC / Edit / `Ctrl + C / X / V` | gestures.test.mjs: clipboard: Ctrl-click multi-selects, Ctrl+C / Ctrl+V pastes ONE batch; Ctrl+X deletes the selection in one batch | — | 05 |
 | M11 | Mimic | Duplicate the selection in place | "?" list MIMIC / Edit / `Ctrl + D` | gestures.test.mjs: clipboard: Ctrl+D duplicates one instance | — | — |
 | M12 | Mimic | Press P to open the ports editor for the selected equipment | "?" list MIMIC / Edit / `P` | gestures.test.mjs: ports-edit tests (enterPortsMode presses p) | component_edit_ports | — |
 | M13 | Mimic | Click to add a pipe point; starting or ending on a port dot anchors that end | "?" list MIMIC / + Pipe tool / `Click` | gestures.test.mjs: port dot -> port dot -> Enter commits an anchored pipe | mimic_pipe, mimic_pipe_direct | — |
 | M14 | Mimic | Enter or double-click finishes the pipe | "?" list MIMIC / + Pipe tool / `Enter / double-click` | gestures.test.mjs: Enter completes a BENT pipe onto a hovered port; floating control: two clicks + Enter | mimic_pipe | — |
-| M15 | Mimic | Hold Shift for a free angle while placing a point | "?" list MIMIC / + Pipe tool / `Shift` | — | — | — |
+| M15 | Mimic | Hold Shift for a free angle while placing a point | "?" list MIMIC / + Pipe tool / `Shift` | mimic-more.test.mjs: M15 without Shift the second point is orthogonalised; holding Shift keeps the diagonal | — | — |
 | M16 | Mimic | Undo the last edit to the file from the diagram | "?" list MIMIC / File / `Ctrl + Z` | — | g_key (ctrl+z in takes) | — |
-| M17 | Mimic | Redo | "?" list MIMIC / File / `Ctrl + Y / Ctrl + Shift + Z` | — | — | — |
+| M17 | Mimic | Redo | "?" list MIMIC / File / `Ctrl + Y / Ctrl + Shift + Z` | mimic-more.test.mjs: M17 Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z post no message and are not preventDefault-ed (undo/redo is VS Code's text undo over the host's WorkspaceEdit; the webview owns no stack, so that is all that is observable) | — | — |
 | M18 | Mimic | Save the file from the diagram | "?" list MIMIC / File / `Ctrl + S` | — | g_save | — |
 
 ## Component (ports) editor (`?` list)
@@ -186,7 +186,7 @@ no rig verb, no smoke check); per section below.
 | P04 | Component | Click a port dot or panel row to select the port | "?" list COMP / Ports / `Click a dot or panel row` | gestures.test.mjs: ports-edit: a DEAD-CENTER click on a port dot selects the port; VISUAL: ports-edit dot selection (in the mimic editor's ports mode) | — | — |
 | P05 | Component | Esc deselects the port | "?" list COMP / Ports / `Esc` | — | — | — |
 | P06 | Component | Undo the last edit to the file from the diagram | "?" list COMP / File / `Ctrl + Z` | — | g_key (ctrl+z in takes) | — |
-| P07 | Component | Redo | "?" list COMP / File / `Ctrl + Y / Ctrl + Shift + Z` | — | — | — |
+| P07 | Component | Redo | "?" list COMP / File / `Ctrl + Y / Ctrl + Shift + Z` | mimic-more.test.mjs: M17 Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z post no message and are not preventDefault-ed (undo/redo is VS Code's text undo over the host's WorkspaceEdit; the webview owns no stack, so that is all that is observable) | — | — |
 | P08 | Component | Save the file from the diagram | "?" list COMP / File / `Ctrl + S` | — | g_save | — |
 
 ## Other claims (README, CHANGELOG, menus)
@@ -230,12 +230,12 @@ no rig verb, no smoke check); per section below.
 | X35 | Mimic | Place equipment from the palette (Tank, Pump, Valve, Gauge, Sparkline, user components) | README HMI mimic editor | — | mimic_drop | — |
 | X36 | Mimic | Bind props to tags in the props panel | README HMI mimic editor | — | mimic_bind | — |
 | X37 | Mimic | Pipes snap to ports, follow equipment when it moves, orthogonal route suggested around obstacles | README HMI mimic editor | gestures.test.mjs: draw preview == committed render; terminal ATTACH / DETACH | mimic_pipe | — |
-| X38 | Mimic | Snap to grid (nautilus.mimic.snapToGrid) | README Settings | — | — | — |
+| X38 | Mimic | Snap to grid (nautilus.mimic.snapToGrid) | README Settings | mimic-more.test.mjs: X38 snapToGrid on lands a drag on the 10 px grid; off moves the exact delta | — | — |
 | X39 | Mimic | Live canvas animates bound props from the controller | README HMI mimic editor | — | — | — |
 
 ## Count of rows with no coverage at all
 
-**32 of 153.** The commands are the thinnest area: only the download /
+**28 of 153.** The commands are the thinnest area: only the download /
 rollback pair (08), the title-bar buttons (04) and the previews (03, 07, 10)
 are touched by any smoke check, and no webview test can reach a command because
 commands live in the extension host (that is what the E3 test-state hooks are
@@ -247,8 +247,7 @@ Notes for the next pass:
 
 - `nautilus.fb.monitor` is registered in `src/extension.ts` but not contributed
   in `package.json`, so it has no palette entry; it is listed so it is not lost.
-- Several rows are covered only on one half of the claim (for example mimic
-  arrow keys: the tests nudge a *port*, not equipment). Those are labelled in
+- Some rows are covered only on one half of the claim. Those are labelled in
   the cell.
 - The rig verbs for the ladder and FBD were written for the lift-station
   episode, so they exercise gestures the takes needed, not a systematic sweep.
