@@ -469,12 +469,24 @@ func (im *importer) declareFound(sc *scope, p *pou, f *found, blockType string) 
 				typ = "CTU"
 			}
 		}
-		k := strings.ToLower(f.tag.Name + ":VAR")
+		k := strings.ToLower("VAR:" + l5x.Ident(f.tag.Name))
 		if d, ok := p.declIdx[k]; ok {
-			if blockType != "" && d.Type != blockType {
+			have := d.Type
+			if i := strings.LastIndex(have, " OF "); strings.HasPrefix(have, "ARRAY") && i >= 0 {
+				have = have[i+4:]
+			}
+			if blockType != "" && have != blockType {
 				return false
 			}
 			return true
+		}
+		if f.dims != "" {
+			n := 0
+			fmt.Sscan(f.dims, &n)
+			if n <= 0 || strings.Contains(strings.TrimSpace(f.dims), " ") {
+				return false
+			}
+			typ = fmt.Sprintf("ARRAY [0..%d] OF %s", n-1, typ)
 		}
 		d := decl{Name: l5x.Ident(f.tag.Name), Type: typ, Section: "VAR", Comment: firstLine(f.tag.Description)}
 		if f.ext && sc.ctrl != nil {

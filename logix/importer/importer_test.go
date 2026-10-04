@@ -612,7 +612,7 @@ func TestRefusalsKeepTheProgramValid(t *testing.T) {
 	doc := miniL5X(tags,
 		"XIC(a)COP(n,m,1);",
 		"XIC(a)XIC(b)ONS(s)OTL(b);",
-		"XIC(n.3)OTE(b);",
+		"XIC(n.3)OTE(m.12);",
 		"XIC(a)OTE(b)XIC(b);",
 		"XIC(a)CTU(c,?,?);",
 		"XIC(b)OTE(a);",
@@ -621,7 +621,7 @@ func TestRefusalsKeepTheProgramValid(t *testing.T) {
 	)
 	p := mustImport(t, doc)
 	reasons := strings.Join(p.Reasons(), " ")
-	for _, want := range []string{"COP 1", "bit 1", "RES 1", "JSR 1"} {
+	for _, want := range []string{"COP 1", "RES 1", "JSR 1"} {
 		if !strings.Contains(reasons, want) {
 			t.Errorf("reasons %v lack %q", p.Reasons(), want)
 		}
@@ -634,12 +634,16 @@ func TestRefusalsKeepTheProgramValid(t *testing.T) {
 	if !strings.Contains(src, "a b ( P os_r1_1 )") || !strings.Contains(src, "os_r1_1 ( S b )") {
 		t.Errorf("compound one-shot:\n%s", src)
 	}
+	// Bits of integers keep their spelling.
+	if !strings.Contains(src, "n.3 ( m.12 )") {
+		t.Errorf("bit access:\n%s", src)
+	}
 	if _, _, err := writer.Write(src, writer.Options{Controller: "Mini"}); err != nil {
 		t.Errorf("the partial program must still write: %v\n%s", err, src)
 	}
 	// XIC(a)OTE(b)XIC(b): the trailing contact drives nothing in Logix
 	// either, so the rung imports as a ( b ).
-	if p.Complete != 0 || p.Imported != 4 {
+	if p.Complete != 0 || p.Imported != 5 {
 		t.Errorf("complete %d imported %d", p.Complete, p.Imported)
 	}
 }
@@ -744,5 +748,62 @@ func TestDataInstructionsImportAndWriteBack(t *testing.T) {
 	tags2 := string(p.Files["tags/logix.yaml"])
 	if !strings.Contains(tags2, "name: n, role: output") {
 		t.Errorf("n is assigned; should be an output:\n%s", tags2)
+	}
+}
+
+// Arrays of timers and counters: the array is declared once, each
+// element is its own instance with its own preset, and members read by
+// index. The miniL5X helper carries one preset per tag as a scalar
+// structure, so every element here presets to 1000 (a real export carries
+// one per element; TestArrayOfStructuresDecodes in lang/l5x covers that).
+func TestArraysOfBlocksImport(t *testing.T) {
+	tags := []string{"a:BOOL", "b:BOOL", "c:BOOL", "i:DINT", "Timers:TIMER=1000", "Counts:COUNTER=3"}
+	doc := miniL5X(tags,
+		"MOVE(500,Timers[0].PRE);",
+		"XIC(a)TON(Timers[0],?,?);",
+		"XIC(Timers[0].DN)OTE(b);",
+		"MOVE(1000,Timers[i].PRE);",
+		"XIC(a)TON(Timers[i],?,?);",
+		"XIC(a)CTU(Counts[1],?,?);",
+		"XIC(Counts[1].DN)OTE(c);",
+	)
+	doc = []byte(strings.Replace(string(doc), `<Tag Name="Timers" TagType="Base" DataType="TIMER"`, `<Tag Name="Timers" TagType="Base" DataType="TIMER" Dimensions="3"`, 1))
+	doc = []byte(strings.Replace(string(doc), `<Tag Name="Counts" TagType="Base" DataType="COUNTER"`, `<Tag Name="Counts" TagType="Base" DataType="COUNTER" Dimensions="2"`, 1))
+	p := mustImport(t, doc)
+	for _, nt := range p.Notes {
+		if nt.Rung >= 0 {
+			t.Errorf("note: %s", nt)
+		}
+	}
+	src := string(p.Files["Main.ld"])
+	for _, want := range []string{
+		"Timers : ARRAY [0..2] OF TON;",
+		"Counts : ARRAY [0..1] OF CTU;",
+		"a Timers[0]:TON(PT := T#500MS)",
+		"Timers[0].Q ( b )",
+		"a Timers[i]:TON(PT := T#1S)",
+		"a Counts[1]:CTU(PV := 3) ( c )",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("missing %q in\n%s", want, src)
+		}
+	}
+	out, diags, err := writer.Write(src, writer.Options{Controller: "Mini"})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("writer: %v %v\n%s", err, diags, src)
+	}
+	back, _ := l5x.Parse(out)
+	got := rungTexts(back, "Main", "MainRoutine")
+	want := []string{
+		"MOVE(500,Timers[0].PRE);",
+		"XIC(a)TON(Timers[0],?,?);",
+		"XIC(Timers[0].DN)OTE(b);",
+		"MOVE(1000,Timers[i].PRE);",
+		"XIC(a)TON(Timers[i],?,?);",
+		"XIC(a)CTU(Counts[1],?,?);",
+		"XIC(Counts[1].DN)OTE(c);",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("written back:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
 	}
 }

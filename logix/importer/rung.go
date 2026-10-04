@@ -37,6 +37,9 @@ type routine struct {
 	resetCond map[string]string
 	// resetRung is the index of the folded RES rung per counter.
 	resetRung map[string]int
+	// presetLit maps an instance to the literal a MOVE ahead of its rung
+	// set its preset to.
+	presetLit map[string]int64
 	// enable maps a rung index to the condition the writer put on an
 	// en_ helper rung ahead of an Add-On Instruction call.
 	enable map[int][]string
@@ -67,7 +70,7 @@ var (
 
 // lowerRoutine imports one ladder routine into p.
 func (im *importer) lowerRoutine(sc *scope, r *l5x.Routine, p *pou) {
-	rt := &routine{im: im, sc: sc, p: p, edges: map[string]string{}, presetVar: map[string]string{}, resetCond: map[string]string{}, resetRung: map[string]int{}, synth: map[string]bool{}, enable: map[int][]string{}, refs: map[string]int{}}
+	rt := &routine{im: im, sc: sc, p: p, edges: map[string]string{}, presetVar: map[string]string{}, resetCond: map[string]string{}, resetRung: map[string]int{}, presetLit: map[string]int64{}, synth: map[string]bool{}, enable: map[int][]string{}, refs: map[string]int{}}
 	for _, rg := range r.Rungs {
 		pr := &parsed{rg: rg}
 		terms, err := l5x.ParseRung(rg.Text)
@@ -175,6 +178,22 @@ func (rt *routine) prepass() {
 					}
 					rt.edges[strings.ToLower(os.Args[1])] = sign + x.Args[0]
 					rt.edges["st:"+strings.ToLower(os.Args[0])] = ""
+					pr.drop = true
+					rt.p.imported++
+					continue
+				}
+			}
+		}
+		// MOVE(500,inst.PRE) ahead of the block's rung: the writer's preset
+		// for an element of a variable-indexed array. It is the literal
+		// PT := / PV :=.
+		if len(terms) == 1 {
+			if mv := instrIs(terms[0], "MOVE", "MOV"); mv != nil && len(mv.Args) == 2 && strings.HasSuffix(strings.ToUpper(mv.Args[1]), ".PRE") && numLit.MatchString(mv.Args[0]) {
+				inst := mv.Args[1][:len(mv.Args[1])-4]
+				if blk := rt.blockRungAfter(i, inst); blk != "" {
+					var n int64
+					fmt.Sscan(mv.Args[0], &n)
+					rt.presetLit[strings.ToLower(inst)] = n
 					pr.drop = true
 					rt.p.imported++
 					continue
@@ -1015,8 +1034,32 @@ func (rt *routine) ref(a string, blockType string) (string, *refusal) {
 	}
 	up := strings.ToUpper(f.dtype)
 	if up == "TIMER" || up == "COUNTER" {
+		// An element of an array of timers: Timers[2] is the instance,
+		// Timers[2].DN its member; the array is declared once.
+		index := ""
 		if f.dims != "" {
-			return "", refuse("array", "an array of %s", up)
+			if !strings.HasPrefix(rest, "[") {
+				return "", refuse("array", "a whole array of %s as an operand", up)
+			}
+			j := strings.IndexByte(rest, ']')
+			if j < 0 {
+				return "", refuse("operand", "unclosed index")
+			}
+			index, rest = rest[:j+1], rest[j+1:]
+			inner := strings.TrimSpace(index[1 : len(index)-1])
+			if strings.Contains(inner, ",") {
+				return "", refuse("array", "a multi-dimensional array of %s", up)
+			}
+			if !numLit.MatchString(inner) {
+				g := rt.sc.lookup(inner)
+				if g == nil {
+					return "", refuse("undefined", "index tag %s is not in scope", inner)
+				}
+				if !rt.im.declareFound(rt.sc, rt.p, g, "") {
+					return "", refuse("type", "%s has no nautilus declaration", inner)
+				}
+				index = "[" + g.name + "]"
+			}
 		}
 		if owner, ok := rt.sc.blockOwner[strings.ToLower(f.name)]; ok && blockType == "" && rt.sc.ctrl != nil {
 			if !strings.EqualFold(rt.sc.owner, rt.ownerProgram()+"/"+owner) {
@@ -1030,7 +1073,7 @@ func (rt *routine) ref(a string, blockType string) (string, *refusal) {
 			return "", refuse("block-type", "%s is driven by two different instructions", f.name)
 		}
 		if rest == "" {
-			return f.name, nil
+			return f.name + index, nil
 		}
 		if !strings.HasPrefix(rest, ".") {
 			return "", refuse("member", "%s on a %s", rest, up)
@@ -1043,7 +1086,7 @@ func (rt *routine) ref(a string, blockType string) (string, *refusal) {
 		if !ok {
 			return "", refuse("member", "%s.%s has no IEC member", f.name, rest[1:])
 		}
-		return f.name + "." + m, nil
+		return f.name + index + "." + m, nil
 	}
 	if blockType != "" {
 		return "", refuse("block-type", "%s is a %s, not a timer or counter", f.name, f.dtype)
@@ -1077,8 +1120,14 @@ func (rt *routine) accessors(rest string) (string, *refusal) {
 				j++
 			}
 			name := rest[1:j]
-			if name == "" || (name[0] >= '0' && name[0] <= '9') {
-				return "", refuse("bit", "bit-level access .%s has no nautilus form", name)
+			if name == "" {
+				return "", refuse("operand", "an empty member")
+			}
+			if name[0] >= '0' && name[0] <= '9' {
+				// Word.3: a bit of an integer, the same spelling in nautilus.
+				b.WriteString("." + name)
+				rest = rest[j:]
+				continue
 			}
 			b.WriteString("." + l5x.Ident(name))
 			rest = rest[j:]
@@ -1128,7 +1177,7 @@ func (rt *routine) block(in *l5x.Instr) (string, *refusal) {
 	if err != nil {
 		return "", err
 	}
-	f := rt.sc.lookup(inst)
+	f := rt.sc.lookup(baseOf(inst))
 	var binds []string
 	pv, hasVar := rt.presetVar[strings.ToLower(inst)]
 	switch m {
@@ -1140,8 +1189,10 @@ func (rt *routine) block(in *l5x.Instr) (string, *refusal) {
 			v := rt.sc.lookup(pv)
 			rt.p.declare(decl{Name: v.name, Type: "TIME", Section: rt.sectionOf(v), Comment: "DINT milliseconds in the export; feeds a timer preset"})
 			binds = append(binds, "PT := "+v.name)
+		} else if lit, ok := rt.presetLit[strings.ToLower(inst)]; ok {
+			binds = append(binds, "PT := "+timeLit(lit))
 		} else {
-			binds = append(binds, "PT := "+timeLit(presetOf(f)))
+			binds = append(binds, "PT := "+timeLit(presetOf(f, inst)))
 		}
 	case "CTU":
 		if !strings.EqualFold(f.dtype, "COUNTER") {
@@ -1153,8 +1204,10 @@ func (rt *routine) block(in *l5x.Instr) (string, *refusal) {
 				return "", refuse("type", "%s has no nautilus declaration", pv)
 			}
 			binds = append(binds, "PV := "+v.name)
+		} else if lit, ok := rt.presetLit[strings.ToLower(inst)]; ok {
+			binds = append(binds, fmt.Sprintf("PV := %d", lit))
 		} else {
-			binds = append(binds, fmt.Sprintf("PV := %d", presetOf(f)))
+			binds = append(binds, fmt.Sprintf("PV := %d", presetOf(f, inst)))
 		}
 		if cond, ok := rt.resetCond[strings.ToLower(inst)]; ok {
 			binds = append(binds, "R := "+cond)
@@ -1170,17 +1223,28 @@ func (rt *routine) sectionOf(f *found) string {
 	return "VAR"
 }
 
-// presetOf reads PRE from a TIMER/COUNTER tag's decorated value.
-func presetOf(f *found) int64 {
+// presetOf reads PRE from a TIMER/COUNTER tag's decorated value — the
+// element's, for an instance that is an element of an array (a literal
+// index; a computed index has no single preset and reads 0).
+func presetOf(f *found, inst string) int64 {
 	if f == nil || f.tag == nil {
 		return 0
 	}
-	if m, ok := f.tag.Value.(map[string]any); ok {
-		switch v := m["PRE"].(type) {
+	v := f.tag.Value
+	if arr, ok := v.([]any); ok {
+		_, rest := baseOf(inst), inst[len(baseOf(inst)):]
+		var idx int
+		if n, err := fmt.Sscanf(rest, "[%d]", &idx); err != nil || n != 1 || idx < 0 || idx >= len(arr) {
+			return 0
+		}
+		v = arr[idx]
+	}
+	if m, ok := v.(map[string]any); ok {
+		switch p := m["PRE"].(type) {
 		case int64:
-			return v
+			return p
 		case float64:
-			return int64(v)
+			return int64(p)
 		}
 	}
 	return 0
