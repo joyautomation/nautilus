@@ -650,7 +650,7 @@ see above), the NaN/overflow probes, and a flake measurement over days
 rather than minutes — those want the scheduled run from §5.6, which needs
 a runner on the licensed host.
 
-**James's call:** *(pending)*
+**James's call (2026-10-03): continue to Phase D; stay on v38 and widen the version matrix only if the product gets traction.**
 
 ## 8. The demo this enables
 
