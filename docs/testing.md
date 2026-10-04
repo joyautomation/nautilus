@@ -324,14 +324,15 @@ The scaffolded workflow gates on all three:
 ```
 
 `naut test` exits non-zero on any failure. `-json` emits one
-line-delimited event per test for editors and CI tooling:
+line-delimited event per test for editors and CI tooling (wrapped here for
+reading):
 
 ```json
-{"suite":"my-plant_test.yaml","name":"pump starts on a high level","line":24,
- "passed":false,"scans":3,"elapsedMs":300,
+{"suite":"my-plant_test.yaml","name":"pump seals in below the start level and drops out above it",
+ "line":19,"passed":false,"scans":3,"elapsedMs":300,
  "failure":{"step":3,"line":30,"stepLine":28,"atMs":300,
             "reason":"expectation failed","detail":"PumpRun = false, want true",
-            "trace":[{"name":"PumpRun","atMs":[200,300],"values":["false","false"]}]}}
+            "trace":[{"name":"PumpRun","desc":"Pump run command","atMs":[200,300],"values":["true","false"]}]}}
 ```
 
 The event's `line` is the test's `- name:`. `failure.line` is the
