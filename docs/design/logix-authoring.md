@@ -939,6 +939,116 @@ their I/O target not carried); JSR (each routine is its own PROGRAM; the
 call rung is left out); the `( P x )` coil in the round-trip comparator
 beyond the writer's unit tests.
 
+### Phase E — data primitives (2026-10-03, later the same day)
+
+**James's call on the data-operation finding:** "if we're going to do this
+we're going to need to have primitives that are well used in Logix... like
+MOVE... so let's add things", and no ST fallback without understanding
+what does not fit. Also: deploy to the Echo emulator at will.
+
+**Built: the ladder assignment.** `{ y := expr }` is a new nautilus ladder
+element (`lang/ld`): made when the rung has power at that point, power
+passing through unchanged — the IEC function box with `EN` on the rung,
+written as the assignment it is. Several with `;`. The value is any IEC
+expression; `lang/ld` now has an expression parser (`ParseExpr`,
+precedence per the standard) and spells it for the FBD netlist as prefix
+calls, lowered as `y := SEL(cond, y, value)`. Function contacts take
+expression arguments the same way (`GT(Raw / Span * 100.0, 50.0)`), which
+they could be written with before but did not compile. The diagram
+renders and edits the element (palette `{ := }`, dblclick to edit); the
+docs (`docs/functions.md`, the package doc) say what it is and the one
+semantic note: the value is evaluated every scan like any block, so an
+index in it must stay valid while the rung is false, where a Logix box is
+skipped.
+
+**The writer** maps an assignment to the instruction its shape names —
+`MOVE`, `ADD`, `SUB`, `MUL`, `DIV`, `ABS` — and anything else to a `CPT`
+in Logix's expression spelling (`SQRT`→`SQR`, `TRUNC`→`TRN`, `EXPT`→`**`,
+TIME literals as milliseconds); a compare with an expression operand is a
+`CMP`. `MOD`, `NEG`, `SQR`, `XPY` exist as instructions too, but no export
+in the corpus carries them, so those shapes go through `CPT`, which the
+corpus does (the mnemonic allowlist rule from Phase A). Refused by rule
+(`logix/data-op`): an assignment of a comparison or boolean (drive the
+BOOL with a coil), and functions Logix cannot spell (MIN, MAX, LIMIT, SEL,
+MUX, strings, shifts). The round-trip comparator checks both.
+
+**The importer** maps `MOVE ADD SUB MUL DIV MOD NEG ABS SQR XPY CLR CPT`
+to assignments, `CMP` to the compare it means (sides as IEC expressions),
+`LIMIT` with literal bounds to the two compares it is (a variable bound
+wraps in Logix when low > high — refused, 4 rungs). And the 2-D habits of
+real Logix ladder come across as the rungs they are: an output leg inside
+a branch is a rung of its own and the branch keeps its conditions; a timer
+or counter inside a leg (it passes its rung-in on) is hoisted onto its own
+rung; parallel boxes stay a branch of boxes; a one-shot of a compound
+condition driving one OTE is the `( P x )` coil, driving anything else
+gets a pulse tag of its own (`cond ( P os_r7_1 )`, then `os_r7_1 rest`);
+`OSR`/`OSF` mid-rung are `( P q )` / `( N q )` output legs; conditions
+left dangling after the last output (which drive nothing in Logix either)
+are dropped. Every refusal now carries its reason into the file and the
+report.
+
+**Measured on the corpus** (same 52 exports):
+
+| | before (Phase E start) | now |
+|---|---|---|
+| rungs imported | 55.9 % | **93.9 %** (28,541 of 30,397) |
+| routines complete | 13.3 % | **66.1 %** (637 of 964) |
+| AOI Logic routines complete | 13.6 % | **73.5 %** |
+| complete program routines written back | 15 identical of 15 | **17 identical + 9 restructured of 26**, 0 refused by the writer |
+
+"Restructured" is the compound one-shot: one Logix rung becomes two
+nautilus rungs with a pulse tag, equivalent and not byte-identical; every
+other complete routine re-emits the export's rung text.
+
+**Measured on Echo:** the `data` conformance project (an ADD per edge, a
+CPT scaling and an ABS, MUL/SUB, a CMP, boxes in parallel legs, a
+compound one-shot, MOVEs of literals) — download verified in 2 m 19 s,
+**4 of 4 scenarios pass on both runtimes.** Two things the live run
+taught, both harness, not semantics: REAL arithmetic on the controller is
+32-bit, so `60.0 / 100.0 * 100.0` lands a few ULPs off and the scenario
+uses `{near: 60.0}`; and a one-scan pulse is invisible to a 100 ms poll,
+so the scenario latches it. **The brownfield DemoLine** — the real
+Studio-authored export, imported — deployed to Echo and verified in
+2 m 23 s: the plant's export is nautilus source and is back on the
+controller.
+
+**What still does not fit, and why** (6.1 % of rungs):
+
+- **Bit-level access `Tag.3`** — 917 rungs, 3.0 %. A contact on bit 3 of
+  a DINT, a coil on bit 12 of a status word. nautilus has no bit-of-
+  integer addressing: integers are values, BOOLs are tags. A read could
+  be spelled `NE(Word AND 8, 0)`; a coil cannot be spelled at all without
+  a read-modify-write. This is the second language question, same shape
+  as the first: Logix programmers pack BOOLs into words everywhere, and
+  nautilus would need `Word.3` as an addressable BOOL in all three
+  languages (and in the tag store, where the live overlay reads it).
+- **Arrays of timers and counters** — 179 rungs, 0.6 %. `TON(T[3],?,?)`.
+  nautilus declares block instances one by one; an array of instances is
+  a language gap (the writer refuses it in the forward direction too).
+- **Module I/O operands** — 161, 0.5 %. `Local:1:I.Data.3` read straight
+  off the rack. A brownfield site aliases these to tags before import,
+  or the import gets an I/O map; nautilus has no rack addressing.
+- **Opaque types** — 159, 0.5 %. MESSAGE tags (the MSG instruction's
+  control block) and tags whose export carries no type.
+- **RES on a timer** — 116, 0.4 %. `XIC(t.DN)RES(t)` restarts a running
+  timer: an IEC TON has no reset input, it restarts when IN drops. The
+  self-resetting-timer idiom could become a block of its own; not done.
+- **GSV / SSV** — 153, 0.5 %. Controller system values (wall clock,
+  fault codes, task scan times). No nautilus equivalent; a side-code
+  question.
+- **One-shots inside a leg that is not rail-fed and carries coils** — 54.
+  The pulse-tag rewrite handles the leg's conditions; a leg that also
+  has its own coils needs the output-leg split and the pulse at once.
+  Doable, not done.
+- **JSR** (30), `COP`/`BTD` (37), `TND` (12), MSG (5), string ops (2):
+  subroutine calls (each routine is its own PROGRAM, the call rung is
+  left out — a `JSR` with parameters has no nautilus form), block copies
+  and bit distributes (no element), temporary end, messaging.
+
+**Not done in E:** bit access and instance arrays (decisions); the
+one-shot-with-coils leg; the alias/I-O map; RTO/CTD; `( P x )` in the
+round-trip comparator is checked by shape only.
+
 ## 8. The demo this enables
 
 James's target demo (2026-10-03), which replaces the Tier A `ab01` draft in the
