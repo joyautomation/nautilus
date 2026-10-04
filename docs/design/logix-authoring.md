@@ -611,6 +611,47 @@ activation). The matrix across revisions is therefore an install question
 for ECHO1 before it is a harness question; the harness itself is
 revision-agnostic (`target.logix.revision`).
 
+### Phase C — check (2026-10-03)
+
+Estimate about a week; one session (the same day as A and B). Timebox not
+hit. Built: `naut test --target logix` (§5.5 as the user's own scenarios),
+the side-code program with the heartbeat, four conformance projects.
+
+**Stop criteria** — unchanged from Phase B: no Studio GUI anywhere in the
+loop; generated rungs online-edit; licence as recorded.
+
+**Re-scope / stop criteria**
+- *Special cases:* **0** per-program fixes, **0** per-firmware branches.
+  One rule changed from a conformance finding (CTU ends its rung).
+- *The equivalent subset is too small to be useful* — the yardstick is
+  batch-skid `line/Line.L5X`. Its instruction set is covered (all of
+  `XIC XIO OTE OTU TON GE`, plus `LT` once its `LES` caption is fixed),
+  and every instruction family now has behavioural equivalence measured on
+  Echo. What it cannot express is the UDT (`Line_Status` with a coil on a
+  member). **Instructions: not a toy. Types: still v1.** Widening to UDTs
+  is Phase D work alongside ST routines.
+- *An instruction not equivalent and not rejectable:* **none.** 13 of 13
+  conformance scenarios pass on both runtimes, including the places the
+  brief named (timer reset while timing, counter at preset, edge at the
+  head and not at the head). Not yet probed: compare with NaN, counter
+  overflow — both outside anything a v1 program writes.
+- *Verification trustworthy:* flake rate **0 of 10** consecutive live runs
+  (40 scenario executions, ~5 s per run) on top of 0 of 13 first runs;
+  0 Echo/logixd interruptions across every scheduled-style run today
+  (about 20 SDK sessions, 7 downloads). Below the 2% and 1-in-5 limits,
+  on a small sample.
+
+**DX criteria** — unchanged: ~2 s warm online edit; 2 m 16–23 s per
+download; 0 errors first seen at SDK import or build since the time-slice
+attribute in Phase B.
+
+**Not done in C:** the version matrix (ECHO1 has one Designer version;
+see above), the NaN/overflow probes, and a flake measurement over days
+rather than minutes — those want the scheduled run from §5.6, which needs
+a runner on the licensed host.
+
+**James's call:** *(pending)*
+
 ## 8. The demo this enables
 
 James's target demo (2026-10-03), which replaces the Tier A `ab01` draft in the
