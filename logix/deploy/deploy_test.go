@@ -106,6 +106,20 @@ func (f *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 			f.running = full
 		}
 		ok(map[string]any{})
+	case strings.HasSuffix(r.URL.Path, "/partial-import"):
+		// A program imported over the skeleton: the project is now the
+		// full generated document, which is what the deploy also staged.
+		file := body["file"].(string)
+		if full, ok := f.files[strings.TrimSuffix(file, ".program.L5X")+".L5X"]; ok {
+			dir := file[:strings.LastIndex(file, "/")+1]
+			f.files[dir+"merged.ACD"] = full
+			for name := range f.files {
+				if strings.HasSuffix(name, ".ACD") && strings.HasPrefix(name, dir) && !strings.Contains(name, "before") && !strings.Contains(name, "after") {
+					f.files[name] = full
+				}
+			}
+		}
+		ok(map[string]any{})
 	case strings.HasSuffix(r.URL.Path, "/partial-export"):
 		f.files[body["output"].(string)] = f.running
 		ok(map[string]any{})
@@ -383,5 +397,41 @@ func TestSessionEditsAnSTRoutine(t *testing.T) {
 	}
 	if len(f.imports) != 0 || len(f.routineImports) != 1 || f.routineImports[0]["onlineOption"] != "FinalizeEdits" {
 		t.Errorf("imports: rungs=%d routines=%v", len(f.imports), f.routineImports)
+	}
+}
+
+// A program with user blocks is built in two steps: skeleton, then the
+// program as a partial import.
+func TestDeployBuildsAnAOIProjectInTwoSteps(t *testing.T) {
+	motor, _ := os.ReadFile(filepath.Join("..", "writer", "testdata", "conformance", "aoi", "lib", "motor.ld"))
+	src, _ := os.ReadFile(filepath.Join("..", "writer", "testdata", "conformance", "aoi", "Main.ld"))
+	tgt := target()
+	tgt.Libs = []string{string(motor)}
+	f, c := newFakeAgent(t, nil)
+	rep, err := Run(context.Background(), string(src), Options{Client: c, Target: tgt, Mode: Download})
+	if err != nil || rep.Applied != Download || !rep.Verified {
+		t.Fatalf("err=%v report=%+v", err, rep)
+	}
+	var partialImports, converts int
+	for _, call := range f.calls {
+		if strings.HasSuffix(call, "/partial-import") {
+			partialImports++
+		}
+		if strings.HasSuffix(call, "/convert") {
+			converts++
+		}
+	}
+	if partialImports != 1 {
+		t.Errorf("partial imports = %d, want 1 (the program over the skeleton)", partialImports)
+	}
+	if _, ok := f.files["deploy-"+""]; ok {
+		t.Error("unexpected")
+	}
+	for name := range f.files {
+		if strings.HasSuffix(name, ".skeleton.L5X") {
+			if !strings.Contains(string(f.files[name]), "NOP()") || strings.Contains(string(f.files[name]), "MotorStarter(m101") {
+				t.Error("the skeleton should carry a NOP routine and no call")
+			}
+		}
 	}
 }

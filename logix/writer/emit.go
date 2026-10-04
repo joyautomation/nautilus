@@ -548,12 +548,14 @@ func emitAOIs(b *strings.Builder, lw *lowered, o Options) {
 		w(`%s`, cdata("nautilus FUNCTION_BLOCK "+a.Name+", generated"))
 		w(`</Description>`)
 		w(`<Parameters>`)
-		w(`<Parameter Name="EnableIn" TagType="Base" DataType="BOOL" Usage="Input" Radix="Decimal" Required="false" Visible="false" ExternalAccess="Read Only">`)
+		// Required and Visible are the SDK's own on these two; it warns
+		// that it ignores them when written.
+		w(`<Parameter Name="EnableIn" TagType="Base" DataType="BOOL" Usage="Input" Radix="Decimal" ExternalAccess="Read Only">`)
 		w(`<Description>`)
 		w(`%s`, cdata("Enable Input - System Defined Parameter"))
 		w(`</Description>`)
 		w(`</Parameter>`)
-		w(`<Parameter Name="EnableOut" TagType="Base" DataType="BOOL" Usage="Output" Radix="Decimal" Required="false" Visible="false" ExternalAccess="Read Only">`)
+		w(`<Parameter Name="EnableOut" TagType="Base" DataType="BOOL" Usage="Output" Radix="Decimal" ExternalAccess="Read Only">`)
 		w(`<Description>`)
 		w(`%s`, cdata("Enable Output - System Defined Parameter"))
 		w(`</Description>`)
@@ -686,4 +688,111 @@ func emitLocalTag(b *strings.Builder, t tagDef) {
 	}
 	w(`</DefaultData>`)
 	w(`</LocalTag>`)
+}
+
+// lowerAny lowers a program in whichever language its path says.
+func lowerAny(path, src string, opts Options) (*lowered, error) {
+	switch Language(path) {
+	case "st":
+		return lowerST(src, opts)
+	case "ld":
+		m, err := ld.Graph(src, opts.Libs...)
+		if err != nil {
+			return nil, err
+		}
+		if m.Name == "" {
+			return nil, fmt.Errorf("logix writer: source declares no PROGRAM")
+		}
+		return lowerSrc(m, src, opts.withDefaults(m.Name)), nil
+	}
+	return nil, fmt.Errorf("%s: only ladder (.ld) and structured text (.st) programs are in the Logix subset", path)
+}
+
+// UsesAOIs reports whether a program instantiates user blocks, which
+// the SDK will only take into an existing project (partial import), not
+// as part of a whole-project import. deploy builds such a project in two
+// steps: WriteSkeleton, then WriteProgramPartial imported into it.
+func UsesAOIs(path, src string, opts Options) bool {
+	lw, err := lowerAny(path, src, opts)
+	return err == nil && len(lw.diags) == 0 && len(lw.aoiOrder) > 0
+}
+
+// WriteSkeleton is the whole project with the program emptied: controller,
+// types, Add-On Instructions, controller tags, task and side code, and the
+// program as a placeholder (no tags, a NOP routine) for the partial import
+// to overwrite.
+func WriteSkeleton(path, src string, opts Options) ([]byte, []Diag, error) {
+	lw, err := lowerAny(path, src, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(lw.diags) > 0 {
+		return nil, lw.diags, nil
+	}
+	lw.progTags = nil
+	lw.st = false
+	lw.rungs = []rungOut{{Text: "NOP()", Comment: "placeholder: the program is imported over this"}}
+	return emit(lw, lw.opts), nil, nil
+}
+
+// WriteProgramPartial is the program alone — its tags and its routine —
+// as a Program-target partial export, with the controller tags as context.
+func WriteProgramPartial(path, src string, opts Options) ([]byte, []Diag, error) {
+	lw, err := lowerAny(path, src, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(lw.diags) > 0 {
+		return nil, lw.diags, nil
+	}
+	o := lw.opts
+	var b strings.Builder
+	w := func(format string, a ...any) {
+		fmt.Fprintf(&b, format, a...)
+		b.WriteByte('\n')
+	}
+	w(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	w(`<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="%s" TargetName="%s" TargetType="Program" ContainsContext="true" ExportDate="%s" ExportOptions="References NoRawData L5KData DecoratedData Context Dependencies ForceProtectedEncoding AllProjDocTrans">`,
+		attr(o.SoftwareRevision), attr(o.Program), attr(o.ExportDate))
+	w(`<Controller Use="Context" Name="%s">`, attr(o.Controller))
+	if len(lw.ctrlTags) > 0 {
+		emitContextTags(&b, lw.ctrlTags)
+	}
+	w(`<Programs Use="Context">`)
+	w(`<Program Use="Target" Name="%s" TestEdits="false" MainRoutineName="%s" Disabled="false" UseAsFolder="false">`, attr(o.Program), attr(o.Routine))
+	emitTags(&b, lw.progTags)
+	w(`<Routines>`)
+	if lw.st {
+		w(`<Routine Name="%s" Type="ST">`, attr(o.Routine))
+		w(`<STContent>`)
+		for i, line := range lw.stLines {
+			w(`<Line Number="%d">`, i)
+			w(`%s`, cdata(line))
+			w(`</Line>`)
+		}
+		w(`</STContent>`)
+	} else {
+		w(`<Routine Name="%s" Type="RLL">`, attr(o.Routine))
+		w(`<RLLContent>`)
+		for i, r := range lw.rungs {
+			w(`<Rung Number="%d" Type="N">`, i)
+			if r.Comment != "" {
+				w(`<Comment>`)
+				w(`%s`, cdata(r.Comment))
+				w(`</Comment>`)
+			}
+			w(`<Text>`)
+			w(`%s`, cdata(r.Text+";"))
+			w(`</Text>`)
+			w(`</Rung>`)
+		}
+		w(`</RLLContent>`)
+	}
+	w(`</Routine>`)
+	w(`</Routines>`)
+	w(`</Program>`)
+	w(`</Programs>`)
+	w(`</Controller>`)
+	w(`</RSLogix5000Content>`)
+	return []byte(b.String()), nil, nil
 }

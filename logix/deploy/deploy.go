@@ -225,12 +225,45 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 		return done(err)
 	}
 	t0 := time.Now()
-	if _, evs, err := c.Convert(ctx, fullRel, acdRel, false); err != nil {
-		return done(withEvents("SDK import", err, evs))
-	}
-	built, err := c.Open(ctx, acdRel)
-	if err != nil {
-		return done(err)
+	var built *logixd.Session
+	if writer.UsesAOIs("program."+langOf(t), src, wopts) {
+		// The SDK takes an Add-On Instruction instance into an existing
+		// project, not as part of a whole-project import. So: the
+		// project with the program emptied, then the program over it.
+		skeleton, _, _ := writer.WriteSkeleton("program."+langOf(t), src, wopts)
+		program, _, _ := writer.WriteProgramPartial("program."+langOf(t), src, wopts)
+		skelRel, progRel := rel(rep.Controller+".skeleton.L5X"), rel(rep.Controller+".program.L5X")
+		keep(rep.Controller+".skeleton.L5X", skeleton)
+		keep(rep.Controller+".program.L5X", program)
+		if err := c.PutFile(ctx, skelRel, skeleton); err != nil {
+			return done(err)
+		}
+		if err := c.PutFile(ctx, progRel, program); err != nil {
+			return done(err)
+		}
+		if _, evs, err := c.Convert(ctx, skelRel, acdRel, false); err != nil {
+			return done(withEvents("SDK import (skeleton)", err, evs))
+		}
+		built, err = c.Open(ctx, acdRel)
+		if err != nil {
+			return done(err)
+		}
+		if evs, err := built.PartialImport(ctx, "Controller/Programs", progRel, logixd.Overwrite, true); err != nil {
+			_ = built.Close(context.Background())
+			return done(withEvents("SDK import (program)", err, evs))
+		}
+		if _, err := built.Save(ctx, "", false); err != nil {
+			_ = built.Close(context.Background())
+			return done(err)
+		}
+	} else {
+		if _, evs, err := c.Convert(ctx, fullRel, acdRel, false); err != nil {
+			return done(withEvents("SDK import", err, evs))
+		}
+		built, err = c.Open(ctx, acdRel)
+		if err != nil {
+			return done(err)
+		}
 	}
 	res, evs, err := built.Build(ctx, logixd.BuildDefault)
 	if err != nil {
@@ -400,4 +433,12 @@ func withEvents(step string, err error, evs []logixd.Event) error {
 		return fmt.Errorf("%s: %w", step, err)
 	}
 	return fmt.Errorf("%s: %w\n  %s", step, err, strings.Join(lines, "\n  "))
+}
+
+// langOf is the extension the writer dispatches on for a target.
+func langOf(t Target) string {
+	if t.Language == "st" {
+		return "st"
+	}
+	return "ld"
 }
