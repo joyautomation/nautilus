@@ -6,6 +6,7 @@
 
 import * as vscode from "vscode";
 import { diagramViewTypeFor } from "./diagramKeyPolicy";
+import { afterTextTabClosed, nextSnapshot, GuardedDoc } from "./sourceGuard";
 
 /** The URI a title-bar command acts on: VS Code passes the editor's resource
  * when the button is clicked; from the palette, use the active tab. */
@@ -59,12 +60,81 @@ async function openAsDiagram(arg: unknown): Promise<void> {
 async function showSource(arg: unknown): Promise<void> {
   const uri = targetUri(arg);
   if (!uri) return;
+  const doc = await vscode.workspace.openTextDocument(uri);
+  guard(doc);
   await vscode.commands.executeCommand("vscode.openWith", uri, "default", vscode.ViewColumn.Beside);
+}
+
+// ── Show Source guard (see sourceGuard.ts and issue #117) ─────────────────
+// Documents whose text tab was opened by Show Source, keyed by URI string,
+// with the last dirty text seen. Entries live until the text tab is gone.
+
+const guarded = new Map<string, GuardedDoc | undefined>();
+
+function guard(doc: vscode.TextDocument): void {
+  const key = doc.uri.toString();
+  guarded.set(key, nextSnapshot(guarded.get(key), doc.isDirty, doc.getText()));
+}
+
+function tabOpenFor(uri: string, kind: "text" | "custom"): boolean {
+  return vscode.window.tabGroups.all.some((g) =>
+    g.tabs.some((t) => {
+      const i = t.input;
+      if (kind === "text") return i instanceof vscode.TabInputText && i.uri.toString() === uri;
+      return i instanceof vscode.TabInputCustom && i.uri.toString() === uri;
+    })
+  );
+}
+
+async function onTextTabClosed(uri: string): Promise<void> {
+  // The confirm → revert → close sequence lands in either order relative to
+  // this event; give the document a beat to settle before judging.
+  await new Promise((r) => setTimeout(r, 150));
+  const doc = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri);
+  const snap = guarded.get(uri);
+  const verdict = afterTextTabClosed(snap, {
+    docOpen: !!doc && !doc.isClosed,
+    diagramOpen: tabOpenFor(uri, "custom"),
+    isDirty: !!doc?.isDirty,
+    text: doc?.getText() ?? "",
+  });
+  if (verdict === "keep") return;
+  if (verdict === "restore" && doc && snap) {
+    const whole = new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length));
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(doc.uri, whole, snap.text);
+    if (await vscode.workspace.applyEdit(edit)) {
+      void vscode.window.setStatusBarMessage(
+        "nautilus: closed the source view — the diagram keeps its unsaved edits",
+        6000
+      );
+    }
+  }
+  if (!tabOpenFor(uri, "text")) guarded.delete(uri);
+}
+
+function registerSourceGuard(): vscode.Disposable {
+  return vscode.Disposable.from(
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      const key = e.document.uri.toString();
+      if (guarded.has(key)) guard(e.document);
+    }),
+    vscode.workspace.onDidCloseTextDocument((d) => guarded.delete(d.uri.toString())),
+    vscode.window.tabGroups.onDidChangeTabs((e) => {
+      for (const t of e.closed) {
+        if (t.input instanceof vscode.TabInputText) {
+          const key = t.input.uri.toString();
+          if (guarded.has(key)) void onTextTabClosed(key);
+        }
+      }
+    })
+  );
 }
 
 export function registerDiagramCommands(): vscode.Disposable {
   return vscode.Disposable.from(
     vscode.commands.registerCommand("nautilus.diagram.openAsDiagram", openAsDiagram),
-    vscode.commands.registerCommand("nautilus.diagram.showSource", showSource)
+    vscode.commands.registerCommand("nautilus.diagram.showSource", showSource),
+    registerSourceGuard()
   );
 }
