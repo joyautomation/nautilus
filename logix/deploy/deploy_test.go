@@ -107,12 +107,8 @@ func (f *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 		// carries the routine a later export shows.
 		file := body["file"].(string)
 		f.running = f.files[file]
-		dir := file[:strings.LastIndex(file, "/")+1]
-		for name, raw := range f.files {
-			if strings.HasPrefix(name, dir) && strings.HasSuffix(name, ".L5X") && !strings.HasSuffix(name, ".rungs.L5X") &&
-				!strings.Contains(name, "before") && !strings.Contains(name, "after") {
-				f.running = raw
-			}
+		if full, ok := f.files[strings.TrimSuffix(file, ".rungs.L5X")+".L5X"]; ok {
+			f.running = full
 		}
 		ok(map[string]any{"insertPosition": body["insertPosition"], "replaceCount": body["replaceCount"], "onlineOption": body["onlineOption"], "elapsedMs": 3})
 	case strings.HasSuffix(r.URL.Path, "/download"):
