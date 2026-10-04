@@ -32,18 +32,18 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 153 rows. **12 rows have no coverage at all** (no webview test,
+Totals: 153 rows. **8 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
 |---|---|---|
-| Commands | 28 | 6 |
+| Commands | 28 | 5 |
 | FBD `?` | 18 | 0 |
 | Ladder `?` | 20 | 0 |
 | SFC `?` | 22 | 0 |
 | Mimic `?` | 18 | 0 |
 | Component `?` | 8 | 0 |
-| Other claims | 39 | 6 |
+| Other claims | 39 | 3 |
 
 ## Commands (package.json `contributes.commands`)
 
@@ -235,7 +235,7 @@ no rig verb, no smoke check); per section below.
 
 ## Count of rows with no coverage at all
 
-**12 of 153.** The commands are the thinnest area: only the download /
+**8 of 153.** The commands are the thinnest area: only the download /
 rollback pair (08), the title-bar buttons (04) and the previews (03, 07, 10)
 are touched by any smoke check, and no webview test can reach a command because
 commands live in the extension host (that is what the E3 test-state hooks are
