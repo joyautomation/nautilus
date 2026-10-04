@@ -146,6 +146,24 @@ func (f Feed) Serve(v ir.Value, cur walk.Varbind) (walk.Varbind, error) {
 	if !ok {
 		return walk.Varbind{}, fmt.Errorf("%s: the recording holds no value (%s) to serve in its place", cur.OID, cur.Type)
 	}
+	if f.Binding.Ports != nil {
+		// A PortList is octets, never text: read and served as bytes, at
+		// the recorded length, whatever the recorded bytes look like.
+		if pl, isOctets := PortListRaw(cur); isOctets {
+			out, err := f.Binding.Invert(f.Field, v, pl)
+			if err != nil {
+				return walk.Varbind{}, fmt.Errorf("%s.%s: %w", f.Tag, f.Member, err)
+			}
+			b, err := hex.DecodeString(strings.ReplaceAll(out.Key(), ":", ""))
+			if err != nil {
+				return walk.Varbind{}, fmt.Errorf("%s.%s: %w", f.Tag, f.Member, err)
+			}
+			if len(b) < len(cur.Bytes) {
+				b = append(b, make([]byte, len(cur.Bytes)-len(b))...)
+			}
+			return walk.Varbind{OID: cur.OID, Type: cur.Type, Bytes: b}, nil
+		}
+	}
 	out, err := f.Binding.Invert(f.Field, v, raw)
 	if err != nil {
 		return walk.Varbind{}, fmt.Errorf("%s.%s: %w", f.Tag, f.Member, err)

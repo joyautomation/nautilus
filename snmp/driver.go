@@ -460,7 +460,13 @@ func (d *Driver) poll(ctx context.Context, sourceID, class string) (hw.Result, e
 			continue
 		}
 		for _, u := range uses {
-			v, ok, err := u.binding.Apply(u.field, raw, u.counter, smp.at)
+			in := raw
+			if u.binding.Ports != nil {
+				if pl, isOctets := PortListRaw(vb); isOctets {
+					in = pl
+				}
+			}
+			v, ok, err := u.binding.Apply(u.field, in, u.counter, smp.at)
 			if err != nil {
 				bad[u.tag] = true
 				d.warnOnce(s, "apply:"+u.tag+"."+u.member, "snmp: binding cannot use the wire value; its tag is Bad", "source", sourceID, "tag", u.tag, "member", u.member, "oid", oid, "error", err)

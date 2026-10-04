@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -432,4 +433,64 @@ func TestDriverUnsetCredential(t *testing.T) {
 	if e := d.Health().Sources[0].LastError; !strings.Contains(e, "$SNMP_UPS1_COMMUNITY is not set") {
 		t.Errorf("LastError = %q", e)
 	}
+}
+
+// A PortList whose octets happen to be printable (0x31 0x32 → "12") is still
+// a bitmap: read as bridge ports 3,4,8,11,12,15, not as the hex "12".
+// Through the importer, the agent and the real driver, then served back.
+func TestPrintablePortList(t *testing.T) {
+	w := loadWalk(t, "switch.snmpwalk")
+	var ifx []int64
+	for _, vb := range w {
+		if strings.HasPrefix(vb.OID, "1.3.6.1.2.1.2.2.1.1.") && len(ifx) < 6 {
+			ifx = append(ifx, vb.Int)
+		}
+	}
+	bitmap := []byte{0x31, 0x32, 0, 0}
+	for i, bp := range []int{3, 4, 8, 11, 12, 15} {
+		w = append(w, walk.Varbind{OID: "1.3.6.1.2.1.17.1.4.1.2." + strconv.Itoa(bp), Type: walk.Integer, Int: ifx[i]})
+	}
+	w = append(w,
+		walk.Varbind{OID: "1.3.6.1.2.1.17.7.1.4.3.1.1.20", Type: walk.OctetString, Bytes: []byte("host-mgmt")},
+		walk.Varbind{OID: "1.3.6.1.2.1.17.7.1.4.3.1.2.20", Type: walk.OctetString, Bytes: bitmap},
+		walk.Varbind{OID: "1.3.6.1.2.1.17.7.1.4.3.1.4.20", Type: walk.OctetString, Bytes: make([]byte, 4)},
+	)
+	w.Sort()
+	a := agent.New(w, "public")
+	a.SetLogger(quiet())
+	if err := a.Start("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(a.Stop)
+	host, port := splitAddr(t, a.Addr())
+	out, err := codegen.Generate(w, codegen.Options{Tag: "SW1", Host: host, Port: port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := out.Manifest
+	m.Sources[0].Interval = 50 * time.Millisecond
+	t.Setenv(m.Sources[0].CommunityEnv, "public")
+	d := (&rig{agent: a, m: m}).start(t)
+	waitFor(t, "SW1_Vlan20", func() bool { _, ok := read(t, d)["SW1_Vlan20"].(ir.Value); return ok })
+	pos := func(n int) string { return strconv.Itoa(n) }
+	want := strings.Join([]string{pos(1), pos(2), pos(3), pos(4), pos(5), pos(6)}, ",")
+	if got := member(t, read(t, d), "SW1_Vlan20", "Ports").S; got != want {
+		t.Fatalf("Ports = %q, want %q (the octets read as text)", got, want)
+	}
+	// Served back: the same octets, never the text "12".
+	feeds, err := m.Feeds("SW1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range feeds {
+		if f.Tag == "SW1_Vlan20" && f.Member == "Ports" {
+			cur, _ := w.Get(f.OID)
+			vb, err := f.Serve(ir.StringVal(want), cur)
+			if err != nil || string(vb.Bytes) != string(bitmap) {
+				t.Fatalf("served %x %v, want %x", vb.Bytes, err, bitmap)
+			}
+			return
+		}
+	}
+	t.Fatal("no feed for SW1_Vlan20.Ports")
 }

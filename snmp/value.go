@@ -43,3 +43,14 @@ func RawOf(v walk.Varbind) (raw hw.Raw, ok bool, err error) {
 	}
 	return hw.Raw{}, false, fmt.Errorf("%s: unsupported type %s", v.OID, v.Type)
 }
+
+// PortListRaw is a varbind bound with ports: (a BRIDGE-MIB PortList), read
+// as the colon hex of ALL its octets whatever they look like. RawOf would
+// hand a PortList whose bytes happen to be printable over as text with its
+// NULs trimmed ("12" for 0x31 0x32 00…), which reads back as other ports.
+func PortListRaw(v walk.Varbind) (hw.Raw, bool) {
+	if v.Type != walk.OctetString && v.Type != walk.Opaque {
+		return hw.Raw{}, false
+	}
+	return hw.RawStringVal(walk.HexString(v.Bytes)), true
+}
