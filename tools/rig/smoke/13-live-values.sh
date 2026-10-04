@@ -360,9 +360,9 @@ near "$(jq_ TempSP)" "$(jq_ apiTempSP)" 0.0005 \
 # (package.json gives nautilus.connect none) renders as its full title text
 # and squeezes the view's own name to "NAUTI…".
 tb=$(cdp page '[...document.querySelectorAll(".part.sidebar .title-actions .action-label")].filter(a => a.offsetParent !== null).map(a => (a.textContent || "").trim() || "[icon]").join(" | ")' | python3 -c 'import sys,json; print(json.load(sys.stdin) or "")')
-ttl=$(cdp page '(document.querySelector(".part.sidebar .title-label h2")?.textContent || "").trim()' | python3 -c 'import sys,json; print(json.load(sys.stdin) or "")')
+ttl=$(cdp page '(() => { const h = document.querySelector(".part.sidebar .title-label h2"); if (!h) return ""; return h.textContent.trim() + (h.scrollWidth > h.clientWidth ? " (truncated)" : ""); })()' | python3 -c 'import sys,json; print(json.load(sys.stdin) or "")')
 if [[ $tb == *nautilus:* ]]; then
-  warn "X12 Live Values title bar: an action renders as text, not an icon ($tb) — the container title shows as '$ttl'; nautilus.connect has no icon in package.json (#138)" "$png"
+  warn "X12 Live Values title bar: an action renders as text, not an icon ($tb) — container title '$ttl'; nautilus.connect has no icon in package.json (#138)" "$png"
 else
   info "X12 Live Values title bar actions: $tb (title '$ttl')" "$png"
 fi
