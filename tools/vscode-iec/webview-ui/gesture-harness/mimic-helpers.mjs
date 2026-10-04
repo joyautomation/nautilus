@@ -151,3 +151,19 @@ export function docPipeBetween() {
 export const exceptions = (ed) => ed.console().filter((l) => l.startsWith('[exception]'));
 
 export const STALE_STATE = { msg: { type: 'model', model: { name: 'x', nodes: [], edges: [] } }, zoom: { ld: 2 } };
+
+// ── component editor (*.component.json) ────────────────────────────────────
+// The mimic bundle also hosts the component editor (data-mimic-mode =
+// "component"); `doc` is { component, ports }. Its ops are `componentOp`
+// messages carrying the FULL ports list (not manifestOp / mimicOp).
+export async function withComponent(doc, fn) {
+	const ed = await Editor.open(BUNDLE, doc, { headless: HEADLESS, mode: 'component' });
+	try {
+		return await fn(ed);
+	} finally {
+		await ed.close();
+	}
+}
+
+export const componentOps = (ed) =>
+	ed.b.eval("JSON.stringify(window.__posted().filter((m) => m && m.type === 'componentOp').map((m) => m.ports))").then(JSON.parse);
