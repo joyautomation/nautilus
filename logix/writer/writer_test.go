@@ -446,3 +446,107 @@ func TestCounterEndsItsRung(t *testing.T) {
 		t.Errorf("rungs = %+v", rungs)
 	}
 }
+
+const udtTypes = `TYPE
+  LineStatus : STRUCT
+    Mode  : DINT;
+    Alarm : BOOL;
+  END_STRUCT;
+  Pump : STRUCT
+    Run    : BOOL;
+    Speed  : REAL;
+    Status : LineStatus;
+    Hist   : ARRAY [0..3] OF REAL;
+  END_STRUCT;
+END_TYPE
+`
+
+const udtLadder = `PROGRAM P
+VAR_EXTERNAL
+    Line_Fault  : BOOL;
+    Line_Status : LineStatus;
+    P101        : Pump;
+    Nested      : BOOL;
+END_VAR
+LD
+  RUNG alarm  Line_Fault ( Line_Status.Alarm )
+  RUNG nested P101.Status.Alarm GT(P101.Hist[2], 1.0) ( Nested )
+END_LD
+END_PROGRAM
+`
+
+// A STRUCT declared in a library is a UDT: nested types first, members
+// in order, tags as structures with the manifest's seeds, member paths
+// checked, and the result readable by the L5X reader as the same type.
+func TestUserDefinedTypes(t *testing.T) {
+	opts := Options{Libs: []string{udtTypes}, Inits: map[string]any{"Line_Status": map[string]any{"Mode": 1, "Alarm": true}}}
+	f := mustWrite(t, udtLadder, opts)
+	if len(f.Controller.DataTypes) != 2 || f.Controller.DataTypes[0].Name != "LineStatus" || f.Controller.DataTypes[1].Name != "Pump" {
+		t.Fatalf("data types = %+v", f.Controller.DataTypes)
+	}
+	pump := f.Controller.DataTypes[1]
+	if len(pump.Members) != 4 || pump.Members[2].DataType != "LineStatus" || pump.Members[3].Dimension != 4 || pump.Members[3].DataType != "REAL" {
+		t.Errorf("Pump members = %+v", pump.Members)
+	}
+	var ls, p *l5x.Tag
+	for _, tg := range f.Controller.Tags {
+		switch tg.Name {
+		case "Line_Status":
+			ls = tg
+		case "P101":
+			p = tg
+		}
+	}
+	if ls == nil || ls.DataType != "LineStatus" {
+		t.Fatalf("Line_Status = %+v", ls)
+	}
+	if m, _ := ls.Value.(map[string]any); m["Mode"] != int64(1) || m["Alarm"] != true {
+		t.Errorf("Line_Status value = %v", ls.Value)
+	}
+	if m, _ := p.Value.(map[string]any); m["Status"] == nil || m["Hist"] == nil {
+		t.Errorf("P101 value = %v", p.Value)
+	}
+	rungs := f.Controller.Programs[0].Routines[0].Rungs
+	if rungs[0].Text != "XIC(Line_Fault)OTE(Line_Status.Alarm);" || rungs[1].Text != "XIC(P101.Status.Alarm)GT(P101.Hist[2],1.0)OTE(Nested);" {
+		t.Errorf("rungs = %+v", rungs)
+	}
+	// The reader renders the UDTs back as the ST they came from.
+	src, unresolved, err := l5x.Types(f, l5x.TypesOptions{})
+	if err != nil || len(unresolved) > 0 || !strings.Contains(src, "LineStatus") || !strings.Contains(src, "Status : LineStatus") {
+		t.Errorf("types back: %v %v\n%s", err, unresolved, src)
+	}
+	_, problems, err := RoundTrip(udtLadder, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pr := range problems {
+		t.Error(pr)
+	}
+}
+
+func TestUserDefinedTypeRejections(t *testing.T) {
+	cases := []struct{ name, types, ladder, rule, mention string }{
+		{"bad member path", udtTypes, strings.Replace(udtLadder, "P101.Status.Alarm", "P101.Status.Alarmed", 1), ruleMember, "no member Alarmed"},
+		{"index into a scalar", udtTypes, strings.Replace(udtLadder, "P101.Hist[2]", "P101.Speed[2]", 1), ruleMember, "not an array"},
+		{"TIME member", "TYPE\n  T : STRUCT\n    D : TIME;\n  END_STRUCT;\nEND_TYPE\n", "PROGRAM P\nVAR_EXTERNAL\n  X : T;\n  Y : BOOL;\nEND_VAR\nLD\n  RUNG r Y ( Y )\nEND_LD\nEND_PROGRAM\n", ruleType, "TIME"},
+		{"undeclared type", "", "PROGRAM P\nVAR_EXTERNAL\n  X : Mystery;\n  Y : BOOL;\nEND_VAR\nLD\n  RUNG r Y ( Y )\nEND_LD\nEND_PROGRAM\n", ruleType, "Mystery"},
+		{"block inside a type", "TYPE\n  T : STRUCT\n    Tmr : TON;\n  END_STRUCT;\nEND_TYPE\n", "PROGRAM P\nVAR_EXTERNAL\n  X : T;\n  Y : BOOL;\nEND_VAR\nLD\n  RUNG r Y ( Y )\nEND_LD\nEND_PROGRAM\n", ruleType, "TON"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, diags, err := Write(c.ladder, Options{Libs: []string{c.types}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, d := range diags {
+				if d.Rule == c.rule && strings.Contains(d.Message, c.mention) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("want %s mentioning %q, got %s", c.rule, c.mention, joinDiags(diags))
+			}
+		})
+	}
+}

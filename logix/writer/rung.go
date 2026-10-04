@@ -171,7 +171,23 @@ func (c *rungCtx) ref(ref string) (string, bool) {
 		c.lw.diag(ruleMember, c.r.Line, c.r.Name, "%s: %s has no %s member the Logix %s carries; the readable members are %s", ref, v.Type, member, st, membersOf(st))
 		return "", false
 	}
-	c.lw.diag(ruleMember, c.r.Line, c.r.Name, "%s: member access into a %s has no Logix shape in v1 (no UDTs); declare the member as its own tag", ref, v.Type)
+	if u, ok := c.lw.types[strings.ToLower(typ)]; ok && u != nil {
+		path := strings.TrimPrefix(rest, ".")
+		if strings.HasPrefix(rest, "[") {
+			// an element of an array of structures: Tags[2].Member
+			i := strings.Index(rest, ".")
+			if i < 0 {
+				return ref, true
+			}
+			path = rest[i+1:]
+		}
+		if _, msg := u.memberPath(path); msg != "" {
+			c.lw.diag(ruleMember, c.r.Line, c.r.Name, "%s: %s", ref, msg)
+			return "", false
+		}
+		return ref, true
+	}
+	c.lw.diag(ruleMember, c.r.Line, c.r.Name, "%s: member access into a %s has no Logix shape; a structure's type must be a STRUCT declared in a library", ref, v.Type)
 	return "", false
 }
 

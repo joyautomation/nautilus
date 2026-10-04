@@ -134,7 +134,8 @@ func (r *liveRun) applyLive(given map[string]any) error {
 	want := map[string]any{}
 	for _, name := range sortedKeys(given) {
 		m := r.live.Resolve(name)
-		if !r.known[m] {
+		head, _, _ := strings.Cut(m, ".")
+		if !r.known[head] {
 			return fmt.Errorf("given: no tag %q on the controller (looked for %q)", name, m)
 		}
 		if err := r.live.Write(m, given[name]); err != nil {
@@ -146,7 +147,7 @@ func (r *liveRun) applyLive(given map[string]any) error {
 	for {
 		pending := ""
 		for m, v := range want {
-			got, err := r.rt.Tags().ReadGlobal(m)
+			got, err := r.mirror(m)
 			if err != nil || !sameValue(got, v) {
 				pending = m
 				break
@@ -156,11 +157,22 @@ func (r *liveRun) applyLive(given map[string]any) error {
 			return nil
 		}
 		if time.Now().After(deadline) {
-			got, _ := r.rt.Tags().ReadGlobal(pending)
+			got, _ := r.mirror(pending)
 			return fmt.Errorf("given: %s was written as %v but the controller still reads %s", pending, want[pending], show(got))
 		}
 		time.Sleep(r.live.Poll / 4)
 	}
+}
+
+// mirror reads a mirror value by tag name or dotted member path.
+func (r *liveRun) mirror(name string) (ir.Value, error) {
+	if v, err := r.rt.Tags().ReadGlobal(name); err == nil {
+		return v, nil
+	}
+	if v, ok := r.rt.Tags().ReadPath(name); ok {
+		return irValue(v)
+	}
+	return ir.Value{}, fmt.Errorf("no %s", name)
 }
 
 // sameValue compares a mirror value with the raw value a test wrote.
@@ -397,12 +409,16 @@ func resolveExpect(e *Expect, resolve func(string) string) *Expect {
 // name the mirror holds is used as is; otherwise <Program>_<name>.
 func ResolveLogix(rt *runtime.Runtime, program string) func(string) string {
 	return func(name string) string {
-		if _, err := rt.Tags().ReadGlobal(name); err == nil {
+		head, rest, dotted := strings.Cut(name, ".")
+		if _, err := rt.Tags().ReadGlobal(head); err == nil {
 			return name
 		}
-		if program != "" && !strings.Contains(name, ".") {
-			return program + "_" + name
+		if program == "" {
+			return name
 		}
-		return name
+		if dotted {
+			return program + "_" + head + "." + rest
+		}
+		return program + "_" + name
 	}
 }

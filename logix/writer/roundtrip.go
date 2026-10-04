@@ -380,6 +380,9 @@ func (c *cmp) tags() {
 		if want == "" {
 			want = blockTypes[typ]
 		}
+		if want == "" && t.DataType != "" && strings.EqualFold(t.DataType, strings.TrimSpace(v.Type)) {
+			want = t.DataType // a user-defined type, by its declared name
+		}
 		if typ == "TIME" {
 			want = "DINT"
 		}

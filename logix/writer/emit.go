@@ -28,7 +28,26 @@ func emit(lw *lowered, o Options) []byte {
 	w(`<RedundancyInfo Enabled="false" KeepTestEditsOnSwitchOver="false"/>`)
 	w(`<Security Code="0" ChangesToDetect="16#ffff_ffff_ffff_ffff"/>`)
 	w(`<SafetyInfo/>`)
-	w(`<DataTypes/>`)
+	if types := lw.usedTypesInOrder(); len(types) > 0 {
+		w(`<DataTypes>`)
+		for _, u := range types {
+			w(`<DataType Name="%s" Family="NoFamily" Class="User">`, attr(u.Name))
+			w(`<Members>`)
+			for _, m := range u.Members {
+				switch {
+				case m.Struct != nil:
+					w(`<Member Name="%s" DataType="%s" Dimension="%d" Radix="NullType" Hidden="false" ExternalAccess="Read/Write"/>`, attr(m.Name), m.DataType, m.Dim)
+				default:
+					w(`<Member Name="%s" DataType="%s" Dimension="%d" Radix="%s" Hidden="false" ExternalAccess="Read/Write"/>`, attr(m.Name), m.DataType, m.Dim, radixOf(m.DataType))
+				}
+			}
+			w(`</Members>`)
+			w(`</DataType>`)
+		}
+		w(`</DataTypes>`)
+	} else {
+		w(`<DataTypes/>`)
+	}
 	w(`<Modules>`)
 	w(`<Module Name="Local" CatalogNumber="%s" Vendor="1" ProductType="14" ProductCode="168" Major="%s" Minor="%s" ParentModule="Local" ParentModPortId="1" Inhibited="false" MajorFault="true">`,
 		attr(o.ProcessorType), attr(o.MajorRev), attr(o.MinorRev))
@@ -135,6 +154,36 @@ func emitTags(b *strings.Builder, tags []tagDef) {
 		dims := ""
 		if t.Dim > 0 {
 			dims = fmt.Sprintf(` Dimensions="%d"`, t.Dim)
+		}
+		if t.Struct != nil {
+			w(`<Tag Name="%s" TagType="Base" DataType="%s"%s Constant="false" ExternalAccess="Read/Write">`, attr(t.Name), t.DataType, dims)
+			if t.Desc != "" {
+				w(`<Description>`)
+				w(`%s`, cdata(t.Desc))
+				w(`</Description>`)
+			}
+			// Decorated only: the L5K spelling of a structure packs its
+			// BOOLs into hidden host bytes in layout order, and the
+			// Decorated form is the one the importer reads.
+			w(`<Data Format="Decorated">`)
+			if t.Dim > 0 {
+				w(`<Array DataType="%s" Dimensions="%d">`, t.DataType, t.Dim)
+				for i := 0; i < t.Dim; i++ {
+					w(`<Element Index="[%d]">`, i)
+					w(`<Structure DataType="%s">`, t.DataType)
+					structValue(t.Struct, nil, w)
+					w(`</Structure>`)
+					w(`</Element>`)
+				}
+				w(`</Array>`)
+			} else {
+				w(`<Structure DataType="%s">`, t.DataType)
+				structValue(t.Struct, t.Init, w)
+				w(`</Structure>`)
+			}
+			w(`</Data>`)
+			w(`</Tag>`)
+			continue
 		}
 		if radix != "" {
 			w(`<Tag Name="%s" TagType="Base" DataType="%s"%s Radix="%s" Constant="false" ExternalAccess="Read/Write">`, attr(t.Name), t.DataType, dims, radix)
@@ -308,6 +357,9 @@ func emitRungs(lw *lowered, o Options) []byte {
 	for _, dt := range usedTypes(lw) {
 		w(`<DataType Name="%s" Family="NoFamily" Class="ProductDefined"/>`, dt)
 	}
+	for _, u := range lw.usedTypesInOrder() {
+		w(`<DataType Name="%s" Family="NoFamily" Class="User"/>`, attr(u.Name))
+	}
 	w(`</DataTypes>`)
 	if len(lw.ctrlTags) > 0 {
 		emitContextTags(&b, lw.ctrlTags)
@@ -356,7 +408,9 @@ func emitContextTags(b *strings.Builder, tags []tagDef) {
 func usedTypes(lw *lowered) []string {
 	seen := map[string]bool{}
 	for _, t := range append(append([]tagDef{}, lw.ctrlTags...), lw.progTags...) {
-		seen[t.DataType] = true
+		if t.Struct == nil {
+			seen[t.DataType] = true
+		}
 	}
 	return sortedKeys(seen)
 }

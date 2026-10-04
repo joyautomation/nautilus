@@ -234,6 +234,12 @@ func runCheck(args []string) int {
 // it. Returns true when anything was reported.
 func checkLogixTarget(f, source string, libs []string) bool {
 	if !strings.EqualFold(filepath.Ext(f), ".ld") {
+		// A library of TYPE declarations (and constants) is fine: the
+		// writer checks the types a program actually uses. Logic in
+		// another language is not, yet.
+		if strings.EqualFold(filepath.Ext(f), ".st") && !declaresLogic(source) {
+			return false
+		}
 		fmt.Printf("%s: logix target: only ladder (.ld) programs are in the v1 subset; ST routines and function blocks (as Add-On Instructions) come in a later phase\n", f)
 		return true
 	}
@@ -246,6 +252,18 @@ func checkLogixTarget(f, source string, libs []string) bool {
 		fmt.Printf("%s:%d:1: logix target: %s [%s]\n", f, d.Line, d.Message, d.Rule)
 	}
 	return len(diags) > 0
+}
+
+// declaresLogic reports whether ST source declares a POU — a PROGRAM,
+// FUNCTION_BLOCK or FUNCTION — as opposed to types and constants only.
+func declaresLogic(src string) bool {
+	for _, t := range st.Lex(src) {
+		switch t.Type {
+		case st.TokenProgram, st.TokenFunctionBlock, st.TokenFunction:
+			return true
+		}
+	}
+	return false
 }
 
 // checkManifest cross-checks a manifest project's declared tags against the

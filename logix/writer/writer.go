@@ -53,6 +53,7 @@ import (
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/ld"
+	"github.com/joyautomation/nautilus/lang/st"
 )
 
 // Options shape the project around the program. Every field has a default
@@ -151,7 +152,7 @@ func Check(src string, libs ...string) ([]Diag, error) {
 	if err != nil {
 		return nil, err
 	}
-	lw := lower(m, Options{}.withDefaults(m.Name))
+	lw := lower(m, Options{Libs: libs}.withDefaults(m.Name))
 	return lw.diags, nil
 }
 
@@ -194,6 +195,10 @@ type lowered struct {
 	// place a TIME is allowed); genNames guards generated tag names.
 	presetVars map[string]bool
 	genNames   map[string]bool
+	// types are the UDTs resolved so far (nil: known bad); rawTypes the
+	// TYPE declarations found in the libraries (types.go).
+	types    map[string]*udt
+	rawTypes map[string]*st.TypeDecl
 }
 
 // tagDef is one Logix tag to emit.
@@ -206,6 +211,10 @@ type tagDef struct {
 	Scope    string // "" controller, else the program
 	Desc     string
 	Line     int
+	// Struct is set for a tag of a user-defined type; Init its manifest
+	// initial value (a map of members), when any.
+	Struct *udt
+	Init   any
 }
 
 // rungOut is one emitted rung.
@@ -219,6 +228,7 @@ type rungOut struct {
 func lower(m *ld.Model, opts Options) *lowered {
 	lw := &lowered{model: m, opts: opts, vars: map[string]ld.VarDecl{},
 		presetVars: map[string]bool{}, genNames: map[string]bool{}}
+	lw.loadTypes()
 	for _, b := range m.Blocks {
 		lw.diag(ruleFunctionBlock, b.Line, "", "FUNCTION_BLOCK %s: user blocks are not in the Logix v1 subset (Add-On Instructions come later); write its rungs in the program", b.Name)
 	}
@@ -377,8 +387,22 @@ func (lw *lowered) declare(v ld.VarDecl) {
 			return
 		}
 		lw.addTag(tagDef{Name: v.Name, DataType: blockTypes[u], Scope: scope, Line: v.Line})
+	case lw.rawTypes[strings.ToLower(u)] != nil:
+		udt, ok := lw.resolveType(typ, v.Line, v.Name)
+		if !ok {
+			return
+		}
+		if v.Init != "" {
+			lw.diag(ruleInit, v.Line, "", "%s: a structure's initial values come from the manifest (init: {member: value}), not the declaration", v.Name)
+			return
+		}
+		var init any
+		if scope == "" {
+			init = lw.opts.Inits[v.Name]
+		}
+		lw.addTag(tagDef{Name: v.Name, DataType: udt.Name, Dim: dim, Scope: scope, Line: v.Line, Struct: udt, Init: init})
 	default:
-		alt := "the v1 subset is BOOL, SINT, INT, DINT, REAL, LREAL, TON, TOF and CTU"
+		alt := "the v1 subset is BOOL, SINT, INT, DINT, REAL, LREAL, TON, TOF, CTU, and STRUCT types declared in a library"
 		switch u {
 		case "TP", "CTD", "CTUD":
 			alt = "its IEC load/reset semantics differ from the Logix instruction; " + alt

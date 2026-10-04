@@ -1,0 +1,23 @@
+tests:
+  - name: a member coil follows its contact, and the mode compare reads the seed
+    steps:
+      - scans: 2
+        expect: { Line_Status.Alarm: false, Auto: true }
+      - given: { Line_Fault: true }
+        scans: 2
+        expect: { Line_Status.Alarm: true, Auto: false }
+      - given: { Line_Fault: false, Line_Status.Mode: 2 }
+        scans: 2
+        expect: { Line_Status.Alarm: false, Auto: false }
+
+  - name: nested members
+    steps:
+      - given: { SpeedCmd: 60.0, P101.Status.Alarm: false }
+        scans: 2
+        expect: { P101.Run: true, Nested: false }
+      - given: { P101.Status.Alarm: true }
+        scans: 2
+        expect: { Nested: true }
+      - given: { SpeedCmd: 10.0 }
+        scans: 2
+        expect: { P101.Run: false, Nested: false }
