@@ -169,6 +169,9 @@ type TaskConfig struct {
 	Program string   `yaml:"program"` // .st, .fbd, or .ld file in the project
 	Scan    Duration `yaml:"scan"`
 	DtTag   string   `yaml:"dt-tag"`
+	// LateThreshold is how late a scan may start before the diagnostics
+	// count it as late (runtime.Lateness). Default: a tenth of scan.
+	LateThreshold Duration `yaml:"late-threshold"`
 }
 
 // TagConfig declares one tag by role — the manifest form of runtime.TagDef.
@@ -559,6 +562,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	}
 	opts.Scan = time.Duration(main.Scan)
 	opts.DtTag = main.DtTag
+	opts.LateThreshold = time.Duration(main.LateThreshold)
 	for _, t := range m.Tasks[1:] {
 		src, err := readProgram(t)
 		if err != nil {
@@ -574,6 +578,9 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			Libraries: libs,
 			Scan:      time.Duration(t.Scan),
 			DtTag:     t.DtTag,
+			// A task without its own threshold inherits the main task's
+			// setting in runtime.New (Options.LateThreshold).
+			LateThreshold: time.Duration(t.LateThreshold),
 		})
 	}
 

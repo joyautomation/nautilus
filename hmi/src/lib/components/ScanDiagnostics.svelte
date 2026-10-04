@@ -11,6 +11,14 @@
 	let { scan }: { scan: ScanStats } = $props();
 
 	const fmt = (v: number, digits = 1) => (isFinite(v) ? v.toFixed(digits) : '—');
+	// A microsecond quantity with whichever unit keeps it readable.
+	const fmtUs = (us: number | undefined) => {
+		if (us == null || !isFinite(us)) return '—';
+		return us >= 1000 ? (us / 1000).toFixed(2) + ' ms' : us.toFixed(us >= 100 ? 0 : 1) + ' µs';
+	};
+	// Lateness is cumulative since start; an older runtime omits it.
+	let late = $derived(scan.lateness);
+	let latePct = $derived(late && scan.count ? (100 * late.late) / scan.count : 0);
 
 	// Phase widths as fractions of the last scan (logic is µs — usually a sliver).
 	let phases = $derived.by(() => {
@@ -50,6 +58,22 @@
 			<span class="label">scan count</span>
 			<span class="value">{scan.count.toLocaleString()}</span>
 		</div>
+		{#if late}
+			<!-- Wake-up timing: how late each scan STARTED against its period,
+			     cumulative — the soft-real-time view beside the live sparklines. -->
+			<div class="tile">
+				<span class="label">late scans — &gt; {fmtUs(late.thresholdMs * 1000)}</span>
+				<span class="value">{late.late.toLocaleString()}<small>{latePct.toFixed(2)}%</small></span>
+			</div>
+			<div class="tile">
+				<span class="label">p99 lateness</span>
+				<span class="value">{fmtUs(late.p99Us)}</span>
+			</div>
+			<div class="tile">
+				<span class="label">max lateness</span>
+				<span class="value">{fmtUs(late.maxUs)}</span>
+			</div>
+		{/if}
 	</div>
 
 	<div class="charts">
@@ -71,6 +95,14 @@
 			<span class="label">scan time distribution</span>
 			<Histogram counts={scan.histogram} />
 		</div>
+		{#if late}
+			<div class="chart">
+				<span class="label">
+					lateness distribution — &lt; {fmtUs(late.bucketsUs[0])} to ≥ {fmtUs(late.bucketsUs.at(-1))}, log
+				</span>
+				<Histogram counts={late.histogram} />
+			</div>
+		{/if}
 	</div>
 
 	{#if scan.tasks?.length}
@@ -80,7 +112,7 @@
 			<span class="label">tasks</span>
 			<table>
 				<thead>
-					<tr><th>task</th><th class="num">target</th><th class="num">last</th><th class="num">scans</th><th class="num">faults</th><th>last error</th></tr>
+					<tr><th>task</th><th class="num">target</th><th class="num">last</th><th class="num">scans</th><th class="num">late</th><th class="num">p99 late</th><th class="num">max late</th><th class="num">faults</th><th>last error</th></tr>
 				</thead>
 				<tbody>
 					<tr>
@@ -88,6 +120,9 @@
 						<td class="num">{fmt(scan.targetMs, 0)} ms</td>
 						<td class="num">{fmt(scan.lastMs, 2)} ms</td>
 						<td class="num">{scan.count.toLocaleString()}</td>
+						<td class="num">{(late?.late ?? 0).toLocaleString()}</td>
+						<td class="num">{fmtUs(late?.p99Us)}</td>
+						<td class="num">{fmtUs(late?.maxUs)}</td>
 						<td class="num" class:bad={scan.logicErrors > 0}>{scan.logicErrors}</td>
 						<td class="err"></td>
 					</tr>
@@ -97,6 +132,9 @@
 							<td class="num">{fmt(t.targetMs, 0)} ms</td>
 							<td class="num">{fmt(t.lastMs, 2)} ms</td>
 							<td class="num">{t.count.toLocaleString()}</td>
+							<td class="num">{(t.lateness?.late ?? 0).toLocaleString()}</td>
+							<td class="num">{fmtUs(t.lateness?.p99Us)}</td>
+							<td class="num">{fmtUs(t.lateness?.maxUs)}</td>
 							<td class="num" class:bad={t.logicErrors > 0}>{t.logicErrors}</td>
 							<td class="err">{t.logicErrors > 0 ? (t.lastError ?? '') : ''}</td>
 						</tr>
