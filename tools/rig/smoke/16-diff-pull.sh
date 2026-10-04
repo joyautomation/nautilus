@@ -17,7 +17,10 @@
 #   sync status stops saying "differs", and `git diff` is exactly the one
 #   pulled line.
 #
-#   Pull over UNSAVED edits → it must not drop them silently.
+#   Pull over UNSAVED edits → it must not drop them silently: the modal
+#   names them (and offers Show Diff), and Overwrite replaces the editor
+#   buffer AND the file together, so the editor shows the pulled program and
+#   the next Ctrl+S cannot write the stale buffer back over it (#140).
 #
 # The extension's test-state snapshot (NAUTILUS_TEST_STATE, testState.ts)
 # carries the sync state, the sync status item's text and the last
@@ -271,17 +274,23 @@ dirty=$(cdp page 'document.querySelector(".editor-group-container.active .tab.ac
 
 vs_cmd "nautilus: Pull Program from Controller" 4
 png=$(shot pull-unsaved-confirm)
+named=0
 if dialog_up; then
   msg=$(page_text 'document.querySelector(".monaco-dialog-box .dialog-message-row")' 2>/dev/null || echo "")
   pass "Pull over unsaved edits asks first ($msg)" "$png"
   if [[ $msg == *nsaved* || $msg == *dirty* ]]; then
+    named=1
     pass "the confirmation mentions the unsaved edits" "$png"
   else
     warn "the confirmation does not mention the unsaved edits — it reads the same as a clean pull ($msg, #140)" "$png"
   fi
+  btns=$(cdp page '[...document.querySelectorAll(".monaco-dialog-box button, .monaco-dialog-box a.monaco-button")].map((b) => b.textContent.trim()).join(" / ")' 2>/dev/null || echo "")
+  info "the dialog's buttons: $btns" "$png"
   p=$(diff_probe)
   info "the preview diffs against the BUFFER: tab '$(pj "$p" 'd["tab"]')', workspace side marked $(pj "$p" '(d["original"] or {}).get("marked", [])')"
-  page_click_button '^Pull and overwrite$' 3 || fail "no 'Pull and overwrite' button"
+  # "Overwrite" when the modal names the unsaved edits (#140); a clean
+  # pull's "Pull and overwrite" otherwise.
+  page_click_button '^(Overwrite|Pull and overwrite)$' 3 || fail "no 'Overwrite' / 'Pull and overwrite' button"
 else
   warn "Pull over unsaved edits did not ask (last notification '$(last_note)')" "$png"
 fi
@@ -289,32 +298,38 @@ wait_for 10 grep -q '9.0 \* PlantDtS' "$F" || true
 key ctrl+w; sleep 1   # the preview diff
 key ctrl+1; sleep 1
 png=$(shot pulled-over-unsaved)
-# What the editor shows now: is the user's 3.5 still there, and is the tab
-# still dirty (the buffer kept, disk replaced) — or did the pull replace it?
+# What the editor shows now: did the pull replace the buffer (the 9.0 in the
+# editor, the tab saved, editor = disk), or land on disk under it?
 buf=$(cdp page '[...document.querySelectorAll(".editor-group-container.active .monaco-editor .view-lines .view-line")].map((l) => l.textContent.replace(/ /g, " ")).join("\n")' 2>/dev/null || echo "")
 dirty=$(cdp page 'document.querySelector(".editor-group-container.active .tab.active.dirty") ? true : false' 2>/dev/null || echo "?")
 ondisk_new=$(grep -c '9.0 \* PlantDtS' "$F" || true); ondisk_user=$(grep -c '3.5 \* PlantDtS' "$F" || true)
 info "after the pull: disk has the controller's 9.0: $ondisk_new, the user's 3.5: $ondisk_user · editor shows 3.5: $([[ $buf == *'3.5 * PlantDtS'* ]] && echo yes || echo no), 9.0: $([[ $buf == *'9.0 * PlantDtS'* ]] && echo yes || echo no) · tab dirty: $dirty" "$png"
-if [[ $buf == *'3.5 * PlantDtS'* && $dirty == true ]]; then
+if [[ $buf == *'9.0 * PlantDtS'* && $buf != *'3.5 * PlantDtS'* && $ondisk_new == 1 && $ondisk_user == 0 && $dirty == false ]]; then
+  if [[ $named == 1 ]]; then
+    pass "the pull replaced the editor buffer and the file together, as the confirmation said: the editor shows the controller's 9.0, the unsaved 3.5 is gone, the tab is saved — editor and disk agree (#140)" "$png"
+  else
+    warn "the pull replaced the unsaved edit (3.5) without the confirmation saying it would" "$png"
+  fi
+elif [[ $buf == *'3.5 * PlantDtS'* && $dirty == true ]]; then
   pass "the unsaved edit survives the pull (still in the editor, tab still dirty)" "$png"
   if [[ $buf != *'9.0 * PlantDtS'* && $ondisk_new == 1 ]]; then
     warn "works-but-wrong: Pull wrote the controller's program to disk UNDER the dirty buffer — the editor still shows the pre-pull text (8.0) plus the unsaved edit, and the pulled 9.0 is nowhere in it (#140)" "$png"
-    # What the person's next Ctrl+S does with that.
-    key ctrl+s; sleep 2
-    png=$(shot save-after-pull)
-    msg=$(cdp page '[...document.querySelectorAll(".notification-list-item-message")].map((e) => e.textContent.trim()).join(" | ")' 2>/dev/null || echo "")
-    if grep -q '9.0 \* PlantDtS' "$F"; then
-      info "the next save does not overwrite the pull: VS Code says '$msg'" "$png"
-    elif grep -q '3.5 \* PlantDtS' "$F"; then
-      warn "the next Ctrl+S silently wrote the stale buffer over the pull (disk is back to 8.0 + 3.5; the controller's 9.0 is gone from the file, issue #140; notification '$msg')" "$png"
-    else
-      info "after Ctrl+S the file has neither 9.0 nor 3.5 (notification '$msg')" "$png"
-    fi
   fi
 elif [[ $ondisk_user == 1 ]]; then
   pass "the unsaved edit was kept (merged into the pulled file)" "$png"
 else
   warn "the unsaved edit (3.5) is gone from both the editor and the disk — Pull dropped it" "$png"
+fi
+# What the person's next Ctrl+S does with that.
+key ctrl+s; sleep 2
+png=$(shot save-after-pull)
+msg=$(cdp page '[...document.querySelectorAll(".notification-list-item-message")].map((e) => e.textContent.trim()).join(" | ")' 2>/dev/null || echo "")
+if grep -q '9.0 \* PlantDtS' "$F"; then
+  pass "the next Ctrl+S keeps the pull: plant.st still has the controller's 9.0 (notification '$msg')" "$png"
+elif grep -q '3.5 \* PlantDtS' "$F"; then
+  warn "the next Ctrl+S silently wrote the stale buffer over the pull (disk is back to 8.0 + 3.5; the controller's 9.0 is gone from the file, issue #140; notification '$msg')" "$png"
+else
+  info "after Ctrl+S the file has neither 9.0 nor 3.5 (notification '$msg')" "$png"
 fi
 key Escape
 vs_cmd "File: Revert File" 2
