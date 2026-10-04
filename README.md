@@ -36,6 +36,7 @@ eip/         EtherNet/IP driver for Allen-Bradley Logix: pure-Go CIP stack,
 sparkplug/   Sparkplug B edge node (and host application) over MQTT
 retain/      retained-memory stores: file, Kubernetes ConfigMap
 leader/      redundancy: Kubernetes Lease leader election
+oplog/       redundancy: a replicated log of operator intent (acks, shelves), agreed by a majority
 hist/        historian seam + Postgres sink, `naut historian`
 alarm/       ISA-18.2 alarms: rules over UDT members, ack/shelve, journal
 acceptance/  virtual-time acceptance tests (`naut test`, `*_test.yaml`)
