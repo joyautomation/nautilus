@@ -48,8 +48,19 @@ export function setVarBounds(vars: VarDecl[]): void {
  * (see resolveScoped); nautilus source has none. */
 export function liveValue(label: string, scope?: string): unknown {
 	if (!live.enabled || !label) return undefined;
-	if (scope) return resolveScoped(live.values, scope, label);
-	return resolveLabel(live.values, live.bounds, label);
+	const v = scope ? resolveScoped(live.values, scope, label) : resolveLabel(live.values, live.bounds, label);
+	if (v !== undefined) return v;
+	// Word.3: a bit of an integer. The stream carries the word; the bit is
+	// read out of it here, the way the runtime reads it.
+	const m = /^(.*)\.(\d+)$/.exec(label);
+	if (m) {
+		const word = scope ? resolveScoped(live.values, scope, m[1]) : resolveLabel(live.values, live.bounds, m[1]);
+		if (typeof word === 'number' && Number.isInteger(word)) {
+			const bit = Number(m[2]);
+			if (bit >= 0 && bit < 64) return ((BigInt(word) >> BigInt(bit)) & 1n) === 1n;
+		}
+	}
+	return undefined;
 }
 
 /** True when the live stream is current AND the controller has no tag by

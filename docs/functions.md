@@ -184,6 +184,17 @@ or inside arguments) ladder function contacts.
 | --- | --- | --- | --- |
 | `SHL`, `SHR` | `(IN: INT/WORD, N: INT)` | same as IN | shift left / logical shift right (zero-fill) |
 | `ROL`, `ROR` | `(IN, N)` | same as IN | rotate left / right |
+| `AND`, `OR`, `XOR` | two integers | integer | bitwise, when both operands are integers (on BOOLs they are the logical operators) |
+
+**Bit access.** `Word.3` is bit 3 of an integer, as a BOOL — readable
+anywhere a BOOL is (`IF Status.0 THEN`, a ladder contact `Status.0`, a
+compare argument) and assignable (`Cmd.4 := TRUE`, a ladder coil
+`( Cmd.4 )`), which reads the word, sets or clears the bit, and writes
+the word back. Bits are numbered from 0 at the least significant end, up
+to 63. This is the spelling Logix uses and the one IEC 61131-3 ed. 3
+writes `Word.%X3`; nautilus takes the shorter one. A bit of an array
+element or a structure member works the same way: `Words[2].15`,
+`P101.Status.12`.
 
 Caveat: the runtime's integers are 64-bit and declared widths aren't
 tracked, so rotates operate over 64 bits — a `WORD` you think of as 16
@@ -335,6 +346,17 @@ lic(AUTO   := TRUE,     PV     := LevelPct, SP    := LevelSP,
 InletValve := lic.CV;
 IF lic.SAT_HI THEN InletMaxedAlm := TRUE; END_IF;
 ```
+
+### Arrays of instances
+
+A function-block instance can be declared in an array — `Timers : ARRAY
+[0..3] OF TON;` — and each element is its own instance with its own
+retained state. Call an element by index and read its outputs by index:
+`Timers[2](IN := Run, PT := T#5S);` and `Timers[2].Q` in ST, or
+`Run Timers[2]:TON(PT := T#5S)` in a rung. The index may be a variable.
+On a Logix target the array is one `TIMER[4]` tag; an element called
+with a literal index carries its preset in the tag's data, one called
+with a computed index takes a `MOVE` to its `.PRE` ahead of the rung.
 
 ## User function blocks
 
