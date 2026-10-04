@@ -141,6 +141,19 @@ export function validateProfile(p: unknown): { path: string; message: string }[]
 			if (Math.abs(x) > w / 2 || y < 0 || y > h || z > 0 || z < -d) e(`${at}/pos`, `outside the chassis (${w} x ${h} x ${d} mm, front face at z = 0)`);
 		}
 	});
+	if (!o.bindings || typeof o.bindings !== 'object' || Array.isArray(o.bindings)) e('/bindings', 'required: an object, part id → tag ({} for none)');
+	// Limits: [warning, critical] per kind (or kind:bus). A missing or
+	// non-numeric critical would leave a part forever HIGH, never CRIT.
+	const lim = (o as { limits?: unknown }).limits;
+	if (lim !== undefined) {
+		if (!lim || typeof lim !== 'object' || Array.isArray(lim)) e('/limits', 'an object: kind (or kind:bus) → [warning, critical] °C');
+		else
+			for (const [k, v] of Object.entries(lim)) {
+				if (!(PART_KINDS as readonly string[]).includes(k.split(':')[0])) e(`/limits/${k}`, `a part kind (${PART_KINDS.join(', ')}), optionally :bus`);
+				if (!Array.isArray(v) || v.length !== 2 || v.some((x) => typeof x !== 'number' || !Number.isFinite(x))) e(`/limits/${k}`, '[warning, critical], two numbers, °C');
+				else if (v[0] > v[1]) e(`/limits/${k}`, 'the warning limit is above the critical one');
+			}
+	}
 	for (const [k, t] of Object.entries(o.bindings ?? {})) {
 		if (k !== 'chassis' && !ids.has(k)) e(`/bindings/${k}`, `no part "${k}"`);
 		if (typeof t !== 'string' || !t.includes('{node}')) e(`/bindings/${k}`, 'a tag name with {node} for the node prefix');

@@ -90,6 +90,18 @@ describe('validateProfile', () => {
 		expect(paths).toContain('/parts/1/id');
 		expect(paths).toContain('/bindings/nope');
 	});
+	it('wants bindings, and limits it can paint by', () => {
+		const ok = { profile: 'x', units: 'mm', size: [100, 40, 100], parts: [], bindings: {} };
+		expect(validateProfile(ok)).toEqual([]);
+		const noBind = { ...ok, bindings: undefined };
+		expect(validateProfile(noBind).map((x) => x.path)).toEqual(['/bindings']);
+		const bad = (limits: unknown) => validateProfile({ ...ok, limits }).map((x) => x.path);
+		expect(bad({ drive: [55, 70], 'drive:nvme': [70, 80] })).toEqual([]);
+		expect(bad({ drive: [90] })).toEqual(['/limits/drive']);
+		expect(bad({ drive: ['hot', 90] })).toEqual(['/limits/drive']);
+		expect(bad({ drive: [90, 70] })).toEqual(['/limits/drive']);
+		expect(bad({ toaster: [1, 2] })).toEqual(['/limits/toaster']);
+	});
 	it('wants {node} in a binding', () => {
 		const p = clone();
 		p.bindings.bay0 = 'NODE1_Drive_NVMe0';
