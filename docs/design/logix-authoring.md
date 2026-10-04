@@ -682,6 +682,32 @@ member, the high-level cutoff unlatching an accept the same scan the OTE
 re-asserts it). The §7a yardstick criterion is closed on both halves:
 instructions and types.
 
+**Step 2, Structured Text routines.** `logix/writer/stwriter.go` emits an
+ST PROGRAM as a Logix ST routine, statements as written: assignments, IF
+/ ELSIF / ELSE, CASE with lists and ranges, FOR / WHILE / REPEAT, EXIT,
+the operators, member and index access, ABS / SQRT / LN / LOG / EXP / SIN
+/ COS / TAN / TRUNC, `EXPT` as `**`, conversions dropped (Logix converts
+on assignment). The dialect gaps as rules: BOOL literals are 1 / 0; TIME
+is a DINT of milliseconds everywhere in ST; a timer instance is an
+`FBD_TIMER` and `t(IN := x, PT := T#2S, Q => y)` becomes `t.PRE := 2000;
+t.TimerEnable := x; t.Reset := NOT (x); TONR(t); y := t.DN;` (the Reset
+mirrors IEC's TON, which clears when IN drops; TONR alone holds ACC); a
+TOF is `TOFR(t)` without Reset; a counter is an `FBD_COUNTER` driven by
+`CUEnable`, `PRE`, `Reset` and `CTUD(c)`. FBD structures are emitted
+without initial data and the preset is assigned in code, because their
+Decorated layout has not been seen in an export. Refused by name:
+STRING, MIN / MAX / LIMIT / SEL / MUX, ATAN2, RETURN, CONTINUE, user
+functions and blocks (step 3). `naut check --target logix`, `naut logix
+write` and `naut logix deploy` take `.st` programs.
+
+Measured on ECHO1 with the `st` conformance project (CASE, a hysteresis
+IF, FOR, a timer and a counter called the IEC way with `Q =>` bindings):
+SDK import and build 36.5 s, download verified, **4 of 4 scenarios pass
+on both runtimes** — the TONR timer times 2 s and resets when its input
+drops, the CTUD counter counts edges, holds done, resets. The facade
+notes that the controller refuses a whole-structure read of an
+FBD_TIMER (CIP 0x0f) and reads members instead; harmless.
+
 ## 8. The demo this enables
 
 James's target demo (2026-10-03), which replaces the Tier A `ab01` draft in the
