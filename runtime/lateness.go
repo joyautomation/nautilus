@@ -11,13 +11,15 @@ import (
 // answers "does it start when it should" — the soft-real-time question,
 // and the one a fast task on a general-purpose kernel actually loses.
 //
-// A sample is period − target: the measured interval since the previous
-// scan of this task minus the configured interval. Positive is late. An
-// early sample (the scan after a late one, on a phase-locked ticker)
-// lands in the first bucket, so one stall is counted once. Every field
-// is cumulative since the runtime started — the numbers a report quotes
-// ("over a 30-minute run, p99.9 was …"), not a moving view, which the
-// Periods sparkline already gives.
+// A sample is how late the scan STARTED against its slot: Run schedules
+// slot n at start + n·period, and the sample is start time − slot time,
+// never negative. When Scan or ScanTask is driven from outside Run (tests,
+// a custom scheduler) there is no slot, and the sample falls back to
+// period − target — the interval since the previous scan minus the
+// configured one, where an early scan lands in the first bucket. Every
+// field is cumulative since the runtime started — the numbers a report
+// quotes ("over a 30-minute run, p99.9 was …"), not a moving view, which
+// the Periods sparkline already gives.
 //
 // Percentiles are read off a log-linear histogram with 32 buckets per
 // octave above 1 µs (about 3 % resolution) and reported as the upper edge
@@ -36,12 +38,17 @@ type Lateness struct {
 	// next tick was already due before this scan finished. A ticker drops
 	// the ticks that pile up, so an overrun is also one or more scans that
 	// never happened.
-	Overruns uint64  `json:"overruns"`
-	LastUs   float64 `json:"lastUs"` // the latest sample, µs (negative = early)
-	MaxUs    float64 `json:"maxUs"`  // worst lateness seen, µs
-	P50Us    float64 `json:"p50Us"`
-	P99Us    float64 `json:"p99Us"`
-	P999Us   float64 `json:"p999Us"`
+	Overruns uint64 `json:"overruns"`
+	// Missed counts scan slots the loop skipped because it was more than a
+	// whole period behind schedule (after an overrun, or a stall): the
+	// scans that should have happened and did not. Run keeps the schedule
+	// absolute, so lateness never accumulates — it is paid once, here.
+	Missed uint64  `json:"missed"`
+	LastUs float64 `json:"lastUs"` // the latest sample, µs
+	MaxUs  float64 `json:"maxUs"`  // worst lateness seen, µs
+	P50Us  float64 `json:"p50Us"`
+	P99Us  float64 `json:"p99Us"`
+	P999Us float64 `json:"p999Us"`
 	// Histogram is the 1-2-5 log-spaced rollup, cumulative; BucketsUs are
 	// its edges (so a chart never hard-codes them).
 	Histogram []int     `json:"histogram"`
@@ -70,6 +77,7 @@ type lateTracker struct {
 	thresholdUs float64
 	late        uint64
 	overruns    uint64
+	missed      uint64
 	lastUs      float64
 	maxUs       float64
 	n           uint64
@@ -77,10 +85,9 @@ type lateTracker struct {
 	coarse      [len(lateBucketsUs) + 1]int
 }
 
-// record folds one scan in: its period and execution time against the
-// target, all in seconds.
-func (l *lateTracker) record(periodS, targetS, execS float64) {
-	lateUs := (periodS - targetS) * 1e6
+// record folds one scan in: how late it started, in µs, and whether its
+// execution overran the period.
+func (l *lateTracker) record(lateUs float64, overrun bool) {
 	l.lastUs = lateUs
 	l.n++
 	if lateUs > l.maxUs {
@@ -89,7 +96,7 @@ func (l *lateTracker) record(periodS, targetS, execS float64) {
 	if lateUs > l.thresholdUs {
 		l.late++
 	}
-	if execS > targetS {
+	if overrun {
 		l.overruns++
 	}
 	l.fine[fineIndex(lateUs)]++
@@ -171,6 +178,7 @@ func (l *lateTracker) snapshot() Lateness {
 		ThresholdMs: l.thresholdUs / 1000,
 		Late:        l.late,
 		Overruns:    l.overruns,
+		Missed:      l.missed,
 		LastUs:      l.lastUs,
 		MaxUs:       l.maxUs,
 		P50Us:       p50,

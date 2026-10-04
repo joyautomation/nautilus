@@ -63,7 +63,11 @@
 			     cumulative — the soft-real-time view beside the live sparklines. -->
 			<div class="tile">
 				<span class="label">late scans — &gt; {fmtUs(late.thresholdMs * 1000)}</span>
-				<span class="value">{late.late.toLocaleString()}<small>{latePct.toFixed(2)}%</small></span>
+				<span class="value"
+					>{late.late.toLocaleString()}<small>{latePct.toFixed(2)}%</small>{#if late.missed}<small
+							class="bad">{late.missed.toLocaleString()} missed</small
+						>{/if}</span
+				>
 			</div>
 			<div class="tile">
 				<span class="label">p99 lateness</span>
