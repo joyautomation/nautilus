@@ -57,6 +57,8 @@ Import flags:
   --profile    Metric-to-member profile (default, and only: node)
   --out        Output directory (default ".")
   --tags-out   Tag file to emit, relative to --out (default tags/prometheus.yaml)
+  --force      Replace a manifest or tag file that holds something else
+               (a hand edit, another device's import); refused otherwise
   --timeout    Live scrape timeout (default 5s)
 
 Browse flags:
@@ -100,6 +102,7 @@ func runPrometheusImport(args []string) int {
 	tag := fs.String("tag", "", "source id and tag prefix (required)")
 	profile := fs.String("profile", "node", "metric-to-member profile")
 	outDir := fs.String("out", ".", "output directory")
+	force := fs.Bool("force", false, "replace a manifest or tag file that holds something else (a hand edit, another device's import)")
 	tagsOut := fs.String("tags-out", "tags/prometheus.yaml", "tag file to emit, relative to --out")
 	timeout := fs.Duration("timeout", 5*time.Second, "live scrape timeout")
 	if err := fs.Parse(args); err != nil {
@@ -161,38 +164,24 @@ func runPrometheusImport(args []string) int {
 		command += " --profile " + *profile
 	}
 
-	if err := os.MkdirAll(*outDir, 0o755); err != nil {
-		fmt.Fprintln(os.Stderr, "naut prometheus import:", err)
-		return 1
-	}
 	manifestPath := filepath.Join(*outDir, "prometheus_manifest.yaml")
-	if err := os.WriteFile(manifestPath, codegen.ManifestYAML(out.Manifest, command), 0o644); err != nil {
-		fmt.Fprintln(os.Stderr, "naut prometheus import:", err)
-		return 1
-	}
 	tagsYAML, err := codegen.TagsYAML(out)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut prometheus import:", err)
 		return 1
 	}
 	tagsPath := filepath.Join(*outDir, *tagsOut)
-	if dir := filepath.Dir(tagsPath); dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			fmt.Fprintln(os.Stderr, "naut prometheus import:", err)
-			return 1
-		}
-	}
-	if err := os.WriteFile(tagsPath, tagsYAML, 0o644); err != nil {
-		fmt.Fprintln(os.Stderr, "naut prometheus import:", err)
-		return 1
-	}
 	typesPath := filepath.Join(*outDir, "hw_types.st")
 	types, err := hw.TypesST("prometheus")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut prometheus import:", err)
 		return 1
 	}
-	if err := os.WriteFile(typesPath, types, 0o644); err != nil {
+	if err := writeImport([]importFile{
+		{path: manifestPath, body: codegen.ManifestYAML(out.Manifest, command)},
+		{path: tagsPath, body: tagsYAML},
+		{path: typesPath, body: types, generated: true},
+	}, *force); err != nil {
 		fmt.Fprintln(os.Stderr, "naut prometheus import:", err)
 		return 1
 	}

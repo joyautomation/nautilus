@@ -307,3 +307,26 @@ func TestSnmpReadOffline(t *testing.T) {
 		t.Fatalf("SW1_Port01 = %v", tags["SW1_Port01"])
 	}
 }
+
+// An import never silently replaces another device's manifest or a hand
+// edit: a second switch into the same directory is refused, nothing
+// written; the same device again is fine; --force replaces.
+func TestSnmpImportRefusesToReplace(t *testing.T) {
+	dir := t.TempDir()
+	walkPath := snmpTestdata("switch.snmpwalk")
+	sw1 := snmpImportInto(t, dir, "--walk", walkPath, "--tag", "SW1", "--host", "192.0.2.2")
+	if out, code := captureSnmp(t, "import", "--out", dir, "--walk", walkPath, "--tag", "SW2", "--host", "192.0.2.3"); code == 0 {
+		t.Fatalf("SW2 over SW1 was not refused:\n%s", out)
+	}
+	if got := read(t, filepath.Join(dir, "snmp_manifest.yaml")); got != sw1.manifest {
+		t.Fatal("a refused import wrote the manifest anyway")
+	}
+	if got := read(t, filepath.Join(dir, "tags", "snmp.yaml")); got != sw1.tags {
+		t.Fatal("a refused import wrote the tags anyway")
+	}
+	snmpImportInto(t, dir, "--walk", walkPath, "--tag", "SW1", "--host", "192.0.2.2") // the same bytes: fine
+	sw2 := snmpImportInto(t, dir, "--walk", walkPath, "--tag", "SW2", "--host", "192.0.2.3", "--force")
+	if sw2.manifest == sw1.manifest || !strings.Contains(sw2.manifest, "SW2") {
+		t.Fatal("--force did not replace")
+	}
+}

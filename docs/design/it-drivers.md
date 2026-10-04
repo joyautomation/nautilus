@@ -536,7 +536,7 @@ becomes `output`. Then:
 
 | Subcommand | Does |
 |---|---|
-| `import --host … \| --walk file.snmpwalk \| --mockup dir \| --file metrics.txt --tag SW1 [--profile switch] [--ports 1-24] [--out dir] [--tags-out tags/snmp.yaml]` | offline or live: enumerate the device, expand the profile into explicit bindings → `<proto>_manifest.yaml` + `tags/<proto>.yaml` + `hw_types.st`. Byte-identical on re-run; `--from` a recorded fixture gives the same bytes as the live device it was recorded from |
+| `import --host … \| --walk file.snmpwalk \| --mockup dir \| --file metrics.txt --tag SW1 [--profile switch] [--ports 1-24] [--out dir] [--tags-out tags/snmp.yaml] [--force]` | offline or live: enumerate the device, expand the profile into explicit bindings → `<proto>_manifest.yaml` + `tags/<proto>.yaml` + `hw_types.st`. Byte-identical on re-run; refuses to replace a manifest or tag file that holds anything else (a hand edit, another device's import) without `--force`; `--from` a recorded fixture gives the same bytes as the live device it was recorded from |
 | `browse --host … [--oid 1.3.6.1.2.1.2] \| [--path /redfish/v1/Chassis] \| [--url http://host:9100/metrics] [--record file]` | live poke with names for what the profiles know (`ifHCInOctets.3 = 812345678`), and `--record` writes the fixture `import`/`serve`/CI consume. This is the commissioning tool — and the first shot of the content capture |
 | `serve --walk file \| --mockup dir \| --file metrics.txt [--listen :1161]` | stand in for the device from its recording: the in-repo SNMP agent / mockup server / metrics server, for `naut run` on a laptop and for the acceptance suite |
 | `tags` | regenerate the tag file only from a committed manifest |

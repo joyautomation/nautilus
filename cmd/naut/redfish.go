@@ -85,6 +85,8 @@ Import flags:
   --out        output directory (default ".")
   --tags-out   tag file, relative to --out (default tags/redfish.yaml)
   --types-out  types file, relative to --out (default hw_types.st)
+  --force      replace a manifest or tag file that holds something else
+               (a hand edit, another device's import); refused otherwise
 
 Browse flags:
   --path       resource to print (default /redfish/v1)
@@ -177,6 +179,7 @@ func runRedfishImport(args []string) int {
 	system := fs.String("system", "", "Systems member Id")
 	chassis := fs.String("chassis", "", "Chassis member Id")
 	outDir := fs.String("out", ".", "output directory")
+	force := fs.Bool("force", false, "replace a manifest or tag file that holds something else (a hand edit, another device's import)")
 	tagsOut := fs.String("tags-out", "tags/redfish.yaml", "tag file, relative to --out")
 	typesOut := fs.String("types-out", "hw_types.st", "types file, relative to --out")
 	if err := fs.Parse(args); err != nil {
@@ -231,23 +234,14 @@ func runRedfishImport(args []string) int {
 		fmt.Fprintln(os.Stderr, "naut redfish import:", err)
 		return 1
 	}
-	files := []struct {
-		path string
-		body []byte
-	}{
-		{filepath.Join(*outDir, "redfish_manifest.yaml"), codegen.ManifestYAML(out.Manifest, command)},
-		{filepath.Join(*outDir, *tagsOut), tagsYAML},
-		{filepath.Join(*outDir, *typesOut), typesST},
+	files := []importFile{
+		{path: filepath.Join(*outDir, "redfish_manifest.yaml"), body: codegen.ManifestYAML(out.Manifest, command)},
+		{path: filepath.Join(*outDir, *tagsOut), body: tagsYAML},
+		{path: filepath.Join(*outDir, *typesOut), body: typesST, generated: true},
 	}
-	for _, f := range files {
-		if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
-			fmt.Fprintln(os.Stderr, "naut redfish import:", err)
-			return 1
-		}
-		if err := os.WriteFile(f.path, f.body, 0o644); err != nil {
-			fmt.Fprintln(os.Stderr, "naut redfish import:", err)
-			return 1
-		}
+	if err := writeImport(files, *force); err != nil {
+		fmt.Fprintln(os.Stderr, "naut redfish import:", err)
+		return 1
 	}
 	for _, n := range out.Notes {
 		fmt.Println("note:", n)

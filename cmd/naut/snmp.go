@@ -81,6 +81,8 @@ Import flags:
   --ports      Interfaces by ifIndex, "1-24,26" or "all" (default: ifType 6)
   --out        Output directory (default ".")
   --tags-out   Tag file, relative to --out (default tags/snmp.yaml)
+  --force      Replace a manifest or tag file that holds something else
+               (a hand edit, another device's import); refused otherwise
   --tags-skip  Comma-separated globs to leave OUT of the tag file
   --plan       Print the requests one poll would send
 
@@ -233,6 +235,7 @@ func runSnmpImport(args []string) int {
 	profile := fs.String("profile", "", "force a profile")
 	ports := fs.String("ports", "", `interfaces by ifIndex: "1-24,26" or "all"`)
 	outDir := fs.String("out", ".", "output directory")
+	force := fs.Bool("force", false, "replace a manifest or tag file that holds something else (a hand edit, another device's import)")
 	tagsOut := fs.String("tags-out", "tags/snmp.yaml", "tag file, relative to --out")
 	tagsSkip := fs.String("tags-skip", "", "comma-separated globs to leave out of the tag file")
 	plan := fs.Bool("plan", false, "print the requests one poll would send")
@@ -321,22 +324,13 @@ func runSnmpImport(args []string) int {
 	manifestPath := filepath.Join(*outDir, "snmp_manifest.yaml")
 	tagsPath := filepath.Join(*outDir, *tagsOut)
 	typesPath := filepath.Join(*outDir, "hw_types.st")
-	for _, f := range []struct {
-		path string
-		body []byte
-	}{
-		{manifestPath, codegen.ManifestYAML(out, command)},
-		{tagsPath, tagsYAML},
-		{typesPath, types},
-	} {
-		if err := os.MkdirAll(filepath.Dir(f.path), 0o755); err != nil {
-			fmt.Fprintln(os.Stderr, "naut snmp import:", err)
-			return 1
-		}
-		if err := os.WriteFile(f.path, f.body, 0o644); err != nil {
-			fmt.Fprintln(os.Stderr, "naut snmp import:", err)
-			return 1
-		}
+	if err := writeImport([]importFile{
+		{path: manifestPath, body: codegen.ManifestYAML(out, command)},
+		{path: tagsPath, body: tagsYAML},
+		{path: typesPath, body: types, generated: true},
+	}, *force); err != nil {
+		fmt.Fprintln(os.Stderr, "naut snmp import:", err)
+		return 1
 	}
 	fmt.Printf("profile %s: %d tag(s) for %s\n", out.Profile.Name, len(out.Manifest.Tags), *tag)
 	if !out.Profile.Verified {
