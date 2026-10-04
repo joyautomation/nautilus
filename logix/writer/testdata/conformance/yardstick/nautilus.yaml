@@ -1,0 +1,26 @@
+# The §7a yardstick: batch-skid's line/Line.L5X — the "existing" line
+# controller the skid talks to — written as a nautilus project. Its five
+# rungs come out of the writer as the export's own text, LES spelled LT.
+name: yardstick-line
+tasks:
+  - program: Receive.ld
+    scan: 10ms
+tags:
+  - { name: Line_Request, role: input, init: false, desc: "Skid asks the line to take a batch" }
+  - { name: Line_Fault, role: input, init: false, desc: "Line fault" }
+  - { name: Line_TankLevel, role: input, init: 0.0, unit: "%", desc: "Receiving tank level" }
+  - { name: Line_BatchId, role: input, init: 0, desc: "Batch id the skid announces" }
+  - { name: Line_Ready, role: output, init: false, desc: "Line has headroom for a batch" }
+  - { name: Line_Accept, role: output, init: false, desc: "Line accepts the batch" }
+  - { name: Line_Status, role: state, type: LineStatus, init: { Mode: 1, Alarm: false }, desc: "Mode/alarm summary" }
+target:
+  logix:
+    controller: DemoLine
+    program: MainProgram
+    routine: Receive
+    processor: 1756-L85E
+    revision: "38.11"
+    comm-path: AB_ETH-1\100.93.56.45\Backplane\0
+    host: 100.93.56.45
+    side:
+      heartbeat: Nautilus_Scan
