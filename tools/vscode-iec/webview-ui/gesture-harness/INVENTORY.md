@@ -32,18 +32,18 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 153 rows. **3 rows have no coverage at all** (no webview test,
+Totals: 153 rows. **0 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
 |---|---|---|
-| Commands | 28 | 1 |
+| Commands | 28 | 0 |
 | FBD `?` | 18 | 0 |
 | Ladder `?` | 20 | 0 |
 | SFC `?` | 22 | 0 |
 | Mimic `?` | 18 | 0 |
 | Component `?` | 8 | 0 |
-| Other claims | 39 | 2 |
+| Other claims | 39 | 0 |
 
 ## Commands (package.json `contributes.commands`)
 
@@ -73,7 +73,7 @@ no rig verb, no smoke check); per section below.
 | C22 | Extension (Diagram editor title ... menu) | Diff the SFC diagram against the controller | package.json command `nautilus.sfc.diffController` | — | — | 04 (menu entry present only) |
 | C23 | Extension (Diagram editor title ... menu) | Diff the SFC diagram between git revisions | package.json command `nautilus.sfc.diffRevisions` | — | — | 04 (menu entry present only) |
 | C24 | Extension (Palette) | Edit the ports of a built-in component | package.json command `nautilus.editComponentPorts` | — | component_edit_ports (opens the editor on a component file; not via the command) | — |
-| C25 | Extension (Palette; Get Started walkthrough) | Create a project (naut new) | package.json command `nautilus.newProject` | — | — | — |
+| C25 | Extension (Palette; Get Started walkthrough) | Create a project (naut new) | package.json command `nautilus.newProject` | — | — | 17 |
 | C26 | Extension (Palette) | Open the Get Started walkthrough | package.json command `nautilus.getStarted` | — | — | 01 (auto-open, not the command) |
 | C27 | Extension (Text editor title; Palette) | Open a text file as a diagram editor (replaces the tab, keeps unsaved edits) | package.json command `nautilus.diagram.openAsDiagram` | — | ed_open_diagram | 04 |
 | C28 | Extension (Diagram editor title; Palette) | Show the diagram's source text beside it | package.json command `nautilus.diagram.showSource` | — | — | 04 |
@@ -193,7 +193,7 @@ no rig verb, no smoke check); per section below.
 
 | id | area | gesture | source of the claim | webview test | rig verb | smoke |
 |---|---|---|---|---|---|---|
-| X01 | Extension | Open a diagram by default via workbench.editorAssociations | README Diagrams | — | — | — |
+| X01 | Extension | Open a diagram by default via workbench.editorAssociations | README Diagrams | — | — | 17 |
 | X02 | Extension | Open a *.mimic.json in the graphical editor (Open With → Text Editor to leave) | README HMI mimic editor | gestures.test.mjs: restore: the mimic editor mounts with saved state | — | — |
 | X03 | Extension | Open a component file in the component editor | README HMI mimic editor (ports) | gestures.test.mjs: restore: the component editor mounts with saved state | component_edit_ports | — |
 | X04 | Extension | A 0-byte .fbd/.ld/.sfc opens with the Empty file banner; initialize or the first gesture writes a skeleton | CHANGELOG 0.10.0 | diagram.test.mjs: FBD: null arrays ... blank file offers initialize; Ladder: a blank file seeds with the file name | sfc_init | 09 |
@@ -213,7 +213,7 @@ no rig verb, no smoke check); per section below.
 | X18 | Extension | Go to definition, hover and completion in ST | README Language intelligence | — | — | 14 |
 | X19 | Extension | *_test.yaml suites in the Testing view; run one from the gutter; failure inline on the assertion | README Testing | — | — | 15 |
 | X20 | Extension | JSON-schema completion and validation for nautilus.yaml, tag, alarm and test files | README Testing | — | — | 14 (nautilus.yaml and *_test.yaml; tag and alarm files not exercised) |
-| X21 | Extension | Hidden command nautilus.fb.monitor (registered in extension.ts, not contributed in package.json) | src/extension.ts:158 | — | — | — |
+| X21 | Extension | nautilus.fb.monitor, run by the FbMonitorLenses CodeLens over each FUNCTION_BLOCK header: pick which declared instance the body's live values read | src/extension.ts, src/liveValues.ts | — | — | 17 |
 | X22 | Ladder | L5X opens read-only: pill, no palette, edits do nothing | README Rockwell L5X | diagram.test.mjs: Ladder: an L5X model is read-only | — | 10 |
 | X23 | Ladder | Declare offer (amber declare …) files an undeclared identifier under VAR_EXTERNAL or VAR | CHANGELOG 0.10.0 | diagram.test.mjs: Ladder: the declare offer covers a block call's arguments | ld_declare | — |
 | X24 | Ladder | FB… picker places any standard or project function block under a chosen instance name | README Diagrams | diagram.test.mjs: Ladder: TON from the palette takes the first free instance name | ld_add_block | — |
@@ -235,7 +235,7 @@ no rig verb, no smoke check); per section below.
 
 ## Count of rows with no coverage at all
 
-**3 of 153.** The commands are the thinnest area: only the download /
+**0 of 153.** The commands are the thinnest area: only the download /
 rollback pair (08), the title-bar buttons (04) and the previews (03, 07, 10)
 are touched by any smoke check, and no webview test can reach a command because
 commands live in the extension host (that is what the E3 test-state hooks are
@@ -245,8 +245,8 @@ of any kind.
 
 Notes for the next pass:
 
-- `nautilus.fb.monitor` is registered in `src/extension.ts` but not contributed
-  in `package.json`, so it has no palette entry; it is listed so it is not lost.
+- `nautilus.fb.monitor` is now contributed in `package.json` ("Choose Function
+  Block Instance to Monitor"); its gesture is the CodeLens (X21, smoke 17).
 - Some rows are covered only on one half of the claim. Those are labelled in
   the cell.
 - The rig verbs for the ladder and FBD were written for the lift-station
