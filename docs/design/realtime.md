@@ -469,6 +469,61 @@ real-time. Ethernet fieldbus jitter is separate and pinning doesn't fix it.
 
 ## Phase 3 — explore harder real-time (spikes, decide with evidence)
 
+**Status (2026-10-04):** the Rust fast-loop spike exists (`rt/fastloop`,
+`tools/jitter/shmpeer`, `rt/README.md`) and has its first rows below; the
+microcontroller spike waits for the Arduino UNO Q James sets up the week of
+2026-10-06.
+
+### Rust fast loop — first measurements
+
+Same desktop, same load, 60 s at 1 kHz, the Go peer polling the segment
+every 1 ms and moving the setpoint. Go rows from Phase 2 item 4 for
+comparison (slot lateness, both):
+
+| loop | placement | scans ran | p50 | p99 | p99.9 | max |
+|---|---|---:|---:|---:|---:|---:|
+| Go (`tools/jitter` main task) | unpinned, normal | 60 017 / 60 018 | 10 µs | 55 µs | 608 µs | 2.27 ms |
+| **Rust (`rt/fastloop`)** | unpinned, normal | 59 997 / 60 000 | 5.9 µs | 33 µs | 504 µs | 2.44 ms |
+| Go | pinned cpu 2, normal | 59 998 / 60 011 | 6 µs | 312 µs | 1.22 ms | 2.89 ms |
+| **Rust** | pinned cpu 2, normal | 59 986 / 60 000 | 3.8 µs | 304 µs | 1.50 ms | 2.58 ms |
+| Go | pinned cpu 2, FIFO 50 | 60 001 / 60 001 | 4.5 µs | 20 µs | 56 µs | 319 µs |
+| Rust | pinned cpu 2, FIFO 50 | *needs `setcap` on the Rust binary* | | | | |
+
+Reading: **on a stock kernel the OS floor dominates and the runtime
+underneath barely shows** — Rust is a few microseconds better at p50 and
+p99, identical at p99.9 and max, and affinity-alone hurts it exactly as
+it hurts Go. What Rust removes is the thing these rows cannot show on a
+busy desktop: the Go collector's stop-the-world (worst seen in Phase 2:
+5 ms under a churning task, 0.2 ms after item 3) and the possibility of a
+Go runtime thread (GC worker, poller) landing on the loop's core. Those
+are the rows to get on an isolated core and on PREEMPT_RT, where the
+kernel's own floor drops to tens of microseconds and the runtime's tail
+becomes the tail.
+
+The exchange: 0 torn reads in 55 000 supervisor reads, 0–2 stale input
+reads on the loop side in 60 000 scans, and the loop's counter advancing
+at 999–1000/s with the supervisor attached. A result's age when the
+supervisor reads it is p50 ≈ 490 µs, p99 ≈ 1 ms: that is the supervisor's
+own 1 ms poll phase, not the seqlock (a futex wake from the loop would
+make it microseconds, and a supervisor scanning at 100 ms would not care
+either way). Raw: `docs/design/realtime/2026-10-04-mira1-rust-spike/`.
+
+### What runs in the fast loop — recommendation
+
+The spike's loop is one fixed block, and that is the recommendation for
+the first real version: **a fixed set of fast blocks configured from the
+manifest, not a second IR executor.**
+
+| option | what it buys | cost | risk |
+|---|---|---|---|
+| Fixed blocks in Rust (PID/PI, a counter/encoder block, a ramp/motion profile, a filter), parameters and I/O bindings from the manifest, exchanged as tags | every fast use case the poll named; same code builds for Linux (this spike) and for the UNO Q's STM32 as `no_std` | ~1 week per block with tests; the manifest/driver plumbing ~1 week once | low: each block is small, testable against the Go VM's own FBs |
+| A Rust executor for the Nautilus IR with identical semantics | user logic in the fast loop | months: the IR, every builtin, every FB, cross-tested against the acceptance suites as the oracle, then kept in step forever | high: two VMs that must agree is the single most expensive thing this project could take on |
+| Nothing fast in a separate process; Phase 2's Go loop pinned + FIFO | p99 20 µs on a stock kernel, today | 0 | the GC tail and the kernel's tail remain; fine for 1 ms, not for 100 µs |
+
+So: ship Phase 2 as the answer for 1 ms class tasks; grow `rt/fastloop`
+into a manifest-configured block runner for the sub-millisecond / pin-level
+class, with the same block set targeting the microcontroller.
+
 **A Rust fast-loop process** (James's idea): no GC; pinned to an isolated core
 with RT priority on PREEMPT_RT; Nautilus stays the supervisor and exchanges a
 small set of tags with it over **shared memory** (a seqlock or double buffer,

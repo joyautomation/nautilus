@@ -1,0 +1,17 @@
+[package]
+name = "nautilus-fastloop"
+version = "0.1.0"
+edition = "2021"
+description = "Phase 3 spike: a 1 kHz real-time loop beside Nautilus, exchanging tags over shared memory"
+
+[dependencies]
+# The one dependency: raw libc bindings for mmap, clock_nanosleep,
+# sched_setaffinity and sched_setscheduler. No runtime, no allocator
+# games, nothing the Go side has to know about.
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
