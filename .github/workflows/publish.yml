@@ -1,4 +1,4 @@
-# Publishes the extension and the HMI kit when their package.json version on
+# Publishes the extension, the HMI kit and the 3D HMI package when their package.json version on
 # main is ahead of the registry. The repo is the source of truth: bump the
 # version in a PR, merge, and this ships it. Nothing publishes when versions
 # already match, so the workflow is idempotent and safe on every push.
@@ -46,6 +46,47 @@ jobs:
         run: |
           if [ "${{ vars.PUBLISH_HMI }}" != "true" ]; then
             echo "repo variable PUBLISH_HMI != true — skipping npm publish"; exit 0
+          fi
+          npm publish --access public --provenance
+
+  hmi3d:
+    name: 3D HMI package → npm
+    runs-on: ubuntu-latest
+    # The same rule as the kit: a package.json version ahead of npm ships.
+    # Trusted publishing is configured per package on npmjs.com, which needs
+    # the package to exist: the FIRST version is published by hand, then the
+    # trusted publisher is set and PUBLISH_HMI3D arms this job (RELEASING.md).
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run: {working-directory: hmi-3d}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Compare repo version with npm
+        id: v
+        run: |
+          repo=$(node -p "require('./package.json').version")
+          reg=$(npm view @joyautomation/nautilus-hmi-3d version 2>/dev/null || echo 0.0.0)
+          echo "repo=$repo npm=$reg"
+          if [ "$repo" = "$reg" ]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if [ "$(printf '%s\n%s\n' "$repo" "$reg" | sort -V | tail -1)" != "$repo" ]; then
+            echo "::error::npm has $reg, ahead of the repo's $repo — out-of-band publish"; exit 1
+          fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+      - if: steps.v.outputs.publish == 'true'
+        run: npm ci
+      - name: Publish to npm (trusted publisher)
+        if: steps.v.outputs.publish == 'true'
+        run: |
+          if [ "${{ vars.PUBLISH_HMI3D }}" != "true" ]; then
+            echo "repo variable PUBLISH_HMI3D != true — skipping npm publish"; exit 0
           fi
           npm publish --access public --provenance
 
