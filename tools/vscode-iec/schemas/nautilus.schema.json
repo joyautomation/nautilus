@@ -167,6 +167,21 @@
           "type": "string",
           "minLength": 1,
           "description": "Tag to publish this task's measured scan delta into, for logic that integrates over real elapsed time."
+        },
+        "late-threshold": {
+          "$ref": "#/definitions/duration",
+          "description": "How late a scan may start before the runtime diagnostics count it as late (the lateness block on /api/state). Default: a tenth of scan. Set on the first task, it is also the default for every task without its own."
+        },
+        "cpu": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Pin this task's scan thread to one CPU (Linux sched_setaffinity). The core is only quiet if the kernel was told to keep everything else off it (isolcpus=, nohz_full=, irqaffinity=) \u2014 see docs/design/realtime.md."
+        },
+        "priority": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 99,
+          "description": "Run this task's thread under SCHED_FIFO at this priority (Linux). Needs CAP_SYS_NICE (setcap cap_sys_nice+ep on the binary) or an rtprio rlimit; a refused request is logged and shown in the task's stats, and the task runs at normal priority."
         }
       }
     },
@@ -320,7 +335,7 @@
         "broker": {
           "type": "string",
           "minLength": 1,
-          "description": "sparkplug-host: broker URL, e.g. tcp://host:1883 or ssl://host:8883. The MQTT password is NEVER here — set NAUTILUS_MQTT_PASSWORD."
+          "description": "sparkplug-host: broker URL, e.g. tcp://host:1883 or ssl://host:8883. The MQTT password is NEVER here \u2014 set NAUTILUS_MQTT_PASSWORD."
         },
         "group-id": {
           "type": "string",
@@ -339,7 +354,7 @@
         "host-id": {
           "type": "string",
           "minLength": 1,
-          "description": "sparkplug-host: this host application's id — it owns the STATE topic spBv1.0/STATE/<host-id>, which is what edge nodes gate their births on."
+          "description": "sparkplug-host: this host application's id \u2014 it owns the STATE topic spBv1.0/STATE/<host-id>, which is what edge nodes gate their births on."
         },
         "client-id": {
           "type": "string",
@@ -348,7 +363,7 @@
         },
         "username": {
           "type": "string",
-          "description": "sparkplug-host: MQTT username. The password is NEVER here — set NAUTILUS_MQTT_PASSWORD."
+          "description": "sparkplug-host: MQTT username. The password is NEVER here \u2014 set NAUTILUS_MQTT_PASSWORD."
         },
         "primary": {
           "type": "boolean",
@@ -360,7 +375,7 @@
             "2.x",
             "both"
           ],
-          "description": "sparkplug-host: which STATE certificate to publish — the Sparkplug 3.0 retained JSON (default), the legacy 2.x retained ONLINE/OFFLINE text, or both for a mixed fleet."
+          "description": "sparkplug-host: which STATE certificate to publish \u2014 the Sparkplug 3.0 retained JSON (default), the legacy 2.x retained ONLINE/OFFLINE text, or both for a mixed fleet."
         },
         "reorder-timeout": {
           "$ref": "#/definitions/duration",
@@ -380,7 +395,7 @@
             "ignore",
             "strict"
           ],
-          "description": "sparkplug-host: what to do with a metric on the wire the manifest does not bind — log it once with the YAML line to add (default), count it only, or report the driver degraded. Never silently dropped; the remedy is to re-run the import."
+          "description": "sparkplug-host: what to do with a metric on the wire the manifest does not bind \u2014 log it once with the YAML line to add (default), count it only, or report the driver degraded. Never silently dropped; the remedy is to re-run the import."
         },
         "rebirth-on-start": {
           "type": "boolean",

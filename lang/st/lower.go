@@ -278,8 +278,7 @@ func lowerFBBody(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[string]*i
 	def.Uses = bodyIR.DirectGlobalUses()
 
 	def.Step = func(inst *ir.FBInstance, ctx ir.FBStepCtx) error {
-		frame := &ir.Frame{Slots: inst.Slots}
-		return ir.Run(bodyIR, frame, ctx.Host)
+		return ir.Run(bodyIR, inst.StepFrame(), ctx.Host)
 	}
 	return nil
 }

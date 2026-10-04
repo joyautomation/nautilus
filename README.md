@@ -43,6 +43,8 @@ server/      tag API over HTTP: JSON snapshot, SSE stream, tag writes, alarms, p
 cmd/naut the developer CLI: new · run · test · check · build · pull · lsp · eip · sparkplug · historian · alarms
 hmi/         SvelteKit digital-twin component kit + realtime SSE client
 tools/vscode-iec/   VS Code extension: syntax, diagnostics, go-to-def, live values, diagram editors
+tools/jitter/       scan-loop lateness harness: the numbers behind docs/design/realtime.md
+rt/          harder real-time spikes beside the Go build (a Rust fast loop + shared-memory tag exchange)
 examples/    four real plant projects — lift-station, batch-skid, remote-fleet, go-sdk — see examples/README.md
 ```
 
@@ -779,11 +781,27 @@ rt, _ := runtime.New(runtime.Options{
 })
 ```
 
-Scans never overlap — tasks serialize on one lock, so every scan sees a
-consistent tag snapshot. The main task reads inputs and writes outputs;
-additional tasks compute against the store at their own pace, each with
-its own measured-`dt` tag and its own health in `Stats().Tasks` (rendered
-in the built-in dashboard and the HMI kit's `ScanDiagnostics`).
+Tasks run concurrently, and every scan still sees a consistent store:
+each scan copies its program's external tags in, executes privately, and
+commits what changed as one unit, so a fast task never waits behind a slow
+one and a reader never sees a scan half-done. Two tasks writing the same
+tag resolve by commit order (last wins), as on any PLC with shared
+globals — give a tag one owner. The main task reads inputs and writes
+outputs; additional tasks compute against the store at their own pace,
+each with its own measured-`dt` tag and its own health in `Stats().Tasks`
+(rendered in the built-in dashboard and the HMI kit's `ScanDiagnostics`).
+
+A task can also be placed: `cpu: 2` pins its thread to a core and
+`priority: 50` runs it under `SCHED_FIFO` (Linux; needs `CAP_SYS_NICE`).
+A request the OS refuses is logged and shown on the task's row as
+REFUSED, and the task runs normally — never a silent fallback. Measured
+honestly: pinning alone on a stock kernel with nothing else changed makes
+a fast task *worse*, because it can no longer move off a busy core; pin
+only together with an isolated core (`isolcpus=`) or a real-time
+priority. The dashboard's lateness block (late, overruns, missed,
+p50/p99/p99.9/max per task) is how you know. See the [scan timing
+guide](website/src/content/docs/guides/real-time.md) and
+`docs/design/realtime.md` for the measurements.
 
 **Every program online-edits, both directions.** Programs are addressed by
 POU name — `PROGRAM <Name>` is a program's identity. `GET /api/program`

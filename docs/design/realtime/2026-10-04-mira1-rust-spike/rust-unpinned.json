@@ -1,0 +1,1 @@
+{"tool":"nautilus rt/fastloop","hostname":"mira1","kernel":"6.16.3-76061603-generic","periodUs":1000,"cpu":null,"priority":0,"durationS":60.0,"scans":59997,"expected":60000,"thresholdUs":100,"late":269,"overruns":0,"missed":2,"stale":0,"p50Us":5.875,"p99Us":33,"p999Us":504,"maxUs":2438.159,"histogram":[0,0,19985,22717,14517,2348,161,96,114,50,7,2,0,0,0,0,0]}

@@ -169,6 +169,14 @@ type TaskConfig struct {
 	Program string   `yaml:"program"` // .st, .fbd, or .ld file in the project
 	Scan    Duration `yaml:"scan"`
 	DtTag   string   `yaml:"dt-tag"`
+	// LateThreshold is how late a scan may start before the diagnostics
+	// count it as late (runtime.Lateness). Default: a tenth of scan.
+	LateThreshold Duration `yaml:"late-threshold"`
+	// CPU pins this task's thread to one CPU (Linux); Priority > 0 asks
+	// for SCHED_FIFO at that priority (needs CAP_SYS_NICE). A pointer so
+	// that cpu: 0 is a request and an absent key is not.
+	CPU      *int `yaml:"cpu"`
+	Priority int  `yaml:"priority"`
 }
 
 // TagConfig declares one tag by role — the manifest form of runtime.TagDef.
@@ -267,6 +275,14 @@ func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
 	}
 	*d = Duration(v)
 	return nil
+}
+
+// cpuList is the runtime's affinity set for a manifest's single cpu: key.
+func cpuList(cpu *int) []int {
+	if cpu == nil {
+		return nil
+	}
+	return []int{*cpu}
 }
 
 // Project is a loaded manifest: everything runtime.New and server.New need.
@@ -559,6 +575,8 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	}
 	opts.Scan = time.Duration(main.Scan)
 	opts.DtTag = main.DtTag
+	opts.LateThreshold = time.Duration(main.LateThreshold)
+	opts.CPUs, opts.Priority = cpuList(main.CPU), main.Priority
 	for _, t := range m.Tasks[1:] {
 		src, err := readProgram(t)
 		if err != nil {
@@ -574,6 +592,11 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			Libraries: libs,
 			Scan:      time.Duration(t.Scan),
 			DtTag:     t.DtTag,
+			// A task without its own threshold inherits the main task's
+			// setting in runtime.New (Options.LateThreshold).
+			LateThreshold: time.Duration(t.LateThreshold),
+			CPUs:          cpuList(t.CPU),
+			Priority:      t.Priority,
 		})
 	}
 

@@ -43,10 +43,12 @@ type Options struct {
 	Tags []TagDef
 	// Tasks are additional programs on their own scan rates — IEC
 	// 61131-3's resource/task model (a fast interlock task beside a slow
-	// reporting task). All tasks share the tag store; scans serialize on
-	// one lock so every scan sees a consistent snapshot. The MAIN task
-	// (Program/Scan above) owns field I/O and remains the online-edit
-	// target; task programs are fixed at composition.
+	// reporting task). All tasks share the tag store and run concurrently:
+	// each scan snapshots its externals in, executes privately, and
+	// commits what changed as one unit (see scanview.go), so every scan
+	// sees a consistent store and a fast task never waits behind a slow
+	// one. The MAIN task (Program/Scan above) owns field I/O and remains
+	// the online-edit target; task programs are fixed at composition.
 	Tasks []Task
 	// Clock, when set, replaces the wall clock as the basis for scan dt and
 	// for the IEC timers' NowMs — the two clocks a program can observe. Nil
@@ -73,6 +75,22 @@ type Options struct {
 	// needs a per-scan refresh in its own right: a watchdog that must be
 	// re-armed, or a bus whose outputs decay without a rewrite.
 	AlwaysWriteOutputs bool
+	// LateThreshold is how far past its target a scan may START before it
+	// counts as late in Lateness (see ScanStats.Lateness). It applies to
+	// the main task and to every Task that does not set its own. Zero
+	// means a tenth of the task's scan interval: 10 ms on a 100 ms task,
+	// 100 µs on a 1 ms task.
+	LateThreshold time.Duration
+	// CPUs pins the main task's scan thread to these CPUs (Linux
+	// sched_setaffinity); empty leaves it to the scheduler. Priority > 0
+	// moves that thread to SCHED_FIFO at that priority (1–99), which needs
+	// CAP_SYS_NICE or an rtprio rlimit; a request the OS refuses is logged
+	// and reported in ScanStats.Sched, and the task runs normally. Tasks
+	// have the same two fields. See docs/design/realtime.md for what the
+	// kernel must be told (isolcpus, nohz_full, irqaffinity) before a
+	// pinned core is actually quiet.
+	CPUs     []int
+	Priority int
 	// Coordinator gates the scan loop for redundancy: a standby replica
 	// (IsLeader false) skips scans entirely — no field I/O, no logic — and
 	// performs the takeover sequence (reload retained state, reset program
@@ -89,6 +107,11 @@ type Task struct {
 	Libraries []string      // composed ahead of Program, like Options.Libraries
 	Scan      time.Duration // this task's interval (default 100ms)
 	DtTag     string        // optional measured-dt tag, like Options.DtTag
+	// LateThreshold overrides Options.LateThreshold for this task.
+	LateThreshold time.Duration
+	// CPUs and Priority pin this task's thread — see Options.CPUs.
+	CPUs     []int
+	Priority int
 }
 
 // TaskStats is one additional task's health, riding inside ScanStats.
@@ -99,6 +122,22 @@ type TaskStats struct {
 	LastMs      float64 `json:"lastMs"`
 	LogicErrors uint64  `json:"logicErrors"`
 	LastError   string  `json:"lastError,omitempty"`
+	// Lateness is this task's wake-up timing — see Lateness.
+	Lateness Lateness `json:"lateness"`
+	// Sched is what was asked of the OS scheduler for this task's thread
+	// and whether it was granted.
+	Sched SchedStats `json:"sched"`
+}
+
+// SchedStats reports a task's thread placement: the CPUs and SCHED_FIFO
+// priority configured, whether the OS granted them (Applied), and the
+// refusal if not — surfaced here because a controller that was MEANT to be
+// pinned and silently is not would be the worst kind of wrong.
+type SchedStats struct {
+	CPUs     []int  `json:"cpus,omitempty"`
+	Priority int    `json:"priority,omitempty"`
+	Applied  bool   `json:"applied"`
+	Error    string `json:"error,omitempty"`
 }
 
 // taskRun is a compiled Task plus its live scheduling state.
@@ -107,10 +146,13 @@ type taskRun struct {
 	prog  *Program
 	scan  time.Duration
 	dtTag string
+	cpus  []int
+	prio  int
 
 	mu       sync.Mutex
 	lastScan time.Time
 	stats    TaskStats
+	late     lateTracker // under mu, like stats
 }
 
 // TagMeta is HMI-facing tag documentation: a human description and the
@@ -138,19 +180,24 @@ type Runtime struct {
 	retainStore retain.Store
 	retainTags  []string
 	coord       Coordinator
+	cpus        []int // main task thread placement, see Options.CPUs
+	prio        int
 
 	// alwaysWrite / outGen / outSent implement the output push rule (see
 	// Options.AlwaysWriteOutputs): outGen is the tag store's output-write
 	// generation at the last SUCCESSFUL WriteOutputs, so a scan that finds
 	// the same stamp knows the driver already holds exactly these values.
-	// Atomic because takeover() clears outSent from outside scanMu.
+	// Atomic because takeover() clears outSent from outside mainMu.
 	alwaysWrite bool
 	outGen      atomic.Uint64
 	outSent     atomic.Bool
 
 	// inBuf is the delivery map an io.BatchReader driver refills each scan
-	// instead of allocating one. Touched only from Scan, under scanMu.
-	inBuf nio.Values
+	// instead of allocating one, and outBuf the map the output push is
+	// assembled in (drivers copy what they keep; see io.Driver). Touched
+	// only from Scan, under mainMu.
+	inBuf  nio.Values
+	outBuf nio.Values
 
 	// readOK is whether the LAST input read succeeded — the runtime's own
 	// contribution to per-tag quality (see Quality). Distinct from
@@ -172,13 +219,15 @@ type Runtime struct {
 	alarmMu sync.Mutex
 	alarms  retain.AlarmRetainer
 
-	// scanMu serializes scan execution across the main task and every
-	// additional task — a scan always sees a consistent tag snapshot.
-	scanMu sync.Mutex
+	// mainMu serializes the MAIN task's Scan — its I/O phases and the
+	// observers that follow — against a second caller of Scan. Additional
+	// tasks do not take it: each Program.Run isolates its own scan
+	// (scanview.go), so tasks never wait on one another.
+	mainMu sync.Mutex
 
-	// obsMu guards onScan/obsNext independently of scanMu: OnScan may be
+	// obsMu guards onScan/obsNext independently of mainMu: OnScan may be
 	// called (registration or cancel) from any goroutine at any time,
-	// including while a scan is in flight. scanMu still serializes the
+	// including while a scan is in flight. mainMu still serializes the
 	// CALLS to registered observers — see fireOnScan.
 	obsMu   sync.Mutex
 	obsNext uint64
@@ -187,6 +236,7 @@ type Runtime struct {
 	mu       sync.Mutex
 	lastScan time.Time
 	stats    ScanStats
+	late     lateTracker // the main task's, under mu like stats
 }
 
 // onScanEntry is one registered OnScan observer, identified by an id so
@@ -225,6 +275,14 @@ type ScanStats struct {
 
 	PeriodMs float64 `json:"periodMs"` // actual interval between scans
 	JitterMs float64 `json:"jitterMs"` // EWMA of |period − target|
+
+	// Lateness is the main task's wake-up timing: late-scan and overrun
+	// counters, the worst and percentile lateness, and a log-spaced
+	// histogram of it — cumulative since start. The soft-real-time view
+	// of the loop; PeriodMs/JitterMs above are the live one.
+	Lateness Lateness `json:"lateness"`
+	// Sched is the main task's thread placement — see SchedStats.
+	Sched SchedStats `json:"sched"`
 
 	// Retain-store failures surface here the way I/O failures do: a save
 	// that keeps erroring is invisible exactly until the restart that
@@ -300,9 +358,15 @@ func New(o Options) (*Runtime, error) {
 		if scan <= 0 {
 			scan = 100 * time.Millisecond
 		}
-		tr := &taskRun{name: name, prog: tprog, scan: scan, dtTag: td.DtTag}
+		tr := &taskRun{name: name, prog: tprog, scan: scan, dtTag: td.DtTag, cpus: td.CPUs, prio: td.Priority}
 		tr.stats.Name = name
+		tr.stats.Sched = SchedStats{CPUs: td.CPUs, Priority: td.Priority}
 		tr.stats.TargetMs = scan.Seconds() * 1000
+		lt := td.LateThreshold
+		if lt <= 0 {
+			lt = o.LateThreshold
+		}
+		tr.late.thresholdUs = lateThresholdS(lt.Seconds(), scan.Seconds()) * 1e6
 		tasks = append(tasks, tr)
 	}
 
@@ -367,6 +431,9 @@ func New(o Options) (*Runtime, error) {
 	// output generation Scan reads (see Tags.markOutputs).
 	tags.markOutputs(o.Outputs)
 	r.stats.TargetMs = o.Scan.Seconds() * 1000
+	r.late.thresholdUs = lateThresholdS(o.LateThreshold.Seconds(), o.Scan.Seconds()) * 1e6
+	r.cpus, r.prio = o.CPUs, o.Priority
+	r.stats.Sched = SchedStats{CPUs: o.CPUs, Priority: o.Priority}
 	r.stats.IOHealthy = true
 	r.stats.Recent = make([]float64, 0, historyLen)
 	r.stats.Periods = make([]float64, 0, historyLen)
@@ -376,17 +443,19 @@ func New(o Options) (*Runtime, error) {
 
 // OnScan registers fn to run at the end of every main-task Scan() — after
 // the program has executed and, if a driver is bound, after outputs have
-// been written to it — so fn observes the tag store exactly as this scan
-// left it. Registered observers run in registration order, synchronously,
-// still holding scanMu: nothing else can be mid-scan while fn runs, which
-// is what lets fn read the store through Tags without racing the next
-// scan. fn must NOT block (it shares the scan budget: a slow observer is a
-// slow scan) and must NOT write field tags (inputs for this cycle already
-// landed in the read phase; a write here would be invisible to the program
-// that just ran and only take effect next scan, which is not what "post-
-// scan" means). Reads are fine and safe — fn runs with scanMu held but NOT
-// t.mu, so Tags.ReadPath/ReadGlobal/Snapshot etc. all work without
-// deadlocking.
+// been written to it — so fn observes the tag store with this scan's
+// results committed. Registered observers run in registration order,
+// synchronously, still holding mainMu: the next main scan cannot start
+// while fn runs. The store only ever holds whole, committed scans (see
+// scanview.go), so fn never sees one half-done; an additional task may
+// commit between two of fn's reads, though — fn that wants one instant
+// takes it with Snapshot/SnapshotInto, one lock. fn must NOT block (it
+// shares the scan budget: a slow observer is a slow scan) and must NOT
+// write field tags (inputs for this cycle already landed in the read
+// phase; a write here would be invisible to the program that just ran and
+// only take effect next scan, which is not what "post-scan" means). Reads
+// are fine and safe — fn runs with mainMu held but NOT t.mu, so
+// Tags.ReadPath/ReadGlobal/Snapshot etc. all work without deadlocking.
 //
 // A panicking observer is recovered and logged rather than propagated: one
 // misbehaving observer (a bug in an alarm engine, say) must not fault the
@@ -423,10 +492,10 @@ func (r *Runtime) OnScan(fn func(*Tags)) (cancel func()) {
 }
 
 // fireOnScan runs every registered OnScan observer, in registration order.
-// Called from Scan() with scanMu already held (see the call site) — that is
+// Called from Scan() with mainMu already held (see the call site) — that is
 // the whole contract OnScan documents, so this only needs to snapshot the
 // observer list (registration can happen concurrently from any goroutine,
-// guarded by obsMu, independent of scanMu) and run it.
+// guarded by obsMu, independent of mainMu) and run it.
 func (r *Runtime) fireOnScan() {
 	r.obsMu.Lock()
 	if len(r.onScan) == 0 {
@@ -512,6 +581,13 @@ func unionGlobals(main *Program, tasks []*taskRun) map[string]*ir.Type {
 	}
 	for _, tr := range tasks {
 		for name, t := range tr.prog.Globals() {
+			if prev, dup := out[name]; dup && t != nil && t.Kind == ir.TypeFB && prev != nil && prev.Kind == ir.TypeFB {
+				// Tasks run concurrently and an FB instance is shared
+				// identity, not a copied value (scanview.go): two tasks
+				// stepping the same instance race on its state.
+				slog.Warn("runtime: function-block instance bound by more than one task; tasks run concurrently and will race on its state",
+					"tag", name, "task", tr.name)
+			}
 			out[name] = t
 		}
 	}
@@ -660,27 +736,88 @@ func (r *Runtime) Run(ctx context.Context) {
 	}
 	for _, tr := range r.tasks {
 		go func(tr *taskRun) {
-			t := time.NewTicker(tr.scan)
-			defer t.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-t.C:
-					r.scanTask(tr)
-				}
-			}
+			runLoop(ctx, tr.scan, func(due time.Time) { r.scanTaskAt(tr, due) }, func(k uint64) {
+				tr.mu.Lock()
+				tr.late.missed += k
+				tr.mu.Unlock()
+			}, func() {
+				err := applySched(tr.cpus, tr.prio)
+				tr.mu.Lock()
+				tr.stats.Sched = schedResult(tr.cpus, tr.prio, err)
+				tr.mu.Unlock()
+				logSched(tr.name, tr.cpus, tr.prio, err)
+			})
 		}(tr)
 	}
-	t := time.NewTicker(r.scan)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			r.Scan()
+	runLoop(ctx, r.scan, r.scanAt, func(k uint64) {
+		r.mu.Lock()
+		r.late.missed += k
+		r.mu.Unlock()
+	}, func() {
+		err := applySched(r.cpus, r.prio)
+		r.mu.Lock()
+		r.stats.Sched = schedResult(r.cpus, r.prio, err)
+		r.mu.Unlock()
+		logSched(MainTaskName, r.cpus, r.prio, err)
+	})
+}
+
+// schedResult is the SchedStats for a placement request and its outcome.
+func schedResult(cpus []int, prio int, err error) SchedStats {
+	s := SchedStats{CPUs: cpus, Priority: prio, Applied: err == nil && (len(cpus) > 0 || prio > 0)}
+	if err != nil {
+		s.Error = err.Error()
+	}
+	return s
+}
+
+// logSched reports a placement request's outcome: nothing when nothing was
+// asked, Info when granted, Error when refused — loudly, because a task
+// that was meant to be pinned and is not is a configuration that lies.
+func logSched(task string, cpus []int, prio int, err error) {
+	if len(cpus) == 0 && prio == 0 {
+		return
+	}
+	if err != nil {
+		slog.Error("runtime: task scheduling request refused", "task", task, "cpus", cpus, "priority", prio, "error", err)
+		return
+	}
+	slog.Info("runtime: task thread placed", "task", task, "cpus", cpus, "priority", prio)
+}
+
+// runLoop calls scan once per period on an ABSOLUTE schedule — slot n is
+// due at start + n·period, whatever happened to slot n−1 — until ctx is
+// done. A scan that wakes late does not push the next one later: the
+// following sleep is just shorter. A loop that falls more than a whole
+// period behind (an overrun, a stall) skips the slots it has lost, reports
+// them through missed, and resumes on the next future slot rather than
+// firing a burst of catch-up scans. scan receives the slot it is running
+// for, so its lateness can be measured against the schedule itself. The
+// sleep itself is the platform's: sleep_linux.go, sleep_other.go.
+//
+// This replaces time.Ticker, whose ticks at a 1 ms period were measured
+// arriving one wake-up latency after the PREVIOUS tick rather than on the
+// schedule: the schedule drifted ~65 µs a tick and 4–6 % of ticks were
+// dropped on an idle desktop. See docs/design/realtime.md, finding F1.
+func runLoop(ctx context.Context, period time.Duration, scan func(due time.Time), missed func(uint64), setup func()) {
+	defer loopThread()()
+	if setup != nil {
+		setup() // on the locked thread: affinity and priority stick to it
+	}
+	start := time.Now()
+	for n := int64(1); ; n++ {
+		next := start.Add(time.Duration(n) * period)
+		if behind := -time.Until(next); behind > 0 {
+			if k := int64(behind / period); k > 0 {
+				n += k
+				next = start.Add(time.Duration(n) * period)
+				missed(uint64(k))
+			}
 		}
+		if !sleepUntil(ctx, next) {
+			return
+		}
+		scan(next)
 	}
 }
 
@@ -699,7 +836,11 @@ func (r *Runtime) ScanTask(name string) error {
 // scanTask runs one cycle of an additional task: measured dt in, program
 // against the shared tag store, stats out. No driver I/O — the main task
 // owns the field seam; tasks compute on the store at their own rates.
-func (r *Runtime) scanTask(tr *taskRun) {
+func (r *Runtime) scanTask(tr *taskRun) { r.scanTaskAt(tr, time.Time{}) }
+
+// scanTaskAt is scanTask with the slot the scan was due at (zero when the
+// caller is not Run's scheduler), for the lateness sample.
+func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
 	if !r.gate() {
 		return
 	}
@@ -707,22 +848,27 @@ func (r *Runtime) scanTask(tr *taskRun) {
 	now := r.now(t0) // dt basis: the injected clock under test, else t0
 	tr.mu.Lock()
 	dt := tr.scan.Seconds()
-	if !tr.lastScan.IsZero() {
+	first := tr.lastScan.IsZero()
+	if !first {
 		dt = now.Sub(tr.lastScan).Seconds()
 	}
 	tr.lastScan = now
 	tr.mu.Unlock()
 
-	r.scanMu.Lock()
+	// No resource-wide lock: Program.Run isolates this scan on its own
+	// (snapshot in, commit out), so a task never waits for another.
 	if tr.dtTag != "" {
 		r.tags.SetReal(tr.dtTag, dt)
 	}
 	err := tr.prog.Run(r.tags)
-	r.scanMu.Unlock()
 
+	execS := time.Since(t0).Seconds()
 	tr.mu.Lock()
 	tr.stats.Count++
-	tr.stats.LastMs = time.Since(t0).Seconds() * 1000
+	tr.stats.LastMs = execS * 1000
+	if !first {
+		tr.late.record(lateUs(t0, due, dt, tr.scan), execS > tr.scan.Seconds())
+	}
 	if err != nil {
 		tr.stats.LogicErrors++
 		tr.stats.LastError = err.Error()
@@ -735,7 +881,11 @@ func (r *Runtime) scanTask(tr *taskRun) {
 // (tests, a custom scheduler, or a redundancy standby stepping in sync).
 // A standby replica returns immediately — suppression by not scanning at
 // all, so a stale replica can never write an output.
-func (r *Runtime) Scan() {
+func (r *Runtime) Scan() { r.scanAt(time.Time{}) }
+
+// scanAt is Scan with the slot the scan was due at (zero when the caller
+// is not Run's scheduler), for the lateness sample.
+func (r *Runtime) scanAt(due time.Time) {
 	if !r.gate() {
 		return
 	}
@@ -750,9 +900,10 @@ func (r *Runtime) Scan() {
 	r.lastScan = now
 	r.mu.Unlock()
 
-	// The whole cycle excludes other tasks — one consistent tag snapshot.
-	r.scanMu.Lock()
-	defer r.scanMu.Unlock()
+	// One main scan at a time (I/O buffers, observers); additional tasks
+	// run alongside, each isolated by its own Program.Run.
+	r.mainMu.Lock()
+	defer r.mainMu.Unlock()
 
 	// 1. inputs — on a read failure the scan runs on last-known values.
 	var ioErr error
@@ -800,7 +951,10 @@ func (r *Runtime) Scan() {
 			// Compound values (UDTs, arrays) cross the seam as ir.Value so
 			// typed drivers keep field names and integer widths; scalars
 			// stay plain Go values for simple drivers.
-			out := make(nio.Values, len(r.outputs))
+			if r.outBuf == nil {
+				r.outBuf = make(nio.Values, len(r.outputs))
+			}
+			out := r.outBuf
 			r.tags.readMany(r.outputs, out)
 			if err := r.driver.WriteOutputs(out); err != nil {
 				if ioErr == nil {
@@ -817,16 +971,28 @@ func (r *Runtime) Scan() {
 	}
 	t3 := time.Now()
 
-	// 4. observers — the store now holds exactly what this scan left it
-	// (program ran, outputs written), and nothing else can be scanning
-	// (scanMu is still held). See OnScan's doc comment for the contract.
+	// 4. observers — the store now holds what this scan committed (program
+	// ran, outputs written), and no other MAIN scan can start (mainMu is
+	// still held). See OnScan's doc comment for the contract.
 	r.fireOnScan()
 
-	r.recordScan(t0, t1, t2, t3, dt, first, ioErr, logicErr)
+	r.recordScan(t0, t1, t2, t3, dt, first, ioErr, logicErr, lateUs(t0, due, dt, r.scan))
+}
+
+// lateUs is one lateness sample: the scan's start against its slot when
+// Run supplied one, else period − target (see Lateness).
+func lateUs(t0, due time.Time, periodS float64, target time.Duration) float64 {
+	if !due.IsZero() {
+		if l := t0.Sub(due); l > 0 {
+			return float64(l) / 1e3
+		}
+		return 0
+	}
+	return (periodS - target.Seconds()) * 1e6
 }
 
 // recordScan folds one cycle's timings into the diagnostics.
-func (r *Runtime) recordScan(t0, t1, t2, t3 time.Time, periodS float64, first bool, ioErr, logicErr error) {
+func (r *Runtime) recordScan(t0, t1, t2, t3 time.Time, periodS float64, first bool, ioErr, logicErr error, lateUs float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s := &r.stats
@@ -862,6 +1028,7 @@ func (r *Runtime) recordScan(t0, t1, t2, t3 time.Time, periodS float64, first bo
 			s.JitterMs = s.JitterMs*0.95 + j*0.05
 		}
 		s.Periods = pushSample(s.Periods, periodMs)
+		r.late.record(lateUs, scanMs > s.TargetMs)
 	}
 	s.Recent = pushSample(s.Recent, scanMs)
 	b := int(scanMs / histBucketMs)
@@ -900,10 +1067,13 @@ func (r *Runtime) Stats() ScanStats {
 	s.Recent = append([]float64(nil), r.stats.Recent...)
 	s.Periods = append([]float64(nil), r.stats.Periods...)
 	s.Histogram = append([]int(nil), r.stats.Histogram...)
+	s.Lateness = r.late.snapshot()
 	r.mu.Unlock()
 	for _, tr := range r.tasks {
 		tr.mu.Lock()
-		s.Tasks = append(s.Tasks, tr.stats)
+		ts := tr.stats
+		ts.Lateness = tr.late.snapshot()
+		s.Tasks = append(s.Tasks, ts)
 		tr.mu.Unlock()
 	}
 	return s

@@ -1,0 +1,17 @@
+name: rt — Rust spikes
+# Builds and tests the Phase 3 Rust spikes under rt/. They are not part of
+# the Go build; this only keeps them compiling.
+on:
+  push: {branches: [main], paths: ['rt/**', '.github/workflows/rust.yml']}
+  pull_request: {paths: ['rt/**', '.github/workflows/rust.yml']}
+jobs:
+  fastloop:
+    runs-on: ubuntu-latest
+    defaults: {run: {working-directory: rt/fastloop}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked
+      - run: cargo clippy --release -- -D warnings
+      # Two seconds of the loop on a hosted runner: wiring, not numbers.
+      - run: ./target/release/nautilus-fastloop --duration-s 2 --shm /tmp/nautilus-rt-ci

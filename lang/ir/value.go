@@ -21,6 +21,20 @@ type Value struct {
 type FBInstance struct {
 	Def   *FBDef
 	Slots []Value
+	// frame is the body's execution frame over Slots, kept across steps so
+	// its scratch stack (see Frame) warms up once. See StepFrame.
+	frame *Frame
+}
+
+// StepFrame returns the frame a user-defined FB's body runs in: a view over
+// the instance's own Slots, created once and reused on every step. If the
+// slots were replaced (an online edit migrated the instance) a fresh one
+// is built, so the frame can never outlive the storage it indexes.
+func (inst *FBInstance) StepFrame() *Frame {
+	if inst.frame == nil || len(inst.Slots) == 0 || len(inst.frame.Slots) != len(inst.Slots) || &inst.frame.Slots[0] != &inst.Slots[0] {
+		inst.frame = &Frame{Slots: inst.Slots}
+	}
+	return inst.frame
 }
 
 // Constructors (keep the call sites concise).
