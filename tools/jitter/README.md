@@ -39,11 +39,15 @@ histogram.
 
 Definitions (the same ones `runtime.Lateness` uses):
 
-- **lateness** = period − target for each scan, cumulative since start,
-  cold start included. Percentiles are bucket upper edges, at most 3.2 %
-  above the true value — a quoted p99 is a bound.
+- **lateness** = how late each scan started against its slot on the
+  loop's absolute schedule (slot n is due at start + n·period), cumulative
+  since start, cold start included. Percentiles are bucket upper edges, at
+  most 3.2 % above the true value — a quoted p99 is a bound.
 - **late** = lateness > threshold (`-threshold`, default a tenth of the
   task's period).
 - **overruns** = scans whose execution took longer than the period.
+- **missed** = slots the loop skipped after falling a whole period behind
+  (an overrun, a stall): scans that should have run and did not. `ran / due`
+  in the table is the same fact from the outside.
 
 Stdlib only, like the runtime it measures.

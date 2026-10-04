@@ -485,15 +485,15 @@ func markdown(r *report, elapsed time.Duration) string {
 		fmt.Fprintf(&b, "; Go-side churn %.0f MB/s", c.ChurnMBps)
 	}
 	b.WriteString(".\n\n")
-	b.WriteString("| task | target | scans (ran / due) | late (> target + thr) | overruns | p50 | p99 | p99.9 | max |\n")
-	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|\n")
+	b.WriteString("| task | target | scans (ran / due) | late (> target + thr) | overruns | missed | p50 | p99 | p99.9 | max |\n")
+	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	for _, t := range r.Tasks {
 		pct := 0.0
 		if t.Scans > 0 {
 			pct = 100 * float64(t.Late) / float64(t.Scans)
 		}
-		fmt.Fprintf(&b, "| %s | %s | %d / %d | %d (%.2f %%, thr %s) | %d | %s | %s | %s | %s |\n",
-			t.Name, fmtMs(t.TargetMs), t.Scans, t.Expected, t.Late, pct, fmtMs(t.ThresholdMs), t.Overruns,
+		fmt.Fprintf(&b, "| %s | %s | %d / %d | %d (%.2f %%, thr %s) | %d | %d | %s | %s | %s | %s |\n",
+			t.Name, fmtMs(t.TargetMs), t.Scans, t.Expected, t.Late, pct, fmtMs(t.ThresholdMs), t.Overruns, t.Missed,
 			fmtUs(t.P50Us), fmtUs(t.P99Us), fmtUs(t.P999Us), fmtUs(t.MaxUs))
 	}
 	fmt.Fprintf(&b, "\nGC: %d collections, %.1f ms total stop-the-world, pause p50 %s · p99 %s · max %s, heap %.1f MB.\n",
@@ -527,7 +527,7 @@ func markdown(r *report, elapsed time.Duration) string {
 			b.WriteString("\n")
 		}
 	}
-	b.WriteString("\nLateness = (period − target) per scan, cumulative since start, cold start included. Percentiles are bucket upper edges (≤ 3.2 % above the true value). Overruns = scans whose execution exceeded the period.\n")
+	b.WriteString("\nLateness = how late each scan started against its slot on the absolute schedule, cumulative since start, cold start included. Percentiles are bucket upper edges (≤ 3.2 % above the true value). Overruns = scans whose execution exceeded the period; missed = slots the loop skipped after falling a whole period behind.\n")
 	return b.String()
 }
 

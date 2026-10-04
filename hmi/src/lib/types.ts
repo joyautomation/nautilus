@@ -139,8 +139,10 @@ export interface Lateness {
 	thresholdMs: number;
 	/** Scans that started more than thresholdMs late. */
 	late: number;
-	/** Scans whose execution outran the period (a tick was dropped). */
+	/** Scans whose execution outran the period. */
 	overruns: number;
+	/** Scan slots the loop skipped after falling a whole period behind. */
+	missed: number;
 	lastUs: number;
 	maxUs: number;
 	/** Percentiles over every scan so far, as bucket upper edges (≤ 3.2 % high). */

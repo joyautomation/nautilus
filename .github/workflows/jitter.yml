@@ -1,0 +1,63 @@
+name: Scan lateness — jitter harness
+# Runs tools/jitter and keeps the reports as artifacts. On GitHub's hosted
+# runners the numbers are RELATIVE only — shared VMs, noisy neighbours, a
+# kernel we don't choose — so this is a regression guard and a before/after
+# on the same runner class, never a figure to publish. The publishable
+# baselines come from the self-hosted boxes (docs/design/realtime.md): add
+# their labels to the matrix once they are registered as runners.
+on:
+  schedule:
+    - cron: '30 6 * * *' # 06:30 UTC, after the rig nightly
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: run length per configuration (Go duration)
+        default: 2m
+jobs:
+  jitter:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest]
+        # runner: [ubuntu-latest, [self-hosted, linux, rt-bench]]
+    runs-on: ${{ matrix.runner }}
+    env:
+      GOTOOLCHAIN: local
+      DURATION: ${{ github.event.inputs.duration || '2m' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.24'}
+      - run: go build -o jitter ./tools/jitter
+      - name: A — fast tasks alone
+        run: ./jitter -duration "$DURATION" -slow 0 -alloc 0 -out out/A-fast-only -note "GitHub runner ${{ runner.name }} (${{ runner.os }} ${{ runner.arch }})"
+      - name: B — full mix
+        run: ./jitter -duration "$DURATION" -out out/B-full-mix -note "GitHub runner ${{ runner.name }}"
+      - name: C — fast + allocation task
+        run: ./jitter -duration "$DURATION" -slow 0 -out out/C-fast-plus-alloc -note "GitHub runner ${{ runner.name }}"
+      - name: Summary
+        run: |
+          for f in out/*/report.md; do
+            echo "### $(basename "$(dirname "$f")")" >> "$GITHUB_STEP_SUMMARY"
+            sed -n '/^| task/,/^$/p' "$f" >> "$GITHUB_STEP_SUMMARY"
+            grep '^GC:' "$f" >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+          done
+      # Regression guard, deliberately loose for a hosted VM: the fast tasks
+      # alone must run at least 99 % of their due scans. Finding F1 (the
+      # ticker drift) lost 4–6 % on an idle desktop; this catches a return.
+      - name: Guard — fast task runs ≥ 99 % of its scans
+        run: |
+          python3 - <<'PY'
+          import json, sys
+          r = json.load(open("out/A-fast-only/report.json"))
+          main = r["tasks"][0]
+          ratio = main["scans"] / main["expected"]
+          print(f"main: {main['scans']} / {main['expected']} = {ratio:.4f}")
+          sys.exit(0 if ratio >= 0.99 else 1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jitter-${{ matrix.runner }}-${{ github.run_id }}
+          path: out/
