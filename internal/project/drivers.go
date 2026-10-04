@@ -8,7 +8,11 @@ import (
 	"github.com/joyautomation/nautilus/eip"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/prom"
+	"github.com/joyautomation/nautilus/redfish"
+	"github.com/joyautomation/nautilus/replay"
 	"github.com/joyautomation/nautilus/server"
+	"github.com/joyautomation/nautilus/snmp"
 	"github.com/joyautomation/nautilus/sparkplug"
 	sphost "github.com/joyautomation/nautilus/sparkplug/host"
 )
@@ -46,6 +50,14 @@ func driverStatusFuncs(d nio.Driver) []func() server.DriverStatus {
 		return []func() server.DriverStatus{func() server.DriverStatus { return hostStatus(drv.Status()) }}
 	case *modbus.Driver:
 		return []func() server.DriverStatus{func() server.DriverStatus { return modbusStatus(drv.Health()) }}
+	case *snmp.Driver:
+		return []func() server.DriverStatus{func() server.DriverStatus { return hwStatus(drv.Health()) }}
+	case *redfish.Driver:
+		return []func() server.DriverStatus{func() server.DriverStatus { return hwStatus(drv.Health()) }}
+	case *prom.Driver:
+		return []func() server.DriverStatus{func() server.DriverStatus { return hwStatus(drv.Health()) }}
+	case *replay.Driver:
+		return []func() server.DriverStatus{func() server.DriverStatus { return replayStatus(drv.Health()) }}
 	case *nio.Multi:
 		var out []func() server.DriverStatus
 		for _, c := range drv.Children() {
@@ -532,4 +544,33 @@ func agoText(ms int64) string {
 	default:
 		return fmt.Sprintf("%.0fh", d.Hours()) // 2h
 	}
+}
+
+// replayStatus is a recording being played back. Only what changes when
+// someone acts is in it (speed, pause, a loaded or failed recording); the
+// clock's position moves every scan, so it rides as a Volatile metric and
+// never pushes the block onto a delta stream by itself.
+func replayStatus(h replay.Health) server.DriverStatus {
+	s := server.DriverStatus{Kind: "replay", Name: "replay", Detail: h.History, LastError: h.LastError}
+	switch {
+	case h.Loaded && h.Paused:
+		s.State, s.Message = "connected", "Paused"
+	case h.Loaded:
+		s.State, s.Message = "connected", fmt.Sprintf("Replaying at %g×", h.Speed)
+	case h.LastError != "":
+		s.State, s.Message = "error", "Recording not loaded"
+	default:
+		s.State, s.Message = "connecting", "Loading the recording"
+	}
+	s.Metrics = []server.DriverMetric{
+		{Label: "tags", Value: float64(h.Tags), Text: fmt.Sprintf("%d / %d recorded", h.Matched, h.Tags)},
+		{Label: "series", Value: float64(h.Series)},
+		{Label: "speed", Value: h.Speed},
+	}
+	if h.Loaded {
+		s.Metrics = append(s.Metrics,
+			server.DriverMetric{Label: "at", Value: float64(h.AtS), Text: time.Unix(h.AtS, 0).UTC().Format("2006-01-02 15:04Z"), Volatile: true},
+			server.DriverMetric{Label: "loops", Value: float64(h.Loops), Volatile: true})
+	}
+	return s
 }

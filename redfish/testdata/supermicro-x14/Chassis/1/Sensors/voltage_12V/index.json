@@ -1,0 +1,14 @@
+{
+    "@odata.type": "#Sensor.v1_7_0.Sensor",
+    "Id": "voltage_12V",
+    "Name": "12V",
+    "Reading": 12.08,
+    "ReadingUnits": "V",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "ReadingType": "Voltage",
+    "PhysicalContext": "VoltageRegulator",
+    "@odata.id": "/redfish/v1/Chassis/1/Sensors/voltage_12V"
+}

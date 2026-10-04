@@ -1,0 +1,968 @@
+{
+	"profile": "supermicro-sys-112b-fwt",
+	"name": "Supermicro SYS-112B-FWT",
+	"chassis": "CSE-515B-R000WNP2",
+	"board": "X14SBW-TF",
+	"units": "mm",
+	"frame": "As the -WR profile: origin at the bottom centre of the FRONT face, +x right looking at the front, +y up, +z out of the front; the chassis runs from z = 0 back to z = -depth. This is a FRONT-I/O chassis: the PSUs, LAN1/LAN2, the BMC port, COM, USB, VGA and all three expansion-slot openings are on the front face; the rear is a blank vented panel with the service tag.",
+	"sources": {
+		"spec": "supermicro.com SYS-112B-FWT: 1U, 436.88 x 44.5 x 429.3 mm, 2 internal fixed 2.5in NVMe/SATA bays, 2 x M.2 PCIe 5.0 x2 (2280/22110), 2 x FHFL + 1 x LP PCIe x16, up to 6 x 4 cm fans, 2 x 800 W 1+1 redundant PSU",
+		"qrg": "MNL-2726-QRG-100 (system) front photo: left to right AC Power Supply 2, AC Power Supply 1, power button with status LED above COM1, dedicated IPMI LAN above USB, LAN1, LAN2, VGA, slot 3 (LP) above the LAN/VGA block, slots 1 (upper) and 2 (lower) FHFL at the right. MNL-2675-QRG-110 (board): DIMMs in two banks of four flanking the socket, FAN1-FAN6 headers on the edge away from the I/O, JM2_1/JM2_2 on the left edge, rear I/O order COM1, BMC_LAN, USB0/1, LAN1, LAN2, VGA, UID",
+		"inventory": "A deployed node, 2026-10-04: dmidecode slots M.2-C1 (bus 34, nvme1) and M.2-C2 (bus 35, nvme0) in use; RSC-W-66G5 SLOT1 x16 in use (Mellanox ConnectX-6 Lx, 2 x SFP28, bus 84), RSC-W-66G5 SLOT2 x16 free, RSC-WR-6G5-UP SLOT1 x16 LP free; DIMMA1/C1/E1/G1 32 GB each; IPMI PS1/PS2 Status present on every node; FAN1-FAN6 all reporting; onboard Intel X550 LAN1/LAN2 (bus 36)",
+		"unverified": "NOT MEASURED. Front-face x positions are scaled from the QRG front photo (about 1.45 px/mm); every depth (z) is inferred: the board's I/O edge at the front, fans behind the board, the two internal 2.5in bays at the rear right. Which riser slot is the UPPER opening (chassis slot 1 vs 2) is assumed SLOT1 = upper. M.2 positions are from the board diagram. Fan order left to right is assumed FAN1..FAN6 following the headers. Nobody is on site; refine from a photo with the lid off when one is available.",
+		"ipmi": "`ipmi` on a part or sensor is the BMC's IPMI sensor name for it (ipmi_exporter's `name` label), read on node1 2026-10-04. M2_SSD1 \u2194 M.2-C1 is assumed, not checked."
+	},
+	"size": [
+		437,
+		44.5,
+		429
+	],
+	"shell": {
+		"wall": 1,
+		"lid": 1,
+		"floor": 1,
+		"bezel": 0,
+		"color": "#2b2d30",
+		"metalness": 0.25
+	},
+	"boardPlate": {
+		"pos": [
+			54,
+			5,
+			-165
+		],
+		"size": [
+			312,
+			1.6,
+			330
+		]
+	},
+	"fixtures": [
+		{
+			"id": "io-block",
+			"name": "Front I/O block (COM1, BMC, USB, LAN1/2, VGA)",
+			"pos": [
+				-20,
+				22,
+				-20
+			],
+			"size": [
+				120,
+				36,
+				38
+			]
+		}
+	],
+	"explodeLid": [
+		0,
+		160,
+		0
+	],
+	"anchors": {
+		"lid": {
+			"pos": [
+				0,
+				44.5,
+				-215
+			],
+			"normal": [
+				0,
+				1,
+				0
+			],
+			"up": [
+				0,
+				0,
+				-1
+			],
+			"size": 100,
+			"payload": "url",
+			"note": "Bench: a 100 mm label on the lid, top edge toward the rear. Hidden once racked."
+		},
+		"front-blank": {
+			"pos": [
+				140,
+				4,
+				0.5
+			],
+			"normal": [
+				0,
+				0,
+				1
+			],
+			"up": [
+				0,
+				1,
+				0
+			],
+			"size": 8,
+			"payload": "NAUT:{node}",
+			"note": "Racked: the front face is all ports and slot openings; only the thin strip under slot 2 is free, so a small code there. Unverified."
+		}
+	},
+	"types": {
+		"server": {
+			"type": "Server",
+			"members": [
+				"Online",
+				"PowerOn",
+				"Health",
+				"Fault",
+				"Model",
+				"Serial",
+				"InletTempC",
+				"PowerW"
+			]
+		},
+		"drive": {
+			"type": "Drive",
+			"members": [
+				"Bay",
+				"Name",
+				"Model",
+				"Serial",
+				"CapacityGB",
+				"Protocol",
+				"MediaType",
+				"Health",
+				"Fault",
+				"PredictedFailure",
+				"TempC",
+				"Present"
+			]
+		},
+		"pcie-card": {
+			"type": "PCIeDevice",
+			"members": [
+				"Slot",
+				"Name",
+				"Model",
+				"Manufacturer",
+				"Firmware",
+				"Health",
+				"Fault",
+				"Ports",
+				"TempC"
+			]
+		},
+		"dimm": {
+			"type": "DIMM",
+			"members": [
+				"Locator",
+				"CapacityGB",
+				"Manufacturer",
+				"PartNumber",
+				"Health",
+				"Fault",
+				"TempC"
+			]
+		},
+		"cpu": {
+			"type": "CPU",
+			"members": [
+				"Model",
+				"Cores",
+				"Health",
+				"Fault",
+				"TempC",
+				"Pct"
+			]
+		},
+		"fan": {
+			"type": "Fan",
+			"members": [
+				"Name",
+				"Present",
+				"RPM",
+				"Pct",
+				"Fault"
+			]
+		},
+		"psu": {
+			"type": "PSU",
+			"members": [
+				"Name",
+				"Present",
+				"Fault",
+				"InputOk",
+				"InputV",
+				"OutputW",
+				"CapacityW"
+			]
+		},
+		"port": {
+			"type": "NetPort",
+			"members": [
+				"Name",
+				"LinkUp",
+				"SpeedGbps",
+				"MAC"
+			]
+		}
+	},
+	"limits": {
+		"drive:nvme": [
+			70,
+			75
+		],
+		"drive:sata": [
+			60,
+			70
+		],
+		"dimm": [
+			80,
+			85
+		],
+		"cpu": [
+			95,
+			100
+		],
+		"pcie-card": [
+			90,
+			100
+		]
+	},
+	"limitsNote": "Copied from the -WR profile; a deployed BMC's own setpoints have not been read yet.",
+	"sensors": [
+		{
+			"id": "system",
+			"name": "System",
+			"tag": "{node}_Temp_System",
+			"pos": [
+				120,
+				8,
+				-250
+			],
+			"ipmi": "System Temp"
+		},
+		{
+			"id": "peripheral",
+			"name": "Peripheral",
+			"tag": "{node}_Temp_Peripheral",
+			"pos": [
+				-60,
+				8,
+				-250
+			],
+			"ipmi": "Peripheral Temp"
+		},
+		{
+			"id": "nic",
+			"name": "NIC (X550)",
+			"tag": "{node}_Temp_NIC",
+			"pos": [
+				0,
+				10,
+				-60
+			],
+			"ipmi": "NIC Temp"
+		},
+		{
+			"id": "vrm",
+			"name": "CPU VRM",
+			"tag": "{node}_Temp_CPU_VRMIN",
+			"pos": [
+				54,
+				10,
+				-120
+			],
+			"ipmi": "CPU_VRMIN Temp"
+		},
+		{
+			"id": "dimmAD",
+			"name": "DIMM A-D",
+			"tag": "{node}_Temp_DIMMA_D",
+			"pos": [
+				107,
+				38,
+				-190
+			],
+			"ipmi": "DIMMA~D Temp"
+		},
+		{
+			"id": "dimmEH",
+			"name": "DIMM E-H",
+			"tag": "{node}_Temp_DIMME_H",
+			"pos": [
+				13,
+				38,
+				-190
+			],
+			"ipmi": "DIMME~H Temp"
+		}
+	],
+	"sensorsNote": "Names are the BMC's IPMI sensor names on these nodes (CPU Temp, System Temp, Peripheral Temp, NIC Temp, M2_SSD1/2 Temp, CPU_VRMIN Temp, AOC_NIC1 Temp, DIMMA~D Temp, DIMME~H Temp). CPU, M.2 and AOC temperatures belong to their parts. Positions are guesses.",
+	"population": {
+		"dimm": [
+			[
+				"A1"
+			],
+			[
+				"A1",
+				"C1",
+				"E1",
+				"G1"
+			],
+			[
+				"A1",
+				"B1",
+				"C1",
+				"D1",
+				"E1",
+				"F1",
+				"G1",
+				"H1"
+			]
+		]
+	},
+	"bindings": {
+		"chassis": "{node}",
+		"m2c1": "{node}_Drive_M2C1",
+		"m2c2": "{node}_Drive_M2C2",
+		"bay0": "{node}_Drive_SATA0",
+		"bay1": "{node}_Drive_SATA1",
+		"fan1": "{node}_Fan1",
+		"fan2": "{node}_Fan2",
+		"fan3": "{node}_Fan3",
+		"fan4": "{node}_Fan4",
+		"fan5": "{node}_Fan5",
+		"fan6": "{node}_Fan6",
+		"cpu1": "{node}_Cpu1",
+		"dimmA1": "{node}_Dimm_A1",
+		"dimmB1": "{node}_Dimm_B1",
+		"dimmC1": "{node}_Dimm_C1",
+		"dimmD1": "{node}_Dimm_D1",
+		"dimmE1": "{node}_Dimm_E1",
+		"dimmF1": "{node}_Dimm_F1",
+		"dimmG1": "{node}_Dimm_G1",
+		"dimmH1": "{node}_Dimm_H1",
+		"slot1": "{node}_Pcie_Slot1",
+		"slot2": "{node}_Pcie_Slot2",
+		"slot3": "{node}_Pcie_Slot3",
+		"psu1": "{node}_PSU1",
+		"psu2": "{node}_PSU2",
+		"slot1p1": "{node}_Nic_Slot1_P1",
+		"slot1p2": "{node}_Nic_Slot1_P2",
+		"lan1": "{node}_Nic_LAN1",
+		"lan2": "{node}_Nic_LAN2",
+		"bmc": "{node}_Nic_BMC"
+	},
+	"parts": [
+		{
+			"id": "psu2",
+			"kind": "psu",
+			"slot": "AC Power Supply 2 (front, leftmost)",
+			"pos": [
+				-182,
+				21,
+				-140
+			],
+			"size": [
+				52,
+				40,
+				280
+			],
+			"explode": [
+				0,
+				0,
+				240
+			],
+			"ipmi": "PS2 Status"
+		},
+		{
+			"id": "psu1",
+			"kind": "psu",
+			"slot": "AC Power Supply 1 (front)",
+			"pos": [
+				-127,
+				21,
+				-140
+			],
+			"size": [
+				52,
+				40,
+				280
+			],
+			"explode": [
+				0,
+				0,
+				240
+			],
+			"ipmi": "PS1 Status"
+		},
+		{
+			"id": "bmc",
+			"kind": "port",
+			"slot": "Dedicated IPMI LAN (front)",
+			"port": "BMC",
+			"pos": [
+				-46,
+				31,
+				-5
+			],
+			"size": [
+				14,
+				12,
+				10
+			],
+			"ratedGbps": 1,
+			"jack": "rj45",
+			"short": "BMC",
+			"role": "management"
+		},
+		{
+			"id": "lan1",
+			"kind": "port",
+			"slot": "LAN1 (onboard X550, front)",
+			"port": "LAN1",
+			"pos": [
+				-15,
+				20,
+				-5
+			],
+			"size": [
+				14,
+				12,
+				10
+			],
+			"ratedGbps": 10,
+			"jack": "rj45",
+			"short": "LAN1"
+		},
+		{
+			"id": "lan2",
+			"kind": "port",
+			"slot": "LAN2 (onboard X550, front)",
+			"port": "LAN2",
+			"pos": [
+				9,
+				20,
+				-5
+			],
+			"size": [
+				14,
+				12,
+				10
+			],
+			"ratedGbps": 10,
+			"jack": "rj45",
+			"short": "LAN2"
+		},
+		{
+			"id": "slot3",
+			"kind": "pcie-card",
+			"slot": "Slot 3: RSC-WR-6G5-UP SLOT1 PCIe 5.0 x16 LP (front, upper left)",
+			"pos": [
+				40,
+				33,
+				-90
+			],
+			"size": [
+				69,
+				12,
+				168
+			],
+			"explode": [
+				0,
+				60,
+				0
+			],
+			"lanes": 16,
+			"height": "low"
+		},
+		{
+			"id": "slot1",
+			"kind": "pcie-card",
+			"slot": "Slot 1: RSC-W-66G5 SLOT1 PCIe 5.0 x16 FHFL (front, upper right)",
+			"pos": [
+				140,
+				33,
+				-90
+			],
+			"size": [
+				111,
+				12,
+				168
+			],
+			"explode": [
+				0,
+				60,
+				0
+			],
+			"lanes": 16,
+			"height": "full",
+			"ipmi": "AOC_NIC1 Temp"
+		},
+		{
+			"id": "slot2",
+			"kind": "pcie-card",
+			"slot": "Slot 2: RSC-W-66G5 SLOT2 PCIe 5.0 x16 FHFL (front, lower right)",
+			"pos": [
+				140,
+				12,
+				-90
+			],
+			"size": [
+				111,
+				12,
+				168
+			],
+			"explode": [
+				0,
+				0,
+				0
+			],
+			"lanes": 16,
+			"height": "full"
+		},
+		{
+			"id": "slot1p1",
+			"kind": "port",
+			"slot": "Slot 1 card port 1",
+			"port": "slot1 p1",
+			"pos": [
+				100,
+				33,
+				-5
+			],
+			"size": [
+				14,
+				9,
+				12
+			],
+			"explode": [
+				0,
+				60,
+				0
+			],
+			"ratedGbps": 25,
+			"jack": "sfp28"
+		},
+		{
+			"id": "slot1p2",
+			"kind": "port",
+			"slot": "Slot 1 card port 2",
+			"port": "slot1 p2",
+			"pos": [
+				118,
+				33,
+				-5
+			],
+			"size": [
+				14,
+				9,
+				12
+			],
+			"explode": [
+				0,
+				60,
+				0
+			],
+			"ratedGbps": 25,
+			"jack": "sfp28"
+		},
+		{
+			"id": "cpu1",
+			"kind": "cpu",
+			"slot": "CPU socket",
+			"pos": [
+				54,
+				20,
+				-190
+			],
+			"size": [
+				75,
+				27,
+				125
+			],
+			"explode": [
+				0,
+				110,
+				0
+			],
+			"ipmi": "CPU Temp"
+		},
+		{
+			"id": "dimmA1",
+			"kind": "dimm",
+			"slot": "DIMMA1",
+			"pos": [
+				98,
+				22,
+				-190
+			],
+			"size": [
+				4,
+				31,
+				133
+			],
+			"explode": [
+				0,
+				90,
+				0
+			],
+			"ipmi": "DIMMA~D Temp"
+		},
+		{
+			"id": "dimmB1",
+			"kind": "dimm",
+			"slot": "DIMMB1",
+			"pos": [
+				104,
+				22,
+				-190
+			],
+			"size": [
+				4,
+				31,
+				133
+			],
+			"explode": [
+				0,
+				90,
+				0
+			],
+			"ipmi": "DIMMA~D Temp"
+		},
+		{
+			"id": "dimmC1",
+			"kind": "dimm",
+			"slot": "DIMMC1",
+			"pos": [
+				110,
+				22,
+				-190
+			],
+			"size": [
+				4,
+				31,
+				133
+			],
+			"explode": [
+				0,
+				90,
+				0
+			],
+			"ipmi": "DIMMA~D Temp"
+		},
+		{
+			"id": "dimmD1",
+			"kind": "dimm",
+			"slot": "DIMMD1",
+			"pos": [
+				116,
+				22,
+				-190
+			],
+			"size": [
+				4,
+				31,
+				133
+			],
+			"explode": [
+				0,
+				90,
+				0
+			],
+			"ipmi": "DIMMA~D Temp"
+		},
+		{
+			"id": "dimmE1",
+			"kind": "dimm",
+			"slot": "DIMME1",
+			"pos": [
+				22,
+				22,
+				-190
+			],
+			"size": [
+				4,
+				31,
+				133
+			],
+			"explode": [
+				0,
+				90,
+				0
+			],
+			"ipmi": "DIMME~H Temp"
+		},
+		{
+			"id": "dimmF1",
+			"kind": "dimm",
+			"slot": "DIMMF1",
+			"pos": [
+				16,
+				22,
+				-190
+			],
+			"size": [
+				4,
+				31,
+				133
+			],
+			"explode": [
+				0,
+				90,
+				0
+			],
+			"ipmi": "DIMME~H Temp"
+		},
+		{
+			"id": "dimmG1",
+			"kind": "dimm",
+			"slot": "DIMMG1",
+			"pos": [
+				10,
+				22,
+				-190
+			],
+			"size": [
+				4,
+				31,
+				133
+			],
+			"explode": [
+				0,
+				90,
+				0
+			],
+			"ipmi": "DIMME~H Temp"
+		},
+		{
+			"id": "dimmH1",
+			"kind": "dimm",
+			"slot": "DIMMH1",
+			"pos": [
+				4,
+				22,
+				-190
+			],
+			"size": [
+				4,
+				31,
+				133
+			],
+			"explode": [
+				0,
+				90,
+				0
+			],
+			"ipmi": "DIMME~H Temp"
+		},
+		{
+			"id": "m2c1",
+			"kind": "drive",
+			"slot": "M.2-C1 (JM2_1, board left edge)",
+			"pos": [
+				-82,
+				9,
+				-120
+			],
+			"size": [
+				22,
+				3,
+				110
+			],
+			"explode": [
+				0,
+				90,
+				0
+			],
+			"bus": "nvme",
+			"form": "m2",
+			"ipmi": "M2_SSD1 Temp"
+		},
+		{
+			"id": "m2c2",
+			"kind": "drive",
+			"slot": "M.2-C2 (JM2_2, board left edge)",
+			"pos": [
+				-68,
+				9,
+				-120
+			],
+			"size": [
+				22,
+				3,
+				110
+			],
+			"explode": [
+				0,
+				90,
+				0
+			],
+			"bus": "nvme",
+			"form": "m2",
+			"ipmi": "M2_SSD2 Temp"
+		},
+		{
+			"id": "fan1",
+			"kind": "fan",
+			"slot": "FAN1",
+			"pos": [
+				-150,
+				21.5,
+				-358
+			],
+			"size": [
+				40,
+				40,
+				56
+			],
+			"explode": [
+				0,
+				70,
+				0
+			],
+			"ipmi": "FAN1"
+		},
+		{
+			"id": "fan2",
+			"kind": "fan",
+			"slot": "FAN2",
+			"pos": [
+				-105,
+				21.5,
+				-358
+			],
+			"size": [
+				40,
+				40,
+				56
+			],
+			"explode": [
+				0,
+				70,
+				0
+			],
+			"ipmi": "FAN2"
+		},
+		{
+			"id": "fan3",
+			"kind": "fan",
+			"slot": "FAN3",
+			"pos": [
+				-60,
+				21.5,
+				-358
+			],
+			"size": [
+				40,
+				40,
+				56
+			],
+			"explode": [
+				0,
+				70,
+				0
+			],
+			"ipmi": "FAN3"
+		},
+		{
+			"id": "fan4",
+			"kind": "fan",
+			"slot": "FAN4",
+			"pos": [
+				-15,
+				21.5,
+				-358
+			],
+			"size": [
+				40,
+				40,
+				56
+			],
+			"explode": [
+				0,
+				70,
+				0
+			],
+			"ipmi": "FAN4"
+		},
+		{
+			"id": "fan5",
+			"kind": "fan",
+			"slot": "FAN5",
+			"pos": [
+				30,
+				21.5,
+				-358
+			],
+			"size": [
+				40,
+				40,
+				56
+			],
+			"explode": [
+				0,
+				70,
+				0
+			],
+			"ipmi": "FAN5"
+		},
+		{
+			"id": "fan6",
+			"kind": "fan",
+			"slot": "FAN6",
+			"pos": [
+				75,
+				21.5,
+				-358
+			],
+			"size": [
+				40,
+				40,
+				56
+			],
+			"explode": [
+				0,
+				70,
+				0
+			],
+			"ipmi": "FAN6"
+		},
+		{
+			"id": "bay0",
+			"kind": "drive",
+			"slot": "Internal 2.5in bay 0 (fixed, rear right)",
+			"pos": [
+				150,
+				11,
+				-370
+			],
+			"size": [
+				70,
+				15,
+				100
+			],
+			"explode": [
+				0,
+				80,
+				0
+			],
+			"bus": "sata"
+		},
+		{
+			"id": "bay1",
+			"kind": "drive",
+			"slot": "Internal 2.5in bay 1 (fixed, rear right)",
+			"pos": [
+				150,
+				29,
+				-370
+			],
+			"size": [
+				70,
+				15,
+				100
+			],
+			"explode": [
+				0,
+				120,
+				0
+			],
+			"bus": "sata"
+		}
+	]
+}

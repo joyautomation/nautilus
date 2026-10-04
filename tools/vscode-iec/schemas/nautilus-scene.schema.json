@@ -1,0 +1,747 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "nautilus scene document",
+  "description": "A 3D process view as data — the spatial sibling of a *.mimic.json P&ID: nodes placed in space, pipes run between them, live tag bindings. Rendered by @joyautomation/nautilus-hmi-3d's <SceneView>, edited as text, diffed and reviewed like the program it belongs to. Positions are METRES in the site frame (the origin marker at [0, 0, 0], +y up), so the file that drives the desktop view is also the file that will place AR overlays. `naut check` runs the same structural rules as this schema, plus the kind ↔ tag-type contract a schema cannot express. Brief: docs/design/spatial-hmi.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "nodes"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Display name for the scene."
+    },
+    "kinds": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/kindContract"
+      },
+      "description": "The kind ↔ struct-type contract (docs/design/spatial-hmi.md §3b): overrides for the built-in kinds (tank → Tank, pump → Motor, valve → Valve) and declarations for kinds the app registers itself. Keyed by kind name. `naut check` holds every node of a declared kind to its `type` and `members`."
+    },
+    "environment": {
+      "$ref": "#/definitions/environment",
+      "description": "The surroundings (docs/design/spatial-hmi.md §3c): an HDRI for image-based lighting, optionally as the backdrop, and shadows. Absent = the flat look."
+    },
+    "camera": {
+      "$ref": "#/definitions/camera",
+      "description": "Initial camera. Positions in scene metres."
+    },
+    "fixtures": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/fixture"
+      },
+      "description": "Static, unbound geometry: the desk, a floor slab, the origin marker."
+    },
+    "grid": {
+      "$ref": "#/definitions/grid",
+      "description": "A reference grid on a horizontal plane."
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/node"
+      },
+      "description": "Equipment placed in the scene, each optionally bound to a live tag."
+    },
+    "pipes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/pipe"
+      },
+      "description": "Polylines run between nodes, optionally showing flow state."
+    },
+    "writable": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "maxItems": 0,
+      "description": "Reserved: tags an operator may write from this scene. The view is read-only until the write path ships, so a non-empty list is an error rather than a silent no-op — this list must stay empty."
+    }
+  },
+  "definitions": {
+    "vec3": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "vec2": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "bindingRef": {
+      "type": "string",
+      "pattern": "^!?[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$",
+      "description": "A tag reference: an absolute name or dotted path, read from the frame's tag map (`Demand`, `P101.Speed`; no indexing). A leading `!` negates a boolean prop: the prop is `value !== true`. An absent path leaves the prop unset, so the component's default holds."
+    },
+    "kindContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The UDT a node of this kind binds. The built-ins default to tank → Tank, pump → Motor, valve → Valve; re-point one here if the project's UDT is named differently."
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "The members the kind's component reads off the struct, so `naut check` can hold every node of this kind to the same standard."
+        },
+        "model": {
+          "type": "string",
+          "pattern": "^(?![a-zA-Z]+:)(?!.*(^|/)\\.\\.(/|$)).+\\.(glb|gltf)$",
+          "description": "A glTF/GLB as a URL path from the app root (`models/pump.glb` → `/models/pump.glb`; `hmi/static/` in source). Metres, +y up; the node's pos/rot/scale place the model's origin. A data kind under a built-in's name keeps that built-in's contract, status text and faceplate and replaces only the geometry."
+        },
+        "component": {
+          "type": "string",
+          "pattern": "^(?![a-zA-Z]+:)(?!/)(?!.*(^|/)\\.\\.(/|$)).+\\.svelte$",
+          "description": "A kind defined by a Svelte component file (docs/design/spatial-hmi.md §3d), as a source path relative to this scene file (`hmi/src/lib/Skid.svelte`). Its default export takes the node's props; its `<script module>` exports `kind` (type, members, bounds, labelAt, status). The app builds it and hands SceneView its modules; the extension lists it in the palette; `naut check` sees the file and holds its nodes to `type`/`members` here."
+        },
+        "assembly": {
+          "$ref": "#/definitions/assembly",
+          "description": "A kind made of kinds (docs/design/spatial-hmi.md §3d): parts and pipes in the kind's own frame. A part's `tag` is a MEMBER of the assembly's struct (`Pump` inside `SK101` reads `SK101.Pump`), and a ref inside is a path from that struct. Parts are never assemblies."
+        },
+        "bounds": {
+          "oneOf": [
+            {
+              "const": "auto"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "size",
+                "center"
+              ],
+              "properties": {
+                "size": {
+                  "$ref": "#/definitions/vec3"
+                },
+                "center": {
+                  "$ref": "#/definitions/vec3"
+                }
+              }
+            }
+          ],
+          "description": "The halo / selection box: 'auto' (default; the loaded model's box) or an explicit local-space box."
+        },
+        "labelAt": {
+          "$ref": "#/definitions/vec3",
+          "description": "Where the label floats, local metres. Default: the top centre of the bounds."
+        },
+        "status": {
+          "type": "string",
+          "description": "The label's value text as a template over members: `{Level:1} %` → `48.3 %`; `{Running?run:stopped}`. Reads `stale` when quality is bad."
+        },
+        "drive": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/drive"
+          },
+          "description": "What live values do to named meshes in the model. Each drive names one mesh and one channel."
+        }
+      },
+      "description": "The UDT ↔ members contract for one kind, and how the document defines it, one way at most: with `model`, a data kind — a glTF whose named meshes the `drive` list moves from the node's struct (docs/design/spatial-hmi.md §3c); with `component`, a kind defined by a Svelte file the app builds (§3d); with `assembly`, a kind made of kinds (§3d)."
+    },
+    "assembly": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "nodes"
+      ],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/node"
+          },
+          "description": "The parts, as nodes in the kind's own frame (metres from the placed node's origin). A part's `tag` is one member name of the assembly's struct; it has no label unless given, no halo, and a click on it picks the placed node."
+        },
+        "pipes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/pipe"
+          },
+          "description": "Pipes in the kind's own frame; `bind.flowing` is a path from the assembly's struct (`Pump.Running`)."
+        }
+      },
+      "description": "An assembly's parts and pipes (docs/design/spatial-hmi.md §3d)."
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pos",
+        "target"
+      ],
+      "properties": {
+        "pos": {
+          "$ref": "#/definitions/vec3",
+          "description": "Camera position, [x, y, z] metres, site frame."
+        },
+        "target": {
+          "$ref": "#/definitions/vec3",
+          "description": "Look-at point, [x, y, z] metres, site frame."
+        },
+        "fov": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "exclusiveMaximum": 180,
+          "description": "Vertical field of view, degrees. Default 45."
+        }
+      }
+    },
+    "grid": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pos": {
+          "$ref": "#/definitions/vec3",
+          "description": "Grid origin, [x, y, z] metres, site frame."
+        },
+        "size": {
+          "$ref": "#/definitions/vec2",
+          "description": "[w, d] in metres. Default [4, 4]."
+        },
+        "cell": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Cell pitch, metres. Default 0.1."
+        },
+        "section": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Heavier line every this many metres. Default 1."
+        }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "pos"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "box",
+            "plane",
+            "marker"
+          ],
+          "description": "Fixture shape: box, plane, or the origin marker."
+        },
+        "pos": {
+          "$ref": "#/definitions/vec3",
+          "description": "[x, y, z] metres, site frame."
+        },
+        "size": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/vec3"
+            },
+            {
+              "$ref": "#/definitions/vec2"
+            }
+          ],
+          "description": "box: [w, h, d] metres; plane / marker: [w, d] metres."
+        },
+        "rot": {
+          "$ref": "#/definitions/vec3",
+          "description": "Degrees, XYZ order."
+        },
+        "color": {
+          "type": "string",
+          "description": "CSS color."
+        },
+        "opacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "0 (transparent) to 1 (opaque)."
+        },
+        "texture": {
+          "$ref": "#/definitions/texture",
+          "description": "plane only: PBR maps, so the floor is concrete rather than a colour."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "box"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "size": {
+                "$ref": "#/definitions/vec3"
+              }
+            },
+            "not": {
+              "required": [
+                "texture"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "plane"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "size": {
+                "$ref": "#/definitions/vec2"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "marker"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "size": {
+                "$ref": "#/definitions/vec2"
+              }
+            },
+            "not": {
+              "required": [
+                "texture"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "pos"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique in the document; what a pick reports."
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Registry key: 'tank' | 'pump' | 'valve' | one the app registered, or one declared under the document's `kinds`."
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The struct tag this node binds; the kind's component reads its members."
+        },
+        "label": {
+          "type": "string",
+          "description": "Display name; defaults to id."
+        },
+        "pos": {
+          "$ref": "#/definitions/vec3",
+          "description": "Metres, site frame."
+        },
+        "rot": {
+          "$ref": "#/definitions/vec3",
+          "description": "Degrees, XYZ order; [0, yaw, 0] turns the node on the spot."
+        },
+        "scale": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "props": {
+          "type": "object",
+          "description": "Static props passed straight through to the component."
+        },
+        "bind": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/bindingRef"
+          },
+          "description": "Live props: component prop -> ref. Same map and rules as a mimic equipment's `bind`, plus dotted paths for struct members (`P101.Speed`)."
+        }
+      }
+    },
+    "pipe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "points"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "points": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "$ref": "#/definitions/vec3"
+          },
+          "description": "Polyline in scene metres, at least two points."
+        },
+        "radius": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Metres. Default 0.012."
+        },
+        "bind": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "flowing": {
+              "$ref": "#/definitions/bindingRef",
+              "description": "The one live prop a pipe has, the same key the mimic's pipe binds. Booleans as-is; a number is flowing above 2 (%)."
+            }
+          },
+          "description": "A pipe binds only 'flowing'."
+        }
+      }
+    },
+    "axis": {
+      "enum": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "numExpr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bind"
+      ],
+      "properties": {
+        "bind": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "A member of the node's struct (`Speed`). The node's own `bind` overrides it by the built-ins' rule (`speed` overrides `Speed`)."
+        },
+        "scale": {
+          "type": "number",
+          "description": "Multiplier. Default 1."
+        },
+        "offset": {
+          "type": "number",
+          "description": "Added after scale. Default 0."
+        },
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        }
+      },
+      "description": "member × scale + offset, clamped to [min, max]."
+    },
+    "boolExpr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bind"
+      ],
+      "properties": {
+        "bind": {
+          "type": "string",
+          "pattern": "^!?[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "A member of the node's struct; true, or a number above `threshold`. A leading `!` negates."
+        },
+        "threshold": {
+          "type": "number",
+          "description": "A number counts as true above this. Default 0."
+        }
+      }
+    },
+    "drive": {
+      "type": "object",
+      "required": [
+        "mesh"
+      ],
+      "properties": {
+        "mesh": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The name of a mesh (node) in the model."
+        },
+        "spin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "axis",
+            "revPerS"
+          ],
+          "properties": {
+            "axis": {
+              "$ref": "#/definitions/axis"
+            },
+            "revPerS": {
+              "$ref": "#/definitions/numExpr"
+            }
+          },
+          "description": "Turn the mesh continuously about its local axis, at revPerS revolutions per second."
+        },
+        "turn": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "axis",
+            "deg"
+          ],
+          "properties": {
+            "axis": {
+              "$ref": "#/definitions/axis"
+            },
+            "deg": {
+              "$ref": "#/definitions/numExpr"
+            }
+          },
+          "description": "Set the mesh's rotation about its local axis, degrees from the model's own."
+        },
+        "scale": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "axis",
+            "to"
+          ],
+          "properties": {
+            "axis": {
+              "enum": [
+                "x",
+                "y",
+                "z",
+                "xyz"
+              ]
+            },
+            "to": {
+              "$ref": "#/definitions/numExpr"
+            }
+          },
+          "description": "Set the mesh's scale on that axis (a fluid whose origin is its base)."
+        },
+        "tint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bind",
+            "on"
+          ],
+          "properties": {
+            "bind": {
+              "type": "string",
+              "pattern": "^!?[A-Za-z_][A-Za-z0-9_]*$",
+              "description": "A member of the node's struct; true, or a number above `threshold`. A leading `!` negates."
+            },
+            "threshold": {
+              "type": "number",
+              "description": "A number counts as true above this. Default 0."
+            },
+            "on": {
+              "type": "string",
+              "minLength": 1,
+              "description": "A palette slot (`running`, `fluid`, `handle`, `stale`, a priority name) or a CSS colour."
+            },
+            "off": {
+              "type": "string",
+              "minLength": 1,
+              "description": "A palette slot (`running`, `fluid`, `handle`, `stale`, a priority name) or a CSS colour. Absent = the model's own colour."
+            }
+          },
+          "description": "The mesh's colour is `on` while true, else `off` or the model's own."
+        },
+        "emissive": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bind",
+            "on"
+          ],
+          "properties": {
+            "bind": {
+              "type": "string",
+              "pattern": "^!?[A-Za-z_][A-Za-z0-9_]*$",
+              "description": "A member of the node's struct; true, or a number above `threshold`. A leading `!` negates."
+            },
+            "threshold": {
+              "type": "number",
+              "description": "A number counts as true above this. Default 0."
+            },
+            "on": {
+              "type": "string",
+              "minLength": 1,
+              "description": "A palette slot (`running`, `fluid`, `handle`, `stale`, a priority name) or a CSS colour."
+            },
+            "intensity": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Default 1."
+            }
+          },
+          "description": "The mesh glows `on` while true."
+        },
+        "visible": {
+          "$ref": "#/definitions/boolExpr",
+          "description": "The mesh is shown while true."
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "spin"
+          ]
+        },
+        {
+          "required": [
+            "turn"
+          ]
+        },
+        {
+          "required": [
+            "scale"
+          ]
+        },
+        {
+          "required": [
+            "tint"
+          ]
+        },
+        {
+          "required": [
+            "emissive"
+          ]
+        },
+        {
+          "required": [
+            "visible"
+          ]
+        }
+      ],
+      "description": "One mesh, one channel: spin, turn, scale, tint, emissive or visible. The vocabulary is fixed (docs/design/spatial-hmi.md §3c); a kind that needs more is a Svelte component in the registry."
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "hdri": {
+          "type": "string",
+          "pattern": "^(?![a-zA-Z]+:)(?!.*(^|/)\\.\\.(/|$)).+\\.(hdr|exr)$",
+          "description": "An equirectangular .hdr or .exr as a URL path from the app root (`env/workshop_1k.hdr`). CC0 1k files from Poly Haven are the size the brief allows in git."
+        },
+        "backdrop": {
+          "type": "string",
+          "pattern": "^(?![a-zA-Z]+:)(?!.*(^|/)\\.\\.(/|$)).+\\.(jpe?g|png|webp|hdr|exr)$",
+          "description": "What you SEE when `background` is on: a larger equirect image (a tonemapped .jpg/.png, or another .hdr/.exr) in place of the HDRI, so lighting comes from a small file and the backdrop from a sharp one."
+        },
+        "background": {
+          "enum": [
+            "none",
+            "sky",
+            "ground"
+          ],
+          "description": "`none` (default): the HDRI lights and reflects only. `sky`: it is the backdrop. `ground`: it is projected onto a floor at `floor`, so a desk-scale scene stands in it."
+        },
+        "floor": {
+          "type": "number",
+          "description": "The floor's y for `ground`, metres. Default 0."
+        },
+        "fog": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "color": {
+              "type": "string",
+              "description": "CSS colour the distance fades toward. Default: a neutral grey."
+            },
+            "near": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Metres at which the fade starts. Default 4."
+            },
+            "far": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Metres at which it is fully the colour. Default 14."
+            }
+          },
+          "description": "Distance fade toward a colour, so the far backdrop and the projected floor soften deliberately instead of reading as a low-res photo."
+        },
+        "intensity": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Environment light multiplier. Default 1."
+        },
+        "shadows": {
+          "type": "boolean",
+          "description": "A shadow-casting key light with soft shadows (the desktop tier)."
+        }
+      },
+      "description": "The surroundings: an HDRI, the backdrop and shadows."
+    },
+    "texture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "map"
+      ],
+      "properties": {
+        "map": {
+          "type": "string",
+          "description": "The colour map, a URL path from the app root."
+        },
+        "normalMap": {
+          "type": "string",
+          "description": "An OpenGL-convention normal map."
+        },
+        "roughnessMap": {
+          "type": "string"
+        },
+        "repeat": {
+          "$ref": "#/definitions/vec2",
+          "description": "Tiles across [w, d]. Default [1, 1]."
+        }
+      },
+      "description": "PBR maps for a plane (a concrete floor). Loaded only in the lit look."
+    }
+  }
+}

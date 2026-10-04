@@ -5,6 +5,13 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- **A JSON Schema for `*.scene.json`**, the 3D HMI scene documents
+  `@joyautomation/nautilus-hmi-3d` renders — completion and validation in
+  the editor, matching `naut check`'s scene pass. Covers kinds as data
+  (`model`, `drive`, `status`, `bounds`), the `environment` block and
+  textured `plane` fixtures (`docs/design/spatial-hmi.md` §3c).
 ### Fixed
 
 - **A diagnostic about a name squiggles that name.** An undeclared

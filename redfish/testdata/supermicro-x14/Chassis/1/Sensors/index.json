@@ -1,0 +1,53 @@
+{
+    "@odata.type": "#SensorCollection.SensorCollection",
+    "Name": "Sensors",
+    "Members@odata.count": 15,
+    "Members": [
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/temperature_CPU_Temp"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/temperature_Inlet_Temp"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/temperature_System_Temp"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/temperature_Peripheral_Temp"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/temperature_VRM_CPU_Temp"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/temperature_DIMM_Temp"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/temperature_NVMe_SSD_Temp"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/fan_tach_FAN1"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/fan_tach_FAN2"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/fan_tach_FAN3"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/fan_tach_FAN4"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/fan_tach_FAN5"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/fan_tach_FAN6"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/voltage_12V"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/power_Total_Power"
+        }
+    ],
+    "@odata.id": "/redfish/v1/Chassis/1/Sensors"
+}

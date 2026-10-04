@@ -1,0 +1,241 @@
+# The plant's fault logic, in virtual time: each fault input bends only
+# what it should, faults compose, clearing one restores the baseline, and
+# the baseline is the recording while it plays and the snapshot when it
+# does not. No recording is needed: the replay driver's tags are given.
+#   naut test .
+tolerance: 0.01
+
+tests:
+  - name: without the recording, the snapshot holds
+    steps:
+      - advance: 2s
+        expect: { SW1_Port25.OperUp: true, SW1_Port25.InBps: 36400.0, SW1_Port25.SpeedMbps: 10000.0, SW1_Port25.Name: "TGigaEthernet0/25", SW1.Online: true }
+
+  - name: while the recording plays, the port follows it and keeps its identity
+    given: { Replay_At: 1790460000, Rec_NODE1.PowerOn: true, Rec_SW1_Port25.OperUp: true, Rec_SW1_Port25.AdminUp: true, Rec_SW1_Port25.SpeedMbps: 10000.0, Rec_SW1_Port25.InBps: 5000000.0 }
+    steps:
+      - advance: 1s
+        expect: { SW1_Port25.InBps: 5000000.0, SW1_Port25.InPct: 0.05, SW1_Port25.Name: "TGigaEthernet0/25", SW1_Port25.Index: 189 }
+      - given: { Rec_SW1_Port25.OperUp: false }
+        advance: 1s
+        expect: { SW1_Port25.OperUp: false, SW1_Port25.Down: true, SW1_Port25.InBps: 0.0 }
+
+  - name: port down drops link and traffic, admin stays up
+    steps:
+      - given: { Sim_SW1_Port25.Down: true }
+        advance: 1s
+        expect: { SW1_Port25.OperUp: false, SW1_Port25.AdminUp: true, SW1_Port25.Down: true, SW1_Port25.InBps: 0.0, SW1_Port26.OperUp: true, SW1.PortsUp: 5 }
+      - given: { Sim_SW1_Port25.Down: false }
+        advance: 1s
+        expect: { SW1_Port25.OperUp: true, SW1_Port25.InBps: 36400.0, SW1.PortsUp: 6 }
+
+  - name: admin down is not a link-down
+    steps:
+      - given: { Sim_SW1_Port25.AdminDown: true }
+        advance: 1s
+        expect: { SW1_Port25.AdminUp: false, SW1_Port25.OperUp: false, SW1_Port25.Down: false }
+
+  - name: speed degrade and error burst compose, and clear
+    steps:
+      - given: { Sim_SW1_Port25.SpeedMbps: 1000.0, Sim_SW1_Port25.ErrorRate: 5.0 }
+        advance: 1s
+        expect: { SW1_Port25.OperUp: true, SW1_Port25.SpeedMbps: 1000.0, SW1_Port25.ErrorRate: 5.0, SW1_Port25.InBps: 36400.0 }
+      - given: { Sim_SW1_Port25.SpeedMbps: 0.0, Sim_SW1_Port25.ErrorRate: 0.0 }
+        advance: 1s
+        expect: { SW1_Port25.SpeedMbps: 10000.0, SW1_Port25.ErrorRate: 0.0 }
+
+  - name: a dark switch takes every port down, and only its own
+    steps:
+      - given: { Sim_SW1.Dark: true }
+        advance: 1s
+        expect: { SW1.Online: false, SW1_Port25.OperUp: false, SW1_Port01.OperUp: false, SW1.PortsUp: 0, SW2_Port25.OperUp: true }
+
+  # ── the scenarios (scenarios.st): each a write of Scenario, each undone by "normal" ──
+
+  - name: port-down takes the switch port and the server port at the far end down
+    steps:
+      - given: { Scenario: "port-down" }
+        advance: 2s
+        expect: { SW2_Port26.OperUp: false, SW2_Port26.Down: true, NODE1_Nic_Slot3_P2.LinkUp: false, NODE1_Nic_Slot3_P2.SpeedGbps: 0.0 }
+      - given: { Scenario: "normal" }
+        advance: 2s
+        expect: { SW2_Port26.OperUp: true, NODE1_Nic_Slot3_P2.LinkUp: true, Sim_SW2_Port26.Down: false }
+
+  - name: cable-pull drops both ends; the switch end alarms, admin stays up
+    steps:
+      - given: { Scenario: "cable-pull" }
+        advance: 2s
+        expect: { SW3_Port25.OperUp: false, SW3_Port25.AdminUp: true, SW3_Port25.Down: true, NODE3_Nic_Slot3_P2.LinkUp: false, SW3_Port26.OperUp: true }
+
+  - name: speed-degrade renegotiates both ends of the cable
+    steps:
+      - given: { Scenario: "speed-degrade" }
+        advance: 2s
+        expect: { SW1_Port25.SpeedMbps: 1000.0, NODE1_Nic_Slot2_P2.SpeedGbps: 1.0, NODE1_Nic_Slot2_P2.LinkUp: true }
+      # while the recording plays, too: a part it lacks holds its snapshot,
+      # so clearing the fault restores it
+      - given: { Replay_At: 1790460000, Rec_NODE1.PowerOn: true, Rec_SW1_Port25.OperUp: true, Rec_SW1_Port25.AdminUp: true, Rec_SW1_Port25.SpeedMbps: 10000.0 }
+        advance: 2s
+        expect: { NODE1_Nic_Slot2_P2.SpeedGbps: 1.0 }
+      - given: { Scenario: "normal" }
+        advance: 2s
+        expect: { SW1_Port25.SpeedMbps: 10000.0, NODE1_Nic_Slot2_P2.SpeedGbps: 10.0 }
+
+  - name: switch-reboot goes dark for 90 s and comes back with its uptime reset
+    steps:
+      - given: { Scenario: "switch-reboot" }
+        advance: 2s
+        expect: { SW3.Online: false, SW3_Port25.OperUp: false, NODE3_Nic_Slot3_P2.LinkUp: false, Sim_SW3.Reboot: false }
+      - until: 120s
+        expect: { SW3.Online: true }
+      - advance: 1s
+        expect: { SW3_Port25.OperUp: true, NODE3_Nic_Slot3_P2.LinkUp: true, SW3.UptimeS: { lt: 10 } }
+
+  - name: fan-fail stops the fan, the others ramp, the CPU warms but holds
+    steps:
+      - given: { Scenario: "fan-fail" }
+        advance: 2s
+        expect: { NODE1_Fan3.RPM: 0.0, NODE1_Fan3.Fault: true }
+      - advance: 300s
+        expect: { NODE1_Fan1.RPM: { gt: 9940 }, NODE1_Temp_CPU.Value: { between: [64, 72] }, NODE1_Temp_CPU.HighHigh: false }
+
+  - name: cpu-overheat climbs (never jumps) past HighHigh within five minutes
+    steps:
+      - given: { Scenario: "cpu-overheat" }
+        advance: 30s
+        expect: { NODE2_Temp_CPU.Value: { between: [60, 85] }, NODE2_Temp_CPU.HighHigh: false, NODE2.CpuPct: 100.0, NODE2.PowerW: { gt: 300 } }
+      - until: 300s
+        expect: { NODE2_Temp_CPU.HighHigh: true }
+      - advance: 1s
+        expect: { NODE2.MaxTempC: { ge: 102 }, NODE2_Fan1.RPM: { gt: 8960 } }
+      - given: { Scenario: "normal" }
+        until: 600s
+        expect: { NODE2_Temp_CPU.HighHigh: false, NODE2_Temp_CPU.Value: { lt: 60 } }
+
+  - name: psu-loss moves the load to the other supply; the server stays up
+    steps:
+      - given: { Scenario: "psu-loss" }
+        advance: 2s
+        expect: { NODE1_PSU2.InputOk: false, NODE1_PSU2.InputV: 0.0, NODE1_PSU2.OutputW: 0.0, NODE1_PSU2.Fault: true, NODE1_PSU1.OutputW: 199.0, NODE1_PSU1.Fault: false, NODE1.PowerOn: true }
+
+  - name: drive-pull and drive-failing
+    steps:
+      - given: { Scenario: "drive-pull" }
+        advance: 2s
+        expect: { NODE3_Drive_NVMe2.Present: false, NODE3_Drive_NVMe2.Fault: true, NODE3_Drive_NVMe1.Present: true }
+      - given: { Scenario: "drive-failing" }
+        advance: 2s
+        expect: { NODE3_Drive_NVMe1.PredictedFailure: true, NODE3_Drive_NVMe1.Health: 1, NODE3_Drive_NVMe1.Fault: true, NODE3_Drive_NVMe2.Present: false }
+
+  - name: node-off drops its links and cools to the inlet
+    steps:
+      - given: { Scenario: "node-off" }
+        advance: 2s
+        expect: { NODE2.PowerOn: false, NODE2.PowerW: 12.0, NODE2_Fan1.RPM: 0.0, SW2_Port25.OperUp: false, SW2_Port25.Down: true, NODE2_Nic_BMC.LinkUp: false }
+      - advance: 1200s
+        expect: { NODE2_Temp_CPU.Value: { lt: 30 }, NODE2.Online: true }
+
+  - name: hot-room raises every inlet, and everything behind it (less the fans that ramp)
+    steps:
+      - given: { Scenario: "hot-room" }
+        advance: 2s
+        expect: { NODE1.InletTempC: 40.0, NODE3.InletTempC: { gt: 39 } }
+      - advance: 400s
+        expect: { NODE1_Temp_Inlet.Value: { gt: 39 }, NODE1_Temp_CPU.Value: { between: [70, 80] } }
+
+  - name: scenarios compose, and normal clears them all
+    steps:
+      - given: { Scenario: "fan-fail" }
+        advance: 2s
+      - given: { Scenario: "bmc-dark" }
+        advance: 2s
+        expect: { NODE1_Fan3.Fault: true, NODE3.Online: false }
+      - given: { Scenario: "normal" }
+        advance: 2s
+        expect: { NODE1_Fan3.Fault: false, NODE3.Online: true, Sim_NODE1_Fan3.Fail: false, Sim_NODE3.Dark: false, ClearFaults: false }
+
+  # ── timelines and the storm (scenarios.yaml) ──
+
+  - name: port-flap is down 10 s in every 30 s, until another scenario is written
+    steps:
+      - given: { Scenario: "port-flap" }
+        advance: 2s
+        expect: { SW2_Port26.OperUp: false }
+      - advance: 11s
+        expect: { SW2_Port26.OperUp: true }
+      - advance: 20s
+        expect: { SW2_Port26.OperUp: false }
+      - advance: 10s
+        expect: { SW2_Port26.OperUp: true }
+      - given: { Scenario: "fan-fail" }
+        advance: 30s
+        always: { SW2_Port26.OperUp: true }
+
+  - name: bmc-reboot is dark for two minutes, then back
+    steps:
+      - given: { Scenario: "bmc-reboot" }
+        advance: 2s
+        expect: { NODE3.Online: false, ScenarioS: { between: [1, 3] } }
+      - until: 130s
+        expect: { NODE3.Online: true }
+
+  - name: broadcast-storm floods every up port; the 1G ports saturate and drop
+    steps:
+      - given: { Scenario: "broadcast-storm" }
+        advance: 10s
+        expect: { SW1_Port24.InBroadcastPps: 1000000.0, SW1_Port24.OutBps: 1000000000.0, SW1_Port24.OutDiscards: { gt: 100000 },
+                  SW2_Port25.InBroadcastPps: 1000000.0, SW2_Port25.OutBps: { between: [1024000000, 1100000000] }, SW2_Port25.OutDiscards: 0,
+                  SW1_Port24.DiscardRate: { gt: 10000 }, SW2_Port25.DiscardRate: 0.0,
+                  SW1_Port05.InBroadcastPps: 0.0 }
+      - given: { Scenario: "normal" }
+        advance: 2s
+        expect: { SW1_Port24.InBroadcastPps: 0.0, SW1_Port24.OutBps: { lt: 1000000 }, SW1_Port24.DiscardRate: 0.0 }
+
+  - name: multicast-storm reaches every port too
+    steps:
+      - given: { Scenario: "multicast-storm" }
+        advance: 2s
+        expect: { SW3_Port25.InMulticastPps: 300000.0, SW3_Port25.InBroadcastPps: 0.0 }
+
+  - name: cooling-failure ramps the room over ten minutes
+    steps:
+      - given: { Scenario: "cooling-failure" }
+        advance: 30s
+        expect: { Sim_Room.InletDeltaC: 0.0 }
+      - advance: 300s
+        expect: { Sim_Room.InletDeltaC: 10.0 }
+      - advance: 300s
+        expect: { Sim_Room.InletDeltaC: 20.0, NODE1.InletTempC: { gt: 44 } }
+
+  - name: an unknown scenario is flagged, and changes nothing
+    steps:
+      - given: { Scenario: "meteor-strike" }
+        advance: 2s
+        expect: { ScenarioUnknown: true, SW1_Port25.OperUp: true }
+
+  # ── VLANs ──
+  - name: the VLAN config is the site as planned, g0/1 the site trunk
+    steps:
+      - advance: 1s
+        expect: { SW1_Vlan20.Ports: "1,25,26,27,28", SW1_Vlan22.Untagged: "24", SW1_Port24.Pvid: 22, SW1_Port01.Pvid: 1, SW2_Vlan251.Ports: "27,28", SW2_Vlan20.Untagged: "" }
+
+  - name: a VLAN pruned from a ring port leaves that port alone, and clears
+    steps:
+      - given: { Scenario: "vlan-pruned" }
+        advance: 2s
+        expect: { SW2_Vlan21.Ports: "25,26,27", SW2_Vlan20.Ports: "25,26,27,28", SW1_Vlan21.Ports: "1,25,26,27,28" }
+      - given: { Scenario: "normal" }
+        advance: 2s
+        expect: { SW2_Vlan21.Ports: "25,26,27,28" }
+
+  - name: a native VLAN override moves the PVID only
+    steps:
+      - given: { Scenario: "native-vlan-mismatch" }
+        advance: 2s
+        expect: { SW1_Port27.Pvid: 20, SW2_Port28.Pvid: 1, SW1_Vlan20.Ports: "1,25,26,27,28" }
+
+  - name: an access port moved to another VLAN leaves its own
+    steps:
+      - given: { Scenario: "wrong-access-vlan" }
+        advance: 2s
+        expect: { SW3_Port24.Pvid: 20, SW3_Vlan20.Untagged: "24", SW3_Vlan20.Ports: "24,25,26,27,28", SW3_Vlan22.Ports: "25,26,27,28", SW3_Vlan22.Untagged: "" }

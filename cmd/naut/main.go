@@ -58,6 +58,14 @@ Usage:
                           tag file, offline), browse (read a live register
                           range raw + decoded), serve (bench slave for a
                           manifest), tags (re-derive the tag file).
+  naut scene <cmd>    3D HMI scene tools: init (generate a starter
+                          *.scene.json from the manifest's struct tags —
+                          one node per UDT tag a kind can draw, laid out
+                          on a grid; nobody types a node). naut check
+                          holds every scene file to the tags and UDTs.
+  naut snmp <cmd>     SNMP tools: import | browse | serve | tags (switches, PDUs, UPSes)
+  naut redfish <cmd>  Redfish tools: import | browse | serve | tags (server BMCs)
+  naut prometheus <cmd>  node_exporter tools: import | browse | serve | tags (hosts)
   naut tags <cmd>     Generate a tag file from a spreadsheet export
                           (import-csv). Commit the output and compose it
                           with tag-files:.
@@ -116,8 +124,16 @@ func main() {
 		os.Exit(runSparkplug(os.Args[2:]))
 	case "modbus":
 		os.Exit(runModbus(os.Args[2:]))
+	case "snmp":
+		os.Exit(runSnmp(os.Args[2:]))
+	case "redfish":
+		os.Exit(runRedfish(os.Args[2:]))
+	case "prometheus":
+		os.Exit(runPrometheus(os.Args[2:]))
 	case "tags":
 		os.Exit(runTags(os.Args[2:]))
+	case "scene":
+		os.Exit(runScene(os.Args[2:]))
 	case "alarms":
 		os.Exit(runAlarms(os.Args[2:]))
 	case "pull":

@@ -1,0 +1,26 @@
+{
+    "@odata.type": "#FanCollection.FanCollection",
+    "Name": "Fan Collection",
+    "Members@odata.count": 6,
+    "Members": [
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/ThermalSubsystem/Fans/Fan1"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/ThermalSubsystem/Fans/Fan2"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/ThermalSubsystem/Fans/Fan3"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/ThermalSubsystem/Fans/Fan4"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/ThermalSubsystem/Fans/Fan5"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/ThermalSubsystem/Fans/Fan6"
+        }
+    ],
+    "@odata.id": "/redfish/v1/Chassis/1/ThermalSubsystem/Fans"
+}

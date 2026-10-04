@@ -1,0 +1,31 @@
+# The rig's physical props: marker → asset → tag, plus surveyed position.
+# This is the seed of the Phase 2 scene file's anchors. Positions are in
+# metres from the ORIGIN marker: +x right along the desk edge, +y up,
+# +z toward the viewer standing at the desk. Fill `pos` in with a tape
+# measure once the props are placed (marker centre, ±1 cm).
+
+origin:
+  marker: 0            # taped flat to the desk/wall corner; never moves
+  pos: [0, 0, 0]
+
+assets:
+  - id: T101
+    tag: T101          # struct tag in nautilus.yaml
+    kind: tank
+    marker: 1
+    pos: null          # [x, y, z] — measure
+  - id: P101
+    tag: P101
+    kind: pump
+    marker: 2
+    pos: null
+  - id: XV101
+    tag: XV101
+    kind: valve
+    marker: 3
+    pos: null
+  - id: RACK1          # Rev E home cluster rack — real telemetry, later
+    tag: null
+    kind: rack
+    marker: 4
+    pos: null
