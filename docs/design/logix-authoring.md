@@ -831,6 +831,114 @@ AOI call online-edit timing; the version matrix and the multi-day flake
 number (as in C, they want the scheduled runner); hardware `.L5X`
 merge and tag-value preservation across downloads (deferred since B).
 
+### Phase E — brownfield, in progress (2026-10-03)
+
+**James's call after the Phase D check: keep pushing.** The brief's "Later"
+phase: existing Logix ladder → editable nautilus source, because every
+plant already has the code and "ditch the IDE" has to start from it.
+
+**Built: `naut logix import --project <dir> <file.L5X>`** (`logix/importer`).
+The whole export as a nautilus project: `nautilus.yaml` (one task per
+imported routine, the scan from the Logix task, `tag-files:`, the
+`target: logix` section with the controller's name, processor and
+revision, and the comm path / host when given), `tags/logix.yaml`
+(controller tags with the export's own descriptions, `role: output` for
+every tag the imported logic writes), `lib/logix_types.st` (the UDTs),
+one `PROGRAM` per ladder routine (`<Program>.ld`, or
+`<Program>_<Routine>.ld` with the program's tags promoted to
+`<Program>_<Tag>` controller tags when a program has several routines),
+one `FUNCTION_BLOCK` per Add-On Instruction in `lib/`, and ST routines
+carried verbatim with their declarations. The L5X reader learned Tasks
+and an AOI local tag's `DefaultData`, and exports its identifier
+mapping, so the import and the type generator agree on a name.
+
+The import is the writer's mapping run backwards, so the writer's own
+idioms fold back to what they came from: `XIC(x)OSR(st,q)` and a later
+`XIC(q)` to `+x`; `MOVE(v,t.PRE)` ahead of the timer to `PT := v` (the
+variable retyped TIME when the preset is all it feeds); `<cond>RES(c)`
+after the count to `R := cond`; the DN-headed continuation after a TOF or
+CTU back onto the block's rung; the `en_` helper rung back to the AOI
+call's condition; the capture rung `XIC(c.DN)OTE(x)` after a folded
+reset to `Q => x`. People's idioms the writer never emits map too: a
+one-shot at the head of a leg of the rung's first branch is `+x` (and
+the writer now inlines ONS there as well); a one-shot of the whole
+condition driving one OTE is the `( P x )` coil — **edge coils joined
+the writer's subset** as `<cond>ONS(st)OTE(x)` and `<cond>OSF(st,x)`,
+alone on their rung; `CMP(a >= b)` with a plain comparison is the
+compare it means; `XIC(t.TT)` is `t.IN /t.Q` (TT is EN AND NOT DN);
+`inst.Out` reads of an Add-On Instruction's output are now legal in the
+writer, as Logix writes them. A mid-rung coil, a block whose rung-in
+passes through, or a branch of output legs becomes one nautilus rung per
+output leg sharing the condition — the split the ladder grammar
+documents.
+
+**What has no nautilus form is not guessed at.** The rung is left out of
+the program, its text kept as a `// not imported (<reason>)` comment
+where it stood, the file's header says the program is not deployable
+until those are rewritten, and the report counts them by reason. A
+routine with a rung left out is never silently "imported".
+
+**Measured on the development corpus** (52 real exports, 30,397 ladder
+rungs, 964 ladder routines of which 831 are AOI logic; the corpus stays
+out of the repo, `NAUTILUS_L5X_CORPUS=… go test ./logix/importer/ -run
+Corpus -v` reruns it):
+
+- **55.9 % of rungs import** (16,984 of 30,397); **13.3 % of routines
+  import complete** (128 of 964; program routines 15 of 133, AOI logic
+  113 of 831).
+- **Every complete program routine writes back identical**: 15 of 15
+  re-emit the export's rung text, modulo the generated edge tag names.
+  The writer refused none of them. Same for the writer's own output: the
+  DemoLine export, the whole v1 subset golden, the UDT and the AOI
+  conformance projects import and write back identical.
+- **What keeps the rest out, by rung:** data operations 10,216 (MOVE
+  6,008, MUL 1,806, SUB 940, ADD 501, CPT 339, LIMIT 322, DIV 300) —
+  **34 % of all rungs**; bit-level access `Tag.3` 891; `CMP` with an
+  expression beyond a binary comparison 733; a one-shot inside a branch
+  leg that also carries coils 440 + compound one-shots 353; arrays of
+  timers 153; module I/O operands 151; GSV/SSV 153; a timer inside a
+  branch leg 100; OSR away from the helper shape 100; JSR 14.
+- **The Studio-authored DemoLine export** (the real one, from the Echo
+  share) imports complete, `naut check --target logix` passes, and the
+  writer re-emits its two rungs byte for byte. Deploying that import
+  back to Echo was not run: the session's permission classifier refused
+  the deploy from the scratch directory, and I did not try another
+  route. The command is one line for James.
+
+**The finding that needs a decision.** Real Logix ladder is a third data
+operations — a MOVE, an ADD, a CPT on a rung — and nautilus ladder has
+no element for any of them: a `.ld` rung's elements are contacts, edges,
+compares, blocks and coils, and the one way to store a number is a
+block's `=>` binding. That is why 87 % of routines import incomplete,
+and it is a language question, not an importer one. The options as I
+see them:
+
+1. **Add data instructions to nautilus ladder** — an output-zone element
+   that assigns on rung condition (`[ y := x ]`, or Logix-style
+   `MOVE(x, y)` / `ADD(a, b, y)` boxes), compiled through the same FBD
+   lowering as everything else. The writer emits MOVE/ADD/SUB/MUL/DIV/CPT
+   from it; the import maps them back one for one. This closes most of
+   the 34 % and also lets a greenfield Logix-style author write the
+   rungs they already write. It is a nautilus language change: lang/ld,
+   the editor's palette and renderer, the docs.
+2. **Import such rungs as ST** — a routine with data operations becomes
+   an ST PROGRAM (`IF a THEN y := x; END_IF;`), losing the ladder view
+   for that routine but importing it whole and deployable (the writer's
+   ST routine). Mechanical, no language change, worse to read.
+3. **Leave them out** and sell brownfield as "boolean logic imports,
+   data moves are rewritten by hand" — honest, and 55 % is not nothing,
+   but it is not "the plant's code is now nautilus source".
+
+I would take option 1, and do option 2 as the fallback for routines that
+still do not fit. Bit-level access (`Tag.3`, 3 % of rungs) is a second,
+smaller language question of the same kind.
+
+**Not done in E:** the controller leg above; the data-operation decision;
+RTO/CTD; `AFI`; multi-dimensional arrays; aliases (declared as tags,
+their I/O target not carried); JSR (each routine is its own PROGRAM; the
+call rung is left out); the `( P x )` coil in the round-trip comparator
+beyond the writer's unit tests.
+
 ## 8. The demo this enables
 
 James's target demo (2026-10-03), which replaces the Tier A `ab01` draft in the
