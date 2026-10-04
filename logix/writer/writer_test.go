@@ -710,3 +710,26 @@ func TestStructuredTextRejections(t *testing.T) {
 		})
 	}
 }
+
+// The routine partial carries an ST routine as the online import's
+// target, with the tags as context.
+func TestWriteRoutineForST(t *testing.T) {
+	doc, diags, err := WriteRoutine("calc.st", stProgram, Options{Controller: "C"})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("%v %v", err, diags)
+	}
+	f, err := l5x.Parse(doc)
+	if err != nil {
+		t.Fatalf("does not parse: %v\n%s", err, doc)
+	}
+	if f.TargetType != "Routine" || !strings.Contains(string(doc), `TargetSubType="ST"`) || !strings.Contains(string(doc), `<Routine Use="Target" Name="MainRoutine" Type="ST">`) {
+		t.Errorf("envelope: %s", string(doc)[:300])
+	}
+	r := f.Controller.Programs[0].Routines[0]
+	if r.Type != "ST" || !strings.Contains(r.Text, "TONR(t);") {
+		t.Errorf("routine = %+v", r)
+	}
+	if !strings.Contains(string(doc), `<Tags Use="Context">`) || strings.Contains(string(doc), "<Tasks>") {
+		t.Error("context tags missing or tasks present")
+	}
+}

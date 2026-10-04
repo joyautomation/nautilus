@@ -25,7 +25,9 @@ type fakeAgent struct {
 	running []byte // the controller's project, as the lean L5X an upload+convert yields
 	calls   []string
 	imports []map[string]any
-	mode    string
+	// routineImports records whole-routine online imports (ST).
+	routineImports []map[string]any
+	mode           string
 }
 
 func newFakeAgent(t *testing.T, running []byte) (*fakeAgent, *logixd.Client) {
@@ -96,6 +98,14 @@ func (f *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 		ok(map[string]any{"connected": "Online", "commPath": "x"})
 	case strings.HasSuffix(r.URL.Path, "/mode"):
 		ok(map[string]any{"mode": f.mode})
+	case strings.HasSuffix(r.URL.Path, "/partial-import-with-target"):
+		f.routineImports = append(f.routineImports, body)
+		file := body["file"].(string)
+		f.running = f.files[file]
+		if full, ok := f.files[strings.TrimSuffix(file, ".routine.L5X")+".L5X"]; ok {
+			f.running = full
+		}
+		ok(map[string]any{})
 	case strings.HasSuffix(r.URL.Path, "/partial-export"):
 		f.files[body["output"].(string)] = f.running
 		ok(map[string]any{})
@@ -346,5 +356,32 @@ func TestSessionOnAnEmptyControllerNeedsADownload(t *testing.T) {
 	var nd *NeedsDownloadError
 	if !errors.As(err, &nd) || !nd.RoutineMissing {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// An ST program edits online as a whole-routine import and verifies by
+// the routine's text.
+func TestSessionEditsAnSTRoutine(t *testing.T) {
+	src := "PROGRAM Calc\nVAR_EXTERNAL\n  A : REAL;\n  B : REAL;\nEND_VAR\nB := A * 2.0;\nEND_PROGRAM\n"
+	same, _, _ := writer.WriteST(src, writer.Options{Controller: "DemoLine"})
+	f, c := newFakeAgent(t, same)
+	tgt := target()
+	tgt.Language = "st"
+	s, err := Connect(context.Background(), Options{Client: c, Target: tgt})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close(context.Background())
+	rep, err := s.Edit(context.Background(), src)
+	if err != nil || !rep.Same {
+		t.Fatalf("same: err=%v report=%+v", err, rep)
+	}
+	edited := strings.Replace(src, "B := A * 2.0;", "B := A * 3.0;", 1)
+	rep, err = s.Edit(context.Background(), edited)
+	if err != nil || rep.Applied != Online || !rep.Verified {
+		t.Fatalf("edit: err=%v report=%+v", err, rep)
+	}
+	if len(f.imports) != 0 || len(f.routineImports) != 1 || f.routineImports[0]["onlineOption"] != "FinalizeEdits" {
+		t.Errorf("imports: rungs=%d routines=%v", len(f.imports), f.routineImports)
 	}
 }

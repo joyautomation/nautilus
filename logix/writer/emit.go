@@ -430,3 +430,99 @@ func usedTypes(lw *lowered) []string {
 	}
 	return sortedKeys(seen)
 }
+
+// WriteRoutine lowers a program to a Routine-target partial export: the
+// routine alone, with the tags it names as context — what an online
+// import of a whole routine (partial-import-with-target) takes. It is
+// the ST routine's online-edit form; ladder uses WriteRungs, the finer
+// rung import, and this works for ladder too.
+func WriteRoutine(path, src string, opts Options) ([]byte, []Diag, error) {
+	var lw *lowered
+	var err error
+	switch Language(path) {
+	case "st":
+		lw, err = lowerST(src, opts)
+	case "ld":
+		m, gerr := ld.Graph(src, opts.Libs...)
+		if gerr != nil {
+			return nil, nil, gerr
+		}
+		if m.Name == "" {
+			return nil, nil, fmt.Errorf("logix writer: source declares no PROGRAM")
+		}
+		lw = lower(m, opts.withDefaults(m.Name))
+		lw.opts = opts.withDefaults(m.Name)
+	default:
+		return nil, nil, fmt.Errorf("%s: only ladder (.ld) and structured text (.st) programs are in the Logix subset", path)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(lw.diags) > 0 {
+		return nil, lw.diags, nil
+	}
+	o := lw.opts
+	var b strings.Builder
+	w := func(format string, a ...any) {
+		fmt.Fprintf(&b, format, a...)
+		b.WriteByte('\n')
+	}
+	sub := "RLL"
+	if lw.st {
+		sub = "ST"
+	}
+	w(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	w(`<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="%s" TargetName="%s" TargetType="Routine" TargetSubType="%s" ContainsContext="true" ExportDate="%s" ExportOptions="References NoRawData L5KData DecoratedData Context ProductDefinedTypes IOTags Dependencies ForceProtectedEncoding AllProjDocTrans">`,
+		attr(o.SoftwareRevision), attr(o.Routine), sub, attr(o.ExportDate))
+	w(`<Controller Use="Context" Name="%s">`, attr(o.Controller))
+	w(`<DataTypes Use="Context">`)
+	for _, dt := range usedTypes(lw) {
+		w(`<DataType Name="%s" Family="NoFamily" Class="ProductDefined"/>`, dt)
+	}
+	for _, u := range lw.usedTypesInOrder() {
+		w(`<DataType Name="%s" Family="NoFamily" Class="User"/>`, attr(u.Name))
+	}
+	w(`</DataTypes>`)
+	if len(lw.ctrlTags) > 0 {
+		emitContextTags(&b, lw.ctrlTags)
+	}
+	w(`<Programs Use="Context">`)
+	w(`<Program Use="Context" Name="%s">`, attr(o.Program))
+	if len(lw.progTags) > 0 {
+		emitContextTags(&b, lw.progTags)
+	}
+	w(`<Routines Use="Context">`)
+	if lw.st {
+		w(`<Routine Use="Target" Name="%s" Type="ST">`, attr(o.Routine))
+		w(`<STContent>`)
+		for i, line := range lw.stLines {
+			w(`<Line Number="%d">`, i)
+			w(`%s`, cdata(line))
+			w(`</Line>`)
+		}
+		w(`</STContent>`)
+	} else {
+		w(`<Routine Use="Target" Name="%s" Type="RLL">`, attr(o.Routine))
+		w(`<RLLContent>`)
+		for i, r := range lw.rungs {
+			w(`<Rung Number="%d" Type="N">`, i)
+			if r.Comment != "" {
+				w(`<Comment>`)
+				w(`%s`, cdata(r.Comment))
+				w(`</Comment>`)
+			}
+			w(`<Text>`)
+			w(`%s`, cdata(r.Text+";"))
+			w(`</Text>`)
+			w(`</Rung>`)
+		}
+		w(`</RLLContent>`)
+	}
+	w(`</Routine>`)
+	w(`</Routines>`)
+	w(`</Program>`)
+	w(`</Programs>`)
+	w(`</Controller>`)
+	w(`</RSLogix5000Content>`)
+	return []byte(b.String()), nil, nil
+}

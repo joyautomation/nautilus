@@ -32,16 +32,18 @@ import (
 
 // Session is one controller held open and online for repeated edits.
 type Session struct {
-	c      *logixd.Client
-	t      Target
-	log    func(string, ...any)
-	mu     sync.Mutex
-	s      *logixd.Session
-	tags   map[string]string // the controller's tag shapes, from LogicOf
-	rungs  []l5x.Rung        // what the routine runs now
-	prog   string
-	rout   string
-	opened time.Time
+	c        *logixd.Client
+	t        Target
+	log      func(string, ...any)
+	mu       sync.Mutex
+	s        *logixd.Session
+	tags     map[string]string // the controller's tag shapes, from LogicOf
+	rungs    []l5x.Rung        // what the routine runs now (ladder)
+	lines    []string          // what the routine runs now (ST), one per line
+	prog     string
+	rout     string
+	routType string
+	opened   time.Time
 }
 
 // Connect uploads the running project, opens it and goes online. It
@@ -111,6 +113,8 @@ func (s *Session) open(ctx context.Context) error {
 		p, name, _ := strings.Cut(k, "/")
 		if (prog == "" || strings.EqualFold(p, prog)) && strings.EqualFold(name, rout) {
 			s.prog, s.rout, s.rungs = p, name, r.Rungs
+			s.lines = strings.Split(strings.TrimRight(r.Text, "\n"), "\n")
+			s.routType = r.Type
 		}
 	}
 	s.log("session open and online to %s in %s (%d rungs in %s/%s)", s.t.CommPath, time.Since(t0).Round(time.Millisecond), len(s.rungs), s.prog, s.rout)
@@ -148,9 +152,6 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 		PeriodMs: s.t.PeriodMs, ProcessorType: s.t.Processor, MajorRev: major, MinorRev: minor, Libs: s.t.Libs,
 		Inits: s.t.Inits, Descs: s.t.Descs, Side: s.t.Side,
 	}
-	if s.t.Language == "st" {
-		return done(fmt.Errorf("an ST routine deploys by download for now; run naut logix deploy --download --yes"))
-	}
 	full, diags, err := s.t.write(src, wopts)
 	if err != nil {
 		return done(err)
@@ -158,7 +159,14 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 	if len(diags) > 0 {
 		return done(&DiagError{Diags: diags})
 	}
-	rungs, _, _ := writer.WriteRungs(src, wopts)
+	// Ladder goes as a rung import; an ST routine as a whole-routine
+	// import, which the SDK also takes online.
+	var partial []byte
+	if s.t.Language == "st" {
+		partial, _, _ = writer.WriteRoutine("program.st", src, wopts)
+	} else {
+		partial, _, _ = writer.WriteRungs(src, wopts)
+	}
 	gen, err := l5x.Parse(full)
 	if err != nil {
 		return done(err)
@@ -186,7 +194,11 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 	if rep.TagsChanged {
 		return done(&NeedsDownloadError{Diffs: rep.Diffs})
 	}
-	have := &l5x.Logic{Tags: s.tags, Routines: map[string]*l5x.RoutineLogic{rep.Program + "/" + rep.Routine: {Type: "RLL", Rungs: s.rungs}}}
+	text := ""
+	if s.routType == "ST" {
+		text = strings.Join(s.lines, "\n") + "\n"
+	}
+	have := &l5x.Logic{Tags: s.tags, Routines: map[string]*l5x.RoutineLogic{rep.Program + "/" + rep.Routine: {Type: s.routType, Rungs: s.rungs, Text: text}}}
 	rep.Diffs = l5x.LogicDiff(have, want)
 	if len(rep.Diffs) == 0 {
 		rep.Same = true
@@ -195,24 +207,42 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 	}
 
 	run := "edit-" + time.Now().UTC().Format("20060102-150405.000")
-	rungsRel := path.Join(run, rep.Controller+".rungs.L5X")
-	if err := s.c.PutFile(ctx, rungsRel, rungs); err != nil {
-		return done(err)
-	}
 	xpath := logixd.RoutinePath(s.prog, s.rout)
 	mode, _ := s.s.Mode(ctx)
 	rep.ModeBefore = string(mode)
-	ir, evs, err := s.s.ImportRungs(ctx, xpath, 0, uint32(len(s.rungs)), rungsRel, logixd.FinalizeEdits)
-	if err != nil {
-		if logixd.IsFatal(err) {
-			// The session is gone; the next edit reopens it.
-			_ = s.s.Close(context.Background())
-			s.s = nil
+	var replaced uint32
+	if s.t.Language == "st" {
+		rel := path.Join(run, rep.Controller+".routine.L5X")
+		if err := s.c.PutFile(ctx, rel, partial); err != nil {
+			return done(err)
 		}
-		return done(withEvents("online rung import", err, evs))
+		evs, err := s.s.ImportWithTarget(ctx, xpath, s.rout, rel, logixd.FinalizeEdits)
+		if err != nil {
+			if logixd.IsFatal(err) {
+				_ = s.s.Close(context.Background())
+				s.s = nil
+			}
+			return done(withEvents("online routine import", err, evs))
+		}
+		replaced = uint32(len(s.lines))
+	} else {
+		rel := path.Join(run, rep.Controller+".rungs.L5X")
+		if err := s.c.PutFile(ctx, rel, partial); err != nil {
+			return done(err)
+		}
+		ir, evs, err := s.s.ImportRungs(ctx, xpath, 0, uint32(len(s.rungs)), rel, logixd.FinalizeEdits)
+		if err != nil {
+			if logixd.IsFatal(err) {
+				// The session is gone; the next edit reopens it.
+				_ = s.s.Close(context.Background())
+				s.s = nil
+			}
+			return done(withEvents("online rung import", err, evs))
+		}
+		replaced = ir.ReplaceCount
 	}
 	after, _ := s.s.Mode(ctx)
-	rep.Applied, rep.Replaced, rep.ModeAfter = Online, ir.ReplaceCount, string(after)
+	rep.Applied, rep.Replaced, rep.ModeAfter = Online, replaced, string(after)
 
 	// Verify from the controller: export the routine and compare rungs.
 	out := path.Join(run, "routine.L5X")
@@ -233,14 +263,22 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 		return done(&VerifyError{Diffs: []string{"routine " + s.prog + "/" + s.rout + ": not in the controller's export"}})
 	}
 	wantR := want.Routines[rep.Program+"/"+rep.Routine]
+	// A partial export carries the routine as context, without its Type;
+	// the type is what was sent.
+	nowCmp := *now
+	if nowCmp.Type == "" {
+		nowCmp.Type = wantR.Type
+	}
 	if d := l5x.LogicDiff(
-		&l5x.Logic{Tags: map[string]string{}, Routines: map[string]*l5x.RoutineLogic{"r": {Type: "RLL", Rungs: wantR.Rungs}}},
-		&l5x.Logic{Tags: map[string]string{}, Routines: map[string]*l5x.RoutineLogic{"r": {Type: "RLL", Rungs: now.Rungs}}},
+		&l5x.Logic{Tags: map[string]string{}, Routines: map[string]*l5x.RoutineLogic{"r": wantR}},
+		&l5x.Logic{Tags: map[string]string{}, Routines: map[string]*l5x.RoutineLogic{"r": &nowCmp}},
 	); len(d) > 0 {
 		return done(&VerifyError{Diffs: d})
 	}
-	s.rungs = now.Rungs
+	s.rungs = nowCmp.Rungs
+	s.lines = strings.Split(strings.TrimRight(nowCmp.Text, "\n"), "\n")
+	s.routType = nowCmp.Type
 	rep.Verified = true
-	s.log("online edit live and verified: %d rung(s) replaced in %s/%s, controller %s, %s", ir.ReplaceCount, s.prog, s.rout, after, time.Since(started).Round(time.Millisecond))
+	s.log("online edit live and verified: %s/%s replaced online, controller %s, %s", s.prog, s.rout, after, time.Since(started).Round(time.Millisecond))
 	return done(nil)
 }

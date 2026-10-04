@@ -196,15 +196,26 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 	rep.Controller = gen.Controller.Name
 	rep.Program = gen.Controller.Programs[0].Name
 	rep.Routine = gen.Controller.Programs[0].Routines[0].Name
-	rep.Rungs = len(gen.Controller.Programs[0].Routines[0].Rungs)
+	routine := gen.Controller.Programs[0].Routines[0]
+	rep.Rungs = len(routine.Rungs)
 	keep(rep.Controller+".L5X", full)
-	keep(rep.Controller+".rungs.L5X", rungs)
-	logf("wrote %s: program %s, routine %s, %d rung(s)", rep.Controller, rep.Program, rep.Routine, rep.Rungs)
+	if t.Language == "st" {
+		rungs, _, _ = writer.WriteRoutine("program.st", src, wopts)
+		keep(rep.Controller+".routine.L5X", rungs)
+		logf("wrote %s: program %s, ST routine %s, %d line(s)", rep.Controller, rep.Program, rep.Routine, strings.Count(routine.Text, "\n"))
+	} else {
+		keep(rep.Controller+".rungs.L5X", rungs)
+		logf("wrote %s: program %s, routine %s, %d rung(s)", rep.Controller, rep.Program, rep.Routine, rep.Rungs)
+	}
 
 	c := o.Client
 	runID := "deploy-" + time.Now().UTC().Format("20060102-150405.000")
 	rel := func(name string) string { return path.Join(runID, name) }
-	fullRel, rungsRel, acdRel := rel(rep.Controller+".L5X"), rel(rep.Controller+".rungs.L5X"), rel(rep.Controller+".ACD")
+	partialName := rep.Controller + ".rungs.L5X"
+	if t.Language == "st" {
+		partialName = rep.Controller + ".routine.L5X"
+	}
+	fullRel, rungsRel, acdRel := rel(rep.Controller+".L5X"), rel(partialName), rel(rep.Controller+".ACD")
 
 	// 1. Import + build.
 	if err := c.PutFile(ctx, fullRel, full); err != nil {
@@ -295,9 +306,6 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 	if o.Mode == Online && (rep.TagsChanged || rep.RoutineMissing) {
 		return done(&NeedsDownloadError{Diffs: rep.Diffs, RoutineMissing: rep.RoutineMissing})
 	}
-	if o.Mode == Online && t.Language == "st" {
-		return done(fmt.Errorf("an ST routine deploys by download for now (online edit of a routine is the next step); use --download --yes"))
-	}
 
 	// 3. Put it on the controller.
 	if o.Mode == Online {
@@ -314,15 +322,26 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 		}
 		mode, _ := s.Mode(ctx)
 		rep.ModeBefore = string(mode)
-		ir, evs, err := s.ImportRungs(ctx, logixd.RoutinePath(rep.Program, rep.Routine), 0, uint32(len(running.Rungs)), rungsRel, logixd.FinalizeEdits)
-		if err != nil {
-			_, _ = s.GoOffline(context.Background())
-			return done(withEvents("online rung import", err, evs))
+		xpath := logixd.RoutinePath(rep.Program, rep.Routine)
+		var replaced uint32
+		if t.Language == "st" {
+			evs, err := s.ImportWithTarget(ctx, xpath, rep.Routine, rungsRel, logixd.FinalizeEdits)
+			if err != nil {
+				_, _ = s.GoOffline(context.Background())
+				return done(withEvents("online routine import", err, evs))
+			}
+		} else {
+			ir, evs, err := s.ImportRungs(ctx, xpath, 0, uint32(len(running.Rungs)), rungsRel, logixd.FinalizeEdits)
+			if err != nil {
+				_, _ = s.GoOffline(context.Background())
+				return done(withEvents("online rung import", err, evs))
+			}
+			replaced = ir.ReplaceCount
 		}
 		after, _ := s.Mode(ctx)
 		_, _ = s.GoOffline(context.Background())
-		rep.Applied, rep.Replaced, rep.ModeAfter = Online, ir.ReplaceCount, string(after)
-		logf("online edit live: %d rung(s) replaced in %s/%s, %s, controller %s → %s", ir.ReplaceCount, rep.Program, rep.Routine, ir.OnlineOption, mode, after)
+		rep.Applied, rep.Replaced, rep.ModeAfter = Online, replaced, string(after)
+		logf("online edit live: %s/%s replaced online (FinalizeEdits), controller %s → %s", rep.Program, rep.Routine, mode, after)
 	} else {
 		s, err := c.Open(ctx, acdRel)
 		if err != nil {
