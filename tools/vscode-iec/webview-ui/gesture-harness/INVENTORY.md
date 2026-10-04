@@ -32,18 +32,18 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 153 rows. **16 rows have no coverage at all** (no webview test,
+Totals: 153 rows. **12 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
 |---|---|---|
-| Commands | 28 | 8 |
+| Commands | 28 | 6 |
 | FBD `?` | 18 | 0 |
 | Ladder `?` | 20 | 0 |
 | SFC `?` | 22 | 0 |
 | Mimic `?` | 18 | 0 |
 | Component `?` | 8 | 0 |
-| Other claims | 39 | 8 |
+| Other claims | 39 | 6 |
 
 ## Commands (package.json `contributes.commands`)
 
@@ -57,9 +57,9 @@ no rig verb, no smoke check); per section below.
 | C06 | Extension (Palette; editor context menu; Live Values item inline) | Write a new value to a tag (right-click an identifier, or the pencil in the Live Values panel) | package.json command `nautilus.setValue` | — | — | 13 |
 | C07 | Extension (Live Values view title (hidden from palette)) | Refresh the Live Values panel | package.json command `nautilus.liveValues.refresh` | — | — | — |
 | C08 | Extension (Palette) | Download the program to the controller (online edit, with confirmation) | package.json command `nautilus.program.download` | — | — | 08 |
-| C09 | Extension (Palette) | Diff the program with the controller | package.json command `nautilus.program.diff` | — | — | — |
+| C09 | Extension (Palette) | Diff the program with the controller | package.json command `nautilus.program.diff` | — | — | 16 |
 | C10 | Extension (Palette) | Roll back the controller program | package.json command `nautilus.program.rollback` | — | — | 08 |
-| C11 | Extension (Palette) | Pull the program from the controller | package.json command `nautilus.program.pull` | — | — | — |
+| C11 | Extension (Palette) | Pull the program from the controller | package.json command `nautilus.program.pull` | — | — | 16 |
 | C12 | Extension (Text editor title; Palette) | Open the FBD diagram beside the text | package.json command `nautilus.fbd.preview` | — | — | 03, 07 |
 | C13 | Extension (Text editor title; Palette) | Open the ladder diagram beside the text (also an L5X) | package.json command `nautilus.ld.preview` | — | — | 10 |
 | C14 | Extension (Text editor title; Palette) | Open the SFC diagram beside the text | package.json command `nautilus.sfc.preview` | — | — | 03 |
@@ -210,9 +210,9 @@ no rig verb, no smoke check); per section below.
 | X15 | Extension | Missing-CLI prompt Install naut; min-version warning (Update naut / Don't show again) | README Get started | — | — | 01, 02 |
 | X16 | Extension | Walkthrough opens once, outside a nautilus project | README Get started | — | — | 01 |
 | X17 | Extension | Diagnostics as you type in .st/.fbd/.ld/.sfc (naut lsp) | README Language intelligence | — | — | 01 |
-| X18 | Extension | Go to definition, hover and completion in ST | README Language intelligence | — | — | — |
+| X18 | Extension | Go to definition, hover and completion in ST | README Language intelligence | — | — | 14 |
 | X19 | Extension | *_test.yaml suites in the Testing view; run one from the gutter; failure inline on the assertion | README Testing | — | — | — |
-| X20 | Extension | JSON-schema completion and validation for nautilus.yaml, tag, alarm and test files | README Testing | — | — | — |
+| X20 | Extension | JSON-schema completion and validation for nautilus.yaml, tag, alarm and test files | README Testing | — | — | 14 (nautilus.yaml and *_test.yaml; tag and alarm files not exercised) |
 | X21 | Extension | Hidden command nautilus.fb.monitor (registered in extension.ts, not contributed in package.json) | src/extension.ts:158 | — | — | — |
 | X22 | Ladder | L5X opens read-only: pill, no palette, edits do nothing | README Rockwell L5X | diagram.test.mjs: Ladder: an L5X model is read-only | — | 10 |
 | X23 | Ladder | Declare offer (amber declare …) files an undeclared identifier under VAR_EXTERNAL or VAR | CHANGELOG 0.10.0 | diagram.test.mjs: Ladder: the declare offer covers a block call's arguments | ld_declare | — |
