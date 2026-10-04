@@ -216,7 +216,10 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 		if err := s.c.PutFile(ctx, rel, partial); err != nil {
 			return done(err)
 		}
-		evs, err := s.s.ImportWithTarget(ctx, xpath, s.rout, rel, logixd.FinalizeEdits)
+		// A routine imports INTO its program: the target path is the
+		// container, and the routine's own path would make the SDK
+		// overwrite the routine with itself and fall over.
+		evs, err := s.s.ImportWithTarget(ctx, logixd.ProgramPath(s.prog), s.rout, rel, logixd.FinalizeEdits)
 		if err != nil {
 			if logixd.IsFatal(err) {
 				_ = s.s.Close(context.Background())

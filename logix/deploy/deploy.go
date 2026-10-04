@@ -325,7 +325,9 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 		xpath := logixd.RoutinePath(rep.Program, rep.Routine)
 		var replaced uint32
 		if t.Language == "st" {
-			evs, err := s.ImportWithTarget(ctx, xpath, rep.Routine, rungsRel, logixd.FinalizeEdits)
+			// A routine imports INTO its program (the container), never
+			// onto its own path.
+			evs, err := s.ImportWithTarget(ctx, logixd.ProgramPath(rep.Program), rep.Routine, rungsRel, logixd.FinalizeEdits)
 			if err != nil {
 				_, _ = s.GoOffline(context.Background())
 				return done(withEvents("online routine import", err, evs))
