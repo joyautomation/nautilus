@@ -720,7 +720,17 @@ the **online import with FinalizeEdits took 4.0 s on Echo, controller in
 Run throughout, routine text verified from the controller.** The SDK
 service recovered on its own once the session closed; nothing on the
 controller changed. Both deploy paths now use the program path. Recorded
-as the rule it is: a container path, never a component's own.
+as the rule it is: a container path, never a component's own. From the
+CLI, `naut logix deploy --online` of the ST fixture: 2 m 24 s on the cold
+path (the SDK opens dominate, as for ladder), verified by routine text.
+
+**Live-test hygiene, found by a rerun:** the ST timer scenario failed on
+its second run because the first run's last step had left `In` true on
+the controller, and the timer was long done. On nautilus every test
+starts from the manifest's seeds; a controller keeps what the last test
+left. `naut test --target logix` now writes every input tag's seed before
+each test (outputs and state are the logic's, and a scenario that depends
+on them establishes them itself). 4 of 4 again, and on reruns.
 
 ## 8. The demo this enables
 
