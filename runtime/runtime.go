@@ -162,8 +162,11 @@ type Runtime struct {
 	outSent     atomic.Bool
 
 	// inBuf is the delivery map an io.BatchReader driver refills each scan
-	// instead of allocating one. Touched only from Scan, under mainMu.
-	inBuf nio.Values
+	// instead of allocating one, and outBuf the map the output push is
+	// assembled in (drivers copy what they keep; see io.Driver). Touched
+	// only from Scan, under mainMu.
+	inBuf  nio.Values
+	outBuf nio.Values
 
 	// readOK is whether the LAST input read succeeded — the runtime's own
 	// contribution to per-tag quality (see Quality). Distinct from
@@ -870,7 +873,10 @@ func (r *Runtime) scanAt(due time.Time) {
 			// Compound values (UDTs, arrays) cross the seam as ir.Value so
 			// typed drivers keep field names and integer widths; scalars
 			// stay plain Go values for simple drivers.
-			out := make(nio.Values, len(r.outputs))
+			if r.outBuf == nil {
+				r.outBuf = make(nio.Values, len(r.outputs))
+			}
+			out := r.outBuf
 			r.tags.readMany(r.outputs, out)
 			if err := r.driver.WriteOutputs(out); err != nil {
 				if ioErr == nil {

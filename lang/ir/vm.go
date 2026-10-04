@@ -378,34 +378,50 @@ func evalExpr(ctx *EvalCtx, e Expr) (Value, error) {
 		}
 		return obj.Fld[n.FieldIdx], nil
 	case *Call:
-		args := make([]Value, len(n.Args))
-		for i, a := range n.Args {
-			v, err := evalExpr(ctx, a)
-			if err != nil {
-				return Value{}, err
-			}
-			args[i] = v
-		}
 		if n.Fn == nil {
 			return Value{}, fmt.Errorf("call %q has no resolved Fn", n.Name)
 		}
-		return n.Fn(args)
+		// Arguments go on the frame's scratch stack, not a fresh slice:
+		// reserve a window, fill it (a nested call stacks above it, so the
+		// window is re-sliced after each argument in case the stack grew),
+		// call, pop. Builtins never retain their args slice.
+		fr := ctx.Frame
+		base := len(fr.scratch)
+		for range n.Args {
+			fr.scratch = append(fr.scratch, Value{})
+		}
+		for i, a := range n.Args {
+			v, err := evalExpr(ctx, a)
+			if err != nil {
+				fr.scratch = fr.scratch[:base]
+				return Value{}, err
+			}
+			fr.scratch[base+i] = v
+		}
+		res, err := n.Fn(fr.scratch[base : base+len(n.Args) : base+len(n.Args)])
+		clear(fr.scratch[base:])
+		fr.scratch = fr.scratch[:base]
+		return res, err
 	case *UserCall:
 		if n.Def == nil || n.Def.Run == nil {
 			return Value{}, fmt.Errorf("user function call has no resolved Def")
 		}
-		frame := NewFuncFrame(n.Def)
+		frame := n.Def.acquireFrame()
 		for i, a := range n.Args {
 			v, err := evalExpr(ctx, a)
 			if err != nil {
+				n.Def.releaseFrame(frame)
 				return Value{}, err
 			}
 			frame.Slots[i] = CopyValue(coerceValue(v, n.Def.Inputs[i].Type))
 		}
 		if err := n.Def.Run(frame, ctx.Host); err != nil {
+			n.Def.releaseFrame(frame)
 			return Value{}, err
 		}
-		return frame.Slots[n.Def.ReturnSlot], nil
+		ret := frame.Slots[n.Def.ReturnSlot]
+		n.Def.releaseFrame(frame)
+		return ret, nil
 	}
 	return Value{}, fmt.Errorf("unknown expr %T", e)
 }

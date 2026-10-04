@@ -215,7 +215,13 @@ func registerStringBuiltins() {
 		Result:   StringT,
 		Variadic: true,
 		Fn: func(args []Value) (Value, error) {
+			// Size the result once: exactly one allocation, the string.
+			n := 0
+			for _, a := range args {
+				n += len(a.S)
+			}
 			var b strings.Builder
+			b.Grow(n)
 			for _, a := range args {
 				b.WriteString(a.S)
 			}
