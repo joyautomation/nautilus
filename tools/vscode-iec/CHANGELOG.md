@@ -3,6 +3,14 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Restart Language Server no longer leaves another "nautilus Structured Text" output channel.** The extension owns one channel and every language client reuses it. (#137)
+- **Live Values: the Connect button is an icon** (plug) instead of 185 px of text that squeezed the view title. (#138)
+- **Ladder: dragging an element no longer text-selects the rung labels it passes over**, and nothing stays highlighted after the drop. (#131)
+
 ## [0.13.1] - 2026-10-04
 
 ### Added
