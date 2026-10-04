@@ -32,12 +32,12 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 153 rows. **8 rows have no coverage at all** (no webview test,
+Totals: 153 rows. **4 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
 |---|---|---|
-| Commands | 28 | 5 |
+| Commands | 28 | 1 |
 | FBD `?` | 18 | 0 |
 | Ladder `?` | 20 | 0 |
 | SFC `?` | 22 | 0 |
@@ -51,11 +51,11 @@ no rig verb, no smoke check); per section below.
 |---|---|---|---|---|---|---|
 | C01 | Extension (Palette) | Toggle inline live tag values from the palette | package.json command `nautilus.liveValues.toggle` | gestures.test.mjs: the live pill reflects nautilus.liveValues.enabled and toggles it through the host | — | 08 (sets it by setting) |
 | C02 | Extension (Palette; missing-CLI prompt) | Install or update the naut CLI | package.json command `nautilus.installCli` | — | — | 01 |
-| C03 | Extension (Palette) | Show which naut is in use and its version | package.json command `nautilus.showCliInfo` | — | — | — |
-| C04 | Extension (Palette) | Restart the language server | package.json command `nautilus.restartLanguageServer` | — | — | — |
-| C05 | Extension (Palette; Live Values view title) | Connect to a controller (set the runtime URL) | package.json command `nautilus.connect` | — | — | — |
+| C03 | Extension (Palette) | Show which naut is in use and its version | package.json command `nautilus.showCliInfo` | — | — | 12 |
+| C04 | Extension (Palette) | Restart the language server | package.json command `nautilus.restartLanguageServer` | — | — | 12 |
+| C05 | Extension (Palette; Live Values view title) | Connect to a controller (set the runtime URL) | package.json command `nautilus.connect` | — | — | 12 |
 | C06 | Extension (Palette; editor context menu; Live Values item inline) | Write a new value to a tag (right-click an identifier, or the pencil in the Live Values panel) | package.json command `nautilus.setValue` | — | — | 13 |
-| C07 | Extension (Live Values view title (hidden from palette)) | Refresh the Live Values panel | package.json command `nautilus.liveValues.refresh` | — | — | — |
+| C07 | Extension (Live Values view title (hidden from palette)) | Refresh the Live Values panel | package.json command `nautilus.liveValues.refresh` | — | — | 12 |
 | C08 | Extension (Palette) | Download the program to the controller (online edit, with confirmation) | package.json command `nautilus.program.download` | — | — | 08 |
 | C09 | Extension (Palette) | Diff the program with the controller | package.json command `nautilus.program.diff` | — | — | 16 |
 | C10 | Extension (Palette) | Roll back the controller program | package.json command `nautilus.program.rollback` | — | — | 08 |
@@ -235,8 +235,9 @@ no rig verb, no smoke check); per section below.
 
 ## Count of rows with no coverage at all
 
-**8 of 153.** The commands are the thinnest area: only the download /
-rollback pair (08), the title-bar buttons (04) and the previews (03, 07, 10)
+**4 of 153.** The commands are the thinnest area: only the download /
+rollback pair (08), the title-bar buttons (04), the previews (03, 07, 10) and
+Show CLI Info, Restart Language Server, Connect and the Live Values Refresh (12)
 are touched by any smoke check, and no webview test can reach a command because
 commands live in the extension host (that is what the E3 test-state hooks are
 for). Of the editors the FBD now has no uncovered row and the SFC is well covered; the ladder single-key shortcuts
