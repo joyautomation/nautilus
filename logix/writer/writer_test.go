@@ -273,6 +273,7 @@ func TestRejections(t *testing.T) {
 		{"preset wrong type", wrap("c : CTU; X : BOOL; Y : BOOL; F : REAL;", "RUNG r X c:CTU(PV := F) ( Y )"), rulePreset, "F"},
 		{"reset expression", wrap("c : CTU; X : BOOL; Y : BOOL; A : BOOL;", "RUNG r X c:CTU(PV := 3, R := A.Q) ( Y )"), ruleReset, "A.Q"},
 		{"TOF in branch", wrap("t : TOF; X : BOOL; Y : BOOL; Z : BOOL;", "RUNG r [ X t:TOF(PT := T#1S) | Z ] ( Y )"), ruleTOFPosition, "t:TOF"},
+		{"CTU in branch", wrap("c : CTU; X : BOOL; Y : BOOL; Z : BOOL;", "RUNG r [ X c:CTU(PV := 2) | Z ] ( Y )"), ruleTOFPosition, "c:CTU"},
 		{"fn not compare", wrap("X : BOOL; Y : BOOL; N : INT;", "RUNG r X ODD(N) ( Y )"), ruleFn, "ODD"},
 		{"operand expression", wrap("X : BOOL; Y : BOOL; N : INT;", "RUNG r GT(N + 1, 5) ( Y )"), ruleOperand, "N + 1"},
 		{"edge coil", wrap("X : BOOL; Y : BOOL;", "RUNG r X ( P Y )"), ruleCoilEdge, "( P Y )"},
@@ -432,5 +433,16 @@ func TestSideCodeHeartbeat(t *testing.T) {
 	bad := strings.Replace(src, "    StartPB    : BOOL;", "    StartPB    : BOOL;\n    Nautilus_Scan : DINT;", 1)
 	if _, diags, _ := Write(bad, opts); len(diags) != 1 || diags[0].Rule != ruleName {
 		t.Errorf("clash: %v", diags)
+	}
+}
+
+// A counter's done bit outlives its pulse, so power after a CTU reads as
+// a new rung — Done = c.DN, not Pulse AND c.DN.
+func TestCounterEndsItsRung(t *testing.T) {
+	src := "PROGRAM P\nVAR\n  Pulse : BOOL; Done : BOOL; c : CTU;\nEND_VAR\nLD\n  RUNG n Pulse c:CTU(PV := 3) ( Done )\nEND_LD\nEND_PROGRAM\n"
+	f := mustWrite(t, src, Options{})
+	rungs := f.Controller.Programs[0].Routines[0].Rungs
+	if len(rungs) != 2 || rungs[0].Text != "XIC(Pulse)CTU(c,?,?);" || rungs[1].Text != "XIC(c.DN)OTE(Done);" {
+		t.Errorf("rungs = %+v", rungs)
 	}
 }

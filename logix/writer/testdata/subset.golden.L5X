@@ -456,20 +456,30 @@ seal-in with a stop]]>
 <![CDATA[counter with a reset and a variable preset]]>
 </Comment>
 <Text>
-<![CDATA[XIC(Done)ONS(rt_count_Done)CTU(c1,?,?)XIC(c1.DN)[OTL(Over) ,OTU(Maint) ];]]>
+<![CDATA[XIC(Done)ONS(rt_count_Done)CTU(c1,?,?);]]>
 </Text>
 </Rung>
 <Rung Number="12" Type="N">
 <Text>
-<![CDATA[XIC(Reset)RES(c1);]]>
+<![CDATA[XIC(c1.DN)[OTL(Over) ,OTU(Maint) ];]]>
 </Text>
 </Rung>
 <Rung Number="13" Type="N">
 <Text>
-<![CDATA[XIC(Done)CTU(c2,?,?)XIC(c2.DN)OTE(Done);]]>
+<![CDATA[XIC(Reset)RES(c1);]]>
 </Text>
 </Rung>
 <Rung Number="14" Type="N">
+<Text>
+<![CDATA[XIC(Done)CTU(c2,?,?);]]>
+</Text>
+</Rung>
+<Rung Number="15" Type="N">
+<Text>
+<![CDATA[XIC(c2.DN)OTE(Done);]]>
+</Text>
+</Rung>
+<Rung Number="16" Type="N">
 <Comment>
 <![CDATA[rewritten members]]>
 </Comment>
@@ -477,7 +487,7 @@ seal-in with a stop]]>
 <![CDATA[[XIC(t1.DN) ,XIO(c1.DN) ]GT(t1.ACC,500)LT(c1.ACC,Target)XIC(Bits[3])OTE(Maint);]]>
 </Text>
 </Rung>
-<Rung Number="15" Type="N">
+<Rung Number="17" Type="N">
 <Comment>
 <![CDATA[a block as the rung's last element]]>
 </Comment>

@@ -35,6 +35,8 @@
 //	                              because DN can be true while the input
 //	                              is false
 //	c:CTU(PV := 5, R := x)        CTU(c,?,?) with PRE in the COUNTER tag,
+//	                              ending its rung the same way (DN stays
+//	                              true at the preset with no pulse present),
 //	                              plus XIC(x)RES(c) on the rung after
 //	PT := tvar / PV := ivar       a helper rung MOVE(tvar,t.PRE) before,
 //	                              tvar carried as a DINT of milliseconds

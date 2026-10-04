@@ -22,7 +22,7 @@ const (
 	ruleFBPin         = "logix/fb-pin"         // a pin binding with no mapping
 	rulePreset        = "logix/preset"         // PT / PV that is not a literal or a variable
 	ruleReset         = "logix/reset"          // CTU R that is not a plain reference
-	ruleTOFPosition   = "logix/tof-position"   // TOF inside a branch
+	ruleTOFPosition   = "logix/block-position" // TOF or CTU inside a branch
 	ruleFn            = "logix/fn"             // a function contact that is not a compare
 	ruleOperand       = "logix/operand"        // a compare operand that is an expression
 	ruleCoilEdge      = "logix/coil-edge"      // ( P X ) / ( N X )
@@ -44,7 +44,7 @@ var Rules = []struct{ ID, Description string }{
 	{ruleFBPin, "only PT (timers), PV and R (counters) may be bound; outputs are read as contacts"},
 	{rulePreset, "a preset is a literal or a declared variable"},
 	{ruleReset, "a counter reset is a plain BOOL reference"},
-	{ruleTOFPosition, "a TOF sits on the rung itself, not inside a branch"},
+	{ruleTOFPosition, "a TOF or CTU sits on the rung itself, not inside a branch: its done bit outlives its rung-in"},
 	{ruleFn, "function contacts are the compares GT GE LT LE EQ NE"},
 	{ruleOperand, "compare operands are tag references or numeric literals"},
 	{ruleCoilEdge, "( P X ) and ( N X ) are not in the v1 subset; use an edge contact"},

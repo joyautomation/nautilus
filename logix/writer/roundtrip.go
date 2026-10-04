@@ -321,13 +321,13 @@ func (c *cmp) series(r ld.Rung, elems []ld.Element, top, noCoils bool) {
 			if last && noCoils {
 				continue
 			}
-			if typ == "TOF" {
+			if splitsRung(typ) {
 				// The rung must end here and the next one open with DN.
 				if c.idx < len(c.cur) {
-					c.problemf(r.Name, "a TOF should end its rung; %d element(s) follow", len(c.cur)-c.idx)
+					c.problemf(r.Name, "a %s should end its rung; %d element(s) follow", typ, len(c.cur)-c.idx)
 				}
 				if len(c.got[c.pos-1].Coils) != 0 {
-					c.problemf(r.Name, "a TOF's rung should carry no coils")
+					c.problemf(r.Name, "a %s's rung should carry no coils", typ)
 				}
 				nr, ok := c.take(r.Name)
 				if !ok {

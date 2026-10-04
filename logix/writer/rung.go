@@ -77,8 +77,8 @@ func (c *rungCtx) series(elems []ld.Element, top bool) string {
 			if cont == "" {
 				continue
 			}
-			if strings.EqualFold(e.Type, "TOF") {
-				// The TOF ends this rung; what follows is a new rung
+			if splitsRung(e.Type) {
+				// The block ends this rung; what follows is a new rung
 				// headed by its done bit.
 				c.segments = append(c.segments, join(parts, top))
 				parts = []string{cont}
@@ -366,6 +366,21 @@ func (c *rungCtx) edge(e ld.Element, head bool) string {
 
 // ── blocks ──────────────────────────────────────────────────────────────────
 
+// splitsRung reports whether a block's done bit can be true while its
+// rung-in is false. A Logix timer or counter passes its rung-in through,
+// so power that nautilus takes from the block's Q has to be read as
+// XIC(inst.DN). For a TON that can stay inline — DN is only ever true
+// while the rung-in is — but a TOF's DN is true during the off delay and
+// a CTU's DN stays true at the preset with no pulse present, so for those
+// the rest of the rung moves to a continuation rung headed by the bit.
+func splitsRung(typ string) bool {
+	switch strings.ToUpper(typ) {
+	case "TOF", "CTU":
+		return true
+	}
+	return false
+}
+
 // block lowers a timer or counter. It returns the instruction text and the
 // contact that carries power onward (XIC(inst.DN)), empty when the block
 // is the rung's last element and nothing follows it.
@@ -394,8 +409,8 @@ func (c *rungCtx) block(e ld.Element, top, isLast bool) (text, cont string, ok b
 		// writer only needs to know it cannot type the tag.
 		return "", "", false
 	}
-	if typ == "TOF" && !top {
-		c.lw.diag(ruleTOFPosition, c.r.Line, c.r.Name, "%s:TOF inside a branch: a Logix TOF passes its rung-in through, not its done bit; put the TOF on its own rung and use %s.Q as a contact", e.Inst, e.Inst)
+	if splitsRung(typ) && !top {
+		c.lw.diag(ruleTOFPosition, c.r.Line, c.r.Name, "%s:%s inside a branch: a Logix %s passes its rung-in through, and its done bit can be true while the rung-in is false; put it on its own rung and use %s.Q as a contact", e.Inst, typ, typ, e.Inst)
 		return "", "", false
 	}
 	var preset, reset string
