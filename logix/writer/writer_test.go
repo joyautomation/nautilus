@@ -774,6 +774,16 @@ func TestAddOnInstructionFromLadderBlock(t *testing.T) {
 	if len(f.Controller.AOIs) != 1 || f.Controller.AOIs[0].Name != "MotorStarter" {
 		t.Fatalf("AOIs = %+v", f.Controller.AOIs)
 	}
+	// The instance tag is a structure: no Radix, no Data. A Radix on it
+	// makes the importer drop the tag with a warning, and the build then
+	// fails on the undefined tag (found on the SDK, 2026-10-03).
+	raw, _, err := Write(string(src), Options{Libs: []string{string(motor)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `<Tag Name="m101" TagType="Base" DataType="MotorStarter" Constant="false" ExternalAccess="Read/Write">`) {
+		t.Errorf("instance tag carries a Radix or other attribute it must not:\n%s", grepLine(string(raw), `Name="m101"`))
+	}
 	a := f.Controller.AOIs[0]
 	var names []string
 	for _, p := range a.Parameters {
@@ -867,4 +877,14 @@ func TestAddOnInstructionPowerAndST(t *testing.T) {
 	if _, diags, _ := Write(bad, Options{Libs: []string{ldLib}}); len(diags) == 0 || diags[0].Rule != ruleTOFPosition {
 		t.Errorf("branch: %v", diags)
 	}
+}
+
+// grepLine returns the first line of doc containing needle.
+func grepLine(doc, needle string) string {
+	for _, line := range strings.Split(doc, "\n") {
+		if strings.Contains(line, needle) {
+			return line
+		}
+	}
+	return ""
 }

@@ -163,6 +163,12 @@ func emitTags(b *strings.Builder, tags []tagDef) {
 	w(`<Tags>`)
 	for _, t := range tags {
 		radix := radixOf(t.DataType)
+		if t.AOI {
+			// An Add-On Instruction instance is a structure: a Radix on
+			// it makes the importer drop the tag (with a warning, not an
+			// error), and the build then fails on the undefined tag.
+			radix = ""
+		}
 		dims := ""
 		if t.Dim > 0 {
 			dims = fmt.Sprintf(` Dimensions="%d"`, t.Dim)
@@ -639,6 +645,9 @@ func emitLocalTag(b *strings.Builder, t tagDef) {
 		b.WriteByte('\n')
 	}
 	radix := radixOf(t.DataType)
+	if t.AOI {
+		radix = "" // a structure; see emitTags
+	}
 	dims := ""
 	if t.Dim > 0 {
 		dims = fmt.Sprintf(` Dimensions="%d"`, t.Dim)
