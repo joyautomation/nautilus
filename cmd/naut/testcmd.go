@@ -62,6 +62,13 @@ func liveLogix(dir string, proj *project.Project) (*acceptance.Live, error) {
 	liveTarget = &acceptance.Live{
 		Runtime: f.Runtime(), Write: f.Write, Poll: poll, Scan: scan,
 		Resolve: acceptance.ResolveLogix(f.Runtime(), program), Libraries: proj.Runtime.Libraries,
+		Heartbeat: p.target.Side.Heartbeat,
+	}
+	if liveTarget.Heartbeat != "" {
+		if _, err := f.Runtime().Tags().ReadGlobal(liveTarget.Heartbeat); err != nil {
+			fmt.Fprintf(os.Stderr, "live: the controller has no heartbeat tag %s (deploy the side code first); scans: will be time-based\n", liveTarget.Heartbeat)
+			liveTarget.Heartbeat = ""
+		}
 	}
 	return liveTarget, nil
 }

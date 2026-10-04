@@ -180,3 +180,51 @@ tests:
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// With a heartbeat, `scans: n` is exactly n counts of the controller's
+// scan counter, and a counter that stops is an error.
+func TestLiveScansWaitOnTheHeartbeat(t *testing.T) {
+	c := newFakeController(t)
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		tk := time.NewTicker(4 * time.Millisecond)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tk.C:
+				c.mu.Lock()
+				c.vals["Heartbeat"] = c.vals["Heartbeat"].(int) + 1
+				c.mu.Unlock()
+				c.publish()
+			}
+		}
+	}()
+	live := c.live()
+	live.Heartbeat = "Heartbeat"
+	s := liveSuite(t, `
+tests:
+  - name: twenty scans
+    given: { StartPB: true }
+    scans: 20
+    expect: { RunCmd: true }
+`)
+	res, err := RunSuiteLive(s, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res[0].Passed || res[0].Scans < 20 || res[0].Scans > 24 {
+		t.Fatalf("result = %+v", res[0])
+	}
+	// A stopped counter: the controller is not scanning.
+	c2 := newFakeController(t)
+	live2 := c2.live()
+	live2.Heartbeat = "Heartbeat"
+	live2.Scan = 5 * time.Millisecond
+	_, err = RunSuiteLive(liveSuite(t, "tests:\n  - name: stuck\n    scans: 3\n"), live2)
+	if err == nil || !strings.Contains(err.Error(), "did not advance") {
+		t.Fatalf("err = %v", err)
+	}
+}

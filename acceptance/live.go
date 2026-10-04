@@ -44,6 +44,10 @@ type Live struct {
 	Resolve func(name string) string
 	// Libraries are the project's library sources, for ST expressions.
 	Libraries []string
+	// Heartbeat names a mirror tag the controller increments once per
+	// task scan (the writer's side code). With it, `scans: n` waits for
+	// exactly n counts; without it, n task periods of wall time.
+	Heartbeat string
 }
 
 // RunSuiteLive runs every test in the suite against the live resource.
@@ -72,6 +76,7 @@ type liveRun struct {
 	*testRun
 	live  Live
 	start time.Time
+	scans int // controller scans spent on the heartbeat, when there is one
 }
 
 func (r *liveRun) elapsed() time.Duration { return time.Since(r.start) }
@@ -111,12 +116,12 @@ func runTestLive(s *Suite, t *Test, live Live) (Result, error) {
 			fail.Line = st.Line
 			fail.AtMs = float64(fail.At) / float64(time.Millisecond)
 			res.Failure = fail
-			res.Elapsed = r.elapsed()
+			res.Elapsed, res.Scans = r.elapsed(), r.scans
 			return res, nil
 		}
 	}
 	res.Passed = true
-	res.Elapsed = r.elapsed()
+	res.Elapsed, res.Scans = r.elapsed(), r.scans
 	return res, nil
 }
 
@@ -285,6 +290,12 @@ func (r *liveRun) runStepLive(st *Step) (*Failure, error) {
 	case st.Advance != nil:
 		r.wait(st.Advance.get()+r.live.Poll, tick)
 	case st.Scans != nil:
+		if r.live.Heartbeat != "" {
+			if err := r.waitScans(*st.Scans, tick); err != nil {
+				return nil, err
+			}
+			break
+		}
 		per := r.live.Scan
 		if per <= 0 {
 			per = r.live.Poll
@@ -308,6 +319,54 @@ func (r *liveRun) runStepLive(st *Step) (*Failure, error) {
 		}
 	}
 	return nil, nil
+}
+
+// heartbeat reads the scan counter.
+func (r *liveRun) heartbeat() (int64, error) {
+	v, err := r.rt.Tags().ReadGlobal(r.live.Heartbeat)
+	if err != nil {
+		return 0, fmt.Errorf("heartbeat %s: %w", r.live.Heartbeat, err)
+	}
+	return int64(numOf(v)), nil
+}
+
+// waitScans spends exactly n controller scans: it waits until the
+// heartbeat has advanced by n from where it stood, then one more poll so
+// the rest of the mirror is at least as fresh as the count. A counter
+// that does not move within a generous window means the task is not
+// scanning — a faulted or Program-mode controller — and that is an error,
+// not a timeout to wait out.
+func (r *liveRun) waitScans(n int, tick func() bool) error {
+	start, err := r.heartbeat()
+	if err != nil {
+		return err
+	}
+	per := r.live.Scan
+	if per <= 0 {
+		per = r.live.Poll
+	}
+	budget := time.Duration(n)*per + 10*r.live.Poll + 2*time.Second
+	deadline := time.Now().Add(budget)
+	r.scans = 0
+	for {
+		now, err := r.heartbeat()
+		if err != nil {
+			return err
+		}
+		if d := now - start; d < 0 || d >= int64(n) {
+			r.scans += int(d)
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the controller's scan counter %s did not advance %d in %s (is the controller in Run?)", r.live.Heartbeat, n, budget)
+		}
+		time.Sleep(r.live.Poll / 4)
+		if tick() {
+			return nil
+		}
+	}
+	r.wait(r.live.Poll, tick)
+	return nil
 }
 
 // resolveStep rewrites the expectation's tag names to the mirror's, so the

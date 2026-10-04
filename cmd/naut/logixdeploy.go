@@ -14,6 +14,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/stproject"
 	"github.com/joyautomation/nautilus/logix/deploy"
 	"github.com/joyautomation/nautilus/logix/logixd"
+	"github.com/joyautomation/nautilus/logix/writer"
 )
 
 const logixDeployUsage = `naut logix deploy — put a nautilus ladder program on a Logix controller
@@ -93,13 +94,17 @@ func loadLogixProject(dir string) (*logixProject, error) {
 			descs[tg.Name] = tg.Desc
 		}
 	}
+	var side writer.Side
+	if tgt.Side != nil {
+		side.Heartbeat = tgt.Side.Heartbeat
+	}
 	return &logixProject{
 		dir: dir, program: progPath, source: string(src),
 		target: deploy.Target{
 			Controller: tgt.Controller, Processor: tgt.Processor, Revision: tgt.Revision,
 			Program: tgt.Program, Routine: tgt.Routine, Task: tgt.Task,
 			PeriodMs: int(time.Duration(task.Scan) / time.Millisecond),
-			CommPath: tgt.CommPath, Libs: libs, Inits: inits, Descs: descs,
+			CommPath: tgt.CommPath, Libs: libs, Inits: inits, Descs: descs, Side: side,
 		},
 		host: tgt.Host, slot: tgt.Slot, port: tgt.Port, agent: tgt.Agent,
 	}, nil

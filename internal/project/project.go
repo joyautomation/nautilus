@@ -123,6 +123,17 @@ type LogixTarget struct {
 	Program string `yaml:"program"`
 	Routine string `yaml:"routine"`
 	Task    string `yaml:"task"`
+	// Side is the side code nautilus adds beside the program, in a Logix
+	// program of its own: testing, verification and metrics logic that
+	// never touches the user's routine.
+	Side *LogixSide `yaml:"side"`
+}
+
+// LogixSide selects the side code.
+type LogixSide struct {
+	// Heartbeat names a controller DINT incremented once per task scan,
+	// which `naut test --target logix` waits on for an exact `scans: n`.
+	Heartbeat string `yaml:"heartbeat"`
 }
 
 // RetainConfig says where retained state lives. In a cluster the ConfigMap

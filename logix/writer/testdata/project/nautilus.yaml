@@ -25,3 +25,7 @@ target:
     # and by live values over EtherNet/IP; both on the VM's Tailscale address.
     comm-path: AB_ETH-1\100.93.56.45\Backplane\0
     host: 100.93.56.45
+    # nautilus side code, in its own Logix program: the scan counter the
+    # live tests wait on for an exact `scans: n`.
+    side:
+      heartbeat: Nautilus_Scan

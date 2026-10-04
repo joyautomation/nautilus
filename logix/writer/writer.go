@@ -89,7 +89,24 @@ type Options struct {
 	// program, and the Logix tag carries both.
 	Inits map[string]any
 	Descs map[string]string
+	// Side is the side code: logic nautilus adds beside the user's
+	// program, in its own Logix program scheduled after it, for testing,
+	// verification and metrics. Nothing of it touches the user's routine.
+	Side Side
 }
+
+// Side selects the side code the writer emits (package doc of side.go).
+type Side struct {
+	// Heartbeat names a controller DINT the side program increments once
+	// per task scan — the scan counter a live test waits on. Empty: none.
+	Heartbeat string
+}
+
+// SideProgram is the Logix program the side code lives in.
+const SideProgram = "Nautilus"
+
+// Enabled reports whether any side code is configured.
+func (s Side) Enabled() bool { return s.Heartbeat != "" }
 
 func (o Options) withDefaults(program string) Options {
 	def := func(p *string, v string) {
@@ -168,6 +185,8 @@ type lowered struct {
 	ctrlTags []tagDef
 	progTags []tagDef
 	rungs    []rungOut
+	// sideRungs is the side program's routine (side.go).
+	sideRungs []rungOut
 
 	// presetVars are TIME/integer variables that feed a preset (the only
 	// place a TIME is allowed); genNames guards generated tag names.
@@ -226,6 +245,7 @@ func lower(m *ld.Model, opts Options) *lowered {
 		}
 		lw.rung(r, notes[r.Line])
 	}
+	lw.side()
 	return lw
 }
 

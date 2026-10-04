@@ -408,6 +408,9 @@ func (c *cmp) tags() {
 			if scope == c.opts.Program && (strings.HasPrefix(name, "rt_") || strings.HasPrefix(name, "ft_")) && tags[name].DataType == "BOOL" {
 				continue
 			}
+			if scope == "" && name == c.opts.Side.Heartbeat {
+				continue
+			}
 			c.problemf("", "unexpected %s tag %s", scopeName(scope), name)
 		}
 	}

@@ -389,3 +389,48 @@ func TestManifestInitsAndDescriptionsLandOnControllerTags(t *testing.T) {
 		t.Errorf("N=%v Run=%v %q", byName["N"].Value, byName["Run"].Value, byName["Run"].Description)
 	}
 }
+
+// The side code lives in its own program, scheduled after the user's, and
+// leaves the user's routine untouched.
+func TestSideCodeHeartbeat(t *testing.T) {
+	src := fixture(t, "demoline.ld")
+	opts := demoOpts()
+	opts.Side = Side{Heartbeat: "Nautilus_Scan"}
+	f := mustWrite(t, src, opts)
+	if len(f.Controller.Programs) != 2 || f.Controller.Programs[1].Name != SideProgram {
+		t.Fatalf("programs = %+v", f.Controller.Programs)
+	}
+	user := f.Controller.Programs[0].Routines[0]
+	if len(user.Rungs) != 2 {
+		t.Errorf("the user's routine gained rungs: %d", len(user.Rungs))
+	}
+	side := f.Controller.Programs[1].Routines[0]
+	if len(side.Rungs) != 1 || side.Rungs[0].Text != "ADD(Nautilus_Scan,1,Nautilus_Scan);" {
+		t.Errorf("side routine = %+v", side.Rungs)
+	}
+	var hb *l5x.Tag
+	for _, tg := range f.Controller.Tags {
+		if tg.Name == "Nautilus_Scan" {
+			hb = tg
+		}
+	}
+	if hb == nil || hb.DataType != "DINT" {
+		t.Fatalf("heartbeat tag = %+v", hb)
+	}
+	doc, _, _ := Write(src, opts)
+	if !strings.Contains(string(doc), `<ScheduledProgram Name="MainProgram"/>`+"\n"+`<ScheduledProgram Name="Nautilus"/>`) {
+		t.Error("the side program is not scheduled after the user's")
+	}
+	_, problems, err := RoundTrip(src, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range problems {
+		t.Error(p)
+	}
+	// A clash with the user's variables is refused.
+	bad := strings.Replace(src, "    StartPB    : BOOL;", "    StartPB    : BOOL;\n    Nautilus_Scan : DINT;", 1)
+	if _, diags, _ := Write(bad, opts); len(diags) != 1 || diags[0].Rule != ruleName {
+		t.Errorf("clash: %v", diags)
+	}
+}

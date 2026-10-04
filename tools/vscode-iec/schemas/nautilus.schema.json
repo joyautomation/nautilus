@@ -165,6 +165,20 @@
             "task": {
               "type": "string",
               "description": "Task the program is scheduled in (default MainTask)."
+            },
+            "side": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "description": "Side code nautilus adds beside the program, in a Logix program of its own (Nautilus): testing, verification and metrics logic that never touches the user's routine.",
+              "additionalProperties": false,
+              "properties": {
+                "heartbeat": {
+                  "type": "string",
+                  "description": "Name of a controller DINT the side program increments once per task scan; `naut test --target logix` waits on it for an exact `scans: n`."
+                }
+              }
             }
           }
         }

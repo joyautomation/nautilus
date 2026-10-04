@@ -11,6 +11,7 @@ var Mnemonics = []string{
 	"GT", "GE", "LT", "LE", "EQ", "NE",
 	"TON", "TOF", "CTU", "RES",
 	"MOVE",
+	"ADD", // side code: the heartbeat
 }
 
 // CorpusVocabulary is every instruction mnemonic found across the 52 real

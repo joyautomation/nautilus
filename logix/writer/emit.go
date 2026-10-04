@@ -67,6 +67,32 @@ func emit(lw *lowered, o Options) []byte {
 	w(`</Routine>`)
 	w(`</Routines>`)
 	w(`</Program>`)
+	if len(lw.sideRungs) > 0 {
+		w(`<Program Name="%s" TestEdits="false" MainRoutineName="MainRoutine" Disabled="false" UseAsFolder="false">`, SideProgram)
+		w(`<Description>`)
+		w(`%s`, cdata("nautilus side code: testing, verification and metrics. Generated; not part of the plant logic."))
+		w(`</Description>`)
+		w(`<Tags/>`)
+		w(`<Routines>`)
+		w(`<Routine Name="MainRoutine" Type="RLL">`)
+		w(`<RLLContent>`)
+		for i, r := range lw.sideRungs {
+			w(`<Rung Number="%d" Type="N">`, i)
+			if r.Comment != "" {
+				w(`<Comment>`)
+				w(`%s`, cdata(r.Comment))
+				w(`</Comment>`)
+			}
+			w(`<Text>`)
+			w(`%s`, cdata(r.Text+";"))
+			w(`</Text>`)
+			w(`</Rung>`)
+		}
+		w(`</RLLContent>`)
+		w(`</Routine>`)
+		w(`</Routines>`)
+		w(`</Program>`)
+	}
 	w(`</Programs>`)
 	w(`<Tasks>`)
 	if o.PeriodMs > 0 {
@@ -76,6 +102,9 @@ func emit(lw *lowered, o Options) []byte {
 	}
 	w(`<ScheduledPrograms>`)
 	w(`<ScheduledProgram Name="%s"/>`, attr(o.Program))
+	if len(lw.sideRungs) > 0 {
+		w(`<ScheduledProgram Name="%s"/>`, SideProgram)
+	}
 	w(`</ScheduledPrograms>`)
 	w(`</Task>`)
 	w(`</Tasks>`)
