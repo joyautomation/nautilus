@@ -708,6 +708,20 @@ drops, the CTUD counter counts edges, holds done, resets. The facade
 notes that the controller refuses a whole-structure read of an
 FBD_TIMER (CIP 0x0f) and reads members instead; harmless.
 
+**ST online edits, and a crash that was ours.** An ST routine has no rung
+import, so an online edit is a whole-routine import
+(`partial-import-with-target`) of a Routine-target partial
+(`writer.WriteRoutine`). The first attempt crashed Logix 5000 Services
+inside the SDK (`LgxSrv_E_FATAL_ERROR`, offline and online alike): the
+import log showed the routine "Overwritten" and then "Renamed" onto its
+own name, because the target path was the routine itself. A routine
+imports INTO its program's path. With that, the offline import works and
+the **online import with FinalizeEdits took 4.0 s on Echo, controller in
+Run throughout, routine text verified from the controller.** The SDK
+service recovered on its own once the session closed; nothing on the
+controller changed. Both deploy paths now use the program path. Recorded
+as the rule it is: a container path, never a component's own.
+
 ## 8. The demo this enables
 
 James's target demo (2026-10-03), which replaces the Tier A `ab01` draft in the
