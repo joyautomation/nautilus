@@ -7,6 +7,14 @@
 *)
 
 TYPE
+  Alerts : STRUCT
+    Firing : DINT;
+    Critical : DINT;
+    Warning : DINT;
+    AnyCritical : BOOL;
+    AnyWarning : BOOL;
+    Worst : STRING;
+  END_STRUCT;
   CPU : STRUCT
     Model : STRING;
     Cores : DINT;
@@ -14,6 +22,31 @@ TYPE
     Fault : BOOL;
     TempC : REAL;
     Pct : REAL;
+  END_STRUCT;
+  CephCluster : STRUCT
+    Online : BOOL;
+    HealthStatus : DINT;
+    HealthOK : BOOL;
+    Fault : BOOL;
+    Warning : BOOL;
+    OsdTotal : DINT;
+    OsdUp : DINT;
+    OsdIn : DINT;
+    MonQuorum : DINT;
+    MgrActive : BOOL;
+    PgDegraded : DINT;
+    ObjectsDegraded : DINT;
+    UsedPct : REAL;
+  END_STRUCT;
+  CnpgCluster : STRUCT
+    Online : BOOL;
+    Instances : DINT;
+    Primaries : DINT;
+    Primary : STRING;
+    StreamingReplicas : DINT;
+    LagS : REAL;
+    BackupAgeS : REAL;
+    Fault : BOOL;
   END_STRUCT;
   DIMM : STRUCT
     Locator : STRING;
@@ -43,6 +76,20 @@ TYPE
     Present : BOOL;
     RPM : REAL;
     Pct : REAL;
+    Fault : BOOL;
+  END_STRUCT;
+  IncusCluster : STRUCT
+    Online : BOOL;
+    MembersTotal : DINT;
+    MembersOnline : DINT;
+    HealingThreshold : DINT;
+    InstancesRunning : DINT;
+    Fault : BOOL;
+  END_STRUCT;
+  KubeCluster : STRUCT
+    Online : BOOL;
+    NodesTotal : DINT;
+    NodesReady : DINT;
     Fault : BOOL;
   END_STRUCT;
   NetPort : STRUCT
@@ -88,6 +135,17 @@ TYPE
     OutputW : REAL;
     CapacityW : REAL;
   END_STRUCT;
+  Ring : STRUCT
+    Online : BOOL;
+    Idle : BOOL;
+    SignalFail : BOOL;
+    RplBlocked : BOOL;
+    PortsForwarding : DINT;
+    Members : DINT;
+    FactsAgeS : REAL;
+    Stale : BOOL;
+    Fault : BOOL;
+  END_STRUCT;
   Server : STRUCT
     Online : BOOL;
     PowerOn : BOOL;
@@ -107,6 +165,16 @@ TYPE
     FanCount : DINT;
     PsuCount : DINT;
     TempCount : DINT;
+  END_STRUCT;
+  Service : STRUCT
+    Online : BOOL;
+    Kind : STRING;
+    Target : STRING;
+    Up : BOOL;
+    DurationS : REAL;
+    HttpStatus : DINT;
+    Expected : STRING;
+    Fault : BOOL;
   END_STRUCT;
   Switch : STRUCT
     Online : BOOL;
@@ -169,6 +237,27 @@ TYPE
     InputV : REAL;
     OutputV : REAL;
     BatteryTempC : REAL;
+  END_STRUCT;
+  VM : STRUCT
+    Online : BOOL;
+    Present : BOOL;
+    Running : BOOL;
+    Host : STRING;
+    Hosts : DINT;
+    Missing : BOOL;
+    Conflict : BOOL;
+    Expected : STRING;
+    Unexpected : BOOL;
+    Prefer : STRING;
+    Displaced : BOOL;
+    OS : STRING;
+    CpuPct : REAL;
+    MemPct : REAL;
+    RootDiskPct : REAL;
+    UptimeS : DINT;
+    ClockOffsetS : REAL;
+    ServicesDown : DINT;
+    Fault : BOOL;
   END_STRUCT;
   Vlan : STRUCT
     Id : DINT;
