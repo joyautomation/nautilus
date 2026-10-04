@@ -307,15 +307,13 @@ each against the 5-minute idle-box runs before quoting it.
 
 ## Open items
 
-- **Baselines not yet run** (ask James or run when the box is idle):
-  - 5-minute runs A/B/C on mira1 with nothing else running.
-  - gb-node1 (Xeon 6515P, Ubuntu 6.8 stock kernel, in service): a run there
-    was held back because the node is carrying cluster workloads; James
-    decides. Command, from this branch:
-    `GOOS=linux GOARCH=amd64 go build -o /tmp/jitter ./tools/jitter && scp /tmp/jitter gb-node1:/tmp/ && ssh gb-node1 '/tmp/jitter -duration 5m -slow 0 -alloc 0 -out /tmp/jitter-A -note "in service"'`
-    (then the B and C variants), and copy the reports back.
-  - A Raspberry Pi-class ARM board: none reachable from this desk; needs one
-    naming or buying.
+- **Baselines not yet run** (James, 2026-10-03): the office cluster nodes
+  are out — they are in service. No idle desktop yet. James has spare Linux
+  boxes (a Tensor PC and VP6650s) that can be hooked up in a few days: those
+  are the stock-kernel industrial-PC baseline, and candidates for a
+  PREEMPT_RT kernel since they are not shared. ARM waits for an ARM Linux
+  board. A Mac mini (Apple silicon) is available: useful as a quick arm64
+  check of F1 (Go's ticker behaviour), not as a deployment baseline.
 - The PREEMPT_RT comparison needs a kernel on a machine James nominates.
 - `hmi` package: `types.ts` grew a `Lateness` interface and `ScanDiagnostics`
   shows it; a patch bump will be wanted when it ships (publish-on-bump).
