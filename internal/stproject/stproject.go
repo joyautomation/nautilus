@@ -30,6 +30,8 @@ package stproject
 
 import (
 	"fmt"
+	"github.com/joyautomation/nautilus/internal/dialect"
+	"gopkg.in/yaml.v3"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -277,6 +279,15 @@ func Libraries(fsys fs.FS, override map[string]string) ([]Library, error) {
 		}
 		return src, true, nil
 	}
+	// The dialect's blocks come first: a project library may build on them.
+	dl, err := dialectLibraries(fsys)
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range dl {
+		stLibs = append(stLibs, libFile{l.Path, l.ST})
+		sources = append(sources, l.ST)
+	}
 	for _, n := range stNames {
 		src, ok, err := read(n)
 		if err != nil {
@@ -438,9 +449,16 @@ func PreludeSources(file string, override map[string]string) (prelude string, so
 	}
 
 	// Pass one: gather the library sources as written, so a ladder library
-	// can resolve blocks the others define (in either direction).
+	// can resolve blocks the others define (in either direction). The
+	// dialect's blocks come first.
 	type libFile struct{ path, src string }
 	var stLibs, gLibs []libFile
+	if dl, err := dialectLibraries(os.DirFS(root)); err == nil {
+		for _, l := range dl {
+			stLibs = append(stLibs, libFile{l.Path, l.ST})
+			sources = append(sources, l.ST)
+		}
+	}
 	for _, p := range stNames {
 		src, ok := read(p)
 		if !ok || !IsLibrary(src) {
@@ -487,4 +505,25 @@ func IsLibrary(src string) bool {
 		return false
 	}
 	return prog.TopKeyword != "PROGRAM" && len(prog.Statements) == 0
+}
+
+// dialectLibraries reads `dialect:` from the project's nautilus.yaml (the
+// one key, leniently: the manifest's own loader validates the rest) and
+// returns that dialect's embedded block library. No manifest, or none
+// named: nothing.
+func dialectLibraries(fsys fs.FS) ([]dialect.Library, error) {
+	raw, err := fs.ReadFile(fsys, "nautilus.yaml")
+	if err != nil {
+		return nil, nil
+	}
+	var m struct {
+		Dialect string `yaml:"dialect"`
+	}
+	if err := yaml.Unmarshal(raw, &m); err != nil {
+		return nil, nil
+	}
+	if m.Dialect == "" {
+		return nil, nil
+	}
+	return dialect.Sources(m.Dialect)
 }

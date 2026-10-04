@@ -13,6 +13,11 @@
       "minLength": 1,
       "description": "The controller's name. Defaults to \"nautilus\"; also the default Sparkplug edge-node id and the default output name for `naut build`."
     },
+    "dialect": {
+      "type": "string",
+      "enum": ["nautilus", "logix", "siemens", "codesys"],
+      "description": "Opt into a vendor-semantics block library: `logix` adds blocks with Allen-Bradley semantics (TONR, …) written in nautilus, so the runtime runs them and the Logix writer/importer map them to the native instructions. Default `nautilus` adds nothing; `siemens` and `codesys` are reserved."
+    },
     "server": {
       "$ref": "#/definitions/server",
       "description": "The tag API an HMI reads."
@@ -307,6 +312,10 @@
         "desc": {
           "type": "string",
           "description": "Human description shown in tag tables."
+        },
+        "alias": {
+          "type": "string",
+          "description": "Vendor-side binding of this tag: on a Logix target the alias tag's AliasFor (\"Local:1:I.Data.3\"), which is how a Logix program names a rack point. The nautilus runtime ignores it. The one place a hardware address lives in a project."
         }
       },
       "allOf": [

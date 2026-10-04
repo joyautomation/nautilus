@@ -10,6 +10,7 @@ package project
 import (
 	"errors"
 	"fmt"
+	"github.com/joyautomation/nautilus/internal/dialect"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -44,9 +45,15 @@ const ManifestName = "nautilus.yaml"
 // server.Options as data; the yaml decoder runs with KnownFields so a typo
 // is an error, not silence.
 type Manifest struct {
-	Name   string       `yaml:"name"`
-	Server ServerConfig `yaml:"server"`
-	Tasks  []TaskConfig `yaml:"tasks"`
+	Name string `yaml:"name"`
+	// Dialect opts the project into a vendor-semantics block library
+	// (internal/dialect): "logix" adds TONR and friends, written in
+	// nautilus so the runtime, the Logix writer and the L5X importer share
+	// one definition. Empty or "nautilus" adds nothing; "siemens" and
+	// "codesys" are reserved.
+	Dialect string       `yaml:"dialect"`
+	Server  ServerConfig `yaml:"server"`
+	Tasks   []TaskConfig `yaml:"tasks"`
 	// TagFiles names files holding additional tags — each a bare YAML
 	// sequence of the same tag entries as Tags. This is how a GENERATED
 	// tag set stays a separate reviewable artifact instead of a 500-line
@@ -248,6 +255,11 @@ type TagConfig struct {
 	Init any    `yaml:"init"`
 	Unit string `yaml:"unit"`
 	Desc string `yaml:"desc"`
+	// Alias binds the tag to a controller's I/O point or another tag on a
+	// vendor target — on Logix, the alias tag's AliasFor
+	// ("Local:1:I.Data.3"). The nautilus runtime ignores it: the tag is a
+	// tag. It is the one place a hardware address lives in a project.
+	Alias string `yaml:"alias"`
 }
 
 // MetaConfig is HMI documentation for a tag, kept separate from the tag's
@@ -501,6 +513,9 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 	dec.KnownFields(true)
 	if err := dec.Decode(&m); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if !dialect.Known(m.Dialect) {
+		return nil, fmt.Errorf("%s: dialect %q is not one of %s", name, m.Dialect, strings.Join(dialect.Names, ", "))
 	}
 	if err := composeTags(fsys, &m, name); err != nil {
 		return nil, err
