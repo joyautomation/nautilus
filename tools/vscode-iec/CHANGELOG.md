@@ -3,6 +3,14 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **The FB monitor CodeLens shows the real position.** It said "1 of 2"
+  whichever instance was monitored; monitoring the second one now reads
+  "2 of 2" (#146).
+
 ## [0.13.1] - 2026-10-04
 
 ### Added

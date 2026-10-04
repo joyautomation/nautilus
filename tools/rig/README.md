@@ -6,8 +6,8 @@ in a throwaway Incus container with its own virtual display (Xvfb `:99` and
 openbox), so it never touches the display of the machine it runs on. It has
 two jobs:
 
-- **asserting** (the product's tests). `smoke/run.sh` runs the 11 extension
-  smoke checks. `selftest.sh` runs every gesture verb once and reads each
+- **asserting** (the product's tests). `smoke/run.sh` runs every `NN-*.sh` extension
+  smoke check. `selftest.sh` runs every gesture verb once and reads each
   edit back from disk.
 - **filming** (the content repo). The episode beats in
   `joyautomation/content/assets/capture` source this rig through `RIG_DIR`
@@ -43,7 +43,7 @@ and is published for reuse. Every run after that starts in seconds.
 
 ```sh
 tools/rig/smoke/build.sh                   # naut + VSIX from THIS checkout → out/build/
-tools/rig/smoke/run.sh                     # build, then all 11 checks (~45 min)
+tools/rig/smoke/run.sh                     # build, then every NN-*.sh check (about 60 min)
 tools/rig/smoke/run.sh 03-preview-undo     # one check, merged into the last results
 tools/rig/selftest.sh                      # build, then every verb (human pace)
 G_PACE=fast tools/rig/selftest.sh          # pointer teleports; what the nightly runs

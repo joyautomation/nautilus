@@ -318,6 +318,7 @@ if [[ -n $l ]] && pg_click "$LENS_A" 1.5; then
     # roc2 is fed LevelPct, whose rate is ±90–102 %/min while the pump
     # cycles; roc (TempC) moves a few °C/min. The OUT pill says which.
     info "X21: body pills after the pick (roc2 = LevelPct's rate, ≈ -90 or +102 /min on OUT): ${after#* }" "$png"
+    [[ $l == *"monitoring roc2 — 2 of 2"* ]] && pass "X21: the lens reads the real position of roc2, the second declared instance: \"$l\"" "$png"
     [[ $l == *"monitoring roc2 — 1 of 2"* ]] && warn "X21: the lens says \"1 of 2\" while monitoring roc2, the SECOND declared instance — the count is hard-coded \"1 of \${n}\" (liveValues.ts FbMonitorLenses), so it reads as a position (#146)" "$png"
   else
     fail "X21: the lens click opened no instance quick pick (quick input '$t'; rows: $rows; toasts: $(pg "$TOASTS"))" "$png"
