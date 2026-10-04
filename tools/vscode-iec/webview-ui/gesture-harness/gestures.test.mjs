@@ -10,9 +10,12 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Editor, applyOpToDoc, twoTankDoc } from './harness.mjs';
+import { recordClips } from './clips.mjs';
 
 const BUNDLE = process.env.MIMIC_BUNDLE || '../media/dist';
 const HEADLESS = process.env.HEADED !== '1';
+// GESTURE_CLIPS=<dir> records each test's run as <dir>/gestures/NN-<slug>.mp4.
+recordClips('gestures');
 
 // One fresh editor per test keeps app state (tool, selection, draft) clean.
 async function withEditor(doc, fn) {

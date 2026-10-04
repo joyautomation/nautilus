@@ -69,8 +69,11 @@ export class Editor {
 			await sleep(200);
 			return ed;
 		}
+		// Wait for the bundle to say it is listening. NOT __ready(): that also
+		// wants `.canvas`, which only renders once a doc arrives — and the doc
+		// is delivered below, so waiting on it always ran the full 5 s.
 		for (let i = 0; i < 100; i++) {
-			if (await b.eval('window.__ready && window.__ready()')) break;
+			if (await b.eval(`window.__posted().some((m) => m && m.type === 'mimicReady')`)) break;
 			await sleep(50);
 		}
 		const posted = await b.eval('JSON.stringify(window.__posted().map((m)=>m&&m.type))');

@@ -1,7 +1,8 @@
 # Nightly run of the VS Code rig (tools/rig) on a self-hosted box: builds naut
 # and the VSIX from this checkout, runs the smoke suite and the verb
-# self-test in throwaway Incus containers, uploads the TSVs + PNGs, and keeps
-# ONE rolling "rig nightly red" issue current.
+# self-test in throwaway Incus containers, uploads the TSVs + PNGs + clips
+# (one mp4 per check and per verb; clips.html in each folder is the review
+# index), and keeps ONE rolling "rig nightly red" issue current.
 #
 # Needs a registered runner with labels `self-hosted linux rig` — see
 # tools/rig/RUNNER.md. First test after registering one: Actions → rig-nightly
@@ -99,7 +100,7 @@ jobs:
               if [[ -f $f ]]; then head -c 20000 "$f"; else echo "(not produced — the run died before its table)"; fi
               echo '```'
             done
-            echo "PNGs and logs are in the run's \`rig-out-*\` artifact."
+            echo "PNGs, clips and logs are in the run's \`rig-out-*\` artifact: open \`smoke/clips.html\` / \`selftest/clips.html\` in it."
           } >"$body"
           if [[ -n $num ]]; then
             gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body-file "$body"

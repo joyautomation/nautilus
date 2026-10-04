@@ -672,6 +672,45 @@ rec_stop() {
   fi
 }
 
+# clip_start / clip_stop — a REVIEW clip, as opposed to a take: what the
+# smoke checks and the verb self-test record so a run can be watched back
+# (out/smoke/<check>.mp4, out/selftest/verbs-NN-<verb>.mp4). Not rec_start,
+# for three reasons:
+#   - it grabs the ROOT window (the CAP_WxCAP_H corner launch_vscode parks
+#     VS Code in), not $WIN: a check relaunches VS Code
+#     (new window id) mid-clip, starts before any window exists, and opens
+#     context menus and tooltips, which are their own X windows;
+#   - its pid is CLIP_PID, not REC_PID, which cleanup_capture SIGTERMs (an
+#     mp4 killed that way has no index) — call clip_stop before it;
+#   - small and robust over pretty: 15 fps, crf 30, and a fragmented mp4,
+#     which still plays if the check is killed (run.sh's timeout) mid-clip.
+# RIG_CLIPS=0 turns both into no-ops, for a quicker rehearsal.
+clip_start() { # <output basename>
+  [[ ${RIG_CLIPS:-1} != 0 ]] || return 0
+  clip_stop
+  local dims w h
+  dims=$(xdpyinfo 2>/dev/null | awk '/dimensions:/ {print $2; exit}')
+  [[ -n $dims ]] || { echo "clip_start: no X screen on $DISPLAY — no clip for $1" >&2; return 0; }
+  # launch_vscode parks the window at 0,0, CAP_WxCAP_H plus its few px of
+  # GTK frame: grab that corner, not the screen's empty margin.
+  w=${dims%x*} h=${dims#*x}
+  (( w > CAP_W + 16 )) && w=$((CAP_W + 16))
+  (( h > CAP_H + 16 )) && h=$((CAP_H + 16))
+  ffmpeg -nostdin -hide_banner -loglevel error -f x11grab -draw_mouse 1 \
+    -video_size "$((w / 2 * 2))x$((h / 2 * 2))" -framerate 15 -i "$DISPLAY" \
+    -c:v libx264 -preset veryfast -crf 30 -pix_fmt yuv420p \
+    -movflags +frag_keyframe+empty_moov+default_base_moof "$OUT_DIR/$1.mp4" -y &
+  CLIP_PID=$!
+  sleep 0.5   # let the grab open before the first action
+}
+
+clip_stop() {
+  [[ -n ${CLIP_PID:-} ]] || return 0
+  kill -INT "$CLIP_PID" 2>/dev/null || true
+  wait "$CLIP_PID" 2>/dev/null || true
+  CLIP_PID=
+}
+
 # kill_controllers_for kills processes whose working directory is <dir>.
 # Deliberately narrow: never kill by port or by binary name, because this
 # machine runs other people's controllers.

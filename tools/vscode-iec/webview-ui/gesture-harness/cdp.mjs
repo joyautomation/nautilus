@@ -30,6 +30,10 @@ function findChrome() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export class Browser {
+	/** Set by clips.mjs when GESTURE_CLIPS is on: { attach(b), detach(b) },
+	 * called after every launch and before every close. Null = no recording. */
+	static recorder = null;
+
 	constructor(proc, userDataDir, ws) {
 		this.proc = proc;
 		this.userDataDir = userDataDir;
@@ -38,6 +42,7 @@ export class Browser {
 		this._pending = new Map();
 		this._sessionId = undefined;
 		this.consoleLines = [];
+		this._listeners = new Map();
 		ws.addEventListener('message', (ev) => this._onMessage(ev));
 	}
 
@@ -108,6 +113,7 @@ export class Browser {
 		await b.send('Page.enable');
 		await b.send('Runtime.enable');
 		await b.send('Log.enable');
+		if (Browser.recorder) await Browser.recorder.attach(b);
 		return b;
 	}
 
@@ -120,6 +126,9 @@ export class Browser {
 			else resolve(msg.result);
 			return;
 		}
+		if (msg.method && this._listeners.has(msg.method)) {
+			for (const fn of this._listeners.get(msg.method)) fn(msg.params);
+		}
 		// Events: capture console output for debugging instrumented builds.
 		if (msg.method === 'Runtime.consoleAPICalled') {
 			const text = (msg.params.args || []).map((a) => a.value ?? a.description ?? '').join(' ');
@@ -130,6 +139,12 @@ export class Browser {
 			const d = msg.params.exceptionDetails;
 			this.consoleLines.push(`[exception] ${d.exception?.description ?? d.text}`);
 		}
+	}
+
+	/** Subscribe to a CDP event (e.g. 'Page.screencastFrame'). */
+	on(method, fn) {
+		if (!this._listeners.has(method)) this._listeners.set(method, []);
+		this._listeners.get(method).push(fn);
 	}
 
 	send(method, params = {}) {
@@ -225,6 +240,9 @@ export class Browser {
 	}
 
 	async close() {
+		// The clip recorder (clips.mjs, GESTURE_CLIPS) grabs a last frame and
+		// stops the screencast while the page is still up.
+		if (Browser.recorder) await Browser.recorder.detach(this);
 		try {
 			this.ws.close();
 		} catch {

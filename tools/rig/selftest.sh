@@ -7,6 +7,7 @@
 #     tools/rig/selftest.sh                       # build THIS checkout, run
 #     NAUT=…/naut VSIX=…/vscode-iec.vsix tools/rig/selftest.sh
 #     G_PACE=fast tools/rig/selftest.sh           # teleport the pointer (nightly)
+#     RIG_CLIPS=0 tools/rig/selftest.sh           # no per-verb clips (quicker)
 #     RIG_NAME=nautilus-verbs-$(hostname -s) RIG_KEEP=1 tools/rig/selftest.sh
 #
 # On the host it brings up the rig container (lib/container.sh), puts naut on
@@ -17,6 +18,8 @@
 #   verbs-selftest.tsv     <n> <verb> PASS|FAIL|XFAIL|XPASS <detail>
 #   verbs-NN-<verb>.png    the window right after each verb — READ THEM: a
 #                          verb that passes by text on a wrong picture fails
+#   verbs-NN-<verb>.mp4    the verb as it happened (RIG_CLIPS=0: no clips)
+#   clips.html, clips.md   the review index: verb · verdict · clip · PNG
 #   verbs-files/           the edited files, as saved, and `naut check` on them
 #
 # Exit status: the number of FAIL rows (capped at 100); 2 if it never got as
@@ -34,6 +37,7 @@ if [[ -z ${RIG_IN_CONTAINER:-} ]]; then
   RIG_DIR=$(cd "$(dirname "$0")" && pwd)
   export RIG_NAME=${RIG_NAME:-nautilus-verbs-rig}
   source "$RIG_DIR/lib/container.sh"
+  source "$RIG_DIR/lib/clips-index.sh"
   OUT=${RIG_OUT:-$RIG_DIR/out}/selftest
 
   if [[ -z ${NAUT:-} || -z ${VSIX:-} ]]; then
@@ -62,7 +66,7 @@ if [[ -z ${RIG_IN_CONTAINER:-} ]]; then
   echo "▸ self-test (G_PACE=${G_PACE:-human})"
   # NB: nothing in this command line may contain "vscode-rec" — lib.sh's
   # launch_vscode pkills by that string and would kill this shell.
-  rig_run "rm -rf ~/out; mkdir -p ~/out && cd ~ && DISPLAY=$RIG_DISPLAY RIG_IN_CONTAINER=1 G_PACE=${G_PACE:-human} timeout 3600 bash ~/selftest.sh" \
+  rig_run "rm -rf ~/out; mkdir -p ~/out && cd ~ && DISPLAY=$RIG_DISPLAY RIG_IN_CONTAINER=1 RIG_CLIPS=${RIG_CLIPS:-1} G_PACE=${G_PACE:-human} timeout 3600 bash ~/selftest.sh" \
     || echo "  (selftest exited non-zero)"
 
   PULL=$(mktemp -d)
@@ -70,6 +74,7 @@ if [[ -z ${RIG_IN_CONTAINER:-} ]]; then
   rm -rf "$OUT"; mkdir -p "$(dirname "$OUT")"; mv "$PULL/out" "$OUT" 2>/dev/null; rm -rf "$PULL"
   TSV=$OUT/verbs-selftest.tsv
   [[ -s $TSV ]] || { echo "no $TSV — the self-test never reached its table" >&2; exit 2; }
+  selftest_clips_index "$OUT"
   echo; echo "════ results — $TSV"
   awk -F'\t' '{ printf "%-3s %-30s %-6s %s\n", $1, $2, $3, $4 }' "$TSV"
   echo
@@ -82,15 +87,18 @@ fi
 set -uo pipefail
 source "$HOME/fixtures/prep.sh"
 source "$HOME/fixtures/gestures.sh"
-trap cleanup_capture EXIT
+trap 'clip_stop; cleanup_capture' EXIT
 
 TSV=$OUT_DIR/verbs-selftest.tsv
 : >"$TSV"
 N=0
 # vt <name> <expect PASS|XFAIL> <verb> [args…] — run, snap, record.
 vt() {
-  local name=$1 expect=$2 rc verdict err; shift 2
+  local name=$1 expect=$2 rc verdict err base; shift 2
   N=$((N + 1))
+  base=$(printf 'verbs-%02d-%s' "$N" "$name")
+  # One review clip per verb, the verb through the snap (RIG_CLIPS=0: none).
+  clip_start "$base"
   # NOT in a subshell: verbs set state later verbs read (G_FILE).
   "$@" >/dev/null 2>"$HOME/.vt-err"; rc=$?
   err=$(sed 's/\x1b\[[0-9;]*m//g' "$HOME/.vt-err" | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//')
@@ -100,7 +108,8 @@ vt() {
     (( rc == 0 )) && verdict=PASS || verdict=FAIL
   fi
   park "$((CAP_W - 30))" "$((CAP_H - 60))" 0.6
-  snap "$(printf 'verbs-%02d-%s' "$N" "$name")" >/dev/null
+  snap "$base" >/dev/null
+  clip_stop
   printf '%02d\t%s\t%s\t%s\n' "$N" "$name" "$verdict" "${err:-ok}" >>"$TSV"
   case $verdict in
     PASS|XFAIL) printf '  \033[32m%-5s\033[0m %02d %s %s\n' "$verdict" "$N" "$name" "${err:+— $err}" ;;
