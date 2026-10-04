@@ -1027,7 +1027,8 @@
         if (lt) {
           $("d-late-k").textContent = `late scans — > ${fmtUsText(lt.thresholdMs * 1000)}`;
           const pct = s.count ? (100 * lt.late / s.count) : 0;
-          $("d-late").innerHTML = (lt.late ?? 0).toLocaleString() + `<small>${pct.toFixed(2)}%</small>`;
+          $("d-late").innerHTML = (lt.late ?? 0).toLocaleString() + `<small>${pct.toFixed(2)}%</small>` +
+            (lt.missed ? ` <small class="io bad">${lt.missed.toLocaleString()} missed</small>` : "");
           $("d-p99").innerHTML = fmtUs(lt.p99Us);
           $("d-maxlate").innerHTML = fmtUs(lt.maxUs);
           $("d-latehist-k").textContent = `lateness distribution — < ${fmtUsText(lt.bucketsUs?.[0] ?? 1)} to ≥ ${fmtUsText(lt.bucketsUs?.at(-1) ?? 1e5)}, log`;

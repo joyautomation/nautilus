@@ -4,9 +4,12 @@ Working document for making Nautilus's soft real-time measurably better and
 for choosing a harder real-time path with evidence. Started 2026-10-03 from a
 content-planning handoff; kept current on branch `rt-explore`.
 
-**Status (2026-10-03):** Phase 1 (measure) is implemented and has preliminary
-numbers from one desktop. Baselines on a cluster node and an ARM board are
-pending (see "Open items"). No optimisation has been made yet.
+**Status (2026-10-03):** Phase 1 (measure) is implemented with preliminary
+numbers from one desktop (PR #113). Phase 2 item 1 (wake-up) is done on top
+of it: an absolute schedule plus, on Linux, `clock_nanosleep` on a locked
+thread with reduced timer slack — a 1 ms task's p99 start lateness went from
+about a millisecond to 32 µs, and no ticks are dropped. Baselines on the
+spare industrial PCs and an ARM board are pending (see "Open items").
 
 ## Why this exists
 
@@ -64,17 +67,26 @@ SSE stream, shown on the built-in dashboard and the HMI's `ScanDiagnostics`:
 |---|---|
 | `thresholdMs` | lateness beyond which a scan counts as late. `Options.LateThreshold` / `Task.LateThreshold`; manifest `late-threshold:` per task (the first task's is the default for the rest). Unset = a tenth of the task's period. |
 | `late` | scans whose period exceeded target + threshold |
-| `overruns` | scans whose **execution** exceeded the period (the next tick was already due; a `time.Ticker` drops the ticks that pile up) |
+| `overruns` | scans whose **execution** exceeded the period (the next slot was already due) |
+| `missed` | slots the loop skipped after falling more than a whole period behind |
 | `lastUs`, `maxUs` | the latest sample and the worst seen |
 | `p50Us`, `p99Us`, `p999Us` | percentiles over every scan since start |
 | `histogram`, `bucketsUs` | 1-2-5 log-spaced buckets, 1 µs … 100 ms, 17 buckets |
 
 Definitions, which the harness shares:
 
-- **A lateness sample is `period − target`** for each scan of a task, where
-  period is the time between this scan's start and the previous one's. Positive
-  is late. An early sample (the scan after a late one, on a phase-locked
-  schedule) lands in the first bucket, so one stall is counted once.
+- **A lateness sample is how late the scan started against its slot.**
+  `Run` schedules slot n at start + n·period; the sample is scan start − slot
+  time, never negative. It is taken before the scan lock, so waiting for
+  another task shows up as scan time and overruns, not as lateness. When
+  `Scan`/`ScanTask` are driven from outside `Run` (tests, a custom scheduler)
+  there is no slot and the sample falls back to `period − target`, with an
+  early scan landing in the first bucket. (Phase 1 as first merged used the
+  period form everywhere; the slot form arrived with Phase 2 item 1, because
+  once the schedule stops drifting the period form says nothing about phase.)
+- **Missed** counts slots the loop skipped after falling a whole period
+  behind: scans that should have run and did not. `ran / due` in a harness
+  report is the same fact from the outside.
 - Percentiles come from a log-linear histogram with 32 buckets per octave
   above 1 µs (about 3 % resolution) and are reported as the **upper edge** of
   the bucket the percentile falls in. A quoted p99 is a bound, never an
@@ -118,9 +130,14 @@ wake-up overhead after the previous receive, so delivery slips ≈ 65 µs per
 tick until a whole tick is skipped. The result is the same with and without
 Go's network poller initialised (a live listener, as under `naut run`) and
 with `GOMAXPROCS` 1, 2 or 32. The absolute-deadline loop holds the schedule
-with the **same** per-wakeup latency — so the latency floor is the kernel's
-and the drift is ours to fix. This moves Phase 2 item 1 to the front: it is a
-small change and removes the tick loss outright.
+with the **same** per-wakeup latency. Measured against the *slot* rather
+than the previous scan (which the period-error columns above cannot show),
+the cause is a floor in Go's Linux runtime: an idle thread waits in
+`epoll_wait` with a whole-millisecond timeout (`runtime/netpoll_epoll.go`
+rounds any delay under 1 ms up to 1 ms), so **any Go sleep shorter than 1 ms
+takes at least 1 ms.** A ticker turns that into drift; an absolute-deadline
+Go timer turns it into a sawtooth of 0–1 ms lateness with catch-up scans.
+The fix has to leave the Go timer path — see Phase 2 item 1 below.
 
 **F2. The wake-up latency floor on this box is ≈ 70 µs typical, ≈ 200 µs p99**
 (harness run A, fast tasks alone, main task at 1 ms): p50 70 µs, p99 204 µs,
@@ -204,14 +221,51 @@ nothing else changed.
 Order revised by the findings; each is its own PR with a before/after from
 the harness.
 
-1. **Wake-up (F1):** replace the per-task `time.Ticker` with an
-   absolute-deadline loop (next = start + n·period; sleep until next; count
-   missed slots as overruns instead of drifting). Go-level `time.Sleep` first —
-   the standalone test says that alone recovers 100 % of ticks; then try
-   `clock_nanosleep(TIMER_ABSTIME)` on a locked thread (Linux build tag) and
-   `prctl(PR_SET_TIMERSLACK)` for the latency floor (F2). The virtual-time
-   path does not use `Run`, so it is untouched by construction; still run the
-   full acceptance suites.
+1. **Wake-up (F1, F2) — done, branch `rt-deadline-loop`.** `Run` now
+   schedules every task on an absolute timeline (`runLoop`: slot n is due at
+   start + n·period; a late wake shortens the next sleep instead of pushing
+   it; more than a period behind, it skips the lost slots and reports them as
+   `missed`). On Linux the sleep is `clock_nanosleep(CLOCK_MONOTONIC,
+   TIMER_ABSTIME)` on the loop's own locked OS thread with the thread's timer
+   slack set to 1 µs (`prctl`), chunked at 50 ms so a cancel is still prompt;
+   elsewhere a Go timer (`runtime/sleep_linux.go`, `sleep_other.go`,
+   `syscall` only). The virtual-time path does not use `Run`; the full
+   acceptance suites pass.
+
+   The standalone experiment behind it (`tools/jitter/wakeup`, 5 s at 1 ms,
+   mira1 in use, slot lateness):
+
+   | wake-up method | scans | p50 | p90 | p99 | p99.9 | max |
+   |---|---:|---:|---:|---:|---:|---:|
+   | Go timer, absolute deadline | 4999 | 535 µs | 952 µs | 1.05 ms | 1.32 ms | 1.87 ms |
+   | `clock_nanosleep` absolute, locked thread | 4999 | 56 µs | 68 µs | 88 µs | 627 µs | 1.26 ms |
+   | … and timer slack 1 ns | 4999 | 5 µs | 9 µs | 21 µs | 76 µs | 0.90 ms |
+
+   The 50 µs step between the second and third rows is Linux's default
+   timer slack for a normal thread; the millisecond in the first row is
+   Go's poller. Neither needs a real-time kernel to remove.
+
+   **Before/after on the harness (mira1 in use, 60 s, main task at 1 ms):**
+
+   | run | before: scans ran | before: period error p50 / p99 | after: scans ran | after: slot lateness p50 / p99 / p99.9 / max | after: missed |
+   |---|---:|---:|---:|---:|---:|
+   | A fast tasks alone | 57 487 / 60 000 (95.8 %) | 70 µs / 204 µs | **60 003 / 60 005 (100 %)** | **6.2 µs / 31.5 µs / 344 µs / 2.53 ms** | 2 |
+   | B full mix | 35 559 / 60 000 (59.3 %) | 68 µs / 27 ms | 51 418 / 60 011 (85.7 %) | 6.1 µs / 264 µs / 928 µs / 2.16 ms | 8 593 |
+   | C fast + alloc | 57 050 / 60 001 (95.1 %) | 74 µs / 304 µs | **59 992 / 60 001 (100 %)** | 6.2 µs / 29.5 µs / 376 µs / 3.39 ms | 9 |
+
+   The before and after columns are different measures (the ticker had no
+   slot to measure against), which is why both are shown; "scans ran" is
+   the comparable one. Run B's remaining loss is the scan lock (F3): the wait
+   for it is counted as scan time, overruns (610) and missed slots, not as
+   lateness, because lateness is taken at wake-up. The 10 ms task in run A:
+   p50 8.8 µs, p99 54 µs, 6000 / 6000. Raw reports:
+   `docs/design/realtime/2026-10-03-mira1-prelim-after-item1/`.
+
+   Still open inside this item: the max column (2–3 ms, a handful of scans
+   per minute) is the stock kernel's preemption latency under a busy
+   desktop and is what item 4 (`SCHED_FIFO`, isolated cores, PREEMPT_RT) is
+   for; and Windows/macOS keep the Go timer and its floor until someone
+   measures them.
 2. **Lock contention (F3):** per-task scan isolation instead of one `scanMu`.
    What actually needs mutual exclusion is the shared tag store's write phase;
    design it (snapshot in, commit out), don't just remove the lock. Measure a
@@ -228,7 +282,7 @@ the harness.
 
 Honest ceiling to keep in the docs: Go's GC briefly stops every thread,
 pinned or not (worst pause seen above: 5.2 ms, under an allocation-heavy
-task). This phase makes Nautilus **much better soft real-time**, not hard
+task), and on a stock kernel any thread can be preempted for milliseconds. This phase makes Nautilus **much better soft real-time**, not hard
 real-time. Ethernet fieldbus jitter is separate and pinning doesn't fix it.
 
 ## Phase 3 — explore harder real-time (spikes, decide with evidence)
@@ -295,13 +349,16 @@ each against the 5-minute idle-box runs before quoting it.
 - **"Nautilus measures its own scan lateness per task, to the microsecond,
   and shows it live"** — evidence: `runtime.Lateness`, the dashboard, this
   branch. Safe to say once merged.
-- **"On a stock Linux desktop, a 1 ms Nautilus task wakes within ≈ 70 µs
-  typically and ≈ 200 µs at p99"** — evidence: run A. Hedge with "busy
-  desktop, stock kernel, no tuning", and do not quote the max (3 ms) as
-  anything but the max.
-- **Do not claim** that Nautilus "runs 1 ms tasks" yet: today it drops 4–6 %
-  of 1 ms ticks (F1). Fixing that is Phase 2 item 1 and the first honest
-  before/after story.
+- **"On a stock Linux desktop, with no kernel tuning, a 1 ms Nautilus task
+  starts within 6 µs of its slot typically and within 32 µs at p99, and runs
+  every scan"** — evidence: run A after item 1 (60 s, busy desktop; p99.9
+  344 µs, max 2.5 ms, 2 missed of 60 005). Quote the max alongside, and say
+  "stock kernel, desktop in use". Re-check on the 5-minute runs and on an
+  industrial PC before publishing.
+- **"Before this, a plain Go ticker dropped 4–6 % of 1 ms ticks and started
+  scans anywhere in a 1 ms window; the fix is an absolute schedule and the
+  kernel's own absolute sleep, not a real-time kernel"** — evidence: F1 and
+  the wake-up table. This is the first before/after story (N-72).
 - **Do not claim** fast tasks are isolated from slow ones: they are not (F3).
   That is the second before/after story, and the better video.
 
@@ -314,7 +371,12 @@ each against the 5-minute idle-box runs before quoting it.
   PREEMPT_RT kernel since they are not shared. ARM waits for an ARM Linux
   board. A Mac mini (Apple silicon) is available: useful as a quick arm64
   check of F1 (Go's ticker behaviour), not as a deployment baseline.
-- The PREEMPT_RT comparison needs a kernel on a machine James nominates.
+- The PREEMPT_RT comparison needs a kernel on a machine James nominates
+  (the spare boxes are candidates; nobody else runs on them).
+- A `jitter.yml` workflow runs the harness on a hosted runner nightly and on
+  demand (relative numbers only, plus a ≥ 99 % scans-ran guard on the fast
+  task) and uploads the reports; add the self-hosted boxes' labels to its
+  matrix once they are runners — that is the baseline rig.
 - `hmi` package: `types.ts` grew a `Lateness` interface and `ScanDiagnostics`
   shows it; a patch bump will be wanted when it ships (publish-on-bump).
 

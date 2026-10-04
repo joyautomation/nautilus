@@ -680,27 +680,50 @@ func (r *Runtime) Run(ctx context.Context) {
 	}
 	for _, tr := range r.tasks {
 		go func(tr *taskRun) {
-			t := time.NewTicker(tr.scan)
-			defer t.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-t.C:
-					r.scanTask(tr)
-				}
-			}
+			runLoop(ctx, tr.scan, func(due time.Time) { r.scanTaskAt(tr, due) }, func(k uint64) {
+				tr.mu.Lock()
+				tr.late.missed += k
+				tr.mu.Unlock()
+			})
 		}(tr)
 	}
-	t := time.NewTicker(r.scan)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			r.Scan()
+	runLoop(ctx, r.scan, r.scanAt, func(k uint64) {
+		r.mu.Lock()
+		r.late.missed += k
+		r.mu.Unlock()
+	})
+}
+
+// runLoop calls scan once per period on an ABSOLUTE schedule — slot n is
+// due at start + n·period, whatever happened to slot n−1 — until ctx is
+// done. A scan that wakes late does not push the next one later: the
+// following sleep is just shorter. A loop that falls more than a whole
+// period behind (an overrun, a stall) skips the slots it has lost, reports
+// them through missed, and resumes on the next future slot rather than
+// firing a burst of catch-up scans. scan receives the slot it is running
+// for, so its lateness can be measured against the schedule itself. The
+// sleep itself is the platform's: sleep_linux.go, sleep_other.go.
+//
+// This replaces time.Ticker, whose ticks at a 1 ms period were measured
+// arriving one wake-up latency after the PREVIOUS tick rather than on the
+// schedule: the schedule drifted ~65 µs a tick and 4–6 % of ticks were
+// dropped on an idle desktop. See docs/design/realtime.md, finding F1.
+func runLoop(ctx context.Context, period time.Duration, scan func(due time.Time), missed func(uint64)) {
+	defer loopThread()()
+	start := time.Now()
+	for n := int64(1); ; n++ {
+		next := start.Add(time.Duration(n) * period)
+		if behind := -time.Until(next); behind > 0 {
+			if k := int64(behind / period); k > 0 {
+				n += k
+				next = start.Add(time.Duration(n) * period)
+				missed(uint64(k))
+			}
 		}
+		if !sleepUntil(ctx, next) {
+			return
+		}
+		scan(next)
 	}
 }
 
@@ -719,7 +742,11 @@ func (r *Runtime) ScanTask(name string) error {
 // scanTask runs one cycle of an additional task: measured dt in, program
 // against the shared tag store, stats out. No driver I/O — the main task
 // owns the field seam; tasks compute on the store at their own rates.
-func (r *Runtime) scanTask(tr *taskRun) {
+func (r *Runtime) scanTask(tr *taskRun) { r.scanTaskAt(tr, time.Time{}) }
+
+// scanTaskAt is scanTask with the slot the scan was due at (zero when the
+// caller is not Run's scheduler), for the lateness sample.
+func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
 	if !r.gate() {
 		return
 	}
@@ -746,7 +773,7 @@ func (r *Runtime) scanTask(tr *taskRun) {
 	tr.stats.Count++
 	tr.stats.LastMs = execS * 1000
 	if !first {
-		tr.late.record(dt, tr.scan.Seconds(), execS)
+		tr.late.record(lateUs(t0, due, dt, tr.scan), execS > tr.scan.Seconds())
 	}
 	if err != nil {
 		tr.stats.LogicErrors++
@@ -760,7 +787,11 @@ func (r *Runtime) scanTask(tr *taskRun) {
 // (tests, a custom scheduler, or a redundancy standby stepping in sync).
 // A standby replica returns immediately — suppression by not scanning at
 // all, so a stale replica can never write an output.
-func (r *Runtime) Scan() {
+func (r *Runtime) Scan() { r.scanAt(time.Time{}) }
+
+// scanAt is Scan with the slot the scan was due at (zero when the caller
+// is not Run's scheduler), for the lateness sample.
+func (r *Runtime) scanAt(due time.Time) {
 	if !r.gate() {
 		return
 	}
@@ -847,11 +878,23 @@ func (r *Runtime) Scan() {
 	// (scanMu is still held). See OnScan's doc comment for the contract.
 	r.fireOnScan()
 
-	r.recordScan(t0, t1, t2, t3, dt, first, ioErr, logicErr)
+	r.recordScan(t0, t1, t2, t3, dt, first, ioErr, logicErr, lateUs(t0, due, dt, r.scan))
+}
+
+// lateUs is one lateness sample: the scan's start against its slot when
+// Run supplied one, else period − target (see Lateness).
+func lateUs(t0, due time.Time, periodS float64, target time.Duration) float64 {
+	if !due.IsZero() {
+		if l := t0.Sub(due); l > 0 {
+			return float64(l) / 1e3
+		}
+		return 0
+	}
+	return (periodS - target.Seconds()) * 1e6
 }
 
 // recordScan folds one cycle's timings into the diagnostics.
-func (r *Runtime) recordScan(t0, t1, t2, t3 time.Time, periodS float64, first bool, ioErr, logicErr error) {
+func (r *Runtime) recordScan(t0, t1, t2, t3 time.Time, periodS float64, first bool, ioErr, logicErr error, lateUs float64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s := &r.stats
@@ -886,7 +929,7 @@ func (r *Runtime) recordScan(t0, t1, t2, t3 time.Time, periodS float64, first bo
 			s.JitterMs = s.JitterMs*0.95 + j*0.05
 		}
 		s.Periods = pushSample(s.Periods, periodMs)
-		r.late.record(periodS, r.scan.Seconds(), scanMs/1000)
+		r.late.record(lateUs, scanMs > s.TargetMs)
 	}
 	s.Recent = pushSample(s.Recent, scanMs)
 	b := int(scanMs / histBucketMs)

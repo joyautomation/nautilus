@@ -65,20 +65,17 @@ func TestCoarseIndex(t *testing.T) {
 func TestLateTrackerCountsAndPercentiles(t *testing.T) {
 	var l lateTracker
 	l.thresholdUs = 100 // late beyond 100 µs
-	target := 0.001     // 1 ms task
-	// 1000 scans: 990 on time (period 1.06 ms, 60 µs late), 9 at 300 µs
-	// late, 1 at 30 ms late with an execution overrun. Sample values sit
-	// mid-bucket so float cancellation in period − target cannot tip one
-	// across an edge.
+	// 1000 scans: 990 at 60 µs late, 9 at 300 µs, 1 at 30 ms with an
+	// execution overrun. Values sit mid-bucket.
 	for i := 0; i < 990; i++ {
-		l.record(target+60e-6, target, 200e-6)
+		l.record(60, false)
 	}
 	for i := 0; i < 9; i++ {
-		l.record(target+300e-6, target, 200e-6)
+		l.record(300, false)
 	}
-	l.record(target+30e-3, target, 29e-3)
-	// And one early sample, which must count as a scan but not as late.
-	l.record(target-40e-6, target, 200e-6)
+	l.record(30000, true)
+	// And one early sample (period form), which counts as a scan, not late.
+	l.record(-40, false)
 
 	if l.n != 1001 {
 		t.Fatalf("n = %d, want 1001", l.n)
