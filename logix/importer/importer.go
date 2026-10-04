@@ -52,6 +52,8 @@ type Note struct {
 	Reason string
 	// Text is the detail: the rung text, the tag, the explanation.
 	Text string
+	// Why says what in the rung had no form, for a rung-level note.
+	Why string
 }
 
 func (n Note) String() string {
@@ -59,10 +61,14 @@ func (n Note) String() string {
 	if n.Rung >= 0 {
 		where = fmt.Sprintf("%s rung %d", n.Owner, n.Rung)
 	}
-	if where == "" {
-		return n.Reason + ": " + n.Text
+	why := ""
+	if n.Why != "" {
+		why = " (" + n.Why + ")"
 	}
-	return where + ": " + n.Reason + ": " + n.Text
+	if where == "" {
+		return n.Reason + why + ": " + n.Text
+	}
+	return where + ": " + n.Reason + why + ": " + n.Text
 }
 
 // Project is the import's result: the files to write, relative to the

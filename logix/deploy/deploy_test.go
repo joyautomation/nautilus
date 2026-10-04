@@ -148,11 +148,20 @@ func (f *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 // generated finds the full project L5X the deploy staged.
+// generated is the whole staged document — never a partial (rungs,
+// routine, program) nor the skeleton of a two-step build, and never an
+// upload. Map order is random, so every other candidate must be excluded
+// by name or this picks the wrong file one run in three.
 func (f *fakeAgent) generated() []byte {
 	for name, raw := range f.files {
-		if strings.HasSuffix(name, ".L5X") && !strings.HasSuffix(name, ".rungs.L5X") && !strings.Contains(name, "before") && !strings.Contains(name, "after") {
-			return raw
+		if !strings.HasSuffix(name, ".L5X") {
+			continue
 		}
+		base := name[strings.LastIndex(name, "/")+1:]
+		if strings.Count(base, ".") != 1 || strings.Contains(name, "before") || strings.Contains(name, "after") {
+			continue
+		}
+		return raw
 	}
 	return nil
 }

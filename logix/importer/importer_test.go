@@ -302,10 +302,8 @@ func TestVarietyReportsWhatItCannotCarry(t *testing.T) {
 	// names tags it never declares, and the import says so rather than
 	// inventing them.
 	reasons := strings.Join(p.Reasons(), " ")
-	for _, want := range []string{"MOVE", "undefined"} {
-		if !strings.Contains(reasons, want) {
-			t.Errorf("reasons %v lack %s", p.Reasons(), want)
-		}
+	if !strings.Contains(reasons, "undefined") {
+		t.Errorf("reasons %v lack undefined", p.Reasons())
 	}
 	var ld, st string
 	for name, b := range p.Files {
@@ -320,7 +318,7 @@ func TestVarietyReportsWhatItCannotCarry(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(ld, "// not imported (MOVE)") || !strings.Contains(ld, "NOT deployable") {
+	if !strings.Contains(ld, "// not imported (undefined") || !strings.Contains(ld, "NOT deployable") {
 		t.Errorf("the skipped rung and the warning should be in the source:\n%s", ld)
 	}
 	if !strings.Contains(st, "MainProgram_Scratch := MainProgram_Scratch + 1;") {
@@ -347,6 +345,7 @@ func TestCorpus(t *testing.T) {
 	total := &Project{}
 	reasons := map[string]int{}
 	detail := map[string]int{}
+	samples := map[string]int{}
 	var routinesComplete, identical, writerDiag, differ int
 	var aoiComplete, aoiTotal int
 	for _, e := range ents {
@@ -370,8 +369,17 @@ func TestCorpus(t *testing.T) {
 		for _, n := range p.Notes {
 			if n.Rung >= 0 {
 				reasons[n.Reason]++
-				if n.Reason == "member" || n.Reason == "bit" || n.Reason == "branch" || n.Reason == "ONS" {
-					detail[n.Reason+": "+detailOf(n)]++
+				if (n.Reason == "no-output" || n.Reason == "RES") && samples[n.Reason] < 4 {
+					samples[n.Reason]++
+					fmt.Printf("  sample %s: %s\n", n.Reason, n.Text)
+				}
+				switch n.Reason {
+				case "branch", "ONS", "no-output", "TON", "CTU", "type", "array", "RES", "undefined":
+					why := n.Why
+					if len(why) > 60 {
+						why = why[:60]
+					}
+					detail[n.Reason+": "+why]++
 				}
 			}
 		}
@@ -464,10 +472,10 @@ func TestCorpus(t *testing.T) {
 	sort.Slice(ks, func(i, j int) bool { return ks[i].v > ks[j].v })
 	fmt.Println("detail:")
 	for i, x := range ks {
-		if i >= 12 {
+		if i >= 24 {
 			break
 		}
-		fmt.Printf("  %-40s %6d\n", x.k, x.v)
+		fmt.Printf("  %-80s %6d\n", x.k, x.v)
 	}
 }
 
@@ -600,9 +608,9 @@ func TestHumanIdiomsImport(t *testing.T) {
 
 // What is refused is refused with its reason, and the program still parses.
 func TestRefusalsKeepTheProgramValid(t *testing.T) {
-	tags := []string{"a:BOOL", "b:BOOL", "n:DINT", "m:DINT", "t:TIMER=1000", "c:COUNTER=3"}
+	tags := []string{"a:BOOL", "b:BOOL", "n:DINT", "m:DINT", "t:TIMER=1000", "c:COUNTER=3", "arr:DINT"}
 	doc := miniL5X(tags,
-		"XIC(a)MOVE(n,m);",
+		"XIC(a)COP(n,m,1);",
 		"XIC(a)XIC(b)ONS(s)OTL(b);",
 		"XIC(n.3)OTE(b);",
 		"XIC(a)OTE(b)XIC(b);",
@@ -613,19 +621,128 @@ func TestRefusalsKeepTheProgramValid(t *testing.T) {
 	)
 	p := mustImport(t, doc)
 	reasons := strings.Join(p.Reasons(), " ")
-	for _, want := range []string{"MOVE 1", "ONS 1", "bit 1", "no-output 1", "RES 1", "JSR 1"} {
+	for _, want := range []string{"COP 1", "bit 1", "RES 1", "JSR 1"} {
 		if !strings.Contains(reasons, want) {
 			t.Errorf("reasons %v lack %q", p.Reasons(), want)
 		}
 	}
 	src := string(p.Files["Main.ld"])
-	if !strings.Contains(src, "NOT deployable") || !strings.Contains(src, "// not imported (MOVE): XIC(a)MOVE(n,m);") {
+	if !strings.Contains(src, "NOT deployable") || !strings.Contains(src, "// not imported (COP: a data operation with no assignment form): XIC(a)COP(n,m,1);") {
 		t.Errorf("source should carry the refusals:\n%s", src)
+	}
+	// The compound one-shot driving a latch: a pulse tag of its own.
+	if !strings.Contains(src, "a b ( P os_r1_1 )") || !strings.Contains(src, "os_r1_1 ( S b )") {
+		t.Errorf("compound one-shot:\n%s", src)
 	}
 	if _, _, err := writer.Write(src, writer.Options{Controller: "Mini"}); err != nil {
 		t.Errorf("the partial program must still write: %v\n%s", err, src)
 	}
-	if p.Complete != 0 || p.Imported != 2 {
-		t.Errorf("stats %+v", *p)
+	// XIC(a)OTE(b)XIC(b): the trailing contact drives nothing in Logix
+	// either, so the rung imports as a ( b ).
+	if p.Complete != 0 || p.Imported != 4 {
+		t.Errorf("complete %d imported %d", p.Complete, p.Imported)
+	}
+}
+
+// Logix's 2-D habits — an output leg inside a branch, a timer inside a
+// leg, a one-shot inside a leg, parallel timers — come across as the
+// rungs they are, one per output leg, sharing the condition.
+func TestBranchOutputsAndHoistedBlocks(t *testing.T) {
+	tags := []string{"a:BOOL", "b:BOOL", "c:BOOL", "x:BOOL", "y:BOOL", "z:BOOL", "n:DINT", "m:DINT", "t1:TIMER=1000", "t2:TIMER=2000"}
+	doc := miniL5X(tags,
+		"XIC(c)[XIC(a)OTE(x) ,XIC(b) ]OTE(y);",
+		"XIC(c)[XIC(a)TON(t1,?,?) ,XIC(b) ]OTE(y);",
+		"XIC(c)[TON(t1,?,?) ,TON(t2,?,?) ];",
+		"XIC(c)[XIC(a)ONS(s) ,XIC(b) ]OTE(z);",
+		"XIC(c)OSR(s2,x)OTE(y);",
+		"XIC(c)OTE(x)XIC(a);",
+		"XIC(c)[MOVE(1,n) ,MOVE(2,m) ];",
+		"[GT(n,5) ,LT(n,1) ][MOVE(3,n) ,MOVE(4,m) ];",
+	)
+	p := mustImport(t, doc)
+	for _, nt := range p.Notes {
+		if nt.Rung >= 0 {
+			t.Errorf("note: %s", nt)
+		}
+	}
+	src := string(p.Files["Main.ld"])
+	for _, want := range []string{
+		"c a ( x )",
+		"c [ a | b ] ( y )",
+		"c a t1:TON(PT := T#1S)",
+		"c t1:TON(PT := T#1S)",
+		"c t2:TON(PT := T#2S)",
+		"c a ( P os_r3_1 )",
+		"c [ os_r3_1 | b ] ( z )",
+		"c ( P x )",
+		"c ( y )",
+		"c ( x )",
+		"c [ { n := 1 } | { m := 2 } ]",
+		"[ GT(n, 5) | LT(n, 1) ] [ { n := 3 } | { m := 4 } ]",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("missing %q in\n%s", want, src)
+		}
+	}
+	if strings.Count(src, "RUNG ") != 13 {
+		t.Errorf("want 13 rungs:\n%s", src)
+	}
+}
+
+// Data instructions come across as assignments and write back as the
+// same instructions; CPT and CMP expressions survive with their function
+// names translated both ways.
+func TestDataInstructionsImportAndWriteBack(t *testing.T) {
+	tags := []string{"a:BOOL", "b:BOOL", "n:DINT", "m:DINT", "r:REAL", "q:REAL"}
+	doc := miniL5X(tags,
+		"XIC(a)MOVE(m,n)MOVE(1.5,r);",
+		"XIC(a)ADD(n,1,n)SUB(n,m,m)MUL(r,2.0,r)DIV(r,q,q)ABS(q,r);",
+		"XIC(a)CPT(n,(n + 3) * m - 7)CPT(r,SQR(q) + ABS(r) ** 2.0)CPT(n,n MOD 4)CPT(r,TRN(q));",
+		"CMP(n + 1 > m)CMP(r * 2.0 <= q)CMP(n MOD 2 = 0)OTE(b);",
+		"XIC(a)[MOVE(1,n) ,XIC(b) MOVE(2,n) ]OTE(b);",
+		"XIC(a)CLR(n)CLR(r)NEG(m,n)XPY(r,2.0,q);",
+		"LIMIT(0,n,100)OTE(b);",
+	)
+	p := mustImport(t, doc)
+	for _, nt := range p.Notes {
+		if nt.Rung >= 0 {
+			t.Errorf("note: %s", nt)
+		}
+	}
+	src := string(p.Files["Main.ld"])
+	for _, want := range []string{
+		"a { n := m } { r := 1.5 }",
+		"a { n := n + 1 } { m := n - m } { r := r * 2.0 } { q := r / q } { r := ABS(q) }",
+		"a { n := (n + 3) * m - 7 } { r := SQRT(q) + ABS(r) ** 2.0 } { n := n MOD 4 } { r := TRUNC(q) }",
+		"GT(n + 1, m) LE(r * 2.0, q) EQ(n MOD 2, 0) ( b )",
+		"a [ { n := 1 } | b { n := 2 } ] ( b )",
+		"a { n := 0 } { r := 0.0 } { n := -m } { q := r ** 2.0 }",
+		"GE(n, 0) LE(n, 100) ( b )",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("missing %q in\n%s", want, src)
+		}
+	}
+	out, diags, err := writer.Write(src, writer.Options{Controller: "Mini"})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("writer: %v %v\n%s", err, diags, src)
+	}
+	back, _ := l5x.Parse(out)
+	got := rungTexts(back, "Main", "MainRoutine")
+	want := []string{
+		"XIC(a)MOVE(m,n)MOVE(1.5,r);",
+		"XIC(a)ADD(n,1,n)SUB(n,m,m)MUL(r,2.0,r)DIV(r,q,q)ABS(q,r);",
+		"XIC(a)CPT(n,((n + 3) * m) - 7)CPT(r,SQR(q) + (ABS(r) ** 2.0))CPT(n,n MOD 4)CPT(r,TRN(q));",
+		"CMP(n + 1 > m)CMP(r * 2.0 <= q)CMP(n MOD 2 = 0)OTE(b);",
+		"XIC(a)[MOVE(1,n) ,XIC(b) MOVE(2,n) ]OTE(b);",
+		"XIC(a)MOVE(0,n)MOVE(0.0,r)CPT(n,-m)CPT(q,r ** 2.0);",
+		"GE(n,0)LE(n,100)OTE(b);",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("written back:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+	tags2 := string(p.Files["tags/logix.yaml"])
+	if !strings.Contains(tags2, "name: n, role: output") {
+		t.Errorf("n is assigned; should be an output:\n%s", tags2)
 	}
 }

@@ -42,7 +42,12 @@ type routine struct {
 	enable map[int][]string
 	// refs counts operand bases, for the preset fold.
 	refs map[string]int
-	// written collects coil targets, for the tag file's roles.
+	// pulses counts the one-shot tags made for compound ONS; curName is
+	// the rung being lowered, for their names.
+	pulses  int
+	curName string
+	// synth are the tags this import made (one-shots), resolvable by name.
+	synth map[string]bool
 }
 
 type refusal struct {
@@ -62,7 +67,7 @@ var (
 
 // lowerRoutine imports one ladder routine into p.
 func (im *importer) lowerRoutine(sc *scope, r *l5x.Routine, p *pou) {
-	rt := &routine{im: im, sc: sc, p: p, edges: map[string]string{}, presetVar: map[string]string{}, resetCond: map[string]string{}, resetRung: map[string]int{}, enable: map[int][]string{}, refs: map[string]int{}}
+	rt := &routine{im: im, sc: sc, p: p, edges: map[string]string{}, presetVar: map[string]string{}, resetCond: map[string]string{}, resetRung: map[string]int{}, synth: map[string]bool{}, enable: map[int][]string{}, refs: map[string]int{}}
 	for _, rg := range r.Rungs {
 		pr := &parsed{rg: rg}
 		terms, err := l5x.ParseRung(rg.Text)
@@ -112,12 +117,20 @@ func baseOf(ref string) string {
 }
 
 func (rt *routine) skip(pr *parsed, reason, text string) {
+	rt.skipWhy(pr, reason, "", text)
+}
+
+func (rt *routine) skipWhy(pr *parsed, reason, why, text string) {
 	header, lines := rungComment(pr.rg.Comment)
 	if header != "" {
 		lines = append(lines, header)
 	}
-	rt.p.rungs = append(rt.p.rungs, outRung{Lines: lines, Skipped: reason, Body: strings.TrimSpace(text)})
-	rt.im.proj.note(rt.sc.owner, pr.rg.Number, reason, strings.TrimSpace(text))
+	label := reason
+	if why != "" {
+		label = reason + ": " + why
+	}
+	rt.p.rungs = append(rt.p.rungs, outRung{Lines: lines, Skipped: label, Body: strings.TrimSpace(text)})
+	rt.im.proj.Notes = append(rt.im.proj.Notes, Note{Owner: rt.sc.owner, Rung: pr.rg.Number, Reason: reason, Why: why, Text: strings.TrimSpace(text)})
 }
 
 // ── the pre-pass: folding the writer's idioms back ──────────────────────────
@@ -378,9 +391,10 @@ func (rt *routine) boolCond(terms []l5x.Term) (string, bool) {
 
 // lower emits the nautilus rung(s) for pr, or skips it with a reason.
 func (rt *routine) lower(i int, pr *parsed) {
+	rt.curName = fmt.Sprintf("r%d", pr.rg.Number)
 	bodies, err := rt.split(pr.terms, rt.enable[i])
 	if err != nil {
-		rt.skip(pr, err.reason, pr.rg.Text)
+		rt.skipWhy(pr, err.reason, err.text, pr.rg.Text)
 		return
 	}
 	if len(bodies) == 0 {
@@ -417,7 +431,7 @@ func (rt *routine) lower(i int, pr *parsed) {
 		}
 		more, err := rt.split(next.terms[1:], bodies[0])
 		if err != nil {
-			rt.skip(next, err.reason, next.rg.Text)
+			rt.skipWhy(next, err.reason, err.text, next.rg.Text)
 			next.drop = true
 			break
 		}
@@ -486,23 +500,54 @@ func (rt *routine) split(terms []l5x.Term, prefix []string) ([][]string, *refusa
 					return out, nil
 				}
 				continue
-			case "outputs":
-				// Each leg is a condition and its own coils: one rung per leg.
-				if !last {
-					return nil, refuse("branch", "a branch of output legs with logic after it")
-				}
+			case "outputs", "mixed":
+				// A leg that ends in coils is a rung of its own: prefix +
+				// the leg. Its coils pass power on in Logix, so the branch
+				// still carries the leg's conditions for what follows.
+				var condLegs [][]l5x.Term
 				for _, leg := range t.Legs {
-					legOut, err := rt.split(leg, parts)
-					if err != nil {
-						return nil, err
+					if k := firstCoil(leg); k >= 0 {
+						legOut, err := rt.split(leg, parts)
+						if err != nil {
+							return nil, err
+						}
+						out = append(out, legOut...)
+						condLegs = append(condLegs, leg[:k])
+					} else {
+						condLegs = append(condLegs, leg)
 					}
-					out = append(out, legOut...)
 				}
-				return out, nil
-			case "mixed":
-				return nil, refuse("branch", "a branch mixing output legs and condition legs")
+				if last {
+					return out, nil
+				}
+				legs, hoisted, err := rt.hoistBlocks(condLegs, parts)
+				if err != nil {
+					return nil, err
+				}
+				out = append(out, hoisted...)
+				if allEmpty(legs) {
+					continue
+				}
+				s, err := rt.series(legs, true, len(parts) == 0)
+				if err != nil {
+					return nil, err
+				}
+				add(s...)
+				continue
 			}
-			s, err := rt.series(t.Legs, true, len(parts) == 0)
+			// A timer or counter inside a leg passes its rung-in on in
+			// Logix, so it is its own output leg: prefix + the leg's
+			// conditions before it + the block, on a rung of its own;
+			// the leg keeps its conditions and loses the block.
+			legs, hoisted, err := rt.hoistBlocks(t.Legs, parts)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, hoisted...)
+			if allEmpty(legs) {
+				continue // the branch was blocks alone; they are rungs now
+			}
+			s, err := rt.series(legs, true, len(parts) == 0)
 			if err != nil {
 				return nil, err
 			}
@@ -541,25 +586,61 @@ func (rt *routine) split(terms []l5x.Term, prefix []string) ([][]string, *refusa
 			}
 			add(c...)
 		case m == "ONS":
-			// A one-shot of the condition so far, driving one OTE: the
-			// rising-edge coil ( P x ) is exactly that.
-			if i+2 == len(terms) && len(parts) > 0 {
+			// A one-shot of the condition so far. Driving one OTE, it is
+			// the rising-edge coil ( P x ). Driving anything else, the
+			// pulse gets a tag of its own: <cond> ( P os_rN ), then
+			// os_rN <rest> — exactly what the ONS did, in two rungs.
+			if len(parts) == 0 {
+				return nil, refuse("ONS", "a one-shot with nothing ahead of it")
+			}
+			if len(in.Args) == 1 {
+				rt.edges["st:"+strings.ToLower(in.Args[0])] = ""
+			}
+			if i+2 == len(terms) {
 				if ote := instrIs(terms[i+1], "OTE"); ote != nil && len(ote.Args) == 1 {
 					ref, err := rt.ref(ote.Args[0], "")
 					if err != nil {
 						return nil, err
 					}
 					rt.markWritten(ote.Args[0])
-					if len(in.Args) == 1 {
-						rt.edges["st:"+strings.ToLower(in.Args[0])] = ""
-					}
 					emit(append(parts, "( P "+ref+" )"))
 					return out, nil
 				}
 			}
-			return nil, refuse("ONS", "a one-shot of a compound condition has no nautilus form unless it drives one OTE; +Name / -Name take one contact")
+			if i+1 == len(terms) {
+				return nil, refuse("ONS", "a one-shot at the rung's end drives nothing")
+			}
+			pulse := rt.pulseTag()
+			emit(append(append([]string(nil), parts...), "( P "+pulse+" )"))
+			rest, err := rt.split(terms[i+1:], []string{pulse})
+			if err != nil {
+				return nil, err
+			}
+			return append(out, rest...), nil
 		case m == "OSR" || m == "OSF":
-			return nil, refuse(m, "a one-shot with storage and output bits away from the XIC(x)%s(st,q) helper shape", m)
+			// OSR(st,q): q is TRUE one scan when the rung-in rises; the
+			// rung-in passes on. That is the ( P q ) coil as an output
+			// leg; OSF is ( N q ).
+			if len(in.Args) != 2 {
+				return nil, refuse(m, "%d operands", len(in.Args))
+			}
+			if len(parts) == 0 {
+				return nil, refuse(m, "a one-shot with nothing ahead of it")
+			}
+			q, err := rt.ref(in.Args[1], "")
+			if err != nil {
+				return nil, err
+			}
+			rt.markWritten(in.Args[1])
+			rt.edges["st:"+strings.ToLower(in.Args[0])] = ""
+			mode := "P"
+			if m == "OSF" {
+				mode = "N"
+			}
+			emit(append(append([]string(nil), parts...), "( "+mode+" "+q+" )"))
+			if last {
+				return out, nil
+			}
 		case compareFn[m] != "":
 			s, err := rt.compare(in)
 			if err != nil {
@@ -643,20 +724,50 @@ func (rt *routine) split(terms []l5x.Term, prefix []string) ([][]string, *refusa
 			return nil, refuse("RES", "a reset away from its counter's rung (nautilus binds R := on the CTU)")
 		case m == "AFI":
 			return nil, refuse("AFI", "always-false instruction")
+		case assignInstr[m]:
+			text, err := rt.dataInstr(in)
+			if err != nil {
+				return nil, err
+			}
+			// A box passes its rung-in on; alone at the rung's end it is
+			// the rung's output.
+			add(text)
+			if last {
+				emit(parts)
+				return out, nil
+			}
+		case m == "LIMIT":
+			texts, err := rt.limitInstr(in)
+			if err != nil {
+				return nil, err
+			}
+			add(texts...)
 		case dataOp[m]:
-			return nil, refuse(m, "a data operation; nautilus ladder has no element for it")
+			return nil, refuse(m, "a data operation with no assignment form")
 		default:
 			return nil, refuse(m, "no nautilus form")
 		}
 	}
 	if dirty {
-		// Conditions with no output: Logix allows it; nautilus does not.
-		return nil, refuse("no-output", "a rung with conditions and no coil or block")
+		// Data boxes are outputs: a rung (or a branch) of MOVEs alone is
+		// complete as it stands.
+		if containsBox(parts) {
+			emit(parts)
+		} else if len(out) == 0 {
+			// Conditions with no output: Logix allows it; nautilus does not.
+			return nil, refuse("no-output", "a rung with conditions and no coil or block")
+		}
 	}
+	// Conditions left after the last output leg (a timer hoisted out of a
+	// branch, a coil mid-rung with a trailing contact) drive nothing in
+	// Logix either; they are dropped.
 	return out, nil
 }
 
-var dataOp = map[string]bool{"MOVE": true, "MOV": true, "ADD": true, "SUB": true, "MUL": true, "DIV": true, "MOD": true, "NEG": true, "ABS": true, "SQR": true, "CPT": true, "CLR": true, "COP": true, "CPS": true, "FLL": true, "BTD": true, "LIMIT": true, "AND": true, "OR": true, "XOR": true, "NOT": true, "TRN": true, "SWPB": true, "DTOS": true, "STOD": true, "RTOS": true, "STOR": true, "CONCAT": true, "SIZE": true, "FAL": true, "FSC": true, "AVE": true, "SRT": true, "STD": true}
+// assignInstr are the data instructions with an assignment form.
+var assignInstr = map[string]bool{"MOVE": true, "MOV": true, "ADD": true, "SUB": true, "MUL": true, "DIV": true, "MOD": true, "NEG": true, "ABS": true, "SQR": true, "XPY": true, "CPT": true, "CLR": true}
+
+var dataOp = map[string]bool{"COP": true, "CPS": true, "FLL": true, "BTD": true, "LIMIT": true, "AND": true, "OR": true, "XOR": true, "NOT": true, "TRN": true, "SWPB": true, "DTOS": true, "STOD": true, "RTOS": true, "STOR": true, "CONCAT": true, "SIZE": true, "FAL": true, "FSC": true, "AVE": true, "SRT": true, "STD": true}
 
 // branchKind classifies a branch: "coils" (every leg one coil), "outputs"
 // (every leg ends in coils), "mixed", or "" for a condition branch.
@@ -759,8 +870,20 @@ func (rt *routine) series(legs [][]l5x.Term, branch, atHead bool) ([]string, *re
 				return nil, refuse("branch", "a coil inside a branch leg with logic after it")
 			case m == "ONS":
 				return nil, refuse("ONS", "a one-shot inside a branch leg")
+			case assignInstr[m]:
+				text, err := rt.dataInstr(in)
+				if err != nil {
+					return nil, err
+				}
+				parts = append(parts, text)
+			case m == "LIMIT":
+				texts, err := rt.limitInstr(in)
+				if err != nil {
+					return nil, err
+				}
+				parts = append(parts, texts...)
 			case dataOp[m]:
-				return nil, refuse(m, "a data operation; nautilus ladder has no element for it")
+				return nil, refuse(m, "a data operation with no assignment form")
 			default:
 				return nil, refuse(m, "no nautilus form")
 			}
@@ -842,24 +965,12 @@ func (rt *routine) markWritten(operand string) {
 
 var compareFn = map[string]string{"EQ": "EQ", "EQU": "EQ", "NE": "NE", "NEQ": "NE", "GT": "GT", "GRT": "GT", "GE": "GE", "GEQ": "GE", "LT": "LT", "LES": "LT", "LE": "LE", "LEQ": "LE", "CMP": "CMP"}
 
-var cmpExpr = regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_.\[\]:]*|[+-]?\d[\d.eE+-]*)\s*(<>|<=|>=|=|<|>)\s*([A-Za-z_][A-Za-z0-9_.\[\]:]*|[+-]?\d[\d.eE+-]*)\s*$`)
-
 var cmpOp = map[string]string{"=": "EQ", "<>": "NE", "<": "LT", "<=": "LE", ">": "GT", ">=": "GE"}
 
 func (rt *routine) compare(in *l5x.Instr) (string, *refusal) {
 	fn := compareFn[strings.ToUpper(in.Mnemonic)]
 	if fn == "CMP" {
-		// CMP carries an expression. The plain binary comparison it is
-		// usually written for maps; anything else does not.
-		if len(in.Args) != 1 {
-			return "", refuse("CMP", "%d operands", len(in.Args))
-		}
-		m := cmpExpr.FindStringSubmatch(in.Args[0])
-		if m == nil {
-			return "", refuse("CMP", "an expression beyond a binary comparison")
-		}
-		in = &l5x.Instr{Mnemonic: cmpOp[m[2]], Args: []string{m[1], m[3]}}
-		fn = cmpOp[m[2]]
+		return rt.cmpInstr(in)
 	}
 	if len(in.Args) != 2 {
 		return "", refuse(strings.ToUpper(in.Mnemonic), "%d operands", len(in.Args))
@@ -895,6 +1006,9 @@ func (rt *routine) ref(a string, blockType string) (string, *refusal) {
 	}
 	base := baseOf(a)
 	rest := a[len(base):]
+	if rt.synth[strings.ToLower(base)] && rest == "" {
+		return base, nil // a one-shot tag this import made
+	}
 	f := rt.sc.lookup(base)
 	if f == nil {
 		return "", refuse("undefined", "tag %s is not in scope", base)
@@ -1146,4 +1260,123 @@ func (rt *routine) aoiCall(in *l5x.Instr) (text, powerOut string, err *refusal) 
 		}
 	}
 	return f.name + ":" + l5x.Ident(a.Name) + "(" + strings.Join(binds, ", ") + ")", powerOut, nil
+}
+
+// pulseTag names the one-shot tag a compound ONS gets, declared as a
+// program-local BOOL.
+func (rt *routine) pulseTag() string {
+	rt.pulses++
+	name := fmt.Sprintf("os_%s_%d", rt.curName, rt.pulses)
+	rt.p.declare(decl{Name: name, Type: "BOOL", Section: "VAR", Comment: "one-shot of a rung condition (Logix ONS)"})
+	return name
+}
+
+// hoistBlocks moves TON/TOF/CTU instructions out of branch legs onto rungs
+// of their own: prefix + the leg's conditions ahead of the block + the
+// block. A following XIC(inst.DN) in the leg stays, as the contact it is.
+// Nested branches are handled the same way, their prefix being the outer
+// leg's conditions so far.
+func (rt *routine) hoistBlocks(legs [][]l5x.Term, prefix []string) ([][]l5x.Term, [][]string, *refusal) {
+	var hoisted [][]string
+	outLegs := make([][]l5x.Term, 0, len(legs))
+	for _, leg := range legs {
+		var kept []l5x.Term
+		var condSoFar []string
+		for _, t := range leg {
+			if t.Instr == nil {
+				inner, h, err := rt.hoistBlocks(t.Legs, append(append([]string(nil), prefix...), condSoFar...))
+				if err != nil {
+					return nil, nil, err
+				}
+				hoisted = append(hoisted, h...)
+				kept = append(kept, l5x.Term{Legs: inner})
+				// the branch's own condition text joins condSoFar
+				s, err := rt.series(inner, true, false)
+				if err != nil {
+					return nil, nil, err
+				}
+				condSoFar = append(condSoFar, s...)
+				continue
+			}
+			m := strings.ToUpper(t.Instr.Mnemonic)
+			if m == "TON" || m == "TOF" || m == "CTU" {
+				text, err := rt.block(t.Instr)
+				if err != nil {
+					return nil, nil, err
+				}
+				body := append(append(append([]string(nil), prefix...), condSoFar...), text)
+				hoisted = append(hoisted, body)
+				continue
+			}
+			if m == "ONS" {
+				// A one-shot of the leg's condition so far (with the
+				// prefix it inherits). At the head of a rail-fed leg
+				// after one contact it stays for series() as +x; else the
+				// pulse gets a tag: prefix cond ( P os ), and the leg
+				// reads os from there.
+				if len(prefix) == 0 && len(kept) == 1 && kept[0].Instr != nil && instrIs(kept[0], "XIC", "XIO") != nil {
+					kept = append(kept, t)
+					continue
+				}
+				if len(t.Instr.Args) == 1 {
+					rt.edges["st:"+strings.ToLower(t.Instr.Args[0])] = ""
+				}
+				pulse := rt.pulseTag()
+				body := append(append(append([]string(nil), prefix...), condSoFar...), "( P "+pulse+" )")
+				hoisted = append(hoisted, body)
+				rt.synth[strings.ToLower(pulse)] = true
+				kept = []l5x.Term{{Instr: &l5x.Instr{Mnemonic: "XIC", Args: []string{pulse}}}}
+				condSoFar = []string{pulse}
+				continue
+			}
+			kept = append(kept, t)
+			switch {
+			case m == "XIC" || m == "XIO":
+				c, err := rt.contact(t.Instr)
+				if err != nil {
+					return nil, nil, err
+				}
+				condSoFar = append(condSoFar, c...)
+			case compareFn[m] != "":
+				c, err := rt.compare(t.Instr)
+				if err != nil {
+					return nil, nil, err
+				}
+				condSoFar = append(condSoFar, c)
+			default:
+				// a data box or anything else passes power; it does not
+				// change the condition
+			}
+		}
+		outLegs = append(outLegs, kept)
+	}
+	return outLegs, hoisted, nil
+}
+
+// firstCoil is the index of the first coil in a leg, or -1.
+func firstCoil(leg []l5x.Term) int {
+	for i, t := range leg {
+		if t.Instr != nil && isCoil(t.Instr) {
+			return i
+		}
+	}
+	return -1
+}
+
+func allEmpty(legs [][]l5x.Term) bool {
+	for _, leg := range legs {
+		if len(leg) > 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func containsBox(parts []string) bool {
+	for _, p := range parts {
+		if strings.Contains(p, "{ ") {
+			return true
+		}
+	}
+	return false
 }
