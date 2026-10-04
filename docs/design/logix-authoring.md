@@ -732,6 +732,105 @@ left. `naut test --target logix` now writes every input tag's seed before
 each test (outputs and state are the logic's, and a scenario that depends
 on them establishes them itself). 4 of 4 again, and on reruns.
 
+**Step 3, FUNCTION_BLOCKs as Add-On Instructions.** A ladder or ST
+`FUNCTION_BLOCK` from the program's own file or a library becomes an AOI:
+`VAR_INPUT` as Required, Visible Input parameters; `VAR_OUTPUT` as Output
+parameters (not Required, Visible) read from the instance as `inst.Out`;
+`VAR_IN_OUT` as InOut parameters, which Logix only allows for structures
+and arrays (a scalar is refused with the rule's name); `VAR` as local
+tags; the body as the `Logic` routine through the same lowering as a
+program, so a timer, a counter and an edge inside a block get the same
+rewrites and generated names. A call `inst:Block(In := x, …, Out => y)`
+is the instruction `Block(inst,x,…)` at the head of its rung — every
+unbound BOOL input, or `EN`, is the power-in, and a call with a rung
+condition in front of it moves to a helper rung so the instruction sits
+first — with one copy rung per `=>` binding. `VAR_EXTERNAL` inside a
+block is refused (an AOI sees only its parameters). The L5X reader's
+`LogicOf` includes AOI definitions, so drift and the deploy diff see a
+changed block, and a changed definition forces a download: Logix does
+not online-edit an AOI's logic while instances exist.
+
+Two SDK facts cost the day's time, both now carried in code. First,
+**a whole-project L5X that declares an AOI instance tag does not
+import** (`XMLSrv_E_IMPORT_ABORTED_NO_CHANGES`, and no import log is
+written to say why), while the same definition, tags and program
+partial-import fine one container at a time. Deploy therefore builds an
+AOI project in two steps: the skeleton (controller, types, AOI
+definitions, controller tags, side code, the program as a NOP
+placeholder) as the whole-project import, then the program — its tags
+and routine, controller tags as context — as a Program-target partial
+over it. Second, **an instance tag with a `Radix` attribute is silently
+dropped** by the importer (a warning, not an error), and the build then
+fails with `RxCMP_E_OPERAND_TAGNOTFOUND` on the call that names it.
+Four bisections pointed at the definition, the import path and the
+operand list before a byte-compare against a hand-written partial that
+did build showed the one attribute. A structure tag carries no Radix;
+the emitter now knows an AOI instance is one, and a unit test pins the
+tag's exact shape.
+
+Measured on ECHO1 with the `aoi` conformance project — the lift
+station's `MotorStarter` block (HOA select, 5 s fail-to-run, three-trip
+lockout; a TON, a CTU and a rising edge inside the block), instantiated
+twice: two-step import and build, **download verified in 2 m 24 s, 3 of
+3 scenarios pass on both runtimes** (hand/auto/off, the 5 s fail-to-run
+cleared by reset in 12.6 s of wall time, three trips to lockout in
+18.8 s). The controller refuses a whole-structure read of an AOI
+instance (CIP 0x0f) as it does for FBD timers; the facade reads the
+externally visible members and reports the `ExternalAccess="None"`
+locals as zero, which is what they are from outside. Not measured: an
+online edit of a program that calls an AOI — the rung import path is
+unchanged, so nothing suggests it differs, but it has not been timed.
+
+### Phase D — check (2026-10-03)
+
+No estimate was written for D; it took one session (the same day as A,
+B and C). Built: UDTs, ST routines with online edit, FUNCTION_BLOCKs as
+AOIs with a two-step build; three new conformance projects and the
+yardstick.
+
+**Stop criteria** — unchanged: no Studio GUI anywhere in the loop (the
+two SDK import quirks above were worked around in the deploy flow, not
+by opening Studio); generated rungs and generated ST routines
+online-edit; licence as recorded in Phase A.
+
+**Re-scope / stop criteria**
+- *Special cases:* still **0** per-program fixes and **0** per-firmware
+  branches. Phase D added rules, not cases: TIME-as-DINT and BOOL
+  literals in ST, the container-path rule for routine imports, the
+  structure-tag shape, the InOut-must-be-a-structure rule.
+- *The equivalent subset is too small to be useful:* **closed.** The
+  yardstick (`line/Line.L5X`, UDT included) is written in the subset
+  and passes 3 of 3 on Echo. The lift station's motor-starter block,
+  the largest reusable unit in the examples, passes 3 of 3 on Echo as
+  an AOI. Still outside the subset: STRING, unsigned and bit-string
+  types, TP/CTD/CTUD, MIN/MAX/LIMIT/SEL/MUX, user FUNCTIONs in ST,
+  arrays of block instances.
+- *An instruction not equivalent and not rejectable:* **none.** The
+  conformance count on Echo is now 13 + 2 (udt) + 3 (yardstick) +
+  4 (st) + 3 (aoi) = **25 of 25** on both runtimes.
+- *Verification trustworthy:* 0 of 10 flake from Phase C stands; every
+  Phase D project passed its first live run and its rerun once the
+  reseed landed; the one reseed failure was a harness gap, fixed. **0**
+  Echo/logixd interruptions in about 15 further SDK sessions and 6
+  downloads today, including one SDK service crash that was our input
+  and from which the service recovered unattended.
+
+**DX criteria** — warm online edit 2.1 s (ladder), 4.0 s (ST); full
+download 2 m 20–24 s on every project today, now consistently over the
+2-minute line by 20–24 s. The time is the SDK's opens, uploads and the
+download itself, not the writer; the warm session removes the opens for
+edits, and a warm download path is the obvious next cut if the number
+matters. *Errors surfacing late:* three in D, all writer defects found on
+the SDK and none reachable from a user's program once fixed (routine
+import path, AOI whole-import, structure-tag Radix). 0 user-program
+errors first seen at import or build; the check target caught every
+refused construct in the conformance sources before the SDK saw them.
+
+**Not done in D:** user FUNCTIONs in ST; arrays of block instances;
+AOI call online-edit timing; the version matrix and the multi-day flake
+number (as in C, they want the scheduled runner); hardware `.L5X`
+merge and tag-value preservation across downloads (deferred since B).
+
 ## 8. The demo this enables
 
 James's target demo (2026-10-03), which replaces the Tier A `ab01` draft in the
