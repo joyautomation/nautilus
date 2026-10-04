@@ -242,14 +242,16 @@ func TestBasePartialBadAndStale(t *testing.T) {
 		t.Fatalf("quality = %v", q)
 	}
 
-	// Transport failures: the first two keep the source connected; the third
-	// moves it to error. Meanwhile stale-after turns everything Stale.
+	// Transport failures: fewer than failuresToError keep the source
+	// connected; the third moves it to error. Meanwhile stale-after turns
+	// everything Stale. Checked after ONE default-class failure: the count
+	// is the source's, across classes, and the slow class may fail once in
+	// between (two default polls could see three failures — a timing race).
 	w.setErr("SW1", DefaultClass, errors.New("timeout"))
 	w.setErr("SW1", "slow", errors.New("timeout"))
 	w.waitPoll(t, "SW1/default")
-	w.waitPoll(t, "SW1/default")
 	if h := b.Health(); h.Sources[0].State != "connected" {
-		t.Fatalf("after two failures: %+v", h.Sources[0])
+		t.Fatalf("after a failure below the threshold: %+v", h.Sources[0])
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for b.Health().Sources[0].State != "error" && time.Now().Before(deadline) {
