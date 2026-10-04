@@ -22,6 +22,7 @@ naut test -json     # one NDJSON event per test, for editors and CI
 - [In CI](#in-ci)
 - [From a Go project](#from-a-go-project)
 - [What these tests cannot do](#what-these-tests-cannot-do)
+- [Against a Logix controller](#against-a-logix-controller)
 
 ## Why virtual time
 
@@ -385,3 +386,27 @@ so the control logic has something to control.
 
 And they don't touch hardware. For driver conformance against a real
 controller, see the EtherNet/IP guide's emulator.
+
+## Against a Logix controller
+
+A project with a `target: logix` section (experimental,
+`docs/design/logix-authoring.md`) can run the same files against the
+controller it was deployed to:
+
+```sh
+naut test                  # the program, on the nautilus runtime, virtual time
+naut test --target logix   # the download, on the controller, real time
+```
+
+The second form browses the controller over EtherNet/IP and drives the
+scenarios through it: `given` writes go to the controller and the step
+waits until they read back; `advance: d` is `d` of wall time plus one
+poll; `scans: n` is `n` task periods plus one poll (a continuous task has
+no period, so it counts as one poll each); `until`, `hold` and `always`
+are evaluated on every poll. A timing assertion is only as sharp as one
+poll plus one scan, so give a timer's `near` that much tolerance.
+`suspend` is a no-op — the tasks it names are nautilus tasks, none of
+which runs on the controller — and the alarm verbs are not available.
+
+Program-scope tags are served as `<Program>_<Tag>`; a scenario may use the
+bare name and it is resolved.

@@ -537,7 +537,36 @@ throughout; the controller was in Program mode (Run is James's to set).
 Left for later phases: `logix/hardware.L5X` merge (§6.1) and tag-value
 preservation across downloads (§6.4), neither needed for the demo.
 
-**James's call:** *(pending)*
+**James's call (2026-10-03):** continue; and the harness takes the shape
+James proposed — the project's own `*_test.yaml` scenarios, run as unit
+tests on the nautilus runtime and again, after the download, against the
+controller over EtherNet/IP.
+
+### Phase C — in progress (2026-10-03)
+
+**`naut test --target logix` built and measured.** `acceptance.Live` runs
+the same scenario files through the facade's mirror of the controller:
+`given` writes wait for read-back, `advance`/`scans` are wall time plus a
+poll, `until`/`hold`/`always` evaluate every poll, `suspend` is a no-op
+(the tasks it names are nautilus tasks). The writer now carries manifest
+seeds and descriptions onto controller tags, and the DemoLine fixture
+declares its field tags in `nautilus.yaml` with the program taking them
+`VAR_EXTERNAL`, which is the ordinary nautilus shape and makes the Logix
+tags controller-scope.
+
+Measured on ECHO1, same file both layers:
+
+| layer | result |
+|---|---|
+| `naut test` (nautilus runtime, virtual time) | 2 passed, 0.4 s / 0.3 s |
+| download of the project-tag DemoLine (tag set changed) | 2 m 19 s, verified |
+| `naut test --target logix` (Echo in Run, 100 ms poll) | 2 passed, 1.25 s / 0.92 s |
+
+That is the whole claim of the brief in one command pair: the program
+proven in nautilus, then the download proven with the controller as the
+runtime. Open: `scans: n` on a controller is time-based (there is no scan
+count to read); a writer-emitted heartbeat rung would make it exact. The
+per-instruction conformance projects and the version matrix are next.
 
 ## 8. The demo this enables
 
