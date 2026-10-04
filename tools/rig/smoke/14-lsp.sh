@@ -3,9 +3,16 @@
 #
 #   X18  `naut lsp` on plant.st: hover (a manifest tag, a VAR_EXTERNAL that
 #        is not in the manifest, a local FB instance), completion (a partial
-#        tag name; `inst.` lists the TON's pins), go to definition (F12 on a
+#        tag name; `inst.` lists the TON's pins — typed, and by Ctrl+Space
+#        after the dot of a line that parses), go to definition (F12 on a
 #        VAR_EXTERNAL tag and on a local), diagnostics (an undeclared name
-#        squiggles and the status bar's error count rises; undo clears it).
+#        squiggles and the status bar's error count rises; the hover on the
+#        name explains it; undo clears it).
+#
+#        Two known product bugs are WARN rows, not FAILs: typed `inst.` lists
+#        nothing (#139), and an undeclared name's problem sits on the
+#        statement's first token, not on the name (#141). When either is
+#        fixed its row turns PASS by itself.
 #   X20  the YAML schemas (package.json yamlValidation → Red Hat YAML): a
 #        bogus key under a task / a test step is flagged; completion in a new
 #        task offers program / scan / name, in a new test step given /
@@ -77,6 +84,8 @@ squiggles() { local n; n=$(wb 'String(document.querySelectorAll(".monaco-editor 
 has_squiggle() { (( $(squiggles) > 0 )); }
 no_squiggle() { (( $(squiggles) == 0 )); }
 has_rows() { [[ -n $(suggest_rows) ]]; }
+# oneline — rows joined "a; b; c" for a results row.
+oneline() { sed 's/ *$//' | paste -sd'|' | sed 's/|/; /g'; }
 # dirty — the active editor has unsaved changes (the window title's "●").
 dirty() { [[ $(title) == ●* ]]; }
 
@@ -167,23 +176,43 @@ new_line_below "$F" '^END_IF;'
 rows=$(complete_with Dra)
 png=$(shot complete-tag)
 if grep -qE '^DrainValve \[variable\]' <<<"$rows"; then
-  pass "X18 completion: 'Dra' lists DrainValve (a variable, from the server) — $(head -3 <<<"$rows" | paste -sd'; ')" "$png"
+  pass "X18 completion: 'Dra' lists DrainValve (a variable, from the server) — $(head -3 <<<"$rows" | oneline)" "$png"
 elif grep -qE '^DrainValve ' <<<"$rows"; then
-  warn "X18 completion: 'Dra' lists DrainValve, but not as a server variable item (word-based?) — $(paste -sd'; ' <<<"$rows")" "$png"
-else fail "X18 completion: 'Dra' does not list DrainValve — rows: $(paste -sd'; ' <<<"${rows:-<none>}")" "$png"; fi
+  warn "X18 completion: 'Dra' lists DrainValve, but not as a server variable item (word-based?) — $(oneline <<<"$rows")" "$png"
+else fail "X18 completion: 'Dra' does not list DrainValve — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
 undo_clean || fail "X18 completion: undo did not bring plant.st back to clean"
 
+# Typed: `settle.` on a fresh line. The buffer does not parse at that
+# moment, and naut lsp drops every symbol on a parse error, so the server
+# answers null and VS Code shows only its word-based fallback — #139.
 new_line_below "$F" '^END_IF;'
 rows=$(complete_with settle.)
+png=$(shot complete-members-typed)
+miss=""; for pin in Q ET IN PT; do grep -qE "^$pin \[" <<<"$rows" || miss="$miss $pin"; done
+if [[ -z $miss ]]; then
+  pass "X18 completion: typing 'settle.' lists the TON's pins — $(oneline <<<"$rows")" "$png"
+else warn "X18 completion: typing 'settle.' lists no pins (missing$miss) — the line does not parse yet and the server drops its symbols (#139); rows: $(head -4 <<<"${rows:-<none>}" | oneline)…" "$png"; fi
+if undo_clean; then
+  pass "X18 completion: the typed text is undone, plant.st clean"
+else fail "X18 completion: plant.st still dirty after undo"; fi
+
+# Invoked (Ctrl+Space) right after the dot in `Full := settle.Q`, where the
+# buffer parses: the member list the server builds for a TON instance.
+l=$(line_of "$F" '^Full := settle\.Q')
+goto "$l" "$(( $(awk -v l="$l" 'NR==l{print index($0,"settle.")}' "$F") + 7 ))"
+xdotool key --clearmodifiers ctrl+space; sleep 1.5
+wait_for 6 has_rows || true
+rows=$(suggest_rows)
 png=$(shot complete-members)
 miss=""; for pin in Q ET IN PT; do grep -qE "^$pin \[" <<<"$rows" || miss="$miss $pin"; done
 if [[ -z $miss ]]; then
-  pass "X18 completion: 'settle.' lists the TON's pins — $(paste -sd'; ' <<<"$rows")" "$png"
-else fail "X18 completion: 'settle.' is missing$miss — rows: $(paste -sd'; ' <<<"${rows:-<none>}")" "$png"; fi
-if undo_clean; then
+  pass "X18 completion: Ctrl+Space after 'settle.' lists the TON's pins — $(oneline <<<"$rows")" "$png"
+else fail "X18 completion: Ctrl+Space after 'settle.' is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+xdotool key --clearmodifiers Escape; sleep 0.3
+if ! dirty; then
   png=$(shot complete-reverted)
-  pass "X18 completion: the typed text is undone, plant.st clean" "$png"
-else png=$(shot complete-reverted); fail "X18 completion: plant.st still dirty after undo" "$png"; fi
+  pass "X18 completion: plant.st clean after the completion probes" "$png"
+else png=$(shot complete-reverted); fail "X18 completion: plant.st dirty after the completion probes" "$png"; fi
 
 # ══ X18 go to definition ═══════════════════════════════════════════════════
 want=$(line_of "$F" '^    Level +: REAL;')
@@ -213,9 +242,18 @@ sleep 1; e1=$(errors); s1=$(squiggles); png=$(shot diagnostics-typo)
 if (( ${s1:-0} > ${s0:-0} && ${e1:-0} > ${e0:-0} )); then
   pass "X18 diagnostics: undeclared 'Heatr' squiggles ($s1) and the status bar errors go $e0 → $e1" "$png"
 else fail "X18 diagnostics: after the typo squiggles $s0 → ${s1:-?}, status-bar errors $e0 → ${e1:-?}" "$png"; fi
+# The problem's hover: on the misspelt name itself, where a person points.
 goto_word "$F" '^IF Heater THEN' Heater
-h=$(show_hover || true)
-[[ -n $h ]] && info "X18 diagnostics: the typo's hover — \"$h\""
+h=$(show_hover || true); png=$(shot diagnostics-hover)
+if grep -q 'undeclared identifier "Heatr"' <<<"$h"; then
+  pass "X18 diagnostics: hovering Heatr shows the problem — \"$h\"" "$png"
+else
+  goto "$(line_of "$F" '^IF Heater THEN')" 1
+  h1=$(show_hover || true); png=$(shot diagnostics-hover-line)
+  if grep -q 'undeclared identifier "Heatr"' <<<"$h1"; then
+    warn "X18 diagnostics: the problem is on 'IF' at column 1, not on 'Heatr' (#141) — hovering the name shows ${h:+\"$h\"}${h:-nothing}; at 1:1 \"$h1\"" "$png"
+  else fail "X18 diagnostics: no hover names the undeclared 'Heatr' (on the name: \"$h\"; at column 1: \"$h1\")" "$png"; fi
+fi
 undo_clean || true
 wait_for 10 no_squiggle || true
 sleep 1; e2=$(errors); s2=$(squiggles); png=$(shot diagnostics-reverted)
@@ -246,8 +284,8 @@ rows=$(complete_with '  - ')
 png=$(shot yaml-task-completion)
 miss=""; for k in program scan name; do grep -qE "^$k \[" <<<"$rows" || miss="$miss $k"; done
 if [[ -z $miss ]]; then
-  pass "X20 nautilus.yaml: completion in a new task offers program, scan, name — $(paste -sd'; ' <<<"$rows")" "$png"
-else fail "X20 nautilus.yaml: new-task completion is missing$miss — rows: $(paste -sd'; ' <<<"${rows:-<none>}")" "$png"; fi
+  pass "X20 nautilus.yaml: completion in a new task offers program, scan, name — $(oneline <<<"$rows")" "$png"
+else fail "X20 nautilus.yaml: new-task completion is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
 undo_clean || true
 sleep 1; png=$(shot yaml-reverted)
 if ! dirty && [[ $(errors) == "$e0" ]]; then
@@ -275,8 +313,8 @@ rows=$(complete_with '      - ')
 png=$(shot test-step-completion)
 miss=""; for k in given advance expect; do grep -qE "^$k \[" <<<"$rows" || miss="$miss $k"; done
 if [[ -z $miss ]]; then
-  pass "X20 batch_test.yaml: completion in a new step offers given, advance, expect — $(paste -sd'; ' <<<"$rows")" "$png"
-else fail "X20 batch_test.yaml: new-step completion is missing$miss — rows: $(paste -sd'; ' <<<"${rows:-<none>}")" "$png"; fi
+  pass "X20 batch_test.yaml: completion in a new step offers given, advance, expect — $(oneline <<<"$rows")" "$png"
+else fail "X20 batch_test.yaml: new-step completion is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
 undo_clean || true
 sleep 1; png=$(shot test-reverted)
 if ! dirty && [[ $(errors) == "$e0" ]]; then
