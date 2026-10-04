@@ -109,7 +109,8 @@ func (f *fakeAgent) serve(w http.ResponseWriter, r *http.Request) {
 		f.running = f.files[file]
 		dir := file[:strings.LastIndex(file, "/")+1]
 		for name, raw := range f.files {
-			if strings.HasPrefix(name, dir) && strings.HasSuffix(name, ".L5X") && !strings.HasSuffix(name, ".rungs.L5X") {
+			if strings.HasPrefix(name, dir) && strings.HasSuffix(name, ".L5X") && !strings.HasSuffix(name, ".rungs.L5X") &&
+				!strings.Contains(name, "before") && !strings.Contains(name, "after") {
 				f.running = raw
 			}
 		}
