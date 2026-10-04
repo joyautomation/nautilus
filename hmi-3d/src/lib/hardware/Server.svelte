@@ -16,7 +16,7 @@
 	import { SCENE, type SceneContext } from '../context.js';
 	import { DEFAULT_PALETTE, type Palette } from '../palette.js';
 	import { member } from './profile.js';
-	import { overlayColors, heatPaint, sensorLimits, placeLabels, fanOutLabels, type Overlay, type OverlayColors, type OverlayContext, type PartPaint } from './overlay.js';
+	import { overlayColors, heatPaint, sensorLimits, deviceOffline, placeLabels, fanOutLabels, type Overlay, type OverlayColors, type OverlayContext, type PartPaint } from './overlay.js';
 	import { Tween } from 'svelte/motion';
 	import { cubicOut } from 'svelte/easing';
 	import type { Component } from 'svelte';
@@ -114,7 +114,7 @@
 					const v = octx.tags[tagFor(q.tag, node)];
 					const t = member(v, 'Value');
 					const lim = sensorLimits(v);
-					const paint = typeof t === 'number' && lim ? heatPaint(t, lim[0], lim[1], q.id === 'inlet' ? t : inletOf(), colors) : undefined;
+					const paint = typeof t === 'number' && lim && !deviceOffline(octx) ? heatPaint(t, lim[0], lim[1], q.id === 'inlet' ? t : inletOf(), colors) : undefined;
 					return { ...q, pos: mm(q.pos), paint };
 				})
 			: []

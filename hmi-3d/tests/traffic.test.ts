@@ -7,7 +7,7 @@ import s3900 from '../profiles/fs-s3900-24t4s-r.json';
 import hq from '../../examples/node-3d/hmi/src/lib/hq.topology.json';
 import { resolveParts, type ChassisProfile } from '../src/lib/hardware/profile.js';
 import type { Plant, Topology } from '../src/lib/hardware/topology.js';
-import { trafficOverlay, mute, portTraffic, trafficColor, trafficText, bitsText, peerTraffic, type OverlayColors } from '../src/lib/hardware/overlay.js';
+import { trafficOverlay, mute, interfacesOverlay, cablesOverlay, heatOverlay, portTraffic, trafficColor, trafficText, bitsText, peerTraffic, type OverlayColors } from '../src/lib/hardware/overlay.js';
 
 const server = sys112b as unknown as ChassisProfile;
 const sw = s3900 as unknown as ChassisProfile;
@@ -68,5 +68,19 @@ describe('the traffic overlay', () => {
 		const g24 = part('SW1', sw, 'g24');
 		const p = mute(trafficOverlay(plant)).paint(g24, tags.SW1_Port24, ctx('SW1', sw, tags));
 		expect(p).toEqual({ color: 'critical', text: undefined });
+	});
+	it('says nothing live about an offline device', () => {
+		// The switch went dark: its tags still hold the last poll.
+		const tags = { SW1__Online: false, SW1_Port25: port(9.5e9, 9.5e9, 10000, 50) };
+		const te25 = part('SW1', sw, 'te25');
+		expect(trafficOverlay(plant).paint(te25, tags.SW1_Port25, ctx('SW1', sw, tags)).dim).toBe(true);
+		expect(interfacesOverlay.paint(te25, tags.SW1_Port25, ctx('SW1', sw, tags)).dim).toBe(true);
+		const nic = part('NODE1', server, 'nicSlot2p2');
+		expect(cablesOverlay(plant).paint(part('SW1', sw, 'g5'), { OperUp: true }, ctx('SW1', sw, tags)).dim).toBe(true);
+		const drive = resolveParts(server, 'NODE1').find((p) => p.kind === 'drive')!;
+		expect(heatOverlay.paint(drive, { TempC: 70 }, ctx('NODE1', server, { NODE1__Online: false })).dim).toBe(true);
+		// Online again: the same readings paint.
+		expect(trafficOverlay(plant).paint(te25, tags.SW1_Port25, ctx('SW1', sw, { ...tags, SW1__Online: true })).color).toBe('critical');
+		expect(nic.kind).toBe('port');
 	});
 });

@@ -98,6 +98,11 @@ export function overlayColors(p: Palette): OverlayColors {
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 const DIM: PartPaint = { dim: true };
 
+/** The device is offline (`{node}__Online` false): its tags hold their last
+ * values, which say nothing about now. An overlay of live readings paints
+ * nothing then — never a stale "10G" or "drops 50/s" as if current. */
+export const deviceOffline = (ctx: Pick<OverlayContext, 'node' | 'tags'>) => ctx.tags[`${ctx.node}__Online`] === false;
+
 // ── heat ───────────────────────────────────────────────────────────────
 
 /** A part's [warning, critical] °C, from the profile's `limits` by
@@ -149,6 +154,7 @@ export const heatOverlay: Overlay = {
 	caption: 'Each part against its own limit: the share of headroom used, from the inlet temperature to the part’s warning limit. No colour between sensors — only measured parts are painted.',
 	sensors: true,
 	paint(part, value, ctx) {
+		if (deviceOffline(ctx)) return DIM;
 		const t = num(member(value, 'TempC'));
 		const lim = limitsFor(ctx.profile, part);
 		// A driver delivers a member it has no binding for as zero; no part
@@ -179,6 +185,7 @@ export const interfacesOverlay: Overlay = {
 	caption: 'Every port by link: green at its rated speed, amber when linked slower than the port can run, grey when unused. A PSU shows its power input.',
 	paint(part, value, ctx) {
 		const c = ctx.colors;
+		if (deviceOffline(ctx)) return DIM;
 		if (part.kind === 'port') {
 			// A port with a name in the profile says it (BMC, LAN1); the NIC
 			// cages, 16 mm apart, keep to the speed alone.
@@ -253,6 +260,7 @@ export const freeOverlay: Overlay = {
 		const c = ctx.colors;
 		const empty = !part.static && (partState(part, value, true) === 'unbound' || partState(part, value, true) === 'missing');
 		if (part.kind === 'psu' && value !== undefined) {
+			if (deviceOffline(ctx)) return DIM;
 			const out = num(member(value, 'OutputW'));
 			const cap = num(member(value, 'CapacityW'));
 			return out !== undefined && cap !== undefined ? { text: `${Math.round(out)}/${cap} W` } : DIM;
@@ -377,7 +385,7 @@ export function cablesOverlay(plant: Plant): Overlay {
 		paint(part, value, ctx) {
 			if (part.kind !== 'port') return DIM;
 			const at = linkOnPort(plant, ctx.node, part.partId, ctx.profile, ctx.tags);
-			if (!at) return readEnd(value).up ? { color: ctx.colors.warning, text: '! not in plan' } : DIM;
+			if (!at) return !deviceOffline(ctx) && readEnd(value).up ? { color: ctx.colors.warning, text: '! not in plan' } : DIM;
 			const far = at.near === 'a' ? at.check.b : at.check.a;
 			return { color: verdictColor(at.check.verdict, ctx.colors), text: `${VERDICT_MARK[at.check.verdict]} ${far.label}` };
 		},
@@ -559,6 +567,7 @@ export function trafficOverlay(plant: Plant): Overlay {
 				if (!p || !p.traffic.up) return DIM;
 				return { color: trafficColor(p.traffic, ctx.colors), text: `${name}: ${trafficText(p.traffic)} (${p.peer})` };
 			}
+			if (deviceOffline(ctx)) return DIM;
 			const t = portTraffic(value);
 			if (!t || !t.up) return DIM;
 			return { color: trafficColor(t, ctx.colors), text: `${name}: ${trafficText(t)}` };
