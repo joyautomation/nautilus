@@ -358,6 +358,45 @@ On a Logix target the array is one `TIMER[4]` tag; an element called
 with a literal index carries its preset in the tag's data, one called
 with a computed index takes a `MOVE` to its `.PRE` ahead of the rung.
 
+## Dialects
+
+A project runs on the nautilus runtime by default, and that is the only
+semantics the standard library has. A project that targets a vendor's
+controller can opt into that vendor's idioms with `dialect:` in
+`nautilus.yaml`:
+
+```yaml
+dialect: logix
+```
+
+A dialect is a library of blocks with the vendor's semantics, written in
+nautilus and compiled into every program of the project like a `lib/`
+file — so the nautilus runtime runs them, the vendor writer emits the
+native instruction for them, and the vendor import folds the native idiom
+back into them. One definition, three uses. The names are `nautilus` (the
+default, adds nothing), `logix`, and the reserved `siemens` and `codesys`.
+
+The `logix` dialect today:
+
+| Block | Pins | Semantics | On a Logix controller |
+| --- | --- | --- | --- |
+| `TONR` | `IN`, `PT`, `Reset` → `Q`, `ET` | a TON whose `Reset` clears the accumulated time and `Q` while TRUE; the free-running pulse is `t:TONR(PT := T#1S, Reset := t.Q)` | a `TON` with a `RES(t)` rung ahead of the timer's rung |
+
+**Tag aliases.** A manifest tag may carry `alias:`, the vendor-side
+binding of the tag — on Logix the alias tag's target, which is how a Logix
+program names a rack point or another tag:
+
+```yaml
+tags:
+  - { name: StartPB, role: input, alias: "Local:1:I.Data.3" }
+```
+
+The program names `StartPB`; the Logix writer emits it as an alias tag;
+the L5X importer turns an export's alias tags, and rack points the logic
+named directly, into tags with `alias:`. The nautilus runtime ignores the
+binding — the tag is a tag — so a simulation runs the same source. It is
+the one place a hardware address lives in a project.
+
 ## User function blocks
 
 User `FUNCTION`s and `FUNCTION_BLOCK`s written in library files

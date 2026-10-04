@@ -476,6 +476,10 @@ func (im *importer) declareFound(sc *scope, p *pou, f *found, blockType string) 
 				have = have[i+4:]
 			}
 			if blockType != "" && have != blockType {
+				if have == "TON" && blockType == "TONR" {
+					d.Type = strings.Replace(d.Type, "TON", "TONR", 1)
+					return true
+				}
 				return false
 			}
 			return true

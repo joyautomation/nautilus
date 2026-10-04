@@ -40,6 +40,9 @@ type routine struct {
 	// presetLit maps an instance to the literal a MOVE ahead of its rung
 	// set its preset to.
 	presetLit map[string]int64
+	// timerReset maps a timer run by TON to the condition of a RES rung on
+	// it: the dialect's TONR Reset pin.
+	timerReset map[string]string
 	// enable maps a rung index to the condition the writer put on an
 	// en_ helper rung ahead of an Add-On Instruction call.
 	enable map[int][]string
@@ -70,7 +73,7 @@ var (
 
 // lowerRoutine imports one ladder routine into p.
 func (im *importer) lowerRoutine(sc *scope, r *l5x.Routine, p *pou) {
-	rt := &routine{im: im, sc: sc, p: p, edges: map[string]string{}, presetVar: map[string]string{}, resetCond: map[string]string{}, resetRung: map[string]int{}, presetLit: map[string]int64{}, synth: map[string]bool{}, enable: map[int][]string{}, refs: map[string]int{}}
+	rt := &routine{im: im, sc: sc, p: p, edges: map[string]string{}, presetVar: map[string]string{}, resetCond: map[string]string{}, resetRung: map[string]int{}, presetLit: map[string]int64{}, timerReset: map[string]string{}, synth: map[string]bool{}, enable: map[int][]string{}, refs: map[string]int{}}
 	for _, rg := range r.Rungs {
 		pr := &parsed{rg: rg}
 		terms, err := l5x.ParseRung(rg.Text)
@@ -236,6 +239,22 @@ func (rt *routine) prepass() {
 					if cond, ok := rt.boolCond(terms[:n-1]); ok {
 						rt.resetCond[c] = cond
 						rt.resetRung[c] = i
+						pr.drop = true
+						rt.p.imported++
+						continue
+					}
+				}
+				// <cond>RES(t) on a timer the routine runs with TON: the
+				// logix dialect's TONR, Reset := cond. (A TON's rung-in
+				// dropping already resets it; RES is the extra reset.)
+				if f := rt.sc.lookup(baseOf(res.Args[0])); f != nil && strings.EqualFold(f.dtype, "TIMER") && rt.timerRunBy(res.Args[0]) == "TON" {
+					if cond, ok := rt.boolCond(terms[:n-1]); ok {
+						key := strings.ToLower(res.Args[0])
+						if prev, dup := rt.timerReset[key]; dup {
+							rt.timerReset[key] = "OR(" + prev + ", " + cond + ")"
+						} else {
+							rt.timerReset[key] = cond
+						}
 						pr.drop = true
 						rt.p.imported++
 						continue
@@ -974,10 +993,17 @@ func (rt *routine) coil(in *l5x.Instr) (string, *refusal) {
 }
 
 func (rt *routine) markWritten(operand string) {
-	if f := rt.sc.lookup(baseOf(operand)); f != nil && f.ext && rt.sc.ctrl != nil && f.tag != nil {
-		if rt.im.written == nil {
-			rt.im.written = map[string]bool{}
+	if rt.im.written == nil {
+		rt.im.written = map[string]bool{}
+	}
+	if strings.Contains(operand, ":") && !strings.HasPrefix(strings.ToUpper(operand), "S:") {
+		// a rack point: the alias tag the import made for it
+		if name, err := rt.ioAlias(operand); err == nil {
+			rt.im.written[strings.ToLower(name)] = true
 		}
+		return
+	}
+	if f := rt.sc.lookup(baseOf(operand)); f != nil && f.ext && rt.sc.ctrl != nil && f.tag != nil {
 		rt.im.written[strings.ToLower(f.name)] = true
 	}
 }
@@ -1020,8 +1046,21 @@ func (rt *routine) ref(a string, blockType string) (string, *refusal) {
 	if a == "?" || a == "" {
 		return "", refuse("operand", "an unset operand")
 	}
+	if strings.HasPrefix(strings.ToUpper(a), "S:") {
+		// A controller status flag: S:FS (first scan), S:N/Z/V/C. No
+		// nautilus form yet — a dialect block for first-scan is the obvious
+		// one — so the rung is refused by name.
+		return "", refuse("status", "the controller status flag %s", a)
+	}
 	if strings.Contains(a, ":") {
-		return "", refuse("io", "module I/O operand %s; alias it to a tag", a)
+		// A rack point named directly: Local:1:I.Data.3. The import gives
+		// it an alias tag (the manifest's alias:), and the program names
+		// the tag, as a Logix program with alias tags would.
+		name, err := rt.ioAlias(a)
+		if err != nil {
+			return "", err
+		}
+		return name, nil
 	}
 	base := baseOf(a)
 	rest := a[len(base):]
@@ -1173,17 +1212,27 @@ func (rt *routine) block(in *l5x.Instr) (string, *refusal) {
 		return "", refuse(m, "no instance operand")
 	}
 	inst := in.Args[0]
-	name, err := rt.ref(inst, m)
+	declType := m
+	if _, ok := rt.timerReset[strings.ToLower(inst)]; ok && m == "TON" {
+		declType = "TONR"
+	}
+	name, err := rt.ref(inst, declType)
 	if err != nil {
 		return "", err
 	}
 	f := rt.sc.lookup(baseOf(inst))
 	var binds []string
+	resetBind := ""
 	pv, hasVar := rt.presetVar[strings.ToLower(inst)]
 	switch m {
 	case "TON", "TOF":
 		if !strings.EqualFold(f.dtype, "TIMER") {
 			return "", refuse("block-type", "%s is a %s, not a TIMER", inst, f.dtype)
+		}
+		if cond, ok := rt.timerReset[strings.ToLower(inst)]; ok && m == "TON" {
+			m = "TONR"
+			rt.im.usesDialect = true
+			resetBind = "Reset := " + cond
 		}
 		if hasVar {
 			v := rt.sc.lookup(pv)
@@ -1212,6 +1261,9 @@ func (rt *routine) block(in *l5x.Instr) (string, *refusal) {
 		if cond, ok := rt.resetCond[strings.ToLower(inst)]; ok {
 			binds = append(binds, "R := "+cond)
 		}
+	}
+	if resetBind != "" {
+		binds = append(binds, resetBind)
 	}
 	return name + ":" + m + "(" + strings.Join(binds, ", ") + ")", nil
 }
@@ -1443,4 +1495,58 @@ func containsBox(parts []string) bool {
 		}
 	}
 	return false
+}
+
+// timerRunBy reports which instruction runs a timer in this routine
+// ("TON", "TOF", "RTO"), or "" when none does.
+func (rt *routine) timerRunBy(inst string) string {
+	found := ""
+	for _, pr := range rt.rungs {
+		walkTerms(pr.terms, func(in *l5x.Instr) {
+			m := strings.ToUpper(in.Mnemonic)
+			if (m == "TON" || m == "TOF" || m == "RTO") && len(in.Args) > 0 && strings.EqualFold(in.Args[0], inst) && found == "" {
+				found = m
+			}
+		})
+	}
+	return found
+}
+
+// ioAlias gives a rack point a tag: Local:1:I.Data.3 → Local_1_I_Data_3,
+// recorded for the tag file with its alias.
+func (rt *routine) ioAlias(operand string) (string, *refusal) {
+	name := l5x.Ident(strings.NewReplacer(":", "_", ".", "_", "[", "_", "]", "").Replace(operand))
+	if rt.im.ioAliases == nil {
+		rt.im.ioAliases = map[string]string{}
+	}
+	if prev, ok := rt.im.ioAliases[name]; ok && prev != operand {
+		return "", refuse("io", "two rack points name the tag %s (%s, %s)", name, prev, operand)
+	}
+	rt.im.ioAliases[name] = operand
+	rt.p.declare(decl{Name: name, Type: ioType(operand), Section: "VAR_EXTERNAL"})
+	return name, nil
+}
+
+// ioType guesses a rack point's type from its address: a trailing bit
+// index is a BOOL, anything else a DINT (an analog channel, a status
+// word). The alias tag takes its real type from the module on the
+// controller; the guess only has to type-check the program.
+func ioType(operand string) string {
+	if _, bit := splitBitOperand(operand); bit {
+		return "BOOL"
+	}
+	return "DINT"
+}
+
+func splitBitOperand(operand string) (string, bool) {
+	i := strings.LastIndex(operand, ".")
+	if i < 0 || i == len(operand)-1 {
+		return operand, false
+	}
+	for _, c := range operand[i+1:] {
+		if c < '0' || c > '9' {
+			return operand, false
+		}
+	}
+	return operand[:i], true
 }

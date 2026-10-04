@@ -2,6 +2,7 @@ package importer
 
 import (
 	"fmt"
+	"github.com/joyautomation/nautilus/internal/dialect"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -805,5 +806,71 @@ func TestArraysOfBlocksImport(t *testing.T) {
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("written back:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+}
+
+// A RES on a timer the routine runs with TON is the logix dialect's TONR
+// (Reset := the RES rung's condition), and the manifest opts into the
+// dialect; a rack point named directly becomes an alias tag.
+func TestDialectAndAliasImport(t *testing.T) {
+	tags := []string{"Go:BOOL", "Pulse:BOOL", "t:TIMER=1000", "Clear:BOOL"}
+	doc := miniL5X(tags,
+		"XIC(t.DN)RES(t);",
+		"XIC(Go)TON(t,?,?)XIC(t.DN)OTE(Pulse);",
+		"XIC(Local:1:I.Data.3)XIO(Clear)OTE(Local:2:O.Data.0);",
+	)
+	p := mustImport(t, doc)
+	for _, nt := range p.Notes {
+		if nt.Rung >= 0 {
+			t.Errorf("note: %s", nt)
+		}
+	}
+	src := string(p.Files["Main.ld"])
+	for _, want := range []string{
+		"t : TONR;",
+		"Go t:TONR(PT := T#1S, Reset := t.Q) ( Pulse )",
+		"Local_1_I_Data_3 /Clear ( Local_2_O_Data_0 )",
+		"Local_1_I_Data_3 : BOOL;",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("missing %q in\n%s", want, src)
+		}
+	}
+	man := string(p.Files["nautilus.yaml"])
+	if !strings.Contains(man, "dialect: logix") {
+		t.Errorf("manifest should opt into the dialect:\n%s", man)
+	}
+	tf := string(p.Files["tags/logix.yaml"])
+	for _, want := range []string{
+		`name: Local_1_I_Data_3, role: input, alias: "Local:1:I.Data.3"`,
+		`name: Local_2_O_Data_0, role: output, alias: "Local:2:O.Data.0"`,
+	} {
+		if !strings.Contains(tf, want) {
+			t.Errorf("missing %q in\n%s", want, tf)
+		}
+	}
+	// Written back with the dialect library in scope: the RES rung ahead
+	// of the timer, the alias tags as alias tags.
+	libs, _ := dialect.Sources("logix")
+	var libSrc []string
+	for _, l := range libs {
+		libSrc = append(libSrc, l.ST)
+	}
+	out, diags, err := writer.Write(src, writer.Options{Controller: "Mini", Libs: libSrc, Aliases: map[string]string{"Local_1_I_Data_3": "Local:1:I.Data.3", "Local_2_O_Data_0": "Local:2:O.Data.0"}})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("writer: %v %v\n%s", err, diags, src)
+	}
+	back, _ := l5x.Parse(out)
+	got := rungTexts(back, "Main", "MainRoutine")
+	want := []string{
+		"XIC(t.DN)RES(t);",
+		"XIC(Go)TON(t,?,?)XIC(t.DN)OTE(Pulse);",
+		"XIC(Local_1_I_Data_3)XIO(Clear)OTE(Local_2_O_Data_0);",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("written back:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(want, "\n  "))
+	}
+	if !strings.Contains(string(out), `TagType="Alias" Radix="Decimal" AliasFor="Local:1:I.Data.3"`) {
+		t.Errorf("alias tag not written back")
 	}
 }
