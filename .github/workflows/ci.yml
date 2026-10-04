@@ -211,6 +211,14 @@ jobs:
           if [ "$(printf '%s\n%s\n' "$repo" "$reg" | sort -V | tail -1)" != "$repo" ]; then
             echo "::error::hmi/package.json ($repo) is behind npm ($reg)"; exit 1
           fi
+      - name: hmi-3d vs npm
+        run: |
+          repo=$(node -p "require('./hmi-3d/package.json').version")
+          reg=$(npm view @joyautomation/nautilus-hmi-3d version 2>/dev/null || echo 0.0.0)
+          echo "repo=$repo npm=$reg"
+          if [ "$(printf '%s\n%s\n' "$repo" "$reg" | sort -V | tail -1)" != "$repo" ]; then
+            echo "::error::hmi-3d/package.json ($repo) is behind npm ($reg)"; exit 1
+          fi
       # The extension has two channels, checked separately (RELEASING.md):
       #   pre-release: main's package.json vs the highest PRE-RELEASE on each
       #                registry;

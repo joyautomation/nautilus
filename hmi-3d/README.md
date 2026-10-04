@@ -13,7 +13,7 @@ by one component. The same file will later place AR overlays, so the
 desktop view is the authoring and testing surface for that.
 
 three.js never enters the 2D kit; this package is the one that carries it.
-Brief and design: [`docs/design/spatial-hmi.md`](../docs/design/spatial-hmi.md).
+Brief and design: [`docs/design/spatial-hmi.md`](https://github.com/joyautomation/nautilus/blob/main/docs/design/spatial-hmi.md).
 
 ## Install
 
@@ -77,7 +77,7 @@ alarms by priority, greys anything whose tag is not good quality, and with
   `rot` is degrees `[x, y, z]`; `[0, 90, 0]` turns a node on the spot.
 - **`tag`** is the struct tag the kind's component reads members off
   (`Level`, `Running`, `Pos`…). The built-in kinds read the UDTs in
-  [`examples/spatial-rig/types.st`](../examples/spatial-rig/types.st).
+  [`examples/spatial-rig/types.st`](https://github.com/joyautomation/nautilus/blob/main/examples/spatial-rig/types.st).
 - **`bind`** is the mimic's binding map, `prop -> ref`, with dotted paths:
   `"cmd": "Demand"`, `"speed": "P101.Speed"`, `"ok": "!P101.Fault"`. An
   absent tag leaves the prop unset. A bound prop overrides the member on the
