@@ -6,8 +6,10 @@
 // neutral rather than guessing.
 
 export type LdElement = {
-	kind: 'contact' | 'branch' | 'fn' | 'fb' | 'coil';
+	kind: 'contact' | 'branch' | 'fn' | 'fb' | 'coil' | 'assign';
 	ref?: string;
+	/** assign: the element's body, `y := a + b; z := 0`. */
+	text?: string;
 	neg?: boolean;
 	mode?: string; // coil: "" | "S" | "R"
 	fn?: string;
@@ -254,6 +256,12 @@ export function annotate(elems: LdElement[], inPower: boolean | undefined, resol
 				ann.out = power;
 				break;
 			}
+			case 'assign': {
+				// Made when power reaches it; power passes through.
+				ann.val = power;
+				ann.out = power;
+				break;
+			}
 		}
 		out.push(ann);
 		power = ann.out;
@@ -276,6 +284,8 @@ function elText(e: LdElement): string {
 			return `${e.fn}(${e.args ?? ''})`;
 		case 'fb':
 			return `${e.inst}:${e.type}(${e.args ?? ''})`;
+		case 'assign':
+			return `{ ${e.text ?? ''} }`;
 		default:
 			return '[ branch ]';
 	}

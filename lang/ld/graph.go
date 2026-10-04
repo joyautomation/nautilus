@@ -97,7 +97,7 @@ type Rung struct {
 
 // Element is one drawable ladder element.
 type Element struct {
-	Kind string `json:"kind"` // "contact" | "edge" | "branch" | "fn" | "fb" | "coil"
+	Kind string `json:"kind"` // "contact" | "edge" | "branch" | "fn" | "fb" | "coil" | "assign"
 	Ref  string `json:"ref,omitempty"`
 	Neg  bool   `json:"neg,omitempty"`  // contact / fn: negated
 	Mode string `json:"mode,omitempty"` // coil: "" | "S" | "R" | "P" | "N"; edge: "P" | "N"
@@ -105,6 +105,8 @@ type Element struct {
 	Args string `json:"args,omitempty"`
 	Inst string `json:"inst,omitempty"`
 	Type string `json:"type,omitempty"`
+	// Text is an assignment element's body: `y := a + b; z := 0`.
+	Text string `json:"text,omitempty"`
 	// The boolean pins a rung's power enters/leaves an FB on.
 	PowerIn  string      `json:"powerIn,omitempty"`
 	PowerOut string      `json:"powerOut,omitempty"`
@@ -286,6 +288,8 @@ func toElements(elems []any, res *resolver) []Element {
 			out = append(out, b)
 		case coilEl:
 			out = append(out, Element{Kind: "coil", Ref: x.ref, Mode: x.mode})
+		case assignEl:
+			out = append(out, Element{Kind: "assign", Text: x.text})
 		}
 	}
 	return out

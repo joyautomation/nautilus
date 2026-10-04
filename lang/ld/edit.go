@@ -167,8 +167,16 @@ func ApplyEdit(src string, op EditOp, libs ...string) ([]TextEdit, error) {
 		if err != nil {
 			return nil, err
 		}
+		if el.Kind == "assign" {
+			as, err := ParseAssignments(op.Args)
+			if err != nil {
+				return nil, fmt.Errorf("ld edit: %v", err)
+			}
+			el.Text = PrintAssignments(as)
+			break
+		}
 		if el.Kind != "fn" && el.Kind != "fb" {
-			return nil, fmt.Errorf("ld edit: only function contacts and blocks take arguments")
+			return nil, fmt.Errorf("ld edit: only function contacts, blocks and assignments take arguments")
 		}
 		// A function contact can change its FUNCTION in the same gesture —
 		// the diagram edits the whole call text (GT(...) → LE(...)).
@@ -489,6 +497,19 @@ func newElement(op EditOp, res *resolver) (Element, error) {
 		}
 		in, out := res.powerPins(op.FbType, op.Args)
 		return Element{Kind: "fb", Inst: op.Inst, Type: op.FbType, Args: op.Args, PowerIn: in, PowerOut: out}, nil
+	case "assign":
+		text := op.Args
+		if text == "" {
+			text = op.Text
+		}
+		if text == "" {
+			text = "_ := 0"
+		}
+		as, err := ParseAssignments(text)
+		if err != nil {
+			return Element{}, fmt.Errorf("ld edit: %v", err)
+		}
+		return Element{Kind: "assign", Text: PrintAssignments(as)}, nil
 	}
 	return Element{}, fmt.Errorf("ld edit: unknown element kind %q", op.Kind)
 }
@@ -522,6 +543,12 @@ func sanitizeElement(e *Element) error {
 		if !identOnly.MatchString(e.Inst) || !identOnly.MatchString(e.Type) {
 			return fmt.Errorf("ld edit: a block needs an instance name and a type")
 		}
+	case "assign":
+		as, err := ParseAssignments(e.Text)
+		if err != nil {
+			return fmt.Errorf("ld edit: %v", err)
+		}
+		e.Text = PrintAssignments(as)
 	case "branch":
 		if len(e.Legs) < 2 {
 			return fmt.Errorf("ld edit: a branch needs at least two legs")
@@ -1004,6 +1031,8 @@ func printElement(e *Element) string {
 			return "( " + e.Mode + " " + e.Ref + " )"
 		}
 		return "( " + e.Ref + " )"
+	case "assign":
+		return "{ " + e.Text + " }"
 	}
 	return ""
 }

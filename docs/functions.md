@@ -64,6 +64,7 @@ A rung is a boolean expression that reads left to right:
 | Reset coil | `( R Tag )` | unlatch: `Tag := Tag AND NOT condition` |
 | Rising-edge coil | `( P Tag )` | `Tag :=` TRUE for one scan when the rung condition rises (an implicit `R_TRIG`) |
 | Falling-edge coil | `( N Tag )` | `Tag :=` TRUE for one scan when the rung condition falls (an implicit `F_TRIG`) |
+| Assignment | `{ Tag := expr }` | made when the rung has power at that point; power passes through unchanged. Several with `;`: `{ Count := Count + 1; Last := Now }` |
 
 Series elements AND together; a rung with only a coil is driven by the
 rail (`TRUE`). Multiple coils on one rung share the same condition. A
@@ -92,8 +93,15 @@ functions don't: `ADD(TempC, 0.0)` as a contact is a **compile error**
 (`operator AND on BOOL and REAL`, or `cannot assign REAL to BOOL` when
 it's alone on the rung) — ADD does not "pass through" its input. Numeric
 functions belong *inside* a comparison's arguments — `GE(ADD(Base, Bias),
-Limit)` — or in an FBD/ST program, where values rather than power flow
-between elements.
+Limit)` — or in an **assignment**: `Run { Hours := Hours + ScanH }` adds
+while `Run` is true and leaves power as it found it, which is the IEC
+function box with its `EN` wired to the rung. The value is any IEC
+expression (operators, functions, members, indexes); it is compiled as a
+`SEL` on the rung condition, so it is evaluated every scan like any block
+— an array index in it must stay valid while the rung is false. On a
+Logix target an assignment becomes the matching instruction (MOVE, ADD,
+SUB, MUL, DIV, MOD, NEG, ABS, SQR, XPY) or a CPT; see
+`docs/design/logix-authoring.md`.
 
 Reading FB outputs: any instance output is addressable as `inst.Pin`
 everywhere — `GE(t2.ET, T#2S)` as a contact, `t2.Q` as an operand, or
