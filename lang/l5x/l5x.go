@@ -81,6 +81,19 @@ type Controller struct {
 	AOIs      []*AddOnInstruction
 	Tags      []*Tag // controller-scoped
 	Programs  []*Program
+	Tasks     []*Task
+}
+
+// Task is one <Task>: how the controller schedules its programs. A
+// brownfield import needs it to give each imported program a scan.
+type Task struct {
+	Name string
+	Type string // "CONTINUOUS" | "PERIODIC" | "EVENT"
+	// RateMs is the period of a PERIODIC task in milliseconds (the
+	// export's Rate attribute); 0 for the other kinds.
+	RateMs float64
+	// Programs are the scheduled programs, in scan order.
+	Programs []string
 }
 
 // DataType is one <DataType>: a UDT, or one of the module-defined and
@@ -320,6 +333,32 @@ func parseController(dec *xml.Decoder, lines *lineIndex) (*Controller, error) {
 					c.Programs = append(c.Programs, p)
 					return nil
 				})
+			case "Tasks":
+				return walk(dec, func(se xml.StartElement) error {
+					if se.Name.Local != "Task" {
+						return skip(dec)
+					}
+					t := &Task{Name: attr(se, "Name"), Type: attr(se, "Type")}
+					if r := attr(se, "Rate"); r != "" {
+						t.RateMs, _ = strconv.ParseFloat(r, 64)
+					}
+					err := walk(dec, func(se xml.StartElement) error {
+						if se.Name.Local != "ScheduledPrograms" {
+							return skip(dec)
+						}
+						return walk(dec, func(se xml.StartElement) error {
+							if se.Name.Local == "ScheduledProgram" {
+								t.Programs = append(t.Programs, attr(se, "Name"))
+							}
+							return skip(dec)
+						})
+					})
+					if err != nil {
+						return err
+					}
+					c.Tasks = append(c.Tasks, t)
+					return nil
+				})
 			default:
 				return skip(dec)
 			}
@@ -493,10 +532,12 @@ func parseTags(dec *xml.Decoder, scope string) ([]*Tag, error) {
 					}
 					return err
 				})
-			case "Data":
+			case "Data", "DefaultData":
 				// Every value is carried twice — once as L5K CDATA and
 				// once Decorated. Decorated is the typed one; the L5K
-				// copy is redundant (see Normalize's DropL5K).
+				// copy is redundant (see Normalize's DropL5K). An Add-On
+				// Instruction's local tag carries its value as
+				// DefaultData, the same shape.
 				if attr(se, "Format") != "Decorated" {
 					return skip(dec)
 				}

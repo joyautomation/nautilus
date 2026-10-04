@@ -176,3 +176,57 @@ func TestParseHandlesBOM(t *testing.T) {
 		t.Fatalf("BOM: %v", err)
 	}
 }
+
+// A task carries the scan an imported program gets.
+func TestTasks(t *testing.T) {
+	f, err := ParseFile("testdata/demoline.L5X")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Controller.Tasks) != 1 {
+		t.Fatalf("tasks = %+v", f.Controller.Tasks)
+	}
+	tk := f.Controller.Tasks[0]
+	if tk.Name != "MainTask" || tk.Type != "CONTINUOUS" || tk.RateMs != 0 || len(tk.Programs) != 1 || tk.Programs[0] != "MainProgram" {
+		t.Errorf("task = %+v", tk)
+	}
+}
+
+// An Add-On Instruction's local tag carries its value as DefaultData.
+func TestAOILocalTagDefaultData(t *testing.T) {
+	src := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="38.01" TargetName="X" TargetType="Controller">
+<Controller Name="X">
+<AddOnInstructionDefinitions>
+<AddOnInstructionDefinition Name="A" Revision="1.0">
+<Parameters/>
+<LocalTags>
+<LocalTag Name="t1" DataType="TIMER" ExternalAccess="None">
+<DefaultData Format="L5K"><![CDATA[[0,5000,0]]]></DefaultData>
+<DefaultData Format="Decorated">
+<Structure DataType="TIMER">
+<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="5000"/>
+<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>
+<DataValueMember Name="EN" DataType="BOOL" Value="0"/>
+<DataValueMember Name="TT" DataType="BOOL" Value="0"/>
+<DataValueMember Name="DN" DataType="BOOL" Value="0"/>
+</Structure>
+</DefaultData>
+</LocalTag>
+</LocalTags>
+<Routines/>
+</AddOnInstructionDefinition>
+</AddOnInstructionDefinitions>
+</Controller>
+</RSLogix5000Content>
+`
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lt := f.Controller.AOIs[0].LocalTags[0]
+	m, _ := lt.Value.(map[string]any)
+	if m["PRE"] != int64(5000) {
+		t.Errorf("PRE = %#v", lt.Value)
+	}
+}
