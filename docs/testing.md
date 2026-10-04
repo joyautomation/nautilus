@@ -265,13 +265,18 @@ actually doing — with the units and descriptions from your manifest:
 
 ```
   FAIL  PI settles a 65 to 72 C step within 20 s
-        heated-tank_test.yaml:7 — step 2, t=3m50s
+        heated-tank_test.yaml:9 — step 2 (line 7), t=3m50s
           ABS(TempC - TempSP) < 0.5   is false   (never held for 5s within 20s)
 
           TempC  °C  — Tank temperature
                  3m30s    3m35.7s    3m41.4s    3m47.1s      3m50s
                64.5001    66.1717     67.663    68.9935    69.6143
 ```
+
+The location is the assertion that broke — the tag or expression inside
+`expect:` / `always:`, or the `alarms:` key — so a terminal that links
+`file:line` lands on it; the step it belongs to is named alongside, with
+the step's own first line when that differs.
 
 The trajectory is the point. Here the loop is fine and still converging —
 the 20 s contract was too tight, which the numbers say and a bare
@@ -283,8 +288,9 @@ With the VS Code extension installed, a suite gets the treatment a program
 gets.
 
 The Test Explorer discovers every `*_test.yaml` in the workspace and runs
-them individually, by file, or all at once; a failure reports its line and
-its trajectory.
+them individually, by file, or all at once. A failure shows inline on the
+assertion that broke — `PumpRun = false, want true` — and the peek adds
+the step, the virtual time and the trajectory.
 
 Expectations written as ST are compiled as you type, against the tags your
 project actually has — what `nautilus.yaml` declares, unioned with what
@@ -318,7 +324,21 @@ The scaffolded workflow gates on all three:
 ```
 
 `naut test` exits non-zero on any failure. `-json` emits one
-line-delimited event per test for editors and CI tooling.
+line-delimited event per test for editors and CI tooling:
+
+```json
+{"suite":"my-plant_test.yaml","name":"pump starts on a high level","line":24,
+ "passed":false,"scans":3,"elapsedMs":300,
+ "failure":{"step":3,"line":30,"stepLine":28,"atMs":300,
+            "reason":"expectation failed","detail":"PumpRun = false, want true",
+            "trace":[{"name":"PumpRun","atMs":[200,300],"values":["false","false"]}]}}
+```
+
+The event's `line` is the test's `- name:`. `failure.line` is the
+assertion that broke (the tag key or expression inside `expect:` /
+`always:`, or the `alarms:` key) and `failure.stepLine` is the first line
+of the step it belongs to; a failure that belongs to no step — a scan that
+faulted — has `step` and `line` 0.
 
 Test files never reach a deployed controller: `naut build` excludes
 `*_test.yaml` from the binary's embedded project. They gate the deploy;

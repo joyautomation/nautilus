@@ -128,8 +128,9 @@ commit (*Open With → Text Editor* any time).
   run through `naut test`.
 - Tests run on a virtual clock, so a ten-second alarm delay is asserted
   exactly, in milliseconds, without waiting.
-- Run one test from the gutter; a failure shows the step and tag value that
-  broke, inline on the assertion.
+- Run one test from the gutter; a failure shows the tag value that broke
+  (`PumpRun = false, want true`) inline on the failing line of `expect:`;
+  the peek adds the step, the virtual time and the traced tags.
 - `nautilus.yaml` (including `drivers:`), tag, alarm and test files get
   completion and validation from bundled JSON schemas, in any YAML editor
   that honors schema associations (for example Red Hat's YAML extension).
