@@ -15,12 +15,13 @@ the old global scan lock). Phase 2 item 3 (allocation-free scan path) is done
 on top of that: the VM makes no allocation per builtin call, user-function
 call or FB step, so a loop-heavy task no longer drives the collector (3 889
 collections a minute → 5; worst pause 2.1 ms → 0.2 ms). Phase 2 item 4
-(pinning) is implemented: per-task `cpu:` / `priority:` with a loud,
-visible refusal when the OS says no. Measured so far: affinity alone on a
-busy, non-isolated desktop makes the fast task WORSE (p99 55 → 312–408 µs);
-the `SCHED_FIFO` and isolated-core measurements need a capability grant and
-a dedicated box (see "Open items"). Baselines on the spare industrial PCs
-and an ARM board are pending.
+(pinning) is done: per-task `cpu:` / `priority:` with a loud, visible
+refusal when the OS says no. Measured: affinity alone on a busy,
+non-isolated desktop makes the fast task WORSE (p99 55 → 312–408 µs);
+`SCHED_FIFO` is what pays — p99 55 → 20 µs, worst 2.3 ms → 0.3 ms, every
+scan run, on the stock kernel. The isolated-core and PREEMPT_RT rows need a
+dedicated box. Baselines on the spare industrial PCs and an ARM board are
+pending; an Arduino UNO Q arrives for Phase 3 the week of 2026-10-06.
 
 ## Why this exists
 
@@ -438,11 +439,28 @@ the harness.
      overruns its period continuously will be throttled, which shows up
      as missed slots.
 
-   **Still to measure** (needs James): `-priority 50` on this desktop
-   (grant: `sudo setcap cap_sys_nice+ep <jitter binary>`), then the same
-   three rows on a spare box booted with `isolcpus`/`nohz_full`, then on a
-   PREEMPT_RT kernel. The before/after that the handoff wanted for a video
-   is unpinned vs pinned+FIFO on an isolated core, and it is not in hand yet.
+   **With `SCHED_FIFO`** (James granted `cap_sys_nice` to the harness
+   binary; same desktop, same load, 60 s, items 1–3 in):
+
+   | main task thread | scans ran | late > 100 µs | p50 | p99 | p99.9 | max |
+   |---|---:|---:|---:|---:|---:|---:|
+   | unpinned, normal priority (from above) | 60 017 / 60 018 | 0.61 % | 10 µs | 55 µs | 608 µs | 2.27 ms |
+   | unpinned, FIFO 50 | 60 016 / 60 017 | 0.02 % | 7.9 µs | 26.5 µs | 59 µs | 460 µs |
+   | pinned to P-core 2, FIFO 50 | **60 001 / 60 001** | 0.03 % | 4.5 µs | **20 µs** | **56 µs** | **319 µs** |
+   | full mix, pinned to P-core 2, FIFO 50 | 60 000 / 60 001 | 0.01 % | 2.4 µs | 14.8 µs | 27 µs | 1.92 ms |
+
+   The priority is what pays: p99.9 drops ten-fold and the worst case
+   from milliseconds to hundreds of microseconds, because the task now
+   preempts the desktop's load instead of queueing behind it. Pinning on
+   top of FIFO adds a little (cache locality, no migration) and costs
+   nothing once the task can take the core. The full mix's one 1.9 ms
+   outlier in 60 000 scans is the kind of thing an isolated core or
+   PREEMPT_RT is for. This is the before/after the handoff wanted for a
+   video, on a stock kernel, with no reboot: "unpinned, normal priority"
+   against "pinned, FIFO 50". Raw reports in the same directory.
+
+   **Still to measure:** the same rows on a spare box booted with
+   `isolcpus`/`nohz_full`, then on a PREEMPT_RT kernel.
 
 Honest ceiling to keep in the docs: Go's GC briefly stops every thread,
 pinned or not (worst pause seen above: 5.2 ms, under an allocation-heavy
@@ -532,9 +550,14 @@ each against the 5-minute idle-box runs before quoting it.
 - **"Pinning a task to a core on a stock kernel, with nothing else
   changed, makes it worse — p99 went from 55 µs to 300–400 µs on a busy
   desktop — and Nautilus tells you when a pin or priority was refused
-  instead of pretending"** — evidence: item 4's table. A useful, honest
-  thing to say in the poll follow-up: "pinned cores" is not a setting, it
-  is a setting plus a kernel configuration.
+  instead of pretending"** — evidence: item 4's first table. A useful,
+  honest thing to say in the poll follow-up: "pinned cores" is not a
+  setting, it is a setting plus a kernel configuration.
+- **"With `priority: 50` and `cpu: 2` in the manifest, on a stock Linux
+  kernel on a busy desktop, a 1 ms task ran 60 001 of 60 001 scans with
+  p99 20 µs, p99.9 56 µs and a worst case of 0.32 ms — and needs one
+  `setcap` to do it"** — evidence: item 4's second table. The video shot:
+  that row against "unpinned, normal priority" (p99 55 µs, worst 2.3 ms).
 - **"The scan loop allocates nothing: a 1 000-iteration loop with two
   builtin calls per iteration makes zero allocations per scan, and a
   loop-heavy task beside a 1 ms task went from 3 889 collections a minute
@@ -550,9 +573,6 @@ each against the 5-minute idle-box runs before quoting it.
   PREEMPT_RT kernel since they are not shared. ARM waits for an ARM Linux
   board. A Mac mini (Apple silicon) is available: useful as a quick arm64
   check of F1 (Go's ticker behaviour), not as a deployment baseline.
-- `SCHED_FIFO` on mira1: needs `sudo setcap cap_sys_nice+ep` on the harness
-  binary (or an rtprio rlimit for the user); then
-  `go run ./tools/jitter -slow 0 -alloc 0 -cpu 2 -priority 50`.
 - The isolated-core and PREEMPT_RT comparisons need a box booted with
   `isolcpus=`/`nohz_full=` and then a PREEMPT_RT kernel — the spare boxes
   are the candidates; nobody else runs on them.
