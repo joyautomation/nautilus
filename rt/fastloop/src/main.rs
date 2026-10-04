@@ -78,7 +78,7 @@ impl Lateness {
         Lateness { threshold_us, n: 0, late: 0, overruns: 0, missed: 0, max_us: 0.0, fine: vec![0; FINE_BUCKETS], coarse: [0; 17] }
     }
     fn fine_index(us: f64) -> usize {
-        if !(us >= 1.0) {
+        if us.is_nan() || us < 1.0 {
             return 0;
         }
         if us >= (1u64 << FINE_OCTAVES) as f64 {
@@ -146,7 +146,7 @@ impl Lateness {
 fn mono_ns() -> i64 {
     let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
     unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
-    ts.tv_sec as i64 * 1_000_000_000 + ts.tv_nsec as i64
+    ts.tv_sec * 1_000_000_000 + ts.tv_nsec
 }
 
 fn sleep_until(ns: i64) {
@@ -191,7 +191,7 @@ struct Shm {
 
 impl Shm {
     fn open(path: &str, period_ns: u32) -> Result<Shm, String> {
-        let f = OpenOptions::new().read(true).write(true).create(true).open(path).map_err(|e| format!("{path}: {e}"))?;
+        let f = OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| format!("{path}: {e}"))?;
         f.set_len(SHM_SIZE as u64).map_err(|e| e.to_string())?;
         let base = unsafe {
             libc::mmap(ptr::null_mut(), SHM_SIZE, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, f.as_raw_fd(), 0)
