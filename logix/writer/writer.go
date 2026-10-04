@@ -83,6 +83,12 @@ type Options struct {
 	// signatures). A user block is rejected either way, but with its
 	// signature known the message can say so by name.
 	Libs []string
+	// Inits and Descs are the manifest's initial values and descriptions
+	// by tag name, for the tags the program declares VAR_EXTERNAL: a
+	// nautilus tag's seed and desc live in nautilus.yaml, not in the
+	// program, and the Logix tag carries both.
+	Inits map[string]any
+	Descs map[string]string
 }
 
 func (o Options) withDefaults(program string) Options {
@@ -177,6 +183,7 @@ type tagDef struct {
 	Value    string // scalar initial value in Logix spelling ("0", "85.0"); "" = zero
 	Preset   int64  // TIMER.PRE / COUNTER.PRE
 	Scope    string // "" controller, else the program
+	Desc     string
 	Line     int
 }
 
@@ -306,11 +313,17 @@ func (lw *lowered) declare(v ld.VarDecl) {
 		lw.diag(ruleArrayShape, v.Line, "", "%s: a Logix BOOL array's size must be a multiple of 32; declare ARRAY [0..%d] OF BOOL", v.Name, (dim/32+1)*32-1)
 		return
 	}
+	init := v.Init
+	if init == "" && scope == "" {
+		if iv, ok := lw.opts.Inits[v.Name]; ok && iv != nil {
+			init = fmt.Sprint(iv)
+		}
+	}
 	switch {
 	case scalarTypes[u] != "":
-		val, ok := literal(u, v.Init)
+		val, ok := literal(u, init)
 		if !ok {
-			lw.diag(ruleInit, v.Line, "", "%s: initial value %q is not a literal the Logix tag can carry", v.Name, v.Init)
+			lw.diag(ruleInit, v.Line, "", "%s: initial value %q is not a literal the Logix tag can carry", v.Name, init)
 			return
 		}
 		lw.addTag(tagDef{Name: v.Name, DataType: scalarTypes[u], Dim: dim, Value: val, Scope: scope, Line: v.Line})
@@ -359,6 +372,9 @@ func (lw *lowered) declare(v ld.VarDecl) {
 }
 
 func (lw *lowered) addTag(t tagDef) {
+	if t.Desc == "" {
+		t.Desc = lw.opts.Descs[t.Name]
+	}
 	if t.Scope == "" {
 		lw.ctrlTags = append(lw.ctrlTags, t)
 	} else {

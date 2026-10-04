@@ -369,3 +369,23 @@ func TestWriteRungsIsAPartialExport(t *testing.T) {
 		t.Errorf("rungs = %+v", rungs)
 	}
 }
+
+// A VAR_EXTERNAL tag's seed and description live in nautilus.yaml; the
+// Logix controller tag carries both.
+func TestManifestInitsAndDescriptionsLandOnControllerTags(t *testing.T) {
+	src := "PROGRAM P\nVAR_EXTERNAL\n  SP : REAL;\n  Run : BOOL;\n  N : INT;\nEND_VAR\nLD\n  RUNG r GT(SP, 1.0) ( Run )\nEND_LD\nEND_PROGRAM\n"
+	f := mustWrite(t, src, Options{
+		Inits: map[string]any{"SP": 85, "N": int64(7), "Run": true},
+		Descs: map[string]string{"SP": "LAH-101 setpoint", "Run": "P-101 run <cmd>"},
+	})
+	byName := map[string]*l5x.Tag{}
+	for _, tg := range f.Controller.Tags {
+		byName[tg.Name] = tg
+	}
+	if byName["SP"].Value != 85.0 || byName["SP"].Description != "LAH-101 setpoint" {
+		t.Errorf("SP = %v %q", byName["SP"].Value, byName["SP"].Description)
+	}
+	if byName["N"].Value != int64(7) || byName["Run"].Value != true || byName["Run"].Description != "P-101 run <cmd>" {
+		t.Errorf("N=%v Run=%v %q", byName["N"].Value, byName["Run"].Value, byName["Run"].Description)
+	}
+}

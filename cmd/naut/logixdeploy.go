@@ -84,13 +84,22 @@ func loadLogixProject(dir string) (*logixProject, error) {
 		return nil, err
 	}
 	_, libs, _ := stproject.PreludeSources(progPath, nil)
+	inits, descs := map[string]any{}, map[string]string{}
+	for _, tg := range m.Tags {
+		if tg.Init != nil {
+			inits[tg.Name] = tg.Init
+		}
+		if tg.Desc != "" {
+			descs[tg.Name] = tg.Desc
+		}
+	}
 	return &logixProject{
 		dir: dir, program: progPath, source: string(src),
 		target: deploy.Target{
 			Controller: tgt.Controller, Processor: tgt.Processor, Revision: tgt.Revision,
 			Program: tgt.Program, Routine: tgt.Routine, Task: tgt.Task,
 			PeriodMs: int(time.Duration(task.Scan) / time.Millisecond),
-			CommPath: tgt.CommPath, Libs: libs,
+			CommPath: tgt.CommPath, Libs: libs, Inits: inits, Descs: descs,
 		},
 		host: tgt.Host, slot: tgt.Slot, port: tgt.Port, agent: tgt.Agent,
 	}, nil

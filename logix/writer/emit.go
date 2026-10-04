@@ -112,6 +112,11 @@ func emitTags(b *strings.Builder, tags []tagDef) {
 		} else {
 			w(`<Tag Name="%s" TagType="Base" DataType="%s"%s Constant="false" ExternalAccess="Read/Write">`, attr(t.Name), t.DataType, dims)
 		}
+		if t.Desc != "" {
+			w(`<Description>`)
+			w(`%s`, cdata(t.Desc))
+			w(`</Description>`)
+		}
 		w(`<Data Format="L5K">`)
 		w(`%s`, cdata(l5kValue(t)))
 		w(`</Data>`)

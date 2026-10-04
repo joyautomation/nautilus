@@ -64,6 +64,10 @@ type Target struct {
 	CommPath                        string
 	// Libs are library sources in scope for the parse.
 	Libs []string
+	// Inits and Descs are the manifest's tag seeds and descriptions, for
+	// the controller tags the program declares VAR_EXTERNAL.
+	Inits map[string]any
+	Descs map[string]string
 }
 
 // Options configure one deploy.
@@ -160,6 +164,7 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 	wopts := writer.Options{
 		Controller: t.Controller, Program: t.Program, Routine: t.Routine, Task: t.Task,
 		PeriodMs: t.PeriodMs, ProcessorType: t.Processor, MajorRev: major, MinorRev: minor, Libs: t.Libs,
+		Inits: t.Inits, Descs: t.Descs,
 	}
 	full, diags, err := writer.Write(src, wopts)
 	if err != nil {

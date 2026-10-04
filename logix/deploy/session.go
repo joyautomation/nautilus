@@ -146,6 +146,7 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 	wopts := writer.Options{
 		Controller: s.t.Controller, Program: s.t.Program, Routine: s.t.Routine, Task: s.t.Task,
 		PeriodMs: s.t.PeriodMs, ProcessorType: s.t.Processor, MajorRev: major, MinorRev: minor, Libs: s.t.Libs,
+		Inits: s.t.Inits, Descs: s.t.Descs,
 	}
 	full, diags, err := writer.Write(src, wopts)
 	if err != nil {
