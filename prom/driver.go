@@ -303,10 +303,19 @@ func (d *Driver) Health() hw.Health                    { return d.base.Health() 
 
 // ── the transport ────────────────────────────────────────────────────────
 
+// insecureTransport is shared by every insecure: source, so its keep-alive
+// connections are reused. One Transport per poll left one idle connection
+// (and its goroutines) behind each scrape: ~5.7k a day at 15 s.
+var insecureTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // opt-in, source-scoped
+	return t
+}()
+
 func httpFetch(ctx context.Context, url string, headers map[string]string, insecure bool, timeout time.Duration) ([]byte, error) {
 	client := &http.Client{Timeout: timeout}
 	if insecure {
-		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec // opt-in, source-scoped
+		client.Transport = insecureTransport
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
