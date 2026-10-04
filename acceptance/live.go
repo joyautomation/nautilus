@@ -48,6 +48,13 @@ type Live struct {
 	// task scan (the writer's side code). With it, `scans: n` waits for
 	// exactly n counts; without it, n task periods of wall time.
 	Heartbeat string
+	// Seeds are written before every test, the way the virtual runtime
+	// starts each test from the manifest's seeds: the INPUT tags and
+	// their initial values. A controller keeps whatever the previous
+	// test left in its inputs; this puts them back. Outputs and state
+	// are the logic's and a scenario that depends on them establishes
+	// them itself.
+	Seeds map[string]any
 }
 
 // RunSuiteLive runs every test in the suite against the live resource.
@@ -98,6 +105,19 @@ func runTestLive(s *Suite, t *Test, live Live) (Result, error) {
 		},
 		live:  live,
 		start: time.Now(),
+	}
+	if len(live.Seeds) > 0 {
+		seeds := map[string]any{}
+		for k, v := range live.Seeds {
+			if _, overridden := t.Given[k]; !overridden {
+				seeds[k] = v
+			}
+		}
+		if err := r.applyLive(seeds); err != nil {
+			return res, fmt.Errorf("%s:%d: test %q: reseeding inputs: %w", s.Path, t.Line, t.Name, err)
+		}
+		// Let the logic see the seeds before the test's own givens.
+		r.wait(2*r.live.Poll, nil)
 	}
 	if err := r.applyLive(t.Given); err != nil {
 		return res, fmt.Errorf("%s:%d: test %q: %w", s.Path, t.Line, t.Name, err)

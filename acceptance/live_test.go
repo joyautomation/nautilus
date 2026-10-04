@@ -228,3 +228,30 @@ tests:
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// Each test starts from the input seeds, whatever the previous test left.
+func TestLiveReseedsInputsPerTest(t *testing.T) {
+	c := newFakeController(t)
+	live := c.live()
+	live.Seeds = map[string]any{"StartPB": false, "StopPB": false}
+	s := liveSuite(t, `
+tests:
+  - name: leaves the start button pressed
+    given: { StartPB: true }
+    scans: 1
+    expect: { RunCmd: true }
+  - name: starts from the seeds anyway
+    given: { StopPB: true }
+    scans: 1
+    expect: { StartPB: false, RunCmd: false }
+`)
+	res, err := RunSuiteLive(s, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range res {
+		if !r.Passed {
+			t.Errorf("%s: %+v", r.Name, r.Failure)
+		}
+	}
+}

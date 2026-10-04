@@ -59,10 +59,21 @@ func liveLogix(dir string, proj *project.Project) (*acceptance.Live, error) {
 	}
 	fmt.Fprintf(os.Stderr, "live: %d tags, program %s, poll %s\n", f.Tags(), program, poll)
 	scan := time.Duration(p.target.PeriodMs) * time.Millisecond
+	// Every test starts with the inputs at their manifest seeds, as the
+	// virtual runtime starts each test — the controller would otherwise
+	// hand the next test whatever the last one left.
+	seeds := map[string]any{}
+	if m, err := project.ReadManifest(os.DirFS(dir), ""); err == nil {
+		for _, tg := range m.Tags {
+			if tg.Role == "input" && tg.Init != nil {
+				seeds[tg.Name] = tg.Init
+			}
+		}
+	}
 	liveTarget = &acceptance.Live{
 		Runtime: f.Runtime(), Write: f.Write, Poll: poll, Scan: scan,
 		Resolve: acceptance.ResolveLogix(f.Runtime(), program), Libraries: proj.Runtime.Libraries,
-		Heartbeat: p.target.Side.Heartbeat,
+		Heartbeat: p.target.Side.Heartbeat, Seeds: seeds,
 	}
 	if liveTarget.Heartbeat != "" {
 		if _, err := f.Runtime().Tags().ReadGlobal(liveTarget.Heartbeat); err != nil {

@@ -298,7 +298,7 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 	case rep.TagsChanged:
 		logf("%d difference(s); the tag set changed, so this needs a download", len(rep.Diffs))
 	default:
-		logf("%d rung difference(s); this can go as an online edit", len(rep.Diffs))
+		logf("%d logic difference(s); this can go as an online edit", len(rep.Diffs))
 	}
 	if o.Mode == BuildOnly || (rep.Same && o.Mode == Online) {
 		return done(nil)
