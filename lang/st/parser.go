@@ -1041,6 +1041,14 @@ func (p *Parser) continuePostfix(expr Expression) (Expression, error) {
 		switch p.peek().Type {
 		case TokenDot:
 			p.advance()
+			// Word.3: a bit of an integer, as Logix spells it (IEC ed. 3
+			// writes Word.%X3). The lowering decides whether the object
+			// is an integer; here it is a member whose name is a number.
+			if p.peek().Type == TokenNumber {
+				bitTok := p.advance()
+				expr = &MemberExpr{Object: expr, Member: bitTok.Literal, Pos: nodePos(expr)}
+				continue
+			}
 			memberTok, err := p.expect(TokenIdent)
 			if err != nil {
 				return nil, err
@@ -1071,6 +1079,9 @@ func (p *Parser) continuePostfix(expr Expression) (Expression, error) {
 			call, err := p.parseCallArgs(name, nodePos(expr))
 			if err != nil {
 				return nil, err
+			}
+			if name == "" {
+				call.Callee = expr
 			}
 			expr = call
 		default:

@@ -28,7 +28,8 @@
 //	              transition (an implicit F_TRIG instance)
 //	[ a | b ]     parallel branch (legs are series; branches nest)
 //	FN(args)      a function used as a contact: GT(TempC, 90.0)
-//	inst:TYPE(…)  a function block in the rung: power drives its boolean
+//	inst:TYPE(…)  a function block in the rung (inst may be an element of an
+//	              array of instances, Timers[2]): power drives its boolean
 //	              input (IN for timers, CU/CD for counters, CLK for edges;
 //	              for a USER block, EN if it declares one, else its first
 //	              BOOL VAR_INPUT the call doesn't bind by name), power
@@ -51,6 +52,9 @@
 //	              / 2 - ABS(c) MOD 4 — and is lowered as a SEL, so it is
 //	              evaluated every scan like any block: an index in it
 //	              must stay valid while the rung is false.
+//
+// Contacts and coils take a bit of an integer too — Status.3, Cmd.12 — as
+// Logix spells it (docs/functions.md, "Bit access").
 //
 // Contacts and coils accept the same accessor references as FBD
 // (Levels[2], M.Cmd). Series composes as AND, branches as OR.
@@ -512,7 +516,7 @@ func seriesCond(elems []any, ec *edgeCtx, stmts *[]string, res *resolver) (strin
 						"leave its power pin unbound, or give the block an EN input", x.inst, x.typ)
 				}
 				args := strings.TrimSpace(x.args)
-				*stmts = append(*stmts, fmt.Sprintf("%s : %s(%s)", x.inst, x.typ, args))
+				*stmts = append(*stmts, fbStmt(x.inst, x.typ, args))
 			default:
 				if containsPin(x.args, in) {
 					return "", fmt.Errorf("%s: the rung's power drives %s — don't pass it as an argument", x.inst, in)
@@ -521,7 +525,7 @@ func seriesCond(elems []any, ec *edgeCtx, stmts *[]string, res *resolver) (strin
 				if strings.TrimSpace(x.args) != "" {
 					args += ", " + x.args
 				}
-				*stmts = append(*stmts, fmt.Sprintf("%s : %s(%s)", x.inst, x.typ, args))
+				*stmts = append(*stmts, fbStmt(x.inst, x.typ, args))
 			}
 			if out == "" {
 				// No BOOL output — power passes through unchanged, so
@@ -583,6 +587,8 @@ func (t *rungTok) peek() string {
 	return string(t.src[t.pos])
 }
 
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+
 func isIdentStart(c byte) bool {
 	return c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
 }
@@ -623,7 +629,8 @@ func (t *rungTok) ident() (string, error) {
 			}
 			continue
 		case '.':
-			if t.pos+1 < len(t.src) && isIdentStart(t.src[t.pos+1]) {
+			// .member, or .3 — a bit of an integer.
+			if t.pos+1 < len(t.src) && (isIdentStart(t.src[t.pos+1]) || isDigit(t.src[t.pos+1])) {
 				t.pos++
 				for t.pos < len(t.src) && isIdentPart(t.src[t.pos]) {
 					t.pos++
@@ -853,4 +860,14 @@ func splitStatementsOn(s string, sep byte) []string {
 		}
 	}
 	return append(out, s[start:])
+}
+
+// fbStmt is the netlist line for a block in a rung: `inst : TYPE(args)`
+// declares and calls a named instance; an element of an array of
+// instances (Timers[2]) is already declared, so it is just called.
+func fbStmt(inst, typ, args string) string {
+	if strings.ContainsAny(inst, "[.") {
+		return fmt.Sprintf("%s(%s)", inst, args)
+	}
+	return fmt.Sprintf("%s : %s(%s)", inst, typ, args)
 }

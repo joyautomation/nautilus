@@ -418,6 +418,9 @@ type CallExpr struct {
 	NamedArgs      []NamedArg
 	OutputBindings []OutputBinding
 	Pos            Pos
+	// Callee is set when the call's head is not a plain name: an element
+	// of an array of function-block instances, Timers[2](IN := x).
+	Callee Expression
 }
 
 // NamedArg is a `name := value` argument in an FB/function call.

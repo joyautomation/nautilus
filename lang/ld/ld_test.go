@@ -1055,3 +1055,89 @@ END_PROGRAM
 		t.Fatalf("FBD does not compile: %v\n%s", err, out)
 	}
 }
+
+// Word.3 in ladder: a contact on a bit, a coil on a bit, a bit in an
+// assignment and in a compare's argument — the Logix spelling, on an
+// integer tag, in all four places.
+func TestBitAccessInLadder(t *testing.T) {
+	src := `PROGRAM P
+VAR_EXTERNAL
+    Status : DINT; Cmd : DINT; Run : BOOL; Fault : BOOL;
+END_VAR
+LD
+  RUNG r0
+    Status.0 /Status.15 ( Run )
+  RUNG r1
+    Run ( Cmd.4 ) ( S Cmd.5 )
+  RUNG r2
+    Run { Cmd.7 := Status.1 }
+  RUNG r3
+    EQ(Status AND 16#F, 3) ( Fault )
+END_LD
+END_PROGRAM
+`
+	out, err := Transpile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Run := AND(Status.0, NOT Status.15)",
+		"Cmd.4 := w_r1",
+		"Cmd.5 := OR(Cmd.5, w_r1)",
+		"Cmd.7 := SEL(Run, Cmd.7, Status.1)",
+		"Fault := EQ(AND(Status, 16#F), 3)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	if _, err := fbd.Compile(out); err != nil {
+		t.Fatalf("FBD does not compile: %v\n%s", err, out)
+	}
+	m, err := Graph(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Rungs[0].Elements[0].Ref != "Status.0" || m.Rungs[1].Coils[0].Ref != "Cmd.4" {
+		t.Errorf("graph refs: %+v %+v", m.Rungs[0].Elements[0], m.Rungs[1].Coils[0])
+	}
+}
+
+// An element of an array of instances in a rung: Timers[1]:TON(PT := …)
+// is called, not declared (the array is), and its Q reads by index.
+func TestFBInstanceArrayInLadder(t *testing.T) {
+	src := `PROGRAM P
+VAR_EXTERNAL
+    a : BOOL; b : BOOL; q : BOOL;
+END_VAR
+VAR
+    Timers : ARRAY [0..3] OF TON;
+END_VAR
+LD
+  RUNG r0
+    a Timers[1]:TON(PT := T#2S) ( b )
+  RUNG r1
+    Timers[2].Q ( q )
+END_LD
+END_PROGRAM
+`
+	out, err := Transpile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Timers[1](IN := a, PT := T#2S)", "b := Timers[1].Q", "q := Timers[2].Q"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	if _, err := fbd.Compile(out); err != nil {
+		t.Fatalf("FBD does not compile: %v\n%s", err, out)
+	}
+	m, err := Graph(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := m.Rungs[0].Elements[1]; e.Kind != "fb" || e.Inst != "Timers[1]" || e.Type != "TON" {
+		t.Errorf("element = %+v", e)
+	}
+}

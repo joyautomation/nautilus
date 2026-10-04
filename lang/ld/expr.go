@@ -340,7 +340,7 @@ func (p *exprParser) primary() (Expr, error) {
 				}
 				continue
 			case '.':
-				if p.pos+1 < len(p.src) && isIdentStart(p.src[p.pos+1]) {
+				if p.pos+1 < len(p.src) && (isIdentStart(p.src[p.pos+1]) || isDigit(p.src[p.pos+1])) {
 					p.pos++
 					for p.pos < len(p.src) && isIdentPart(p.src[p.pos]) {
 						p.pos++

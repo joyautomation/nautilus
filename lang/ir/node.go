@@ -181,6 +181,18 @@ func (m *MemberRef) ExprType() *Type { return m.T }
 func (m *MemberRef) exprNode()       {}
 func (m *MemberRef) lvalueNode()     {}
 
+// BitRef is one bit of an integer, addressable as a BOOL: Word.3 reads
+// bit 3; Word.3 := TRUE sets it (a read-modify-write of the word). The
+// Logix spelling, which IEC 61131-3 ed. 3 writes Word.%X3.
+type BitRef struct {
+	Object LValue // the integer, addressable so the bit can be written
+	Bit    int
+}
+
+func (b *BitRef) ExprType() *Type { return BoolT }
+func (b *BitRef) exprNode()       {}
+func (b *BitRef) lvalueNode()     {}
+
 // Call invokes a built-in stateless function. Fn is resolved at
 // lowering time (so the VM doesn't pay for a map lookup per scan)
 // and given the evaluated arg values directly.
@@ -212,10 +224,13 @@ func (u *UserCall) exprNode()       {}
 // evaluate args, write them into the instance's input slots, and run
 // Step in a fixed order.
 type FBCall struct {
-	InstanceSlot int        // slot in Frame.Slots holding the FBInstance
-	Def          *FBDef     // resolved FB type
-	Inputs       []FBInput  // bindings for this invocation, in source order
-	Outputs      []FBOutput // post-step copies from FB output slots to caller lvalues
+	InstanceSlot int // slot in Frame.Slots holding the FBInstance
+	// Instance, when set, locates the instance instead of InstanceSlot: an
+	// element of an array of instances (Timers[2]).
+	Instance LValue
+	Def      *FBDef     // resolved FB type
+	Inputs   []FBInput  // bindings for this invocation, in source order
+	Outputs  []FBOutput // post-step copies from FB output slots to caller lvalues
 }
 
 func (*FBCall) stmtNode() {}

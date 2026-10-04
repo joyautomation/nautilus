@@ -872,17 +872,37 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 			return &ir.ExprStmt{X: expr}, nil
 		}
 	}
-	sym, ok := l.scope[n.Call.Name]
-	if !ok {
-		return nil, errName(n.Call.Pos, n.Call.Name, fmt.Errorf("call to undeclared name %q", n.Call.Name))
+	var def *ir.FBDef
+	var instanceSlot int
+	var instance ir.LValue
+	if n.Call.Callee != nil {
+		// Timers[2](IN := …): an element of an array of instances.
+		lv, err := l.lowerLValue(n.Call.Callee)
+		if err != nil {
+			return nil, fmt.Errorf("call target: %w", err)
+		}
+		if lv.ExprType().Kind != ir.TypeFB {
+			return nil, fmt.Errorf("call target is a %s, not a function-block instance", lv.ExprType())
+		}
+		if g, isGlobal := rootRef(lv).(*ir.GlobalRef); isGlobal {
+			return nil, fmt.Errorf("FB instance %s must be a local variable, not VAR_GLOBAL", g.Name)
+		}
+		def = lv.ExprType().FB
+		instance = lv
+	} else {
+		sym, ok := l.scope[n.Call.Name]
+		if !ok {
+			return nil, errName(n.Call.Pos, n.Call.Name, fmt.Errorf("call to undeclared name %q", n.Call.Name))
+		}
+		if sym.typ == nil || sym.typ.Kind != ir.TypeFB {
+			return nil, fmt.Errorf("%q is not a function-block instance (declare e.g. `t1 : TON;`)", n.Call.Name)
+		}
+		if sym.kind == ir.VarGlobal {
+			return nil, fmt.Errorf("FB instance %q must be a local variable, not VAR_GLOBAL", n.Call.Name)
+		}
+		def = sym.typ.FB
+		instanceSlot = sym.slot
 	}
-	if sym.typ == nil || sym.typ.Kind != ir.TypeFB {
-		return nil, fmt.Errorf("%q is not a function-block instance (declare e.g. `t1 : TON;`)", n.Call.Name)
-	}
-	if sym.kind == ir.VarGlobal {
-		return nil, fmt.Errorf("FB instance %q must be a local variable, not VAR_GLOBAL", n.Call.Name)
-	}
-	def := sym.typ.FB
 	if len(n.Call.Args) > 0 {
 		return nil, fmt.Errorf("FB call %q must use named args (IN := …, PT := …)", n.Call.Name)
 	}
@@ -957,7 +977,31 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		}
 		outputs = append(outputs, ir.FBOutput{SlotIdx: idx, Target: target})
 	}
-	return &ir.FBCall{InstanceSlot: sym.slot, Def: def, Inputs: bindings, Outputs: outputs}, nil
+	return &ir.FBCall{InstanceSlot: instanceSlot, Instance: instance, Def: def, Inputs: bindings, Outputs: outputs}, nil
+}
+
+// rootRef follows an lvalue to the slot or global it addresses.
+func rootRef(lv ir.LValue) ir.LValue {
+	for {
+		switch n := lv.(type) {
+		case *ir.IndexRef:
+			inner, ok := n.Array.(ir.LValue)
+			if !ok {
+				return lv
+			}
+			lv = inner
+		case *ir.MemberRef:
+			inner, ok := n.Object.(ir.LValue)
+			if !ok {
+				return lv
+			}
+			lv = inner
+		case *ir.BitRef:
+			lv = n.Object
+		default:
+			return lv
+		}
+	}
 }
 
 // lowerInOutArg lowers the argument bound to a VAR_IN_OUT pin. The pin is
@@ -1188,6 +1232,20 @@ func (l *lowerer) lowerMember(m *MemberExpr) (ir.Expr, error) {
 		return nil, err
 	}
 	ot := obj.ExprType()
+	if isBitMember(m.Member) {
+		if ot.Kind != ir.TypeInt {
+			return nil, fmt.Errorf("bit access .%s needs an integer, got %s", m.Member, ot)
+		}
+		bit, _ := strconv.Atoi(m.Member)
+		if bit < 0 || bit > 63 {
+			return nil, fmt.Errorf("bit %d is out of range (0..63)", bit)
+		}
+		lv, ok := obj.(ir.LValue)
+		if !ok {
+			return nil, fmt.Errorf("bit access .%s needs a variable, not an expression", m.Member)
+		}
+		return &ir.BitRef{Object: lv, Bit: bit}, nil
+	}
 	switch ot.Kind {
 	case ir.TypeStruct:
 		idx, ok := ot.Struct.FieldIndex[m.Member]
@@ -1419,4 +1477,17 @@ func assignable(lhs, rhs *ir.Type) bool {
 		return true
 	}
 	return false
+}
+
+// isBitMember reports a member name that is a bit index: Word.3.
+func isBitMember(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		if name[i] < '0' || name[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
