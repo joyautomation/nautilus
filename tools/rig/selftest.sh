@@ -179,7 +179,7 @@ vt ed_open_diagram-mimic PASS ed_open_diagram lift.mimic.json
 vt mimic_drop-tank PASS mimic_drop Tank 400 60 WW101
 vt mimic_drop-pump PASS mimic_drop Pump 150 250 P101
 vt mimic_bind PASS mimic_bind WW101 levelPct LevelPct
-vt mimic_pipe_direct XFAIL mimic_pipe_direct P101.out WW101.left
+vt mimic_pipe_direct PASS mimic_pipe_direct P101.out WW101.left
 vt mimic_pipe PASS mimic_pipe P101.out WW101.left
 
 # ── Component ports ─────────────────────────────────────────────────────────
