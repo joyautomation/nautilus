@@ -119,3 +119,9 @@ func TestFastTaskDoesNotWaitForSlowTask(t *testing.T) {
 		t.Errorf("results: Acc=%v N=%v", r.Tags().Real("Acc"), r.Tags().All()["N"])
 	}
 }
+
+// Every optional ir.Host extension the VM asks for must be forwarded by
+// the view, or it silently disappears behind it.
+func TestScanViewForwardsHostExtensions(t *testing.T) {
+	var _ ir.DivZeroCounter = (*scanView)(nil)
+}
