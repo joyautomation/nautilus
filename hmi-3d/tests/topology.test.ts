@@ -222,6 +222,26 @@ describe('the mesh', () => {
 	});
 });
 
+describe('the mesh at scale', () => {
+	it('lays out many servers on few switches without hanging, each apart', () => {
+		// 30 servers all on the same two switches: every one wants the same angle.
+		const many: Topology = {
+			site: 'big',
+			devices: [{ id: 'swA', kind: 'switch', tag: 'SWA' }, { id: 'swB', kind: 'switch', tag: 'SWB' }, ...Array.from({ length: 30 }, (_, i) => ({ id: `n${i}`, kind: 'server', tag: `N${i}` }))],
+			links: Array.from({ length: 30 }, (_, i) => [
+				{ kind: 'uplink', a: `n${i}/p1`, b: 'swA/p1' },
+				{ kind: 'uplink', a: `n${i}/p2`, b: 'swB/p1' }
+			]).flat()
+		};
+		const m = meshLayout(many);
+		const servers = m.nodes.filter((n) => n.kind === 'server');
+		expect(servers.length).toBe(30);
+		const ang = servers.map((n) => Math.atan2(n.pos[0], n.pos[2]));
+		const minGap = Math.min(...ang.flatMap((x, i) => ang.slice(i + 1).map((y) => Math.abs(Math.atan2(Math.sin(x - y), Math.cos(x - y))))));
+		expect(minGap > 0.1).toBe(true);
+	});
+});
+
 describe('focus', () => {
 	it('a device’s neighbourhood: what its cables reach, and those links', () => {
 		const n = neighbourhood(topology, 'node2');

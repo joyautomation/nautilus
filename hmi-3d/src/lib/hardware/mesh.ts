@@ -59,8 +59,20 @@ export function meshLayout(t: Topology, opts: { radius?: number; serverRadius?: 
 			const z = ps.reduce((s, p) => s + Math.cos(angle.get(p)!), 0);
 			if (Math.hypot(x, z) > 1e-6) a = Math.atan2(x, z);
 		}
-		// Two servers on the same pair of switches: step the second aside.
-		while (taken.some((b) => Math.abs(Math.atan2(Math.sin(a - b), Math.cos(a - b))) < 0.3)) a += 0.45;
+		// Two servers on the same pair of switches: step the second aside. The
+		// gap shrinks with the count (a ring holds only so many at 0.3 rad)
+		// and the search is bounded: with no free angle left, a server keeps
+		// its own and may overlap, never hangs the page.
+		const gap = Math.min(0.3, (TAU / Math.max(servers.length, 1)) * 0.9);
+		const clash = (x: number) => taken.some((b) => Math.abs(Math.atan2(Math.sin(x - b), Math.cos(x - b))) < gap);
+		const step = Math.max(gap * 1.5, 0.05); // 0.45 rad for a small site, as before
+		for (let k = 1; clash(a) && k * step < TAU; k++) {
+			const x = a + k * step;
+			if (!clash(x)) {
+				a = x;
+				break;
+			}
+		}
 		taken.push(a);
 		angle.set(d.id, a);
 	});
