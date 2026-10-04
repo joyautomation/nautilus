@@ -504,7 +504,7 @@ func (c *rungCtx) block(e ld.Element, top, isLast bool) (text, cont string, ok b
 	typ := strings.ToUpper(e.Type)
 	st := blockTypes[typ]
 	if st == "" {
-		alt := "the v1 blocks are TON, TOF and CTU"
+		alt := "the v1 blocks are TON, TOF and CTU (and TONR with dialect: logix)"
 		switch typ {
 		case "TP", "CTD", "CTUD":
 			alt = "its IEC semantics have no equivalent Logix instruction; " + alt
@@ -558,11 +558,13 @@ func (c *rungCtx) block(e ld.Element, top, isLast bool) (text, cont string, ok b
 			preset = val
 		case up == "R" && st == "COUNTER":
 			reset = val
+		case up == "RESET" && typ == "TONR":
+			reset = val
 		case up == "IN" || up == "CU":
 			c.lw.diag(ruleFBPin, c.r.Line, c.r.Name, "%s:%s: the rung's power drives %s; don't bind it", e.Inst, e.Type, pin)
 			return "", "", false
 		default:
-			c.lw.diag(ruleFBPin, c.r.Line, c.r.Name, "%s:%s: pin %s has no Logix mapping in v1 (timers take PT; counters take PV and R)", e.Inst, e.Type, pin)
+			c.lw.diag(ruleFBPin, c.r.Line, c.r.Name, "%s:%s: pin %s has no Logix mapping in v1 (timers take PT, TONR also Reset; counters take PV and R)", e.Inst, e.Type, pin)
 			return "", "", false
 		}
 	}
@@ -582,14 +584,25 @@ func (c *rungCtx) block(e ld.Element, top, isLast bool) (text, cont string, ok b
 		if !ok {
 			return "", "", false
 		}
-		// After the count, so a reset in the same scan as a count edge
-		// wins — R is dominant in the IEC block.
-		c.post = append(c.post, rungOut{Text: cond + "RES(" + e.Inst + ")", Source: c.r.Name, Line: c.r.Line})
+		if typ == "TONR" {
+			// The dialect's resettable timer: Reset clears the timer at the
+			// call, so the RES rung runs ahead of the timer's rung — the
+			// Logix free-running-pulse shape, XIC(t.DN)RES(t) then TON(t).
+			c.pre = append(c.pre, rungOut{Text: cond + "RES(" + e.Inst + ")", Source: c.r.Name, Line: c.r.Line})
+		} else {
+			// After the count, so a reset in the same scan as a count edge
+			// wins — R is dominant in the IEC block.
+			c.post = append(c.post, rungOut{Text: cond + "RES(" + e.Inst + ")", Source: c.r.Name, Line: c.r.Line})
+		}
 	}
 	// Captures copy the block's state as the IEC call leaves it: after
 	// the reset has had its say.
 	c.post = append(c.post, captures...)
-	text = typ + "(" + e.Inst + ",?,?)"
+	instr := typ
+	if typ == "TONR" {
+		instr = "TON"
+	}
+	text = instr + "(" + e.Inst + ",?,?)"
 	if !isLast {
 		cont = "XIC(" + e.Inst + ".DN)"
 	}

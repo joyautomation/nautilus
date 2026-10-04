@@ -1,0 +1,23 @@
+tests:
+  - name: the free-running pulse counts about twice a second
+    steps:
+      - given: { Go: true }
+        advance: 2.3s
+        expect: { Pulses: { between: [3, 5] } }
+      - given: { Go: false }
+        scans: 2
+        expect: { Pulses: 0 }
+
+  - name: a reset input holds the timer back
+    steps:
+      - given: { Go: true, Clear: true }
+        advance: 1.5s
+        expect: { Held: false }
+      - given: { Clear: false }
+        advance: 0.5s
+        expect: { Held: false }
+      - advance: 0.7s
+        expect: { Held: true }
+      - given: { Clear: true }
+        scans: 2
+        expect: { Held: false }

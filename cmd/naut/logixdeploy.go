@@ -84,13 +84,16 @@ func loadLogixProject(dir string) (*logixProject, error) {
 		return nil, err
 	}
 	_, libs, _ := stproject.PreludeSources(progPath, nil)
-	inits, descs := map[string]any{}, map[string]string{}
+	inits, descs, aliases := map[string]any{}, map[string]string{}, map[string]string{}
 	for _, tg := range m.Tags {
 		if tg.Init != nil {
 			inits[tg.Name] = tg.Init
 		}
 		if tg.Desc != "" {
 			descs[tg.Name] = tg.Desc
+		}
+		if tg.Alias != "" {
+			aliases[tg.Name] = tg.Alias
 		}
 	}
 	var side writer.Side
@@ -103,7 +106,7 @@ func loadLogixProject(dir string) (*logixProject, error) {
 			Controller: tgt.Controller, Processor: tgt.Processor, Revision: tgt.Revision,
 			Program: tgt.Program, Routine: tgt.Routine, Task: tgt.Task,
 			PeriodMs: int(time.Duration(task.Scan) / time.Millisecond),
-			CommPath: tgt.CommPath, Libs: libs, Inits: inits, Descs: descs, Side: side,
+			CommPath: tgt.CommPath, Libs: libs, Inits: inits, Descs: descs, Aliases: aliases, Side: side,
 			Language: writer.Language(progPath),
 		},
 		host: tgt.Host, slot: tgt.Slot, port: tgt.Port, agent: tgt.Agent,

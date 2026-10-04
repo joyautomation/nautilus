@@ -162,6 +162,18 @@ func emitTags(b *strings.Builder, tags []tagDef) {
 	}
 	w(`<Tags>`)
 	for _, t := range tags {
+		if t.Alias != "" {
+			// A Logix alias tag: the manifest's hardware binding. No data of
+			// its own; its value is the aliased operand's.
+			w(`<Tag Name="%s" TagType="Alias" Radix="%s" AliasFor="%s" ExternalAccess="Read/Write">`, attr(t.Name), radixOrDecimal(t.DataType), attr(t.Alias))
+			if t.Desc != "" {
+				w(`<Description>`)
+				w(`%s`, cdata(t.Desc))
+				w(`</Description>`)
+			}
+			w(`</Tag>`)
+			continue
+		}
 		radix := radixOf(t.DataType)
 		if t.AOI {
 			// An Add-On Instruction instance is a structure: a Radix on
@@ -829,4 +841,11 @@ func WriteProgramPartial(path, src string, opts Options) ([]byte, []Diag, error)
 	w(`</Controller>`)
 	w(`</RSLogix5000Content>`)
 	return []byte(b.String()), nil, nil
+}
+
+func radixOrDecimal(dt string) string {
+	if r := radixOf(dt); r != "" {
+		return r
+	}
+	return "Decimal"
 }

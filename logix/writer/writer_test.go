@@ -1,6 +1,7 @@
 package writer
 
 import (
+	"github.com/joyautomation/nautilus/internal/dialect"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1160,5 +1161,107 @@ END_PROGRAM
 	}
 	if m, _ := carr[1].(map[string]any); m["PRE"] != int64(3) {
 		t.Errorf("Counts[1].PRE = %v, want 3", m["PRE"])
+	}
+}
+
+// A manifest alias becomes a Logix alias tag: the hardware binding lives
+// in the manifest, the program names the tag.
+func TestAliasTags(t *testing.T) {
+	src := `PROGRAM P
+VAR_EXTERNAL
+    StartPB : BOOL; Level : REAL; Run : BOOL;
+END_VAR
+LD
+  RUNG r0
+    StartPB GT(Level, 1.0) ( Run )
+END_LD
+END_PROGRAM
+`
+	doc, diags, err := Write(src, Options{Aliases: map[string]string{"StartPB": "Local:1:I.Data.3", "Level": "Local:2:I.Ch0Data"}, Descs: map[string]string{"StartPB": "start pushbutton"}})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("%v %v", err, diags)
+	}
+	text := string(doc)
+	for _, want := range []string{
+		`<Tag Name="StartPB" TagType="Alias" Radix="Decimal" AliasFor="Local:1:I.Data.3" ExternalAccess="Read/Write">`,
+		`<Tag Name="Level" TagType="Alias" Radix="Float" AliasFor="Local:2:I.Ch0Data" ExternalAccess="Read/Write">`,
+		`<Tag Name="Run" TagType="Base" DataType="BOOL"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	f, err := l5x.Parse(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tg := range f.Controller.Tags {
+		if tg.Name == "StartPB" && (tg.TagType != "Alias" || tg.AliasFor != "Local:1:I.Data.3" || tg.Description != "start pushbutton") {
+			t.Errorf("StartPB = %+v", tg)
+		}
+	}
+}
+
+// The Logix dialect's TONR: a TON with a RES rung ahead of it, in ladder
+// and in ST.
+func TestTONR(t *testing.T) {
+	libs, err := dialect.Sources("logix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var libSrc []string
+	for _, l := range libs {
+		libSrc = append(libSrc, l.ST)
+	}
+	src := `PROGRAM P
+VAR_EXTERNAL
+    Go : BOOL; Pulse : BOOL; Clear : BOOL;
+END_VAR
+VAR
+    t : TONR;
+    u : TONR;
+END_VAR
+LD
+  RUNG pulse (* the free-running pulse: resets itself when done *)
+    Go t:TONR(PT := T#1S, Reset := t.Q) ( Pulse )
+  RUNG held
+    Go u:TONR(PT := T#2S, Reset := AND(Clear, NOT(Go)))
+END_LD
+END_PROGRAM
+`
+	f := mustWrite(t, src, Options{Libs: libSrc})
+	var got []string
+	for _, rg := range f.Controller.Programs[0].Routines[0].Rungs {
+		got = append(got, rg.Text)
+	}
+	want := []string{
+		"XIC(t.DN)RES(t);",
+		"XIC(Go)TON(t,?,?)XIC(t.DN)OTE(Pulse);",
+		"XIC(Clear)XIO(Go)RES(u);",
+		"XIC(Go)TON(u,?,?);",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("rungs\n got %s\nwant %s", strings.Join(got, "\n     "), strings.Join(want, "\n     "))
+	}
+	if _, problems, err := RoundTrip(src, Options{Libs: libSrc}); err != nil || len(problems) > 0 {
+		t.Errorf("round trip: %v %v", err, problems)
+	}
+	stSrc := `PROGRAM P
+VAR_EXTERNAL
+    Go : BOOL; Pulse : BOOL;
+END_VAR
+VAR
+    t : TONR;
+END_VAR
+t(IN := Go, PT := T#1S, Reset := t.Q);
+Pulse := t.Q;
+END_PROGRAM
+`
+	doc, diags, err := WriteST(stSrc, Options{Libs: libSrc})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("st: %v %v", err, diags)
+	}
+	if !strings.Contains(string(doc), "t.Reset := NOT (Go) OR (t.DN);") || !strings.Contains(string(doc), "TONR(t);") {
+		t.Errorf("st:\n%s", doc)
 	}
 }

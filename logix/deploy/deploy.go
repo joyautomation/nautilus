@@ -66,8 +66,9 @@ type Target struct {
 	Libs []string
 	// Inits and Descs are the manifest's tag seeds and descriptions, for
 	// the controller tags the program declares VAR_EXTERNAL.
-	Inits map[string]any
-	Descs map[string]string
+	Inits   map[string]any
+	Descs   map[string]string
+	Aliases map[string]string
 	// Side is the side code to emit (writer.Side).
 	Side writer.Side
 	// Language is the program's language, "ld" (default) or "st".
@@ -176,7 +177,7 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 	wopts := writer.Options{
 		Controller: t.Controller, Program: t.Program, Routine: t.Routine, Task: t.Task,
 		PeriodMs: t.PeriodMs, ProcessorType: t.Processor, MajorRev: major, MinorRev: minor, Libs: t.Libs,
-		Inits: t.Inits, Descs: t.Descs, Side: t.Side,
+		Inits: t.Inits, Descs: t.Descs, Aliases: t.Aliases, Side: t.Side,
 	}
 	full, diags, err := t.write(src, wopts)
 	if err != nil {

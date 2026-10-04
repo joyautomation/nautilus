@@ -36,7 +36,7 @@ import (
 // positional FB argument.
 
 // stBlockTypes are the Logix structures an ST routine drives.
-var stBlockTypes = map[string]string{"TON": "FBD_TIMER", "TOF": "FBD_TIMER", "CTU": "FBD_COUNTER"}
+var stBlockTypes = map[string]string{"TON": "FBD_TIMER", "TOF": "FBD_TIMER", "CTU": "FBD_COUNTER", "TONR": "FBD_TIMER"}
 
 var stMemberRewrite = map[string]map[string]string{
 	"FBD_TIMER":   {"Q": "DN", "ET": "ACC", "IN": "TimerEnable", "PT": "PRE"},
@@ -278,8 +278,11 @@ func (w *stWriter) call(c *st.CallExpr, depth int) {
 	}
 	inst := c.Name
 	switch typ {
-	case "TON", "TOF":
+	case "TON", "TOF", "TONR":
 		for pin := range inputs {
+			if pin == "RESET" && typ == "TONR" {
+				continue
+			}
 			if pin != "IN" && pin != "PT" {
 				w.diag(ruleFBPin, w.line, "%s:%s: pin %s has no Logix mapping (timers take IN and PT)", inst, typ, pin)
 				return
@@ -293,10 +296,19 @@ func (w *stWriter) call(c *st.CallExpr, depth int) {
 			in = "0"
 		}
 		w.emitf(depth, "%s.TimerEnable := %s;", inst, in)
-		if typ == "TON" {
+		switch typ {
+		case "TON":
 			w.emitf(depth, "%s.Reset := NOT (%s);", inst, in)
 			w.emitf(depth, "TONR(%s);", inst)
-		} else {
+		case "TONR":
+			// The dialect's resettable timer: its Reset pin, or IN dropping.
+			reset := inputs["RESET"]
+			if reset == "" {
+				reset = "0"
+			}
+			w.emitf(depth, "%s.Reset := NOT (%s) OR (%s);", inst, in, reset)
+			w.emitf(depth, "TONR(%s);", inst)
+		default:
 			w.emitf(depth, "TOFR(%s);", inst)
 		}
 	case "CTU":

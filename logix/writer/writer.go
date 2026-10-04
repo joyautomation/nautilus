@@ -92,7 +92,10 @@ type Options struct {
 	// nautilus tag's seed and desc live in nautilus.yaml, not in the
 	// program, and the Logix tag carries both.
 	Inits map[string]any
-	Descs map[string]string
+	// Aliases are the manifest's alias bindings: a controller tag that is
+	// a Logix alias of an I/O point or another tag ("Local:1:I.Data.3").
+	Aliases map[string]string
+	Descs   map[string]string
 	// Side is the side code: logic nautilus adds beside the user's
 	// program, in its own Logix program scheduled after it, for testing,
 	// verification and metrics. Nothing of it touches the user's routine.
@@ -249,6 +252,9 @@ type tagDef struct {
 	Init   any
 	// AOI marks an Add-On Instruction instance.
 	AOI bool
+	// Alias makes the tag a Logix alias tag of this operand (an I/O point,
+	// another tag); it carries no data of its own.
+	Alias string
 }
 
 // rungOut is one emitted rung.
@@ -341,7 +347,9 @@ var scalarTypes = map[string]string{
 }
 
 // blockTypes are the standard blocks with a Logix structure behind them.
-var blockTypes = map[string]string{"TON": "TIMER", "TOF": "TIMER", "CTU": "COUNTER"}
+// TONR is the Logix dialect's resettable timer (internal/dialect): a TIMER
+// with a RES rung ahead of the timer's.
+var blockTypes = map[string]string{"TON": "TIMER", "TOF": "TIMER", "TONR": "TIMER", "CTU": "COUNTER"}
 
 func (lw *lowered) declare(v ld.VarDecl) {
 	scope := ""
@@ -464,6 +472,7 @@ func (lw *lowered) addTag(t tagDef) {
 		t.Desc = lw.opts.Descs[t.Name]
 	}
 	if t.Scope == "" {
+		t.Alias = lw.opts.Aliases[t.Name]
 		lw.ctrlTags = append(lw.ctrlTags, t)
 	} else {
 		lw.progTags = append(lw.progTags, t)

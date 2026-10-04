@@ -220,6 +220,16 @@ func (c *cmp) helpers(r ld.Rung, elems []ld.Element, top bool) {
 					}
 				case "R":
 					c.resets = append(c.resets, val+"|"+e.Inst)
+				case "RESET":
+					// TONR: the RES rung runs ahead of the timer's rung.
+					hr, ok := c.take(r.Name)
+					if !ok {
+						return
+					}
+					n := len(hr.Elements)
+					if n == 0 || hr.Elements[n-1].Kind != "fn" || hr.Elements[n-1].Fn != "RES" || hr.Elements[n-1].Args != e.Inst {
+						c.problemf(r.Name, "expected the reset rung …RES(%s) ahead of the TONR, got %+v", e.Inst, hr.Elements)
+					}
 				}
 			}
 		}
@@ -351,6 +361,9 @@ func (c *cmp) series(r ld.Rung, elems []ld.Element, top, noCoils bool) {
 				return
 			}
 			typ := strings.ToUpper(e.Type)
+			if typ == "TONR" {
+				typ = "TON"
+			}
 			if g.Kind != "fb" || g.Inst != e.Inst || g.Type != typ || g.Args != "?, ?" {
 				c.problemf(r.Name, "element %+v, want %s(%s,?,?)", g, typ, e.Inst)
 			}
