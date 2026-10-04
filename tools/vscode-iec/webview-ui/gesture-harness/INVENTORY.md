@@ -32,13 +32,13 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 153 rows. **20 rows have no coverage at all** (no webview test,
+Totals: 153 rows. **16 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
 |---|---|---|
 | Commands | 28 | 8 |
-| FBD `?` | 18 | 4 |
+| FBD `?` | 18 | 0 |
 | Ladder `?` | 20 | 0 |
 | SFC `?` | 22 | 0 |
 | Mimic `?` | 18 | 0 |
@@ -83,18 +83,18 @@ no rig verb, no smoke check); per section below.
 | id | area | gesture | source of the claim | webview test | rig verb | smoke |
 |---|---|---|---|---|---|---|
 | F01 | FBD | Click a block, chip, coil, note or wire to select it | "?" list FBD / Select / `Click` | diagram.test.mjs: FBD: deleting two selected notes (selection by click) | fbd_pin_el / g_click | — |
-| F02 | FBD | Box-select several nodes | "?" list FBD / Select / `Shift + drag` | — | — | — |
+| F02 | FBD | Box-select several nodes | "?" list FBD / Select / `Shift + drag` | fbd-drag.test.mjs: FBD drag: Shift+drag over empty canvas selects exactly the boxed nodes (F02) | — | — |
 | F03 | FBD | Add to or remove from the selection | "?" list FBD / Select / `Ctrl + click` | diagram.test.mjs: FBD: deleting two selected notes | — | — |
 | F04 | FBD | Select everything | "?" list FBD / Select / `Ctrl + A` | diagram.test.mjs: FBD: Ctrl+A selects every node | — | — |
 | F05 | FBD | Double-click to edit a constant, rename a wire or instance, edit a note | "?" list FBD / Edit / `Double-click` | diagram.test.mjs: FBD: double-clicking an FB header renames the instance | float_edit, fbd_add_tag_ref | — |
 | F06 | FBD | Commit an in-place edit (Ctrl+Enter in a note) | "?" list FBD / Edit / `Enter` | — | float_edit | — |
-| F07 | FBD | Cancel an in-place edit | "?" list FBD / Edit / `Esc` | — | — | — |
-| F08 | FBD | Drag from an output pin to an input pin to wire; drop on + to add an input | "?" list FBD / Edit / `Drag pin → pin` | diagram.test.mjs: FBD: disconnecting two inputs of one block goes highest pin first (disconnect, not wire) | fbd_wire | — |
+| F07 | FBD | Cancel an in-place edit | "?" list FBD / Edit / `Esc` | fbd-drag.test.mjs: FBD drag: Esc cancels a constant edit — no setLiteral, chip keeps its value (F07) | — | — |
+| F08 | FBD | Drag from an output pin to an input pin to wire; drop on + to add an input | "?" list FBD / Edit / `Drag pin → pin` | diagram.test.mjs: FBD: disconnecting two inputs of one block goes highest pin first (disconnect, not wire); fbd-drag.test.mjs: FBD drag: output pin → input pin posts a rewire naming exactly those pins; dropping a wire on a block's + posts addInput; a wire released on empty canvas posts nothing | fbd_wire | — |
 | F09 | FBD | Delete the selection; a selected wire disconnects | "?" list FBD / Edit / `Del / Backspace` | diagram.test.mjs: FBD: deleting a wired coil posts no disconnects for its own edges | fbd_wire (asserts) | — |
 | F10 | FBD | Copy, cut, paste; pastes into another .fbd too | "?" list FBD / Edit / `Ctrl + C / X / V` | diagram.test.mjs: FBD: Ctrl+C / Ctrl+V duplicates in place; Ctrl+X deletes | — | 05 |
-| F11 | FBD | Move a node; the position is pinned in the file | "?" list FBD / Layout & view / `Drag a node` | — | — | — |
+| F11 | FBD | Move a node; the position is pinned in the file | "?" list FBD / Layout & view / `Drag a node` | fbd-drag.test.mjs: FBD drag: dragging a node posts ONE setLayout per drag, with the new coordinates (F11) | — | — |
 | F12 | FBD | Move the selection with the arrow keys (pinned like a drag) | "?" list FBD / Layout & view / `Arrow keys` | diagram.test.mjs: FBD: arrow-key moves persist as ONE setLayout | — | — |
-| F13 | FBD | Pan the canvas by dragging empty space | "?" list FBD / Layout & view / `Drag empty canvas` | — | — | — |
+| F13 | FBD | Pan the canvas by dragging empty space | "?" list FBD / Layout & view / `Drag empty canvas` | fbd-drag.test.mjs: FBD drag: dragging empty canvas pans the viewport and posts no edit (F13) | — | — |
 | F14 | FBD | Scroll or pinch to zoom (corner buttons zoom and fit too) | "?" list FBD / Layout & view / `Scroll / pinch` | diagram.test.mjs: FBD zoom: Ctrl+= / Ctrl+- / Ctrl+0 drive the xyflow viewport too (keys only) | fbd_zoom_to | 06 (ladder and SFC only) |
 | F15 | FBD | Zoom in / out / fit | "?" list FBD / Layout & view / `Ctrl + = / Ctrl + - / Ctrl + 0` | diagram.test.mjs: FBD zoom: Ctrl+= / Ctrl+- / Ctrl+0 | fbd_zoom_to | 06 (ladder and SFC only) |
 | F16 | FBD | Undo the last edit to the file from the diagram | "?" list FBD / File / `Ctrl + Z` | — | g_key (ctrl+z in takes) | 03 (preview panel) |
@@ -235,13 +235,13 @@ no rig verb, no smoke check); per section below.
 
 ## Count of rows with no coverage at all
 
-**20 of 153.** The commands are the thinnest area: only the download /
+**16 of 153.** The commands are the thinnest area: only the download /
 rollback pair (08), the title-bar buttons (04) and the previews (03, 07, 10)
 are touched by any smoke check, and no webview test can reach a command because
 commands live in the extension host (that is what the E3 test-state hooks are
-for). Of the editors the SFC is best covered; the ladder's `N` / `M` keys, redo and
-middle-drag pan are now pinned by `ld-keys.test.mjs`, while drag-on-empty-canvas
-pan (mimic) still has no test of any kind.
+for). Of the editors the FBD now has no uncovered row and the SFC is well covered; the ladder single-key shortcuts
+(`N`, `M`) and the ladder/SFC pan gestures (middle-drag, drag empty canvas) have no test
+of any kind.
 
 Notes for the next pass:
 
