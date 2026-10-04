@@ -191,7 +191,9 @@
 		if (!drag) return;
 		if (drag.moved) {
 			const d = drag;
-			commit(ports.map((p, i) => (i === d.index ? { name: p.name, x: d.fx, y: d.fy } : p)));
+			// Keep everything else the port carries (an explicit `dir`, …): a
+			// drag moves the dot, it does not redefine the port (#130).
+			commit(ports.map((p, i) => (i === d.index ? { ...p, x: d.fx, y: d.fy } : p)));
 		}
 		drag = null;
 	}

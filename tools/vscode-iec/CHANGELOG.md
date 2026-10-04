@@ -14,6 +14,8 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- **Component editor: dragging a port dot keeps the port's explicit exit direction.** The drag rebuilt the port from name and position only, so a `dir` set in the sidecar vanished on the first move. Found by the rig self-test's `component_move_port-dir` row. (#130)
+
 - **Closing the Show Source text tab no longer loses the diagram's unsaved edits.** The diagram editor and the text view share one document, so VS Code asks Save / Don't Save when the text tab closes dirty — and *Don't Save* used to revert the file under a diagram that was still open. The extension now puts the diagram's edits back (status bar: "the diagram keeps its unsaved edits"); only the text view goes away. (#117)
 
 - **`nautilus.fb.monitor` is now declared.** The CodeLens command was

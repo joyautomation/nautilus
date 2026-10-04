@@ -10,6 +10,8 @@ recordClips('component-ports');
 // 'Widget' is not a built-in, so the editor draws its fixed 160x100
 // placeholder: dot positions are deterministic.
 const DOC = () => ({ component: 'Widget', ports: [{ name: 'in', x: 0, y: 0.5 }, { name: 'out', x: 1, y: 0.5 }] });
+// The same, with an explicit exit direction on `out` (regression for #130).
+const DOC_DIR = () => ({ component: 'Widget', ports: [{ name: 'in', x: 0, y: 0.5 }, { name: 'out', x: 1, y: 0.5, dir: 'up' }] });
 
 const dots = (ed) =>
 	ed.b.eval(`JSON.stringify([...document.querySelectorAll('circle.port')].map((c) => { const r = c.getBoundingClientRect(); return { id: c.dataset.id, cx: r.left + r.width / 2, cy: r.top + r.height / 2, sel: c.classList.contains('sel'), title: c.querySelector('title')?.textContent }; }))`).then(JSON.parse);
@@ -39,6 +41,29 @@ test('P01 component: dragging a port dot posts the port at its new fraction, and
 		const moved = (await dots(ed))[0];
 		assert.ok(Math.abs(moved.cx - tx) < 2 && Math.abs(moved.cy - ty) < 2, JSON.stringify({ moved, tx, ty }));
 		assert.match(moved.title, /^in · 0\.75, 0/);
+		assert.deepEqual(exceptions(ed), []);
+	});
+});
+
+test('P01 component: dragging a port with an explicit dir keeps the dir (#130)', async () => {
+	await withComponent(DOC_DIR(), async (ed) => {
+		const box = await boxRect(ed);
+		const out = (await dots(ed))[1];
+		// to the bottom edge, 1/4 across
+		const tx = box.x + box.w * 0.25;
+		const ty = box.y + box.h;
+		await ed.b.mouseDown(out.cx, out.cy);
+		await ed.b.mouseMove(out.cx - 20, out.cy + 10);
+		await ed.b.mouseMove(tx, ty);
+		await ed.b.mouseUp(tx, ty);
+		await sleepMs(150);
+		const ops = await componentOps(ed);
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		const moved = ops[0][1];
+		assert.equal(moved.name, 'out');
+		assert.ok(Math.abs(moved.x - 0.25) < 0.01 && Math.abs(moved.y - 1) < 0.01, JSON.stringify(moved));
+		assert.equal(moved.dir, 'up', 'the explicit dir survives the drag: ' + JSON.stringify(moved));
+		assert.deepEqual(ops[0][0], { name: 'in', x: 0, y: 0.5 }, 'the other port is untouched');
 		assert.deepEqual(exceptions(ed), []);
 	});
 });

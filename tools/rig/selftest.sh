@@ -200,7 +200,7 @@ vt component_add_port PASS component_add_port seal
 # carries dir "up", which the move must keep, as the mimic editor's ports
 # mode does. XFAIL: the Component Editor's drag drops it (issue #130).
 vt component_move_port PASS component_move_port seal 60 50
-vt component_move_port-dir XFAIL component_move_port out -50 40
+vt component_move_port-dir PASS component_move_port out -50 40
 
 # ── the files, as saved, and what the compiler makes of them ────────────────
 mkdir -p "$OUT_DIR/verbs-files"
