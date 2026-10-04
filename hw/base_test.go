@@ -817,13 +817,22 @@ func TestBaseStaleCommandsDropped(t *testing.T) {
 	_ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": true}) // baseline
 	writes := func() string { w.mu.Lock(); defer w.mu.Unlock(); return strings.Join(w.writes, ",") }
 
-	// The device goes down for longer than StaleAfter; the command waits, then is dropped.
+	// The device goes down for longer than StaleAfter; the command waits, then
+	// is dropped. Queued only once the source is DOWN (error): below
+	// failuresToError it still flushes writes, as it should, and how many
+	// polls fit in a fixed sleep depends on the machine.
 	w.setErr("PDU1", DefaultClass, errors.New("timeout"))
-	time.Sleep(30 * time.Millisecond)
+	deadline := time.Now().Add(2 * time.Second)
+	for b.Health().Sources[0].State != "error" && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if st := b.Health().Sources[0].State; st != "error" {
+		t.Fatalf("source never went down: %s", st)
+	}
 	_ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": false})
 	time.Sleep(150 * time.Millisecond)
 	w.setErr("PDU1", DefaultClass, nil)
-	deadline := time.Now().Add(time.Second)
+	deadline = time.Now().Add(time.Second)
 	for !strings.Contains(b.Health().Sources[0].LastWriteError, "dropped") && time.Now().Before(deadline) {
 		time.Sleep(2 * time.Millisecond)
 	}
