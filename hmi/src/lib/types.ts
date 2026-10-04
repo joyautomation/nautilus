@@ -101,6 +101,8 @@ export interface ScanStats {
 	jitterMs: number;
 	/** Wake-up timing of the main task, cumulative since start. */
 	lateness: Lateness;
+	/** The main task's thread placement. */
+	sched: SchedStats;
 	ioErrors: number;
 	logicErrors: number;
 	ioHealthy: boolean;
@@ -127,6 +129,18 @@ export interface TaskStats {
 	lastError?: string;
 	/** This task's wake-up timing — see Lateness. */
 	lateness: Lateness;
+	/** Thread placement asked of the OS, and whether it was granted. */
+	sched: SchedStats;
+}
+
+/** A task's thread placement. Mirrors runtime.SchedStats. */
+export interface SchedStats {
+	cpus?: number[];
+	/** SCHED_FIFO priority (Linux), 1–99; absent = normal. */
+	priority?: number;
+	applied: boolean;
+	/** The OS's refusal, when a request was not granted. */
+	error?: string;
 }
 
 /**

@@ -14,8 +14,13 @@ task no longer delays it (p99 72 µs, 99.95 % of scans run, versus 59 % with
 the old global scan lock). Phase 2 item 3 (allocation-free scan path) is done
 on top of that: the VM makes no allocation per builtin call, user-function
 call or FB step, so a loop-heavy task no longer drives the collector (3 889
-collections a minute → 5; worst pause 2.1 ms → 0.2 ms). Baselines on the
-spare industrial PCs and an ARM board are pending (see "Open items").
+collections a minute → 5; worst pause 2.1 ms → 0.2 ms). Phase 2 item 4
+(pinning) is implemented: per-task `cpu:` / `priority:` with a loud,
+visible refusal when the OS says no. Measured so far: affinity alone on a
+busy, non-isolated desktop makes the fast task WORSE (p99 55 → 312–408 µs);
+the `SCHED_FIFO` and isolated-core measurements need a capability grant and
+a dedicated box (see "Open items"). Baselines on the spare industrial PCs
+and an ARM board are pending.
 
 ## Why this exists
 
@@ -371,11 +376,73 @@ the harness.
    `GOMEMLIMIT` to what it can have and `GOGC=off` (or a high `GOGC`): the
    collector then runs only when the heap reaches the limit. On a small
    box, leave the default — the scan loop itself no longer feeds it.
-4. **Pinning:** `runtime.LockOSThread` + `sched_setaffinity` per task, optional
-   `SCHED_FIFO` (needs `CAP_SYS_NICE`; fail loudly, not silently), manifest
-   `cpu:` / `priority:` per task, docs for `isolcpus` / `nohz_full` /
-   `irqaffinity`. Measure on stock and PREEMPT_RT kernels. Estimate: pinning
-   itself 1–2 days; a demonstrable before/after histogram about a week.
+4. **Pinning — implemented, branch `rt-pinning`; measured in part.** Each
+   task's loop thread is already its own locked OS thread (item 1). Now
+   `Options.CPUs` / `Task.CPUs` pin it with `sched_setaffinity`, and
+   `Options.Priority` / `Task.Priority` (1–99) move it to `SCHED_FIFO`
+   with `sched_setscheduler`; the manifest keys are `cpu:` and `priority:`
+   per task (`runtime/sched_linux.go`, `sched_other.go`; `syscall` only).
+   **A refused request is loud:** `slog.Error` with the fix, and
+   `ScanStats.Sched` / `TaskStats.Sched` carry `applied: false` and the
+   refusal text, which the dashboards show as "cpu 3 · fifo 50 REFUSED" on
+   the task row. The task then runs unpinned at normal priority — never a
+   silent fallback. `SCHED_FIFO` needs `CAP_SYS_NICE` (`setcap
+   cap_sys_nice+ep` on the binary, or root) or an rtprio rlimit
+   (`ulimit -r`, `/etc/security/limits.conf`). Off Linux both keys are
+   refused the same way. The harness takes `-cpu` / `-priority` for the
+   main task and exits rather than produce a report that looks pinned when
+   the OS refused.
+
+   **What affinity alone does on a busy, non-isolated box** (mira1 in use,
+   stock kernel, 60 s, fast tasks alone, items 1–3 in):
+
+   | main task thread | scans ran | late > 100 µs | p50 | p99 | p99.9 | max |
+   |---|---:|---:|---:|---:|---:|---:|
+   | unpinned | 60 017 / 60 018 | 0.61 % | 10 µs | **55 µs** | 608 µs | 2.27 ms |
+   | pinned to P-core 2 | 59 998 / 60 011 | 2.78 % | 6 µs | 312 µs | 1.22 ms | 2.89 ms |
+   | pinned to E-core 20 | 60 000 / 60 003 | 3.27 % | 13 µs | 392 µs | 1.06 ms | 2.47 ms |
+   | pinned to the idlest core at launch (25, 9 % busy) | 60 011 / 60 018 | 2.66 % | 13 µs | 408 µs | 1.06 ms | 1.98 ms |
+   | full mix, pinned to P-core 2 | 59 940 / 60 001 | 3.24 % | 6.5 µs | 424 µs | 1.41 ms | 3.41 ms |
+
+   Pinning alone made it **worse**, p99 by 6–7×: unpinned, the scheduler
+   moves the task to an idle core the instant something lands on its
+   current one; pinned, it waits behind whatever the desktop put there (a
+   VM, an encoder), and at normal priority it has no claim to go first.
+   Affinity buys cache locality and nothing else. It only pays when the
+   core is kept EMPTY (kernel isolation) or the task can PREEMPT what is
+   there (`SCHED_FIFO`) — and ideally both. So the manifest doc says: do
+   not set `cpu:` without one of the two. Raw reports:
+   `docs/design/realtime/2026-10-03-mira1-prelim-item4/`.
+
+   **What the kernel must be told, for a pinned core to be quiet** (write
+   these into the docs page when the measurements exist):
+
+   - `isolcpus=managed_irq,domain,2-3` (or the cpuset/cgroup `isolated`
+     partition on a systemd box) keeps the scheduler's load balancer off
+     cores 2–3; only threads pinned there run there.
+   - `nohz_full=2-3` stops the periodic scheduler tick on those cores while
+     a single thread runs; `rcu_nocbs=2-3` moves RCU callbacks off them.
+   - `irqaffinity=0-1` (and per-device `/proc/irq/*/smp_affinity`) keeps
+     interrupt handling off the pinned cores; the fieldbus NIC's IRQ is
+     the one exception worth putting NEAR the task's core.
+   - Go's own threads (GC workers, the poller, every other goroutine) are
+     not pinned and will use the isolated cores only if something pins
+     them there — but the GC's stop-the-world still stops the pinned
+     thread, pinned or not. That ceiling stands.
+   - Hybrid CPUs (this i9: 8 P-cores with SMT, 16 E-cores): pin to a
+     P-core, and its SMT sibling should be isolated too or the sibling's
+     load halves the core.
+   - `SCHED_FIFO` at priority 50 with the default `sched_rt_runtime_us`
+     (950 ms of every second) leaves 5 % for everything else, which is the
+     kernel's protection against a runaway real-time loop; a task that
+     overruns its period continuously will be throttled, which shows up
+     as missed slots.
+
+   **Still to measure** (needs James): `-priority 50` on this desktop
+   (grant: `sudo setcap cap_sys_nice+ep <jitter binary>`), then the same
+   three rows on a spare box booted with `isolcpus`/`nohz_full`, then on a
+   PREEMPT_RT kernel. The before/after that the handoff wanted for a video
+   is unpinned vs pinned+FIFO on an isolated core, and it is not in hand yet.
 
 Honest ceiling to keep in the docs: Go's GC briefly stops every thread,
 pinned or not (worst pause seen above: 5.2 ms, under an allocation-heavy
@@ -462,6 +529,12 @@ each against the 5-minute idle-box runs before quoting it.
   item 2's table (and run B before item 1 for the 59 % / 27 ms). The second
   before/after story (N-73). State the shared-globals rule honestly: last
   commit wins, as on any PLC.
+- **"Pinning a task to a core on a stock kernel, with nothing else
+  changed, makes it worse — p99 went from 55 µs to 300–400 µs on a busy
+  desktop — and Nautilus tells you when a pin or priority was refused
+  instead of pretending"** — evidence: item 4's table. A useful, honest
+  thing to say in the poll follow-up: "pinned cores" is not a setting, it
+  is a setting plus a kernel configuration.
 - **"The scan loop allocates nothing: a 1 000-iteration loop with two
   builtin calls per iteration makes zero allocations per scan, and a
   loop-heavy task beside a 1 ms task went from 3 889 collections a minute
@@ -477,8 +550,12 @@ each against the 5-minute idle-box runs before quoting it.
   PREEMPT_RT kernel since they are not shared. ARM waits for an ARM Linux
   board. A Mac mini (Apple silicon) is available: useful as a quick arm64
   check of F1 (Go's ticker behaviour), not as a deployment baseline.
-- The PREEMPT_RT comparison needs a kernel on a machine James nominates
-  (the spare boxes are candidates; nobody else runs on them).
+- `SCHED_FIFO` on mira1: needs `sudo setcap cap_sys_nice+ep` on the harness
+  binary (or an rtprio rlimit for the user); then
+  `go run ./tools/jitter -slow 0 -alloc 0 -cpu 2 -priority 50`.
+- The isolated-core and PREEMPT_RT comparisons need a box booted with
+  `isolcpus=`/`nohz_full=` and then a PREEMPT_RT kernel — the spare boxes
+  are the candidates; nobody else runs on them.
 - A `jitter.yml` workflow runs the harness on a hosted runner nightly and on
   demand (relative numbers only, plus a ≥ 99 % scans-ran guard on the fast
   task) and uploads the reports; add the self-hosted boxes' labels to its

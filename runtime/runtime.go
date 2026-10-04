@@ -81,6 +81,16 @@ type Options struct {
 	// means a tenth of the task's scan interval: 10 ms on a 100 ms task,
 	// 100 µs on a 1 ms task.
 	LateThreshold time.Duration
+	// CPUs pins the main task's scan thread to these CPUs (Linux
+	// sched_setaffinity); empty leaves it to the scheduler. Priority > 0
+	// moves that thread to SCHED_FIFO at that priority (1–99), which needs
+	// CAP_SYS_NICE or an rtprio rlimit; a request the OS refuses is logged
+	// and reported in ScanStats.Sched, and the task runs normally. Tasks
+	// have the same two fields. See docs/design/realtime.md for what the
+	// kernel must be told (isolcpus, nohz_full, irqaffinity) before a
+	// pinned core is actually quiet.
+	CPUs     []int
+	Priority int
 	// Coordinator gates the scan loop for redundancy: a standby replica
 	// (IsLeader false) skips scans entirely — no field I/O, no logic — and
 	// performs the takeover sequence (reload retained state, reset program
@@ -99,6 +109,9 @@ type Task struct {
 	DtTag     string        // optional measured-dt tag, like Options.DtTag
 	// LateThreshold overrides Options.LateThreshold for this task.
 	LateThreshold time.Duration
+	// CPUs and Priority pin this task's thread — see Options.CPUs.
+	CPUs     []int
+	Priority int
 }
 
 // TaskStats is one additional task's health, riding inside ScanStats.
@@ -111,6 +124,20 @@ type TaskStats struct {
 	LastError   string  `json:"lastError,omitempty"`
 	// Lateness is this task's wake-up timing — see Lateness.
 	Lateness Lateness `json:"lateness"`
+	// Sched is what was asked of the OS scheduler for this task's thread
+	// and whether it was granted.
+	Sched SchedStats `json:"sched"`
+}
+
+// SchedStats reports a task's thread placement: the CPUs and SCHED_FIFO
+// priority configured, whether the OS granted them (Applied), and the
+// refusal if not — surfaced here because a controller that was MEANT to be
+// pinned and silently is not would be the worst kind of wrong.
+type SchedStats struct {
+	CPUs     []int  `json:"cpus,omitempty"`
+	Priority int    `json:"priority,omitempty"`
+	Applied  bool   `json:"applied"`
+	Error    string `json:"error,omitempty"`
 }
 
 // taskRun is a compiled Task plus its live scheduling state.
@@ -119,6 +146,8 @@ type taskRun struct {
 	prog  *Program
 	scan  time.Duration
 	dtTag string
+	cpus  []int
+	prio  int
 
 	mu       sync.Mutex
 	lastScan time.Time
@@ -151,6 +180,8 @@ type Runtime struct {
 	retainStore retain.Store
 	retainTags  []string
 	coord       Coordinator
+	cpus        []int // main task thread placement, see Options.CPUs
+	prio        int
 
 	// alwaysWrite / outGen / outSent implement the output push rule (see
 	// Options.AlwaysWriteOutputs): outGen is the tag store's output-write
@@ -250,6 +281,8 @@ type ScanStats struct {
 	// histogram of it — cumulative since start. The soft-real-time view
 	// of the loop; PeriodMs/JitterMs above are the live one.
 	Lateness Lateness `json:"lateness"`
+	// Sched is the main task's thread placement — see SchedStats.
+	Sched SchedStats `json:"sched"`
 
 	// Retain-store failures surface here the way I/O failures do: a save
 	// that keeps erroring is invisible exactly until the restart that
@@ -321,8 +354,9 @@ func New(o Options) (*Runtime, error) {
 		if scan <= 0 {
 			scan = 100 * time.Millisecond
 		}
-		tr := &taskRun{name: name, prog: tprog, scan: scan, dtTag: td.DtTag}
+		tr := &taskRun{name: name, prog: tprog, scan: scan, dtTag: td.DtTag, cpus: td.CPUs, prio: td.Priority}
 		tr.stats.Name = name
+		tr.stats.Sched = SchedStats{CPUs: td.CPUs, Priority: td.Priority}
 		tr.stats.TargetMs = scan.Seconds() * 1000
 		lt := td.LateThreshold
 		if lt <= 0 {
@@ -394,6 +428,8 @@ func New(o Options) (*Runtime, error) {
 	tags.markOutputs(o.Outputs)
 	r.stats.TargetMs = o.Scan.Seconds() * 1000
 	r.late.thresholdUs = lateThresholdS(o.LateThreshold.Seconds(), o.Scan.Seconds()) * 1e6
+	r.cpus, r.prio = o.CPUs, o.Priority
+	r.stats.Sched = SchedStats{CPUs: o.CPUs, Priority: o.Priority}
 	r.stats.IOHealthy = true
 	r.stats.Recent = make([]float64, 0, historyLen)
 	r.stats.Periods = make([]float64, 0, historyLen)
@@ -700,6 +736,12 @@ func (r *Runtime) Run(ctx context.Context) {
 				tr.mu.Lock()
 				tr.late.missed += k
 				tr.mu.Unlock()
+			}, func() {
+				err := applySched(tr.cpus, tr.prio)
+				tr.mu.Lock()
+				tr.stats.Sched = schedResult(tr.cpus, tr.prio, err)
+				tr.mu.Unlock()
+				logSched(tr.name, tr.cpus, tr.prio, err)
 			})
 		}(tr)
 	}
@@ -707,7 +749,36 @@ func (r *Runtime) Run(ctx context.Context) {
 		r.mu.Lock()
 		r.late.missed += k
 		r.mu.Unlock()
+	}, func() {
+		err := applySched(r.cpus, r.prio)
+		r.mu.Lock()
+		r.stats.Sched = schedResult(r.cpus, r.prio, err)
+		r.mu.Unlock()
+		logSched(MainTaskName, r.cpus, r.prio, err)
 	})
+}
+
+// schedResult is the SchedStats for a placement request and its outcome.
+func schedResult(cpus []int, prio int, err error) SchedStats {
+	s := SchedStats{CPUs: cpus, Priority: prio, Applied: err == nil && (len(cpus) > 0 || prio > 0)}
+	if err != nil {
+		s.Error = err.Error()
+	}
+	return s
+}
+
+// logSched reports a placement request's outcome: nothing when nothing was
+// asked, Info when granted, Error when refused — loudly, because a task
+// that was meant to be pinned and is not is a configuration that lies.
+func logSched(task string, cpus []int, prio int, err error) {
+	if len(cpus) == 0 && prio == 0 {
+		return
+	}
+	if err != nil {
+		slog.Error("runtime: task scheduling request refused", "task", task, "cpus", cpus, "priority", prio, "error", err)
+		return
+	}
+	slog.Info("runtime: task thread placed", "task", task, "cpus", cpus, "priority", prio)
 }
 
 // runLoop calls scan once per period on an ABSOLUTE schedule — slot n is
@@ -724,8 +795,11 @@ func (r *Runtime) Run(ctx context.Context) {
 // arriving one wake-up latency after the PREVIOUS tick rather than on the
 // schedule: the schedule drifted ~65 µs a tick and 4–6 % of ticks were
 // dropped on an idle desktop. See docs/design/realtime.md, finding F1.
-func runLoop(ctx context.Context, period time.Duration, scan func(due time.Time), missed func(uint64)) {
+func runLoop(ctx context.Context, period time.Duration, scan func(due time.Time), missed func(uint64), setup func()) {
 	defer loopThread()()
+	if setup != nil {
+		setup() // on the locked thread: affinity and priority stick to it
+	}
 	start := time.Now()
 	for n := int64(1); ; n++ {
 		next := start.Add(time.Duration(n) * period)
