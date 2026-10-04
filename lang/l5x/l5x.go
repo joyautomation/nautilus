@@ -645,9 +645,27 @@ func parseDecorated(dec *xml.Decoder) (any, error) {
 
 func decodedValue(dec *xml.Decoder, se xml.StartElement) (any, error) {
 	switch se.Name.Local {
-	case "DataValue", "DataValueMember", "Element":
+	case "DataValue", "DataValueMember":
 		v := scalarValue(attr(se, "DataType"), attr(se, "Radix"), attr(se, "Value"))
 		return v, skip(dec)
+	case "Element":
+		// An element of an array of atomics carries its Value; an element
+		// of an array of structures (TIMER[3], a UDT[]) carries a
+		// <Structure> child.
+		if attr(se, "Value") != "" || attr(se, "DataType") != "" {
+			v := scalarValue(attr(se, "DataType"), attr(se, "Radix"), attr(se, "Value"))
+			return v, skip(dec)
+		}
+		var inner any
+		err := walk(dec, func(child xml.StartElement) error {
+			v, err := decodedValue(dec, child)
+			if err != nil {
+				return err
+			}
+			inner = v
+			return nil
+		})
+		return inner, err
 	case "Structure", "StructureMember":
 		// A Logix STRING is a structure of LEN + a SINT array; the useful
 		// form of it is the string.

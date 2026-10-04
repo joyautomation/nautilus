@@ -230,3 +230,49 @@ func TestAOILocalTagDefaultData(t *testing.T) {
 		t.Errorf("PRE = %#v", lt.Value)
 	}
 }
+
+// An array of structures (an array of timers) decodes element by element,
+// each a member map.
+func TestArrayOfStructuresDecodes(t *testing.T) {
+	src := `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="38.01" TargetName="X" TargetType="Controller">
+<Controller Name="X">
+<Tags>
+<Tag Name="Timers" TagType="Base" DataType="TIMER" Dimensions="2" Constant="false" ExternalAccess="Read/Write">
+<Data Format="Decorated">
+<Array DataType="TIMER" Dimensions="2">
+<Element Index="[0]">
+<Structure DataType="TIMER">
+<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="2000"/>
+<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>
+<DataValueMember Name="DN" DataType="BOOL" Value="0"/>
+</Structure>
+</Element>
+<Element Index="[1]">
+<Structure DataType="TIMER">
+<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="500"/>
+<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>
+<DataValueMember Name="DN" DataType="BOOL" Value="0"/>
+</Structure>
+</Element>
+</Array>
+</Data>
+</Tag>
+</Tags>
+</Controller>
+</RSLogix5000Content>
+`
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	arr, ok := f.Controller.Tags[0].Value.([]any)
+	if !ok || len(arr) != 2 {
+		t.Fatalf("value = %#v", f.Controller.Tags[0].Value)
+	}
+	m0, _ := arr[0].(map[string]any)
+	m1, _ := arr[1].(map[string]any)
+	if m0["PRE"] != int64(2000) || m1["PRE"] != int64(500) {
+		t.Errorf("presets = %#v %#v", m0, m1)
+	}
+}
