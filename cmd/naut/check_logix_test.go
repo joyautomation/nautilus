@@ -100,9 +100,17 @@ func TestCheckTargetLogix(t *testing.T) {
 }
 
 func TestCheckTargetLogixRefusesOtherLanguages(t *testing.T) {
-	dir := writeFiles(t, map[string]string{"calc.st": "PROGRAM Calc\nVAR x : INT; END_VAR\nx := x + 1;\nEND_PROGRAM\n"})
+	// An ST program is checked by the ST rules; a construct outside the
+	// subset is a located diagnostic, like ladder's.
+	dir := writeFiles(t, map[string]string{"calc.st": "PROGRAM Calc\nVAR x : INT; y : INT; END_VAR\nx := MIN(x, y);\nEND_PROGRAM\n"})
 	out, code := capture(t, func() int { return runCheck([]string{"--target", "logix", dir}) })
-	if code != 1 || !strings.Contains(out, "calc.st: logix target: only ladder (.ld) programs are in the v1 subset") {
+	if code != 1 || !strings.Contains(out, "calc.st:3:1: logix target: MIN()") {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	// A graphical language that is not ladder is refused as a whole.
+	dir = writeFiles(t, map[string]string{"net.fbd": "PROGRAM Net\nVAR x : BOOL; y : BOOL; END_VAR\nFBD\n  y := x\nEND_FBD\nEND_PROGRAM\n"})
+	out, code = capture(t, func() int { return runCheck([]string{"--target", "logix", dir}) })
+	if code != 1 || !strings.Contains(out, "net.fbd: logix target: only ladder (.ld) and structured text (.st)") {
 		t.Fatalf("exit %d\n%s", code, out)
 	}
 	if _, code := capture(t, func() int { return runCheck([]string{"--target", "siemens", dir}) }); code != 2 {

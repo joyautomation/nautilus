@@ -1,0 +1,24 @@
+name: conformance-st
+tasks:
+  - program: Main.st
+    scan: 10ms
+tags:
+  - { name: In, role: input, init: false }
+  - { name: Level, role: input, init: 0.0 }
+  - { name: Mode, role: input, init: 0 }
+  - { name: Pulse, role: input, init: false }
+  - { name: Reset, role: input, init: false }
+  - { name: Out, role: output, init: 0.0 }
+  - { name: HiAlm, role: state, init: false }
+  - { name: Delayed, role: output, init: false }
+  - { name: Counted, role: output, init: false }
+  - { name: Sum, role: output, init: 0 }
+target:
+  logix:
+    controller: DemoLine
+    processor: 1756-L85E
+    revision: "38.11"
+    comm-path: AB_ETH-1\100.93.56.45\Backplane\0
+    host: 100.93.56.45
+    side:
+      heartbeat: Nautilus_Scan

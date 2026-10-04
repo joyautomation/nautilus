@@ -233,17 +233,17 @@ func runCheck(args []string) int {
 // file in another language is one diagnostic naming the phase that adds
 // it. Returns true when anything was reported.
 func checkLogixTarget(f, source string, libs []string) bool {
-	if !strings.EqualFold(filepath.Ext(f), ".ld") {
-		// A library of TYPE declarations (and constants) is fine: the
-		// writer checks the types a program actually uses. Logic in
-		// another language is not, yet.
-		if strings.EqualFold(filepath.Ext(f), ".st") && !declaresLogic(source) {
-			return false
-		}
-		fmt.Printf("%s: logix target: only ladder (.ld) programs are in the v1 subset; ST routines and function blocks (as Add-On Instructions) come in a later phase\n", f)
+	if writer.Language(f) == "" {
+		fmt.Printf("%s: logix target: only ladder (.ld) and structured text (.st) programs are in the Logix subset; FBD and SFC come later\n", f)
 		return true
 	}
-	diags, err := writer.Check(source, libs...)
+	// A library of TYPE declarations (and constants) is fine: the writer
+	// checks the types a program actually uses. A library of blocks is
+	// refused where a program uses one.
+	if strings.EqualFold(filepath.Ext(f), ".st") && !stproject.DeclaresProgram(source) {
+		return false
+	}
+	diags, err := writer.CheckProgram(f, source, libs...)
 	if err != nil {
 		fmt.Printf("%s: logix target: %s\n", f, err)
 		return true
@@ -252,18 +252,6 @@ func checkLogixTarget(f, source string, libs []string) bool {
 		fmt.Printf("%s:%d:1: logix target: %s [%s]\n", f, d.Line, d.Message, d.Rule)
 	}
 	return len(diags) > 0
-}
-
-// declaresLogic reports whether ST source declares a POU — a PROGRAM,
-// FUNCTION_BLOCK or FUNCTION — as opposed to types and constants only.
-func declaresLogic(src string) bool {
-	for _, t := range st.Lex(src) {
-		switch t.Type {
-		case st.TokenProgram, st.TokenFunctionBlock, st.TokenFunction:
-			return true
-		}
-	}
-	return false
 }
 
 // checkManifest cross-checks a manifest project's declared tags against the

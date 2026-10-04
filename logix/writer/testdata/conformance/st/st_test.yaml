@@ -1,0 +1,68 @@
+tests:
+  - name: case and arithmetic
+    steps:
+      - given: { Level: 10.0, Mode: 0 }
+        scans: 2
+        expect: { Out: 10.0, Sum: 10 }
+      - given: { Mode: 1 }
+        scans: 2
+        expect: { Out: 20.0 }
+      - given: { Mode: 3 }
+        scans: 2
+        expect: { Out: 90.0 }
+      - given: { Mode: 7 }
+        scans: 2
+        expect: { Out: 0.0 }
+
+  - name: hysteresis alarm
+    steps:
+      - given: { Level: 75.0 }
+        scans: 2
+        expect: { HiAlm: false }
+      - given: { Level: 81.0 }
+        scans: 2
+        expect: { HiAlm: true }
+      - given: { Level: 75.0 }
+        scans: 2
+        expect: { HiAlm: true }
+      - given: { Level: 69.0 }
+        scans: 2
+        expect: { HiAlm: false }
+
+  - name: timer called the IEC way
+    steps:
+      - given: { In: true }
+        advance: 1.2s
+        expect: { Delayed: false }
+      - advance: 1.3s
+        expect: { Delayed: true }
+      - given: { In: false }
+        scans: 2
+        expect: { Delayed: false }
+      - given: { In: true }
+        advance: 1.2s
+        expect: { Delayed: false }
+
+  - name: counter called the IEC way
+    given: { Reset: true }
+    steps:
+      - given: { Reset: false }
+        scans: 2
+      - given: { Pulse: true }
+        scans: 2
+      - given: { Pulse: false }
+        scans: 2
+      - given: { Pulse: true }
+        scans: 2
+      - given: { Pulse: false }
+        scans: 2
+        expect: { Counted: false }
+      - given: { Pulse: true }
+        scans: 2
+        expect: { Counted: true }
+      - given: { Pulse: false }
+        scans: 2
+        expect: { Counted: true }
+      - given: { Reset: true }
+        scans: 2
+        expect: { Counted: false }

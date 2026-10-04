@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/joyautomation/nautilus/internal/project"
@@ -77,8 +76,8 @@ func loadLogixProject(dir string) (*logixProject, error) {
 	}
 	task := m.Tasks[0]
 	progPath := filepath.Join(dir, filepath.FromSlash(task.Program))
-	if !strings.EqualFold(filepath.Ext(progPath), ".ld") {
-		return nil, fmt.Errorf("%s: only ladder (.ld) programs are in the Logix v1 subset", progPath)
+	if writer.Language(progPath) == "" {
+		return nil, fmt.Errorf("%s: only ladder (.ld) and structured text (.st) programs are in the Logix subset", progPath)
 	}
 	src, err := os.ReadFile(progPath)
 	if err != nil {
@@ -105,6 +104,7 @@ func loadLogixProject(dir string) (*logixProject, error) {
 			Program: tgt.Program, Routine: tgt.Routine, Task: tgt.Task,
 			PeriodMs: int(time.Duration(task.Scan) / time.Millisecond),
 			CommPath: tgt.CommPath, Libs: libs, Inits: inits, Descs: descs, Side: side,
+			Language: writer.Language(progPath),
 		},
 		host: tgt.Host, slot: tgt.Slot, port: tgt.Port, agent: tgt.Agent,
 	}, nil

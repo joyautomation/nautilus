@@ -148,7 +148,10 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 		PeriodMs: s.t.PeriodMs, ProcessorType: s.t.Processor, MajorRev: major, MinorRev: minor, Libs: s.t.Libs,
 		Inits: s.t.Inits, Descs: s.t.Descs, Side: s.t.Side,
 	}
-	full, diags, err := writer.Write(src, wopts)
+	if s.t.Language == "st" {
+		return done(fmt.Errorf("an ST routine deploys by download for now; run naut logix deploy --download --yes"))
+	}
+	full, diags, err := s.t.write(src, wopts)
 	if err != nil {
 		return done(err)
 	}

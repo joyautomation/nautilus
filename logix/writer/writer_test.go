@@ -581,3 +581,132 @@ func TestYardstickMatchesLineL5X(t *testing.T) {
 		t.Errorf("data types = %+v", f.Controller.DataTypes)
 	}
 }
+
+const stProgram = `PROGRAM Calc
+VAR_EXTERNAL
+    Start    : BOOL;
+    Level    : REAL;
+    Mode     : INT;
+    Out      : REAL;
+    Alarm    : BOOL;
+    Done     : BOOL;
+    Elapsed  : TIME;
+END_VAR
+VAR
+    t   : TON;
+    c   : CTU;
+    i   : INT;
+    acc : REAL;
+END_VAR
+Out := Level * 2.5 + 1.0;
+IF Level > 80.0 AND NOT Alarm THEN
+    Alarm := TRUE;
+ELSIF Level < 70.0 THEN
+    Alarm := FALSE;
+END_IF;
+CASE Mode OF
+    0: Out := 0.0;
+    1, 2: Out := ABS(Out);
+    3..5: Out := SQRT(Out);
+ELSE
+    Out := EXPT(Out, 2.0);
+END_CASE;
+acc := 0.0;
+FOR i := 1 TO 3 DO
+    acc := acc + INT_TO_REAL(i);
+END_FOR;
+t(IN := Start, PT := T#2S, Q => Done, ET => Elapsed);
+c(CU := Done, PV := 3);
+IF c.Q THEN
+    Alarm := TRUE;
+END_IF;
+END_PROGRAM
+`
+
+// An ST program comes out as a Logix ST routine: the statements as
+// written, timers and counters as FBD structures driven by TONR / CTUD,
+// TIME as milliseconds, booleans as 1 and 0.
+func TestStructuredText(t *testing.T) {
+	doc, diags, err := WriteST(stProgram, Options{Controller: "C"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diags) > 0 {
+		t.Fatal(joinDiags(diags))
+	}
+	f, err := l5x.Parse(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := f.Controller.Programs[0].Routines[0]
+	if r.Type != "ST" {
+		t.Fatalf("routine type %s", r.Type)
+	}
+	for _, want := range []string{
+		"Out := ((Level * 2.5) + 1.0);",
+		"IF ((Level > 80.0) AND NOT (Alarm)) THEN",
+		"Alarm := 1;",
+		"ELSIF (Level < 70.0) THEN",
+		"CASE Mode OF",
+		"1, 2:",
+		"3..5:",
+		"Out := (Out ** 2.0);",
+		"FOR i := 1 TO 3 DO",
+		"acc := (acc + i);",
+		"t.PRE := 2000;",
+		"t.TimerEnable := Start;",
+		"t.Reset := NOT (Start);",
+		"TONR(t);",
+		"Done := t.DN;",
+		"Elapsed := t.ACC;",
+		"c.PRE := 3;",
+		"c.CUEnable := Done;",
+		"c.Reset := 0;",
+		"CTUD(c);",
+		"IF c.DN THEN",
+	} {
+		if !strings.Contains(r.Text, want) {
+			t.Errorf("missing %q in:\n%s", want, r.Text)
+		}
+	}
+	types := map[string]string{}
+	for _, tg := range append(f.Controller.Tags, f.Controller.Programs[0].Tags...) {
+		types[tg.Name] = tg.DataType
+	}
+	if types["t"] != "FBD_TIMER" || types["c"] != "FBD_COUNTER" || types["Elapsed"] != "DINT" || types["i"] != "INT" {
+		t.Errorf("tag types = %v", types)
+	}
+}
+
+func TestStructuredTextRejections(t *testing.T) {
+	wrap := func(body string) string {
+		return "PROGRAM P\nVAR\n  X : REAL; Y : REAL; B : BOOL; S : STRING; t : TON;\nEND_VAR\n" + body + "\nEND_PROGRAM\n"
+	}
+	cases := []struct{ name, src, rule, mention string }{
+		{"MIN", wrap("X := MIN(X, Y);"), ruleST, "MIN()"},
+		{"string", wrap("S := 'abc';"), ruleType, "STRING"},
+		{"return", wrap("RETURN;"), ruleST, "RETURN"},
+		{"continue", wrap("WHILE B DO\n CONTINUE;\nEND_WHILE;"), ruleST, "CONTINUE"},
+		{"positional pin", wrap("t(B, T#1S);"), ruleST, "by name"},
+		{"unknown pin", wrap("t(IN := B, PV := 3);"), ruleFBPin, "PV"},
+		{"bad member", wrap("B := t.TT;"), ruleMember, "TT"},
+		{"user block", "PROGRAM P\nVAR\n  m : Motor;\nEND_VAR\nm(Run := TRUE);\nEND_PROGRAM\n", ruleFB, "Motor"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			diags, err := CheckST(c.src, "FUNCTION_BLOCK Motor\nVAR_INPUT Run : BOOL; END_VAR\nEND_FUNCTION_BLOCK\n")
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			found := false
+			for _, d := range diags {
+				if d.Rule == c.rule && strings.Contains(d.Message, c.mention) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("want %s mentioning %q, got %s", c.rule, c.mention, joinDiags(diags))
+			}
+		})
+	}
+}

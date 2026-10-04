@@ -41,7 +41,7 @@ Usage:
                                        exports of unchanged code compare equal.
                                        The basis of drift detection.
   naut logix info <file.L5X>       Summarize what the export contains.
-  naut logix write <program.ld>    Write a nautilus ladder program as a
+  naut logix write <program.ld|.st> Write a nautilus ladder or ST program as a
                                        Logix L5X project (experimental:
                                        docs/design/logix-authoring.md). The
                                        v1 subset is enforced; a construct it
@@ -512,7 +512,7 @@ func runLogixWrite(args []string) int {
 	}
 	major, minor, _ := strings.Cut(*revision, ".")
 	_, libs, _ := stproject.PreludeSources(path, nil)
-	doc, diags, err := writer.Write(string(raw), writer.Options{
+	doc, diags, err := writer.WriteProgram(path, string(raw), writer.Options{
 		Controller: *controller, Program: *program, Routine: *routine, Task: *task,
 		PeriodMs: *period, ProcessorType: *processor, MajorRev: major, MinorRev: minor,
 		SoftwareRevision: *software, ExportDate: *date, Libs: libs,

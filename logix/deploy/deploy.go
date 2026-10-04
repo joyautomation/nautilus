@@ -70,6 +70,16 @@ type Target struct {
 	Descs map[string]string
 	// Side is the side code to emit (writer.Side).
 	Side writer.Side
+	// Language is the program's language, "ld" (default) or "st".
+	Language string
+}
+
+// write lowers src in the target's language.
+func (t Target) write(src string, w writer.Options) ([]byte, []writer.Diag, error) {
+	if t.Language == "st" {
+		return writer.WriteST(src, w)
+	}
+	return writer.Write(src, w)
 }
 
 // Options configure one deploy.
@@ -168,14 +178,17 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 		PeriodMs: t.PeriodMs, ProcessorType: t.Processor, MajorRev: major, MinorRev: minor, Libs: t.Libs,
 		Inits: t.Inits, Descs: t.Descs, Side: t.Side,
 	}
-	full, diags, err := writer.Write(src, wopts)
+	full, diags, err := t.write(src, wopts)
 	if err != nil {
 		return done(err)
 	}
 	if len(diags) > 0 {
 		return done(&DiagError{Diags: diags})
 	}
-	rungs, _, _ := writer.WriteRungs(src, wopts)
+	var rungs []byte
+	if t.Language != "st" {
+		rungs, _, _ = writer.WriteRungs(src, wopts)
+	}
 	gen, err := l5x.Parse(full)
 	if err != nil {
 		return done(fmt.Errorf("generated L5X does not parse: %w", err))
@@ -281,6 +294,9 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 	}
 	if o.Mode == Online && (rep.TagsChanged || rep.RoutineMissing) {
 		return done(&NeedsDownloadError{Diffs: rep.Diffs, RoutineMissing: rep.RoutineMissing})
+	}
+	if o.Mode == Online && t.Language == "st" {
+		return done(fmt.Errorf("an ST routine deploys by download for now (online edit of a routine is the next step); use --download --yes"))
 	}
 
 	// 3. Put it on the controller.

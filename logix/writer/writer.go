@@ -47,6 +47,7 @@ package writer
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -593,4 +594,38 @@ func sortedKeys(m map[string]bool) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// Language names the source language of a program file, by extension.
+func Language(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".ld":
+		return "ld"
+	case ".st":
+		return "st"
+	}
+	return ""
+}
+
+// WriteProgram lowers a program in whichever language its path says.
+func WriteProgram(path, src string, opts Options) ([]byte, []Diag, error) {
+	switch Language(path) {
+	case "ld":
+		return Write(src, opts)
+	case "st":
+		return WriteST(src, opts)
+	}
+	return nil, nil, fmt.Errorf("%s: only ladder (.ld) and structured text (.st) programs are in the Logix subset", path)
+}
+
+// CheckProgram runs the rules for a program in whichever language its
+// path says.
+func CheckProgram(path, src string, libs ...string) ([]Diag, error) {
+	switch Language(path) {
+	case "ld":
+		return Check(src, libs...)
+	case "st":
+		return CheckST(src, libs...)
+	}
+	return nil, fmt.Errorf("%s: only ladder (.ld) and structured text (.st) programs are in the Logix subset", path)
 }
