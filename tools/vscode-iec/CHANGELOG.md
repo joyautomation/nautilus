@@ -3,7 +3,7 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.13.2] - 2026-10-04
 
 ### Added
 
@@ -21,10 +21,10 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   first token, so `IF Heatr THEN` underlined `IF` and hovering `Heatr`
   showed nothing. The squiggle now covers the name itself, and `naut check`
   prints its column (`plant.st:28:4`, not `plant.st:28:1`). Diagrams still
-  land on the rung or netlist line. Comes from `naut lsp`, so it needs the
-  matching `naut` CLI. (#141)
+  land on the rung or netlist line. Comes from `naut lsp`, so it needs
+  `naut` 0.15.0 or later. (#141)
 
-- **Testing view: a failing acceptance test shows the tag value that broke, inline on the assertion.** The inline message used to read only `step 3, t=0.300s of virtual time` and sat on the step's `- given:` line; it now leads with `PumpRun = false, want true`, puts the step, its line and the virtual time on the line below, and sits on the failing tag inside `expect:` (or the `always:` term, or the `alarms:` key). Needs a `naut` that reports the assertion's line in `naut test -json` (`failure.line`, with the step's line now in `failure.stepLine`); an older CLI still gets the value-first message, anchored on the step. (#145)
+- **Testing view: a failing acceptance test shows the tag value that broke, inline on the assertion.** The inline message used to read only `step 3, t=0.300s of virtual time` and sat on the step's `- given:` line; it now leads with `PumpRun = false, want true`, puts the step, its line and the virtual time on the line below, and sits on the failing tag inside `expect:` (or the `always:` term, or the `alarms:` key). Needs `naut` 0.15.0 or later, which reports the assertion's line in `naut test -json` (`failure.line`, with the step's line now in `failure.stepLine`); an older CLI still gets the value-first message, anchored on the step. (#145)
 
 ## [0.13.1] - 2026-10-04
 
