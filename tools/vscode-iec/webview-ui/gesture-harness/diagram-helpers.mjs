@@ -16,7 +16,7 @@ export const BUNDLE = process.env.DIAGRAM_BUNDLE || join(HERE, '../../media/dist
 export const HEADLESS = process.env.HEADED !== '1';
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-export async function open({ state } = {}) {
+export async function open({ state, forwardKeys } = {}) {
 	const dir = mkdtempSync(join(tmpdir(), 'diagram-run-'));
 	// `state` seeds the webview state (vscode.getState) the bundle reads at
 	// mount — a panel reopening with what it saved.
@@ -24,7 +24,8 @@ export async function open({ state } = {}) {
 		'window.__POSTED__ = [];',
 		`window.__POSTED__ = []; window.__STATE__ = ${JSON.stringify(state ?? null)};`
 	);
-	writeFileSync(join(dir, 'host.html'), html);
+	// `forwardKeys` is the preview panel: Ctrl+Z/Y/S post `diagramKey` to the host.
+	writeFileSync(join(dir, 'host.html'), forwardKeys ? html.replace('<body>', '<body data-forward-keys="1">') : html);
 	copyFileSync(join(BUNDLE, 'fbd-flow.js'), join(dir, 'fbd-flow.js'));
 	copyFileSync(join(BUNDLE, 'fbd-flow.css'), join(dir, 'fbd-flow.css'));
 	const b = await Browser.launch({ headless: HEADLESS });
