@@ -419,12 +419,36 @@ func TestBaseWrites(t *testing.T) {
 	if h := b.Health(); !strings.Contains(h.Sources[0].LastError, "REFUSE_Cmd") || h.Sources[0].QueuedWrites != 0 {
 		t.Fatalf("refused write: %+v", h.Sources[0])
 	}
-	// A closed gate keeps a command queued.
-	b.SetWriteGate(func() bool { return false })
+	// A closed gate (a standby) neither queues nor records a command...
+	gate := true
+	var gmu sync.Mutex
+	b.SetWriteGate(func() bool { gmu.Lock(); defer gmu.Unlock(); return gate })
+	setGate := func(v bool) { gmu.Lock(); gate = v; gmu.Unlock() }
+	setGate(false)
 	_ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": false})
+	_ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": true})
 	time.Sleep(40 * time.Millisecond)
-	if h := b.Health(); h.Sources[0].QueuedWrites != 1 || h.Writes != 1 {
+	if h := b.Health(); h.Sources[0].QueuedWrites != 0 || h.Writes != 1 {
 		t.Fatalf("gated write: %+v writes=%d", h.Sources[0], h.Writes)
+	}
+	// ...so becoming leader replays nothing: the first value after the gate
+	// opens is a baseline, and only a change after it is a command.
+	setGate(true)
+	_ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": true})
+	time.Sleep(40 * time.Millisecond)
+	if h := b.Health(); h.Writes != 1 {
+		t.Fatalf("promotion replayed a command: writes=%d", h.Writes)
+	}
+	_ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": false})
+	deadline = time.Now().Add(time.Second)
+	for b.Health().Writes != 2 && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	w.mu.Lock()
+	got = strings.Join(w.writes, ",")
+	w.mu.Unlock()
+	if !strings.HasSuffix(got, "PDU1/PDU1_Outlet03.On=false") || b.Health().Writes != 2 {
+		t.Fatalf("change after promotion: %q writes=%d", got, b.Health().Writes)
 	}
 	if err := b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": "off"}); err == nil {
 		t.Fatal("a string into a BOOL command must error")
@@ -760,5 +784,61 @@ func TestBaseOnReconnect(t *testing.T) {
 	mu.Unlock()
 	if n != 2 {
 		t.Fatalf("OnReconnect calls = %d, want 2", n)
+	}
+}
+
+// A command queued while the device is down is sent when it comes back —
+// unless it waited longer than StaleAfter: a ForceOff from an hour ago is
+// not what anyone means now. Dropped with the reason on the device row.
+func TestBaseStaleCommandsDropped(t *testing.T) {
+	w := newFakeWire()
+	cfg := Config{
+		Kind:    "test",
+		Sources: []SourceConfig{{ID: "PDU1", Interval: 10 * time.Millisecond, StaleAfter: 80 * time.Millisecond, RetryMin: 5 * time.Millisecond, RetryMax: 10 * time.Millisecond}},
+		Tags: []TagDecl{{Name: "PDU1_Outlet03", Type: "PDUOutlet", Source: "PDU1", Members: map[string]Binding{
+			"Index": {Const: 3}, "On": {},
+		}}},
+		Writes: []WriteDecl{{Name: "PDU1_Outlet03_Cmd", Tag: "PDU1_Outlet03", Member: "On"}},
+		Poll:   w.poll,
+		Write:  w.write,
+	}
+	b, err := NewBase(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.set("PDU1", DefaultClass, Result{Updates: []Update{{"PDU1_Outlet03", "On", ir.BoolVal(true)}}})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b.Start(ctx)
+	defer b.Stop()
+	w.waitPoll(t, "PDU1/default")
+	_ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": true}) // baseline
+	writes := func() string { w.mu.Lock(); defer w.mu.Unlock(); return strings.Join(w.writes, ",") }
+
+	// The device goes down for longer than StaleAfter; the command waits, then is dropped.
+	w.setErr("PDU1", DefaultClass, errors.New("timeout"))
+	time.Sleep(30 * time.Millisecond)
+	_ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": false})
+	time.Sleep(150 * time.Millisecond)
+	w.setErr("PDU1", DefaultClass, nil)
+	deadline := time.Now().Add(time.Second)
+	for !strings.Contains(b.Health().Sources[0].LastWriteError, "dropped") && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := writes(); got != "" {
+		t.Fatalf("a stale command reached the device: %q", got)
+	}
+	if h := b.Health(); !strings.Contains(h.Sources[0].LastWriteError, "dropped") || h.Sources[0].QueuedWrites != 0 {
+		t.Fatalf("stale command: %+v", h.Sources[0])
+	}
+
+	// A fresh command still goes out.
+	_ = b.WriteOutputs(nio.Values{"PDU1_Outlet03_Cmd": true})
+	deadline = time.Now().Add(time.Second)
+	for writes() == "" && time.Now().Before(deadline) {
+		time.Sleep(2 * time.Millisecond)
+	}
+	if got := writes(); got != "PDU1/PDU1_Outlet03.On=true" {
+		t.Fatalf("fresh command: %q", got)
 	}
 }

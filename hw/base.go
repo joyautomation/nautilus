@@ -206,6 +206,7 @@ type derivedMember struct {
 type queuedWrite struct {
 	name string
 	v    ir.Value
+	at   time.Time // when the runtime handed it over: too old, it is dropped
 }
 
 type writeRun struct {
@@ -673,10 +674,25 @@ func (b *Base) Quality() map[string]nio.Quality {
 
 // WriteOutputs takes the runtime's changed outputs: Enable tags park or
 // wake their sources; command tags are queued per source and flushed by
-// its loop. The FIRST value seen per command tag is a baseline that is
-// never written — `init: false` on an outlet command must not switch the
-// outlet off at boot — and only a change from the last handed-over value
-// goes out (modbus §4's rule).
+// its loop. The rules are modbus's (modbus/driver.go WriteOutputs):
+//
+//  1. Enable tags act at once, gate or no gate.
+//  2. GATE. While the write gate is closed (a standby, logic faulted) no
+//     command is queued or recorded. A standby that becomes leader must
+//     not replay what the old leader already sent (a ForceOff sent twice
+//     is a server powered off twice): the first value it sees after the
+//     gate opens is a baseline, like the first after Start.
+//  3. BASELINE. The FIRST value seen per command tag is never written —
+//     `init: false` on an outlet command must not switch it off at boot.
+//  4. CHANGE. Only a change from the last handed-over value goes out,
+//     queued per source in order (a command is often a pulse — ForceOff,
+//     then back to idle — so every value counts, unlike a modbus level)
+//     and flushed by the source's loop after a good poll.
+//  5. EXPIRY. A command is an instruction for now, not for whenever the
+//     device comes back: one still unsent after the source's StaleAfter (a
+//     down or slow device) is dropped at flush, with a warning and the
+//     reason on the device row. A parked source (Enable false) queues and
+//     records nothing, like a closed gate.
 func (b *Base) WriteOutputs(vals nio.Values) error {
 	var errs []error
 	for name, raw := range vals {
@@ -712,6 +728,14 @@ func (b *Base) WriteOutputs(vals nio.Values) error {
 			continue
 		}
 		s := w.src
+		if !b.gateOpen() || !s.isEnabled() {
+			// Rules 2 and 5: neither queued nor recorded; forget the last
+			// value too, so the first one after is a baseline.
+			s.mu.Lock()
+			delete(s.written, name)
+			s.mu.Unlock()
+			continue
+		}
 		s.mu.Lock()
 		prev, seen := s.written[name]
 		if !seen {
@@ -724,7 +748,7 @@ func (b *Base) WriteOutputs(vals nio.Values) error {
 			continue
 		}
 		s.written[name] = v
-		s.pending = append(s.pending, queuedWrite{name, v})
+		s.pending = append(s.pending, queuedWrite{name, v, b.now()})
 		s.mu.Unlock()
 		s.wake()
 	}
@@ -970,8 +994,19 @@ func (b *Base) flushWrites(ctx context.Context, s *Source) {
 	batch := s.pending
 	s.pending = nil
 	s.mu.Unlock()
+	now := b.now()
 	for _, q := range batch {
 		name := q.name
+		if age := now.Sub(q.at); age > s.cfg.StaleAfter {
+			// Rule 5: too old to be what anyone means now.
+			b.errs.Add(1)
+			s.mu.Lock()
+			s.lastErr = fmt.Errorf("write %s: dropped, %s old (the source was down or slow; a command is not held past %s)", name, age.Round(time.Second), s.cfg.StaleAfter)
+			s.lastWrite = s.lastErr
+			s.mu.Unlock()
+			b.log.Warn(b.kind+": stale command dropped", "source", s.cfg.ID, "tag", name, "age", age)
+			continue
+		}
 		w := b.writes[name]
 		err := b.write(ctx, s.cfg.ID, w.decl, q.v)
 		if errors.Is(err, ErrNoWrite) {
