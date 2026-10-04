@@ -564,9 +564,23 @@ Measured on ECHO1, same file both layers:
 
 That is the whole claim of the brief in one command pair: the program
 proven in nautilus, then the download proven with the controller as the
-runtime. Open: `scans: n` on a controller is time-based (there is no scan
-count to read); a writer-emitted heartbeat rung would make it exact. The
-per-instruction conformance projects and the version matrix are next.
+runtime.
+
+**Side code (James, 2026-10-03):** logic nautilus adds beside the user's
+program for its own purposes — testing, verification, metrics — lives in
+a Logix program of its own, `Nautilus`, scheduled after the user's in the
+same task, so the user's routine in Studio 5000 is their source and
+nothing else. First piece: a heartbeat, `target.logix.side.heartbeat`
+naming a controller DINT the side program increments every task scan
+(`ADD(Nautilus_Scan,1,Nautilus_Scan)`). `naut test --target logix` waits
+on it, so `scans: n` is exactly n controller scans, and a counter that
+stops is reported as "is the controller in Run?". Downloaded to Echo
+(2 m 20 s, verified: the new program and tag are the whole logic diff);
+the scenarios pass with scan counts reported from the controller.
+
+Next in Phase C: the per-instruction conformance projects (timers,
+counters, edges, the §5.5 edge cases) as ordinary test projects for the
+same two commands, then the version matrix.
 
 ## 8. The demo this enables
 
