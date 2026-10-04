@@ -259,6 +259,49 @@ the obvious next type; wait for a project that needs it), interface
 VLAN/LLDP topology (that is a graph, not a tag), and any vendor-specific
 member. Add members, never rename them.
 
+### The operator-view set (argonaut)
+
+Added 2026-10-04 for argonaut, the 3D operator view for clusters, which reads a Prometheus
+**server** (not an exporter) through bindings a site manifest drives. These types carry what
+the manifest *expects* and the cluster does or does not do; the expectation members
+(`Missing`, `Conflict`, `Unexpected`, `Displaced`) are computed from a placement query no
+exporter emits, because absence is not a value an exporter has. Same contract rules: add
+members, never rename or reorder.
+
+| Member | Type | Unit | Notes |
+|---|---|---|---|
+| `VM.Online`, `Present`, `Running` | BOOL | | Present: some host reports it; Running: that host says running |
+| `VM.Host` | STRING | | the host reporting it this tick |
+| `VM.Hosts` | DINT | | 0 missing, 1 placed, more a conflict |
+| `VM.Missing`, `Conflict`, `Unexpected`, `Displaced`, `Fault` | BOOL | | Unexpected: Running disagrees with Expected; Displaced: not on Prefer |
+| `VM.Expected`, `Prefer`, `OS` | STRING | | running \| stopped \| any; the host it belongs on |
+| `VM.CpuPct`, `MemPct`, `RootDiskPct` | REAL | % | from the guest's exporter |
+| `VM.UptimeS` | DINT | s | |
+| `VM.ClockOffsetS` | REAL | s | |
+| `VM.ServicesDown` | DINT | | expected services not running |
+| `Ring.Online`, `Idle`, `SignalFail`, `RplBlocked`, `Stale`, `Fault` | BOOL | | G.8032 ERPS; Idle = whole, RPL blocked at both ends |
+| `Ring.PortsForwarding`, `Members` | DINT | | |
+| `Ring.FactsAgeS` | REAL | s | age of the collector's last write |
+| `Service.Online`, `Up`, `Fault` | BOOL | | a probed endpoint |
+| `Service.Kind`, `Target`, `Expected` | STRING | | http \| tcp; the URL or address |
+| `Service.DurationS` | REAL | s | |
+| `Service.HttpStatus` | DINT | | |
+| `Alerts.Firing`, `Critical`, `Warning` | DINT | | the site's own firing Prometheus alerts, placed on the entity by its identity label |
+| `Alerts.AnyCritical`, `AnyWarning` | BOOL | | |
+| `Alerts.Worst` | STRING | | the name of one firing alert, critical first |
+| `IncusCluster.MembersTotal`, `MembersOnline`, `HealingThreshold`, `InstancesRunning` | DINT | | |
+| `IncusCluster.Online`, `Fault` | BOOL | | |
+| `CephCluster.HealthStatus` | DINT | | 0 OK, 1 WARN, 2 ERR |
+| `CephCluster.HealthOK`, `Warning`, `Fault`, `MgrActive`, `Online` | BOOL | | |
+| `CephCluster.OsdTotal`, `OsdUp`, `OsdIn`, `MonQuorum`, `PgDegraded`, `ObjectsDegraded` | DINT | | |
+| `CephCluster.UsedPct` | REAL | % | |
+| `KubeCluster.NodesTotal`, `NodesReady` | DINT | | |
+| `KubeCluster.Online`, `Fault` | BOOL | | |
+| `CnpgCluster.Instances`, `Primaries`, `StreamingReplicas` | DINT | | Primaries: 1 is healthy |
+| `CnpgCluster.Primary` | STRING | | the pod that is primary |
+| `CnpgCluster.LagS`, `BackupAgeS` | REAL | s | |
+| `CnpgCluster.Online`, `Fault` | BOOL | | |
+
 ## 3. Per-protocol mapping
 
 **All MIB, schema and metric-name knowledge lives in codegen.** At run time
