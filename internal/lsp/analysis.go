@@ -35,6 +35,10 @@ type analysis struct {
 	// typeMembers maps lowercased UDT names to their members, for member
 	// completion after a dot.
 	typeMembers map[string][]TypeMember
+	// indexed reports that Symbols/types/typeMembers came from a parse —
+	// of this text, of its declaration skeleton, or (carryDeclarations) of
+	// the document's previous version.
+	indexed bool
 }
 
 // TypeMember is one member of a UDT, as declared.
@@ -77,26 +81,17 @@ func analyze(text, prelude string, preludeLines int) analysis {
 			Source:   "nautilus-st",
 			Message:  err.Error(),
 		})
+		// The text is mid-edit, but its declarations are usually whole:
+		// index those so hover and member completion ("settle.") keep
+		// working. The parse error above stays the only diagnostic.
+		skel := declSkeleton(text)
+		if sp, err := st.Parse(skel); err == nil {
+			a.index(sp, skel, prelude, preludeLines)
+		}
 		return a
 	}
 
-	a.Symbols = collectSymbols(prog)
-
-	lowerProg := prog
-	if prelude != "" {
-		// The prelude parsed on its own (stproject filters), so a combined
-		// parse only fails on pathological interactions — fall back to the
-		// solo program rather than losing lowering diagnostics entirely.
-		if combined, err := st.Parse(prelude + text); err == nil {
-			lowerProg = combined
-		} else {
-			preludeLines = 0
-		}
-	} else {
-		preludeLines = 0
-	}
-	a.types = typeIndex(lowerProg.TypeDecls)
-	a.typeMembers = typeMemberIndex(lowerProg.TypeDecls)
+	lowerProg, preludeLines := a.index(prog, text, prelude, preludeLines)
 
 	if _, err := st.Lower(lowerProg); err != nil {
 		pos := st.Pos{Line: 1, Col: 1}
@@ -123,6 +118,32 @@ func analyze(text, prelude string, preludeLines int) analysis {
 		})
 	}
 	return a
+}
+
+// index fills the symbol table and the type indexes from prog (parsed from
+// text). Types come from the project prelude too, so it returns the program
+// to lower — prelude+text when that combination parses — and the prelude
+// line count that applies to it (0 when the prelude is not part of it).
+func (a *analysis) index(prog *st.Program, text, prelude string, preludeLines int) (*st.Program, int) {
+	a.Symbols = collectSymbols(prog)
+	a.indexed = true
+
+	lowerProg := prog
+	if prelude != "" {
+		// The prelude parsed on its own (stproject filters), so a combined
+		// parse only fails on pathological interactions — fall back to the
+		// solo program rather than losing lowering diagnostics entirely.
+		if combined, err := st.Parse(prelude + text); err == nil {
+			lowerProg = combined
+		} else {
+			preludeLines = 0
+		}
+	} else {
+		preludeLines = 0
+	}
+	a.types = typeIndex(lowerProg.TypeDecls)
+	a.typeMembers = typeMemberIndex(lowerProg.TypeDecls)
+	return lowerProg, preludeLines
 }
 
 // analyzeLD compiles a Ladder Diagram document: LD → FBD netlist → the FBD
