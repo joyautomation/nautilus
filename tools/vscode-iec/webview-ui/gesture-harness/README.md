@@ -93,3 +93,24 @@ the ops posted (`ed.ops()`) or the rendered geometry (`ed.pipePaths()`,
 render, commit, reflect the op with `applyOpToDoc` + `ed.setDoc`, and assert the
 two paths are equal. When you fix a bug, first confirm the new test FAILS
 against the shipped bundle (`MIMIC_BUNDLE=…`), then passes against your build.
+
+## Adding a suite
+
+`npm run test:gestures` runs `gesture-harness/*.test.mjs` by glob, so a new
+suite is just a new file there — no `package.json` change.
+
+1. Name it `<topic>.test.mjs` (e.g. `fbd-drag.test.mjs`).
+2. Import helpers from the shared module, **never** from another `*.test.mjs`
+   (importing a test file re-registers its tests):
+   - FBD / Ladder / SFC: `./diagram-helpers.mjs` — `open`, `withPage`,
+     `deliver`, `posted`, `clickAt`, `key`, the `FBD` / `LD` / `SFC` fixture
+     models, `fbdOps` / `ldOps` / `sfcOps`, and so on.
+   - Mimic editor: `./mimic-helpers.mjs` — `withEditor`, the `doc*` fixtures,
+     plus re-exports of `Editor`, `applyOpToDoc`, `twoTankDoc`.
+   Both also export `BUNDLE`, `HEADLESS` and `recordClips`.
+3. Call `recordClips('<suite>')` once at the top of the file, after the
+   imports. With `GESTURE_CLIPS=<dir>` each of the file's tests is recorded to
+   `<dir>/<suite>/NN-<slug>.mp4` and listed in `index.html`; use a unique suite
+   name per file so clip folders do not collide.
+4. Put only `test(...)` calls in the file; shared helpers and fixtures belong
+   in the helpers module.
