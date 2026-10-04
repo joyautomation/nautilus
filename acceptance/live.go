@@ -347,7 +347,6 @@ func (r *liveRun) waitScans(n int, tick func() bool) error {
 	}
 	budget := time.Duration(n)*per + 10*r.live.Poll + 2*time.Second
 	deadline := time.Now().Add(budget)
-	r.scans = 0
 	for {
 		now, err := r.heartbeat()
 		if err != nil {
