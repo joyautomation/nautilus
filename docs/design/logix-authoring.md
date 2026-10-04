@@ -652,6 +652,31 @@ a runner on the licensed host.
 
 **James's call (2026-10-03): continue to Phase D; stay on v38 and widen the version matrix only if the product gets traction.**
 
+### Phase D — in progress (2026-10-03)
+
+**Step 1, user-defined types** — the one thing the yardstick needed. A
+`TYPE X : STRUCT … END_STRUCT; END_TYPE` in a library `.st` becomes a Logix
+UDT (nested types first, members in order; BOOL, SINT, INT, DINT, REAL,
+LREAL, nested types and one-dimensional arrays; TIME, STRING and block
+instances refused by name); a tag of that type is a structure with the
+manifest's `init:` map as its seeds; a rung's member path
+(`P101.Status.Alarm`, `P101.Hist[2]`) is checked against the type at
+check time and passes through verbatim. The L5X reader renders the emitted
+UDTs back as the same ST. `naut check --target logix` now passes a
+type-only `.st` library, and `naut test --target logix` reads and writes
+members by dotted path.
+
+Measured on ECHO1 with the `udt` conformance project (two types, one
+nested; a coil on a member, a compare on a numeric member, a contact two
+levels down): SDK import and build in 38 s, download verified, **2 of 2
+scenarios pass on both runtimes** — including a write to a nested member
+over EtherNet/IP that the controller's logic then acts on.
+
+**The yardstick, written:** `logix/writer/testdata/conformance/yardstick`
+is batch-skid's `line/Line.L5X` Receive routine as a nautilus project. The
+writer emits the export's rung text, with `LES` spelled `LT`
+(`TestYardstickMatchesLineL5X`); 3 scenarios pass on nautilus.
+
 ## 8. The demo this enables
 
 James's target demo (2026-10-03), which replaces the Tier A `ab01` draft in the
