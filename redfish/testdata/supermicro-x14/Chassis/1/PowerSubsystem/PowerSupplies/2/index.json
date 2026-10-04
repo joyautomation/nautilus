@@ -1,0 +1,18 @@
+{
+    "@odata.type": "#PowerSupply.v1_5_0.PowerSupply",
+    "Id": "2",
+    "Name": "PowerSupply2",
+    "Manufacturer": "SUPERMICRO",
+    "Model": "PWS-000S-0R",
+    "SerialNumber": "P00000000002",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "LineInputStatus": "Normal",
+    "PowerCapacityWatts": 860,
+    "Metrics": {
+        "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/2/Metrics"
+    },
+    "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/2"
+}

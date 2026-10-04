@@ -1,0 +1,22 @@
+{
+    "@odata.type": "#Sensor.v1_7_0.Sensor",
+    "Id": "InletTemp",
+    "Name": "Inlet Temp",
+    "Reading": 24.5,
+    "ReadingUnits": "Cel",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "ReadingType": "Temperature",
+    "PhysicalContext": "Intake",
+    "Thresholds": {
+        "UpperCaution": {
+            "Reading": 35
+        },
+        "UpperCritical": {
+            "Reading": 40
+        }
+    },
+    "@odata.id": "/redfish/v1/Chassis/1/Sensors/InletTemp"
+}

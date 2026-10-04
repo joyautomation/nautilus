@@ -1,0 +1,16 @@
+{
+    "@odata.type": "#Fan.v1_5_0.Fan",
+    "Id": "Fan5",
+    "Name": "Fan 5",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "HotPluggable": true,
+    "SpeedPercent": {
+        "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/Fan5Speed",
+        "Reading": 40,
+        "SpeedRPM": 5900
+    },
+    "@odata.id": "/redfish/v1/Chassis/1/ThermalSubsystem/Fans/Fan5"
+}

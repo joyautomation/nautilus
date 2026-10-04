@@ -11,6 +11,7 @@ import (
 
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/internal/stproject"
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/lang/ld"
 	"github.com/joyautomation/nautilus/lang/sfc"
@@ -222,6 +223,14 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 	if err != nil {
 		fmt.Printf("%s: %s\n", dir, err)
 		return 1, 0
+	}
+
+	// A driver's own non-fatal findings: an unset credential variable, a
+	// missing secret file, a weak SNMP auth. Warnings, never errors — this
+	// runs on laptops that have none of the secrets a controller will.
+	for _, w := range driverWarnings(proj.Runtime.Driver) {
+		warns++
+		fmt.Printf("%s: warning: %s\n", dir, w)
 	}
 
 	// The first task's name: key is a footgun, not a choice: Load (like
@@ -471,4 +480,24 @@ func inLibDir(f string) bool {
 	}
 	rel, err := filepath.Rel(stproject.ProjectRoot(abs), abs)
 	return err == nil && stproject.InLibDir(filepath.ToSlash(rel))
+}
+
+// driverWarnings collects Warnings() from a driver, recursing into a
+// multi-driver set so each child's findings carry its name.
+func driverWarnings(d nio.Driver) []string {
+	switch drv := d.(type) {
+	case nil:
+		return nil
+	case *nio.Multi:
+		var out []string
+		for _, c := range drv.Children() {
+			for _, w := range driverWarnings(c.Driver) {
+				out = append(out, c.Name+": "+w)
+			}
+		}
+		return out
+	case interface{ Warnings() []string }:
+		return drv.Warnings()
+	}
+	return nil
 }

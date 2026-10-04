@@ -261,6 +261,30 @@ func TestSchemaRequiresWhatLoaderRequires(t *testing.T) {
 		t.Fatal("loader accepted a modbus driver with no manifest")
 	}
 	requires(t, "driver(modbus)", driverRequires(t, "modbus"), "manifest")
+
+	// The IT-hardware drivers: same contract as modbus — every check is
+	// offline (New never dials), manifest is the one required key. The
+	// manifests are the CLI's golden fixtures, so this also proves what
+	// `naut <proto> import` writes is what the loader reads.
+	for _, proto := range []string{"snmp", "redfish", "prometheus"} {
+		fixture := map[string]string{
+			"snmp":       "../../cmd/naut/testdata/snmp/snmp_manifest.yaml",
+			"redfish":    "../../cmd/naut/testdata/redfish/legacy-1u/redfish_manifest.yaml",
+			"prometheus": "../../cmd/naut/testdata/prometheus/prometheus_manifest.yaml",
+		}[proto]
+		raw, err := os.ReadFile(fixture)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hwFS := fstest.MapFS{proto + "_manifest.yaml": &fstest.MapFile{Data: raw}}
+		if _, err := buildDriver(hwFS, DriverConfig{Type: proto, Manifest: proto + "_manifest.yaml"}); err != nil {
+			t.Fatalf("a complete %s driver must build offline: %v", proto, err)
+		}
+		if _, err := buildDriver(hwFS, DriverConfig{Type: proto}); err == nil {
+			t.Fatalf("loader accepted a %s driver with no manifest", proto)
+		}
+		requires(t, "driver("+proto+")", driverRequires(t, proto), "manifest")
+	}
 }
 
 // driverRequires reports what the schema demands of one driver type. A

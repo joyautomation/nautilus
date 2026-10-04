@@ -27,8 +27,12 @@ import (
 	"github.com/joyautomation/nautilus/internal/stproject"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/prom"
+	"github.com/joyautomation/nautilus/redfish"
+	"github.com/joyautomation/nautilus/replay"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
+	"github.com/joyautomation/nautilus/snmp"
 	"github.com/joyautomation/nautilus/sparkplug"
 	sphost "github.com/joyautomation/nautilus/sparkplug/host"
 )
@@ -1003,7 +1007,90 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 			opts = append(opts, modbus.WithTagClass(class, patterns...))
 		}
 		return modbus.New(mm, opts...)
+	case "snmp", "redfish", "prometheus":
+		// The IT-hardware drivers (brief docs/design/it-drivers.md): a
+		// switch, a PDU or a UPS over SNMP, a server BMC over Redfish, a
+		// commodity host over node_exporter — all delivering the same UDT
+		// set on hw.Base, and all wired exactly like modbus: a generated
+		// manifest, New never dials, the eip keys reused as poll intervals.
+		// Secrets never enter the manifest; an unset credential variable
+		// is a `naut check` warning, not a load error, because check runs
+		// on laptops that have no secrets.
+		if d.Manifest == "" {
+			return nil, fmt.Errorf("driver %s: manifest (the imported %s_manifest.yaml) is required", d.Type, d.Type)
+		}
+		raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
+		if err != nil {
+			return nil, fmt.Errorf("driver %s: %w", d.Type, err)
+		}
+		log := slog.Default().With("driver", d.Type)
+		switch d.Type {
+		case "snmp":
+			m, err := snmp.ParseManifest(raw)
+			if err != nil {
+				return nil, fmt.Errorf("driver snmp: %s: %w", d.Manifest, err)
+			}
+			opts := []snmp.Option{snmp.WithLogger(log)}
+			if d.ScanRate != 0 {
+				opts = append(opts, snmp.WithScanRate(time.Duration(d.ScanRate)))
+			}
+			for name, rate := range d.ScanClasses {
+				opts = append(opts, snmp.WithScanClass(name, time.Duration(rate)))
+			}
+			for class, patterns := range d.TagClasses {
+				opts = append(opts, snmp.WithTagClass(class, patterns...))
+			}
+			return snmp.New(m, opts...)
+		case "redfish":
+			m, err := redfish.ParseManifest(raw)
+			if err != nil {
+				return nil, fmt.Errorf("driver redfish: %s: %w", d.Manifest, err)
+			}
+			opts := []redfish.Option{redfish.WithLogger(log)}
+			if d.ScanRate != 0 {
+				opts = append(opts, redfish.WithScanRate(time.Duration(d.ScanRate)))
+			}
+			for name, rate := range d.ScanClasses {
+				opts = append(opts, redfish.WithScanClass(name, time.Duration(rate)))
+			}
+			for class, patterns := range d.TagClasses {
+				opts = append(opts, redfish.WithTagClass(class, patterns...))
+			}
+			return redfish.New(m, opts...)
+		default:
+			m, err := prom.ParseManifest(raw)
+			if err != nil {
+				return nil, fmt.Errorf("driver prometheus: %s: %w", d.Manifest, err)
+			}
+			opts := []prom.Option{prom.WithLogger(log)}
+			if d.ScanRate != 0 {
+				opts = append(opts, prom.WithScanRate(time.Duration(d.ScanRate)))
+			}
+			for name, rate := range d.ScanClasses {
+				opts = append(opts, prom.WithScanClass(name, time.Duration(rate)))
+			}
+			for class, patterns := range d.TagClasses {
+				opts = append(opts, prom.WithTagClass(class, patterns...))
+			}
+			return prom.New(m, opts...)
+		}
+	case "replay":
+		// A recording played back as live tags at a steerable clock: the
+		// baseline of a plant simulation. The recording itself is read on
+		// Start, so check and build pass where it is absent.
+		if d.Manifest == "" {
+			return nil, fmt.Errorf("driver replay: manifest (the replay_manifest.yaml) is required")
+		}
+		raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
+		if err != nil {
+			return nil, fmt.Errorf("driver replay: %w", err)
+		}
+		m, err := replay.ParseManifest(raw)
+		if err != nil {
+			return nil, fmt.Errorf("driver replay: %s: %w", d.Manifest, err)
+		}
+		return replay.New(m, fsys, replay.WithLogger(slog.Default().With("driver", "replay")))
 	default:
-		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host and modbus — custom buses are the Go tier (io.Driver)", d.Type)
+		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, snmp, redfish, prometheus and replay — custom buses are the Go tier (io.Driver)", d.Type)
 	}
 }

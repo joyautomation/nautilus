@@ -1,0 +1,27 @@
+{
+    "@odata.type": "#Chassis.v1_8_0.Chassis",
+    "Id": "1",
+    "Name": "Chassis",
+    "ChassisType": "RackMount",
+    "Manufacturer": "Example Systems",
+    "Model": "R1U-L",
+    "PowerState": "On",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "Thermal": {
+        "@odata.id": "/redfish/v1/Chassis/1/Thermal"
+    },
+    "Power": {
+        "@odata.id": "/redfish/v1/Chassis/1/Power"
+    },
+    "Links": {
+        "ComputerSystems": [
+            {
+                "@odata.id": "/redfish/v1/Systems/1"
+            }
+        ]
+    },
+    "@odata.id": "/redfish/v1/Chassis/1"
+}

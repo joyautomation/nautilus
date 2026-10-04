@@ -256,11 +256,18 @@
 
       /* ── tables ───────────────────────────────────────────────────────── */
       table { width: 100%; border-collapse: collapse; margin-top: 0.75rem; }
+      /* overflow-x: auto, not hidden: a tag name or description with no
+         break opportunity (a hwmon fan called 0000:02:00_0_0000:03:00_0, a
+         sensor tag forty characters long) used to push the Value, Unit and
+         Quality columns past the wrapper's edge, where hidden clipped them
+         and the table looked like it had no values at all. Long cells wrap
+         first (overflow-wrap) and the wrapper scrolls as the last resort. */
       .tags-wrap {
-        border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+        border: 1px solid var(--border); border-radius: var(--radius); overflow-x: auto;
         background: var(--surface);
       }
       th, td { text-align: left; padding: 0.5rem 0.9rem; font-size: var(--font-sm); }
+      td.name, td.desc { overflow-wrap: anywhere; }
       th {
         color: var(--muted); font-weight: 600; font-size: var(--font-2xs);
         text-transform: uppercase; letter-spacing: 0.06em;
