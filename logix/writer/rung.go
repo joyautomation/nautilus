@@ -70,6 +70,23 @@ func (c *rungCtx) series(elems []ld.Element, top bool) string {
 			}
 			parts = append(parts, "["+strings.Join(legs, " ,")+" ]")
 		case "fb":
+			if c.lw.blockType(e.Type) == "" && c.lw.blockSourceExists(e.Type) {
+				// A user block: an Add-On Instruction at the head of its
+				// rung, the condition so far on a helper rung (aoi.go).
+				if !top {
+					c.lw.diag(ruleTOFPosition, c.r.Line, c.r.Name, "%s:%s inside a branch: Logix skips an Add-On Instruction whose rung-in is false; put the block on its own rung", e.Inst, e.Type)
+					continue
+				}
+				t, cont, ok := c.aoiCall(e, parts, top)
+				if !ok {
+					continue
+				}
+				parts = []string{t}
+				if cont != "" && !(last && len(c.r.Coils) == 0) {
+					parts = append(parts, cont)
+				}
+				continue
+			}
 			t, cont, ok := c.block(e, top, last && len(c.r.Coils) == 0)
 			if !ok {
 				continue
@@ -413,10 +430,6 @@ func (c *rungCtx) block(e ld.Element, top, isLast bool) (text, cont string, ok b
 			alt = "write the edge as +Name / -Name"
 		case "SR", "RS":
 			alt = "write the latch as ( S X ) and ( R X ) coils"
-		default:
-			if c.lw.userBlock(e.Type) {
-				alt = "user blocks become Add-On Instructions in a later phase; inline its rungs here"
-			}
 		}
 		c.lw.diag(ruleFB, c.r.Line, c.r.Name, "%s:%s: not in the Logix v1 subset; %s", e.Inst, e.Type, alt)
 		return "", "", false

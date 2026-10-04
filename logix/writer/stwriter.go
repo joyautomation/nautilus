@@ -98,13 +98,14 @@ func lowerST(src string, opts Options) (*lowered, error) {
 		}
 	}
 	lw := &lowered{model: m, opts: opts, vars: map[string]ld.VarDecl{},
-		presetVars: map[string]bool{}, genNames: map[string]bool{}, st: true}
+		presetVars: map[string]bool{}, genNames: map[string]bool{}, st: true, aois: map[string]*aoiDef{}, src: src}
 	lw.loadTypes()
 	for _, v := range m.Vars {
 		lw.vars[strings.ToLower(v.Name)] = v
 	}
-	for _, fb := range prog.FBDecls {
-		lw.diag(ruleFunctionBlock, fb.Pos.Line, "", "FUNCTION_BLOCK %s: user blocks are not in the Logix v1 subset (Add-On Instructions come later)", fb.Name)
+	if len(prog.FBDecls) > 0 {
+		// Blocks declared beside an ST program are its own library.
+		lw.opts.Libs = append([]string{src}, lw.opts.Libs...)
 	}
 	for _, fn := range prog.FuncDecls {
 		lw.diag(ruleFunctionBlock, fn.Pos.Line, "", "FUNCTION %s: user functions are not in the Logix v1 subset; inline it", fn.Name)
@@ -254,17 +255,17 @@ func (w *stWriter) stmt(s st.Statement, depth int) {
 func (w *stWriter) call(c *st.CallExpr, depth int) {
 	v, ok := w.lw.vars[strings.ToLower(c.Name)]
 	if !ok {
-		if w.lw.userBlock(c.Name) {
-			w.diag(ruleFB, w.line, "%s: user function blocks are not in the Logix v1 subset (Add-On Instructions come later); inline the logic", c.Name)
-		} else {
-			w.diag(ruleST, w.line, "%s(...): a call statement must invoke a declared TON, TOF or CTU instance", c.Name)
-		}
+		w.diag(ruleST, w.line, "%s(...): a call statement must invoke a declared block instance", c.Name)
 		return
 	}
 	typ := strings.ToUpper(strings.TrimSpace(v.Type))
 	structType := stBlockTypes[typ]
 	if structType == "" {
-		w.diag(ruleFB, w.line, "%s:%s: not in the Logix v1 subset; the v1 blocks are TON, TOF and CTU", c.Name, v.Type)
+		if w.lw.blockSourceExists(v.Type) {
+			w.aoiCall(c, v.Type, depth)
+			return
+		}
+		w.diag(ruleFB, w.line, "%s:%s: not in the Logix v1 subset; the v1 blocks are TON, TOF, CTU and user FUNCTION_BLOCKs declared in a library", c.Name, v.Type)
 		return
 	}
 	if len(c.Args) > 0 {
@@ -420,4 +421,53 @@ func (w *stWriter) callExpr(c *st.CallExpr) string {
 	}
 	w.diag(ruleST, w.line, "%s(): not a function the Logix ST subset knows", c.Name)
 	return "0"
+}
+
+// aoiCall lowers an ST call of a user block: the instruction with its
+// instance and inputs as operands, then the output bindings as copies.
+func (w *stWriter) aoiCall(c *st.CallExpr, typ string, depth int) {
+	a, ok := w.lw.resolveAOI(typ, w.line)
+	if !ok {
+		return
+	}
+	if len(c.Args) > 0 {
+		w.diag(ruleST, w.line, "%s: bind the block's inputs by name", c.Name)
+		return
+	}
+	bound := map[string]string{}
+	for _, na := range c.NamedArgs {
+		p := a.param(na.Name)
+		if p == nil || p.Usage == "Output" {
+			w.diag(ruleFBPin, w.line, "%s:%s: no input parameter %s", c.Name, typ, na.Name)
+			return
+		}
+		bound[strings.ToLower(p.Name)] = w.expr(na.Value)
+	}
+	operands := []string{c.Name}
+	for _, p := range a.Params {
+		switch p.Usage {
+		case "Input":
+			v, ok := bound[strings.ToLower(p.Name)]
+			if !ok {
+				v = "0"
+			}
+			operands = append(operands, v)
+		case "InOut":
+			v, ok := bound[strings.ToLower(p.Name)]
+			if !ok {
+				w.diag(ruleFBPin, w.line, "%s:%s: VAR_IN_OUT %s must be bound", c.Name, typ, p.Name)
+				return
+			}
+			operands = append(operands, v)
+		}
+	}
+	w.emitf(depth, "%s(%s);", a.Name, strings.Join(operands, ", "))
+	for _, ob := range c.OutputBindings {
+		p := a.param(ob.Name)
+		if p == nil || p.Usage != "Output" {
+			w.diag(ruleFBPin, w.line, "%s:%s: no output parameter %s", c.Name, typ, ob.Name)
+			return
+		}
+		w.emitf(depth, "%s := %s.%s;", w.expr(ob.Target), c.Name, p.Name)
+	}
 }

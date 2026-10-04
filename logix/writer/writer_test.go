@@ -251,7 +251,7 @@ func TestRejections(t *testing.T) {
 	cases := []struct {
 		name, src, rule, mention string
 	}{
-		{"function block", "FUNCTION_BLOCK Seq\nVAR_INPUT A : BOOL; END_VAR\nVAR_OUTPUT Q : BOOL; END_VAR\nLD\n RUNG r A ( Q )\nEND_LD\nEND_FUNCTION_BLOCK\n" + wrap("X : BOOL; Y : BOOL;", "RUNG r X ( Y )"), ruleFunctionBlock, "Seq"},
+		{"block with an external", "FUNCTION_BLOCK Seq\nVAR_INPUT A : BOOL; END_VAR\nVAR_OUTPUT Q : BOOL; END_VAR\nVAR_EXTERNAL G : BOOL; END_VAR\nLD\n RUNG r A G ( Q )\nEND_LD\nEND_FUNCTION_BLOCK\n" + wrap("X : BOOL; Y : BOOL; s : Seq;", "RUNG r s:Seq(A := X, Q => Y)"), ruleFunctionBlock, "VAR_EXTERNAL G"},
 		{"var section", "PROGRAM P\nVAR_INPUT X : BOOL; END_VAR\nVAR Y : BOOL; END_VAR\nLD\n RUNG r X ( Y )\nEND_LD\nEND_PROGRAM", ruleVarSection, "VAR_INPUT X"},
 		{"type", wrap("S : STRING; X : BOOL; Y : BOOL;", "RUNG r X ( Y )"), ruleType, "STRING"},
 		{"unsigned", wrap("U : UINT; X : BOOL; Y : BOOL;", "RUNG r X ( Y )"), ruleType, "UINT"},
@@ -690,11 +690,11 @@ func TestStructuredTextRejections(t *testing.T) {
 		{"positional pin", wrap("t(B, T#1S);"), ruleST, "by name"},
 		{"unknown pin", wrap("t(IN := B, PV := 3);"), ruleFBPin, "PV"},
 		{"bad member", wrap("B := t.TT;"), ruleMember, "TT"},
-		{"user block", "PROGRAM P\nVAR\n  m : Motor;\nEND_VAR\nm(Run := TRUE);\nEND_PROGRAM\n", ruleFB, "Motor"},
+		{"block with a scalar in-out", "PROGRAM P\nVAR\n  m : Motor2;\nEND_VAR\nm(Run := TRUE);\nEND_PROGRAM\n", ruleType, "VAR_IN_OUT"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			diags, err := CheckST(c.src, "FUNCTION_BLOCK Motor\nVAR_INPUT Run : BOOL; END_VAR\nEND_FUNCTION_BLOCK\n")
+			diags, err := CheckST(c.src, "FUNCTION_BLOCK Motor\nVAR_INPUT Run : BOOL; END_VAR\nEND_FUNCTION_BLOCK\nFUNCTION_BLOCK Motor2\nVAR_INPUT Run : BOOL; END_VAR\nVAR_IN_OUT Spd : REAL; END_VAR\nEND_FUNCTION_BLOCK\n")
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}
@@ -754,5 +754,117 @@ func TestOutputCapturesAndResetConditions(t *testing.T) {
 	}
 	if strings.Join(texts, "|") != strings.Join(want, "|") {
 		t.Errorf("rungs:\n  got  %s\n  want %s", strings.Join(texts, " "), strings.Join(want, " "))
+	}
+}
+
+// A ladder FUNCTION_BLOCK becomes an Add-On Instruction: inputs as
+// Required parameters, outputs read from the instance, locals as local
+// tags, the rungs as its Logic routine; the call is the instruction with
+// the inputs as operands and the output bindings as copy rungs.
+func TestAddOnInstructionFromLadderBlock(t *testing.T) {
+	motor, err := os.ReadFile(filepath.Join("..", "..", "examples", "lift-station", "lib", "motor.ld"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := os.ReadFile(filepath.Join("testdata", "conformance", "aoi", "Main.ld"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := mustWrite(t, string(src), Options{Libs: []string{string(motor)}})
+	if len(f.Controller.AOIs) != 1 || f.Controller.AOIs[0].Name != "MotorStarter" {
+		t.Fatalf("AOIs = %+v", f.Controller.AOIs)
+	}
+	a := f.Controller.AOIs[0]
+	var names []string
+	for _, p := range a.Parameters {
+		names = append(names, p.Name+":"+p.Usage+":"+p.DataType)
+	}
+	want := "EnableIn:Input:BOOL EnableOut:Output:BOOL Mode:Input:INT AutoReq:Input:BOOL Permissive:Input:BOOL RunFb:Input:BOOL Reset:Input:BOOL Run:Output:BOOL InHand:Output:BOOL FailToRun:Output:BOOL LockedOut:Output:BOOL"
+	if strings.Join(names, " ") != want {
+		t.Errorf("parameters\n got %s\nwant %s", strings.Join(names, " "), want)
+	}
+	locals := map[string]string{}
+	for _, lt := range a.LocalTags {
+		locals[lt.Name] = lt.DataType
+	}
+	if locals["t1"] != "TIMER" || locals["c1"] != "COUNTER" || locals["rt_lockout_FailToRun"] != "BOOL" {
+		t.Errorf("locals = %v", locals)
+	}
+	if len(a.Routines) != 1 || a.Routines[0].Type != "RLL" || len(a.Routines[0].Rungs) == 0 {
+		t.Fatalf("routines = %+v", a.Routines)
+	}
+	logic := map[string]bool{}
+	for _, r := range a.Routines[0].Rungs {
+		logic[r.Text] = true
+	}
+	for _, text := range []string{
+		"[EQ(Mode,2) XIC(AutoReq) ,EQ(Mode,1) ]XIC(Permissive)XIO(FailToRun)XIO(LockedOut)OTE(Run);",
+		"XIC(Run)XIO(RunFb)TON(t1,?,?)XIC(t1.DN)OTL(FailToRun);",
+		"XIC(Reset)OTU(FailToRun);",
+		"EQ(Mode,1)OTE(InHand);",
+		"XIC(FailToRun)ONS(rt_lockout_FailToRun)CTU(c1,?,?);",
+		"XIC(Reset)XIC(LockedOut)RES(c1);",
+		"XIC(c1.DN)OTE(LockedOut);",
+	} {
+		if !logic[text] {
+			t.Errorf("Logic lacks %s", text)
+		}
+	}
+	rungs := f.Controller.Programs[0].Routines[0].Rungs
+	if rungs[0].Text != "MotorStarter(m101,P101_Mode,P101_Req,P101_Permissive,P101_Running,ResetFaults);" {
+		t.Errorf("call = %s", rungs[0].Text)
+	}
+	if rungs[1].Text != "XIC(m101.Run)OTE(P101_RunCmd);" || rungs[4].Text != "XIC(m101.LockedOut)OTE(P101_LockedOut);" {
+		t.Errorf("captures = %s / %s", rungs[1].Text, rungs[4].Text)
+	}
+	var inst *l5x.Tag
+	for _, tg := range f.Controller.Programs[0].Tags {
+		if tg.Name == "m101" {
+			inst = tg
+		}
+	}
+	if inst == nil || inst.DataType != "MotorStarter" {
+		t.Errorf("instance tag = %+v", inst)
+	}
+	// The reader renders the AOI's rungs like any routine's.
+	m, err := l5x.Ladder(f, l5x.LadderOptions{Routine: "MotorStarter/Logic", AOIs: true})
+	if err != nil || len(m.Rungs) != 7 {
+		t.Errorf("ladder of the AOI: %v, %d rungs", err, len(m.Rungs))
+	}
+}
+
+// A conditioned call takes its power through a generated tag on a helper
+// rung, and the ST form of a block is an ST Logic routine.
+func TestAddOnInstructionPowerAndST(t *testing.T) {
+	ldLib := "FUNCTION_BLOCK Gate\nVAR_INPUT  Open : BOOL; Level : REAL; END_VAR\nVAR_OUTPUT Pass : BOOL; END_VAR\nLD\n  RUNG p Open GT(Level, 1.0) ( Pass )\nEND_LD\nEND_FUNCTION_BLOCK\n"
+	src := "PROGRAM P\nVAR\n  A : BOOL; B : BOOL; L : REAL; Y : BOOL; g : Gate;\nEND_VAR\nLD\n  RUNG r A B g:Gate(Level := L) ( Y )\nEND_LD\nEND_PROGRAM\n"
+	f := mustWrite(t, src, Options{Libs: []string{ldLib}})
+	rungs := f.Controller.Programs[0].Routines[0].Rungs
+	if len(rungs) != 2 || rungs[0].Text != "XIC(A)XIC(B)OTE(en_r_g);" || rungs[1].Text != "Gate(g,en_r_g,L)XIC(g.Pass)OTE(Y);" {
+		t.Errorf("rungs = %+v", rungs)
+	}
+	stLib := "FUNCTION_BLOCK Scale\nVAR_INPUT  Raw : REAL; Gain : REAL; END_VAR\nVAR_OUTPUT Out : REAL; Hi : BOOL; END_VAR\nVAR  last : REAL; END_VAR\nOut := Raw * Gain;\nHi := Out > 100.0;\nlast := Out;\nEND_FUNCTION_BLOCK\n"
+	stSrc := "PROGRAM Q\nVAR\n  R : REAL; V : REAL; H : BOOL; s : Scale;\nEND_VAR\ns(Raw := R, Gain := 2.0, Out => V, Hi => H);\nEND_PROGRAM\n"
+	doc, diags, err := WriteST(stSrc, Options{Libs: []string{stLib}})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("%v %v", err, diags)
+	}
+	f2, err := l5x.Parse(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f2.Controller.AOIs) != 1 || f2.Controller.AOIs[0].Routines[0].Type != "ST" || !strings.Contains(f2.Controller.AOIs[0].Routines[0].Text, "Out := (Raw * Gain);") {
+		t.Errorf("ST AOI = %+v", f2.Controller.AOIs)
+	}
+	text := f2.Controller.Programs[0].Routines[0].Text
+	for _, want := range []string{"Scale(s, R, 2.0);", "V := s.Out;", "H := s.Hi;"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("ST call lacks %q in:\n%s", want, text)
+		}
+	}
+	// Inside a branch, a block cannot run unconditionally: refused.
+	bad := "PROGRAM P\nVAR\n  A : BOOL; L : REAL; Y : BOOL; g : Gate;\nEND_VAR\nLD\n  RUNG r [ A g:Gate(Level := L) | A ] ( Y )\nEND_LD\nEND_PROGRAM\n"
+	if _, diags, _ := Write(bad, Options{Libs: []string{ldLib}}); len(diags) == 0 || diags[0].Rule != ruleTOFPosition {
+		t.Errorf("branch: %v", diags)
 	}
 }

@@ -153,7 +153,7 @@ func Check(src string, libs ...string) ([]Diag, error) {
 	if err != nil {
 		return nil, err
 	}
-	lw := lower(m, Options{Libs: libs}.withDefaults(m.Name))
+	lw := lowerSrc(m, src, Options{Libs: libs}.withDefaults(m.Name))
 	return lw.diags, nil
 }
 
@@ -169,7 +169,7 @@ func Write(src string, opts Options) ([]byte, []Diag, error) {
 		return nil, nil, fmt.Errorf("logix writer: source declares no PROGRAM")
 	}
 	opts = opts.withDefaults(m.Name)
-	lw := lower(m, opts)
+	lw := lowerSrc(m, src, opts)
 	if len(lw.diags) > 0 {
 		return nil, lw.diags, nil
 	}
@@ -204,6 +204,14 @@ type lowered struct {
 	// structures, TIME is a DINT, and the routine is stLines.
 	st      bool
 	stLines []string
+	// src is the program source (a ladder file may declare blocks of its
+	// own); aois the Add-On Instructions resolved so far (nil: known
+	// bad), aoiOrder the ones to emit, in first-use order; inAOI marks a
+	// block body being lowered (aoi.go).
+	src      string
+	aois     map[string]*aoiDef
+	aoiOrder []*aoiDef
+	inAOI    bool
 }
 
 // blockType is the Logix structure behind a block instance: TIMER and
@@ -229,6 +237,8 @@ type tagDef struct {
 	// initial value (a map of members), when any.
 	Struct *udt
 	Init   any
+	// AOI marks an Add-On Instruction instance.
+	AOI bool
 }
 
 // rungOut is one emitted rung.
@@ -240,15 +250,17 @@ type rungOut struct {
 }
 
 func lower(m *ld.Model, opts Options) *lowered {
+	return lowerSrc(m, "", opts)
+}
+
+func lowerSrc(m *ld.Model, src string, opts Options) *lowered {
 	lw := &lowered{model: m, opts: opts, vars: map[string]ld.VarDecl{},
-		presetVars: map[string]bool{}, genNames: map[string]bool{}}
+		presetVars: map[string]bool{}, genNames: map[string]bool{}, aois: map[string]*aoiDef{}}
 	lw.loadTypes()
-	for _, b := range m.Blocks {
-		lw.diag(ruleFunctionBlock, b.Line, "", "FUNCTION_BLOCK %s: user blocks are not in the Logix v1 subset (Add-On Instructions come later); write its rungs in the program", b.Name)
-	}
+	lw.src = src
 	for _, v := range m.Vars {
 		if v.POU != "" {
-			continue // inside a rejected block
+			continue // a block's own; lowered with the block (aoi.go)
 		}
 		lw.vars[strings.ToLower(v.Name)] = v
 	}
@@ -415,8 +427,18 @@ func (lw *lowered) declare(v ld.VarDecl) {
 			init = lw.opts.Inits[v.Name]
 		}
 		lw.addTag(tagDef{Name: v.Name, DataType: udt.Name, Dim: dim, Scope: scope, Line: v.Line, Struct: udt, Init: init})
+	case lw.blockSourceExists(typ):
+		if dim > 0 {
+			lw.diag(ruleArrayShape, v.Line, "", "%s: an array of %s instances is not in the subset; declare one instance per element", v.Name, typ)
+			return
+		}
+		a, ok := lw.resolveAOI(typ, v.Line)
+		if !ok {
+			return
+		}
+		lw.addTag(tagDef{Name: v.Name, DataType: a.Name, Scope: scope, Line: v.Line, AOI: true})
 	default:
-		alt := "the v1 subset is BOOL, SINT, INT, DINT, REAL, LREAL, TON, TOF, CTU, and STRUCT types declared in a library"
+		alt := "the v1 subset is BOOL, SINT, INT, DINT, REAL, LREAL, TON, TOF, CTU, STRUCT types declared in a library, and FUNCTION_BLOCKs (as Add-On Instructions)"
 		switch u {
 		case "TP", "CTD", "CTUD":
 			alt = "its IEC load/reset semantics differ from the Logix instruction; " + alt
@@ -628,4 +650,9 @@ func CheckProgram(path, src string, libs ...string) ([]Diag, error) {
 		return CheckST(src, libs...)
 	}
 	return nil, fmt.Errorf("%s: only ladder (.ld) and structured text (.st) programs are in the Logix subset", path)
+}
+
+func (lw *lowered) blockSourceExists(name string) bool {
+	src, _ := lw.blockSource(name)
+	return src != ""
 }

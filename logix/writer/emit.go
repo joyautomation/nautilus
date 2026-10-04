@@ -62,7 +62,7 @@ func emit(lw *lowered, o Options) []byte {
 	w(`</Ports>`)
 	w(`</Module>`)
 	w(`</Modules>`)
-	w(`<AddOnInstructionDefinitions/>`)
+	emitAOIs(&b, lw, o)
 	emitTags(&b, lw.ctrlTags)
 	w(`<Programs>`)
 	w(`<Program Name="%s" TestEdits="false" MainRoutineName="%s" Disabled="false" UseAsFolder="false">`, attr(o.Program), attr(o.Routine))
@@ -207,7 +207,8 @@ func emitTags(b *strings.Builder, tags []tagDef) {
 			w(`%s`, cdata(t.Desc))
 			w(`</Description>`)
 		}
-		if strings.HasPrefix(t.DataType, "FBD_") {
+		if strings.HasPrefix(t.DataType, "FBD_") || t.AOI {
+			// No initial data: the structure's layout is the SDK's.
 			w(`</Tag>`)
 			continue
 		}
@@ -525,4 +526,164 @@ func WriteRoutine(path, src string, opts Options) ([]byte, []Diag, error) {
 	w(`</Controller>`)
 	w(`</RSLogix5000Content>`)
 	return []byte(b.String()), nil, nil
+}
+
+// emitAOIs writes the Add-On Instruction definitions the program uses,
+// in first-use order. EnableIn and EnableOut are the two parameters every
+// AOI carries; the block's inputs are Required so a call binds them as
+// operands, its outputs are read from the instance.
+func emitAOIs(b *strings.Builder, lw *lowered, o Options) {
+	if len(lw.aoiOrder) == 0 {
+		b.WriteString("<AddOnInstructionDefinitions/>\n")
+		return
+	}
+	w := func(format string, a ...any) {
+		fmt.Fprintf(b, format, a...)
+		b.WriteByte('\n')
+	}
+	w(`<AddOnInstructionDefinitions>`)
+	for _, a := range lw.aoiOrder {
+		w(`<AddOnInstructionDefinition Name="%s" Class="Standard" Revision="1.0" Vendor="nautilus" ExecutePrescan="false" ExecutePostscan="false" ExecuteEnableInFalse="false" CreatedDate="2026-01-01T00:00:00.000Z" CreatedBy="nautilus" EditedDate="2026-01-01T00:00:00.000Z" EditedBy="nautilus" SoftwareRevision="v%s">`, attr(a.Name), attr(o.SoftwareRevision))
+		w(`<Description>`)
+		w(`%s`, cdata("nautilus FUNCTION_BLOCK "+a.Name+", generated"))
+		w(`</Description>`)
+		w(`<Parameters>`)
+		w(`<Parameter Name="EnableIn" TagType="Base" DataType="BOOL" Usage="Input" Radix="Decimal" Required="false" Visible="false" ExternalAccess="Read Only">`)
+		w(`<Description>`)
+		w(`%s`, cdata("Enable Input - System Defined Parameter"))
+		w(`</Description>`)
+		w(`</Parameter>`)
+		w(`<Parameter Name="EnableOut" TagType="Base" DataType="BOOL" Usage="Output" Radix="Decimal" Required="false" Visible="false" ExternalAccess="Read Only">`)
+		w(`<Description>`)
+		w(`%s`, cdata("Enable Output - System Defined Parameter"))
+		w(`</Description>`)
+		w(`</Parameter>`)
+		for _, p := range a.Params {
+			dims := ""
+			if p.Dim > 0 {
+				dims = fmt.Sprintf(` Dimensions="%d"`, p.Dim)
+			}
+			switch p.Usage {
+			case "Input":
+				w(`<Parameter Name="%s" TagType="Base" DataType="%s"%s Usage="Input" Radix="%s" Required="true" Visible="true" ExternalAccess="Read/Write">`, attr(p.Name), p.DataType, dims, radixOf(p.DataType))
+				w(`<DefaultData Format="L5K">`)
+				w(`%s`, cdata(l5kZero(p.DataType)))
+				w(`</DefaultData>`)
+				w(`<DefaultData Format="Decorated">`)
+				w(`<DataValue DataType="%s" Radix="%s" Value="%s"/>`, p.DataType, radixOf(p.DataType), zeroOf(p.DataType))
+				w(`</DefaultData>`)
+				w(`</Parameter>`)
+			case "Output":
+				w(`<Parameter Name="%s" TagType="Base" DataType="%s"%s Usage="Output" Radix="%s" Required="false" Visible="true" ExternalAccess="Read Only">`, attr(p.Name), p.DataType, dims, radixOf(p.DataType))
+				w(`<DefaultData Format="L5K">`)
+				w(`%s`, cdata(l5kZero(p.DataType)))
+				w(`</DefaultData>`)
+				w(`<DefaultData Format="Decorated">`)
+				w(`<DataValue DataType="%s" Radix="%s" Value="%s"/>`, p.DataType, radixOf(p.DataType), zeroOf(p.DataType))
+				w(`</DefaultData>`)
+				w(`</Parameter>`)
+			case "InOut":
+				w(`<Parameter Name="%s" TagType="Base" DataType="%s"%s Usage="InOut" Required="true" Visible="true"/>`, attr(p.Name), p.DataType, dims)
+			}
+		}
+		w(`</Parameters>`)
+		if len(a.Locals) == 0 {
+			w(`<LocalTags/>`)
+		} else {
+			w(`<LocalTags>`)
+			for _, t := range a.Locals {
+				emitLocalTag(b, t)
+			}
+			w(`</LocalTags>`)
+		}
+		w(`<Routines>`)
+		if a.ST {
+			w(`<Routine Name="Logic" Type="ST">`)
+			w(`<STContent>`)
+			for i, line := range a.Lines {
+				w(`<Line Number="%d">`, i)
+				w(`%s`, cdata(line))
+				w(`</Line>`)
+			}
+			w(`</STContent>`)
+		} else {
+			w(`<Routine Name="Logic" Type="RLL">`)
+			w(`<RLLContent>`)
+			for i, r := range a.Rungs {
+				w(`<Rung Number="%d" Type="N">`, i)
+				if r.Comment != "" {
+					w(`<Comment>`)
+					w(`%s`, cdata(r.Comment))
+					w(`</Comment>`)
+				}
+				w(`<Text>`)
+				w(`%s`, cdata(r.Text+";"))
+				w(`</Text>`)
+				w(`</Rung>`)
+			}
+			w(`</RLLContent>`)
+		}
+		w(`</Routine>`)
+		w(`</Routines>`)
+		w(`</AddOnInstructionDefinition>`)
+	}
+	w(`</AddOnInstructionDefinitions>`)
+}
+
+// emitLocalTag writes one AOI local: a tag with DefaultData.
+func emitLocalTag(b *strings.Builder, t tagDef) {
+	w := func(format string, a ...any) {
+		fmt.Fprintf(b, format, a...)
+		b.WriteByte('\n')
+	}
+	radix := radixOf(t.DataType)
+	dims := ""
+	if t.Dim > 0 {
+		dims = fmt.Sprintf(` Dimensions="%d"`, t.Dim)
+	}
+	if radix != "" {
+		w(`<LocalTag Name="%s" DataType="%s"%s Radix="%s" ExternalAccess="None">`, attr(t.Name), t.DataType, dims, radix)
+	} else {
+		w(`<LocalTag Name="%s" DataType="%s"%s ExternalAccess="None">`, attr(t.Name), t.DataType, dims)
+	}
+	if strings.HasPrefix(t.DataType, "FBD_") || t.AOI {
+		w(`</LocalTag>`)
+		return
+	}
+	w(`<DefaultData Format="L5K">`)
+	w(`%s`, cdata(l5kValue(t)))
+	w(`</DefaultData>`)
+	w(`<DefaultData Format="Decorated">`)
+	switch {
+	case t.DataType == "TIMER":
+		w(`<Structure DataType="TIMER">`)
+		w(`<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="%d"/>`, t.Preset)
+		w(`<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>`)
+		for _, m := range []string{"EN", "TT", "DN"} {
+			w(`<DataValueMember Name="%s" DataType="BOOL" Value="0"/>`, m)
+		}
+		w(`</Structure>`)
+	case t.DataType == "COUNTER":
+		w(`<Structure DataType="COUNTER">`)
+		w(`<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="%d"/>`, t.Preset)
+		w(`<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>`)
+		for _, m := range []string{"CU", "CD", "DN", "OV", "UN"} {
+			w(`<DataValueMember Name="%s" DataType="BOOL" Value="0"/>`, m)
+		}
+		w(`</Structure>`)
+	case t.Struct != nil:
+		w(`<Structure DataType="%s">`, t.DataType)
+		structValue(t.Struct, t.Init, w)
+		w(`</Structure>`)
+	case t.Dim > 0:
+		w(`<Array DataType="%s" Dimensions="%d" Radix="%s">`, t.DataType, t.Dim, radix)
+		for i := 0; i < t.Dim; i++ {
+			w(`<Element Index="[%d]" Value="%s"/>`, i, zeroOf(t.DataType))
+		}
+		w(`</Array>`)
+	default:
+		w(`<DataValue DataType="%s" Radix="%s" Value="%s"/>`, t.DataType, radix, decoratedValue(t))
+	}
+	w(`</DefaultData>`)
+	w(`</LocalTag>`)
 }

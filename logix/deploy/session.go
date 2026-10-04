@@ -32,18 +32,21 @@ import (
 
 // Session is one controller held open and online for repeated edits.
 type Session struct {
-	c        *logixd.Client
-	t        Target
-	log      func(string, ...any)
-	mu       sync.Mutex
-	s        *logixd.Session
-	tags     map[string]string // the controller's tag shapes, from LogicOf
-	rungs    []l5x.Rung        // what the routine runs now (ladder)
-	lines    []string          // what the routine runs now (ST), one per line
-	prog     string
-	rout     string
-	routType string
-	opened   time.Time
+	c    *logixd.Client
+	t    Target
+	log  func(string, ...any)
+	mu   sync.Mutex
+	s    *logixd.Session
+	tags map[string]string // the controller's tag shapes, from LogicOf
+	// aoiRoutines are the controller\'s Add-On Instruction routines, which
+	// an online routine edit cannot change.
+	aoiRoutines map[string]*l5x.RoutineLogic
+	rungs       []l5x.Rung // what the routine runs now (ladder)
+	lines       []string   // what the routine runs now (ST), one per line
+	prog        string
+	rout        string
+	routType    string
+	opened      time.Time
 }
 
 // Connect uploads the running project, opens it and goes online. It
@@ -101,6 +104,7 @@ func (s *Session) open(ctx context.Context) error {
 		return fmt.Errorf("go online: %w", err)
 	}
 	s.s, s.tags, s.opened = sess, logic.Tags, time.Now()
+	s.aoiRoutines = aoiRoutinesOf(logic)
 	s.prog, s.rout = "", ""
 	s.rungs = nil
 	// The routine the target names, if the controller has it.
@@ -186,8 +190,8 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 		rep.RoutineMissing = true
 		return done(&NeedsDownloadError{RoutineMissing: true})
 	}
-	// Tags cannot change online.
-	for _, d := range l5x.LogicDiff(&l5x.Logic{Tags: s.tags, Routines: map[string]*l5x.RoutineLogic{}}, &l5x.Logic{Tags: want.Tags, Routines: map[string]*l5x.RoutineLogic{}}) {
+	// Tags cannot change online, and neither can an Add-On Instruction.
+	for _, d := range l5x.LogicDiff(&l5x.Logic{Tags: s.tags, Routines: s.aoiRoutines}, &l5x.Logic{Tags: want.Tags, Routines: aoiRoutinesOf(want)}) {
 		rep.Diffs = append(rep.Diffs, d)
 		rep.TagsChanged = true
 	}
@@ -284,4 +288,16 @@ func (s *Session) Edit(ctx context.Context, src string) (*Report, error) {
 	rep.Verified = true
 	s.log("online edit live and verified: %s/%s replaced online, controller %s, %s", s.prog, s.rout, after, time.Since(started).Round(time.Millisecond))
 	return done(nil)
+}
+
+// aoiRoutinesOf keeps only the Add-On Instruction routines of a logic
+// view.
+func aoiRoutinesOf(l *l5x.Logic) map[string]*l5x.RoutineLogic {
+	out := map[string]*l5x.RoutineLogic{}
+	for k, r := range l.Routines {
+		if strings.HasPrefix(k, "AOI:") {
+			out[k] = r
+		}
+	}
+	return out
 }

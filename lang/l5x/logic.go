@@ -51,6 +51,25 @@ func LogicOf(f *File) *Logic {
 			l.Routines[p.Name+"/"+r.Name] = &RoutineLogic{Type: r.Type, Rungs: r.Rungs, Text: r.Text}
 		}
 	}
+	// An Add-On Instruction is logic too: its interface as "tags" under
+	// the AOI: scope and its routines beside the programs'. A changed
+	// block is a changed controller, and deploy treats both kinds of
+	// difference as structural.
+	for _, a := range f.Controller.AOIs {
+		for _, p := range a.Parameters {
+			shape := p.DataType + " " + p.Usage
+			if p.Dimension > 0 {
+				shape = fmt.Sprintf("%s[%d] %s", p.DataType, p.Dimension, p.Usage)
+			}
+			l.Tags["AOI:"+a.Name+"/"+p.Name] = shape
+		}
+		for _, t := range a.LocalTags {
+			addTag("AOI:"+a.Name, t)
+		}
+		for _, r := range a.Routines {
+			l.Routines["AOI:"+a.Name+"/"+r.Name] = &RoutineLogic{Type: r.Type, Rungs: r.Rungs, Text: r.Text}
+		}
+	}
 	return l
 }
 

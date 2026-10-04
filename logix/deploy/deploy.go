@@ -284,7 +284,9 @@ func Run(ctx context.Context, src string, o Options) (*Report, error) {
 	rep.Diffs = l5x.LogicDiff(have, want)
 	rep.Same = len(rep.Diffs) == 0
 	for _, d := range rep.Diffs {
-		if strings.HasPrefix(d, "tag ") {
+		// A tag difference, or any difference in an Add-On Instruction,
+		// is structural: an online rung edit cannot carry it.
+		if strings.HasPrefix(d, "tag ") || strings.Contains(d, "AOI:") {
 			rep.TagsChanged = true
 		}
 	}
