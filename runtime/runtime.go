@@ -237,6 +237,10 @@ type ScanStats struct {
 	IOErrors    uint64 `json:"ioErrors"`
 	LogicErrors uint64 `json:"logicErrors"`
 	LastError   string `json:"lastError,omitempty"` // message of the last main-task fault
+	// DivZero counts divisions (and MODs) by zero evaluated by any task
+	// since start. The VM yields 0 and the scan keeps running, so this is
+	// the only trace a bad divisor leaves — the Logix S:V of nautilus.
+	DivZero     uint64 `json:"divZero"`
 	IOHealthy   bool   `json:"ioHealthy"`
 	LastIOError string `json:"lastIOError,omitempty"`
 
@@ -829,6 +833,7 @@ func (r *Runtime) recordScan(t0, t1, t2, t3 time.Time, periodS float64, first bo
 
 	scanMs := t3.Sub(t0).Seconds() * 1000
 	s.Count++
+	s.DivZero = r.tags.DivZeroCount()
 	s.LastMs = scanMs
 	s.ReadMs = t1.Sub(t0).Seconds() * 1000
 	s.ExecUs = t2.Sub(t1).Seconds() * 1e6

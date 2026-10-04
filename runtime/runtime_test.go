@@ -317,7 +317,7 @@ END_PROGRAM`,
 		// y is seeded: Aux reads it and may win the startup race against
 		// Main's first scan, which is what creates it — the tag model's
 		// read-before-first-write case, whose documented fix is a seed.
-		Tags:   []runtime.TagDef{runtime.Input("x"), runtime.Output("y", runtime.Init(0.0)), runtime.State("z", 0.0)},
+		Tags: []runtime.TagDef{runtime.Input("x"), runtime.Output("y", runtime.Init(0.0)), runtime.State("z", 0.0)},
 		Tasks: []runtime.Task{{
 			Name: "aux",
 			Scan: 3 * time.Millisecond,
@@ -498,5 +498,39 @@ func TestMainTaskFaultKeepsMessage(t *testing.T) {
 	st := rt.Stats()
 	if st.LogicErrors != 1 || !strings.Contains(st.LastError, "MUX selector 5 out of range") {
 		t.Fatalf("want 1 logic error with the MUX message, got %d %q", st.LogicErrors, st.LastError)
+	}
+}
+
+func TestDivideByZeroCountsAndKeepsScanning(t *testing.T) {
+	rt, err := runtime.New(runtime.Options{
+		Program: "PROGRAM P\nVAR_EXTERNAL N : INT; D : INT; RN : REAL; RD : REAL; Q : INT; M : INT; RQ : REAL; Scans : INT; END_VAR\n" +
+			"Q := N / D;\nM := N MOD D;\nRQ := RN / RD;\nScans := Scans + 1;\nEND_PROGRAM\n",
+		Tags: []runtime.TagDef{
+			runtime.State("N", int64(7)), runtime.State("D", int64(0)),
+			runtime.State("RN", 7.0), runtime.State("RD", 0.0),
+			runtime.State("Q", int64(0)), runtime.State("M", int64(0)), runtime.State("RQ", 0.0),
+			runtime.State("Scans", int64(0)),
+		},
+	})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	rt.Scan()
+	st := rt.Stats()
+	if st.LogicErrors != 0 || st.DivZero != 3 {
+		t.Fatalf("after one scan: want 0 logic errors and divZero=3, got %d / %d (%q)", st.LogicErrors, st.DivZero, st.LastError)
+	}
+	rt.Scan()
+	if st = rt.Stats(); st.DivZero != 6 {
+		t.Fatalf("the counter accumulates across scans: want 6, got %d", st.DivZero)
+	}
+	if v := rt.Tags().Snapshot()["Scans"].I; v != 2 {
+		t.Fatalf("the scan kept running: want Scans=2, got %v", v)
+	}
+	rt.Tags().Set("D", int64(2))
+	rt.Tags().Set("RD", 2.0)
+	rt.Scan()
+	if st = rt.Stats(); st.DivZero != 6 {
+		t.Fatalf("a good divisor adds nothing: want 6, got %d", st.DivZero)
 	}
 }

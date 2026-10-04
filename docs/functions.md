@@ -135,8 +135,8 @@ means the block accepts 2+ inputs (the `+` pin in the FBD editor).
 | `ADD` | n-ary numeric | common type | sum |
 | `SUB` | 2 numeric | common type | difference |
 | `MUL` | n-ary numeric | common type | product |
-| `DIV` | 2 numeric | common type | quotient; integer and REAL ÷0 yield 0 and the scan keeps running. This is a deliberate deviation (the standard calls it an error; Codesys and TIA yield IEEE ±Inf) so a bad divisor cannot propagate Inf/NaN through a control loop |
-| `MOD` | 2 INT | INT | remainder; ÷0 yields 0 |
+| `DIV` | 2 numeric | common type | quotient; integer and REAL ÷0 yield 0 and the scan keeps running. This is a deliberate deviation (the standard calls it an error; Codesys and TIA yield IEEE ±Inf) so a bad divisor cannot propagate Inf/NaN through a control loop — and because every seam on the tag bus (`/api/state`, the SSE stream, retained state, `*_test.yaml`) is JSON, which cannot carry Inf or NaN. The fault is not silent: every ÷0 bumps the program's **`divZero`** counter in the scan stats (`/api/state` → `stats.divZero`, controller-wide, counted since start), the way Logix raises `S:V` and keeps running |
+| `MOD` | 2 INT | INT | remainder; ÷0 yields 0 and counts in `divZero` |
 | `MOVE` | 1 any | same | pass-through assignment (FBD wiring aid) |
 | `GT`, `GE`, `LT`, `LE` | 2 comparable | **BOOL** | ordering (numeric or TIME) |
 | `EQ`, `NE` | 2 comparable | **BOOL** | equality |
