@@ -43,10 +43,12 @@ type Options struct {
 	Tags []TagDef
 	// Tasks are additional programs on their own scan rates — IEC
 	// 61131-3's resource/task model (a fast interlock task beside a slow
-	// reporting task). All tasks share the tag store; scans serialize on
-	// one lock so every scan sees a consistent snapshot. The MAIN task
-	// (Program/Scan above) owns field I/O and remains the online-edit
-	// target; task programs are fixed at composition.
+	// reporting task). All tasks share the tag store and run concurrently:
+	// each scan snapshots its externals in, executes privately, and
+	// commits what changed as one unit (see scanview.go), so every scan
+	// sees a consistent store and a fast task never waits behind a slow
+	// one. The MAIN task (Program/Scan above) owns field I/O and remains
+	// the online-edit target; task programs are fixed at composition.
 	Tasks []Task
 	// Clock, when set, replaces the wall clock as the basis for scan dt and
 	// for the IEC timers' NowMs — the two clocks a program can observe. Nil
@@ -154,13 +156,13 @@ type Runtime struct {
 	// Options.AlwaysWriteOutputs): outGen is the tag store's output-write
 	// generation at the last SUCCESSFUL WriteOutputs, so a scan that finds
 	// the same stamp knows the driver already holds exactly these values.
-	// Atomic because takeover() clears outSent from outside scanMu.
+	// Atomic because takeover() clears outSent from outside mainMu.
 	alwaysWrite bool
 	outGen      atomic.Uint64
 	outSent     atomic.Bool
 
 	// inBuf is the delivery map an io.BatchReader driver refills each scan
-	// instead of allocating one. Touched only from Scan, under scanMu.
+	// instead of allocating one. Touched only from Scan, under mainMu.
 	inBuf nio.Values
 
 	// readOK is whether the LAST input read succeeded — the runtime's own
@@ -183,13 +185,15 @@ type Runtime struct {
 	alarmMu sync.Mutex
 	alarms  retain.AlarmRetainer
 
-	// scanMu serializes scan execution across the main task and every
-	// additional task — a scan always sees a consistent tag snapshot.
-	scanMu sync.Mutex
+	// mainMu serializes the MAIN task's Scan — its I/O phases and the
+	// observers that follow — against a second caller of Scan. Additional
+	// tasks do not take it: each Program.Run isolates its own scan
+	// (scanview.go), so tasks never wait on one another.
+	mainMu sync.Mutex
 
-	// obsMu guards onScan/obsNext independently of scanMu: OnScan may be
+	// obsMu guards onScan/obsNext independently of mainMu: OnScan may be
 	// called (registration or cancel) from any goroutine at any time,
-	// including while a scan is in flight. scanMu still serializes the
+	// including while a scan is in flight. mainMu still serializes the
 	// CALLS to registered observers — see fireOnScan.
 	obsMu   sync.Mutex
 	obsNext uint64
@@ -396,17 +400,19 @@ func New(o Options) (*Runtime, error) {
 
 // OnScan registers fn to run at the end of every main-task Scan() — after
 // the program has executed and, if a driver is bound, after outputs have
-// been written to it — so fn observes the tag store exactly as this scan
-// left it. Registered observers run in registration order, synchronously,
-// still holding scanMu: nothing else can be mid-scan while fn runs, which
-// is what lets fn read the store through Tags without racing the next
-// scan. fn must NOT block (it shares the scan budget: a slow observer is a
-// slow scan) and must NOT write field tags (inputs for this cycle already
-// landed in the read phase; a write here would be invisible to the program
-// that just ran and only take effect next scan, which is not what "post-
-// scan" means). Reads are fine and safe — fn runs with scanMu held but NOT
-// t.mu, so Tags.ReadPath/ReadGlobal/Snapshot etc. all work without
-// deadlocking.
+// been written to it — so fn observes the tag store with this scan's
+// results committed. Registered observers run in registration order,
+// synchronously, still holding mainMu: the next main scan cannot start
+// while fn runs. The store only ever holds whole, committed scans (see
+// scanview.go), so fn never sees one half-done; an additional task may
+// commit between two of fn's reads, though — fn that wants one instant
+// takes it with Snapshot/SnapshotInto, one lock. fn must NOT block (it
+// shares the scan budget: a slow observer is a slow scan) and must NOT
+// write field tags (inputs for this cycle already landed in the read
+// phase; a write here would be invisible to the program that just ran and
+// only take effect next scan, which is not what "post-scan" means). Reads
+// are fine and safe — fn runs with mainMu held but NOT t.mu, so
+// Tags.ReadPath/ReadGlobal/Snapshot etc. all work without deadlocking.
 //
 // A panicking observer is recovered and logged rather than propagated: one
 // misbehaving observer (a bug in an alarm engine, say) must not fault the
@@ -443,10 +449,10 @@ func (r *Runtime) OnScan(fn func(*Tags)) (cancel func()) {
 }
 
 // fireOnScan runs every registered OnScan observer, in registration order.
-// Called from Scan() with scanMu already held (see the call site) — that is
+// Called from Scan() with mainMu already held (see the call site) — that is
 // the whole contract OnScan documents, so this only needs to snapshot the
 // observer list (registration can happen concurrently from any goroutine,
-// guarded by obsMu, independent of scanMu) and run it.
+// guarded by obsMu, independent of mainMu) and run it.
 func (r *Runtime) fireOnScan() {
 	r.obsMu.Lock()
 	if len(r.onScan) == 0 {
@@ -532,6 +538,13 @@ func unionGlobals(main *Program, tasks []*taskRun) map[string]*ir.Type {
 	}
 	for _, tr := range tasks {
 		for name, t := range tr.prog.Globals() {
+			if prev, dup := out[name]; dup && t != nil && t.Kind == ir.TypeFB && prev != nil && prev.Kind == ir.TypeFB {
+				// Tasks run concurrently and an FB instance is shared
+				// identity, not a copied value (scanview.go): two tasks
+				// stepping the same instance race on its state.
+				slog.Warn("runtime: function-block instance bound by more than one task; tasks run concurrently and will race on its state",
+					"tag", name, "task", tr.name)
+			}
 			out[name] = t
 		}
 	}
@@ -761,12 +774,12 @@ func (r *Runtime) scanTaskAt(tr *taskRun, due time.Time) {
 	tr.lastScan = now
 	tr.mu.Unlock()
 
-	r.scanMu.Lock()
+	// No resource-wide lock: Program.Run isolates this scan on its own
+	// (snapshot in, commit out), so a task never waits for another.
 	if tr.dtTag != "" {
 		r.tags.SetReal(tr.dtTag, dt)
 	}
 	err := tr.prog.Run(r.tags)
-	r.scanMu.Unlock()
 
 	execS := time.Since(t0).Seconds()
 	tr.mu.Lock()
@@ -806,9 +819,10 @@ func (r *Runtime) scanAt(due time.Time) {
 	r.lastScan = now
 	r.mu.Unlock()
 
-	// The whole cycle excludes other tasks — one consistent tag snapshot.
-	r.scanMu.Lock()
-	defer r.scanMu.Unlock()
+	// One main scan at a time (I/O buffers, observers); additional tasks
+	// run alongside, each isolated by its own Program.Run.
+	r.mainMu.Lock()
+	defer r.mainMu.Unlock()
 
 	// 1. inputs — on a read failure the scan runs on last-known values.
 	var ioErr error
@@ -873,9 +887,9 @@ func (r *Runtime) scanAt(due time.Time) {
 	}
 	t3 := time.Now()
 
-	// 4. observers — the store now holds exactly what this scan left it
-	// (program ran, outputs written), and nothing else can be scanning
-	// (scanMu is still held). See OnScan's doc comment for the contract.
+	// 4. observers — the store now holds what this scan committed (program
+	// ran, outputs written), and no other MAIN scan can start (mainMu is
+	// still held). See OnScan's doc comment for the contract.
 	r.fireOnScan()
 
 	r.recordScan(t0, t1, t2, t3, dt, first, ioErr, logicErr, lateUs(t0, due, dt, r.scan))

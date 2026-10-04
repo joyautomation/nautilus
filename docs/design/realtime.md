@@ -8,8 +8,11 @@ content-planning handoff; kept current on branch `rt-explore`.
 numbers from one desktop (PR #113). Phase 2 item 1 (wake-up) is done on top
 of it: an absolute schedule plus, on Linux, `clock_nanosleep` on a locked
 thread with reduced timer slack — a 1 ms task's p99 start lateness went from
-about a millisecond to 32 µs, and no ticks are dropped. Baselines on the
-spare industrial PCs and an ARM board are pending (see "Open items").
+about a millisecond to 32 µs, and no ticks are dropped. Phase 2 item 2 (per-
+task scan isolation) is done on top of that: a 20 ms task beside the 1 ms
+task no longer delays it (p99 72 µs, 99.95 % of scans run, versus 59 % with
+the old global scan lock). Baselines on the spare industrial PCs and an ARM
+board are pending (see "Open items").
 
 ## Why this exists
 
@@ -37,8 +40,12 @@ claim without a measurement, on stated hardware, with the method written down.**
 - `runtime/runtime.go` `Run`: the main task and each extra task run in their
   own goroutine on a `time.NewTicker(scan)`; `Scan()` / `scanTask()` do
   read → execute → write (extra tasks: execute only; the main task owns driver I/O).
-- `scanMu`: **one mutex serializes every task's scan.** A fast task waits
-  behind a slow one — measured below, it is the single biggest effect.
+- Scan isolation: each `Program.Run` snapshots its VAR_EXTERNAL set in
+  under one read lock, executes against the private copy, and commits what
+  changed under one write lock (`runtime/scanview.go`, Phase 2 item 2).
+  Before that, one mutex (`scanMu`) serialized every task's scan and a fast
+  task waited behind a slow one — measured below as F3, it was the single
+  biggest effect.
 - `ScanStats`: last/min/max/EWMA scan time; read/exec/write split; actual
   `PeriodMs`; `JitterMs` = EWMA of |period − target|; last 180 scan times and
   periods; `Histogram` = scan *execution* time in 2 ms buckets. **Phase 1 added
@@ -266,11 +273,45 @@ the harness.
    desktop and is what item 4 (`SCHED_FIFO`, isolated cores, PREEMPT_RT) is
    for; and Windows/macOS keep the Go timer and its floor until someone
    measures them.
-2. **Lock contention (F3):** per-task scan isolation instead of one `scanMu`.
-   What actually needs mutual exclusion is the shared tag store's write phase;
-   design it (snapshot in, commit out), don't just remove the lock. Measure a
-   1 ms task beside a 20 ms one: the target is the slow task's presence not
-   showing in the fast task's p99 at all.
+2. **Lock contention (F3) — done, branch `rt-task-isolation`.** The global
+   scan lock is gone. Each `Program.Run` now runs against a private
+   `scanView`: the program's externals (its `GlobalsDeep` set, re-derived
+   after an online edit) are copied in under one read lock, the VM executes
+   with no locking at all, and the changed ones are written back under one
+   write lock through the same `writeLocked` path as any write, so
+   generations and equal-value suppression are unchanged. What that keeps:
+   every scan sees one consistent store and lands as one unit; the store
+   only ever holds committed scans (`TestScanCommitsAreAtomic`). What it
+   changes: tasks run concurrently, so two tasks writing one tag resolve by
+   commit order (last wins, as before at scan granularity), a cross-task
+   read-modify-write can lose an update exactly as on any PLC with shared
+   globals, and an FB instance bound as a global in two tasks is shared
+   identity those tasks race on (`New` logs a warning). `OnScan` observers
+   still run with the main task's lock held, but another task may commit
+   between two of their reads; one that wants an instant uses `Snapshot`.
+   The main task keeps a lock of its own (`mainMu`) for its I/O buffers and
+   observers. Virtual time calls scans sequentially, so it is bit-identical;
+   the acceptance suites and `-race` pass.
+
+   **Before/after on the harness (mira1 in use, 60 s, item 1 already in):**
+
+   | run | task | before: scans ran | before: p50 / p99 / p99.9 / max | overruns / missed | after: scans ran | after: p50 / p99 / p99.9 / max | overruns / missed |
+   |---|---|---:|---:|---:|---:|---:|---:|
+   | B full mix | main 1 ms | 51 418 / 60 011 (85.7 %) | 6.1 µs / 264 µs / 928 µs / 2.16 ms | 610 / 8 593 | **59 974 / 60 001 (99.95 %)** | **6.8 µs / 72 µs / 624 µs / 2.48 ms** | 30 / 27 |
+   | B full mix | fast2 10 ms | 5 951 / 6 001 | 8.8 µs / 5.12 ms / 9.22 ms / 9.96 ms | 132 / 50 | **6 000 / 6 000** | 9.8 µs / 86 µs / 496 µs / 1.91 ms | 0 / 0 |
+   | B full mix | slow 100 ms | 600 / 600 | 9.8 µs / 68 µs / 376 µs / 372 µs | 0 / 0 | 599 / 600 | 12.5 µs / 82 µs / 1.34 ms / 1.34 ms | 0 / 0 |
+   | A fast alone | main 1 ms | 60 003 / 60 005 | 6.2 µs / 31.5 µs / 344 µs / 2.53 ms | 15 / 2 | 59 992 / 60 001 | 6.1 µs / 28 µs / 312 µs / 2.37 ms | 16 / 9 |
+
+   Run A is unchanged within noise, as it should be. In run B the 20 ms task
+   no longer appears in the fast task's numbers at all; the gap that is left
+   between B and A (p99 72 vs 28 µs, p99.9 624 vs 312 µs) tracks the GC the
+   slow task's loop provokes (3 889 collections in 60 s against 25 in A),
+   which is item 3. Raw reports:
+   `docs/design/realtime/2026-10-03-mira1-prelim-after-item2/`.
+
+   The isolation test (`TestFastTaskDoesNotWaitForSlowTask`) pins the
+   property directly: a 1 ms task scanned while a ~70 ms main scan is in
+   flight returns in a fraction of that time.
 3. **Allocation-free scan path (F4):** profile allocations in the VM on the
    `FOR … SQRT()` loop and the string task; drive the per-call allocations to
    0; then `GOGC`/`GOMEMLIMIT` guidance. Report GC pause count and max before/after.
@@ -359,8 +400,14 @@ each against the 5-minute idle-box runs before quoting it.
   scans anywhere in a 1 ms window; the fix is an absolute schedule and the
   kernel's own absolute sleep, not a real-time kernel"** — evidence: F1 and
   the wake-up table. This is the first before/after story (N-72).
-- **Do not claim** fast tasks are isolated from slow ones: they are not (F3).
-  That is the second before/after story, and the better video.
+- **"A slow task no longer delays a fast one: with a 20 ms task every 100 ms
+  beside a 1 ms task, the fast task keeps 99.95 % of its scans and a 72 µs
+  p99, where the old global scan lock left it 59 % and 27 ms"** — evidence:
+  item 2's table (and run B before item 1 for the 59 % / 27 ms). The second
+  before/after story (N-73). State the shared-globals rule honestly: last
+  commit wins, as on any PLC.
+- **Do not claim** anything about GC yet: a loop-heavy task still costs the
+  fast task its p99.9 (item 3).
 
 ## Open items
 
