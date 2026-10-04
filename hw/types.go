@@ -234,7 +234,7 @@ var Types = []Type{
 		{Name: "ServicesDown", Kind: ir.TypeInt, Desc: "expected services not running"},
 		{Name: "Fault", Kind: ir.TypeBool, Desc: "Missing, Conflict or Unexpected"},
 	}},
-	{Name: "Alerts", Desc: "what the site's own Prometheus rules say about one entity, this tick", Fields: []Field{
+	{Name: "PromAlerts", Desc: "what the site's own Prometheus rules say about one entity, this tick", Fields: []Field{
 		{Name: "Firing", Kind: ir.TypeInt, Desc: "alerts firing with this entity's identity label"},
 		{Name: "Critical", Kind: ir.TypeInt},
 		{Name: "Warning", Kind: ir.TypeInt},
@@ -242,7 +242,7 @@ var Types = []Type{
 		{Name: "AnyWarning", Kind: ir.TypeBool},
 		{Name: "Worst", Kind: ir.TypeString, Desc: "the name of one firing alert, critical first"},
 	}},
-	{Name: "Ring", Desc: "one G.8032 ERPS ring", Fields: []Field{
+	{Name: "ErpsRing", Desc: "one G.8032 ERPS ring", Fields: []Field{
 		{Name: "Online", Kind: ir.TypeBool},
 		{Name: "Idle", Kind: ir.TypeBool, Desc: "every member reads Idle: whole, RPL blocked"},
 		{Name: "SignalFail", Kind: ir.TypeBool, Desc: "any member reports Signal Fail"},
@@ -253,7 +253,7 @@ var Types = []Type{
 		{Name: "Stale", Kind: ir.TypeBool, Desc: "FactsAgeS past 15 minutes"},
 		{Name: "Fault", Kind: ir.TypeBool, Desc: "not Idle"},
 	}},
-	{Name: "Service", Desc: "one probed endpoint", Fields: []Field{
+	{Name: "Probe", Desc: "one probed endpoint", Fields: []Field{
 		{Name: "Online", Kind: ir.TypeBool},
 		{Name: "Kind", Kind: ir.TypeString, Desc: "http | tcp"},
 		{Name: "Target", Kind: ir.TypeString},

@@ -7,14 +7,6 @@
 *)
 
 TYPE
-  Alerts : STRUCT
-    Firing : DINT;
-    Critical : DINT;
-    Warning : DINT;
-    AnyCritical : BOOL;
-    AnyWarning : BOOL;
-    Worst : STRING;
-  END_STRUCT;
   CPU : STRUCT
     Model : STRING;
     Cores : DINT;
@@ -70,6 +62,17 @@ TYPE
     PredictedFailure : BOOL;
     TempC : REAL;
     Present : BOOL;
+  END_STRUCT;
+  ErpsRing : STRUCT
+    Online : BOOL;
+    Idle : BOOL;
+    SignalFail : BOOL;
+    RplBlocked : BOOL;
+    PortsForwarding : DINT;
+    Members : DINT;
+    FactsAgeS : REAL;
+    Stale : BOOL;
+    Fault : BOOL;
   END_STRUCT;
   Fan : STRUCT
     Name : STRING;
@@ -135,16 +138,23 @@ TYPE
     OutputW : REAL;
     CapacityW : REAL;
   END_STRUCT;
-  Ring : STRUCT
+  Probe : STRUCT
     Online : BOOL;
-    Idle : BOOL;
-    SignalFail : BOOL;
-    RplBlocked : BOOL;
-    PortsForwarding : DINT;
-    Members : DINT;
-    FactsAgeS : REAL;
-    Stale : BOOL;
+    Kind : STRING;
+    Target : STRING;
+    Up : BOOL;
+    DurationS : REAL;
+    HttpStatus : DINT;
+    Expected : STRING;
     Fault : BOOL;
+  END_STRUCT;
+  PromAlerts : STRUCT
+    Firing : DINT;
+    Critical : DINT;
+    Warning : DINT;
+    AnyCritical : BOOL;
+    AnyWarning : BOOL;
+    Worst : STRING;
   END_STRUCT;
   Server : STRUCT
     Online : BOOL;
@@ -165,16 +175,6 @@ TYPE
     FanCount : DINT;
     PsuCount : DINT;
     TempCount : DINT;
-  END_STRUCT;
-  Service : STRUCT
-    Online : BOOL;
-    Kind : STRING;
-    Target : STRING;
-    Up : BOOL;
-    DurationS : REAL;
-    HttpStatus : DINT;
-    Expected : STRING;
-    Fault : BOOL;
   END_STRUCT;
   Switch : STRUCT
     Online : BOOL;

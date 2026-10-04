@@ -266,7 +266,9 @@ Added 2026-10-04 for argonaut, the 3D operator view for clusters, which reads a 
 the manifest *expects* and the cluster does or does not do; the expectation members
 (`Missing`, `Conflict`, `Unexpected`, `Displaced`) are computed from a placement query no
 exporter emits, because absence is not a value an exporter has. Same contract rules: add
-members, never rename or reorder.
+members, never rename or reorder. Names are specific (`Probe`, `PromAlerts`, `ErpsRing`)
+because every IT import writes the whole set into a project's `hw_types.st`, where a
+project's own `Service` or `Ring` type would collide.
 
 | Member | Type | Unit | Notes |
 |---|---|---|---|
@@ -279,16 +281,16 @@ members, never rename or reorder.
 | `VM.UptimeS` | DINT | s | |
 | `VM.ClockOffsetS` | REAL | s | |
 | `VM.ServicesDown` | DINT | | expected services not running |
-| `Ring.Online`, `Idle`, `SignalFail`, `RplBlocked`, `Stale`, `Fault` | BOOL | | G.8032 ERPS; Idle = whole, RPL blocked at both ends |
-| `Ring.PortsForwarding`, `Members` | DINT | | |
-| `Ring.FactsAgeS` | REAL | s | age of the collector's last write |
-| `Service.Online`, `Up`, `Fault` | BOOL | | a probed endpoint |
-| `Service.Kind`, `Target`, `Expected` | STRING | | http \| tcp; the URL or address |
-| `Service.DurationS` | REAL | s | |
-| `Service.HttpStatus` | DINT | | |
-| `Alerts.Firing`, `Critical`, `Warning` | DINT | | the site's own firing Prometheus alerts, placed on the entity by its identity label |
-| `Alerts.AnyCritical`, `AnyWarning` | BOOL | | |
-| `Alerts.Worst` | STRING | | the name of one firing alert, critical first |
+| `ErpsRing.Online`, `Idle`, `SignalFail`, `RplBlocked`, `Stale`, `Fault` | BOOL | | G.8032 ERPS; Idle = whole, RPL blocked at both ends |
+| `ErpsRing.PortsForwarding`, `Members` | DINT | | |
+| `ErpsRing.FactsAgeS` | REAL | s | age of the collector's last write |
+| `Probe.Online`, `Up`, `Fault` | BOOL | | a probed endpoint |
+| `Probe.Kind`, `Target`, `Expected` | STRING | | http \| tcp; the URL or address |
+| `Probe.DurationS` | REAL | s | |
+| `Probe.HttpStatus` | DINT | | |
+| `PromAlerts.Firing`, `Critical`, `Warning` | DINT | | the site's own firing Prometheus alerts, placed on the entity by its identity label |
+| `PromAlerts.AnyCritical`, `AnyWarning` | BOOL | | |
+| `PromAlerts.Worst` | STRING | | the name of one firing alert, critical first |
 | `IncusCluster.MembersTotal`, `MembersOnline`, `HealingThreshold`, `InstancesRunning` | DINT | | |
 | `IncusCluster.Online`, `Fault` | BOOL | | |
 | `CephCluster.HealthStatus` | DINT | | 0 OK, 1 WARN, 2 ERR |
