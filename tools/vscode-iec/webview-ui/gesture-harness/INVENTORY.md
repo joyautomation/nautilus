@@ -32,18 +32,18 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 153 rows. **12 rows have no coverage at all** (no webview test,
+Totals: 153 rows. **4 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
 |---|---|---|
-| Commands | 28 | 4 |
+| Commands | 28 | 1 |
 | FBD `?` | 18 | 0 |
 | Ladder `?` | 20 | 0 |
 | SFC `?` | 22 | 0 |
 | Mimic `?` | 18 | 0 |
 | Component `?` | 8 | 0 |
-| Other claims | 39 | 8 |
+| Other claims | 39 | 3 |
 
 ## Commands (package.json `contributes.commands`)
 
@@ -54,12 +54,12 @@ no rig verb, no smoke check); per section below.
 | C03 | Extension (Palette) | Show which naut is in use and its version | package.json command `nautilus.showCliInfo` | — | — | 12 |
 | C04 | Extension (Palette) | Restart the language server | package.json command `nautilus.restartLanguageServer` | — | — | 12 |
 | C05 | Extension (Palette; Live Values view title) | Connect to a controller (set the runtime URL) | package.json command `nautilus.connect` | — | — | 12 |
-| C06 | Extension (Palette; editor context menu; Live Values item inline) | Write a new value to a tag (right-click an identifier, or the pencil in the Live Values panel) | package.json command `nautilus.setValue` | — | — | — |
+| C06 | Extension (Palette; editor context menu; Live Values item inline) | Write a new value to a tag (right-click an identifier, or the pencil in the Live Values panel) | package.json command `nautilus.setValue` | — | — | 13 |
 | C07 | Extension (Live Values view title (hidden from palette)) | Refresh the Live Values panel | package.json command `nautilus.liveValues.refresh` | — | — | 12 |
 | C08 | Extension (Palette) | Download the program to the controller (online edit, with confirmation) | package.json command `nautilus.program.download` | — | — | 08 |
-| C09 | Extension (Palette) | Diff the program with the controller | package.json command `nautilus.program.diff` | — | — | — |
+| C09 | Extension (Palette) | Diff the program with the controller | package.json command `nautilus.program.diff` | — | — | 16 |
 | C10 | Extension (Palette) | Roll back the controller program | package.json command `nautilus.program.rollback` | — | — | 08 |
-| C11 | Extension (Palette) | Pull the program from the controller | package.json command `nautilus.program.pull` | — | — | — |
+| C11 | Extension (Palette) | Pull the program from the controller | package.json command `nautilus.program.pull` | — | — | 16 |
 | C12 | Extension (Text editor title; Palette) | Open the FBD diagram beside the text | package.json command `nautilus.fbd.preview` | — | — | 03, 07 |
 | C13 | Extension (Text editor title; Palette) | Open the ladder diagram beside the text (also an L5X) | package.json command `nautilus.ld.preview` | — | — | 10 |
 | C14 | Extension (Text editor title; Palette) | Open the SFC diagram beside the text | package.json command `nautilus.sfc.preview` | — | — | 03 |
@@ -203,16 +203,16 @@ no rig verb, no smoke check); per section below.
 | X08 | Extension | Diagrams follow the VS Code theme (light, dark, high contrast) | CHANGELOG 0.10.0 | diagram.test.mjs: Theme: (x3) | — | 11 |
 | X09 | Extension | Live pill: green when a controller is reachable, amber offline; click toggles live values | README Live values | gestures.test.mjs: the live pill reflects nautilus.liveValues.enabled and toggles it | — | 07 |
 | X10 | Extension | Live values paint on FBD, ladder (power flow) and SFC (active step) | README Live values | — | — | 07 |
-| X11 | Extension | Inline live-value pills beside identifiers in .st/.fbd/.ld/.sfc text | README Live values | — | — | — |
-| X12 | Extension | Live Values panel lists every tag and local with its value | README Live values | — | — | — |
+| X11 | Extension | Inline live-value pills beside identifiers in .st/.fbd/.ld/.sfc text | README Live values | — | — | 13 (.st, .fbd, .ld text; not .sfc) |
+| X12 | Extension | Live Values panel lists every tag and local with its value | README Live values | — | — | 13 |
 | X13 | Extension | Status-bar item shows whether the file matches the controller | README Online edit | — | — | 08 |
 | X14 | Extension | Download and Rollback ask for confirmation naming URL and program; nautilus.confirmControllerWrites=false skips it | README Online edit | — | — | 08 |
 | X15 | Extension | Missing-CLI prompt Install naut; min-version warning (Update naut / Don't show again) | README Get started | — | — | 01, 02 |
 | X16 | Extension | Walkthrough opens once, outside a nautilus project | README Get started | — | — | 01 |
 | X17 | Extension | Diagnostics as you type in .st/.fbd/.ld/.sfc (naut lsp) | README Language intelligence | — | — | 01 |
-| X18 | Extension | Go to definition, hover and completion in ST | README Language intelligence | — | — | — |
+| X18 | Extension | Go to definition, hover and completion in ST | README Language intelligence | — | — | 14 |
 | X19 | Extension | *_test.yaml suites in the Testing view; run one from the gutter; failure inline on the assertion | README Testing | — | — | — |
-| X20 | Extension | JSON-schema completion and validation for nautilus.yaml, tag, alarm and test files | README Testing | — | — | — |
+| X20 | Extension | JSON-schema completion and validation for nautilus.yaml, tag, alarm and test files | README Testing | — | — | 14 (nautilus.yaml and *_test.yaml; tag and alarm files not exercised) |
 | X21 | Extension | Hidden command nautilus.fb.monitor (registered in extension.ts, not contributed in package.json) | src/extension.ts:158 | — | — | — |
 | X22 | Ladder | L5X opens read-only: pill, no palette, edits do nothing | README Rockwell L5X | diagram.test.mjs: Ladder: an L5X model is read-only | — | 10 |
 | X23 | Ladder | Declare offer (amber declare …) files an undeclared identifier under VAR_EXTERNAL or VAR | CHANGELOG 0.10.0 | diagram.test.mjs: Ladder: the declare offer covers a block call's arguments | ld_declare | — |
@@ -231,11 +231,11 @@ no rig verb, no smoke check); per section below.
 | X36 | Mimic | Bind props to tags in the props panel | README HMI mimic editor | — | mimic_bind | — |
 | X37 | Mimic | Pipes snap to ports, follow equipment when it moves, orthogonal route suggested around obstacles | README HMI mimic editor | gestures.test.mjs: draw preview == committed render; terminal ATTACH / DETACH | mimic_pipe | — |
 | X38 | Mimic | Snap to grid (nautilus.mimic.snapToGrid) | README Settings | mimic-more.test.mjs: X38 snapToGrid on lands a drag on the 10 px grid; off moves the exact delta | — | — |
-| X39 | Mimic | Live canvas animates bound props from the controller | README HMI mimic editor | — | — | — |
+| X39 | Mimic | Live canvas animates bound props from the controller | README HMI mimic editor | — | — | 13 |
 
 ## Count of rows with no coverage at all
 
-**12 of 153.** The commands are the thinnest area: only the download /
+**4 of 153.** The commands are the thinnest area: only the download /
 rollback pair (08), the title-bar buttons (04), the previews (03, 07, 10) and
 Show CLI Info, Restart Language Server, Connect and the Live Values Refresh (12)
 are touched by any smoke check, and no webview test can reach a command because
