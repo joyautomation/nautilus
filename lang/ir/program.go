@@ -80,6 +80,12 @@ func NewFrame(prog *Program) *Frame {
 // Frame is a mutable runtime slot vector. One per program instance.
 type Frame struct {
 	Slots []Value
+	// scratch is the argument stack for builtin calls made while this
+	// frame executes: a call reserves a window at the top, evaluates its
+	// arguments into it (nested calls stack above), hands the window to
+	// the builtin, and pops. It grows to the deepest call nesting once and
+	// is never reallocated after, so a scan makes no allocation per call.
+	scratch []Value
 }
 
 // NewFuncFrame allocates a fresh per-call frame for a user FUNCTION,
@@ -92,12 +98,35 @@ func NewFuncFrame(def *FuncDef) *Frame {
 	for i, s := range def.Inputs {
 		slots[i] = s.initial()
 	}
-	for i, s := range def.Locals {
-		slots[len(def.Inputs)+i] = s.initial()
-	}
-	slots[def.ReturnSlot] = Zero(def.ReturnType)
-	return &Frame{Slots: slots}
+	f := &Frame{Slots: slots}
+	def.reinitLocals(f)
+	return f
 }
+
+// reinitLocals puts a frame's locals and return slot back to their
+// declared initial values (IEC: re-initialised on every call). Inputs are
+// left alone — the caller overwrites every one before the body runs.
+func (def *FuncDef) reinitLocals(f *Frame) {
+	for i, s := range def.Locals {
+		f.Slots[len(def.Inputs)+i] = s.initial()
+	}
+	f.Slots[def.ReturnSlot] = Zero(def.ReturnType)
+}
+
+// acquireFrame hands out a call frame for def: a recycled one re-initialised
+// in place, or a fresh one. releaseFrame gives it back once the caller has
+// read the return value. A scalar-only function therefore allocates
+// nothing per call after its first; recursion and concurrent callers each
+// get their own frame because sync.Pool never hands one out twice.
+func (def *FuncDef) acquireFrame() *Frame {
+	if f, ok := def.frames.Get().(*Frame); ok {
+		def.reinitLocals(f)
+		return f
+	}
+	return NewFuncFrame(def)
+}
+
+func (def *FuncDef) releaseFrame(f *Frame) { def.frames.Put(f) }
 
 // GlobalsDeep reports every PLC variable this program binds: its own
 // Globals plus, transitively, the Globals of every FUNCTION_BLOCK instance

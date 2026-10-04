@@ -11,8 +11,11 @@ thread with reduced timer slack — a 1 ms task's p99 start lateness went from
 about a millisecond to 32 µs, and no ticks are dropped. Phase 2 item 2 (per-
 task scan isolation) is done on top of that: a 20 ms task beside the 1 ms
 task no longer delays it (p99 72 µs, 99.95 % of scans run, versus 59 % with
-the old global scan lock). Baselines on the spare industrial PCs and an ARM
-board are pending (see "Open items").
+the old global scan lock). Phase 2 item 3 (allocation-free scan path) is done
+on top of that: the VM makes no allocation per builtin call, user-function
+call or FB step, so a loop-heavy task no longer drives the collector (3 889
+collections a minute → 5; worst pause 2.1 ms → 0.2 ms). Baselines on the
+spare industrial PCs and an ARM board are pending (see "Open items").
 
 ## Why this exists
 
@@ -55,9 +58,11 @@ claim without a measurement, on stated hardware, with the method written down.**
   clock every period is exactly the target, so the lateness tracker records
   zeros and the acceptance path is unchanged (`TestLatenessUnderVirtualClock`).
 - Benchmarks: `runtime/scan_bench_test.go`, `hostdriver_bench_test.go`,
-  `bigstore_bench_test.go`. On the desktop below: a full `Scan()` on the
-  heated-tank program is 2.3 µs and **5 allocations (1 KB)**; the VM alone
-  (`ProgramRun`) is 1.2 µs and 2 allocations.
+  `bigstore_bench_test.go`, `loop_bench_test.go`. On the desktop below,
+  after item 3: a full `Scan()` on the heated-tank program is 1.6 µs and
+  **1 allocation (8 bytes)**; the VM alone (`ProgramRun`) is 1.1 µs and 0
+  allocations. Before item 3 it was 2.3 µs / 5 allocations (1 KB) and
+  1.2 µs / 2.
 - The core is **stdlib only** (HANDOFF.md). Linux syscalls go through `syscall`
   (or a justified, reviewed addition), behind build tags; `naut build`
   cross-compiles, so Windows/macOS must still build with no-ops.
@@ -312,9 +317,60 @@ the harness.
    The isolation test (`TestFastTaskDoesNotWaitForSlowTask`) pins the
    property directly: a 1 ms task scanned while a ~70 ms main scan is in
    flight returns in a fraction of that time.
-3. **Allocation-free scan path (F4):** profile allocations in the VM on the
-   `FOR … SQRT()` loop and the string task; drive the per-call allocations to
-   0; then `GOGC`/`GOMEMLIMIT` guidance. Report GC pause count and max before/after.
+3. **Allocation-free scan path (F4) — done, branch `rt-alloc-free`.** The
+   profile said it all: every builtin call allocated its argument slice
+   (`evalExpr`, 2 per loop iteration in the slow task, 224 KB per scan),
+   every user-FUNCTION call allocated a frame, every user-FB step wrapped
+   its slots in a fresh frame, and `CONCAT` grew its builder piecemeal.
+   Now: arguments go on a scratch stack kept on the executing `Frame`
+   (reserve a window, fill, call, pop; it grows to the deepest nesting once);
+   user-function frames are recycled through a `sync.Pool` per `FuncDef`
+   with locals re-initialised in place (recursion and concurrent callers
+   still get distinct frames); a user FB's body frame is cached on the
+   instance (`FBInstance.StepFrame`, rebuilt only if a migration replaced
+   the slots); `CONCAT` sizes its result once; and the main task reuses its
+   output map (the `io.Driver` contract now says the map is the caller's,
+   which every driver in tree already honoured).
+
+   | benchmark (per scan) | before | after |
+   |---|---:|---:|
+   | `LoopScan`, 1000 iterations of `SQRT(INT_TO_REAL(i))` | 328 µs, 2 000 allocs, 224 KB | **144 µs, 0 allocs** |
+   | `UserFBScan`, one user FB calling `LIMIT` | — | 0.64 µs, 0 allocs |
+   | `ProgramRun` (heated tank) | 1.24 µs, 2 allocs | 1.08 µs, 0 allocs |
+   | `Scan` (heated tank, loopback I/O) | 2.3 µs, 5 allocs, 1 KB | 1.6 µs, 1 alloc, 8 B |
+   | `StringsScan`, 200 × `CONCAT(RIGHT(s,48), INT_TO_STRING(i))` | 91 µs, 1 078 allocs | 40 µs, 301 allocs (the strings themselves) |
+
+   The one allocation left in `Scan` is boxing a float into the driver
+   seam's `map[string]any`; it is 8 bytes and constant, and removing it
+   means a typed output path on the seam, not worth it yet.
+
+   **Before/after on the harness (mira1 in use, 60 s, items 1–2 already in):**
+
+   | run | GC before | GC after | main 1 ms task before | after |
+   |---|---:|---:|---:|---:|
+   | A fast alone | 25 collections, worst pause 115 µs | **1 collection**, 49 µs | p99 28 µs, p99.9 312 µs | p99 60 µs, p99.9 656 µs (desktop noise: nothing allocates in A either way) |
+   | B full mix | **3 889 collections**, 317 ms stop-the-world, worst 2.10 ms | **5 collections**, 0.6 ms, worst 197 µs | p99 72 µs, p99.9 624 µs | **p99 32 µs, p99.9 368 µs** |
+   | C fast + alloc | 82 collections, worst 262 µs | 5 collections, worst 131 µs | p99 32 µs | p99 37 µs |
+
+   Run B's fast task now matches run A's: nothing the slow or allocation
+   task does reaches it any more. Raw reports:
+   `docs/design/realtime/2026-10-03-mira1-prelim-after-item3/`.
+
+   **`GOGC` / `GOMEMLIMIT` guidance.** With the scan path allocation-free,
+   the collector runs for whatever else the process does (the tag API,
+   Sparkplug, a historian). Measured with 50 MB/s of such churn added
+   (`-churn-mb 50`, full mix, 60 s):
+
+   | setting | collections | stop-the-world total | worst pause | heap | main task p99 / p99.9 / max |
+   |---|---:|---:|---:|---:|---:|
+   | `GOGC=100` (default) | 448 | 37 ms | 2.10 ms | 12 MB | 28 µs / 256 µs / 3.2 ms |
+   | `GOGC=off GOMEMLIMIT=256MiB` | 12 | 0.7 ms | 82 µs | 134 MB | 29 µs / 336 µs / 2.3 ms |
+
+   So: the fast task's p99 does not care; the worst pause and the CPU the
+   collector burns do. On a controller with memory to spare, set
+   `GOMEMLIMIT` to what it can have and `GOGC=off` (or a high `GOGC`): the
+   collector then runs only when the heap reaches the limit. On a small
+   box, leave the default — the scan loop itself no longer feeds it.
 4. **Pinning:** `runtime.LockOSThread` + `sched_setaffinity` per task, optional
    `SCHED_FIFO` (needs `CAP_SYS_NICE`; fail loudly, not silently), manifest
    `cpu:` / `priority:` per task, docs for `isolcpus` / `nohz_full` /
@@ -406,8 +462,11 @@ each against the 5-minute idle-box runs before quoting it.
   item 2's table (and run B before item 1 for the 59 % / 27 ms). The second
   before/after story (N-73). State the shared-globals rule honestly: last
   commit wins, as on any PLC.
-- **Do not claim** anything about GC yet: a loop-heavy task still costs the
-  fast task its p99.9 (item 3).
+- **"The scan loop allocates nothing: a 1 000-iteration loop with two
+  builtin calls per iteration makes zero allocations per scan, and a
+  loop-heavy task beside a 1 ms task went from 3 889 collections a minute
+  to 5"** — evidence: item 3's tables. Say "the scan path"; the rest of the
+  process (API, MQTT) still allocates, which is what `GOMEMLIMIT` is for.
 
 ## Open items
 
