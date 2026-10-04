@@ -257,3 +257,36 @@ func TestClientTransportFailure(t *testing.T) {
 		t.Fatalf("refused: %v", err)
 	}
 }
+
+// A transport failure retries a GET, never a POST: an action whose reply
+// was lost may have run, and sent again a server restarts twice.
+func TestClientRetriesReadsOnly(t *testing.T) {
+	var mu sync.Mutex
+	hits := map[string]int{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits[r.Method]++
+		mu.Unlock()
+		// No reply at all: the connection drops, a transport error.
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			conn.Close()
+		}
+	}))
+	defer srv.Close()
+	c, err := NewClient(Source{ID: "X", Host: srv.URL, Retries: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Get(context.Background(), "/redfish/v1/Systems/1"); err == nil {
+		t.Fatal("GET: want a transport error")
+	}
+	if _, err := c.Post(context.Background(), "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset", map[string]string{"ResetType": "GracefulRestart"}); err == nil {
+		t.Fatal("POST: want a transport error")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if hits["GET"] != 3 || hits["POST"] != 1 {
+		t.Fatalf("attempts = %v; want GET 3 (1 + 2 retries), POST 1", hits)
+	}
+}

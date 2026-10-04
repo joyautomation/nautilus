@@ -244,7 +244,11 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (Resp
 		}
 		resp, err := c.sendLocked(ctx, method, path, body)
 		if err != nil {
-			if attempt < c.retries && ctx.Err() == nil && !isTLS(err) {
+			// Only a read is retried. A POST that timed out may well have
+			// run (a reset, a power action): sent again, a server restarts
+			// twice. A 401 below is different: the BMC refused it unrun.
+			idempotent := method == http.MethodGet || method == http.MethodHead
+			if idempotent && attempt < c.retries && ctx.Err() == nil && !isTLS(err) {
 				continue
 			}
 			return Response{}, err
