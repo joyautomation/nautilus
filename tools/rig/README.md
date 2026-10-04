@@ -21,7 +21,9 @@ changes, so they have to be fixed in the same PR as the change.
 tools/rig/
   lib/container.sh   the container: rig_up / rig_run / rig_push(_tree) / rig_down
   lib/lib.sh         capture plumbing: vscode_profile, launch_vscode, vs_cmd,
-                     snap, rec_start, start_controller, cleanup_capture, ...
+                     snap, rec_start, clip_start, start_controller,
+                     cleanup_capture, ...
+  lib/clips-index.sh the per-run review index (clips.html / clips.md), host side
   verbs/prep.sh      per-run setup inside the container (frame, ext_scaffold,
                      ext_open, diagram, the CDP `code` wrapper)
   verbs/gestures.sh  the verbs: semantic targets ("step Fill", "pin IN1 of t1")
@@ -49,6 +51,7 @@ G_PACE=fast tools/rig/selftest.sh          # pointer teleports; what the nightly
 NAUT=… VSIX=… tools/rig/smoke/run.sh       # builds you already have
 NAUTILUS_REF=v0.12.0-rc1 tools/rig/smoke/run.sh   # build a ref, in ../nautilus-smoke
 RIG_KEEP=1 …                               # leave the container up afterwards
+RIG_CLIPS=0 …                              # no review clips (a quicker rehearsal)
 RIG_NAME=nautilus-smoke-$(hostname -s) …   # one container name per concurrent run
 ```
 
@@ -65,6 +68,18 @@ never got as far as a table. Results go to `out/smoke/results.tsv` (check,
 verdict, what, png) and `out/selftest/verbs-selftest.tsv` (n, verb,
 PASS|FAIL|XFAIL|XPASS, detail), each beside its PNG evidence. **Read the PNGs.**
 A verb can pass on the text and still show the wrong picture.
+
+**Clips.** Every smoke check is recorded whole (`out/smoke/<check>.mp4`) and
+every self-test verb on its own (`out/selftest/verbs-NN-<verb>.mp4`, beside
+its PNG), so a run can be watched back for review or a demo. Each run also
+writes `clips.html` (open it: every clip inline, with its verdict and
+evidence PNGs) and `clips.md` into its folder. The nightly's `rig-out-*`
+artifact carries all of it. `lib.sh`'s `clip_start`/`clip_stop` do the
+recording: the root window's capture-frame corner, where `launch_vscode`
+parks VS Code, not the window itself (VS Code relaunches mid-check, and
+context menus and tooltips are separate X windows), 15 fps, pointer drawn,
+fragmented mp4 so a clip survives a check killed by its timeout.
+`RIG_CLIPS=0` turns them off.
 
 ### What goes into the container
 

@@ -8,9 +8,12 @@
 #     NAUT=… VSIX=… tools/rig/smoke/run.sh           # test builds you already have
 #     NAUTILUS_REF=v0.12.0-rc1 tools/rig/smoke/run.sh  # build another ref (build.sh)
 #     RIG_KEEP=1 tools/rig/smoke/run.sh …            # leave the container up after
+#     RIG_CLIPS=0 tools/rig/smoke/run.sh             # no per-check clips (quicker)
 #
 # Output: tools/rig/out/smoke/ (RIG_OUT= moves tools/rig/out) — one PNG per
-# piece of evidence plus results.tsv (check, verdict, what, png). The table
+# piece of evidence plus results.tsv (check, verdict, what, png), one clip
+# per check (<check>.mp4; RIG_CLIPS=0 skips them) and clips.html/clips.md,
+# the review index (check · verdict · clip · PNGs). The table
 # is printed at the end; the exit status is the number of FAILs (capped at 100).
 #
 # Each check is its own script (NN-*.sh, sourcing lib.sh) run inside the
@@ -22,6 +25,7 @@ RIG_DIR=$(cd "$HERE/.." && pwd)                # tools/rig
 REPO=$(cd "$RIG_DIR/../.." && pwd)             # the nautilus checkout
 export RIG_NAME=${RIG_NAME:-nautilus-smoke-rig}
 source "$RIG_DIR/lib/container.sh"
+source "$RIG_DIR/lib/clips-index.sh"
 OUT=${RIG_OUT:-$RIG_DIR/out}/smoke
 
 if [[ -z ${NAUT:-} || -z ${VSIX:-} ]]; then
@@ -65,9 +69,10 @@ for c in "${checks[@]}"; do
   echo; echo "▸ $c"
   # NB: nothing in this command line may contain "vscode-rec" — lib.sh's
   # launch_vscode pkills by that string and would kill this shell.
-  rig_run "cd ~ && DISPLAY=$RIG_DISPLAY timeout 1200 bash ~/smoke/$c.sh 2>&1 | grep -v 'still: '" \
+  rig_run "cd ~ && DISPLAY=$RIG_DISPLAY RIG_CLIPS=${RIG_CLIPS:-1} timeout 1200 bash ~/smoke/$c.sh 2>&1 | grep -v 'still: '" \
     || echo "  ($c exited non-zero)"
-  rig_run "pkill -x naut 2>/dev/null; true"
+  # A check the timeout killed never ran its clip_stop: end its recording.
+  rig_run "pkill -x naut 2>/dev/null; pkill -INT -x ffmpeg 2>/dev/null && sleep 1; true"
 done
 
 PULL=$(mktemp -d)
@@ -75,15 +80,16 @@ incus file pull -r "$RIG_NAME/home/$RIG_USER/out/smoke" "$PULL/" >/dev/null 2>&1
 if [[ $# -gt 0 && -f $OUT/results.tsv ]]; then
   # A subset re-run: replace just those checks' rows and PNGs in the last
   # full run's results, so out/smoke stays one complete picture.
-  for c in "${checks[@]}"; do rm -f "$OUT/$c"-*.png; done
+  for c in "${checks[@]}"; do rm -f "$OUT/$c"-*.png "$OUT/$c.mp4"; done
   { head -1 "$PULL/smoke/results.tsv" | sed 's/$/ (partial re-run: '"${checks[*]}"')/'
     awk -F'\t' -v re="^($(IFS='|'; echo "${checks[*]}"))$" 'NR>1 && $1 !~ re' "$OUT/results.tsv"
     tail -n +2 "$PULL/smoke/results.tsv"; } | awk 'NR==1{print;next}{print | "sort -s -t\"\t\" -k1,1"}' >"$OUT/results.new"
-  cp "$PULL/smoke/"*.png "$OUT/" 2>/dev/null; mv "$OUT/results.new" "$OUT/results.tsv"
+  cp "$PULL/smoke/"*.png "$PULL/smoke/"*.mp4 "$OUT/" 2>/dev/null; mv "$OUT/results.new" "$OUT/results.tsv"
 else
   rm -rf "$OUT"; mkdir -p "$(dirname "$OUT")"; mv "$PULL/smoke" "$OUT"
 fi
 rm -rf "$PULL"
+smoke_clips_index "$OUT"
 
 echo; echo "════ results — $OUT/results.tsv"
 head -1 "$OUT/results.tsv"

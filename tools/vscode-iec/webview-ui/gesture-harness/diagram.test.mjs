@@ -15,10 +15,13 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Browser } from './cdp.mjs';
 import { applyThemeJs } from './themes.mjs';
+import { recordClips } from './clips.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BUNDLE = process.env.DIAGRAM_BUNDLE || join(HERE, '../../media/dist');
 const HEADLESS = process.env.HEADED !== '1';
+// GESTURE_CLIPS=<dir> records each test's run as <dir>/diagram/NN-<slug>.mp4.
+recordClips('diagram');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function open({ state } = {}) {

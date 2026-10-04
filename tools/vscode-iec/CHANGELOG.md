@@ -14,6 +14,11 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   items carry stable names (`nautilus.live`, `nautilus.sync`) and a
   `[name]` tooltip prefix; the SFC delete-step confirm has `data-testid`s.
   Inert unless the variable is set.
+- **Clips of the webview gesture harness.** With `GESTURE_CLIPS=<dir>` set,
+  `npm run test:gestures` records every test's run (CDP screencast, then
+  ffmpeg) as `<dir>/<suite>/NN-<test>.mp4`, with `index.html`/`index.md`
+  listing each clip and its PASS/FAIL. CI uploads them as the
+  `gesture-clips` artifact. Unset, nothing changes.
 
 ### Changed
 

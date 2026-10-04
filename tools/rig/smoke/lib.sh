@@ -17,6 +17,9 @@
 #
 #   <check id>  PASS|FAIL|SKIP|WARN|NOTE  <what>  <evidence png, if any>
 #
+# and the whole check is recorded to ~/out/smoke/<check id>.mp4 (RIG_CLIPS=0
+# skips that), which run.sh lists in out/smoke/clips.html beside the PNGs.
+#
 # and run.sh prints the table at the end. A check that dies part-way leaves
 # the verdicts it reached, then a FAIL for the die.
 
@@ -70,7 +73,12 @@ check() {
 }
 
 # A die() from lib.sh mid-check should still land in the table.
-trap '_rc=$?; (( _rc )) && fail "check aborted (exit $_rc) — see the log above"; cleanup_capture' EXIT
+trap '_rc=$?; (( _rc )) && fail "check aborted (exit $_rc) — see the log above"; clip_stop; cleanup_capture' EXIT
+
+# The whole check is one review clip, out/smoke/<check>.mp4 (lib.sh's
+# clip_start: the root screen, so relaunches and menus are in it too).
+# RIG_CLIPS=0 skips it.
+clip_start "$CHECK"
 
 # shot <name> — snap, prefixed with the check id so out/smoke sorts by check.
 shot() { snap "$CHECK-$1" >/dev/null; echo "$CHECK-$1"; }
