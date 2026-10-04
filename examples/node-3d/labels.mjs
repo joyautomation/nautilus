@@ -3,7 +3,7 @@
 // the racked pair across two empty bay blanks. Print at 100 %.
 //
 //   node labels.mjs [NODE1] > labels/node1.html
-//   HMI_URL=https://mira1.tail913f1.ts.net:9446 node labels.mjs NODE1 > labels/node1.html
+//   HMI_URL=https://your-ar-hmi:9446 node labels.mjs NODE1 > labels/node1.html
 //
 // `url` anchors encode `${HMI_URL}/a/{node}`, the phone-AR asset link any
 // camera app opens; short payloads (`NAUT:{node}/L`) fit the smallest QR
@@ -15,7 +15,8 @@ const require = createRequire(new URL('./hmi/package.json', import.meta.url));
 const QRCode = require('qrcode');
 const profile = JSON.parse(readFileSync(new URL('../../hmi-3d/profiles/supermicro-sys-112b-wr.json', import.meta.url), 'utf8'));
 const node = process.argv[2] ?? 'NODE1';
-const HMI = (process.env.HMI_URL ?? 'https://mira1.tail913f1.ts.net:9446').replace(/\/$/, '');
+// Set HMI_URL to your AR HMI; the default is a placeholder, not a live host.
+const HMI = (process.env.HMI_URL ?? 'https://hmi.example.com:9446').replace(/\/$/, '');
 
 const cards = [];
 for (const [id, a] of Object.entries(profile.anchors ?? {})) {

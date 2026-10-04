@@ -223,7 +223,7 @@ export function checkLink(plant: Plant, link: TopoLink, tags: Record<string, unk
 			reasons.push(`${near.label} sees ${near.lldp.system}${near.lldp.port ? ` ${near.lldp.port}` : ''} over LLDP`);
 			return done('confirmed');
 		}
-		reasons.push(`${near.label} sees ${near.lldp.system}${near.lldp.port ? ` ${near.lldp.port}` : ''} over LLDP, not ${far.device?.hostname ?? far.label}`);
+		reasons.push(`${near.label} sees ${near.lldp.system}${near.lldp.port ? ` ${near.lldp.port}` : ''} over LLDP, not ${far.device?.hostname ?? far.device?.id ?? far.label}`);
 		return done('contradicted');
 	}
 	for (const [near, far] of [

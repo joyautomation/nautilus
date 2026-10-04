@@ -13,7 +13,7 @@ later change to it is a versioned decision, not a refactor.
 UDT instance, a failed PSU is an ISA-18.2 alarm, a rack publishes Sparkplug B
 like a pump skid. Then the 3D view, phone AR, alarms, history and Sparkplug
 all work on a server rack with no special cases — and the server/NOC tier
-(the GB-style clusters) gets its monitoring from the same tool as the plant.
+(the server clusters we deliver) gets its monitoring from the same tool as the plant.
 Three manifest-tier drivers, one shape:
 
 | `driver.type` | Speaks to | Package | Dependency |
@@ -581,7 +581,7 @@ under `examples/it-rack/fixtures/` and `<proto>/testdata/`.
 6. **Real hardware, once**, and recorded (§11): `browse --record` the FS
    S3900 and mira1, `import`, `naut run`, pull a cable, watch `Down` → alarm
    → clear. Then the CyberPower PDU and UPS when the Rev E rack is bought.
-   No GB hardware — those BMCs are a client production system.
+   No client hardware — a client's BMCs are a production system.
 
 ## 10. `examples/it-rack` (Milestone 3)
 

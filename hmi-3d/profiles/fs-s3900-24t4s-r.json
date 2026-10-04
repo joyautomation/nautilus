@@ -6,7 +6,7 @@
 	"frame": "As the server profiles: origin at the bottom centre of the port face, +x right looking at the ports, +y up, +z out of the port face; the chassis runs back to z = -depth.",
 	"sources": {
 		"spec": "fs.com S3900-24T4S-R: 1U, 24 x 10/100/1000BASE-T RJ45 + 4 x 10G SFP+, dual PSU; about 440 x 44 x 220 mm",
-		"tags": "it-drivers SNMP import: {node}_PortNN SwitchPort tags in ifIndex order (GigaEthernet0/1-24 = Port01-24, TGigaEthernet0/25-28 = Port25-28), checked against hq-sw1's live ifName",
+		"tags": "it-drivers SNMP import: {node}_PortNN SwitchPort tags in ifIndex order (GigaEthernet0/1-24 = Port01-24, TGigaEthernet0/25-28 = Port25-28), checked against a live S3900's ifName",
 		"unverified": "Port face layout from fs.com's product photo (James, 2026-09-30), positions scaled from it, not measured: three blocks of four RJ45 columns (odd ports on top), the four SFP+ cages in one row level with the lower RJ45 row, 25 to 28 left to right. The console port and the LED panel are not drawn. The depth is not measured."
 	},
 	"size": [

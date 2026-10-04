@@ -256,7 +256,9 @@
 	// them: off by default (a placement guide, not part of the server),
 	// drawn from the same payloads as ../../labels.mjs so the model matches
 	// the sheet.
-	const AR_HMI = 'https://mira1.tail913f1.ts.net:9446';
+	// Set VITE_AR_HMI_URL at build time to your AR HMI; the default is a
+	// placeholder, not a live host.
+	const AR_HMI = import.meta.env.VITE_AR_HMI_URL ?? 'https://hmi.example.com:9446';
 	let codes = $state(params.has('codes'));
 	let codeImages = $state<Record<string, string>>({});
 	let codesFor = '';

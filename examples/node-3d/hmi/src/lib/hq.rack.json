@@ -3,7 +3,7 @@
 	"units": 24,
 	"depth": 700,
 	"base": 60,
-	"note": "Not racked yet: the cluster runs on a bench and the customer racks it in free space, so the units are a default (from the cluster-hq session, 2026-09-29): the three switches on top, 3 x 1U, ports on the FRONT face (power at the rear); node1..3 directly below, drive bays front, NIC cages and BMC at the rear.",
+	"note": "Not racked yet: the cluster runs on a bench, so the units are a default: the three switches on top, 3 x 1U, ports on the FRONT face (power at the rear); node1..3 directly below, drive bays front, NIC cages and BMC at the rear.",
 	"devices": [
 		{
 			"id": "sw1",

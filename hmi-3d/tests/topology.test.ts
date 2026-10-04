@@ -98,11 +98,11 @@ describe('the live check', () => {
 	});
 	it('confirmed: LLDP names the declared neighbour; contradicted when it names another', () => {
 		const ring = link('sw1/te0/27');
-		const ok = checkLink(plant, ring, { SW1_Port27: { ...swUp(10000), LldpSystem: 'hq-sw2', LldpPort: 'TGigaEthernet0/28' }, SW2_Port28: swUp(10000) });
+		const ok = checkLink(plant, ring, { SW1_Port27: { ...swUp(10000), LldpSystem: 'sw2', LldpPort: 'TGigaEthernet0/28' }, SW2_Port28: swUp(10000) });
 		expect(ok.verdict).toBe('confirmed');
-		const bad = checkLink(plant, ring, { SW1_Port27: { ...swUp(10000), LldpSystem: 'hq-sw3' }, SW2_Port28: swUp(10000) });
+		const bad = checkLink(plant, ring, { SW1_Port27: { ...swUp(10000), LldpSystem: 'sw3' }, SW2_Port28: swUp(10000) });
 		expect(bad.verdict).toBe('contradicted');
-		expect(bad.reasons).toEqual(['sw1 te0/27 sees hq-sw3 over LLDP, not hq-sw2']);
+		expect(bad.reasons).toEqual(['sw1 te0/27 sees sw3 over LLDP, not sw2']);
 	});
 	it('confirmed: the server port’s MAC is learned on the switch port', () => {
 		const c = checkLink(plant, l, { NODE1_Nic_Slot2_P2: { ...up(10), MAC: '90:5a:08:00:00:01' }, SW1_Port25: { ...swUp(10000), Macs: ['90-5A-08-00-00-01'] } });
