@@ -73,6 +73,12 @@ type Options struct {
 	// needs a per-scan refresh in its own right: a watchdog that must be
 	// re-armed, or a bus whose outputs decay without a rewrite.
 	AlwaysWriteOutputs bool
+	// LateThreshold is how far past its target a scan may START before it
+	// counts as late in Lateness (see ScanStats.Lateness). It applies to
+	// the main task and to every Task that does not set its own. Zero
+	// means a tenth of the task's scan interval: 10 ms on a 100 ms task,
+	// 100 µs on a 1 ms task.
+	LateThreshold time.Duration
 	// Coordinator gates the scan loop for redundancy: a standby replica
 	// (IsLeader false) skips scans entirely — no field I/O, no logic — and
 	// performs the takeover sequence (reload retained state, reset program
@@ -89,6 +95,8 @@ type Task struct {
 	Libraries []string      // composed ahead of Program, like Options.Libraries
 	Scan      time.Duration // this task's interval (default 100ms)
 	DtTag     string        // optional measured-dt tag, like Options.DtTag
+	// LateThreshold overrides Options.LateThreshold for this task.
+	LateThreshold time.Duration
 }
 
 // TaskStats is one additional task's health, riding inside ScanStats.
@@ -99,6 +107,8 @@ type TaskStats struct {
 	LastMs      float64 `json:"lastMs"`
 	LogicErrors uint64  `json:"logicErrors"`
 	LastError   string  `json:"lastError,omitempty"`
+	// Lateness is this task's wake-up timing — see Lateness.
+	Lateness Lateness `json:"lateness"`
 }
 
 // taskRun is a compiled Task plus its live scheduling state.
@@ -111,6 +121,7 @@ type taskRun struct {
 	mu       sync.Mutex
 	lastScan time.Time
 	stats    TaskStats
+	late     lateTracker // under mu, like stats
 }
 
 // TagMeta is HMI-facing tag documentation: a human description and the
@@ -187,6 +198,7 @@ type Runtime struct {
 	mu       sync.Mutex
 	lastScan time.Time
 	stats    ScanStats
+	late     lateTracker // the main task's, under mu like stats
 }
 
 // onScanEntry is one registered OnScan observer, identified by an id so
@@ -225,6 +237,12 @@ type ScanStats struct {
 
 	PeriodMs float64 `json:"periodMs"` // actual interval between scans
 	JitterMs float64 `json:"jitterMs"` // EWMA of |period − target|
+
+	// Lateness is the main task's wake-up timing: late-scan and overrun
+	// counters, the worst and percentile lateness, and a log-spaced
+	// histogram of it — cumulative since start. The soft-real-time view
+	// of the loop; PeriodMs/JitterMs above are the live one.
+	Lateness Lateness `json:"lateness"`
 
 	// Retain-store failures surface here the way I/O failures do: a save
 	// that keeps erroring is invisible exactly until the restart that
@@ -299,6 +317,11 @@ func New(o Options) (*Runtime, error) {
 		tr := &taskRun{name: name, prog: tprog, scan: scan, dtTag: td.DtTag}
 		tr.stats.Name = name
 		tr.stats.TargetMs = scan.Seconds() * 1000
+		lt := td.LateThreshold
+		if lt <= 0 {
+			lt = o.LateThreshold
+		}
+		tr.late.thresholdUs = lateThresholdS(lt.Seconds(), scan.Seconds()) * 1e6
 		tasks = append(tasks, tr)
 	}
 
@@ -363,6 +386,7 @@ func New(o Options) (*Runtime, error) {
 	// output generation Scan reads (see Tags.markOutputs).
 	tags.markOutputs(o.Outputs)
 	r.stats.TargetMs = o.Scan.Seconds() * 1000
+	r.late.thresholdUs = lateThresholdS(o.LateThreshold.Seconds(), o.Scan.Seconds()) * 1e6
 	r.stats.IOHealthy = true
 	r.stats.Recent = make([]float64, 0, historyLen)
 	r.stats.Periods = make([]float64, 0, historyLen)
@@ -703,7 +727,8 @@ func (r *Runtime) scanTask(tr *taskRun) {
 	now := r.now(t0) // dt basis: the injected clock under test, else t0
 	tr.mu.Lock()
 	dt := tr.scan.Seconds()
-	if !tr.lastScan.IsZero() {
+	first := tr.lastScan.IsZero()
+	if !first {
 		dt = now.Sub(tr.lastScan).Seconds()
 	}
 	tr.lastScan = now
@@ -716,9 +741,13 @@ func (r *Runtime) scanTask(tr *taskRun) {
 	err := tr.prog.Run(r.tags)
 	r.scanMu.Unlock()
 
+	execS := time.Since(t0).Seconds()
 	tr.mu.Lock()
 	tr.stats.Count++
-	tr.stats.LastMs = time.Since(t0).Seconds() * 1000
+	tr.stats.LastMs = execS * 1000
+	if !first {
+		tr.late.record(dt, tr.scan.Seconds(), execS)
+	}
 	if err != nil {
 		tr.stats.LogicErrors++
 		tr.stats.LastError = err.Error()
@@ -857,6 +886,7 @@ func (r *Runtime) recordScan(t0, t1, t2, t3 time.Time, periodS float64, first bo
 			s.JitterMs = s.JitterMs*0.95 + j*0.05
 		}
 		s.Periods = pushSample(s.Periods, periodMs)
+		r.late.record(periodS, r.scan.Seconds(), scanMs/1000)
 	}
 	s.Recent = pushSample(s.Recent, scanMs)
 	b := int(scanMs / histBucketMs)
@@ -895,10 +925,13 @@ func (r *Runtime) Stats() ScanStats {
 	s.Recent = append([]float64(nil), r.stats.Recent...)
 	s.Periods = append([]float64(nil), r.stats.Periods...)
 	s.Histogram = append([]int(nil), r.stats.Histogram...)
+	s.Lateness = r.late.snapshot()
 	r.mu.Unlock()
 	for _, tr := range r.tasks {
 		tr.mu.Lock()
-		s.Tasks = append(s.Tasks, tr.stats)
+		ts := tr.stats
+		ts.Lateness = tr.late.snapshot()
+		s.Tasks = append(s.Tasks, ts)
 		tr.mu.Unlock()
 	}
 	return s
