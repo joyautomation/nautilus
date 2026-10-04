@@ -39,6 +39,13 @@ type Program struct {
 	prevSource string
 	prevProg   *ir.Program
 	prevFrame  *ir.Frame
+
+	// view is the scan's private window onto the tag store (see scanview.go)
+	// and exts the VAR_EXTERNAL names it copies in — derived from prog, and
+	// re-derived when a swap replaces it (extsFor is the prog they belong to).
+	view    *scanView
+	exts    []string
+	extsFor *ir.Program
 }
 
 // fbdBlockRe detects a Function Block Diagram netlist in program source: an
@@ -142,11 +149,27 @@ func (p *Program) POU() string {
 	return POUOf(p.source)
 }
 
-// Run executes one scan of the program against the tag store.
+// Run executes one scan of the program against the tag store: the
+// program's externals are snapshotted in, the VM runs against the copy,
+// and what changed is committed back as one unit — see scanView. Calls on
+// one Program serialise; different Programs run concurrently.
 func (p *Program) Run(tags *Tags) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if err := ir.Run(p.prog, p.frame, tags); err != nil {
+	if p.view == nil || p.view.store != tags {
+		p.view = newScanView(tags)
+	}
+	if p.extsFor != p.prog {
+		p.exts = p.exts[:0]
+		for name := range p.prog.GlobalsDeep() {
+			p.exts = append(p.exts, name)
+		}
+		p.extsFor = p.prog
+	}
+	p.view.snapshot(p.exts)
+	err := ir.Run(p.prog, p.frame, p.view)
+	p.view.commit()
+	if err != nil {
 		p.lastErr = err.Error()
 		return err
 	}
