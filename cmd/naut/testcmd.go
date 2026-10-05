@@ -91,7 +91,7 @@ func runTest(args []string) int {
 	asJSON := fs.Bool("json", false, "emit one NDJSON event per test (for editors and CI tooling)")
 	list := fs.Bool("list", false, "list the tests (suite, name, line) without running them")
 	manifest := fs.String("m", "", manifestFlagUsage)
-	target := fs.String("target", "", "run the scenarios against the deployed controller instead of the nautilus runtime: \"logix\" drives the project's target: logix controller over EtherNet/IP, in real time")
+	target := fs.String("target", "", "run the scenarios against the deployed controller instead of the nautilus runtime (experimental): \"logix\" drives the project's target: logix controller over EtherNet/IP, in real time")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

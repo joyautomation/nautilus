@@ -63,6 +63,24 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   the outline. Comes from `naut lsp` (`textDocument/documentSymbol`). An
   older `naut` leaves the outline empty, as before.
 
+- **Ladder: the assignment element `{ y := expr }`.** A rung can make an
+  assignment where it has power — `Run { Hours := Hours + ScanH }` — and
+  pass the power on unchanged; several go in one element with `;`. The
+  ladder editor draws it as a box with its text, the palette has a
+  `{ := }` button, and double-clicking edits it with tag completion.
+  Needs a `naut` newer than 0.15.0 to compile.
+
+- **Live values on bits of a word.** A contact or coil on `Status.3` (bit
+  access, new in the language) shows that bit's live state, read out of
+  the word the runtime streams.
+
+- **`nautilus.yaml`: `dialect:`, a tag's `alias:`, and `target: logix`**
+  in the schema, with completion and hover. `dialect: logix` adds blocks
+  with Allen-Bradley semantics (`TONR`); `alias:` is a tag's vendor-side
+  binding (`Local:1:I.Data.3`); `target: logix` names the Logix controller
+  a project is deployed to (experimental — the *Authoring for Logix*
+  guide).
+
 ### Fixed
 
 - **The FB monitor CodeLens shows the real position.** It said "1 of 2"

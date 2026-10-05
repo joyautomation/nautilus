@@ -36,6 +36,7 @@ Usage:
                                        a FUNCTION_BLOCK in lib/. Rungs with
                                        no nautilus form are kept as comments
                                        and reported, never guessed at.
+                                       Experimental, with the Logix target.
   naut logix graph <file.L5X|-> [routine]
                                        Emit an RLL routine's ladder render
                                        model as JSON: the same shape

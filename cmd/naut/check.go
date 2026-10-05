@@ -29,7 +29,7 @@ import (
 func runCheck(args []string) int {
 	fset := flag.NewFlagSet("check", flag.ContinueOnError)
 	manifest := fset.String("m", "", manifestFlagUsage)
-	target := fset.String("target", "", "also check the sources against a deploy target: \"logix\" runs the Allen-Bradley writer's rules, so a construct the L5X writer cannot express is a diagnostic here, not a download failure")
+	target := fset.String("target", "", "also check the sources against a deploy target (experimental): \"logix\" runs the Allen-Bradley writer's rules, so a construct the L5X writer cannot express is a diagnostic here, not a download failure")
 	if err := fset.Parse(args); err != nil {
 		return 2
 	}

@@ -46,11 +46,13 @@ Usage:
                           committed, so what deploys is always readable.
   naut eip <cmd>      EtherNet/IP tools: import (browse a Logix controller
                           and generate types + tag manifest) and browse.
-  naut logix <cmd>    Allen-Bradley Logix tools, all offline: import an
-                          L5X export's UDTs and tags (descriptions included,
-                          which a live browse cannot recover), graph an RLL
-                          routine for the ladder preview, normalize an export
-                          so drift is detectable, info.
+  naut logix <cmd>    Allen-Bradley Logix tools: import an L5X export's
+                          UDTs and tags (descriptions included, which a live
+                          browse cannot recover), graph an RLL routine for
+                          the ladder preview, normalize an export so drift
+                          is detectable, info; with a logixd agent, build,
+                          drift and online edits. Experimental: write and
+                          deploy a nautilus program to a Logix controller.
   naut sparkplug <cmd> Sparkplug B host tools: import (listen to a group
                           and generate types + manifest + tag file), browse,
                           and tags (re-derive the tag file, no broker).

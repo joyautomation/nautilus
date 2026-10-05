@@ -9,6 +9,9 @@ watch live values and write setpoints from your editor.
 
 **Nothing about the runtime changes.** Logix stays the controller and the
 program of record; nautilus supplies the software engineering around it.
+(The other direction, writing the logic in nautilus and generating the
+Logix project from it, is [Authoring for Logix](/guides/logix-authoring/),
+which is experimental.)
 
 There are two halves, and the first needs nothing from Rockwell at all.
 
