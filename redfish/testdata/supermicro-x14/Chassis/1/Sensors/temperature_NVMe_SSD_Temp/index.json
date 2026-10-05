@@ -1,0 +1,22 @@
+{
+    "@odata.type": "#Sensor.v1_7_0.Sensor",
+    "Id": "temperature_NVMe_SSD_Temp",
+    "Name": "NVMe SSD Temp",
+    "Reading": 38,
+    "ReadingUnits": "Cel",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "ReadingType": "Temperature",
+    "PhysicalContext": "StorageDevice",
+    "Thresholds": {
+        "UpperCaution": {
+            "Reading": 70
+        },
+        "UpperCritical": {
+            "Reading": 75
+        }
+    },
+    "@odata.id": "/redfish/v1/Chassis/1/Sensors/temperature_NVMe_SSD_Temp"
+}

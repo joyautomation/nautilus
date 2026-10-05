@@ -1,0 +1,82 @@
+# Acceptance tests for the rack — no devices, virtual time. Every
+# driver-fed tag is role: input, so `given:` writes the driver's input
+# image directly: a port going down, a fan stopping, a sensor crossing
+# its critical threshold are one line each, and the alarm rules answer.
+#
+# rack.st reads every port, the switch and the host each scan (under their
+# __Online guards), and an input the harness has never been given faults
+# the scan — so the first test's `given:` is the baseline every other test
+# merges (`<<: *rack`): both companions true, every struct at zero.
+tolerance: 0.5
+
+tests:
+  - name: PortsUp / PortsDown count links, only while the switch answers
+    given: &rack {
+      SW1__Online: true, MIRA1__Online: true,
+      SW1.Fault: false, SW1.TempC: 0.0, MIRA1.Fault: false, MIRA1.MaxTempC: 0.0,
+      SW1_Port01.OperUp: false, SW1_Port02.OperUp: false, SW1_Port03.OperUp: false, SW1_Port04.OperUp: false,
+      SW1_Port05.OperUp: false, SW1_Port06.OperUp: false, SW1_Port07.OperUp: false, SW1_Port08.OperUp: false,
+      SW1_Port09.OperUp: false, SW1_Port10.OperUp: false, SW1_Port11.OperUp: false, SW1_Port12.OperUp: false,
+      SW1_Port13.OperUp: false, SW1_Port14.OperUp: false, SW1_Port15.OperUp: false, SW1_Port16.OperUp: false,
+      SW1_Port17.OperUp: false, SW1_Port18.OperUp: false, SW1_Port19.OperUp: false, SW1_Port20.OperUp: false,
+      SW1_Port21.OperUp: false, SW1_Port22.OperUp: false, SW1_Port23.OperUp: false, SW1_Port24.OperUp: false,
+      SW1_Port25.OperUp: false, SW1_Port26.OperUp: false, SW1_Port27.OperUp: false, SW1_Port28.OperUp: false,
+    }
+    steps:
+      - given: { SW1_Port01.OperUp: true, SW1_Port02.OperUp: true, SW1_Port03.OperUp: true, SW1_Port04.AdminUp: true, SW1_Port04.Down: true }
+        scans: 1
+        expect: { PortsUp: 3, PortsDown: 1, DevicesOnline: 2, RackFault: false }
+      - given: { SW1_Port03.OperUp: false, SW1_Port03.Down: true }
+        scans: 1
+        expect: { PortsUp: 2, PortsDown: 2 }
+      # A dark switch keeps its last values (Stale) — the guard is what
+      # zeroes the rollup, not the data.
+      - given: { SW1__Online: false }
+        scans: 1
+        expect: { PortsUp: 0, PortsDown: 0, DevicesOnline: 1, RackFault: true }
+
+  - name: a port that is enabled but has no link alarms after 15 s, and is suppressed while the switch is dark
+    given: { <<: *rack }
+    steps:
+      - given: { SW1_Port03.AdminUp: true, SW1_Port03.OperUp: false, SW1_Port03.Down: true }
+        advance: 15.5s
+        alarms: { active: ["SW1_Port03.Down"] }
+      - ack: { ids: ["SW1_Port03.Down"], by: test }
+        scans: 1
+        alarms: { state: { SW1_Port03.Down: ack-active } }
+      - given: { SW1__Online: false }
+        scans: 1
+        alarms: { active: [], state: { SW1_Port03.Down: suppressed } }
+      - given: { SW1__Online: true, SW1_Port03.OperUp: true, SW1_Port03.Down: false }
+        advance: 1s
+        alarms: { active: [], state: { SW1_Port03.Down: normal } }
+
+  - name: a stopped fan and a critical temperature on the host
+    given: { <<: *rack }
+    steps:
+      - given: { MIRA1_Fan2.Present: true, MIRA1_Fan2.RPM: 0.0, MIRA1_Fan2.Fault: true }
+        advance: 30.5s
+        alarms: { active: ["MIRA1_Fan2.Fault"] }
+      - given: { MIRA1_Temp_Package_id_0.Value: 101.0, MIRA1_Temp_Package_id_0.High: true, MIRA1_Temp_Package_id_0.HighHigh: true }
+        advance: 10.5s
+        alarms: { active: ["MIRA1_Fan2.Fault", "MIRA1_Temp_Package_id_0.HighHigh"] }
+      # Cleared but not acknowledged is still annunciating (Unack-RTN): the
+      # operator has to see it went away. Ack, then it returns to normal.
+      - given: { MIRA1_Fan2.RPM: 1200.0, MIRA1_Fan2.Fault: false, MIRA1_Temp_Package_id_0.Value: 60.0, MIRA1_Temp_Package_id_0.High: false, MIRA1_Temp_Package_id_0.HighHigh: false }
+        advance: 1s
+        alarms: { state: { MIRA1_Fan2.Fault: unack-rtn, MIRA1_Temp_Package_id_0.HighHigh: unack-rtn } }
+      - ack: { ids: ["MIRA1_Fan2.Fault", "MIRA1_Temp_Package_id_0.HighHigh"], by: test }
+        scans: 1
+        alarms: { active: [] }
+
+  - name: the rack's hottest reading and its fault rollup
+    given: { <<: *rack, SW1.TempC: 41.0, MIRA1.MaxTempC: 67.5 }
+    steps:
+      - scans: 1
+        expect: { RackMaxTempC: 67.5, RackFault: false }
+      - given: { MIRA1.Health: 2, MIRA1.Fault: true }
+        advance: 5.5s
+        expect: { RackFault: true }
+        alarms: { active: ["MIRA1.Fault"] }
+      - advance: 30s
+        alarms: { active: ["MIRA1.Fault", "RackFault"] }

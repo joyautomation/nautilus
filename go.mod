@@ -5,6 +5,7 @@ go 1.24.0
 require (
 	github.com/charmbracelet/huh v1.0.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
+	github.com/gosnmp/gosnmp v1.45.0
 	github.com/lib/pq v1.10.9
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	golang.org/x/term v0.35.0

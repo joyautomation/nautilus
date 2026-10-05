@@ -1,0 +1,233 @@
+{
+	"site": "hq",
+	"generated": "2026-09-29T05:13:09Z",
+	"devices": [
+		{
+			"id": "node1",
+			"kind": "server",
+			"profile": "supermicro-sys-112b-wr",
+			"tag": "NODE1"
+		},
+		{
+			"id": "node2",
+			"kind": "server",
+			"profile": "supermicro-sys-112b-wr",
+			"tag": "NODE2"
+		},
+		{
+			"id": "node3",
+			"kind": "server",
+			"profile": "supermicro-sys-112b-wr",
+			"tag": "NODE3"
+		},
+		{
+			"id": "sw1",
+			"kind": "switch",
+			"model": "FS S3900-24T4S-R",
+			"tag": "SW1"
+		},
+		{
+			"id": "sw2",
+			"kind": "switch",
+			"model": "FS S3900-24T4S-R",
+			"tag": "SW2"
+		},
+		{
+			"id": "sw3",
+			"kind": "switch",
+			"model": "FS S3900-24T4S-R",
+			"tag": "SW3"
+		}
+	],
+	"links": [
+		{
+			"kind": "uplink",
+			"a": "node1/nicSlot2p2",
+			"b": "sw1/te0/25",
+			"rateGbps": 10,
+			"evidence": "the switch's MAC table, 2026-09-25",
+			"vlans": {
+				"tagged": [20, 21, 22],
+				"evidence": "the design said 20,21; 22 was added later, for a monitoring VM's out-of-band NIC"
+			}
+		},
+		{
+			"kind": "uplink",
+			"a": "node3/nicSlot2p2",
+			"b": "sw1/te0/26",
+			"rateGbps": 10,
+			"evidence": "the switch's MAC table, 2026-09-25",
+			"vlans": {
+				"tagged": [20, 21, 22],
+				"evidence": "the design said 20,21; 22 was added later, for a monitoring VM's out-of-band NIC"
+			}
+		},
+		{
+			"kind": "bmc",
+			"a": "node1/bmc",
+			"b": "sw1/g0/24",
+			"rateGbps": 1,
+			"evidence": "the switch's MAC table (the BMC's MAC on g0/24)",
+			"vlans": {
+				"native": 22
+			}
+		},
+		{
+			"kind": "uplink",
+			"a": "node2/nicSlot2p2",
+			"b": "sw2/te0/25",
+			"rateGbps": 10,
+			"evidence": "the switch's MAC table, 2026-09-25",
+			"vlans": {
+				"tagged": [20, 21, 22],
+				"evidence": "the design said 20,21; 22 was added later, for a monitoring VM's out-of-band NIC"
+			}
+		},
+		{
+			"kind": "uplink",
+			"a": "node1/nicSlot3p2",
+			"b": "sw2/te0/26",
+			"rateGbps": 10,
+			"evidence": "the switch's MAC table, 2026-09-25",
+			"vlans": {
+				"tagged": [20, 21, 22],
+				"evidence": "the design said 20,21; 22 was added later, for a monitoring VM's out-of-band NIC"
+			}
+		},
+		{
+			"kind": "bmc",
+			"a": "node2/bmc",
+			"b": "sw2/g0/24",
+			"rateGbps": 1,
+			"evidence": "the switch's MAC table (the BMC's MAC on g0/24)",
+			"vlans": {
+				"native": 22
+			}
+		},
+		{
+			"kind": "uplink",
+			"a": "node3/nicSlot3p2",
+			"b": "sw3/te0/25",
+			"rateGbps": 10,
+			"evidence": "the switch's MAC table, 2026-09-25",
+			"vlans": {
+				"tagged": [20, 21, 22],
+				"evidence": "the design said 20,21; 22 was added later, for a monitoring VM's out-of-band NIC"
+			}
+		},
+		{
+			"kind": "uplink",
+			"a": "node2/nicSlot3p2",
+			"b": "sw3/te0/26",
+			"rateGbps": 10,
+			"evidence": "the switch's MAC table, 2026-09-25",
+			"vlans": {
+				"tagged": [20, 21, 22],
+				"evidence": "the design said 20,21; 22 was added later, for a monitoring VM's out-of-band NIC"
+			}
+		},
+		{
+			"kind": "bmc",
+			"a": "node3/bmc",
+			"b": "sw3/g0/24",
+			"rateGbps": 1,
+			"evidence": "the switch's MAC table (the BMC's MAC on g0/24)",
+			"vlans": {
+				"native": 22
+			}
+		},
+		{
+			"kind": "mesh",
+			"a": "node1/nicSlot2p1",
+			"b": "node2/nicSlot3p1",
+			"rateGbps": 25,
+			"evidence": "host-side discovery and a ping across the link",
+			"name": "mesh12",
+			"vlans": null
+		},
+		{
+			"kind": "mesh",
+			"a": "node2/nicSlot2p1",
+			"b": "node3/nicSlot3p1",
+			"rateGbps": 25,
+			"evidence": "host-side discovery and a ping across the link",
+			"name": "mesh23",
+			"vlans": null
+		},
+		{
+			"kind": "mesh",
+			"a": "node1/nicSlot3p1",
+			"b": "node3/nicSlot2p1",
+			"rateGbps": 25,
+			"evidence": "host-side discovery and a ping across the link",
+			"name": "mesh13",
+			"vlans": null
+		},
+		{
+			"kind": "ring",
+			"a": "sw1/te0/27",
+			"b": "sw2/te0/28",
+			"rateGbps": 10,
+			"evidence": "LLDP, both ends (2026-09-28)",
+			"rpl": false,
+			"vlans": {
+				"tagged": [20, 21, 22, 251]
+			}
+		},
+		{
+			"kind": "ring",
+			"a": "sw2/te0/27",
+			"b": "sw3/te0/28",
+			"rateGbps": 10,
+			"evidence": "LLDP, both ends (2026-09-28)",
+			"rpl": false,
+			"vlans": {
+				"tagged": [20, 21, 22, 251]
+			}
+		},
+		{
+			"kind": "ring",
+			"a": "sw3/te0/27",
+			"b": "sw1/te0/28",
+			"rateGbps": 10,
+			"evidence": "LLDP, both ends (2026-09-28)",
+			"rpl": true,
+			"vlans": {
+				"tagged": [20, 21, 22, 251]
+			}
+		},
+		{
+			"kind": "site-uplink",
+			"a": "sw1/g0/1",
+			"b": "site",
+			"rateGbps": 1,
+			"evidence": "the site uplink (trunk VLANs 20/21/22); unplugged after the VLAN cutover",
+			"vlans": {
+				"tagged": [20, 21, 22]
+			}
+		}
+	],
+	"note": "A three-node cluster as recorded from its own switches and design, with MACs, hostnames and subnets removed. The bench trunk used during bring-up is left out. VLANs per link: tagged, and the native where the design says.",
+	"vlans": [
+		{
+			"id": 20,
+			"name": "host-mgmt",
+			"note": "host management: the SET team's vNIC"
+		},
+		{
+			"id": 21,
+			"name": "vm-data",
+			"note": "VM traffic: the Hyper-V switch"
+		},
+		{
+			"id": 22,
+			"name": "oob-mgmt",
+			"note": "out of band: the BMCs"
+		},
+		{
+			"id": 251,
+			"name": "erps-raps",
+			"note": "the ring's R-APS control: L2 between the switches only, never to the site"
+		}
+	]
+}

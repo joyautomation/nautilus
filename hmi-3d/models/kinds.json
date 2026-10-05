@@ -1,0 +1,18 @@
+{
+	"tank": {
+		"model": "models/tank.glb",
+		"drive": [{ "mesh": "Fluid", "scale": { "axis": "y", "to": { "bind": "Level", "scale": 0.0039, "min": 0.005, "max": 0.39 } } }]
+	},
+	"pump": {
+		"model": "models/pump.glb",
+		"drive": [
+			{ "mesh": "Coupling", "spin": { "axis": "x", "revPerS": { "bind": "Speed", "scale": 0.02 } } },
+			{ "mesh": "Motor", "tint": { "bind": "Running", "on": "running" } },
+			{ "mesh": "Volute", "tint": { "bind": "Running", "on": "running" } }
+		]
+	},
+	"valve": {
+		"model": "models/valve.glb",
+		"drive": [{ "mesh": "Handle", "turn": { "axis": "z", "deg": { "bind": "Pos", "scale": -0.9, "offset": 90 } } }]
+	}
+}

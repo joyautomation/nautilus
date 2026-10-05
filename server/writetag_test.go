@@ -233,6 +233,38 @@ func TestMetaAdvertisesMemberWrites(t *testing.T) {
 	}
 }
 
+// A string is a value only a STRING tag takes: a scenario or recipe name
+// lands, a string aimed at a REAL is refused rather than stored as text.
+func TestWriteStringOnlyToStringTag(t *testing.T) {
+	rt, err := runtime.New(runtime.Options{
+		Program: "PROGRAM Test\nVAR_EXTERNAL\n  Scenario : STRING;\n  SP : REAL;\nEND_VAR\nEND_PROGRAM\n",
+		Driver:  nio.NewMemory(),
+		Tags: []runtime.TagDef{
+			runtime.Setpoint("Scenario", "normal"),
+			runtime.Setpoint("SP", 65.0),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := New(rt)
+	if rec := postTag(t, srv, `{"name":"Scenario","value":"port-down"}`); rec.Code != 204 {
+		t.Fatalf("string to STRING: %d %s", rec.Code, rec.Body)
+	}
+	if got := rt.Tags().All()["Scenario"]; got != "port-down" {
+		t.Fatalf("Scenario = %v", got)
+	}
+	if rec := postTag(t, srv, `{"name":"SP","value":"fast"}`); rec.Code != 422 {
+		t.Fatalf("string to REAL: %d", rec.Code)
+	}
+	if rec := postTag(t, srv, `{"name":"Nope","value":"x"}`); rec.Code != 422 {
+		t.Fatalf("string to no tag: %d", rec.Code)
+	}
+	if got := rt.Tags().All()["SP"]; got != 65.0 {
+		t.Fatalf("SP = %v", got)
+	}
+}
+
 // statusErr is a TagWriter refusal that names its own HTTP status.
 type statusErr struct {
 	code int

@@ -379,6 +379,9 @@
 			const pe = ev as PointerEvent;
 			if (!editable || pe.button !== 0) return;
 			ev.stopPropagation();
+			// Without this the browser's text-selection gesture runs alongside the
+			// drag and highlights every rung label the pointer passes over.
+			ev.preventDefault();
 			// Take keyboard focus so Del/N/M/Ctrl+C land (window keydown is
 			// dead in a webview while nothing in the document has focus).
 			(el.closest('.wrap') as HTMLElement | null)?.focus({ preventScroll: true });
@@ -978,6 +981,10 @@
 <svelte:window onpointermove={onPointerMove} onpointerup={onPointerUp} />
 
 <style>
+	.wrap.dragging {
+		user-select: none;
+		-webkit-user-select: none;
+	}
 	.wrap {
 		display: flex;
 		flex-direction: column;

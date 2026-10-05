@@ -1,0 +1,92 @@
+{
+	"name": "Office rig",
+	"kinds": {
+		"tank": {
+			"model": "models/tank.glb",
+			"drive": [{ "mesh": "Fluid", "scale": { "axis": "y", "to": { "bind": "Level", "scale": 0.0039, "min": 0.005, "max": 0.39 } } }]
+		},
+		"pump": {
+			"model": "models/pump.glb",
+			"drive": [
+				{ "mesh": "Coupling", "spin": { "axis": "x", "revPerS": { "bind": "Speed", "scale": 0.02 } } },
+				{ "mesh": "Motor", "tint": { "bind": "Running", "on": "running" } },
+				{ "mesh": "Volute", "tint": { "bind": "Running", "on": "running" } }
+			]
+		},
+		"valve": {
+			"model": "models/valve.glb",
+			"drive": [{ "mesh": "Handle", "turn": { "axis": "z", "deg": { "bind": "Pos", "scale": -0.9, "offset": 90 } } }]
+		},
+		"skid": {
+			"type": "Skid",
+			"members": ["Pump", "Valve", "Fault"],
+			"component": "hmi/src/lib/Skid.svelte"
+		},
+		"skid-data": {
+			"type": "Skid",
+			"members": ["Fault"],
+			"status": "{Fault?FAULT:ok}",
+			"bounds": { "size": [0.8, 0.36, 0.26], "center": [0.2, 0.15, 0] },
+			"labelAt": [0.2, 0.36, 0],
+			"assembly": {
+				"nodes": [
+					{ "id": "pump", "kind": "pump", "tag": "Pump", "pos": [0, 0.06, 0] },
+					{ "id": "valve", "kind": "valve", "tag": "Valve", "pos": [0.5, 0.2, 0], "rot": [0, 0, -90] }
+				],
+				"pipes": [
+					{ "points": [[0.1, 0.16, 0], [0.1, 0.2, 0], [0.42, 0.2, 0]], "bind": { "flowing": "Pump.Running" } },
+					{ "points": [[0.58, 0.2, 0], [0.7, 0.2, 0], [0.7, 0.05, 0]], "bind": { "flowing": "Valve.Pos" } }
+				]
+			}
+		}
+	},
+	"environment": {
+		"hdri": "env/industrial_workshop_foundry_1k.hdr",
+		"backdrop": "env/industrial_workshop_foundry_backdrop_6k.jpg",
+		"background": "ground",
+		"floor": -0.75,
+		"intensity": 0.45,
+		"shadows": true,
+		"fog": { "color": "#9a968f", "near": 6, "far": 26 }
+	},
+	"camera": { "pos": [2.2, 1.6, 2.6], "target": [0.9, 0.1, 0] },
+	"grid": { "pos": [0.9, -0.748, 0.2], "size": [4, 3], "cell": 0.1, "section": 1 },
+	"fixtures": [
+		{
+			"kind": "plane",
+			"pos": [0.9, -0.749, 0.2],
+			"size": [4, 3],
+			"texture": {
+				"map": "textures/concrete_floor_02_diff_1k.jpg",
+				"normalMap": "textures/concrete_floor_02_nor_gl_1k.jpg",
+				"roughnessMap": "textures/concrete_floor_02_rough_1k.jpg",
+				"repeat": [4, 3]
+			}
+		},
+		{ "kind": "box", "pos": [0.35, -0.01, 0.1], "size": [0.9, 0.02, 0.6], "color": "#3a3833" },
+		{ "kind": "box", "pos": [-0.07, -0.385, -0.17], "size": [0.04, 0.73, 0.04], "color": "#3a3833" },
+		{ "kind": "box", "pos": [0.77, -0.385, -0.17], "size": [0.04, 0.73, 0.04], "color": "#3a3833" },
+		{ "kind": "box", "pos": [-0.07, -0.385, 0.37], "size": [0.04, 0.73, 0.04], "color": "#3a3833" },
+		{ "kind": "box", "pos": [0.77, -0.385, 0.37], "size": [0.04, 0.73, 0.04], "color": "#3a3833" },
+		{ "kind": "marker", "pos": [0, 0.001, 0], "size": [0.08, 0.08] }
+	],
+	"nodes": [
+		{ "id": "T101", "kind": "tank", "tag": "T101", "label": "T-101", "pos": [1.0, -0.75, 0.4] },
+		{ "id": "P101", "kind": "pump", "tag": "P101", "label": "P-101", "pos": [0.3, 0, 0.2] },
+		{ "id": "XV101", "kind": "valve", "tag": "XV101", "label": "XV-101", "pos": [1.8, 0.85, 0], "bind": { "cmd": "Demand" } },
+		{ "id": "SK101", "kind": "skid", "tag": "SK101", "label": "SK-101", "pos": [-0.6, -0.75, 0.7] },
+		{ "id": "SK102", "kind": "skid-data", "tag": "SK102", "label": "SK-102", "pos": [-0.6, -0.75, 1.25] }
+	],
+	"pipes": [
+		{
+			"id": "fill",
+			"points": [[0.46, 0.08, 0.2], [0.75, 0.08, 0.2], [0.75, 0.08, 0.4], [1.0, 0.08, 0.4], [1.0, -0.33, 0.4]],
+			"bind": { "flowing": "P101.Running" }
+		},
+		{
+			"id": "drain",
+			"points": [[1.2, -0.7, 0.4], [1.8, -0.7, 0.4], [1.8, 0.75, 0.4], [1.8, 0.75, 0]],
+			"bind": { "flowing": "XV101.Pos" }
+		}
+	]
+}

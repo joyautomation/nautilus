@@ -1,0 +1,39 @@
+{
+	"name": "HQ cluster rack",
+	"units": 24,
+	"depth": 700,
+	"base": 60,
+	"note": "Not racked yet: the cluster runs on a bench, so the units are a default: the three switches on top, 3 x 1U, ports on the FRONT face (power at the rear); node1..3 directly below, drive bays front, NIC cages and BMC at the rear.",
+	"devices": [
+		{
+			"id": "sw1",
+			"u": 22,
+			"face": "front"
+		},
+		{
+			"id": "sw2",
+			"u": 21,
+			"face": "front"
+		},
+		{
+			"id": "sw3",
+			"u": 20,
+			"face": "front"
+		},
+		{
+			"id": "node1",
+			"u": 19,
+			"face": "front"
+		},
+		{
+			"id": "node2",
+			"u": 18,
+			"face": "front"
+		},
+		{
+			"id": "node3",
+			"u": 17,
+			"face": "front"
+		}
+	]
+}

@@ -68,6 +68,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -1090,13 +1091,21 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	// Whole-tag scalar write, unchanged: Tags.Set silently ignores anything
-	// that isn't a number or bool, so reject those here rather than
-	// returning 204 for a write that didn't happen. JSON numbers decode to
-	// float64; booleans to bool.
-	switch req.Value.(type) {
+	// Whole-tag scalar write. JSON numbers decode to float64; booleans to
+	// bool; a string is taken only by a tag that already holds a STRING (a
+	// recipe name, a scenario), so a typo cannot turn a REAL into text.
+	// Anything else is refused here rather than answered 204 for a write
+	// that didn't happen.
+	switch v := req.Value.(type) {
 	case float64, bool:
 		s.rt.Tags().Set(req.Name, req.Value)
+		w.WriteHeader(http.StatusNoContent)
+	case string:
+		if cur, err := s.rt.Tags().ReadGlobal(req.Name); err != nil || cur.Kind != ir.TypeString {
+			http.Error(w, "value must be a number or boolean (a string only to a STRING tag)", http.StatusUnprocessableEntity)
+			return
+		}
+		s.rt.Tags().Set(req.Name, v)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "value must be a number or boolean", http.StatusUnprocessableEntity)

@@ -1,0 +1,45 @@
+{
+    "@odata.type": "#Power.v1_5_0.Power",
+    "Id": "Power",
+    "Name": "Power",
+    "PowerControl": [
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Power#/PowerControl/0",
+            "MemberId": "0",
+            "Name": "System Power Control",
+            "PowerConsumedWatts": 238,
+            "PowerCapacityWatts": 1100,
+            "Status": {
+                "State": "Enabled",
+                "Health": "OK"
+            }
+        }
+    ],
+    "PowerSupplies": [
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Power#/PowerSupplies/0",
+            "MemberId": "0",
+            "Name": "PSU 1",
+            "Status": {
+                "State": "Enabled",
+                "Health": "OK"
+            },
+            "LineInputVoltage": 208,
+            "LastPowerOutputWatts": 241,
+            "PowerCapacityWatts": 550
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Power#/PowerSupplies/1",
+            "MemberId": "1",
+            "Name": "PSU 2",
+            "Status": {
+                "State": "Enabled",
+                "Health": "Critical"
+            },
+            "LineInputVoltage": 0,
+            "LastPowerOutputWatts": 0,
+            "PowerCapacityWatts": 550
+        }
+    ],
+    "@odata.id": "/redfish/v1/Chassis/1/Power"
+}
