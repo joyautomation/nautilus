@@ -1,0 +1,199 @@
+---
+// /verified/<section>/ — one entry per gesture-inventory row: the claim, where
+// the claim is made, the tests linked to it with their verdicts, a clip
+// (demo clip preferred, nightly fallback, harness clip as evidence) and the
+// rig's evidence PNGs. Data: src/lib/verified.ts.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { Badge } from '@astrojs/starlight/components';
+import {
+  SECTIONS,
+  SET_LABEL,
+  type Item,
+  type SetKey,
+  badgeVariant,
+  commitUrl,
+  formatDate,
+  isCovered,
+  itemLabel,
+  loadVerified,
+  mediaUrl,
+  rowClip,
+  rowVerdict,
+} from '../../lib/verified';
+import '../../styles/verified.css';
+
+export function getStaticPaths() {
+  return SECTIONS.map((s) => ({ params: { section: s.slug } }));
+}
+
+const { section } = Astro.params;
+const meta = SECTIONS.find((s) => s.slug === section)!;
+const v = loadVerified();
+const rows = v.rows.filter((r) => r.section === section);
+const covered = rows.filter(isCovered).length;
+const sets: SetKey[] = ['nightly', 'demo', 'gestures'];
+const allItems = sets.flatMap((k) => v.sets[k]?.items ?? []);
+const knownVerb = (name: string) => allItems.some((i) => i.kind === 'verb' && (i.id === name || i.id.startsWith(`${name}-`)));
+const knownSmoke = (nn: string) => allItems.some((i) => i.kind === 'smoke' && i.id.startsWith(`${nn}-`));
+const run = (set: SetKey) => v.sets[set]?.run;
+
+function thumbs(items: Item[], first?: Item) {
+  const out: { set: SetKey; path: string }[] = [];
+  for (const i of first ? [first, ...items.filter((x) => x !== first)] : items) {
+    for (const p of i.pngs ?? []) if (!out.some((o) => o.set === i.set && o.path === p)) out.push({ set: i.set, path: p });
+  }
+  return out;
+}
+const MAX_THUMBS = 6;
+---
+
+<StarlightPage
+  frontmatter={{
+    title: `Verified: ${meta.label}`,
+    description: `${meta.blurb} Each claim with its tests, verdicts and a clip from the last green run.`,
+    tableOfContents: false,
+    prev: false,
+    next: false,
+  }}
+>
+  <p>
+    {meta.blurb} Each entry below is one row of the
+    <a href={`https://github.com/${v.repository}/blob/main/tools/vscode-iec/webview-ui/gesture-harness/INVENTORY.md`}>gesture inventory</a>,
+    with the tests that exercise it in the <strong>last green run</strong> of each suite.
+    {rows.length > 0 && <>{covered} of {rows.length} are covered by a passing test.</>}
+  </p>
+  <p class="vf-muted">
+    <small>
+      {
+        sets.map((k, idx) => (
+          <>
+            {idx > 0 && ' · '}
+            {SET_LABEL[k]}:{' '}
+            {run(k) ? (
+              <>
+                last green run {formatDate(run(k)!.date)}
+                {run(k)!.sha && (
+                  <>
+                    {' '}on <a href={commitUrl(v.repository, run(k)!.sha!)}><code>{run(k)!.sha!.slice(0, 7)}</code></a>
+                  </>
+                )}
+              </>
+            ) : (
+              'no verified run yet'
+            )}
+          </>
+        ))
+      }
+      {' · '}<a href="/verified/">overview</a>
+    </small>
+  </p>
+
+  {rows.length === 0 && <p class="vf-empty">No inventory rows were baked into this build.</p>}
+
+  {
+    rows.map((r) => {
+      const verdict = rowVerdict(r);
+      const clip = rowClip(r);
+      const rigItems = [...r.verbs, ...r.smokes];
+      const pics = thumbs(rigItems, clip && !clip.harness ? clip.item : undefined);
+      const cr = clip ? run(clip.item.set) : undefined;
+      const missingVerbs = r.refs.verbs.filter((n) => !knownVerb(n));
+      const missingSmokes = r.refs.smokes.filter((n) => !knownSmoke(n));
+      return (
+        <article class="vf-row" id={r.id.toLowerCase()}>
+          <h3>
+            <span class="vf-rid">{r.id}</span>
+            {r.gesture}
+          </h3>
+          <p class="vf-meta">
+            {r.area && <>{r.area} · </>}claimed in {r.source || 'the inventory'}
+          </p>
+          <div class:list={['vf-row-body', { 'has-clip': !!clip?.item.clip }]}>
+            <div>
+              <p>
+                {verdict ? <Badge text={verdict} variant={badgeVariant(verdict)} /> : <Badge text="no run yet" />}
+              </p>
+              <ul class="vf-tests">
+                {rigItems.map((i) => (
+                  <li>
+                    <Badge text={i.verdict} variant={badgeVariant(i.verdict)} size="small" />{' '}
+                    {i.kind === 'verb' ? 'rig verb' : 'smoke check'} <code>{i.id}</code> ·{' '}
+                    {SET_LABEL[i.set]}
+                    {i.kind === 'verb' && i.text && i.text !== 'ok' && <span class="vf-muted"> — {i.text}</span>}
+                    {i.kind === 'smoke' && i.rows && (
+                      <span class="vf-muted">
+                        {' '}— {i.rows.filter((x) => x.verdict === 'PASS').length} of {i.rows.filter((x) => x.verdict !== 'NOTE').length} checks pass
+                      </span>
+                    )}
+                  </li>
+                ))}
+                {r.gestures.map((i) => (
+                  <li>
+                    <Badge text={i.verdict} variant={badgeVariant(i.verdict)} size="small" /> harness ·{' '}
+                    <code>{i.suite}</code> {i.test}
+                  </li>
+                ))}
+                {missingVerbs.map((n) => (
+                  <li class="vf-muted">
+                    rig verb <code>{n}</code> — not in a baked run
+                  </li>
+                ))}
+                {missingSmokes.map((n) => (
+                  <li class="vf-muted">smoke check {n} — not in a baked run</li>
+                ))}
+                {r.webviewTest && r.gestures.length === 0 && (
+                  <li class="vf-muted">webview test with no linked recording: {r.webviewTest}</li>
+                )}
+              </ul>
+              <details>
+                <summary>What the inventory lists</summary>
+                <dl>
+                  <dt>webview test</dt>
+                  <dd>{r.webviewTest || '—'}</dd>
+                  <dt>rig verb</dt>
+                  <dd>{r.rigVerb || '—'}</dd>
+                  <dt>smoke</dt>
+                  <dd>{r.smoke || '—'}</dd>
+                </dl>
+              </details>
+            </div>
+            {clip?.item.clip && (
+              <figure class="vf-clip">
+                <video
+                  controls
+                  preload="none"
+                  playsinline
+                  muted
+                  poster={clip.item.pngs?.[0] ? mediaUrl(clip.item.set, clip.item.pngs[0]) : undefined}
+                  src={mediaUrl(clip.item.set, clip.item.clip)}
+                />
+                <figcaption>
+                  {clip.harness ? (
+                    <>
+                      <span class="vf-harness-tag">Harness evidence</span> — {itemLabel(clip.item)}
+                    </>
+                  ) : (
+                    itemLabel(clip.item)
+                  )}{' '}
+                  · {SET_LABEL[clip.item.set]}, last green run {formatDate(cr?.date)}
+                  {cr?.sha && <> on <code>{cr.sha.slice(0, 7)}</code></>}
+                  {cr?.vscode && <> · VS Code {cr.vscode}</>}
+                </figcaption>
+              </figure>
+            )}
+          </div>
+          {pics.length > 0 && (
+            <div class="vf-thumbs">
+              {pics.slice(0, MAX_THUMBS).map((p) => (
+                <a href={mediaUrl(p.set, p.path)}>
+                  <img src={mediaUrl(p.set, p.path)} alt={`evidence: ${p.path.split('/').pop()}`} loading="lazy" decoding="async" />
+                </a>
+              ))}
+              {pics.length > MAX_THUMBS && <span class="vf-muted">+{pics.length - MAX_THUMBS} more in the run's artifact</span>}
+            </div>
+          )}
+        </article>
+      );
+    })
+  }
+</StarlightPage>

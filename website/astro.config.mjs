@@ -70,6 +70,22 @@ export default defineConfig({
           label: 'Reference',
           autogenerate: { directory: 'reference' },
         },
+        {
+          // src/pages/verified/ — built from the latest green rig and CI runs
+          // by scripts/fetch-verified.mjs (see README).
+          label: 'Verified',
+          collapsed: true,
+          items: [
+            { label: 'Overview', link: '/verified/' },
+            { label: 'FBD', link: '/verified/fbd/' },
+            { label: 'Ladder', link: '/verified/ladder/' },
+            { label: 'SFC', link: '/verified/sfc/' },
+            { label: 'Mimic', link: '/verified/mimic/' },
+            { label: 'Component', link: '/verified/component/' },
+            { label: 'Commands', link: '/verified/commands/' },
+            { label: 'Other claims', link: '/verified/other/' },
+          ],
+        },
       ],
     }),
   ],

@@ -1,0 +1,67 @@
+---
+/**
+ * <Clip id="ld_add_branch" /> — embed the verified recording of one test in a
+ * guide (.mdx):
+ *
+ *   import Clip from '../../../components/Clip.astro';
+ *   <Clip id="ld_add_branch" />                 rig verb id
+ *   <Clip id="04-title-buttons" />              smoke check id (or just "04")
+ *   <Clip id="diagram/08-ladder-click-a-rung-name-del-deletes-the-rung" />   harness clip
+ *
+ * The clip comes from the last green run baked into the site
+ * (src/data/verified.json, written by scripts/fetch-verified.mjs): the demo
+ * set (episode pace) when it has the id, else the nightly, else the gesture
+ * harness. The caption names the date, commit, VS Code version and verdict,
+ * and links to the claim on its /verified/ page. With no baked clip for the
+ * id it renders nothing — pass `fallback` to show a muted "no clip yet"
+ * instead — so a guide never breaks on a missing run.
+ */
+import { SET_LABEL, findItem, formatDate, loadVerified, mediaUrl, rowAnchor, rowFor } from '../lib/verified';
+import '../styles/verified.css';
+
+interface Props {
+  id: string;
+  /** Optional caption text before the verification line. */
+  caption?: string;
+  /** Render a muted "no clip yet" note when the id has no baked clip. */
+  fallback?: boolean;
+}
+const { id, caption, fallback = false } = Astro.props;
+const item = findItem(id);
+const run = item ? loadVerified().sets[item.set]?.run : undefined;
+const row = item ? rowFor(item) : null;
+---
+
+{
+  item?.clip ? (
+    <figure class="vf-clip not-content" data-clip-id={id} style="margin-block: 1.25rem;">
+      <video
+        controls
+        preload="metadata"
+        playsinline
+        muted
+        poster={item.pngs?.[0] ? mediaUrl(item.set, item.pngs[0]) : undefined}
+        src={mediaUrl(item.set, item.clip)}
+      />
+      <figcaption>
+        {caption && <>{caption} — </>}
+        Verified {formatDate(run?.date)}
+        {run?.sha && <> on <code>{run.sha.slice(0, 7)}</code></>}
+        {run?.vscode && <> · VS Code {run.vscode}</>} · {item.verdict}
+        {item.set === 'gestures' && <> · harness evidence</>}
+        {item.set === 'nightly' && <> · {SET_LABEL.nightly}</>}
+        {row ? (
+          <>
+            {' '}· <a href={rowAnchor(row)}>{row.id} on the proof page</a>
+          </>
+        ) : (
+          <>
+            {' '}· <a href="/verified/">proof pages</a>
+          </>
+        )}
+      </figcaption>
+    </figure>
+  ) : (
+    fallback && <p class="vf-muted" data-clip-id={id}><small>No verified clip for <code>{id}</code> yet.</small></p>
+  )
+}

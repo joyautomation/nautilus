@@ -4,7 +4,10 @@
   "type": "module",
   "scripts": {
     "sync": "node scripts/sync-reference.mjs",
+    "verified": "node scripts/fetch-verified.mjs",
+    "predev": "npm run verified",
     "dev": "npm run sync && astro dev",
+    "prebuild": "npm run verified",
     "build": "npm run sync && astro build",
     "preview": "astro preview"
   },
