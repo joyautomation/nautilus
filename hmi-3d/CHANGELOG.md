@@ -1,5 +1,13 @@
 # Changelog — @joyautomation/nautilus-hmi-3d
 
+## 0.1.2 — 2026-10-05
+
+**Fixed.** The rack's frame: the top beam was drawn inside the unit space,
+over the top unit's holes, and the bottom beam on the floor below where the
+units start. The beams now sit just below the first unit and just above the
+last, the posts stand below the bottom beam as feet, and the mounting rails
+span exactly the units. Devices, holes and cables do not move. (#226)
+
 ## 0.1.1 — 2026-10-04
 
 **Fixed.** The SYS-112B-FWT profile's ports face the front: the chassis has

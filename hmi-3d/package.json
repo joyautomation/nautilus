@@ -1,6 +1,6 @@
 {
 	"name": "@joyautomation/nautilus-hmi-3d",
-	"version": "0.1.1",
+	"version": "0.1.2",
 	"description": "The spatial layer of the nautilus HMI kit — a live 3D process view rendered from a *.scene.json document bound to struct tags, on Threlte (Svelte 5 + three.js).",
 	"license": "Apache-2.0",
 	"repository": {
