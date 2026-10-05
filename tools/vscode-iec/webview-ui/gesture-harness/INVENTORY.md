@@ -32,7 +32,7 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 153 rows. **0 rows have no coverage at all** (no webview test,
+Totals: 156 rows. **0 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
@@ -43,7 +43,7 @@ no rig verb, no smoke check); per section below.
 | SFC `?` | 22 | 0 |
 | Mimic `?` | 18 | 0 |
 | Component `?` | 8 | 0 |
-| Other claims | 39 | 0 |
+| Other claims | 42 | 0 |
 
 ## Commands (package.json `contributes.commands`)
 
@@ -203,7 +203,7 @@ no rig verb, no smoke check); per section below.
 | X08 | Extension | Diagrams follow the VS Code theme (light, dark, high contrast) | CHANGELOG 0.10.0 | diagram.test.mjs: Theme: (x3) | — | 11 |
 | X09 | Extension | Live pill: green when a controller is reachable, amber offline; click toggles live values | README Live values | gestures.test.mjs: the live pill reflects nautilus.liveValues.enabled and toggles it | — | 07 |
 | X10 | Extension | Live values paint on FBD, ladder (power flow) and SFC (active step) | README Live values | — | — | 07 |
-| X11 | Extension | Inline live-value pills beside identifiers in .st/.fbd/.ld/.sfc text | README Live values | — | — | 13 (.st, .fbd, .ld text; not .sfc) |
+| X11 | Extension | Inline live-value pills beside identifiers in .st/.fbd/.ld/.sfc text | README Live values | — | — | 13 |
 | X12 | Extension | Live Values panel lists every tag and local with its value | README Live values | — | — | 13 |
 | X13 | Extension | Status-bar item shows whether the file matches the controller | README Online edit | — | — | 08 |
 | X14 | Extension | Download and Rollback ask for confirmation naming URL and program; nautilus.confirmControllerWrites=false skips it | README Online edit | — | — | 08 |
@@ -212,7 +212,7 @@ no rig verb, no smoke check); per section below.
 | X17 | Extension | Diagnostics as you type in .st/.fbd/.ld/.sfc (naut lsp) | README Language intelligence | — | — | 01 |
 | X18 | Extension | Go to definition, hover and completion in ST | README Language intelligence | — | — | 14 |
 | X19 | Extension | *_test.yaml suites in the Testing view; run one from the gutter; failure inline on the assertion | README Testing | — | — | 15 |
-| X20 | Extension | JSON-schema completion and validation for nautilus.yaml, tag, alarm and test files | README Testing | — | — | 14 (nautilus.yaml and *_test.yaml; tag and alarm files not exercised) |
+| X20 | Extension | JSON-schema completion and validation for nautilus.yaml, tag, alarm and test files | README Testing | — | — | 14 |
 | X21 | Extension | nautilus.fb.monitor, run by the FbMonitorLenses CodeLens over each FUNCTION_BLOCK header: pick which declared instance the body's live values read | src/extension.ts, src/liveValues.ts | — | — | 17 |
 | X22 | Ladder | L5X opens read-only: pill, no palette, edits do nothing | README Rockwell L5X | diagram.test.mjs: Ladder: an L5X model is read-only | — | 10 |
 | X23 | Ladder | Declare offer (amber declare …) files an undeclared identifier under VAR_EXTERNAL or VAR | CHANGELOG 0.10.0 | diagram.test.mjs: Ladder: the declare offer covers a block call's arguments | ld_declare | — |
@@ -232,10 +232,13 @@ no rig verb, no smoke check); per section below.
 | X37 | Mimic | Pipes snap to ports, follow equipment when it moves, orthogonal route suggested around obstacles | README HMI mimic editor | gestures.test.mjs: draw preview == committed render; terminal ATTACH / DETACH | mimic_pipe | — |
 | X38 | Mimic | Snap to grid (nautilus.mimic.snapToGrid) | README Settings | mimic-more.test.mjs: X38 snapToGrid on lands a drag on the 10 px grid; off moves the exact delta | — | — |
 | X39 | Mimic | Live canvas animates bound props from the controller | README HMI mimic editor | — | — | 13 |
+| X40 | Extension | Signature help while typing a call: parameters with types, FB inputs and outputs (=>), the active one highlighted by comma position or named pin | README Language intelligence | — | — | 14 |
+| X42 | Extension | Find all references (Shift+F12): a tag across every program and the manifest, a local only in its POU | README Language intelligence | — | — | 14 |
+| X41 | Extension | Outline view, breadcrumbs and Go to Symbol in Editor list POUs, VAR sections and declarations, FBD statements, ladder rungs, SFC steps / transitions / actions (naut lsp documentSymbol) | README Language intelligence | — | — | 14 (.st, .ld, .sfc; not .fbd) |
 
 ## Count of rows with no coverage at all
 
-**0 of 153.** Every row has at least one layer of coverage: a webview test, a
+**0 of 156.** Every row has at least one layer of coverage: a webview test, a
 rig verb, or a smoke check. Some rows are covered only in part, and the cell
 says which part:
 
@@ -249,9 +252,6 @@ says which part:
   swallow the keys; the undo itself is VS Code's text undo over the host's
   WorkspaceEdit, so only smoke 03 (field undo) sees it happen. S22 (save) is
   likewise only 03's field undo.
-- Live values: X11 pills are checked in .st, .fbd and .ld text, not .sfc. X20
-  schema completion is checked for nautilus.yaml and *_test.yaml, not tag or
-  alarm files.
 - Single-sided gestures: F08 (disconnect, not wire), F14/F15 (ladder and SFC
   zoom only in smoke), L01 (rung name only), S15 (popover half only), P02
   (add side only).

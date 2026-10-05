@@ -130,8 +130,8 @@ Install **nautilus IEC 61131-3** from the
 or [Open VSX](https://open-vsx.org/extension/joyauto/vscode-iec). (*Switch
 to Pre-Release Version* on the extension page gets builds from `main`.) With
 your project open and the controller running you get compile
-diagnostics as you type, go-to-definition, hover, completion, and live tag
-values next to identifiers in your program.
+diagnostics as you type, go-to-definition, find all references, hover,
+completion, and live tag values next to identifiers in your program.
 
 On macOS, VS Code launched from the Dock or Spotlight gets the login `PATH`,
 not your shell's, so it may not find `naut` even though your terminal

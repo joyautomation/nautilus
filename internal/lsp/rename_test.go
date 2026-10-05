@@ -249,10 +249,10 @@ func TestRenameTagAcrossProject(t *testing.T) {
 	}
 	manifest := applyEdits(renameManifest, we.Changes[pathToURI(filepath.Join(dir, "nautilus.yaml"))])
 	for _, want := range []string{
-		`- { name: TankTempC,   role: state,`, // flow-style name
+		`- { name: TankTempC,   role: state,`,    // flow-style name
 		"tag-meta:\n  TankTempC: { hmi: gauge }", // tag-meta key
-		`name: "HiTempSP"`,                         // untouched neighbour keeps its quotes
-		"dt-tag: ScanDtS",                          // a different tag's dt-tag untouched
+		`name: "HiTempSP"`,                       // untouched neighbour keeps its quotes
+		"dt-tag: ScanDtS",                        // a different tag's dt-tag untouched
 	} {
 		if !strings.Contains(manifest, want) {
 			t.Fatalf("manifest missing %q:\n%s", want, manifest)

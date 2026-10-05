@@ -34,6 +34,8 @@ tools/rig/
   demo.sh            selftest.sh filmed at episode pace and frame → out/demo/
   smoke/             the extension smoke suite: run.sh, build.sh, lib.sh,
                      NN-*.sh checks, and fixtures/ (their projects)
+  builds/            build-from-scratch dogfood (test plan §5): one folder per
+                     build — reference/ project, build.sh, PLAN.md, FINDINGS.md
   out/               results (gitignored): build/, smoke/, selftest/,
                      manifest.json, demo/
 ```
