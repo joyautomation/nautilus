@@ -111,7 +111,7 @@ const MAX_THUMBS = 6;
           <div class:list={['vf-row-body', { 'has-clip': !!clip?.item.clip }]}>
             <div>
               <p>
-                {verdict ? <Badge text={verdict} variant={badgeVariant(verdict)} /> : <Badge text="no run yet" />}
+                {verdict ? <Badge text={verdict} variant={badgeVariant(verdict)} /> : <Badge text="no evidence yet" />}
               </p>
               <ul class="vf-tests">
                 {rigItems.map((i) => (
