@@ -36,13 +36,19 @@ type Result struct {
 // Failure says what went wrong, where, and — for anything time-dependent —
 // what the process was actually doing when it did.
 type Failure struct {
-	Step   int           `json:"step"` // 1-based
-	Line   int           `json:"line"`
-	At     time.Duration `json:"-"`
-	AtMs   float64       `json:"atMs"`
-	Reason string        `json:"reason"`
-	Detail string        `json:"detail,omitempty"`
-	Trace  []TraceTag    `json:"trace,omitempty"`
+	Step int `json:"step"` // 1-based
+	// Line is the assertion that broke: the tag key (or ST expression)
+	// inside `expect:` / `always:`, or the `alarms:` key. It is where an
+	// editor anchors the failure.
+	Line int `json:"line"`
+	// StepLine is the first line of the step that failed, which is what a
+	// person scanning the log reads "step 3" against.
+	StepLine int           `json:"stepLine,omitempty"`
+	At       time.Duration `json:"-"`
+	AtMs     float64       `json:"atMs"`
+	Reason   string        `json:"reason"`
+	Detail   string        `json:"detail,omitempty"`
+	Trace    []TraceTag    `json:"trace,omitempty"`
 }
 
 // TraceTag is one tag's trajectory over the failing step: the answer to
@@ -203,7 +209,10 @@ func runTest(s *Suite, t *Test, opts runtime.Options, cfg runOptions) (Result, e
 		}
 		if fail != nil {
 			fail.Step = i + 1
-			fail.Line = st.Line
+			fail.StepLine = st.Line
+			if fail.Line == 0 {
+				fail.Line = st.Line
+			}
 			fail.AtMs = float64(fail.At) / float64(time.Millisecond)
 			res.Failure = fail
 			res.Elapsed, res.Scans = sch.Elapsed(), sch.ScanCount(runtime.MainTaskName)
@@ -262,13 +271,14 @@ func (r *testRun) runStep(st *Step) (*Failure, error) {
 		if st.Always == nil || alwaysFail != nil || alwaysErr != nil {
 			return
 		}
-		ok, detail, err := r.check(st.Always)
+		ok, detail, line, err := r.check(st.Always)
 		if err != nil {
 			alwaysErr = err
 			return
 		}
 		if !ok {
 			alwaysFail = &Failure{
+				Line:   line,
 				At:     r.sch.Elapsed(),
 				Reason: "invariant broke",
 				Detail: detail,
@@ -286,7 +296,7 @@ func (r *testRun) runStep(st *Step) (*Failure, error) {
 			if perr != nil {
 				return false
 			}
-			held, _, err := r.check(st.Expect)
+			held, _, _, err := r.check(st.Expect)
 			if err != nil {
 				perr = err
 			}
@@ -303,7 +313,7 @@ func (r *testRun) runStep(st *Step) (*Failure, error) {
 			return alwaysFail, nil
 		}
 		if !ok {
-			_, detail, err := r.check(st.Expect)
+			_, detail, line, err := r.check(st.Expect)
 			if err != nil {
 				return nil, err
 			}
@@ -311,7 +321,7 @@ func (r *testRun) runStep(st *Step) (*Failure, error) {
 			if st.Hold.get() > 0 {
 				reason = fmt.Sprintf("never held for %s within %s", st.Hold.get(), st.Until.get())
 			}
-			return &Failure{At: r.sch.Elapsed(), Reason: reason, Detail: detail, Trace: tr.result()}, nil
+			return &Failure{Line: line, At: r.sch.Elapsed(), Reason: reason, Detail: detail, Trace: tr.result()}, nil
 		}
 	case st.Advance != nil:
 		r.sch.Advance(st.Advance.get())
@@ -329,13 +339,14 @@ func (r *testRun) runStep(st *Step) (*Failure, error) {
 		return alwaysFail, nil
 	}
 	if st.Until == nil && st.Expect != nil {
-		ok, detail, err := r.check(st.Expect)
+		ok, detail, line, err := r.check(st.Expect)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
 			return &Failure{
-				At: r.sch.Elapsed(), Reason: "expectation failed",
+				Line: line,
+				At:   r.sch.Elapsed(), Reason: "expectation failed",
 				Detail: detail, Trace: tr.result(),
 			}, nil
 		}
@@ -347,7 +358,8 @@ func (r *testRun) runStep(st *Step) (*Failure, error) {
 		}
 		if !ok {
 			return &Failure{
-				At: r.sch.Elapsed(), Reason: "alarm expectation failed",
+				Line: st.AlarmsLine,
+				At:   r.sch.Elapsed(), Reason: "alarm expectation failed",
 				Detail: detail, Trace: tr.result(),
 			}, nil
 		}
@@ -355,36 +367,37 @@ func (r *testRun) runStep(st *Step) (*Failure, error) {
 	return nil, nil
 }
 
-// check evaluates every term; the first that fails renders the detail.
-func (r *testRun) check(e *Expect) (bool, string, error) {
+// check evaluates every term; the first that fails renders the detail and
+// names its source line.
+func (r *testRun) check(e *Expect) (ok bool, detail string, line int, err error) {
 	if e == nil {
-		return true, "", nil
+		return true, "", 0, nil
 	}
 	for _, term := range e.Terms {
 		if term.Expr != "" {
 			p, err := r.predicate(term.Expr)
 			if err != nil {
-				return false, "", err
+				return false, "", 0, err
 			}
 			ok, err := p.eval(r.rt)
 			if err != nil {
-				return false, "", err
+				return false, "", 0, err
 			}
 			if !ok {
-				return false, fmt.Sprintf("%s   is false", term.Expr), nil
+				return false, fmt.Sprintf("%s   is false", term.Expr), e.line(term), nil
 			}
 			continue
 		}
 		got, err := r.value(term.Tag)
 		if err != nil {
-			return false, "", err
+			return false, "", 0, err
 		}
 		ok, want := term.Matcher.match(got, r.tol)
 		if !ok {
-			return false, fmt.Sprintf("%s = %s, want %s", term.Tag, show(got), want), nil
+			return false, fmt.Sprintf("%s = %s, want %s", term.Tag, show(got), want), e.line(term), nil
 		}
 	}
-	return true, "", nil
+	return true, "", 0, nil
 }
 
 // predicate compiles an ST expression once and reuses it — an `until` loop

@@ -1,0 +1,15 @@
+{
+    "@odata.type": "#PowerSupply.v1_5_0.PowerSupply",
+    "Id": "PSU2",
+    "Name": "PSU 2",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "LineInputStatus": "Normal",
+    "PowerCapacityWatts": 800,
+    "Metrics": {
+        "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/PSU2/Metrics"
+    },
+    "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/PSU2"
+}

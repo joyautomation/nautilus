@@ -1,0 +1,218 @@
+{
+    "@odata.id": "/redfish/v1/Systems/1",
+    "@odata.type": "#ComputerSystem.v1_25_0.ComputerSystem",
+    "Actions": {
+        "#ComputerSystem.Decommission": {
+            "@Redfish.ActionInfo": "/redfish/v1/Systems/1/DecommissionActionInfo",
+            "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Decommission"
+        },
+        "#ComputerSystem.Reset": {
+            "@Redfish.ActionInfo": "/redfish/v1/Systems/1/ResetActionInfo",
+            "ResetType@Redfish.AllowableValues": [
+                "On",
+                "ForceOff",
+                "ForceOn",
+                "ForceRestart",
+                "GracefulRestart",
+                "GracefulShutdown",
+                "PowerCycle",
+                "Nmi"
+            ],
+            "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset"
+        },
+        "Oem": {
+            "#OemSystemExtensions.Reset": {
+                "@Redfish.ActionInfo": "/redfish/v1/Systems/1/Oem/OemSystemExtensions/ResetActionInfo",
+                "target": "/redfish/v1/Systems/1/Actions/Oem/OemSystemExtensions.Reset"
+            }
+        }
+    },
+    "AssetTag": "",
+    "Bios": {
+        "@odata.id": "/redfish/v1/Systems/1/Bios"
+    },
+    "BiosVersion": "BIOS Date: 05/18/2026 Ver 1.5b",
+    "Boot": {
+        "BootNext": null,
+        "BootOptions": {
+            "@odata.id": "/redfish/v1/Systems/1/BootOptions"
+        },
+        "BootOrder": [
+            "Boot0001",
+            "Boot0005",
+            "Boot0006",
+            "Boot0007",
+            "Boot0008",
+            "Boot0009",
+            "Boot000A",
+            "Boot000B",
+            "Boot000C",
+            "Boot000D",
+            "Boot000E",
+            "Boot000F",
+            "Boot0010"
+        ],
+        "BootSourceOverrideEnabled": "Disabled",
+        "BootSourceOverrideMode": "Legacy",
+        "BootSourceOverrideTarget": "None",
+        "BootSourceOverrideTarget@Redfish.AllowableValues": [
+            "None",
+            "Pxe",
+            "Hdd",
+            "Cd",
+            "BiosSetup",
+            "Usb",
+            "Floppy",
+            "UsbCd",
+            "UefiBootNext",
+            "Diags"
+        ],
+        "Certificates": {
+            "@odata.id": "/redfish/v1/Systems/1/Boot/Certificates"
+        }
+    },
+    "BootProgress": {
+        "LastState": "SystemHardwareInitializationComplete",
+        "OemLastState": ""
+    },
+    "Description": "Computer System",
+    "EthernetInterfaces": {
+        "@odata.id": "/redfish/v1/Systems/1/EthernetInterfaces"
+    },
+    "GraphicalConsole": {
+        "ConnectTypesSupported": [
+            "KVMIP"
+        ],
+        "MaxConcurrentSessions": 4,
+        "Port": 5900,
+        "ServiceEnabled": true
+    },
+    "HostWatchdogTimer": {
+        "FunctionEnabled": false,
+        "Status": {
+            "State": "Enabled"
+        },
+        "TimeoutAction": "ResetSystem"
+    },
+    "IPMIHostInterface": {
+        "ServiceEnabled": true
+    },
+    "Id": "1",
+    "IndicatorLED": "Off",
+    "LastResetTime": "2026-01-01T00:00:00+00:00",
+    "Links": {
+        "Chassis": [
+            {
+                "@odata.id": "/redfish/v1/Chassis/1"
+            }
+        ],
+        "ManagedBy": [
+            {
+                "@odata.id": "/redfish/v1/Managers/1"
+            }
+        ]
+    },
+    "LocationIndicatorActive": false,
+    "LogServices": {
+        "@odata.id": "/redfish/v1/Systems/1/LogServices"
+    },
+    "Manufacturer": "Supermicro",
+    "Memory": {
+        "@odata.id": "/redfish/v1/Systems/1/Memory"
+    },
+    "MemorySummary": {
+        "MemoryMirroring": "System",
+        "Metrics": {
+            "@odata.id": "/redfish/v1/Systems/1/MemorySummary/MemoryMetrics"
+        },
+        "Status": {
+            "Health": "OK",
+            "HealthRollup": "OK",
+            "State": "Enabled"
+        },
+        "TotalSystemMemoryGiB": 256
+    },
+    "Model": "SYS-112B-WR",
+    "Name": "System",
+    "NetworkInterfaces": {
+        "@odata.id": "/redfish/v1/Systems/1/NetworkInterfaces"
+    },
+    "Oem": {
+        "Supermicro": {
+            "FixedBootOrder": {
+                "@odata.id": "/redfish/v1/Systems/1/Oem/Supermicro/FixedBootOrder"
+            }
+        }
+    },
+    "PCIeDevices": [
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/PCIeDevices/NIC1"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/PCIeDevices/NIC2"
+        }
+    ],
+    "PCIeDevices@odata.count": 2,
+    "PartNumber": "SYS-112B-WR",
+    "PowerCycleDelaySeconds": 5,
+    "PowerCycleDelaySeconds@Redfish.AllowableNumbers": [
+        "5:254:1"
+    ],
+    "PowerOffDelaySeconds": 3,
+    "PowerOffDelaySeconds@Redfish.AllowableNumbers": [
+        "3:254:1"
+    ],
+    "PowerOnDelaySeconds": 3,
+    "PowerOnDelaySeconds@Redfish.AllowableNumbers": [
+        "3:254:1"
+    ],
+    "PowerRestorePolicy": "LastState",
+    "PowerState": "On",
+    "ProcessorSummary": {
+        "Count": 1,
+        "Metrics": {
+            "@odata.id": "/redfish/v1/Systems/1/ProcessorSummary/ProcessorMetrics"
+        },
+        "Model": "Intel(R) Xeon(R) processor",
+        "Status": {
+            "Health": "OK",
+            "HealthRollup": "OK",
+            "State": "Disabled"
+        }
+    },
+    "Processors": {
+        "@odata.id": "/redfish/v1/Systems/1/Processors"
+    },
+    "SKU": "",
+    "SecureBoot": {
+        "@odata.id": "/redfish/v1/Systems/1/SecureBoot"
+    },
+    "SerialConsole": {
+        "IPMI": {
+            "Port": 623,
+            "ServiceEnabled": true
+        },
+        "MaxConcurrentSessions": 15,
+        "SSH": {
+            "HotKeySequenceDisplay": "Press ~. to exit console",
+            "Port": 22,
+            "ServiceEnabled": true,
+            "SharedWithManagerCLI": true
+        }
+    },
+    "SerialNumber": "S000000X0000001",
+    "Status": {
+        "Health": "OK",
+        "State": "Enabled"
+    },
+    "Storage": {
+        "@odata.id": "/redfish/v1/Systems/1/Storage"
+    },
+    "SubModel": "",
+    "SystemType": "Physical",
+    "UUID": "00000000-0000-4000-8000-000000000001",
+    "VirtualMediaConfig": {
+        "Port": 623,
+        "ServiceEnabled": true
+    }
+}

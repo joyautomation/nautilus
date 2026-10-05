@@ -8,9 +8,10 @@
 #   Gutter: a run glyph beside each `- name:` line; clicking one re-runs
 #     only that test (`naut test -json -run ^(<that name>)$`, a 1/1 summary).
 #   Failure inline: a wrong expectation, saved and run → that test Failed in
-#     the tree, a failure widget in the yaml on the line naut reports, the tag
-#     value in it (or at least in the peek). Revert → green, and the file is
-#     byte-identical to where it started.
+#     the tree, a failure widget in the yaml on the edited `expect:` line
+#     (the line naut reports, #145), the tag value in the widget itself and
+#     in the peek. Revert → green, and the file is byte-identical to where it
+#     started.
 #   Watcher: a test added to the yaml and saved appears in the tree with no
 #     manual refresh (the FileSystemWatcher on **/*_test.yaml).
 #
@@ -205,12 +206,12 @@ if [[ $W == null || -z $W ]]; then
   fail "no inline failure message in the yaml editor" "$png"
 else
   WL=$(pyj "$W" 'd["line"]'); WT=$(pyj "$W" 'd["text"]')
-  [[ $WL == "$FL" ]] && pass "inline failure message on line $WL, the step naut reports ('$WT')" "$png" \
-    || fail "inline failure message on line $WL (naut reports line $FL): '$WT'" "$png"
+  [[ $WL == "$FL" && $WL == "$EL" ]] && pass "inline failure message on line $WL, the expect naut reports ('$WT')" "$png" \
+    || fail "inline failure message on line $WL (naut reports line $FL, the edited expect is $EL): '$WT'" "$png"
   if [[ $WT == *"$FD"* ]]; then
     pass "the inline message carries the tag value: '$FD'" "$png"
   else
-    warn "the inline message reads '$WT' — the tag value ('$FD') is not in it, only in the peek; and it sits on the step's line $WL, not the expect on line $EL (README: 'a failure shows the step and tag value that broke, inline on the assertion'; #145)" "$png"
+    fail "the inline message reads '$WT' — the tag value ('$FD') is not in it (README: 'a failure shows the tag value that broke, inline on the assertion'; #145)" "$png"
   fi
   click_page "$WIDGET_JS" 2
   wait_for 8 peek_up || true

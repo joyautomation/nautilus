@@ -1,0 +1,78 @@
+# spatial-rig — the office rig behind the 3D operator view: three physical
+# props on a desk (a tank, a pump, a valve) given a live, simulated process
+# by this controller, and a *.scene.json that places them in space and
+# binds each to its struct tag. The 3D view is examples/spatial-rig/hmi,
+# built on @joyautomation/nautilus-hmi-3d (../../hmi-3d).
+# Brief: docs/design/spatial-hmi.md.
+#
+#   naut check .     validate offline
+#   naut test  .     4 acceptance tests, virtual time (rig_test.yaml)
+#   naut run   .     dashboard + tag API on http://0.0.0.0:8080
+#   naut build .     one deployable controller binary, 3D view included
+name: spatial-rig
+
+server:
+  addr: "0.0.0.0:8080"   # reachable from a phone or headset on the office LAN
+  # The 3D view, once built (see hmi/README.md). Tolerates being absent:
+  # check/run/build fall back to the dashboard until the first npm run build.
+  hmi: hmi/build
+
+tasks:
+  - program: control.st
+    scan: 100ms
+    dt-tag: ControlDtS
+  - name: sim
+    program: sim.st
+    scan: 100ms
+    dt-tag: SimDtS
+
+tags:
+  # The three props. Each is ONE struct tag, so a scene node binds `P101`
+  # and reads P101.Running, P101.Speed, ... — the same shape a Sparkplug
+  # Template or a Logix UDT arrives in. The UDTs are in types.st.
+  - { name: T101,  role: state, type: Tank,  init: { Level: 50.0, TempC: 20.0 }, desc: "Rig tank" }
+  - { name: P101,  role: state, type: Motor, desc: "Rig fill pump" }
+  - { name: XV101, role: state, type: Valve, desc: "Rig drain valve" }
+  # Two simulated transfer skids (not props): a duty/standby pair, each ONE
+  # struct tag of a UDT that nests UDTs, so the scene places a skid as one
+  # node and its parts read SK101.Pump and SK101.Valve (design §3d).
+  - { name: SK101, role: state, type: Skid, desc: "Transfer skid A (duty)" }
+  - { name: SK102, role: state, type: Skid, desc: "Transfer skid B (standby)" }
+
+  - { name: Demand,     role: setpoint, init: 50.0, unit: "%", desc: "Drain demand — XV-101 follows it" }
+  - { name: StartLevel, role: setpoint, init: 35.0, unit: "%", desc: "P-101 start level" }
+  - { name: StopLevel,  role: setpoint, init: 75.0, unit: "%", desc: "P-101 stop level" }
+  - { name: LevelHH,    role: setpoint, init: 90.0, unit: "%", desc: "T-101 high-high limit" }
+  - { name: LevelLL,    role: setpoint, init: 10.0, unit: "%", desc: "T-101 low-low limit" }
+
+  # Fault injection: flip these from the dashboard to give the scene
+  # something abnormal to show (README, "Make something happen").
+  - { name: InjectPumpFault,  role: setpoint, init: false, desc: "Test: trip P-101" }
+  - { name: InjectValveStick, role: setpoint, init: false, desc: "Test: freeze XV-101 in place" }
+
+alarms:
+  defaults: { ack-required: true, auto-clear: true, shelve: true }
+  journal: { keep: 200 }
+  rules:
+    - match: { type: Tank, member: HH }
+      name: "{desc} level high-high"
+      priority: high
+      on-delay: 2s
+    - match: { type: Tank, member: LL }
+      name: "{desc} level low-low"
+      priority: high
+      on-delay: 2s
+    - match: { type: Motor, member: Fault }
+      name: "{desc} fault"
+      priority: medium
+    - match: { type: Valve, member: Fault }
+      name: "{desc} position disagrees with command"
+      priority: medium
+      on-delay: 3s
+    - match: { type: Skid, member: Fault }
+      name: "{desc} fault"
+      priority: medium
+      on-delay: 3s
+
+driver:
+  type: memory   # no field I/O; the process is sim.st

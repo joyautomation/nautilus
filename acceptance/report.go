@@ -25,9 +25,16 @@ func FormatFailure(r Result) string {
 		return ""
 	}
 	var b strings.Builder
+	// The location is the assertion that broke, so a terminal that links
+	// file:line lands on it; the step is named alongside, with its own line
+	// when that differs, because "step 3" is how a person counts.
 	loc := fmt.Sprintf("%s:%d", r.Suite, f.Line)
 	if f.Step > 0 {
-		fmt.Fprintf(&b, "%s — step %d, t=%s\n", loc, f.Step, vtime(f.At))
+		step := fmt.Sprintf("step %d", f.Step)
+		if f.StepLine > 0 && f.StepLine != f.Line {
+			step += fmt.Sprintf(" (line %d)", f.StepLine)
+		}
+		fmt.Fprintf(&b, "%s — %s, t=%s\n", loc, step, vtime(f.At))
 	} else {
 		fmt.Fprintf(&b, "%s — t=%s\n", loc, vtime(f.At))
 	}

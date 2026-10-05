@@ -1,0 +1,39 @@
+{
+    "@odata.type": "#ComputerSystem.v1_5_0.ComputerSystem",
+    "Id": "1",
+    "Name": "System",
+    "Manufacturer": "Example Systems",
+    "Model": "R1U-L",
+    "SerialNumber": "EX-LEG-0001",
+    "PowerState": "On",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "ProcessorSummary": {
+        "Count": 2,
+        "Status": {
+            "State": "Enabled",
+            "Health": "OK"
+        }
+    },
+    "Links": {
+        "Chassis": [
+            {
+                "@odata.id": "/redfish/v1/Chassis/1"
+            }
+        ]
+    },
+    "Actions": {
+        "#ComputerSystem.Reset": {
+            "target": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+            "ResetType@Redfish.AllowableValues": [
+                "On",
+                "ForceOff",
+                "GracefulShutdown",
+                "GracefulRestart"
+            ]
+        }
+    },
+    "@odata.id": "/redfish/v1/Systems/1"
+}

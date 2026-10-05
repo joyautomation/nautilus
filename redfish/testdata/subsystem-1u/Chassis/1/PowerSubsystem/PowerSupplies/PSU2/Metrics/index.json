@@ -1,0 +1,19 @@
+{
+    "@odata.type": "#PowerSupplyMetrics.v1_1_0.PowerSupplyMetrics",
+    "Id": "Metrics",
+    "Name": "PSU 2 Metrics",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "InputVoltage": {
+        "Reading": 229.8
+    },
+    "OutputPowerWatts": {
+        "Reading": 91
+    },
+    "EnergykWh": {
+        "Reading": 5002
+    },
+    "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem/PowerSupplies/PSU2/Metrics"
+}

@@ -1,0 +1,41 @@
+{
+    "@odata.type": "#SensorCollection.SensorCollection",
+    "Name": "Sensors",
+    "Members@odata.count": 11,
+    "Members": [
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/CPU1Temp"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/InletTemp"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/ExhaustTemp"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/Fan1Speed"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/Fan2Speed"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/Fan3Speed"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/Fan4Speed"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/Fan5Speed"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/Fan6Speed"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/TotalPower"
+        },
+        {
+            "@odata.id": "/redfish/v1/Chassis/1/Sensors/TotalEnergy"
+        }
+    ],
+    "@odata.id": "/redfish/v1/Chassis/1/Sensors"
+}

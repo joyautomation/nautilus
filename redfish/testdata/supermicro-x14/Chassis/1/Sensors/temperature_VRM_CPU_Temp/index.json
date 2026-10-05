@@ -1,0 +1,22 @@
+{
+    "@odata.type": "#Sensor.v1_7_0.Sensor",
+    "Id": "temperature_VRM_CPU_Temp",
+    "Name": "VRM CPU Temp",
+    "Reading": 42,
+    "ReadingUnits": "Cel",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "ReadingType": "Temperature",
+    "PhysicalContext": "VoltageRegulator",
+    "Thresholds": {
+        "UpperCaution": {
+            "Reading": 95
+        },
+        "UpperCritical": {
+            "Reading": 100
+        }
+    },
+    "@odata.id": "/redfish/v1/Chassis/1/Sensors/temperature_VRM_CPU_Temp"
+}

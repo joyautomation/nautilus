@@ -11,6 +11,7 @@ import (
 
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/internal/stproject"
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/lang/ld"
 	"github.com/joyautomation/nautilus/lang/sfc"
@@ -224,6 +225,14 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		return 1, 0
 	}
 
+	// A driver's own non-fatal findings: an unset credential variable, a
+	// missing secret file, a weak SNMP auth. Warnings, never errors — this
+	// runs on laptops that have none of the secrets a controller will.
+	for _, w := range driverWarnings(proj.Runtime.Driver) {
+		warns++
+		fmt.Printf("%s: warning: %s\n", dir, w)
+	}
+
 	// The first task's name: key is a footgun, not a choice: Load (like
 	// Sources, for a warm swap) assigns the first task runtime.MainTaskName
 	// unconditionally, so a manifest author who names it — e.g. expecting
@@ -344,6 +353,27 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		// of alarms": `naut alarms list` dumps what they became.
 		fmt.Printf("%s: %d alarm definitions\n", dir, len(defs))
 	}
+
+	// Scenes: every *.scene.json at the root really binds struct tags the
+	// manifest declares, and every kind really finds its members on them.
+	// Same offline discipline as alarms; docs/design/spatial-hmi.md §3b.
+	reports, serrs, swarns, err := proj.CheckScenes(os.DirFS(dir), rt)
+	if err != nil {
+		errs++
+		fmt.Printf("%s: error: scenes: %s\n", dir, err)
+		return errs, warns
+	}
+	for _, m := range serrs {
+		errs++
+		fmt.Printf("%s: error: %s\n", dir, m)
+	}
+	for _, m := range swarns {
+		warns++
+		fmt.Printf("%s: warning: %s\n", dir, m)
+	}
+	for _, r := range reports {
+		fmt.Printf("%s: scene %s: %d nodes, %d pipes\n", dir, r.File, r.Nodes, r.Pipes)
+	}
 	return errs, warns
 }
 
@@ -450,4 +480,24 @@ func inLibDir(f string) bool {
 	}
 	rel, err := filepath.Rel(stproject.ProjectRoot(abs), abs)
 	return err == nil && stproject.InLibDir(filepath.ToSlash(rel))
+}
+
+// driverWarnings collects Warnings() from a driver, recursing into a
+// multi-driver set so each child's findings carry its name.
+func driverWarnings(d nio.Driver) []string {
+	switch drv := d.(type) {
+	case nil:
+		return nil
+	case *nio.Multi:
+		var out []string
+		for _, c := range drv.Children() {
+			for _, w := range driverWarnings(c.Driver) {
+				out = append(out, c.Name+": "+w)
+			}
+		}
+		return out
+	case interface{ Warnings() []string }:
+		return drv.Warnings()
+	}
+	return nil
 }

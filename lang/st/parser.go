@@ -1045,7 +1045,7 @@ func (p *Parser) continuePostfix(expr Expression) (Expression, error) {
 			if err != nil {
 				return nil, err
 			}
-			expr = &MemberExpr{Object: expr, Member: memberTok.Literal, Pos: nodePos(expr)}
+			expr = &MemberExpr{Object: expr, Member: memberTok.Literal, Pos: nodePos(expr), MemberPos: tokPos(memberTok)}
 		case TokenLBracket:
 			p.advance()
 			var indices []Expression
