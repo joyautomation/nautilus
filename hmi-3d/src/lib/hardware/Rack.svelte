@@ -1,6 +1,6 @@
 <script lang="ts">
 	// A 19-inch rack frame from a RackLayout (rack.ts): four posts running
-	// the full height with the floor and top frames butted square into
+	// the full height with the bottom and top frames butted square into
 	// them, a mounting rail front and rear with the EIA-310 square holes
 	// (three per unit) that the devices' ears bolt to, and a unit scale on
 	// the left front post. The devices, their slide rails (<SlideRails>) and
@@ -24,7 +24,13 @@
 	const X = RAIL_X + RAIL_W - POST / 2; // post centres, flush with the rail's outer edge
 	const postZ = -EAR_T - RAIL_T - POST / 2;
 	let D = $derived(layout.depth / 1000);
+	// The units fill the mounting rails from `lo` to `top`; the frame's beams
+	// sit outside that space, below the first unit and above the last, the way
+	// a rack is built, so every unit's holes are on open rail. Below the
+	// bottom beam the posts stand on the floor as feet.
 	let top = $derived(uY(layout, layout.units + 1));
+	let lo = $derived(Math.max(BEAM, uY(layout, 1)));
+	let frameTop = $derived(top + BEAM);
 	let marks = $derived(Array.from({ length: Math.floor(layout.units / 5) }, (_, i) => (i + 1) * 5));
 	const frame = { color: '#34363a', metalness: 0.5, roughness: 0.55 };
 	const rail = { color: '#4a4d52', metalness: 0.6, roughness: 0.45 };
@@ -50,13 +56,13 @@
 {#each [-1, 1] as sx}
 	<!-- posts, full height: the frame's beams stop at their faces -->
 	{#each zs as z}
-		<T.Mesh position={[sx * X, top / 2, z]} raycast={noRaycast}>
-			<T.BoxGeometry args={[POST, top, POST]} />
+		<T.Mesh position={[sx * X, frameTop / 2, z]} raycast={noRaycast}>
+			<T.BoxGeometry args={[POST, frameTop, POST]} />
 			<T.MeshStandardMaterial {...frame} />
 		</T.Mesh>
 	{/each}
-	<!-- side beams, floor and top, between the posts -->
-	{#each [BEAM / 2, top - BEAM / 2] as y}
+	<!-- side beams, just below the first unit and just above the last, between the posts -->
+	{#each [lo - BEAM / 2, top + BEAM / 2] as y}
 		<T.Mesh position={[sx * X, y, (zs[0] + zs[1]) / 2]} raycast={noRaycast}>
 			<T.BoxGeometry args={[POST, BEAM, zs[0] - zs[1] - POST]} />
 			<T.MeshStandardMaterial {...frame} />
@@ -65,8 +71,8 @@
 	<!-- mounting rails, front and rear, with their holes -->
 	{#each [railZ, -D - railZ] as z, i}
 		{@const face = i === 0 ? 1 : -1}
-		<T.Mesh position={[sx * (RAIL_X + RAIL_W / 2), top / 2, z]} raycast={noRaycast}>
-			<T.BoxGeometry args={[RAIL_W, top - 2 * BEAM, RAIL_T]} />
+		<T.Mesh position={[sx * (RAIL_X + RAIL_W / 2), (lo + top) / 2, z]} raycast={noRaycast}>
+			<T.BoxGeometry args={[RAIL_W, top - lo, RAIL_T]} />
 			<T.MeshStandardMaterial {...rail} />
 		</T.Mesh>
 		<T.Mesh geometry={holes} position={[sx * HOLE_X, 0, z + (face * (RAIL_T + 0.0004)) / 2]} raycast={noRaycast}>
@@ -74,9 +80,9 @@
 		</T.Mesh>
 	{/each}
 {/each}
-<!-- front and rear beams, floor and top, between the posts -->
+<!-- front and rear beams, just below the first unit and just above the last -->
 {#each zs as z}
-	{#each [BEAM / 2, top - BEAM / 2] as y}
+	{#each [lo - BEAM / 2, top + BEAM / 2] as y}
 		<T.Mesh position={[0, y, z]} raycast={noRaycast}>
 			<T.BoxGeometry args={[2 * X - POST, BEAM, POST]} />
 			<T.MeshStandardMaterial {...frame} />
@@ -89,7 +95,7 @@
 	</HTML>
 {/each}
 {#if label}
-	<HTML position={[0, top + 0.05, 0]} center pointerEvents="none">
+	<HTML position={[0, frameTop + 0.05, 0]} center pointerEvents="none">
 		<span class="name">{label}</span>
 	</HTML>
 {/if}
