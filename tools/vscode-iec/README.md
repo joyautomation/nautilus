@@ -160,6 +160,11 @@ server.
   their types (`LIMIT(MN, IN, MX)`), or a function block's input pins and,
   after `=>`, its outputs, with the one you are on highlighted — by
   position after each `,`, or by name once you write `PT :=`.
+- **Find all references** (Shift+F12, or *Go to References*): a tag in
+  every program that binds it — `.st`, and `.fbd`/`.ld`/`.sfc` on the
+  diagram file's own lines — and where `nautilus.yaml` or a tag file names
+  it; a local only inside its POU; `t1.Q` only as that instance's `Q`.
+
 
 - **Outline, breadcrumbs and Go to Symbol** (`Ctrl+Shift+O`) in `.st`,
   `.fbd`, `.ld` and `.sfc`: each POU and TYPE, its VAR sections and their

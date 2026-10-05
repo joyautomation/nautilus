@@ -138,6 +138,7 @@ type ServerCapabilities struct {
 	TextDocumentSync      int                `json:"textDocumentSync"` // 1 = Full
 	HoverProvider         bool               `json:"hoverProvider"`
 	DefinitionProvider    bool               `json:"definitionProvider"`
+	ReferencesProvider    bool               `json:"referencesProvider,omitempty"`
 	CompletionProvider    *CompletionOpts    `json:"completionProvider,omitempty"`
 	SignatureHelpProvider *SignatureHelpOpts `json:"signatureHelpProvider,omitempty"`
 	RenameProvider        *RenameOpts        `json:"renameProvider,omitempty"`

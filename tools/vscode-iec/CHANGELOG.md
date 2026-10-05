@@ -43,6 +43,15 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   operator blocks `ADD`, `GT`, `AND`, … included). Comes from `naut lsp`,
   so it needs a `naut` newer than 0.15.0.
 
+- **Find all references** (Shift+F12 / *Go to References* / *Find All
+  References*) on any name in `.st`, `.fbd`, `.ld` and `.sfc`. A tag lists
+  every program that binds it in `VAR_EXTERNAL` — diagram programs on the
+  diagram file's own lines — plus where `nautilus.yaml` or a tag file names
+  it (its declaration, `dt-tag`, `tag-meta`, `tag-classes`); a local lists
+  only its own POU; a member (`t1.Q`) lists that instance's `Q`, including
+  `t1(Q => …)`, never another timer's. Works mid-edit, while the buffer does
+  not parse. Comes from `naut lsp`, so it needs a `naut` newer than 0.15.0.
+
 - **Outline view, breadcrumbs and Go to Symbol in Editor for `.st`, `.fbd`,
   `.ld` and `.sfc`.** They were empty. Each POU (PROGRAM, FUNCTION_BLOCK,
   FUNCTION) and TYPE now lists its VAR sections and their declarations as
