@@ -52,6 +52,17 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   `t1(Q => …)`, never another timer's. Works mid-edit, while the buffer does
   not parse. Comes from `naut lsp`, so it needs a `naut` newer than 0.15.0.
 
+- **Outline view, breadcrumbs and Go to Symbol in Editor for `.st`, `.fbd`,
+  `.ld` and `.sfc`.** They were empty. Each POU (PROGRAM, FUNCTION_BLOCK,
+  FUNCTION) and TYPE now lists its VAR sections and their declarations as
+  `name : type`, and a STRUCT lists its fields. A diagram file then lists its
+  body: one entry per FBD netlist statement, named by what it assigns or
+  calls (`t1 : TON(...)` is t1, `Run := latch` is Run), one per ladder RUNG
+  with its name and comment, and the SFC steps (the initial step marked),
+  transitions (`Fill → Hold`) and actions. A half-typed line does not empty
+  the outline. Comes from `naut lsp` (`textDocument/documentSymbol`). An
+  older `naut` leaves the outline empty, as before.
+
 ### Fixed
 
 - **The FB monitor CodeLens shows the real position.** It said "1 of 2"

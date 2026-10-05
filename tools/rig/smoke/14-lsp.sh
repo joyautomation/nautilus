@@ -30,6 +30,15 @@
 #        task offers program / scan / name, in a new test step given /
 #        advance / expect. Last block: tags/*.yaml and alarms/*.yaml (a
 #        misspelt key is an error; a new entry completes with the schema's keys).
+
+#        advance / expect.
+#   X40  document symbols (naut lsp textDocument/documentSymbol): the
+#        Outline view lists plant.st's PROGRAM, its VAR sections and their
+#        declarations; with the cursor on a declaration, a rung or a step the
+#        breadcrumb bar shows the enclosing POU / section; Go to Symbol in
+#        Editor (Ctrl+Shift+O) lists them. The same on interlock.ld (rungs)
+#        and batch.sfc (steps, transitions, actions). The rig profile turns
+#        breadcrumbs off; X40 turns them on (live) after the X18/X20 rows.
 #
 # Everything is read from the WORKBENCH page's DOM over CDP (gestures.sh
 # `cdp page`): the hover widget's text, the suggest widget's rows (label +
@@ -43,6 +52,10 @@
 # the PROGRAM with its own local settle (for X41's scoping row), and a
 # batch_test.yaml with a step, committed on top of the fixture before VS
 # Code opens.
+
+# check gives it one (settle : TON, read as settle.Q), a batch_test.yaml
+# with a step and a ladder library (interlock.ld, for X40's rungs),
+# committed on top of the fixture before VS Code opens.
 set -euo pipefail
 CHECK=14-lsp
 source "$HOME/smoke/lib.sh"
@@ -88,6 +101,29 @@ cat >"$PROJ/alarms/spare-alarms.yaml" <<'YAML'
   priority: low
 YAML
 git -C "$PROJ" add -A; git -C "$PROJ" commit -qm "smoke 14: an FB instance and a test step"
+
+cat >"$PROJ/interlock.ld" <<'LADDER'
+(* A start/stop seal-in, written as rungs: a PROGRAM-less .ld is a
+   project library. *)
+FUNCTION_BLOCK SealIn
+VAR_INPUT
+    Start : BOOL;
+    Stop  : BOOL;
+END_VAR
+VAR_OUTPUT
+    Run  : BOOL;
+    Lamp : BOOL;
+END_VAR
+LD
+  RUNG seal (* start/stop with seal-in *)
+    [ Start | Run ] /Stop ( Run )
+
+  RUNG lamp (* the run lamp follows the seal *)
+    Run ( Lamp )
+END_LD
+END_FUNCTION_BLOCK
+LADDER
+git -C "$PROJ" add -A; git -C "$PROJ" commit -qm "smoke 14: an FB instance, a test step and a ladder library"
 out=$(cd "$PROJ" && naut check 2>&1 | tail -1 || true)
 [[ $out == *", 0 with errors"* ]] || { fail "the check's own fixture does not compile: $out"; exit 1; }
 
@@ -509,6 +545,120 @@ for pre in "ta:tag" "prio:priority"; do
   undo_clean || fail "X20 alarms-yaml: undo did not bring the buffer back to clean after '${pre%%:*}'"
 done
 # END smoke-partial-rows
+
+# ══ X40 document symbols ═══════════════════════════════════════════════════
+# outline_rows — the Outline view's rows on screen (a virtual list) in list
+# order, indented by tree level: "name [kind] detail", "<selected>" on the
+# selected row.
+outline_rows() {
+  wb '(() => { const p = document.querySelector(".outline-pane"); if (!p) return ""; return [...p.querySelectorAll(".monaco-list-row")].sort((a, b) => (+a.dataset.index) - (+b.dataset.index)).map(r => "  ".repeat(Math.max(0, (+r.getAttribute("aria-level") || 1) - 1)) + (r.querySelector(".label-name")?.innerText || r.getAttribute("aria-label") || "").trim() + " [" + ((r.querySelector("[class*=codicon-symbol-]")?.className.match(/codicon-symbol-([a-z-]+)/) || [])[1] || "?") + "] " + (r.querySelector(".label-description")?.innerText || "").trim() + (r.classList.contains("selected") ? " <selected>" : "")).join("\n"); })()'
+}
+has_outline() { [[ -n $(outline_rows) ]]; }
+# outline_all — every row of the Outline, not just the ones its virtual list
+# has on screen: Home, then PageDown through the tree (the Outline has the
+# focus), collecting rows by list index. The selection marks are dropped.
+outline_all() {
+  local i acc=""
+  xdotool key --clearmodifiers Home; sleep 0.5
+  for i in 1 2 3 4 5 6 7 8; do
+    acc+=$(wb '(() => { const p = document.querySelector(".outline-pane"); if (!p) return ""; return [...p.querySelectorAll(".monaco-list-row")].map(r => r.dataset.index + "\t" + "  ".repeat(Math.max(0, (+r.getAttribute("aria-level") || 1) - 1)) + (r.querySelector(".label-name")?.innerText || r.getAttribute("aria-label") || "").trim() + " [" + ((r.querySelector("[class*=codicon-symbol-]")?.className.match(/codicon-symbol-([a-z-]+)/) || [])[1] || "?") + "] " + (r.querySelector(".label-description")?.innerText || "").trim()).join("\n"); })()')$'\n'
+    xdotool key --clearmodifiers Next; sleep 0.4
+  done
+  sort -t$'\t' -k1,1n -u <<<"$acc" | grep . | cut -f2-
+}
+# crumbs — the active editor's breadcrumb bar, "a › b › c".
+crumbs() {
+  wb '(() => { const g = document.querySelector(".editor-group-container.active") || document; return [...g.querySelectorAll(".breadcrumbs-control .monaco-breadcrumb-item")].map(e => e.innerText.trim()).filter(Boolean).join(" › "); })()'
+}
+# qp_rows — the open quick pick's rows: "label | description".
+qp_rows() {
+  wb '[...document.querySelectorAll(".quick-input-widget .quick-input-list .monaco-list-row")].sort((a, b) => (+a.dataset.index) - (+b.dataset.index)).map(r => (r.querySelector(".label-name")?.innerText || r.getAttribute("aria-label") || "").trim() + " | " + (r.querySelector(".label-description")?.innerText || "").trim()).join("\n")'
+}
+has_qp() { [[ -n $(qp_rows) ]]; }
+# has_all <text> <ERE>... — every ERE matches a line of the text; prints the
+# ones that do not.
+has_all() { local t=$1 re miss=""; shift; for re; do grep -qE -- "$re" <<<"$t" || miss="$miss /$re/"; done; [[ -z $miss ]] || { echo "$miss"; return 1; }; }
+# outline_tree — focus the Outline view, read its whole tree, focus the
+# editor again. Prints the rows.
+outline_tree() {
+  local rows
+  vs_cmd "Focus on Outline View" 2
+  wait_for 10 has_outline || true
+  rows=$(outline_all)
+  key ctrl+1
+  echo "$rows"
+}
+# symbol_at <file> <ERE for the line> <word> — the cursor on it, then the
+# breadcrumbs and the Outline's selection have caught up.
+symbol_at() { goto_word "$@"; sleep 1.5; }
+# goto_symbol [filter] — Ctrl+Shift+O, optionally narrowed; prints the rows.
+goto_symbol() {
+  xdotool key --clearmodifiers Escape; sleep 0.3
+  xdotool key --clearmodifiers ctrl+shift+o; sleep 1.5
+  [[ -n ${1:-} ]] && { xdotool type --delay 60 -- "$1"; sleep 1.2; }
+  wait_for 6 has_qp || true
+  qp_rows
+}
+
+# The rig profile turns breadcrumbs off; X40 needs them, and the Outline
+# fully expanded. Settings apply live.
+sed -i 's/"breadcrumbs.enabled": false/"breadcrumbs.enabled": true/; 0,/^{/s//{\n  "outline.collapseItems": "alwaysExpand",/' "$PROFILE/User/settings.json"
+sleep 1
+open_file plant.st 3
+rows=$(outline_tree); png=$(shot outline-st)
+if miss=$(has_all "$rows" '^Plant \[' '^  VAR_EXTERNAL \[' '^    Level \[[a-z?-]+\] REAL' '^  VAR \[' '^    settle \[[a-z?-]+\] TON'); then
+  pass "X41 Outline on plant.st: the PROGRAM, its VAR sections and declarations — $(head -4 <<<"$rows" | oneline)…" "$png"
+else fail "X41 Outline on plant.st is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+
+symbol_at "$F" '^    settle : TON;' settle
+c=$(crumbs); png=$(shot breadcrumbs-st)
+if [[ $c == *"Plant › VAR › settle"* ]]; then
+  pass "X41 breadcrumbs on plant.st's settle declaration: \"$c\"" "$png"
+else fail "X41 breadcrumbs on plant.st's settle declaration: \"${c:-<none>}\", want …Plant › VAR › settle" "$png"; fi
+
+rows=$(goto_symbol); png=$(shot goto-symbol-st)
+if miss=$(has_all "$rows" '^Plant ' '^VAR_EXTERNAL ' '^Level ' '^settle '); then
+  pass "X41 Go to Symbol in Editor on plant.st lists them — $(head -5 <<<"$rows" | oneline)…" "$png"
+else fail "X41 Go to Symbol in Editor on plant.st is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+xdotool key --clearmodifiers Escape; sleep 0.4
+
+L=$PROJ/interlock.ld
+open_file interlock.ld 4
+rows=$(outline_tree); png=$(shot outline-ld)
+if miss=$(has_all "$rows" '^SealIn \[' '^  VAR_INPUT \[' '^    Start \[[a-z?-]+\] BOOL' '^  seal \[[a-z?-]+\] start/stop with seal-in' '^  lamp \['); then
+  pass "X41 Outline on interlock.ld: the FUNCTION_BLOCK, its sections and its rungs with their comments — $(oneline <<<"$rows")" "$png"
+else fail "X41 Outline on interlock.ld is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+
+symbol_at "$L" '^    Run \( Lamp \)' Lamp
+c=$(crumbs); png=$(shot breadcrumbs-ld)
+if [[ $c == *"SealIn › lamp"* ]]; then
+  pass "X41 breadcrumbs inside interlock.ld's lamp rung: \"$c\"" "$png"
+else fail "X41 breadcrumbs inside interlock.ld's lamp rung: \"${c:-<none>}\", want …SealIn › lamp" "$png"; fi
+
+rows=$(goto_symbol); png=$(shot goto-symbol-ld)
+if miss=$(has_all "$rows" '^SealIn ' '^seal ' '^lamp '); then
+  pass "X41 Go to Symbol in Editor on interlock.ld lists the rungs — $(oneline <<<"$rows")" "$png"
+else fail "X41 Go to Symbol in Editor on interlock.ld is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+xdotool key --clearmodifiers Escape; sleep 0.4
+
+S=$PROJ/batch.sfc
+open_file batch.sfc 4
+rows=$(outline_tree); png=$(shot outline-sfc)
+if miss=$(has_all "$rows" '^TankBatch \[' '^  VAR_EXTERNAL \[' '^    BatchCount \[[a-z?-]+\] INT' '^  Idle \[[a-z?-]+\] INITIAL_STEP' '^  Fill \[[a-z?-]+\] STEP' '^  Fill → \(Heat, Mix\) \[[a-z?-]+\] t_full: ' '^  \(Heat, Mix\) → Drain \[' '^  CountBatch \[[a-z?-]+\] ACTION'); then
+  pass "X41 Outline on batch.sfc: the PROGRAM, its sections, the steps (initial marked), the transitions as From → To, the actions — $(grep -E '^  [^ ]' <<<"$rows" | sed 's/^ *//' | oneline)" "$png"
+else fail "X41 Outline on batch.sfc is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+
+symbol_at "$S" '^  STEP Fill:' Fill
+c=$(crumbs); png=$(shot breadcrumbs-sfc)
+if [[ $c == *"TankBatch › Fill"* ]]; then
+  pass "X41 breadcrumbs on batch.sfc's STEP Fill: \"$c\"" "$png"
+else fail "X41 breadcrumbs on batch.sfc's STEP Fill: \"${c:-<none>}\", want …TankBatch › Fill" "$png"; fi
+
+rows=$(goto_symbol Idle); png=$(shot goto-symbol-sfc)
+if miss=$(has_all "$rows" '^Idle ' '^Idle → Fill ' '^Drain → Idle '); then
+  pass "X41 Go to Symbol in Editor on batch.sfc, filtered 'Idle': the initial step and its transitions — $(oneline <<<"$rows")" "$png"
+else fail "X41 Go to Symbol in Editor on batch.sfc, filtered 'Idle', is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+xdotool key --clearmodifiers Escape; sleep 0.4
 
 # ══ nothing left behind ════════════════════════════════════════════════════
 d=$(wb 'String(document.querySelectorAll(".tabs-container .tab.dirty").length)')

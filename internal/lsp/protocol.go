@@ -142,6 +142,9 @@ type ServerCapabilities struct {
 	CompletionProvider    *CompletionOpts    `json:"completionProvider,omitempty"`
 	SignatureHelpProvider *SignatureHelpOpts `json:"signatureHelpProvider,omitempty"`
 	RenameProvider        *RenameOpts        `json:"renameProvider,omitempty"`
+
+	// DocumentSymbolProvider advertises textDocument/documentSymbol (symbols.go).
+	DocumentSymbolProvider bool `json:"documentSymbolProvider,omitempty"`
 }
 
 type CompletionOpts struct {
