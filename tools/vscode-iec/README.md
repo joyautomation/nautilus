@@ -156,6 +156,11 @@ server.
 - **Go to definition**, **hover** (type, var section, a tag's unit and
   description) and **completion** (in-scope variables, keywords, types, and
   the compiler's own function and function-block registries).
+- **Signature help** while you type a call: the function's parameters with
+  their types (`LIMIT(MN, IN, MX)`), or a function block's input pins and,
+  after `=>`, its outputs, with the one you are on highlighted — by
+  position after each `,`, or by name once you write `PT :=`.
+
 - **Outline, breadcrumbs and Go to Symbol** (`Ctrl+Shift+O`) in `.st`,
   `.fbd`, `.ld` and `.sfc`: each POU and TYPE, its VAR sections and their
   declarations (`name : type`), STRUCT fields; then the FBD netlist

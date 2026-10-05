@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 14 — language intelligence (INVENTORY X18, X20), in a real editor:
+# 14 — language intelligence (INVENTORY X18, X20, X40), in a real editor:
 #
 #   X18  `naut lsp` on plant.st: hover (a manifest tag, a VAR_EXTERNAL that
 #        is not in the manifest, a local FB instance), completion (a partial
@@ -13,6 +13,13 @@
 #        nothing (#139), and an undeclared name's problem sits on the
 #        statement's first token, not on the name (#141). When either is
 #        fixed its row turns PASS by itself.
+#   X40  signature help: typing `LIMIT(` opens the parameter-hints widget
+#        with LIMIT's three parameters, the first highlighted; typing
+#        `0.0, ` moves the highlight to the second; `settle(IN := ` shows the
+#        TON's pins (inputs, outputs after =>) with IN highlighted, and
+#        `Full, PT := ` moves it to PT. Read from the widget's DOM
+#        (.parameter-hints-widget, its .parameter.active span); Esc and
+#        undo leave the buffer clean.
 #   X20  the YAML schemas (package.json yamlValidation → Red Hat YAML): a
 #        bogus key under a task / a test step is flagged; completion in a new
 #        task offers program / scan / name, in a new test step given /
@@ -289,6 +296,56 @@ sleep 1; e2=$(errors); s2=$(squiggles); png=$(shot diagnostics-reverted)
 if ! dirty && [[ $e2 == "$e0" && $s2 == "$s0" ]]; then
   pass "X18 diagnostics: undo clears them (errors $e2, squiggles $s2, buffer clean)" "$png"
 else fail "X18 diagnostics: after undo errors ${e2:-?} (was $e0), squiggles ${s2:-?}, $(dirty && echo dirty || echo clean)" "$png"; fi
+
+# ══ X40 signature help ═════════════════════════════════════════════════════
+# sig_label / sig_active — the visible parameter-hints widget's signature
+# text, and the highlighted parameter's text ("" when none).
+sig_widget='[...document.querySelectorAll(".parameter-hints-widget")].find(e => e.classList.contains("visible") && e.getBoundingClientRect().height > 0)'
+sig_label() { wb "(() => { const w = $sig_widget; return w ? (w.querySelector(\".signature .code\") || w.querySelector(\".signature\") || w).innerText.trim().replace(/\\s*\\n\\s*/g, \" \") : \"\"; })()"; }
+sig_active() { wb "(() => { const w = $sig_widget; return w ? (w.querySelector(\".parameter.active\")?.innerText || \"\").trim() : \"\"; })()"; }
+has_sig() { [[ -n $(sig_label) ]]; }
+active_is() { [[ $(sig_active) == "$1" ]]; }
+
+new_line_below "$F" '^END_IF;'
+xdotool type --delay 60 -- 'TempC := LIMIT('
+wait_for 8 has_sig || true
+sleep 0.5; lbl=$(sig_label); act=$(sig_active); png=$(shot signature-open)
+miss=""; for p in "MN : ANY_NUM" "IN : ANY_NUM" "MX : ANY_NUM"; do [[ $lbl == *"LIMIT("*"$p"* ]] || miss="$miss '$p'"; done
+if [[ -z $miss && $act == "MN : ANY_NUM" ]]; then
+  pass "X40 signature help: typing 'LIMIT(' shows \"$lbl\", first parameter highlighted ($act)" "$png"
+else fail "X40 signature help: after 'LIMIT(' the widget shows \"${lbl:-<none>}\" (missing$miss), highlighted \"${act:-<none>}\" — want MN" "$png"; fi
+
+xdotool type --delay 60 -- '0.0, '
+wait_for 6 active_is "IN : ANY_NUM" || true
+sleep 0.3; lbl=$(sig_label); act=$(sig_active); png=$(shot signature-comma)
+if [[ $act == "IN : ANY_NUM" && $lbl == *"LIMIT("* ]]; then
+  pass "X40 signature help: typing '0.0, ' moves the highlight to the second parameter ($act)" "$png"
+else fail "X40 signature help: after '0.0, ' highlighted \"${act:-<none>}\" in \"${lbl:-<none>}\" — want IN" "$png"; fi
+undo_clean || fail "X40 signature help: undo did not bring plant.st back to clean"
+
+new_line_below "$F" '^END_IF;'
+xdotool type --delay 60 -- 'settle(IN := '
+wait_for 8 has_sig || true
+wait_for 4 active_is "IN : BOOL" || true
+sleep 0.3; lbl=$(sig_label); act=$(sig_active); png=$(shot signature-fb)
+if [[ $lbl == *"TON(IN : BOOL, PT : TIME) => Q : BOOL, ET : TIME"* && $act == "IN : BOOL" ]]; then
+  pass "X40 signature help: 'settle(IN := ' names the TON's pins — \"$lbl\", IN highlighted" "$png"
+else fail "X40 signature help: after 'settle(IN := ' the widget shows \"${lbl:-<none>}\", highlighted \"${act:-<none>}\" — want TON's pins, IN" "$png"; fi
+
+xdotool type --delay 60 -- 'Full, PT := '
+wait_for 6 active_is "PT : TIME" || true
+sleep 0.3; act=$(sig_active); png=$(shot signature-fb-named)
+if [[ $act == "PT : TIME" ]]; then
+  pass "X40 signature help: 'Full, PT := ' moves the highlight to the named pin ($act)" "$png"
+else fail "X40 signature help: after 'Full, PT := ' highlighted \"${act:-<none>}\" — want PT" "$png"; fi
+
+xdotool key --clearmodifiers Escape; sleep 0.5
+gone=$(has_sig && echo shown || echo hidden)
+undo_clean || true
+sleep 0.5; png=$(shot signature-reverted)
+if [[ $gone == hidden ]] && ! dirty; then
+  pass "X40 signature help: Esc closes the widget; undone, plant.st clean" "$png"
+else fail "X40 signature help: after Esc the widget is $gone; plant.st $(dirty && echo dirty || echo clean) after undo" "$png"; fi
 
 # ══ X20 nautilus.yaml schema ═══════════════════════════════════════════════
 Y=$PROJ/nautilus.yaml

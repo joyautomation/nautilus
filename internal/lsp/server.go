@@ -81,6 +81,13 @@ func (s *Server) dispatch(m *message) {
 	case "initialize":
 		s.w.respond(m.ID, InitializeResult{
 			Capabilities: ServerCapabilities{
+				TextDocumentSync:      1, // Full: client resends the whole doc per change
+				HoverProvider:         true,
+				DefinitionProvider:    true,
+				CompletionProvider:    &CompletionOpts{TriggerCharacters: []string{"."}},
+				SignatureHelpProvider: signatureHelpOptions(),
+				RenameProvider:        &RenameOpts{PrepareProvider: true},
+
 				TextDocumentSync:   1, // Full: client resends the whole doc per change
 				HoverProvider:      true,
 				DefinitionProvider: true,
@@ -124,6 +131,8 @@ func (s *Server) dispatch(m *message) {
 		s.handleHover(m)
 	case "textDocument/completion":
 		s.handleCompletion(m)
+	case "textDocument/signatureHelp":
+		s.handleSignatureHelp(m)
 	case "textDocument/prepareRename":
 		s.handlePrepareRename(m)
 	case "textDocument/rename":
