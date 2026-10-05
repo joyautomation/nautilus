@@ -156,6 +156,10 @@ server.
 - **Go to definition**, **hover** (type, var section, a tag's unit and
   description) and **completion** (in-scope variables, keywords, types, and
   the compiler's own function and function-block registries).
+- **Signature help** while you type a call: the function's parameters with
+  their types (`LIMIT(MN, IN, MX)`), or a function block's input pins and,
+  after `=>`, its outputs, with the one you are on highlighted — by
+  position after each `,`, or by name once you write `PT :=`.
 - Syntax highlighting works with no CLI at all.
 
 ## Requirements
