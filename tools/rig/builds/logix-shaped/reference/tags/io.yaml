@@ -1,0 +1,23 @@
+# Field I/O — the Logix controller-tag habit: one flat list, every tag with
+# a description. Inputs need an init (their value until a driver supplies
+# one). Composed into nautilus.yaml through `tag-files:`.
+
+# Panel and safety
+- { name: EStop,        role: input, init: false, desc: "E-stop chain open (TRUE = stopped)" }
+- { name: AirOk,        role: input, init: true,  desc: "Instrument air pressure switch made" }
+- { name: FaultReset,   role: input, init: false, desc: "Fault reset pushbutton" }
+
+# M1 — discharge conveyor
+- { name: M1_StartPB,   role: input, init: false, desc: "M1 start pushbutton (momentary)" }
+- { name: M1_StopPB,    role: input, init: false, desc: "M1 stop pushbutton, TRUE while pressed" }
+- { name: M1_Aux,       role: input, init: false, desc: "M1 contactor auxiliary contact" }
+- { name: M1_OL,        role: input, init: false, desc: "M1 overload tripped" }
+- { name: M1_Run,       role: output,             desc: "M1 contactor coil" }
+
+# M2 — infeed conveyor (runs only behind M1)
+- { name: M2_StartPB,   role: input, init: false, desc: "M2 start pushbutton (momentary)" }
+- { name: M2_StopPB,    role: input, init: false, desc: "M2 stop pushbutton, TRUE while pressed" }
+- { name: M2_Aux,       role: input, init: false, desc: "M2 contactor auxiliary contact" }
+- { name: M2_OL,        role: input, init: false, desc: "M2 overload tripped" }
+- { name: M2_Run,       role: output,             desc: "M2 contactor coil" }
+- { name: M2_SpeedRef,  role: output, init: 0.0, unit: Hz, desc: "M2 drive speed reference" }
