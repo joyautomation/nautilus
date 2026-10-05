@@ -29,6 +29,20 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- **Signature help: a call's parameters while you type it.** Typing `(`
+  after a function or a function block instance opens the parameter-hints
+  widget with the callee's signature, and `,` moves the highlight on —
+  `LIMIT(MN : ANY_NUM, IN : ANY_NUM, MX : ANY_NUM) : ANY_NUM` for a builtin
+  or a conversion, `Scale(Raw : INT, Span : REAL) : REAL` for your own
+  FUNCTION, and for a block (`settle(IN := …`) its inputs with their types
+  and its outputs after `=>`, the highlight on the pin being bound (`PT :=`).
+  Works while the line is still unfinished, in nested calls, for blocks
+  declared in a project library, and on a netlist line of a `.fbd` (the
+  operator blocks `ADD`, `GT`, `AND`, … included). Comes from `naut lsp`,
+  so it needs a `naut` newer than 0.15.0.
+
 ### Fixed
 
 - **The FB monitor CodeLens shows the real position.** It said "1 of 2"
