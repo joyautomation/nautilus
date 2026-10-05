@@ -20,9 +20,10 @@
 #   X40  document symbols (naut lsp textDocument/documentSymbol): the
 #        Outline view lists plant.st's PROGRAM, its VAR sections and their
 #        declarations; with the cursor on a declaration, a rung or a step the
-#        breadcrumb bar shows the enclosing POU / section and the Outline
-#        selects that row; Go to Symbol in Editor (Ctrl+Shift+O) lists them.
-#        The same on interlock.ld (rungs) and batch.sfc (steps, transitions).
+#        breadcrumb bar shows the enclosing POU / section; Go to Symbol in
+#        Editor (Ctrl+Shift+O) lists them. The same on interlock.ld (rungs)
+#        and batch.sfc (steps, transitions, actions). The rig profile turns
+#        breadcrumbs off; X40 turns them on (live) after the X18/X20 rows.
 #
 # Everything is read from the WORKBENCH page's DOM over CDP (gestures.sh
 # `cdp page`): the hover widget's text, the suggest widget's rows (label +
@@ -165,8 +166,7 @@ complete_with() {
   suggest_rows
 }
 
-# X40 reads the whole symbol tree, so the Outline opens fully expanded.
-EXTRA_SETTINGS='"outline.collapseItems": "alwaysExpand"' smoke_open "$PROJ" plant.st
+smoke_open "$PROJ" plant.st
 key Escape; hide_sidebar
 sleep 3
 
@@ -351,13 +351,25 @@ if ! dirty && [[ $(errors) == "$e0" ]]; then
 else fail "X20 batch_test.yaml: after undo $(dirty && echo dirty || echo clean), errors $(errors) (was $e0)" "$png"; fi
 
 # ══ X40 document symbols ═══════════════════════════════════════════════════
-# outline_rows — the Outline view's rendered rows in list order, indented by
-# tree level: "name [kind] detail", "<selected>" on the row the Outline
-# selected (it follows the editor's cursor).
+# outline_rows — the Outline view's rows on screen (a virtual list) in list
+# order, indented by tree level: "name [kind] detail", "<selected>" on the
+# selected row.
 outline_rows() {
   wb '(() => { const p = document.querySelector(".outline-pane"); if (!p) return ""; return [...p.querySelectorAll(".monaco-list-row")].sort((a, b) => (+a.dataset.index) - (+b.dataset.index)).map(r => "  ".repeat(Math.max(0, (+r.getAttribute("aria-level") || 1) - 1)) + (r.querySelector(".label-name")?.innerText || r.getAttribute("aria-label") || "").trim() + " [" + ((r.querySelector("[class*=codicon-symbol-]")?.className.match(/codicon-symbol-([a-z-]+)/) || [])[1] || "?") + "] " + (r.querySelector(".label-description")?.innerText || "").trim() + (r.classList.contains("selected") ? " <selected>" : "")).join("\n"); })()'
 }
 has_outline() { [[ -n $(outline_rows) ]]; }
+# outline_all — every row of the Outline, not just the ones its virtual list
+# has on screen: Home, then PageDown through the tree (the Outline has the
+# focus), collecting rows by list index. The selection marks are dropped.
+outline_all() {
+  local i acc=""
+  xdotool key --clearmodifiers Home; sleep 0.5
+  for i in 1 2 3 4 5 6 7 8; do
+    acc+=$(wb '(() => { const p = document.querySelector(".outline-pane"); if (!p) return ""; return [...p.querySelectorAll(".monaco-list-row")].map(r => r.dataset.index + "\t" + "  ".repeat(Math.max(0, (+r.getAttribute("aria-level") || 1) - 1)) + (r.querySelector(".label-name")?.innerText || r.getAttribute("aria-label") || "").trim() + " [" + ((r.querySelector("[class*=codicon-symbol-]")?.className.match(/codicon-symbol-([a-z-]+)/) || [])[1] || "?") + "] " + (r.querySelector(".label-description")?.innerText || "").trim()).join("\n"); })()')$'\n'
+    xdotool key --clearmodifiers Next; sleep 0.4
+  done
+  sort -t$'\t' -k1,1n -u <<<"$acc" | grep . | cut -f2-
+}
 # crumbs — the active editor's breadcrumb bar, "a › b › c".
 crumbs() {
   wb '(() => { const g = document.querySelector(".editor-group-container.active") || document; return [...g.querySelectorAll(".breadcrumbs-control .monaco-breadcrumb-item")].map(e => e.innerText.trim()).filter(Boolean).join(" › "); })()'
@@ -370,12 +382,15 @@ has_qp() { [[ -n $(qp_rows) ]]; }
 # has_all <text> <ERE>... — every ERE matches a line of the text; prints the
 # ones that do not.
 has_all() { local t=$1 re miss=""; shift; for re; do grep -qE -- "$re" <<<"$t" || miss="$miss /$re/"; done; [[ -z $miss ]] || { echo "$miss"; return 1; }; }
-# outline_focus — the Outline view, open and focused, then the editor
-# focused again (the Outline follows the cursor from there).
-outline_focus() {
+# outline_tree — focus the Outline view, read its whole tree, focus the
+# editor again. Prints the rows.
+outline_tree() {
+  local rows
   vs_cmd "Focus on Outline View" 2
   wait_for 10 has_outline || true
+  rows=$(outline_all)
   key ctrl+1
+  echo "$rows"
 }
 # symbol_at <file> <ERE for the line> <word> — the cursor on it, then the
 # breadcrumbs and the Outline's selection have caught up.
@@ -389,18 +404,21 @@ goto_symbol() {
   qp_rows
 }
 
+# The rig profile turns breadcrumbs off; X40 needs them, and the Outline
+# fully expanded. Settings apply live.
+sed -i 's/"breadcrumbs.enabled": false/"breadcrumbs.enabled": true/; 0,/^{/s//{\n  "outline.collapseItems": "alwaysExpand",/' "$PROFILE/User/settings.json"
+sleep 1
 open_file plant.st 3
-outline_focus
-rows=$(outline_rows); png=$(shot outline-st)
+rows=$(outline_tree); png=$(shot outline-st)
 if miss=$(has_all "$rows" '^Plant \[' '^  VAR_EXTERNAL \[' '^    Level \[[a-z?-]+\] REAL' '^  VAR \[' '^    settle \[[a-z?-]+\] TON'); then
   pass "X40 Outline on plant.st: the PROGRAM, its VAR sections and declarations — $(head -4 <<<"$rows" | oneline)…" "$png"
 else fail "X40 Outline on plant.st is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
 
 symbol_at "$F" '^    settle : TON;' settle
-c=$(crumbs); sel=$(outline_rows | grep '<selected>' || true); png=$(shot breadcrumbs-st)
+c=$(crumbs); png=$(shot breadcrumbs-st)
 if [[ $c == *"Plant › VAR › settle"* ]]; then
-  pass "X40 breadcrumbs on plant.st's settle declaration: \"$c\"; Outline selects \"${sel# *}\"" "$png"
-else fail "X40 breadcrumbs on plant.st's settle declaration: \"${c:-<none>}\", want …Plant › VAR › settle (Outline selection: \"$sel\")" "$png"; fi
+  pass "X40 breadcrumbs on plant.st's settle declaration: \"$c\"" "$png"
+else fail "X40 breadcrumbs on plant.st's settle declaration: \"${c:-<none>}\", want …Plant › VAR › settle" "$png"; fi
 
 rows=$(goto_symbol); png=$(shot goto-symbol-st)
 if miss=$(has_all "$rows" '^Plant ' '^VAR_EXTERNAL ' '^Level ' '^settle '); then
@@ -410,16 +428,16 @@ xdotool key --clearmodifiers Escape; sleep 0.4
 
 L=$PROJ/interlock.ld
 open_file interlock.ld 4
-rows=$(outline_rows); png=$(shot outline-ld)
+rows=$(outline_tree); png=$(shot outline-ld)
 if miss=$(has_all "$rows" '^SealIn \[' '^  VAR_INPUT \[' '^    Start \[[a-z?-]+\] BOOL' '^  seal \[[a-z?-]+\] start/stop with seal-in' '^  lamp \['); then
   pass "X40 Outline on interlock.ld: the FUNCTION_BLOCK, its sections and its rungs with their comments — $(oneline <<<"$rows")" "$png"
 else fail "X40 Outline on interlock.ld is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
 
 symbol_at "$L" '^    Run \( Lamp \)' Lamp
-c=$(crumbs); sel=$(outline_rows | grep '<selected>' || true); png=$(shot breadcrumbs-ld)
+c=$(crumbs); png=$(shot breadcrumbs-ld)
 if [[ $c == *"SealIn › lamp"* ]]; then
-  pass "X40 breadcrumbs inside interlock.ld's lamp rung: \"$c\"; Outline selects \"${sel# *}\"" "$png"
-else fail "X40 breadcrumbs inside interlock.ld's lamp rung: \"${c:-<none>}\", want …SealIn › lamp (Outline selection: \"$sel\")" "$png"; fi
+  pass "X40 breadcrumbs inside interlock.ld's lamp rung: \"$c\"" "$png"
+else fail "X40 breadcrumbs inside interlock.ld's lamp rung: \"${c:-<none>}\", want …SealIn › lamp" "$png"; fi
 
 rows=$(goto_symbol); png=$(shot goto-symbol-ld)
 if miss=$(has_all "$rows" '^SealIn ' '^seal ' '^lamp '); then
@@ -429,11 +447,16 @@ xdotool key --clearmodifiers Escape; sleep 0.4
 
 S=$PROJ/batch.sfc
 open_file batch.sfc 4
+rows=$(outline_tree); png=$(shot outline-sfc)
+if miss=$(has_all "$rows" '^TankBatch \[' '^  VAR_EXTERNAL \[' '^    BatchCount \[[a-z?-]+\] INT' '^  Idle \[[a-z?-]+\] INITIAL_STEP' '^  Fill \[[a-z?-]+\] STEP' '^  Fill → \(Heat, Mix\) \[[a-z?-]+\] t_full: ' '^  \(Heat, Mix\) → Drain \[' '^  CountBatch \[[a-z?-]+\] ACTION'); then
+  pass "X40 Outline on batch.sfc: the PROGRAM, its sections, the steps (initial marked), the transitions as From → To, the actions — $(grep -E '^  [^ ]' <<<"$rows" | sed 's/^ *//' | oneline)" "$png"
+else fail "X40 Outline on batch.sfc is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+
 symbol_at "$S" '^  STEP Fill:' Fill
-c=$(crumbs); rows=$(outline_rows); sel=$(grep '<selected>' <<<"$rows" || true); png=$(shot outline-sfc)
-if [[ $c == *"TankBatch › Fill"* ]] && grep -qE '^  Fill \[[a-z?-]+\] STEP <selected>' <<<"$rows"; then
-  pass "X40 batch.sfc: on STEP Fill the breadcrumbs read \"$c\" and the Outline selects \"${sel# *}\"" "$png"
-else fail "X40 batch.sfc: on STEP Fill the breadcrumbs read \"${c:-<none>}\" (want …TankBatch › Fill), the Outline selects \"${sel:-nothing}\" — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+c=$(crumbs); png=$(shot breadcrumbs-sfc)
+if [[ $c == *"TankBatch › Fill"* ]]; then
+  pass "X40 breadcrumbs on batch.sfc's STEP Fill: \"$c\"" "$png"
+else fail "X40 breadcrumbs on batch.sfc's STEP Fill: \"${c:-<none>}\", want …TankBatch › Fill" "$png"; fi
 
 rows=$(goto_symbol Idle); png=$(shot goto-symbol-sfc)
 if miss=$(has_all "$rows" '^Idle ' '^Idle → Fill ' '^Drain → Idle '); then
