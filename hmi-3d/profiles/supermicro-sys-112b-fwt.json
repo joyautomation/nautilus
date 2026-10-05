@@ -9,7 +9,7 @@
 		"spec": "supermicro.com SYS-112B-FWT: 1U, 436.88 x 44.5 x 429.3 mm, 2 internal fixed 2.5in NVMe/SATA bays, 2 x M.2 PCIe 5.0 x2 (2280/22110), 2 x FHFL + 1 x LP PCIe x16, up to 6 x 4 cm fans, 2 x 800 W 1+1 redundant PSU",
 		"qrg": "MNL-2726-QRG-100 (system) front photo: left to right AC Power Supply 2, AC Power Supply 1, power button with status LED above COM1, dedicated IPMI LAN above USB, LAN1, LAN2, VGA, slot 3 (LP) above the LAN/VGA block, slots 1 (upper) and 2 (lower) FHFL at the right. MNL-2675-QRG-110 (board): DIMMs in two banks of four flanking the socket, FAN1-FAN6 headers on the edge away from the I/O, JM2_1/JM2_2 on the left edge, rear I/O order COM1, BMC_LAN, USB0/1, LAN1, LAN2, VGA, UID",
 		"inventory": "A deployed node, 2026-10-04: dmidecode slots M.2-C1 (bus 34, nvme1) and M.2-C2 (bus 35, nvme0) in use; RSC-W-66G5 SLOT1 x16 in use (Mellanox ConnectX-6 Lx, 2 x SFP28, bus 84), RSC-W-66G5 SLOT2 x16 free, RSC-WR-6G5-UP SLOT1 x16 LP free; DIMMA1/C1/E1/G1 32 GB each; IPMI PS1/PS2 Status present on every node; FAN1-FAN6 all reporting; onboard Intel X550 LAN1/LAN2 (bus 36)",
-		"unverified": "NOT MEASURED. Front-face x positions are scaled from the QRG front photo (about 1.45 px/mm); every depth (z) is inferred: the board's I/O edge at the front, fans behind the board, the two internal 2.5in bays at the rear right. Which riser slot is the UPPER opening (chassis slot 1 vs 2) is assumed SLOT1 = upper. M.2 positions are from the board diagram. Fan order left to right is assumed FAN1..FAN6 following the headers. Nobody is on site; refine from a photo with the lid off when one is available.",
+		"unverified": "NOT MEASURED. Front-face x positions are scaled from the QRG front photo (about 1.45 px/mm); every depth (z) is inferred: the board's I/O edge at the front, fans behind the board, the two internal 2.5in bays at the rear right. Which riser slot is the UPPER opening (chassis slot 1 vs 2) is assumed SLOT1 = upper. M.2 positions are from the board diagram. Fan order left to right is assumed FAN1..FAN6 following the headers. Nobody is on site; refine from a photo with the lid off when one is available. Ports carry rot [0, 180, 0] because the renderer takes a port to face the rear unless told otherwise, and on this chassis every port is on the front.",
 		"ipmi": "`ipmi` on a part or sensor is the BMC's IPMI sensor name for it (ipmi_exporter's `name` label), read on node1 2026-10-04. M2_SSD1 \u2194 M.2-C1 is assumed, not checked."
 	},
 	"size": [
@@ -408,7 +408,12 @@
 			"ratedGbps": 1,
 			"jack": "rj45",
 			"short": "BMC",
-			"role": "management"
+			"role": "management",
+			"rot": [
+				0,
+				180,
+				0
+			]
 		},
 		{
 			"id": "lan1",
@@ -427,7 +432,12 @@
 			],
 			"ratedGbps": 10,
 			"jack": "rj45",
-			"short": "LAN1"
+			"short": "LAN1",
+			"rot": [
+				0,
+				180,
+				0
+			]
 		},
 		{
 			"id": "lan2",
@@ -446,7 +456,12 @@
 			],
 			"ratedGbps": 10,
 			"jack": "rj45",
-			"short": "LAN2"
+			"short": "LAN2",
+			"rot": [
+				0,
+				180,
+				0
+			]
 		},
 		{
 			"id": "slot3",
@@ -536,7 +551,12 @@
 				0
 			],
 			"ratedGbps": 25,
-			"jack": "sfp28"
+			"jack": "sfp28",
+			"rot": [
+				0,
+				180,
+				0
+			]
 		},
 		{
 			"id": "slot1p2",
@@ -559,7 +579,12 @@
 				0
 			],
 			"ratedGbps": 25,
-			"jack": "sfp28"
+			"jack": "sfp28",
+			"rot": [
+				0,
+				180,
+				0
+			]
 		},
 		{
 			"id": "cpu1",
