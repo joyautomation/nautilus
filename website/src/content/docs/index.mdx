@@ -16,6 +16,14 @@ hero:
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
+import { isCovered, loadVerified } from '../../lib/verified';
+
+export const v = loadVerified();
+export const covered = v.rows.filter(isCovered).length;
+export const when = new Date(v.sets.nightly?.run?.date || v.generatedAt || NaN);
+export const verifiedOn = Number.isNaN(when.getTime())
+  ? null
+  : when.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 
 <CardGrid>
   <Card title="Four IEC languages, one program model" icon="seti:plan">
@@ -42,5 +50,10 @@ import { Card, CardGrid } from '@astrojs/starlight/components';
   <Card title="An HMI kit for SvelteKit" icon="laptop">
     Faceplates, trends, and a realtime SSE client — build operator screens the
     way you build web apps.
+  </Card>
+  <Card title="Every claim, tested on video" icon="approve-check">
+    Each thing the VS Code extension claims is tested every night, and the
+    test is recorded in a real VS Code. {v.rows.length > 0 && <>{covered} of {v.rows.length} claims verified{verifiedOn ? <> on {verifiedOn}</> : null}. </>}
+    [See the evidence](/verified/).
   </Card>
 </CardGrid>
