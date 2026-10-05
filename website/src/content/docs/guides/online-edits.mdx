@@ -3,6 +3,8 @@ title: Online edits
 description: Change logic while it runs — warm swaps with retained state, diff against the controller, and pull field edits back to git.
 ---
 
+import Clip from '../../../components/Clip.astro';
+
 nautilus has two planes. The **cold plane** — connections, the tag manifest,
 scan classes, server wiring — is Go, and changes ship through CI/CD as a new
 binary. The **hot plane** — the IEC program and tag values — can change live,
@@ -21,7 +23,11 @@ srv := server.New(rt, server.Options{OnlineEdits: true})
 Then from VS Code: **Download Program to Controller** warm-swaps your open
 program, **Diff Program with Controller** shows running-vs-workspace, and a
 status-bar indicator flags when the controller runs something other than the
-committed file. Edits are ephemeral by design — a restart reverts to the
+committed file.
+
+<Clip id="08-online-edit" />
+
+Edits are ephemeral by design — a restart reverts to the
 program the binary embeds, so **committing the program to git is the only way
 an edit becomes permanent**. The rule of thumb falls out of the two planes:
 logic you want to tune online, write in IEC; infrastructure, write in Go.
@@ -44,6 +50,8 @@ disk never disagree. If the file has **unsaved edits**, the confirmation says
 so: **Overwrite** replaces them with the controller's program, and **Show
 Diff** puts the controller's program beside your buffer instead, so you can
 take lines across by hand and pull nothing.
+
+<Clip id="16-diff-pull" />
 
 What a download sends is the program's **composition**: the project's
 library prelude — every PROGRAM-less `.st` file in the root and under `lib/`,

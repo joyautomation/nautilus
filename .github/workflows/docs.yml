@@ -3,9 +3,9 @@ name: docs
 on:
   push:
     branches: [main]
-    paths: ['website/**', 'docs/**', 'hmi/README.md', 'tools/vscode-iec/syntaxes/**']
+    paths: ['website/**', 'docs/**', 'hmi/README.md', 'tools/vscode-iec/syntaxes/**', 'tools/vscode-iec/webview-ui/gesture-harness/INVENTORY.md']
   pull_request:
-    paths: ['website/**', 'docs/**', 'hmi/README.md', 'tools/vscode-iec/syntaxes/**']
+    paths: ['website/**', 'docs/**', 'hmi/README.md', 'tools/vscode-iec/syntaxes/**', 'tools/vscode-iec/webview-ui/gesture-harness/INVENTORY.md']
 
   # Dispatched by a green rig-nightly / rig-demo so the proof pages pick up
   # the new clips.

@@ -110,7 +110,7 @@ no rig verb, no smoke check); per section below.
 | L03 | LD | Double-click to retag a contact or coil, edit arguments, rename a rung | "?" list LD / Edit / `Double-click` | diagram.test.mjs: Ladder: the declare offer covers a block call's arguments (retag path) | ld_add_contact, ld_rename_block, float_edit | — |
 | L04 | LD | Commit / cancel an in-place edit | "?" list LD / Edit / `Enter / Esc` | — | float_edit | — |
 | L05 | LD | Click ⊕ to insert an element at that spot | "?" list LD / Edit / `⊕` | — | ld_add_contact, ld_add_coil, ld_add_block | — |
-| L06 | LD | Drag a palette item onto a rung spot | "?" list LD / Edit / `Drag a palette item` | diagram.test.mjs: Ladder: TON from the palette takes the first free instance name | ld_palette, g_drag_to | — |
+| L06 | LD | Drag a palette item onto a rung spot | "?" list LD / Edit / `Drag a palette item` | diagram.test.mjs: Ladder: the FB… picker names a TON / CTU instance with the first free name | ld_palette, g_drag_to | — |
 | L07 | LD | Drag an element to another spot or rung | "?" list LD / Edit / `Drag an element` | diagram.test.mjs: Ladder zoom: a palette drop and a node drag still hit their spots at 173%; ld-keys.test.mjs: a contact dragged into another rung / to a later spot in its own rung post one `move` op (L07) | ld_move_element (selftest: another rung, the same rung, a coil) | — |
 | L08 | LD | Delete the element, or the rung when its name is selected | "?" list LD / Edit / `Del / Backspace` | diagram.test.mjs: Ladder: click a rung name, Del deletes the rung | ld_delete_last_coil | — |
 | L09 | LD | Press N to toggle a contact between NO and NC | "?" list LD / Edit / `N` | ld-keys.test.mjs: N on a selected contact posts toggleNeg, again flips it back | — | — |
@@ -216,7 +216,7 @@ no rig verb, no smoke check); per section below.
 | X21 | Extension | nautilus.fb.monitor, run by the FbMonitorLenses CodeLens over each FUNCTION_BLOCK header: pick which declared instance the body's live values read | src/extension.ts, src/liveValues.ts | — | — | 17 |
 | X22 | Ladder | L5X opens read-only: pill, no palette, edits do nothing | README Rockwell L5X | diagram.test.mjs: Ladder: an L5X model is read-only | — | 10 |
 | X23 | Ladder | Declare offer (amber declare …) files an undeclared identifier under VAR_EXTERNAL or VAR | CHANGELOG 0.10.0 | diagram.test.mjs: Ladder: the declare offer covers a block call's arguments | ld_declare | — |
-| X24 | Ladder | FB… picker places any standard or project function block under a chosen instance name | README Diagrams | diagram.test.mjs: Ladder: TON from the palette takes the first free instance name | ld_add_block | — |
+| X24 | Ladder | FB… picker places any standard or project function block under a chosen instance name | README Diagrams | diagram.test.mjs: Ladder: the FB… picker names a TON / CTU instance with the first free name | ld_add_block | — |
 | X25 | Ladder | Double-click an FB header to rename the instance everywhere | README Diagrams | — | ld_rename_block | — |
 | X26 | Ladder | Empty body renders the palette; + rung adds the first rung | CHANGELOG 0.10.0 | diagram.test.mjs: Ladder: empty body (rungs null) renders the palette; + rung works | ld_add_rung | — |
 | X27 | Ladder | Diff overlay: added / removed / changed elements marked, removed ghosted | README Visual diff | diagram.test.mjs: Theme: ladder diff colours come from theme tokens | — | 04, 11 |
