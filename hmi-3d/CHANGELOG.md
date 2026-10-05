@@ -1,5 +1,14 @@
 # Changelog — @joyautomation/nautilus-hmi-3d
 
+## 0.1.3 — 2026-10-05
+
+**Added.** `TopoLink.expect: 'up' | 'down'`. A link declared down (a
+service port left open for a visitor's laptop) is consistent while it has
+no link ("down, as declared") and contradicted the moment an end has link
+("something is plugged in"); unreported stays unverified. The VLAN view
+counts a declared-down link as carrying only while it is contradicted, so
+neither its far end nor a ring's protection link is misread. (#228)
+
 ## 0.1.2 — 2026-10-05
 
 **Fixed.** The rack's frame: the top beam was drawn inside the unit space,
