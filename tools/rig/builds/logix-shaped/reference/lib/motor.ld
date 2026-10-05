@@ -19,9 +19,6 @@ VAR_OUTPUT
     FailToStart : BOOL; (* commanded, no aux feedback within 3 s *)
     Faulted     : BOOL; (* latched: overload or fail-to-start *)
 END_VAR
-VAR
-    tFail : TON; (* fail-to-start supervision *)
-END_VAR
 LD
   RUNG run (* seal-in: Start energizes Run, Run holds itself in *)
     [ Start | Run ] /Stop Permit /Faulted ( Run )

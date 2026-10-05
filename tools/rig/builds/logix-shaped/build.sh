@@ -172,6 +172,13 @@ _lx_vars_open() {
   click_button vars || return 1
   wait_js 'doc.querySelector(".addrow")' 4 || { g_err "the variables panel did not open"; return 1; }
 }
+# _lx_vars_close — a click on the bar's hint text (the panel closes on any
+# click outside it; Escape does not close it).
+_lx_vars_close() {
+  js_true 'doc.querySelector(".addrow")' || return 0
+  click_el 'doc.querySelector(".bar")' 0.3 0.5
+  wait_js '!doc.querySelector(".addrow")' 3 || { g_err "the variables panel did not close"; return 1; }
+}
 # lx_vars_delete <name> — the variables panel's × on <name>'s row.
 lx_vars_delete() {
   local name=$1
@@ -179,7 +186,7 @@ lx_vars_delete() {
   _lx_vars_open || return 1
   click_el "doc.querySelector('button.del[data-id=\"del:$name\"]')" || { g_err "no $name row in the variables panel"; return 1; }
   wait_js "!doc.querySelector('button.del[data-id=\"del:$name\"]')" 6 || { g_err "$name is still listed"; return 1; }
-  g_key Escape
+  _lx_vars_close || return 1
   g_save
   ! grep -Eq "^ *$name *:" "$PROJ/$G_FILE" || { g_err "$name is still declared in $G_FILE"; return 1; }
 }
@@ -200,7 +207,7 @@ lx_vars_declare() {
   g_key Escape   # dismiss the type suggestions (the first Escape stops there)
   click_el 'doc.querySelector(".addrow button.add")' || return 1
   sleep 1
-  g_key Escape
+  _lx_vars_close || return 1
   assert_file_contains "$G_FILE" "^ *$name *: *$type *;"
 }
 # lx_rung_comment <rung> <text> — double-click the rung's "(* … *)" slot,
@@ -230,6 +237,60 @@ lx_desc_on_element() {
   local rung=$1 tag=$2 desc=$3
   js_true "($(ld_node_el "$rung" '*' "$tag"))?.closest('g.node')?.textContent.includes($(_q "$desc"))" \
     || { g_err "the $tag element on $rung shows no description (want \"$desc\")"; return 1; }
+}
+# lx_edge_drawn <rung> <tag> — is the edge contact `+Tag` on the diagram?
+# (The ladder model has it — `naut ld graph` sends kind "edge" — but
+# ladderLayout.ts lays out contact/fn/fb/branch only.) XFAIL until it is.
+lx_edge_drawn() {
+  local rung=$1 tag=$2
+  grep -Eq "(^| )\+$tag\b" <<<"$(ld_rung_text "$rung")" || { g_err "rung $rung has no +$tag in the file"; return 1; }
+  js_true "[...(($(ld_rung_el "$rung"))?.querySelectorAll('g.node') ?? [])].some(g => (g.querySelector('text.operand')?.textContent ?? '').includes($(_q "$tag")))" \
+    || { g_err "the file has +$tag on $rung; the diagram draws no element for it"; return 1; }
+}
+# lx_copy_rung <rung> — the Studio 5000 habit: select the rung, Ctrl+C,
+# Ctrl+V, and a copy lands below it. XFAIL until a gesture copies a rung
+# (doCopy refuses a whole-rung selection). An XPASS copy is deleted again,
+# so the rest of the build is unchanged.
+lx_copy_rung() {
+  local rung=$1 n0 n1 new
+  G_WHAT="copy rung $rung"
+  n0=$(js 'doc.querySelectorAll("svg.rsvg").length')
+  ld_select_rung "$rung" || return 1
+  g_key ctrl+c; g_key ctrl+v; sleep 1.5
+  n1=$(js 'doc.querySelectorAll("svg.rsvg").length')
+  (( n1 > n0 )) || { g_err "Ctrl+C / Ctrl+V on rung $rung added no rung ($n0 rungs before and after)"; return 1; }
+  new=$(js "(() => { $_LD_JS return [...doc.querySelectorAll('svg.rsvg')].map(rungName).at($n0 > 0 ? -1 : 0); })()" | tr -d '"')
+  [[ -n $new && $new != "$rung" ]] && lx_delete_rung "$new"
+  return 0
+}
+# lx_vars_lists_instance <inst> — the AOI-backing-tag habit: is the block
+# instance in the variables panel? Leaves the panel open for the row's PNG.
+# XFAIL: the panel lists header declarations, and the FB picker declares an
+# instance by its call.
+lx_vars_lists_instance() {
+  _lx_vars_open || return 1
+  js_true "[...doc.querySelectorAll('.rows .row')].some(r => r.dataset.id === $(_q "$1"))" \
+    || { g_err "the variables panel ($(js 'doc.querySelectorAll(".rows .row").length') rows) does not list $1"; return 1; }
+}
+# lx_vars_escape_closes — Escape closes the open variables panel? XFAIL:
+# only a click outside it does (closed that way after the probe).
+lx_vars_escape_closes() {
+  _lx_vars_open || return 1
+  g_key Escape; sleep 0.6
+  js_true '!doc.querySelector(".addrow")' && return 0
+  _lx_vars_close
+  g_err "Escape left the variables panel open"; return 1
+}
+# lx_declare_offer_type <name> <type> — open the amber declare offer and
+# read the type its VAR_EXTERNAL button offers for <name>. Leaves the offer
+# open for the row's PNG.
+lx_declare_offer_type() {
+  local name=$1 type=$2 btn got
+  btn="[...doc.querySelectorAll('.declpop button.declbtn')].find(b => b.dataset.name === $(_q "$name") && b.dataset.section === 'VAR_EXTERNAL')"
+  js_true "$btn" || click_el 'doc.querySelector(".palette button.declare")' || { g_err "no declare offer in the palette"; return 1; }
+  wait_js "$btn" 3 || { g_err "the declare offer has no VAR_EXTERNAL row for $name"; return 1; }
+  got=$(js "($btn).textContent.trim()" | tr -d '"')
+  [[ $got == *": $type" ]] || { g_err "the declare offer for $name reads '$got', not ': $type'"; return 1; }
 }
 # lx_real_coil_checks <rung> <REAL tag> — the MOV/CPT habit: a coil that
 # writes a REAL. The gesture itself lands (a retag is text); the verdict is
@@ -262,14 +323,14 @@ _paste_tags() {
 }
 # The FB's interface: FUNCTION_BLOCK, VAR_INPUT, VAR_OUTPUT and an empty LD
 # body — no gesture creates a POU or declares a pin (the variables panel
-# offers VAR_EXTERNAL and VAR only). The VAR block (tFail) is left to the
-# FB picker, which declares the instance it inserts.
+# offers VAR_EXTERNAL and VAR only). tFail needs no declaration: the FB
+# picker inserts `tFail:TON(…)`, which declares it.
 _paste_fb_header() {
   mkdir -p "$PROJ/lib"
   python3 - "$REF/lib/motor.ld" "$PROJ/lib/motor.ld" <<'PY'
 import sys
 src = open(sys.argv[1]).read()
-i = src.index("VAR\n    tFail")
+i = src.index("\nLD\n") + 1
 open(sys.argv[2], "w").write(src[:i] + "LD\nEND_LD\nEND_FUNCTION_BLOCK\n")
 PY
 }
@@ -364,11 +425,15 @@ row lx_desc_on_element-M1_StartPB XFAIL lx_desc_on_element m1 M1_StartPB "M1 sta
 row ld_add_block-MotorStarter-m1 PASS ld_add_block m1 MotorStarter m1 \
   "Stop := M1_StopPB, Permit := M1_Permit, Aux := M1_Aux, Fault := M1_OL, Reset := FaultReset, FailToStart => Alm_M1FTS"
 for v in M1_StopPB M1_Aux M1_OL FaultReset Alm_M1FTS; do row "ld_declare-$v" PASS ld_declare "$v" VAR_EXTERNAL; done
+row lx_vars_lists_instance-m1 XFAIL lx_vars_lists_instance m1
+row lx_vars_escape_closes XFAIL lx_vars_escape_closes
 row ld_add_coil-M1_Run PASS ld_add_coil m1 M1_Run
 row ld_declare-M1_Run PASS ld_declare M1_Run VAR_EXTERNAL
 chk 05-m1-plain
 paste_row edge-M1_StartPB _edge program.ld m1 M1_StartPB
+row lx_edge_drawn-M1_StartPB XFAIL lx_edge_drawn m1 M1_StartPB
 chk 05-m1-ons
+row lx_copy_rung-m1 XFAIL lx_copy_rung m1
 #   m2perm: /EStop [ M1_Run [ M1_Aux | M1_AuxBypass ] | Maint ] ( M2_Permit )
 row ld_add_rung-m2perm PASS ld_add_rung m2perm
 row ld_add_contact-EStop-nc-2 PASS ld_add_contact m2perm EStop nc
@@ -401,6 +466,7 @@ row ld_rename_block-cStarts PASS ld_rename_block starts c1 cStarts
 row ld_declare-CountReset PASS ld_declare CountReset VAR_EXTERNAL
 # the amber offer types an integer-seeded tag REAL (nothing declares it
 # yet): declare the counter's INT through the variables panel instead
+row lx_declare_offer_type-M1_Starts XFAIL lx_declare_offer_type M1_Starts INT
 row lx_vars_declare-M1_Starts PASS lx_vars_declare M1_Starts INT VAR_EXTERNAL
 row ld_delete_last_coil-starts PASS ld_delete_last_coil starts
 chk 05-starts

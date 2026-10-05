@@ -1,6 +1,8 @@
 PROGRAM Conveyor
 (* The main routine. Each motor is one rung calling MotorStarter (the
-   JSR habit, as a block call); +Tag is the ONS. *)
+   JSR habit, as a block call); +Tag is the ONS. The instances (m1, m2,
+   cStarts, spd: the AOI backing tags) are declared by their calls,
+   `m1:MotorStarter(...)`, the way the FB picker inserts them. *)
 VAR_EXTERNAL
     EStop        : BOOL;
     AirOk        : BOOL;
@@ -31,12 +33,6 @@ VAR_EXTERNAL
     Alm_M1FTS    : BOOL;
     Alm_M2FTS    : BOOL;
     Alm_Any      : BOOL;
-END_VAR
-VAR
-    m1      : MotorStarter;
-    m2      : MotorStarter;
-    cStarts : CTU;
-    spd     : SpeedCalc;
 END_VAR
 LD
   RUNG m1perm
