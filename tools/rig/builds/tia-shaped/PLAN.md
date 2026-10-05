@@ -48,14 +48,42 @@ would teach us anything new there).
 |---|---|---|---|---|
 | 01 | scaffold | `naut new tia-dosing --template minimal`, committed | CLI | `naut check` clean |
 | 02 | types | `types.st`: `TYPE DoseRecipe : STRUCT … END_STRUCT; END_TYPE` | typed | file == reference; check clean |
-| 03 | tag table | `tags/plc_tags.yaml` pasted (TIA users import a tag table); the `tag-files:` entry typed into `nautilus.yaml` | pasted + typed | check clean (warnings: tags no program binds yet) |
+| 03 | tag table | `tags/plc_tags.yaml` pasted (TIA users import a tag table); the `tag-files:` entry typed into `nautilus.yaml`; the Data-type-column habit (`type: INT`) probed | pasted + typed | check clean (warnings: tags no program binds yet); `type: INT` XFAIL |
 | 04 | FC | `scale.st`: `FUNCTION ScaleAnalog : REAL`, VAR_INPUT, VAR_TEMP, body; completion on `LIMIT(`, signature help probe, hover a pin | typed | completion lists LIMIT; signature help (XFAIL until #168); hover shows the type; check clean |
-| 05 | FB | `dosing.st`: the whole `Dosing` FB typed, including the TIA habit `#state` (diagnostic, then fixed) and a deliberate typo (`Recipe.TargetLL`, diagnostic, then fixed) | typed | squiggle + status-bar error appear and clear; Outline (document symbols) probe XFAIL; Find All References probe XFAIL; check clean |
-| 06 | main.fbd header | blank `main.fbd`, opened as the FBD diagram; every `VAR_EXTERNAL` declared from the palette's "variable (external tag)" | gestured (`fbd_declare` ×15) | header == reference; check clean |
+| 05 | FB | `dosing.st`: the whole `Dosing` FB typed; then four edits typed over it, each read back (squiggle, status-bar count, F8's problem text) and undone: the SCL habit `#state` on the right-hand side and on an assignment target, a typo (`Recipe.TargetLL`), and `REGION … END_REGION` | typed | diagnostics appear and clear (the `#` on a target is not diagnosed: XFAIL); Outline (Ctrl+Shift+O) XFAIL; Find All References (Shift+F12) XFAIL; check clean |
+| 06 | main.fbd header | blank `main.fbd`, opened as the FBD diagram; every `VAR_EXTERNAL` declared from the palette's "variable (external tag)" (the first one seeds `PROGRAM main`) | gestured (`fbd_declare` ×15) | header == reference; check clean |
 | 07 | network 1 | comment; `ft = ScaleAnalog(FT101_Raw, 0.0, 120.0)`; coil `FT101_Flow := ft` | gestured (`fbd_add_comment`, `fbd_add_block`, `fbd_add_coil`) | user FUNCTION in the palette suggestions (XFAIL); `naut check` on the user FUNCTION call (XFAIL: FBD upper-cases call names); workaround typed in `scale.st` (rename to `SCALEANALOG`), check clean |
 | 08 | network 2 | comment; `doseA : Dosing(…)` from the FB picker; five pins wired from tag chips; the `NoFlowTime := _` open pin removed; four output coils | gestured (`fbd_add_block Dosing`, `fbd_add_tag_ref` ×5, `fbd_add_coil` ×4); the open pin by text (see FINDINGS) | check red while pins are open, clean once wired |
 | 09 | network 3 | comment; `spA = LIMIT(0.0, RecipeA.FlowSP, MaxFlowLpm)`; `spOut = SEL(doseA.ValveOpen, 0.0, _)`; wire `spA → spOut.IN3`; coil | gestured (`fbd_add_block` ×2, `fbd_wire`, `fbd_add_coil`) | EN/ENO on a standard block probe (XFAIL); check clean |
 | 10 | network 4 | comment; `hiFlow = GT(…)`; `tHi : TON` from the picker; wire `hiFlow → tHi.IN`; coil | gestured | check clean |
 | 11 | network 5 | comment; `cDoses : CTU`; wire `doseA.Done → cDoses.CU`; tag chip on `R`; coil `DosesToday := cDoses.CV`; `fbd_move_node` one block | gestured | network-number / execution-order display probe (XFAIL); check clean |
-| 12 | go live | the task switched to `main.fbd` (typed in `nautilus.yaml`), the template's `program.st` and test removed, `tia-dosing_test.yaml` pasted | typed + pasted | `naut check` clean; `naut test` 6/6 |
-| 13 | compare | built files vs `reference/` modulo whitespace and `@layout`; the TIA "compare blocks" habit: `Diff FBD Diagram (vs git HEAD)` after one more edit; the "force" habit: is there a Force command | gestured + palette probes | compare == ; diff overlay opens; force XFAIL |
+| 12 | go live | `program: main.fbd` and `dt-tag: MainDtS` typed into `nautilus.yaml`, the template's example tags selected and deleted, the template's `program.st` and test removed, `tia-dosing_test.yaml` pasted | typed + pasted | `naut check` clean; `naut test` 6/6 |
+| 13 | compare | built files vs `reference/` modulo indentation, blank lines and `@layout` (`nautilus.yaml` from `server:` on, comments dropped: the template's header stays); the TIA "compare blocks" habit: commit, retype `T#2S` → `T#3S` on the diagram, `Diff FBD Diagram (vs git HEAD)`, put it back; the "force" habit: is there a force command | gestured + palette probes | compare ==; the diff tab opens; force XFAIL |
+
+## Last run
+
+2026-10-05, origin/main e2e41d2 + this branch, `G_PACE=fast`, clips on:
+**84 rows: 72 PASS, 0 FAIL, 12 XFAIL, 0 XPASS, no FALLBACK.** Every built
+file equals `reference/` modulo layout; `naut check` clean and `naut test`
+6/6 at the end. 20 findings (FINDINGS.md): 4 bugs, 6 papercuts, 10 gaps.
+
+The 12 XFAIL rows, and what turns each one XPASS:
+
+| row | finding |
+|---|---|
+| 03-tag-elementary-type | #200 |
+| 04-signature-help-LIMIT | PR #168 |
+| 05-diag-hash-prefix-target | #198 |
+| 05-outline-symbols | PR #172 |
+| 05-find-references | PR #171 |
+| 07-palette-lists-user-FUNCTION | #204 |
+| 07-check-user-FUNCTION-from-FBD | #197 |
+| 08-check-with-open-pins | #205 (an open `_` is an error by design today) |
+| 09-EN-ENO-on-LIMIT | #206 |
+| 09-EN-input-by-text | #206 |
+| 11-network-numbers-or-exec-order | #207 |
+| 13-force-command | #211 |
+
+When #197 is fixed, `07-check-user-FUNCTION-from-FBD` turns XPASS and
+`07-workaround-uppercase-FC` (the rename to `SCALEANALOG`) can go, along
+with the capitals in `reference/scale.st`.
