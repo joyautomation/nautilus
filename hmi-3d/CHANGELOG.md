@@ -1,5 +1,11 @@
 # Changelog — @joyautomation/nautilus-hmi-3d
 
+## 0.1.1 — 2026-10-04
+
+**Fixed.** The SYS-112B-FWT profile's ports face the front: the chassis has
+every port on its front face, but they were drawn facing the rear, so cables
+left through the back of the rack. (#159)
+
 ## 0.1.0 — 2026-10-04
 
 The first release. Design: `docs/design/spatial-hmi.md`.
