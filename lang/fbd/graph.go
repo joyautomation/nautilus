@@ -783,6 +783,11 @@ func ensurePin(pins *[]string, name string) {
 	*pins = append(*pins, name)
 }
 
+// BlockPins is blockPins for callers outside the package — the language
+// server's signature help names a call's parameters the way the diagram
+// names the block's pins, so the two never disagree.
+func BlockPins(fn string, n int) []string { return blockPins(fn, n) }
+
 // blockPins names an operator/function block's input pins per IEC
 // convention: IN for unary, IN1..INn for extensible/binary operators, and
 // the standard formal names for the few functions that have them.

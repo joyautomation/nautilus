@@ -1,0 +1,26 @@
+# tia-dosing — a dosing line written the way a TIA Portal (S7-1500)
+# programmer lays one out: an OB1-style main program in FBD calling an
+# SCL-style FB with its own instance data, an FC for analog scaling, a
+# DB-as-UDT recipe, and a PLC tag table.
+#
+#   naut check            compile in CI
+#   naut test             the acceptance tests (tia-dosing_test.yaml)
+#   naut run              scan loop + dashboard + tag API
+name: tia-dosing
+
+server:
+  addr: "localhost:8080"   # NAUTILUS_ADDR overrides; set NAUTILUS_TOKEN to gate writes
+  online-edits: true       # PLC-style online edits from VS Code (off for production)
+
+# The PLC tag table (TIA: "PLC tags" / "Default tag table").
+tag-files:
+  - tags/plc_tags.yaml
+
+# One task: main.fbd is OB1. MainDtS is the seconds since the last scan.
+tasks:
+  - program: main.fbd
+    scan: 100ms
+    dt-tag: MainDtS
+
+driver:
+  type: memory

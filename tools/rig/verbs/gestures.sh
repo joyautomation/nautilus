@@ -42,6 +42,9 @@
 #   FBD   fbd_add_block <FN|FB TYPE> <name> [inputs|args] [x y] · fbd_zoom_to <node> [notches]
 #         fbd_wire <node.PIN> <node.PIN> · fbd_add_tag_ref <tag> [node.PIN]
 #         fbd_add_comment <text> · fbd_move_node <node> <dx> <dy>   (drag; pins it)
+#         fbd_add_function <FN> <name> [inputs]   (block → wire, any FUNCTION name)
+#         fbd_add_coil <tag> <source> · fbd_declare <name> <type> [VAR_EXTERNAL|VAR]
+#         fbd_disconnect <node.PIN>               (select the wire, Delete)
 #   Mimic mimic_drop <Component> <x> <y> [id] · mimic_bind <id> <prop> <tag>
 #         mimic_pipe <id.port> <id.port>  (mimic_pipe_direct: the documented
 #         gesture, broken in 0.11.1 — see the content repo's
@@ -1047,8 +1050,22 @@ for line in text.splitlines():
     named = {k.strip(): v.strip() for k, _, v in (x.partition(":=") for x in a if ":=" in x)}
     if pin in named: ok = named[pin] == src
     else:
-        n = re.match(r"IN(\d+)$", pin)
-        ok = bool(n) and int(n.group(1)) <= len(a) and a[int(n.group(1)) - 1] == src
+        # A positional pin's place comes from the block's own pin list
+        # (naut fbd graph): SEL is G, IN0, IN1 and LIMIT MN, IN, MX, so
+        # "IN<n> is argument n" holds only for the IN1..INn blocks.
+        idx = None
+        try:
+            import json, subprocess
+            m = json.loads(subprocess.run(["naut", "fbd", "graph", sys.argv[1]], capture_output=True, text=True).stdout)
+            for nd in m["nodes"]:
+                if nd["id"] in ("b:w." + node, "b:c." + node) and pin in (nd.get("inputs") or []):
+                    idx = nd["inputs"].index(pin)
+        except Exception:
+            pass
+        if idx is None:
+            n = re.match(r"IN(\d+)$", pin)
+            idx = int(n.group(1)) - 1 if n else None
+        ok = idx is not None and idx < len(a) and a[idx] == src
     sys.exit(0 if ok else 1)
 sys.exit(1)
 PY2
@@ -1078,6 +1095,76 @@ fbd_add_comment() {
   _fbd_palette "comment" "text=$1" || return 1
   fbd_wait "[...doc.querySelectorAll('.svelte-flow__node')].some(n => n.dataset.id.startsWith('cm:') && n.textContent.includes($(_q "$1")))" || return 1
   assert_file_contains "$G_FILE" "// *$(printf '%s' "$1" | sed 's/[][\.*^$()+?{}|]/\\&/g')"
+}
+
+# fbd_add_function <FUNCTION> <name> [inputs] — "block → wire" for ANY
+# function name. fbd_add_block routes a CamelCase name to the FB picker (a
+# project FUNCTION_BLOCK); a project FUNCTION (ScaleAnalog) is a block →
+# wire too, so this verb never guesses.
+fbd_add_function() {
+  local fn=$1 name=$2 inputs=${3:-_, _}
+  G_WHAT="block $name = $fn"
+  _fbd_palette "block → wire" "name=$name" "function=$fn" "inputs=$inputs" || return 1
+  fbd_wait "$(fbd_node_el "$name")" || return 1
+  assert_file_contains "$G_FILE" "\\b$name *= *$fn *\\("
+}
+
+# fbd_add_coil <tag> <source> — the palette's "output reference" with a
+# source: `<tag> := <source>` in one gesture (an FB output lic.CV, a wire,
+# a tag). Read back as that statement.
+fbd_add_coil() {
+  local tag=$1 src=$2
+  G_WHAT="coil $tag := $src"
+  _fbd_palette "output reference" "name=$tag" "source=$src" || return 1
+  fbd_wait "doc.querySelector('.svelte-flow__node[data-id=\"c:$tag\"]')" || return 1
+  assert_file_contains "$G_FILE" "^ *$tag *:= *$(printf '%s' "$src" | sed 's/[][\.*^$()+?{}|]/\\&/g') *;? *$"
+}
+
+# fbd_declare <name> <type> [VAR_EXTERNAL|VAR] — the palette's "variable
+# (external tag)" (or "local variable (retained)" for VAR): one declaration
+# in the program's header. On a blank file the first one seeds the PROGRAM.
+fbd_declare() {
+  local name=$1 typ=$2 sec=${3:-VAR_EXTERNAL} label="variable (external tag)"
+  [[ $sec == VAR ]] && label="local variable (retained)"
+  G_WHAT="declare $name : $typ"
+  _fbd_palette "$label" "name=$name" "type=$typ" || return 1
+  sleep 0.5
+  assert_file_contains "$G_FILE" "^ *$name *: *$typ *;"
+}
+
+# fbd_disconnect <node.PIN> — click the wire into <node>'s input PIN and press
+# Delete: the editor posts a disconnect, which
+# drops a named FB argument (`PIN := …`) outright. Read back: the node's
+# statement no longer names PIN.
+fbd_disconnect() {
+  local spec=$1 node=${1%.*} pin=${1##*.} el id ax ay bx by
+  G_WHAT="disconnect $spec"
+  el=$(fbd_node_el "$node")
+  js_true "$el" || { g_err "no FBD node $node"; return 1; }
+  id=$(js "($el).dataset.id" | tr -d '"')
+  local edge="[...doc.querySelectorAll('g.fbd-edge')].find(g => g.dataset.id.endsWith($(_q "->$id:$pin")))"
+  js_true "$edge" || { g_err "no wire into $spec"; return 1; }
+  # The wire is a symmetric bezier between the two handles, so it passes
+  # through their midpoint (its bounding box's centre does not, when the
+  # ends are at different heights); the target end carries the NOT toggle's
+  # hit circle (FbdEdge.svelte), well clear of the midpoint.
+  local from a b
+  from=$(js "($edge).dataset.id.split('->')[0]" | tr -d '"')
+  a=$(el_settled "[...doc.querySelectorAll('.svelte-flow__node')].find(n => n.dataset.id === $(_q "$from"))?.querySelector('.svelte-flow__handle.source')") || { g_err "no source handle on $from"; return 1; }
+  b=$(el_at "$(fbd_pin_el "$spec" target)") || { g_err "no input pin $spec"; return 1; }
+  read -r ax ay <<<"$a"; read -r bx by <<<"$b"
+  g_click $(( (ax + bx) / 2 )) $(( (ay + by) / 2 )) || return 1
+  g_key Delete
+  sleep 1.2
+  g_save
+  python3 - "$PROJ/$G_FILE" "$node" "$pin" <<'PY2' || { g_err "$G_FILE: $node still has a $pin argument"; return 1; }
+import re, sys
+text, node, pin = open(sys.argv[1]).read(), sys.argv[2], sys.argv[3]
+for line in text.splitlines():
+    if re.match(r"\s*" + re.escape(node) + r"\s*:", line):
+        sys.exit(1 if re.search(r"\b" + re.escape(pin) + r"\s*:=", line) else 0)
+sys.exit(1)
+PY2
 }
 
 # fbd_move_node <node> <dx> <dy> — drag a block (by its title bar) or a
