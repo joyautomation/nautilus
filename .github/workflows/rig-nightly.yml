@@ -16,6 +16,7 @@ on:
 permissions:
   contents: read
   issues: write # the rolling "rig nightly red" issue
+  actions: write # a green run dispatches docs.yml so the proof pages refresh
 
 concurrency:
   group: rig-nightly
@@ -71,8 +72,10 @@ jobs:
             tools/rig/out/selftest
             tools/rig/out/build/build.log
             tools/rig/out/build/SHA
+            tools/rig/out/manifest.json
+            tools/rig/out/nightly/manifest.json
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 90 # the docs build downloads the last green run's artifact
 
       # Red: open the rolling issue or add a comment to it. Green: close it.
       # Only scheduled runs touch the issue; a manual dispatch just reports.
@@ -112,3 +115,11 @@ jobs:
         if: always()
         run: |
           [[ ${{ steps.smoke.outcome }} == success && ${{ steps.selftest.outcome }} == success ]] || { echo "smoke=${{ steps.smoke.outcome }} selftest=${{ steps.selftest.outcome }}"; exit 1; }
+
+      # A green run refreshes the proof pages: the docs build downloads the
+      # newest green rig-out-* artifact (website/scripts/fetch-verified.mjs).
+      - name: Rebuild docs
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run docs.yml --ref main --repo "$GITHUB_REPOSITORY"
