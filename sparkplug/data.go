@@ -12,6 +12,11 @@ import (
 // drives device DBIRTH/DDEATH from health transitions and triggers a rebirth
 // when a new metric name appears (a metric must be in a birth before data).
 func (n *Node) scanAndPublish() {
+	// The whole tick holds the wire (see Node.pubMu): a birth cannot start
+	// in the middle of it, and it cannot run while a birth is in progress.
+	n.pubMu.Lock()
+	defer n.pubMu.Unlock()
+
 	n.mu.Lock()
 	// Unborn — the broker is gone, or the node has not birthed yet — the
 	// tick still runs when store-and-forward is on and there has been a
@@ -21,7 +26,7 @@ func (n *Node) scanAndPublish() {
 	// this the tick returned here and an outage was a hole in the historian.
 	// Before the first birth there is nothing a host could receive, so
 	// nothing to buffer.
-	if !n.born && !n.bufferingLocked() {
+	if !n.liveLocked() && !n.bufferingLocked() {
 		n.mu.Unlock()
 		return
 	}
@@ -35,7 +40,9 @@ func (n *Node) scanAndPublish() {
 	// paho's connection-lost handler, which runs only once paho has noticed
 	// the loss, and a tick that lands in that window used to hand its
 	// publish to a connection about to be torn down.
-	deliverable := n.born && n.hostDeliverableLocked() && n.cli.IsConnectionOpen()
+	// And not mid-rebirth: liveLocked is false from the moment a rebirth is
+	// requested until its NBIRTH is issued.
+	deliverable := n.liveLocked() && n.hostDeliverableLocked() && n.cli.IsConnectionOpen()
 	n.mu.Unlock()
 
 	for _, e := range deviceEvents {
@@ -67,10 +74,19 @@ func (n *Node) scanAndPublish() {
 // how many went out. It stops at the first that did not: that record's seq
 // is handed back (unsentSeq) so the next message reuses it and the host sees
 // no gap — the record was never on the wire, or the link is dead and a birth
-// is coming either way.
+// is coming either way. Caller holds n.pubMu.
+//
+// It also stops — ok=false, the record not sent, so it is buffered or
+// dropped like any other undelivered one — when the node stops being live
+// part-way through: a rebirth request accepted mid-tick (rebirthPending)
+// stops the very next record, not the next tick.
 func (n *Node) publishRecords(recs []sfRecord) (sent int, ok bool) {
 	for i, r := range recs {
 		n.mu.Lock()
+		if !n.liveLocked() {
+			n.mu.Unlock()
+			return i, false
+		}
 		seq := n.nextSeq()
 		births := n.births
 		p, err := Payload{Timestamp: r.ts, Seq: seq, Metrics: r.metrics}.Encode()
@@ -95,6 +111,13 @@ func (n *Node) publishRecords(recs []sfRecord) (sent int, ok bool) {
 		n.mu.Unlock()
 	}
 	return len(recs), true
+}
+
+// liveLocked reports whether the node may issue session messages (DATA,
+// device DBIRTH/DDEATH): it is born and no rebirth is pending. Caller holds
+// n.mu.
+func (n *Node) liveLocked() bool {
+	return n.born && !n.rebirthPending
 }
 
 // bufferingLocked reports whether an unborn node should still sample: it
@@ -136,7 +159,7 @@ func (n *Node) publishPassLocked(now time.Time) (msgs []sfRecord, deviceEvents [
 	// its DBIRTH covers them on the health transition — and rebirthing for
 	// them would storm empty births the whole time the device is down
 	// (e.g. every startup, while the field driver is still connecting).
-	if n.born {
+	if n.liveLocked() {
 		for _, name := range n.pubNames {
 			if n.known[name] {
 				continue // already birthed — the overwhelmingly common case
@@ -315,6 +338,12 @@ func (n *Node) deviceHealthLocked(snap map[string]runtime.Sample) []func(*Node) 
 func (n *Node) publishDeviceBirth(d Device) {
 	snap := n.rt.Tags().Snapshot()
 	n.mu.Lock()
+	if !n.liveLocked() {
+		// A rebirth was requested since the tick saw the transition; its
+		// birth re-evaluates every device and DBIRTHs the healthy ones.
+		n.mu.Unlock()
+		return
+	}
 	ts := nowMs()
 	var ms []Metric
 	for _, name := range n.deviceTagsSortedLocked(d.ID) {
@@ -343,6 +372,12 @@ func (n *Node) publishDeviceBirth(d Device) {
 // publishDeviceDeath sends a DDEATH for a device that went offline.
 func (n *Node) publishDeviceDeath(id string) {
 	n.mu.Lock()
+	if !n.liveLocked() {
+		// Mid-rebirth: the NBIRTH that follows supersedes the device, and
+		// the birth does not DBIRTH an unhealthy one.
+		n.mu.Unlock()
+		return
+	}
 	p, err := Payload{Timestamp: nowMs(), Seq: n.nextSeq()}.Encode()
 	n.mu.Unlock()
 	if err != nil {

@@ -104,6 +104,20 @@ website/, docs/      docs site (deploys from main); design briefs in docs/design
   Its correctness rests on one rule — a client's generation advances only when
   a frame is actually ENQUEUED, so a dropped frame costs latency, never
   content. Do not "optimise" that by advancing it at build time.
+- **The Sparkplug edge node owns the wire with one lock.** `Node.pubMu`
+  serialises everything the node sends in a session: a birth (NBIRTH, then
+  DBIRTHs) and a publish tick (DATA, device DBIRTH/DDEATH, store-and-forward
+  replay) each hold it from deciding what to send until it is handed to paho,
+  and paho writes in issue order. A rebirth request closes a gate
+  (`rebirthPending`, read through `liveLocked`) synchronously in the NCMD
+  handler; the birth that answers it reopens it. Together: once a Rebirth is
+  accepted no DATA goes out before the NBIRTH, and nothing of the new session
+  overtakes it (the TCK's rebirth-action-1; before this it flaked CI). Any new
+  publish path must take `pubMu` and check `liveLocked`; an MQTT handler must
+  never wait on `pubMu` (paho OrderMatters). Pinned by
+  `sparkplug/rebirth_test.go`. The TCK scores that rule by broker receive
+  time, so the conformance test sends its own NCMD only once the broker has
+  delivered the node's last NDATA back to it — never on a timer.
 - **Quality is answered lazily, off the scan loop.** `Runtime.Quality()` asks
   the driver on demand (server tick / `/api/state`), so a driver's `Quality()`
   is called from a goroutine other than the one calling `ReadInputs` and must

@@ -39,7 +39,7 @@ func (n *Node) applyCommand(payload Payload) {
 	for _, m := range payload.Metrics {
 		if m.Name == "Node Control/Rebirth" {
 			if b, ok := m.Value.(bool); ok && b {
-				go n.Rebirth()
+				n.requestRebirth()
 				return
 			}
 		}
@@ -126,11 +126,34 @@ func (n *Node) warnCommandOnce(reason, msg string, args ...any) {
 	}
 }
 
+// requestRebirth answers a "Node Control/Rebirth" command. The spec says an
+// edge node that receives one MUST stop sending DATA immediately and resume
+// only after its new NBIRTH. So the gate closes HERE, synchronously, before
+// the handler returns — rebirthPending stops every DATA not yet issued — and
+// only the birth itself runs on its own goroutine: an MQTT message handler
+// must not block on a publish (paho with OrderMatters), and the birth waits
+// on pubMu behind any tick in progress. See the pubMu invariant in node.go.
+//
+// "Not yet issued" is exact: publishRecords checks the gate under n.mu per
+// record, so the one record that can still go out after this returns is one
+// that passed its check before the gate closed — the same, on the wire, as a
+// record sent just before the command arrived.
+func (n *Node) requestRebirth() {
+	n.mu.Lock()
+	n.rebirthPending = true
+	n.mu.Unlock()
+	go n.Rebirth()
+}
+
 // Rebirth republishes the birth certificates without a new MQTT session:
 // bdSeq stays the same, seq restarts at 0. Runs on its own goroutine (see
-// handleCommand's `go n.Rebirth()` and the rebirth-debounce timer in
-// data.go), so it registers itself as in-flight the same way birth() does —
-// no-op once Stop has begun, so Stop can wait for it before mutating bdSeq.
+// requestRebirth and the rebirth-debounce timer below), so it registers
+// itself as in-flight the same way birth() does — no-op once Stop has begun,
+// so Stop can wait for it before mutating bdSeq.
+//
+// It does not clear born: the rebirthPending gate stops data instead, which
+// leaves born meaning what Stop reads it as — "an NBIRTH is out, so an
+// NDEATH is owed" — even when Stop cancels the rebirth.
 func (n *Node) Rebirth() {
 	if !n.beginInflight() {
 		return // Stop already in progress; no-op
@@ -138,7 +161,7 @@ func (n *Node) Rebirth() {
 	defer n.inflight.Done()
 
 	n.mu.Lock()
-	n.born = false
+	n.rebirthPending = true
 	n.mu.Unlock()
 	if err := n.birth(); err != nil {
 		n.log.Error("sparkplug: rebirth failed", "error", err)

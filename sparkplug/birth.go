@@ -16,6 +16,15 @@ func (n *Node) birth() error {
 	}
 	defer n.inflight.Done()
 
+	// Hold the wire for the whole birth: no publish tick may issue anything
+	// between the moment this birth restarts seq / marks the node born and
+	// the moment its NBIRTH and DBIRTHs are handed to paho. Without it a tick
+	// could see born=true and send NDATA seq=1 ahead of NBIRTH seq=0 — or
+	// finish an old-session NDATA after a rebirth request but before the
+	// NBIRTH answering it.
+	n.pubMu.Lock()
+	defer n.pubMu.Unlock()
+
 	snap := n.rt.Tags().Snapshot()
 
 	n.mu.Lock()
@@ -91,6 +100,7 @@ func (n *Node) birth() error {
 		dbirthPayloads[b.device] = p
 	}
 	n.born = true
+	n.rebirthPending = false // this NBIRTH answers any rebirth requested before now
 	n.bornMs = int64(nowMs())
 	bd := n.bdSeq // captured under the lock — Stop() may mutate n.bdSeq concurrently once unlocked
 	n.mu.Unlock()

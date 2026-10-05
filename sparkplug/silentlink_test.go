@@ -42,6 +42,10 @@ type fakeClient struct {
 	open bool      // what IsConnectionOpen / IsConnected report
 	hang bool      // Publish returns tokens that never complete
 	pubs []fakePub // every publish handed to the client, completed or not
+	// onPublish, when set, runs at the start of every Publish, before it is
+	// recorded and outside c.mu — a test's hook to hold a publish or to
+	// inject an event at an exact point on the wire.
+	onPublish func(topic string)
 }
 
 type fakePub struct {
@@ -59,6 +63,12 @@ func (c *fakeClient) set(open, hang bool) {
 }
 
 func (c *fakeClient) Publish(topic string, _ byte, _ bool, payload interface{}) mqtt.Token {
+	c.mu.Lock()
+	hook := c.onPublish
+	c.mu.Unlock()
+	if hook != nil {
+		hook(topic)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.pubs = append(c.pubs, fakePub{topic, payload.([]byte)})
