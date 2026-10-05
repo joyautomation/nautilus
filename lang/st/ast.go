@@ -440,10 +440,14 @@ func (e *CallExpr) exprNode()        {}
 func (e *CallExpr) NodePos() Pos     { return e.Pos }
 
 // MemberExpr is a dotted member access: obj.field.
+// Pos is where the whole chain starts (the object); MemberPos is the
+// member name token after the dot, so a diagnostic about an unknown member
+// can land on the member rather than the object.
 type MemberExpr struct {
-	Object Expression
-	Member string
-	Pos    Pos
+	Object    Expression
+	Member    string
+	Pos       Pos
+	MemberPos Pos
 }
 
 func (e *MemberExpr) nodeType() string { return "MemberExpr" }

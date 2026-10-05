@@ -14,30 +14,9 @@ import * as vscode from "vscode";
 import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
 import { execFile } from "node:child_process";
 import * as path from "node:path";
+import { failureText, Listed, RunResult } from "./acceptanceMessage";
 
 const SUITE_GLOB = "**/*_test.yaml";
-
-/** One test as `naut test -list` reports it. */
-interface Listed {
-  suite: string;
-  name: string;
-  line: number;
-}
-
-/** One result as `naut test -json` reports it. */
-interface RunResult extends Listed {
-  passed: boolean;
-  scans: number;
-  elapsedMs: number;
-  failure?: {
-    step: number;
-    line: number;
-    atMs: number;
-    reason: string;
-    detail?: string;
-    trace?: { name: string; unit?: string; desc?: string; atMs: number[]; values: string[] }[];
-  };
-}
 
 function cliPath(): string {
   return cliCommand();
@@ -220,28 +199,14 @@ export class AcceptanceTests implements vscode.Disposable {
     run.end();
   }
 
-  /** A failure message: the assertion, then the trajectory that explains it. */
+  /** A failure message: the value that broke, first (it is the line VS Code
+   * shows inline), then the step, the virtual time, and the trajectory —
+   * anchored on the assertion that broke rather than the top of its step. */
   private message(r: RunResult, item: vscode.TestItem): vscode.TestMessage {
-    const f = r.failure;
-    const lines: string[] = [];
-    if (f) {
-      const at = `t=${(f.atMs / 1000).toFixed(3)}s of virtual time`;
-      lines.push(f.step > 0 ? `step ${f.step}, ${at}` : at);
-      lines.push("");
-      lines.push(f.detail ? `${f.detail}   (${f.reason})` : f.reason);
-      for (const t of f.trace ?? []) {
-        const head = [t.name, t.unit, t.desc && `— ${t.desc}`].filter(Boolean).join("  ");
-        lines.push("", head);
-        lines.push(t.atMs.map((ms) => `${(ms / 1000).toFixed(2)}s`.padStart(11)).join(""));
-        lines.push(t.values.map((v) => v.padStart(11)).join(""));
-      }
-    } else {
-      lines.push("failed");
-    }
-    const msg = new vscode.TestMessage(lines.join("\n"));
-    if (item.uri && f?.line) {
-      const line = Math.max(0, f.line - 1);
-      msg.location = new vscode.Location(item.uri, new vscode.Position(line, 0));
+    const { text, line } = failureText(r);
+    const msg = new vscode.TestMessage(text);
+    if (item.uri && line) {
+      msg.location = new vscode.Location(item.uri, new vscode.Position(line - 1, 0));
     }
     return msg;
   }

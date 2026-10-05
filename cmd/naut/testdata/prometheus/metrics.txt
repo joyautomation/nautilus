@@ -1,0 +1,46 @@
+# HELP node_load1 1m load average.
+# TYPE node_load1 gauge
+node_load1 0.5
+# HELP node_boot_time_seconds Unix time of boot.
+# TYPE node_boot_time_seconds gauge
+node_boot_time_seconds 1700000000
+# HELP node_cpu_seconds_total Seconds the CPUs spent in each mode.
+# TYPE node_cpu_seconds_total counter
+node_cpu_seconds_total{cpu="0",mode="idle"} 50000
+node_cpu_seconds_total{cpu="1",mode="idle"} 50010
+node_cpu_seconds_total{cpu="0",mode="user"} 500
+node_cpu_seconds_total{cpu="1",mode="user"} 505
+# HELP node_memory_MemTotal_bytes Total memory.
+# TYPE node_memory_MemTotal_bytes gauge
+node_memory_MemTotal_bytes 8000000000
+# HELP node_memory_MemAvailable_bytes Available memory.
+# TYPE node_memory_MemAvailable_bytes gauge
+node_memory_MemAvailable_bytes 4000000000
+# HELP node_filesystem_avail_bytes Filesystem space available.
+# TYPE node_filesystem_avail_bytes gauge
+node_filesystem_avail_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/"} 100000000000
+# HELP node_filesystem_size_bytes Filesystem size.
+# TYPE node_filesystem_size_bytes gauge
+node_filesystem_size_bytes{device="/dev/sda1",fstype="ext4",mountpoint="/"} 200000000000
+# HELP node_uname_info Labeled system information.
+# TYPE node_uname_info gauge
+node_uname_info{nodename="bench1",machine="x86_64",sysname="Linux"} 1
+# HELP node_dmi_info Labeled system information from dmi.
+# TYPE node_dmi_info gauge
+node_dmi_info{product_serial="SN-BENCH-0001",system_vendor="Acme"} 1
+# HELP node_hwmon_sensor_label Sensor label.
+# TYPE node_hwmon_sensor_label gauge
+node_hwmon_sensor_label{chip="platform_coretemp_0",sensor="temp1"} 1
+# HELP node_hwmon_temp_celsius Hardware monitor for temperature (input).
+# TYPE node_hwmon_temp_celsius gauge
+node_hwmon_temp_celsius{chip="platform_coretemp_0",sensor="temp1"} 42
+node_hwmon_temp_celsius{chip="platform_coretemp_0",sensor="temp2"} 45
+# HELP node_hwmon_temp_max_celsius Hardware monitor for temperature (high).
+# TYPE node_hwmon_temp_max_celsius gauge
+node_hwmon_temp_max_celsius{chip="platform_coretemp_0",sensor="temp1"} 80
+# HELP node_hwmon_temp_crit_celsius Hardware monitor for temperature (crit).
+# TYPE node_hwmon_temp_crit_celsius gauge
+node_hwmon_temp_crit_celsius{chip="platform_coretemp_0",sensor="temp1"} 100
+# HELP node_hwmon_fan_rpm Hardware monitor for fan revolutions per minute (input).
+# TYPE node_hwmon_fan_rpm gauge
+node_hwmon_fan_rpm{chip="platform_coretemp_0",sensor="fan1"} 1100

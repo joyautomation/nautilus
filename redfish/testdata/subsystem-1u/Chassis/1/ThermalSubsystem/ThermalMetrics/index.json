@@ -1,0 +1,33 @@
+{
+    "@odata.type": "#ThermalMetrics.v1_3_0.ThermalMetrics",
+    "Id": "ThermalMetrics",
+    "Name": "Thermal Metrics",
+    "TemperatureSummaryCelsius": {
+        "Intake": {
+            "Reading": 24.5,
+            "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/InletTemp"
+        },
+        "Exhaust": {
+            "Reading": 38.5,
+            "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/ExhaustTemp"
+        }
+    },
+    "TemperatureReadingsCelsius": [
+        {
+            "DeviceName": "CPU1",
+            "Reading": 55,
+            "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/CPU1Temp"
+        },
+        {
+            "DeviceName": "Intake",
+            "Reading": 24.5,
+            "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/InletTemp"
+        },
+        {
+            "DeviceName": "Exhaust",
+            "Reading": 38.5,
+            "DataSourceUri": "/redfish/v1/Chassis/1/Sensors/ExhaustTemp"
+        }
+    ],
+    "@odata.id": "/redfish/v1/Chassis/1/ThermalSubsystem/ThermalMetrics"
+}

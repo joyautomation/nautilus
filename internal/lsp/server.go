@@ -175,6 +175,11 @@ func (s *Server) setDocument(uri, text string) {
 		an = analyzeSFC
 	}
 	doc := &document{text: text, an: an(text, prelude, preludeLines)}
+	if prev, ok := s.docs[uri]; ok && prev.test == nil {
+		// Not even the declarations parse (a VAR block mid-edit): answer
+		// hover and completion from the last version that did.
+		doc.an.carryDeclarations(&prev.an)
+	}
 	s.docs[uri] = doc
 	s.w.notify("textDocument/publishDiagnostics", PublishDiagnosticsParams{
 		URI: uri, Diagnostics: nonNil(doc.an.Diags),
@@ -386,9 +391,11 @@ func (s *Server) handleCompletion(m *message) {
 	// included ("Plt[3].Header.|"). Nothing else is meaningful there.
 	line := lineText(doc.text, pos.Line+1)
 	if base, path, isMember := memberContext(line, pos.Character); isMember {
-		var items []CompletionItem
+		// An empty list, not null: the dot is answered, there is just
+		// nothing to offer on an unknown base.
+		items := []CompletionItem{}
 		if t, ok := doc.an.resolveChain(base, path, pos.Line+1); ok {
-			items = doc.an.memberCompletions(t)
+			items = append(items, doc.an.memberCompletions(t)...)
 		}
 		s.w.respond(m.ID, items)
 		return

@@ -1,0 +1,14 @@
+{
+    "@odata.type": "#Sensor.v1_7_0.Sensor",
+    "Id": "Fan4Speed",
+    "Name": "Fan 4 Speed",
+    "Reading": 44,
+    "ReadingUnits": "%",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "ReadingType": "Percent",
+    "PhysicalContext": "Fan",
+    "@odata.id": "/redfish/v1/Chassis/1/Sensors/Fan4Speed"
+}

@@ -1,0 +1,14 @@
+{
+    "@odata.type": "#Sensor.v1_7_0.Sensor",
+    "Id": "TotalPower",
+    "Name": "Total Power",
+    "Reading": 187,
+    "ReadingUnits": "W",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "ReadingType": "Power",
+    "PhysicalContext": "Chassis",
+    "@odata.id": "/redfish/v1/Chassis/1/Sensors/TotalPower"
+}

@@ -1,0 +1,42 @@
+{
+	"_": "Large CC0 assets the rig scene refers to, fetched into static/ by fetch-assets.mjs (npm run assets; also before dev and build). They live in a GitHub release, not in git. Sources: Poly Haven (see static/CREDITS.md).",
+	"release": "spatial-assets-v1",
+	"files": [
+		{
+			"path": "env/industrial_workshop_foundry_1k.hdr",
+			"url": "https://github.com/joyautomation/nautilus/releases/download/spatial-assets-v1/industrial_workshop_foundry_1k.hdr",
+			"bytes": 1701301,
+			"sha256": "3ee689931f2b1a661e1c8d101539cdd82a8546655813c1fdcd26ab6f248aa54f"
+		},
+		{
+			"path": "env/industrial_workshop_foundry_backdrop_4k.jpg",
+			"url": "https://github.com/joyautomation/nautilus/releases/download/spatial-assets-v1/industrial_workshop_foundry_backdrop_4k.jpg",
+			"bytes": 1634260,
+			"sha256": "0a2705fb8863110d79c43fdee6c90f1e3fa51872854416811e45e9e096fd704c"
+		},
+		{
+			"path": "env/industrial_workshop_foundry_backdrop_6k.jpg",
+			"url": "https://github.com/joyautomation/nautilus/releases/download/spatial-assets-v1/industrial_workshop_foundry_backdrop_6k.jpg",
+			"bytes": 3464666,
+			"sha256": "5b0651762c74a2630bc8746934d0f021dc8be84f05f0321e475c9e8bd394c82b"
+		},
+		{
+			"path": "textures/concrete_floor_02_diff_1k.jpg",
+			"url": "https://github.com/joyautomation/nautilus/releases/download/spatial-assets-v1/concrete_floor_02_diff_1k.jpg",
+			"bytes": 776097,
+			"sha256": "6db84a6d87dc50508b9d134d6fbd2b7e876b8081a5f43a118a249ca18de73af5"
+		},
+		{
+			"path": "textures/concrete_floor_02_nor_gl_1k.jpg",
+			"url": "https://github.com/joyautomation/nautilus/releases/download/spatial-assets-v1/concrete_floor_02_nor_gl_1k.jpg",
+			"bytes": 192757,
+			"sha256": "fcda391b57a816d646ae15544688be53790478da5cd48dbe514b3c6901415e61"
+		},
+		{
+			"path": "textures/concrete_floor_02_rough_1k.jpg",
+			"url": "https://github.com/joyautomation/nautilus/releases/download/spatial-assets-v1/concrete_floor_02_rough_1k.jpg",
+			"bytes": 318550,
+			"sha256": "c7f026a611b7859903c61ec7fd4574944157223e9e7796413dd6e2a66eaeac7a"
+		}
+	]
+}

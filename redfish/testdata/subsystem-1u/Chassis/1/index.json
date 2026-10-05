@@ -1,0 +1,33 @@
+{
+    "@odata.type": "#Chassis.v1_23_0.Chassis",
+    "Id": "1",
+    "Name": "Chassis",
+    "ChassisType": "RackMount",
+    "Manufacturer": "Example Systems",
+    "Model": "R1U-S",
+    "PowerState": "On",
+    "Status": {
+        "State": "Enabled",
+        "Health": "OK"
+    },
+    "ThermalSubsystem": {
+        "@odata.id": "/redfish/v1/Chassis/1/ThermalSubsystem"
+    },
+    "PowerSubsystem": {
+        "@odata.id": "/redfish/v1/Chassis/1/PowerSubsystem"
+    },
+    "Sensors": {
+        "@odata.id": "/redfish/v1/Chassis/1/Sensors"
+    },
+    "EnvironmentMetrics": {
+        "@odata.id": "/redfish/v1/Chassis/1/EnvironmentMetrics"
+    },
+    "Links": {
+        "ComputerSystems": [
+            {
+                "@odata.id": "/redfish/v1/Systems/1"
+            }
+        ]
+    },
+    "@odata.id": "/redfish/v1/Chassis/1"
+}

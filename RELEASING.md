@@ -149,6 +149,14 @@ applies the rules below. Run the guard locally to see what CI would decide:
   **`publish.yml`** (npm verifies the workflow *filename*; it was previously
   configured for `release.yml` — update it or CI publishes will be rejected).
   Repository **variable** `PUBLISH_HMI` = `true` arms the publish step.
+- **`@joyautomation/nautilus-hmi-3d` (`hmi-3d/`), the same way, with its own
+  variable `PUBLISH_HMI3D`.** Trusted publishing is set on the package's own
+  npmjs.com page, which exists only once a version is published, so the
+  FIRST version (0.1.0) is published by hand from the merged commit:
+  `cd hmi-3d && npm ci && npm publish --access public` (prepublishOnly runs
+  `npm run package`). Then on npmjs.com set its Trusted Publisher to repo
+  `joyautomation/nautilus`, workflow `publish.yml`, and set
+  `PUBLISH_HMI3D` = `true`. From then on a version bump on main ships it.
 
 ## Validating changes to the pipeline
 
