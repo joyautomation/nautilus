@@ -411,57 +411,57 @@ sleep 1
 open_file plant.st 3
 rows=$(outline_tree); png=$(shot outline-st)
 if miss=$(has_all "$rows" '^Plant \[' '^  VAR_EXTERNAL \[' '^    Level \[[a-z?-]+\] REAL' '^  VAR \[' '^    settle \[[a-z?-]+\] TON'); then
-  pass "X40 Outline on plant.st: the PROGRAM, its VAR sections and declarations — $(head -4 <<<"$rows" | oneline)…" "$png"
-else fail "X40 Outline on plant.st is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+  pass "X41 Outline on plant.st: the PROGRAM, its VAR sections and declarations — $(head -4 <<<"$rows" | oneline)…" "$png"
+else fail "X41 Outline on plant.st is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
 
 symbol_at "$F" '^    settle : TON;' settle
 c=$(crumbs); png=$(shot breadcrumbs-st)
 if [[ $c == *"Plant › VAR › settle"* ]]; then
-  pass "X40 breadcrumbs on plant.st's settle declaration: \"$c\"" "$png"
-else fail "X40 breadcrumbs on plant.st's settle declaration: \"${c:-<none>}\", want …Plant › VAR › settle" "$png"; fi
+  pass "X41 breadcrumbs on plant.st's settle declaration: \"$c\"" "$png"
+else fail "X41 breadcrumbs on plant.st's settle declaration: \"${c:-<none>}\", want …Plant › VAR › settle" "$png"; fi
 
 rows=$(goto_symbol); png=$(shot goto-symbol-st)
 if miss=$(has_all "$rows" '^Plant ' '^VAR_EXTERNAL ' '^Level ' '^settle '); then
-  pass "X40 Go to Symbol in Editor on plant.st lists them — $(head -5 <<<"$rows" | oneline)…" "$png"
-else fail "X40 Go to Symbol in Editor on plant.st is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+  pass "X41 Go to Symbol in Editor on plant.st lists them — $(head -5 <<<"$rows" | oneline)…" "$png"
+else fail "X41 Go to Symbol in Editor on plant.st is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
 xdotool key --clearmodifiers Escape; sleep 0.4
 
 L=$PROJ/interlock.ld
 open_file interlock.ld 4
 rows=$(outline_tree); png=$(shot outline-ld)
 if miss=$(has_all "$rows" '^SealIn \[' '^  VAR_INPUT \[' '^    Start \[[a-z?-]+\] BOOL' '^  seal \[[a-z?-]+\] start/stop with seal-in' '^  lamp \['); then
-  pass "X40 Outline on interlock.ld: the FUNCTION_BLOCK, its sections and its rungs with their comments — $(oneline <<<"$rows")" "$png"
-else fail "X40 Outline on interlock.ld is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+  pass "X41 Outline on interlock.ld: the FUNCTION_BLOCK, its sections and its rungs with their comments — $(oneline <<<"$rows")" "$png"
+else fail "X41 Outline on interlock.ld is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
 
 symbol_at "$L" '^    Run \( Lamp \)' Lamp
 c=$(crumbs); png=$(shot breadcrumbs-ld)
 if [[ $c == *"SealIn › lamp"* ]]; then
-  pass "X40 breadcrumbs inside interlock.ld's lamp rung: \"$c\"" "$png"
-else fail "X40 breadcrumbs inside interlock.ld's lamp rung: \"${c:-<none>}\", want …SealIn › lamp" "$png"; fi
+  pass "X41 breadcrumbs inside interlock.ld's lamp rung: \"$c\"" "$png"
+else fail "X41 breadcrumbs inside interlock.ld's lamp rung: \"${c:-<none>}\", want …SealIn › lamp" "$png"; fi
 
 rows=$(goto_symbol); png=$(shot goto-symbol-ld)
 if miss=$(has_all "$rows" '^SealIn ' '^seal ' '^lamp '); then
-  pass "X40 Go to Symbol in Editor on interlock.ld lists the rungs — $(oneline <<<"$rows")" "$png"
-else fail "X40 Go to Symbol in Editor on interlock.ld is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+  pass "X41 Go to Symbol in Editor on interlock.ld lists the rungs — $(oneline <<<"$rows")" "$png"
+else fail "X41 Go to Symbol in Editor on interlock.ld is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
 xdotool key --clearmodifiers Escape; sleep 0.4
 
 S=$PROJ/batch.sfc
 open_file batch.sfc 4
 rows=$(outline_tree); png=$(shot outline-sfc)
 if miss=$(has_all "$rows" '^TankBatch \[' '^  VAR_EXTERNAL \[' '^    BatchCount \[[a-z?-]+\] INT' '^  Idle \[[a-z?-]+\] INITIAL_STEP' '^  Fill \[[a-z?-]+\] STEP' '^  Fill → \(Heat, Mix\) \[[a-z?-]+\] t_full: ' '^  \(Heat, Mix\) → Drain \[' '^  CountBatch \[[a-z?-]+\] ACTION'); then
-  pass "X40 Outline on batch.sfc: the PROGRAM, its sections, the steps (initial marked), the transitions as From → To, the actions — $(grep -E '^  [^ ]' <<<"$rows" | sed 's/^ *//' | oneline)" "$png"
-else fail "X40 Outline on batch.sfc is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+  pass "X41 Outline on batch.sfc: the PROGRAM, its sections, the steps (initial marked), the transitions as From → To, the actions — $(grep -E '^  [^ ]' <<<"$rows" | sed 's/^ *//' | oneline)" "$png"
+else fail "X41 Outline on batch.sfc is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
 
 symbol_at "$S" '^  STEP Fill:' Fill
 c=$(crumbs); png=$(shot breadcrumbs-sfc)
 if [[ $c == *"TankBatch › Fill"* ]]; then
-  pass "X40 breadcrumbs on batch.sfc's STEP Fill: \"$c\"" "$png"
-else fail "X40 breadcrumbs on batch.sfc's STEP Fill: \"${c:-<none>}\", want …TankBatch › Fill" "$png"; fi
+  pass "X41 breadcrumbs on batch.sfc's STEP Fill: \"$c\"" "$png"
+else fail "X41 breadcrumbs on batch.sfc's STEP Fill: \"${c:-<none>}\", want …TankBatch › Fill" "$png"; fi
 
 rows=$(goto_symbol Idle); png=$(shot goto-symbol-sfc)
 if miss=$(has_all "$rows" '^Idle ' '^Idle → Fill ' '^Drain → Idle '); then
-  pass "X40 Go to Symbol in Editor on batch.sfc, filtered 'Idle': the initial step and its transitions — $(oneline <<<"$rows")" "$png"
-else fail "X40 Go to Symbol in Editor on batch.sfc, filtered 'Idle', is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+  pass "X41 Go to Symbol in Editor on batch.sfc, filtered 'Idle': the initial step and its transitions — $(oneline <<<"$rows")" "$png"
+else fail "X41 Go to Symbol in Editor on batch.sfc, filtered 'Idle', is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
 xdotool key --clearmodifiers Escape; sleep 0.4
 
 # ══ nothing left behind ════════════════════════════════════════════════════

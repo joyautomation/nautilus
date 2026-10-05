@@ -232,7 +232,7 @@ no rig verb, no smoke check); per section below.
 | X37 | Mimic | Pipes snap to ports, follow equipment when it moves, orthogonal route suggested around obstacles | README HMI mimic editor | gestures.test.mjs: draw preview == committed render; terminal ATTACH / DETACH | mimic_pipe | — |
 | X38 | Mimic | Snap to grid (nautilus.mimic.snapToGrid) | README Settings | mimic-more.test.mjs: X38 snapToGrid on lands a drag on the 10 px grid; off moves the exact delta | — | — |
 | X39 | Mimic | Live canvas animates bound props from the controller | README HMI mimic editor | — | — | 13 |
-| X40 | Extension | Outline view, breadcrumbs and Go to Symbol in Editor list POUs, VAR sections and declarations, FBD statements, ladder rungs, SFC steps / transitions / actions (naut lsp documentSymbol) | README Language intelligence | — | — | 14 (.st, .ld, .sfc; not .fbd) |
+| X41 | Extension | Outline view, breadcrumbs and Go to Symbol in Editor list POUs, VAR sections and declarations, FBD statements, ladder rungs, SFC steps / transitions / actions (naut lsp documentSymbol) | README Language intelligence | — | — | 14 (.st, .ld, .sfc; not .fbd) |
 
 ## Count of rows with no coverage at all
 
