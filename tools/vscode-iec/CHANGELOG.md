@@ -26,6 +26,14 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 - **Testing view: a failing acceptance test shows the tag value that broke, inline on the assertion.** The inline message used to read only `step 3, t=0.300s of virtual time` and sat on the step's `- given:` line; it now leads with `PumpRun = false, want true`, puts the step, its line and the virtual time on the line below, and sits on the failing tag inside `expect:` (or the `always:` term, or the `alarms:` key). Needs `naut` 0.15.0 or later, which reports the assertion's line in `naut test -json` (`failure.line`, with the step's line now in `failure.stepLine`); an older CLI still gets the value-first message, anchored on the step. (#145)
 
+## [Unreleased]
+
+### Fixed
+
+- **The FB monitor CodeLens shows the real position.** It said "1 of 2"
+  whichever instance was monitored; monitoring the second one now reads
+  "2 of 2" (#146).
+
 ## [0.13.1] - 2026-10-04
 
 ### Added
