@@ -7,9 +7,16 @@ on:
   pull_request:
     paths: ['website/**', 'docs/**', 'hmi/README.md', 'tools/vscode-iec/syntaxes/**']
 
+  # Dispatched by a green rig-nightly / rig-demo so the proof pages pick up
+  # the new clips.
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # fetch-verified.mjs lists runs and downloads artifacts
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,16 +26,24 @@ jobs:
           cache-dependency-path: website/package-lock.json
       - run: npm ci
         working-directory: website
+      # The prebuild fetch of verified clips is soft: no token or no green run
+      # yields empty data and the build still passes (see the script).
       - run: npm run build
         working-directory: website
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
 
   # Ships nautilus.joyautomation.com — same pattern as the joyautomation.com
   # site: image → DO registry, kubectl apply to k8s-joy-1/joy. Skips cleanly
   # until the DIGITALOCEAN_ACCESS_TOKEN secret exists in this repo.
   deploy:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # fetch-verified.mjs downloads rig/CI artifacts
     steps:
       - uses: actions/checkout@v4
       - name: Check deploy credentials
@@ -47,6 +62,28 @@ jobs:
         uses: digitalocean/action-doctl@v2
         with:
           token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      # The image build has no token, so fetch the proof-page clips here; the
+      # Dockerfile copies the generated website/public/verified and
+      # website/src/data/verified.json in. Soft: no script / no green run is fine.
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.go == 'true'
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Fetch verified clips
+        if: steps.gate.outputs.go == 'true'
+        working-directory: website
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          if test -f scripts/fetch-verified.mjs; then
+            npm ci
+            node scripts/fetch-verified.mjs
+          else
+            echo 'no fetch script yet'
+          fi
       - name: Build container image
         if: steps.gate.outputs.go == 'true'
         run: docker build -f website/Dockerfile -t registry.digitalocean.com/jar-containers/nautilus-docs:$(echo $GITHUB_SHA | head -c7) .

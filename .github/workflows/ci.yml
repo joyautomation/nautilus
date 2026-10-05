@@ -158,9 +158,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gesture-clips
-          path: gesture-clips
+          path: gesture-clips # includes manifest.json (set "gestures")
           if-no-files-found: warn
-          retention-days: 14
+          retention-days: 90 # the docs build downloads the last green main run's clips
   # A real VS Code with nothing useful on PATH, the way a desktop launcher
   # starts it, on each OS: the extension has to find a plain `go install` in
   # ~/go/bin (language-server diagnostics, diagram editors), and without a
