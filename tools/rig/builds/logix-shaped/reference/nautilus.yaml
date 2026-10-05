@@ -1,0 +1,20 @@
+# conveyor — a Studio 5000-shaped program, rebuilt in nautilus: a
+# MotorStarter "AOI" as a ladder FUNCTION_BLOCK (lib/motor.ld), a main
+# routine calling it once per motor (program.ld), and the speed math a
+# CPT rung would do as an ST block (lib/speed.st).
+name: conveyor
+
+server:
+  addr: "localhost:8080"
+  online-edits: true
+
+tag-files:
+  - tags/io.yaml
+  - tags/plant.yaml
+
+tasks:
+  - program: program.ld
+    scan: 100ms
+
+driver:
+  type: memory

@@ -1,0 +1,81 @@
+# Acceptance tests for the conveyor pair — what a Logix programmer would
+# prove by toggling bits in Emulate, here in virtual time.
+#
+#   naut test            run them
+#   naut test -v         with the virtual time each test covered
+
+tolerance: 0.01
+
+tests:
+  - name: M1 starts on the start edge, seals in, and stops on Stop
+    steps:
+      - given: { M1_StartPB: true }
+        scans: 1
+        expect: { M1_Run: true }
+      - given: { M1_StartPB: false, M1_Aux: true }
+        advance: 5s
+        expect: { M1_Run: true, Alm_M1FTS: false }
+      - given: { M1_StopPB: true }
+        scans: 1
+        expect: { M1_Run: false }
+
+  - name: a held start button does not restart after Stop (the ONS)
+    steps:
+      - given: { M1_StartPB: true, M1_Aux: true }
+        scans: 2
+        expect: { M1_Run: true }
+      - given: { M1_StopPB: true }
+        scans: 1
+        expect: { M1_Run: false }
+      - given: { M1_StopPB: false } # start still held
+        advance: 1s
+        expect: { M1_Run: false }
+
+  - name: M2 is interlocked behind M1, and drops when M1 stops
+    steps:
+      - given: { M2_StartPB: true }
+        scans: 2
+        expect: { M2_Permit: false, M2_Run: false }
+      - given: { M2_StartPB: false, M1_StartPB: true, M1_Aux: true }
+        scans: 2
+        expect: { M1_Run: true, M2_Permit: true }
+      - given: { M1_StartPB: false, M2_StartPB: true, M2_Aux: true }
+        scans: 2
+        expect: { M2_Run: true }
+      - given: { M1_StopPB: true }
+        scans: 3
+        expect: { M1_Run: false, M2_Permit: false, M2_Run: false }
+
+  - name: fail to start latches the fault and the alarm word; Reset clears it
+    steps:
+      - given: { M1_StartPB: true } # M1_Aux never makes
+        advance: 3.5s
+        expect: { M1_Run: false, Alm_M1FTS: true, Alm_M1Fault: true, Alm_Any: true }
+      - given: { M1_StartPB: false, FaultReset: true }
+        scans: 2
+        expect: { Alm_M1FTS: false, Alm_M1Fault: false, Alm_Any: false }
+
+  - name: M1 starts are counted, and CountReset zeroes the count
+    steps:
+      - given: { M1_Aux: true, M1_StartPB: true }
+        scans: 2
+      - given: { M1_StartPB: false, M1_StopPB: true }
+        scans: 2
+      - given: { M1_StopPB: false, M1_StartPB: true }
+        scans: 2
+        expect: { M1_Run: true, M1_Starts: 2 }
+      - given: { CountReset: true }
+        scans: 1
+        expect: { M1_Starts: 0 }
+
+  - name: M2 speed reference scales the demand while running, 0 when stopped
+    steps:
+      - given: { Maint: true, M2_SpeedPct: 50.0 }
+        scans: 2
+        expect: { M2_SpeedRef: 0.0 }
+      - given: { M2_StartPB: true, M2_Aux: true }
+        scans: 2
+        expect: { M2_Run: true, M2_SpeedRef: 40.0 } # 20 + (60 - 20) * 50 %
+      - given: { EStop: true }
+        scans: 2
+        expect: { M2_Run: false, M2_SpeedRef: 0.0, Alm_EStop: true, Alm_Any: true }
