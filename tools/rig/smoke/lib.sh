@@ -12,8 +12,9 @@
 #                       extension with no naut at all. with_naut puts it back.
 #
 # Unlike the stills, a check ASSERTS: it reads files in the container after
-# a gesture, asks the controller's /api, and asks X for window state. Each
-# verdict is one line in ~/out/smoke/results.tsv:
+# a gesture, asks the controller's /api, asks X for window state, and reads
+# the workbench's and the webviews' DOM (the DOM section at the end; README,
+# "DOM first"). Each verdict is one line in ~/out/smoke/results.tsv:
 #
 #   <check id>  PASS|FAIL|SKIP|WARN|NOTE  <what>  <evidence png, if any>
 #

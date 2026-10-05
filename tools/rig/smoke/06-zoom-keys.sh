@@ -25,7 +25,7 @@ readout() { wv 'doc.querySelector(".zpane .zpct")?.textContent.trim() ?? ""'; }
 # chrome — the workbench's zoom factor and the tab strip's and status bar's
 # heights in device px: "dpr tabs status". A window zoom changes all three.
 chrome() {
-  pg '(() => { const k = window.devicePixelRatio, h = (e) => e ? Math.round(e.getBoundingClientRect().height * k) : -1; return k + " " + h(document.querySelector(".editor-group-container.active .tabs-and-actions-container, .editor-group-container.active .title")) + " " + h(document.getElementById("workbench.parts.statusbar")); })()'
+  pg '(() => { const k = window.devicePixelRatio, h = (e) => e ? Math.round(e.getBoundingClientRect().height * k) : -1; return Math.round(k * 1000) / 1000 + " " + h(document.querySelector(".editor-group-container.active .tabs-and-actions-container, .editor-group-container.active .title")) + " " + h(document.getElementById("workbench.parts.statusbar")); })()'
 }
 
 one() { # <lang> <file>

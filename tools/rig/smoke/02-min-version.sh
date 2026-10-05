@@ -50,7 +50,8 @@ png=$(shot warning)
 
 page_click_button '^Update naut$' 2 || fail "no 'Update naut' button on the min-version warning"
 png=$(shot update-followup)
-info "Update naut → follow-up names how this naut was installed and offers the managed copy" "$png"
+fu=$(notifications | awk -F'\t' -v re="$OLD_RE" '$2 !~ re { print $2 " [" $3 "]"; exit }')
+info "Update naut → follow-up names how this naut was installed and offers the managed copy (DOM: ${fu:-no other notification})" "$png"
 
 # "Don't show again for this version", in the next session.
 vs_cmd "Notifications: Clear All Notifications" 1

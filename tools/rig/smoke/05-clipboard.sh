@@ -13,7 +13,8 @@
 # (the select-all FBD paste: must be well-formed — see there for why not clean).
 #
 # What is selected is found in the DOM (gestures.sh: fbd_node_el,
-# mimic_eq_el, ld_node_el, sfc_step_el; empty canvas by elementFromPoint).
+# mimic_eq_el, ld_select_node, sfc_select_step; empty canvas by
+# elementFromPoint).
 set -euo pipefail
 CHECK=05-clipboard
 source "$HOME/smoke/lib.sh"
@@ -145,7 +146,7 @@ smoke_open "$PROJ" batch.sfc
 key Escape; hide_sidebar
 vs_cmd "nautilus: Open as Diagram Editor" 8
 wait_js "$_G_READY" 10 || true
-click_el "$(sfc_step_el Fill)" || fail "SFC: no step Fill on the chart"
+sfc_select_step Fill || fail "SFC: could not select step Fill on the chart"
 key ctrl+c; sleep 0.5; key ctrl+v; sleep 2.5
 png=$(shot sfc-pasted)
 key ctrl+s; sleep 1.5

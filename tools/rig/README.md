@@ -166,10 +166,34 @@ working, so go and look.
 The smoke checks use the same rig, but they assert instead of shooting. Each
 `NN-*.sh` drives a real VS Code 1.139 on its own fresh profile, reads files
 back after gestures, queries the controller's `/api`, asks X for the window
-title, and counts pixels where nothing else can answer (the live pill's green,
-a modal's primary button). Run it before every stable promotion. The checks
-still use hard-coded pixel boxes in places. Moving them onto the verb layer is
-test plan §4.2 step 2. Traps learned while building it:
+title, and reads the DOM. Run it before every stable promotion.
+
+**DOM first.** A check finds what it clicks, and reads what it asserts, in the
+DOM, never at a coordinate measured on one frame. The early checks (01–11)
+were written against measured pixel boxes, and every VS Code or layout change
+moved a box and turned a correct extension red; they now follow the rule too.
+The tools, in `smoke/lib.sh` on top of `verbs/gestures.sh`:
+
+- **The workbench page** (`cdp page`; `pg`, `page_click`, `page_hover`,
+  `page_click_button`): notifications with their severity and buttons
+  (`notifications`, `notification <re>`), the custom modal (`dialog_up`,
+  `dialog_message`, `dialog_buttons`), editor-title actions by aria-label
+  (`title_action_el`), tabs, the status bar, the editor-group count.
+- **The active webview** (`cdp eval`; `wv`, `click_el`, `js_true`): every
+  diagram element carries `data-id` / `data-kind` (FBD nodes, chips, pins and
+  edges, Ladder rungs and nodes, SFC steps and transitions, mimic pipes and
+  ports), and the verbs' finders (`fbd_node_el`, `ld_node_el`, `sfc_step_el`,
+  `mimic_eq_el`, `button_el`) build on them. `canvas_spot` / `click_canvas`
+  find an EMPTY spot of a canvas with `elementFromPoint` (`cdp.js point`).
+- **The extension's state**: `NAUTILUS_TEST_STATE` (`testState.ts`), a JSON
+  snapshot of the status-bar items, sync state, CLI and last notification.
+
+Pixels are read only where the subject IS a colour (11-themes' luminance),
+and then inside a box the DOM located (`snap_box` turns a window box into
+frame coordinates). If a new check needs to find something the product
+does not expose (no `data-id`, no label), add the attribute in the webview or
+the extension, with a CHANGELOG line, rather than measure a box. Traps learned
+while building the suite:
 
 - **naut goes in at `/opt/smoke-bin`, never `/usr/local/bin`.** The extension
   searches `/usr/local/bin` itself, and check 01 needs a machine with no naut.
@@ -178,8 +202,8 @@ test plan §4.2 step 2. Traps learned while building it:
 - **Startup toasts auto-hide (~15 s)** before `launch_vscode` finishes
   settling. Read startup notifications in the notification centre.
 - **Editor-title buttons move** when git sees the file modified (the git
-  extension's "Open Changes" button joins them). Click them while the edit is
-  only in the buffer, or use the palette.
+  extension's "Open Changes" button joins them). Find them by aria-label
+  (`title_action_el`), never by slot.
 - `window.dialogStyle: custom` puts modals inside the window, so the grab sees
   them. `window.zoomPerWindow: false` makes a window zoom write
   `window.zoomLevel`, which is how the zoom-key check proves that the diagram
@@ -191,12 +215,14 @@ test plan §4.2 step 2. Traps learned while building it:
   `incus launch` still holds the name, so kill it before you start another.
   Machines that share an incus remote need distinct names, so derive the name
   from the hostname.
-- **Pixel boxes assume ONE editor group.** A palette command that is not
-  offered for the active editor fuzzy-matches another one. "Open as Diagram
-  Editor" on a file already showing as a diagram runs "Open … Diagram Preview"
-  and splits the area. Reload Window does not restore a preview panel, so the
-  split survives as an empty group. Check 07 closes the other groups before its
-  reload and NOTEs any green outside the pill box.
+- **Webview reads assume ONE editor group.** `cdp.js` reads the LARGEST
+  visible webview, so a second group can put a different editor under the
+  read. A palette command that is not offered for the active editor
+  fuzzy-matches another one: "Open as Diagram Editor" on a file already
+  showing as a diagram runs "Open … Diagram Preview" and splits the area.
+  Reload Window does not restore a preview panel, so the split survives as an
+  empty group. Check 07 closes the other groups before its reload and NOTEs
+  the editor-group count if it is not 1 (`editor_groups`).
 - **Nothing version-shaped is hard-coded.** Check 02 reads
   `nautilusCli.minVersion` out of the VSIX. It moved 0.11.0 → 0.12.0 in 5f045a0,
   and a hard-coded check went red on a correct extension.

@@ -275,7 +275,7 @@ _G_READY='doc.querySelector(".svelte-flow__node, svg.rsvg, svg.chart, .palette, 
 # trap 2), so this opens the TEXT by quick-open and then runs "Open as
 # Diagram Editor", which REPLACES the tab. Everything else is closed first:
 # that command fuzzy-matches the preview command when the file is already a
-# diagram (README, "Pixel boxes assume ONE editor group"), and a second
+# diagram (README, "Webview reads assume ONE editor group"), and a second
 # group halves the canvas every other verb aims into.
 # *.mimic.json / *.component.json are default-priority custom editors, so
 # quick-open alone gives the editor (once the extension is active — it is,
@@ -1707,8 +1707,9 @@ api_get() { curl -sf --max-time 3 "localhost:$PORT$1"; }
 api_post() { curl -sf --max-time 3 -X POST "localhost:$PORT$1" -H 'Content-Type: application/json' -d "$2"; }
 
 # px_count <png basename in $OUT_DIR> <x0> <y0> <x1> <y1> <python cond over
-# r,g,b> — how many pixels in the box satisfy the condition (the same helper
-# smoke/lib.sh defines; smoke checks do not source this file).
+# r,g,b> — how many pixels in the box satisfy the condition. For the
+# content repo's beats; the smoke checks read the DOM instead (README, "DOM
+# first").
 px_count() {
   python3 - "$OUT_DIR/$1.png" "$2" "$3" "$4" "$5" "$6" <<'PY'
 import sys
