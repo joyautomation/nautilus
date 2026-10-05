@@ -1,0 +1,84 @@
+# Weekly human-pace run of the VS Code rig: tools/rig/demo.sh drives the verbs
+# at the pace of an episode into tools/rig/out/demo/ (clips + manifest.json).
+# The docs build embeds the last GREEN run's clips. The nightly owns red
+# reporting; a red demo run only comments on its issue (or opens a one-off).
+#
+# Same runner and labels as rig-nightly (tools/rig/RUNNER.md).
+name: rig-demo
+on:
+  schedule:
+    - cron: '0 3 * * 0' # Sunday 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  actions: write # a green run dispatches docs.yml
+
+# Shared with rig-nightly so the two never overlap on one box.
+concurrency:
+  group: rig-nightly
+  cancel-in-progress: false
+
+jobs:
+  demo:
+    name: rig demo (human pace)
+    runs-on: [self-hosted, linux, rig]
+    timeout-minutes: 240
+    env:
+      RIG_OUT: ${{ github.workspace }}/tools/rig/out
+      G_PACE: human
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Container name
+        run: echo "RIG_NAME=nautilus-demo-$(hostname -s | tr -c 'a-zA-Z0-9\n' '-')" >> "$GITHUB_ENV"
+
+      - name: Build naut + VSIX from this checkout
+        run: tools/rig/smoke/build.sh | tee "$RUNNER_TEMP/build.env"
+
+      - name: Demo run
+        id: demo
+        run: |
+          # TEMPORARY guard: remove once tools/rig/demo.sh is on main.
+          test -x tools/rig/demo.sh || { echo 'demo.sh not on main yet'; exit 0; }
+          eval "$(cat "$RUNNER_TEMP/build.env")"
+          export NAUT VSIX NAUTILUS_SHA
+          tools/rig/demo.sh
+
+      - name: Upload clips
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rig-demo-${{ github.run_id }}
+          path: tools/rig/out/demo
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Report red
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          msg="Demo rig run **${GITHUB_SHA::8}** failed (${GITHUB_EVENT_NAME}) — $RUN_URL. Clips and logs are in the run's \`rig-demo-*\` artifact."
+          nightly="rig nightly red"
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$nightly\" in:title" --json number,title --jq "[.[]|select(.title==\"$nightly\")][0].number // empty")
+          if [[ -n $num ]]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body "$msg"
+            exit 0
+          fi
+          title="rig demo run red"
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number,title --jq "[.[]|select(.title==\"$title\")][0].number // empty")
+          if [[ -n $num ]]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body "$msg"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$msg"
+          fi
+
+      # A green run refreshes the proof pages (demo clips are downloaded at docs build time).
+      - name: Rebuild docs
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run docs.yml --ref main --repo "$GITHUB_REPOSITORY"

@@ -7,9 +7,16 @@ on:
   pull_request:
     paths: ['website/**', 'docs/**', 'hmi/README.md', 'tools/vscode-iec/syntaxes/**']
 
+  # Dispatched by a green rig-nightly / rig-demo so the proof pages pick up
+  # the new clips.
+  workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # fetch-verified.mjs lists runs and downloads artifacts
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -19,8 +26,13 @@ jobs:
           cache-dependency-path: website/package-lock.json
       - run: npm ci
         working-directory: website
+      # The prebuild fetch of verified clips is soft: no token or no green run
+      # yields empty data and the build still passes (see the script).
       - run: npm run build
         working-directory: website
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
 
   # Ships nautilus.joyautomation.com — same pattern as the joyautomation.com
   # site: image → DO registry, kubectl apply to k8s-joy-1/joy. Skips cleanly
