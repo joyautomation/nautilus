@@ -233,7 +233,7 @@ no rig verb, no smoke check); per section below.
 | X38 | Mimic | Snap to grid (nautilus.mimic.snapToGrid) | README Settings | mimic-more.test.mjs: X38 snapToGrid on lands a drag on the 10 px grid; off moves the exact delta | — | — |
 | X39 | Mimic | Live canvas animates bound props from the controller | README HMI mimic editor | — | — | 13 |
 | X40 | Extension | Signature help while typing a call: parameters with types, FB inputs and outputs (=>), the active one highlighted by comma position or named pin | README Language intelligence | — | — | 14 |
-| X41 | Extension | Find all references (Shift+F12): a tag across every program and the manifest, a local only in its POU | README Language intelligence | — | — | 14 |
+| X42 | Extension | Find all references (Shift+F12): a tag across every program and the manifest, a local only in its POU | README Language intelligence | — | — | 14 |
 
 ## Count of rows with no coverage at all
 

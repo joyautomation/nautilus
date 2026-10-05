@@ -20,7 +20,7 @@
 #        `Full, PT := ` moves it to PT. Read from the widget's DOM
 #        (.parameter-hints-widget, its .parameter.active span); Esc and
 #        undo leave the buffer clean.
-#   X41  find all references (Shift+F12 → the references peek): on the tag
+#   X42  find all references (Shift+F12 → the references peek): on the tag
 #        Level, every program that binds it and the manifest — per file, the
 #        same count as a host-side `grep -ow Level` of that file; on the
 #        PROGRAM's local settle, only the PROGRAM's lines — not those of the
@@ -286,8 +286,8 @@ want=$(grep_counts Level plant.st batch.sfc nautilus.yaml | sort)
 n=$(awk -F= '{s += $2} END {print s + 0}' <<<"$want")
 nf=$(grep -c = <<<"$got" || true)
 if [[ -n $got && $got == "$want" && $t == *"References ($n)"* ]] && (( nf >= 2 )); then
-  pass "X41 Shift+F12 on tag Level: \"$t\", $nf files, each file's count = grep -ow Level — $(oneline <<<"$got")" "$png"
-else fail "X41 Shift+F12 on tag Level: the peek (\"${t:-no peek}\") lists $(oneline <<<"${got:-<no file rows>}"); grep -ow counts $(oneline <<<"$want") = $n" "$png"; fi
+  pass "X42 Shift+F12 on tag Level: \"$t\", $nf files, each file's count = grep -ow Level — $(oneline <<<"$got")" "$png"
+else fail "X42 Shift+F12 on tag Level: the peek (\"${t:-no peek}\") lists $(oneline <<<"${got:-<no file rows>}"); grep -ow counts $(oneline <<<"$want") = $n" "$png"; fi
 xdotool key --clearmodifiers Escape; sleep 0.5
 
 goto_word "$F" '^Full := settle\.Q' settle
@@ -297,8 +297,8 @@ n=$(grep -c . <<<"$rows" || true)
 inprog=$(awk '/^PROGRAM /,/^END_PROGRAM/' "$F" | grep -ow settle | wc -l)
 infile=$(grep -ow settle "$F" | wc -l)
 if [[ $t == "plant.st"*"References ($inprog)"* && -z $got && $n == "$inprog" ]] && ! grep -q 'Raw' <<<"$rows" && (( infile > inprog )); then
-  pass "X41 Shift+F12 on local settle: \"$t\", every one in PROGRAM Plant (grep there: $inprog), none of the FB Debounce's own settle ($infile in the file) — $(oneline <<<"$rows")" "$png"
-else fail "X41 Shift+F12 on local settle: the peek (\"${t:-no peek}\") lists $n rows [$(oneline <<<"$rows")]${got:+ in files $(oneline <<<"$got")}; want $inprog, all in PROGRAM Plant, of the file's $infile" "$png"; fi
+  pass "X42 Shift+F12 on local settle: \"$t\", every one in PROGRAM Plant (grep there: $inprog), none of the FB Debounce's own settle ($infile in the file) — $(oneline <<<"$rows")" "$png"
+else fail "X42 Shift+F12 on local settle: the peek (\"${t:-no peek}\") lists $n rows [$(oneline <<<"$rows")]${got:+ in files $(oneline <<<"$got")}; want $inprog, all in PROGRAM Plant, of the file's $infile" "$png"; fi
 xdotool key --clearmodifiers Escape; sleep 0.5
 
 # ══ X18 diagnostics ════════════════════════════════════════════════════════
