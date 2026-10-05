@@ -87,6 +87,51 @@ export function rollbackConfirmMessage(url: string, pou: string): string {
   return `Roll back ${pou || "the program"} on ${url} to the previous program?`;
 }
 
+/** How the program file stands in the editor when Pull is about to replace
+ * it: not loaded at all, loaded and matching disk, or loaded with unsaved
+ * edits. */
+export type PullDocState = "closed" | "clean" | "dirty";
+
+/** The Pull confirmation and how the pulled text gets written — see
+ * pullPlan. */
+export type PullPlan = {
+  /** The modal's text. */
+  message: string;
+  /** The button that goes ahead with the overwrite. */
+  overwrite: string;
+  /** "Show Diff" for a dirty buffer (open the buffer ↔ controller diff and
+   * write nothing); undefined otherwise. */
+  showDiff?: string;
+  /** "disk": the file is not open — write it with workspace.fs. "buffer":
+   * it is open — replace the whole buffer with a WorkspaceEdit (so the
+   * editor and any diagram view show the pulled program, and Undo brings
+   * the previous text back) and then save it, so disk and buffer agree and
+   * the next Ctrl+S cannot write a stale buffer over the pull (#140). */
+  write: "disk" | "buffer";
+};
+
+/** Decide Pull's confirmation and write path from the program file's editor
+ * state — the replace-a-file-with-unsaved-changes convention other editors
+ * follow: a dirty buffer is named in the confirmation, which says its edits
+ * will be lost, and the pull goes through the buffer, never under it. */
+export function pullPlan(programFile: string, doc: PullDocState): PullPlan {
+  if (doc === "dirty") {
+    return {
+      message:
+        `${programFile} has unsaved edits. Overwrite the editor and the file with the controller's program? ` +
+        "Your edits will be lost.",
+      overwrite: "Overwrite",
+      showDiff: "Show Diff",
+      write: "buffer",
+    };
+  }
+  return {
+    message: `Overwrite ${programFile} with the controller's program?`,
+    overwrite: "Pull and overwrite",
+    write: doc === "clean" ? "buffer" : "disk",
+  };
+}
+
 // ── project library layout ──────────────────────────────────────────────
 //
 // Where a project's IEC files may live — the path half of internal/

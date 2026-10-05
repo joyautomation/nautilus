@@ -31,6 +31,8 @@ import {
   downloadConfirmMessage,
   forceDownloadConfirmMessage,
   normalize,
+  PullDocState,
+  pullPlan,
   rollbackConfirmMessage,
   splitProgram,
 } from "./programSync";
@@ -582,14 +584,52 @@ export class OnlineEdit implements vscode.Disposable {
       remote,
       `nautilus: ${composed.programFile} (workspace ↔ controller ${info.hash})`
     );
-    const pick = await notifyWarning(
-      `Overwrite ${composed.programFile} with the controller's program?`,
-      { modal: true },
-      "Pull and overwrite"
-    );
-    if (pick !== "Pull and overwrite") return;
+    // An open program file is replaced through its buffer, never under it:
+    // a disk write beneath a dirty editor left the pull invisible and let
+    // the next Ctrl+S write the stale buffer back over it (#140).
+    const openDoc = () =>
+      vscode.workspace.textDocuments.find((d) => d.uri.toString() === composed.programUri.toString());
+    const before = openDoc();
+    const docState: PullDocState = !before ? "closed" : before.isDirty ? "dirty" : "clean";
+    const plan = pullPlan(composed.programFile, docState);
+    const buttons = plan.showDiff ? [plan.overwrite, plan.showDiff] : [plan.overwrite];
+    const pick = await notifyWarning(plan.message, { modal: true }, ...buttons);
+    if (plan.showDiff && pick === plan.showDiff) {
+      // The controller beside the live, editable buffer — the Diff
+      // command's orientation — so lines can be taken across by hand.
+      await vscode.commands.executeCommand(
+        "vscode.diff",
+        remote,
+        composed.programUri,
+        `nautilus: controller ${info.hash} ↔ ${composed.programFile} (unsaved edits)`
+      );
+      void notifyInfo(
+        `nautilus: nothing pulled — ${composed.programFile} keeps your unsaved edits; run Pull again to overwrite them`
+      );
+      return;
+    }
+    if (pick !== plan.overwrite) return;
 
-    await vscode.workspace.fs.writeFile(composed.programUri, new TextEncoder().encode(program));
+    // Look again: the document may have been opened or closed while the
+    // modal was up.
+    const doc = openDoc();
+    if (doc) {
+      const edit = new vscode.WorkspaceEdit();
+      edit.replace(doc.uri, new vscode.Range(doc.positionAt(0), doc.positionAt(doc.getText().length)), program);
+      if (!(await vscode.workspace.applyEdit(edit))) {
+        void notifyError(`nautilus: could not apply the controller's program to ${composed.programFile} — nothing pulled`);
+        return;
+      }
+      if (!(await doc.save())) {
+        void notifyError(
+          `nautilus: pulled ${composed.programFile} into the editor but could not save it — save the file to keep the pull`
+        );
+        void this.refreshStatus();
+        return;
+      }
+    } else {
+      await vscode.workspace.fs.writeFile(composed.programUri, new TextEncoder().encode(program));
+    }
     void notifyInfo(
       `nautilus: pulled ${composed.programFile} from controller — review the diff and commit to keep it`
     );

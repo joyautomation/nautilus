@@ -39,6 +39,8 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 - **Live Values: the Connect button is an icon** (plug) instead of 185 px of text that squeezed the view title. (#138)
 - **Ladder: dragging an element no longer text-selects the rung labels it passes over**, and nothing stays highlighted after the drop. (#131)
 
+- **Pull Program from Controller no longer writes under unsaved edits.** With the program file open and dirty, the pull went to disk beneath the editor: the pulled change was nowhere on screen, and the next Ctrl+S wrote the stale buffer back over it without a prompt. The confirmation now names the file and says its unsaved edits will be lost (Overwrite / Show Diff / Cancel), and an open program file is replaced through its editor buffer and saved, so the editor, any diagram view and the file all show the pulled program. Show Diff puts the controller's program beside the live buffer and pulls nothing. (#140)
+
 ## [0.13.1] - 2026-10-04
 
 ### Added
