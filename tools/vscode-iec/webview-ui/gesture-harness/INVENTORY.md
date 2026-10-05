@@ -203,7 +203,7 @@ no rig verb, no smoke check); per section below.
 | X08 | Extension | Diagrams follow the VS Code theme (light, dark, high contrast) | CHANGELOG 0.10.0 | diagram.test.mjs: Theme: (x3) | — | 11 |
 | X09 | Extension | Live pill: green when a controller is reachable, amber offline; click toggles live values | README Live values | gestures.test.mjs: the live pill reflects nautilus.liveValues.enabled and toggles it | — | 07 |
 | X10 | Extension | Live values paint on FBD, ladder (power flow) and SFC (active step) | README Live values | — | — | 07 |
-| X11 | Extension | Inline live-value pills beside identifiers in .st/.fbd/.ld/.sfc text | README Live values | — | — | 13 (.st, .fbd, .ld text; not .sfc) |
+| X11 | Extension | Inline live-value pills beside identifiers in .st/.fbd/.ld/.sfc text | README Live values | — | — | 13 |
 | X12 | Extension | Live Values panel lists every tag and local with its value | README Live values | — | — | 13 |
 | X13 | Extension | Status-bar item shows whether the file matches the controller | README Online edit | — | — | 08 |
 | X14 | Extension | Download and Rollback ask for confirmation naming URL and program; nautilus.confirmControllerWrites=false skips it | README Online edit | — | — | 08 |
@@ -212,7 +212,7 @@ no rig verb, no smoke check); per section below.
 | X17 | Extension | Diagnostics as you type in .st/.fbd/.ld/.sfc (naut lsp) | README Language intelligence | — | — | 01 |
 | X18 | Extension | Go to definition, hover and completion in ST | README Language intelligence | — | — | 14 |
 | X19 | Extension | *_test.yaml suites in the Testing view; run one from the gutter; failure inline on the assertion | README Testing | — | — | 15 |
-| X20 | Extension | JSON-schema completion and validation for nautilus.yaml, tag, alarm and test files | README Testing | — | — | 14 (nautilus.yaml and *_test.yaml; tag and alarm files not exercised) |
+| X20 | Extension | JSON-schema completion and validation for nautilus.yaml, tag, alarm and test files | README Testing | — | — | 14 |
 | X21 | Extension | nautilus.fb.monitor, run by the FbMonitorLenses CodeLens over each FUNCTION_BLOCK header: pick which declared instance the body's live values read | src/extension.ts, src/liveValues.ts | — | — | 17 |
 | X22 | Ladder | L5X opens read-only: pill, no palette, edits do nothing | README Rockwell L5X | diagram.test.mjs: Ladder: an L5X model is read-only | — | 10 |
 | X23 | Ladder | Declare offer (amber declare …) files an undeclared identifier under VAR_EXTERNAL or VAR | CHANGELOG 0.10.0 | diagram.test.mjs: Ladder: the declare offer covers a block call's arguments | ld_declare | — |
@@ -250,9 +250,6 @@ says which part:
   swallow the keys; the undo itself is VS Code's text undo over the host's
   WorkspaceEdit, so only smoke 03 (field undo) sees it happen. S22 (save) is
   likewise only 03's field undo.
-- Live values: X11 pills are checked in .st, .fbd and .ld text, not .sfc. X20
-  schema completion is checked for nautilus.yaml and *_test.yaml, not tag or
-  alarm files.
 - Single-sided gestures: F08 (disconnect, not wire), F14/F15 (ladder and SFC
   zoom only in smoke), L01 (rung name only), S15 (popover half only), P02
   (add side only).
