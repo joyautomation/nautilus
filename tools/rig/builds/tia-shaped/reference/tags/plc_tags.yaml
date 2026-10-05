@@ -1,0 +1,29 @@
+# PLC tag table for the dosing line (TIA: the "Default tag table" plus the
+# global recipe DB). Roles: input = field value from the driver, output =
+# to the driver, setpoint = operator-writable, state = computed and retained.
+
+# Field I/O
+- { name: FT101_Raw, role: input, init: 0, desc: "FT-101 flow, raw analog (0..27648 = 0..120 L/min)" }
+- { name: XV101_Open, role: output, init: false, desc: "XV-101 dosing valve, open command" }
+- { name: FCV101_SP, role: output, init: 0.0, unit: "L/min", desc: "FCV-101 flow control valve setpoint" }
+
+# Operator commands and setpoints
+- { name: StartA, role: setpoint, init: false, desc: "Start a dose on line A (edge-triggered)" }
+- { name: StopAll, role: setpoint, init: false, desc: "Stop/abort dosing; also clears a fault" }
+- { name: ResetCount, role: setpoint, init: false, desc: "Reset the doses-today counter" }
+- { name: MaxFlowLpm, role: setpoint, init: 100.0, unit: "L/min", desc: "High-flow alarm limit and FCV-101 setpoint clamp" }
+
+# The recipe DB (TIA: a global DB of a PLC data type)
+- name: RecipeA
+  role: setpoint
+  type: DoseRecipe
+  desc: "Line A recipe — the FB counts completed doses back into it"
+  init: { TargetL: 10.0, FlowSP: 60.0, SettleSec: 2.0, DoneCount: 0, LastDosedL: 0.0 }
+
+# Computed state
+- { name: FT101_Flow, role: state, init: 0.0, unit: "L/min", desc: "FT-101 flow, scaled" }
+- { name: DoseStep, role: state, init: 0, desc: "Dosing FB state (0 idle, 10 dosing, 20 settling, 90 fault)" }
+- { name: DoseFault, role: state, init: false, desc: "No flow while dosing" }
+- { name: DoneLamp, role: state, init: false, desc: "Dose complete (held 2 s)" }
+- { name: HighFlowAlm, role: state, init: false, desc: "Flow above MaxFlowLpm for 2 s" }
+- { name: DosesToday, role: state, init: 0, desc: "Completed doses since ResetCount" }

@@ -1,0 +1,85 @@
+# Acceptance tests for the dosing line, in virtual time.
+#   naut test            run them
+#   naut test -v         with the virtual time each test covered
+#
+# FT101_Raw is the field input: 27648 counts = 120 L/min, so 13824 = 60
+# L/min = 1 L/s, and the recipe's 10 L takes 10 s.
+
+tolerance: 0.2
+
+tests:
+  - name: FT-101 scales raw counts to L/min and clamps over range
+    steps:
+      - given: { FT101_Raw: 13824 }
+        scans: 1
+        expect: { FT101_Flow: { near: 60.0 } }
+      - given: { FT101_Raw: 30000 } # over range
+        scans: 1
+        expect: { FT101_Flow: { near: 120.0 } }
+
+  - name: a 10 L dose opens the valve, closes at target, settles, and counts
+    given: { FT101_Raw: 13824 }
+    steps:
+      - given: { StartA: true }
+        scans: 1
+        expect: { XV101_Open: true, DoseStep: 10, FCV101_SP: { near: 60.0 } }
+      - given: { StartA: false }
+        advance: 9s
+        expect: { XV101_Open: true }
+      - advance: 1.5s
+        expect: { XV101_Open: false, DoseStep: 20, FCV101_SP: { near: 0.0 } }
+      - advance: 2.2s # SettleSec 2 s
+        expect:
+          - DoseStep: 0
+          - DoneLamp: true
+          - RecipeA.DoneCount: 1
+          - RecipeA.LastDosedL: { near: 10.0 }
+          - DosesToday: 1
+      - advance: 2.5s # the TOF holds Done for 2 s
+        expect: { DoneLamp: false }
+
+  - name: no flow while dosing faults after NoFlowTime, Stop clears it
+    given: { FT101_Raw: 0 }
+    steps:
+      - given: { StartA: true }
+        scans: 1
+        expect: { XV101_Open: true }
+      - given: { StartA: false }
+        advance: 4.5s
+        expect: { DoseFault: false, XV101_Open: true }
+      - advance: 1s
+        expect: { DoseFault: true, XV101_Open: false, DoseStep: 90 }
+      - given: { StopAll: true }
+        scans: 1
+        expect: { DoseFault: false, DoseStep: 0 }
+
+  - name: Stop aborts a dose mid-way without counting it
+    given: { FT101_Raw: 13824 }
+    steps:
+      - given: { StartA: true }
+        scans: 1
+      - given: { StartA: false }
+        advance: 3s
+      - given: { StopAll: true }
+        scans: 1
+        expect: { XV101_Open: false, DoseStep: 0 }
+      - advance: 5s
+        expect: { RecipeA.DoneCount: 0, DoneLamp: false }
+
+  - name: the flow setpoint is clamped to MaxFlowLpm
+    given: { FT101_Raw: 13824, RecipeA.FlowSP: 150.0 }
+    steps:
+      - given: { StartA: true }
+        scans: 1
+        expect: { FCV101_SP: { near: 100.0 } }
+
+  - name: high flow alarms after a 2 s on-delay
+    steps:
+      - given: { FT101_Raw: 27648 } # 120 L/min, over MaxFlowLpm 100
+        advance: 1.5s
+        expect: { HighFlowAlm: false }
+      - advance: 1s
+        expect: { HighFlowAlm: true }
+      - given: { FT101_Raw: 13824 }
+        scans: 1
+        expect: { HighFlowAlm: false }
