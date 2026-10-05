@@ -23,6 +23,9 @@
 #   X20  the YAML schemas (package.json yamlValidation → Red Hat YAML): a
 #        bogus key under a task / a test step is flagged; completion in a new
 #        task offers program / scan / name, in a new test step given /
+#        advance / expect. Last block: tags/*.yaml and alarms/*.yaml (a
+#        misspelt key is an error; a new entry completes with the schema's keys).
+
 #        advance / expect.
 #   X40  document symbols (naut lsp textDocument/documentSymbol): the
 #        Outline view lists plant.st's PROGRAM, its VAR sections and their
@@ -67,6 +70,26 @@ tests:
         advance: 2s
         expect: { Level: { gt: 10.0 } }
 YAML
+# tag + alarm files for the X20 tag/alarm rows at the end (not composed into
+# nautilus.yaml: the schemas bind by path, tags/*.yaml and alarms/*.yaml).
+mkdir -p "$PROJ/tags" "$PROJ/alarms"
+cat >"$PROJ/tags/spare-tags.yaml" <<'YAML'
+- name: SpareTemp
+  role: state
+  init: 0.0
+- name: SpareFlag
+  role: input
+YAML
+cat >"$PROJ/alarms/spare-alarms.yaml" <<'YAML'
+- id: spare-high
+  tag: SpareFlag
+  priority: high
+- id: spare-low
+  tag: SpareFlag
+  priority: low
+YAML
+git -C "$PROJ" add -A; git -C "$PROJ" commit -qm "smoke 14: an FB instance and a test step"
+
 cat >"$PROJ/interlock.ld" <<'LADDER'
 (* A start/stop seal-in, written as rungs: a PROGRAM-less .ld is a
    project library. *)
@@ -406,6 +429,58 @@ sleep 1; png=$(shot test-reverted)
 if ! dirty && [[ $(errors) == "$e0" ]]; then
   pass "X20 batch_test.yaml: undone, buffer clean, errors back to $e0" "$png"
 else fail "X20 batch_test.yaml: after undo $(dirty && echo dirty || echo clean), errors $(errors) (was $e0)" "$png"; fi
+
+# ══ X20 tags/*.yaml and alarms/*.yaml schemas ═════════════════════════════
+# BEGIN smoke-partial-rows: appended block — the tag-file and alarm-file
+# schemas (package.json yamlValidation). Same shape as the rows above: a
+# bogus key is a schema error, a new list entry completes with the schema's
+# keys. Keys are the schema's (nautilus.schema.json definitions tag / alarm).
+yaml_rows() { # <file> <label> <bogus-from> <bogus-to> <anchor ERE for the entry> <keys…>
+  local f=$1 name=$2 from=$3 to=$4 anchor=$5; shift 5
+  local base=${f##*/}
+  open_file "$base" 4
+  sleep 3
+  e0=$(errors); s0=$(squiggles)
+  [[ $e0 == 0 && $s0 == 0 ]] || info "X20 $name: baseline is not clean — $e0 error(s), $s0 squiggle(s)"
+  text_replace "$f" "$from" "$to"
+  wait_for 12 has_squiggle || true
+  sleep 1; e1=$(errors); s1=$(squiggles)
+  goto_word "$f" "$from" "${from%%:*}"
+  h=$(show_hover || true); png=$(shot "$name-bogus-key")
+  if (( ${s1:-0} > ${s0:-0} && ${e1:-0} > ${e0:-0} )); then
+    pass "X20 $name: a misspelt key is a schema error (errors $e0 → $e1) — \"$h\"" "$png"
+  else fail "X20 $name: no schema error for a misspelt key (squiggles $s0 → ${s1:-?}, errors $e0 → ${e1:-?}, hover \"$h\")" "$png"; fi
+  undo_clean || fail "X20 $name: undo did not bring the buffer back to clean"
+
+  new_line_above "$f" "$anchor"
+  rows=$(complete_with '- ')
+  png=$(shot "$name-completion")
+  miss=""; for k in "$@"; do grep -qE "^$k \[" <<<"$rows" || miss="$miss $k"; done
+  if [[ -z $miss ]]; then
+    pass "X20 $name: completion in a new entry offers $* — $(oneline <<<"$rows")" "$png"
+  else fail "X20 $name: new-entry completion is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+  undo_clean || true
+  sleep 1; png=$(shot "$name-reverted")
+  if ! dirty && [[ $(errors) == "$e0" ]]; then
+    pass "X20 $name: undone, buffer clean, errors back to $e0" "$png"
+  else fail "X20 $name: after undo $(dirty && echo dirty || echo clean), errors $(errors) (was $e0)" "$png"; fi
+}
+yaml_rows "$PROJ/tags/spare-tags.yaml" tags-yaml "init: 0.0" "inits: 0.0" '^- name: SpareFlag' name role type init unit desc
+yaml_rows "$PROJ/alarms/spare-alarms.yaml" alarms-yaml "priority: high" "priorty: high" \
+  '^- id: spare-low' id name match class
+# The suggest list is alphabetical and shows ~12 rows, so `tag` and `priority`
+# sit below the fold: filter by typing their prefixes instead.
+A=$PROJ/alarms/spare-alarms.yaml
+for pre in "ta:tag" "prio:priority"; do
+  new_line_above "$A" '^- id: spare-low'
+  rows=$(complete_with "- ${pre%%:*}")
+  png=$(shot "alarms-yaml-complete-${pre#*:}")
+  if grep -qE "^${pre#*:} \[" <<<"$rows"; then
+    pass "X20 alarms-yaml: completing '${pre%%:*}' in a new entry offers ${pre#*:} — $(oneline <<<"$rows")" "$png"
+  else fail "X20 alarms-yaml: completing '${pre%%:*}' does not offer ${pre#*:} — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
+  undo_clean || fail "X20 alarms-yaml: undo did not bring the buffer back to clean after '${pre%%:*}'"
+done
+# END smoke-partial-rows
 
 # ══ X40 document symbols ═══════════════════════════════════════════════════
 # outline_rows — the Outline view's rows on screen (a virtual list) in list
