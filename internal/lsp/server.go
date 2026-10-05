@@ -86,6 +86,8 @@ func (s *Server) dispatch(m *message) {
 				DefinitionProvider: true,
 				CompletionProvider: &CompletionOpts{TriggerCharacters: []string{"."}},
 				RenameProvider:     &RenameOpts{PrepareProvider: true},
+
+				DocumentSymbolProvider: true, // symbols.go
 			},
 			ServerInfo: ServerInfo{Name: "nautilus-st-lsp", Version: Version},
 		})
@@ -126,6 +128,8 @@ func (s *Server) dispatch(m *message) {
 		s.handlePrepareRename(m)
 	case "textDocument/rename":
 		s.handleRename(m)
+	case "textDocument/documentSymbol":
+		s.handleDocumentSymbol(m)
 	default:
 		if m.ID != nil { // unknown request: must answer; unknown notification: ignore
 			s.w.respondError(m.ID, codeMethodNotFound, fmt.Sprintf("method %q not supported", m.Method))
