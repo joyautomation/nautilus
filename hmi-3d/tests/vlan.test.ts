@@ -199,6 +199,25 @@ describe('VLAN domains', () => {
 		expect(v21.islands.length).toBe(2);
 		expect(v21.islands.some((g) => g.includes('sw1') && g.includes('sw3'))).toBe(true);
 	});
+	it('a link declared down carries nothing until something is plugged in', () => {
+		// The site uplink as a service port: trunked on the switch, down by design.
+		const declared: Topology = { ...topology, links: topology.links.map((l) => (l.b === 'site' || l.a === 'site' ? { ...l, expect: 'down' as const } : l)) };
+		const p2: Plant = { topology: declared, profileOf: plant.profileOf };
+		const i = declared.links.findIndex((l) => l.expect === 'down');
+		const tags = planned();
+		tags.SW1_Port01 = { OperUp: false, Pvid: 1 };
+		const quiet = checkAll(p2, tags);
+		expect(quiet[i].check.verdict).toBe('consistent');
+		const v21 = vlanDomains(p2, checkAllVlans(p2, tags), tags, quiet).find((d) => d.id === 21)!;
+		expect(v21.devices.includes('site')).toBe(false);
+		expect(v21.links.find((l) => l.index === i)?.carried ?? false).toBe(false);
+		// Plugged in: contradicted, and then it does carry.
+		tags.SW1_Port01 = { OperUp: true, SpeedMbps: 1000, Pvid: 1 };
+		const plugged = checkAll(p2, tags);
+		expect(plugged[i].check.verdict).toBe('contradicted');
+		const lit = vlanDomains(p2, checkAllVlans(p2, tags), tags, plugged).find((d) => d.id === 21)!;
+		expect(lit.devices.includes('site')).toBe(true);
+	});
 	it('lays the VLANs out as floors, each device where the mesh puts it', () => {
 		const tags = planned();
 		const ds = vlanDomains(plant, checkAllVlans(plant, tags), tags, cablesUp());
