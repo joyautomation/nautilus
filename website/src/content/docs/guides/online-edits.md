@@ -37,6 +37,14 @@ and exits non-zero, so CI can fail a build when a controller has un-pulled
 edits. Composition is a single definition shared by the runtime, the language
 server, download, and pull, so a program round-trips losslessly.
 
+In VS Code, Pull previews the change and asks before writing. If the program
+file is open, the pull goes through its editor — the text and any diagram view
+show the controller's program, and the file is saved — so the editor and the
+disk never disagree. If the file has **unsaved edits**, the confirmation says
+so: **Overwrite** replaces them with the controller's program, and **Show
+Diff** puts the controller's program beside your buffer instead, so you can
+take lines across by hand and pull nothing.
+
 What a download sends is the program's **composition**: the project's
 library prelude — every PROGRAM-less `.st` file in the root and under `lib/`,
 verbatim, then every PROGRAM-less `.ld` / `.fbd` file transpiled to ST — then

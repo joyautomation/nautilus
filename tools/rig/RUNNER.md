@@ -44,6 +44,27 @@ making a check fail on purpose in a scratch branch (scheduled runs only read
 the default branch, so test the issue step by temporarily dropping the
 `github.event_name == 'schedule'` condition on that branch).
 
+## Schedules
+
+Two workflows run on the rig, one at a time (they share the concurrency
+group `rig-nightly`, so they queue instead of overlapping on a box):
+
+- **rig-nightly** (06:00 UTC daily): fast pace. Smoke suite + verb self-test;
+  the proof. Owns the rolling "rig nightly red" issue. Uploads `rig-out-<run>`
+  (90 days) with `manifest.json`.
+- **rig-demo** (Sunday 03:00 UTC): human pace, 2560x1440 frame; runs
+  `tools/rig/demo.sh` to produce the clips the docs embed. Uploads
+  `rig-demo-<run>` (90 days). A red demo run comments on the open "rig nightly
+  red" issue, or opens a one-off "rig demo run red" issue.
+
+Dispatch either by hand: Actions -> the workflow -> Run workflow, or
+`gh workflow run rig-nightly.yml --ref main` / `gh workflow run rig-demo.yml --ref main`.
+
+A **green** run dispatches `docs.yml`, which rebuilds the docs site; its
+prebuild downloads the latest green rig-nightly, rig-demo and CI artifacts
+for the /verified/ pages. Red runs do not rebuild, so the pages keep showing
+the last green run.
+
 ## When it goes red
 
 Open the "rig nightly red" issue: it carries the smoke and self-test TSVs.

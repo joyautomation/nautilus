@@ -3,7 +3,12 @@
 
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { downloadConfirmMessage, forceDownloadConfirmMessage, rollbackConfirmMessage } from "./programSync";
+import {
+  downloadConfirmMessage,
+  forceDownloadConfirmMessage,
+  pullPlan,
+  rollbackConfirmMessage,
+} from "./programSync";
 
 const URL = "http://plant-line-3.local:8080";
 
@@ -34,4 +39,34 @@ test("rollbackConfirmMessage names the program and the controller", () => {
 
 test("rollbackConfirmMessage falls back to a generic label when the POU is unknown", () => {
   assert.equal(rollbackConfirmMessage(URL, ""), `Roll back the program on ${URL} to the previous program?`);
+});
+
+// ── Pull over the program file's editor state (#140) ────────────────────
+
+test("pullPlan: a file that is not open is written to disk, with the plain confirmation", () => {
+  const p = pullPlan("plant.st", "closed");
+  assert.equal(p.message, "Overwrite plant.st with the controller's program?");
+  assert.equal(p.overwrite, "Pull and overwrite");
+  assert.equal(p.showDiff, undefined);
+  assert.equal(p.write, "disk");
+});
+
+test("pullPlan: an open, clean file goes through the buffer so the editor shows the pull", () => {
+  const p = pullPlan("plant.st", "clean");
+  assert.equal(p.message, "Overwrite plant.st with the controller's program?");
+  assert.doesNotMatch(p.message, /unsaved/);
+  assert.equal(p.overwrite, "Pull and overwrite");
+  assert.equal(p.showDiff, undefined);
+  assert.equal(p.write, "buffer");
+});
+
+test("pullPlan: a dirty buffer is named, says its edits will be lost, and is never written under", () => {
+  const p = pullPlan("plant.st", "dirty");
+  assert.equal(
+    p.message,
+    "plant.st has unsaved edits. Overwrite the editor and the file with the controller's program? Your edits will be lost."
+  );
+  assert.equal(p.overwrite, "Overwrite");
+  assert.equal(p.showDiff, "Show Diff");
+  assert.equal(p.write, "buffer");
 });

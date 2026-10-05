@@ -235,19 +235,29 @@ no rig verb, no smoke check); per section below.
 
 ## Count of rows with no coverage at all
 
-**0 of 153.** The commands are the thinnest area: only the download /
-rollback pair (08), the title-bar buttons (04) and the previews (03, 07, 10)
-are touched by any smoke check, and no webview test can reach a command because
-commands live in the extension host (that is what the E3 test-state hooks are
-for). Of the editors the FBD now has no uncovered row and the SFC is well covered; the ladder single-key shortcuts
-(`N`, `M`) and the ladder/SFC pan gestures (middle-drag, drag empty canvas) have no test
-of any kind.
+**0 of 153.** Every row has at least one layer of coverage: a webview test, a
+rig verb, or a smoke check. Some rows are covered only in part, and the cell
+says which part:
+
+- Commands: the diff-against-controller and diff-between-revisions commands
+  (C16, C17, C19, C20, C22, C23) are covered only as a present menu entry (04);
+  the ladder and SFC diff commands (C18, C21) have a render test, not the
+  command; C24 opens the editor by verb, not via the command; C26 is covered by
+  the walkthrough's auto-open, not the command. No webview test can reach a
+  command, because commands live in the extension host.
+- Undo and redo (F17, S20, S21, M17): the webview posts no message and does not
+  swallow the keys; the undo itself is VS Code's text undo over the host's
+  WorkspaceEdit, so only smoke 03 (field undo) sees it happen. S22 (save) is
+  likewise only 03's field undo.
+- Live values: X11 pills are checked in .st, .fbd and .ld text, not .sfc. X20
+  schema completion is checked for nautilus.yaml and *_test.yaml, not tag or
+  alarm files.
+- Single-sided gestures: F08 (disconnect, not wire), F14/F15 (ladder and SFC
+  zoom only in smoke), L01 (rung name only), S15 (popover half only), P02
+  (add side only).
 
 Notes for the next pass:
 
-- `nautilus.fb.monitor` is now contributed in `package.json` ("Choose Function
-  Block Instance to Monitor"); its gesture is the CodeLens (X21, smoke 17).
-- Some rows are covered only on one half of the claim. Those are labelled in
-  the cell.
+- Partial rows (listed above) are the place to add coverage first.
 - The rig verbs for the ladder and FBD were written for the lift-station
   episode, so they exercise gestures the takes needed, not a systematic sweep.

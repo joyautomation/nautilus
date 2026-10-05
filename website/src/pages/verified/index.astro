@@ -1,0 +1,88 @@
+---
+// /verified/ — the last green run of each evidence set, and how much of the
+// gesture inventory each editor's tests cover. Data: src/lib/verified.ts.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import RunCard from '../../components/verified/RunCard.astro';
+import { SECTIONS, formatDate, isCovered, loadVerified, rowClip } from '../../lib/verified';
+import '../../styles/verified.css';
+
+const v = loadVerified();
+const anyRun = v.sets.nightly || v.sets.demo || v.sets.gestures;
+const stats = SECTIONS.map((s) => {
+  const rows = v.rows.filter((r) => r.section === s.slug);
+  return {
+    ...s,
+    total: rows.length,
+    covered: rows.filter(isCovered).length,
+    clips: rows.filter((r) => rowClip(r)).length,
+  };
+});
+const total = stats.reduce((a, s) => a + s.total, 0);
+const covered = stats.reduce((a, s) => a + s.covered, 0);
+---
+
+<StarlightPage
+  frontmatter={{
+    title: 'Verified',
+    description:
+      'Every gesture the nautilus VS Code extension claims, with the test that proves it and a clip from the last green run.',
+    tableOfContents: false,
+    prev: false,
+    next: false,
+  }}
+>
+  <p class="vf-lede">
+    Every gesture the VS Code extension claims, with the test that exercises it and a recording of
+    that test from the <strong>last green run</strong>. Nothing here is hand-picked: the site is
+    rebuilt from the latest successful rig and CI runs on <code>main</code>.
+  </p>
+
+  {
+    !anyRun && (
+      <p class="vf-empty">
+        No verified run yet. These pages fill in once a green rig or CI run has been baked into the
+        site{v.generatedAt ? ` (last checked ${formatDate(v.generatedAt)})` : ''}.
+      </p>
+    )
+  }
+
+  <div class="vf-runs">
+    <RunCard set="nightly" blurb="Smoke checks and the verb self-test in a real VS Code, at full speed." />
+    <RunCard set="demo" blurb="The verb self-test at episode pace and frame — the clips guides embed." />
+    <RunCard set="gestures" blurb="The webview gesture harness from CI (headless browser, no extension host)." />
+  </div>
+
+  <h2>By editor</h2>
+  <p>
+    A claim counts as covered when at least one test linked to it passed in the last green runs{
+      total ? `: ${covered} of ${total} claims` : ''
+    }. The claims come from the
+    <a href={`https://github.com/${v.repository}/blob/main/tools/vscode-iec/webview-ui/gesture-harness/INVENTORY.md`}>gesture inventory</a>.
+  </p>
+  <table class="vf-sections">
+    <thead>
+      <tr><th>Section</th><th>Covered</th><th></th><th>With a clip</th></tr>
+    </thead>
+    <tbody>
+      {
+        stats.map((s) => (
+          <tr>
+            <td>
+              <a href={`/verified/${s.slug}/`}>{s.label}</a>
+            </td>
+            <td class="num">
+              {s.covered} / {s.total}
+            </td>
+            <td style="width: 30%">
+              <div class="vf-bar" role="presentation">
+                <span style={`width: ${s.total ? Math.round((100 * s.covered) / s.total) : 0}%`} />
+              </div>
+            </td>
+            <td class="num">{s.clips}</td>
+          </tr>
+        ))
+      }
+    </tbody>
+  </table>
+  {v.generatedAt && <p class="vf-muted"><small>Data baked {formatDate(v.generatedAt)}.</small></p>}
+</StarlightPage>

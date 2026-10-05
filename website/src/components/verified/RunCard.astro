@@ -1,0 +1,66 @@
+---
+// One evidence set's last green run: date, commit, versions, verdict counts.
+import { Badge } from '@astrojs/starlight/components';
+import { type SetKey, SET_LABEL, badgeVariant, commitUrl, formatDate, loadVerified } from '../../lib/verified';
+
+interface Props {
+  set: SetKey;
+  /** What this set is, one line. */
+  blurb: string;
+}
+const { set, blurb } = Astro.props;
+const v = loadVerified();
+const m = v.sets[set];
+const run = m?.run ?? {};
+const counts: Record<string, number> = {};
+for (const i of m?.items ?? []) counts[i.verdict] = (counts[i.verdict] ?? 0) + 1;
+const order = ['PASS', 'WARN', 'FAIL', 'XFAIL', 'XPASS', 'SKIP'];
+const countList = Object.entries(counts).sort((a, b) => order.indexOf(a[0]) - order.indexOf(b[0]));
+const frame = run.frame ? `${run.frame.w}×${run.frame.h}${run.frame.zoom ? `, zoom ${run.frame.zoom}` : ''}${run.frame.font ? `, font ${run.frame.font}` : ''}` : null;
+const kinds = new Set((m?.items ?? []).map((i) => i.kind));
+const what = set === 'gestures' ? 'tests' : [...kinds].map((k) => (k === 'verb' ? 'verbs' : 'smoke checks')).join(' + ') || 'items';
+---
+
+<section class="vf-run">
+  <h2>{SET_LABEL[set]}</h2>
+  <p class="vf-muted">{blurb}</p>
+  {
+    m ? (
+      <>
+        <p>
+          Last green run <strong>{formatDate(run.date)}</strong>
+          {run.runUrl && (
+            <>
+              {' '}
+              · <a href={run.runUrl}>run {run.runId}</a>
+            </>
+          )}
+        </p>
+        <dl>
+          {run.sha && (
+            <>
+              <dt>commit</dt>
+              <dd>
+                <a href={commitUrl(v.repository, run.sha)}>{run.sha.slice(0, 7)}</a>
+              </dd>
+            </>
+          )}
+          {run.naut && (<><dt>naut</dt><dd>{run.naut}</dd></>)}
+          {run.vsix && (<><dt>extension</dt><dd>{run.vsix}</dd></>)}
+          {run.vscode && (<><dt>VS Code</dt><dd>{run.vscode}</dd></>)}
+          {run.pace && (<><dt>pace</dt><dd>{run.pace}</dd></>)}
+          {frame && (<><dt>frame</dt><dd>{frame}</dd></>)}
+          <dt>{what}</dt>
+          <dd>{m.items.length}</dd>
+        </dl>
+        <p class="vf-counts">
+          {countList.map(([verdict, n]) => (
+            <Badge text={`${n} ${verdict}`} variant={badgeVariant(verdict)} />
+          ))}
+        </p>
+      </>
+    ) : (
+      <p class="vf-empty">No verified run yet.</p>
+    )
+  }
+</section>
