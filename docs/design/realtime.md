@@ -472,12 +472,44 @@ real-time. Ethernet fieldbus jitter is separate and pinning doesn't fix it.
 
 ## Phase 3 — explore harder real-time (spikes, decide with evidence)
 
+### The fast loop owns its I/O
+
+James, 2026-10-05: "I don't know that a fast loop interacting solely with a
+slow one does anyone a whole lot of good… the only way that would make
+sense is if the fast loop had its own I/O." That is the design rule for
+everything in this phase, stated here so no table row has to imply it:
+
+- **The fast side talks to its own field devices directly** — a fieldbus,
+  a serial link, or pins — and runs its loop against them. Nautilus is the
+  line PLC above it: sequencing, recipes and targets, counts, rejects,
+  alarms, the HMI. It hands the fast side a target and reads back results
+  and faults, the way a filler controller sits under a line PLC.
+- The worked example: a bottling line. The fast part talks to the
+  individual fill heads, often over Modbus RTU on RS-485; Nautilus owns
+  the line.
+- **Serial is a first-class case, and it is about consistency, not
+  speed.** RS-485 is capped by the wire: Modbus RTU at 115 200 baud is
+  roughly 1–2 ms per request and response, so a real-time loop there buys
+  deterministic bus timing and line turnaround, not raw rate. That favours
+  the microcontroller's UART over a Linux serial port. Sub-millisecond
+  fill heads are usually on EtherCAT, or pins counting a flowmeter.
+
+So the shared-memory exchange below is the supervisor link — parameters
+and setpoints down, results and faults up — not the fast loop's I/O.
+
 **Status (2026-10-04):** the Rust fast-loop spike exists (`rt/fastloop`,
 `tools/jitter/shmpeer`, `rt/README.md`) and has its first rows below; the
 microcontroller spike waits for the Arduino UNO Q James sets up the week of
 2026-10-06.
 
 ### Rust fast loop — first measurements
+
+**What the spike proves, and what it does not.** It has no real I/O: its
+PI block takes its process value over shared memory from the Go peer and
+hands its output back the same way. The rows below therefore prove the
+loop's timing and the supervisor exchange, nothing about a fast loop
+driving fill heads over RS-485 or counting a flowmeter on a pin. That
+part needs the I/O in the loop, which is the UNO Q spike.
 
 Same desktop, same load, 60 s at 1 kHz, the Go peer polling the segment
 every 1 ms and moving the setpoint. Go rows from Phase 2 item 4 for
@@ -521,8 +553,11 @@ either way). Raw: `docs/design/realtime/2026-10-04-mira1-rust-spike/`.
 ### What runs in the fast loop — recommendation
 
 The spike's loop is one fixed block, and that is the recommendation for
-the first real version: **a fixed set of fast blocks configured from the
-manifest, not a second IR executor.**
+the first real version: **a fixed set of fast blocks, each bound to the
+fast side's own I/O (a fieldbus, a serial line, pins), configured from
+the manifest, not a second IR executor.** Nautilus supplies parameters
+and setpoints as tags and reads results and faults back as tags; users
+configure blocks in the manifest and never write Rust or firmware.
 
 | option | what it buys | cost | risk |
 |---|---|---|---|
@@ -532,7 +567,15 @@ manifest, not a second IR executor.**
 
 So: ship Phase 2 as the answer for 1 ms class tasks; grow `rt/fastloop`
 into a manifest-configured block runner for the sub-millisecond / pin-level
-class, with the same block set targeting the microcontroller.
+class, with the same block set targeting the microcontroller — and with
+each block's I/O binding (Modbus RTU slave address and registers, an
+EtherCAT PDO, a pin) part of the block's manifest entry.
+
+**Open question:** what happens when the block a line needs is not on the
+menu. Options range from "it is a Nautilus task at 1 ms, which Phase 2
+made good" through "a block request to us" to "an escape hatch into Rust
+for the customer"; undecided, and the answer decides how big the block
+set must be before this ships.
 
 **A Rust fast-loop process** (James's idea): no GC; pinned to an isolated core
 with RT priority on PREEMPT_RT; Nautilus stays the supervisor and exchanges a
