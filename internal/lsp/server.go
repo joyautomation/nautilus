@@ -88,12 +88,6 @@ func (s *Server) dispatch(m *message) {
 				SignatureHelpProvider: signatureHelpOptions(),
 				RenameProvider:        &RenameOpts{PrepareProvider: true},
 
-				TextDocumentSync:   1, // Full: client resends the whole doc per change
-				HoverProvider:      true,
-				DefinitionProvider: true,
-				CompletionProvider: &CompletionOpts{TriggerCharacters: []string{"."}},
-				RenameProvider:     &RenameOpts{PrepareProvider: true},
-
 				DocumentSymbolProvider: true, // symbols.go
 			},
 			ServerInfo: ServerInfo{Name: "nautilus-st-lsp", Version: Version},
