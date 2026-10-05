@@ -50,7 +50,7 @@ tools/rig/smoke/run.sh                     # build, then all 11 checks (~45 min)
 tools/rig/smoke/run.sh 03-preview-undo     # one check, merged into the last results
 tools/rig/selftest.sh                      # build, then every verb (human pace)
 G_PACE=fast tools/rig/selftest.sh          # pointer teleports; what the nightly runs
-tools/rig/demo.sh                          # the demo clips: human pace, 2560x1440 (~25 min)
+tools/rig/demo.sh                          # the demo clips: human pace, 2560x1440 (~10 min)
 
 NAUT=… VSIX=… tools/rig/smoke/run.sh       # builds you already have
 NAUTILUS_REF=v0.12.0-rc1 tools/rig/smoke/run.sh   # build a ref, in ../nautilus-smoke
@@ -112,7 +112,7 @@ and `RIG_SET=demo`, into `out/demo/` (`RIG_OUT` moves `out/`, so
 `RIG_OUT=/x` writes `/x/demo/`): `demo/selftest/` as the self-test writes
 it, and `demo/manifest.json` (set `demo`, pace `human`). The container's
 display is sized from `CAP_W`/`CAP_H` (Xvfb is the frame plus 40 px each
-way, `lib/container.sh`), so the big frame needs nothing else. Takes 20–30
+way, `lib/container.sh`), so the big frame needs nothing else. Takes about 10
 minutes. Watch a few clips before trusting a new build's set: a verb that
 passes can still look wrong.
 

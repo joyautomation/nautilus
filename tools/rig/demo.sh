@@ -19,8 +19,11 @@
 # "demo", pace "human", frame 2560x1440 at zoom 2 (lib/manifest.sh). A build
 # (no NAUT/VSIX given) still goes to out/build/, not under demo/.
 #
-# ~20–30 min: human pace moves the pointer the way a take does. The display
-# is sized from CAP_W/CAP_H (lib/container.sh: Xvfb is CAP+40 each way).
+# ~10 min (10.5 on mira1, 2026-10-04; the fast self-test is ~9): human pace
+# moves the pointer the way a take does; most of a verb is its settles. The
+# display is sized from CAP_W/CAP_H (lib/container.sh: Xvfb is CAP+40 each
+# way). Clips are CAP+16 (lib.sh's clip_start keeps VS Code's frame margin:
+# 2576x1456), the PNGs exactly 2560x1440.
 # Exit status: selftest.sh's (the number of FAIL rows; 2 if no table).
 set -uo pipefail
 RIG_DIR=$(cd "$(dirname "$0")" && pwd)
