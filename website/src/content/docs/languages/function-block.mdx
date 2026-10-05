@@ -5,6 +5,8 @@ sidebar:
   order: 3
 ---
 
+import Clip from '../../../components/Clip.astro';
+
 An FBD program is a text file. `.fbd` source is a netlist of named wires
 driven by blocks, coils that write variables, and function-block instances,
 all inside an otherwise ordinary ST POU. The VS Code extension projects that
@@ -159,16 +161,30 @@ tasks](/guides/blocks-and-tasks/).
 
 Right-click a `.fbd` file and choose **Open With → FBD Diagram** to use the
 diagram as the editor itself, or run **nautilus: Open FBD Diagram Preview**
-to open it beside the text, which then updates as you type.
+to open it beside the text, which then updates as you type. With a `.fbd`
+open as text, the editor title's **Open as Diagram Editor** button swaps the
+tab for the diagram and carries unsaved edits across; from the diagram,
+**Show Source** opens the text beside it.
+
+<Clip id="04-title-buttons" />
 
 Structural gestures are resolved by the Go compiler into minimal text edits
 against the file: double-click a constant to retype it or a block to rename
 it, click an input pin to toggle `NOT`, drag an output onto a pin to rewire,
-delete a selected node, and insert statements from the **+ add** palette
-(block-to-wire, coil, timer, counter, comment, bare reference chips, and
-variable declarations). Layout is computed from topology by default. Drag a
-node to pin it and the position is stored in a `(* @layout *)` comment that
-the compiler skips; **auto layout** clears every pin.
+and delete a selected node.
+
+<Clip id="fbd_wire" />
+
+The **+ add** palette inserts statements: block-to-wire, coil, timer,
+counter, comment, bare reference chips, and variable declarations.
+
+<Clip id="fbd_add_block" />
+
+Layout is computed from topology by default. Drag a node to pin it and the
+position is stored in a `(* @layout *)` comment that the compiler skips;
+**auto layout** clears every pin.
+
+<Clip id="fbd_move_node" />
 
 The **vars** button opens a panel listing every header declaration, wired or
 not, with its section, its live value, an `unused` marker when nothing in the

@@ -5,6 +5,8 @@ sidebar:
   order: 2
 ---
 
+import Clip from '../../../components/Clip.astro';
+
 IEC 61131-3 defines ladder graphically. nautilus defines it as text: a `.ld`
 file holds rungs written left to right along the power rail, in a grammar
 with the standard's semantics and no vendor dialect. The VS Code extension
@@ -191,18 +193,33 @@ for text on the left and rungs on the right. Layout is canonical, computed
 from the source, so no coordinates land in your diffs. Editing gestures
 resolve through the Go compiler into minimal text edits:
 
-- A palette of NO contact, NC contact, function contact, TON, CTU, parallel
-  branch, and output/set/reset coil. Click to append at the selection, or
-  drag onto a rung.
+- A palette of NO contact, NC contact, function contact, parallel branch,
+  and output/set/reset coil. Click to append at the selection, or drag onto
+  a rung.
+
+  <Clip id="ld_add_contact" />
+
+- **FB…** opens a picker over the standard blocks and the project's own
+  function blocks, prefilled with the next free instance name, and inserts
+  the call at the end of the selected rung.
+
+  <Clip id="ld_add_block-TON" />
 - Double-click a contact or coil to retag it, a function contact to rewrite
-  the call, a block to edit its arguments, the rung name to rename it, and
-  the `(* … *)` slot to write a rung comment.
+  the call, a block's body to edit its arguments or its header to rename the
+  instance, the rung name to rename it, and the `(* … *)` slot to write a
+  rung comment.
+
+  <Clip id="ld_rename_block" />
 - `N` flips a contact between NO and NC, `M` cycles a coil through output,
   set and reset, `B` wraps the selection in a parallel branch, `Del`
   deletes, and Ctrl+X/C/V cut, copy and paste. A pasted block instance gets
   a fresh name.
+
+  <Clip id="ld_add_branch" />
 - Drag an element to reorder it or move it to another rung. A contact
   dropped in the coil zone is refused, and so is a coil dropped mid-series.
+
+  <Clip id="ld_move_element" />
 - `+ rung` adds a rung, `//` adds a comment note, and the variables panel
   declares or removes a declaration without leaving the diagram.
 

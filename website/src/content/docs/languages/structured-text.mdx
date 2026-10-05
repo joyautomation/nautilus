@@ -5,6 +5,8 @@ sidebar:
   order: 1
 ---
 
+import Clip from '../../../components/Clip.astro';
+
 Structured Text is IEC 61131-3's text language, and in nautilus it sits under
 the other three. A `.st` file holds a program, a library of types and blocks,
 or both. Ladder lowers to FBD, FBD lowers to ST, and an SFC file is an ST POU
@@ -247,9 +249,15 @@ and type errors, go-to-definition from an identifier to its declaration, hover
 showing the declared type and var section, and completion over in-scope
 variables, keywords, types, and the builtin registries.
 
+<Clip id="14-lsp" />
+
 Point `nautilus.runtimeUrl` at a running controller and the extension renders
 live tag values inline beside every identifier, with a Live Values panel and a
-**Set Live Value** command. The program commands work on `.st` directly:
+**Set Live Value** command.
+
+<Clip id="13-live-values" />
+
+The program commands work on `.st` directly:
 **Download Program to Controller**, **Diff Program with Controller**, **Rollback
 Controller Program**, and **Pull Program from Controller**.
 
