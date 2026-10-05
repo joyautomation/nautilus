@@ -8,6 +8,7 @@
 #        the value — VS Code draws them as an empty <span> whose ::after
 #        content is that text, so the page's computed style reads them back);
 #        a value written over the API is followed within ~3 s.
+#        The .sfc text view is the last block (it relaunches on tank-batch).
 #   X12  the Live Values panel (nautilusLiveValues): every tag in /api/state
 #        by name, with a value, and the program locals (task.local).
 #   C06  nautilus: Set Live Value… — (a) from the .st editor's context menu
@@ -458,3 +459,51 @@ for step in "18 true running" "88 false stopped"; do
     fail "X39 mimic: P-101 shows '$ps' while /api/state PumpRun is $apr" "$(shot "mimic-pump-x")"
   fi
 done
+
+# ── X11 on the .sfc TEXT view ───────────────────────────────────────────────
+# The Demo scaffold has no .sfc, so this block swaps to tank-batch (batch.sfc,
+# driven by plant.st): the controller and the window are relaunched on it.
+# HeatSP is a setpoint nothing writes, so its pill is exact; Mixer and
+# BatchCount appear only inside ACTION bodies, so a pill behind them is a pill
+# in the actions, not in the transitions.
+vs_cmd "View: Close All Editors" 1
+kill_controllers_for "$PROJ"; sleep 1
+ext_fixture tank-batch
+PORT=$(free_port 18084 18085 18086 18087)
+point_extension_at "$PROJ" "$PORT"
+start_controller "$PROJ" "$PORT"
+sleep 3
+smoke_open "$PROJ" batch.sfc
+key Escape; hide_sidebar
+sleep 5
+png=$(shot sfc-text-pills)
+pj=$(pills)
+n=$(python3 -c 'import sys,json; print(len(json.loads(sys.argv[1]) or []))' "$pj")
+ids=$(python3 -c 'import sys,json; print(" ".join(sorted({p["id"] for p in json.loads(sys.argv[1]) or []})))' "$pj")
+known=$(api /api/state | python3 -c 'import sys,json; d=json.load(sys.stdin); print(" ".join(k.lower() for k in list(d.get("tags",{}))+list(d.get("locals",{}))))')
+unknown=$(for i in $ids; do [[ " $known " == *" ${i,,} "* ]] || printf '%s ' "$i"; done)
+if (( n == 0 )); then
+  warn "X11 batch.sfc (text): NO pills in the .sfc text view although liveValues.ts lists iec-sfc (editor language: $(cdp page 'document.querySelector(".statusbar-item[id=\"status.editor.mode\"]")?.innerText || ""' | tr -d '"')) — finding, see the issue filed for it" "$png"
+else
+  if (( n >= 5 )) && [[ -z $unknown ]]; then
+    pass "X11 batch.sfc (text): $n pills, each behind a controller tag ($ids)" "$png"
+  else
+    fail "X11 batch.sfc (text): $n pills (behind: ${ids:-none}; not tags: ${unknown:-none})" "$png"
+  fi
+  body=""; for i in $ids; do [[ $i == FillSP || $i == HeatSP || $i == EmptySP || $i == Abort ]] && body="$body$i "; done
+  act=""; for i in $ids; do [[ $i == Mixer || $i == BatchCount || $i == Heater ]] && act="$act$i "; done
+  if [[ -n $body && -n $act ]]; then
+    pass "X11 batch.sfc (text): pills in the transitions (${body% }) and in the ACTION bodies (${act% })" "$png"
+  else
+    fail "X11 batch.sfc (text): pills in transitions: [${body% }], in action bodies: [${act% }] (all: $ids)" "$png"
+  fi
+  r=$(pill_vs_api HeatSP 0.0005) && pass "X11 batch.sfc (text): the HeatSP pill reads the controller exactly ($r)" "$png" \
+    || fail "X11 batch.sfc (text): the HeatSP pill does not match /api/state ($r)" "$png"
+  post_tag HeatSP 52.5
+  if v=$(pill_follows HeatSP 52.5 0.0005 3); then
+    pass "X11 batch.sfc (text): HeatSP written 52.5 over the API → the pill reads $v" "$(shot sfc-pill-follows)"
+  else
+    fail "X11 batch.sfc (text): HeatSP written 52.5 → the pill reads '$v' after 3 s" "$(shot sfc-pill-follows)"
+  fi
+  post_tag HeatSP 45
+fi

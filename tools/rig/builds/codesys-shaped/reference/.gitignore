@@ -1,0 +1,5 @@
+# Local retained state — recreated on first run.
+retain.json
+
+# `naut build` output.
+/washer
