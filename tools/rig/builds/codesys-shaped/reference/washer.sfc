@@ -1,0 +1,208 @@
+PROGRAM Washer
+(* A front-loader wash cycle, the way a Codesys programmer draws it:
+   Idle -> Fill -> (Heat -> HeatDone || Wash) -> Drain -> Spin -> Idle,
+   with an abort branch out of Fill and step-time supervision on Fill and
+   Drain. The Codesys habits this chart had to give up, and what it does
+   instead (tools/rig/builds/codesys-shaped/FINDINGS.md has the log):
+     - D/L/SD timed qualifiers   -> Step.T in an ACTION body or a condition
+     - SFCError / step max time  -> the Supervise action + abort transitions
+     - an E_WashState enum       -> INT constants ST_IDLE.., a StateNo tag
+     - a GVL                     -> tags/washer.yaml + VAR_EXTERNAL here *)
+VAR_EXTERNAL
+    StartPB    : BOOL;
+    StopPB     : BOOL;
+    ResetPB    : BOOL;
+    DoorClosed : BOOL;
+    LevelPct   : REAL;
+    TempC      : REAL;
+    FillSP     : REAL;
+    TempSP     : REAL;
+    FillValve  : BOOL;
+    Detergent  : BOOL;
+    Heater     : BOOL;
+    DrumCW     : BOOL;
+    DrumCCW    : BOOL;
+    SpinMotor  : BOOL;
+    DrainPump  : BOOL;
+    DoorLock   : BOOL;
+    AlarmLamp  : BOOL;
+    StateNo    : INT;
+    FaultCode  : INT;
+    CycleCount : INT;
+END_VAR
+VAR
+    drum : FB_Reverser;
+END_VAR
+VAR CONSTANT
+    tMaxFill   : TIME := T#60S;
+    tMaxDrain  : TIME := T#45S;
+    tWash      : TIME := T#20S;
+    tSpin      : TIME := T#10S;
+    tDoseDelay : TIME := T#3S;
+    ST_IDLE    : INT := 0;
+    ST_FILL    : INT := 1;
+    ST_WASH    : INT := 2;
+    ST_DRAIN   : INT := 3;
+    ST_SPIN    : INT := 4;
+    ST_ABORTED : INT := 9;
+    FC_STOP          : INT := 1;
+    FC_FILL_TIMEOUT  : INT := 2;
+    FC_DRAIN_TIMEOUT : INT := 3;
+END_VAR
+SFC
+
+  INITIAL_STEP Idle:
+    R  DoorLock;
+    R  AlarmLamp;
+    N  TrackState;
+  END_STEP
+
+  STEP Fill:
+    S  DoorLock;
+    N  FillValve;
+    P1 CountCycle;
+    N  Dose;
+    N  Supervise;
+    N  TrackState;
+  END_STEP
+
+  STEP Heat:
+    N  HeatCtl;
+    N  TrackState;
+  END_STEP
+
+  STEP Wash:
+    N  DrumCtl;
+    N  TrackState;
+  END_STEP
+
+  STEP HeatDone:
+    N  TrackState;
+  END_STEP
+
+  STEP Drain:
+    N  DrainPump;
+    N  Supervise;
+    N  TrackState;
+  END_STEP
+
+  STEP Spin:
+    N  SpinCtl;
+    N  DrainPump;
+    N  TrackState;
+  END_STEP
+
+  STEP Aborted:
+    S  AlarmLamp;
+    N  DrainPump;
+    P1 RecordFault;
+    P0 ClearFault;
+    N  TrackState;
+  END_STEP
+
+  TRANSITION FROM Idle TO Fill := StartPB AND DoorClosed;
+  END_TRANSITION
+
+  (* alternative divergence out of Fill: the abort is declared first, so
+     it has priority over the normal Fill -> (Heat, Wash) progression *)
+  TRANSITION FROM Fill TO Aborted := StopPB OR NOT DoorClosed OR FaultCode <> 0;
+  END_TRANSITION
+
+  (* simultaneous divergence: heat the water and wash at the same time *)
+  TRANSITION FROM Fill TO (Heat, Wash) := LevelPct >= FillSP;
+  END_TRANSITION
+
+  TRANSITION FROM Heat TO HeatDone := TempC >= TempSP;
+  END_TRANSITION
+
+  (* simultaneous convergence: drain once the wash has run its time AND
+     the water reached temperature *)
+  TRANSITION FROM (Wash, HeatDone) TO Drain := Wash.T >= tWash;
+  END_TRANSITION
+
+  TRANSITION FROM Drain TO Spin := LevelPct <= 1.0;
+  END_TRANSITION
+
+  TRANSITION FROM Drain TO Aborted := FaultCode <> 0;
+  END_TRANSITION
+
+  TRANSITION FROM Spin TO Idle := Spin.T >= tSpin;
+  END_TRANSITION
+
+  TRANSITION FROM Aborted TO Idle := ResetPB AND LevelPct <= 1.0;
+  END_TRANSITION
+
+  (* Codesys: P1 on the step — a pulse, once per cycle *)
+  ACTION CountCycle:
+    CycleCount := CycleCount + 1;
+  END_ACTION
+
+  (* Codesys: D Detergent(T#3S) — delayed. Here: on once Fill has been
+     active tDoseDelay; the body's final scan (Fill.X FALSE) closes it. *)
+  ACTION Dose:
+    Detergent := Fill.X AND Fill.T >= tDoseDelay;
+  END_ACTION
+
+  (* Codesys: the step's maximum time and SFCError. Here: Step.T against
+     a limit, a fault code, and an abort transition out of each step. *)
+  ACTION Supervise:
+    IF Fill.X AND Fill.T > tMaxFill THEN
+        FaultCode := FC_FILL_TIMEOUT;
+    END_IF;
+    IF Drain.X AND Drain.T > tMaxDrain THEN
+        FaultCode := FC_DRAIN_TIMEOUT;
+    END_IF;
+  END_ACTION
+
+  (* a thermostat while the Heat leg is active; the body's final scan
+     (Heat.X FALSE) switches the heater off *)
+  ACTION HeatCtl:
+    Heater := Heat.X AND TempC < TempSP;
+  END_ACTION
+
+  (* the library block, enabled by the step's own activity *)
+  ACTION DrumCtl:
+    drum(Enable := Wash.X, tRun := T#4S, tPause := T#1S);
+    DrumCW := drum.CW;
+    DrumCCW := drum.CCW;
+  END_ACTION
+
+  (* Codesys: L SpinMotor(T#10S) — time-limited. Here: on while Spin.T is
+     under tSpin; Spin -> Idle fires at the same limit. *)
+  ACTION SpinCtl:
+    SpinMotor := Spin.X AND Spin.T < tSpin;
+  END_ACTION
+
+  (* P1 on Aborted: no supervision fault recorded, so it was the stop
+     button or the door *)
+  ACTION RecordFault:
+    IF FaultCode = 0 THEN
+        FaultCode := FC_STOP;
+    END_IF;
+  END_ACTION
+
+  (* P0 on Aborted: once, as the chart leaves it *)
+  ACTION ClearFault:
+    FaultCode := 0;
+  END_ACTION
+
+  (* Codesys: eState := E_WashState.FILL in each step. Here: one body,
+     associated N from every step, writing an INT code. *)
+  ACTION TrackState:
+    IF Aborted.X THEN
+        StateNo := ST_ABORTED;
+    ELSIF Spin.X THEN
+        StateNo := ST_SPIN;
+    ELSIF Drain.X THEN
+        StateNo := ST_DRAIN;
+    ELSIF Heat.X OR Wash.X OR HeatDone.X THEN
+        StateNo := ST_WASH;
+    ELSIF Fill.X THEN
+        StateNo := ST_FILL;
+    ELSE
+        StateNo := ST_IDLE;
+    END_IF;
+  END_ACTION
+
+END_SFC
+END_PROGRAM
