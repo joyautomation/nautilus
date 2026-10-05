@@ -169,3 +169,30 @@ test('Ladder drag: a contact dragged to a later spot in its own rung posts a mov
 		assert.deepEqual(ops[0], { type: 'move', rung: 'r1', path: [0], toRung: 'r1', toPath: later.series ?? [], toIndex: later.index });
 	});
 });
+
+test('Ladder drag: a cross-rung drag leaves no text selected, mid-drag or after the drop (#131)', async () => {
+	await withPage(async (b) => {
+		await deliver(b, { type: 'ldModel', model: LD, title: 'p.ld' });
+		const all = await spots(b);
+		const target = all.find((s) => s.rung === 'r2' && s.op === 'insert' && s.index === 0);
+		// Grab the contact by its operand label: text under the press is what lets
+		// the browser start a selection.
+		const lab = await rect(b, '.operand', 0);
+		const a = { x: lab.cx, y: lab.cy };
+		await reset(b);
+		await b.mouseDown(a.x, a.y);
+		await b.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: a.x + 12, y: a.y + 12, button: 'left', buttons: 1 });
+		// Real drags report button 'left' on every move, which is what lets the
+		// browser extend a text selection.
+		// Sweep across the other rung's labels on the way to the drop.
+		const labels = await b.eval(`[...document.querySelectorAll('.rsvg text')].map((el) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; }).filter((p) => p.y > ${a.y})`);
+		for (const p of [...labels, target]) await b.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, button: 'left', buttons: 1 });
+		const mid = await b.eval(`document.getSelection().toString()`);
+		await b.mouseUp(target.x, target.y);
+		await sleep(150);
+		const after = await b.eval(`document.getSelection().toString()`);
+		assert.equal(mid, '', 'nothing selected mid-drag');
+		assert.equal(after, '', 'nothing selected after the drop');
+		assert.equal((await ldOps(b)).length, 1, 'the move itself still posts');
+	});
+});

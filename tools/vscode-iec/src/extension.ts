@@ -77,6 +77,9 @@ function wireTestState(context: vscode.ExtensionContext): void {
 }
 
 let client: LanguageClient | undefined;
+// One channel for the whole session: a LanguageClient makes its own when none
+// is given, and stop() does not dispose it, so each restart leaked one (#137).
+let outputChannel: vscode.OutputChannel | undefined;
 let live: LiveValues | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -309,7 +312,9 @@ async function startLanguageClient(context: vscode.ExtensionContext): Promise<vo
     command: cliPath,
     args: ["lsp"],
   };
+  outputChannel ??= vscode.window.createOutputChannel("nautilus Structured Text");
   const clientOptions: LanguageClientOptions = {
+    outputChannel,
     documentSelector: [
       { language: "iec-st" },
       { language: "iec-fbd" },
@@ -345,5 +350,8 @@ async function startLanguageClient(context: vscode.ExtensionContext): Promise<vo
 
 export function deactivate(): Thenable<void> | undefined {
   live?.dispose();
-  return client?.stop();
+  const stopped = client?.stop();
+  outputChannel?.dispose();
+  outputChannel = undefined;
+  return stopped;
 }

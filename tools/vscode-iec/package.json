@@ -178,7 +178,8 @@
       },
       {
         "command": "nautilus.connect",
-        "title": "nautilus: Connect to Controller…"
+        "title": "nautilus: Connect to Controller…",
+        "icon": "$(plug)"
       },
       {
         "command": "nautilus.setValue",
