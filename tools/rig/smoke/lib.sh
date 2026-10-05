@@ -43,6 +43,9 @@ no_naut() { export PATH=$(tr : "\n" <<<"$PATH" | grep -vx "$SMOKE_BIN" | paste -
 source "$HOME/fixtures/prep.sh"
 # Undo prep.sh's OUT_DIR default if it moved it.
 export OUT_DIR=$HOME/out/smoke
+# The frame and pace the checks ran at, for run.sh's manifest (lib/manifest.sh).
+printf 'CAP_W=%s\nCAP_H=%s\nREC_ZOOM=%s\nREC_FONT_SIZE=%s\nG_PACE=%s\n' \
+  "$CAP_W" "$CAP_H" "$REC_ZOOM" "$REC_FONT_SIZE" "${G_PACE:-human}" >"$OUT_DIR/frame.env"
 
 CHECK=${CHECK:-$(basename "$0" .sh)}
 export PROFILE=$HOME/.vscode-rec-$CHECK
