@@ -11,9 +11,14 @@
 #
 # Every paste is saved and read back, and the project must still `naut check`
 # (the select-all FBD paste: must be well-formed — see there for why not clean).
+#
+# What is selected is found in the DOM (gestures.sh: fbd_node_el,
+# mimic_eq_el, ld_node_el, sfc_step_el; empty canvas by elementFromPoint).
 set -euo pipefail
 CHECK=05-clipboard
 source "$HOME/smoke/lib.sh"
+export G_PACE=fast
+source "$HOME/fixtures/gestures.sh"   # cdp / click_el / the editors' element finders
 rm -rf "$PROFILE"
 
 ext_scaffold my-plant
@@ -29,8 +34,8 @@ key Escape; hide_sidebar
 vs_cmd "nautilus: Open as Diagram Editor" 6
 
 # ── FBD, one network: the TAL-101 LT block (wire "cold") ────────────────────
-# Measured at 1920x1200 on the full-width diagram editor.
-click_at 750 820 1
+wait_js "$_G_READY" 10 || true
+click_el "$(fbd_node_el cold)" || fail "FBD: no block cold (data-id b:w.cold) on the diagram"
 png=$(shot fbd-selected)
 key ctrl+c; sleep 1
 open_file clip.txt 2; key ctrl+v; sleep 1; key ctrl+s; sleep 1
@@ -41,7 +46,8 @@ else
 fi
 open_file target.fbd 3
 vs_cmd "nautilus: Open as Diagram Editor" 6
-click_at 1000 500 0.5; key ctrl+v; sleep 3
+wait_js "$_G_READY" 10 || true
+click_canvas "" 0.5 || true; key ctrl+v; sleep 3
 png=$(shot fbd-pasted-one)
 key ctrl+s; sleep 1.5
 if grep -q 'cold = LT(' "$PROJ/target.fbd"; then
@@ -56,10 +62,12 @@ e=$(fcheck | grep target.fbd || true)
 vs_cmd "View: Close All Editors" 1
 open_file program.fbd 3
 vs_cmd "nautilus: Open as Diagram Editor" 6
-click_at 1500 400 0.5; key ctrl+a; sleep 0.5; key ctrl+c; sleep 1
+wait_js "$_G_READY" 10 || true
+click_canvas "" 0.5 || true; key ctrl+a; sleep 0.5; key ctrl+c; sleep 1
 open_file target2.fbd 3
 vs_cmd "nautilus: Open as Diagram Editor" 6
-click_at 1000 500 0.5; key ctrl+v; sleep 3
+wait_js "$_G_READY" 10 || true
+click_canvas "" 0.5 || true; key ctrl+v; sleep 3
 key ctrl+s; sleep 1.5
 png=$(shot fbd-pasted-all)
 e=$(fcheck | grep target2.fbd || true)
@@ -96,7 +104,8 @@ vs_cmd "View: Close All Editors" 1
 
 # ── Mimic: copy / paste the tank ────────────────────────────────────────────
 open_file heated-tank.mimic.json 10
-click_at 906 360 1
+G_FILE=heated-tank.mimic.json   # mimic_eq_el reads the ids from it
+click_el "$(mimic_eq_el T101)" || fail "Mimic: no tank T101 on the canvas"
 key ctrl+c; sleep 0.5; key ctrl+v; sleep 2
 png=$(shot mimic-pasted)
 key ctrl+s; sleep 1.5
@@ -107,14 +116,15 @@ vs_cmd "View: Close All Editors" 1
 
 # ── Ladder: cut / paste an element ──────────────────────────────────────────
 # Cut the horn rung's /HornAck contact, paste it after the ackclear rung's
-# /HiTempAlm contact. Measured on the full-width ladder editor.
+# /HiTempAlm contact.
 L=$PROJ/interlocks.ld
 open_file interlocks.ld 3
 vs_cmd "nautilus: Open as Diagram Editor" 6
-click_at 228 371 1
+wait_js "$_G_READY" 10 || true
+ld_select_node horn contact HornAck || fail "Ladder: no contact HornAck on rung horn"
 png=$(shot ladder-selected)
 key ctrl+x; sleep 2
-click_at 218 571 1
+ld_select_node ackclear contact HiTempAlm || fail "Ladder: no contact HiTempAlm on rung ackclear"
 key ctrl+v; sleep 2
 png=$(shot ladder-pasted)
 key ctrl+s; sleep 1.5
@@ -134,7 +144,8 @@ n0=$(grep -cE '^\s*(INITIAL_)?STEP ' "$S")
 smoke_open "$PROJ" batch.sfc
 key Escape; hide_sidebar
 vs_cmd "nautilus: Open as Diagram Editor" 8
-click_at 510 454 1              # step Fill
+wait_js "$_G_READY" 10 || true
+click_el "$(sfc_step_el Fill)" || fail "SFC: no step Fill on the chart"
 key ctrl+c; sleep 0.5; key ctrl+v; sleep 2.5
 png=$(shot sfc-pasted)
 key ctrl+s; sleep 1.5

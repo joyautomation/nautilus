@@ -10,9 +10,15 @@
 # Save is how "the buffer reverted" is read back: every step saves and reads
 # the file, and the window title must stay on the diagram throughout (no
 # focus left behind in the text editor).
+#
+# Every target is found in the DOM: the editor-title button by its label,
+# the TAL-101 constant by the wire into IN2 of block `cold` (data-id), the
+# SFC "+ step" button by its text, empty canvas by elementFromPoint.
 set -euo pipefail
 CHECK=03-preview-undo
 source "$HOME/smoke/lib.sh"
+export G_PACE=fast
+source "$HOME/fixtures/gestures.sh"   # cdp / click_el / dclick_el / click_button
 rm -rf "$PROFILE"
 
 ext_scaffold my-plant
@@ -25,9 +31,10 @@ key Escape; hide_sidebar
 # The editor-title button (navigation@2, right of "Open as Diagram Editor"),
 # not the palette: the button is what a user clicks.
 png=$(shot text-title-buttons)
-click_at 1830 56 8
+page_click "$(title_action_el 'Open FBD Diagram Preview')" 8 || fail "no 'Open FBD Diagram Preview' button in the editor title" "$png"
 # The preview opens beside with preserveFocus: click empty canvas to focus it.
-click_at 1750 400 1
+wait_js "$_G_READY" 10 || true
+click_canvas "" 1 || true
 [[ $(title) == "FBD: program.fbd"* ]] && pass "editor-title preview button opened 'FBD: program.fbd' beside the text" "$png" \
   || { fail "preview did not open: $(title)" "$png"; exit 1; }
 png=$(shot preview)
@@ -43,8 +50,12 @@ keyin() {
 }
 
 # ── an edit through the float editor: 62.0 → 55.0 ──────────────────────────
-# The TAL-101 constant (IN2 of LT). Measured at 1920x1200, side bar hidden.
-dclick_at 1103 875 1
+# The TAL-101 constant: the chip whose wire runs into IN2 of block `cold`
+# (FbdEdge's data-id is "<from>-><to>:<pin>", the chip's data-id <from>).
+CONST_EL='(() => { const e = [...doc.querySelectorAll("[data-kind=edge]")].find(e => e.dataset.id.endsWith("->b:w.cold:IN2")); return e ? doc.querySelector(`[data-kind=chip][data-id="${CSS.escape(e.dataset.id.split("->")[0])}"]`) : null; })()'
+chip() { wv "$CONST_EL?.textContent.trim() ?? ''"; }
+chip0=$(chip)
+dclick_el "$CONST_EL" || fail "no TAL-101 constant chip (wire into cold.IN2) on the preview"
 key ctrl+a; xdotool type --delay 40 55.0; sleep 0.3; key Return; sleep 2
 png=$(shot edited)
 [[ $(const) == 62.0 ]] && pass "float-editor edit is in the buffer, not yet on disk" "$png" \
@@ -59,17 +70,13 @@ png=$(shot undone)
 keyin ctrl+s; sleep 1
 [[ $(const) == 62.0 ]] && pass "Ctrl+Z in the preview reverted the document (saved: 62.0)" "$png" \
   || fail "Ctrl+Z in the preview did not revert the document (saved: $(const))" "$png"
-# The diagram re-rendered from the text: the constant's chip is pixel-for-
-# pixel what it was before the edit.
-d=$(python3 - "$OUT_DIR/$CHECK-preview.png" "$OUT_DIR/$png.png" <<'PY'
-import sys
-from PIL import Image, ImageChops
-a, b = (Image.open(p).convert("RGB").crop((1070, 855, 1140, 895)) for p in sys.argv[1:])
-print(sum(1 for p in ImageChops.difference(a, b).getdata() if max(p) > 40))
-PY
-)
-(( d < 30 )) && pass "diagram re-rendered to 62.0 after undo (chip matches the pre-edit frame)" "$png" \
-  || fail "diagram did not re-render after undo ($d px differ from the pre-edit chip)" "$png"
+# The diagram re-rendered from the text: the constant's chip reads what it
+# read before the edit.
+chip_is() { [[ $(chip) == "$1" ]]; }
+wait_for 5 chip_is "$chip0" || true
+c=$(chip)
+[[ $chip0 == 62.0 && $c == "$chip0" ]] && pass "diagram re-rendered to 62.0 after undo (the chip reads '$c' again, as before the edit)" "$png" \
+  || fail "diagram did not re-render after undo (the chip reads '$c'; before the edit '$chip0')" "$png"
 
 keyin ctrl+shift+z; sleep 1.5; keyin ctrl+s; sleep 1
 [[ $(const) == 55.0 ]] && pass "Ctrl+Shift+Z redo (saved: 55.0)" || fail "Ctrl+Shift+Z did not redo (saved: $(const))"
@@ -84,16 +91,17 @@ on_diagram && pass "focus stayed on the diagram through every undo/redo/save" ||
 # program.fbd closes, VS Code closes the TextDocument and the preview looks
 # it up in workspace.textDocuments — so check whether anything still lands.
 xdotool key --clearmodifiers ctrl+1; sleep 0.6; xdotool key --clearmodifiers ctrl+w; sleep 1.5
-click_at 1750 400 0.6        # empty canvas, focus in the diagram
+click_canvas "" 0.6 || true  # empty canvas, focus in the diagram
 keyin ctrl+z; sleep 1.5
 png=$(shot undo-no-text-editor)
 keyin ctrl+s; sleep 1
 [[ $(const) == 62.0 ]] && pass "text editor closed: Ctrl+Z in the preview still reverted the document" "$png" \
   || fail "text editor closed: Ctrl+Z in the preview did nothing (no editor beside, saved $(const)) — key dropped: fbdPreview.ts:564 finds the doc in workspace.textDocuments, which no longer has it" "$png"
-# A float-editor edit in the same state (the constant, now at the left of a
-# full-width preview).
+# A float-editor edit in the same state (the constant, now in a full-width
+# preview).
 before=$(const)
-dclick_at 143 875 1; key ctrl+a; xdotool type --delay 40 50.0; sleep 0.3; key Return; sleep 2
+dclick_el "$CONST_EL" || fail "no TAL-101 constant chip on the full-width preview"
+key ctrl+a; xdotool type --delay 40 50.0; sleep 0.3; key Return; sleep 2
 keyin ctrl+s; sleep 1
 png=$(shot edit-no-text-editor)
 [[ $(const) == 50.0 ]] && pass "text editor closed: a float-editor edit still reached the document" "$png" \
@@ -108,14 +116,19 @@ key Escape; hide_sidebar
 vs_cmd "nautilus: Open as Diagram Editor" 8
 # A document edit first, so a Ctrl+Z that wrongly reached the document
 # would have something to take away: add step "Extra".
-click_at 73 132 1; xdotool type --delay 40 Extra; key Return; sleep 2
+add_step_form() {
+  click_button "+ step" || return 1
+  wait_js 'doc.activeElement?.matches(".addform input")' 4 || g_err "the Add step form did not take focus"
+}
+add_step_form || fail "SFC: no '+ step' button"
+xdotool type --delay 40 Extra; key Return; sleep 2
 # Then the field: "Alpha", replaced by "Beta", Ctrl+Z → "Alpha".
-click_at 73 132 1
+add_step_form || true
 xdotool type --delay 40 Alpha; sleep 0.4; key ctrl+a; xdotool type --delay 40 Beta; sleep 0.4
 shot field-beta >/dev/null
 key ctrl+z; sleep 1
 png=$(shot field-undo)
-info "Add-step name field after Ctrl+Z: 'Alpha' expected (was 'Beta')" "$png"
+info "Add-step name field after Ctrl+Z: 'Alpha' expected (was 'Beta'); the field reads '$(wv 'doc.querySelector(".addform input")?.value ?? ""')'" "$png"
 [[ $(title) == "● batch.sfc"* ]] && pass "document still dirty after Ctrl+Z in the field (the Extra edit survived)" "$png" \
   || fail "document no longer dirty after Ctrl+Z in the field: $(title)" "$png"
 key Escape; key ctrl+s; sleep 1.5
@@ -125,7 +138,7 @@ else
   fail "Ctrl+Z in the field reached the document: $(grep -c 'STEP Extra' "$S") Extra"
 fi
 # And on the canvas, Ctrl+Z IS the document's (the custom editor path).
-click_at 1500 1100 0.6
+click_canvas "" 0.6 || true
 key ctrl+z; sleep 1.5; key ctrl+s; sleep 1.5
 png=$(shot canvas-undo)
 ! grep -q "STEP Extra" "$S" && pass "Ctrl+Z on the SFC canvas undid the add-step in the document" "$png" \

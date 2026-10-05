@@ -3,9 +3,14 @@
 # pushed in by run.sh as ~/smoke-assets/) opens in the ladder diagram editor
 # READ-ONLY: the "read-only · Logix export" pill, the live pill, and no
 # element palette. Editing gestures change nothing.
+#
+# The palette, the pills and the contact the gestures aim at are read from
+# the webview's DOM.
 set -euo pipefail
 CHECK=10-l5x
 source "$HOME/smoke/lib.sh"
+export G_PACE=fast
+source "$HOME/fixtures/gestures.sh"   # cdp eval / click_el / dclick_el
 rm -rf "$PROFILE"
 
 SRC=$HOME/smoke-assets/DemoProgram.L5X
@@ -20,18 +25,21 @@ vs_cmd "nautilus: Open as Diagram Editor" 8
 png=$(shot diagram)
 [[ $(title) == "DemoProgram.L5X"* ]] && pass "L5X opens in the ladder diagram editor (rungs render)" "$png" \
   || fail "L5X diagram did not open: $(title)" "$png"
-# The palette row (⊣⊢ ⊣/⊢ FN( ) … + rung) sits at y≈132 on an .ld; here the
-# rungs start there instead — so count button-border pixels across the row's
-# left third, where the .ld palette's buttons are.
-row=$(px_count "$png" 30 118 700 146 'r + g + b > 330')
-(( row < 400 )) && pass "no element palette on the L5X diagram ($row lit px in the palette row)" "$png" \
-  || fail "an element palette is showing on the read-only L5X ($row px)" "$png"
-info "header pills: 'read-only · Logix export' beside the title, live/offline at the right" "$png"
+# The element palette (⊣⊢ ⊣/⊢ FN( ) … + rung) is LadderView's .palette row;
+# a read-only ladder must not render it at all.
+wait_js 'doc.querySelector("svg.rsvg")' 10 || true
+row=$(wv 'String(doc.querySelectorAll(".palette button").length)')
+[[ $row == 0 ]] && pass "no element palette on the L5X diagram (0 palette buttons in the DOM)" "$png" \
+  || fail "an element palette is showing on the read-only L5X (${row:-?} palette buttons)" "$png"
+pills=$(wv '[...doc.querySelectorAll(".bar .ropill, .bar button.livepill")].map((e) => e.textContent.trim()).join(" · ")')
+info "header pills: 'read-only · Logix export' beside the title, live/offline at the right (DOM: $pills)" "$png"
 
 # Gestures that would edit an .ld: select a contact + Delete, dblclick, Ctrl+Z.
-click_at 120 166 0.6           # the StartPB contact, rung 0
+# The StartPB contact (rung 0), by its operand.
+START_PB='(() => { const g = [...doc.querySelectorAll("svg.rsvg g.node")].find((g) => g.querySelector("text.operand")?.textContent.trim() === "StartPB"); return g?.querySelector("rect.hit") ?? g; })()'
+click_el "$START_PB" || fail "no StartPB contact on the L5X diagram"
 key Delete; sleep 1
-dclick_at 120 166 1; key Escape
+dclick_el "$START_PB" || true; key Escape
 key ctrl+z; sleep 1
 png=$(shot after-gestures)
 if [[ $(sum "$F") == "$before" && $(title) != "●"* ]]; then

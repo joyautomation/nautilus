@@ -1681,11 +1681,12 @@ print(round((d['x'])*k) + $fl, round((d['y'])*k) + $ft, round(d['w']*k), round(d
 }
 
 # page_click_button <label regex (JS RegExp source, case-sensitive)> —
-# find a <button>/<a class=monaco-button> in the workbench page whose
-# trimmed textContent matches, and click its centre.
+# find a <button>/<a class=monaco-button> in the workbench page (a custom
+# modal, or a notification toast / centre row, whose buttons are
+# a.monaco-button) whose trimmed textContent matches, and click its centre.
 page_click_button() {
   local label=$1 settle=${2:-1.5} box
-  box=$(page_el_box "[...document.querySelectorAll('.monaco-dialog-box button, .monaco-dialog-box a.monaco-button, .notification-list-item button')].find(b => /$label/.test(b.textContent.trim()))") \
+  box=$(page_el_box "[...document.querySelectorAll('.monaco-dialog-box button, .monaco-dialog-box a.monaco-button, .notification-list-item button, .notification-list-item a.monaco-button')].find(b => /$label/.test(b.textContent.trim()) && b.getBoundingClientRect().width > 0)") \
     || { g_err "no dialog/notification button matching /$label/"; return 1; }
   local x y w h
   read -r x y w h <<<"$box"
