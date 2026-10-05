@@ -92,10 +92,22 @@ func TestReferencesLocalSingleFile(t *testing.T) {
 	refSameLines(t, refLines(t, s.refsAt(uri, 4, 1, false), "err", texts), "blocks.st:5")
 	// Beta's err, asked from its declaration.
 	refSameLines(t, refLines(t, s.refsAt(uri, 9, 5, true), "err", texts), "blocks.st:10", "blocks.st:12")
-	// A keyword and whitespace answer null, not an error.
+	// A keyword answers null, not an error.
 	if got := s.refsAt(uri, 1, 1, true); got != nil {
 		t.Fatalf("VAR: %+v", got)
 	}
+}
+
+// A PROGRAM's local is not visible in an FB's body: a same-named but
+// undeclared use inside the FB is not one of its references.
+func TestReferencesProgramLocalNotInFBBody(t *testing.T) {
+	const src = "FUNCTION_BLOCK F\nVAR\n  x : INT;\nEND_VAR\nx := y;\nEND_FUNCTION_BLOCK\n\n" +
+		"PROGRAM P\nVAR\n  y : INT;\nEND_VAR\ny := 1;\nEND_PROGRAM\n"
+	s := startSession(t)
+	s.recvResponse(s.send("initialize", map[string]any{}, true))
+	const uri = "file:///scoped.st"
+	s.refOpen(uri, src)
+	refSameLines(t, refLines(t, s.refsAt(uri, 11, 0, true), "y", map[string]string{uri: src}), "scoped.st:10", "scoped.st:12")
 }
 
 // refProject lays out a project directory and returns its files' paths.
@@ -369,4 +381,34 @@ func TestReferencesInDiagramsReportDiagramLines(t *testing.T) {
 	refSameLines(t, refLines(t, s.refsAt(ldURI, 8, 6, true), "Stop", texts),
 		"perms.ld:5", "perms.ld:9", "nautilus.yaml:15")
 	refSameLines(t, refLines(t, s.refsAt(ldURI, 8, 6, false), "Stop", texts), "perms.ld:9")
+}
+
+// A member of a tag crosses files with the tag: Tank.Level in every
+// program that binds Tank, never Tank.High or a local Level; an indexed
+// base (Plt[i].Valid) is the same member whatever the index.
+func TestReferencesTagMemberAcrossFiles(t *testing.T) {
+	const types = "TYPE\n  Tank_Type : STRUCT\n    Level : REAL;\n    High : BOOL;\n  END_STRUCT;\n  Hdr : STRUCT\n    Valid : BOOL;\n  END_STRUCT;\nEND_TYPE\n"
+	const a = "PROGRAM A\nVAR_EXTERNAL\n    Tank : Tank_Type;\nEND_VAR\nVAR\n    Level : REAL;\n    Plt : ARRAY[1..3] OF Hdr;\n    i : INT;\nEND_VAR\n" +
+		"Level := Tank.Level;\nTank.High := Tank.Level > 90.0;\nPlt[2].Valid := Plt[i].Valid;\nEND_PROGRAM\n"
+	const b = "PROGRAM B\nVAR_EXTERNAL\n    Tank : Tank_Type;\nEND_VAR\nTank.Level := Tank.Level + 1.0;\nEND_PROGRAM\n"
+	files := map[string]string{
+		"nautilus.yaml": "name: m\ntasks:\n  - program: a.st\n    scan: 100ms\n  - name: b\n    program: b.st\n    scan: 100ms\n",
+		"types.st":      types,
+		"a.st":          a,
+		"b.st":          b,
+	}
+	_, paths := refProject(t, files)
+	texts := refTexts(files, paths)
+	s := startSession(t)
+	s.recvResponse(s.send("initialize", map[string]any{}, true))
+	uri := pathToURI(paths["a.st"])
+	s.refOpen(uri, a)
+
+	// "Level := Tank.Level;" — the member, at column 14.
+	refSameLines(t, refLines(t, s.refsAt(uri, 9, 15, true), "Level", texts),
+		"a.st:10", "a.st:11", "b.st:5", "b.st:5")
+	// The local Level: declaration and the one plain use.
+	refSameLines(t, refLines(t, s.refsAt(uri, 9, 0, true), "Level", texts), "a.st:6", "a.st:10")
+	// Plt[2].Valid and Plt[i].Valid are the same member.
+	refSameLines(t, refLines(t, s.refsAt(uri, 11, 8, true), "Valid", texts), "a.st:12", "a.st:12")
 }

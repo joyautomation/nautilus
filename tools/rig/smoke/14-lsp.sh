@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 14 — language intelligence (INVENTORY X18, X20, X40), in a real editor:
+# 14 — language intelligence (INVENTORY X18, X20, X40, X41), in a real editor:
 #
 #   X18  `naut lsp` on plant.st: hover (a manifest tag, a VAR_EXTERNAL that
 #        is not in the manifest, a local FB instance), completion (a partial
@@ -20,6 +20,11 @@
 #        `Full, PT := ` moves it to PT. Read from the widget's DOM
 #        (.parameter-hints-widget, its .parameter.active span); Esc and
 #        undo leave the buffer clean.
+#   X41  find all references (Shift+F12 → the references peek): on the tag
+#        Level, every program that binds it and the manifest — per file, the
+#        same count as a host-side `grep -ow Level` of that file; on the
+#        PROGRAM's local settle, only the PROGRAM's lines — not those of the
+#        FB above it that declares its own settle.
 #   X20  the YAML schemas (package.json yamlValidation → Red Hat YAML): a
 #        bogus key under a task / a test step is flagged; completion in a new
 #        task offers program / scan / name, in a new test step given /
@@ -33,8 +38,10 @@
 # every buffer is clean and the project is byte-identical to its commit.
 #
 # tank-batch's plant.st has VAR_EXTERNAL tags but no FB instance, so the
-# check gives it one (settle : TON, read as settle.Q) and a batch_test.yaml
-# with a step, committed on top of the fixture before VS Code opens.
+# check gives it one (settle : TON, read as settle.Q), an FB ahead of
+# the PROGRAM with its own local settle (for X41's scoping row), and a
+# batch_test.yaml with a step, committed on top of the fixture before VS
+# Code opens.
 set -euo pipefail
 CHECK=14-lsp
 source "$HOME/smoke/lib.sh"
@@ -48,6 +55,8 @@ import sys
 p = sys.argv[1]; s = open(p).read()
 s = s.replace("END_VAR\n", "END_VAR\nVAR\n    settle : TON;\n    Full   : BOOL;\nEND_VAR\n", 1)
 s = s.replace("END_PROGRAM", "settle(IN := Level > 90.0, PT := T#2s);\nFull := settle.Q;\nEND_PROGRAM")
+s = ("FUNCTION_BLOCK Debounce\nVAR_INPUT\n  Raw : BOOL;\nEND_VAR\nVAR_OUTPUT\n  Clean : BOOL;\nEND_VAR\n"
+      "VAR\n  settle : TON;\nEND_VAR\nsettle(IN := Raw, PT := T#1s);\nClean := settle.Q;\nEND_FUNCTION_BLOCK\n\n") + s
 open(p, "w").write(s)
 PY
 cat >"$PROJ/batch_test.yaml" <<'YAML'
@@ -239,6 +248,58 @@ got=$(cursor_line); png=$(shot definition-local)
 if [[ $got == "$want" ]]; then
   pass "X18 F12 on local settle (Ln $from) lands on its VAR line, Ln $got" "$png"
 else fail "X18 F12 on local settle (Ln $from): cursor on Ln ${got:-?}, declaration is Ln $want" "$png"; fi
+
+# ══ X41 find all references ════════════════════════════════════════════════
+# refs_files — the references peek's file rows, "name=count" per line.
+refs_files() {
+  wb '[...document.querySelectorAll(".reference-zone-widget .reference-file")].map(e => (e.querySelector(".label-name")?.innerText || e.innerText.split("\n")[0]).trim() + "=" + (e.querySelector(".monaco-count-badge")?.innerText || "?").trim()).join("\n")'
+}
+# refs_lines — the peek tree's rows (a reference row's text is its line), one per line.
+refs_lines() {
+  wb '[...document.querySelectorAll(".reference-zone-widget .monaco-list-row")].map(e => e.innerText.replace(/\s+/g, " ").trim()).join("\n")'
+}
+# refs_title — the peek's title bar: "plant.st ~/tank-batch - References (N)".
+refs_title() { wb '(document.querySelector(".reference-zone-widget .peekview-title")?.innerText || "").replace(/\s+/g, " ").trim()'; }
+# The tree has a row per file only when the results span files; a
+# single-file result lists its reference rows alone.
+refs_open() { [[ $(refs_title) == *"References ("* ]]; }
+# peek_refs — Shift+F12 (Go to References) at the cursor, until the peek
+# opens (a keystroke can land before the editor has focus back, as
+# show_hover retries Ctrl+K Ctrl+I).
+peek_refs() {
+  local i
+  for i in 1 2 3 4; do
+    xdotool key --clearmodifiers Escape; sleep 0.3
+    xdotool key --clearmodifiers shift+F12
+    wait_for 6 refs_open && break
+  done
+  sleep 1
+}
+# grep_counts <word> <file>… — "file=N" per file with N > 0: whole-word,
+# case-sensitive occurrences, the way a person would count them by hand.
+grep_counts() { local w=$1 f n; shift; for f in "$@"; do n=$(grep -ow -- "$w" "$PROJ/$f" | wc -l); (( n > 0 )) && echo "$f=$n"; done; }
+
+goto_word "$F" '^    Level := LIMIT\(0\.0, Level \+ 6' Level
+peek_refs
+got=$(refs_files | sort); t=$(refs_title); png=$(shot references-tag)
+want=$(grep_counts Level plant.st batch.sfc nautilus.yaml | sort)
+n=$(awk -F= '{s += $2} END {print s + 0}' <<<"$want")
+nf=$(grep -c = <<<"$got" || true)
+if [[ -n $got && $got == "$want" && $t == *"References ($n)"* ]] && (( nf >= 2 )); then
+  pass "X41 Shift+F12 on tag Level: \"$t\", $nf files, each file's count = grep -ow Level — $(oneline <<<"$got")" "$png"
+else fail "X41 Shift+F12 on tag Level: the peek (\"${t:-no peek}\") lists $(oneline <<<"${got:-<no file rows>}"); grep -ow counts $(oneline <<<"$want") = $n" "$png"; fi
+xdotool key --clearmodifiers Escape; sleep 0.5
+
+goto_word "$F" '^Full := settle\.Q' settle
+peek_refs
+got=$(refs_files); rows=$(refs_lines); t=$(refs_title); png=$(shot references-local)
+n=$(grep -c . <<<"$rows" || true)
+inprog=$(awk '/^PROGRAM /,/^END_PROGRAM/' "$F" | grep -ow settle | wc -l)
+infile=$(grep -ow settle "$F" | wc -l)
+if [[ $t == "plant.st"*"References ($inprog)"* && -z $got && $n == "$inprog" ]] && ! grep -q 'Raw' <<<"$rows" && (( infile > inprog )); then
+  pass "X41 Shift+F12 on local settle: \"$t\", every one in PROGRAM Plant (grep there: $inprog), none of the FB Debounce's own settle ($infile in the file) — $(oneline <<<"$rows")" "$png"
+else fail "X41 Shift+F12 on local settle: the peek (\"${t:-no peek}\") lists $n rows [$(oneline <<<"$rows")]${got:+ in files $(oneline <<<"$got")}; want $inprog, all in PROGRAM Plant, of the file's $infile" "$png"; fi
+xdotool key --clearmodifiers Escape; sleep 0.5
 
 # ══ X18 diagnostics ════════════════════════════════════════════════════════
 e0=$(errors); s0=$(squiggles)

@@ -390,16 +390,14 @@ func (f *refFile) find(t refTarget) []refHit {
 			if c.member || c.formal {
 				continue
 			}
-			if got := f.an.lookup(t.root.Name, line); got != nil && sameSymbol(got, t.root) {
+			if f.resolves(t.root.Name, line, t.root) {
 				hits = append(hits, refHit{r: r, decl: hasDecl && r.Start == decl})
 			}
 			continue
 		}
 		if c.formal {
-			if len(t.path) == 1 {
-				if got := f.an.lookup(c.callee, line); got != nil && sameSymbol(got, t.root) {
-					hits = append(hits, refHit{r: r})
-				}
+			if len(t.path) == 1 && f.resolves(c.callee, line, t.root) {
+				hits = append(hits, refHit{r: r})
 			}
 			continue
 		}
@@ -420,11 +418,25 @@ func (f *refFile) find(t refTarget) []refHit {
 		if !same {
 			continue
 		}
-		if got := f.an.lookup(base, line); got != nil && sameSymbol(got, t.root) {
+		if f.resolves(base, line, t.root) {
 			hits = append(hits, refHit{r: r})
 		}
 	}
 	return hits
+}
+
+// resolves reports whether name, written on line, means sym. lookup()
+// falls back to a symbol of any POU when the enclosing one declares no
+// such name — right for hover on a half-typed body, wrong here: a
+// variable is visible only inside the POU that declares it (a PROGRAM's
+// locals and tags are not visible in an FB's body, which has to bind a tag
+// in its own VAR_EXTERNAL). POU and type names are file scope.
+func (f *refFile) resolves(name string, line int, sym *Symbol) bool {
+	got := f.an.lookup(name, line)
+	if got == nil || !sameSymbol(got, sym) {
+		return false
+	}
+	return isPOUSymbol(sym) || strings.EqualFold(f.an.containerAt(line), sym.Container)
 }
 
 // identCtx is the lexical context of one identifier token.
