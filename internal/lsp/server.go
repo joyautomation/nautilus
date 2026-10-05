@@ -84,6 +84,7 @@ func (s *Server) dispatch(m *message) {
 				TextDocumentSync:      1, // Full: client resends the whole doc per change
 				HoverProvider:         true,
 				DefinitionProvider:    true,
+				ReferencesProvider:    true,
 				CompletionProvider:    &CompletionOpts{TriggerCharacters: []string{"."}},
 				SignatureHelpProvider: signatureHelpOptions(),
 				RenameProvider:        &RenameOpts{PrepareProvider: true},
@@ -119,6 +120,8 @@ func (s *Server) dispatch(m *message) {
 		}
 	case "textDocument/definition":
 		s.handleDefinition(m)
+	case "textDocument/references":
+		s.handleReferences(m)
 	case "textDocument/hover":
 		s.handleHover(m)
 	case "textDocument/completion":
