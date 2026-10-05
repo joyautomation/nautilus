@@ -24,15 +24,18 @@ tools/rig/
                      snap, rec_start, clip_start, start_controller,
                      cleanup_capture, ...
   lib/clips-index.sh the per-run review index (clips.html / clips.md), host side
+  lib/manifest.sh    the run's manifest.json (schema 1), host side
   verbs/prep.sh      per-run setup inside the container (frame, ext_scaffold,
                      ext_open, diagram, the CDP `code` wrapper)
   verbs/gestures.sh  the verbs: semantic targets ("step Fill", "pin IN1 of t1")
                      resolved through cdp.js, input through xdotool
   verbs/cdp.js       read-only DevTools queries into the webviews and workbench
   selftest.sh        every verb, once, on a fresh scaffold
+  demo.sh            selftest.sh filmed at episode pace and frame → out/demo/
   smoke/             the extension smoke suite: run.sh, build.sh, lib.sh,
                      NN-*.sh checks, and fixtures/ (their projects)
-  out/               results (gitignored): build/, smoke/, selftest/
+  out/               results (gitignored): build/, smoke/, selftest/,
+                     manifest.json, demo/
 ```
 
 ## Running it
@@ -47,6 +50,7 @@ tools/rig/smoke/run.sh                     # build, then every NN-*.sh check (ab
 tools/rig/smoke/run.sh 03-preview-undo     # one check, merged into the last results
 tools/rig/selftest.sh                      # build, then every verb (human pace)
 G_PACE=fast tools/rig/selftest.sh          # pointer teleports; what the nightly runs
+tools/rig/demo.sh                          # the demo clips: human pace, 2560x1440 (~10 min)
 
 NAUT=… VSIX=… tools/rig/smoke/run.sh       # builds you already have
 NAUTILUS_REF=v0.12.0-rc1 tools/rig/smoke/run.sh   # build a ref, in ../nautilus-smoke
@@ -80,6 +84,42 @@ parks VS Code, not the window itself (VS Code relaunches mid-check, and
 context menus and tooltips are separate X windows), 15 fps, pointer drawn,
 fragmented mp4 so a clip survives a check killed by its timeout.
 `RIG_CLIPS=0` turns them off.
+
+**Manifest.** Each run also writes `out/manifest.json` (`lib/manifest.sh`;
+schema 1, the contract in `randd/handoffs/TEST-PLAN-PROOF.md`), which the
+docs site's proof pages read from the run's artifact. `run` says what was
+tested and how it was filmed: nautilus sha, `naut version`, the VSIX's
+version, the container's VS Code, UTC date, pace, frame (`CAP_W`×`CAP_H`,
+`REC_ZOOM`, `REC_FONT_SIZE`), `runId` (`$GITHUB_RUN_ID` or `local`) and host.
+`items` has one entry per smoke check (`kind` smoke: verdict = worst row,
+FAIL > WARN > PASS, the rows, clip, PNGs, `durationS`) and one per self-test
+verb (`kind` verb: `n`, verdict, detail, clip, PNG, `durationS`, `editor`
+from the verb's prefix). Paths are relative to the manifest. Smoke and
+selftest into the same `RIG_OUT` (the nightly) share one manifest; each run
+rebuilds it from `smoke/` and `selftest/` on disk and leaves out a part
+from another build (a different sha) or another set. `RIG_SET=nightly|demo`
+names the set (default `nightly`); the frame and pace are what the container
+actually used (each part writes `frame.env`, then `run.json`).
+
+### Demo clips
+
+`demo.sh` is the verb self-test filmed for people: every verb at
+`G_PACE=human` in the series frame (2560×1440, `REC_ZOOM=2`,
+`REC_FONT_SIZE=14`, the frame the ex01 beats are shot in), one clip each.
+These are the clips the docs site's proof pages play; the nightly's
+fast-pace clips are the fallback. It runs `selftest.sh` with those settings
+and `RIG_SET=demo`, into `out/demo/` (`RIG_OUT` moves `out/`, so
+`RIG_OUT=/x` writes `/x/demo/`): `demo/selftest/` as the self-test writes
+it, and `demo/manifest.json` (set `demo`, pace `human`). The container's
+display is sized from `CAP_W`/`CAP_H` (Xvfb is the frame plus 40 px each
+way, `lib/container.sh`), so the big frame needs nothing else. Takes about 10
+minutes. Watch a few clips before trusting a new build's set: a verb that
+passes can still look wrong.
+
+```sh
+tools/rig/demo.sh                                   # build THIS checkout, film
+NAUT=… VSIX=… RIG_NAME=nautilus-demo-$(hostname -s) tools/rig/demo.sh
+```
 
 ### What goes into the container
 

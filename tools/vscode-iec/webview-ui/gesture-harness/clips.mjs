@@ -9,13 +9,21 @@
 // timeline (a screencast only emits a frame when something repaints; still
 // stretches over 1 s are shortened to 1 s) and piped to ffmpeg →
 // <dir>/<suite>/<NN>-<slug>.mp4 (libx264, yuv420p).
-// <dir>/index.md and <dir>/index.html list every clip with PASS/FAIL.
+// <dir>/index.md and <dir>/index.html list every clip with PASS/FAIL, and
+// <dir>/manifest.json describes the same for machines (schema 1, set
+// "gestures" — the docs site's proof pages read it; contract in
+// randd/handoffs/TEST-PLAN-PROOF.md): run {sha, date, runId, host} from
+// GITHUB_SHA / GITHUB_RUN_ID (else `git rev-parse HEAD`, "local") and one
+// item per test {kind "gesture", id "<suite>/<NN-slug>", suite, test,
+// verdict pass|fail, clip "<suite>/<NN-slug>.mp4" | null, durationS}.
 // Zero npm deps; needs `ffmpeg` on PATH only when recording.
 
 import { before, after, beforeEach, afterEach } from 'node:test';
 import { spawn, execSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync, renameSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { hostname } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { Browser } from './cdp.mjs';
 
 const FPS = 25;
@@ -43,6 +51,7 @@ export function recordClips(suite) {
 	let n = 0;
 	let frames = null; // [{ t, data: Buffer }] for the running test
 	const results = [];
+	const started = new Date().toISOString().replace(/\.\d+Z$/, 'Z');
 
 	Browser.recorder = {
 		async attach(b) {
@@ -91,22 +100,24 @@ export function recordClips(suite) {
 	afterEach(async (t) => {
 		const got = frames;
 		frames = null;
-		const file = `${String(++n).padStart(2, '0')}-${slugify(t.name)}.mp4`;
+		const id = `${String(++n).padStart(2, '0')}-${slugify(t.name)}`;
+		const file = `${id}.mp4`;
 		let clip = null;
+		let durationS = null;
 		try {
 			if (got.length) {
-				await encode(got, join(dir, file));
+				durationS = await encode(got, join(dir, file));
 				clip = file;
 			}
 		} catch (e) {
 			// A broken clip must not turn a passing test red.
 			console.error(`[clips] ${file}: ${e.message}`);
 		}
-		results.push({ n, name: t.name, passed: t.passed, clip });
+		results.push({ n, id, name: t.name, passed: t.passed, clip, durationS });
 	});
 
 	after(() => {
-		writeJson(join(dir, 'results.json'), { suite, results });
+		writeJson(join(dir, 'results.json'), { suite, started, results });
 		writeIndex(root);
 	});
 }
@@ -122,6 +133,7 @@ function encode(raw, out) {
 	}
 	const t0 = 0;
 	const end = frames[frames.length - 1].t + TAIL_MS;
+	const ticks = Math.floor((end - t0) / step) + 1;
 	const ff = spawn(
 		'ffmpeg',
 		[
@@ -137,7 +149,9 @@ function encode(raw, out) {
 	ff.stderr.on('data', (d) => (err = (err + d).slice(-2000)));
 	const done = new Promise((res, rej) => {
 		ff.on('error', rej);
-		ff.on('close', (code) => (code === 0 ? res() : rej(new Error(`ffmpeg exited ${code}: ${err.trim()}`))));
+		ff.on('close', (code) =>
+			code === 0 ? res(Math.round((ticks / FPS) * 10) / 10) : rej(new Error(`ffmpeg exited ${code}: ${err.trim()}`))
+		);
 	});
 	ff.stdin.on('error', () => {}); // surfaced through `done`
 	(async () => {
@@ -159,9 +173,9 @@ function writeJson(path, value) {
 
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
-/** Rebuild <root>/index.md and index.html from every suite's results.json —
- * each test file runs in its own process, so whichever finishes last writes
- * the complete index. */
+/** Rebuild <root>/index.md, index.html and manifest.json from every suite's
+ * results.json — each test file runs in its own process, so whichever
+ * finishes last writes the complete index. */
 function writeIndex(root) {
 	const suites = readdirSync(root, { withFileTypes: true })
 		.filter((d) => d.isDirectory() && existsSync(join(root, d.name, 'results.json')))
@@ -195,4 +209,46 @@ function writeIndex(root) {
 	}
 	writeFileSync(join(root, 'index.md'), md.join('\n'));
 	writeFileSync(join(root, 'index.html'), html.join('\n'));
+	writeManifest(root, suites);
+}
+
+function gitSha() {
+	try {
+		return execSync('git rev-parse HEAD', { cwd: dirname(fileURLToPath(import.meta.url)), stdio: ['ignore', 'pipe', 'ignore'] })
+			.toString()
+			.trim();
+	} catch {
+		return null;
+	}
+}
+
+/** <root>/manifest.json: schema 1, set "gestures" (see the header). */
+function writeManifest(root, suites) {
+	const starts = suites.map((s) => s.started).filter(Boolean).sort();
+	const items = [];
+	for (const s of suites) {
+		for (const r of s.results) {
+			const id = r.id ?? `${String(r.n).padStart(2, '0')}-${slugify(r.name)}`;
+			items.push({
+				kind: 'gesture',
+				id: `${s.suite}/${id}`,
+				suite: s.suite,
+				test: r.name,
+				verdict: r.passed ? 'pass' : 'fail',
+				clip: r.clip ? `${s.suite}/${r.clip}` : null,
+				durationS: r.durationS ?? null
+			});
+		}
+	}
+	writeJson(join(root, 'manifest.json'), {
+		schema: 1,
+		set: 'gestures',
+		run: {
+			sha: process.env.GITHUB_SHA || gitSha(),
+			date: starts[0] ?? new Date().toISOString().replace(/\.\d+Z$/, 'Z'),
+			runId: process.env.GITHUB_RUN_ID || 'local',
+			host: hostname().split('.')[0]
+		},
+		items
+	});
 }

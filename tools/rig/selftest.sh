@@ -21,6 +21,13 @@
 #   verbs-NN-<verb>.mp4    the verb as it happened (RIG_CLIPS=0: no clips)
 #   clips.html, clips.md   the review index: verb · verdict · clip · PNG
 #   verbs-files/           the edited files, as saved, and `naut check` on them
+#   ../manifest.json       the run's manifest (lib/manifest.sh), shared with a
+#                          smoke/run.sh run into the same RIG_OUT; RIG_SET=
+#                          nightly|demo names the set (default nightly)
+#
+# The frame: CAP_W/CAP_H/REC_ZOOM/REC_FONT_SIZE, when set, go through to the
+# container (and size its display, lib/container.sh); unset, prep.sh's
+# 1600x1000 at zoom 2.5. demo.sh runs this at the series frame, human pace.
 #
 # Exit status: the number of FAIL rows (capped at 100); 2 if it never got as
 # far as a table.
@@ -38,13 +45,19 @@ if [[ -z ${RIG_IN_CONTAINER:-} ]]; then
   export RIG_NAME=${RIG_NAME:-nautilus-verbs-rig}
   source "$RIG_DIR/lib/container.sh"
   source "$RIG_DIR/lib/clips-index.sh"
+  source "$RIG_DIR/lib/manifest.sh"
   OUT=${RIG_OUT:-$RIG_DIR/out}/selftest
+  STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
   if [[ -z ${NAUT:-} || -z ${VSIX:-} ]]; then
     echo "▸ building the candidate (NAUT/VSIX not given)"
     eval "$("$RIG_DIR/smoke/build.sh")" || exit 2
   fi
   [[ -x $NAUT && -f $VSIX ]] || { echo "need NAUT=<naut binary> and VSIX=<vscode-iec.vsix>" >&2; exit 2; }
+  export NAUT VSIX NAUTILUS_SHA=${NAUTILUS_SHA:-$(cat "$(dirname "$NAUT")/SHA" 2>/dev/null || echo unknown)}
+  # The frame, passed in only when the caller set it (prep.sh has defaults).
+  FRAME=""
+  for v in CAP_W CAP_H REC_ZOOM REC_FONT_SIZE; do [[ -n ${!v:-} ]] && FRAME+="$v=${!v} "; done
 
   echo "▸ $RIG_NAME: fresh container"
   trap '[[ -n ${RIG_KEEP:-} ]] || rig_down' EXIT
@@ -63,10 +76,10 @@ if [[ -z ${RIG_IN_CONTAINER:-} ]]; then
   echo "▸ installing $(basename "$VSIX")"
   rig_run "code --install-extension /tmp/ext.vsix --force 2>&1 | tail -1"
 
-  echo "▸ self-test (G_PACE=${G_PACE:-human})"
+  echo "▸ self-test (G_PACE=${G_PACE:-human}${FRAME:+ $FRAME})"
   # NB: nothing in this command line may contain "vscode-rec" — lib.sh's
   # launch_vscode pkills by that string and would kill this shell.
-  rig_run "rm -rf ~/out; mkdir -p ~/out && cd ~ && DISPLAY=$RIG_DISPLAY RIG_IN_CONTAINER=1 RIG_CLIPS=${RIG_CLIPS:-1} G_PACE=${G_PACE:-human} timeout 3600 bash ~/selftest.sh" \
+  rig_run "rm -rf ~/out; mkdir -p ~/out && cd ~ && DISPLAY=$RIG_DISPLAY $FRAME RIG_IN_CONTAINER=1 RIG_CLIPS=${RIG_CLIPS:-1} G_PACE=${G_PACE:-human} timeout 3600 bash ~/selftest.sh" \
     || echo "  (selftest exited non-zero)"
 
   PULL=$(mktemp -d)
@@ -75,6 +88,8 @@ if [[ -z ${RIG_IN_CONTAINER:-} ]]; then
   TSV=$OUT/verbs-selftest.tsv
   [[ -s $TSV ]] || { echo "no $TSV — the self-test never reached its table" >&2; exit 2; }
   selftest_clips_index "$OUT"
+  rig_run_meta "$OUT" "$STARTED"
+  rig_manifest "$(dirname "$OUT")" selftest
   echo; echo "════ results — $TSV"
   awk -F'\t' '{ printf "%-3s %-30s %-6s %s\n", $1, $2, $3, $4 }' "$TSV"
   echo
@@ -88,6 +103,9 @@ set -uo pipefail
 source "$HOME/fixtures/prep.sh"
 source "$HOME/fixtures/gestures.sh"
 trap 'clip_stop; cleanup_capture' EXIT
+# The frame and pace this ran at, for the host's manifest (lib/manifest.sh).
+printf 'CAP_W=%s\nCAP_H=%s\nREC_ZOOM=%s\nREC_FONT_SIZE=%s\nG_PACE=%s\n' \
+  "$CAP_W" "$CAP_H" "$REC_ZOOM" "$REC_FONT_SIZE" "$G_PACE" >"$OUT_DIR/frame.env"
 
 TSV=$OUT_DIR/verbs-selftest.tsv
 : >"$TSV"

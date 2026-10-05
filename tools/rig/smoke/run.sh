@@ -13,7 +13,10 @@
 # Output: tools/rig/out/smoke/ (RIG_OUT= moves tools/rig/out) — one PNG per
 # piece of evidence plus results.tsv (check, verdict, what, png), one clip
 # per check (<check>.mp4; RIG_CLIPS=0 skips them) and clips.html/clips.md,
-# the review index (check · verdict · clip · PNGs). The table
+# the review index (check · verdict · clip · PNGs); and the run's
+# manifest.json one level up (tools/rig/out/manifest.json, lib/manifest.sh),
+# shared with a selftest.sh run into the same RIG_OUT. RIG_SET=nightly|demo
+# names the set in it (default nightly). The table
 # is printed at the end; the exit status is the number of FAILs (capped at 100).
 #
 # Each check is its own script (NN-*.sh, sourcing lib.sh) run inside the
@@ -26,14 +29,17 @@ REPO=$(cd "$RIG_DIR/../.." && pwd)             # the nautilus checkout
 export RIG_NAME=${RIG_NAME:-nautilus-smoke-rig}
 source "$RIG_DIR/lib/container.sh"
 source "$RIG_DIR/lib/clips-index.sh"
+source "$RIG_DIR/lib/manifest.sh"
 OUT=${RIG_OUT:-$RIG_DIR/out}/smoke
+STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 if [[ -z ${NAUT:-} || -z ${VSIX:-} ]]; then
   echo "▸ building the candidate (NAUT/VSIX not given)"
   eval "$("$HERE/build.sh")" || exit 2
 fi
 [[ -x $NAUT && -f $VSIX ]] || { echo "need NAUT=<naut binary> and VSIX=<vscode-iec.vsix>" >&2; exit 2; }
-NAUTILUS_SHA=${NAUTILUS_SHA:-$(cat "$(dirname "$NAUT")/SHA" 2>/dev/null || echo unknown)}
+export NAUTILUS_SHA=${NAUTILUS_SHA:-$(cat "$(dirname "$NAUT")/SHA" 2>/dev/null || echo unknown)}
+export NAUT VSIX
 
 checks=("$@")
 [[ ${#checks[@]} -gt 0 ]] || mapfile -t checks < <(cd "$HERE" && ls [0-9][0-9]-*.sh | sed 's/\.sh$//')
@@ -84,12 +90,14 @@ if [[ $# -gt 0 && -f $OUT/results.tsv ]]; then
   { head -1 "$PULL/smoke/results.tsv" | sed 's/$/ (partial re-run: '"${checks[*]}"')/'
     awk -F'\t' -v re="^($(IFS='|'; echo "${checks[*]}"))$" 'NR>1 && $1 !~ re' "$OUT/results.tsv"
     tail -n +2 "$PULL/smoke/results.tsv"; } | awk 'NR==1{print;next}{print | "sort -s -t\"\t\" -k1,1"}' >"$OUT/results.new"
-  cp "$PULL/smoke/"*.png "$PULL/smoke/"*.mp4 "$OUT/" 2>/dev/null; mv "$OUT/results.new" "$OUT/results.tsv"
+  cp "$PULL/smoke/"*.png "$PULL/smoke/"*.mp4 "$PULL/smoke/frame.env" "$OUT/" 2>/dev/null; mv "$OUT/results.new" "$OUT/results.tsv"
 else
   rm -rf "$OUT"; mkdir -p "$(dirname "$OUT")"; mv "$PULL/smoke" "$OUT"
 fi
 rm -rf "$PULL"
 smoke_clips_index "$OUT"
+rig_run_meta "$OUT" "$STARTED"
+rig_manifest "$(dirname "$OUT")" smoke
 
 echo; echo "════ results — $OUT/results.tsv"
 head -1 "$OUT/results.tsv"
