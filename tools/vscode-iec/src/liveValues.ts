@@ -14,6 +14,7 @@ import * as https from "https";
 import * as vscode from "vscode";
 import { mirrorStatus, notifyError, notifyInfo, notifyWarning } from "./testHooks";
 import { STATUS_LIVE, testState } from "./testState";
+import { fbMonitorTitle } from "./fbMonitorTitle";
 import { projectDirFor, projectFiles } from "./projectFiles";
 import {
   formatValue,
@@ -571,10 +572,7 @@ export class FbMonitorLenses implements vscode.CodeLensProvider {
     const out: vscode.CodeLens[] = [];
     for (const r of scanFbRegions(doc.getText())) {
       const inst = this.live.monitorFor(r.type);
-      const n = this.live.candidatesFor(r.type).length;
-      const title = inst
-        ? `◉ live values: monitoring ${inst}${n > 1 ? ` — 1 of ${n}, click to switch` : ""}`
-        : "○ live values: monitor an instance…";
+      const title = fbMonitorTitle(inst, this.live.candidatesFor(r.type));
       out.push(
         new vscode.CodeLens(new vscode.Range(r.headerLine, 0, r.headerLine, 0), {
           title,
