@@ -294,7 +294,15 @@ const declares = (l: TopoLink, id: number) => !!l.vlans && ((l.vlans.tagged ?? [
  */
 export function vlanDomains(plant: Plant, vlanChecks: VlanCheck[], tags: Record<string, unknown>, cables?: { check: LinkCheck }[]): VlanDomain[] {
 	const t = plant.topology;
-	const lit = (i: number) => cables?.[i]?.check.verdict !== 'down';
+	// A link carries while it has light. One declared down (a service port)
+	// is consistent with no light, so its verdict alone does not say: it
+	// carries only when contradicted, which means something is plugged in.
+	const lit = (i: number) => {
+		const c = cables?.[i]?.check;
+		if (!c) return true;
+		if (c.verdict === 'down') return false;
+		return t.links[i].expect !== 'down' || c.verdict === 'contradicted';
+	};
 	const ringUp = t.links.every((l, i) => l.kind !== 'ring' || l.rpl || lit(i));
 	return siteVlans(t, tags).map((v) => {
 		const links: DomainLink[] = [];

@@ -46,6 +46,10 @@ export interface TopoLink {
 	/** What the link should carry (vlan.ts): `null` for a link with no
 	 * VLAN at all (a storage mesh), absent when the plan does not say. */
 	vlans?: LinkVlans | null;
+	/** The state the plan expects: `down` for a port left open on purpose
+	 * (a service port a visitor plugs a laptop into). Down is then as
+	 * declared, and link on it is the surprise. Absent: up. */
+	expect?: 'up' | 'down';
 	[k: string]: unknown;
 }
 
@@ -191,6 +195,16 @@ const names = (seen: { system: string; port?: string }, e: End) => {
 /** Check one declared link against what its ends report. `tags` is the
  * frame (name → value). */
 export function checkLink(plant: Plant, link: TopoLink, tags: Record<string, unknown>): LinkCheck {
+	const c = checkWired(plant, link, tags);
+	if (link.expect !== 'down') return c;
+	// A link declared down: no link is the plan, link is someone plugged in.
+	const live = [c.a, c.b].find((e) => e.up === true);
+	if (live) return { ...c, verdict: 'contradicted', reasons: [`${live.label} has link, declared down: something is plugged in`, ...c.reasons] };
+	if (c.verdict === 'down') return { ...c, verdict: 'consistent', reasons: ['down, as declared', ...c.reasons] };
+	return c;
+}
+
+function checkWired(plant: Plant, link: TopoLink, tags: Record<string, unknown>): LinkCheck {
 	const ea = resolveEnd(plant, link.a);
 	const eb = resolveEnd(plant, link.b);
 	const reasons: string[] = [];
