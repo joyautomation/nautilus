@@ -1,4 +1,4 @@
-PROGRAM Main
+PROGRAM main
 VAR_EXTERNAL
     FT101_Raw : INT;
     FT101_Flow : REAL;
