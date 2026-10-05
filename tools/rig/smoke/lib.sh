@@ -12,8 +12,9 @@
 #                       extension with no naut at all. with_naut puts it back.
 #
 # Unlike the stills, a check ASSERTS: it reads files in the container after
-# a gesture, asks the controller's /api, and asks X for window state. Each
-# verdict is one line in ~/out/smoke/results.tsv:
+# a gesture, asks the controller's /api, asks X for window state, and reads
+# the workbench's and the webviews' DOM (the DOM section at the end; README,
+# "DOM first"). Each verdict is one line in ~/out/smoke/results.tsv:
 #
 #   <check id>  PASS|FAIL|SKIP|WARN|NOTE  <what>  <evidence png, if any>
 #
@@ -124,125 +125,10 @@ wait_for() {
   return 1
 }
 
-# click_at <x> <y> — a plain left click at window coords (DOM buttons: toasts,
-# the diagram canvas; NOT context-menu items, which need ydotool — lib.sh).
-#
-# Coordinates are SNAP coordinates (what you measure on a PNG from shot):
-# the grab starts inside launch_vscode's CSD margin, so window coords are
-# snap + the left/top frame extents.
-_frame() { xprop -id "$WIN" _GTK_FRAME_EXTENTS 2>/dev/null | grep -oE '[0-9]+(, [0-9]+){3}' || echo "0, 0, 0, 0"; }
-to_win() { local l r t b; IFS=', ' read -r l r t b <<<"$(_frame)"; echo "$(($1 + l)) $(($2 + t))"; }
-move_to() { xdotool mousemove --window "$WIN" $(to_win "$1" "$2"); sleep 0.3; }
-click_at() { move_to "$1" "$2"; xdotool click 1; sleep "${3:-0.8}"; }
-dclick_at() { move_to "$1" "$2"; xdotool click --repeat 2 --delay 80 1; sleep "${3:-0.8}"; }
-
-# ld_palette_x <label> — the Ladder element palette's button CENTRES (SNAP x,
-# 1920-wide capture). Measured 2026-09-25 against the layout PR #47 left
-# behind: ⊣ ⊢ · ⊣/⊢ · FN( ) · FB… · [ | ] · ( ) · (S) · (R) | // · + rung |
-# ✂ ⧉ ⎘ ✕ (LadderView.svelte's PALETTE array, then the toolbar's own // and
-# + rung buttons). #47 replaced the old separate TON/CTU buttons with the
-# single FB… button, which is what shifted every button after FN( ) about
-# 57px to the left and left 09-empty-files' hard-coded "+ rung" click on the
-# gap after it — the reason this table exists instead of another hard-code.
-# The row's Y is context, not label, so it is NOT in this table: y≈132 on an
-# already-populated .ld (10-l5x.sh) and y≈168 when the Empty-file banner is
-# showing above it (09-empty-files.sh) — pass whichever Y applies to click_at.
-ld_palette_x() {
-  case $1 in
-    '⊣ ⊢')     echo 63  ;;
-    '⊣/⊢')     echo 113 ;;
-    'FN( )')   echo 170 ;;
-    'FB…')     echo 228 ;;
-    '[ | ]')   echo 286 ;;
-    '( )')     echo 344 ;;
-    '(S)')     echo 393 ;;
-    '(R)')     echo 443 ;;
-    '//')      echo 505 ;;
-    '+ rung')  echo 563 ;;
-    *) echo "ld_palette_x: no button '$1' — re-measure the row (see the comment above) and add it" >&2; return 1 ;;
-  esac
-}
 key() { xdotool key --clearmodifiers "$@"; sleep 0.6; }
-
-# banner_button_x <png basename> <row y> — the SNAP x centre of the button
-# on a one-line banner row (09's Empty-file "initialize"), found by SIGHT in
-# a frame of that row rather than from a coordinate table: the banner's text
-# runs up to the button, so its x moves with the text — the file name in it
-# ("PROGRAM seq" vs "PROGRAM alarms") — and with every left inset (PR #50's
-# html/body reset dropped VS Code's 20px webview body padding, which moved
-# the SFC button off 09's old hard-coded x=691). The button is the one thing
-# on the row drawn as a rectangle OUTLINE: a top and a bottom border row of
-# the same span, 12–34px apart, joined by lit left and right edge columns
-# (a few px outside that span — the corners are rounded);
-# text never makes that. Prints the rightmost such box's centre (the button
-# follows the text); status 1 and a note on stderr if there is none.
-banner_button_x() {
-  python3 - "$OUT_DIR/$1.png" "$2" <<'PY'
-import sys
-from PIL import Image
-im = Image.open(sys.argv[1]).convert("RGB"); px = im.load()
-y0 = int(sys.argv[2]); W = min(im.size[0], 1400)
-def lit(x, y, bg):
-    p = px[x, y]
-    return max(abs(p[i] - bg[i]) for i in range(3)) > 12
-rows = {}
-for y in range(y0 - 18, y0 + 19):
-    bg = px[4, y]; s = None; runs = []
-    for x in range(W + 1):
-        on = x < W and lit(x, y, bg)
-        if on and s is None:
-            s = x
-        elif not on and s is not None:
-            if 30 <= x - s <= 240: runs.append((s, x - 1))
-            s = None
-    rows[y] = (bg, runs)
-best = None
-for ya in rows:
-    for yb in rows:
-        if not 12 <= yb - ya <= 34: continue
-        bg = rows[ya][0]
-        edge = lambda x: sum(lit(x, y, bg) for y in range(ya, yb + 1)) >= 0.8 * (yb - ya)
-        for a in rows[ya][1]:
-            for b in rows[yb][1]:
-                if abs(a[0] - b[0]) > 1 or abs(a[1] - b[1]) > 1: continue
-                # Rounded corners: the side edges stand a few px outside
-                # the border rows' flat run.
-                l = next((x for x in range(a[0] - 5, a[0] + 2) if edge(x)), None)
-                r = next((x for x in range(a[1] + 5, a[1] - 2, -1) if edge(x)), None)
-                if l is not None and r is not None and (best is None or l > best[0]):
-                    best = (l, r)
-if best is None:
-    sys.exit("banner_button_x: no outlined button on row %d of %s" % (y0, sys.argv[1]))
-print((best[0] + best[1]) // 2)
-PY
-}
-
-# find_text_png <png> <regex> — nothing cheap reads text off a frame in the
-# container (no OCR), so checks that need to FIND a button use known layout
-# plus the logs, and the PNG is the human-readable evidence.
 
 # md5 of a file, for "did the save reach disk".
 sum() { md5sum "$1" | cut -d' ' -f1; }
-
-# The recording profile hides the activity bar and the side bar is on the
-# left: smoke checks want the side bar hidden too, so the diagram gets the width.
-
-# px_count <png basename> <x0> <y0> <x1> <y1> <python cond over r,g,b> — how
-# many pixels in the box satisfy the condition. The cheap way to ask a frame
-# "is the amber warning icon there", "did the pill paint", with no OCR.
-px_count() {
-  python3 - "$OUT_DIR/$1.png" "$2" "$3" "$4" "$5" "$6" <<'PY'
-import sys
-from PIL import Image
-im = Image.open(sys.argv[1]).convert("RGB"); px = im.load()
-x0, y0, x1, y1 = map(int, sys.argv[2:6]); cond = eval("lambda r, g, b: " + sys.argv[6])
-print(sum(1 for y in range(y0, min(y1, im.size[1])) for x in range(x0, min(x1, im.size[0])) if cond(*px[x, y])))
-PY
-}
-# The notification centre's region at 1920x1200 (bottom-right), and VS Code's
-# warning-icon amber in Night Owl.
-NOTIF_BOX="1380 900 1410 1175"   # the icon column of the centre's rows
-AMBER='r > 150 and 110 < g < 175 and b < 110 and r - b > 60'
 
 # gstate — the extension's globalState as JSON.
 gstate() {
@@ -266,12 +152,108 @@ text_replace() {
   xdotool type --delay 30 -- "$new"; sleep 0.6
 }
 
-# hover <x> <y> — lib.sh's hover_at, in snap coordinates, and safe under
-# set -u (hover_at's `local x=$1 … ax=${3:-$((x …))}` reads x before it is
-# assigned, which set -u rejects).
-hover() {
-  move_to "$(( $1 > 300 ? $1 - 300 : $1 + 300 ))" "$(( $2 + 300 ))"; sleep 0.6
-  move_to "$1" "$2"; sleep 0.8
-  local _
+# ── the DOM: how a check finds things and reads verdicts ────────────────────
+# DOM FIRST. A check locates what it clicks, and reads what it asserts, from
+# the DOM: the workbench page (`cdp page`: notifications, the custom modal,
+# editor-title actions, tabs, the status bar) or the active webview (`cdp
+# eval`: every diagram element carries data-id / data-kind), or from the
+# extension's NAUTILUS_TEST_STATE snapshot. Never from a coordinate measured
+# on one frame: VS Code's layout moves under every release and every theme,
+# and that is where this suite's flakes came from. Pixels are read only where
+# the subject IS a colour (11-themes' luminance), and then inside a box the
+# DOM located (snap_box). These build on gestures.sh (cdp, page_el_box,
+# click_el, g_click, …), which every check sources after this file.
+
+# _dom_str — a cdp JSON result on stdin, printed raw if a string ("" for null).
+_dom_str() { python3 -c 'import json,sys; v=json.loads(sys.stdin.read() or "null"); print("" if v is None else v if isinstance(v, str) else json.dumps(v))' 2>/dev/null || true; }
+# pg <js> — evaluate in the workbench page. wv <js> — in the active webview
+# (`doc` is its document). Both print a string raw, null as "", and never fail.
+pg() { cdp page "$1" 2>/dev/null | _dom_str; }
+wv() { cdp eval "$1" 2>/dev/null | _dom_str; }
+
+# page_click <js → Element in the workbench page> [settle] — click its centre.
+page_click() {
+  local box x y w h
+  box=$(page_el_box "$1") || { g_err "not in the workbench: ${1:0:100}…"; return 1; }
+  read -r x y w h <<<"$box"
+  g_click $((x + w / 2)) $((y + h / 2)) "${2:-0.8}"
+}
+# page_hover <js → Element in the workbench page> — rest the pointer on it
+# until its tooltip shows (the evidence PNG): approach from away, then a
+# small wiggle, as lib.sh's hover_at does.
+page_hover() {
+  local box x y w h _
+  box=$(page_el_box "$1") || { g_err "not in the workbench: ${1:0:100}…"; return 1; }
+  read -r x y w h <<<"$box"
+  x=$((x + w / 2)) y=$((y + h / 2))
+  xdotool mousemove --window "$WIN" "$(( x > 300 ? x - 300 : x + 300 ))" "$(( y + 300 ))"; sleep 0.6
+  xdotool mousemove --window "$WIN" "$x" "$y"; sleep 0.8
   for _ in 1 2 3; do xdotool mousemove_relative -- 2 0; sleep 0.25; xdotool mousemove_relative -- -2 0; sleep 0.25; done
+}
+
+# title_action_el <JS regex source> — the ACTIVE editor group's editor-title
+# action whose aria-label (the command's title) matches. Ours, the git
+# extension's "Open Changes", Split Editor and "More Actions..." all live
+# there, in an order that shifts with the file's git state; by label it
+# does not matter.
+title_action_el() {
+  printf '[...document.querySelectorAll(".editor-group-container.active .editor-actions .action-label")].find(a => /%s/.test(a.getAttribute("aria-label") || "") && a.getBoundingClientRect().width > 0)' "$1"
+}
+
+# notifications — every notification on screen, toasts and the centre, one
+# per line: <severity>\t<message>\t<button / button …> (severity is the
+# icon's codicon: error, warning or info).
+notifications() {
+  pg '[...document.querySelectorAll(".notification-list-item")].filter(e => e.getBoundingClientRect().height > 0).map(e => { const ic = e.querySelector(".notification-list-item-icon"); const sev = ic ? ((ic.className.match(/codicon-(error|warning|info)\b/) || [])[1] || "?") : "?"; return sev + "\t" + (e.querySelector(".notification-list-item-message")?.textContent.trim() || "") + "\t" + [...e.querySelectorAll(".notification-list-item-buttons-container .monaco-button")].map(b => b.textContent.trim()).join(" / "); }).join("\n")'
+}
+# notification <ERE> — the first notifications line whose MESSAGE matches;
+# status 1 if none does.
+notification() {
+  local l; l=$(notifications | awk -F'\t' -v re="$1" '$2 ~ re { print; exit }')
+  [[ -n $l ]] && echo "$l"
+}
+
+# dialog_message / dialog_buttons — the custom modal's text, and its buttons
+# ("A / B / C"). window.dialogStyle is custom in the smoke profile, so the
+# modal is workbench DOM (gestures.sh's dialog_up says whether one is up).
+dialog_message() { pg '[...document.querySelectorAll(".monaco-dialog-box .dialog-message-row")].map(e => e.textContent.trim()).join(" ")'; }
+dialog_buttons() { pg '[...document.querySelectorAll(".monaco-dialog-box .dialog-buttons .monaco-button")].map(b => b.textContent.trim()).join(" / ")'; }
+
+# DIAGRAM_CANVAS — the active diagram's canvas: FBD's xyflow pane, or the
+# Ladder / SFC ZoomPane's scroller.
+DIAGRAM_CANVAS='doc.querySelector(".svelte-flow__pane, .zpane .flow")'
+# canvas_spot [js → canvas element] — an EMPTY point of a diagram canvas in
+# the active webview, as window coordinates "x y": the first point of a grid
+# over the canvas (from its bottom-right, where the layouts leave room) whose
+# top element is the canvas itself or plain background — not a node, step,
+# rung, edge, pin, panel, zoom control or form. Status 1 if there is none.
+canvas_spot() {
+  cdp point "(() => {
+    const c = (${1:-$DIAGRAM_CANVAS}); if (!c) return null;
+    const r = c.getBoundingClientRect();
+    const busy = 'g.node, g.step, g.trans, g.jump, g.note, g.spot, g.orphan, svg.rsvg, .svelte-flow__node, .svelte-flow__edge, .svelte-flow__panel, .svelte-flow__handle, .zctl, .addform, button, input, select, a';
+    for (let fy = 0.92; fy > 0.04; fy -= 0.04)
+      for (let fx = 0.92; fx > 0.04; fx -= 0.04) {
+        const x = r.left + r.width * fx, y = r.top + r.height * fy;
+        if (x < 1 || y < 1 || x > win.innerWidth - 1 || y > win.innerHeight - 1) continue;
+        const h = doc.elementFromPoint(x, y);
+        if (h && (h === c || c.contains(h)) && !h.closest(busy)) return { x, y };
+      }
+    return null;
+  })()" 2>/dev/null
+}
+# click_canvas [js → canvas element] [settle] — click an empty spot of it
+# (focus in the diagram, nothing selected).
+click_canvas() {
+  local p; p=$(canvas_spot "${1:-}") || { g_err "no empty spot on the diagram canvas"; return 1; }
+  g_click $p "${2:-0.6}"
+}
+
+# snap_box <"x y w h" in window coordinates> — the same box in SNAP
+# coordinates (a PNG from shot) as "x0 y0 x1 y1": the grab starts inside
+# launch_vscode's CSD margin, so snap = window − the left/top frame extents.
+snap_box() {
+  local x y w h l t
+  read -r x y w h _ <<<"$1"; read -r l t <<<"$(_g_frame)"
+  echo "$((x - l)) $((y - t)) $((x - l + w)) $((y - t + h))"
 }

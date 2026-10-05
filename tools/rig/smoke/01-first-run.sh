@@ -6,9 +6,14 @@
 #
 # Needs the container's network (api.github.com); without it the install
 # half is a SKIP and naut goes back on PATH for the rest.
+#
+# The prompt is read, and its button found, in the workbench DOM (the
+# notification centre's rows: icon, message, buttons), not off the frame.
 set -euo pipefail
 CHECK=01-first-run
 source "$HOME/smoke/lib.sh"
+export G_PACE=fast
+source "$HOME/fixtures/gestures.sh"   # cdp page / page_click_button
 
 rm -rf "$PROFILE" "$HOME/scratch"; mkdir -p "$HOME/scratch"
 printf 'PROGRAM Broken\nVAR x : INT; END_VAR\nx := x + ;\nEND_PROGRAM\n' >"$HOME/scratch/broken.st"
@@ -47,11 +52,13 @@ if ext_log | grep -q 'not found. Looked in'; then pass "nautilus log: CLI not fo
 # At startup the warning lands in the notification CENTER with no toast (the
 # bell gets its dot) — see the report; so open the centre to reach it.
 vs_cmd "Notifications: Show Notifications" 1.5
+wait_for 10 notification "couldn't find the nautilus CLI" >/dev/null || true
+n=$(notification "couldn't find the nautilus CLI" || true)
 png=$(shot missing-cli-prompt)
-if (( $(px_count "$png" $NOTIF_BOX "$AMBER") > 25 )); then
+if [[ $n == warning$'\t'*$'\t'"Install naut / Locate naut… / Install steps" ]]; then
   pass "missing-CLI warning is up, offering Install naut / Locate naut… / Install steps (in the centre: startup toasts auto-hide before the window settles)" "$png"
 else
-  fail "no missing-CLI warning in the notification centre" "$png"
+  fail "no missing-CLI warning in the notification centre (notifications: $(notifications | tr '\t\n' '|;'))" "$png"
 fi
 
 if ! getent hosts api.github.com >/dev/null; then
@@ -60,9 +67,8 @@ if ! getent hosts api.github.com >/dev/null; then
   exit 0
 fi
 
-# "Install naut" is the toast's primary button: the first of three, at the
-# centre's bottom-right. Measured at 1920x1200, side bar visible.
-click_at 1598 1131 1
+# "Install naut", the notification's primary button, found by its label.
+page_click_button '^Install naut$' 1 || fail "Install naut: no such button on the notification"
 if ! wait_for 120 test -x "$MANAGED"; then
   png=$(shot install-failed)
   fail "Install naut: nothing landed in globalStorage/bin in 120 s" "$png"

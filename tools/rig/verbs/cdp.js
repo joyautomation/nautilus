@@ -20,6 +20,10 @@
 //                                    clickable, 0 = covered, -1/2 = scrolled
 //                                    off above/below, 3 = off a side), or exit 3
 //   cdp.js vp                      — the webview viewport's centre, "x y"
+//   cdp.js point '<js → {x, y}>'   — a CLIENT point of the active webview
+//                                    (e.g. an empty spot of a canvas, found
+//                                    with elementFromPoint) in window
+//                                    coordinates, "x y"; exit 3 on null
 //   cdp.js rects '<js → Element[]>'— one "x y w h" line per element
 //   cdp.js page '<js>'             — evaluate in the workbench page itself
 //
@@ -196,7 +200,13 @@ async function main() {
 		console.log(toWin(wv, res.off, { x: res.w / 2, y: res.h / 2, w: 0, h: 0 }).slice(0, 2).join(' '));
 		return;
 	}
-	throw new Error('usage: cdp.js targets|eval|rect|rects|page <js>');
+	if (cmd === 'point') {
+		const res = await evalIn(wv.target, wrap(`({ off, p: (${arg}) })`));
+		if (!res.p) process.exit(3);
+		console.log(toWin(wv, res.off, { x: res.p.x, y: res.p.y, w: 0, h: 0 }).slice(0, 2).join(' '));
+		return;
+	}
+	throw new Error('usage: cdp.js targets|eval|rect|rects|vp|point|page <js>');
 }
 
 main().catch((e) => {

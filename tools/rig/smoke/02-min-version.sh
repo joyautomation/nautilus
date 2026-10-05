@@ -4,9 +4,15 @@
 # "Update naut" and "Don't show again for this version"; Update explains how
 # that copy was installed and offers the managed install; Don't-show-again
 # persists per version (globalState) and silences the next session.
+#
+# The warning and its buttons are found in the workbench DOM (the
+# notification centre's rows), not off the frame.
 set -euo pipefail
 CHECK=02-min-version
 source "$HOME/smoke/lib.sh"
+export G_PACE=fast
+source "$HOME/fixtures/gestures.sh"   # cdp page / page_click_button
+OLD_RE='naut 0\.10\.0 is older than this extension needs'
 
 rm -rf "$PROFILE"; mkdir -p "$HOME/fake-bin"
 cat >"$HOME/fake-bin/naut" <<SH
@@ -35,22 +41,25 @@ fi
 # Startup toasts auto-hide (~15 s) before the window settles — the centre
 # holds the same notification with the same buttons.
 vs_cmd "Notifications: Show Notifications" 1.5
+wait_for 10 notification "$OLD_RE" >/dev/null || true
+n=$(notification "$OLD_RE" || true)
 png=$(shot warning)
-n=$(px_count "$png" $NOTIF_BOX "$AMBER")
-(( n > 25 )) && pass "min-version warning present (Update naut / Don't show again for this version)" "$png" \
-             || fail "no warning in the notification centre" "$png"
+[[ $n == warning$'\t'*"($MIN)"*$'\t'"Update naut / Don't show again for this version" ]] \
+  && pass "min-version warning present (Update naut / Don't show again for this version)" "$png" \
+  || fail "no warning in the notification centre (notifications: $(notifications | tr '\t\n' '|;'))" "$png"
 
-# "Update naut" — measured at 1920x1200: the primary button.
-click_at 1577 1131 2
+page_click_button '^Update naut$' 2 || fail "no 'Update naut' button on the min-version warning"
 png=$(shot update-followup)
-info "Update naut → follow-up names how this naut was installed and offers the managed copy" "$png"
+fu=$(notifications | awk -F'\t' -v re="$OLD_RE" '$2 !~ re { print $2 " [" $3 "]"; exit }')
+info "Update naut → follow-up names how this naut was installed and offers the managed copy (DOM: ${fu:-no other notification})" "$png"
 
 # "Don't show again for this version", in the next session.
 vs_cmd "Notifications: Clear All Notifications" 1
 vs_cmd "Developer: Reload Window" 10
 vs_cmd "Notifications: Show Notifications" 1.5
+wait_for 10 notification "$OLD_RE" >/dev/null || true
 shot warning-again >/dev/null
-click_at 1768 1131 2
+page_click_button "^Don't show again for this version\$" 2 || fail "no 'Don't show again for this version' button after the reload"
 if gstate | grep -qF "\"nautilus.cli.skipVersionWarning\":\"0.10.0<$MIN\""; then
   pass "Don't show again → globalState skipVersionWarning = 0.10.0<$MIN"
 else
@@ -58,6 +67,9 @@ else
 fi
 vs_cmd "Developer: Reload Window" 10
 vs_cmd "Notifications: Show Notifications" 1.5
+# The extension checks the version once the window is up; give it the time
+# the warning took to appear above before calling it silenced.
+sleep 4
 png=$(shot silenced)
-n=$(px_count "$png" $NOTIF_BOX "$AMBER")
-(( n < 10 )) && pass "next session: no min-version warning" "$png" || fail "warning shown again after Don't show again" "$png"
+n=$(notification "$OLD_RE" || true)
+[[ -z $n ]] && pass "next session: no min-version warning" "$png" || fail "warning shown again after Don't show again ($n)" "$png"

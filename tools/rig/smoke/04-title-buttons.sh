@@ -7,20 +7,24 @@
 #                   the "…" menu has "between git revisions…" and
 #                   "vs Controller"
 #
-# Button and menu identity is read off hover tooltips / the open menu (the
-# PNGs); what each one DOES is asserted from the file, the title and the
-# number of editors.
+# Every button is found in the workbench DOM by its label (the command's
+# title, the action's aria-label), so the git extension's "Open Changes"
+# joining the row when the file is modified on disk no longer moves the
+# target; it is hovered for the tooltip in the PNG, and what it DOES is
+# asserted from the file, the title and the number of editors. The modal
+# is read as DOM too (window.dialogStyle custom).
 set -euo pipefail
 CHECK=04-title-buttons
 source "$HOME/smoke/lib.sh"
+export G_PACE=fast
+source "$HOME/fixtures/gestures.sh"   # cdp page / page_click_button / g_click
 rm -rf "$PROFILE"
 
-# The title-bar buttons of a single full-width editor at 1920x1200, side bar
-# hidden, file CLEAN against git (right to left: …, split, then ours). Once
-# the file is modified on disk the git extension's "Open Changes" joins them
-# and ours move a slot left — so every button here is clicked before the
-# save, while the edit is only in the buffer.
-B1=1798; B2=1830; MORE=1893; BY=56
+# The editor-title actions, by aria-label (JS regex source).
+AS_DIAGRAM='Open as Diagram Editor'
+DIFF_HEAD='Diff \w+ Diagram \(vs git HEAD\)'
+SHOW_SOURCE='Show Source'
+MORE='^More Actions'
 
 # back_to_diagram — close whatever opened beside (group 2+), focus group 1.
 back_to_diagram() {
@@ -28,11 +32,10 @@ back_to_diagram() {
   vs_cmd "View: Close Editors in Other Groups" 1.5
 }
 
-# slots <file> — B1/B2 for the file's git state: modified on disk adds the
-# git extension's "Open Changes" and moves ours one slot (32 px) left.
-slots() {
-  if [[ -n $(git -C "$PROJ" status --porcelain -- "$1") ]]; then B1=1766; B2=1798; else B1=1798; B2=1830; fi
-}
+# label <regex> — the matching title action's aria-label ("" if none).
+label() { pg "($(title_action_el "$1"))?.getAttribute('aria-label') ?? ''"; }
+# save_prompt — the custom modal is up and offers Save and Don't Save.
+save_prompt() { dialog_up && [[ " / $(dialog_buttons) / " == *" / Save / "* && $(dialog_buttons) == *"Don't Save"* ]]; }
 # as_diagram <file> — quick-open the text, then Open as Diagram Editor.
 as_diagram() { open_file "$1" 3; vs_cmd "nautilus: Open as Diagram Editor" 6; }
 
@@ -41,31 +44,31 @@ one() { # <lang label> <project> <file> <old literal> <new literal>
   local f=$PROJ/$file png
   smoke_open "$PROJ" "$file"
   key Escape; hide_sidebar
-  hover $B1 $BY
+  page_hover "$(title_action_el "$AS_DIAGRAM")" || true
   png=$(shot "$lang-text-buttons")
-  info "$lang text editor: title buttons (hover: 'Open as Diagram Editor')" "$png"
+  info "$lang text editor: title buttons (hover: 'Open as Diagram Editor'; DOM label '$(label "$AS_DIAGRAM")')" "$png"
 
   text_replace "$f" "$old" "$new"
   [[ $(title) == "● $file"* ]] || { fail "$lang: the unsaved text edit did not register ($(title))"; return; }
-  click_at $B1 $BY 6
+  page_click "$(title_action_el "$AS_DIAGRAM")" 6 || fail "$lang: no 'Open as Diagram Editor' title button"
   png=$(shot "$lang-as-diagram")
   [[ $(title) == "● $file"* ]] && pass "$lang: Open as Diagram Editor → diagram, unsaved edit carried over (still dirty)" "$png" \
     || fail "$lang: after Open as Diagram Editor the title is '$(title)'" "$png"
 
-  hover $B1 $BY; png=$(shot "$lang-diagram-btn1")
-  info "$lang diagram editor: button 1 (hover: 'Diff … (vs git HEAD)')" "$png"
-  hover $B2 $BY; png=$(shot "$lang-diagram-btn2")
-  info "$lang diagram editor: button 2 (hover: 'Show Source')" "$png"
+  page_hover "$(title_action_el "$DIFF_HEAD")" || true; png=$(shot "$lang-diagram-btn1")
+  info "$lang diagram editor: button 1 (hover: 'Diff … (vs git HEAD)'; DOM label '$(label "$DIFF_HEAD")')" "$png"
+  page_hover "$(title_action_el "$SHOW_SOURCE")" || true; png=$(shot "$lang-diagram-btn2")
+  info "$lang diagram editor: button 2 (hover: 'Show Source'; DOM label '$(label "$SHOW_SOURCE")')" "$png"
 
-  click_at $B1 $BY 8
+  page_click "$(title_action_el "$DIFF_HEAD")" 8 || fail "$lang: no 'Diff … (vs git HEAD)' title button"
   png=$(shot "$lang-diff-head")
   info "$lang: Diff vs HEAD (the buffer's $old→$new change should be marked)" "$png"
   back_to_diagram
-  click_at $MORE $BY 1.5
+  page_click "$(title_action_el "$MORE")" 1.5 || fail "$lang: no '…' (More Actions) title button"
   png=$(shot "$lang-more-menu")
   info "$lang: '…' menu (between git revisions… / vs Controller)" "$png"
   xdotool key --clearmodifiers Escape; sleep 0.5
-  click_at $B2 $BY 4
+  page_click "$(title_action_el "$SHOW_SOURCE")" 4 || fail "$lang: no 'Show Source' title button"
   png=$(shot "$lang-show-source")
   info "$lang: Show Source → the text beside the diagram" "$png"
   # Close that text tab again (Ctrl+W, focus is on it). The diagram still
@@ -73,13 +76,13 @@ one() { # <lang label> <project> <file> <old literal> <new literal>
   # asks to save — see the SFC round for what "Don't Save" then does.
   xdotool key --clearmodifiers ctrl+w; sleep 1.5
   png=$(shot "$lang-close-source")
-  if (( $(px_count "$png" 1180 645 1250 680 'r > 90 and b > 150 and g < 110') > 200 )); then
+  if save_prompt; then
     warn "$lang: closing Show Source's text tab while the diagram editor still has the file open prompts Save / Don't Save" "$png"
-    click_at 1214 662 2          # Save
+    page_click_button '^Save$' 2 || fail "$lang: the save prompt has no Save button ($(dialog_buttons))"
   fi
   back_to_diagram
   grep -qF -- "$new" "$f" && pass "$lang: the carried-over edit saved from the diagram session ($new on disk)" \
-    || { click_at 1500 1000 0.5; xdotool key --clearmodifiers ctrl+s; sleep 1.5
+    || { click_canvas "" 0.5 || true; xdotool key --clearmodifiers ctrl+s; sleep 1.5
          grep -qF -- "$new" "$f" && pass "$lang: Ctrl+S in the diagram editor saved the carried-over edit" \
            || fail "$lang: the carried-over edit never reached disk"; }
   [[ $(title) != "●"* ]] || fail "$lang: diagram still dirty after the save: $(title)"
@@ -101,7 +104,9 @@ one SFC tank-batch batch.sfc "Start AND NOT Abort" "Start AND Abort"
 # text, "Don't Save". The diagram is still open on the same document.
 S=$PROJ/batch.sfc
 as_diagram batch.sfc
-click_at 73 132 1; xdotool type --delay 40 Extra; key Return; sleep 2
+click_button "+ step" || fail "SFC: no '+ step' button"
+wait_js 'doc.activeElement?.matches(".addform input")' 4 || true
+xdotool type --delay 40 Extra; key Return; sleep 2
 [[ $(title) == "● batch.sfc"* ]] || fail "SFC: add-step did not dirty the diagram"
 # Show Source by the palette here: the button was exercised per language
 # above, and right after a webview edit its first click is unreliable.
@@ -110,8 +115,8 @@ vs_cmd "nautilus: Show Source" 4
 [[ $(title) == "● batch.sfc"* ]] || info "SFC: Show Source title: $(title)"
 xdotool key --clearmodifiers ctrl+w; sleep 1.5
 png=$(shot dont-save-prompt)
-if (( $(px_count "$png" 1180 645 1250 680 'r > 90 and b > 150 and g < 110') > 200 )); then
-  click_at 1046 662 2           # Don't Save
+if save_prompt; then
+  page_click_button "^Don't Save\$" 2 || fail "SFC: the save prompt has no Don't Save button ($(dialog_buttons))"
   png=$(shot dont-save-after)
   if [[ $(title) != "●"* ]] && ! grep -q "STEP Extra" "$S"; then
     warn "SFC: 'Don't Save' on closing Show Source's text DISCARDED the diagram editor's unsaved edit (step Extra gone; diagram clean, still open)" "$png"

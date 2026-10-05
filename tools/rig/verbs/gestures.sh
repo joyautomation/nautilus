@@ -278,7 +278,7 @@ _G_READY='doc.querySelector(".svelte-flow__node, svg.rsvg, svg.chart, .palette, 
 # trap 2), so this opens the TEXT by quick-open and then runs "Open as
 # Diagram Editor", which REPLACES the tab. Everything else is closed first:
 # that command fuzzy-matches the preview command when the file is already a
-# diagram (README, "Pixel boxes assume ONE editor group"), and a second
+# diagram (README, "Webview reads assume ONE editor group"), and a second
 # group halves the canvas every other verb aims into.
 # *.mimic.json / *.component.json are default-priority custom editors, so
 # quick-open alone gives the editor (once the extension is active — it is,
@@ -1768,11 +1768,12 @@ print(round((d['x'])*k) + $fl, round((d['y'])*k) + $ft, round(d['w']*k), round(d
 }
 
 # page_click_button <label regex (JS RegExp source, case-sensitive)> —
-# find a <button>/<a class=monaco-button> in the workbench page whose
-# trimmed textContent matches, and click its centre.
+# find a <button>/<a class=monaco-button> in the workbench page (a custom
+# modal, or a notification toast / centre row, whose buttons are
+# a.monaco-button) whose trimmed textContent matches, and click its centre.
 page_click_button() {
   local label=$1 settle=${2:-1.5} box
-  box=$(page_el_box "[...document.querySelectorAll('.monaco-dialog-box button, .monaco-dialog-box a.monaco-button, .notification-list-item button')].find(b => /$label/.test(b.textContent.trim()))") \
+  box=$(page_el_box "[...document.querySelectorAll('.monaco-dialog-box button, .monaco-dialog-box a.monaco-button, .notification-list-item button, .notification-list-item a.monaco-button')].find(b => /$label/.test(b.textContent.trim()) && b.getBoundingClientRect().width > 0)") \
     || { g_err "no dialog/notification button matching /$label/"; return 1; }
   local x y w h
   read -r x y w h <<<"$box"
@@ -1793,8 +1794,9 @@ api_get() { curl -sf --max-time 3 "localhost:$PORT$1"; }
 api_post() { curl -sf --max-time 3 -X POST "localhost:$PORT$1" -H 'Content-Type: application/json' -d "$2"; }
 
 # px_count <png basename in $OUT_DIR> <x0> <y0> <x1> <y1> <python cond over
-# r,g,b> — how many pixels in the box satisfy the condition (the same helper
-# smoke/lib.sh defines; smoke checks do not source this file).
+# r,g,b> — how many pixels in the box satisfy the condition. For the
+# content repo's beats; the smoke checks read the DOM instead (README, "DOM
+# first").
 px_count() {
   python3 - "$OUT_DIR/$1.png" "$2" "$3" "$4" "$5" "$6" <<'PY'
 import sys
