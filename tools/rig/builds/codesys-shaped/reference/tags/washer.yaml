@@ -1,0 +1,35 @@
+# The washer's globals — what a Codesys project keeps in a GVL. A tag has
+# no initial value in the source (`:=` on VAR_GLOBAL/VAR_EXTERNAL is a
+# compile error); `init:` here sets it. Every POU that reads one declares
+# it again in its own VAR_EXTERNAL block.
+
+# Operator pushbuttons and the door switch (field inputs).
+- { name: StartPB,    role: input, init: false, desc: "Start pushbutton" }
+- { name: StopPB,     role: input, init: false, desc: "Stop pushbutton — aborts a fill" }
+- { name: ResetPB,    role: input, init: false, desc: "Fault reset — leaves Aborted once the drum is empty" }
+- { name: DoorClosed, role: input, init: true,  desc: "Door closed switch" }
+
+# Process values — owned by the sim task on the bench.
+- { name: LevelPct, role: state, init: 0.0,  unit: "%",    desc: "Drum water level" }
+- { name: TempC,    role: state, init: 20.0, unit: "degC", desc: "Drum water temperature" }
+- { name: SimDtS,   role: state, init: 0.1,  unit: "s",    desc: "sim task measured scan period" }
+
+# Setpoints.
+- { name: FillSP, role: setpoint, init: 60.0, unit: "%",    desc: "Fill to this level" }
+- { name: TempSP, role: setpoint, init: 40.0, unit: "degC", desc: "Wash water temperature" }
+
+# Outputs.
+- { name: FillValve, role: output, init: false, desc: "Fill valve" }
+- { name: Detergent, role: output, init: false, desc: "Detergent dosing valve" }
+- { name: Heater,    role: output, init: false, desc: "Water heater" }
+- { name: DrumCW,    role: output, init: false, desc: "Drum motor, clockwise" }
+- { name: DrumCCW,   role: output, init: false, desc: "Drum motor, counter-clockwise" }
+- { name: SpinMotor, role: output, init: false, desc: "Drum motor, spin speed" }
+- { name: DrainPump, role: output, init: false, desc: "Drain pump" }
+- { name: DoorLock,  role: output, init: false, desc: "Door lock solenoid" }
+- { name: AlarmLamp, role: output, init: false, desc: "Fault lamp — latched in Aborted, reset in Idle" }
+
+# Sequence state — what an enum would carry in Codesys; INT codes here.
+- { name: StateNo,    role: state, init: 0, desc: "0 Idle, 1 Fill, 2 Heat/Wash, 3 Drain, 4 Spin, 9 Aborted" }
+- { name: FaultCode,  role: state, init: 0, desc: "0 none, 1 stop/door, 2 fill timeout, 3 drain timeout" }
+- { name: CycleCount, role: state, init: 0, desc: "Cycles started" }
