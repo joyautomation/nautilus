@@ -135,11 +135,12 @@ type ServerInfo struct {
 }
 
 type ServerCapabilities struct {
-	TextDocumentSync   int             `json:"textDocumentSync"` // 1 = Full
-	HoverProvider      bool            `json:"hoverProvider"`
-	DefinitionProvider bool            `json:"definitionProvider"`
-	CompletionProvider *CompletionOpts `json:"completionProvider,omitempty"`
-	RenameProvider     *RenameOpts     `json:"renameProvider,omitempty"`
+	TextDocumentSync      int                `json:"textDocumentSync"` // 1 = Full
+	HoverProvider         bool               `json:"hoverProvider"`
+	DefinitionProvider    bool               `json:"definitionProvider"`
+	CompletionProvider    *CompletionOpts    `json:"completionProvider,omitempty"`
+	SignatureHelpProvider *SignatureHelpOpts `json:"signatureHelpProvider,omitempty"`
+	RenameProvider        *RenameOpts        `json:"renameProvider,omitempty"`
 }
 
 type CompletionOpts struct {
