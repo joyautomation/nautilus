@@ -257,13 +257,13 @@ func (r *liveRun) runStepLive(st *Step) (*Failure, error) {
 		if st.Always == nil || alwaysFail != nil || alwaysErr != nil {
 			return alwaysFail != nil || alwaysErr != nil
 		}
-		ok, detail, err := r.check(st.Always)
+		ok, detail, line, err := r.check(st.Always)
 		if err != nil {
 			alwaysErr = err
 			return true
 		}
 		if !ok {
-			alwaysFail = &Failure{At: r.elapsed(), Reason: "invariant broke", Detail: detail}
+			alwaysFail = &Failure{Line: line, At: r.elapsed(), Reason: "invariant broke", Detail: detail}
 			return true
 		}
 		return false
@@ -279,7 +279,7 @@ func (r *liveRun) runStepLive(st *Step) (*Failure, error) {
 			if tick() {
 				return true
 			}
-			ok, _, err := r.check(st.Expect)
+			ok, _, _, err := r.check(st.Expect)
 			if err != nil {
 				perr = err
 				return true
@@ -308,7 +308,7 @@ func (r *liveRun) runStepLive(st *Step) (*Failure, error) {
 			return alwaysFail, nil
 		}
 		if !held {
-			_, detail, err := r.check(st.Expect)
+			_, detail, line, err := r.check(st.Expect)
 			if err != nil {
 				return nil, err
 			}
@@ -316,7 +316,7 @@ func (r *liveRun) runStepLive(st *Step) (*Failure, error) {
 			if st.Hold.get() > 0 {
 				reason = fmt.Sprintf("never held for %s within %s", st.Hold.get(), st.Until.get())
 			}
-			return &Failure{At: r.elapsed(), Reason: reason, Detail: detail, Trace: tr.result()}, nil
+			return &Failure{Line: line, At: r.elapsed(), Reason: reason, Detail: detail, Trace: tr.result()}, nil
 		}
 		return nil, nil
 	case st.Advance != nil:
@@ -342,12 +342,12 @@ func (r *liveRun) runStepLive(st *Step) (*Failure, error) {
 		return alwaysFail, nil
 	}
 	if st.Expect != nil {
-		ok, detail, err := r.check(st.Expect)
+		ok, detail, line, err := r.check(st.Expect)
 		if err != nil {
 			return nil, err
 		}
 		if !ok {
-			return &Failure{At: r.elapsed(), Reason: "expectation failed", Detail: detail, Trace: tr.result()}, nil
+			return &Failure{Line: line, At: r.elapsed(), Reason: "expectation failed", Detail: detail, Trace: tr.result()}, nil
 		}
 	}
 	return nil, nil
