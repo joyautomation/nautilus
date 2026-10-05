@@ -96,6 +96,16 @@ describe('the live check', () => {
 		expect(c.verdict).toBe('down');
 		expect(c.reasons).toEqual(['site is outside the model', 'sw1 g0/1 has no link']);
 	});
+	it('a link declared down: down is as declared, link on it is the surprise', () => {
+		const service = { ...link('sw1/g0/1'), expect: 'down' as const };
+		const quiet = checkLink(plant, service, { SW1_Port01: { OperUp: false, SpeedMbps: 1000 } });
+		expect(quiet.verdict).toBe('consistent');
+		expect(quiet.reasons).toEqual(['down, as declared', 'site is outside the model', 'sw1 g0/1 has no link']);
+		const plugged = checkLink(plant, service, { SW1_Port01: swUp(1000) });
+		expect(plugged.verdict).toBe('contradicted');
+		expect(plugged.reasons[0]).toBe('sw1 g0/1 has link, declared down: something is plugged in');
+		expect(checkLink(plant, service, {}).verdict).toBe('unverified');
+	});
 	it('confirmed: LLDP names the declared neighbour; contradicted when it names another', () => {
 		const ring = link('sw1/te0/27');
 		const ok = checkLink(plant, ring, { SW1_Port27: { ...swUp(10000), LldpSystem: 'sw2', LldpPort: 'TGigaEthernet0/28' }, SW2_Port28: swUp(10000) });
