@@ -14,7 +14,7 @@
 	import LdBlockPicker from './LdBlockPicker.svelte';
 	import { FB_TYPES } from './suggest';
 	import { layoutRung, rungMinWidth, fitArgs, L, OPERAND_LABEL_MAX, type LSpot, type LNode } from './ladderLayout';
-	import { live, liveValue, formatLive } from './liveState.svelte';
+	import { live, liveValue, liveForced, formatLive } from './liveState.svelte';
 	import { readClip, typingTarget, writeClip } from './clipboard';
 
 	type Diag = { line: number; message: string; severity: string };
@@ -991,7 +991,7 @@
 							{/if}
 							<text x={n.w / 2} y={n.h + 12} text-anchor="middle" class="operand">{trunc(n.ann.el.ref)}</text>
 							{#if valText(n.ann.el.ref, r.scope)}
-								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true}>{valText(n.ann.el.ref, r.scope)}</text>
+								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true}>{#if !r.scope && liveForced(n.ann.el.ref)}<tspan class="nx-forced-mark">{'F '}</tspan>{/if}{valText(n.ann.el.ref, r.scope)}</text>
 							{/if}
 						{:else if n.kind === 'edge'}
 							<title>{n.ann.el.mode === 'N' ? '-' : '+'}{n.ann.el.ref} — {n.ann.el.mode === 'N' ? 'falling' : 'rising'}-edge contact: TRUE for one scan when {n.ann.el.ref} goes {n.ann.el.mode === 'N' ? '1→0' : '0→1'} ({n.ann.el.ref} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope))}){diffNote(n.ann.el)}{editable ? ' — dblclick: retag · P: NO → P → N → NC · Del · drag to move' : ''}</title>
@@ -1015,7 +1015,7 @@
 							{/if}
 							<text x={n.w / 2} y={n.h + 12} text-anchor="middle" class="operand">{trunc(n.ann.el.ref)}</text>
 							{#if valText(n.ann.el.ref, r.scope)}
-								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true}>{valText(n.ann.el.ref, r.scope)}</text>
+								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true}>{#if !r.scope && liveForced(n.ann.el.ref)}<tspan class="nx-forced-mark">{'F '}</tspan>{/if}{valText(n.ann.el.ref, r.scope)}</text>
 							{/if}
 						{:else if n.kind === 'fn'}
 							<title>{n.ann.el.fn}({n.ann.el.args}){diffNote(n.ann.el)}{editable ? ' — dblclick: edit the call (any function) · Del · drag to move' : ''}</title>

@@ -258,6 +258,33 @@ Everything declared runs by default. Naming what you freeze states the
 intent — *this test drives the temperature, so the plant must not fight
 it* — and it survives a fifth task being added to the project.
 
+## Forcing — holding a tag against its writers
+
+`suspend:` stops a whole task; a **force** holds one tag. `force:` in a
+step puts tags in the controller's force table — the same one Force… in
+the editor and `POST /api/forces` use — and they stay held, against the
+driver's input image, the plant model and the logic alike, until an
+`unforce:` names them (or `unforce: all`):
+
+```yaml
+- name: a forced level starts the pump while the plant keeps running
+  steps:
+    - force: { LevelPct: 20.0 }     # the sim task still scans; the force wins
+      advance: 3s
+      expect: { PumpRun: true }
+    - force: { PumpRun: false }     # an output, against the logic
+      advance: 2s
+      expect: { PumpRun: false }
+    - unforce: all                  # both return to their writers at once
+      advance: 5s
+      expect: "LevelPct > 20.0"
+```
+
+Where `given:` writes once and lets the next writer take the tag back,
+a force is the lever for "hold this while everything else runs": a
+sensor stuck at a value, an output held off while the sequence carries
+on. Dotted member paths work as in `given:`. Forces end with the test.
+
 ## Reading a failure
 
 A failure says what broke, when in virtual time, and what the process was

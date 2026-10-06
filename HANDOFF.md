@@ -104,6 +104,14 @@ website/, docs/      docs site (deploys from main); design briefs in docs/design
   Its correctness rests on one rule — a client's generation advances only when
   a frame is actually ENQUEUED, so a dropped frame costs latency, never
   content. Do not "optimise" that by advancing it at build time.
+- **Forces live in the tag store's write path** (`runtime/force.go`). A
+  forced tag carries `tagVal.forced`; `writeLocked` records every writer's
+  value as the tag's ACTUAL value and lays the force back over it, so a
+  driver delivery, a program commit and an operator write all lose to it
+  without the scan loop knowing forces exist. Anything that persists or
+  replicates tag values must read the actual value (`readActual` — the
+  retain saver does), or a force outlives itself. A takeover or step-down
+  drops the table; a restart starts without one.
 - **The Sparkplug edge node owns the wire with one lock.** `Node.pubMu`
   serialises everything the node sends in a session: a birth (NBIRTH, then
   DBIRTHs) and a publish tick (DATA, device DBIRTH/DDEATH, store-and-forward

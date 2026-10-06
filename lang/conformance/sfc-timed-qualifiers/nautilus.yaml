@@ -1,0 +1,34 @@
+# sfc-timed-qualifiers — the IEC 61131-3 timed action qualifiers L, D, SD,
+# DS, SL (time Limited, time Delayed, Stored-and-Delayed, Delayed-and-
+# Stored, Stored-and-time-Limited) on BOOL variables and on an ACTION body,
+# and an R that resets the stored ones. SFC is the only language that can
+# express a step, so this feature has a single sfc task (README rule 3).
+# 1ms scan so every timer edge lands on an exact scan.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/sfc-timed-qualifiers'
+#   go run ./cmd/naut test lang/conformance/sfc-timed-qualifiers
+name: sfc-timed-qualifiers
+
+tasks:
+  - program: sfc-timed-qualifiers.sfc   # the first task is always "main"
+    scan: 1ms
+
+tags:
+  # Shared inputs.
+  - { name: Go,   role: state, init: false, desc: "Idle -> A" }
+  - { name: Next, role: state, init: false, desc: "A -> B" }
+  - { name: Back, role: state, init: false, desc: "B -> Idle" }
+  - { name: Rst,  role: state, init: false, desc: "B -> Clear (R on SD, DS, SL), then Clear -> Idle" }
+
+  # Outputs, sfc_ prefix: BOOL variables driven by timed associations on A,
+  # every one with PT = 100ms.
+  - { name: sfc_L,  role: state, init: false, desc: "L: on for the first 100ms A is active" }
+  - { name: sfc_D,  role: state, init: false, desc: "D: on once A has been active 100ms, until A is left" }
+  - { name: sfc_SD, role: state, init: false, desc: "SD: on 100ms after A activates, stays on until an R, even after A is left" }
+  - { name: sfc_DS, role: state, init: false, desc: "DS: on once A has been active 100ms, stays on until an R" }
+  - { name: sfc_SL, role: state, init: false, desc: "SL: on for 100ms from A's activation, even after A is left; R cuts it short" }
+  # An ACTION body under L: counts the scans it runs.
+  - { name: sfc_CntL, role: state, init: 0, desc: "scans the L body ran (100 timed + 1 final)" }
+
+driver:
+  type: memory

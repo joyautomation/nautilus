@@ -53,6 +53,38 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   double-click, together with its references and, for a pin, the calls'
   named bindings in that file. Needs a `naut` newer than 0.15.0. (#214)
 
+- **Forcing.** *Force…* holds a tag — or one member of a struct tag — at a
+  value against the field and the logic until it is removed: a forced input
+  beats the driver every scan, a forced output beats the logic. From the
+  editor's context menu, a live pill's hover, or the lock on a Live Values
+  row; *Remove Force* and *Remove All Forces* undo it. Forced values are
+  marked with an amber **F** on the inline pills, in the Live Values panel
+  (a *Forces* group first), and on the FBD, ladder and SFC diagrams, and a
+  status-bar item reads **N forces active** until the last is removed (click
+  it to list and remove). Force and Remove All ask first while
+  `nautilus.confirmControllerWrites` is on. Needs a `naut` newer than 0.15.0
+  (the controller's force table). (#211)
+
+- **SFC online commands.** Right-click a step in a live SFC diagram for
+  *Set Active Step* (jump the chart there once, Codesys's *set step*), or a
+  transition for *Fire Transition* (take it once, if its source steps are
+  active); both are in the Command Palette too, picking from the running
+  charts. Needs a `naut` newer than 0.15.0. (#192)
+
+- **SFC: timed qualifiers, IEC associations, step supervision** (naut).
+  `L`, `D`, `SD`, `DS`, `SL` now compile with the standard's semantics
+  (`D Detergent(T#3S);` was an error), the IEC textual form
+  `Detergent(D, T#3S);` is read as the same association, and a step can
+  carry a maximum time, `STEP Fill (MAXTIME := T#60S, ERROR := FillOverrun):`,
+  setting `Fill.ERR` and a tag an alarm binds to. The `.sfc` grammar
+  highlights the IEC-form qualifier, `MAXTIME`/`ERROR` and `Step.ERR`.
+
+- **Create Project… asks for the program language.** After a Minimal or
+  SDK template the command offers Structured Text, Ladder, Function Block
+  Diagram or Sequential Function Chart and passes `naut new --language`, so
+  a ladder programmer's first project opens as `program.ld` without a
+  terminal. The Get Started walkthrough's step is the same command (#221).
+
 - **Signature help: a call's parameters while you type it.** Typing `(`
   after a function or a function block instance opens the parameter-hints
   widget with the callee's signature, and `,` moves the highlight on —

@@ -36,7 +36,7 @@ labelled `ux:<kind>`, `editor:fbd|ext`, `parity:tia`, titled
 | 17 | papercut | the `(* @layout *)` block lands mid-body | OPEN #208 |
 | 18 | papercut | a blank `.fbd` seeds `PROGRAM main` | OPEN #209 |
 | 19 | gap | every tag re-declared per program, one palette gesture each | OPEN #210 |
-| 20 | gap | no force | OPEN #211 |
+| 20 | gap | no force | FIXED #211 (PR #234: Force… / F badges / status bar; row 13 now PASS) |
 
 20 findings: 4 bugs, 6 papercuts, 10 gaps. 16 new issues; 3 are covered by
 open PRs and 1 was already filed (#81).
