@@ -1,12 +1,23 @@
 PROGRAM {{.Program}}
+{{- if .NoGo}}
+(* Your control logic. The tags in nautilus.yaml are in scope as they
+   are — no declaration needed: field inputs are written before the
+   scan, outputs collected after. VAR is program state, retained across
+   scans. Naming a tag in VAR_EXTERNAL stays legal (IEC's explicit form)
+   and must then agree with its type: in nautilus.yaml —
+       VAR_EXTERNAL
+           Setpoint : REAL;
+       END_VAR *)
+{{- else}}
 (* Your control logic. VAR_EXTERNAL tags are bound by the runtime each
    scan: field inputs are written before the scan, outputs collected
    after. VAR is program state, retained across scans. *)
 VAR_EXTERNAL
-    Sensor   : REAL;  (* field input — {{if .NoGo}}bound by the driver in nautilus.yaml{{else}}see driver.go{{end}} *)
-    Setpoint : REAL;  (* operator value — {{if .NoGo}}declared in nautilus.yaml{{else}}seeded in main.go{{end}} *)
+    Sensor   : REAL;  (* field input — see driver.go *)
+    Setpoint : REAL;  (* operator value — seeded in main.go *)
     Actuator : REAL;  (* field output *)
 END_VAR
+{{- end}}
 VAR
     err : REAL;
 END_VAR

@@ -4,12 +4,17 @@ PROGRAM {{.Program}}
    edge (true for one scan), ( x ) coil, ( S x )/( R x ) latch/unlatch,
    FN(args) comparison contact, inst:TYPE(args) block.
    Open the diagram: VS Code → right-click program.ld →
-   "Open With → Ladder Diagram". *)
+   "Open With → Ladder Diagram".{{if .NoGo}}
+   The tags in nautilus.yaml are in scope as they are — no declaration
+   needed; a VAR_EXTERNAL naming one stays legal and must agree with
+   its type:.{{end}} *)
+{{- if not .NoGo}}
 VAR_EXTERNAL
-    Sensor   : REAL;  (* field input — {{if .NoGo}}bound by the driver in nautilus.yaml{{else}}see driver.go{{end}} *)
-    Setpoint : REAL;  (* operator value — {{if .NoGo}}declared in nautilus.yaml{{else}}seeded in main.go{{end}} *)
+    Sensor   : REAL;  (* field input — see driver.go *)
+    Setpoint : REAL;  (* operator value — seeded in main.go *)
     Alarm    : BOOL;  (* field output *)
 END_VAR
+{{- end}}
 LD
   RUNG high (* alarm when the sensor exceeds the setpoint *)
     GT(Sensor, Setpoint) ( Alarm )

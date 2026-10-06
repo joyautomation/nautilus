@@ -28,14 +28,16 @@ tasks:
 # Tags by role: input (driver → tag), output (tag → driver),
 # setpoint (operator-writable, exists from scan one), state (retained).
 # An input needs init (its value until the driver supplies it) — a READ of
-# a tag that was never written faults the scan, on purpose.
+# a tag that was never written faults the scan, on purpose. type: is the
+# tag's data type (BOOL, INT, DINT, REAL, TIME, STRING, or a TYPE your ST
+# declares); every program sees these tags without declaring them.
 tags:
-  - { name: Sensor,   role: input, init: 0.0 }
-  - { name: Setpoint, role: setpoint, init: 50.0 }
+  - { name: Sensor,   role: input,    type: REAL, init: 0.0 }
+  - { name: Setpoint, role: setpoint, type: REAL, init: 50.0 }
 {{- if eq .Language "ld"}}
-  - { name: Alarm,    role: output }
+  - { name: Alarm,    role: output,   type: BOOL }
 {{- else}}
-  - { name: Actuator, role: output }
+  - { name: Actuator, role: output,   type: REAL }
 {{- end}}
 
 # memory = loopback for bring-up. For an Allen-Bradley Logix controller:
