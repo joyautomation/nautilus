@@ -79,7 +79,7 @@ test('FBD: null arrays (older CLI) render without crashing; blank file offers in
 		assert.match(await text(b), /Empty file/);
 		await reset(b);
 		await clickAt(b, await center(b, '.blank button'));
-		assert.deepEqual(await fbdOps(b), [{ type: 'init', pou: 'heater_2' }]);
+		assert.deepEqual(await fbdOps(b), [{ type: 'init', pou: 'Heater2' }]);
 	});
 });
 
@@ -97,7 +97,7 @@ test('Ladder: a blank file seeds with the file name on the first op', async () =
 		await deliver(b, { type: 'ldModel', model: { name: '', rungs: [], blank: true }, title: 'interlock.ld' });
 		await reset(b);
 		await clickAt(b, await paletteBtn(b, '+ rung'));
-		assert.deepEqual(await ldOps(b), [{ type: 'addRung', name: 'rung1', after: '', pou: 'interlock' }]);
+		assert.deepEqual(await ldOps(b), [{ type: 'addRung', name: 'rung1', after: '', pou: 'Interlock' }]);
 	});
 });
 

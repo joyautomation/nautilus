@@ -15,6 +15,7 @@
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
 	import FbdNode from './FbdNode.svelte';
+	import NetBand from './NetBand.svelte';
 	import FbdEdge from './FbdEdge.svelte';
 	import FitController from './FitController.svelte';
 	import Palette from './Palette.svelte';
@@ -25,7 +26,7 @@
 	import { diffLd, normalizeLd, type LdElement, type LdModel, type RungStatus } from './ladder';
 	import SfcView from './SfcView.svelte';
 	import { diffSfc, normalizeSfc, type SfcModel } from './sfc';
-	import { layout, normalizeFbd, type FbdModel, type VarDecl } from './layout';
+	import { layout, normalizeFbd, type FbdModel, type FbdNode as ModelNode, type VarDecl } from './layout';
 	import type { FbCatalogType, FbInst } from './suggest';
 	import { mergeDiff } from './diff';
 	import { vscode, postOp, pouFromFile, setSeedPou, withSeed } from './vscodeApi';
@@ -38,7 +39,7 @@
 	import { loadViewState, saveViewState } from './viewState';
 	import { themeColorMode } from './themeMode.svelte';
 
-	const nodeTypes = { fbd: FbdNode };
+	const nodeTypes = { fbd: FbdNode, net: NetBand };
 	const edgeTypes = { fbd: FbdEdge };
 
 	let nodes = $state.raw<Node[]>([]);
@@ -73,6 +74,7 @@
 	// The FBD palette's block picker: the model's catalog, the instances on
 	// the diagram (their outputs are sources), and every name in use.
 	let fbTypes = $state<FbCatalogType[]>([]);
+	let userFuncs = $state<FbCatalogType[]>([]);
 	let fbInsts = $state<FbInst[]>([]);
 	let takenNames = $state(new Set<string>());
 	let usedNames = $state(new Set<string>());
@@ -97,6 +99,12 @@
 	// host sends it with every model; the clipboard snapshot).
 	let selectedIds: string[] = [];
 	let fbdSource: string | undefined;
+
+	// The EN/ENO pin gesture: blocks whose unbound EN/ENO pins are drawn
+	// (open pins to wire) — view state only, the text changes when a wire
+	// lands. And the network the palette inserts into (a band header click).
+	let enoOpen = new Set<string>();
+	let activeNet = $state<string | undefined>(undefined);
 
 	// The FB instance inspector: which called instance's live data is open.
 	let inspect = $state<{ name: string; type: string; ins: string[]; outs: string[] } | null>(null);
@@ -199,9 +207,35 @@
 		editor?.open({ init, at, commit, ...opts });
 	}
 
+	// The pin gesture's open EN/ENO pins, added to a copy of the model.
+	function withOpenEno(model: FbdModel): FbdModel {
+		if (!enoOpen.size) return model;
+		const nodes = model.nodes.map((n): ModelNode => {
+			if (!enoOpen.has(n.id) || (n.kind !== 'block' && n.kind !== 'fb')) return n;
+			const inputs = n.inputs ?? [];
+			const outputs = n.outputs ?? [];
+			const openEn = !inputs.includes('EN');
+			const openEno = !outputs.includes('ENO');
+			return {
+				...n,
+				inputs: openEn ? ['EN', ...inputs] : inputs,
+				outputs: openEno ? [...outputs, 'ENO'] : outputs,
+				openEn,
+				openEno
+			};
+		});
+		return { ...model, nodes };
+	}
+	function toggleEno(id: string) {
+		if (enoOpen.has(id)) enoOpen.delete(id);
+		else enoOpen.add(id);
+		if (lastModel && !diffing) render(lastModel, false);
+	}
+
 	function render(model: FbdModel, isDiff: boolean) {
 		if (!isDiff) lastModel = model;
-		const { placed, edges: modelEdges, laneIdx } = layout(model);
+		if (!isDiff && activeNet && !model.networks?.some((nw) => 'n:' + nw.number === activeNet)) activeNet = undefined;
+		const { placed, edges: modelEdges, laneIdx, frames } = layout(isDiff ? model : withOpenEno(model));
 		const editable = !isDiff;
 		// Join the compiler's squiggles onto nodes by source line — the same
 		// message the text editor shows, as a badge + tooltip on the block.
@@ -220,6 +254,7 @@
 			// resolve their live values.
 			setVarBounds(varList);
 			fbTypes = model.fbTypes ?? [];
+			userFuncs = model.funcs ?? [];
 			fbInsts = model.nodes
 				.filter((n) => n.kind === 'fb')
 				.map((n) => ({ name: n.label, type: n.type, outs: n.outputs ?? [] }));
@@ -244,7 +279,37 @@
 				.filter((v) => v.section === 'VAR_EXTERNAL')
 				.map((v) => v.name.toLowerCase())
 		);
-		nodes = placed.map((n) => ({
+		const netCount = frames.length;
+		const bands: Node[] = frames.map((f) => ({
+			id: f.id,
+			type: 'net',
+			position: { x: f.x, y: f.y },
+			data: {
+				f,
+				count: netCount,
+				editable,
+				// Read live (no re-render: a rebuilt header would eat the
+				// second click of a double-click).
+				activeOf: () => activeNet,
+				onActivate: (id: string) => {
+					activeNet = activeNet === id ? undefined : id;
+				},
+				onOp: (op: { type: 'renameNetwork' | 'moveNetwork' | 'removeNetwork' | 'addNetwork'; node: string; value?: string; text?: string }) => {
+					// A moved/removed network renumbers: the palette target goes.
+					if (op.type !== 'renameNetwork') activeNet = undefined;
+					postOp(op);
+				},
+				requestInput
+			},
+			draggable: false,
+			selectable: false,
+			connectable: false,
+			deletable: false,
+			focusable: false,
+			zIndex: -1,
+			style: 'pointer-events: none;'
+		}));
+		nodes = bands.concat(placed.map((n) => ({
 			id: n.id,
 			type: 'fbd',
 			position: { x: n.x, y: n.y },
@@ -254,6 +319,8 @@
 				editable,
 				extNames,
 				requestInput,
+				enoShown: enoOpen.has(n.id),
+				onToggleEno: toggleEno,
 				onInspect: (inst: { name: string; type: string; ins: string[]; outs: string[] }) => {
 					inspect = inst;
 					paletteOpen = varsOpen = false;
@@ -289,7 +356,7 @@
 						n.id.startsWith('f:') ||
 						n.id.startsWith('cm:') ||
 						n.id.startsWith('g:'))
-		}));
+		})));
 		const srcWire = new Map(placed.map((n) => [n.id, !!n.wire]));
 		edges = modelEdges.map((e, i) => ({
 			id: `${e.from}|${e.fromPin ?? ''}|${e.to}|${e.toPin ?? ''}|${i}`,
@@ -808,7 +875,7 @@
 		</SvelteFlow>
 	</div>
 	{/if}
-	<Palette bind:open={paletteOpen} vars={varList} {fbTypes} insts={fbInsts} taken={takenNames} />
+	<Palette bind:open={paletteOpen} vars={varList} {fbTypes} funcs={userFuncs} insts={fbInsts} taken={takenNames} net={mode === 'fbd' ? activeNet : undefined} />
 	<VarsPanel
 		bind:open={varsOpen}
 		vars={varList}

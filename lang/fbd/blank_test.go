@@ -36,7 +36,12 @@ func TestSeedBlankFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	out = applySeed("\n", mustOp(t, "\n", EditOp{Type: "init", Pou: "1bad"}))
-	if out != skeleton("Main") {
-		t.Fatalf("init with an invalid name should fall back to Main:\n%s", out)
+	if !strings.HasPrefix(out, "PROGRAM P1bad\n") {
+		t.Fatalf("init with a digit-led name should get naut new's P prefix:\n%s", out)
+	}
+	// #209: the file name's case follows naut new — main.fbd is PROGRAM Main.
+	out = applySeed("", mustOp(t, "", EditOp{Type: "init", Pou: "main"}))
+	if !strings.HasPrefix(out, "PROGRAM Main\n") {
+		t.Fatalf("a blank main.fbd should seed PROGRAM Main:\n%s", out)
 	}
 }

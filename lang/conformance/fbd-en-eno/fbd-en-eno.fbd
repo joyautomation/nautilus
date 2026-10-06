@@ -1,0 +1,27 @@
+PROGRAM EnEnoFbd
+(* EN/ENO in FBD: three networks, each block's EN wired to the EN tag. *)
+VAR_EXTERNAL
+    EN       : BOOL;
+    X        : REAL;
+    D        : REAL;
+    CU       : BOOL;
+    fbd_OUT  : REAL;
+    fbd_ENO  : BOOL;
+    fbd_CV   : INT;
+    fbd_CENO : BOOL;
+    fbd_Q    : REAL;
+    fbd_QENO : BOOL;
+END_VAR
+FBD
+  NETWORK 'LIMIT: not assigned while EN is FALSE'
+  sp = LIMIT(EN := EN, MN := 0.0, IN := X, MX := 10.0, ENO => fbd_ENO)
+  fbd_OUT := sp
+  NETWORK 'CTU: does not run while EN is FALSE'
+  c : CTU(EN := EN, CU := CU, R := FALSE, PV := 100, ENO => fbd_CENO)
+  fbd_CV := c.CV
+  NETWORK 'DIV: ENO FALSE on a zero divisor'
+  q = DIV(EN := EN, X, D)
+  fbd_Q := q
+  fbd_QENO := q.ENO
+END_FBD
+END_PROGRAM

@@ -99,9 +99,13 @@ accepts these forms.
 | Negation | `NOT high` | inline pin negation, drawn as the IEC circle on the pin |
 | Constant | `5.0`, `T#10S`, `TRUE`, `'ok'` | a literal input chip |
 | Accessor | `TempHist[2]`, `M.Speed` | array element or struct member, as an input or a coil target |
+| Network | `NETWORK 'high-level alarm'` | starts the next numbered network; the title is optional ([below](#networks)) |
+| EN / ENO | `sp = LIMIT(EN := Run, MN := 0.0, IN := x, MX := 9.0, ENO => ok)`, `t1.ENO` | execution control on any block ([below](#eneno-execution-control)) |
 
 Full-line `//` comments inside the body render as notes on the diagram.
-Statements may end with `;` or just a newline.
+Statements may end with `;` or just a newline. A standard function's inputs
+are positional, `LIMIT(0.0, x, 9.0)`, or all named by their standard names,
+`LIMIT(MN := 0.0, IN := x, MX := 9.0)`.
 
 ## How a diagram evaluates
 
@@ -124,8 +128,47 @@ body carries the value its coil wrote on the previous scan.
 Statements evaluate in source order, with one adjustment: a function-block
 call is emitted ahead of any statement that reads its output pins, so
 `lic.CV` reads this scan's result no matter where `lic` sits in the file.
-Ties keep source order. There is no other reordering and no way to override
-it.
+Ties keep source order. With [networks](#networks), that rule applies within
+each network and the networks run in order. There is no other reordering
+and no way to override it.
+
+### Networks
+
+A body can be divided into numbered networks, the way TIA Portal and CODESYS
+lay out an FBD block. A `NETWORK` line starts one, with an optional title,
+and it runs to the next:
+
+```iecfbd
+FBD
+  NETWORK 'LIC-101: level to pump speed'
+  lic : PID(AUTO := LeadReq, PV := LIT101_Level, SP := LevelSP, DT := LevelDtS)
+  SpeedRef := lic.CV
+  NETWORK 'LAH-101: high level alarm'
+  // latches at the setpoint, clears 5 % below it
+  above = GE(LIT101_Level, HighLevelAlmSP)
+  below = LE(LIT101_Level, SUB(HighLevelAlmSP, 5.0))
+  HighLevelAlm := AND(OR(above, HighLevelAlm), NOT below)
+END_FBD
+```
+
+Network 1 runs to completion, then network 2. Within a network the
+FB-before-reader rule holds; a read of a later network's FB output sees the
+previous scan's value. The numbers are positions: the file holds only the
+order, so moving or inserting a network renumbers nothing in the text.
+Statements before the first `NETWORK` line are an untitled first network,
+and a body with no `NETWORK` line is one network, exactly as before.
+
+### EN/ENO: execution control
+
+Any block takes `EN` (BOOL, TRUE when unbound) and gives `ENO`, as IEC
+61131-3 defines them. While `EN` is FALSE the block does not run: a
+function's result is not written, so the variable it drives keeps its
+value, and a function block's outputs and internal state hold. `ENO` is
+`EN` AND no error; `DIV` and `MOD` report a zero divisor through it. A
+block with EN/ENO must drive a variable (a coil, directly or through its
+named wire), and its `ENO` reads like a pin: `t1.ENO`, or `sp.ENO` for a
+block on wire `sp`, can feed a coil or the next block's `EN`. The details,
+and the ST form, are in the [language reference](/reference/functions/#eneno-execution-control).
 
 ## Types, functions, and blocks
 
@@ -135,7 +178,9 @@ and `MUL` take two or more inputs (the `+` pin in the editor adds one);
 one-input pass-through for wiring. Standard functions such as `LIMIT`, `SEL`,
 `SQRT` and `CONCAT` are written as blocks with positional inputs, and
 standard function blocks such as `TON`, `CTU` and `R_TRIG` are instantiated
-with named pins. User-defined `TYPE` structs work as inputs and coil targets.
+with named pins. An FB input left out of the call keeps its value (its
+declared initial value until something writes it). User-defined `TYPE`
+structs work as inputs and coil targets.
 The whole list is in the [language reference](/reference/functions/).
 
 A `FUNCTION_BLOCK` you write yourself instantiates the same way a `TON` does:
@@ -175,8 +220,19 @@ and delete a selected node.
 
 <Clip id="fbd_wire" />
 
-The **+ add** palette inserts statements: block-to-wire, coil, timer,
+The **+ add** palette inserts statements: networks, block-to-wire (its
+function field offers the project's own `FUNCTION`s by name, beside the
+standard ones), function blocks from the picker (every required input an
+open `_` pin; an input with a declared default stays unbound), coil, timer,
 counter, comment, bare reference chips, and variable declarations.
+
+Each network draws as a numbered band with its title, and every statement
+carries a small badge with its execution order in the network. Click a
+band's header and **+ add** inserts into that network; its ▲ ▼ buttons move
+the network, + adds one after it, ✕ removes the `NETWORK` line (the
+statements join the network above), and a double-click renames it.
+`EN`/`ENO` pins draw when they are bound; the small **EN** toggle on a block
+shows them as open pins to wire.
 
 <Clip id="fbd_add_block" />
 
@@ -187,8 +243,9 @@ right-click → **Find All References**, opens the References view on that
 name.
 
 Layout is computed from topology by default. Drag a node to pin it and the
-position is stored in a `(* @layout *)` comment that the compiler skips;
-**auto layout** clears every pin.
+position is stored in a `(* @layout *)` comment that the compiler skips,
+right after `END_FBD` so it never sits between statements; **auto layout**
+clears every pin.
 
 <Clip id="fbd_move_node" />
 
@@ -236,9 +293,8 @@ Because the source is text, a wiring change reviews as a diff:
 
 - Authoring a `FUNCTION` in FBD. Functions are ST; blocks may be FBD or
   ladder.
-- `EN`/`ENO` pins. Blocks always evaluate.
-- Execution-order overrides. Order is source order plus the FB-before-reader
-  rule described above.
+- Execution-order overrides. Order is network order, then source order plus
+  the FB-before-reader rule within a network.
 - Control flow: no `IF`, `CASE`, or loops in the netlist.
 - Inline arithmetic in an array index. Compute the index on a named wire
   first, then use `Levels[i]`.
