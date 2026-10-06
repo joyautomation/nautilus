@@ -84,6 +84,12 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- **Find All References from another file now finds a program that defines
+  a FUNCTION_BLOCK ahead of its PROGRAM.** Such a file was not recognized
+  as a program at all, so its reads and writes of a tag were missing from
+  the list whenever the search started anywhere else. (Found by the X44
+  smoke row.)
+
 - **The FB monitor CodeLens shows the real position.** It said "1 of 2"
   whichever instance was monitored; monitoring the second one now reads
   "2 of 2" (#146).
