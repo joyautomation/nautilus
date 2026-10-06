@@ -219,7 +219,9 @@ func (s *Server) handleActivate(w http.ResponseWriter, r *http.Request) {
 
 	// Validate every source before touching any program.
 	for _, name := range running {
-		if _, err := runtime.Compile(sources[name]); err != nil {
+		// In the running program's own context: the project's tags are in
+		// scope without a declaration, as they were at boot.
+		if err := s.rt.TaskProgram(name).Check(sources[name]); err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
 				"error": "task " + name + " at " + c.Short + " does not compile: " + err.Error(),
 			})
