@@ -321,7 +321,12 @@ func New(o Options) (*Runtime, error) {
 	if len(o.Libraries) > 0 {
 		o.Program = stproject.Join(o.Libraries, o.Program)
 	}
-	prog, err := Compile(o.Program)
+	scope, err := tagScopeFor(o)
+	if err != nil {
+		return nil, err
+	}
+	lopts := scope.LowerOpts()
+	prog, err := CompileWith(o.Program, lopts)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +350,7 @@ func New(o Options) (*Runtime, error) {
 		if name == MainTaskName {
 			return nil, fmt.Errorf("task name %q is reserved for the main task", MainTaskName)
 		}
-		tprog, err := Compile(src)
+		tprog, err := CompileWith(src, lopts)
 		if err != nil {
 			return nil, fmt.Errorf("task %s: %w", name, err)
 		}
@@ -372,6 +377,9 @@ func New(o Options) (*Runtime, error) {
 
 	types, err := unionTypes(prog, tasks)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkBindings(prog, tasks, o.Tags); err != nil {
 		return nil, err
 	}
 	if o, err = expandTags(o, types, unionGlobals(prog, tasks)); err != nil {
@@ -439,6 +447,47 @@ func New(o Options) (*Runtime, error) {
 	r.stats.Periods = make([]float64, 0, historyLen)
 	r.stats.Histogram = make([]int, histBuckets)
 	return r, nil
+}
+
+// tagScopeFor resolves the tags every program sees without declaring
+// them: the declared tags (o.Tags), plus each task's dt-tag, which the
+// runtime writes every scan as REAL seconds. Types resolve against the
+// TYPE tables of the composed sources, read before anything compiles —
+// the programs compile against this scope, so it cannot wait for them.
+func tagScopeFor(o Options) (TagScope, error) {
+	types := map[string]*ir.Type{}
+	add := func(src string) {
+		for n, t := range sourceTypes(src) {
+			if _, _, dup := ir.Lookup(types, n); !dup {
+				types[n] = t
+			}
+		}
+	}
+	add(o.Program)
+	for _, td := range o.Tasks {
+		src := td.Program
+		if len(td.Libraries) > 0 {
+			src = stproject.Join(td.Libraries, src)
+		}
+		add(src)
+	}
+	scope, errs := ResolveTagScope(o.Tags, types)
+	if len(errs) > 0 {
+		return TagScope{}, errs[0]
+	}
+	dt := func(name string) {
+		if name == "" {
+			return
+		}
+		if _, _, ok := ir.Lookup(scope.Implicit, name); !ok {
+			scope.Implicit[name] = ir.RealT
+		}
+	}
+	dt(o.DtTag)
+	for _, td := range o.Tasks {
+		dt(td.DtTag)
+	}
+	return scope, nil
 }
 
 // OnScan registers fn to run at the end of every main-task Scan() — after

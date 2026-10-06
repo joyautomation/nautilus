@@ -164,21 +164,25 @@ func expandTags(o Options, types, globals map[string]*ir.Type) (Options, error) 
 			outputs = append(outputs, d.Name)
 		}
 		switch {
-		case d.Init != nil && d.Type != "":
+		case d.Type != "":
 			// A typed tag's init is validated and shaped against the
-			// resolved struct (SeedFromInit), rather than stored as the
-			// raw manifest value — a nested map is not one of the kinds
-			// Tags.Set understands, so without this it would silently do
-			// nothing.
-			t, _, ok := ir.Lookup(types, d.Type)
-			if !ok {
-				return o, fmt.Errorf("tag %s: no TYPE %s is declared by this project's "+
-					"ST — a tag's type is the one the programs use, so declare it in a "+
-					"library .st file (known: %s)", d.Name, d.Type, knownTypes(types))
+			// resolved type (SeedFromInit), rather than stored as the raw
+			// manifest value — a nested map is not one of the kinds
+			// Tags.Set understands, and `type: INT` with `init: 2.5` is a
+			// mistake to report, not a REAL to store.
+			t, err := ResolveTagType(d.Type, types)
+			if err != nil {
+				return o, fmt.Errorf("tag %s: %w", d.Name, err)
+			}
+			if d.Init == nil {
+				if d.Role == RoleSetpoint || d.Role == RoleState {
+					seed[d.Name] = ir.Zero(t)
+				}
+				break
 			}
 			v, err := ir.SeedFromInit(t, d.Init)
 			if err != nil {
-				return o, fmt.Errorf("tag %s: %w", d.Name, err)
+				return o, fmt.Errorf("tag %s (type %s): %w", d.Name, d.Type, err)
 			}
 			seed[d.Name] = v
 		case d.Init != nil:
@@ -191,14 +195,11 @@ func expandTags(o Options, types, globals map[string]*ir.Type) (Options, error) 
 				break
 			}
 			seed[d.Name] = d.Init
-		case d.Type != "":
-			t, _, ok := ir.Lookup(types, d.Type)
-			if !ok {
-				return o, fmt.Errorf("tag %s: no TYPE %s is declared by this project's "+
-					"ST — a tag's type is the one the programs use, so declare it in a "+
-					"library .st file (known: %s)", d.Name, d.Type, knownTypes(types))
-			}
-			if d.Role == RoleSetpoint || d.Role == RoleState {
+		case d.Role == RoleSetpoint || d.Role == RoleState:
+			// Neither init nor type: a GVL global (a library's file-level
+			// VAR_GLOBAL), which starts at the zero of the type the
+			// programs declare it as — the Codesys meaning of a GVL entry.
+			if t := folded[ir.NameKey(d.Name)]; t != nil {
 				seed[d.Name] = ir.Zero(t)
 			}
 		}

@@ -102,6 +102,19 @@ func (p *Parser) parseProgram() (*Program, error) {
 			}
 			prog.FuncDecls = append(prog.FuncDecls, fn)
 			continue
+		case TokenVarGlobal:
+			// A file-level VAR_GLOBAL block (a GVL file) declares globals
+			// for whatever follows it — in a composed source, the PROGRAM.
+			// Before this case it ended the declaration prelude, and the
+			// PROGRAM after it parsed as a bare statement ("undeclared
+			// identifier <ProgramName>", #175).
+			vb, err := p.parseVarBlock()
+			if err != nil {
+				return nil, err
+			}
+			vb.FileScope = true
+			prog.VarBlocks = append(prog.VarBlocks, *vb)
+			continue
 		case TokenProgram:
 			if prog.TopKeyword == "" {
 				prog.TopKeyword = "PROGRAM"

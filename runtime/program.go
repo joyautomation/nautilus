@@ -46,6 +46,11 @@ type Program struct {
 	view    *scanView
 	exts    []string
 	extsFor *ir.Program
+
+	// opts is the compile context every (re)compile of this program uses:
+	// the project's tags, visible without a VAR_EXTERNAL (see TagScope).
+	// An online edit compiles against the same tag table the boot did.
+	opts st.LowerOpts
 }
 
 // fbdBlockRe detects a Function Block Diagram netlist in program source: an
@@ -77,7 +82,17 @@ func Language(src string) string {
 
 // lowerSource compiles original program source — ST, or ST with an FBD,
 // LD, or SFC program body — down to the IR.
-func lowerSource(src string) (*ir.Program, error) {
+func lowerSource(src string, opts st.LowerOpts) (*ir.Program, error) {
+	ast, err := parseSource(src)
+	if err != nil {
+		return nil, err
+	}
+	return st.LowerWithOpts(ast, opts)
+}
+
+// parseSource takes program source in any of the four languages to the
+// ST AST: the front half of lowerSource.
+func parseSource(src string) (*st.Program, error) {
 	if Language(src) == "ld" {
 		fbdSrc, err := ld.Transpile(src)
 		if err != nil {
@@ -101,27 +116,41 @@ func lowerSource(src string) (*ir.Program, error) {
 		}
 		src = stSrc
 	}
-	ast, err := st.Parse(src)
-	if err != nil {
-		return nil, err
-	}
-	return st.Lower(ast)
+	return st.Parse(src)
 }
 
 // Compile parses and lowers program source (ST or FBD) into a runnable
 // program.
 func Compile(src string) (*Program, error) {
-	p := &Program{bootSource: src}
+	return CompileWith(src, st.LowerOpts{})
+}
+
+// CompileWith is Compile in a project's context: opts carries the tags a
+// program sees without declaring them (TagScope.LowerOpts). Every later
+// Swap / SwapWarm / Check of the program reuses opts.
+func CompileWith(src string, opts st.LowerOpts) (*Program, error) {
+	p := &Program{bootSource: src, opts: opts}
 	if err := p.Swap(src); err != nil {
 		return nil, err
 	}
 	return p, nil
 }
 
+// Check compiles src in this program's context without running or
+// swapping anything — the pre-flight a multi-program activation does
+// before touching any program.
+func (p *Program) Check(src string) error {
+	p.mu.Lock()
+	opts := p.opts
+	p.mu.Unlock()
+	_, err := lowerSource(src, opts)
+	return err
+}
+
 // Swap replaces the running program with newly-compiled source, resetting the
 // retained frame. On a compile error the old program keeps running.
 func (p *Program) Swap(src string) error {
-	prog, err := lowerSource(src)
+	prog, err := lowerSource(src, p.opts)
 	if err == nil {
 		p.mu.Lock()
 		p.prog, p.frame = prog, ir.NewFrame(prog)
@@ -191,7 +220,7 @@ type SwapReport struct {
 // or counter survives the edit. The outgoing program and frame are kept for
 // one Rollback. On a compile error the running program is untouched.
 func (p *Program) SwapWarm(src string) (SwapReport, error) {
-	prog, err := lowerSource(src)
+	prog, err := lowerSource(src, p.opts)
 	if err == nil {
 		p.mu.Lock()
 		frame, resets := ir.MigrateFrame(prog, p.prog, p.frame)

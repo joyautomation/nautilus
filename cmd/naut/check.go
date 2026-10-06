@@ -97,7 +97,34 @@ func runCheck(args []string) int {
 	}
 
 	bad, blankWarns := 0, 0
+	// #199: an error inside a library is reported once, on the library's
+	// own line — by that file's own check when it is one of the files
+	// checked, else from the first program that composes it. The programs
+	// that compose a broken library say nothing more: their compile stops
+	// at the library, and fixing it is the one thing to do.
+	ownBad := map[string]bool{}  // abs path → its own check failed
+	display := map[string]string{} // abs path → the name it is printed as
+	var libErrs []libErr
+	markBad := func(f string) {
+		bad++
+		if abs, err := filepath.Abs(f); err == nil {
+			ownBad[abs] = true
+		}
+	}
+	tagsFor := map[string][]runtime.TagDef{}
+	projectTags := func(f string) []runtime.TagDef {
+		root := stproject.ProjectRoot(f)
+		if defs, ok := tagsFor[root]; ok {
+			return defs
+		}
+		defs := project.TagDefsFor(f)
+		tagsFor[root] = defs
+		return defs
+	}
 	for _, f := range files {
+		if abs, err := filepath.Abs(f); err == nil {
+			display[abs] = f
+		}
 		src, err := os.ReadFile(f)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "naut check:", err)
@@ -120,7 +147,7 @@ func runCheck(args []string) int {
 		// dropped from every composition (it is neither a library nor a
 		// task), so it is refused here, by its project-relative path.
 		if inLibDir(f) && stproject.DeclaresProgram(source) {
-			bad++
+			markBad(f)
 			fmt.Printf("%s: declares a PROGRAM, but %s/ holds libraries only — "+
 				"programs belong in the root and in `tasks:`\n", f, stproject.LibDir)
 			continue
@@ -130,7 +157,8 @@ func runCheck(args []string) int {
 		// runtime that composes sources see it. They are resolved BEFORE the
 		// transpile hops below because a ladder rung needs a user block's
 		// signature to know which pins its power uses.
-		prelude, libSources, preludeLines := stproject.PreludeSources(f, nil)
+		prelude, libSources, segs := stproject.PreludeParts(f, nil)
+		tags := projectTags(f)
 		// Graphical languages compile by transpiling toward ST — LD to the
 		// FBD netlist, FBD to ST — then check exactly like an .st file; the
 		// composed line maps project diagnostic positions back onto the
@@ -144,7 +172,7 @@ func runCheck(args []string) int {
 			// other program.
 			prog, perr := sfc.Parse(source)
 			if perr != nil {
-				bad++
+				markBad(f)
 				fmt.Printf("%s: %s\n", f, perr.Error())
 				continue
 			}
@@ -156,12 +184,12 @@ func runCheck(args []string) int {
 				}
 			}
 			if hasErr {
-				bad++
+				markBad(f)
 				continue
 			}
 			stSrc, lm, terr := sfc.TranspileWithLines(source)
 			if terr != nil {
-				bad++
+				markBad(f)
 				fmt.Printf("%s: %s\n", f, terr.Error())
 				continue
 			}
@@ -170,7 +198,7 @@ func runCheck(args []string) int {
 		if strings.EqualFold(filepath.Ext(f), ".ld") {
 			fbdSrc, lm, terr := ld.TranspileWithLines(source, libSources...)
 			if terr != nil {
-				bad++
+				markBad(f)
 				fmt.Printf("%s: %s\n", f, terr.Error())
 				continue
 			}
@@ -181,7 +209,7 @@ func runCheck(args []string) int {
 		if strings.EqualFold(filepath.Ext(f), ".fbd") || strings.EqualFold(filepath.Ext(f), ".ld") {
 			stSrc, lm, terr := fbd.TranspileWithLines(source)
 			if terr != nil {
-				bad++
+				markBad(f)
 				fmt.Printf("%s: %s\n", f, terr.Error())
 				continue
 			}
@@ -199,21 +227,72 @@ func runCheck(args []string) int {
 			}
 			source, lineMap = stSrc, lm
 		}
-		if msg, pos, failed := compileErr(source, prelude, preludeLines); failed {
-			bad++
-			if lineMap != nil {
-				if pos.Line >= 1 && pos.Line <= len(lineMap) {
-					pos = st.Pos{Line: lineMap[pos.Line-1], Col: 1}
-				} else {
-					pos = st.Pos{Line: 1, Col: 1}
-				}
+		mapLine := func(line int) int {
+			if lineMap == nil {
+				return line
 			}
-			fmt.Printf("%s:%d:%d: %s\n", f, pos.Line, pos.Col, msg)
+			if line >= 1 && line <= len(lineMap) {
+				return lineMap[line-1]
+			}
+			return 1
+		}
+		res := compileFile(source, prelude, segs, tags)
+		if res.failed {
+			if res.inLib {
+				libErrs = append(libErrs, res.lib)
+				continue
+			}
+			markBad(f)
+			pos := res.pos
+			if lineMap != nil {
+				pos = st.Pos{Line: mapLine(pos.Line), Col: 1}
+			}
+			fmt.Printf("%s:%d:%d: %s\n", f, pos.Line, pos.Col, res.msg)
 			continue
+		}
+		// A program's own VAR of a tag's name hides the tag inside that
+		// program — legal (IEC scoping), and almost never what was meant.
+		for _, vd := range runtime.ShadowedTags(res.prog, tags) {
+			blankWarns++
+			line, col := mapLine(vd.Pos.Line), vd.Pos.Col
+			if lineMap != nil {
+				col = 1
+			}
+			fmt.Printf("%s:%d:%d: warning: local %s shadows the project tag %s — "+
+				"this program reads and writes its own %s, not the tag; rename it, "+
+				"or drop the declaration to use the tag\n", f, line, col, vd.Name, vd.Name, vd.Name)
 		}
 		// The target's rules run on a file that compiles: the same
 		// lowering `naut logix write` uses, so what passes here writes.
 		if *target == "logix" && checkLogixTarget(f, original, libSources) {
+			markBad(f)
+		}
+	}
+
+	// Library errors that surfaced only through a program that composes
+	// the library: reported at the library's own line, once.
+	seenLib, libCounted := map[string]bool{}, map[string]bool{}
+	for _, le := range libErrs {
+		if ownBad[le.path] {
+			continue // its own check already reported it, on its own line
+		}
+		key := fmt.Sprintf("%s:%d:%d: %s", le.path, le.line, le.col, le.msg)
+		if seenLib[key] {
+			continue
+		}
+		seenLib[key] = true
+		name, ok := display[le.path]
+		if !ok {
+			name = le.path
+			if wd, err := os.Getwd(); err == nil {
+				if rel, err := filepath.Rel(wd, le.path); err == nil {
+					name = rel
+				}
+			}
+		}
+		fmt.Printf("%s:%d:%d: %s\n", name, le.line, le.col, le.msg)
+		if !libCounted[le.path] {
+			libCounted[le.path] = true
 			bad++
 		}
 	}
@@ -499,11 +578,31 @@ func sortedNames[V any](m map[string]V) []string {
 	return out
 }
 
-// compileErr runs the same parse+lower pipeline as the LSP and returns the
-// first diagnostic. Positions default to 1:1 when the compiler couldn't
-// attach one (e.g. some parse errors). The prelude participates in lowering
-// only; positions are remapped back into the checked file.
-func compileErr(src, prelude string, preludeLines int) (string, st.Pos, bool) {
+// libErr is a compile error positioned in a library, by the library's
+// own path and line.
+type libErr struct {
+	path      string
+	line, col int
+	msg       string
+}
+
+// checkResult is one file's compile verdict.
+type checkResult struct {
+	failed bool
+	msg    string
+	pos    st.Pos // in the checked file
+	// inLib: the error lies in a library the file composes, at lib.
+	inLib bool
+	lib   libErr
+	prog  *st.Program // the file's own parse, when it compiled
+}
+
+// compileFile runs the same parse+lower pipeline as the LSP: the prelude
+// (the project's libraries, segs locating each) joins ahead of src, and
+// the project's tags are in scope as the runtime puts them there
+// (runtime.ResolveTagScope). Positions in src are reported in src's
+// coordinates; an error inside the prelude is attributed to its library.
+func compileFile(src, prelude string, segs []stproject.Segment, tags []runtime.TagDef) checkResult {
 	prog, err := st.Parse(src)
 	if err != nil {
 		// Anchor on the parser-reported position (shared with the LSP via
@@ -512,19 +611,21 @@ func compileErr(src, prelude string, preludeLines int) (string, st.Pos, bool) {
 		if p, ok := st.ParseErrorPos(err); ok {
 			pos = p
 		}
-		return err.Error(), pos, true
+		return checkResult{failed: true, msg: err.Error(), pos: pos}
 	}
-	lowerProg := prog
+	lowerProg, preludeLines := prog, 0
 	if prelude != "" {
 		if combined, cerr := st.Parse(prelude + src); cerr == nil {
-			lowerProg = combined
-		} else {
-			preludeLines = 0
+			lowerProg, preludeLines = combined, strings.Count(prelude, "\n")
 		}
-	} else {
-		preludeLines = 0
 	}
-	if _, err := st.Lower(lowerProg); err != nil {
+	var opts st.LowerOpts
+	if len(tags) > 0 {
+		types, _ := st.Types(lowerProg)
+		scope, _ := runtime.ResolveTagScope(tags, types)
+		opts = scope.LowerOpts()
+	}
+	if _, err := st.LowerWithOpts(lowerProg, opts); err != nil {
 		pos := st.Pos{Line: 1, Col: 1}
 		msg := err.Error()
 		if le, ok := st.AsLowerError(err); ok && le.Pos.Line > 0 {
@@ -532,15 +633,23 @@ func compileErr(src, prelude string, preludeLines int) (string, st.Pos, bool) {
 			// LowerError.Error() adds is already in the path:line:col.
 			pos, msg = le.Pos, le.Err.Error()
 		}
-		if pos.Line > preludeLines {
+		switch {
+		case pos.Line > preludeLines:
 			pos.Line -= preludeLines
-		} else if preludeLines > 0 {
-			pos = st.Pos{Line: 1, Col: 1}
-			msg = "in project library files: " + msg
+		case preludeLines > 0:
+			if sg, line, ok := stproject.Locate(segs, pos.Line); ok {
+				col := pos.Col
+				if sg.Transpiled {
+					line, col = 1, 1
+				}
+				return checkResult{failed: true, inLib: true, msg: msg,
+					lib: libErr{path: sg.Path, line: line, col: col, msg: msg}}
+			}
+			pos, msg = st.Pos{Line: 1, Col: 1}, "in project library files: "+msg
 		}
-		return msg, pos, true
+		return checkResult{failed: true, msg: msg, pos: pos}
 	}
-	return "", st.Pos{}, false
+	return checkResult{prog: prog}
 }
 
 // inLibDir reports whether f lies under the lib/ directory of a manifest
