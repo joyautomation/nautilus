@@ -527,20 +527,21 @@ func parseIntInto(name string, t convType, s string) (Value, error) {
 		}
 		return Value{}, fmt.Errorf("%s: %q is not an integer", name, s)
 	}
-	lo, hi := intRange(t)
-	if neg {
-		if mag == 0 {
-			return IntVal(0), nil
-		}
-		if -float64(mag) < lo || (t.signed && t.width == 64 && mag > 1<<63) {
-			return Value{}, fmt.Errorf("%s: %q is out of range for %s", name, s, intRangeText(t))
-		}
-		return IntVal(-int64(mag)), nil
+	// The largest magnitude t holds on each side, as a uint64.
+	var maxPos, maxNeg uint64
+	switch {
+	case t.signed:
+		maxPos, maxNeg = uint64(1)<<(t.width-1)-1, uint64(1)<<(t.width-1)
+	case t.width == 64:
+		maxPos = math.MaxUint64
+	default:
+		maxPos = uint64(1)<<t.width - 1
 	}
-	if t.width < 64 || t.signed {
-		if float64(mag) >= hi || (t.signed && t.width == 64 && mag > 1<<63-1) {
-			return Value{}, fmt.Errorf("%s: %q is out of range for %s", name, s, intRangeText(t))
-		}
+	if neg && mag > maxNeg || !neg && mag > maxPos {
+		return Value{}, fmt.Errorf("%s: %q is out of range for %s", name, s, intRangeText(t))
+	}
+	if neg {
+		return IntVal(int64(-mag)), nil // two's complement: -(2^63) wraps to MinInt64
 	}
 	return IntVal(int64(mag)), nil
 }

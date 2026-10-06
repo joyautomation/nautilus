@@ -1,0 +1,83 @@
+PROGRAM ConvMatrixFbd
+(* conversions.go's rules through every family: wrap at the target width,
+   ties to even, toward-zero TRUNC, binary transfer, BOOL 0/1, TIME in ms,
+   STRING round trips, and the overloaded TO_<type> — one block per output. *)
+VAR_EXTERNAL
+    D : DINT;
+    S : SINT;
+    U : UINT;
+    W : WORD;
+    DW : DWORD;
+    R : REAL;
+    LR : LREAL;
+    T : TIME;
+    TXT : STRING;
+    B : BOOL;
+    fbd_D2I : INT;
+    fbd_D2UI : UINT;
+    fbd_D2B : BYTE;
+    fbd_S2UI : UINT;
+    fbd_S2D : DINT;
+    fbd_W2I : INT;
+    fbd_UI2S : SINT;
+    fbd_ToUI : UINT;
+    fbd_R2D : DINT;
+    fbd_ToD : DINT;
+    fbd_TrD : DINT;
+    fbd_LR2S : SINT;
+    fbd_D2R : REAL;
+    fbd_UI2LR : LREAL;
+    fbd_R2DW : DWORD;
+    fbd_DW2R : REAL;
+    fbd_B2D : DINT;
+    fbd_W2B : BOOL;
+    fbd_D2BY2B : BOOL;
+    fbd_T2D : DINT;
+    fbd_T2I : INT;
+    fbd_D2T : TIME;
+    fbd_R2T : TIME;
+    fbd_T2LR : LREAL;
+    fbd_D2Str : STRING;
+    fbd_UI2Str : STRING;
+    fbd_DRound : DINT;
+    fbd_RRound : REAL;
+    fbd_TRound : TIME;
+    fbd_T2Str : STRING;
+    fbd_Txt2W : WORD;
+    fbd_ToStr : STRING;
+END_VAR
+FBD
+  fbd_D2I := DINT_TO_INT(D)
+  fbd_D2UI := DINT_TO_UINT(D)
+  fbd_D2B := DINT_TO_BYTE(D)
+  fbd_S2UI := SINT_TO_UINT(S)
+  fbd_S2D := SINT_TO_DINT(S)
+  fbd_W2I := WORD_TO_INT(W)
+  fbd_UI2S := UINT_TO_SINT(U)
+  fbd_ToUI := TO_UINT(S)
+  fbd_R2D := REAL_TO_DINT(R)
+  fbd_ToD := TO_DINT(R)
+  fbd_TrD := TRUNC_DINT(R)
+  fbd_LR2S := LREAL_TO_SINT(LR)
+  fbd_D2R := DINT_TO_REAL(D)
+  fbd_UI2LR := UINT_TO_LREAL(U)
+  fbd_R2DW := REAL_TO_DWORD(R)
+  fbd_DW2R := DWORD_TO_REAL(DW)
+  fbd_B2D := BOOL_TO_DINT(B)
+  fbd_W2B := WORD_TO_BOOL(W)
+  fbd_D2BY2B := BYTE_TO_BOOL(DINT_TO_BYTE(D))
+  fbd_T2D := TIME_TO_DINT(T)
+  fbd_T2I := TIME_TO_INT(T)
+  fbd_D2T := DINT_TO_TIME(D)
+  fbd_R2T := REAL_TO_TIME(R)
+  fbd_T2LR := TIME_TO_LREAL(T)
+  fbd_D2Str := DINT_TO_STRING(D)
+  fbd_UI2Str := UINT_TO_STRING(U)
+  fbd_DRound := STRING_TO_DINT(DINT_TO_STRING(D))
+  fbd_RRound := STRING_TO_REAL(REAL_TO_STRING(R))
+  fbd_TRound := STRING_TO_TIME(TIME_TO_STRING(T))
+  fbd_T2Str := TIME_TO_STRING(T)
+  fbd_Txt2W := STRING_TO_WORD(TXT)
+  fbd_ToStr := TO_STRING(LR)
+END_FBD
+END_PROGRAM

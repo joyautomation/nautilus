@@ -114,8 +114,9 @@ is the house style. What matters here:
 
 Where the implementation deliberately departs from the standard (the
 documented ones live in `lang/ir/builtins_std.go` and `docs/functions.md`:
-every INT width is int64 and nothing wraps, ROL/ROR rotate over 64 bits,
-string positions clamp), the corpus **pins the deviation as a test** — a
+every INT width is int64 and arithmetic never wraps — a conversion does,
+`st-conversions-matrix` — ROL/ROR rotate over 64 bits, string positions
+clamp), the corpus **pins the deviation as a test** — a
 feature whose suite asserts the actual, documented behaviour, with a
 comment at the top of the `*_test.yaml` saying which decision it pins and
 where it is written down. The point is that the deviation is a decision,
@@ -176,11 +177,18 @@ Current table:
 | `sfc-step-t` |   |   |   | ✓ | 5 |
 | `sfc-timed-qualifiers` |   |   |   | ✓ | 10 |
 | `st-bitwise` | ✓ |   | ✓ |   | 5 |
+| `st-case-constants` | ✓ |   |   | ✓ | 3 |
 | `st-case-insensitive` | ✓ | ✓ | ✓ | ✓ | 2 |
+| `st-conversions-matrix` | ✓ |   | ✓ |   | 8 |
 | `st-div-zero` | ✓ |   |   |   | 4 |
+| `st-enum` | ✓ |   |   | ✓ | 2 |
+| `st-global-constants` | ✓ | ✓ | ✓ | ✓ | 3 |
 | `st-int-width` | ✓ |   |   |   | 5 |
 | `st-mux-fault` | ✓ |   |   |   | 2 |
+| `st-partial-access` | ✓ | ✓ | ✓ |   | 2 |
+| `st-region` | ✓ |   |   | ✓ | 2 |
 | `st-string-clamp` | ✓ |   |   |   | 8 |
+| `st-var-temp` | ✓ | ✓ | ✓ | ✓ | 2 |
 | `st-xor` | ✓ |   |   |   | 3 |
 
-27 features, 164 tests.
+34 features, 186 tests.

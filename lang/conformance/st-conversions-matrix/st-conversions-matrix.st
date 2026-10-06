@@ -1,0 +1,81 @@
+PROGRAM ConvMatrixSt
+(* conversions.go's rules through every family: wrap at the target width,
+   ties to even, toward-zero TRUNC, binary transfer, BOOL 0/1, TIME in ms,
+   STRING round trips, and the overloaded TO_<type>. *)
+VAR_EXTERNAL
+    D : DINT;
+    S : SINT;
+    U : UINT;
+    W : WORD;
+    DW : DWORD;
+    R : REAL;
+    LR : LREAL;
+    T : TIME;
+    TXT : STRING;
+    B : BOOL;
+    st_D2I : INT;
+    st_D2UI : UINT;
+    st_D2B : BYTE;
+    st_S2UI : UINT;
+    st_S2D : DINT;
+    st_W2I : INT;
+    st_UI2S : SINT;
+    st_ToUI : UINT;
+    st_R2D : DINT;
+    st_ToD : DINT;
+    st_TrD : DINT;
+    st_LR2S : SINT;
+    st_D2R : REAL;
+    st_UI2LR : LREAL;
+    st_R2DW : DWORD;
+    st_DW2R : REAL;
+    st_B2D : DINT;
+    st_W2B : BOOL;
+    st_D2BY2B : BOOL;
+    st_T2D : DINT;
+    st_T2I : INT;
+    st_D2T : TIME;
+    st_R2T : TIME;
+    st_T2LR : LREAL;
+    st_D2Str : STRING;
+    st_UI2Str : STRING;
+    st_DRound : DINT;
+    st_RRound : REAL;
+    st_TRound : TIME;
+    st_T2Str : STRING;
+    st_Txt2W : WORD;
+    st_ToStr : STRING;
+END_VAR
+st_D2I := DINT_TO_INT(D);
+st_D2UI := DINT_TO_UINT(D);
+st_D2B := DINT_TO_BYTE(D);
+st_S2UI := SINT_TO_UINT(S);
+st_S2D := SINT_TO_DINT(S);
+st_W2I := WORD_TO_INT(W);
+st_UI2S := UINT_TO_SINT(U);
+st_ToUI := TO_UINT(S);
+st_R2D := REAL_TO_DINT(R);
+st_ToD := TO_DINT(R);
+st_TrD := TRUNC_DINT(R);
+st_LR2S := LREAL_TO_SINT(LR);
+st_D2R := DINT_TO_REAL(D);
+st_UI2LR := UINT_TO_LREAL(U);
+st_R2DW := REAL_TO_DWORD(R);
+st_DW2R := DWORD_TO_REAL(DW);
+st_B2D := BOOL_TO_DINT(B);
+st_W2B := WORD_TO_BOOL(W);
+st_D2BY2B := BYTE_TO_BOOL(DINT_TO_BYTE(D));
+st_T2D := TIME_TO_DINT(T);
+st_T2I := TIME_TO_INT(T);
+st_D2T := DINT_TO_TIME(D);
+st_R2T := REAL_TO_TIME(R);
+st_T2LR := TIME_TO_LREAL(T);
+st_D2Str := DINT_TO_STRING(D);
+st_UI2Str := UINT_TO_STRING(U);
+st_DRound := STRING_TO_DINT(DINT_TO_STRING(D));
+st_RRound := STRING_TO_REAL(REAL_TO_STRING(R));
+st_TRound := STRING_TO_TIME(TIME_TO_STRING(T));
+st_T2Str := TIME_TO_STRING(T);
+st_Txt2W := STRING_TO_WORD(TXT);
+st_ToStr := TO_STRING(LR);
+END_PROGRAM

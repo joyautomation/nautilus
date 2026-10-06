@@ -1,0 +1,86 @@
+# The IEC 61131-3 conversion matrix (#244), every family's edges, ST and
+# FBD asserted together. The rules (docs/functions.md "Type conversions"):
+#   - integer and bit-string narrowing WRAPS to the target width, as Codesys
+#     documents and TIA writes the low bits; the source is read as its own
+#     declared type first;
+#   - REAL -> integer and REAL -> TIME round half to even; TRUNC_* go toward
+#     zero; a REAL the target cannot hold faults (faults_test.go);
+#   - REAL <-> DWORD is the bit pattern (the standard's binary transfer);
+#   - BOOL is 0/1; TIME is milliseconds; STRING round-trips.
+tolerance: 0.00001
+tests:
+  - name: integer narrowing wraps at the target width (DINT to INT, UINT, BYTE)
+    steps:
+      - { given: { D: 70000 }, scans: 1, expect: { st_D2I: 4464, fbd_D2I: 4464, st_D2UI: 4464, fbd_D2UI: 4464, st_D2B: 112, fbd_D2B: 112 } }  # 70000 = 16#11170: the low 16 bits are 4464, the low 8 are 16#70
+      - { given: { D: 32767 }, scans: 1, expect: { st_D2I: 32767, fbd_D2I: 32767, st_D2UI: 32767, fbd_D2UI: 32767, st_D2B: 255, fbd_D2B: 255 } }
+      - { given: { D: 32768 }, scans: 1, expect: { st_D2I: -32768, fbd_D2I: -32768, st_D2UI: 32768, fbd_D2UI: 32768, st_D2B: 0, fbd_D2B: 0 } }  # one past INT's top reads as INT's bottom
+      - { given: { D: -1 }, scans: 1, expect: { st_D2I: -1, fbd_D2I: -1, st_D2UI: 65535, fbd_D2UI: 65535, st_D2B: 255, fbd_D2B: 255 } }  # all ones, read unsigned
+      - { given: { D: 65536 }, scans: 1, expect: { st_D2I: 0, fbd_D2I: 0, st_D2UI: 0, fbd_D2UI: 0, st_D2B: 0, fbd_D2B: 0 } }
+      - { given: { D: -32769 }, scans: 1, expect: { st_D2I: 32767, fbd_D2I: 32767, st_D2UI: 32767, fbd_D2UI: 32767, st_D2B: 255, fbd_D2B: 255 } }
+
+  - name: sign - a signed source sign-extends, an unsigned one does not
+    steps:
+      - { given: { S: -1 }, scans: 1, expect: { st_S2UI: 65535, fbd_S2UI: 65535, st_S2D: -1, fbd_S2D: -1, st_ToUI: 65535, fbd_ToUI: 65535 } }
+      - { given: { S: -128 }, scans: 1, expect: { st_S2UI: 65408, fbd_S2UI: 65408, st_S2D: -128, fbd_S2D: -128, st_ToUI: 65408, fbd_ToUI: 65408 } }
+      - { given: { S: 127 }, scans: 1, expect: { st_S2UI: 127, fbd_S2UI: 127, st_S2D: 127, fbd_S2D: 127, st_ToUI: 127, fbd_ToUI: 127 } }
+      - { given: { W: 65535 }, scans: 1, expect: { st_W2I: -1, fbd_W2I: -1, st_W2B: true, fbd_W2B: true } }  # WORD 16#FFFF is INT -1
+      - { given: { W: 32768 }, scans: 1, expect: { st_W2I: -32768, fbd_W2I: -32768, st_W2B: true, fbd_W2B: true } }
+      - { given: { W: 0 }, scans: 1, expect: { st_W2I: 0, fbd_W2I: 0, st_W2B: false, fbd_W2B: false } }
+      - { given: { U: 200 }, scans: 1, expect: { st_UI2S: -56, fbd_UI2S: -56, st_UI2LR: { near: 200.0 }, fbd_UI2LR: { near: 200.0 }, st_UI2Str: "200", fbd_UI2Str: "200" } }
+      - { given: { U: 128 }, scans: 1, expect: { st_UI2S: -128, fbd_UI2S: -128, st_UI2LR: { near: 128.0 }, fbd_UI2LR: { near: 128.0 }, st_UI2Str: "128", fbd_UI2Str: "128" } }
+      - { given: { U: 65535 }, scans: 1, expect: { st_UI2S: -1, fbd_UI2S: -1, st_UI2LR: { near: 65535.0 }, fbd_UI2LR: { near: 65535.0 }, st_UI2Str: "65535", fbd_UI2Str: "65535" } }
+
+  - name: REAL to integer rounds half to even; TRUNC goes toward zero
+    steps:
+      - { given: { R: 2.5 }, scans: 1, expect: { st_R2D: 2, fbd_R2D: 2, st_ToD: 2, fbd_ToD: 2, st_TrD: 2, fbd_TrD: 2 } }
+      - { given: { R: 3.5 }, scans: 1, expect: { st_R2D: 4, fbd_R2D: 4, st_ToD: 4, fbd_ToD: 4, st_TrD: 3, fbd_TrD: 3 } }
+      - { given: { R: -2.5 }, scans: 1, expect: { st_R2D: -2, fbd_R2D: -2, st_ToD: -2, fbd_ToD: -2, st_TrD: -2, fbd_TrD: -2 } }
+      - { given: { R: -3.5 }, scans: 1, expect: { st_R2D: -4, fbd_R2D: -4, st_ToD: -4, fbd_ToD: -4, st_TrD: -3, fbd_TrD: -3 } }
+      - { given: { R: 1.4999 }, scans: 1, expect: { st_R2D: 1, fbd_R2D: 1, st_ToD: 1, fbd_ToD: 1, st_TrD: 1, fbd_TrD: 1 } }
+      - { given: { R: -0.7 }, scans: 1, expect: { st_R2D: -1, fbd_R2D: -1, st_ToD: -1, fbd_ToD: -1, st_TrD: 0, fbd_TrD: 0 } }
+      - { given: { LR: 127.4 }, scans: 1, expect: { st_LR2S: 127, fbd_LR2S: 127 } }
+      - { given: { LR: -128.5 }, scans: 1, expect: { st_LR2S: -128, fbd_LR2S: -128 } }  # the tie rounds to even, which is still in range
+      - { given: { LR: -127.5 }, scans: 1, expect: { st_LR2S: -128, fbd_LR2S: -128 } }
+      - { given: { LR: 0.5 }, scans: 1, expect: { st_LR2S: 0, fbd_LR2S: 0 } }
+      - { given: { LR: 1.5 }, scans: 1, expect: { st_LR2S: 2, fbd_LR2S: 2 } }
+
+  - name: integers to REAL - REAL holds LREAL precision here
+    steps:
+      - { given: { D: -7 }, scans: 1, expect: { st_D2R: { near: -7.0 }, fbd_D2R: { near: -7.0 } } }
+      - { given: { D: 16777217 }, scans: 1, expect: { st_D2R: { near: 16777217.0 }, fbd_D2R: { near: 16777217.0 } } }  # a 32-bit REAL would round to 16777216: REAL is float64 at run time (docs)
+
+  - name: REAL to DWORD and back is the IEEE 754 bit pattern (binary transfer)
+    steps:
+      - { given: { R: 1.0 }, scans: 1, expect: { st_R2DW: 1065353216, fbd_R2DW: 1065353216 } }  # 16#3F800000
+      - { given: { R: -2.0 }, scans: 1, expect: { st_R2DW: 3221225472, fbd_R2DW: 3221225472 } }  # 16#C0000000
+      - { given: { DW: 1078530011 }, scans: 1, expect: { st_DW2R: { near: 3.1415927 }, fbd_DW2R: { near: 3.1415927 } } }  # 16#40490FDB is pi as a 32-bit float
+      - { given: { DW: 0 }, scans: 1, expect: { st_DW2R: { near: 0.0 }, fbd_DW2R: { near: 0.0 } } }
+
+  - name: BOOL is 0 and 1; a number is TRUE when nonzero in the source width
+    steps:
+      - { given: { B: true }, scans: 1, expect: { st_B2D: 1, fbd_B2D: 1 } }
+      - { given: { B: false }, scans: 1, expect: { st_B2D: 0, fbd_B2D: 0 } }
+      - { given: { D: 256 }, scans: 1, expect: { st_D2BY2B: false, fbd_D2BY2B: false } }  # 256 is 0 as a BYTE
+      - { given: { D: 257 }, scans: 1, expect: { st_D2BY2B: true, fbd_D2BY2B: true } }
+
+  - name: TIME is milliseconds, and wraps like any integer when narrowed
+    steps:
+      - { given: { T: 90000 }, scans: 1, expect: { st_T2D: 90000, fbd_T2D: 90000, st_T2I: 24464, fbd_T2I: 24464, st_T2LR: { near: 90000.0 }, fbd_T2LR: { near: 90000.0 }, st_T2Str: "T#90000ms", fbd_T2Str: "T#90000ms", st_TRound: 90000, fbd_TRound: 90000 } }
+      - { given: { T: 32768 }, scans: 1, expect: { st_T2D: 32768, fbd_T2D: 32768, st_T2I: -32768, fbd_T2I: -32768 } }
+      - { given: { T: 0 }, scans: 1, expect: { st_T2D: 0, fbd_T2D: 0, st_T2I: 0, fbd_T2I: 0, st_T2LR: { near: 0.0 }, fbd_T2LR: { near: 0.0 }, st_T2Str: "T#0ms", fbd_T2Str: "T#0ms", st_TRound: 0, fbd_TRound: 0 } }
+      - { given: { D: 1500 }, scans: 1, expect: { st_D2T: 1500, fbd_D2T: 1500 } }
+      - { given: { R: 1500.5 }, scans: 1, expect: { st_R2T: 1500, fbd_R2T: 1500 } }  # ms ties to even
+      - { given: { R: 1501.5 }, scans: 1, expect: { st_R2T: 1502, fbd_R2T: 1502 } }
+
+  - name: STRING formatting, parsing and round trips
+    steps:
+      - { given: { D: -2147483648 }, scans: 1, expect: { st_D2Str: "-2147483648", fbd_D2Str: "-2147483648", st_DRound: -2147483648, fbd_DRound: -2147483648 } }
+      - { given: { D: 2147483647 }, scans: 1, expect: { st_D2Str: "2147483647", fbd_D2Str: "2147483647", st_DRound: 2147483647, fbd_DRound: 2147483647 } }
+      - { given: { R: 0.1 }, scans: 1, expect: { st_RRound: { near: 0.1 }, fbd_RRound: { near: 0.1 } } }
+      - { given: { R: -123.456 }, scans: 1, expect: { st_RRound: { near: -123.456 }, fbd_RRound: { near: -123.456 } } }
+      - { given: { TXT: "16#FFFF" }, scans: 1, expect: { st_Txt2W: 65535, fbd_Txt2W: 65535 } }
+      - { given: { TXT: "2#1010" }, scans: 1, expect: { st_Txt2W: 10, fbd_Txt2W: 10 } }
+      - { given: { TXT: " 42 " }, scans: 1, expect: { st_Txt2W: 42, fbd_Txt2W: 42 } }  # surrounding blanks are trimmed
+      - { given: { TXT: "1_000" }, scans: 1, expect: { st_Txt2W: 1000, fbd_Txt2W: 1000 } }  # IEC digit separators
+      - { given: { LR: -2.75 }, scans: 1, expect: { st_ToStr: "-2.75", fbd_ToStr: "-2.75" } }
+      - { given: { LR: 100.125 }, scans: 1, expect: { st_ToStr: "100.125", fbd_ToStr: "100.125" } }
