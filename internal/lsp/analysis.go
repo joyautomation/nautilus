@@ -248,6 +248,18 @@ func analyzeFBD(text, prelude string, preludeLines int) analysis {
 //     knows how to render.
 func analyzeSFC(text, prelude string, preludeLines int) analysis {
 	var a analysis
+	// A new, still-empty chart (before the diagram's "initialize"): one
+	// warning that says what to do, not the parser's "must contain an SFC
+	// ... END_SFC body" — the same call `naut check` makes.
+	if strings.TrimSpace(text) == "" {
+		a.Diags = append(a.Diags, Diagnostic{
+			Range:    lineRange(text, 1),
+			Severity: SeverityWarning,
+			Source:   "nautilus-sfc",
+			Message:  `empty chart — no PROGRAM yet; open it as a diagram and click "initialize"`,
+		})
+		return a
+	}
 	prog, err := sfc.Parse(text)
 	if err != nil {
 		a.Diags = append(a.Diags, Diagnostic{

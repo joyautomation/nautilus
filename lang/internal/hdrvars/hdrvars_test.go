@@ -69,3 +69,19 @@ func TestDeleteSpan(t *testing.T) {
 		t.Error("found a missing name")
 	}
 }
+
+func TestScanConstantSection(t *testing.T) {
+	ds := Scan("PROGRAM P\nVAR CONSTANT\n  tMax : TIME := T#60S;\nEND_VAR\nVAR x : BOOL; END_VAR\nVAR_EXTERNAL CONSTANT k : INT; END_VAR\n")
+	if len(ds) != 3 {
+		t.Fatalf("Scan = %+v", ds)
+	}
+	if !ds[0].Constant || ds[0].Section != "VAR" || ds[0].Init != "T#60S" {
+		t.Errorf("tMax = %+v", ds[0])
+	}
+	if ds[1].Constant {
+		t.Errorf("x is not a constant: %+v", ds[1])
+	}
+	if !ds[2].Constant || ds[2].Section != "VAR_EXTERNAL" {
+		t.Errorf("k = %+v", ds[2])
+	}
+}
