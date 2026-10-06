@@ -2,38 +2,8 @@ PROGRAM Conveyor
 (* The main routine. Each motor is one rung calling MotorStarter (the
    JSR habit, as a block call); +Tag is the ONS. The instances (m1, m2,
    cStarts, spd: the AOI backing tags) are declared by their calls,
-   `m1:MotorStarter(...)`, the way the FB picker inserts them. *)
-VAR_EXTERNAL
-    EStop        : BOOL;
-    AirOk        : BOOL;
-    FaultReset   : BOOL;
-    M1_StartPB   : BOOL;
-    M1_StopPB    : BOOL;
-    M1_Aux       : BOOL;
-    M1_OL        : BOOL;
-    M1_Run       : BOOL;
-    M2_StartPB   : BOOL;
-    M2_StopPB    : BOOL;
-    M2_Aux       : BOOL;
-    M2_OL        : BOOL;
-    M2_Run       : BOOL;
-    M2_SpeedRef  : REAL;
-    M1_AuxBypass : BOOL;
-    Maint        : BOOL;
-    CountReset   : BOOL;
-    M2_SpeedPct  : REAL;
-    MinHz        : REAL;
-    MaxHz        : REAL;
-    M1_Permit    : BOOL;
-    M2_Permit    : BOOL;
-    M1_Starts    : INT;
-    Alm_EStop    : BOOL;
-    Alm_M1Fault  : BOOL;
-    Alm_M2Fault  : BOOL;
-    Alm_M1FTS    : BOOL;
-    Alm_M2FTS    : BOOL;
-    Alm_Any      : BOOL;
-END_VAR
+   `m1:MotorStarter(...)`, the way the FB picker inserts them. The
+   controller-scope tags (tags/*.yaml) are in scope as they are. *)
 LD
   RUNG m1perm
     /EStop AirOk ( M1_Permit )

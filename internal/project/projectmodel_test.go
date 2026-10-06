@@ -328,3 +328,30 @@ END_TYPE
 		t.Errorf("Delay = %+v, want TIME 5000 (init: T#5s implies TIME)", d)
 	}
 }
+
+// An implicit struct-typed tag is the program's own TYPE, not a lookalike:
+// it binds to a block's VAR_IN_OUT (passed by reference, so the types must
+// be identical) without a VAR_EXTERNAL.
+func TestImplicitStructTagBindsInOut(t *testing.T) {
+	rt := loadRuntime(t, map[string]string{
+		"nautilus.yaml": "tasks:\n  - program: main.st\ntags:\n  - { name: RecipeA, role: setpoint, type: Recipe, init: { Count: 1 } }\n",
+		"lib.st": `TYPE
+  Recipe : STRUCT
+    Count : INT;
+  END_STRUCT;
+END_TYPE
+FUNCTION_BLOCK Bump
+VAR_IN_OUT
+    R : Recipe;
+END_VAR
+R.Count := R.Count + 1;
+END_FUNCTION_BLOCK
+`,
+		"main.st": "PROGRAM Main\nVAR\n    b : Bump;\nEND_VAR\nb(R := RecipeA);\nEND_PROGRAM\n",
+	})
+	rt.Scan()
+	v, _ := rt.Tags().ReadGlobal("RecipeA")
+	if v.Fld[0].I != 2 {
+		t.Errorf("RecipeA.Count = %+v, want 2", v.Fld[0])
+	}
+}

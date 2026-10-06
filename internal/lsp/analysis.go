@@ -370,7 +370,11 @@ func analyzeSFCIn(text string, e env) analysis {
 	}
 
 	var structDiags []Diagnostic
-	for _, d := range sfc.Check(prog) {
+	var tagNames []string
+	for _, d := range e.tags {
+		tagNames = append(tagNames, d.Name)
+	}
+	for _, d := range sfc.CheckWith(prog, tagNames) {
 		sev := SeverityError
 		if d.Severity == sfc.SeverityWarning {
 			sev = SeverityWarning

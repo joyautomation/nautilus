@@ -105,6 +105,10 @@ rung boundaries.
    controller-scoped tags are simply in scope. This is a **papercut**
    already filed from the other builds: #210 (tia-shaped #19) and #177
    (codesys-shaped #3). The logix evidence was added to #210.
+   FIXED in PR #243: the tags are in scope as controller-scoped tags are;
+   the build's `ld_declare … VAR_EXTERNAL` rows became `tag_in_scope-*`
+   rows (no offer listed, nothing declared) and the reference program has
+   no VAR_EXTERNAL block.
 9. **2026-10-05 · `CV => M1_Starts` on the CTU, then the amber offer for
    M1_Starts.** Expected `VAR_EXTERNAL : INT`, since the tag is a count with
    `init: 0`. The offer reads `VAR_EXTERNAL : REAL`
@@ -115,6 +119,8 @@ rung boundaries.
    (`102-lx_vars_declare-M1_Starts`). **papercut** ·
    `naut ld graph` `tags[].type` for an untyped integer seed,
    `LadderView.svelte` declare offer. OPEN, #219.
+   With #200 (PR #243) the tag database says `type: DINT`, and the offer no
+   longer lists a typed tag at all.
 10. **2026-10-05 · looked for the AOI backing tags (m1, m2, cStarts, spd,
     tFail) in the variables panel.** It lists only header declarations:
     right after the m1 insert it shows "variables 9", all VAR_EXTERNAL, with
@@ -135,7 +141,8 @@ rung boundaries.
     the message sends you off to declare a TYPE. The workaround is `init:`
     with the program's declaration deciding the type. **papercut**, already
     filed as #200 (tia-shaped #5). The logix evidence (REAL as well as INT)
-    was added there.
+    was added there. FIXED in PR #243: the reference tag database
+    carries a Data Type on every tag (`type: BOOL`, `DINT`, `REAL`).
 12. **2026-10-05 · started the project the way the walkthrough does.** The
     extension's *Create Project…* asks for a name and a template (Demo,
     Minimal, SDK, SDK demo) but not a language, so Minimal is always
@@ -213,8 +220,8 @@ rung boundaries.
 |---|---|---|---|
 | New Add-On Instruction, Parameters tab | no gesture | paste the `FUNCTION_BLOCK` + `VAR_INPUT`/`VAR_OUTPUT` header; gesture the rungs | #214 (and #179) |
 | AOI backing tag in the tag database | the instance is declared by its call | read it in the text (`m1:MotorStarter(…)`) | #220 |
-| Controller-scoped tags | VAR_EXTERNAL per POU, one declare per tag | 29 declarations, one gesture each | #210 (#177) |
-| Data Type column (DINT, REAL) | `type:` takes UDTs only | `init:` plus the program's declaration | #200 |
+| Controller-scoped tags | in scope in every program, as they are | nothing | #210 (#177), fixed |
+| Data Type column (DINT, REAL) | `type:` takes any elementary type | nothing | #200, fixed |
 | Alarm DINT with aliased bits | no bit-of-word access | one BOOL tag per bit | #222 |
 | ONS / OSR | `+Tag` / `( P Tag )` in text only | paste `+` into the rung | #212, #213 |
 | Copy rung, paste, Find/Replace M1→M2 | no rung copy | rebuild the rung, or copy it in the text view | #217 |

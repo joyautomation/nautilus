@@ -263,16 +263,21 @@ open(p, "w").write(s)
 PY
   note_row FALLBACK "tag-files written by text"; }
 # the TIA habit: a data type in the tag table's type column (Int, Bool …)
+# on every tag — the pasted table carries one (#200), and init: must agree
 b03_types() {
-  local out
+  grep -q '{ name: FT101_Raw, role: input, type: INT,' "$PROJ/tags/plc_tags.yaml" || { echo "the table has no type: INT on FT101_Raw" >&2; return 1; }
+  local out; out=$(cd "$PROJ" && naut check . 2>&1); local rc=$?
+  echo "$(tail -1 <<<"$out")"
+  (( rc == 0 )) || { grep -v '^naut check' <<<"$out" | head -2 >&2; return 1; }
+  # …and a type the init cannot hold says so, naming the type
   cp "$PROJ/tags/plc_tags.yaml" "$HOME/.tags.bak"
-  sed -i 's/{ name: FT101_Raw, role: input,/{ name: FT101_Raw, role: input, type: INT,/' "$PROJ/tags/plc_tags.yaml"
-  out=$(cd "$PROJ" && naut check . 2>&1); local rc=$?
+  sed -i 's/{ name: FT101_Raw, role: input, type: INT, init: 0,/{ name: FT101_Raw, role: input, type: INT, init: 0.5,/' "$PROJ/tags/plc_tags.yaml"
+  out=$(cd "$PROJ" && naut check . 2>&1)
   cp "$HOME/.tags.bak" "$PROJ/tags/plc_tags.yaml"
   echo "$(grep -m1 FT101_Raw <<<"$out")"
-  return $rc
+  grep -q 'tag FT101_Raw (type INT): init: want INT' <<<"$out"
 }
-row 03-tag-elementary-type XFAIL b03_types
+row 03-tag-elementary-type PASS b03_types
 
 # ── 04 scale.st: the FC, typed, with the language server ────────────────────
 SCALE_TYPED=$(cat "$REF/scale.st")
@@ -382,10 +387,31 @@ b05_refs() {
 }
 row 05-find-references XFAIL b05_refs
 row 05-check PASS check_clean 05-dosing
+# one typo in a library file is one error, on its line — not one more at
+# 1:1 on every file that composes the library (#199)
+b05_liberr() {
+  cp "$PROJ/dosing.st" "$HOME/.dosing.bak"
+  sed -i 's/Recipe\.TargetL > 0\.0/Recipe.TargetLL > 0.0/' "$PROJ/dosing.st"
+  local out; out=$(cd "$PROJ" && naut check . 2>&1)
+  cp "$HOME/.dosing.bak" "$PROJ/dosing.st"
+  echo "$(grep -v '^naut check' <<<"$out" | grep TargetLL | tr '\n' ' ')· $(tail -1 <<<"$out")"
+  [[ $(grep -c TargetLL <<<"$out") == 1 ]] && grep -q '^dosing.st:[0-9]*:[0-9]*: .*TargetLL' <<<"$out" \
+    && grep -q ', 1 with errors' <<<"$out" && ! grep -q 'in project library files' <<<"$out"
+}
+row 05-library-error-once PASS b05_liberr
 
-# ── 06 main.fbd: a blank file, its header declared from the palette ─────────
+# ── 06 main.fbd: a blank file; the tag table is its declaration ──────────────
+# TIA: a tag from the PLC tag table is usable in any block as it is. So it
+# is here (#210): the blank file is initialized and nothing is declared —
+# before #210 this was 15 palette gestures, one VAR_EXTERNAL per tag. (The
+# loop below still declares any VAR_EXTERNAL the reference might carry.)
 : >"$PROJ/main.fbd"
 row 06-open-main-fbd PASS ed_open_diagram main.fbd
+b06_init() {
+  click_button initialize || return 1
+  wait_for 8 grep -q '^PROGRAM Main' "$PROJ/main.fbd" || { echo "initialize wrote no PROGRAM" >&2; return 1; }
+}
+row 06-initialize PASS b06_init || { printf 'PROGRAM Main\nFBD\nEND_FBD\nEND_PROGRAM\n' >"$PROJ/main.fbd"; note_row FALLBACK "skeleton written by text"; }
 while read -r -u 3 name typ; do
   row "06-declare-$name" PASS fbd_declare "$name" "$typ" || {
     python3 - "$PROJ/main.fbd" "$name" "$typ" <<'PY'

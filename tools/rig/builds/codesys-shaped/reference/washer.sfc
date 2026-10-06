@@ -7,29 +7,7 @@ PROGRAM Washer
      - D/L/SD timed qualifiers   -> Step.T in an ACTION body or a condition
      - SFCError / step max time  -> the Supervise action + abort transitions
      - an E_WashState enum       -> INT constants ST_IDLE.., a StateNo tag
-     - a GVL                     -> tags/washer.yaml + VAR_EXTERNAL here *)
-VAR_EXTERNAL
-    StartPB    : BOOL;
-    StopPB     : BOOL;
-    ResetPB    : BOOL;
-    DoorClosed : BOOL;
-    LevelPct   : REAL;
-    TempC      : REAL;
-    FillSP     : REAL;
-    TempSP     : REAL;
-    FillValve  : BOOL;
-    Detergent  : BOOL;
-    Heater     : BOOL;
-    DrumCW     : BOOL;
-    DrumCCW    : BOOL;
-    SpinMotor  : BOOL;
-    DrainPump  : BOOL;
-    DoorLock   : BOOL;
-    AlarmLamp  : BOOL;
-    StateNo    : INT;
-    FaultCode  : INT;
-    CycleCount : INT;
-END_VAR
+     - a GVL                     -> tags/washer.yaml, in scope as it is *)
 VAR
     drum : FB_Reverser;
 END_VAR

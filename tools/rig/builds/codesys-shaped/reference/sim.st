@@ -2,14 +2,6 @@ PROGRAM Sim
 (* Bench-only plant: the drum fills through FillValve, drains through
    DrainPump, and the heater warms the water (it cools slowly toward
    20 degC otherwise). *)
-VAR_EXTERNAL
-    FillValve : BOOL;
-    DrainPump : BOOL;
-    Heater    : BOOL;
-    LevelPct  : REAL;
-    TempC     : REAL;
-    SimDtS    : REAL;
-END_VAR
 VAR CONSTANT
     FillRate  : REAL := 5.0;   (* %/s *)
     DrainRate : REAL := 8.0;   (* %/s *)

@@ -1,6 +1,6 @@
 FUNCTION_BLOCK Dosing
 (* One dosing line. Start's rising edge opens the valve until the recipe's
-   TargetL has flowed, then waits SettleSec and counts the dose back into
+   TargetL has flowed, then waits SettleTime and counts the dose back into
    the recipe. No flow for NoFlowTime while dosing is a fault; Stop aborts
    from any state and clears a fault. *)
 VAR_INPUT
@@ -57,7 +57,7 @@ CASE state OF
         END_IF;
 END_CASE;
 noFlow(IN := state = 10 AND FlowLpm < 0.5, PT := NoFlowTime);
-settle(IN := state = 20, PT := REAL_TO_TIME(Recipe.SettleSec * 1000.0));
+settle(IN := state = 20, PT := Recipe.SettleTime);
 doneHold(IN := justDone, PT := T#2S);
 ValveOpen := state = 10;
 Fault := state = 90;

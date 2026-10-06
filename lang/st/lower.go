@@ -746,9 +746,31 @@ func (l *lowerer) collectVars() error {
 			l.untypedTags[ir.NameKey(name)] = name
 			continue
 		}
-		l.scope[ir.NameKey(name)] = symbol{name: name, slot: -1, typ: t, kind: ir.VarGlobal, global: name, implicit: true}
+		l.scope[ir.NameKey(name)] = symbol{name: name, slot: -1, typ: l.canonical(t), kind: ir.VarGlobal, global: name, implicit: true}
 	}
 	return nil
+}
+
+// canonical maps a type resolved elsewhere (a tag's type:, resolved
+// against a separate parse of the same TYPE declarations) onto this
+// source's own resolution of it, so identity checks — a VAR_IN_OUT
+// binding, a struct assignment — see one DoseRecipe, not two.
+func (l *lowerer) canonical(t *ir.Type) *ir.Type {
+	switch {
+	case t == nil:
+		return nil
+	case t.Kind == ir.TypeStruct && t.Struct != nil:
+		if own, _, ok := ir.Lookup(l.types, t.Struct.Name); ok && ir.SameShape(own, t) {
+			return own
+		}
+	case t.Kind == ir.TypeArray:
+		if elem := l.canonical(t.Elem); elem != t.Elem {
+			c := *t
+			c.Elem = elem
+			return &c
+		}
+	}
+	return t
 }
 
 func varKindFor(blockKind string) ir.VarKind {

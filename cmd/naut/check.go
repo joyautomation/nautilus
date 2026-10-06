@@ -177,7 +177,7 @@ func runCheck(args []string) int {
 				continue
 			}
 			hasErr := false
-			for _, d := range sfc.Check(prog) {
+			for _, d := range sfc.CheckWith(prog, tagNames(projectTags(f))) {
 				fmt.Printf("%s:%d:%d: %s: %s\n", f, d.Pos.Line, d.Pos.Col, d.Severity, d.Message)
 				if d.Severity == sfc.SeverityError {
 					hasErr = true
@@ -575,6 +575,15 @@ func sortedNames[V any](m map[string]V) []string {
 		out = append(out, k)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// tagNames lists the tags' names.
+func tagNames(tags []runtime.TagDef) []string {
+	out := make([]string, 0, len(tags))
+	for _, d := range tags {
+		out = append(out, d.Name)
+	}
 	return out
 }
 

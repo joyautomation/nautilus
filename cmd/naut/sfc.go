@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/joyautomation/nautilus/internal/lsp"
+	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/lang/sfc"
 )
 
@@ -158,7 +159,7 @@ func runSFCCheck(args []string) int {
 		return 1
 	}
 	bad := false
-	for _, d := range sfc.Check(prog) {
+	for _, d := range sfc.CheckWith(prog, tagNames(project.TagDefsFor(args[0]))) {
 		fmt.Printf("%s:%d:%d: %s: %s\n", args[0], d.Pos.Line, d.Pos.Col, d.Severity, d.Message)
 		if d.Severity == sfc.SeverityError {
 			bad = true

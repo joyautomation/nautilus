@@ -28,6 +28,8 @@ association order (#14).
    top-level VAR block and the program after it parses as a bare body.
    **bug** · `lang/st` library compose · row `habit-gvl-var-global` ·
    [#175](https://github.com/joyautomation/nautilus/issues/175)
+   FIXED in PR #243: the GVL declares its globals for every program (each
+   one the manifest does not declare is a state tag); the row is PASS.
 2. **2026-10-05 · `VAR_GLOBAL CONSTANT tMaxFill : TIME := T#60S; …` in the
    same file.** Expected: project-wide constants. Happened: `an initial
    value is not applied to a tag — give it an init: in the manifest instead`,
@@ -43,6 +45,9 @@ association order (#14).
    chart's header and 6 in sim.st. **papercut** · `lang/st/lower.go`
    (ImplicitGlobals not fed from the manifest), LSP · CLI-verified ·
    [#177](https://github.com/joyautomation/nautilus/issues/177)
+   FIXED in PR #243: manifest tags are in scope in every program; the
+   reference's chart and sim.st no longer declare them, and the build's two
+   `sfc_vars_declare … ext` rows are gone.
 4. **2026-10-05 · `TYPE E_WashState : (IDLE := 0, FILL := 1, …); END_TYPE`
    in `lib/types.st`.** Expected: "enumerated types are not supported".
    Happened: `type decl: line 2: expected 79, got ":="` — a token-kind
@@ -175,7 +180,7 @@ plain declarations. `naut check` stayed clean through every one of them.
 | timed qualifiers `L` `D` `SD` `DS` `SL` | rejected, clear error (#12) | `N` + an ACTION on `Step.T`: D → `X := S.X AND S.T >= t;` (the final scan closes it), L → `X := S.X AND S.T < t;`, a step watchdog → see supervision | FIXED (#235): all five compile; reference-timed/ uses D, SD, L [#190](https://github.com/joyautomation/nautilus/issues/190) |
 | SFCError / step maximum time | none | an ACTION `Supervise` (N on each supervised step) sets `FaultCode` from `Step.T`, an abort transition per supervised step, `P1 RecordFault` on the abort step | FIXED (#235): `STEP Fill (MAXTIME := T#60S, ERROR := FillOverrun):`, `Fill.ERR`, an alarm on the tag; reference-timed/ [#191](https://github.com/joyautomation/nautilus/issues/191) |
 | enumerated types (DUT) | not supported, opaque error (#4) | `VAR CONSTANT ST_IDLE : INT := 0; …` in the POU, an INT tag (`StateNo`), one ACTION associated from every step | documented (structured-text.mdx "Not supported"); the error is #178 |
-| GVL, GVL constants | tags in `nautilus.yaml` / `tag-files:`, `VAR_EXTERNAL` per POU; no global constants (#1–#3) | `tags/washer.yaml` with `init:`; `VAR CONSTANT` per POU | #175, #176, #177 |
+| GVL, GVL constants | a `gvl.st` (#175) or tags in `nautilus.yaml` / `tag-files:`, in scope in every POU (#177); no global constants yet (#2) | `tags/washer.yaml` with `init:`/`type:`; `VAR CONSTANT` per POU | #175 (fixed), #176, #177 (fixed) |
 | numeric transition priority | declaration order, drawn left to right | declare the abort first — and, since "+ alt branch" appends last, move it by text (#7) | declined by design (docs/design/sfc.md §7); the reorder gap is #181 |
 | transition condition in LD/FBD | ST expression only | write it in ST; a complex one becomes a BOOL computed in an ACTION or another task | declined (test plan §6.4 "—") |
 | keyboard navigation of the chart | none (#8) | the pointer | OPEN #76 |

@@ -1,7 +1,8 @@
-# The washer's globals — what a Codesys project keeps in a GVL. A tag has
-# no initial value in the source (`:=` on VAR_GLOBAL/VAR_EXTERNAL is a
-# compile error); `init:` here sets it. Every POU that reads one declares
-# it again in its own VAR_EXTERNAL block.
+# The washer's globals — what a Codesys project keeps in a GVL. Every
+# program sees them as they are, with no declaration. A tag has no initial
+# value in the source (`:=` on VAR_GLOBAL/VAR_EXTERNAL is a compile error);
+# `init:` here sets it, and `type:` says what it is where the init alone
+# would not (a 0 reads as REAL).
 
 # Operator pushbuttons and the door switch (field inputs).
 - { name: StartPB,    role: input, init: false, desc: "Start pushbutton" }
@@ -30,6 +31,6 @@
 - { name: AlarmLamp, role: output, init: false, desc: "Fault lamp — latched in Aborted, reset in Idle" }
 
 # Sequence state — what an enum would carry in Codesys; INT codes here.
-- { name: StateNo,    role: state, init: 0, desc: "0 Idle, 1 Fill, 2 Heat/Wash, 3 Drain, 4 Spin, 9 Aborted" }
-- { name: FaultCode,  role: state, init: 0, desc: "0 none, 1 stop/door, 2 fill timeout, 3 drain timeout" }
-- { name: CycleCount, role: state, init: 0, desc: "Cycles started" }
+- { name: StateNo,    role: state, type: INT, init: 0, desc: "0 Idle, 1 Fill, 2 Heat/Wash, 3 Drain, 4 Spin, 9 Aborted" }
+- { name: FaultCode,  role: state, type: INT, init: 0, desc: "0 none, 1 stop/door, 2 fill timeout, 3 drain timeout" }
+- { name: CycleCount, role: state, type: INT, init: 0, desc: "Cycles started" }
