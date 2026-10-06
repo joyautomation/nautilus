@@ -765,6 +765,14 @@ func opArity(fn string) (min, max int) {
 	return 1, -1
 }
 
+// arity is opArity, with a user FUNCTION in scope fixed at its inputs.
+func (b *modelBuilder) arity(c callExpr) (min, max int) {
+	if f, ok := b.scope.Function(c.fn); ok {
+		return len(f.Inputs), len(f.Inputs)
+	}
+	return opArity(c.fn)
+}
+
 // opDisconnect removes the connection into an input pin. FB pins drop their
 // named argument; extensible operator inputs drop the argument when the
 // block keeps its minimum arity; fixed-arity inputs placehold with `_`; a
@@ -842,7 +850,7 @@ func (b *modelBuilder) opDisconnect(op EditOp) ([]TextEdit, error) {
 			return removeItem(func(it argItem) bool { return it.pin == "EN" })
 		}
 		idx := -1
-		for i, p := range formalPins(call) {
+		for i, p := range b.pinsOf(call) {
 			if p == op.ToPin {
 				idx = i
 			}
@@ -850,7 +858,7 @@ func (b *modelBuilder) opDisconnect(op EditOp) ([]TextEdit, error) {
 		if idx < 0 || idx >= len(call.args) {
 			return nil, fmt.Errorf("fbd edit: %s has no input %q", node.Label, op.ToPin)
 		}
-		minA, _ := opArity(call.fn)
+		minA, _ := b.arity(call)
 		if len(call.args)-1 < minA {
 			// Fixed-arity (and minimum-arity) pins keep their POSITION with a
 			// placeholder — removing the arg would silently shift the others.
@@ -940,7 +948,7 @@ func (b *modelBuilder) opAddInput(op EditOp) ([]TextEdit, error) {
 	if !ok {
 		return nil, fmt.Errorf("fbd edit: unknown block %q", op.Node)
 	}
-	_, maxA := opArity(call.fn)
+	_, maxA := b.arity(call)
 	if maxA != -1 && len(call.args) >= maxA {
 		return nil, fmt.Errorf("fbd edit: %s takes exactly %d inputs", call.fn, maxA)
 	}

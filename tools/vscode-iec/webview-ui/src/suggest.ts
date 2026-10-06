@@ -18,7 +18,7 @@ export const FUNCTIONS: SuggestItem[] = [
  * declared names, with their inputs and return type), then the standard
  * functions. */
 export function functionItems(user: FbCatalogType[] | undefined): SuggestItem[] {
-	const own = (user ?? []).map((f) => ({ name: f.name, detail: f.detail ?? 'user FUNCTION' }));
+	const own: SuggestItem[] = (user ?? []).map((f) => ({ name: f.name, detail: f.detail ?? 'user FUNCTION' }));
 	const have = new Set(own.map((f) => f.name.toUpperCase()));
 	return own.concat(FUNCTIONS.filter((f) => !have.has(f.name)));
 }

@@ -261,6 +261,22 @@ type Func struct {
 	Inputs []Pin
 }
 
+// Function finds a user FUNCTION in scope by name, case-insensitively.
+func (s *Scope) Function(name string) (Func, bool) {
+	if s == nil {
+		return Func{}, false
+	}
+	if f, ok := s.funcs[name]; ok {
+		return f, true
+	}
+	for n, f := range s.funcs {
+		if strings.EqualFold(n, name) {
+			return f, true
+		}
+	}
+	return Func{}, false
+}
+
 // Functions lists the user FUNCTIONs in scope by their DECLARED names,
 // sorted case-insensitively, each with its input pins and return type —
 // what the FBD palette's function field offers beside the standard

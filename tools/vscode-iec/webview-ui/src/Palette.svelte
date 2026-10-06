@@ -23,7 +23,8 @@
 		fbTypes = [],
 		funcs = [],
 		insts = [],
-		taken = new Set<string>()
+		taken = new Set<string>(),
+		net = undefined
 	}: {
 		open?: boolean;
 		vars?: VarDecl[];
@@ -36,6 +37,9 @@
 		insts?: FbInst[];
 		/** Every name in use (lowercased): a fresh instance avoids them. */
 		taken?: Set<string>;
+		/** The network a band-header click picked (n:K): inserts land at its
+		 * end, a new network goes after it. Unset: the end of the body. */
+		net?: string;
 	} = $props();
 
 	// What a field completes against: declared tags (optionally comma-lists),
@@ -55,6 +59,14 @@
 	};
 	const TEMPLATES: Template[] = [
 		{ label: 'function block', preview: 'inst : PID(…)', fields: [], picker: true },
+		{
+			// A numbered network (#207): the statements after it, up to the
+			// next one, run as one network, in network order.
+			label: 'network',
+			preview: "NETWORK 'title'",
+			fields: [{ key: 'title', def: '' }],
+			op: (f) => ({ type: 'addNetwork', text: f.title.trim() })
+		},
 		{
 			label: 'block → wire',
 			preview: 'w = AND(a, b)',
@@ -147,6 +159,9 @@
 	const tagItems = $derived<SuggestItem[]>(vars.map((v) => ({ name: v.name, detail: v.type })));
 	const catalog = $derived(fbCatalog(fbTypes));
 	const fnItems = $derived(functionItems(funcs));
+	// The picker's args field shows exactly what goes in: an older CLI's
+	// catalog (no args) gets the same open-pin rule here.
+	const pickerTypes = $derived(catalog.map((t) => ({ ...t, args: openArgs(t) })));
 	const srcItems = $derived<SuggestItem[]>([...fbOutputRefs(insts), ...tagItems]);
 	function itemsFor(kind: Kind): SuggestItem[] {
 		switch (kind) {
@@ -172,6 +187,14 @@
 		values = Object.fromEntries(t.fields.map((f) => [f.key, f.def]));
 	}
 
+	// With a network picked, statements land at its end and a new network
+	// follows it.
+	function into(op: FbdEditOp): FbdEditOp {
+		if (!net) return op;
+		if (op.type === 'insertStatement' || op.type === 'addNetwork') return { ...op, node: net };
+		return op;
+	}
+
 	// ── the function-block picker ──────────────────────────────────────────
 	function freeInst(prefix: string): string {
 		let n = 1;
@@ -183,7 +206,7 @@
 		// An emptied args field still gets the open pins — a call needs an
 		// argument list to be a block at all.
 		const args = v.args || (known ? openArgs(known) : '');
-		postOp({ type: 'insertStatement', text: `${v.inst} : ${v.type}(${args})` });
+		postOp(into({ type: 'insertStatement', text: `${v.inst} : ${v.type}(${args})` }));
 		open = false;
 		active = null;
 	}
@@ -201,7 +224,7 @@
 
 	function commit() {
 		if (!active || active.picker) return;
-		postOp(active.op ? active.op(values) : { type: 'insertStatement', text: active.build!(values) });
+		postOp(into(active.op ? active.op(values) : { type: 'insertStatement', text: active.build!(values) }));
 		open = false;
 		active = null;
 	}
@@ -224,6 +247,9 @@
 
 {#if open}
 	<Popover onkeydown={keydown}>
+		{#if net && !active}
+			<div class="target" data-kind="net-target">inserting into network {net.slice(2)}</div>
+		{/if}
 		{#if !active}
 			{#each TEMPLATES as t (t.label)}
 				<button class="item" data-kind="chip" data-id={t.label} onclick={() => pick(t)}>
@@ -233,7 +259,7 @@
 			{/each}
 		{:else if active.picker}
 			<LdBlockPicker
-				types={catalog}
+				types={pickerTypes}
 				{freeInst}
 				embedded
 				hint={blockHint}
@@ -277,6 +303,11 @@
 		cursor: pointer;
 		font-size: 12px;
 		text-align: left;
+	}
+	.target {
+		font-size: 10px;
+		color: var(--nx-accent);
+		padding: 2px 8px 4px;
 	}
 	.item:hover {
 		background: var(--nx-hover);

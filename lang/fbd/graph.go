@@ -571,7 +571,7 @@ func (b *modelBuilder) source(e expr, baseID string, visited []string) (outRef, 
 		return outRef{node: b.inputChip(x.inst+"."+x.pin, x.line).ID}, nil
 	case callExpr:
 		b.exprOf[baseID] = x
-		pins := formalPins(x)
+		pins := b.pinsOf(x)
 		inputs := pins
 		if x.en != nil {
 			inputs = append([]string{"EN"}, pins...)
@@ -944,6 +944,22 @@ func formalPins(c callExpr) []string {
 		return c.names
 	}
 	return blockPins(c.fn, len(c.args))
+}
+
+// pinsOf is formalPins, with a user FUNCTION's own input names for a
+// positional call of one in scope (ScaleAnalog's Raw/EngLo/EngHi, not
+// IN1..IN3) — the names its declaration gives them.
+func (b *modelBuilder) pinsOf(c callExpr) []string {
+	if c.names == nil {
+		if f, ok := b.scope.Function(c.fn); ok && len(f.Inputs) == len(c.args) {
+			pins := make([]string, len(f.Inputs))
+			for i, p := range f.Inputs {
+				pins[i] = p.Name
+			}
+			return pins
+		}
+	}
+	return formalPins(c)
 }
 
 // enFirst moves an FB's EN pin to the top, where IEC draws it.

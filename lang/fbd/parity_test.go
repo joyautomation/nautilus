@@ -461,3 +461,22 @@ func TestNetworkOps(t *testing.T) {
 		t.Fatalf("add to a plain body:\n%s", out)
 	}
 }
+
+// A positional call of a user FUNCTION draws its declared input names.
+func TestUserFunctionPinNames(t *testing.T) {
+	src := strings.Replace(levelSrc, "  hi = GE(LIT101_Level, LevelSP)", "  s = ScaleAnalog(3, 0.0, 1.0)\n  SpeedRef := s", 1)
+	m, err := GraphWithLibs(src, []string{dosingLib})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(fbNode(t, m, "b:w.s").Inputs, ","); got != "Raw,EngLo,EngHi" {
+		t.Fatalf("pins = %s", got)
+	}
+	edits, err := ApplyEdit(src, EditOp{Type: "disconnect", To: "b:w.s", ToPin: "EngLo"}, dosingLib)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := apply(t, src, edits); !strings.Contains(out, "s = ScaleAnalog(3, _, 1.0)") {
+		t.Fatalf("disconnect by the declared name:\n%s", out)
+	}
+}

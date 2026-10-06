@@ -51,6 +51,10 @@ export type FbdEditOp = {
 		| 'setComment'
 		| 'duplicate'
 		| 'retarget'
+		| 'addNetwork'
+		| 'renameNetwork'
+		| 'moveNetwork'
+		| 'removeNetwork'
 		| 'init';
 	node?: string;
 	to?: string;
