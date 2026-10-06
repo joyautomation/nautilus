@@ -7,7 +7,7 @@
 	import { Handle, Position } from '@xyflow/svelte';
 	import type { Placed } from './layout';
 	import { pinOffset, EXTENSIBLE, NOTE_LINE_H } from './layout';
-	import { live, liveValue, liveMissing, liveForced, member, formatLive } from './liveState.svelte';
+	import { live, liveValue, liveMissing, liveForced, liveEnum, liveTypeNote, member, formatLive } from './liveState.svelte';
 	import { withDesc } from './xref.svelte';
 
 	let {
@@ -184,7 +184,7 @@
 		{#if problems.length}<span class="badge">!</span>{/if}
 		{#if n.exec}<span class="exec" title="runs {ordinal(n.exec)} in its network">{n.exec}</span>{/if}
 		{#if chipVal !== undefined}
-			<span class="nx-pill val below" class:off={!live.fresh} class:forced={liveForced(n.label)} title="{n.label} = {formatLive(chipVal)} (live{liveForced(n.label) ? ', FORCED' : ''})">{formatLive(chipVal)}</span>
+			<span class="nx-pill val below" class:off={!live.fresh} class:forced={liveForced(n.label)} class:enum={liveEnum(n.label)} title="{n.label} = {formatLive(chipVal, n.label)}{liveTypeNote(n.label)} (live{liveForced(n.label) ? ', FORCED' : ''})">{formatLive(chipVal, n.label)}</span>
 		{/if}
 	</div>
 {:else}
@@ -215,8 +215,8 @@
 					class="nx-pill val beside"
 					class:off={!live.fresh}
 					style="top: {pinOffset(n, pin, 'out') - 8}px"
-					title="{n.label}.{pin} = {formatLive(member(fbStruct, pin))} (live)"
-				>{formatLive(member(fbStruct, pin))}</span>
+					title="{n.label}.{pin} = {formatLive(member(fbStruct, pin), `${n.label}.${pin}`)}{liveTypeNote(`${n.label}.${pin}`)} (live)"
+				>{formatLive(member(fbStruct, pin), `${n.label}.${pin}`)}</span>
 			{/if}
 		{/each}
 		{#if plusPin}

@@ -79,6 +79,19 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   the project's constants and members join the completion list. Needs a
   `naut` newer than 0.15.0. (#238)
 
+- **An enumerated value reads as a member, not as text.** Live values used
+  to quote an enumeration's member like a `STRING` (`"Run"`), so the two
+  could not be told apart. The inline pills, the Live Values panel and the
+  ladder, FBD and SFC live values now show it bare (`Run`) in its own style
+  (blue italic; the enum icon in the panel), with the type on hover
+  (`Mode · enum`); a `STRING` keeps its quotes. **Set Live Value…** and
+  **Force…** on an enumerated tag offer its members as a pick list, and
+  still take a typed member, `Mode#Run` or an integer; on a `STRING` tag
+  their input takes a quoted string (`'text'`, the pill's own form), which
+  it used to refuse as not a number. The types come from
+  the controller's `/api/meta`, so this needs a `naut` newer than 0.15.0;
+  against an older one values show as before. (#246)
+
 - **`REGION … END_REGION` folds and shows in the Outline.** TIA SCL's
   regions group statements: each region is a fold range and an Outline
   entry (nested regions under theirs, under their POU), and `REGION` /

@@ -32,6 +32,7 @@
 	import { vscode, postOp, pouFromFile, setSeedPou, withSeed } from './vscodeApi';
 	import { setRects, updateRect } from './diagState.svelte';
 	import { live, setLive, setVarBounds } from './liveState.svelte';
+	import type { FlatTypes } from '../../src/tagTypes';
 	import { readClip, typingTarget, writeClip } from './clipboard';
 	import ShortcutHelp from './ShortcutHelp.svelte';
 	import { FBD_SHORTCUTS, LD_SHORTCUTS, SFC_SHORTCUTS, hintLine } from './shortcuts';
@@ -509,7 +510,7 @@
 		const msg = ev.data as
 			| Msg
 			| { type: 'diagnostics'; diags?: Diag[] }
-			| { type: 'liveValues'; enabled?: boolean; fresh?: boolean; values?: Record<string, unknown>; forced?: Record<string, unknown> }
+			| { type: 'liveValues'; enabled?: boolean; fresh?: boolean; values?: Record<string, unknown>; forced?: Record<string, unknown>; types?: FlatTypes }
 			| { type: 'syncState'; state?: string };
 		if (!msg?.type) return;
 		if (msg.type === 'syncState') {
@@ -518,7 +519,7 @@
 		}
 		if (msg.type === 'liveValues') {
 			// Store-only update: FbdNode pills react directly, no node rebuild.
-			setLive({ enabled: !!msg.enabled, fresh: !!msg.fresh, values: msg.values ?? {}, forced: msg.forced ?? {} });
+			setLive({ enabled: !!msg.enabled, fresh: !!msg.fresh, values: msg.values ?? {}, forced: msg.forced ?? {}, types: msg.types ?? {} });
 			return;
 		}
 		if (msg.type === 'diagnostics') {

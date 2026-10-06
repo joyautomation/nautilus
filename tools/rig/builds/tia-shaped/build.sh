@@ -393,16 +393,31 @@ b05_region_fold() {
 }
 row 05-region-folds PASS b05_region_fold
 # Outline: Go to Symbol in Editor (Ctrl+Shift+O) — the block interface.
-b05_outline() {
+# The quick pick is a virtual list: only the rows on screen are in the DOM,
+# so each expected symbol is typed into its filter and looked for (#249),
+# the way smoke 14-lsp's goto_symbol narrows the list.
+b05_goto_symbol() {
   xdotool key --clearmodifiers Escape; sleep 0.3
-  xdotool key --clearmodifiers ctrl+shift+o; sleep 2.5
-  local t; t=$(wb '(() => { const q = document.querySelector(".quick-input-widget"); if (!q || q.style.display === "none") return ""; return [...q.querySelectorAll(".monaco-list-row")].map(r => r.innerText.replace(/\s+/g, " ").trim()).join(" | ") || q.innerText.replace(/\s+/g, " ").trim(); })()')
-  snap 05-outline >/dev/null
-  xdotool key --clearmodifiers Escape; sleep 0.4
-  echo "Ctrl+Shift+O: ${t:-<nothing>}"
-  [[ $t == *Dosing* && $t == *state* ]]
+  xdotool key --clearmodifiers ctrl+shift+o; sleep 2
+  xdotool type --delay 60 -- "$1"; sleep 1.5
+  # each row as "<label> (<description>)", the label read on its own (a
+  # row's innerText runs it into its kind: "stateVAR")
+  wb '(() => { const q = document.querySelector(".quick-input-widget"); if (!q || q.style.display === "none") return ""; return [...q.querySelectorAll(".quick-input-list .monaco-list-row")].map(r => (r.querySelector(".label-name")?.innerText || "").trim() + " (" + (r.querySelector(".label-description")?.innerText || "").trim() + ")").join(" | "); })()'
 }
-row 05-outline-symbols XFAIL b05_outline
+b05_outline() {
+  local sym t all="" miss=""
+  for sym in Dosing state; do
+    t=$(b05_goto_symbol "$sym")
+    [[ $sym == state ]] && snap 05-outline >/dev/null
+    xdotool key --clearmodifiers Escape; sleep 0.4
+    all+="$sym → ${t:-<nothing>}; "
+    # a row whose label is the symbol itself, not merely one containing it
+    grep -qE "(^| \| )$sym \(" <<<"$t" || miss+=" $sym"
+  done
+  echo "Ctrl+Shift+O filtered: ${all:0:400}"
+  [[ -z $miss ]] || { echo "missing:$miss" >&2; return 1; }
+}
+row 05-outline-symbols PASS b05_outline
 # Cross-reference: Find All References (Shift+F12) on `state`.
 b05_refs() {
   goto_word "$PROJ/dosing.st" '^ValveOpen := state = S_DOSING;' state || return 1

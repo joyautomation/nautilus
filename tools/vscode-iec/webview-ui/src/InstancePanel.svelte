@@ -4,7 +4,7 @@
 	// PLC-IDE "open instance" view. Values ride the same live store as the
 	// pills, so rows tick at frame rate.
 	import Popover from './Popover.svelte';
-	import { live, liveValue, formatLive } from './liveState.svelte';
+	import { live, liveValue, liveEnum, liveTypeNote, formatLive } from './liveState.svelte';
 	import { vscode } from './vscodeApi';
 
 	let {
@@ -57,7 +57,7 @@
 				<span class="badge {r.kind}">{r.kind}</span>
 				<span class="name">{r.name}</span>
 				<span class="spacer"></span>
-				<span class="nx-pill val" class:off={!live.fresh}>{formatLive(r.value)}</span>
+				<span class="nx-pill val" class:off={!live.fresh} class:enum={liveEnum(`${inst.name}.${r.name}`)} title="{inst.name}.{r.name}{liveTypeNote(`${inst.name}.${r.name}`)}">{formatLive(r.value, `${inst.name}.${r.name}`)}</span>
 			</div>
 		{/each}
 	{/if}

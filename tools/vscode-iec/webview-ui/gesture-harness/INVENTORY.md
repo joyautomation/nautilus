@@ -222,8 +222,8 @@ no rig verb, no smoke check); per section below.
 | X08 | Extension | Diagrams follow the VS Code theme (light, dark, high contrast) | CHANGELOG 0.10.0 | diagram.test.mjs: Theme: (x3) | — | 11 |
 | X09 | Extension | Live pill: green when a controller is reachable, amber offline; click toggles live values | README Live values | gestures.test.mjs: the live pill reflects nautilus.liveValues.enabled and toggles it | — | 07 |
 | X10 | Extension | Live values paint on FBD, ladder (power flow) and SFC (active step) | README Live values | — | — | 07 |
-| X11 | Extension | Inline live-value pills beside identifiers in .st/.fbd/.ld/.sfc text | README Live values | — | — | 13 |
-| X12 | Extension | Live Values panel lists every tag and local with its value | README Live values | — | — | 13 |
+| X11 | Extension | Inline live-value pills beside identifiers in .st/.fbd/.ld/.sfc text; an enumerated value reads bare (`Run`, enum style, `Mode · enum` on hover) where a STRING stays quoted, here and in the ladder/FBD/SFC overlays; Set Live Value / Force… on an enum offer its members | README Live values; CHANGELOG Unreleased (#246) | enum-display.test.mjs: FBD chip and VARS pill, ladder operand, SFC vars panel (enum bare vs STRING quoted) | — | 13 (enum pill bare + style, Set Live Value member pick) |
+| X12 | Extension | Live Values panel lists every tag and local with its value (an enumerated one bare, with the enum icon) | README Live values | — | — | 13 |
 | X13 | Extension | Status-bar item shows whether the file matches the controller | README Online edit | — | — | 08 |
 | X14 | Extension | Download and Rollback ask for confirmation naming URL and program; nautilus.confirmControllerWrites=false skips it | README Online edit | — | — | 08 |
 | X15 | Extension | Missing-CLI prompt Install naut; min-version warning (Update naut / Don't show again) | README Get started | — | — | 01, 02 |

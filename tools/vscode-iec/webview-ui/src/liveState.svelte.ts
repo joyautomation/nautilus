@@ -7,6 +7,10 @@
 
 import { resolveLabel, resolveScoped, arrayLowerBounds, member, forcedLabel } from './liveResolve';
 import type { VarDecl } from './layout';
+// Shared with the extension host (vscode-free): the declared-type lookup the
+// text pills and the Live Values panel use, so an enumerated value reads the
+// same everywhere (#246).
+import { enumText, typeFor, typeLabel, type FlatTypes } from '../../src/tagTypes';
 
 export { member };
 
@@ -22,6 +26,10 @@ export const live = $state({
 	// The controller's force table: lowercased forced address → value.
 	// Empty when nothing is forced (or the extension predates forcing).
 	forced: {} as Record<string, unknown>,
+	// Declared types from the controller's /api/meta, by tagTypes.typeKey:
+	// which values are enumerations (they stream as a member's NAME, which
+	// alone reads like a STRING). Empty against an older controller.
+	types: {} as FlatTypes,
 	// Per-dimension array lower bounds by lowercased variable name, parsed
 	// from the header declarations — an IEC ARRAY[1..4] stores element [1]
 	// at position 0, so indexed chips can't resolve without them.
@@ -33,12 +41,16 @@ export function setLive(frame: {
 	fresh: boolean;
 	values: Record<string, unknown>;
 	forced?: Record<string, unknown>;
+	types?: FlatTypes;
 }): void {
 	live.seen = true;
 	live.enabled = frame.enabled;
 	live.fresh = frame.fresh;
 	live.values = frame.values;
 	live.forced = frame.forced ?? {};
+	// The extension sends the same object until /api/meta is read again;
+	// reassigning it anyway is cheap (nothing derives from it but labels).
+	live.types = frame.types ?? {};
 }
 
 /** True when a diagram label's value is held by a force — the hook every
@@ -86,9 +98,29 @@ export function liveMissing(name: string): boolean {
 	return live.enabled && live.fresh && !(name.split(/[.[]/)[0].toLowerCase() in live.values);
 }
 
+/** True when the value under a diagram label is an enumeration's member
+ * (#246) — the hook for the pill's `enum` class (bare, blue italic; see
+ * theme.css) and for the type in its tooltip. */
+export function liveEnum(label: string | undefined): boolean {
+	return !!label && enumText(liveValue(label), typeFor(live.types, label)) !== undefined;
+}
+
+/** " (Mode · enum)" for a label whose declared type is known, else "" —
+ * appended to a live value's tooltip. */
+export function liveTypeNote(label: string | undefined): string {
+	const tl = label ? typeLabel(typeFor(live.types, label)) : undefined;
+	return tl ? ` (${tl})` : '';
+}
+
 /** Compact single-line rendering — mirrors formatValue in src/scan.ts so a
- * value reads the same in the diagram as in the text pill. */
-export function formatLive(v: unknown): string {
+ * value reads the same in the diagram as in the text pill. With `label`, an
+ * enumerated value shows as its member's name, bare (#246); a STRING keeps
+ * its quotes. */
+export function formatLive(v: unknown, label?: string): string {
+	if (label) {
+		const e = enumText(v, typeFor(live.types, label));
+		if (e !== undefined) return e;
+	}
 	if (v === null || v === undefined) return '—';
 	if (typeof v === 'number') {
 		if (Number.isInteger(v)) return String(v);

@@ -1,3 +1,5 @@
+import { enumValueName, isEnum, isStringType, parseEnumWrite, type FlatType } from "./tagTypes";
+
 // Identifier scanning and value formatting for inline live values.
 // Deliberately free of any `vscode` import so it can be unit-tested in
 // plain Node (see scan.test.ts, run by `npm test`).
@@ -259,6 +261,34 @@ export function parseWriteValue(raw: string): number | boolean | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+/** A tag's value as the Set/Force free-text box takes it, by the target's
+ * declared type (tagTypes, from /api/meta — #246): a STRING tag takes a
+ * quoted string ('text' or "text"; the quotes the pill shows); an
+ * enumerated one a member's name (any case, `Mode#Run`) or an integer, sent
+ * as the member's name or the integer; anything else — or an unknown type —
+ * a number or TRUE/FALSE, as parseWriteValue. undefined for anything the
+ * write would refuse, so it doubles as the validator. */
+export function parseTypedWrite(raw: string, ft: FlatType | undefined): number | boolean | string | undefined {
+  if (isStringType(ft)) {
+    const m = /^\s*(["'])([\s\S]*)\1\s*$/.exec(raw);
+    return m ? m[2] : undefined;
+  }
+  if (isEnum(ft)) {
+    const s = raw.trim();
+    if (/^[+-]?\d+$/.test(s)) return Number(s);
+    const v = parseEnumWrite(s, ft);
+    return v === undefined ? undefined : enumValueName(v, ft);
+  }
+  return parseWriteValue(raw);
+}
+
+/** What the Set/Force box asks for, by the target's type. */
+export function typedWriteHint(ft: FlatType | undefined): string {
+  if (isStringType(ft)) return "a quoted string, 'text'";
+  if (isEnum(ft)) return `a member of ${ft.t} (${ft.e.map((m) => m.name).join(", ")}), or its integer`;
+  return "a number, or TRUE/FALSE";
+}
+
 /** Hover rendering caps so a 173-member AOI doesn't flood the tooltip. */
 const HOVER_MAX_LINES = 40;
 const HOVER_MAX_ELEMS = 10;
@@ -277,10 +307,13 @@ const HOVER_MAX_ELEMS = 10;
  *
  * Scalars pass through formatValue; long arrays elide after HOVER_MAX_ELEMS
  * elements and the whole rendering elides after HOVER_MAX_LINES lines.
+ * `leaf`, when given, renders a scalar first (by its path below the root:
+ * "", ".Mode", "[2].Mode") — how an enumerated member shows bare (#246);
+ * undefined falls back to formatValue.
  */
-export function formatValueHover(v: unknown): string {
+export function formatValueHover(v: unknown, leaf?: (v: unknown, path: string) => string | undefined): string {
   const lines: string[] = [];
-  build(v, "", "", lines);
+  build(v, "", "", lines, "", leaf);
   if (lines.length > HOVER_MAX_LINES) {
     const kept = lines.slice(0, HOVER_MAX_LINES);
     kept.push(`… (${lines.length - HOVER_MAX_LINES} more lines)`);
@@ -289,13 +322,20 @@ export function formatValueHover(v: unknown): string {
   return lines.join("\n");
 }
 
-function build(v: unknown, label: string, indent: string, out: string[]): void {
+function build(
+  v: unknown,
+  label: string,
+  indent: string,
+  out: string[],
+  path: string,
+  leaf?: (v: unknown, path: string) => string | undefined
+): void {
   const prefix = label === "" ? indent : `${indent}${label}: `;
   if (Array.isArray(v)) {
     out.push(prefix + "[");
     const n = Math.min(v.length, HOVER_MAX_ELEMS);
     for (let i = 0; i < n; i++) {
-      build(v[i], `[${i}]`, indent + "  ", out);
+      build(v[i], `[${i}]`, indent + "  ", out, `${path}[${i}]`, leaf);
     }
     if (v.length > n) out.push(`${indent}  … (${v.length - n} more elements)`);
     out.push(indent + "]");
@@ -304,10 +344,10 @@ function build(v: unknown, label: string, indent: string, out: string[]): void {
   if (v !== null && typeof v === "object") {
     out.push(prefix + "{");
     for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-      build(val, k, indent + "  ", out);
+      build(val, k, indent + "  ", out, `${path}.${k}`, leaf);
     }
     out.push(indent + "}");
     return;
   }
-  out.push(prefix + formatValue(v));
+  out.push(prefix + (leaf?.(v, path) ?? formatValue(v)));
 }

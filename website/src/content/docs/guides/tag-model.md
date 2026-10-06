@@ -116,7 +116,7 @@ Picking a role, by use case:
 `type:` is the tag's data type, the Data Type column of a vendor tag
 table. It takes every IEC elementary type — `BOOL`, `SINT` … `ULINT`,
 `BYTE` … `LWORD`, `REAL`, `LREAL`, `TIME`, `STRING` — a TYPE the project's
-ST declares (a UDT, or an enumeration once those land), or an
+ST declares (a UDT or an enumeration), or an
 `ARRAY[lo..hi] OF` either:
 
 ```yaml
@@ -135,6 +135,25 @@ zero of its type. A type that is none of the above names what the project
 does declare (`type Widget is neither an IEC elementary type … nor a TYPE
 this project's ST declares (known: DoseRecipe, Motor)`); a function-block
 type is refused, since an instance is program state, not a tag.
+
+`GET /api/meta` reports each tag's declared type beside its `desc` and
+`unit`, and an enumeration's members, so a client can tell an enumerated
+value (which the stream carries as its member's name, `"Run"`) from a
+`STRING`. Program locals get the same entry under `locals`; a struct or
+function block lists `members` only where an enumeration sits beneath:
+
+```json
+"tags": {
+  "Mode":  { "desc": "Pump mode", "type": "PumpMode",
+             "enum": [{ "name": "Off", "value": 0 }, { "name": "Run", "value": 10 }] },
+  "Label": { "type": "STRING" },
+  "P101":  { "type": "Pump", "members": { "State": { "type": "PumpMode", "enum": [ … ] } } }
+}
+```
+
+The VS Code extension reads it to show `Run` bare (and the type, `PumpMode ·
+enum`, on hover) where a `STRING` would read `"Run"`, and to offer the
+members when you set or force the tag.
 
 ## A scalar seed takes the program's type
 

@@ -8,7 +8,7 @@
 	import Popover from './Popover.svelte';
 	import Suggest from './Suggest.svelte';
 	import { TYPES } from './suggest';
-	import { live, liveValue, liveMissing, liveForced, formatLive } from './liveState.svelte';
+	import { live, liveValue, liveMissing, liveForced, liveEnum, liveTypeNote, formatLive } from './liveState.svelte';
 	import { postOp } from './vscodeApi';
 
 	// The panel is editor-agnostic: FBD and LD share it, differing only in
@@ -183,7 +183,7 @@
 						<span class="type">: {v.type}{v.init ? ` := ${v.init}` : ''}</span>
 						<span class="spacer"></span>
 						{#if val !== undefined}
-							<span class="nx-pill val" class:off={!live.fresh} class:forced={liveForced(v.name)}>{formatLive(val)}</span>
+							<span class="nx-pill val" class:off={!live.fresh} class:forced={liveForced(v.name)} class:enum={liveEnum(v.name)} title="{v.name} = {formatLive(val, v.name)}{liveTypeNote(v.name)}">{formatLive(val, v.name)}</span>
 						{/if}
 						{#if v.section === 'VAR_EXTERNAL' && !sc.pou && liveMissing(v.name)}
 							<span

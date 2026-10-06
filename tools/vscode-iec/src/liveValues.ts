@@ -31,11 +31,25 @@ import {
   formatValue,
   formatValueHover,
   instanceScope,
-  parseWriteValue,
+  parseTypedWrite,
+  typedWriteHint,
   scanFbRegions,
   scanIdentifiers,
   scanInstanceDecls,
 } from "./scan";
+import {
+  enumPickItems,
+  enumText,
+  enumValueName,
+  flattenMetaTypes,
+  isEnum,
+  typedEnumPick,
+  typeFor,
+  typeLabel,
+  type EnumMember,
+  type FlatType,
+  type FlatTypes,
+} from "./tagTypes";
 
 type Frame = {
   ts: number;
@@ -68,6 +82,10 @@ export type LiveFrameListener = (frame: {
   values: Record<string, unknown>;
   // Lowercased forced address → forced value — the diagrams' F badge.
   forced: Record<string, unknown>;
+  // Declared types by tagTypes.typeKey (GET /api/meta): which values are
+  // enumerations, and their members (#246). Sent whole with every frame —
+  // small, and the stream itself stays type-free.
+  types: FlatTypes;
 }) => void;
 
 export class LiveValues implements vscode.Disposable {
@@ -79,6 +97,12 @@ export class LiveValues implements vscode.Disposable {
   private lastLocals: [string, unknown][] = [];
   // The controller's force table as of the last frame (declared casing).
   private forces = new Map<string, unknown>();
+  // Declared types from GET /api/meta (#246): fetched on every (re)connect,
+  // and again when the frame's set of names changes (an online edit can
+  // add an enumerated local). metaNames is the name count it was read at.
+  private types: FlatTypes = {};
+  private metaNames = -1;
+  private metaAt = 0;
   private readonly valuesChanged = new vscode.EventEmitter<void>();
   /** Fires when the snapshot changes (a frame arrived, or the stream went
    * stale/offline) — the Live Values view refreshes on this. */
@@ -115,6 +139,10 @@ export class LiveValues implements vscode.Disposable {
   // some dark themes (seen on the rig), and a forced value must never be
   // the hard one to read. A light theme gets a darker amber for contrast.
   private readonly forcedDeco = forcedPillDecoration();
+  // An enumerated value's pill (#246): the member's name, bare, in blue
+  // italics — so `Run` reads as a named value, never as text, and a STRING
+  // keeps its quotes in the ordinary green pill.
+  private readonly enumDeco = enumPillDecoration();
   private readonly status = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     90
@@ -184,6 +212,57 @@ export class LiveValues implements vscode.Disposable {
     return this.values.get(name.toLowerCase());
   }
 
+  /** The declared type of a tag, local or member path, from /api/meta;
+   * undefined when the controller did not say (or predates #246). */
+  typeOf(path: string): FlatType | undefined {
+    return typeFor(this.types, path);
+  }
+
+  /** A value as every live surface shows it: an enumeration's member by
+   * name, bare; anything else as formatValue renders it. */
+  display(v: unknown, path: string): string {
+    return enumText(v, this.typeOf(path)) ?? formatValue(v);
+  }
+
+  /** The member pick an enumerated tag's Set Live Value / Force… offers
+   * instead of a free-text box: the members (current marked), and whatever
+   * is typed — a member's name, `Mode#Run`, or an integer — as its own row.
+   * Resolves to the integer to write (the API takes an enumerated tag's
+   * value by its integer), or undefined on cancel. */
+  private pickEnum(title: string, placeholder: string, ft: FlatType & { e: EnumMember[] }, current: unknown): Promise<number | undefined> {
+    type Item = vscode.QuickPickItem & { value: number };
+    const qp = vscode.window.createQuickPick<Item>();
+    qp.title = title;
+    qp.placeholder = placeholder;
+    qp.matchOnDescription = false;
+    const base: Item[] = enumPickItems(ft, current).map((p) => ({ label: p.label, description: p.description, value: p.value }));
+    qp.items = base;
+    const cur = base.find((i) => i.description?.endsWith("· current"));
+    if (cur) qp.activeItems = [cur];
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = (v: number | undefined) => {
+        if (done) return;
+        done = true;
+        resolve(v);
+        qp.hide();
+      };
+      qp.onDidChangeValue((raw) => {
+        const typed = typedEnumPick(raw, ft);
+        qp.items = typed ? [{ label: typed.label, description: typed.description, value: typed.value, alwaysShow: true }, ...base] : base;
+      });
+      qp.onDidAccept(() => {
+        const pick = qp.selectedItems[0] ?? qp.activeItems[0];
+        if (pick) finish(pick.value);
+      });
+      qp.onDidHide(() => {
+        finish(undefined);
+        qp.dispose();
+      });
+      qp.show();
+    });
+  }
+
   /**
    * Write a value to a tag over the API — the editor's counterpart to the
    * dashboard's tag table (POST /api/tags). tag defaults to the identifier
@@ -203,17 +282,34 @@ export class LiveValues implements vscode.Disposable {
       return;
     }
     const current = this.valueFor(name);
+    const ft = this.typeOf(name);
+    if (isEnum(ft)) {
+      const v = await this.pickEnum(
+        `nautilus: Set ${name}`,
+        `${typeLabel(ft)}${current === undefined ? "" : ` — now ${this.display(current, name)}`}: pick a member, or type one or its integer`,
+        ft,
+        current
+      );
+      if (v === undefined) return;
+      await this.postValue(name, v, enumValueName(v, ft));
+      return;
+    }
     const prefill = current === undefined ? "" : formatValue(current);
+    const hint = typedWriteHint(ft);
     const input = await vscode.window.showInputBox({
       title: `nautilus: Set ${name}`,
-      prompt: current === undefined ? "New value (number, or TRUE/FALSE)" : `Current ${formatValue(current)} — new value (number, or TRUE/FALSE)`,
+      prompt: current === undefined ? `New value (${hint})` : `Current ${formatValue(current)} — new value (${hint})`,
       value: prefill,
-      validateInput: (v) => (parseWriteValue(v) === undefined ? "Enter a number, or TRUE/FALSE" : undefined),
+      validateInput: (v) => (parseTypedWrite(v, ft) === undefined ? `Enter ${hint}` : undefined),
     });
     if (input === undefined) return;
-    const value = parseWriteValue(input);
+    const value = parseTypedWrite(input, ft);
     if (value === undefined) return;
+    await this.postValue(name, value, formatValue(value));
+  }
 
+  /** POST /api/tags, and say how it went. */
+  private async postValue(name: string, value: number | boolean | string, shown: string): Promise<void> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     const token = vscode.workspace.getConfiguration("nautilus").get<string>("token", "");
     if (token) headers["Authorization"] = "Bearer " + token;
@@ -224,7 +320,7 @@ export class LiveValues implements vscode.Disposable {
         body: JSON.stringify({ name, value }),
       });
       if (res.status === 204 || res.ok) {
-        void notifyInfo(`nautilus: set ${name} = ${formatValue(value)}`);
+        void notifyInfo(`nautilus: set ${name} = ${shown}`);
         return;
       }
       const body = await res.text();
@@ -270,27 +366,41 @@ export class LiveValues implements vscode.Disposable {
     }
     const forcedAt = this.forcedFor(name);
     const current = forcedAt === name ? this.forces.get(name) : this.pathValue(name);
+    const ft = this.typeOf(name);
+    if (isEnum(ft)) {
+      const v = await this.pickEnum(
+        `nautilus: Force ${name}`,
+        `${typeLabel(ft)}${current === undefined ? "" : ` — ${forcedAt === name ? "forced to" : "now"} ${this.display(current, name)}`}: force to a member (or its integer), held until you remove the force`,
+        ft,
+        current
+      );
+      if (v === undefined) return;
+      await this.applyForce(name, v, enumValueName(v, ft), current === undefined ? undefined : this.display(current, name));
+      return;
+    }
+    const hint = typedWriteHint(ft);
     const input = await vscode.window.showInputBox({
       title: `nautilus: Force ${name}`,
       prompt:
         (forcedAt === name ? `Forced to ${formatValue(current)} — new forced value` : current === undefined ? "Force to" : `Now ${formatValue(current)} — force to`) +
-        " (number, or TRUE/FALSE). Held until you remove the force.",
+        ` (${hint}). Held until you remove the force.`,
       value: current === undefined ? "" : formatValue(current),
-      validateInput: (v) => (parseWriteValue(v) === undefined ? "Enter a number, or TRUE/FALSE" : undefined),
+      validateInput: (v) => (parseTypedWrite(v, ft) === undefined ? `Enter ${hint}` : undefined),
     });
     if (input === undefined) return;
-    const value = parseWriteValue(input);
+    const value = parseTypedWrite(input, ft);
     if (value === undefined) return;
+    await this.applyForce(name, value, formatValue(value), current === undefined ? undefined : formatValue(current));
+  }
+
+  /** Confirm (when configured) and send one force. */
+  private async applyForce(name: string, value: number | boolean | string, shown: string, was: string | undefined): Promise<void> {
     if (this.confirmWrites()) {
-      const go = await notifyWarning(
-        forceConfirmMessage(this.runtimeUrl(), name, formatValue(value), current === undefined ? undefined : formatValue(current)),
-        { modal: true },
-        "Force"
-      );
+      const go = await notifyWarning(forceConfirmMessage(this.runtimeUrl(), name, shown, was), { modal: true }, "Force");
       if (go !== "Force") return;
     }
     if (await this.write(`force ${name}`, forceApi.force(name, value))) {
-      void notifyInfo(`nautilus: forced ${name} = ${formatValue(value)}`);
+      void notifyInfo(`nautilus: forced ${name} = ${shown}`);
     }
   }
 
@@ -309,7 +419,7 @@ export class LiveValues implements vscode.Disposable {
         return;
       }
       const pick = await vscode.window.showQuickPick(
-        [...this.forces].map(([n, v]) => ({ label: n, description: `F ${formatValue(v)}` })),
+        [...this.forces].map(([n, v]) => ({ label: n, description: `F ${this.display(v, n)}` })),
         { title: "nautilus: Remove which force?" }
       );
       if (!pick) return;
@@ -342,7 +452,7 @@ export class LiveValues implements vscode.Disposable {
     type Item = vscode.QuickPickItem & { force?: string; all?: boolean };
     const items: Item[] = [...this.forces].map(([n, v]) => ({
       label: `$(lock) ${n}`,
-      description: `F ${formatValue(v)}`,
+      description: `F ${this.display(v, n)}`,
       detail: "Select to remove this force",
       force: n,
     }));
@@ -418,6 +528,7 @@ export class LiveValues implements vscode.Disposable {
       fresh: this.fresh(),
       values: Object.fromEntries(this.values),
       forced: this.enabled ? lowerForces(this.forces) : {},
+      types: this.types,
     };
     for (const l of this.listeners) l(frame);
   }
@@ -444,6 +555,7 @@ export class LiveValues implements vscode.Disposable {
         this.scheduleReconnect();
         return;
       }
+      void this.fetchMeta();
       res.setEncoding("utf8");
       res.on("data", (chunk: string) => {
         buffer += chunk;
@@ -469,6 +581,22 @@ export class LiveValues implements vscode.Disposable {
     req.on("error", () => this.scheduleReconnect());
     req.on("close", () => this.scheduleReconnect());
     this.req = req;
+  }
+
+  /** GET /api/meta → the declared types (#246). A failure keeps what we
+   * had: the values still render, enumerations just read as before. */
+  private async fetchMeta(): Promise<void> {
+    this.metaAt = Date.now();
+    try {
+      const res = await fetch(this.runtimeUrl() + "/api/meta", { signal: AbortSignal.timeout(3000) });
+      if (!res.ok) return;
+      this.types = flattenMetaTypes(await res.json());
+      this.metaNames = this.lastTags.length + this.lastLocals.length;
+      this.scheduleRender();
+      this.valuesChanged.fire();
+    } catch {
+      // controller gone or too old to answer — keep the last types
+    }
   }
 
   private disconnect(): void {
@@ -507,6 +635,11 @@ export class LiveValues implements vscode.Disposable {
     }
     this.lastTags = Object.entries(frame.tags ?? {});
     this.lastLocals = Object.entries(frame.locals ?? {});
+    // A name appeared or went (an online edit, a restart on a new program):
+    // the types may have too. At most every few seconds.
+    if (this.lastTags.length + this.lastLocals.length !== this.metaNames && Date.now() - this.metaAt > 5000) {
+      void this.fetchMeta();
+    }
     const hadForces = this.forces.size;
     this.forces = parseForces(frame);
     if (hadForces !== this.forces.size) this.updateStatus();
@@ -575,10 +708,12 @@ export class LiveValues implements vscode.Disposable {
         editor.setDecorations(this.freshDeco, []);
         editor.setDecorations(this.staleDeco, []);
         editor.setDecorations(this.forcedDeco, []);
+        editor.setDecorations(this.enumDeco, []);
         continue;
       }
       const decos: vscode.DecorationOptions[] = [];
       const forcedDecos: vscode.DecorationOptions[] = [];
+      const enumDecos: vscode.DecorationOptions[] = [];
       const text = editor.document.getText();
       // Segment the document: program text scans against the global watch;
       // each FUNCTION_BLOCK body scans against its MONITORED instance's
@@ -610,15 +745,22 @@ export class LiveValues implements vscode.Disposable {
           const pos = editor.document.positionAt(seg.offset + site.end);
           // site.value is resolved down the accessor path — a member reference
           // (RTU.VALUE) shows the child value, not the parent struct.
+          const full = seg.prefix + site.path;
+          const ft = this.typeOf(full);
+          const shown = enumText(site.value, ft) ?? formatValue(site.value);
           const hover = new vscode.MarkdownString();
-          hover.appendMarkdown(`**${seg.prefix}${site.path}** — live value from ${this.runtimeUrl()}\n`);
-          hover.appendCodeblock(formatValueHover(site.value), "");
+          const tl = typeLabel(ft);
+          hover.appendMarkdown(`**${full}**${tl ? ` · \`${tl}\`` : ""} — live value from ${this.runtimeUrl()}\n`);
+          hover.appendCodeblock(formatValueHover(site.value, (v, p) => enumText(v, this.typeOf(full + p))), "");
+          if (isEnum(ft)) {
+            hover.appendMarkdown(`\n\n${ft.e.map((m) => (m.name === shown ? `**${m.name}**` : m.name)).join(" · ")}`);
+          }
           // "Set value…" — only for a bare top-level tag (no FB-instance
           // prefix, no member/index path); a struct member isn't a writable
           // name on its own. The command link needs a trusted hover.
           const forced = seg.prefix === "" ? this.forcedFor(site.path) : undefined;
           if (forced) {
-            hover.appendMarkdown(`\n\n**F** — forced to \`${formatValue(this.forces.get(forced))}\` (\`${forced}\`)`);
+            hover.appendMarkdown(`\n\n**F** — forced to \`${this.display(this.forces.get(forced), forced)}\` (\`${forced}\`)`);
           }
           if (seg.prefix === "" && /^[A-Za-z_][A-Za-z0-9_.]*$/.test(site.path)) {
             const arg = encodeURIComponent(JSON.stringify([site.path]));
@@ -633,10 +775,10 @@ export class LiveValues implements vscode.Disposable {
             hover.isTrusted = { enabledCommands: ["nautilus.setValue", "nautilus.force", "nautilus.unforce"] };
             hover.supportThemeIcons = true;
           }
-          (forced ? forcedDecos : decos).push({
+          (forced ? forcedDecos : enumText(site.value, ft) !== undefined ? enumDecos : decos).push({
             range: new vscode.Range(pos, pos),
             renderOptions: {
-              after: { contentText: forced ? forcedPillText(formatValue(site.value)) : formatValue(site.value) },
+              after: { contentText: forced ? forcedPillText(shown) : shown },
             },
             hoverMessage: hover,
           });
@@ -644,9 +786,12 @@ export class LiveValues implements vscode.Disposable {
       }
       // A stale frame can't vouch for a force any more than for a value:
       // forced pills grey out with the rest (the F in their text stays).
+      // An enumerated pill greys out with the rest when stale; its bare
+      // member name still says it is not a STRING.
       editor.setDecorations(fresh ? this.staleDeco : this.freshDeco, []);
-      editor.setDecorations(fresh ? this.freshDeco : this.staleDeco, fresh ? decos : decos.concat(forcedDecos));
+      editor.setDecorations(fresh ? this.freshDeco : this.staleDeco, fresh ? decos : decos.concat(forcedDecos, enumDecos));
       editor.setDecorations(this.forcedDeco, fresh ? forcedDecos : []);
+      editor.setDecorations(this.enumDeco, fresh ? enumDecos : []);
     }
     this.notify();
   }
@@ -785,6 +930,7 @@ export class LiveValues implements vscode.Disposable {
     this.freshDeco.dispose();
     this.staleDeco.dispose();
     this.forcedDeco.dispose();
+    this.enumDeco.dispose();
     this.status.dispose();
     this.forceStatus.dispose();
     this.monitorsChanged.dispose();
@@ -855,6 +1001,25 @@ function forcedPillDecoration(): vscode.TextEditorDecorationType {
     },
     light: {
       after: { color: "#9a5b00", backgroundColor: "rgba(214, 140, 20, 0.14)", border: "1px solid rgba(170, 100, 0, 0.6)" },
+    },
+  });
+}
+
+// enumPillDecoration is pillDecoration for an enumerated value (#246): the
+// same shape (the smoke checks find pills by their 5px radius), in the
+// theme's enum-member blue and italic, so a named value is never mistaken
+// for a STRING's text.
+function enumPillDecoration(): vscode.TextEditorDecorationType {
+  return vscode.window.createTextEditorDecorationType({
+    after: {
+      margin: "0 0 0 0.6em",
+      color: new vscode.ThemeColor("symbolIcon.enumeratorMemberForeground"),
+      backgroundColor: "rgba(75, 156, 230, 0.13)",
+      border: "1px solid rgba(75, 156, 230, 0.45)",
+      fontWeight: "600",
+      fontStyle: "italic",
+      textDecoration:
+        "none; border-radius: 5px; padding: 0px 5px; font-size: 0.85em; vertical-align: baseline;",
     },
   });
 }
