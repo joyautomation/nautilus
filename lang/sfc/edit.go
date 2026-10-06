@@ -156,12 +156,8 @@ func findAction(m *Model, id string) (*GAction, error) {
 // like hand-written source; untouched blocks are never reformatted.
 
 func printStep(s *GStep) string {
-	kw := "STEP"
-	if s.Initial {
-		kw = "INITIAL_STEP"
-	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "  %s %s:\n", kw, s.Name)
+	b.WriteString("  " + StepHeader(s, s.Name) + "\n")
 	for _, a := range s.Actions {
 		b.WriteString("    " + printAssoc(a) + "\n")
 	}
@@ -474,7 +470,7 @@ func opRenameStep(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
 	// of an edit op guessing at ST-expression surgery.
 	edits := []TextEdit{{
 		Line: s.Line, Col: 1, EndLine: s.Line + 1, EndCol: 1,
-		NewText: fmt.Sprintf("  %s %s:\n", stepKeyword(s), newName),
+		NewText: "  " + StepHeader(s, newName) + "\n",
 	}}
 	for i := range m.Trans {
 		t := &m.Trans[i]

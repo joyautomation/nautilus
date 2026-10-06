@@ -251,12 +251,28 @@ sfc_check_says() {
   grep -Eq -- "$2" <<<"$t" || { g_err "$1 shows no problem matching /$2/"; return 1; }
 }
 
-# habit_check <ERE> — naut check is expected to FAIL here (a habit); return 0
-# only if it is clean (XPASS). Prints the matching diagnostics.
+# habit_check <ERE> — naut check on the project as it stands: status is
+# naut's (0 = the habit is accepted). Prints the matching diagnostics.
 habit_check() {
   local out rc; out=$(cd "$PROJ" && naut check . 2>&1); rc=$?
   grep -E -- "$1" <<<"$out" | head -3
   (( rc == 0 ))
+}
+
+# iec_assoc_form <as written> <IEC form> — in a scratch copy of the project,
+# rewrite the association into IEC 61131-3's textual form; naut check must be
+# clean and naut sfc graph must read it as the same qualifier, target, time.
+iec_assoc_form() {
+  local tmp; tmp=$(mktemp -d)
+  cp -r "$PROJ/." "$tmp/"
+  grep -qF -- "$1" "$tmp/washer.sfc" || { g_err "washer.sfc has no '$1'"; rm -rf "$tmp"; return 1; }
+  sed -i "s/$(sed 's/[][\/.*^$]/\\&/g' <<<"$1")/$2/" "$tmp/washer.sfc"
+  grep -F -- "$2" "$tmp/washer.sfc" | sed 's/^ */written: /'
+  local rc=0
+  (cd "$tmp" && naut check .) | tail -1 || rc=1
+  (cd "$tmp" && naut check . >/dev/null 2>&1) || rc=1
+  naut sfc graph "$tmp/washer.sfc" | python3 -c 'import json,sys; m=json.load(sys.stdin); a=[x for s in m["steps"] for x in (s.get("actions") or []) if x["target"]=="Detergent"]; print("graph:", a); sys.exit(0 if any(x["qualifier"]=="D" and x.get("time")=="T#3S" for x in a) else 1)' || rc=1
+  rm -rf "$tmp"; return $rc
 }
 
 # sfc_transition_name_field — "+ transition" from <step>: does the form take
@@ -474,7 +490,10 @@ row paste-sfc-actions PASS sfc_paste_actions SpinCtl
 check_after actions
 
 # every step's associations, in the reference's order; the timed qualifiers
-# a Codesys programmer types first are tried in place and retyped
+# a Codesys programmer types first are typed in place (they compile since
+# #190 — the habit rows PASS) and then retyped to the reference's Step.T
+# form, which the gesture build reproduces; reference-timed/ is the same
+# washer written with them, checked and tested at the end
 row sfc_add_action-Idle-R-DoorLock PASS sfc_add_action Idle R DoorLock
 row sfc_add_action-Idle-R-AlarmLamp PASS sfc_add_action Idle R AlarmLamp
 row sfc_add_action-Idle-N-TrackState PASS sfc_add_action Idle N TrackState
@@ -483,8 +502,12 @@ row sfc_add_action-Fill-N-FillValve PASS sfc_add_action Fill N FillValve
 row sfc_add_action-Fill-P1-CountCycle PASS sfc_add_action Fill P1 CountCycle
 # Codesys qualifier syntax: the time typed after the target, no parens (#183)
 row habit-assoc-time-syntax PASS sfc_try_assoc Fill "D Detergent T#3S"
-row habit-D-qualifier XFAIL habit_check 'timed qualifier'
-row chart-shows-timed-qualifier-error PASS sfc_check_says Fill 'timed qualifier|not implemented'
+row habit-D-qualifier PASS habit_check 'Detergent|qualifier'
+# ACTION Dose (pasted) also assigns Detergent: the step's marker carries the
+# association-vs-ACTION warning, worded for D's window (#185)
+row chart-explains-timed-assoc PASS sfc_check_says Fill 'association \(D\).*once Fill has been active T#3S'
+# the same association in IEC 61131-3's textual form (#189), CLI
+row habit-iec-assoc-form PASS iec_assoc_form 'D Detergent(T#3S);' 'Detergent(D, T#3S);'
 row sfc_edit_action-Fill-N-Dose PASS sfc_edit_action Fill Detergent "N Dose"
 row sfc_add_action-Fill-N-Supervise PASS sfc_add_action Fill N Supervise
 row sfc_add_action-Fill-N-TrackState PASS sfc_add_action Fill N TrackState
@@ -494,11 +517,11 @@ row sfc_add_action-Wash-N-TrackState PASS sfc_add_action Wash N TrackState
 row sfc_add_action-HeatDone-N-TrackState PASS sfc_add_action HeatDone N TrackState
 row sfc_add_action-Drain-N-DrainPump PASS sfc_add_action Drain N DrainPump
 row sfc_add_action-Drain-SD-AlarmLamp PASS sfc_add_action Drain SD AlarmLamp T#45S
-row habit-SD-qualifier XFAIL habit_check 'timed qualifier'
+row habit-SD-qualifier PASS habit_check 'AlarmLamp|qualifier'
 row sfc_edit_action-Drain-N-Supervise PASS sfc_edit_action Drain AlarmLamp "N Supervise"
 row sfc_add_action-Drain-N-TrackState PASS sfc_add_action Drain N TrackState
 row sfc_add_action-Spin-L-SpinMotor PASS sfc_add_action Spin L SpinMotor T#10S
-row habit-L-qualifier XFAIL habit_check 'timed qualifier'
+row habit-L-qualifier PASS habit_check 'SpinMotor|qualifier'
 row sfc_edit_action-Spin-N-SpinCtl PASS sfc_edit_action Spin SpinMotor "N SpinCtl"
 row sfc_add_action-Spin-N-DrainPump PASS sfc_add_action Spin N DrainPump
 row sfc_add_action-Spin-N-TrackState PASS sfc_add_action Spin N TrackState
@@ -537,6 +560,17 @@ compare_order() {
   return "${PIPESTATUS[0]}"
 }
 row habit-assoc-typed-order PASS compare_order
+
+# the washer as a Codesys programmer writes it first — D / SD / L and step
+# MAXTIME supervision with an overrun alarm (#190, #191) — checked and run
+reference_timed() {
+  local out rc
+  out=$(cd "$HOME/build/reference-timed" && naut "$1" . 2>&1); rc=$?
+  printf '%s\n' "$out" >"$OUT_DIR/built/reference-timed-$1.txt"
+  tail -1 <<<"$out"; return $rc
+}
+row reference-timed-check PASS reference_timed check
+row reference-timed-test PASS reference_timed test
 
 (cd "$PROJ" && naut check . >"$OUT_DIR/built/naut-check.txt" 2>&1)
 tar -C "$HOME" --exclude=.git -cf - washer | tar -C "$OUT_DIR/built" -xf -

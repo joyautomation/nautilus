@@ -1,0 +1,128 @@
+# SFC timed action qualifiers (IEC 61131-3 §2.6.4.5, Table 52 — the action
+# control block's L, D, SD, DS, SL inputs). Every association is on step A
+# with PT = 100ms; R associations on step Clear reset the stored ones.
+# 1ms scans: A activates on scan 1 (its elapsed time is 0 there), so
+# "100ms after activation" is scan 101.
+#
+# Pinned, and where the standard is followed literally:
+#   - L  = A.X AND NOT TON(A.X, PT).Q      — on for scans 1..100
+#   - D  = TON(A.X, PT).Q                  — on from scan 101 while A is active
+#   - SD = TON(latch, PT).Q, latch set by A's activation, cleared by R
+#   - DS = latch set by TON(A.X, PT).Q, cleared by R
+#   - SL = latch AND NOT TON(latch, PT).Q, latch set by A's activation,
+#          cleared only by R — so an SL that has timed out does NOT re-arm on
+#          re-entry until an R clears its latch (the standard's SL_FF has R as
+#          its only reset; CODESYS behaves the same).
+#   - R acts once, on its step's activation scan, like nautilus's R on an S
+#     (docs: languages/sfc, "Action qualifiers").
+#   - a body under a timed qualifier is a level: one final scan when its
+#     window closes (sfc-final-scan).
+tests:
+  - name: nothing acts while A has never been active
+    steps:
+      - scans: 200
+        expect: { sfc_L: false, sfc_D: false, sfc_SD: false, sfc_DS: false, sfc_SL: false, sfc_CntL: 0 }
+
+  - name: the activation scan — L and SL on, the delayed ones not yet
+    given: { Go: true }
+    steps:
+      - scans: 1
+        expect: { sfc_L: true, sfc_D: false, sfc_SD: false, sfc_DS: false, sfc_SL: true, sfc_CntL: 1 }
+
+  - name: the scan before PT — nothing has changed
+    given: { Go: true }
+    steps:
+      - scans: 1
+      - advance: 99ms # scan 100: A has been active 99ms
+        expect: { sfc_L: true, sfc_D: false, sfc_SD: false, sfc_DS: false, sfc_SL: true, sfc_CntL: 100 }
+
+  - name: the scan at PT — L and SL drop, D SD DS rise, the L body runs its final scan
+    given: { Go: true }
+    steps:
+      - scans: 1
+      - advance: 100ms # scan 101: A has been active 100ms
+        expect: { sfc_L: false, sfc_D: true, sfc_SD: true, sfc_DS: true, sfc_SL: false, sfc_CntL: 101 }
+      - advance: 50ms # nothing more changes while A stays active
+        expect: { sfc_L: false, sfc_D: true, sfc_SD: true, sfc_DS: true, sfc_SL: false, sfc_CntL: 101 }
+
+  - name: after the step leaves — D drops, the stored SD and DS hold
+    given: { Go: true }
+    steps:
+      - advance: 150ms
+        expect: { sfc_D: true, sfc_SD: true, sfc_DS: true }
+      - given: { Go: false, Next: true }
+        scans: 1 # A -> B
+        expect: { sfc_L: false, sfc_D: false, sfc_SD: true, sfc_DS: true, sfc_SL: false }
+      - advance: 1s
+        expect: { sfc_L: false, sfc_D: false, sfc_SD: true, sfc_DS: true, sfc_SL: false, sfc_CntL: 101 }
+
+  - name: leaving before PT — L is cut short, D and DS never come on, SD and SL run on stored
+    given: { Go: true }
+    steps:
+      - advance: 50ms # scan 50
+        expect: { sfc_L: true, sfc_SL: true, sfc_CntL: 50 }
+      - given: { Go: false, Next: true }
+        scans: 1 # scan 51: A -> B; L's final write, its body's final scan
+        expect: { sfc_L: false, sfc_D: false, sfc_SD: false, sfc_DS: false, sfc_SL: true, sfc_CntL: 51 }
+      - advance: 49ms # scan 100: SL's 100ms is still running, SD's has not elapsed
+        expect: { sfc_SD: false, sfc_SL: true, sfc_D: false, sfc_DS: false }
+      - advance: 1ms # scan 101: 100ms since A activated
+        expect: { sfc_SD: true, sfc_SL: false, sfc_D: false, sfc_DS: false, sfc_CntL: 51 }
+
+  - name: R resets the stored qualifiers
+    given: { Go: true }
+    steps:
+      - advance: 150ms
+        expect: { sfc_SD: true, sfc_DS: true }
+      - given: { Go: false, Next: true }
+        scans: 1 # A -> B
+      - given: { Next: false, Rst: true }
+        scans: 1 # B -> Clear: the R associations act
+        expect: { sfc_SD: false, sfc_DS: false, sfc_SL: false }
+      - given: { Rst: false }
+        advance: 1s # back in Idle; nothing re-latches
+        expect: { sfc_L: false, sfc_D: false, sfc_SD: false, sfc_DS: false, sfc_SL: false }
+
+  - name: R before PT cuts SL short and stops SD from ever coming on
+    given: { Go: true }
+    steps:
+      - advance: 10ms
+        expect: { sfc_SL: true, sfc_SD: false }
+      - given: { Go: false, Next: true }
+        scans: 1 # A -> B
+      - given: { Next: false, Rst: true }
+        scans: 1 # B -> Clear: R
+        expect: { sfc_SL: false, sfc_SD: false }
+      - given: { Rst: false }
+        advance: 200ms # well past where SD would have risen
+        expect: { sfc_SL: false, sfc_SD: false, sfc_DS: false }
+
+  - name: re-entry restarts L and D; a timed-out SL stays off until an R
+    given: { Go: true }
+    steps:
+      - advance: 150ms
+      - given: { Go: false, Next: true }
+        scans: 1 # A -> B
+      - given: { Next: false, Back: true }
+        scans: 1 # B -> Idle, no R
+      - given: { Back: false, Go: true }
+        scans: 1 # Idle -> A again
+        expect: { sfc_L: true, sfc_D: false, sfc_SL: false, sfc_SD: true, sfc_DS: true }
+      - advance: 100ms # 100ms into the second visit
+        expect: { sfc_L: false, sfc_D: true, sfc_SL: false }
+
+  - name: after an R, SL arms again on the next activation
+    given: { Go: true }
+    steps:
+      - advance: 150ms
+      - given: { Go: false, Next: true }
+        scans: 1
+      - given: { Next: false, Rst: true }
+        scans: 1 # B -> Clear: R
+      - given: { Rst: false }
+        scans: 1 # Clear -> Idle
+      - given: { Go: true }
+        scans: 1 # Idle -> A
+        expect: { sfc_SL: true, sfc_SD: false, sfc_DS: false, sfc_L: true }
+      - advance: 100ms
+        expect: { sfc_SL: false, sfc_SD: true, sfc_DS: true, sfc_L: false, sfc_D: true }

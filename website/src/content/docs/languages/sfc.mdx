@@ -164,9 +164,11 @@ END_PROGRAM
 | --- | --- | --- |
 | Initial step | `INITIAL_STEP Idle: … END_STEP` | Exactly one per chart; active on the first scan |
 | Step | `STEP ChargeA: … END_STEP` | Owns a retained BOOL, `ChargeA.X`, and a `ChargeA.T` elapsed time |
+| Supervised step | `STEP ChargeA (MAXTIME := T#5M, ERROR := ChargeA_Overrun): … END_STEP` | Adds a retained overrun flag, `ChargeA.ERR`; see [Step supervision](#step-supervision) |
 | Transition | `TRANSITION [name] FROM a TO b := <ST expr>; END_TRANSITION` | `FROM`/`TO` take one step or a parenthesised list; the name is optional |
 | Action block | `ACTION LoadRecipe: <ST statements> END_ACTION` | The body is Structured Text |
-| Association | `N XV201A_Cmd;` | A qualifier plus either an `ACTION` name or a declared BOOL variable |
+| Association | `N XV201A_Cmd;` or `D XV201A_Cmd(T#3S);` | A qualifier plus either an `ACTION` name or a declared BOOL variable; a timed qualifier takes a duration |
+| Association, IEC form | `XV201A_Cmd(N);` or `XV201A_Cmd(D, T#3S);` | The standard's own textual spelling, read as the same association; an omitted qualifier is `N` |
 
 ## How a chart executes
 
@@ -193,33 +195,106 @@ condition is true. That one rule covers both branch forms:
   targets and the token splits. **Simultaneous convergence** is
   `FROM (Heat, Mix)`, enabled only when both sources are active.
 
-Qualifiers that compile today are `N`, `S`, `R`, `P1`, `P`, and `P0`. `N` is
-active exactly while the step is. `S` sets the target and `R` clears it, each
-once, on the scan its step activates, which is the abort/reset pattern above.
-`P1` and `P` fire once on the rising edge, `P0` once on the falling edge.
-`N` and pulse associations targeting the same BOOL variable are OR-combined:
-the variable is held `TRUE` while any of them is active and written `FALSE`
-once, on the scan the last one drops, so `HeatingActive` — `N`-qualified
-from both `Heat` and `Hold` above — only goes low the scan the chart leaves
-both of them, for `Transfer` or `Aborted`.
+### Action qualifiers
+
+Every IEC 61131-3 action qualifier compiles: `N`, `S`, `R`, `P1`, `P`, `P0`,
+and the timed `L`, `D`, `SD`, `DS`, `SL`. `N` is active exactly while the
+step is. `S` sets the target and `R` clears it, each once, on the scan its
+step activates, which is the abort/reset pattern above. `P1` and `P` fire
+once on the rising edge, `P0` once on the falling edge.
+
+The timed qualifiers take a duration, a `TIME` literal or a `TIME`
+variable: `D Detergent(T#3S);`, or in the standard's own spelling
+`Detergent(D, T#3S);`. Each association gets its own timer, started when its
+step activates.
+
+| Qualifier | Active | Ends |
+| --- | --- | --- |
+| `L` time limited | from the step's activation, for the duration | at the duration, or when the step is left first |
+| `D` time delayed | once the step has been active for the duration | when the step is left |
+| `SD` stored, then delayed | the duration after the step activates, even if the step was left meanwhile | at an `R` on the same target |
+| `DS` delayed, then stored | once the step has been active for the duration (never, if it was left sooner) | at an `R` on the same target |
+| `SL` stored, time limited | from the step's activation, for the duration, even after the step is left | at the duration, or an `R` |
+
+These are the standard's action-control semantics, with one difference:
+like nautilus's `S`/`R`, an `R` acts once, on its step's activation scan,
+and clears the `SD`, `DS` and `SL` latches on its target as well as an `S`.
+An `SL` that has run its time stays latched, so it does not run again on
+the step's next activation until an `R` clears it. That is the standard's
+`SL` (its latch has `R` as its only reset), and CODESYS behaves the same.
+
+`N`, pulse and timed associations targeting the same BOOL variable are
+OR-combined: the variable is held `TRUE` while any of them is active and
+written `FALSE` once, on the scan the last one drops, so `HeatingActive` —
+`N`-qualified from both `Heat` and `Hold` above — only goes low the scan the
+chart leaves both of them, for `Transfer` or `Aborted`.
 
 An association writes its variable only on the scans it acts. A step that is
 not active never touches it, and between those scans the variable belongs to
 whoever else writes it. When an `ACTION` body assigns the same variable, the
 association wins while it acts (it is applied after the bodies in the scan):
 every scan its `N` step is active, the one activation scan of an `S` or `R`,
-the one scan of a pulse. The `ACTION` owns it the rest of the time, so an
+the one scan of a pulse, the window of a timed qualifier. The `ACTION` owns it the rest of the time, so an
 `R X` on an abort step and an `ACTION` that sets `X` on a normal step coexist.
 `naut check` warns on every such pair.
 
-Action bodies are ST, and only ST. A body driven by a level qualifier runs
+Action bodies are ST, and only ST. A body driven by a level qualifier (any
+but the pulses: a timed qualifier's window is a level) runs
 one extra scan on the falling edge of its active signal, so a body written
 against step activity shuts its outputs down: on that final scan
 `holdTmr(IN := Hold.X, …)` runs once more with `Hold.X` false, resetting the
 timer, clean for re-entry. A `P1` body has no final scan.
 
 `Step.T` compiles to a hidden `TON`, and only for steps whose `.T` is read.
-Both `.X` and `.T` are legal in conditions and action bodies.
+Both `.X` and `.T` are legal in conditions and action bodies, and so is
+`Step.ERR` on a supervised step.
+
+Timing no qualifier expresses (an output on between two times, a delay that
+counts only while a condition holds) is an `N` association to an `ACTION`
+that reads the step's elapsed time: `Valve := Fill.X AND Fill.T >= T#3S;`.
+
+## Step supervision
+
+A step can carry a maximum active time. Put it in the step's attribute list,
+between the name and the colon:
+
+```iecsfc
+STEP Fill (MAXTIME := T#60S, ERROR := FillOverrun):
+  N FillValve;
+END_STEP
+
+(* the abort has priority over the normal way out *)
+TRANSITION FROM Fill TO Aborted := Fill.ERR;
+END_TRANSITION
+TRANSITION FROM Fill TO Wash := LevelPct >= FillSP;
+END_TRANSITION
+```
+
+When the step has been active **longer** than `MAXTIME`, its retained flag
+`Fill.ERR` goes `TRUE`: one scan after `Fill.T` reaches the limit, the
+reading of a CODESYS maximum step time or an S7-GRAPH supervision
+`T > limit`. The flag stays set after the step is left, so the abort step
+can still read why it was entered, and clears on the step's next
+activation. Nothing else happens on its own: the chart moves only where a
+transition says, so the overrun's consequence (`Fill.ERR` in an abort
+transition, a fault code in an `ACTION`) is in the chart where it can be read.
+
+`ERROR := FillOverrun` is optional. It names a BOOL variable, normally a
+manifest tag, that mirrors `Fill.ERR` every scan. That tag is how the alarm
+engine sees the overrun; a definition binds to it like any other condition:
+
+```yaml
+# nautilus.yaml
+alarms:
+  defs:
+    - { id: FillOverrun, tag: FillOverrun, name: "Fill ran past its maximum time", priority: high }
+```
+
+`MAXTIME` takes a `TIME` literal. The attribute list is the one place this
+departs from the standard's textual SFC, which has no step supervision; it
+sits in the step header because the limit belongs to the step, not to any
+action, and the chart editor keeps it on every edit.
+`lang/conformance/sfc-step-maxtime` pins every edge, the alarm included.
 
 ## Structural checks
 
@@ -229,7 +304,12 @@ Both `.X` and `.T` are legal in conditions and action bodies.
 Errors: duplicate step, action, or transition names; no `INITIAL_STEP`, or
 more than one; a `FROM`/`TO` naming a step that does not exist; an empty
 condition; an association naming neither an `ACTION` block nor a declared
-variable; a `.X`/`.T` reference to an unknown step; an unsupported qualifier.
+variable; a `.X`/`.T` reference to an unknown step; an unknown qualifier
+(the message lists every supported one and the `Step.T` recipe); a timed
+qualifier with no duration, or an untimed one given one; a bad step attribute
+(`MAXTIME` that is not a `TIME` literal, `ERROR` that is not a declared
+variable, or `ERROR` without `MAXTIME`); `Step.ERR` on a step with no
+`MAXTIME`.
 
 Warnings: a non-initial step that no transition targets (unreachable); a
 dead-end step that no transition sources, which a terminal step may be on
@@ -320,7 +400,8 @@ commit and the working tree.
 carrying its derived kind (`normal`/`alt`/`simDiverge`/`simConverge`), and
 `naut sfc edit` applies one structural op to source read on stdin.
 
-Step activity, stored flags, pulse edge memories, and step timers are all
+Step activity, stored flags, pulse edge memories, step timers, timed-qualifier
+timers and latches, and overrun flags are all
 retained VAR slots, so an [online edit](/guides/online-edits/) preserves the
 live token and every timer, and a running batch does not restart. Renaming a
 step is the exception: the renamed step's slot is a new name, so its token
@@ -330,12 +411,11 @@ into the `.sfc` file for review in `git diff`.
 
 ## Not supported
 
-- The timed qualifiers `L`, `D`, `SD`, `DS`, `SL`. They parse and are
-  reported as an error naming the supported set.
 - Macro steps and charts nested inside a step. Charts are flat.
 - Explicit numeric transition priorities; priority is declaration order.
 - Instruction List action bodies. Action bodies are ST.
-- Transition indicator variables, and the full standard action-control block.
+- Indicator variables in an association (`Valve(N, Ind);`) and on
+  transitions. `naut check` names the forms it does take.
 - Import of vendor SFC (Rockwell `.L5X` routines, Siemens GRAPH, CODESYS).
 - Machine-checked token conservation for pathological branch topologies. The
   structural checks cover the detectable cases.

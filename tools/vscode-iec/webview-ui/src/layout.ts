@@ -38,6 +38,9 @@ export type VarDecl = {
 	init?: string;
 	section: string;
 	line: number;
+	/** The FUNCTION_BLOCK that declares it (a ladder file's blocks); absent
+	 * for the program's own. */
+	pou?: string;
 };
 export type FbdModel = {
   name: string;

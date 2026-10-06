@@ -152,84 +152,14 @@ chk() {
   _record "$name" "$verdict" "$(grep -v '^$' <<<"$out" | grep -v 'warning:' | tail -2 | tr '\n' ' ')"
 }
 
-# ── build-local verbs (candidates for verbs/gestures.sh) ────────────────────
-# Same contract as the verbs there: save, then read the file back.
+# ── build-local verbs ───────────────────────────────────────────────────────
+# Same contract as the verbs in verbs/gestures.sh: save, then read the file
+# back. The build's generally useful verbs moved there (ld_delete_rung,
+# ld_vars_delete, ld_vars_declare, ld_rung_comment, ld_edge_retag,
+# ld_edge_drawn, ld_copy_rung, ld_vars_lists_instance,
+# ld_vars_escape_closes, ld_declare_offer_type); what stays are the probes
+# of habits nautilus does not have yet.
 
-# lx_delete_rung <rung> — click the rung's name (selects the whole rung),
-# Del.
-lx_delete_rung() {
-  local rung=$1
-  G_WHAT="delete rung $rung"
-  ld_select_rung "$rung" || return 1
-  g_key Delete
-  ld_wait "!($(ld_rung_el "$rung"))" || return 1
-  g_save
-  ! grep -Eq "^ *RUNG +$rung\\b" "$PROJ/$G_FILE" || { g_err "RUNG $rung is still in $G_FILE"; return 1; }
-}
-# _lx_vars_open — the diagram bar's "vars" button (the variables panel).
-_lx_vars_open() {
-  js_true 'doc.querySelector(".addrow")' && return 0
-  click_button vars || return 1
-  wait_js 'doc.querySelector(".addrow")' 4 || { g_err "the variables panel did not open"; return 1; }
-}
-# _lx_vars_close — a click on the bar's hint text (the panel closes on any
-# click outside it; Escape does not close it).
-_lx_vars_close() {
-  js_true 'doc.querySelector(".addrow")' || return 0
-  click_el 'doc.querySelector(".bar")' 0.3 0.5
-  wait_js '!doc.querySelector(".addrow")' 3 || { g_err "the variables panel did not close"; return 1; }
-}
-# lx_vars_delete <name> — the variables panel's × on <name>'s row.
-lx_vars_delete() {
-  local name=$1
-  G_WHAT="delete the declaration of $name"
-  _lx_vars_open || return 1
-  click_el "doc.querySelector('button.del[data-id=\"del:$name\"]')" || { g_err "no $name row in the variables panel"; return 1; }
-  wait_js "!doc.querySelector('button.del[data-id=\"del:$name\"]')" 6 || { g_err "$name is still listed"; return 1; }
-  _lx_vars_close || return 1
-  g_save
-  ! grep -Eq "^ *$name *:" "$PROJ/$G_FILE" || { g_err "$name is still declared in $G_FILE"; return 1; }
-}
-# lx_vars_declare <name> <type> [VAR_EXTERNAL|VAR] — the variables panel's
-# footer row: section badge, name, type, Enter.
-lx_vars_declare() {
-  local name=$1 type=$2 section=${3:-VAR_EXTERNAL} cur
-  G_WHAT="declare $name : $type in $section"
-  _lx_vars_open || return 1
-  cur=$(js 'doc.querySelector(".addrow button.badge")?.textContent.trim()' | tr -d '"')
-  if [[ ($section == VAR && $cur == ext) || ($section == VAR_EXTERNAL && $cur == local) ]]; then
-    click_el 'doc.querySelector(".addrow button.badge")' || return 1
-  fi
-  click_el 'doc.querySelector(".addrow input.nx-input.grow")' || return 1
-  g_key ctrl+a; g_type "$name"
-  click_el 'doc.querySelector(".addrow .typefield input")' || return 1
-  g_key ctrl+a; g_type "$type"
-  g_key Escape   # dismiss the type suggestions (the first Escape stops there)
-  click_el 'doc.querySelector(".addrow button.add")' || return 1
-  sleep 1
-  _lx_vars_close || return 1
-  assert_file_contains "$G_FILE" "^ *$name *: *$type *;"
-}
-# lx_rung_comment <rung> <text> — double-click the rung's "(* … *)" slot,
-# type the comment.
-lx_rung_comment() {
-  local rung=$1 text=$2
-  G_WHAT="comment on $rung"
-  dclick_el "doc.querySelector('tspan.rungcomment[data-id=\"rungcomment:$rung\"]')" || { g_err "no comment slot on $rung"; return 1; }
-  float_edit "$text" || return 1
-  assert_file_contains "$G_FILE" "^ *RUNG +$rung *\\(\\* *$(sed 's/[][\\.*^$()|+?{}]/\\&/g' <<<"$text") *\\*\\)"
-}
-# lx_edge_retag <rung> <tag> — the Logix ONS habit: double-click a contact
-# and type "+Tag" for a rising-edge contact (the grammar has `+Tag`; the
-# palette has no edge contact). XFAIL until a gesture authors one.
-lx_edge_retag() {
-  local rung=$1 tag=$2
-  G_WHAT="+$tag on $rung"
-  dclick_el "$(ld_node_el "$rung" contact "$tag")" || { g_err "no contact $tag on $rung"; return 1; }
-  float_edit "+$tag" || return 1
-  sleep 1.5
-  ld_assert_rung "$rung" "(^| )\\+$tag\\b"
-}
 # lx_desc_on_element <rung> <tag> <desc> — Studio 5000 draws a tag's
 # description above the instruction. Does the ladder element show (or
 # title) the nautilus.yaml desc anywhere? XFAIL until it does.
@@ -237,60 +167,6 @@ lx_desc_on_element() {
   local rung=$1 tag=$2 desc=$3
   js_true "($(ld_node_el "$rung" '*' "$tag"))?.closest('g.node')?.textContent.includes($(_q "$desc"))" \
     || { g_err "the $tag element on $rung shows no description (want \"$desc\")"; return 1; }
-}
-# lx_edge_drawn <rung> <tag> — is the edge contact `+Tag` on the diagram?
-# (The ladder model has it — `naut ld graph` sends kind "edge" — but
-# ladderLayout.ts lays out contact/fn/fb/branch only.) XFAIL until it is.
-lx_edge_drawn() {
-  local rung=$1 tag=$2
-  grep -Eq "(^| )\+$tag\b" <<<"$(ld_rung_text "$rung")" || { g_err "rung $rung has no +$tag in the file"; return 1; }
-  js_true "[...(($(ld_rung_el "$rung"))?.querySelectorAll('g.node') ?? [])].some(g => (g.querySelector('text.operand')?.textContent ?? '').includes($(_q "$tag")))" \
-    || { g_err "the file has +$tag on $rung; the diagram draws no element for it"; return 1; }
-}
-# lx_copy_rung <rung> — the Studio 5000 habit: select the rung, Ctrl+C,
-# Ctrl+V, and a copy lands below it. XFAIL until a gesture copies a rung
-# (doCopy refuses a whole-rung selection). An XPASS copy is deleted again,
-# so the rest of the build is unchanged.
-lx_copy_rung() {
-  local rung=$1 n0 n1 new
-  G_WHAT="copy rung $rung"
-  n0=$(js 'doc.querySelectorAll("svg.rsvg").length')
-  ld_select_rung "$rung" || return 1
-  g_key ctrl+c; g_key ctrl+v; sleep 1.5
-  n1=$(js 'doc.querySelectorAll("svg.rsvg").length')
-  (( n1 > n0 )) || { g_err "Ctrl+C / Ctrl+V on rung $rung added no rung ($n0 rungs before and after)"; return 1; }
-  new=$(js "(() => { $_LD_JS return [...doc.querySelectorAll('svg.rsvg')].map(rungName).at($n0 > 0 ? -1 : 0); })()" | tr -d '"')
-  [[ -n $new && $new != "$rung" ]] && lx_delete_rung "$new"
-  return 0
-}
-# lx_vars_lists_instance <inst> — the AOI-backing-tag habit: is the block
-# instance in the variables panel? Leaves the panel open for the row's PNG.
-# XFAIL: the panel lists header declarations, and the FB picker declares an
-# instance by its call.
-lx_vars_lists_instance() {
-  _lx_vars_open || return 1
-  js_true "[...doc.querySelectorAll('.rows .row')].some(r => r.dataset.id === $(_q "$1"))" \
-    || { g_err "the variables panel ($(js 'doc.querySelectorAll(".rows .row").length') rows) does not list $1"; return 1; }
-}
-# lx_vars_escape_closes — Escape closes the open variables panel? XFAIL:
-# only a click outside it does (closed that way after the probe).
-lx_vars_escape_closes() {
-  _lx_vars_open || return 1
-  g_key Escape; sleep 0.6
-  js_true '!doc.querySelector(".addrow")' && return 0
-  _lx_vars_close
-  g_err "Escape left the variables panel open"; return 1
-}
-# lx_declare_offer_type <name> <type> — open the amber declare offer and
-# read the type its VAR_EXTERNAL button offers for <name>. Leaves the offer
-# open for the row's PNG.
-lx_declare_offer_type() {
-  local name=$1 type=$2 btn got
-  btn="[...doc.querySelectorAll('.declpop button.declbtn')].find(b => b.dataset.name === $(_q "$name") && b.dataset.section === 'VAR_EXTERNAL')"
-  js_true "$btn" || click_el 'doc.querySelector(".palette button.declare")' || { g_err "no declare offer in the palette"; return 1; }
-  wait_js "$btn" 3 || { g_err "the declare offer has no VAR_EXTERNAL row for $name"; return 1; }
-  got=$(js "($btn).textContent.trim()" | tr -d '"')
-  [[ $got == *": $type" ]] || { g_err "the declare offer for $name reads '$got', not ': $type'"; return 1; }
 }
 # lx_real_coil_checks <rung> <REAL tag> — the MOV/CPT habit: a coil that
 # writes a REAL. The gesture itself lands (a retag is text); the verdict is
@@ -303,34 +179,21 @@ lx_real_coil_checks() {
 }
 
 # ── pastes ──────────────────────────────────────────────────────────────────
-# _edge <file> <rung> <tag> — `Tag` → `+Tag` in one rung (no gesture does it).
-_edge() {
-  python3 - "$PROJ/$1" "$2" "$3" <<'PY'
-import re, sys
-p, rung, tag = sys.argv[1:4]
-t = open(p).read()
-m = re.search(r"(^\s*RUNG\s+%s\b.*?)(?=^\s*RUNG\s|^\s*END_LD\b)" % re.escape(rung), t, re.S | re.M)
-if not m: sys.exit(f"no rung {rung}")
-blk, n = re.subn(r"(?<![+\w])%s\b" % re.escape(tag), "+" + tag, m.group(1), count=1)
-if n != 1: sys.exit(f"no {tag} contact in rung {rung}")
-open(p, "w").write(t[:m.start(1)] + blk + t[m.end(1):])
-PY
-}
 _paste_tags() {
   mkdir -p "$PROJ/tags"
   cp "$REF/tags/io.yaml" "$REF/tags/plant.yaml" "$PROJ/tags/"
   cp "$REF/nautilus.yaml" "$PROJ/nautilus.yaml"
 }
-# The FB's interface: FUNCTION_BLOCK, VAR_INPUT, VAR_OUTPUT and an empty LD
-# body — no gesture creates a POU or declares a pin (the variables panel
-# offers VAR_EXTERNAL and VAR only). tFail needs no declaration: the FB
+# The FB itself: its doc comment, FUNCTION_BLOCK and an empty LD body — no
+# gesture creates a POU yet (#179). Its pins are gestured (the variables
+# panel and the declare offer, #214); tFail needs no declaration: the FB
 # picker inserts `tFail:TON(…)`, which declares it.
-_paste_fb_header() {
+_paste_fb_shell() {
   mkdir -p "$PROJ/lib"
   python3 - "$REF/lib/motor.ld" "$PROJ/lib/motor.ld" <<'PY'
 import sys
 src = open(sys.argv[1]).read()
-i = src.index("\nLD\n") + 1
+i = src.index("FUNCTION_BLOCK MotorStarter\n") + len("FUNCTION_BLOCK MotorStarter\n")
 open(sys.argv[2], "w").write(src[:i] + "LD\nEND_LD\nEND_FUNCTION_BLOCK\n")
 PY
 }
@@ -355,34 +218,42 @@ sleep 3
 
 # B1 — clear the template: its one rung and its three tags' declarations.
 row ed_open_diagram-program PASS ed_open_diagram program.ld
-row lx_delete_rung-high PASS lx_delete_rung high
-for v in Sensor Setpoint Alarm; do row "lx_vars_delete-$v" PASS lx_vars_delete "$v"; done
+row ld_delete_rung-high PASS ld_delete_rung high
+for v in Sensor Setpoint Alarm; do row "ld_vars_delete-$v" PASS ld_vars_delete "$v"; done
 
 # B2 — the tag database (YAML: no tag-grid gesture) and the manifest.
 paste_row tags-yaml _paste_tags
 chk 02-tags
 
 # B3 — the AOI: MotorStarter as a ladder FUNCTION_BLOCK in lib/motor.ld.
-paste_row motor-fb-header _paste_fb_header
-chk 03-fb-header
+paste_row motor-fb-shell _paste_fb_shell
+chk 03-fb-shell
 row ed_open_diagram-motor PASS ed_open_diagram lib/motor.ld
-#   run: [ Start | Run ] /Stop Permit /Faulted ( Run ) — the seal-in
+#   the AOI's Parameters tab: the inputs, in order, from the variables
+#   panel (the first BOOL input, Start, is the pin the caller's rung powers)
+for p in Start Stop Permit Aux Fault Reset; do row "ld_vars_declare-$p" PASS ld_vars_declare "$p" BOOL VAR_INPUT MotorStarter; done
+chk 03-fb-inputs
+#   run: [ Start | Run ] /Stop Permit /Faulted ( Run ) — the seal-in; the
+#   outputs are declared from the amber offer as the rungs name them
 row ld_add_rung-run PASS ld_add_rung run
-row lx_rung_comment-run PASS lx_rung_comment run "seal-in: Start energizes Run, Run holds itself in"
+row ld_rung_comment-run PASS ld_rung_comment run "seal-in: Start energizes Run, Run holds itself in"
 row ld_add_contact-Start PASS ld_add_contact run Start
 row ld_add_branch-sealin PASS ld_add_branch run Start Run
 row ld_add_contact-Stop-nc PASS ld_add_contact run Stop nc
 row ld_add_contact-Permit PASS ld_add_contact run Permit
 row ld_add_contact-Faulted-nc PASS ld_add_contact run Faulted nc
 row ld_add_coil-Run PASS ld_add_coil run Run
+row ld_declare-Run PASS ld_declare Run VAR_OUTPUT
+row ld_declare-Faulted PASS ld_declare Faulted VAR_OUTPUT
 chk 03-run
 #   fts: Run /Aux tFail:TON(PT := T#3S) ( S FailToStart )
 row ld_add_rung-fts PASS ld_add_rung fts
-row lx_rung_comment-fts PASS lx_rung_comment fts "commanded but the aux never made: fail to start"
+row ld_rung_comment-fts PASS ld_rung_comment fts "commanded but the aux never made: fail to start"
 row ld_add_contact-Run PASS ld_add_contact fts Run
 row ld_add_contact-Aux-nc PASS ld_add_contact fts Aux nc
 row ld_add_block-TON PASS ld_add_block fts TON tFail "PT := T#3S"
 row ld_add_coil-FailToStart-set PASS ld_add_coil fts FailToStart set
+row ld_declare-FailToStart PASS ld_declare FailToStart VAR_OUTPUT
 chk 03-fts
 #   flt: [ Fault | FailToStart ] ( S Faulted )
 row ld_add_rung-flt PASS ld_add_rung flt
@@ -392,7 +263,7 @@ row ld_add_coil-Faulted-set PASS ld_add_coil flt Faulted set
 chk 03-flt
 #   rst: Reset /Fault ( R Faulted ) ( R FailToStart )
 row ld_add_rung-rst PASS ld_add_rung rst
-row lx_rung_comment-rst PASS lx_rung_comment rst "reset only once the overload has cleared"
+row ld_rung_comment-rst PASS ld_rung_comment rst "reset only once the overload has cleared"
 row ld_add_contact-Reset PASS ld_add_contact rst Reset
 row ld_add_contact-Fault-nc PASS ld_add_contact rst Fault nc
 row ld_add_coil-Faulted-reset PASS ld_add_coil rst Faulted reset
@@ -416,24 +287,22 @@ row ld_move_element-EStop PASS ld_move_element m1perm EStop m1perm AirOk
 row ld_add_coil-M1_Permit PASS ld_add_coil m1perm M1_Permit
 row ld_declare-M1_Permit PASS ld_declare M1_Permit VAR_EXTERNAL
 chk 05-m1perm
-#   m1: +M1_StartPB m1:MotorStarter(…) ( M1_Run ) — the JSR habit, as a call
+#   m1: +M1_StartPB m1:MotorStarter(…) ( M1_Run ) — the JSR habit, as a
+#   call; the ONS typed as +Tag on the start button's contact
 row ld_add_rung-m1 PASS ld_add_rung m1
 row ld_add_contact-M1_StartPB PASS ld_add_contact m1 M1_StartPB
 row ld_declare-M1_StartPB PASS ld_declare M1_StartPB VAR_EXTERNAL
-row lx_edge_retag-M1_StartPB XFAIL lx_edge_retag m1 M1_StartPB
+row ld_edge_retag-M1_StartPB PASS ld_edge_retag m1 M1_StartPB
+row ld_edge_drawn-M1_StartPB PASS ld_edge_drawn m1 M1_StartPB
 row lx_desc_on_element-M1_StartPB XFAIL lx_desc_on_element m1 M1_StartPB "M1 start pushbutton"
 row ld_add_block-MotorStarter-m1 PASS ld_add_block m1 MotorStarter m1 \
   "Stop := M1_StopPB, Permit := M1_Permit, Aux := M1_Aux, Fault := M1_OL, Reset := FaultReset, FailToStart => Alm_M1FTS"
 for v in M1_StopPB M1_Aux M1_OL FaultReset Alm_M1FTS; do row "ld_declare-$v" PASS ld_declare "$v" VAR_EXTERNAL; done
-row lx_vars_lists_instance-m1 XFAIL lx_vars_lists_instance m1
-row lx_vars_escape_closes XFAIL lx_vars_escape_closes
+row ld_vars_lists_instance-m1 PASS ld_vars_lists_instance m1 MotorStarter
+row ld_vars_escape_closes PASS ld_vars_escape_closes
 row ld_add_coil-M1_Run PASS ld_add_coil m1 M1_Run
 row ld_declare-M1_Run PASS ld_declare M1_Run VAR_EXTERNAL
-chk 05-m1-plain
-paste_row edge-M1_StartPB _edge program.ld m1 M1_StartPB
-row lx_edge_drawn-M1_StartPB XFAIL lx_edge_drawn m1 M1_StartPB
-chk 05-m1-ons
-row lx_copy_rung-m1 XFAIL lx_copy_rung m1
+chk 05-m1
 #   m2perm: /EStop [ M1_Run [ M1_Aux | M1_AuxBypass ] | Maint ] ( M2_Permit )
 row ld_add_rung-m2perm PASS ld_add_rung m2perm
 row ld_add_contact-EStop-nc-2 PASS ld_add_contact m2perm EStop nc
@@ -447,16 +316,16 @@ row ld_add_coil-M2_Permit PASS ld_add_coil m2perm M2_Permit
 row ld_declare-M2_Permit PASS ld_declare M2_Permit VAR_EXTERNAL
 row ld_assert_rung-m2perm PASS ld_assert_rung m2perm '/EStop *\[ *M1_Run *\[ *M1_Aux *\| *M1_AuxBypass *\] *\| *Maint *\] *\( *M2_Permit *\)'
 chk 05-m2perm
-#   m2: the same call for the second motor (no rung copy/paste: rebuilt)
-row ld_add_rung-m2 PASS ld_add_rung m2
-row ld_add_contact-M2_StartPB PASS ld_add_contact m2 M2_StartPB
+#   m2: rung m1 copied below m2perm (select m1, Ctrl+C, select m2perm,
+#   Ctrl+V — the copy is m2, its instance m2), then M1 → M2
+row ld_copy_rung-m1 PASS ld_copy_rung m1 m2perm m2
+row ld_retag-M2_StartPB PASS ld_retag m2 edge M1_StartPB M2_StartPB
 row ld_declare-M2_StartPB PASS ld_declare M2_StartPB VAR_EXTERNAL
-row ld_add_block-MotorStarter-m2 PASS ld_add_block m2 MotorStarter m2 \
+row ld_edit_fb_args-m2 PASS ld_edit_fb_args m2 m2 \
   "Stop := M2_StopPB, Permit := M2_Permit, Aux := M2_Aux, Fault := M2_OL, Reset := FaultReset, FailToStart => Alm_M2FTS"
 for v in M2_StopPB M2_Aux M2_OL Alm_M2FTS; do row "ld_declare-$v" PASS ld_declare "$v" VAR_EXTERNAL; done
-row ld_add_coil-M2_Run PASS ld_add_coil m2 M2_Run
+row ld_retag-M2_Run PASS ld_retag m2 coil M1_Run M2_Run
 row ld_declare-M2_Run PASS ld_declare M2_Run VAR_EXTERNAL
-paste_row edge-M2_StartPB _edge program.ld m2 M2_StartPB
 chk 05-m2
 #   starts: M1_Run cStarts:CTU(R := CountReset, PV := 9999, CV => M1_Starts)
 row ld_add_rung-starts PASS ld_add_rung starts
@@ -464,10 +333,10 @@ row ld_add_contact-M1_Run-2 PASS ld_add_contact starts M1_Run
 row ld_add_block-CTU PASS ld_add_block starts CTU "" "R := CountReset, PV := 9999, CV => M1_Starts"
 row ld_rename_block-cStarts PASS ld_rename_block starts c1 cStarts
 row ld_declare-CountReset PASS ld_declare CountReset VAR_EXTERNAL
-# the amber offer types an integer-seeded tag REAL (nothing declares it
-# yet): declare the counter's INT through the variables panel instead
-row lx_declare_offer_type-M1_Starts XFAIL lx_declare_offer_type M1_Starts INT
-row lx_vars_declare-M1_Starts PASS lx_vars_declare M1_Starts INT VAR_EXTERNAL
+# the amber offer types the counter's tag from the CV pin it captures (INT),
+# not from its integer seed (the manifest's REAL)
+row ld_declare_offer_type-M1_Starts PASS ld_declare_offer_type M1_Starts INT
+row ld_declare-M1_Starts PASS ld_declare M1_Starts VAR_EXTERNAL
 row ld_delete_last_coil-starts PASS ld_delete_last_coil starts
 chk 05-starts
 #   speed: M2_Run spd:SpeedCalc(…, Hz => M2_SpeedRef) — the CPT/MOV rung.

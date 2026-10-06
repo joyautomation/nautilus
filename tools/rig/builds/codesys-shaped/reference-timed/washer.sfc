@@ -1,0 +1,174 @@
+PROGRAM Washer
+(* The washer as a Codesys programmer writes it first — the timed variant
+   of reference/washer.sfc:
+     - D Detergent(T#3S) on Fill, SD AlarmLamp(T#45S) on Drain,
+       L SpinMotor(T#10S) on Spin           (timed qualifiers)
+     - STEP Fill (MAXTIME := T#60S, ...)    (step supervision: Fill.ERR,
+       mirrored into FillOverrun, which an alarm watches)
+   Everything else is as in reference/. *)
+VAR_EXTERNAL
+    StartPB    : BOOL;
+    StopPB     : BOOL;
+    ResetPB    : BOOL;
+    DoorClosed : BOOL;
+    LevelPct   : REAL;
+    TempC      : REAL;
+    FillSP     : REAL;
+    TempSP     : REAL;
+    FillValve  : BOOL;
+    Detergent  : BOOL;
+    Heater     : BOOL;
+    DrumCW     : BOOL;
+    DrumCCW    : BOOL;
+    SpinMotor  : BOOL;
+    DrainPump  : BOOL;
+    DoorLock   : BOOL;
+    AlarmLamp  : BOOL;
+    StateNo    : INT;
+    FaultCode  : INT;
+    CycleCount : INT;
+    FillOverrun  : BOOL;
+    DrainOverrun : BOOL;
+END_VAR
+VAR
+    drum : FB_Reverser;
+END_VAR
+VAR CONSTANT
+    tWash      : TIME := T#20S;
+    tSpin      : TIME := T#10S;
+    ST_IDLE    : INT := 0;
+    ST_FILL    : INT := 1;
+    ST_WASH    : INT := 2;
+    ST_DRAIN   : INT := 3;
+    ST_SPIN    : INT := 4;
+    ST_ABORTED : INT := 9;
+    FC_STOP          : INT := 1;
+    FC_FILL_TIMEOUT  : INT := 2;
+    FC_DRAIN_TIMEOUT : INT := 3;
+END_VAR
+SFC
+
+  INITIAL_STEP Idle:
+    R  DoorLock;
+    R  AlarmLamp;
+    N  TrackState;
+  END_STEP
+
+  STEP Fill (MAXTIME := T#60S, ERROR := FillOverrun):
+    S  DoorLock;
+    N  FillValve;
+    P1 CountCycle;
+    D  Detergent(T#3S);
+    N  TrackState;
+  END_STEP
+
+  STEP Heat:
+    N  HeatCtl;
+    N  TrackState;
+  END_STEP
+
+  STEP Wash:
+    N  DrumCtl;
+    N  TrackState;
+  END_STEP
+
+  STEP HeatDone:
+    N  TrackState;
+  END_STEP
+
+  STEP Drain (MAXTIME := T#45S, ERROR := DrainOverrun):
+    N  DrainPump;
+    SD AlarmLamp(T#45S);
+    N  TrackState;
+  END_STEP
+
+  STEP Spin:
+    L  SpinMotor(T#10S);
+    N  DrainPump;
+    N  TrackState;
+  END_STEP
+
+  STEP Aborted:
+    S  AlarmLamp;
+    N  DrainPump;
+    P1 RecordFault;
+    P0 ClearFault;
+    N  TrackState;
+  END_STEP
+
+  TRANSITION FROM Idle TO Fill := StartPB AND DoorClosed;
+  END_TRANSITION
+
+  (* the abort is declared first, so it has priority; Fill.ERR is the
+     step's own overrun flag *)
+  TRANSITION FROM Fill TO Aborted := StopPB OR NOT DoorClosed OR Fill.ERR;
+  END_TRANSITION
+
+  TRANSITION FROM Fill TO (Heat, Wash) := LevelPct >= FillSP;
+  END_TRANSITION
+
+  TRANSITION FROM Heat TO HeatDone := TempC >= TempSP;
+  END_TRANSITION
+
+  TRANSITION FROM (Wash, HeatDone) TO Drain := Wash.T >= tWash;
+  END_TRANSITION
+
+  TRANSITION FROM Drain TO Spin := LevelPct <= 1.0;
+  END_TRANSITION
+
+  TRANSITION FROM Drain TO Aborted := Drain.ERR;
+  END_TRANSITION
+
+  TRANSITION FROM Spin TO Idle := Spin.T >= tSpin;
+  END_TRANSITION
+
+  TRANSITION FROM Aborted TO Idle := ResetPB AND LevelPct <= 1.0;
+  END_TRANSITION
+
+  ACTION CountCycle:
+    CycleCount := CycleCount + 1;
+  END_ACTION
+
+  ACTION HeatCtl:
+    Heater := Heat.X AND TempC < TempSP;
+  END_ACTION
+
+  ACTION DrumCtl:
+    drum(Enable := Wash.X, tRun := T#4S, tPause := T#1S);
+    DrumCW := drum.CW;
+    DrumCCW := drum.CCW;
+  END_ACTION
+
+  (* P1 on Aborted: the cause, from the supervised steps' flags *)
+  ACTION RecordFault:
+    IF Fill.ERR THEN
+        FaultCode := FC_FILL_TIMEOUT;
+    ELSIF Drain.ERR THEN
+        FaultCode := FC_DRAIN_TIMEOUT;
+    ELSE
+        FaultCode := FC_STOP;
+    END_IF;
+  END_ACTION
+
+  ACTION ClearFault:
+    FaultCode := 0;
+  END_ACTION
+
+  ACTION TrackState:
+    IF Aborted.X THEN
+        StateNo := ST_ABORTED;
+    ELSIF Spin.X THEN
+        StateNo := ST_SPIN;
+    ELSIF Drain.X THEN
+        StateNo := ST_DRAIN;
+    ELSIF Heat.X OR Wash.X OR HeatDone.X THEN
+        StateNo := ST_WASH;
+    ELSIF Fill.X THEN
+        StateNo := ST_FILL;
+    ELSE
+        StateNo := ST_IDLE;
+    END_IF;
+  END_ACTION
+
+END_SFC
+END_PROGRAM
