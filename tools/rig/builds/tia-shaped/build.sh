@@ -422,12 +422,16 @@ PY
   note_row FALLBACK "main.fbd: wrote '$2' by text"
   sleep 2
 }
-ref_line() { grep -E -m1 -- "$1" "$REF/main.fbd" | sed 's/^ *//'; }
-NET1=$(ref_line '// Network 1'); NET2=$(ref_line '// Network 2'); NET3=$(ref_line '// Network 3')
-NET4=$(ref_line '// Network 4'); NET5=$(ref_line '// Network 5')
+# The five networks' titles, from the reference's NETWORK lines (#207).
+mapfile -t NETT < <(grep -E "^ *NETWORK '" "$REF/main.fbd" | sed -E "s/^ *NETWORK '(.*)'.*$/\1/")
+# net_row <beat> <n> — the palette's "network" with the reference's title.
+net_row() {
+  row "$1-network" PASS fbd_add_network "${NETT[$2]}" ||
+    fb_fallback "NETWORK '$(printf '%s' "${NETT[$2]}" | sed 's/[][\.*^$()+?{}|]/\\&/g')'" "NETWORK '${NETT[$2]}'"
+}
 
 # ── 07 network 1: the FC call ───────────────────────────────────────────────
-row 07-comment PASS fbd_add_comment "${NET1#// }" || fb_fallback 'Network 1' "$NET1"
+net_row 07 0
 # Does "block → wire"'s function field offer the project's FUNCTION?
 b07_suggest() {
   click_button "+ add" || return 1
@@ -443,7 +447,7 @@ b07_suggest() {
   echo "function field after 'Sca': ${items:-<no list>}"
   [[ $items == *ScaleAnalog* ]]
 }
-row 07-palette-lists-user-FUNCTION XFAIL b07_suggest
+row 07-palette-lists-user-FUNCTION PASS b07_suggest
 row 07-block-ScaleAnalog PASS fbd_add_function ScaleAnalog ft "FT101_Raw, 0.0, 120.0" || fb_fallback '^ *ft = ' "ft = ScaleAnalog(FT101_Raw, 0.0, 120.0)"
 row 07-coil-FT101_Flow PASS fbd_add_coil FT101_Flow ft || fb_fallback '^ *FT101_Flow := ft' "FT101_Flow := ft"
 row 07-check-user-FUNCTION-from-FBD XFAIL check_clean 07-net1
@@ -462,15 +466,27 @@ row 07-workaround-uppercase-FC PASS b07_rename || { cp "$REF/scale.st" "$PROJ/sc
 row 07-reopen-main-fbd PASS ed_open_diagram main.fbd
 
 # ── 08 network 2: the FB instance (the "instance DB") ───────────────────────
-row 08-comment PASS fbd_add_comment "${NET2#// }" || fb_fallback 'Network 2' "$NET2"
-row 08-fb-picker-Dosing PASS fbd_add_block Dosing doseA || fb_fallback '^ *doseA : Dosing' "doseA : Dosing(Start := _, Stop := _, FlowLpm := _, Dt := _, NoFlowTime := _, Recipe := _)"
-row 08-check-with-open-pins XFAIL check_clean 08-open-pins
+net_row 08 1
+row 08-fb-picker-Dosing PASS fbd_add_block Dosing doseA || fb_fallback '^ *doseA : Dosing' "doseA : Dosing(Start := _, Stop := _, FlowLpm := _, Dt := _, Recipe := _)"
+# #205: NoFlowTime has a declared default (T#5S): the picker leaves it
+# unbound — TIA's unconnected FB input keeps its instance value. The pins
+# with no default are open (`_`): naut check is red on those, and only those.
+b08_open_pins() {
+  local line out
+  line=$(grep -E '^ *doseA : Dosing\(' "$PROJ/main.fbd")
+  echo "picked: ${line## }"
+  [[ $line != *NoFlowTime* && $line == *"Start := _"* ]] || { echo "NoFlowTime must arrive unbound, the rest open" >&2; return 1; }
+  out=$(cd "$PROJ" && naut check . 2>&1) && { echo "naut check is clean with open pins?" >&2; return 1; }
+  echo "$out" >"$OUT_DIR/check-08-open-pins.txt"
+  grep -q 'NoFlowTime' <<<"$out" && { echo "a diagnostic names NoFlowTime: $(grep NoFlowTime <<<"$out" | head -1)" >&2; return 1; }
+  grep -q 'unfilled placeholder' <<<"$out" || { echo "no open-pin diagnostic: $(tail -2 <<<"$out")" >&2; return 1; }
+  echo "naut check red on the open pins only: $(grep -c 'unfilled placeholder' <<<"$out") placeholder diagnostic(s)"
+}
+row 08-defaulted-input-unbound PASS b08_open_pins
 for pr in StartA:Start StopAll:Stop FT101_Flow:FlowLpm MainDtS:Dt RecipeA:Recipe; do
   t=${pr%%:*}; p=${pr##*:}
   row "08-wire-$t-to-$p" PASS fbd_add_tag_ref "$t" "doseA.$p" || fb_fallback "doseA : Dosing\\(.*\\b$p := $t\\b" "\\1$p := $t" "^( *doseA : Dosing\\(.*?)$p := _"
 done
-row 08-disconnect-NoFlowTime PASS fbd_disconnect doseA.NoFlowTime || {
-  sed -i -E 's/, NoFlowTime := _//' "$PROJ/main.fbd"; note_row FALLBACK "main.fbd: dropped ', NoFlowTime := _' by text"; sleep 2; }
 for pr in XV101_Open:ValveOpen DoseFault:Fault DoneLamp:Done DoseStep:Step; do
   t=${pr%%:*}; p=${pr##*:}
   row "08-coil-$t" PASS fbd_add_coil "$t" "doseA.$p" || fb_fallback "^ *$t := doseA.$p" "$t := doseA.$p"
@@ -478,12 +494,14 @@ done
 row 08-check PASS check_clean 08-net2
 
 # ── 09 network 3: LIMIT and SEL, REAL math ──────────────────────────────────
-row 09-comment PASS fbd_add_comment "${NET3#// }" || fb_fallback 'Network 3' "$NET3"
+net_row 09 2
 row 09-block-LIMIT PASS fbd_add_block LIMIT spA "0.0, RecipeA.FlowSP, MaxFlowLpm" || fb_fallback '^ *spA = ' "spA = LIMIT(0.0, RecipeA.FlowSP, MaxFlowLpm)"
 row 09-block-SEL PASS fbd_add_block SEL spOut "doseA.ValveOpen, 0.0, _" || fb_fallback '^ *spOut = ' "spOut = SEL(doseA.ValveOpen, 0.0, _)"
 row 09-wire-spA-to-SEL.IN1 PASS fbd_wire spA.OUT spOut.IN1 || fb_fallback '^ *spOut = SEL\(doseA.ValveOpen, 0.0, spA\)' "spOut = SEL(doseA.ValveOpen, 0.0, spA)" '^ *spOut = SEL\(.*\)$'
-# EN/ENO: TIA draws EN and ENO on every box; is there an EN pin on LIMIT?
+# EN/ENO: TIA draws EN and ENO on every box. Here they draw when bound, or
+# after the pin gesture (#206): the EN toggle on LIMIT.
 b09_eno() {
+  fbd_eno_pins spA || return 1
   local en eno
   en=$(js "!!$(fbd_node_el spA)?.querySelector('.svelte-flow__handle.target[data-handleid=\"EN\"]')")
   eno=$(js "!!$(fbd_node_el spA)?.querySelector('.svelte-flow__handle.source[data-handleid=\"ENO\"]')")
@@ -492,7 +510,7 @@ b09_eno() {
   echo "LIMIT spA pins: $pins (EN $en, ENO $eno)"
   [[ $en == true && $eno == true ]]
 }
-row 09-EN-ENO-on-LIMIT XFAIL b09_eno
+row 09-EN-ENO-on-LIMIT PASS b09_eno
 b09_en_text() {
   # and by text, what a Siemens programmer would try: EN as a named input
   local src out
@@ -501,12 +519,12 @@ b09_en_text() {
   echo "insertStatement 'spB = LIMIT(EN := …, MN := …, IN := …, MX := …)': ${out:0:200}"
   [[ $out != *error* ]]
 }
-row 09-EN-input-by-text XFAIL b09_en_text
+row 09-EN-input-by-text PASS b09_en_text
 row 09-coil-FCV101_SP PASS fbd_add_coil FCV101_SP spOut || fb_fallback '^ *FCV101_SP := spOut' "FCV101_SP := spOut"
 row 09-check PASS check_clean 09-net3
 
 # ── 10 network 4: compare + TON ─────────────────────────────────────────────
-row 10-comment PASS fbd_add_comment "${NET4#// }" || fb_fallback 'Network 4' "$NET4"
+net_row 10 3
 row 10-block-GT PASS fbd_add_block GT hiFlow "FT101_Flow, MaxFlowLpm" || fb_fallback '^ *hiFlow = ' "hiFlow = GT(FT101_Flow, MaxFlowLpm)"
 row 10-fb-picker-TON PASS fbd_add_block TON tHi "IN := _, PT := T#2S" || fb_fallback '^ *tHi : TON' "tHi : TON(IN := _, PT := T#2S)"
 row 10-wire-hiFlow-to-tHi.IN PASS fbd_wire hiFlow.OUT tHi.IN || fb_fallback '^ *tHi : TON\(IN := hiFlow' '\1hiFlow' '^( *tHi : TON\(IN := )_'
@@ -514,7 +532,7 @@ row 10-coil-HighFlowAlm PASS fbd_add_coil HighFlowAlm tHi.Q || fb_fallback '^ *H
 row 10-check PASS check_clean 10-net4
 
 # ── 11 network 5: CTU; network numbers; a pinned layout ─────────────────────
-row 11-comment PASS fbd_add_comment "${NET5#// }" || fb_fallback 'Network 5' "$NET5"
+net_row 11 4
 row 11-fb-picker-CTU PASS fbd_add_block CTU cDoses "CU := _, R := _, PV := 1000" || fb_fallback '^ *cDoses : CTU' "cDoses : CTU(CU := _, R := _, PV := 1000)"
 row 11-wire-doseA.Done-to-CU PASS fbd_wire doseA.Done cDoses.CU || fb_fallback '^ *cDoses : CTU\(CU := doseA.Done' '\1doseA.Done' '^( *cDoses : CTU\(CU := )_'
 row 11-wire-ResetCount-to-R PASS fbd_add_tag_ref ResetCount cDoses.R || fb_fallback 'R := ResetCount' '\1ResetCount' '^( *cDoses : CTU\(.*R := )_'
@@ -526,7 +544,7 @@ b11_netno() {
   echo "numbered labels outside notes: ${nums//\"/}; network/order elements: ${t//\"/}"
   [[ -n ${nums//\"/} || -n ${t//\"/} ]]
 }
-row 11-network-numbers-or-exec-order XFAIL b11_netno
+row 11-network-numbers-or-exec-order PASS b11_netno
 row 11-move-node-doseA PASS fbd_move_node doseA 60 40
 row 11-check PASS check_clean 11-net5
 

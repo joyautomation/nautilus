@@ -32,18 +32,18 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 177 rows. **0 rows have no coverage at all** (no webview test,
+Totals: 183 rows. **0 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
 |---|---|---|
 | Commands | 28 | 0 |
-| FBD `?` | 18 | 0 |
+| FBD `?` | 20 | 0 |
 | Ladder `?` | 28 | 0 |
 | SFC `?` | 31 | 0 |
 | Mimic `?` | 18 | 0 |
 | Component `?` | 8 | 0 |
-| Other claims | 46 | 0 |
+| Other claims | 50 | 0 |
 
 ## Commands (package.json `contributes.commands`)
 
@@ -100,6 +100,8 @@ no rig verb, no smoke check); per section below.
 | F16 | FBD | Undo the last edit to the file from the diagram | "?" list FBD / File / `Ctrl + Z` | — | g_key (ctrl+z in takes) | 03 (preview panel) |
 | F17 | FBD | Redo | "?" list FBD / File / `Ctrl + Y / Ctrl + Shift + Z` | mimic-more.test.mjs: M17 Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z post no message and are not preventDefault-ed (undo/redo is VS Code's text undo over the host's WorkspaceEdit; the webview owns no stack, so that is all that is observable) | — | 03 (preview panel) |
 | F18 | FBD | Save the file from the diagram | "?" list FBD / File / `Ctrl + S` | — | g_save | 03 (preview panel) |
+| F19 | FBD | Click EN on a block to show its EN / ENO pins; wire EN, drag from ENO | "?" list FBD / Edit / `Click EN on a block` | fbd-parity.test.mjs: FBD EN/ENO: bound EN draws without asking; the EN toggle opens EN/ENO pins to wire (F19, #206) | (tia-shaped build 09-EN-ENO-on-LIMIT) | — |
+| F20 | FBD | Network header: click to make it the palette's target; ▲ ▼ move, + add after, ✕ remove the NETWORK line; double-click the title to rename | "?" list FBD / Edit / `Network header` | fbd-parity.test.mjs: FBD networks: the header picks the palette target; buttons move, add, remove; double-click renames (F20) | (tia-shaped build 07..11-network) | — |
 
 ## Ladder editor (`?` list)
 
@@ -237,7 +239,7 @@ no rig verb, no smoke check); per section below.
 | X25 | Ladder | Double-click an FB header to rename the instance everywhere | README Diagrams | — | ld_rename_block | — |
 | X26 | Ladder | Empty body renders the palette; + rung adds the first rung | CHANGELOG 0.10.0 | diagram.test.mjs: Ladder: empty body (rungs null) renders the palette; + rung works | ld_add_rung | — |
 | X27 | Ladder | Diff overlay: added / removed / changed elements marked, removed ghosted | README Visual diff | diagram.test.mjs: Theme: ladder diff colours come from theme tokens | — | 04, 11 |
-| X28 | FBD | + add palette: function block places any standard block (PID included) with every input open | README Diagrams | diagram.test.mjs: FBD palette: function block places a PID | fbd_add_block | — |
+| X28 | FBD | + add palette: function block places any standard block (PID included) with every required input open; an input with a declared default stays unbound (#205) | README Diagrams | diagram.test.mjs: FBD palette: function block places a PID; fbd-parity.test.mjs: FBD palette: the FB picker leaves an input with a declared default unbound (#205) | fbd_add_block | — |
 | X29 | FBD | + add palette: output reference names its source (SpeedRef := lic.CV) | CHANGELOG 0.10.0 | diagram.test.mjs: FBD palette: output reference takes an FB output as its source | fbd_add_tag_ref | — |
 | X30 | FBD | + add palette: comment / note | package.json UI (palette) | — | fbd_add_comment | — |
 | X31 | FBD | Diff overlay: added / removed / changed blocks and wires | README Visual diff | — | — | 04 |
@@ -253,13 +255,17 @@ no rig verb, no smoke check); per section below.
 | X42 | Extension | Find all references (Shift+F12): a tag across every program and the manifest, a local only in its POU | README Language intelligence | — | — | 14 |
 | X50 | Extension | Create Project… asks for the program language (ST / Ladder / FBD / SFC) after Minimal or SDK and passes `naut new --language`; choosing Ladder gives a program.ld that checks clean and opens in the ladder diagram | CHANGELOG Unreleased (#221) | newProjectLogic.test.ts: newProjectArgs passes --language | — | 17 |
 | X41 | Extension | Outline view, breadcrumbs and Go to Symbol in Editor list POUs, VAR sections and declarations, FBD statements, ladder rungs, SFC steps / transitions / actions (naut lsp documentSymbol) | README Language intelligence | — | — | 14 (.st, .ld, .sfc; not .fbd) |
+| X48 | FBD | EN/ENO on every function and FB call (IEC execution control): EN FALSE skips the call — a function's result is not assigned, an FB's outputs hold; ENO = EN AND no error (DIV/MOD: a zero divisor); EN/ENO pins draw when bound or after the pin gesture | docs/functions.md EN/ENO; CHANGELOG | fbd-parity.test.mjs: FBD EN/ENO (F19); conformance fbd-en-eno (ST + FBD) | (tia-shaped build 09-EN-ENO-on-LIMIT, 09-EN-input-by-text) | — |
+| X49 | FBD | Numbered networks: `NETWORK 'title'` lines divide the body, run in order; the diagram draws numbered bands with titles and each statement's execution order; + add palette "network", header ops | docs/languages FBD; CHANGELOG | fbd-parity.test.mjs: FBD networks: numbered bands in order, statements with their execution order (F20, X49, #207); the header picks the palette target (F20) | (tia-shaped build 07..11-network, 11-network-numbers-or-exec-order) | — |
 | X43 | Extension | Force… / Remove Force / Remove All Forces (context menu, pill hover, Live Values row); forced values marked F on pills, the Live Values panel and the FBD/ladder/SFC overlays; status bar "N forces active"; SFC diagram Set Active Step / Fire Transition | README Live values and online edit; CHANGELOG Unreleased | force.test.mjs: FBD: a forced input chip and its VARS pill carry the F badge; Ladder: a forced operand shows F; SFC: steps and transitions carry the context the menu keys on | — | 18 |
+| X44 | Diagrams | Cross-reference from a diagram element: Shift+F12, or right-click → Find All References, on a ladder contact/coil/block, an FBD chip/FB instance/FB pin or an SFC step/action association opens the References view on that name (every program and the manifest) | README Diagrams; #218 | xref-desc.test.mjs: X44 ladder / read-only / FBD / SFC (the posted message) | — | 14 (ladder contact → References view) |
+| X45 | Diagrams | Tag descriptions on diagram elements: the manifest desc (or the VAR line's comment) in the element tooltip in ladder, FBD and SFC; a second line under ladder contacts and coils (nautilus.diagram.showDescriptions) | README Diagrams; #216 | xref-desc.test.mjs: X45 ladder; X44/X45 FBD, SFC | logix-shaped lx_desc_on_element | 14 (ladder contact title + line) |
 | X46 | SFC | Timed qualifiers L, D, SD, DS, SL compile with the standard's semantics, in `Q Target(T#t);` or IEC's `Target(Q, T#t);` form; an R resets the stored ones | CHANGELOG [Unreleased]; website languages/sfc "Action qualifiers" | — (Go: lang/conformance/sfc-timed-qualifiers, lang/sfc/timed_test.go) | codesys-shaped build rows habit-D-qualifier, habit-SD-qualifier, habit-L-qualifier, habit-iec-assoc-form; reference-timed/ (naut test) | — |
 | X47 | SFC | Step supervision: `STEP Fill (MAXTIME := T#60S, ERROR := Tag):` sets Fill.ERR on an overrun and mirrors it into a tag an alarm binds to | CHANGELOG [Unreleased]; website languages/sfc "Step supervision" | — (Go: lang/conformance/sfc-step-maxtime asserts the alarm, lang/sfc/timed_test.go) | codesys-shaped reference-timed/ (naut test: fill timeout) | — |
 
 ## Count of rows with no coverage at all
 
-**0 of 177.** Every row has at least one layer of coverage: a webview test, a
+**0 of 183.** Every row has at least one layer of coverage: a webview test, a
 rig verb, or a smoke check. Some rows are covered only in part, and the cell
 says which part:
 

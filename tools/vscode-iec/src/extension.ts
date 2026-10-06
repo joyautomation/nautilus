@@ -33,6 +33,8 @@ import { AcceptanceTests } from "./acceptanceTests";
 import { cliVersion, checkCliVersion, initCli, installCliCommand, resolveCliNow, showCliInfo, showCliMissing } from "./cli";
 import { initTestState } from "./testState";
 import { notifyInfo, notifyWarning, openEditors } from "./testHooks";
+import { setLspClient } from "./lspClient";
+import { registerDiagramDescriptions } from "./diagramXref";
 
 /** The id `workbench.action.openWalkthrough` wants: `<extension id>#<walkthrough id>`,
  * matching this file's `contributes.walkthroughs[0].id` in package.json. */
@@ -117,6 +119,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const fbd = new FbdPreview(context, live);
   context.subscriptions.push(fbd);
+
+  // Tag descriptions on diagram elements: re-sent when the setting or a
+  // tag file changes (diagramXref.ts).
+  registerDiagramDescriptions(context);
 
   const ladder = new LdPreview(context, live);
   context.subscriptions.push(ladder);
@@ -284,6 +290,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("nautilus.installCli", () => installCliCommand()),
     vscode.commands.registerCommand("nautilus.showCliInfo", () => showCliInfo()),
     vscode.commands.registerCommand("nautilus.restartLanguageServer", async () => {
+      setLspClient(undefined);
       await client?.stop().catch(() => undefined);
       client = undefined;
       await startLanguageClient(context);
@@ -345,6 +352,7 @@ async function startLanguageClient(context: vscode.ExtensionContext): Promise<vo
 
   try {
     await client.start();
+    setLspClient(client);
     context.subscriptions.push({ dispose: () => client?.stop() });
   } catch (err) {
     client = undefined;

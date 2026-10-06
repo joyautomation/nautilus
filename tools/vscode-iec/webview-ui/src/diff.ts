@@ -45,5 +45,5 @@ export function mergeDiff(base: FbdModel, head: FbdModel): FbdModel {
 		});
 	}
 	for (const e of base.edges) if (!he.has(key(e))) edges.push({ ...e, status: 'removed' });
-	return { name: head.name || base.name, nodes, edges };
+	return { name: head.name || base.name, nodes, edges, networks: head.networks ?? base.networks };
 }

@@ -75,6 +75,22 @@ test("reset (new html) holds messages again; one-shot messages are delivered onc
 test("slots", () => {
   assert.equal(slotOf({ type: "ldDiff" }), "view");
   assert.equal(slotOf({ type: "liveValues" }), "liveValues");
+  // Tag descriptions are state too: a page that mounts late still gets them.
+  assert.equal(slotOf({ type: "descriptions" }), "descriptions");
   assert.equal(slotOf({ type: "whatever" }), undefined);
   assert.equal(slotOf(null), undefined);
+});
+
+test("descriptions replay after the view's diagnostics, before the decorations", () => {
+  const { g, sent } = gate();
+  g.post({ type: "liveValues", enabled: true });
+  g.post({ type: "descriptions", descriptions: { a: "x" } });
+  g.post({ type: "ldModel", model: 1 });
+  g.post({ type: "descriptions", descriptions: { a: "y" } });
+  g.onReady();
+  assert.deepEqual(sent, [
+    { type: "ldModel", model: 1 },
+    { type: "descriptions", descriptions: { a: "y" } },
+    { type: "liveValues", enabled: true },
+  ]);
 });

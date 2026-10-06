@@ -39,6 +39,14 @@ const FILE_GROUP: ShortcutGroup = {
 	]
 };
 
+/** Cross-reference on an element (xref.svelte.ts) — the three diagrams. */
+const XREF_GROUP: ShortcutGroup = {
+	title: 'Navigate',
+	rows: [
+		{ keys: 'Shift + F12', does: 'Find All References to the selected element\'s name — also on its right-click menu' }
+	]
+};
+
 export const FBD_SHORTCUTS: ShortcutGroup[] = [
 	{
 		title: 'Select',
@@ -57,7 +65,9 @@ export const FBD_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: 'Esc', does: 'Cancel an in-place edit' },
 			{ keys: 'Drag pin → pin', does: 'Wire an output to an input; drop on + to add an input', hint: 'drag pin→pin: wire (+ adds an input)' },
 			{ keys: 'Del / Backspace', does: 'Delete the selection; a selected wire disconnects', hint: 'Del: delete / disconnect' },
-			{ keys: 'Ctrl + C / X / V', does: 'Copy, cut, paste — pastes into another .fbd too', hint: 'Ctrl+C/X/V: copy cut paste' }
+			{ keys: 'Ctrl + C / X / V', does: 'Copy, cut, paste — pastes into another .fbd too', hint: 'Ctrl+C/X/V: copy cut paste' },
+			{ keys: 'Click EN on a block', does: 'Show its EN / ENO pins: wire EN to run the block only while it is TRUE; ENO is TRUE when it ran without an error' },
+			{ keys: 'Network header', does: 'Click: “+ add” inserts into that network · ▲ ▼ move it · + adds a network after it · ✕ removes its NETWORK line · double-click the title to rename' }
 		]
 	},
 	{
@@ -70,6 +80,7 @@ export const FBD_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: 'Ctrl + = / Ctrl + - / Ctrl + 0', does: 'Zoom in / out / fit' }
 		]
 	},
+	XREF_GROUP,
 	FILE_GROUP
 ];
 
@@ -99,6 +110,7 @@ export const LD_SHORTCUTS: ShortcutGroup[] = [
 		]
 	},
 	viewGroup('Fit the widest rung to the pane width (also the corner fit button)'),
+	XREF_GROUP,
 	FILE_GROUP
 ];
 
@@ -133,6 +145,7 @@ export const SFC_SHORTCUTS: ShortcutGroup[] = [
 		]
 	},
 	viewGroup('Fit the whole chart to the pane (also the corner fit button)'),
+	XREF_GROUP,
 	FILE_GROUP
 ];
 

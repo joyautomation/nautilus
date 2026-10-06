@@ -37,6 +37,7 @@
 	} from './sfc';
 	import { live, liveValue, liveForced } from './liveState.svelte';
 	import { readClip, typingTarget, writeClip } from './clipboard';
+	import { descTail } from './xref.svelte';
 
 	type Diag = { line: number; message: string; severity: string };
 
@@ -1190,6 +1191,7 @@ if ((ev.key === 'Enter' || ev.key === 'F2') && !ev.ctrlKey && !ev.metaKey && !ev
 				data-id={p.id}
 				data-kind="step"
 				data-vscode-context={JSON.stringify({ nautilusSfcStep: p.step.name })}
+				data-xref={p.step.name} data-xref-line={p.step.line} data-xref-end={p.step.endLine ?? p.step.line}
 				transform="translate({pos.x}, {pos.y})"
 				class:selected={isSelStep(p.id)}
 				class:active
@@ -1239,6 +1241,7 @@ if ((ev.key === 'Enter' || ev.key === 'F2') && !ev.ctrlKey && !ev.metaKey && !ev
 								class="assocrow {actionFor(a.target)?.status ?? ''}"
 								data-kind="assoc"
 								data-id="{p.id}:{i}"
+								data-xref={isAction ? undefined : a.target} data-xref-line={p.step.line} data-xref-end={p.step.endLine ?? p.step.line}
 								class:selected={isSelAssoc(p.id, i)}
 								transform="translate(0, {i * 16})"
 								onclick={(e) => selectAssoc(e, p.id, i)}
@@ -1248,7 +1251,7 @@ if ((ev.key === 'Enter' || ev.key === 'F2') && !ev.ctrlKey && !ev.metaKey && !ev
 										? `ACTION ${a.target} — dblclick to edit its ST body (on the qualifier: the association)`
 										: isNew
 											? `no ACTION or variable named ${a.target} yet — dblclick to write ACTION ${a.target}'s body (on the qualifier: the association)`
-											: `${a.qualifier} ${a.target}${a.time ? '(' + a.time + ')' : ''}`}</title>
+											: `${a.qualifier} ${a.target}${a.time ? '(' + a.time + ')' : ''}${descTail(a.target)}`}</title>
 								<rect x="0" y="1" width={p.assocW} height="15" class="assocbg" />
 								<text x="4" y="11" class="assocq">{a.qualifier}</text>
 								<text x="26" y="11" class="assoctarget" class:isaction={isAction} class:isnew={isNew}>{a.target}{a.time ? `(${a.time})` : ''}{#if showVal && !isAction && liveForced(a.target)}<tspan class="nx-forced-mark" dx="4">F</tspan>{/if}</text>

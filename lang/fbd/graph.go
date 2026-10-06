@@ -40,6 +40,26 @@ type Model struct {
 	// file's own, plus the project libraries' when GraphWithLibs is given
 	// them — each with its pins.
 	FBTypes []fbcatalog.Type `json:"fbTypes,omitempty"`
+	// Funcs lists the user FUNCTIONs in scope (this file's and the project
+	// libraries'), by their declared names, with inputs and return type —
+	// the palette's function field offers them beside the standard
+	// functions (#204).
+	Funcs []fbcatalog.Type `json:"funcs,omitempty"`
+	// Networks lists the body's numbered networks (#207) when it declares
+	// any (a NETWORK line); absent, the body is one network, as it always
+	// was. Number is the network's 1-based position — what the diagram
+	// draws and a programmer calls it ("network 4") — and every node
+	// carries the Number it belongs to (Node.Net).
+	Networks []Network `json:"networks,omitempty"`
+}
+
+// Network is one numbered network of the body. Implicit marks the
+// statements before the first NETWORK line (no header line of its own).
+type Network struct {
+	Number   int    `json:"number"`
+	Title    string `json:"title,omitempty"`
+	Line     int    `json:"line,omitempty"` // the NETWORK line; 0 when implicit
+	Implicit bool   `json:"implicit,omitempty"`
 }
 
 // VarDecl is one header declaration: `Name : Type [:= init];` inside a
@@ -89,6 +109,14 @@ type Node struct {
 	// Line is the 1-based source line this element comes from, so renderers
 	// can join compiler diagnostics (which carry lines) onto diagram nodes.
 	Line int `json:"line,omitempty"`
+	// Net is the number of the network the element belongs to (1-based,
+	// Model.Networks); omitted for a body without NETWORK lines.
+	Net int `json:"net,omitempty"`
+	// Exec is a statement's execution order within its network (1-based):
+	// FB calls and coils — the statements — carry it, in the order the
+	// scan runs them (a call before the statements reading its outputs,
+	// otherwise source order). Inline blocks run as part of their coil.
+	Exec int `json:"exec,omitempty"`
 }
 
 // Span locates an editable region in the .fbd source: the 1-based line/col
@@ -145,7 +173,8 @@ func Graph(src string, userFBs ...map[string]*ir.FBDef) (*Model, error) {
 // the outputs nothing reads yet — and joins the palette's block catalog.
 func GraphWithLibs(src string, libs []string, userFBs ...map[string]*ir.FBDef) (*Model, error) {
 	if seed.Blank(src) {
-		m := &Model{Blank: true, FBTypes: fbcatalog.NewScope("", libs).Catalog()}
+		scope := fbcatalog.NewScope("", libs)
+		m := &Model{Blank: true, FBTypes: scope.Catalog(), Funcs: scope.Functions()}
 		return m.normalize(), nil
 	}
 	b, err := buildModelIn(src, libs, userFBs...)
@@ -181,9 +210,11 @@ func buildModelIn(src string, libs []string, userFBs ...map[string]*ir.FBDef) (*
 		coils:       map[string]*Node{},
 		fbs:         map[string]*Node{},
 		wireOut:     map[string]outRef{},
+		stmtNet:     map[string]int{},
 		scope:       fbcatalog.NewScope(src, libs),
 	}
 	b.m.FBTypes = b.scope.Catalog()
+	b.m.Funcs = b.scope.Functions()
 	for _, reg := range userFBs {
 		for name, def := range reg {
 			if b.userFBs == nil {
@@ -205,6 +236,7 @@ func buildModelIn(src string, libs []string, userFBs ...map[string]*ir.FBDef) (*
 	for i, run := range b.comments {
 		b.add(&Node{ID: "cm:" + strconv.Itoa(i), Kind: "comment", Label: run.text, Line: run.start})
 	}
+	b.numberNetworks(comp)
 	b.buildGhosts()
 	for id, e := range b.layout {
 		if n, ok := b.nodes[id]; ok {
@@ -253,6 +285,8 @@ type modelBuilder struct {
 	litSeq                 int
 	openSeq                int          // `_` open pins seen so far (openChip)
 	comments               []commentRun // full-line // comment runs in the body
+	curNet                 int          // network of the statement being built (explicit networks only)
+	stmtNet                map[string]int // statement node id -> network index
 
 }
 
@@ -274,13 +308,18 @@ func (b *modelBuilder) build() error {
 			continue // repeated writes share one coil node (each adds an edge)
 		}
 		b.coils[n.target] = b.add(&Node{ID: "c:" + n.target, Kind: "coil", Label: n.target, Line: n.line})
+		b.stmtNet["c:"+n.target] = n.net
 	}
 	for _, d := range b.nl.fbDecls {
 		b.fbNode(d.name, d.typ, d.line)
+		b.stmtNet["f:"+d.name] = d.net
 	}
 	for _, n := range b.nl.nodes { // calls of instances declared in the ST header
 		if n.isCall {
 			b.fbNode(n.inst, "", n.line)
+			if _, ok := b.stmtNet["f:"+n.inst]; !ok {
+				b.stmtNet["f:"+n.inst] = n.net
+			}
 		}
 	}
 	for _, w := range b.nl.wireSrc {
@@ -290,6 +329,7 @@ func (b *modelBuilder) build() error {
 	}
 	coilWrites := map[string]int{}
 	for _, n := range b.nl.nodes {
+		b.curNet = n.net
 		if n.isCall {
 			fb := b.fbs[n.inst]
 			for _, a := range n.args {
@@ -309,6 +349,7 @@ func (b *modelBuilder) build() error {
 					Wire: r.wire, Negated: r.negated, Feedback: r.feedback,
 				}, a.val, r))
 			}
+			enFirst(fb)
 		} else {
 			baseID := "b:c." + n.target
 			if k := coilWrites[n.target]; k > 0 {
@@ -436,7 +477,10 @@ func (b *modelBuilder) resolveWire(name string, visited []string) (outRef, error
 			return outRef{}, fmt.Errorf("fbd: combinational loop through wire %q", name)
 		}
 	}
+	saved := b.curNet
+	b.curNet = b.nl.wireNet[name]
 	r, err := b.source(b.nl.wires[name], "b:w."+name, append(visited, name))
+	b.curNet = saved
 	if err != nil {
 		return outRef{}, err
 	}
@@ -478,6 +522,11 @@ func (b *modelBuilder) source(e expr, baseID string, visited []string) (outRef, 
 		return r, err
 	case refExpr:
 		if _, isWire := b.nl.wires[x.name]; isWire {
+			if b.nl.wireNet[x.name] != b.curNet {
+				// Another network's wire: a box naming it, not a line
+				// across the network boundary.
+				return outRef{node: b.inputChip(x.name, x.line).ID}, nil
+			}
 			return b.resolveWire(x.name, visited)
 		}
 		if c, ok := b.coils[x.name]; ok {
@@ -499,25 +548,60 @@ func (b *modelBuilder) source(e expr, baseID string, visited []string) (outRef, 
 		return outRef{node: b.inputChip(x.text, x.line).ID}, nil
 	case pinExpr:
 		if fb, ok := b.fbs[x.inst]; ok {
+			if net, ok := b.stmtNet[fb.ID]; ok && net != b.curNet {
+				// Another network's instance output: a box, as TIA draws
+				// a read of instance data from another network.
+				return outRef{node: b.inputChip(x.inst+"."+x.pin, x.line).ID}, nil
+			}
 			ensurePin(&fb.Outputs, x.pin)
 			return outRef{node: fb.ID, pin: x.pin}, nil
+		}
+		if _, isWire := b.nl.wires[x.inst]; isWire && strings.EqualFold(x.pin, "ENO") && b.nl.wireNet[x.inst] == b.curNet {
+			// A block's ENO read as a wire (w.ENO): from the block's ENO pin.
+			r, err := b.resolveWire(x.inst, visited)
+			if err != nil {
+				return outRef{}, err
+			}
+			if n, ok := b.nodes[r.node]; ok && n.Kind == "block" {
+				ensurePin(&n.Outputs, "ENO")
+				return outRef{node: n.ID, pin: "ENO"}, nil
+			}
 		}
 		// Not an FB instance: a struct-member read like M.Speed.
 		return outRef{node: b.inputChip(x.inst+"."+x.pin, x.line).ID}, nil
 	case callExpr:
 		b.exprOf[baseID] = x
+		pins := b.pinsOf(x)
+		inputs := pins
+		if x.en != nil {
+			inputs = append([]string{"EN"}, pins...)
+		}
+		outputs := []string{"OUT"}
+		if x.eno != nil {
+			outputs = append(outputs, "ENO")
+		}
 		n := b.add(&Node{
 			ID: baseID, Kind: "block", Label: x.fn, Line: x.line,
-			Inputs:  blockPins(x.fn, len(x.args)),
-			Outputs: []string{"OUT"},
+			Inputs:  inputs,
+			Outputs: outputs,
 		})
+		if x.en != nil {
+			r, err := b.source(x.en, baseID+".en", visited)
+			if err != nil {
+				return outRef{}, err
+			}
+			b.m.Edges = append(b.m.Edges, b.edgeWithSpans(&Edge{
+				From: r.node, FromPin: r.pin, To: n.ID, ToPin: "EN",
+				Wire: r.wire, Negated: r.negated, Feedback: r.feedback,
+			}, x.en, r))
+		}
 		for i, a := range x.args {
 			r, err := b.source(a, baseID+"."+strconv.Itoa(i), visited)
 			if err != nil {
 				return outRef{}, err
 			}
 			b.m.Edges = append(b.m.Edges, b.edgeWithSpans(&Edge{
-				From: r.node, FromPin: r.pin, To: n.ID, ToPin: n.Inputs[i],
+				From: r.node, FromPin: r.pin, To: n.ID, ToPin: pins[i],
 				Wire: r.wire, Negated: r.negated, Feedback: r.feedback,
 			}, a, r))
 		}
@@ -774,6 +858,120 @@ func (b *modelBuilder) alignCoils(comp map[string]int) {
 	}
 }
 
+// explicitNetworks reports whether the body declares networks (a NETWORK
+// line); without one the body is a single network and the model says so by
+// leaving Networks (and every Node.Net) out.
+func (nl *netlist) explicitNetworks() bool {
+	return len(nl.networks) > 1 || len(nl.networks) == 1 && !nl.networks[0].implicit
+}
+
+// numberNetworks stamps the model with the networks (#207): each statement
+// node's execution order within its network (Exec), and — when the body
+// declares networks — the network list and each node's network number.
+// Statements carry their network from the parse; inline blocks take their
+// component's, input chips their consumer's, notes the network whose lines
+// they sit in.
+func (b *modelBuilder) numberNetworks(comp map[string]int) {
+	_ = b.nl.prepareExec() // a bad ENO read is the transpiler's diagnostic
+	if order, err := b.nl.order(); err == nil {
+		seq := map[int]int{}
+		for _, i := range order {
+			n := b.nl.nodes[i]
+			seq[n.net]++
+			id := "c:" + n.target
+			if n.isCall {
+				id = "f:" + n.inst
+			}
+			if node, ok := b.nodes[id]; ok && node.Exec == 0 {
+				node.Exec = seq[n.net]
+			}
+		}
+	}
+	if !b.nl.explicitNetworks() {
+		return
+	}
+	for i, nw := range b.nl.networks {
+		b.m.Networks = append(b.m.Networks, Network{Number: i + 1, Title: nw.title, Line: nw.line, Implicit: nw.implicit})
+	}
+	compNet := map[int]int{}
+	for id, net := range b.stmtNet {
+		if c, ok := comp[id]; ok {
+			compNet[c] = net
+		}
+	}
+	for w, net := range b.nl.wireNet {
+		if c, ok := comp["b:w."+w]; ok {
+			if _, set := compNet[c]; !set {
+				compNet[c] = net
+			}
+		}
+	}
+	for _, n := range b.m.Nodes {
+		if c, ok := comp[n.ID]; ok {
+			if net, ok := compNet[c]; ok {
+				n.Net = net + 1
+			}
+		}
+	}
+	for _, e := range b.m.Edges {
+		from, to := b.nodes[e.From], b.nodes[e.To]
+		if from != nil && to != nil && from.Kind == "input" && from.Net == 0 {
+			from.Net = to.Net
+		}
+	}
+	for _, n := range b.m.Nodes {
+		if n.Kind == "comment" {
+			n.Net = b.netAtLine(n.Line)
+		}
+	}
+}
+
+// netAtLine is the number of the network whose lines hold source line l.
+func (b *modelBuilder) netAtLine(l int) int {
+	num := 1
+	for i, nw := range b.nl.networks {
+		if !nw.implicit && nw.line <= l {
+			num = i + 1
+		}
+	}
+	return num
+}
+
+// formalPins names a block's inputs: as the call names them (a formal
+// call), else by the standard's names (blockPins).
+func formalPins(c callExpr) []string {
+	if c.names != nil {
+		return c.names
+	}
+	return blockPins(c.fn, len(c.args))
+}
+
+// pinsOf is formalPins, with a user FUNCTION's own input names for a
+// positional call of one in scope (ScaleAnalog's Raw/EngLo/EngHi, not
+// IN1..IN3) — the names its declaration gives them.
+func (b *modelBuilder) pinsOf(c callExpr) []string {
+	if c.names == nil {
+		if f, ok := b.scope.Function(c.fn); ok && len(f.Inputs) == len(c.args) {
+			pins := make([]string, len(f.Inputs))
+			for i, p := range f.Inputs {
+				pins[i] = p.Name
+			}
+			return pins
+		}
+	}
+	return formalPins(c)
+}
+
+// enFirst moves an FB's EN pin to the top, where IEC draws it.
+func enFirst(n *Node) {
+	for i, p := range n.Inputs {
+		if strings.EqualFold(p, "EN") && i > 0 {
+			n.Inputs = append([]string{p}, append(n.Inputs[:i:i], n.Inputs[i+1:]...)...)
+			return
+		}
+	}
+}
+
 func ensurePin(pins *[]string, name string) {
 	for _, p := range *pins {
 		if p == name {
@@ -789,60 +987,9 @@ func ensurePin(pins *[]string, name string) {
 func BlockPins(fn string, n int) []string { return blockPins(fn, n) }
 
 // blockPins names an operator/function block's input pins per IEC
-// convention: IN for unary, IN1..INn for extensible/binary operators, and
-// the standard formal names for the few functions that have them.
-func blockPins(fn string, n int) []string {
-	switch fn {
-	case "LIMIT":
-		if n == 3 {
-			return []string{"MN", "IN", "MX"}
-		}
-	case "SEL":
-		if n == 3 {
-			return []string{"G", "IN0", "IN1"}
-		}
-	case "MUX":
-		if n >= 2 {
-			pins := []string{"K"}
-			for i := 0; i < n-1; i++ {
-				pins = append(pins, "IN"+strconv.Itoa(i))
-			}
-			return pins
-		}
-	case "SHL", "SHR", "ROL", "ROR":
-		if n == 2 {
-			return []string{"IN", "N"}
-		}
-	case "LEFT", "RIGHT":
-		if n == 2 {
-			return []string{"IN", "L"}
-		}
-	case "MID":
-		if n == 3 {
-			return []string{"IN", "L", "P"}
-		}
-	case "INSERT":
-		if n == 3 {
-			return []string{"IN1", "IN2", "P"}
-		}
-	case "DELETE":
-		if n == 3 {
-			return []string{"IN", "L", "P"}
-		}
-	case "REPLACE":
-		if n == 4 {
-			return []string{"IN1", "IN2", "L", "P"}
-		}
-	}
-	if n == 1 {
-		return []string{"IN"}
-	}
-	pins := make([]string, n)
-	for i := range pins {
-		pins[i] = "IN" + strconv.Itoa(i+1)
-	}
-	return pins
-}
+// convention (ir.FormalNames — one table with the ST lowering's formal
+// calls and the language server).
+func blockPins(fn string, n int) []string { return ir.FormalNames(fn, n) }
 
 var pouNameRe = regexp.MustCompile(`(?im)^\s*(?:PROGRAM|FUNCTION_BLOCK)\s+([A-Za-z_][A-Za-z0-9_]*)`)
 

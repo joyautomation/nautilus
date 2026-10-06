@@ -10,7 +10,7 @@
 //   - gateWebview() wraps the webview's postMessage. Until the page says
 //     `{type:'ready'}`, messages are held instead of sent.
 //   - State messages are remembered as the latest of their kind (model/
-//     diff, error, diagnostics, syncState, liveValues). On `ready` the
+//     diff, error, diagnostics, descriptions, syncState, liveValues). On `ready` the
 //     latest of each is replayed in that order; anything else posted
 //     before the first `ready` is delivered once, after them.
 //   - The page posts `ready` on EVERY mount, so a reload (a hidden panel
@@ -24,7 +24,7 @@ import type * as vscode from "vscode";
 type Msg = { type?: unknown };
 
 /** Replay order: the view first, then what decorates it. */
-const ORDER = ["view", "error", "diagnostics", "syncState", "liveValues"];
+const ORDER = ["view", "error", "diagnostics", "descriptions", "syncState", "liveValues"];
 
 /** The replay slot a state message occupies: model and diff views share
  * one (whichever came last is what the panel shows); an error is kept

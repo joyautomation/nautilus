@@ -31,6 +31,48 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Added
 
+- **FBD networks.** A `.fbd` body can be divided into numbered networks
+  with titles, the way TIA Portal and CODESYS lay out an FBD block: a
+  `NETWORK 'title'` line starts one, and networks execute in order. The
+  diagram draws each as a numbered band with its title, its notes and its
+  logic, and every statement carries a badge with its execution order. Click
+  a band's header and **+ add** inserts into that network; ▲ ▼ move it, +
+  adds one after it, ✕ removes its `NETWORK` line, double-click renames;
+  the palette has a *network* entry. A file without `NETWORK` lines is one
+  network, as before. Needs a `naut` newer than 0.15.0. (#207)
+
+- **EN/ENO on every FBD block** (IEC execution control): wire `EN` and the
+  block runs only while it is TRUE — a function's result is not written, a
+  function block's outputs hold — and `ENO` reports that it ran without an
+  error (`DIV`/`MOD`: a zero divisor). The pins draw when bound; the small
+  **EN** toggle on a block shows them as open pins to wire. ST takes the
+  same `EN := …` / `ENO => …` formal arguments. Needs a `naut` newer than
+  0.15.0. (#206)
+
+- **The FBD palette's function field offers the project's own FUNCTIONs**
+  by their declared names, with their inputs and return type, beside the
+  standard functions; a user FUNCTION block draws its declared pin names.
+  (#204)
+
+- **Find All References from a diagram element.** Select a ladder contact,
+  coil or block, an FBD variable chip, FB instance or FB pin, or an SFC
+  step or action association and press **Shift+F12**, or right-click it →
+  *Find All References*. The References view opens on that name: every
+  program that reads or writes it, on the diagram files' own lines, plus
+  its declaration in `nautilus.yaml` or a tag file. Studio 5000's
+  Ctrl+E cross-reference, in all three diagram editors. (#218)
+
+- **Tag descriptions on diagram elements.** A tag's `desc` (from
+  `nautilus.yaml` or a tag file), or the trailing comment on a variable's
+  VAR line (`Run : BOOL; (* motor running *)`), now shows in the element's
+  tooltip in the ladder, FBD and SFC editors, and as a second line under
+  each ladder contact and coil, the way Studio 5000 draws it. The new
+  setting `nautilus.diagram.showDescriptions` (default on) controls the
+  ladder's second line; tooltips always carry the description. Editing a
+  tag file now refreshes hover and these descriptions without a restart.
+  Comes from `naut lsp` (the new `nautilus/descriptions` request), so it
+  needs a `naut` newer than 0.15.0. (#216)
+
 - **Ladder: edge contacts, from the palette, a key or a retag.** The
   palette has rising- and falling-edge contacts (`⊣P⊢`, `⊣N⊢`, the Logix
   ONS habit); `P` cycles a selected contact NO → P → N → NC; and
@@ -147,6 +189,28 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   older `naut` leaves the outline empty, as before.
 
 ### Fixed
+
+- **The FB picker leaves an input with a declared default unbound.** It
+  wrote every input as `_`, and `_` is an error, so `doseA : Dosing(...)`
+  was red until even `NoFlowTime` (declared `:= T#5S`) was wired or
+  deleted. An input with an initial value now arrives unbound — it keeps
+  that value, like an unconnected FB input in TIA — and only inputs without
+  one (and in-outs) arrive as open `_` pins. (#205)
+
+- **The `(* @layout *)` block stays out of the logic.** It was written where
+  the body ended at the first drag, so statements added later landed after
+  it and it read as part of a network. It now lives right after `END_FBD`,
+  and a file with one mid-body moves it there on the next layout write.
+  (#208)
+
+- **A blank `.fbd`/`.ld`/`.sfc` seeds the POU name `naut new` would**:
+  `main.fbd` becomes `PROGRAM Main`, not `PROGRAM main`. (#209)
+
+- **Find All References from another file now finds a program that defines
+  a FUNCTION_BLOCK ahead of its PROGRAM.** Such a file was not recognized
+  as a program at all, so its reads and writes of a tag were missing from
+  the list whenever the search started anywhere else. (Found by the X44
+  smoke row.)
 
 - **Ladder: an edge contact (`+Tag`, `-Tag`) is drawn.** The diagram
   dropped it and wired the block behind it straight to the rail, as if the

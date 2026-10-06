@@ -23,6 +23,7 @@ import { gitShow } from "./gitHistory";
 import { pickRevisions } from "./revisionPick";
 import { applyDiagramKey, isDiagramKeyMessage, serialQueue, sourceDocument } from "./diagramKeys";
 import { gateWebview } from "./webviewReady";
+import { findReferencesFromDiagram, isXrefMessage, postDescriptions } from "./diagramXref";
 
 /** Mirror of lang/fbd.Model — see lang/fbd/graph.go for the contract. */
 export type FbdModel = {
@@ -67,7 +68,11 @@ export type FbdEditOp = {
     | "deleteVar"
     | "setComment"
     | "duplicate"
-    | "retarget";
+    | "retarget"
+    | "addNetwork"
+    | "renameNetwork"
+    | "moveNetwork"
+    | "removeNetwork";
   node?: string;
   to?: string;
   toPin?: string;
@@ -226,6 +231,8 @@ function handleWebviewMessage(doc: vscode.TextDocument, msg: WebviewMessage): vo
     void vscode.commands.executeCommand("nautilus.fbd.diffController");
     return;
   }
+  const xref: unknown = msg;
+  if (isXrefMessage(xref)) return void findReferencesFromDiagram(doc, xref);
   editQueue = editQueue.then(() => applyOpMessage(doc, msg)).catch(() => undefined);
 }
 
@@ -303,6 +310,7 @@ async function postModel(webview: vscode.Webview, doc: vscode.TextDocument): Pro
     // node ids resolve against, so a cut (or another file) can still paste.
     void webview.postMessage({ type: "model", model: res.model, title: docTitle(doc), source });
     postDiagnostics(webview, doc);
+    void postDescriptions(webview, doc);
   }
 }
 
@@ -547,6 +555,7 @@ export class FbdPreview implements vscode.Disposable {
     } else {
       this.post({ type: "model", model: res.model, title: docTitle(doc), source });
       postDiagnostics(this.panel.webview, doc);
+      void postDescriptions(this.panel.webview, doc);
     }
   }
 

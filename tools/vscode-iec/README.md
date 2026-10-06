@@ -61,6 +61,18 @@ controller onto both the text and the diagram.
   kind too), undo / redo / save with the usual keys, zoom and fit
   (Ctrl+wheel, Ctrl+= / Ctrl+- / Ctrl+0), and a **?** button that lists
   every gesture and key for that editor.
+- **Cross-reference from the diagram**: select a contact, coil or block, an
+  FBD variable chip, FB instance or pin, or an SFC step or action and press
+  **Shift+F12** (or right-click → *Find All References*). The References
+  view lists every read and write of that name across the project and its
+  declaration in `nautilus.yaml` or a tag file.
+- **Tag descriptions on the elements**: a tag's `desc` from `nautilus.yaml`
+  (or a tag file), or a trailing `(* comment *)` on its VAR line, shows in
+  the element's tooltip in all three editors, and under each ladder contact
+  and coil as a second line, Studio 5000 style. Turn the second line off
+  with `nautilus.diagram.showDescriptions`; FBD and SFC keep the
+  description in the tooltip only, since their elements are packed too
+  closely for another line.
 
 ![A Sequential Function Chart with the active step highlighted](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/sfc-chart.png)
 

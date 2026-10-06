@@ -30,17 +30,32 @@ type Edit struct {
 // editor should seed rather than parse.
 func Blank(src string) bool { return strings.TrimSpace(src) == "" }
 
-var identRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var nonAlnum = regexp.MustCompile(`[^A-Za-z0-9]+`)
 
-// PouName is the PROGRAM name for a seeded skeleton: the caller's hint
-// (the webview derives one from the file name) when it's a valid
-// identifier, else "Main".
+// PouName is the PROGRAM name for a seeded skeleton, from the caller's hint
+// (the webview derives one from the file name): the same rule `naut new`
+// applies to a project name (cmd/naut pascalCase) — split on anything that
+// is not a letter or digit, capitalise each part's first letter, a leading
+// digit gets a "P" — so `main.fbd` seeds `PROGRAM Main` and `heater-2.fbd`
+// `PROGRAM Heater2`, the way every example and TIA's OB1 spell it. A hint
+// with nothing usable in it seeds "Main".
 func PouName(hint string) string {
-	hint = strings.TrimSpace(hint)
-	if identRe.MatchString(hint) {
-		return hint
+	var b strings.Builder
+	for _, p := range nonAlnum.Split(strings.TrimSpace(hint), -1) {
+		if p == "" {
+			continue
+		}
+		b.WriteString(strings.ToUpper(p[:1]))
+		b.WriteString(p[1:])
 	}
-	return "Main"
+	out := b.String()
+	if out == "" {
+		return "Main"
+	}
+	if out[0] >= '0' && out[0] <= '9' {
+		out = "P" + out
+	}
+	return out
 }
 
 // Seed resolves an op against a blank file. skeleton is the POU text the
