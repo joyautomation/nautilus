@@ -201,3 +201,23 @@ func ShadowedTags(prog *st.Program, tags []TagDef) []st.VarDecl {
 	}
 	return out
 }
+
+// enumTags finds the tags whose type is an enumeration: by a program's
+// binding, or by the tag's own type:. Keyed by ir.NameKey.
+func enumTags(tags []TagDef, types, globals map[string]*ir.Type) map[string]*ir.Type {
+	out := map[string]*ir.Type{}
+	for name, t := range globals {
+		if t != nil && t.Enum != nil {
+			out[ir.NameKey(name)] = t
+		}
+	}
+	for _, d := range tags {
+		if d.Type == "" {
+			continue
+		}
+		if t, err := ResolveTagType(d.Type, types); err == nil && t.Enum != nil {
+			out[ir.NameKey(d.Name)] = t
+		}
+	}
+	return out
+}

@@ -96,6 +96,8 @@ func documentSymbols(uri, text string) []DocumentSymbol {
 		roots = o.place(roots, o.ldRungs())
 	case strings.HasSuffix(lower, ".sfc"):
 		roots = o.place(roots, o.sfcElements())
+	default:
+		roots = o.place(roots, o.regions())
 	}
 	return finish(roots)
 }
@@ -663,6 +665,60 @@ func (o *outliner) place(roots, elems []*symNode) []*symNode {
 		}
 	}
 	return roots
+}
+
+// regions outlines REGION name … END_REGION (#202): one symbol per region,
+// named by the rest of its REGION line, holding the regions nested in it.
+// Placed under the POU that contains it. REGION is not a reserved word, so
+// it opens a region only first on its line and not followed by what would
+// make it an assignment or a call; a region left open runs to the end.
+func (o *outliner) regions() []*symNode {
+	var out, stack []*symNode
+	firstOnLine := func(i int) bool { return i == 0 || o.toks[i-1].Line != o.toks[i].Line }
+	for i := 0; i < len(o.toks); i++ {
+		t := o.toks[i]
+		if t.Type != st.TokenIdent || !firstOnLine(i) {
+			continue
+		}
+		switch strings.ToUpper(t.Literal) {
+		case "REGION":
+			if i+1 < len(o.toks) && o.toks[i+1].Line == t.Line {
+				switch o.toks[i+1].Type {
+				case st.TokenAssign, st.TokenDot, st.TokenLBracket, st.TokenLParen, st.TokenSemicolon,
+					st.TokenOutputAssign, st.TokenColon, st.TokenComma:
+					continue
+				}
+			}
+			last := i
+			for j := i + 1; j < len(o.toks) && o.toks[j].Line == t.Line; j++ {
+				last = j
+			}
+			n := &symNode{pou: true}
+			n.sym.Kind, n.sym.Detail = SymbolKindNamespace, "REGION"
+			n.sym.Name = "REGION"
+			if last > i {
+				n.sym.Name = o.sourceText(i+1, last)
+			}
+			n.sym.Range = Range{Start: o.start(i), End: o.end(last)}
+			n.sym.SelectionRange = n.sym.Range
+			stack = append(stack, n)
+			out = append(out, n)
+		case "END_REGION":
+			if len(stack) == 0 {
+				continue
+			}
+			end := o.end(i)
+			if o.typ(i+1) == st.TokenSemicolon && o.toks[i+1].Line == t.Line {
+				end = o.end(i + 1)
+			}
+			stack[len(stack)-1].sym.Range.End = end
+			stack = stack[:len(stack)-1]
+		}
+	}
+	for _, n := range stack {
+		n.sym.Range.End = o.docEnd()
+	}
+	return out
 }
 
 // clip shortens a one-line detail for the outline.

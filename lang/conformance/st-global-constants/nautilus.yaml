@@ -1,0 +1,42 @@
+# st-global-constants — project-wide constants (#176): lib/gvl.st holds a
+# VAR_GLOBAL CONSTANT block, and every language reads its names — in a
+# comparison, as a timer's preset, and as an array bound and loop limit.
+# Before the fix the block was rejected ("an initial value is not applied
+# to a tag").
+#
+#   go test ./lang/conformance/ -run 'TestConformance/st-global-constants'
+#   go run ./cmd/naut test lang/conformance/st-global-constants
+name: st-global-constants
+
+tasks:
+  - program: st-global-constants.st   # the first task is always "main"; its prefix is still st_
+    scan: 10ms
+  - name: ld
+    program: st-global-constants.ld
+    scan: 10ms
+  - name: fbd
+    program: st-global-constants.fbd
+    scan: 10ms
+  - name: sfc
+    program: st-global-constants.sfc
+    scan: 10ms
+
+tags:
+  # Shared inputs.
+  - { name: Level, role: state, init: 0.0, desc: "Tank level, %" }
+  - { name: Run,   role: state, init: false }
+
+  # Outputs, one set per language.
+  - { name: st_High,   role: state, init: false }
+  - { name: st_Done,   role: state, init: false }
+  - { name: st_Stages, role: state, init: 0 }
+  - { name: ld_High,   role: state, init: false }
+  - { name: ld_Done,   role: state, init: false }
+  - { name: fbd_High,  role: state, init: false }
+  - { name: fbd_Done,  role: state, init: false }
+  - { name: sfc_High,  role: state, init: false }
+  - { name: sfc_Done,  role: state, init: false }
+  - { name: sfc_Stages, role: state, init: 0 }
+
+driver:
+  type: memory

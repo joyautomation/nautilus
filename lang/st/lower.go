@@ -1,6 +1,7 @@
 package st
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -115,7 +116,19 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 	for name, t := range opts.Types {
 		if t != nil {
 			l.types[name] = t
+			if t.Enum != nil {
+				l.enums = append(l.enums, t)
+			}
 		}
+	}
+	// Order: TYPE shells and enumerations first (a constant may be of an
+	// enumerated type), then the file's VAR_GLOBAL CONSTANT blocks (#176),
+	// then the remaining TYPEs (an array bound may name a constant).
+	if err := l.collectTypeShells(); err != nil {
+		return nil, err
+	}
+	if err := l.collectGlobalConsts(); err != nil {
+		return nil, err
 	}
 	if err := l.collectTypes(); err != nil {
 		return nil, err
@@ -126,12 +139,12 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 	// declaration order. They resolve against l.types, so a pin may be
 	// declared with a user TYPE from this file or a project library.
 	for _, fbDecl := range prog.FBDecls {
-		if err := populateFBSignature(fbDecl, inFile[fbDecl.Name], combined, l.types); err != nil {
+		if err := populateFBSignature(fbDecl, inFile[fbDecl.Name], l); err != nil {
 			return nil, err
 		}
 	}
 	for _, fd := range prog.FuncDecls {
-		if err := populateFuncSignature(fd, inFileFuncs[fd.Name], combined, l.types); err != nil {
+		if err := populateFuncSignature(fd, inFileFuncs[fd.Name], l); err != nil {
 			return nil, err
 		}
 	}
@@ -156,7 +169,7 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 	// every in-file FB plus the engine-supplied registry.
 	for _, fbDecl := range prog.FBDecls {
 		def := inFile[fbDecl.Name]
-		if err := lowerFBBody(fbDecl, def, combined, combinedFuncs, l.types); err != nil {
+		if err := lowerFBBody(fbDecl, def, l); err != nil {
 			return nil, err
 		}
 		l.irProg.UserFBs = append(l.irProg.UserFBs, def)
@@ -165,7 +178,7 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 	// (and user FBs) since both registries are now populated.
 	for _, fd := range prog.FuncDecls {
 		def := inFileFuncs[fd.Name]
-		if err := lowerFuncBody(fd, def, combined, combinedFuncs, l.types); err != nil {
+		if err := lowerFuncBody(fd, def, l); err != nil {
 			return nil, err
 		}
 		l.irProg.UserFuncs = append(l.irProg.UserFuncs, def)
@@ -181,10 +194,12 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 // types is the enclosing file's resolved TYPE table (its own TYPE block
 // plus the project libraries joined ahead of it), so a pin may be declared
 // with a user TYPE: `VAR_INPUT IN : AnalogInput; END_VAR`.
-func populateFBSignature(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[string]*ir.FBDef, types map[string]*ir.Type) error {
-	sig := newLowerer(&Program{Name: fbDecl.Name}, userFBs)
-	sig.types = types
+func populateFBSignature(fbDecl *FunctionBlockDecl, def *ir.FBDef, env *lowerer) error {
+	sig := env.child(&Program{Name: fbDecl.Name})
 	for _, vb := range fbDecl.VarBlocks {
+		if err := checkVarBlock(vb); err != nil {
+			return fmt.Errorf("FUNCTION_BLOCK %s: %w", fbDecl.Name, err)
+		}
 		for _, vd := range vb.Variables {
 			switch vb.Kind {
 			case "VAR_GLOBAL", "VAR_EXTERNAL":
@@ -194,14 +209,22 @@ func populateFBSignature(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[s
 			if err != nil {
 				return errAt(vd.Pos, fmt.Errorf("FUNCTION_BLOCK %s VAR %s: %w", fbDecl.Name, vd.Name, err))
 			}
-			slot := ir.FBSlot{Name: vd.Name, Type: t, Constant: vb.Constant}
+			if err := checkTemp(vb, vd, t); err != nil {
+				return err
+			}
+			slot := ir.FBSlot{Name: vd.Name, Type: t, Constant: vb.Constant, Temp: vb.Kind == "VAR_TEMP"}
 			if vd.Initial != nil && vb.Kind != "VAR_IN_OUT" {
 				// The instance starts here (ir.NewFBInstance); dropping it
 				// left every initialised FB variable — a VAR CONSTANT most
 				// visibly — reading zero.
-				if slot.Init, err = evalConstValue(vd.Initial, t); err != nil {
+				if slot.Init, err = sig.constValue(vd.Initial, t); err != nil {
 					return errAt(vd.Pos, fmt.Errorf("FUNCTION_BLOCK %s VAR %s initial: %w", fbDecl.Name, vd.Name, err))
 				}
+			}
+			if vb.Constant {
+				// A later declaration (an array bound, an initial value) may
+				// name this constant.
+				sig.consts[ir.NameKey(vd.Name)] = constSym{name: vd.Name, val: ir.SlotInitial(slot), typ: t, what: "VAR CONSTANT"}
 			}
 			switch vb.Kind {
 			case "VAR_INPUT":
@@ -235,7 +258,7 @@ func populateFBSignature(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[s
 // Program whose VarBlocks are reordered to
 // VAR_INPUT ‖ VAR_OUTPUT ‖ VAR_IN_OUT ‖ VAR so the resulting Slots match
 // FBInstance.Slots (FBDef.AllSlots) index-for-index.
-func lowerFBBody(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[string]*ir.FBDef, userFuncs map[string]*ir.FuncDef, types map[string]*ir.Type) error {
+func lowerFBBody(fbDecl *FunctionBlockDecl, def *ir.FBDef, env *lowerer) error {
 	var inputBlocks, outputBlocks, inoutBlocks, internalBlocks, globalBlocks []VarBlock
 	for _, vb := range fbDecl.VarBlocks {
 		switch vb.Kind {
@@ -259,9 +282,7 @@ func lowerFBBody(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[string]*i
 	blocks = append(blocks, globalBlocks...)
 
 	bodyProg := &Program{Name: fbDecl.Name, VarBlocks: blocks, Statements: fbDecl.Statements}
-	sub := newLowerer(bodyProg, userFBs)
-	sub.userFuncs = userFuncs
-	sub.types = types
+	sub := env.child(bodyProg)
 	if err := sub.collectVars(); err != nil {
 		return fmt.Errorf("FUNCTION_BLOCK %s: %w", fbDecl.Name, err)
 	}
@@ -291,9 +312,8 @@ func lowerFBBody(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[string]*i
 // populateFuncSignature resolves a FUNCTION's input slot list and return
 // type, writing them onto def so peer call sites can type-check before
 // the body itself is lowered.
-func populateFuncSignature(decl *FunctionDecl, def *ir.FuncDef, userFBs map[string]*ir.FBDef, types map[string]*ir.Type) error {
-	sig := newLowerer(&Program{Name: decl.Name}, userFBs)
-	sig.types = types
+func populateFuncSignature(decl *FunctionDecl, def *ir.FuncDef, env *lowerer) error {
+	sig := env.child(&Program{Name: decl.Name})
 	retT, err := sig.resolveType(decl.ReturnType)
 	if err != nil {
 		return errAt(decl.Pos, fmt.Errorf("FUNCTION %s return type: %w", decl.Name, err))
@@ -306,17 +326,26 @@ func populateFuncSignature(decl *FunctionDecl, def *ir.FuncDef, userFBs map[stri
 		case "VAR_GLOBAL", "VAR_EXTERNAL":
 			continue
 		}
+		if err := checkVarBlock(vb); err != nil {
+			return fmt.Errorf("FUNCTION %s: %w", decl.Name, err)
+		}
 		for _, vd := range vb.Variables {
 			t, err := sig.resolveType(vd.Type)
 			if err != nil {
 				return errAt(vd.Pos, fmt.Errorf("FUNCTION %s VAR %s: %w", decl.Name, vd.Name, err))
 			}
-			slot := ir.FBSlot{Name: vd.Name, Type: t, Constant: vb.Constant}
+			if err := checkTemp(vb, vd, t); err != nil {
+				return err
+			}
+			slot := ir.FBSlot{Name: vd.Name, Type: t, Constant: vb.Constant, Temp: vb.Kind == "VAR_TEMP"}
 			if vd.Initial != nil {
 				// Each call's frame starts here (ir.NewFuncFrame).
-				if slot.Init, err = evalConstValue(vd.Initial, t); err != nil {
+				if slot.Init, err = sig.constValue(vd.Initial, t); err != nil {
 					return errAt(vd.Pos, fmt.Errorf("FUNCTION %s VAR %s initial: %w", decl.Name, vd.Name, err))
 				}
+			}
+			if vb.Constant {
+				sig.consts[ir.NameKey(vd.Name)] = constSym{name: vd.Name, val: ir.SlotInitial(slot), typ: t, what: "VAR CONSTANT"}
 			}
 			switch vb.Kind {
 			case "VAR_INPUT":
@@ -341,7 +370,7 @@ func populateFuncSignature(decl *FunctionDecl, def *ir.FuncDef, userFBs map[stri
 // closure on def. The body lowers against a synthetic Program whose
 // VarBlocks are reordered VAR_INPUT ‖ VAR (locals) ‖ <return slot>, so
 // the per-call Frame.Slots layout matches def's FrameSize.
-func lowerFuncBody(decl *FunctionDecl, def *ir.FuncDef, userFBs map[string]*ir.FBDef, userFuncs map[string]*ir.FuncDef, types map[string]*ir.Type) error {
+func lowerFuncBody(decl *FunctionDecl, def *ir.FuncDef, env *lowerer) error {
 	var inputBlocks, localBlocks, globalBlocks []VarBlock
 	for _, vb := range decl.VarBlocks {
 		switch vb.Kind {
@@ -371,9 +400,7 @@ func lowerFuncBody(decl *FunctionDecl, def *ir.FuncDef, userFBs map[string]*ir.F
 	blocks = append(blocks, globalBlocks...)
 
 	bodyProg := &Program{Name: decl.Name, VarBlocks: blocks, Statements: decl.Statements}
-	sub := newLowerer(bodyProg, userFBs)
-	sub.userFuncs = userFuncs
-	sub.types = types
+	sub := env.child(bodyProg)
 	if err := sub.collectVars(); err != nil {
 		return fmt.Errorf("FUNCTION %s: %w", decl.Name, err)
 	}
@@ -383,6 +410,9 @@ func lowerFuncBody(decl *FunctionDecl, def *ir.FuncDef, userFBs map[string]*ir.F
 	}
 	sub.irProg.Body = stmts
 	bodyIR := sub.irProg
+	// Every local of a FUNCTION — VAR_TEMP included — is already
+	// re-initialised per call by the frame (FuncDef.reinitLocals).
+	bodyIR.Temps = nil
 	def.Run = func(frame *ir.Frame, host ir.Host) error {
 		return ir.Run(bodyIR, frame, host)
 	}
@@ -406,6 +436,30 @@ type lowerer struct {
 	// assigns the return value rather than failing as undeclared.
 	returnSlot     int
 	returnSlotName string
+
+	// fileConsts are the constants every POU of the composed source sees:
+	// its VAR_GLOBAL CONSTANT blocks (#176). consts is this POU's view:
+	// fileConsts plus its own VAR CONSTANT declarations. Both are keyed by
+	// ir.NameKey.
+	fileConsts map[string]constSym
+	consts     map[string]constSym
+	// enums are the enumerated types in scope, for resolving an unqualified
+	// member name (Run for Mode#Run) — see lowerEnumMember.
+	enums []*ir.Type
+	// hint is the type the expression being lowered is expected to have
+	// (an assignment's target, the other side of a comparison, a CASE
+	// selector): it settles an unqualified enumeration member that two
+	// enumerations share.
+	hint *ir.Type
+}
+
+// constSym is a named compile-time constant: a VAR CONSTANT or a
+// VAR_GLOBAL CONSTANT declaration, with its folded value.
+type constSym struct {
+	name string // as declared
+	val  ir.Value
+	typ  *ir.Type
+	what string // "VAR CONSTANT", "VAR_GLOBAL CONSTANT" — for diagnostics
 }
 
 type symbol struct {
@@ -419,6 +473,9 @@ type symbol struct {
 	// POU did not declare — recorded in Globals on first use.
 	fileScope bool
 	implicit  bool
+	// constant marks a VAR CONSTANT local: reads fold to its value (see
+	// lowerIdent), and writing it is a compile error.
+	constant bool
 }
 
 func newLowerer(prog *Program, userFBs map[string]*ir.FBDef) *lowerer {
@@ -429,7 +486,24 @@ func newLowerer(prog *Program, userFBs map[string]*ir.FBDef) *lowerer {
 		types:      map[string]*ir.Type{},
 		userFBs:    userFBs,
 		returnSlot: -1,
+		fileConsts: map[string]constSym{},
+		consts:     map[string]constSym{},
 	}
+}
+
+// child is a lowerer for one POU of the same source file: it shares the
+// file's TYPEs, enumerations, project constants and POU registries, and
+// starts its own scope and its own local constants.
+func (l *lowerer) child(prog *Program) *lowerer {
+	c := newLowerer(prog, l.userFBs)
+	c.userFuncs = l.userFuncs
+	c.types = l.types
+	c.enums = l.enums
+	c.fileConsts = l.fileConsts
+	for k, v := range l.fileConsts {
+		c.consts[k] = v
+	}
+	return c
 }
 
 // lookup resolves an identifier in the POU's scope, case-insensitively
@@ -469,9 +543,11 @@ func mergeShadowing[V any](base, top map[string]V) map[string]V {
 
 // ─── Type resolution ──────────────────────────────────────────────────────
 
-// collectTypes resolves program-level TypeDecls in two passes so struct
-// fields can reference peer UDTs declared in the same TYPE block.
-func (l *lowerer) collectTypes() error {
+// collectTypeShells registers every program-level TypeDecl by name, so
+// struct fields can reference peer UDTs declared in the same TYPE block,
+// and resolves the enumerations outright (they reference nothing else, and
+// a project constant may be of one). collectTypes fills in the rest.
+func (l *lowerer) collectTypeShells() error {
 	for _, td := range l.prog.TypeDecls {
 		if _, prev, dup := ir.Lookup(l.types, td.Name); dup {
 			return errAt(td.Pos, dupErr("TYPE", td.Name, prev))
@@ -482,8 +558,130 @@ func (l *lowerer) collectTypes() error {
 		}
 	}
 	for _, td := range l.prog.TypeDecls {
+		et, ok := td.Type.(*EnumType)
+		if !ok {
+			if td.Initial != nil {
+				return errAt(td.Pos, fmt.Errorf("TYPE %s: an initial value on a TYPE is supported for enumerations only", td.Name))
+			}
+			continue
+		}
+		def, err := l.enumDef(td, et)
+		if err != nil {
+			return err
+		}
+		*l.types[td.Name] = ir.Type{Kind: ir.TypeInt, Enum: def}
+		l.enums = append(l.enums, l.types[td.Name])
+	}
+	return nil
+}
+
+// enumDef resolves an enumerated TYPE (#238): each member's value (an
+// explicit `:= n`, else the previous member's plus one, starting at 0), and
+// the type's initial member (`:= Idle`, else the first). Member names and
+// values are unique within the type.
+func (l *lowerer) enumDef(td TypeDecl, et *EnumType) (*ir.EnumDef, error) {
+	def := &ir.EnumDef{Name: td.Name}
+	next := int64(0)
+	for _, m := range et.Members {
+		v := next
+		if m.Value != nil {
+			n, err := l.constInt(m.Value)
+			if err != nil {
+				return nil, errAt(m.Pos, fmt.Errorf("TYPE %s: value of %s: %w", td.Name, m.Name, err))
+			}
+			v = n
+		}
+		if prev, dup := def.Member(m.Name); dup {
+			return nil, errAt(m.Pos, dupErr("enumeration member", m.Name, prev.Name))
+		}
+		if other := def.NameOf(v); other != "" {
+			return nil, errAt(m.Pos, fmt.Errorf("TYPE %s: %s and %s both have the value %d — give each member its own value", td.Name, other, m.Name, v))
+		}
+		def.Members = append(def.Members, ir.EnumMember{Name: m.Name, Value: v})
+		next = v + 1
+	}
+	if len(def.Members) > 0 {
+		def.Default = def.Members[0].Value
+	}
+	if td.Initial != nil {
+		name := ""
+		switch x := td.Initial.(type) {
+		case *IdentExpr:
+			name = x.Name
+		case *TypedLit:
+			if id, ok := x.Inner.(*IdentExpr); ok && ir.SameName(x.TypeName, td.Name) {
+				name = id.Name
+			}
+		}
+		m, ok := def.Member(name)
+		if !ok {
+			return nil, errAt(td.Pos, fmt.Errorf("TYPE %s: the initial value must be one of its members (%s)", td.Name, memberList(def)))
+		}
+		def.Default = m.Value
+	}
+	return def, nil
+}
+
+// memberList renders an enumeration's member names for a diagnostic.
+func memberList(def *ir.EnumDef) string {
+	names := make([]string, len(def.Members))
+	for i, m := range def.Members {
+		names[i] = m.Name
+	}
+	return strings.Join(names, ", ")
+}
+
+// collectGlobalConsts folds the file's VAR_GLOBAL CONSTANT blocks into
+// fileConsts (#176): constants every POU sees, folded at compile time like
+// a local VAR CONSTANT. A constant may name an earlier one.
+func (l *lowerer) collectGlobalConsts() error {
+	for _, vb := range l.prog.GlobalConsts {
+		for _, vd := range vb.Variables {
+			if err := l.declareConst(vb, vd, l.fileConsts); err != nil {
+				return err
+			}
+			l.consts[ir.NameKey(vd.Name)] = l.fileConsts[ir.NameKey(vd.Name)]
+		}
+	}
+	return nil
+}
+
+// declareConst resolves one constant declaration into table. The type must
+// be elementary or an enumeration (a constant is a value, folded where it
+// is used), and the value a constant expression.
+func (l *lowerer) declareConst(vb VarBlock, vd VarDecl, table map[string]constSym) error {
+	key := ir.NameKey(vd.Name)
+	if prev, dup := table[key]; dup {
+		return errAt(vd.Pos, dupErr("constant", vd.Name, prev.name))
+	}
+	t, err := l.resolveType(vd.Type)
+	if err != nil {
+		return errAt(vd.Pos, fmt.Errorf("%s %s: %w", vb.Kind, vd.Name, err))
+	}
+	switch t.Kind {
+	case ir.TypeBool, ir.TypeInt, ir.TypeReal, ir.TypeTime, ir.TypeString:
+	default:
+		return errAt(vd.Pos, fmt.Errorf("%s CONSTANT %s: a constant must have an elementary or enumerated type, not %s", vb.Kind, vd.Name, t))
+	}
+	v := ir.Zero(t)
+	if vd.Initial != nil {
+		if v, err = l.constValue(vd.Initial, t); err != nil {
+			return errAt(vd.Pos, fmt.Errorf("%s CONSTANT %s: %w", vb.Kind, vd.Name, err))
+		}
+	}
+	table[key] = constSym{name: vd.Name, val: v, typ: t, what: vb.Kind + " CONSTANT"}
+	return nil
+}
+
+// collectTypes resolves the program-level TypeDecls that collectTypeShells
+// left as shells: structs (in a second pass, so fields can reference peer
+// UDTs) and aliases.
+func (l *lowerer) collectTypes() error {
+	for _, td := range l.prog.TypeDecls {
 		t := l.types[td.Name]
 		switch body := td.Type.(type) {
+		case *EnumType:
+			continue // resolved by collectTypeShells
 		case *StructType:
 			for i, f := range body.Fields {
 				ft, err := l.resolveType(f.Type)
@@ -539,11 +737,11 @@ func (l *lowerer) resolveType(te TypeExpr) (*ir.Type, error) {
 		// decomposes cleanly into a[i][j].
 		current := elem
 		for i := len(t.Dims) - 1; i >= 0; i-- {
-			lo, err := evalConstInt(t.Dims[i].Lo)
+			lo, err := l.constInt(t.Dims[i].Lo)
 			if err != nil {
 				return nil, fmt.Errorf("array dim lo: %w", err)
 			}
-			hi, err := evalConstInt(t.Dims[i].Hi)
+			hi, err := l.constInt(t.Dims[i].Hi)
 			if err != nil {
 				return nil, fmt.Errorf("array dim hi: %w", err)
 			}
@@ -569,6 +767,8 @@ func (l *lowerer) resolveType(te TypeExpr) (*ir.Type, error) {
 			def.FieldIndex[f.Name] = i
 		}
 		return &ir.Type{Kind: ir.TypeStruct, Struct: def}, nil
+	case *EnumType:
+		return nil, fmt.Errorf("declare the enumeration as a TYPE (TYPE Name : %s; END_TYPE) and use its name here", t)
 	}
 	return nil, fmt.Errorf("unsupported type %T", te)
 }
@@ -578,7 +778,9 @@ func resolveScalar(name string) (*ir.Type, error) {
 	case "BOOL":
 		return ir.BoolT, nil
 	case "BYTE", "SINT", "USINT", "INT", "UINT", "WORD", "DINT", "UDINT", "DWORD", "LINT", "ULINT", "LWORD":
-		return ir.IntT, nil
+		// One int64 at run time, but the declared name stays on the type so
+		// a diagnostic says DINT, and w.%X31 knows a DINT has 32 bits.
+		return ir.IntNamed(strings.ToUpper(name)), nil
 	case "REAL", "LREAL":
 		return ir.RealT, nil
 	case "TIME", "LTIME":
@@ -667,13 +869,76 @@ func evalConstValue(e Expression, t *ir.Type) (ir.Value, error) {
 	return ir.Value{}, fmt.Errorf("initial value must be a literal constant: %T", e)
 }
 
+// constValue folds a declaration's initial value (or a constant's value)
+// to a Value of type t. A literal takes the historic literal path; anything
+// else — a named constant, an enumeration member, arithmetic on constants
+// (`N_TANKS * 2`) — is lowered and must fold to a constant.
+func (l *lowerer) constValue(e Expression, t *ir.Type) (ir.Value, error) {
+	if t == nil || t.Enum == nil {
+		if v, err := evalConstValue(e, t); err == nil {
+			return v, nil
+		}
+	}
+	x, err := l.lowerExprHint(e, t)
+	if err != nil {
+		return ir.Value{}, err
+	}
+	if t != nil {
+		x = coerce(x, t)
+		if !assignable(t, x.ExprType()) {
+			return ir.Value{}, errNode(e, fmt.Errorf("cannot initialise a %s with a %s", t, x.ExprType()))
+		}
+	}
+	v, ok := ir.ConstValue(x)
+	if !ok {
+		return ir.Value{}, errNode(e, fmt.Errorf("initial value must be a constant: a literal, a named constant, or arithmetic on them"))
+	}
+	if t != nil {
+		v = ir.CoerceValue(v, t)
+	}
+	return v, nil
+}
+
+// constInt folds an integer constant expression: an array bound, an
+// enumeration value. A literal, a named constant, or arithmetic on them.
+func (l *lowerer) constInt(e Expression) (int64, error) {
+	if v, err := evalConstInt(e); err == nil {
+		return v, nil
+	}
+	x, err := l.lowerExpr(e)
+	if err != nil {
+		return 0, err
+	}
+	if !x.ExprType().IsInteger() {
+		return 0, fmt.Errorf("needs an integer constant, got %s", x.ExprType())
+	}
+	v, ok := ir.ConstValue(x)
+	if !ok {
+		return 0, fmt.Errorf("not a compile-time integer (a literal, a named constant, or arithmetic on them)")
+	}
+	return v.I, nil
+}
+
 // ─── Slot / symbol table ───────────────────────────────────────────────────
 
 func (l *lowerer) collectVars() error {
 	for _, vb := range l.prog.VarBlocks {
+		if err := checkVarBlock(vb); err != nil {
+			return err
+		}
 		kind := varKindFor(vb.Kind)
 		for _, vd := range vb.Variables {
 			prev, dup := l.lookup(vd.Name)
+			if kind == ir.VarGlobal && vb.Constant {
+				// VAR_GLOBAL CONSTANT inside a POU: a constant, not a tag.
+				if dup {
+					return errAt(vd.Pos, dupErr("declaration", vd.Name, prev.name))
+				}
+				if err := l.declareConst(vb, vd, l.consts); err != nil {
+					return err
+				}
+				continue
+			}
 			t, err := l.resolveType(vd.Type)
 			if err != nil {
 				if dup {
@@ -699,9 +964,12 @@ func (l *lowerer) collectVars() error {
 						"a tag has one type; change this declaration or the tag's type:", vb.Kind, vd.Name, t, spelled, want))
 				}
 			}
+			if err := checkTemp(vb, vd, t); err != nil {
+				return err
+			}
 			var init ir.Value
 			if vd.Initial != nil {
-				init, err = evalConstValue(vd.Initial, t)
+				init, err = l.constValue(vd.Initial, t)
 				if err != nil {
 					return errAt(vd.Pos, fmt.Errorf("VAR %s initial: %w", vd.Name, err))
 				}
@@ -719,6 +987,7 @@ func (l *lowerer) collectVars() error {
 				continue
 			}
 			slot := len(l.irProg.Slots)
+			temp := vb.Kind == "VAR_TEMP"
 			l.irProg.Slots = append(l.irProg.Slots, ir.VarSlot{
 				Name:     vd.Name,
 				Type:     t,
@@ -726,9 +995,19 @@ func (l *lowerer) collectVars() error {
 				Retained: vb.Retain,
 				Constant: vb.Constant,
 				Kind:     kind,
+				Temp:     temp,
 			})
+			if temp {
+				l.irProg.Temps = append(l.irProg.Temps, slot)
+			}
 			l.irProg.SlotIndex[vd.Name] = slot
-			l.scope[ir.NameKey(vd.Name)] = symbol{name: vd.Name, slot: slot, typ: t, kind: kind}
+			l.scope[ir.NameKey(vd.Name)] = symbol{name: vd.Name, slot: slot, typ: t, kind: kind, constant: vb.Constant}
+			if vb.Constant {
+				if init.Kind == ir.TypeVoid {
+					init = ir.Zero(t)
+				}
+				l.consts[ir.NameKey(vd.Name)] = constSym{name: vd.Name, val: init, typ: t, what: "VAR CONSTANT"}
+			}
 		}
 	}
 	// Inject PLC project variables as implicit globals so unqualified
@@ -763,6 +1042,10 @@ func (l *lowerer) canonical(t *ir.Type) *ir.Type {
 		if own, _, ok := ir.Lookup(l.types, t.Struct.Name); ok && ir.SameShape(own, t) {
 			return own
 		}
+	case t.Enum != nil:
+		if own, _, ok := ir.Lookup(l.types, t.Enum.Name); ok && own.Enum != nil && ir.SameShape(own, t) {
+			return own
+		}
 	case t.Kind == ir.TypeArray:
 		if elem := l.canonical(t.Elem); elem != t.Elem {
 			c := *t
@@ -771,6 +1054,49 @@ func (l *lowerer) canonical(t *ir.Type) *ir.Type {
 		}
 	}
 	return t
+}
+
+// checkVarBlock rejects qualifier combinations the block kind cannot carry.
+func checkVarBlock(vb VarBlock) error {
+	if vb.Kind == "VAR_TEMP" && vb.Retain {
+		pos := Pos{}
+		if len(vb.Variables) > 0 {
+			pos = vb.Variables[0].Pos
+		}
+		return errAt(pos, fmt.Errorf("VAR_TEMP RETAIN: a temporary is re-initialised on every call, so it cannot be retained — declare it in VAR RETAIN"))
+	}
+	return nil
+}
+
+// checkTemp rejects a function-block instance in VAR_TEMP: the instance
+// would be re-created on every call, losing the state that is the point of
+// a block (IEC 61131-3 does not allow it either).
+func checkTemp(vb VarBlock, vd VarDecl, t *ir.Type) error {
+	if vb.Kind != "VAR_TEMP" || t == nil {
+		return nil
+	}
+	if containsFB(t) {
+		return errAt(vd.Pos, fmt.Errorf("VAR_TEMP %s: a function-block instance cannot be a temporary — it would lose its state on every call; declare it in VAR", vd.Name))
+	}
+	return nil
+}
+
+func containsFB(t *ir.Type) bool {
+	switch t.Kind {
+	case ir.TypeFB:
+		return true
+	case ir.TypeArray:
+		return containsFB(t.Elem)
+	case ir.TypeStruct:
+		if t.Struct != nil {
+			for _, f := range t.Struct.Fields {
+				if containsFB(f.Type) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func varKindFor(blockKind string) ir.VarKind {
@@ -849,7 +1175,10 @@ func (l *lowerer) lowerStmt(s Statement) (ir.Stmt, error) {
 		if sym.kind == ir.VarGlobal {
 			return nil, fmt.Errorf("FOR: loop variable %q must be local, not global", n.Variable)
 		}
-		if sym.typ.Kind != ir.TypeInt {
+		if sym.constant {
+			return nil, fmt.Errorf("FOR: loop variable %q is a constant (VAR CONSTANT) and cannot be written", n.Variable)
+		}
+		if !sym.typ.IsInteger() {
 			return nil, fmt.Errorf("FOR: loop variable %q must be integer, got %s", n.Variable, sym.typ)
 		}
 		start, err := l.lowerExpr(n.Start)
@@ -906,26 +1235,38 @@ func (l *lowerer) lowerStmt(s Statement) (ir.Stmt, error) {
 		if err != nil {
 			return nil, err
 		}
+		selT := expr.ExprType()
+		var seen []caseLabel
 		var clauses []ir.CaseClause
 		for _, c := range n.Cases {
 			var vals []ir.Expr
 			for _, v := range c.Values {
-				lv, err := l.lowerExpr(v)
+				lit, lab, err := l.caseLabelValue(v, selT)
 				if err != nil {
 					return nil, err
 				}
-				vals = append(vals, lv)
+				lab.lo, lab.hi = lit.V, lit.V
+				if err := checkCaseOverlap(seen, lab); err != nil {
+					return nil, errNode(v, err)
+				}
+				seen = append(seen, lab)
+				vals = append(vals, lit)
 			}
 			var ranges []ir.CaseRange
 			for _, r := range c.Ranges {
-				lo, err := l.lowerExpr(r.Lo)
+				lo, labLo, err := l.caseLabelValue(r.Lo, selT)
 				if err != nil {
 					return nil, err
 				}
-				hi, err := l.lowerExpr(r.Hi)
+				hi, labHi, err := l.caseLabelValue(r.Hi, selT)
 				if err != nil {
 					return nil, err
 				}
+				lab := caseLabel{text: labLo.text + ".." + labHi.text, lo: lo.V, hi: hi.V, isRange: true, line: labLo.line}
+				if err := checkCaseOverlap(seen, lab); err != nil {
+					return nil, errNode(r.Lo, err)
+				}
+				seen = append(seen, lab)
 				ranges = append(ranges, ir.CaseRange{Lo: lo, Hi: hi})
 			}
 			body, err := l.lowerStmts(c.Body)
@@ -1052,11 +1393,14 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		if !def.IsInput(idx) {
 			return nil, errName(na.Pos, na.Name, fmt.Errorf("FB %s field %q is not an input", def.Name, na.Name))
 		}
-		v, err := l.lowerExpr(na.Value)
+		v, err := l.lowerExprHint(na.Value, def.Inputs[idx].Type)
 		if err != nil {
 			return nil, fmt.Errorf("FB %s arg %q: %w", def.Name, na.Name, err)
 		}
 		v = coerce(v, def.Inputs[idx].Type)
+		if !assignable(def.Inputs[idx].Type, v.ExprType()) && (def.Inputs[idx].Type.Enum != nil || v.ExprType().Enum != nil) {
+			return nil, errNode(na.Value, fmt.Errorf("FB %s input %s: cannot pass %s as %s", def.Name, na.Name, v.ExprType(), def.Inputs[idx].Type))
+		}
 		bindings = append(bindings, ir.FBInput{SlotIdx: idx, Value: v})
 	}
 	// Every VAR_IN_OUT must be bound at every call site: unlike an input it
@@ -1148,7 +1492,7 @@ func (l *lowerer) lowerAssign(a *AssignStmt) (ir.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	value, err := l.lowerExpr(a.Value)
+	value, err := l.lowerExprHint(a.Value, target.ExprType())
 	if err != nil {
 		return nil, err
 	}
@@ -1172,6 +1516,9 @@ func (l *lowerer) lowerExpr(e Expression) (ir.Expr, error) {
 	case *TimeLit:
 		return &ir.Lit{V: ir.TimeVal(int64(ParseTimeMs(n.Raw))), T: ir.TimeT}, nil
 	case *TypedLit:
+		if id, ok := n.Inner.(*IdentExpr); ok {
+			return l.lowerEnumLiteral(n, id)
+		}
 		return l.lowerExpr(n.Inner)
 	case *IdentExpr:
 		return l.lowerIdent(n)
@@ -1200,6 +1547,9 @@ func (l *lowerer) lowerCallExpr(n *CallExpr) (ir.Expr, error) {
 			}
 			return l.lowerUserFuncCall(n, def)
 		}
+	}
+	if conv, handled, err := l.lowerEnumConversion(n); handled {
+		return conv, err
 	}
 	sig, ok := ir.Builtins[strings.ToUpper(n.Name)]
 	if !ok {
@@ -1282,7 +1632,7 @@ func (l *lowerer) lowerUserFuncCall(n *CallExpr, def *ir.FuncDef) (ir.Expr, erro
 			if have[idx] {
 				return nil, fmt.Errorf("FUNCTION %s: input %q given twice", def.Name, na.Name)
 			}
-			v, err := l.lowerExpr(na.Value)
+			v, err := l.lowerExprHint(na.Value, def.Inputs[idx].Type)
 			if err != nil {
 				return nil, fmt.Errorf("FUNCTION %s arg %s: %w", def.Name, na.Name, err)
 			}
@@ -1303,7 +1653,7 @@ func (l *lowerer) lowerUserFuncCall(n *CallExpr, def *ir.FuncDef) (ir.Expr, erro
 			return nil, fmt.Errorf("FUNCTION %s expects %d argument(s), got %d", def.Name, expected, len(n.Args))
 		}
 		for i, a := range n.Args {
-			v, err := l.lowerExpr(a)
+			v, err := l.lowerExprHint(a, def.Inputs[i].Type)
 			if err != nil {
 				return nil, fmt.Errorf("FUNCTION %s arg %d: %w", def.Name, i+1, err)
 			}
@@ -1339,7 +1689,20 @@ func lowerNumberLit(n *NumberLit) (ir.Expr, error) {
 func (l *lowerer) lowerIdent(n *IdentExpr) (ir.Expr, error) {
 	name := n.Name
 	sym, ok := l.lookup(name)
+	if ok && sym.constant {
+		// A VAR CONSTANT folds to its value; an aggregate one (no literal
+		// form) is still read from its slot.
+		if c, isConst := l.consts[ir.NameKey(name)]; isConst && isScalarKind(c.typ) {
+			return &ir.Lit{V: c.val, T: c.typ}, nil
+		}
+	}
 	if !ok {
+		if c, isConst := l.consts[ir.NameKey(name)]; isConst {
+			return &ir.Lit{V: c.val, T: c.typ}, nil
+		}
+		if lit, found, err := l.lowerEnumMember(n); found || err != nil {
+			return lit, err
+		}
 		if name == "_" {
 			// The diagram editors' placeholder: an open FBD pin, a ladder
 			// coil or contact not yet named ("+ rung" writes `( _ )`).
@@ -1365,19 +1728,8 @@ func (l *lowerer) lowerMember(m *MemberExpr) (ir.Expr, error) {
 		return nil, err
 	}
 	ot := obj.ExprType()
-	if isBitMember(m.Member) {
-		if ot.Kind != ir.TypeInt {
-			return nil, fmt.Errorf("bit access .%s needs an integer, got %s", m.Member, ot)
-		}
-		bit, _ := strconv.Atoi(m.Member)
-		if bit < 0 || bit > 63 {
-			return nil, fmt.Errorf("bit %d is out of range (0..63)", bit)
-		}
-		lv, ok := obj.(ir.LValue)
-		if !ok {
-			return nil, fmt.Errorf("bit access .%s needs a variable, not an expression", m.Member)
-		}
-		return &ir.BitRef{Object: lv, Bit: bit}, nil
+	if isBitMember(m.Member) || isPartialMember(m.Member) {
+		return l.lowerPartial(m, obj)
 	}
 	switch ot.Kind {
 	case ir.TypeStruct:
@@ -1398,7 +1750,7 @@ func (l *lowerer) lowerMember(m *MemberExpr) (ir.Expr, error) {
 		all := ot.FB.AllSlots()
 		return &ir.MemberRef{Object: obj, FieldIdx: idx, T: all[idx].Type}, nil
 	}
-	return nil, errName(m.MemberPos, m.Member, fmt.Errorf("member access on non-struct type %s", ot))
+	return nil, errName(m.MemberPos, m.Member, fmt.Errorf("member access on non-struct type %s (%s.%s)", ot, exprLabel(m.Object), m.Member))
 }
 
 func (l *lowerer) lowerIndex(n *IndexExpr) (ir.Expr, error) {
@@ -1416,7 +1768,7 @@ func (l *lowerer) lowerIndex(n *IndexExpr) (ir.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
-		if idx.ExprType().Kind != ir.TypeInt {
+		if !idx.ExprType().IsInteger() {
 			return nil, errNode(idxExpr, fmt.Errorf("array index must be integer, got %s", idx.ExprType()))
 		}
 		zero := ir.Expr(idx)
@@ -1435,6 +1787,9 @@ func (l *lowerer) lowerIndex(n *IndexExpr) (ir.Expr, error) {
 }
 
 func (l *lowerer) lowerLValue(e Expression) (ir.LValue, error) {
+	if err := l.checkNotConst(e); err != nil {
+		return nil, err
+	}
 	lowered, err := l.lowerExpr(e)
 	if err != nil {
 		return nil, err
@@ -1447,12 +1802,23 @@ func (l *lowerer) lowerLValue(e Expression) (ir.LValue, error) {
 }
 
 func (l *lowerer) lowerBinary(b *BinaryExpr) (ir.Expr, error) {
+	// Each side is the other's hint, so `m = Idle` settles an unqualified
+	// member two enumerations share. Lower the left first; if it is the
+	// ambiguous one, lower the right first and come back.
 	left, err := l.lowerExpr(b.Left)
+	var right ir.Expr
 	if err != nil {
-		return nil, err
-	}
-	right, err := l.lowerExpr(b.Right)
-	if err != nil {
+		var amb *ambiguousMemberError
+		if !errors.As(err, &amb) {
+			return nil, err
+		}
+		if right, err = l.lowerExpr(b.Right); err != nil {
+			return nil, err
+		}
+		if left, err = l.lowerExprHint(b.Left, right.ExprType()); err != nil {
+			return nil, err
+		}
+	} else if right, err = l.lowerExprHint(b.Right, left.ExprType()); err != nil {
 		return nil, err
 	}
 	op, err := mapBinOp(b.Op)
@@ -1487,10 +1853,10 @@ func (l *lowerer) lowerUnary(u *UnaryExpr) (ir.Expr, error) {
 		return &ir.UnOp{Op: ir.OpNeg, X: x, T: x.ExprType()}, nil
 	case "NOT":
 		// Logical on BOOL, bitwise complement (of the 64-bit value) on INT.
-		switch x.ExprType().Kind {
-		case ir.TypeBool:
+		switch {
+		case x.ExprType().Kind == ir.TypeBool:
 			return &ir.UnOp{Op: ir.OpNot, X: x, T: ir.BoolT}, nil
-		case ir.TypeInt:
+		case x.ExprType().IsInteger():
 			return &ir.UnOp{Op: ir.OpNot, X: x, T: ir.IntT}, nil
 		}
 		return nil, errNode(u.Operand, fmt.Errorf("NOT requires a BOOL or INT operand, got %s", x.ExprType()))
@@ -1535,6 +1901,9 @@ func mapBinOp(op string) (ir.BinKind, error) {
 }
 
 func resolveBinType(op ir.BinKind, lt, rt *ir.Type) (*ir.Type, error) {
+	if lt.Enum != nil || rt.Enum != nil {
+		return resolveEnumBinType(op, lt, rt)
+	}
 	switch op {
 	case ir.OpAdd, ir.OpSub, ir.OpMul, ir.OpDiv, ir.OpMod:
 		if !lt.IsNumeric() || !rt.IsNumeric() {
@@ -1565,7 +1934,7 @@ func resolveBinType(op ir.BinKind, lt, rt *ir.Type) (*ir.Type, error) {
 		if lt.Kind == ir.TypeBool && rt.Kind == ir.TypeBool {
 			return ir.BoolT, nil
 		}
-		if lt.Kind == ir.TypeInt && rt.Kind == ir.TypeInt {
+		if lt.IsInteger() && rt.IsInteger() {
 			return ir.IntT, nil
 		}
 		return nil, fmt.Errorf("logical op requires BOOL or INT operands")
@@ -1573,7 +1942,7 @@ func resolveBinType(op ir.BinKind, lt, rt *ir.Type) (*ir.Type, error) {
 		if lt.Kind == ir.TypeBool && rt.Kind == ir.TypeBool {
 			return ir.BoolT, nil
 		}
-		if lt.Kind == ir.TypeInt && rt.Kind == ir.TypeInt {
+		if lt.IsInteger() && rt.IsInteger() {
 			return ir.IntT, nil
 		}
 		return nil, fmt.Errorf("XOR requires BOOL or INT operands")
@@ -1596,7 +1965,7 @@ func coerce(e ir.Expr, want *ir.Type) ir.Expr {
 	if want == nil || e.ExprType().Equal(want) {
 		return e
 	}
-	if want.Kind == ir.TypeReal && e.ExprType().Kind == ir.TypeInt {
+	if want.Kind == ir.TypeReal && e.ExprType().IsInteger() {
 		return intToReal(e)
 	}
 	return e
@@ -1606,7 +1975,7 @@ func assignable(lhs, rhs *ir.Type) bool {
 	if lhs.Equal(rhs) {
 		return true
 	}
-	if lhs.Kind == ir.TypeReal && rhs.Kind == ir.TypeInt {
+	if lhs.Kind == ir.TypeReal && rhs.IsInteger() {
 		return true
 	}
 	return false

@@ -179,7 +179,7 @@ plain declarations. `naut check` stayed clean through every one of them.
 |---|---|---|---|
 | timed qualifiers `L` `D` `SD` `DS` `SL` | rejected, clear error (#12) | `N` + an ACTION on `Step.T`: D → `X := S.X AND S.T >= t;` (the final scan closes it), L → `X := S.X AND S.T < t;`, a step watchdog → see supervision | FIXED (#235): all five compile; reference-timed/ uses D, SD, L [#190](https://github.com/joyautomation/nautilus/issues/190) |
 | SFCError / step maximum time | none | an ACTION `Supervise` (N on each supervised step) sets `FaultCode` from `Step.T`, an abort transition per supervised step, `P1 RecordFault` on the abort step | FIXED (#235): `STEP Fill (MAXTIME := T#60S, ERROR := FillOverrun):`, `Fill.ERR`, an alarm on the tag; reference-timed/ [#191](https://github.com/joyautomation/nautilus/issues/191) |
-| enumerated types (DUT) | not supported, opaque error (#4) | `VAR CONSTANT ST_IDLE : INT := 0; …` in the POU, an INT tag (`StateNo`), one ACTION associated from every step | documented (structured-text.mdx "Not supported"); the error is #178 |
+| enumerated types (DUT) | not supported, opaque error (#4) | `VAR CONSTANT ST_IDLE : INT := 0; …` in the POU, an INT tag (`StateNo`), one ACTION associated from every step | FIXED [#238](https://github.com/joyautomation/nautilus/issues/238) — PR #242: enumerations compile, show by name live; row variant-enum-state runs the washer with `StateNo : E_WashState` |
 | GVL, GVL constants | a `gvl.st` (#175) or tags in `nautilus.yaml` / `tag-files:`, in scope in every POU (#177); no global constants yet (#2) | `tags/washer.yaml` with `init:`/`type:`; `VAR CONSTANT` per POU | #175 (fixed), #176, #177 (fixed) |
 | numeric transition priority | declaration order, drawn left to right | declare the abort first — and, since "+ alt branch" appends last, move it by text (#7) | declined by design (docs/design/sfc.md §7); the reorder gap is #181 |
 | transition condition in LD/FBD | ST expression only | write it in ST; a complex one becomes a BOOL computed in an ACTION or another task | declined (test plan §6.4 "—") |
@@ -194,9 +194,9 @@ plain declarations. `naut check` stayed clean through every one of them.
 | # | kind | label | issue |
 |---|---|---|---|
 | 1 | bug | editor:ext | #175 |
-| 2 | gap | editor:ext | #176 |
+| 2 | gap | editor:ext | #176 — FIXED (PR #242): habit-gvl-var-global-constant PASS |
 | 3 | papercut | editor:ext | #177 |
-| 4 | bug | editor:ext | #178 |
+| 4 | bug | editor:ext | #178 — FIXED (PR #242): tokens named in words; the enum compiles (habit-enum-type PASS, variant-enum-state) |
 | 5 | papercut | editor:ext | #179 |
 | 6 | gap | editor:sfc | #180 |
 | 7 | gap | editor:sfc | #181 |

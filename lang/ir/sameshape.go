@@ -12,6 +12,20 @@ func SameShape(a, b *Type) bool {
 	case a == nil || b == nil || a.Kind != b.Kind:
 		return false
 	}
+	if (a.Enum == nil) != (b.Enum == nil) {
+		return false
+	}
+	if a.Enum != nil {
+		if !SameName(a.Enum.Name, b.Enum.Name) || len(a.Enum.Members) != len(b.Enum.Members) {
+			return false
+		}
+		for i := range a.Enum.Members {
+			if !SameName(a.Enum.Members[i].Name, b.Enum.Members[i].Name) || a.Enum.Members[i].Value != b.Enum.Members[i].Value {
+				return false
+			}
+		}
+		return true
+	}
 	switch a.Kind {
 	case TypeStruct:
 		if a.Struct == nil || b.Struct == nil {

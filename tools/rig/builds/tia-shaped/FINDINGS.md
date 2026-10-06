@@ -17,17 +17,17 @@ labelled `ux:<kind>`, `editor:fbd|ext`, `parity:tia`, titled
 
 | # | kind | finding | status |
 |---|---|---|---|
-| 1 | bug | CASE labels that are named constants silently miscompile | OPEN #196 |
+| 1 | bug | CASE labels that are named constants silently miscompile | FIXED #196 (PR #242: reference/dosing.st now names its states) |
 | 2 | bug | identifiers are case-sensitive; a project FUNCTION is unreachable from FBD | FIXED #197 (PR #241) |
-| 3 | bug | SCL `#` prefix: an error on the RHS, silently dropped on a target | OPEN #198 |
+| 3 | bug | SCL `#` prefix: an error on the RHS, silently dropped on a target | FIXED #198 (PR #242: one message everywhere; row 05-diag-hash-prefix-target PASS) |
 | 4 | papercut | one library error is reported on every file at 1:1 | FIXED #199 (PR #243: row 05-library-error-once) |
 | 5 | papercut | tag `type: INT` refused with "no TYPE INT is declared" | FIXED #200 (PR #243: every tag in the table carries its type; row 03 now PASS) |
 | 6 | gap | TIME members of a UDT tag cannot be seeded by `init:` | FIXED #201 (PR #243: the reference's recipe has `SettleTime : TIME`, seeded `T#2S`) |
-| 7 | gap | `REGION … END_REGION` unsupported; reported as an undeclared identifier | OPEN #202 |
-| 8 | gap | `VAR_TEMP` keeps its value between calls | OPEN #203 |
-| 9 | gap | no signature help on `LIMIT(` | OPEN, PR #168 |
+| 7 | gap | `REGION … END_REGION` unsupported; reported as an undeclared identifier | FIXED #202 (PR #242: reference uses two regions; rows 05-region-outline, 05-region-folds) |
+| 8 | gap | `VAR_TEMP` keeps its value between calls | FIXED #203 (PR #242: the `justDone := FALSE;` workaround is gone) |
+| 9 | gap | no signature help on `LIMIT(` | FIXED (PR #168); row 04-signature-help-LIMIT PASS |
 | 10 | gap | no document symbols (Ctrl+Shift+O, Outline) | OPEN, PR #172 |
-| 11 | gap | no Find All References (Shift+F12) | OPEN, PR #171 |
+| 11 | gap | no Find All References (Shift+F12) | FIXED (PR #171); row 05-find-references PASS |
 | 12 | papercut | block → wire's function field never suggests project FUNCTIONs | FIXED #204 (PR #236) |
 | 13 | gap | FB picker writes every input as `_`, an error even with a default | FIXED #205 (PR #236) |
 | 14 | gap | no EN/ENO on standard blocks | FIXED #206 (PR #236) |

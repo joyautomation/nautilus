@@ -1,0 +1,14 @@
+PROGRAM PartFbd
+VAR_EXTERNAL
+    Alarms     : DINT;
+    fbd_Bit3   : BOOL;
+    fbd_Byte1  : INT;
+    fbd_Packed : WORD;
+END_VAR
+FBD
+  fbd_Bit3 := Alarms.%X3
+  fbd_Byte1 := Alarms.%B1
+  fbd_Packed.%X0 := Alarms.%X3
+  fbd_Packed.%X15 := Alarms.%X31
+END_FBD
+END_PROGRAM

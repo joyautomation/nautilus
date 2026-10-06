@@ -91,6 +91,14 @@ resolve identically: both name a tag in the store. A declared initial value
 start in the source: `:=` on a `VAR_GLOBAL` or `VAR_EXTERNAL` is a compile
 error, and the tag's `init:` in the manifest sets it instead.
 
+`VAR_TEMP` is scratch for one execution: it starts every scan of a program,
+and every call of a function block or function, at its initial value (or
+zero), never at what the last one left. `VAR CONSTANT` is a named value,
+folded at compile time; assigning one is a compile error. `VAR_GLOBAL
+CONSTANT` in a library file declares project constants that every POU sees
+(a Codesys GVL of constants); a constant is not a tag. The [language
+reference](/reference/functions/#constants) has the details.
+
 A `VAR_GLOBAL` block may also stand on its own at the top of a library file —
 a Codesys-style `gvl.st`. It declares those globals for every program; one the
 manifest does not declare becomes a `state` tag starting at the zero of its
@@ -125,9 +133,12 @@ kinds share one 64-bit representation, so a declared width documents intent
 without narrowing. `TIME` counts milliseconds.
 
 `ARRAY[lo..hi] OF T` takes several comma-separated dimensions and any element
-type, including a UDT or a function block. Bounds are integer literals.
-`TYPE … END_TYPE` declares a `STRUCT` or an alias for another type. An initial
-value after `:=` must be a single literal constant. A struct-typed
+type, including a UDT or a function block. Bounds are integer constants: a
+literal, a named constant, or arithmetic on them (`ARRAY[1..N_TANKS]`).
+`TYPE … END_TYPE` declares a `STRUCT`, an alias for another type, or an
+[enumeration](/reference/functions/#enumerations): `TYPE Mode : (Idle, Run :=
+10, Fault) := Idle; END_TYPE`, used as `Mode#Run` or plain `Run`, shown by
+name in live values. An initial value after `:=` is a constant expression. A struct-typed
 `VAR_EXTERNAL` tag is written one field at a time (`P101.Running := TRUE`)
 or whole, and each field write reaches the tag store as a member write.
 
@@ -146,8 +157,11 @@ across a restart is configured per tag on the retain store.
 `IF … ELSIF … ELSE … END_IF`, `CASE … OF … ELSE … END_CASE`,
 `FOR … TO … BY … DO … END_FOR`, `WHILE … DO … END_WHILE`,
 `REPEAT … UNTIL … END_REPEAT`, plus `EXIT`, `CONTINUE`, and `RETURN`.
-A `CASE` label is a constant, a comma list, or an inclusive `lo..hi` range.
-Assignment is `:=`, equality is `=`, and inequality is `<>`.
+A `CASE` label is a constant (a literal, a named constant, or an enumeration
+member), a comma list, or an inclusive `lo..hi` range; two labels with the same
+value are a compile error. Assignment is `:=`, equality is `=`, and inequality
+is `<>`. `REGION name … END_REGION` groups statements for folding and the
+Outline, as in TIA SCL; it opens no scope.
 
 ```iecst
 CASE Mode OF
@@ -295,7 +309,7 @@ pull --check` fails a build when a controller holds edits nobody pulled back.
 - **Pointers and references.** No `REF_TO`, no dereference operator.
 - **`VAR_ACCESS`, `CONFIGURATION`, `RESOURCE`, and `TASK` declarations.**
   Tasks come from `nautilus.yaml` or the Go composition.
-- **Enumerated and subrange types.** `TYPE` declares a `STRUCT` or an alias.
+- **Subrange types.** `TYPE` declares a `STRUCT`, an enumeration, or an alias.
 - **Date and time-of-day.** `DATE`, `TOD`, `TIME_OF_DAY`, `DT`, and
   `DATE_AND_TIME` are rejected as unknown scalar types, and their literals do
   not evaluate. Durations are fine.
@@ -304,10 +318,8 @@ pull --check` fails a build when a controller holds edits nobody pulled back.
   any length.
 - **Aggregate initializers.** `:= [1, 2, 3]` in a declaration is a parse error;
   assign the elements in the body.
-- **`VAR_TEMP`.** It parses as an ordinary local, kept between scans rather than
-  cleared per invocation.
-- **`CONSTANT` enforcement.** `VAR CONSTANT` declares and initializes; assigning
-  to one is not an error.
+- **SCL's `#` local prefix.** `#state` is rejected with a message saying to drop
+  the `#`.
 
 ## See also
 

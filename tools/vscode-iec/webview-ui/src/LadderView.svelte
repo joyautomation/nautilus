@@ -264,6 +264,8 @@
 	const undeclared = $derived.by(() => {
 		const out: Undeclared[] = [];
 		const tags = new Map((model.tags ?? []).map((t) => [t.name.toLowerCase(), t]));
+		// Project constants and enumeration members are in scope as they are.
+		const known = new Set((model.known ?? []).map((n) => n.toLowerCase()));
 		const pous = [...new Set((model.rungs ?? []).map((r) => r.pou ?? ''))];
 		for (const pou of pous) {
 			const rungsIn = (model.rungs ?? []).filter((r) => (r.pou ?? '') === pou);
@@ -300,7 +302,7 @@
 			}
 			const used = useTypes(rungsIn, model.fbTypes ?? [], vars);
 			for (const [l, name] of refs) {
-				if (declared.has(l) || insts.has(l) || l === 'true' || l === 'false') continue;
+				if (declared.has(l) || insts.has(l) || known.has(l) || l === 'true' || l === 'false') continue;
 				const tag = pou ? undefined : tags.get(l);
 				// A manifest tag is in scope in the PROGRAM without a
 				// declaration (#177/#210): nothing to offer when its type is

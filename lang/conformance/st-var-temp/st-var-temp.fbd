@@ -1,0 +1,20 @@
+PROGRAM TempFbd
+(* Two networks, each calling the one instance; networks run in order. *)
+VAR_EXTERNAL
+    fbd_Fresh1 : INT;
+    fbd_Fresh2 : INT;
+    fbd_Total  : INT;
+END_VAR
+VAR
+    s : Scratch;
+END_VAR
+FBD
+  NETWORK 'first call'
+  s(Add := 1)
+  fbd_Fresh1 := s.Fresh
+  NETWORK 'second call'
+  s(Add := 2)
+  fbd_Fresh2 := s.Fresh
+  fbd_Total := s.Total
+END_FBD
+END_PROGRAM

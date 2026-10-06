@@ -355,3 +355,43 @@ END_FUNCTION_BLOCK
 		t.Errorf("RecipeA.Count = %+v, want 2", v.Fld[0])
 	}
 }
+
+// #200 with #238: a tag typed by a project enumeration seeds from a member
+// name, is in scope by that type, and an operator's write of a member name
+// or its integer lands as the named value.
+func TestEnumTypedTag(t *testing.T) {
+	rt := loadRuntime(t, map[string]string{
+		"nautilus.yaml": "tasks:\n  - program: main.st\ntags:\n  - { name: Mode, role: setpoint, type: E_Mode, init: Run }\n  - { name: Running, role: output, type: BOOL }\n",
+		"types.st":      "TYPE E_Mode : (Idle, Run := 10, Fault); END_TYPE\n",
+		"main.st":       "PROGRAM Main\nRunning := Mode = E_Mode#Run;\nEND_PROGRAM\n",
+	})
+	if v, _ := rt.Tags().ReadGlobal("Mode"); v.I != 10 || v.S != "Run" {
+		t.Errorf("Mode seeded %+v, want Run (10)", v)
+	}
+	rt.Scan()
+	if v, _ := rt.Tags().ReadGlobal("Running"); !v.B {
+		t.Error("Running should be TRUE")
+	}
+	if err := rt.Tags().SetPath("Mode", "Fault"); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := rt.Tags().ReadGlobal("Mode"); v.S != "Fault" {
+		t.Errorf("after writing \"Fault\": %+v", v)
+	}
+	if err := rt.Tags().SetPath("Mode", 10.0); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := rt.Tags().ReadGlobal("Mode"); v.S != "Run" || v.I != 10 {
+		t.Errorf("after writing 10: %+v, want Run", v)
+	}
+	if err := rt.Tags().SetPath("Mode", "Walk"); err == nil || !strings.Contains(err.Error(), "not a member of E_Mode") {
+		t.Errorf("a non-member write: %v", err)
+	}
+	if err := newRuntimeErr(t, map[string]string{
+		"nautilus.yaml": "tasks:\n  - program: main.st\ntags:\n  - { name: Mode, role: setpoint, type: E_Mode, init: Walk }\n",
+		"types.st":      "TYPE E_Mode : (Idle, Run := 10, Fault); END_TYPE\n",
+		"main.st":       "PROGRAM Main\nEND_PROGRAM\n",
+	}); err == nil || !strings.Contains(err.Error(), `"Walk" is not a member of E_Mode`) {
+		t.Errorf("init: Walk → %v", err)
+	}
+}

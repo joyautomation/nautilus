@@ -370,7 +370,7 @@ END_VAR
 EOF
 }
 row paste-gvl-constant-habit PASS paste_gvl_const_habit
-row habit-gvl-var-global-constant XFAIL habit_check 'VAR_GLOBAL|init'
+row habit-gvl-var-global-constant PASS habit_check 'VAR_GLOBAL|init|error'
 rm -f "$PROJ/gvl.st"
 
 # the Nautilus way: the tag list in its own file (tag-files:), in scope in
@@ -411,7 +411,7 @@ END_TYPE
 EOF
 }
 row paste-enum-habit PASS paste_enum_habit
-row habit-enum-type XFAIL habit_check 'types.st|enum|expected'
+row habit-enum-type PASS habit_check 'types.st|enum|expected|error'
 rm -f "$PROJ/lib/types.st"
 
 row paste-library-fb PASS paste_file lib/reverser.st
@@ -561,6 +561,31 @@ compare_order() {
   return "${PIPESTATUS[0]}"
 }
 row habit-assoc-typed-order PASS compare_order
+
+# The state code as a real enumeration (#238), the way a Codesys programmer
+# writes it: in a scratch copy of the built project, lib/types.st declares
+# E_WashState, the StateNo tag is typed with it (type: in the tag table), and TrackState assigns members
+# (qualified: the steps are called Idle, Fill … too, and a step shadows an
+# unqualified member). The suite's numeric expectations (StateNo: 1) still
+# hold — an enumeration's value is its integer — and naut check is clean.
+variant_enum() {
+  local tmp out rc=0; tmp=$(mktemp -d)
+  cp -r "$PROJ/." "$tmp/"
+  mkdir -p "$tmp/lib"
+  printf '%s\n' '(* DUT: the wash cycle states *)' \
+    'TYPE E_WashState : (IDLE := 0, FILL := 1, WASH := 2, DRAIN := 3, SPIN := 4, ABORTED := 9);' 'END_TYPE' >"$tmp/lib/types.st"
+  # StateNo's type is the tag table's (no program declares it, #177)
+  sed -i -E 's/(name: StateNo, +role: state, )type: INT,/\1type: E_WashState,/' "$tmp/tags/washer.yaml"
+  grep -q 'type: E_WashState' "$tmp/tags/washer.yaml" || { echo "StateNo's type: did not change" >&2; rc=1; }
+  sed -i -E 's/StateNo := ST_([A-Z]+);/StateNo := E_WashState#\1;/' "$tmp/washer.sfc"
+  grep -c 'E_WashState#' "$tmp/washer.sfc" | sed 's/^/members assigned: /'
+  out=$(cd "$tmp" && naut check . 2>&1) || rc=1
+  printf '%s\n' "$out" >"$OUT_DIR/built/variant-enum-check.txt"; tail -1 <<<"$out"
+  out=$(cd "$tmp" && naut test . 2>&1) || rc=1
+  printf '%s\n' "$out" >"$OUT_DIR/built/variant-enum-test.txt"; tail -1 <<<"$out"
+  rm -rf "$tmp"; return $rc
+}
+row variant-enum-state PASS variant_enum
 
 # the washer as a Codesys programmer writes it first — D / SD / L and step
 # MAXTIME supervision with an overrun alarm (#190, #191) — checked and run

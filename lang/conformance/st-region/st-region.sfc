@@ -1,0 +1,32 @@
+PROGRAM RegionSfc
+VAR_EXTERNAL
+    In       : INT;
+    sfc_Out  : INT;
+    sfc_Copy : INT;
+END_VAR
+VAR
+    Region : INT;
+END_VAR
+SFC
+
+  INITIAL_STEP Busy:
+    N Work;
+  END_STEP
+
+  ACTION Work:
+    REGION Scale the input
+        sfc_Out := In * 2;
+        REGION Clamp
+            IF sfc_Out > 100 THEN
+                sfc_Out := 100;
+            END_IF;
+        END_REGION
+    END_REGION
+    REGION
+        Region := sfc_Out;
+        sfc_Copy := Region + 1;
+    END_REGION;
+  END_ACTION
+
+END_SFC
+END_PROGRAM

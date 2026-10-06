@@ -54,6 +54,19 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   `VAR_GLOBAL` block — declares its globals for every program instead of
   breaking each one with "undeclared identifier <ProgramName>". (#175)
 
+- **Enumerated types show their member names live.** A variable or tag of
+  an enumeration (`TYPE Mode : (Idle, Run, Fault); END_TYPE`) shows `Run`,
+  not `1`, in the inline live values, the Live Values panel and the
+  acceptance test results; completion after `Mode#` lists the members, and
+  the project's constants and members join the completion list. Needs a
+  `naut` newer than 0.15.0. (#238)
+
+- **`REGION … END_REGION` folds and shows in the Outline.** TIA SCL's
+  regions group statements: each region is a fold range and an Outline
+  entry (nested regions under theirs, under their POU), and `REGION` /
+  `END_REGION` are highlighted. The Outline needs a `naut` newer than
+  0.15.0. (#202)
+
 - **FBD networks.** A `.fbd` body can be divided into numbered networks
   with titles, the way TIA Portal and CODESYS lay out an FBD block: a
   `NETWORK 'title'` line starts one, and networks execute in order. The

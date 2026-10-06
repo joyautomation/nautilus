@@ -160,17 +160,24 @@ test('Ladder: a typed manifest tag needs no declare offer; an untyped one still 
 		const model = {
 			name: 'P',
 			vars: [],
-			rungs: [{ name: 'r1', line: 3, endLine: 4, elements: [{ kind: 'contact', ref: 'StartPB' }, { kind: 'contact', ref: 'Local1' }], coils: [{ kind: 'coil', ref: 'Motor' }] }],
+			rungs: [
+				{ name: 'r1', line: 3, endLine: 4, elements: [{ kind: 'contact', ref: 'StartPB' }, { kind: 'contact', ref: 'Local1' }], coils: [{ kind: 'coil', ref: 'Motor' }] },
+				{ name: 'r2', line: 5, endLine: 6, elements: [{ kind: 'fn', fn: 'EQ', args: 'State, Idle' }, { kind: 'fn', fn: 'GT', args: 'Count, MAX_COUNT' }], coils: [] }
+			],
 			tags: [
 				{ name: 'StartPB', type: 'BOOL', role: 'input' },
 				{ name: 'Motor', role: 'output' }
-			]
+			],
+			// a project constant and an enumeration member: in scope, never offered
+			known: ['MAX_COUNT', 'Idle']
 		};
 		await deliver(b, { type: 'ldModel', model, title: 'main.ld' });
 		const title = await b.eval(`document.querySelector('.palette button.declare')?.getAttribute('title') ?? ''`);
 		assert.doesNotMatch(title, /StartPB/, 'a typed manifest tag is in scope without a declaration');
 		assert.match(title, /Motor/, 'an untyped tag still needs a type from somewhere');
 		assert.match(title, /Local1/);
+		assert.doesNotMatch(title, /Idle|MAX_COUNT/, 'constants and enumeration members need no declaration');
+		assert.match(title, /State/);
 	});
 });
 

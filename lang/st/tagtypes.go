@@ -17,6 +17,14 @@ import (
 // lowering any POU. The result keys each TYPE by its declared spelling.
 func Types(prog *Program) (map[string]*ir.Type, error) {
 	l := newLowerer(prog, nil)
+	// The same sequence LowerWithOpts runs: shells and enumerations, the
+	// project constants (an array bound may name one), then the rest.
+	if err := l.collectTypeShells(); err != nil {
+		return nil, err
+	}
+	if err := l.collectGlobalConsts(); err != nil {
+		return nil, err
+	}
 	if err := l.collectTypes(); err != nil {
 		return nil, err
 	}

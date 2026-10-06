@@ -184,14 +184,37 @@ func (m *MemberRef) lvalueNode()     {}
 // BitRef is one bit of an integer, addressable as a BOOL: Word.3 reads
 // bit 3; Word.3 := TRUE sets it (a read-modify-write of the word). The
 // Logix spelling, which IEC 61131-3 ed. 3 writes Word.%X3.
+//
+// With Width > 1 it is the IEC partial access to a wider part of the
+// integer: w.%B1 is the 8 bits starting at bit 8 (Bit = 8, Width = 8, T =
+// BYTE), w.%W0 the low 16. It reads as an unsigned integer of that width
+// and writes back only those bits.
 type BitRef struct {
 	Object LValue // the integer, addressable so the bit can be written
-	Bit    int
+	Bit    int    // the lowest bit addressed
+	Width  int    // 0 or 1: a single bit (BOOL); else the part's width in bits
+	T      *Type  // Width > 1: the part's type (BYTE, WORD, DWORD)
 }
 
-func (b *BitRef) ExprType() *Type { return BoolT }
-func (b *BitRef) exprNode()       {}
-func (b *BitRef) lvalueNode()     {}
+// mask is the part's value mask, unshifted.
+func (b *BitRef) mask() int64 {
+	if b.Width <= 1 {
+		return 1
+	}
+	if b.Width >= 64 {
+		return -1
+	}
+	return int64(1)<<uint(b.Width) - 1
+}
+
+func (b *BitRef) ExprType() *Type {
+	if b.Width > 1 && b.T != nil {
+		return b.T
+	}
+	return BoolT
+}
+func (b *BitRef) exprNode()   {}
+func (b *BitRef) lvalueNode() {}
 
 // Call invokes a built-in stateless function. Fn is resolved at
 // lowering time (so the VM doesn't pay for a map lookup per scan)

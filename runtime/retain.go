@@ -276,7 +276,7 @@ func (r *Runtime) retainState() retain.State {
 			if st.Tags == nil {
 				st.Tags = map[string]any{}
 			}
-			st.Tags[name] = plain(v)
+			st.Tags[name] = plainNumeric(v) // an enumeration as its integer: it reloads as a number
 		}
 	}
 	record := func(task string, p *Program) {

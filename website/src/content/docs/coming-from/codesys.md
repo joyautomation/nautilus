@@ -19,8 +19,10 @@ means pursued in the parity batch and **not available yet**.
 | Task configuration | `tasks:` in `nautilus.yaml` | Today |
 | GVL (global variable list) | tags in `nautilus.yaml` or `tags/*.yaml`, in scope in every program without a declaration (`VAR_EXTERNAL` stays legal); a function block names the ones it uses in its own `VAR_EXTERNAL` | Today, [#177](https://github.com/joyautomation/nautilus/issues/177) |
 | A GVL file of only `VAR_GLOBAL` | the same: a `gvl.st` with a file-level `VAR_GLOBAL` block declares globals for every program; one the manifest does not declare is a `state` tag starting at zero. An initial value goes in the manifest's `init:` | Today, [#175](https://github.com/joyautomation/nautilus/issues/175) |
-| `VAR_GLOBAL CONSTANT` shared by the project | rejected as a tag's initial value today | Planned, [#176](https://github.com/joyautomation/nautilus/issues/176) |
-| Enumerations (`TYPE E : (A, B, C)`) | not supported: `TYPE` declares a `STRUCT` or an alias. Use named `INT` constants. A parse error on an enum shows an internal token number today ([#178](https://github.com/joyautomation/nautilus/issues/178)) | Not supported today |
+| `VAR_GLOBAL CONSTANT` shared by the project | the same, in a `lib/` file: every POU sees the constants, folded at compile time; they are not tags | Today, [#176](https://github.com/joyautomation/nautilus/issues/176) |
+| Enumerations (`TYPE E : (A, B, C)`, `(A := 1, …)`) | the same: `E#A` or plain `A`, `CASE` labels, comparisons, `TO_INT` / `TO_E`; live values show the member name | Today, [#238](https://github.com/joyautomation/nautilus/issues/238) |
+| `VAR_TEMP` | the same: reset on every call | Today, [#203](https://github.com/joyautomation/nautilus/issues/203) |
+| `CASE` on named constants | the same | Today, [#196](https://github.com/joyautomation/nautilus/issues/196) |
 | `STRUCT`, arrays, `FUNCTION_BLOCK` instances | the same | Today |
 | `VAR_IN_OUT` | the same | Today |
 | Library manager, `.library` files | not available. A project's reusable blocks live in `lib/`; share them between projects by copying files or vendoring with git | Declined for now, [#193](https://github.com/joyautomation/nautilus/issues/193) |

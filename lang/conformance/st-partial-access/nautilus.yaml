@@ -1,0 +1,36 @@
+# st-partial-access — IEC 61131-3 partial access to an integer (#222):
+# w.%X3 is bit 3 (a BOOL), w.%B1 the second byte, w.%W0 the low word, read
+# and written, beside the Logix spelling w.3. Bounded by the declared type
+# (a DINT has bits 0..31). ST, LD (a contact and a coil on a bit) and FBD.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/st-partial-access'
+#   go run ./cmd/naut test lang/conformance/st-partial-access
+name: st-partial-access
+
+tasks:
+  - program: st-partial-access.st   # the first task is always "main"; its prefix is still st_
+    scan: 10ms
+  - name: ld
+    program: st-partial-access.ld
+    scan: 10ms
+  - name: fbd
+    program: st-partial-access.fbd
+    scan: 10ms
+
+tags:
+  # Shared input: an alarm word, as a PLC packs one.
+  - { name: Alarms, role: state, init: 0, desc: "Alarm word (DINT)" }
+
+  # Outputs, one set per language.
+  - { name: st_Bit3,   role: state, init: false }
+  - { name: st_Bit3L,  role: state, init: false }
+  - { name: st_Byte1,  role: state, init: 0 }
+  - { name: st_Packed, role: state, init: 0 }
+  - { name: ld_Bit3,   role: state, init: false }
+  - { name: ld_Packed, role: state, init: 0 }
+  - { name: fbd_Bit3,  role: state, init: false }
+  - { name: fbd_Byte1, role: state, init: 0 }
+  - { name: fbd_Packed, role: state, init: 0 }
+
+driver:
+  type: memory

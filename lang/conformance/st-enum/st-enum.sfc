@@ -1,0 +1,46 @@
+PROGRAM EnumSfc
+(* The steps track the machine; the transitions and actions read and write
+   the enumeration. *)
+VAR_EXTERNAL
+    Start     : BOOL;
+    Full      : BOOL;
+    sfc_State : WashState;
+    sfc_Code  : INT;
+    sfc_Valve : Valve;
+END_VAR
+SFC
+
+  INITIAL_STEP Waiting:
+    N Show;
+  END_STEP
+  STEP Filling:
+    N Show;
+  END_STEP
+  STEP Washing:
+    N Show;
+  END_STEP
+  STEP Draining:
+    N Show;
+  END_STEP
+
+  TRANSITION t_fill  FROM Waiting  TO Filling  := sfc_State = Idle AND Start;
+  END_TRANSITION
+  TRANSITION t_wash  FROM Filling  TO Washing  := sfc_State = WashState#Fill AND Full;
+  END_TRANSITION
+  TRANSITION t_drain FROM Washing  TO Draining := sfc_State = Wash;
+  END_TRANSITION
+  TRANSITION t_idle  FROM Draining TO Waiting  := sfc_State = Drain AND NOT Start;
+  END_TRANSITION
+
+  ACTION Show:
+    IF Waiting.X THEN sfc_State := Idle;
+    ELSIF Filling.X THEN sfc_State := WashState#Fill;
+    ELSIF Washing.X THEN sfc_State := Wash;
+    ELSE sfc_State := Drain;
+    END_IF;
+    IF sfc_State = Fill THEN sfc_Valve := Open; ELSE sfc_Valve := Closed; END_IF;
+    sfc_Code := TO_INT(sfc_State);
+  END_ACTION
+
+END_SFC
+END_PROGRAM

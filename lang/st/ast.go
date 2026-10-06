@@ -1,5 +1,7 @@
 package st
 
+import "strings"
+
 // Pos is a 1-based source location captured by the parser. Zero values
 // mean "unknown" (e.g. synthesized nodes); diagnostic emitters fall back
 // to the program's first line in that case.
@@ -45,6 +47,12 @@ type Program struct {
 	FBDecls    []*FunctionBlockDecl
 	FuncDecls  []*FunctionDecl
 	TopKeyword string
+	// GlobalConsts are file-level VAR_GLOBAL CONSTANT blocks — a Codesys
+	// GVL of constants in a library file (#176). They are not tags: each
+	// declaration is a named constant every POU in the composed source sees,
+	// folded at compile time. A VAR_GLOBAL CONSTANT inside a POU stays in
+	// that POU's VarBlocks and means the same thing there.
+	GlobalConsts []VarBlock
 }
 
 func (p *Program) nodeType() string { return "Program" }
@@ -115,7 +123,10 @@ func (v VarDecl) NodePos() Pos { return v.Pos }
 type TypeDecl struct {
 	Name string
 	Type TypeExpr
-	Pos  Pos
+	// Initial is the type's declared initial value (`TYPE Mode : (Idle,
+	// Run) := Run; END_TYPE`); nil when none. Only an enumeration takes one.
+	Initial Expression
+	Pos     Pos
 }
 
 func (t *TypeDecl) nodeType() string { return "TypeDecl" }
@@ -182,6 +193,33 @@ type ArrayDim struct {
 func (d ArrayDim) String() string {
 	// Best-effort pretty-print: only literal bounds render readably here.
 	return exprShort(d.Lo) + ".." + exprShort(d.Hi)
+}
+
+// EnumType is an enumerated type body: (Idle, Run := 10, Fault) (#238).
+// A member without a value takes the previous member's value plus one (the
+// first, 0). Base is the integer type a Codesys declaration may name after
+// the closing parenthesis (`(A, B) DINT`); every width is an int64 at run
+// time, so it only documents intent.
+type EnumType struct {
+	Members []EnumMemberDecl
+	Base    string
+}
+
+// EnumMemberDecl is one member of an EnumType.
+type EnumMemberDecl struct {
+	Name  string
+	Value Expression // nil: previous + 1
+	Pos   Pos
+}
+
+func (e *EnumType) nodeType() string { return "EnumType" }
+func (e *EnumType) typeExprNode()    {}
+func (e *EnumType) String() string {
+	names := make([]string, len(e.Members))
+	for i, m := range e.Members {
+		names[i] = m.Name
+	}
+	return "(" + strings.Join(names, ", ") + ")"
 }
 
 // StructType is an inline STRUCT ... END_STRUCT body.
@@ -486,7 +524,8 @@ func (e *TimeLit) exprNode()        {}
 func (e *TimeLit) NodePos() Pos     { return e.Pos }
 
 // TypedLit is a type-prefixed literal: INT#42, REAL#3.14, BOOL#TRUE, STRING#'x'.
-// TypeName is the prefix as written (uppercased); Inner is the payload literal.
+// TypeName is the prefix: upper-cased for an elementary type (INT#5), as
+// written for a user TYPE (Mode#Run). Inner is the payload literal.
 type TypedLit struct {
 	TypeName string
 	Inner    Expression

@@ -31,6 +31,9 @@ func MigrateFrame(next *Program, prev *Program, prevFrame *Frame) (*Frame, []str
 		if s.Constant {
 			continue // a constant is its declaration: NewFrame already set it
 		}
+		if s.Temp {
+			continue // scratch for one scan: nothing to carry, nothing that "reset"
+		}
 		j, ok := prevByName[strings.ToLower(s.Name)]
 		if !ok {
 			resets = append(resets, s.Name)
@@ -73,6 +76,14 @@ func typesCompatible(a, b *Type) bool {
 		return true
 	case TypeFB:
 		return fbDefsCompatible(a.FB, b.FB)
+	case TypeInt:
+		// An enumeration carries to the same-named enumeration (its members
+		// may have been edited: the integer carries and is renamed by the new
+		// declaration); never to or from a plain integer.
+		if (a.Enum == nil) != (b.Enum == nil) {
+			return false
+		}
+		return a.Enum == nil || strings.EqualFold(a.Enum.Name, b.Enum.Name)
 	}
 	return true
 }
@@ -143,7 +154,7 @@ func carryValue(t *Type, v Value) Value {
 		for i, s := range v.FB.Slots {
 			var st *Type
 			if i < len(all) {
-				if all[i].Constant {
+				if all[i].Constant || all[i].Temp {
 					// A constant is its declaration, not state: take the
 					// new compile's value so an edit to it lands.
 					inst.Slots[i] = all[i].initial()
@@ -155,6 +166,9 @@ func carryValue(t *Type, v Value) Value {
 		}
 		return Value{Kind: TypeFB, FB: inst}
 	default:
+		if t != nil && t.Enum != nil && v.Kind == TypeInt {
+			return t.Enum.Val(v.I) // named by the new declaration
+		}
 		return v // scalars are self-contained
 	}
 }

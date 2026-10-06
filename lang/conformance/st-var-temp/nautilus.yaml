@@ -1,0 +1,45 @@
+# st-var-temp — VAR_TEMP is scratch for one execution (#203): a temp in a
+# FUNCTION_BLOCK starts every CALL at its declared initial value, and a
+# temp in a PROGRAM starts every SCAN there, while VAR keeps its value.
+# Before the fix a temp was an ordinary retained local: the block's Fresh
+# output climbed 101, 102, 103 … where IEC (and TIA's Temp) give 101 on
+# every call. Every language calls the library block twice per scan, so a
+# reset per call and not per scan is visible.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/st-var-temp'
+#   go run ./cmd/naut test lang/conformance/st-var-temp
+name: st-var-temp
+
+tasks:
+  - program: st-var-temp.st   # the first task is always "main"; its prefix is still st_
+    scan: 10ms
+  - name: ld
+    program: st-var-temp.ld
+    scan: 10ms
+  - name: fbd
+    program: st-var-temp.fbd
+    scan: 10ms
+  - name: sfc
+    program: st-var-temp.sfc
+    scan: 10ms
+
+tags:
+  # Outputs, one set per language: the first and second call's Fresh, the
+  # second call's Total.
+  - { name: st_Fresh1,  role: state, init: 0 }
+  - { name: st_Fresh2,  role: state, init: 0 }
+  - { name: st_Total,   role: state, init: 0 }
+  - { name: st_Scan,    role: state, init: 0 }
+  - { name: ld_Fresh1,  role: state, init: 0 }
+  - { name: ld_Fresh2,  role: state, init: 0 }
+  - { name: ld_Total,   role: state, init: 0 }
+  - { name: fbd_Fresh1, role: state, init: 0 }
+  - { name: fbd_Fresh2, role: state, init: 0 }
+  - { name: fbd_Total,  role: state, init: 0 }
+  - { name: sfc_Fresh1, role: state, init: 0 }
+  - { name: sfc_Fresh2, role: state, init: 0 }
+  - { name: sfc_Total,  role: state, init: 0 }
+  - { name: sfc_Scan,   role: state, init: 0 }
+
+driver:
+  type: memory

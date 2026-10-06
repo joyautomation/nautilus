@@ -74,6 +74,30 @@ func seedFromInit(t *Type, init any, path string) (Value, error) {
 // scalarFromInit converts a leaf init value to t's kind. Accepted Go shapes
 // mirror what a YAML decoder ever hands back for a scalar node.
 func scalarFromInit(t *Type, v any, path string) (Value, error) {
+	if t.Enum != nil {
+		// An enumeration seeds from a member name (`Run`, `Mode#Run`) or a
+		// member's integer, and carries the member's name like any value
+		// of the type does.
+		if s, ok := v.(string); ok {
+			member := s
+			if _, after, qualified := strings.Cut(s, "#"); qualified {
+				member = after
+			}
+			m, ok := t.Enum.Member(member)
+			if !ok {
+				return Value{}, fmt.Errorf("%s: %q is not a member of %s", path, s, t.Enum.Name)
+			}
+			return t.Enum.Val(m.Value), nil
+		}
+		i, ok := toInt(v)
+		if !ok {
+			return Value{}, fmt.Errorf("%s: want a member of %s, got %s", path, t.Enum.Name, describeKind(v))
+		}
+		if t.Enum.NameOf(i) == "" {
+			return Value{}, fmt.Errorf("%s: %d is no member of %s", path, i, t.Enum.Name)
+		}
+		return t.Enum.Val(i), nil
+	}
 	switch t.Kind {
 	case TypeBool:
 		b, ok := v.(bool)
@@ -88,9 +112,25 @@ func scalarFromInit(t *Type, v any, path string) (Value, error) {
 		}
 		return RealVal(f), nil
 	case TypeInt:
+		if t.Enum != nil {
+			// An enumeration seeds by member name (init: Run) or by its
+			// integer (init: 1), and is stored named either way.
+			if name, ok := v.(string); ok {
+				m, found := t.Enum.Member(name)
+				if !found {
+					return Value{}, fmt.Errorf("%s: %q is not a member of %s (%s)", path, name, t.Enum.Name, enumNames(t.Enum))
+				}
+				return t.Enum.Val(m.Value), nil
+			}
+			i, ok := toInt(v)
+			if !ok {
+				return Value{}, fmt.Errorf("%s: want a member of %s (%s), got %s", path, t.Enum.Name, enumNames(t.Enum), describeKind(v))
+			}
+			return t.Enum.Val(i), nil
+		}
 		i, ok := toInt(v)
 		if !ok {
-			return Value{}, fmt.Errorf("%s: want INT, got %s", path, describeKind(v))
+			return Value{}, fmt.Errorf("%s: want %s, got %s", path, t.String(), describeKind(v))
 		}
 		return IntVal(i), nil
 	case TypeString:
@@ -298,4 +338,15 @@ func editDistance(a, b string) int {
 		prev, curr = curr, prev
 	}
 	return prev[len(b)]
+}
+
+func enumNames(d *EnumDef) string {
+	out := ""
+	for i, m := range d.Members {
+		if i > 0 {
+			out += ", "
+		}
+		out += m.Name
+	}
+	return out
 }

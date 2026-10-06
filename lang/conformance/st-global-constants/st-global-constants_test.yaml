@@ -1,0 +1,23 @@
+# Project-wide constants (#176). Each step asserts every language.
+tests:
+  - name: a REAL constant in a comparison
+    steps:
+      - given: { Level: 80.0 }
+        scans: 1
+        expect: { st_High: false, ld_High: false, fbd_High: false, sfc_High: false }
+      - given: { Level: 80.5 }
+        scans: 1
+        expect: { st_High: true, ld_High: true, fbd_High: true, sfc_High: true }
+
+  - name: a TIME constant as a timer preset (T#30ms at a 10ms scan)
+    steps:
+      - given: { Run: true }
+        scans: 3
+        expect: { st_Done: false, ld_Done: false, fbd_Done: false, sfc_Done: false }
+      - scans: 1
+        expect: { st_Done: true, ld_Done: true, fbd_Done: true, sfc_Done: true }
+
+  - name: an INT constant from a constant expression sizes an array and bounds a loop
+    steps:
+      - scans: 1
+        expect: { st_Stages: 6, sfc_Stages: 6 }
