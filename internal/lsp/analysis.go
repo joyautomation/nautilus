@@ -179,6 +179,30 @@ func (a *analysis) index(prog *st.Program, text, prelude string, preludeLines in
 	return lowerProg, preludeLines
 }
 
+// constOrMemberHover renders a project constant (VAR_GLOBAL CONSTANT, from
+// this file or a library) or an enumeration member for hover; "" when word
+// is neither.
+func (a *analysis) constOrMemberHover(word string) string {
+	for _, c := range a.projectConsts {
+		if strings.EqualFold(c.Name, word) {
+			return "```iec-st\n" + c.Name + " : " + c.Datatype + "\n```\n\nVAR_GLOBAL CONSTANT — a project constant"
+		}
+	}
+	var types []string
+	for typeName, members := range a.enumDecl {
+		for _, m := range members {
+			if strings.EqualFold(m, word) {
+				types = append(types, typeName+"#"+m)
+			}
+		}
+	}
+	if len(types) == 0 {
+		return ""
+	}
+	sort.Strings(types)
+	return "```iec-st\n" + strings.Join(types, "\n") + "\n```\n\nenumeration value"
+}
+
 // hashContext detects a completion site just after `Name#`, returning Name:
 // "x := Mode#R|" yields "Mode". A based number (16#) or a TIME literal (T#)
 // is a hash context too — with no enumeration of that name, it offers

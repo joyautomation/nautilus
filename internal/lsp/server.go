@@ -317,6 +317,11 @@ func (s *Server) handleHover(m *message) {
 			})
 			return
 		}
+		// A project constant from a library file, or an enumeration member.
+		if v := doc.an.constOrMemberHover(word); v != "" {
+			s.w.respond(m.ID, Hover{Contents: MarkupContent{Kind: "markdown", Value: v}, Range: &wr})
+			return
+		}
 		s.w.respond(m.ID, nil)
 		return
 	}

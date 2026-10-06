@@ -80,4 +80,11 @@ func TestEnumMemberCompletion(t *testing.T) {
 			t.Errorf("general completion is missing %q", want)
 		}
 	}
+	an := analyze(prog, lib, 2)
+	if h := an.constOrMemberHover("max_n"); !strings.Contains(h, "MAX_N : INT") {
+		t.Errorf("hover on a library constant = %q", h)
+	}
+	if h := an.constOrMemberHover("Fault"); !strings.Contains(h, "Mode#Fault") {
+		t.Errorf("hover on a member = %q", h)
+	}
 }
