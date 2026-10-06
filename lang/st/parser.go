@@ -51,9 +51,28 @@ func (p *Parser) advance() Token {
 func (p *Parser) expect(tt TokenType) (Token, error) {
 	tok := p.advance()
 	if tok.Type != tt {
-		return tok, fmt.Errorf("line %d: expected %d, got %q", tok.Line, tt, tok.Literal)
+		if tok.Type == TokenHash {
+			return tok, p.hashPrefixErr(tok)
+		}
+		return tok, fmt.Errorf("line %d: expected %s, got %s", tok.Line, tt, tok.describe())
 	}
 	return tok, nil
+}
+
+// hashPrefixErr is the one diagnostic for SCL's `#` local prefix (#198),
+// wherever it appears: `#state := 10;` on a target, `x := #state;` in an
+// expression, a `#` in an argument list. hash is the `#` token, already
+// consumed. Nautilus reads IEC 61131-3 Structured Text, where a local is
+// written bare; accepting the prefix is a future `dialect: siemens` choice.
+func (p *Parser) hashPrefixErr(hash Token) error {
+	name := ""
+	if next := p.peek(); next.Type == TokenIdent && next.Line == hash.Line {
+		name = next.Literal
+	}
+	if name != "" {
+		return fmt.Errorf("line %d: the # prefix is Siemens SCL syntax; write the name without it (%s, not #%s)", hash.Line, name, name)
+	}
+	return fmt.Errorf("line %d: the # prefix is Siemens SCL syntax; write the name without it", hash.Line)
 }
 
 func (p *Parser) match(tt TokenType) bool {
@@ -179,7 +198,7 @@ func (p *Parser) parseFunctionBlock() (*FunctionBlockDecl, error) {
 	startTok := p.advance() // FUNCTION_BLOCK
 	nameTok, err := p.expect(TokenIdent)
 	if err != nil {
-		return nil, fmt.Errorf("FUNCTION_BLOCK: expected name, got %q", nameTok.Literal)
+		return nil, fmt.Errorf("line %d: FUNCTION_BLOCK: expected a name, got %s", nameTok.Line, nameTok.describe())
 	}
 	fb := &FunctionBlockDecl{Name: nameTok.Literal, Pos: tokPos(startTok)}
 	for p.peek().Type != TokenEndFunctionBlock && p.peek().Type != TokenEOF {
@@ -221,7 +240,7 @@ func (p *Parser) parseFunctionDecl() (*FunctionDecl, error) {
 	startTok := p.advance() // FUNCTION
 	nameTok, err := p.expect(TokenIdent)
 	if err != nil {
-		return nil, fmt.Errorf("FUNCTION: expected name, got %q", nameTok.Literal)
+		return nil, fmt.Errorf("line %d: FUNCTION: expected a name, got %s", nameTok.Line, nameTok.describe())
 	}
 	if _, err := p.expect(TokenColon); err != nil {
 		return nil, fmt.Errorf("FUNCTION %s: expected ':' before return type", nameTok.Literal)
@@ -508,6 +527,10 @@ func (p *Parser) parseStatement() (Statement, error) {
 		return nil, nil
 	case TokenIdent:
 		return p.parseAssignOrCall()
+	case TokenHash:
+		// `#state := 10;` — this used to fall through to the skip below,
+		// silently dropping the `#` and running the assignment (#198).
+		return nil, p.hashPrefixErr(p.advance())
 	default:
 		p.advance()
 		return nil, nil
@@ -1019,8 +1042,13 @@ func (p *Parser) parsePrimary() (Expression, error) {
 		return p.continuePostfix(expr)
 	case TokenIdent:
 		return p.parsePostfixChain()
+	case TokenHash:
+		return nil, p.hashPrefixErr(p.advance())
 	default:
-		return nil, fmt.Errorf("line %d: unexpected token %q", tok.Line, tok.Literal)
+		if tok.Type == TokenEOF {
+			return nil, fmt.Errorf("line %d: unexpected end of file", tok.Line)
+		}
+		return nil, fmt.Errorf("line %d: unexpected token %s", tok.Line, tok.describe())
 	}
 }
 
