@@ -452,7 +452,7 @@ func (r *testRun) value(name string) (ir.Value, error) {
 		return ir.Value{}, fieldMissErr(root, head, rest)
 	}
 	if prog := r.rt.TaskProgram(head); prog != nil {
-		v, ok := prog.Locals()[rest]
+		v, _, ok := ir.Lookup(prog.Locals(), rest)
 		if !ok {
 			return ir.Value{}, fmt.Errorf("task %s has no local %q", head, rest)
 		}

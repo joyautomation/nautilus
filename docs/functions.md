@@ -201,8 +201,9 @@ case-insensitive (`limit(`, `ton`, `Real`).
 
 - **Shown as declared.** The declaration's spelling is the name: diagnostics,
   hover, completion, the outline, live values, `/api/state` keys, Sparkplug
-  metrics and the L5X writer all show `Level` for a tag declared `Level`,
-  however a program spells it. A tag's spelling is the manifest's (or, for
+  metrics and the L5X tag list all show `Level` for a tag declared `Level`,
+  however a program spells it (an L5X rung keeps the operand as written;
+  Logix folds case too). A tag's spelling is the manifest's (or, for
   a tag no manifest declares, the first program's to bind it). An FBD block
   shows the spelling it was given; a standard function its standard name.
 - **One scope, one name.** Two declarations that differ only in case in the
