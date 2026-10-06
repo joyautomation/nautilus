@@ -62,6 +62,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httputil"
@@ -1134,7 +1135,8 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 	}
 	// Whole-tag scalar write. JSON numbers decode to float64; booleans to
 	// bool; a string is taken only by a tag that already holds a STRING (a
-	// recipe name, a scenario), so a typo cannot turn a REAL into text.
+	// recipe name, a scenario), so a typo cannot turn a REAL into text —
+	// or by an enumerated tag, as one of its members' names (#246).
 	// Anything else is refused here rather than answered 204 for a write
 	// that didn't happen.
 	switch v := req.Value.(type) {
@@ -1142,6 +1144,23 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 		s.rt.Tags().Set(req.Name, req.Value)
 		w.WriteHeader(http.StatusNoContent)
 	case string:
+		if et := s.rt.Tags().EnumType(req.Name); et != nil {
+			member := v
+			if typ, after, qualified := strings.Cut(v, "#"); qualified && ir.SameName(typ, et.Enum.Name) {
+				member = after
+			}
+			if _, ok := et.Enum.Member(member); !ok {
+				names := make([]string, len(et.Enum.Members))
+				for i, m := range et.Enum.Members {
+					names[i] = m.Name
+				}
+				http.Error(w, fmt.Sprintf("%q is not a member of %s (%s)", v, et.Enum.Name, strings.Join(names, ", ")), http.StatusUnprocessableEntity)
+				return
+			}
+			s.rt.Tags().Set(req.Name, member)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if cur, err := s.rt.Tags().ReadGlobal(req.Name); err != nil || cur.Kind != ir.TypeString {
 			http.Error(w, "value must be a number or boolean (a string only to a STRING tag)", http.StatusUnprocessableEntity)
 			return

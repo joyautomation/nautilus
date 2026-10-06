@@ -54,3 +54,10 @@ func (p *Program) localTypes(out map[string]*ir.Type) {
 		}
 	}
 }
+
+// EnumType is the enumerated type of a tag whose type is one (#238), nil
+// otherwise — so the HTTP write path can take a member's name for it, the
+// way it takes text for a STRING.
+func (t *Tags) EnumType(name string) *ir.Type {
+	return t.enums[ir.NameKey(name)]
+}
