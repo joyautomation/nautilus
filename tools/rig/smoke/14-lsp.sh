@@ -25,6 +25,9 @@
 #        same count as a host-side `grep -ow Level` of that file; on the
 #        PROGRAM's local settle, only the PROGRAM's lines — not those of the
 #        FB above it that declares its own settle.
+#   X44/X45  (own block, near the end) a ladder diagram's contact: its
+#        tooltip and second line carry the tag's description; Shift+F12 on
+#        it opens the References view on the tag.
 #   X20  the YAML schemas (package.json yamlValidation → Red Hat YAML): a
 #        bogus key under a task / a test step is flagged; completion in a new
 #        task offers program / scan / name, in a new test step given /
@@ -659,6 +662,94 @@ if miss=$(has_all "$rows" '^Idle ' '^Idle → Fill ' '^Drain → Idle '); then
   pass "X41 Go to Symbol in Editor on batch.sfc, filtered 'Idle': the initial step and its transitions — $(oneline <<<"$rows")" "$png"
 else fail "X41 Go to Symbol in Editor on batch.sfc, filtered 'Idle', is missing$miss — rows: $(oneline <<<"${rows:-<none>}")" "$png"; fi
 xdotool key --clearmodifiers Escape; sleep 0.4
+
+# ┌── X44 / X45: cross-reference and descriptions on a diagram element ──────┐
+# │ (#218, #216 — parity-xref-desc). Self-contained: its own ladder program, │
+# │ committed, opened as the diagram editor; reads the webview over cdp.js   │
+# │ and the References view from the workbench DOM.                          │
+# └──────────────────────────────────────────────────────────────────────────┘
+#   X45  the Start contact's tooltip (<title>) ends with the manifest desc
+#        and the contact draws it as a second line (text.nx-desc); the
+#        local Latched carries its VAR line's comment the same way.
+#   X44  click the Start contact, Shift+F12: the References view opens on
+#        Start — per file the same count as `grep -ow Start`, over every
+#        program that binds it (drain.ld itself, plant.st, batch.sfc) and
+#        nautilus.yaml; the SealIn FB's own VAR_INPUT Start (interlock.ld)
+#        is not one of them.
+cat >"$PROJ/drain.ld" <<'LADDER'
+PROGRAM DrainInterlock
+VAR_EXTERNAL
+    Start   : BOOL;
+    Abort   : BOOL;
+    RunLamp : BOOL;
+END_VAR
+VAR
+    Latched : BOOL; (* abort seen since the last batch began *)
+END_VAR
+LD
+  RUNG latch (* an abort latches until the next batch *)
+    [ Abort | Latched ] /Start ( Latched )
+
+  RUNG lamp
+    /Latched ( RunLamp )
+END_LD
+END_PROGRAM
+LADDER
+git -C "$PROJ" add -A; git -C "$PROJ" commit -qm "smoke 14: a ladder program for X44/X45"
+start_desc=$(grep -oP 'name: Start,.*desc: "\K[^"]+' "$PROJ/nautilus.yaml")
+# xd_title <rung> <tag> — the element's tooltip; xd_line — its second line.
+xd_title() { js "($(ld_node_el "$1" '*' "$2"))?.closest('g.node')?.querySelector(':scope > title')?.textContent ?? ''" | python3 -c 'import sys, json; print(json.load(sys.stdin))'; }
+xd_line() { js "($(ld_node_el "$1" '*' "$2"))?.closest('g.node')?.querySelector('text.nx-desc')?.textContent ?? ''" | python3 -c 'import sys, json; print(json.load(sys.stdin))'; }
+# refview_rows — the References view's tree, "level<TAB>text" per row ("" when
+# no References view is showing). refview_files — "file=N" per file row, N its
+# reference rows.
+refview_js='(() => {
+  const trees = [...document.querySelectorAll(".customview-tree")].filter((t) => t.getBoundingClientRect().height > 0);
+  const tree = trees.find((t) => t.closest(".pane")?.querySelector(".pane-header")?.innerText.match(/references/i)) ?? trees.find((t) => (t.closest(".composite")?.querySelector(".composite.title, .title-label")?.innerText ?? "").match(/references/i));
+  if (!tree) return "";
+  return [...tree.querySelectorAll(".monaco-list-row")].map((r) => (r.getAttribute("aria-level") ?? "?") + "\t" + r.innerText.replace(/\s+/g, " ").trim()).join("\n");
+})()'
+refview_rows() { wb "$refview_js"; }
+refview_files() {
+  refview_rows | awk -F'\t' '$1 == 1 { split($2, w, " "); f = w[1]; n[f] = 0; order[++k] = f; next } $1 == 2 && f != "" { n[f]++ } END { for (i = 1; i <= k; i++) print order[i] "=" n[order[i]] }'
+}
+refview_open() { [[ -n $(refview_rows) ]]; }
+
+if ed_open_diagram drain.ld; then
+  # Descriptions arrive from naut lsp after the model: wait for the tooltip.
+  wait_js "($(ld_node_el latch '*' Start))?.closest('g.node')?.querySelector(':scope > title')?.textContent.includes($(_q "$start_desc"))" 20 || true
+  t=$(xd_title latch Start || true); l=$(xd_line latch Start || true)
+  click_el "$(ld_node_el latch contact Start)" || true
+  p=$(el_at "$(ld_node_el latch contact Start)" 0.5 0.5 || true)
+  [[ -n $p ]] && { g_move $p || true; sleep 2.5; }   # the native tooltip, for the PNG
+  png=$(shot xref-desc-contact)
+  if [[ $t == *$'\n'"$start_desc" && -n $l && $start_desc == "${l%…}"* ]]; then
+    pass "X45 ladder contact Start: tooltip ends with its nautilus.yaml desc \"$start_desc\"; second line \"$l\"" "$png"
+  else fail "X45 ladder contact Start: tooltip \"${t//$'\n'/ ⏎ }\", second line \"$l\" — want the desc \"$start_desc\" in both" "$png"; fi
+  t=$(xd_title latch Latched || true)
+  if [[ $t == *"abort seen since the last batch began" ]]; then
+    pass "X45 ladder contact Latched (a local): tooltip ends with its VAR line's comment"
+  else fail "X45 ladder contact Latched: tooltip \"${t//$'\n'/ ⏎ }\" lacks its VAR comment"; fi
+
+  want=$(grep_counts Start drain.ld plant.st batch.sfc nautilus.yaml | sort || true)
+  for i in 1 2 3; do
+    click_el "$(ld_node_el latch contact Start)" || true
+    g_key shift+F12 || true
+    wait_for 10 refview_open && break
+  done
+  sleep 1.5
+  got=$(refview_files | sort || true); rows=$(refview_rows || true); png=$(shot xref-desc-references)
+  n=$(awk -F= '{s += $2} END {print s + 0}' <<<"$want")
+  if [[ -n $got && $got == "$want" ]] && ! grep -q '^interlock.ld=' <<<"$got"; then
+    pass "X44 Shift+F12 on the ladder contact Start opens the References view: $n references, per file = grep -ow Start — $(oneline <<<"$got"); not interlock.ld's FB-local Start" "$png"
+  else fail "X44 Shift+F12 on the ladder contact Start: the References view lists $(oneline <<<"${got:-<nothing>}") (rows: $(head -12 <<<"$rows" | tr '\t' ' ' | oneline)); want $(oneline <<<"$want")" "$png"; fi
+  xdotool key --clearmodifiers ctrl+b; sleep 0.8   # the sidebar the view opened
+else
+  png=$(shot xref-desc-open)
+  fail "X44/X45: drain.ld did not open as a ladder diagram" "$png"
+fi
+vs_cmd "View: Close All Editors" 1.2
+# └── end X44 / X45 block ────────────────────────────────────────────────────┘
 
 # ══ nothing left behind ════════════════════════════════════════════════════
 d=$(wb 'String(document.querySelectorAll(".tabs-container .tab.dirty").length)')

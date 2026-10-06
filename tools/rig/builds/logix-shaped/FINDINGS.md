@@ -77,7 +77,9 @@ rung boundaries.
    element nor its tooltip shows it
    (`56-lx_desc_on_element-M1_StartPB.png`). The only place the desc
    appears is the amber declare offer's row title. **gap** · `LadderView.svelte`
-   node `<title>`/operand, the model's `tags` already carries `desc`. OPEN, #216.
+   node `<title>`/operand, the model's `tags` already carries `desc`. FIXED (#216):
+   the tooltip ends with the desc and a second line under the operand draws
+   it (`nautilus.diagram.showDescriptions`); the row is PASS now.
 6. **2026-10-05 · rung m1 finished, wanted m2 = copy of m1 with M1→M2.**
    Selected rung m1 by its name, then Ctrl+C, Ctrl+V. Expected a copy below
    it. Happened: nothing changed (`71-lx_copy_rung-m1.png`). `doCopy`
@@ -92,7 +94,9 @@ rung boundaries.
    action and the language server has no `references` provider on main.
    The LSP half is in flight on other branches; the ladder half needs its
    own entry point (the contact's context menu or a key). **gap** ·
-   `LadderView.svelte`, `naut lsp`. OPEN, #218.
+   `LadderView.svelte`, `naut lsp`. FIXED (#218): Shift+F12 or right-click →
+   Find All References on the element opens the References view (smoke 14,
+   X44).
 8. **2026-10-05 · declared the main routine's tags.** Every manifest tag a
    rung names needs its own VAR_EXTERNAL line, made by opening the amber
    offer and clicking that tag's row: 29 declarations in this build (28
@@ -195,12 +199,12 @@ rung boundaries.
 | Output boxes: MOV/ADD/CPT | ✗ | ✗ confirmed (`cannot assign BOOL to REAL`); the route is an ST FB with EN/ENO | #215 |
 | JMP/LBL, JSR/RET, MCR | ✗ (decide) | JSR → FB works well; JMP/LBL/MCR ✗ | #223 |
 | Rung comments | ✓ | ✓ by gesture | none |
-| Tag description on the element | ✗ | ✗ confirmed (XFAIL probe) | #216 |
+| Tag description on the element | ✗ | ✓ since #216 (tooltip + second line; the probe row is PASS) | #216 |
 | Keyboard rung entry | ✓ (the text file) | the `.ld` text is the ASCII rung editor; without a map from Logix mnemonics it is a new grammar to learn | #224 |
 | Drag to reorder | ✓ | ✓ | none |
 | Copy/cut/paste, multi-select | ✓ (elements) | elements only; **a rung cannot be copied** | #217 |
 | Power flow online | ✓ | not exercised (no controller in this build) | none |
-| Cross-reference from a contact | ✗ | ✗ confirmed | #218 |
+| Cross-reference from a contact | ✗ | ✓ since #218 (Shift+F12 / right-click → References view) | #218 |
 | Rung-level diff | ✓✓ | not exercised | none |
 
 ## More Studio 5000 day-one habits, and what to do instead
@@ -215,7 +219,7 @@ rung boundaries.
 | ONS / OSR | `+Tag` / `( P Tag )` in text only | paste `+` into the rung | #212, #213 |
 | Copy rung, paste, Find/Replace M1→M2 | no rung copy | rebuild the rung, or copy it in the text view | #217 |
 | CPT / MOV | no output box | ST FB with EN/ENO, called from the rung | #215 |
-| Cross Reference (Ctrl+E) | none | VS Code text search | #218 |
+| Cross Reference (Ctrl+E) | none | Shift+F12 on the element (References view) | #218 |
 | Ladder on New Project | `--language ld` on the CLI only | `naut new … --language ld` in a terminal | #221 |
 | JMP/LBL, MCR | none | gate each rung, or move the section into an FB | #223 |
 | Verify routine | `naut check`, live diagnostics | none needed | ✓ |
