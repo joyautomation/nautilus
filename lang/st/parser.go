@@ -122,17 +122,23 @@ func (p *Parser) parseProgram() (*Program, error) {
 			prog.FuncDecls = append(prog.FuncDecls, fn)
 			continue
 		case TokenVarGlobal:
-			// A GVL of constants (#176): VAR_GLOBAL CONSTANT at file level
-			// declares project-wide constants, not tags. A plain VAR_GLOBAL
-			// here is left to the body loop below, as before.
-			if !p.globalConstAhead() {
-				break
-			}
+			// A file-level VAR_GLOBAL block (a GVL file). VAR_GLOBAL CONSTANT
+			// declares project-wide constants, not tags (#176). A plain one
+			// declares globals for whatever follows it — in a composed
+			// source, the PROGRAM (#175); before, it ended the declaration
+			// prelude and the PROGRAM after it parsed as a bare statement
+			// ("undeclared identifier <ProgramName>").
+			isConst := p.globalConstAhead()
 			vb, err := p.parseVarBlock()
 			if err != nil {
 				return nil, err
 			}
-			prog.GlobalConsts = append(prog.GlobalConsts, *vb)
+			if isConst {
+				prog.GlobalConsts = append(prog.GlobalConsts, *vb)
+			} else {
+				vb.FileScope = true
+				prog.VarBlocks = append(prog.VarBlocks, *vb)
+			}
 			continue
 		case TokenProgram:
 			if prog.TopKeyword == "" {

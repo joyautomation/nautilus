@@ -3,22 +3,22 @@
 # aliases (Alm_*).
 
 # Setpoints (operator-writable)
-- { name: M1_AuxBypass, role: setpoint, init: false, desc: "Ignore M1's aux contact in M2's interlock (maintenance)" }
-- { name: Maint,        role: setpoint, init: false, desc: "Maintenance mode: M2 may run without M1" }
-- { name: CountReset,   role: setpoint, init: false, desc: "Reset the M1 start counter" }
-- { name: M2_SpeedPct,  role: setpoint, init: 50.0, unit: "%",  desc: "M2 speed demand" }
-- { name: MinHz,        role: setpoint, init: 20.0, unit: Hz,   desc: "Drive speed floor" }
-- { name: MaxHz,        role: setpoint, init: 60.0, unit: Hz,   desc: "Drive speed ceiling" }
+- { name: M1_AuxBypass, role: setpoint, type: BOOL, init: false, desc: "Ignore M1's aux contact in M2's interlock (maintenance)" }
+- { name: Maint,        role: setpoint, type: BOOL, init: false, desc: "Maintenance mode: M2 may run without M1" }
+- { name: CountReset,   role: setpoint, type: BOOL, init: false, desc: "Reset the M1 start counter" }
+- { name: M2_SpeedPct,  role: setpoint, type: REAL, init: 50.0, unit: "%",  desc: "M2 speed demand" }
+- { name: MinHz,        role: setpoint, type: REAL, init: 20.0, unit: Hz,   desc: "Drive speed floor" }
+- { name: MaxHz,        role: setpoint, type: REAL, init: 60.0, unit: Hz,   desc: "Drive speed ceiling" }
 
 # Computed state
-- { name: M1_Permit,    role: state, init: false, desc: "M1 interlocks healthy" }
-- { name: M2_Permit,    role: state, init: false, desc: "M2 interlocks healthy (M1 proven running, or Maint)" }
-- { name: M1_Starts,    role: state, init: 0, desc: "M1 starts since the last CountReset" }
+- { name: M1_Permit,    role: state, type: BOOL, init: false, desc: "M1 interlocks healthy" }
+- { name: M2_Permit,    role: state, type: BOOL, init: false, desc: "M2 interlocks healthy (M1 proven running, or Maint)" }
+- { name: M1_Starts,    role: state, type: DINT, init: 0, desc: "M1 starts since the last CountReset" }
 
 # Alarm word — bit per condition
-- { name: Alm_EStop,    role: state, init: false, desc: "ALM bit 0: E-stop active" }
-- { name: Alm_M1Fault,  role: state, init: false, desc: "ALM bit 1: M1 faulted (overload or fail to start)" }
-- { name: Alm_M2Fault,  role: state, init: false, desc: "ALM bit 2: M2 faulted (overload or fail to start)" }
-- { name: Alm_M1FTS,    role: state, init: false, desc: "ALM bit 3: M1 failed to start" }
-- { name: Alm_M2FTS,    role: state, init: false, desc: "ALM bit 4: M2 failed to start" }
-- { name: Alm_Any,      role: state, init: false, desc: "Summary: any alarm bit set" }
+- { name: Alm_EStop,    role: state, type: BOOL, init: false, desc: "ALM bit 0: E-stop active" }
+- { name: Alm_M1Fault,  role: state, type: BOOL, init: false, desc: "ALM bit 1: M1 faulted (overload or fail to start)" }
+- { name: Alm_M2Fault,  role: state, type: BOOL, init: false, desc: "ALM bit 2: M2 faulted (overload or fail to start)" }
+- { name: Alm_M1FTS,    role: state, type: BOOL, init: false, desc: "ALM bit 3: M1 failed to start" }
+- { name: Alm_M2FTS,    role: state, type: BOOL, init: false, desc: "ALM bit 4: M2 failed to start" }
+- { name: Alm_Any,      role: state, type: BOOL, init: false, desc: "Summary: any alarm bit set" }

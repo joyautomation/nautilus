@@ -246,8 +246,9 @@
 	// A retag (or a block's or function's arguments) may name something the
 	// POU doesn't declare: the rung goes red and `naut check` says
 	// "undeclared identifier". Every such name is offered here, per POU. In
-	// the PROGRAM: into VAR_EXTERNAL, typed from nautilus.yaml, when it is a
-	// manifest tag; into VAR (a retained local) either way. In a
+	// the PROGRAM a manifest tag needs no declaration (#177/#210) unless the
+	// manifest cannot type it — then into VAR_EXTERNAL; anything else into
+	// VAR (a retained local). In a
 	// FUNCTION_BLOCK: as a pin (VAR_INPUT for a name the rungs read,
 	// VAR_OUTPUT for one a coil or `=>` writes) or a local — the AOI's
 	// Parameters tab. The type is what the use says (a CTU's CV is INT, a
@@ -263,6 +264,8 @@
 	const undeclared = $derived.by(() => {
 		const out: Undeclared[] = [];
 		const tags = new Map((model.tags ?? []).map((t) => [t.name.toLowerCase(), t]));
+		// Project constants and enumeration members are in scope as they are.
+		const known = new Set((model.known ?? []).map((n) => n.toLowerCase()));
 		const pous = [...new Set((model.rungs ?? []).map((r) => r.pou ?? ''))];
 		for (const pou of pous) {
 			const rungsIn = (model.rungs ?? []).filter((r) => (r.pou ?? '') === pou);
@@ -299,8 +302,15 @@
 			}
 			const used = useTypes(rungsIn, model.fbTypes ?? [], vars);
 			for (const [l, name] of refs) {
-				if (declared.has(l) || insts.has(l) || l === 'true' || l === 'false') continue;
+				if (declared.has(l) || insts.has(l) || known.has(l) || l === 'true' || l === 'false') continue;
 				const tag = pou ? undefined : tags.get(l);
+				// A manifest tag is in scope in the PROGRAM without a
+				// declaration (#177/#210): nothing to offer when its type is
+				// what the use needs. An untyped tag is still offered, and so
+				// is one whose type only reads REAL from a number seed while
+				// the use says INT (a CTU's CV, #219): declaring it is how the
+				// program states the integer.
+				if (tag?.type && offerType(used.get(l), tag.type).toUpperCase() === tag.type.toUpperCase()) continue;
 				out.push({
 					name,
 					pou,

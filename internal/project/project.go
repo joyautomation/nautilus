@@ -17,6 +17,7 @@ import (
 	"net"
 	"os"
 	"path"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -28,6 +29,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/stproject"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/prom"
 	"github.com/joyautomation/nautilus/redfish"
@@ -684,6 +686,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	if opts.Tags, err = tagDefs(m.Tags); err != nil {
 		return nil, err
 	}
+	opts.Tags = append(opts.Tags, gvlTags(libs, opts.Tags)...)
 	opts.Meta = applyTagMeta(opts.Tags, m.TagMeta)
 	if opts.Driver, err = buildDrivers(fsys, m); err != nil {
 		return nil, err
@@ -780,6 +783,95 @@ func libraries(fsys fs.FS) ([]string, error) {
 		out[i] = l.ST
 	}
 	return out, nil
+}
+
+// gvlTags turns a GVL — a library file's file-level VAR_GLOBAL block, the
+// Codesys habit (#175) — into tags: each global the manifest does not
+// already declare becomes a state tag, seeded with the zero of its
+// declared type (runtime.expandTags), so it exists from scan one, is
+// visible to every program (the block composes into each one's prelude),
+// and reaches the HMI and the tag API like any other tag. A global the
+// manifest also declares is that tag: the manifest supplies its role,
+// init, unit and desc, and the GVL's declaration must agree with a type:
+// it states. VAR_GLOBAL CONSTANT entries are constants, not tags.
+func gvlTags(libs []string, declared []runtime.TagDef) []runtime.TagDef {
+	have := make(map[string]bool, len(declared))
+	for _, d := range declared {
+		have[ir.NameKey(d.Name)] = true
+	}
+	var out []runtime.TagDef
+	for _, src := range libs {
+		prog, err := st.Parse(src)
+		if err != nil {
+			continue // the library reports its own error when it compiles
+		}
+		for _, g := range st.FileGlobals(prog) {
+			if g.Constant || have[ir.NameKey(g.Name)] {
+				continue
+			}
+			have[ir.NameKey(g.Name)] = true
+			out = append(out, runtime.TagDef{Name: g.Name, Role: runtime.RoleState})
+		}
+	}
+	return out
+}
+
+// TagDefs is the manifest's tags as the runtime declares them, plus each
+// task's dt-tag (a REAL the runtime writes every scan): the table a
+// program compiles against without declaring its tags. Tooling that
+// compiles one file at a time — `naut check`, the language server —
+// resolves it with runtime.ResolveTagScope, exactly as runtime.New does.
+func TagDefs(m *Manifest) ([]runtime.TagDef, error) {
+	defs, err := tagDefs(m.Tags)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range m.Tasks {
+		if t.DtTag == "" {
+			continue
+		}
+		dup := false
+		for _, d := range defs {
+			if ir.SameName(d.Name, t.DtTag) {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			defs = append(defs, runtime.State(t.DtTag, 0.0))
+		}
+	}
+	return defs, nil
+}
+
+// TagDefsFor finds the manifest governing a source file (nautilus.yaml in
+// its directory or the nearest one above it) and returns its TagDefs; nil
+// when the file is in no project, or the manifest does not read.
+func TagDefsFor(file string) []runtime.TagDef {
+	abs, err := filepath.Abs(file)
+	if err != nil {
+		return nil
+	}
+	dir := filepath.Dir(abs)
+	for range 32 {
+		if fi, err := os.Stat(filepath.Join(dir, ManifestName)); err == nil && !fi.IsDir() {
+			m, err := ReadManifest(os.DirFS(dir), "")
+			if err != nil {
+				return nil
+			}
+			defs, err := TagDefs(m)
+			if err != nil {
+				return nil
+			}
+			return defs
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil
+		}
+		dir = parent
+	}
+	return nil
 }
 
 func tagDefs(tags []TagConfig) ([]runtime.TagDef, error) {

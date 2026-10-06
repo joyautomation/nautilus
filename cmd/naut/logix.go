@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/internal/stproject"
 	"github.com/joyautomation/nautilus/lang/l5x"
 	"github.com/joyautomation/nautilus/logix/importer"
@@ -565,10 +566,18 @@ func runLogixWrite(args []string) int {
 	}
 	major, minor, _ := strings.Cut(*revision, ".")
 	_, libs, _ := stproject.PreludeSources(path, nil)
+	// In a project, the manifest's tags are controller tags the program may
+	// name without declaring them (#177/#210).
+	var tags map[string]string
+	if dir, ok := projectDirOf(path); ok {
+		if m, err := project.ReadManifest(os.DirFS(dir), ""); err == nil {
+			tags = logixTagTypes(m)
+		}
+	}
 	doc, diags, err := writer.WriteProgram(path, string(raw), writer.Options{
 		Controller: *controller, Program: *program, Routine: *routine, Task: *task,
 		PeriodMs: *period, ProcessorType: *processor, MajorRev: major, MinorRev: minor,
-		SoftwareRevision: *software, ExportDate: *date, Libs: libs,
+		SoftwareRevision: *software, ExportDate: *date, Libs: libs, Tags: tags,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
@@ -591,4 +600,18 @@ func runLogixWrite(args []string) int {
 	}
 	fmt.Fprintf(os.Stderr, "wrote %s\n", *out)
 	return 0
+}
+
+// projectDirOf is the directory holding the manifest that governs a source
+// file: its own, or the nearest one above it.
+func projectDirOf(file string) (string, bool) {
+	abs, err := filepath.Abs(file)
+	if err != nil {
+		return "", false
+	}
+	dir := stproject.ProjectRoot(abs)
+	if _, err := os.Stat(filepath.Join(dir, project.ManifestName)); err != nil {
+		return "", false
+	}
+	return dir, true
 }

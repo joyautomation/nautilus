@@ -5,6 +5,9 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 // testHistory is two commits of the test program: HEAD (as booted) and an
@@ -180,5 +183,38 @@ func TestActivateRejections(t *testing.T) {
 	}
 	if rt.Program().Source() != testProgram || rt.Program().Dirty() {
 		t.Fatal("a rejected activation must leave the running program untouched")
+	}
+}
+
+// A program that names its tags without VAR_EXTERNAL (#177/#210) activates:
+// the pre-flight compiles in the running program's context, where the
+// project's tags are in scope.
+func TestActivateImplicitTags(t *testing.T) {
+	rt, err := runtime.New(runtime.Options{
+		Program: "PROGRAM Test\nOut := SP - Level;\nEND_PROGRAM\n",
+		Driver:  nio.NewMemory(),
+		Tags: []runtime.TagDef{
+			runtime.Input("Level", runtime.Init(40.0)),
+			runtime.Setpoint("SP", 65.0),
+			runtime.Typed("Out", runtime.RoleOutput, "REAL"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := testHistory()
+	h.Blobs["b2"] = "PROGRAM Test\nOut := (SP - Level) * 0.5;\nEND_PROGRAM\n"
+	srv := New(rt, Options{
+		OnlineEdits: true,
+		History:     func() *ProgramHistory { return h },
+		SourcesAt:   sourcesFromHistory(h),
+	}).Handler()
+	w, body := doJSON(t, srv, "POST", "/api/program/activate", map[string]string{"sha": "bbbb111"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("activate = %d %v", w.Code, body)
+	}
+	rt.Scan()
+	if v, _ := rt.Tags().ReadGlobal("Out"); v.F != 12.5 {
+		t.Errorf("Out = %v, want 12.5 from the activated revision", v.F)
 	}
 }

@@ -184,8 +184,8 @@ func checkFBD(src, blocks string) (string, bool) {
 	if err != nil {
 		return err.Error(), true
 	}
-	msg, _, bad := compileErr(stSrc, blocks, strings.Count(blocks, "\n"))
-	return msg, bad
+	res := compileFile(stSrc, blocks, nil, nil)
+	return res.msg, res.failed
 }
 
 // applyFBDEdits applies 1-based end-exclusive text edits bottom-up.

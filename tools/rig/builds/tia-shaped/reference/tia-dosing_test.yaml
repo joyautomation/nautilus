@@ -28,7 +28,7 @@ tests:
         expect: { XV101_Open: true }
       - advance: 1.5s
         expect: { XV101_Open: false, DoseStep: 20, FCV101_SP: { near: 0.0 } }
-      - advance: 2.2s # SettleSec 2 s
+      - advance: 2.2s # SettleTime T#2S
         expect:
           - DoseStep: 0
           - DoneLamp: true

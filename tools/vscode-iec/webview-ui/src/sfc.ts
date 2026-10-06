@@ -51,6 +51,9 @@ export type SfcComment = { line: number; endLine: number; text: string; status?:
 export type SfcModel = {
 	name: string;
 	vars?: SfcVar[];
+	/** The project manifest's tags (`naut sfc graph - <file>`): in scope in
+	 * the chart without a declaration (#177/#210). */
+	tags?: { name: string; type?: string; role?: string; unit?: string; desc?: string }[];
 	steps: SfcStep[];
 	trans: SfcTransition[];
 	actions?: SfcAction[];

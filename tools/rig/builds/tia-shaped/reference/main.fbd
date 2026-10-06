@@ -1,20 +1,6 @@
 PROGRAM Main
 VAR_EXTERNAL
-    FT101_Raw : INT;
-    FT101_Flow : REAL;
-    StartA : BOOL;
-    StopAll : BOOL;
     MainDtS : REAL;
-    RecipeA : DoseRecipe;
-    XV101_Open : BOOL;
-    DoseFault : BOOL;
-    DoneLamp : BOOL;
-    DoseStep : INT;
-    MaxFlowLpm : REAL;
-    FCV101_SP : REAL;
-    HighFlowAlm : BOOL;
-    ResetCount : BOOL;
-    DosesToday : INT;
 END_VAR
 FBD
   NETWORK 'FT-101 raw analog to L/min (FC105-style scaling)'

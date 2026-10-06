@@ -7,12 +7,17 @@ PROGRAM {{.Program}}
    so it uses the same Sensor/Setpoint/Actuator tags every other starter
    program does — replace Track with your real sequence (INITIAL_STEP +
    STEPs + TRANSITIONs) once there is more than one continuously running
-   action. *)
+   action.{{if .NoGo}}
+   The tags in nautilus.yaml are in scope as they are — no declaration
+   needed; a VAR_EXTERNAL naming one stays legal and must agree with
+   its type:.{{end}} *)
+{{- if not .NoGo}}
 VAR_EXTERNAL
-    Sensor   : REAL;  (* field input — {{if .NoGo}}bound by the driver in nautilus.yaml{{else}}see driver.go{{end}} *)
-    Setpoint : REAL;  (* operator value — {{if .NoGo}}declared in nautilus.yaml{{else}}seeded in main.go{{end}} *)
+    Sensor   : REAL;  (* field input — see driver.go *)
+    Setpoint : REAL;  (* operator value — seeded in main.go *)
     Actuator : REAL;  (* field output *)
 END_VAR
+{{- end}}
 SFC
 
   INITIAL_STEP Track:

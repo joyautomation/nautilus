@@ -6,8 +6,10 @@ import (
 	"io"
 	"os"
 
+	"github.com/joyautomation/nautilus/internal/lsp"
 	"github.com/joyautomation/nautilus/internal/stproject"
 	"github.com/joyautomation/nautilus/lang/fbd"
+	"path/filepath"
 )
 
 const fbdUsage = `naut fbd — Function Block Diagram tools
@@ -123,9 +125,28 @@ func runFBDGraph(args []string) int {
 		_ = enc.Encode(map[string]string{"error": gerr.Error()})
 		return 1
 	}
-	if err := enc.Encode(model); err != nil {
+	// The manifest's tags ride along, as for `naut ld graph`: every program
+	// has them in scope without a declaration (#177/#210), so the palette
+	// and a chip's retag offer them beside the file's own variables.
+	if err := enc.Encode(struct {
+		*fbd.Model
+		Tags []lsp.ProjectTag `json:"tags,omitempty"`
+	}{model, graphTags(at)}); err != nil {
 		fmt.Fprintln(os.Stderr, "naut fbd graph:", err)
 		return 2
 	}
 	return 0
+}
+
+// graphTags is the manifest's tags for the project a diagram file belongs
+// to; nil for a buffer with no file.
+func graphTags(at string) []lsp.ProjectTag {
+	if at == "" {
+		return nil
+	}
+	abs, err := filepath.Abs(at)
+	if err != nil {
+		return nil
+	}
+	return lsp.ProjectTags(abs)
 }

@@ -546,3 +546,16 @@ END_PROGRAM
 	prog := mustParse(t, src)
 	wantDiag(t, Check(prog), SeverityWarning, "X is driven by a qualifier association (N) on step A and assigned in ACTION Clear — the association wins while A is active")
 }
+
+// A manifest tag is in scope without a declaration (#177/#210): an
+// association to one is not "neither an ACTION nor a declared variable".
+func TestCheckWithProjectTags(t *testing.T) {
+	src := "PROGRAM P\nSFC\n  INITIAL_STEP Idle:\n    N Lamp;\n  END_STEP\nEND_SFC\nEND_PROGRAM\n"
+	prog := mustParse(t, src)
+	wantDiag(t, Check(prog), SeverityError, "references neither an ACTION block nor a declared variable")
+	for _, d := range CheckWith(prog, []string{"lamp"}) {
+		if d.Severity == SeverityError {
+			t.Errorf("with the tag in scope: %s", d.Message)
+		}
+	}
+}

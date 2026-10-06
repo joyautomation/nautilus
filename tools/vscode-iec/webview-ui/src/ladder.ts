@@ -75,6 +75,9 @@ export type LdModel = {
 	fbTypes?: LdFbType[];
 	/** The project manifest's tags, for declare-on-retag. */
 	tags?: LdTag[];
+	/** Names the project's libraries put in scope that need no declaration:
+	 * VAR_GLOBAL CONSTANT constants and enumeration members. */
+	known?: string[];
 	/** A whitespace-only source: no POU yet; the first op seeds one. */
 	blank?: boolean;
 };

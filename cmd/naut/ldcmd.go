@@ -10,6 +10,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/lsp"
 	"github.com/joyautomation/nautilus/internal/stproject"
 	"github.com/joyautomation/nautilus/lang/ld"
+	"github.com/joyautomation/nautilus/lang/st"
 )
 
 const ldUsage = `naut ld — Ladder Diagram tools
@@ -137,7 +138,35 @@ func runLDGraph(args []string) int {
 	}
 	_ = enc.Encode(struct {
 		*ld.Model
-		Tags []lsp.ProjectTag `json:"tags,omitempty"`
-	}{model, tags})
+		Tags  []lsp.ProjectTag `json:"tags,omitempty"`
+		Known []string         `json:"known,omitempty"`
+	}{model, tags, projectNames(libs)})
 	return 0
+}
+
+// projectNames are the names the project's libraries put in scope that are
+// neither tags nor variables: VAR_GLOBAL CONSTANT constants (#176) and
+// enumeration members (#238). A rung naming one needs no declaration, so
+// the ladder's declare offer leaves it out.
+func projectNames(libs []string) []string {
+	var out []string
+	for _, src := range libs {
+		prog, err := st.Parse(src)
+		if err != nil {
+			continue
+		}
+		for _, vb := range prog.GlobalConsts {
+			for _, vd := range vb.Variables {
+				out = append(out, vd.Name)
+			}
+		}
+		for _, td := range prog.TypeDecls {
+			if e, ok := td.Type.(*st.EnumType); ok {
+				for _, m := range e.Members {
+					out = append(out, m.Name)
+				}
+			}
+		}
+	}
+	return out
 }

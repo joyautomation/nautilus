@@ -278,13 +278,15 @@
 		return model.actions?.find((a) => a.name.toLowerCase() === name.toLowerCase());
 	}
 	/** An association whose target is neither an ACTION nor a declared
-	 * variable (nor a step): a new action, waiting for its body (#182). */
+	 * variable (nor a step, nor a manifest tag — in scope without a
+	 * declaration, #177/#210): a new action, waiting for its body (#182). */
 	function isNewAction(name: string): boolean {
 		const n = name.toLowerCase();
 		return (
 			!actionFor(name) &&
 			!(model.vars ?? []).some((v) => v.name.toLowerCase() === n) &&
-			!(model.steps ?? []).some((s) => s.name.toLowerCase() === n)
+			!(model.steps ?? []).some((s) => s.name.toLowerCase() === n) &&
+			!(model.tags ?? []).some((t) => t.name.toLowerCase() === n)
 		);
 	}
 	function editActionBody(ev: Event, name: string) {

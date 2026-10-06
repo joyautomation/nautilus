@@ -357,7 +357,9 @@ END_VAR
 EOF
 }
 row paste-gvl-habit PASS paste_gvl_habit
-row habit-gvl-var-global XFAIL habit_check 'gvl|undeclared|VAR_GLOBAL|program'
+# a GVL composes into every program's prelude and declares its globals
+# (#175); each one the manifest does not declare is a state tag
+row habit-gvl-var-global PASS habit_check 'gvl|undeclared|VAR_GLOBAL|program'
 # ...and the Codesys GVL of constants
 paste_gvl_const_habit() {
   cat >"$PROJ/gvl.st" <<'EOF'
@@ -371,8 +373,8 @@ row paste-gvl-constant-habit PASS paste_gvl_const_habit
 row habit-gvl-var-global-constant PASS habit_check 'VAR_GLOBAL|init|error'
 rm -f "$PROJ/gvl.st"
 
-# the Nautilus way: the tag list in its own file (tag-files:), declared again
-# in each POU's VAR_EXTERNAL. The template's program.st and its three tags
+# the Nautilus way: the tag list in its own file (tag-files:), in scope in
+# every POU as it is (#177). The template's program.st and its three tags
 # stay until the chart replaces them, so every intermediate checks clean.
 paste_tag_file() {
   paste_file tags/washer.yaml
@@ -427,13 +429,12 @@ row sfc_rename_step-Start-Idle PASS sfc_rename_step Start Idle
 row diagram_zoom PASS diagram_zoom in 1
 check_after sfc-init
 
-# the declaration part (Codesys: the POU's declaration editor). The chart's
-# "vars" panel declares one at a time: two tags and the FB instance by
-# gesture, then a constant the way a Codesys programmer writes one, then the
-# rest of the header pasted (the paste rewrites the whole header to the
-# reference's, the gestured three included)
-row sfc_vars_declare-StartPB PASS sfc_vars_declare StartPB BOOL ext
-row sfc_vars_declare-LevelPct PASS sfc_vars_declare LevelPct REAL ext
+# the declaration part (Codesys: the POU's declaration editor). The tags
+# need none: like a GVL's variables, the manifest's tags are in scope in
+# every program (#177). The chart's "vars" panel declares the FB instance
+# by gesture, then a constant the way a Codesys programmer writes one, then
+# the rest of the header is pasted (the paste rewrites the whole header to
+# the reference's, the gestured ones included)
 row sfc_vars_declare-drum PASS sfc_vars_declare drum FB_Reverser local
 vars_close
 row habit-vars-constant PASS sfc_vars_declare_constant tMaxFill TIME T#60S
@@ -563,7 +564,7 @@ row habit-assoc-typed-order PASS compare_order
 
 # The state code as a real enumeration (#238), the way a Codesys programmer
 # writes it: in a scratch copy of the built project, lib/types.st declares
-# E_WashState, StateNo is declared with it, and TrackState assigns members
+# E_WashState, the StateNo tag is typed with it (type: in the tag table), and TrackState assigns members
 # (qualified: the steps are called Idle, Fill … too, and a step shadows an
 # unqualified member). The suite's numeric expectations (StateNo: 1) still
 # hold — an enumeration's value is its integer — and naut check is clean.
@@ -573,7 +574,10 @@ variant_enum() {
   mkdir -p "$tmp/lib"
   printf '%s\n' '(* DUT: the wash cycle states *)' \
     'TYPE E_WashState : (IDLE := 0, FILL := 1, WASH := 2, DRAIN := 3, SPIN := 4, ABORTED := 9);' 'END_TYPE' >"$tmp/lib/types.st"
-  sed -i -E 's/^( *StateNo +): INT;/\1: E_WashState;/; s/StateNo := ST_([A-Z]+);/StateNo := E_WashState#\1;/' "$tmp/washer.sfc"
+  # StateNo's type is the tag table's (no program declares it, #177)
+  sed -i -E 's/(name: StateNo, +role: state, )type: INT,/\1type: E_WashState,/' "$tmp/tags/washer.yaml"
+  grep -q 'type: E_WashState' "$tmp/tags/washer.yaml" || { echo "StateNo's type: did not change" >&2; rc=1; }
+  sed -i -E 's/StateNo := ST_([A-Z]+);/StateNo := E_WashState#\1;/' "$tmp/washer.sfc"
   grep -c 'E_WashState#' "$tmp/washer.sfc" | sed 's/^/members assigned: /'
   out=$(cd "$tmp" && naut check . 2>&1) || rc=1
   printf '%s\n' "$out" >"$OUT_DIR/built/variant-enum-check.txt"; tail -1 <<<"$out"

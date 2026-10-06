@@ -148,7 +148,18 @@ func TestScaffoldVariants(t *testing.T) {
 			if prog.Name != tc.sc.Program {
 				t.Errorf("PROGRAM name = %q, want %q", prog.Name, tc.sc.Program)
 			}
-			if _, err := st.Lower(prog); err != nil {
+			// A manifest project's tags are in scope without a declaration
+			// (#177/#210): lower in that project's context, as runtime.New does.
+			var opts st.LowerOpts
+			if tags := project.TagDefsFor(filepath.Join(dir, tc.sc.Name, "program."+tc.sc.Language)); len(tags) > 0 {
+				types, _ := st.Types(prog)
+				scope, errs := runtime.ResolveTagScope(tags, types)
+				if len(errs) > 0 {
+					t.Fatalf("manifest tags: %v", errs)
+				}
+				opts = scope.LowerOpts()
+			}
+			if _, err := st.LowerWithOpts(prog, opts); err != nil {
 				t.Fatalf("generated program.st doesn't lower: %v", err)
 			}
 		})

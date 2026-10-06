@@ -164,21 +164,25 @@ func expandTags(o Options, types, globals map[string]*ir.Type) (Options, error) 
 			outputs = append(outputs, d.Name)
 		}
 		switch {
-		case d.Init != nil && d.Type != "":
+		case d.Type != "":
 			// A typed tag's init is validated and shaped against the
-			// resolved struct (SeedFromInit), rather than stored as the
-			// raw manifest value — a nested map is not one of the kinds
-			// Tags.Set understands, so without this it would silently do
-			// nothing.
-			t, _, ok := ir.Lookup(types, d.Type)
-			if !ok {
-				return o, fmt.Errorf("tag %s: no TYPE %s is declared by this project's "+
-					"ST — a tag's type is the one the programs use, so declare it in a "+
-					"library .st file (known: %s)", d.Name, d.Type, knownTypes(types))
+			// resolved type (SeedFromInit), rather than stored as the raw
+			// manifest value — a nested map is not one of the kinds
+			// Tags.Set understands, and `type: INT` with `init: 2.5` is a
+			// mistake to report, not a REAL to store.
+			t, err := ResolveTagType(d.Type, types)
+			if err != nil {
+				return o, fmt.Errorf("tag %s: %w", d.Name, err)
+			}
+			if d.Init == nil {
+				if d.Role == RoleSetpoint || d.Role == RoleState {
+					seed[d.Name] = ir.Zero(t)
+				}
+				break
 			}
 			v, err := ir.SeedFromInit(t, d.Init)
 			if err != nil {
-				return o, fmt.Errorf("tag %s: %w", d.Name, err)
+				return o, fmt.Errorf("tag %s (type %s): %w", d.Name, d.Type, err)
 			}
 			seed[d.Name] = v
 		case d.Init != nil:
@@ -190,15 +194,21 @@ func expandTags(o Options, types, globals map[string]*ir.Type) (Options, error) 
 				seed[d.Name] = v
 				break
 			}
-			seed[d.Name] = d.Init
-		case d.Type != "":
-			t, _, ok := ir.Lookup(types, d.Type)
-			if !ok {
-				return o, fmt.Errorf("tag %s: no TYPE %s is declared by this project's "+
-					"ST — a tag's type is the one the programs use, so declare it in a "+
-					"library .st file (known: %s)", d.Name, d.Type, knownTypes(types))
+			if t := typeOfInit(d.Init); t == ir.TimeT {
+				// `init: T#5s` with no type: is a TIME, and seeds as one.
+				v, err := ir.SeedFromInit(t, d.Init)
+				if err != nil {
+					return o, fmt.Errorf("tag %s: %w", d.Name, err)
+				}
+				seed[d.Name] = v
+				break
 			}
-			if d.Role == RoleSetpoint || d.Role == RoleState {
+			seed[d.Name] = d.Init
+		case d.Role == RoleSetpoint || d.Role == RoleState:
+			// Neither init nor type: a GVL global (a library's file-level
+			// VAR_GLOBAL), which starts at the zero of the type the
+			// programs declare it as — the Codesys meaning of a GVL entry.
+			if t := folded[ir.NameKey(d.Name)]; t != nil {
 				seed[d.Name] = ir.Zero(t)
 			}
 		}
@@ -211,17 +221,17 @@ func expandTags(o Options, types, globals map[string]*ir.Type) (Options, error) 
 }
 
 // scalarGlobal returns the type a program declares tag name as, when that
-// is one of the kinds an init: can seed (BOOL, INT, REAL, STRING); nil
-// otherwise. globals is keyed by ir.NameKey: a program may case a tag
-// differently from the manifest. A struct-typed global is the `type:` path's business, and a
-// TIME or ARRAY has no init: literal form.
+// is one of the kinds an init: can seed (BOOL, INT, REAL, STRING, TIME,
+// ARRAY); nil otherwise. globals is keyed by ir.NameKey: a program may case
+// a tag differently from the manifest. A struct-typed global is the
+// `type:` path's business.
 func scalarGlobal(globals map[string]*ir.Type, name string) *ir.Type {
 	t := globals[ir.NameKey(name)]
 	if t == nil {
 		return nil
 	}
 	switch t.Kind {
-	case ir.TypeBool, ir.TypeInt, ir.TypeReal, ir.TypeString:
+	case ir.TypeBool, ir.TypeInt, ir.TypeReal, ir.TypeString, ir.TypeTime, ir.TypeArray:
 		return t
 	}
 	return nil

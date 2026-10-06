@@ -4,7 +4,7 @@ TYPE
   DoseRecipe : STRUCT
     TargetL    : REAL;  (* amount to dose, L *)
     FlowSP     : REAL;  (* flow setpoint for FCV-101, L/min *)
-    SettleSec  : REAL;  (* wait after the valve shuts before counting the dose, s *)
+    SettleTime : TIME;  (* wait after the valve shuts before counting the dose *)
     DoneCount  : INT;   (* doses completed with this recipe *)
     LastDosedL : REAL;  (* litres delivered by the last dose *)
   END_STRUCT;

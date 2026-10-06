@@ -68,7 +68,13 @@ var (
 // It does not parse or lower transition conditions / action bodies (that's
 // the ST-level hop — Transpile, then st.Parse/st.Lower — which is Slice B);
 // this is purely chart-shape validation.
-func Check(prog *Program) []Diagnostic {
+func Check(prog *Program) []Diagnostic { return CheckWith(prog, nil) }
+
+// CheckWith is Check in a project: globals are the names the chart has in
+// scope without declaring them — the manifest's tags (#177/#210) — which
+// an action association, a step's ERROR flag, or a name a step shares may
+// refer to exactly as a declared variable can.
+func CheckWith(prog *Program, globals []string) []Diagnostic {
 	var diags []Diagnostic
 	add := func(pos Pos, sev Severity, format string, args ...any) {
 		diags = append(diags, Diagnostic{Pos: pos, Severity: sev, Message: fmt.Sprintf(format, args...)})
@@ -127,6 +133,9 @@ func Check(prog *Program) []Diagnostic {
 	// ── declared variable names (any VAR* kind), for assoc-target and
 	// Step.X/.T resolution ────────────────────────────────────────────────
 	varNames := map[string]bool{}
+	for _, g := range globals {
+		varNames[strings.ToUpper(g)] = true
+	}
 	for _, vb := range prog.VarBlocks {
 		for _, v := range vb.Variables {
 			varNames[strings.ToUpper(v.Name)] = true

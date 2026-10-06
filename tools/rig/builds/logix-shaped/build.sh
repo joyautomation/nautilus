@@ -180,6 +180,21 @@ lx_real_coil_checks() {
   (cd "$PROJ" && naut check . >"$HOME/.real-coil" 2>&1) || { g_err "naut check: $(grep -v warning "$HOME/.real-coil" | head -1)"; return 1; }
 }
 
+# lx_tag_in_scope <tag> — Logix controller scope: a tag the routine names is
+# simply there. Every program sees the manifest's tags without a
+# declaration (#177/#210), so the ladder's amber declare offer does not
+# list it and the program declares nothing for it; the beat's `naut check`
+# is the compile half of the proof.
+lx_tag_in_scope() {
+  local name=$1 title
+  [[ -n ${G_FILE:-} ]] && g_save
+  sleep 0.5
+  title=$(js 'doc.querySelector(".palette button.declare")?.getAttribute("title") ?? ""')
+  if grep -qw -- "$name" <<<"$title"; then g_err "the declare offer still lists $name ($title)"; return 1; fi
+  if grep -Eq "^ *$name *:" "$PROJ/program.ld"; then g_err "program.ld declares $name"; return 1; fi
+  return 0
+}
+
 # ── pastes ──────────────────────────────────────────────────────────────────
 _paste_tags() {
   mkdir -p "$PROJ/tags"
@@ -218,10 +233,10 @@ ext_open
 hide_sidebar
 sleep 3
 
-# B1 — clear the template: its one rung and its three tags' declarations.
+# B1 — clear the template: its one rung (its tags were never declared in
+# the program — manifest tags are in scope as they are, #177).
 row ed_open_diagram-program PASS ed_open_diagram program.ld
 row ld_delete_rung-high PASS ld_delete_rung high
-for v in Sensor Setpoint Alarm; do row "ld_vars_delete-$v" PASS ld_vars_delete "$v"; done
 
 # B2 — the tag database (YAML: no tag-grid gesture) and the manifest.
 paste_row tags-yaml _paste_tags
@@ -282,63 +297,62 @@ row ed_open_diagram-program-2 PASS ed_open_diagram program.ld
 #   dragged in front of it.
 row ld_add_rung-m1perm PASS ld_add_rung m1perm
 row ld_add_contact-AirOk PASS ld_add_contact m1perm AirOk
-row ld_declare-AirOk PASS ld_declare AirOk VAR_EXTERNAL
+row tag_in_scope-AirOk PASS lx_tag_in_scope AirOk
 row ld_add_contact-EStop-nc PASS ld_add_contact m1perm EStop nc
-row ld_declare-EStop PASS ld_declare EStop VAR_EXTERNAL
+row tag_in_scope-EStop PASS lx_tag_in_scope EStop
 row ld_move_element-EStop PASS ld_move_element m1perm EStop m1perm AirOk
 row ld_add_coil-M1_Permit PASS ld_add_coil m1perm M1_Permit
-row ld_declare-M1_Permit PASS ld_declare M1_Permit VAR_EXTERNAL
+row tag_in_scope-M1_Permit PASS lx_tag_in_scope M1_Permit
 chk 05-m1perm
 #   m1: +M1_StartPB m1:MotorStarter(…) ( M1_Run ) — the JSR habit, as a
 #   call; the ONS typed as +Tag on the start button's contact
 row ld_add_rung-m1 PASS ld_add_rung m1
 row ld_add_contact-M1_StartPB PASS ld_add_contact m1 M1_StartPB
-row ld_declare-M1_StartPB PASS ld_declare M1_StartPB VAR_EXTERNAL
+row tag_in_scope-M1_StartPB PASS lx_tag_in_scope M1_StartPB
 row ld_edge_retag-M1_StartPB PASS ld_edge_retag m1 M1_StartPB
 row ld_edge_drawn-M1_StartPB PASS ld_edge_drawn m1 M1_StartPB
 row lx_desc_on_element-M1_StartPB PASS lx_desc_on_element m1 M1_StartPB "M1 start pushbutton"
 row ld_add_block-MotorStarter-m1 PASS ld_add_block m1 MotorStarter m1 \
   "Stop := M1_StopPB, Permit := M1_Permit, Aux := M1_Aux, Fault := M1_OL, Reset := FaultReset, FailToStart => Alm_M1FTS"
-for v in M1_StopPB M1_Aux M1_OL FaultReset Alm_M1FTS; do row "ld_declare-$v" PASS ld_declare "$v" VAR_EXTERNAL; done
+for v in M1_StopPB M1_Aux M1_OL FaultReset Alm_M1FTS; do row "tag_in_scope-$v" PASS lx_tag_in_scope "$v"; done
 row ld_vars_lists_instance-m1 PASS ld_vars_lists_instance m1 MotorStarter
 row ld_vars_escape_closes PASS ld_vars_escape_closes
 row ld_add_coil-M1_Run PASS ld_add_coil m1 M1_Run
-row ld_declare-M1_Run PASS ld_declare M1_Run VAR_EXTERNAL
+row tag_in_scope-M1_Run PASS lx_tag_in_scope M1_Run
 chk 05-m1
 #   m2perm: /EStop [ M1_Run [ M1_Aux | M1_AuxBypass ] | Maint ] ( M2_Permit )
 row ld_add_rung-m2perm PASS ld_add_rung m2perm
 row ld_add_contact-EStop-nc-2 PASS ld_add_contact m2perm EStop nc
 row ld_add_contact-M1_Run PASS ld_add_contact m2perm M1_Run
 row ld_add_branch-Maint PASS ld_add_branch m2perm M1_Run Maint
-row ld_declare-Maint PASS ld_declare Maint VAR_EXTERNAL
+row tag_in_scope-Maint PASS lx_tag_in_scope Maint
 row ld_add_contact_after-M1_Aux PASS ld_add_contact_after m2perm contact M1_Run M1_Aux
 row ld_add_branch-nested PASS ld_add_branch m2perm M1_Aux M1_AuxBypass
-row ld_declare-M1_AuxBypass PASS ld_declare M1_AuxBypass VAR_EXTERNAL
+row tag_in_scope-M1_AuxBypass PASS lx_tag_in_scope M1_AuxBypass
 row ld_add_coil-M2_Permit PASS ld_add_coil m2perm M2_Permit
-row ld_declare-M2_Permit PASS ld_declare M2_Permit VAR_EXTERNAL
+row tag_in_scope-M2_Permit PASS lx_tag_in_scope M2_Permit
 row ld_assert_rung-m2perm PASS ld_assert_rung m2perm '/EStop *\[ *M1_Run *\[ *M1_Aux *\| *M1_AuxBypass *\] *\| *Maint *\] *\( *M2_Permit *\)'
 chk 05-m2perm
 #   m2: rung m1 copied below m2perm (select m1, Ctrl+C, select m2perm,
 #   Ctrl+V — the copy is m2, its instance m2), then M1 → M2
 row ld_copy_rung-m1 PASS ld_copy_rung m1 m2perm m2
 row ld_retag-M2_StartPB PASS ld_retag m2 edge M1_StartPB M2_StartPB
-row ld_declare-M2_StartPB PASS ld_declare M2_StartPB VAR_EXTERNAL
+row tag_in_scope-M2_StartPB PASS lx_tag_in_scope M2_StartPB
 row ld_edit_fb_args-m2 PASS ld_edit_fb_args m2 m2 \
   "Stop := M2_StopPB, Permit := M2_Permit, Aux := M2_Aux, Fault := M2_OL, Reset := FaultReset, FailToStart => Alm_M2FTS"
-for v in M2_StopPB M2_Aux M2_OL Alm_M2FTS; do row "ld_declare-$v" PASS ld_declare "$v" VAR_EXTERNAL; done
+for v in M2_StopPB M2_Aux M2_OL Alm_M2FTS; do row "tag_in_scope-$v" PASS lx_tag_in_scope "$v"; done
 row ld_retag-M2_Run PASS ld_retag m2 coil M1_Run M2_Run
-row ld_declare-M2_Run PASS ld_declare M2_Run VAR_EXTERNAL
+row tag_in_scope-M2_Run PASS lx_tag_in_scope M2_Run
 chk 05-m2
 #   starts: M1_Run cStarts:CTU(R := CountReset, PV := 9999, CV => M1_Starts)
 row ld_add_rung-starts PASS ld_add_rung starts
 row ld_add_contact-M1_Run-2 PASS ld_add_contact starts M1_Run
 row ld_add_block-CTU PASS ld_add_block starts CTU "" "R := CountReset, PV := 9999, CV => M1_Starts"
 row ld_rename_block-cStarts PASS ld_rename_block starts c1 cStarts
-row ld_declare-CountReset PASS ld_declare CountReset VAR_EXTERNAL
-# the amber offer types the counter's tag from the CV pin it captures (INT),
-# not from its integer seed (the manifest's REAL)
-row ld_declare_offer_type-M1_Starts PASS ld_declare_offer_type M1_Starts INT
-row ld_declare-M1_Starts PASS ld_declare M1_Starts VAR_EXTERNAL
+row tag_in_scope-CountReset PASS lx_tag_in_scope CountReset
+# the counter's tag is a DINT in the tag database (type:, #200), so the CV
+# pin it captures needs no declaration either
+row tag_in_scope-M1_Starts PASS lx_tag_in_scope M1_Starts
 row ld_delete_last_coil-starts PASS ld_delete_last_coil starts
 chk 05-starts
 #   speed: M2_Run spd:SpeedCalc(…, Hz => M2_SpeedRef) — the CPT/MOV rung.
@@ -347,7 +361,7 @@ row ld_add_rung-speed PASS ld_add_rung speed
 row ld_add_contact-M2_Run PASS ld_add_contact speed M2_Run
 row ld_add_block-SpeedCalc PASS ld_add_block speed SpeedCalc spd \
   "Pct := M2_SpeedPct, MinHz := MinHz, MaxHz := MaxHz, Hz => M2_SpeedRef"
-for v in M2_SpeedPct MinHz MaxHz M2_SpeedRef; do row "ld_declare-$v" PASS ld_declare "$v" VAR_EXTERNAL; done
+for v in M2_SpeedPct MinHz MaxHz M2_SpeedRef; do row "tag_in_scope-$v" PASS lx_tag_in_scope "$v"; done
 row lx_real_coil_checks-M2_SpeedRef XFAIL lx_real_coil_checks speed M2_SpeedRef
 row ld_delete_last_coil-speed PASS ld_delete_last_coil speed M2_SpeedRef
 chk 05-speed
@@ -355,22 +369,22 @@ chk 05-speed
 row ld_add_rung-almestop PASS ld_add_rung almestop
 row ld_add_contact-EStop-3 PASS ld_add_contact almestop EStop
 row ld_add_coil-Alm_EStop PASS ld_add_coil almestop Alm_EStop
-row ld_declare-Alm_EStop PASS ld_declare Alm_EStop VAR_EXTERNAL
+row tag_in_scope-Alm_EStop PASS lx_tag_in_scope Alm_EStop
 row ld_add_rung-almm1 PASS ld_add_rung almm1
 row ld_add_contact-m1.Faulted PASS ld_add_contact almm1 m1.Faulted
 row ld_add_coil-Alm_M1Fault PASS ld_add_coil almm1 Alm_M1Fault
-row ld_declare-Alm_M1Fault PASS ld_declare Alm_M1Fault VAR_EXTERNAL
+row tag_in_scope-Alm_M1Fault PASS lx_tag_in_scope Alm_M1Fault
 row ld_add_rung-almm2 PASS ld_add_rung almm2
 row ld_add_contact-m2.Faulted PASS ld_add_contact almm2 m2.Faulted
 row ld_add_coil-Alm_M2Fault PASS ld_add_coil almm2 Alm_M2Fault
-row ld_declare-Alm_M2Fault PASS ld_declare Alm_M2Fault VAR_EXTERNAL
+row tag_in_scope-Alm_M2Fault PASS lx_tag_in_scope Alm_M2Fault
 row ld_add_rung-almany PASS ld_add_rung almany
 row ld_add_contact-Alm_EStop PASS ld_add_contact almany Alm_EStop
 row ld_add_branch-almany PASS ld_add_branch almany Alm_EStop Alm_M1Fault
 row ld_add_leg-almany PASS ld_add_leg almany
 row ld_retag_placeholder-Alm_M2Fault PASS ld_retag_placeholder almany contact Alm_M2Fault
 row ld_add_coil-Alm_Any PASS ld_add_coil almany Alm_Any
-row ld_declare-Alm_Any PASS ld_declare Alm_Any VAR_EXTERNAL
+row tag_in_scope-Alm_Any PASS lx_tag_in_scope Alm_Any
 chk 05-alarms
 row diagram_zoom-fit PASS diagram_zoom fit
 

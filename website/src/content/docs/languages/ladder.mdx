@@ -232,8 +232,10 @@ resolve through the Go compiler into minimal text edits:
   (`VAR_INPUT`, `VAR_OUTPUT`, `VAR_IN_OUT`) as well as locals; renaming a
   pin also renames it in the calls in that file.
 - The amber **declare …** offer lists every name a rung uses that its POU
-  does not declare. In the program it offers `VAR_EXTERNAL` for a
-  `nautilus.yaml` tag, or `VAR`; inside a `FUNCTION_BLOCK` it offers a pin,
+  does not declare. A `nautilus.yaml` tag is in scope in the program as it
+  is, so it is not listed (unless the manifest gives it no type, when the
+  offer's `VAR_EXTERNAL` types it); any other name in the program is offered
+  as `VAR`; inside a `FUNCTION_BLOCK` it offers a pin,
   `VAR_INPUT` for a name the rungs read and `VAR_OUTPUT` for one a coil or
   `=>` writes. The type comes from the use: a counter's `CV => Count` is
   `INT`, a contact is `BOOL`.

@@ -421,14 +421,44 @@ func Prelude(file string, override map[string]string) (string, int) {
 // languages — what a ladder file needs to resolve a block defined in a
 // sibling, before that sibling has been transpiled.
 func PreludeSources(file string, override map[string]string) (prelude string, sources []string, lines int) {
+	prelude, sources, _ = PreludeParts(file, override)
+	return prelude, sources, strings.Count(prelude, "\n")
+}
+
+// Segment is one library's span of a composed prelude: the file it came
+// from and the prelude lines it occupies. A compile error positioned in
+// the prelude belongs to the library whose segment holds its line — where
+// it is reported, once, instead of on every file that composes it (#199).
+type Segment struct {
+	Path      string // absolute path; a dialect block library's embedded name
+	StartLine int    // 1-based first prelude line of this library
+	Lines     int    // line count it contributes
+	// Transpiled marks a .ld/.fbd library: its lines are generated ST,
+	// so a position in it does not map back onto the file's own lines.
+	Transpiled bool
+}
+
+// Locate maps a 1-based prelude line to the library it falls in and the
+// line within that library's contribution.
+func Locate(segs []Segment, line int) (Segment, int, bool) {
+	for _, sg := range segs {
+		if line >= sg.StartLine && line < sg.StartLine+sg.Lines {
+			return sg, line - sg.StartLine + 1, true
+		}
+	}
+	return Segment{}, 0, false
+}
+
+// PreludeParts is PreludeSources with the prelude's per-library segments.
+func PreludeParts(file string, override map[string]string) (prelude string, sources []string, segs []Segment) {
 	abs, err := filepath.Abs(file)
 	if err != nil {
-		return "", nil, 0
+		return "", nil, nil
 	}
 	root := ProjectRoot(abs)
 	stRel, gRel, err := LibraryPaths(os.DirFS(root))
 	if err != nil {
-		return "", nil, 0
+		return "", nil, nil
 	}
 	toAbs := func(rels []string) []string {
 		var out []string
@@ -481,24 +511,30 @@ func PreludeSources(file string, override map[string]string) (prelude string, so
 	}
 
 	var b strings.Builder
-	write := func(src string) {
+	line := 1
+	write := func(path, src string, transpiled bool) {
 		b.WriteString(src)
 		if !strings.HasSuffix(src, "\n") {
 			b.WriteByte('\n')
 		}
+		n := strings.Count(src, "\n")
+		if !strings.HasSuffix(src, "\n") {
+			n++
+		}
+		segs = append(segs, Segment{Path: path, StartLine: line, Lines: n, Transpiled: transpiled})
+		line += n
 	}
 	for _, l := range stLibs {
-		write(l.src)
+		write(l.path, l.src, false)
 	}
 	for _, l := range gLibs {
 		stSrc, err := LibraryST(l.path, l.src, sources...)
 		if err != nil {
 			continue
 		}
-		write(stSrc)
+		write(l.path, stSrc, true)
 	}
-	prelude = b.String()
-	return prelude, sources, strings.Count(prelude, "\n")
+	return b.String(), sources, segs
 }
 
 // IsLibrary reports whether src is a declarations-only ST source: it parses

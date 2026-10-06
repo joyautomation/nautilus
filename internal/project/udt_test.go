@@ -290,7 +290,7 @@ func TestStructInitUnknownMemberIsAnError(t *testing.T) {
 	if err == nil {
 		t.Fatal("an unknown init member was accepted")
 	}
-	const want = "tag P101: init: unknown member STRTTMRS (did you mean STRTTMRSP?)"
+	const want = "tag P101 (type Pump): init: unknown member STRTTMRS (did you mean STRTTMRSP?)"
 	if !strings.Contains(err.Error(), want) {
 		t.Errorf("error = %q, want it to contain %q", err.Error(), want)
 	}

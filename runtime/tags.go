@@ -62,6 +62,11 @@ type Tags struct {
 	// the API and Sparkplug show. An exact hit (every program and driver
 	// using the declared spelling) never touches this map.
 	fold map[string]string
+	// enums maps ir.NameKey(tag) to the enumerated type (#238) of a tag
+	// whose type is one, so an operator's or a test's write of a member
+	// name ("Run") or its integer lands as the NAMED value, as a program's
+	// assignment does (ir.CoerceValue). Set once in New, read-only after.
+	enums map[string]*ir.Type
 	// divZero counts every integer or REAL division (or MOD) by zero the
 	// VM has evaluated against this store, controller-wide, since start
 	// (ir.DivZeroCounter). Surfaced as ScanStats.DivZero.
@@ -461,7 +466,38 @@ func (t *Tags) Set(name string, v any) {
 		_ = t.SetPath(name, v)
 		return
 	}
+	if ev, isEnum, err := t.enumWrite(name, v); isEnum {
+		if err == nil {
+			t.setAny(name, ev)
+		}
+		return
+	}
 	t.setAny(name, v)
+}
+
+// enumWrite converts a write to an enumerated tag into its named value: a
+// member name (optionally Type#-qualified) or the member's integer. isEnum
+// reports whether name is such a tag at all.
+func (t *Tags) enumWrite(name string, v any) (ir.Value, bool, error) {
+	et := t.enums[ir.NameKey(name)]
+	if et == nil {
+		return ir.Value{}, false, nil
+	}
+	if s, ok := v.(string); ok {
+		member := s
+		if _, after, qualified := strings.Cut(s, "#"); qualified {
+			member = after
+		}
+		if _, ok := et.Enum.Member(member); !ok {
+			return ir.Value{}, true, fmt.Errorf("tag %s: %q is not a member of %s", name, s, et.Enum.Name)
+		}
+		return ir.CoerceValue(ir.StringVal(member), et), true, nil
+	}
+	iv, ok := irValue(v)
+	if !ok {
+		return ir.Value{}, true, fmt.Errorf("tag %s: want a member of %s, got %T", name, et.Enum.Name, v)
+	}
+	return ir.CoerceValue(iv, et), true, nil
 }
 
 // setAny is Set without the member-path guard: the flat, tag-creating store
@@ -508,6 +544,13 @@ func (t *Tags) SetPath(path string, v any) error {
 	// tag after the field symbol it was read from, and such a tag must stay
 	// writable as a whole.
 	if cur, key, ok := t.lookupLocked(path); ok {
+		if ev, isEnum, err := t.enumWrite(key, v); isEnum {
+			if err != nil {
+				return err
+			}
+			t.writeLocked(key, ev)
+			return nil
+		}
 		return t.setFieldLocked(key, t.writeBase(key, cur), nil, v)
 	}
 	root, rest, dotted := strings.Cut(path, ".")

@@ -89,9 +89,16 @@ func (f *FunctionDecl) NodePos() Pos     { return f.Pos }
 
 // VarBlock is a VAR / VAR_INPUT / VAR_OUTPUT / VAR_IN_OUT / VAR_TEMP / VAR_GLOBAL / VAR_EXTERNAL block.
 type VarBlock struct {
-	Kind      string // "VAR", "VAR_INPUT", "VAR_OUTPUT", "VAR_IN_OUT", "VAR_TEMP", "VAR_GLOBAL", "VAR_EXTERNAL"
-	Retain    bool   // VAR RETAIN
-	Constant  bool   // VAR CONSTANT
+	Kind     string // "VAR", "VAR_INPUT", "VAR_OUTPUT", "VAR_IN_OUT", "VAR_TEMP", "VAR_GLOBAL", "VAR_EXTERNAL"
+	Retain   bool   // VAR RETAIN
+	Constant bool   // VAR CONSTANT
+	// FileScope marks a VAR_GLOBAL block written at file level, outside
+	// any POU — the Codesys GVL form (a gvl.st holding one VAR_GLOBAL
+	// block). In a composed source a library's file-scope block precedes
+	// the PROGRAM, and its globals are declared for that program; the
+	// program may still name one in its own VAR_EXTERNAL (IEC's explicit
+	// form), which must then agree in type.
+	FileScope bool
 	Variables []VarDecl
 }
 

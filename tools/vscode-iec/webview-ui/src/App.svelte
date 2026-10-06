@@ -74,6 +74,9 @@
 	// The FBD palette's block picker: the model's catalog, the instances on
 	// the diagram (their outputs are sources), and every name in use.
 	let fbTypes = $state<FbCatalogType[]>([]);
+	// The project manifest's tags (from whichever graph command drew this
+	// diagram): in scope in a PROGRAM without a declaration (#177/#210).
+	let projectTags = $state<{ name: string; type?: string }[]>([]);
 	let userFuncs = $state<FbCatalogType[]>([]);
 	let fbInsts = $state<FbInst[]>([]);
 	let takenNames = $state(new Set<string>());
@@ -112,14 +115,12 @@
 	// The floating in-place editor (constants, renames, comments) — all the
 	// commit/cancel/suggestion mechanics live in FloatEditor.
 	let editor = $state<FloatEditor | null>(null);
-	// Ladder retags also offer the project's nautilus.yaml tags the file
-	// doesn't declare yet — picking one leaves the palette's "declare"
-	// offer to add it to VAR_EXTERNAL.
+	// Retags also offer the project's nautilus.yaml tags the file doesn't
+	// declare: they are in scope without a declaration (#177/#210).
 	const tagItems = $derived.by(() => {
 		const items = varList.map((v) => ({ name: v.name, detail: v.type }));
-		if (mode !== 'ld' || !ldModel?.tags) return items;
 		const have = new Set(varList.map((v) => v.name.toLowerCase()));
-		for (const t of ldModel.tags) {
+		for (const t of projectTags) {
 			if (!have.has(t.name.toLowerCase())) items.push({ name: t.name, detail: `${t.type ?? ''} · manifest`.trim() });
 		}
 		return items;
@@ -257,6 +258,7 @@
 			setVarBounds(varList);
 			fbTypes = model.fbTypes ?? [];
 			userFuncs = model.funcs ?? [];
+			projectTags = model.tags ?? [];
 			fbInsts = model.nodes
 				.filter((n) => n.kind === 'fb')
 				.map((n) => ({ name: n.label, type: n.type, outs: n.outputs ?? [] }));
@@ -434,6 +436,7 @@
 			setVarBounds(varList);
 			usedNames = collectLdUsed(msg.model);
 			ldModel = normalizeLd(msg.model);
+			projectTags = msg.model.tags ?? [];
 			ldStatus = {};
 			diffing = false;
 			problemCount = diags.length;
@@ -463,6 +466,7 @@
 			ldModel = null;
 			varList = (msg.model.vars ?? []) as VarDecl[];
 			setVarBounds(varList);
+			projectTags = msg.model.tags ?? [];
 			usedNames = collectSfcUsed(msg.model);
 			sfcModel = normalizeSfc(msg.model);
 			diffing = false;
@@ -877,7 +881,7 @@
 		</SvelteFlow>
 	</div>
 	{/if}
-	<Palette bind:open={paletteOpen} vars={varList} {fbTypes} funcs={userFuncs} insts={fbInsts} taken={takenNames} net={mode === 'fbd' ? activeNet : undefined} />
+	<Palette bind:open={paletteOpen} vars={varList} tags={projectTags} {fbTypes} funcs={userFuncs} insts={fbInsts} taken={takenNames} net={mode === 'fbd' ? activeNet : undefined} />
 	<VarsPanel
 		bind:open={varsOpen}
 		vars={varList}

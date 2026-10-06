@@ -20,9 +20,9 @@ labelled `ux:<kind>`, `editor:fbd|ext`, `parity:tia`, titled
 | 1 | bug | CASE labels that are named constants silently miscompile | FIXED #196 (PR #242: reference/dosing.st now names its states) |
 | 2 | bug | identifiers are case-sensitive; a project FUNCTION is unreachable from FBD | FIXED #197 (PR #241) |
 | 3 | bug | SCL `#` prefix: an error on the RHS, silently dropped on a target | FIXED #198 (PR #242: one message everywhere; row 05-diag-hash-prefix-target PASS) |
-| 4 | papercut | one library error is reported on every file at 1:1 | OPEN #199 |
-| 5 | papercut | tag `type: INT` refused with "no TYPE INT is declared" | OPEN #200 |
-| 6 | gap | TIME members of a UDT tag cannot be seeded by `init:` | OPEN #201 |
+| 4 | papercut | one library error is reported on every file at 1:1 | FIXED #199 (PR #243: row 05-library-error-once) |
+| 5 | papercut | tag `type: INT` refused with "no TYPE INT is declared" | FIXED #200 (PR #243: every tag in the table carries its type; row 03 now PASS) |
+| 6 | gap | TIME members of a UDT tag cannot be seeded by `init:` | FIXED #201 (PR #243: the reference's recipe has `SettleTime : TIME`, seeded `T#2S`) |
 | 7 | gap | `REGION … END_REGION` unsupported; reported as an undeclared identifier | FIXED #202 (PR #242: reference uses two regions; rows 05-region-outline, 05-region-folds) |
 | 8 | gap | `VAR_TEMP` keeps its value between calls | FIXED #203 (PR #242: the `justDone := FALSE;` workaround is gone) |
 | 9 | gap | no signature help on `LIMIT(` | FIXED (PR #168); row 04-signature-help-LIMIT PASS |
@@ -35,7 +35,7 @@ labelled `ux:<kind>`, `editor:fbd|ext`, `parity:tia`, titled
 | 16 | bug | wired tag chips keep the ghost's 40,40 pin and stack | OPEN #81 (commented) |
 | 17 | papercut | the `(* @layout *)` block lands mid-body | FIXED #208 (PR #236) |
 | 18 | papercut | a blank `.fbd` seeds `PROGRAM main` | FIXED #209 (PR #236) |
-| 19 | gap | every tag re-declared per program, one palette gesture each | OPEN #210 |
+| 19 | gap | every tag re-declared per program, one palette gesture each | FIXED #210 (PR #243: manifest tags in scope; 15 `06-declare-*` rows became one — MainDtS, the dt-tag the manifest names only at beat 12 — and `06-initialize` writes the skeleton) |
 | 20 | gap | no force | FIXED #211 (PR #234: Force… / F badges / status bar; row 13 now PASS) |
 
 20 findings: 4 bugs, 6 papercuts, 10 gaps. 16 new issues; 3 are covered by
@@ -194,7 +194,7 @@ These worked the way a TIA programmer would hope:
 | TIA habit | Nautilus | what the user does instead |
 |---|---|---|
 | **Instance DB** (`"Dosing_DB"`, a DB per call, visible and monitorable on its own) | the instance is a variable of the calling program, `doseA : Dosing(...)` in `main.fbd`; no separate DB object | name the instance after the DB. Its state lives in the program and survives a warm swap by name; monitor it through the live values on the FB's pins. Multi-instances (an FB inside an FB) work the same way (`noFlow : TON` in `Dosing`) |
-| **Global DB of a UDT** (recipe DB) | a tag of a `TYPE … STRUCT` in the tag table, `RecipeA : DoseRecipe` | as here, but a TIME member cannot get a start value (#201), so carry seconds as REAL |
+| **Global DB of a UDT** (recipe DB) | a tag of a `TYPE … STRUCT` in the tag table, `RecipeA : DoseRecipe` | as here; a TIME member takes its start value as `T#2S` (#201) |
 | **VAR_TEMP** = per-call scratch | retained between calls (#203) | write every temp before reading it |
 | **`#local`, `"Global"` quoting, REGION** | none of them (#198, #202) | plain names; `(* *)` comments for structure |
 | **CASE on named state constants** | silently wrong today (#196) | literal labels plus a comment per state |
@@ -204,8 +204,8 @@ These worked the way a TIA programmer would hope:
 | **Block interface / Outline navigation** | none yet (#172 in review) | Ctrl+G to a line, F12 to a declaration; the FBD **vars** panel lists a program's declarations |
 | **Compare blocks** (online/offline compare editor) | **Diff FBD/Ladder/SFC Diagram** vs git HEAD, vs the controller, or between two revisions; text diffs | git holds the project's history; the overlays colour added, removed and changed blocks |
 | **Force table** | none (#211) | Set Live Value on setpoint/state tags; for a test, `given:` with `suspend:` in `*_test.yaml` |
-| **Tag table usable from any block** | each program declares each tag `VAR_EXTERNAL` (#210) | the palette's "variable (external tag)" once per tag, or type the header |
-| **Data type column in the tag table** | `type:` takes a UDT only (#200) | leave `type:` off for elementary tags; the programs' declarations set it |
+| **Tag table usable from any block** | every program sees the tag table as it is (#210); a function block names what it uses in its own `VAR_EXTERNAL` | nothing |
+| **Data type column in the tag table** | `type:` takes any elementary type, a UDT, or an ARRAY (#200) | nothing |
 
 ## Rig notes (not product findings)
 

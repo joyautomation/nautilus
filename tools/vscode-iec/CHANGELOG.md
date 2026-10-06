@@ -31,6 +31,29 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Added
 
+- **Manifest tags are in scope in every program without `VAR_EXTERNAL`**,
+  the way a TIA tag table, a Codesys GVL or Logix controller scope is.
+  Hover, completion (with the tag's unit and description), go-to-definition
+  (the tag's entry in `nautilus.yaml`), Find All References and rename all
+  reach a tag a program names without declaring it. A tag's type is its
+  `type:`, else what its `init:` implies; `VAR_EXTERNAL` stays legal and
+  must agree with a stated `type:`. A program's own local of a tag's name
+  shadows it, with a warning. Function blocks still name the tags they use
+  in their own `VAR_EXTERNAL`. In the diagrams: the ladder's **declare …**
+  offer no longer lists a typed tag, an SFC association naming a tag is no
+  longer taken for a new action, and the FBD palette and retags offer the
+  manifest's tags. `naut new`'s minimal programs drop their `VAR_EXTERNAL`
+  blocks. Needs a `naut` newer than 0.15.0. (#177, #210)
+
+- **A tag's `type:` takes any IEC elementary type** (`INT`, `BOOL`, `REAL`,
+  `TIME`, `STRING`, …) or an `ARRAY`, as well as a UDT, and `init:` must
+  agree with it. A `TIME` member of a struct tag seeds from `T#2s`, `2s` or
+  milliseconds; an array member from a list. (#200, #201)
+
+- **A Codesys-style GVL file** — a library `.st` holding only a
+  `VAR_GLOBAL` block — declares its globals for every program instead of
+  breaking each one with "undeclared identifier <ProgramName>". (#175)
+
 - **Enumerated types show their member names live.** A variable or tag of
   an enumeration (`TYPE Mode : (Idle, Run, Fault); END_TYPE`) shows `Run`,
   not `1`, in the inline live values, the Live Values panel and the
@@ -220,6 +243,10 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   guide).
 
 ### Fixed
+
+- **An error in a library file is reported once, on its own line** —
+  in `naut check` and in the Problems panel — instead of again at 1:1 on
+  every file that composes the library. (#199)
 
 - **Identifiers are case-insensitive** (IEC 61131-3, as in TIA Portal,
   Codesys and Studio 5000). `Level`, `LEVEL` and `level` are one name — a

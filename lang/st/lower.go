@@ -21,7 +21,22 @@ import (
 // ImplicitGlobals lets the caller surface PLC-wide variables (declared
 // in the PLC config) so programs can reference them directly without
 // repeating VAR_GLOBAL boilerplate. Names already declared explicitly
-// in the source win; the implicit entry is then silently ignored.
+// in the source win: a local VAR of the same name shadows the global,
+// and an explicit VAR_GLOBAL/VAR_EXTERNAL binds it with its own type
+// (which must agree when TagTypes states one). An implicit global is
+// recorded in ir.Program.Globals only where the PROGRAM body actually
+// names it — a manifest of a thousand tags must not make every program
+// bind (and snapshot) all of them. A nil type marks a tag the project
+// declares but cannot type (no type:, no init:); naming it is an error
+// that says so, instead of "undeclared". FUNCTION_BLOCK and FUNCTION
+// bodies never see implicit globals: a block reaches a tag only through
+// its own VAR_EXTERNAL, so it stays self-contained.
+//
+// TagTypes are the tags whose type the project STATES (a manifest
+// type:). An explicit VAR_GLOBAL / VAR_EXTERNAL of one must declare that
+// same type; a disagreement is an error at the declaration. A type that
+// was only inferred (from an init: value) is not here, so a program's
+// `Count : DINT` keeps overriding an `init: 0` that would read as REAL.
 //
 // Types is a registry of TYPEs resolved elsewhere (a separately compiled
 // library) that this source should see in addition to its own TYPE block.
@@ -31,6 +46,7 @@ type LowerOpts struct {
 	UserFBs         map[string]*ir.FBDef
 	UserFuncs       map[string]*ir.FuncDef
 	ImplicitGlobals map[string]*ir.Type
+	TagTypes        map[string]*ir.Type
 	Types           map[string]*ir.Type
 }
 
@@ -93,6 +109,7 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 	l := newLowerer(prog, combined)
 	l.userFuncs = combinedFuncs
 	l.implicitGlobals = opts.ImplicitGlobals
+	l.tagTypes = opts.TagTypes
 	// Seed the file's TYPE table with any the caller supplies (a separately
 	// compiled library), then resolve this file's own TYPE block. Both are
 	// in scope for the POUs below — a FUNCTION_BLOCK pin may name a UDT.
@@ -412,6 +429,8 @@ type lowerer struct {
 	userFBs         map[string]*ir.FBDef   // optional; consulted for FB type resolution
 	userFuncs       map[string]*ir.FuncDef // optional; consulted at call sites for bare-name lookup
 	implicitGlobals map[string]*ir.Type    // optional; PLC project vars surfaced as globals
+	tagTypes        map[string]*ir.Type    // optional; tags whose type the project states
+	untypedTags     map[string]string      // NameKey → spelling: project tags with no knowable type
 	// returnSlot, when >= 0, marks the slot the bare function-name
 	// identifier should bind to inside a FUNCTION body so `Name := value`
 	// assigns the return value rather than failing as undeclared.
@@ -449,6 +468,11 @@ type symbol struct {
 	typ    *ir.Type
 	kind   ir.VarKind
 	global string
+	// fileScope: declared by a file-level VAR_GLOBAL (a GVL), which a
+	// POU's own VAR_EXTERNAL may name again. implicit: a project tag the
+	// POU did not declare — recorded in Globals on first use.
+	fileScope bool
+	implicit  bool
 	// constant marks a VAR CONSTANT local: reads fold to its value (see
 	// lowerIdent), and writing it is a compile error.
 	constant bool
@@ -904,11 +928,12 @@ func (l *lowerer) collectVars() error {
 		}
 		kind := varKindFor(vb.Kind)
 		for _, vd := range vb.Variables {
-			if prev, dup := l.lookup(vd.Name); dup {
-				return errAt(vd.Pos, dupErr("declaration", vd.Name, prev.name))
-			}
+			prev, dup := l.lookup(vd.Name)
 			if kind == ir.VarGlobal && vb.Constant {
 				// VAR_GLOBAL CONSTANT inside a POU: a constant, not a tag.
+				if dup {
+					return errAt(vd.Pos, dupErr("declaration", vd.Name, prev.name))
+				}
 				if err := l.declareConst(vb, vd, l.consts); err != nil {
 					return err
 				}
@@ -916,7 +941,28 @@ func (l *lowerer) collectVars() error {
 			}
 			t, err := l.resolveType(vd.Type)
 			if err != nil {
+				if dup {
+					return errAt(vd.Pos, dupErr("declaration", vd.Name, prev.name))
+				}
 				return errAt(vd.Pos, fmt.Errorf("VAR %s: %w", vd.Name, err))
+			}
+			if dup {
+				// A POU naming a GVL global in its own VAR_EXTERNAL is IEC's
+				// explicit form of the same binding, not a second variable.
+				if prev.fileScope && kind == ir.VarGlobal && !vb.FileScope {
+					if !ir.SameShape(t, prev.typ) {
+						return errAt(vd.Pos, fmt.Errorf("%s %s : %s disagrees with the global's declaration %s : %s in the project's VAR_GLOBAL",
+							vb.Kind, vd.Name, t, prev.name, prev.typ))
+					}
+					continue
+				}
+				return errAt(vd.Pos, dupErr("declaration", vd.Name, prev.name))
+			}
+			if kind == ir.VarGlobal {
+				if want, spelled, ok := ir.Lookup(l.tagTypes, vd.Name); ok && want != nil && !ir.SameShape(t, want) {
+					return errAt(vd.Pos, fmt.Errorf("%s %s : %s disagrees with the tag %s, whose type is %s — "+
+						"a tag has one type; change this declaration or the tag's type:", vb.Kind, vd.Name, t, spelled, want))
+				}
 			}
 			if err := checkTemp(vb, vd, t); err != nil {
 				return err
@@ -934,7 +980,7 @@ func (l *lowerer) collectVars() error {
 					// would be silently ignored, so say so instead.
 					return errAt(vd.Pos, fmt.Errorf("%s %s: an initial value is not applied to a tag — give it an init: in the manifest instead", vb.Kind, vd.Name))
 				}
-				l.scope[ir.NameKey(vd.Name)] = symbol{name: vd.Name, slot: -1, typ: t, kind: ir.VarGlobal, global: vd.Name}
+				l.scope[ir.NameKey(vd.Name)] = symbol{name: vd.Name, slot: -1, typ: t, kind: ir.VarGlobal, global: vd.Name, fileScope: vb.FileScope}
 				// A global has no slot, so Slots cannot record that the
 				// program binds it; Globals is where tooling reads it.
 				l.irProg.Globals[vd.Name] = t
@@ -966,18 +1012,48 @@ func (l *lowerer) collectVars() error {
 	}
 	// Inject PLC project variables as implicit globals so unqualified
 	// references resolve without a matching VAR_GLOBAL declaration.
-	// Any name already declared explicitly (above) wins.
+	// Any name already declared explicitly (above) wins. They join
+	// Globals on first use (lowerIdent), not here.
 	for name, t := range l.implicitGlobals {
 		if _, exists := l.lookup(name); exists {
 			continue
 		}
 		if t == nil {
+			if l.untypedTags == nil {
+				l.untypedTags = map[string]string{}
+			}
+			l.untypedTags[ir.NameKey(name)] = name
 			continue
 		}
-		l.scope[ir.NameKey(name)] = symbol{name: name, slot: -1, typ: t, kind: ir.VarGlobal, global: name}
-		l.irProg.Globals[name] = t
+		l.scope[ir.NameKey(name)] = symbol{name: name, slot: -1, typ: l.canonical(t), kind: ir.VarGlobal, global: name, implicit: true}
 	}
 	return nil
+}
+
+// canonical maps a type resolved elsewhere (a tag's type:, resolved
+// against a separate parse of the same TYPE declarations) onto this
+// source's own resolution of it, so identity checks — a VAR_IN_OUT
+// binding, a struct assignment — see one DoseRecipe, not two.
+func (l *lowerer) canonical(t *ir.Type) *ir.Type {
+	switch {
+	case t == nil:
+		return nil
+	case t.Kind == ir.TypeStruct && t.Struct != nil:
+		if own, _, ok := ir.Lookup(l.types, t.Struct.Name); ok && ir.SameShape(own, t) {
+			return own
+		}
+	case t.Enum != nil:
+		if own, _, ok := ir.Lookup(l.types, t.Enum.Name); ok && own.Enum != nil && ir.SameShape(own, t) {
+			return own
+		}
+	case t.Kind == ir.TypeArray:
+		if elem := l.canonical(t.Elem); elem != t.Elem {
+			c := *t
+			c.Elem = elem
+			return &c
+		}
+	}
+	return t
 }
 
 // checkVarBlock rejects qualifier combinations the block kind cannot carry.
@@ -1632,9 +1708,15 @@ func (l *lowerer) lowerIdent(n *IdentExpr) (ir.Expr, error) {
 			// coil or contact not yet named ("+ rung" writes `( _ )`).
 			return nil, errName(n.Pos, name, fmt.Errorf("unfilled placeholder `_`: connect this pin or name its variable"))
 		}
+		if tag, isTag := l.untypedTags[ir.NameKey(name)]; isTag {
+			return nil, errName(n.Pos, name, fmt.Errorf("%q is a project tag with no type — give %s a type: (or an init:) in the manifest, or declare it in VAR_EXTERNAL", name, tag))
+		}
 		return nil, errName(n.Pos, name, fmt.Errorf("undeclared identifier %q (declare in VAR_* or VAR_GLOBAL block)", name))
 	}
 	if sym.kind == ir.VarGlobal {
+		if sym.implicit {
+			l.irProg.Globals[sym.global] = sym.typ
+		}
 		return &ir.GlobalRef{Name: sym.global, T: sym.typ}, nil
 	}
 	return &ir.SlotRef{Slot: sym.slot, T: sym.typ}, nil

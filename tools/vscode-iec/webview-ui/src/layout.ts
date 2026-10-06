@@ -65,6 +65,9 @@ export type FbdModel = {
   funcs?: FbCatalogType[];
   /** Numbered networks, when the body declares any (NETWORK lines). */
   networks?: FbdNetwork[];
+  /** The project manifest's tags: in scope without a declaration
+   * (#177/#210), so the palette and a retag offer them. */
+  tags?: { name: string; type?: string; role?: string; unit?: string; desc?: string }[];
 };
 
 /** Arrays always arrays: an older CLI (or saved webview state) can carry

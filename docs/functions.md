@@ -222,6 +222,33 @@ case-insensitive (`limit(`, `ton`, `Real`).
 
 Pinned in `lang/conformance/st-case-insensitive` (ST, ladder, FBD and SFC).
 
+## Project tags are in scope
+
+Every tag the manifest declares (`nautilus.yaml` and its `tag-files:`) is in
+scope in every `PROGRAM` — ST, ladder, FBD and SFC — without a declaration:
+the tag table is the declaration, as a Codesys GVL, a TIA PLC tag table or
+Logix controller scope is.
+
+- **Its type** is the tag's `type:` (any elementary type, a project `TYPE`,
+  or an `ARRAY` of either), else the type its `init:` implies (`TRUE` BOOL,
+  a number REAL, `T#5s` TIME, other text STRING). A tag with neither cannot
+  be typed; naming it is an error that says to give it a `type:`.
+- **`VAR_EXTERNAL` stays legal**, as IEC's explicit form, and must agree with
+  a stated `type:` (an error at the declaration otherwise). Two programs
+  binding one untyped tag with different types is an error naming both.
+- **A local shadows a tag**: a program's own `VAR Level` is its own variable
+  (IEC scoping). `naut check` and the editor warn.
+- **`FUNCTION_BLOCK` and `FUNCTION` bodies do not see tags implicitly** — a
+  block reaches a tag only through its own `VAR_EXTERNAL`, so it stays
+  self-contained.
+- **A GVL file** — a library `.st` holding a file-level `VAR_GLOBAL` block —
+  declares globals for every program; one the manifest does not declare is a
+  `state` tag starting at zero. A program may still name it in
+  `VAR_EXTERNAL` (same type).
+
+The [tag model guide](/guides/tag-model/#tags-in-scope-the-rules) has the
+details, `type:` forms and `init:` forms (TIME members, arrays).
+
 ## Types
 
 `BOOL`, `INT`, `DINT`, `UINT`, `UDINT`, `WORD`, `REAL`, `LREAL`, `TIME`,
@@ -241,7 +268,7 @@ Pinned in `lang/conformance/st-case-insensitive` (ST, ladder, FBD and SFC).
 - Assigning a struct or an array **copies** it. `b := a; b.F := 1` leaves
   `a.F` alone, and so does a struct passed to a `VAR_INPUT` pin. The one
   pin that writes back to the caller is `VAR_IN_OUT`, [below](#user-function-blocks).
-- A field or element of a `VAR_EXTERNAL` tag assigns directly —
+- A field or element of a tag assigns directly —
   `P101.Running := TRUE`, `Levels[2] := 41.0`. The tag store holds the
   whole aggregate, so the VM reads it, writes the field, and puts it back.
 

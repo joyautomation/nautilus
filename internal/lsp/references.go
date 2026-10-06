@@ -161,7 +161,7 @@ func (s *Server) tagReferences(path string, t refTarget, byURI map[string][]refH
 			if progPath == path {
 				continue
 			}
-			an := analyzerFor(prog.File)(prog.Body, comp.Prelude, preludeLines)
+			an := analyzerFor(prog.File)(prog.Body, env{prelude: comp.Prelude, preludeLines: preludeLines, tags: projectTagDefs(path)})
 			var bound *Symbol
 			for i := range an.Symbols {
 				sy := &an.Symbols[i]
