@@ -185,8 +185,13 @@ Operator precedence runs, tightest first: unary `NOT` and `-`; then `*`, `/`,
 `MOD`; then `+` and `-`; then the comparisons `<`, `<=`, `>`, `>=`, `=`, `<>`;
 then `AND`; then `XOR`; then `OR`. An `INT` widens to `REAL` where one is
 expected; the other direction is a compile error, so narrowing goes through
-`REAL_TO_INT`, which rounds to nearest with ties to even (`2.5` becomes `2`,
-`3.5` becomes `4`, as on Codesys, Logix and TIA). `TRUNC` truncates toward zero.
+a conversion: `REAL_TO_DINT` (or `TO_DINT`) rounds to nearest with ties to even
+(`2.5` becomes `2`, `3.5` becomes `4`, as on Codesys, Logix and TIA), and
+`TRUNC_DINT` truncates toward zero. Every IEC `<A>_TO_<B>` between the
+elementary types exists; integer narrowing wraps to the target width
+(`DINT_TO_INT(70000)` is `4464`, as on Codesys), and a REAL or a STRING with
+no value in the target faults the scan. The full matrix and its rules are in
+the [language reference](/reference/functions/#type-conversions).
 
 A function block instance is declared like a variable (`dwell : TON;`) and
 invoked as its own statement with named arguments. `=>` copies an output into a

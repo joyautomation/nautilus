@@ -294,9 +294,10 @@ END_TYPE
 - Values of one enumeration compare (`=`, `<>`, and `<`/`>` by member
   value) and are `CASE` labels. Assignment is between the same enumeration
   only. An enumeration does not mix with an integer and has no arithmetic.
-- Conversion is explicit: `TO_INT(s)` (or `TO_DINT`, any integer type) is
-  the member's integer; `TO_WashState(n)` is the member with integer `n` (a
-  number no member has keeps that number and shows unnamed).
+- Conversion is explicit: `TO_INT(s)` (or `TO_DINT`, `TO_REAL`, any
+  [`TO_<type>`](#type-conversions)) is the member's integer, converted;
+  `TO_WashState(n)` is the member with integer `n` (a number no member has
+  keeps that number and shows unnamed).
 - A tag may be typed with an enumeration in the manifest (`type:
   WashState`), seeded by name or number (`init: Fill` or `init: 10`).
 - **Live values show the member name.** `/api/state`, the live stream, the
@@ -428,7 +429,7 @@ takes [EN/ENO](#eneno-execution-control).
 | `ABS` | 1 numeric | same type | absolute value |
 | `SQRT`, `LN`, `LOG`, `EXP` | 1 numeric | REAL | root, ln, log₁₀, eˣ |
 | `EXPT` | `EXPT(base, exp)` | REAL | baseᵉˣᵖ |
-| `TRUNC` | 1 REAL | INT | toward-zero truncation |
+| `TRUNC` | 1 REAL | INT | toward-zero truncation; `TRUNC_DINT` and the rest of the typed forms are under [Type conversions](#type-conversions) |
 | `SIN`, `COS`, `TAN` | 1 numeric (radians) | REAL | trigonometry |
 | `ASIN`, `ACOS`, `ATAN` | 1 numeric | REAL | inverse trig |
 | `ATAN2` | `ATAN2(Y, X)` | REAL | quadrant-correct arctangent |
@@ -462,7 +463,8 @@ names the type. Ladder contacts and coils and FBD wires take every form
 
 Caveat: the runtime's integers are 64-bit, so rotates and arithmetic
 operate over 64 bits — a `WORD` you think of as 16 bits rotates as a 64-bit
-value. Only partial access and diagnostics use the declared width.
+value. Only partial access, diagnostics and the [conversions](#type-conversions)
+use the declared width.
 
 ### Strings
 
@@ -482,20 +484,91 @@ clamp to the string instead of faulting.
 
 ## Type conversions
 
-Explicit, in the standard's `X_TO_Y` naming — there are no implicit
-conversions across kinds:
+Explicit, in the standard's `<A>_TO_<B>` naming — there are no implicit
+conversions across kinds. The set is generated from one table of the
+elementary types ([#244](https://github.com/joyautomation/nautilus/issues/244),
+`lang/ir/conversions.go`), so the compiler, FBD, completion and signature
+help all see the same list.
 
-| Conversion | Notes |
-| --- | --- |
-| `INT_TO_REAL`, `REAL_TO_INT` | REAL→INT rounds to nearest, ties to even (IEC 60559: 2.5 → 2, 3.5 → 4) |
-| `BOOL_TO_INT`, `INT_TO_BOOL` | 0 ↔ FALSE, nonzero → TRUE |
-| `BOOL_TO_REAL`, `REAL_TO_BOOL` | 0.0 ↔ FALSE, nonzero → TRUE |
-| `INT_TO_TIME`, `TIME_TO_INT` | the INT is **milliseconds** |
-| `REAL_TO_TIME`, `TIME_TO_REAL` | milliseconds, rounded to nearest, ties to even |
-| `INT_TO_STRING`, `REAL_TO_STRING`, `BOOL_TO_STRING`, `TIME_TO_STRING` | formatting |
-| `STRING_TO_INT`, `STRING_TO_REAL`, `STRING_TO_BOOL` | parse; a non-parsing string is a runtime scan fault, so validate upstream |
-| `TO_INT`, `TO_DINT`, … (any integer type) | an [enumeration](#enumerations)'s member integer (or an integer, unchanged) |
-| `TO_<Enum>` (`TO_WashState`) | the enumeration member with that integer |
+**The matrix.** Every `<A>_TO_<B>` between these 18 types exists, except
+the cells marked `·`:
+
+| from ↓ / to → | BOOL | SINT…LINT | USINT…ULINT | BYTE, WORD | DWORD | LWORD | REAL | LREAL | TIME, LTIME | STRING |
+| --- | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: | :-: |
+| **BOOL** | | 0/1 | 0/1 | 0/1 | 0/1 | 0/1 | 0/1 | 0/1 | 0/1 ms | `TRUE`/`FALSE` |
+| **SINT…LINT** | ≠ 0 | wrap | wrap | wrap | wrap | wrap | exact¹ | exact¹ | ms | decimal |
+| **USINT…ULINT** | ≠ 0 | wrap | wrap | wrap | wrap | wrap | exact¹ | exact¹ | ms | decimal |
+| **BYTE, WORD** | ≠ 0 | wrap | wrap | wrap | wrap | wrap | · | · | ms | decimal |
+| **DWORD** | ≠ 0 | wrap | wrap | wrap | wrap | wrap | bits | · | ms | decimal |
+| **LWORD** | ≠ 0 | wrap | wrap | wrap | wrap | wrap | · | bits | ms | decimal |
+| **REAL** | ≠ 0 | round² | round² | · | bits | · | — | same | round² ms | shortest |
+| **LREAL** | ≠ 0 | round² | round² | · | · | bits | same | — | round² ms | shortest |
+| **TIME, LTIME** | ≠ 0 | ms, wrap | ms, wrap | ms, wrap | ms, wrap | ms, wrap | ms | ms | same | `T#…ms` |
+| **STRING** | parse³ | parse³ | parse³ | parse³ | parse³ | parse³ | parse³ | parse³ | parse³ | — |
+
+That is 294 `X_TO_Y` functions, plus:
+
+| Form | Example | Meaning |
+| --- | --- | --- |
+| `TO_<type>(x)` | `TO_DINT(r)`, `TO_STRING(t)` | the overloaded form: `<A>_TO_<type>` for whatever `x` is declared as (an expression's integer converts as `LINT`; an [enumeration](#enumerations) as its integer). The same `·` cells are compile errors. |
+| `TRUNC_<int>(x)` | `TRUNC_INT(r)` | REAL → that integer type, **toward zero** |
+| `<real>_TRUNC_<int>(x)` | `LREAL_TRUNC_DINT(lr)` | the standard's typed truncation; same as `TRUNC_<int>` |
+| `TRUNC(x)` | `TRUNC(r)` | toward zero, into the 64-bit integer an undeclared INT is |
+| `TO_<Enum>(n)` | `TO_WashState(20)` | the [enumeration](#enumerations) member with that integer |
+
+**The rules.**
+
+- **Integer narrowing wraps.** The result keeps the target's low bits, read
+  signed or unsigned as the target is: `DINT_TO_INT(70000)` = 4464,
+  `INT_TO_USINT(-1)` = 255, `BYTE_TO_SINT(255)` = -1, `SINT_TO_WORD(-1)` =
+  16#FFFF. This is what Codesys documents ("the high bytes are lost") and
+  what TIA writes (TIA also drops ENO); the standard calls the
+  integer↔bit-string ones a binary transfer. Saturating would match none of
+  them. Arithmetic still never wraps (see [Types](#types)); a conversion is
+  the one place the declared width cuts.
+- **The argument is read as its own type first.** A variable keeps a 64-bit
+  value at run time, so `UINT_TO_DINT(u)` with `u` at -1 sees the UINT a PLC
+  would hold, 65535. Pass a `DINT` to `INT_TO_REAL` and it is read as an
+  INT, as Codesys's implicit conversion would.
+- ² **REAL → integer and REAL → TIME round to nearest, ties to even** (IEC
+  60559: 2.5 → 2, 3.5 → 4, -2.5 → -2), the same as Codesys, Logix and TIA's
+  `ROUND`. `TRUNC*` go toward zero. A REAL with **no value in the target**
+  — beyond its range, NaN or infinite — **faults the scan**, like a STRING
+  that does not parse: there is no right number to store, and TIA reports
+  it as an error too. `LREAL_TO_SINT(127.5)` faults; `LREAL_TO_SINT(-128.5)`
+  rounds to the even -128 and does not.
+- **REAL ↔ bit strings are binary transfers** of the IEEE 754 pattern, and
+  only at the same width: `REAL_TO_DWORD(1.0)` = 16#3F800000,
+  `LWORD_TO_LREAL`, as the standard and TIA define them. A pattern that is
+  NaN or infinite faults (the tag bus is JSON, which cannot carry them).
+  The standard has no `REAL_TO_WORD`, and Codesys's numeric one would read
+  differently from TIA's, so it is a compile error that says to write
+  `REAL_TO_UINT` for the number or `REAL_TO_DWORD` for the bits.
+- ¹ **Integers to REAL are exact** up to 2⁵³: REAL and LREAL are both
+  float64 at run time (a 32-bit REAL would round `DINT_TO_REAL(16777217)` to
+  16777216; here it stays). `REAL_TO_LREAL` and `LREAL_TO_REAL` change only
+  the type. ULINT and LWORD convert unsigned.
+- **BOOL** converts to 0/1 of any numeric type (1 ms for TIME); any number
+  converts to TRUE when it is nonzero **in the source width**
+  (`BYTE_TO_BOOL(256)` is FALSE).
+- **TIME and LTIME count milliseconds** (LTIME is not nanoseconds here).
+  `TIME_TO_INT(T#70s)` wraps like any integer narrowing; use `TIME_TO_DINT`.
+- ³ **STRING parses**, after trimming blanks: an integer in decimal or
+  base-prefixed (`16#FF`, `2#1010`, `8#17`) with `_` separators, a REAL in
+  ordinary decimal or exponent notation, a TIME as a duration (`T#1m30s`,
+  `90s`, `500ms`), a BOOL as `TRUE`/`FALSE`/`1`/`0` in any case. Text that
+  does not parse, or parses to a value the target cannot hold
+  (`STRING_TO_SINT('128')`, `STRING_TO_UINT('-1')`), **faults the scan** —
+  validate upstream. Formatting is decimal for integers (unsigned for the
+  U- and bit-string types), the shortest exact form for REAL (`21.5`, `3`,
+  `1e+21`), `T#5000ms` / `LTIME#5000ms` for durations, so every
+  `STRING_TO_x(x_TO_STRING(v))` gives `v` back.
+- `DATE`, `TIME_OF_DAY` and `DATE_AND_TIME` are not run-time types yet, so
+  they have no conversions.
+
+Pinned in `lang/conformance/st-conversions-matrix` (ST and FBD, every
+family's edges) and `fn-conversions`; the faults in
+`lang/conformance/faults_test.go`.
 
 ## Standard function blocks
 
