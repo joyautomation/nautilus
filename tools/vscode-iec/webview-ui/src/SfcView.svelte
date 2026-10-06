@@ -867,7 +867,9 @@ let pendingSelectTrans = $state<{ from: string | string[]; to: string | string[]
 			ev.preventDefault();
 			return;
 		}
-		if ((ev.key === 'Enter' || ev.key === 'F2') && !ev.ctrlKey && !ev.metaKey && !ev.altKey && selected) {
+		// (Enter on a focused palette/popover button is that button's click.)
+const onButton = !!(ev.target as Element | null)?.closest?.('button');
+if ((ev.key === 'Enter' || ev.key === 'F2') && !ev.ctrlKey && !ev.metaKey && !ev.altKey && selected && !onButton) {
 			editSelected(ev.key === 'F2');
 			ev.preventDefault();
 			ev.stopPropagation();
