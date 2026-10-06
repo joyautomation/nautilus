@@ -187,6 +187,8 @@
 	// body — the header + logic together (VarsPanel itself can't tell tags
 	// from step/action names, but it only marks unreferenced tags "unused";
 	// a false negative here just costs the badge, never breaks anything).
+	// The chart's one scope: tags, retained locals and named constants.
+	const SFC_SCOPES = [{ pou: '', label: '', sections: ['VAR_EXTERNAL', 'VAR', 'VAR CONSTANT'] }];
 	function collectSfcUsed(m: SfcModel): Set<string> {
 		const used = new Set<string>();
 		const words = (s: string) => {
@@ -202,7 +204,7 @@
 		init: string,
 		at: { x: number; y: number; w: number },
 		commit: (v: string) => void,
-		opts?: { multiline?: boolean; suggest?: 'tags' | 'types' | 'functions' | 'assoc' }
+		opts?: { multiline?: boolean; suggest?: 'tags' | 'types' | 'functions' | 'assoc'; error?: string; title?: string }
 	) {
 		editor?.open({ init, at, commit, ...opts });
 	}
@@ -881,19 +883,20 @@
 		vars={varList}
 		used={usedNames}
 		insts={mode === 'ld' ? ldInsts : []}
-		scopes={mode === 'ld' ? ldScopes : undefined}
+		scopes={mode === 'ld' ? ldScopes : mode === 'sfc' ? SFC_SCOPES : undefined}
 		readonly={readOnly || diffing}
 		onRename={mode === 'ld' ? (name, newName, pou) => postLd({ type: 'renameVar', name, newName, ...(pou ? { block: pou } : {}) }) : undefined}
 		onDeclare={mode === 'ld'
 			? (name, type, section, pou) => postLd({ type: 'declareVar', name, varType: type, section, ...(pou ? { block: pou } : {}) })
 			: mode === 'sfc'
-				? (name, type, section) => postSfc({ type: 'declareVar', name, varType: type, section })
+				? (name, type, section, _pou, init) => postSfc({ type: 'declareVar', name, varType: type, section, init })
 				: undefined}
 		onDelete={mode === 'ld'
 			? (name, pou) => postLd({ type: 'deleteVar', name, ...(pou ? { block: pou } : {}) })
 			: mode === 'sfc'
 				? (name) => postSfc({ type: 'deleteVar', name })
 				: undefined}
+		withInit={mode === 'sfc'}
 	/>
 	{#if inspect}
 		<InstancePanel inst={inspect} onclose={() => (inspect = null)} />

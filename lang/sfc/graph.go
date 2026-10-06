@@ -309,7 +309,11 @@ func scanSFCComments(lines []string, startLine, endLine int) []Comment {
 func scanVars(header string) []VarDecl {
 	var out []VarDecl
 	for _, d := range hdrvars.Scan(header) {
-		out = append(out, VarDecl{Name: d.Name, Type: d.Type, Init: d.Init, Section: d.Section, Line: d.Line})
+		sec := d.Section
+		if d.Constant {
+			sec += " CONSTANT" // the vars panel's CONSTANT section
+		}
+		out = append(out, VarDecl{Name: d.Name, Type: d.Type, Init: d.Init, Section: sec, Line: d.Line})
 	}
 	return out
 }

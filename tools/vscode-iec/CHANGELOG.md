@@ -127,6 +127,35 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   a ladder programmer's first project opens as `program.ld` without a
   terminal. The Get Started walkthrough's step is the same command (#221).
 
+- **SFC: the keyboard walks the chart.** The arrow keys move the selection
+  along the flow: ↓ from a step to its first transition (highest priority)
+  and on to its target, ↑ back, ← → to the neighbouring step or alternative
+  branch, → from a step into its actions. Enter edits the selection in place
+  (a step's name, a transition's condition, an action's body, a note), F2
+  renames, Del deletes. (#76)
+
+- **SFC: transition names on the chart.** A named transition shows its name
+  above its condition; the add forms (+ step chained, + transition, + alt
+  branch) take one, and F2 or a double-click on the name renames it
+  (`naut sfc edit` op `renameTransition`). (#76)
+
+- **SFC: reorder alternative branches.** Branches out of one step carry
+  their priority number (file order); ◀ priority / priority ▶ in the
+  palette, or Alt+← / Alt+→, move the selected one earlier or later
+  (op `moveTransition`), so an abort drawn last can be given priority. (#181)
+
+- **SFC: a new action's body from the chart.** Double-clicking an
+  association whose target is not an ACTION or a declared variable yet opens
+  the ST-body editor; saving it writes `ACTION <name>`. Rows for such a
+  target are marked, and a double-click on the qualifier column edits the
+  association line. (#182)
+
+- **SFC vars panel: constants and initial values.** The section toggle
+  cycles ext / local / const (`VAR CONSTANT`), an init field takes the value
+  (`TIME` `:= T#60S`), and a declare the CLI refuses keeps the typed name.
+  Constants list with a `const` badge. Needs a `naut` newer than 0.15.0.
+  (#180)
+
 - **Signature help: a call's parameters while you type it.** Typing `(`
   after a function or a function block instance opens the parameter-hints
   widget with the callee's signature, and `,` moves the highlight on —
@@ -198,6 +227,20 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   Escape.** The instances rungs declare by their calls (`m1:MotorStarter(…)`,
   the AOI's backing tag) are listed read-only as `m1 : MotorStarter` with
   their rung. (#220)
+
+- **SFC: "+ action" adds at the end.** Associations landed first, so a
+  step's list read upside down against the order it was typed. (#186)
+
+- **SFC: the action field no longer drops text it cannot read.**
+  `D Detergent T#3S` (qualifier, name, time in columns) is now accepted;
+  anything else stays in the field with the form it expects. (#183)
+
+- **SFC: a join whose legs differ in length draws as a convergence** under
+  both legs instead of a `↩` jump under one of them. (#187)
+
+- **SFC: a new, empty `.sfc` is one warning, not an error.** The Problems
+  view and `naut check` say to initialize it (`naut` newer than 0.15.0);
+  `naut check` stays clean until a task names it. (#179)
 
 - **The FB monitor CodeLens shows the real position.** It said "1 of 2"
   whichever instance was monitored; monitoring the second one now reads

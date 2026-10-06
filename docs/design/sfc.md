@@ -397,7 +397,9 @@ Addressed by render-model ids, resolved against a fresh parse in Go, returning m
 | `addTransition` | insert `TRANSITION FROM a TO b := ; END_TRANSITION` |
 | `deleteTransition` | remove a `TRANSITION` block |
 | `setCondition` | replace a transition's `:= expr` |
-| `addAssoc` / `setAssoc` / `deleteAssoc` | add/edit/remove an action association line inside a step |
+| `renameTransition` | name, rename, or (empty name) un-name a transition — the label the chart draws above its condition |
+| `moveTransition` | swap a transition with its neighbour (`delta` -1/+1) among the transitions sharing a source step — the reorder gesture, since priority is declaration order |
+| `addAssoc` / `setAssoc` / `deleteAssoc` | add/edit/remove an action association line inside a step (`addAssoc` with no `index` appends) |
 | `setActionBody` | replace an `ACTION` block body |
 | `insertAlternativeBranch` | add a second `TRANSITION FROM <same source>` (priority = insertion order) |
 | `insertSimultaneousBranch` | turn a `TO x` into `TO (x, y)` and add step `y` |

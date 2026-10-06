@@ -280,7 +280,7 @@ func TestEditKeepsStepAttributes(t *testing.T) {
 	if fill.MaxTime != "T#30S" || fill.Attrs != "MAXTIME := T#30S, ERROR := Ovr" {
 		t.Fatalf("GStep = %+v", fill)
 	}
-	res, m2 := applyOp(t, timedChart, EditOp{Type: "addAssoc", Step: "st:Fill", Qualifier: "N", Target: "Lamp", Index: 0})
+	res, m2 := applyOp(t, timedChart, EditOp{Type: "addAssoc", Step: "st:Fill", Qualifier: "N", Target: "Lamp", Index: ip(0)})
 	if !strings.Contains(res, "STEP Fill (MAXTIME := T#30S, ERROR := Ovr):") || findStepT(t, m2, "st:Fill").MaxTime != "T#30S" {
 		t.Fatalf("addAssoc dropped the attributes:\n%s", res)
 	}

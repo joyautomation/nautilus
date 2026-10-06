@@ -73,20 +73,20 @@ warnings are counted in the row) except where a row says XFAIL.
 | B02 | the GVL habit | `gvl.st` with `VAR_GLOBAL`, then `VAR_GLOBAL CONSTANT` → `naut check` (habit rows, XFAIL); then `tags/washer.yaml` + `tag-files:` | pasted | a GVL is typed text in Codesys too; the tag file has YAML schema completion, no grid |
 | B02 | sim task | `sim.st` + its task | pasted | a plain ST program, not under test |
 | B03 | the enum habit, the library FB | `lib/types.st` with `TYPE … : (…)` → `naut check` (habit, XFAIL); `lib/reverser.st` | pasted | ST text; nothing to gesture |
-| B04 | a new SFC POU | empty `washer.sfc` → `ed_open_diagram` → `sfc_init` → `sfc_rename_step Start Idle` | **gestured** | — |
-| B04 | the declaration part | the chart's **vars** panel: `StartPB : BOOL`, `LevelPct : REAL` (ext), `drum : FB_Reverser` (local); a constant `tMaxFill : TIME := T#60S` (habit, XFAIL) | **gestured** | — |
-| B04 | the rest of the header | 17 more `VAR_EXTERNAL`, the `VAR CONSTANT` block; the manifest's tasks switch to `washer.sfc` + `sim.st` | pasted | the panel declares one at a time and has no CONSTANT section or initial value (FINDINGS #6); Codesys's declaration editor is text too |
+| B04 | a new SFC POU | empty `washer.sfc` → `naut check` (clean: one warning, #179) → `ed_open_diagram` → `sfc_init` → `sfc_rename_step Start Idle` | **gestured** | — |
+| B04 | the declaration part | the chart's **vars** panel: `StartPB : BOOL`, `LevelPct : REAL` (ext), `drum : FB_Reverser` (local); a constant `tMaxFill : TIME := T#60S` in the panel's const section with its init (habit, PASS since #180) | **gestured** | — |
+| B04 | the rest of the header | 17 more `VAR_EXTERNAL`, the `VAR CONSTANT` block; the manifest's tasks switch to `washer.sfc` + `sim.st` | pasted | the panel declares one at a time; Codesys's declaration editor is text too |
 | B05 | the chart | `sfc_add_step` (chained) ×3, `sfc_add_transition_condition`, `sfc_add_transition_new_step`, `sfc_add_parallel_branch`, `sfc_add_transition` ×3, `sfc_join_step`, `sfc_add_alt_branch` ×2 | **gestured** | — |
-| B05 | abort priority | habit row: is the abort declared before the normal transition? (XFAIL: "+ alt branch" always appends last); then the abort TRANSITION block moved up | pasted (a block move) | no gesture reorders transitions |
-| B05 | chart habits | arrow-key navigation, a transition name in the add form | habit rows (XFAIL) | — |
-| B06 | the action-body gap | `sfc_add_action Heat N HeatCtl` before `ACTION HeatCtl` exists, then double-click it hoping for a body editor (habit, XFAIL) | gestured attempt | — |
-| B06 | ACTION blocks | all nine, `SpinCtl` as a stub | pasted | no gesture creates an `ACTION` block (only an existing one's body is editable) |
-| B06 | associations | 25 `sfc_add_action` across 8 steps; the timed qualifiers typed first (`D Detergent(T#3S)`, `SD AlarmLamp(T#45S)`, `L SpinMotor(T#10S)`), `naut check` clean (habit rows, PASS since #190), the chart's marker read for the association-vs-ACTION warning worded for D (#185), the IEC form `Detergent(D, T#3S);` checked by CLI (#189), then each retyped in place with `sfc_edit_action`; a Codesys-ordered `D Detergent T#3S` (habit, XFAIL) | **gestured** | — |
+| B05 | abort priority | "+ alt branch" lands the abort last; `sfc_reorder_branch Fill->Aborted left` (Alt+←, #181) moves it ahead; habit row: is the abort declared first? (PASS) | **gestured** | — |
+| B05 | chart habits | arrow-key navigation (`sfc_keynav`, #76), a transition name in the add form (#76) | habit rows (PASS) | — |
+| B06 | the action body | `sfc_add_action Heat N HeatCtl` before `ACTION HeatCtl` exists, double-click it: the ST-body editor (habit, PASS since #182); `sfc_create_action` types the body and writes `ACTION HeatCtl` | **gestured** | — |
+| B06 | ACTION blocks | the other eight, `SpinCtl` as a stub | pasted | typing eight multi-line bodies is typing; the gesture is proven on HeatCtl and SpinCtl |
+| B06 | associations | 25 `sfc_add_action` across 8 steps; the timed qualifiers typed first (`D Detergent T#3S` in Codesys column order — habit, PASS since #183 — `SD AlarmLamp(T#45S)`, `L SpinMotor(T#10S)`), `naut check` clean (habit rows, PASS since #190), the chart's marker read for the association-vs-ACTION warning worded for D (#185), the IEC form `Detergent(D, T#3S);` checked by CLI (#189), then each retyped in place with `sfc_edit_action` | **gestured** | — |
 | B06 | one body | `SpinCtl`'s body typed in the chart's ST-body editor | **gestured** | — |
 | B07 | tests | `washer_test.yaml` | pasted | the Testing view runs it; writing YAML is typing |
-| B05 | join drawing | is `(Wash, HeatDone) → Drain` drawn as a convergence? (XFAIL) | — | — |
+| B05 | join drawing | is `(Wash, HeatDone) → Drain` drawn as a convergence? (PASS since #187) | — | — |
 | B07 | the timed variant | `naut check` + `naut test` 7/7 on `reference-timed/` | — | — |
-| B07 | verdict | `naut test` 6/6; `sfc_compare.py` built vs `reference/washer.sfc` (associations as a multiset), and again with `--assoc-order` (XFAIL, FINDINGS #14) | — | — |
+| B07 | verdict | `naut test` 6/6; `sfc_compare.py` built vs `reference/washer.sfc` (associations as a multiset), and again with `--assoc-order` (PASS since #186, FINDINGS #14) | — | — |
 
 `sfc_compare.py` compares through `naut sfc graph`: program name, header
 declarations, steps and their associations (order only with

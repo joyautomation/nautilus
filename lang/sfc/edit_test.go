@@ -286,7 +286,7 @@ func TestOpSetTransitionEnds(t *testing.T) {
 // ── addAssoc / setAssoc / deleteAssoc ───────────────────────────────────
 
 func TestOpAssoc(t *testing.T) {
-	result, m := applyOp(t, workedExample, EditOp{Type: "addAssoc", Step: "st:Heat", Qualifier: "s", Target: "AlarmLamp", Index: 2})
+	result, m := applyOp(t, workedExample, EditOp{Type: "addAssoc", Step: "st:Heat", Qualifier: "s", Target: "AlarmLamp", Index: ip(2)})
 	heat := findStepT(t, m, "st:Heat")
 	if len(heat.Actions) != 3 || heat.Actions[2].Qualifier != "S" || heat.Actions[2].Target != "AlarmLamp" {
 		t.Fatalf("Heat.Actions = %+v", heat.Actions)
@@ -302,20 +302,20 @@ func TestOpAssoc(t *testing.T) {
 		}
 	}
 
-	result2, m2 := applyOp(t, result, EditOp{Type: "setAssoc", Step: "st:Heat", Index: 2, Qualifier: "R", Target: "AlarmLamp"})
+	result2, m2 := applyOp(t, result, EditOp{Type: "setAssoc", Step: "st:Heat", Index: ip(2), Qualifier: "R", Target: "AlarmLamp"})
 	heat2 := findStepT(t, m2, "st:Heat")
 	if heat2.Actions[2].Qualifier != "R" {
 		t.Fatalf("after setAssoc: %+v", heat2.Actions)
 	}
 
-	_, m3 := applyOp(t, result2, EditOp{Type: "deleteAssoc", Step: "st:Heat", Index: 2})
+	_, m3 := applyOp(t, result2, EditOp{Type: "deleteAssoc", Step: "st:Heat", Index: ip(2)})
 	heat3 := findStepT(t, m3, "st:Heat")
 	if len(heat3.Actions) != 2 {
 		t.Fatalf("after deleteAssoc: %+v", heat3.Actions)
 	}
 
 	wantOpErr(t, workedExample, EditOp{Type: "addAssoc", Step: "st:Heat", Qualifier: "not valid", Target: "X"})
-	wantOpErr(t, workedExample, EditOp{Type: "deleteAssoc", Step: "st:Heat", Index: 99})
+	wantOpErr(t, workedExample, EditOp{Type: "deleteAssoc", Step: "st:Heat", Index: ip(99)})
 }
 
 // ── setActionBody (create-or-update) ────────────────────────────────────

@@ -32,7 +32,7 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 174 rows. **0 rows have no coverage at all** (no webview test,
+Totals: 183 rows. **0 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
@@ -40,7 +40,7 @@ no rig verb, no smoke check); per section below.
 | Commands | 28 | 0 |
 | FBD `?` | 20 | 0 |
 | Ladder `?` | 28 | 0 |
-| SFC `?` | 22 | 0 |
+| SFC `?` | 31 | 0 |
 | Mimic `?` | 18 | 0 |
 | Component `?` | 8 | 0 |
 | Other claims | 50 | 0 |
@@ -162,6 +162,15 @@ no rig verb, no smoke check); per section below.
 | S20 | SFC | Undo the last edit to the file from the diagram | "?" list SFC / File / `Ctrl + Z` | — | g_key (ctrl+z in takes) | 03 (field undo only) |
 | S21 | SFC | Redo | "?" list SFC / File / `Ctrl + Y / Ctrl + Shift + Z` | mimic-more.test.mjs: M17 Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z post no message and are not preventDefault-ed (undo/redo is VS Code's text undo over the host's WorkspaceEdit; the webview owns no stack, so that is all that is observable) | — | 03 (field undo only) |
 | S22 | SFC | Save the file from the diagram | "?" list SFC / File / `Ctrl + S` | — | g_save | 03 (field undo only) |
+| S23 | SFC | Walk the chart with the arrow keys along its flow (step ↓ transition ↓ step, ← → neighbours, → into a step's actions) | "?" list SFC / Select / `Arrow keys` | sfc-parity.test.mjs: S23–S25 #76 SFC: arrow keys walk the chart along its flow | sfc_keynav | — |
+| S24 | SFC | Enter edits the selection in place (step name, condition, action body, note) | "?" list SFC / Edit / `Enter` | sfc-parity.test.mjs: S23–S25 #76 SFC: arrow keys walk the chart …; Enter edits the selection | — | — |
+| S25 | SFC | F2 renames a step or names a transition (drawn above its condition) | "?" list SFC / Edit / `F2` | sfc-parity.test.mjs: S23–S25 #76 SFC: … transition names are drawn | sfc_name_transition | — |
+| S26 | SFC | Move an alternative branch earlier / later (priority = file order; numbered on the bars) | "?" list SFC / Edit / `◀ priority ▶ / Alt + ← →` | sfc-parity.test.mjs: S26 #181 SFC: ◀ priority / Alt+← move an alternative branch earlier | sfc_reorder_branch | — |
+| S27 | SFC | "+ action" appends; takes `D Detergent T#3S`; text it cannot parse stays in the field with the reason | CHANGELOG [Unreleased] (#186, #183) | sfc-parity.test.mjs: S27 #186 SFC: "+ action" appends; S27 #183 SFC: the action field takes "D Detergent T#3S" | sfc_add_action | — |
+| S28 | SFC | Double-click an association to a not-yet-existing action: the ST-body editor, which writes the ACTION | CHANGELOG [Unreleased] (#182) | sfc-parity.test.mjs: S28 #182 SFC: double-click an association to an action that does not exist yet | sfc_create_action | — |
+| S29 | SFC | Vars panel: ext / local / const sections, an initial value; a refused declare keeps the name | CHANGELOG [Unreleased] (#180) | sfc-parity.test.mjs: S29 #180 SFC: the vars panel declares a CONSTANT with its value | sfc_declare | — |
+| S30 | SFC | A join whose legs differ in length draws as a convergence under both legs | CHANGELOG [Unreleased] (#187) | sfc-parity.test.mjs: S30 #187 SFC: a join whose legs differ in length is drawn as a convergence | sfc_join_step (codesys-shaped `sfc-join-drawn-as-convergence`) | — |
+| S31 | SFC | The add forms (+ step chained, + transition, + alt branch) take a transition name | CHANGELOG [Unreleased] (#76) | sfc-parity.test.mjs: S31 #76 SFC: the add forms take a transition name | — (codesys-shaped `habit-transition-name`) | — |
 
 ## Mimic editor (`?` list)
 
@@ -256,7 +265,7 @@ no rig verb, no smoke check); per section below.
 
 ## Count of rows with no coverage at all
 
-**0 of 174.** Every row has at least one layer of coverage: a webview test, a
+**0 of 183.** Every row has at least one layer of coverage: a webview test, a
 rig verb, or a smoke check. Some rows are covered only in part, and the cell
 says which part:
 

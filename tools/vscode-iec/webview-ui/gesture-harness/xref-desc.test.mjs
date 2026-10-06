@@ -178,6 +178,9 @@ test('X44/X45 FBD: Shift+F12 on a chip or an FB instance posts its name and stat
 test('X44/X45 SFC: Shift+F12 on an action association or a step posts its name and the step lines; the association tooltip carries the description', async () => {
 	const model = {
 		...SFC,
+		// Pump is a declared tag in a real project (VAR_EXTERNAL); without it the
+		// SFC editor would mark the row "no ACTION or variable named Pump yet".
+		vars: [...(SFC.vars ?? []), { name: 'Pump', type: 'BOOL', section: 'VAR_EXTERNAL' }],
 		steps: SFC.steps.map((s) => (s.name === 'Run' ? { ...s, actions: [{ qualifier: 'N', target: 'Pump' }] } : s))
 	};
 	await withPage(async (b) => {

@@ -21,7 +21,10 @@ type Decl struct {
 	Type    string
 	Init    string
 	Section string // VAR, VAR_EXTERNAL, VAR_INPUT, …
-	Line    int    // 1-based line of the declaration
+	// Constant marks a declaration in a `VAR CONSTANT` (or
+	// `VAR_EXTERNAL CONSTANT`) section — the section keyword's qualifier.
+	Constant bool
+	Line     int // 1-based line of the declaration
 }
 
 // sectionRe matches a section opener at the start of a line — the keyword
@@ -37,6 +40,7 @@ var identRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 func Scan(header string) []Decl {
 	var out []Decl
 	section := ""
+	constant := false
 	for i, line := range strings.Split(StripComments(header), "\n") {
 		rest := line
 		for {
@@ -46,6 +50,7 @@ func Scan(header string) []Decl {
 					break
 				}
 				section = strings.ToUpper(rest[m[2]:m[3]])
+				constant = strings.Contains(strings.ToUpper(rest[m[4]:m[5]]), "CONSTANT")
 				rest = rest[m[1]:]
 			}
 			// Declarations up to END_VAR (if it closes on this line).
@@ -59,6 +64,7 @@ func Scan(header string) []Decl {
 			for _, d := range splitDecls(body) {
 				if dec, ok := parseDecl(d.text); ok {
 					dec.Section = section
+					dec.Constant = constant
 					dec.Line = i + 1
 					out = append(out, dec)
 				}

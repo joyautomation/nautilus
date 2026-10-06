@@ -356,6 +356,28 @@ making it a simultaneous convergence:
 
 <Clip id="sfc_add_parallel_branch" />
 
+A join draws as a double bar under every leg it waits for, even when one
+leg has more steps than the other.
+
+Every transition can carry a name, typed in the add form or with **F2** on a
+selected transition, and the chart draws it above the condition. Alternative
+branches out of one step are numbered by priority, which is their order in
+the file. **◀ priority** and **priority ▶** (or **Alt+←** / **Alt+→**) move
+the selected branch earlier or later, so an abort drawn after the main path
+can still win.
+
+The arrow keys walk the chart along its flow: **↓** from a step to its
+transition and on to the next step, **↑** back, **←**/**→** to the
+neighbouring step or alternative branch, and **→** from a step into its
+actions. **Enter** edits the selection in place and **Del** deletes it. An
+association naming an action that does not exist yet opens the ST-body
+editor on double-click, and saving it writes the `ACTION` block. The action
+field also takes the qualifier, name and time in columns
+(`D Detergent T#3S`); text it cannot read stays in the field with the form
+it expects. The **vars** panel declares `VAR_EXTERNAL`, `VAR` and
+`VAR CONSTANT` entries, with an initial value. A new, empty `.sfc` file is a
+`naut check` warning until its diagram's **initialize** writes the program.
+
 Whether the joined steps are legs of one divergence is a `naut check`
 warning, not a refusal. Each add is one edit and one undo, and the new step
 scrolls into view. A transition

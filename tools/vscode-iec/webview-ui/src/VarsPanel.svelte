@@ -32,7 +32,8 @@
 			postOp({ type: 'declareVar', newName: name, value: type, text: section }),
 		onDelete = (name: string) => postOp({ type: 'deleteVar', newName: name }),
 		onRename,
-		readonly = false
+		readonly = false,
+		withInit = false
 	}: {
 		open?: boolean;
 		/** List only — no declare row, no delete buttons (an L5X export). */
@@ -41,10 +42,12 @@
 		used: Set<string>;
 		insts?: Inst[];
 		scopes?: Scope[];
-		onDeclare?: (name: string, type: string, section: string, pou?: string) => void;
+		onDeclare?: (name: string, type: string, section: string, pou?: string, init?: string) => void;
 		onDelete?: (name: string, pou?: string) => void;
 		/** Double-click a name to rename it (and its references); absent: no rename. */
 		onRename?: (name: string, newName: string, pou?: string) => void;
+		/** Offer an initial-value field (`:= …`), passed to onDeclare. */
+		withInit?: boolean;
 	} = $props();
 
 	const SECTION_BADGE: Record<string, string> = {
@@ -52,9 +55,11 @@
 		VAR: 'local',
 		VAR_INPUT: 'in',
 		VAR_OUTPUT: 'out',
-		VAR_IN_OUT: 'in/out'
+		VAR_IN_OUT: 'in/out',
+		'VAR CONSTANT': 'const'
 	};
 	const SECTION_TITLE: Record<string, string> = {
+		'VAR CONSTANT': 'named constant (VAR CONSTANT) — needs a value',
 		VAR_EXTERNAL: 'external tag (VAR_EXTERNAL)',
 		VAR: 'retained local (VAR)',
 		VAR_INPUT: 'input pin (VAR_INPUT)',
@@ -70,6 +75,7 @@
 
 	let newName = $state('');
 	let newType = $state('REAL');
+	let newInit = $state('');
 	let scopeIdx = $state(0);
 	const scope = $derived(scopes[Math.min(scopeIdx, scopes.length - 1)] ?? scopes[0]);
 	let newSection = $state('VAR_EXTERNAL');
@@ -82,10 +88,23 @@
 		newSection = secs[(secs.indexOf(newSection) + 1) % secs.length];
 	}
 	const nameOk = $derived(/^[A-Za-z_][A-Za-z0-9_]*$/.test(newName.trim()));
+	// The typed name stays until the declaration shows up in the list — a
+	// declare the op refuses (a bad type, a duplicate) leaves it there to
+	// fix, instead of clearing the attempt before the result is known.
+	let pending = $state<string | null>(null);
+	$effect(() => {
+		const want = pending?.toLowerCase();
+		if (!want || !vars.some((v) => v.name.toLowerCase() === want)) return;
+		if (newName.trim().toLowerCase() === want) {
+			newName = '';
+			newInit = '';
+		}
+		pending = null;
+	});
 	function addVar() {
 		if (!nameOk) return;
-		onDeclare(newName.trim(), newType.trim() || 'REAL', newSection, scope.pou || undefined);
-		newName = '';
+		pending = newName.trim();
+		onDeclare(newName.trim(), newType.trim() || 'REAL', newSection, scope.pou || undefined, withInit ? newInit.trim() || undefined : undefined);
 	}
 
 	// In-place rename (double-click a name).
@@ -139,7 +158,7 @@
 				{#each varsOf(sc.pou) as v (v.section + ':' + v.name)}
 					{@const val = sc.pou ? undefined : liveValue(v.name)}
 					<div class="row" data-kind="chip" data-id={v.name} data-section={v.section} data-pou={sc.pou} title="line {v.line}{used.has(v.name.toLowerCase()) ? '' : ' — declared but not referenced by the logic; it appears in the diagram once something reads or writes it'}{onRename && !readonly ? ' · dblclick the name: rename it everywhere' : ''}">
-						<span class="badge {v.section === 'VAR_EXTERNAL' ? 'ext' : ''}">{SECTION_BADGE[v.section] ?? v.section}</span>
+						<span class="badge {v.section === 'VAR_EXTERNAL' ? 'ext' : v.section === 'VAR CONSTANT' ? 'const' : ''}">{SECTION_BADGE[v.section] ?? v.section}</span>
 						{#if renaming && renaming.name === v.name && renaming.pou === sc.pou}
 							<!-- svelte-ignore a11y_autofocus -->
 							<input
@@ -220,12 +239,22 @@
 			<button
 				class="badge toggle"
 				class:ext={newSection === 'VAR_EXTERNAL'}
-				data-section={newSection}
+				class:const={newSection === 'VAR CONSTANT'}
+data-section={newSection}
 				title="{SECTION_TITLE[newSection] ?? newSection} — click for {SECTION_TITLE[scope.sections[(scope.sections.indexOf(newSection) + 1) % scope.sections.length]] ?? ''}"
 				onclick={nextSection}
 			>{SECTION_BADGE[newSection] ?? newSection}</button>
 			<input class="nx-input grow" placeholder="name" spellcheck="false" bind:value={newName} />
 			<Suggest cls="typefield" bind:value={newType} items={TYPES} />
+			{#if withInit}
+				<input
+					class="nx-input initfield"
+					placeholder={newSection === 'VAR CONSTANT' ? ':= value' : ':= init'}
+					title="initial value (optional; a constant needs one)"
+					spellcheck="false"
+					bind:value={newInit}
+				/>
+			{/if}
 			<button class="add" disabled={!nameOk} title="Declare (Enter)" onclick={addVar}>+</button>
 		</div>
 		{/if}
@@ -253,6 +282,14 @@
 	}
 	.addrow :global(.typefield) {
 		width: 84px;
+	}
+	.addrow .initfield {
+		width: 70px;
+		min-width: 0;
+	}
+	.badge.const {
+		color: var(--nx-warn);
+		border-color: color-mix(in srgb, var(--nx-warn) 55%, transparent);
 	}
 	.badge.toggle {
 		background: transparent;

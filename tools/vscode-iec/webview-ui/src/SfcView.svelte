@@ -23,6 +23,10 @@
 		stepAtPoint,
 		nextStepInitial,
 		joinCandidates,
+		moveTransitionOp,
+		altGroup,
+		navigate,
+		type NavDir,
 		type OrphanChip,
 		type PlacedNote,
 		type PlacedStep,
@@ -58,7 +62,7 @@
 			init: string,
 			at: { x: number; y: number; w: number },
 			commit: (v: string) => void,
-			opts?: { multiline?: boolean; suggest?: 'tags' | 'types' | 'functions' | 'assoc' }
+			opts?: { multiline?: boolean; suggest?: 'tags' | 'types' | 'functions' | 'assoc'; error?: string; title?: string }
 		) => void;
 	} = $props();
 
@@ -164,51 +168,101 @@
 
 	// ── editing gestures ─────────────────────────────────────────────────────
 
+	// Every in-place edit opens over an element's on-screen box — a pointer
+	// gesture passes the element it hit, the keyboard (Enter, F2) the
+	// selected element's own text.
+	type At = { x: number; y: number; w: number };
+	const atRect = (el: Element, minW: number, below = false): At => {
+		const r = el.getBoundingClientRect();
+		return { x: r.left, y: below ? r.bottom : r.top, w: Math.max(r.width, minW) };
+	};
 	function renameStep(ev: Event, p: PlacedStep) {
 		ev.stopPropagation();
+		renameStepAt(p.step, atRect(ev.currentTarget as Element, 90));
+	}
+	function renameStepAt(step: SfcStep, at: At) {
 		if (!editable || !requestInput) return;
-		const rect = (ev.currentTarget as Element).getBoundingClientRect();
-		requestInput(p.step.name, { x: rect.left, y: rect.top, w: Math.max(rect.width, 90) }, (v) => {
-			if (v && v !== p.step.name) post({ type: 'renameStep', step: p.id, newName: v });
+		requestInput(step.name, at, (v) => {
+			if (v && v !== step.name) post({ type: 'renameStep', step: step.id, newName: v });
 		});
 	}
 
-	function editCondition(ev: Event, t: SfcTransition, at: { x: number; y: number; w: number }) {
+	function editCondition(ev: Event, t: SfcTransition, at: At) {
 		ev.stopPropagation();
+		editConditionAt(t, at);
+	}
+	function editConditionAt(t: SfcTransition, at: At) {
 		if (!editable || !requestInput) return;
 		requestInput(t.cond, at, (v) => post({ type: 'setCondition', transition: t.id, cond: v }));
+	}
+	// A transition's name: the label drawn above its condition. FloatEditor
+	// never commits an empty line, so "-" is the explicit "no name".
+	function renameTransition(ev: Event, t: SfcTransition) {
+		ev.stopPropagation();
+		renameTransitionAt(t, atRect(ev.currentTarget as Element, 120));
+	}
+	function renameTransitionAt(t: SfcTransition, at: At) {
+		if (!editable || !requestInput) return;
+		requestInput(t.name ?? '', at, (v) => {
+			const name = v === '-' ? '' : v;
+			if (name === (t.name ?? '')) return;
+			pendingSelectTrans = { from: t.from, to: t.to, since: model };
+			post({ type: 'renameTransition', transition: t.id, newName: name });
+		}, { title: 'transition name ("-" clears it)' });
 	}
 
 	function assocText(a: { qualifier: string; target: string; time?: string }): string {
 		return a.time ? `${a.qualifier} ${a.target}(${a.time})` : `${a.qualifier} ${a.target}`;
 	}
+	// "N Pump", "D Detergent(T#3S)" — and the column order a Codesys
+	// programmer types, qualifier · name · time: "D Detergent T#3S".
 	function parseAssoc(text: string): { qualifier: string; target: string; time?: string } | undefined {
-		const m = /^\s*([A-Za-z0-9]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\(([^)]*)\))?\s*$/.exec(text);
+		const m =
+			/^\s*([A-Za-z0-9]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\(([^()]*)\))?\s*;?\s*$/.exec(text) ??
+			/^\s*([A-Za-z0-9]+)\s+([A-Za-z_][A-Za-z0-9_]*)\s*,?\s+([A-Za-z_][A-Za-z0-9_#.:]*)\s*;?\s*$/.exec(text);
 		if (!m) return undefined;
 		return { qualifier: m[1].toUpperCase(), target: m[2], time: m[3]?.trim() || undefined };
+	}
+	const ASSOC_FORM = 'Not an action association. Write the qualifier, then the action or variable: "N FillValve", or with a time "D Detergent(T#3S)".';
+	type Assoc = { qualifier: string; target: string; time?: string };
+	/** Commit an association field. Text that doesn't parse reopens the
+	 * field with what was typed and why (#183) — never a silent drop. */
+	function commitAssoc(v: string, op: (a: Assoc) => Record<string, unknown>, retry: (v: string, error: string) => void) {
+		const parsed = parseAssoc(v);
+		if (parsed) post(op(parsed));
+		else queueMicrotask(() => retry(v, ASSOC_FORM));
 	}
 
 	function editAssoc(ev: Event, step: SfcStep, index: number) {
 		ev.stopPropagation();
+		editAssocAt(step, index, atRect(ev.currentTarget as Element, 140));
+	}
+	function editAssocAt(step: SfcStep, index: number, at: At, init?: string, error?: string) {
 		if (!editable || !requestInput) return;
 		const a = step.actions![index];
-		const rect = (ev.currentTarget as Element).getBoundingClientRect();
-		requestInput(assocText(a), { x: rect.left, y: rect.top, w: Math.max(rect.width, 140) }, (v) => {
-			const parsed = parseAssoc(v);
-			if (parsed) post({ type: 'setAssoc', step: step.id, index, ...parsed });
-		}, { suggest: 'assoc' });
+		requestInput(
+			init ?? assocText(a),
+			at,
+			(v) => commitAssoc(v, (p) => ({ type: 'setAssoc', step: step.id, index, ...p }), (t, e) => editAssocAt(step, index, at, t, e)),
+			{ suggest: 'assoc', error }
+		);
 	}
 
 	function addAssoc(ev: Event, step: SfcStep) {
 		ev.stopPropagation();
+		addAssocAt(step, atRect(ev.currentTarget as Element, 140, true));
+	}
+	function addAssocAt(step: SfcStep, at: At, init = 'N Output', error?: string) {
 		if (!editable || !requestInput) return;
-		const rect = (ev.currentTarget as Element).getBoundingClientRect();
 		// Tags complete the word after the qualifier ("N Pu" → "N PumpRun"),
-		// the vocabulary the ladder's retag offers.
-		requestInput('N Output', { x: rect.left, y: rect.bottom, w: 140 }, (v) => {
-			const parsed = parseAssoc(v);
-			if (parsed) post({ type: 'addAssoc', step: step.id, ...parsed });
-		}, { suggest: 'assoc' });
+		// the vocabulary the ladder's retag offers. The "+ action" row is
+		// drawn under the last association, so that is where it lands (#186).
+		requestInput(
+			init,
+			at,
+			(v) => commitAssoc(v, (p) => ({ type: 'addAssoc', step: step.id, index: step.actions?.length ?? 0, ...p }), (t, e) => addAssocAt(step, at, t, e)),
+			{ suggest: 'assoc', error }
+		);
 	}
 
 	function deleteAssoc(ev: Event, step: SfcStep, index: number) {
@@ -223,12 +277,39 @@
 	function actionFor(name: string) {
 		return model.actions?.find((a) => a.name.toLowerCase() === name.toLowerCase());
 	}
+	/** An association whose target is neither an ACTION nor a declared
+	 * variable (nor a step): a new action, waiting for its body (#182). */
+	function isNewAction(name: string): boolean {
+		const n = name.toLowerCase();
+		return (
+			!actionFor(name) &&
+			!(model.vars ?? []).some((v) => v.name.toLowerCase() === n) &&
+			!(model.steps ?? []).some((s) => s.name.toLowerCase() === n)
+		);
+	}
 	function editActionBody(ev: Event, name: string) {
 		ev.stopPropagation();
+		const r = (ev.currentTarget as Element).getBoundingClientRect();
+		editActionBodyAt(name, { x: r.left, y: r.bottom + 4, w: Math.max(r.width, 220) });
+	}
+	// setActionBody creates the ACTION block when it doesn't exist yet, so
+	// the same editor writes a new action's first body.
+	function editActionBodyAt(name: string, at: At) {
 		if (!editable || !requestInput) return;
-		const rect = (ev.currentTarget as Element).getBoundingClientRect();
-		const body = actionFor(name)?.body ?? '';
-		requestInput(body, { x: rect.left, y: rect.bottom + 4, w: Math.max(rect.width, 220) }, (v) => post({ type: 'setActionBody', action: name, body: v }), { multiline: true });
+		const a = actionFor(name);
+		requestInput(a?.body ?? '', at, (v) => post({ type: 'setActionBody', action: a?.name ?? name, body: v }), {
+			multiline: true,
+			title: a ? `ACTION ${a.name}` : `new ACTION ${name} — Ctrl+Enter writes it`
+		});
+	}
+	/** Double-click on an association row: an ACTION's body — or a new
+	 * action's first one; a variable's association line. The qualifier
+	 * column always edits the line. */
+	function openAssoc(ev: Event, step: SfcStep, i: number) {
+		const a = step.actions![i];
+		const onQualifier = !!(ev.target as Element | null)?.classList?.contains('assocq');
+		if (!onQualifier && (actionFor(a.target) || isNewAction(a.target))) editActionBody(ev, a.target);
+		else editAssoc(ev, step, i);
 	}
 
 	// ── step-name picker (dropdown of existing steps + a typed "other…"
@@ -258,6 +339,10 @@
 	let fName = $state('');
 	let fTo = $state('');
 	let fCond = $state('TRUE');
+	// The new transition's name (optional; #76) — the label drawn above its
+	// condition, the way Codesys names every transition.
+	let fTName = $state('');
+	const tname = () => fTName.trim() || undefined;
 	// The step the form adds FROM, captured when it opens: "+ step" with a
 	// step selected chains the new one under it; "+ transition" and
 	// "+ alt branch" leave it.
@@ -268,6 +353,7 @@
 		fName = nextStepName();
 		fTo = '';
 		fCond = 'TRUE';
+		fTName = '';
 		fFrom = selectedStepName();
 		if (kind === 'join') fTo = joinCandidates(model, selectedTransId())[0]?.name ?? '';
 		addOpen = true;
@@ -336,7 +422,7 @@
 			if (fFrom) {
 				// Chained: the step AND `TRANSITION FROM <selected> TO
 				// <new> := <cond>` in one op (one undo).
-				post({ type: 'addStep', name, from: [fFrom], cond: fCond });
+				post({ type: 'addStep', name, from: [fFrom], cond: fCond, transName: tname() });
 			} else {
 				// A chart's first step is its INITIAL_STEP — an empty chart
 				// (or a blank file being seeded, or one whose initial step
@@ -350,7 +436,7 @@
 			const to = fTo.trim();
 			if (!from || !to) return;
 			added = newTarget(to);
-			post({ type: 'addTransition', from: [from], to: [to], cond: fCond, newStep: added });
+			post({ type: 'addTransition', from: [from], to: [to], cond: fCond, newStep: added, name: tname() });
 		} else if (addKind === 'alt') {
 			// Out of a selected step (a second transition from it), or off
 			// a selected transition's source (priority after it).
@@ -358,7 +444,11 @@
 			const to = fTo.trim();
 			if ((!after && !fFrom) || !to) return;
 			added = newTarget(to);
-			post(after ? { type: 'insertAlternativeBranch', after, to: [to], cond: fCond, newStep: added } : { type: 'insertAlternativeBranch', from: [fFrom], to: [to], cond: fCond, newStep: added });
+			post(
+				after
+					? { type: 'insertAlternativeBranch', after, to: [to], cond: fCond, newStep: added, name: tname() }
+					: { type: 'insertAlternativeBranch', from: [fFrom], to: [to], cond: fCond, newStep: added, name: tname() }
+			);
 		} else if (addKind === 'join') {
 			// A simultaneous convergence: FROM x becomes FROM (x, y). No
 			// new step — the transition stays selected.
@@ -477,17 +567,20 @@
 	// sfcModel) — matched by its (from, to) pair rather than a guessed id,
 	// since an unnamed transition's id (tr:<line>) isn't known client-side
 	// until the model comes back.
-	let pendingSelectTrans = $state<{ from: string; to: string } | null>(null);
+	// (Also after a reorder or a rename: an unnamed transition's id is its
+	// line, which a moveTransition changes.)
+	// `since`: the model the gesture saw — a reorder/rename matches a
+// transition that already exists, so only the NEXT model may resolve it.
+let pendingSelectTrans = $state<{ from: string | string[]; to: string | string[]; since?: SfcModel } | null>(null);
+	const sameSet = (a: string[], b: string | string[]) => {
+		const bb = typeof b === 'string' ? [b] : b;
+		return a.length === bb.length && a.every((n, i) => n.toLowerCase() === bb[i].toLowerCase());
+	};
 	$effect(() => {
 		if (!pendingSelectTrans) return;
 		const want = pendingSelectTrans;
-		const match = (model.trans ?? []).find(
-			(t) =>
-				t.from.length === 1 &&
-				t.to.length === 1 &&
-				t.from[0].toLowerCase() === want.from.toLowerCase() &&
-				t.to[0].toLowerCase() === want.to.toLowerCase()
-		);
+		if (want.since === model) return;
+		const match = (model.trans ?? []).find((t) => sameSet(t.from, want.from) && sameSet(t.to, want.to));
 		if (match) {
 			selected = { kind: 'trans', id: match.id };
 			pendingSelectTrans = null;
@@ -644,6 +737,87 @@
 		}
 	});
 
+	// ── keyboard navigation (#76): arrows walk the chart along its flow
+	// (sfc.ts navigate); Enter edits the selection in place, F2 renames ──
+	function arrowNav(dir: NavDir) {
+		const sel = selected;
+		if (sel?.kind === 'assoc') {
+			const n = (model.steps ?? []).find((s) => s.id === sel.step)?.actions?.length ?? 0;
+			if (dir === 'left') selected = { kind: 'step', id: sel.step };
+			else if (dir === 'up' && sel.index > 0) selected = { kind: 'assoc', step: sel.step, index: sel.index - 1 };
+			else if (dir === 'down' && sel.index < n - 1) selected = { kind: 'assoc', step: sel.step, index: sel.index + 1 };
+			revealSelected();
+			return;
+		}
+		const from = sel?.kind === 'step' || sel?.kind === 'trans' ? sel : null;
+		let next: Sel | undefined = navigate(model, layout, from, dir);
+		// Right from a step with nothing further right on its row: into its
+		// action table.
+		if (!next && sel?.kind === 'step' && dir === 'right') {
+			const step = (model.steps ?? []).find((s) => s.id === sel.id);
+			if (step?.actions?.length) next = { kind: 'assoc', step: step.id, index: 0 };
+		}
+		if (!next) return;
+		multi = [];
+		selected = next;
+		revealSelected();
+	}
+	function selectedEl(): Element | null {
+		const sel = selected;
+		if (!sel || !svgEl) return null;
+		if (sel.kind === 'step') return svgEl.querySelector(`g.step[data-id="${CSS.escape(sel.id)}"]`);
+		if (sel.kind === 'trans') return svgEl.querySelector(`[data-kind="transition"][data-id="${CSS.escape(sel.id)}"]`);
+		if (sel.kind === 'assoc') return svgEl.querySelector(`g.assocrow[data-id="${CSS.escape(sel.step + ':' + sel.index)}"]`);
+		return svgEl.querySelector(`g.note[data-id="${CSS.escape(commentId(sel.index))}"]`);
+	}
+	function revealSelected() {
+		requestAnimationFrame(() => {
+			const el = selectedEl();
+			if (el) revealInPane(el);
+		});
+	}
+	/** Enter: the selection's own in-place edit — a step's name, a
+	 * transition's condition, an association (an action's body), a note.
+	 * F2: rename — a step, or a transition's name. */
+	function editSelected(rename: boolean) {
+		const sel = selected;
+		const el = selectedEl();
+		if (!sel || !el) return;
+		if (sel.kind === 'step') {
+			const step = (model.steps ?? []).find((s) => s.id === sel.id);
+			const nameEl = el.querySelector('text.stepname');
+			if (step && nameEl) renameStepAt(step, atRect(nameEl, 90));
+		} else if (sel.kind === 'trans') {
+			const t = (model.trans ?? []).find((x) => x.id === sel.id);
+			if (!t) return;
+			if (rename) renameTransitionAt(t, atRect(el.querySelector('text.tname') ?? el.querySelector('text.cond') ?? el, 120));
+			else editConditionAt(t, atRect(el.querySelector('text.cond') ?? el, 160));
+		} else if (sel.kind === 'assoc' && !rename) {
+			const step = (model.steps ?? []).find((s) => s.id === sel.step);
+			const a = step?.actions?.[sel.index];
+			if (!step || !a) return;
+			const r = el.getBoundingClientRect();
+			if (actionFor(a.target) || isNewAction(a.target)) editActionBodyAt(a.target, { x: r.left, y: r.bottom + 4, w: Math.max(r.width, 220) });
+			else editAssocAt(step, sel.index, atRect(el, 140));
+		} else if (sel.kind === 'comment' && !rename && requestInput) {
+			const n = layout.notes.find((x) => x.index === sel.index);
+			if (n) requestInput(n.c.text, atRect(el, 200), (v) => post({ type: 'setComment', comment: n.index, text: v }), { multiline: true });
+		}
+	}
+
+	// ── reorder alternative branches (#181): the selected transition trades
+	// places with its neighbour in its group; priority = file order ──────
+	const canMove = (delta: -1 | 1) => !!moveTransitionOp(model, selectedTransId(), delta);
+	function moveBranch(delta: -1 | 1) {
+		const id = selectedTransId();
+		const op = moveTransitionOp(model, id, delta);
+		const t = (model.trans ?? []).find((x) => x.id === id);
+		if (!op || !t) return;
+		pendingSelectTrans = { from: t.from, to: t.to, since: model };
+		post(op);
+	}
+	const selGroupSize = $derived(selected?.kind === 'trans' ? altGroup(model, selected.id).length : 0);
+
 	// ── keyboard: Esc cancels a connect drag / closes a popover; Del deletes
 	// the selection (offering the cascade popover for an attached step) ────
 	function handleKey(ev: KeyboardEvent) {
@@ -675,6 +849,31 @@
 			if (!selected) return;
 			requestDeleteSelected();
 			ev.preventDefault();
+			return;
+		}
+		if (ev.key.startsWith('Arrow') && !ev.ctrlKey && !ev.metaKey) {
+			const dir = ev.key.slice(5).toLowerCase() as NavDir;
+			if (ev.altKey) {
+				// Alt+←/→ trades places with the neighbouring alternative
+				// branch: priority is file order, leftmost first (#181).
+				if (dir === 'left' || dir === 'right') {
+					moveBranch(dir === 'left' ? -1 : 1);
+					ev.preventDefault();
+					ev.stopPropagation();
+				}
+				return;
+			}
+			if (ev.shiftKey) return;
+			arrowNav(dir);
+			ev.preventDefault();
+			return;
+		}
+		// (Enter on a focused palette/popover button is that button's click.)
+const onButton = !!(ev.target as Element | null)?.closest?.('button');
+if ((ev.key === 'Enter' || ev.key === 'F2') && !ev.ctrlKey && !ev.metaKey && !ev.altKey && selected && !onButton) {
+			editSelected(ev.key === 'F2');
+			ev.preventDefault();
+			ev.stopPropagation();
 			return;
 		}
 		if (!(ev.ctrlKey || ev.metaKey) || ev.altKey) return;
@@ -787,6 +986,11 @@
 				disabled={!selectedTransId() || !joinCandidates(model, selectedTransId()).length}
 				onclick={() => openAdd('join')}>+ join</button>
 			<button title="Add a diagram note — dblclick to write it" onclick={addNote}>+ comment</button>
+			{#if selGroupSize > 1}
+				<span class="sep"></span>
+				<button title="Raise this alternative branch's priority: move it left, earlier in the file (Alt+←)" disabled={!canMove(-1)} onclick={() => moveBranch(-1)}>◀ priority</button>
+				<button title="Lower this alternative branch's priority: move it right, later in the file (Alt+→)" disabled={!canMove(1)} onclick={() => moveBranch(1)}>priority ▶</button>
+			{/if}
 			<span class="sep"></span>
 			<button title="Cut the selected step(s) (Ctrl+X)" disabled={selected?.kind !== 'step'} onclick={() => doCut()}>✂</button>
 			<button title="Copy the selected step(s) with their actions (Ctrl+C)" disabled={selected?.kind !== 'step'} onclick={() => doCopy()}>⧉</button>
@@ -826,6 +1030,7 @@
 			{/if}
 			{#if addKind === 'step' && fFrom}
 				<label title="The transition from {fFrom} to the new step"><span>condition</span><input class="nx-input" bind:value={fCond} spellcheck="false" /></label>
+				<label title="Optional: the transition's name, drawn above its condition"><span>trans. name</span><input class="nx-input" bind:value={fTName} spellcheck="false" placeholder="optional" /></label>
 			{/if}
 			{#if addKind === 'transition' || addKind === 'alt'}
 				<label>
@@ -848,6 +1053,9 @@
 						{/if}
 					</span>
 				</label>
+				<!-- the name before the condition: the condition stays the
+				     form's last field (the rig's verbs type into it) -->
+				<label title="Optional: the transition's name, drawn above its condition"><span>name</span><input class="nx-input" bind:value={fTName} spellcheck="false" placeholder="optional" /></label>
 				<label><span>condition</span><input class="nx-input" bind:value={fCond} spellcheck="false" /></label>
 			{/if}
 			<div class="addactions">
@@ -919,10 +1127,12 @@
 	>
 		{#each layout.trans as r (r.t.id)}
 			{@const problems = problemsFor(r.t.line, r.t.endLine)}
-			<g class="trans {r.t.status ?? ''}" data-kind="transition" data-id={r.t.id} class:selected={isSelTrans(r.t.id)} data-vscode-context={JSON.stringify({ nautilusSfcTransition: r.t.name || `t${r.t.line}` })}>
+			<!-- data-from / data-to: the ends, so a transition is addressable by
+			     them (the rig's verbs), not only by where it happens to be drawn -->
+			<g class="trans {r.t.status ?? ''}" data-kind="transition" data-id={r.t.id} data-from={r.t.from.join(',')} data-to={r.t.to.join(',')} class:selected={isSelTrans(r.t.id)} data-vscode-context={JSON.stringify({ nautilusSfcTransition: r.t.name || `t${r.t.line}` })}>
 				{#if r.jump}
 					<g class="jump" data-kind="transition" data-id={r.t.id} transform="translate({r.jump.x}, {r.jump.y})" onclick={(e) => selectTrans(e, r.t.id)}>
-						<title>{r.t.name ? r.t.name + ': ' : ''}{r.t.cond} — jumps to {r.t.to.join(', ')} (a loop back, drawn compact rather than as a long line){editable ? ' — click to select, dblclick condition to edit' : ''}</title>
+						<title>{r.t.name ? r.t.name + ': ' : ''}{r.t.cond} — jumps to {r.t.to.join(', ')} (a loop back, drawn compact rather than as a long line){r.prio ? ` — priority ${r.prio}` : ''}{editable ? ' — click to select, dblclick condition to edit, F2: name' : ''}</title>
 						<rect x="-9" y="-9" width="18" height="18" rx="3" class="jumpbox" class:double={r.double} />
 						<text y="4" text-anchor="middle" class="jumpmark">↩</text>
 						<text
@@ -931,12 +1141,18 @@
 							class="cond jumplabel"
 							ondblclick={(e) => editCondition(e, r.t, { x: (e.currentTarget as Element).getBoundingClientRect().left, y: (e.currentTarget as Element).getBoundingClientRect().top, w: 160 })}
 						>{r.jump.label}: {r.t.cond}</text>
+						{#if r.t.name}
+							<text x="16" y="-12" class="tname" ondblclick={(e) => renameTransition(e, r.t)}>{r.t.name}</text>
+						{/if}
+						{#if r.prio}
+							<g class="prio" transform="translate(-17, -9)"><title>priority {r.prio} of the branches out of {r.t.from.join(', ')} (file order; ◀ / ▶ or Alt+← / Alt+→ reorders)</title><circle r="6" class="priodot" /><text y="3" text-anchor="middle" class="priotext">{r.prio}</text></g>
+						{/if}
 					</g>
 				{:else}
 					{#each r.legsIn as leg, i (i)}<line x1={leg.x} y1={leg.y1} x2={leg.x} y2={leg.y2} class="flowline" />{/each}
 					{#each r.legsOut as leg, i (i)}<line x1={leg.x} y1={leg.y1} x2={leg.x} y2={leg.y2} class="flowline" />{/each}
 					<g onclick={(e) => selectTrans(e, r.t.id)}>
-						<title>{r.t.name ? r.t.name + ': ' : ''}{r.t.cond}{editable ? ' — click: select · dblclick: edit condition · Del: delete' : ''}</title>
+						<title>{r.t.name ? r.t.name + ': ' : ''}{r.t.cond}{r.prio ? ` — priority ${r.prio}` : ''}{editable ? ' — click: select · dblclick: edit condition · F2: name · Del: delete' : ''}</title>
 						<line x1={r.barX1} y1={r.barY} x2={r.barX2} y2={r.barY} class="bar" />
 						{#if r.double}
 							<line x1={r.barX1} y1={r.barY + 4} x2={r.barX2} y2={r.barY + 4} class="bar" />
@@ -948,6 +1164,12 @@
 							class="cond"
 							ondblclick={(e) => editCondition(e, r.t, { x: (e.currentTarget as Element).getBoundingClientRect().left, y: (e.currentTarget as Element).getBoundingClientRect().top, w: 160 })}
 						>{r.t.cond || '…'}</text>
+						{#if r.t.name}
+							<text x={r.condX} y={r.condY - 9} class="tname" ondblclick={(e) => renameTransition(e, r.t)}>{r.t.name}</text>
+						{/if}
+						{#if r.prio}
+							<g class="prio" transform="translate({r.barX1 - 14}, {r.barY})"><title>priority {r.prio} of the branches out of {r.t.from.join(', ')} (file order; ◀ / ▶ or Alt+← / Alt+→ reorders)</title><circle r="6" class="priodot" /><text y="3" text-anchor="middle" class="priotext">{r.prio}</text></g>
+						{/if}
 					</g>
 				{/if}
 				{#if problems.length}
@@ -1011,6 +1233,7 @@
 					<g class="assoctable" transform="translate({p.w + ASSOC_GAP}, 0)">
 						{#each p.step.actions ?? [] as a, i (i)}
 							{@const isAction = !!actionFor(a.target)}
+{@const isNew = editable && isNewAction(a.target)}
 							<!-- An ACTION block has no box of its own on the chart, so a
 							     diff of its BODY (T#3S -> T#5S inside Stir) shows on
 							     every row that runs it; otherwise it marks nothing. -->
@@ -1022,12 +1245,16 @@
 								class:selected={isSelAssoc(p.id, i)}
 								transform="translate(0, {i * 16})"
 								onclick={(e) => selectAssoc(e, p.id, i)}
-								ondblclick={(e) => (isAction ? editActionBody(e, a.target) : editAssoc(e, p.step, i))}
+								ondblclick={(e) => openAssoc(e, p.step, i)}
 							>
-								<title>{isAction ? `ACTION ${a.target} — dblclick to edit its ST body` : `${a.qualifier} ${a.target}${a.time ? '(' + a.time + ')' : ''}${descTail(a.target)}`}</title>
+								<title>{isAction
+										? `ACTION ${a.target} — dblclick to edit its ST body (on the qualifier: the association)`
+										: isNew
+											? `no ACTION or variable named ${a.target} yet — dblclick to write ACTION ${a.target}'s body (on the qualifier: the association)`
+											: `${a.qualifier} ${a.target}${a.time ? '(' + a.time + ')' : ''}${descTail(a.target)}`}</title>
 								<rect x="0" y="1" width={p.assocW} height="15" class="assocbg" />
 								<text x="4" y="11" class="assocq">{a.qualifier}</text>
-								<text x="26" y="11" class="assoctarget" class:isaction={isAction}>{a.target}{a.time ? `(${a.time})` : ''}{#if showVal && !isAction && liveForced(a.target)}<tspan class="nx-forced-mark" dx="4">F</tspan>{/if}</text>
+								<text x="26" y="11" class="assoctarget" class:isaction={isAction} class:isnew={isNew}>{a.target}{a.time ? `(${a.time})` : ''}{#if showVal && !isAction && liveForced(a.target)}<tspan class="nx-forced-mark" dx="4">F</tspan>{/if}</text>
 								{#if editable}
 									<text x={p.assocW - 14} y="11" class="assocdel" onclick={(e) => deleteAssoc(e, p.step, i)}>✕</text>
 								{/if}
@@ -1270,7 +1497,33 @@
 		font-size: 10px;
 		fill: var(--nx-ui-ink);
 	}
-	.assoctarget.isaction {
+	.assoctarget.isnew {
+	fill: var(--nx-warn);
+	text-decoration: underline dotted;
+}
+.tname {
+	font-family: var(--nx-mono);
+	font-size: 10px;
+	font-weight: 700;
+	fill: var(--nx-ui-ink);
+	cursor: text;
+	dominant-baseline: middle;
+}
+.priodot {
+	fill: var(--nx-panel-bg);
+	stroke: var(--nx-muted);
+	stroke-width: 1;
+}
+.priotext {
+	font-size: 8px;
+	font-weight: 700;
+	fill: var(--nx-muted);
+	pointer-events: none;
+}
+.trans.selected .priodot {
+	stroke: var(--nx-accent);
+}
+.assoctarget.isaction {
 		fill: var(--nx-link);
 		text-decoration: underline dotted;
 	}

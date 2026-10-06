@@ -75,7 +75,7 @@ func runCheck(args []string) int {
 		return 0
 	}
 
-	bad := 0
+	bad, blankWarns := 0, 0
 	for _, f := range files {
 		src, err := os.ReadFile(f)
 		if err != nil {
@@ -83,6 +83,17 @@ func runCheck(args []string) int {
 			return 2
 		}
 		source := string(src)
+		// A new, still-empty diagram file (VS Code's New File, before the
+		// diagram's "initialize" writes its POU) is no program yet, and no
+		// task can name it without project.Load refusing it below — so it
+		// is a warning that says what to do, not a parse error. (An empty
+		// .st already compiles clean; an empty .ld/.fbd is read as a
+		// library by the composition, which reports it.)
+		if strings.EqualFold(filepath.Ext(f), ".sfc") && strings.TrimSpace(source) == "" {
+			blankWarns++
+			fmt.Printf("%s:1:1: warning: empty chart — no PROGRAM yet; open it as a diagram and click \"initialize\" (or delete it)\n", f)
+			continue
+		}
 		// lib/ holds libraries only. A PROGRAM there would be silently
 		// dropped from every composition (it is neither a library nor a
 		// task), so it is refused here, by its project-relative path.
@@ -188,6 +199,7 @@ func runCheck(args []string) int {
 		manifestErrs, manifestWarns = checkManifest(paths, *manifest)
 		bad += manifestErrs
 	}
+	manifestWarns += blankWarns
 
 	fmt.Printf("naut check: %d file(s), %d with errors", len(files), bad)
 	if manifestWarns > 0 {
