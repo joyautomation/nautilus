@@ -236,6 +236,12 @@ shows them as open pins to wire.
 
 <Clip id="fbd_add_block" />
 
+A variable chip's or block instance's tooltip ends with the tag's
+description (its `desc` in `nautilus.yaml`, or the comment on its
+declaration). **Shift+F12** on a selected chip, instance or FB pin, or
+right-click → **Find All References**, opens the References view on that
+name.
+
 Layout is computed from topology by default. Drag a node to pin it and the
 position is stored in a `(* @layout *)` comment that the compiler skips,
 right after `END_FBD` so it never sits between statements; **auto layout**

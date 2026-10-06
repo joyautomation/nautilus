@@ -162,10 +162,12 @@ chk() {
 
 # lx_desc_on_element <rung> <tag> <desc> — Studio 5000 draws a tag's
 # description above the instruction. Does the ladder element show (or
-# title) the nautilus.yaml desc anywhere? XFAIL until it does.
+# title) the nautilus.yaml desc? It does since #216: the element's tooltip
+# and a second line under the operand (descriptions arrive from naut lsp
+# after the model, so wait for them).
 lx_desc_on_element() {
   local rung=$1 tag=$2 desc=$3
-  js_true "($(ld_node_el "$rung" '*' "$tag"))?.closest('g.node')?.textContent.includes($(_q "$desc"))" \
+  wait_js "($(ld_node_el "$rung" '*' "$tag"))?.closest('g.node')?.textContent.includes($(_q "$desc"))" 15 \
     || { g_err "the $tag element on $rung shows no description (want \"$desc\")"; return 1; }
 }
 # lx_real_coil_checks <rung> <REAL tag> — the MOV/CPT habit: a coil that
@@ -294,7 +296,7 @@ row ld_add_contact-M1_StartPB PASS ld_add_contact m1 M1_StartPB
 row ld_declare-M1_StartPB PASS ld_declare M1_StartPB VAR_EXTERNAL
 row ld_edge_retag-M1_StartPB PASS ld_edge_retag m1 M1_StartPB
 row ld_edge_drawn-M1_StartPB PASS ld_edge_drawn m1 M1_StartPB
-row lx_desc_on_element-M1_StartPB XFAIL lx_desc_on_element m1 M1_StartPB "M1 start pushbutton"
+row lx_desc_on_element-M1_StartPB PASS lx_desc_on_element m1 M1_StartPB "M1 start pushbutton"
 row ld_add_block-MotorStarter-m1 PASS ld_add_block m1 MotorStarter m1 \
   "Stop := M1_StopPB, Permit := M1_Permit, Aux := M1_Aux, Fault := M1_OL, Reset := FaultReset, FailToStart => Alm_M1FTS"
 for v in M1_StopPB M1_Aux M1_OL FaultReset Alm_M1FTS; do row "ld_declare-$v" PASS ld_declare "$v" VAR_EXTERNAL; done

@@ -39,6 +39,14 @@ const FILE_GROUP: ShortcutGroup = {
 	]
 };
 
+/** Cross-reference on an element (xref.svelte.ts) — the three diagrams. */
+const XREF_GROUP: ShortcutGroup = {
+	title: 'Navigate',
+	rows: [
+		{ keys: 'Shift + F12', does: 'Find All References to the selected element\'s name — also on its right-click menu' }
+	]
+};
+
 export const FBD_SHORTCUTS: ShortcutGroup[] = [
 	{
 		title: 'Select',
@@ -72,6 +80,7 @@ export const FBD_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: 'Ctrl + = / Ctrl + - / Ctrl + 0', does: 'Zoom in / out / fit' }
 		]
 	},
+	XREF_GROUP,
 	FILE_GROUP
 ];
 
@@ -101,6 +110,7 @@ export const LD_SHORTCUTS: ShortcutGroup[] = [
 		]
 	},
 	viewGroup('Fit the widest rung to the pane width (also the corner fit button)'),
+	XREF_GROUP,
 	FILE_GROUP
 ];
 
@@ -131,6 +141,7 @@ export const SFC_SHORTCUTS: ShortcutGroup[] = [
 		]
 	},
 	viewGroup('Fit the whole chart to the pane (also the corner fit button)'),
+	XREF_GROUP,
 	FILE_GROUP
 ];
 

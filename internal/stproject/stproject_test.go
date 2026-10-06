@@ -253,3 +253,30 @@ func TestPreludeSourcesIncludesLadderLibrary(t *testing.T) {
 		t.Errorf("the file being compiled must not be in its own prelude")
 	}
 }
+
+// A program file may define a FUNCTION_BLOCK ahead of its PROGRAM; it is
+// still a program (the parser's TopKeyword names only the first POU). Find
+// All References from another file missed such a program's uses of a tag
+// because Programs() left it out.
+func TestProgramsListsAFileWhoseFBPrecedesItsProgram(t *testing.T) {
+	dir := t.TempDir()
+	fbFirst := "FUNCTION_BLOCK Debounce\nVAR_INPUT\n  Raw : BOOL;\nEND_VAR\nVAR_OUTPUT\n  Clean : BOOL;\nEND_VAR\nClean := Raw;\nEND_FUNCTION_BLOCK\n\n" +
+		"PROGRAM Plant\nVAR_EXTERNAL\n  Start : BOOL;\nEND_VAR\nStart := TRUE;\nEND_PROGRAM\n"
+	lib := "FUNCTION_BLOCK OnlyFB\nVAR_INPUT\n  X : BOOL;\nEND_VAR\nEND_FUNCTION_BLOCK\n"
+	for name, src := range map[string]string{"plant.st": fbFirst, "lib.st": lib, "main.st": programSrc} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	progs, err := Programs(dir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, p := range progs {
+		got = append(got, p.File+":"+p.POU)
+	}
+	if strings.Join(got, " ") != "main.st:Main plant.st:Plant" {
+		t.Fatalf("Programs = %v, want main.st:Main plant.st:Plant (lib.st is a library)", got)
+	}
+}

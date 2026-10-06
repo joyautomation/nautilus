@@ -32,7 +32,7 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 172 rows. **0 rows have no coverage at all** (no webview test,
+Totals: 174 rows. **0 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
@@ -43,7 +43,7 @@ no rig verb, no smoke check); per section below.
 | SFC `?` | 22 | 0 |
 | Mimic `?` | 18 | 0 |
 | Component `?` | 8 | 0 |
-| Other claims | 48 | 0 |
+| Other claims | 50 | 0 |
 
 ## Commands (package.json `contributes.commands`)
 
@@ -249,12 +249,14 @@ no rig verb, no smoke check); per section below.
 | X48 | FBD | EN/ENO on every function and FB call (IEC execution control): EN FALSE skips the call — a function's result is not assigned, an FB's outputs hold; ENO = EN AND no error (DIV/MOD: a zero divisor); EN/ENO pins draw when bound or after the pin gesture | docs/functions.md EN/ENO; CHANGELOG | fbd-parity.test.mjs: FBD EN/ENO (F19); conformance fbd-en-eno (ST + FBD) | (tia-shaped build 09-EN-ENO-on-LIMIT, 09-EN-input-by-text) | — |
 | X49 | FBD | Numbered networks: `NETWORK 'title'` lines divide the body, run in order; the diagram draws numbered bands with titles and each statement's execution order; + add palette "network", header ops | docs/languages FBD; CHANGELOG | fbd-parity.test.mjs: FBD networks: numbered bands in order, statements with their execution order (F20, X49, #207); the header picks the palette target (F20) | (tia-shaped build 07..11-network, 11-network-numbers-or-exec-order) | — |
 | X43 | Extension | Force… / Remove Force / Remove All Forces (context menu, pill hover, Live Values row); forced values marked F on pills, the Live Values panel and the FBD/ladder/SFC overlays; status bar "N forces active"; SFC diagram Set Active Step / Fire Transition | README Live values and online edit; CHANGELOG Unreleased | force.test.mjs: FBD: a forced input chip and its VARS pill carry the F badge; Ladder: a forced operand shows F; SFC: steps and transitions carry the context the menu keys on | — | 18 |
+| X44 | Diagrams | Cross-reference from a diagram element: Shift+F12, or right-click → Find All References, on a ladder contact/coil/block, an FBD chip/FB instance/FB pin or an SFC step/action association opens the References view on that name (every program and the manifest) | README Diagrams; #218 | xref-desc.test.mjs: X44 ladder / read-only / FBD / SFC (the posted message) | — | 14 (ladder contact → References view) |
+| X45 | Diagrams | Tag descriptions on diagram elements: the manifest desc (or the VAR line's comment) in the element tooltip in ladder, FBD and SFC; a second line under ladder contacts and coils (nautilus.diagram.showDescriptions) | README Diagrams; #216 | xref-desc.test.mjs: X45 ladder; X44/X45 FBD, SFC | logix-shaped lx_desc_on_element | 14 (ladder contact title + line) |
 | X46 | SFC | Timed qualifiers L, D, SD, DS, SL compile with the standard's semantics, in `Q Target(T#t);` or IEC's `Target(Q, T#t);` form; an R resets the stored ones | CHANGELOG [Unreleased]; website languages/sfc "Action qualifiers" | — (Go: lang/conformance/sfc-timed-qualifiers, lang/sfc/timed_test.go) | codesys-shaped build rows habit-D-qualifier, habit-SD-qualifier, habit-L-qualifier, habit-iec-assoc-form; reference-timed/ (naut test) | — |
 | X47 | SFC | Step supervision: `STEP Fill (MAXTIME := T#60S, ERROR := Tag):` sets Fill.ERR on an overrun and mirrors it into a tag an alarm binds to | CHANGELOG [Unreleased]; website languages/sfc "Step supervision" | — (Go: lang/conformance/sfc-step-maxtime asserts the alarm, lang/sfc/timed_test.go) | codesys-shaped reference-timed/ (naut test: fill timeout) | — |
 
 ## Count of rows with no coverage at all
 
-**0 of 172.** Every row has at least one layer of coverage: a webview test, a
+**0 of 174.** Every row has at least one layer of coverage: a webview test, a
 rig verb, or a smoke check. Some rows are covered only in part, and the cell
 says which part:
 

@@ -54,6 +54,25 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   standard functions; a user FUNCTION block draws its declared pin names.
   (#204)
 
+- **Find All References from a diagram element.** Select a ladder contact,
+  coil or block, an FBD variable chip, FB instance or FB pin, or an SFC
+  step or action association and press **Shift+F12**, or right-click it →
+  *Find All References*. The References view opens on that name: every
+  program that reads or writes it, on the diagram files' own lines, plus
+  its declaration in `nautilus.yaml` or a tag file. Studio 5000's
+  Ctrl+E cross-reference, in all three diagram editors. (#218)
+
+- **Tag descriptions on diagram elements.** A tag's `desc` (from
+  `nautilus.yaml` or a tag file), or the trailing comment on a variable's
+  VAR line (`Run : BOOL; (* motor running *)`), now shows in the element's
+  tooltip in the ladder, FBD and SFC editors, and as a second line under
+  each ladder contact and coil, the way Studio 5000 draws it. The new
+  setting `nautilus.diagram.showDescriptions` (default on) controls the
+  ladder's second line; tooltips always carry the description. Editing a
+  tag file now refreshes hover and these descriptions without a restart.
+  Comes from `naut lsp` (the new `nautilus/descriptions` request), so it
+  needs a `naut` newer than 0.15.0. (#216)
+
 - **Ladder: edge contacts, from the palette, a key or a retag.** The
   palette has rising- and falling-edge contacts (`⊣P⊢`, `⊣N⊢`, the Logix
   ONS habit); `P` cycles a selected contact NO → P → N → NC; and
@@ -157,6 +176,12 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 - **A blank `.fbd`/`.ld`/`.sfc` seeds the POU name `naut new` would**:
   `main.fbd` becomes `PROGRAM Main`, not `PROGRAM main`. (#209)
+
+- **Find All References from another file now finds a program that defines
+  a FUNCTION_BLOCK ahead of its PROGRAM.** Such a file was not recognized
+  as a program at all, so its reads and writes of a tag were missing from
+  the list whenever the search started anywhere else. (Found by the X44
+  smoke row.)
 
 - **Ladder: an edge contact (`+Tag`, `-Tag`) is drawn.** The diagram
   dropped it and wired the block behind it straight to the rail, as if the
