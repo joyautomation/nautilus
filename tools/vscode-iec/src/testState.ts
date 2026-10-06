@@ -62,6 +62,7 @@ export function emptySnapshot(): TestSnapshot {
 /** Status-bar names. Stable: the rig finds items by these. */
 export const STATUS_LIVE = "nautilus.live";
 export const STATUS_SYNC = "nautilus.sync";
+export const STATUS_FORCES = "nautilus.forces";
 
 /** The tooltip carrying its machine-readable prefix. */
 export function prefixedTooltip(name: string, tooltip: string): string {

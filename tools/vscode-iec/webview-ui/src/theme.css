@@ -38,6 +38,8 @@
 	--nx-warn: var(--vscode-editorWarning-foreground, #d7a021);
 	--nx-err: var(--vscode-errorForeground, #f48771);
 	--nx-err-bg: var(--vscode-inputValidation-errorBackground, rgba(200, 60, 60, 0.12));
+	/* a FORCED value: amber, like the F a PLC IDE shows beside one */
+	--nx-forced: var(--vscode-charts-orange, #e8a028);
 
 	/* diff */
 	--nx-added: var(--vscode-gitDecoration-addedResourceForeground, #2ea043);
@@ -115,7 +117,10 @@ body.vscode-high-contrast button:focus-visible {
 }
 
 /* A live-value pill: green while frames flow, grey once the stream goes
-   stale. Size/placement stay with the component; color chrome lives here. */
+   stale. Size/placement stay with the component; color chrome lives here.
+   .forced marks a value the controller's force table holds: amber, with
+   an F badge ahead of the value (the frame's `forces` block; see
+   liveForced in liveState). */
 .nx-pill {
 	font-weight: 600;
 	border-radius: 5px;
@@ -129,4 +134,26 @@ body.vscode-high-contrast button:focus-visible {
 	color: var(--nx-muted);
 	background: color-mix(in srgb, var(--nx-muted) 12%, var(--nx-bg));
 	border-color: color-mix(in srgb, var(--nx-muted) 32%, transparent);
+}
+.nx-pill.forced {
+	color: var(--nx-forced);
+	background: color-mix(in srgb, var(--nx-forced) 16%, var(--nx-bg));
+	border-color: color-mix(in srgb, var(--nx-forced) 65%, transparent);
+}
+.nx-pill.forced::before {
+	content: 'F';
+	display: inline-block;
+	margin-right: 4px;
+	padding: 0 3px;
+	border-radius: 3px;
+	font-weight: 800;
+	color: var(--nx-bg);
+	background: var(--nx-forced);
+}
+/* The same mark inside SVG diagrams (ladder operands, SFC actions), where a
+   ::before can't attach to a <text>: a <tspan class="nx-forced-mark">F</tspan>. */
+.nx-forced-mark,
+text.nx-forced {
+	fill: var(--nx-forced);
+	font-weight: 800;
 }

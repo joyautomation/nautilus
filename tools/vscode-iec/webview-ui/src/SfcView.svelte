@@ -31,7 +31,7 @@
 		type SfcTransition,
 		type TransRoute
 	} from './sfc';
-	import { live, liveValue } from './liveState.svelte';
+	import { live, liveValue, liveForced } from './liveState.svelte';
 	import { readClip, typingTarget, writeClip } from './clipboard';
 
 	type Diag = { line: number; message: string; severity: string };
@@ -918,7 +918,7 @@
 	>
 		{#each layout.trans as r (r.t.id)}
 			{@const problems = problemsFor(r.t.line, r.t.endLine)}
-			<g class="trans {r.t.status ?? ''}" data-kind="transition" data-id={r.t.id} class:selected={isSelTrans(r.t.id)}>
+			<g class="trans {r.t.status ?? ''}" data-kind="transition" data-id={r.t.id} class:selected={isSelTrans(r.t.id)} data-vscode-context={JSON.stringify({ nautilusSfcTransition: r.t.name || `t${r.t.line}` })}>
 				{#if r.jump}
 					<g class="jump" data-kind="transition" data-id={r.t.id} transform="translate({r.jump.x}, {r.jump.y})" onclick={(e) => selectTrans(e, r.t.id)}>
 						<title>{r.t.name ? r.t.name + ': ' : ''}{r.t.cond} — jumps to {r.t.to.join(', ')} (a loop back, drawn compact rather than as a long line){editable ? ' — click to select, dblclick condition to edit' : ''}</title>
@@ -967,6 +967,7 @@
 				class="step {p.step.status ?? ''}"
 				data-id={p.id}
 				data-kind="step"
+				data-vscode-context={JSON.stringify({ nautilusSfcStep: p.step.name })}
 				transform="translate({pos.x}, {pos.y})"
 				class:selected={isSelStep(p.id)}
 				class:active
@@ -1023,7 +1024,7 @@
 								<title>{isAction ? `ACTION ${a.target} — dblclick to edit its ST body` : `${a.qualifier} ${a.target}${a.time ? '(' + a.time + ')' : ''}`}</title>
 								<rect x="0" y="1" width={p.assocW} height="15" class="assocbg" />
 								<text x="4" y="11" class="assocq">{a.qualifier}</text>
-								<text x="26" y="11" class="assoctarget" class:isaction={isAction}>{a.target}{a.time ? `(${a.time})` : ''}</text>
+								<text x="26" y="11" class="assoctarget" class:isaction={isAction}>{a.target}{a.time ? `(${a.time})` : ''}{#if showVal && !isAction && liveForced(a.target)}<tspan class="nx-forced-mark" dx="4">F</tspan>{/if}</text>
 								{#if editable}
 									<text x={p.assocW - 14} y="11" class="assocdel" onclick={(e) => deleteAssoc(e, p.step, i)}>✕</text>
 								{/if}

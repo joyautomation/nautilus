@@ -8,12 +8,13 @@
 import * as vscode from "vscode";
 import { LiveValues } from "./liveValues";
 import { formatValue } from "./scan";
+import { forcedDescription } from "./forces";
 
 const REFRESH_THROTTLE_MS = 500;
 
 type Node =
-  | { kind: "group"; label: string; settable: boolean; entries: [string, unknown][] }
-  | { kind: "tag"; name: string; value: unknown; settable: boolean }
+  | { kind: "group"; label: string; settable: boolean; entries: [string, unknown][]; forces?: boolean }
+  | { kind: "tag"; name: string; value: unknown; settable: boolean; forced?: string; forceRow?: boolean }
   | { kind: "member"; label: string; value: unknown };
 
 export class LiveValuesView implements vscode.TreeDataProvider<Node> {
@@ -38,7 +39,12 @@ export class LiveValuesView implements vscode.TreeDataProvider<Node> {
   getTreeItem(node: Node): vscode.TreeItem {
     if (node.kind === "group") {
       const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Expanded);
-      item.contextValue = "nautilusGroup";
+      // The Forces group carries "Remove All Forces" on its row.
+      item.contextValue = node.forces ? "nautilusForceGroup" : "nautilusGroup";
+      if (node.forces) {
+        item.iconPath = new vscode.ThemeIcon("lock", new vscode.ThemeColor("charts.orange"));
+        item.tooltip = "Values held by a force against the field and the logic, until removed";
+      }
       return item;
     }
     if (node.kind === "member") {
@@ -54,17 +60,29 @@ export class LiveValuesView implements vscode.TreeDataProvider<Node> {
     );
     item.description = formatValue(node.value);
     item.tooltip = `${node.name} = ${formatValue(node.value)}`;
-    // contextValue drives the inline pencil (see package.json view/item/context):
-    // only settable leaves get it.
-    item.contextValue = node.settable ? "nautilusTag" : "nautilusLocal";
-    // Carry the name so nautilus.setValue can read it off the tree element.
+    // contextValue drives the inline actions (see package.json
+    // view/item/context): only settable leaves get the pencil and Force…;
+    // a forced one gets Remove Force instead of the pencil — a write to it
+    // would be refused while the force holds.
+    item.contextValue = node.settable ? (node.forced ? "nautilusTagForced" : "nautilusTag") : "nautilusLocal";
+    // Carry the name so nautilus.setValue/force can read it off the element.
     (item as unknown as { tag: string }).tag = node.name;
+    (item as unknown as { force?: string }).force = node.forced;
+    if (node.forced) {
+      // The F badge: Logix and TIA both mark a forced value in the list.
+      item.description = forcedDescription(formatValue(node.value));
+      item.iconPath = new vscode.ThemeIcon("lock", new vscode.ThemeColor("charts.orange"));
+      item.tooltip = `${node.name} = ${formatValue(node.value)} — FORCED${node.forced !== node.name ? ` (${node.forced})` : ""}; held against the field and the logic until removed`;
+    }
     // Click-to-edit: a settable scalar opens the Set Live Value input on a
     // plain row click, so the panel reads as a values EDITOR (the pencil is
-    // the same action, for discoverability). Compound values and locals have
+    // the same action, for discoverability) — or, when forced, the Force…
+    // input to change the forced value. Compound values and locals have
     // no command — clicking just expands/selects them.
     if (node.settable && !compound) {
-      item.command = { command: "nautilus.setValue", title: "Set value", arguments: [{ tag: node.name }] };
+      item.command = node.forced
+        ? { command: "nautilus.force", title: "Change force", arguments: [{ tag: node.forced }] }
+        : { command: "nautilus.setValue", title: "Set value", arguments: [{ tag: node.name }] };
     }
     return item;
   }
@@ -74,6 +92,9 @@ export class LiveValuesView implements vscode.TreeDataProvider<Node> {
     if (!node) {
       if (!snap.enabled) return [];
       const groups: Node[] = [];
+      if (snap.forces.size) {
+        groups.push({ kind: "group", label: `Forces (${snap.forces.size})`, settable: true, entries: [...snap.forces], forces: true });
+      }
       if (snap.tags.length) groups.push({ kind: "group", label: "Tags", settable: true, entries: snap.tags });
       if (snap.locals.length) groups.push({ kind: "group", label: "Locals", settable: false, entries: snap.locals });
       return groups;
@@ -82,7 +103,14 @@ export class LiveValuesView implements vscode.TreeDataProvider<Node> {
       return node.entries
         .slice()
         .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([name, value]) => ({ kind: "tag", name, value, settable: node.settable }));
+        .map(([name, value]) => ({
+          kind: "tag",
+          name,
+          value,
+          settable: node.settable,
+          forced: node.settable ? (node.forces ? name : this.live.forcedFor(name)) : undefined,
+          forceRow: node.forces,
+        }));
     }
     if (node.kind === "tag" && node.value && typeof node.value === "object") {
       return members(node.value);

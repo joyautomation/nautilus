@@ -187,6 +187,33 @@
         "icon": "$(edit)"
       },
       {
+        "command": "nautilus.force",
+        "title": "nautilus: Force…",
+        "icon": "$(lock)"
+      },
+      {
+        "command": "nautilus.unforce",
+        "title": "nautilus: Remove Force",
+        "icon": "$(unlock)"
+      },
+      {
+        "command": "nautilus.unforceAll",
+        "title": "nautilus: Remove All Forces",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "nautilus.forces.show",
+        "title": "nautilus: Show Forces"
+      },
+      {
+        "command": "nautilus.sfc.setStep",
+        "title": "nautilus: Set Active Step"
+      },
+      {
+        "command": "nautilus.sfc.fireTransition",
+        "title": "nautilus: Fire Transition"
+      },
+      {
         "command": "nautilus.liveValues.refresh",
         "title": "nautilus: Refresh Live Values",
         "icon": "$(refresh)"
@@ -329,6 +356,11 @@
           "command": "nautilus.liveValues.refresh",
           "when": "view == nautilusLiveValues",
           "group": "navigation@2"
+        },
+        {
+          "command": "nautilus.unforceAll",
+          "when": "view == nautilusLiveValues && nautilus.forcesActive",
+          "group": "navigation@3"
         }
       ],
       "view/item/context": [
@@ -336,6 +368,53 @@
           "command": "nautilus.setValue",
           "when": "view == nautilusLiveValues && viewItem == nautilusTag",
           "group": "inline"
+        },
+        {
+          "command": "nautilus.force",
+          "when": "view == nautilusLiveValues && viewItem =~ /^nautilusTag/",
+          "group": "inline"
+        },
+        {
+          "command": "nautilus.unforce",
+          "when": "view == nautilusLiveValues && viewItem == nautilusTagForced",
+          "group": "inline"
+        },
+        {
+          "command": "nautilus.unforceAll",
+          "when": "view == nautilusLiveValues && viewItem == nautilusForceGroup",
+          "group": "inline"
+        },
+        {
+          "command": "nautilus.setValue",
+          "when": "view == nautilusLiveValues && viewItem == nautilusTag",
+          "group": "nautilus@1"
+        },
+        {
+          "command": "nautilus.force",
+          "when": "view == nautilusLiveValues && viewItem =~ /^nautilusTag/",
+          "group": "nautilus@2"
+        },
+        {
+          "command": "nautilus.unforce",
+          "when": "view == nautilusLiveValues && viewItem == nautilusTagForced",
+          "group": "nautilus@3"
+        },
+        {
+          "command": "nautilus.unforceAll",
+          "when": "view == nautilusLiveValues && nautilus.forcesActive",
+          "group": "nautilus@4"
+        }
+      ],
+      "webview/context": [
+        {
+          "command": "nautilus.sfc.setStep",
+          "when": "(webviewId == 'nautilus.sfcDiagram' || webviewId == 'nautilus.sfcPreview') && nautilusSfcStep && nautilus.liveConnected",
+          "group": "nautilus@1"
+        },
+        {
+          "command": "nautilus.sfc.fireTransition",
+          "when": "(webviewId == 'nautilus.sfcDiagram' || webviewId == 'nautilus.sfcPreview') && nautilusSfcTransition && nautilus.liveConnected",
+          "group": "nautilus@2"
         }
       ],
       "editor/context": [
@@ -343,6 +422,21 @@
           "command": "nautilus.setValue",
           "when": "resourceLangId == iec-st || resourceLangId == iec-fbd || resourceLangId == iec-ld || resourceLangId == iec-sfc",
           "group": "nautilus@1"
+        },
+        {
+          "command": "nautilus.force",
+          "when": "resourceLangId == iec-st || resourceLangId == iec-fbd || resourceLangId == iec-ld || resourceLangId == iec-sfc",
+          "group": "nautilus@2"
+        },
+        {
+          "command": "nautilus.unforce",
+          "when": "nautilus.forcesActive && (resourceLangId == iec-st || resourceLangId == iec-fbd || resourceLangId == iec-ld || resourceLangId == iec-sfc)",
+          "group": "nautilus@3"
+        },
+        {
+          "command": "nautilus.unforceAll",
+          "when": "nautilus.forcesActive && (resourceLangId == iec-st || resourceLangId == iec-fbd || resourceLangId == iec-ld || resourceLangId == iec-sfc)",
+          "group": "nautilus@4"
         }
       ],
       "editor/title": [
@@ -695,7 +789,7 @@
     "vscode:prepublish": "npm run compile && npm run build:webview",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/fbMonitorTitle.test.js out/testState.test.js out/sourceGuard.test.js out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js out/sceneKinds.test.js out/acceptanceMessage.test.js && npm --prefix webview-ui run test",
+    "test": "npm run compile && node --test out/fbMonitorTitle.test.js out/testState.test.js out/sourceGuard.test.js out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js out/sceneKinds.test.js out/acceptanceMessage.test.js out/forces.test.js && npm --prefix webview-ui run test",
     "build:webview": "npm --prefix webview-ui run build",
     "test:e2e": "npm run compile && node out/e2e/run.js"
   },

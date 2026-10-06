@@ -2,7 +2,7 @@
 // a program tag as MainProgram_Counts while the rung says Counts.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveLabel, resolveScoped } from './liveResolve.ts';
+import { forcedLabel, resolveLabel, resolveScoped } from './liveResolve.ts';
 
 // Top-level keys arrive lowercased, as the extension sends them.
 const values: Record<string, unknown> = {
@@ -48,4 +48,15 @@ test('an AOI routine resolves nothing: its operands are per-instance', () => {
 test('nautilus source keeps unknown bounds unresolved', () => {
 	assert.equal(resolveLabel(values, {}, 'MainProgram_Recipe[0]'), undefined);
 	assert.equal(resolveLabel(values, { mainprogram_recipe: [1] }, 'MainProgram_Recipe[1]'), 10);
+});
+
+test('forcedLabel: exact, under a whole-tag force, and a struct with a forced member', () => {
+	const forced = { startpb: true, 'p101.speed': 55, tbl: [1, 2] };
+	assert.equal(forcedLabel(forced, 'StartPB'), true);
+	assert.equal(forcedLabel(forced, 'StartPBX'), false);
+	assert.equal(forcedLabel(forced, 'P101.Speed'), true);
+	assert.equal(forcedLabel(forced, 'P101'), true);
+	assert.equal(forcedLabel(forced, 'P101.Run'), false);
+	assert.equal(forcedLabel(forced, 'Tbl[1]'), true);
+	assert.equal(forcedLabel({}, 'StartPB'), false);
 });

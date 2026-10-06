@@ -7,7 +7,7 @@
 	import { Handle, Position } from '@xyflow/svelte';
 	import type { Placed } from './layout';
 	import { pinOffset, EXTENSIBLE, NOTE_LINE_H } from './layout';
-	import { live, liveValue, liveMissing, member, formatLive } from './liveState.svelte';
+	import { live, liveValue, liveMissing, liveForced, member, formatLive } from './liveState.svelte';
 
 	let {
 		data
@@ -167,7 +167,7 @@
 		<Handle type="source" position={Position.Right} id="" data-kind="pin" data-pin="" style="top: {n.h / 2}px" isConnectable={data.editable} />
 		{#if problems.length}<span class="badge">!</span>{/if}
 		{#if chipVal !== undefined}
-			<span class="nx-pill val below" class:off={!live.fresh} title="{n.label} = {formatLive(chipVal)} (live)">{formatLive(chipVal)}</span>
+			<span class="nx-pill val below" class:off={!live.fresh} class:forced={liveForced(n.label)} title="{n.label} = {formatLive(chipVal)} (live{liveForced(n.label) ? ', FORCED' : ''})">{formatLive(chipVal)}</span>
 		{/if}
 	</div>
 {:else}
