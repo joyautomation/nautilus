@@ -216,6 +216,17 @@ clamp to the string instead of faulting.
 | `REPLACE` | `REPLACE(IN1, IN2, L, P)` | STRING | L characters at P replaced by IN2 |
 | `FIND` | `FIND(IN1, IN2)` | INT | 1-based position of IN2 in IN1; **0** when absent or IN2 empty |
 
+### The scan
+
+| Name | Signature | Result | Behavior |
+| --- | --- | --- | --- |
+| `FIRST_SCAN` | `FIRST_SCAN()` | BOOL | TRUE for the whole of the program's first scan after it starts or is downloaded, FALSE from the second scan on. An online edit keeps the program's state, so it is not a start, and neither is a rollback |
+
+`FIRST_SCAN()` is how a program seeds state from the world once: a ladder
+function contact `FIRST_SCAN() { next := Clock.SECOND }`, or
+`IF FIRST_SCAN() THEN … END_IF;` in ST. Each task's program has its own
+first scan. On a Logix controller it is the status flag `S:FS`.
+
 ## Type conversions
 
 Explicit, in the standard's `X_TO_Y` naming — there are no implicit
@@ -250,6 +261,7 @@ scans. Outputs read as `inst.Pin` from any language.
 | `SR` | `S1: BOOL, R: BOOL` | `Q1: BOOL` | set-dominant latch |
 | `RS` | `S: BOOL, R1: BOOL` | `Q1: BOOL` | reset-dominant latch |
 | `PID` | see [below](#pid-closed-loop-control) | see below | closed-loop control — proportional/integral/derivative with anti-windup and bumpless auto/manual |
+| `LOCAL_TIME` | — | `YEAR`, `MONTH`, `DAY`, `HOUR`, `MINUTE`, `SECOND`, `MILLISECOND`: DINT | the calendar, now: each call reads the runtime's clock once, so the seven outputs are one instant. The names are IEC 61131-3's `SPLIT_DT` outputs. In production the clock is the machine's local time; under `naut test` it is the test's virtual clock, read in UTC (it starts at 2000-01-01 00:00:00), so a test that reads the calendar gives the same answer on every machine |
 
 ### Power pins in ladder
 
@@ -265,6 +277,7 @@ parentheses:
 | `R_TRIG`, `F_TRIG` | `CLK` | `Q` |
 | `SR` | `S1` | `Q1` |
 | `RS` | `S` | `Q1` |
+| `LOCAL_TIME` | none: it sits on the rail | none: power passes through |
 | user FUNCTION_BLOCK | `EN`, else the first **BOOL** `VAR_INPUT` the call doesn't bind by name | `ENO`, else the first **BOOL** `VAR_OUTPUT` |
 
 Passing the power pin explicitly in the argument list (`t1:TON(IN := x)`)
@@ -381,6 +394,11 @@ The `logix` dialect today:
 | Block | Pins | Semantics | On a Logix controller |
 | --- | --- | --- | --- |
 | `TONR` | `IN`, `PT`, `Reset` → `Q`, `ET` | a TON whose `Reset` clears the accumulated time and `Q` while TRUE; the free-running pulse is `t:TONR(PT := T#1S, Reset := t.Q)` | a `TON` with a `RES(t)` rung ahead of the timer's rung |
+
+A vendor idiom with a standard equivalent is not a dialect block. The
+first-scan flag and the controller's calendar are `FIRST_SCAN()` and
+`LOCAL_TIME`, standard in every project; the Logix writer spells them
+`S:FS` and `GSV(WallClockTime,,LocalDateTime,…)`.
 
 **Tag aliases.** A manifest tag may carry `alias:`, the vendor-side
 binding of the tag — on Logix the alias tag's target, which is how a Logix

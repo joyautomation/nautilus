@@ -1,0 +1,27 @@
+tests:
+  - name: the first scan ran once
+    steps:
+      - advance: 0.5s
+        expect: { Seeded: 1 }
+
+  # A Logix controller whose clock was never set (Echo after a restart)
+  # reads 1998-01-01; virtual time starts at 2000-01-01. Either is a
+  # calendar, which is all this asks.
+  - name: the calendar is a calendar
+    steps:
+      - advance: 0.5s
+        expect:
+          Year: { between: [1998, 2100] }
+          Month: { between: [1, 12] }
+          Day: { between: [1, 31] }
+          Hour: { between: [0, 23] }
+          Sec: { between: [0, 59] }
+
+  - name: the sequencer ticks once a second
+    steps:
+      - given: { Restart: true }
+        advance: 0.3s
+        expect: { Ticks: 0 }
+      - given: { Restart: false }
+        advance: 3.5s
+        expect: { Ticks: { between: [2, 4] } }

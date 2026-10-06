@@ -1,6 +1,10 @@
 package runtime
 
-import "github.com/joyautomation/nautilus/lang/ir"
+import (
+	"time"
+
+	"github.com/joyautomation/nautilus/lang/ir"
+)
 
 // scanView is one program's private window onto the shared tag store for
 // the duration of a scan: its VAR_EXTERNAL set is copied in under one read
@@ -33,6 +37,8 @@ type scanView struct {
 	store *Tags
 	vals  map[string]ir.Value
 	dirty map[string]struct{}
+	// firstScan answers ir.ScanInfo for the scan in progress (Program.Run).
+	firstScan bool
 }
 
 func newScanView(store *Tags) *scanView {
@@ -93,3 +99,9 @@ func (v *scanView) NowMs() int64 { return v.store.NowMs() }
 // view is the Host now, and a type assertion on it finds only what it
 // implements.
 func (v *scanView) DivZero() { v.store.DivZero() }
+
+// Now forwards the VM's optional ir.WallClock: LOCAL_TIME.
+func (v *scanView) Now() time.Time { return v.store.Now() }
+
+// FirstScan is the VM's optional ir.ScanInfo: FIRST_SCAN().
+func (v *scanView) FirstScan() bool { return v.firstScan }

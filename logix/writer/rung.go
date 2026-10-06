@@ -55,12 +55,21 @@ func (lw *lowered) rung(r ld.Rung, notes string) {
 // split the rung) and false inside a branch leg.
 func (c *rungCtx) series(elems []ld.Element, top bool) string {
 	var parts []string
+	skip := 0
 	for i, e := range elems {
+		if skip > 0 {
+			skip--
+			continue
+		}
 		last := i == len(elems)-1
 		switch e.Kind {
 		case "contact":
 			parts = append(parts, c.contact(e.Ref, e.Neg))
 		case "fn":
+			if isFirstScan(e.Fn, e.Args) {
+				parts = append(parts, c.contact(firstScanFlag, e.Neg))
+				continue
+			}
 			if t, ok := c.compare(e); ok {
 				parts = append(parts, t)
 			}
@@ -78,6 +87,27 @@ func (c *rungCtx) series(elems []ld.Element, top bool) string {
 			c.legHead = inherited
 			parts = append(parts, "["+strings.Join(legs, " ,")+" ]")
 		case "fb":
+			if isLocalTime(e.Type) {
+				// The import's copy right after the call folds into the GSV;
+				// when the instance is read elsewhere too, the call fills
+				// it and the copy is element for element.
+				if i+1 < len(elems) && elems[i+1].Kind == "assign" {
+					if dest, ok := localTimeCopy(e.Inst, elems[i+1].Text); ok {
+						skip = 1
+						if c.lw.clockFold[strings.ToLower(e.Inst)] {
+							parts = append(parts, gsvLocalTime(dest))
+							continue
+						}
+						c.lw.clockUsed[strings.ToLower(e.Inst)] = true
+						parts = append(parts, gsvLocalTime(e.Inst+"[0]"))
+						parts = append(parts, localTimeMoves(e.Inst, dest)...)
+						continue
+					}
+				}
+				c.lw.clockUsed[strings.ToLower(e.Inst)] = true
+				parts = append(parts, gsvLocalTime(e.Inst+"[0]"))
+				continue
+			}
 			if c.lw.blockType(e.Type) == "" && c.lw.blockSourceExists(e.Type) {
 				// A user block: an Add-On Instruction at the head of its
 				// rung, the condition so far on a helper rung (aoi.go).
@@ -209,6 +239,9 @@ func (c *rungCtx) ref(ref string) (string, bool) {
 	if strings.EqualFold(typ, "TIME") {
 		c.lw.diag(ruleTime, c.r.Line, c.r.Name, "%s: a TIME variable can only feed a timer preset in the Logix target", ref)
 		return "", false
+	}
+	if isLocalTime(typ) && strings.HasPrefix(rest, ".") {
+		return c.lw.localTimeMember(base, rest[1:], c.r.Line, c.r.Name)
 	}
 	if rest == "" || strings.HasPrefix(rest, "[") && !strings.Contains(rest, ".") {
 		return ref, true

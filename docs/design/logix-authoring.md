@@ -1209,6 +1209,65 @@ them yet (§5.1); `naut check` does.
 **James's call (2026-10-05):** guide and this phase log reviewed and
 approved; the PR comes out of draft.
 
+### Follow-up — first scan and the wall clock (2026-10-05)
+
+**James's calls:** dialect blocks before I/O modules, in corpus order;
+and nothing Logix-specific in the language ("as standard as possible"),
+so the two corpus idioms with a standard equivalent became **core**
+features, not `dialect: logix` blocks.
+
+**Built: `FIRST_SCAN()`.** A BOOL function, TRUE for the whole of a
+program's first scan after a start or download; an online edit (a warm
+swap, state kept) and a rollback are not a start, as `S:FS` is not set
+by a Logix online edit. Builtin functions gained an optional host-aware
+form (`ir.HostFn`) and the host an optional `ir.ScanInfo`, which the
+runtime's scan view answers from the program's cold-start flag. Ladder
+uses it as a function contact (`FIRST_SCAN()`, `/FIRST_SCAN()`), ST as
+an expression. The writer emits `XIC(S:FS)` / `XIO(S:FS)` and `S:FS` in
+ST; the importer turns an `S:FS` contact back. Other status flags
+(`S:N`, `S:Z`, …) stay refused by name.
+
+**Built: `LOCAL_TIME`.** A block with no inputs and the outputs of IEC
+`SPLIT_DT` (`YEAR`, `MONTH`, `DAY`, `HOUR`, `MINUTE`, `SECOND`,
+`MILLISECOND`), read from the runtime's clock through an optional
+`ir.WallClock`: local time in production, the virtual clock in UTC under
+`naut test`, so calendar tests are machine-independent. In a rung it has
+no power pins (it sits on the rail, power passes through), which is the
+only shape GSV has in the corpus. The writer makes an instance a `DINT[7]`
+tag, a call `GSV(WallClockTime,,LocalDateTime,clk[0])`, a member read its
+element; `MILLISECOND` (Logix keeps microseconds) is an ST expression and
+refused in ladder. The importer turns `GSV(…,arr[k])` into the POU's
+`wallClock` instance plus one assignment copying the seven outputs into
+`arr[k..k+6]` (microseconds as `MILLISECOND * 1000`); the writer folds
+that pair back into the one GSV, and drops the instance's tag, when
+nothing else reads the instance, and otherwise fills the instance and
+copies element by element. GSV of anything else (`Task`, `LastScanTime`:
+none in the corpus) stays refused.
+
+**Not built: `COP`.** Classified by operand type, the corpus's COPs are
+byte serialization: DINT and INT into SINT byte buffers, socket
+structures into bytes and back, for `MSG`/socket payloads. Five are
+same-type array copies. Emulating them needs a byte-layout memory model
+nautilus deliberately lacks, and the routines are blocked by `MSG`
+anyway. **James's call:** skip it; the remaining gap is messaging.
+
+**Corpus:** rungs 97.2 % → 97.9 % (29,752 of 30,397); ladder routines
+complete 70.4 % → 81.0 %; AOI routines 73.5 % → 85.8 %; write-backs
+unchanged (53 identical + 15 equivalent of 68, 0 refused). The "status"
+and "GSV" buckets are gone; the largest left are MESSAGE types (187),
+`RES` (162), `SSV` (51), `COP` (35).
+
+**Measured:** conformance project `system` (the corpus idiom: GSV into an
+array, a sequencer seeded on the first scan, a once-a-second tick, plus a
+clock read by member): 3 of 3 on nautilus and 3 of 3 on Echo; the SDK
+built the GSV and `S:FS` unchanged (download 2 m 13 s). One controller
+fact found on the way: a Logix controller whose clock was never set
+reads 1998-01-01 (Echo after its service restarts), so the scenario
+asks for a calendar, not the date. Echo itself needed attention first:
+after the VM rebooted, Tailscale wanted a desktop login (James), and the
+Echo service needed a restart to bind its controller to the address
+again, which emptied the controller.
+
 ## 8. The demo this enables
 
 James's target demo (2026-10-03), which replaces the Tier A `ab01` draft in the

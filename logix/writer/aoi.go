@@ -124,7 +124,7 @@ func (lw *lowered) blockSource(name string) (string, string) {
 func (lw *lowered) child(name string, vars []ld.VarDecl) *lowered {
 	c := &lowered{model: &ld.Model{Name: name}, opts: lw.opts, vars: map[string]ld.VarDecl{},
 		presetVars: map[string]bool{}, genNames: map[string]bool{}, types: lw.types, rawTypes: lw.rawTypes,
-		aois: lw.aois, inAOI: true, st: lw.st}
+		aois: lw.aois, inAOI: true, st: lw.st, clocks: map[string]bool{}, clockUsed: map[string]bool{}}
 	c.opts.Program = name
 	for _, v := range vars {
 		c.vars[strings.ToLower(v.Name)] = v

@@ -111,6 +111,8 @@ programs are not in the subset.
 | `{ y := expr }` | `MOVE`, `ADD`, `SUB`, `MUL`, `DIV`, `MOD`, `NEG`, `ABS`, `SQR`, `XPY`, or `CPT` |
 | `t:TON` `t:TOF`, `c:CTU` | `TON` `TOF` `CTU` on `TIMER` / `COUNTER` tags; `t.Q`→`t.DN`, `t.ET`→`t.ACC` |
 | `t:TONR` (with `dialect: logix`) | a `TON` with a `RES(t)` rung ahead of it |
+| `FIRST_SCAN()`, `/FIRST_SCAN()` | `XIC(S:FS)`, `XIO(S:FS)`; `S:FS` in ST |
+| `clk:LOCAL_TIME()`, `clk.SECOND` | `GSV(WallClockTime,,LocalDateTime,clk[0])` into a `DINT[7]`, `clk[5]` |
 | `Word.3` | bit 3 of the word, as Logix spells it |
 | `Timers : ARRAY [0..3] OF TON` | one `TIMER[4]` tag |
 | BOOL, SINT, INT, DINT, REAL, LREAL | the same types |
@@ -179,8 +181,12 @@ dialect: logix
 |---|---|---|
 | `TONR` (`IN`, `PT`, `Reset` → `Q`, `ET`) | a TON whose `Reset` clears it while TRUE; `t:TONR(PT := T#1S, Reset := t.Q)` is a free-running pulse | a `TON` with a `RES(t)` rung ahead of the timer's rung |
 
-More will follow (first scan, wall clock and scan time, `COP`). The
-default dialect is `nautilus`, which adds nothing.
+The default dialect is `nautilus`, which adds nothing. An idiom with a
+standard equivalent needs no dialect: the first-scan flag `S:FS` is
+`FIRST_SCAN()` and the controller's calendar, `GSV(WallClockTime,,
+LocalDateTime,…)`, is the `LOCAL_TIME` block, both standard in every
+project. `LOCAL_TIME`'s millisecond is Logix's microsecond element divided
+by 1000, so a ladder program reads it in an ST routine.
 
 ## I/O: tag aliases
 
@@ -216,10 +222,11 @@ directly, become tags with `alias:`. A rung with no nautilus form is kept
 as a comment and reported, never guessed at. `--comm-path` and `--host`
 fill in how to reach the controller.
 
-On a corpus of 52 real production exports, 97.2% of rungs import, and most
-complete routines write back identically or equivalently. The largest
-remaining gaps are `MSG` instructions, status flags (`S:FS`), `GSV`, and
-`COP`.
+On a corpus of 52 real production exports, 97.9% of rungs import, 81% of
+ladder routines import whole, and most complete routines write back
+identically or equivalently. The largest remaining gap is messaging:
+`MSG` instructions and the byte-buffer copies (`COP`) that build their
+payloads.
 
 ## The loop
 

@@ -47,7 +47,7 @@ var Rules = []struct{ ID, Description string }{
 	{rulePreset, "a preset is a literal or a declared variable"},
 	{ruleReset, "a counter reset is a plain BOOL reference"},
 	{ruleTOFPosition, "a TOF or CTU sits on the rung itself, not inside a branch: its done bit outlives its rung-in"},
-	{ruleFn, "function contacts are the compares GT GE LT LE EQ NE"},
+	{ruleFn, "function contacts are the compares GT GE LT LE EQ NE, and FIRST_SCAN() (S:FS)"},
 	{ruleOperand, "a compare operand must be a reference, a literal, or an expression Logix can spell (CMP)"},
 	{ruleCoilEdge, "an edge coil ( P X ) / ( N X ) must be its rung's only coil"},
 	{ruleMember, "member access is only into timer, counter and user-block instances and declared STRUCT types"},

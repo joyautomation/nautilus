@@ -1265,3 +1265,140 @@ END_PROGRAM
 		t.Errorf("st:\n%s", doc)
 	}
 }
+
+// FIRST_SCAN() is the status flag S:FS: a contact in ladder (negated, the
+// XIO), the bit itself in ST.
+func TestFirstScan(t *testing.T) {
+	src := `PROGRAM P
+VAR_EXTERNAL
+    Seeded : DINT; Later : BOOL; Go : BOOL;
+END_VAR
+LD
+  RUNG seed
+    FIRST_SCAN() { Seeded := 5 }
+  RUNG later
+    Go /FIRST_SCAN() ( Later )
+END_LD
+END_PROGRAM
+`
+	f := mustWrite(t, src, Options{})
+	var got []string
+	for _, rg := range f.Controller.Programs[0].Routines[0].Rungs {
+		got = append(got, rg.Text)
+	}
+	want := []string{
+		"XIC(S:FS)MOVE(5,Seeded);",
+		"XIC(Go)XIO(S:FS)OTE(Later);",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("rungs\n got %s\nwant %s", strings.Join(got, "\n     "), strings.Join(want, "\n     "))
+	}
+	if _, problems, err := RoundTrip(src, Options{}); err != nil || len(problems) > 0 {
+		t.Errorf("round trip: %v %v", err, problems)
+	}
+	stSrc := `PROGRAM P
+VAR_EXTERNAL
+    Seeded : DINT;
+END_VAR
+IF FIRST_SCAN() THEN
+    Seeded := 5;
+END_IF;
+END_PROGRAM
+`
+	doc, diags, err := WriteST(stSrc, Options{})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("st: %v %v", err, diags)
+	}
+	if !strings.Contains(string(doc), "IF S:FS THEN") {
+		t.Errorf("st:\n%s", doc)
+	}
+}
+
+// LOCAL_TIME is GSV(WallClockTime,,LocalDateTime,…): the instance a
+// DINT[7] whose members are its elements, and the import's copy into an
+// array folds into one GSV into that array, with no instance tag left.
+func TestLocalTime(t *testing.T) {
+	src := `PROGRAM P
+VAR_EXTERNAL
+    Sec : DINT; Late : BOOL;
+END_VAR
+VAR
+    clk : LOCAL_TIME;
+    imp : LOCAL_TIME;
+    gettime : ARRAY[0..6] OF DINT;
+END_VAR
+LD
+  RUNG clock
+    clk:LOCAL_TIME() { Sec := clk.SECOND }
+  RUNG late
+    GE(clk.HOUR, 17) ( Late )
+  RUNG imported
+    imp:LOCAL_TIME() { gettime[0] := imp.YEAR; gettime[1] := imp.MONTH; gettime[2] := imp.DAY; gettime[3] := imp.HOUR; gettime[4] := imp.MINUTE; gettime[5] := imp.SECOND; gettime[6] := imp.MILLISECOND * 1000 }
+END_LD
+END_PROGRAM
+`
+	f := mustWrite(t, src, Options{})
+	prog := f.Controller.Programs[0]
+	var got []string
+	for _, rg := range prog.Routines[0].Rungs {
+		got = append(got, rg.Text)
+	}
+	want := []string{
+		"GSV(WallClockTime,,LocalDateTime,clk[0])MOVE(clk[5],Sec);",
+		"GE(clk[3],17)OTE(Late);",
+		"GSV(WallClockTime,,LocalDateTime,gettime[0]);",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("rungs\n got %s\nwant %s", strings.Join(got, "\n     "), strings.Join(want, "\n     "))
+	}
+	tags := map[string]string{}
+	for _, tg := range prog.Tags {
+		tags[tg.Name] = tg.DataType + "[" + tg.Dimensions + "]"
+	}
+	if tags["clk"] != "DINT[7]" {
+		t.Errorf("clk tag = %q, want DINT[7]", tags["clk"])
+	}
+	if _, ok := tags["imp"]; ok {
+		t.Errorf("imp folded into gettime; its tag should be gone: %v", tags)
+	}
+	if _, problems, err := RoundTrip(src, Options{}); err != nil || len(problems) > 0 {
+		t.Errorf("round trip: %v %v", err, problems)
+	}
+	// Read anywhere else, the instance keeps its tag and the call fills it:
+	// a fold into gettime would leave imp's elements unwritten.
+	shared := strings.Replace(src, "GE(clk.HOUR, 17)", "GE(imp.HOUR, 17)", 1)
+	f = mustWrite(t, shared, Options{})
+	var texts []string
+	for _, rg := range f.Controller.Programs[0].Routines[0].Rungs {
+		texts = append(texts, rg.Text)
+	}
+	if !strings.HasPrefix(texts[2], "GSV(WallClockTime,,LocalDateTime,imp[0])MOVE(imp[0],gettime[0])") {
+		t.Errorf("shared clock: %v", texts)
+	}
+	// Ladder cannot read MILLISECOND (the element is microseconds); ST can.
+	bad := strings.Replace(src, "clk.SECOND", "clk.MILLISECOND", 1)
+	if _, diags, _ := Write(bad, Options{}); len(diags) == 0 || diags[0].Rule != ruleMember {
+		t.Errorf("MILLISECOND in ladder: %v", diags)
+	}
+	stSrc := `PROGRAM P
+VAR_EXTERNAL
+    Sec : DINT; Ms : DINT;
+END_VAR
+VAR
+    clk : LOCAL_TIME;
+END_VAR
+clk();
+Sec := clk.SECOND;
+Ms := clk.MILLISECOND;
+END_PROGRAM
+`
+	doc, diags, err := WriteST(stSrc, Options{})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("st: %v %v", err, diags)
+	}
+	for _, w := range []string{"GSV(WallClockTime,,LocalDateTime,clk[0]);", "Sec := clk[5];", "Ms := (clk[6] / 1000);"} {
+		if !strings.Contains(string(doc), w) {
+			t.Errorf("st: missing %q in\n%s", w, doc)
+		}
+	}
+}

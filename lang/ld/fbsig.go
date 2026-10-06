@@ -88,6 +88,9 @@ func builtinPowerPins(typ string) (in, out string, ok bool) {
 		return "S1", "Q1", true
 	case "RS":
 		return "S", "Q1", true
+	case "LOCAL_TIME":
+		// No BOOL pins: it sits on the rail, and power passes through.
+		return "", "", true
 	}
 	return "", "", false
 }

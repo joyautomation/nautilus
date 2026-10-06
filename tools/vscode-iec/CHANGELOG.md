@@ -81,6 +81,14 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   a project is deployed to (experimental — the *Authoring for Logix*
   guide).
 
+- **`FIRST_SCAN()` and `LOCAL_TIME`** in completion, signature help and
+  the diagram editors' palettes. `FIRST_SCAN()` is TRUE for a program's
+  first scan after a start or download (a ladder function contact, or
+  `IF FIRST_SCAN() THEN` in ST); `LOCAL_TIME` is a block whose outputs are
+  the calendar now (`YEAR` … `MILLISECOND`), sitting on the rail in a rung.
+  On a Logix target they are `S:FS` and `GSV(WallClockTime,,
+  LocalDateTime,…)`. Needs a `naut` newer than 0.15.0.
+
 ### Fixed
 
 - **The FB monitor CodeLens shows the real position.** It said "1 of 2"
