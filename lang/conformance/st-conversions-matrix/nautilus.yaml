@@ -1,0 +1,98 @@
+# st-conversions-matrix — the IEC 61131-3 conversion functions (#244), one
+# block per family, generated from one table (lang/ir/conversions.go). ST and
+# FBD call the same functions; every output carries its language prefix.
+# Faults (REAL out of range, a STRING that does not parse or does not fit)
+# are pinned in faults_test.go.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/st-conversions-matrix'
+#   go run ./cmd/naut test lang/conformance/st-conversions-matrix
+name: st-conversions-matrix
+
+tasks:
+  - program: st-conversions-matrix.st   # the first task is always "main"; its prefix is still st_
+    scan: 10ms
+  - name: fbd
+    program: st-conversions-matrix.fbd
+    scan: 10ms
+
+tags:
+  # Shared inputs.
+  - { name: D, role: state, init: 0, desc: "DINT input" }
+  - { name: S, role: state, init: 0, desc: "SINT input" }
+  - { name: U, role: state, init: 0, desc: "UINT input" }
+  - { name: W, role: state, init: 0, desc: "WORD input" }
+  - { name: DW, role: state, init: 0, desc: "DWORD input" }
+  - { name: R, role: state, init: 0.0, desc: "REAL input" }
+  - { name: LR, role: state, init: 0.0, desc: "LREAL input" }
+  - { name: T, role: state, init: 0, unit: ms, desc: "TIME input" }
+  - { name: TXT, role: state, init: "0", desc: "STRING input" }
+  - { name: B, role: state, init: false, desc: "BOOL input" }
+
+  # Outputs, one set per language.
+  - { name: st_D2I, role: state, init: 0, desc: "DINT_TO_INT(D)" }
+  - { name: st_D2UI, role: state, init: 0, desc: "DINT_TO_UINT(D)" }
+  - { name: st_D2B, role: state, init: 0, desc: "DINT_TO_BYTE(D)" }
+  - { name: st_S2UI, role: state, init: 0, desc: "SINT_TO_UINT(S)" }
+  - { name: st_S2D, role: state, init: 0, desc: "SINT_TO_DINT(S)" }
+  - { name: st_W2I, role: state, init: 0, desc: "WORD_TO_INT(W)" }
+  - { name: st_UI2S, role: state, init: 0, desc: "UINT_TO_SINT(U)" }
+  - { name: st_ToUI, role: state, init: 0, desc: "TO_UINT(S)" }
+  - { name: st_R2D, role: state, init: 0, desc: "REAL_TO_DINT(R)" }
+  - { name: st_ToD, role: state, init: 0, desc: "TO_DINT(R)" }
+  - { name: st_TrD, role: state, init: 0, desc: "TRUNC_DINT(R)" }
+  - { name: st_LR2S, role: state, init: 0, desc: "LREAL_TO_SINT(LR)" }
+  - { name: st_D2R, role: state, init: 0.0, desc: "DINT_TO_REAL(D)" }
+  - { name: st_UI2LR, role: state, init: 0.0, desc: "UINT_TO_LREAL(U)" }
+  - { name: st_R2DW, role: state, init: 0, desc: "REAL_TO_DWORD(R)" }
+  - { name: st_DW2R, role: state, init: 0.0, desc: "DWORD_TO_REAL(DW)" }
+  - { name: st_B2D, role: state, init: 0, desc: "BOOL_TO_DINT(B)" }
+  - { name: st_W2B, role: state, init: false, desc: "WORD_TO_BOOL(W)" }
+  - { name: st_D2BY2B, role: state, init: false, desc: "BYTE_TO_BOOL(DINT_TO_BYTE(D))" }
+  - { name: st_T2D, role: state, init: 0, desc: "TIME_TO_DINT(T)" }
+  - { name: st_T2I, role: state, init: 0, desc: "TIME_TO_INT(T)" }
+  - { name: st_D2T, role: state, init: 0, unit: ms, desc: "DINT_TO_TIME(D)" }
+  - { name: st_R2T, role: state, init: 0, unit: ms, desc: "REAL_TO_TIME(R)" }
+  - { name: st_T2LR, role: state, init: 0.0, desc: "TIME_TO_LREAL(T)" }
+  - { name: st_D2Str, role: state, init: "", desc: "DINT_TO_STRING(D)" }
+  - { name: st_UI2Str, role: state, init: "", desc: "UINT_TO_STRING(U)" }
+  - { name: st_DRound, role: state, init: 0, desc: "STRING_TO_DINT(DINT_TO_STRING(D))" }
+  - { name: st_RRound, role: state, init: 0.0, desc: "STRING_TO_REAL(REAL_TO_STRING(R))" }
+  - { name: st_TRound, role: state, init: 0, unit: ms, desc: "STRING_TO_TIME(TIME_TO_STRING(T))" }
+  - { name: st_T2Str, role: state, init: "", desc: "TIME_TO_STRING(T)" }
+  - { name: st_Txt2W, role: state, init: 0, desc: "STRING_TO_WORD(TXT)" }
+  - { name: st_ToStr, role: state, init: "", desc: "TO_STRING(LR)" }
+  - { name: fbd_D2I, role: state, init: 0 }
+  - { name: fbd_D2UI, role: state, init: 0 }
+  - { name: fbd_D2B, role: state, init: 0 }
+  - { name: fbd_S2UI, role: state, init: 0 }
+  - { name: fbd_S2D, role: state, init: 0 }
+  - { name: fbd_W2I, role: state, init: 0 }
+  - { name: fbd_UI2S, role: state, init: 0 }
+  - { name: fbd_ToUI, role: state, init: 0 }
+  - { name: fbd_R2D, role: state, init: 0 }
+  - { name: fbd_ToD, role: state, init: 0 }
+  - { name: fbd_TrD, role: state, init: 0 }
+  - { name: fbd_LR2S, role: state, init: 0 }
+  - { name: fbd_D2R, role: state, init: 0.0 }
+  - { name: fbd_UI2LR, role: state, init: 0.0 }
+  - { name: fbd_R2DW, role: state, init: 0 }
+  - { name: fbd_DW2R, role: state, init: 0.0 }
+  - { name: fbd_B2D, role: state, init: 0 }
+  - { name: fbd_W2B, role: state, init: false }
+  - { name: fbd_D2BY2B, role: state, init: false }
+  - { name: fbd_T2D, role: state, init: 0 }
+  - { name: fbd_T2I, role: state, init: 0 }
+  - { name: fbd_D2T, role: state, init: 0, unit: ms }
+  - { name: fbd_R2T, role: state, init: 0, unit: ms }
+  - { name: fbd_T2LR, role: state, init: 0.0 }
+  - { name: fbd_D2Str, role: state, init: "" }
+  - { name: fbd_UI2Str, role: state, init: "" }
+  - { name: fbd_DRound, role: state, init: 0 }
+  - { name: fbd_RRound, role: state, init: 0.0 }
+  - { name: fbd_TRound, role: state, init: 0, unit: ms }
+  - { name: fbd_T2Str, role: state, init: "" }
+  - { name: fbd_Txt2W, role: state, init: 0 }
+  - { name: fbd_ToStr, role: state, init: "" }
+
+driver:
+  type: memory

@@ -1559,7 +1559,7 @@ func (l *lowerer) lowerCallExpr(n *CallExpr) (ir.Expr, error) {
 		if sym, defined := l.lookup(n.Name); defined && sym.typ != nil && sym.typ.Kind == ir.TypeFB {
 			return nil, errName(n.Pos, n.Name, fmt.Errorf("FB instance %q can't be used as an expression — invoke it as a statement and read outputs (e.g. %s.Q)", n.Name, n.Name))
 		}
-		return nil, errName(n.Pos, n.Name, fmt.Errorf("unknown function %q", n.Name))
+		return nil, errName(n.Pos, n.Name, fmt.Errorf("unknown function %q%s", n.Name, ir.ConversionHint(n.Name)))
 	}
 	if hasExecControl(n) {
 		return nil, errExecInExpr(n)
@@ -1587,8 +1587,15 @@ func (l *lowerer) lowerCallExpr(n *CallExpr) (ir.Expr, error) {
 	if sig.Variadic && len(args) < len(sig.Params) {
 		return nil, fmt.Errorf("function %s expects at least %d argument(s), got %d", sig.Name, len(sig.Params), len(args))
 	}
-	resultT := sig.Result
-	if sig.Coerce != nil {
+	resultT, fn := sig.Result, sig.Fn
+	switch {
+	case sig.Resolve != nil:
+		t, f, err := sig.Resolve(argTypes)
+		if err != nil {
+			return nil, errNode(srcArgs[0], err)
+		}
+		resultT, fn = t, f
+	case sig.Coerce != nil:
 		t, err := sig.Coerce(argTypes)
 		if err != nil {
 			return nil, err
@@ -1604,7 +1611,7 @@ func (l *lowerer) lowerCallExpr(n *CallExpr) (ir.Expr, error) {
 			return nil, errNode(srcArgs[i], fmt.Errorf("function %s arg %d: cannot pass %s as %s", sig.Name, i+1, args[i].ExprType(), p))
 		}
 	}
-	return &ir.Call{Name: sig.Name, Args: args, Fn: sig.Fn, T: resultT}, nil
+	return &ir.Call{Name: sig.Name, Args: args, Fn: fn, T: resultT}, nil
 }
 
 // lowerUserFuncCall resolves a CallExpr against a user-defined FUNCTION.

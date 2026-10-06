@@ -24,6 +24,15 @@ type BuiltinSig struct {
 	Variadic bool    // last param repeats
 	Coerce   func(argTypes []*Type) (*Type, error)
 	Fn       BuiltinFn
+
+	// Resolve, when non-nil, replaces Coerce for an overloaded function
+	// whose implementation depends on the argument types, not only its
+	// result (TO_REAL of a STRING parses, of a ULINT reads it unsigned): it
+	// returns the result type and the Fn to call for these arguments.
+	Resolve func(argTypes []*Type) (*Type, BuiltinFn, error)
+	// Generic names the parameter type a nil Params entry accepts, for
+	// signature help ("ANY_ELEMENTARY" for TO_<type>); "" means ANY_NUM.
+	Generic string
 }
 
 // Builtins holds every stateless function the IR knows about. The
@@ -38,7 +47,6 @@ func RegisterBuiltin(sig BuiltinSig) {
 
 func init() {
 	registerArithBuiltins()
-	registerConversionBuiltins()
 }
 
 func registerArithBuiltins() {
@@ -162,38 +170,6 @@ func registerArithBuiltins() {
 		Result: RealT,
 		Fn:     func(args []Value) (Value, error) { return RealVal(math.Tan(asFloat(args[0]))), nil },
 	})
-}
-
-func registerConversionBuiltins() {
-	conv := []struct {
-		name string
-		from *Type
-		to   *Type
-		fn   BuiltinFn
-	}{
-		{"INT_TO_REAL", IntT, RealT, func(a []Value) (Value, error) { return RealVal(float64(a[0].I)), nil }},
-		{"REAL_TO_INT", RealT, IntT, func(a []Value) (Value, error) { return IntVal(int64(math.RoundToEven(a[0].F))), nil }},
-		{"BOOL_TO_INT", BoolT, IntT, func(a []Value) (Value, error) {
-			if a[0].B {
-				return IntVal(1), nil
-			}
-			return IntVal(0), nil
-		}},
-		{"INT_TO_BOOL", IntT, BoolT, func(a []Value) (Value, error) { return BoolVal(a[0].I != 0), nil }},
-		{"INT_TO_TIME", IntT, TimeT, func(a []Value) (Value, error) { return TimeVal(a[0].I), nil }},
-		{"TIME_TO_INT", TimeT, IntT, func(a []Value) (Value, error) { return IntVal(a[0].I), nil }},
-		{"REAL_TO_TIME", RealT, TimeT, func(a []Value) (Value, error) { return TimeVal(int64(math.RoundToEven(a[0].F))), nil }},
-		{"TIME_TO_REAL", TimeT, RealT, func(a []Value) (Value, error) { return RealVal(float64(a[0].I)), nil }},
-	}
-	for _, c := range conv {
-		c := c
-		RegisterBuiltin(BuiltinSig{
-			Name:   c.name,
-			Params: []*Type{c.from},
-			Result: c.to,
-			Fn:     c.fn,
-		})
-	}
 }
 
 // numericResultOfArgs is the standard "promote to REAL if any arg is

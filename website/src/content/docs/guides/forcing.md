@@ -18,7 +18,11 @@ re-applied every scan until it is removed.
 |---|---|
 | an **input** (`role: input`) | the driver's reading is replaced by the forced value before the logic runs — the program sees the forced value |
 | an **output** or **state** tag | the forced value is laid back over whatever the logic wrote, so the driver is handed the forced value |
-| a **struct member** (`P101.Speed`) | only that member is held; the rest of the struct follows its writers |
+| a **struct member** (`P101.Speed`, `Recipe.Steps[2].Mode`) | only that member is held; the rest of the struct follows its writers |
+
+A forced value is coerced like any write: an enumerated member or tag takes
+its member name (`Run`), and a name that is no member is refused with the
+list of members.
 
 The controller records what the tag *would* hold — the driver's latest
 reading, the logic's latest write — and the force table shows it beside the

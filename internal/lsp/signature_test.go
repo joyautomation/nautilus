@@ -137,6 +137,13 @@ func TestSignatureHelpCallKinds(t *testing.T) {
 		{"selector", "Level := SEL(Full, ", "SEL(G : BOOL, IN0 : ANY, IN1 : ANY) : ANY",
 			[]string{"G : BOOL", "IN0 : ANY", "IN1 : ANY"}, 1},
 		{"conversion", "Level := INT_TO_REAL(", "INT_TO_REAL(IN : INT) : REAL", []string{"IN : INT"}, 0},
+		// #244: the generated matrix — declared names, the overloaded TO_
+		// form and the typed truncations all come from the registry.
+		{"conversion matrix", "Level := DINT_TO_LREAL(", "DINT_TO_LREAL(IN : DINT) : LREAL", []string{"IN : DINT"}, 0},
+		{"bit string conversion", "Raw := WORD_TO_INT(", "WORD_TO_INT(IN : WORD) : INT", []string{"IN : WORD"}, 0},
+		{"overloaded TO_", "Level := TO_REAL(", "TO_REAL(IN : ANY_ELEMENTARY) : REAL", []string{"IN : ANY_ELEMENTARY"}, 0},
+		{"typed truncation", "Raw := LREAL_TRUNC_DINT(", "LREAL_TRUNC_DINT(IN : LREAL) : DINT", []string{"IN : LREAL"}, 0},
+		{"TRUNC_ form", "Raw := TRUNC_INT(", "TRUNC_INT(IN : REAL) : INT", []string{"IN : REAL"}, 0},
 		{"user function", "Level := Scale(3, ", "Scale(Raw : INT, Span : REAL) : REAL",
 			[]string{"Raw : INT", "Span : REAL"}, 1},
 		{"fb open", "settle(", ton, tonParams, 0},

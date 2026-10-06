@@ -76,6 +76,9 @@ type forceSet struct {
 	// wrote is whether anything has been written since the force was
 	// applied (the reported Actual is only interesting once it has).
 	wrote bool
+	// typ is the root tag's declared type (nil when none), so a member
+	// force's [n] counts from the array's declared lower bound.
+	typ *ir.Type
 }
 
 type forceEntry struct {
@@ -92,7 +95,7 @@ type forceEntry struct {
 func (fs *forceSet) apply(v ir.Value) ir.Value {
 	for i := range fs.entries {
 		e := &fs.entries[i]
-		if nv, err := ir.SetField(v, e.path, e.val, ""); err == nil {
+		if nv, err := ir.SetFieldTyped(v, fs.typ, e.path, e.val, ""); err == nil {
 			v = nv
 		}
 	}
@@ -109,22 +112,29 @@ func (t *Tags) resolveForceAddr(addr string) (string, []string, *tagVal, error) 
 	if tv, key, ok := t.lookupLocked(addr); ok {
 		return key, nil, tv, nil
 	}
-	root, rest, dotted := strings.Cut(addr, ".")
+	root, segs := ir.SplitAddress(addr)
 	tv, root, ok := t.lookupLocked(root)
-	if !ok || !dotted {
+	if !ok || len(segs) == 0 {
 		return "", nil, nil, &UndefinedTagError{root}
 	}
-	return root, declaredPath(tv.v, strings.Split(rest, ".")), tv, nil
+	return root, declaredPath(tv.v, segs), tv, nil
 }
 
 // declaredPath respells a member path as the struct declares it (member
 // names are case-insensitive), so a force entry is named one way however
-// the operator typed it. A segment that names nothing is left as typed —
-// SetField reports it.
+// the operator typed it. An index segment ([n]) steps into the element. A
+// segment that names nothing is left as typed — SetFieldTyped reports it.
 func declaredPath(v ir.Value, path []string) []string {
 	out := make([]string, len(path))
 	copy(out, path)
 	for i, seg := range out {
+		if strings.HasPrefix(seg, "[") {
+			if v.Kind != ir.TypeArray || len(v.Arr) == 0 {
+				break
+			}
+			v = v.Arr[0] // every element has the same shape
+			continue
+		}
 		if v.Kind != ir.TypeStruct || v.Struct == nil {
 			break
 		}
@@ -160,30 +170,27 @@ func (t *Tags) Force(addr string, v any) error {
 	}
 	// Validate and coerce through the very routine every write uses, then
 	// read the coerced leaf back so the entry stores a typed value.
-	nv, err := ir.SetField(base, path, v, "tag "+root)
+	rootT := t.types[ir.NameKey(root)]
+	nv, err := ir.SetFieldTyped(base, rootT, path, v, "tag "+root)
 	if err != nil {
 		return err
 	}
-	fv := nv
-	for _, seg := range path {
-		i := fv.Struct.FieldIndex[seg]
-		fv = fv.Fld[i]
+	fv, _, err := ir.FieldAt(nv, rootT, path, root)
+	if err != nil {
+		return err
 	}
 	if fv.Kind == ir.TypeFB {
 		return fmt.Errorf("%s is a function-block instance — it has no value to force", addr)
 	}
 	if fs == nil {
-		fs = &forceSet{actual: tv.v}
+		fs = &forceSet{actual: tv.v, typ: rootT}
 		if t.forces == nil {
 			t.forces = map[string]*forceSet{}
 		}
 		t.forces[root] = fs
 		tv.forced = true
 	}
-	name := root
-	if len(path) > 0 {
-		name = root + "." + strings.Join(path, ".")
-	}
+	name := ir.JoinPath(root, path)
 	e := forceEntry{name: name, path: path, val: ir.CopyValue(fv), sinceMs: t.NowMs()}
 	replaced := false
 	for i := range fs.entries {
@@ -330,7 +337,7 @@ func (t *Tags) ForcedOverlap(addr string) string {
 	}
 	root := addr
 	if _, _, ok := t.lookupLocked(addr); !ok {
-		root, _, _ = strings.Cut(addr, ".")
+		root, _ = ir.SplitAddress(addr)
 	}
 	_, root, _ = t.lookupLocked(root)
 	fs := t.forces[root]
@@ -340,11 +347,17 @@ func (t *Tags) ForcedOverlap(addr string) string {
 	a := ir.NameKey(addr)
 	for _, e := range fs.entries {
 		n := ir.NameKey(e.name)
-		if n == a || strings.HasPrefix(n, a+".") || strings.HasPrefix(a, n+".") {
+		if n == a || under(n, a) || under(a, n) {
 			return e.name
 		}
 	}
 	return ""
+}
+
+// under reports whether address a lies inside address p: a member
+// (p.X) or an element (p[2]) of it, at any depth.
+func under(a, p string) bool {
+	return strings.HasPrefix(a, p+".") || strings.HasPrefix(a, p+"[")
 }
 
 // readActual is ReadGlobal for what the tag holds WITHOUT its forces — the

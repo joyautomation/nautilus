@@ -149,3 +149,155 @@ func TestSetFieldErrors(t *testing.T) {
 		t.Errorf("merge error = %v", err)
 	}
 }
+
+// #247: a recipe UDT with an enumerated member, a nested struct holding
+// one, and an array of structs (from 1) holding one — every place a write by
+// path can reach an enumeration.
+func recipeType() *Type {
+	mode := &Type{Kind: TypeInt, Enum: &EnumDef{Name: "Mode", Members: []EnumMember{{"Idle", 0}, {"Run", 10}, {"Fault", 11}}}}
+	step := &StructDef{
+		Name:       "Step",
+		Fields:     []StructField{{Name: "Mode", Type: mode}, {Name: "Secs", Type: RealT}},
+		FieldIndex: map[string]int{"Mode": 0, "Secs": 1},
+	}
+	stepT := &Type{Kind: TypeStruct, Struct: step}
+	recipe := &StructDef{
+		Name: "Recipe",
+		Fields: []StructField{
+			{Name: "Mode", Type: mode},
+			{Name: "First", Type: stepT},
+			{Name: "Steps", Type: &Type{Kind: TypeArray, Elem: stepT, ArrLen: 3, ArrLoBound: 1}},
+		},
+		FieldIndex: map[string]int{"Mode": 0, "First": 1, "Steps": 2},
+	}
+	return &Type{Kind: TypeStruct, Struct: recipe}
+}
+
+func TestSetFieldEnumMemberByName(t *testing.T) {
+	rt := recipeType()
+	base := Zero(rt)
+	for _, c := range []struct {
+		path string
+		v    any
+		want Value
+	}{
+		{"Mode", "Run", Value{Kind: TypeInt, I: 10, S: "Run"}},
+		{"Mode", "run", Value{Kind: TypeInt, I: 10, S: "Run"}},          // case-insensitive
+		{"Mode", "Mode#Fault", Value{Kind: TypeInt, I: 11, S: "Fault"}}, // qualified
+		{"Mode", 10, Value{Kind: TypeInt, I: 10, S: "Run"}},             // the member's integer, named
+		{"Mode", 10.0, Value{Kind: TypeInt, I: 10, S: "Run"}},           // as JSON spells it
+		{"Mode", 7, Value{Kind: TypeInt, I: 7}},                         // no member: kept, unnamed (as TO_Mode(7))
+		{"First.Mode", "Fault", Value{Kind: TypeInt, I: 11, S: "Fault"}},
+		{"Steps[2].Mode", "Run", Value{Kind: TypeInt, I: 10, S: "Run"}},
+		{"Steps[3].Mode", "Idle", Value{Kind: TypeInt, I: 0, S: "Idle"}},
+	} {
+		got, err := SetFieldTyped(base, rt, PathSegments(c.path), c.v, "tag R")
+		if err != nil {
+			t.Errorf("%s := %v: %v", c.path, c.v, err)
+			continue
+		}
+		leaf, _, err := FieldAt(got, rt, PathSegments(c.path), "R")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if leaf.Kind != c.want.Kind || leaf.I != c.want.I || leaf.S != c.want.S {
+			t.Errorf("%s := %v stored %+v, want %+v", c.path, c.v, leaf, c.want)
+		}
+	}
+	// Even untyped, a member below a struct knows its type from the StructDef.
+	got, err := SetField(base, []string{"First", "Mode"}, "Run", "tag R")
+	if err != nil || got.Fld[1].Fld[0].S != "Run" {
+		t.Errorf("untyped First.Mode := Run: %+v, %v", got.Fld[1].Fld[0], err)
+	}
+}
+
+func TestSetFieldEnumNonMemberListsMembers(t *testing.T) {
+	rt := recipeType()
+	for _, c := range []struct {
+		path string
+		v    any
+		want string
+	}{
+		{"Mode", "Stop", `tag R.Mode: "Stop" is not a member of Mode (Idle, Run, Fault)`},
+		{"Steps[1].Mode", "Stop", `tag R.Steps[1].Mode: "Stop" is not a member of Mode (Idle, Run, Fault)`},
+		{"Mode", "Other#Run", `"Other#Run" is not a member of Mode`},
+		{"Mode", true, "want a member of Mode (Idle, Run, Fault), got a boolean"},
+		{"Steps[4].Mode", "Run", "tag R.Steps[4]: index out of bounds 1..3"},
+		{"Steps[0].Mode", "Run", "index out of bounds 1..3"},
+		{"Mode[1]", "Run", "not an array"},
+		{"Steps[x]", "Run", `"[x]" is not an index`},
+	} {
+		_, err := SetFieldTyped(Zero(rt), rt, PathSegments(c.path), c.v, "tag R")
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s := %v: err = %v, want %q", c.path, c.v, err, c.want)
+		}
+	}
+}
+
+// A mapping (and a list inside one) merges member by member, enumerations
+// coerced at every depth — what a struct write over the API sends.
+func TestSetFieldMergeCoercesEnumsInArraysOfStructs(t *testing.T) {
+	rt := recipeType()
+	got, err := SetFieldTyped(Zero(rt), rt, nil, map[string]any{
+		"Mode":  "Run",
+		"Steps": []any{map[string]any{"Mode": "Fault"}, nil, map[string]any{"Mode": 10, "Secs": 2.5}},
+	}, "tag R")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Fld[0].S != "Run" || got.Fld[2].Arr[0].Fld[0].S != "Fault" || got.Fld[2].Arr[1].Fld[0].S != "Idle" ||
+		got.Fld[2].Arr[2].Fld[0].S != "Run" || got.Fld[2].Arr[2].Fld[1].F != 2.5 {
+		t.Errorf("merged: %+v", got)
+	}
+	if _, err := SetFieldTyped(Zero(rt), rt, nil, map[string]any{"Steps": []any{nil, nil, nil, nil}}, "tag R"); err == nil {
+		t.Error("a list longer than the array was accepted")
+	}
+	if _, err := SetFieldTyped(Zero(rt), rt, nil, map[string]any{"Steps": []any{map[string]any{"Mode": "Nope"}}}, "tag R"); err == nil ||
+		!strings.Contains(err.Error(), `tag R.Steps[1].Mode: "Nope" is not a member of Mode (Idle, Run, Fault)`) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// struct init: seeds enum members by name inside nested structs and arrays
+// of structs, and a non-member names the members.
+func TestSeedEnumMembersInArraysOfStructs(t *testing.T) {
+	rt := recipeType()
+	v, err := SeedFromInit(rt, map[string]any{
+		"Mode":  "Run",
+		"First": map[string]any{"Mode": "Fault"},
+		"Steps": []any{map[string]any{"Mode": "Run"}, map[string]any{"Mode": 11}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Fld[0].S != "Run" || v.Fld[1].Fld[0].S != "Fault" || v.Fld[2].Arr[0].Fld[0].S != "Run" || v.Fld[2].Arr[1].Fld[0].S != "Fault" {
+		t.Errorf("seeded: %+v", v)
+	}
+	_, err = SeedFromInit(rt, map[string]any{"Steps": []any{map[string]any{"Mode": "Walk"}}})
+	if err == nil || !strings.Contains(err.Error(), `init.Steps[1].Mode: "Walk" is not a member of Mode (Idle, Run, Fault)`) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestPathSegments(t *testing.T) {
+	for in, want := range map[string]string{
+		"":              "",
+		"Speed":         "Speed",
+		"Drive.Speed":   "Drive|Speed",
+		"Steps[2].Mode": "Steps|[2]|Mode",
+		"[1].Mode":      "[1]|Mode",
+		"Grid[1][2]":    "Grid|[1]|[2]",
+		"Grid[1, 2].X":  "Grid|[1]|[2]|X",
+	} {
+		if got := strings.Join(PathSegments(in), "|"); got != want {
+			t.Errorf("PathSegments(%q) = %q, want %q", in, got, want)
+		}
+	}
+	root, segs := SplitAddress("Recipes[2].Mode")
+	if root != "Recipes" || strings.Join(segs, "|") != "[2]|Mode" {
+		t.Errorf("SplitAddress = %q %q", root, segs)
+	}
+	if got := JoinPath("Recipes", segs); got != "Recipes[2].Mode" {
+		t.Errorf("JoinPath = %q", got)
+	}
+}

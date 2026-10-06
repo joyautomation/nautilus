@@ -328,30 +328,21 @@ func resolveEnumBinType(op ir.BinKind, lt, rt *ir.Type) (*ir.Type, error) {
 	return nil, fmt.Errorf("%s is an enumeration: its values are names, not numbers — convert with TO_INT to compute with one", e.Enum.Name)
 }
 
-// lowerEnumConversion handles the explicit conversions between an
-// enumeration and an integer (#238):
+// lowerEnumConversion handles the conversion INTO an enumeration (#238):
 //
-//	TO_INT(m), TO_DINT(m), … — the member's integer, as that integer type
-//	TO_Mode(n)               — the Mode with integer n (a number no member
-//	                           has stays that number, shown unnamed)
+//	TO_Mode(n) — the Mode with integer n (a number no member has stays
+//	             that number, shown unnamed)
 //
-// handled is false for any other call, which then resolves as before.
+// The other direction, TO_INT(m) / TO_DINT(m) / …, is the registry's
+// overloaded TO_<type> (lang/ir/conversions.go), which takes an
+// enumeration as its integer. handled is false for any call that is not
+// TO_<an enumeration in scope>, which then resolves as before.
 func (l *lowerer) lowerEnumConversion(n *CallExpr) (ir.Expr, bool, error) {
 	up := strings.ToUpper(n.Name)
 	if !strings.HasPrefix(up, "TO_") || len(n.Args) != 1 || len(n.NamedArgs) > 0 {
 		return nil, false, nil
 	}
 	target := n.Name[3:]
-	if it := ir.IntNamed(strings.ToUpper(target)); it != nil {
-		arg, err := l.lowerExpr(n.Args[0])
-		if err != nil {
-			return nil, true, err
-		}
-		if !arg.ExprType().IsInteger() && arg.ExprType().Enum == nil {
-			return nil, true, errNode(n.Args[0], fmt.Errorf("%s converts an enumeration or an integer, got %s", up, arg.ExprType()))
-		}
-		return &ir.Call{Name: up, Args: []ir.Expr{arg}, Fn: enumToInt, T: it}, true, nil
-	}
 	et, _, ok := ir.Lookup(l.types, target)
 	if !ok || et == nil || et.Enum == nil {
 		return nil, false, nil
@@ -368,8 +359,6 @@ func (l *lowerer) lowerEnumConversion(n *CallExpr) (ir.Expr, bool, error) {
 		return def.Val(a[0].I), nil
 	}, T: et}, true, nil
 }
-
-func enumToInt(a []ir.Value) (ir.Value, error) { return ir.IntVal(a[0].I), nil }
 
 // ─── Partial access: w.3, w.%X3, w.%B1, w.%W0, w.%D0 ─────────────────────
 

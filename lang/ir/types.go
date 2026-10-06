@@ -115,13 +115,15 @@ func (d *EnumDef) Val(v int64) Value {
 
 // intTypes are the declared integer types, one singleton each, so a
 // diagnostic names DINT or WORD rather than the canonical INT.
-var intTypes = map[string]*Type{}
-
-func init() {
+// A variable initializer, not init(), so the conversion table (also built
+// at package initialization) sees them.
+var intTypes = func() map[string]*Type {
+	m := map[string]*Type{}
 	for _, n := range []string{"SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "ULINT", "BYTE", "WORD", "DWORD", "LWORD"} {
-		intTypes[n] = &Type{Kind: TypeInt, Name: n}
+		m[n] = &Type{Kind: TypeInt, Name: n}
 	}
-}
+	return m
+}()
 
 // IntNamed is the integer type declared as name (DINT, WORD, ...); nil
 // when name is not an IEC integer type. Every one is TypeInt at run time.

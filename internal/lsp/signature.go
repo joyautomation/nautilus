@@ -418,6 +418,9 @@ func builtinSig(b ir.BuiltinSig) *callSig {
 	if b.Name == "SEL" || b.Name == "MUX" {
 		generic = "ANY"
 	}
+	if b.Generic != "" {
+		generic = b.Generic // TO_<type>: ANY_ELEMENTARY
+	}
 	n := len(b.Params)
 	if b.Name == "MUX" && n < 3 {
 		n = 3 // K plus at least two inputs

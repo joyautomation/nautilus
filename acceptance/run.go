@@ -433,7 +433,7 @@ func (r *testRun) value(name string) (ir.Value, error) {
 	if v, err := r.rt.Tags().ReadGlobal(name); err == nil {
 		return v, nil
 	}
-	head, rest, dotted := strings.Cut(name, ".")
+	head, rest, dotted := cutHead(name)
 	if !dotted {
 		return ir.Value{}, fmt.Errorf("no tag %q in this project", name)
 	}
@@ -448,6 +448,14 @@ func (r *testRun) value(name string) (ir.Value, error) {
 		// error path.
 		if v, ok := r.rt.Tags().ReadPath(name); ok {
 			return irValue(v)
+		}
+		if strings.Contains(rest, "[") {
+			// An indexed path: the shared walker's message names the
+			// segment and, for an index, the declared bounds.
+			_, _, err := ir.FieldAt(root, r.rt.Tags().TypeOf(head), ir.PathSegments(rest), head)
+			if err != nil {
+				return ir.Value{}, err
+			}
 		}
 		return ir.Value{}, fieldMissErr(root, head, rest)
 	}
@@ -540,7 +548,7 @@ func (r *testRun) apply(given map[string]any) error {
 		if !r.known[name] {
 			// A dotted name may address one field of a UDT tag. Resolution
 			// order matches `expect` (value()): whole tag first, then field.
-			if head, path, dotted := strings.Cut(name, "."); dotted && r.known[head] {
+			if head, path, dotted := cutHead(name); dotted && r.known[head] {
 				if fieldEdits[head] == nil {
 					fieldEdits[head] = map[string]any{}
 				}
@@ -598,6 +606,7 @@ func (r *testRun) apply(given map[string]any) error {
 // happens lazily, only for a tag a test actually addresses by field, so no
 // test that does not use this feature changes behaviour.
 func (r *testRun) applyFields(tag string, edits map[string]any) error {
+	rootT := r.rt.Tags().TypeOf(tag)
 	base, err := r.rt.Tags().ReadGlobal(tag)
 	if err != nil {
 		typeName, typed := r.types[tag]
@@ -609,7 +618,7 @@ func (r *testRun) applyFields(tag string, edits map[string]any) error {
 		if !ok {
 			return fmt.Errorf("%s is declared as %s, which this project does not declare", tag, typeName)
 		}
-		base = ir.Zero(t)
+		base, rootT = ir.Zero(t), t
 	}
 	paths := make([]string, 0, len(edits))
 	for path := range edits {
@@ -617,11 +626,12 @@ func (r *testRun) applyFields(tag string, edits map[string]any) error {
 	}
 	sort.Strings(paths)
 	for _, path := range paths {
-		// ir.SetField is the shared dotted-write primitive: the same
+		// ir.SetFieldTyped is the shared dotted-write primitive: the same
 		// read-modify-write the HTTP API's member writes use (Tags.SetPath),
 		// so a `given:` path and an operator's POST resolve, coerce and fail
-		// identically.
-		updated, err := ir.SetField(base, strings.Split(path, "."), edits[path], tag)
+		// identically — an enum member by name at any depth (#247), an
+		// array element by its declared index.
+		updated, err := ir.SetFieldTyped(base, rootT, ir.PathSegments(path), edits[path], tag)
 		if err != nil {
 			return err
 		}
@@ -792,16 +802,27 @@ func (r *testRun) canonName(name string) string {
 	if r.known[name] {
 		return name
 	}
-	head, rest, dotted := strings.Cut(name, ".")
+	head, _, dotted := cutHead(name)
 	for k := range r.known {
 		if strings.EqualFold(k, name) {
 			return k
 		}
 		if dotted && strings.EqualFold(k, head) {
-			return k + "." + rest
+			return k + name[len(head):]
 		}
 	}
 	return name
+}
+
+// cutHead splits an address at its first member or index step:
+// "P101.Speed" → "P101", "Speed"; "Recipes[2].Mode" → "Recipes",
+// "[2].Mode". dotted is false for a bare name.
+func cutHead(name string) (head, rest string, dotted bool) {
+	i := strings.IndexAny(name, ".[")
+	if i < 0 {
+		return name, "", false
+	}
+	return name[:i], strings.TrimPrefix(name[i:], "."), true
 }
 
 func knownTags(o runtime.Options) map[string]bool {
