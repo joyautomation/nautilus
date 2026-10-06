@@ -270,6 +270,10 @@ func (s *Server) broadcast() {
 	base := Frame{
 		TS:    now.UnixMilli(),
 		Scans: stats.Count,
+		// The force table rides every frame while it is non-empty — never
+		// gated, so "absent" means "nothing forced" on every kind of
+		// stream. Nil (omitted) costs one length check when nothing is.
+		Forces: tags.ForcedValues(),
 	}
 	quality := qualityJSON(s.rt.Quality())
 

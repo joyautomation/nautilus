@@ -236,6 +236,12 @@
         },
         "alarms": {
           "$ref": "#/definitions/alarms"
+        },
+        "force": {
+          "$ref": "#/definitions/force"
+        },
+        "unforce": {
+          "$ref": "#/definitions/unforce"
         }
       },
       "dependencies": {
@@ -585,6 +591,34 @@
           "type": "string"
         }
       }
+    },
+    "force": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Tags held at a value from this step on, the controller's force table: a forced input beats the driver (the plant model) every scan, a forced output beats the logic. Unlike `given:`, which writes once, a force holds until `unforce:`. Accepts the same names and dotted member paths as `given:`.",
+      "additionalProperties": {
+        "type": [
+          "number",
+          "boolean",
+          "string"
+        ]
+      }
+    },
+    "unforce": {
+      "description": "Release forces: a list of forced names, or `all`. A released tag returns at once to what its driver or its logic last wrote.",
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        {
+          "const": "all"
+        }
+      ]
     }
   }
 }

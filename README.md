@@ -497,6 +497,13 @@ the controller and the matching `nautilus.token` in the editor — reads and
 `naut pull` stay open, but tag writes and online edits then require the
 token.
 
+**Forcing.** A tag can be held at a value against the field and the logic —
+the PLC force table — from the editor (**Force…**, an **F** on every forced
+value, **N forces active** in the status bar) or `POST /api/forces`. A
+running SFC chart can be jumped to a step or have one transition fired.
+Forces are not retained across a restart and a redundancy takeover drops
+them; see the [forcing guide](https://nautilus.joyautomation.com/guides/forcing/).
+
 ### Alarms
 
 An alarm engine is a small thing when alarms are just tags. Your logic

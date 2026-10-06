@@ -113,3 +113,16 @@ export function resolveScoped(
 	}
 	return resolveLabel(values, {}, label, 0);
 }
+
+/** Is a diagram label covered by the force table? `forced` is keyed by
+ * lowercased address. A label is forced when its own address is, when a
+ * whole-tag force covers it (`P101.Speed` under `P101`, `Tbl[2]` under
+ * `Tbl`), or when it names a struct with a forced member. Mirrors
+ * forcedAddress in the extension's src/forces.ts. */
+export function forcedLabel(forced: Record<string, unknown>, label: string): boolean {
+	const want = label.toLowerCase();
+	for (const k in forced) {
+		if (k === want || want.startsWith(k + '.') || want.startsWith(k + '[') || k.startsWith(want + '.')) return true;
+	}
+	return false;
+}

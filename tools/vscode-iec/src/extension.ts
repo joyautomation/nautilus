@@ -18,6 +18,7 @@ import {
 } from "vscode-languageclient/node";
 import { FbMonitorLenses, LiveValues } from "./liveValues";
 import { LiveValuesView } from "./liveValuesView";
+import { fireTransition, setActiveStep } from "./sfcCommands";
 import { OnlineEdit } from "./onlineEdit";
 import { broadcastSyncState, FbdEditorProvider, FbdPreview } from "./fbdPreview";
 import { LdEditorProvider, LdPreview } from "./ldPreview";
@@ -270,6 +271,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
     vscode.commands.registerCommand("nautilus.setValue", (tag?: string) => live?.setValue(tag)),
+    vscode.commands.registerCommand("nautilus.force", (tag?: string) => live?.force(tag)),
+    vscode.commands.registerCommand("nautilus.unforce", (tag?: string) => live?.unforce(tag)),
+    vscode.commands.registerCommand("nautilus.unforceAll", () => live?.unforceAll()),
+    vscode.commands.registerCommand("nautilus.forces.show", () => live?.showForces()),
+    vscode.commands.registerCommand("nautilus.sfc.setStep", (arg?: string) => live && setActiveStep(live, arg)),
+    vscode.commands.registerCommand("nautilus.sfc.fireTransition", (arg?: string) => live && fireTransition(live, arg)),
     vscode.commands.registerCommand("nautilus.program.download", () => online.download()),
     vscode.commands.registerCommand("nautilus.program.diff", () => online.diff()),
     vscode.commands.registerCommand("nautilus.program.rollback", () => online.rollback()),
