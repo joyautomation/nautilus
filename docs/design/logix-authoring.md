@@ -1198,6 +1198,17 @@ at the call), textually a move.
 scan time, `COP`); the hardware configuration for aliases to land on;
 whether the alias binding belongs in the manifest or a sibling I/O file.
 
+### Pre-PR (2026-10-05)
+
+Rebased onto main, website guide *Authoring for Logix (experimental)*,
+experimental labels on the target's CLI surface, extension CHANGELOG;
+draft PR #225. Known gap carried as a follow-up: `naut lsp` does not run
+the Logix target's rules, so the editor's live diagnostics do not show
+them yet (§5.1); `naut check` does.
+
+**James's call (2026-10-05):** guide and this phase log reviewed and
+approved; the PR comes out of draft.
+
 ## 8. The demo this enables
 
 James's target demo (2026-10-03), which replaces the Tier A `ab01` draft in the
