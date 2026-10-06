@@ -874,3 +874,82 @@ func TestDialectAndAliasImport(t *testing.T) {
 		t.Errorf("alias tag not written back")
 	}
 }
+
+// The implicit-st golden (#248) imports with every controller tag the
+// program named without declaring it declared VAR_EXTERNAL, typed as
+// written (the enumeration as its DINT), and — minus the timer, whose
+// Logix ST form the import keeps verbatim (TONR) — writes back to the
+// same controller tags and the same ST routine.
+func TestImplicitSTGoldenImportsAndWritesBack(t *testing.T) {
+	doc, err := os.ReadFile(filepath.Join("..", "writer", "testdata", "implicit-st.golden.L5X"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig, err := l5x.Parse(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tagSet := func(f *l5x.File) string {
+		var s []string
+		for _, tg := range f.Controller.Tags {
+			s = append(s, tg.Name+":"+tg.DataType)
+		}
+		sort.Strings(s)
+		return strings.Join(s, " ")
+	}
+	p := mustImport(t, doc)
+	src := string(p.Files["ImplicitST.st"])
+	var declared []string
+	for _, tg := range orig.Controller.Tags {
+		declared = append(declared, tg.Name+" : "+tg.DataType+";")
+	}
+	for _, d := range declared {
+		if !strings.Contains(src, d) {
+			t.Errorf("import does not declare %q:\n%s", d, src)
+		}
+	}
+
+	// Write-back identity, without the timer.
+	main, err := os.ReadFile(filepath.Join("..", "writer", "testdata", "conformance", "implicit-st", "Main.st"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lib, err := os.ReadFile(filepath.Join("..", "writer", "testdata", "conformance", "implicit-st", "lib", "types.st"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	noTimer := strings.NewReplacer("    t : TON;\n", "", "t(IN := Run, PT := T#2S, Q => Delayed);\n", "").Replace(string(main))
+	tags := map[string]string{"Level": "REAL", "HiSP": "REAL", "Cmd": "DINT", "HiAlm": "BOOL", "Count": "DINT",
+		"Pump": "PumpData", "State": "MachineState", "StateNo": "DINT", "Speed": "REAL"}
+	first, diags, err := writer.WriteST(noTimer, writer.Options{Controller: "DemoLine", Libs: []string{string(lib)}, Tags: tags})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("%v %v", err, diags)
+	}
+	f1, err := l5x.Parse(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p = mustImport(t, first)
+	out, diags, err := writer.WriteST(string(p.Files["ImplicitST.st"]), writer.Options{Controller: "DemoLine", Libs: libsOf(p)})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("writing the import back: %v %v\n%s", err, diags, p.Files["ImplicitST.st"])
+	}
+	back, err := l5x.Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := tagSet(back), tagSet(f1); got != want || !strings.Contains(want, "State:DINT") || !strings.Contains(want, "Pump:PumpData") {
+		t.Errorf("controller tags after import+write\n got: %s\nwant: %s", got, want)
+	}
+	routine := func(f *l5x.File) string {
+		for _, pr := range f.Controller.Programs {
+			if pr.Name == "ImplicitST" {
+				return pr.Routines[0].Text
+			}
+		}
+		return ""
+	}
+	if got, want := routine(back), routine(f1); got != want || want == "" {
+		t.Errorf("ST routine after import+write differs\n got:\n%s\nwant:\n%s", got, want)
+	}
+}

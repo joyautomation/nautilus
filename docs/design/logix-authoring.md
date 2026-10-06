@@ -101,6 +101,8 @@ positions (`logix-target.md` §6.4).
 | BOOL, SINT, INT, DINT, REAL, LREAL | same | width from the declaration (AST), not the IR |
 | `TIME` | DINT milliseconds | only where it feeds a timer preset; elsewhere rejected in v1 |
 | global (`VAR_EXTERNAL`) | controller tag | |
+| a manifest tag a program names undeclared (#177/#210) | controller tag, typed from the manifest | ladder and ST (#248); uses resolved on the compiler's AST (`logix/writer/uses.go`) |
+| enumeration type and its members | `DINT`; a member is its value | Logix has no enumerated type; the names do not reach the controller, and an import brings the tag back as `DINT` (`logix/writer/enum.go`) |
 | program-local `VAR` | program tag | |
 | one nautilus task + program | one Logix task + program + `MainRoutine` | a stated decision, not a derivation |
 
@@ -1208,6 +1210,34 @@ them yet (§5.1); `naut check` does.
 
 **James's call (2026-10-05):** guide and this phase log reviewed and
 approved; the PR comes out of draft.
+
+### Implicit tags in every program (2026-10-06, #248)
+
+Manifest tags are in scope in every program without `VAR_EXTERNAL`
+(#177/#210). #243 gave a ladder program's undeclared tags controller tags
+by scanning rung text for identifiers; an ST program got none, so its L5X
+named tags the project did not create. The writer now collects uses on the
+compiler's AST for both languages — the ST parse, and for ladder its
+transpilation through FBD to ST, the source the runtime compiles — resolving
+each name the lowerer's way: the program's declarations first, then the
+manifest's tags, case-insensitively (`lang/ir/names.go`). Member names, pin
+names, function names and `Type#Member` literals are not uses, which also
+fixes the ladder scan's false hits (`P.Speed` made a `Speed` tag, `T#2S` an
+`S`). References in an ST routine take the declared spelling. FBD and SFC
+programs are not in the target, so nothing changes for them.
+
+Enumerations (#238) had no Logix mapping: they are `DINT` now, members
+folded to their values in ST and in rung operands, `TO_INT` / `TO_<Enum>`
+passed through like `X_TO_Y`.
+
+**Measured on Echo:** conformance project `implicit-st` (an ST program
+declaring one tag of eleven it names: a UDT tag, an enumeration tag, a tag
+that is only a member name, one named nowhere) — SDK import and build 35 s,
+download verified by upload; the controller's tag list (CIP browse) is
+exactly the ten tags named plus the side code's `Nautilus_Scan`, `State` a
+`DINT` and `Pump` a `PumpData`; the task scans and the values read back
+match the program (`Count` 6, `StateNo` 1, `HiSP` 80 from the manifest).
+4/4 scenarios on nautilus.
 
 ## 8. The demo this enables
 

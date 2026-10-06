@@ -50,12 +50,21 @@ func TestSDKConvertAndBuild(t *testing.T) {
 	}
 
 	cases := map[string]Options{
-		"demoline": demoOpts(),
-		"subset":   {},
+		"demoline":    demoOpts(),
+		"subset":      {},
+		"implicit-st": {}, // conformance/implicit-st with its manifest (#248)
 	}
 	for name, opts := range cases {
 		t.Run(name, func(t *testing.T) {
-			doc, diags, err := Write(fixture(t, name+".ld"), opts)
+			var doc []byte
+			var diags []Diag
+			var err error
+			if name == "implicit-st" {
+				src, o := implicitSTOpts(t)
+				doc, diags, err = WriteST(src, o)
+			} else {
+				doc, diags, err = Write(fixture(t, name+".ld"), opts)
+			}
 			if err != nil || len(diags) > 0 {
 				t.Fatalf("write: %v %v", err, diags)
 			}

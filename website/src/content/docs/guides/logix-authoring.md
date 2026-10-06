@@ -81,8 +81,13 @@ END_LD
 END_PROGRAM
 ```
 
-The manifest's tags become controller-scope Logix tags, with their initial
-values and descriptions. A program's `VAR` become program tags. The task
+The manifest's tags that the program names become controller-scope Logix
+tags, with their initial values and descriptions. The `VAR_EXTERNAL` block
+is optional: every program sees the project's tags without declaring them
+([the tag model](/guides/tag-model/)), and a ladder or ST program that names
+one undeclared gets its controller tag all the same, typed from the
+manifest. A tag no program names is not written. A program's `VAR` become
+program tags. The task
 becomes a periodic Logix task at the task's scan rate, the program a Logix
 program, and the rungs its `MainRoutine`. `program`, `routine` and `task`
 under `target.logix` rename them.
@@ -116,6 +121,7 @@ programs are not in the subset.
 | BOOL, SINT, INT, DINT, REAL, LREAL | the same types |
 | `TIME` | a DINT of milliseconds, where it feeds a preset |
 | STRUCT types in a library | UDTs |
+| enumerations (`TYPE Mode : (Idle := 1, Run := 10);`) | `DINT` tags; a member (`Run`, `Mode#Run`) is its value, `10` — Logix has no enumerated type |
 | user FUNCTION_BLOCKs (ladder or ST) | Add-On Instructions |
 | ST: assignments, IF, CASE, FOR, WHILE, REPEAT, EXIT, operators, maths | Logix ST, close to as written |
 

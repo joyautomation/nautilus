@@ -396,7 +396,7 @@ func WriteRungs(src string, opts Options) ([]byte, []Diag, error) {
 		return nil, nil, fmt.Errorf("logix writer: source declares no PROGRAM")
 	}
 	opts = opts.withDefaults(m.Name)
-	lw := lower(m, opts)
+	lw := lowerSrc(m, src, opts)
 	if len(lw.diags) > 0 {
 		return nil, lw.diags, nil
 	}
@@ -494,7 +494,7 @@ func WriteRoutine(path, src string, opts Options) ([]byte, []Diag, error) {
 		if m.Name == "" {
 			return nil, nil, fmt.Errorf("logix writer: source declares no PROGRAM")
 		}
-		lw = lower(m, opts.withDefaults(m.Name))
+		lw = lowerSrc(m, src, opts.withDefaults(m.Name))
 		lw.opts = opts.withDefaults(m.Name)
 	default:
 		return nil, nil, fmt.Errorf("%s: only ladder (.ld) and structured text (.st) programs are in the Logix subset", path)
