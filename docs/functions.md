@@ -15,6 +15,7 @@ line/rung**, never a silent coercion.
 - [Standard functions](#standard-functions)
 - [Type conversions](#type-conversions)
 - [Standard function blocks](#standard-function-blocks)
+- [EN/ENO: execution control](#eneno-execution-control)
 - [User function blocks](#user-function-blocks)
 - [Function blocks in ladder](#function-blocks-in-ladder)
 
@@ -44,6 +45,51 @@ truth; the graphical editors are projections that edit it structurally.
 Statements evaluate **top to bottom within a scan**, so a value written by
 one rung/statement is visible to the ones below it in the same scan, and
 to everything on the next scan (that's what makes the seal-in idiom work).
+
+### FBD networks
+
+An `.fbd` body can be divided into numbered **networks**, the way TIA
+Portal and CODESYS draw an FBD block: a `NETWORK` line starts one, with an
+optional title, and it runs to the next `NETWORK` line.
+
+```
+FBD
+  NETWORK 'FT-101 raw to L/min'
+  ft = ScaleAnalog(FT101_Raw, 0.0, 120.0)
+  FT101_Flow := ft
+  NETWORK 'high-flow alarm'
+  // a comment after the NETWORK line is the network's note
+  hiFlow = GT(FT101_Flow, MaxFlowLpm)
+  tHi : TON(IN := hiFlow, PT := T#2S)
+  HighFlowAlm := tHi.Q
+END_FBD
+```
+
+- Networks are numbered by position (1, 2, …): the number is what the
+  diagram draws and what you call it ("network 2"); the text carries only
+  the order, so inserting or moving a network renumbers nothing in the file.
+- **Execution order is network order.** Network 1 runs completely, then
+  network 2, and so on. Within a network the FBD rule holds: an FB call runs
+  before the statements that read its outputs, otherwise source order. A
+  read of a *later* network's FB output sees the value from the previous
+  scan, as on any PLC.
+- Statements before the first `NETWORK` line form an untitled first
+  network. A body with no `NETWORK` line is one network — exactly the
+  program it always was.
+- `NETWORK` stands alone on its line; the title is a `'…'` string (no
+  quotes inside it). A tag that happens to be called `Network` still works
+  as one (`Network := x` is a coil).
+
+The diagram draws each network as a numbered band with its title, its
+notes and its logic, and a small badge on every statement (FB calls and
+coils) with its execution order within the network. A read that crosses a
+network boundary (an FB output or a wire from another network) draws as a
+variable box in the reading network, never as a line across bands. The
+band header is the network's handle: click it and the palette's *+ add*
+inserts into that network; ▲ / ▼ move it, + adds a network after it, ✕
+removes its `NETWORK` line (its statements join the network above;
+nothing else is deleted), and a double-click on the title renames it. The
+palette's *network* adds one at the end (or after the picked network).
 
 ## Ladder power flow
 
@@ -149,6 +195,13 @@ functions that can gate power directly.
 Stateless, callable from ST, FBD blocks, and (where they return BOOL —
 or inside arguments) ladder function contacts.
 
+A call is positional — `LIMIT(0.0, x, 100.0)` — or **formal**, every input
+by its standard name: `LIMIT(MN := 0.0, IN := x, MX := 100.0)`. The names
+are the ones the signatures below use (`IN` for one input, `IN1`…`INn` for
+the extensible ones, `G`/`IN0`/`IN1` for `SEL`, `K`/`IN0`… for `MUX`); one
+call is one or the other, never a mix. A formal call is also how a function
+takes [EN/ENO](#eneno-execution-control).
+
 ### Selection
 
 | Name | Signature | Result | Behavior |
@@ -231,6 +284,48 @@ scans. Outputs read as `inst.Pin` from any language.
 | `SR` | `S1: BOOL, R: BOOL` | `Q1: BOOL` | set-dominant latch |
 | `RS` | `S: BOOL, R1: BOOL` | `Q1: BOOL` | reset-dominant latch |
 | `PID` | see [below](#pid-closed-loop-control) | see below | closed-loop control — proportional/integral/derivative with anti-windup and bumpless auto/manual |
+
+## EN/ENO: execution control
+
+Every function and function-block call may bind **EN** (a BOOL input,
+TRUE when unbound) and read **ENO** (a BOOL output), as IEC 61131-3
+§6.6.1.2.4 defines them and every FBD editor draws them:
+
+- **EN FALSE: the call does not execute.** A function's result is **not
+  assigned**: the variable it drives keeps its value. A function block's
+  body does not run: its outputs, every `=>` binding and its internal state
+  (a counter's edge memory, a timer's start) keep their values until it runs
+  again.
+- **ENO = EN AND no error.** A call that errors faults the scan here (a `MUX`
+  index out of range, an unparseable `STRING_TO_*`), so a call that returns
+  has ENO = EN — except FBD's `DIV` and `MOD`, whose ENO is FALSE on a zero
+  divisor (the result itself follows the ÷0 rule: 0, and the `divZero`
+  counter).
+
+In ST, EN and ENO are formal arguments:
+
+```iecst
+t1(EN := Enable, IN := Start, PT := T#5S, ENO => t1Ok);
+Out := LIMIT(EN := Enable, MN := 0.0, IN := Raw, MX := 100.0, ENO => ok);
+```
+
+A function's EN/ENO needs its call to be a statement of its own — the whole
+right-hand side of an assignment (or a user `FUNCTION` called as a
+statement) — because "not assigned" has to name what is not assigned;
+inside a larger expression it is a compile error that says so.
+
+In FBD, any block takes them the same way — `sp = LIMIT(EN := Enable, MN :=
+0.0, IN := Raw, MX := 100.0, ENO => ok)` — and a block with EN/ENO must drive
+a variable (a coil, directly or through its named wire), never another
+block's input. ENO also reads as a wire: `t1.ENO`, or `sp.ENO` for a named
+block, feeds a coil or the next block's EN (TIA's EN/ENO chain). The diagram
+draws EN first and ENO last, but only when bound; the **EN** toggle on a
+block (or FB) shows both as open pins to drop a wire on or drag one from.
+
+A user block that **declares** its own `EN` input or `ENO` output (the
+ladder convention, [below](#power-pins-in-ladder)) keeps them as ordinary
+pins: its body decides what they mean. `lang/conformance/fbd-en-eno` runs
+the same EN/ENO logic in ST and FBD and asserts them together.
 
 ### Power pins in ladder
 
@@ -355,6 +450,18 @@ END_FUNCTION_BLOCK
 At the call site the struct output reads like any other pin, one field at a
 time (`s.OUT.VALUE`) or whole (`Scaled := s.OUT`). A pin naming a type
 nothing declares is still a compile error that names the type.
+
+### An input left unbound keeps its value
+
+A call may leave any `VAR_INPUT` out: it keeps its value — the declared
+initial value (`NoFlowTime : TIME := T#5S`) until something writes it,
+exactly an unconnected FB input in TIA or CODESYS. A `VAR_IN_OUT` must be
+bound at every call. The FBD palette's *function block* picker follows
+this: an input **with a declared initial value** arrives unbound (it
+already has its value), an input without one arrives as an open `_` pin
+(the compiler flags it until something is wired, since nobody decided
+what it reads), and so does every `VAR_IN_OUT`. EN is never written by the
+picker: unbound, it is TRUE.
 
 ### VAR_IN_OUT is a reference pin
 
@@ -497,7 +604,10 @@ non-BOOL inputs and in-outs, and an instance name you can edit; double-click
 a block's header to rename the instance (its declaration and every
 reference in the POU follow). The FBD palette's *function block* picker
 lists the same catalog (`naut fbd graph` sends it too) and inserts
-`inst : TYPE(pin := _, …)`, every input an open pin; its *output reference*
+`inst : TYPE(pin := _, …)`, every required input an open pin (an input with
+a declared initial value stays unbound — [above](#an-input-left-unbound-keeps-its-value));
+its *block → wire* function field offers the project's own `FUNCTION`s, by
+their declared names, beside the standard functions; its *output reference*
 reads an instance output (`Speed := m1.Run`). Two limits worth knowing: an edit op addresses a rung by
 **name**, so two rungs with the same name in different POUs of one file
 resolve to the first — name them distinctly; and `addRung` with no `after`

@@ -31,6 +31,29 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Added
 
+- **FBD networks.** A `.fbd` body can be divided into numbered networks
+  with titles, the way TIA Portal and CODESYS lay out an FBD block: a
+  `NETWORK 'title'` line starts one, and networks execute in order. The
+  diagram draws each as a numbered band with its title, its notes and its
+  logic, and every statement carries a badge with its execution order. Click
+  a band's header and **+ add** inserts into that network; ▲ ▼ move it, +
+  adds one after it, ✕ removes its `NETWORK` line, double-click renames;
+  the palette has a *network* entry. A file without `NETWORK` lines is one
+  network, as before. Needs a `naut` newer than 0.15.0. (#207)
+
+- **EN/ENO on every FBD block** (IEC execution control): wire `EN` and the
+  block runs only while it is TRUE — a function's result is not written, a
+  function block's outputs hold — and `ENO` reports that it ran without an
+  error (`DIV`/`MOD`: a zero divisor). The pins draw when bound; the small
+  **EN** toggle on a block shows them as open pins to wire. ST takes the
+  same `EN := …` / `ENO => …` formal arguments. Needs a `naut` newer than
+  0.15.0. (#206)
+
+- **The FBD palette's function field offers the project's own FUNCTIONs**
+  by their declared names, with their inputs and return type, beside the
+  standard functions; a user FUNCTION block draws its declared pin names.
+  (#204)
+
 - **Signature help: a call's parameters while you type it.** Typing `(`
   after a function or a function block instance opens the parameter-hints
   widget with the callee's signature, and `,` moves the highlight on —
@@ -64,6 +87,22 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   older `naut` leaves the outline empty, as before.
 
 ### Fixed
+
+- **The FB picker leaves an input with a declared default unbound.** It
+  wrote every input as `_`, and `_` is an error, so `doseA : Dosing(...)`
+  was red until even `NoFlowTime` (declared `:= T#5S`) was wired or
+  deleted. An input with an initial value now arrives unbound — it keeps
+  that value, like an unconnected FB input in TIA — and only inputs without
+  one (and in-outs) arrive as open `_` pins. (#205)
+
+- **The `(* @layout *)` block stays out of the logic.** It was written where
+  the body ended at the first drag, so statements added later landed after
+  it and it read as part of a network. It now lives right after `END_FBD`,
+  and a file with one mid-body moves it there on the next layout write.
+  (#208)
+
+- **A blank `.fbd`/`.ld`/`.sfc` seeds the POU name `naut new` would**:
+  `main.fbd` becomes `PROGRAM Main`, not `PROGRAM main`. (#209)
 
 - **The FB monitor CodeLens shows the real position.** It said "1 of 2"
   whichever instance was monitored; monitoring the second one now reads
