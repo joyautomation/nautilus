@@ -24,7 +24,7 @@ func Types(prog *Program) (map[string]*ir.Type, error) {
 }
 
 // ResolveTypeName resolves a type as a manifest writes it — an IEC
-// elementary type (`INT`, `REAL`, `TIME`, `STRING`, `STRING[20]`), a TYPE
+// elementary type (`INT`, `REAL`, `TIME`, `STRING`), a TYPE
 // the project declares (`Motor`), or an array of either
 // (`ARRAY[1..4] OF REAL`) — against types, the project's TYPE table. A
 // function-block type is refused: an FB instance is program state, never a

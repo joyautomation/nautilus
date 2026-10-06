@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/st"
@@ -22,8 +23,9 @@ import (
 //  1. its `type:` — any IEC elementary type (BOOL, SINT…ULINT, BYTE…LWORD,
 //     REAL, LREAL, TIME, STRING), a TYPE the project's ST declares, or an
 //     ARRAY of either; or else
-//  2. its `init:` value — TRUE/FALSE is BOOL, a number REAL, text STRING
-//     (the inference a seed has always had); or else
+//  2. its `init:` value — TRUE/FALSE is BOOL, a number REAL, a `T#…`
+//     duration TIME, other text STRING (the inference a seed has always
+//     had); or else
 //  3. nothing: the tag is known but untyped, and a program naming it
 //     without declaring it is told to give it a type.
 //
@@ -88,6 +90,12 @@ func typeOfInit(v any) *ir.Type {
 	case bool:
 		return ir.BoolT
 	case string:
+		// An ST duration literal is a TIME; any other text a STRING.
+		if x := strings.ToUpper(strings.TrimSpace(v.(string))); strings.HasPrefix(x, "T#") || strings.HasPrefix(x, "TIME#") {
+			if _, err := ir.ParseDuration(x); err == nil {
+				return ir.TimeT
+			}
+		}
 		return ir.StringT
 	case int, int64, uint64, float64:
 		return ir.RealT

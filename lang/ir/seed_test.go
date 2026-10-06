@@ -1,6 +1,9 @@
 package ir
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // levelT/motorT mirror the shape a real UDT tag test wants: a struct nested
 // two levels deep, exactly what Riverbend WTP's Motor1Speed/LevelControl pair
@@ -177,5 +180,48 @@ func TestSeedFromInitScalarType(t *testing.T) {
 	}
 	if v.Kind != TypeReal || v.F != 5.0 {
 		t.Errorf("scalar init on a scalar type = %+v, want REAL 5.0", v)
+	}
+}
+
+func TestParseDuration(t *testing.T) {
+	ok := map[string]int64{
+		"T#3s": 3000, "t#3S": 3000, "TIME#1m30s": 90000, "LTIME#2s": 2000, "3s": 3000,
+		"500ms": 500, "1h2m3s4ms": 3723004, "T#1.5s": 1500, "T#1_000ms": 1000, "T#-2s": -2000, "2d": 172800000,
+	}
+	for in, want := range ok {
+		got, err := ParseDuration(in)
+		if err != nil || got != want {
+			t.Errorf("ParseDuration(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"", "T#", "soon", "3", "3 parsecs", "T#3x"} {
+		if _, err := ParseDuration(bad); err == nil {
+			t.Errorf("ParseDuration(%q) accepted", bad)
+		}
+	}
+}
+
+func TestSeedTimeAndArray(t *testing.T) {
+	v, err := SeedFromInit(TimeT, "T#2s")
+	if err != nil || v.Kind != TypeTime || v.I != 2000 {
+		t.Errorf("TIME from T#2s = %+v, %v", v, err)
+	}
+	v, err = SeedFromInit(TimeT, 750)
+	if err != nil || v.I != 750 {
+		t.Errorf("TIME from 750 = %+v, %v", v, err)
+	}
+	if _, err := SeedFromInit(TimeT, true); err == nil || !strings.Contains(err.Error(), "want TIME") {
+		t.Errorf("TIME from true: %v", err)
+	}
+	arr := &Type{Kind: TypeArray, Elem: IntT, ArrLen: 3, ArrLoBound: 1}
+	v, err = SeedFromInit(arr, []any{1, 2})
+	if err != nil || v.Arr[0].I != 1 || v.Arr[1].I != 2 || v.Arr[2].I != 0 {
+		t.Errorf("ARRAY = %+v, %v", v, err)
+	}
+	if _, err := SeedFromInit(arr, []any{1, 2, 3, 4}); err == nil {
+		t.Error("an over-long list was accepted")
+	}
+	if _, err := SeedFromInit(arr, []any{1, "x"}); err == nil || !strings.Contains(err.Error(), "init[2]") {
+		t.Errorf("bad element: %v, want the path init[2]", err)
 	}
 }
