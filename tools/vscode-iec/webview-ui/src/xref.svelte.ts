@@ -20,6 +20,8 @@
 //     cased keys — lands in `descriptions`. Views read it through
 //     withDesc() for tooltips and descLine() for the ladder's second line.
 
+import { live } from './liveState.svelte';
+
 export const descriptions = $state({
 	/** lower-cased name → description */
 	map: {} as Record<string, string>,
@@ -177,6 +179,13 @@ export function installXref(post: (msg: unknown) => void): void {
 		const target = xrefOf(ev.target as Element | null);
 		closeMenu();
 		if (!target) return;
+		// An element with a native VS Code menu of its own (an SFC step or
+		// transition: data-vscode-context, package.json webview/context —
+		// Set Active Step, Fire Transition) keeps it while those items are
+		// on offer, i.e. while connected to a controller; Shift+F12 still
+		// answers there. Offline, that menu would be only Cut/Copy/Paste,
+		// so ours shows instead.
+		if ((ev.target as Element | null)?.closest?.('[data-vscode-context]') && live.enabled && live.fresh) return;
 		// Our menu instead of the webview's Cut/Copy/Paste one.
 		ev.preventDefault();
 		ev.stopPropagation();

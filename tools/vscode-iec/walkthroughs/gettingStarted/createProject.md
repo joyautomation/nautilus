@@ -2,8 +2,10 @@
 
 ![The nautilus: Create Project… command: a parent folder, a name, the Demo template, and the new project open in the Explorer](../../images/create-project.gif)
 
-Picks a folder and a name, then runs `naut new` for you — no terminal
-needed.
+Picks a folder and a name, then a template, then (for Minimal and SDK) the
+language of your first program — Structured Text, Ladder, Function Block
+Diagram or Sequential Function Chart — and runs `naut new` for you. No
+terminal needed. Coming from Allen-Bradley? Pick Minimal, then Ladder.
 
 Prefer a terminal?
 

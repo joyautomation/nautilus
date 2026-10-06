@@ -198,5 +198,14 @@ test('X44/X45 SFC: Shift+F12 on an action association or a step posts its name a
 		await rightClick(b, await center(b, `${row} .assoctarget`));
 		await clickAt(b, await menuItem(b));
 		assert.deepEqual(await xrefs(b), [{ type: 'xref', name: 'Pump', line: 5, endLine: 6 }]);
+		// Connected to a controller, a step keeps VS Code's own menu (its
+		// data-vscode-context: Set Active Step): no menu of ours there, and
+		// Shift+F12 still answers.
+		await deliver(b, { type: 'liveValues', enabled: true, fresh: true, values: {} });
+		await rightClick(b, await center(b, `${byId('step', 'st:Idle')} .stepname`));
+		assert.equal(await menuItem(b), null, 'the native step menu is left alone while live');
+		await reset(b);
+		await shiftF12(b);
+		assert.deepEqual(await xrefs(b), [{ type: 'xref', name: 'Idle', line: 3, endLine: 4 }]);
 	});
 });

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -66,6 +67,10 @@ func (r *Runtime) gate() bool {
 		r.takeover()
 		r.leading = true
 	case !lead:
+		if r.leading {
+			// Stepping down: forces belong to the active controller only.
+			r.dropForces("lost leadership")
+		}
 		r.leading = false
 	}
 	return lead
@@ -86,6 +91,12 @@ func (r *Runtime) gate() bool {
 // Process state is deliberately NOT replicated between replicas: config
 // travels through the retain store, process state re-derives from the field.
 func (r *Runtime) takeover() {
+	// Forces are never carried across a takeover (see force.go): the standby
+	// never saw this replica's force table, and a leader that lost and
+	// regained the lease must not quietly resume holding values nobody may
+	// still be watching. Dropped BEFORE the retained load so a restored
+	// value is not captured as a forced tag's "actual".
+	r.dropForces("takeover")
 	if r.retainStore != nil {
 		if err := r.loadRetained(); err != nil {
 			r.noteRetainError(err)
@@ -107,6 +118,13 @@ func (r *Runtime) takeover() {
 		tr.mu.Lock()
 		tr.lastScan = time.Time{}
 		tr.mu.Unlock()
+	}
+}
+
+// dropForces clears the force table, logging what was dropped.
+func (r *Runtime) dropForces(why string) {
+	if n := r.tags.UnforceAll(); n > 0 {
+		slog.Warn("runtime: forces dropped", "count", n, "reason", why)
 	}
 }
 
@@ -246,7 +264,10 @@ func (r *Runtime) saveRetained(lastSaved []byte) []byte {
 func (r *Runtime) retainState() retain.State {
 	st := retain.State{}
 	for _, name := range r.retainTags {
-		v, err := r.tags.ReadGlobal(name)
+		// The ACTUAL value, not a forced one: forces are not retained
+		// (force.go), and persisting a forced setpoint's value would bring
+		// the force back after a restart in all but name.
+		v, err := r.tags.readActual(name)
 		if err != nil {
 			continue
 		}

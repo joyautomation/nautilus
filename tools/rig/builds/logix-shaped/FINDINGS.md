@@ -224,3 +224,17 @@ rung boundaries.
 | JMP/LBL, MCR | none | gate each rung, or move the section into an FB | #223 |
 | Verify routine | `naut check`, live diagnostics | none needed | ✓ |
 | Emulate + toggle bits | `naut test` in virtual time | none needed | ✓✓ |
+
+## Rerun after #232 (2026-10-05)
+
+The ladder editor parity PR (#232) closes findings 1, 2, 3 (the pins; the
+POU itself is still #179), 6, 9 and 10. The build now types the ONS as
+`+M1_StartPB` on the contact (`ld_edge_retag`) and sees it drawn
+(`ld_edge_drawn`), declares MotorStarter's inputs in the variables panel's
+block scope and its outputs from the amber offer, builds rung m2 as a copy
+of m1 pasted below m2perm (`ld_copy_rung`, instance m1 → m2) with three
+retags, declares `M1_Starts` from the offer (now `: INT`, from the CTU's CV
+pin), and finds instance m1 in the variables panel, which Escape closes.
+Rig run on parity-ld-editor 5a2fad7 at G_PACE=fast: PASS 139, FAIL 0,
+XFAIL 2 (#215, #216), XPASS 0, PASTE 4 (tag YAML, the FB shell, the ST
+block, the tests); `naut test` 6/6; built == reference modulo layout.

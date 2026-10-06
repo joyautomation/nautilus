@@ -50,6 +50,60 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   Comes from `naut lsp` (the new `nautilus/descriptions` request), so it
   needs a `naut` newer than 0.15.0. (#216)
 
+- **Ladder: edge contacts, from the palette, a key or a retag.** The
+  palette has rising- and falling-edge contacts (`⊣P⊢`, `⊣N⊢`, the Logix
+  ONS habit); `P` cycles a selected contact NO → P → N → NC; and
+  double-clicking a contact and typing `+Tag`, `-Tag` or `/Tag` sets its
+  form with the tag (a bare tag keeps it). Needs a `naut` newer than
+  0.15.0. (#213)
+
+- **Ladder: copy and paste a whole rung.** With a rung's name selected,
+  Ctrl+C (or ⧉) copies the rung and Ctrl+V (or ⎘) pastes it below the
+  selected rung, named on from the original (`m1` → `m2`), its block
+  instances renamed the same way and its comment kept. ⧉ and ✂ are
+  disabled while nothing copyable is selected. Needs a `naut` newer than
+  0.15.0. (#217)
+
+- **Ladder: a FUNCTION_BLOCK's pins from the diagram.** Inside a
+  `FUNCTION_BLOCK`, the amber declare offer makes a name a pin
+  (`VAR_INPUT` for one the rungs read, `VAR_OUTPUT` for one a coil writes)
+  or a local, and the variables panel groups declarations by POU, declares
+  pins (`in` → `out` → `in/out` → `local`) and renames a declaration on a
+  double-click, together with its references and, for a pin, the calls'
+  named bindings in that file. Needs a `naut` newer than 0.15.0. (#214)
+
+- **Forcing.** *Force…* holds a tag — or one member of a struct tag — at a
+  value against the field and the logic until it is removed: a forced input
+  beats the driver every scan, a forced output beats the logic. From the
+  editor's context menu, a live pill's hover, or the lock on a Live Values
+  row; *Remove Force* and *Remove All Forces* undo it. Forced values are
+  marked with an amber **F** on the inline pills, in the Live Values panel
+  (a *Forces* group first), and on the FBD, ladder and SFC diagrams, and a
+  status-bar item reads **N forces active** until the last is removed (click
+  it to list and remove). Force and Remove All ask first while
+  `nautilus.confirmControllerWrites` is on. Needs a `naut` newer than 0.15.0
+  (the controller's force table). (#211)
+
+- **SFC online commands.** Right-click a step in a live SFC diagram for
+  *Set Active Step* (jump the chart there once, Codesys's *set step*), or a
+  transition for *Fire Transition* (take it once, if its source steps are
+  active); both are in the Command Palette too, picking from the running
+  charts. Needs a `naut` newer than 0.15.0. (#192)
+
+- **SFC: timed qualifiers, IEC associations, step supervision** (naut).
+  `L`, `D`, `SD`, `DS`, `SL` now compile with the standard's semantics
+  (`D Detergent(T#3S);` was an error), the IEC textual form
+  `Detergent(D, T#3S);` is read as the same association, and a step can
+  carry a maximum time, `STEP Fill (MAXTIME := T#60S, ERROR := FillOverrun):`,
+  setting `Fill.ERR` and a tag an alarm binds to. The `.sfc` grammar
+  highlights the IEC-form qualifier, `MAXTIME`/`ERROR` and `Step.ERR`.
+
+- **Create Project… asks for the program language.** After a Minimal or
+  SDK template the command offers Structured Text, Ladder, Function Block
+  Diagram or Sequential Function Chart and passes `naut new --language`, so
+  a ladder programmer's first project opens as `program.ld` without a
+  terminal. The Get Started walkthrough's step is the same command (#221).
+
 - **Signature help: a call's parameters while you type it.** Typing `(`
   after a function or a function block instance opens the parameter-hints
   widget with the callee's signature, and `,` moves the highlight on —
@@ -89,6 +143,22 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   as a program at all, so its reads and writes of a tag were missing from
   the list whenever the search started anywhere else. (Found by the X44
   smoke row.)
+
+- **Ladder: an edge contact (`+Tag`, `-Tag`) is drawn.** The diagram
+  dropped it and wired the block behind it straight to the rail, as if the
+  call were unconditional. It now draws as a P or N contact, and with live
+  values on it lights for the scan its one-shot fires. (#212)
+
+- **Ladder: the declare offer types a name from its use.** A counter's
+  `CV => M1_Starts` was offered as `VAR_EXTERNAL : REAL` because the
+  manifest seed `init: 0` types the tag REAL; the offer now takes the pin's
+  type (`INT`), a comparison's other operand, or BOOL for a contact, and
+  its `VAR` choice uses the same type. (#219)
+
+- **Ladder: the variables panel lists block instances and closes on
+  Escape.** The instances rungs declare by their calls (`m1:MotorStarter(…)`,
+  the AOI's backing tag) are listed read-only as `m1 : MotorStarter` with
+  their rung. (#220)
 
 - **The FB monitor CodeLens shows the real position.** It said "1 of 2"
   whichever instance was monitored; monitoring the second one now reads

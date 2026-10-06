@@ -157,7 +157,7 @@ func scanSuite(text string) (exprs, keys []span) {
 							}
 						}
 					}
-				case "given":
+				case "given", "force":
 					if v.Kind == yaml.MappingNode {
 						addKeys(v)
 					}

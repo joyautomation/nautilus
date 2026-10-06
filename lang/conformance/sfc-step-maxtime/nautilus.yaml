@@ -1,0 +1,33 @@
+# sfc-step-maxtime — step supervision: a step's maximum active time
+# (`STEP Fill (MAXTIME := T#100ms, ERROR := sfc_FillErr):`), its retained
+# overrun flag Fill.ERR, the BOOL tag ERROR mirrors it into, and the alarm
+# the existing alarm engine raises from that tag. SFC is the only language
+# that can express a step: a single sfc task (README rule 3). 1ms scan.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/sfc-step-maxtime'
+#   go run ./cmd/naut test lang/conformance/sfc-step-maxtime
+name: sfc-step-maxtime
+
+tasks:
+  - program: sfc-step-maxtime.sfc   # the first task is always "main"
+    scan: 1ms
+
+tags:
+  # Shared inputs.
+  - { name: Go,    role: state, init: false, desc: "Idle -> Fill" }
+  - { name: Full,  role: state, init: false, desc: "Fill -> Done (the normal way out)" }
+  - { name: Reset, role: state, init: false, desc: "Done / Aborted -> Idle" }
+
+  # Outputs, sfc_ prefix.
+  - { name: sfc_FillErr, role: state, init: false, desc: "ERROR := target: mirrors Fill.ERR every scan; the alarm watches it" }
+  - { name: sfc_Fill,    role: state, init: false, desc: "N on Fill" }
+  - { name: sfc_Aborted, role: state, init: false, desc: "N on Aborted" }
+  - { name: sfc_Cause,   role: state, init: false, desc: "Fill.ERR as read by a P1 body on Aborted" }
+
+alarms:
+  defaults: { ack-required: true, auto-clear: true }
+  defs:
+    - { id: FillOverrun, tag: sfc_FillErr, name: "Fill ran past its maximum step time", priority: high }
+
+driver:
+  type: memory

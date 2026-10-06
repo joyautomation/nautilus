@@ -43,7 +43,32 @@ export const NEW_PROJECT_TEMPLATES: TemplateItem[] = [
   },
 ];
 
-/** The argv `naut new` gets. */
-export function newProjectArgs(name: string, template: string): string[] {
-  return ["new", name, "--no-input", "--template", template];
+export interface LanguageItem {
+  language: string;
+  label: string;
+  description: string;
+}
+
+/** The program languages `naut new --language` accepts (cmd/naut/new.go).
+ * Structured Text first: it is the default. */
+export const NEW_PROJECT_LANGUAGES: LanguageItem[] = [
+  { language: "st", label: "Structured Text", description: "program.st" },
+  { language: "ld", label: "Ladder Diagram", description: "program.ld" },
+  { language: "fbd", label: "Function Block Diagram", description: "program.fbd" },
+  { language: "sfc", label: "Sequential Function Chart", description: "program.sfc" },
+];
+
+/** `--language` picks the language of the BLANK program, so it only applies
+ * to Minimal and SDK; Demo is the fixed multi-language tour and the SDK demo's
+ * plant is ST. The quick pick is skipped for the others. */
+export function templateTakesLanguage(template: string): boolean {
+  return template === "minimal" || template === "sdk";
+}
+
+/** The argv `naut new` gets. `language` is omitted (the CLI defaults to st)
+ * for templates that ignore it. */
+export function newProjectArgs(name: string, template: string, language?: string): string[] {
+  const args = ["new", name, "--no-input", "--template", template];
+  if (language && templateTakesLanguage(template)) args.push("--language", language);
+  return args;
 }
