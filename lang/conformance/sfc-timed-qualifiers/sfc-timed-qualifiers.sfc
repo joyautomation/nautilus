@@ -1,0 +1,47 @@
+PROGRAM SfcTimedQualifiers
+VAR_EXTERNAL
+    Go : BOOL;  Next : BOOL;  Back : BOOL;  Rst : BOOL;
+    sfc_L : BOOL;  sfc_D : BOOL;  sfc_SD : BOOL;  sfc_DS : BOOL;  sfc_SL : BOOL;
+    sfc_CntL : INT;
+END_VAR
+SFC
+
+  INITIAL_STEP Idle:
+  END_STEP
+
+  (* L, D and SD in nautilus's `Q Target(time);` form; DS and SL in IEC
+     61131-3's own textual form `Target(Q, time);` — both parse to the same
+     association. *)
+  STEP A:
+    L  sfc_L(T#100ms);
+    D  sfc_D(T#100ms);
+    SD sfc_SD(T#100ms);
+    sfc_DS(DS, T#100ms);
+    sfc_SL(SL, T#100ms);
+    L  CountL(T#100ms);
+  END_STEP
+
+  STEP B:
+  END_STEP
+
+  STEP Clear:
+    R sfc_SD;
+    R sfc_DS;
+    R sfc_SL;
+  END_STEP
+
+  TRANSITION t_go    FROM Idle  TO A     := Go;
+  END_TRANSITION
+  TRANSITION t_next  FROM A     TO B     := Next;
+  END_TRANSITION
+  TRANSITION t_rst   FROM B     TO Clear := Rst;
+  END_TRANSITION
+  TRANSITION t_back  FROM B     TO Idle  := Back;
+  END_TRANSITION
+  TRANSITION t_clear FROM Clear TO Idle  := TRUE;
+  END_TRANSITION
+
+  ACTION CountL: sfc_CntL := sfc_CntL + 1; END_ACTION
+
+END_SFC
+END_PROGRAM
