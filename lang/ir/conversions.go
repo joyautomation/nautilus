@@ -80,7 +80,7 @@ var (
 	ltimeT = &Type{Kind: TypeTime, Name: "LTIME"}
 )
 
-// ConvTypes is the conversion table's elementary types in the order the
+// convTypes is the conversion table's elementary types in the order the
 // docs and the conformance matrix list them.
 var convTypes = func() []convType {
 	out := []convType{{Name: "BOOL", class: ccBool, T: BoolT}}
@@ -207,17 +207,17 @@ func registerConversions() {
 		b := b
 		for _, form := range []struct {
 			name string
-			from convType
+			from *Type
 		}{
-			{"TRUNC_" + b.Name, convType{Name: "REAL", class: ccReal, width: 64, T: RealT}},
-			{"REAL_TRUNC_" + b.Name, convType{Name: "REAL", class: ccReal, width: 32, T: RealT}},
-			{"LREAL_TRUNC_" + b.Name, convType{Name: "LREAL", class: ccReal, width: 64, T: lrealT}},
+			{"TRUNC_" + b.Name, RealT},
+			{"REAL_TRUNC_" + b.Name, RealT},
+			{"LREAL_TRUNC_" + b.Name, lrealT},
 		} {
 			name := form.name
 			conversionNames[name] = struct{}{}
 			RegisterBuiltin(BuiltinSig{
 				Name:   name,
-				Params: []*Type{form.from.T},
+				Params: []*Type{form.from},
 				Result: b.T,
 				Fn:     func(args []Value) (Value, error) { return realToInt(name, b, args[0].F, math.Trunc) },
 			})
