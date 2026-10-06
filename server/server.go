@@ -1115,10 +1115,19 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 	// flat assignment of "P101.Spede" would otherwise create a top-level tag
 	// under that literal name, which no program reads and a Sparkplug edge
 	// would publish as a bogus metric. That is a 400 with the reason.
+	// An enumerated tag (#238) takes a member name or integer, whole or by
+	// path, through the same rule, and a name that is no member is a 400
+	// that lists the members (#247).
 	_, isObject := req.Value.(map[string]any)
-	if isObject || strings.Contains(req.Name, ".") {
-		root, _, _ := strings.Cut(req.Name, ".")
-		if msg := s.refuseMemberWrite(root); msg != "" {
+	_, isList := req.Value.([]any)
+	enum := false
+	if t := s.rt.Tags().TypeOf(req.Name); t != nil && t.Enum != nil {
+		enum = true
+	}
+	member := isObject || isList || strings.ContainsAny(req.Name, ".[")
+	if member || enum {
+		root, _ := ir.SplitAddress(req.Name)
+		if msg := s.refuseMemberWrite(root); member && msg != "" {
 			http.Error(w, msg, http.StatusBadRequest)
 			return
 		}

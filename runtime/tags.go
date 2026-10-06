@@ -62,11 +62,14 @@ type Tags struct {
 	// the API and Sparkplug show. An exact hit (every program and driver
 	// using the declared spelling) never touches this map.
 	fold map[string]string
-	// enums maps ir.NameKey(tag) to the enumerated type (#238) of a tag
-	// whose type is one, so an operator's or a test's write of a member
-	// name ("Run") or its integer lands as the NAMED value, as a program's
-	// assignment does (ir.CoerceValue). Set once in New, read-only after.
-	enums map[string]*ir.Type
+	// types maps ir.NameKey(tag) to the tag's declared type, for every tag
+	// a program binds or the manifest types. An operator's or a test's
+	// write goes through it (ir.SetFieldTyped), whole tag or member path:
+	// an enumeration (#238) takes a member name ("Run") or its integer and
+	// lands as the NAMED value, as a program's assignment does — at any
+	// depth (#247) — and an array index counts from the declared lower
+	// bound. Set once in New, read-only after.
+	types map[string]*ir.Type
 	// divZero counts every integer or REAL division (or MOD) by zero the
 	// VM has evaluated against this store, controller-wide, since start
 	// (ir.DivZeroCounter). Surfaced as ScanStats.DivZero.
@@ -462,7 +465,7 @@ func (t *Tags) SetBool(name string, v bool)    { _ = t.WriteGlobal(name, ir.Bool
 // the per-scan driver copy, a retained restore — go through setAny, which
 // creates tags by their configured name and never guesses at members.
 func (t *Tags) Set(name string, v any) {
-	if _, isMap := v.(map[string]any); isMap || strings.Contains(name, ".") {
+	if _, isMap := v.(map[string]any); isMap || strings.ContainsAny(name, ".[") {
 		_ = t.SetPath(name, v)
 		return
 	}
@@ -476,28 +479,31 @@ func (t *Tags) Set(name string, v any) {
 }
 
 // enumWrite converts a write to an enumerated tag into its named value: a
-// member name (optionally Type#-qualified) or the member's integer. isEnum
-// reports whether name is such a tag at all.
+// member name (optionally Type#-qualified) or the member's integer, by the
+// same rule as a member write (ir.EnumFromAny). isEnum reports whether
+// name is such a tag at all.
 func (t *Tags) enumWrite(name string, v any) (ir.Value, bool, error) {
-	et := t.enums[ir.NameKey(name)]
-	if et == nil {
+	et := t.types[ir.NameKey(name)]
+	if et == nil || et.Enum == nil {
 		return ir.Value{}, false, nil
 	}
-	if s, ok := v.(string); ok {
-		member := s
-		if _, after, qualified := strings.Cut(s, "#"); qualified {
-			member = after
+	if _, ok := v.(string); !ok {
+		if _, ok := v.(ir.Value); !ok {
+			iv, ok := irValue(v)
+			if !ok {
+				return ir.Value{}, true, fmt.Errorf("tag %s: want a member of %s, got %T", name, et.Enum.Name, v)
+			}
+			v = iv
 		}
-		if _, ok := et.Enum.Member(member); !ok {
-			return ir.Value{}, true, fmt.Errorf("tag %s: %q is not a member of %s", name, s, et.Enum.Name)
-		}
-		return ir.CoerceValue(ir.StringVal(member), et), true, nil
 	}
-	iv, ok := irValue(v)
-	if !ok {
-		return ir.Value{}, true, fmt.Errorf("tag %s: want a member of %s, got %T", name, et.Enum.Name, v)
-	}
-	return ir.CoerceValue(iv, et), true, nil
+	ev, err := ir.EnumFromAny(et, v, "tag "+name)
+	return ev, true, err
+}
+
+// TypeOf is the declared type of a tag (any spelling), nil when neither a
+// program nor the manifest declares one.
+func (t *Tags) TypeOf(name string) *ir.Type {
+	return t.types[ir.NameKey(name)]
 }
 
 // setAny is Set without the member-path guard: the flat, tag-creating store
@@ -516,6 +522,7 @@ func (t *Tags) setAny(name string, v any) {
 //	SetPath("TempSP", 65.0)                                    // whole tag
 //	SetPath("P101.Drive.Speed", 60.0)                          // one member
 //	SetPath("P101", map[string]any{"Cmd": true, "Speed": 60})  // partial merge
+//	SetPath("Line.Steps[2].Mode", "Run")                        // array element, enum by name
 //
 // The whole struct is read, modified and written back under one lock, so a
 // member write is atomic against the scan and against another writer: the
@@ -553,15 +560,15 @@ func (t *Tags) SetPath(path string, v any) error {
 		}
 		return t.setFieldLocked(key, t.writeBase(key, cur), nil, v)
 	}
-	root, rest, dotted := strings.Cut(path, ".")
-	if !dotted {
+	root, segs := ir.SplitAddress(path)
+	if len(segs) == 0 {
 		return &UndefinedTagError{root}
 	}
 	cur, root, ok := t.lookupLocked(root)
 	if !ok {
 		return &UndefinedTagError{root}
 	}
-	return t.setFieldLocked(root, t.writeBase(root, cur), strings.Split(rest, "."), v)
+	return t.setFieldLocked(root, t.writeBase(root, cur), segs, v)
 }
 
 // writeBase is the value a member write edits: the stored value, or for a
@@ -577,7 +584,7 @@ func (t *Tags) writeBase(root string, cur *tagVal) ir.Value {
 // setFieldLocked applies one member write to a tag already read under the
 // lock, and stores the result. Caller holds t.mu.
 func (t *Tags) setFieldLocked(root string, cur ir.Value, path []string, v any) error {
-	nv, err := ir.SetField(cur, path, v, "tag "+root)
+	nv, err := ir.SetFieldTyped(cur, t.types[ir.NameKey(root)], path, v, "tag "+root)
 	if err != nil {
 		return err
 	}
@@ -591,7 +598,7 @@ func (t *Tags) setFieldLocked(root string, cur ir.Value, path []string, v any) e
 // struct field like RTU9_WEL15_FIT_001.HH. As SetPath does, a tag whose own
 // NAME contains a dot wins over member resolution; failing that, the first
 // segment names the tag and every remaining segment steps into one struct
-// field.
+// field or, written [n], one array element (ir.PathSegments).
 //
 // A leaf value comes back as a plain Go scalar — bool, int64, float64, or
 // string, the same collapse All() applies to a whole tag — so a caller
@@ -612,26 +619,17 @@ func (t *Tags) ReadPath(path string) (any, bool) {
 	if v, _, ok := t.lookupLocked(path); ok {
 		return plainLeaf(v.v), true
 	}
-	root, rest, dotted := strings.Cut(path, ".")
-	if !dotted {
+	root, segs := ir.SplitAddress(path)
+	if len(segs) == 0 {
 		return nil, false
 	}
-	tv, _, ok := t.lookupLocked(root)
+	tv, root, ok := t.lookupLocked(root)
 	if !ok {
 		return nil, false
 	}
-	v := tv.v
-	for rest != "" {
-		var field string
-		field, rest, _ = strings.Cut(rest, ".")
-		if v.Kind != ir.TypeStruct || v.Struct == nil {
-			return nil, false
-		}
-		i, ok := v.Struct.FieldOf(field)
-		if !ok || i >= len(v.Fld) {
-			return nil, false
-		}
-		v = v.Fld[i]
+	v, _, err := ir.FieldAt(tv.v, t.types[ir.NameKey(root)], segs, root)
+	if err != nil {
+		return nil, false
 	}
 	return plainLeaf(v), true
 }
