@@ -1126,7 +1126,9 @@ if ((ev.key === 'Enter' || ev.key === 'F2') && !ev.ctrlKey && !ev.metaKey && !ev
 	>
 		{#each layout.trans as r (r.t.id)}
 			{@const problems = problemsFor(r.t.line, r.t.endLine)}
-			<g class="trans {r.t.status ?? ''}" data-kind="transition" data-id={r.t.id} class:selected={isSelTrans(r.t.id)}>
+			<!-- data-from / data-to: the ends, so a transition is addressable by
+     them (the rig's verbs), not only by where it happens to be drawn -->
+<g class="trans {r.t.status ?? ''}" data-kind="transition" data-id={r.t.id} data-from={r.t.from.join(',')} data-to={r.t.to.join(',')} class:selected={isSelTrans(r.t.id)}>
 				{#if r.jump}
 					<g class="jump" data-kind="transition" data-id={r.t.id} transform="translate({r.jump.x}, {r.jump.y})" onclick={(e) => selectTrans(e, r.t.id)}>
 						<title>{r.t.name ? r.t.name + ': ' : ''}{r.t.cond} — jumps to {r.t.to.join(', ')} (a loop back, drawn compact rather than as a long line){r.prio ? ` — priority ${r.prio}` : ''}{editable ? ' — click to select, dblclick condition to edit, F2: name' : ''}</title>

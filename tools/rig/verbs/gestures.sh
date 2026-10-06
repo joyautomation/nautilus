@@ -343,7 +343,8 @@ fbd_zoom_to() {
 # transition has no name on the chart unless the text gives it one, so the
 # verbs name it by its ends, "From->To", and find it by geometry: the bar
 # between From's box and To's box, over To's column (a loop back is the ↩
-# chip whose title says "jumps to To").
+# chip whose title says "jumps to To"). Newer builds carry each transition's
+# ends as data-from/data-to, which sfc_trans_el prefers.
 
 sfc_step_el() { printf '[...doc.querySelectorAll("svg.chart g.step")].find(g => g.querySelector("text.stepname")?.textContent.trim() === %s)' "$(_q "$1")"; }
 
@@ -358,6 +359,15 @@ sfc_trans_el() {
   const Bg = step($(_q "$to")); const B = Bg?.querySelector("rect.box").getBoundingClientRect();
   if (!A || !B) return null;
   const bcx = B.left + B.width / 2, acx = A.left + A.width / 2;
+  const part = (t) => "$part" === "cond" ? t.querySelector("text.cond") : (t.querySelector("rect.barhit") || t.querySelector("rect.jumpbox"));
+  // By its ends first (data-from/data-to, on builds that carry them): FROM holds
+  // From and TO holds To — the plain From -> To one before a join or a
+  // divergence that merely includes them. Geometry is the fallback.
+  const ends = (t, k) => (t.dataset[k] ?? "").split(",").filter(Boolean);
+  const byEnds = [...doc.querySelectorAll("svg.chart g.trans[data-from]")]
+    .filter(t => ends(t, "from").includes($(_q "$from")) && ends(t, "to").includes($(_q "$to")))
+    .sort((x, y) => (ends(x, "from").length + ends(x, "to").length) - (ends(y, "from").length + ends(y, "to").length));
+  if (byEnds.length) return part(byEnds[0]);
   let best = null, bd = 1e9;
   for (const t of doc.querySelectorAll("svg.chart g.trans")) {
     const j = t.querySelector("g.jump");
@@ -379,7 +389,7 @@ sfc_trans_el() {
     if (d < bd) { bd = d; best = t; }
   }
   if (!best) return null;
-  return "$part" === "cond" ? best.querySelector("text.cond") : (best.querySelector("rect.barhit") || best.querySelector("rect.jumpbox"));
+  return part(best);
 })()
 JS
 }
