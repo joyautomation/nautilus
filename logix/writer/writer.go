@@ -53,6 +53,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/ld"
 	"github.com/joyautomation/nautilus/lang/st"
 )
@@ -98,9 +99,9 @@ type Options struct {
 	Descs   map[string]string
 	// Tags are the manifest's tags by name, with the IEC type each one has
 	// in scope (its type:, else the type its init: implies). A program
-	// names a tag without declaring it (#177/#210); a ladder program's
-	// rungs that do get the tag as a controller tag, typed from here, as if
-	// the program had said VAR_EXTERNAL.
+	// names a tag without declaring it (#177/#210); a program — ladder or
+	// ST — that does gets the tag as a controller tag, typed from here, as
+	// if it had said VAR_EXTERNAL (uses.go).
 	Tags map[string]string
 	// Side is the side code: logic nautilus adds beside the user's
 	// program, in its own Logix program scheduled after it, for testing,
@@ -216,6 +217,9 @@ type lowered struct {
 	// TYPE declarations found in the libraries (types.go).
 	types    map[string]*udt
 	rawTypes map[string]*st.TypeDecl
+	// enums are the enumerations the libraries declare, by ir.NameKey
+	// (enum.go): DINT tags, their members integers.
+	enums map[string]*ir.EnumDef
 	// st marks a Structured Text program: block instances are FBD
 	// structures, TIME is a DINT, and the routine is stLines.
 	st      bool
@@ -271,61 +275,6 @@ type rungOut struct {
 	Line    int
 }
 
-// identRe finds identifiers in an element's operand, arguments or text.
-var identRe = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
-
-// implicitTags are the manifest tags (Options.Tags) the program's rungs name
-// without a declaration of their own, as VAR_EXTERNAL declarations in first-
-// use order: a controller tag in the Logix project, exactly as a declared
-// one is. Names inside a block's own rungs are the block's business.
-func (lw *lowered) implicitTags(m *ld.Model) []ld.VarDecl {
-	if len(lw.opts.Tags) == 0 {
-		return nil
-	}
-	tags := make(map[string]string, len(lw.opts.Tags))
-	for name := range lw.opts.Tags {
-		tags[strings.ToLower(name)] = name
-	}
-	var out []ld.VarDecl
-	seen := map[string]bool{}
-	note := func(ident string, line int) {
-		k := strings.ToLower(ident)
-		name, isTag := tags[k]
-		if !isTag || seen[k] {
-			return
-		}
-		if _, declared := lw.vars[k]; declared {
-			return
-		}
-		seen[k] = true
-		out = append(out, ld.VarDecl{Name: name, Type: lw.opts.Tags[name], Section: "VAR_EXTERNAL", Line: line})
-	}
-	var walk func(els []ld.Element, line int)
-	walk = func(els []ld.Element, line int) {
-		for _, e := range els {
-			for _, text := range []string{e.Ref, e.Args, e.Text} {
-				for _, id := range identRe.FindAllString(text, -1) {
-					note(id, line)
-				}
-			}
-			for _, leg := range e.Legs {
-				walk(leg, line)
-			}
-		}
-	}
-	for _, r := range m.Rungs {
-		if r.POU == "" {
-			walk(r.Elements, r.Line)
-			walk(r.Coils, r.Line)
-		}
-	}
-	return out
-}
-
-func lower(m *ld.Model, opts Options) *lowered {
-	return lowerSrc(m, "", opts)
-}
-
 func lowerSrc(m *ld.Model, src string, opts Options) *lowered {
 	lw := &lowered{model: m, opts: opts, vars: map[string]ld.VarDecl{},
 		presetVars: map[string]bool{}, computedIdx: map[string]bool{}, genNames: map[string]bool{}, aois: map[string]*aoiDef{}}
@@ -337,7 +286,7 @@ func lowerSrc(m *ld.Model, src string, opts Options) *lowered {
 		}
 		lw.vars[strings.ToLower(v.Name)] = v
 	}
-	implicit := lw.implicitTags(m)
+	implicit := lw.implicitLadder(src)
 	for _, v := range implicit {
 		lw.vars[strings.ToLower(v.Name)] = v
 	}
@@ -455,7 +404,7 @@ func (lw *lowered) declare(v ld.VarDecl) {
 	}
 	init := v.Init
 	if init == "" && scope == "" {
-		if iv, ok := lw.opts.Inits[v.Name]; ok && iv != nil {
+		if iv, _, ok := ir.Lookup(lw.opts.Inits, v.Name); ok && iv != nil {
 			init = fmt.Sprint(iv)
 		}
 	}
@@ -491,6 +440,13 @@ func (lw *lowered) declare(v ld.VarDecl) {
 			return
 		}
 		lw.addTag(tagDef{Name: v.Name, DataType: lw.blockType(u), Dim: dim, Scope: scope, Line: v.Line})
+	case lw.enumOf(typ) != nil:
+		val, ok := lw.enumInit(lw.enumOf(typ), init)
+		if !ok {
+			lw.diag(ruleInit, v.Line, "", "%s: initial value %q is not a member of %s", v.Name, init, lw.enumOf(typ).Name)
+			return
+		}
+		lw.addTag(tagDef{Name: v.Name, DataType: "DINT", Dim: dim, Value: val, Scope: scope, Line: v.Line})
 	case lw.rawTypes[strings.ToLower(u)] != nil:
 		udt, ok := lw.resolveType(typ, v.Line, v.Name)
 		if !ok {
@@ -502,7 +458,7 @@ func (lw *lowered) declare(v ld.VarDecl) {
 		}
 		var init any
 		if scope == "" {
-			init = lw.opts.Inits[v.Name]
+			init, _, _ = ir.Lookup(lw.opts.Inits, v.Name)
 		}
 		lw.addTag(tagDef{Name: v.Name, DataType: udt.Name, Dim: dim, Scope: scope, Line: v.Line, Struct: udt, Init: init})
 	case lw.blockSourceExists(typ):
@@ -516,7 +472,7 @@ func (lw *lowered) declare(v ld.VarDecl) {
 		}
 		lw.addTag(tagDef{Name: v.Name, DataType: a.Name, Scope: scope, Line: v.Line, AOI: true})
 	default:
-		alt := "the v1 subset is BOOL, SINT, INT, DINT, REAL, LREAL, TON, TOF, CTU, STRUCT types declared in a library, and FUNCTION_BLOCKs (as Add-On Instructions)"
+		alt := "the v1 subset is BOOL, SINT, INT, DINT, REAL, LREAL, TON, TOF, CTU, STRUCT types and enumerations (as DINT) declared in a library, and FUNCTION_BLOCKs (as Add-On Instructions)"
 		switch u {
 		case "TP", "CTD", "CTUD":
 			alt = "its IEC load/reset semantics differ from the Logix instruction; " + alt
@@ -533,10 +489,10 @@ func (lw *lowered) declare(v ld.VarDecl) {
 
 func (lw *lowered) addTag(t tagDef) {
 	if t.Desc == "" {
-		t.Desc = lw.opts.Descs[t.Name]
+		t.Desc, _, _ = ir.Lookup(lw.opts.Descs, t.Name)
 	}
 	if t.Scope == "" {
-		t.Alias = lw.opts.Aliases[t.Name]
+		t.Alias, _, _ = ir.Lookup(lw.opts.Aliases, t.Name)
 		lw.ctrlTags = append(lw.ctrlTags, t)
 	} else {
 		lw.progTags = append(lw.progTags, t)

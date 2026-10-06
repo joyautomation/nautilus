@@ -278,6 +278,7 @@ finding.
 | CI build / verify | SDK `build` + Logix Echo | Medium |
 | Alarms, historian, Sparkplug over Logix data | existing nautilus subsystems over the EIP driver | **Done** — `examples/client60` does it today |
 | Acceptance tests of *nautilus-authored* logic | unchanged — runs on the nautilus VM | **Done** |
+| Manifest tags a program names (declared or not) | controller tags, typed from the manifest; an enumeration as `DINT` | **Done** — ladder and ST (#248; `logix-authoring.md` §4) |
 
 ---
 
