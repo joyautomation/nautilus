@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/joyautomation/nautilus/runtime"
@@ -94,46 +93,5 @@ TYPE Pump : STRUCT State : Mode; Hz : REAL; END_STRUCT; END_TYPE
 	rt.Scan()
 	if got := rt.Tags().All()["Cmd"]; got != "Idle" {
 		t.Errorf("Cmd streams as %v, want Idle", got)
-	}
-}
-
-// #246: POST /api/tags takes an enumerated tag's member by name (or
-// Type#-qualified), as it takes text for a STRING — and refuses a name that
-// is no member, listing them, rather than answering 204 for nothing.
-func TestWriteEnumTagByName(t *testing.T) {
-	rt, err := runtime.New(runtime.Options{
-		Program: `PROGRAM P
-VAR_EXTERNAL Cmd : Mode; END_VAR
-END_PROGRAM`,
-		Libraries: []string{`TYPE Mode : (Idle, Run := 10, Fault) := Idle; END_TYPE`},
-		Tags:      []runtime.TagDef{runtime.Typed("Cmd", runtime.RoleSetpoint, "Mode")},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := New(rt)
-	post := func(body string) int {
-		rec := httptest.NewRecorder()
-		srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/tags", strings.NewReader(body)))
-		return rec.Code
-	}
-	for _, c := range []struct {
-		body string
-		code int
-		want any
-	}{
-		{`{"name":"Cmd","value":"Run"}`, 204, "Run"},
-		{`{"name":"cmd","value":"fault"}`, 204, "Fault"},
-		{`{"name":"Cmd","value":"Mode#Idle"}`, 204, "Idle"},
-		{`{"name":"Cmd","value":10}`, 204, "Run"},
-		{`{"name":"Cmd","value":"Running"}`, 422, "Run"},
-		{`{"name":"Cmd","value":"Other#Fault"}`, 422, "Run"},
-	} {
-		if got := post(c.body); got != c.code {
-			t.Errorf("%s: status %d, want %d", c.body, got, c.code)
-		}
-		if got := rt.Tags().All()["Cmd"]; got != c.want {
-			t.Errorf("%s: Cmd = %v, want %v", c.body, got, c.want)
-		}
 	}
 }

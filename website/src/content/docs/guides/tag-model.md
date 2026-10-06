@@ -153,9 +153,7 @@ function block lists `members` only where an enumeration sits beneath:
 
 The VS Code extension reads it to show `Run` bare (and the type, `PumpMode ·
 enum`, on hover) where a `STRING` would read `"Run"`, and to offer the
-members when you set or force the tag. `POST /api/tags` takes an
-enumerated tag's value as a member's name (`"Run"`, or `"PumpMode#Run"`) or
-its integer, and refuses a name that is no member.
+members when you set or force the tag.
 
 ## A scalar seed takes the program's type
 
