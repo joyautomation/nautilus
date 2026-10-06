@@ -302,10 +302,13 @@
 			for (const [l, name] of refs) {
 				if (declared.has(l) || insts.has(l) || l === 'true' || l === 'false') continue;
 				const tag = pou ? undefined : tags.get(l);
-				// A typed manifest tag is in scope in the PROGRAM without a
-				// declaration (#177/#210): nothing to offer. An untyped one
-				// still is offered, so the use can give it a type.
-				if (tag?.type) continue;
+				// A manifest tag is in scope in the PROGRAM without a
+				// declaration (#177/#210): nothing to offer when its type is
+				// what the use needs. An untyped tag is still offered, and so
+				// is one whose type only reads REAL from a number seed while
+				// the use says INT (a CTU's CV, #219): declaring it is how the
+				// program states the integer.
+				if (tag?.type && offerType(used.get(l), tag.type).toUpperCase() === tag.type.toUpperCase()) continue;
 				out.push({
 					name,
 					pou,
