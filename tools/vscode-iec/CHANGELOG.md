@@ -81,6 +81,14 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   a project is deployed to (experimental — the *Authoring for Logix*
   guide).
 
+- **A Logix project's target rules squiggle as you type.** In a project
+  whose `nautilus.yaml` has a `target: logix` section, a construct the
+  Allen-Bradley writer cannot express (a `TP` instance, a user FUNCTION,
+  an array that does not start at 0) is an error on its line while you
+  type, with the rule ID (`logix/fb`) in the Problems panel. These are the
+  diagnostics `naut check` already printed for such a project; they show
+  once the file compiles. Needs a `naut` newer than 0.15.0.
+
 ### Fixed
 
 - **The FB monitor CodeLens shows the real position.** It said "1 of 2"

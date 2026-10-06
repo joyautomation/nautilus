@@ -106,17 +106,52 @@ func (lw *lowered) blockSource(name string) (string, string) {
 			}
 		}
 	}
+	if b, ok := lw.libs().blocks[strings.ToLower(name)]; ok {
+		return b.src, b.lang
+	}
+	return "", ""
+}
+
+// libIndex is what the libraries declare, read once per lowering. The
+// rules ask per operand, and the editor runs them on every keystroke:
+// rescanning every library per question cost 100 ms on a 45-line routine
+// with a large project library (corpus, 2026-10-05).
+type libIndex struct {
+	blocks   map[string]libBlock // by lower-cased name; the first library wins
+	fbs, fns map[string]bool     // FUNCTION_BLOCKs and FUNCTIONs an ST library declares
+}
+
+type libBlock struct{ src, lang string }
+
+// libs builds the index on first use, after the lowering has settled its
+// library list (an ST program's own blocks join it), and shares it with
+// the block bodies lowered beneath.
+func (lw *lowered) libs() *libIndex {
+	if lw.libIx != nil {
+		return lw.libIx
+	}
+	ix := &libIndex{blocks: map[string]libBlock{}, fbs: map[string]bool{}, fns: map[string]bool{}}
 	for _, lib := range lw.opts.Libs {
+		lang := "st"
+		if ld.HasBlock(lib) {
+			lang = "ld"
+		}
 		for _, sig := range fbcatalog.ScanSigs(lib) {
-			if strings.EqualFold(sig.Name, name) {
-				if ld.HasBlock(lib) {
-					return lib, "ld"
-				}
-				return lib, "st"
+			if k := strings.ToLower(sig.Name); ix.blocks[k] == (libBlock{}) {
+				ix.blocks[k] = libBlock{lib, lang}
+			}
+		}
+		if prog, err := st.Parse(lib); err == nil {
+			for _, fb := range prog.FBDecls {
+				ix.fbs[strings.ToLower(fb.Name)] = true
+			}
+			for _, fn := range prog.FuncDecls {
+				ix.fns[strings.ToLower(fn.Name)] = true
 			}
 		}
 	}
-	return "", ""
+	lw.libIx = ix
+	return ix
 }
 
 // child is a lowering scope for one block body: its own variables, the
@@ -124,7 +159,7 @@ func (lw *lowered) blockSource(name string) (string, string) {
 func (lw *lowered) child(name string, vars []ld.VarDecl) *lowered {
 	c := &lowered{model: &ld.Model{Name: name}, opts: lw.opts, vars: map[string]ld.VarDecl{},
 		presetVars: map[string]bool{}, genNames: map[string]bool{}, types: lw.types, rawTypes: lw.rawTypes,
-		aois: lw.aois, inAOI: true, st: lw.st}
+		aois: lw.aois, inAOI: true, st: lw.st, libIx: lw.libs()}
 	c.opts.Program = name
 	for _, v := range vars {
 		c.vars[strings.ToLower(v.Name)] = v

@@ -1204,10 +1204,32 @@ Rebased onto main, website guide *Authoring for Logix (experimental)*,
 experimental labels on the target's CLI surface, extension CHANGELOG;
 draft PR #225. Known gap carried as a follow-up: `naut lsp` does not run
 the Logix target's rules, so the editor's live diagnostics do not show
-them yet (§5.1); `naut check` does.
+them yet (§5.1); `naut check` does. (Closed by the follow-up below.)
 
 **James's call (2026-10-05):** guide and this phase log reviewed and
 approved; the PR comes out of draft.
+
+### Follow-up — the target's rules in the editor (2026-10-05)
+
+**Built:** `naut lsp` runs the Logix target's rules on every keystroke,
+closing the §5.1 gap the pre-PR entry carried. It matches `naut check`:
+only in a project whose manifest has `target: logix` (read through the
+LSP's modtime-keyed manifest cache, so adding the section takes effect
+without a restart), only on a buffer that compiles, with the same library
+sources (the dialect's first, unsaved sibling buffers winning). Each rule
+is an error squiggle over its whole line (the writer reports no column),
+source `nautilus (logix target)`, the rule ID as the diagnostic's code.
+One behaviour was settled for both: a file with no PROGRAM, in any
+language, is a library and is checked where a program uses it, so an FBD
+block library no longer draws the "only ladder and ST" diagnostic from
+`naut check`; an FBD or SFC *program* still does, on its PROGRAM line.
+**Cost, measured on the corpus** (133 imported program routines, writer
+check only, steady state): it first ran 9 ms median and up to ~150 ms on
+a 45-line routine with a large project library, because every operand's
+block lookup rescanned every library. The writer now indexes the
+libraries once per lowering: 4.3 ms median, 13 ms p90, 26 ms worst, 7 ms
+for the largest (1,385-line) routine; no debounce. Corpus numbers
+unchanged (97.2 % of rungs; 53 identical + 15 equivalent, 0 refused).
 
 ## 8. The demo this enables
 

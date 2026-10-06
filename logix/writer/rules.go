@@ -1,10 +1,11 @@
 package writer
 
 // The rule table: every reason the Logix target refuses a construct, with
-// a stable identifier. `naut check --target logix` and `naut logix write`
-// run the same lowering, so a rule fires in the editor on the keystroke
-// that introduces the construct and never for the first time at import or
-// build (logix-authoring.md §5.1).
+// a stable identifier. The editor (`naut lsp`, internal/lsp/logix.go),
+// `naut check --target logix` and `naut logix write` run the same
+// lowering, so a rule fires in the editor on the keystroke that introduces
+// the construct and never for the first time at import or build
+// (logix-authoring.md §5.1).
 //
 // A rule's message always names the construct and the alternative. When a
 // failure first shows up at SDK import or build instead of here, the fix is

@@ -35,10 +35,13 @@ const (
 
 // Diagnostic is a compiler finding published to the editor.
 type Diagnostic struct {
-	Range    Range  `json:"range"`
-	Severity int    `json:"severity,omitempty"`
-	Source   string `json:"source,omitempty"`
-	Message  string `json:"message"`
+	Range    Range `json:"range"`
+	Severity int   `json:"severity,omitempty"`
+	// Code identifies the rule that fired (logix/fb), shown beside the
+	// message in the Problems panel.
+	Code    string `json:"code,omitempty"`
+	Source  string `json:"source,omitempty"`
+	Message string `json:"message"`
 }
 
 // PublishDiagnosticsParams is the payload of textDocument/publishDiagnostics.
