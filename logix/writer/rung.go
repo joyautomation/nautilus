@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/ld"
-	"github.com/joyautomation/nautilus/lang/st"
 )
 
 // Rung lowering: the ladder graph's elements to Logix neutral text.
@@ -761,30 +760,12 @@ func (lw *lowered) userBlock(typ string) bool {
 			return true
 		}
 	}
-	for _, lib := range lw.opts.Libs {
-		if prog, err := st.Parse(lib); err == nil {
-			for _, fb := range prog.FBDecls {
-				if strings.EqualFold(fb.Name, typ) {
-					return true
-				}
-			}
-		}
-	}
-	return false
+	return lw.libs().fbs[strings.ToLower(typ)]
 }
 
 // userFunction reports whether a name is a user FUNCTION a library declares.
 func (lw *lowered) userFunction(name string) bool {
-	for _, lib := range lw.opts.Libs {
-		if prog, err := st.Parse(lib); err == nil {
-			for _, fn := range prog.FuncDecls {
-				if strings.EqualFold(fn.Name, name) {
-					return true
-				}
-			}
-		}
-	}
-	return false
+	return lw.libs().fns[strings.ToLower(name)]
 }
 
 // splitBinding reads `PIN := value` or `PIN => target`.

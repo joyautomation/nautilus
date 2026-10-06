@@ -229,19 +229,19 @@ func runCheck(args []string) int {
 
 // checkLogixTarget reports every construct in one source file that the
 // Allen-Bradley writer (logix/writer) cannot express, in the same
-// gcc-style lines as a compile error. Only ladder is in the v1 subset; a
-// file in another language is one diagnostic naming the phase that adds
-// it. Returns true when anything was reported.
+// gcc-style lines as a compile error. Ladder and ST programs are in the
+// subset; a program in another language is one diagnostic naming the
+// phase that adds it. Returns true when anything was reported. The editor
+// runs the same check (internal/lsp/logix.go); the two must agree.
 func checkLogixTarget(f, source string, libs []string) bool {
+	// A library, in any language, is checked where a program uses it: the
+	// writer checks the types and blocks a program actually reaches.
+	if !stproject.DeclaresProgram(source) {
+		return false
+	}
 	if writer.Language(f) == "" {
 		fmt.Printf("%s: logix target: only ladder (.ld) and structured text (.st) programs are in the Logix subset; FBD and SFC come later\n", f)
 		return true
-	}
-	// A library of TYPE declarations (and constants) is fine: the writer
-	// checks the types a program actually uses. A library of blocks is
-	// refused where a program uses one.
-	if strings.EqualFold(filepath.Ext(f), ".st") && !stproject.DeclaresProgram(source) {
-		return false
 	}
 	diags, err := writer.CheckProgram(f, source, libs...)
 	if err != nil {

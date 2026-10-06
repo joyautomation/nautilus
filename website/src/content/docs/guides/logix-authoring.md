@@ -136,10 +136,11 @@ MainProgram.ld:18:1: logix target: pulse:TP: not in the Logix v1 subset; ...
   the v1 blocks are TON, TOF and CTU (and TONR with dialect: logix) [logix/fb]
 ```
 
-A project with a `target: logix` section gets these from `naut check`
-without asking; `naut check --target logix` asks for them on any project.
-(The editor's live diagnostics do not run them yet.) Each carries a stable
-rule ID:
+A project with a `target: logix` section gets these without asking: in
+the editor as you type, once the file compiles, and from `naut check`;
+`naut check --target logix` asks for them on any project. Each carries a
+stable rule ID, which the editor's Problems panel shows beside the
+message:
 
 | Rule | What it enforces |
 |---|---|

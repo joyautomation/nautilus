@@ -43,6 +43,10 @@ type manifestCache struct {
 type manifestEntry struct {
 	mod  int64
 	tags []ProjectTag
+	// logix: the manifest declares `target: logix`, so the project's
+	// programs are checked against the Logix writer's rules as they are
+	// typed, the same rules `naut check` runs for such a project.
+	logix bool
 }
 
 var manifests = manifestCache{entries: map[string]*manifestEntry{}}
@@ -75,6 +79,22 @@ func ProjectTags(path string) []ProjectTag { return projectTags(path) }
 // nil when there is no manifest (a bare .st file outside a project, which
 // is a perfectly good thing to edit).
 func projectTags(path string) []ProjectTag {
+	if e := projectManifest(path); e != nil {
+		return e.tags
+	}
+	return nil
+}
+
+// logixTarget reports whether the manifest governing path declares a
+// Logix deploy target.
+func logixTarget(path string) bool {
+	e := projectManifest(path)
+	return e != nil && e.logix
+}
+
+// projectManifest returns the cached reading of the manifest governing
+// path, or nil when there is none.
+func projectManifest(path string) *manifestEntry {
 	mpath, ok := findManifest(path)
 	if !ok {
 		return nil
@@ -89,24 +109,25 @@ func projectTags(path string) []ProjectTag {
 	defer manifests.mu.Unlock()
 	prev, hadPrev := manifests.entries[mpath]
 	if hadPrev && prev.mod == mod {
-		return prev.tags
+		return prev
 	}
-	tags, err := readTags(mpath)
+	e, err := readManifest(mpath)
 	if err != nil {
 		// A manifest being edited is invalid for most of the keystrokes it
 		// takes to add a tag. Serving the last good answer beats completion
 		// blinking out mid-edit — and the failure is deliberately NOT
 		// cached, so the next keystroke retries.
 		if hadPrev {
-			return prev.tags
+			return prev
 		}
 		return nil
 	}
-	manifests.entries[mpath] = &manifestEntry{mod: mod, tags: tags}
-	return tags
+	e.mod = mod
+	manifests.entries[mpath] = e
+	return e
 }
 
-func readTags(mpath string) ([]ProjectTag, error) {
+func readManifest(mpath string) (*manifestEntry, error) {
 	m, err := project.ReadManifest(os.DirFS(filepath.Dir(mpath)), "")
 	if err != nil {
 		return nil, err
@@ -132,7 +153,10 @@ func readTags(mpath string) ([]ProjectTag, error) {
 			Desc: t.Desc,
 		})
 	}
-	return out, nil
+	return &manifestEntry{
+		tags:  out,
+		logix: m.Target != nil && m.Target.Logix != nil,
+	}, nil
 }
 
 // iecTypeOf infers a tag's IEC type from its declared initial value. The
