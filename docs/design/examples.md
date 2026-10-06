@@ -43,8 +43,8 @@ release. It also produces the footage and stills for launch content.
 1. **A project is a plant, not a feature demo.** Each has a one-paragraph
    process description, a P&ID-ish mimic, control narrative, alarms and tests.
    Scenarios are generic industry patterns such as water/wastewater, batching
-   and remote sites. **No client material:** pomona and stax are Tier 3 (see
-   `content/sourcing.md`), so no names, tag conventions or logic from them.
+   and remote sites. **No client material:** no names, tag conventions or logic
+   from client work.
 2. **Manifest-first.** Each project runs with `naut run` and has no Go; the
    plant model is ST (`sim.st`, `lib/physics`-style). Keep exactly one small
    Go-tier example (the SDK story: custom driver or richer sim), clearly

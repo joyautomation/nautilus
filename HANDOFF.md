@@ -406,9 +406,8 @@ Next, in rough priority:
    timer state and warning→alarm escalation (evaluated 2026-09-09 against
    OpenBridge; not adopted as code, the ISA-18.2 skeleton stays).
 4. **Remote counter RESET coil / task scan-order guarantee / remote-program FB
-   pin reads** — asks from a real ControlLogix transpile (see the Riverbend
-   demo's sites/aep/README.md limitations table; abstract it as "a real
-   ControlLogix transpile").
+   pin reads** — asks from a real ControlLogix transpile (see that transpile's
+   limitations table).
 5. **Alarm notifiers beyond log/webhook**.
 6. **Native-Go function blocks** alongside ST (both lowering to the IR).
 7. **Extension 0.10.0** — first stable-channel Marketplace release, when the
