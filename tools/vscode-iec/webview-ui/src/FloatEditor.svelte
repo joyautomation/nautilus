@@ -9,6 +9,11 @@
 		commit: (v: string) => void;
 		multiline?: boolean;
 		suggest?: 'tags' | 'types' | 'functions' | 'assoc';
+		/** Why the last commit was refused — shown under the field, which
+		 * reopens with the text that was typed (never a silent drop). */
+		error?: string;
+		/** A caption above the field (what is being edited). */
+		title?: string;
 	};
 </script>
 
@@ -98,6 +103,12 @@
 </script>
 
 {#if edit}
+	{#if edit.title}
+		<div class="fcap" style="left: {edit.at.x}px; top: {edit.at.y - 20}px">{edit.title}</div>
+	{/if}
+	{#if edit.error}
+		<div class="ferr" role="alert" style="left: {edit.at.x}px; top: {edit.at.y + 24}px; max-width: {Math.max(edit.at.w, 260)}px">{edit.error}</div>
+	{/if}
 	{#if edit.multiline}
 		<textarea
 			bind:this={ta}
@@ -124,6 +135,26 @@
 {/if}
 
 <style>
+	.fcap,
+	.ferr {
+		position: fixed;
+		z-index: 31;
+		font-size: 11px;
+		padding: 2px 6px;
+		border-radius: 3px;
+		pointer-events: none;
+		white-space: nowrap;
+	}
+	.fcap {
+		color: var(--nx-muted);
+		background: var(--nx-panel-bg);
+	}
+	.ferr {
+		white-space: normal;
+		color: var(--nx-err);
+		background: var(--nx-err-bg, var(--nx-panel-bg));
+		border: 1px solid var(--nx-err);
+	}
 	.note {
 		position: fixed;
 		z-index: 30;

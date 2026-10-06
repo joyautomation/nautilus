@@ -559,6 +559,119 @@ sfc_rename_step() {
   assert_file_contains "$G_FILE" "STEP +$2\\b"
 }
 
+# _sfc_sel_js <step | From->To> — true when that step / transition is the
+# chart's selection.
+_sfc_sel_js() {
+  if [[ $1 == *'->'* ]]; then printf '!!(%s)?.closest("g.trans")?.classList.contains("selected")' "$(sfc_trans_el "$1")"
+  else printf '!!(%s)?.classList.contains("selected")' "$(sfc_step_el "$1")"; fi
+}
+_sfc_gf() { [[ $G_FILE == /* ]] && echo "$G_FILE" || echo "$PROJ/$G_FILE"; }
+_sfc_sel_now() { js '[...doc.querySelectorAll("svg.chart .selected")].map(g => g.dataset.id).join(",") || "nothing"' | tr -d '"'; }
+
+# sfc_keynav <step> <keys> <expect> — select <step>, press the arrow keys
+# (xdotool names, "Down Down Right"), and the selection must land on
+# <expect>: a step, or a From->To transition. The arrows walk the chart
+# along its flow (#76): ↓ step → its first transition → that transition's
+# leftmost target, ↑ back, ← → to the neighbouring step or alternative
+# branch. Walking writes nothing.
+sfc_keynav() {
+  local step=$1 keys=$2 want=$3 k before
+  G_WHAT="$keys from $step"
+  g_save; before=$(md5sum <"$(_sfc_gf)")
+  sfc_select_step "$step" || return 1
+  for k in $keys; do g_key "$k"; done
+  wait_js "$(_sfc_sel_js "$want")" 3 || { g_err "$keys from $step selected $(_sfc_sel_now), not $want"; return 1; }
+  g_save
+  [[ $(md5sum <"$(_sfc_gf)") == "$before" ]] || { g_err "walking the chart changed $G_FILE"; return 1; }
+}
+
+# sfc_name_transition <From->To> <name> — select the transition, F2, type
+# the name: TRANSITION <name> FROM …, drawn above its condition (#76).
+sfc_name_transition() {
+  G_WHAT="name $1 $2"
+  sfc_select_trans "$1" || return 1
+  g_key F2
+  float_edit "$2" || return 1
+  sfc_wait "[...doc.querySelectorAll('svg.chart text.tname')].some(t => t.textContent.trim() === $(_q "$2"))" || return 1
+  assert_file_contains "$G_FILE" "TRANSITION +$2 +FROM\\b"
+}
+
+# _sfc_trans_line <From->To> — the file line of that transition's header
+# (FROM and TO may be step-sets holding the names).
+_sfc_trans_line() {
+  local from=${1%%->*} to=${1##*->}
+  grep -nE "^ *TRANSITION\\b.*FROM +\\(?[A-Za-z0-9_, ]*\\b$from\\b[A-Za-z0-9_, ]*\\)? +TO +\\(?[A-Za-z0-9_, ]*\\b$to\\b" "$(_sfc_gf)" | head -1 | cut -d: -f1
+}
+
+# sfc_reorder_branch <From->To> <left|right> [key|button] — move an
+# alternative branch earlier (left: higher priority) or later among the
+# transitions sharing its source (#181): Alt+←/→, or the palette's
+# "◀ priority" / "priority ▶". Priority is file order, so the header line
+# must move that way; the transition stays selected for the next press.
+sfc_reorder_branch() {
+  local tr=$1 dir=$2 how=${3:-key} before after i
+  G_WHAT="reorder $tr $dir"
+  sfc_select_trans "$tr" || return 1
+  g_save; before=$(_sfc_trans_line "$tr")
+  [[ -n $before ]] || { g_err "no TRANSITION $tr in $G_FILE"; return 1; }
+  if [[ $how == key ]]; then g_key "alt+$([[ $dir == left ]] && echo Left || echo Right)"
+  else click_button "$([[ $dir == left ]] && echo '◀ priority' || echo 'priority ▶')" || return 1; fi
+  for i in 1 2 3 4 5 6; do
+    g_save; after=$(_sfc_trans_line "$tr")
+    [[ -n $after && $after != "$before" ]] && break
+  done
+  if [[ $dir == left ]]; then (( after < before )) || { g_err "$tr stayed at line $before (now ${after:-?}): not moved earlier"; return 1; }
+  else (( after > before )) || { g_err "$tr stayed at line $before (now ${after:-?}): not moved later"; return 1; }; fi
+  wait_js "$(_sfc_sel_js "$tr")" 5 || { g_err "after the move the selection is $(_sfc_sel_now), not $tr"; return 1; }
+}
+
+# sfc_assoc_el <step> <target> — <step>'s association row naming <target>.
+sfc_assoc_el() { printf '[...(%s)?.querySelectorAll("g.assocrow") ?? []].find(r => r.querySelector("text.assoctarget")?.textContent.startsWith(%s))' "$(sfc_step_el "$1")" "$(_q "$2")"; }
+
+# sfc_create_action <step> <action> <ST body> — <step> associates <action>,
+# which is no ACTION (nor variable) yet: double-click its row, the ST-body
+# editor opens, type the body, Ctrl+Enter — the ACTION block is written
+# (#182). (sfc_add_action <step> N <action> first.)
+sfc_create_action() {
+  local step=$1 act=$2 body=$3 first
+  G_WHAT="ACTION $act from $step"
+  dclick_el "$(sfc_assoc_el "$step" "$act")?.querySelector('text.assoctarget')" || { g_err "no association $act on $step"; return 1; }
+  wait_js 'doc.activeElement?.tagName === "TEXTAREA"' 5 || { g_err "double-click on $step's $act row opened $(js 'doc.activeElement?.tagName ?? "nothing"'), not the ST-body editor"; return 1; }
+  g_key ctrl+a; g_type "$body"; g_key ctrl+Return; sleep 1
+  assert_file_contains "$G_FILE" "^ *ACTION +$act *:" || return 1
+  first=$(head -1 <<<"$body" | sed 's/[][\.*^$()+?{}|]/\\&/g')
+  assert_file_contains "$G_FILE" "$first"
+}
+
+# sfc_declare <name> <type> [ext|local|const] [init] — the chart's "vars"
+# panel (shared with FBD/LD): the section toggle cycles ext → local → const
+# (VAR CONSTANT, #180), then name, type, initial value, Enter. The panel
+# stays open.
+sfc_declare() {
+  local name=$1 typ=$2 sec=${3:-ext} init=${4:-} i re
+  G_WHAT="declare $name ($sec)"
+  js_true 'doc.querySelector(".addrow")' || click_button vars || return 1
+  wait_js 'doc.querySelector(".addrow input.grow")' 4 || { g_err "the vars panel did not open"; return 1; }
+  for i in 1 2 3; do
+    [[ $(js 'doc.querySelector(".addrow button.toggle")?.textContent.trim()' | tr -d '"') == "$sec" ]] && break
+    click_el 'doc.querySelector(".addrow button.toggle")' || return 1
+  done
+  [[ $(js 'doc.querySelector(".addrow button.toggle")?.textContent.trim()' | tr -d '"') == "$sec" ]] || { g_err "the section toggle has no $sec"; return 1; }
+  click_el 'doc.querySelector(".addrow input.grow")' || return 1
+  g_key ctrl+a; g_type "$name"
+  click_el 'doc.querySelector(".addrow .typefield input")' || return 1
+  g_key ctrl+a; g_type "$typ"; g_key Escape; sleep 0.3
+  if [[ -n $init ]]; then
+    click_el 'doc.querySelector(".addrow input.initfield")' || { g_err "the vars panel has no initial-value field"; return 1; }
+    g_key ctrl+a; g_type "$init"
+  fi
+  click_el 'doc.querySelector(".addrow button.add")' || return 1
+  sleep 1.5
+  re=$(printf '%s' "$typ${init:+ := $init}" | sed 's/[][\.*^$()+?{}|]/\\&/g')
+  assert_file_contains "$G_FILE" "^ *$name *: *$re *;" || return 1
+  [[ $sec != const ]] || assert_file_contains "$G_FILE" "^ *VAR +CONSTANT *$"
+}
+
 # ── Ladder ──────────────────────────────────────────────────────────────────
 # LadderView.svelte: one <svg class="rsvg"> per rung, its name in
 # <tspan class="rungname"> (plus a <title> child — read the text nodes

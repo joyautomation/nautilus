@@ -204,3 +204,12 @@ plain declarations. `naut check` stayed clean through every one of them.
 
 17–20 are the habits-table rows that are open gaps rather than deliberate
 declines.
+
+**SFC editor parity (PR #233):** findings 5 (an empty `.sfc` is one
+`naut check` warning; no "new POU" command yet), 6, 7, 8, 9, 11, 14 and 15
+are fixed; their build rows (`check-empty-sfc`, `habit-vars-constant`,
+`sfc-join-drawn-as-convergence`, `habit-abort-priority` — now after
+`sfc_reorder_branch`, with the text move gone — `habit-keyboard-nav`,
+`habit-transition-name`, `habit-create-action-body`, `check-action-gap`,
+`habit-assoc-time-syntax`, `habit-assoc-typed-order`) expect PASS, and
+`ACTION HeatCtl` is written by gesture (`sfc_create_action`).

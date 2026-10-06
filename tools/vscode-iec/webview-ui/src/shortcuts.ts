@@ -107,18 +107,22 @@ export const SFC_SHORTCUTS: ShortcutGroup[] = [
 		rows: [
 			{ keys: 'Click', does: 'Select a step, transition, action or note', hint: 'click: select' },
 			{ keys: 'Ctrl / Shift + click', does: 'Add a step to or remove it from the selection', hint: 'Ctrl-click: multi-select' },
-			{ keys: 'Ctrl + A', does: 'Select every step' }
+			{ keys: 'Ctrl + A', does: 'Select every step' },
+			{ keys: 'Arrow keys', does: 'Walk the chart along its flow: ↓ step → its transition → the next step, ↑ back, ← → to the neighbouring step or alternative branch; → from a step enters its actions', hint: 'arrows: walk the chart' }
 		]
 	},
 	{
 		title: 'Edit',
 		rows: [
+			{ keys: 'Enter', does: 'Edit the selection in place: a step’s name, a transition’s condition, an action (its ST body), a note' },
+			{ keys: 'F2', does: 'Rename the selected step, or name the selected transition (the label above its condition; "-" clears it)' },
 			{ keys: '+ step', does: 'With a step selected: a new step under it, joined by a transition (condition in the form); nothing selected: a free step' },
 			{ keys: '+ transition', does: 'From the selected step to an existing step, or "other… (new step)" to create the target too' },
 			{ keys: '+ alt branch', does: 'Another transition out of the selected step (or the selected transition’s source) — an alternative divergence; priority is file order' },
 			{ keys: '+ parallel branch', does: 'Widen the selected transition’s TO with a new step — a simultaneous divergence (a join after it waits for the new leg too)' },
 			{ keys: '+ join', does: 'Add another step to the selected transition’s FROM — a simultaneous convergence that fires once every source is active' },
-			{ keys: 'Double-click', does: 'Rename a step, edit a condition, an action or its ST body', hint: 'dblclick: rename / edit condition / edit action' },
+			{ keys: 'Double-click', does: 'Rename a step, edit a condition or a transition’s name, an action or its ST body — a new action’s first body writes its ACTION block; the qualifier column edits the association line', hint: 'dblclick: rename / edit condition / edit action' },
+			{ keys: '◀ priority ▶ / Alt + ← →', does: 'Move the selected alternative branch left or right among its siblings — priority is file order, leftmost first (the small numbers on the bars)' },
 			{ keys: 'Enter / Esc', does: 'Commit / cancel an in-place edit or the add form' },
 			{ keys: 'Drag a step body', does: 'Move it — the position is pinned in the file', hint: 'drag a step: pin layout' },
 			{ keys: 'Drag a step’s ⊙ handle', does: 'Drop on another step to connect them with a transition', hint: 'drag ⊙ onto a step: connect' },

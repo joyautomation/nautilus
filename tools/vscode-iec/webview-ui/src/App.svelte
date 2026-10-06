@@ -157,7 +157,7 @@
 		init: string,
 		at: { x: number; y: number; w: number },
 		commit: (v: string) => void,
-		opts?: { multiline?: boolean; suggest?: 'tags' | 'types' | 'functions' | 'assoc' }
+		opts?: { multiline?: boolean; suggest?: 'tags' | 'types' | 'functions' | 'assoc'; error?: string; title?: string }
 	) {
 		editor?.open({ init, at, commit, ...opts });
 	}
@@ -780,13 +780,15 @@
 		onDeclare={mode === 'ld'
 			? (name, type, section) => postLd({ type: 'declareVar', name, varType: type, section })
 			: mode === 'sfc'
-				? (name, type, section) => postSfc({ type: 'declareVar', name, varType: type, section })
+				? (name, type, section, init) => postSfc({ type: 'declareVar', name, varType: type, section, init })
 				: undefined}
 		onDelete={mode === 'ld'
 			? (name) => postLd({ type: 'deleteVar', name })
 			: mode === 'sfc'
 				? (name) => postSfc({ type: 'deleteVar', name })
 				: undefined}
+		sections={mode === 'sfc' ? ['VAR_EXTERNAL', 'VAR', 'VAR CONSTANT'] : undefined}
+		withInit={mode === 'sfc'}
 	/>
 	{#if inspect}
 		<InstancePanel inst={inspect} onclose={() => (inspect = null)} />

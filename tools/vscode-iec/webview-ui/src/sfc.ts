@@ -156,6 +156,7 @@ export function computeRanksAndColumns(model: SfcModel): {
 	}
 
 	const treeChildren = new Map<string, string[]>();
+	const parentOf = new Map<string, string>();
 	const queue: string[] = [initial.id];
 	rankOf.set(initial.id, 0);
 	let qi = 0;
@@ -164,6 +165,7 @@ export function computeRanksAndColumns(model: SfcModel): {
 		for (const kid of childrenOf.get(cur) ?? []) {
 			if (rankOf.has(kid)) continue; // already discovered: a jump/converge edge, not a tree edge
 			rankOf.set(kid, rankOf.get(cur)! + 1);
+			parentOf.set(kid, cur);
 			let arr = treeChildren.get(cur);
 			if (!arr) {
 				arr = [];
@@ -171,6 +173,44 @@ export function computeRanksAndColumns(model: SfcModel): {
 			}
 			arr.push(kid);
 			queue.push(kid);
+		}
+	}
+
+	// A simultaneous convergence's step sits below EVERY leg it joins, not
+	// just the one BFS reached it through first: `(Wash, HeatDone) TO
+	// Drain`, legs of different lengths, puts Drain under HeatDone too —
+	// else the join reads as a loop back (#187). Each forward convergence
+	// edge (its target no tree ancestor of the source — that would be a loop
+	// back to an earlier step) is a "below" constraint, and the tree edges
+	// carry the push down to the target's own successors. Bounded passes, so
+	// a pathological chart can't spin.
+	const isAncestor = (anc: string, node: string): boolean => {
+		for (let cur: string | undefined = node; cur !== undefined; cur = parentOf.get(cur)) if (cur === anc) return true;
+		return false;
+	};
+	const below: [string, string][] = [];
+	for (const t of model.trans ?? []) {
+		if (t.from.length < 2) continue;
+		for (const f of t.from) {
+			for (const to of t.to) {
+				const fid = stepId(f);
+				const tid = stepId(to);
+				if (rankOf.has(fid) && rankOf.has(tid) && !isAncestor(tid, fid)) below.push([fid, tid]);
+			}
+		}
+	}
+	if (below.length) {
+		for (const [p, kids] of treeChildren) for (const k of kids) below.push([p, k]);
+		for (let pass = 0; pass <= steps.length; pass++) {
+			let changed = false;
+			for (const [a, b] of below) {
+				const need = rankOf.get(a)! + 1;
+				if (rankOf.get(b)! < need) {
+					rankOf.set(b, need);
+					changed = true;
+				}
+			}
+			if (!changed) break;
 		}
 	}
 
@@ -264,6 +304,9 @@ export type TransRoute = {
 	// with the destination step name(s), rather than a line stretching back
 	// up the canvas.
 	jump?: { x: number; y: number; label: string };
+	/** 1-based priority among the transitions sharing a source step (§2.3:
+	 * declaration order), set only when there are two or more. */
+	prio?: number;
 };
 
 // A rendered diagram note (from a `//` comment run) — a fixed-size box in a
@@ -398,6 +441,7 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 	}
 
 	const trans: TransRoute[] = [];
+	const prioOf = priorities(model);
 	// Transitions whose FROM and/or TO don't fully resolve — collected here,
 	// positioned into OrphanChips once every step's final position is known.
 	const dangling: { t: SfcTransition; anchor?: PlacedStep }[] = [];
@@ -420,6 +464,7 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 				legsOut: [],
 				condX: 0,
 				condY: 0,
+				prio: prioOf.get(t.id),
 				jump: {
 					x: centerX(anchor),
 					// Below the box AND below its action table (plus the
@@ -459,6 +504,7 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 			legsOut: targets.map((p) => ({ x: centerX(p), y1: barY, y2: p.y })),
 			condX: leftOnly ? barX1 + 10 : barX2 + 10,
 			condY: leftOnly ? barY - 12 : barY,
+			prio: prioOf.get(t.id),
 		});
 	}
 
@@ -719,4 +765,114 @@ export function deleteStepsOp(model: SfcModel, ids: string[]): Record<string, un
 	const steps = (model.steps ?? []).filter((s) => ids.includes(s.id));
 	const names = new Set(steps.map((s) => s.name.toLowerCase()));
 	return { type: 'deleteSelection', nodes: [...steps.map((s) => s.id), ...innerTransitions(model, names).map((t) => t.id)] };
+}
+
+// ── alternative branches: priority, reorder ───────────────────────────────
+
+/** The transitions competing with `t` for a source step (§2.3: FROM sets
+ * that share any step), `t` included, in declaration (= priority) order. */
+export function altGroup(model: Pick<SfcModel, 'trans'>, transId: string | undefined): SfcTransition[] {
+	const t = (model.trans ?? []).find((x) => x.id === transId);
+	if (!t) return [];
+	const from = new Set(t.from.map((n) => n.toLowerCase()));
+	return (model.trans ?? []).filter((u) => u.id === t.id || u.from.some((n) => from.has(n.toLowerCase())));
+}
+
+/** Each transition's 1-based priority within its alternative group, for
+ * groups of two or more (the chart's small priority badges). */
+export function priorities(model: Pick<SfcModel, 'trans'>): Map<string, number> {
+	const out = new Map<string, number>();
+	for (const t of model.trans ?? []) {
+		const g = altGroup(model, t.id);
+		if (g.length > 1) out.set(t.id, g.findIndex((u) => u.id === t.id) + 1);
+	}
+	return out;
+}
+
+/** The moveTransition op that raises (-1) or lowers (+1) a transition's
+ * priority, or undefined when it is already first/last or has no rival. */
+export function moveTransitionOp(model: Pick<SfcModel, 'trans'>, transId: string | undefined, delta: -1 | 1): Record<string, unknown> | undefined {
+	const g = altGroup(model, transId);
+	const i = g.findIndex((u) => u.id === transId);
+	if (g.length < 2 || i < 0 || i + delta < 0 || i + delta >= g.length) return undefined;
+	return { type: 'moveTransition', transition: transId, delta };
+}
+
+// ── keyboard navigation (arrow keys along the flow) ───────────────────────
+
+export type NavSel = { kind: 'step'; id: string } | { kind: 'trans'; id: string };
+export type NavDir = 'up' | 'down' | 'left' | 'right';
+
+/** Where an arrow key moves the selection, following the chart's flow:
+ * Down from a step to its first outgoing transition (priority order) and
+ * from a transition to its (leftmost) target; Up the reverse; Left/Right to
+ * the neighbouring step on the same row, or the neighbouring alternative
+ * branch (else the nearest transition on the same row). Nothing selected:
+ * the initial step. Undefined: nowhere to go (the selection stays). */
+export function navigate(model: SfcModel, layout: SfcLayout, sel: NavSel | null, dir: NavDir): NavSel | undefined {
+	const steps = layout.steps;
+	if (!sel) {
+		const init = steps.find((p) => p.step.initial) ?? steps[0];
+		return init ? { kind: 'step', id: init.id } : undefined;
+	}
+	const placed = new Map(steps.map((p) => [p.step.name.toLowerCase(), p]));
+	const cx = (p: PlacedStep) => p.x + p.w / 2;
+	const cy = (p: PlacedStep) => p.y + p.h / 2;
+	const route = (id: string) => layout.trans.find((r) => r.t.id === id);
+	const routePt = (r: TransRoute) => (r.jump ? { x: r.jump.x, y: r.jump.y } : { x: (r.barX1 + r.barX2) / 2, y: r.barY });
+	const leftmost = (names: string[]) =>
+		names
+			.map((n) => placed.get(n.toLowerCase()))
+			.filter((p): p is PlacedStep => !!p)
+			.sort((a, b) => cx(a) - cx(b))[0];
+	// Nearest candidate strictly left/right of x, on roughly the same row.
+	function sideways<T>(items: T[], pt: (v: T) => { x: number; y: number }, x: number, y: number): T | undefined {
+		let best: T | undefined;
+		let bd = Infinity;
+		for (const v of items) {
+			const q = pt(v);
+			const dx = q.x - x;
+			if (Math.abs(q.y - y) > G.RANK_H / 2 || (dir === 'left' ? dx >= -1 : dx <= 1)) continue;
+			if (Math.abs(dx) < bd) {
+				bd = Math.abs(dx);
+				best = v;
+			}
+		}
+		return best;
+	}
+
+	if (sel.kind === 'step') {
+		const p = steps.find((q) => q.id === sel.id);
+		if (!p) return undefined;
+		const name = p.step.name.toLowerCase();
+		const has = (names: string[]) => names.some((n) => n.toLowerCase() === name);
+		if (dir === 'down') {
+			const t = layout.trans.find((r) => has(r.t.from));
+			return t ? { kind: 'trans', id: t.t.id } : undefined;
+		}
+		if (dir === 'up') {
+			const ins = layout.trans.filter((r) => has(r.t.to));
+			const t = ins.find((r) => !r.jump) ?? ins[0];
+			return t ? { kind: 'trans', id: t.t.id } : undefined;
+		}
+		const q = sideways(steps.filter((o) => o.id !== p.id), (o) => ({ x: cx(o), y: cy(o) }), cx(p), cy(p));
+		return q ? { kind: 'step', id: q.id } : undefined;
+	}
+
+	const r = route(sel.id);
+	const t = r?.t ?? (model.trans ?? []).find((x) => x.id === sel.id);
+	if (!t) return undefined;
+	if (dir === 'down' || dir === 'up') {
+		const q = leftmost(dir === 'down' ? t.to : t.from);
+		return q ? { kind: 'step', id: q.id } : undefined;
+	}
+	const group = altGroup(model, t.id).filter((u) => route(u.id));
+	if (group.length > 1) {
+		const i = group.findIndex((u) => u.id === t.id) + (dir === 'left' ? -1 : 1);
+		return i >= 0 && i < group.length ? { kind: 'trans', id: group[i].id } : undefined;
+	}
+	if (!r) return undefined;
+	const at = routePt(r);
+	const o = sideways(layout.trans.filter((u) => u.t.id !== t.id), routePt, at.x, at.y);
+	return o ? { kind: 'trans', id: o.t.id } : undefined;
 }
