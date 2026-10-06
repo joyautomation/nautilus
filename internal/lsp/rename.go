@@ -42,7 +42,7 @@ func (s *Server) handlePrepareRename(m *message) {
 		return
 	}
 	sym := doc.an.lookup(word, pos.Line+1)
-	if sym == nil || sym.Pos.Line == 0 {
+	if sym == nil || (sym.Pos.Line == 0 && !sym.Implicit) {
 		s.w.respondError(m.ID, codeInvalidRequest, fmt.Sprintf("no declaration of %s in this file to rename", word))
 		return
 	}
@@ -75,7 +75,7 @@ func (s *Server) handleRename(m *message) {
 		return
 	}
 	sym := doc.an.lookup(word, p.Position.Line+1)
-	if sym == nil || sym.Pos.Line == 0 {
+	if sym == nil || (sym.Pos.Line == 0 && !sym.Implicit) {
 		s.w.respondError(m.ID, codeInvalidRequest, fmt.Sprintf("no declaration of %s in this file to rename", word))
 		return
 	}
@@ -169,7 +169,7 @@ func (s *Server) renameTagAcrossProject(uri, name, newName string, edits *Worksp
 		if prog.File == self {
 			continue
 		}
-		an := analyzerFor(prog.File)(prog.Body, comp.Prelude, preludeLines)
+		an := analyzerFor(prog.File)(prog.Body, env{prelude: comp.Prelude, preludeLines: preludeLines, tags: projectTagDefs(path)})
 		// The tag is bound in this program only if its VAR_EXTERNAL declares
 		// it; a same-named local elsewhere in the file is a different name.
 		var bound *Symbol
@@ -202,16 +202,16 @@ func (s *Server) renameTagAcrossProject(uri, name, newName string, edits *Worksp
 }
 
 // analyzerFor picks the per-language analysis, as setDocument does.
-func analyzerFor(file string) func(text, prelude string, preludeLines int) analysis {
+func analyzerFor(file string) func(text string, e env) analysis {
 	switch strings.ToLower(filepath.Ext(file)) {
 	case ".fbd":
-		return analyzeFBD
+		return analyzeFBDIn
 	case ".ld":
-		return analyzeLD
+		return analyzeLDIn
 	case ".sfc":
-		return analyzeSFC
+		return analyzeSFCIn
 	}
-	return analyze
+	return analyzeIn
 }
 
 // renameTagInManifest edits, by YAML node position, every place the

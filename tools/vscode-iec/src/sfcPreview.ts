@@ -32,11 +32,13 @@ import {
 import { pickRevisions } from "./revisionPick";
 import { findReferencesFromDiagram, isXrefMessage, postDescriptions } from "./diagramXref";
 
-/** Run `naut sfc graph -` over source text. */
-function sfcGraph(source: string): Promise<{ model?: unknown; error?: string }> {
+/** Run `naut sfc graph -` over source text. `at` (the file the buffer
+ * belongs to) lets the CLI attach the project's manifest tags. */
+function sfcGraph(source: string, at?: string): Promise<{ model?: unknown; error?: string }> {
   const cli = cliCommand();
   return new Promise((resolve) => {
-    const child = execFile(cli, ["sfc", "graph", "-"], cliExecOptions(), (err, stdout) => {
+    const args = at ? ["sfc", "graph", "-", at] : ["sfc", "graph", "-"];
+    const child = execFile(cli, args, cliExecOptions(), (err, stdout) => {
       try {
         const parsed = JSON.parse(stdout) as { error?: string };
         if (parsed.error) return resolve({ error: parsed.error });
@@ -114,7 +116,7 @@ const DEBOUNCE_MS = 250;
 
 /** Post the SFC model (or the parse error) into a webview. */
 async function postSfcModel(webview: vscode.Webview, doc: vscode.TextDocument): Promise<void> {
-  const res = await sfcGraph(doc.getText());
+  const res = await sfcGraph(doc.getText(), doc.uri.scheme === "file" ? doc.uri.fsPath : undefined);
   if (res.error) {
     void webview.postMessage({ type: "error", message: res.error, title: docTitle(doc), lang: "sfc" });
   } else {

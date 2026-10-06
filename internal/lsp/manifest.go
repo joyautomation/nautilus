@@ -18,10 +18,12 @@ package lsp
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/joyautomation/nautilus/internal/project"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 // ProjectTag is one tag as nautilus.yaml declares it.
@@ -44,6 +46,7 @@ type manifestEntry struct {
 	mod   int64
 	files []string // the tag-files it composed, whose modtimes join mod
 	tags  []ProjectTag
+	defs  []runtime.TagDef // the same tags as the compiler scopes them
 }
 
 // modOf is the newest modtime among the manifest and its tag-files: a
@@ -98,6 +101,23 @@ func ProjectTags(path string) []ProjectTag { return projectTags(path) }
 // nil when there is no manifest (a bare .st file outside a project, which
 // is a perfectly good thing to edit).
 func projectTags(path string) []ProjectTag {
+	if e := manifestFor(path); e != nil {
+		return e.tags
+	}
+	return nil
+}
+
+// projectTagDefs is projectTags as the compiler sees them: the tags every
+// program in the project has in scope without declaring them (#177/#210),
+// for runtime.ResolveTagScope.
+func projectTagDefs(path string) []runtime.TagDef {
+	if e := manifestFor(path); e != nil {
+		return e.defs
+	}
+	return nil
+}
+
+func manifestFor(path string) *manifestEntry {
 	mpath, ok := findManifest(path)
 	if !ok {
 		return nil
@@ -106,31 +126,65 @@ func projectTags(path string) []ProjectTag {
 	defer manifests.mu.Unlock()
 	prev, hadPrev := manifests.entries[mpath]
 	if hadPrev && prev.mod == modOf(mpath, prev.files) {
-		return prev.tags
+		return prev
 	}
-	tags, files, err := readTags(mpath)
+	tags, defs, files, err := readTags(mpath)
 	if err != nil {
 		// A manifest being edited is invalid for most of the keystrokes it
 		// takes to add a tag. Serving the last good answer beats completion
 		// blinking out mid-edit — and the failure is deliberately NOT
 		// cached, so the next keystroke retries.
 		if hadPrev {
-			return prev.tags
+			return prev
 		}
 		return nil
 	}
-	manifests.entries[mpath] = &manifestEntry{mod: modOf(mpath, files), files: files, tags: tags}
-	return tags
+	e := &manifestEntry{mod: modOf(mpath, files), files: files, tags: tags, defs: defs}
+	manifests.entries[mpath] = e
+	return e
+}
+
+// manifestTagLocation is where the manifest (or a tag-file) declares the
+// tag name — its tags[].name entry — for go-to-definition on a tag the
+// program names without declaring.
+func manifestTagLocation(uri, name string) (Location, bool) {
+	path, ok := uriToPath(uri)
+	if !ok {
+		return Location{}, false
+	}
+	mpath, ok := findManifest(path)
+	if !ok {
+		return Location{}, false
+	}
+	for _, t := range projectTags(path) {
+		if strings.EqualFold(t.Name, name) {
+			name = t.Name
+			break
+		}
+	}
+	decls := manifestTagDecls(mpath, name)
+	files := make([]string, 0, len(decls))
+	for f := range decls {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	for _, f := range files {
+		for r := range decls[f] {
+			return Location{URI: pathToURI(f), Range: r}, true
+		}
+	}
+	return Location{}, false
 }
 
 // readTags returns the manifest's composed tags and the tag-files they came
 // from (as paths, for the cache's modtime check).
-func readTags(mpath string) ([]ProjectTag, []string, error) {
+func readTags(mpath string) ([]ProjectTag, []runtime.TagDef, []string, error) {
 	dir := filepath.Dir(mpath)
 	m, err := project.ReadManifest(os.DirFS(dir), "")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	defs, _ := project.TagDefs(m)
 	files := make([]string, 0, len(m.TagFiles))
 	for _, f := range m.TagFiles {
 		files = append(files, filepath.Join(dir, filepath.FromSlash(f)))
@@ -156,7 +210,7 @@ func readTags(mpath string) ([]ProjectTag, []string, error) {
 			Desc: t.Desc,
 		})
 	}
-	return out, files, nil
+	return out, defs, files, nil
 }
 
 // iecTypeOf infers a tag's IEC type from its declared initial value. The
@@ -169,6 +223,9 @@ func iecTypeOf(init any) string {
 	case bool:
 		return "BOOL"
 	case string:
+		if x := strings.ToUpper(strings.TrimSpace(init.(string))); strings.HasPrefix(x, "T#") || strings.HasPrefix(x, "TIME#") {
+			return "TIME"
+		}
 		return "STRING"
 	case int, int64, float64:
 		return "REAL"

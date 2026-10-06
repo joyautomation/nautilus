@@ -246,8 +246,9 @@
 	// A retag (or a block's or function's arguments) may name something the
 	// POU doesn't declare: the rung goes red and `naut check` says
 	// "undeclared identifier". Every such name is offered here, per POU. In
-	// the PROGRAM: into VAR_EXTERNAL, typed from nautilus.yaml, when it is a
-	// manifest tag; into VAR (a retained local) either way. In a
+	// the PROGRAM a manifest tag needs no declaration (#177/#210) unless the
+	// manifest cannot type it — then into VAR_EXTERNAL; anything else into
+	// VAR (a retained local). In a
 	// FUNCTION_BLOCK: as a pin (VAR_INPUT for a name the rungs read,
 	// VAR_OUTPUT for one a coil or `=>` writes) or a local — the AOI's
 	// Parameters tab. The type is what the use says (a CTU's CV is INT, a
@@ -301,6 +302,10 @@
 			for (const [l, name] of refs) {
 				if (declared.has(l) || insts.has(l) || l === 'true' || l === 'false') continue;
 				const tag = pou ? undefined : tags.get(l);
+				// A typed manifest tag is in scope in the PROGRAM without a
+				// declaration (#177/#210): nothing to offer. An untyped one
+				// still is offered, so the use can give it a type.
+				if (tag?.type) continue;
 				out.push({
 					name,
 					pou,

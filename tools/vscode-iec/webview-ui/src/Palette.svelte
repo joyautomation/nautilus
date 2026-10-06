@@ -24,10 +24,14 @@
 		funcs = [],
 		insts = [],
 		taken = new Set<string>(),
-		net = undefined
+		net = undefined,
+		tags = []
 	}: {
 		open?: boolean;
 		vars?: VarDecl[];
+		/** The project manifest's tags: in scope without a declaration
+		 * (#177/#210), so the name fields offer them too. */
+		tags?: { name: string; type?: string }[];
 		/** The block catalog from the model (empty from an older CLI). */
 		fbTypes?: LdFbType[];
 		/** The project's FUNCTIONs (the model's `funcs`): the function field
@@ -156,7 +160,14 @@
 		}
 	];
 
-	const tagItems = $derived<SuggestItem[]>(vars.map((v) => ({ name: v.name, detail: v.type })));
+	const tagItems = $derived.by<SuggestItem[]>(() => {
+		const items: SuggestItem[] = vars.map((v) => ({ name: v.name, detail: v.type }));
+		const have = new Set(vars.map((v) => v.name.toLowerCase()));
+		for (const t of tags) {
+			if (!have.has(t.name.toLowerCase())) items.push({ name: t.name, detail: `${t.type ?? ''} · manifest`.trim() });
+		}
+		return items;
+	});
 	const catalog = $derived(fbCatalog(fbTypes));
 	const fnItems = $derived(functionItems(funcs));
 	// The picker's args field shows exactly what goes in: an older CLI's

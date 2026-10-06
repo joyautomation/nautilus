@@ -7,11 +7,13 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/joyautomation/nautilus/internal/stproject"
 	"github.com/joyautomation/nautilus/lang/fbd"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/ld"
 	"github.com/joyautomation/nautilus/lang/sfc"
 	"github.com/joyautomation/nautilus/lang/st"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 // Symbol is a declared name the LSP can navigate to: a variable, an FB
@@ -22,6 +24,11 @@ type Symbol struct {
 	BlockKind string // "VAR", "VAR_INPUT", ... — or "FUNCTION_BLOCK"/"FUNCTION"/"TYPE" for POU/type decls
 	Container string // enclosing POU name; "" for file scope
 	Pos       st.Pos // 1-based declaration site
+	// Implicit marks a project tag the file names without declaring it
+	// (#177/#210): BlockKind "VAR_EXTERNAL", no declaration site here —
+	// it is declared in the manifest. Visible in PROGRAM scope only; a
+	// FUNCTION_BLOCK or FUNCTION body does not see tags implicitly.
+	Implicit bool
 }
 
 // analysis is everything the server derives from one version of a document.
@@ -39,6 +46,28 @@ type analysis struct {
 	// of this text, of its declaration skeleton, or (carryDeclarations) of
 	// the document's previous version.
 	indexed bool
+	// libDiags are errors that lie in a library this document composes,
+	// in the library's own coordinates: published on the library's file,
+	// once, never on this document at 1:1 (#199).
+	libDiags []libDiag
+}
+
+// libDiag is a compile error inside a project library file.
+type libDiag struct {
+	path      string // absolute path of the library
+	pos, end  st.Pos // in the library's own lines
+	msg       string
+	transpile bool // a .ld/.fbd library: the position is in generated ST
+}
+
+// env is the project a document compiles in: the libraries joined ahead
+// of it (segs says which file each prelude line came from) and the tags
+// every program sees without declaring them.
+type env struct {
+	prelude      string
+	preludeLines int
+	segs         []stproject.Segment
+	tags         []runtime.TagDef
 }
 
 // TypeMember is one member of a UDT, as declared.
@@ -63,6 +92,13 @@ type scope struct {
 // resolve, with diagnostic positions remapped back into the user's file.
 // preludeLines is the prelude's line count.
 func analyze(text, prelude string, preludeLines int) analysis {
+	return analyzeIn(text, env{prelude: prelude, preludeLines: preludeLines})
+}
+
+// analyzeIn is analyze in a project env: tags in scope, library errors
+// attributed to their library.
+func analyzeIn(text string, e env) analysis {
+	prelude, preludeLines := e.prelude, e.preludeLines
 	var a analysis
 	a.scopes = scanScopes(text)
 
@@ -86,14 +122,25 @@ func analyze(text, prelude string, preludeLines int) analysis {
 		// working. The parse error above stays the only diagnostic.
 		skel := declSkeleton(text)
 		if sp, err := st.Parse(skel); err == nil {
-			a.index(sp, skel, prelude, preludeLines)
+			lp, _ := a.index(sp, skel, prelude, preludeLines)
+			a.addImplicitTags(e.tags, lp)
 		}
 		return a
 	}
 
 	lowerProg, preludeLines := a.index(prog, text, prelude, preludeLines)
-
-	if _, err := st.Lower(lowerProg); err != nil {
+	opts := a.addImplicitTags(e.tags, lowerProg)
+	// A program's own VAR named like a tag hides the tag in that program.
+	for _, vd := range runtime.ShadowedTags(prog, e.tags) {
+		a.Diags = append(a.Diags, Diagnostic{
+			Range:    spanRange(text, vd.Pos, st.Pos{Line: vd.Pos.Line, Col: vd.Pos.Col + len(vd.Name)}),
+			Severity: SeverityWarning,
+			Source:   "nautilus-st",
+			Message: "local " + vd.Name + " shadows the project tag " + vd.Name +
+				" — this program reads and writes its own " + vd.Name + ", not the tag",
+		})
+	}
+	if _, err := st.LowerWithOpts(lowerProg, opts); err != nil {
 		pos := st.Pos{Line: 1, Col: 1}
 		var end st.Pos
 		msg := err.Error()
@@ -110,9 +157,18 @@ func analyze(text, prelude string, preludeLines int) analysis {
 				end.Line -= preludeLines
 			}
 		} else if preludeLines > 0 {
-			// The error sits inside a sibling library file (duplicate type,
-			// broken FB, ...). Surface it here at 1:1 so it isn't silently
-			// swallowed, but say where it came from.
+			// The error sits inside a library file (duplicate type, broken
+			// FB, ...). It belongs on that file's own line, once — the
+			// server publishes it there — not on every file that composes
+			// the library (#199).
+			if sg, line, ok := stproject.Locate(e.segs, pos.Line); ok {
+				d := libDiag{path: sg.Path, pos: st.Pos{Line: line, Col: pos.Col}, msg: msg, transpile: sg.Transpiled}
+				if end.Line > 0 {
+					d.end = st.Pos{Line: end.Line - pos.Line + line, Col: end.Col}
+				}
+				a.libDiags = append(a.libDiags, d)
+				return a
+			}
 			pos, end = st.Pos{Line: 1, Col: 1}, st.Pos{}
 			msg = "in project library files: " + msg
 		}
@@ -152,11 +208,45 @@ func (a *analysis) index(prog *st.Program, text, prelude string, preludeLines in
 	return lowerProg, preludeLines
 }
 
+// addImplicitTags puts the project's tags in the symbol index as the
+// compiler puts them in scope: every tag the file does not declare itself
+// at program level, typed as runtime.ResolveTagScope types it. Returns the
+// lowering options carrying that scope.
+func (a *analysis) addImplicitTags(tags []runtime.TagDef, lowerProg *st.Program) st.LowerOpts {
+	if len(tags) == 0 {
+		return st.LowerOpts{}
+	}
+	types, _ := st.Types(lowerProg)
+	scope, _ := runtime.ResolveTagScope(tags, types)
+	declared := map[string]bool{}
+	for i := range a.Symbols {
+		if a.Symbols[i].Container == "" {
+			declared[ir.NameKey(a.Symbols[i].Name)] = true
+		}
+	}
+	for _, d := range tags {
+		if d.Name == "" || declared[ir.NameKey(d.Name)] {
+			continue
+		}
+		declared[ir.NameKey(d.Name)] = true
+		typ := d.Type
+		if t := scope.Implicit[d.Name]; typ == "" && t != nil {
+			typ = t.String()
+		}
+		a.Symbols = append(a.Symbols, Symbol{Name: d.Name, Datatype: typ, BlockKind: "VAR_EXTERNAL", Implicit: true})
+	}
+	return scope.LowerOpts()
+}
+
 // analyzeLD compiles a Ladder Diagram document: LD → FBD netlist → the FBD
 // analysis, with the extra line map composed so diagnostics land on the
 // offending RUNG in the .ld source.
 func analyzeLD(text, prelude string, preludeLines int) analysis {
-	fbdText, ldMap, err := ld.TranspileWithLines(text, prelude)
+	return analyzeLDIn(text, env{prelude: prelude, preludeLines: preludeLines})
+}
+
+func analyzeLDIn(text string, e env) analysis {
+	fbdText, ldMap, err := ld.TranspileWithLines(text, e.prelude)
 	if err != nil {
 		var a analysis
 		a.Diags = append(a.Diags, Diagnostic{
@@ -167,7 +257,7 @@ func analyzeLD(text, prelude string, preludeLines int) analysis {
 		})
 		return a
 	}
-	a := analyzeFBD(fbdText, prelude, preludeLines)
+	a := analyzeFBDIn(fbdText, e)
 	for i := range a.Diags {
 		orig := 1
 		if l := a.Diags[i].Range.Start.Line; l >= 0 && l < len(ldMap) {
@@ -197,6 +287,10 @@ func ldErrLine(err error) int {
 // header declarations map 1:1, so hover/completion on variables still work;
 // go-to-definition inside the netlist is approximate for now.
 func analyzeFBD(text, prelude string, preludeLines int) analysis {
+	return analyzeFBDIn(text, env{prelude: prelude, preludeLines: preludeLines})
+}
+
+func analyzeFBDIn(text string, e env) analysis {
 	stText, lineMap, err := fbd.TranspileWithLines(text)
 	if err != nil {
 		var a analysis
@@ -213,7 +307,7 @@ func analyzeFBD(text, prelude string, preludeLines int) analysis {
 		})
 		return a
 	}
-	a := analyze(stText, prelude, preludeLines)
+	a := analyzeIn(stText, e)
 	for i := range a.Diags {
 		// Diagnostics carry 0-based lines; the map is 1-based on both sides.
 		orig := 1
@@ -247,6 +341,10 @@ func analyzeFBD(text, prelude string, preludeLines int) analysis {
 //     machinery, just data the generic ST-hover/completion code already
 //     knows how to render.
 func analyzeSFC(text, prelude string, preludeLines int) analysis {
+	return analyzeSFCIn(text, env{prelude: prelude, preludeLines: preludeLines})
+}
+
+func analyzeSFCIn(text string, e env) analysis {
 	var a analysis
 	// A new, still-empty chart (before the diagram's "initialize"): one
 	// warning that says what to do, not the parser's "must contain an SFC
@@ -296,7 +394,7 @@ func analyzeSFC(text, prelude string, preludeLines int) analysis {
 		return a
 	}
 
-	a = analyze(stText, prelude, preludeLines)
+	a = analyzeIn(stText, e)
 	for i := range a.Diags {
 		// Diagnostics carry 0-based lines; the map is 1-based on both sides.
 		orig := 1
@@ -661,7 +759,7 @@ func (a *analysis) lookup(name string, line int) *Symbol {
 		var ci *Symbol
 		for i := range a.Symbols {
 			s := &a.Symbols[i]
-			if !tier[0](s) {
+			if !tier[0](s) || (s.Implicit && container != "") {
 				continue
 			}
 			if s.Name == name {

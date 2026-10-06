@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"os"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
@@ -39,6 +40,9 @@ func init() {
 type Server struct {
 	w        *writer
 	docs     map[string]*document
+	// libDiags: library URI → reporting document URI → the errors that
+	// document's compile found inside that library (publishLibDiags).
+	libDiags map[string]map[string][]Diagnostic
 	statics  []CompletionItem
 	exited   bool
 	shutdown bool
@@ -162,31 +166,11 @@ func (s *Server) setDocument(uri, text string) {
 		})
 		return
 	}
-	var prelude string
-	var preludeLines int
+	var e env
 	if path, ok := uriToPath(uri); ok {
-		overrides := map[string]string{}
-		for otherURI, otherDoc := range s.docs {
-			if otherURI == uri {
-				continue
-			}
-			if p, ok := uriToPath(otherURI); ok {
-				overrides[p] = otherDoc.text
-			}
-		}
-		prelude, preludeLines = stproject.Prelude(path, overrides)
+		e = s.envFor(uri, path)
 	}
-	an := analyze
-	if strings.HasSuffix(strings.ToLower(uri), ".fbd") {
-		an = analyzeFBD
-	}
-	if strings.HasSuffix(strings.ToLower(uri), ".ld") {
-		an = analyzeLD
-	}
-	if strings.HasSuffix(strings.ToLower(uri), ".sfc") {
-		an = analyzeSFC
-	}
-	doc := &document{text: text, an: an(text, prelude, preludeLines)}
+	doc := &document{text: text, an: analyzerFor(uri)(text, e)}
 	if prev, ok := s.docs[uri]; ok && prev.test == nil {
 		// Not even the declarations parse (a VAR block mid-edit): answer
 		// hover and completion from the last version that did.
@@ -196,6 +180,80 @@ func (s *Server) setDocument(uri, text string) {
 	s.w.notify("textDocument/publishDiagnostics", PublishDiagnosticsParams{
 		URI: uri, Diagnostics: nonNil(doc.an.Diags),
 	})
+	s.publishLibDiags(uri, doc.an.libDiags)
+}
+
+// envFor is the project a document at path compiles in: its libraries
+// (unsaved buffers win over disk) and the manifest's tags.
+func (s *Server) envFor(uri, path string) env {
+	prelude, _, segs := stproject.PreludeParts(path, s.otherBuffers(uri))
+	return env{
+		prelude:      prelude,
+		preludeLines: strings.Count(prelude, "\n"),
+		segs:         segs,
+		tags:         projectTagDefs(path),
+	}
+}
+
+// publishLibDiags reports errors that lie in a library on the library's
+// own file (#199), once, instead of on every document that composes it.
+// A library open in the editor reports its own errors from its own
+// analysis, so it is left alone here. Several documents may compose the
+// same broken library: each one's findings are kept per document and the
+// library's list is their union, so one clean document does not clear
+// what another still sees.
+func (s *Server) publishLibDiags(from string, found []libDiag) {
+	if s.libDiags == nil {
+		s.libDiags = map[string]map[string][]Diagnostic{}
+	}
+	touched := map[string]bool{}
+	for lib, by := range s.libDiags {
+		if _, had := by[from]; had {
+			delete(by, from)
+			touched[lib] = true
+		}
+	}
+	for _, d := range found {
+		lib := pathToURI(d.path)
+		if lib == from {
+			continue
+		}
+		text := ""
+		if raw, err := os.ReadFile(d.path); err == nil {
+			text = string(raw)
+		}
+		r := spanRange(text, d.pos, d.end)
+		if d.transpile {
+			r = lineRange(text, 1)
+		}
+		if s.libDiags[lib] == nil {
+			s.libDiags[lib] = map[string][]Diagnostic{}
+		}
+		s.libDiags[lib][from] = append(s.libDiags[lib][from], Diagnostic{
+			Range: r, Severity: SeverityError, Source: "nautilus-st", Message: d.msg,
+		})
+		touched[lib] = true
+	}
+	for lib := range touched {
+		if _, open := s.docs[lib]; open {
+			continue
+		}
+		var union []Diagnostic
+		seen := map[string]bool{}
+		for _, ds := range s.libDiags[lib] {
+			for _, d := range ds {
+				k := fmt.Sprintf("%d:%d:%s", d.Range.Start.Line, d.Range.Start.Character, d.Message)
+				if !seen[k] {
+					seen[k] = true
+					union = append(union, d)
+				}
+			}
+		}
+		if len(union) == 0 {
+			delete(s.libDiags, lib)
+		}
+		s.w.notify("textDocument/publishDiagnostics", PublishDiagnosticsParams{URI: lib, Diagnostics: nonNil(union)})
+	}
 }
 
 // uriToPath converts a file:// URI to a filesystem path. Non-file schemes
@@ -256,6 +314,14 @@ func (s *Server) handleDefinition(m *message) {
 	sym := (*Symbol)(nil)
 	if word != "" {
 		sym = doc.an.lookup(word, pos.Line+1)
+	}
+	if sym != nil && sym.Implicit {
+		// A tag in scope without a declaration here: its declaration is
+		// the manifest's tags[].name entry.
+		if loc, ok := manifestTagLocation(uri, sym.Name); ok {
+			s.w.respond(m.ID, loc)
+			return
+		}
 	}
 	if sym == nil || sym.Pos.Line == 0 {
 		s.w.respond(m.ID, nil)
@@ -368,9 +434,9 @@ func (s *Server) handleCompletion(m *message) {
 		return
 	}
 	// Inside VAR_EXTERNAL the question is "which of the project's tags do I
-	// want to bind?", and only nautilus.yaml can answer it. Elsewhere in the
-	// program the answer would be actively wrong: an undeclared tag doesn't
-	// compile, so offering one would suggest a name that cannot be used.
+	// want to bind?", and only nautilus.yaml can answer it. Elsewhere in a
+	// program the tags are already in scope (#177/#210) — they come from
+	// the analysis's implicit symbols below, like any declared name.
 	if inVarExternal(doc.text, pos.Line+1) {
 		declared := map[string]bool{}
 		for i := range doc.an.Symbols {
@@ -421,6 +487,10 @@ func (s *Server) handleCompletion(m *message) {
 		if sym.Container != "" && sym.Container != container {
 			continue
 		}
+		// A block body does not see tags implicitly (#177/#210).
+		if sym.Implicit && container != "" {
+			continue
+		}
 		kind := CompletionKindVariable
 		switch sym.BlockKind {
 		case "FUNCTION_BLOCK":
@@ -430,11 +500,20 @@ func (s *Server) handleCompletion(m *message) {
 		case "TYPE":
 			kind = CompletionKindStruct
 		}
-		items = append(items, CompletionItem{
+		item := CompletionItem{
 			Label:  sym.Name,
 			Kind:   kind,
 			Detail: strings.TrimSpace(sym.Datatype + " " + strings.ToLower(sym.BlockKind)),
-		})
+		}
+		if sym.Implicit {
+			// A tag in scope without a declaration: what the manifest says
+			// about it is the useful part.
+			if t, ok := s.manifestTag(uri, sym.Name); ok {
+				item.Detail = t.detail()
+				item.Documentation = &MarkupContent{Kind: "markdown", Value: t.hoverDoc()}
+			}
+		}
+		items = append(items, item)
 	}
 	items = append(items, s.statics...)
 	s.w.respond(m.ID, items)

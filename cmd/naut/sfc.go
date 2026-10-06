@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/joyautomation/nautilus/internal/lsp"
 	"github.com/joyautomation/nautilus/lang/sfc"
 )
 
@@ -22,6 +23,7 @@ Usage:
                               runs these and then the ST-level hop
                               (transpile + lower) as well.
   naut sfc graph <file>   Emit the diagram render model for a .sfc file
+  naut sfc graph - [file] The same for source on stdin; file locates its project
                               as JSON on stdout: steps (with action
                               associations), transitions (with derived
                               kind: normal/alt/simDiverge/simConverge),
@@ -68,14 +70,22 @@ func runSFC(args []string) int {
 }
 
 func runSFCGraph(args []string) int {
-	if len(args) != 1 {
+	if len(args) < 1 || len(args) > 2 {
 		fmt.Fprint(os.Stderr, sfcUsage)
 		return 2
 	}
 	var src []byte
 	var err error
+	// The file the source belongs to (the path, or — reading an unsaved
+	// buffer from stdin — the optional second argument), for its project's
+	// tags.
+	at := args[0]
 	if args[0] == "-" {
 		src, err = io.ReadAll(os.Stdin)
+		at = ""
+		if len(args) == 2 {
+			at = args[1]
+		}
 	} else {
 		src, err = os.ReadFile(args[0])
 	}
@@ -91,7 +101,12 @@ func runSFCGraph(args []string) int {
 		_ = enc.Encode(map[string]string{"error": gerr.Error()})
 		return 1
 	}
-	if err := enc.Encode(model); err != nil {
+	// The manifest's tags ride along: an action association naming a tag
+	// is a tag, not a new action waiting for its body (#177/#210).
+	if err := enc.Encode(struct {
+		*sfc.Model
+		Tags []lsp.ProjectTag `json:"tags,omitempty"`
+	}{model, graphTags(at)}); err != nil {
 		fmt.Fprintln(os.Stderr, "naut sfc graph:", err)
 		return 2
 	}

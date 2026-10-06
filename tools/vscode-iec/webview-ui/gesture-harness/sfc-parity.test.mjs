@@ -263,6 +263,20 @@ test('S28 #182 SFC: double-click an association to an action that does not exist
 	});
 });
 
+test('S28 #177/#210 SFC: an association naming a manifest tag is the tag, not a new action', async () => {
+	await withPage(async (b) => {
+		await show(b, { ...WASHER, tags: [{ name: 'HeatCtl', type: 'BOOL', role: 'output' }] });
+		const row = `g.assocrow[data-id="st:Heat:0"]`;
+		assert.equal(await b.eval(`document.querySelector('${row} text.assoctarget').classList.contains('isnew')`), false, 'HeatCtl is a tag');
+		await reset(b);
+		const tgt = await center(b, `${row} text.assoctarget`);
+		await b.dblclick(tgt.x, tgt.y);
+		await sleep(200);
+		assert.equal(await floatInput(b), 'INPUT:N HeatCtl', 'the association line, not an ST-body editor');
+		await esc(b);
+	});
+});
+
 test('S29 #180 SFC: the vars panel declares a CONSTANT with its value; a refused declare keeps the typed name', async () => {
 	await withPage(async (b) => {
 		await show(b);
