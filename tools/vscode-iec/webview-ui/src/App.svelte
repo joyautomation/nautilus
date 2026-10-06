@@ -125,6 +125,12 @@
 		const out: { pou: string; label: string; sections: string[] }[] = [];
 		if (ldModel.name || !(ldModel.blocks ?? []).length) out.push({ pou: '', label: `PROGRAM ${ldModel.name ?? ''}`.trim(), sections: ['VAR_EXTERNAL', 'VAR'] });
 		for (const b of ldModel.blocks ?? []) out.push({ pou: b.name, label: `FUNCTION_BLOCK ${b.name}`, sections: ['VAR_INPUT', 'VAR_OUTPUT', 'VAR_IN_OUT', 'VAR'] });
+		// Any other owner a declaration names (a model with no blocks list)
+		// still gets its rows shown.
+		for (const v of ldModel.vars ?? []) {
+			if (v.pou && !out.some((s) => s.pou === v.pou)) out.push({ pou: v.pou, label: v.pou, sections: ['VAR'] });
+		}
+		if (!out.some((s) => s.pou === '') && (ldModel.vars ?? []).some((v) => !v.pou)) out.unshift({ pou: '', label: 'PROGRAM', sections: ['VAR_EXTERNAL', 'VAR'] });
 		return out;
 	});
 	const ldInsts = $derived.by(() => {

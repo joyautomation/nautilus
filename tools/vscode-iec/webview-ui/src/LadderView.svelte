@@ -995,10 +995,10 @@
 							{/if}
 						{:else if n.kind === 'edge'}
 							<title>{n.ann.el.mode === 'N' ? '-' : '+'}{n.ann.el.ref} — {n.ann.el.mode === 'N' ? 'falling' : 'rising'}-edge contact: TRUE for one scan when {n.ann.el.ref} goes {n.ann.el.mode === 'N' ? '1→0' : '0→1'} ({n.ann.el.ref} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope))}){diffNote(n.ann.el)}{editable ? ' — dblclick: retag · P: NO → P → N → NC · Del · drag to move' : ''}</title>
-							<line x1="0" y1={n.h / 2} x2={n.w / 2 - 7} y2={n.h / 2} class="w {wcls(n.ann.in)}" />
-							<line x1={n.w / 2 + 7} y1={n.h / 2} x2={n.w} y2={n.h / 2} class="w {wcls(n.ann.out)}" />
-							<line x1={n.w / 2 - 7} y1="2" x2={n.w / 2 - 7} y2={n.h - 2} class="post" />
-							<line x1={n.w / 2 + 7} y1="2" x2={n.w / 2 + 7} y2={n.h - 2} class="post" />
+							<line x1="0" y1={n.h / 2} x2={n.w / 2 - 8} y2={n.h / 2} class="w {wcls(n.ann.in)}" />
+							<line x1={n.w / 2 + 8} y1={n.h / 2} x2={n.w} y2={n.h / 2} class="w {wcls(n.ann.out)}" />
+							<line x1={n.w / 2 - 8} y1="2" x2={n.w / 2 - 8} y2={n.h - 2} class="post" />
+							<line x1={n.w / 2 + 8} y1="2" x2={n.w / 2 + 8} y2={n.h - 2} class="post" />
 							<text x={n.w / 2} y={n.h / 2 + 3.5} text-anchor="middle" class="mark edgemark">{n.ann.el.mode === 'N' ? 'N' : 'P'}</text>
 							<text x={n.w / 2} y={n.h + 12} text-anchor="middle" class="operand">{trunc(n.ann.el.ref)}</text>
 							{#if valText(n.ann.el.ref, r.scope)}
@@ -1163,7 +1163,7 @@
 		color: var(--nx-muted);
 	}
 	.mark.edgemark {
-		font-size: 10px;
+		font-size: 9px;
 	}
 	.declname {
 		min-width: 90px;
