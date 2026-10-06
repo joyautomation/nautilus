@@ -8,6 +8,7 @@
 	import type { Placed } from './layout';
 	import { pinOffset, EXTENSIBLE, NOTE_LINE_H } from './layout';
 	import { live, liveValue, liveMissing, member, formatLive } from './liveState.svelte';
+	import { withDesc } from './xref.svelte';
 
 	let {
 		data
@@ -95,6 +96,10 @@
 	}
 
 	const problems = $derived(data.problems ?? []);
+	// The identifier this element draws, for Find All References and its
+	// description (xref.svelte.ts): a variable chip (not a literal), or an
+	// FB instance. Plain blocks are inlined expressions — nothing to name.
+	const xref = $derived((chip && !n.src) || n.kind === 'fb' ? n.label : undefined);
 	// Live value pills, mirroring the text editor's inline decorations:
 	// variable chips and coils show their value; FB instances show each
 	// output pin's value off the streamed instance struct. Literals need no
@@ -152,12 +157,13 @@
 		class="chip {n.kind} {n.status ?? ''}"
 		data-id={n.id}
 		data-kind="chip"
+		data-xref={xref} data-xref-line={n.line}
 		class:ghost={n.ghost}
 		class:editable={editableConst || retargetable}
 		class:missing={missingTag}
 		class:problem={problems.length > 0}
 		style="width: {n.w}px; height: {n.h}px"
-		{title}
+		title={withDesc(title, xref)}
 		use:dblEdit
 	>
 		{#if n.kind === 'coil'}
@@ -175,10 +181,11 @@
 		class="block {n.status ?? ''}"
 		data-id={n.id}
 		data-kind={n.kind === 'fb' ? 'fb' : 'node'}
+		data-xref={xref} data-xref-line={n.line}
 		class:editable={renameable}
 		class:problem={problems.length > 0}
 		style="width: {n.w}px; height: {n.h}px"
-		{title}
+		title={withDesc(title, xref)}
 		use:dblEdit
 	>
 		<div class="title" style="height: {n.titleH}px">
@@ -186,11 +193,11 @@
 			{#if n.kind === 'fb'}<span class="type">{n.type ?? '?'}</span>{/if}
 		</div>
 		{#each n.ins as pin (pin)}
-			<Handle type="target" position={Position.Left} id={pin} data-kind="pin" data-pin={pin} style="top: {pinOffset(n, pin, 'in')}px" isConnectable={data.editable} />
+			<Handle type="target" position={Position.Left} id={pin} data-kind="pin" data-pin={pin} data-xref={n.kind === 'fb' ? `${n.label}.${pin}` : undefined} data-xref-line={n.line} style="top: {pinOffset(n, pin, 'in')}px" isConnectable={data.editable} />
 			<span class="pin in" style="top: {pinOffset(n, pin, 'in') - 7}px">{pin}</span>
 		{/each}
 		{#each n.outs as pin (pin)}
-			<Handle type="source" position={Position.Right} id={pin} data-kind="pin" data-pin={pin} style="top: {pinOffset(n, pin, 'out')}px" isConnectable={data.editable} />
+			<Handle type="source" position={Position.Right} id={pin} data-kind="pin" data-pin={pin} data-xref={n.kind === 'fb' ? `${n.label}.${pin}` : undefined} data-xref-line={n.line} style="top: {pinOffset(n, pin, 'out')}px" isConnectable={data.editable} />
 			<span class="pin out" style="top: {pinOffset(n, pin, 'out') - 7}px">{pin}</span>
 			{#if fbStruct !== undefined && member(fbStruct, pin) !== undefined}
 				<span

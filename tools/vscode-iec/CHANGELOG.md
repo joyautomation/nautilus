@@ -31,6 +31,25 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Added
 
+- **Find All References from a diagram element.** Select a ladder contact,
+  coil or block, an FBD variable chip, FB instance or FB pin, or an SFC
+  step or action association and press **Shift+F12**, or right-click it →
+  *Find All References*. The References view opens on that name: every
+  program that reads or writes it, on the diagram files' own lines, plus
+  its declaration in `nautilus.yaml` or a tag file. Studio 5000's
+  Ctrl+E cross-reference, in all three diagram editors. (#218)
+
+- **Tag descriptions on diagram elements.** A tag's `desc` (from
+  `nautilus.yaml` or a tag file), or the trailing comment on a variable's
+  VAR line (`Run : BOOL; (* motor running *)`), now shows in the element's
+  tooltip in the ladder, FBD and SFC editors, and as a second line under
+  each ladder contact and coil, the way Studio 5000 draws it. The new
+  setting `nautilus.diagram.showDescriptions` (default on) controls the
+  ladder's second line; tooltips always carry the description. Editing a
+  tag file now refreshes hover and these descriptions without a restart.
+  Comes from `naut lsp` (the new `nautilus/descriptions` request), so it
+  needs a `naut` newer than 0.15.0. (#216)
+
 - **Signature help: a call's parameters while you type it.** Typing `(`
   after a function or a function block instance opens the parameter-hints
   widget with the callee's signature, and `,` moves the highlight on —

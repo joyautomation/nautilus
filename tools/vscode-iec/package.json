@@ -507,6 +507,11 @@
           "default": "",
           "markdownDescription": "Bearer token for writes to a token-gated controller (matches the controller's `NAUTILUS_TOKEN`). Needed for online-edit download/rollback and Set Live Value against a controller started with a token \u2014 reads and `naut pull` never require it. Prefer setting this in workspace settings, not user settings."
         },
+        "nautilus.diagram.showDescriptions": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Draw each tag's description as a second line under its ladder contact or coil, the way Studio 5000 shows them. The description is the tag's `desc` in nautilus.yaml (or its tag file), or a trailing `(* comment *)` on the variable's declaration in the file. Element tooltips show the description in the ladder, FBD and SFC editors whatever this is set to; FBD and SFC never draw a second line."
+        },
         "nautilus.mimic.snapToGrid": {
           "type": "boolean",
           "default": true,
@@ -695,7 +700,7 @@
     "vscode:prepublish": "npm run compile && npm run build:webview",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/fbMonitorTitle.test.js out/testState.test.js out/sourceGuard.test.js out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js out/sceneKinds.test.js out/acceptanceMessage.test.js && npm --prefix webview-ui run test",
+    "test": "npm run compile && node --test out/fbMonitorTitle.test.js out/testState.test.js out/sourceGuard.test.js out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js out/sceneKinds.test.js out/acceptanceMessage.test.js out/xrefTarget.test.js && npm --prefix webview-ui run test",
     "build:webview": "npm --prefix webview-ui run build",
     "test:e2e": "npm run compile && node out/e2e/run.js"
   },

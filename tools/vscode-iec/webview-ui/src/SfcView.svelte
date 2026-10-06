@@ -33,6 +33,7 @@
 	} from './sfc';
 	import { live, liveValue } from './liveState.svelte';
 	import { readClip, typingTarget, writeClip } from './clipboard';
+	import { descTail } from './xref.svelte';
 
 	type Diag = { line: number; message: string; severity: string };
 
@@ -967,6 +968,7 @@
 				class="step {p.step.status ?? ''}"
 				data-id={p.id}
 				data-kind="step"
+				data-xref={p.step.name} data-xref-line={p.step.line} data-xref-end={p.step.endLine ?? p.step.line}
 				transform="translate({pos.x}, {pos.y})"
 				class:selected={isSelStep(p.id)}
 				class:active
@@ -1015,12 +1017,13 @@
 								class="assocrow {actionFor(a.target)?.status ?? ''}"
 								data-kind="assoc"
 								data-id="{p.id}:{i}"
+								data-xref={isAction ? undefined : a.target} data-xref-line={p.step.line} data-xref-end={p.step.endLine ?? p.step.line}
 								class:selected={isSelAssoc(p.id, i)}
 								transform="translate(0, {i * 16})"
 								onclick={(e) => selectAssoc(e, p.id, i)}
 								ondblclick={(e) => (isAction ? editActionBody(e, a.target) : editAssoc(e, p.step, i))}
 							>
-								<title>{isAction ? `ACTION ${a.target} — dblclick to edit its ST body` : `${a.qualifier} ${a.target}${a.time ? '(' + a.time + ')' : ''}`}</title>
+								<title>{isAction ? `ACTION ${a.target} — dblclick to edit its ST body` : `${a.qualifier} ${a.target}${a.time ? '(' + a.time + ')' : ''}${descTail(a.target)}`}</title>
 								<rect x="0" y="1" width={p.assocW} height="15" class="assocbg" />
 								<text x="4" y="11" class="assocq">{a.qualifier}</text>
 								<text x="26" y="11" class="assoctarget" class:isaction={isAction}>{a.target}{a.time ? `(${a.time})` : ''}</text>

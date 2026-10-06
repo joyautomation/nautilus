@@ -23,6 +23,7 @@ import {
   webviewOptions,
 } from "./fbdPreview";
 import { pickRevisions } from "./revisionPick";
+import { findReferencesFromDiagram, isXrefMessage, postDescriptions } from "./diagramXref";
 
 /** An L5X is a Rockwell export, not nautilus source — but `naut logix
  * graph` renders it into the SAME ladder model `naut ld graph` emits,
@@ -100,6 +101,7 @@ function handleLdMessage(doc: vscode.TextDocument, msg: { type?: string; op?: un
     void vscode.commands.executeCommand("nautilus.ld.diffController");
     return;
   }
+  if (isXrefMessage(msg)) return void findReferencesFromDiagram(doc, msg);
   if (msg?.type !== "ldEdit" || !msg.op) return;
   // An L5X is a vendor export rendered read-only. `naut ld edit` writes
   // nautilus rung text, so letting a gesture through here would rewrite XML
@@ -156,6 +158,7 @@ async function postLdModel(webview: vscode.Webview, doc: vscode.TextDocument): P
     // every gesture end in the refusal below.
     void webview.postMessage({ type: "ldModel", model: res.model, title: docTitle(doc), readOnly: isL5XDoc(doc) });
     postDiagnostics(webview, doc);
+    void postDescriptions(webview, doc);
   }
 }
 

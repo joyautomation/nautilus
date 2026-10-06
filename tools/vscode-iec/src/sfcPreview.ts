@@ -30,6 +30,7 @@ import {
   webviewOptions,
 } from "./fbdPreview";
 import { pickRevisions } from "./revisionPick";
+import { findReferencesFromDiagram, isXrefMessage, postDescriptions } from "./diagramXref";
 
 /** Run `naut sfc graph -` over source text. */
 function sfcGraph(source: string): Promise<{ model?: unknown; error?: string }> {
@@ -86,6 +87,7 @@ function handleSfcMessage(doc: vscode.TextDocument, msg: { type?: string; op?: u
     void vscode.commands.executeCommand("nautilus.sfc.diffController");
     return;
   }
+  if (isXrefMessage(msg)) return void findReferencesFromDiagram(doc, msg);
   if (msg?.type !== "sfcEdit" || !msg.op) return;
   sfcEditQueue = sfcEditQueue
     .then(async () => {
@@ -118,6 +120,7 @@ async function postSfcModel(webview: vscode.Webview, doc: vscode.TextDocument): 
   } else {
     void webview.postMessage({ type: "sfcModel", model: res.model, title: docTitle(doc) });
     postDiagnostics(webview, doc);
+    void postDescriptions(webview, doc);
   }
 }
 

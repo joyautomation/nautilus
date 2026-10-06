@@ -16,6 +16,7 @@
 	import { layoutRung, rungMinWidth, fitArgs, L, OPERAND_LABEL_MAX, type LSpot, type LNode } from './ladderLayout';
 	import { live, liveValue, formatLive } from './liveState.svelte';
 	import { readClip, typingTarget, writeClip } from './clipboard';
+	import { descLine, descTail } from './xref.svelte';
 
 	type Diag = { line: number; message: string; severity: string };
 
@@ -880,6 +881,7 @@
 						data-id={n.ann.el.ref ?? n.ann.el.inst ?? n.ann.el.fn}
 						data-rung={r.name}
 						data-path={n.path?.join('.')}
+						data-xref={n.ann.el.ref ?? n.ann.el.inst} data-xref-line={r.line} data-xref-end={r.endLine ?? r.line}
 						class:on={n.ann.val === true}
 						class:off={n.ann.val === false}
 						class:dadd={n.ann.el._diff === 'added'}
@@ -891,7 +893,7 @@
 					>
 						<rect class="hit" x="-2" y={-L.LABEL_TOP} width={n.w + 4} height={n.h + L.LABEL_TOP + L.LABEL_BOT - 4} rx="3" />
 						{#if n.kind === 'contact'}
-							<title>{n.ann.el.ref}{n.ann.el.neg ? ' (NC)' : ''} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope))}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag · N: NO/NC · B: branch around · Del · drag to move' : ''}</title>
+							<title>{n.ann.el.ref}{n.ann.el.neg ? ' (NC)' : ''} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope))}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag · N: NO/NC · B: branch around · Del · drag to move' : ''}{descTail(n.ann.el.ref)}</title>
 							<line x1="0" y1={n.h / 2} x2={n.w / 2 - 5} y2={n.h / 2} class="w {wcls(n.ann.in)}" />
 							<line x1={n.w / 2 + 5} y1={n.h / 2} x2={n.w} y2={n.h / 2} class="w {wcls(n.ann.out)}" />
 							<line x1={n.w / 2 - 5} y1="2" x2={n.w / 2 - 5} y2={n.h - 2} class="post" />
@@ -900,11 +902,12 @@
 								<line x1={n.w / 2 - 9} y1={n.h - 1} x2={n.w / 2 + 9} y2="1" class="post" />
 							{/if}
 							<text x={n.w / 2} y={n.h + 12} text-anchor="middle" class="operand">{trunc(n.ann.el.ref)}</text>
+							{#if !n.ann.el._diff && descLine(n.ann.el.ref, n.w)}<text x={n.w / 2} y={n.h + (valText(n.ann.el.ref, r.scope) ? 35 : 23)} text-anchor="middle" class="nx-desc">{descLine(n.ann.el.ref, n.w)}</text>{/if}
 							{#if valText(n.ann.el.ref, r.scope)}
 								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true}>{valText(n.ann.el.ref, r.scope)}</text>
 							{/if}
 						{:else if n.kind === 'coil'}
-							<title>{n.ann.el.mode ? n.ann.el.mode + ' ' : ''}{n.ann.el.ref} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope))}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag · M: mode · Del · drag to reorder' : ''}</title>
+							<title>{n.ann.el.mode ? n.ann.el.mode + ' ' : ''}{n.ann.el.ref} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope))}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag · M: mode · Del · drag to reorder' : ''}{descTail(n.ann.el.ref)}</title>
 							<line x1="0" y1={n.h / 2} x2={n.w / 2 - 12} y2={n.h / 2} class="w {wcls(n.ann.in)}" />
 							<line x1={n.w / 2 + 12} y1={n.h / 2} x2={n.w} y2={n.h / 2} class="w {wcls(n.ann.val)}" />
 							<path d="M {n.w / 2 - 8} 2 Q {n.w / 2 - 16} {n.h / 2} {n.w / 2 - 8} {n.h - 2}" fill="none" class="post" />
@@ -913,6 +916,7 @@
 								<text x={n.w / 2} y={n.h / 2 + 4} text-anchor="middle" class="mark">{n.ann.el.mode}</text>
 							{/if}
 							<text x={n.w / 2} y={n.h + 12} text-anchor="middle" class="operand">{trunc(n.ann.el.ref)}</text>
+							{#if !n.ann.el._diff && descLine(n.ann.el.ref, n.w)}<text x={n.w / 2} y={n.h + (valText(n.ann.el.ref, r.scope) ? 35 : 23)} text-anchor="middle" class="nx-desc">{descLine(n.ann.el.ref, n.w)}</text>{/if}
 							{#if valText(n.ann.el.ref, r.scope)}
 								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true}>{valText(n.ann.el.ref, r.scope)}</text>
 							{/if}
@@ -921,7 +925,7 @@
 							<rect x="0" y="0" width={n.w} height={n.h} rx="4" class="box" />
 							<text x={n.w / 2} y={n.h / 2 + 3.5} text-anchor="middle" class="fntext">{n.ann.el.fn}({n.ann.el.args})</text>
 						{:else if n.kind === 'fb'}
-							<title>{n.ann.el.inst} : {n.ann.el.type}({n.ann.el.args}){diffNote(n.ann.el)}{editable ? ' — dblclick the name: rename the instance · dblclick the body: edit args · Del · drag to move' : ''}</title>
+							<title>{n.ann.el.inst} : {n.ann.el.type}({n.ann.el.args}){diffNote(n.ann.el)}{editable ? ' — dblclick the name: rename the instance · dblclick the body: edit args · Del · drag to move' : ''}{descTail(n.ann.el.inst)}</title>
 							<rect x="0" y="0" width={n.w} height={n.h} rx="3" class="box fbbox" />
 							<rect x="0" y={-L.LABEL_TOP - 8} width={n.w} height={L.LABEL_TOP + 28} class="fbhead" />
 							<text x={n.w / 2} y="-4" text-anchor="middle" class="operand inst">{n.ann.el.inst}</text>
