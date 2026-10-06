@@ -73,6 +73,7 @@
 	// The FBD palette's block picker: the model's catalog, the instances on
 	// the diagram (their outputs are sources), and every name in use.
 	let fbTypes = $state<FbCatalogType[]>([]);
+	let userFuncs = $state<FbCatalogType[]>([]);
 	let fbInsts = $state<FbInst[]>([]);
 	let takenNames = $state(new Set<string>());
 	let usedNames = $state(new Set<string>());
@@ -183,6 +184,7 @@
 			// resolve their live values.
 			setVarBounds(varList);
 			fbTypes = model.fbTypes ?? [];
+			userFuncs = model.funcs ?? [];
 			fbInsts = model.nodes
 				.filter((n) => n.kind === 'fb')
 				.map((n) => ({ name: n.label, type: n.type, outs: n.outputs ?? [] }));
@@ -771,7 +773,7 @@
 		</SvelteFlow>
 	</div>
 	{/if}
-	<Palette bind:open={paletteOpen} vars={varList} {fbTypes} insts={fbInsts} taken={takenNames} />
+	<Palette bind:open={paletteOpen} vars={varList} {fbTypes} funcs={userFuncs} insts={fbInsts} taken={takenNames} />
 	<VarsPanel
 		bind:open={varsOpen}
 		vars={varList}

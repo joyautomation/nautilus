@@ -14,6 +14,15 @@ export const FUNCTIONS: SuggestItem[] = [
 	'LEN', 'CONCAT', 'LEFT', 'RIGHT', 'MID', 'FIND', 'INSERT', 'DELETE', 'REPLACE'
 ].map((name) => ({ name }));
 
+/** The function field's vocabulary: the project's own FUNCTIONs (by their
+ * declared names, with their inputs and return type), then the standard
+ * functions. */
+export function functionItems(user: FbCatalogType[] | undefined): SuggestItem[] {
+	const own = (user ?? []).map((f) => ({ name: f.name, detail: f.detail ?? 'user FUNCTION' }));
+	const have = new Set(own.map((f) => f.name.toUpperCase()));
+	return own.concat(FUNCTIONS.filter((f) => !have.has(f.name)));
+}
+
 // Standard function block types (lang/ir/builtins_fb.go) — the fallback
 // only: the real list is the catalog each model carries (fbTypes, from
 // lang/fbcatalog: these plus every user FUNCTION_BLOCK in scope, with pins).
@@ -36,9 +45,11 @@ export type FbCatalogType = {
 	name: string;
 	detail?: string;
 	user?: boolean;
-	pins?: { name: string; type: string; dir: 'in' | 'out' | 'inout' }[];
+	pins?: { name: string; type: string; dir: 'in' | 'out' | 'inout'; init?: string }[];
 	args?: string;
 	prefix: string;
+	/** A FUNCTION's return type (the model's `funcs`). */
+	result?: string;
 };
 
 /** The model's catalog; an older CLI sends none, and the standard names
@@ -52,11 +63,14 @@ export function fbCatalog<T extends FbCatalogType>(types: T[] | undefined): FbCa
 	}));
 }
 
-/** A fresh insert's arguments: every input and in-out open (`_`). */
+/** A fresh insert's arguments: every required input and every in-out
+ * open (`_`); an input with a declared initial value stays unbound — it
+ * keeps that value (lang/fbcatalog.OpenArgs, the rule the CLI's `args`
+ * already follows). */
 export function openArgs(t: FbCatalogType): string {
 	if (t.args) return t.args;
 	return (t.pins ?? [])
-		.filter((p) => p.dir !== 'out')
+		.filter((p) => p.dir !== 'out' && !(p.dir === 'in' && p.init))
 		.map((p) => `${p.name} := _`)
 		.join(', ');
 }

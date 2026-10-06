@@ -21,11 +21,14 @@ import (
 	"github.com/joyautomation/nautilus/lang/ir"
 )
 
-// Pin is one declared pin: dir "in" | "out" | "inout".
+// Pin is one declared pin: dir "in" | "out" | "inout". Init is the
+// declared initial value's text (`NoFlowTime : TIME := T#5S` → "T#5S"),
+// "" when the declaration has none.
 type Pin struct {
 	Name string `json:"name"`
 	Type string `json:"type"`
 	Dir  string `json:"dir"`
+	Init string `json:"init,omitempty"`
 }
 
 // Sig is a FUNCTION_BLOCK's signature: its pins in declaration order.
@@ -57,6 +60,8 @@ type Type struct {
 	Args string `json:"args,omitempty"`
 	// Prefix names a fresh instance: the first free <prefix><n>.
 	Prefix string `json:"prefix"`
+	// Result is a FUNCTION's return type (Functions only; a block has none).
+	Result string `json:"result,omitempty"`
 }
 
 // standard is the palette order and wording of the standard blocks; any
@@ -121,18 +126,30 @@ func IsStandard(typ string) bool {
 	return ok
 }
 
-// OpenArgs is a fresh insert's argument list: every input and in-out bound
-// to `_`, the open placeholder the diagram shows as an unwired pin (and
-// the compiler flags until something is wired to it).
+// OpenArgs is a fresh insert's argument list: every REQUIRED input and
+// every in-out bound to `_`, the open placeholder the diagram shows as an
+// unwired pin (and the compiler flags until something is wired to it).
+//
+// An input is optional — left out of the call, so the block compiles with
+// it unconnected — when its declaration carries an initial value
+// (`NoFlowTime : TIME := T#5S`): an FB input nobody binds keeps its value,
+// which is the declared one until something writes it (IEC 61131-3, and
+// what TIA does with an unconnected FB input). EN (execution control,
+// docs/functions.md) is never written: unbound it is TRUE. An input with
+// no initial value and every VAR_IN_OUT stay `_` — they need a decision.
 func OpenArgs(pins []Pin) string {
 	var parts []string
 	for _, p := range pins {
-		if p.Dir != "out" {
-			parts = append(parts, p.Name+" := _")
+		if p.Dir == "out" || Optional(p) {
+			continue
 		}
+		parts = append(parts, p.Name+" := _")
 	}
 	return strings.Join(parts, ", ")
 }
+
+// Optional reports whether a fresh call may leave pin p unbound (OpenArgs).
+func Optional(p Pin) bool { return p.Dir == "in" && p.Init != "" }
 
 // Prefix names instances of a user block by its type's first letter,
 // lowercased: MotorStarter → m1, RateOfChange → r1.
@@ -145,22 +162,25 @@ func Prefix(typ string) string {
 	return "fb"
 }
 
-// Scope is the user blocks in scope for one file: its own and its
-// libraries'.
-type Scope struct{ sigs map[string]Sig }
+// Scope is the user blocks and FUNCTIONs in scope for one file: its own
+// and its libraries'.
+type Scope struct {
+	sigs  map[string]Sig
+	funcs map[string]Func
+}
 
 // NewScope scans src plus any library sources for user FB signatures.
 // Later sources win, so the file being compiled shadows a library — the
 // same precedence the ST compiler's in-file FB table has.
 func NewScope(src string, libs []string) *Scope {
-	s := &Scope{sigs: map[string]Sig{}}
-	for _, l := range libs {
+	s := &Scope{sigs: map[string]Sig{}, funcs: map[string]Func{}}
+	for _, l := range append(append([]string{}, libs...), src) {
 		for _, sig := range ScanSigs(l) {
 			s.sigs[sig.Name] = sig
 		}
-	}
-	for _, sig := range ScanSigs(src) {
-		s.sigs[sig.Name] = sig
+		for _, f := range ScanFuncs(l) {
+			s.funcs[f.Name] = f
+		}
 	}
 	return s
 }
@@ -231,6 +251,82 @@ func userDetail(sig Sig) string {
 		out = "–"
 	}
 	return in + " → " + out
+}
+
+// Func is a user FUNCTION's signature: its inputs (VAR_INPUT, then
+// VAR_IN_OUT) in declaration order, and its return type.
+type Func struct {
+	Name   string
+	Result string
+	Inputs []Pin
+}
+
+// Functions lists the user FUNCTIONs in scope by their DECLARED names,
+// sorted case-insensitively, each with its input pins and return type —
+// what the FBD palette's function field offers beside the standard
+// functions (#204). A FUNCTION named like a standard function is left out.
+func (s *Scope) Functions() []Type {
+	if s == nil {
+		return nil
+	}
+	names := make([]string, 0, len(s.funcs))
+	for n := range s.funcs {
+		if _, std := ir.Builtins[strings.ToUpper(n)]; !std {
+			names = append(names, n)
+		}
+	}
+	sort.Slice(names, func(i, j int) bool { return strings.ToLower(names[i]) < strings.ToLower(names[j]) })
+	out := make([]Type, 0, len(names))
+	for _, n := range names {
+		f := s.funcs[n]
+		var in []string
+		for _, p := range f.Inputs {
+			in = append(in, p.Name)
+		}
+		detail := "(" + strings.Join(in, ", ") + ")"
+		if f.Result != "" {
+			detail += " → " + f.Result
+		}
+		out = append(out, Type{Name: n, User: true, Pins: f.Inputs, Result: f.Result,
+			Detail: detail, Prefix: Prefix(n)})
+	}
+	return out
+}
+
+var (
+	fnStartRe = regexp.MustCompile(`(?i)^\s*FUNCTION\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?::\s*([A-Za-z_][A-Za-z0-9_]*))?`)
+	fnEndRe   = regexp.MustCompile(`(?i)^\s*END_FUNCTION\s*$`)
+)
+
+// ScanFuncs reads every `FUNCTION Name : TYPE … END_FUNCTION` in source:
+// its declared name, return type and inputs. Textual and comment-aware,
+// like ScanSigs.
+func ScanFuncs(src string) []Func {
+	var out []Func
+	lines := strings.Split(src, "\n")
+	stripped := strings.Split(StripComments(src), "\n")
+	cur, start := Func{}, -1
+	flush := func(end int) {
+		sig := ScanBody(cur.Name, strings.Join(lines[start:end], "\n"))
+		cur.Inputs = append(append([]Pin{}, sig.Inputs...), sig.InOuts...)
+		out = append(out, cur)
+	}
+	for i := range lines {
+		if start == -1 {
+			if m := fnStartRe.FindStringSubmatch(stripped[i]); m != nil {
+				cur, start = Func{Name: m[1], Result: m[2]}, i+1
+			}
+			continue
+		}
+		if fnEndRe.MatchString(stripped[i]) {
+			flush(i)
+			start = -1
+		}
+	}
+	if start != -1 {
+		flush(len(lines))
+	}
+	return out
 }
 
 var (
@@ -304,8 +400,9 @@ func parseDecls(text, dir string) []Pin {
 		if !ok {
 			continue
 		}
+		init := ""
 		if i := strings.Index(typ, ":="); i >= 0 {
-			typ = typ[:i]
+			typ, init = typ[:i], strings.Join(strings.Fields(typ[i+2:]), " ")
 		}
 		typ = strings.TrimSpace(typ)
 		if typ == "" {
@@ -314,7 +411,7 @@ func parseDecls(text, dir string) []Pin {
 		for _, n := range strings.Split(names, ",") {
 			n = strings.TrimSpace(n)
 			if declNameRe.MatchString(n) {
-				out = append(out, Pin{Name: n, Type: typ, Dir: dir})
+				out = append(out, Pin{Name: n, Type: typ, Dir: dir, Init: init})
 			}
 		}
 	}

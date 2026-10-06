@@ -15,12 +15,13 @@
 	import Popover from './Popover.svelte';
 	import Suggest from './Suggest.svelte';
 	import LdBlockPicker from './LdBlockPicker.svelte';
-	import { FUNCTIONS, TYPES, fbCatalog, fbOutputRefs, openArgs, type FbInst, type SuggestItem } from './suggest';
+	import { TYPES, fbCatalog, functionItems, fbOutputRefs, openArgs, type FbCatalogType, type FbInst, type SuggestItem } from './suggest';
 
 	let {
 		open = $bindable(false),
 		vars = [],
 		fbTypes = [],
+		funcs = [],
 		insts = [],
 		taken = new Set<string>()
 	}: {
@@ -28,6 +29,9 @@
 		vars?: VarDecl[];
 		/** The block catalog from the model (empty from an older CLI). */
 		fbTypes?: LdFbType[];
+		/** The project's FUNCTIONs (the model's `funcs`): the function field
+		 * offers them before the standard functions. */
+		funcs?: FbCatalogType[];
 		/** The FB instances on the diagram: their outputs are sources. */
 		insts?: FbInst[];
 		/** Every name in use (lowercased): a fresh instance avoids them. */
@@ -142,6 +146,7 @@
 
 	const tagItems = $derived<SuggestItem[]>(vars.map((v) => ({ name: v.name, detail: v.type })));
 	const catalog = $derived(fbCatalog(fbTypes));
+	const fnItems = $derived(functionItems(funcs));
 	const srcItems = $derived<SuggestItem[]>([...fbOutputRefs(insts), ...tagItems]);
 	function itemsFor(kind: Kind): SuggestItem[] {
 		switch (kind) {
@@ -151,7 +156,7 @@
 			case 'src':
 				return srcItems;
 			case 'fn':
-				return FUNCTIONS;
+				return fnItems;
 			case 'fbtype':
 				return catalog.map((t) => ({ name: t.name, detail: t.detail }));
 			case 'type':

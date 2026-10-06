@@ -18,7 +18,8 @@ import (
 //	  v:TempC#2 24,510
 //	*)
 //
-// The lexer skips comments, so the block is invisible to compilation,
+// The block lives right after END_FBD (see layoutLine). The lexer skips
+// comments, so the block is invisible to compilation,
 // transpilation, and the controller; it versions and diffs like any other
 // text. Only dragged nodes appear — everything else keeps auto-layout — and
 // rename/delete ops keep the entries consistent with their ids.
@@ -93,28 +94,58 @@ func renderLayoutBlock(entries map[string]layoutEntry) string {
 	return b.String()
 }
 
-// writeLayout produces the text edit that replaces (or creates, just above
-// END_FBD) the @layout block. An empty entry set removes the block.
-func (b *modelBuilder) writeLayout(entries map[string]layoutEntry) ([]TextEdit, error) {
-	if b.layoutStart > 0 {
-		if len(entries) == 0 {
-			return []TextEdit{{Line: b.layoutStart, Col: 1, EndLine: b.layoutEnd + 1, EndCol: 1}}, nil
+// layoutLine is where the @layout block belongs: the line right after the
+// (last) END_FBD — after the logic, before END_PROGRAM/END_FUNCTION_BLOCK —
+// so it never sits between statements, never reads as part of a network,
+// and a statement appended just above END_FBD can never land after it
+// (#208). Found on comment-stripped text, like every structural scan.
+func (b *modelBuilder) layoutLine() (int, error) {
+	end := -1
+	for i, line := range b.srcStripped {
+		if strings.EqualFold(strings.TrimSpace(line), "END_FBD") {
+			end = i + 1
 		}
-		return []TextEdit{{
-			Line: b.layoutStart, Col: 1, EndLine: b.layoutEnd + 1, EndCol: 1,
-			NewText: renderLayoutBlock(entries),
-		}}, nil
+	}
+	if end == -1 {
+		return 0, fmt.Errorf("fbd edit: no END_FBD to anchor the layout block")
+	}
+	return end + 1, nil
+}
+
+// writeLayout produces the text edit that replaces (or creates) the @layout
+// block at its fixed place (layoutLine). A block found anywhere else — a
+// file written before #208, where it landed wherever the body ended at the
+// first layout write — moves there on this write. An empty entry set
+// removes the block.
+func (b *modelBuilder) writeLayout(entries map[string]layoutEntry) ([]TextEdit, error) {
+	at, err := b.layoutLine()
+	if err != nil {
+		return nil, err
+	}
+	insert := func(line int) TextEdit {
+		if line > len(b.src) {
+			// END_FBD is the file's last line: open a line after it.
+			last := len(b.src)
+			text := strings.TrimSuffix(renderLayoutBlock(entries), "\n")
+			return TextEdit{Line: last, Col: len(b.src[last-1]) + 1, EndLine: last, EndCol: len(b.src[last-1]) + 1, NewText: "\n" + text}
+		}
+		return TextEdit{Line: line, Col: 1, EndLine: line, EndCol: 1, NewText: renderLayoutBlock(entries)}
+	}
+	if b.layoutStart > 0 {
+		old := TextEdit{Line: b.layoutStart, Col: 1, EndLine: b.layoutEnd + 1, EndCol: 1}
+		if b.layoutStart == at || len(entries) == 0 {
+			if len(entries) > 0 {
+				old.NewText = renderLayoutBlock(entries)
+			}
+			return []TextEdit{old}, nil
+		}
+		// Migrate: the old block goes, the new one lands after END_FBD.
+		return []TextEdit{old, insert(at)}, nil
 	}
 	if len(entries) == 0 {
 		return nil, nil
 	}
-	for i, line := range b.src {
-		if strings.EqualFold(strings.TrimSpace(line), "END_FBD") {
-			at := i + 1
-			return []TextEdit{{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: renderLayoutBlock(entries)}}, nil
-		}
-	}
-	return nil, fmt.Errorf("fbd edit: no END_FBD to anchor the layout block")
+	return []TextEdit{insert(at)}, nil
 }
 
 // opSetLayout pins node positions (a drag in the diagram editor). A batch

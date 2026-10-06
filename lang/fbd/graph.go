@@ -40,6 +40,11 @@ type Model struct {
 	// file's own, plus the project libraries' when GraphWithLibs is given
 	// them — each with its pins.
 	FBTypes []fbcatalog.Type `json:"fbTypes,omitempty"`
+	// Funcs lists the user FUNCTIONs in scope (this file's and the project
+	// libraries'), by their declared names, with inputs and return type —
+	// the palette's function field offers them beside the standard
+	// functions (#204).
+	Funcs []fbcatalog.Type `json:"funcs,omitempty"`
 }
 
 // VarDecl is one header declaration: `Name : Type [:= init];` inside a
@@ -145,7 +150,8 @@ func Graph(src string, userFBs ...map[string]*ir.FBDef) (*Model, error) {
 // the outputs nothing reads yet — and joins the palette's block catalog.
 func GraphWithLibs(src string, libs []string, userFBs ...map[string]*ir.FBDef) (*Model, error) {
 	if seed.Blank(src) {
-		m := &Model{Blank: true, FBTypes: fbcatalog.NewScope("", libs).Catalog()}
+		scope := fbcatalog.NewScope("", libs)
+		m := &Model{Blank: true, FBTypes: scope.Catalog(), Funcs: scope.Functions()}
 		return m.normalize(), nil
 	}
 	b, err := buildModelIn(src, libs, userFBs...)
@@ -184,6 +190,7 @@ func buildModelIn(src string, libs []string, userFBs ...map[string]*ir.FBDef) (*
 		scope:       fbcatalog.NewScope(src, libs),
 	}
 	b.m.FBTypes = b.scope.Catalog()
+	b.m.Funcs = b.scope.Functions()
 	for _, reg := range userFBs {
 		for name, def := range reg {
 			if b.userFBs == nil {

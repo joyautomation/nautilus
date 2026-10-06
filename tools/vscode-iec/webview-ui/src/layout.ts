@@ -47,6 +47,8 @@ export type FbdModel = {
   blank?: boolean;
   /** The palette's block catalog (lang/fbcatalog via `naut fbd graph`). */
   fbTypes?: FbCatalogType[];
+  /** The project's FUNCTIONs (lang/fbcatalog), for the function field. */
+  funcs?: FbCatalogType[];
 };
 
 /** Arrays always arrays: an older CLI (or saved webview state) can carry
