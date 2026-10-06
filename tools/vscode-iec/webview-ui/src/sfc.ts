@@ -429,16 +429,16 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 
 	const centerX = (p: PlacedStep) => p.x + p.w / 2;
 
-	// Forward transitions grouped by their exact source set, in declaration
-	// order — the alternative-divergence groups the bar stagger below needs.
-	const sourceKey = (t: SfcTransition) => t.from.map((n) => n.toLowerCase()).sort().join(',');
-	const forwardFrom = new Map<string, SfcTransition[]>();
-	for (const t of model.trans ?? []) {
-		const resolved = [...t.from, ...t.to].every((n) => byId.has(stepId(n)));
-		if (!resolved || !isForward(t, rankOf)) continue;
-		const k = sourceKey(t);
-		forwardFrom.set(k, [...(forwardFrom.get(k) ?? []), t]);
-	}
+	// Forward transitions that compete for a source step (§2.3: FROM sets
+	// sharing any step — `Fill -> Overflow` and the join `(Fill, Mix) ->
+	// Empty` too), in declaration order — the alternative-divergence groups
+	// the bar stagger below needs.
+	const forwardIds = new Set(
+		(model.trans ?? [])
+			.filter((t) => [...t.from, ...t.to].every((n) => byId.has(stepId(n))) && isForward(t, rankOf))
+			.map((t) => t.id)
+	);
+	const forwardGroup = (t: SfcTransition) => altGroup(model, t.id).filter((u) => forwardIds.has(u.id));
 
 	const trans: TransRoute[] = [];
 	const prioOf = priorities(model);
@@ -484,7 +484,7 @@ export function layoutSfc(model: SfcModel): SfcLayout {
 		// put their bar at the same midpoint — drawn on top of each other,
 		// with one condition label sitting on the other's bar. Stagger them
 		// in declaration (= priority) order, highest priority on top.
-		const group = forwardFrom.get(sourceKey(t)) ?? [t];
+		const group = forwardGroup(t);
 		const slot = group.indexOf(t) - (group.length - 1) / 2;
 		const barY = (srcBottom + tgtTop) / 2 + slot * ALT_BAR_GAP;
 		const xs = [...sources, ...targets].map(centerX);

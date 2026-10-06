@@ -582,3 +582,19 @@ test('#76 navigate: arrows follow the flow — step ↓ transition ↓ step, ←
 	assert.deepEqual(go({ kind: 'trans', id: 'tr:join' }, 'up'), { kind: 'step', id: L.steps.filter((p) => p.id === 'st:Wash' || p.id === 'st:HeatDone').sort((a, b) => a.x - b.x)[0].id });
 	assert.deepEqual(go({ kind: 'step', id: 'st:Idle' }, 'up'), { kind: 'trans', id: 'tr:15' }, 'a loop back when that is the only way in');
 });
+
+test('layoutSfc: an alternative branch and a join sharing its source get separate bars (no overlap)', () => {
+	const st = (name: string, line: number, initial = false) => ({ id: 'st:' + name, name, initial, line, endLine: line });
+	const tr = (id: string, from: string[], to: string[], line: number) => ({ id, from, to, cond: 'c', kind: 'normal' as const, line, endLine: line });
+	const m: SfcModel = {
+		name: 'Station',
+		steps: [st('Start', 1, true), st('Fill', 2), st('Mix', 3), st('Empty', 4), st('Overflow', 5)],
+		trans: [tr('tr:a', ['Start'], ['Fill', 'Mix'], 10), tr('tr:join', ['Fill', 'Mix'], ['Empty'], 11), tr('tr:ov', ['Fill'], ['Overflow'], 12)]
+	};
+	const L = layoutSfc(m);
+	const join = L.trans.find((r) => r.t.id === 'tr:join')!;
+	const ov = L.trans.find((r) => r.t.id === 'tr:ov')!;
+	assert.ok(!join.jump && !ov.jump);
+	assert.ok(Math.abs(join.barY - ov.barY) >= 20, `bars at ${join.barY} and ${ov.barY} overlap`);
+	assert.ok(join.barY < ov.barY, 'the higher priority (declared first) on top');
+});
