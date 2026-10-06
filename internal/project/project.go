@@ -27,6 +27,7 @@ import (
 	"github.com/joyautomation/nautilus/eip"
 	"github.com/joyautomation/nautilus/internal/stproject"
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/prom"
 	"github.com/joyautomation/nautilus/redfish"
@@ -559,7 +560,10 @@ func HMIBuildHint(hmiDir string) string {
 // or stops applying, with no diff to show for it. The remedies stay legible —
 // fix the generator, or narrow its scope so the tag is never generated.
 func composeTags(fsys fs.FS, m *Manifest, manifestName string) error {
-	from := make(map[string]string, len(m.Tags))
+	// Keyed by ir.NameKey: tag names are IEC identifiers, so Level and
+	// LEVEL are one tag declared twice (#197).
+	type decl struct{ name, src string }
+	from := make(map[string]decl, len(m.Tags))
 	out := make([]TagConfig, 0, len(m.Tags))
 	add := func(tags []TagConfig, src string) error {
 		for _, t := range tags {
@@ -568,12 +572,17 @@ func composeTags(fsys fs.FS, m *Manifest, manifestName string) error {
 			if t.Name == "" {
 				continue
 			}
-			if prev, dup := from[t.Name]; dup {
+			if prev, dup := from[ir.NameKey(t.Name)]; dup {
+				if prev.name != t.Name {
+					return fmt.Errorf("tag %q (%s) and tag %q (%s) are one tag — "+
+						"tag names are case-insensitive, like every IEC identifier; "+
+						"rename one, or declare it once", prev.name, prev.src, t.Name, src)
+				}
 				return fmt.Errorf("tag %q is declared in both %s and %s — "+
 					"a tag may be declared once (fix the generator, or narrow "+
-					"its scope so the tag is not generated)", t.Name, prev, src)
+					"its scope so the tag is not generated)", t.Name, prev.src, src)
 			}
-			from[t.Name] = src
+			from[ir.NameKey(t.Name)] = decl{t.Name, src}
 		}
 		out = append(out, tags...)
 		return nil
@@ -836,11 +845,11 @@ func applyTagMeta(defs []runtime.TagDef, tm map[string]MetaConfig) map[string]ru
 	}
 	byName := make(map[string]int, len(defs))
 	for i, d := range defs {
-		byName[d.Name] = i
+		byName[ir.NameKey(d.Name)] = i
 	}
 	out := make(map[string]runtime.TagMeta, len(tm))
 	for key, mc := range tm {
-		i, ok := byName[key]
+		i, ok := byName[ir.NameKey(key)]
 		if !ok {
 			out[key] = runtime.TagMeta{Unit: mc.Unit, Desc: mc.Desc}
 			continue

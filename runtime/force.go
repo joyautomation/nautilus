@@ -106,15 +106,36 @@ func (t *Tags) resolveForceAddr(addr string) (string, []string, *tagVal, error) 
 	if addr == "" {
 		return "", nil, nil, fmt.Errorf("no tag name")
 	}
-	if tv, ok := t.vals[addr]; ok {
-		return addr, nil, tv, nil
+	if tv, key, ok := t.lookupLocked(addr); ok {
+		return key, nil, tv, nil
 	}
 	root, rest, dotted := strings.Cut(addr, ".")
-	tv, ok := t.vals[root]
+	tv, root, ok := t.lookupLocked(root)
 	if !ok || !dotted {
 		return "", nil, nil, &UndefinedTagError{root}
 	}
-	return root, strings.Split(rest, "."), tv, nil
+	return root, declaredPath(tv.v, strings.Split(rest, ".")), tv, nil
+}
+
+// declaredPath respells a member path as the struct declares it (member
+// names are case-insensitive), so a force entry is named one way however
+// the operator typed it. A segment that names nothing is left as typed —
+// SetField reports it.
+func declaredPath(v ir.Value, path []string) []string {
+	out := make([]string, len(path))
+	copy(out, path)
+	for i, seg := range out {
+		if v.Kind != ir.TypeStruct || v.Struct == nil {
+			break
+		}
+		j, ok := v.Struct.FieldOf(seg)
+		if !ok || j >= len(v.Fld) {
+			break
+		}
+		out[i] = v.Struct.Fields[j].Name
+		v = v.Fld[j]
+	}
+	return out
 }
 
 // Force holds a tag — or one member of a struct tag, by dotted path — at v
@@ -193,7 +214,7 @@ func (t *Tags) Unforce(addr string) bool {
 	defer t.mu.Unlock()
 	for root, fs := range t.forces {
 		for i := range fs.entries {
-			if fs.entries[i].name != addr {
+			if !strings.EqualFold(fs.entries[i].name, addr) {
 				continue
 			}
 			fs.entries = append(fs.entries[:i], fs.entries[i+1:]...)
@@ -308,15 +329,18 @@ func (t *Tags) ForcedOverlap(addr string) string {
 		return ""
 	}
 	root := addr
-	if _, ok := t.vals[addr]; !ok {
+	if _, _, ok := t.lookupLocked(addr); !ok {
 		root, _, _ = strings.Cut(addr, ".")
 	}
+	_, root, _ = t.lookupLocked(root)
 	fs := t.forces[root]
 	if fs == nil {
 		return ""
 	}
+	a := ir.NameKey(addr)
 	for _, e := range fs.entries {
-		if e.name == addr || strings.HasPrefix(e.name, addr+".") || strings.HasPrefix(addr, e.name+".") {
+		n := ir.NameKey(e.name)
+		if n == a || strings.HasPrefix(n, a+".") || strings.HasPrefix(a, n+".") {
 			return e.name
 		}
 	}
@@ -328,7 +352,7 @@ func (t *Tags) ForcedOverlap(addr string) string {
 func (t *Tags) readActual(name string) (ir.Value, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	tv, ok := t.vals[name]
+	tv, name, ok := t.lookupLocked(name)
 	if !ok {
 		return ir.Value{}, &UndefinedTagError{name}
 	}
@@ -344,7 +368,7 @@ func leafAt(v ir.Value, path []string) (ir.Value, bool) {
 		if v.Kind != ir.TypeStruct || v.Struct == nil {
 			return ir.Value{}, false
 		}
-		i, ok := v.Struct.FieldIndex[seg]
+		i, ok := v.Struct.FieldOf(seg)
 		if !ok || i >= len(v.Fld) {
 			return ir.Value{}, false
 		}

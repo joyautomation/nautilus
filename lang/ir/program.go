@@ -166,6 +166,11 @@ func collectFBGlobals(t *Type, seen map[*FBDef]bool, out map[string]*Type) {
 		}
 		seen[t.FB] = true
 		for name, gt := range t.FB.Globals {
+			// One tag, however each POU spells it: the program's own
+			// (or the first) spelling stands.
+			if _, key, dup := Lookup(out, name); dup && key != name {
+				continue
+			}
 			out[name] = gt
 		}
 		for _, s := range t.FB.AllSlots() {

@@ -301,11 +301,11 @@ func (p *Project) CheckAlarms(rt *runtime.Runtime) (defs []alarm.Def, errs, warn
 
 	byName := make(map[string]alarm.TagInfo, len(tags))
 	for _, t := range tags {
-		byName[t.Name] = t
+		byName[ir.NameKey(t.Name)] = t
 	}
 	check := func(what, path string) {
 		root, member, dotted := strings.Cut(path, ".")
-		info, declared := byName[root]
+		info, declared := byName[ir.NameKey(root)]
 		if !declared {
 			warns = append(warns, fmt.Sprintf("%s watches %q, which %s declares no tag for — "+
 				"correct if the tag arrives from the field, dead otherwise", what, path, ManifestName))
@@ -319,7 +319,7 @@ func (p *Project) CheckAlarms(rt *runtime.Runtime) (defs []alarm.Def, errs, warn
 				"so it has no member %q", what, path, root, member))
 			return
 		}
-		i, ok := info.Struct.FieldIndex[member]
+		i, ok := info.Struct.FieldOf(member)
 		if !ok || i >= len(info.Struct.Fields) {
 			errs = append(errs, fmt.Sprintf("%s watches %q, but %s has no member %q (%s has: %s)",
 				what, path, root, member, info.Struct.Name, memberNames(info.Struct)))

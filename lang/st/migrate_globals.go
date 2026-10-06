@@ -40,7 +40,7 @@ func MigrateProgramGlobals(src string, globalTypes map[string]*ir.Type) (string,
 	declared := map[string]struct{}{}
 	for _, vb := range prog.VarBlocks {
 		for _, vd := range vb.Variables {
-			declared[vd.Name] = struct{}{}
+			declared[ir.NameKey(vd.Name)] = struct{}{}
 		}
 	}
 
@@ -50,14 +50,18 @@ func MigrateProgramGlobals(src string, globalTypes map[string]*ir.Type) (string,
 	}
 
 	var missing []string
-	for name := range used {
-		if _, ok := declared[name]; ok {
+	added := map[string]bool{}
+	for used := range used {
+		if _, ok := declared[ir.NameKey(used)]; ok {
 			continue
 		}
-		t, ok := globalTypes[name]
-		if !ok || t == nil {
+		// The tag's own spelling goes into the declaration, however the
+		// body happened to case it.
+		t, name, ok := ir.Lookup(globalTypes, used)
+		if !ok || t == nil || added[name] {
 			continue
 		}
+		added[name] = true
 		if t.Kind == ir.TypeFB {
 			// FB-instance globals shouldn't be re-declared as VAR_EXTERNAL —
 			// they need to be passed as parameters or instantiated locally.

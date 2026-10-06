@@ -13,6 +13,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/stproject"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/fbd"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/ld"
 	"github.com/joyautomation/nautilus/lang/sfc"
 	"github.com/joyautomation/nautilus/lang/st"
@@ -325,26 +326,28 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		return 1, 0
 	}
 
+	// Keyed by ir.NameKey: tag names are case-insensitive identifiers, so a
+	// program's `level` binds the manifest's Level.
 	declared := make(map[string]bool, len(proj.Runtime.Tags))
 	for _, d := range proj.Runtime.Tags {
-		declared[d.Name] = true
+		declared[ir.NameKey(d.Name)] = true
 	}
 	// A task's dt-tag is written by the runtime every scan, so a program may
 	// read it without any tag entry. It is declared in the manifest — just
 	// not under tags: — and reporting it would be a false alarm on the one
 	// tag the manifest is most certain about.
 	if proj.Runtime.DtTag != "" {
-		declared[proj.Runtime.DtTag] = true
+		declared[ir.NameKey(proj.Runtime.DtTag)] = true
 	}
 	for _, t := range proj.Runtime.Tasks {
 		if t.DtTag != "" {
-			declared[t.DtTag] = true
+			declared[ir.NameKey(t.DtTag)] = true
 		}
 	}
 	uses := rt.GlobalUses()
 
 	for _, name := range sortedNames(rt.Globals()) {
-		if declared[name] {
+		if declared[ir.NameKey(name)] {
 			continue
 		}
 		switch {
@@ -361,9 +364,12 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		}
 	}
 
-	bound := rt.Globals()
+	bound := map[string]bool{}
+	for name := range rt.Globals() {
+		bound[ir.NameKey(name)] = true
+	}
 	for _, d := range proj.Runtime.Tags {
-		if _, ok := bound[d.Name]; ok {
+		if bound[ir.NameKey(d.Name)] {
 			continue
 		}
 		// An INPUT no program binds is not a defect: the driver fills it and
@@ -389,7 +395,7 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 	// key is a field path and legitimate, so only bare names are reported —
 	// which is where a typo in a hand-written documentation block shows up.
 	for _, key := range sortedNames(proj.Runtime.Meta) {
-		if strings.Contains(key, ".") || declared[key] {
+		if strings.Contains(key, ".") || declared[ir.NameKey(key)] {
 			continue
 		}
 		warns++

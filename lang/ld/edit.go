@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/fbcatalog"
 	"github.com/joyautomation/nautilus/lang/internal/hdrvars"
 	"github.com/joyautomation/nautilus/lang/internal/seed"
 )
@@ -255,7 +256,7 @@ func ApplyEdit(src string, op EditOp, libs ...string) ([]TextEdit, error) {
 			if !identOnly.MatchString(op.Fn) {
 				return nil, fmt.Errorf("ld edit: %q is not a valid function name", op.Fn)
 			}
-			el.Fn = strings.ToUpper(op.Fn)
+			el.Fn = fbcatalog.CallName(op.Fn)
 		}
 		el.Args = op.Args
 	case "insert":
@@ -561,7 +562,7 @@ func newElement(op EditOp, res *resolver) (Element, error) {
 		if op.Fn == "" {
 			return Element{}, fmt.Errorf("ld edit: a function contact needs its function name")
 		}
-		return Element{Kind: "fn", Fn: strings.ToUpper(op.Fn), Args: op.Args}, nil
+		return Element{Kind: "fn", Fn: fbcatalog.CallName(op.Fn), Args: op.Args}, nil
 	case "fb":
 		if !identOnly.MatchString(op.Inst) || !identOnly.MatchString(op.FbType) {
 			return Element{}, fmt.Errorf("ld edit: a block needs an instance name and a type")

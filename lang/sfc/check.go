@@ -266,7 +266,7 @@ func Check(prog *Program) []Diagnostic {
 	return diags
 }
 
-var stepRefRe = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\.(X|T|ERR)\b`)
+var stepRefRe = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\.((?i:X|T|ERR))\b`)
 
 // checkStepRefs scans a text span for `Ident.X` / `Ident.T` references and
 // flags any whose base identifier resolves to neither a declared step nor a
@@ -279,7 +279,7 @@ func checkStepRefs(sp Span, context string, stepByName map[string]*Step, varName
 	var diags []Diagnostic
 	for _, loc := range stepRefRe.FindAllStringSubmatchIndex(sp.Text, -1) {
 		name := sp.Text[loc[2]:loc[3]]
-		suffix := sp.Text[loc[4]:loc[5]]
+		suffix := strings.ToUpper(sp.Text[loc[4]:loc[5]])
 		key := strings.ToUpper(name)
 		if s := stepByName[key]; s != nil {
 			if suffix == "ERR" && s.MaxTime() == "" && !(loc[0] > 0 && sp.Text[loc[0]-1] == '.') {

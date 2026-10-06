@@ -23,7 +23,7 @@ func RegisterFB(def *FBDef) {
 // The returned *Type wraps the def so multiple instances share the
 // same FBDef pointer (which the runtime compares by identity).
 func LookupFBType(name string) *Type {
-	def, ok := FBs[name]
+	def, _, ok := Lookup(FBs, name)
 	if !ok {
 		return nil
 	}
@@ -339,7 +339,7 @@ func registerLatches() {
 // fbSlotByName returns the slot index for a named FB input/output/internal.
 // Used by lowering to translate `t1(IN := …)` into an InputBinding.
 func fbSlotByName(def *FBDef, name string) (int, error) {
-	idx, ok := def.SlotIndex[name]
+	idx, ok := def.SlotOf(name)
 	if !ok {
 		return 0, fmt.Errorf("FB %s has no field %q", def.Name, name)
 	}

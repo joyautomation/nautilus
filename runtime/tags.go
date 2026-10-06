@@ -54,6 +54,14 @@ import (
 type Tags struct {
 	mu   sync.RWMutex
 	vals map[string]*tagVal
+	// fold maps ir.NameKey(name) to the spelling a tag was created under.
+	// Tag names are IEC identifiers, so they are case-insensitive (#197):
+	// a lookup that misses vals exactly falls back here, and a write in
+	// another casing lands on the existing tag. The stored spelling — the
+	// manifest's, or the first program's to declare it — is what Snapshot,
+	// the API and Sparkplug show. An exact hit (every program and driver
+	// using the declared spelling) never touches this map.
+	fold map[string]string
 	// divZero counts every integer or REAL division (or MOD) by zero the
 	// VM has evaluated against this store, controller-wide, since start
 	// (ir.DivZeroCounter). Surfaced as ScanStats.DivZero.
@@ -106,12 +114,37 @@ type Sample struct {
 	Gen   uint64
 }
 
-func NewTags() *Tags { return &Tags{vals: make(map[string]*tagVal)} }
+func NewTags() *Tags {
+	return &Tags{vals: make(map[string]*tagVal), fold: make(map[string]string)}
+}
+
+// lookupLocked finds a tag by name, case-insensitively: an exact hit first,
+// then the fold index. It returns the tag and the name it is stored under.
+// Caller holds t.mu (either mode).
+func (t *Tags) lookupLocked(name string) (*tagVal, string, bool) {
+	if tv, ok := t.vals[name]; ok {
+		return tv, name, true
+	}
+	if k, ok := t.fold[ir.NameKey(name)]; ok {
+		return t.vals[k], k, true
+	}
+	return nil, name, false
+}
+
+// Canonical returns the spelling a tag is stored under — the name every
+// reader is shown — and whether such a tag exists. Tag names are
+// case-insensitive: Canonical("level") is "Level" for a tag declared Level.
+func (t *Tags) Canonical(name string) (string, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	_, k, ok := t.lookupLocked(name)
+	return k, ok
+}
 
 func (t *Tags) ReadGlobal(name string) (ir.Value, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	v, ok := t.vals[name]
+	v, _, ok := t.lookupLocked(name)
 	if !ok {
 		return ir.Value{}, &UndefinedTagError{name}
 	}
@@ -130,7 +163,8 @@ func (t *Tags) WriteGlobal(name string, v ir.Value) error {
 // the new value with a fresh generation. Reports whether the store changed.
 // Caller holds t.mu.
 func (t *Tags) writeLocked(name string, v ir.Value) bool {
-	if cur, ok := t.vals[name]; ok {
+	if cur, key, ok := t.lookupLocked(name); ok {
+		name = key
 		if cur.forced {
 			// A forced tag: what the writer asked for becomes the tag's
 			// ACTUAL value, and the forces are laid back over it — see
@@ -149,6 +183,10 @@ func (t *Tags) writeLocked(name string, v ir.Value) bool {
 		t.outGen = t.gen
 	}
 	t.vals[name] = &tagVal{v: v, gen: t.gen, out: out}
+	if t.fold == nil {
+		t.fold = map[string]string{}
+	}
+	t.fold[ir.NameKey(name)] = name
 	return true
 }
 
@@ -228,7 +266,7 @@ func (t *Tags) NameGeneration() uint64 {
 func (t *Tags) TagGeneration(name string) (uint64, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	if v, ok := t.vals[name]; ok {
+	if v, _, ok := t.lookupLocked(name); ok {
 		return v.gen, true
 	}
 	return 0, false
@@ -267,7 +305,7 @@ func (t *Tags) readMany(names []string, dst map[string]any) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	for _, name := range names {
-		tv, ok := t.vals[name]
+		tv, _, ok := t.lookupLocked(name)
 		if !ok {
 			delete(dst, name)
 			continue
@@ -385,7 +423,7 @@ func (e *UndefinedTagError) Error() string { return "undefined tag " + e.Name }
 func (t *Tags) Real(name string) float64 {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	if v, ok := t.vals[name]; ok {
+	if v, _, ok := t.lookupLocked(name); ok {
 		return v.v.F
 	}
 	return 0
@@ -394,7 +432,7 @@ func (t *Tags) Real(name string) float64 {
 func (t *Tags) Bool(name string) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	if v, ok := t.vals[name]; ok {
+	if v, _, ok := t.lookupLocked(name); ok {
 		return v.v.B
 	}
 	return false
@@ -467,14 +505,14 @@ func (t *Tags) SetPath(path string, v any) error {
 	// Nothing in nautilus creates one today, but a driver is free to name a
 	// tag after the field symbol it was read from, and such a tag must stay
 	// writable as a whole.
-	if cur, ok := t.vals[path]; ok {
-		return t.setFieldLocked(path, t.writeBase(path, cur), nil, v)
+	if cur, key, ok := t.lookupLocked(path); ok {
+		return t.setFieldLocked(key, t.writeBase(key, cur), nil, v)
 	}
 	root, rest, dotted := strings.Cut(path, ".")
 	if !dotted {
 		return &UndefinedTagError{root}
 	}
-	cur, ok := t.vals[root]
+	cur, root, ok := t.lookupLocked(root)
 	if !ok {
 		return &UndefinedTagError{root}
 	}
@@ -526,14 +564,14 @@ func (t *Tags) setFieldLocked(root string, cur ir.Value, path []string, v any) e
 func (t *Tags) ReadPath(path string) (any, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	if v, ok := t.vals[path]; ok {
+	if v, _, ok := t.lookupLocked(path); ok {
 		return plainLeaf(v.v), true
 	}
 	root, rest, dotted := strings.Cut(path, ".")
 	if !dotted {
 		return nil, false
 	}
-	tv, ok := t.vals[root]
+	tv, _, ok := t.lookupLocked(root)
 	if !ok {
 		return nil, false
 	}
@@ -544,7 +582,7 @@ func (t *Tags) ReadPath(path string) (any, bool) {
 		if v.Kind != ir.TypeStruct || v.Struct == nil {
 			return nil, false
 		}
-		i, ok := v.Struct.FieldIndex[field]
+		i, ok := v.Struct.FieldOf(field)
 		if !ok || i >= len(v.Fld) {
 			return nil, false
 		}

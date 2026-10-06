@@ -304,18 +304,31 @@ type Externals map[string]string
 // block generated this way, so they stay left out.
 func ExternalsOf(rt *runtime.Runtime) Externals {
 	ext := Externals{}
+	// Keyed by ir.NameKey as well: identifiers are case-insensitive, so a
+	// program's `level` and the store's `Level` are one VAR_EXTERNAL — two
+	// would be a duplicate declaration.
+	spelled := map[string]string{}
+	put := func(name, ty string) {
+		k := ir.NameKey(name)
+		if prev, ok := spelled[k]; ok && prev != name {
+			delete(ext, prev)
+		}
+		spelled[k] = name
+		ext[name] = ty
+	}
 	for name, t := range rt.Globals() {
 		if t == nil {
 			continue
 		}
 		if ty, ok := stTypeNameOfType(t); ok {
-			ext[name] = ty
+			put(name, ty)
 		}
 	}
-	// The store wins on a disagreement: it is what eval actually reads.
+	// The store wins on a disagreement — type and spelling: it is what eval
+	// actually reads.
 	for name, v := range rt.Tags().Snapshot() {
 		if ty, ok := stTypeNameOfValue(v); ok {
-			ext[name] = ty
+			put(name, ty)
 		}
 	}
 	delete(ext, resultTag)

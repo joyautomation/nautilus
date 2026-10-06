@@ -475,7 +475,7 @@ func fieldMissErr(v ir.Value, sofar, path string) error {
 		if v.Kind != ir.TypeStruct || v.Struct == nil {
 			return fmt.Errorf("%s is not a struct, so it has no field %q", sofar, field)
 		}
-		i, ok := v.Struct.FieldIndex[field]
+		i, ok := v.Struct.FieldOf(field)
 		if !ok || i >= len(v.Fld) {
 			return fmt.Errorf("%s has no field %q (%s has: %s)",
 				sofar, field, v.Struct.Name, strings.Join(fieldNames(v.Struct), ", "))
