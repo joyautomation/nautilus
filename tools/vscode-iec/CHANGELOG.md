@@ -86,7 +86,9 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   (blue italic; the enum icon in the panel), with the type on hover
   (`Mode · enum`); a `STRING` keeps its quotes. **Set Live Value…** and
   **Force…** on an enumerated tag offer its members as a pick list, and
-  still take a typed member, `Mode#Run` or an integer. The types come from
+  still take a typed member, `Mode#Run` or an integer; on a `STRING` tag
+  their input takes a quoted string (`'text'`, the pill's own form), which
+  it used to refuse as not a number. The types come from
   the controller's `/api/meta`, so this needs a `naut` newer than 0.15.0;
   against an older one values show as before. (#246)
 
