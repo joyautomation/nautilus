@@ -32,7 +32,7 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 156 rows. **0 rows have no coverage at all** (no webview test,
+Totals: 158 rows. **0 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
@@ -43,7 +43,7 @@ no rig verb, no smoke check); per section below.
 | SFC `?` | 22 | 0 |
 | Mimic `?` | 18 | 0 |
 | Component `?` | 8 | 0 |
-| Other claims | 42 | 0 |
+| Other claims | 44 | 0 |
 
 ## Commands (package.json `contributes.commands`)
 
@@ -240,7 +240,7 @@ no rig verb, no smoke check); per section below.
 
 ## Count of rows with no coverage at all
 
-**0 of 156.** Every row has at least one layer of coverage: a webview test, a
+**0 of 158.** Every row has at least one layer of coverage: a webview test, a
 rig verb, or a smoke check. Some rows are covered only in part, and the cell
 says which part:
 
