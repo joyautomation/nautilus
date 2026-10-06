@@ -111,11 +111,10 @@ export class LiveValues implements vscode.Disposable {
   );
   // A forced value's pill: amber, with an F badge in its text — Logix and
   // TIA both mark a forced value so it can't be mistaken for the field's.
-  private readonly forcedDeco = pillDecoration(
-    new vscode.ThemeColor("charts.orange"),
-    "rgba(232, 160, 40, 0.16)",
-    "rgba(232, 160, 40, 0.65)"
-  );
+  // Literal ambers, not a ThemeColor: charts.orange rendered near-black in
+  // some dark themes (seen on the rig), and a forced value must never be
+  // the hard one to read. A light theme gets a darker amber for contrast.
+  private readonly forcedDeco = forcedPillDecoration();
   private readonly status = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     90
@@ -845,3 +844,17 @@ function pillDecoration(
   });
 }
 
+// forcedPillDecoration is pillDecoration in amber, with a darker ink on light
+// themes — the forced value's pill (its text carries the F).
+function forcedPillDecoration(): vscode.TextEditorDecorationType {
+  const shape = "none; border-radius: 5px; padding: 0px 5px; font-size: 0.85em; vertical-align: baseline;";
+  return vscode.window.createTextEditorDecorationType({
+    after: { margin: "0 0 0 0.6em", fontWeight: "700", textDecoration: shape },
+    dark: {
+      after: { color: "#f2b13c", backgroundColor: "rgba(242, 177, 60, 0.16)", border: "1px solid rgba(242, 177, 60, 0.7)" },
+    },
+    light: {
+      after: { color: "#9a5b00", backgroundColor: "rgba(214, 140, 20, 0.14)", border: "1px solid rgba(170, 100, 0, 0.6)" },
+    },
+  });
+}

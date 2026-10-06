@@ -42,7 +42,7 @@ export class LiveValuesView implements vscode.TreeDataProvider<Node> {
       // The Forces group carries "Remove All Forces" on its row.
       item.contextValue = node.forces ? "nautilusForceGroup" : "nautilusGroup";
       if (node.forces) {
-        item.iconPath = new vscode.ThemeIcon("lock", new vscode.ThemeColor("charts.orange"));
+        item.iconPath = new vscode.ThemeIcon("lock", new vscode.ThemeColor("list.warningForeground"));
         item.tooltip = "Values held by a force against the field and the logic, until removed";
       }
       return item;
@@ -71,7 +71,7 @@ export class LiveValuesView implements vscode.TreeDataProvider<Node> {
     if (node.forced) {
       // The F badge: Logix and TIA both mark a forced value in the list.
       item.description = forcedDescription(formatValue(node.value));
-      item.iconPath = new vscode.ThemeIcon("lock", new vscode.ThemeColor("charts.orange"));
+      item.iconPath = new vscode.ThemeIcon("lock", new vscode.ThemeColor("list.warningForeground"));
       item.tooltip = `${node.name} = ${formatValue(node.value)} — FORCED${node.forced !== node.name ? ` (${node.forced})` : ""}; held against the field and the logic until removed`;
     }
     // Click-to-edit: a settable scalar opens the Set Live Value input on a
