@@ -1,0 +1,26 @@
+# st-region — REGION name … END_REGION (#202), TIA SCL's way of structuring
+# a block: a grouping for folding and the outline that runs its statements
+# in place, nests, and opens no scope. A variable may still be called
+# Region. ST, and an SFC action (an action body is ST); LD and FBD have
+# their own structure (rungs, networks).
+#
+#   go test ./lang/conformance/ -run 'TestConformance/st-region'
+#   go run ./cmd/naut test lang/conformance/st-region
+name: st-region
+
+tasks:
+  - program: st-region.st   # the first task is always "main"; its prefix is still st_
+    scan: 10ms
+  - name: sfc
+    program: st-region.sfc
+    scan: 10ms
+
+tags:
+  - { name: In, role: state, init: 0 }
+  - { name: st_Out,     role: state, init: 0 }
+  - { name: st_Copy,    role: state, init: 0 }
+  - { name: sfc_Out,    role: state, init: 0 }
+  - { name: sfc_Copy,   role: state, init: 0 }
+
+driver:
+  type: memory

@@ -1,0 +1,22 @@
+# Enumerated types (#238). An enum-typed tag is given and asserted by its
+# member NAME (st_State: Fill) — the form /api/state shows; st_Code is the
+# integer TO_INT gives. Each step asserts st_ and sfc_ together.
+tests:
+  - name: a tag of an enumerated type starts at the type's initial member
+    steps:
+      - scans: 1
+        expect: { st_State: Idle, sfc_State: Idle, st_Code: 0, sfc_Code: 0, st_Valve: Closed, sfc_Valve: Closed }
+
+  - name: CASE labels and comparisons on members, qualified and not
+    steps:
+      - given: { Start: true }
+        scans: 2
+        expect: { st_State: Fill, sfc_State: Fill, st_Code: 10, sfc_Code: 10, st_Valve: Open, sfc_Valve: Open }
+      - given: { Full: true }
+        scans: 1
+        expect: { st_State: Wash, sfc_State: Wash, st_Code: 20, sfc_Code: 20, st_Valve: Closed, sfc_Valve: Closed }
+      - scans: 1
+        expect: { st_State: Drain, sfc_State: Drain, st_Code: 30, sfc_Code: 30 }
+      - given: { Start: false }
+        scans: 2
+        expect: { st_State: Idle, sfc_State: Idle, st_Code: 0, sfc_Code: 0 }

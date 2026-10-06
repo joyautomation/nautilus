@@ -11,7 +11,10 @@ line/rung**, never a silent coercion.
 - [How a scan evaluates](#how-a-scan-evaluates)
 - [Ladder power flow](#ladder-power-flow)
 - [Identifiers are case-insensitive](#identifiers-are-case-insensitive)
-- [Types](#types)
+- [Types](#types) — [enumerations](#enumerations), [constants](#constants), [VAR_TEMP](#temporaries-var_temp)
+- [Structure: REGION](#structure-region)
+- [CASE labels](#case-labels)
+- [SCL's `#` prefix](#scls--prefix)
 - [Operators](#operators)
 - [Standard functions](#standard-functions)
 - [Type conversions](#type-conversions)
@@ -225,7 +228,9 @@ Pinned in `lang/conformance/st-case-insensitive` (ST, ladder, FBD and SFC).
 `STRING`, plus `ARRAY[lo..hi] OF T` and user `TYPE ... STRUCT`.
 
 - Integer kinds share one 64-bit runtime representation; `REAL`/`LREAL`
-  are float64.
+  are float64. The declared name is kept on the type, so a diagnostic
+  says `DINT` or `WORD` for a variable declared that way, and
+  [partial access](#bit-operations) knows a `DINT` has 32 bits.
 - `TIME` counts **milliseconds** internally. Literals: `T#500MS`, `T#5S`,
   `T#2M30S`. TIME values compare with the ordinary comparisons.
 - Mixed numeric arguments promote to REAL; comparing or combining a
@@ -239,6 +244,113 @@ Pinned in `lang/conformance/st-case-insensitive` (ST, ladder, FBD and SFC).
 - A field or element of a `VAR_EXTERNAL` tag assigns directly —
   `P101.Running := TRUE`, `Levels[2] := 41.0`. The tag store holds the
   whole aggregate, so the VM reads it, writes the field, and puts it back.
+
+### Enumerations
+
+An enumerated `TYPE` (IEC 61131-3, as in Codesys) names a fixed set of
+values ([#238](https://github.com/joyautomation/nautilus/issues/238)):
+
+```iecst
+TYPE
+    WashState : (Idle, Fill := 10, Wash := 20, Drain := 30) := Idle;
+END_TYPE
+```
+
+- A member without `:= n` takes the previous member's value plus one (the
+  first, 0). Names and values are unique within the type. `:= Idle` after
+  the list is the type's initial value; without it, the first member. A
+  Codesys base type after the list (`(A, B) DINT`) is accepted.
+- `WashState#Fill` names a member qualified; `Fill` alone works where only
+  one enumeration in scope has a member of that name, or where the context
+  says which (an assignment's target, the other side of a comparison, a
+  `CASE` selector). Otherwise the compiler asks for the qualified form.
+- Values of one enumeration compare (`=`, `<>`, and `<`/`>` by member
+  value) and are `CASE` labels. Assignment is between the same enumeration
+  only. An enumeration does not mix with an integer and has no arithmetic.
+- Conversion is explicit: `TO_INT(s)` (or `TO_DINT`, any integer type) is
+  the member's integer; `TO_WashState(n)` is the member with integer `n` (a
+  number no member has keeps that number and shows unnamed).
+- A tag may be typed with an enumeration in the manifest (`type:
+  WashState`), seeded by name or number (`init: Fill` or `init: 10`).
+- **Live values show the member name.** `/api/state`, the live stream, the
+  editors' inline values and acceptance tests (`expect: { State: Fill }`)
+  show and take `Fill`. Underneath, a value is its integer, and that is
+  what Sparkplug, Modbus and the retain store carry.
+
+Pinned in `lang/conformance/st-enum` (ST and SFC).
+
+### Constants
+
+`VAR CONSTANT` declares a named value: reads fold to it at compile time,
+and assigning one (or a field, element or bit of one, or using it as a
+`FOR` variable) is a compile error. A constant's value, an initial value
+and an array bound may be a constant expression: literals, other constants
+and operators (`N2 : INT := N * 2;`, `ARRAY[1..N] OF REAL`).
+
+`VAR_GLOBAL CONSTANT` in a library file declares **project constants**
+([#176](https://github.com/joyautomation/nautilus/issues/176)), the Codesys
+GVL of constants — visible to every POU in every language, folded the same
+way:
+
+```iecst
+(* lib/constants.st *)
+VAR_GLOBAL CONSTANT
+    tMaxFill : TIME := T#60S;
+    HI_LIMIT : REAL := 80.0;
+END_VAR
+```
+
+A constant is not a tag: it has no manifest entry, no live value and no
+API path. A POU's own declaration of the same name shadows it. A
+constant's type is elementary or an enumeration. (A plain `VAR_GLOBAL`
+block, with no `CONSTANT`, still declares tags.) Pinned in
+`lang/conformance/st-global-constants` (ST, ladder, FBD and SFC).
+
+### Temporaries: VAR_TEMP
+
+`VAR_TEMP` is scratch for one execution
+([#203](https://github.com/joyautomation/nautilus/issues/203)): it starts
+every scan of a `PROGRAM`, and every **call** of a `FUNCTION_BLOCK` or
+`FUNCTION`, at its declared initial value (or its type's zero) — never at
+what the previous scan or call left, as TIA's `Temp` and IEC say. A block
+that reads a temp before writing it therefore sees its initial value. An
+online edit never carries a temp over. A temp cannot be `RETAIN` and cannot
+be a function-block instance (it would lose its state every call). Keep
+anything that must survive in `VAR`. Pinned in
+`lang/conformance/st-var-temp` (ST, ladder, FBD and SFC).
+
+## Structure: REGION
+
+`REGION name … END_REGION` groups statements, as TIA SCL does
+([#202](https://github.com/joyautomation/nautilus/issues/202)). It nests,
+appears anywhere a statement can, and changes nothing about how the
+statements run: it opens no scope and declares nothing. The name is the
+rest of the `REGION` line and may contain spaces. Regions fold in the
+editor and show in the Outline under their POU. `REGION` is not a reserved
+word — a variable may still be called `Region`. A `REGION` must be closed
+inside the statement list it opened in (not across an `END_IF`). Pinned in
+`lang/conformance/st-region`.
+
+## CASE labels
+
+A `CASE` label is a constant: a literal, a named constant (`VAR CONSTANT`
+or a project constant), an enumeration member, or a range of them
+(`S_FILL..S_DRAIN`). Each label ends the clause before it, named or not
+([#196](https://github.com/joyautomation/nautilus/issues/196): a named
+constant label used to be read as a statement of the clause above).
+A variable is not a label. Two labels with the same value — two constants,
+a constant and a literal, a value inside a range — are a compile error
+naming both, since the second could never run. Pinned in
+`lang/conformance/st-case-constants`.
+
+## SCL's `#` prefix
+
+TIA SCL marks a local `#name`. nautilus reads IEC Structured Text, where a
+local is written bare, and rejects the prefix wherever it appears with
+"the # prefix is Siemens SCL syntax; write the name without it"
+([#198](https://github.com/joyautomation/nautilus/issues/198)). It used to
+be dropped silently on an assignment target. Accepting it is a possible
+future `dialect: siemens` option.
 
 ## Operators
 
@@ -306,15 +418,24 @@ takes [EN/ENO](#eneno-execution-control).
 anywhere a BOOL is (`IF Status.0 THEN`, a ladder contact `Status.0`, a
 compare argument) and assignable (`Cmd.4 := TRUE`, a ladder coil
 `( Cmd.4 )`), which reads the word, sets or clears the bit, and writes
-the word back. Bits are numbered from 0 at the least significant end, up
-to 63. This is the spelling Logix uses and the one IEC 61131-3 ed. 3
-writes `Word.%X3`; nautilus takes the shorter one. A bit of an array
-element or a structure member works the same way: `Words[2].15`,
-`P101.Status.12`.
+the word back. Bits are numbered from 0 at the least significant end. This
+is the spelling Logix uses; IEC 61131-3 ed. 3 writes it `Word.%X3`, and
+both work. A bit of an array element or a structure member works the same
+way: `Words[2].15`, `P101.Status.12`.
 
-Caveat: the runtime's integers are 64-bit and declared widths aren't
-tracked, so rotates operate over 64 bits — a `WORD` you think of as 16
-bits rotates as a 64-bit value.
+**Partial access** (IEC, [#222](https://github.com/joyautomation/nautilus/issues/222))
+addresses a wider part the same way: `w.%B1` is the second byte (a
+`BYTE`, bits 8..15), `w.%W0` the low word, `w.%D1` the high double word of
+an `LWORD`, `w.%L0` the whole 64 bits. Each reads as an unsigned integer of
+that width and writes back only its own bits (`Alarms.%B3 := 16#AB`). The
+part must fit the **declared** type: a `DINT` has bits 0..31, bytes 0..3
+and words 0..1, so `d.%X32` or `w.16` on a `WORD` is a compile error that
+names the type. Ladder contacts and coils and FBD wires take every form
+(`Alarms.%X3`). Pinned in `lang/conformance/st-partial-access`.
+
+Caveat: the runtime's integers are 64-bit, so rotates and arithmetic
+operate over 64 bits — a `WORD` you think of as 16 bits rotates as a 64-bit
+value. Only partial access and diagnostics use the declared width.
 
 ### Strings
 
@@ -346,6 +467,8 @@ conversions across kinds:
 | `REAL_TO_TIME`, `TIME_TO_REAL` | milliseconds, rounded to nearest, ties to even |
 | `INT_TO_STRING`, `REAL_TO_STRING`, `BOOL_TO_STRING`, `TIME_TO_STRING` | formatting |
 | `STRING_TO_INT`, `STRING_TO_REAL`, `STRING_TO_BOOL` | parse; a non-parsing string is a runtime scan fault, so validate upstream |
+| `TO_INT`, `TO_DINT`, … (any integer type) | an [enumeration](#enumerations)'s member integer (or an integer, unchanged) |
+| `TO_<Enum>` (`TO_WashState`) | the enumeration member with that integer |
 
 ## Standard function blocks
 

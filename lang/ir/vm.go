@@ -41,7 +41,16 @@ func isZeroDivisor(v Value) bool {
 }
 
 // Run executes one scan of the program body against the frame.
+//
+// Every VAR_TEMP slot (Program.Temps) starts the call at its declared
+// initial value, or its type's zero: IEC 61131-3 temporaries are scratch for
+// one execution of the POU and never carry a value from the previous scan or
+// call (#203). A FUNCTION_BLOCK body runs through here on each call with
+// the instance's slots as the frame, so its temps reset per call too.
 func Run(prog *Program, frame *Frame, host Host) error {
+	for _, i := range prog.Temps {
+		prog.Slots[i].resetInto(&frame.Slots[i])
+	}
 	ctx := &EvalCtx{Program: prog, Frame: frame, Host: host}
 	return execBlock(ctx, prog.Body)
 }
@@ -274,6 +283,11 @@ func writeLValue(ctx *EvalCtx, lv LValue, v Value) error {
 		if err != nil {
 			return err
 		}
+		if b.Width > 1 {
+			m := b.mask()
+			word.I = word.I&^(m<<uint(b.Bit)) | (v.I&m)<<uint(b.Bit)
+			return writeLValue(ctx, b.Object, word)
+		}
 		mask := int64(1) << uint(b.Bit)
 		if v.B {
 			word.I |= mask
@@ -412,6 +426,9 @@ func evalExpr(ctx *EvalCtx, e Expr) (Value, error) {
 		obj, err := evalExpr(ctx, n.Object)
 		if err != nil {
 			return Value{}, err
+		}
+		if n.Width > 1 {
+			return IntVal(obj.I >> uint(n.Bit) & n.mask()), nil
 		}
 		return BoolVal(obj.I>>uint(n.Bit)&1 != 0), nil
 	case *MemberRef:
@@ -606,6 +623,9 @@ func asFloat(v Value) float64 {
 func CoerceValue(v Value, t *Type) Value { return coerceValue(v, t) }
 
 func coerceValue(v Value, t *Type) Value {
+	if t != nil && t.Enum != nil {
+		return coerceEnum(v, t.Enum)
+	}
 	if t == nil || v.Kind == t.Kind {
 		return v
 	}
@@ -645,4 +665,71 @@ func coerceValue(v Value, t *Type) Value {
 		}
 	}
 	return Zero(t)
+}
+
+// coerceEnum brings a host-supplied value into an enumerated type: an
+// integer keeps its value and gains the member's name (a tag a driver wrote
+// as a plain number reads back named); a string names a member, so an
+// operator or a tag table may write "Run" (an unknown name is the type's
+// default). This is the conversion a typed tag store applies on write.
+func coerceEnum(v Value, d *EnumDef) Value {
+	switch v.Kind {
+	case TypeInt, TypeTime:
+		if v.Kind == TypeInt && v.S != "" && d.NameOf(v.I) == v.S {
+			return v
+		}
+		return d.Val(v.I)
+	case TypeReal:
+		return d.Val(int64(v.F))
+	case TypeBool:
+		if v.B {
+			return d.Val(1)
+		}
+		return d.Val(0)
+	case TypeString:
+		if m, ok := d.Member(v.S); ok {
+			return Value{Kind: TypeInt, I: m.Value, S: m.Name}
+		}
+	}
+	return d.Val(d.Default)
+}
+
+// ConstValue evaluates e at compile time when it is a constant expression:
+// literals combined by operators and built-in functions (which are pure —
+// a BuiltinFn sees only its arguments). ok is false for anything that
+// reads a variable, a tag or calls a user POU, or that faults. The lowering
+// pass uses it to fold named constants, CASE labels and array bounds.
+func ConstValue(e Expr) (Value, bool) {
+	if !isConstExpr(e) {
+		return Value{}, false
+	}
+	v, err := evalExpr(&EvalCtx{Frame: &Frame{}}, e)
+	if err != nil {
+		return Value{}, false
+	}
+	return v, true
+}
+
+func isConstExpr(e Expr) bool {
+	switch n := e.(type) {
+	case *Lit:
+		return true
+	case *BinOp:
+		return isConstExpr(n.L) && isConstExpr(n.R)
+	case *UnOp:
+		return isConstExpr(n.X)
+	case *Call:
+		// A builtin with no arguments can only be a source (a clock, a
+		// first-scan flag), never a constant.
+		if n.Fn == nil || len(n.Args) == 0 {
+			return false
+		}
+		for _, a := range n.Args {
+			if !isConstExpr(a) {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }

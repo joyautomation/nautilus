@@ -39,14 +39,15 @@ three things it is:
 | SCL | nautilus | Status |
 | --- | --- | --- |
 | `IF`, `CASE`, `FOR`, `WHILE`, `REPEAT` | the same | Today |
-| `CASE` labels that are named constants | silently wrong today, avoid until fixed | Planned, [#196](https://github.com/joyautomation/nautilus/issues/196) |
+| `CASE` labels that are named constants | the same: a `VAR CONSTANT` (or project constant, or enumeration member) label ends its clause; two labels with one value are an error naming both | Today, [#196](https://github.com/joyautomation/nautilus/issues/196) |
 | Case-insensitive identifiers (`MyTag` = `mytag`) | the same: any casing names the one declaration, and diagnostics, live values and the API show it as declared | Today, [#197](https://github.com/joyautomation/nautilus/issues/197) |
-| `#name` for a local variable | rejected; the message is being made to say why. It will be accepted later only under `dialect: siemens` | Rejected; dialect only, [#198](https://github.com/joyautomation/nautilus/issues/198) |
+| `#name` for a local variable | write `name`. `#` is rejected everywhere with "the # prefix is Siemens SCL syntax; write the name without it". It may be accepted later only under `dialect: siemens` | Rejected with a clear message, [#198](https://github.com/joyautomation/nautilus/issues/198) |
 | `"Tag"` quoted global name | write the tag's plain name | Not applicable |
-| `VAR_TEMP` | parses, but keeps its value between scans. TIA's `Temp` is scratch cleared per call | Planned, [#203](https://github.com/joyautomation/nautilus/issues/203) |
-| `REGION … END_REGION` | not supported; the diagnostic is poor | Planned, [#202](https://github.com/joyautomation/nautilus/issues/202) |
+| `VAR_TEMP` | the same as `Temp`: starts every call (and every scan of a program) at its initial value | Today, [#203](https://github.com/joyautomation/nautilus/issues/203) |
+| `REGION … END_REGION` | the same: groups statements, folds in the editor, shows in the Outline, opens no scope | Today, [#202](https://github.com/joyautomation/nautilus/issues/202) |
+| User constants | `VAR CONSTANT` in a block, or `VAR_GLOBAL CONSTANT` in a `lib/` file for the whole project | Today, [#176](https://github.com/joyautomation/nautilus/issues/176) |
 | `Real`, `DInt`, `Time` in SCL's casing | the same; any casing | Today |
-| `Word.%X3` bit access | `Word.3` | In review, [#225](https://github.com/joyautomation/nautilus/pull/225) |
+| `Word.%X3` bit access, `%B`/`%W`/`%D` partial access | the same, or Logix's `Word.3`; bounded by the declared type | Today, [#222](https://github.com/joyautomation/nautilus/issues/222) |
 | `IEC_TIMER` / `TON` DB | `t : TON;` and `t(IN := Run, PT := T#5S);` | Today |
 
 Standard timers and counters have the IEC pins, so SCL calls such as

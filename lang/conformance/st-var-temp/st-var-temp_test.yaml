@@ -1,0 +1,40 @@
+# VAR_TEMP resets on every call and every scan (#203); VAR does not.
+# Fresh is 100 + Add on each call; Total accumulates 3 per scan.
+tests:
+  - name: the first scan
+    steps:
+      - scans: 1
+        expect:
+          st_Fresh1: 101
+          ld_Fresh1: 101
+          fbd_Fresh1: 101
+          sfc_Fresh1: 101
+          st_Fresh2: 102
+          ld_Fresh2: 102
+          fbd_Fresh2: 102
+          sfc_Fresh2: 102
+          st_Total: 3
+          ld_Total: 3
+          fbd_Total: 3
+          sfc_Total: 3
+          st_Scan: 1
+          sfc_Scan: 1
+
+  - name: later scans — the temps start over, VAR keeps counting
+    steps:
+      - scans: 5
+        expect:
+          st_Fresh1: 101
+          ld_Fresh1: 101
+          fbd_Fresh1: 101
+          sfc_Fresh1: 101
+          st_Fresh2: 102
+          ld_Fresh2: 102
+          fbd_Fresh2: 102
+          sfc_Fresh2: 102
+          st_Total: 15
+          ld_Total: 15
+          fbd_Total: 15
+          sfc_Total: 15
+          st_Scan: 1
+          sfc_Scan: 1

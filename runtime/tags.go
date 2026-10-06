@@ -360,7 +360,9 @@ func sameValue(a, b *ir.Value) bool {
 	case ir.TypeReal:
 		return a.F == b.F
 	case ir.TypeInt, ir.TypeTime:
-		return a.I == b.I
+		// S is an enumeration member's name: a named value over the same
+		// integer unnamed is a change (the name is what the HMI shows).
+		return a.I == b.I && a.S == b.S
 	case ir.TypeString:
 		return a.S == b.S
 	case ir.TypeArray:
@@ -601,6 +603,9 @@ func plainLeaf(v ir.Value) any {
 	case ir.TypeReal:
 		return v.F
 	case ir.TypeInt, ir.TypeTime:
+		if v.Kind == ir.TypeInt && v.S != "" {
+			return v.S // an enumeration member, by name (#238)
+		}
 		return v.I
 	case ir.TypeString:
 		return v.S
@@ -742,20 +747,32 @@ func (t *Tags) All() map[string]any {
 	return out
 }
 
-func plain(v ir.Value) any {
+func plain(v ir.Value) any { return render(v, true) }
+
+// plainNumeric is plain with an enumeration as its integer — the form
+// retain persists, because the reload writes it back as a number.
+func plainNumeric(v ir.Value) any { return render(v, false) }
+
+// render is plain's walk. names: an enumeration value (#238) renders as its
+// member name ("Run"), the form /api/state, the stream and an editor's live
+// values show; otherwise as its integer.
+func render(v ir.Value, names bool) any {
 	switch v.Kind {
 	case ir.TypeBool:
 		return v.B
 	case ir.TypeReal:
 		return v.F
 	case ir.TypeInt, ir.TypeTime:
+		if names && v.Kind == ir.TypeInt && v.S != "" {
+			return v.S
+		}
 		return v.I
 	case ir.TypeString:
 		return v.S
 	case ir.TypeArray:
 		out := make([]any, len(v.Arr))
 		for i, e := range v.Arr {
-			out[i] = plain(e)
+			out[i] = render(e, names)
 		}
 		return out
 	case ir.TypeStruct:
@@ -768,7 +785,7 @@ func plain(v ir.Value) any {
 			if name == "" {
 				name = "_" + strconv.Itoa(i)
 			}
-			out[name] = plain(f)
+			out[name] = render(f, names)
 		}
 		return out
 	case ir.TypeFB:
@@ -784,7 +801,7 @@ func plain(v ir.Value) any {
 			if i >= len(v.FB.Slots) || strings.HasPrefix(s.Name, "_") {
 				continue
 			}
-			out[s.Name] = plain(v.FB.Slots[i])
+			out[s.Name] = render(v.FB.Slots[i], names)
 		}
 		return out
 	default:

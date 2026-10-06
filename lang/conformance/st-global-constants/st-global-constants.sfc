@@ -1,0 +1,36 @@
+PROGRAM GConstSfc
+(* The project constants in an action and in a transition condition. *)
+VAR_EXTERNAL
+    Level      : REAL;
+    Run        : BOOL;
+    sfc_High   : BOOL;
+    sfc_Done   : BOOL;
+    sfc_Stages : INT;
+END_VAR
+VAR
+    t : TON;
+END_VAR
+SFC
+
+  INITIAL_STEP Watch:
+    N Measure;
+  END_STEP
+
+  STEP High:
+    N Measure;
+  END_STEP
+
+  TRANSITION up   FROM Watch TO High  := Level > HI_LIMIT;
+  END_TRANSITION
+  TRANSITION down FROM High  TO Watch := NOT (Level > HI_LIMIT);
+  END_TRANSITION
+
+  ACTION Measure:
+    sfc_High := Level > HI_LIMIT;
+    t(IN := Run, PT := T_DELAY);
+    sfc_Done := t.Q;
+    sfc_Stages := STAGES * (STAGES + 1) / 2;
+  END_ACTION
+
+END_SFC
+END_PROGRAM

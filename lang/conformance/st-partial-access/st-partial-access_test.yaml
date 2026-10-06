@@ -1,0 +1,20 @@
+# Partial access (#222). Alarms is a DINT; 16#8000_0A08 has bits 3, 9, 11
+# and 31 set, so its second byte is 16#0A. Each step asserts every language.
+tests:
+  - name: a bit and a byte of a word read as BOOL and BYTE
+    steps:
+      - given: { Alarms: 2048 }
+        scans: 1
+        expect: { st_Bit3: false, st_Bit3L: false, ld_Bit3: false, fbd_Bit3: false, st_Byte1: 8, fbd_Byte1: 8 }
+      - given: { Alarms: 2568 }
+        scans: 1
+        expect: { st_Bit3: true, st_Bit3L: true, ld_Bit3: true, fbd_Bit3: true, st_Byte1: 10, fbd_Byte1: 10 }
+
+  - name: writing bits packs a word, leaving its other bits alone
+    steps:
+      - given: { Alarms: -2147481080 }
+        scans: 1
+        expect: { st_Packed: 32769, ld_Packed: 32769, fbd_Packed: 32769 }
+      - given: { Alarms: 0 }
+        scans: 1
+        expect: { st_Packed: 0, ld_Packed: 0, fbd_Packed: 0 }

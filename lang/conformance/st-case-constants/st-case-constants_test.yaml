@@ -1,0 +1,28 @@
+# CASE labels that are named constants (#196). Each step asserts st_ and
+# sfc_ together; the counts are the edge the bug broke (it stopped at 1).
+tests:
+  - name: idle holds until Go
+    steps:
+      - scans: 2
+        expect: { st_State: 0, sfc_State: 0, st_Count: 0, sfc_Count: 0 }
+
+  - name: each constant label runs its own clause, one per scan
+    steps:
+      - given: { Go: true }
+        scans: 1
+        expect: { st_State: 10, sfc_State: 10, st_Count: 0, sfc_Count: 0 }
+      - scans: 1
+        expect: { st_State: 10, sfc_State: 10, st_Count: 1, sfc_Count: 1 }
+      - scans: 1
+        expect: { st_Count: 2, sfc_Count: 2 }
+      - scans: 1
+        expect: { st_State: 20, sfc_State: 20, st_Count: 3, sfc_Count: 3 }
+
+  - name: the last label holds, then returns to the first
+    given: { Go: true }
+    steps:
+      - scans: 6
+        expect: { st_State: 20, sfc_State: 20, st_Count: 3, sfc_Count: 3 }
+      - given: { Go: false }
+        scans: 1
+        expect: { st_State: 0, sfc_State: 0, st_Count: 3, sfc_Count: 3 }

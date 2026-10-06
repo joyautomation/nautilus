@@ -85,7 +85,7 @@ func (s *Server) dispatch(m *message) {
 				HoverProvider:         true,
 				DefinitionProvider:    true,
 				ReferencesProvider:    true,
-				CompletionProvider:    &CompletionOpts{TriggerCharacters: []string{"."}},
+				CompletionProvider:    &CompletionOpts{TriggerCharacters: []string{".", "#"}},
 				SignatureHelpProvider: signatureHelpOptions(),
 				RenameProvider:        &RenameOpts{PrepareProvider: true},
 
@@ -317,6 +317,11 @@ func (s *Server) handleHover(m *message) {
 			})
 			return
 		}
+		// A project constant from a library file, or an enumeration member.
+		if v := doc.an.constOrMemberHover(word); v != "" {
+			s.w.respond(m.ID, Hover{Contents: MarkupContent{Kind: "markdown", Value: v}, Range: &wr})
+			return
+		}
 		s.w.respond(m.ID, nil)
 		return
 	}
@@ -398,6 +403,17 @@ func (s *Server) handleCompletion(m *message) {
 			return
 		}
 	}
+	// After Mode#, offer the enumeration's members (#238). A '#' after
+	// anything else (16#, T#, INT#) has nothing to offer.
+	line0 := lineText(doc.text, pos.Line+1)
+	if typeName, isHash := hashContext(line0, pos.Character); isHash {
+		items := []CompletionItem{}
+		for _, m := range doc.an.enums[strings.ToLower(typeName)] {
+			items = append(items, CompletionItem{Label: m, Kind: CompletionKindEnum, Detail: typeName})
+		}
+		s.w.respond(m.ID, items)
+		return
+	}
 	// After a dot, offer the members of the base expression's type —
 	// "PIT_001.| " lists Analog_Input's members, chains and array indexing
 	// included ("Plt[3].Header.|"). Nothing else is meaningful there.
@@ -435,6 +451,23 @@ func (s *Server) handleCompletion(m *message) {
 			Kind:   kind,
 			Detail: strings.TrimSpace(sym.Datatype + " " + strings.ToLower(sym.BlockKind)),
 		})
+	}
+	// Project constants and enumeration members are in scope everywhere,
+	// including those a sibling library declares.
+	inFile := map[string]bool{}
+	for i := range doc.an.Symbols {
+		inFile[strings.ToLower(doc.an.Symbols[i].Name)] = true
+	}
+	for _, c := range doc.an.projectConsts {
+		if inFile[strings.ToLower(c.Name)] {
+			continue // this file's own: already offered above
+		}
+		items = append(items, CompletionItem{Label: c.Name, Kind: CompletionKindConstant, Detail: c.Datatype + " constant"})
+	}
+	for typeName, members := range doc.an.enumDecl {
+		for _, m := range members {
+			items = append(items, CompletionItem{Label: m, Kind: CompletionKindEnum, Detail: typeName})
+		}
 	}
 	items = append(items, s.statics...)
 	s.w.respond(m.ID, items)

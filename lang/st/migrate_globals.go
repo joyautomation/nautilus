@@ -186,7 +186,7 @@ func renderTypeForExternal(t *ir.Type) string {
 	case ir.TypeBool:
 		return "BOOL"
 	case ir.TypeInt:
-		return "INT"
+		return t.String() // INT, DINT, WORD, … or an enumeration's name
 	case ir.TypeReal:
 		return "REAL"
 	case ir.TypeTime:

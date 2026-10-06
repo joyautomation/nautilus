@@ -1,0 +1,31 @@
+# st-enum — enumerated types (#238), the Codesys washer's state machine
+# without INT constants: a TYPE with explicit values, qualified (WashState#Fill)
+# and unqualified (Drain) members, comparison, CASE labels, an enum-typed
+# tag (shown and asserted by member name), and TO_INT for the number. ST
+# and SFC (where a transition compares enum values); LD and FBD do not
+# compute with enumerations.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/st-enum'
+#   go run ./cmd/naut test lang/conformance/st-enum
+name: st-enum
+
+tasks:
+  - program: st-enum.st   # the first task is always "main"; its prefix is still st_
+    scan: 10ms
+  - name: sfc
+    program: st-enum.sfc
+    scan: 10ms
+
+tags:
+  - { name: Start, role: state, init: false }
+  - { name: Full,  role: state, init: false }
+
+  - { name: st_State,  role: state, type: WashState }
+  - { name: st_Code,   role: state, init: 0 }
+  - { name: st_Valve,  role: state, type: Valve }
+  - { name: sfc_State, role: state, type: WashState }
+  - { name: sfc_Code,  role: state, init: 0 }
+  - { name: sfc_Valve, role: state, type: Valve }
+
+driver:
+  type: memory

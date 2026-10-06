@@ -1,0 +1,29 @@
+PROGRAM TempSfc
+(* The chart's header declares a temp too: it starts every scan at zero. *)
+VAR_EXTERNAL
+    sfc_Fresh1 : INT;
+    sfc_Fresh2 : INT;
+    sfc_Total  : INT;
+    sfc_Scan   : INT;
+END_VAR
+VAR
+    s : Scratch;
+END_VAR
+VAR_TEMP
+    n : INT;
+END_VAR
+SFC
+
+  INITIAL_STEP Busy:
+    N Work;
+  END_STEP
+
+  ACTION Work:
+    s(Add := 1, Fresh => sfc_Fresh1);
+    s(Add := 2, Fresh => sfc_Fresh2, Total => sfc_Total);
+    n := n + 1;
+    sfc_Scan := n;
+  END_ACTION
+
+END_SFC
+END_PROGRAM

@@ -1,0 +1,14 @@
+# REGION … END_REGION runs its statements in place, nested regions
+# included (#202). Each step asserts st_ and sfc_ together.
+tests:
+  - name: statements inside regions run in order
+    given: { In: 20 }
+    steps:
+      - scans: 1
+        expect: { st_Out: 40, sfc_Out: 40, st_Copy: 41, sfc_Copy: 41 }
+
+  - name: a nested region's statements run too
+    given: { In: 70 }
+    steps:
+      - scans: 1
+        expect: { st_Out: 100, sfc_Out: 100, st_Copy: 101, sfc_Copy: 101 }

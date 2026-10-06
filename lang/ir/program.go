@@ -24,6 +24,48 @@ type VarSlot struct {
 	Constant bool
 	Kind     VarKind
 	Global   string // Kind == VarGlobal: PLC variable name passed to Host
+	// Temp marks a VAR_TEMP declaration: scratch for one execution, put
+	// back to Init (or the type's zero) at the start of every Run and never
+	// carried across an online edit (#203). See Program.Temps.
+	Temp bool
+}
+
+// resetInto puts *dst back to the slot's initial value. An aggregate of the
+// right shape is reset in place, element by element, so a VAR_TEMP array
+// costs no allocation per scan.
+func (s VarSlot) resetInto(dst *Value) {
+	if s.Init.Kind != TypeVoid {
+		*dst = CopyValue(s.Init)
+		return
+	}
+	resetZero(dst, s.Type)
+}
+
+// resetZero writes Zero(t) into *dst, reusing dst's array and struct
+// storage when it already has t's shape.
+func resetZero(dst *Value, t *Type) {
+	if t == nil {
+		*dst = Value{}
+		return
+	}
+	switch t.Kind {
+	case TypeArray:
+		if dst.Kind == TypeArray && len(dst.Arr) == t.ArrLen {
+			for i := range dst.Arr {
+				resetZero(&dst.Arr[i], t.Elem)
+			}
+			return
+		}
+	case TypeStruct:
+		if dst.Kind == TypeStruct && t.Struct != nil && len(dst.Fld) == len(t.Struct.Fields) {
+			for i := range dst.Fld {
+				resetZero(&dst.Fld[i], t.Struct.Fields[i].Type)
+			}
+			dst.Struct = t.Struct
+			return
+		}
+	}
+	*dst = Zero(t)
 }
 
 // Program is a compiled ST program (or function-block body in phase 4).
@@ -56,6 +98,10 @@ type Program struct {
 	// after Lower returns and registers them so other programs can use
 	// them by name.
 	UserFBs []*FBDef
+
+	// Temps are the indices of the VAR_TEMP slots, which Run resets before
+	// every execution of the body (#203).
+	Temps []int
 
 	// UserFuncs are FuncDefs declared at the top of this source file via
 	// FUNCTION Name : Return ... END_FUNCTION. The engine registers them
