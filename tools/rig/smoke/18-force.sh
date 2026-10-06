@@ -170,11 +170,6 @@ point_extension_at "$PROJ" "$PORT"
 start_controller "$PROJ" "$PORT"
 sleep 3
 api /api/meta | grep -q '"forces":true' && pass "naut run on :$PORT advertises forces (/api/meta)" || { fail "controller on :$PORT does not advertise forces"; exit 1; }
-# Drop the level below the pump's start level so the seal-in is RUNNING
-# before the force: forcing the level high must then stop it — a change the
-# force causes, not one the plant was about to make.
-api_post /api/tags '{"name":"LevelPct","value":30}' >/dev/null || true
-sleep 1
 
 EXTRA_SETTINGS='"window.menuStyle": "custom"' smoke_open "$PROJ" sim.st
 key Escape
@@ -183,6 +178,12 @@ vs_cmd "nautilus: Focus on Live Values View" 3
 sleep 1.5
 
 # ── a: Force… from the Live Values panel ────────────────────────────────────
+# Drop the level below the pump's start level so the seal-in is RUNNING
+# when the force lands: forcing the level high must then stop it — a change
+# the force causes, not one the plant was about to make (the sim fills at
+# 1.7 %/s, so from 30 the pump has ~25 s of run left; the gesture takes ~5).
+api_post /api/tags '{"name":"LevelPct","value":30}' >/dev/null || true
+sleep 1
 pump0=$(tagv PumpRun)
 if r=$(row_action LevelPct 'Force'); then
   png=$(shot a-input)
@@ -368,5 +369,14 @@ if right_click_el "$TS_EL"; then
 else
   fail "e: no t_start transition on the chart" "$(shot e-notrans)"
 fi
+# b on a diagram: a forced action target is marked F on the live chart.
+api_post /api/forces '{"name":"FillValve","value":true}' >/dev/null || fail "b: could not force FillValve over the API"
+marked() { [[ $(js '[...doc.querySelectorAll(".assoctarget")].filter(t => t.querySelector(".nx-forced-mark")).map(t => t.textContent).join(",")') == *FillValve* ]]; }
+if wait_for 5 marked; then
+  pass "b: the SFC chart marks the forced FillValve action ($(js '[...doc.querySelectorAll(".assoctarget")].filter(t => t.querySelector(".nx-forced-mark")).map(t => t.textContent).join(",")'))" "$(shot e-diagram-badge)"
+else
+  fail "b: no F mark on the forced FillValve action in the chart" "$(shot e-diagram-badge)"
+fi
+api_post /api/forces/clear '' >/dev/null || true
 a=$(grep -cE 'sfc: (set active step|fired transition)' /tmp/capture-controller.log || true)
 (( a >= 2 )) && pass "f: $a SFC audit lines in the controller log" || fail "f: $a SFC audit lines in the controller log, want ≥ 2"
