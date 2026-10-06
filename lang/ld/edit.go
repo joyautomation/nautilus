@@ -59,6 +59,21 @@ type EditOp struct {
 	ToCoil  bool   `json:"toCoil,omitempty"`
 	// Pou names the PROGRAM a blank file is seeded with (see ApplyEdit).
 	Pou string `json:"pou,omitempty"`
+	// Block names the FUNCTION_BLOCK whose header declareVar / deleteVar /
+	// renameVar edit (its pins and locals); "" is the file's PROGRAM.
+	Block string `json:"block,omitempty"`
+	// NewName is renameVar's new name (Name is the old one).
+	NewName string `json:"newName,omitempty"`
+	// Body is pasteRung's rung: its elements, coils and header comment, as
+	// the render model carries them (a copied rung from the webview).
+	Body *RungBody `json:"body,omitempty"`
+}
+
+// RungBody is a whole rung's content, for pasteRung.
+type RungBody struct {
+	Comment  string    `json:"comment,omitempty"`
+	Elements []Element `json:"elements"`
+	Coils    []Element `json:"coils"`
 }
 
 // TextEdit is a 1-based, end-exclusive replacement (mirrors lang/fbd).
@@ -79,6 +94,30 @@ func refValid(s string) bool {
 	t := &rungTok{src: s, line: 1}
 	got, err := t.ident()
 	return err == nil && got == strings.TrimSpace(s) && t.peek() == ""
+}
+
+// splitRefForm splits a typed contact reference into the reference and
+// its form prefix: "+" rising edge, "-" falling edge, "/" normally closed,
+// "" none.
+func splitRefForm(s string) (ref, form string) {
+	t := strings.TrimSpace(s)
+	if t != "" && strings.ContainsRune("+-/", rune(t[0])) {
+		return strings.TrimSpace(t[1:]), t[:1]
+	}
+	return t, ""
+}
+
+// setContactForm turns a contact or edge element into the form a prefix
+// names ("" NO, "/" NC, "+" P, "-" N), keeping its reference.
+func setContactForm(el *Element, form string) {
+	switch form {
+	case "+", "-":
+		el.Kind, el.Neg, el.Mode = "edge", false, map[string]string{"+": "P", "-": "N"}[form]
+	case "/":
+		el.Kind, el.Neg, el.Mode = "contact", true, ""
+	default:
+		el.Kind, el.Neg, el.Mode = "contact", false, ""
+	}
 }
 
 // ApplyEdit resolves op against source and returns the text edits. libs
@@ -122,6 +161,10 @@ func ApplyEdit(src string, op EditOp, libs ...string) ([]TextEdit, error) {
 		return opRenameInst(src, m, op)
 	case "deleteVar":
 		return opDeleteVar(src, m, op)
+	case "renameVar":
+		return opRenameVar(src, m, op)
+	case "pasteRung":
+		return opPasteRung(src, m, op)
 	}
 
 	r, err := findRung(m, op.Rung)
@@ -130,17 +173,45 @@ func ApplyEdit(src string, op EditOp, libs ...string) ([]TextEdit, error) {
 	}
 	switch op.Type {
 	case "setRef":
-		if !refValid(op.Ref) {
+		// A contact's retag may also say its form, as the rung grammar
+		// writes it: `+Tag` a rising-edge contact, `-Tag` a falling one,
+		// `/Tag` normally closed. A bare tag keeps the element's form.
+		ref, form := splitRefForm(op.Ref)
+		if !refValid(ref) {
 			return nil, fmt.Errorf("ld edit: %q is not a valid reference", op.Ref)
 		}
 		el, err := locate(r, op)
 		if err != nil {
 			return nil, err
 		}
-		if el.Kind != "contact" && el.Kind != "coil" && el.Kind != "edge" {
+		switch el.Kind {
+		case "contact", "edge":
+			if form != "" {
+				setContactForm(el, form)
+			}
+		case "coil":
+			if form != "" {
+				return nil, fmt.Errorf("ld edit: %q: a coil takes a plain reference (M sets its mode)", op.Ref)
+			}
+		default:
 			return nil, fmt.Errorf("ld edit: only contacts, coils, and edges retag")
 		}
-		el.Ref = op.Ref
+		el.Ref = ref
+	case "setContactForm":
+		// One contact, four forms: NO, NC, P (rising edge), N (falling
+		// edge) — the P key cycles them on a selected contact.
+		el, err := locate(r, op)
+		if err != nil {
+			return nil, err
+		}
+		if el.Kind != "contact" && el.Kind != "edge" {
+			return nil, fmt.Errorf("ld edit: only contacts change form")
+		}
+		form, ok := map[string]string{"NO": "", "NC": "/", "P": "+", "N": "-"}[strings.ToUpper(op.Mode)]
+		if !ok {
+			return nil, fmt.Errorf("ld edit: a contact's form is NO, NC, P or N, not %q", op.Mode)
+		}
+		setContactForm(el, form)
 	case "toggleNeg":
 		el, err := locate(r, op)
 		if err != nil {
@@ -600,7 +671,13 @@ func insertInstConflict(m *Model, pou, inst, typ string) error {
 // uniquifyInsts renames pasted fb instances that already exist anywhere in
 // the program — a paste duplicates state, it never aliases the original.
 func uniquifyInsts(m *Model, el *Element) {
-	taken := map[string]bool{}
+	uniquifyInstsAgainst(m, el, map[string]bool{})
+}
+
+// uniquifyInstsAgainst is uniquifyInsts with more names already taken
+// (header declarations, for a whole-rung paste); a rename keeps the name's
+// own number running on — m1 → m2, t1 → t2.
+func uniquifyInstsAgainst(m *Model, el *Element, taken map[string]bool) {
 	for i := range m.Rungs {
 		collectInsts(m.Rungs[i].Elements, taken)
 		collectInsts(m.Rungs[i].Coils, taken)
@@ -614,6 +691,8 @@ func uniquifyInsts(m *Model, el *Element) {
 				n++
 			}
 			e.Inst = fmt.Sprintf("%s%d", base, n)
+		}
+		if e.Kind == "fb" {
 			taken[strings.ToLower(e.Inst)] = true
 		}
 		for li := range e.Legs {
@@ -851,20 +930,49 @@ func opSetRungComment(src string, m *Model, op EditOp) ([]TextEdit, error) {
 // header (before the LD block), so the diagram edits them textually.
 
 var (
-	ldVarSectionRe = regexp.MustCompile(`(?i)^\s*(VAR_EXTERNAL|VAR)\s*$`)
+	ldVarSectionRe = regexp.MustCompile(`(?i)^\s*(VAR_EXTERNAL|VAR_INPUT|VAR_OUTPUT|VAR_IN_OUT|VAR)\s*$`)
 	programLineRe  = regexp.MustCompile(`(?i)^\s*PROGRAM\s+[A-Za-z_]`)
 )
 
-// opDeclareVar inserts "name : TYPE;" into a header section (VAR_EXTERNAL
-// default, VAR for retained locals), creating the section above LD if needed.
+// The sections the diagram declares into: a PROGRAM's tags and locals; a
+// FUNCTION_BLOCK's pins (the AOI's parameters) and locals.
+var (
+	programSections = map[string]bool{"VAR_EXTERNAL": true, "VAR": true}
+	blockSections   = map[string]bool{"VAR_INPUT": true, "VAR_OUTPUT": true, "VAR_IN_OUT": true, "VAR": true, "VAR_EXTERNAL": true}
+)
+
+// findBlock returns the FUNCTION_BLOCK the file defines by that name.
+func findBlock(m *Model, name string) (*Block, error) {
+	for i := range m.Blocks {
+		if strings.EqualFold(m.Blocks[i].Name, name) {
+			return &m.Blocks[i], nil
+		}
+	}
+	return nil, fmt.Errorf("ld edit: no FUNCTION_BLOCK named %q in this file", name)
+}
+
+// opDeclareVar inserts "name : TYPE;" into a header section, creating the
+// section above LD if needed. The header is the PROGRAM's (VAR_EXTERNAL by
+// default, VAR for retained locals) or, with Block, that FUNCTION_BLOCK's:
+// its pins (VAR_INPUT / VAR_OUTPUT / VAR_IN_OUT) and locals.
 func opDeclareVar(src string, m *Model, op EditOp) ([]TextEdit, error) {
 	name := strings.TrimSpace(op.Name)
 	typ := strings.TrimSpace(op.VarType)
 	section := strings.ToUpper(strings.TrimSpace(op.Section))
 	if section == "" {
 		section = "VAR_EXTERNAL"
+		if op.Block != "" {
+			section = "VAR_INPUT"
+		}
 	}
-	if section != "VAR" && section != "VAR_EXTERNAL" {
+	allowed := programSections
+	if op.Block != "" {
+		allowed = blockSections
+	}
+	if !allowed[section] {
+		if op.Block == "" && blockSections[section] {
+			return nil, fmt.Errorf("ld edit: %s declares a FUNCTION_BLOCK's pins — a PROGRAM takes VAR_EXTERNAL or VAR", section)
+		}
 		return nil, fmt.Errorf("ld edit: unknown section %q", section)
 	}
 	if !identOnly.MatchString(name) {
@@ -873,29 +981,43 @@ func opDeclareVar(src string, m *Model, op EditOp) ([]TextEdit, error) {
 	if !identOnly.MatchString(typ) {
 		return nil, fmt.Errorf("ld edit: %q is not a valid type name", typ)
 	}
-	hasProgram := m.Name != ""
-	for _, v := range m.Vars {
-		// The PROGRAM's header is the one this op writes; a FUNCTION_BLOCK
-		// defined in the same file has its own scope.
-		if (v.POU == "" || !hasProgram) && strings.EqualFold(v.Name, name) {
-			return nil, fmt.Errorf("ld edit: %q is already declared", name)
-		}
-	}
 
 	// Scanned on comment-stripped text so a `(* ... *)` doc comment whose
 	// text happens to start a line with "LD" or "VAR" isn't mistaken for
-	// real header structure. The header is the PROGRAM's when the file has
-	// one (FUNCTION_BLOCKs may precede it), else the first POU's.
+	// real header structure. The header is the named block's, else the
+	// PROGRAM's when the file has one (FUNCTION_BLOCKs may precede it),
+	// else the first POU's.
 	lines := strings.Split(stripComments(src), "\n")
-	start := 0
-	for i, l := range lines {
-		if programLineRe.MatchString(l) {
-			start = i
-			break
+	start, stop := 0, len(lines)
+	if op.Block != "" {
+		b, err := findBlock(m, op.Block)
+		if err != nil {
+			return nil, err
+		}
+		start, stop = b.Line-1, b.EndLine
+		for _, v := range m.Vars {
+			if strings.EqualFold(v.POU, b.Name) && strings.EqualFold(v.Name, name) {
+				return nil, fmt.Errorf("ld edit: %q is already declared in %s", name, b.Name)
+			}
+		}
+	} else {
+		hasProgram := m.Name != ""
+		for _, v := range m.Vars {
+			// The PROGRAM's header is the one this op writes; a FUNCTION_BLOCK
+			// defined in the same file has its own scope.
+			if (v.POU == "" || !hasProgram) && strings.EqualFold(v.Name, name) {
+				return nil, fmt.Errorf("ld edit: %q is already declared", name)
+			}
+		}
+		for i, l := range lines {
+			if programLineRe.MatchString(l) {
+				start = i
+				break
+			}
 		}
 	}
 	ldLine := -1 // 0-based line of the LD block start = end of the header
-	for i := start; i < len(lines); i++ {
+	for i := start; i < stop; i++ {
 		if ldStartRe.MatchString(lines[i]) {
 			ldLine = i
 			break
@@ -925,32 +1047,165 @@ func opDeclareVar(src string, m *Model, op EditOp) ([]TextEdit, error) {
 		at := insertAt + 1 // 1-based line of END_VAR
 		return []TextEdit{{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: decl}}, nil
 	}
+	// A new section. A block's pins read in the order IEC writes them —
+	// VAR_INPUT, VAR_IN_OUT, VAR_OUTPUT, then locals — so a new section goes
+	// ahead of the first existing one that sorts after it; anything else
+	// lands just above LD.
 	at := ldLine + 1
+	if op.Block != "" {
+		rank := map[string]int{"VAR_INPUT": 0, "VAR_IN_OUT": 1, "VAR_OUTPUT": 2, "VAR_EXTERNAL": 3, "VAR": 4}
+		for i := start; i < ldLine; i++ {
+			if mm := ldVarSectionRe.FindStringSubmatch(lines[i]); mm != nil && rank[strings.ToUpper(mm[1])] > rank[section] {
+				at = i + 1
+				break
+			}
+		}
+	}
 	return []TextEdit{{Line: at, Col: 1, EndLine: at, EndCol: 1,
 		NewText: section + "\n" + decl + "END_VAR\n"}}, nil
+}
+
+// findVar picks the declaration a header op names: in Block's header when
+// it is given, else the PROGRAM's — or, in a file with no PROGRAM, the
+// first declaration by that name.
+func findVar(m *Model, name, block string) (*VarDecl, error) {
+	var fallback *VarDecl
+	for i := range m.Vars {
+		v := &m.Vars[i]
+		if !strings.EqualFold(v.Name, name) {
+			continue
+		}
+		if block != "" {
+			if strings.EqualFold(v.POU, block) {
+				return v, nil
+			}
+			continue
+		}
+		if v.POU == "" {
+			return v, nil
+		}
+		if fallback == nil {
+			fallback = v
+		}
+	}
+	if fallback != nil && m.Name == "" {
+		return fallback, nil
+	}
+	if block != "" {
+		return nil, fmt.Errorf("ld edit: %s declares no %q", block, name)
+	}
+	return nil, fmt.Errorf("ld edit: no declaration named %q", name)
 }
 
 // opDeleteVar removes a declaration by name. References the rungs still
 // hold become undeclared-variable diagnostics — deliberately allowed, the
 // same breadcrumb philosophy as the FBD editor.
 func opDeleteVar(src string, m *Model, op EditOp) ([]TextEdit, error) {
-	name := strings.TrimSpace(op.Name)
-	for _, v := range m.Vars {
-		if !strings.EqualFold(v.Name, name) {
-			continue
-		}
-		// The whole line when the declaration stands alone on it, else just
-		// its `name : TYPE;` — a compact header keeps its neighbours.
-		col, end, whole, ok := hdrvars.DeleteSpan(strings.Split(src, "\n")[v.Line-1], v.Name)
-		if !ok {
-			return nil, fmt.Errorf("ld edit: can't locate the declaration of %q", name)
-		}
-		if whole {
-			return []TextEdit{{Line: v.Line, Col: 1, EndLine: v.Line + 1, EndCol: 1}}, nil
-		}
-		return []TextEdit{{Line: v.Line, Col: col, EndLine: v.Line, EndCol: end}}, nil
+	v, err := findVar(m, strings.TrimSpace(op.Name), op.Block)
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("ld edit: no declaration named %q", name)
+	// The whole line when the declaration stands alone on it, else just
+	// its `name : TYPE;` — a compact header keeps its neighbours.
+	col, end, whole, ok := hdrvars.DeleteSpan(strings.Split(src, "\n")[v.Line-1], v.Name)
+	if !ok {
+		return nil, fmt.Errorf("ld edit: can't locate the declaration of %q", v.Name)
+	}
+	if whole {
+		return []TextEdit{{Line: v.Line, Col: 1, EndLine: v.Line + 1, EndCol: 1}}, nil
+	}
+	return []TextEdit{{Line: v.Line, Col: col, EndLine: v.Line, EndCol: end}}, nil
+}
+
+// ── whole-rung paste ────────────────────────────────────────────────────────
+
+// opPasteRung inserts a copied rung after op.After (or before the file's
+// END_LD): a fresh rung name from op.Name (m1 → m2, the next free one),
+// its instances renamed the way an element paste renames them (a copy
+// duplicates state, never aliases it), its header comment kept.
+func opPasteRung(src string, m *Model, op EditOp) ([]TextEdit, error) {
+	if op.Body == nil {
+		return nil, fmt.Errorf("ld edit: pasteRung needs the rung's body")
+	}
+	r := Rung{Comment: op.Body.Comment, Elements: op.Body.Elements, Coils: op.Body.Coils}
+	if len(r.Elements) == 0 && len(r.Coils) == 0 {
+		return nil, fmt.Errorf("ld edit: a pasted rung needs at least one element")
+	}
+	for i := range r.Elements {
+		if r.Elements[i].Kind == "coil" {
+			return nil, fmt.Errorf("ld edit: coils live at the rung's right end")
+		}
+		if err := sanitizeElement(&r.Elements[i]); err != nil {
+			return nil, err
+		}
+	}
+	for i := range r.Coils {
+		if r.Coils[i].Kind != "coil" {
+			return nil, fmt.Errorf("ld edit: only coils live in the coil zone")
+		}
+		if err := sanitizeElement(&r.Coils[i]); err != nil {
+			return nil, err
+		}
+	}
+	if strings.Contains(r.Comment, "*)") {
+		return nil, fmt.Errorf("ld edit: a rung comment can't contain *)")
+	}
+	taken := map[string]bool{}
+	for _, v := range m.Vars {
+		taken[strings.ToLower(v.Name)] = true
+	}
+	for i := range r.Elements {
+		uniquifyInstsAgainst(m, &r.Elements[i], taken)
+	}
+
+	name := nextRungName(m, op.Name)
+	at := 0
+	if op.After != "" {
+		after, err := findRung(m, op.After)
+		if err != nil {
+			return nil, err
+		}
+		at = after.EndLine + 1
+	} else {
+		at = findEndLD(src)
+		if at == 0 {
+			return nil, fmt.Errorf("ld edit: no END_LD to insert before")
+		}
+	}
+	body := "    " + printRung(&r)
+	if _, err := parseRungText(body, at); err != nil {
+		return nil, fmt.Errorf("ld edit: refused — the result would not parse: %w", err)
+	}
+	head := "  RUNG " + name
+	if c := strings.Join(strings.Fields(r.Comment), " "); c != "" {
+		head += "  (* " + c + " *)"
+	}
+	return []TextEdit{{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: "\n" + head + "\n" + body + "\n"}}, nil
+}
+
+// nextRungName is a copy's rung name: the source's, numbered on — m1 → m2,
+// seal → seal2 — to the first that no rung in the file uses.
+func nextRungName(m *Model, from string) string {
+	from = strings.TrimSpace(from)
+	if !identOnly.MatchString(from) {
+		from = "rung"
+	}
+	base := strings.TrimRight(from, "0123456789")
+	if base == "" {
+		base = "rung"
+	}
+	n := 2
+	if digits := from[len(base):]; digits != "" {
+		fmt.Sscanf(digits, "%d", &n)
+		n++
+	}
+	for {
+		name := fmt.Sprintf("%s%d", base, n)
+		if _, err := findRung(m, name); err != nil {
+			return name
+		}
+		n++
+	}
 }
 
 // ── printing ────────────────────────────────────────────────────────────────

@@ -1,7 +1,8 @@
 PROGRAM {{.Program}}
 (* Your interlock logic as ladder. Rung grammar: series = AND,
-   [ a | b ] = OR branch, /x = NC contact, ( x ) coil, ( S x )/( R x )
-   latch/unlatch, FN(args) comparison contact, inst:TYPE(args) block.
+   [ a | b ] = OR branch, /x = NC contact, +x / -x = rising / falling
+   edge (true for one scan), ( x ) coil, ( S x )/( R x ) latch/unlatch,
+   FN(args) comparison contact, inst:TYPE(args) block.
    Open the diagram: VS Code → right-click program.ld →
    "Open With → Ladder Diagram". *)
 VAR_EXTERNAL
