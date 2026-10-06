@@ -65,11 +65,14 @@ func bodyStatements(fileLines []string, body string, lineOffset int) []Statement
 	var out []Statement
 	for !p.at(st.TokenEOF) {
 		from := p.pos
-		nl := &netlist{wires: map[string]expr{}, wirePos: map[string]exprPos{}, wireSpan: map[string]exprPos{}}
+		nl := newNetlist()
 		if err := p.item(nl); err != nil {
 			// Resume on the first token of a later line than the one the
 			// parse stopped at — always moving forward.
 			stop := p.toks[min(p.pos, len(p.toks)-1)].Line
+			if pe, ok := err.(*ParseError); ok && pe.Line-lineOffset < stop {
+				stop = pe.Line - lineOffset // the error sits before the parser's position
+			}
 			if p.pos <= from {
 				p.pos = from + 1
 			}

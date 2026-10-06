@@ -28,13 +28,13 @@ labelled `ux:<kind>`, `editor:fbd|ext`, `parity:tia`, titled
 | 9 | gap | no signature help on `LIMIT(` | OPEN, PR #168 |
 | 10 | gap | no document symbols (Ctrl+Shift+O, Outline) | OPEN, PR #172 |
 | 11 | gap | no Find All References (Shift+F12) | OPEN, PR #171 |
-| 12 | papercut | block → wire's function field never suggests project FUNCTIONs | OPEN #204 |
-| 13 | gap | FB picker writes every input as `_`, an error even with a default | OPEN #205 |
-| 14 | gap | no EN/ENO on standard blocks | OPEN #206 |
-| 15 | gap | no network numbers, titles or execution order | OPEN #207 |
+| 12 | papercut | block → wire's function field never suggests project FUNCTIONs | FIXED #204 (PR #236) |
+| 13 | gap | FB picker writes every input as `_`, an error even with a default | FIXED #205 (PR #236) |
+| 14 | gap | no EN/ENO on standard blocks | FIXED #206 (PR #236) |
+| 15 | gap | no network numbers, titles or execution order | FIXED #207 (PR #236) |
 | 16 | bug | wired tag chips keep the ghost's 40,40 pin and stack | OPEN #81 (commented) |
-| 17 | papercut | the `(* @layout *)` block lands mid-body | OPEN #208 |
-| 18 | papercut | a blank `.fbd` seeds `PROGRAM main` | OPEN #209 |
+| 17 | papercut | the `(* @layout *)` block lands mid-body | FIXED #208 (PR #236) |
+| 18 | papercut | a blank `.fbd` seeds `PROGRAM main` | FIXED #209 (PR #236) |
 | 19 | gap | every tag re-declared per program, one palette gesture each | OPEN #210 |
 | 20 | gap | no force | FIXED #211 (PR #234: Force… / F badges / status bar; row 13 now PASS) |
 
