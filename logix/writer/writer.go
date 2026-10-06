@@ -222,6 +222,12 @@ type lowered struct {
 	aois     map[string]*aoiDef
 	aoiOrder []*aoiDef
 	inAOI    bool
+	// clocks are the LOCAL_TIME instances declared, clockUsed those a
+	// call or a member read needs as a tag (system.go).
+	clocks, clockUsed map[string]bool
+	// clockFold: the instances whose calls fold into a GSV into the
+	// import's array (planClocks).
+	clockFold map[string]bool
 }
 
 // blockType is the Logix structure behind a block instance: TIMER and
@@ -271,7 +277,8 @@ func lower(m *ld.Model, opts Options) *lowered {
 
 func lowerSrc(m *ld.Model, src string, opts Options) *lowered {
 	lw := &lowered{model: m, opts: opts, vars: map[string]ld.VarDecl{},
-		presetVars: map[string]bool{}, computedIdx: map[string]bool{}, genNames: map[string]bool{}, aois: map[string]*aoiDef{}}
+		presetVars: map[string]bool{}, computedIdx: map[string]bool{}, genNames: map[string]bool{}, aois: map[string]*aoiDef{},
+		clocks: map[string]bool{}, clockUsed: map[string]bool{}}
 	lw.loadTypes()
 	lw.src = src
 	for _, v := range m.Vars {
@@ -293,18 +300,27 @@ func lowerSrc(m *ld.Model, src string, opts Options) *lowered {
 		}
 	}
 	notes := lw.notesByLine()
+	lw.planClocks(m.Rungs)
 	for _, r := range m.Rungs {
 		if r.POU != "" {
 			continue
 		}
 		lw.rung(r, notes[r.Line])
 	}
+	lw.dropUnusedClocks()
 	lw.side()
 	return lw
 }
 
 func (lw *lowered) diag(rule string, line int, rung, format string, a ...any) {
-	lw.diags = append(lw.diags, Diag{Rule: rule, Line: line, Rung: rung, Message: fmt.Sprintf(format, a...)})
+	d := Diag{Rule: rule, Line: line, Rung: rung, Message: fmt.Sprintf(format, a...)}
+	// An operand checked twice on its way through a lowering reports once.
+	for _, prev := range lw.diags {
+		if prev == d {
+			return
+		}
+	}
+	lw.diags = append(lw.diags, d)
 }
 
 // notesByLine maps a rung's header line to the `//` note run that sits
@@ -421,6 +437,13 @@ func (lw *lowered) declare(v ld.VarDecl) {
 			}
 		}
 		lw.addTag(tagDef{Name: v.Name, DataType: "DINT", Value: strconv.FormatInt(ms, 10), Scope: scope, Line: v.Line})
+	case u == localTimeType:
+		if dim > 0 {
+			lw.diag(ruleArrayShape, v.Line, "", "%s: an array of LOCAL_TIME is not in the subset; one instance reads the clock for every use", v.Name)
+			return
+		}
+		lw.clocks[strings.ToLower(v.Name)] = true
+		lw.addTag(tagDef{Name: v.Name, DataType: "DINT", Dim: 7, Scope: scope, Line: v.Line})
 	case lw.blockType(u) != "":
 		if v.Init != "" {
 			lw.diag(ruleInit, v.Line, "", "%s: a %s instance takes no initializer; the preset comes from the rung (PT := / PV :=)", v.Name, u)

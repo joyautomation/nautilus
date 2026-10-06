@@ -538,7 +538,12 @@ func miniL5X(tags []string, rungs ...string) []byte {
 	for _, t := range tags {
 		name, typ, _ := strings.Cut(t, ":")
 		typ, pre, hasPre := strings.Cut(typ, "=")
-		fmt.Fprintf(&b, `<Tag Name="%s" TagType="Base" DataType="%s" Constant="false" ExternalAccess="Read/Write">`+"\n", name, typ)
+		dims := ""
+		if i := strings.Index(typ, "["); i > 0 {
+			dims = ` Dimensions="` + strings.TrimSuffix(typ[i+1:], "]") + `"`
+			typ = typ[:i]
+		}
+		fmt.Fprintf(&b, `<Tag Name="%s" TagType="Base" DataType="%s"%s Constant="false" ExternalAccess="Read/Write">`+"\n", name, typ, dims)
 		if hasPre {
 			fmt.Fprintf(&b, `<Data Format="Decorated"><Structure DataType="%s"><DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="%s"/><DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/><DataValueMember Name="DN" DataType="BOOL" Value="0"/></Structure></Data>`+"\n", typ, pre)
 		}
@@ -872,5 +877,80 @@ func TestDialectAndAliasImport(t *testing.T) {
 	}
 	if !strings.Contains(string(out), `TagType="Alias" Radix="Decimal" AliasFor="Local:1:I.Data.3"`) {
 		t.Errorf("alias tag not written back")
+	}
+}
+
+// The first-scan flag S:FS is the runtime's FIRST_SCAN(), a contact
+// either way round, and writes back as itself.
+func TestFirstScanImport(t *testing.T) {
+	tags := []string{"Go:BOOL", "Later:BOOL", "n:DINT"}
+	rungs := []string{
+		"XIC(S:FS)MOVE(5,n);",
+		"XIC(Go)XIO(S:FS)OTE(Later);",
+	}
+	p := mustImport(t, miniL5X(tags, rungs...))
+	for _, nt := range p.Notes {
+		if nt.Rung >= 0 {
+			t.Errorf("note: %s", nt)
+		}
+	}
+	src := string(p.Files["Main.ld"])
+	for _, want := range []string{"FIRST_SCAN() { n := 5 }", "Go /FIRST_SCAN() ( Later )"} {
+		if !strings.Contains(src, want) {
+			t.Errorf("missing %q in\n%s", want, src)
+		}
+	}
+	out, diags, err := writer.Write(src, writer.Options{Controller: "Mini"})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("writer: %v %v\n%s", err, diags, src)
+	}
+	back, _ := l5x.Parse(out)
+	if got := rungTexts(back, "Main", "MainRoutine"); strings.Join(got, "\n") != strings.Join(rungs, "\n") {
+		t.Errorf("written back:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(rungs, "\n  "))
+	}
+}
+
+// GSV(WallClockTime,,LocalDateTime,a[0]) is LOCAL_TIME: the POU's clock
+// called, its outputs copied into the seven elements, folding back into
+// the one GSV. Another GSV class stays refused by name.
+func TestWallClockImport(t *testing.T) {
+	tags := []string{"gettime:DINT[7]", "Sec:DINT"}
+	rungs := []string{
+		"GSV(WallClockTime,,LocalDateTime,gettime[0]);",
+		"MOVE(gettime[5],Sec);",
+	}
+	p := mustImport(t, miniL5X(tags, rungs...))
+	for _, nt := range p.Notes {
+		if nt.Rung >= 0 {
+			t.Errorf("note: %s", nt)
+		}
+	}
+	src := string(p.Files["Main.ld"])
+	for _, want := range []string{
+		"wallClock : LOCAL_TIME;",
+		"wallClock:LOCAL_TIME() { gettime[0] := wallClock.YEAR; gettime[1] := wallClock.MONTH; gettime[2] := wallClock.DAY; gettime[3] := wallClock.HOUR; gettime[4] := wallClock.MINUTE; gettime[5] := wallClock.SECOND; gettime[6] := wallClock.MILLISECOND * 1000 }",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("missing %q in\n%s", want, src)
+		}
+	}
+	out, diags, err := writer.Write(src, writer.Options{Controller: "Mini"})
+	if err != nil || len(diags) > 0 {
+		t.Fatalf("writer: %v %v\n%s", err, diags, src)
+	}
+	back, _ := l5x.Parse(out)
+	if got := rungTexts(back, "Main", "MainRoutine"); strings.Join(got, "\n") != strings.Join(rungs, "\n") {
+		t.Errorf("written back:\n  %s\nwant:\n  %s", strings.Join(got, "\n  "), strings.Join(rungs, "\n  "))
+	}
+	if strings.Contains(string(out), `Name="wallClock"`) {
+		t.Errorf("the folded clock should leave no tag")
+	}
+	p = mustImport(t, miniL5X([]string{"n:DINT"}, "GSV(Task,THIS,LastScanTime,n);"))
+	refused := false
+	for _, nt := range p.Notes {
+		refused = refused || nt.Rung >= 0 && nt.Reason == "GSV"
+	}
+	if !refused {
+		t.Errorf("GSV Task LastScanTime should be refused: %v", p.Notes)
 	}
 }

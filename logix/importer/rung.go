@@ -3,6 +3,7 @@ package importer
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/l5x"
@@ -762,6 +763,19 @@ func (rt *routine) split(terms []l5x.Term, prefix []string) ([][]string, *refusa
 			return nil, refuse("RES", "a reset away from its counter's rung (nautilus binds R := on the CTU)")
 		case m == "AFI":
 			return nil, refuse("AFI", "always-false instruction")
+		case m == "GSV":
+			if len(parts) != 0 {
+				return nil, refuse("GSV", "a GSV under a condition: LOCAL_TIME sits on the rail")
+			}
+			texts, err := rt.gsv(in)
+			if err != nil {
+				return nil, err
+			}
+			add(texts...)
+			if last {
+				emit(parts)
+				return out, nil
+			}
 		case assignInstr[m]:
 			text, err := rt.dataInstr(in)
 			if err != nil {
@@ -943,6 +957,13 @@ func (rt *routine) contact(in *l5x.Instr) ([]string, *refusal) {
 	}
 	a := in.Args[0]
 	neg := strings.EqualFold(in.Mnemonic, "XIO")
+	if strings.EqualFold(a, "S:FS") {
+		// The first-scan flag is the runtime's FIRST_SCAN().
+		if neg {
+			return []string{"/FIRST_SCAN()"}, nil
+		}
+		return []string{"FIRST_SCAN()"}, nil
+	}
 	if e, ok := rt.edges[strings.ToLower(a)]; ok && e != "" {
 		if neg {
 			return nil, refuse("edge", "XIO of a one-shot output")
@@ -1047,9 +1068,9 @@ func (rt *routine) ref(a string, blockType string) (string, *refusal) {
 		return "", refuse("operand", "an unset operand")
 	}
 	if strings.HasPrefix(strings.ToUpper(a), "S:") {
-		// A controller status flag: S:FS (first scan), S:N/Z/V/C. No
-		// nautilus form yet — a dialect block for first-scan is the obvious
-		// one — so the rung is refused by name.
+		// A controller status flag read as a value: S:N/Z/V/C (and S:FS
+		// anywhere but a contact, which is FIRST_SCAN()) have no nautilus
+		// form, so the rung is refused by name.
 		return "", refuse("status", "the controller status flag %s", a)
 	}
 	if strings.Contains(a, ":") {
@@ -1549,4 +1570,47 @@ func splitBitOperand(operand string) (string, bool) {
 		}
 	}
 	return operand[:i], true
+}
+
+// gsv imports GSV(WallClockTime,,LocalDateTime,dest[k]), the controller's
+// calendar into seven DINTs, as the runtime's LOCAL_TIME: a call of the
+// POU's clock instance, then one assignment copying its outputs into the
+// same seven elements (microseconds being MILLISECOND * 1000). The writer
+// folds that pair back into the one GSV. Other GSV classes and attributes
+// have no nautilus form.
+func (rt *routine) gsv(in *l5x.Instr) ([]string, *refusal) {
+	if len(in.Args) != 4 || !strings.EqualFold(strings.TrimSpace(in.Args[0]), "WallClockTime") ||
+		!strings.EqualFold(strings.TrimSpace(in.Args[2]), "LocalDateTime") {
+		return nil, refuse("GSV", "GSV(%s): only WallClockTime LocalDateTime has a nautilus form (LOCAL_TIME)", strings.Join(in.Args, ","))
+	}
+	m := gsvDestRe.FindStringSubmatch(strings.TrimSpace(in.Args[3]))
+	if m == nil {
+		return nil, refuse("GSV", "the destination %s is not an array element", in.Args[3])
+	}
+	dest, err := rt.ref(m[1], "")
+	if err != nil {
+		return nil, err
+	}
+	rt.markWritten(m[1])
+	k, _ := strconv.Atoi(m[2])
+	clk := rt.clockInstance()
+	outs := []string{"YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND", "MILLISECOND * 1000"}
+	stmts := make([]string, len(outs))
+	for i, o := range outs {
+		stmts[i] = fmt.Sprintf("%s[%d] := %s.%s", dest, k+i, clk, o)
+	}
+	return []string{clk + ":LOCAL_TIME()", "{ " + strings.Join(stmts, "; ") + " }"}, nil
+}
+
+var gsvDestRe = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_:.]*)\[(\d+)\]$`)
+
+// clockInstance is the POU's LOCAL_TIME instance, declared on first use;
+// every GSV of the wall clock calls the same one.
+func (rt *routine) clockInstance() string {
+	name := "wallClock"
+	for n := 2; rt.sc.lookup(name) != nil; n++ {
+		name = fmt.Sprintf("wallClock%d", n)
+	}
+	rt.p.declare(decl{Name: name, Type: "LOCAL_TIME", Section: "VAR", Comment: "the controller's calendar (Logix GSV WallClockTime LocalDateTime)"})
+	return name
 }

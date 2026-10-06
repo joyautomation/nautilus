@@ -74,6 +74,7 @@ var standard = []struct{ name, detail, prefix string }{
 	{"SR", "set-dominant latch", "sr"},
 	{"RS", "reset-dominant latch", "rs"},
 	{"PID", "closed-loop control", "pid"},
+	{"LOCAL_TIME", "the calendar, now", "clk"},
 }
 
 // Standard lists the built-in blocks lang/ir registers, with their pins.

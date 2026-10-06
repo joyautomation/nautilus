@@ -46,7 +46,7 @@ func RoundTrip(src string, opts Options) (doc []byte, problems []string, err err
 	if err != nil {
 		return doc, nil, fmt.Errorf("emitted L5X renders no ladder: %w", err)
 	}
-	c := &cmp{src: m, got: got.Rungs, types: map[string]string{}, opts: opts, file: f}
+	c := &cmp{src: m, got: got.Rungs, types: map[string]string{}, opts: opts, file: f, clockTag: map[string]bool{}}
 	for _, v := range m.Vars {
 		c.types[strings.ToLower(v.Name)] = strings.ToUpper(strings.TrimSpace(v.Type))
 	}
@@ -54,6 +54,13 @@ func RoundTrip(src string, opts Options) (doc []byte, problems []string, err err
 	for _, cm := range m.Comments {
 		notes[cm.EndLine+1] = cm.Text
 	}
+	clocks := map[string]bool{}
+	for k, t := range c.types {
+		if t == localTimeType {
+			clocks[k] = true
+		}
+	}
+	c.clockFold = foldableClocks(m.Rungs, clocks)
 	for _, r := range m.Rungs {
 		c.rung(r, notes[r.Line])
 	}
@@ -83,6 +90,10 @@ type cmp struct {
 	// legHead mirrors the writer's: set while inside the legs of a branch
 	// that takes power from the rail.
 	legHead bool
+	// clockTag: a LOCAL_TIME instance something reads as a tag (a call
+	// that did not fold, a member read), so its DINT[7] must exist.
+	clockTag  map[string]bool
+	clockFold map[string]bool
 }
 
 func (c *cmp) problemf(rung, format string, a ...any) {
@@ -107,6 +118,13 @@ func (c *cmp) take(rung string) (ld.Rung, bool) {
 func (c *cmp) logixRef(ref string) string {
 	base, rest := splitRef(ref)
 	if rest == "" || rest[0] == '[' {
+		return ref
+	}
+	if c.types[strings.ToLower(base)] == localTimeType {
+		c.clockTag[strings.ToLower(base)] = true
+		if k, ok := localTimeIndex[strings.ToUpper(rest[1:])]; ok {
+			return fmt.Sprintf("%s[%d]", base, k)
+		}
 		return ref
 	}
 	st := blockTypes[c.types[strings.ToLower(base)]]
@@ -250,7 +268,12 @@ func (c *cmp) next(r ld.Rung) (ld.Element, bool) {
 // cursor. noCoils tells whether the rung has coils (a block that is the
 // very last thing on a coil-less rung carries no DN contact).
 func (c *cmp) series(r ld.Rung, elems []ld.Element, top, noCoils bool) {
+	skip := 0
 	for i, e := range elems {
+		if skip > 0 {
+			skip--
+			continue
+		}
 		last := i == len(elems)-1
 		switch e.Kind {
 		case "contact":
@@ -265,6 +288,12 @@ func (c *cmp) series(r ld.Rung, elems []ld.Element, top, noCoils bool) {
 			g, ok := c.next(r)
 			if !ok {
 				return
+			}
+			if isFirstScan(e.Fn, e.Args) {
+				if g.Kind != "contact" || g.Ref != firstScanFlag || g.Neg != e.Neg {
+					c.problemf(r.Name, "element %+v, want contact %s neg=%v", g, firstScanFlag, e.Neg)
+				}
+				continue
 			}
 			fn := strings.ToUpper(e.Fn)
 			if e.Neg {
@@ -361,6 +390,39 @@ func (c *cmp) series(r ld.Rung, elems []ld.Element, top, noCoils bool) {
 				return
 			}
 			typ := strings.ToUpper(e.Type)
+			if typ == localTimeType {
+				dest, copyTo := e.Inst+"[0]", ""
+				if i+1 < len(elems) && elems[i+1].Kind == "assign" {
+					if d, ok := localTimeCopy(e.Inst, elems[i+1].Text); ok {
+						skip = 1
+						if c.clockFold[strings.ToLower(e.Inst)] {
+							dest = d
+						} else {
+							copyTo = d
+						}
+					}
+				}
+				if dest == e.Inst+"[0]" {
+					c.clockTag[strings.ToLower(e.Inst)] = true
+				}
+				if want := "WallClockTime, , LocalDateTime, " + dest; g.Kind != "fn" || g.Fn != "GSV" || g.Args != want {
+					c.problemf(r.Name, "element %+v, want GSV(%s)", g, want)
+				}
+				if copyTo != "" {
+					m := localTimeElemRe.FindStringSubmatch(copyTo)
+					k := atoi(m[2])
+					for j := 0; j < 7; j++ {
+						mv, ok := c.next(r)
+						if !ok {
+							return
+						}
+						if want := fmt.Sprintf("%s[%d], %s[%d]", e.Inst, j, m[1], k+j); mv.Kind != "fn" || mv.Fn != "MOVE" || mv.Args != want {
+							c.problemf(r.Name, "element %+v, want MOVE(%s)", mv, want)
+						}
+					}
+				}
+				continue
+			}
 			if typ == "TONR" {
 				typ = "TON"
 			}
@@ -420,6 +482,15 @@ func (c *cmp) tags() {
 		}
 		expected[scope+"/"+v.Name] = true
 		t := byScope[scope][v.Name]
+		if isLocalTime(v.Type) {
+			switch {
+			case t == nil && c.clockTag[strings.ToLower(v.Name)]:
+				c.problemf("", "LOCAL_TIME %s is read as a tag but has none", v.Name)
+			case t != nil && (t.DataType != "DINT" || t.Dimensions != "7"):
+				c.problemf("", "tag %s is %s[%s], want DINT[7]", v.Name, t.DataType, t.Dimensions)
+			}
+			continue
+		}
 		if t == nil {
 			c.problemf("", "variable %s (%s) has no %s tag", v.Name, v.Section, scopeName(scope))
 			continue
@@ -542,7 +613,7 @@ func roundTripAgainst(src string, opts Options, doc []byte) ([]byte, []string, e
 	if err != nil {
 		return doc, nil, err
 	}
-	c := &cmp{src: m, got: got.Rungs, types: map[string]string{}, opts: opts, file: f}
+	c := &cmp{src: m, got: got.Rungs, types: map[string]string{}, opts: opts, file: f, clockTag: map[string]bool{}}
 	for _, v := range m.Vars {
 		c.types[strings.ToLower(v.Name)] = strings.ToUpper(strings.TrimSpace(v.Type))
 	}

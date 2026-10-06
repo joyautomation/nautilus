@@ -28,6 +28,11 @@ type Program struct {
 	compiledAt time.Time
 	scans      uint64
 	lastErr    string
+	// ran: the program has scanned since its last cold start (Compile or
+	// Swap, which reset its state). FIRST_SCAN() is its negation. A warm
+	// swap and a rollback keep it, as Logix's S:FS does across an online
+	// edit: the state carried over is not a start.
+	ran bool
 
 	// bootSource is what Compile was first given — the program the deployed
 	// binary embeds. A running source that differs is an online edit in
@@ -126,6 +131,7 @@ func (p *Program) Swap(src string) error {
 		p.mu.Lock()
 		p.prog, p.frame = prog, ir.NewFrame(prog)
 		p.source, p.compiledAt, p.scans, p.lastErr = src, time.Now(), 0, ""
+		p.ran = false
 		p.mu.Unlock()
 		return nil
 	}
@@ -167,7 +173,9 @@ func (p *Program) Run(tags *Tags) error {
 		p.extsFor = p.prog
 	}
 	p.view.snapshot(p.exts)
+	p.view.firstScan = !p.ran
 	err := ir.Run(p.prog, p.frame, p.view)
+	p.ran = true
 	p.view.commit()
 	if err != nil {
 		p.lastErr = err.Error()

@@ -197,10 +197,11 @@ func (b *BitRef) lvalueNode()     {}
 // lowering time (so the VM doesn't pay for a map lookup per scan)
 // and given the evaluated arg values directly.
 type Call struct {
-	Name string
-	Args []Expr
-	Fn   BuiltinFn
-	T    *Type
+	Name   string
+	Args   []Expr
+	Fn     BuiltinFn
+	HostFn HostFn // set instead of Fn for a function the host answers
+	T      *Type
 }
 
 func (c *Call) ExprType() *Type { return c.T }

@@ -430,7 +430,7 @@ func evalExpr(ctx *EvalCtx, e Expr) (Value, error) {
 		}
 		return obj.Fld[n.FieldIdx], nil
 	case *Call:
-		if n.Fn == nil {
+		if n.Fn == nil && n.HostFn == nil {
 			return Value{}, fmt.Errorf("call %q has no resolved Fn", n.Name)
 		}
 		// Arguments go on the frame's scratch stack, not a fresh slice:
@@ -450,7 +450,14 @@ func evalExpr(ctx *EvalCtx, e Expr) (Value, error) {
 			}
 			fr.scratch[base+i] = v
 		}
-		res, err := n.Fn(fr.scratch[base : base+len(n.Args) : base+len(n.Args)])
+		args := fr.scratch[base : base+len(n.Args) : base+len(n.Args)]
+		var res Value
+		var err error
+		if n.HostFn != nil {
+			res, err = n.HostFn(ctx.Host, args)
+		} else {
+			res, err = n.Fn(args)
+		}
 		clear(fr.scratch[base:])
 		fr.scratch = fr.scratch[:base]
 		return res, err

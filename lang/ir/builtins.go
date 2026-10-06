@@ -10,6 +10,13 @@ import (
 // implicit conversions) and returns a single result.
 type BuiltinFn func(args []Value) (Value, error)
 
+// HostFn implements a built-in function whose result comes from the
+// runtime rather than from its arguments: FIRST_SCAN asks the host whether
+// this is the program's first scan. The host may be nil (a bare VM in a
+// test), and need not implement the extension asked for; the function
+// then answers as a host that knows nothing would.
+type HostFn func(host Host, args []Value) (Value, error)
+
 // BuiltinSig describes a stateless built-in function. The lowering pass
 // uses it both to type-check the call and to record Fn on the IR Call
 // node so the VM can dispatch without a map lookup per scan.
@@ -24,6 +31,7 @@ type BuiltinSig struct {
 	Variadic bool    // last param repeats
 	Coerce   func(argTypes []*Type) (*Type, error)
 	Fn       BuiltinFn
+	HostFn   HostFn // instead of Fn, for a function the host answers
 }
 
 // Builtins holds every stateless function the IR knows about. The
@@ -39,6 +47,27 @@ func RegisterBuiltin(sig BuiltinSig) {
 func init() {
 	registerArithBuiltins()
 	registerConversionBuiltins()
+	registerHostBuiltins()
+}
+
+// ScanInfo is an optional Host extension: what the runtime knows about the
+// scan in progress. A host without it has no first scan to report.
+type ScanInfo interface {
+	// FirstScan is true for the whole of a program's first scan after it
+	// starts or is downloaded, and false from the second scan on. An online
+	// edit (a warm swap, which keeps the program's state) is not a start.
+	FirstScan() bool
+}
+
+func registerHostBuiltins() {
+	RegisterBuiltin(BuiltinSig{
+		Name:   "FIRST_SCAN",
+		Result: BoolT,
+		HostFn: func(host Host, _ []Value) (Value, error) {
+			si, ok := host.(ScanInfo)
+			return BoolVal(ok && si.FirstScan()), nil
+		},
+	})
 }
 
 func registerArithBuiltins() {

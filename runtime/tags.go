@@ -354,6 +354,16 @@ func (t *Tags) NowMs() int64 {
 	return time.Now().UnixMilli()
 }
 
+// Now is the runtime's clock as a calendar instant (ir.WallClock, read by
+// LOCAL_TIME): the injected clock as it reports itself (the acceptance
+// harness's is UTC), otherwise the machine's local time.
+func (t *Tags) Now() time.Time {
+	if t.clock != nil {
+		return t.clock.Now()
+	}
+	return time.Now()
+}
+
 // UndefinedTagError is returned when a program reads a tag that was never set.
 type UndefinedTagError struct{ Name string }
 
