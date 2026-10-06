@@ -18,6 +18,10 @@
 //	                   or one member of a struct tag by dotted path:
 //	                   {"name": "P101.Drive.Speed", "value": 60.0}, or several
 //	                   at once: {"name": "P101", "value": {"Cmd": true}}
+//	GET  /api/forces   the force table; POST /api/forces to force a tag,
+//	                   DELETE /api/forces/{name}, POST /api/forces/clear
+//	GET  /api/sfc      running SFC charts; POST /api/sfc/step and
+//	                   /api/sfc/transition jump or fire once (force.go)
 //	GET  /api/cluster  this replica's redundancy status (leader.Status JSON)
 //	GET  /assets/…     the dashboard's logo, favicon and brand fonts
 //
@@ -174,6 +178,11 @@ type Frame struct {
 	// what decides whether the block goes on the wire at all: an unchanged
 	// Rev is a block the client already holds.
 	Alarms *alarm.Summary `json:"alarms,omitempty"`
+	// Forces is the force table — forced address → forced value — present
+	// on EVERY frame while at least one force is active and absent when
+	// none is. Never delta-gated (it is a handful of entries at most), so
+	// on any stream "absent" means "nothing is forced". See force.go.
+	Forces map[string]any `json:"forces,omitempty"`
 }
 
 // Options tunes the server; zero values mean defaults.
@@ -547,6 +556,7 @@ func (s *Server) frame(pats []string) Frame {
 		Scan:    &stats,
 		Quality: filterQuality(qualityJSON(s.rt.Quality()), pats),
 		Drivers: s.driverStatus(now),
+		Forces:  s.rt.Tags().ForcedValues(),
 	}
 	f.Alarms = s.alarmSummary()
 	return f
@@ -592,6 +602,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/program/rollback", s.handleRollback)
 	mux.HandleFunc("GET /api/program/history", s.handleProgramHistory)
 	mux.HandleFunc("POST /api/program/activate", s.handleActivate)
+	mux.HandleFunc("GET /api/forces", s.handleForces)
+	mux.HandleFunc("POST /api/forces", s.handleForce)
+	mux.HandleFunc("POST /api/forces/clear", s.handleUnforceAll)
+	mux.HandleFunc("DELETE /api/forces/{name}", s.handleUnforce)
+	mux.HandleFunc("GET /api/sfc", s.handleSFC)
+	mux.HandleFunc("POST /api/sfc/step", s.handleSFCStep)
+	mux.HandleFunc("POST /api/sfc/transition", s.handleSFCTransition)
 	mux.HandleFunc("GET /api/cluster", s.handleCluster)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/history/", s.handleHistory)
@@ -670,7 +687,7 @@ func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		if r.Method == http.MethodOptions {
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 			// Allow the auth headers so an authorized cross-origin writer's
 			// preflight succeeds; Content-Type for JSON bodies.
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Nautilus-Token")
@@ -930,6 +947,12 @@ type metaResponse struct {
 	// the client would never see `full` and could not tell resync from
 	// steady state. Cheaper to advertise.
 	Deltas bool `json:"deltas"`
+	// Forces says this controller has a force table (/api/forces, and the
+	// frame's `forces`) and the online SFC commands (/api/sfc/*). An editor
+	// offers Force… only against a controller that will hold one, rather
+	// than finding out from a 404 mid-commissioning. False on a server that
+	// fronts a controller it does not run (TagWriter set).
+	Forces bool `json:"forces"`
 	// BlockDeltas says GET /api/stream understands `?blocks=delta`: the
 	// non-tag blocks (scan diagnostics, driver status, alarm counts) sent
 	// only when they change, instead of on every frame. Advertised for the
@@ -962,6 +985,7 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		Quality:      s.rt.ReportsQuality(),
 		Deltas:       true,
 		BlockDeltas:  true,
+		Forces:       s.tagWriter == nil,
 		ShelveTimes:  shelveSeconds(s.shelveTimes),
 	})
 }
@@ -1057,6 +1081,15 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		http.Error(w, `expected {"name": ..., "value": ...}`, http.StatusBadRequest)
 		return
+	}
+	if s.tagWriter == nil {
+		// A forced address holds its forced value against every writer,
+		// an operator's included; answering 204 for a write the force will
+		// swallow would be a lie. Change the force, or remove it.
+		if f := s.rt.Tags().ForcedOverlap(req.Name); f != "" {
+			http.Error(w, "tag "+f+" is forced — change the force value or remove the force first", http.StatusConflict)
+			return
+		}
 	}
 	if s.tagWriter != nil {
 		if err := s.tagWriter(req.Name, req.Value); err != nil {
