@@ -1097,6 +1097,30 @@ fbd_add_comment() {
   assert_file_contains "$G_FILE" "// *$(printf '%s' "$1" | sed 's/[][\.*^$()+?{}|]/\\&/g')"
 }
 
+# fbd_add_network <title> — the palette's "network": a `NETWORK 'title'`
+# line at the end of the body (#207); the statements added after it are
+# that network's. Read back: the band draws with the title, the line is in
+# the file.
+fbd_add_network() {
+  G_WHAT="network $1"
+  _fbd_palette "network" "title=$1" || return 1
+  fbd_wait "[...doc.querySelectorAll('[data-kind=\"network\"] .ntitle')].some(t => t.textContent.trim() === $(_q "$1"))" || return 1
+  assert_file_contains "$G_FILE" "^ *NETWORK *'$(printf '%s' "$1" | sed 's/[][\.*^$()+?{}|]/\\&/g')'"
+}
+
+# fbd_eno_pins <node> — the EN/ENO pin gesture (#206): click the block's EN
+# toggle; its EN and ENO pins draw (open until wired). View state only — the
+# file does not change.
+fbd_eno_pins() {
+  local el; el=$(fbd_node_el "$1")
+  G_WHAT="EN/ENO pins on $1"
+  js_true "$el" || { g_err "no FBD node $1"; return 1; }
+  click_el "($el)?.querySelector('.eno-toggle')" || { g_err "no EN toggle on $1 (nautilus too old?)"; return 1; }
+  sleep 0.5
+  js_true "($el)?.querySelector('.svelte-flow__handle.target[data-handleid=\"EN\"]') && ($el)?.querySelector('.svelte-flow__handle.source[data-handleid=\"ENO\"]')" \
+    || { g_err "EN/ENO pins did not draw on $1"; return 1; }
+}
+
 # fbd_add_function <FUNCTION> <name> [inputs] — "block → wire" for ANY
 # function name. fbd_add_block routes a CamelCase name to the FB picker (a
 # project FUNCTION_BLOCK); a project FUNCTION (ScaleAnalog) is a block →

@@ -67,7 +67,11 @@ export type FbdEditOp = {
     | "deleteVar"
     | "setComment"
     | "duplicate"
-    | "retarget";
+    | "retarget"
+    | "addNetwork"
+    | "renameNetwork"
+    | "moveNetwork"
+    | "removeNetwork";
   node?: string;
   to?: string;
   toPin?: string;

@@ -13,7 +13,7 @@ What a TIA programmer reaches for, and where it lands here:
 | FC with a return value (FC105 SCALE) | `scale.st` `FUNCTION SCALEANALOG : REAL` (typed as `ScaleAnalog`, see FINDINGS) |
 | PLC data type + global DB of it | `types.st` `TYPE DoseRecipe : STRUCT`, tag `RecipeA` of that type |
 | instance DB | the FBD instance `doseA : Dosing(...)` in `main.fbd` (instance data lives in the program) |
-| OB1 with FBD networks | `main.fbd` `PROGRAM Main`, five commented "networks" |
+| OB1 with FBD networks | `main.fbd` `PROGRAM Main`, five numbered, titled networks (`NETWORK 'title'`) |
 | TON/TOF, CASE state machine | inside `Dosing` (`noFlow`, `settle` TON; `doneHold` TOF; `CASE state OF`) |
 | REAL math with LIMIT/SEL | network 3: `LIMIT` then `SEL` |
 | PLC tag table | `tags/plc_tags.yaml` |
@@ -51,12 +51,12 @@ would teach us anything new there).
 | 03 | tag table | `tags/plc_tags.yaml` pasted (TIA users import a tag table); the `tag-files:` entry typed into `nautilus.yaml`; the Data-type-column habit (`type: INT`) probed | pasted + typed | check clean (warnings: tags no program binds yet); `type: INT` XFAIL |
 | 04 | FC | `scale.st`: `FUNCTION ScaleAnalog : REAL`, VAR_INPUT, VAR_TEMP, body; completion on `LIMIT(`, signature help probe, hover a pin | typed | completion lists LIMIT; signature help (XFAIL until #168); hover shows the type; check clean |
 | 05 | FB | `dosing.st`: the whole `Dosing` FB typed; then four edits typed over it, each read back (squiggle, status-bar count, F8's problem text) and undone: the SCL habit `#state` on the right-hand side and on an assignment target, a typo (`Recipe.TargetLL`), and `REGION … END_REGION` | typed | diagnostics appear and clear (the `#` on a target is not diagnosed: XFAIL); Outline (Ctrl+Shift+O) XFAIL; Find All References (Shift+F12) XFAIL; check clean |
-| 06 | main.fbd header | blank `main.fbd`, opened as the FBD diagram; every `VAR_EXTERNAL` declared from the palette's "variable (external tag)" (the first one seeds `PROGRAM main`) | gestured (`fbd_declare` ×15) | header == reference; check clean |
-| 07 | network 1 | comment; `ft = ScaleAnalog(FT101_Raw, 0.0, 120.0)`; coil `FT101_Flow := ft` | gestured (`fbd_add_comment`, `fbd_add_block`, `fbd_add_coil`) | user FUNCTION in the palette suggestions (XFAIL); `naut check` on the user FUNCTION call (XFAIL: FBD upper-cases call names); workaround typed in `scale.st` (rename to `SCALEANALOG`), check clean |
-| 08 | network 2 | comment; `doseA : Dosing(…)` from the FB picker; five pins wired from tag chips; the `NoFlowTime := _` open pin removed; four output coils | gestured (`fbd_add_block Dosing`, `fbd_add_tag_ref` ×5, `fbd_add_coil` ×4); the open pin by text (see FINDINGS) | check red while pins are open, clean once wired |
-| 09 | network 3 | comment; `spA = LIMIT(0.0, RecipeA.FlowSP, MaxFlowLpm)`; `spOut = SEL(doseA.ValveOpen, 0.0, _)`; wire `spA → spOut.IN3`; coil | gestured (`fbd_add_block` ×2, `fbd_wire`, `fbd_add_coil`) | EN/ENO on a standard block probe (XFAIL); check clean |
-| 10 | network 4 | comment; `hiFlow = GT(…)`; `tHi : TON` from the picker; wire `hiFlow → tHi.IN`; coil | gestured | check clean |
-| 11 | network 5 | comment; `cDoses : CTU`; wire `doseA.Done → cDoses.CU`; tag chip on `R`; coil `DosesToday := cDoses.CV`; `fbd_move_node` one block | gestured | network-number / execution-order display probe (XFAIL); check clean |
+| 06 | main.fbd header | blank `main.fbd`, opened as the FBD diagram; every `VAR_EXTERNAL` declared from the palette's "variable (external tag)" (the first one seeds `PROGRAM Main`, #209) | gestured (`fbd_declare` ×15) | header == reference; check clean |
+| 07 | network 1 | `NETWORK` with its title; `ft = ScaleAnalog(FT101_Raw, 0.0, 120.0)`; coil `FT101_Flow := ft` | gestured (`fbd_add_network`, `fbd_add_block`, `fbd_add_coil`) | user FUNCTION in the palette suggestions (#204); `naut check` on the user FUNCTION call (XFAIL: FBD upper-cases call names); workaround typed in `scale.st` (rename to `SCALEANALOG`), check clean |
+| 08 | network 2 | `NETWORK`; `doseA : Dosing(…)` from the FB picker (`NoFlowTime`, which has a default, arrives unbound — #205); five pins wired from tag chips; four output coils | gestured (`fbd_add_network`, `fbd_add_block Dosing`, `fbd_add_tag_ref` ×5, `fbd_add_coil` ×4) | check red while the required pins are open (and only on those), clean once wired |
+| 09 | network 3 | `NETWORK`; `spA = LIMIT(0.0, RecipeA.FlowSP, MaxFlowLpm)`; `spOut = SEL(doseA.ValveOpen, 0.0, _)`; wire `spA → spOut.IN3`; coil | gestured (`fbd_add_network`, `fbd_add_block` ×2, `fbd_wire`, `fbd_eno_pins`, `fbd_add_coil`) | EN/ENO pins on LIMIT after the pin gesture, and `EN :=` by text (#206); check clean |
+| 10 | network 4 | `NETWORK`; `hiFlow = GT(…)`; `tHi : TON` from the picker; wire `hiFlow → tHi.IN`; coil | gestured | check clean |
+| 11 | network 5 | `NETWORK`; `cDoses : CTU`; wire `doseA.Done → cDoses.CU`; tag chip on `R`; coil `DosesToday := cDoses.CV`; `fbd_move_node` one block | gestured | network numbers and execution order drawn (#207); check clean |
 | 12 | go live | `program: main.fbd` and `dt-tag: MainDtS` typed into `nautilus.yaml`, the template's example tags selected and deleted, the template's `program.st` and test removed, `tia-dosing_test.yaml` pasted | typed + pasted | `naut check` clean; `naut test` 6/6 |
 | 13 | compare | built files vs `reference/` modulo indentation, blank lines and `@layout` (`nautilus.yaml` from `server:` on, comments dropped: the template's header stays); the TIA "compare blocks" habit: commit, retype `T#2S` → `T#3S` on the diagram, `Diff FBD Diagram (vs git HEAD)`, put it back; the "force" habit: is there a force command | gestured + palette probes | compare ==; the diff tab opens; force XFAIL |
 
@@ -76,13 +76,18 @@ The 12 XFAIL rows, and what turns each one XPASS:
 | 05-diag-hash-prefix-target | #198 |
 | 05-outline-symbols | PR #172 |
 | 05-find-references | PR #171 |
-| 07-palette-lists-user-FUNCTION | #204 |
 | 07-check-user-FUNCTION-from-FBD | #197 |
-| 08-check-with-open-pins | #205 (an open `_` is an error by design today) |
-| 09-EN-ENO-on-LIMIT | #206 |
-| 09-EN-input-by-text | #206 |
-| 11-network-numbers-or-exec-order | #207 |
 | 13-force-command | #211 |
+
+PASS since PR #236 (the FBD parity batch): `07-palette-lists-user-FUNCTION`
+(#204), `09-EN-ENO-on-LIMIT` and `09-EN-input-by-text` (#206),
+`11-network-numbers-or-exec-order` (#207). `08-check-with-open-pins` became
+`08-defaulted-input-unbound` (#205: `NoFlowTime`, which has a default, now
+arrives unbound, so the `08-disconnect-NoFlowTime` workaround row is gone; an
+open `_` on a pin with no default is still an error, by design). The five
+`// Network N:` comments became `NETWORK 'title'` lines, added with the
+palette's "network" (`fbd_add_network`), and `reference/main.fbd` seeds
+`PROGRAM Main` (#209).
 
 When #197 is fixed, `07-check-user-FUNCTION-from-FBD` turns XPASS and
 `07-workaround-uppercase-FC` (the rename to `SCALEANALOG`) can go, along
