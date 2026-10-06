@@ -108,6 +108,8 @@ const (
 	CompletionKindClass    = 7 // used for function blocks
 	CompletionKindKeyword  = 14
 	CompletionKindStruct   = 22 // used for elementary/user types
+	CompletionKindConstant = 21 // project constants (VAR_GLOBAL CONSTANT)
+	CompletionKindEnum     = 20 // an enumeration member (Mode#Run)
 )
 
 // CompletionItem is a single completion suggestion.

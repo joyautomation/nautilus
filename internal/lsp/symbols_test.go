@@ -475,3 +475,35 @@ func checkWellFormed(t *testing.T, path string, syms []DocumentSymbol, parent *D
 		checkWellFormed(t, path, s.Children, s)
 	}
 }
+
+// #202: REGION … END_REGION shows in the outline under its POU, nested
+// regions under theirs, after the VAR sections (sorted by position); a
+// variable called Region is not a region.
+func TestDocumentSymbolsRegions(t *testing.T) {
+	src := `PROGRAM Mixer
+VAR x : INT; Region : INT; END_VAR
+REGION Fill the tank
+    x := 1;
+    REGION valves
+        x := 2;
+    END_REGION
+END_REGION;
+Region := 3;
+REGION Drain
+    x := 0;
+END_REGION
+END_PROGRAM
+`
+	syms := documentSymbols("file:///p.st", src)
+	wantOutline(t, syms, `
+Mixer [2] PROGRAM
+  VAR [3]
+    x [13] INT
+    Region [13] INT
+  Fill the tank [3] REGION
+    valves [3] REGION
+  Drain [3] REGION
+`)
+	wantRange(t, syms, "Fill the tank", "3:1-8:12", "3:1-3:21")
+	wantRange(t, syms, "valves", "5:5-7:15", "5:5-5:18")
+}

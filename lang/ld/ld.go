@@ -639,6 +639,14 @@ func (t *rungTok) ident() (string, error) {
 				}
 				continue
 			}
+			// .%X3 — IEC partial access (%X bit, %B byte, %W word, %D, %L).
+			if t.pos+3 < len(t.src) && t.src[t.pos+1] == '%' && strings.ContainsRune("XxBbWwDdLl", rune(t.src[t.pos+2])) && isDigit(t.src[t.pos+3]) {
+				t.pos += 3
+				for t.pos < len(t.src) && isDigit(t.src[t.pos]) {
+					t.pos++
+				}
+				continue
+			}
 		}
 		break
 	}

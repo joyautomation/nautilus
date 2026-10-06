@@ -1,0 +1,34 @@
+PROGRAM CaseConstSfc
+(* The same machine, in an SFC action: the chart's header declares the
+   constants, the action's CASE uses them as labels. *)
+VAR_EXTERNAL
+    Go        : BOOL;
+    sfc_State : INT;
+    sfc_Count : INT;
+END_VAR
+VAR CONSTANT
+    S_IDLE : INT := 0;
+    S_RUN  : INT := 10;
+    S_DONE : INT := 20;
+    RUNS   : INT := 3;
+END_VAR
+SFC
+
+  INITIAL_STEP Machine:
+    N Advance;
+  END_STEP
+
+  ACTION Advance:
+    CASE sfc_State OF
+        S_IDLE:
+            IF Go THEN sfc_State := S_RUN; END_IF;
+        S_RUN:
+            sfc_Count := sfc_Count + 1;
+            IF sfc_Count >= RUNS THEN sfc_State := S_DONE; END_IF;
+        S_DONE:
+            IF NOT Go THEN sfc_State := S_IDLE; END_IF;
+    END_CASE;
+  END_ACTION
+
+END_SFC
+END_PROGRAM

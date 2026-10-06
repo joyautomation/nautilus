@@ -604,7 +604,7 @@ func (p *netParser) primary() (expr, error) {
 			return accExpr{exprPos: p.span(at), base: name, text: text}, nil
 		case st.TokenDot: // FB output pin, or a member chain with indexes
 			p.next()
-			if p.at(st.TokenNumber) { // Word.3: a bit of an integer
+			if p.at(st.TokenNumber) || p.at(st.TokenPartial) { // Word.3 / Word.%X3: part of an integer
 				bit := p.next().Literal
 				return accExpr{exprPos: p.span(at), base: name, text: name + "." + bit}, nil
 			}
@@ -656,7 +656,7 @@ func (p *netParser) accessorChain(head string) (string, error) {
 			text += "[" + idx + "]"
 		case st.TokenDot:
 			p.next()
-			if p.at(st.TokenNumber) { // a bit of an integer member
+			if p.at(st.TokenNumber) || p.at(st.TokenPartial) { // a bit (or %B/%W part) of an integer member
 				text += "." + p.next().Literal
 				continue
 			}

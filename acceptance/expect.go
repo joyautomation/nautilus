@@ -213,6 +213,11 @@ func (m Matcher) match(got ir.Value, defaultTol float64) (bool, string) {
 		case m.IsBool:
 			return got.Kind == ir.TypeBool && got.B == m.Bool, fmt.Sprintf("%v", m.Bool)
 		case m.IsStr:
+			if got.Kind == ir.TypeInt && got.S != "" {
+				// An enumeration value, asserted by member name (#238):
+				// `st_State: Fill`. Names are identifiers: case-insensitive.
+				return strings.EqualFold(got.S, m.Str), m.Str
+			}
 			return got.Kind == ir.TypeString && got.S == m.Str, fmt.Sprintf("%q", m.Str)
 		default:
 			return numOf(got) == m.Num, trim(m.Num)
@@ -267,6 +272,9 @@ func show(v ir.Value) string {
 	case ir.TypeReal:
 		return trim(v.F)
 	case ir.TypeInt, ir.TypeTime:
+		if v.Kind == ir.TypeInt && v.S != "" {
+			return fmt.Sprintf("%s (%d)", v.S, v.I) // an enumeration member
+		}
 		return fmt.Sprintf("%d", v.I)
 	}
 	return "?"
@@ -449,6 +457,9 @@ func stTypeName(k ir.TypeKind) (string, bool) {
 // the UDT's TYPE name, so the generated VAR_EXTERNAL block reads
 // `P101 : Motor;` exactly as the real program does.
 func stTypeNameOfType(t *ir.Type) (string, bool) {
+	if t.Enum != nil {
+		return t.Enum.Name, true // an enumeration: its TYPE, so `x = Mode#Run` compiles
+	}
 	if t.Kind == ir.TypeStruct {
 		if t.Struct == nil || t.Struct.Name == "" {
 			return "", false

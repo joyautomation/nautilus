@@ -144,7 +144,7 @@ func TestMemberCompletionWhileTyping(t *testing.T) {
 	if err := json.Unmarshal(s.recvResponse(id), &init); err != nil {
 		t.Fatal(err)
 	}
-	if cp := init.Capabilities.CompletionProvider; cp == nil || !reflect.DeepEqual(cp.TriggerCharacters, []string{"."}) {
+	if cp := init.Capabilities.CompletionProvider; cp == nil || !reflect.DeepEqual(cp.TriggerCharacters, []string{".", "#"}) {
 		t.Fatalf("completion trigger characters = %+v, want [.]", cp)
 	}
 	s.open(uri, typingSrc("Full := settle.Q;"))

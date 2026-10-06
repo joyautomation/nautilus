@@ -127,6 +127,10 @@
           "match": "(?i)\\b(RETURN|EXIT|CONTINUE)\\b"
         },
         {
+          "name": "keyword.control.region.iec-st",
+          "match": "(?i)^\\s*(END_REGION\\b|REGION\\b(?!\\s*(:=|\\.|\\[|\\(|;|:|,)))"
+        },
+        {
           "name": "keyword.operator.logical.iec-st",
           "match": "(?i)\\b(AND|OR|XOR|NOT|MOD)\\b"
         }

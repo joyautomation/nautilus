@@ -35,6 +35,13 @@ type analysis struct {
 	// typeMembers maps lowercased UDT names to their members, for member
 	// completion after a dot.
 	typeMembers map[string][]TypeMember
+	// enums maps lowercased enumeration type names (this file and the
+	// prelude) to their member names, for completion after Mode#; enumDecl
+	// is the same keyed by the declared spelling. projectConsts are the
+	// VAR_GLOBAL CONSTANT declarations in scope (#176).
+	enums         map[string][]string
+	enumDecl      map[string][]string
+	projectConsts []Symbol
 	// indexed reports that Symbols/types/typeMembers came from a parse —
 	// of this text, of its declaration skeleton, or (carryDeclarations) of
 	// the document's previous version.
@@ -149,7 +156,53 @@ func (a *analysis) index(prog *st.Program, text, prelude string, preludeLines in
 	}
 	a.types = typeIndex(lowerProg.TypeDecls)
 	a.typeMembers = typeMemberIndex(lowerProg.TypeDecls)
+	for _, td := range lowerProg.TypeDecls {
+		et, ok := td.Type.(*st.EnumType)
+		if !ok {
+			continue
+		}
+		if a.enums == nil {
+			a.enums, a.enumDecl = map[string][]string{}, map[string][]string{}
+		}
+		names := make([]string, len(et.Members))
+		for i, m := range et.Members {
+			names[i] = m.Name
+		}
+		a.enums[strings.ToLower(td.Name)] = names
+		a.enumDecl[td.Name] = names
+	}
+	for _, b := range lowerProg.GlobalConsts {
+		for _, v := range b.Variables {
+			a.projectConsts = append(a.projectConsts, Symbol{Name: v.Name, Datatype: v.Datatype, BlockKind: "VAR_GLOBAL CONSTANT", Pos: v.Pos})
+		}
+	}
 	return lowerProg, preludeLines
+}
+
+// hashContext detects a completion site just after `Name#`, returning Name:
+// "x := Mode#R|" yields "Mode". A based number (16#) or a TIME literal (T#)
+// is a hash context too — with no enumeration of that name, it offers
+// nothing.
+func hashContext(line string, col int) (string, bool) {
+	if col > len(line) {
+		col = len(line)
+	}
+	i := col
+	for i > 0 && isIdentByte(line[i-1]) {
+		i--
+	}
+	if i == 0 || line[i-1] != '#' {
+		return "", false
+	}
+	end := i - 1
+	j := end
+	for j > 0 && isIdentByte(line[j-1]) {
+		j--
+	}
+	if j == end {
+		return "", false
+	}
+	return line[j:end], true
 }
 
 // analyzeLD compiles a Ladder Diagram document: LD → FBD netlist → the FBD
@@ -586,6 +639,7 @@ func collectSymbols(prog *st.Program) []Symbol {
 	// returns for lines outside any FB/FUNCTION body — so scoped lookup
 	// and completion treat the program body as the default scope.
 	addBlocks("", prog.VarBlocks)
+	addBlocks("", prog.GlobalConsts)
 	for _, t := range prog.TypeDecls {
 		syms = append(syms, Symbol{Name: t.Name, Datatype: t.Type.String(), BlockKind: "TYPE", Pos: t.Pos})
 	}

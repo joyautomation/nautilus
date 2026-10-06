@@ -1,0 +1,30 @@
+# st-case-constants — CASE labels that are named constants (#196). A state
+# machine whose states are VAR CONSTANT names: each label ends the clause
+# before it, exactly as literal labels do. Before the fix only literal
+# labels ended a clause, so S_RUN's body was parsed into S_IDLE's and the
+# machine counted once and stopped. ST and SFC (an action holds the CASE)
+# run the same machine; LD and FBD have no CASE.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/st-case-constants'
+#   go run ./cmd/naut test lang/conformance/st-case-constants
+name: st-case-constants
+
+tasks:
+  - program: st-case-constants.st   # the first task is always "main"; its prefix is still st_
+    scan: 10ms
+  - name: sfc
+    program: st-case-constants.sfc
+    scan: 10ms
+
+tags:
+  # Shared input.
+  - { name: Go, role: state, init: false, desc: "Start the machine" }
+
+  # Outputs, one set per language.
+  - { name: st_State,  role: state, init: 0 }
+  - { name: st_Count,  role: state, init: 0 }
+  - { name: sfc_State, role: state, init: 0 }
+  - { name: sfc_Count, role: state, init: 0 }
+
+driver:
+  type: memory

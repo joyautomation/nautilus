@@ -1,0 +1,14 @@
+PROGRAM GConstFbd
+(* The project constants wired into a compare block and a timer's PT pin. *)
+VAR_EXTERNAL
+    Level    : REAL;
+    Run      : BOOL;
+    fbd_High : BOOL;
+    fbd_Done : BOOL;
+END_VAR
+FBD
+  fbd_High := GT(Level, HI_LIMIT)
+  t : TON(IN := Run, PT := T_DELAY)
+  fbd_Done := t.Q
+END_FBD
+END_PROGRAM
