@@ -1,0 +1,40 @@
+# fbd-en-eno — EN/ENO execution control (IEC 61131-3 §6.6.1.2.4,
+# docs/functions.md "EN/ENO") in ST and FBD: a function whose EN is FALSE
+# does not run and its result is not assigned (the target holds); an FB
+# whose EN is FALSE does not run (its outputs and => bindings hold); ENO
+# is EN AND no error — DIV's zero divisor is the error FBD reports.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/fbd-en-eno'
+#   go run ./cmd/naut test lang/conformance/fbd-en-eno
+name: fbd-en-eno
+
+tasks:
+  - program: fbd-en-eno.st      # the first task is always "main"; its prefix is still st_
+    scan: 10ms
+  - name: fbd
+    program: fbd-en-eno.fbd
+    scan: 10ms
+
+tags:
+  # Shared inputs.
+  - { name: EN, role: state, init: false, desc: "EN of every call" }
+  - { name: X,  role: state, init: 0.0 }
+  - { name: D,  role: state, init: 1.0, desc: "DIV's divisor" }
+  - { name: CU, role: state, init: false, desc: "CTU count input" }
+
+  # Outputs, one set per language.
+  - { name: st_OUT,   role: state, init: -1.0 }
+  - { name: st_ENO,   role: state, init: false }
+  - { name: st_CV,    role: state, init: 0 }
+  - { name: st_CENO,  role: state, init: false }
+  - { name: st_Q,     role: state, init: -1.0 }
+  - { name: st_QENO,  role: state, init: false }
+  - { name: fbd_OUT,  role: state, init: -1.0 }
+  - { name: fbd_ENO,  role: state, init: false }
+  - { name: fbd_CV,   role: state, init: 0 }
+  - { name: fbd_CENO, role: state, init: false }
+  - { name: fbd_Q,    role: state, init: -1.0 }
+  - { name: fbd_QENO, role: state, init: false }
+
+driver:
+  type: memory

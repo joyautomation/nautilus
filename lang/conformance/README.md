@@ -163,6 +163,7 @@ Current table:
 | `fb-tof` | ✓ | ✓ | ✓ |   | 7 |
 | `fb-ton` | ✓ | ✓ | ✓ |   | 6 |
 | `fb-tp` | ✓ | ✓ | ✓ |   | 8 |
+| `fbd-en-eno` | ✓ |   | ✓ |   | 7 |
 | `fn-conversions` | ✓ |   |   |   | 8 |
 | `fn-trig-log` | ✓ |   |   |   | 8 |
 | `ld-coils` | ✓ | ✓ |   |   | 9 |
@@ -179,4 +180,4 @@ Current table:
 | `st-string-clamp` | ✓ |   |   |   | 8 |
 | `st-xor` | ✓ |   |   |   | 3 |
 
-23 features, 140 tests.
+24 features, 147 tests.
