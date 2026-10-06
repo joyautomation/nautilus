@@ -285,24 +285,6 @@ END_PROGRAM
 	wantDiag(t, Check(prog), SeverityError, `unknown action qualifier "Q"`)
 }
 
-func TestCheckStagedQualifier(t *testing.T) {
-	src := `PROGRAM P
-VAR
-  Lamp : BOOL;
-END_VAR
-SFC
-INITIAL_STEP A:
-  L Lamp(T#5s);
-END_STEP
-TRANSITION FROM A TO A := TRUE;
-END_TRANSITION
-END_SFC
-END_PROGRAM
-`
-	prog := mustParse(t, src)
-	wantDiag(t, Check(prog), SeverityError, `timed qualifier "L" is not implemented`)
-}
-
 func TestCheckUnknownStepXTRef(t *testing.T) {
 	src := `PROGRAM P
 VAR END_VAR

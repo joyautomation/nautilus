@@ -1,0 +1,105 @@
+# Acceptance tests for the washer (timed variant) — reference/'s six tests,
+# unchanged, against the chart written with D / SD / L and MAXTIME, plus
+# the overrun alarm the supervision raises.
+#
+#   naut test          run them
+#   naut test -v       with the virtual time each test covered
+#
+# File-level suspend: [sim] — every test but the closed-loop full cycle
+# drives LevelPct/TempC directly. StateNo codes (the enum a Codesys
+# project would have): 0 Idle, 1 Fill, 2 Heat/Wash, 3 Drain, 4 Spin,
+# 9 Aborted. FaultCode: 1 stop/door, 2 fill timeout, 3 drain timeout.
+tolerance: 0.5
+suspend: [sim]
+
+tests:
+  - name: a full cycle runs Idle to Idle with the plant simulated
+    suspend: []
+    steps:
+      - given: { StartPB: true }
+        scans: 2
+        expect: { StateNo: 1, FillValve: true, DoorLock: true }
+      - given: { StartPB: false }
+        until: 60s
+        expect: { StateNo: 4 }
+      - scans: 1
+        expect: { SpinMotor: true, DrainPump: true, DoorLock: true }
+      - until: 15s
+        expect: { StateNo: 0 }
+      - scans: 1
+        expect: { CycleCount: 1, SpinMotor: false, DoorLock: false, FaultCode: 0 }
+
+  - name: Fill opens the valve, counts the cycle once, and doses after 3 s
+    steps:
+      - given: { StartPB: true }
+        scans: 2
+        expect: { StateNo: 1, FillValve: true, DoorLock: true, CycleCount: 1, Detergent: false }
+      - given: { StartPB: false }
+        advance: 2.5s
+        expect: { Detergent: false }
+      - advance: 1s
+        expect: { Detergent: true, CycleCount: 1 }
+
+  - name: Heat and Wash run together, the drum reverses, and Drain waits for both
+    steps:
+      - given: { StartPB: true }
+        scans: 2
+      - given: { StartPB: false, LevelPct: 60.0 }
+        scans: 2
+        expect: { StateNo: 2, Heater: true, DrumCW: true, DrumCCW: false, FillValve: false, Detergent: false }
+      - advance: 4.5s
+        expect: { DrumCW: false, DrumCCW: false }   # FB_Reverser's pause
+      - advance: 1s
+        expect: { DrumCCW: true }
+      - advance: 20s                                # wash time is up, the water is still cold
+        expect: { StateNo: 2, DrainPump: false, Heater: true }
+      - given: { TempC: 45.0 }
+        scans: 2                                    # Heat -> HeatDone, then the join
+        expect: { StateNo: 3, DrainPump: true, Heater: false, DrumCW: false, DrumCCW: false }
+
+  - name: Stop during Fill aborts, latches the lamp, and Reset returns to Idle
+    steps:
+      - given: { StartPB: true }
+        scans: 2
+      - given: { StartPB: false, StopPB: true }
+        scans: 2
+        expect: { StateNo: 9, AlarmLamp: true, FillValve: false, DrainPump: true, FaultCode: 1 }
+      - given: { StopPB: false }
+        advance: 5s
+        expect: { StateNo: 9, AlarmLamp: true }     # stays aborted until Reset
+      - given: { ResetPB: true }
+        scans: 2
+        expect: { StateNo: 0, AlarmLamp: false, DoorLock: false, DrainPump: false, FaultCode: 0 }
+
+  - name: a fill that runs past its maximum step time aborts with a fault code
+    steps:
+      - given: { StartPB: true }
+        scans: 2
+      - given: { StartPB: false }
+        advance: 59s
+        expect: { StateNo: 1, FaultCode: 0 }
+      - advance: 2s
+        expect: { StateNo: 9, FaultCode: 2, AlarmLamp: true, FillOverrun: true }
+        alarms: { active: [FillOverrun] }
+
+  - name: the abort branch has priority when Stop and a full drum arrive together
+    steps:
+      - given: { StartPB: true }
+        scans: 2
+      - given: { StartPB: false, StopPB: true, LevelPct: 60.0 }
+        scans: 2
+        expect: { StateNo: 9, Heater: false, DrumCW: false, FaultCode: 1 }
+
+  - name: a drain past its maximum time lights the lamp (SD) and aborts with a fault code (MAXTIME)
+    steps:
+      - given: { StartPB: true }
+        scans: 2
+      - given: { StartPB: false, LevelPct: 60.0, TempC: 45.0 }
+        scans: 3
+      - advance: 20.2s                              # wash time is up: the join fires
+        expect: { StateNo: 3, DrainPump: true, AlarmLamp: false }
+      - advance: 44s                                # the drum never empties (the sim is suspended)
+        expect: { StateNo: 3, AlarmLamp: false, DrainOverrun: false }
+      - advance: 1.5s
+        expect: { StateNo: 9, FaultCode: 3, AlarmLamp: true, DrainOverrun: true }
+        alarms: { active: [DrainOverrun] }
