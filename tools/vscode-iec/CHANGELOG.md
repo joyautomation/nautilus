@@ -41,10 +41,13 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   does not define, are a compile error that says what to write. Needs a
   `naut` newer than 0.15.0. (#244)
 
-- **Set Value and Force take an enumeration's member name inside a
-  struct** — `Recipe.Mode`, or an array element `Recipe.Steps[2].Mode` —
-  as they already did for a whole enumerated tag; a name that is no member
-  is refused with the list. Needs a `naut` newer than 0.15.0. (#247)
+- **A write into an enumerated member of a struct lands named.** Set Value
+  or Force of `Recipe.Mode` (or an array element, `Recipe.Steps[2].Mode`)
+  with the member's integer now stores the member — the pill shows `Run`,
+  not an unnamed `10` — as a write of a whole enumerated tag already did.
+  The controller also takes the member name over the API (a name that is
+  no member is refused with the list). Needs a `naut` newer than 0.15.0.
+  (#247)
 
 - **Manifest tags are in scope in every program without `VAR_EXTERNAL`**,
   the way a TIA tag table, a Codesys GVL or Logix controller scope is.
