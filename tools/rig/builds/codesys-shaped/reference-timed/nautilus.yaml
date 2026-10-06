@@ -1,0 +1,45 @@
+# washer (timed variant) — the same wash cycle written the way a Codesys
+# programmer types it first, now that nautilus has the timed qualifiers
+# (D Detergent(T#3S), SD AlarmLamp(T#45S), L SpinMotor(T#10S)) and step
+# supervision (MAXTIME, Step.ERR, ERROR := tag + an alarm). reference/ is
+# the Step.T version the gesture build reproduces; this one runs the same
+# washer_test.yaml plus the overrun alarm, and the build checks and tests it.
+#
+# washer — a Codesys-shaped build: a front-loader wash cycle as an SFC
+# (washer.sfc), the plant simulated in ST (sim.st), the tag list in its
+# own file (tags/washer.yaml — the GVL a Codesys project would have), and
+# a library function block in lib/reverser.st used from the chart's
+# actions. Built from `naut new --template minimal` by
+# tools/rig/builds/codesys-shaped/build.sh; this is the finished reference.
+#
+#   naut check .     validate offline
+#   naut test  .     the acceptance suite (washer_test.yaml), virtual time
+#   naut run   .     dashboard + tag API on http://localhost:8080
+name: washer
+
+server:
+  addr: "localhost:8080"   # NAUTILUS_ADDR overrides; set NAUTILUS_TOKEN to gate writes
+  online-edits: true       # PLC-style online edits from VS Code (off for production)
+
+# The Codesys GVL: every global in one file, beside the manifest.
+tag-files:
+  - tags/washer.yaml
+
+# One program per task, each on its own scan. The first task owns field I/O.
+tasks:
+  - program: washer.sfc
+    scan: 100ms
+  - name: sim
+    program: sim.st
+    scan: 100ms
+    dt-tag: SimDtS
+
+# The step-supervision flags, annunciated by the alarm engine.
+alarms:
+  defaults: { ack-required: true, auto-clear: true }
+  defs:
+    - { id: FillOverrun,  tag: FillOverrun,  name: "Fill ran past its maximum time",  priority: high }
+    - { id: DrainOverrun, tag: DrainOverrun, name: "Drain ran past its maximum time", priority: high }
+
+driver:
+  type: memory

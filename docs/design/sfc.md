@@ -38,10 +38,15 @@ Rationale:
 ```
 sfc-body   := "SFC" newline { element } "END_SFC"
 element    := initial-step | step | transition | action | comment | layout-comment
-initial-step := "INITIAL_STEP" ident ":" { assoc } "END_STEP"
-step         := "STEP" ident ":" { assoc } "END_STEP"
-assoc        := qualifier ident [ "(" time-literal ")" ] ";"      (* action association *)
-qualifier    := "N" | "S" | "R" | "P" | "P0" | "P1"               (* slice 1 set *)
+initial-step := "INITIAL_STEP" ident [ step-attrs ] ":" { assoc } "END_STEP"
+step         := "STEP" ident [ step-attrs ] ":" { assoc } "END_STEP"
+step-attrs   := "(" attr { "," attr } ")"                         (* §2.6.1 *)
+attr         := ( "MAXTIME" ":=" time-literal ) | ( "ERROR" ":=" ident )
+assoc        := qualifier ident [ "(" duration ")" ] ";"          (* nautilus form *)
+              | ident "(" [ qualifier ] [ "," duration ] ")" ";"  (* IEC 61131-3 textual form *)
+qualifier    := "N" | "S" | "R" | "P" | "P0" | "P1"
+              | "L" | "D" | "SD" | "DS" | "SL"                     (* timed: take a duration *)
+duration     := time-literal | ident                              (* a TIME literal or variable *)
 transition := "TRANSITION" [ ident ] "FROM" step-set "TO" step-set
               ":=" st-expression ";" "END_TRANSITION"
 step-set   := ident | "(" ident { "," ident } ")"
@@ -225,9 +230,21 @@ fire(t)    = enabled(t) AND altGuard(t)
 | `S` | Set (stored): action becomes active and **stays** active until an `R` on the same target. Acts **once**, on the step's activation. | 1 |
 | `P1` | Pulse on rising activation: body runs **once**, the scan the step becomes active. | 1 |
 | `P` / `P0` | Pulse (P ≡ P1 in most vendors) / pulse on deactivation. | 1 if cheap, else 1b |
-| `L` `D` `SD` `DS` `SL` | Time-limited / delayed / stored-delayed variants. | **later slice** |
+| `L` `D` `SD` `DS` `SL` | Time-limited / delayed / stored-delayed variants (below). | shipped 2026-10 (#190) |
 
-Rationale for staging: `N`/`S`/`R`/`P1` cover the overwhelming majority of real sequences and require **no new timer state** beyond a one-scan edge memory for `P1`. The timed qualifiers each require a per-association timer and a more elaborate action-control block; deferring them keeps slice-1 semantics small and *fully honest* (we ship a declared subset, not a broken superset). The deferral is called out in `naut check`: an unsupported qualifier is a clear diagnostic, never silently mis-executed.
+Rationale for staging (as originally written; the timed qualifiers have since shipped): `N`/`S`/`R`/`P1` cover the overwhelming majority of real sequences and require **no new timer state** beyond a one-scan edge memory for `P1`. The timed qualifiers each require a per-association timer and a more elaborate action-control block; deferring them keeps slice-1 semantics small and *fully honest* (we ship a declared subset, not a broken superset). The deferral is called out in `naut check`: an unsupported qualifier is a clear diagnostic, never silently mis-executed.
+
+**Timed qualifiers (shipped 2026-10, #190).** Each timed association lowers to its own `TON`, plus a latch for the stored ones, named `_q_<Step>_<Target>_<Q>_tmr` / `_ff` so a warm swap carries them across. The active signals are the standard action-control block's (IEC 61131-3 §2.6.4.5, the `ACTION_CONTROL` body), per association rather than per action:
+
+| Qualifier | Active signal |
+|---|---|
+| `L` | `Step.X AND NOT TON(Step.X, T).Q` |
+| `D` | `TON(Step.X, T).Q` |
+| `SD` | `TON(ff, T).Q`, `ff` set on the step's activation, cleared by `R` |
+| `DS` | `ff`, set by `TON(Step.X, T).Q`, cleared by `R` |
+| `SL` | `ff AND NOT TON(ff, T).Q`, `ff` set on the step's activation, cleared only by `R` |
+
+Each is a **level** for the combine rules below (OR-combined with the other drive signals on a Boolean variable, final scan on a body). Two declared departures: an `R` acts once, on its step's activation (the same edge rule as `S`/`R` here; the standard's `R` is a level), and it clears every `SD`/`DS`/`SL` latch on its target as well as the `S` store. Order within the scan: `L`/`D`/`DS` timers, then the `S`/`SD`/`SL`/`DS` sets, then `R` resets (so a reset on the same scan wins), then the `SD`/`SL` timers. `lang/conformance/sfc-timed-qualifiers` pins every edge.
 
 **Action-control model (simplified conformant subset).** The standard defines an "action control" function block per action with a `Q` output. nautilus computes, for each *(step, action, qualifier)* association, a Boolean "active" signal, then combines per action:
 
@@ -252,6 +269,21 @@ Rationale for staging: `N`/`S`/`R`/`P1` cover the overwhelming majority of real 
 
 - **`S.X`** — the retained BOOL activity slot. Free to read anywhere.
 - **`S.T`** — TIME elapsed since `S` last became active; `T#0s` while inactive. **Implementation: reuse the existing `TON`.** For each step whose `.T` is actually referenced, generate a hidden `_S_<step>_t : TON` and emit `_S_<step>_t(IN := <step>.X, PT := T#<cap>);`, then compile `S.T` to `_S_<step>_t.ET`. `TON.ET` (see `lang/ir/builtins_fb.go`) is driven by the runtime clock (`ctx.NowMs`), resets to 0 when `IN` falls, and is clamped to `PT`; choosing `<cap>` ≥ the largest bound the chart compares against makes the clamp invisible. This reuses a real, tested, clock-based FB and inherits its warm-restart migration for free. Steps whose `.T` is never read generate no timer (zero cost).
+- **`S.ERR`** — the retained overrun flag of a supervised step (§2.6.1); legal only on a step with `MAXTIME`.
+
+#### 2.6.1 Step supervision: `MAXTIME` (2026-10, #191)
+
+IEC 61131-3 has no step supervision; CODESYS has a step's maximum time with `SFCError`, S7-GRAPH a per-step supervision condition. nautilus takes the smallest form that covers both: a **step attribute list** between the step name and its colon,
+
+```
+STEP Fill (MAXTIME := T#60S, ERROR := FillOverrun):
+```
+
+- **Why an attribute, not a reserved association.** The limit belongs to the step, not to an action: an association-shaped spelling (`MAXTIME Fill(T#60S);`) would read as an action, show as one in the chart's action table, and need a reserved target. A `( NAME := value )` list is the ST call/parameter idiom, keeps every existing association parse unchanged, and has room for the error target. The edit model carries it (`GStep.Attrs`, reprinted by every op that rewrites a step header via `StepHeader`) and exposes `GStep.MaxTime` for the chart to show.
+- **Semantics.** The step reuses its hidden `.T` timer (§2.6; `MAXTIME`'s literal counts toward the clamp). `_S_<Step>_err` is cleared on the step's activation scan and set on any scan the step is active with `.T > MAXTIME` — strictly longer than the limit, CODESYS's and S7-GRAPH's reading. It stays set after the step is left (so an abort step can read the cause) until the step's next activation. It is retained like every other SFC slot.
+- **Consequences are explicit.** Nothing moves on an overrun by itself: a transition reads `Fill.ERR` (`FROM Fill TO Aborted := Fill.ERR`, declared first for priority).
+- **Alarm.** `ERROR := <BOOL var>` mirrors the flag into a variable every scan. The alarm engine reads the tag store, not program locals, so the route to an alarm is a manifest tag declared `VAR_EXTERNAL` here and an `alarms:` definition on it — no new alarm plumbing, and the alarm's on-delay/ack/latch policy stays the manifest's. `lang/conformance/sfc-step-maxtime` asserts the alarm activating, returning to normal and acking.
+- `MAXTIME` takes a TIME literal only (the clamp is computed from it); `naut check` rejects anything else, an undeclared `ERROR` target, `ERROR` without `MAXTIME`, an unknown attribute, and `Step.ERR` on an unsupervised step.
 
 ### 2.7 First scan and warm restart
 
@@ -391,9 +423,10 @@ The base pipeline is inherited: `.sfc` → `sfc.TranspileWithLines` → the exis
 - **Convergence/divergence arity** — a `FROM (A,B)` whose steps aren't all real; a simultaneous convergence whose sources can never be concurrently active (structurally: not reachable from a common simultaneous divergence) — warn.
 - **Duplicate / missing initial step** — exactly one `INITIAL_STEP` required.
 - **Action reference to an undefined action or variable** — an association naming neither an `ACTION` block nor a declared variable → error (the variable case is *also* caught by ST lowering; catching it structurally gives a better message).
-- **Unsupported qualifier** (e.g. `L`, `SD` in slice 1) — clear "not yet supported" diagnostic, never silent.
+- **Unknown qualifier** — error listing every supported qualifier (the timed ones included) and the `Step.T` recipe for timing none of them expresses. A timed qualifier without a duration, or an untimed one with one, is an error too.
+- **Step attributes** (§2.6.1) — `MAXTIME` not a TIME literal, `ERROR` naming no declared variable, `ERROR` without `MAXTIME`, an unknown or repeated attribute, `Step.ERR` on an unsupervised step — errors.
 - **Reference to `Step.X`/`Step.T` of an unknown step** — error.
-- **Association vs ACTION write** — a variable targeted by a bare qualifier association (`N X`, `S X`, `R X`, `P1 X`, …) and also assigned (`X := …`, at statement level) inside an `ACTION` body → warning, naming the step, the qualifier, the ACTION(s), and the rule that decides between them (§2.5: the association wins while it acts, the ACTION otherwise).
+- **Association vs ACTION write** — a variable targeted by a bare qualifier association (`N X`, `S X`, `R X`, `P1 X`, `D X(T#3S)`, …) and also assigned (`X := …`, at statement level) inside an `ACTION` body → warning, naming the step, the qualifier, the ACTION(s), and the rule that decides between them, worded for that qualifier's window (§2.5: the association wins while it acts, the ACTION otherwise). An unknown qualifier gets no such warning; its own error stands.
 - *(Removed 2026-09: "ambiguous alternative-priority group" for a non-transitive shared-source group. With the `fire`-based guard of §2.3 such a group has one well-defined outcome, so the warning only ever flagged correct charts.)*
 
 All emitted through the same gcc-style `path:line:col: message` channel, positions on the offending `.sfc` construct via the line map.
@@ -470,10 +503,10 @@ Land the "new language exists" seams as thin pass-throughs so nothing else is bl
 ## 7. Explicit non-goals for v1
 
 - **Macro steps** and **SFC-in-SFC nesting** (a step whose body is itself a chart). Slice 1 is flat charts only.
-- **Timed action qualifiers** `L`, `D`, `SD`, `DS`, `SL` (deferred to a follow-on slice; flagged, not silently accepted).
+- ~~Timed action qualifiers~~ — shipped 2026-10 (§2.5, #190).
 - **Explicit numeric transition priorities** — source order only in v1.
 - **IL action bodies** — action bodies are ST only (nautilus has no IL front-end).
-- **Indicator variables** on transitions and the full standard **action-control block** with all edge cases — v1 ships the declared simplified subset of §2.5.
+- **Indicator variables** (in an association's parentheses, and on transitions) — refused with a message naming the accepted forms. The action-control block is implemented per association (§2.5), with the declared edge-`R` departure.
 - **Machine-checked token conservation** for pathological branch topologies — v1 checks the structurally obvious cases only (§5.1).
 - **Vendor SFC import** (Rockwell `.L5X` SFC routines, Siemens GRAPH, CODESYS `.sfc`). This is deliberately deferred and noted as a **future moat item** consistent with the project's language strategy: standard-only canonical form now; vendor-format import later as the migration on-ramp.
 

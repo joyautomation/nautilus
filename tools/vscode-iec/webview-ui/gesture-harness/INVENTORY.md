@@ -235,6 +235,8 @@ no rig verb, no smoke check); per section below.
 | X40 | Extension | Signature help while typing a call: parameters with types, FB inputs and outputs (=>), the active one highlighted by comma position or named pin | README Language intelligence | — | — | 14 |
 | X42 | Extension | Find all references (Shift+F12): a tag across every program and the manifest, a local only in its POU | README Language intelligence | — | — | 14 |
 | X41 | Extension | Outline view, breadcrumbs and Go to Symbol in Editor list POUs, VAR sections and declarations, FBD statements, ladder rungs, SFC steps / transitions / actions (naut lsp documentSymbol) | README Language intelligence | — | — | 14 (.st, .ld, .sfc; not .fbd) |
+| X46 | SFC | Timed qualifiers L, D, SD, DS, SL compile with the standard's semantics, in `Q Target(T#t);` or IEC's `Target(Q, T#t);` form; an R resets the stored ones | CHANGELOG [Unreleased]; website languages/sfc "Action qualifiers" | — (Go: lang/conformance/sfc-timed-qualifiers, lang/sfc/timed_test.go) | codesys-shaped build rows habit-D-qualifier, habit-SD-qualifier, habit-L-qualifier, habit-iec-assoc-form; reference-timed/ (naut test) | — |
+| X47 | SFC | Step supervision: `STEP Fill (MAXTIME := T#60S, ERROR := Tag):` sets Fill.ERR on an overrun and mirrors it into a tag an alarm binds to | CHANGELOG [Unreleased]; website languages/sfc "Step supervision" | — (Go: lang/conformance/sfc-step-maxtime asserts the alarm, lang/sfc/timed_test.go) | codesys-shaped reference-timed/ (naut test: fill timeout) | — |
 
 ## Count of rows with no coverage at all
 

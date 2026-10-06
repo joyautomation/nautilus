@@ -23,18 +23,30 @@ no gesture can author it — the reason is given).
 | `sim.st` | the drum's level and temperature | a simulation POU |
 | `washer_test.yaml` | 6 acceptance tests in virtual time | (CODESYS Test Manager) |
 
+`reference-timed/` is the same washer written the way a Codesys programmer
+types it first, now that nautilus has them (#190, #191): `D Detergent(T#3S)`
+on Fill, `SD AlarmLamp(T#45S)` on Drain, `L SpinMotor(T#10S)` on Spin, and
+`STEP Fill (MAXTIME := T#60S, ERROR := FillOverrun):` / Drain likewise in
+place of the `Supervise` action, with an `alarms:` definition on each
+overrun tag. Its `washer_test.yaml` is reference/'s six tests plus a drain
+overrun, 7/7, the fill-timeout test also asserting the alarm. The gesture
+build still reproduces reference/; the variant is checked and tested at the
+end (rows `reference-timed-check`, `reference-timed-test`).
+
 The chart: 8 steps, 9 transitions — an alternative divergence out of `Fill`
 (abort declared first, so it has priority), a simultaneous divergence
 `Fill → (Heat, Wash)` and its join `(Wash, HeatDone) → Drain`, two
 loop-backs to `Idle`. Associations use `N`, `S`, `R`, `P1`, `P0`. Nine
 `ACTION` blocks, all ST. The Codesys habits it had to give up, and what it
-does instead:
+does instead (the first three rows compile as written since #190/#191 —
+reference-timed/ uses them; reference/ keeps the Step.T form the build
+gestures):
 
 | Codesys | here |
 |---|---|
 | `D Detergent(T#3S)` | `N Dose` — `Detergent := Fill.X AND Fill.T >= tDoseDelay;` (the body's final scan closes it) |
 | `L SpinMotor(T#10S)` | `N SpinCtl` — `SpinMotor := Spin.X AND Spin.T < tSpin;` |
-| `SD`/step max time + `SFCError` | `N Supervise` on Fill/Drain sets `FaultCode` from `Step.T`; an abort transition per supervised step; `P1 RecordFault` on Aborted |
+| `SD`/step max time + `SFCError` | `N Supervise` on Fill/Drain sets `FaultCode` from `Step.T`; an abort transition per supervised step; `P1 RecordFault` on Aborted (reference-timed/: `MAXTIME` + `Fill.ERR`) |
 | `TYPE E_WashState : (IDLE, FILL, …)` | `VAR CONSTANT ST_IDLE : INT := 0; …` in the chart, `StateNo : INT` tag, one `TrackState` ACTION associated from every step |
 | GVL (`VAR_GLOBAL … END_VAR` in its own object) | `tags/washer.yaml` + `tag-files:`, re-declared `VAR_EXTERNAL` in each POU |
 | GVL constants (`VAR_GLOBAL CONSTANT`) | `VAR CONSTANT` in the POU that uses them |
@@ -69,10 +81,11 @@ warnings are counted in the row) except where a row says XFAIL.
 | B05 | chart habits | arrow-key navigation, a transition name in the add form | habit rows (XFAIL) | — |
 | B06 | the action-body gap | `sfc_add_action Heat N HeatCtl` before `ACTION HeatCtl` exists, then double-click it hoping for a body editor (habit, XFAIL) | gestured attempt | — |
 | B06 | ACTION blocks | all nine, `SpinCtl` as a stub | pasted | no gesture creates an `ACTION` block (only an existing one's body is editable) |
-| B06 | associations | 25 `sfc_add_action` across 8 steps; the timed qualifiers typed first (`D Detergent(T#3S)`, `SD AlarmLamp(T#45S)`, `L SpinMotor(T#10S)`), `naut check` read (habit, XFAIL), the chart's marker read, then each retyped in place with `sfc_edit_action`; a Codesys-ordered `D Detergent T#3S` (habit, XFAIL) | **gestured** | — |
+| B06 | associations | 25 `sfc_add_action` across 8 steps; the timed qualifiers typed first (`D Detergent(T#3S)`, `SD AlarmLamp(T#45S)`, `L SpinMotor(T#10S)`), `naut check` clean (habit rows, PASS since #190), the chart's marker read for the association-vs-ACTION warning worded for D (#185), the IEC form `Detergent(D, T#3S);` checked by CLI (#189), then each retyped in place with `sfc_edit_action`; a Codesys-ordered `D Detergent T#3S` (habit, XFAIL) | **gestured** | — |
 | B06 | one body | `SpinCtl`'s body typed in the chart's ST-body editor | **gestured** | — |
 | B07 | tests | `washer_test.yaml` | pasted | the Testing view runs it; writing YAML is typing |
 | B05 | join drawing | is `(Wash, HeatDone) → Drain` drawn as a convergence? (XFAIL) | — | — |
+| B07 | the timed variant | `naut check` + `naut test` 7/7 on `reference-timed/` | — | — |
 | B07 | verdict | `naut test` 6/6; `sfc_compare.py` built vs `reference/washer.sfc` (associations as a multiset), and again with `--assoc-order` (XFAIL, FINDINGS #14) | — | — |
 
 `sfc_compare.py` compares through `naut sfc graph`: program name, header
