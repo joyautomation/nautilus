@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="38.01" TargetName="DemoLine" TargetType="Controller" ContainsContext="false" Owner="nautilus" ExportDate="(pinned)" ExportOptions="References NoRawData L5KData DecoratedData Context Dependencies ForceProtectedEncoding AllProjDocTrans">
+<Controller Use="Target" Name="DemoLine" ProcessorType="1756-L85E" MajorRev="38" MinorRev="11" ProjectCreationDate="(pinned)" LastModifiedDate="(pinned)" SFCExecutionControl="CurrentActive" SFCRestartPosition="MostRecent" SFCLastScan="DontScan" ProjectSN="16#0000_0000" MatchProjectToController="false" CanUseRPIFromProducer="false" InhibitAutomaticFirmwareUpdate="0" PassThroughConfiguration="EnabledWithAppend" DownloadProjectDocumentationAndExtendedProperties="true" DownloadProjectCustomProperties="true" ReportMinorOverflow="false" AutoDiagsEnabled="true" WebServerEnabled="false">
+<RedundancyInfo Enabled="false" KeepTestEditsOnSwitchOver="false"/>
+<Security Code="0" ChangesToDetect="16#ffff_ffff_ffff_ffff"/>
+<SafetyInfo/>
+<DataTypes>
+<DataType Name="PumpData" Family="NoFamily" Class="User">
+<Members>
+<Member Name="Speed" DataType="REAL" Dimension="0" Radix="Float" Hidden="false" ExternalAccess="Read/Write"/>
+<Member Name="Running" DataType="BOOL" Dimension="0" Radix="Decimal" Hidden="false" ExternalAccess="Read/Write"/>
+</Members>
+</DataType>
+</DataTypes>
+<Modules>
+<Module Name="Local" CatalogNumber="1756-L85E" Vendor="1" ProductType="14" ProductCode="168" Major="38" Minor="11" ParentModule="Local" ParentModPortId="1" Inhibited="false" MajorFault="true">
+<EKey State="Disabled"/>
+<Ports>
+<Port Id="1" Address="0" Type="ICP" Upstream="false">
+<Bus Size="17"/>
+</Port>
+<Port Id="2" Type="Ethernet" Upstream="false">
+<Bus/>
+</Port>
+</Ports>
+</Module>
+</Modules>
+<AddOnInstructionDefinitions/>
+<Tags>
+<Tag Name="HiAlm" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="L5K">
+<![CDATA[0]]>
+</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Level" TagType="Base" DataType="REAL" Radix="Float" Constant="false" ExternalAccess="Read/Write">
+<Data Format="L5K">
+<![CDATA[0.00000000e+000]]>
+</Data>
+<Data Format="Decorated">
+<DataValue DataType="REAL" Radix="Float" Value="0.0"/>
+</Data>
+</Tag>
+<Tag Name="HiSP" TagType="Base" DataType="REAL" Radix="Float" Constant="false" ExternalAccess="Read/Write">
+<Data Format="L5K">
+<![CDATA[8.00000000e+001]]>
+</Data>
+<Data Format="Decorated">
+<DataValue DataType="REAL" Radix="Float" Value="80.0"/>
+</Data>
+</Tag>
+<Tag Name="Pump" TagType="Base" DataType="PumpData" Constant="false" ExternalAccess="Read/Write">
+<Data Format="Decorated">
+<Structure DataType="PumpData">
+<DataValueMember Name="Speed" DataType="REAL" Radix="Float" Value="0.0"/>
+<DataValueMember Name="Running" DataType="BOOL" Value="0"/>
+</Structure>
+</Data>
+</Tag>
+<Tag Name="Cmd" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="L5K">
+<![CDATA[0]]>
+</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="State" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="L5K">
+<![CDATA[10]]>
+</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="10"/>
+</Data>
+</Tag>
+<Tag Name="StateNo" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="L5K">
+<![CDATA[0]]>
+</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Count" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="L5K">
+<![CDATA[0]]>
+</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Run" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="L5K">
+<![CDATA[0]]>
+</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="Delayed" TagType="Base" DataType="BOOL" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="L5K">
+<![CDATA[0]]>
+</Data>
+<Data Format="Decorated">
+<DataValue DataType="BOOL" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+</Tags>
+<Programs>
+<Program Name="ImplicitST" TestEdits="false" MainRoutineName="MainRoutine" Disabled="false" UseAsFolder="false">
+<Tags>
+<Tag Name="i" TagType="Base" DataType="DINT" Radix="Decimal" Constant="false" ExternalAccess="Read/Write">
+<Data Format="L5K">
+<![CDATA[0]]>
+</Data>
+<Data Format="Decorated">
+<DataValue DataType="DINT" Radix="Decimal" Value="0"/>
+</Data>
+</Tag>
+<Tag Name="t" TagType="Base" DataType="FBD_TIMER" Constant="false" ExternalAccess="Read/Write">
+</Tag>
+</Tags>
+<Routines>
+<Routine Name="MainRoutine" Type="ST">
+<STContent>
+<Line Number="0">
+<![CDATA[IF (Level > HiSP) THEN]]>
+</Line>
+<Line Number="1">
+<![CDATA[  HiAlm := 1;]]>
+</Line>
+<Line Number="2">
+<![CDATA[ELSIF (Level < (HiSP - 10.0)) THEN]]>
+</Line>
+<Line Number="3">
+<![CDATA[  HiAlm := 0;]]>
+</Line>
+<Line Number="4">
+<![CDATA[END_IF;]]>
+</Line>
+<Line Number="5">
+<![CDATA[Pump.Speed := (Level * 2.0);]]>
+</Line>
+<Line Number="6">
+<![CDATA[Pump.Running := HiAlm;]]>
+</Line>
+<Line Number="7">
+<![CDATA[CASE Cmd OF]]>
+</Line>
+<Line Number="8">
+<![CDATA[  0:]]>
+</Line>
+<Line Number="9">
+<![CDATA[    State := 1;]]>
+</Line>
+<Line Number="10">
+<![CDATA[  1:]]>
+</Line>
+<Line Number="11">
+<![CDATA[    State := 10;]]>
+</Line>
+<Line Number="12">
+<![CDATA[  2:]]>
+</Line>
+<Line Number="13">
+<![CDATA[    State := 11;]]>
+</Line>
+<Line Number="14">
+<![CDATA[END_CASE;]]>
+</Line>
+<Line Number="15">
+<![CDATA[StateNo := State;]]>
+</Line>
+<Line Number="16">
+<![CDATA[Count := 0;]]>
+</Line>
+<Line Number="17">
+<![CDATA[FOR i := 1 TO 3 DO]]>
+</Line>
+<Line Number="18">
+<![CDATA[  Count := (Count + i);]]>
+</Line>
+<Line Number="19">
+<![CDATA[END_FOR;]]>
+</Line>
+<Line Number="20">
+<![CDATA[t.PRE := 2000;]]>
+</Line>
+<Line Number="21">
+<![CDATA[t.TimerEnable := Run;]]>
+</Line>
+<Line Number="22">
+<![CDATA[t.Reset := NOT (Run);]]>
+</Line>
+<Line Number="23">
+<![CDATA[TONR(t);]]>
+</Line>
+<Line Number="24">
+<![CDATA[Delayed := t.DN;]]>
+</Line>
+</STContent>
+</Routine>
+</Routines>
+</Program>
+</Programs>
+<Tasks>
+<Task Name="MainTask" Type="CONTINUOUS" Priority="10" Watchdog="500" DisableUpdateOutputs="false" InhibitTask="false">
+<ScheduledPrograms>
+<ScheduledProgram Name="ImplicitST"/>
+</ScheduledPrograms>
+</Task>
+</Tasks>
+<CST MasterID="0"/>
+<WallClockTime LocalTimeAdjustment="0" TimeZone="0"/>
+<Trends/>
+<TimeSynchronize Priority1="128" Priority2="128" PTPEnable="false"/>
+<EthernetPorts>
+<EthernetPort Port="1" Label="1" PortEnabled="true"/>
+</EthernetPorts>
+</Controller>
+</RSLogix5000Content>

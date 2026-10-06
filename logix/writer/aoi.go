@@ -123,7 +123,7 @@ func (lw *lowered) blockSource(name string) (string, string) {
 // parent's types and options.
 func (lw *lowered) child(name string, vars []ld.VarDecl) *lowered {
 	c := &lowered{model: &ld.Model{Name: name}, opts: lw.opts, vars: map[string]ld.VarDecl{},
-		presetVars: map[string]bool{}, genNames: map[string]bool{}, types: lw.types, rawTypes: lw.rawTypes,
+		presetVars: map[string]bool{}, genNames: map[string]bool{}, types: lw.types, rawTypes: lw.rawTypes, enums: lw.enums,
 		aois: lw.aois, inAOI: true, st: lw.st}
 	c.opts.Program = name
 	for _, v := range vars {

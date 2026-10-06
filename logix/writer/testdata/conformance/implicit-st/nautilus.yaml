@@ -1,0 +1,32 @@
+# An ST program that declares almost nothing: the manifest's tags are in
+# scope in every program (#177/#210), and on the Logix target each tag the
+# program names is a controller tag, typed from here (#248). HiAlm is still
+# declared VAR_EXTERNAL, the old way, and is written once. Speed is a tag
+# AND a member name of Pump; Spare is named nowhere. Neither may reach the
+# controller.
+name: conformance-implicit-st
+tasks:
+  - program: Main.st
+    scan: 10ms
+tags:
+  - { name: Level, role: input, init: 0.0 }
+  - { name: HiSP, role: setpoint, init: 80.0 }
+  - { name: Run, role: input, init: false }
+  - { name: Cmd, role: input, type: DINT, init: 0 }
+  - { name: HiAlm, role: output, init: false }
+  - { name: Delayed, role: output, init: false }
+  - { name: Count, role: state, type: DINT, init: 0 }
+  - { name: Pump, role: state, type: PumpData }
+  - { name: State, role: state, type: MachineState, init: Running }
+  - { name: StateNo, role: output, type: DINT, init: 0 }
+  - { name: Speed, role: state, init: 0.0 }
+  - { name: Spare, role: state, init: 0.0 }
+target:
+  logix:
+    controller: DemoLine
+    processor: 1756-L85E
+    revision: "38.11"
+    comm-path: AB_ETH-1\100.93.56.45\Backplane\0
+    host: 100.93.56.45
+    side:
+      heartbeat: Nautilus_Scan

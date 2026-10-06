@@ -39,6 +39,9 @@ func (c *rungCtx) logixExpr(e ld.Expr) (string, string) {
 		case strings.HasPrefix(t, "'"):
 			return "", "a string literal"
 		case strings.Contains(t, "#"):
+			if n, ok := c.lw.enumLiteral(t); ok {
+				return strconv.FormatInt(n, 10), "" // Mode#Run
+			}
 			if ms, ok := parseTime(t); ok {
 				return msText(ms), "" // TIME is DINT milliseconds
 			}

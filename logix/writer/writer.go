@@ -53,6 +53,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/ld"
 	"github.com/joyautomation/nautilus/lang/st"
 )
@@ -216,6 +217,9 @@ type lowered struct {
 	// TYPE declarations found in the libraries (types.go).
 	types    map[string]*udt
 	rawTypes map[string]*st.TypeDecl
+	// enums are the enumerations the libraries declare, by ir.NameKey
+	// (enum.go): DINT tags, their members integers.
+	enums map[string]*ir.EnumDef
 	// st marks a Structured Text program: block instances are FBD
 	// structures, TIME is a DINT, and the routine is stLines.
 	st      bool
@@ -400,7 +404,7 @@ func (lw *lowered) declare(v ld.VarDecl) {
 	}
 	init := v.Init
 	if init == "" && scope == "" {
-		if iv, ok := lw.opts.Inits[v.Name]; ok && iv != nil {
+		if iv, _, ok := ir.Lookup(lw.opts.Inits, v.Name); ok && iv != nil {
 			init = fmt.Sprint(iv)
 		}
 	}
@@ -436,6 +440,13 @@ func (lw *lowered) declare(v ld.VarDecl) {
 			return
 		}
 		lw.addTag(tagDef{Name: v.Name, DataType: lw.blockType(u), Dim: dim, Scope: scope, Line: v.Line})
+	case lw.enumOf(typ) != nil:
+		val, ok := lw.enumInit(lw.enumOf(typ), init)
+		if !ok {
+			lw.diag(ruleInit, v.Line, "", "%s: initial value %q is not a member of %s", v.Name, init, lw.enumOf(typ).Name)
+			return
+		}
+		lw.addTag(tagDef{Name: v.Name, DataType: "DINT", Dim: dim, Value: val, Scope: scope, Line: v.Line})
 	case lw.rawTypes[strings.ToLower(u)] != nil:
 		udt, ok := lw.resolveType(typ, v.Line, v.Name)
 		if !ok {
@@ -447,7 +458,7 @@ func (lw *lowered) declare(v ld.VarDecl) {
 		}
 		var init any
 		if scope == "" {
-			init = lw.opts.Inits[v.Name]
+			init, _, _ = ir.Lookup(lw.opts.Inits, v.Name)
 		}
 		lw.addTag(tagDef{Name: v.Name, DataType: udt.Name, Dim: dim, Scope: scope, Line: v.Line, Struct: udt, Init: init})
 	case lw.blockSourceExists(typ):
@@ -461,7 +472,7 @@ func (lw *lowered) declare(v ld.VarDecl) {
 		}
 		lw.addTag(tagDef{Name: v.Name, DataType: a.Name, Scope: scope, Line: v.Line, AOI: true})
 	default:
-		alt := "the v1 subset is BOOL, SINT, INT, DINT, REAL, LREAL, TON, TOF, CTU, STRUCT types declared in a library, and FUNCTION_BLOCKs (as Add-On Instructions)"
+		alt := "the v1 subset is BOOL, SINT, INT, DINT, REAL, LREAL, TON, TOF, CTU, STRUCT types and enumerations (as DINT) declared in a library, and FUNCTION_BLOCKs (as Add-On Instructions)"
 		switch u {
 		case "TP", "CTD", "CTUD":
 			alt = "its IEC load/reset semantics differ from the Logix instruction; " + alt
@@ -478,10 +489,10 @@ func (lw *lowered) declare(v ld.VarDecl) {
 
 func (lw *lowered) addTag(t tagDef) {
 	if t.Desc == "" {
-		t.Desc = lw.opts.Descs[t.Name]
+		t.Desc, _, _ = ir.Lookup(lw.opts.Descs, t.Name)
 	}
 	if t.Scope == "" {
-		t.Alias = lw.opts.Aliases[t.Name]
+		t.Alias, _, _ = ir.Lookup(lw.opts.Aliases, t.Name)
 		lw.ctrlTags = append(lw.ctrlTags, t)
 	} else {
 		lw.progTags = append(lw.progTags, t)

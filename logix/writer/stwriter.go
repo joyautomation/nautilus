@@ -27,8 +27,10 @@ import (
 //	                         Reset, then CTUD(c)
 //	t.Q t.ET t.IN c.CV c.CU  t.DN t.ACC t.TimerEnable c.ACC c.CUEnable
 //	Q => y                   y := t.DN; after the call
-//	EXPT(a, b)               a ** b;   X_TO_Y(v) → v (Logix converts on
-//	                         assignment, rounding a REAL as IEC does)
+//	EXPT(a, b)               a ** b;   X_TO_Y(v), TO_Y(v) → v (Logix
+//	                         converts on assignment, rounding a REAL as
+//	                         IEC does)
+//	Run, Mode#Run            the enumeration member's value (enum.go)
 //
 // Refused by name: STRING and the string functions, MIN / MAX / LIMIT /
 // SEL / MUX (no Logix ST function; write the IF), ATAN2, user FUNCTIONs
@@ -141,7 +143,12 @@ func exprText(e st.Expression) string {
 	case *st.TimeLit:
 		return "T#" + v.Raw
 	case *st.TypedLit:
+		if id, ok := v.Inner.(*st.IdentExpr); ok {
+			return v.TypeName + "#" + id.Name // an enumeration member
+		}
 		return exprText(v.Inner)
+	case *st.IdentExpr:
+		return v.Name // an enumeration member (enum.go)
 	case *st.UnaryExpr:
 		return v.Op + exprText(v.Operand)
 	case *st.StringLit:
@@ -351,8 +358,13 @@ func (w *stWriter) call(c *st.CallExpr, depth int) {
 	}
 }
 
-// ref renders a plain variable reference, refusing what has no home.
+// ref renders a plain variable reference in its declared spelling
+// (lang/ir/names.go: a name is compared folded, shown as declared), so
+// `level` reads Level on the controller as it does in nautilus.
 func (w *stWriter) ref(name string) string {
+	if v, ok := w.lw.vars[strings.ToLower(name)]; ok {
+		return v.Name
+	}
 	return name
 }
 
@@ -378,9 +390,26 @@ func (w *stWriter) expr(e st.Expression) string {
 		}
 		return strconv.FormatInt(ms, 10)
 	case *st.TypedLit:
+		if id, ok := v.Inner.(*st.IdentExpr); ok && w.lw.enumOf(v.TypeName) != nil {
+			n, ok := w.lw.enumLiteral(v.TypeName + "#" + id.Name)
+			if !ok {
+				w.diag(ruleST, w.line, "%s#%s: %s has no member %s", v.TypeName, id.Name, w.lw.enumOf(v.TypeName).Name, id.Name)
+				return "0"
+			}
+			return strconv.FormatInt(n, 10)
+		}
 		return w.expr(v.Inner)
 	case *st.IdentExpr:
-		return v.Name
+		if _, declared := w.lw.vars[strings.ToLower(v.Name)]; !declared {
+			// Not a variable: an enumeration member is its value (enum.go).
+			if n, ok, ambiguous := w.lw.enumMember(v.Name); ok {
+				return strconv.FormatInt(n, 10)
+			} else if ambiguous {
+				w.diag(ruleST, w.line, "%s: several enumerations have a member %s with different values; write Type#%s", v.Name, v.Name, v.Name)
+				return "0"
+			}
+		}
+		return w.ref(v.Name)
 	case *st.MemberExpr:
 		return w.member(v)
 	case *st.IndexExpr:
@@ -407,7 +436,7 @@ func (w *stWriter) member(m *st.MemberExpr) string {
 		if v, declared := w.lw.vars[strings.ToLower(base.Name)]; declared {
 			if structType := stBlockTypes[strings.ToUpper(strings.TrimSpace(v.Type))]; structType != "" {
 				if to, ok := stMemberRewrite[structType][strings.ToUpper(m.Member)]; ok {
-					return base.Name + "." + to
+					return w.ref(base.Name) + "." + to
 				}
 				w.diag(ruleMember, w.line, "%s.%s: %s has no %s member the Logix %s carries", base.Name, m.Member, v.Type, m.Member, structType)
 				return base.Name + "." + m.Member
@@ -428,7 +457,9 @@ func (w *stWriter) callExpr(c *st.CallExpr) string {
 		return name + "(" + strings.Join(args, ", ") + ")"
 	case name == "EXPT" && len(args) == 2:
 		return "(" + args[0] + " ** " + args[1] + ")"
-	case strings.Contains(name, "_TO_") && len(args) == 1:
+	case (strings.Contains(name, "_TO_") || strings.HasPrefix(name, "TO_")) && len(args) == 1:
+		// X_TO_Y, and the overloaded TO_Y (TO_INT of an enumeration, TO_Mode
+		// of an integer): Logix converts on assignment.
 		return args[0]
 	}
 	if why, bad := stRejected[name]; bad {

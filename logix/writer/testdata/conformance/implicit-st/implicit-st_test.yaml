@@ -1,0 +1,41 @@
+tests:
+  - name: implicit tags in conditions and assignments
+    steps:
+      - given: { Level: 85.0 }
+        scans: 2
+        expect: { HiAlm: true, Count: 6 }
+      - given: { Level: 75.0 }
+        scans: 2
+        expect: { HiAlm: true }
+      - given: { Level: 65.0 }
+        scans: 2
+        expect: { HiAlm: false }
+
+  - name: a structure tag's members
+    steps:
+      - given: { Level: 12.5 }
+        scans: 2
+        expect: { Pump.Speed: 25.0, Pump.Running: false }
+
+  - name: an enumeration tag carried as its values
+    steps:
+      - given: { Cmd: 0 }
+        scans: 2
+        expect: { StateNo: 1 }
+      - given: { Cmd: 1 }
+        scans: 2
+        expect: { StateNo: 10 }
+      - given: { Cmd: 2 }
+        scans: 2
+        expect: { StateNo: 11 }
+
+  - name: a timer driven and read through implicit tags
+    steps:
+      - given: { Run: true }
+        advance: 1.2s
+        expect: { Delayed: false }
+      - advance: 1.3s
+        expect: { Delayed: true }
+      - given: { Run: false }
+        scans: 2
+        expect: { Delayed: false }

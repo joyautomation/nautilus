@@ -36,7 +36,7 @@ const (
 var Rules = []struct{ ID, Description string }{
 	{ruleFunctionBlock, "user FUNCTIONs have no Logix form (inline them); a FUNCTION_BLOCK becomes an Add-On Instruction, which cannot reach a controller tag"},
 	{ruleVarSection, "a program's VAR and VAR_EXTERNAL map to Logix tags; a program takes no parameters"},
-	{ruleType, "the types are BOOL, SINT, INT, DINT, REAL, LREAL, TON, TOF, CTU, library STRUCTs (UDTs) and user blocks (AOIs); an AOI takes structures and arrays only as VAR_IN_OUT"},
+	{ruleType, "the types are BOOL, SINT, INT, DINT, REAL, LREAL, TON, TOF, CTU, library STRUCTs (UDTs), enumerations (DINT, members as their values) and user blocks (AOIs); an AOI takes structures and arrays only as VAR_IN_OUT"},
 	{ruleTime, "TIME is carried as DINT milliseconds only where it feeds a preset"},
 	{ruleArrayShape, "arrays start at 0, are one-dimensional, and BOOL arrays are a multiple of 32"},
 	{ruleArrayInit, "array initializers are not in the v1 subset"},
