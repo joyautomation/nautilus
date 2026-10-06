@@ -1,0 +1,10 @@
+name: tp
+tasks:
+  - program: Main.st
+    scan: 10ms
+tags:
+  - { name: Go, role: input, init: false }
+  - { name: Out, role: output, init: false }
+target:
+  logix:
+    controller: TP
