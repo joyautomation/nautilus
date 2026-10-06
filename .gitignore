@@ -18,3 +18,4 @@ tools/vscode-iec/.vscode-test/
 
 # Locally built binaries
 /nautilus
+/naut
