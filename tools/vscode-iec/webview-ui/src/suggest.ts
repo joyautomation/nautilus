@@ -11,7 +11,8 @@ export const FUNCTIONS: SuggestItem[] = [
 	'SEL', 'MUX', 'MIN', 'MAX', 'LIMIT',
 	'ABS', 'SQRT', 'EXPT', 'TRUNC', 'SIN', 'COS', 'TAN', 'ASIN', 'ACOS', 'ATAN', 'ATAN2',
 	'LN', 'LOG', 'EXP', 'SHL', 'SHR', 'ROL', 'ROR',
-	'LEN', 'CONCAT', 'LEFT', 'RIGHT', 'MID', 'FIND', 'INSERT', 'DELETE', 'REPLACE'
+	'LEN', 'CONCAT', 'LEFT', 'RIGHT', 'MID', 'FIND', 'INSERT', 'DELETE', 'REPLACE',
+	'FIRST_SCAN'
 ].map((name) => ({ name }));
 
 // Standard function block types (lang/ir/builtins_fb.go) — the fallback
@@ -28,7 +29,8 @@ export const FB_TYPES: SuggestItem[] = [
 	{ name: 'F_TRIG', detail: 'falling edge' },
 	{ name: 'SR', detail: 'set-dominant latch' },
 	{ name: 'RS', detail: 'reset-dominant latch' },
-	{ name: 'PID', detail: 'closed-loop control' }
+	{ name: 'PID', detail: 'closed-loop control' },
+	{ name: 'LOCAL_TIME', detail: 'the calendar, now' }
 ];
 
 /** One insertable block type (mirror of lang/fbcatalog.Type). */

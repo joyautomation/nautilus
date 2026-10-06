@@ -1,0 +1,25 @@
+# The runtime's own values: FIRST_SCAN() (S:FS) and LOCAL_TIME (GSV
+# WallClockTime LocalDateTime), in the corpus's idiom: the clock read into
+# an array every scan, a once-a-second sequencer seeded on the first scan.
+name: conformance-system
+tasks:
+  - program: Main.ld
+    scan: 10ms
+tags:
+  - { name: Restart, role: input, init: false }
+  - { name: Seeded, role: state, init: 0 }
+  - { name: Ticks, role: state, init: 0 }
+  - { name: Year, role: state, init: 0 }
+  - { name: Month, role: state, init: 0 }
+  - { name: Day, role: state, init: 0 }
+  - { name: Hour, role: state, init: 0 }
+  - { name: Sec, role: state, init: 0 }
+target:
+  logix:
+    controller: DemoLine
+    processor: 1756-L85E
+    revision: "38.11"
+    comm-path: AB_ETH-1\100.93.56.45\Backplane\0
+    host: 100.93.56.45
+    side:
+      heartbeat: Nautilus_Scan
