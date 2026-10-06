@@ -2,14 +2,14 @@
 # 18 — forcing, end to end (gesture inventory X43; issues #211, #192):
 #
 #   a. Force… from the Live Values panel (the lock on a row): LevelPct, a
-#      value the sim task integrates every scan, forced low — the confirm
+#      value the sim task integrates every scan, forced high — the confirm
 #      modal names it; the controller's table has it; it HOLDS against the
-#      plant for seconds; the logic reacts (the pump seal-in starts).
+#      plant for seconds; the logic reacts (the pump seal-in drops out).
 #   b. The F badge: the inline pill in sim.st reads "F <value>", the Live
 #      Values panel lists a Forces group and the tag row reads "F <value>".
 #   c. The status bar: "1 force active", then "2 forces active" after an
-#      OUTPUT is forced from the editor context menu (PumpRun held FALSE
-#      against the logic that wants it TRUE).
+#      OUTPUT is forced from the editor context menu (PumpRun held TRUE
+#      against the logic that wants it off).
 #   d. Remove: the status-bar item's list removes LevelPct (the plant owns
 #      it again — it moves); the panel's Remove All Forces (title bar)
 #      clears the rest: table empty, status item gone, pill without F.
@@ -39,7 +39,11 @@ tagv() {
 import sys, json
 d = json.load(sys.stdin); print(json.dumps(d.get("tags", {}).get(sys.argv[1])))' "$1"
 }
-forces() { api /api/forces | python3 -c 'import sys,json; print(" ".join(f"{f[\"name\"]}={json.dumps(f[\"value\"])}" for f in json.load(sys.stdin)["forces"]))'; }
+forces() {
+  api /api/forces | python3 -c '
+import sys, json
+print(" ".join("%s=%s" % (f["name"], json.dumps(f["value"])) for f in json.load(sys.stdin)["forces"]))'
+}
 tstate() {
   python3 - "$NAUTILUS_TEST_STATE" "$1" <<'PY'
 import json, sys
@@ -151,7 +155,11 @@ ident_point() {
 # sample over the window (a plant-integrated value would drift).
 holds() {
   local i v
-  for ((i = 0; i < $3 * 4; i++)); do v=$(tagv "$1"); [[ $v == "$2" ]] || { echo "$1 = $v"; return 1; }; sleep 0.25; done
+  for ((i = 0; i < $3 * 4; i++)); do
+    v=$(tagv "$1")
+    python3 -c 'import sys,json; sys.exit(0 if json.loads(sys.argv[1]) == json.loads(sys.argv[2]) else 1)' "$v" "$2" || { echo "$1 = $v"; return 1; }
+    sleep 0.25
+  done
   echo "$1 = $v for $3 s"
 }
 
@@ -162,8 +170,11 @@ point_extension_at "$PROJ" "$PORT"
 start_controller "$PROJ" "$PORT"
 sleep 3
 api /api/meta | grep -q '"forces":true' && pass "naut run on :$PORT advertises forces (/api/meta)" || { fail "controller on :$PORT does not advertise forces"; exit 1; }
-# Hold the level mid-band first so "the logic reacts" is a change we cause.
-api_post /api/tags '{"name":"LevelPct","value":60}' >/dev/null || true
+# Drop the level below the pump's start level so the seal-in is RUNNING
+# before the force: forcing the level high must then stop it — a change the
+# force causes, not one the plant was about to make.
+api_post /api/tags '{"name":"LevelPct","value":30}' >/dev/null || true
+sleep 1
 
 EXTRA_SETTINGS='"window.menuStyle": "custom"' smoke_open "$PROJ" sim.st
 key Escape
@@ -175,11 +186,11 @@ sleep 1.5
 pump0=$(tagv PumpRun)
 if r=$(row_action LevelPct 'Force'); then
   png=$(shot a-input)
-  if t=$(type_in_input "Force LevelPct" 20); then
+  if t=$(type_in_input "Force LevelPct" 90); then
     if m=$(confirm Force); then
       png=$(shot a-confirm)
-      [[ $m == *LevelPct* && $m == *20* ]] && pass "a: Force… on the LevelPct row → '$t' → modal '$m'" "$png" \
-        || fail "a: the confirmation does not name LevelPct and 20: '$m'" "$png"
+      [[ $m == *LevelPct* && $m == *90* ]] && pass "a: Force… on the LevelPct row → '$t' → modal '$m'" "$png" \
+        || fail "a: the confirmation does not name LevelPct and 90: '$m'" "$png"
     else
       fail "a: $m" "$(shot a-no-modal)"
     fi
@@ -194,21 +205,21 @@ if poll 3 is_forced LevelPct; then
 else
   fail "a: /api/forces after the gesture: '$(forces)'"
 fi
-if h=$(holds LevelPct 20.0 4); then
+if h=$(holds LevelPct 90 4); then
   pass "a: the forced value holds against the sim task that integrates it: $h"
 else
   fail "a: the force did not hold: $h"
 fi
 pump1=$(tagv PumpRun)
-[[ $pump1 == true ]] && pass "a: the logic reacts — PumpRun $pump0 → $pump1 (seal-in on the forced low level)" \
-  || fail "a: PumpRun is $pump1 under LevelPct forced to 20 (was $pump0)"
+[[ $pump0 == true && $pump1 == false ]] && pass "a: the logic reacts — PumpRun $pump0 → $pump1 (the seal-in drops out on the forced high level)" \
+  || fail "a: PumpRun $pump0 → $pump1 under LevelPct forced to 90"
 
 # ── b: the F badge, panel ───────────────────────────────────────────────────
 sleep 1
 png=$(shot b-panel)
 groups=$(pg "($ROWS_JS).map(r => r.name).filter(n => /^Forces|^Tags$/.test(n)).join(' ')")
 d=$(row_desc LevelPct)
-if [[ $groups == Forces* && $d == F\ 20* ]]; then
+if [[ $groups == Forces* && $d == F\ 90* ]]; then
   pass "b: the panel lists a Forces group first ($groups) and LevelPct reads '$d'" "$png"
 else
   fail "b: panel groups '$groups', LevelPct row '$d'" "$png"
@@ -224,7 +235,7 @@ sleep 1
 if poll 4 pill_forced LevelPct; then
   pass "b: the LevelPct pill in sim.st reads '$(pill LevelPct)'" "$(shot b-pill)"
 else
-  fail "b: the LevelPct pill reads '$(pill LevelPct)', want 'F 20…'" "$(shot b-pill)"
+  fail "b: the LevelPct pill reads '$(pill LevelPct)', want 'F 90…'" "$(shot b-pill)"
 fi
 
 # ── c: force an OUTPUT from the editor context menu ─────────────────────────
@@ -239,10 +250,10 @@ else
   png=$(shot c-context-menu)
   items=$(menu_items)
   if click_menu_item '^nautilus: Force'; then
-    if t=$(type_in_input "Force PumpRun" FALSE) && m=$(confirm Force); then
-      if poll 3 is_forced PumpRun && h=$(holds PumpRun false 2); then
+    if t=$(type_in_input "Force PumpRun" TRUE) && m=$(confirm Force); then
+      if poll 3 is_forced PumpRun && h=$(holds PumpRun true 2); then
         s=$(force_status)
-        [[ $s == *"2 forces active"* ]] && pass "c: Force… from the context menu ($items) held PumpRun FALSE against the logic ($h); status '$s'" "$(shot c-two)" \
+        [[ $s == *"2 forces active"* ]] && pass "c: Force… from the context menu ($items) held PumpRun TRUE against the logic that wants it off ($h); status '$s'" "$(shot c-two)" \
           || fail "c: PumpRun forced but the status bar reads '$s'" "$(shot c-two)"
       else
         fail "c: PumpRun not held: forces '$(forces)', PumpRun $(tagv PumpRun)" "$(shot c-two)"
@@ -266,7 +277,7 @@ if b=$(force_status_box); then
     g_type "LevelPct"; g_key Return; sleep 1
     if poll 3 not_forced LevelPct; then
       v0=$(tagv LevelPct); sleep 2; v1=$(tagv LevelPct)
-      [[ $v0 != "$v1" || $v0 != 20.0 ]] && pass "d: the status-bar list ('$t': $rowsq) removed LevelPct — the plant owns it again ($v0 → $v1)" "$png" \
+      [[ $v0 != "$v1" || $v0 != 90 ]] && pass "d: the status-bar list ('$t': $rowsq) removed LevelPct — the plant owns it again ($v0 → $v1)" "$png" \
         || fail "d: LevelPct unforced but stuck at $v0 → $v1" "$png"
     else
       fail "d: LevelPct still forced after picking it in '$t' ($rowsq)" "$png"
