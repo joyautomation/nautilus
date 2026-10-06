@@ -9,6 +9,7 @@ import {
   enumValueName,
   flattenMetaTypes,
   isEnum,
+  isStringType,
   parseEnumWrite,
   typedEnumPick,
   typeFor,
@@ -123,4 +124,30 @@ test("typedEnumPick: a typed integer or qualified name gets its own row; a plain
   assert.equal(typedEnumPick("Ru", ft), undefined, "a filter prefix is not a value");
   assert.equal(enumValueName(11, ft), "Fault");
   assert.equal(enumValueName(42, ft), "42");
+});
+
+test("parseTypedWrite: the Set/Force box by the target's type — a quoted STRING, an enum member or integer, else number/BOOL", async () => {
+  const { parseTypedWrite, typedWriteHint } = await import("./scan");
+  const t = flattenMetaTypes(META);
+  const str = typeFor(t, "Label");
+  assert.equal(parseTypedWrite('"Run"', str), "Run", "the quotes the pill shows");
+  assert.equal(parseTypedWrite("'two words'", str), "two words");
+  assert.equal(parseTypedWrite('""', str), "", "an empty STRING");
+  assert.equal(parseTypedWrite("Run", str), undefined, "unquoted text is refused: a quote says it is text");
+  assert.equal(parseTypedWrite("12", str), undefined);
+  assert.equal(parseTypedWrite("'mismatched\"", str), undefined);
+  assert.equal(typedWriteHint(str), "a quoted string, 'text'");
+  const en = typeFor(t, "Cmd");
+  assert.equal(parseTypedWrite("run", en), "Run", "a member by name, sent as its name");
+  assert.equal(parseTypedWrite("Mode#Fault", en), "Fault");
+  assert.equal(parseTypedWrite("10", en), 10, "or its integer");
+  assert.equal(parseTypedWrite("Running", en), undefined);
+  assert.match(typedWriteHint(en), /member of Mode \(Idle, Run, Fault\)/);
+  const real = typeFor(t, "Speed");
+  assert.equal(parseTypedWrite("12.5", real), 12.5);
+  assert.equal(parseTypedWrite("TRUE", undefined), true, "unknown type: as before");
+  assert.equal(parseTypedWrite('"x"', real), undefined);
+  assert.equal(isStringType({ t: "STRING[20]" }), true);
+  assert.equal(isStringType({ t: "WSTRING" }), true);
+  assert.equal(isStringType({ t: "Mode", e: [] }), false);
 });

@@ -642,6 +642,24 @@ else
   fail "C06 Set Live Value on Mode, typed 10: no pick ($r)" "$(shot enum-set-int)"
   key Escape
 fi
+# A STRING tag's Set Live Value takes a quoted string (the pill's own
+# form): the input refuses bare text, so typing over the prefill "Run".
+p=$(ident_point 'ModeNote := ' ModeNote)
+if [[ -n $p ]]; then
+  read -r x y <<<"$p"
+  xdotool mousemove --window "$WIN" "$x" "$y"; xdotool click 1; sleep 0.3
+  vs_cmd "nautilus: Set Live Value" 1
+  if t=$(set_in_input "Set ModeNote" "'hello'"); then
+    for ((i = 0; i < 12; i++)); do a=$(tagv ModeNote); [[ $a == '"hello"' ]] && break; sleep 0.25; done
+    [[ $a == '"hello"' ]] \
+      && pass "C06 Set Live Value on the STRING ModeNote: typed 'hello' → /api/state ModeNote $a" "$(shot string-set)" \
+      || fail "C06 Set Live Value on ModeNote: typed 'hello' → /api/state ModeNote $a" "$(shot string-set)"
+  else
+    fail "C06 Set Live Value on ModeNote: no input ($t)" "$(shot string-set)"; key Escape
+  fi
+else
+  fail "C06: no ModeNote on screen in modes.st"
+fi
 # The Live Values panel: Mode bare with the enum icon, ModeNote quoted.
 vs_cmd "nautilus: Focus on Live Values View" 3
 sleep 1.5

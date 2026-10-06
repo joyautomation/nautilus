@@ -76,6 +76,11 @@ export function isEnum(ft: FlatType | undefined): ft is FlatType & { e: EnumMemb
   return !!ft && Array.isArray(ft.e);
 }
 
+/** True for a STRING (or WSTRING, or STRING[n]) type. */
+export function isStringType(ft: FlatType | undefined): boolean {
+  return !!ft && !isEnum(ft) && /^W?STRING(\s*[[(]\s*\d+\s*[\])])?$/i.test(ft.t);
+}
+
 /** An enumerated value's display text — the member's name, bare (no
  * quotes: it is not a STRING) — or undefined when `v` is not an enumerated
  * value, so the caller renders it as it always has. An integer (a value

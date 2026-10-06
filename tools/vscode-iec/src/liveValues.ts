@@ -31,7 +31,8 @@ import {
   formatValue,
   formatValueHover,
   instanceScope,
-  parseWriteValue,
+  parseTypedWrite,
+  typedWriteHint,
   scanFbRegions,
   scanIdentifiers,
   scanInstanceDecls,
@@ -294,20 +295,21 @@ export class LiveValues implements vscode.Disposable {
       return;
     }
     const prefill = current === undefined ? "" : formatValue(current);
+    const hint = typedWriteHint(ft);
     const input = await vscode.window.showInputBox({
       title: `nautilus: Set ${name}`,
-      prompt: current === undefined ? "New value (number, or TRUE/FALSE)" : `Current ${formatValue(current)} — new value (number, or TRUE/FALSE)`,
+      prompt: current === undefined ? `New value (${hint})` : `Current ${formatValue(current)} — new value (${hint})`,
       value: prefill,
-      validateInput: (v) => (parseWriteValue(v) === undefined ? "Enter a number, or TRUE/FALSE" : undefined),
+      validateInput: (v) => (parseTypedWrite(v, ft) === undefined ? `Enter ${hint}` : undefined),
     });
     if (input === undefined) return;
-    const value = parseWriteValue(input);
+    const value = parseTypedWrite(input, ft);
     if (value === undefined) return;
     await this.postValue(name, value, formatValue(value));
   }
 
   /** POST /api/tags, and say how it went. */
-  private async postValue(name: string, value: number | boolean, shown: string): Promise<void> {
+  private async postValue(name: string, value: number | boolean | string, shown: string): Promise<void> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     const token = vscode.workspace.getConfiguration("nautilus").get<string>("token", "");
     if (token) headers["Authorization"] = "Bearer " + token;
@@ -376,22 +378,23 @@ export class LiveValues implements vscode.Disposable {
       await this.applyForce(name, v, enumValueName(v, ft), current === undefined ? undefined : this.display(current, name));
       return;
     }
+    const hint = typedWriteHint(ft);
     const input = await vscode.window.showInputBox({
       title: `nautilus: Force ${name}`,
       prompt:
         (forcedAt === name ? `Forced to ${formatValue(current)} — new forced value` : current === undefined ? "Force to" : `Now ${formatValue(current)} — force to`) +
-        " (number, or TRUE/FALSE). Held until you remove the force.",
+        ` (${hint}). Held until you remove the force.`,
       value: current === undefined ? "" : formatValue(current),
-      validateInput: (v) => (parseWriteValue(v) === undefined ? "Enter a number, or TRUE/FALSE" : undefined),
+      validateInput: (v) => (parseTypedWrite(v, ft) === undefined ? `Enter ${hint}` : undefined),
     });
     if (input === undefined) return;
-    const value = parseWriteValue(input);
+    const value = parseTypedWrite(input, ft);
     if (value === undefined) return;
     await this.applyForce(name, value, formatValue(value), current === undefined ? undefined : formatValue(current));
   }
 
   /** Confirm (when configured) and send one force. */
-  private async applyForce(name: string, value: number | boolean, shown: string, was: string | undefined): Promise<void> {
+  private async applyForce(name: string, value: number | boolean | string, shown: string, was: string | undefined): Promise<void> {
     if (this.confirmWrites()) {
       const go = await notifyWarning(forceConfirmMessage(this.runtimeUrl(), name, shown, was), { modal: true }, "Force");
       if (go !== "Force") return;

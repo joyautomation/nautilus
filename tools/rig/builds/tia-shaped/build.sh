@@ -400,7 +400,9 @@ b05_goto_symbol() {
   xdotool key --clearmodifiers Escape; sleep 0.3
   xdotool key --clearmodifiers ctrl+shift+o; sleep 2
   xdotool type --delay 60 -- "$1"; sleep 1.5
-  wb '(() => { const q = document.querySelector(".quick-input-widget"); if (!q || q.style.display === "none") return ""; return [...q.querySelectorAll(".monaco-list-row")].map(r => r.innerText.replace(/\s+/g, " ").trim()).join(" | "); })()'
+  # each row as "<label> (<description>)", the label read on its own (a
+  # row's innerText runs it into its kind: "stateVAR")
+  wb '(() => { const q = document.querySelector(".quick-input-widget"); if (!q || q.style.display === "none") return ""; return [...q.querySelectorAll(".quick-input-list .monaco-list-row")].map(r => (r.querySelector(".label-name")?.innerText || "").trim() + " (" + (r.querySelector(".label-description")?.innerText || "").trim() + ")").join(" | "); })()'
 }
 b05_outline() {
   local sym t all="" miss=""
@@ -410,7 +412,7 @@ b05_outline() {
     xdotool key --clearmodifiers Escape; sleep 0.4
     all+="$sym → ${t:-<nothing>}; "
     # a row whose label is the symbol itself, not merely one containing it
-    grep -qE "(^| \| )$sym( |$)" <<<"$t" || miss+=" $sym"
+    grep -qE "(^| \| )$sym \(" <<<"$t" || miss+=" $sym"
   done
   echo "Ctrl+Shift+O filtered: ${all:0:400}"
   [[ -z $miss ]] || { echo "missing:$miss" >&2; return 1; }

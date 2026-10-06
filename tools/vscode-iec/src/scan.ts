@@ -1,3 +1,5 @@
+import { enumValueName, isEnum, isStringType, parseEnumWrite, type FlatType } from "./tagTypes";
+
 // Identifier scanning and value formatting for inline live values.
 // Deliberately free of any `vscode` import so it can be unit-tested in
 // plain Node (see scan.test.ts, run by `npm test`).
@@ -257,6 +259,34 @@ export function parseWriteValue(raw: string): number | boolean | undefined {
   if (/^false$/i.test(s)) return false;
   const n = Number(s);
   return Number.isFinite(n) ? n : undefined;
+}
+
+/** A tag's value as the Set/Force free-text box takes it, by the target's
+ * declared type (tagTypes, from /api/meta — #246): a STRING tag takes a
+ * quoted string ('text' or "text"; the quotes the pill shows); an
+ * enumerated one a member's name (any case, `Mode#Run`) or an integer, sent
+ * as the member's name or the integer; anything else — or an unknown type —
+ * a number or TRUE/FALSE, as parseWriteValue. undefined for anything the
+ * write would refuse, so it doubles as the validator. */
+export function parseTypedWrite(raw: string, ft: FlatType | undefined): number | boolean | string | undefined {
+  if (isStringType(ft)) {
+    const m = /^\s*(["'])([\s\S]*)\1\s*$/.exec(raw);
+    return m ? m[2] : undefined;
+  }
+  if (isEnum(ft)) {
+    const s = raw.trim();
+    if (/^[+-]?\d+$/.test(s)) return Number(s);
+    const v = parseEnumWrite(s, ft);
+    return v === undefined ? undefined : enumValueName(v, ft);
+  }
+  return parseWriteValue(raw);
+}
+
+/** What the Set/Force box asks for, by the target's type. */
+export function typedWriteHint(ft: FlatType | undefined): string {
+  if (isStringType(ft)) return "a quoted string, 'text'";
+  if (isEnum(ft)) return `a member of ${ft.t} (${ft.e.map((m) => m.name).join(", ")}), or its integer`;
+  return "a number, or TRUE/FALSE";
 }
 
 /** Hover rendering caps so a 173-member AOI doesn't flood the tooltip. */
