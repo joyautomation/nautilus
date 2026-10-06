@@ -1,0 +1,78 @@
+# EN/ENO conformance. Every step asserts st_ and fbd_ together. EN is the
+# execution control of every call in both programs: FALSE means the call
+# does not run — a function's result is not assigned (its target holds the
+# last value), an FB's body does not run (its outputs hold, and so does
+# its edge memory) — and ENO is FALSE. With EN TRUE, ENO is TRUE unless
+# the call errors; DIV's zero divisor is that error (the result itself
+# follows the documented ÷0 rule: 0).
+tests:
+  - name: EN TRUE runs the call and ENO is TRUE
+    given: { EN: true, X: 42.0 }
+    steps:
+      - scans: 1
+        expect: { st_OUT: 10.0, fbd_OUT: 10.0, st_ENO: true, fbd_ENO: true, st_CENO: true, fbd_CENO: true }
+
+  - name: EN FALSE leaves the function's result unassigned
+    given: { EN: true, X: 4.0 }
+    steps:
+      - scans: 1
+        expect: { st_OUT: 4.0, fbd_OUT: 4.0, st_ENO: true, fbd_ENO: true }
+      - given: { EN: false, X: 7.0 }
+        scans: 1
+        expect: { st_OUT: 4.0, fbd_OUT: 4.0, st_ENO: false, fbd_ENO: false }
+      - given: { EN: true }
+        scans: 1
+        expect: { st_OUT: 7.0, fbd_OUT: 7.0, st_ENO: true, fbd_ENO: true }
+
+  - name: EN FALSE from power-up never assigns (the tag keeps its init)
+    steps:
+      - scans: 3
+        expect: { st_OUT: -1.0, fbd_OUT: -1.0, st_ENO: false, fbd_ENO: false, st_CENO: false, fbd_CENO: false }
+
+  - name: an FB with EN FALSE does not run — edges it misses are not counted
+    given: { EN: true }
+    steps:
+      - given: { CU: true }
+        scans: 1
+        expect: { st_CV: 1, fbd_CV: 1 }
+      - given: { CU: false }
+        scans: 1
+      - given: { EN: false, CU: true }
+        scans: 1
+        expect: { st_CV: 1, fbd_CV: 1, st_CENO: false, fbd_CENO: false }
+      - given: { CU: false }
+        scans: 1
+        expect: { st_CV: 1, fbd_CV: 1 }
+      - given: { EN: true }
+        scans: 1
+        expect: { st_CV: 1, fbd_CV: 1, st_CENO: true, fbd_CENO: true }
+
+  - name: the FB's edge memory is stale while disabled — a rise across it counts on return
+    given: { EN: true }
+    steps:
+      - scans: 1 # CU FALSE seen
+        expect: { st_CV: 0, fbd_CV: 0 }
+      - given: { EN: false, CU: true }
+        scans: 1
+        expect: { st_CV: 0, fbd_CV: 0 }
+      - given: { EN: true }
+        scans: 1 # CU was FALSE the last time the block ran: a rising edge
+        expect: { st_CV: 1, fbd_CV: 1 }
+
+  - name: DIV's ENO is FALSE on a zero divisor, TRUE otherwise
+    given: { EN: true, X: 9.0, D: 2.0 }
+    steps:
+      - scans: 1
+        expect: { st_Q: 4.5, fbd_Q: 4.5, st_QENO: true, fbd_QENO: true }
+      - given: { D: 0.0 }
+        scans: 1
+        expect: { st_Q: 0.0, fbd_Q: 0.0, st_QENO: false, fbd_QENO: false }
+
+  - name: DIV with EN FALSE holds its result and reports ENO FALSE
+    given: { EN: true, X: 9.0, D: 3.0 }
+    steps:
+      - scans: 1
+        expect: { st_Q: 3.0, fbd_Q: 3.0, st_QENO: true, fbd_QENO: true }
+      - given: { EN: false, D: 9.0 }
+        scans: 1
+        expect: { st_Q: 3.0, fbd_Q: 3.0, st_QENO: false, fbd_QENO: false }

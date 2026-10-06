@@ -163,6 +163,7 @@ Current table:
 | `fb-tof` | ✓ | ✓ | ✓ |   | 7 |
 | `fb-ton` | ✓ | ✓ | ✓ |   | 6 |
 | `fb-tp` | ✓ | ✓ | ✓ |   | 8 |
+| `fbd-en-eno` | ✓ |   | ✓ |   | 7 |
 | `fn-conversions` | ✓ |   |   |   | 8 |
 | `fn-trig-log` | ✓ |   |   |   | 8 |
 | `ld-coils` | ✓ | ✓ |   |   | 9 |
@@ -171,7 +172,9 @@ Current table:
 | `sfc-jump-back` |   |   |   | ✓ | 4 |
 | `sfc-qualifiers` |   |   |   | ✓ | 7 |
 | `sfc-sim-div-conv` |   |   |   | ✓ | 6 |
+| `sfc-step-maxtime` |   |   |   | ✓ | 5 |
 | `sfc-step-t` |   |   |   | ✓ | 5 |
+| `sfc-timed-qualifiers` |   |   |   | ✓ | 10 |
 | `st-bitwise` | ✓ |   | ✓ |   | 5 |
 | `st-div-zero` | ✓ |   |   |   | 4 |
 | `st-int-width` | ✓ |   |   |   | 5 |
@@ -179,4 +182,4 @@ Current table:
 | `st-string-clamp` | ✓ |   |   |   | 8 |
 | `st-xor` | ✓ |   |   |   | 3 |
 
-23 features, 140 tests.
+26 features, 162 tests.

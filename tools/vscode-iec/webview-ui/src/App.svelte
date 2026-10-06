@@ -15,6 +15,7 @@
 	} from '@xyflow/svelte';
 	import '@xyflow/svelte/dist/style.css';
 	import FbdNode from './FbdNode.svelte';
+	import NetBand from './NetBand.svelte';
 	import FbdEdge from './FbdEdge.svelte';
 	import FitController from './FitController.svelte';
 	import Palette from './Palette.svelte';
@@ -25,7 +26,7 @@
 	import { diffLd, normalizeLd, type LdElement, type LdModel, type RungStatus } from './ladder';
 	import SfcView from './SfcView.svelte';
 	import { diffSfc, normalizeSfc, type SfcModel } from './sfc';
-	import { layout, normalizeFbd, type FbdModel, type VarDecl } from './layout';
+	import { layout, normalizeFbd, type FbdModel, type FbdNode as ModelNode, type VarDecl } from './layout';
 	import type { FbCatalogType, FbInst } from './suggest';
 	import { mergeDiff } from './diff';
 	import { vscode, postOp, pouFromFile, setSeedPou, withSeed } from './vscodeApi';
@@ -38,7 +39,7 @@
 	import { loadViewState, saveViewState } from './viewState';
 	import { themeColorMode } from './themeMode.svelte';
 
-	const nodeTypes = { fbd: FbdNode };
+	const nodeTypes = { fbd: FbdNode, net: NetBand };
 	const edgeTypes = { fbd: FbdEdge };
 
 	let nodes = $state.raw<Node[]>([]);
@@ -73,6 +74,7 @@
 	// The FBD palette's block picker: the model's catalog, the instances on
 	// the diagram (their outputs are sources), and every name in use.
 	let fbTypes = $state<FbCatalogType[]>([]);
+	let userFuncs = $state<FbCatalogType[]>([]);
 	let fbInsts = $state<FbInst[]>([]);
 	let takenNames = $state(new Set<string>());
 	let usedNames = $state(new Set<string>());
@@ -98,6 +100,12 @@
 	let selectedIds: string[] = [];
 	let fbdSource: string | undefined;
 
+	// The EN/ENO pin gesture: blocks whose unbound EN/ENO pins are drawn
+	// (open pins to wire) — view state only, the text changes when a wire
+	// lands. And the network the palette inserts into (a band header click).
+	let enoOpen = new Set<string>();
+	let activeNet = $state<string | undefined>(undefined);
+
 	// The FB instance inspector: which called instance's live data is open.
 	let inspect = $state<{ name: string; type: string; ins: string[]; outs: string[] } | null>(null);
 
@@ -115,6 +123,43 @@
 			if (!have.has(t.name.toLowerCase())) items.push({ name: t.name, detail: `${t.type ?? ''} · manifest`.trim() });
 		}
 		return items;
+	});
+
+	// The ladder's scopes for the vars panel: the PROGRAM (tags and locals),
+	// then each FUNCTION_BLOCK the file defines (its pins and locals); and
+	// the block instances rungs declare by their calls, listed read-only.
+	const ldScopes = $derived.by(() => {
+		if (!ldModel) return undefined;
+		const out: { pou: string; label: string; sections: string[] }[] = [];
+		if (ldModel.name || !(ldModel.blocks ?? []).length) out.push({ pou: '', label: `PROGRAM ${ldModel.name ?? ''}`.trim(), sections: ['VAR_EXTERNAL', 'VAR'] });
+		for (const b of ldModel.blocks ?? []) out.push({ pou: b.name, label: `FUNCTION_BLOCK ${b.name}`, sections: ['VAR_INPUT', 'VAR_OUTPUT', 'VAR_IN_OUT', 'VAR'] });
+		// Any other owner a declaration names (a model with no blocks list)
+		// still gets its rows shown.
+		for (const v of ldModel.vars ?? []) {
+			if (v.pou && !out.some((s) => s.pou === v.pou)) out.push({ pou: v.pou, label: v.pou, sections: ['VAR'] });
+		}
+		if (!out.some((s) => s.pou === '') && (ldModel.vars ?? []).some((v) => !v.pou)) out.unshift({ pou: '', label: 'PROGRAM', sections: ['VAR_EXTERNAL', 'VAR'] });
+		return out;
+	});
+	const ldInsts = $derived.by(() => {
+		if (!ldModel) return [];
+		const out: { name: string; type: string; rung: string; pou?: string }[] = [];
+		const seen = new Set<string>();
+		const declared = new Set((ldModel.vars ?? []).map((v) => `${v.pou ?? ''}:${v.name.toLowerCase()}`));
+		const walk = (els: LdElement[], rung: string, pou: string) => {
+			for (const e of els ?? []) {
+				const key = `${pou}:${(e.inst ?? '').toLowerCase()}`;
+				// An element of an instance array (Timers[2]) is the array's,
+				// declared in the header; a header-declared instance lists there.
+				if (e.kind === 'fb' && e.inst && /^[A-Za-z_][A-Za-z0-9_]*$/.test(e.inst) && !declared.has(key) && !seen.has(key)) {
+					seen.add(key);
+					out.push({ name: e.inst, type: e.type ?? '', rung, pou: pou || undefined });
+				}
+				for (const leg of e.legs ?? []) walk(leg, rung, pou);
+			}
+		};
+		for (const r of ldModel.rungs ?? []) walk(r.elements, r.name, r.pou ?? '');
+		return out;
 	});
 
 	// "Used" for the ladder = referenced by any rung: contact/coil operands
@@ -142,6 +187,8 @@
 	// body — the header + logic together (VarsPanel itself can't tell tags
 	// from step/action names, but it only marks unreferenced tags "unused";
 	// a false negative here just costs the badge, never breaks anything).
+	// The chart's one scope: tags, retained locals and named constants.
+	const SFC_SCOPES = [{ pou: '', label: '', sections: ['VAR_EXTERNAL', 'VAR', 'VAR CONSTANT'] }];
 	function collectSfcUsed(m: SfcModel): Set<string> {
 		const used = new Set<string>();
 		const words = (s: string) => {
@@ -157,14 +204,40 @@
 		init: string,
 		at: { x: number; y: number; w: number },
 		commit: (v: string) => void,
-		opts?: { multiline?: boolean; suggest?: 'tags' | 'types' | 'functions' | 'assoc' }
+		opts?: { multiline?: boolean; suggest?: 'tags' | 'types' | 'functions' | 'assoc'; error?: string; title?: string }
 	) {
 		editor?.open({ init, at, commit, ...opts });
 	}
 
+	// The pin gesture's open EN/ENO pins, added to a copy of the model.
+	function withOpenEno(model: FbdModel): FbdModel {
+		if (!enoOpen.size) return model;
+		const nodes = model.nodes.map((n): ModelNode => {
+			if (!enoOpen.has(n.id) || (n.kind !== 'block' && n.kind !== 'fb')) return n;
+			const inputs = n.inputs ?? [];
+			const outputs = n.outputs ?? [];
+			const openEn = !inputs.includes('EN');
+			const openEno = !outputs.includes('ENO');
+			return {
+				...n,
+				inputs: openEn ? ['EN', ...inputs] : inputs,
+				outputs: openEno ? [...outputs, 'ENO'] : outputs,
+				openEn,
+				openEno
+			};
+		});
+		return { ...model, nodes };
+	}
+	function toggleEno(id: string) {
+		if (enoOpen.has(id)) enoOpen.delete(id);
+		else enoOpen.add(id);
+		if (lastModel && !diffing) render(lastModel, false);
+	}
+
 	function render(model: FbdModel, isDiff: boolean) {
 		if (!isDiff) lastModel = model;
-		const { placed, edges: modelEdges, laneIdx } = layout(model);
+		if (!isDiff && activeNet && !model.networks?.some((nw) => 'n:' + nw.number === activeNet)) activeNet = undefined;
+		const { placed, edges: modelEdges, laneIdx, frames } = layout(isDiff ? model : withOpenEno(model));
 		const editable = !isDiff;
 		// Join the compiler's squiggles onto nodes by source line — the same
 		// message the text editor shows, as a badge + tooltip on the block.
@@ -183,6 +256,7 @@
 			// resolve their live values.
 			setVarBounds(varList);
 			fbTypes = model.fbTypes ?? [];
+			userFuncs = model.funcs ?? [];
 			fbInsts = model.nodes
 				.filter((n) => n.kind === 'fb')
 				.map((n) => ({ name: n.label, type: n.type, outs: n.outputs ?? [] }));
@@ -207,7 +281,37 @@
 				.filter((v) => v.section === 'VAR_EXTERNAL')
 				.map((v) => v.name.toLowerCase())
 		);
-		nodes = placed.map((n) => ({
+		const netCount = frames.length;
+		const bands: Node[] = frames.map((f) => ({
+			id: f.id,
+			type: 'net',
+			position: { x: f.x, y: f.y },
+			data: {
+				f,
+				count: netCount,
+				editable,
+				// Read live (no re-render: a rebuilt header would eat the
+				// second click of a double-click).
+				activeOf: () => activeNet,
+				onActivate: (id: string) => {
+					activeNet = activeNet === id ? undefined : id;
+				},
+				onOp: (op: { type: 'renameNetwork' | 'moveNetwork' | 'removeNetwork' | 'addNetwork'; node: string; value?: string; text?: string }) => {
+					// A moved/removed network renumbers: the palette target goes.
+					if (op.type !== 'renameNetwork') activeNet = undefined;
+					postOp(op);
+				},
+				requestInput
+			},
+			draggable: false,
+			selectable: false,
+			connectable: false,
+			deletable: false,
+			focusable: false,
+			zIndex: -1,
+			style: 'pointer-events: none;'
+		}));
+		nodes = bands.concat(placed.map((n) => ({
 			id: n.id,
 			type: 'fbd',
 			position: { x: n.x, y: n.y },
@@ -217,6 +321,8 @@
 				editable,
 				extNames,
 				requestInput,
+				enoShown: enoOpen.has(n.id),
+				onToggleEno: toggleEno,
 				onInspect: (inst: { name: string; type: string; ins: string[]; outs: string[] }) => {
 					inspect = inst;
 					paletteOpen = varsOpen = false;
@@ -252,7 +358,7 @@
 						n.id.startsWith('f:') ||
 						n.id.startsWith('cm:') ||
 						n.id.startsWith('g:'))
-		}));
+		})));
 		const srcWire = new Map(placed.map((n) => [n.id, !!n.wire]));
 		edges = modelEdges.map((e, i) => ({
 			id: `${e.from}|${e.fromPin ?? ''}|${e.to}|${e.toPin ?? ''}|${i}`,
@@ -399,7 +505,7 @@
 		const msg = ev.data as
 			| Msg
 			| { type: 'diagnostics'; diags?: Diag[] }
-			| { type: 'liveValues'; enabled?: boolean; fresh?: boolean; values?: Record<string, unknown> }
+			| { type: 'liveValues'; enabled?: boolean; fresh?: boolean; values?: Record<string, unknown>; forced?: Record<string, unknown> }
 			| { type: 'syncState'; state?: string };
 		if (!msg?.type) return;
 		if (msg.type === 'syncState') {
@@ -408,7 +514,7 @@
 		}
 		if (msg.type === 'liveValues') {
 			// Store-only update: FbdNode pills react directly, no node rebuild.
-			setLive({ enabled: !!msg.enabled, fresh: !!msg.fresh, values: msg.values ?? {} });
+			setLive({ enabled: !!msg.enabled, fresh: !!msg.fresh, values: msg.values ?? {}, forced: msg.forced ?? {} });
 			return;
 		}
 		if (msg.type === 'diagnostics') {
@@ -771,22 +877,26 @@
 		</SvelteFlow>
 	</div>
 	{/if}
-	<Palette bind:open={paletteOpen} vars={varList} {fbTypes} insts={fbInsts} taken={takenNames} />
+	<Palette bind:open={paletteOpen} vars={varList} {fbTypes} funcs={userFuncs} insts={fbInsts} taken={takenNames} net={mode === 'fbd' ? activeNet : undefined} />
 	<VarsPanel
 		bind:open={varsOpen}
 		vars={varList}
 		used={usedNames}
+		insts={mode === 'ld' ? ldInsts : []}
+		scopes={mode === 'ld' ? ldScopes : mode === 'sfc' ? SFC_SCOPES : undefined}
 		readonly={readOnly || diffing}
+		onRename={mode === 'ld' ? (name, newName, pou) => postLd({ type: 'renameVar', name, newName, ...(pou ? { block: pou } : {}) }) : undefined}
 		onDeclare={mode === 'ld'
-			? (name, type, section) => postLd({ type: 'declareVar', name, varType: type, section })
+			? (name, type, section, pou) => postLd({ type: 'declareVar', name, varType: type, section, ...(pou ? { block: pou } : {}) })
 			: mode === 'sfc'
-				? (name, type, section) => postSfc({ type: 'declareVar', name, varType: type, section })
+				? (name, type, section, _pou, init) => postSfc({ type: 'declareVar', name, varType: type, section, init })
 				: undefined}
 		onDelete={mode === 'ld'
-			? (name) => postLd({ type: 'deleteVar', name })
+			? (name, pou) => postLd({ type: 'deleteVar', name, ...(pou ? { block: pou } : {}) })
 			: mode === 'sfc'
 				? (name) => postSfc({ type: 'deleteVar', name })
 				: undefined}
+		withInit={mode === 'sfc'}
 	/>
 	{#if inspect}
 		<InstancePanel inst={inspect} onclose={() => (inspect = null)} />

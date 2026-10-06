@@ -865,9 +865,16 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 	// User FUNCTION called as a statement — discard the return value.
 	if l.userFuncs != nil {
 		if def, ok := l.userFuncs[n.Call.Name]; ok && def != nil {
-			expr, err := l.lowerUserFuncCall(n.Call, def)
+			call, x, err := splitExecControl(n.Call, funcDeclaresEN(def), false)
 			if err != nil {
 				return nil, err
+			}
+			expr, err := l.lowerUserFuncCall(call, def)
+			if err != nil {
+				return nil, err
+			}
+			if x.any() {
+				return l.gate(def.Name, x, []ir.Stmt{&ir.ExprStmt{X: expr}})
 			}
 			return &ir.ExprStmt{X: expr}, nil
 		}
@@ -906,6 +913,14 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 	if len(n.Call.Args) > 0 {
 		return nil, fmt.Errorf("FB call %q must use named args (IN := …, PT := …)", n.Call.Name)
 	}
+	// EN/ENO execution control (lower_eneno.go), unless the block declares
+	// pins of those names itself.
+	ownEN, ownENO := fbDeclares(def)
+	callNoEN, exec, err := splitExecControl(n.Call, ownEN, ownENO)
+	if err != nil {
+		return nil, err
+	}
+	n = &CallStmt{Call: callNoEN, Pos: n.Pos}
 	bindings := make([]ir.FBInput, 0, len(n.Call.NamedArgs))
 	// VAR_IN_OUT bindings become a pair: an input binding that copies the
 	// caller's variable in before Step, and an output binding that copies
@@ -977,7 +992,11 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		}
 		outputs = append(outputs, ir.FBOutput{SlotIdx: idx, Target: target})
 	}
-	return &ir.FBCall{InstanceSlot: instanceSlot, Instance: instance, Def: def, Inputs: bindings, Outputs: outputs}, nil
+	call := &ir.FBCall{InstanceSlot: instanceSlot, Instance: instance, Def: def, Inputs: bindings, Outputs: outputs}
+	if exec.any() {
+		return l.gate(n.Call.Name, exec, []ir.Stmt{call})
+	}
+	return call, nil
 }
 
 // rootRef follows an lvalue to the slot or global it addresses.
@@ -1024,6 +1043,9 @@ func (l *lowerer) lowerInOutArg(def *ir.FBDef, na NamedArg) (ir.LValue, error) {
 }
 
 func (l *lowerer) lowerAssign(a *AssignStmt) (ir.Stmt, error) {
+	if s, gated, err := l.lowerGatedAssign(a); gated {
+		return s, err
+	}
 	if a.TargetExpr == nil {
 		return nil, fmt.Errorf("assignment has no structured target (parser bug)")
 	}
@@ -1078,6 +1100,9 @@ func (l *lowerer) lowerCallExpr(n *CallExpr) (ir.Expr, error) {
 	// case while still binding by bare name.
 	if l.userFuncs != nil {
 		if def, ok := l.userFuncs[n.Name]; ok && def != nil {
+			if !funcDeclaresEN(def) && hasExecControl(n) {
+				return nil, errExecInExpr(n)
+			}
 			return l.lowerUserFuncCall(n, def)
 		}
 	}
@@ -1091,12 +1116,19 @@ func (l *lowerer) lowerCallExpr(n *CallExpr) (ir.Expr, error) {
 		}
 		return nil, errName(n.Pos, n.Name, fmt.Errorf("unknown function %q", n.Name))
 	}
-	if len(n.NamedArgs) > 0 {
-		return nil, fmt.Errorf("function %s does not accept named args", sig.Name)
+	if hasExecControl(n) {
+		return nil, errExecInExpr(n)
 	}
-	args := make([]ir.Expr, 0, len(n.Args))
-	argTypes := make([]*ir.Type, 0, len(n.Args))
-	for _, a := range n.Args {
+	for _, ob := range n.OutputBindings {
+		return nil, errName(ob.Pos, ob.Name, fmt.Errorf("function %s has no output %q to bind", sig.Name, ob.Name))
+	}
+	srcArgs, err := lowerFormalBuiltinArgs(n, sig)
+	if err != nil {
+		return nil, err
+	}
+	args := make([]ir.Expr, 0, len(srcArgs))
+	argTypes := make([]*ir.Type, 0, len(srcArgs))
+	for _, a := range srcArgs {
 		la, err := l.lowerExpr(a)
 		if err != nil {
 			return nil, fmt.Errorf("function %s arg: %w", sig.Name, err)
@@ -1124,7 +1156,7 @@ func (l *lowerer) lowerCallExpr(n *CallExpr) (ir.Expr, error) {
 		}
 		args[i] = coerce(args[i], p)
 		if !assignable(p, args[i].ExprType()) {
-			return nil, errNode(n.Args[i], fmt.Errorf("function %s arg %d: cannot pass %s as %s", sig.Name, i+1, args[i].ExprType(), p))
+			return nil, errNode(srcArgs[i], fmt.Errorf("function %s arg %d: cannot pass %s as %s", sig.Name, i+1, args[i].ExprType(), p))
 		}
 	}
 	return &ir.Call{Name: sig.Name, Args: args, Fn: sig.Fn, T: resultT}, nil

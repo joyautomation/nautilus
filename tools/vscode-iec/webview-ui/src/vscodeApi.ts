@@ -51,6 +51,10 @@ export type FbdEditOp = {
 		| 'setComment'
 		| 'duplicate'
 		| 'retarget'
+		| 'addNetwork'
+		| 'renameNetwork'
+		| 'moveNetwork'
+		| 'removeNetwork'
 		| 'init';
 	node?: string;
 	to?: string;
@@ -83,14 +87,19 @@ export function withSeed<T extends object>(op: T): T & { pou?: string } {
 	return seedPou ? { ...op, pou: seedPou } : op;
 }
 
-/** The PROGRAM name a blank file seeds with: its base name, as an IEC
- * identifier (`heater-2.fbd` → `heater_2`). */
+/** The PROGRAM name a blank file seeds with: its base name, PascalCased
+ * by the rule `naut new` (and Go's seed.PouName) uses — `main.fbd` →
+ * `Main`, `heater-2.fbd` → `Heater2`, a leading digit gets a `P`. */
 export function pouFromFile(file: string | undefined): string {
 	const base = (file ?? '').replace(/^.*[\\/]/, '').replace(/\.[^.]*$/, '');
-	if (!base) return 'Main';
-	let id = base.replace(/[^A-Za-z0-9_]/g, '_');
-	if (!/^[A-Za-z_]/.test(id)) id = 'P_' + id;
-	return /^[A-Za-z_][A-Za-z0-9_]*$/.test(id) ? id : 'Main';
+	let id = base
+		.split(/[^A-Za-z0-9]+/)
+		.filter(Boolean)
+		.map((p) => p[0].toUpperCase() + p.slice(1))
+		.join('');
+	if (!id) return 'Main';
+	if (/^[0-9]/.test(id)) id = 'P' + id;
+	return id;
 }
 
 export function postOp(op: FbdEditOp): void {

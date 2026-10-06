@@ -39,6 +39,14 @@ const FILE_GROUP: ShortcutGroup = {
 	]
 };
 
+/** Cross-reference on an element (xref.svelte.ts) — the three diagrams. */
+const XREF_GROUP: ShortcutGroup = {
+	title: 'Navigate',
+	rows: [
+		{ keys: 'Shift + F12', does: 'Find All References to the selected element\'s name — also on its right-click menu' }
+	]
+};
+
 export const FBD_SHORTCUTS: ShortcutGroup[] = [
 	{
 		title: 'Select',
@@ -57,7 +65,9 @@ export const FBD_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: 'Esc', does: 'Cancel an in-place edit' },
 			{ keys: 'Drag pin → pin', does: 'Wire an output to an input; drop on + to add an input', hint: 'drag pin→pin: wire (+ adds an input)' },
 			{ keys: 'Del / Backspace', does: 'Delete the selection; a selected wire disconnects', hint: 'Del: delete / disconnect' },
-			{ keys: 'Ctrl + C / X / V', does: 'Copy, cut, paste — pastes into another .fbd too', hint: 'Ctrl+C/X/V: copy cut paste' }
+			{ keys: 'Ctrl + C / X / V', does: 'Copy, cut, paste — pastes into another .fbd too', hint: 'Ctrl+C/X/V: copy cut paste' },
+			{ keys: 'Click EN on a block', does: 'Show its EN / ENO pins: wire EN to run the block only while it is TRUE; ENO is TRUE when it ran without an error' },
+			{ keys: 'Network header', does: 'Click: “+ add” inserts into that network · ▲ ▼ move it · + adds a network after it · ✕ removes its NETWORK line · double-click the title to rename' }
 		]
 	},
 	{
@@ -70,6 +80,7 @@ export const FBD_SHORTCUTS: ShortcutGroup[] = [
 			{ keys: 'Ctrl + = / Ctrl + - / Ctrl + 0', does: 'Zoom in / out / fit' }
 		]
 	},
+	XREF_GROUP,
 	FILE_GROUP
 ];
 
@@ -84,20 +95,22 @@ export const LD_SHORTCUTS: ShortcutGroup[] = [
 	{
 		title: 'Edit',
 		rows: [
-			{ keys: 'Double-click', does: 'Retag a contact or coil, edit arguments, rename a rung', hint: 'dblclick: retag / edit args / rename rung' },
+			{ keys: 'Double-click', does: 'Retag a contact or coil (+Tag / -Tag makes an edge contact, /Tag an NC one), edit arguments, rename a rung', hint: 'dblclick: retag / edit args / rename rung' },
 			{ keys: 'Enter / Esc', does: 'Commit / cancel an in-place edit' },
 			{ keys: '⊕', does: 'Insert an element at that spot', hint: '⊕: insert' },
 			{ keys: 'Drag a palette item', does: 'Drop it onto a rung spot' },
 			{ keys: 'Drag an element', does: 'Move it to another spot or rung' },
 			{ keys: 'Del / Backspace', does: 'Delete the element — or the rung, when its name is selected', hint: 'Del: delete element or rung' },
 			{ keys: 'N', does: 'Toggle a contact between NO and NC', hint: 'N: NO/NC' },
+			{ keys: 'P', does: 'Cycle a contact: NO → P (rising edge) → N (falling edge) → NC', hint: 'P: edge contact' },
 			{ keys: 'M', does: 'Cycle a coil: normal → set → reset', hint: 'M: coil mode' },
 			{ keys: 'B', does: 'Wrap the selection in a parallel branch', hint: 'B: branch around' },
-			{ keys: 'Ctrl + C / X / V', does: 'Copy, cut, paste an element — pastes after the selection, into another ladder too', hint: 'Ctrl+C/X/V: copy cut paste' },
+			{ keys: 'Ctrl + C / X / V', does: 'Copy, cut, paste an element or a whole rung (its name selected) — pastes after the selection, into another ladder too; a pasted rung gets the next name (m1 → m2) and renamed blocks', hint: 'Ctrl+C/X/V: copy cut paste' },
 			{ keys: 'Esc', does: 'Cancel a drag', hint: 'Esc: cancel drag' }
 		]
 	},
 	viewGroup('Fit the widest rung to the pane width (also the corner fit button)'),
+	XREF_GROUP,
 	FILE_GROUP
 ];
 
@@ -107,18 +120,22 @@ export const SFC_SHORTCUTS: ShortcutGroup[] = [
 		rows: [
 			{ keys: 'Click', does: 'Select a step, transition, action or note', hint: 'click: select' },
 			{ keys: 'Ctrl / Shift + click', does: 'Add a step to or remove it from the selection', hint: 'Ctrl-click: multi-select' },
-			{ keys: 'Ctrl + A', does: 'Select every step' }
+			{ keys: 'Ctrl + A', does: 'Select every step' },
+			{ keys: 'Arrow keys', does: 'Walk the chart along its flow: ↓ step → its transition → the next step, ↑ back, ← → to the neighbouring step or alternative branch; → from a step enters its actions', hint: 'arrows: walk the chart' }
 		]
 	},
 	{
 		title: 'Edit',
 		rows: [
+			{ keys: 'Enter', does: 'Edit the selection in place: a step’s name, a transition’s condition, an action (its ST body), a note' },
+			{ keys: 'F2', does: 'Rename the selected step, or name the selected transition (the label above its condition; "-" clears it)' },
 			{ keys: '+ step', does: 'With a step selected: a new step under it, joined by a transition (condition in the form); nothing selected: a free step' },
 			{ keys: '+ transition', does: 'From the selected step to an existing step, or "other… (new step)" to create the target too' },
 			{ keys: '+ alt branch', does: 'Another transition out of the selected step (or the selected transition’s source) — an alternative divergence; priority is file order' },
 			{ keys: '+ parallel branch', does: 'Widen the selected transition’s TO with a new step — a simultaneous divergence (a join after it waits for the new leg too)' },
 			{ keys: '+ join', does: 'Add another step to the selected transition’s FROM — a simultaneous convergence that fires once every source is active' },
-			{ keys: 'Double-click', does: 'Rename a step, edit a condition, an action or its ST body', hint: 'dblclick: rename / edit condition / edit action' },
+			{ keys: 'Double-click', does: 'Rename a step, edit a condition or a transition’s name, an action or its ST body — a new action’s first body writes its ACTION block; the qualifier column edits the association line', hint: 'dblclick: rename / edit condition / edit action' },
+			{ keys: '◀ priority ▶ / Alt + ← →', does: 'Move the selected alternative branch left or right among its siblings — priority is file order, leftmost first (the small numbers on the bars)' },
 			{ keys: 'Enter / Esc', does: 'Commit / cancel an in-place edit or the add form' },
 			{ keys: 'Drag a step body', does: 'Move it — the position is pinned in the file', hint: 'drag a step: pin layout' },
 			{ keys: 'Drag a step’s ⊙ handle', does: 'Drop on another step to connect them with a transition', hint: 'drag ⊙ onto a step: connect' },
@@ -128,6 +145,7 @@ export const SFC_SHORTCUTS: ShortcutGroup[] = [
 		]
 	},
 	viewGroup('Fit the whole chart to the pane (also the corner fit button)'),
+	XREF_GROUP,
 	FILE_GROUP
 ];
 

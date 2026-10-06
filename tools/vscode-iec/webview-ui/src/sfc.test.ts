@@ -17,6 +17,10 @@ import {
 	stepAtPoint,
 	nextStepInitial,
 	stepId,
+	altGroup,
+	priorities,
+	moveTransitionOp,
+	navigate,
 	type SfcModel
 } from './sfc.ts';
 
@@ -496,4 +500,101 @@ test('joinCandidates lists every step not already a source, in chart order', () 
 	assert.deepEqual(joinCandidates(model, 'tr:t_back').map((s) => s.name), ['Idle', 'Alternate']);
 	assert.deepEqual(joinCandidates(model, 'tr:nope'), []);
 	assert.deepEqual(joinCandidates(model, undefined), []);
+});
+
+// ── SFC editor parity (#187, #181, #76) ──────────────────────────────────
+
+// The Codesys-shaped washer's join: legs of different lengths.
+// Idle -> Fill -> (Heat, Wash); Heat -> HeatDone; (Wash, HeatDone) -> Drain;
+// Drain -> Idle; and an abort out of Fill, declared first.
+function washerModel(): SfcModel {
+	const st = (name: string, line: number, initial = false) => ({ id: 'st:' + name, name, initial, line, endLine: line });
+	const tr = (id: string, from: string[], to: string[], line: number) => ({ id, from, to, cond: 'c', kind: 'normal' as const, line, endLine: line });
+	return {
+		name: 'Washer',
+		steps: [st('Idle', 1, true), st('Fill', 2), st('Heat', 3), st('Wash', 4), st('HeatDone', 5), st('Drain', 6), st('Aborted', 7)],
+		trans: [
+			tr('tr:10', ['Idle'], ['Fill'], 10),
+			tr('tr:abort', ['Fill'], ['Aborted'], 11),
+			tr('tr:12', ['Fill'], ['Heat', 'Wash'], 12),
+			tr('tr:13', ['Heat'], ['HeatDone'], 13),
+			tr('tr:join', ['Wash', 'HeatDone'], ['Drain'], 14),
+			tr('tr:15', ['Drain'], ['Idle'], 15),
+			tr('tr:16', ['Aborted'], ['Idle'], 16)
+		]
+	};
+}
+
+test('#187 a convergence whose legs have different lengths sits below every leg and draws as a real convergence', () => {
+	const m = washerModel();
+	const { rankOf } = computeRanksAndColumns(m);
+	assert.equal(rankOf.get('st:HeatDone'), 3);
+	assert.equal(rankOf.get('st:Drain'), 4, 'Drain below HeatDone, not level with it');
+	const L = layoutSfc(m);
+	const join = L.trans.find((r) => r.t.id === 'tr:join')!;
+	assert.equal(join.jump, undefined, 'the join is not a ↩ jump');
+	assert.equal(join.legsIn.length, 2, 'both legs run into the bar');
+	const drain = L.steps.find((p) => p.id === 'st:Drain')!;
+	const heatDone = L.steps.find((p) => p.id === 'st:HeatDone')!;
+	assert.ok(join.barY > heatDone.y + heatDone.h && join.barY < drain.y, 'the bar is between HeatDone and Drain');
+	// The loop backs stay jumps.
+	assert.ok(L.trans.find((r) => r.t.id === 'tr:15')!.jump);
+	assert.ok(L.trans.find((r) => r.t.id === 'tr:16')!.jump);
+});
+
+test('#187 a convergence that loops back to an earlier step stays a jump (no rank push)', () => {
+	const m = washerModel();
+	m.trans.push({ id: 'tr:back', from: ['Wash', 'HeatDone'], to: ['Fill'], cond: 'c', kind: 'simConverge', line: 20, endLine: 20 });
+	const { rankOf } = computeRanksAndColumns(m);
+	assert.equal(rankOf.get('st:Fill'), 1);
+	assert.ok(layoutSfc(m).trans.find((r) => r.t.id === 'tr:back')!.jump);
+});
+
+test('#181 priorities: the alternative branches out of Fill are numbered in declaration order; a lone transition has none', () => {
+	const m = washerModel();
+	assert.deepEqual(altGroup(m, 'tr:12').map((t) => t.id), ['tr:abort', 'tr:12']);
+	const p = priorities(m);
+	assert.equal(p.get('tr:abort'), 1);
+	assert.equal(p.get('tr:12'), 2);
+	assert.equal(p.get('tr:10'), undefined);
+	assert.equal(layoutSfc(m).trans.find((r) => r.t.id === 'tr:abort')!.prio, 1);
+	assert.deepEqual(moveTransitionOp(m, 'tr:12', -1), { type: 'moveTransition', transition: 'tr:12', delta: -1 });
+	assert.equal(moveTransitionOp(m, 'tr:abort', -1), undefined, 'already first');
+	assert.equal(moveTransitionOp(m, 'tr:10', 1), undefined, 'no rival');
+});
+
+test('#76 navigate: arrows follow the flow — step ↓ transition ↓ step, ← → between parallel steps and alternative branches', () => {
+	const m = washerModel();
+	const L = layoutSfc(m);
+	const go = (sel: Parameters<typeof navigate>[2], dir: Parameters<typeof navigate>[3]) => navigate(m, L, sel, dir);
+	assert.deepEqual(go(null, 'down'), { kind: 'step', id: 'st:Idle' }, 'nothing selected: the initial step');
+	assert.deepEqual(go({ kind: 'step', id: 'st:Idle' }, 'down'), { kind: 'trans', id: 'tr:10' });
+	assert.deepEqual(go({ kind: 'trans', id: 'tr:10' }, 'down'), { kind: 'step', id: 'st:Fill' });
+	assert.deepEqual(go({ kind: 'step', id: 'st:Fill' }, 'down'), { kind: 'trans', id: 'tr:abort' }, 'highest priority first');
+	assert.deepEqual(go({ kind: 'trans', id: 'tr:abort' }, 'right'), { kind: 'trans', id: 'tr:12' });
+	assert.deepEqual(go({ kind: 'trans', id: 'tr:12' }, 'left'), { kind: 'trans', id: 'tr:abort' });
+	assert.equal(go({ kind: 'trans', id: 'tr:abort' }, 'left'), undefined);
+	const heat = go({ kind: 'trans', id: 'tr:12' }, 'down');
+	assert.deepEqual(heat, { kind: 'step', id: 'st:Heat' }, 'the leftmost target');
+	assert.deepEqual(go(heat!, 'right'), { kind: 'step', id: 'st:Wash' });
+	assert.deepEqual(go({ kind: 'step', id: 'st:Wash' }, 'left'), { kind: 'step', id: 'st:Heat' });
+	assert.deepEqual(go({ kind: 'step', id: 'st:Drain' }, 'up'), { kind: 'trans', id: 'tr:join' }, 'up prefers the forward way in over a loop back');
+	assert.deepEqual(go({ kind: 'trans', id: 'tr:join' }, 'up'), { kind: 'step', id: L.steps.filter((p) => p.id === 'st:Wash' || p.id === 'st:HeatDone').sort((a, b) => a.x - b.x)[0].id });
+	assert.deepEqual(go({ kind: 'step', id: 'st:Idle' }, 'up'), { kind: 'trans', id: 'tr:15' }, 'a loop back when that is the only way in');
+});
+
+test('layoutSfc: an alternative branch and a join sharing its source get separate bars (no overlap)', () => {
+	const st = (name: string, line: number, initial = false) => ({ id: 'st:' + name, name, initial, line, endLine: line });
+	const tr = (id: string, from: string[], to: string[], line: number) => ({ id, from, to, cond: 'c', kind: 'normal' as const, line, endLine: line });
+	const m: SfcModel = {
+		name: 'Station',
+		steps: [st('Start', 1, true), st('Fill', 2), st('Mix', 3), st('Empty', 4), st('Overflow', 5)],
+		trans: [tr('tr:a', ['Start'], ['Fill', 'Mix'], 10), tr('tr:join', ['Fill', 'Mix'], ['Empty'], 11), tr('tr:ov', ['Fill'], ['Overflow'], 12)]
+	};
+	const L = layoutSfc(m);
+	const join = L.trans.find((r) => r.t.id === 'tr:join')!;
+	const ov = L.trans.find((r) => r.t.id === 'tr:ov')!;
+	assert.ok(!join.jump && !ov.jump);
+	assert.ok(Math.abs(join.barY - ov.barY) >= 20, `bars at ${join.barY} and ${ov.barY} overlap`);
+	assert.ok(join.barY < ov.barY, 'the higher priority (declared first) on top');
 });

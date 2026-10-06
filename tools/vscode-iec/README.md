@@ -61,6 +61,18 @@ controller onto both the text and the diagram.
   kind too), undo / redo / save with the usual keys, zoom and fit
   (Ctrl+wheel, Ctrl+= / Ctrl+- / Ctrl+0), and a **?** button that lists
   every gesture and key for that editor.
+- **Cross-reference from the diagram**: select a contact, coil or block, an
+  FBD variable chip, FB instance or pin, or an SFC step or action and press
+  **Shift+F12** (or right-click → *Find All References*). The References
+  view lists every read and write of that name across the project and its
+  declaration in `nautilus.yaml` or a tag file.
+- **Tag descriptions on the elements**: a tag's `desc` from `nautilus.yaml`
+  (or a tag file), or a trailing `(* comment *)` on its VAR line, shows in
+  the element's tooltip in all three editors, and under each ladder contact
+  and coil as a second line, Studio 5000 style. Turn the second line off
+  with `nautilus.diagram.showDescriptions`; FBD and SFC keep the
+  description in the tooltip only, since their elements are packed too
+  closely for another line.
 
 ![A Sequential Function Chart with the active step highlighted](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/sfc-chart.png)
 
@@ -91,6 +103,14 @@ Review a logic change as a diagram, not as text.
 - **Live Values panel** (nautilus in the Activity Bar): every tag and
   program local with its value; the pencil on a tag sets it.
 - **Set Live Value…**: right-click an identifier to write a new value.
+- **Force… / Remove Force / Remove All Forces**: hold a tag at a value
+  against the field and the logic until you remove it — the PLC force
+  table. Forced values show an amber **F** on the inline pill, in the Live
+  Values panel (a Forces group first) and on the diagrams, and a status-bar
+  item reads **N forces active** until the last one is removed.
+- **SFC online**: right-click a step in a live SFC diagram for **Set Active
+  Step** (jump the chart there, once), or a transition for **Fire
+  Transition** (take it, once).
 - **Online edit**: **Download Program to Controller** swaps the running
   program without a restart; **Diff Program with Controller**, **Pull
   Program from Controller** and **Rollback Controller Program** do what
@@ -211,6 +231,8 @@ The most used; all are under **nautilus:** in the Command Palette.
 | Diff … Diagram (vs git HEAD / between git revisions… / vs Controller) | Visual diff |
 | Connect to Controller… | Set `nautilus.runtimeUrl` for this workspace |
 | Set Live Value… | Write a tag on the controller |
+| Force… / Remove Force / Remove All Forces / Show Forces | Hold a tag at a value until removed; list and clear forces |
+| Set Active Step / Fire Transition | Jump a running SFC chart to a step, or take one transition, once |
 | Download Program to Controller | Online edit |
 | Diff / Pull / Rollback Program | Compare with, bring back, or undo on the controller |
 | Show CLI Info | Which `naut` is in use, and its version |

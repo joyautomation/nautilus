@@ -18,19 +18,49 @@ type netlist struct {
 	// wire definition, so ops can rename or delete by name.
 	wirePos  map[string]exprPos
 	wireSpan map[string]exprPos
+	// networks in source order (see network); every statement belongs to
+	// one, by index: wireNet for wires, fbDecl.net / node.net for the rest.
+	networks []network
+	wireNet  map[string]int
+	// Execution control, indexed by prepareExec: names whose ENO is read as
+	// a wire (a hidden <name>__ENO), and the first coil each EN/ENO wire
+	// drives.
+	hiddenENO   map[string]bool
+	hiddenLine  map[string]int
+	hiddenOrder []string
+	execFirst   map[string]int
 }
+
+// network is one numbered network of the body (#207). A `NETWORK` line
+// starts one — `NETWORK 'Dosing line A'`, the title optional — and runs
+// to the next; statements before the first NETWORK line form an implicit,
+// untitled first network, and a body with no NETWORK line at all is one
+// network: exactly the program it always was. Networks execute in order;
+// within one, the usual rule holds (an FB call runs before the statements
+// that read its outputs, otherwise source order).
+type network struct {
+	title    string
+	line     int  // the NETWORK line (1-based); 0 for the implicit one
+	implicit bool // statements before the first NETWORK line
+	stmts    int  // statements in it (wires, instances, calls, coils)
+}
+
+// curNet is the index of the network statements are being added to.
+func (nl *netlist) curNet() int { return len(nl.networks) - 1 }
 
 type fbDecl struct {
 	name, typ string
 	line      int     // 1-based source line of the declaration
 	namePos   exprPos // the instance name token, for rename
 	span      exprPos // the whole declaration statement, for delete
+	net       int     // the network it is in
 }
 
 // node is an ordered netlist statement that becomes an ST statement: an FB
 // call or a coil.
 type node struct {
 	isCall bool
+	net    int     // the network it is in
 	line   int     // 1-based source line of the statement, for diagnostics
 	lhs    exprPos // the leading name token (target / instance), for rename
 	span   exprPos // the whole statement, for delete
@@ -90,6 +120,36 @@ type callExpr struct { // operator/function block
 	exprPos
 	fn   string
 	args []expr
+	// names[i] is the formal name args[i] was given by (`MN := 0.0`), nil
+	// for a positional call — a call is one or the other.
+	names []string
+	// EN := expr / ENO => target: execution control (docs/functions.md
+	// "EN/ENO"). nil when unbound; they are not in args.
+	en, eno expr
+	// items is every argument in source order (positional, named, EN,
+	// ENO), for edits that remove one with its separator.
+	items []argItem
+	// open is just past '(' — where a new EN := … is inserted.
+	open exprPos
+}
+
+// argItem is one argument of a call as written: head is its first token
+// (the pin name of a named one, else the value), val its value expression.
+type argItem struct {
+	head exprPos
+	val  expr
+	pin  string // "" for a positional argument; "EN", "ENO", or the formal name
+}
+
+// execControl reports whether the call binds EN or ENO.
+func (c callExpr) execControl() bool { return c.en != nil || c.eno != nil }
+
+// reads lists the expressions the call reads: its inputs, and EN.
+func (c callExpr) reads() []expr {
+	if c.en == nil {
+		return c.args
+	}
+	return append([]expr{c.en}, c.args...)
 }
 
 func (refExpr) isExpr()  {}
@@ -115,13 +175,18 @@ type netParser struct {
 
 func parseNetlist(body string, lineOffset int) (*netlist, error) {
 	p := &netParser{toks: st.Lex(body), lineOffset: lineOffset, lines: strings.Split(body, "\n")}
-	nl := &netlist{wires: map[string]expr{}, wirePos: map[string]exprPos{}, wireSpan: map[string]exprPos{}}
+	nl := newNetlist()
 	for !p.at(st.TokenEOF) {
 		if err := p.item(nl); err != nil {
 			return nil, err
 		}
 	}
 	return nl, nil
+}
+
+func newNetlist() *netlist {
+	return &netlist{wires: map[string]expr{}, wirePos: map[string]exprPos{}, wireSpan: map[string]exprPos{},
+		wireNet: map[string]int{}, networks: []network{{implicit: true}}}
 }
 
 func (p *netParser) peek() st.Token         { return p.toks[p.pos] }
@@ -192,6 +257,9 @@ func (p *netParser) item(nl *netlist) error {
 	if !p.at(st.TokenIdent) {
 		return p.posErr(fmt.Sprintf("expected a wire, coil, or block, got %q", p.peek().Literal))
 	}
+	if p.atNetworkHeader() {
+		return p.networkHeader(nl)
+	}
 	lhsAt := p.here()
 	line := lhsAt.line
 	name := p.next().Literal
@@ -239,6 +307,7 @@ func (p *netParser) item(nl *netlist) error {
 		}
 		nl.wires[name] = e
 		nl.wireSrc = append(nl.wireSrc, name)
+		nl.wireNet[name] = nl.curNet()
 		kind = "wire"
 	case st.TokenAssign: // coil: target := <expr>
 		p.next()
@@ -246,7 +315,7 @@ func (p *netParser) item(nl *netlist) error {
 		if err != nil {
 			return err
 		}
-		nl.nodes = append(nl.nodes, node{target: name, source: e, line: line, lhs: lhs})
+		nl.nodes = append(nl.nodes, node{target: name, source: e, line: line, lhs: lhs, net: nl.curNet()})
 		nodeIdx = len(nl.nodes) - 1
 	case st.TokenColon: // FB instance decl: inst : TYPE  (optionally with a call)
 		p.next()
@@ -254,14 +323,14 @@ func (p *netParser) item(nl *netlist) error {
 			return p.posErr("expected a function-block type after ':'")
 		}
 		typ := p.next().Literal
-		nl.fbDecls = append(nl.fbDecls, fbDecl{name: name, typ: typ, line: line, namePos: lhs})
+		nl.fbDecls = append(nl.fbDecls, fbDecl{name: name, typ: typ, line: line, namePos: lhs, net: nl.curNet()})
 		kind = "decl"
 		if p.at(st.TokenLParen) { // inline call: inst : TON(IN := ..., ...)
 			args, err := p.namedArgs()
 			if err != nil {
 				return err
 			}
-			nl.nodes = append(nl.nodes, node{isCall: true, inst: name, args: args, line: line, lhs: lhs})
+			nl.nodes = append(nl.nodes, node{isCall: true, inst: name, args: args, line: line, lhs: lhs, net: nl.curNet()})
 			nodeIdx = len(nl.nodes) - 1
 		}
 	case st.TokenLParen: // FB call: inst(pin := ..., ...)
@@ -269,7 +338,7 @@ func (p *netParser) item(nl *netlist) error {
 		if err != nil {
 			return err
 		}
-		nl.nodes = append(nl.nodes, node{isCall: true, inst: name, args: args, line: line, lhs: lhs})
+		nl.nodes = append(nl.nodes, node{isCall: true, inst: name, args: args, line: line, lhs: lhs, net: nl.curNet()})
 		nodeIdx = len(nl.nodes) - 1
 	default:
 		return p.posErr(fmt.Sprintf("expected '=', ':=', ':', or '(' after %q", name))
@@ -277,6 +346,7 @@ func (p *netParser) item(nl *netlist) error {
 	if p.at(st.TokenSemicolon) {
 		p.next()
 	}
+	nl.networks[nl.curNet()].stmts++
 	// Close the whole-statement span (through the trailing ';') and record
 	// the edit anchors on whatever this item produced.
 	span := p.span(lhsAt)
@@ -290,6 +360,46 @@ func (p *netParser) item(nl *netlist) error {
 	if nodeIdx >= 0 {
 		nl.nodes[nodeIdx].span = span
 	}
+	return nil
+}
+
+// atNetworkHeader reports whether the next tokens are a NETWORK line:
+// the word NETWORK (any case) not followed by what would make it a
+// statement's name (`=`, `:=`, `:`, `(`, `[`, `.`) — so a tag that happens
+// to be called Network still works as one.
+func (p *netParser) atNetworkHeader() bool {
+	if !strings.EqualFold(p.peek().Literal, "NETWORK") || p.pos+1 >= len(p.toks) {
+		return false
+	}
+	switch p.toks[p.pos+1].Type {
+	case st.TokenEqual, st.TokenAssign, st.TokenColon, st.TokenLParen, st.TokenLBracket, st.TokenDot:
+		return false
+	}
+	return true
+}
+
+// networkHeader parses `NETWORK ['title'] [;]`, alone on its line, and
+// opens the next network. A NETWORK line before any statement names the
+// first network rather than adding an empty implicit one in front of it.
+func (p *netParser) networkHeader(nl *netlist) error {
+	kw := p.next()
+	line := kw.Line + p.lineOffset
+	title := ""
+	if p.at(st.TokenString) && p.peek().Line == kw.Line {
+		title = p.next().Literal
+	}
+	if p.at(st.TokenSemicolon) {
+		p.next()
+	}
+	if !p.at(st.TokenEOF) && p.peek().Line == kw.Line {
+		return p.posErr("a NETWORK line holds only the word NETWORK and an optional 'title'")
+	}
+	n := network{title: title, line: line}
+	if last := &nl.networks[nl.curNet()]; last.implicit && last.stmts == 0 {
+		*last = n
+		return nil
+	}
+	nl.networks = append(nl.networks, n)
 	return nil
 }
 
@@ -365,11 +475,12 @@ func (p *netParser) primary() (expr, error) {
 	// them as function heads when followed by '('.
 	if op := opKeyword(p.peek()); op != "" {
 		p.next()
-		args, err := p.posArgs()
+		c, err := p.callArgs(op)
 		if err != nil {
 			return nil, err
 		}
-		return callExpr{exprPos: p.span(at), fn: op, args: args}, nil
+		c.exprPos = p.span(at)
+		return c, nil
 	}
 	switch t := p.peek(); t.Type {
 	case st.TokenNumber, st.TokenBasedNumber, st.TokenString, st.TokenTimeLiteral, st.TokenTypedLiteral:
@@ -394,11 +505,12 @@ func (p *netParser) primary() (expr, error) {
 		name := p.next().Literal
 		switch p.peek().Type {
 		case st.TokenLParen: // function/operator block call
-			args, err := p.posArgs()
+			c, err := p.callArgs(strings.ToUpper(name))
 			if err != nil {
 				return nil, err
 			}
-			return callExpr{exprPos: p.span(at), fn: strings.ToUpper(name), args: args}, nil
+			c.exprPos = p.span(at)
+			return c, nil
 		case st.TokenLBracket: // array element (and any trailing members)
 			text, err := p.accessorChain(name)
 			if err != nil {
@@ -487,22 +599,77 @@ func (p *netParser) indexText() (string, error) {
 	return "", p.posErr(fmt.Sprintf("expected a number or tag as the index, got %q (compute indexes on a named wire first)", p.peek().Literal))
 }
 
-// posArgs parses positional block args "(a, b, ...)".
-func (p *netParser) posArgs() ([]expr, error) {
+// callArgs parses a block's argument list: positional "(a, b, ...)" or
+// formal "(MN := a, IN := b, ...)", either one plus EN := expr and
+// ENO => target (execution control, any position).
+func (p *netParser) callArgs(fn string) (callExpr, error) {
+	c := callExpr{fn: fn}
 	p.next() // '('
-	var args []expr
+	c.open = exprPos{line: p.lastEndLine, col: p.lastEndCol}
+	positional := 0
 	for !p.at(st.TokenRParen) {
-		e, err := p.expr()
-		if err != nil {
-			return nil, err
+		if p.at(st.TokenEOF) {
+			return c, p.posErr(fmt.Sprintf("%s: expected ')'", fn))
 		}
-		args = append(args, e)
-		if p.at(st.TokenComma) {
+		head := p.here()
+		if p.at(st.TokenIdent) && p.pos+1 < len(p.toks) &&
+			(p.toks[p.pos+1].Type == st.TokenAssign || p.toks[p.pos+1].Type == st.TokenOutputAssign) {
+			pinTok := p.next()
+			pin := pinTok.Literal
+			head.endLine, head.endCol = head.line, head.col+len(pin)
+			isOut := p.next().Type == st.TokenOutputAssign
+			e, err := p.expr()
+			if err != nil {
+				return c, err
+			}
+			switch {
+			case isOut && strings.EqualFold(pin, "ENO"):
+				switch e.(type) {
+				case refExpr, accExpr, pinExpr:
+				default:
+					return c, &ParseError{Line: head.line, Col: head.col, Msg: fmt.Sprintf("%s: ENO => needs a variable to write", fn)}
+				}
+				if c.eno != nil {
+					return c, &ParseError{Line: head.line, Col: head.col, Msg: fmt.Sprintf("%s: ENO bound twice", fn)}
+				}
+				c.eno = e
+				pin = "ENO"
+			case isOut:
+				return c, &ParseError{Line: head.line, Col: head.col, Msg: fmt.Sprintf("%s has no output %q to bind (a function's result is its OUT wire; => binds ENO only)", fn, pin)}
+			case strings.EqualFold(pin, "EN"):
+				if c.en != nil {
+					return c, &ParseError{Line: head.line, Col: head.col, Msg: fmt.Sprintf("%s: EN given twice", fn)}
+				}
+				c.en = e
+				pin = "EN"
+			default:
+				c.args = append(c.args, e)
+				c.names = append(c.names, pin)
+			}
+			c.items = append(c.items, argItem{head: head, val: e, pin: pin})
+		} else {
+			e, err := p.expr()
+			if err != nil {
+				return c, err
+			}
+			c.args = append(c.args, e)
+			c.items = append(c.items, argItem{head: head, val: e})
+			positional++
+		}
+		switch {
+		case p.at(st.TokenComma):
 			p.next()
+		case !p.at(st.TokenRParen):
+			// Reported where the argument ended, not at the stray token: a
+			// half-typed call must not swallow the statement after it.
+			return c, &ParseError{Line: p.lastEndLine, Col: p.lastEndCol, Msg: fmt.Sprintf("%s: expected ',' or ')' after an argument", fn)}
 		}
 	}
 	p.next() // ')'
-	return args, nil
+	if positional > 0 && len(c.names) > 0 {
+		return c, &ParseError{Line: c.open.line, Col: c.open.col, Msg: fmt.Sprintf("%s: give every input by name or none (a call is formal or positional, not both)", fn)}
+	}
+	return c, nil
 }
 
 // opKeyword returns the FBD block-function name for an operator that the ST

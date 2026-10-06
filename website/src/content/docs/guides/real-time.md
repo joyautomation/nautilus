@@ -159,7 +159,12 @@ reports are your before/after. `-cpu` and `-priority` place the fast task.
 A loop that must be tens of microseconds, cycle-exact, or must keep running
 through a Linux reboot is not a Nautilus task: it is a separate fast loop
 beside Nautilus — a Rust process on an isolated core, or a microcontroller
-owning the pins — exchanging a small set of tags with the supervisor. The
-repository's `rt/` directory holds the spikes and `docs/design/realtime.md`
-the measurements and the recommendation (fixed fast blocks configured from
-the manifest, not a second logic engine). That work is in progress.
+— that **owns its own I/O** (a fieldbus, a serial line such as Modbus RTU
+to fill heads, pins counting a flowmeter) and takes only parameters and
+setpoints from Nautilus, handing results and faults back as tags. Nautilus
+stays the line controller: sequencing, recipes, counts, alarms, the HMI.
+The repository's `rt/` directory holds the spikes (timing and the tag
+exchange only, no real I/O yet) and `docs/design/realtime.md` the
+measurements and the recommendation: fixed fast blocks bound to that I/O
+and configured from the manifest, not a second logic engine. That work is
+in progress.

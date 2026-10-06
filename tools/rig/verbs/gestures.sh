@@ -343,7 +343,8 @@ fbd_zoom_to() {
 # transition has no name on the chart unless the text gives it one, so the
 # verbs name it by its ends, "From->To", and find it by geometry: the bar
 # between From's box and To's box, over To's column (a loop back is the ↩
-# chip whose title says "jumps to To").
+# chip whose title says "jumps to To"). Newer builds carry each transition's
+# ends as data-from/data-to, which sfc_trans_el prefers.
 
 sfc_step_el() { printf '[...doc.querySelectorAll("svg.chart g.step")].find(g => g.querySelector("text.stepname")?.textContent.trim() === %s)' "$(_q "$1")"; }
 
@@ -358,6 +359,15 @@ sfc_trans_el() {
   const Bg = step($(_q "$to")); const B = Bg?.querySelector("rect.box").getBoundingClientRect();
   if (!A || !B) return null;
   const bcx = B.left + B.width / 2, acx = A.left + A.width / 2;
+  const part = (t) => "$part" === "cond" ? t.querySelector("text.cond") : (t.querySelector("rect.barhit") || t.querySelector("rect.jumpbox"));
+  // By its ends first (data-from/data-to, on builds that carry them): FROM holds
+  // From and TO holds To — the plain From -> To one before a join or a
+  // divergence that merely includes them. Geometry is the fallback.
+  const ends = (t, k) => (t.dataset[k] ?? "").split(",").filter(Boolean);
+  const byEnds = [...doc.querySelectorAll("svg.chart g.trans[data-from]")]
+    .filter(t => ends(t, "from").includes($(_q "$from")) && ends(t, "to").includes($(_q "$to")))
+    .sort((x, y) => (ends(x, "from").length + ends(x, "to").length) - (ends(y, "from").length + ends(y, "to").length));
+  if (byEnds.length) return part(byEnds[0]);
   let best = null, bd = 1e9;
   for (const t of doc.querySelectorAll("svg.chart g.trans")) {
     const j = t.querySelector("g.jump");
@@ -379,7 +389,7 @@ sfc_trans_el() {
     if (d < bd) { bd = d; best = t; }
   }
   if (!best) return null;
-  return "$part" === "cond" ? best.querySelector("text.cond") : (best.querySelector("rect.barhit") || best.querySelector("rect.jumpbox"));
+  return part(best);
 })()
 JS
 }
@@ -559,14 +569,128 @@ sfc_rename_step() {
   assert_file_contains "$G_FILE" "STEP +$2\\b"
 }
 
+# _sfc_sel_js <step | From->To> — true when that step / transition is the
+# chart's selection.
+_sfc_sel_js() {
+  if [[ $1 == *'->'* ]]; then printf '!!(%s)?.closest("g.trans")?.classList.contains("selected")' "$(sfc_trans_el "$1")"
+  else printf '!!(%s)?.classList.contains("selected")' "$(sfc_step_el "$1")"; fi
+}
+_sfc_gf() { [[ $G_FILE == /* ]] && echo "$G_FILE" || echo "$PROJ/$G_FILE"; }
+_sfc_sel_now() { js '[...doc.querySelectorAll("svg.chart .selected")].map(g => g.dataset.id).join(",") || "nothing"' | tr -d '"'; }
+
+# sfc_keynav <step> <keys> <expect> — select <step>, press the arrow keys
+# (xdotool names, "Down Down Right"), and the selection must land on
+# <expect>: a step, or a From->To transition. The arrows walk the chart
+# along its flow (#76): ↓ step → its first transition → that transition's
+# leftmost target, ↑ back, ← → to the neighbouring step or alternative
+# branch. Walking writes nothing.
+sfc_keynav() {
+  local step=$1 keys=$2 want=$3 k before
+  G_WHAT="$keys from $step"
+  g_save; before=$(md5sum <"$(_sfc_gf)")
+  sfc_select_step "$step" || return 1
+  for k in $keys; do g_key "$k"; done
+  wait_js "$(_sfc_sel_js "$want")" 3 || { g_err "$keys from $step selected $(_sfc_sel_now), not $want"; return 1; }
+  g_save
+  [[ $(md5sum <"$(_sfc_gf)") == "$before" ]] || { g_err "walking the chart changed $G_FILE"; return 1; }
+}
+
+# sfc_name_transition <From->To> <name> — select the transition, F2, type
+# the name: TRANSITION <name> FROM …, drawn above its condition (#76).
+sfc_name_transition() {
+  G_WHAT="name $1 $2"
+  sfc_select_trans "$1" || return 1
+  g_key F2
+  float_edit "$2" || return 1
+  sfc_wait "[...doc.querySelectorAll('svg.chart text.tname')].some(t => t.textContent.trim() === $(_q "$2"))" || return 1
+  assert_file_contains "$G_FILE" "TRANSITION +$2 +FROM\\b"
+}
+
+# _sfc_trans_line <From->To> — the file line of that transition's header
+# (FROM and TO may be step-sets holding the names).
+_sfc_trans_line() {
+  local from=${1%%->*} to=${1##*->}
+  grep -nE "^ *TRANSITION\\b.*FROM +\\(?[A-Za-z0-9_, ]*\\b$from\\b[A-Za-z0-9_, ]*\\)? +TO +\\(?[A-Za-z0-9_, ]*\\b$to\\b" "$(_sfc_gf)" | head -1 | cut -d: -f1
+}
+
+# sfc_reorder_branch <From->To> <left|right> [key|button] — move an
+# alternative branch earlier (left: higher priority) or later among the
+# transitions sharing its source (#181): Alt+←/→, or the palette's
+# "◀ priority" / "priority ▶". Priority is file order, so the header line
+# must move that way; the transition stays selected for the next press.
+sfc_reorder_branch() {
+  local tr=$1 dir=$2 how=${3:-key} before after i
+  G_WHAT="reorder $tr $dir"
+  sfc_select_trans "$tr" || return 1
+  g_save; before=$(_sfc_trans_line "$tr")
+  [[ -n $before ]] || { g_err "no TRANSITION $tr in $G_FILE"; return 1; }
+  if [[ $how == key ]]; then g_key "alt+$([[ $dir == left ]] && echo Left || echo Right)"
+  else click_button "$([[ $dir == left ]] && echo '◀ priority' || echo 'priority ▶')" || return 1; fi
+  for i in 1 2 3 4 5 6; do
+    g_save; after=$(_sfc_trans_line "$tr")
+    [[ -n $after && $after != "$before" ]] && break
+  done
+  if [[ $dir == left ]]; then (( after < before )) || { g_err "$tr stayed at line $before (now ${after:-?}): not moved earlier"; return 1; }
+  else (( after > before )) || { g_err "$tr stayed at line $before (now ${after:-?}): not moved later"; return 1; }; fi
+  wait_js "$(_sfc_sel_js "$tr")" 5 || { g_err "after the move the selection is $(_sfc_sel_now), not $tr"; return 1; }
+}
+
+# sfc_assoc_el <step> <target> — <step>'s association row naming <target>.
+sfc_assoc_el() { printf '[...(%s)?.querySelectorAll("g.assocrow") ?? []].find(r => r.querySelector("text.assoctarget")?.textContent.startsWith(%s))' "$(sfc_step_el "$1")" "$(_q "$2")"; }
+
+# sfc_create_action <step> <action> <ST body> — <step> associates <action>,
+# which is no ACTION (nor variable) yet: double-click its row, the ST-body
+# editor opens, type the body, Ctrl+Enter — the ACTION block is written
+# (#182). (sfc_add_action <step> N <action> first.)
+sfc_create_action() {
+  local step=$1 act=$2 body=$3 first
+  G_WHAT="ACTION $act from $step"
+  dclick_el "$(sfc_assoc_el "$step" "$act")?.querySelector('text.assoctarget')" || { g_err "no association $act on $step"; return 1; }
+  wait_js 'doc.activeElement?.tagName === "TEXTAREA"' 5 || { g_err "double-click on $step's $act row opened $(js 'doc.activeElement?.tagName ?? "nothing"'), not the ST-body editor"; return 1; }
+  g_key ctrl+a; g_type "$body"; g_key ctrl+Return; sleep 1
+  assert_file_contains "$G_FILE" "^ *ACTION +$act *:" || return 1
+  first=$(head -1 <<<"$body" | sed 's/[][\.*^$()+?{}|]/\\&/g')
+  assert_file_contains "$G_FILE" "$first"
+}
+
+# sfc_declare <name> <type> [ext|local|const] [init] — the chart's "vars"
+# panel (shared with FBD/LD): the section toggle cycles ext → local → const
+# (VAR CONSTANT, #180), then name, type, initial value, Enter. The panel
+# stays open.
+sfc_declare() {
+  local name=$1 typ=$2 sec=${3:-ext} init=${4:-} i re
+  G_WHAT="declare $name ($sec)"
+  js_true 'doc.querySelector(".addrow")' || click_button vars || return 1
+  wait_js 'doc.querySelector(".addrow input.grow")' 4 || { g_err "the vars panel did not open"; return 1; }
+  for i in 1 2 3; do
+    [[ $(js 'doc.querySelector(".addrow button.toggle")?.textContent.trim()' | tr -d '"') == "$sec" ]] && break
+    click_el 'doc.querySelector(".addrow button.toggle")' || return 1
+  done
+  [[ $(js 'doc.querySelector(".addrow button.toggle")?.textContent.trim()' | tr -d '"') == "$sec" ]] || { g_err "the section toggle has no $sec"; return 1; }
+  click_el 'doc.querySelector(".addrow input.grow")' || return 1
+  g_key ctrl+a; g_type "$name"
+  click_el 'doc.querySelector(".addrow .typefield input")' || return 1
+  g_key ctrl+a; g_type "$typ"; g_key Escape; sleep 0.3
+  if [[ -n $init ]]; then
+    click_el 'doc.querySelector(".addrow input.initfield")' || { g_err "the vars panel has no initial-value field"; return 1; }
+    g_key ctrl+a; g_type "$init"
+  fi
+  click_el 'doc.querySelector(".addrow button.add")' || return 1
+  sleep 1.5
+  re=$(printf '%s' "$typ${init:+ := $init}" | sed 's/[][\.*^$()+?{}|]/\\&/g')
+  assert_file_contains "$G_FILE" "^ *$name *: *$re *;" || return 1
+  [[ $sec != const ]] || assert_file_contains "$G_FILE" "^ *VAR +CONSTANT *$"
+}
+
 # ── Ladder ──────────────────────────────────────────────────────────────────
 # LadderView.svelte: one <svg class="rsvg"> per rung, its name in
 # <tspan class="rungname"> (plus a <title> child — read the text nodes
 # only); elements are <g class="node"> with the tag in <text
 # class="operand"> (a function block's operand is its instance name). Kind
 # by shape: a coil draws <path class="post"> arcs, a contact <line
-# class="post"> bars, an FB a <rect class="fbbox">, a function contact a
-# <text class="fntext">. Insert points are <g class="spot" data-spot=JSON>.
+# class="post"> bars, an edge contact (+Tag / -Tag) the same bars around a
+# <text class="edgemark"> P or N, an FB a <rect class="fbbox">, a function
+# contact a <text class="fntext">. Insert points are <g class="spot" data-spot=JSON>.
 #
 # Palette-click semantics (paletteClick): with a RUNG selected (its name
 # clicked) an item appends at the end of that rung's series (a coil: at the
@@ -575,7 +699,7 @@ sfc_rename_step() {
 
 _LD_JS='const rungName = (s) => [...s.querySelector("tspan.rungname").childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join("").trim();
 const rung = (n) => [...doc.querySelectorAll("svg.rsvg")].find(s => rungName(s) === n);
-const kind = (g) => g.querySelector("rect.fbbox") ? "fb" : g.querySelector("text.fntext") ? "fn" : g.querySelector("path.post") ? "coil" : "contact";
+const kind = (g) => g.querySelector("rect.fbbox") ? "fb" : g.querySelector("text.fntext") ? "fn" : g.querySelector("path.post") ? "coil" : g.querySelector("text.edgemark") ? "edge" : "contact";
 const operand = (g) => (g.querySelector("text.operand")?.textContent ?? g.querySelector("text.fntext")?.textContent ?? "").trim();'
 
 ld_rung_el() { printf '(() => { %s return rung(%s); })()' "$_LD_JS" "$(_q "$1")"; }
@@ -1095,6 +1219,30 @@ fbd_add_comment() {
   _fbd_palette "comment" "text=$1" || return 1
   fbd_wait "[...doc.querySelectorAll('.svelte-flow__node')].some(n => n.dataset.id.startsWith('cm:') && n.textContent.includes($(_q "$1")))" || return 1
   assert_file_contains "$G_FILE" "// *$(printf '%s' "$1" | sed 's/[][\.*^$()+?{}|]/\\&/g')"
+}
+
+# fbd_add_network <title> — the palette's "network": a `NETWORK 'title'`
+# line at the end of the body (#207); the statements added after it are
+# that network's. Read back: the band draws with the title, the line is in
+# the file.
+fbd_add_network() {
+  G_WHAT="network $1"
+  _fbd_palette "network" "title=$1" || return 1
+  fbd_wait "[...doc.querySelectorAll('[data-kind=\"network\"] .ntitle')].some(t => t.textContent.trim() === $(_q "$1"))" || return 1
+  assert_file_contains "$G_FILE" "^ *NETWORK *'$(printf '%s' "$1" | sed 's/[][\.*^$()+?{}|]/\\&/g')'"
+}
+
+# fbd_eno_pins <node> — the EN/ENO pin gesture (#206): click the block's EN
+# toggle; its EN and ENO pins draw (open until wired). View state only — the
+# file does not change.
+fbd_eno_pins() {
+  local el; el=$(fbd_node_el "$1")
+  G_WHAT="EN/ENO pins on $1"
+  js_true "$el" || { g_err "no FBD node $1"; return 1; }
+  click_el "($el)?.querySelector('.eno-toggle')" || { g_err "no EN toggle on $1 (nautilus too old?)"; return 1; }
+  sleep 0.5
+  js_true "($el)?.querySelector('.svelte-flow__handle.target[data-handleid=\"EN\"]') && ($el)?.querySelector('.svelte-flow__handle.source[data-handleid=\"ENO\"]')" \
+    || { g_err "EN/ENO pins did not draw on $1"; return 1; }
 }
 
 # fbd_add_function <FUNCTION> <name> [inputs] — "block → wire" for ANY
@@ -1706,6 +1854,221 @@ ld_edit_fb_args() {
   float_edit "$args" || return 1
   sleep 0.5
   ld_assert_rung "$rung" "$inst *: *[A-Za-z_]+ *\\( *$(printf '%s' "$args" | sed 's/[][\.*^$()|+?{}]/\\&/g')"
+}
+
+# ── Ladder: Studio 5000 habits (the logix-shaped build's verbs) ─────────────
+# Lifted from tools/rig/builds/logix-shaped/build.sh (its lx_* verbs) once
+# the gestures they probe existed: edge contacts (#212/#213), a block's pins
+# (#214), rung copy (#217), the declare offer's type (#219), and the
+# variables panel's instances and Escape (#220). Same contract as the verbs
+# above: save, then read the file back.
+
+# ld_delete_rung <rung> — click the rung's name (selects the whole rung),
+# Del.
+ld_delete_rung() {
+  local rung=$1
+  G_WHAT="delete rung $rung"
+  ld_select_rung "$rung" || return 1
+  g_key Delete
+  ld_wait "!($(ld_rung_el "$rung"))" || return 1
+  g_save
+  ! grep -Eq "^ *RUNG +$rung\\b" "$PROJ/$G_FILE" || { g_err "RUNG $rung is still in $G_FILE"; return 1; }
+}
+
+# ld_rung_comment <rung> <text> — double-click the rung's "(* … *)" slot,
+# type the comment.
+ld_rung_comment() {
+  local rung=$1 text=$2
+  G_WHAT="comment on $rung"
+  dclick_el "doc.querySelector('tspan.rungcomment[data-id=\"rungcomment:$rung\"]')" || { g_err "no comment slot on $rung"; return 1; }
+  float_edit "$text" || return 1
+  assert_file_contains "$G_FILE" "^ *RUNG +$rung *\\(\\* *$(sed 's/[][\\.*^$()|+?{}]/\\&/g' <<<"$text") *\\*\\)"
+}
+
+# _ld_vars_open — the diagram bar's "vars" button (the variables panel).
+_ld_vars_open() {
+  js_true 'doc.querySelector(".addrow")' && return 0
+  click_button vars || return 1
+  wait_js 'doc.querySelector(".addrow")' 4 || { g_err "the variables panel did not open"; return 1; }
+}
+# _ld_vars_close — Escape (vscode-iec newer than 0.13.2), else a click on
+# the bar (any click outside the panel closes it).
+_ld_vars_close() {
+  js_true 'doc.querySelector(".addrow")' || return 0
+  g_key Escape
+  wait_js '!doc.querySelector(".addrow")' 2 && return 0
+  click_el 'doc.querySelector(".bar")' 0.3 0.5
+  wait_js '!doc.querySelector(".addrow")' 3 || { g_err "the variables panel did not close"; return 1; }
+}
+# _ld_vars_row <name> [pou] — the panel row of a declaration (JS).
+_ld_vars_row() {
+  printf '[...doc.querySelectorAll(".rows .row")].find(r => r.dataset.id === %s && (%s === "" || r.dataset.pou === %s))' "$(_q "$1")" "$(_q "${2:-}")" "$(_q "${2:-}")"
+}
+
+# ld_vars_delete <name> [pou] — the variables panel's × on <name>'s row (a
+# FUNCTION_BLOCK's, with [pou]).
+ld_vars_delete() {
+  local name=$1 pou=${2:-} row
+  G_WHAT="delete the declaration of $name"
+  _ld_vars_open || return 1
+  row=$(_ld_vars_row "$name" "$pou")
+  click_el "($row)?.querySelector('button.del')" || { g_err "no $name row in the variables panel"; return 1; }
+  wait_js "!($row)" 6 || { g_err "$name is still listed"; return 1; }
+  _ld_vars_close || return 1
+  g_save
+  ! grep -Eq "^ *$name *:" "$PROJ/$G_FILE" || { g_err "$name is still declared in $G_FILE"; return 1; }
+}
+
+# ld_vars_declare <name> <type> [section, default VAR_EXTERNAL] [pou] — the
+# variables panel's footer row: the scope (a FUNCTION_BLOCK's, when the
+# file has more than one), the section badge clicked round to <section>
+# (a program: ext / local; a block: in / out / in/out / local), name, type,
+# +. In a file whose only POU is a block, its pins are the panel's scope.
+ld_vars_declare() {
+  local name=$1 type=$2 section=${3:-VAR_EXTERNAL} pou=${4:-} i cur
+  G_WHAT="declare $name : $type in ${pou:+$pou }$section"
+  _ld_vars_open || return 1
+  if [[ -n $pou ]] && js_true 'doc.querySelector(".addrow select.scopesel")'; then
+    js "(() => { const s = doc.querySelector('.addrow select.scopesel'); const i = [...s.options].findIndex(o => o.textContent.trim() === $(_q "$pou")); if (i < 0) return false; s.selectedIndex = i; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()" >/dev/null
+  fi
+  for ((i = 0; i < 6; i++)); do
+    cur=$(js 'doc.querySelector(".addrow button.badge")?.dataset.section ?? (doc.querySelector(".addrow button.badge")?.textContent.trim() === "local" ? "VAR" : "VAR_EXTERNAL")' | tr -d '"')
+    [[ $cur == "$section" ]] && break
+    click_el 'doc.querySelector(".addrow button.badge")' || return 1
+  done
+  [[ $cur == "$section" ]] || { g_err "the panel's section badge never reached $section (at $cur)"; return 1; }
+  click_el 'doc.querySelector(".addrow input.nx-input.grow")' || return 1
+  g_key ctrl+a; g_type "$name"
+  click_el 'doc.querySelector(".addrow .typefield input")' || return 1
+  g_key ctrl+a; g_type "$type"
+  g_key Escape   # dismiss the type suggestions (the first Escape stops there)
+  click_el 'doc.querySelector(".addrow button.add")' || return 1
+  wait_js "$(_ld_vars_row "$name" "$pou")" 6 || { g_err "$name never appeared in the panel"; return 1; }
+  _ld_vars_close || return 1
+  assert_file_contains "$G_FILE" "^ *$name *: *$type *;"
+}
+
+# ld_vars_rename <old> <new> [pou] — double-click the name in the variables
+# panel, type the new one: the declaration and every reference follow (a
+# block's pin: its callers' named bindings in the file too).
+ld_vars_rename() {
+  local old=$1 new=$2 pou=${3:-}
+  G_WHAT="rename $old to $new"
+  _ld_vars_open || return 1
+  dclick_el "($(_ld_vars_row "$old" "$pou"))?.querySelector('.name')" || { g_err "no $old row in the variables panel"; return 1; }
+  float_edit "$new" || return 1
+  wait_js "$(_ld_vars_row "$new" "$pou")" 6 || { g_err "$new never appeared in the panel"; return 1; }
+  _ld_vars_close || return 1
+  assert_file_contains "$G_FILE" "^ *$new *: *[A-Za-z_]+ *;" || return 1
+  if grep -Eq "(^|[^A-Za-z0-9_.#])$old([^A-Za-z0-9_]|$)" <(sed 's/(\*.*\*)//g; s://.*$::' "$PROJ/$G_FILE" | grep -v '^ *RUNG'); then
+    g_err "$old is still referenced after the rename"; return 1
+  fi
+}
+
+# ld_vars_lists_instance <inst> [type] — is the block instance a rung
+# declares by its call listed in the variables panel (read-only, `inst :
+# TYPE`)? Leaves the panel open for the row's PNG.
+ld_vars_lists_instance() {
+  local inst=$1 type=${2:-} row
+  _ld_vars_open || return 1
+  row="[...doc.querySelectorAll('.rows .row')].find(r => r.dataset.id === $(_q "$inst") && r.dataset.section === 'instance')"
+  js_true "$row" || { g_err "the variables panel ($(js 'doc.querySelectorAll(".rows .row").length') rows) does not list instance $inst"; return 1; }
+  [[ -z $type ]] || js_true "($row).querySelector('.type')?.textContent.includes($(_q "$type"))" || { g_err "$inst is not listed as $type"; return 1; }
+}
+
+# ld_vars_escape_closes — Escape closes the open variables panel.
+ld_vars_escape_closes() {
+  _ld_vars_open || return 1
+  g_key Escape; sleep 0.6
+  js_true '!doc.querySelector(".addrow")' && return 0
+  click_el 'doc.querySelector(".bar")' 0.3 0.5
+  g_err "Escape left the variables panel open"; return 1
+}
+
+# ld_declare_offer_type <name> <type> [section, default VAR_EXTERNAL] —
+# open the amber declare offer and read the type its <section> button
+# offers <name>. Leaves the offer open (ld_declare can click it next).
+ld_declare_offer_type() {
+  local name=$1 type=$2 section=${3:-VAR_EXTERNAL} btn got
+  btn="[...doc.querySelectorAll('.declpop button.declbtn')].find(b => b.dataset.name === $(_q "$name") && b.dataset.section === $(_q "$section"))"
+  js_true "$btn" || click_el 'doc.querySelector(".palette button.declare")' || { g_err "no declare offer in the palette"; return 1; }
+  wait_js "$btn" 3 || { g_err "the declare offer has no $section row for $name"; return 1; }
+  got=$(js "($btn).textContent.trim()" | tr -d '"')
+  [[ $got == *": $type" ]] || { g_err "the declare offer for $name reads '$got', not ': $type'"; return 1; }
+}
+
+# ld_add_edge <rung> <tag> [P|N] — the palette's ⊣P⊢ / ⊣N⊢ (rising /
+# falling edge, the ONS habit) appended to the rung, its "_" retagged.
+ld_add_edge() {
+  local rung=$1 tag=$2 mode=${3:-P} n0
+  G_WHAT="$mode edge $tag on $rung"
+  n0=$(ld_count "$rung" edge _)
+  ld_select_rung "$rung" || return 1
+  ld_palette "⊣${mode}⊢" || return 1
+  ld_wait "(() => { $_LD_JS return [...(rung($(_q "$rung"))?.querySelectorAll('g.node') ?? [])].filter(g => kind(g) === 'edge' && operand(g) === '_').length > $n0; })()" || return 1
+  _ld_retag "$rung" edge "$tag" || return 1
+  ld_assert_rung "$rung" "(^|[ [|])[$([[ $mode == N ]] && echo - || echo +)]$tag\\b"
+}
+
+# ld_edge_retag <rung> <tag> [P|N] — the Logix ONS habit typed: double-click
+# the contact <tag> and type "+tag" (or "-tag"): it becomes an edge contact.
+ld_edge_retag() {
+  local rung=$1 tag=$2 mode=${3:-P} sign
+  sign=$([[ $mode == N ]] && echo - || echo +)
+  G_WHAT="$sign$tag on $rung"
+  dclick_el "$(ld_node_el "$rung" contact "$tag")" || { g_err "no contact $tag on $rung"; return 1; }
+  float_edit "$sign$tag" || return 1
+  ld_wait "$(ld_node_el "$rung" edge "$tag")" || return 1
+  ld_assert_rung "$rung" "(^|[ [|])[$sign]$tag\\b"
+}
+
+# ld_edge_drawn <rung> <tag> — the file has `+tag` / `-tag` on the rung,
+# and the diagram draws it: a P / N contact with the tag as its operand.
+ld_edge_drawn() {
+  local rung=$1 tag=$2
+  grep -Eq "(^| |\\[|\\|)[-+]$tag\b" <<<"$(ld_rung_text "$rung")" || { g_err "rung $rung has no +$tag / -$tag in the file"; return 1; }
+  js_true "$(ld_node_el "$rung" edge "$tag")" \
+    || { g_err "the file has an edge on $tag in $rung; the diagram draws no edge contact for it"; return 1; }
+}
+
+# ld_retag <rung> <kind> <old> <new> — double-click the element <old> (a
+# contact, edge or coil) and type <new>; its form (NC, edge, coil mode)
+# stays.
+ld_retag() {
+  local rung=$1 kind=$2 old=$3 new=$4
+  G_WHAT="retag $old to $new on $rung"
+  dclick_el "$(ld_node_el "$rung" "$kind" "$old")" || { g_err "no $kind $old on $rung"; return 1; }
+  float_edit "$new" || return 1
+  ld_wait "$(ld_node_el "$rung" "$kind" "$new")" || return 1
+  ld_assert_rung "$rung" "(^|[ [|/+(-])$new\\b"
+}
+
+# ld_copy_rung <rung> [below-rung] [expect-name] — the Studio 5000 habit:
+# select the rung (its name), Ctrl+C; select [below-rung] (default <rung>),
+# Ctrl+V. A copy lands right below it, named on from <rung> (m1 → m2), its
+# block instances renamed the same way. Sets G_RUNG to the new rung's name.
+ld_copy_rung() {
+  local rung=$1 below=${2:-$1} want=${3:-} n0 new names
+  G_WHAT="copy rung $rung below $below"
+  n0=$(js 'doc.querySelectorAll("svg.rsvg").length')
+  names=$(js "(() => { $_LD_JS return [...doc.querySelectorAll('svg.rsvg')].map(rungName); })()")
+  ld_select_rung "$rung" || return 1
+  g_key ctrl+c
+  ld_select_rung "$below" || return 1
+  g_key ctrl+v
+  ld_wait "doc.querySelectorAll('svg.rsvg').length > $n0" || { g_err "Ctrl+C / Ctrl+V on rung $rung added no rung"; return 1; }
+  new=$(js "(() => { $_LD_JS const all = [...doc.querySelectorAll('svg.rsvg')].map(rungName); return all[all.indexOf($(_q "$below")) + 1]; })()" | tr -d '"')
+  if [[ -z $new ]] || grep -q "\"$new\"" <<<"$names"; then g_err "no new rung right below $below (got '$new')"; return 1; fi
+  [[ -z $want || $new == "$want" ]] || { g_err "the copy is rung '$new', not '$want'"; return 1; }
+  G_RUNG=$new
+  g_save
+  local src cp
+  src=$(ld_rung_text "$rung" | sed -E 's/^ *RUNG +[A-Za-z0-9_]+ *(\(\*.*\*\))? *//')
+  cp=$(ld_rung_text "$new" | sed -E 's/^ *RUNG +[A-Za-z0-9_]+ *(\(\*.*\*\))? *//')
+  [[ -n $cp ]] || { g_err "rung $new is empty in $G_FILE"; return 1; }
+  # Same rung modulo block instance names (renamed on paste).
+  [[ $(sed -E 's/[A-Za-z_][A-Za-z0-9_]* *: *([A-Za-z_])/I:\1/g' <<<"$src") == $(sed -E 's/[A-Za-z_][A-Za-z0-9_]* *: *([A-Za-z_])/I:\1/g' <<<"$cp") ]] \
+    || { g_err "rung $new is '$cp', not a copy of $rung ('$src')"; return 1; }
 }
 
 # ── Mimic: bind at a point ──────────────────────────────────────────────────

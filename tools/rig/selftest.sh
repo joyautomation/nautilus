@@ -161,6 +161,19 @@ vt sfc_rename_step PASS sfc_rename_step Drain Empty
 # "+ join": Mix (the Start divergence's second leg) joins Fill->Empty's
 # FROM — a simultaneous convergence, FROM (Fill, Mix) TO Empty
 vt sfc_join_step PASS sfc_join_step "Fill->Empty" Mix
+# The keyboard (#76): ↓ from Start to its transition, ↓ to its leftmost
+# target; a transition named with F2, drawn above its condition
+vt sfc_keynav PASS sfc_keynav Start "Down Down" Fill
+vt sfc_name_transition PASS sfc_name_transition "Fill->Overflow" T_overflow
+# Overflow was branched last, so it has the lowest priority: Alt+← gives it
+# the highest (#181), and the palette button takes it back
+vt sfc_reorder_branch PASS sfc_reorder_branch "Fill->Overflow" left
+vt sfc_reorder_branch-button PASS sfc_reorder_branch "Fill->Overflow" right button
+# An association to an action that does not exist yet, then its body (#182)
+vt sfc_add_action-new PASS sfc_add_action Mix N MixCtl
+vt sfc_create_action PASS sfc_create_action Mix MixCtl "PumpRun := TRUE;"
+# The vars panel's CONSTANT section, with its value (#180)
+vt sfc_declare-const PASS sfc_declare tMaxMix TIME const T#30S
 
 # ── Ladder: a new rung on the Demo's interlocks.ld ──────────────────────────
 vt ed_open_diagram-ld PASS ed_open_diagram interlocks.ld
@@ -185,6 +198,29 @@ vt ld_delete_last_coil PASS ld_delete_last_coil starter
 vt ld_move_element PASS ld_move_element pump_run LevelPct horn HornAck
 vt ld_move_element-same PASS ld_move_element horn LevelPct horn
 vt ld_move_element-coil PASS ld_move_element pump_run Horn ackclear
+# Studio 5000 habits (the logix-shaped build's verbs): an ONS typed as
+# +Tag, a falling edge from the palette, a CTU whose CV the declare offer
+# types INT, a rung copy (ons → ons2, c9 → c10) retagged and deleted, and
+# the variables panel: the rung-declared instance, Escape, declare /
+# rename / delete.
+vt ld_add_rung-ons PASS ld_add_rung ons
+vt ld_add_contact-ons PASS ld_add_contact ons HornAck
+vt ld_edge_retag PASS ld_edge_retag ons HornAck
+vt ld_edge_drawn PASS ld_edge_drawn ons HornAck
+vt ld_add_edge-N PASS ld_add_edge ons TempLowAlm N
+vt ld_add_block-CTU PASS ld_add_block ons CTU c9 "CV => AckCount"
+vt ld_declare_offer_type PASS ld_declare_offer_type AckCount INT VAR
+vt ld_declare-AckCount PASS ld_declare AckCount VAR
+vt ld_delete_last_coil-ons PASS ld_delete_last_coil ons
+vt ld_rung_comment PASS ld_rung_comment ons "count the acks"
+vt ld_copy_rung PASS ld_copy_rung ons ons ons2
+vt ld_retag-edge PASS ld_retag ons2 edge HornAck HiTempAlm
+vt ld_delete_rung PASS ld_delete_rung ons2
+vt ld_vars_lists_instance PASS ld_vars_lists_instance c9 CTU
+vt ld_vars_escape_closes PASS ld_vars_escape_closes
+vt ld_vars_declare PASS ld_vars_declare Spare INT VAR
+vt ld_vars_rename PASS ld_vars_rename Spare Spare2
+vt ld_vars_delete PASS ld_vars_delete Spare2
 
 # ── FBD: the Demo's program.fbd ─────────────────────────────────────────────
 vt ed_open_diagram-fbd PASS ed_open_diagram program.fbd

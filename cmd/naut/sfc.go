@@ -37,7 +37,8 @@ Usage:
                               end-exclusive spans). Ops address render-model
                               ids (st:/tr:/ac:): addStep, deleteStep,
                               renameStep, addTransition, deleteTransition,
-                              setCondition, setTransitionEnds, addAssoc,
+                              setCondition, setTransitionEnds,
+                              renameTransition, moveTransition, addAssoc,
                               setAssoc, deleteAssoc, setActionBody,
                               insertAlternativeBranch,
                               insertSimultaneousBranch,

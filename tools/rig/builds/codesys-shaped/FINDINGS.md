@@ -118,13 +118,18 @@ association order (#14).
     the habits table). Each was retyped in place by double-click
     (`sfc_edit_action`, PASS). **docs** · `lang/sfc` check, `sfc.mdx` "Not
     supported" · rows `habit-D/SD/L-qualifier` ·
-    [#184](https://github.com/joyautomation/nautilus/issues/184)
+    [#184](https://github.com/joyautomation/nautilus/issues/184) ·
+    **fixed (#235):** the qualifiers compile; an unknown one's error lists
+    the full set and the `Step.T` recipe. Rows now PASS;
+    `chart-shows-timed-qualifier-error` became `chart-explains-timed-assoc`.
 13. **2026-10-05 · the same D association, with `ACTION Dose` assigning
     `Detergent`.** The step marker adds `the association wins on its one
     pulse scan (and writes FALSE the scan after)` — semantics for a
     qualifier that has none here. **papercut** · `lang/sfc` association vs
     ACTION warning ·
-    [#185](https://github.com/joyautomation/nautilus/issues/185)
+    [#185](https://github.com/joyautomation/nautilus/issues/185) ·
+    **fixed (#235):** `… the association wins once Fill has been active
+    T#3S, until it deactivates …` (row `chart-explains-timed-assoc`).
 14. **2026-10-05 · 25 associations through "+ action" (the row under each
     step's table), in the reference's order.** Expected: each appended.
     Happened: each inserted FIRST — every step's list is reversed against
@@ -147,7 +152,9 @@ association order (#14).
     own textual form"), or an error that shows `D Detergent(T#3S);`.
     Happened: `expected an action or variable name after qualifier
     "Detergent"`. **docs** · `lang/sfc` parser, `sfc.mdx` · CLI-verified ·
-    [#189](https://github.com/joyautomation/nautilus/issues/189)
+    [#189](https://github.com/joyautomation/nautilus/issues/189) ·
+    **fixed (#235):** accepted as the same association (row
+    `habit-iec-assoc-form`, CLI).
 
 Seen again, not refiled: the zoom controls sit over the leftmost column
 (Aborted / Heat, PNGs 36-38 — ex01 SFC 14); the fitted chart (39 %) is
@@ -165,14 +172,14 @@ plain declarations. `naut check` stayed clean through every one of them.
 
 | habit | Nautilus | what the user does instead | status |
 |---|---|---|---|
-| timed qualifiers `L` `D` `SD` `DS` `SL` | rejected, clear error (#12) | `N` + an ACTION on `Step.T`: D → `X := S.X AND S.T >= t;` (the final scan closes it), L → `X := S.X AND S.T < t;`, a step watchdog → see supervision | OPEN gap [#190](https://github.com/joyautomation/nautilus/issues/190) |
-| SFCError / step maximum time | none | an ACTION `Supervise` (N on each supervised step) sets `FaultCode` from `Step.T`, an abort transition per supervised step, `P1 RecordFault` on the abort step | OPEN gap [#191](https://github.com/joyautomation/nautilus/issues/191) |
+| timed qualifiers `L` `D` `SD` `DS` `SL` | rejected, clear error (#12) | `N` + an ACTION on `Step.T`: D → `X := S.X AND S.T >= t;` (the final scan closes it), L → `X := S.X AND S.T < t;`, a step watchdog → see supervision | FIXED (#235): all five compile; reference-timed/ uses D, SD, L [#190](https://github.com/joyautomation/nautilus/issues/190) |
+| SFCError / step maximum time | none | an ACTION `Supervise` (N on each supervised step) sets `FaultCode` from `Step.T`, an abort transition per supervised step, `P1 RecordFault` on the abort step | FIXED (#235): `STEP Fill (MAXTIME := T#60S, ERROR := FillOverrun):`, `Fill.ERR`, an alarm on the tag; reference-timed/ [#191](https://github.com/joyautomation/nautilus/issues/191) |
 | enumerated types (DUT) | not supported, opaque error (#4) | `VAR CONSTANT ST_IDLE : INT := 0; …` in the POU, an INT tag (`StateNo`), one ACTION associated from every step | documented (structured-text.mdx "Not supported"); the error is #178 |
 | GVL, GVL constants | tags in `nautilus.yaml` / `tag-files:`, `VAR_EXTERNAL` per POU; no global constants (#1–#3) | `tags/washer.yaml` with `init:`; `VAR CONSTANT` per POU | #175, #176, #177 |
 | numeric transition priority | declaration order, drawn left to right | declare the abort first — and, since "+ alt branch" appends last, move it by text (#7) | declined by design (docs/design/sfc.md §7); the reorder gap is #181 |
 | transition condition in LD/FBD | ST expression only | write it in ST; a complex one becomes a BOOL computed in an ACTION or another task | declined (test plan §6.4 "—") |
 | keyboard navigation of the chart | none (#8) | the pointer | OPEN #76 |
-| online force of a step / transition, set active step | Set Live Value writes tags only; a step is a program-local slot (`main.Fill`), readable by `naut test`, not writable from the IDE or the API | drive the transition's inputs with Set Live Value, or add a commissioning tag to the condition. Not exercised in the rig: read from `server/server.go` and docs/testing.md | OPEN gap [#192](https://github.com/joyautomation/nautilus/issues/192) |
+| online force of a step / transition, set active step | Set Live Value writes tags only; a step is a program-local slot (`main.Fill`), readable by `naut test`, not writable from the IDE or the API | drive the transition's inputs with Set Live Value, or add a commissioning tag to the condition. Not exercised in the rig: read from `server/server.go` and docs/testing.md | FIXED [#192](https://github.com/joyautomation/nautilus/issues/192) — PR #234: Set Active Step / Fire Transition from the chart, POST /api/sfc/step and /api/sfc/transition; rig smoke 18 e |
 | GVL browsing (online) | the Live Values view and inline pills; the chart's vars panel (header only) | open Live Values, or hover; `tags/*.yaml` has schema completion, no grid | equivalent exists (test plan §6.5 ◐) |
 | library manager (versioned references) | `lib/` and root library files compose into every task | copy `lib/*.st` between projects (or a git submodule) | OPEN gap [#193](https://github.com/joyautomation/nautilus/issues/193) |
 | Add Object → POU | no "new program" command (#5) | create the file, open as diagram, "initialize" | #179 |
@@ -204,3 +211,12 @@ plain declarations. `naut check` stayed clean through every one of them.
 
 17–20 are the habits-table rows that are open gaps rather than deliberate
 declines.
+
+**SFC editor parity (PR #233):** findings 5 (an empty `.sfc` is one
+`naut check` warning; no "new POU" command yet), 6, 7, 8, 9, 11, 14 and 15
+are fixed; their build rows (`check-empty-sfc`, `habit-vars-constant`,
+`sfc-join-drawn-as-convergence`, `habit-abort-priority` — now after
+`sfc_reorder_branch`, with the text move gone — `habit-keyboard-nav`,
+`habit-transition-name`, `habit-create-action-body`, `check-action-gap`,
+`habit-assoc-time-syntax`, `habit-assoc-typed-order`) expect PASS, and
+`ACTION HeatCtl` is written by gesture (`sfc_create_action`).

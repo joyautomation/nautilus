@@ -32,6 +32,11 @@ program the binary embeds, so **committing the program to git is the only way
 an edit becomes permanent**. The rule of thumb falls out of the two planes:
 logic you want to tune online, write in IEC; infrastructure, write in Go.
 
+Tag values are the other half of the hot plane: **Set Live Value** writes a
+tag once, and a **force** holds one against the field and the logic until it
+is removed — see [Forcing](/guides/forcing/), which also covers jumping a
+running SFC chart to a step.
+
 ## Pulling field edits back
 
 Pulling a field edit back to git closes the loop. **Pull Program from

@@ -665,3 +665,13 @@ END_PROGRAM
 		t.Fatalf("calling a library block should analyse clean: %v", a.Diags)
 	}
 }
+
+// #179: an empty .sfc carries one clear warning, not a parse error.
+func TestAnalyzeSFCEmptyChartIsOneWarning(t *testing.T) {
+	for _, src := range []string{"", "\n  \n"} {
+		a := analyzeSFC(src, "", 0)
+		if len(a.Diags) != 1 || a.Diags[0].Severity != SeverityWarning || !strings.Contains(a.Diags[0].Message, "initialize") {
+			t.Fatalf("analyzeSFC(%q) diags = %+v, want one warning naming initialize", src, a.Diags)
+		}
+	}
+}

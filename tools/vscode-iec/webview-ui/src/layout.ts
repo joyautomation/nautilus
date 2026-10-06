@@ -18,8 +18,19 @@ export type FbdNode = {
   x?: number;
   y?: number;
   ghost?: boolean;
+  /** The network this element belongs to (1-based; absent without NETWORK lines). */
+  net?: number;
+  /** A statement's execution order within its network (FB calls, coils). */
+  exec?: number;
+  /** EN/ENO pins drawn by the pin gesture but not bound in the text yet. */
+  openEn?: boolean;
+  openEno?: boolean;
   status?: 'added' | 'removed' | 'changed' | 'same';
 };
+/** One numbered network of the body (lang/fbd Model.Networks). */
+export type FbdNetwork = { number: number; title?: string; line?: number; implicit?: boolean };
+/** A network's band on the canvas: header + the region its logic occupies. */
+export type NetFrame = FbdNetwork & { id: string; x: number; y: number; w: number; h: number };
 export type FbdEdge = {
   from: string;
   fromPin?: string;
@@ -38,6 +49,9 @@ export type VarDecl = {
 	init?: string;
 	section: string;
 	line: number;
+	/** The FUNCTION_BLOCK that declares it (a ladder file's blocks); absent
+	 * for the program's own. */
+	pou?: string;
 };
 export type FbdModel = {
   name: string;
@@ -47,6 +61,10 @@ export type FbdModel = {
   blank?: boolean;
   /** The palette's block catalog (lang/fbcatalog via `naut fbd graph`). */
   fbTypes?: FbCatalogType[];
+  /** The project's FUNCTIONs (lang/fbcatalog), for the function field. */
+  funcs?: FbCatalogType[];
+  /** Numbered networks, when the body declares any (NETWORK lines). */
+  networks?: FbdNetwork[];
 };
 
 /** Arrays always arrays: an older CLI (or saved webview state) can carry
@@ -79,6 +97,10 @@ const COL_GAP = 72;
 const ROW_GAP = 16;
 const PAD = 24;
 const BAND_GAP = 44;
+// A network band: its header strip, and the gap between two networks.
+export const NET_HEAD_H = 26;
+const NET_GAP = 28;
+const NET_EMPTY_H = 34;
 
 let meter: CanvasRenderingContext2D | null = null;
 function textW(s: string, px: number): number {
@@ -99,6 +121,7 @@ export function layout(model: FbdModel): {
   placed: Placed[];
   edges: FbdEdge[];
   laneIdx: Map<FbdEdge, number>;
+  frames: NetFrame[];
 } {
   // Pinned coordinates from the @layout block, captured before Placed
   // initializes x/y to zero for the auto pass.
@@ -183,12 +206,22 @@ export function layout(model: FbdModel): {
 
   // Assign each comment to the first band whose earliest source line
   // follows it — the note renders above that network, like in the text.
-  const minLine = bands.map((band) => Math.min(...band.map((n) => n.line ?? Infinity)));
+  // With numbered networks, a note only ever joins a band of its own
+  // network (it stays with the statements after it, #207).
+  const nets = model.networks ?? [];
+  // (With networks, a band's first line is its first statement's: a chip
+  // copied into another network keeps the line of the read it came from.)
+  const minLine = bands.map((band) => {
+    const own = nets.length ? band.filter((n) => n.kind !== 'input') : band;
+    return Math.min(...(own.length ? own : band).map((n) => n.line ?? Infinity));
+  });
+  const bandNet = bands.map((band) => band.find((n) => n.net)?.net ?? 1);
   const notesFor = new Map<number, Placed[]>();
   const trailing: Placed[] = [];
   for (const c of comments) {
     let best = -1;
     for (let bi = 0; bi < bands.length; bi++) {
+      if (nets.length && bandNet[bi] !== (c.net ?? 1)) continue;
       if (minLine[bi] >= (c.line ?? 0) && (best === -1 || minLine[bi] < minLine[best])) best = bi;
     }
     if (best === -1) trailing.push(c);
@@ -196,20 +229,41 @@ export function layout(model: FbdModel): {
   }
 
   let bandTop = PAD;
-  bands.forEach((band, bi) => {
+  const placeBand = (bi: number) => {
     for (const c of notesFor.get(bi) ?? []) {
       c.x = PAD;
       c.y = bandTop;
       bandTop += c.h + 10;
     }
-    const h = layoutBand(band, srcOf, dstOf, bandTop);
+    const h = layoutBand(bands[bi], srcOf, dstOf, bandTop);
     const lanes = fbCount.get(bi) ?? 0;
     bandTop += h + (lanes ? 14 + lanes * 10 : 0) + BAND_GAP;
-  });
-  for (const c of trailing) {
+  };
+  const placeNote = (c: Placed) => {
     c.x = PAD;
     c.y = bandTop;
     bandTop += c.h + 10;
+  };
+  const frames: NetFrame[] = [];
+  if (!nets.length) {
+    bands.forEach((_, bi) => placeBand(bi));
+    trailing.forEach(placeNote);
+  } else {
+    // Networks stack in order, each a framed band: a header strip (number,
+    // title), its notes and logic — network order IS execution order.
+    for (const nw of nets) {
+      const top = bandTop;
+      bandTop += NET_HEAD_H + 10;
+      const start = bandTop;
+      bands.forEach((_, bi) => bandNet[bi] === nw.number && placeBand(bi));
+      if (bandTop !== start) bandTop -= BAND_GAP - 12;
+      trailing.filter((c) => (c.net ?? 1) === nw.number).forEach(placeNote);
+      if (bandTop === start) bandTop += NET_EMPTY_H; // an empty network still shows
+      frames.push({ ...nw, id: 'n:' + nw.number, x: PAD - 14, y: top, w: 0, h: bandTop - top });
+      bandTop += NET_GAP;
+    }
+    // Anything of a network the list does not name (a stale model) still lands.
+    bands.forEach((_, bi) => !nets.some((nw) => nw.number === bandNet[bi]) && placeBand(bi));
   }
 
   // Pinned positions (the @layout block) override auto placement — dragged
@@ -239,7 +293,16 @@ export function layout(model: FbdModel): {
     laneOf.set(bi, lane + 1);
     laneIdx.set(e, lane);
   }
-  return { placed, edges, laneIdx };
+  if (frames.length) {
+    // One width for every band: the widest network's logic (auto-placed
+    // nodes only — a pinned node can sit anywhere).
+    const right = Math.max(
+      340,
+      ...placed.filter((n) => !pinned.has(n.id) && !n.ghost).map((n) => n.x + n.w + 14)
+    );
+    for (const f of frames) f.w = right - f.x;
+  }
+  return { placed, edges, laneIdx, frames };
 }
 
 function layoutBand(

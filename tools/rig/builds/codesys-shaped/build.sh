@@ -178,6 +178,10 @@ built, ref = open(p).read(), open(r).read()
 last_tr = list(re.finditer(r"END_TRANSITION\s*\n", ref))[-1].end()
 end = re.search(r"^END_SFC", ref, re.M).start()
 actions = ref[last_tr:end].strip("\n") + "\n\n"
+# an ACTION the chart already has (written by gesture) is not pasted again,
+# nor the comment block right above it
+for name in re.findall(r"^\s*ACTION\s+(\w+)\s*:", built, re.M):
+    actions = re.sub(r"(?:^[ \t]*\(\*(?:(?!\*\)).)*\*\)[ \t]*\n)*^[ \t]*ACTION %s:\n.*?END_ACTION[ \t]*\n\n?" % name, "", actions, flags=re.S | re.M)
 for s in stubs:
     actions, n = re.subn(r"(ACTION %s:\n).*?(  END_ACTION)" % s, r"\1    SpinMotor := FALSE;\n\2", actions, flags=re.S)
     if n != 1: sys.exit(f"no ACTION {s} in the reference")
@@ -235,7 +239,7 @@ sfc_try_assoc() {
   float_edit "$txt" || return 1
   sleep 1.5; g_save; after=$(md5sum <"$PROJ/washer.sfc")
   [[ $before != "$after" ]] && return 0
-  js_true '[...doc.querySelectorAll(".error, .toast, [role=alert]")].some(e => e.offsetParent)' && { g_err "not written; an error was shown"; return 1; }
+  js_true '[...doc.querySelectorAll(".error, .toast, [role=alert]")].some(e => e.getClientRects().length)' && { g_err "not written; an error was shown"; return 1; }
   g_err "typed '$txt' on $step: nothing written, nothing shown (the field silently drops text it cannot parse)"; return 1
 }
 
@@ -247,20 +251,28 @@ sfc_check_says() {
   grep -Eq -- "$2" <<<"$t" || { g_err "$1 shows no problem matching /$2/"; return 1; }
 }
 
-# habit_check <ERE> — naut check is expected to FAIL here (a habit); return 0
-# only if it is clean (XPASS). Prints the matching diagnostics.
+# habit_check <ERE> — naut check on the project as it stands: status is
+# naut's (0 = the habit is accepted). Prints the matching diagnostics.
 habit_check() {
   local out rc; out=$(cd "$PROJ" && naut check . 2>&1); rc=$?
   grep -E -- "$1" <<<"$out" | head -3
   (( rc == 0 ))
 }
 
-# sfc_keynav <step> — select a step, press Down: does the selection move?
-sfc_keynav() {
-  sfc_select_step "$1" || return 1
-  g_key Down; sleep 0.6
-  js_true "!($(sfc_step_el "$1")).classList.contains('selected') && !!doc.querySelector('svg.chart .selected')" \
-    || { g_err "Down with $1 selected: the selection stayed on $1 (no arrow-key navigation)"; return 1; }
+# iec_assoc_form <as written> <IEC form> — in a scratch copy of the project,
+# rewrite the association into IEC 61131-3's textual form; naut check must be
+# clean and naut sfc graph must read it as the same qualifier, target, time.
+iec_assoc_form() {
+  local tmp; tmp=$(mktemp -d)
+  cp -r "$PROJ/." "$tmp/"
+  grep -qF -- "$1" "$tmp/washer.sfc" || { g_err "washer.sfc has no '$1'"; rm -rf "$tmp"; return 1; }
+  sed -i "s/$(sed 's/[][\/.*^$]/\\&/g' <<<"$1")/$2/" "$tmp/washer.sfc"
+  grep -F -- "$2" "$tmp/washer.sfc" | sed 's/^ */written: /'
+  local rc=0
+  (cd "$tmp" && naut check .) | tail -1 || rc=1
+  (cd "$tmp" && naut check . >/dev/null 2>&1) || rc=1
+  naut sfc graph "$tmp/washer.sfc" | python3 -c 'import json,sys; m=json.load(sys.stdin); a=[x for s in m["steps"] for x in (s.get("actions") or []) if x["target"]=="Detergent"]; print("graph:", a); sys.exit(0 if any(x["qualifier"]=="D" and x.get("time")=="T#3S" for x in a) else 1)' || rc=1
+  rm -rf "$tmp"; return $rc
 }
 
 # sfc_transition_name_field — "+ transition" from <step>: does the form take
@@ -282,53 +294,22 @@ sfc_abort_first() {
   a=$(grep -nE 'FROM +Fill +TO +Aborted' "$PROJ/washer.sfc" | head -1 | cut -d: -f1)
   b=$(grep -nE 'FROM +Fill +TO +\(Heat, *Wash\)' "$PROJ/washer.sfc" | head -1 | cut -d: -f1)
   [[ -n $a && -n $b ]] || { g_err "missing transitions (abort line ${a:-?}, normal line ${b:-?})"; return 1; }
-  (( a < b )) || { g_err "Fill->Aborted (line $a) is declared AFTER Fill->(Heat, Wash) (line $b): the abort has the LOWEST priority, and no gesture reorders it"; return 1; }
-}
-
-# sfc_move_abort_first — the text fix for the above: move the abort
-# TRANSITION block above the normal one (the smallest non-gesture edit).
-sfc_move_abort_first() {
-  g_save
-  python3 - "$PROJ/washer.sfc" <<'PY' || return 1
-import re, sys
-p = sys.argv[1]; t = open(p).read()
-blk = lambda pat: re.search(r"^[ \t]*TRANSITION\b[^\n]*" + pat + r".*?END_TRANSITION[ \t]*\n", t, re.M | re.S)
-a, b = blk(r"FROM +Fill +TO +Aborted"), blk(r"FROM +Fill +TO +\(Heat, *Wash\)")
-if not a or not b: sys.exit("transitions not found")
-if a.start() > b.start():
-    abort = t[a.start():a.end()]
-    t = t[:a.start()] + t[a.end():]
-    t = t[:b.start()] + abort + t[b.start():]
-open(p, "w").write(t)
-PY
-  reload_diagram
-  sfc_abort_first
+  (( a < b )) || { g_err "Fill->Aborted (line $a) is declared AFTER Fill->(Heat, Wash) (line $b): the abort has the LOWEST priority (◀ priority / Alt+← reorders it)"; return 1; }
 }
 
 # sfc_vars_declare <name> <type> [ext|local] — the chart's "vars" panel
 # (shared with FBD/LD): section toggle, name, type, Enter.
-sfc_vars_declare() {
-  local name=$1 typ=$2 sec=${3:-ext} cur re
-  js_true 'doc.querySelector(".addrow")' || click_button vars || return 1
-  wait_js 'doc.querySelector(".addrow input.grow")' 4 || { g_err "the vars panel did not open"; return 1; }
-  cur=$(js 'doc.querySelector(".addrow button.toggle")?.textContent.trim()')
-  [[ ${cur//\"/} == "$sec" ]] || click_el 'doc.querySelector(".addrow button.toggle")' || return 1
-  click_el 'doc.querySelector(".addrow input.grow")' || return 1
-  g_key ctrl+a; g_type "$name"
-  click_el 'doc.querySelector(".addrow .typefield input")' || return 1
-  g_key ctrl+a; g_type "$typ"; g_key Escape; sleep 0.3
-  click_el 'doc.querySelector(".addrow button.add")' || return 1
-  sleep 1.5
-  re=$(printf '%s' "$typ" | sed 's/[][\.*^$()+?{}|]/\\&/g')
-  assert_file_contains washer.sfc "^ *$name *: *$re *;" || return 1
-}
+# (the shared verbs/gestures.sh sfc_declare: the toggle cycles ext → local →
+# const)
+sfc_vars_declare() { sfc_declare "$@"; }
 # vars_close — the panel toggles on its own button
 vars_close() { js_true 'doc.querySelector(".addrow")' && click_button vars; sleep 0.4; return 0; }
 # sfc_vars_declare_constant <name> <type> <init> — what a Codesys
-# programmer types for a constant: the panel has ext/local only and one
-# type field, so the init goes in after the type.
+# programmer declares: a constant with its value, in the panel's CONSTANT
+# section (const) and its init field (#180; the panel had ext/local and a
+# type only, FINDINGS #6).
 sfc_vars_declare_constant() {
-  local rc; sfc_vars_declare "$1" "$2 := $3" local; rc=$?
+  local rc; sfc_vars_declare "$1" "$2" const "$3"; rc=$?
   local note; note=$(page_text '[...document.querySelectorAll(".notification-list-item")].map(e => e.textContent).join(" | ")' 2>/dev/null)
   [[ -n $note && $note != null && $note != '""' ]] && echo "notification: $note"
   vars_close; return $rc
@@ -438,6 +419,8 @@ check_after library-fb
 # Codesys: Add Object → POU → SFC. Here: a new file (no "new POU" command),
 # the diagram's Empty-file banner, "initialize".
 : >"$PROJ/washer.sfc"
+# an empty chart no task names is one warning, not an error (#179)
+check_after empty-sfc
 row ed_open_diagram-washer PASS ed_open_diagram washer.sfc
 row sfc_init PASS sfc_init
 row sfc_rename_step-Start-Idle PASS sfc_rename_step Start Idle
@@ -453,7 +436,7 @@ row sfc_vars_declare-StartPB PASS sfc_vars_declare StartPB BOOL ext
 row sfc_vars_declare-LevelPct PASS sfc_vars_declare LevelPct REAL ext
 row sfc_vars_declare-drum PASS sfc_vars_declare drum FB_Reverser local
 vars_close
-row habit-vars-constant XFAIL sfc_vars_declare_constant tMaxFill TIME T#60S
+row habit-vars-constant PASS sfc_vars_declare_constant tMaxFill TIME T#60S
 row paste-sfc-header PASS sfc_paste_header
 # the chart becomes the main task; the template's program.st and its three
 # tags go
@@ -476,46 +459,55 @@ row sfc_add_transition-Wash-Drain PASS sfc_add_transition Wash Drain "Wash.T >= 
 row sfc_join_step-HeatDone PASS sfc_join_step "Wash->Drain" HeatDone
 row sfc_add_step-Spin PASS sfc_add_step Drain Spin "LevelPct <= 1.0"
 row sfc_add_transition-Spin-Idle PASS sfc_add_transition Spin Idle "Spin.T >= tSpin"
-row sfc-join-drawn-as-convergence XFAIL sfc_join_drawn
+row sfc-join-drawn-as-convergence PASS sfc_join_drawn
 check_after main-path
 # then the abort branch and the supervision exits
 row sfc_add_alt_branch-Fill-Aborted PASS sfc_add_alt_branch Fill Aborted "StopPB OR NOT DoorClosed OR FaultCode <> 0"
 row sfc_add_alt_branch-Drain-Aborted PASS sfc_add_alt_branch Drain Aborted "FaultCode <> 0"
 row sfc_add_transition-Aborted-Idle PASS sfc_add_transition Aborted Idle "ResetPB AND LevelPct <= 1.0"
 check_after branches
-# Priority: the abort must win over a full drum on the same scan.
-row habit-abort-priority XFAIL sfc_abort_first
-row paste-move-abort-first PASS sfc_move_abort_first
+# Priority: the abort must win over a full drum on the same scan. "+ alt
+# branch" lands last (lowest priority, as drawn rightmost); Alt+← moves it
+# ahead of the main path (#181) — the text paste is no longer needed.
+row sfc_reorder_branch-Fill-Aborted PASS sfc_reorder_branch "Fill->Aborted" left
+row habit-abort-priority PASS sfc_abort_first
 check_after priority
 
 # Habits on the chart itself
-row habit-keyboard-nav XFAIL sfc_keynav Fill
-row habit-transition-name XFAIL sfc_transition_name_field Fill
+row habit-keyboard-nav PASS sfc_keynav Fill Down "Fill->Aborted"
+row habit-transition-name PASS sfc_transition_name_field Fill
 
 # ── B06: actions ────────────────────────────────────────────────────────────
 # The ACTION-body gap (04-sfc): an association to a not-yet-existing ACTION,
 # then a double-click on it, hoping for a body editor.
 row sfc_add_action-Heat-HeatCtl PASS sfc_add_action Heat N HeatCtl
-row habit-create-action-body XFAIL sfc_body_editor_opens Heat HeatCtl
-check_after action-gap XFAIL
-# ...so the ACTION blocks are pasted (SpinCtl as a stub, typed below)
+row habit-create-action-body PASS sfc_body_editor_opens Heat HeatCtl
+# ...and the body typed there writes ACTION HeatCtl (#182)
+row sfc_create_action-HeatCtl PASS sfc_create_action Heat HeatCtl "Heater := Heat.X AND TempC < TempSP;"
+check_after action-gap
+# the other eight ACTION blocks are pasted (SpinCtl as a stub, typed below)
 row paste-sfc-actions PASS sfc_paste_actions SpinCtl
 check_after actions
 
-# Codesys qualifier syntax first: a time typed after the target, no parens
-row habit-assoc-time-syntax XFAIL sfc_try_assoc Fill "D Detergent T#3S"
-
 # every step's associations, in the reference's order; the timed qualifiers
-# a Codesys programmer types first are tried in place and retyped
+# a Codesys programmer types first are typed in place (they compile since
+# #190 — the habit rows PASS) and then retyped to the reference's Step.T
+# form, which the gesture build reproduces; reference-timed/ is the same
+# washer written with them, checked and tested at the end
 row sfc_add_action-Idle-R-DoorLock PASS sfc_add_action Idle R DoorLock
 row sfc_add_action-Idle-R-AlarmLamp PASS sfc_add_action Idle R AlarmLamp
 row sfc_add_action-Idle-N-TrackState PASS sfc_add_action Idle N TrackState
 row sfc_add_action-Fill-S-DoorLock PASS sfc_add_action Fill S DoorLock
 row sfc_add_action-Fill-N-FillValve PASS sfc_add_action Fill N FillValve
 row sfc_add_action-Fill-P1-CountCycle PASS sfc_add_action Fill P1 CountCycle
-row sfc_add_action-Fill-D-Detergent PASS sfc_add_action Fill D Detergent T#3S
-row habit-D-qualifier XFAIL habit_check 'timed qualifier'
-row chart-shows-timed-qualifier-error PASS sfc_check_says Fill 'timed qualifier|not implemented'
+# Codesys qualifier syntax: the time typed after the target, no parens (#183)
+row habit-assoc-time-syntax PASS sfc_try_assoc Fill "D Detergent T#3S"
+row habit-D-qualifier PASS habit_check 'Detergent|qualifier'
+# ACTION Dose (pasted) also assigns Detergent: the step's marker carries the
+# association-vs-ACTION warning, worded for D's window (#185)
+row chart-explains-timed-assoc PASS sfc_check_says Fill 'association \(D\).*once Fill has been active T#3S'
+# the same association in IEC 61131-3's textual form (#189), CLI
+row habit-iec-assoc-form PASS iec_assoc_form 'D Detergent(T#3S);' 'Detergent(D, T#3S);'
 row sfc_edit_action-Fill-N-Dose PASS sfc_edit_action Fill Detergent "N Dose"
 row sfc_add_action-Fill-N-Supervise PASS sfc_add_action Fill N Supervise
 row sfc_add_action-Fill-N-TrackState PASS sfc_add_action Fill N TrackState
@@ -525,11 +517,11 @@ row sfc_add_action-Wash-N-TrackState PASS sfc_add_action Wash N TrackState
 row sfc_add_action-HeatDone-N-TrackState PASS sfc_add_action HeatDone N TrackState
 row sfc_add_action-Drain-N-DrainPump PASS sfc_add_action Drain N DrainPump
 row sfc_add_action-Drain-SD-AlarmLamp PASS sfc_add_action Drain SD AlarmLamp T#45S
-row habit-SD-qualifier XFAIL habit_check 'timed qualifier'
+row habit-SD-qualifier PASS habit_check 'AlarmLamp|qualifier'
 row sfc_edit_action-Drain-N-Supervise PASS sfc_edit_action Drain AlarmLamp "N Supervise"
 row sfc_add_action-Drain-N-TrackState PASS sfc_add_action Drain N TrackState
 row sfc_add_action-Spin-L-SpinMotor PASS sfc_add_action Spin L SpinMotor T#10S
-row habit-L-qualifier XFAIL habit_check 'timed qualifier'
+row habit-L-qualifier PASS habit_check 'SpinMotor|qualifier'
 row sfc_edit_action-Spin-N-SpinCtl PASS sfc_edit_action Spin SpinMotor "N SpinCtl"
 row sfc_add_action-Spin-N-DrainPump PASS sfc_add_action Spin N DrainPump
 row sfc_add_action-Spin-N-TrackState PASS sfc_add_action Spin N TrackState
@@ -567,7 +559,18 @@ compare_order() {
   (cd "$HOME/build" && python3 sfc_compare.py --assoc-order "$PROJ/washer.sfc" "$REF/washer.sfc") | tee "$OUT_DIR/built/compare-order.txt"
   return "${PIPESTATUS[0]}"
 }
-row habit-assoc-typed-order XFAIL compare_order
+row habit-assoc-typed-order PASS compare_order
+
+# the washer as a Codesys programmer writes it first — D / SD / L and step
+# MAXTIME supervision with an overrun alarm (#190, #191) — checked and run
+reference_timed() {
+  local out rc
+  out=$(cd "$HOME/build/reference-timed" && naut "$1" . 2>&1); rc=$?
+  printf '%s\n' "$out" >"$OUT_DIR/built/reference-timed-$1.txt"
+  tail -1 <<<"$out"; return $rc
+}
+row reference-timed-check PASS reference_timed check
+row reference-timed-test PASS reference_timed test
 
 (cd "$PROJ" && naut check . >"$OUT_DIR/built/naut-check.txt" 2>&1)
 tar -C "$HOME" --exclude=.git -cf - washer | tar -C "$OUT_DIR/built" -xf -

@@ -63,6 +63,10 @@ func ApplyEdit(src string, op EditOp) ([]TextEdit, error) {
 		edits, err = opDeleteTransition(lines, m, op)
 	case "setCondition":
 		edits, err = opSetCondition(m, op)
+	case "renameTransition":
+		edits, err = opRenameTransition(lines, m, op)
+	case "moveTransition":
+		edits, err = opMoveTransition(lines, m, op)
 	case "setTransitionEnds":
 		edits, err = opSetTransitionEnds(m, op)
 	case "addAssoc":
@@ -152,12 +156,8 @@ func findAction(m *Model, id string) (*GAction, error) {
 // like hand-written source; untouched blocks are never reformatted.
 
 func printStep(s *GStep) string {
-	kw := "STEP"
-	if s.Initial {
-		kw = "INITIAL_STEP"
-	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "  %s %s:\n", kw, s.Name)
+	b.WriteString("  " + StepHeader(s, s.Name) + "\n")
 	for _, a := range s.Actions {
 		b.WriteString("    " + printAssoc(a) + "\n")
 	}
@@ -355,7 +355,7 @@ func opAddStep(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
 	// "+ step" with a step selected CHAINS: the step plus the transition
 	// that reaches it (FROM <selected> TO <new> := cond), in one edit so a
 	// single undo takes both back.
-	tr, err := newTransitionEdit(lines, m, op.From, []string{name}, "", op.Cond)
+	tr, err := newTransitionEdit(lines, m, op.From, []string{name}, strings.TrimSpace(op.TransName), op.Cond)
 	if err != nil {
 		return nil, err
 	}
@@ -470,7 +470,7 @@ func opRenameStep(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
 	// of an edit op guessing at ST-expression surgery.
 	edits := []TextEdit{{
 		Line: s.Line, Col: 1, EndLine: s.Line + 1, EndCol: 1,
-		NewText: fmt.Sprintf("  %s %s:\n", stepKeyword(s), newName),
+		NewText: "  " + StepHeader(s, newName) + "\n",
 	}}
 	for i := range m.Trans {
 		t := &m.Trans[i]
@@ -626,6 +626,80 @@ func opSetTransitionEnds(m *Model, op EditOp) ([]TextEdit, error) {
 	return []TextEdit{{Line: t.Line, Col: 1, EndLine: t.EndLine + 1, EndCol: 1, NewText: printTransition(t)}}, nil
 }
 
+// opRenameTransition gives a transition a name (the label the chart draws
+// beside its bar), renames it, or — with an empty NewName — makes it
+// unnamed again. Only its header line is reprinted. A layout pin under the
+// old id follows it.
+func opRenameTransition(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
+	t, err := findTransition(m, op.Transition)
+	if err != nil {
+		return nil, err
+	}
+	name := strings.TrimSpace(op.NewName)
+	if name != "" {
+		if !sfcIdentRe.MatchString(name) {
+			return nil, fmt.Errorf("sfc edit: %q is not a valid transition name", name)
+		}
+		for _, o := range m.Trans {
+			if o.ID != t.ID && strings.EqualFold(o.Name, name) {
+				return nil, fmt.Errorf("sfc edit: a transition named %q already exists", o.Name)
+			}
+		}
+	}
+	if name == t.Name {
+		return nil, nil
+	}
+	oldID := t.ID
+	t.Name = name
+	edits := []TextEdit{{Line: t.Line, Col: 1, EndLine: t.EndLine + 1, EndCol: 1, NewText: printTransition(t)}}
+	edits = append(edits, remapLayout(lines, m, idRewrite(oldID, transID(name, t.Line)))...)
+	return edits, nil
+}
+
+// opMoveTransition moves a transition one place earlier (Delta -1) or later
+// (+1) among its alternative branches — the transitions whose FROM shares a
+// step with its own (§2.3's priority group). Priority IS declaration order,
+// so this is the reorder gesture: the two neighbours' blocks swap text,
+// everything between them stays where it is.
+func opMoveTransition(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
+	t, err := findTransition(m, op.Transition)
+	if err != nil {
+		return nil, err
+	}
+	if op.Delta != -1 && op.Delta != 1 {
+		return nil, fmt.Errorf("sfc edit: moveTransition needs delta -1 or +1")
+	}
+	var group []*GTransition
+	at := -1
+	for i := range m.Trans {
+		u := &m.Trans[i]
+		if u.ID == t.ID {
+			at = len(group)
+			group = append(group, u)
+		} else if shareAnyStep(u.From, t.From) {
+			group = append(group, u)
+		}
+	}
+	j := at + op.Delta
+	if j < 0 || j >= len(group) {
+		if len(group) < 2 {
+			return nil, fmt.Errorf("sfc edit: transition %s has no alternative branch to trade places with", t.ID)
+		}
+		return nil, nil // already first/last: nothing to do
+	}
+	a, b := t, group[j]
+	if a.Line > b.Line {
+		a, b = b, a
+	}
+	block := func(x *GTransition) string {
+		return strings.Join(lines[x.Line-1:x.EndLine], "\n") + "\n"
+	}
+	return []TextEdit{
+		{Line: a.Line, Col: 1, EndLine: a.EndLine + 1, EndCol: 1, NewText: block(b)},
+		{Line: b.Line, Col: 1, EndLine: b.EndLine + 1, EndCol: 1, NewText: block(a)},
+	}, nil
+}
+
 // ── addAssoc / setAssoc / deleteAssoc ───────────────────────────────────
 
 func opAddAssoc(m *Model, op EditOp) ([]TextEdit, error) {
@@ -639,13 +713,24 @@ func opAddAssoc(m *Model, op EditOp) ([]TextEdit, error) {
 	if err := validQualifierTargetTime(q, target, tm); err != nil {
 		return nil, err
 	}
-	idx := op.Index
-	if idx < 0 || idx > len(s.Actions) {
-		idx = len(s.Actions)
+	// No index appends — "+ action" is drawn under the last row, so that
+	// is where the association lands (an explicit 0 still inserts first).
+	idx := len(s.Actions)
+	if op.Index != nil && *op.Index >= 0 && *op.Index <= len(s.Actions) {
+		idx = *op.Index
 	}
 	a := GAssoc{Qualifier: q, Target: target, Time: tm}
 	s.Actions = append(s.Actions[:idx:idx], append([]GAssoc{a}, s.Actions[idx:]...)...)
 	return []TextEdit{{Line: s.Line, Col: 1, EndLine: s.EndLine + 1, EndCol: 1, NewText: printStep(s)}}, nil
+}
+
+// assocIndex is setAssoc/deleteAssoc's row: an absent index is row 0, as
+// it was before Index became optional.
+func (op EditOp) assocIndex() int {
+	if op.Index == nil {
+		return 0
+	}
+	return *op.Index
 }
 
 func opSetAssoc(m *Model, op EditOp) ([]TextEdit, error) {
@@ -653,8 +738,9 @@ func opSetAssoc(m *Model, op EditOp) ([]TextEdit, error) {
 	if err != nil {
 		return nil, err
 	}
-	if op.Index < 0 || op.Index >= len(s.Actions) {
-		return nil, fmt.Errorf("sfc edit: association index %d out of range", op.Index)
+	i := op.assocIndex()
+	if i < 0 || i >= len(s.Actions) {
+		return nil, fmt.Errorf("sfc edit: association index %d out of range", i)
 	}
 	q := strings.ToUpper(strings.TrimSpace(op.Qualifier))
 	target := strings.TrimSpace(op.Target)
@@ -662,7 +748,7 @@ func opSetAssoc(m *Model, op EditOp) ([]TextEdit, error) {
 	if err := validQualifierTargetTime(q, target, tm); err != nil {
 		return nil, err
 	}
-	s.Actions[op.Index] = GAssoc{Qualifier: q, Target: target, Time: tm}
+	s.Actions[i] = GAssoc{Qualifier: q, Target: target, Time: tm}
 	return []TextEdit{{Line: s.Line, Col: 1, EndLine: s.EndLine + 1, EndCol: 1, NewText: printStep(s)}}, nil
 }
 
@@ -671,10 +757,11 @@ func opDeleteAssoc(m *Model, op EditOp) ([]TextEdit, error) {
 	if err != nil {
 		return nil, err
 	}
-	if op.Index < 0 || op.Index >= len(s.Actions) {
-		return nil, fmt.Errorf("sfc edit: association index %d out of range", op.Index)
+	i := op.assocIndex()
+	if i < 0 || i >= len(s.Actions) {
+		return nil, fmt.Errorf("sfc edit: association index %d out of range", i)
 	}
-	s.Actions = append(s.Actions[:op.Index], s.Actions[op.Index+1:]...)
+	s.Actions = append(s.Actions[:i], s.Actions[i+1:]...)
 	return []TextEdit{{Line: s.Line, Col: 1, EndLine: s.EndLine + 1, EndCol: 1, NewText: printStep(s)}}, nil
 }
 
@@ -1327,19 +1414,31 @@ func collapseEdit(src, result string) []TextEdit {
 // The vars-panel seam shared with lang/fbd and lang/ld: declarations live
 // in the ST header above the SFC body, edited textually.
 
-var sfcVarSectionRe = regexp.MustCompile(`(?i)^\s*(VAR_EXTERNAL|VAR)\s*$`)
+var sfcVarSectionRe = regexp.MustCompile(`(?i)^\s*(VAR_EXTERNAL|VAR)(\s+CONSTANT)?\s*$`)
 
-// opDeclareVar inserts "name : TYPE;" into a header section (VAR_EXTERNAL
-// default, VAR for retained locals), creating the section above SFC when
-// the header has none.
+// opDeclareVar inserts "name : TYPE [:= init];" into a header section
+// (VAR_EXTERNAL default, VAR for retained locals, VAR CONSTANT for a named
+// constant), creating the section above SFC when the header has none. The
+// initial value comes from Init, or from a "TYPE := init" typed in the type
+// field the way a declaration is written; a constant needs one.
 func opDeclareVar(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
 	name := strings.TrimSpace(op.Name)
 	typ := strings.TrimSpace(op.VarType)
-	section := strings.ToUpper(strings.TrimSpace(op.Section))
-	if section == "" {
-		section = "VAR_EXTERNAL"
+	init := strings.TrimSpace(op.Init)
+	if i := strings.Index(typ, ":="); i >= 0 {
+		if init == "" {
+			init = strings.TrimSpace(typ[i+2:])
+		}
+		typ = strings.TrimSpace(typ[:i])
 	}
-	if section != "VAR" && section != "VAR_EXTERNAL" {
+	section := strings.Join(strings.Fields(strings.ToUpper(op.Section)), " ")
+	switch section {
+	case "":
+		section = "VAR_EXTERNAL"
+	case "CONSTANT":
+		section = "VAR CONSTANT"
+	}
+	if section != "VAR" && section != "VAR_EXTERNAL" && section != "VAR CONSTANT" {
 		return nil, fmt.Errorf("sfc edit: unknown section %q", section)
 	}
 	if !sfcIdentRe.MatchString(name) {
@@ -1347,6 +1446,12 @@ func opDeclareVar(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
 	}
 	if !sfcIdentRe.MatchString(typ) {
 		return nil, fmt.Errorf("sfc edit: %q is not a valid type name", typ)
+	}
+	if strings.ContainsAny(init, ";") || strings.Contains(init, "(*") {
+		return nil, fmt.Errorf("sfc edit: %q is not a valid initial value", init)
+	}
+	if section == "VAR CONSTANT" && init == "" {
+		return nil, fmt.Errorf("sfc edit: a constant needs a value — %s : %s := …", name, typ)
 	}
 	for _, v := range m.Vars {
 		if strings.EqualFold(v.Name, name) {
@@ -1381,6 +1486,9 @@ func opDeclareVar(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
 	for i := 0; i < sfcLine; i++ {
 		if mm := sfcVarSectionRe.FindStringSubmatch(stripped[i]); mm != nil {
 			inSection = strings.ToUpper(mm[1])
+			if mm[2] != "" {
+				inSection += " CONSTANT"
+			}
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(stripped[i]), "END_VAR") {
@@ -1391,6 +1499,9 @@ func opDeclareVar(lines []string, m *Model, op EditOp) ([]TextEdit, error) {
 		}
 	}
 	decl := "    " + name + " : " + typ + ";\n"
+	if init != "" {
+		decl = "    " + name + " : " + typ + " := " + init + ";\n"
+	}
 	if insertAt >= 0 {
 		at := insertAt + 1 // 1-based line of END_VAR
 		return []TextEdit{{Line: at, Col: 1, EndLine: at, EndCol: 1, NewText: decl}}, nil

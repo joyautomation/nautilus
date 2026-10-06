@@ -76,8 +76,29 @@ type GStep struct {
 	Name    string   `json:"name"`
 	Initial bool     `json:"initial"`
 	Actions []GAssoc `json:"actions,omitempty"`
-	Line    int      `json:"line"`    // the STEP/INITIAL_STEP keyword
-	EndLine int      `json:"endLine"` // the matching END_STEP
+	// Attrs is the step's attribute list verbatim, without its parentheses
+	// (`MAXTIME := T#30S, ERROR := FillOverrun`), "" when it has none; an
+	// edit op that reprints the step keeps it (see StepHeader). MaxTime is
+	// the parsed supervision limit, for the chart to show on the step.
+	Attrs   string `json:"attrs,omitempty"`
+	MaxTime string `json:"maxTime,omitempty"`
+	Line    int    `json:"line"`    // the STEP/INITIAL_STEP keyword
+	EndLine int    `json:"endLine"` // the matching END_STEP
+}
+
+// StepHeader renders a step's header line body — `STEP Fill (MAXTIME :=
+// T#30S):` without indentation or newline — under the given name, keeping
+// the attribute list. Every printer that rewrites a step header goes through
+// it, so a rename or an association edit never drops a step's MAXTIME.
+func StepHeader(s *GStep, name string) string {
+	kw := "STEP"
+	if s.Initial {
+		kw = "INITIAL_STEP"
+	}
+	if s.Attrs != "" {
+		return fmt.Sprintf("%s %s (%s):", kw, name, s.Attrs)
+	}
+	return fmt.Sprintf("%s %s:", kw, name)
 }
 
 // GTransition is one TRANSITION element. ID is "tr:<Name>" for a named
@@ -169,6 +190,7 @@ func Graph(src string) (*Model, error) {
 	for _, s := range prog.Steps {
 		ms := GStep{
 			ID: stepID(s.Name), Name: s.Name, Initial: s.Initial,
+			Attrs: s.AttrText, MaxTime: s.MaxTime(),
 			Line: s.Pos.Line, EndLine: s.EndPos.Line,
 		}
 		for _, a := range s.Actions {
@@ -287,7 +309,11 @@ func scanSFCComments(lines []string, startLine, endLine int) []Comment {
 func scanVars(header string) []VarDecl {
 	var out []VarDecl
 	for _, d := range hdrvars.Scan(header) {
-		out = append(out, VarDecl{Name: d.Name, Type: d.Type, Init: d.Init, Section: d.Section, Line: d.Line})
+		sec := d.Section
+		if d.Constant {
+			sec += " CONSTANT" // the vars panel's CONSTANT section
+		}
+		out = append(out, VarDecl{Name: d.Name, Type: d.Type, Init: d.Init, Section: sec, Line: d.Line})
 	}
 	return out
 }

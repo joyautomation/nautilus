@@ -1,4 +1,4 @@
-PROGRAM main
+PROGRAM Main
 VAR_EXTERNAL
     FT101_Raw : INT;
     FT101_Flow : REAL;
@@ -17,24 +17,24 @@ VAR_EXTERNAL
     DosesToday : INT;
 END_VAR
 FBD
-  // Network 1: FT-101 raw analog to L/min (FC105-style scaling)
+  NETWORK 'FT-101 raw analog to L/min (FC105-style scaling)'
   ft = ScaleAnalog(FT101_Raw, 0.0, 120.0)
   FT101_Flow := ft
-  // Network 2: dosing line A, its instance data in doseA
+  NETWORK 'dosing line A, its instance data in doseA'
   doseA : Dosing(Start := StartA, Stop := StopAll, FlowLpm := FT101_Flow, Dt := MainDtS, Recipe := RecipeA)
   XV101_Open := doseA.ValveOpen
   DoseFault := doseA.Fault
   DoneLamp := doseA.Done
   DoseStep := doseA.Step
-  // Network 3: FCV-101 flow setpoint, clamped, zero while the valve is shut
+  NETWORK 'FCV-101 flow setpoint, clamped, zero while the valve is shut'
   spA = LIMIT(0.0, RecipeA.FlowSP, MaxFlowLpm)
   spOut = SEL(doseA.ValveOpen, 0.0, spA)
   FCV101_SP := spOut
-  // Network 4: high-flow alarm, 2 s on-delay
+  NETWORK 'high-flow alarm, 2 s on-delay'
   hiFlow = GT(FT101_Flow, MaxFlowLpm)
   tHi : TON(IN := hiFlow, PT := T#2S)
   HighFlowAlm := tHi.Q
-  // Network 5: doses today
+  NETWORK 'doses today'
   cDoses : CTU(CU := doseA.Done, R := ResetCount, PV := 1000)
   DosesToday := cDoses.CV
 END_FBD

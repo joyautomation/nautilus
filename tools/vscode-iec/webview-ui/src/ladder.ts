@@ -6,12 +6,15 @@
 // neutral rather than guessing.
 
 export type LdElement = {
-	kind: 'contact' | 'branch' | 'fn' | 'fb' | 'coil' | 'assign';
+	kind: 'contact' | 'edge' | 'branch' | 'fn' | 'fb' | 'coil' | 'assign';
 	ref?: string;
 	/** assign: the element's body, `y := a + b; z := 0`. */
 	text?: string;
 	neg?: boolean;
-	mode?: string; // coil: "" | "S" | "R"
+	mode?: string; // coil: "" | "S" | "R" | "P" | "N"; edge: "P" | "N"
+	/** edge: the implicit R_TRIG / F_TRIG instance (`rt_<rung>_<ref>`),
+	 * whose .Q is the contact's one-scan state. */
+	trig?: string;
 	fn?: string;
 	args?: string;
 	inst?: string;
@@ -227,6 +230,20 @@ export function annotate(elems: LdElement[], inPower: boolean | undefined, resol
 				ann.out = and3(power, ann.val);
 				break;
 			}
+			case 'edge': {
+				// The one-shot's own output streams with the program's
+				// instances (exact); without it, the input still rules out
+				// a pulse: a rising edge can't fire while its tag is FALSE,
+				// a falling one while it is TRUE. Otherwise: unknown.
+				const q = el.trig ? truthy(resolve(el.trig + '.Q')) : undefined;
+				if (q !== undefined) ann.val = q;
+				else {
+					const v = truthy(resolve(el.ref ?? ''));
+					ann.val = v === undefined ? undefined : (el.mode === 'N') === v ? false : undefined;
+				}
+				ann.out = and3(power, ann.val);
+				break;
+			}
 			case 'fn': {
 				ann.val = evalFn(el.fn ?? '', el.args ?? '', resolve);
 				ann.out = and3(power, ann.val);
@@ -278,6 +295,8 @@ function elText(e: LdElement): string {
 	switch (e.kind) {
 		case 'contact':
 			return (e.neg ? '/' : '') + (e.ref ?? '');
+		case 'edge':
+			return (e.mode === 'N' ? '-' : '+') + (e.ref ?? '');
 		case 'coil':
 			return `( ${e.mode ? e.mode + ' ' : ''}${e.ref ?? ''} )`;
 		case 'fn':
@@ -389,4 +408,76 @@ export function diffLd(
 		insertAt++;
 	}
 	return { model: { ...head, rungs: out }, status };
+}
+
+// ── what a use says a name is (the declare offer's type) ────────────────────
+
+const PLAIN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const NUMERIC = /^(S|D|L|U|US|UD|UL)?INT$|^L?REAL$|^(BYTE|WORD|DWORD|LWORD)$/;
+const COMPARE = new Set(['GT', 'GE', 'LT', 'LE', 'EQ', 'NE', 'MAX', 'MIN', 'ADD', 'SUB', 'MUL', 'DIV', 'MOD']);
+
+/** The type each name the given rungs use is used AS, keyed by lower-case
+ * name — the type its declaration should take. Strongest first: a block
+ * pin it binds (`CV => Count` on a CTU is INT; a user block's pin is what
+ * the block declares), then the other operand of a comparison (a typed
+ * literal `INT#5`, a REAL literal `90.0`, or a declared variable), then
+ * BOOL for a plain contact or coil. A use that says nothing (an untyped
+ * integer literal could be any number) leaves the name out. */
+export function useTypes(rungs: LdRung[], fbTypes: LdFbType[] = [], vars: LdVar[] = []): Map<string, string> {
+	const out = new Map<string, { type: string; rank: number }>();
+	const put = (name: string, type: string, rank: number) => {
+		const k = name.toLowerCase();
+		const had = out.get(k);
+		if (!had || rank > had.rank) out.set(k, { type: type.toUpperCase(), rank });
+	};
+	const declared = new Map(vars.map((v) => [v.name.toLowerCase(), v.type.toUpperCase()]));
+	const pinTypes = new Map(
+		fbTypes.map((t) => [t.name.toLowerCase(), new Map((t.pins ?? []).map((p) => [p.name.toLowerCase(), p.type]))])
+	);
+	const literalType = (s: string): string | undefined => {
+		const t = s.trim();
+		const typed = /^([A-Za-z_]+)#/.exec(t);
+		if (typed && NUMERIC.test(typed[1].toUpperCase())) return typed[1].toUpperCase();
+		if (/^-?\d+\.\d*([eE][-+]?\d+)?$/.test(t)) return 'REAL';
+		if (PLAIN.test(t)) return declared.get(t.toLowerCase());
+		return undefined;
+	};
+	const walk = (els: LdElement[]) => {
+		for (const e of els ?? []) {
+			if ((e.kind === 'contact' || e.kind === 'edge' || e.kind === 'coil') && e.ref && PLAIN.test(e.ref) && e.ref !== '_') {
+				put(e.ref, 'BOOL', 1);
+			}
+			if (e.kind === 'fb' && e.args) {
+				const pins = pinTypes.get((e.type ?? '').toLowerCase());
+				for (const part of splitArgs(e.args)) {
+					const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(:=|=>)\s*(.*?)\s*$/.exec(part);
+					const type = m && pins?.get(m[1].toLowerCase());
+					if (m && type && PLAIN.test(m[3]) && m[3] !== '_') put(m[3], type, 3);
+				}
+			}
+			if (e.kind === 'fn' && COMPARE.has((e.fn ?? '').toUpperCase())) {
+				const args = splitArgs(e.args ?? '');
+				for (const [i, a] of args.entries()) {
+					if (!PLAIN.test(a) || a === '_' || declared.has(a.toLowerCase())) continue;
+					const other = args.filter((_, j) => j !== i).map(literalType).find((t) => t && NUMERIC.test(t));
+					if (other) put(a, other, 2);
+				}
+			}
+			for (const leg of e.legs ?? []) walk(leg);
+		}
+	};
+	for (const r of rungs) {
+		walk(r.elements);
+		walk(r.coils);
+	}
+	return new Map([...out].map(([k, v]) => [k, v.type]));
+}
+
+/** The type the declare offer gives a name: its use's, over a manifest
+ * REAL — the manifest types a tag from its seed, and a number seed (`init:
+ * 0`) only says "a number" — else the manifest's, else BOOL. */
+export function offerType(use: string | undefined, tagType: string | undefined): string {
+	if (!tagType) return use ?? 'BOOL';
+	if (tagType.toUpperCase() === 'REAL' && use && NUMERIC.test(use)) return use;
+	return tagType;
 }

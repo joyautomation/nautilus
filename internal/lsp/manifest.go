@@ -41,8 +41,31 @@ type manifestCache struct {
 }
 
 type manifestEntry struct {
-	mod  int64
-	tags []ProjectTag
+	mod   int64
+	files []string // the tag-files it composed, whose modtimes join mod
+	tags  []ProjectTag
+}
+
+// modOf is the newest modtime among the manifest and its tag-files: a
+// tags/*.yaml save must refresh hover and the diagrams' descriptions as
+// surely as a nautilus.yaml one. A file that cannot be stat'ed counts as
+// changed (-1 never matches a stored modtime).
+func modOf(mpath string, files []string) int64 {
+	st, err := os.Stat(mpath)
+	if err != nil {
+		return -1
+	}
+	mod := st.ModTime().UnixNano()
+	for _, f := range files {
+		fst, err := os.Stat(f)
+		if err != nil {
+			return -1
+		}
+		if m := fst.ModTime().UnixNano(); m > mod {
+			mod = m
+		}
+	}
+	return mod
 }
 
 var manifests = manifestCache{entries: map[string]*manifestEntry{}}
@@ -79,19 +102,13 @@ func projectTags(path string) []ProjectTag {
 	if !ok {
 		return nil
 	}
-	st, err := os.Stat(mpath)
-	if err != nil {
-		return nil
-	}
-	mod := st.ModTime().UnixNano()
-
 	manifests.mu.Lock()
 	defer manifests.mu.Unlock()
 	prev, hadPrev := manifests.entries[mpath]
-	if hadPrev && prev.mod == mod {
+	if hadPrev && prev.mod == modOf(mpath, prev.files) {
 		return prev.tags
 	}
-	tags, err := readTags(mpath)
+	tags, files, err := readTags(mpath)
 	if err != nil {
 		// A manifest being edited is invalid for most of the keystrokes it
 		// takes to add a tag. Serving the last good answer beats completion
@@ -102,14 +119,21 @@ func projectTags(path string) []ProjectTag {
 		}
 		return nil
 	}
-	manifests.entries[mpath] = &manifestEntry{mod: mod, tags: tags}
+	manifests.entries[mpath] = &manifestEntry{mod: modOf(mpath, files), files: files, tags: tags}
 	return tags
 }
 
-func readTags(mpath string) ([]ProjectTag, error) {
-	m, err := project.ReadManifest(os.DirFS(filepath.Dir(mpath)), "")
+// readTags returns the manifest's composed tags and the tag-files they came
+// from (as paths, for the cache's modtime check).
+func readTags(mpath string) ([]ProjectTag, []string, error) {
+	dir := filepath.Dir(mpath)
+	m, err := project.ReadManifest(os.DirFS(dir), "")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	files := make([]string, 0, len(m.TagFiles))
+	for _, f := range m.TagFiles {
+		files = append(files, filepath.Join(dir, filepath.FromSlash(f)))
 	}
 	out := make([]ProjectTag, 0, len(m.Tags))
 	for _, t := range m.Tags {
@@ -132,7 +156,7 @@ func readTags(mpath string) ([]ProjectTag, error) {
 			Desc: t.Desc,
 		})
 	}
-	return out, nil
+	return out, files, nil
 }
 
 // iecTypeOf infers a tag's IEC type from its declared initial value. The

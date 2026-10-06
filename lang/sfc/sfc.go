@@ -128,14 +128,16 @@ type TextEdit struct {
 // Resolution and printers live in edit.go; this is the wire shape shared
 // with the CLI (`naut sfc edit`) and, eventually, the diagram webview.
 //
-//	addStep                  Name, Initial, After (existing step id, optional); From + Cond (optional) chain it: the step lands after From's step and TRANSITION FROM <From> TO <Name> := Cond comes in the same edit
+//	addStep                  Name, Initial, After (existing step id, optional); From + Cond (optional) chain it: the step lands after From's step and TRANSITION [TransName] FROM <From> TO <Name> := Cond comes in the same edit
 //	deleteStep               Step
 //	renameStep               Step, NewName
 //	addTransition            Name (optional), From, To, Cond, After (optional), NewStep (optional: a TO name to create as an empty STEP after the source step, in the same edit; ignored if it already exists)
 //	deleteTransition         Transition
 //	setCondition             Transition, Cond
+//	renameTransition         Transition, NewName ("" makes it unnamed) — the name the chart draws beside the bar
+//	moveTransition           Transition, Delta (-1 earlier / +1 later) — swaps the transition with its neighbour in its alternative-branch group (the transitions sharing a source step): priority is declaration order, so -1 raises it
 //	setTransitionEnds        Transition, From (optional, keeps current if omitted), To (optional, keeps current if omitted) — re-point a transition's FROM/TO step-sets, e.g. to fix a dangling reference left by deleteStep or an orphan chip's retarget popover. Names are validated as identifiers only; they need NOT already exist (never-block: Check flags an unknown step, ApplyEdit does not refuse it).
-//	addAssoc                 Step, Qualifier, Target, Time (optional), Index (optional, append if omitted/out of range)
+//	addAssoc                 Step, Qualifier, Target, Time (optional), Index (optional: append when omitted or out of range — an explicit 0 inserts first)
 //	setAssoc                 Step, Index, Qualifier, Target, Time (optional)
 //	deleteAssoc              Step, Index
 //	setActionBody            Action (name; created if it doesn't exist yet), Body
@@ -147,7 +149,7 @@ type TextEdit struct {
 //	setComment               Comment (index into Model.Comments), Text ("" deletes)
 //	addComment               Text — appends a new note just above END_SFC
 //	deleteComment            Comment (index into Model.Comments)
-//	declareVar / deleteVar   Name, VarType, Section (the vars panel; lang/ld's shape)
+//	declareVar / deleteVar   Name, VarType, Section (VAR_EXTERNAL | VAR | VAR CONSTANT), Init (optional; "TYPE := init" in VarType also works) — the vars panel; lang/ld's shape
 //	pasteSteps               Steps (+ Trans between them) — clipboard paste; names freshened
 //	deleteSelection          Nodes (st:/tr: ids) — one op for a multi-selection or a cut
 type EditOp struct {
@@ -158,16 +160,22 @@ type EditOp struct {
 	Name    string `json:"name,omitempty"` // new step/transition name (create ops)
 	NewName string `json:"newName,omitempty"`
 	Initial bool   `json:"initial,omitempty"`
-	After   string `json:"after,omitempty"` // insertion/priority anchor: an existing element id of the same kind
+	// TransName names the transition a chained addStep writes.
+	TransName string `json:"transName,omitempty"`
+	After     string `json:"after,omitempty"` // insertion/priority anchor: an existing element id of the same kind
 
 	// transition-addressed ops
 	Transition string   `json:"transition,omitempty"`
 	From       []string `json:"from,omitempty"`
 	To         []string `json:"to,omitempty"`
 	Cond       string   `json:"cond,omitempty"`
+	// Delta is moveTransition's direction: -1 earlier (higher priority),
+	// +1 later.
+	Delta int `json:"delta,omitempty"`
 
-	// association ops (within Step)
-	Index     int    `json:"index,omitempty"`
+	// association ops (within Step). A pointer so addAssoc can tell "no
+	// index" (append) from an explicit 0 (insert first).
+	Index     *int   `json:"index,omitempty"`
 	Qualifier string `json:"qualifier,omitempty"`
 	Target    string `json:"target,omitempty"`
 	Time      string `json:"time,omitempty"`
@@ -201,6 +209,7 @@ type EditOp struct {
 	// shape as lang/ld's, so the shared vars panel posts one form.
 	VarType string `json:"varType,omitempty"`
 	Section string `json:"section,omitempty"`
+	Init    string `json:"init,omitempty"`
 
 	// Pou names the PROGRAM a blank file is seeded with (see ApplyEdit).
 	Pou string `json:"pou,omitempty"`

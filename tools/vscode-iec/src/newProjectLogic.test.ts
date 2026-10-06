@@ -4,7 +4,7 @@
 
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { NEW_PROJECT_TEMPLATES, newProjectArgs, validateProjectName } from "./newProjectLogic";
+import { NEW_PROJECT_LANGUAGES, NEW_PROJECT_TEMPLATES, templateTakesLanguage, newProjectArgs, validateProjectName } from "./newProjectLogic";
 
 test("validateProjectName: rejects empty/whitespace", () => {
   assert.equal(validateProjectName(""), "a name is required");
@@ -37,4 +37,26 @@ test("NEW_PROJECT_TEMPLATES: covers every template naut new supports, demo first
     NEW_PROJECT_TEMPLATES.map((t) => t.template),
     ["demo", "minimal", "sdk", "sdk-demo"]
   );
+});
+
+test("newProjectArgs: passes --language for Minimal and SDK", () => {
+  assert.deepEqual(newProjectArgs("p", "minimal", "ld"), [
+    "new", "p", "--no-input", "--template", "minimal", "--language", "ld",
+  ]);
+  assert.deepEqual(newProjectArgs("p", "sdk", "sfc").slice(-2), ["--language", "sfc"]);
+});
+
+test("newProjectArgs: Demo and SDK demo ignore the language", () => {
+  assert.ok(!newProjectArgs("p", "demo", "ld").includes("--language"));
+  assert.ok(!newProjectArgs("p", "sdk-demo", "ld").includes("--language"));
+  assert.ok(!newProjectArgs("p", "minimal").includes("--language"));
+});
+
+test("templateTakesLanguage / NEW_PROJECT_LANGUAGES: the four languages naut new accepts", () => {
+  assert.deepEqual(NEW_PROJECT_LANGUAGES.map((l) => l.language), ["st", "ld", "fbd", "sfc"]);
+  assert.deepEqual(NEW_PROJECT_LANGUAGES.map((l) => l.label), [
+    "Structured Text", "Ladder Diagram", "Function Block Diagram", "Sequential Function Chart",
+  ]);
+  assert.equal(templateTakesLanguage("minimal"), true);
+  assert.equal(templateTakesLanguage("demo"), false);
 });

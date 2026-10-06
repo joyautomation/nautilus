@@ -391,9 +391,13 @@ func Compose(dir string, override map[string]string) (Composition, error) {
 // with a lexical fallback so a program that doesn't parse mid-edit — or a
 // graphical source, which the ST parser can't read — is still recognized
 // without mistaking a comment that mentions PROGRAM for one).
+//
+// TopKeyword is the file's FIRST POU, so a parse alone misses a program file
+// that defines a FUNCTION_BLOCK ahead of its PROGRAM; the lexical check
+// answers for that one too.
 func hasProgram(src string) bool {
-	if prog, err := st.Parse(src); err == nil {
-		return prog.TopKeyword == "PROGRAM"
+	if prog, err := st.Parse(src); err == nil && prog.TopKeyword == "PROGRAM" {
+		return true
 	}
 	return DeclaresProgram(src)
 }

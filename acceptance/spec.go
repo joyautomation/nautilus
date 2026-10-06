@@ -89,11 +89,37 @@ type Step struct {
 	Unshelve *UnshelveStep `yaml:"unshelve"`
 	Alarms   *AlarmExpect  `yaml:"alarms"`
 
+	// Force holds tags at values for the rest of the test (or until an
+	// `unforce:`), the controller's force table — unlike `given:`, which
+	// writes once and lets the driver or the logic take the tag back. A
+	// forced input beats the plant model every scan; a forced output beats
+	// the logic. Unforce names the addresses to release, or is `all`.
+	Force   map[string]any `yaml:"force"`
+	Unforce *UnforceList   `yaml:"unforce"`
+
 	Line int `yaml:"-"`
 	// AlarmsLine is the line of the `alarms:` key, where a failed alarm
 	// assertion points. (A failed `expect:`/`always:` points at the term
 	// that broke; see Term.Line.)
 	AlarmsLine int `yaml:"-"`
+}
+
+// UnforceList is `unforce:` — a list of forced addresses, or the word
+// `all`.
+type UnforceList struct {
+	All   bool
+	Names []string
+}
+
+func (u *UnforceList) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		if node.Value != "all" {
+			return fmt.Errorf("line %d: unforce: a list of tag names, or `all`", node.Line)
+		}
+		u.All = true
+		return nil
+	}
+	return node.Decode(&u.Names)
 }
 
 // UnmarshalYAML records the source line so a failure can point at it.

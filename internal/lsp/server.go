@@ -136,6 +136,8 @@ func (s *Server) dispatch(m *message) {
 		s.handleRename(m)
 	case "textDocument/documentSymbol":
 		s.handleDocumentSymbol(m)
+	case "nautilus/descriptions":
+		s.handleDescriptions(m) // descriptions.go: tag descriptions for the diagram editors
 	default:
 		if m.ID != nil { // unknown request: must answer; unknown notification: ignore
 			s.w.respondError(m.ID, codeMethodNotFound, fmt.Sprintf("method %q not supported", m.Method))

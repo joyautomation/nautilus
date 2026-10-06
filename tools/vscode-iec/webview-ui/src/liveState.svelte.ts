@@ -5,7 +5,7 @@
 // frame rate without rebuilding the Svelte Flow node array, so drags,
 // selections, and open inputs are never disturbed by a data update.
 
-import { resolveLabel, resolveScoped, arrayLowerBounds, member } from './liveResolve';
+import { resolveLabel, resolveScoped, arrayLowerBounds, member, forcedLabel } from './liveResolve';
 import type { VarDecl } from './layout';
 
 export { member };
@@ -19,17 +19,32 @@ export const live = $state({
 	// Top-level keys are lowercased by the extension; struct members inside
 	// (FB pins, UDT fields) keep their declared casing.
 	values: {} as Record<string, unknown>,
+	// The controller's force table: lowercased forced address → value.
+	// Empty when nothing is forced (or the extension predates forcing).
+	forced: {} as Record<string, unknown>,
 	// Per-dimension array lower bounds by lowercased variable name, parsed
 	// from the header declarations — an IEC ARRAY[1..4] stores element [1]
 	// at position 0, so indexed chips can't resolve without them.
 	bounds: {} as Record<string, number[]>
 });
 
-export function setLive(frame: { enabled: boolean; fresh: boolean; values: Record<string, unknown> }): void {
+export function setLive(frame: {
+	enabled: boolean;
+	fresh: boolean;
+	values: Record<string, unknown>;
+	forced?: Record<string, unknown>;
+}): void {
 	live.seen = true;
 	live.enabled = frame.enabled;
 	live.fresh = frame.fresh;
 	live.values = frame.values;
+	live.forced = frame.forced ?? {};
+}
+
+/** True when a diagram label's value is held by a force — the hook every
+ * pill uses for its F badge (class "forced" on an .nx-pill; see theme.css). */
+export function liveForced(label: string | undefined): boolean {
+	return !!label && live.enabled && live.fresh && forcedLabel(live.forced, label);
 }
 
 /** Refresh the array-bounds map from the model's header declarations. */

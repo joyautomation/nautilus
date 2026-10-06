@@ -32,18 +32,18 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 156 rows. **0 rows have no coverage at all** (no webview test,
+Totals: 183 rows. **0 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
 |---|---|---|
 | Commands | 28 | 0 |
-| FBD `?` | 18 | 0 |
-| Ladder `?` | 20 | 0 |
-| SFC `?` | 22 | 0 |
+| FBD `?` | 20 | 0 |
+| Ladder `?` | 28 | 0 |
+| SFC `?` | 31 | 0 |
 | Mimic `?` | 18 | 0 |
 | Component `?` | 8 | 0 |
-| Other claims | 42 | 0 |
+| Other claims | 50 | 0 |
 
 ## Commands (package.json `contributes.commands`)
 
@@ -100,6 +100,8 @@ no rig verb, no smoke check); per section below.
 | F16 | FBD | Undo the last edit to the file from the diagram | "?" list FBD / File / `Ctrl + Z` | — | g_key (ctrl+z in takes) | 03 (preview panel) |
 | F17 | FBD | Redo | "?" list FBD / File / `Ctrl + Y / Ctrl + Shift + Z` | mimic-more.test.mjs: M17 Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z post no message and are not preventDefault-ed (undo/redo is VS Code's text undo over the host's WorkspaceEdit; the webview owns no stack, so that is all that is observable) | — | 03 (preview panel) |
 | F18 | FBD | Save the file from the diagram | "?" list FBD / File / `Ctrl + S` | — | g_save | 03 (preview panel) |
+| F19 | FBD | Click EN on a block to show its EN / ENO pins; wire EN, drag from ENO | "?" list FBD / Edit / `Click EN on a block` | fbd-parity.test.mjs: FBD EN/ENO: bound EN draws without asking; the EN toggle opens EN/ENO pins to wire (F19, #206) | (tia-shaped build 09-EN-ENO-on-LIMIT) | — |
+| F20 | FBD | Network header: click to make it the palette's target; ▲ ▼ move, + add after, ✕ remove the NETWORK line; double-click the title to rename | "?" list FBD / Edit / `Network header` | fbd-parity.test.mjs: FBD networks: the header picks the palette target; buttons move, add, remove; double-click renames (F20) | (tia-shaped build 07..11-network) | — |
 
 ## Ladder editor (`?` list)
 
@@ -107,7 +109,7 @@ no rig verb, no smoke check); per section below.
 |---|---|---|---|---|---|---|
 | L01 | LD | Click an element to select it | "?" list LD / Select / `Click` | diagram.test.mjs: Ladder: click a rung name, Del deletes the rung (rung name only) | ld_node_el / click_el | — |
 | L02 | LD | Click a rung's name to select the whole rung | "?" list LD / Select / `Click a rung's name` | diagram.test.mjs: Ladder: click a rung name, Del deletes the rung | ld_select_rung | — |
-| L03 | LD | Double-click to retag a contact or coil, edit arguments, rename a rung | "?" list LD / Edit / `Double-click` | diagram.test.mjs: Ladder: the declare offer covers a block call's arguments (retag path) | ld_add_contact, ld_rename_block, float_edit | — |
+| L03 | LD | Double-click to retag a contact or coil (+Tag / -Tag makes an edge contact, /Tag an NC one), edit arguments, rename a rung | "?" list LD / Edit / `Double-click` | diagram.test.mjs: Ladder: the declare offer covers a block call's arguments (retag path); ld-parity.test.mjs: L24 | ld_add_contact, ld_rename_block, ld_retag, ld_edge_retag, float_edit | — |
 | L04 | LD | Commit / cancel an in-place edit | "?" list LD / Edit / `Enter / Esc` | — | float_edit | — |
 | L05 | LD | Click ⊕ to insert an element at that spot | "?" list LD / Edit / `⊕` | — | ld_add_contact, ld_add_coil, ld_add_block | — |
 | L06 | LD | Drag a palette item onto a rung spot | "?" list LD / Edit / `Drag a palette item` | diagram.test.mjs: Ladder: the FB… picker names a TON / CTU instance with the first free name | ld_palette, g_drag_to | — |
@@ -116,7 +118,7 @@ no rig verb, no smoke check); per section below.
 | L09 | LD | Press N to toggle a contact between NO and NC | "?" list LD / Edit / `N` | ld-keys.test.mjs: N on a selected contact posts toggleNeg, again flips it back | — | — |
 | L10 | LD | Press M to cycle a coil normal → set → reset | "?" list LD / Edit / `M` | ld-keys.test.mjs: M on a selected coil cycles normal -> set -> reset -> normal | — | — |
 | L11 | LD | Press B to wrap the selection in a parallel branch | "?" list LD / Edit / `B` | — | ld_add_branch | — |
-| L12 | LD | Copy, cut, paste an element (into another ladder too) | "?" list LD / Edit / `Ctrl + C / X / V` | — | — | 05 (cut / paste) |
+| L12 | LD | Copy, cut, paste an element or a whole rung (into another ladder too) | "?" list LD / Edit / `Ctrl + C / X / V` | ld-parity.test.mjs: L25 (the whole rung) | ld_copy_rung (the whole rung) | 05 (cut / paste) |
 | L13 | LD | Esc cancels a drag | "?" list LD / Edit / `Esc` | diagram.test.mjs: Ladder: Esc cancels an in-flight palette drag | — | — |
 | L14 | LD | Zoom around the pointer | "?" list LD / View / `Ctrl + wheel / pinch` | diagram.test.mjs: Ladder zoom: Ctrl+wheel zooms around the cursor | diagram_zoom | 06 |
 | L15 | LD | Zoom in / out (corner buttons too) | "?" list LD / View / `Ctrl + = / Ctrl + -` | diagram.test.mjs: Ladder zoom: buttons and Ctrl+= / Ctrl+- / Ctrl+0 | diagram_zoom | 06 |
@@ -125,6 +127,14 @@ no rig verb, no smoke check); per section below.
 | L18 | LD | Undo the last edit to the file from the diagram | "?" list LD / File / `Ctrl + Z` | — | g_key (ctrl+z in takes) | — |
 | L19 | LD | Redo | "?" list LD / File / `Ctrl + Y / Ctrl + Shift + Z` | ld-keys.test.mjs: Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y post diagramKey undo / redo / redo | — | — |
 | L20 | LD | Save the file from the diagram | "?" list LD / File / `Ctrl + S` | — | g_save | — |
+| L21 | LD | An edge contact (`+Tag` / `-Tag`) draws as a P / N contact; live, it lights for the scan its one-shot fires (#212) | CHANGELOG Unreleased; ladder.mdx In the editor | ld-parity.test.mjs: +Tag / -Tag draw as P / N contacts; live power comes from its one-shot | ld_edge_drawn (selftest; logix-shaped m1) | — |
+| L22 | LD | Insert a rising / falling-edge contact from the palette (⊣P⊢ ⊣N⊢) (#213) | palette titles; ladder.mdx In the editor | ld-parity.test.mjs: the palette inserts P and N contacts | ld_add_edge (selftest) | — |
+| L23 | LD | Press P to cycle a contact NO → P → N → NC (N on an edge: NC) (#213) | "?" list LD / Edit / `P` | ld-parity.test.mjs: P cycles a selected contact | — | — |
+| L24 | LD | Type `+Tag` / `-Tag` / `/Tag` into a contact's retag to set its form; a bare tag keeps it (#213) | ladder.mdx In the editor | ld-parity.test.mjs: double-click a contact and type +Tag | ld_edge_retag, ld_retag (selftest; logix-shaped m1, m2) | — |
+| L25 | LD | Copy a whole rung (its name selected) and paste it below the selected rung: next name (m1 → m2), instances renamed; ⧉ / ✂ disabled with nothing to copy (#217) | "?" list LD / Edit / `Ctrl + C / X / V`; CHANGELOG Unreleased | ld-parity.test.mjs: Ctrl+C / Ctrl+V pasteRung; ⧉ then ⎘, ✂ cuts the rung | ld_copy_rung (selftest; logix-shaped m2) | — |
+| L26 | LD | The declare offer types a name from its use (a CTU's `CV =>` is INT) over a seed-typed REAL (#219) | CHANGELOG Unreleased | ld-parity.test.mjs: a CTU's CV => Starts is offered as VAR_EXTERNAL : INT | ld_declare_offer_type (selftest; logix-shaped starts) | — |
+| L27 | LD | Declare, rename and delete a FUNCTION_BLOCK's pins: the declare offer inside a block (VAR_INPUT / VAR_OUTPUT), the variables panel's block scope (in → out → in/out → local), double-click a name to rename (#214) | CHANGELOG Unreleased; ladder.mdx In the editor | ld-parity.test.mjs: inside a FUNCTION_BLOCK the offer makes pins; a block's scope declares, renames and deletes its pins | ld_vars_declare, ld_declare (logix-shaped motor.ld), ld_vars_rename, ld_vars_delete (selftest) | — |
+| L28 | LD | The variables panel lists rung-declared block instances (`m1 : MotorStarter`, rung m1); Escape closes it (#220) | CHANGELOG Unreleased | ld-parity.test.mjs: rung-declared block instances are listed; Escape closes the panel | ld_vars_lists_instance, ld_vars_escape_closes (selftest; logix-shaped m1) | — |
 
 ## SFC editor (`?` list)
 
@@ -152,6 +162,15 @@ no rig verb, no smoke check); per section below.
 | S20 | SFC | Undo the last edit to the file from the diagram | "?" list SFC / File / `Ctrl + Z` | — | g_key (ctrl+z in takes) | 03 (field undo only) |
 | S21 | SFC | Redo | "?" list SFC / File / `Ctrl + Y / Ctrl + Shift + Z` | mimic-more.test.mjs: M17 Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z post no message and are not preventDefault-ed (undo/redo is VS Code's text undo over the host's WorkspaceEdit; the webview owns no stack, so that is all that is observable) | — | 03 (field undo only) |
 | S22 | SFC | Save the file from the diagram | "?" list SFC / File / `Ctrl + S` | — | g_save | 03 (field undo only) |
+| S23 | SFC | Walk the chart with the arrow keys along its flow (step ↓ transition ↓ step, ← → neighbours, → into a step's actions) | "?" list SFC / Select / `Arrow keys` | sfc-parity.test.mjs: S23–S25 #76 SFC: arrow keys walk the chart along its flow | sfc_keynav | — |
+| S24 | SFC | Enter edits the selection in place (step name, condition, action body, note) | "?" list SFC / Edit / `Enter` | sfc-parity.test.mjs: S23–S25 #76 SFC: arrow keys walk the chart …; Enter edits the selection | — | — |
+| S25 | SFC | F2 renames a step or names a transition (drawn above its condition) | "?" list SFC / Edit / `F2` | sfc-parity.test.mjs: S23–S25 #76 SFC: … transition names are drawn | sfc_name_transition | — |
+| S26 | SFC | Move an alternative branch earlier / later (priority = file order; numbered on the bars) | "?" list SFC / Edit / `◀ priority ▶ / Alt + ← →` | sfc-parity.test.mjs: S26 #181 SFC: ◀ priority / Alt+← move an alternative branch earlier | sfc_reorder_branch | — |
+| S27 | SFC | "+ action" appends; takes `D Detergent T#3S`; text it cannot parse stays in the field with the reason | CHANGELOG [Unreleased] (#186, #183) | sfc-parity.test.mjs: S27 #186 SFC: "+ action" appends; S27 #183 SFC: the action field takes "D Detergent T#3S" | sfc_add_action | — |
+| S28 | SFC | Double-click an association to a not-yet-existing action: the ST-body editor, which writes the ACTION | CHANGELOG [Unreleased] (#182) | sfc-parity.test.mjs: S28 #182 SFC: double-click an association to an action that does not exist yet | sfc_create_action | — |
+| S29 | SFC | Vars panel: ext / local / const sections, an initial value; a refused declare keeps the name | CHANGELOG [Unreleased] (#180) | sfc-parity.test.mjs: S29 #180 SFC: the vars panel declares a CONSTANT with its value | sfc_declare | — |
+| S30 | SFC | A join whose legs differ in length draws as a convergence under both legs | CHANGELOG [Unreleased] (#187) | sfc-parity.test.mjs: S30 #187 SFC: a join whose legs differ in length is drawn as a convergence | sfc_join_step (codesys-shaped `sfc-join-drawn-as-convergence`) | — |
+| S31 | SFC | The add forms (+ step chained, + transition, + alt branch) take a transition name | CHANGELOG [Unreleased] (#76) | sfc-parity.test.mjs: S31 #76 SFC: the add forms take a transition name | — (codesys-shaped `habit-transition-name`) | — |
 
 ## Mimic editor (`?` list)
 
@@ -220,7 +239,7 @@ no rig verb, no smoke check); per section below.
 | X25 | Ladder | Double-click an FB header to rename the instance everywhere | README Diagrams | — | ld_rename_block | — |
 | X26 | Ladder | Empty body renders the palette; + rung adds the first rung | CHANGELOG 0.10.0 | diagram.test.mjs: Ladder: empty body (rungs null) renders the palette; + rung works | ld_add_rung | — |
 | X27 | Ladder | Diff overlay: added / removed / changed elements marked, removed ghosted | README Visual diff | diagram.test.mjs: Theme: ladder diff colours come from theme tokens | — | 04, 11 |
-| X28 | FBD | + add palette: function block places any standard block (PID included) with every input open | README Diagrams | diagram.test.mjs: FBD palette: function block places a PID | fbd_add_block | — |
+| X28 | FBD | + add palette: function block places any standard block (PID included) with every required input open; an input with a declared default stays unbound (#205) | README Diagrams | diagram.test.mjs: FBD palette: function block places a PID; fbd-parity.test.mjs: FBD palette: the FB picker leaves an input with a declared default unbound (#205) | fbd_add_block | — |
 | X29 | FBD | + add palette: output reference names its source (SpeedRef := lic.CV) | CHANGELOG 0.10.0 | diagram.test.mjs: FBD palette: output reference takes an FB output as its source | fbd_add_tag_ref | — |
 | X30 | FBD | + add palette: comment / note | package.json UI (palette) | — | fbd_add_comment | — |
 | X31 | FBD | Diff overlay: added / removed / changed blocks and wires | README Visual diff | — | — | 04 |
@@ -234,11 +253,19 @@ no rig verb, no smoke check); per section below.
 | X39 | Mimic | Live canvas animates bound props from the controller | README HMI mimic editor | — | — | 13 |
 | X40 | Extension | Signature help while typing a call: parameters with types, FB inputs and outputs (=>), the active one highlighted by comma position or named pin | README Language intelligence | — | — | 14 |
 | X42 | Extension | Find all references (Shift+F12): a tag across every program and the manifest, a local only in its POU | README Language intelligence | — | — | 14 |
+| X50 | Extension | Create Project… asks for the program language (ST / Ladder / FBD / SFC) after Minimal or SDK and passes `naut new --language`; choosing Ladder gives a program.ld that checks clean and opens in the ladder diagram | CHANGELOG Unreleased (#221) | newProjectLogic.test.ts: newProjectArgs passes --language | — | 17 |
 | X41 | Extension | Outline view, breadcrumbs and Go to Symbol in Editor list POUs, VAR sections and declarations, FBD statements, ladder rungs, SFC steps / transitions / actions (naut lsp documentSymbol) | README Language intelligence | — | — | 14 (.st, .ld, .sfc; not .fbd) |
+| X48 | FBD | EN/ENO on every function and FB call (IEC execution control): EN FALSE skips the call — a function's result is not assigned, an FB's outputs hold; ENO = EN AND no error (DIV/MOD: a zero divisor); EN/ENO pins draw when bound or after the pin gesture | docs/functions.md EN/ENO; CHANGELOG | fbd-parity.test.mjs: FBD EN/ENO (F19); conformance fbd-en-eno (ST + FBD) | (tia-shaped build 09-EN-ENO-on-LIMIT, 09-EN-input-by-text) | — |
+| X49 | FBD | Numbered networks: `NETWORK 'title'` lines divide the body, run in order; the diagram draws numbered bands with titles and each statement's execution order; + add palette "network", header ops | docs/languages FBD; CHANGELOG | fbd-parity.test.mjs: FBD networks: numbered bands in order, statements with their execution order (F20, X49, #207); the header picks the palette target (F20) | (tia-shaped build 07..11-network, 11-network-numbers-or-exec-order) | — |
+| X43 | Extension | Force… / Remove Force / Remove All Forces (context menu, pill hover, Live Values row); forced values marked F on pills, the Live Values panel and the FBD/ladder/SFC overlays; status bar "N forces active"; SFC diagram Set Active Step / Fire Transition | README Live values and online edit; CHANGELOG Unreleased | force.test.mjs: FBD: a forced input chip and its VARS pill carry the F badge; Ladder: a forced operand shows F; SFC: steps and transitions carry the context the menu keys on | — | 18 |
+| X44 | Diagrams | Cross-reference from a diagram element: Shift+F12, or right-click → Find All References, on a ladder contact/coil/block, an FBD chip/FB instance/FB pin or an SFC step/action association opens the References view on that name (every program and the manifest) | README Diagrams; #218 | xref-desc.test.mjs: X44 ladder / read-only / FBD / SFC (the posted message) | — | 14 (ladder contact → References view) |
+| X45 | Diagrams | Tag descriptions on diagram elements: the manifest desc (or the VAR line's comment) in the element tooltip in ladder, FBD and SFC; a second line under ladder contacts and coils (nautilus.diagram.showDescriptions) | README Diagrams; #216 | xref-desc.test.mjs: X45 ladder; X44/X45 FBD, SFC | logix-shaped lx_desc_on_element | 14 (ladder contact title + line) |
+| X46 | SFC | Timed qualifiers L, D, SD, DS, SL compile with the standard's semantics, in `Q Target(T#t);` or IEC's `Target(Q, T#t);` form; an R resets the stored ones | CHANGELOG [Unreleased]; website languages/sfc "Action qualifiers" | — (Go: lang/conformance/sfc-timed-qualifiers, lang/sfc/timed_test.go) | codesys-shaped build rows habit-D-qualifier, habit-SD-qualifier, habit-L-qualifier, habit-iec-assoc-form; reference-timed/ (naut test) | — |
+| X47 | SFC | Step supervision: `STEP Fill (MAXTIME := T#60S, ERROR := Tag):` sets Fill.ERR on an overrun and mirrors it into a tag an alarm binds to | CHANGELOG [Unreleased]; website languages/sfc "Step supervision" | — (Go: lang/conformance/sfc-step-maxtime asserts the alarm, lang/sfc/timed_test.go) | codesys-shaped reference-timed/ (naut test: fill timeout) | — |
 
 ## Count of rows with no coverage at all
 
-**0 of 156.** Every row has at least one layer of coverage: a webview test, a
+**0 of 183.** Every row has at least one layer of coverage: a webview test, a
 rig verb, or a smoke check. Some rows are covered only in part, and the cell
 says which part:
 

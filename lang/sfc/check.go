@@ -5,6 +5,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/joyautomation/nautilus/lang/st"
 )
 
 // Severity is a structural diagnostic's level.
@@ -35,14 +37,31 @@ func (d Diagnostic) String() string {
 	return fmt.Sprintf("%d:%d: %s: %s", d.Pos.Line, d.Pos.Col, d.Severity, d.Message)
 }
 
-// supportedQualifiers are the action qualifiers the transpiler implements
-// (design §2.5). None of them takes a time argument.
-var supportedQualifiers = map[string]bool{"N": true, "S": true, "R": true, "P": true, "P0": true, "P1": true}
+// untimedQualifiers take no time argument; timedQualifiers require one (the
+// IEC 61131-3 action-control qualifiers with a duration: time Limited,
+// time Delayed, Stored-and-Delayed, Delayed-and-Stored, Stored-and-time-
+// Limited — design §2.5). Every one of them is implemented.
+var (
+	untimedQualifiers = map[string]bool{"N": true, "S": true, "R": true, "P": true, "P0": true, "P1": true}
+	timedQualifiers   = map[string]bool{"L": true, "D": true, "SD": true, "DS": true, "SL": true}
+)
 
-// timedQualifiers are the IEC qualifiers that take a time argument and are
-// not implemented (§2.5, §7) — distinguished from a genuinely unknown token
-// so the diagnostic says "not implemented" rather than "unknown".
-var timedQualifiers = map[string]bool{"L": true, "D": true, "SD": true, "DS": true, "SL": true}
+// IsTimedQualifier reports whether q (upper-case) is one of the timed
+// qualifiers L, D, SD, DS, SL, which take a duration.
+func IsTimedQualifier(q string) bool { return timedQualifiers[q] }
+
+// qualifierHelp is the tail of every qualifier diagnostic: the whole
+// supported set, and the Step.T recipe for timing the qualifiers can't say.
+const qualifierHelp = "supported qualifiers are N, S, R, P, P0, P1 and the timed L, D, SD, DS, SL (`D Valve(T#3S);` or IEC's `Valve(D, T#3S);`); " +
+	"for timing none of them expresses, associate N with an ACTION that reads the step's elapsed time (`Valve := Fill.X AND Fill.T >= T#3S;`)"
+
+// durationRe accepts what a timed association or MAXTIME can take: a TIME
+// literal (T#3S, TIME#1m30s, t#250ms) or, for a timed association only, a
+// variable or constant name holding a TIME.
+var (
+	timeLiteralRe = regexp.MustCompile(`(?i)^(T|TIME)#-?[0-9][0-9a-z_.]*$`)
+	durationIdent = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
 
 // Check runs the structural checks of design doc §5.1 against a parsed
 // chart and returns every finding, positioned and sorted by location.
@@ -164,22 +183,55 @@ func Check(prog *Program) []Diagnostic {
 	// ── action associations: qualifier support + target resolution ───────
 	for _, s := range prog.Steps {
 		for _, a := range s.Actions {
-			if !supportedQualifiers[a.Qualifier] {
-				if timedQualifiers[a.Qualifier] {
-					add(a.Pos, SeverityError, "timed qualifier %q is not implemented; supported qualifiers are N, S, R, P, P0, P1", a.Qualifier)
-				} else {
-					add(a.Pos, SeverityError, "unknown action qualifier %q; supported qualifiers are N, S, R, P, P0, P1", a.Qualifier)
+			switch {
+			case timedQualifiers[a.Qualifier]:
+				switch {
+				case a.Time == "":
+					add(a.Pos, SeverityError, "timed qualifier %s needs a duration: `%s %s(T#3S);` (or IEC's `%s(%s, T#3S);`)", a.Qualifier, a.Qualifier, a.Target, a.Target, a.Qualifier)
+				case !timeLiteralRe.MatchString(a.Time) && !durationIdent.MatchString(a.Time):
+					add(a.Pos, SeverityError, "timed qualifier %s: %q is not a duration — write a TIME literal like T#3S, or the name of a TIME variable", a.Qualifier, a.Time)
 				}
-			} else if a.Time != "" {
-				// The parser keeps the `(time)` argument so the editor can
-				// round-trip it, but no supported qualifier reads it: refuse
-				// rather than run a chart that silently ignores a duration.
-				add(a.Pos, SeverityError, "qualifier %s does not take a time argument (%q); only the timed qualifiers L, D, SD, DS, SL do, and those are not implemented", a.Qualifier, a.Time)
+			case untimedQualifiers[a.Qualifier]:
+				if a.Time != "" {
+					// The parser keeps the `(time)` argument so the editor can
+					// round-trip it, but this qualifier never reads it: refuse
+					// rather than run a chart that silently ignores a duration.
+					add(a.Pos, SeverityError, "qualifier %s does not take a time argument (%q); only the timed qualifiers L, D, SD, DS, SL do", a.Qualifier, a.Time)
+				}
+			default:
+				add(a.Pos, SeverityError, "unknown action qualifier %q; %s", a.Qualifier, qualifierHelp)
 			}
 			key := strings.ToUpper(a.Target)
 			if actionByName[key] == nil && !varNames[key] {
 				add(a.Pos, SeverityError, "step %s: action association %s %s references neither an ACTION block nor a declared variable", s.Name, a.Qualifier, a.Target)
 			}
+		}
+	}
+
+	// ── step attributes: MAXTIME (supervision) and ERROR (its flag's tag) ──
+	for _, s := range prog.Steps {
+		seen := map[string]bool{}
+		for _, at := range s.Attrs {
+			if seen[at.Name] {
+				add(at.Pos, SeverityError, "step %s: attribute %s is given twice", s.Name, at.Name)
+				continue
+			}
+			seen[at.Name] = true
+			switch at.Name {
+			case "MAXTIME":
+				if !timeLiteralRe.MatchString(at.Value) || st.ParseTimeMs(strings.SplitN(strings.ToUpper(at.Value), "#", 2)[1]) <= 0 {
+					add(at.Pos, SeverityError, "step %s: MAXTIME takes a positive TIME literal, e.g. (MAXTIME := T#30S); got %q", s.Name, at.Value)
+				}
+			case "ERROR":
+				if !durationIdent.MatchString(at.Value) || !varNames[strings.ToUpper(at.Value)] {
+					add(at.Pos, SeverityError, "step %s: ERROR names the BOOL variable (usually a tag, for an alarm) that mirrors %s.ERR; %q is not a declared variable", s.Name, s.Name, at.Value)
+				}
+			default:
+				add(at.Pos, SeverityError, "step %s: unknown step attribute %s; a step takes MAXTIME := <TIME> (its supervision limit) and ERROR := <BOOL variable> (where the overrun flag goes)", s.Name, at.Name)
+			}
+		}
+		if seen["ERROR"] && !seen["MAXTIME"] {
+			add(s.Pos, SeverityError, "step %s: ERROR without MAXTIME — the error flag is set when the step stays active longer than its MAXTIME", s.Name)
 		}
 	}
 
@@ -190,6 +242,11 @@ func Check(prog *Program) []Diagnostic {
 	}
 	for _, a := range prog.Actions {
 		diags = append(diags, checkStepRefs(a.Body, fmt.Sprintf("action %s", a.Name), stepByName, varNames)...)
+	}
+	for _, s := range prog.Steps {
+		if v := s.Attr("ERROR"); v != "" && stepByName[strings.ToUpper(v)] != nil {
+			add(s.Pos, SeverityError, "step %s: ERROR := %s names a step; it takes a BOOL variable", s.Name, v)
+		}
 	}
 
 	// ── simultaneous-convergence sources reachable from a common
@@ -209,7 +266,7 @@ func Check(prog *Program) []Diagnostic {
 	return diags
 }
 
-var stepRefRe = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\.(X|T)\b`)
+var stepRefRe = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\.(X|T|ERR)\b`)
 
 // checkStepRefs scans a text span for `Ident.X` / `Ident.T` references and
 // flags any whose base identifier resolves to neither a declared step nor a
@@ -224,8 +281,18 @@ func checkStepRefs(sp Span, context string, stepByName map[string]*Step, varName
 		name := sp.Text[loc[2]:loc[3]]
 		suffix := sp.Text[loc[4]:loc[5]]
 		key := strings.ToUpper(name)
-		if stepByName[key] != nil || varNames[key] {
+		if s := stepByName[key]; s != nil {
+			if suffix == "ERR" && s.MaxTime() == "" && !(loc[0] > 0 && sp.Text[loc[0]-1] == '.') {
+				diags = append(diags, Diagnostic{Pos: spanOffsetPos(sp, loc[0]), Severity: SeverityError,
+					Message: fmt.Sprintf("%s: %s.ERR is the step's overrun flag, but step %s has no MAXTIME — write STEP %s (MAXTIME := T#30S):", context, name, s.Name, s.Name)})
+			}
 			continue
+		}
+		if varNames[key] {
+			continue
+		}
+		if suffix == "ERR" {
+			continue // an ordinary struct member named ERR, not a step reference
 		}
 		pos := spanOffsetPos(sp, loc[0])
 		diags = append(diags, Diagnostic{Pos: pos, Severity: SeverityError,
@@ -352,11 +419,14 @@ func bipartiteCovers(sources []string, reachSets []map[string]bool) bool {
 // every such group has one well-defined outcome and needs no diagnostic.
 
 // checkAssocBodyWrites warns when a boolean variable is the target of a bare
-// qualifier association (N/S/R/P/P1/P0 X) AND is assigned inside an ACTION
-// body. Both are legal and the rule is fixed (§2.5): the association writes
-// the variable last in the scan, but only on the scans it acts — N while its
-// step is active (plus the one final scan), S/R once on its step's activation,
-// a pulse on its one edge scan — and the variable is the ACTION's otherwise.
+// qualifier association (N/S/R/P/P1/P0/L/D/SD/DS/SL X) AND is assigned inside
+// an ACTION body. Both are legal and the rule is fixed (§2.5): the association
+// writes the variable last in the scan, but only on the scans it acts — N
+// while its step is active (plus the one final scan), S/R once on its step's
+// activation, a pulse on its one edge scan, a timed qualifier over its timed
+// window — and the variable is the ACTION's otherwise. The message states the
+// window for the qualifier actually written; an unknown qualifier gets no
+// warning (its own error says what is wrong).
 // It is worth a warning because it reads as "two owners" and a test that only
 // samples a few scans can't tell which one produced a value.
 func checkAssocBodyWrites(prog *Program, actionByName map[string]*ActionBlock) []Diagnostic {
@@ -391,8 +461,24 @@ func checkAssocBodyWrites(prog *Program, actionByName map[string]*ActionBlock) [
 					verb = "resets"
 				}
 				rule = fmt.Sprintf("the association %s it once, on the scan %s activates; the ACTION's writes stand otherwise", verb, s.Name)
+			case "P", "P1", "P0":
+				edge := "activates"
+				if a.Qualifier == "P0" {
+					edge = "deactivates"
+				}
+				rule = fmt.Sprintf("the association wins on its one pulse scan, the scan %s %s (and writes FALSE the scan after); the ACTION's writes stand otherwise", s.Name, edge)
+			case "L":
+				rule = fmt.Sprintf("the association wins for the first %s %s is active (and writes FALSE once when that ends); the ACTION's writes stand otherwise", a.Time, s.Name)
+			case "D":
+				rule = fmt.Sprintf("the association wins once %s has been active %s, until it deactivates (and writes FALSE once then); the ACTION's writes stand otherwise", s.Name, a.Time)
+			case "SD":
+				rule = fmt.Sprintf("the association wins from %s after %s activates until an R resets it, even after the step is left (and writes FALSE once then); the ACTION's writes stand otherwise", a.Time, s.Name)
+			case "DS":
+				rule = fmt.Sprintf("the association wins once %s has been active %s, and keeps winning after the step is left until an R resets it (and writes FALSE once then); the ACTION's writes stand otherwise", s.Name, a.Time)
+			case "SL":
+				rule = fmt.Sprintf("the association wins for %s from %s's activation, even after the step is left, or until an R (and writes FALSE once then); the ACTION's writes stand otherwise", a.Time, s.Name)
 			default:
-				rule = "the association wins on its one pulse scan (and writes FALSE the scan after); the ACTION's writes stand otherwise"
+				continue // an unknown qualifier: Check already reports it, and it has no rule to describe
 			}
 			diags = append(diags, Diagnostic{Pos: a.Pos, Severity: SeverityWarning,
 				Message: fmt.Sprintf("%s is driven by a qualifier association (%s) on step %s and assigned in ACTION %s — %s",

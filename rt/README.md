@@ -46,4 +46,8 @@ not by the exchange.
 
 The spike answers "what does the OS give a loop with nothing underneath
 it, on this box, with this kernel", next to the Go loop after Phase 2. It
-does not run IEC logic. See the design doc for what would.
+does not run IEC logic, and **it has no real I/O**: its block takes its
+process value over shared memory from the peer, so it proves timing and
+the supervisor exchange only. The real thing owns its I/O — fill heads
+over RS-485, a fieldbus, pins — and takes only parameters and setpoints
+from Nautilus. See the design doc's "The fast loop owns its I/O".

@@ -17,7 +17,13 @@
 import { execFile } from "node:child_process";
 import * as vscode from "vscode";
 import { cliCommand, cliExecOptions, cliMissingMessage, isMissing } from "./cli";
-import { NEW_PROJECT_TEMPLATES, newProjectArgs, validateProjectName } from "./newProjectLogic";
+import {
+  NEW_PROJECT_LANGUAGES,
+  NEW_PROJECT_TEMPLATES,
+  newProjectArgs,
+  templateTakesLanguage,
+  validateProjectName,
+} from "./newProjectLogic";
 
 /** `naut new` itself is fast (file writes + `git init`), but give it real
  * room on a slow disk or an antivirus scanner in the way. */
@@ -42,7 +48,17 @@ export function registerNewProjectCommand(): vscode.Disposable {
     });
     if (!template) return;
 
-    await createProject(parent, name.trim(), template.template);
+    let language: string | undefined;
+    if (templateTakesLanguage(template.template)) {
+      const picked = await vscode.window.showQuickPick(NEW_PROJECT_LANGUAGES, {
+        title: "nautilus: Create Project — program language",
+        placeHolder: "The language of the first program (you can add the others later)",
+      });
+      if (!picked) return;
+      language = picked.language;
+    }
+
+    await createProject(parent, name.trim(), template.template, language);
   });
 }
 
@@ -57,9 +73,11 @@ async function pickParentFolder(): Promise<vscode.Uri | undefined> {
   return picked?.[0];
 }
 
-async function createProject(parent: vscode.Uri, name: string, template: string): Promise<void> {
+async function createProject(parent: vscode.Uri, name: string, template: string,
+  language?: string
+): Promise<void> {
   const cli = cliCommand();
-  const args = newProjectArgs(name, template);
+  const args = newProjectArgs(name, template, language);
   const projectUri = vscode.Uri.joinPath(parent, name);
 
   const ok = await vscode.window.withProgress(

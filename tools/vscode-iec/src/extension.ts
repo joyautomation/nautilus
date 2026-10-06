@@ -18,6 +18,7 @@ import {
 } from "vscode-languageclient/node";
 import { FbMonitorLenses, LiveValues } from "./liveValues";
 import { LiveValuesView } from "./liveValuesView";
+import { fireTransition, setActiveStep } from "./sfcCommands";
 import { OnlineEdit } from "./onlineEdit";
 import { broadcastSyncState, FbdEditorProvider, FbdPreview } from "./fbdPreview";
 import { LdEditorProvider, LdPreview } from "./ldPreview";
@@ -32,6 +33,8 @@ import { AcceptanceTests } from "./acceptanceTests";
 import { cliVersion, checkCliVersion, initCli, installCliCommand, resolveCliNow, showCliInfo, showCliMissing } from "./cli";
 import { initTestState } from "./testState";
 import { notifyInfo, notifyWarning, openEditors } from "./testHooks";
+import { setLspClient } from "./lspClient";
+import { registerDiagramDescriptions } from "./diagramXref";
 
 /** The id `workbench.action.openWalkthrough` wants: `<extension id>#<walkthrough id>`,
  * matching this file's `contributes.walkthroughs[0].id` in package.json. */
@@ -116,6 +119,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const fbd = new FbdPreview(context, live);
   context.subscriptions.push(fbd);
+
+  // Tag descriptions on diagram elements: re-sent when the setting or a
+  // tag file changes (diagramXref.ts).
+  registerDiagramDescriptions(context);
 
   const ladder = new LdPreview(context, live);
   context.subscriptions.push(ladder);
@@ -270,6 +277,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
     vscode.commands.registerCommand("nautilus.setValue", (tag?: string) => live?.setValue(tag)),
+    vscode.commands.registerCommand("nautilus.force", (tag?: string) => live?.force(tag)),
+    vscode.commands.registerCommand("nautilus.unforce", (tag?: string) => live?.unforce(tag)),
+    vscode.commands.registerCommand("nautilus.unforceAll", () => live?.unforceAll()),
+    vscode.commands.registerCommand("nautilus.forces.show", () => live?.showForces()),
+    vscode.commands.registerCommand("nautilus.sfc.setStep", (arg?: string) => live && setActiveStep(live, arg)),
+    vscode.commands.registerCommand("nautilus.sfc.fireTransition", (arg?: string) => live && fireTransition(live, arg)),
     vscode.commands.registerCommand("nautilus.program.download", () => online.download()),
     vscode.commands.registerCommand("nautilus.program.diff", () => online.diff()),
     vscode.commands.registerCommand("nautilus.program.rollback", () => online.rollback()),
@@ -277,6 +290,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("nautilus.installCli", () => installCliCommand()),
     vscode.commands.registerCommand("nautilus.showCliInfo", () => showCliInfo()),
     vscode.commands.registerCommand("nautilus.restartLanguageServer", async () => {
+      setLspClient(undefined);
       await client?.stop().catch(() => undefined);
       client = undefined;
       await startLanguageClient(context);
@@ -338,6 +352,7 @@ async function startLanguageClient(context: vscode.ExtensionContext): Promise<vo
 
   try {
     await client.start();
+    setLspClient(client);
     context.subscriptions.push({ dispose: () => client?.stop() });
   } catch (err) {
     client = undefined;

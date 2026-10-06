@@ -7,7 +7,8 @@
 	import { Handle, Position } from '@xyflow/svelte';
 	import type { Placed } from './layout';
 	import { pinOffset, EXTENSIBLE, NOTE_LINE_H } from './layout';
-	import { live, liveValue, liveMissing, member, formatLive } from './liveState.svelte';
+	import { live, liveValue, liveMissing, liveForced, member, formatLive } from './liveState.svelte';
+	import { withDesc } from './xref.svelte';
 
 	let {
 		data
@@ -30,6 +31,9 @@
 				declareType?: string;
 			}) => void;
 			onInspect?: (inst: { name: string; type: string; ins: string[]; outs: string[] }) => void;
+			/** The EN/ENO pin gesture: show (or hide) a block's EN and ENO. */
+			onToggleEno?: (id: string) => void;
+			enoShown?: boolean;
 		};
 	} = $props();
 	const n = $derived(data.n);
@@ -42,6 +46,12 @@
 	const renameable = $derived(data.editable && (n.kind === 'fb' || (n.kind === 'block' && !!n.wire)));
 	const plusPin = $derived(data.editable && n.kind === 'block' && EXTENSIBLE.has(n.label));
 	const plusTop = $derived(n.titleH + (n.ins.length + 0.5) * 18);
+	// EN/ENO (execution control): every block and FB has them, IEC-style,
+	// but they draw only when bound — or after this toggle, as open pins to
+	// drop a wire on (EN) or drag one from (ENO).
+	const enoToggle = $derived(data.editable && (n.kind === 'block' || n.kind === 'fb') && !!data.onToggleEno);
+	const openPin = (pin: string, side: 'in' | 'out') =>
+		(side === 'in' && pin === 'EN' && !!n.openEn) || (side === 'out' && pin === 'ENO' && !!n.openEno);
 
 	// A direct listener (not Svelte's delegated ondblclick): survives synthetic
 	// events in tests and never races xyflow's node wrapper handling.
@@ -95,6 +105,11 @@
 	}
 
 	const problems = $derived(data.problems ?? []);
+	// The identifier this element draws, for Find All References and its
+	// description (xref.svelte.ts): a variable chip (not a literal), or an
+	// FB instance. Plain blocks are inlined expressions — nothing to name.
+	const xref = $derived((chip && !n.src) || n.kind === 'fb' ? n.label : undefined);
+	const ordinal = (k: number) => k + (k % 100 >= 11 && k % 100 <= 13 ? 'th' : ['th', 'st', 'nd', 'rd'][k % 10] ?? 'th');
 	// Live value pills, mirroring the text editor's inline decorations:
 	// variable chips and coils show their value; FB instances show each
 	// output pin's value off the streamed instance struct. Literals need no
@@ -152,12 +167,13 @@
 		class="chip {n.kind} {n.status ?? ''}"
 		data-id={n.id}
 		data-kind="chip"
+		data-xref={xref} data-xref-line={n.line}
 		class:ghost={n.ghost}
 		class:editable={editableConst || retargetable}
 		class:missing={missingTag}
 		class:problem={problems.length > 0}
 		style="width: {n.w}px; height: {n.h}px"
-		{title}
+		title={withDesc(title, xref)}
 		use:dblEdit
 	>
 		{#if n.kind === 'coil'}
@@ -166,8 +182,9 @@
 		<span>{n.label}</span>
 		<Handle type="source" position={Position.Right} id="" data-kind="pin" data-pin="" style="top: {n.h / 2}px" isConnectable={data.editable} />
 		{#if problems.length}<span class="badge">!</span>{/if}
+		{#if n.exec}<span class="exec" title="runs {ordinal(n.exec)} in its network">{n.exec}</span>{/if}
 		{#if chipVal !== undefined}
-			<span class="nx-pill val below" class:off={!live.fresh} title="{n.label} = {formatLive(chipVal)} (live)">{formatLive(chipVal)}</span>
+			<span class="nx-pill val below" class:off={!live.fresh} class:forced={liveForced(n.label)} title="{n.label} = {formatLive(chipVal)} (live{liveForced(n.label) ? ', FORCED' : ''})">{formatLive(chipVal)}</span>
 		{/if}
 	</div>
 {:else}
@@ -175,10 +192,11 @@
 		class="block {n.status ?? ''}"
 		data-id={n.id}
 		data-kind={n.kind === 'fb' ? 'fb' : 'node'}
+		data-xref={xref} data-xref-line={n.line}
 		class:editable={renameable}
 		class:problem={problems.length > 0}
 		style="width: {n.w}px; height: {n.h}px"
-		{title}
+		title={withDesc(title, xref)}
 		use:dblEdit
 	>
 		<div class="title" style="height: {n.titleH}px">
@@ -186,12 +204,12 @@
 			{#if n.kind === 'fb'}<span class="type">{n.type ?? '?'}</span>{/if}
 		</div>
 		{#each n.ins as pin (pin)}
-			<Handle type="target" position={Position.Left} id={pin} data-kind="pin" data-pin={pin} style="top: {pinOffset(n, pin, 'in')}px" isConnectable={data.editable} />
-			<span class="pin in" style="top: {pinOffset(n, pin, 'in') - 7}px">{pin}</span>
+			<Handle type="target" class={openPin(pin, 'in') ? 'open-pin' : ''} position={Position.Left} id={pin} data-kind="pin" data-pin={pin} data-xref={n.kind === 'fb' ? `${n.label}.${pin}` : undefined} data-xref-line={n.line} style="top: {pinOffset(n, pin, 'in')}px" isConnectable={data.editable} />
+			<span class="pin in" class:ctl={pin === 'EN'} class:open={openPin(pin, 'in')} style="top: {pinOffset(n, pin, 'in') - 7}px">{pin}</span>
 		{/each}
 		{#each n.outs as pin (pin)}
-			<Handle type="source" position={Position.Right} id={pin} data-kind="pin" data-pin={pin} style="top: {pinOffset(n, pin, 'out')}px" isConnectable={data.editable} />
-			<span class="pin out" style="top: {pinOffset(n, pin, 'out') - 7}px">{pin}</span>
+			<Handle type="source" class={openPin(pin, 'out') ? 'open-pin' : ''} position={Position.Right} id={pin} data-kind="pin" data-pin={pin} data-xref={n.kind === 'fb' ? `${n.label}.${pin}` : undefined} data-xref-line={n.line} style="top: {pinOffset(n, pin, 'out')}px" isConnectable={data.editable} />
+			<span class="pin out" class:ctl={pin === 'ENO'} class:open={openPin(pin, 'out')} style="top: {pinOffset(n, pin, 'out') - 7}px">{pin}</span>
 			{#if fbStruct !== undefined && member(fbStruct, pin) !== undefined}
 				<span
 					class="nx-pill val beside"
@@ -208,6 +226,19 @@
 		{/if}
 		{#if n.wire}<span class="wire">{n.wire}</span>{/if}
 		{#if problems.length}<span class="badge">!</span>{/if}
+		{#if n.exec}<span class="exec" title="runs {ordinal(n.exec)} in its network">{n.exec}</span>{/if}
+		{#if enoToggle}
+			<button
+				class="eno-toggle"
+				class:on={data.enoShown}
+				title={data.enoShown ? 'hide the unwired EN/ENO pins' : 'show EN/ENO: wire EN to run this block only while it is TRUE; ENO is TRUE when it ran without an error'}
+				onclick={(e) => {
+					e.stopPropagation();
+					data.onToggleEno?.(n.id);
+				}}
+				ondblclick={(e) => e.stopPropagation()}
+			>EN</button>
+		{/if}
 	</div>
 {/if}
 
@@ -357,6 +388,60 @@
 		border: 1.2px dashed var(--nx-blue);
 		width: 9px;
 		height: 9px;
+	}
+	/* EN/ENO: execution control, drawn a shade apart from the data pins */
+	.pin.ctl {
+		font-weight: 700;
+		color: var(--nx-blue);
+	}
+	.pin.open {
+		opacity: 0.55;
+		font-style: italic;
+	}
+	:global(.svelte-flow__handle.open-pin) {
+		background: transparent;
+		border: 1.2px dashed var(--nx-blue);
+	}
+	/* a statement's execution order within its network */
+	.exec {
+		position: absolute;
+		top: -8px;
+		left: -8px;
+		min-width: 14px;
+		height: 14px;
+		padding: 0 3px;
+		box-sizing: border-box;
+		border-radius: 7px;
+		background: var(--nx-panel-bg);
+		border: 1px solid color-mix(in srgb, var(--nx-ink) 45%, transparent);
+		color: var(--nx-muted);
+		font-size: 9px;
+		line-height: 12px;
+		text-align: center;
+		pointer-events: none;
+	}
+	.eno-toggle {
+		position: absolute;
+		top: 2px;
+		left: 2px;
+		font-family: var(--nx-mono);
+		font-size: 8px;
+		line-height: 1;
+		padding: 1px 2px;
+		border-radius: 2px;
+		border: 1px dashed var(--nx-blue);
+		background: transparent;
+		color: var(--nx-blue);
+		cursor: pointer;
+		opacity: 0;
+	}
+	.block:hover .eno-toggle,
+	.eno-toggle.on,
+	:global(.svelte-flow__node.selected) .eno-toggle {
+		opacity: 0.85;
+	}
+	.eno-toggle.on {
+		border-style: solid;
 	}
 	.pin.plus {
 		color: var(--nx-blue);

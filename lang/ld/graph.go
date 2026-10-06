@@ -111,6 +111,10 @@ type Element struct {
 	PowerIn  string      `json:"powerIn,omitempty"`
 	PowerOut string      `json:"powerOut,omitempty"`
 	Legs     [][]Element `json:"legs,omitempty"`
+	// Trig is an edge contact's implicit R_TRIG / F_TRIG instance, as the
+	// compiler names it (rt_<rung>_<ref>): its .Q is the contact's state,
+	// for a live overlay. Output only — an edit ignores it.
+	Trig string `json:"trig,omitempty"`
 }
 
 // Graph parses LD source into the render model. libs are project library
@@ -167,8 +171,9 @@ func Graph(src string, libs ...string) (*Model, error) {
 			}
 			break
 		}
-		r.Elements = toElements(elems[:condEnd], res)
-		r.Coils = toElements(elems[condEnd:], res)
+		ec := &edgeCtx{rung: rung.name, seen: map[string]int{}}
+		r.Elements = toElements(elems[:condEnd], res, ec)
+		r.Coils = toElements(elems[condEnd:], res, nil)
 		m.Rungs = append(m.Rungs, r)
 		rung = nil
 		return nil
@@ -260,7 +265,10 @@ func Graph(src string, libs ...string) (*Model, error) {
 	return m, nil
 }
 
-func toElements(elems []any, res *resolver) []Element {
+// toElements converts parsed elements to the render model. ec, when given,
+// names edge contacts' implicit instances in the compiler's order (the
+// rung's condition, depth first — seriesCond's walk).
+func toElements(elems []any, res *resolver, ec *edgeCtx) []Element {
 	out := make([]Element, 0, len(elems))
 	for _, e := range elems {
 		switch x := e.(type) {
@@ -269,11 +277,15 @@ func toElements(elems []any, res *resolver) []Element {
 		case fnEl:
 			out = append(out, Element{Kind: "fn", Fn: x.fn, Args: x.args, Neg: x.neg})
 		case edgeEl:
-			mode := "P"
+			mode, kind := "P", "rt"
 			if !x.rise {
-				mode = "N"
+				mode, kind = "N", "ft"
 			}
-			out = append(out, Element{Kind: "edge", Ref: x.ref, Mode: mode})
+			el := Element{Kind: "edge", Ref: x.ref, Mode: mode}
+			if ec != nil {
+				el.Trig = ec.name(kind, x.ref)
+			}
+			out = append(out, el)
 		case fbEl:
 			in, pOut := res.powerPins(x.typ, x.args)
 			out = append(out, Element{
@@ -283,7 +295,7 @@ func toElements(elems []any, res *resolver) []Element {
 		case branch:
 			b := Element{Kind: "branch"}
 			for _, leg := range x.legs {
-				b.Legs = append(b.Legs, toElements(leg, res))
+				b.Legs = append(b.Legs, toElements(leg, res, ec))
 			}
 			out = append(out, b)
 		case coilEl:

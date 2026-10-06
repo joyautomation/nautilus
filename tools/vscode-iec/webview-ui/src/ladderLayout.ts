@@ -38,7 +38,7 @@ export const L = {
 } as const;
 
 export type LNode = {
-	kind: 'contact' | 'coil' | 'fn' | 'fb' | 'assign';
+	kind: 'contact' | 'edge' | 'coil' | 'fn' | 'fb' | 'assign';
 	x: number;
 	y: number;
 	w: number;
@@ -204,6 +204,15 @@ export function layoutSeries(anns: Ann[], x: number, cy: number, path: number[] 
 				const w = operandBoxWidth(a.el.ref, L.CONTACT_W);
 				const y = cy - halfC;
 				nodes.push({ kind: 'contact', x: cursor, y, w, h: L.CONTACT_H, ann: a, path: elPath });
+				descent = reserveWasLabel(a, cy, y, L.CONTACT_H, descent);
+				cursor += w;
+				break;
+			}
+			case 'edge': {
+				// A contact's box: the P / N mark sits between its bars.
+				const w = operandBoxWidth(a.el.ref, L.CONTACT_W);
+				const y = cy - halfC;
+				nodes.push({ kind: 'edge', x: cursor, y, w, h: L.CONTACT_H, ann: a, path: elPath });
 				descent = reserveWasLabel(a, cy, y, L.CONTACT_H, descent);
 				cursor += w;
 				break;
