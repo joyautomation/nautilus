@@ -42,7 +42,11 @@ import (
 //	_act_<Tgt>_stored   retained S/R stored flag
 //	_act_<Act>_prev     retained final-scan memory for a level body action
 //	_act_<Var>_lvl      retained final-scan memory for a boolean variable's
-//	                    N/P/P1/P0 drive signal
+//	                    N/P/P1/P0/L/D/SD/DS/SL drive signal
+//	_q_<Step>_<Tgt>_<Q>_tmr  per-association TON of a timed qualifier
+//	                    (L/D/SD/DS/SL on that step and target)
+//	_q_<Step>_<Tgt>_<Q>_ff   per-association stored flag of SD/DS/SL
+//	_S_<Step>_err       retained MAXTIME overrun flag (Step.ERR)
 //
 // where <tid> is the transition's declared name, or t<line> when unnamed.
 func transpileProgram(prog *Program, src string) (string, []int, error) {
@@ -128,6 +132,10 @@ type gen struct {
 	needTimer map[string]bool // upper step name -> needs hidden TON
 	stepOrder []*Step
 
+	// timed holds the per-association state stem of every timed-qualifier
+	// association (L/D/SD/DS/SL), keyed by the association's position.
+	timed map[Pos]string
+
 	decls []decl
 	stmts []stmt
 }
@@ -140,6 +148,7 @@ func newGen(prog *Program) *gen {
 		transID:     map[*Transition]string{},
 		needPrev:    map[string]bool{},
 		needTimer:   map[string]bool{},
+		timed:       map[Pos]string{},
 	}
 	for _, s := range prog.Steps {
 		g.stepByUpper[strings.ToUpper(s.Name)] = s
@@ -168,6 +177,17 @@ func (g *gen) stored(name string) string {
 }
 func (g *gen) prevMem(name string) string { return "_act_" + g.canon(name) + "_prev" }
 func (g *gen) lvlMem(name string) string  { return "_act_" + g.canon(name) + "_lvl" }
+func (g *gen) errFlag(name string) string { return "_S_" + g.canon(name) + "_err" }
+
+// timedTmr / timedFF name a timed association's TON and stored flag. The stem
+// is step + target + qualifier, so it survives every edit that keeps those
+// three (a warm swap carries the timer and the latch across, §2.7).
+func (g *gen) timedTmr(sa stepAssoc) string { return g.timed[sa.a.Pos] + "_tmr" }
+func (g *gen) timedFF(sa stepAssoc) string  { return g.timed[sa.a.Pos] + "_ff" }
+
+// isStoredTimed reports whether a timed qualifier latches (needs a _ff slot
+// an R resets): SD, DS and SL.
+func isStoredTimed(q string) bool { return q == "SD" || q == "DS" || q == "SL" }
 
 // canon returns a step/action's canonical spelling (the declaration's spelling)
 // so a slot name is stable regardless of how a condition/body cased a reference.
@@ -183,6 +203,7 @@ func (g *gen) comment(text string)        { g.emit("(* "+text+" *)", g.bodyLine)
 
 func (g *gen) build() error {
 	g.assignTransIDs()
+	g.assignTimedStems()
 	g.scanTimerRefs()
 	g.scanEdgeNeeds()
 
@@ -192,6 +213,7 @@ func (g *gen) build() error {
 	g.emitClears()
 	g.emitSets()
 	g.emitStepTimers()
+	g.emitSupervision()
 	if err := g.emitActions(); err != nil {
 		return err
 	}
@@ -214,6 +236,25 @@ func (g *gen) assignTransIDs() {
 		}
 		used[strings.ToUpper(id)] = true
 		g.transID[t] = id
+	}
+}
+
+// assignTimedStems names the state of every timed-qualifier association:
+// _q_<Step>_<Target>_<Q>, de-duplicated with a numeric suffix when one step
+// carries the same qualifier on the same target twice.
+func (g *gen) assignTimedStems() {
+	used := map[string]bool{}
+	for _, sa := range g.assocs() {
+		if !IsTimedQualifier(sa.a.Qualifier) {
+			continue
+		}
+		stem := fmt.Sprintf("_q_%s_%s_%s", sa.step.Name, sa.a.Target, sa.a.Qualifier)
+		base := stem
+		for i := 2; used[strings.ToUpper(stem)]; i++ {
+			stem = fmt.Sprintf("%s_%d", base, i)
+		}
+		used[strings.ToUpper(stem)] = true
+		g.timed[sa.a.Pos] = stem
 	}
 }
 
@@ -242,6 +283,13 @@ func (g *gen) scanTimerRefs() {
 	for _, a := range g.prog.Actions {
 		mark(a.Body.Text)
 	}
+	// A supervised step (MAXTIME) measures its active time with the same
+	// hidden timer a .T read uses.
+	for _, s := range g.prog.Steps {
+		if s.MaxTime() != "" {
+			g.needTimer[strings.ToUpper(s.Name)] = true
+		}
+	}
 }
 
 // scanEdgeNeeds marks which steps need a _prev edge memory: any step carrying
@@ -251,9 +299,12 @@ func (g *gen) scanEdgeNeeds() {
 	for _, s := range g.prog.Steps {
 		for _, a := range s.Actions {
 			switch a.Qualifier {
-			case "S", "R", "P", "P1", "P0":
+			case "S", "R", "P", "P1", "P0", "SD", "SL":
 				g.needPrev[strings.ToUpper(s.Name)] = true
 			}
+		}
+		if s.MaxTime() != "" {
+			g.needPrev[strings.ToUpper(s.Name)] = true // the overrun flag clears on re-activation
 		}
 	}
 }
@@ -278,6 +329,9 @@ func (g *gen) ptCapMs() int {
 	for _, a := range g.prog.Actions {
 		scan(a.Body.Text)
 	}
+	for _, s := range g.prog.Steps {
+		scan(s.MaxTime())
+	}
 	cap := max * 2
 	const day = 24 * 3600 * 1000
 	if cap < day {
@@ -299,6 +353,18 @@ func (g *gen) buildVarBlock() {
 		}
 		if g.needTimer[strings.ToUpper(s.Name)] {
 			g.decls = append(g.decls, decl{fmt.Sprintf("%s : TON;", g.timer(s.Name)), s.Pos.Line})
+		}
+		if s.MaxTime() != "" {
+			g.decls = append(g.decls, decl{fmt.Sprintf("%s : BOOL;", g.errFlag(s.Name)), s.Pos.Line})
+		}
+	}
+	for _, sa := range g.assocs() {
+		if !IsTimedQualifier(sa.a.Qualifier) {
+			continue
+		}
+		g.decls = append(g.decls, decl{fmt.Sprintf("%s : TON;", g.timedTmr(sa)), sa.a.Pos.Line})
+		if isStoredTimed(sa.a.Qualifier) {
+			g.decls = append(g.decls, decl{fmt.Sprintf("%s : BOOL;", g.timedFF(sa)), sa.a.Pos.Line})
 		}
 	}
 	for _, t := range g.prog.Transitions {
@@ -380,8 +446,13 @@ func (g *gen) levelBodyActions() []string {
 	return out
 }
 
-func (g *gen) isLevel(q string) bool  { return q == "N" || q == "S" || q == "R" }
-func (g *gen) isPulse(q string) bool  { return q == "P" || q == "P1" || q == "P0" }
+// isLevel: the qualifiers whose active signal is a level (an interval of
+// scans), so a body they drive gets the final scan (§2.5.1). Every timed
+// qualifier is a level: it acts over a timed window, not on one edge scan.
+func (g *gen) isLevel(q string) bool {
+	return q == "N" || q == "S" || q == "R" || IsTimedQualifier(q)
+}
+func (g *gen) isPulse(q string) bool { return q == "P" || q == "P1" || q == "P0" }
 
 // riseEdge / fallEdge render a step's rising / falling edge signal.
 func (g *gen) riseEdge(name string) string {
@@ -501,6 +572,37 @@ func (g *gen) emitStepTimers() {
 	}
 }
 
+// ─── phase 5b: step supervision (MAXTIME) ─────────────────────────────────────
+
+// emitSupervision lowers each supervised step's MAXTIME (design §2.6.1): the
+// retained overrun flag _S_<Step>_err (Step.ERR) is cleared on the scan the
+// step activates and set on any scan the step is active and its elapsed time
+// exceeds the limit — strictly longer than MAXTIME, the way CODESYS's
+// maximum step time and a S7-GRAPH supervision `T > limit` read. It then
+// stays set after the step is left (an abort transition's target can still
+// read why), until the step's next activation. With ERROR := <var>, that
+// variable mirrors the flag every scan, which is how an alarm sees it.
+func (g *gen) emitSupervision() {
+	var sup []*Step
+	for _, s := range g.stepOrder {
+		if s.MaxTime() != "" {
+			sup = append(sup, s)
+		}
+	}
+	if len(sup) == 0 {
+		return
+	}
+	g.comment("5b. step supervision: MAXTIME overrun flags (Step.ERR)")
+	for _, s := range sup {
+		e := g.errFlag(s.Name)
+		g.emit(fmt.Sprintf("IF %s THEN %s := FALSE; END_IF;", g.riseEdge(s.Name), e), s.Pos.Line)
+		g.emit(fmt.Sprintf("IF %s AND %s.ET > %s THEN %s := TRUE; END_IF;", g.slot(s.Name), g.timer(s.Name), s.MaxTime(), e), s.Pos.Line)
+		if v := s.Attr("ERROR"); v != "" {
+			g.emit(fmt.Sprintf("%s := %s;", v, e), s.Pos.Line)
+		}
+	}
+}
+
 // ─── phase 6: actions ────────────────────────────────────────────────────────
 
 func (g *gen) emitActions() error {
@@ -513,9 +615,39 @@ func (g *gen) emitActions() error {
 			g.emit(fmt.Sprintf("IF %s THEN %s := TRUE; END_IF;", g.riseEdge(sa.step.Name), g.stored(sa.a.Target)), sa.a.Pos.Line)
 		}
 	}
+	// Timed qualifiers (IEC 61131-3 action control): L, D and DS time the
+	// step's activity; SD and SL latch on the step's activation and time the
+	// latch; DS latches when its timer elapses. All before the resets, so an
+	// R on the same scan wins.
+	for _, sa := range g.assocs() {
+		switch sa.a.Qualifier {
+		case "L", "D", "DS":
+			g.emit(fmt.Sprintf("%s(IN := %s, PT := %s);", g.timedTmr(sa), g.slot(sa.step.Name), sa.a.Time), sa.a.Pos.Line)
+		}
+	}
+	for _, sa := range g.assocs() {
+		switch sa.a.Qualifier {
+		case "SD", "SL":
+			g.emit(fmt.Sprintf("IF %s THEN %s := TRUE; END_IF;", g.riseEdge(sa.step.Name), g.timedFF(sa)), sa.a.Pos.Line)
+		case "DS":
+			g.emit(fmt.Sprintf("IF %s.Q THEN %s := TRUE; END_IF;", g.timedTmr(sa), g.timedFF(sa)), sa.a.Pos.Line)
+		}
+	}
 	for _, sa := range g.assocs() {
 		if sa.a.Qualifier == "R" {
-			g.emit(fmt.Sprintf("IF %s THEN %s := FALSE; END_IF;", g.riseEdge(sa.step.Name), g.stored(sa.a.Target)), sa.a.Pos.Line)
+			reset := g.stored(sa.a.Target) + " := FALSE;"
+			for _, ta := range g.assocs() {
+				if isStoredTimed(ta.a.Qualifier) && strings.EqualFold(ta.a.Target, sa.a.Target) {
+					reset += " " + g.timedFF(ta) + " := FALSE;"
+				}
+			}
+			g.emit(fmt.Sprintf("IF %s THEN %s END_IF;", g.riseEdge(sa.step.Name), reset), sa.a.Pos.Line)
+		}
+	}
+	for _, sa := range g.assocs() {
+		switch sa.a.Qualifier {
+		case "SD", "SL":
+			g.emit(fmt.Sprintf("%s(IN := %s, PT := %s);", g.timedTmr(sa), g.timedFF(sa), sa.a.Time), sa.a.Pos.Line)
 		}
 	}
 
@@ -619,6 +751,14 @@ func (g *gen) activeSignal(sa stepAssoc) string {
 		return g.riseEdge(sa.step.Name)
 	case "P0":
 		return g.fallEdge(sa.step.Name)
+	case "L":
+		return fmt.Sprintf("(%s AND NOT %s.Q)", g.slot(sa.step.Name), g.timedTmr(sa))
+	case "D", "SD":
+		return g.timedTmr(sa) + ".Q"
+	case "DS":
+		return g.timedFF(sa)
+	case "SL":
+		return fmt.Sprintf("(%s AND NOT %s.Q)", g.timedFF(sa), g.timedTmr(sa))
 	}
 	return "FALSE"
 }
@@ -754,9 +894,12 @@ func (g *gen) rewriteRefs(text string) string {
 			continue // leave this match as-is
 		}
 		b.WriteString(text[last:loc[0]])
-		if suffix == "X" {
+		switch suffix {
+		case "X":
 			b.WriteString(g.slot(s.Name))
-		} else {
+		case "ERR":
+			b.WriteString(g.errFlag(s.Name))
+		default:
 			b.WriteString(g.timer(s.Name) + ".ET")
 		}
 		last = loc[1]

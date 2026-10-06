@@ -102,6 +102,38 @@ variable** at the call site, use the standard's output binding:
 `t2:TON(PT := T#5S, ET => Elapsed)` — the one way ladder stores a
 non-BOOL (coils only assign BOOL). `=>` works in ST and FBD calls too.
 
+## SFC action qualifiers and step supervision
+
+Every IEC 61131-3 action qualifier compiles. An association is written
+`Q Target;` / `Q Target(T#3S);`, or in the standard's own textual form
+`Target(Q);` / `Target(Q, T#3S);`. The duration of a timed qualifier is a
+`TIME` literal or a `TIME` variable.
+
+| Qualifier | Active |
+| --- | --- |
+| `N` | while the step is active |
+| `S` / `R` | set / reset once, on the step's activation scan |
+| `P`, `P1` / `P0` | one scan, on the step's activation / deactivation |
+| `L` | from activation, for the duration (or until the step is left) |
+| `D` | once the step has been active the duration, until it is left |
+| `SD` | the duration after activation, even if the step was left; until an `R` |
+| `DS` | once the step has been active the duration; then until an `R` |
+| `SL` | from activation for the duration, even after the step is left; an `R` cuts it short |
+
+An `R` acts on its step's activation scan and clears the `S`, `SD`, `DS` and
+`SL` latches on its target. A timed `SL` that has run out stays latched until
+an `R`, as the standard specifies. Every timed association has its own timer,
+retained across an online edit.
+
+A step can carry a maximum time:
+`STEP Fill (MAXTIME := T#60S, ERROR := FillOverrun):`. When the step has
+been active longer than that, `Fill.ERR` goes TRUE (legal in conditions and
+action bodies), stays TRUE after the step is left, and clears on its next
+activation. `ERROR :=` mirrors it into a BOOL variable, a manifest tag an
+`alarms:` definition can watch. Pinned in `lang/conformance/sfc-timed-qualifiers`
+and `lang/conformance/sfc-step-maxtime`; the full description is on the
+[SFC page](/languages/sfc/).
+
 ## Types
 
 `BOOL`, `INT`, `DINT`, `UINT`, `UDINT`, `WORD`, `REAL`, `LREAL`, `TIME`,

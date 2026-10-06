@@ -8,14 +8,24 @@
       "match": "(?i)\\b(SFC|END_SFC|INITIAL_STEP|STEP|END_STEP|TRANSITION|END_TRANSITION|FROM|TO|ACTION|END_ACTION)\\b"
     },
     {
-      "comment": "action qualifiers at the start of an association line (N/S/R/P/P0/P1 and the not-yet-supported timed ones)",
+      "comment": "action qualifiers at the start of an association line: N S R P P0 P1 and the timed L D SD DS SL",
       "name": "storage.modifier.qualifier.iec-sfc",
       "match": "(?i)(?<=^|;)\\s*\\b(N|S|R|P0|P1|P|L|D|SD|DS|SL)\\b(?=\\s+[A-Za-z_])"
     },
     {
-      "comment": "step activity/timer attributes: Step.X, Step.T",
+      "comment": "the qualifier of an IEC-form association: Target(D, T#3S);",
+      "match": "(?i)(?<=\\()\\s*(N|S|R|P0|P1|P|L|D|SD|DS|SL)\\b(?=\\s*[,)])",
+      "captures": { "1": { "name": "storage.modifier.qualifier.iec-sfc" } }
+    },
+    {
+      "comment": "step attributes in a step header: STEP Fill (MAXTIME := T#30S, ERROR := Tag):",
+      "name": "keyword.other.step-attr.iec-sfc",
+      "match": "(?i)\\b(MAXTIME|ERROR)\\b(?=\\s*:=)"
+    },
+    {
+      "comment": "step activity/timer/overrun attributes: Step.X, Step.T, Step.ERR",
       "name": "support.variable.step-attr.iec-sfc",
-      "match": "\\.(X|T)\\b"
+      "match": "\\.(X|T|ERR)\\b"
     },
     { "include": "source.iec-st" }
   ]
