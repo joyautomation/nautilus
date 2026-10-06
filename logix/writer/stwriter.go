@@ -99,18 +99,26 @@ func lowerST(src string, opts Options) (*lowered, error) {
 	}
 	lw := &lowered{model: m, opts: opts, vars: map[string]ld.VarDecl{},
 		presetVars: map[string]bool{}, genNames: map[string]bool{}, st: true, aois: map[string]*aoiDef{}, src: src}
+	if len(prog.FBDecls) > 0 || len(prog.TypeDecls) > 0 {
+		// Blocks and types declared beside an ST program are its own
+		// library.
+		lw.opts.Libs = append([]string{src}, lw.opts.Libs...)
+	}
 	lw.loadTypes()
 	for _, v := range m.Vars {
 		lw.vars[strings.ToLower(v.Name)] = v
 	}
-	if len(prog.FBDecls) > 0 {
-		// Blocks declared beside an ST program are its own library.
-		lw.opts.Libs = append([]string{src}, lw.opts.Libs...)
+	// The manifest tags the body names undeclared are controller tags
+	// too (uses.go); they join the scope before the body is written, as
+	// the declared ones do.
+	implicit := lw.implicitFrom(prog, func(n int) int { return n })
+	for _, v := range implicit {
+		lw.vars[strings.ToLower(v.Name)] = v
 	}
 	for _, fn := range prog.FuncDecls {
 		lw.diag(ruleFunctionBlock, fn.Pos.Line, "", "FUNCTION %s: user functions are not in the Logix v1 subset; inline it", fn.Name)
 	}
-	for _, v := range m.Vars {
+	for _, v := range append(m.Vars, implicit...) {
 		lw.declare(v)
 	}
 	w := &stWriter{lw: lw}
