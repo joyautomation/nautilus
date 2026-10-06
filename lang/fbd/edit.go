@@ -43,6 +43,8 @@ type TextEdit struct {
 //	addInput    Node (extensible block), Source (+SourcePin) — append an arg
 //	declareVar  NewName, Value (type), Text (section) — add a declaration
 //	duplicate   Nodes (+ Text: the source they were copied from, KeepRefs)
+//	addNetwork, renameNetwork, moveNetwork, removeNetwork — networks.go;
+//	insertStatement with Node n:K lands at the end of network K
 type EditOp struct {
 	Type      string `json:"type"`
 	Node      string `json:"node,omitempty"`
@@ -128,6 +130,14 @@ func ApplyEdit(src string, op EditOp, libs ...string) ([]TextEdit, error) {
 		return b.opDuplicate(op)
 	case "retarget":
 		return b.opRetarget(op)
+	case "addNetwork":
+		return b.opAddNetwork(op)
+	case "renameNetwork":
+		return b.opRenameNetwork(op)
+	case "moveNetwork":
+		return b.opMoveNetwork(op)
+	case "removeNetwork":
+		return b.opRemoveNetwork(op)
 	}
 	return nil, fmt.Errorf("fbd edit: unknown op %q", op.Type)
 }
@@ -232,6 +242,9 @@ func (b *modelBuilder) opRewire(op EditOp) ([]TextEdit, error) {
 		if strings.HasPrefix(op.To, "f:") && strings.Contains(err.Error(), "no connection") {
 			return b.wireNewFBPin(op)
 		}
+		if strings.EqualFold(op.ToPin, "EN") && strings.Contains(err.Error(), "no connection") {
+			return b.wireNewEN(op)
+		}
 		return nil, err
 	}
 	ref, err := b.refText(op.Source, op.SourcePin)
@@ -253,7 +266,8 @@ func (b *modelBuilder) wireNewFBPin(op EditOp) ([]TextEdit, error) {
 	if !ok {
 		return nil, fmt.Errorf("fbd edit: unknown instance %q", inst)
 	}
-	valid := false
+	// EN is every call's execution-control input, drawn or not.
+	valid := strings.EqualFold(op.ToPin, "EN")
 	for _, p := range fbNode.Inputs {
 		if p == op.ToPin {
 			valid = true
@@ -274,6 +288,26 @@ func (b *modelBuilder) wireNewFBPin(op EditOp) ([]TextEdit, error) {
 		}
 	}
 	return nil, fmt.Errorf("fbd edit: %s has no call statement to extend", inst)
+}
+
+// wireNewEN binds a function block's EN (its execution control) for the
+// first time: `EN := ref` goes in first, where the diagram draws the pin.
+func (b *modelBuilder) wireNewEN(op EditOp) ([]TextEdit, error) {
+	call, ok := b.exprOf[op.To]
+	if !ok {
+		return nil, fmt.Errorf("fbd edit: %q has no EN to wire", op.To)
+	}
+	ref, err := b.refText(op.Source, op.SourcePin)
+	if err != nil {
+		return nil, err
+	}
+	text := "EN := " + ref
+	if len(call.items) > 0 {
+		text += ", "
+	}
+	at := call.open
+	return append([]TextEdit{{Line: at.line, Col: at.col, EndLine: at.line, EndCol: at.col, NewText: text}},
+		b.ghostConsumed(op.Source)...), nil
 }
 
 // refText is the netlist expression that reads a node's output: the variable
@@ -297,6 +331,9 @@ func (b *modelBuilder) refText(nodeID, pin string) (string, error) {
 	case "block":
 		if n.Wire == "" {
 			return "", fmt.Errorf("fbd edit: name this block's output wire before connecting it elsewhere")
+		}
+		if strings.EqualFold(pin, "ENO") {
+			return n.Wire + ".ENO", nil
 		}
 		return n.Wire, nil
 	}
@@ -455,7 +492,7 @@ func (b *modelBuilder) eachExpr(visit func(expr)) {
 		case notExpr:
 			walk(x.inner)
 		case callExpr:
-			for _, a := range x.args {
+			for _, a := range x.reads() {
 				walk(a)
 			}
 		}
@@ -509,6 +546,12 @@ func (b *modelBuilder) opInsert(op EditOp) ([]TextEdit, error) {
 	}
 	if endFBD == -1 {
 		return nil, fmt.Errorf("fbd edit: no END_FBD to insert before")
+	}
+	if strings.HasPrefix(op.Node, "n:") {
+		// Into a network: at its end rather than the body's.
+		if endFBD, err = b.stmtInsertLine(op); err != nil {
+			return nil, err
+		}
 	}
 	var text strings.Builder
 	for _, line := range strings.Split(stmt, "\n") {
@@ -778,8 +821,28 @@ func (b *modelBuilder) opDisconnect(op EditOp) ([]TextEdit, error) {
 			return nil, fmt.Errorf("fbd edit: unknown block %q", op.To)
 		}
 		node := b.nodes[op.To]
+		// Every argument as written (EN, ENO and formal names included):
+		// a removal takes one with its separator.
+		removeItem := func(match func(argItem) bool) ([]TextEdit, error) {
+			for i, it := range call.items {
+				if match(it) {
+					if len(call.items) == 1 {
+						el, ec := it.val.end()
+						return []TextEdit{{Line: it.head.line, Col: it.head.col, EndLine: el, EndCol: ec}}, nil
+					}
+					return []TextEdit{argRemoval(i, len(call.items),
+						func(j int) exprPos { return call.items[j].head },
+						func(j int) expr { return call.items[j].val })}, nil
+				}
+			}
+			return nil, fmt.Errorf("fbd edit: %s has no input %q", node.Label, op.ToPin)
+		}
+		if strings.EqualFold(op.ToPin, "EN") {
+			// Unbinding EN: the block runs every scan again (EN = TRUE).
+			return removeItem(func(it argItem) bool { return it.pin == "EN" })
+		}
 		idx := -1
-		for i, p := range node.Inputs {
+		for i, p := range formalPins(call) {
 			if p == op.ToPin {
 				idx = i
 			}
@@ -795,13 +858,12 @@ func (b *modelBuilder) opDisconnect(op EditOp) ([]TextEdit, error) {
 			el, ec := call.args[idx].end()
 			return []TextEdit{posEdit(exprPos{l, c, el, ec}, "_")}, nil
 		}
-		return []TextEdit{argRemoval(idx, len(call.args),
-			func(j int) exprPos {
-				l, c := call.args[j].pos()
-				el, ec := call.args[j].end()
-				return exprPos{l, c, el, ec}
-			},
-			func(j int) expr { return call.args[j] })}, nil
+		target := call.args[idx]
+		return removeItem(func(it argItem) bool {
+			l, c := it.val.pos()
+			tl, tc := target.pos()
+			return l == tl && c == tc && it.pin != "EN" && it.pin != "ENO"
+		})
 	}
 }
 
@@ -890,7 +952,12 @@ func (b *modelBuilder) opAddInput(op EditOp) ([]TextEdit, error) {
 		return nil, err
 	}
 	l, c := call.args[len(call.args)-1].end()
-	return append([]TextEdit{{Line: l, Col: c, EndLine: l, EndCol: c, NewText: ", " + ref}},
+	text := ", " + ref
+	if call.names != nil {
+		// A formal call stays formal: the new input by its standard name.
+		text = ", " + blockPins(call.fn, len(call.args)+1)[len(call.args)] + " := " + ref
+	}
+	return append([]TextEdit{{Line: l, Col: c, EndLine: l, EndCol: c, NewText: text}},
 		b.ghostConsumed(op.Source)...), nil
 }
 

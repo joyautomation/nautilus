@@ -357,7 +357,7 @@ func severRefs(e expr, owned map[string]bool, out *[]exprPos) {
 	case notExpr:
 		severRefs(v.inner, owned, out)
 	case callExpr:
-		for _, a := range v.args {
+		for _, a := range v.reads() {
 			severRefs(a, owned, out)
 		}
 	}
