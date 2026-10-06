@@ -323,6 +323,21 @@ func (t *Tags) ForcedOverlap(addr string) string {
 	return ""
 }
 
+// readActual is ReadGlobal for what the tag holds WITHOUT its forces — the
+// value its writers last stored. Unforced tags read as usual.
+func (t *Tags) readActual(name string) (ir.Value, error) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	tv, ok := t.vals[name]
+	if !ok {
+		return ir.Value{}, &UndefinedTagError{name}
+	}
+	if tv.forced {
+		return t.forces[name].actual, nil
+	}
+	return tv.v, nil
+}
+
 // leafAt walks a member path into a value.
 func leafAt(v ir.Value, path []string) (ir.Value, bool) {
 	for _, seg := range path {

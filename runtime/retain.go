@@ -264,7 +264,10 @@ func (r *Runtime) saveRetained(lastSaved []byte) []byte {
 func (r *Runtime) retainState() retain.State {
 	st := retain.State{}
 	for _, name := range r.retainTags {
-		v, err := r.tags.ReadGlobal(name)
+		// The ACTUAL value, not a forced one: forces are not retained
+		// (force.go), and persisting a forced setpoint's value would bring
+		// the force back after a restart in all but name.
+		v, err := r.tags.readActual(name)
 		if err != nil {
 			continue
 		}

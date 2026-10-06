@@ -444,3 +444,19 @@ func TestSFCProgramResolution(t *testing.T) {
 		t.Fatalf("SFCCharts = %d", n)
 	}
 }
+
+// A forced setpoint is retained at its ACTUAL value: the force is not
+// retained, so neither may its value sneak into the store under the tag.
+func TestRetainSavesActualNotForced(t *testing.T) {
+	store := &fakeStore{}
+	rt := newRetained(t, store, nil)
+	rt.Scan()
+	rt.Tags().SetReal("SP", 70)
+	if err := rt.Tags().Force("SP", 99.0); err != nil {
+		t.Fatal(err)
+	}
+	st := rt.retainState()
+	if got := st.Tags["SP"]; got != 70.0 {
+		t.Fatalf("retained SP = %v; want the actual 70, not the forced 99", got)
+	}
+}
