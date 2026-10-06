@@ -32,18 +32,18 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 168 rows. **0 rows have no coverage at all** (no webview test,
+Totals: 172 rows. **0 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
 |---|---|---|
 | Commands | 28 | 0 |
-| FBD `?` | 18 | 0 |
+| FBD `?` | 20 | 0 |
 | Ladder `?` | 28 | 0 |
 | SFC `?` | 22 | 0 |
 | Mimic `?` | 18 | 0 |
 | Component `?` | 8 | 0 |
-| Other claims | 46 | 0 |
+| Other claims | 48 | 0 |
 
 ## Commands (package.json `contributes.commands`)
 
