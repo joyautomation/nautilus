@@ -13,7 +13,7 @@
 //	                   ?blocks=delta   — and gate the NON-tag blocks the
 //	                                     same way (scan/drivers/alarms)
 //	                   ?full=1         — never send deltas on this stream
-//	GET  /api/meta     tag descriptions/units, I/O binding, scan target
+//	GET  /api/meta     tag descriptions/units/declared types, I/O binding, scan target
 //	POST /api/tags     {"name": "TempSP", "value": 65.0} — write one tag,
 //	                   or one member of a struct tag by dotted path:
 //	                   {"name": "P101.Drive.Speed", "value": 60.0}, or several
@@ -910,10 +910,16 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 // derives quality from this + the frame: an input while the scan reports
 // ioHealthy=false is showing a stale, held value.
 type metaResponse struct {
-	Tags         map[string]runtime.TagMeta `json:"tags"`
-	Inputs       []string                   `json:"inputs"`
-	Outputs      []string                   `json:"outputs"`
-	ScanTargetMs float64                    `json:"scanTargetMs"`
+	// Tags is each tag's documentation (desc, unit) and declared type
+	// (type, and an enumeration's members as enum) — see tagMetaJSON.
+	Tags map[string]tagMetaJSON `json:"tags"`
+	// Locals is each streamed program local's declared type, the same
+	// shape, so a client can show an enumerated local (whose value streams
+	// as its member's name) unquoted, as it shows an enumerated tag.
+	Locals       map[string]typeInfo `json:"locals"`
+	Inputs       []string            `json:"inputs"`
+	Outputs      []string            `json:"outputs"`
+	ScanTargetMs float64             `json:"scanTargetMs"`
 	// MemberWrites says this controller accepts POST /api/tags with a dotted
 	// member path ("P101.Drive.Speed") or an object payload merging into a
 	// struct tag. It is a capability flag, not a policy: writability itself
@@ -970,13 +976,10 @@ type metaResponse struct {
 }
 
 func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
-	meta := s.rt.Meta()
-	if meta == nil {
-		meta = map[string]runtime.TagMeta{}
-	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(metaResponse{
-		Tags:         meta,
+		Tags:         metaTags(s.rt),
+		Locals:       metaLocals(s.rt),
 		Inputs:       nonNilStrings(s.rt.Inputs()),
 		Outputs:      nonNilStrings(s.rt.Outputs()),
 		ScanTargetMs: s.rt.Stats().TargetMs,
