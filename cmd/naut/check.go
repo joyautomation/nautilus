@@ -102,7 +102,7 @@ func runCheck(args []string) int {
 	// checked, else from the first program that composes it. The programs
 	// that compose a broken library say nothing more: their compile stops
 	// at the library, and fixing it is the one thing to do.
-	ownBad := map[string]bool{}  // abs path → its own check failed
+	ownBad := map[string]bool{}    // abs path → its own check failed
 	display := map[string]string{} // abs path → the name it is printed as
 	var libErrs []libErr
 	markBad := func(f string) {

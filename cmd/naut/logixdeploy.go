@@ -14,6 +14,7 @@ import (
 	"github.com/joyautomation/nautilus/logix/deploy"
 	"github.com/joyautomation/nautilus/logix/logixd"
 	"github.com/joyautomation/nautilus/logix/writer"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 const logixDeployUsage = `naut logix deploy — put a nautilus ladder program on a Logix controller
@@ -85,6 +86,7 @@ func loadLogixProject(dir string) (*logixProject, error) {
 	}
 	_, libs, _ := stproject.PreludeSources(progPath, nil)
 	inits, descs, aliases := map[string]any{}, map[string]string{}, map[string]string{}
+	tags := logixTagTypes(m)
 	for _, tg := range m.Tags {
 		if tg.Init != nil {
 			inits[tg.Name] = tg.Init
@@ -106,7 +108,7 @@ func loadLogixProject(dir string) (*logixProject, error) {
 			Controller: tgt.Controller, Processor: tgt.Processor, Revision: tgt.Revision,
 			Program: tgt.Program, Routine: tgt.Routine, Task: tgt.Task,
 			PeriodMs: int(time.Duration(task.Scan) / time.Millisecond),
-			CommPath: tgt.CommPath, Libs: libs, Inits: inits, Descs: descs, Aliases: aliases, Side: side,
+			CommPath: tgt.CommPath, Libs: libs, Inits: inits, Descs: descs, Aliases: aliases, Tags: tags, Side: side,
 			Language: writer.Language(progPath),
 		},
 		host: tgt.Host, slot: tgt.Slot, port: tgt.Port, agent: tgt.Agent,
@@ -216,4 +218,27 @@ func runLogixDeploy(args []string) int {
 		fmt.Println("no comm path: built only")
 	}
 	return 0
+}
+
+// logixTagTypes is the manifest's tags with the IEC type each has in scope
+// in a program (runtime.ResolveTagScope's rule: type:, else what init:
+// implies), for writer.Options.Tags. A tag with neither is left out: the
+// compiler already refuses a program that names it undeclared.
+func logixTagTypes(m *project.Manifest) map[string]string {
+	defs, err := project.TagDefs(m)
+	if err != nil {
+		return nil
+	}
+	scope, _ := runtime.ResolveTagScope(defs, nil)
+	out := map[string]string{}
+	for _, d := range defs {
+		if d.Type != "" {
+			out[d.Name] = d.Type
+			continue
+		}
+		if t := scope.Implicit[d.Name]; t != nil {
+			out[d.Name] = t.String()
+		}
+	}
+	return out
 }
