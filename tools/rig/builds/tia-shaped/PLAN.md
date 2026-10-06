@@ -62,13 +62,13 @@ would teach us anything new there).
 
 ## Last run
 
-2026-10-05, PR #236 (parity-fbd, on origin/main ed8cd85), `G_PACE=fast`,
-clips on, `RIG_NAME=parity-fbd`: **83 rows: 76 PASS, 0 FAIL, 5 XFAIL,
-2 XPASS, no FALLBACK.** Every built file equals `reference/` modulo layout;
-`naut check` clean and `naut test` 6/6 at the end. The two XPASS rows are
-`04-signature-help-LIMIT` and `05-find-references` (the language-server
-PRs, merged since the first run); `05-outline-symbols` still XFAILs on
-this probe.
+2026-10-05, PR #236 (parity-fbd merged with origin/main 4012a30 — the force
+and ladder parity PRs in), `G_PACE=fast`, clips on, `RIG_NAME=parity-fbd`:
+**83 rows: 77 PASS, 0 FAIL, 4 XFAIL, 2 XPASS, no FALLBACK.** Every built
+file equals `reference/` modulo layout; `naut check` clean and `naut test`
+6/6 at the end. The two XPASS rows are `04-signature-help-LIMIT` and
+`05-find-references` (the language-server PRs, merged since the first
+run); `05-outline-symbols` still XFAILs on this probe.
 
 The first run (2026-10-05, origin/main e2e41d2): 84 rows, 72 PASS, 0 FAIL,
 12 XFAIL, 0 XPASS, no FALLBACK; 20 findings (FINDINGS.md): 4 bugs,
