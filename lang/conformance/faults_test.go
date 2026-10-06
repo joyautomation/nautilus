@@ -13,6 +13,10 @@ package main
 //   - STRING_TO_INT / STRING_TO_REAL / STRING_TO_BOOL on text that does not
 //     parse fault the scan (docs/functions.md "Type conversions";
 //     fn-conversions pins the valid half).
+//   - A conversion whose input has no value in the target type faults the
+//     scan: a REAL out of the integer's range (or NaN), text that parses but
+//     does not fit, a bit pattern that is not a finite REAL (#244;
+//     st-conversions-matrix pins the valid half).
 
 import (
 	"strings"
@@ -101,6 +105,26 @@ func TestStringParseFaults(t *testing.T) {
 			tags := "  - { name: S, role: state, init: \"0\" }\n  - { name: Out, role: state, init: " + init + " }\n"
 			prog := "PROGRAM P\nVAR_EXTERNAL S : STRING; Out : " + tc.typ + "; END_VAR\nOut := " + tc.fn + "(S);\nEND_PROGRAM\n"
 			r := runFaulting(t, tags, prog, "tests:\n  - name: unparseable\n    given: { S: \""+tc.bad+"\" }\n    steps:\n      - scans: 1\n")
+			wantFault(t, r, tc.msg)
+		})
+	}
+}
+
+func TestConversionRangeFaults(t *testing.T) {
+	for _, tc := range []struct{ name, inTyp, inInit, outTyp, outInit, call, given, msg string }{
+		{"REAL above SINT", "REAL", "0.0", "SINT", "0", "REAL_TO_SINT(X)", "127.5", "REAL_TO_SINT: 127.5 is out of range for SINT (-128..127)"},
+		{"REAL below USINT", "REAL", "0.0", "USINT", "0", "REAL_TO_USINT(X)", "-0.6", "REAL_TO_USINT: -0.6 is out of range for USINT (0..255)"},
+		{"REAL above DINT", "LREAL", "0.0", "DINT", "0", "TO_DINT(X)", "3.0e9", "TO_DINT: 3e+09 is out of range for DINT"},
+		{"TRUNC above INT", "REAL", "0.0", "INT", "0", "TRUNC_INT(X)", "32768.2", "TRUNC_INT: 32768.2 is out of range for INT"},
+		{"text beyond SINT", "STRING", `"0"`, "SINT", "0", "STRING_TO_SINT(X)", `"128"`, `STRING_TO_SINT: "128" is out of range for SINT (-128..127)`},
+		{"negative text into UINT", "STRING", `"0"`, "UINT", "0", "STRING_TO_UINT(X)", `"-1"`, "out of range for UINT"},
+		{"text that is no duration", "STRING", `"0s"`, "TIME", "0", "STRING_TO_TIME(X)", `"soon"`, "is not a duration"},
+		{"NaN bit pattern", "DWORD", "0", "REAL", "0.0", "DWORD_TO_REAL(X)", "2143289344", "is not a finite REAL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tags := "  - { name: X, role: state, init: " + tc.inInit + " }\n  - { name: Out, role: state, init: " + tc.outInit + " }\n"
+			prog := "PROGRAM P\nVAR_EXTERNAL X : " + tc.inTyp + "; Out : " + tc.outTyp + "; END_VAR\nOut := " + tc.call + ";\nEND_PROGRAM\n"
+			r := runFaulting(t, tags, prog, "tests:\n  - name: out of range\n    given: { X: "+tc.given+" }\n    steps:\n      - scans: 1\n")
 			wantFault(t, r, tc.msg)
 		})
 	}

@@ -180,6 +180,27 @@ func TestWordAt(t *testing.T) {
 	}
 }
 
+// #244: the conversion matrix is generated into ir.Builtins, so completion
+// offers every pair — and not the REAL↔bit-string widths the standard does
+// not define.
+func TestStaticCompletionsListConversions(t *testing.T) {
+	seen := map[string]bool{}
+	for _, it := range staticCompletions() {
+		seen[it.Label] = true
+	}
+	for _, name := range []string{"DINT_TO_REAL", "LINT_TO_LREAL", "WORD_TO_INT", "UDINT_TO_STRING",
+		"STRING_TO_TIME", "LTIME_TO_TIME", "REAL_TO_DWORD", "TO_DINT", "TO_STRING", "TRUNC_SINT", "REAL_TRUNC_ULINT"} {
+		if !seen[name] {
+			t.Errorf("static completions missing %s", name)
+		}
+	}
+	for _, name := range []string{"REAL_TO_WORD", "LREAL_TO_DWORD", "INT_TO_INT"} {
+		if seen[name] {
+			t.Errorf("static completions offer %s, which IEC 61131-3 does not define", name)
+		}
+	}
+}
+
 func TestStaticCompletionsIncludeBuiltins(t *testing.T) {
 	items := staticCompletions()
 	// Keyword, standard FB, common type, and — the regression this guards —

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/internal/seed"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
@@ -761,6 +762,11 @@ func opArity(fn string) (min, max int) {
 		return 3, 3
 	case "REPLACE":
 		return 4, 4
+	}
+	// Any other fixed-arity standard function — the conversion matrix
+	// (INT_TO_REAL, TO_DWORD, TRUNC_INT, …) — takes exactly its inputs.
+	if sig, ok := ir.Builtins[strings.ToUpper(fn)]; ok && !sig.Variadic {
+		return len(sig.Params), len(sig.Params)
 	}
 	return 1, -1
 }

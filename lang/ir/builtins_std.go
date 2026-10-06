@@ -3,7 +3,6 @@ package ir
 import (
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 )
 
@@ -24,7 +23,6 @@ func init() {
 	registerBitBuiltins()
 	registerNumericBuiltins()
 	registerStringBuiltins()
-	registerStringConversions()
 }
 
 func registerSelectionBuiltins() {
@@ -165,7 +163,11 @@ func registerNumericBuiltins() {
 		Params: []*Type{RealT},
 		Result: IntT,
 		Fn: func(args []Value) (Value, error) {
-			return IntVal(int64(math.Trunc(asFloat(args[0])))), nil
+			// Toward zero, into the 64-bit integer an undeclared INT is;
+			// a REAL with no integer value (NaN, ±Inf, beyond 64 bits)
+			// faults, as TRUNC_<int> does (conversions.go).
+			lint, _ := convTypeNamed("LINT")
+			return realToInt("TRUNC", lint, asFloat(args[0]), math.Trunc)
 		},
 	})
 }
@@ -282,68 +284,4 @@ func clampN(n int64, max int) int {
 		return max
 	}
 	return int(n)
-}
-
-func registerStringConversions() {
-	conv := []struct {
-		name string
-		from *Type
-		to   *Type
-		fn   BuiltinFn
-	}{
-		{"BOOL_TO_REAL", BoolT, RealT, func(a []Value) (Value, error) {
-			if a[0].B {
-				return RealVal(1), nil
-			}
-			return RealVal(0), nil
-		}},
-		{"REAL_TO_BOOL", RealT, BoolT, func(a []Value) (Value, error) { return BoolVal(a[0].F != 0), nil }},
-		{"INT_TO_STRING", IntT, StringT, func(a []Value) (Value, error) {
-			return StringVal(strconv.FormatInt(a[0].I, 10)), nil
-		}},
-		{"REAL_TO_STRING", RealT, StringT, func(a []Value) (Value, error) {
-			return StringVal(strconv.FormatFloat(a[0].F, 'g', -1, 64)), nil
-		}},
-		{"BOOL_TO_STRING", BoolT, StringT, func(a []Value) (Value, error) {
-			if a[0].B {
-				return StringVal("TRUE"), nil
-			}
-			return StringVal("FALSE"), nil
-		}},
-		{"TIME_TO_STRING", TimeT, StringT, func(a []Value) (Value, error) {
-			return StringVal("T#" + strconv.FormatInt(a[0].I, 10) + "ms"), nil
-		}},
-		{"STRING_TO_INT", StringT, IntT, func(a []Value) (Value, error) {
-			v, err := strconv.ParseInt(strings.TrimSpace(a[0].S), 10, 64)
-			if err != nil {
-				return Value{}, fmt.Errorf("STRING_TO_INT: %q is not an integer", a[0].S)
-			}
-			return IntVal(v), nil
-		}},
-		{"STRING_TO_REAL", StringT, RealT, func(a []Value) (Value, error) {
-			v, err := strconv.ParseFloat(strings.TrimSpace(a[0].S), 64)
-			if err != nil {
-				return Value{}, fmt.Errorf("STRING_TO_REAL: %q is not a number", a[0].S)
-			}
-			return RealVal(v), nil
-		}},
-		{"STRING_TO_BOOL", StringT, BoolT, func(a []Value) (Value, error) {
-			switch strings.ToUpper(strings.TrimSpace(a[0].S)) {
-			case "TRUE", "1":
-				return BoolVal(true), nil
-			case "FALSE", "0":
-				return BoolVal(false), nil
-			}
-			return Value{}, fmt.Errorf("STRING_TO_BOOL: %q is not TRUE/FALSE", a[0].S)
-		}},
-	}
-	for _, c := range conv {
-		c := c
-		RegisterBuiltin(BuiltinSig{
-			Name:   c.name,
-			Params: []*Type{c.from},
-			Result: c.to,
-			Fn:     c.fn,
-		})
-	}
 }

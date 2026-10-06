@@ -492,3 +492,16 @@ func TestEditDeclareVar(t *testing.T) {
 		t.Error("invalid identifier must be rejected")
 	}
 }
+
+// #244: a conversion block takes exactly its one input, from the registry
+// rather than a hand-kept list, so the editor never offers a second pin.
+func TestOpArityConversionsFromRegistry(t *testing.T) {
+	for _, fn := range []string{"DINT_TO_REAL", "STRING_TO_TIME", "TO_DWORD", "TRUNC_INT", "LREAL_TRUNC_DINT"} {
+		if lo, hi := opArity(fn); lo != 1 || hi != 1 {
+			t.Errorf("opArity(%s) = %d, %d; want 1, 1", fn, lo, hi)
+		}
+	}
+	if lo, hi := opArity("MyFunc"); lo != 1 || hi != -1 {
+		t.Errorf("an unknown function is unrestricted: got %d, %d", lo, hi)
+	}
+}

@@ -387,7 +387,7 @@ func New(o Options) (*Runtime, error) {
 	}
 
 	tags := NewTags()
-	tags.enums = enumTags(o.Tags, types, unionGlobals(prog, tasks))
+	tags.types = tagTypes(o.Tags, types, unionGlobals(prog, tasks))
 	// Set before any scan or goroutine can observe it, so the store's NowMs
 	// and the scan's dt always read the same clock.
 	tags.clock = o.Clock
