@@ -1,0 +1,67 @@
+# SFC step supervision (MAXTIME). Not in IEC 61131-3; the shape of CODESYS's
+# step "maximum time" + SFCError and of an S7-GRAPH step supervision
+# (`T > limit`). Pinned (docs: languages/sfc, "Step supervision"):
+#   - the limit is exceeded when the step has been active LONGER than
+#     MAXTIME: Fill activates on scan 1 (T = 0), T = 100ms on scan 101 is
+#     still within it, T = 101ms on scan 102 sets Fill.ERR;
+#   - an abort transition reading Fill.ERR fires one scan later (scan 103),
+#     the one-scan latency every transition has (sfc-step-t);
+#   - the flag is retained after the step is left, so the abort target can
+#     read the cause, and clears on the step's next activation;
+#   - ERROR := sfc_FillErr mirrors the flag into a BOOL tag every scan, and
+#     an alarms: definition on that tag annunciates through the alarm engine.
+tests:
+  - name: within the limit nothing is flagged
+    given: { Go: true }
+    steps:
+      - scans: 1
+        expect: { sfc_Fill: true, sfc_FillErr: false }
+      - advance: 100ms # scan 101: Fill has been active exactly 100ms
+        expect: { sfc_Fill: true, sfc_FillErr: false, sfc_Aborted: false }
+        alarms: { active: [] }
+
+  - name: the scan the step overruns sets the flag; the abort fires the scan after
+    given: { Go: true }
+    steps:
+      - scans: 1
+      - advance: 101ms # scan 102: 101ms > 100ms
+        expect: { sfc_FillErr: true, sfc_Fill: true, sfc_Aborted: false }
+        alarms: { active: [FillOverrun], state: { FillOverrun: unack-active } }
+      - advance: 1ms # scan 103: t_abort reads Fill.ERR
+        expect: { sfc_Fill: false, sfc_Aborted: true, sfc_Cause: true, sfc_FillErr: true }
+
+  - name: the flag holds after the step is left, until Fill runs again
+    given: { Go: true }
+    steps:
+      - advance: 103ms
+        expect: { sfc_Aborted: true, sfc_FillErr: true }
+      - given: { Go: false }
+        advance: 1s
+        expect: { sfc_Aborted: true, sfc_FillErr: true }
+        alarms: { active: [FillOverrun] }
+      - given: { Reset: true }
+        scans: 1 # Aborted -> Idle: still flagged
+        expect: { sfc_Aborted: false, sfc_FillErr: true }
+      - given: { Reset: false, Go: true }
+        scans: 1 # Idle -> Fill: the next activation clears it
+        expect: { sfc_Fill: true, sfc_FillErr: false }
+        alarms: { active: [FillOverrun], state: { FillOverrun: unack-rtn } }
+      - ack: { all: true, by: test }
+        scans: 1
+        alarms: { active: [], unacked: 0 }
+
+  - name: leaving in time never sets the flag
+    given: { Go: true }
+    steps:
+      - advance: 50ms
+      - given: { Full: true }
+        scans: 1 # Fill -> Done at 50ms
+        expect: { sfc_Fill: false, sfc_FillErr: false }
+      - advance: 1s
+        expect: { sfc_FillErr: false, sfc_Aborted: false }
+        alarms: { active: [], unacked: 0 }
+
+  - name: the step's time does not run while it is inactive
+    steps:
+      - advance: 1s
+        expect: { sfc_FillErr: false, sfc_Fill: false }

@@ -631,7 +631,7 @@ b13_diff() {
   grep -q 'PT := T#2S' "$PROJ/main.fbd" || { echo "could not put T#2S back" >&2; return 1; }
 }
 row 13-diff-vs-HEAD PASS b13_diff
-# Force (TIA: force table): is there any force command?
+# Force (TIA: force table): the palette offers Force… (#211).
 b13_force() {
   vs_cmd "View: Close All Editors" 1
   xdotool key --clearmodifiers Escape; sleep 0.4
@@ -643,7 +643,7 @@ b13_force() {
   echo "palette 'nautilus: force': ${t:-<no commands>}"
   grep -qi 'force' <<<"$t"
 }
-row 13-force-command XFAIL b13_force
+row 13-force-command PASS b13_force
 
 # ── the end state ───────────────────────────────────────────────────────────
 row 99-naut-check PASS check_clean 99-final

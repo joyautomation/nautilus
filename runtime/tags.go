@@ -78,6 +78,11 @@ type Tags struct {
 	// clock backs NowMs. Nil = wall clock; a Runtime built with
 	// Options.Clock sets it once at construction, before any scan runs.
 	clock Clock
+	// forces is the force table, keyed by ROOT tag (see force.go); a tag
+	// in it carries tagVal.forced so the write path pays one bool read for
+	// the feature. forceRev bumps on every change to the table.
+	forces   map[string]*forceSet
+	forceRev uint64
 }
 
 // tagVal is one stored tag: its value and the store generation at which
@@ -87,9 +92,10 @@ type Tags struct {
 // pointed-to value is mutated only under t.mu, and every reader copies what
 // it needs out before releasing the lock.
 type tagVal struct {
-	v   ir.Value
-	gen uint64
-	out bool // this tag is bound to a driver output; see Tags.outGen
+	v      ir.Value
+	gen    uint64
+	out    bool // this tag is bound to a driver output; see Tags.outGen
+	forced bool // the tag has an entry in Tags.forces; see force.go
 }
 
 // Sample is a tag's value together with the store generation it was written
@@ -125,15 +131,16 @@ func (t *Tags) WriteGlobal(name string, v ir.Value) error {
 // Caller holds t.mu.
 func (t *Tags) writeLocked(name string, v ir.Value) bool {
 	if cur, ok := t.vals[name]; ok {
-		if sameValue(&cur.v, &v) {
-			return false
+		if cur.forced {
+			// A forced tag: what the writer asked for becomes the tag's
+			// ACTUAL value, and the forces are laid back over it — see
+			// force.go. Re-applying the same forced value is a no-op below,
+			// like any other unchanged write.
+			fs := t.forces[name]
+			fs.actual, fs.wrote = v, true
+			v = fs.apply(v)
 		}
-		t.gen++
-		cur.v, cur.gen = v, t.gen
-		if cur.out {
-			t.outGen = t.gen
-		}
-		return true
+		return t.storeLocked(name, cur, v)
 	}
 	t.keyGen++
 	_, out := t.outNames[name] // a tag registered before it existed
@@ -142,6 +149,20 @@ func (t *Tags) writeLocked(name string, v ir.Value) bool {
 		t.outGen = t.gen
 	}
 	t.vals[name] = &tagVal{v: v, gen: t.gen, out: out}
+	return true
+}
+
+// storeLocked stores v into an existing tag unless it equals what is there,
+// stamping a fresh generation when it changes. Caller holds t.mu.
+func (t *Tags) storeLocked(name string, cur *tagVal, v ir.Value) bool {
+	if sameValue(&cur.v, &v) {
+		return false
+	}
+	t.gen++
+	cur.v, cur.gen = v, t.gen
+	if cur.out {
+		t.outGen = t.gen
+	}
 	return true
 }
 
@@ -447,7 +468,7 @@ func (t *Tags) SetPath(path string, v any) error {
 	// tag after the field symbol it was read from, and such a tag must stay
 	// writable as a whole.
 	if cur, ok := t.vals[path]; ok {
-		return t.setFieldLocked(path, cur.v, nil, v)
+		return t.setFieldLocked(path, t.writeBase(path, cur), nil, v)
 	}
 	root, rest, dotted := strings.Cut(path, ".")
 	if !dotted {
@@ -457,7 +478,17 @@ func (t *Tags) SetPath(path string, v any) error {
 	if !ok {
 		return &UndefinedTagError{root}
 	}
-	return t.setFieldLocked(root, cur.v, strings.Split(rest, "."), v)
+	return t.setFieldLocked(root, t.writeBase(root, cur), strings.Split(rest, "."), v)
+}
+
+// writeBase is the value a member write edits: the stored value, or for a
+// forced tag its ACTUAL value — editing the stored one would copy the forced
+// members into what the tag returns to when the force is removed.
+func (t *Tags) writeBase(root string, cur *tagVal) ir.Value {
+	if cur.forced {
+		return t.forces[root].actual
+	}
+	return cur.v
 }
 
 // setFieldLocked applies one member write to a tag already read under the

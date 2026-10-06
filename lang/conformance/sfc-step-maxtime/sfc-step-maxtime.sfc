@@ -1,0 +1,39 @@
+PROGRAM SfcStepMaxtime
+VAR_EXTERNAL
+    Go : BOOL;  Full : BOOL;  Reset : BOOL;
+    sfc_FillErr : BOOL;  sfc_Fill : BOOL;  sfc_Aborted : BOOL;  sfc_Cause : BOOL;
+END_VAR
+SFC
+
+  INITIAL_STEP Idle:
+  END_STEP
+
+  (* supervised: active longer than 100ms sets Fill.ERR (and sfc_FillErr) *)
+  STEP Fill (MAXTIME := T#100ms, ERROR := sfc_FillErr):
+    N sfc_Fill;
+  END_STEP
+
+  STEP Done:
+  END_STEP
+
+  STEP Aborted:
+    N  sfc_Aborted;
+    P1 RecordCause;
+  END_STEP
+
+  TRANSITION t_go    FROM Idle    TO Fill    := Go;
+  END_TRANSITION
+  (* the abort is declared first: it has priority *)
+  TRANSITION t_abort FROM Fill    TO Aborted := Fill.ERR;
+  END_TRANSITION
+  TRANSITION t_full  FROM Fill    TO Done    := Full;
+  END_TRANSITION
+  TRANSITION t_done  FROM Done    TO Idle    := Reset;
+  END_TRANSITION
+  TRANSITION t_reset FROM Aborted TO Idle    := Reset;
+  END_TRANSITION
+
+  ACTION RecordCause: sfc_Cause := Fill.ERR; END_ACTION
+
+END_SFC
+END_PROGRAM

@@ -125,6 +125,43 @@
 		return items;
 	});
 
+	// The ladder's scopes for the vars panel: the PROGRAM (tags and locals),
+	// then each FUNCTION_BLOCK the file defines (its pins and locals); and
+	// the block instances rungs declare by their calls, listed read-only.
+	const ldScopes = $derived.by(() => {
+		if (!ldModel) return undefined;
+		const out: { pou: string; label: string; sections: string[] }[] = [];
+		if (ldModel.name || !(ldModel.blocks ?? []).length) out.push({ pou: '', label: `PROGRAM ${ldModel.name ?? ''}`.trim(), sections: ['VAR_EXTERNAL', 'VAR'] });
+		for (const b of ldModel.blocks ?? []) out.push({ pou: b.name, label: `FUNCTION_BLOCK ${b.name}`, sections: ['VAR_INPUT', 'VAR_OUTPUT', 'VAR_IN_OUT', 'VAR'] });
+		// Any other owner a declaration names (a model with no blocks list)
+		// still gets its rows shown.
+		for (const v of ldModel.vars ?? []) {
+			if (v.pou && !out.some((s) => s.pou === v.pou)) out.push({ pou: v.pou, label: v.pou, sections: ['VAR'] });
+		}
+		if (!out.some((s) => s.pou === '') && (ldModel.vars ?? []).some((v) => !v.pou)) out.unshift({ pou: '', label: 'PROGRAM', sections: ['VAR_EXTERNAL', 'VAR'] });
+		return out;
+	});
+	const ldInsts = $derived.by(() => {
+		if (!ldModel) return [];
+		const out: { name: string; type: string; rung: string; pou?: string }[] = [];
+		const seen = new Set<string>();
+		const declared = new Set((ldModel.vars ?? []).map((v) => `${v.pou ?? ''}:${v.name.toLowerCase()}`));
+		const walk = (els: LdElement[], rung: string, pou: string) => {
+			for (const e of els ?? []) {
+				const key = `${pou}:${(e.inst ?? '').toLowerCase()}`;
+				// An element of an instance array (Timers[2]) is the array's,
+				// declared in the header; a header-declared instance lists there.
+				if (e.kind === 'fb' && e.inst && /^[A-Za-z_][A-Za-z0-9_]*$/.test(e.inst) && !declared.has(key) && !seen.has(key)) {
+					seen.add(key);
+					out.push({ name: e.inst, type: e.type ?? '', rung, pou: pou || undefined });
+				}
+				for (const leg of e.legs ?? []) walk(leg, rung, pou);
+			}
+		};
+		for (const r of ldModel.rungs ?? []) walk(r.elements, r.name, r.pou ?? '');
+		return out;
+	});
+
 	// "Used" for the ladder = referenced by any rung: contact/coil operands
 	// (accessor bases), fb instances, and identifiers inside argument lists.
 	function collectLdUsed(m: LdModel): Set<string> {
@@ -466,7 +503,7 @@
 		const msg = ev.data as
 			| Msg
 			| { type: 'diagnostics'; diags?: Diag[] }
-			| { type: 'liveValues'; enabled?: boolean; fresh?: boolean; values?: Record<string, unknown> }
+			| { type: 'liveValues'; enabled?: boolean; fresh?: boolean; values?: Record<string, unknown>; forced?: Record<string, unknown> }
 			| { type: 'syncState'; state?: string };
 		if (!msg?.type) return;
 		if (msg.type === 'syncState') {
@@ -475,7 +512,7 @@
 		}
 		if (msg.type === 'liveValues') {
 			// Store-only update: FbdNode pills react directly, no node rebuild.
-			setLive({ enabled: !!msg.enabled, fresh: !!msg.fresh, values: msg.values ?? {} });
+			setLive({ enabled: !!msg.enabled, fresh: !!msg.fresh, values: msg.values ?? {}, forced: msg.forced ?? {} });
 			return;
 		}
 		if (msg.type === 'diagnostics') {
@@ -843,14 +880,17 @@
 		bind:open={varsOpen}
 		vars={varList}
 		used={usedNames}
+		insts={mode === 'ld' ? ldInsts : []}
+		scopes={mode === 'ld' ? ldScopes : undefined}
 		readonly={readOnly || diffing}
+		onRename={mode === 'ld' ? (name, newName, pou) => postLd({ type: 'renameVar', name, newName, ...(pou ? { block: pou } : {}) }) : undefined}
 		onDeclare={mode === 'ld'
-			? (name, type, section) => postLd({ type: 'declareVar', name, varType: type, section })
+			? (name, type, section, pou) => postLd({ type: 'declareVar', name, varType: type, section, ...(pou ? { block: pou } : {}) })
 			: mode === 'sfc'
 				? (name, type, section) => postSfc({ type: 'declareVar', name, varType: type, section })
 				: undefined}
 		onDelete={mode === 'ld'
-			? (name) => postLd({ type: 'deleteVar', name })
+			? (name, pou) => postLd({ type: 'deleteVar', name, ...(pou ? { block: pou } : {}) })
 			: mode === 'sfc'
 				? (name) => postSfc({ type: 'deleteVar', name })
 				: undefined}

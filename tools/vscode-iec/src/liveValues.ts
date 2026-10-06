@@ -13,7 +13,18 @@ import * as http from "http";
 import * as https from "https";
 import * as vscode from "vscode";
 import { mirrorStatus, notifyError, notifyInfo, notifyWarning } from "./testHooks";
-import { STATUS_LIVE, testState } from "./testState";
+import { STATUS_FORCES, STATUS_LIVE, testState } from "./testState";
+import {
+  clearForcesConfirmMessage,
+  controllerWrite,
+  forceApi,
+  forceConfirmMessage,
+  forcedAddress,
+  forcedPillText,
+  forceStatusText,
+  lowerForces,
+  parseForces,
+} from "./forces";
 import { fbMonitorTitle } from "./fbMonitorTitle";
 import { projectDirFor, projectFiles } from "./projectFiles";
 import {
@@ -33,6 +44,9 @@ type Frame = {
   // Retained program locals (a PI integral, latches, FB instances with
   // their pins) — the watch inside the POU, streamed alongside the tags.
   locals?: Record<string, unknown>;
+  // The force table (address → forced value), present while any force is
+  // active — see server/force.go.
+  forces?: Record<string, unknown>;
 };
 
 /** All four IEC languages get live values — the identifier scanner is syntax-
@@ -52,6 +66,8 @@ export type LiveFrameListener = (frame: {
   enabled: boolean;
   fresh: boolean;
   values: Record<string, unknown>;
+  // Lowercased forced address → forced value — the diagrams' F badge.
+  forced: Record<string, unknown>;
 }) => void;
 
 export class LiveValues implements vscode.Disposable {
@@ -61,6 +77,8 @@ export class LiveValues implements vscode.Disposable {
   // Values panel (the decoration path lowercases; a list wants real names).
   private lastTags: [string, unknown][] = [];
   private lastLocals: [string, unknown][] = [];
+  // The controller's force table as of the last frame (declared casing).
+  private forces = new Map<string, unknown>();
   private readonly valuesChanged = new vscode.EventEmitter<void>();
   /** Fires when the snapshot changes (a frame arrived, or the stream went
    * stale/offline) — the Live Values view refreshes on this. */
@@ -91,15 +109,29 @@ export class LiveValues implements vscode.Disposable {
     "rgba(140, 140, 140, 0.12)",
     "rgba(140, 140, 140, 0.32)"
   );
+  // A forced value's pill: amber, with an F badge in its text — Logix and
+  // TIA both mark a forced value so it can't be mistaken for the field's.
+  // Literal ambers, not a ThemeColor: charts.orange rendered near-black in
+  // some dark themes (seen on the rig), and a forced value must never be
+  // the hard one to read. A light theme gets a darker amber for contrast.
+  private readonly forcedDeco = forcedPillDecoration();
   private readonly status = vscode.window.createStatusBarItem(
     vscode.StatusBarAlignment.Right,
     90
+  );
+  // "N forces active" — Logix keeps forces in plain sight, and so do we.
+  private readonly forceStatus = vscode.window.createStatusBarItem(
+    vscode.StatusBarAlignment.Right,
+    89
   );
 
   constructor() {
     this.enabled = this.configEnabled();
     this.status.name = STATUS_LIVE;
     this.status.command = "nautilus.liveValues.toggle";
+    this.forceStatus.name = STATUS_FORCES;
+    this.forceStatus.command = "nautilus.forces.show";
+    this.forceStatus.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
     this.staleTimer = setInterval(() => this.onStaleCheck(), 1000);
     this.disposables.push(
       vscode.window.onDidChangeVisibleTextEditors(() => this.onEditorsChanged()),
@@ -202,13 +234,163 @@ export class LiveValues implements vscode.Disposable {
     }
   }
 
+  // ── forcing ───────────────────────────────────────────────────────────
+
+  private confirmWrites(): boolean {
+    return vscode.workspace.getConfiguration("nautilus").get<boolean>("confirmControllerWrites", true);
+  }
+
+  private token(): string {
+    return vscode.workspace.getConfiguration("nautilus").get<string>("token", "");
+  }
+
+  /** One controller write; reports a refusal or an unreachable controller
+   * and returns whether it landed. */
+  private async write(what: string, req: { method: "POST" | "DELETE"; path: string; body?: unknown }): Promise<boolean> {
+    try {
+      const res = await controllerWrite(this.runtimeUrl(), this.token(), req.method, req.path, req.body);
+      if (res.ok) return true;
+      void notifyError(`nautilus: ${what} rejected — ${res.message}`);
+    } catch (e) {
+      void notifyError(`nautilus: could not reach ${this.runtimeUrl()} — ${String(e)}`);
+    }
+    return false;
+  }
+
+  /** "Force…": hold a tag (or a struct member, by dotted path) at a value
+   * until the force is removed — the controller re-applies it every scan
+   * against the driver and the logic. Same entry points as Set Live Value:
+   * a hover link (name), a Live Values row ({tag}), or the cursor. */
+  async force(arg?: string | { tag?: string; name?: string }): Promise<void> {
+    const tag = typeof arg === "string" ? arg : arg?.tag ?? arg?.name;
+    const name = tag ?? this.identifierAtCursor(true);
+    if (!name) {
+      void notifyWarning("nautilus: put the cursor on a tag, then Force…");
+      return;
+    }
+    const forcedAt = this.forcedFor(name);
+    const current = forcedAt === name ? this.forces.get(name) : this.pathValue(name);
+    const input = await vscode.window.showInputBox({
+      title: `nautilus: Force ${name}`,
+      prompt:
+        (forcedAt === name ? `Forced to ${formatValue(current)} — new forced value` : current === undefined ? "Force to" : `Now ${formatValue(current)} — force to`) +
+        " (number, or TRUE/FALSE). Held until you remove the force.",
+      value: current === undefined ? "" : formatValue(current),
+      validateInput: (v) => (parseWriteValue(v) === undefined ? "Enter a number, or TRUE/FALSE" : undefined),
+    });
+    if (input === undefined) return;
+    const value = parseWriteValue(input);
+    if (value === undefined) return;
+    if (this.confirmWrites()) {
+      const go = await notifyWarning(
+        forceConfirmMessage(this.runtimeUrl(), name, formatValue(value), current === undefined ? undefined : formatValue(current)),
+        { modal: true },
+        "Force"
+      );
+      if (go !== "Force") return;
+    }
+    if (await this.write(`force ${name}`, forceApi.force(name, value))) {
+      void notifyInfo(`nautilus: forced ${name} = ${formatValue(value)}`);
+    }
+  }
+
+  /** "Remove Force": one address. With no argument, the forced address
+   * under the cursor — or a pick from the table when there is none. */
+  async unforce(arg?: string | { tag?: string; name?: string; force?: string }): Promise<void> {
+    let name = typeof arg === "string" ? arg : arg?.force ?? arg?.tag ?? arg?.name;
+    if (name) name = this.forcedFor(name) ?? name;
+    if (!name) {
+      const here = this.identifierAtCursor(true);
+      name = here ? this.forcedFor(here) : undefined;
+    }
+    if (!name) {
+      if (this.forces.size === 0) {
+        void notifyInfo("nautilus: nothing is forced");
+        return;
+      }
+      const pick = await vscode.window.showQuickPick(
+        [...this.forces].map(([n, v]) => ({ label: n, description: `F ${formatValue(v)}` })),
+        { title: "nautilus: Remove which force?" }
+      );
+      if (!pick) return;
+      name = pick.label;
+    }
+    if (await this.write(`remove force ${name}`, forceApi.unforce(name))) {
+      void notifyInfo(`nautilus: removed the force on ${name}`);
+    }
+  }
+
+  /** "Remove All Forces". */
+  async unforceAll(): Promise<void> {
+    const n = this.forces.size;
+    if (this.confirmWrites()) {
+      const go = await notifyWarning(clearForcesConfirmMessage(this.runtimeUrl(), n), { modal: true }, "Remove All");
+      if (go !== "Remove All") return;
+    }
+    if (await this.write("remove all forces", forceApi.clear())) {
+      void notifyInfo(`nautilus: removed all forces`);
+    }
+  }
+
+  /** The status bar's target: the force table as a pick list, each entry
+   * removable, plus "Remove all". */
+  async showForces(): Promise<void> {
+    if (this.forces.size === 0) {
+      void notifyInfo("nautilus: nothing is forced");
+      return;
+    }
+    type Item = vscode.QuickPickItem & { force?: string; all?: boolean };
+    const items: Item[] = [...this.forces].map(([n, v]) => ({
+      label: `$(lock) ${n}`,
+      description: `F ${formatValue(v)}`,
+      detail: "Select to remove this force",
+      force: n,
+    }));
+    items.push({ label: "$(unlock) Remove all forces", all: true });
+    const pick = await vscode.window.showQuickPick(items, {
+      title: `nautilus: ${this.forces.size} force${this.forces.size === 1 ? "" : "s"} active on ${this.runtimeUrl()}`,
+    });
+    if (!pick) return;
+    if (pick.all) await this.unforceAll();
+    else if (pick.force) await this.unforce(pick.force);
+  }
+
+  /** Jump a running SFC chart to a step, once (Codesys "set step"). */
+  async sfcSetStep(step: string, pou?: string): Promise<boolean> {
+    if (!(await this.write(`set step ${step}`, forceApi.setStep(step, pou)))) return false;
+    void notifyInfo(`nautilus: chart jumped to step ${step}`);
+    return true;
+  }
+
+  /** Fire one SFC transition, once. */
+  async sfcFireTransition(id: string, pou?: string): Promise<boolean> {
+    if (!(await this.write(`fire transition ${id}`, forceApi.fireTransition(id, pou)))) return false;
+    void notifyInfo(`nautilus: fired transition ${id}`);
+    return true;
+  }
+
+  /** A tag or member path's live value (case-insensitive), for prefills. */
+  private pathValue(path: string): unknown {
+    const [head, ...rest] = path.split(".");
+    let v: unknown = this.values.get(head.toLowerCase());
+    for (const seg of rest) {
+      if (v === null || typeof v !== "object") return undefined;
+      const obj = v as Record<string, unknown>;
+      const k = Object.keys(obj).find((x) => x.toLowerCase() === seg.toLowerCase());
+      v = k === undefined ? undefined : obj[k];
+    }
+    return v;
+  }
+
   /** The bare identifier under the active editor's cursor, or "". Only the
    * top-level watch is offered a value write, so an FB member path (a name
    * with a dot) resolves to "" here. */
-  private identifierAtCursor(): string {
+  private identifierAtCursor(dotted = false): string {
     const editor = vscode.window.activeTextEditor;
     if (!editor || !isIecDoc(editor.document)) return "";
-    const range = editor.document.getWordRangeAtPosition(editor.selection.active, /[A-Za-z_][A-Za-z0-9_]*/);
+    // A force may address a struct member ("P101.Speed"); a value write may not.
+    const word = dotted ? /[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*/ : /[A-Za-z_][A-Za-z0-9_]*/;
+    const range = editor.document.getWordRangeAtPosition(editor.selection.active, word);
     return range ? editor.document.getText(range) : "";
   }
 
@@ -235,6 +417,7 @@ export class LiveValues implements vscode.Disposable {
       enabled: this.enabled,
       fresh: this.fresh(),
       values: Object.fromEntries(this.values),
+      forced: this.enabled ? lowerForces(this.forces) : {},
     };
     for (const l of this.listeners) l(frame);
   }
@@ -324,6 +507,9 @@ export class LiveValues implements vscode.Disposable {
     }
     this.lastTags = Object.entries(frame.tags ?? {});
     this.lastLocals = Object.entries(frame.locals ?? {});
+    const hadForces = this.forces.size;
+    this.forces = parseForces(frame);
+    if (hadForces !== this.forces.size) this.updateStatus();
     const wasStale = !this.fresh();
     this.lastFrameMs = Date.now();
     if (wasStale) this.updateStatus();
@@ -334,8 +520,19 @@ export class LiveValues implements vscode.Disposable {
   /** The current tags and locals with declared casing, for the Live Values
    * panel. tags are settable (POST /api/tags by name); locals are the
    * program's retained internals and are read-only here. */
-  snapshot(): { tags: [string, unknown][]; locals: [string, unknown][]; enabled: boolean; fresh: boolean } {
-    return { tags: this.lastTags, locals: this.lastLocals, enabled: this.enabled, fresh: this.fresh() };
+  snapshot(): {
+    tags: [string, unknown][];
+    locals: [string, unknown][];
+    forces: ReadonlyMap<string, unknown>;
+    enabled: boolean;
+    fresh: boolean;
+  } {
+    return { tags: this.lastTags, locals: this.lastLocals, forces: this.forces, enabled: this.enabled, fresh: this.fresh() };
+  }
+
+  /** The forced address covering this tag or member path, if any. */
+  forcedFor(name: string): string | undefined {
+    return forcedAddress(this.forces, name);
   }
 
   private fresh(): boolean {
@@ -377,9 +574,11 @@ export class LiveValues implements vscode.Disposable {
       if (!this.enabled || this.values.size === 0) {
         editor.setDecorations(this.freshDeco, []);
         editor.setDecorations(this.staleDeco, []);
+        editor.setDecorations(this.forcedDeco, []);
         continue;
       }
       const decos: vscode.DecorationOptions[] = [];
+      const forcedDecos: vscode.DecorationOptions[] = [];
       const text = editor.document.getText();
       // Segment the document: program text scans against the global watch;
       // each FUNCTION_BLOCK body scans against its MONITORED instance's
@@ -417,23 +616,37 @@ export class LiveValues implements vscode.Disposable {
           // "Set value…" — only for a bare top-level tag (no FB-instance
           // prefix, no member/index path); a struct member isn't a writable
           // name on its own. The command link needs a trusted hover.
-          if (seg.prefix === "" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(site.path)) {
+          const forced = seg.prefix === "" ? this.forcedFor(site.path) : undefined;
+          if (forced) {
+            hover.appendMarkdown(`\n\n**F** — forced to \`${formatValue(this.forces.get(forced))}\` (\`${forced}\`)`);
+          }
+          if (seg.prefix === "" && /^[A-Za-z_][A-Za-z0-9_.]*$/.test(site.path)) {
             const arg = encodeURIComponent(JSON.stringify([site.path]));
-            hover.appendMarkdown(`\n\n[$(edit) Set value…](command:nautilus.setValue?${arg})`);
-            hover.isTrusted = { enabledCommands: ["nautilus.setValue"] };
+            const links: string[] = [];
+            if (!forced && !site.path.includes(".")) links.push(`[$(edit) Set value…](command:nautilus.setValue?${arg})`);
+            links.push(`[$(lock) Force…](command:nautilus.force?${arg})`);
+            if (forced) {
+              const farg = encodeURIComponent(JSON.stringify([forced]));
+              links.push(`[$(unlock) Remove force](command:nautilus.unforce?${farg})`);
+            }
+            hover.appendMarkdown("\n\n" + links.join(" · "));
+            hover.isTrusted = { enabledCommands: ["nautilus.setValue", "nautilus.force", "nautilus.unforce"] };
             hover.supportThemeIcons = true;
           }
-          decos.push({
+          (forced ? forcedDecos : decos).push({
             range: new vscode.Range(pos, pos),
             renderOptions: {
-              after: { contentText: formatValue(site.value) },
+              after: { contentText: forced ? forcedPillText(formatValue(site.value)) : formatValue(site.value) },
             },
             hoverMessage: hover,
           });
         }
       }
+      // A stale frame can't vouch for a force any more than for a value:
+      // forced pills grey out with the rest (the F in their text stays).
       editor.setDecorations(fresh ? this.staleDeco : this.freshDeco, []);
-      editor.setDecorations(fresh ? this.freshDeco : this.staleDeco, decos);
+      editor.setDecorations(fresh ? this.freshDeco : this.staleDeco, fresh ? decos : decos.concat(forcedDecos));
+      editor.setDecorations(this.forcedDeco, fresh ? forcedDecos : []);
     }
     this.notify();
   }
@@ -521,7 +734,27 @@ export class LiveValues implements vscode.Disposable {
     if (pick) this.setMonitor(fbType, pick.label);
   }
 
+  /** The force count in the status bar, and the context keys the menus
+   * gate on. Shown only while frames are fresh: an offline controller's
+   * force table is unknown, and a stale count would be worse than none. */
+  private updateForceStatus(): void {
+    const live = this.enabled && this.fresh();
+    const n = live ? this.forces.size : 0;
+    void vscode.commands.executeCommand("setContext", "nautilus.liveConnected", live);
+    void vscode.commands.executeCommand("setContext", "nautilus.forcesActive", n > 0);
+    if (n === 0) {
+      this.forceStatus.hide();
+      mirrorStatus(this.forceStatus, STATUS_FORCES, false);
+      return;
+    }
+    this.forceStatus.text = forceStatusText(n);
+    this.forceStatus.tooltip = `${n} forced on ${this.runtimeUrl()}: ${[...this.forces.keys()].join(", ")} — click to list or remove`;
+    this.forceStatus.show();
+    mirrorStatus(this.forceStatus, STATUS_FORCES, true);
+  }
+
   private updateStatus(): void {
+    this.updateForceStatus();
     // Visible while anything shows live values — a text editor OR a diagram
     // webview (the diagram's toolbar toggle drives the same command).
     if (this.stEditors().length === 0 && this.listeners.size === 0) {
@@ -551,7 +784,9 @@ export class LiveValues implements vscode.Disposable {
     if (this.renderTimer) clearTimeout(this.renderTimer);
     this.freshDeco.dispose();
     this.staleDeco.dispose();
+    this.forcedDeco.dispose();
     this.status.dispose();
+    this.forceStatus.dispose();
     this.monitorsChanged.dispose();
     for (const d of this.disposables) d.dispose();
   }
@@ -609,3 +844,17 @@ function pillDecoration(
   });
 }
 
+// forcedPillDecoration is pillDecoration in amber, with a darker ink on light
+// themes — the forced value's pill (its text carries the F).
+function forcedPillDecoration(): vscode.TextEditorDecorationType {
+  const shape = "none; border-radius: 5px; padding: 0px 5px; font-size: 0.85em; vertical-align: baseline;";
+  return vscode.window.createTextEditorDecorationType({
+    after: { margin: "0 0 0 0.6em", fontWeight: "700", textDecoration: shape },
+    dark: {
+      after: { color: "#f2b13c", backgroundColor: "rgba(242, 177, 60, 0.16)", border: "1px solid rgba(242, 177, 60, 0.7)" },
+    },
+    light: {
+      after: { color: "#9a5b00", backgroundColor: "rgba(214, 140, 20, 0.14)", border: "1px solid rgba(170, 100, 0, 0.6)" },
+    },
+  });
+}

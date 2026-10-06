@@ -172,7 +172,9 @@ Current table:
 | `sfc-jump-back` |   |   |   | ✓ | 4 |
 | `sfc-qualifiers` |   |   |   | ✓ | 7 |
 | `sfc-sim-div-conv` |   |   |   | ✓ | 6 |
+| `sfc-step-maxtime` |   |   |   | ✓ | 5 |
 | `sfc-step-t` |   |   |   | ✓ | 5 |
+| `sfc-timed-qualifiers` |   |   |   | ✓ | 10 |
 | `st-bitwise` | ✓ |   | ✓ |   | 5 |
 | `st-div-zero` | ✓ |   |   |   | 4 |
 | `st-int-width` | ✓ |   |   |   | 5 |
@@ -180,4 +182,4 @@ Current table:
 | `st-string-clamp` | ✓ |   |   |   | 8 |
 | `st-xor` | ✓ |   |   |   | 3 |
 
-24 features, 147 tests.
+26 features, 162 tests.

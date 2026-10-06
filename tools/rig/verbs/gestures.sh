@@ -565,8 +565,9 @@ sfc_rename_step() {
 # only); elements are <g class="node"> with the tag in <text
 # class="operand"> (a function block's operand is its instance name). Kind
 # by shape: a coil draws <path class="post"> arcs, a contact <line
-# class="post"> bars, an FB a <rect class="fbbox">, a function contact a
-# <text class="fntext">. Insert points are <g class="spot" data-spot=JSON>.
+# class="post"> bars, an edge contact (+Tag / -Tag) the same bars around a
+# <text class="edgemark"> P or N, an FB a <rect class="fbbox">, a function
+# contact a <text class="fntext">. Insert points are <g class="spot" data-spot=JSON>.
 #
 # Palette-click semantics (paletteClick): with a RUNG selected (its name
 # clicked) an item appends at the end of that rung's series (a coil: at the
@@ -575,7 +576,7 @@ sfc_rename_step() {
 
 _LD_JS='const rungName = (s) => [...s.querySelector("tspan.rungname").childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join("").trim();
 const rung = (n) => [...doc.querySelectorAll("svg.rsvg")].find(s => rungName(s) === n);
-const kind = (g) => g.querySelector("rect.fbbox") ? "fb" : g.querySelector("text.fntext") ? "fn" : g.querySelector("path.post") ? "coil" : "contact";
+const kind = (g) => g.querySelector("rect.fbbox") ? "fb" : g.querySelector("text.fntext") ? "fn" : g.querySelector("path.post") ? "coil" : g.querySelector("text.edgemark") ? "edge" : "contact";
 const operand = (g) => (g.querySelector("text.operand")?.textContent ?? g.querySelector("text.fntext")?.textContent ?? "").trim();'
 
 ld_rung_el() { printf '(() => { %s return rung(%s); })()' "$_LD_JS" "$(_q "$1")"; }
@@ -1730,6 +1731,221 @@ ld_edit_fb_args() {
   float_edit "$args" || return 1
   sleep 0.5
   ld_assert_rung "$rung" "$inst *: *[A-Za-z_]+ *\\( *$(printf '%s' "$args" | sed 's/[][\.*^$()|+?{}]/\\&/g')"
+}
+
+# ── Ladder: Studio 5000 habits (the logix-shaped build's verbs) ─────────────
+# Lifted from tools/rig/builds/logix-shaped/build.sh (its lx_* verbs) once
+# the gestures they probe existed: edge contacts (#212/#213), a block's pins
+# (#214), rung copy (#217), the declare offer's type (#219), and the
+# variables panel's instances and Escape (#220). Same contract as the verbs
+# above: save, then read the file back.
+
+# ld_delete_rung <rung> — click the rung's name (selects the whole rung),
+# Del.
+ld_delete_rung() {
+  local rung=$1
+  G_WHAT="delete rung $rung"
+  ld_select_rung "$rung" || return 1
+  g_key Delete
+  ld_wait "!($(ld_rung_el "$rung"))" || return 1
+  g_save
+  ! grep -Eq "^ *RUNG +$rung\\b" "$PROJ/$G_FILE" || { g_err "RUNG $rung is still in $G_FILE"; return 1; }
+}
+
+# ld_rung_comment <rung> <text> — double-click the rung's "(* … *)" slot,
+# type the comment.
+ld_rung_comment() {
+  local rung=$1 text=$2
+  G_WHAT="comment on $rung"
+  dclick_el "doc.querySelector('tspan.rungcomment[data-id=\"rungcomment:$rung\"]')" || { g_err "no comment slot on $rung"; return 1; }
+  float_edit "$text" || return 1
+  assert_file_contains "$G_FILE" "^ *RUNG +$rung *\\(\\* *$(sed 's/[][\\.*^$()|+?{}]/\\&/g' <<<"$text") *\\*\\)"
+}
+
+# _ld_vars_open — the diagram bar's "vars" button (the variables panel).
+_ld_vars_open() {
+  js_true 'doc.querySelector(".addrow")' && return 0
+  click_button vars || return 1
+  wait_js 'doc.querySelector(".addrow")' 4 || { g_err "the variables panel did not open"; return 1; }
+}
+# _ld_vars_close — Escape (vscode-iec newer than 0.13.2), else a click on
+# the bar (any click outside the panel closes it).
+_ld_vars_close() {
+  js_true 'doc.querySelector(".addrow")' || return 0
+  g_key Escape
+  wait_js '!doc.querySelector(".addrow")' 2 && return 0
+  click_el 'doc.querySelector(".bar")' 0.3 0.5
+  wait_js '!doc.querySelector(".addrow")' 3 || { g_err "the variables panel did not close"; return 1; }
+}
+# _ld_vars_row <name> [pou] — the panel row of a declaration (JS).
+_ld_vars_row() {
+  printf '[...doc.querySelectorAll(".rows .row")].find(r => r.dataset.id === %s && (%s === "" || r.dataset.pou === %s))' "$(_q "$1")" "$(_q "${2:-}")" "$(_q "${2:-}")"
+}
+
+# ld_vars_delete <name> [pou] — the variables panel's × on <name>'s row (a
+# FUNCTION_BLOCK's, with [pou]).
+ld_vars_delete() {
+  local name=$1 pou=${2:-} row
+  G_WHAT="delete the declaration of $name"
+  _ld_vars_open || return 1
+  row=$(_ld_vars_row "$name" "$pou")
+  click_el "($row)?.querySelector('button.del')" || { g_err "no $name row in the variables panel"; return 1; }
+  wait_js "!($row)" 6 || { g_err "$name is still listed"; return 1; }
+  _ld_vars_close || return 1
+  g_save
+  ! grep -Eq "^ *$name *:" "$PROJ/$G_FILE" || { g_err "$name is still declared in $G_FILE"; return 1; }
+}
+
+# ld_vars_declare <name> <type> [section, default VAR_EXTERNAL] [pou] — the
+# variables panel's footer row: the scope (a FUNCTION_BLOCK's, when the
+# file has more than one), the section badge clicked round to <section>
+# (a program: ext / local; a block: in / out / in/out / local), name, type,
+# +. In a file whose only POU is a block, its pins are the panel's scope.
+ld_vars_declare() {
+  local name=$1 type=$2 section=${3:-VAR_EXTERNAL} pou=${4:-} i cur
+  G_WHAT="declare $name : $type in ${pou:+$pou }$section"
+  _ld_vars_open || return 1
+  if [[ -n $pou ]] && js_true 'doc.querySelector(".addrow select.scopesel")'; then
+    js "(() => { const s = doc.querySelector('.addrow select.scopesel'); const i = [...s.options].findIndex(o => o.textContent.trim() === $(_q "$pou")); if (i < 0) return false; s.selectedIndex = i; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()" >/dev/null
+  fi
+  for ((i = 0; i < 6; i++)); do
+    cur=$(js 'doc.querySelector(".addrow button.badge")?.dataset.section ?? (doc.querySelector(".addrow button.badge")?.textContent.trim() === "local" ? "VAR" : "VAR_EXTERNAL")' | tr -d '"')
+    [[ $cur == "$section" ]] && break
+    click_el 'doc.querySelector(".addrow button.badge")' || return 1
+  done
+  [[ $cur == "$section" ]] || { g_err "the panel's section badge never reached $section (at $cur)"; return 1; }
+  click_el 'doc.querySelector(".addrow input.nx-input.grow")' || return 1
+  g_key ctrl+a; g_type "$name"
+  click_el 'doc.querySelector(".addrow .typefield input")' || return 1
+  g_key ctrl+a; g_type "$type"
+  g_key Escape   # dismiss the type suggestions (the first Escape stops there)
+  click_el 'doc.querySelector(".addrow button.add")' || return 1
+  wait_js "$(_ld_vars_row "$name" "$pou")" 6 || { g_err "$name never appeared in the panel"; return 1; }
+  _ld_vars_close || return 1
+  assert_file_contains "$G_FILE" "^ *$name *: *$type *;"
+}
+
+# ld_vars_rename <old> <new> [pou] — double-click the name in the variables
+# panel, type the new one: the declaration and every reference follow (a
+# block's pin: its callers' named bindings in the file too).
+ld_vars_rename() {
+  local old=$1 new=$2 pou=${3:-}
+  G_WHAT="rename $old to $new"
+  _ld_vars_open || return 1
+  dclick_el "($(_ld_vars_row "$old" "$pou"))?.querySelector('.name')" || { g_err "no $old row in the variables panel"; return 1; }
+  float_edit "$new" || return 1
+  wait_js "$(_ld_vars_row "$new" "$pou")" 6 || { g_err "$new never appeared in the panel"; return 1; }
+  _ld_vars_close || return 1
+  assert_file_contains "$G_FILE" "^ *$new *: *[A-Za-z_]+ *;" || return 1
+  if grep -Eq "(^|[^A-Za-z0-9_.#])$old([^A-Za-z0-9_]|$)" <(sed 's/(\*.*\*)//g; s://.*$::' "$PROJ/$G_FILE" | grep -v '^ *RUNG'); then
+    g_err "$old is still referenced after the rename"; return 1
+  fi
+}
+
+# ld_vars_lists_instance <inst> [type] — is the block instance a rung
+# declares by its call listed in the variables panel (read-only, `inst :
+# TYPE`)? Leaves the panel open for the row's PNG.
+ld_vars_lists_instance() {
+  local inst=$1 type=${2:-} row
+  _ld_vars_open || return 1
+  row="[...doc.querySelectorAll('.rows .row')].find(r => r.dataset.id === $(_q "$inst") && r.dataset.section === 'instance')"
+  js_true "$row" || { g_err "the variables panel ($(js 'doc.querySelectorAll(".rows .row").length') rows) does not list instance $inst"; return 1; }
+  [[ -z $type ]] || js_true "($row).querySelector('.type')?.textContent.includes($(_q "$type"))" || { g_err "$inst is not listed as $type"; return 1; }
+}
+
+# ld_vars_escape_closes — Escape closes the open variables panel.
+ld_vars_escape_closes() {
+  _ld_vars_open || return 1
+  g_key Escape; sleep 0.6
+  js_true '!doc.querySelector(".addrow")' && return 0
+  click_el 'doc.querySelector(".bar")' 0.3 0.5
+  g_err "Escape left the variables panel open"; return 1
+}
+
+# ld_declare_offer_type <name> <type> [section, default VAR_EXTERNAL] —
+# open the amber declare offer and read the type its <section> button
+# offers <name>. Leaves the offer open (ld_declare can click it next).
+ld_declare_offer_type() {
+  local name=$1 type=$2 section=${3:-VAR_EXTERNAL} btn got
+  btn="[...doc.querySelectorAll('.declpop button.declbtn')].find(b => b.dataset.name === $(_q "$name") && b.dataset.section === $(_q "$section"))"
+  js_true "$btn" || click_el 'doc.querySelector(".palette button.declare")' || { g_err "no declare offer in the palette"; return 1; }
+  wait_js "$btn" 3 || { g_err "the declare offer has no $section row for $name"; return 1; }
+  got=$(js "($btn).textContent.trim()" | tr -d '"')
+  [[ $got == *": $type" ]] || { g_err "the declare offer for $name reads '$got', not ': $type'"; return 1; }
+}
+
+# ld_add_edge <rung> <tag> [P|N] — the palette's ⊣P⊢ / ⊣N⊢ (rising /
+# falling edge, the ONS habit) appended to the rung, its "_" retagged.
+ld_add_edge() {
+  local rung=$1 tag=$2 mode=${3:-P} n0
+  G_WHAT="$mode edge $tag on $rung"
+  n0=$(ld_count "$rung" edge _)
+  ld_select_rung "$rung" || return 1
+  ld_palette "⊣${mode}⊢" || return 1
+  ld_wait "(() => { $_LD_JS return [...(rung($(_q "$rung"))?.querySelectorAll('g.node') ?? [])].filter(g => kind(g) === 'edge' && operand(g) === '_').length > $n0; })()" || return 1
+  _ld_retag "$rung" edge "$tag" || return 1
+  ld_assert_rung "$rung" "(^|[ [|])[$([[ $mode == N ]] && echo - || echo +)]$tag\\b"
+}
+
+# ld_edge_retag <rung> <tag> [P|N] — the Logix ONS habit typed: double-click
+# the contact <tag> and type "+tag" (or "-tag"): it becomes an edge contact.
+ld_edge_retag() {
+  local rung=$1 tag=$2 mode=${3:-P} sign
+  sign=$([[ $mode == N ]] && echo - || echo +)
+  G_WHAT="$sign$tag on $rung"
+  dclick_el "$(ld_node_el "$rung" contact "$tag")" || { g_err "no contact $tag on $rung"; return 1; }
+  float_edit "$sign$tag" || return 1
+  ld_wait "$(ld_node_el "$rung" edge "$tag")" || return 1
+  ld_assert_rung "$rung" "(^|[ [|])[$sign]$tag\\b"
+}
+
+# ld_edge_drawn <rung> <tag> — the file has `+tag` / `-tag` on the rung,
+# and the diagram draws it: a P / N contact with the tag as its operand.
+ld_edge_drawn() {
+  local rung=$1 tag=$2
+  grep -Eq "(^| |\\[|\\|)[-+]$tag\b" <<<"$(ld_rung_text "$rung")" || { g_err "rung $rung has no +$tag / -$tag in the file"; return 1; }
+  js_true "$(ld_node_el "$rung" edge "$tag")" \
+    || { g_err "the file has an edge on $tag in $rung; the diagram draws no edge contact for it"; return 1; }
+}
+
+# ld_retag <rung> <kind> <old> <new> — double-click the element <old> (a
+# contact, edge or coil) and type <new>; its form (NC, edge, coil mode)
+# stays.
+ld_retag() {
+  local rung=$1 kind=$2 old=$3 new=$4
+  G_WHAT="retag $old to $new on $rung"
+  dclick_el "$(ld_node_el "$rung" "$kind" "$old")" || { g_err "no $kind $old on $rung"; return 1; }
+  float_edit "$new" || return 1
+  ld_wait "$(ld_node_el "$rung" "$kind" "$new")" || return 1
+  ld_assert_rung "$rung" "(^|[ [|/+(-])$new\\b"
+}
+
+# ld_copy_rung <rung> [below-rung] [expect-name] — the Studio 5000 habit:
+# select the rung (its name), Ctrl+C; select [below-rung] (default <rung>),
+# Ctrl+V. A copy lands right below it, named on from <rung> (m1 → m2), its
+# block instances renamed the same way. Sets G_RUNG to the new rung's name.
+ld_copy_rung() {
+  local rung=$1 below=${2:-$1} want=${3:-} n0 new names
+  G_WHAT="copy rung $rung below $below"
+  n0=$(js 'doc.querySelectorAll("svg.rsvg").length')
+  names=$(js "(() => { $_LD_JS return [...doc.querySelectorAll('svg.rsvg')].map(rungName); })()")
+  ld_select_rung "$rung" || return 1
+  g_key ctrl+c
+  ld_select_rung "$below" || return 1
+  g_key ctrl+v
+  ld_wait "doc.querySelectorAll('svg.rsvg').length > $n0" || { g_err "Ctrl+C / Ctrl+V on rung $rung added no rung"; return 1; }
+  new=$(js "(() => { $_LD_JS const all = [...doc.querySelectorAll('svg.rsvg')].map(rungName); return all[all.indexOf($(_q "$below")) + 1]; })()" | tr -d '"')
+  if [[ -z $new ]] || grep -q "\"$new\"" <<<"$names"; then g_err "no new rung right below $below (got '$new')"; return 1; fi
+  [[ -z $want || $new == "$want" ]] || { g_err "the copy is rung '$new', not '$want'"; return 1; }
+  G_RUNG=$new
+  g_save
+  local src cp
+  src=$(ld_rung_text "$rung" | sed -E 's/^ *RUNG +[A-Za-z0-9_]+ *(\(\*.*\*\))? *//')
+  cp=$(ld_rung_text "$new" | sed -E 's/^ *RUNG +[A-Za-z0-9_]+ *(\(\*.*\*\))? *//')
+  [[ -n $cp ]] || { g_err "rung $new is empty in $G_FILE"; return 1; }
+  # Same rung modulo block instance names (renamed on paste).
+  [[ $(sed -E 's/[A-Za-z_][A-Za-z0-9_]* *: *([A-Za-z_])/I:\1/g' <<<"$src") == $(sed -E 's/[A-Za-z_][A-Za-z0-9_]* *: *([A-Za-z_])/I:\1/g' <<<"$cp") ]] \
+    || { g_err "rung $new is '$cp', not a copy of $rung ('$src')"; return 1; }
 }
 
 # ── Mimic: bind at a point ──────────────────────────────────────────────────
