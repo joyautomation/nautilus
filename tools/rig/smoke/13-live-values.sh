@@ -17,10 +17,16 @@
 #   X39  the mimic editor's canvas follows the controller: a level written
 #        over the API shows in the tank's own aria-label and in the LT-101
 #        readout, and the pump's running state follows the control loop.
+#   X11/X12 enumerations (#246, the last block): an enumerated tag's pill
+#        reads its member bare (Run), in the enum style, while a STRING tag
+#        holding the same text stays quoted; Set Live Value on it offers the
+#        type's members as a pick, and takes a member or an integer.
 #
 # Project: the Demo scaffold (`naut new`) with smoke/fixtures/
 # heated-tank.mimic.json beside it (bound to LevelPct, TempC, Heater,
-# PumpRun) — the same pairing 07 uses.
+# PumpRun) — the same pairing 07 uses — plus a fourth task, modes.st, that
+# declares TYPE PumpMode and binds the manifest tags Mode (a PumpMode) and
+# ModeNote (a STRING seeded with a member's name) for the enumeration block.
 #
 # The context menu: VS Code's NATIVE menu ignores XTEST clicks (lib.sh,
 # yd_click) and the rig image has no ydotool, so the profile sets
@@ -181,7 +187,36 @@ api_follows() {
 # ── project + controller ────────────────────────────────────────────────────
 ext_scaffold my-plant
 cp "$FIX/heated-tank.mimic.json" "$PROJ/"
-git -C "$PROJ" add -A; git -C "$PROJ" commit -qm "mimic"
+# An enumerated TYPE and a tag of it, and a STRING holding the same text
+# (#246) — read by the last block.
+cat >"$PROJ/modes.st" <<'ST'
+(* An enumerated type and a tag of it (#246): its live value is the
+   member's NAME, shown bare (Run), never quoted like the STRING beside it. *)
+TYPE PumpMode : (Off, Run := 10, Fault) := Off; END_TYPE
+
+PROGRAM Modes
+VAR_EXTERNAL
+    Mode     : PumpMode;
+    ModeNote : STRING;
+END_VAR
+IF Mode = Fault THEN
+    ModeNote := 'Fault';
+END_IF;
+END_PROGRAM
+ST
+python3 - "$PROJ/nautilus.yaml" <<'PY'
+import sys
+p = sys.argv[1]; s = open(p).read()
+task = "    program: interlocks.ld\n    scan: 200ms\n"
+assert task in s and "\ntags:\n" in s, "the Demo scaffold's nautilus.yaml changed shape"
+s = s.replace(task, task + "  - name: modes\n    program: modes.st\n    scan: 200ms\n", 1)
+s = s.replace("\ntags:\n", "\ntags:\n"
+  '  - { name: Mode,     role: setpoint, type: PumpMode, init: Run, desc: "Pump mode (an enumeration)" }\n'
+  '  - { name: ModeNote, role: setpoint, init: "Run", desc: "A STRING holding a member name" }\n', 1)
+open(p, "w").write(s)
+PY
+git -C "$PROJ" add -A; git -C "$PROJ" commit -qm "mimic + an enumeration"
+MYPLANT=$PROJ
 PORT=$(free_port 18080 18081 18082 18083)
 point_extension_at "$PROJ" "$PORT"
 start_controller "$PROJ" "$PORT"
@@ -507,3 +542,119 @@ else
   fi
   post_tag HeatSP 45
 fi
+
+# ══ X11/X12 enumerations (#246) ══════════════════════════════════════════════
+# Back on my-plant (the scaffold step's modes.st): Mode is a PumpMode seeded
+# Run, ModeNote a STRING seeded "Run". The stream carries both as the text
+# Run; only /api/meta's declared types tell them apart.
+vs_cmd "View: Close All Editors" 1
+kill_controllers_for "$PROJ"; sleep 1
+PROJ=$MYPLANT
+PORT=$(free_port 18088 18089 18090 18091)
+point_extension_at "$PROJ" "$PORT"
+start_controller "$PROJ" "$PORT"
+sleep 3
+mt=$(api /api/meta | python3 -c 'import sys,json; t=json.load(sys.stdin)["tags"]; m=t.get("Mode",{}); print(m.get("type",""), ",".join(e["name"] for e in m.get("enum") or []), t.get("ModeNote",{}).get("type",""))')
+read -r mtype mmembers ntype <<<"$mt"
+if [[ $mtype == PumpMode && $mmembers == Off,Run,Fault && $ntype == STRING ]]; then
+  pass "X11 /api/meta: Mode is a PumpMode with members $mmembers; ModeNote a STRING"
+else
+  fail "X11 /api/meta: Mode type '$mtype' members '$mmembers', ModeNote type '$ntype'"
+fi
+smoke_open "$PROJ" modes.st
+key Escape; hide_sidebar
+sleep 5
+# enum_pill_style — the Mode pill's ::after font style (the enum pill is
+# italic, liveValues.ts enumPillDecoration; the STRING's is not).
+ENUM_STYLE_JS='(() => {
+  const ed = (document.querySelector(".editor-group-container.active") || document).querySelector(".monaco-editor");
+  const out = {};
+  for (const line of ed ? ed.querySelectorAll(".view-lines .view-line") : []) {
+    let acc = "";
+    for (const sp of line.querySelectorAll("span")) {
+      if (sp.children.length) continue;
+      const a = getComputedStyle(sp, "::after");
+      if (a.content && a.content !== "none" && a.content !== "normal" && a.borderTopLeftRadius === "5px") {
+        const m = acc.replace(/ /g, " ").match(/([A-Za-z_][A-Za-z0-9_.]*)\s*$/);
+        if (m && !(m[1] in out)) out[m[1]] = a.fontStyle;
+      }
+      acc += sp.textContent;
+    }
+  }
+  return out;
+})()'
+for ((i = 0; i < 12; i++)); do v=$(pill Mode); [[ $v == Run ]] && break; sleep 0.5; done
+nv=$(pill ModeNote)
+st=$(cdp page "$ENUM_STYLE_JS")
+png=$(shot enum-pills)
+ms=$(python3 -c 'import sys,json; d=json.loads(sys.argv[1]) or {}; print(d.get("Mode",""), d.get("ModeNote",""))' "$st")
+read -r mstyle nstyle <<<"$ms"
+if [[ $v == Run && $nv == '"Run"' ]]; then
+  pass "X11 modes.st: the enumerated Mode pill reads Run unquoted; the STRING ModeNote pill reads \"Run\" (api: $(tagv Mode) / $(tagv ModeNote))" "$png"
+else
+  fail "X11 modes.st: Mode pill '$v' (want Run, bare), ModeNote pill '$nv' (want \"Run\")" "$png"
+fi
+[[ $mstyle == italic && $nstyle != italic ]] \
+  && pass "X11 modes.st: the enum pill has its own style (Mode ${mstyle}, ModeNote ${nstyle:-?})" "$png" \
+  || fail "X11 modes.st: pill styles Mode '${mstyle:-?}', ModeNote '${nstyle:-?}' — want the enum italic, the STRING not" "$png"
+
+# Set Live Value on Mode: a pick of the type's members, not a free-text box.
+qp_labels() {
+  cdp page '(() => { const w = document.querySelector(".quick-input-widget"); if (!w || w.style.display === "none") return ""; return [...w.querySelectorAll(".monaco-list-row")].map(r => (r.querySelector(".label-name")?.textContent || "").trim() + "|" + (r.querySelector(".label-description")?.textContent || "").trim()).join(";"); })()' | python3 -c 'import sys,json; print(json.load(sys.stdin) or "")'
+}
+set_mode() { # <typed> — cursor on Mode, Set Live Value, type, Enter; prints the pick's title and rows
+  local p x y t= rows i
+  p=$(ident_point 'IF Mode = Fault' Mode)
+  [[ -n $p ]] || { echo "no Mode on screen"; return 1; }
+  read -r x y <<<"$p"
+  xdotool mousemove --window "$WIN" "$x" "$y"; xdotool click 1; sleep 0.3
+  vs_cmd "nautilus: Set Live Value" 1
+  for ((i = 0; i < 20; i++)); do t=$(input_title); [[ -n $t ]] && break; sleep 0.25; done
+  rows=$(qp_labels)
+  echo "$t :: $rows"
+  [[ $t == *"Set Mode"* ]] || return 1
+  g_type "$1"; sleep 0.6; g_key Return
+}
+if r=$(set_mode Fault); then
+  png=$(shot enum-set-pick)
+  rows=${r#*:: }
+  if [[ $rows == Off\|*\;Run\|*\;Fault\|* ]]; then
+    pass "C06 Set Live Value on the enumerated Mode offers its members: $(sed 's/;/ · /g' <<<"$rows")" "$png"
+  else
+    fail "C06 Set Live Value on Mode: rows '$rows' — want Off, Run, Fault as a pick" "$png"
+  fi
+  for ((i = 0; i < 12; i++)); do a=$(tagv Mode); [[ $a == '"Fault"' ]] && break; sleep 0.25; done
+  for ((i = 0; i < 12; i++)); do [[ $(pill Mode) == Fault ]] && break; sleep 0.25; done
+  [[ $a == '"Fault"' && $(pill Mode) == Fault ]] \
+    && pass "C06 picked Fault → /api/state Mode $a, the pill reads $(pill Mode)" "$(shot enum-set-fault)" \
+    || fail "C06 picked Fault → /api/state Mode $a, pill '$(pill Mode)'" "$(shot enum-set-fault)"
+else
+  fail "C06 Set Live Value on Mode: no member pick ($r)" "$(shot enum-set-nopick)"
+  key Escape
+fi
+# A typed integer still works: 10 is Run.
+if r=$(set_mode 10); then
+  for ((i = 0; i < 12; i++)); do a=$(tagv Mode); [[ $a == '"Run"' ]] && break; sleep 0.25; done
+  [[ $a == '"Run"' ]] \
+    && pass "C06 typed 10 into the Mode pick → /api/state Mode $a (the member with that integer)" "$(shot enum-set-int)" \
+    || fail "C06 typed 10 into the Mode pick → /api/state Mode $a" "$(shot enum-set-int)"
+else
+  fail "C06 Set Live Value on Mode, typed 10: no pick ($r)" "$(shot enum-set-int)"
+  key Escape
+fi
+# The Live Values panel: Mode bare with the enum icon, ModeNote quoted.
+vs_cmd "nautilus: Focus on Live Values View" 3
+sleep 1.5
+lv=$(cdp page '(() => { const sb = document.querySelector(".part.sidebar"); if (!sb) return {}; const o = {}; for (const r of sb.querySelectorAll(".monaco-list-row")) { const n = (r.querySelector(".label-name")?.textContent || "").trim(); if (n === "Mode" || n === "ModeNote") o[n] = { desc: (r.querySelector(".label-description")?.textContent || "").trim(), icon: !!r.querySelector(".codicon-symbol-enum-member") }; } return o; })()')
+png=$(shot enum-panel)
+res=$(python3 -c 'import sys,json; d=json.loads(sys.argv[1]) or {}; m=d.get("Mode",{}); n=d.get("ModeNote",{}); print(json.dumps(m.get("desc","")), m.get("icon"), json.dumps(n.get("desc","")), n.get("icon"))' "$lv")
+read -r pdesc picon ndesc nicon <<<"$res"
+# (ModeNote reads "Run", or "Fault" once modes.st has seen Mode = Fault.)
+if [[ $pdesc == '"Run"' && $picon == True && $ndesc == '"\"'* && $nicon == False ]]; then
+  pass "X12 Live Values: Mode reads Run with the enum icon; the STRING ModeNote reads $ndesc, quoted" "$png"
+elif [[ -z $lv || $lv == '{}' ]]; then
+  warn "X12 Live Values: Mode/ModeNote rows not on screen (virtual list) — $lv" "$png"
+else
+  fail "X12 Live Values: Mode $pdesc (enum icon $picon), ModeNote $ndesc (icon $nicon)" "$png"
+fi
+# ══ end enumerations ═════════════════════════════════════════════════════════

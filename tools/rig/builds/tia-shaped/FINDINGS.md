@@ -26,7 +26,7 @@ labelled `ux:<kind>`, `editor:fbd|ext`, `parity:tia`, titled
 | 7 | gap | `REGION … END_REGION` unsupported; reported as an undeclared identifier | FIXED #202 (PR #242: reference uses two regions; rows 05-region-outline, 05-region-folds) |
 | 8 | gap | `VAR_TEMP` keeps its value between calls | FIXED #203 (PR #242: the `justDone := FALSE;` workaround is gone) |
 | 9 | gap | no signature help on `LIMIT(` | FIXED (PR #168); row 04-signature-help-LIMIT PASS |
-| 10 | gap | no document symbols (Ctrl+Shift+O, Outline) | OPEN, PR #172 |
+| 10 | gap | no document symbols (Ctrl+Shift+O, Outline) | FIXED (PR #172); the row read only the quick-pick rows on screen, so it now filters by each symbol (#249); row 05-outline-symbols PASS |
 | 11 | gap | no Find All References (Shift+F12) | FIXED (PR #171); row 05-find-references PASS |
 | 12 | papercut | block → wire's function field never suggests project FUNCTIONs | FIXED #204 (PR #236) |
 | 13 | gap | FB picker writes every input as `_`, an error even with a default | FIXED #205 (PR #236) |

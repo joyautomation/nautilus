@@ -40,6 +40,9 @@
 	--nx-err-bg: var(--vscode-inputValidation-errorBackground, rgba(200, 60, 60, 0.12));
 	/* a FORCED value: amber, like the F a PLC IDE shows beside one */
 	--nx-forced: var(--vscode-charts-orange, #e8a028);
+	/* an ENUMERATED value (#246): the theme's enum-member colour, so a
+	   member's bare name never reads as a STRING */
+	--nx-enum: var(--vscode-symbolIcon-enumeratorMemberForeground, #4b9ce6);
 
 	/* diff */
 	--nx-added: var(--vscode-gitDecoration-addedResourceForeground, #2ea043);
@@ -129,6 +132,13 @@ body.vscode-high-contrast button:focus-visible {
 	/* Opaque: pills sit over wires, so lines must not bleed through. */
 	background: color-mix(in srgb, var(--nx-ok) 13%, var(--nx-bg));
 	border: 1px solid color-mix(in srgb, var(--nx-ok) 38%, transparent);
+}
+/* before .off and .forced: a stale enum greys, a forced one goes amber */
+.nx-pill.enum {
+	font-style: italic;
+	color: var(--nx-enum);
+	background: color-mix(in srgb, var(--nx-enum) 13%, var(--nx-bg));
+	border-color: color-mix(in srgb, var(--nx-enum) 45%, transparent);
 }
 .nx-pill.off {
 	color: var(--nx-muted);

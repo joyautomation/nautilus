@@ -7,15 +7,15 @@
 
 import * as vscode from "vscode";
 import { LiveValues } from "./liveValues";
-import { formatValue } from "./scan";
 import { forcedDescription } from "./forces";
+import { isEnum, typeLabel } from "./tagTypes";
 
 const REFRESH_THROTTLE_MS = 500;
 
 type Node =
   | { kind: "group"; label: string; settable: boolean; entries: [string, unknown][]; forces?: boolean }
   | { kind: "tag"; name: string; value: unknown; settable: boolean; forced?: string; forceRow?: boolean }
-  | { kind: "member"; label: string; value: unknown };
+  | { kind: "member"; label: string; value: unknown; path: string };
 
 export class LiveValuesView implements vscode.TreeDataProvider<Node> {
   private readonly changed = new vscode.EventEmitter<Node | undefined>();
@@ -48,8 +48,13 @@ export class LiveValuesView implements vscode.TreeDataProvider<Node> {
       return item;
     }
     if (node.kind === "member") {
-      const item = new vscode.TreeItem(node.label);
-      item.description = formatValue(node.value);
+      const compound = node.value !== null && typeof node.value === "object";
+      const item = new vscode.TreeItem(
+        node.label,
+        compound ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None
+      );
+      item.description = this.live.display(node.value, node.path);
+      decorateType(item, this.live.typeOf(node.path), node.path, item.description);
       return item;
     }
     // A tag or local leaf.
@@ -58,8 +63,12 @@ export class LiveValuesView implements vscode.TreeDataProvider<Node> {
       node.name,
       compound ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None
     );
-    item.description = formatValue(node.value);
-    item.tooltip = `${node.name} = ${formatValue(node.value)}`;
+    const shown = this.live.display(node.value, node.name);
+    item.description = shown;
+    item.tooltip = `${node.name} = ${shown}`;
+    // An enumerated value (#246): its member's name bare, the enum icon,
+    // and the type in the tooltip — never the quotes a STRING gets.
+    decorateType(item, this.live.typeOf(node.name), node.name, shown);
     // contextValue drives the inline actions (see package.json
     // view/item/context): only settable leaves get the pencil and Force…;
     // a forced one gets Remove Force instead of the pencil — a write to it
@@ -70,9 +79,9 @@ export class LiveValuesView implements vscode.TreeDataProvider<Node> {
     (item as unknown as { force?: string }).force = node.forced;
     if (node.forced) {
       // The F badge: Logix and TIA both mark a forced value in the list.
-      item.description = forcedDescription(formatValue(node.value));
+      item.description = forcedDescription(shown);
       item.iconPath = new vscode.ThemeIcon("lock", new vscode.ThemeColor("list.warningForeground"));
-      item.tooltip = `${node.name} = ${formatValue(node.value)} — FORCED${node.forced !== node.name ? ` (${node.forced})` : ""}; held against the field and the logic until removed`;
+      item.tooltip = `${node.name} = ${shown} — FORCED${node.forced !== node.name ? ` (${node.forced})` : ""}; held against the field and the logic until removed`;
     }
     // Click-to-edit: a settable scalar opens the Set Live Value input on a
     // plain row click, so the panel reads as a values EDITOR (the pencil is
@@ -113,7 +122,10 @@ export class LiveValuesView implements vscode.TreeDataProvider<Node> {
         }));
     }
     if (node.kind === "tag" && node.value && typeof node.value === "object") {
-      return members(node.value);
+      return members(node.value, node.name);
+    }
+    if (node.kind === "member" && node.value && typeof node.value === "object") {
+      return members(node.value, node.path);
     }
     return [];
   }
@@ -128,10 +140,19 @@ export class LiveValuesView implements vscode.TreeDataProvider<Node> {
   }
 }
 
-// members flattens one level of a struct/array value into read-only rows.
-function members(value: object): Node[] {
+// members flattens one level of a struct/array value into read-only rows,
+// each carrying its path for the type lookup.
+function members(value: object, path: string): Node[] {
   if (Array.isArray(value)) {
-    return value.map((v, i) => ({ kind: "member", label: `[${i}]`, value: v }));
+    return value.map((v, i) => ({ kind: "member", label: `[${i}]`, value: v, path: `${path}[${i}]` }));
   }
-  return Object.entries(value).map(([k, v]) => ({ kind: "member", label: k, value: v }));
+  return Object.entries(value).map(([k, v]) => ({ kind: "member", label: k, value: v, path: `${path}.${k}` }));
+}
+
+// decorateType marks an enumerated row: the enum-member icon, and the type
+// with its members in the tooltip.
+function decorateType(item: vscode.TreeItem, ft: ReturnType<LiveValues["typeOf"]>, path: string, shown: string): void {
+  if (!isEnum(ft)) return;
+  item.iconPath = new vscode.ThemeIcon("symbol-enum-member", new vscode.ThemeColor("symbolIcon.enumeratorMemberForeground"));
+  item.tooltip = `${path} = ${shown} (${typeLabel(ft)}: ${ft.e.map((m) => m.name).join(", ")})`;
 }

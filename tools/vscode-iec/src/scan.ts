@@ -277,10 +277,13 @@ const HOVER_MAX_ELEMS = 10;
  *
  * Scalars pass through formatValue; long arrays elide after HOVER_MAX_ELEMS
  * elements and the whole rendering elides after HOVER_MAX_LINES lines.
+ * `leaf`, when given, renders a scalar first (by its path below the root:
+ * "", ".Mode", "[2].Mode") — how an enumerated member shows bare (#246);
+ * undefined falls back to formatValue.
  */
-export function formatValueHover(v: unknown): string {
+export function formatValueHover(v: unknown, leaf?: (v: unknown, path: string) => string | undefined): string {
   const lines: string[] = [];
-  build(v, "", "", lines);
+  build(v, "", "", lines, "", leaf);
   if (lines.length > HOVER_MAX_LINES) {
     const kept = lines.slice(0, HOVER_MAX_LINES);
     kept.push(`… (${lines.length - HOVER_MAX_LINES} more lines)`);
@@ -289,13 +292,20 @@ export function formatValueHover(v: unknown): string {
   return lines.join("\n");
 }
 
-function build(v: unknown, label: string, indent: string, out: string[]): void {
+function build(
+  v: unknown,
+  label: string,
+  indent: string,
+  out: string[],
+  path: string,
+  leaf?: (v: unknown, path: string) => string | undefined
+): void {
   const prefix = label === "" ? indent : `${indent}${label}: `;
   if (Array.isArray(v)) {
     out.push(prefix + "[");
     const n = Math.min(v.length, HOVER_MAX_ELEMS);
     for (let i = 0; i < n; i++) {
-      build(v[i], `[${i}]`, indent + "  ", out);
+      build(v[i], `[${i}]`, indent + "  ", out, `${path}[${i}]`, leaf);
     }
     if (v.length > n) out.push(`${indent}  … (${v.length - n} more elements)`);
     out.push(indent + "]");
@@ -304,10 +314,10 @@ function build(v: unknown, label: string, indent: string, out: string[]): void {
   if (v !== null && typeof v === "object") {
     out.push(prefix + "{");
     for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-      build(val, k, indent + "  ", out);
+      build(val, k, indent + "  ", out, `${path}.${k}`, leaf);
     }
     out.push(indent + "}");
     return;
   }
-  out.push(prefix + formatValue(v));
+  out.push(prefix + (leaf?.(v, path) ?? formatValue(v)));
 }

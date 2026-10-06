@@ -14,7 +14,7 @@
 	import LdBlockPicker from './LdBlockPicker.svelte';
 	import { FB_TYPES } from './suggest';
 	import { layoutRung, rungMinWidth, fitArgs, L, OPERAND_LABEL_MAX, type LSpot, type LNode } from './ladderLayout';
-	import { live, liveValue, liveForced, formatLive } from './liveState.svelte';
+	import { live, liveValue, liveForced, liveEnum, liveTypeNote, formatLive } from './liveState.svelte';
 	import { readClip, typingTarget, writeClip } from './clipboard';
 	import { descLine, descTail } from './xref.svelte';
 
@@ -134,7 +134,8 @@
 	const valText = (ref: string | undefined, scope?: string) => {
 		if (!showVal || !ref) return '';
 		const v = liveValue(ref, scope);
-		return v === undefined ? '' : formatLive(v);
+		// A Logix rung's scoped name is not a controller path: no type.
+		return v === undefined ? '' : formatLive(v, scope ? undefined : ref);
 	};
 	const trunc = (s: string | undefined, n = OPERAND_LABEL_MAX) => {
 		const t = s ?? '';
@@ -996,7 +997,7 @@
 					>
 						<rect class="hit" x="-2" y={-L.LABEL_TOP} width={n.w + 4} height={n.h + L.LABEL_TOP + L.LABEL_BOT - 4} rx="3" />
 						{#if n.kind === 'contact'}
-							<title>{n.ann.el.ref}{n.ann.el.neg ? ' (NC)' : ''} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope))}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag (+Tag / -Tag: an edge) · N: NO/NC · P: NO → P → N → NC · B: branch around · Del · drag to move' : ''}{descTail(n.ann.el.ref)}</title>
+							<title>{n.ann.el.ref}{n.ann.el.neg ? ' (NC)' : ''} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope), r.scope ? undefined : n.ann.el.ref)}{r.scope ? '' : liveTypeNote(n.ann.el.ref)}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag (+Tag / -Tag: an edge) · N: NO/NC · P: NO → P → N → NC · B: branch around · Del · drag to move' : ''}{descTail(n.ann.el.ref)}</title>
 							<line x1="0" y1={n.h / 2} x2={n.w / 2 - 5} y2={n.h / 2} class="w {wcls(n.ann.in)}" />
 							<line x1={n.w / 2 + 5} y1={n.h / 2} x2={n.w} y2={n.h / 2} class="w {wcls(n.ann.out)}" />
 							<line x1={n.w / 2 - 5} y1="2" x2={n.w / 2 - 5} y2={n.h - 2} class="post" />
@@ -1007,10 +1008,10 @@
 							<text x={n.w / 2} y={n.h + 12} text-anchor="middle" class="operand">{trunc(n.ann.el.ref)}</text>
 							{#if !n.ann.el._diff && descLine(n.ann.el.ref, n.w)}<text x={n.w / 2} y={n.h + (valText(n.ann.el.ref, r.scope) ? 35 : 23)} text-anchor="middle" class="nx-desc">{descLine(n.ann.el.ref, n.w)}</text>{/if}
 							{#if valText(n.ann.el.ref, r.scope)}
-								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true}>{#if !r.scope && liveForced(n.ann.el.ref)}<tspan class="nx-forced-mark">{'F '}</tspan>{/if}{valText(n.ann.el.ref, r.scope)}</text>
+								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true} class:enum={!r.scope && liveEnum(n.ann.el.ref)}>{#if !r.scope && liveForced(n.ann.el.ref)}<tspan class="nx-forced-mark">{'F '}</tspan>{/if}{valText(n.ann.el.ref, r.scope)}</text>
 							{/if}
 						{:else if n.kind === 'edge'}
-							<title>{n.ann.el.mode === 'N' ? '-' : '+'}{n.ann.el.ref} — {n.ann.el.mode === 'N' ? 'falling' : 'rising'}-edge contact: TRUE for one scan when {n.ann.el.ref} goes {n.ann.el.mode === 'N' ? '1→0' : '0→1'} ({n.ann.el.ref} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope))}){diffNote(n.ann.el)}{editable ? ' — dblclick: retag · P: NO → P → N → NC · Del · drag to move' : ''}{descTail(n.ann.el.ref)}</title>
+							<title>{n.ann.el.mode === 'N' ? '-' : '+'}{n.ann.el.ref} — {n.ann.el.mode === 'N' ? 'falling' : 'rising'}-edge contact: TRUE for one scan when {n.ann.el.ref} goes {n.ann.el.mode === 'N' ? '1→0' : '0→1'} ({n.ann.el.ref} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope), r.scope ? undefined : n.ann.el.ref)}{r.scope ? '' : liveTypeNote(n.ann.el.ref)}){diffNote(n.ann.el)}{editable ? ' — dblclick: retag · P: NO → P → N → NC · Del · drag to move' : ''}{descTail(n.ann.el.ref)}</title>
 							<line x1="0" y1={n.h / 2} x2={n.w / 2 - 8} y2={n.h / 2} class="w {wcls(n.ann.in)}" />
 							<line x1={n.w / 2 + 8} y1={n.h / 2} x2={n.w} y2={n.h / 2} class="w {wcls(n.ann.out)}" />
 							<line x1={n.w / 2 - 8} y1="2" x2={n.w / 2 - 8} y2={n.h - 2} class="post" />
@@ -1019,10 +1020,10 @@
 							<text x={n.w / 2} y={n.h + 12} text-anchor="middle" class="operand">{trunc(n.ann.el.ref)}</text>
 							{#if !n.ann.el._diff && descLine(n.ann.el.ref, n.w)}<text x={n.w / 2} y={n.h + (valText(n.ann.el.ref, r.scope) ? 35 : 23)} text-anchor="middle" class="nx-desc">{descLine(n.ann.el.ref, n.w)}</text>{/if}
 							{#if valText(n.ann.el.ref, r.scope)}
-								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true}>{valText(n.ann.el.ref, r.scope)}</text>
+								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true} class:enum={!r.scope && liveEnum(n.ann.el.ref)}>{valText(n.ann.el.ref, r.scope)}</text>
 							{/if}
 						{:else if n.kind === 'coil'}
-							<title>{n.ann.el.mode ? n.ann.el.mode + ' ' : ''}{n.ann.el.ref} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope))}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag · M: mode · Del · drag to reorder' : ''}{descTail(n.ann.el.ref)}</title>
+							<title>{n.ann.el.mode ? n.ann.el.mode + ' ' : ''}{n.ann.el.ref} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope), r.scope ? undefined : n.ann.el.ref)}{r.scope ? '' : liveTypeNote(n.ann.el.ref)}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag · M: mode · Del · drag to reorder' : ''}{descTail(n.ann.el.ref)}</title>
 							<line x1="0" y1={n.h / 2} x2={n.w / 2 - 12} y2={n.h / 2} class="w {wcls(n.ann.in)}" />
 							<line x1={n.w / 2 + 12} y1={n.h / 2} x2={n.w} y2={n.h / 2} class="w {wcls(n.ann.val)}" />
 							<path d="M {n.w / 2 - 8} 2 Q {n.w / 2 - 16} {n.h / 2} {n.w / 2 - 8} {n.h - 2}" fill="none" class="post" />
@@ -1033,7 +1034,7 @@
 							<text x={n.w / 2} y={n.h + 12} text-anchor="middle" class="operand">{trunc(n.ann.el.ref)}</text>
 							{#if !n.ann.el._diff && descLine(n.ann.el.ref, n.w)}<text x={n.w / 2} y={n.h + (valText(n.ann.el.ref, r.scope) ? 35 : 23)} text-anchor="middle" class="nx-desc">{descLine(n.ann.el.ref, n.w)}</text>{/if}
 							{#if valText(n.ann.el.ref, r.scope)}
-								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true}>{#if !r.scope && liveForced(n.ann.el.ref)}<tspan class="nx-forced-mark">{'F '}</tspan>{/if}{valText(n.ann.el.ref, r.scope)}</text>
+								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true} class:enum={!r.scope && liveEnum(n.ann.el.ref)}>{#if !r.scope && liveForced(n.ann.el.ref)}<tspan class="nx-forced-mark">{'F '}</tspan>{/if}{valText(n.ann.el.ref, r.scope)}</text>
 							{/if}
 						{:else if n.kind === 'fn'}
 							<title>{n.ann.el.fn}({n.ann.el.args}){diffNote(n.ann.el)}{editable ? ' — dblclick: edit the call (any function) · Del · drag to move' : ''}</title>
@@ -1444,6 +1445,11 @@
 	}
 	.liveval.lit {
 		fill: var(--nx-ok);
+	}
+	/* an enumerated operand's member name (#246): italic, never quoted */
+	.liveval.enum {
+		font-style: italic;
+		fill: var(--nx-enum);
 	}
 	.mark {
 		font-size: 9px;
