@@ -225,6 +225,10 @@ func TestMatchMemberDiscriminatesStructFromFlat(t *testing.T) {
 		{Match{Tag: "*_YA"}, "X_YA", "AnalogInput", "HH", false}, // has member: struct only
 		{Match{Member: "*ALM"}, "A", "Motor1Speed", "FAIL1ALM", true},
 		{Match{Member: "*ALM"}, "A", "Motor1Speed", "ANYFAULT", false},
+		// #197: names are case-insensitive identifiers.
+		{Match{Type: "analoginput", Member: "hh"}, "A", "AnalogInput", "HH", true},
+		{Match{Tag: "x_*"}, "X_YA", "", "", true},
+		{Match{Member: "*alm"}, "A", "Motor1Speed", "Fail1Alm", true},
 	}
 	for _, c := range cases {
 		if got := c.m.matches(c.tag, c.typeName, c.member); got != c.want {

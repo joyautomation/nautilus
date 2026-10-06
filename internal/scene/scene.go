@@ -738,7 +738,7 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 			if t == nil {
 				return nil, fmt.Sprintf("%s is not a struct, so it has no member %q", strings.Join(append([]string{from}, members[:i]...), "."), m)
 			}
-			idx, ok := t.FieldOf(m)
+			idx, ok := t.FieldIndex[m]
 			if !ok {
 				return nil, fmt.Sprintf("%s has no member %q (it has %s)", t.Name, m, memberList(t))
 			}
@@ -879,7 +879,7 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 				continue
 			}
 			if info.Struct != nil {
-				if _, ok := info.Struct.FieldOf(m); ok {
+				if _, ok := info.Struct.FieldIndex[m]; ok {
 					continue
 				}
 			}
@@ -902,12 +902,12 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 					if !ok || pk.Type == "" {
 						continue
 					}
-					idx, _ := info.Struct.FieldOf(part.Tag)
+					idx := info.Struct.FieldIndex[part.Tag]
 					ft := info.Struct.Fields[idx].Type
 					switch {
 					case ft == nil || ft.Kind != ir.TypeStruct:
 						errf(p+"/tag", "%s.%s is not a struct, but part %q (kind %q) expects a %s — see %s", info.TypeName, part.Tag, part.ID, part.Kind, pk.Type, pp+"/tag")
-					case !strings.EqualFold(ft.Struct.Name, pk.Type):
+					case ft.Struct.Name != pk.Type:
 						errf(p+"/tag", "%s.%s is a %s, but part %q (kind %q) expects a %s — see %s", info.TypeName, part.Tag, ft.Struct.Name, part.ID, part.Kind, pk.Type, pp+"/tag")
 					}
 					for _, prop := range sortedKeys(part.Bind) {
