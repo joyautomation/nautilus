@@ -15,6 +15,7 @@ means pursued in the parity batch and **not available yet**.
 | Codesys | nautilus | Status |
 | --- | --- | --- |
 | POU (`PROGRAM`, `FUNCTION_BLOCK`, `FUNCTION`) | the same, in `.st`, `.ld`, `.fbd` or `.sfc` | Today |
+| Case-insensitive identifiers (`MyVar` = `MYVAR`) | the same: any casing names the one declaration, shown as declared | Today, [#197](https://github.com/joyautomation/nautilus/issues/197) |
 | Task configuration | `tasks:` in `nautilus.yaml` | Today |
 | GVL (global variable list) | tags in `nautilus.yaml` or `tags/*.yaml`, named by `VAR_EXTERNAL` | Today |
 | A GVL file of only `VAR_GLOBAL` | a library file of just `VAR_GLOBAL` currently breaks every program with an undeclared-identifier error. Use manifest tags | Planned, [#175](https://github.com/joyautomation/nautilus/issues/175) |

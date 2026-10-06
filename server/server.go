@@ -1166,7 +1166,7 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 // and the host driver publishes it as a command.
 func (s *Server) refuseMemberWrite(root string) string {
 	for _, in := range s.rt.Inputs() {
-		if in == root {
+		if strings.EqualFold(in, root) {
 			return "tag " + root + " is a driver-owned input: the driver replaces its whole " +
 				"value before every scan, so a member write would be discarded unread — " +
 				"write the setpoint or command tag the logic reads instead"

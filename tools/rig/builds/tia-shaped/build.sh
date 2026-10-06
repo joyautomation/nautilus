@@ -275,7 +275,7 @@ b03_types() {
 row 03-tag-elementary-type XFAIL b03_types
 
 # ── 04 scale.st: the FC, typed, with the language server ────────────────────
-SCALE_TYPED=$(sed 's/SCALEANALOG/ScaleAnalog/g' "$REF/scale.st")
+SCALE_TYPED=$(cat "$REF/scale.st")
 b04() {
   new_text_file scale.st || return 1
   local head tail
@@ -302,11 +302,11 @@ b04() {
   xdotool key --clearmodifiers Escape; sleep 0.05; xdotool key --clearmodifiers Return; sleep 0.1
   type_text "$tail"
   save
-  same_as_ref scale.st 's/SCALEANALOG/ScaleAnalog/g' || return 1
+  same_as_ref scale.st || return 1
   grep -qx LIMIT "$OUT_DIR/04-limit-completion.txt" || { echo "completion after 'LIM' did not list LIMIT: $(head -5 "$OUT_DIR/04-limit-completion.txt" | paste -sd' ')" >&2; return 1; }
   echo "completion after LIM: $(head -4 "$OUT_DIR/04-limit-completion.txt" | paste -sd' ')"
 }
-row 04-type-ScaleAnalog PASS b04 || { sed 's/SCALEANALOG/ScaleAnalog/g' "$REF/scale.st" >"$PROJ/scale.st"; note_row FALLBACK "scale.st written from the reference"; }
+row 04-type-ScaleAnalog PASS b04 || { cp "$REF/scale.st" "$PROJ/scale.st"; note_row FALLBACK "scale.st written from the reference"; }
 b04_sig() { local s; s=$(cat "$OUT_DIR/04-signature-help.txt"); echo "parameter hints: ${s:-<none>}"; [[ -n $s ]]; }
 row 04-signature-help-LIMIT XFAIL b04_sig
 b04_hover() {
@@ -450,19 +450,9 @@ b07_suggest() {
 row 07-palette-lists-user-FUNCTION PASS b07_suggest
 row 07-block-ScaleAnalog PASS fbd_add_function ScaleAnalog ft "FT101_Raw, 0.0, 120.0" || fb_fallback '^ *ft = ' "ft = ScaleAnalog(FT101_Raw, 0.0, 120.0)"
 row 07-coil-FT101_Flow PASS fbd_add_coil FT101_Flow ft || fb_fallback '^ *FT101_Flow := ft' "FT101_Flow := ft"
-row 07-check-user-FUNCTION-from-FBD XFAIL check_clean 07-net1
-# the workaround: the FUNCTION's name in capitals (FBD upper-cases a call's
-# name; a user FUNCTION is looked up case-sensitively). Typed in scale.st.
-b07_rename() {
-  vs_cmd "View: Close All Editors" 1
-  open_file scale.st 2
-  text_replace "$PROJ/scale.st" "FUNCTION ScaleAnalog : REAL" "FUNCTION SCALEANALOG : REAL" || return 1
-  text_replace "$PROJ/scale.st" "ScaleAnalog := LIMIT(" "SCALEANALOG := LIMIT(" || return 1
-  save
-  same_as_ref scale.st || return 1
-  check_clean 07-workaround
-}
-row 07-workaround-uppercase-FC PASS b07_rename || { cp "$REF/scale.st" "$PROJ/scale.st"; note_row FALLBACK "scale.st: the SCALEANALOG rename by text"; }
+# #197: identifiers are case-insensitive, and the FBD block keeps the
+# spelling it was given — the FC is reached as declared, no workaround.
+row 07-check-user-FUNCTION-from-FBD PASS check_clean 07-net1
 row 07-reopen-main-fbd PASS ed_open_diagram main.fbd
 
 # ── 08 network 2: the FB instance (the "instance DB") ───────────────────────
