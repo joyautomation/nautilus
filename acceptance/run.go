@@ -452,7 +452,7 @@ func (r *testRun) value(name string) (ir.Value, error) {
 		return ir.Value{}, fieldMissErr(root, head, rest)
 	}
 	if prog := r.rt.TaskProgram(head); prog != nil {
-		v, ok := prog.Locals()[rest]
+		v, _, ok := ir.Lookup(prog.Locals(), rest)
 		if !ok {
 			return ir.Value{}, fmt.Errorf("task %s has no local %q", head, rest)
 		}
@@ -475,7 +475,7 @@ func fieldMissErr(v ir.Value, sofar, path string) error {
 		if v.Kind != ir.TypeStruct || v.Struct == nil {
 			return fmt.Errorf("%s is not a struct, so it has no field %q", sofar, field)
 		}
-		i, ok := v.Struct.FieldIndex[field]
+		i, ok := v.Struct.FieldOf(field)
 		if !ok || i >= len(v.Fld) {
 			return fmt.Errorf("%s has no field %q (%s has: %s)",
 				sofar, field, v.Struct.Name, strings.Join(fieldNames(v.Struct), ", "))
@@ -535,7 +535,8 @@ func (r *testRun) forces(st *Step) error {
 
 func (r *testRun) apply(given map[string]any) error {
 	fieldEdits := map[string]map[string]any{} // root tag → path → raw
-	for _, name := range sortedKeys(given) {
+	for _, key := range sortedKeys(given) {
+		name := r.canonName(key)
 		if !r.known[name] {
 			// A dotted name may address one field of a UDT tag. Resolution
 			// order matches `expect` (value()): whole tag first, then field.
@@ -543,12 +544,12 @@ func (r *testRun) apply(given map[string]any) error {
 				if fieldEdits[head] == nil {
 					fieldEdits[head] = map[string]any{}
 				}
-				fieldEdits[head][path] = given[name]
+				fieldEdits[head][path] = given[key]
 				continue
 			}
-			return fmt.Errorf("given: no tag %q in this project", name)
+			return fmt.Errorf("given: no tag %q in this project", key)
 		}
-		v := r.coerce(name, given[name])
+		v := r.coerce(name, given[key])
 		if r.inputs[name] {
 			if err := r.drv.WriteOutputs(nio.Values{name: v}); err != nil {
 				return err
@@ -685,6 +686,7 @@ func (r *testRun) newTracer(st *Step) *tracer {
 	seen := map[string]bool{}
 	var names []string
 	add := func(n string) {
+		n = r.canonName(n)
 		if n == "" || seen[n] || !r.known[n] {
 			return
 		}
@@ -779,6 +781,27 @@ func inputSet(o runtime.Options) map[string]bool {
 		}
 	}
 	return m
+}
+
+// canonName respells a test's tag reference — a tag, or a tag's member
+// path — as the manifest declares the tag. Tag names are IEC identifiers,
+// so case-insensitive (#197): `given: {level: 3}` is the tag Level, and the
+// driver image and the store are both keyed by that declared spelling. A
+// name that matches no tag comes back unchanged for the caller to report.
+func (r *testRun) canonName(name string) string {
+	if r.known[name] {
+		return name
+	}
+	head, rest, dotted := strings.Cut(name, ".")
+	for k := range r.known {
+		if strings.EqualFold(k, name) {
+			return k
+		}
+		if dotted && strings.EqualFold(k, head) {
+			return k + "." + rest
+		}
+	}
+	return name
 }
 
 func knownTags(o runtime.Options) map[string]bool {

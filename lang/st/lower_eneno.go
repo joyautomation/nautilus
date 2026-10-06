@@ -156,7 +156,7 @@ func (l *lowerer) lowerGatedAssign(a *AssignStmt) (ir.Stmt, bool, error) {
 	}
 	ownEN := false
 	if l.userFuncs != nil {
-		if def, ok := l.userFuncs[call.Name]; ok && def != nil {
+		if def, _, ok := ir.Lookup(l.userFuncs, call.Name); ok && def != nil {
 			ownEN = funcDeclaresEN(def)
 		}
 	}

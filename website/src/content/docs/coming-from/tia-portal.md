@@ -40,12 +40,12 @@ three things it is:
 | --- | --- | --- |
 | `IF`, `CASE`, `FOR`, `WHILE`, `REPEAT` | the same | Today |
 | `CASE` labels that are named constants | silently wrong today, avoid until fixed | Planned, [#196](https://github.com/joyautomation/nautilus/issues/196) |
-| Case-insensitive identifiers (`MyTag` = `mytag`) | identifiers are case-sensitive today, so a `FUNCTION` called from FBD must match its spelling | Planned, [#197](https://github.com/joyautomation/nautilus/issues/197) |
+| Case-insensitive identifiers (`MyTag` = `mytag`) | the same: any casing names the one declaration, and diagnostics, live values and the API show it as declared | Today, [#197](https://github.com/joyautomation/nautilus/issues/197) |
 | `#name` for a local variable | rejected; the message is being made to say why. It will be accepted later only under `dialect: siemens` | Rejected; dialect only, [#198](https://github.com/joyautomation/nautilus/issues/198) |
 | `"Tag"` quoted global name | write the tag's plain name | Not applicable |
 | `VAR_TEMP` | parses, but keeps its value between scans. TIA's `Temp` is scratch cleared per call | Planned, [#203](https://github.com/joyautomation/nautilus/issues/203) |
 | `REGION … END_REGION` | not supported; the diagnostic is poor | Planned, [#202](https://github.com/joyautomation/nautilus/issues/202) |
-| `Real`, `DInt`, `Time` in SCL's casing | `REAL`, `DINT`, `TIME` | Today (case-sensitive until #197) |
+| `Real`, `DInt`, `Time` in SCL's casing | the same; any casing | Today |
 | `Word.%X3` bit access | `Word.3` | In review, [#225](https://github.com/joyautomation/nautilus/pull/225) |
 | `IEC_TIMER` / `TON` DB | `t : TON;` and `t(IN := Run, PT := T#5S);` | Today |
 

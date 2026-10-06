@@ -1,0 +1,24 @@
+# Case-insensitive identifiers. Every program spells the tags, the library
+# FUNCTIONs, the CTU type, its instance and its pins differently from their
+# declarations — and the given:/expect: keys below are cased otherwise too.
+# Every step asserts st_, ld_, fbd_ and sfc_ together.
+tests:
+  - name: a FUNCTION called in another casing computes its result
+    given: { LEVEL: 50.0 }
+    steps:
+      - scans: 1
+        expect: { st_Scaled: 60.0, fbd_Scaled: 60.0, SFC_scaled: 60.0, ST_HALF: false, ld_half: false, Fbd_Half: false, sfc_half: false }
+      - given: { level: 75.0 }
+        scans: 1
+        expect: { st_scaled: 90.0, FBD_SCALED: 90.0, sfc_scaled: 90.0, st_Half: true, ld_Half: true, fbd_Half: true, SFC_HALF: true }
+
+  - name: an FB instance and its pins in another casing count
+    steps:
+      - given: { start: true }
+        scans: 1
+        expect: { st_Starts: 1, ld_Starts: 1, fbd_Starts: 1, sfc_Starts: 1, sfc_ran: true }
+      - given: { START: false }
+        scans: 1
+      - given: { Start: true }
+        scans: 1
+        expect: { ST_STARTS: 2, LD_STARTS: 2, FBD_STARTS: 2, SFC_STARTS: 2 }

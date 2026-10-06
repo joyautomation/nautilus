@@ -1,0 +1,38 @@
+PROGRAM CaseSfc
+(* Step names, action names and the Step.X / Step.T flags in casings other
+   than declared; the library FUNCTIONs and Level as elsewhere. *)
+VAR_EXTERNAL
+    LEVEL      : REAL;
+    start      : BOOL;
+    SFC_SCALED : REAL;
+    sfc_half   : BOOL;
+    Sfc_Starts : INT;
+    sfc_Ran    : BOOL;
+END_VAR
+SFC
+
+  INITIAL_STEP Idle:
+    N measure;
+  END_STEP
+  STEP Running:
+    N MEASURE;
+    p1 Count;
+  END_STEP
+
+  TRANSITION t_go   FROM idle TO RUNNING := START;
+  END_TRANSITION
+  TRANSITION t_back FROM running TO IDLE := NOT start AND RUNNING.t >= T#0ms;
+  END_TRANSITION
+
+  ACTION Measure:
+    sfc_scaled := scaleanalog(level, 0.0, 120.0);
+    SFC_HALF := ABOVEHALF(Level);
+    sfc_ran := running.x OR SFC_RAN;
+  END_ACTION
+
+  ACTION count:
+    sfc_starts := SFC_STARTS + 1;
+  END_ACTION
+
+END_SFC
+END_PROGRAM

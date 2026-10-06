@@ -208,6 +208,16 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- **Identifiers are case-insensitive** (IEC 61131-3, as in TIA Portal,
+  Codesys and Studio 5000). `Level`, `LEVEL` and `level` are one name — a
+  variable, tag, POU, type, FB instance or pin, struct member, SFC step or
+  action. A project FUNCTION is reached from FBD however it is spelled (the
+  block keeps the spelling it was given, instead of being upper-cased), and
+  `startedge(CLK := Start)` reaches `startEdge`. Everything shows the name as
+  declared. Two declarations differing only in case in one scope are now a
+  duplicate-declaration error naming both. Needs a `naut` newer than
+  0.15.0. (#197)
+
 - **The FB picker leaves an input with a declared default unbound.** It
   wrote every input as `_`, and `_` is an error, so `doseA : Dosing(...)`
   was red until even `NoFlowTime` (declared `:= T#5S`) was wired or

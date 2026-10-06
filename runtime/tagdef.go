@@ -149,6 +149,10 @@ func expandTags(o Options, types, globals map[string]*ir.Type) (Options, error) 
 	}
 	inputs := append([]string(nil), o.Inputs...)
 	outputs := append([]string(nil), o.Outputs...)
+	folded := make(map[string]*ir.Type, len(globals))
+	for name, t := range globals {
+		folded[ir.NameKey(name)] = t
+	}
 	for _, d := range o.Tags {
 		if d.Name == "" {
 			continue
@@ -166,7 +170,7 @@ func expandTags(o Options, types, globals map[string]*ir.Type) (Options, error) 
 			// raw manifest value — a nested map is not one of the kinds
 			// Tags.Set understands, so without this it would silently do
 			// nothing.
-			t, ok := types[d.Type]
+			t, _, ok := ir.Lookup(types, d.Type)
 			if !ok {
 				return o, fmt.Errorf("tag %s: no TYPE %s is declared by this project's "+
 					"ST — a tag's type is the one the programs use, so declare it in a "+
@@ -178,7 +182,7 @@ func expandTags(o Options, types, globals map[string]*ir.Type) (Options, error) 
 			}
 			seed[d.Name] = v
 		case d.Init != nil:
-			if t := scalarGlobal(globals, d.Name); t != nil {
+			if t := scalarGlobal(folded, d.Name); t != nil {
 				v, err := ir.SeedFromInit(t, d.Init)
 				if err != nil {
 					return o, fmt.Errorf("tag %s (declared %s by a program): %w", d.Name, t.String(), err)
@@ -188,7 +192,7 @@ func expandTags(o Options, types, globals map[string]*ir.Type) (Options, error) 
 			}
 			seed[d.Name] = d.Init
 		case d.Type != "":
-			t, ok := types[d.Type]
+			t, _, ok := ir.Lookup(types, d.Type)
 			if !ok {
 				return o, fmt.Errorf("tag %s: no TYPE %s is declared by this project's "+
 					"ST — a tag's type is the one the programs use, so declare it in a "+
@@ -208,10 +212,11 @@ func expandTags(o Options, types, globals map[string]*ir.Type) (Options, error) 
 
 // scalarGlobal returns the type a program declares tag name as, when that
 // is one of the kinds an init: can seed (BOOL, INT, REAL, STRING); nil
-// otherwise. A struct-typed global is the `type:` path's business, and a
+// otherwise. globals is keyed by ir.NameKey: a program may case a tag
+// differently from the manifest. A struct-typed global is the `type:` path's business, and a
 // TIME or ARRAY has no init: literal form.
 func scalarGlobal(globals map[string]*ir.Type, name string) *ir.Type {
-	t := globals[name]
+	t := globals[ir.NameKey(name)]
 	if t == nil {
 		return nil
 	}

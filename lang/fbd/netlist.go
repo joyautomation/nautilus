@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/joyautomation/nautilus/lang/fbcatalog"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/st"
 )
 
@@ -181,7 +183,87 @@ func parseNetlist(body string, lineOffset int) (*netlist, error) {
 			return nil, err
 		}
 	}
+	nl.foldNames()
 	return nl, nil
+}
+
+// foldNames makes the netlist's own names case-insensitive (#197): a
+// reference to a wire or an FB instance in any casing is rewritten to the
+// spelling that defined it — the wire's `name = …`, the instance's
+// `inst : TYPE`, or else its first call — so the graph draws one node and
+// the transpiler sees one name. Variables are left alone: the ST lowerer
+// resolves those.
+func (nl *netlist) foldNames() {
+	canon := map[string]string{}
+	add := func(name string) {
+		if k := ir.NameKey(name); canon[k] == "" {
+			canon[k] = name
+		}
+	}
+	for _, w := range nl.wireSrc {
+		add(w)
+	}
+	for _, d := range nl.fbDecls {
+		add(d.name)
+	}
+	for _, n := range nl.nodes {
+		if n.isCall && !strings.ContainsAny(n.inst, "[.") {
+			add(n.inst)
+		}
+	}
+	fix := func(name string) string {
+		if c := canon[ir.NameKey(name)]; c != "" {
+			return c
+		}
+		return name
+	}
+	var walk func(e expr) expr
+	walk = func(e expr) expr {
+		switch x := e.(type) {
+		case refExpr:
+			x.name = fix(x.name)
+			return x
+		case pinExpr:
+			x.inst = fix(x.inst)
+			return x
+		case notExpr:
+			x.inner = walk(x.inner)
+			return x
+		case callExpr:
+			args := make([]expr, len(x.args))
+			for i, a := range x.args {
+				args[i] = walk(a)
+			}
+			x.args = args
+			if x.en != nil {
+				x.en = walk(x.en)
+			}
+			items := make([]argItem, len(x.items))
+			for i, it := range x.items {
+				it.val = walk(it.val)
+				items[i] = it
+			}
+			x.items = items
+			return x
+		}
+		return e
+	}
+	for k, e := range nl.wires {
+		nl.wires[k] = walk(e)
+	}
+	for i := range nl.nodes {
+		n := &nl.nodes[i]
+		if n.isCall {
+			n.inst = fix(n.inst)
+			for j := range n.args {
+				if !n.args[j].out {
+					n.args[j].val = walk(n.args[j].val)
+				}
+			}
+			continue
+		}
+		n.source = walk(n.source)
+	}
 }
 
 func newNetlist() *netlist {
@@ -302,7 +384,10 @@ func (p *netParser) item(nl *netlist) error {
 		if err != nil {
 			return err
 		}
-		if _, dup := nl.wires[name]; dup {
+		if _, prev, dup := ir.Lookup(nl.wires, name); dup {
+			if prev != name {
+				return p.posErr(fmt.Sprintf("wire %q defined twice (as %q; names are case-insensitive)", name, prev))
+			}
 			return p.posErr(fmt.Sprintf("wire %q defined twice", name))
 		}
 		nl.wires[name] = e
@@ -505,7 +590,7 @@ func (p *netParser) primary() (expr, error) {
 		name := p.next().Literal
 		switch p.peek().Type {
 		case st.TokenLParen: // function/operator block call
-			c, err := p.callArgs(strings.ToUpper(name))
+			c, err := p.callArgs(fbcatalog.CallName(name))
 			if err != nil {
 				return nil, err
 			}

@@ -310,3 +310,40 @@ func TestTagWriterTakesOverWrites(t *testing.T) {
 		t.Errorf("device failure = %d, want 502", rec.Code)
 	}
 }
+
+// #197: tag and member names are case-insensitive identifiers. A write by
+// another casing lands on the declared tag (no second tag appears), and the
+// state the API answers with keeps the declared spelling.
+func TestWriteTagAnyCasing(t *testing.T) {
+	rt := newUDTRuntime(t)
+	srv := New(rt)
+	before := len(rt.Tags().All())
+	for _, body := range []string{
+		`{"name": "sp", "value": 70.0}`,
+		`{"name": "p101.speed", "value": 12.5}`,
+		`{"name": "P101", "value": {"start": true, "lvl": {"hsp": 81.0}}}`,
+	} {
+		if rec := postTag(t, srv, body); rec.Code != 204 {
+			t.Fatalf("%s = %d, body %s", body, rec.Code, rec.Body)
+		}
+	}
+	if got := rt.Tags().Real("SP"); got != 70 {
+		t.Errorf("SP = %v, want 70", got)
+	}
+	if got := tagMember(t, rt, "P101", "Speed"); got != 12.5 {
+		t.Errorf("P101.Speed = %v, want 12.5", got)
+	}
+	if got := tagMember(t, rt, "P101", "START"); got != true {
+		t.Errorf("P101.START = %v, want true", got)
+	}
+	if got := tagMember(t, rt, "P101", "LVL", "HSP"); got != 81.0 {
+		t.Errorf("P101.LVL.HSP = %v, want 81", got)
+	}
+	if after := len(rt.Tags().All()); after != before {
+		t.Errorf("a write by another casing created a tag: %d -> %d", before, after)
+	}
+	// A driver-owned input is refused by any casing too.
+	if rec := postTag(t, srv, `{"name": "feed.START", "value": true}`); rec.Code != 400 {
+		t.Errorf("input member write by another casing = %d, want 400", rec.Code)
+	}
+}

@@ -18,7 +18,7 @@ labelled `ux:<kind>`, `editor:fbd|ext`, `parity:tia`, titled
 | # | kind | finding | status |
 |---|---|---|---|
 | 1 | bug | CASE labels that are named constants silently miscompile | OPEN #196 |
-| 2 | bug | identifiers are case-sensitive; a project FUNCTION is unreachable from FBD | OPEN #197 |
+| 2 | bug | identifiers are case-sensitive; a project FUNCTION is unreachable from FBD | FIXED #197 (PR #241) |
 | 3 | bug | SCL `#` prefix: an error on the RHS, silently dropped on a target | OPEN #198 |
 | 4 | papercut | one library error is reported on every file at 1:1 | OPEN #199 |
 | 5 | papercut | tag `type: INT` refused with "no TYPE INT is declared" | OPEN #200 |
@@ -61,6 +61,9 @@ open PRs and 1 was already filed (#81).
    SCALEANALOG` are all rejected. IEC and every vendor IDE are
    case-insensitive. **bug** · workaround, typed in the build
    (`07-workaround-uppercase-FC`): rename the FUNCTION to `SCALEANALOG`. #197
+   — **fixed** (PR #241): identifiers are case-insensitive throughout, the
+   FBD block keeps the spelling it was given, and the row is PASS; the
+   workaround row is gone.
 3. **2026-10-05 · the SCL `#` habit** (`05-diag-hash-prefix-rhs` PASS,
    `05-diag-hash-prefix-target` XFAIL). Typed `Step := #state;` → a squiggle,
    `unexpected token "#"`, which is fine. Typed `#state := 10;` → no

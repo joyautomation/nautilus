@@ -119,6 +119,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/joyautomation/nautilus/lang/fbcatalog"
 )
 
 var (
@@ -692,7 +694,7 @@ func (t *rungTok) series(inBranch bool) ([]any, error) {
 				if err != nil {
 					return nil, err
 				}
-				out = append(out, fnEl{fn: strings.ToUpper(ref), args: args, neg: true})
+				out = append(out, fnEl{fn: fbcatalog.CallName(ref), args: args, neg: true})
 			} else {
 				out = append(out, contact{ref: ref, neg: true})
 			}
@@ -812,7 +814,7 @@ func (t *rungTok) series(inBranch bool) ([]any, error) {
 				if err != nil {
 					return nil, err
 				}
-				out = append(out, fnEl{fn: strings.ToUpper(name), args: args})
+				out = append(out, fnEl{fn: fbcatalog.CallName(name), args: args})
 			} else {
 				out = append(out, contact{ref: name})
 			}

@@ -313,11 +313,13 @@ func (m Match) matches(tagName, typeName, member string) bool {
 	return true
 }
 
+// glob matches a tag, type or member name. Those are IEC identifiers, so
+// the match is case-insensitive (#197): `tag: line_*` selects Line_Fault.
 func glob(pattern, s string) bool {
-	if pattern == s {
+	if strings.EqualFold(pattern, s) {
 		return true
 	}
-	ok, err := path.Match(pattern, s)
+	ok, err := path.Match(strings.ToUpper(pattern), strings.ToUpper(s))
 	return err == nil && ok
 }
 

@@ -53,7 +53,7 @@ func SetField(val Value, path []string, v any, sofar string) (Value, error) {
 		return Value{}, fmt.Errorf("%s is a %s, not a struct — it has no member %s",
 			sofar, val.Kind, name)
 	}
-	i, ok := val.Struct.FieldIndex[name]
+	i, ok := val.Struct.FieldOf(name)
 	if !ok || i >= len(val.Fld) {
 		return Value{}, fmt.Errorf("%s: unknown member %s%s", sofar, name, didYouMean(name, val.Struct))
 	}

@@ -10,6 +10,7 @@ line/rung**, never a silent coercion.
 
 - [How a scan evaluates](#how-a-scan-evaluates)
 - [Ladder power flow](#ladder-power-flow)
+- [Identifiers are case-insensitive](#identifiers-are-case-insensitive)
 - [Types](#types)
 - [Operators](#operators)
 - [Standard functions](#standard-functions)
@@ -187,6 +188,36 @@ activation. `ERROR :=` mirrors it into a BOOL variable, a manifest tag an
 `alarms:` definition can watch. Pinned in `lang/conformance/sfc-timed-qualifiers`
 and `lang/conformance/sfc-step-maxtime`; the full description is on the
 [SFC page](/languages/sfc/).
+
+## Identifiers are case-insensitive
+
+As IEC 61131-3 says (and TIA Portal, Codesys and Studio 5000 do), `Level`,
+`LEVEL` and `level` are one name. That holds for every identifier: a
+variable, a manifest tag, a `PROGRAM`, `FUNCTION` or `FUNCTION_BLOCK`, a
+`TYPE`, an FB instance and its pins (`startedge(clk := Start)` for
+`startEdge : R_TRIG`), a struct member, an SFC step or action and its
+`.X`/`.T` flags, and an FBD wire. Keywords and standard names were already
+case-insensitive (`limit(`, `ton`, `Real`).
+
+- **Shown as declared.** The declaration's spelling is the name: diagnostics,
+  hover, completion, the outline, live values, `/api/state` keys, Sparkplug
+  metrics and the L5X tag list all show `Level` for a tag declared `Level`,
+  however a program spells it (an L5X rung keeps the operand as written;
+  Logix folds case too). A tag's spelling is the manifest's (or, for
+  a tag no manifest declares, the first program's to bind it). An FBD block
+  shows the spelling it was given; a standard function its standard name.
+- **One scope, one name.** Two declarations that differ only in case in the
+  same scope — two variables of one POU, two POUs, two `TYPE`s, two
+  manifest tags, two pins of one block — are a duplicate-declaration error
+  naming both. The same name in different scopes (a program local and an FB
+  local, a pin and a variable) is fine, as it always was.
+- **The HTTP API accepts any casing** for a tag or member path on writes
+  (`POST /api/tags`), forces and acceptance-test `given:`/`expect:` keys,
+  and answers with the declared spelling.
+- **Rename in the editor** (F2) rewrites every spelling of the symbol to the
+  new name; Find All References lists every spelling.
+
+Pinned in `lang/conformance/st-case-insensitive` (ST, ladder, FBD and SFC).
 
 ## Types
 

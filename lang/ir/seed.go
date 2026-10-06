@@ -3,7 +3,6 @@ package ir
 import (
 	"fmt"
 	"sort"
-	"strings"
 )
 
 // SeedFromInit builds a tag's seed value from a manifest `init:` value,
@@ -53,7 +52,7 @@ func seedFromInit(t *Type, init any, path string) (Value, error) {
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		idx, ok := t.Struct.FieldIndex[k]
+		idx, ok := t.Struct.FieldOf(k)
 		if !ok {
 			return Value{}, fmt.Errorf("%s: unknown member %s%s", path, k, didYouMean(k, t.Struct))
 		}
@@ -173,9 +172,6 @@ func describeKind(v any) string {
 func didYouMean(name string, sd *StructDef) string {
 	best, bestDist := "", 3
 	for _, f := range sd.Fields {
-		if strings.EqualFold(f.Name, name) {
-			return " (did you mean " + f.Name + "?)"
-		}
 		if d := editDistance(name, f.Name); d < bestDist {
 			best, bestDist = f.Name, d
 		}

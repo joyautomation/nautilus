@@ -433,3 +433,21 @@ func parseDecls(text, dir string) []Pin {
 	}
 	return out
 }
+
+// CallName is how a diagram keeps a function call's name (#197): a standard
+// function or operator by its standard upper-case name (`limit(` → LIMIT,
+// `gt(` → GT), anything else — a project FUNCTION — exactly as the user
+// wrote it. Identifiers are case-insensitive, so the compiler resolves
+// either spelling; this only decides what the diagram shows and emits.
+func CallName(name string) string {
+	u := strings.ToUpper(name)
+	if _, std := ir.Builtins[u]; std {
+		return u
+	}
+	switch u {
+	case "AND", "OR", "XOR", "NOT", "ADD", "SUB", "MUL", "DIV", "MOD", "MOVE",
+		"GT", "GE", "LT", "LE", "EQ", "NE", "SHL", "SHR", "ROL", "ROR":
+		return u
+	}
+	return name
+}

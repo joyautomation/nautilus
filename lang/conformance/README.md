@@ -176,10 +176,11 @@ Current table:
 | `sfc-step-t` |   |   |   | ✓ | 5 |
 | `sfc-timed-qualifiers` |   |   |   | ✓ | 10 |
 | `st-bitwise` | ✓ |   | ✓ |   | 5 |
+| `st-case-insensitive` | ✓ | ✓ | ✓ | ✓ | 2 |
 | `st-div-zero` | ✓ |   |   |   | 4 |
 | `st-int-width` | ✓ |   |   |   | 5 |
 | `st-mux-fault` | ✓ |   |   |   | 2 |
 | `st-string-clamp` | ✓ |   |   |   | 8 |
 | `st-xor` | ✓ |   |   |   | 3 |
 
-26 features, 162 tests.
+27 features, 164 tests.

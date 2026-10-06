@@ -1,0 +1,19 @@
+PROGRAM CaseFbd
+VAR_EXTERNAL
+    level      : REAL;
+    Start      : BOOL;
+    FBD_SCALED : REAL;
+    fbd_half   : BOOL;
+    Fbd_Starts : INT;
+END_VAR
+FBD
+  NETWORK 'a project FUNCTION, cased otherwise'
+  s = scaleAnalog(LEVEL, 0.0, 120.0)
+  fbd_scaled := S
+  NETWORK 'a BOOL FUNCTION'
+  fbd_HALF := abovehalf(Level)
+  NETWORK 'an FB instance and its pins'
+  cnt : Ctu(cu := START, R := FALSE, PV := 1000)
+  FBD_STARTS := CNT.CV
+END_FBD
+END_PROGRAM

@@ -269,7 +269,7 @@ func (g *gen) scanTimerRefs() {
 				continue // a nested field access like foo.Mix.T, not a step ref
 			}
 			name := text[loc[2]:loc[3]]
-			suffix := text[loc[4]:loc[5]]
+			suffix := strings.ToUpper(text[loc[4]:loc[5]])
 			if suffix == "T" {
 				if s := g.stepByUpper[strings.ToUpper(name)]; s != nil {
 					g.needTimer[strings.ToUpper(s.Name)] = true
@@ -887,7 +887,7 @@ func (g *gen) rewriteRefs(text string) string {
 	last := 0
 	for _, loc := range locs {
 		name := text[loc[2]:loc[3]]
-		suffix := text[loc[4]:loc[5]]
+		suffix := strings.ToUpper(text[loc[4]:loc[5]])
 		s := g.stepByUpper[strings.ToUpper(name)]
 		dotted := loc[0] > 0 && text[loc[0]-1] == '.'
 		if s == nil || dotted {

@@ -87,6 +87,16 @@ func TestTagFilesRejectDuplicates(t *testing.T) {
 			},
 			mentions: []string{"Dup", "nautilus.yaml"},
 		},
+		{
+			// #197: tag names are case-insensitive identifiers.
+			what: "differing only in case",
+			files: map[string]string{
+				"nautilus.yaml": oneTask + "tag-files: [tags/a.yaml]\n" +
+					"tags:\n  - { name: LEVEL, role: state, init: 0.0 }\n",
+				"tags/a.yaml": "- { name: Level, role: input }\n",
+			},
+			mentions: []string{"Level", "LEVEL", "tags/a.yaml", "nautilus.yaml", "case-insensitive"},
+		},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			_, err := ReadManifest(tagProject(tc.files), "")

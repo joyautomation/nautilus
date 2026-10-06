@@ -154,7 +154,7 @@ func (r *liveRun) applyLive(given map[string]any) error {
 	want := map[string]any{}
 	for _, name := range sortedKeys(given) {
 		m := r.live.Resolve(name)
-		head, _, _ := strings.Cut(m, ".")
+		head, _, _ := strings.Cut(r.canonName(m), ".")
 		if !r.known[head] {
 			return fmt.Errorf("given: no tag %q on the controller (looked for %q)", name, m)
 		}

@@ -33,10 +33,17 @@ type scanView struct {
 	store *Tags
 	vals  map[string]ir.Value
 	dirty map[string]struct{}
+	// alias maps a program's spelling of a tag to the store's when the two
+	// differ only in case (#197: `VAR_EXTERNAL level` binds the manifest's
+	// Level). vals and dirty are keyed by the store's spelling, so two POUs
+	// that case one tag differently share one value within the scan. Empty
+	// — and never consulted — while every program uses the declared
+	// spelling, which keeps the scan path to the one map read it was.
+	alias map[string]string
 }
 
 func newScanView(store *Tags) *scanView {
-	return &scanView{store: store, vals: map[string]ir.Value{}, dirty: map[string]struct{}{}}
+	return &scanView{store: store, vals: map[string]ir.Value{}, dirty: map[string]struct{}{}, alias: map[string]string{}}
 }
 
 // snapshot copies the named externals in. A name the store does not hold
@@ -50,6 +57,18 @@ func (v *scanView) snapshot(names []string) {
 	for _, name := range names {
 		if tv, ok := v.store.vals[name]; ok {
 			v.vals[name] = tv.v
+			continue
+		}
+		key, ok := v.alias[name]
+		if !ok {
+			// Resolved once, then remembered: a tag never changes the
+			// spelling it is stored under.
+			if key, ok = v.store.fold[ir.NameKey(name)]; ok {
+				v.alias[name] = key
+			}
+		}
+		if ok {
+			v.vals[key] = v.store.vals[key].v
 		}
 	}
 	v.store.mu.RUnlock()
@@ -73,6 +92,11 @@ func (v *scanView) commit() {
 // ir.Host — what the VM sees during the scan.
 
 func (v *scanView) ReadGlobal(name string) (ir.Value, error) {
+	if len(v.alias) > 0 {
+		if key, ok := v.alias[name]; ok {
+			name = key
+		}
+	}
 	if val, ok := v.vals[name]; ok {
 		return val, nil
 	}
@@ -80,6 +104,11 @@ func (v *scanView) ReadGlobal(name string) (ir.Value, error) {
 }
 
 func (v *scanView) WriteGlobal(name string, val ir.Value) error {
+	if len(v.alias) > 0 {
+		if key, ok := v.alias[name]; ok {
+			name = key
+		}
+	}
 	v.vals[name] = val
 	v.dirty[name] = struct{}{}
 	return nil

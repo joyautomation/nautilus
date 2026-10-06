@@ -65,40 +65,28 @@ func LowerWithOpts(prog *Program, opts LowerOpts) (*ir.Program, error) {
 	// slot tables in the next phase is observed by all earlier references.
 	inFile := map[string]*ir.FBDef{}
 	for _, fbDecl := range prog.FBDecls {
-		if _, dup := inFile[fbDecl.Name]; dup {
-			return nil, fmt.Errorf("duplicate FUNCTION_BLOCK %q", fbDecl.Name)
+		if _, prev, dup := ir.Lookup(inFile, fbDecl.Name); dup {
+			return nil, errAt(fbDecl.Pos, dupErr("FUNCTION_BLOCK", fbDecl.Name, prev))
 		}
 		inFile[fbDecl.Name] = &ir.FBDef{Name: fbDecl.Name, SlotIndex: map[string]int{}}
 	}
 	combined := resolver
 	if len(inFile) > 0 {
-		combined = make(map[string]*ir.FBDef, len(resolver)+len(inFile))
-		for k, v := range resolver {
-			combined[k] = v
-		}
-		for k, v := range inFile {
-			combined[k] = v
-		}
+		combined = mergeShadowing(resolver, inFile)
 	}
 
 	// Same dance for FUNCTIONs: build empty shells so peer functions and
 	// the outer program can resolve each by name regardless of order.
 	inFileFuncs := map[string]*ir.FuncDef{}
 	for _, fd := range prog.FuncDecls {
-		if _, dup := inFileFuncs[fd.Name]; dup {
-			return nil, fmt.Errorf("duplicate FUNCTION %q", fd.Name)
+		if _, prev, dup := ir.Lookup(inFileFuncs, fd.Name); dup {
+			return nil, errAt(fd.Pos, dupErr("FUNCTION", fd.Name, prev))
 		}
 		inFileFuncs[fd.Name] = &ir.FuncDef{Name: fd.Name}
 	}
 	combinedFuncs := opts.UserFuncs
 	if len(inFileFuncs) > 0 {
-		combinedFuncs = make(map[string]*ir.FuncDef, len(opts.UserFuncs)+len(inFileFuncs))
-		for k, v := range opts.UserFuncs {
-			combinedFuncs[k] = v
-		}
-		for k, v := range inFileFuncs {
-			combinedFuncs[k] = v
-		}
+		combinedFuncs = mergeShadowing(opts.UserFuncs, inFileFuncs)
 	}
 
 	l := newLowerer(prog, combined)
@@ -217,8 +205,8 @@ func populateFBSignature(fbDecl *FunctionBlockDecl, def *ir.FBDef, userFBs map[s
 		}
 	}
 	for idx, s := range def.AllSlots() {
-		if _, dup := def.SlotIndex[s.Name]; dup {
-			return fmt.Errorf("FUNCTION_BLOCK %s: duplicate slot %q", fbDecl.Name, s.Name)
+		if _, prev, dup := ir.Lookup(def.SlotIndex, s.Name); dup {
+			return fmt.Errorf("FUNCTION_BLOCK %s: %w", fbDecl.Name, dupErr("slot", s.Name, prev))
 		}
 		def.SlotIndex[s.Name] = idx
 	}
@@ -315,12 +303,12 @@ func populateFuncSignature(decl *FunctionDecl, def *ir.FuncDef, userFBs map[stri
 			}
 			switch vb.Kind {
 			case "VAR_INPUT":
-				if vd.Name == decl.Name {
+				if ir.SameName(vd.Name, decl.Name) {
 					return errAt(vd.Pos, fmt.Errorf("FUNCTION %s: VAR_INPUT %q shadows the return name", decl.Name, vd.Name))
 				}
 				def.Inputs = append(def.Inputs, slot)
 			default:
-				if vd.Name == decl.Name {
+				if ir.SameName(vd.Name, decl.Name) {
 					return errAt(vd.Pos, fmt.Errorf("FUNCTION %s: local %q shadows the return name", decl.Name, vd.Name))
 				}
 				def.Locals = append(def.Locals, slot)
@@ -385,8 +373,10 @@ func lowerFuncBody(decl *FunctionDecl, def *ir.FuncDef, userFBs map[string]*ir.F
 }
 
 type lowerer struct {
-	prog            *Program
-	irProg          *ir.Program
+	prog   *Program
+	irProg *ir.Program
+	// scope is keyed by ir.NameKey — identifiers are case-insensitive — and
+	// each symbol carries its declared spelling; use lookup, not an index.
 	scope           map[string]symbol
 	types           map[string]*ir.Type
 	userFBs         map[string]*ir.FBDef   // optional; consulted for FB type resolution
@@ -400,7 +390,8 @@ type lowerer struct {
 }
 
 type symbol struct {
-	slot   int // -1 for globals
+	name   string // as declared
+	slot   int    // -1 for globals
 	typ    *ir.Type
 	kind   ir.VarKind
 	global string
@@ -417,14 +408,49 @@ func newLowerer(prog *Program, userFBs map[string]*ir.FBDef) *lowerer {
 	}
 }
 
+// lookup resolves an identifier in the POU's scope, case-insensitively
+// (IEC 61131-3: identifiers are not case-sensitive). The symbol carries
+// the declared spelling.
+func (l *lowerer) lookup(name string) (symbol, bool) {
+	sym, ok := l.scope[ir.NameKey(name)]
+	return sym, ok
+}
+
+// dupErr is the duplicate-declaration error. When the two declarations
+// differ only in case it names both, so a project written when Nautilus
+// was case-sensitive sees exactly which two names now collide.
+func dupErr(what, name, prev string) error {
+	if prev != "" && prev != name {
+		return fmt.Errorf("duplicate %s %q: %q is already declared, and identifiers are case-insensitive", what, name, prev)
+	}
+	return fmt.Errorf("duplicate %s %q", what, name)
+}
+
+// mergeShadowing returns base overlaid with top, where a name in top hides
+// every spelling of that name in base — the file's own POUs shadow a
+// registry entry however either is cased.
+func mergeShadowing[V any](base, top map[string]V) map[string]V {
+	out := make(map[string]V, len(base)+len(top))
+	for k, v := range base {
+		if _, _, hidden := ir.Lookup(top, k); hidden {
+			continue
+		}
+		out[k] = v
+	}
+	for k, v := range top {
+		out[k] = v
+	}
+	return out
+}
+
 // ─── Type resolution ──────────────────────────────────────────────────────
 
 // collectTypes resolves program-level TypeDecls in two passes so struct
 // fields can reference peer UDTs declared in the same TYPE block.
 func (l *lowerer) collectTypes() error {
 	for _, td := range l.prog.TypeDecls {
-		if _, dup := l.types[td.Name]; dup {
-			return errAt(td.Pos, fmt.Errorf("duplicate TYPE declaration %q", td.Name))
+		if _, prev, dup := ir.Lookup(l.types, td.Name); dup {
+			return errAt(td.Pos, dupErr("TYPE", td.Name, prev))
 		}
 		l.types[td.Name] = &ir.Type{
 			Kind:   ir.TypeStruct,
@@ -459,7 +485,7 @@ func (l *lowerer) resolveType(te TypeExpr) (*ir.Type, error) {
 	case *ScalarType:
 		return resolveScalar(t.Name)
 	case *NamedType:
-		if udt, ok := l.types[t.Name]; ok {
+		if udt, _, ok := ir.Lookup(l.types, t.Name); ok {
 			return udt, nil
 		}
 		// Built-in FB types (TON, R_TRIG, CTU, …) live in the IR's
@@ -474,7 +500,7 @@ func (l *lowerer) resolveType(te TypeExpr) (*ir.Type, error) {
 		// caller is responsible for compiling FB-only files first so
 		// the registry is populated before any program references them.
 		if l.userFBs != nil {
-			if def, ok := l.userFBs[t.Name]; ok && def != nil {
+			if def, _, ok := ir.Lookup(l.userFBs, t.Name); ok && def != nil {
 				return &ir.Type{Kind: ir.TypeFB, FB: def}, nil
 			}
 		}
@@ -623,8 +649,8 @@ func (l *lowerer) collectVars() error {
 	for _, vb := range l.prog.VarBlocks {
 		kind := varKindFor(vb.Kind)
 		for _, vd := range vb.Variables {
-			if _, dup := l.scope[vd.Name]; dup {
-				return errAt(vd.Pos, fmt.Errorf("duplicate declaration %q", vd.Name))
+			if prev, dup := l.lookup(vd.Name); dup {
+				return errAt(vd.Pos, dupErr("declaration", vd.Name, prev.name))
 			}
 			t, err := l.resolveType(vd.Type)
 			if err != nil {
@@ -643,7 +669,7 @@ func (l *lowerer) collectVars() error {
 					// would be silently ignored, so say so instead.
 					return errAt(vd.Pos, fmt.Errorf("%s %s: an initial value is not applied to a tag — give it an init: in the manifest instead", vb.Kind, vd.Name))
 				}
-				l.scope[vd.Name] = symbol{slot: -1, typ: t, kind: ir.VarGlobal, global: vd.Name}
+				l.scope[ir.NameKey(vd.Name)] = symbol{name: vd.Name, slot: -1, typ: t, kind: ir.VarGlobal, global: vd.Name}
 				// A global has no slot, so Slots cannot record that the
 				// program binds it; Globals is where tooling reads it.
 				l.irProg.Globals[vd.Name] = t
@@ -659,20 +685,20 @@ func (l *lowerer) collectVars() error {
 				Kind:     kind,
 			})
 			l.irProg.SlotIndex[vd.Name] = slot
-			l.scope[vd.Name] = symbol{slot: slot, typ: t, kind: kind}
+			l.scope[ir.NameKey(vd.Name)] = symbol{name: vd.Name, slot: slot, typ: t, kind: kind}
 		}
 	}
 	// Inject PLC project variables as implicit globals so unqualified
 	// references resolve without a matching VAR_GLOBAL declaration.
 	// Any name already declared explicitly (above) wins.
 	for name, t := range l.implicitGlobals {
-		if _, exists := l.scope[name]; exists {
+		if _, exists := l.lookup(name); exists {
 			continue
 		}
 		if t == nil {
 			continue
 		}
-		l.scope[name] = symbol{slot: -1, typ: t, kind: ir.VarGlobal, global: name}
+		l.scope[ir.NameKey(name)] = symbol{name: name, slot: -1, typ: t, kind: ir.VarGlobal, global: name}
 		l.irProg.Globals[name] = t
 	}
 	return nil
@@ -747,7 +773,7 @@ func (l *lowerer) lowerStmt(s Statement) (ir.Stmt, error) {
 		return &ir.If{Cond: cond, Then: thenB, Else: elseB}, nil
 
 	case *ForStmt:
-		sym, ok := l.scope[n.Variable]
+		sym, ok := l.lookup(n.Variable)
 		if !ok {
 			return nil, fmt.Errorf("FOR: undeclared loop variable %q", n.Variable)
 		}
@@ -864,7 +890,7 @@ func (l *lowerer) lowerStmt(s Statement) (ir.Stmt, error) {
 func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 	// User FUNCTION called as a statement — discard the return value.
 	if l.userFuncs != nil {
-		if def, ok := l.userFuncs[n.Call.Name]; ok && def != nil {
+		if def, _, ok := ir.Lookup(l.userFuncs, n.Call.Name); ok && def != nil {
 			call, x, err := splitExecControl(n.Call, funcDeclaresEN(def), false)
 			if err != nil {
 				return nil, err
@@ -897,7 +923,7 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 		def = lv.ExprType().FB
 		instance = lv
 	} else {
-		sym, ok := l.scope[n.Call.Name]
+		sym, ok := l.lookup(n.Call.Name)
 		if !ok {
 			return nil, errName(n.Call.Pos, n.Call.Name, fmt.Errorf("call to undeclared name %q", n.Call.Name))
 		}
@@ -930,7 +956,7 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 	inoutBack := make([]ir.FBOutput, 0, len(def.InOuts))
 	boundInOut := make([]bool, len(def.InOuts))
 	for _, na := range n.Call.NamedArgs {
-		idx, ok := def.SlotIndex[na.Name]
+		idx, ok := def.SlotOf(na.Name)
 		if !ok {
 			return nil, errName(na.Pos, na.Name, fmt.Errorf("FB %s has no input %q", def.Name, na.Name))
 		}
@@ -975,7 +1001,7 @@ func (l *lowerer) lowerCallStmt(n *CallStmt) (ir.Stmt, error) {
 	}
 	outputs := append([]ir.FBOutput(nil), inoutBack...)
 	for _, ob := range n.Call.OutputBindings {
-		idx, ok := def.SlotIndex[ob.Name]
+		idx, ok := def.SlotOf(ob.Name)
 		if !ok {
 			return nil, errName(ob.Pos, ob.Name, fmt.Errorf("FB %s has no member %q", def.Name, ob.Name))
 		}
@@ -1099,7 +1125,7 @@ func (l *lowerer) lowerCallExpr(n *CallExpr) (ir.Expr, error) {
 	// builtin table so a user can shadow nothing accidentally with mixed
 	// case while still binding by bare name.
 	if l.userFuncs != nil {
-		if def, ok := l.userFuncs[n.Name]; ok && def != nil {
+		if def, _, ok := ir.Lookup(l.userFuncs, n.Name); ok && def != nil {
 			if !funcDeclaresEN(def) && hasExecControl(n) {
 				return nil, errExecInExpr(n)
 			}
@@ -1111,7 +1137,7 @@ func (l *lowerer) lowerCallExpr(n *CallExpr) (ir.Expr, error) {
 		// FB instance "calls" inside expressions are illegal — outputs
 		// are read via member access (t1.Q), and bare `t1(...)` produces
 		// no value. Surface a clearer message when this is the case.
-		if sym, defined := l.scope[n.Name]; defined && sym.typ != nil && sym.typ.Kind == ir.TypeFB {
+		if sym, defined := l.lookup(n.Name); defined && sym.typ != nil && sym.typ.Kind == ir.TypeFB {
 			return nil, errName(n.Pos, n.Name, fmt.Errorf("FB instance %q can't be used as an expression — invoke it as a statement and read outputs (e.g. %s.Q)", n.Name, n.Name))
 		}
 		return nil, errName(n.Pos, n.Name, fmt.Errorf("unknown function %q", n.Name))
@@ -1176,7 +1202,7 @@ func (l *lowerer) lowerUserFuncCall(n *CallExpr, def *ir.FuncDef) (ir.Expr, erro
 		for _, na := range n.NamedArgs {
 			idx := -1
 			for i, in := range def.Inputs {
-				if in.Name == na.Name {
+				if ir.SameName(in.Name, na.Name) {
 					idx = i
 					break
 				}
@@ -1243,7 +1269,7 @@ func lowerNumberLit(n *NumberLit) (ir.Expr, error) {
 
 func (l *lowerer) lowerIdent(n *IdentExpr) (ir.Expr, error) {
 	name := n.Name
-	sym, ok := l.scope[name]
+	sym, ok := l.lookup(name)
 	if !ok {
 		if name == "_" {
 			// The diagram editors' placeholder: an open FBD pin, a ladder
@@ -1280,7 +1306,7 @@ func (l *lowerer) lowerMember(m *MemberExpr) (ir.Expr, error) {
 	}
 	switch ot.Kind {
 	case ir.TypeStruct:
-		idx, ok := ot.Struct.FieldIndex[m.Member]
+		idx, ok := ot.Struct.FieldOf(m.Member)
 		if !ok {
 			label := ot.Struct.Name
 			if label == "" {
@@ -1290,7 +1316,7 @@ func (l *lowerer) lowerMember(m *MemberExpr) (ir.Expr, error) {
 		}
 		return &ir.MemberRef{Object: obj, FieldIdx: idx, T: ot.Struct.Fields[idx].Type}, nil
 	case ir.TypeFB:
-		idx, ok := ot.FB.SlotIndex[m.Member]
+		idx, ok := ot.FB.SlotOf(m.Member)
 		if !ok {
 			return nil, errName(m.MemberPos, m.Member, fmt.Errorf("FB %s has no field %q", ot.FB.Name, m.Member))
 		}

@@ -1,0 +1,46 @@
+# st-case-insensitive — identifiers are case-insensitive (IEC 61131-3
+# §6.1.2, #197): Level, LEVEL and level name one tag; a FUNCTION, an FB
+# type, an FB instance and its pins resolve however a call site cases
+# them; so do SFC step and action names and Step.X / Step.T. Each program
+# references the tag Level in three casings and calls the library's
+# ScaleAnalog / AboveHalf in a casing other than declared — the FBD row is
+# the tia-shaped build's `07-check-user-FUNCTION-from-FBD`.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/st-case-insensitive'
+#   go run ./cmd/naut test lang/conformance/st-case-insensitive
+name: st-case-insensitive
+
+tasks:
+  - program: st-case-insensitive.st   # the first task is always "main"; its prefix is still st_
+    scan: 10ms
+  - name: ld
+    program: st-case-insensitive.ld
+    scan: 10ms
+  - name: fbd
+    program: st-case-insensitive.fbd
+    scan: 10ms
+  - name: sfc
+    program: st-case-insensitive.sfc
+    scan: 10ms
+
+tags:
+  # Shared inputs — declared with this spelling; the programs case them otherwise.
+  - { name: Level, role: state, init: 0.0, desc: "Raw level, 0..100 %" }
+  - { name: Start, role: state, init: false }
+
+  # Outputs, one set per language.
+  - { name: st_Scaled,  role: state, init: 0.0 }
+  - { name: st_Half,    role: state, init: false }
+  - { name: st_Starts,  role: state, init: 0 }
+  - { name: ld_Half,    role: state, init: false }
+  - { name: ld_Starts,  role: state, init: 0 }
+  - { name: fbd_Scaled, role: state, init: 0.0 }
+  - { name: fbd_Half,   role: state, init: false }
+  - { name: fbd_Starts, role: state, init: 0 }
+  - { name: sfc_Scaled, role: state, init: 0.0 }
+  - { name: sfc_Half,   role: state, init: false }
+  - { name: sfc_Starts, role: state, init: 0 }
+  - { name: sfc_Ran,    role: state, init: false, desc: "Running.X seen from an action" }
+
+driver:
+  type: memory

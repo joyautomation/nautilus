@@ -15,20 +15,18 @@ VAR_EXTERNAL
     Running      : BOOL;
 END_VAR
 VAR
-    running : BOOL;
     runEdge : R_TRIG;
     reqEdge : R_TRIG;
 END_VAR
 
 Batch.Phase := PhaseName;
 
-running := NOT (PhaseName = 'Idle');
-Running := running; (* Line_Fault's alarms.defs enable: reads this — see nautilus.yaml/line.yaml *)
-runEdge(CLK := running);
+Running := NOT (PhaseName = 'Idle'); (* Line_Fault's alarms.defs enable: reads this — see nautilus.yaml/line.yaml *)
+runEdge(CLK := Running);
 IF runEdge.Q THEN
     Batch.ElapsedSec := 0.0;
 END_IF;
-IF running THEN
+IF Running THEN
     Batch.ElapsedSec := Batch.ElapsedSec + StatusDtS;
 END_IF;
 
