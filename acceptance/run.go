@@ -244,6 +244,9 @@ func (r *testRun) runStep(st *Step) (*Failure, error) {
 	if err := r.apply(st.Given); err != nil {
 		return nil, err
 	}
+	if err := r.forces(st); err != nil {
+		return nil, err
+	}
 	// The operator verbs land with `given:`, before the step spends its
 	// time: an ack is an input to the step, the same way a tag write is.
 	if st.Ack != nil {
@@ -508,6 +511,28 @@ func anyMap(m map[string]bool) map[string]any {
 // Dotted field writes are gathered per root tag rather than applied one at a
 // time: see applyFields for why a single map's fields must compose onto one
 // base value instead of each re-reading the store independently.
+// forces applies a step's `unforce:` then its `force:` — the force table
+// the controller itself keeps (runtime/force.go), so a test holds a tag
+// exactly the way an operator commissioning the plant would.
+func (r *testRun) forces(st *Step) error {
+	if u := st.Unforce; u != nil {
+		if u.All {
+			r.rt.Tags().UnforceAll()
+		}
+		for _, name := range u.Names {
+			if !r.rt.Tags().Unforce(name) {
+				return fmt.Errorf("unforce: %s is not forced", name)
+			}
+		}
+	}
+	for _, name := range sortedKeys(st.Force) {
+		if err := r.rt.Tags().Force(name, r.coerce(name, st.Force[name])); err != nil {
+			return fmt.Errorf("force: %w", err)
+		}
+	}
+	return nil
+}
+
 func (r *testRun) apply(given map[string]any) error {
 	fieldEdits := map[string]map[string]any{} // root tag → path → raw
 	for _, name := range sortedKeys(given) {
