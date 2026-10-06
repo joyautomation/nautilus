@@ -10,7 +10,7 @@
 	// pointer-based with a movement threshold (HTML5 dnd doesn't exist for
 	// SVG), resolved at pointerup via elementFromPoint with a
 	// nearest-hotspot snap fallback.
-	import { annotate, argIdents, type Ann, type LdElement, type LdFbType, type LdModel, type RungStatus } from './ladder';
+	import { annotate, argIdents, offerType, useTypes, type Ann, type LdElement, type LdFbType, type LdModel, type RungStatus } from './ladder';
 	import LdBlockPicker from './LdBlockPicker.svelte';
 	import { FB_TYPES } from './suggest';
 	import { layoutRung, rungMinWidth, fitArgs, L, OPERAND_LABEL_MAX, type LSpot, type LNode } from './ladderLayout';
@@ -180,6 +180,8 @@
 	const PALETTE: PalItem[] = [
 		{ label: '⊣ ⊢', title: 'NO contact', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'contact', path: series, index }) },
 		{ label: '⊣/⊢', title: 'NC contact', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'contact', neg: true, path: series, index }) },
+		{ label: '⊣P⊢', title: 'rising-edge contact (+Tag): TRUE for the one scan its tag goes 0→1 — the ONS / OSR habit; P on a selected contact cycles NO → P → N → NC', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'edge', mode: 'P', path: series, index }) },
+		{ label: '⊣N⊢', title: 'falling-edge contact (-Tag): TRUE for the one scan its tag goes 1→0', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'edge', mode: 'N', path: series, index }) },
 		{ label: 'FN( )', title: 'function contact — inserts GT(_, 0.0) as a placeholder; dblclick it to make it ANY function: LE, EQ, ABS(x) > 0 comparisons, etc.', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'fn', fn: 'GT', args: '_, 0.0', path: series, index }) },
 		{ label: 'FB…', title: 'function block — TON, CTU, any standard block or one of the project\'s own (library) blocks; pick the type, name the instance', accept: 'series', pick: true },
 		{ label: '[ | ]', title: 'parallel branch (two open legs)', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'branch', path: series, index }) },
@@ -240,38 +242,74 @@
 
 	// ── declare what a retag introduced ─────────────────────────────────────
 	// A retag (or a block's or function's arguments) may name something the
-	// PROGRAM doesn't declare: the rung goes
-	// red and `naut check` says "undeclared identifier". Every such name is
-	// offered here — into VAR_EXTERNAL, typed from nautilus.yaml, when it is
-	// a manifest tag; into VAR (a retained local) either way.
+	// POU doesn't declare: the rung goes red and `naut check` says
+	// "undeclared identifier". Every such name is offered here, per POU. In
+	// the PROGRAM: into VAR_EXTERNAL, typed from nautilus.yaml, when it is a
+	// manifest tag; into VAR (a retained local) either way. In a
+	// FUNCTION_BLOCK: as a pin (VAR_INPUT for a name the rungs read,
+	// VAR_OUTPUT for one a coil or `=>` writes) or a local — the AOI's
+	// Parameters tab. The type is what the use says (a CTU's CV is INT, a
+	// contact BOOL), over a manifest REAL that only means "a number seed".
+	type Undeclared = {
+		name: string;
+		pou: string;
+		tag?: { name: string; type?: string; role?: string; desc?: string };
+		type: string;
+		tagType?: string;
+		writes: boolean;
+	};
 	const undeclared = $derived.by(() => {
-		const declared = new Set((model.vars ?? []).filter((v) => !v.pou).map((v) => v.name.toLowerCase()));
-		const insts = new Set<string>();
-		const refs = new Map<string, string>();
-		const walk = (els: LdElement[]) => {
-			for (const e of els ?? []) {
-				if (e.inst) insts.add(e.inst.toLowerCase());
-				if ((e.kind === 'contact' || e.kind === 'coil' || (e.kind as string) === 'edge') && e.ref) {
-					const base = /^[A-Za-z_][A-Za-z0-9_]*/.exec(e.ref)?.[0];
-					if (base && base !== '_' && !refs.has(base.toLowerCase())) refs.set(base.toLowerCase(), base);
-				}
-				// A function contact's or block's arguments, `=>` targets
-				// included (`m101:MotorStarter(Reset := ResetFaults, …)`).
-				if ((e.kind === 'fn' || e.kind === 'fb') && e.args) {
-					for (const name of argIdents(e.args)) if (!refs.has(name.toLowerCase())) refs.set(name.toLowerCase(), name);
-				}
-				for (const leg of e.legs ?? []) walk(leg);
-			}
-		};
-		for (const r of model.rungs ?? []) {
-			if (r.pou) continue; // a FUNCTION_BLOCK's rungs have their own header
-			walk(r.elements);
-			walk(r.coils);
-		}
+		const out: Undeclared[] = [];
 		const tags = new Map((model.tags ?? []).map((t) => [t.name.toLowerCase(), t]));
-		return [...refs]
-			.filter(([l]) => !declared.has(l) && !insts.has(l) && l !== 'true' && l !== 'false')
-			.map(([l, name]) => ({ name, tag: tags.get(l) }));
+		const pous = [...new Set((model.rungs ?? []).map((r) => r.pou ?? ''))];
+		for (const pou of pous) {
+			const rungsIn = (model.rungs ?? []).filter((r) => (r.pou ?? '') === pou);
+			const vars = (model.vars ?? []).filter((v) => (v.pou ?? '') === pou);
+			const declared = new Set(vars.map((v) => v.name.toLowerCase()));
+			const insts = new Set<string>();
+			const refs = new Map<string, string>();
+			const writes = new Set<string>();
+			const add = (name: string) => {
+				if (!refs.has(name.toLowerCase())) refs.set(name.toLowerCase(), name);
+			};
+			const walk = (els: LdElement[]) => {
+				for (const e of els ?? []) {
+					if (e.inst) insts.add(e.inst.toLowerCase());
+					if ((e.kind === 'contact' || e.kind === 'coil' || e.kind === 'edge') && e.ref) {
+						const base = /^[A-Za-z_][A-Za-z0-9_]*/.exec(e.ref)?.[0];
+						if (base && base !== '_') {
+							add(base);
+							if (e.kind === 'coil') writes.add(base.toLowerCase());
+						}
+					}
+					// A function contact's or block's arguments, `=>` targets
+					// included (`m101:MotorStarter(Reset := ResetFaults, …)`).
+					if ((e.kind === 'fn' || e.kind === 'fb') && e.args) {
+						for (const name of argIdents(e.args)) add(name);
+						for (const m of e.args.matchAll(/=>\s*([A-Za-z_][A-Za-z0-9_]*)/g)) writes.add(m[1].toLowerCase());
+					}
+					for (const leg of e.legs ?? []) walk(leg);
+				}
+			};
+			for (const r of rungsIn) {
+				walk(r.elements);
+				walk(r.coils);
+			}
+			const used = useTypes(rungsIn, model.fbTypes ?? [], vars);
+			for (const [l, name] of refs) {
+				if (declared.has(l) || insts.has(l) || l === 'true' || l === 'false') continue;
+				const tag = pou ? undefined : tags.get(l);
+				out.push({
+					name,
+					pou,
+					tag,
+					type: used.get(l) ?? 'BOOL',
+					tagType: tag ? offerType(used.get(l), tag.type) : undefined,
+					writes: writes.has(l)
+				});
+			}
+		}
+		return out;
 	});
 	let declaring = $state(false);
 	$effect(() => {
@@ -287,8 +325,8 @@
 		window.addEventListener('pointerdown', away, true);
 		return () => window.removeEventListener('pointerdown', away, true);
 	});
-	function declare(name: string, section: 'VAR_EXTERNAL' | 'VAR', varType: string) {
-		post({ type: 'declareVar', name, varType, section });
+	function declare(name: string, section: string, varType: string, pou = '') {
+		post({ type: 'declareVar', name, varType, section, ...(pou ? { block: pou } : {}) });
 	}
 
 	// ── pointer drags (palette items and existing nodes) ────────────────────
@@ -402,7 +440,8 @@
 			const at = { x: rect.left, y: rect.top, w: Math.max(rect.width, 90) };
 			const ann = a.node.ann;
 			const addr = a.node.coil !== undefined ? { rung: a.rung, coil: a.node.coil } : { rung: a.rung, path: a.node.path };
-			if (ann.el.kind === 'contact' || ann.el.kind === 'coil') {
+			if (ann.el.kind === 'contact' || ann.el.kind === 'coil' || ann.el.kind === 'edge') {
+				// A bare tag keeps the contact's form; +Tag / -Tag / /Tag set it.
 				requestInput(ann.el.ref ?? '', at, (v) => post({ type: 'setRef', ...addr, ref: v }), { suggest: 'tags' });
 			} else if (ann.el.kind === 'fn') {
 				// The WHOLE call is editable — swap GT(...) for LE(...), ABS(...),
@@ -570,7 +609,16 @@
 	// swallows some editing keys (Delete, Ctrl+X) before bubble listeners
 	// see them — so the handler dedupes with its own WeakSet and ignores
 	// defaultPrevented entirely.
-	let clipboard = $state<{ el: LdElement; coil: boolean } | null>(null);
+	// The clipboard holds an element, or a whole rung (its name selected):
+	// a rung pastes as a new rung below the selection (pasteRung: m1 → m2,
+	// its block instances renamed the same way).
+	type RungClip = { name: string; comment?: string; elements: LdElement[]; coils: LdElement[] };
+	type Clip = { el: LdElement; coil: boolean; rung?: undefined } | { rung: RungClip; el?: undefined; coil?: undefined };
+	let clipboard = $state<Clip | null>(null);
+	// What ⧉ / ✂ / Ctrl+C can take: the selected element, or the rung.
+	const canCopy = $derived(
+		!!selected && (selected.whole ? model.rungs.some((r) => r.name === selected!.rung) : !!findSelected(selected))
+	);
 
 	// NOTE: `selected` is $state, so anything read from it is a reactive
 	// Proxy — and proxies can't cross postMessage (structured clone throws
@@ -593,9 +641,19 @@
 		}
 	}
 
+	// Model elements as the editor got them, minus the diff overlay's marks.
+	const plain = (els: LdElement[]): LdElement[] =>
+		JSON.parse(JSON.stringify(els, (k, v) => (k === '_diff' || k === '_was' ? undefined : v)));
+
 	function doCopy(): boolean {
 		const sel = selected;
-		if (sel?.whole) return false;
+		if (sel?.whole) {
+			const r = model.rungs.find((x) => x.name === sel.rung);
+			if (!r) return false;
+			clipboard = { rung: { name: r.name, comment: r.comment, elements: plain(r.elements), coils: plain(r.coils) } };
+			writeClip('ld', clipboard);
+			return true;
+		}
 		const node = sel ? findSelected(sel) : undefined;
 		if (!sel || !node) return false;
 		clipboard = { el: JSON.parse(JSON.stringify(node.el)), coil: sel.coil !== undefined };
@@ -625,12 +683,22 @@
 	function doPaste(): boolean {
 		// The system clipboard's copy (possibly from another panel) wins;
 		// readClip falls back to this panel's own when there's none.
-		void readClip<{ el: LdElement; coil: boolean }>('ld').then((c) => pasteElement(c ?? clipboard));
+		void readClip<Clip>('ld').then((c) => pasteElement(c ?? clipboard));
 		return true;
 	}
 
-	function pasteElement(clip: { el: LdElement; coil: boolean } | null): boolean {
+	function pasteElement(clip: Clip | null): boolean {
 		if (!clip) return false;
+		if (clip.rung) {
+			// Below the selected rung; with nothing selected, below the rung
+			// it was copied from (still here), else at the end.
+			const here = (n: string | undefined) => (n && model.rungs.some((r) => r.name === n) ? n : undefined);
+			const after =
+				here(selected?.rung) ?? here(clip.rung.name) ?? (model.rungs.length ? model.rungs[model.rungs.length - 1].name : '');
+			const { name, comment, elements, coils } = clip.rung;
+			post({ type: 'pasteRung', name, after, body: { comment, elements, coils } });
+			return true;
+		}
 		const rungName = selected?.rung ?? (model.rungs.length ? model.rungs[model.rungs.length - 1].name : '');
 		if (!rungName) return false;
 		const el = JSON.parse(JSON.stringify(clip.el));
@@ -670,6 +738,15 @@
 			acted = doDelete();
 		} else if (!ctrl && (ev.key === 'n' || ev.key === 'N') && node?.el.kind === 'contact') {
 			post({ type: 'toggleNeg', ...selAddr() });
+			acted = true;
+		} else if (!ctrl && (ev.key === 'n' || ev.key === 'N') && node?.el.kind === 'edge') {
+			post({ type: 'setContactForm', ...selAddr(), mode: 'NC' });
+			acted = true;
+		} else if (!ctrl && (ev.key === 'p' || ev.key === 'P') && (node?.el.kind === 'contact' || node?.el.kind === 'edge')) {
+			// One key through the contact's forms: NO → P → N → NC → NO.
+			const form = node.el.kind === 'edge' ? (node.el.mode === 'N' ? 'N' : 'P') : node.el.neg ? 'NC' : 'NO';
+			const next = ({ NO: 'P', P: 'N', N: 'NC', NC: 'NO' } as Record<string, string>)[form];
+			post({ type: 'setContactForm', ...selAddr(), mode: next });
 			acted = true;
 		} else if (!ctrl && (ev.key === 'm' || ev.key === 'M') && node?.el.kind === 'coil') {
 			const next = !node.el.mode ? 'S' : node.el.mode === 'S' ? 'R' : '';
@@ -742,9 +819,9 @@
 			<button title="Add a comment (after the selection; dblclick it to edit, empty text deletes)" onclick={addNote}>//</button>
 			<button title="Add a rung at the bottom" onclick={addRung}>+ rung</button>
 			<span class="sep"></span>
-			<button title="Cut the selected element (Ctrl+X)" disabled={!selected} onclick={() => doCut()}>✂</button>
-			<button title="Copy the selected element (Ctrl+C)" disabled={!selected} onclick={() => doCopy()}>⧉</button>
-			<button title="Paste after the selection (Ctrl+V)" disabled={!clipboard} onclick={() => doPaste()}>⎘</button>
+			<button title={selected?.whole ? `Cut rung ${selected.rung} (Ctrl+X)` : 'Cut the selected element — or the rung, when its name is selected (Ctrl+X)'} disabled={!canCopy} onclick={() => doCut()}>✂</button>
+			<button title={selected?.whole ? `Copy rung ${selected.rung} (Ctrl+C) — it pastes as a new rung, its blocks renamed` : 'Copy the selected element — or the rung, when its name is selected (Ctrl+C)'} disabled={!canCopy} onclick={() => doCopy()}>⧉</button>
+			<button title={clipboard?.rung ? `Paste rung ${clipboard.rung.name} below the selected rung (Ctrl+V)` : 'Paste after the selection (Ctrl+V)'} disabled={!clipboard} onclick={() => doPaste()}>⎘</button>
 			<button title={selected?.whole ? `Delete rung ${selected.rung} (Del)` : 'Delete the selected element — or the rung, when its name is selected (Del)'} disabled={!selected} onclick={() => doDelete()}>✕</button>
 			{#if undeclared.length}
 				<span class="sep"></span>
@@ -760,25 +837,38 @@
 			{#if declaring && undeclared.length}
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<div class="declpop" onpointerdown={(e) => e.stopPropagation()}>
-					{#each undeclared as u (u.name)}
-						<div class="declrow">
-							<span class="declname" title={u.tag ? `nautilus.yaml: ${u.tag.role ?? ''} ${u.tag.type ?? ''} ${u.tag.desc ?? ''}` : 'not a nautilus.yaml tag'}>{u.name}</span>
-							{#if u.tag}
+					{#each undeclared as u (u.pou + ':' + u.name)}
+						<div class="declrow" data-pou={u.pou}>
+							<span class="declname" title={u.tag ? `nautilus.yaml: ${u.tag.role ?? ''} ${u.tag.type ?? ''} ${u.tag.desc ?? ''}` : u.pou ? `used in FUNCTION_BLOCK ${u.pou}` : 'not a nautilus.yaml tag'}>{u.name}{#if u.pou}<span class="declpou"> · {u.pou}</span>{/if}</span>
+							{#if u.pou}
+								{#each [u.writes ? 'VAR_OUTPUT' : 'VAR_INPUT', u.writes ? 'VAR_INPUT' : 'VAR_OUTPUT'] as section, i (section)}
+									<button
+										class="declbtn"
+										class:primary={i === 0}
+										data-name={u.name}
+										data-section={section}
+										data-pou={u.pou}
+										title="a pin of {u.pou} — add it to its {section}"
+										onclick={() => declare(u.name, section, u.type, u.pou)}
+									>{section} : {u.type}</button>
+								{/each}
+							{:else if u.tag}
 								<button
 									class="declbtn primary"
 									data-name={u.name}
 									data-section="VAR_EXTERNAL"
-									title="the project tag — add it to this program's VAR_EXTERNAL"
-									onclick={() => declare(u.name, 'VAR_EXTERNAL', u.tag?.type || 'BOOL')}
-								>VAR_EXTERNAL : {u.tag.type || 'BOOL'}</button>
+									title="the project tag — add it to this program's VAR_EXTERNAL{u.tagType !== (u.tag.type || 'BOOL') ? ` (typed ${u.tagType} by its use; the manifest seed says ${u.tag.type})` : ''}"
+									onclick={() => declare(u.name, 'VAR_EXTERNAL', u.tagType || 'BOOL')}
+								>VAR_EXTERNAL : {u.tagType || 'BOOL'}</button>
 							{/if}
 							<button
 								class="declbtn"
 								data-name={u.name}
 								data-section="VAR"
-								title="a retained local of this program — add it to VAR"
-								onclick={() => declare(u.name, 'VAR', 'BOOL')}
-							>VAR : BOOL</button>
+								data-pou={u.pou}
+								title={u.pou ? `a local of ${u.pou} — add it to its VAR` : 'a retained local of this program — add it to VAR'}
+								onclick={() => declare(u.name, 'VAR', u.type, u.pou)}
+							>VAR : {u.type}</button>
 						</div>
 					{/each}
 				</div>
@@ -891,7 +981,7 @@
 					>
 						<rect class="hit" x="-2" y={-L.LABEL_TOP} width={n.w + 4} height={n.h + L.LABEL_TOP + L.LABEL_BOT - 4} rx="3" />
 						{#if n.kind === 'contact'}
-							<title>{n.ann.el.ref}{n.ann.el.neg ? ' (NC)' : ''} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope))}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag · N: NO/NC · B: branch around · Del · drag to move' : ''}</title>
+							<title>{n.ann.el.ref}{n.ann.el.neg ? ' (NC)' : ''} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope))}{diffNote(n.ann.el)}{editable ? ' — dblclick: retag (+Tag / -Tag: an edge) · N: NO/NC · P: NO → P → N → NC · B: branch around · Del · drag to move' : ''}</title>
 							<line x1="0" y1={n.h / 2} x2={n.w / 2 - 5} y2={n.h / 2} class="w {wcls(n.ann.in)}" />
 							<line x1={n.w / 2 + 5} y1={n.h / 2} x2={n.w} y2={n.h / 2} class="w {wcls(n.ann.out)}" />
 							<line x1={n.w / 2 - 5} y1="2" x2={n.w / 2 - 5} y2={n.h - 2} class="post" />
@@ -899,6 +989,17 @@
 							{#if n.ann.el.neg}
 								<line x1={n.w / 2 - 9} y1={n.h - 1} x2={n.w / 2 + 9} y2="1" class="post" />
 							{/if}
+							<text x={n.w / 2} y={n.h + 12} text-anchor="middle" class="operand">{trunc(n.ann.el.ref)}</text>
+							{#if valText(n.ann.el.ref, r.scope)}
+								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true}>{valText(n.ann.el.ref, r.scope)}</text>
+							{/if}
+						{:else if n.kind === 'edge'}
+							<title>{n.ann.el.mode === 'N' ? '-' : '+'}{n.ann.el.ref} — {n.ann.el.mode === 'N' ? 'falling' : 'rising'}-edge contact: TRUE for one scan when {n.ann.el.ref} goes {n.ann.el.mode === 'N' ? '1→0' : '0→1'} ({n.ann.el.ref} = {formatLive(liveValue(n.ann.el.ref ?? '', r.scope))}){diffNote(n.ann.el)}{editable ? ' — dblclick: retag · P: NO → P → N → NC · Del · drag to move' : ''}</title>
+							<line x1="0" y1={n.h / 2} x2={n.w / 2 - 7} y2={n.h / 2} class="w {wcls(n.ann.in)}" />
+							<line x1={n.w / 2 + 7} y1={n.h / 2} x2={n.w} y2={n.h / 2} class="w {wcls(n.ann.out)}" />
+							<line x1={n.w / 2 - 7} y1="2" x2={n.w / 2 - 7} y2={n.h - 2} class="post" />
+							<line x1={n.w / 2 + 7} y1="2" x2={n.w / 2 + 7} y2={n.h - 2} class="post" />
+							<text x={n.w / 2} y={n.h / 2 + 3.5} text-anchor="middle" class="mark edgemark">{n.ann.el.mode === 'N' ? 'N' : 'P'}</text>
 							<text x={n.w / 2} y={n.h + 12} text-anchor="middle" class="operand">{trunc(n.ann.el.ref)}</text>
 							{#if valText(n.ann.el.ref, r.scope)}
 								<text x={n.w / 2} y={n.h + 24} text-anchor="middle" class="liveval" class:lit={n.ann.val === true}>{valText(n.ann.el.ref, r.scope)}</text>
@@ -1056,6 +1157,13 @@
 		display: flex;
 		align-items: center;
 		gap: 6px;
+	}
+	.declpou {
+		font-size: 10px;
+		color: var(--nx-muted);
+	}
+	.mark.edgemark {
+		font-size: 10px;
 	}
 	.declname {
 		min-width: 90px;

@@ -193,9 +193,10 @@ for text on the left and rungs on the right. Layout is canonical, computed
 from the source, so no coordinates land in your diffs. Editing gestures
 resolve through the Go compiler into minimal text edits:
 
-- A palette of NO contact, NC contact, function contact, parallel branch,
-  and output/set/reset coil. Click to append at the selection, or drag onto
-  a rung.
+- A palette of NO contact, NC contact, rising- and falling-edge contact
+  (P / N: the Logix ONS habit), function contact, parallel branch, and
+  output/set/reset coil. Click to append at the selection, or drag onto a
+  rung.
 
   <Clip id="ld_add_contact" />
 
@@ -204,16 +205,19 @@ resolve through the Go compiler into minimal text edits:
   the call at the end of the selected rung.
 
   <Clip id="ld_add_block-TON" />
-- Double-click a contact or coil to retag it, a function contact to rewrite
+- Double-click a contact or coil to retag it (typing `+Tag` or `-Tag` makes
+  the contact an edge, `/Tag` an NC one), a function contact to rewrite
   the call, a block's body to edit its arguments or its header to rename the
   instance, the rung name to rename it, and the `(* … *)` slot to write a
   rung comment.
 
   <Clip id="ld_rename_block" />
-- `N` flips a contact between NO and NC, `M` cycles a coil through output,
-  set and reset, `B` wraps the selection in a parallel branch, `Del`
-  deletes, and Ctrl+X/C/V cut, copy and paste. A pasted block instance gets
-  a fresh name.
+- `N` flips a contact between NO and NC, `P` cycles it NO → P → N → NC,
+  `M` cycles a coil through output, set and reset, `B` wraps the selection
+  in a parallel branch, `Del` deletes, and Ctrl+X/C/V cut, copy and paste.
+  A pasted block instance gets a fresh name. With a rung's name selected,
+  copy takes the whole rung: it pastes below the selected rung with the
+  next name (`m1` → `m2`) and its block instances renamed the same way.
 
   <Clip id="ld_add_branch" />
 - Drag an element to reorder it or move it to another rung. A contact
@@ -221,10 +225,22 @@ resolve through the Go compiler into minimal text edits:
 
   <Clip id="ld_move_element" />
 - `+ rung` adds a rung, `//` adds a comment note, and the variables panel
-  declares or removes a declaration without leaving the diagram.
+  declares, renames (double-click the name) or removes a declaration
+  without leaving the diagram. It also lists the block instances the rungs
+  declare by their calls (`m1 : MotorStarter`, with the rung), and Escape
+  closes it. In a `FUNCTION_BLOCK` it declares the block's pins
+  (`VAR_INPUT`, `VAR_OUTPUT`, `VAR_IN_OUT`) as well as locals; renaming a
+  pin also renames it in the calls in that file.
+- The amber **declare …** offer lists every name a rung uses that its POU
+  does not declare. In the program it offers `VAR_EXTERNAL` for a
+  `nautilus.yaml` tag, or `VAR`; inside a `FUNCTION_BLOCK` it offers a pin,
+  `VAR_INPUT` for a name the rungs read and `VAR_OUTPUT` for one a coil or
+  `=>` writes. The type comes from the use: a counter's `CV => Count` is
+  `INT`, a contact is `BOOL`.
 
 With a controller reachable, live values paint power flow: contacts and
-coils show their state, the wires show whether power reaches that far, and
+coils show their state (an edge contact shows its one-shot's output, so it
+lights for the one scan it fires), the wires show whether power reaches that far, and
 comparisons evaluate locally. An in-rung block reads its real output pin
 from the controller. Anything unresolvable renders neutral.
 

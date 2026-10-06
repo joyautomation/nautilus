@@ -117,6 +117,37 @@
 		return items;
 	});
 
+	// The ladder's scopes for the vars panel: the PROGRAM (tags and locals),
+	// then each FUNCTION_BLOCK the file defines (its pins and locals); and
+	// the block instances rungs declare by their calls, listed read-only.
+	const ldScopes = $derived.by(() => {
+		if (!ldModel) return undefined;
+		const out: { pou: string; label: string; sections: string[] }[] = [];
+		if (ldModel.name || !(ldModel.blocks ?? []).length) out.push({ pou: '', label: `PROGRAM ${ldModel.name ?? ''}`.trim(), sections: ['VAR_EXTERNAL', 'VAR'] });
+		for (const b of ldModel.blocks ?? []) out.push({ pou: b.name, label: `FUNCTION_BLOCK ${b.name}`, sections: ['VAR_INPUT', 'VAR_OUTPUT', 'VAR_IN_OUT', 'VAR'] });
+		return out;
+	});
+	const ldInsts = $derived.by(() => {
+		if (!ldModel) return [];
+		const out: { name: string; type: string; rung: string; pou?: string }[] = [];
+		const seen = new Set<string>();
+		const declared = new Set((ldModel.vars ?? []).map((v) => `${v.pou ?? ''}:${v.name.toLowerCase()}`));
+		const walk = (els: LdElement[], rung: string, pou: string) => {
+			for (const e of els ?? []) {
+				const key = `${pou}:${(e.inst ?? '').toLowerCase()}`;
+				// An element of an instance array (Timers[2]) is the array's,
+				// declared in the header; a header-declared instance lists there.
+				if (e.kind === 'fb' && e.inst && /^[A-Za-z_][A-Za-z0-9_]*$/.test(e.inst) && !declared.has(key) && !seen.has(key)) {
+					seen.add(key);
+					out.push({ name: e.inst, type: e.type ?? '', rung, pou: pou || undefined });
+				}
+				for (const leg of e.legs ?? []) walk(leg, rung, pou);
+			}
+		};
+		for (const r of ldModel.rungs ?? []) walk(r.elements, r.name, r.pou ?? '');
+		return out;
+	});
+
 	// "Used" for the ladder = referenced by any rung: contact/coil operands
 	// (accessor bases), fb instances, and identifiers inside argument lists.
 	function collectLdUsed(m: LdModel): Set<string> {
@@ -776,14 +807,17 @@
 		bind:open={varsOpen}
 		vars={varList}
 		used={usedNames}
+		insts={mode === 'ld' ? ldInsts : []}
+		scopes={mode === 'ld' ? ldScopes : undefined}
 		readonly={readOnly || diffing}
+		onRename={mode === 'ld' ? (name, newName, pou) => postLd({ type: 'renameVar', name, newName, ...(pou ? { block: pou } : {}) }) : undefined}
 		onDeclare={mode === 'ld'
-			? (name, type, section) => postLd({ type: 'declareVar', name, varType: type, section })
+			? (name, type, section, pou) => postLd({ type: 'declareVar', name, varType: type, section, ...(pou ? { block: pou } : {}) })
 			: mode === 'sfc'
 				? (name, type, section) => postSfc({ type: 'declareVar', name, varType: type, section })
 				: undefined}
 		onDelete={mode === 'ld'
-			? (name) => postLd({ type: 'deleteVar', name })
+			? (name, pou) => postLd({ type: 'deleteVar', name, ...(pou ? { block: pou } : {}) })
 			: mode === 'sfc'
 				? (name) => postSfc({ type: 'deleteVar', name })
 				: undefined}

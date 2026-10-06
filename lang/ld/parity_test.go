@@ -251,3 +251,36 @@ END_PROGRAM`
 		}
 	}
 }
+
+// #212: an edge contact carries its implicit trigger instance — the name
+// the compiler gives it — so the diagram can show the one-shot live.
+func TestEdgeTrigNamesMatchTheCompiler(t *testing.T) {
+	src := `PROGRAM p
+VAR_EXTERNAL A : BOOL; B : BOOL; Y : BOOL; END_VAR
+LD
+  RUNG m1
+    +A [ -B | +A ] ( P Y )
+END_LD
+END_PROGRAM`
+	m, err := Graph(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := m.Rungs[0]
+	got := []string{r.Elements[0].Trig, r.Elements[1].Legs[0][0].Trig, r.Elements[1].Legs[1][0].Trig}
+	want := []string{"rt_m1_A", "ft_m1_B", "rt_m1_A_2"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("trig names %v, want %v", got, want)
+		}
+	}
+	st, err := Transpile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range want {
+		if !strings.Contains(st, w+" : ") && !strings.Contains(st, w+" :") {
+			t.Fatalf("the compiler has no instance %s:\n%s", w, st)
+		}
+	}
+}
