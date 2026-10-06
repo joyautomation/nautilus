@@ -31,6 +31,21 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Added
 
+- **The whole IEC conversion matrix.** Every `<A>_TO_<B>` between `BOOL`,
+  the integers, the bit strings, `REAL`/`LREAL`, `TIME`/`LTIME` and
+  `STRING` (`DINT_TO_REAL`, `WORD_TO_INT`, `STRING_TO_TIME`, …), the
+  overloaded `TO_<type>(x)` and `TRUNC_<int>` — offered by completion and
+  signature help. Narrowing wraps to the target width as on Codesys
+  (`DINT_TO_INT(70000)` is 4464); a REAL or a STRING with no value in the
+  target faults the scan. `REAL_TO_WORD` and its kin, which the standard
+  does not define, are a compile error that says what to write. Needs a
+  `naut` newer than 0.15.0. (#244)
+
+- **Set Value and Force take an enumeration's member name inside a
+  struct** — `Recipe.Mode`, or an array element `Recipe.Steps[2].Mode` —
+  as they already did for a whole enumerated tag; a name that is no member
+  is refused with the list. Needs a `naut` newer than 0.15.0. (#247)
+
 - **Manifest tags are in scope in every program without `VAR_EXTERNAL`**,
   the way a TIA tag table, a Codesys GVL or Logix controller scope is.
   Hover, completion (with the tag's unit and description), go-to-definition

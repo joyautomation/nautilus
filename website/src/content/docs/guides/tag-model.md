@@ -229,6 +229,15 @@ plant is already running on.
 - **The leaf keeps its type.** A number lands on a `REAL` member as a REAL
   and on a `DINT` member as an integer; a mismatch is
   `tag WEL15_SUP_015.START: want BOOL, got a number`, not a silent retype.
+- **An enumerated member takes its name** — `{"name": "Recipe.Mode",
+  "value": "Run"}`, any case, `Mode#Run` qualified, or the member's integer —
+  and stores the named value, exactly as a write of a whole enumerated tag
+  does. A name that is no member is a `400` that lists them
+  (`tag Recipe.Mode: "Stop" is not a member of Mode (Idle, Run, Fault)`).
+- **An array element is `[n]`**, counted from the array's declared lower
+  bound: `Recipe.Steps[2].Mode`, `Line[0].Speed`. An index outside the bounds
+  is a `400` that gives them. A list `value` merges onto an array element by
+  element (`{"Steps": [{"Mode": "Run"}]}` sets the first step's mode).
 - **The role rule is the root tag's**, because the store holds whole tags. A
   member of a driver-owned `input` is refused — the driver replaces the whole
   value before the next scan, so the edit could not survive one cycle.
@@ -238,8 +247,9 @@ plant is already running on.
 - **`GET /api/meta`** reports `"memberWrites": true`, so an HMI can tell a
   controller that resolves member paths from an older one that swallowed them.
 
-The same dotted paths work everywhere else a tag is addressed: a test
-manifest's `given:`/`expect:`, the built-in dashboard's tag table (expand a
+The same dotted (and indexed) paths work everywhere else a tag is
+addressed: a test manifest's `given:`/`expect:`, a force, the built-in
+dashboard's tag table (expand a
 writable struct tag and each leaf is editable), and the HMI kit's
 `rt.writeTag('WEL15_SUP_015.START', true)`, which resolves to `null` on
 success or the controller's reason when it refuses.

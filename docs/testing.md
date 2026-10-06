@@ -147,6 +147,14 @@ onto a single copy of that tag's current value and is written once, so
 `{ P101.Running: true, P101.Speed: 12.5 }` sets both, regardless of key
 order — a map's keys are otherwise unordered.
 
+An array element is `[n]` from the array's declared lower bound —
+`Recipe.Steps[2].Mode: Run` in `given:` and `expect:` alike. In a flow
+mapping (`{ … }`) YAML reads `[` as a list, so quote an indexed key there:
+`{ "Recipe.Steps[2].Mode": Run }`; a block mapping needs no quotes. A member
+of an [enumeration](functions.md#enumerations) takes its name (or integer) at
+any depth, the same as a whole enumerated tag, and a name that is no member
+fails the test with the members listed.
+
 **Tests never open a socket.** Whatever `driver:` says — including `eip` —
 the test harness substitutes a stub, so a project bound to real hardware
 is fully testable on a laptop with nothing on the network.
