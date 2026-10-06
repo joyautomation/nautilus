@@ -31,6 +31,12 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Added
 
+- **Create Project… asks for the program language.** After a Minimal or
+  SDK template the command offers Structured Text, Ladder, Function Block
+  Diagram or Sequential Function Chart and passes `naut new --language`, so
+  a ladder programmer's first project opens as `program.ld` without a
+  terminal. The Get Started walkthrough's step is the same command (#221).
+
 - **Signature help: a call's parameters while you type it.** Typing `(`
   after a function or a function block instance opens the parameter-hints
   widget with the callee's signature, and `,` moves the highlight on —

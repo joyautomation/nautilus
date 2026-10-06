@@ -63,6 +63,10 @@ export default defineConfig({
           autogenerate: { directory: 'languages' },
         },
         {
+          label: 'Coming from…',
+          autogenerate: { directory: 'coming-from' },
+        },
+        {
           label: 'Guides',
           autogenerate: { directory: 'guides' },
         },

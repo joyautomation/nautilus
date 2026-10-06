@@ -32,7 +32,7 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 156 rows. **0 rows have no coverage at all** (no webview test,
+Totals: 157 rows. **0 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
@@ -43,7 +43,7 @@ no rig verb, no smoke check); per section below.
 | SFC `?` | 22 | 0 |
 | Mimic `?` | 18 | 0 |
 | Component `?` | 8 | 0 |
-| Other claims | 42 | 0 |
+| Other claims | 43 | 0 |
 
 ## Commands (package.json `contributes.commands`)
 
@@ -234,11 +234,12 @@ no rig verb, no smoke check); per section below.
 | X39 | Mimic | Live canvas animates bound props from the controller | README HMI mimic editor | — | — | 13 |
 | X40 | Extension | Signature help while typing a call: parameters with types, FB inputs and outputs (=>), the active one highlighted by comma position or named pin | README Language intelligence | — | — | 14 |
 | X42 | Extension | Find all references (Shift+F12): a tag across every program and the manifest, a local only in its POU | README Language intelligence | — | — | 14 |
+| X50 | Extension | Create Project… asks for the program language (ST / Ladder / FBD / SFC) after Minimal or SDK and passes `naut new --language`; choosing Ladder gives a program.ld that checks clean and opens in the ladder diagram | CHANGELOG Unreleased (#221) | newProjectLogic.test.ts: newProjectArgs passes --language | — | 17 |
 | X41 | Extension | Outline view, breadcrumbs and Go to Symbol in Editor list POUs, VAR sections and declarations, FBD statements, ladder rungs, SFC steps / transitions / actions (naut lsp documentSymbol) | README Language intelligence | — | — | 14 (.st, .ld, .sfc; not .fbd) |
 
 ## Count of rows with no coverage at all
 
-**0 of 156.** Every row has at least one layer of coverage: a webview test, a
+**0 of 157.** Every row has at least one layer of coverage: a webview test, a
 rig verb, or a smoke check. Some rows are covered only in part, and the cell
 says which part:
 

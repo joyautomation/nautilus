@@ -62,11 +62,17 @@ qi_row_js() { echo "[...document.querySelectorAll('.quick-input-widget .quick-in
 TOASTS='[...document.querySelectorAll(".notification-list-item")].map(n => n.textContent.trim())'
 
 # ════ C25: Create Project ═════════════════════════════════════════════════
-# create_flow <label> <parent dir> <name> — from an open folder picker
-# ("Create project here") to the window reopened on <parent>/<name>. One
-# PASS/FAIL per step; status 1 at the first step that does not happen.
+# create_flow <label> <parent dir> <name> [lang: st|ld|fbd|sfc] — from an open
+# folder picker ("Create project here") to the window reopened on
+# <parent>/<name>. One PASS/FAIL per step; status 1 at the first step that
+# does not happen. After Minimal the program-language quick pick (X50, #221)
+# asks; default Structured Text.
 create_flow() {
-  local lbl=$1 parent=$2 name=$3 png t rows i
+  local lbl=$1 parent=$2 name=$3 lang=${4:-st} png t rows i llabel
+  case $lang in
+    st) llabel="Structured Text" ;; ld) llabel="Ladder Diagram" ;;
+    fbd) llabel="Function Block Diagram" ;; sfc) llabel="Sequential Function Chart" ;;
+  esac
   png=$(shot "$lbl-1-folder")
   pass "$lbl: parent-folder picker up (\"Create project here\", on $parent)" "$png"
   pg_click "$(btn_js 'Create project here')" 1.2 || { fail "$lbl: could not click \"Create project here\"" "$png"; return 1; }
@@ -88,6 +94,16 @@ create_flow() {
   fi
   pg_click "$(qi_row_js Minimal)" 1.5 || { fail "$lbl: could not click the Minimal row" "$png"; return 1; }
 
+  wait_pg "($QI_TITLE || '').includes('program language')" 10 || true
+  rows=$(qi_rows); t=$(qi_title)
+  png=$(shot "$lbl-3b-language")
+  if [[ $t == *"program language"* && $rows == "Structured Text"* && $rows == *"Ladder Diagram"* && $rows == *"Function Block Diagram"* && $rows == *"Sequential Function Chart"* ]]; then
+    pass "X50: $lbl: program-language quick pick after the template — $rows" "$png"
+  else
+    fail "X50: $lbl: no program-language quick pick after Minimal (title '$t'; rows: $rows)" "$png"; return 1
+  fi
+  pg_click "$(qi_row_js "$llabel")" 1.5 || { fail "$lbl: could not click the $llabel row" "$png"; return 1; }
+
   # naut new runs under a progress toast, then "created <name>/" with
   # Open in New Window / Open Here.
   wait_pg "$(btn_js 'Open Here')" 30 || true
@@ -99,8 +115,8 @@ create_flow() {
   fi
   [[ -f $parent/$name/nautilus.yaml ]] && pass "$lbl: $parent/$name/nautilus.yaml exists" \
     || { fail "$lbl: no $parent/$name/nautilus.yaml (ls: $(ls "$parent/$name" 2>&1 | tr '\n' ' '))"; return 1; }
-  if [[ -f $parent/$name/program.st && ! -e $parent/$name/sim.st ]] && grep -q '^name: '"$name" "$parent/$name/nautilus.yaml"; then
-    pass "$lbl: Minimal template (program.st, no Demo sim.st; manifest name: $name)"
+  if [[ -f $parent/$name/program.$lang && ! -e $parent/$name/sim.st ]] && grep -q '^name: '"$name" "$parent/$name/nautilus.yaml"; then
+    pass "X50: $lbl: Minimal template in $llabel (program.$lang, no Demo sim.st; manifest name: $name)"
   else
     fail "$lbl: not the Minimal template: $(ls "$parent/$name" | tr '\n' ' ')"
   fi
@@ -119,7 +135,7 @@ create_flow() {
 
 picker_up() { pg_true "$(btn_js 'Create project here')"; }
 
-# ── from the palette ─────────────────────────────────────────────────────
+# ── from the palette (Structured Text) ─────────────────────────────────────────────────────
 PARENT=$HOME/c25-parent
 rm -rf "$PARENT" "$HOME/c25-walk"; mkdir -p "$PARENT" "$HOME/c25-walk"
 EXTRA_SETTINGS='"files.simpleDialog.enable": true' smoke_open "$PARENT"
@@ -325,5 +341,39 @@ if [[ -n $l ]] && pg_click "$LENS_A" 1.5; then
   fi
 elif [[ -n $l ]]; then
   fail "X21: could not click the CodeLens"
+fi
+true
+
+# ════ X50: Create Project… → Ladder ═══════════════════════════════════════
+# The language pick (#221): choose Ladder Diagram, so the first project is a
+# program.ld that checks clean and opens in the ladder diagram editor.
+LD_PARENT=$HOME/x50-parent
+rm -rf "$LD_PARENT"; mkdir -p "$LD_PARENT"
+EXTRA_SETTINGS='"files.simpleDialog.enable": true' smoke_open "$LD_PARENT"
+key Escape; vs_cmd "Notifications: Clear All Notifications" 1
+up=
+for attempt in 1 2 3; do
+  vs_cmd "nautilus: Create Project" 2
+  if wait_pg "$(btn_js 'Create project here')" 10; then up=$attempt; break; fi
+  key Escape; vs_cmd "Notifications: Clear All Notifications" 1; vs_cmd "View: Close All Editors" 1
+done
+if [[ -z $up ]]; then
+  fail "X50: \"nautilus: Create Project…\" never opened the folder picker (Ladder flow)"
+else
+  create_flow ladder "$LD_PARENT" smoke-ld ld || true
+  # The window reopened on the project: program.ld opens in the ladder diagram.
+  key Escape; vs_cmd "Notifications: Clear All Notifications" 1
+  [[ -f $LD_PARENT/smoke-ld/program.ld ]] && ! [[ -e $LD_PARENT/smoke-ld/program.st ]] \
+    && pass "X50: the Ladder project has program.ld and no program.st" \
+    || fail "X50: Ladder project files: $(ls "$LD_PARENT/smoke-ld" | tr '\n' ' ')"
+  open_file program.ld 5
+  vs_cmd "nautilus: Open as Diagram Editor" 7
+  kind=$(editor_kind)
+  png=$(shot x50-ladder-diagram)
+  if [[ $kind == "diagram program.ld" ]]; then
+    pass "X50: program.ld opens in the Ladder diagram editor (tab program.ld, webview, no text editor)" "$png"
+  else
+    fail "X50: program.ld opened as '$kind' (want diagram; page: $(pg "$KIND_JS"))" "$png"
+  fi
 fi
 true
