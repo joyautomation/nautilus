@@ -402,14 +402,17 @@ row 05-library-error-once PASS b05_liberr
 
 # ── 06 main.fbd: a blank file; the tag table is its declaration ──────────────
 # TIA: a tag from the PLC tag table is usable in any block as it is. So it
-# is here (#210): the blank file is initialized and nothing is declared —
-# before #210 this was 15 palette gestures, one VAR_EXTERNAL per tag. (The
-# loop below still declares any VAR_EXTERNAL the reference might carry.)
+# is here (#210): the blank file is initialized and no tag is declared —
+# before #210 this was 15 palette gestures, one VAR_EXTERNAL per tag. The
+# one declaration left is MainDtS, the scan time (OB1's cycle time in TIA):
+# it is the task's dt-tag, which the manifest only names at beat 12, so the
+# program states it itself (VAR_EXTERNAL stays legal).
 : >"$PROJ/main.fbd"
 row 06-open-main-fbd PASS ed_open_diagram main.fbd
 b06_init() {
   click_button initialize || return 1
-  wait_for 8 grep -q '^PROGRAM Main' "$PROJ/main.fbd" || { echo "initialize wrote no PROGRAM" >&2; return 1; }
+  sleep 1
+  assert_file_contains "$G_FILE" '^PROGRAM Main'
 }
 row 06-initialize PASS b06_init || { printf 'PROGRAM Main\nFBD\nEND_FBD\nEND_PROGRAM\n' >"$PROJ/main.fbd"; note_row FALLBACK "skeleton written by text"; }
 while read -r -u 3 name typ; do

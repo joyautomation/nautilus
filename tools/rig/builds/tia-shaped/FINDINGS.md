@@ -35,7 +35,7 @@ labelled `ux:<kind>`, `editor:fbd|ext`, `parity:tia`, titled
 | 16 | bug | wired tag chips keep the ghost's 40,40 pin and stack | OPEN #81 (commented) |
 | 17 | papercut | the `(* @layout *)` block lands mid-body | FIXED #208 (PR #236) |
 | 18 | papercut | a blank `.fbd` seeds `PROGRAM main` | FIXED #209 (PR #236) |
-| 19 | gap | every tag re-declared per program, one palette gesture each | FIXED #210 (PR #243: manifest tags in scope; the 15 `06-declare-*` rows are gone, `06-initialize` writes the skeleton) |
+| 19 | gap | every tag re-declared per program, one palette gesture each | FIXED #210 (PR #243: manifest tags in scope; 15 `06-declare-*` rows became one — MainDtS, the dt-tag the manifest names only at beat 12 — and `06-initialize` writes the skeleton) |
 | 20 | gap | no force | FIXED #211 (PR #234: Force… / F badges / status bar; row 13 now PASS) |
 
 20 findings: 4 bugs, 6 papercuts, 10 gaps. 16 new issues; 3 are covered by

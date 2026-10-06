@@ -1,4 +1,7 @@
 PROGRAM Main
+VAR_EXTERNAL
+    MainDtS : REAL;
+END_VAR
 FBD
   NETWORK 'FT-101 raw analog to L/min (FC105-style scaling)'
   ft = ScaleAnalog(FT101_Raw, 0.0, 120.0)
