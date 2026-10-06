@@ -122,6 +122,10 @@ func (u *GlobalUse) stmt(s Stmt) {
 			for _, v := range c.Values {
 				u.expr(v)
 			}
+			for _, r := range c.Ranges {
+				u.expr(r.Lo)
+				u.expr(r.Hi)
+			}
 			u.stmts(c.Body)
 		}
 		u.stmts(n.Else)
@@ -152,6 +156,10 @@ func (u *GlobalUse) target(l LValue) {
 		u.expr(n.Array)
 		u.expr(n.Index)
 		u.markWrite(n.Array)
+	case *BitRef:
+		// Setting one bit reads the word and writes it back.
+		u.expr(n.Object)
+		u.markWrite(n.Object)
 	}
 }
 
@@ -166,6 +174,8 @@ func (u *GlobalUse) markWrite(e Expr) {
 		u.markWrite(n.Object)
 	case *IndexRef:
 		u.markWrite(n.Array)
+	case *BitRef:
+		u.markWrite(n.Object)
 	}
 }
 
@@ -182,6 +192,8 @@ func (u *GlobalUse) expr(e Expr) {
 		u.expr(n.Array)
 		u.expr(n.Index)
 	case *MemberRef:
+		u.expr(n.Object)
+	case *BitRef:
 		u.expr(n.Object)
 	case *Call:
 		for _, a := range n.Args {

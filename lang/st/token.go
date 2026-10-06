@@ -106,6 +106,7 @@ const (
 	TokenDot          // .
 	TokenDotDot       // ..
 	TokenHash         // #
+	TokenPartial      // %X3, %B1, %W0, %D0, %L0 — an IEC partial access after '.'
 
 	// tokenKindCount is one past the last token kind: the length the
 	// tokenNames table must cover (TestTokenNamesCoverEveryKind).
@@ -205,6 +206,7 @@ var tokenNames = [...]string{
 	TokenDot:          "'.'",
 	TokenDotDot:       "'..'",
 	TokenHash:         "'#'",
+	TokenPartial:      "a partial access (%X3)",
 }
 
 // String names the token kind for a diagnostic ("':='", "END_VAR", "an

@@ -7,7 +7,7 @@ type Value struct {
 	I    int64   // TypeInt, TypeTime, TypeBool(fallback) encoded bits if needed
 	F    float64 // TypeReal
 	B    bool    // TypeBool
-	S    string  // TypeString
+	S    string  // TypeString; on a TypeInt, an enumeration member's name (see EnumDef)
 	Arr  []Value // TypeArray
 	Fld  []Value // TypeStruct — parallel to StructDef.Fields
 	// Struct names the fields of a TypeStruct value. The VM addresses fields
@@ -91,6 +91,9 @@ func Zero(t *Type) Value {
 	case TypeBool:
 		return Value{Kind: TypeBool}
 	case TypeInt:
+		if t.Enum != nil {
+			return t.Enum.Val(t.Enum.Default)
+		}
 		return Value{Kind: TypeInt}
 	case TypeReal:
 		return Value{Kind: TypeReal}

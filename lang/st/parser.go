@@ -121,6 +121,19 @@ func (p *Parser) parseProgram() (*Program, error) {
 			}
 			prog.FuncDecls = append(prog.FuncDecls, fn)
 			continue
+		case TokenVarGlobal:
+			// A GVL of constants (#176): VAR_GLOBAL CONSTANT at file level
+			// declares project-wide constants, not tags. A plain VAR_GLOBAL
+			// here is left to the body loop below, as before.
+			if !p.globalConstAhead() {
+				break
+			}
+			vb, err := p.parseVarBlock()
+			if err != nil {
+				return nil, err
+			}
+			prog.GlobalConsts = append(prog.GlobalConsts, *vb)
+			continue
 		case TokenProgram:
 			if prog.TopKeyword == "" {
 				prog.TopKeyword = "PROGRAM"
@@ -158,6 +171,14 @@ func (p *Parser) parseProgram() (*Program, error) {
 				return nil, err
 			}
 			prog.FuncDecls = append(prog.FuncDecls, fn)
+		case !nameSet && p.peek().Type == TokenVarGlobal && p.globalConstAhead():
+			// A library file: its VAR_GLOBAL CONSTANT blocks are file-level
+			// constants wherever they sit among its declarations.
+			vb, err := p.parseVarBlock()
+			if err != nil {
+				return nil, err
+			}
+			prog.GlobalConsts = append(prog.GlobalConsts, *vb)
 		case p.isVarBlockStart():
 			vb, err := p.parseVarBlock()
 			if err != nil {
@@ -169,9 +190,7 @@ func (p *Parser) parseProgram() (*Program, error) {
 			if err != nil {
 				return nil, err
 			}
-			if stmt != nil {
-				prog.Statements = append(prog.Statements, stmt)
-			}
+			prog.Statements = appendStmt(prog.Statements, stmt)
 		}
 	}
 	if nameSet {
@@ -214,9 +233,7 @@ func (p *Parser) parseFunctionBlock() (*FunctionBlockDecl, error) {
 			if err != nil {
 				return nil, fmt.Errorf("FUNCTION_BLOCK %s: %w", fb.Name, err)
 			}
-			if stmt != nil {
-				fb.Statements = append(fb.Statements, stmt)
-			}
+			fb.Statements = appendStmt(fb.Statements, stmt)
 		}
 	}
 	if _, err := p.expect(TokenEndFunctionBlock); err != nil {
@@ -264,9 +281,7 @@ func (p *Parser) parseFunctionDecl() (*FunctionDecl, error) {
 			if err != nil {
 				return nil, fmt.Errorf("FUNCTION %s: %w", fn.Name, err)
 			}
-			if stmt != nil {
-				fn.Statements = append(fn.Statements, stmt)
-			}
+			fn.Statements = appendStmt(fn.Statements, stmt)
 		}
 	}
 	if _, err := p.expect(TokenEndFunction); err != nil {
@@ -290,12 +305,34 @@ func (p *Parser) parseTypeBlock(prog *Program) error {
 		if err != nil {
 			return fmt.Errorf("type decl %q: %w", nameTok.Literal, err)
 		}
+		var init Expression
+		if p.match(TokenAssign) {
+			if init, err = p.parseExpression(); err != nil {
+				return fmt.Errorf("type decl %q initial value: %w", nameTok.Literal, err)
+			}
+		}
 		p.match(TokenSemicolon)
-		prog.TypeDecls = append(prog.TypeDecls, TypeDecl{Name: nameTok.Literal, Type: typ, Pos: tokPos(nameTok)})
+		prog.TypeDecls = append(prog.TypeDecls, TypeDecl{Name: nameTok.Literal, Type: typ, Initial: init, Pos: tokPos(nameTok)})
 	}
 	p.match(TokenEndType)
 	p.match(TokenSemicolon)
 	return nil
+}
+
+// globalConstAhead reports a VAR_GLOBAL block whose qualifiers (RETAIN /
+// CONSTANT, in either order) include CONSTANT. The current token is
+// VAR_GLOBAL.
+func (p *Parser) globalConstAhead() bool {
+	for i := 1; ; i++ {
+		switch p.peekAt(i).Type {
+		case TokenConstant:
+			return true
+		case TokenRetain:
+			continue
+		default:
+			return false
+		}
+	}
 }
 
 func (p *Parser) isVarBlockStart() bool {
@@ -424,6 +461,8 @@ func (p *Parser) parseTypeExpr() (TypeExpr, error) {
 		return p.parseArrayType()
 	case TokenStruct:
 		return p.parseStructType()
+	case TokenLParen:
+		return p.parseEnumType()
 	}
 	// A scalar or named type: consume a single identifier-like token.
 	tok := p.advance()
@@ -433,6 +472,43 @@ func (p *Parser) parseTypeExpr() (TypeExpr, error) {
 	}
 	// Otherwise treat as a user-defined type (UDT or FB instance type).
 	return &NamedType{Name: tok.Literal}, nil
+}
+
+// parseEnumType parses an enumerated type body (#238):
+//
+//	( Name [:= value] {, Name [:= value]} ) [BaseType]
+//
+// The optional base type is the Codesys spelling `(A, B) DINT`.
+func (p *Parser) parseEnumType() (TypeExpr, error) {
+	open := p.advance() // (
+	et := &EnumType{}
+	for {
+		nameTok, err := p.expect(TokenIdent)
+		if err != nil {
+			return nil, fmt.Errorf("enumeration: %w", err)
+		}
+		m := EnumMemberDecl{Name: nameTok.Literal, Pos: tokPos(nameTok)}
+		if p.match(TokenAssign) {
+			if m.Value, err = p.parseExpression(); err != nil {
+				return nil, fmt.Errorf("enumeration value %s: %w", nameTok.Literal, err)
+			}
+		}
+		et.Members = append(et.Members, m)
+		if !p.match(TokenComma) {
+			break
+		}
+	}
+	if _, err := p.expect(TokenRParen); err != nil {
+		return nil, fmt.Errorf("enumeration opened on line %d: %w", open.Line, err)
+	}
+	// Codesys: `(A, B) DINT` names the base integer type.
+	if t := p.peek(); t.Type != TokenSemicolon && t.Type != TokenAssign && t.Type != TokenEndType {
+		if IsScalarTypeName(strings.ToUpper(t.Literal)) && t.Line == p.tokens[p.pos-1].Line {
+			p.advance()
+			et.Base = strings.ToUpper(t.Literal)
+		}
+	}
+	return et, nil
 }
 
 func (p *Parser) parseArrayType() (TypeExpr, error) {
@@ -526,6 +602,12 @@ func (p *Parser) parseStatement() (Statement, error) {
 		p.advance()
 		return nil, nil
 	case TokenIdent:
+		if p.atRegionStart() {
+			return p.parseRegion()
+		}
+		if p.atEndRegion() {
+			return nil, fmt.Errorf("line %d: END_REGION without a matching REGION", p.peek().Line)
+		}
 		return p.parseAssignOrCall()
 	case TokenHash:
 		// `#state := 10;` — this used to fall through to the skip below,
@@ -534,6 +616,84 @@ func (p *Parser) parseStatement() (Statement, error) {
 	default:
 		p.advance()
 		return nil, nil
+	}
+}
+
+// regionBlock is what parseRegion returns: the statements of a REGION, to
+// be spliced into the enclosing list (appendStmt). REGION … END_REGION is
+// a grouping for folding and the outline (#202); it does not open a scope
+// and leaves no node behind, so nothing downstream of the parser sees it.
+type regionBlock struct{ stmts []Statement }
+
+func (*regionBlock) nodeType() string { return "Region" }
+func (*regionBlock) stmtNode()        {}
+
+// appendStmt appends a parsed statement to a list, splicing a REGION's
+// statements in place and dropping the nil of an empty statement.
+func appendStmt(list []Statement, s Statement) []Statement {
+	switch n := s.(type) {
+	case nil:
+		return list
+	case *regionBlock:
+		return append(list, n.stmts...)
+	}
+	return append(list, s)
+}
+
+// atRegionStart reports `REGION [name...]` at a statement start. REGION is
+// not reserved (a variable may be called Region): it opens a region only
+// when what follows could not continue an assignment or call.
+func (p *Parser) atRegionStart() bool {
+	t := p.peek()
+	if t.Type != TokenIdent || !strings.EqualFold(t.Literal, "REGION") {
+		return false
+	}
+	switch p.peekAt(1).Type {
+	case TokenAssign, TokenDot, TokenLBracket, TokenLParen, TokenSemicolon, TokenOutputAssign, TokenColon, TokenComma:
+		return false
+	}
+	return true
+}
+
+func (p *Parser) atEndRegion() bool {
+	t := p.peek()
+	return t.Type == TokenIdent && strings.EqualFold(t.Literal, "END_REGION")
+}
+
+// parseRegion parses REGION name … END_REGION. The name is the rest of the
+// REGION line (TIA allows spaces in it). Regions nest.
+func (p *Parser) parseRegion() (Statement, error) {
+	open := p.advance() // REGION
+	var words []string
+	for t := p.peek(); t.Type != TokenEOF && t.Line == open.Line; t = p.peek() {
+		if t.Type == TokenIdent && strings.EqualFold(t.Literal, "END_REGION") {
+			break
+		}
+		words = append(words, t.Literal)
+		p.advance()
+	}
+	name := strings.Join(words, " ")
+	label := "REGION"
+	if name != "" {
+		label = "REGION " + name
+	}
+	rb := &regionBlock{}
+	for {
+		if p.atEndRegion() {
+			p.advance()
+			p.match(TokenSemicolon)
+			return rb, nil
+		}
+		switch p.peek().Type {
+		case TokenEOF, TokenEndIf, TokenElse, TokenElsif, TokenEndCase, TokenEndFor, TokenEndWhile,
+			TokenUntil, TokenEndRepeat, TokenEndProgram, TokenEndFunction, TokenEndFunctionBlock:
+			return nil, fmt.Errorf("line %d: %s (opened here) has no END_REGION before %s", open.Line, label, p.peek().describe())
+		}
+		stmt, err := p.parseStatement()
+		if err != nil {
+			return nil, err
+		}
+		rb.stmts = appendStmt(rb.stmts, stmt)
 	}
 }
 
@@ -792,17 +952,16 @@ func (p *Parser) parseCaseBody() ([]Statement, error) {
 		if err != nil {
 			return nil, err
 		}
-		if stmt != nil {
-			stmts = append(stmts, stmt)
-		}
+		stmts = appendStmt(stmts, stmt)
 	}
 }
 
 // looksLikeCaseLabel returns true if the upcoming tokens form
 // `<label>[, <label>]* :` where a label is a constant or a `<const>..<const>`
-// range. Case labels in ST are constant values, so an integer/typed literal
-// or negative number followed by `,`, `..`, or `:` unambiguously starts a
-// new clause.
+// range. Case labels in ST are constant values — a literal, or the NAME of
+// one (a VAR CONSTANT, a project constant, an enumeration member: #196) —
+// and no statement starts with a name followed by `:`, `,` or `..`, so
+// that shape unambiguously starts a new clause.
 func (p *Parser) looksLikeCaseLabel() bool {
 	// constAt reports whether a (possibly negated) constant starts at i and
 	// returns the index just past it.
@@ -811,7 +970,7 @@ func (p *Parser) looksLikeCaseLabel() bool {
 			i++
 		}
 		switch p.peekAt(i).Type {
-		case TokenNumber, TokenBasedNumber, TokenTypedLiteral, TokenTrue, TokenFalse, TokenString, TokenTimeLiteral:
+		case TokenNumber, TokenBasedNumber, TokenTypedLiteral, TokenTrue, TokenFalse, TokenString, TokenTimeLiteral, TokenIdent:
 			return i + 1, true
 		}
 		return i, false
@@ -854,9 +1013,7 @@ func (p *Parser) parseStatementBlock(terminators ...TokenType) ([]Statement, err
 		if err != nil {
 			return nil, err
 		}
-		if stmt != nil {
-			stmts = append(stmts, stmt)
-		}
+		stmts = appendStmt(stmts, stmt)
 	}
 	return stmts, nil
 }
@@ -1074,7 +1231,13 @@ func (p *Parser) continuePostfix(expr Expression) (Expression, error) {
 			// is an integer; here it is a member whose name is a number.
 			if p.peek().Type == TokenNumber {
 				bitTok := p.advance()
-				expr = &MemberExpr{Object: expr, Member: bitTok.Literal, Pos: nodePos(expr)}
+				expr = &MemberExpr{Object: expr, Member: bitTok.Literal, Pos: nodePos(expr), MemberPos: tokPos(bitTok)}
+				continue
+			}
+			// w.%X3, w.%B1, w.%W0, w.%D0: the IEC partial access (#222).
+			if p.peek().Type == TokenPartial {
+				partTok := p.advance()
+				expr = &MemberExpr{Object: expr, Member: partTok.Literal, Pos: nodePos(expr), MemberPos: tokPos(partTok)}
 				continue
 			}
 			memberTok, err := p.expect(TokenIdent)
@@ -1226,6 +1389,12 @@ func buildTypedLit(raw string, pos Pos) Expression {
 		return &TypedLit{TypeName: typeName, Inner: &TimeLit{Raw: payload, Pos: pos}, Pos: pos}
 	}
 
+	// Mode#Run: a qualified enumeration value (#238). The type is a user
+	// TYPE, so it is not an elementary type name, and the payload is a name.
+	if !IsScalarTypeName(typeName) && isIdentText(payload) {
+		return &TypedLit{TypeName: typeName, Inner: &IdentExpr{Name: payload, Pos: pos}, Pos: pos}
+	}
+
 	// Default: numeric literal. Detect real by presence of '.' or exponent.
 	if strings.ContainsAny(payload, ".eE") {
 		return &TypedLit{TypeName: typeName, Inner: &NumberLit{Value: payload, Base: 10, Pos: pos}, Pos: pos}
@@ -1240,4 +1409,17 @@ func nodePos(n Node) Pos {
 		return p.NodePos()
 	}
 	return Pos{}
+}
+
+// isIdentText reports whether s is spelled like an identifier.
+func isIdentText(s string) bool {
+	if s == "" || !isIdentStart(s[0]) {
+		return false
+	}
+	for i := 1; i < len(s); i++ {
+		if !isIdentPart(s[i]) {
+			return false
+		}
+	}
+	return true
 }

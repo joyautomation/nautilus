@@ -107,6 +107,8 @@ func (l *Lexer) lex() {
 			l.emit(TokenDot, ".", 1)
 		case ch == '#':
 			l.emit(TokenHash, "#", 1)
+		case ch == '%' && isPartialPrefix(l.peek(1)) && isDigit(l.peek(2)):
+			l.lexPartial()
 		case ch == '\'':
 			l.lexString()
 		case isDigit(ch):
@@ -277,12 +279,23 @@ func (l *Lexer) lexIdentOrKeyword() {
 				return
 			}
 		}
-		// Numeric / boolean typed literal: capture the payload until a delimiter.
+		// Numeric / boolean typed literal: capture the payload until a
+		// delimiter. A ".." ends it, so a CASE range of typed or enumeration
+		// literals (INT#1..INT#5, Mode#Idle..Mode#Run) lexes as a range.
 		pstart := l.pos
 		for l.pos < len(l.input) && isTypedLitChar(l.input[l.pos]) {
+			if l.input[l.pos] == '.' && l.peek(1) == '.' {
+				break
+			}
 			l.advance(1)
 		}
-		l.tokens = append(l.tokens, Token{Type: TokenTypedLiteral, Literal: upper + "#" + l.input[pstart:l.pos], Line: line, Col: col})
+		// An elementary type prefix is upper-cased (INT#5); any other is a
+		// user TYPE — an enumeration, Mode#Run — and keeps its spelling.
+		prefix := upper
+		if !IsScalarTypeName(upper) {
+			prefix = lit
+		}
+		l.tokens = append(l.tokens, Token{Type: TokenTypedLiteral, Literal: prefix + "#" + l.input[pstart:l.pos], Line: line, Col: col})
 		return
 	}
 
@@ -291,6 +304,28 @@ func (l *Lexer) lexIdentOrKeyword() {
 	} else {
 		l.tokens = append(l.tokens, Token{Type: TokenIdent, Literal: lit, Line: line, Col: col})
 	}
+}
+
+// lexPartial scans an IEC partial-access suffix: %X3 (a bit), %B1 (a
+// byte), %W0 (a word), %D0 (a double word), %L0. The size letter is
+// upper-cased in the literal.
+func (l *Lexer) lexPartial() {
+	line, col := l.line, l.col
+	start := l.pos
+	l.advance(2) // % and the size letter
+	for l.pos < len(l.input) && isDigit(l.input[l.pos]) {
+		l.advance(1)
+	}
+	lit := "%" + strings.ToUpper(l.input[start+1:start+2]) + l.input[start+2:l.pos]
+	l.tokens = append(l.tokens, Token{Type: TokenPartial, Literal: lit, Line: line, Col: col})
+}
+
+func isPartialPrefix(ch byte) bool {
+	switch ch {
+	case 'X', 'x', 'B', 'b', 'W', 'w', 'D', 'd', 'L', 'l':
+		return true
+	}
+	return false
 }
 
 func (l *Lexer) emit(tt TokenType, lit string, width int) {

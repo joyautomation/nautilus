@@ -49,6 +49,101 @@ type Type struct {
 	ArrLen     int        // Kind == TypeArray
 	ArrLoBound int        // Kind == TypeArray — IEC arrays may start at any integer
 	FB         *FBDef     // Kind == TypeFB
+
+	// Name is the declared elementary type when it is not the canonical
+	// one: every integer width collapses to TypeInt (int64), but a DINT is
+	// still a DINT in a diagnostic and has 32 bits to address (#222). Empty
+	// for the canonical singletons. Equal ignores it.
+	Name string
+	// Enum, on a TypeInt, makes this an enumerated type (#238): the value
+	// is the member's integer, and the type carries the member names. Two
+	// enum types are Equal only when they are the same declaration.
+	Enum *EnumDef
+}
+
+// EnumDef is an IEC enumerated data type: TYPE Mode : (Idle, Run := 10,
+// Fault) := Idle; END_TYPE. A value of the type is a TypeInt Value whose I
+// is the member's integer and whose S is the member's name — the name rides
+// with the value so the tag store, the HMI JSON and an editor's live values
+// can show it with no type information of their own; the VM, Sparkplug and
+// Modbus use only I.
+type EnumDef struct {
+	Name    string
+	Members []EnumMember // declaration order
+	// Default is the initial member's integer: the type's `:= Idle`, or the
+	// first member when none is given.
+	Default int64
+}
+
+// EnumMember is one named value of an enumerated type.
+type EnumMember struct {
+	Name  string
+	Value int64
+}
+
+// Member finds a member by name, case-insensitively.
+func (d *EnumDef) Member(name string) (EnumMember, bool) {
+	if d == nil {
+		return EnumMember{}, false
+	}
+	for _, m := range d.Members {
+		if SameName(m.Name, name) {
+			return m, true
+		}
+	}
+	return EnumMember{}, false
+}
+
+// NameOf is the member name for an integer, "" when no member has it (an
+// out-of-range value converted in with TO_<Enum>).
+func (d *EnumDef) NameOf(v int64) string {
+	if d == nil {
+		return ""
+	}
+	for _, m := range d.Members {
+		if m.Value == v {
+			return m.Name
+		}
+	}
+	return ""
+}
+
+// Val is the Value of the member with integer v, named.
+func (d *EnumDef) Val(v int64) Value {
+	return Value{Kind: TypeInt, I: v, S: d.NameOf(v)}
+}
+
+// intTypes are the declared integer types, one singleton each, so a
+// diagnostic names DINT or WORD rather than the canonical INT.
+var intTypes = map[string]*Type{}
+
+func init() {
+	for _, n := range []string{"SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "ULINT", "BYTE", "WORD", "DWORD", "LWORD"} {
+		intTypes[n] = &Type{Kind: TypeInt, Name: n}
+	}
+}
+
+// IntNamed is the integer type declared as name (DINT, WORD, ...); nil
+// when name is not an IEC integer type. Every one is TypeInt at run time.
+func IntNamed(name string) *Type { return intTypes[name] }
+
+// BitWidth is the number of addressable bits of an integer type: 8 for
+// SINT/USINT/BYTE, 16 for INT/UINT/WORD, 32 for DINT/UDINT/DWORD, 64 for
+// the L-types and for the canonical (undeclared-width) INT of an
+// expression result. 0 for a type that is not an integer.
+func (t *Type) BitWidth() int {
+	if t == nil || t.Kind != TypeInt || t.Enum != nil {
+		return 0
+	}
+	switch t.Name {
+	case "SINT", "USINT", "BYTE":
+		return 8
+	case "INT", "UINT", "WORD":
+		return 16
+	case "DINT", "UDINT", "DWORD":
+		return 32
+	}
+	return 64
 }
 
 // Singleton scalar types. Use these instead of allocating new *Type for every reference.
@@ -124,7 +219,14 @@ type FBSlot struct {
 	// online edit rebinding an instance (MigrateFrame) never carries the
 	// old value over the new declaration.
 	Constant bool
+	// Temp marks a VAR_TEMP slot: reset at the start of every call (the
+	// body's Program.Temps does it) and never carried by MigrateFrame.
+	Temp bool
 }
+
+// SlotInitial is s's starting value: Init when declared, else the type's
+// zero.
+func SlotInitial(s FBSlot) Value { return s.initial() }
 
 // initial is the slot's starting value: Init when declared, else the
 // type's zero.
@@ -235,15 +337,27 @@ func (t *Type) String() string {
 		}
 		return "ARRAY OF " + elem
 	}
+	if t.Enum != nil {
+		return t.Enum.Name
+	}
+	if t.Name != "" {
+		return t.Name
+	}
 	return t.Kind.String()
 }
 
-// IsNumeric reports whether t permits arithmetic operators.
+// IsNumeric reports whether t permits arithmetic operators. An enumerated
+// type does not: its values are names, compared but never computed with.
 func (t *Type) IsNumeric() bool {
-	if t == nil {
+	if t == nil || t.Enum != nil {
 		return false
 	}
 	return t.Kind == TypeInt || t.Kind == TypeReal || t.Kind == TypeTime
+}
+
+// IsInteger reports a plain integer type (any width, not an enumeration).
+func (t *Type) IsInteger() bool {
+	return t != nil && t.Kind == TypeInt && t.Enum == nil
 }
 
 // Equal reports structural equality of two types.
@@ -264,6 +378,8 @@ func (t *Type) Equal(other *Type) bool {
 		return t.ArrLen == other.ArrLen && t.ArrLoBound == other.ArrLoBound && t.Elem.Equal(other.Elem)
 	case TypeFB:
 		return t.FB == other.FB
+	case TypeInt:
+		return t.Enum == other.Enum
 	}
 	return true
 }

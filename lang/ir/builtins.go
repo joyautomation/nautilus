@@ -247,3 +247,7 @@ func compareValues(a, b Value) int {
 	}
 	return 0
 }
+
+// CompareValues is compareValues for the lowering pass (CASE label
+// overlap): -1/0/+1, INT and REAL compared through float promotion.
+func CompareValues(a, b Value) int { return compareValues(a, b) }
