@@ -1,0 +1,20 @@
+name: conformance-edges
+tasks:
+  - program: Main.ld
+    scan: 10ms
+tags:
+  - { name: Btn, role: input, init: false }
+  - { name: Arm, role: input, init: false }
+  - { name: Clear, role: input, init: false }
+  - { name: RoseOnce, role: state, init: false }
+  - { name: FellOnce, role: state, init: false }
+  - { name: ArmedRose, role: state, init: false }
+target:
+  logix:
+    controller: DemoLine
+    processor: 1756-L85E
+    revision: "38.11"
+    comm-path: AB_ETH-1\100.93.56.45\Backplane\0
+    host: 100.93.56.45
+    side:
+      heartbeat: Nautilus_Scan

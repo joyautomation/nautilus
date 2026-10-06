@@ -707,3 +707,129 @@ END_PROGRAM`
 		t.Fatalf("lower: %v", err)
 	}
 }
+
+// Word.3 is bit 3 of an integer, readable as a BOOL and assignable: the
+// Logix spelling of IEC's Word.%X3. AND/OR on integers are bitwise.
+func TestBitAccess(t *testing.T) {
+	src := `PROGRAM P
+VAR
+    w : DINT := 5;
+    b : BOOL;
+    c : BOOL;
+    m : DINT;
+END_VAR
+b := w.0;
+c := w.1;
+w.1 := TRUE;
+w.0 := FALSE;
+m := w AND 16#6 OR 8;
+END_PROGRAM
+`
+	ast, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, err := Lower(ast)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := ir.NewFrame(prog)
+	if err := ir.Run(prog, frame, nil); err != nil {
+		t.Fatal(err)
+	}
+	get := func(name string) ir.Value {
+		for i, s := range prog.Slots {
+			if s.Name == name {
+				return frame.Slots[i]
+			}
+		}
+		t.Fatalf("no slot %s", name)
+		return ir.Value{}
+	}
+	if got := get("b"); !got.B {
+		t.Errorf("b = %v, want TRUE (bit 0 of 5)", got.B)
+	}
+	if got := get("c"); got.B {
+		t.Errorf("c = %v, want FALSE (bit 1 of 5)", got.B)
+	}
+	if got := get("w"); got.I != 6 {
+		t.Errorf("w = %d, want 6 (bit 1 set, bit 0 cleared)", got.I)
+	}
+	if got := get("m"); got.I != 14 {
+		t.Errorf("m = %d, want 14 (6 AND 6 OR 8)", got.I)
+	}
+	for _, bad := range []string{
+		"PROGRAM P VAR r : REAL; b : BOOL; END_VAR b := r.3; END_PROGRAM",
+		"PROGRAM P VAR w : DINT; b : BOOL; END_VAR b := w.64; END_PROGRAM",
+		"PROGRAM P VAR w : DINT; b : BOOL; END_VAR b := (w + 1).3; END_PROGRAM",
+	} {
+		ast, err := Parse(bad)
+		if err != nil {
+			continue
+		}
+		if _, err := Lower(ast); err == nil {
+			t.Errorf("no error for %q", bad)
+		}
+	}
+}
+
+// An array of function-block instances: declared once, each element its
+// own timer, called by index, read by index.
+func TestFBInstanceArray(t *testing.T) {
+	src := `PROGRAM P
+VAR
+    Timers : ARRAY [0..2] OF TON;
+    Counts : ARRAY [1..2] OF CTU;
+    a : BOOL := TRUE;
+    q0 : BOOL;
+    q1 : BOOL;
+    n : DINT;
+END_VAR
+Timers[0](IN := a, PT := T#0S);
+Timers[1](IN := FALSE, PT := T#5S);
+Counts[2](CU := a, PV := 1);
+q0 := Timers[0].Q;
+q1 := Timers[1].Q;
+n := Counts[2].CV;
+END_PROGRAM
+`
+	ast, err := Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, err := Lower(ast)
+	if err != nil {
+		t.Fatal(err)
+	}
+	frame := ir.NewFrame(prog)
+	if err := ir.Run(prog, frame, newStubHost()); err != nil {
+		t.Fatal(err)
+	}
+	get := func(name string) ir.Value {
+		for i, s := range prog.Slots {
+			if s.Name == name {
+				return frame.Slots[i]
+			}
+		}
+		t.Fatalf("no slot %s", name)
+		return ir.Value{}
+	}
+	if !get("q0").B || get("q1").B {
+		t.Errorf("q0 %v q1 %v: element 0 (PT 0, IN TRUE) is done, element 1 is not", get("q0").B, get("q1").B)
+	}
+	if get("n").I != 1 {
+		t.Errorf("Counts[2].CV = %d, want 1", get("n").I)
+	}
+	for _, bad := range []string{
+		"PROGRAM P VAR Timers : ARRAY [0..2] OF TON; n : DINT; END_VAR n(IN := TRUE); END_PROGRAM",
+		"PROGRAM P VAR Nums : ARRAY [0..2] OF DINT; END_VAR Nums[1](IN := TRUE); END_PROGRAM",
+	} {
+		ast, err := Parse(bad)
+		if err != nil {
+			continue
+		}
+		if _, err := Lower(ast); err == nil {
+			t.Errorf("no error for %q", bad)
+		}
+	}
+}

@@ -1,0 +1,34 @@
+# lift-station's MotorStarter block, as an Add-On Instruction: HOA
+# selection, fail-to-run supervision, lockout after three trips. Two
+# instances, as in the lift station.
+name: conformance-aoi
+tasks:
+  - program: Main.ld
+    scan: 10ms
+tags:
+  - { name: P101_Mode, role: input, init: 0 }
+  - { name: P101_Req, role: input, init: false }
+  - { name: P101_Running, role: input, init: false }
+  - { name: P101_Permissive, role: input, init: true }
+  - { name: P102_Mode, role: input, init: 0 }
+  - { name: P102_Req, role: input, init: false }
+  - { name: P102_Running, role: input, init: false }
+  - { name: P102_Permissive, role: input, init: true }
+  - { name: ResetFaults, role: input, init: false }
+  - { name: P101_RunCmd, role: output, init: false }
+  - { name: P101_InHand, role: output, init: false }
+  - { name: P101_FailToRun, role: output, init: false }
+  - { name: P101_LockedOut, role: output, init: false }
+  - { name: P102_RunCmd, role: output, init: false }
+  - { name: P102_InHand, role: output, init: false }
+  - { name: P102_FailToRun, role: output, init: false }
+  - { name: P102_LockedOut, role: output, init: false }
+target:
+  logix:
+    controller: DemoLine
+    processor: 1756-L85E
+    revision: "38.11"
+    comm-path: AB_ETH-1\100.93.56.45\Backplane\0
+    host: 100.93.56.45
+    side:
+      heartbeat: Nautilus_Scan

@@ -1,0 +1,31 @@
+# DemoLine as a nautilus project with a Logix deploy target: the fixture
+# `naut logix deploy`, `naut check` and `naut test` are tested against, and
+# the project the Echo demo deploys (docs/design/logix-authoring.md §8).
+#
+# The field tags are declared here, as in any nautilus project; the program
+# takes them VAR_EXTERNAL and the writer makes them controller-scope Logix
+# tags, seeds and descriptions included.
+name: demoline
+tasks:
+  - program: MainProgram.ld
+    scan: 100ms
+tags:
+  - { name: StartPB, role: input, init: false, desc: "P-101 start pushbutton, field-wired NO" }
+  - { name: StopPB, role: input, init: false, desc: "P-101 stop pushbutton, field-wired NC" }
+  - { name: LevelPct, role: input, init: 0.0, unit: "%", desc: "T-101 level, percent of span from LT-101" }
+  - { name: HiLevelSP, role: setpoint, init: 85.0, unit: "%", desc: "LAH-101 high-level alarm setpoint" }
+  - { name: RunCmd, role: output, init: false, desc: "P-101 run command to the VFD" }
+  - { name: HiLevelAlm, role: output, init: false, desc: "LAH-101 high-level alarm active" }
+target:
+  logix:
+    controller: DemoLine
+    processor: 1756-L85E
+    revision: "38.11"
+    # ECHO1's Echo controller, reached by logixd through FactoryTalk Linx
+    # and by live values over EtherNet/IP; both on the VM's Tailscale address.
+    comm-path: AB_ETH-1\100.93.56.45\Backplane\0
+    host: 100.93.56.45
+    # nautilus side code, in its own Logix program: the scan counter the
+    # live tests wait on for an exact `scans: n`.
+    side:
+      heartbeat: Nautilus_Scan

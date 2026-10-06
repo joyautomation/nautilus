@@ -1,0 +1,54 @@
+tests:
+  - name: series and parallel
+    steps:
+      - given: { A: true, B: false, C: false }
+        scans: 2
+        expect: { AndOut: false, OrOut: true, Both1: true, Both2: true }
+      - given: { B: true }
+        scans: 2
+        expect: { AndOut: true, OrOut: true }
+      - given: { C: true }
+        scans: 2
+        expect: { AndOut: true, OrOut: false }
+      - given: { A: false, B: false }
+        scans: 2
+        expect: { AndOut: false, OrOut: false, Both1: false, Both2: false }
+
+  - name: nested branches
+    steps:
+      - given: { A: true, B: false, C: false }
+        scans: 2
+        expect: { Nest: false }
+      - given: { C: true }
+        scans: 2
+        expect: { Nest: true }
+      - given: { A: false }
+        scans: 2
+        expect: { Nest: true }
+      - given: { C: false, B: true }
+        scans: 2
+        expect: { Nest: false }
+
+  - name: compares and a negated compare
+    steps:
+      - given: { X: 10.0, Y: 0 }
+        scans: 2
+        expect: { Cmp: false }
+      - given: { X: 10.5 }
+        scans: 2
+        expect: { Cmp: true }
+      - given: { Y: 3 }
+        scans: 2
+        expect: { Cmp: false }
+
+  - name: a latch set and reset
+    steps:
+      - given: { A: true, B: true, C: true }
+        scans: 2
+        expect: { Lat: true }
+      - given: { A: false }
+        scans: 2
+        expect: { Lat: true }
+      - given: { B: false, C: false }
+        scans: 2
+        expect: { Lat: false }

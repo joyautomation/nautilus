@@ -1017,6 +1017,11 @@ func nonNilStrings(s []string) []string {
 // Progressive enhancement — AuthToken set: the request must present the
 // token, and a valid token authorizes the write from any origin (an
 // attacker's page can't read or guess it, so CORS is irrelevant to safety).
+// AuthorizeWrite applies the server's write policy — the auth token, else
+// same-origin — to a request another handler serves, so a facade that adds
+// an endpoint keeps the same rule for it. 0 means allowed.
+func (s *Server) AuthorizeWrite(r *http.Request) (int, string) { return s.authorizeWrite(r) }
+
 func (s *Server) authorizeWrite(r *http.Request) (int, string) {
 	if s.authToken != "" {
 		if tokenMatches(r, s.authToken) {

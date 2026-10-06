@@ -1,0 +1,48 @@
+tests:
+  - name: hand runs, auto runs on request, off never runs
+    steps:
+      - given: { P101_Mode: 1 }
+        scans: 2
+        expect: { P101_RunCmd: true, P101_InHand: true, P102_RunCmd: false }
+      - given: { P101_Mode: 2 }
+        scans: 2
+        expect: { P101_RunCmd: false, P101_InHand: false }
+      - given: { P101_Req: true }
+        scans: 2
+        expect: { P101_RunCmd: true }
+      - given: { P101_Mode: 0 }
+        scans: 2
+        expect: { P101_RunCmd: false }
+
+  - name: no running feedback for 5 s is a fail-to-run, cleared by reset
+    steps:
+      - given: { P102_Mode: 1 }
+        advance: 4s
+        expect: { P102_RunCmd: true, P102_FailToRun: false }
+      - advance: 1.5s
+        expect: { P102_FailToRun: true, P102_RunCmd: false }
+      - given: { ResetFaults: true }
+        scans: 2
+        expect: { P102_FailToRun: false }
+      - given: { ResetFaults: false, P102_Running: true }
+        advance: 6s
+        expect: { P102_RunCmd: true, P102_FailToRun: false }
+
+  - name: three fail-to-run trips lock the pump out until reset
+    steps:
+      - given: { P101_Mode: 1 }
+        advance: 5.5s
+        expect: { P101_FailToRun: true, P101_LockedOut: false }
+      - given: { ResetFaults: true }
+        scans: 2
+      - given: { ResetFaults: false }
+        advance: 5.5s
+        expect: { P101_FailToRun: true, P101_LockedOut: false }
+      - given: { ResetFaults: true }
+        scans: 2
+      - given: { ResetFaults: false }
+        advance: 5.5s
+        expect: { P101_FailToRun: true, P101_LockedOut: true, P101_RunCmd: false }
+      - given: { ResetFaults: true }
+        scans: 2
+        expect: { P101_LockedOut: false, P101_FailToRun: false }

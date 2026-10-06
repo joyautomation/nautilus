@@ -215,7 +215,16 @@ func execStmt(ctx *EvalCtx, s Stmt) error {
 		return err
 
 	case *FBCall:
-		inst := ctx.Frame.Slots[n.InstanceSlot].FB
+		var inst *FBInstance
+		if n.Instance != nil {
+			v, err := evalExpr(ctx, n.Instance)
+			if err != nil {
+				return err
+			}
+			inst = v.FB
+		} else {
+			inst = ctx.Frame.Slots[n.InstanceSlot].FB
+		}
 		if inst == nil {
 			return fmt.Errorf("FB call on uninitialised instance at slot %d", n.InstanceSlot)
 		}
@@ -258,6 +267,21 @@ type accessor struct {
 }
 
 func writeLValue(ctx *EvalCtx, lv LValue, v Value) error {
+	// A bit of an integer: read the word, set or clear the bit, write the
+	// word back through whatever lvalue it is.
+	if b, ok := lv.(*BitRef); ok {
+		word, err := evalExpr(ctx, b.Object)
+		if err != nil {
+			return err
+		}
+		mask := int64(1) << uint(b.Bit)
+		if v.B {
+			word.I |= mask
+		} else {
+			word.I &^= mask
+		}
+		return writeLValue(ctx, b.Object, word)
+	}
 	// Collect accessors while descending to the root slot / global.
 	// The chain is built leaf-first and applied root-first below.
 	var chain []accessor
@@ -384,6 +408,12 @@ func evalExpr(ctx *EvalCtx, e Expr) (Value, error) {
 			return Value{}, fmt.Errorf("index %d out of bounds [0..%d]", iv.I, len(arr.Arr)-1)
 		}
 		return arr.Arr[iv.I], nil
+	case *BitRef:
+		obj, err := evalExpr(ctx, n.Object)
+		if err != nil {
+			return Value{}, err
+		}
+		return BoolVal(obj.I>>uint(n.Bit)&1 != 0), nil
 	case *MemberRef:
 		obj, err := evalExpr(ctx, n.Object)
 		if err != nil {

@@ -38,7 +38,7 @@ export const L = {
 } as const;
 
 export type LNode = {
-	kind: 'contact' | 'edge' | 'coil' | 'fn' | 'fb';
+	kind: 'contact' | 'edge' | 'coil' | 'fn' | 'fb' | 'assign';
 	x: number;
 	y: number;
 	w: number;
@@ -221,6 +221,15 @@ export function layoutSeries(anns: Ann[], x: number, cy: number, path: number[] 
 				const w = fnWidth(a);
 				const y = cy - L.FN_H / 2;
 				nodes.push({ kind: 'fn', x: cursor, y, w, h: L.FN_H, ann: a, path: elPath });
+				descent = reserveWasLabel(a, cy, y, L.FN_H, descent);
+				cursor += w;
+				break;
+			}
+			case 'assign': {
+				// A box like a function contact, sized to its text.
+				const w = Math.max(60, Math.min(260, 16 + 6.2 * (a.el.text ?? '').length));
+				const y = cy - L.FN_H / 2;
+				nodes.push({ kind: 'assign', x: cursor, y, w, h: L.FN_H, ann: a, path: elPath });
 				descent = reserveWasLabel(a, cy, y, L.FN_H, descent);
 				cursor += w;
 				break;

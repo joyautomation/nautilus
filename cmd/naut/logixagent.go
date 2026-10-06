@@ -564,6 +564,7 @@ func runLogixDrift(args []string) int {
 	agent, token := agentFlags(fs)
 	commPath := fs.String("comm-path", "", "controller to upload from (required)")
 	keep := fs.String("keep", "", "also write the controller's L5X here")
+	logic := fs.Bool("logic", false, "compare logic only — programs, routines, rungs and tag shapes, never tag values, which move on a running controller")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -623,6 +624,24 @@ func runLogixDrift(args []string) int {
 	}
 	_ = res
 
+	if *logic {
+		ctrlFile, err := l5x.Parse(ctrlRaw)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut logix drift: controller export:", err)
+			return 1
+		}
+		diffs := l5x.LogicDiff(l5x.LogicOf(repoFile), l5x.LogicOf(ctrlFile))
+		if len(diffs) == 0 {
+			fmt.Printf("no logic drift — the controller at %s runs the logic in %s\n", *commPath, repoPath)
+			return 0
+		}
+		fmt.Printf("LOGIC DRIFT — %d difference(s) between %s (first) and the controller at %s (second)\n", len(diffs), repoPath, *commPath)
+		for _, d := range diffs {
+			fmt.Println("  " + d)
+		}
+		return 1
+	}
+
 	// Normalization is what makes this a comparison rather than a diff of
 	// timestamps: every export stamps a new ExportDate.
 	opts := l5x.NormalizeOptions{}
@@ -642,7 +661,6 @@ func runLogixDrift(args []string) int {
 	return 1
 }
 
-
 // wrapIndent breaks text to width and prefixes every line, so a remedy sits
 // under its gate as a readable block rather than one long line.
 func wrapIndent(text string, width int, indent string) []string {
@@ -661,4 +679,84 @@ func wrapIndent(text string, width int, indent string) []string {
 		line += " " + w
 	}
 	return append(out, indent+line)
+}
+
+// --- mode -----------------------------------------------------------------
+
+// runLogixMode reads or changes a controller's mode. A change is a
+// consequential act — Program stops the logic, Run starts it against
+// whatever the outputs are wired to — so it needs --yes, like download.
+func runLogixMode(args []string) int {
+	fs := flag.NewFlagSet("logix mode", flag.ContinueOnError)
+	agent, token := agentFlags(fs)
+	commPath := fs.String("comm-path", "", "controller (required)")
+	yes := fs.Bool("yes", false, "confirm a mode change")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	// Either --comm-path, or a project directory whose target: logix names
+	// the controller — the form with no quoting at all, which is what a
+	// shell permission rule can match.
+	args = fs.Args()
+	if *commPath == "" && len(args) > 0 {
+		if p, err := loadLogixProject(args[len(args)-1]); err == nil {
+			*commPath = p.target.CommPath
+			args = args[:len(args)-1]
+		}
+	}
+	if len(args) > 1 || *commPath == "" {
+		fmt.Fprintln(os.Stderr, "usage: naut logix mode [--yes run|program|test] (--comm-path <path> | <project-dir>)")
+		return 2
+	}
+	var want logixd.RequestedMode
+	if len(args) == 1 {
+		switch strings.ToLower(args[0]) {
+		case "run":
+			want = logixd.ModeRun
+		case "program":
+			want = logixd.ModeProgram
+		case "test":
+			want = logixd.ModeTest
+		default:
+			fmt.Fprintln(os.Stderr, "naut logix mode: the modes are run, program and test")
+			return 2
+		}
+		if !*yes {
+			fmt.Fprintf(os.Stderr, "naut logix mode: refusing to put %s in %s without --yes\n", *commPath, want)
+			return 2
+		}
+	}
+
+	c := logixd.New(*agent, *token)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	// The SDK changes a controller's mode through a project that is
+	// correlated with it, so the project comes from the controller.
+	rel := path.Join(newRunID(), "controller.ACD")
+	if evs, err := c.UploadToNew(ctx, *commPath, rel); err != nil {
+		printEvents(evs)
+		return reportErr("mode", err)
+	}
+	s, err := c.Open(ctx, rel)
+	if err != nil {
+		return reportErr("mode", err)
+	}
+	defer s.Close(context.Background())
+	if _, err := s.SetCommPath(ctx, *commPath); err != nil {
+		return reportErr("mode", err)
+	}
+	mode, err := s.Mode(ctx)
+	if err != nil {
+		return reportErr("mode", err)
+	}
+	if want == "" {
+		fmt.Printf("%s is %s\n", *commPath, mode)
+		return 0
+	}
+	after, err := s.SetMode(ctx, want)
+	if err != nil {
+		return reportErr("mode", err)
+	}
+	fmt.Printf("%s: %s → %s\n", *commPath, mode, after)
+	return 0
 }

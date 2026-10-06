@@ -1,0 +1,50 @@
+# Margins of 0.5 s around the 2 s presets: on the controller a reading is
+# only as fresh as one poll (100 ms) plus one scan.
+tests:
+  - name: on-delay times out after its preset and resets when the input drops
+    steps:
+      - given: { In: true }
+        advance: 1.2s
+        expect: { OnDelayed: false, Timing: true }
+      - advance: 1.3s
+        expect: { OnDelayed: true, Timing: false }
+      - given: { In: false }
+        scans: 2
+        expect: { OnDelayed: false, Timing: false }
+
+  - name: on-delay restarts from zero after an interruption
+    steps:
+      - given: { In: true }
+        advance: 1.2s
+      - given: { In: false }
+        scans: 2
+      - given: { In: true }
+        advance: 1.5s
+        expect: { OnDelayed: false }
+      - advance: 1s
+        expect: { OnDelayed: true }
+
+  - name: off-delay holds its output for the preset after the input drops
+    steps:
+      - given: { In: true }
+        scans: 2
+        expect: { OffDelayed: true }
+      - given: { In: false }
+        advance: 1.2s
+        expect: { OffDelayed: true }
+      - advance: 1.3s
+        expect: { OffDelayed: false }
+
+  - name: off-delay re-arms when the input returns during the delay
+    steps:
+      - given: { In: true }
+        scans: 2
+      - given: { In: false }
+        advance: 1.2s
+      - given: { In: true }
+        scans: 2
+      - given: { In: false }
+        advance: 1.2s
+        expect: { OffDelayed: true }
+      - advance: 1.3s
+        expect: { OffDelayed: false }

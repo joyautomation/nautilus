@@ -1,0 +1,32 @@
+tests:
+  - name: a rising edge latches once, a falling edge latches once
+    steps:
+      - given: { Clear: true }
+        scans: 2
+      - given: { Clear: false }
+        scans: 2
+        expect: { RoseOnce: false, FellOnce: false }
+      - given: { Btn: true }
+        scans: 2
+        expect: { RoseOnce: true, FellOnce: false }
+      - given: { Btn: false }
+        scans: 2
+        expect: { RoseOnce: true, FellOnce: true }
+
+  - name: the edge belongs to the button, not to the rung
+    steps:
+      - given: { Clear: true, Btn: false, Arm: false }
+        scans: 2
+      - given: { Clear: false }
+        scans: 2
+      - given: { Btn: true }
+        scans: 2
+        expect: { ArmedRose: false }
+      - given: { Arm: true }
+        scans: 2
+        expect: { ArmedRose: false }
+      - given: { Btn: false }
+        scans: 2
+      - given: { Btn: true }
+        scans: 2
+        expect: { ArmedRose: true }

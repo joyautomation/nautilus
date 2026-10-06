@@ -341,6 +341,25 @@ Logix Designer export's tags — UDTs, program tags, initial values — as a
 ControlLogix on 127.0.0.1:44818 (`--ramp` makes the numbers move), so
 browse, import and a `driver: {type: eip}` project all run against it.
 
+### Writing Logix programs in nautilus (experimental)
+
+The other direction: write the logic in nautilus — ladder or ST, in git,
+tested on the nautilus runtime — and deploy it to a ControlLogix or
+CompactLogix, with Studio 5000 running headless behind a `logixd` agent as
+compiler and loader. Add a `target: logix` section to `nautilus.yaml` and:
+
+```sh
+naut check                   # also enforces the Logix subset, by rule ID
+naut logix deploy --online   # write the L5X, build it, online-edit the controller
+naut test --target logix     # the same acceptance tests, on the controller
+```
+
+`naut logix import --project <dir> Line.L5X` turns an existing export into
+such a project. This is a proof of concept, verified on one controller
+family at one firmware revision; see the
+[Authoring for Logix guide](website/src/content/docs/guides/logix-authoring.md)
+and [`docs/design/logix-authoring.md`](docs/design/logix-authoring.md).
+
 ### Talking to Modbus TCP devices
 
 Field devices that aren't a Logix PLC — PID loops behind a gateway, VFDs,

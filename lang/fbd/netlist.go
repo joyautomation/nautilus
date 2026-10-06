@@ -272,6 +272,21 @@ func (p *netParser) item(nl *netlist) error {
 		if err != nil {
 			return err
 		}
+		if p.at(st.TokenLParen) {
+			// Timers[2](IN := …): a call on an element of an array of
+			// instances.
+			args, err := p.namedArgs()
+			if err != nil {
+				return err
+			}
+			lhs = p.span(lhsAt)
+			nl.nodes = append(nl.nodes, node{isCall: true, inst: text, args: args, line: line, lhs: lhs})
+			if p.at(st.TokenSemicolon) {
+				p.next()
+			}
+			nl.nodes[len(nl.nodes)-1].span = p.span(lhsAt)
+			return nil
+		}
 		if !p.at(st.TokenAssign) {
 			return p.posErr(fmt.Sprintf("expected ':=' after %q (only coils write array elements/members)", text))
 		}
@@ -468,7 +483,7 @@ func (p *netParser) primary() (expr, error) {
 		return c, nil
 	}
 	switch t := p.peek(); t.Type {
-	case st.TokenNumber, st.TokenString, st.TokenTimeLiteral, st.TokenTypedLiteral:
+	case st.TokenNumber, st.TokenBasedNumber, st.TokenString, st.TokenTimeLiteral, st.TokenTypedLiteral:
 		p.next()
 		return litExpr{exprPos: p.span(at), text: literalText(t)}, nil
 	case st.TokenTrue, st.TokenFalse:
@@ -504,6 +519,10 @@ func (p *netParser) primary() (expr, error) {
 			return accExpr{exprPos: p.span(at), base: name, text: text}, nil
 		case st.TokenDot: // FB output pin, or a member chain with indexes
 			p.next()
+			if p.at(st.TokenNumber) { // Word.3: a bit of an integer
+				bit := p.next().Literal
+				return accExpr{exprPos: p.span(at), base: name, text: name + "." + bit}, nil
+			}
 			if !p.at(st.TokenIdent) {
 				return nil, p.posErr("expected a pin name after '.'")
 			}
@@ -552,6 +571,10 @@ func (p *netParser) accessorChain(head string) (string, error) {
 			text += "[" + idx + "]"
 		case st.TokenDot:
 			p.next()
+			if p.at(st.TokenNumber) { // a bit of an integer member
+				text += "." + p.next().Literal
+				continue
+			}
 			if !p.at(st.TokenIdent) {
 				return "", p.posErr("expected a member name after '.'")
 			}

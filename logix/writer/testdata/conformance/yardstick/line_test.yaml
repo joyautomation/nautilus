@@ -1,0 +1,32 @@
+tests:
+  - name: ready below 80 percent
+    steps:
+      - given: { Line_TankLevel: 50.0 }
+        scans: 2
+        expect: { Line_Ready: true }
+      - given: { Line_TankLevel: 80.0 }
+        scans: 2
+        expect: { Line_Ready: false }
+
+  - name: a request against a ready line is accepted after the 2 s settle
+    steps:
+      - given: { Line_TankLevel: 50.0, Line_Request: true }
+        advance: 1.2s
+        expect: { Line_Accept: false }
+      - advance: 1.3s
+        expect: { Line_Accept: true }
+      - given: { Line_Fault: true }
+        scans: 2
+        expect: { Line_Accept: false, Line_Status.Alarm: true }
+      - given: { Line_Fault: false, Line_Request: false }
+        scans: 2
+        expect: { Line_Accept: false, Line_Status.Alarm: false }
+
+  - name: the high-level cutoff unlatches an accept
+    steps:
+      - given: { Line_TankLevel: 50.0, Line_Request: true }
+        advance: 2.5s
+        expect: { Line_Accept: true }
+      - given: { Line_TankLevel: 96.0 }
+        scans: 2
+        expect: { Line_Accept: false, Line_Ready: false }

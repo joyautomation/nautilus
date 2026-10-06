@@ -28,6 +28,9 @@ type Tag struct {
 	Init any
 	Unit string
 	Desc string
+	// Alias is the vendor-side binding a tag carries (a Logix alias tag's
+	// AliasFor: "Local:1:I.Data.3"); empty for a plain tag.
+	Alias string
 }
 
 // Render writes the header comment (each line prefixed with "# ") followed by
@@ -71,6 +74,9 @@ func Render(header []string, tags []Tag) ([]byte, error) {
 		}
 		if t.Unit != "" {
 			fmt.Fprintf(&b, ", unit: %s", quote(t.Unit))
+		}
+		if t.Alias != "" {
+			fmt.Fprintf(&b, ", alias: %s", quote(t.Alias))
 		}
 		if t.Desc != "" {
 			fmt.Fprintf(&b, ", desc: %s", quote(t.Desc))

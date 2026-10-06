@@ -1,0 +1,851 @@
+package writer
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/joyautomation/nautilus/lang/ld"
+)
+
+// The L5X itself. Written by hand rather than through encoding/xml so the
+// output has the exporter's own shape line for line: one element per
+// line, CDATA on its own lines, attributes in Logix's order. That is what
+// makes a generated project diff cleanly against an export of the same
+// project — and it is what lang/l5x.Normalize was measured against.
+
+func emit(lw *lowered, o Options) []byte {
+	var b strings.Builder
+	w := func(format string, a ...any) {
+		fmt.Fprintf(&b, format, a...)
+		b.WriteByte('\n')
+	}
+	w(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	w(`<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="%s" TargetName="%s" TargetType="Controller" ContainsContext="false" Owner="nautilus" ExportDate="%s" ExportOptions="References NoRawData L5KData DecoratedData Context Dependencies ForceProtectedEncoding AllProjDocTrans">`,
+		attr(o.SoftwareRevision), attr(o.Controller), attr(o.ExportDate))
+	w(`<Controller Use="Target" Name="%s" ProcessorType="%s" MajorRev="%s" MinorRev="%s" ProjectCreationDate="(pinned)" LastModifiedDate="(pinned)" SFCExecutionControl="CurrentActive" SFCRestartPosition="MostRecent" SFCLastScan="DontScan" ProjectSN="16#0000_0000" MatchProjectToController="false" CanUseRPIFromProducer="false" InhibitAutomaticFirmwareUpdate="0" PassThroughConfiguration="EnabledWithAppend" DownloadProjectDocumentationAndExtendedProperties="true" DownloadProjectCustomProperties="true" ReportMinorOverflow="false" AutoDiagsEnabled="true" WebServerEnabled="false">`,
+		attr(o.Controller), attr(o.ProcessorType), attr(o.MajorRev), attr(o.MinorRev))
+	w(`<RedundancyInfo Enabled="false" KeepTestEditsOnSwitchOver="false"/>`)
+	w(`<Security Code="0" ChangesToDetect="16#ffff_ffff_ffff_ffff"/>`)
+	w(`<SafetyInfo/>`)
+	if types := lw.usedTypesInOrder(); len(types) > 0 {
+		w(`<DataTypes>`)
+		for _, u := range types {
+			w(`<DataType Name="%s" Family="NoFamily" Class="User">`, attr(u.Name))
+			w(`<Members>`)
+			for _, m := range u.Members {
+				switch {
+				case m.Struct != nil:
+					w(`<Member Name="%s" DataType="%s" Dimension="%d" Radix="NullType" Hidden="false" ExternalAccess="Read/Write"/>`, attr(m.Name), m.DataType, m.Dim)
+				default:
+					w(`<Member Name="%s" DataType="%s" Dimension="%d" Radix="%s" Hidden="false" ExternalAccess="Read/Write"/>`, attr(m.Name), m.DataType, m.Dim, radixOf(m.DataType))
+				}
+			}
+			w(`</Members>`)
+			w(`</DataType>`)
+		}
+		w(`</DataTypes>`)
+	} else {
+		w(`<DataTypes/>`)
+	}
+	w(`<Modules>`)
+	w(`<Module Name="Local" CatalogNumber="%s" Vendor="1" ProductType="14" ProductCode="168" Major="%s" Minor="%s" ParentModule="Local" ParentModPortId="1" Inhibited="false" MajorFault="true">`,
+		attr(o.ProcessorType), attr(o.MajorRev), attr(o.MinorRev))
+	w(`<EKey State="Disabled"/>`)
+	w(`<Ports>`)
+	w(`<Port Id="1" Address="0" Type="ICP" Upstream="false">`)
+	w(`<Bus Size="17"/>`)
+	w(`</Port>`)
+	w(`<Port Id="2" Type="Ethernet" Upstream="false">`)
+	w(`<Bus/>`)
+	w(`</Port>`)
+	w(`</Ports>`)
+	w(`</Module>`)
+	w(`</Modules>`)
+	emitAOIs(&b, lw, o)
+	emitTags(&b, lw.ctrlTags)
+	w(`<Programs>`)
+	w(`<Program Name="%s" TestEdits="false" MainRoutineName="%s" Disabled="false" UseAsFolder="false">`, attr(o.Program), attr(o.Routine))
+	emitTags(&b, lw.progTags)
+	w(`<Routines>`)
+	if lw.st {
+		w(`<Routine Name="%s" Type="ST">`, attr(o.Routine))
+		w(`<STContent>`)
+		for i, line := range lw.stLines {
+			w(`<Line Number="%d">`, i)
+			w(`%s`, cdata(line))
+			w(`</Line>`)
+		}
+		w(`</STContent>`)
+		w(`</Routine>`)
+	} else {
+		w(`<Routine Name="%s" Type="RLL">`, attr(o.Routine))
+		w(`<RLLContent>`)
+		for i, r := range lw.rungs {
+			w(`<Rung Number="%d" Type="N">`, i)
+			if r.Comment != "" {
+				w(`<Comment>`)
+				w(`%s`, cdata(r.Comment))
+				w(`</Comment>`)
+			}
+			w(`<Text>`)
+			w(`%s`, cdata(r.Text+";"))
+			w(`</Text>`)
+			w(`</Rung>`)
+		}
+		w(`</RLLContent>`)
+		w(`</Routine>`)
+	}
+	w(`</Routines>`)
+	w(`</Program>`)
+	if len(lw.sideRungs) > 0 {
+		w(`<Program Name="%s" TestEdits="false" MainRoutineName="MainRoutine" Disabled="false" UseAsFolder="false">`, SideProgram)
+		w(`<Description>`)
+		w(`%s`, cdata("nautilus side code: testing, verification and metrics. Generated; not part of the plant logic."))
+		w(`</Description>`)
+		w(`<Tags/>`)
+		w(`<Routines>`)
+		w(`<Routine Name="MainRoutine" Type="RLL">`)
+		w(`<RLLContent>`)
+		for i, r := range lw.sideRungs {
+			w(`<Rung Number="%d" Type="N">`, i)
+			if r.Comment != "" {
+				w(`<Comment>`)
+				w(`%s`, cdata(r.Comment))
+				w(`</Comment>`)
+			}
+			w(`<Text>`)
+			w(`%s`, cdata(r.Text+";"))
+			w(`</Text>`)
+			w(`</Rung>`)
+		}
+		w(`</RLLContent>`)
+		w(`</Routine>`)
+		w(`</Routines>`)
+		w(`</Program>`)
+	}
+	w(`</Programs>`)
+	w(`<Tasks>`)
+	if o.PeriodMs > 0 {
+		w(`<Task Name="%s" Type="PERIODIC" Rate="%d" Priority="10" Watchdog="500" DisableUpdateOutputs="false" InhibitTask="false">`, attr(o.Task), o.PeriodMs)
+	} else {
+		w(`<Task Name="%s" Type="CONTINUOUS" Priority="10" Watchdog="500" DisableUpdateOutputs="false" InhibitTask="false">`, attr(o.Task))
+	}
+	w(`<ScheduledPrograms>`)
+	w(`<ScheduledProgram Name="%s"/>`, attr(o.Program))
+	if len(lw.sideRungs) > 0 {
+		w(`<ScheduledProgram Name="%s"/>`, SideProgram)
+	}
+	w(`</ScheduledPrograms>`)
+	w(`</Task>`)
+	w(`</Tasks>`)
+	w(`<CST MasterID="0"/>`)
+	w(`<WallClockTime LocalTimeAdjustment="0" TimeZone="0"/>`)
+	w(`<Trends/>`)
+	w(`<TimeSynchronize Priority1="128" Priority2="128" PTPEnable="false"/>`)
+	w(`<EthernetPorts>`)
+	w(`<EthernetPort Port="1" Label="1" PortEnabled="true"/>`)
+	w(`</EthernetPorts>`)
+	w(`</Controller>`)
+	w(`</RSLogix5000Content>`)
+	return []byte(b.String())
+}
+
+func emitTags(b *strings.Builder, tags []tagDef) {
+	if len(tags) == 0 {
+		b.WriteString("<Tags/>\n")
+		return
+	}
+	w := func(format string, a ...any) {
+		fmt.Fprintf(b, format, a...)
+		b.WriteByte('\n')
+	}
+	w(`<Tags>`)
+	for _, t := range tags {
+		if t.Alias != "" {
+			// A Logix alias tag: the manifest's hardware binding. No data of
+			// its own; its value is the aliased operand's.
+			w(`<Tag Name="%s" TagType="Alias" Radix="%s" AliasFor="%s" ExternalAccess="Read/Write">`, attr(t.Name), radixOrDecimal(t.DataType), attr(t.Alias))
+			if t.Desc != "" {
+				w(`<Description>`)
+				w(`%s`, cdata(t.Desc))
+				w(`</Description>`)
+			}
+			w(`</Tag>`)
+			continue
+		}
+		radix := radixOf(t.DataType)
+		if t.AOI {
+			// An Add-On Instruction instance is a structure: a Radix on
+			// it makes the importer drop the tag (with a warning, not an
+			// error), and the build then fails on the undefined tag.
+			radix = ""
+		}
+		dims := ""
+		if t.Dim > 0 {
+			dims = fmt.Sprintf(` Dimensions="%d"`, t.Dim)
+		}
+		if t.Struct != nil {
+			w(`<Tag Name="%s" TagType="Base" DataType="%s"%s Constant="false" ExternalAccess="Read/Write">`, attr(t.Name), t.DataType, dims)
+			if t.Desc != "" {
+				w(`<Description>`)
+				w(`%s`, cdata(t.Desc))
+				w(`</Description>`)
+			}
+			// Decorated only: the L5K spelling of a structure packs its
+			// BOOLs into hidden host bytes in layout order, and the
+			// Decorated form is the one the importer reads.
+			w(`<Data Format="Decorated">`)
+			if t.Dim > 0 {
+				w(`<Array DataType="%s" Dimensions="%d">`, t.DataType, t.Dim)
+				for i := 0; i < t.Dim; i++ {
+					w(`<Element Index="[%d]">`, i)
+					w(`<Structure DataType="%s">`, t.DataType)
+					structValue(t.Struct, nil, w)
+					w(`</Structure>`)
+					w(`</Element>`)
+				}
+				w(`</Array>`)
+			} else {
+				w(`<Structure DataType="%s">`, t.DataType)
+				structValue(t.Struct, t.Init, w)
+				w(`</Structure>`)
+			}
+			w(`</Data>`)
+			w(`</Tag>`)
+			continue
+		}
+		if radix != "" {
+			w(`<Tag Name="%s" TagType="Base" DataType="%s"%s Radix="%s" Constant="false" ExternalAccess="Read/Write">`, attr(t.Name), t.DataType, dims, radix)
+		} else {
+			w(`<Tag Name="%s" TagType="Base" DataType="%s"%s Constant="false" ExternalAccess="Read/Write">`, attr(t.Name), t.DataType, dims)
+		}
+		if t.Desc != "" {
+			w(`<Description>`)
+			w(`%s`, cdata(t.Desc))
+			w(`</Description>`)
+		}
+		if strings.HasPrefix(t.DataType, "FBD_") || t.AOI {
+			// No initial data: the structure's layout is the SDK's.
+			w(`</Tag>`)
+			continue
+		}
+		w(`<Data Format="L5K">`)
+		w(`%s`, cdata(l5kValue(t)))
+		w(`</Data>`)
+		w(`<Data Format="Decorated">`)
+		switch {
+		case (t.DataType == "TIMER" || t.DataType == "COUNTER") && t.Dim > 0:
+			w(`<Array DataType="%s" Dimensions="%d">`, t.DataType, t.Dim)
+			for i := 0; i < t.Dim; i++ {
+				w(`<Element Index="[%d]">`, i)
+				w(`<Structure DataType="%s">`, t.DataType)
+				w(`<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="%d"/>`, t.Presets[i])
+				w(`<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>`)
+				members := []string{"EN", "TT", "DN"}
+				if t.DataType == "COUNTER" {
+					members = []string{"CU", "CD", "DN", "OV", "UN"}
+				}
+				for _, m := range members {
+					w(`<DataValueMember Name="%s" DataType="BOOL" Value="0"/>`, m)
+				}
+				w(`</Structure>`)
+				w(`</Element>`)
+			}
+			w(`</Array>`)
+		case t.DataType == "TIMER":
+			w(`<Structure DataType="TIMER">`)
+			w(`<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="%d"/>`, t.Preset)
+			w(`<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>`)
+			for _, m := range []string{"EN", "TT", "DN"} {
+				w(`<DataValueMember Name="%s" DataType="BOOL" Value="0"/>`, m)
+			}
+			w(`</Structure>`)
+		case t.DataType == "COUNTER":
+			w(`<Structure DataType="COUNTER">`)
+			w(`<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="%d"/>`, t.Preset)
+			w(`<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>`)
+			for _, m := range []string{"CU", "CD", "DN", "OV", "UN"} {
+				w(`<DataValueMember Name="%s" DataType="BOOL" Value="0"/>`, m)
+			}
+			w(`</Structure>`)
+		case t.Dim > 0:
+			w(`<Array DataType="%s" Dimensions="%d" Radix="%s">`, t.DataType, t.Dim, radix)
+			for i := 0; i < t.Dim; i++ {
+				w(`<Element Index="[%d]" Value="%s"/>`, i, zeroOf(t.DataType))
+			}
+			w(`</Array>`)
+		default:
+			w(`<DataValue DataType="%s" Radix="%s" Value="%s"/>`, t.DataType, radix, decoratedValue(t))
+		}
+		w(`</Data>`)
+		w(`</Tag>`)
+	}
+	w(`</Tags>`)
+}
+
+func radixOf(dt string) string {
+	switch dt {
+	case "REAL", "LREAL":
+		return "Float"
+	case "TIMER", "COUNTER", "FBD_TIMER", "FBD_COUNTER":
+		return ""
+	default:
+		return "Decimal"
+	}
+}
+
+func zeroOf(dt string) string {
+	switch dt {
+	case "REAL", "LREAL":
+		return "0.0"
+	default:
+		return "0"
+	}
+}
+
+func decoratedValue(t tagDef) string {
+	if t.Value == "" {
+		return zeroOf(t.DataType)
+	}
+	return t.Value
+}
+
+// l5kValue is the L5K spelling of the tag's value: the exporter writes
+// every value twice, and an importer may read either.
+func l5kValue(t tagDef) string {
+	switch t.DataType {
+	case "TIMER", "COUNTER":
+		if t.Dim > 0 {
+			elems := make([]string, t.Dim)
+			for i := range elems {
+				elems[i] = fmt.Sprintf("[0,%d,0]", t.Presets[i])
+			}
+			return "[" + strings.Join(elems, ",") + "]"
+		}
+		return fmt.Sprintf("[0,%d,0]", t.Preset)
+	}
+	one := func() string {
+		switch t.DataType {
+		case "REAL", "LREAL":
+			f := 0.0
+			if t.Value != "" {
+				f, _ = strconv.ParseFloat(t.Value, 64)
+			}
+			return l5kReal(f)
+		default:
+			if t.Value == "" {
+				return "0"
+			}
+			return t.Value
+		}
+	}
+	if t.Dim == 0 {
+		return one()
+	}
+	elems := make([]string, t.Dim)
+	for i := range elems {
+		elems[i] = l5kZero(t.DataType)
+	}
+	return "[" + strings.Join(elems, ",") + "]"
+}
+
+func l5kZero(dt string) string {
+	if dt == "REAL" || dt == "LREAL" {
+		return l5kReal(0)
+	}
+	return "0"
+}
+
+// l5kReal is the exporter's float spelling: 8 decimals and a three-digit
+// signed exponent (8.50000000e+001).
+func l5kReal(f float64) string {
+	s := strconv.FormatFloat(f, 'e', 8, 64)
+	i := strings.LastIndexAny(s, "+-")
+	exp := s[i+1:]
+	for len(exp) < 3 {
+		exp = "0" + exp
+	}
+	return s[:i+1] + exp
+}
+
+func attr(s string) string {
+	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;")
+	return r.Replace(s)
+}
+
+// cdata wraps text for a CDATA section; a literal "]]>" is split across
+// two sections so it cannot end the block early.
+func cdata(s string) string {
+	return "<![CDATA[" + strings.ReplaceAll(s, "]]>", "]]]]><![CDATA[>") + "]]>"
+}
+
+// WriteRungs lowers ladder source to a Rung-target partial export: the
+// shape the SDK's import-rungs takes, and what an online edit sends to a
+// running controller. Every rung is Use="Target"; the tags the rungs name
+// ride along as Use="Context", exactly as Logix exports them, so the
+// importer can resolve operands without creating anything. New tags are
+// not an online edit's to create — a program whose tag set changed needs
+// a download, which deploy decides by comparing tag sets.
+func WriteRungs(src string, opts Options) ([]byte, []Diag, error) {
+	m, err := ld.Graph(src, opts.Libs...)
+	if err != nil {
+		return nil, nil, err
+	}
+	if m.Name == "" {
+		return nil, nil, fmt.Errorf("logix writer: source declares no PROGRAM")
+	}
+	opts = opts.withDefaults(m.Name)
+	lw := lower(m, opts)
+	if len(lw.diags) > 0 {
+		return nil, lw.diags, nil
+	}
+	return emitRungs(lw, opts), nil, nil
+}
+
+func emitRungs(lw *lowered, o Options) []byte {
+	var b strings.Builder
+	w := func(format string, a ...any) {
+		fmt.Fprintf(&b, format, a...)
+		b.WriteByte('\n')
+	}
+	w(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	w(`<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="%s" TargetType="Rung" TargetCount="%d" ContainsContext="true" ExportDate="%s" ExportOptions="References NoRawData L5KData DecoratedData Context ProductDefinedTypes RoutineLabels AliasExtras IOTags NoStringData ForceProtectedEncoding AllProjDocTrans">`,
+		attr(o.SoftwareRevision), len(lw.rungs), attr(o.ExportDate))
+	w(`<Controller Use="Context" Name="%s">`, attr(o.Controller))
+	w(`<DataTypes Use="Context">`)
+	for _, dt := range usedTypes(lw) {
+		w(`<DataType Name="%s" Family="NoFamily" Class="ProductDefined"/>`, dt)
+	}
+	for _, u := range lw.usedTypesInOrder() {
+		w(`<DataType Name="%s" Family="NoFamily" Class="User"/>`, attr(u.Name))
+	}
+	w(`</DataTypes>`)
+	if len(lw.ctrlTags) > 0 {
+		emitContextTags(&b, lw.ctrlTags)
+	}
+	w(`<Programs Use="Context">`)
+	w(`<Program Use="Context" Name="%s">`, attr(o.Program))
+	if len(lw.progTags) > 0 {
+		emitContextTags(&b, lw.progTags)
+	}
+	w(`<Routines Use="Context">`)
+	w(`<Routine Use="Context" Name="%s">`, attr(o.Routine))
+	w(`<RLLContent Use="Context">`)
+	for i, r := range lw.rungs {
+		w(`<Rung Use="Target" Number="%d" Type="N">`, i)
+		if r.Comment != "" {
+			w(`<Comment>`)
+			w(`%s`, cdata(r.Comment))
+			w(`</Comment>`)
+		}
+		w(`<Text>`)
+		w(`%s`, cdata(r.Text+";"))
+		w(`</Text>`)
+		w(`</Rung>`)
+	}
+	w(`</RLLContent>`)
+	w(`</Routine>`)
+	w(`</Routines>`)
+	w(`</Program>`)
+	w(`</Programs>`)
+	w(`</Controller>`)
+	w(`</RSLogix5000Content>`)
+	return []byte(b.String())
+}
+
+// emitContextTags writes a tag list marked Use="Context": the exporter's
+// form for tags a partial export references but does not carry.
+func emitContextTags(b *strings.Builder, tags []tagDef) {
+	var inner strings.Builder
+	emitTags(&inner, tags)
+	s := strings.Replace(inner.String(), "<Tags>", `<Tags Use="Context">`, 1)
+	b.WriteString(s)
+}
+
+// usedTypes lists the atomic types the tags use, sorted, for the partial
+// export's DataTypes context.
+func usedTypes(lw *lowered) []string {
+	seen := map[string]bool{}
+	for _, t := range append(append([]tagDef{}, lw.ctrlTags...), lw.progTags...) {
+		if t.Struct == nil {
+			seen[t.DataType] = true
+		}
+	}
+	return sortedKeys(seen)
+}
+
+// WriteRoutine lowers a program to a Routine-target partial export: the
+// routine alone, with the tags it names as context — what an online
+// import of a whole routine (partial-import-with-target) takes. It is
+// the ST routine's online-edit form; ladder uses WriteRungs, the finer
+// rung import, and this works for ladder too.
+func WriteRoutine(path, src string, opts Options) ([]byte, []Diag, error) {
+	var lw *lowered
+	var err error
+	switch Language(path) {
+	case "st":
+		lw, err = lowerST(src, opts)
+	case "ld":
+		m, gerr := ld.Graph(src, opts.Libs...)
+		if gerr != nil {
+			return nil, nil, gerr
+		}
+		if m.Name == "" {
+			return nil, nil, fmt.Errorf("logix writer: source declares no PROGRAM")
+		}
+		lw = lower(m, opts.withDefaults(m.Name))
+		lw.opts = opts.withDefaults(m.Name)
+	default:
+		return nil, nil, fmt.Errorf("%s: only ladder (.ld) and structured text (.st) programs are in the Logix subset", path)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(lw.diags) > 0 {
+		return nil, lw.diags, nil
+	}
+	o := lw.opts
+	var b strings.Builder
+	w := func(format string, a ...any) {
+		fmt.Fprintf(&b, format, a...)
+		b.WriteByte('\n')
+	}
+	sub := "RLL"
+	if lw.st {
+		sub = "ST"
+	}
+	w(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	w(`<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="%s" TargetName="%s" TargetType="Routine" TargetSubType="%s" ContainsContext="true" ExportDate="%s" ExportOptions="References NoRawData L5KData DecoratedData Context ProductDefinedTypes IOTags Dependencies ForceProtectedEncoding AllProjDocTrans">`,
+		attr(o.SoftwareRevision), attr(o.Routine), sub, attr(o.ExportDate))
+	w(`<Controller Use="Context" Name="%s">`, attr(o.Controller))
+	w(`<DataTypes Use="Context">`)
+	for _, dt := range usedTypes(lw) {
+		w(`<DataType Name="%s" Family="NoFamily" Class="ProductDefined"/>`, dt)
+	}
+	for _, u := range lw.usedTypesInOrder() {
+		w(`<DataType Name="%s" Family="NoFamily" Class="User"/>`, attr(u.Name))
+	}
+	w(`</DataTypes>`)
+	if len(lw.ctrlTags) > 0 {
+		emitContextTags(&b, lw.ctrlTags)
+	}
+	w(`<Programs Use="Context">`)
+	w(`<Program Use="Context" Name="%s">`, attr(o.Program))
+	if len(lw.progTags) > 0 {
+		emitContextTags(&b, lw.progTags)
+	}
+	w(`<Routines Use="Context">`)
+	if lw.st {
+		w(`<Routine Use="Target" Name="%s" Type="ST">`, attr(o.Routine))
+		w(`<STContent>`)
+		for i, line := range lw.stLines {
+			w(`<Line Number="%d">`, i)
+			w(`%s`, cdata(line))
+			w(`</Line>`)
+		}
+		w(`</STContent>`)
+	} else {
+		w(`<Routine Use="Target" Name="%s" Type="RLL">`, attr(o.Routine))
+		w(`<RLLContent>`)
+		for i, r := range lw.rungs {
+			w(`<Rung Number="%d" Type="N">`, i)
+			if r.Comment != "" {
+				w(`<Comment>`)
+				w(`%s`, cdata(r.Comment))
+				w(`</Comment>`)
+			}
+			w(`<Text>`)
+			w(`%s`, cdata(r.Text+";"))
+			w(`</Text>`)
+			w(`</Rung>`)
+		}
+		w(`</RLLContent>`)
+	}
+	w(`</Routine>`)
+	w(`</Routines>`)
+	w(`</Program>`)
+	w(`</Programs>`)
+	w(`</Controller>`)
+	w(`</RSLogix5000Content>`)
+	return []byte(b.String()), nil, nil
+}
+
+// emitAOIs writes the Add-On Instruction definitions the program uses,
+// in first-use order. EnableIn and EnableOut are the two parameters every
+// AOI carries; the block's inputs are Required so a call binds them as
+// operands, its outputs are read from the instance.
+func emitAOIs(b *strings.Builder, lw *lowered, o Options) {
+	if len(lw.aoiOrder) == 0 {
+		b.WriteString("<AddOnInstructionDefinitions/>\n")
+		return
+	}
+	w := func(format string, a ...any) {
+		fmt.Fprintf(b, format, a...)
+		b.WriteByte('\n')
+	}
+	w(`<AddOnInstructionDefinitions>`)
+	for _, a := range lw.aoiOrder {
+		w(`<AddOnInstructionDefinition Name="%s" Class="Standard" Revision="1.0" Vendor="nautilus" ExecutePrescan="false" ExecutePostscan="false" ExecuteEnableInFalse="false" CreatedDate="2026-01-01T00:00:00.000Z" CreatedBy="nautilus" EditedDate="2026-01-01T00:00:00.000Z" EditedBy="nautilus" SoftwareRevision="v%s">`, attr(a.Name), attr(o.SoftwareRevision))
+		w(`<Description>`)
+		w(`%s`, cdata("nautilus FUNCTION_BLOCK "+a.Name+", generated"))
+		w(`</Description>`)
+		w(`<Parameters>`)
+		// Required and Visible are the SDK's own on these two; it warns
+		// that it ignores them when written.
+		w(`<Parameter Name="EnableIn" TagType="Base" DataType="BOOL" Usage="Input" Radix="Decimal" ExternalAccess="Read Only">`)
+		w(`<Description>`)
+		w(`%s`, cdata("Enable Input - System Defined Parameter"))
+		w(`</Description>`)
+		w(`</Parameter>`)
+		w(`<Parameter Name="EnableOut" TagType="Base" DataType="BOOL" Usage="Output" Radix="Decimal" ExternalAccess="Read Only">`)
+		w(`<Description>`)
+		w(`%s`, cdata("Enable Output - System Defined Parameter"))
+		w(`</Description>`)
+		w(`</Parameter>`)
+		for _, p := range a.Params {
+			dims := ""
+			if p.Dim > 0 {
+				dims = fmt.Sprintf(` Dimensions="%d"`, p.Dim)
+			}
+			switch p.Usage {
+			case "Input":
+				w(`<Parameter Name="%s" TagType="Base" DataType="%s"%s Usage="Input" Radix="%s" Required="true" Visible="true" ExternalAccess="Read/Write">`, attr(p.Name), p.DataType, dims, radixOf(p.DataType))
+				w(`<DefaultData Format="L5K">`)
+				w(`%s`, cdata(l5kZero(p.DataType)))
+				w(`</DefaultData>`)
+				w(`<DefaultData Format="Decorated">`)
+				w(`<DataValue DataType="%s" Radix="%s" Value="%s"/>`, p.DataType, radixOf(p.DataType), zeroOf(p.DataType))
+				w(`</DefaultData>`)
+				w(`</Parameter>`)
+			case "Output":
+				w(`<Parameter Name="%s" TagType="Base" DataType="%s"%s Usage="Output" Radix="%s" Required="false" Visible="true" ExternalAccess="Read Only">`, attr(p.Name), p.DataType, dims, radixOf(p.DataType))
+				w(`<DefaultData Format="L5K">`)
+				w(`%s`, cdata(l5kZero(p.DataType)))
+				w(`</DefaultData>`)
+				w(`<DefaultData Format="Decorated">`)
+				w(`<DataValue DataType="%s" Radix="%s" Value="%s"/>`, p.DataType, radixOf(p.DataType), zeroOf(p.DataType))
+				w(`</DefaultData>`)
+				w(`</Parameter>`)
+			case "InOut":
+				w(`<Parameter Name="%s" TagType="Base" DataType="%s"%s Usage="InOut" Required="true" Visible="true"/>`, attr(p.Name), p.DataType, dims)
+			}
+		}
+		w(`</Parameters>`)
+		if len(a.Locals) == 0 {
+			w(`<LocalTags/>`)
+		} else {
+			w(`<LocalTags>`)
+			for _, t := range a.Locals {
+				emitLocalTag(b, t)
+			}
+			w(`</LocalTags>`)
+		}
+		w(`<Routines>`)
+		if a.ST {
+			w(`<Routine Name="Logic" Type="ST">`)
+			w(`<STContent>`)
+			for i, line := range a.Lines {
+				w(`<Line Number="%d">`, i)
+				w(`%s`, cdata(line))
+				w(`</Line>`)
+			}
+			w(`</STContent>`)
+		} else {
+			w(`<Routine Name="Logic" Type="RLL">`)
+			w(`<RLLContent>`)
+			for i, r := range a.Rungs {
+				w(`<Rung Number="%d" Type="N">`, i)
+				if r.Comment != "" {
+					w(`<Comment>`)
+					w(`%s`, cdata(r.Comment))
+					w(`</Comment>`)
+				}
+				w(`<Text>`)
+				w(`%s`, cdata(r.Text+";"))
+				w(`</Text>`)
+				w(`</Rung>`)
+			}
+			w(`</RLLContent>`)
+		}
+		w(`</Routine>`)
+		w(`</Routines>`)
+		w(`</AddOnInstructionDefinition>`)
+	}
+	w(`</AddOnInstructionDefinitions>`)
+}
+
+// emitLocalTag writes one AOI local: a tag with DefaultData.
+func emitLocalTag(b *strings.Builder, t tagDef) {
+	w := func(format string, a ...any) {
+		fmt.Fprintf(b, format, a...)
+		b.WriteByte('\n')
+	}
+	radix := radixOf(t.DataType)
+	if t.AOI {
+		radix = "" // a structure; see emitTags
+	}
+	dims := ""
+	if t.Dim > 0 {
+		dims = fmt.Sprintf(` Dimensions="%d"`, t.Dim)
+	}
+	if radix != "" {
+		w(`<LocalTag Name="%s" DataType="%s"%s Radix="%s" ExternalAccess="None">`, attr(t.Name), t.DataType, dims, radix)
+	} else {
+		w(`<LocalTag Name="%s" DataType="%s"%s ExternalAccess="None">`, attr(t.Name), t.DataType, dims)
+	}
+	if strings.HasPrefix(t.DataType, "FBD_") || t.AOI {
+		w(`</LocalTag>`)
+		return
+	}
+	w(`<DefaultData Format="L5K">`)
+	w(`%s`, cdata(l5kValue(t)))
+	w(`</DefaultData>`)
+	w(`<DefaultData Format="Decorated">`)
+	switch {
+	case t.DataType == "TIMER":
+		w(`<Structure DataType="TIMER">`)
+		w(`<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="%d"/>`, t.Preset)
+		w(`<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>`)
+		for _, m := range []string{"EN", "TT", "DN"} {
+			w(`<DataValueMember Name="%s" DataType="BOOL" Value="0"/>`, m)
+		}
+		w(`</Structure>`)
+	case t.DataType == "COUNTER":
+		w(`<Structure DataType="COUNTER">`)
+		w(`<DataValueMember Name="PRE" DataType="DINT" Radix="Decimal" Value="%d"/>`, t.Preset)
+		w(`<DataValueMember Name="ACC" DataType="DINT" Radix="Decimal" Value="0"/>`)
+		for _, m := range []string{"CU", "CD", "DN", "OV", "UN"} {
+			w(`<DataValueMember Name="%s" DataType="BOOL" Value="0"/>`, m)
+		}
+		w(`</Structure>`)
+	case t.Struct != nil:
+		w(`<Structure DataType="%s">`, t.DataType)
+		structValue(t.Struct, t.Init, w)
+		w(`</Structure>`)
+	case t.Dim > 0:
+		w(`<Array DataType="%s" Dimensions="%d" Radix="%s">`, t.DataType, t.Dim, radix)
+		for i := 0; i < t.Dim; i++ {
+			w(`<Element Index="[%d]" Value="%s"/>`, i, zeroOf(t.DataType))
+		}
+		w(`</Array>`)
+	default:
+		w(`<DataValue DataType="%s" Radix="%s" Value="%s"/>`, t.DataType, radix, decoratedValue(t))
+	}
+	w(`</DefaultData>`)
+	w(`</LocalTag>`)
+}
+
+// lowerAny lowers a program in whichever language its path says.
+func lowerAny(path, src string, opts Options) (*lowered, error) {
+	switch Language(path) {
+	case "st":
+		return lowerST(src, opts)
+	case "ld":
+		m, err := ld.Graph(src, opts.Libs...)
+		if err != nil {
+			return nil, err
+		}
+		if m.Name == "" {
+			return nil, fmt.Errorf("logix writer: source declares no PROGRAM")
+		}
+		return lowerSrc(m, src, opts.withDefaults(m.Name)), nil
+	}
+	return nil, fmt.Errorf("%s: only ladder (.ld) and structured text (.st) programs are in the Logix subset", path)
+}
+
+// UsesAOIs reports whether a program instantiates user blocks, which
+// the SDK will only take into an existing project (partial import), not
+// as part of a whole-project import. deploy builds such a project in two
+// steps: WriteSkeleton, then WriteProgramPartial imported into it.
+func UsesAOIs(path, src string, opts Options) bool {
+	lw, err := lowerAny(path, src, opts)
+	return err == nil && len(lw.diags) == 0 && len(lw.aoiOrder) > 0
+}
+
+// WriteSkeleton is the whole project with the program emptied: controller,
+// types, Add-On Instructions, controller tags, task and side code, and the
+// program as a placeholder (no tags, a NOP routine) for the partial import
+// to overwrite.
+func WriteSkeleton(path, src string, opts Options) ([]byte, []Diag, error) {
+	lw, err := lowerAny(path, src, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(lw.diags) > 0 {
+		return nil, lw.diags, nil
+	}
+	lw.progTags = nil
+	lw.st = false
+	lw.rungs = []rungOut{{Text: "NOP()", Comment: "placeholder: the program is imported over this"}}
+	return emit(lw, lw.opts), nil, nil
+}
+
+// WriteProgramPartial is the program alone — its tags and its routine —
+// as a Program-target partial export, with the controller tags as context.
+func WriteProgramPartial(path, src string, opts Options) ([]byte, []Diag, error) {
+	lw, err := lowerAny(path, src, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(lw.diags) > 0 {
+		return nil, lw.diags, nil
+	}
+	o := lw.opts
+	var b strings.Builder
+	w := func(format string, a ...any) {
+		fmt.Fprintf(&b, format, a...)
+		b.WriteByte('\n')
+	}
+	w(`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>`)
+	w(`<RSLogix5000Content SchemaRevision="1.0" SoftwareRevision="%s" TargetName="%s" TargetType="Program" ContainsContext="true" ExportDate="%s" ExportOptions="References NoRawData L5KData DecoratedData Context Dependencies ForceProtectedEncoding AllProjDocTrans">`,
+		attr(o.SoftwareRevision), attr(o.Program), attr(o.ExportDate))
+	w(`<Controller Use="Context" Name="%s">`, attr(o.Controller))
+	if len(lw.ctrlTags) > 0 {
+		emitContextTags(&b, lw.ctrlTags)
+	}
+	w(`<Programs Use="Context">`)
+	w(`<Program Use="Target" Name="%s" TestEdits="false" MainRoutineName="%s" Disabled="false" UseAsFolder="false">`, attr(o.Program), attr(o.Routine))
+	emitTags(&b, lw.progTags)
+	w(`<Routines>`)
+	if lw.st {
+		w(`<Routine Name="%s" Type="ST">`, attr(o.Routine))
+		w(`<STContent>`)
+		for i, line := range lw.stLines {
+			w(`<Line Number="%d">`, i)
+			w(`%s`, cdata(line))
+			w(`</Line>`)
+		}
+		w(`</STContent>`)
+	} else {
+		w(`<Routine Name="%s" Type="RLL">`, attr(o.Routine))
+		w(`<RLLContent>`)
+		for i, r := range lw.rungs {
+			w(`<Rung Number="%d" Type="N">`, i)
+			if r.Comment != "" {
+				w(`<Comment>`)
+				w(`%s`, cdata(r.Comment))
+				w(`</Comment>`)
+			}
+			w(`<Text>`)
+			w(`%s`, cdata(r.Text+";"))
+			w(`</Text>`)
+			w(`</Rung>`)
+		}
+		w(`</RLLContent>`)
+	}
+	w(`</Routine>`)
+	w(`</Routines>`)
+	w(`</Program>`)
+	w(`</Programs>`)
+	w(`</Controller>`)
+	w(`</RSLogix5000Content>`)
+	return []byte(b.String()), nil, nil
+}
+
+func radixOrDecimal(dt string) string {
+	if r := radixOf(dt); r != "" {
+		return r
+	}
+	return "Decimal"
+}

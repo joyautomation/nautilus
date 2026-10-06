@@ -903,3 +903,241 @@ func TestTranspileNoLDBody(t *testing.T) {
 		}
 	}
 }
+
+// { target := expr } assigns when the rung has power at that point and
+// passes power through: the IEC function box with EN on the rung, written
+// as the assignment it is. Lowered as a SEL so the value is a block like
+// any other.
+func TestAssignmentElement(t *testing.T) {
+	src := `PROGRAM P
+VAR_EXTERNAL
+    a : BOOL; b : BOOL; c : BOOL; x : DINT; y : DINT; z : REAL; k : REAL;
+END_VAR
+VAR
+    t1 : TON;
+END_VAR
+LD
+  RUNG move
+    a { y := x }
+  RUNG math
+    a b { y := x + 1; z := k * 2.0 } ( c )
+  RUNG expr
+    { x := (x + 3) / 2 - ABS(y) MOD 4 }
+  RUNG leg
+    [ a { y := 0 } | b ] ( c )
+  RUNG after
+    a { y := 1 } t1:TON(PT := T#1S) ( c )
+END_LD
+END_PROGRAM
+`
+	out, err := Transpile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"y := SEL(a, y, x)",
+		"y := SEL(AND(a, b), y, ADD(x, 1))",
+		"z := SEL(AND(a, b), z, MUL(k, 2.0))",
+		"x := SUB(DIV(ADD(x, 3), 2), MOD(ABS(y), 4))",
+		"y := SEL(a, y, 0)",
+		"t1 : TON(IN := a, PT := T#1S)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	// The coil after the assignments still sees the whole condition, and
+	// an assignment alone is a legal rung.
+	if !strings.Contains(out, "c := AND(a, b)") {
+		t.Errorf("coil condition lost:\n%s", out)
+	}
+	prog, err := fbd.Compile(out)
+	if err != nil {
+		t.Fatalf("FBD does not compile: %v\n%s", err, out)
+	}
+	_ = prog
+
+	m, err := Graph(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := m.Rungs[1].Elements[2]
+	if e.Kind != "assign" || e.Text != "y := x + 1; z := k * 2.0" {
+		t.Errorf("element = %+v", e)
+	}
+	if got := printElement(&e); got != "{ y := x + 1; z := k * 2.0 }" {
+		t.Errorf("printed %q", got)
+	}
+
+	// Errors name the assignment.
+	for _, bad := range []string{
+		"  RUNG r\n    a { y }\n",
+		"  RUNG r\n    a { 3 := y }\n",
+		"  RUNG r\n    a { y := x + }\n",
+		"  RUNG r\n    a { y := x\n",
+	} {
+		s := "PROGRAM P\nVAR_EXTERNAL a : BOOL; x : DINT; y : DINT; END_VAR\nLD\n" + bad + "END_LD\nEND_PROGRAM\n"
+		if _, err := Transpile(s); err == nil {
+			t.Errorf("no error for %q", bad)
+		}
+	}
+}
+
+// The expression parser spells IEC infix as the netlist's prefix calls,
+// with precedence and associativity as the standard has them.
+func TestParseExpr(t *testing.T) {
+	cases := map[string][2]string{
+		"a + b * c":          {"a + b * c", "ADD(a, MUL(b, c))"},
+		"(a + b) * c":        {"(a + b) * c", "MUL(ADD(a, b), c)"},
+		"a - b - c":          {"a - b - c", "SUB(SUB(a, b), c)"},
+		"a - (b - c)":        {"a - (b - c)", "SUB(a, SUB(b, c))"},
+		"2 ** 3 ** 2":        {"2 ** 3 ** 2", "EXPT(2, EXPT(3, 2))"},
+		"-x":                 {"-x", "SUB(0, x)"},
+		"-5":                 {"-5", "-5"},
+		"NOT a AND b":        {"NOT a AND b", "AND(NOT a, b)"},
+		"a >= 10":            {"a >= 10", "GE(a, 10)"},
+		"x <> y OR z":        {"x <> y OR z", "OR(NE(x, y), z)"},
+		"LIMIT(0, v, 100)":   {"LIMIT(0, v, 100)", "LIMIT(0, v, 100)"},
+		"Arr[i].Val * 1.5e3": {"Arr[i].Val * 1.5e3", "MUL(Arr[i].Val, 1.5e3)"},
+		"16#FF AND m":        {"16#FF AND m", "AND(16#FF, m)"},
+		"T#5S":               {"T#5S", "T#5S"},
+		"a MOD 2 = 0":        {"a MOD 2 = 0", "EQ(MOD(a, 2), 0)"},
+		"SQRT(x) + ABS(-y)":  {"SQRT(x) + ABS(-y)", "ADD(SQRT(x), ABS(SUB(0, y)))"},
+		"TRUE":               {"TRUE", "TRUE"},
+		"a & b":              {"a AND b", "AND(a, b)"},
+		"'hi'":               {"'hi'", "'hi'"},
+		"(a + b) * (c - d)":  {"(a + b) * (c - d)", "MUL(ADD(a, b), SUB(c, d))"},
+		"a * (b + c) MOD 2":  {"a * (b + c) MOD 2", "MOD(MUL(a, ADD(b, c)), 2)"},
+		"- (a + b)":          {"-(a + b)", "SUB(0, ADD(a, b))"},
+	}
+	for src, want := range cases {
+		e, err := ParseExpr(src)
+		if err != nil {
+			t.Errorf("%s: %v", src, err)
+			continue
+		}
+		if e.IEC() != want[0] || e.FBD() != want[1] {
+			t.Errorf("%s:\n IEC %q want %q\n FBD %q want %q", src, e.IEC(), want[0], e.FBD(), want[1])
+		}
+	}
+	for _, bad := range []string{"", "a +", "(a", "a b", "f(a,", "1 2"} {
+		if _, err := ParseExpr(bad); err == nil {
+			t.Errorf("no error for %q", bad)
+		}
+	}
+}
+
+// A function contact's arguments are expressions, spelled as prefix calls
+// for the netlist: GT(Raw / Span * 100.0, 50.0) compiles.
+func TestFunctionContactExpressionArgs(t *testing.T) {
+	src := `PROGRAM P
+VAR_EXTERNAL
+    Raw : REAL; Span : REAL; Hi : BOOL; n : DINT; b : BOOL;
+END_VAR
+LD
+  RUNG r0
+    GT(Raw / Span * 100.0, 50.0) ( Hi )
+  RUNG r1
+    /EQ(n MOD 2, 0) ( b )
+END_LD
+END_PROGRAM
+`
+	out, err := Transpile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"GT(MUL(DIV(Raw, Span), 100.0), 50.0)", "NOT EQ(MOD(n, 2), 0)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	if _, err := fbd.Compile(out); err != nil {
+		t.Fatalf("FBD does not compile: %v\n%s", err, out)
+	}
+}
+
+// Word.3 in ladder: a contact on a bit, a coil on a bit, a bit in an
+// assignment and in a compare's argument — the Logix spelling, on an
+// integer tag, in all four places.
+func TestBitAccessInLadder(t *testing.T) {
+	src := `PROGRAM P
+VAR_EXTERNAL
+    Status : DINT; Cmd : DINT; Run : BOOL; Fault : BOOL;
+END_VAR
+LD
+  RUNG r0
+    Status.0 /Status.15 ( Run )
+  RUNG r1
+    Run ( Cmd.4 ) ( S Cmd.5 )
+  RUNG r2
+    Run { Cmd.7 := Status.1 }
+  RUNG r3
+    EQ(Status AND 16#F, 3) ( Fault )
+END_LD
+END_PROGRAM
+`
+	out, err := Transpile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Run := AND(Status.0, NOT Status.15)",
+		"Cmd.4 := w_r1",
+		"Cmd.5 := OR(Cmd.5, w_r1)",
+		"Cmd.7 := SEL(Run, Cmd.7, Status.1)",
+		"Fault := EQ(AND(Status, 16#F), 3)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	if _, err := fbd.Compile(out); err != nil {
+		t.Fatalf("FBD does not compile: %v\n%s", err, out)
+	}
+	m, err := Graph(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Rungs[0].Elements[0].Ref != "Status.0" || m.Rungs[1].Coils[0].Ref != "Cmd.4" {
+		t.Errorf("graph refs: %+v %+v", m.Rungs[0].Elements[0], m.Rungs[1].Coils[0])
+	}
+}
+
+// An element of an array of instances in a rung: Timers[1]:TON(PT := …)
+// is called, not declared (the array is), and its Q reads by index.
+func TestFBInstanceArrayInLadder(t *testing.T) {
+	src := `PROGRAM P
+VAR_EXTERNAL
+    a : BOOL; b : BOOL; q : BOOL;
+END_VAR
+VAR
+    Timers : ARRAY [0..3] OF TON;
+END_VAR
+LD
+  RUNG r0
+    a Timers[1]:TON(PT := T#2S) ( b )
+  RUNG r1
+    Timers[2].Q ( q )
+END_LD
+END_PROGRAM
+`
+	out, err := Transpile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Timers[1](IN := a, PT := T#2S)", "b := Timers[1].Q", "q := Timers[2].Q"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in\n%s", want, out)
+		}
+	}
+	if _, err := fbd.Compile(out); err != nil {
+		t.Fatalf("FBD does not compile: %v\n%s", err, out)
+	}
+	m, err := Graph(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := m.Rungs[0].Elements[1]; e.Kind != "fb" || e.Inst != "Timers[1]" || e.Type != "TON" {
+		t.Errorf("element = %+v", e)
+	}
+}

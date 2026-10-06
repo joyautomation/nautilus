@@ -28,7 +28,8 @@
 //	              transition (an implicit F_TRIG instance)
 //	[ a | b ]     parallel branch (legs are series; branches nest)
 //	FN(args)      a function used as a contact: GT(TempC, 90.0)
-//	inst:TYPE(…)  a function block in the rung: power drives its boolean
+//	inst:TYPE(…)  a function block in the rung (inst may be an element of an
+//	              array of instances, Timers[2]): power drives its boolean
 //	              input (IN for timers, CU/CD for counters, CLK for edges;
 //	              for a USER block, EN if it declares one, else its first
 //	              BOOL VAR_INPUT the call doesn't bind by name), power
@@ -43,6 +44,17 @@
 //	              rung condition rises (an implicit R_TRIG instance)
 //	( N Name )    falling-edge coil: Name := TRUE for one scan when the
 //	              rung condition falls (an implicit F_TRIG instance)
+//	{ y := expr } assignment: made when the rung has power at that point
+//	              (the IEC function box with EN on the rung, written as
+//	              the assignment it is); power passes through unchanged.
+//	              Several, separated by ';'. The value is any IEC
+//	              expression — y := x, Count := Count + 1, z := (a + b)
+//	              / 2 - ABS(c) MOD 4 — and is lowered as a SEL, so it is
+//	              evaluated every scan like any block: an index in it
+//	              must stay valid while the rung is false.
+//
+// Contacts and coils take a bit of an integer too — Status.3, Cmd.12 — as
+// Logix spells it (docs/functions.md, "Bit access").
 //
 // Contacts and coils accept the same accessor references as FBD
 // (Levels[2], M.Cmd). Series composes as AND, branches as OR.
@@ -279,6 +291,14 @@ type coilEl struct {
 	mode string // "", "S", "R", "P", "N"
 }
 
+// assignEl is `{ target := expr; … }`: assignments made when the rung has
+// power at that point, with power passing through unchanged — the IEC
+// function box with EN wired to the rung, written as the assignment it is.
+type assignEl struct {
+	text string
+	as   []Assignment
+}
+
 // edgeEl is an edge contact (+Name / -Name): an implicit R_TRIG/F_TRIG
 // instance whose Q joins the rung's condition like any other contact.
 type edgeEl struct {
@@ -374,9 +394,10 @@ func (r *rungParse) compile(res *resolver) ([]string, error) {
 	}
 	// A rung's only output may be a function block instance — its own
 	// output (inst.Q, inst.DN, …) is read elsewhere, the same way a coil
-	// would be. Only a bare rung (no coil AND no FB anywhere) is illegal.
+	// would be — or an assignment. Only a bare rung (no coil, no FB, no
+	// assignment anywhere) is illegal.
 	if len(coils) == 0 && !hasFB(elems) {
-		return nil, fmt.Errorf("ld: rung %s (line %d): a rung needs at least one coil or function block", r.name, r.line)
+		return nil, fmt.Errorf("ld: rung %s (line %d): a rung needs at least one coil, function block or assignment", r.name, r.line)
 	}
 
 	ec := &edgeCtx{rung: r.name, seen: map[string]int{}}
@@ -419,7 +440,7 @@ func (r *rungParse) compile(res *resolver) ([]string, error) {
 func hasFB(elems []any) bool {
 	for _, e := range elems {
 		switch x := e.(type) {
-		case fbEl:
+		case fbEl, assignEl:
 			return true
 		case branch:
 			for _, leg := range x.legs {
@@ -457,7 +478,9 @@ func seriesCond(elems []any, ec *edgeCtx, stmts *[]string, res *resolver) (strin
 				parts = append(parts, x.ref)
 			}
 		case fnEl:
-			call := x.fn + "(" + x.args + ")"
+			// A contact's arguments are IEC expressions — GT(Raw / Span,
+			// 0.5) — spelled for the netlist as prefix calls.
+			call := x.fn + "(" + fbdArgs(x.args) + ")"
 			if x.neg {
 				call = "NOT " + call
 			}
@@ -493,7 +516,7 @@ func seriesCond(elems []any, ec *edgeCtx, stmts *[]string, res *resolver) (strin
 						"leave its power pin unbound, or give the block an EN input", x.inst, x.typ)
 				}
 				args := strings.TrimSpace(x.args)
-				*stmts = append(*stmts, fmt.Sprintf("%s : %s(%s)", x.inst, x.typ, args))
+				*stmts = append(*stmts, fbStmt(x.inst, x.typ, args))
 			default:
 				if containsPin(x.args, in) {
 					return "", fmt.Errorf("%s: the rung's power drives %s — don't pass it as an argument", x.inst, in)
@@ -502,7 +525,7 @@ func seriesCond(elems []any, ec *edgeCtx, stmts *[]string, res *resolver) (strin
 				if strings.TrimSpace(x.args) != "" {
 					args += ", " + x.args
 				}
-				*stmts = append(*stmts, fmt.Sprintf("%s : %s(%s)", x.inst, x.typ, args))
+				*stmts = append(*stmts, fbStmt(x.inst, x.typ, args))
 			}
 			if out == "" {
 				// No BOOL output — power passes through unchanged, so
@@ -511,6 +534,20 @@ func seriesCond(elems []any, ec *edgeCtx, stmts *[]string, res *resolver) (strin
 				continue
 			}
 			parts = []string{x.inst + "." + out}
+		case assignEl:
+			// Made when power reaches it: target := SEL(power, target, value)
+			// — the value is a block like any other, so it is evaluated
+			// every scan, and an index in it must stay valid while the
+			// rung is false (a Logix box would be skipped; see the docs).
+			// Power passes through unchanged.
+			cond := flush()
+			for _, a := range x.as {
+				if cond == "TRUE" {
+					*stmts = append(*stmts, fmt.Sprintf("%s := %s", a.Target, a.Value.FBD()))
+				} else {
+					*stmts = append(*stmts, fmt.Sprintf("%s := SEL(%s, %s, %s)", a.Target, cond, a.Target, a.Value.FBD()))
+				}
+			}
 		default:
 			return "", fmt.Errorf("unexpected element %T", e)
 		}
@@ -549,6 +586,8 @@ func (t *rungTok) peek() string {
 	}
 	return string(t.src[t.pos])
 }
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
 func isIdentStart(c byte) bool {
 	return c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
@@ -590,7 +629,8 @@ func (t *rungTok) ident() (string, error) {
 			}
 			continue
 		case '.':
-			if t.pos+1 < len(t.src) && isIdentStart(t.src[t.pos+1]) {
+			// .member, or .3 — a bit of an integer.
+			if t.pos+1 < len(t.src) && (isIdentStart(t.src[t.pos+1]) || isDigit(t.src[t.pos+1])) {
 				t.pos++
 				for t.pos < len(t.src) && isIdentPart(t.src[t.pos]) {
 					t.pos++
@@ -693,6 +733,32 @@ func (t *rungTok) series(inBranch bool) ([]any, error) {
 				return nil, t.errf("a branch needs at least two legs ([ a | b ])")
 			}
 			out = append(out, branch{legs: legs})
+		case "{":
+			// assignment: { target := expr; … }
+			start := t.pos + 1
+			depth := 0
+			for t.pos < len(t.src) {
+				switch t.src[t.pos] {
+				case '{':
+					depth++
+				case '}':
+					depth--
+				}
+				if depth == 0 {
+					break
+				}
+				t.pos++
+			}
+			if t.pos >= len(t.src) {
+				return nil, t.errf("unclosed '{' in an assignment")
+			}
+			body := strings.TrimSpace(t.src[start:t.pos])
+			t.pos++
+			as, err := ParseAssignments(body)
+			if err != nil {
+				return nil, t.errf("assignment { %s }: %v", body, err)
+			}
+			out = append(out, assignEl{text: PrintAssignments(as), as: as})
 		case "(":
 			// coil: ( Name ), ( S Name ), ( R Name )
 			t.pos++
@@ -752,4 +818,56 @@ func (t *rungTok) series(inBranch bool) ([]any, error) {
 			}
 		}
 	}
+}
+
+// fbdArgs rewrites a call's comma-separated arguments from IEC infix to
+// the netlist's prefix calls. An argument that is not an expression (an
+// output binding, something the parser does not know) passes through for
+// the FBD hop to judge.
+func fbdArgs(args string) string {
+	parts := splitStatementsOn(args, ',')
+	for i, a := range parts {
+		a = strings.TrimSpace(a)
+		if e, err := ParseExpr(a); err == nil {
+			parts[i] = e.FBD()
+		} else {
+			parts[i] = a
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// splitStatementsOn splits on sep outside parentheses, brackets and strings.
+func splitStatementsOn(s string, sep byte) []string {
+	var out []string
+	depth, start := 0, 0
+	inStr := false
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case inStr:
+			if c == '\'' {
+				inStr = false
+			}
+		case c == '\'':
+			inStr = true
+		case c == '(' || c == '[':
+			depth++
+		case c == ')' || c == ']':
+			depth--
+		case c == sep && depth == 0:
+			out = append(out, s[start:i])
+			start = i + 1
+		}
+	}
+	return append(out, s[start:])
+}
+
+// fbStmt is the netlist line for a block in a rung: `inst : TYPE(args)`
+// declares and calls a named instance; an element of an array of
+// instances (Timers[2]) is already declared, so it is just called.
+func fbStmt(inst, typ, args string) string {
+	if strings.ContainsAny(inst, "[.") {
+		return fmt.Sprintf("%s(%s)", inst, args)
+	}
+	return fmt.Sprintf("%s : %s(%s)", inst, typ, args)
 }

@@ -11,7 +11,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/joyautomation/nautilus/internal/stproject"
 	"github.com/joyautomation/nautilus/lang/l5x"
+	"github.com/joyautomation/nautilus/logix/importer"
+	"github.com/joyautomation/nautilus/logix/writer"
 )
 
 const logixUsage = `naut logix — Allen-Bradley Logix project tools
@@ -25,6 +28,15 @@ Usage:
                                        file WITH the controller's own tag
                                        descriptions — which a live CIP browse
                                        cannot recover.
+  naut logix import --project <dir> <file.L5X>
+                                       Brownfield: the whole export as a
+                                       nautilus project — manifest, tags,
+                                       types, every ladder routine as a
+                                       PROGRAM, every Add-On Instruction as
+                                       a FUNCTION_BLOCK in lib/. Rungs with
+                                       no nautilus form are kept as comments
+                                       and reported, never guessed at.
+                                       Experimental, with the Logix target.
   naut logix graph <file.L5X|-> [routine]
                                        Emit an RLL routine's ladder render
                                        model as JSON: the same shape
@@ -39,6 +51,13 @@ Usage:
                                        exports of unchanged code compare equal.
                                        The basis of drift detection.
   naut logix info <file.L5X>       Summarize what the export contains.
+  naut logix write <program.ld|.st> Write a nautilus ladder or ST program as a
+                                       Logix L5X project (experimental:
+                                       docs/design/logix-authoring.md). The
+                                       v1 subset is enforced; a construct it
+                                       lacks is a diagnostic naming the
+                                       alternative, and nothing is written.
+                                       "naut logix write -h" for the flags.
   naut logix emulate --l5x <file.L5X> [--listen 127.0.0.1:44818]
                    [--values seed.json] [--ramp] [--name <controller>]
   naut logix emulate --surface <surface.json> [...]
@@ -77,8 +96,23 @@ to a logixd agent on the licensed Windows machine (tools/logixd):
                                        --accept/--finalize sends it back.
   naut logix download <proj.ACD>   Download a project to a controller.
                                        STOPS it and resets tags; needs --yes.
+  naut logix mode [--yes run|program] (<project-dir> | --comm-path <p>)
+                                       Read the controller's mode, or
+                                       change it (--yes: Program stops the
+                                       logic, Run starts it). The project's
+                                       target: logix names the controller.
   naut logix drift <repo.L5X>      Does the controller still match the
-                                       repo? --comm-path names the controller.
+                                       repo? --comm-path names the controller;
+                                       --logic compares logic only, never
+                                       the tag values a running controller
+                                       keeps changing.
+  naut logix deploy [dir]          Write the project's ladder program as a
+                                       Logix project, build it, and put it
+                                       on the controller named by
+                                       target: logix — as an online edit
+                                       (--online) or a download
+                                       (--download --yes). Experimental.
+                                       "naut logix deploy -h" for the flags.
 
 Import flags:
   --out         Output directory (default ".")
@@ -123,6 +157,12 @@ func runLogix(args []string) int {
 		return runLogixNormalize(args[1:])
 	case "info":
 		return runLogixInfo(args[1:])
+	case "write":
+		return runLogixWrite(args[1:])
+	case "deploy":
+		return runLogixDeploy(args[1:])
+	case "mode":
+		return runLogixMode(args[1:])
 	case "emulate":
 		return runLogixEmulate(args[1:])
 	case "serve":
@@ -159,6 +199,10 @@ func runLogixImport(args []string) int {
 	skip := fs.String("skip", "", "comma-separated globs to leave OUT of the tag file")
 	constants := fs.Bool("constants", false, "include Logix Constant tags")
 	allTypes := fs.Bool("all-types", false, "also emit module- and product-defined shapes")
+	projectDir := fs.String("project", "", "write the export as a whole nautilus project into this directory")
+	programs := fs.String("programs", "", "with --project: comma-separated Logix programs to import (default all)")
+	commPath := fs.String("comm-path", "", "with --project: the FactoryTalk Linx path for the manifest's target")
+	host := fs.String("host", "", "with --project: the controller's EtherNet/IP address for the manifest's target")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -170,6 +214,11 @@ func runLogixImport(args []string) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut logix import:", err)
 		return 1
+	}
+	if *projectDir != "" {
+		return runLogixImportProject(f, *projectDir, importer.Options{
+			Programs: splitPatterns(*programs), CommPath: *commPath, Host: *host,
+		})
 	}
 
 	// The types the tags actually bind are the roots, so the generated
@@ -216,6 +265,40 @@ func runLogixImport(args []string) int {
 	fmt.Printf("wrote %s (%d types) and %s (%d tags)\n",
 		typesPath, len(known), tagsPath, countTags(raw))
 	fmt.Printf("compose the tags with `tag-files: [%s]`\n", *tagsOut)
+	return 0
+}
+
+// runLogixImportProject writes the brownfield import and its report.
+func runLogixImportProject(f *l5x.File, dir string, opts importer.Options) int {
+	p, err := importer.Import(f, opts)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut logix import:", err)
+		return 1
+	}
+	names := make([]string, 0, len(p.Files))
+	for name := range p.Files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if err := writeUnder(filepath.Join(dir, filepath.FromSlash(name)), p.Files[name]); err != nil {
+			fmt.Fprintln(os.Stderr, "naut logix import:", err)
+			return 1
+		}
+		fmt.Println("wrote", filepath.Join(dir, filepath.FromSlash(name)))
+	}
+	fmt.Printf("%d ladder routines, %d complete; %d rungs, %d carried\n", p.Routines, p.Complete, p.Rungs, p.Imported)
+	if rs := p.Reasons(); len(rs) > 0 {
+		fmt.Println("rungs not carried, by reason:", strings.Join(rs, ", "))
+	}
+	for _, n := range p.Notes {
+		if n.Rung < 0 {
+			fmt.Println("  note:", n)
+		}
+	}
+	if p.Complete < p.Routines {
+		fmt.Printf("%d routine(s) are incomplete: their files say so in the header, and `naut logix deploy` of one would leave logic out.\n", p.Routines-p.Complete)
+	}
 	return 0
 }
 
@@ -449,5 +532,63 @@ func runLogixInfo(args []string) int {
 		fmt.Printf("program %s: %d tags, %s, %d rungs\n",
 			p.Name, len(p.Tags), strings.Join(kinds, ", "), rungs)
 	}
+	return 0
+}
+
+// runLogixWrite is the nautilus → Logix writer: one ladder program in,
+// one L5X controller project out. The flags are the project envelope the
+// program lands in; a hardware.L5X merge replaces them in a later phase.
+func runLogixWrite(args []string) int {
+	fs := flag.NewFlagSet("logix write", flag.ContinueOnError)
+	out := fs.String("o", "", "write the L5X here (default: stdout)")
+	controller := fs.String("controller", "", "controller (project) name (default: the PROGRAM name)")
+	program := fs.String("program", "", "Logix program name (default: the PROGRAM name)")
+	routine := fs.String("routine", "MainRoutine", "ladder routine name")
+	task := fs.String("task", "MainTask", "task name")
+	period := fs.Int("period", 0, "periodic task rate in ms (0: continuous)")
+	processor := fs.String("processor", "1756-L85E", "controller catalog number")
+	revision := fs.String("revision", "38.11", "firmware revision, major.minor")
+	software := fs.String("software", "38.01", "Logix Designer version the export claims")
+	date := fs.String("date", "", "ExportDate attribute (default: \"(pinned)\", so a regeneration of unchanged logic is byte-identical)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: naut logix write [flags] <program.ld>")
+		return 2
+	}
+	path := fs.Arg(0)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut logix write:", err)
+		return 2
+	}
+	major, minor, _ := strings.Cut(*revision, ".")
+	_, libs, _ := stproject.PreludeSources(path, nil)
+	doc, diags, err := writer.WriteProgram(path, string(raw), writer.Options{
+		Controller: *controller, Program: *program, Routine: *routine, Task: *task,
+		PeriodMs: *period, ProcessorType: *processor, MajorRev: major, MinorRev: minor,
+		SoftwareRevision: *software, ExportDate: *date, Libs: libs,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", path, err)
+		return 2
+	}
+	if len(diags) > 0 {
+		for _, d := range diags {
+			fmt.Printf("%s:%d:1: logix target: %s [%s]\n", path, d.Line, d.Message, d.Rule)
+		}
+		fmt.Fprintf(os.Stderr, "naut logix write: %d construct(s) outside the Logix v1 subset; nothing written\n", len(diags))
+		return 1
+	}
+	if *out == "" {
+		os.Stdout.Write(doc)
+		return 0
+	}
+	if err := os.WriteFile(*out, doc, 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "naut logix write:", err)
+		return 2
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s\n", *out)
 	return 0
 }

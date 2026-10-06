@@ -64,7 +64,7 @@ func Tags(f *File, opts TagsOptions) ([]tagfile.Tag, error) {
 				return
 			}
 		}
-		tag := tagfile.Tag{Name: name, Role: "input", Desc: t.Description}
+		tag := tagfile.Tag{Name: name, Role: "input", Desc: t.Description, Alias: t.AliasFor}
 		// An array's shape comes from the driver that delivers it; a tag
 		// file has no syntax for one, so it stays untyped and unseeded.
 		if t.Dimensions == "" {

@@ -1,0 +1,26 @@
+name: conformance-logic
+tasks:
+  - program: Main.ld
+    scan: 10ms
+tags:
+  - { name: A, role: input, init: false }
+  - { name: B, role: input, init: false }
+  - { name: C, role: input, init: false }
+  - { name: X, role: input, init: 0.0 }
+  - { name: Y, role: input, init: 0 }
+  - { name: AndOut, role: output, init: false }
+  - { name: OrOut, role: output, init: false }
+  - { name: Nest, role: output, init: false }
+  - { name: Cmp, role: output, init: false }
+  - { name: Lat, role: state, init: false }
+  - { name: Both1, role: output, init: false }
+  - { name: Both2, role: output, init: false }
+target:
+  logix:
+    controller: DemoLine
+    processor: 1756-L85E
+    revision: "38.11"
+    comm-path: AB_ETH-1\100.93.56.45\Backplane\0
+    host: 100.93.56.45
+    side:
+      heartbeat: Nautilus_Scan

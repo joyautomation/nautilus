@@ -1,0 +1,31 @@
+# Data instructions: assignments on a rung — MOVE, ADD/SUB/MUL/DIV, ABS,
+# a CPT expression, a CMP compare, boxes in parallel legs, a one-shot of a
+# compound condition — measured on both runtimes.
+name: conformance-data
+tasks:
+  - program: Main.ld
+    scan: 10ms
+tags:
+  - { name: Go, role: input, init: false }
+  - { name: Step, role: input, init: false }
+  - { name: Count, role: state, init: 0 }
+  - { name: Total, role: state, init: 0 }
+  - { name: Span, role: input, init: 100.0 }
+  - { name: Raw, role: input, init: 0.0 }
+  - { name: Scaled, role: output, init: 0.0 }
+  - { name: Mag, role: output, init: 0.0 }
+  - { name: Mode, role: input, init: 0 }
+  - { name: Hi, role: output, init: false }
+  - { name: SetA, role: state, init: 0 }
+  - { name: SetB, role: state, init: 0 }
+  - { name: Armed, role: output, init: false }
+  - { name: Seen, role: output, init: false }
+target:
+  logix:
+    controller: DemoLine
+    processor: 1756-L85E
+    revision: "38.11"
+    comm-path: AB_ETH-1\100.93.56.45\Backplane\0
+    host: 100.93.56.45
+    side:
+      heartbeat: Nautilus_Scan

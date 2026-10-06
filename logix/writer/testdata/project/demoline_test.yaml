@@ -1,0 +1,31 @@
+# DemoLine's two rungs as scenarios. `naut test` runs them on the nautilus
+# runtime in virtual time; `naut test --target logix` runs the same file
+# against the Echo controller the project was deployed to, over
+# EtherNet/IP, with the controller as the runtime.
+tests:
+  - name: start seals in the run command and stop drops it out
+    steps:
+      - given: { StartPB: true }
+        scans: 1
+        expect: { RunCmd: true }
+      - given: { StartPB: false }
+        scans: 1
+        expect: { RunCmd: true }
+      - given: { StopPB: true }
+        scans: 1
+        expect: { RunCmd: false }
+      - given: { StopPB: false }
+        scans: 1
+        expect: { RunCmd: false }
+
+  - name: high-level alarm at and above the setpoint
+    given: { LevelPct: 84.9 }
+    steps:
+      - scans: 1
+        expect: { HiLevelAlm: false }
+      - given: { LevelPct: 85.0 }
+        scans: 1
+        expect: { HiLevelAlm: true }
+      - given: { LevelPct: 50.0 }
+        scans: 1
+        expect: { HiLevelAlm: false }

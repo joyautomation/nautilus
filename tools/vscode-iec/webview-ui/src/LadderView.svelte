@@ -184,6 +184,7 @@
 		{ label: '⊣P⊢', title: 'rising-edge contact (+Tag): TRUE for the one scan its tag goes 0→1 — the ONS / OSR habit; P on a selected contact cycles NO → P → N → NC', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'edge', mode: 'P', path: series, index }) },
 		{ label: '⊣N⊢', title: 'falling-edge contact (-Tag): TRUE for the one scan its tag goes 1→0', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'edge', mode: 'N', path: series, index }) },
 		{ label: 'FN( )', title: 'function contact — inserts GT(_, 0.0) as a placeholder; dblclick it to make it ANY function: LE, EQ, ABS(x) > 0 comparisons, etc.', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'fn', fn: 'GT', args: '_, 0.0', path: series, index }) },
+		{ label: '{ := }', title: 'assignment — { y := x + 1 } made when the rung has power here; power passes through. dblclick to edit; several with ;', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'assign', args: '_ := 0', path: series, index }) },
 		{ label: 'FB…', title: 'function block — TON, CTU, any standard block or one of the project\'s own (library) blocks; pick the type, name the instance', accept: 'series', pick: true },
 		{ label: '[ | ]', title: 'parallel branch (two open legs)', accept: 'series', op: (rung, series, index) => ({ type: 'insert', rung, kind: 'branch', path: series, index }) },
 		{ label: '( )', title: 'output coil', accept: 'coil', op: (rung, _s, index) => ({ type: 'insert', rung, kind: 'coil', index }) },
@@ -457,6 +458,8 @@
 					},
 					{ suggest: 'functions' }
 				);
+			} else if (ann.el.kind === 'assign') {
+				requestInput(ann.el.text ?? '', { ...at, w: Math.max(rect.width, 160) }, (v) => post({ type: 'setArgs', ...addr, args: v }), { suggest: 'tags' });
 			} else if (ann.el.kind === 'fb') {
 				// The header (instance name, type) renames the instance —
 				// declaration and every reference, in one edit; the body
@@ -1026,6 +1029,10 @@
 							<title>{n.ann.el.fn}({n.ann.el.args}){diffNote(n.ann.el)}{editable ? ' — dblclick: edit the call (any function) · Del · drag to move' : ''}</title>
 							<rect x="0" y="0" width={n.w} height={n.h} rx="4" class="box" />
 							<text x={n.w / 2} y={n.h / 2 + 3.5} text-anchor="middle" class="fntext">{n.ann.el.fn}({n.ann.el.args})</text>
+						{:else if n.kind === 'assign'}
+							<title>{'{ ' + (n.ann.el.text ?? '') + ' }'}{diffNote(n.ann.el)}{editable ? ' — dblclick: edit the assignment(s) · Del · drag to move' : ''}</title>
+							<rect x="0" y="0" width={n.w} height={n.h} rx="4" class="box" />
+							<text x={n.w / 2} y={n.h / 2 + 3.5} text-anchor="middle" class="fntext">{n.ann.el.text}</text>
 						{:else if n.kind === 'fb'}
 							<title>{n.ann.el.inst} : {n.ann.el.type}({n.ann.el.args}){diffNote(n.ann.el)}{editable ? ' — dblclick the name: rename the instance · dblclick the body: edit args · Del · drag to move' : ''}{descTail(n.ann.el.inst)}</title>
 							<rect x="0" y="0" width={n.w} height={n.h} rx="3" class="box fbbox" />

@@ -110,6 +110,7 @@ A rung is a boolean expression that reads left to right:
 | Reset coil | `( R Tag )` | unlatch: `Tag := Tag AND NOT condition` |
 | Rising-edge coil | `( P Tag )` | `Tag :=` TRUE for one scan when the rung condition rises (an implicit `R_TRIG`) |
 | Falling-edge coil | `( N Tag )` | `Tag :=` TRUE for one scan when the rung condition falls (an implicit `F_TRIG`) |
+| Assignment | `{ Tag := expr }` | made when the rung has power at that point; power passes through unchanged. Several with `;`: `{ Count := Count + 1; Last := Now }` |
 
 Series elements AND together; a rung with only a coil is driven by the
 rail (`TRUE`). Multiple coils on one rung share the same condition. A
@@ -138,8 +139,15 @@ functions don't: `ADD(TempC, 0.0)` as a contact is a **compile error**
 (`operator AND on BOOL and REAL`, or `cannot assign REAL to BOOL` when
 it's alone on the rung) — ADD does not "pass through" its input. Numeric
 functions belong *inside* a comparison's arguments — `GE(ADD(Base, Bias),
-Limit)` — or in an FBD/ST program, where values rather than power flow
-between elements.
+Limit)` — or in an **assignment**: `Run { Hours := Hours + ScanH }` adds
+while `Run` is true and leaves power as it found it, which is the IEC
+function box with its `EN` wired to the rung. The value is any IEC
+expression (operators, functions, members, indexes); it is compiled as a
+`SEL` on the rung condition, so it is evaluated every scan like any block
+— an array index in it must stay valid while the rung is false. On a
+Logix target an assignment becomes the matching instruction (MOVE, ADD,
+SUB, MUL, DIV, MOD, NEG, ABS, SQR, XPY) or a CPT; see
+`docs/design/logix-authoring.md`.
 
 Reading FB outputs: any instance output is addressable as `inst.Pin`
 everywhere — `GE(t2.ET, T#2S)` as a contact, `t2.Q` as an operand, or
@@ -261,6 +269,17 @@ takes [EN/ENO](#eneno-execution-control).
 | --- | --- | --- | --- |
 | `SHL`, `SHR` | `(IN: INT/WORD, N: INT)` | same as IN | shift left / logical shift right (zero-fill) |
 | `ROL`, `ROR` | `(IN, N)` | same as IN | rotate left / right |
+| `AND`, `OR`, `XOR` | two integers | integer | bitwise, when both operands are integers (on BOOLs they are the logical operators) |
+
+**Bit access.** `Word.3` is bit 3 of an integer, as a BOOL — readable
+anywhere a BOOL is (`IF Status.0 THEN`, a ladder contact `Status.0`, a
+compare argument) and assignable (`Cmd.4 := TRUE`, a ladder coil
+`( Cmd.4 )`), which reads the word, sets or clears the bit, and writes
+the word back. Bits are numbered from 0 at the least significant end, up
+to 63. This is the spelling Logix uses and the one IEC 61131-3 ed. 3
+writes `Word.%X3`; nautilus takes the shorter one. A bit of an array
+element or a structure member works the same way: `Words[2].15`,
+`P101.Status.12`.
 
 Caveat: the runtime's integers are 64-bit and declared widths aren't
 tracked, so rotates operate over 64 bits — a `WORD` you think of as 16
@@ -454,6 +473,56 @@ lic(AUTO   := TRUE,     PV     := LevelPct, SP    := LevelSP,
 InletValve := lic.CV;
 IF lic.SAT_HI THEN InletMaxedAlm := TRUE; END_IF;
 ```
+
+### Arrays of instances
+
+A function-block instance can be declared in an array — `Timers : ARRAY
+[0..3] OF TON;` — and each element is its own instance with its own
+retained state. Call an element by index and read its outputs by index:
+`Timers[2](IN := Run, PT := T#5S);` and `Timers[2].Q` in ST, or
+`Run Timers[2]:TON(PT := T#5S)` in a rung. The index may be a variable.
+On a Logix target the array is one `TIMER[4]` tag; an element called
+with a literal index carries its preset in the tag's data, one called
+with a computed index takes a `MOVE` to its `.PRE` ahead of the rung.
+
+## Dialects
+
+A project runs on the nautilus runtime by default, and that is the only
+semantics the standard library has. A project that targets a vendor's
+controller can opt into that vendor's idioms with `dialect:` in
+`nautilus.yaml`:
+
+```yaml
+dialect: logix
+```
+
+A dialect is a library of blocks with the vendor's semantics, written in
+nautilus and compiled into every program of the project like a `lib/`
+file — so the nautilus runtime runs them, the vendor writer emits the
+native instruction for them, and the vendor import folds the native idiom
+back into them. One definition, three uses. The names are `nautilus` (the
+default, adds nothing), `logix`, and the reserved `siemens` and `codesys`.
+
+The `logix` dialect today:
+
+| Block | Pins | Semantics | On a Logix controller |
+| --- | --- | --- | --- |
+| `TONR` | `IN`, `PT`, `Reset` → `Q`, `ET` | a TON whose `Reset` clears the accumulated time and `Q` while TRUE; the free-running pulse is `t:TONR(PT := T#1S, Reset := t.Q)` | a `TON` with a `RES(t)` rung ahead of the timer's rung |
+
+**Tag aliases.** A manifest tag may carry `alias:`, the vendor-side
+binding of the tag — on Logix the alias tag's target, which is how a Logix
+program names a rack point or another tag:
+
+```yaml
+tags:
+  - { name: StartPB, role: input, alias: "Local:1:I.Data.3" }
+```
+
+The program names `StartPB`; the Logix writer emits it as an alias tag;
+the L5X importer turns an export's alias tags, and rack points the logic
+named directly, into tags with `alias:`. The nautilus runtime ignores the
+binding — the tag is a tag — so a simulation runs the same source. It is
+the one place a hardware address lives in a project.
 
 ## User function blocks
 

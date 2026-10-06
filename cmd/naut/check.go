@@ -16,6 +16,7 @@ import (
 	"github.com/joyautomation/nautilus/lang/ld"
 	"github.com/joyautomation/nautilus/lang/sfc"
 	"github.com/joyautomation/nautilus/lang/st"
+	"github.com/joyautomation/nautilus/logix/writer"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -28,8 +29,27 @@ import (
 func runCheck(args []string) int {
 	fset := flag.NewFlagSet("check", flag.ContinueOnError)
 	manifest := fset.String("m", "", manifestFlagUsage)
+	target := fset.String("target", "", "also check the sources against a deploy target (experimental): \"logix\" runs the Allen-Bradley writer's rules, so a construct the L5X writer cannot express is a diagnostic here, not a download failure")
 	if err := fset.Parse(args); err != nil {
 		return 2
+	}
+	if *target != "" && *target != "logix" {
+		fmt.Fprintf(os.Stderr, "naut check: unknown target %q (the targets are: logix)\n", *target)
+		return 2
+	}
+	paths0 := fset.Args()
+	if len(paths0) == 0 {
+		paths0 = []string{"."}
+	}
+	// A project that declares a deploy target is checked against it
+	// without being asked: the point of the target's rules is to fire on
+	// the keystroke, not on the flag.
+	if *target == "" {
+		if dir, ok := manifestDir(paths0, *manifest); ok {
+			if m, err := project.ReadManifest(os.DirFS(dir), *manifest); err == nil && m.Target != nil && m.Target.Logix != nil {
+				*target = "logix"
+			}
+		}
 	}
 	paths := fset.Args()
 	if len(paths) == 0 {
@@ -94,6 +114,7 @@ func runCheck(args []string) int {
 			fmt.Printf("%s:1:1: warning: empty chart — no PROGRAM yet; open it as a diagram and click \"initialize\" (or delete it)\n", f)
 			continue
 		}
+		original := source
 		// lib/ holds libraries only. A PROGRAM there would be silently
 		// dropped from every composition (it is neither a library nor a
 		// task), so it is refused here, by its project-relative path.
@@ -187,6 +208,12 @@ func runCheck(args []string) int {
 				}
 			}
 			fmt.Printf("%s:%d:%d: %s\n", f, pos.Line, pos.Col, msg)
+			continue
+		}
+		// The target's rules run on a file that compiles: the same
+		// lowering `naut logix write` uses, so what passes here writes.
+		if *target == "logix" && checkLogixTarget(f, original, libSources) {
+			bad++
 		}
 	}
 
@@ -210,6 +237,33 @@ func runCheck(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// checkLogixTarget reports every construct in one source file that the
+// Allen-Bradley writer (logix/writer) cannot express, in the same
+// gcc-style lines as a compile error. Only ladder is in the v1 subset; a
+// file in another language is one diagnostic naming the phase that adds
+// it. Returns true when anything was reported.
+func checkLogixTarget(f, source string, libs []string) bool {
+	if writer.Language(f) == "" {
+		fmt.Printf("%s: logix target: only ladder (.ld) and structured text (.st) programs are in the Logix subset; FBD and SFC come later\n", f)
+		return true
+	}
+	// A library of TYPE declarations (and constants) is fine: the writer
+	// checks the types a program actually uses. A library of blocks is
+	// refused where a program uses one.
+	if strings.EqualFold(filepath.Ext(f), ".st") && !stproject.DeclaresProgram(source) {
+		return false
+	}
+	diags, err := writer.CheckProgram(f, source, libs...)
+	if err != nil {
+		fmt.Printf("%s: logix target: %s\n", f, err)
+		return true
+	}
+	for _, d := range diags {
+		fmt.Printf("%s:%d:1: logix target: %s [%s]\n", f, d.Line, d.Message, d.Rule)
+	}
+	return len(diags) > 0
 }
 
 // checkManifest cross-checks a manifest project's declared tags against the

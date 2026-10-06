@@ -10,6 +10,7 @@ package project
 import (
 	"errors"
 	"fmt"
+	"github.com/joyautomation/nautilus/internal/dialect"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -44,9 +45,15 @@ const ManifestName = "nautilus.yaml"
 // server.Options as data; the yaml decoder runs with KnownFields so a typo
 // is an error, not silence.
 type Manifest struct {
-	Name   string       `yaml:"name"`
-	Server ServerConfig `yaml:"server"`
-	Tasks  []TaskConfig `yaml:"tasks"`
+	Name string `yaml:"name"`
+	// Dialect opts the project into a vendor-semantics block library
+	// (internal/dialect): "logix" adds TONR and friends, written in
+	// nautilus so the runtime, the Logix writer and the L5X importer share
+	// one definition. Empty or "nautilus" adds nothing; "siemens" and
+	// "codesys" are reserved.
+	Dialect string       `yaml:"dialect"`
+	Server  ServerConfig `yaml:"server"`
+	Tasks   []TaskConfig `yaml:"tasks"`
 	// TagFiles names files holding additional tags — each a bare YAML
 	// sequence of the same tag entries as Tags. This is how a GENERATED
 	// tag set stays a separate reviewable artifact instead of a 500-line
@@ -81,6 +88,59 @@ type Manifest struct {
 	// ReadManifest, so check, run and the language server see one set.
 	Alarms     *AlarmsConfig `yaml:"alarms"`
 	AlarmFiles []string      `yaml:"alarm-files"`
+	// Target names a controller this project is DEPLOYED to instead of
+	// being run by the nautilus runtime: today, an Allen-Bradley Logix
+	// controller (docs/design/logix-authoring.md). With a target set,
+	// `naut check` also runs that target's rules, so a construct the
+	// target cannot take is a diagnostic on the keystroke that wrote it.
+	Target *TargetConfig `yaml:"target"`
+}
+
+// TargetConfig is the deploy target. One kind at a time; logix is the
+// only one so far.
+type TargetConfig struct {
+	Logix *LogixTarget `yaml:"logix"`
+}
+
+// LogixTarget is an Allen-Bradley Logix controller as a deploy target:
+// what the L5X writer puts in the project envelope, where logixd reaches
+// the controller, and where live values come from.
+type LogixTarget struct {
+	// Controller is the Logix controller (project) name. Default: the
+	// task program's POU name.
+	Controller string `yaml:"controller"`
+	// Processor is the catalog number (1756-L85E); Revision the firmware
+	// "major.minor" (38.11). Defaults match ECHO1.
+	Processor string `yaml:"processor"`
+	Revision  string `yaml:"revision"`
+	// CommPath is the FactoryTalk Linx path logixd uses to reach the
+	// controller (AB_ETH-1\10.0.0.5\Backplane\0). Required to deploy.
+	CommPath string `yaml:"comm-path"`
+	// Host and Slot are the controller's EtherNet/IP address for live
+	// values (`naut logix serve`); Port 0 is 44818.
+	Host string `yaml:"host"`
+	Slot int    `yaml:"slot"`
+	Port int    `yaml:"port"`
+	// Agent is the logixd URL. NAUTILUS_LOGIXD_URL overrides it, and the
+	// token is NEVER in the manifest — set NAUTILUS_LOGIXD_TOKEN.
+	Agent string `yaml:"agent"`
+	// Program, Routine and Task name the Logix program, its ladder
+	// routine and the task it is scheduled in. Defaults: the POU name,
+	// MainRoutine, MainTask.
+	Program string `yaml:"program"`
+	Routine string `yaml:"routine"`
+	Task    string `yaml:"task"`
+	// Side is the side code nautilus adds beside the program, in a Logix
+	// program of its own: testing, verification and metrics logic that
+	// never touches the user's routine.
+	Side *LogixSide `yaml:"side"`
+}
+
+// LogixSide selects the side code.
+type LogixSide struct {
+	// Heartbeat names a controller DINT incremented once per task scan,
+	// which `naut test --target logix` waits on for an exact `scans: n`.
+	Heartbeat string `yaml:"heartbeat"`
 }
 
 // RetainConfig says where retained state lives. In a cluster the ConfigMap
@@ -195,6 +255,11 @@ type TagConfig struct {
 	Init any    `yaml:"init"`
 	Unit string `yaml:"unit"`
 	Desc string `yaml:"desc"`
+	// Alias binds the tag to a controller's I/O point or another tag on a
+	// vendor target — on Logix, the alias tag's AliasFor
+	// ("Local:1:I.Data.3"). The nautilus runtime ignores it: the tag is a
+	// tag. It is the one place a hardware address lives in a project.
+	Alias string `yaml:"alias"`
 }
 
 // MetaConfig is HMI documentation for a tag, kept separate from the tag's
@@ -448,6 +513,9 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 	dec.KnownFields(true)
 	if err := dec.Decode(&m); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if !dialect.Known(m.Dialect) {
+		return nil, fmt.Errorf("%s: dialect %q is not one of %s", name, m.Dialect, strings.Join(dialect.Names, ", "))
 	}
 	if err := composeTags(fsys, &m, name); err != nil {
 		return nil, err

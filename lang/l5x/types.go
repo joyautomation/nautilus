@@ -273,6 +273,13 @@ func memberType(m Member) (stgen.Type, string) {
 //
 // Renaming is the only option; it is deterministic, so a regenerated
 // file diffs against the last one instead of reshuffling.
+// Ident maps a Logix name to the nautilus identifier the generated
+// source uses for it: the characters IEC allows, and a keyword escaped
+// the way the type declarations escape it. Every generator that refers
+// to a Logix tag must go through this, or a tag named "retain" declares
+// as one thing and is referenced as another.
+func Ident(name string) string { return ident(name) }
+
 func ident(name string) string {
 	var b strings.Builder
 	for i := 0; i < len(name); i++ {

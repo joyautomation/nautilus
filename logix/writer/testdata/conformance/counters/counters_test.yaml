@@ -1,0 +1,65 @@
+tests:
+  - name: three pulses reach the preset, a held pulse counts once, done survives the pulse dropping
+    steps:
+      - given: { Pulse: true }
+        scans: 2
+        expect: { Done: false }
+      - given: { Pulse: false }
+        scans: 2
+      - given: { Pulse: true }
+        scans: 2
+        expect: { Done: false }
+      - given: { Pulse: false }
+        scans: 2
+      - given: { Pulse: true }
+        scans: 2
+        expect: { Done: true }
+      - given: { Pulse: false }
+        scans: 2
+        expect: { Done: true }
+      - given: { Pulse: true }
+        scans: 2
+        expect: { Done: true }
+
+  - name: reset clears the count and done
+    steps:
+      - given: { Pulse: true }
+        scans: 2
+      - given: { Pulse: false }
+        scans: 2
+      - given: { Pulse: true }
+        scans: 2
+      - given: { Pulse: false }
+        scans: 2
+      - given: { Pulse: true }
+        scans: 2
+        expect: { Done: true }
+      - given: { Reset: true }
+        scans: 2
+        expect: { Done: false }
+      - given: { Reset: false, Pulse: false }
+        scans: 2
+      - given: { Pulse: true }
+        scans: 2
+        expect: { Done: false }
+
+  - name: a gated counter counts only while armed and keeps done when disarmed
+    given: { Reset: true }
+    steps:
+      - given: { Reset: false }
+        scans: 2
+      - given: { Pulse: true }
+        scans: 2
+      - given: { Pulse: false }
+        scans: 2
+        expect: { ArmedDone: false }
+      - given: { Armed: true, Pulse: true }
+        scans: 2
+      - given: { Pulse: false }
+        scans: 2
+      - given: { Pulse: true }
+        scans: 2
+        expect: { ArmedDone: true }
+      - given: { Armed: false, Pulse: false }
+        scans: 2
+        expect: { ArmedDone: true }
