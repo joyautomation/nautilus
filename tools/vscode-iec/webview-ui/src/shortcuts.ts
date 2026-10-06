@@ -84,16 +84,17 @@ export const LD_SHORTCUTS: ShortcutGroup[] = [
 	{
 		title: 'Edit',
 		rows: [
-			{ keys: 'Double-click', does: 'Retag a contact or coil, edit arguments, rename a rung', hint: 'dblclick: retag / edit args / rename rung' },
+			{ keys: 'Double-click', does: 'Retag a contact or coil (+Tag / -Tag makes an edge contact, /Tag an NC one), edit arguments, rename a rung', hint: 'dblclick: retag / edit args / rename rung' },
 			{ keys: 'Enter / Esc', does: 'Commit / cancel an in-place edit' },
 			{ keys: '⊕', does: 'Insert an element at that spot', hint: '⊕: insert' },
 			{ keys: 'Drag a palette item', does: 'Drop it onto a rung spot' },
 			{ keys: 'Drag an element', does: 'Move it to another spot or rung' },
 			{ keys: 'Del / Backspace', does: 'Delete the element — or the rung, when its name is selected', hint: 'Del: delete element or rung' },
 			{ keys: 'N', does: 'Toggle a contact between NO and NC', hint: 'N: NO/NC' },
+			{ keys: 'P', does: 'Cycle a contact: NO → P (rising edge) → N (falling edge) → NC', hint: 'P: edge contact' },
 			{ keys: 'M', does: 'Cycle a coil: normal → set → reset', hint: 'M: coil mode' },
 			{ keys: 'B', does: 'Wrap the selection in a parallel branch', hint: 'B: branch around' },
-			{ keys: 'Ctrl + C / X / V', does: 'Copy, cut, paste an element — pastes after the selection, into another ladder too', hint: 'Ctrl+C/X/V: copy cut paste' },
+			{ keys: 'Ctrl + C / X / V', does: 'Copy, cut, paste an element or a whole rung (its name selected) — pastes after the selection, into another ladder too; a pasted rung gets the next name (m1 → m2) and renamed blocks', hint: 'Ctrl+C/X/V: copy cut paste' },
 			{ keys: 'Esc', does: 'Cancel a drag', hint: 'Esc: cancel drag' }
 		]
 	},

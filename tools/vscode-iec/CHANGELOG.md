@@ -31,6 +31,28 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Added
 
+- **Ladder: edge contacts, from the palette, a key or a retag.** The
+  palette has rising- and falling-edge contacts (`⊣P⊢`, `⊣N⊢`, the Logix
+  ONS habit); `P` cycles a selected contact NO → P → N → NC; and
+  double-clicking a contact and typing `+Tag`, `-Tag` or `/Tag` sets its
+  form with the tag (a bare tag keeps it). Needs a `naut` newer than
+  0.15.0. (#213)
+
+- **Ladder: copy and paste a whole rung.** With a rung's name selected,
+  Ctrl+C (or ⧉) copies the rung and Ctrl+V (or ⎘) pastes it below the
+  selected rung, named on from the original (`m1` → `m2`), its block
+  instances renamed the same way and its comment kept. ⧉ and ✂ are
+  disabled while nothing copyable is selected. Needs a `naut` newer than
+  0.15.0. (#217)
+
+- **Ladder: a FUNCTION_BLOCK's pins from the diagram.** Inside a
+  `FUNCTION_BLOCK`, the amber declare offer makes a name a pin
+  (`VAR_INPUT` for one the rungs read, `VAR_OUTPUT` for one a coil writes)
+  or a local, and the variables panel groups declarations by POU, declares
+  pins (`in` → `out` → `in/out` → `local`) and renames a declaration on a
+  double-click, together with its references and, for a pin, the calls'
+  named bindings in that file. Needs a `naut` newer than 0.15.0. (#214)
+
 - **Forcing.** *Force…* holds a tag — or one member of a struct tag — at a
   value against the field and the logic until it is removed: a forced input
   beats the driver every scan, a forced output beats the logic. From the
@@ -62,6 +84,7 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   Diagram or Sequential Function Chart and passes `naut new --language`, so
   a ladder programmer's first project opens as `program.ld` without a
   terminal. The Get Started walkthrough's step is the same command (#221).
+
 - **Signature help: a call's parameters while you type it.** Typing `(`
   after a function or a function block instance opens the parameter-hints
   widget with the callee's signature, and `,` moves the highlight on —
@@ -95,6 +118,22 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   older `naut` leaves the outline empty, as before.
 
 ### Fixed
+
+- **Ladder: an edge contact (`+Tag`, `-Tag`) is drawn.** The diagram
+  dropped it and wired the block behind it straight to the rail, as if the
+  call were unconditional. It now draws as a P or N contact, and with live
+  values on it lights for the scan its one-shot fires. (#212)
+
+- **Ladder: the declare offer types a name from its use.** A counter's
+  `CV => M1_Starts` was offered as `VAR_EXTERNAL : REAL` because the
+  manifest seed `init: 0` types the tag REAL; the offer now takes the pin's
+  type (`INT`), a comparison's other operand, or BOOL for a contact, and
+  its `VAR` choice uses the same type. (#219)
+
+- **Ladder: the variables panel lists block instances and closes on
+  Escape.** The instances rungs declare by their calls (`m1:MotorStarter(…)`,
+  the AOI's backing tag) are listed read-only as `m1 : MotorStarter` with
+  their rung. (#220)
 
 - **The FB monitor CodeLens shows the real position.** It said "1 of 2"
   whichever instance was monitored; monitoring the second one now reads

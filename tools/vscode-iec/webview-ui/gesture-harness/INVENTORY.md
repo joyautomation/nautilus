@@ -32,14 +32,14 @@ the smoke checks `01`..`11` in `content/assets/capture/ext-stable/smoke/`.
   the verb list, not by running them; a "partial" label is deliberately
   conservative.
 
-Totals: 160 rows. **0 rows have no coverage at all** (no webview test,
+Totals: 168 rows. **0 rows have no coverage at all** (no webview test,
 no rig verb, no smoke check); per section below.
 
 | section | rows | no coverage |
 |---|---|---|
 | Commands | 28 | 0 |
 | FBD `?` | 18 | 0 |
-| Ladder `?` | 20 | 0 |
+| Ladder `?` | 28 | 0 |
 | SFC `?` | 22 | 0 |
 | Mimic `?` | 18 | 0 |
 | Component `?` | 8 | 0 |
@@ -107,7 +107,7 @@ no rig verb, no smoke check); per section below.
 |---|---|---|---|---|---|---|
 | L01 | LD | Click an element to select it | "?" list LD / Select / `Click` | diagram.test.mjs: Ladder: click a rung name, Del deletes the rung (rung name only) | ld_node_el / click_el | — |
 | L02 | LD | Click a rung's name to select the whole rung | "?" list LD / Select / `Click a rung's name` | diagram.test.mjs: Ladder: click a rung name, Del deletes the rung | ld_select_rung | — |
-| L03 | LD | Double-click to retag a contact or coil, edit arguments, rename a rung | "?" list LD / Edit / `Double-click` | diagram.test.mjs: Ladder: the declare offer covers a block call's arguments (retag path) | ld_add_contact, ld_rename_block, float_edit | — |
+| L03 | LD | Double-click to retag a contact or coil (+Tag / -Tag makes an edge contact, /Tag an NC one), edit arguments, rename a rung | "?" list LD / Edit / `Double-click` | diagram.test.mjs: Ladder: the declare offer covers a block call's arguments (retag path); ld-parity.test.mjs: L24 | ld_add_contact, ld_rename_block, ld_retag, ld_edge_retag, float_edit | — |
 | L04 | LD | Commit / cancel an in-place edit | "?" list LD / Edit / `Enter / Esc` | — | float_edit | — |
 | L05 | LD | Click ⊕ to insert an element at that spot | "?" list LD / Edit / `⊕` | — | ld_add_contact, ld_add_coil, ld_add_block | — |
 | L06 | LD | Drag a palette item onto a rung spot | "?" list LD / Edit / `Drag a palette item` | diagram.test.mjs: Ladder: the FB… picker names a TON / CTU instance with the first free name | ld_palette, g_drag_to | — |
@@ -116,7 +116,7 @@ no rig verb, no smoke check); per section below.
 | L09 | LD | Press N to toggle a contact between NO and NC | "?" list LD / Edit / `N` | ld-keys.test.mjs: N on a selected contact posts toggleNeg, again flips it back | — | — |
 | L10 | LD | Press M to cycle a coil normal → set → reset | "?" list LD / Edit / `M` | ld-keys.test.mjs: M on a selected coil cycles normal -> set -> reset -> normal | — | — |
 | L11 | LD | Press B to wrap the selection in a parallel branch | "?" list LD / Edit / `B` | — | ld_add_branch | — |
-| L12 | LD | Copy, cut, paste an element (into another ladder too) | "?" list LD / Edit / `Ctrl + C / X / V` | — | — | 05 (cut / paste) |
+| L12 | LD | Copy, cut, paste an element or a whole rung (into another ladder too) | "?" list LD / Edit / `Ctrl + C / X / V` | ld-parity.test.mjs: L25 (the whole rung) | ld_copy_rung (the whole rung) | 05 (cut / paste) |
 | L13 | LD | Esc cancels a drag | "?" list LD / Edit / `Esc` | diagram.test.mjs: Ladder: Esc cancels an in-flight palette drag | — | — |
 | L14 | LD | Zoom around the pointer | "?" list LD / View / `Ctrl + wheel / pinch` | diagram.test.mjs: Ladder zoom: Ctrl+wheel zooms around the cursor | diagram_zoom | 06 |
 | L15 | LD | Zoom in / out (corner buttons too) | "?" list LD / View / `Ctrl + = / Ctrl + -` | diagram.test.mjs: Ladder zoom: buttons and Ctrl+= / Ctrl+- / Ctrl+0 | diagram_zoom | 06 |
@@ -125,6 +125,14 @@ no rig verb, no smoke check); per section below.
 | L18 | LD | Undo the last edit to the file from the diagram | "?" list LD / File / `Ctrl + Z` | — | g_key (ctrl+z in takes) | — |
 | L19 | LD | Redo | "?" list LD / File / `Ctrl + Y / Ctrl + Shift + Z` | ld-keys.test.mjs: Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y post diagramKey undo / redo / redo | — | — |
 | L20 | LD | Save the file from the diagram | "?" list LD / File / `Ctrl + S` | — | g_save | — |
+| L21 | LD | An edge contact (`+Tag` / `-Tag`) draws as a P / N contact; live, it lights for the scan its one-shot fires (#212) | CHANGELOG Unreleased; ladder.mdx In the editor | ld-parity.test.mjs: +Tag / -Tag draw as P / N contacts; live power comes from its one-shot | ld_edge_drawn (selftest; logix-shaped m1) | — |
+| L22 | LD | Insert a rising / falling-edge contact from the palette (⊣P⊢ ⊣N⊢) (#213) | palette titles; ladder.mdx In the editor | ld-parity.test.mjs: the palette inserts P and N contacts | ld_add_edge (selftest) | — |
+| L23 | LD | Press P to cycle a contact NO → P → N → NC (N on an edge: NC) (#213) | "?" list LD / Edit / `P` | ld-parity.test.mjs: P cycles a selected contact | — | — |
+| L24 | LD | Type `+Tag` / `-Tag` / `/Tag` into a contact's retag to set its form; a bare tag keeps it (#213) | ladder.mdx In the editor | ld-parity.test.mjs: double-click a contact and type +Tag | ld_edge_retag, ld_retag (selftest; logix-shaped m1, m2) | — |
+| L25 | LD | Copy a whole rung (its name selected) and paste it below the selected rung: next name (m1 → m2), instances renamed; ⧉ / ✂ disabled with nothing to copy (#217) | "?" list LD / Edit / `Ctrl + C / X / V`; CHANGELOG Unreleased | ld-parity.test.mjs: Ctrl+C / Ctrl+V pasteRung; ⧉ then ⎘, ✂ cuts the rung | ld_copy_rung (selftest; logix-shaped m2) | — |
+| L26 | LD | The declare offer types a name from its use (a CTU's `CV =>` is INT) over a seed-typed REAL (#219) | CHANGELOG Unreleased | ld-parity.test.mjs: a CTU's CV => Starts is offered as VAR_EXTERNAL : INT | ld_declare_offer_type (selftest; logix-shaped starts) | — |
+| L27 | LD | Declare, rename and delete a FUNCTION_BLOCK's pins: the declare offer inside a block (VAR_INPUT / VAR_OUTPUT), the variables panel's block scope (in → out → in/out → local), double-click a name to rename (#214) | CHANGELOG Unreleased; ladder.mdx In the editor | ld-parity.test.mjs: inside a FUNCTION_BLOCK the offer makes pins; a block's scope declares, renames and deletes its pins | ld_vars_declare, ld_declare (logix-shaped motor.ld), ld_vars_rename, ld_vars_delete (selftest) | — |
+| L28 | LD | The variables panel lists rung-declared block instances (`m1 : MotorStarter`, rung m1); Escape closes it (#220) | CHANGELOG Unreleased | ld-parity.test.mjs: rung-declared block instances are listed; Escape closes the panel | ld_vars_lists_instance, ld_vars_escape_closes (selftest; logix-shaped m1) | — |
 
 ## SFC editor (`?` list)
 
@@ -242,7 +250,7 @@ no rig verb, no smoke check); per section below.
 
 ## Count of rows with no coverage at all
 
-**0 of 160.** Every row has at least one layer of coverage: a webview test, a
+**0 of 168.** Every row has at least one layer of coverage: a webview test, a
 rig verb, or a smoke check. Some rows are covered only in part, and the cell
 says which part:
 
