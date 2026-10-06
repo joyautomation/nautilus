@@ -294,16 +294,18 @@
         "type": {
           "type": "string",
           "minLength": 1,
-          "description": "A UDT declared by this project's ST, for a tag whose value is a struct \u2014 the same TYPE the programs bind with VAR_EXTERNAL, so the tag store and the logic cannot disagree about its shape. A typed setpoint or state needs no init: zero-of-type is its seed. A typed input stays unseeded, so a driver that has not delivered still faults loudly."
+          "description": "The tag's data type: an IEC elementary type (BOOL, SINT, INT, DINT, LINT, USINT, UINT, UDINT, ULINT, BYTE, WORD, DWORD, LWORD, REAL, LREAL, TIME, STRING), a TYPE this project's ST declares (a UDT), or an ARRAY[lo..hi] OF either. Every program sees the tag with this type without declaring it; a VAR_EXTERNAL naming it must agree. init must agree with it too. A typed setpoint or state needs no init: zero-of-type is its seed. A typed input stays unseeded, so a driver that has not delivered still faults loudly.",
+          "examples": ["BOOL", "INT", "DINT", "REAL", "TIME", "STRING"]
         },
         "init": {
           "type": [
             "boolean",
             "string",
             "number",
-            "object"
+            "object",
+            "array"
           ],
-          "description": "Initial value. A scalar for an untyped (or scalar-typed) tag. For a struct-typed tag (`type:`), init may instead be a mapping of member name to value \u2014 nested for a member that is itself a struct \u2014 to seed only the members that need a non-zero starting value; every member the mapping omits still takes the zero of its own field type. A struct-typed tag given a scalar init is an error. Required for setpoint and state unless `type` supplies one. On an output, needed only when the logic reads it before writing it (a seal-in latch)."
+          "description": "Initial value. A scalar for an untyped (or scalar-typed) tag; a TIME as T#2s, 2s or milliseconds; a list for an ARRAY (from its lower bound). Without a type:, the init also types the tag every program sees: TRUE/FALSE BOOL, a number REAL, T#\u2026 TIME, other text STRING. For a struct-typed tag (`type:`), init may instead be a mapping of member name to value \u2014 nested for a member that is itself a struct \u2014 to seed only the members that need a non-zero starting value; every member the mapping omits still takes the zero of its own field type. A struct-typed tag given a scalar init is an error. Required for setpoint and state unless `type` supplies one. On an output, needed only when the logic reads it before writing it (a seal-in latch)."
         },
         "unit": {
           "type": "string",

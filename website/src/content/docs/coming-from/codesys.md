@@ -17,8 +17,8 @@ means pursued in the parity batch and **not available yet**.
 | POU (`PROGRAM`, `FUNCTION_BLOCK`, `FUNCTION`) | the same, in `.st`, `.ld`, `.fbd` or `.sfc` | Today |
 | Case-insensitive identifiers (`MyVar` = `MYVAR`) | the same: any casing names the one declaration, shown as declared | Today, [#197](https://github.com/joyautomation/nautilus/issues/197) |
 | Task configuration | `tasks:` in `nautilus.yaml` | Today |
-| GVL (global variable list) | tags in `nautilus.yaml` or `tags/*.yaml`, named by `VAR_EXTERNAL` | Today |
-| A GVL file of only `VAR_GLOBAL` | a library file of just `VAR_GLOBAL` currently breaks every program with an undeclared-identifier error. Use manifest tags | Planned, [#175](https://github.com/joyautomation/nautilus/issues/175) |
+| GVL (global variable list) | tags in `nautilus.yaml` or `tags/*.yaml`, in scope in every program without a declaration (`VAR_EXTERNAL` stays legal); a function block names the ones it uses in its own `VAR_EXTERNAL` | Today, [#177](https://github.com/joyautomation/nautilus/issues/177) |
+| A GVL file of only `VAR_GLOBAL` | the same: a `gvl.st` with a file-level `VAR_GLOBAL` block declares globals for every program; one the manifest does not declare is a `state` tag starting at zero. An initial value goes in the manifest's `init:` | Today, [#175](https://github.com/joyautomation/nautilus/issues/175) |
 | `VAR_GLOBAL CONSTANT` shared by the project | rejected as a tag's initial value today | Planned, [#176](https://github.com/joyautomation/nautilus/issues/176) |
 | Enumerations (`TYPE E : (A, B, C)`) | not supported: `TYPE` declares a `STRUCT` or an alias. Use named `INT` constants. A parse error on an enum shows an internal token number today ([#178](https://github.com/joyautomation/nautilus/issues/178)) | Not supported today |
 | `STRUCT`, arrays, `FUNCTION_BLOCK` instances | the same | Today |

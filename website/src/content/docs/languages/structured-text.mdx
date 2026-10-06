@@ -70,9 +70,15 @@ download, diff, and pull. `VAR` holds program-local state that persists between
 scans. Statements evaluate top to bottom, so the `integral` written on one line
 is what the next line reads in the same scan.
 
-A `VAR_EXTERNAL` declaration binds a name in the tag store rather than creating
-it, and reading a tag nothing has ever written faults the scan with `undefined
-tag`. See [the tag model](/guides/tag-model/) for which role fits which name.
+The `VAR_EXTERNAL` block here is the explicit form: in a manifest project every
+tag in `nautilus.yaml` is in scope in every program without it, typed by its
+`type:` (or its `init:`), and a `VAR_EXTERNAL` that names one must agree with
+that type. (This Go-tier example's tags are declared in Go with no type, so
+the program states them.) Either way, naming a tag binds it in the tag store
+rather than creating it, and reading a tag nothing has ever written faults the
+scan with `undefined tag`. A `FUNCTION_BLOCK` sees no tag it does not declare
+in its own `VAR_EXTERNAL`. See [the tag model](/guides/tag-model/) for the
+rules and which role fits which name.
 
 ## Declarations
 
@@ -84,6 +90,11 @@ resolve identically: both name a tag in the store. A declared initial value
 `FUNCTION_BLOCK` instance, and on every `FUNCTION` call. A tag has no such
 start in the source: `:=` on a `VAR_GLOBAL` or `VAR_EXTERNAL` is a compile
 error, and the tag's `init:` in the manifest sets it instead.
+
+A `VAR_GLOBAL` block may also stand on its own at the top of a library file —
+a Codesys-style `gvl.st`. It declares those globals for every program; one the
+manifest does not declare becomes a `state` tag starting at the zero of its
+type, and a program may still name it in its own `VAR_EXTERNAL`.
 
 ```iecst
 TYPE

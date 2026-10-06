@@ -17,10 +17,14 @@ HMI / POST /api/tags ──(writes)─────▶ │           │ ──(r
                                      (coils)    ▼
 ```
 
-**A `VAR_EXTERNAL` declaration binds a name; it does not create the tag.**
-Declaring `TempC : REAL;` in your program means "resolve this name in the
-tag store at scan time", and nothing more. Existence
-comes from a write, and there are exactly four writers:
+**Every program sees the project's tags without declaring them.** A tag in
+`nautilus.yaml` (or a `tag-files:` entry) is in scope in every PROGRAM as
+it is — the tag table is the declaration, as a Codesys GVL, a TIA PLC tag
+table or Logix controller scope is. A `VAR_EXTERNAL` naming one stays legal,
+as IEC's explicit form. Either way the name binds the tag; it does not
+create it. Using `TempC` in a program means "resolve this name in the tag
+store at scan time", and nothing more. Existence comes from a write, and
+there are exactly four writers:
 
 1. a **seed** in the Go composition (initial value, exists from scan one),
 2. a **driver** delivering it as an input each scan,
@@ -35,6 +39,38 @@ on scan one, before the first write; the fix is a seed. (In the FBD
 diagram, with live values on, externals with no backing tag are flagged —
 an amber *no tag* badge in the vars panel and on any chip that reads one —
 so you see this before the download, not after.)
+
+## Tags in scope: the rules
+
+- **A manifest tag needs no declaration** in a PROGRAM — ST, ladder, FBD or
+  SFC. Its type is its `type:`; with no `type:`, the type its `init:`
+  implies (`TRUE`/`FALSE` BOOL, a number REAL, `T#5s` TIME, other text
+  STRING). A tag with neither has no knowable type, and naming it says so:
+  `"Valve" is a project tag with no type — give Valve a type: (or an init:)
+  in the manifest, or declare it in VAR_EXTERNAL`.
+- **`VAR_EXTERNAL` stays legal** and wins for that program. When the tag
+  states a `type:`, the declaration must agree with it — `VAR_EXTERNAL Speed
+  : BOOL` against `type: REAL` is an error at the declaration. Programs that
+  bind one untyped tag with different types (one declares `Count : DINT`,
+  another reads `Count` implicitly as the REAL its `init: 0` implies) are an
+  error naming both tasks; a `type:` on the tag settles it.
+- **A local shadows a tag.** A program's own `VAR Level : REAL;` is that
+  program's variable, and the tag `Level` goes unread and unwritten there.
+  That is IEC scoping, so it compiles; `naut check` and the editor warn
+  (`local Level shadows the project tag Level`).
+- **Function blocks and functions do not see tags implicitly.** A block
+  that reaches a tag says so in its own `VAR_EXTERNAL`, so it stays
+  self-contained and can move to another project. Pass values in through
+  `VAR_INPUT` / `VAR_IN_OUT` where you can.
+- **A GVL file works too.** A library `.st` holding a file-level
+  `VAR_GLOBAL` block (Codesys's `gvl.st`) declares globals for every
+  program. A global the manifest does not also declare becomes a `state`
+  tag starting at the zero of its type; one it does declare is that tag
+  (the manifest supplies its role, init, unit and desc). `VAR_GLOBAL
+  CONSTANT` entries are constants, not tags.
+
+A program binds only the tags it names: an unused tag costs a program
+nothing per scan.
 
 ## Declaring tags: one entry per tag
 
@@ -75,6 +111,31 @@ Picking a role, by use case:
 | your logic owns across scans (integrator)   | `State(name, initial, …)`    | the seed, then the coil                     |
 | the HMI watches but the field never sees    | plain coil write — no entry  | the program creates it on first write       |
 
+## A tag's `type:`
+
+`type:` is the tag's data type, the Data Type column of a vendor tag
+table. It takes every IEC elementary type — `BOOL`, `SINT` … `ULINT`,
+`BYTE` … `LWORD`, `REAL`, `LREAL`, `TIME`, `STRING` — a TYPE the project's
+ST declares (a UDT, or an enumeration once those land), or an
+`ARRAY[lo..hi] OF` either:
+
+```yaml
+tags:
+  - { name: FT101_Raw, role: input,    type: INT,  init: 0 }
+  - { name: PumpRun,   role: output,   type: BOOL }
+  - { name: SettleT,   role: setpoint, type: TIME, init: T#2s }
+  - { name: Profile,   role: setpoint, type: 'ARRAY[1..4] OF REAL', init: [10.0, 20.0] }
+  - { name: P101,      role: state,    type: Motor }
+```
+
+`type:` and `init:` must agree: `type: INT` with `init: 2.5` is a load
+error naming the tag and its type (`tag N (type INT): init: want INT, got a
+number`). A typed `setpoint` or `state` tag with no `init:` starts at the
+zero of its type. A type that is none of the above names what the project
+does declare (`type Widget is neither an IEC elementary type … nor a TYPE
+this project's ST declares (known: DoseRecipe, Motor)`); a function-block
+type is refused, since an instance is program state, not a tag.
+
 ## A scalar seed takes the program's type
 
 An `init:` on a plain (untyped) tag is seeded as whatever the programs
@@ -109,6 +170,19 @@ tags:
     init:
       STRTTMRSP: 30
       LVL: { CTL1HSP: 60.0, CTL1LSP: 40.0 } # nested struct member
+```
+
+A `TIME` member (a recipe's step times) seeds from the ST literal
+(`T#2s`, `TIME#1m30s`), the same duration without its prefix (`90s`,
+`500ms`), or a whole number of milliseconds. An `ARRAY` member seeds from a
+list, element by element from its lower bound; elements the list leaves
+out stay zero:
+
+```yaml
+  - name: RecipeA
+    role: setpoint
+    type: DoseRecipe   # STRUCT TargetL : REAL; SettleTime : TIME; Steps : ARRAY[0..2] OF TIME; …
+    init: { TargetL: 10.0, SettleTime: T#2s, Steps: [T#1s, 2s] }
 ```
 
 Every member the mapping omits still takes the zero of its own field type —
@@ -236,13 +310,16 @@ build and `run`/`build` again to serve or embed it.
 
 ## Adding a field input end to end
 
-Adding a **new field input** is three lines in three places, all by the
-same name: declare it in the program (`VAR_EXTERNAL testExt : REAL;` — or
-from the diagram's vars panel), produce it in the driver
-(`"testExt": p.testExt` in the `ReadInputs` map), and bind it in the
-composition (`runtime.Input("testExt")`). The `Inputs` list is a deliberate
-allowlist — a driver can't spray arbitrary names into the store — which is
-why the middle step alone isn't enough.
+Adding a **new field input** to a manifest project is one entry —
+`- { name: testExt, role: input, type: REAL, init: 0.0 }` — and the driver
+binding that delivers it; every program can then read `testExt` as it is.
+In the Go tier it is two more places by the same name: produce it in the
+driver (`"testExt": p.testExt` in the `ReadInputs` map) and bind it in the
+composition (`runtime.Input("testExt")`; give it a type with
+`runtime.Typed` or a seed with `runtime.Init`, or declare it in the
+program's `VAR_EXTERNAL`, so the programs know its type). The `Inputs`
+list is a deliberate allowlist — a driver can't spray arbitrary names into
+the store — which is why the driver map alone isn't enough.
 
 ## Performance notes: write generations
 

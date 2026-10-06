@@ -28,9 +28,10 @@ three things it is:
 | Multi-instance | an instance declared inside another block's `VAR` | Today |
 | Global DB | a UDT-typed tag in the manifest (`type: Motor`), or plain tags | Today |
 | PLC tag table | tags in `nautilus.yaml` or `tags/*.yaml` | Today |
-| Tag table visible in every block | manifest tags in every program without `VAR_EXTERNAL`; today each program declares what it uses | Planned, [#177](https://github.com/joyautomation/nautilus/issues/177), [#210](https://github.com/joyautomation/nautilus/issues/210) |
-| `INT`-typed entry in the tag table | `type: INT` is refused today; only a UDT name is accepted | Planned, [#200](https://github.com/joyautomation/nautilus/issues/200) |
-| UDT with `Time` members seeded by default values | `init:` cannot seed a TIME member of a UDT tag yet | Planned, [#201](https://github.com/joyautomation/nautilus/issues/201) |
+| Tag table visible in every block | manifest tags are in scope in every program without a declaration (`VAR_EXTERNAL` stays legal). A function block reaches a tag only through its own `VAR_EXTERNAL`, so it stays self-contained, as a TIA FB with its interface does | Today, [#177](https://github.com/joyautomation/nautilus/issues/177), [#210](https://github.com/joyautomation/nautilus/issues/210) |
+| Data type column (`Int`, `Bool`, `Real`, `Time`, a UDT) | the tag's `type:`: any elementary type, a UDT, or an `ARRAY`; `init:` must agree with it | Today, [#200](https://github.com/joyautomation/nautilus/issues/200) |
+| UDT with `Time` members seeded by default values | `init:` seeds a TIME member from `T#2s`, `2s` or milliseconds, and an array member from a list | Today, [#201](https://github.com/joyautomation/nautilus/issues/201) |
+| An error in one block | reported once, on its own line; the blocks that use it are not marked | Today, [#199](https://github.com/joyautomation/nautilus/issues/199) |
 | Library | files in `lib/`, composed ahead of every task | Today |
 | Global library, version management | not available; copy or vendor the `lib/` files with git | Declined for now, [#193](https://github.com/joyautomation/nautilus/issues/193) |
 
@@ -68,5 +69,5 @@ Standard timers and counters have the IEC pins, so SCL calls such as
 `naut new my-plant --template minimal --language fbd` scaffolds an FBD
 program; **nautilus: Create Project…** asks for the language. Then read the
 [tag model](/guides/tag-model/) first: it is where a global DB or a tag
-table maps, and the one rule that surprises everyone, which is that a
-`VAR_EXTERNAL` declaration binds a tag and does not create it.
+table maps, and the one rule that surprises everyone, which is that naming
+a tag binds it and does not create it.

@@ -115,18 +115,22 @@ and tasks](/guides/blocks-and-tasks/).
 
 | Logix | nautilus |
 | --- | --- |
-| controller-scope tag | an entry in `nautilus.yaml` or `tags/*.yaml`, named in each program by `VAR_EXTERNAL` |
+| controller-scope tag | an entry in `nautilus.yaml` or `tags/*.yaml`, in scope in every program as it is |
+| a tag's Data Type | the tag's `type:` — `BOOL`, `DINT`, `REAL`, `TIME`, a UDT, an `ARRAY` |
 | program-scope tag | `VAR` in the program |
 | alias tag, rack point | the tag's `alias:` field, `dialect: logix` **(in review)** |
 | task, program | `tasks:` in `nautilus.yaml`, one program file per task |
 | UDT | `TYPE … STRUCT … END_STRUCT` |
 | tag description | the tag's `desc:` (the diagram does not show it on the element yet, [#216](https://github.com/joyautomation/nautilus/issues/216)) |
 
-Today every program repeats `VAR_EXTERNAL` for each manifest tag it uses.
-That is changing: manifest tags become visible in every program without it
+Manifest tags are visible in every program without a declaration, as
+controller-scope tags are in every Logix routine
 ([#177](https://github.com/joyautomation/nautilus/issues/177),
-[#210](https://github.com/joyautomation/nautilus/issues/210)), and
-`VAR_EXTERNAL` stays legal.
+[#210](https://github.com/joyautomation/nautilus/issues/210)); the ladder
+editor no longer offers to declare one. `VAR_EXTERNAL` stays legal, and must
+agree with the tag's `type:`. A function block (the AOI) does not see tags
+implicitly: like an AOI, it takes what it needs as parameters, or names a
+tag in its own `VAR_EXTERNAL`.
 
 ## Declined, by design
 
