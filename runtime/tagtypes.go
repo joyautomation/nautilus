@@ -4,8 +4,7 @@ import "github.com/joyautomation/nautilus/lang/ir"
 
 // TagTypes reports the declared type of every tag that has one, keyed by
 // the spelling the store shows (the name a frame carries): the type a
-// program binds it as (Globals), and a manifest tag's own `type:` for an
-// enumeration (#246) — so a client can tell an enumerated value, which
+// program binds it as (Globals), and a manifest tag's own `type:` (#246) — so a client can tell an enumerated value, which
 // streams as its member's name, from a STRING. A tag whose type comes only
 // from its seed is absent. Read at call time, so an online edit's new
 // bindings show up on the next ask.
@@ -23,7 +22,10 @@ func (r *Runtime) TagTypes() map[string]*ir.Type {
 	for name, t := range r.Globals() {
 		add(name, t)
 	}
-	for key, t := range r.tags.enums {
+	// The store's own table (Tags.TypeOf): every tag a program binds or
+	// the manifest types, as of New. Globals above adds what an online
+	// edit has bound since.
+	for key, t := range r.tags.types {
 		add(key, t)
 	}
 	return out
