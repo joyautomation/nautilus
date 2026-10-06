@@ -116,20 +116,22 @@ test('X45 ladder: descriptions land in the tooltips and as a second line under c
 		assert.match(await titleOf(b, byId('fb', 't1')), /\nstart delay$/);
 		// The line fits the element: a long description is cut with an
 		// ellipsis (the tooltip has it whole); a short one shows as is.
-		assert.equal(await descText(b, byId('contact', 'a')), 'Start pushbutto…');
+		assert.equal(await descText(b, byId('contact', 'a')), 'Start pushbu…');
 		assert.equal(await descText(b, byId('coil', 'y')), 'Motor 1 run');
 		// A name without a description draws no line and keeps its tooltip.
 		assert.equal(await descText(b, byId('contact', 'b')), null);
 		assert.doesNotMatch(await titleOf(b, byId('contact', 'b')), /\n/);
-		// The second line sits under the operand, inside the rung's own svg.
+		// The second line sits under the operand, inside the rung's own svg and
+		// within the element's width (it never runs over a branch rail).
 		const geo = await b.eval(`(() => {
 			const g = document.querySelector('[data-kind="contact"][data-id="a"]');
 			const op = g.querySelector('text.operand').getBoundingClientRect();
 			const d = g.querySelector('text.nx-desc').getBoundingClientRect();
+			const hit = g.querySelector('rect.hit').getBoundingClientRect();
 			const svg = g.closest('svg').getBoundingClientRect();
-			return { below: d.top >= op.bottom - 1, inside: d.bottom <= svg.bottom + 0.5 };
+			return { below: d.top >= op.bottom - 1, inside: d.bottom <= svg.bottom + 0.5, narrow: d.left >= hit.left - 0.5 && d.right <= hit.right + 0.5 };
 		})()`);
-		assert.deepEqual(geo, { below: true, inside: true });
+		assert.deepEqual(geo, { below: true, inside: true, narrow: true });
 		// The message is not a view: the ladder is still there, and a
 		// re-sent model keeps the descriptions.
 		await deliver(b, { type: 'ldModel', model: LD, title: 'p.ld' });

@@ -62,7 +62,7 @@ export function descTail(name: string | undefined): string {
 }
 
 /** Average glyph width of the ladder's description line (9.5px sans). */
-const DESC_CH = 5.2;
+const DESC_CH = 5.3;
 
 /** The ladder's second line under an operand: the description, fit to the
  * element's width ('' when there is none or the setting is off). */
@@ -70,7 +70,9 @@ export function descLine(name: string | undefined, widthPx: number): string {
 	if (!descriptions.show) return '';
 	const d = describe(name);
 	if (!d) return '';
-	const max = Math.max(6, Math.floor((widthPx + 16) / DESC_CH));
+	// Within the element's own width: a wider line runs over a branch's
+	// rails or the next element's label.
+	const max = Math.max(6, Math.floor((widthPx - 2) / DESC_CH));
 	return d.length <= max ? d : d.slice(0, max - 1).trimEnd() + '…';
 }
 
