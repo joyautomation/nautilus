@@ -203,6 +203,13 @@ func (c *rungCtx) ref(ref string) (string, bool) {
 	base, rest := splitRef(ref)
 	v, declared := c.lw.vars[strings.ToLower(base)]
 	if !declared {
+		// Not a variable: an enumeration member is its value (enum.go).
+		if n, ok, ambiguous := c.lw.enumMember(ref); ok && rest == "" {
+			return strconv.FormatInt(n, 10), true
+		} else if ambiguous && rest == "" {
+			c.lw.diag(ruleOperand, c.r.Line, c.r.Name, "%s: several enumerations have a member %s with different values; write Type#%s", ref, ref, ref)
+			return "", false
+		}
 		return ref, true // undeclared: the compiler's diagnostic, not ours
 	}
 	typ := strings.ToUpper(strings.TrimSpace(v.Type))
@@ -349,6 +356,9 @@ func (c *rungCtx) operand(a string, e ld.Element) (string, bool) {
 	a = strings.TrimSpace(a)
 	if numRe.MatchString(a) {
 		return a, true
+	}
+	if n, ok := c.lw.enumLiteral(a); ok {
+		return strconv.FormatInt(n, 10), true // Mode#Run
 	}
 	if i := strings.Index(a, "#"); i > 0 {
 		// INT#5, 16#FF: spell as decimal

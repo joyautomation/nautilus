@@ -53,6 +53,7 @@ func (lw *lowered) loadTypes() {
 			}
 		}
 	}
+	lw.loadEnums()
 }
 
 // resolveType returns the UDT a name declares, building it (and the UDTs
