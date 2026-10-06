@@ -14,9 +14,8 @@ import (
 // walked a PROGRAM POU's own VAR_EXTERNAL block, so `naut check`
 // reported the tag as "declared, no program binds" — a false positive that,
 // on a real transpile with a lot of library blocks, forced re-declaring
-// every one of them in the calling program (see the AEP transpile:
-// sites/aep/README.md, "A library FUNCTION_BLOCK's VAR_EXTERNAL binding a
-// tag"). rt.Globals()/rt.GlobalUses() must see through the whole instance
+// every one of them in the calling program (a real ControlLogix
+// transpile hit exactly this). rt.Globals()/rt.GlobalUses() must see through the whole instance
 // tree a program reaches, nested FB-in-FB and ladder libraries included.
 
 const fbExternManifest = `
@@ -82,7 +81,7 @@ func TestGlobalsSeesTagBoundThroughInstantiatedLibraryFB(t *testing.T) {
 		t.Errorf("Setpoint should be reported as read through the FB instance: %+v", uses)
 	}
 
-	// And it actually works at runtime, exactly like the AEP transpile
+	// And it actually works at runtime, exactly like the real transpile
 	// found: the tag is read through the instance.
 	rt.Tags().SetReal("Setpoint", 42.0)
 	rt.Scan()

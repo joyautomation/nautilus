@@ -294,8 +294,8 @@ func TestCheckWarnsOnTagMetaNamingNothing(t *testing.T) {
 }
 
 // A library FUNCTION_BLOCK's VAR_EXTERNAL binds the tag through whichever
-// program instantiates it — it compiles and runs correctly (the AEP
-// transpile is the real-world proof: 1,325 of these, all working) — so an
+// program instantiates it — it compiles and runs correctly (a real
+// ControlLogix transpile is the real-world proof: 1,325 of these, all working) — so an
 // instantiated library FB must not trigger "no program binds", the false
 // positive that used to force re-declaring every one of them in the calling
 // program's own VAR_EXTERNAL block.
