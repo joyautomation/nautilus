@@ -308,7 +308,7 @@ b04() {
 }
 row 04-type-ScaleAnalog PASS b04 || { cp "$REF/scale.st" "$PROJ/scale.st"; note_row FALLBACK "scale.st written from the reference"; }
 b04_sig() { local s; s=$(cat "$OUT_DIR/04-signature-help.txt"); echo "parameter hints: ${s:-<none>}"; [[ -n $s ]]; }
-row 04-signature-help-LIMIT XFAIL b04_sig
+row 04-signature-help-LIMIT PASS b04_sig
 b04_hover() {
   goto_word "$PROJ/scale.st" '^ScaleAnalog := LIMIT' EngHi || return 1
   local h; h=$(show_hover) || { echo "no hover" >&2; return 1; }
@@ -352,13 +352,41 @@ diag_probe() {
   wait_for 12 no_squiggle || { echo "squiggle still there after the fix" >&2; return 1; }
   ! dirty
 }
-# SCL's # prefix on a local: on the right-hand side it is a parse error; on
-# an assignment target it is silently dropped (no squiggle — FINDINGS)
+# SCL's # prefix on a local: rejected in every position with one message
+# (#198; it used to be silently dropped on an assignment target)
 row 05-diag-hash-prefix-rhs PASS diag_probe "Step := state;" "Step := #state;" 05-hash-prefix-rhs
-row 05-diag-hash-prefix-target XFAIL diag_probe "    state := 10;" "    #state := 10;" 05-hash-prefix-target
+row 05-diag-hash-prefix-target PASS diag_probe "        state := S_IDLE;" "        #state := S_IDLE;" 05-hash-prefix-target
+b05_hash_msg() { grep -q "the # prefix is Siemens SCL syntax" <<<"$(tail -1 "$TSV" | cut -f4)" || { echo "the problem does not name the SCL prefix" >&2; return 1; }; echo "the problem names the SCL habit"; }
+row 05-diag-hash-prefix-message PASS b05_hash_msg
 row 05-diag-typo PASS diag_probe "Recipe.TargetL > 0.0" "Recipe.TargetLL > 0.0" 05-typo
-# REGION … END_REGION, the SCL folding habit
-row 05-diag-region PASS diag_probe "justDone := FALSE;" "REGION init justDone := FALSE; END_REGION" 05-region
+# REGION … END_REGION, the SCL folding habit (#202): reference/dosing.st was
+# typed with two regions; a REGION line holding code is still diagnosed.
+row 05-diag-region-code-on-its-line PASS diag_probe "REGION timers" "REGION timers doneHold(IN := justDone, PT := T#2S);" 05-region-code
+# The regions are in the Outline and fold (Fold All Regions folds marker
+# regions only: the language's REGION / END_REGION markers).
+b05_region_outline() {
+  xdotool key --clearmodifiers Escape; sleep 0.3
+  xdotool key --clearmodifiers ctrl+shift+o; sleep 2.5
+  local t; t=$(wb '(() => { const q = document.querySelector(".quick-input-widget"); if (!q || q.style.display === "none") return ""; return [...q.querySelectorAll(".monaco-list-row")].map(r => r.innerText.replace(/\s+/g, " ").trim()).join(" | "); })()')
+  xdotool key --clearmodifiers Escape; sleep 0.4
+  echo "Ctrl+Shift+O: ${t:0:240}"
+  [[ $t == *sequence* && $t == *timers* ]]
+}
+row 05-region-outline PASS b05_region_outline
+visible_lines() { wb '[...document.querySelectorAll(".monaco-editor .margin-view-overlays .line-numbers")].map(e => e.innerText.trim()).filter(Boolean).join(",")'; }
+b05_region_fold() {
+  local l in_region before after
+  l=$(line_of "$PROJ/dosing.st" '^REGION timers'); in_region=$((l + 1))
+  goto "$l" 1
+  before=$(visible_lines)
+  vs_cmd "Fold All Regions" 1.5
+  after=$(visible_lines)
+  snap 05-region-folded >/dev/null
+  vs_cmd "Unfold All Regions" 1
+  echo "line $in_region visible before: $([[ ,$before, == *,$in_region,* ]] && echo yes || echo no); after Fold All Regions: $([[ ,$after, == *,$in_region,* ]] && echo yes || echo no)"
+  [[ ,$before, == *,$in_region,* && ,$after, != *,$in_region,* ]]
+}
+row 05-region-folds PASS b05_region_fold
 # Outline: Go to Symbol in Editor (Ctrl+Shift+O) — the block interface.
 b05_outline() {
   xdotool key --clearmodifiers Escape; sleep 0.3
@@ -372,7 +400,7 @@ b05_outline() {
 row 05-outline-symbols XFAIL b05_outline
 # Cross-reference: Find All References (Shift+F12) on `state`.
 b05_refs() {
-  goto_word "$PROJ/dosing.st" '^ValveOpen := state = 10;' state || return 1
+  goto_word "$PROJ/dosing.st" '^ValveOpen := state = S_DOSING;' state || return 1
   xdotool key --clearmodifiers shift+F12; sleep 3
   local t; t=$(wb '(() => { const p = document.querySelector(".peekview-widget, .reference-zone-widget"); const n = [...document.querySelectorAll(".notifications-toasts .notification-toast, .monaco-editor .message-widget, .monaco-editor-overlaymessage")].map(e => e.innerText.trim()).join(" | "); return (p ? "peek: " + p.innerText.replace(/\s+/g, " ").slice(0, 200) : "") + (n ? " msg: " + n : ""); })()')
   snap 05-references >/dev/null
@@ -380,7 +408,7 @@ b05_refs() {
   echo "Shift+F12: ${t:-<nothing>}"
   [[ $t == peek:* ]]
 }
-row 05-find-references XFAIL b05_refs
+row 05-find-references PASS b05_refs
 row 05-check PASS check_clean 05-dosing
 
 # ── 06 main.fbd: a blank file, its header declared from the palette ─────────

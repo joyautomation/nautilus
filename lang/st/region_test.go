@@ -82,14 +82,16 @@ END_PROGRAM`, `undeclared identifier "y"`)
 
 func TestRegionErrors(t *testing.T) {
 	cases := map[string]string{
-		"END_REGION alone": "PROGRAM P\nVAR x : INT; END_VAR\nx := 1;\nEND_REGION\nEND_PROGRAM\n",
-		"unclosed":         "PROGRAM P\nVAR x : INT; END_VAR\nREGION Fill\nx := 1;\nEND_PROGRAM\n",
-		"crosses END_IF":   "PROGRAM P\nVAR x : INT; END_VAR\nIF x > 0 THEN\nREGION r\nx := 1;\nEND_IF;\nEND_REGION\nEND_PROGRAM\n",
+		"END_REGION alone":        "PROGRAM P\nVAR x : INT; END_VAR\nx := 1;\nEND_REGION\nEND_PROGRAM\n",
+		"unclosed":                "PROGRAM P\nVAR x : INT; END_VAR\nREGION Fill\nx := 1;\nEND_PROGRAM\n",
+		"crosses END_IF":          "PROGRAM P\nVAR x : INT; END_VAR\nIF x > 0 THEN\nREGION r\nx := 1;\nEND_IF;\nEND_REGION\nEND_PROGRAM\n",
+		"code on the REGION line": "PROGRAM P\nVAR x : INT; END_VAR\nREGION init x := 0; END_REGION\nEND_PROGRAM\n",
 	}
 	wants := map[string]string{
-		"END_REGION alone": "line 4: END_REGION without a matching REGION",
-		"unclosed":         "line 3: REGION Fill (opened here) has no END_REGION before",
-		"crosses END_IF":   "REGION r (opened here) has no END_REGION before",
+		"END_REGION alone":        "line 4: END_REGION without a matching REGION",
+		"unclosed":                "line 3: REGION Fill (opened here) has no END_REGION before",
+		"crosses END_IF":          "REGION r (opened here) has no END_REGION before",
+		"code on the REGION line": "line 3: a REGION's name is the rest of its line",
 	}
 	for name, src := range cases {
 		_, err := Parse(src)

@@ -669,6 +669,12 @@ func (p *Parser) parseRegion() (Statement, error) {
 		if t.Type == TokenIdent && strings.EqualFold(t.Literal, "END_REGION") {
 			break
 		}
+		if t.Type == TokenAssign || t.Type == TokenSemicolon {
+			// `REGION init x := 0; END_REGION` on one line: the name runs
+			// to the end of the line, so the statement would be swallowed
+			// into it. Say so rather than drop it.
+			return nil, fmt.Errorf("line %d: a REGION's name is the rest of its line — put the region's statements on the lines after REGION", open.Line)
+		}
 		words = append(words, t.Literal)
 		p.advance()
 	}
