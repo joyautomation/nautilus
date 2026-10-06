@@ -213,8 +213,8 @@ func (b *BitRef) ExprType() *Type {
 	}
 	return BoolT
 }
-func (b *BitRef) exprNode()       {}
-func (b *BitRef) lvalueNode()     {}
+func (b *BitRef) exprNode()   {}
+func (b *BitRef) lvalueNode() {}
 
 // Call invokes a built-in stateless function. Fn is resolved at
 // lowering time (so the VM doesn't pay for a map lookup per scan)
