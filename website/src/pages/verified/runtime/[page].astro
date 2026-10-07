@@ -1,0 +1,80 @@
+---
+// /verified/runtime/<page>/ — one entry per claim a documentation page
+// makes: the claim, where it is made, its verdict, and every test it names
+// with how that test fared in the last green CI run. Data: src/lib/runtime.ts.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { Badge } from '@astrojs/starlight/components';
+import { STATUS_VARIANT, docsUrl, loadRuntime, pageSlug, refUrl, sourceUrl, verdictMeta } from '../../../lib/runtime';
+import { commitUrl, formatDate, loadVerified } from '../../../lib/verified';
+import '../../../styles/verified.css';
+
+export function getStaticPaths() {
+  const r = loadRuntime();
+  return (r?.pages ?? []).map((p) => ({ params: { page: pageSlug(p) }, props: { page: p } }));
+}
+
+const { page } = Astro.props;
+const r = loadRuntime()!;
+const repo = loadVerified().repository;
+const claims = r.claims.filter((c) => c.file === page.file);
+const verified = claims.filter((c) => c.verdict === 'verified').length;
+const gaps = claims.filter((c) => c.verdict === 'gap').length;
+/** "go ./modbus TestForeign/read coils" → ["./modbus", "TestForeign/read coils"]. */
+const split = (ref: string) => ref.replace(/^(go|naut) /, '').split(/ (.*)/s);
+---
+
+<StarlightPage
+  frontmatter={{
+    title: `Verified: ${page.title}`,
+    description: `Each behaviour the ${page.title} page promises, with the tests that prove it in the last green CI run.`,
+    tableOfContents: false,
+    prev: false,
+    next: false,
+  }}
+>
+  <p>
+    Each claim the <a href={docsUrl(page.page)}>{page.title}</a> page makes, with the tests that
+    prove it in the <strong>last green CI run</strong>: {verified} of {claims.length} verified{gaps > 0 && <>, {gaps} with no test yet</>}.
+    The claims live in <a href={`https://github.com/${repo}/blob/main/docs/claims/${page.file}`}><code>docs/claims/{page.file}</code></a>.
+  </p>
+  <p class="vf-muted">
+    <small>
+      {r.run.local ? 'Local evidence file' : <>Last green CI run {formatDate(r.run.date)}</>}
+      {r.run.sha && <> on <a href={commitUrl(repo, r.run.sha)}><code>{r.run.sha.slice(0, 7)}</code></a></>}
+      {' · '}<a href="/verified/runtime/">all runtime claims</a>
+    </small>
+  </p>
+
+  {
+    claims.map((c) => {
+      const v = verdictMeta(c.verdict);
+      return (
+        <section class="vf-row" id={c.id.toLowerCase()}>
+          <h3>
+            <a class="vf-rid" href={`#${c.id.toLowerCase()}`}>{c.id}</a> <Badge text={v.label} variant={v.variant} />
+          </h3>
+          <p>{c.claim}</p>
+          <p class="vf-meta">
+            <small><a href={sourceUrl(page, c.source)}>where the docs say so</a>{c.note && <> · {c.note}</>}</small>
+          </p>
+          {c.refs.length > 0 && (
+            <ul class="vf-tests">
+              {c.refs.map((t) => {
+                const [dir, name] = split(t.ref);
+                const url = refUrl(repo, t.ref);
+                const n = t.passed + t.failed + t.skipped;
+                return (
+                  <li>
+                    <Badge text={t.status === 'missing' ? 'not reported' : t.status} variant={STATUS_VARIANT[t.status]} />{' '}
+                    <code>{name}</code> in {url ? <a href={url}><code>{dir.replace(/^\.\//, '')}</code></a> : <code>{dir}</code>}
+                    {n > 1 && <span class="vf-muted"> ({t.passed} of {n} passed)</span>}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+      );
+    })
+  }
+</StarlightPage>

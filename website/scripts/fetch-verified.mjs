@@ -6,7 +6,11 @@
 //   public/verified/<set>/…        clips (.mp4), evidence PNGs, manifest.json
 //   src/data/verified.json         {generatedAt, sets, rows} for the pages
 // where <set> is nightly (rig-nightly.yml, rig-out-*), demo (rig-demo.yml,
-// rig-demo-*) or gestures (ci.yml, gesture-clips). Rows come from the gesture
+// rig-demo-*) or gestures (ci.yml, gesture-clips). Separately, ci.yml's
+// runtime-evidence artifact (tools/evidence: the docs/claims inventory
+// joined to every job's test results) becomes src/data/runtime.json for
+// /verified/runtime/; RUNTIME_EVIDENCE=<evidence.json> bakes a local file
+// instead, for previewing the pages without a CI run. Rows come from the gesture
 // inventory (tools/vscode-iec/webview-ui/gesture-harness/INVENTORY.md) joined
 // to the manifest items. Manifest schema 1 is the contract with the rig; when
 // an artifact predates it, the manifest is synthesised from the rig's TSVs
@@ -35,6 +39,7 @@ import { fileURLToPath } from 'node:url';
 const WEB = dirname(dirname(fileURLToPath(import.meta.url)));
 const REPO_ROOT = dirname(WEB);
 const DATA_FILE = join(WEB, 'src', 'data', 'verified.json');
+const RUNTIME_FILE = join(WEB, 'src', 'data', 'runtime.json');
 const PUBLIC_DIR = join(WEB, 'public', 'verified');
 const INVENTORY = join(REPO_ROOT, 'tools', 'vscode-iec', 'webview-ui', 'gesture-harness', 'INVENTORY.md');
 const REPO = process.env.GITHUB_REPOSITORY || 'joyautomation/nautilus';
@@ -441,6 +446,55 @@ async function fetchSet({ key, workflow, match }) {
   }
 }
 
+// ------------------------------------------------------- runtime evidence
+
+/** Write src/data/runtime.json: the evidence file plus the run it came from. */
+function writeRuntime(evidence, run) {
+  mkdirSync(dirname(RUNTIME_FILE), { recursive: true });
+  writeFileSync(RUNTIME_FILE, JSON.stringify({ ...evidence, run }, null, 1));
+  const v = evidence.verdicts ?? {};
+  log(`runtime: ${evidence.claims?.length ?? 0} claims (${Object.entries(v).map(([k, n]) => `${n} ${k}`).join(', ')}) from ${run.runId ?? 'a local file'}`);
+}
+
+async function bakeRuntime() {
+  const local = process.env.RUNTIME_EVIDENCE;
+  if (local) {
+    writeRuntime(JSON.parse(readFileSync(local, 'utf8')), { local: true, sha: null, date: new Date().toISOString() });
+    return;
+  }
+  if (!TOKEN) {
+    log(existsSync(RUNTIME_FILE) ? 'runtime: no GITHUB_TOKEN — keeping existing evidence' : 'runtime: no GITHUB_TOKEN — no evidence');
+    return;
+  }
+  const run = await latestGreenRun('ci.yml');
+  if (!run) return log('runtime: no green ci.yml run on main');
+  const arts = await gh(`/repos/${REPO}/actions/runs/${run.id}/artifacts?per_page=100`);
+  const art = (arts?.artifacts ?? []).find((a) => a.name === 'runtime-evidence' && !a.expired);
+  if (!art) return log(`runtime: run ${run.id} has no runtime-evidence artifact${existsSync(RUNTIME_FILE) ? ' — keeping existing evidence' : ''}`);
+  const tmp = mkdtempSync(join(tmpdir(), 'verified-runtime-'));
+  try {
+    const zip = join(tmp, 'a.zip');
+    const res = await gh(`/repos/${REPO}/actions/artifacts/${art.id}/zip`, { raw: true });
+    if (!res) throw new Error(`artifact ${art.id} download 404`);
+    await pipeline(Readable.fromWeb(res.body), createWriteStream(zip));
+    const root = join(tmp, 'x');
+    mkdirSync(root);
+    unzip(zip, root);
+    const file = walk(root).find((f) => f.endsWith(`${sep}evidence.json`));
+    if (!file) throw new Error(`${art.name} has no evidence.json`);
+    const evidence = JSON.parse(readFileSync(file, 'utf8'));
+    writeRuntime(evidence, {
+      sha: evidence.sha || run.head_sha,
+      date: run.run_started_at || run.created_at,
+      runId: String(run.id),
+      runUrl: run.html_url,
+      artifact: art.name,
+    });
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 // --------------------------------------------------------------------- main
 
 function readExisting() {
@@ -465,6 +519,16 @@ function writeData(sets, rows, note) {
 }
 
 async function main() {
+  // Independent of the clip sets; its failure keeps whatever was there.
+  const runtime = bakeRuntime().catch((e) => log(`runtime: skipped (${e.name === 'TimeoutError' ? 'timed out' : e.message})`));
+  try {
+    await mainSets();
+  } finally {
+    await runtime;
+  }
+}
+
+async function mainSets() {
   let rows = [];
   try {
     rows = parseInventory(readFileSync(INVENTORY, 'utf8'));

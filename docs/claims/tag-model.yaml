@@ -1,0 +1,471 @@
+page: website/src/content/docs/guides/tag-model.md
+title: The tag model
+prefix: TAG
+claims:
+  - id: TAG-001
+    claim: >-
+      A tag declared in nautilus.yaml is in scope in every PROGRAM without a
+      VAR_EXTERNAL declaration, typed by its type: (or by what its init:
+      implies), and a program binds only the tags it names.
+    source: "#tags-in-scope-the-rules"
+    tests:
+      - go ./internal/project TestManifestTagsAreImplicit
+      - go ./internal/project TestImplicitTagsBindOnlyWhereUsed
+      - go ./internal/project TestElementaryTagTypes
+    partial: true
+    note: >-
+      Covered for ST programs; the same promise for ladder, FBD and SFC
+      programs is only exercised through the LSP/check tests, not asserted at
+      runtime.
+  - id: TAG-002
+    claim: >-
+      Tags come into existence only through a write (a seed, a driver input,
+      an operator write, or a program coil write); a write to a name no
+      writer has created through the API is refused rather than creating a
+      tag.
+    source: "#the-tag-model"
+    tests:
+      - go ./server TestWriteTag
+      - go ./runtime TestSetPathOnNonStructRootCreatesNoJunkTag
+      - go ./runtime TestSetRejectsDottedNamesWithoutCreatingThem
+    partial: true
+    note: >-
+      The program-coil-creates-a-tag half is not asserted by a named test.
+  - id: TAG-003
+    claim: >-
+      Reading a tag nobody has ever written stops the scan with "undefined
+      tag <name>" instead of running on a silent zero.
+    source: "#the-tag-model"
+    tests: []
+    note: >-
+      Gap. The message is asserted only for the force and SetPath APIs, not
+      for a program reading an unwritten tag on scan one. naut check's
+      "reading an undeclared tag fails the check" (TestCheckFailsOnUndeclaredRead)
+      covers the static side only.
+  - id: TAG-004
+    claim: >-
+      An output tag seeded with Init (or any seeded setpoint/state) exists
+      from scan one, so a seal-in latch that reads its own coil does not
+      fault on the first scan.
+    source: "#declaring-tags-one-entry-per-tag"
+    tests:
+      - go ./runtime TestTagDefs
+      - go ./runtime TestDtTagSeededBeforeFirstScan
+      - go ./acceptance TestPumpSealInHysteresis
+      - naut testdata/projects/heated-tank pump seals in below the start level and drops out above it
+  - id: TAG-005
+    claim: >-
+      A tag with neither a type: nor an init: that a program names without a
+      declaration is refused with a message telling the author to give it a
+      type or declare it in VAR_EXTERNAL.
+    source: "#tags-in-scope-the-rules"
+    tests:
+      - go ./internal/project TestUntypedTagSaysGiveItAType
+      - go ./cmd/naut TestCheckGoldenUntypedTag
+  - id: TAG-006
+    claim: >-
+      A VAR_EXTERNAL declaration wins for its program but must agree with a
+      stated type: (VAR_EXTERNAL Speed : BOOL against type: REAL is an error
+      at the declaration).
+    source: "#tags-in-scope-the-rules"
+    tests:
+      - go ./internal/project TestExplicitDeclarationMustAgreeWithTypedTag
+  - id: TAG-007
+    claim: >-
+      Programs that bind one untyped tag with different types are an error
+      naming both tasks, and a type: on the tag settles it.
+    source: "#tags-in-scope-the-rules"
+    tests:
+      - go ./internal/project TestProgramsDisagreeingOnAnUntypedTag
+    note: >-
+      Asserts the error names the fix; the "naming both tasks" wording is not pinned.
+  - id: TAG-008
+    claim: >-
+      A program's own local with a tag's name shadows the tag in that
+      program (the tag is neither read nor written there), and naut check
+      warns "local X shadows the project tag X".
+    source: "#tags-in-scope-the-rules"
+    tests:
+      - go ./internal/project TestLocalShadowsTag
+      - go ./cmd/naut TestCheckGoldenShadowWarning
+  - id: TAG-009
+    claim: >-
+      Function blocks and functions do not see project tags implicitly; a
+      block reaches a tag only through its own VAR_EXTERNAL.
+    source: "#tags-in-scope-the-rules"
+    tests:
+      - go ./internal/project TestFunctionBlocksDoNotSeeTagsImplicitly
+  - id: TAG-010
+    claim: >-
+      A file-level VAR_GLOBAL block in a library .st (a GVL) declares globals
+      for every program; a global the manifest does not declare becomes a
+      state tag starting at the zero of its type, a redeclaration must agree
+      in type, and VAR_GLOBAL CONSTANT entries are constants rather than tags.
+    source: "#tags-in-scope-the-rules"
+    tests:
+      - go ./internal/project TestGVLComposesIntoEveryProgram
+      - go ./internal/project TestGVLRedeclarationMustAgree
+      - go ./cmd/naut TestCheckGoldenGVL
+    partial: true
+    note: >-
+      Manifest-declared global supplying role/init/unit/desc, and the
+      CONSTANT case, are not asserted.
+  - id: TAG-011
+    claim: >-
+      runtime.Options.Tags states each tag's role once (Input, Output,
+      Setpoint, State with Init/Desc/Unit), composes with the flat
+      Inputs/Outputs/Seed/Meta fields, and an Input is deliberately not
+      seeded.
+    source: "#declaring-tags-one-entry-per-tag"
+    tests:
+      - go ./runtime TestTagDefs
+      - go ./runtime TestRuntimeDrivesOutputs
+      - go ./internal/project TestTypedInputStaysUnseeded
+    partial: true
+    note: >-
+      Composition with the legacy flat fields is not asserted.
+  - id: TAG-012
+    claim: >-
+      type: accepts every IEC elementary type, a project TYPE (UDT or
+      enumeration) or an ARRAY[lo..hi] OF either, and a typed setpoint or
+      state tag with no init: starts at the zero of its type.
+    source: "#a-tags-type"
+    tests:
+      - go ./internal/project TestElementaryTagTypes
+      - go ./internal/project TestTypedTagSeedsZeroOfType
+      - go ./internal/project TestEnumTypedTag
+      - go ./internal/project TestSeededRolesAcceptTypeInsteadOfInit
+  - id: TAG-013
+    claim: >-
+      type: and init: must agree: type: INT with init: 2.5 is a load error
+      naming the tag and its type.
+    source: "#a-tags-type"
+    tests:
+      - go ./internal/project TestTagTypeAndInitMustAgree
+      - go ./internal/project TestFractionalInitOnIntegerTagIsAnError
+  - id: TAG-014
+    claim: >-
+      A type: naming something that is neither an IEC elementary type nor a
+      project TYPE is refused, listing the types the project does declare.
+    source: "#a-tags-type"
+    tests:
+      - go ./internal/project TestUnknownTypeIsAnError
+  - id: TAG-015
+    claim: >-
+      A function-block type is refused as a tag type, since an instance is program state, not a tag.
+    source: "#a-tags-type"
+    tests: []
+    note: >-
+      Gap. No test declares a tag of a FUNCTION_BLOCK type.
+  - id: TAG-016
+    claim: >-
+      GET /api/meta reports each tag's declared type beside desc and unit,
+      plus an enumeration's members, and the stream carries an enumerated
+      value as its member name.
+    source: "#a-tags-type"
+    tests:
+      - go ./server TestMetaTagTypes
+      - go ./runtime TestEnumTagsRenderByName
+    partial: true
+    note: >-
+      Program locals under "locals" and struct "members" listing are not
+      separately asserted.
+  - id: TAG-017
+    claim: >-
+      An init: on an untyped tag is seeded as the type the programs declare
+      for it (init: 0 on a DINT binds an integer; init: 65 on a REAL stays a
+      REAL), and a tag no program declares seeds a number as a REAL.
+    source: "#a-scalar-seed-takes-the-programs-type"
+    tests:
+      - go ./internal/project TestIntegerTagSeedsAsTheProgramDeclaresIt
+      - go ./internal/project TestRealTagWithIntegerLiteralStaysReal
+      - go ./internal/project TestUndeclaredTagWithIntegerLiteralSeedsReal
+  - id: TAG-018
+    claim: >-
+      A seeded integer tag is born to a Sparkplug host as an Int64 and a
+      REAL as a Double.
+    source: "#a-scalar-seed-takes-the-programs-type"
+    tests:
+      - go ./sparkplug TestFaithfulTypingFromIR
+    partial: true
+    note: >-
+      Covers the IR-kind to wire-type mapping, not a manifest seed carried
+      end to end into a birth.
+  - id: TAG-019
+    claim: >-
+      A UDT-typed manifest tag seeds to the zero of the type by default, and
+      for setpoint/state tags init: may be a (nested) mapping of member
+      names to values; members the mapping omits stay zero.
+    source: "#seeding-struct-members"
+    tests:
+      - go ./internal/project TestStructInitSeedsNestedMembersOthersZero
+      - go ./internal/project TestStructInitWorksThroughTagFiles
+      - go ./internal/project TestStructInitRenderRoundTripsThroughTagFile
+  - id: TAG-020
+    claim: >-
+      TIME members seed from an ST literal, a bare duration (90s, 500ms) or
+      whole milliseconds, and ARRAY members seed from a list element by
+      element from the lower bound, leaving unnamed elements zero.
+    source: "#seeding-struct-members"
+    tests:
+      - go ./internal/project TestTimeMembersSeedFromInit
+    partial: true
+    note: >-
+      Array-from-list seeding is not asserted by name.
+  - id: TAG-021
+    claim: >-
+      An unknown member name in a struct init: is a load error naming the tag
+      and member path with a did-you-mean hint, and a struct-typed tag given
+      a scalar init: is an error.
+    source: "#seeding-struct-members"
+    tests:
+      - go ./internal/project TestStructInitUnknownMemberIsAnError
+      - go ./internal/project TestStructInitScalarOnStructIsAnError
+  - id: TAG-022
+    claim: >-
+      POST /api/tags accepts a dotted member path (to any depth) and
+      read-modify-writes the whole struct, leaving other members unchanged.
+    source: "#writing-a-member-post-apitags-with-tagmember"
+    tests:
+      - go ./server TestWriteMemberOfStateAndOutputRoots
+      - go ./runtime TestSetPathScalarMember
+      - go ./runtime TestSetPathNestedMember
+  - id: TAG-023
+    claim: >-
+      An object value on POST /api/tags merges onto the tag: members it does
+      not name keep their current values (unlike init:, which zero-fills).
+    source: "#writing-a-member-post-apitags-with-tagmember"
+    tests:
+      - go ./server TestWriteStructMapMerges
+      - go ./runtime TestSetPathMapMergesAndKeepsOtherMembers
+  - id: TAG-024
+    claim: >-
+      A member write never creates anything: an unknown tag, a misspelled
+      member (with a did-you-mean) or a member path into a scalar tag is a
+      400 carrying the reason, not a new top-level tag.
+    source: "#writing-a-member-post-apitags-with-tagmember"
+    tests:
+      - go ./server TestWriteMemberErrorsAre400WithReason
+      - go ./runtime TestSetPathUnknownMemberSuggests
+      - go ./runtime TestSetPathOnNonStructRootCreatesNoJunkTag
+      - go ./runtime TestSetPathUnknownRoot
+  - id: TAG-025
+    claim: >-
+      A member write keeps the leaf's type (a number lands as REAL or as an
+      integer according to the member) and a type mismatch is an error, not
+      a silent retype.
+    source: "#writing-a-member-post-apitags-with-tagmember"
+    tests:
+      - go ./runtime TestSetPathTypedMembers
+      - go ./runtime TestSetPathTypeMismatch
+  - id: TAG-026
+    claim: >-
+      An enumerated member takes its member name (any case, Mode#Run
+      qualified, or its integer), and a name that is no member is a 400
+      listing the members.
+    source: "#writing-a-member-post-apitags-with-tagmember"
+    tests:
+      - go ./server TestWriteEnumMemberByPath
+      - go ./server TestWriteEnumNonMemberIs400ListingMembers
+      - go ./runtime TestSetPathEnumMemberByName
+      - go ./runtime TestSetPathEnumNonMemberIsAnError
+  - id: TAG-027
+    claim: >-
+      An array element is addressed as [n] counted from the array's declared
+      lower bound, an index outside the bounds is a 400 giving them, and a
+      list value merges onto an array element by element.
+    source: "#writing-a-member-post-apitags-with-tagmember"
+    tests:
+      - go ./server TestWriteEnumMemberByPath
+      - go ./server TestWriteEnumNonMemberIs400ListingMembers
+      - go ./runtime TestSetPathStructWriteCoercesEnumsDeep
+  - id: TAG-028
+    claim: >-
+      The role rule is the root tag's: a member of a driver-owned input is
+      refused, while setpoint, state and output roots are writable.
+    source: "#writing-a-member-post-apitags-with-tagmember"
+    tests:
+      - go ./server TestWriteMemberOfInputRootRefused
+      - go ./server TestWriteMemberOfStateAndOutputRoots
+    partial: true
+    note: >-
+      The rule that a struct-typed output needs an init: to exist before the
+      first write is not asserted.
+  - id: TAG-029
+    claim: >-
+      GET /api/meta reports "memberWrites": true so an HMI can detect member-path support.
+    source: "#writing-a-member-post-apitags-with-tagmember"
+    tests:
+      - go ./server TestMetaAdvertisesMemberWrites
+  - id: TAG-030
+    claim: >-
+      Dotted and indexed paths also address tags in a test's given:/expect:
+      and in a force.
+    source: "#writing-a-member-post-apitags-with-tagmember"
+    tests:
+      - go ./acceptance TestGivenAndExpectAddressFields
+      - go ./acceptance TestGivenEnumMemberByPath
+      - go ./runtime TestForceStructMember
+      - go ./server TestForceEnumMemberByPath
+    partial: true
+    note: >-
+      The built-in dashboard's editable struct leaves and the HMI kit's
+      rt.writeTag are not covered here.
+  - id: TAG-031
+    claim: >-
+      Runtime.OnScan observers fire once per main-task Scan(), after the
+      program has run, see the store as that scan left it, run in
+      registration order, and work under a virtual clock.
+    source: "#observing-scans-runtimeonscan"
+    tests:
+      - go ./runtime TestOnScanFiresWithPostProgramValues
+      - go ./runtime TestOnScanMultipleObserversOrder
+      - go ./runtime TestOnScanUnderVirtualClock
+  - id: TAG-032
+    claim: >-
+      A panic in an OnScan observer is recovered and logged without taking
+      the scan down, and the returned cancel func unregisters (idempotently).
+    source: "#observing-scans-runtimeonscan"
+    tests:
+      - go ./runtime TestOnScanPanicIsRecoveredAndScanContinues
+      - go ./runtime TestOnScanCancelStopsFiringAndIsIdempotent
+  - id: TAG-033
+    claim: >-
+      Tags.ReadPath reads a dotted member path (scalar leaf or struct
+      sub-tree) from inside an OnScan callback without deadlocking.
+    source: "#observing-scans-runtimeonscan"
+    tests:
+      - go ./runtime TestOnScanObserverCanReadPathWithoutDeadlock
+      - go ./runtime TestReadPathScalarLeaf
+      - go ./runtime TestReadPathStructSubTree
+      - go ./runtime TestReadPathNestedLeaf
+  - id: TAG-034
+    claim: >-
+      server.hmi serves a built static SPA at / in place of the dashboard,
+      falling back to the bundle's index.html for unmatched non-/api paths,
+      with the built-in dashboard moved to /_nautilus/ and /api/* untouched.
+    source: "#serving-the-hmi-from-the-controller"
+    tests:
+      - go ./server TestHMIServesStaticFile
+      - go ./server TestHMISPAFallback
+      - go ./server TestHMIDoesNotShadowAPI
+      - go ./server TestHMIMovesBuiltinDashboardToNautilusPrefix
+      - go ./server TestHMIBuiltinAssetsMoveWithDashboard
+  - id: TAG-035
+    claim: >-
+      The server.hmi path is relative to the project and must resolve inside
+      it, and a path that is a file is an error.
+    source: "#serving-the-hmi-from-the-controller"
+    tests:
+      - go ./internal/project TestHMIPathMustStayInsideProject
+      - go ./internal/project TestHMIPathIsAFileIsAnError
+      - go ./cmd/naut TestRunBuildErrorsWhenHMIPathIsAFile
+  - id: TAG-036
+    claim: >-
+      naut build embeds the HMI build output in the binary like any project
+      file, and the built binary serves it.
+    source: "#serving-the-hmi-from-the-controller"
+    tests:
+      - go ./cmd/naut TestRunBuildEmbedsHMIWhenPresent
+      - go ./cmd/naut TestBuildEmbedsHMIAndBuiltBinaryServesIt
+  - id: TAG-037
+    claim: >-
+      When the server.hmi directory is not built yet, neither naut run nor
+      naut build fails; both warn and fall back to the built-in dashboard.
+    source: "#serving-the-hmi-from-the-controller"
+    tests:
+      - go ./cmd/naut TestRunBuildWarnsOnMissingHMIDir
+      - go ./cmd/naut TestHMIBannerSuffixHMIMissingWarns
+      - go ./internal/project TestHMIDirNeedNotExistAtLoad
+      - go ./internal/project TestServerFallsBackToDashboardWhenHMIDirMissing
+  - id: TAG-038
+    claim: >-
+      naut build prints a warning when the embedded project comes out over
+      about 50 MB.
+    source: "#serving-the-hmi-from-the-controller"
+    tests: []
+    note: >-
+      Gap. TestEmitBinarySkipsDependencyTrees covers skipping node_modules
+      and vendor, not the size warning.
+  - id: TAG-039
+    claim: >-
+      A driver input must be listed in the allowlist (the manifest tag with
+      role: input); a driver cannot create arbitrary tags by delivering
+      extra names.
+    source: "#adding-a-field-input-end-to-end"
+    tests: []
+    note: >-
+      Gap. No test delivers an unlisted name from a driver and checks it stays out of the store.
+  - id: TAG-040
+    claim: >-
+      Every stored value carries the generation at which it last changed,
+      and writing a value equal to the one already stored does not advance
+      the counter.
+    source: "#performance-notes-write-generations"
+    tests:
+      - go ./runtime TestGenerationAdvancesOnlyOnChange
+      - go ./runtime TestGenerationStructWrites
+      - go ./runtime TestNameGeneration
+  - id: TAG-041
+    claim: >-
+      Tags.SnapshotInto refills the caller's map with Sample{Value, Gen}
+      instead of allocating a fresh copy, and ChangedSince(gen, dst)
+      appends exactly the tags that moved and returns the generation to ask
+      with next.
+    source: "#performance-notes-write-generations"
+    tests:
+      - go ./runtime TestSnapshotInto
+      - go ./runtime TestChangedSinceReportsOnlyWhatMoved
+      - go ./runtime TestChangedSinceAccumulatesAcrossTicks
+      - go ./runtime TestChangedSinceReusesTheCallersBuffer
+      - go ./runtime TestChangedSinceZeroIsEverything
+  - id: TAG-042
+    claim: >-
+      WriteOutputs is called on the first scan, on any scan where an output
+      differs from the last value handed over, after a failed write and
+      after a redundancy takeover, and skipped otherwise;
+      Options.AlwaysWriteOutputs restores a per-scan call.
+    source: "#performance-notes-write-generations"
+    tests:
+      - go ./runtime TestHostWriteOutputsSkippedWhenUnchanged
+      - go ./runtime TestAlwaysWriteOutputs
+    partial: true
+    note: >-
+      The after-a-failed-write and after-takeover triggers are not asserted.
+  - id: TAG-043
+    claim: >-
+      A driver implementing io.BatchReader is handed the same map each scan
+      via ReadInputsInto, and the runtime falls back to ReadInputs when it
+      is absent.
+    source: "#performance-notes-write-generations"
+    tests:
+      - go ./modbus TestDriverDeliversTagsPerClass
+    partial: true
+    note: >-
+      The Modbus driver's ReadInputsInto delivers the same set as
+      ReadInputs; the runtime preferring it over ReadInputs is only
+      exercised by benchmarks.
+  - id: TAG-044
+    claim: >-
+      Change detection is conservative: two struct values are equal only if
+      they share the same StructDef, and a function-block instance is never
+      equal to anything; it can report a change that did not happen but
+      never hide one.
+    source: "#performance-notes-write-generations"
+    tests:
+      - go ./runtime TestGenerationStructWrites
+    partial: true
+    note: >-
+      The function-block-never-equal rule is not separately asserted.
+  - id: TAG-045
+    claim: >-
+      Quality travels beside the tags: the non-good entries appear in
+      /api/state and every stream frame as a quality map, an absent name
+      means good, and a driver-bound input whose last read failed is stale.
+    source: "#what-a-value-is-worth-quality"
+    tests:
+      - go ./runtime TestQualityDerivesStaleFromFailedReads
+      - go ./runtime TestQualityDropsGoodEntries
+      - go ./runtime TestQualityFromDriverWins
+      - go ./server TestFrameCarriesQuality
+      - go ./server TestFrameOmitsQualityWhenEverythingIsGood

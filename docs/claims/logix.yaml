@@ -1,0 +1,336 @@
+page: website/src/content/docs/guides/logix.md
+title: Allen-Bradley Logix
+prefix: LGX
+claims:
+  - id: LGX-001
+    claim: >-
+      `naut logix import` reads an L5X export on any OS with no Rockwell
+      software and writes a tag file and an IEC types file that, together
+      with a program that names them, check clean as a nautilus project.
+    source: "#half-one-reading-l5x--no-rockwell-software"
+    tests:
+      - go ./cmd/naut TestLogixImportProducesACheckableProject
+      - go ./lang/l5x TestParseControllerExport
+
+  - id: LGX-002
+    claim: >-
+      Tag descriptions from the offline project are recovered into the
+      imported tag file as `desc:`, which a live CIP browse cannot do.
+    source: "#tags-arrive-documented"
+    tests:
+      - go ./cmd/naut TestLogixImportRecoversDescriptions
+      - go ./lang/l5x TestTagsCarryDescriptions
+
+  - id: LGX-003
+    claim: >-
+      Import takes controller-scope tags by default and reaches into
+      program-scope tags only when `--scope` asks for them; an unknown scope
+      is an error rather than an empty file.
+    source: "#tags-arrive-documented"
+    tests:
+      - go ./cmd/naut TestLogixImportRecoversDescriptions
+      - go ./lang/l5x TestTagsScopes
+
+  - id: LGX-004
+    claim: >-
+      A Logix UDT imports as an IEC STRUCT: the hidden byte that hosts its
+      BOOLs is dropped and the BOOLs the author wrote are declared; nested
+      UDTs and arrays come across.
+    source: "#tags-arrive-documented"
+    tests:
+      - go ./lang/l5x TestTypesRendersUserUDTs
+      - go ./lang/l5x TestArrayOfStructuresDecodes
+      - go ./cmd/naut TestLogixImportProducesACheckableProject
+
+  - id: LGX-005
+    claim: >-
+      `naut logix graph` turns an RLL routine into the same ladder model
+      `naut ld graph` emits for a `.ld` file (contacts, nested branches,
+      in-rung blocks, coils), and reports an unknown routine as a JSON error.
+    source: "#ladder-in-your-editor"
+    tests:
+      - go ./cmd/naut TestLogixGraphEmitsTheLadderModel
+      - go ./cmd/naut TestLogixGraphReportsErrorsAsJSON
+      - go ./lang/l5x TestLadderContactsAndCoils
+      - go ./lang/l5x TestLadderNestedBranchesAndBlocks
+
+  - id: LGX-006
+    claim: >-
+      An instruction nautilus has never seen still draws, as a box with its
+      mnemonic and operands verbatim; a rung with no output is still a rung.
+    source: "#ladder-in-your-editor"
+    tests:
+      - go ./lang/l5x TestLadderUnknownInstructionsDraw
+
+  - id: LGX-007
+    claim: >-
+      `naut logix normalize` pins the volatile export attributes (ExportDate
+      and the other attributes that move on every export) and is idempotent;
+      attribute line-wrapping and the comm path do not make two exports of
+      unchanged code differ.
+    source: "#drift-detection"
+    tests:
+      - go ./lang/l5x TestNormalizePinsTheVolatileAttributes
+      - go ./lang/l5x TestNormalizeIsIdempotent
+      - go ./lang/l5x TestNormalizeDropsTheCommPath
+      - go ./lang/l5x TestNormalizeIgnoresAttributeWrapping
+      - go ./cmd/naut TestLogixNormalizeWritesAPinnedExport
+
+  - id: LGX-008
+    claim: >-
+      `naut logix normalize --check` exits 0 when two exports are the same
+      project and 1 when a real change (a setpoint, a rung) separates them;
+      normalization never swallows a real change.
+    source: "#drift-detection"
+    tests:
+      - go ./cmd/naut TestLogixNormalizeChecksDrift
+      - go ./lang/l5x TestNormalizeKeepsARealChange
+      - go ./lang/l5x TestLogicIgnoresValues
+      - go ./lang/l5x TestLogicDiffNamesTheChange
+
+  - id: LGX-009
+    claim: >-
+      `naut logix serve` browses the controller over EtherNet/IP at startup
+      and serves every user tag it can decode through the nautilus HTTP API;
+      controller-scope tags keep their names and a program-scope tag is
+      served as `<Program>_<Tag>`; values change when the controller's own
+      logic changes them.
+    source: "#live-values-from-a-running-controller"
+    tests:
+      - go ./logix/facade TestLiveValuesFromTheController
+      - go ./logix/facade TestDriverStatusInTheFrame
+
+  - id: LGX-010
+    claim: >-
+      `naut logix serve` leaves module I/O tags out, and `--tags` narrows
+      what is served with globs such as `Program:MainProgram.*`.
+    source: "#live-values-from-a-running-controller"
+    tests: []
+    note: The facade tests use an emulator with no module I/O and never pass a glob.
+
+  - id: LGX-011
+    claim: >-
+      `--l5x` supplies tag descriptions to the served API, since a CIP
+      browse cannot read documentation.
+    source: "#live-values-from-a-running-controller"
+    tests: []
+    note: No test feeds an L5X to the facade and checks descriptions.
+
+  - id: LGX-012
+    claim: >-
+      A write through `naut logix serve` goes to the controller and the frame
+      shows the value the next poll read back, not the value that was sent.
+    source: "#live-values-from-a-running-controller"
+    tests:
+      - go ./logix/facade TestWritesReachTheController
+
+  - id: LGX-013
+    claim: >-
+      A write names one value (`P101.Run`); naming a whole UDT, a missing
+      member, an unknown tag or a wrongly typed value is refused with a
+      message that says why.
+    source: "#live-values-from-a-running-controller"
+    tests:
+      - go ./logix/facade TestWritesThatCannotWork
+
+  - id: LGX-014
+    claim: >-
+      Program commands against a served Logix controller (Diff with
+      Controller, Download, rollback, activate) are refused with a message
+      that points at `naut logix drift` or `naut logix push`.
+    source: "#live-values-from-a-running-controller"
+    tests:
+      - go ./logix/facade TestProgramEndpoints
+
+  - id: LGX-015
+    claim: >-
+      With `NAUTILUS_TOKEN` set, `naut logix serve` requires a bearer token
+      for writes; without it, writes are open to anything that can reach the
+      port.
+    source: "#live-values-from-a-running-controller"
+    tests: []
+    note: logixserve.go hands the token to the server, but no test exercises that wiring for logix serve.
+
+  - id: LGX-016
+    claim: >-
+      `naut logix probe` reports each SDK prerequisite as its own gate and
+      exits non-zero when the SDK is unusable, while still printing the
+      gates.
+    source: "#check-it-before-you-trust-it"
+    tests:
+      - go ./cmd/naut TestLogixProbeExitCodeFollowsUsability
+      - go ./logix/logixd TestAgentProbeReportsGates
+    partial: true
+    note: Exit-code behaviour is CI-tested against a fake agent; the real multi-gate probe is verified on hardware only.
+
+  - id: LGX-017
+    claim: >-
+      A failing probe gate prints its remedy underneath; a passing gate
+      carries no advice.
+    source: "#when-something-isnt-working"
+    tests:
+      - go ./cmd/naut TestLogixProbePrintsTheRemedyForAFailingGate
+
+  - id: LGX-018
+    claim: >-
+      An unreachable `logixd` is a fatal error whose message names the URL
+      nautilus tried; an unauthorized one is reported as such.
+    source: "#when-something-isnt-working"
+    tests:
+      - go ./cmd/naut TestLogixAgentReportsAnUnreachableAgentHelpfully
+      - go ./logix/logixd TestClientUnreachableIsFatalAndNamesTheURL
+      - go ./logix/logixd TestClientClassifiesErrors
+    partial: true
+    note: The 401 "unauthorized" wording from the page is not asserted; error kinds are.
+
+  - id: LGX-019
+    claim: >-
+      `naut logix convert` stages the input to the agent, converts between
+      ACD and L5X in either direction, and fetches the result.
+    source: "#what-you-can-then-do"
+    tests:
+      - go ./cmd/naut TestLogixConvertStagesAndFetches
+      - go ./logix/logixd TestSDKConvertAndInspect
+    partial: true
+    note: CI covers staging and fetch against a fake agent; the actual ACD/L5X conversion is verified on hardware only.
+
+  - id: LGX-020
+    claim: >-
+      `naut logix build` compiles a project through the SDK without a
+      controller, and rejects an unknown build target.
+    source: "#what-you-can-then-do"
+    tests:
+      - go ./cmd/naut TestLogixBuildRejectsAnUnknownTarget
+      - go ./logix/logixd TestSDKBuild
+    partial: true
+    note: Argument handling is CI-tested; the build itself is verified on hardware only.
+
+  - id: LGX-021
+    claim: >-
+      `naut logix drift` compares the controller with the repo file and exits
+      1 on a mismatch, so it works as a CI gate; it requests the same export
+      kind (detailed or basic) as the repo file.
+    source: "#online-edits"
+    tests:
+      - go ./logix/logixd TestConvertSendsDetailedFlag
+    partial: true
+    note: Only the detailed-flag plumbing is tested. The drift verb's exit code and kind matching have no test (logix drift is hardware only).
+
+  - id: LGX-022
+    claim: >-
+      `naut logix browse` lists the controllers FactoryTalk Linx has already
+      discovered, as comm paths with the controller name and catalog number,
+      without scanning the network.
+    source: "#what-you-can-then-do"
+    tests:
+      - go ./logix/logixd TestParseLinxConfigFindsTheController
+      - go ./logix/logixd TestAgentCommPaths
+    partial: true
+    note: Parsing the Linx configuration is CI-tested; the live agent listing is verified on hardware only.
+
+  - id: LGX-023
+    claim: >-
+      `naut logix push --accept` or `--finalize` without `--comm-path` is
+      refused, as is giving both; a push needs a program and a routine.
+    source: "#online-edits"
+    tests:
+      - go ./cmd/naut TestLogixPushRefusesOnlineOptionsWithoutACommPath
+      - go ./cmd/naut TestLogixPushRefusesBothOnlineOptions
+      - go ./cmd/naut TestLogixPushRequiresProgramAndRoutine
+
+  - id: LGX-024
+    claim: >-
+      `--finalize`, `--accept` and neither flag send FinalizeEdits,
+      AcceptEdits and LeaveEdits to the SDK respectively, with the chosen
+      position, replace count and routine path.
+    source: "#online-edits"
+    tests:
+      - go ./cmd/naut TestLogixPushSendsTheChosenOnlineOption
+      - go ./logix/logixd TestImportRungsSendsTheOnlineOptionVerbatim
+      - go ./logix/logixd TestSDKOnlineRungImport
+    partial: true
+    note: Option plumbing is CI-tested against a fake agent; the controller behaviour is verified on hardware only.
+
+  - id: LGX-025
+    claim: >-
+      An online edit takes no project file: it uploads the program the
+      controller is running, imports the rungs into that, and sends it back.
+      An offline import does not touch the controller.
+    source: "#online-edits"
+    tests:
+      - go ./cmd/naut TestLogixPushSendsTheChosenOnlineOption
+      - go ./logix/logixd TestSDKUploadFromController
+    partial: true
+    note: The upload-from-controller flow is CI-tested against a fake agent; the claim that a disk project cannot go online is verified on hardware only.
+
+  - id: LGX-026
+    claim: >-
+      `naut logix download` refuses without `--yes` and without
+      `--comm-path`, and the refusal never reaches the agent.
+    source: "#what-nautilus-will-not-pretend-to-do"
+    tests:
+      - go ./cmd/naut TestLogixDownloadRefusesWithoutConfirmation
+      - go ./cmd/naut TestLogixDownloadRequiresACommPath
+
+  - id: LGX-027
+    claim: >-
+      A download never changes the controller mode unless explicitly asked:
+      `ensureProgramMode` is sent exactly as the caller set it.
+    source: "#security"
+    tests:
+      - go ./logix/logixd TestDownloadSendsEnsureProgramModeExplicitly
+
+  - id: LGX-028
+    claim: >-
+      `logixd` listening on a routable address requires a token and refuses
+      to start without one.
+    source: "#security"
+    tests: []
+    note: The agent is C# (tools/logixd) and has no automated tests at all.
+
+  - id: LGX-029
+    claim: >-
+      `LOGIXD_COMM_ALLOW` is agent-side configuration only, so a request
+      cannot name a controller the operator has not allowed.
+    source: "#security"
+    tests: []
+    note: No test; the agent is C# with no automated tests.
+
+  - id: LGX-030
+    claim: >-
+      Every path the agent touches is confined to `LOGIXD_WORKDIR`, compared
+      after full resolution so traversal is rejected.
+    source: "#security"
+    tests:
+      - go ./logix/logixd TestAgentRefusesToEscapeItsWorkDirectory
+    partial: true
+    note: Verified on hardware only (needs NAUTILUS_LOGIXD_URL); skipped in CI.
+
+  - id: LGX-031
+    claim: An agent that has a token answers an unauthenticated or wrongly authenticated caller with 401.
+    source: "#security"
+    tests:
+      - go ./logix/logixd TestAgentRejectsMissingToken
+    partial: true
+    note: Verified on hardware only (needs a running agent with a token); skipped in CI.
+
+  - id: LGX-032
+    claim: >-
+      The installer refuses to run while plain `DOTNET_ROOT` is set and
+      prints the commands that fix it.
+    source: "#install-it"
+    tests: []
+    note: install.ps1 has no automated test.
+
+  - id: LGX-033
+    claim: >-
+      The mnemonics nautilus writes into neutral text are the short
+      spellings the Logix importer accepts (`GE` `GT` `LE` `LT` `EQ` `NE`
+      `MOVE` `LIMIT`), never the editor captions (`GEQ`, `GRT`, `MOV`,
+      `LIM`).
+    source: "#when-something-isnt-working"
+    tests:
+      - go ./logix/writer TestMnemonicsAreCorpusVocabulary
+      - go ./logix/writer TestNeutralTextSpelling
+    partial: true
+    note: Checked against a vocabulary of surveyed exports, not against the SDK importer (SDK acceptance is verified on hardware only).

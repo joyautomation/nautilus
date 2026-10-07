@@ -1,0 +1,477 @@
+page: website/src/content/docs/languages/sfc.mdx
+title: Sequential Function Chart
+prefix: SFC
+claims:
+  - id: SFC-001
+    claim: >-
+      An .sfc file's SFC ... END_SFC block, written with INITIAL_STEP, STEP,
+      TRANSITION and ACTION, parses and compiles to a running program.
+    source: "#a-chart-in-text"
+    tests:
+      - go ./lang/sfc TestParseWorkedExample
+      - go ./lang/sfc TestTranspileShape
+      - go ./lang/sfc TestParseOutlineLenient
+
+  - id: SFC-002
+    claim: >-
+      A chart has exactly one INITIAL_STEP, active on the first scan; no
+      initial step, or more than one, is an error.
+    source: "#a-chart-in-text"
+    tests:
+      - go ./lang/sfc TestCheckMissingInitialStep
+      - go ./lang/sfc TestCheckMultipleInitialSteps
+      - go ./lang/conformance TestConformance/sfc-sim-div-conv/the initial token waits in Idle
+
+  - id: SFC-003
+    claim: >-
+      Each step owns a retained BOOL Step.X and an elapsed time Step.T; both
+      are legal in conditions and action bodies.
+    source: "#a-chart-in-text"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-step-t
+      - go ./lang/sfc TestCheckKnownStepXTRefIsClean
+      - go ./lang/sfc TestStepTimerGatesTransition
+
+  - id: SFC-004
+    claim: >-
+      FROM and TO take one step or a parenthesised list, and the transition
+      name is optional.
+    source: "#a-chart-in-text"
+    tests:
+      - go ./lang/sfc TestParseSimultaneousDivergenceConvergence
+      - go ./lang/sfc TestParseAlternativeDivergence
+      - go ./lang/sfc TestOpTransitionNames
+
+  - id: SFC-005
+    claim: >-
+      An association's IEC form XV201A_Cmd(N); or XV201A_Cmd(D, T#3S); is
+      read as the same association as the keyword form; an omitted qualifier
+      is N.
+    source: "#a-chart-in-text"
+    tests:
+      - go ./lang/sfc TestIECAssociationForm
+
+  - id: SFC-006
+    claim: >-
+      Each scan runs one fixed-order pass: evaluate each transition against
+      the pre-scan activity snapshot, resolve which fire, clear the sources,
+      set the targets, update step timers, compute actions.
+    source: "#how-a-chart-executes"
+    tests:
+      - go ./lang/sfc TestScanTrace
+      - go ./lang/sfc TestEnabledNotCondGuard
+    partial: true
+    note: The pass order is asserted through behaviour rather than as a single property.
+
+  - id: SFC-007
+    claim: >-
+      Every transition reads the same snapshot, so a token advances at most
+      one step per scan, though several transitions can fire in one scan when
+      several tokens are live.
+    source: "#how-a-chart-executes"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-alt-priority/the token advances one step per scan (X to Idle to X again)
+      - go ./lang/conformance TestConformance/sfc-sim-div-conv/each leg advances independently
+
+  - id: SFC-008
+    claim: >-
+      Clears run before sets, so a self-loop FROM S TO S leaves S active (and
+      does not re-fire its entry pulse).
+    source: "#how-a-chart-executes"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-jump-back/a self-loop leaves the step active and does not re-fire its entry pulse
+      - go ./lang/sfc TestSetDominatesClear
+
+  - id: SFC-009
+    claim: >-
+      A transition is enabled when all its FROM steps are active and its
+      condition is true.
+    source: "#how-a-chart-executes"
+    tests:
+      - go ./lang/sfc TestEnabledNotCondGuard
+      - go ./lang/conformance TestConformance/sfc-sim-div-conv/convergence does not fire until every source is active
+
+  - id: SFC-010
+    claim: >-
+      Alternative divergence: transitions sharing a source step are
+      prioritised by declaration order, first highest.
+    source: "#how-a-chart-executes"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-alt-priority
+      - go ./lang/sfc TestAltPriorityMutualExclusion
+      - go ./lang/sfc TestAltDivergenceAbort
+      - go ./lang/conformance TestConformance/sfc-jump-back/the jump back outranks the exit declared after it
+
+  - id: SFC-011
+    claim: >-
+      A lower branch is suppressed only when a higher one sharing a source
+      actually fires, so a convergence waiting on an inactive source cannot
+      deadlock the branch below; overlapping groups resolve to one outcome
+      per scan.
+    source: "#how-a-chart-executes"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-alt-priority/a dead convergence declared first does not starve the branches below it
+      - go ./lang/sfc TestSuppressedOnlyByFiringTransition
+      - go ./lang/sfc TestNonTransitiveGroupConvergenceFires
+
+  - id: SFC-012
+    claim: >-
+      Simultaneous divergence (TO (Heat, Mix)) sets both targets in one scan
+      and splits the token; simultaneous convergence (FROM (Heat, Mix)) is
+      enabled only when both sources are active.
+    source: "#how-a-chart-executes"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-sim-div-conv
+      - go ./lang/sfc TestParseSimultaneousDivergenceConvergence
+
+  - id: SFC-013
+    claim: >-
+      Every IEC action qualifier compiles: N, S, R, P1, P, P0 and the timed L,
+      D, SD, DS, SL.
+    source: "#action-qualifiers"
+    tests:
+      - go ./lang/sfc TestTimedQualifiersParseAndCheckClean
+      - go ./lang/conformance TestConformance/sfc-qualifiers
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers
+
+  - id: SFC-014
+    claim: N is active exactly while the step is.
+    source: "#action-qualifiers"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-qualifiers/N is high exactly while the step is active
+      - go ./lang/sfc TestNDrivesOnlyWhileActive
+
+  - id: SFC-015
+    claim: >-
+      S sets the target and R clears it, each once, on the scan their step
+      activates.
+    source: "#action-qualifiers"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-qualifiers/S sets once and the chart never clears it
+      - go ./lang/conformance TestConformance/sfc-qualifiers/R clears once on activation
+      - go ./lang/sfc TestSetActsOnceThenActionMayClear
+      - go ./lang/sfc TestResetActsOnceThenActionMaySet
+
+  - id: SFC-016
+    claim: >-
+      P1 and P fire once on the rising edge of step activity and re-fire on
+      every re-entry; P0 fires once on the falling edge.
+    source: "#action-qualifiers"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-qualifiers/P1 and P are one scan wide on the rising edge, and fire once per entry
+      - go ./lang/conformance TestConformance/sfc-qualifiers/P0 fires on the falling edge only, once, after the step has been left
+      - go ./lang/conformance TestConformance/sfc-qualifiers/every re-entry re-fires P1 and P (P0 counts only its own exits)
+      - go ./lang/sfc TestP1FiresOncePerActivation
+
+  - id: SFC-017
+    claim: >-
+      Timed qualifiers take a duration (a TIME literal or a TIME variable);
+      each association gets its own timer, started when its step activates.
+    source: "#action-qualifiers"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers
+      - go ./lang/sfc TestTimedLoweringStableSlots
+    partial: true
+    note: A TIME-variable duration (as opposed to a literal) is not covered.
+
+  - id: SFC-018
+    claim: >-
+      L is active from activation for the duration (ending early if the step
+      is left first); D is active once the step has been active for the
+      duration and ends when the step is left.
+    source: "#action-qualifiers"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers/the scan at PT — L and SL drop, D SD DS rise, the L body runs its final scan
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers/leaving before PT — L is cut short, D and DS never come on, SD and SL run on stored
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers/after the step leaves — D drops, the stored SD and DS hold
+
+  - id: SFC-019
+    claim: >-
+      SD turns on the duration after activation even if the step was left
+      meanwhile; DS turns on once the step has been active for the duration
+      (never, if left sooner); SL runs from activation for the duration, even
+      after the step is left; all three end at an R on the same target.
+    source: "#action-qualifiers"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers/leaving before PT — L is cut short, D and DS never come on, SD and SL run on stored
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers/R resets the stored qualifiers
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers/R before PT cuts SL short and stops SD from ever coming on
+      - go ./lang/sfc TestStoredLatchAcrossSteps
+
+  - id: SFC-020
+    claim: >-
+      An R acts once, on its step's activation scan, and clears the SD, DS and
+      SL latches on its target as well as an S; an SL that has run its time
+      stays latched and does not run again on re-activation until an R clears
+      it.
+    source: "#action-qualifiers"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers/re-entry restarts L and D; a timed-out SL stays off until an R
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers/after an R, SL arms again on the next activation
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers/R resets the stored qualifiers
+
+  - id: SFC-021
+    claim: >-
+      N, pulse and timed associations targeting the same BOOL are OR-combined:
+      the variable is held TRUE while any is active and written FALSE once, on
+      the scan the last one drops.
+    source: "#action-qualifiers"
+    tests:
+      - go ./lang/sfc TestTranspileShape
+      - go ./lang/sfc TestNStoreInteraction
+    partial: true
+    note: >-
+      The transpiled OR expression is asserted, and N/S/R interaction is run;
+      no test runs two steps driving one variable and checks it drops only
+      when both are left.
+
+  - id: SFC-022
+    claim: >-
+      An association writes its variable only on the scans it acts; an
+      inactive step never touches it, and between those scans the variable
+      belongs to whoever else writes it.
+    source: "#action-qualifiers"
+    tests:
+      - go ./lang/sfc TestNFreeWhenInactive
+      - go ./lang/sfc TestResetOnInactiveStepDoesNotClobberActionWrite
+      - go ./acceptance TestSFCResetOnInactiveStepKeepsActionWrite
+
+  - id: SFC-023
+    claim: >-
+      When an ACTION body assigns the same variable, the association wins
+      while it acts (it is applied after the bodies in the scan); the ACTION
+      owns it the rest of the time, so an R X on an abort step and an ACTION
+      that sets X on a normal step coexist.
+    source: "#action-qualifiers"
+    tests:
+      - go ./lang/sfc TestSetActsOnceThenActionMayClear
+      - go ./lang/sfc TestResetActsOnceThenActionMaySet
+      - go ./lang/sfc TestNDrivesOnlyWhileActive
+      - go ./acceptance TestSFCResetOnInactiveStepKeepsActionWrite
+
+  - id: SFC-024
+    claim: >-
+      naut check warns on every association/ACTION-body pair that assigns the
+      same variable.
+    source: "#action-qualifiers"
+    tests:
+      - go ./lang/sfc TestCheckAssocVsActionWrite
+      - go ./lang/sfc TestCheckAssocVsActionWriteN
+      - go ./lang/sfc TestCheckTimedAssocVsActionWrite
+
+  - id: SFC-025
+    claim: >-
+      An action body driven by a level qualifier (any but the pulses; a timed
+      window is a level) runs one extra scan on the falling edge of its active
+      signal, so a body written against step activity shuts its outputs down
+      (a TON called with Hold.X resets). A P1 body has no final scan.
+    source: "#action-qualifiers"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-final-scan
+      - go ./lang/sfc TestFinalScanResetsTON
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers/the scan at PT — L and SL drop, D SD DS rise, the L body runs its final scan
+
+  - id: SFC-026
+    claim: >-
+      Step.T counts the time the step has been active, starts at 0 on the
+      activation scan, resets when the step is left, restarts on re-entry, and
+      does not run while the step is inactive; a Step.T condition fires one
+      scan after T reaches its preset.
+    source: "#action-qualifiers"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-step-t
+      - go ./lang/sfc TestStepTimerGatesTransition
+
+  - id: SFC-027
+    claim: Step.T compiles to a hidden TON only for steps whose .T is read.
+    source: "#action-qualifiers"
+    tests: []
+    note: >-
+      Behaviour of .T is tested (SFC-026); no test asserts that unread steps
+      get no hidden timer.
+
+  - id: SFC-028
+    claim: >-
+      A step supervised with (MAXTIME := T#..) sets its retained Step.ERR one
+      scan after Step.T reaches the limit (active longer than MAXTIME); within
+      the limit nothing is flagged.
+    source: "#step-supervision"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-step-maxtime/within the limit nothing is flagged
+      - go ./lang/conformance TestConformance/sfc-step-maxtime/the scan the step overruns sets the flag; the abort fires the scan after
+      - go ./lang/conformance TestConformance/sfc-step-maxtime/leaving in time never sets the flag
+      - go ./lang/conformance TestConformance/sfc-step-maxtime/the step's time does not run while it is inactive
+
+  - id: SFC-029
+    claim: >-
+      Step.ERR stays set after the step is left, so an abort step can read the
+      cause, and clears on the step's next activation; nothing else happens
+      automatically.
+    source: "#step-supervision"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-step-maxtime/the flag holds after the step is left, until Fill runs again
+
+  - id: SFC-030
+    claim: >-
+      ERROR := Var names a BOOL variable that mirrors Step.ERR every scan, and
+      an alarm definition bound to that tag annunciates the overrun.
+    source: "#step-supervision"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-step-maxtime/the flag holds after the step is left, until Fill runs again
+      - go ./lang/conformance TestConformance/sfc-step-maxtime/leaving in time never sets the flag
+    note: The sfc-step-maxtime fixture asserts the mirrored tag and the FillOverrun alarm lifecycle (active, unack-rtn, ack).
+
+  - id: SFC-031
+    claim: >-
+      MAXTIME takes a TIME literal; a bad step attribute (non-TIME MAXTIME,
+      ERROR not a declared variable, ERROR without MAXTIME) and Step.ERR on a
+      step with no MAXTIME are errors.
+    source: "#step-supervision"
+    tests:
+      - go ./lang/sfc TestCheckStepAttributes
+
+  - id: SFC-032
+    claim: >-
+      naut check structural errors: duplicate step, action or transition
+      names; no or more than one INITIAL_STEP; FROM/TO naming a missing step;
+      an empty condition.
+    source: "#structural-checks"
+    tests:
+      - go ./lang/sfc TestCheckDuplicateStepName
+      - go ./lang/sfc TestCheckDuplicateActionName
+      - go ./lang/sfc TestCheckDuplicateTransitionName
+      - go ./lang/sfc TestCheckMissingInitialStep
+      - go ./lang/sfc TestCheckMultipleInitialSteps
+      - go ./lang/sfc TestCheckUnknownFromTo
+      - go ./lang/sfc TestCheckEmptyCondition
+
+  - id: SFC-033
+    claim: >-
+      naut check structural errors: an association naming neither an ACTION
+      nor a declared variable; a .X/.T reference to an unknown step.
+    source: "#structural-checks"
+    tests:
+      - go ./lang/sfc TestCheckUnresolvedActionAssociation
+      - go ./lang/sfc TestCheckActionAssociationResolvesToVariable
+      - go ./lang/sfc TestCheckUnknownStepXTRef
+
+  - id: SFC-034
+    claim: >-
+      naut check structural errors: an unknown qualifier (the message lists
+      every supported one and the Step.T recipe); a timed qualifier with no
+      duration, or an untimed one given one.
+    source: "#structural-checks"
+    tests:
+      - go ./lang/sfc TestCheckUnsupportedQualifier
+      - go ./lang/sfc TestCheckQualifierDiagnostics
+      - go ./lang/sfc TestCheckTimeArgumentOnUntimedQualifierIsAnError
+
+  - id: SFC-035
+    claim: >-
+      naut check warns on an unreachable non-initial step and on a dead-end
+      step (a terminal step may be one on purpose).
+    source: "#structural-checks"
+    tests:
+      - go ./lang/sfc TestCheckUnreachableStepWarns
+      - go ./lang/sfc TestCheckDeadEndStepWarns
+      - go ./lang/sfc TestCheckSingleStepChartIsNotADeadEnd
+
+  - id: SFC-036
+    claim: >-
+      naut check warns on a simultaneous convergence whose sources are not
+      reachable from a common simultaneous divergence, and not otherwise.
+    source: "#structural-checks"
+    tests:
+      - go ./lang/sfc TestCheckConvergenceUnreachableWarns
+      - go ./lang/sfc TestCheckConvergenceReachableIsClean
+      - go ./lang/sfc TestCheckNonTransitiveAltGroupIsClean
+      - go ./lang/sfc TestCheckCliqueAltGroupIsClean
+
+  - id: SFC-037
+    claim: >-
+      The chart transpiles to ST and compiles like any program; the line map
+      puts a type error in a condition on its TRANSITION line and one in a
+      body on its ACTION line.
+    source: "#structural-checks"
+    tests:
+      - go ./lang/sfc TestTranspileShape
+    partial: true
+    note: >-
+      Transpile-and-lower is tested; no test asserts the line mapping of a
+      type error to the TRANSITION or ACTION line.
+
+  - id: SFC-038
+    claim: >-
+      Step activity, stored flags, pulse edge memories, step timers,
+      timed-qualifier timers and latches, and overrun flags are retained, so an
+      online edit preserves the live token and every timer.
+    source: "#tooling"
+    tests:
+      - go ./lang/sfc TestWarmMigration
+      - go ./runtime TestSwapWarmCarriesRetainedState
+    partial: true
+    note: >-
+      TestWarmMigration covers the token and timers on the tank-batch chart;
+      stored latches and overrun flags are not asserted across a swap.
+
+  - id: SFC-039
+    claim: >-
+      Renaming a step resets its token (the renamed step's slot is a new name),
+      listed in the swap report.
+    source: "#tooling"
+    tests: []
+    note: No test asserts the rename behaviour of a warm swap on a chart.
+
+  - id: SFC-040
+    claim: >-
+      naut test runs the same *_test.yaml acceptance tests on an SFC program in
+      virtual time.
+    source: "#tooling"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-step-t
+      - go ./runtime TestSFCSetStep
+    partial: true
+    note: The conformance corpus is the evidence; the naut test CLI itself is not asserted here.
+
+  - id: SFC-041
+    claim: >-
+      Macro steps and charts nested inside a step are not supported; charts
+      are flat.
+    source: "#not-supported"
+    tests: []
+    note: No test asserts the rejection.
+
+  - id: SFC-042
+    claim: >-
+      Explicit numeric transition priorities are not supported; priority is
+      declaration order.
+    source: "#not-supported"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-alt-priority/with every condition true the first declared branch wins alone
+    partial: true
+    note: Declaration-order priority is tested; rejection of a numeric priority syntax is not.
+
+  - id: SFC-043
+    claim: >-
+      Instruction List action bodies are not supported; action bodies are ST.
+    source: "#not-supported"
+    tests: []
+    note: No test asserts the rejection.
+
+  - id: SFC-044
+    claim: >-
+      Indicator variables in an association (Valve(N, Ind);) are rejected, and
+      the error names the forms accepted.
+    source: "#not-supported"
+    tests:
+      - go ./lang/sfc TestIECAssociationForm
+    partial: true
+    note: The association case is tested; indicator variables on transitions are not.
+
+  - id: SFC-045
+    claim: >-
+      Import of vendor SFC (Rockwell .L5X routines, Siemens GRAPH, CODESYS) is
+      not supported.
+    source: "#not-supported"
+    tests: []
+    note: No test asserts that an SFC routine in an L5X is refused.

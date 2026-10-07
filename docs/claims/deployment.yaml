@@ -1,0 +1,116 @@
+page: website/src/content/docs/guides/deployment.md
+title: Continuous deployment
+prefix: DEP
+claims:
+  - id: DEP-001
+    claim: >-
+      naut new with the Kubernetes deploy feature (--deploy) scaffolds a
+      Dockerfile, deploy/k8s.yaml and a deploy workflow, all rendered
+      without leftover template syntax, and none of them without the
+      feature.
+    source: "#continuous-deployment"
+    tests:
+      - go ./cmd/naut TestScaffoldVariants/demo with deploy
+      - go ./cmd/naut TestScaffoldVariants/demo manifest project
+      - go ./cmd/naut TestDeployWorkflowRenders
+  - id: DEP-002
+    claim: >-
+      The scaffolded deploy workflow runs check, test and build, builds the
+      binary with naut build, and pushes an image to GHCR using the repo's
+      own GITHUB_TOKEN.
+    source: "#continuous-deployment"
+    tests:
+      - go ./cmd/naut TestDeployWorkflowRenders
+    partial: true
+    note: >-
+      Asserts the workflow text contains naut build, naut test, ghcr.io and
+      the repository variable; it never runs the workflow, so the image tag
+      being the commit sha is not exercised.
+  - id: DEP-003
+    claim: >-
+      Every merge that passes its acceptance suites becomes an image tagged
+      with its sha, and a PR that fails its suites cannot merge.
+    source: "#continuous-deployment"
+    tests: []
+    note: >-
+      Gap. A CI-pipeline property of the scaffolded workflows; nothing in the test suite executes it.
+  - id: DEP-004
+    claim: >-
+      naut build emits a self-contained controller binary (runtime plus
+      project in one file), which a rebuild from a built binary replaces
+      rather than stacking.
+    source: "#the-image"
+    tests:
+      - go ./cmd/naut TestBuildEmbedRoundTrip
+      - go ./cmd/naut TestBuildEmbedsHMIAndBuiltBinaryServesIt
+  - id: DEP-005
+    claim: >-
+      The Dockerfile is distroless/static with no shell, so the binary must
+      be static; release CLIs are static builds and the workflow sets
+      CGO_ENABLED=0.
+    source: "#the-image"
+    tests: []
+    note: >-
+      Gap. The Dockerfile content is only checked for unrendered template syntax.
+  - id: DEP-006
+    claim: >-
+      A deploy scaffold adds the retain: {} and redundancy: {} sections to
+      the manifest, which the two-replica Deployment depends on.
+    source: "#the-cluster"
+    tests:
+      - go ./cmd/naut TestDeployWorkflowRenders
+  - id: DEP-007
+    claim: >-
+      A Lease elects the scanning leader, and a standby acquires it when the
+      leader's lease lapses or the leader steps down.
+    source: "#the-cluster"
+    tests:
+      - go ./leader TestFreshClusterAcquire
+      - go ./leader TestRenew
+      - go ./leader TestFollowerThenSteal
+      - go ./leader TestCASRace
+      - go ./leader TestStepDown
+      - go ./leader TestRelease
+    partial: true
+    note: >-
+      Exercised against a fake Kubernetes API; the real lease and the 4 s worst-case takeover bound are not tested.
+  - id: DEP-008
+    claim: >-
+      Setpoints and online edits ride a ConfigMap across restarts and
+      failovers.
+    source: "#the-cluster"
+    tests:
+      - go ./retain TestConfigMapStoreRoundTrip
+      - go ./retain TestConfigMapStoreSaveUpdatesWhenPresent
+      - go ./runtime TestRetainedProgramApplies
+      - go ./runtime TestTakeoverReloadsAndResetsFrames
+    partial: true
+    note: >-
+      Against a fake API server; a real cluster failover is not exercised.
+  - id: DEP-009
+    claim: >-
+      Either replica answers the Service: a standby proxies API traffic to
+      the leader.
+    source: "#the-cluster"
+    tests:
+      - go ./server TestStandbyProxiesToLeader
+      - go ./server TestStandbyWithNoLeaderServesLocally
+      - go ./server TestLeaderNeverProxies
+  - id: DEP-010
+    claim: >-
+      The scaffolded RBAC grants exactly the verbs the lease and ConfigMap
+      need and not delete.
+    source: "#the-cluster"
+    tests: []
+    note: >-
+      Gap. The k8s manifest's RBAC rules are not asserted by any test.
+  - id: DEP-011
+    claim: >-
+      The deployed binary embeds the project's git history and serves
+      GET /api/program/history with no git, .git directory or network.
+    source: "#the-artifact-carries-its-own-provenance"
+    tests:
+      - go ./cmd/naut TestBuildEmbedsHistory
+    partial: true
+    note: >-
+      See PH-004; the no-git runtime environment is not reproduced.

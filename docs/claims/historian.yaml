@@ -1,0 +1,226 @@
+page: website/src/content/docs/guides/historian.md
+title: Historian
+prefix: HST
+claims:
+  - id: HST-001
+    claim: >-
+      The collector records every numeric or boolean leaf of GET /api/state
+      matching -tags (booleans as 0/1) once per interval, and skips strings
+      and null values.
+    source: "#struct-udt-tags"
+    tests:
+      - go ./cmd/naut TestSampleOfRecordsNumbers
+      - go ./cmd/naut TestSampleOfRecordsBoolsAsZeroOne
+      - go ./cmd/naut TestSampleOfSkipsStringsAndNil
+      - go ./cmd/naut TestCollectOnceAgainstRealisticFrame
+    note: The once-per-interval polling cadence itself is not asserted; collectOnce is tested per poll.
+    partial: true
+
+  - id: HST-002
+    claim: >-
+      Struct tag members are recorded as dotted paths (FIT_001.VALUE), nested
+      structs walk further (FIT_001.RAW.COUNTS) and array members index with
+      brackets (FIT_001.LOG[0]); strings are skipped at every depth.
+    source: "#struct-udt-tags"
+    tests:
+      - go ./cmd/naut TestSampleOfFlattensStructTag
+
+  - id: HST-003
+    claim: >-
+      -tags and -exclude globs match the full dotted leaf name, so * also
+      matches dots; a dotless pattern matches only a top-level scalar and
+      never a struct member, and *.VALUE matches that member of every struct.
+    source: "#struct-udt-tags"
+    tests:
+      - go ./cmd/naut TestSampleOfGlobFiltering
+      - go ./cmd/naut TestSampleOfMultiplePatterns
+      - go ./cmd/naut TestSampleOfDottedPatternMatchesNestedMember
+    note: The default of * (all numerics) when -tags is omitted is not asserted at the flag level.
+    partial: true
+
+  - id: HST-004
+    claim: -exclude trims leaves a broader -tags pattern would otherwise record.
+    source: "#struct-udt-tags"
+    tests:
+      - go ./cmd/naut TestSampleOfExcludeTrimsMatchedNoise
+
+  - id: HST-005
+    claim: >-
+      An unreachable source (for example mid-failover) records nothing and
+      the collector carries on without panicking or blocking.
+    source: "#the-historian"
+    tests:
+      - go ./cmd/naut TestCollectOnceSourceUnreachable
+
+  - id: HST-006
+    claim: >-
+      With -min-interval at its default 0, every matched tag is recorded on
+      every poll (change filtering is off).
+    source: "#cutting-rowsminute---deadband---min-interval"
+    tests:
+      - go ./cmd/naut TestChangeFilterDisabledByDefault
+
+  - id: HST-007
+    claim: >-
+      With -min-interval set, a tag is recorded when new, when it has moved by
+      more than -deadband since last recorded, or when min-interval has
+      elapsed since last recorded (heartbeat); otherwise it is dropped, and
+      each tag is tracked independently.
+    source: "#cutting-rowsminute---deadband---min-interval"
+    tests:
+      - go ./cmd/naut TestChangeFilterRecordsOnChangeOrHeartbeat
+      - go ./cmd/naut TestChangeFilterPerTagIndependent
+
+  - id: HST-008
+    claim: >-
+      Retention is a rolling window (-retention, default 7 days) pruned
+      hourly.
+    source: "#the-historian"
+    tests: []
+    note: Prune and the hourly pruneLoop have no test; the Postgres store tests skip in CI.
+
+  - id: HST-009
+    claim: >-
+      Pointing -source at the Service in front of the replicas keeps samples
+      flowing across a failover, because a standby proxies the poll to the
+      leader.
+    source: "#the-historian"
+    tests: []
+    note: >-
+      Standby proxying of /api/state is tested in the server package, but no
+      test runs the historian collector across a failover.
+
+  - id: HST-010
+    claim: >-
+      GET /history returns downsampled [unixMs, value] pairs per tag as
+      bucket averages, with maxPoints (default 600) bounding the points; the
+      bucket is never smaller than one second.
+    source: "#serving-history-to-the-hmi"
+    tests:
+      - go ./hist TestSeriesIsChartWireFormat
+      - go ./hist TestStorePostgres
+    partial: true
+    note: Bucket averaging in SQL runs only in TestStorePostgres, which skips in CI (no Postgres). The TestBucketSize* tests exercise a test-local mirror of the formula, not the production code, so they are not cited.
+
+  - id: HST-011
+    claim: GET /history/span returns the first and last sample and the count, and GET /healthz answers.
+    source: "#serving-history-to-the-hmi"
+    tests:
+      - go ./cmd/naut TestExistingRoutesUnaffectedByStoreInterface
+      - go ./hist TestStorePostgres
+    partial: true
+    note: The route test checks only that /history/span answers 200 against a fake store; /healthz is untested and the real span query needs Postgres.
+
+  - id: HST-012
+    claim: >-
+      The tags query parameter is a CSV of exact archived leaf names with no
+      globbing at query time, and a dot in a name is not special.
+    source: "#serving-history-to-the-hmi"
+    tests:
+      - go ./hist TestStorePostgres
+    partial: true
+    note: Skips in CI without Postgres; no test asserts that a glob is not expanded.
+
+  - id: HST-013
+    claim: >-
+      With server.historian (or NAUTILUS_HISTORIAN_URL) set, the controller
+      proxies GET /api/history* to the historian, and does so on any replica,
+      leader or standby.
+    source: "#serving-history-to-the-hmi"
+    tests: []
+    note: No test covers the /api/history proxy in the server package.
+
+  - id: HST-014
+    claim: >-
+      GET /history/agg takes tags, from, to, bucket and fn, rejects a missing
+      tags or fn and a malformed bucket with 400, and returns one row per tag
+      per bucket as {tag, ts, value} with ts in milliseconds since the epoch.
+    source: "#aggregates"
+    tests:
+      - go ./cmd/naut TestHandleAggRequiresTags
+      - go ./cmd/naut TestHandleAggRequiresFn
+      - go ./cmd/naut TestHandleAggRejectsBadBucket
+      - go ./cmd/naut TestHandleAggParsesQueryIntoAggQuery
+      - go ./cmd/naut TestHandleAggPropagatesStoreError
+
+  - id: HST-015
+    claim: >-
+      Omitting bucket aggregates the whole [from,to) range as a single row per
+      tag, and an empty series yields no buckets.
+    source: "#aggregates"
+    tests:
+      - go ./hist TestBucketizeNoBucketingIsWholeRangeAtFrom
+      - go ./hist TestBucketizeEmptySeriesYieldsNoBuckets
+
+  - id: HST-016
+    claim: >-
+      Buckets align to the Unix epoch, not to from, so a 24h bucket lands on
+      UTC midnight and a sample exactly on a boundary starts the new bucket.
+    source: "#aggregates"
+    tests:
+      - go ./hist TestBucketizeAlignsToEpochFloor
+    partial: true
+    note: Go-side bucketing is tested; the SQL aggregate's alignment runs only against Postgres (skipped in CI).
+
+  - id: HST-017
+    claim: min, max, avg, sum and count aggregate over a bucket's samples; an unknown fn is rejected before any query.
+    source: "#aggregates"
+    tests:
+      - go ./hist TestSQLAggFnsCoversDocumentedFunctions
+      - go ./hist TestAggregateUnknownFnErrorsWithoutTouchingDB
+      - go ./hist TestAggregateAndSnapshotPostgres
+    partial: true
+    note: The SQL results are asserted only in the Postgres test, which skips in CI; the CI-run tests check the dispatch table.
+
+  - id: HST-018
+    claim: first and last return a bucket's earliest and latest value, and delta is last minus first.
+    source: "#aggregates"
+    tests:
+      - go ./hist TestFirstLastDeltaReducers
+
+  - id: HST-019
+    claim: >-
+      ontime sums the seconds a tag was non-zero, counting each interval up to
+      the next sample when the earlier sample was non-zero; the last sample
+      in a bucket contributes no trailing interval.
+    source: "#aggregates"
+    tests:
+      - go ./hist TestOntimeSeconds
+    partial: true
+    note: The straddling-boundary drop is not separately asserted.
+
+  - id: HST-020
+    claim: >-
+      GET /history/at returns each tag's last value at-or-before at, omits a
+      tag with no such sample, and requires tags.
+    source: "#aggregates"
+    tests:
+      - go ./cmd/naut TestHandleAtRequiresTags
+      - go ./cmd/naut TestHandleAtParsesQueryAndReturnsSnapshot
+      - go ./cmd/naut TestHandleAtPropagatesStoreError
+      - go ./hist TestAggregateAndSnapshotPostgres
+    partial: true
+    note: The at-or-before and absent-tag semantics are asserted only in the Postgres test (skipped in CI).
+
+  - id: HST-021
+    claim: Aggregate and Snapshot with no tags are no-ops returning nil without touching the database.
+    source: "#from-go"
+    tests:
+      - go ./hist TestAggregateEmptyTagsIsNoop
+      - go ./hist TestSnapshotEmptyTagsIsNoop
+
+  - id: HST-022
+    claim: hist.Sink is a one-method seam (Insert) that a different store can implement.
+    source: "#from-go"
+    tests:
+      - go ./hist TestFakeSinkRecordsInserts
+
+  - id: HST-023
+    claim: >-
+      The samples table and its (tag, ts DESC) index are created, and a
+      round trip of Insert then Query returns the data.
+    source: "#schema"
+    tests:
+      - go ./hist TestStorePostgres
+    partial: true
+    note: Skips unless NAUTILUS_TEST_DATABASE_URL is set; not run in CI.

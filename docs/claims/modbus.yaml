@@ -1,0 +1,502 @@
+page: website/src/content/docs/guides/modbus.md
+title: Modbus TCP
+prefix: MB
+claims:
+  - id: MB-001
+    claim: >-
+      A modbus driver without a `manifest:` key is rejected at project load
+      (so `naut check` fails), and a misspelled manifest key or an unknown
+      source reference is a load error, not a silently dropped binding.
+    source: "#"
+    tests:
+      - go ./internal/project TestLoadModbusErrors
+      - go ./modbus/codegen TestParseRejectsUnknownKey
+      - go ./modbus TestParseManifestRejectsUnknownKeys
+      - go ./internal/project TestSchemaRequiresWhatLoaderRequires
+  - id: MB-002
+    claim: >-
+      `New` never dials: it validates the manifest and computes the block
+      plan offline, so a project with a modbus driver loads and checks with
+      no device present, and an invalid manifest fails in `New`.
+    source: "#"
+    tests:
+      - go ./modbus TestNewNeverDialsAndReadsFaultBeforeStart
+      - go ./internal/project TestLoadModbusDriver
+  - id: MB-003
+    claim: >-
+      `naut modbus import` emits a manifest and a tag file that are
+      byte-identical on every re-run, and the generated manifest loads
+      through the strict manifest loader, validates and plans.
+    source: "#generating-the-manifest-naut-modbus-import"
+    tests:
+      - go ./cmd/naut TestModbusImportGolden
+      - go ./cmd/naut TestModbusImportLoadsThroughCore
+      - go ./modbus/codegen TestGenerateDeterministic
+  - id: MB-004
+    claim: >-
+      The device map's per-type defaults and per-instance overrides are
+      applied to the generated manifest, and `--instance` and the
+      `--tags` / `--writable` globs select and mark the right
+      instances and tags.
+    source: "#generating-the-manifest-naut-modbus-import"
+    tests:
+      - go ./modbus/codegen TestGenerateAppliesOverridesAndDefaults
+      - go ./modbus/codegen TestGenerateInstanceFilter
+      - go ./modbus/codegen TestGenerateWritableAndTagGlobs
+  - id: MB-005
+    claim: >-
+      The generated tag file gives each tag the right role (input or output)
+      and `--tags-skip` leaves hand-declared tags out of it.
+    source: "#generating-the-manifest-naut-modbus-import"
+    tests:
+      - go ./modbus/codegen TestTagsYAMLRolesAndSkip
+  - id: MB-006
+    claim: >-
+      `naut modbus tags` re-derives the tag file from a committed manifest
+      byte for byte with `--map`, and without `--map` keeps names and roles
+      and drops the unit/desc/init columns.
+    source: "#generating-the-manifest-naut-modbus-import"
+    tests:
+      - go ./cmd/naut TestModbusTagsRederives
+  - id: MB-007
+    claim: >-
+      The planner coalesces bindings on the same source, table and scan
+      class into one block read, so adjacent registers of mixed formats
+      become a single request; sources, tables and classes never share a
+      block.
+    source: "#the-block-plan"
+    tests:
+      - go ./modbus TestPlanCoalescesAdjacent
+      - go ./modbus TestPlanMixedTablesAndClasses
+      - go ./modbus TestPlanPerSourceGrouping
+  - id: MB-008
+    claim: >-
+      A block spans up to 8 unaddressed registers rather than split, a hole
+      beyond that splits it, and `WithBlockGap(0)` never bridges a hole.
+    source: "#the-block-plan"
+    tests:
+      - go ./modbus TestPlanGapTolerance
+  - id: MB-009
+    claim: >-
+      Without `max-block`, a block holds at most 125 registers (FC3/FC4) or
+      2000 coils (FC1/FC2); `max-block` lowers the cap, and a multi-register
+      value is never split across two blocks.
+    source: "#the-block-plan"
+    tests:
+      - go ./modbus TestPlanRegisterCap
+      - go ./modbus TestPlanCoilCap
+      - go ./modbus TestPlanMaxBlockOverride
+      - go ./modbus TestPlanMultiRegisterValueNeverSplits
+  - id: MB-010
+    claim: >-
+      The reserved scan class `none` catalogs a tag without ever polling it;
+      `write-only` bindings are also left out of the read plan while a
+      writable binding that can be read back is still polled.
+    source: "#the-block-plan"
+    tests:
+      - go ./modbus TestPlanSkipsNoPollAndWriteOnly
+  - id: MB-011
+    claim: >-
+      Scan classes poll at their own rates: a binding's `scan-class` places
+      it in its own poll group and unassigned bindings use the default
+      class at `scan-rate`.
+    source: "#the-block-plan"
+    tests:
+      - go ./modbus TestDriverDeliversTagsPerClass
+    partial: true
+    note: >-
+      Delivery per class and class membership are asserted; the actual
+      poll periods (500ms vs 2.5s) are not measured.
+  - id: MB-012
+    claim: >-
+      `tag-classes:` globs in `nautilus.yaml` override the generated scan
+      class, so re-running the import never erases polling policy.
+    source: "#the-block-plan"
+    tests: []
+    note: >-
+      WithTagClass / tag-classes glob override has no test asserting it.
+  - id: MB-013
+    claim: >-
+      Addresses are 0-based PDU addresses end to end (datasheet 40001 is
+      holding address 0), identical in the map, manifest, `browse` and plan
+      output.
+    source: "#addressing-word-order-byte-order"
+    tests:
+      - go ./modbus TestClientReadsAndDecodes
+    partial: true
+    note: >-
+      The client reads the PDU address it is given; no test asserts that
+      the documented 40001-to-0 convention holds in `browse` or the plan
+      output.
+  - id: MB-014
+    claim: >-
+      Marking a binding on a read-only table (input or discrete) `writable`
+      is a validation error.
+    source: "#addressing-word-order-byte-order"
+    tests:
+      - go ./modbus TestValidateErrors/writable input table
+      - go ./modbus TestValidateErrors/writable discrete table
+  - id: MB-015
+    claim: >-
+      The formats int16, uint16, int32, uint32, float32, float64, bool and
+      `bit:N` decode correctly, and bit tables accept only `bool`.
+    source: "#addressing-word-order-byte-order"
+    tests:
+      - go ./modbus TestDecodeGolden
+      - go ./modbus TestParseFormat
+      - go ./modbus TestCoilFormatDefaultsToBool
+    partial: true
+    note: >-
+      The "bit tables take only bool" validation is not asserted by name.
+  - id: MB-016
+    claim: >-
+      Scaling is `engineering = raw * scale + offset` on read, inverted on
+      write, and `scale: 0` means 1 (an unset scale is the identity).
+    source: "#addressing-word-order-byte-order"
+    tests:
+      - go ./modbus TestDecodeGolden/scaled uint16
+      - go ./modbus TestDecodeGolden/offset only
+      - go ./modbus TestEncodeInvertsScaling
+  - id: MB-017
+    claim: >-
+      Word order and byte order are per source: `wordorder: little`
+      reverses the register sequence of a multi-register value and
+      `byteorder: little` swaps the bytes inside each register, in all four
+      combinations.
+    source: "#addressing-word-order-byte-order"
+    tests:
+      - go ./modbus TestDecodeGolden/float32 word little
+      - go ./modbus TestDecodeGolden/uint16 byte little
+      - go ./modbus TestDecodeGolden/float32 both little
+      - go ./modbus TestForeignDecodesEverySeededValue
+      - go ./modbus TestForeignWriteRoundTrip
+  - id: MB-018
+    claim: >-
+      Each source gets a `<source>__Online` BOOL input that is true while
+      its connection is up and false while the source is dead or parked.
+    source: "#the-online-companion-and-enable"
+    tests:
+      - go ./modbus TestDriverDeliversTagsPerClass
+      - go ./modbus TestSlaveDeathHoldsValuesQueuesWritesRecovers
+      - go ./modbus TestEnableTagParksSource
+  - id: MB-019
+    claim: >-
+      The `__Online` companion is present from `Start`, before any poll has
+      landed, and data tags stay absent from the snapshot until their block
+      has been read at least once.
+    source: "#the-online-companion-and-enable"
+    tests: []
+    note: >-
+      No test reads the snapshot between Start and the first poll.
+  - id: MB-020
+    claim: >-
+      A source with an `enable:` tag that is false is parked: it closes the
+      connection, `__Online` is false, its tags hold their last values and
+      report Stale, and setting the tag true reconnects.
+    source: "#the-online-companion-and-enable"
+    tests:
+      - go ./modbus TestEnableTagParksSource
+    partial: true
+    note: >-
+      A never-delivered tag reporting NotConnected while parked, and the
+      enable tag acting while the write gate is closed, are not asserted.
+  - id: MB-021
+    claim: >-
+      The enable tag is a command to the driver, not a register write: it
+      appears in `OutputNames()` and never goes on the wire.
+    source: "#the-online-companion-and-enable"
+    tests:
+      - go ./modbus TestEnableTagParksSource
+  - id: MB-022
+    claim: >-
+      A Modbus exception response marks only that block's tags Bad while
+      sibling blocks on the same device stay Good, the source stays online
+      and polling continues without reconnecting, and the block recovers
+      when the fault clears.
+    source: "#per-tag-quality"
+    tests:
+      - go ./modbus TestExceptionOnOneBlockLeavesOthersGood
+      - go ./modbus TestForeignExceptionMarksOnlyThatBlock
+  - id: MB-023
+    claim: >-
+      Three consecutive exceptions park just that block for one `retrymin`
+      period (no requests for it, siblings keep polling), after which one
+      probe goes out; a refused block is counted as `badBlocks`.
+    source: "#per-tag-quality"
+    tests:
+      - go ./modbus TestBlockParksAfterConsecutiveExceptionsAndUnparks
+  - id: MB-024
+    claim: >-
+      A transport failure (dial refused, timeout, short read, wrong unit id)
+      takes the whole source down: the driver drops the connection and
+      reconnects, values hold, tags delivered at least once report Stale,
+      and `__Online` goes false.
+    source: "#per-tag-quality"
+    tests:
+      - go ./modbus TestSlaveDeathHoldsValuesQueuesWritesRecovers
+      - go ./modbus TestTimeoutOnOneBlockLeavesOthersCoherent
+      - go ./modbus TestForeignLatencyAboveTimeoutReconnects
+      - go ./modbus TestRequestWrongUnitIDIsTransportError
+      - go ./modbus TestRequestShortReadIsUnexpectedEOF
+    partial: true
+    note: >-
+      Dial-refused is covered by slave death only.
+  - id: MB-025
+    claim: >-
+      Reconnect backoff is exponential from `retrymin` (1s) to `retrymax`
+      (60s) and resets on success.
+    source: "#per-tag-quality"
+    tests: []
+    note: >-
+      Tests shorten RetryMin/RetryMax and assert recovery, not the
+      exponential growth, the cap or the reset.
+  - id: MB-026
+    claim: >-
+      A tag never delivered reports NotConnected rather than a made-up
+      value, and nothing is zeroed or invented while a source is down.
+    source: "#per-tag-quality"
+    tests:
+      - go ./modbus TestSlaveDeathHoldsValuesQueuesWritesRecovers
+    partial: true
+    note: >-
+      Held values are asserted; the NotConnected quality for a
+      never-delivered tag is not.
+  - id: MB-027
+    claim: >-
+      Quality is reported non-Good only (a healthy plant reports an empty
+      map) and is source-scoped: a dead device affects only its own tags.
+    source: "#per-tag-quality"
+    tests:
+      - go ./modbus TestDriverDeliversTagsPerClass
+      - go ./io TestMultiQualityMerges
+    partial: true
+    note: >-
+      No test runs two sources and kills one to show the other stays Good.
+  - id: MB-028
+    claim: >-
+      A `writable: true` binding on a holding or coil table becomes an
+      output whose writes reach the device as FC 5/6/15/16, and the value
+      lands in the device register.
+    source: "#writes"
+    tests:
+      - go ./modbus TestWriteCoalescingAndBaseline
+      - go ./modbus TestForeignWriteRoundTrip
+      - go ./modbus TestSlaveRoundTripWrites
+  - id: MB-029
+    claim: >-
+      The first output snapshot after `Start` is a baseline that writes
+      nothing, and thereafter only a value that changed goes on the wire,
+      once.
+    source: "#writes"
+    tests:
+      - go ./modbus TestWriteCoalescingAndBaseline
+      - go ./modbus TestRewriteFiresOnPeriodAndStopsOnGate
+  - id: MB-030
+    claim: >-
+      A command raised while the source is down is queued per source (latest
+      value per tag), flushed on reconnect, and counted as `queuedWrites`.
+    source: "#writes"
+    tests:
+      - go ./modbus TestSlaveDeathHoldsValuesQueuesWritesRecovers
+    partial: true
+    note: >-
+      Queueing one tag and flush on reconnect are asserted; latest-value-wins
+      coalescing of several queued writes to one tag is not.
+  - id: MB-031
+    claim: >-
+      A binding with `rewrite:` re-asserts its last commanded value on that
+      period even when nothing changed, and its baseline value is written on
+      connect, while non-rewrite bindings stay change-only.
+    source: "#writes"
+    tests:
+      - go ./modbus TestRewriteFiresOnPeriodAndStopsOnGate
+  - id: MB-032
+    claim: >-
+      A `write-only` register is taken out of the read plan; without it a
+      writable binding is also polled and the read-back is the source of
+      truth.
+    source: "#writes"
+    tests:
+      - go ./modbus TestPlanSkipsNoPollAndWriteOnly
+  - id: MB-033
+    claim: >-
+      Exactly adjacent register writes in one flush merge into a single
+      FC16, adjacent coils into one FC15, and a lone register or coil goes
+      as FC6 or FC5.
+    source: "#writes"
+    tests:
+      - go ./modbus TestWriteCoalescingAndBaseline
+  - id: MB-035
+    claim: >-
+      Requests on a source are strictly sequential: one outstanding request
+      at a time, never pipelined.
+    source: "#writes"
+    tests: []
+    note: >-
+      No test asserts a single outstanding request.
+  - id: MB-036
+    claim: >-
+      `/api/drivers` reports Kind `modbus` with one device row per source,
+      and the driver state steps connecting, error (nothing answers),
+      degraded (a source dark or any block refused), connected, or waiting
+      when every source is parked.
+    source: "#apidrivers"
+    tests:
+      - go ./internal/project TestModbusStatus
+      - go ./internal/project TestLoadModbusDriver
+    partial: true
+    note: >-
+      The "N blocks · 1 refused" detail string and the exact metric list are
+      not asserted.
+  - id: MB-037
+    claim: >-
+      `Extra["sources"]` carries per-source rows (state, blocks, badBlocks,
+      queuedWrites, rttMs, retries, exceptions) and a queued-writes gauge
+      appears only when a command is parked.
+    source: "#apidrivers"
+    tests:
+      - go ./internal/project TestModbusStatus
+    partial: true
+    note: >-
+      Presence of the rows and the gauge is asserted; the individual field
+      names and the RTT EWMA are not.
+  - id: MB-038
+    claim: >-
+      `naut modbus serve` stands in for a plant from the manifest alone: a
+      seeded engineering-unit value is stored with the binding's scaling
+      and word order inverted, and two sources on one unit id and table are
+      refused.
+    source: "#bench-without-a-device-serve-and-browse"
+    tests:
+      - go ./cmd/naut TestModbusServeSeedSmoke
+      - go ./cmd/naut TestModbusServeRefusesUnitCollision
+      - go ./cmd/naut TestModbusServeRejectsUnknownSeed
+  - id: MB-039
+    claim: >-
+      The bench slave is multi-unit like a real gateway and answers unknown
+      units, unsupported functions and bad counts with the right Modbus
+      exceptions.
+    source: "#bench-without-a-device-serve-and-browse"
+    tests:
+      - go ./modbus TestSlaveMultiUnit
+      - go ./modbus/slave TestUnknownUnitAnswersGatewayException
+      - go ./modbus/slave TestUnsupportedFunctionAnswersIllegalFunction
+      - go ./modbus/slave TestMalformedCountAnswersIllegalDataValue
+  - id: MB-040
+    claim: >-
+      `--ramp` drifts the numeric inputs and `--listen` defaults to
+      `127.0.0.1:5020`.
+    source: "#bench-without-a-device-serve-and-browse"
+    tests: []
+    note: >-
+      The ramp and the default listen address have no test.
+  - id: MB-041
+    claim: >-
+      `naut modbus browse` reads a range from a device and prints every
+      address raw and decoded, with every format side by side when
+      `--format` is absent.
+    source: "#bench-without-a-device-serve-and-browse"
+    tests: []
+    note: >-
+      The browse command has no test.
+  - id: MB-042
+    claim: >-
+      `drivers:` lists several drivers: reads fan out and merge, a write
+      goes to the one driver that claims the tag, and names default to the
+      type, deduped.
+    source: "#modbus-alongside-another-bus-drivers"
+    tests:
+      - go ./io TestMultiRoutesAndMerges
+      - go ./internal/project TestDriversBuildAMultiWithStatusRows
+      - go ./internal/project TestDriversExplicitNameCollisionIsAnError
+  - id: MB-043
+    claim: >-
+      A tag delivered by two drivers is a load error naming both, reported
+      offline by `naut check`; setting `driver:` and `drivers:` together is
+      also an error.
+    source: "#modbus-alongside-another-bus-drivers"
+    tests:
+      - go ./io TestMultiDuplicateTagIsAnError
+      - go ./internal/project TestDriversDuplicateTagNamesBothDrivers
+      - go ./internal/project TestDriverAndDriversBothSetIsAnError
+      - go ./cmd/naut TestCheckReportsDuplicateTagAcrossDrivers
+    partial: true
+    note: >-
+      A tag writable through two drivers (as opposed to delivered by two)
+      is not separately tested.
+  - id: MB-044
+    claim: >-
+      Each driver keeps its own `/api/drivers` row in a multi-driver set,
+      quality merges per tag, and a Sparkplug `device:` is healthy only
+      when every child bus is.
+    source: "#modbus-alongside-another-bus-drivers"
+    tests:
+      - go ./internal/project TestDriversBuildAMultiWithStatusRows
+      - go ./io TestMultiQualityMerges
+  - id: MB-045
+    claim: >-
+      The `memory` loopback cannot join a `drivers:` list.
+    source: "#modbus-alongside-another-bus-drivers"
+    tests:
+      - go ./internal/project TestDriversMemoryCannotShareAScan
+      - go ./io TestMultiRefusesTheUnroutable
+  - id: MB-046
+    claim: >-
+      With a `redundancy:` section the write gate is wired to leadership so
+      commands leave the driver only on the leader, reads are unaffected,
+      and a closed gate also stops `rewrite:` re-asserts (resuming when
+      reopened).
+    source: "#redundancy"
+    tests:
+      - go ./modbus TestRewriteFiresOnPeriodAndStopsOnGate
+    partial: true
+    note: >-
+      The gate stopping re-asserts is asserted; plain writes under a closed
+      gate, reads being unaffected, and the leadership wiring in `naut run`
+      are not.
+  - id: MB-047
+    claim: >-
+      `naut test` with a `memory.yaml` loopback runs the acceptance suites
+      without opening a socket, and `given:` writes the input image so the
+      same `*_test.yaml` passes unchanged against the real driver.
+    source: "#testing"
+    tests: []
+    note: >-
+      The memory-loopback workflow is exercised by example projects but no
+      test asserts the claim as stated.
+  - id: MB-048
+    claim: >-
+      Against a foreign pymodbus server the driver decodes every seeded
+      value of every format in both word orders across all four tables,
+      round-trips every writable format, marks an unimplemented range
+      (exception 0x02) bad while siblings stay Good, and a slow response
+      drives the reconnect path with values held.
+    source: "#testing"
+    tests:
+      - go ./modbus TestForeignDecodesEverySeededValue
+      - go ./modbus TestForeignWriteRoundTrip
+      - go ./modbus TestForeignExceptionMarksOnlyThatBlock
+      - go ./modbus TestForeignLatencyAboveTimeoutReconnects
+  - id: MB-049
+    claim: >-
+      Modbus RTU/ASCII, BCD, int64 and string formats, one-based
+      addressing and pipelined requests are unsupported: unknown formats
+      are rejected.
+    source: "#not-supported"
+    tests:
+      - go ./modbus TestParseFormat
+    partial: true
+    note: >-
+      Only rejection of an unknown format is checked; the other items are
+      absences with nothing to assert.
+  - id: MB-050
+    claim: >-
+      `WithDialer` substitutes the TCP dial and `driver.Plan()` returns the
+      computed block plan.
+    source: "#from-go"
+    tests:
+      - go ./modbus TestNewNeverDialsAndReadsFaultBeforeStart
+      - go ./modbus TestTimeoutOnOneBlockLeavesOthersCoherent
+    partial: true
+    note: >-
+      `Stop` closing every connection is not asserted.

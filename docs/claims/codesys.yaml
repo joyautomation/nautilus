@@ -1,0 +1,154 @@
+page: website/src/content/docs/coming-from/codesys.md
+title: Coming from Codesys
+prefix: CCS
+claims:
+  - id: CCS-001
+    claim: >-
+      The same POU (PROGRAM, FUNCTION_BLOCK, FUNCTION) written in `.st`,
+      `.ld`, `.fbd` or `.sfc` runs with the same behaviour.
+    source: "#project-and-data"
+    tests:
+      - go ./lang/conformance TestConformance/fb-ton
+      - go ./lang/conformance TestConformance/fb-tof
+      - go ./lang/conformance TestConformance/fb-ctd
+      - go ./lang/conformance TestConformance/ld-coils
+    partial: true
+    note: Cross-language parity is checked per conformance feature; SFC runs only the features written for it.
+
+  - id: CCS-002
+    claim: >-
+      Identifiers are case-insensitive: any casing names the one
+      declaration, shown as declared.
+    source: "#project-and-data"
+    tests:
+      - go ./lang/conformance TestConformance/st-case-insensitive
+      - go ./lang/st TestLowerCaseInsensitiveIdentifiers
+    partial: true
+    note: Resolution is tested; "shown as declared" is not tested outside FBD call spelling.
+
+  - id: CCS-003
+    claim: >-
+      Tags in `nautilus.yaml` or `tags/*.yaml` are in scope in every program
+      without a declaration (`VAR_EXTERNAL` stays legal), and a function
+      block names the ones it uses in its own `VAR_EXTERNAL`.
+    source: "#project-and-data"
+    tests:
+      - go ./internal/project TestManifestTagsAreImplicit
+      - go ./internal/project TestFunctionBlocksDoNotSeeTagsImplicitly
+
+  - id: CCS-004
+    claim: >-
+      A `gvl.st` with a file-level `VAR_GLOBAL` block declares globals for
+      every program; one the manifest does not declare is a `state` tag
+      starting at zero, and a program that redeclares one with another type
+      is an error.
+    source: "#project-and-data"
+    tests:
+      - go ./internal/project TestGVLComposesIntoEveryProgram
+      - go ./internal/project TestGVLRedeclarationMustAgree
+      - go ./cmd/naut TestCheckGoldenGVL
+    partial: true
+    note: The initial value coming from the manifest's `init:` is not tested for a GVL global.
+
+  - id: CCS-005
+    claim: >-
+      `VAR_GLOBAL CONSTANT` in a `lib/` file is seen by every POU and folded
+      at compile time; the constants are not tags and cannot be written.
+    source: "#project-and-data"
+    tests:
+      - go ./lang/conformance TestConformance/st-global-constants
+      - go ./lang/conformance TestConstantsAndMembersAreNotWritable
+    partial: true
+    note: "\"Not tags\" is not asserted directly."
+
+  - id: CCS-006
+    claim: >-
+      Enumerations (`TYPE E : (A, B, C)` and `(A := 1, ...)`) work as in
+      Codesys: `E#A` or plain `A` in comparisons and `CASE` labels,
+      `TO_INT`, and live values show the member name; a non-member write or
+      init is refused.
+    source: "#project-and-data"
+    tests:
+      - go ./lang/conformance TestConformance/st-enum
+      - go ./internal/project TestEnumTypedTag
+      - go ./lang/conformance TestCodesysEnumTypeCompiles
+    partial: true
+    note: "`TO_E` conversion from an integer is not tested."
+
+  - id: CCS-007
+    claim: "`VAR_TEMP` is reset on every call."
+    source: "#project-and-data"
+    tests:
+      - go ./lang/conformance TestConformance/st-var-temp
+
+  - id: CCS-008
+    claim: "`CASE` on named constants runs the clause of the matching constant."
+    source: "#project-and-data"
+    tests:
+      - go ./lang/conformance TestConformance/st-case-constants
+
+  - id: CCS-009
+    claim: >-
+      `VAR_IN_OUT` passes the caller's variable by reference, so a block
+      reads and writes the caller's struct.
+    source: "#project-and-data"
+    tests:
+      - go ./lang/ld TestLadderFunctionBlockInOutStructPin
+    partial: true
+    note: Struct by-reference is tested through ladder; scalar and array VAR_IN_OUT are not separately asserted.
+
+  - id: CCS-010
+    claim: >-
+      `Step.X` is TRUE while the step is active and `Step.T` is the elapsed
+      TIME in the step, starting at 0 on activation, not running while the
+      step is inactive and restarting on re-entry.
+    source: "#sfc"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-step-t
+
+  - id: CCS-011
+    claim: >-
+      Action qualifiers `N`, `S`, `R`, `P` plus `P1` and `P0` behave as in
+      IEC 61131-3: N while active, S sets once, R clears, P and P1 fire one
+      scan wide on entry, P0 on exit.
+    source: "#sfc"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-qualifiers
+
+  - id: CCS-012
+    claim: >-
+      Alternative branch priority is declaration order, first highest, and a
+      lower branch fires when the higher ones are false.
+    source: "#sfc"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-alt-priority
+
+  - id: CCS-013
+    claim: >-
+      A transition is evaluated once per scan from a snapshot, with
+      divergence activating every target in the same scan and convergence
+      waiting for every source.
+    source: "#sfc"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-sim-div-conv
+    partial: true
+    note: The page defers to the SFC page for these semantics; they are claimed here only by reference.
+
+  - id: CCS-014
+    claim: >-
+      Numeric transition priority, transition conditions in LD/FBD/IL and
+      action bodies in LD/FBD/IL are not supported: transitions are ST
+      expressions and action bodies are ST.
+    source: "#sfc"
+    tests: []
+    note: No test asserts the refusal of a non-ST transition or action body.
+
+  - id: CCS-015
+    claim: >-
+      Library manager and `.library` files are not available: reusable
+      blocks live in `lib/` and are shared by copying or vendoring.
+    source: "#project-and-data"
+    tests:
+      - go ./cmd/naut TestCheckLibDirClean
+    partial: true
+    note: Only that `lib/` works; the absence of library-manager support is not tested (and not testable as such).

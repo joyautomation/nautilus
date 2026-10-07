@@ -1,0 +1,213 @@
+page: website/src/content/docs/coming-from/studio-5000.md
+title: Coming from Studio 5000
+prefix: C5K
+claims:
+  - id: C5K-001
+    claim: >-
+      A set coil `( S Tag )` latches the tag and a reset coil `( R Tag )`
+      unlatches it, as `OTL` and `OTU` do; the latch holds after the rung
+      goes false.
+    source: "#contacts-and-coils"
+    tests:
+      - "go ./lang/conformance TestConformance/ld-coils/S coil latches, R coil unlatches, R wins a same-scan tie"
+    partial: true
+    note: The plain XIC/XIO contact and OTE coil have no dedicated test here; they are exercised by every ladder example and the seal-in rungs.
+
+  - id: C5K-002
+    claim: >-
+      A pulse coil `( P Tag )` is TRUE for exactly one scan when the rung
+      condition rises, and `( N Tag )` for exactly one scan when it falls
+      (`OSR`/`OSF` as output instructions).
+    source: "#contacts-and-coils"
+    tests:
+      - "go ./lang/conformance TestConformance/ld-coils/P coil is TRUE for exactly one scan on the rising edge"
+      - "go ./lang/conformance TestConformance/ld-coils/N coil is TRUE for exactly one scan on the falling edge"
+      - "go ./lang/conformance TestConformance/ld-coils/first scan with A already TRUE counts as a rising edge"
+
+  - id: C5K-003
+    claim: >-
+      An edge contact `+Tag` passes power for one scan on the rise and
+      `-Tag` for one scan on the fall, standing in for `ONS` at a position
+      in the rung, with no storage bit to declare.
+    source: "#contacts-and-coils"
+    tests:
+      - "go ./lang/conformance TestConformance/ld-coils/+ contact passes one scan on the rise, - contact one scan on the fall"
+      - go ./lang/ld TestEdgeTrigNamesMatchTheCompiler
+    partial: true
+    note: The page also says the generated edge state stays stable across unrelated edits; only the name derivation (rung and reference) is tested.
+
+  - id: C5K-004
+    claim: >-
+      Branches `[ a | b ]` nest, and a bare leg passes power at once while a
+      block in another leg times normally.
+    source: "#contacts-and-coils"
+    tests:
+      - "go ./lang/conformance TestConformance/ld-coils/nested branch, bare leg passes at once"
+      - "go ./lang/conformance TestConformance/ld-coils/nested branch, FB leg is Q false at PT-1ms, true at PT, drop resets"
+    partial: true
+    note: Two levels of nesting are tested; "any depth" is not.
+
+  - id: C5K-005
+    claim: >-
+      `t:TON(PT := T#5S)` behaves like a Logix TON: `t.Q` (the `.DN` bit) is
+      FALSE until PT has elapsed and `t.ET` (the `.ACC`) is a TIME that
+      clamps at PT.
+    source: "#timers-and-counters"
+    tests:
+      - "go ./lang/conformance TestConformance/fb-ton/Q false at PT-1ms, true at PT, ET clamps at PT"
+      - "go ./lang/conformance TestConformance/fb-ton/IN dropping resets Q and ET, and a new rise times from scratch"
+
+  - id: C5K-006
+    claim: >-
+      `t:TOF(PT := T#5S)` keeps `Q` TRUE for PT after `IN` drops.
+    source: "#timers-and-counters"
+    tests:
+      - "go ./lang/conformance TestConformance/fb-tof/Q holds for PT after IN falls, drops at PT, ET clamps at PT"
+
+  - id: C5K-007
+    claim: >-
+      `c:CTU(PV := 10, R := ResetC)` counts rising edges of the rung power
+      (a held input counts once), `c.Q` goes TRUE at PV and the `R` pin
+      resets it.
+    source: "#timers-and-counters"
+    tests:
+      - "go ./lang/conformance TestConformance/ld-coils/FB-only rung (no coil) still runs, its outputs read elsewhere"
+      - go ./lang/st TestFBCTUCountsAndResets
+    partial: true
+    note: Counting and Q at PV are covered in ladder; the reset behaviour is only checked in ST, and `c.CV` as `.ACC` is read through the same pin.
+
+  - id: C5K-008
+    claim: >-
+      `CTD` is the IEC block: it counts down from `PV` loaded by `LD`, and
+      `Q` means `CV <= 0` (so before any load it is already TRUE); this
+      differs from a Logix CTD.
+    source: "#timers-and-counters"
+    tests:
+      - "go ./lang/conformance TestConformance/fb-ctd/LD loads PV into CV and clears Q"
+      - "go ./lang/conformance TestConformance/fb-ctd/before any load CV is 0 and Q is already TRUE (CV <= 0)"
+      - "go ./lang/conformance TestConformance/fb-ctd/counts down one per rising CD edge and Q rises when CV reaches 0"
+
+  - id: C5K-009
+    claim: >-
+      With `dialect: logix`, `t:TONR(PT := T#5S, Reset := Clear)` clears
+      `ET` and `Q` while `Reset` is TRUE, the stand-in for `RES` on a timer.
+    source: "#timers-and-counters"
+    tests:
+      - go ./logix/writer TestTONR
+    partial: true
+    note: Only the Logix writer's translation is tested. No test runs a TONR on the nautilus runtime. The page still marks this row "in review" although #225 has merged.
+
+  - id: C5K-010
+    claim: >-
+      Compare functions are contacts: `EQ(A, B)` `NE` `GT` `GE` `LT` `LE`,
+      with `/EQ(A, B)` passing power when the comparison is FALSE, and an
+      arithmetic expression is allowed inside the comparison, as in
+      `GE(ADD(Base, Bias), Limit)`.
+    source: "#compare-math-and-data-movement"
+    tests:
+      - "go ./lang/conformance TestConformance/ld-coils/negated function contact passes power when the call returns FALSE"
+      - go ./lang/ld TestFunctionContactExpressionArgs
+    partial: true
+    note: The negated contact runs in conformance; expression arguments are only checked as transpiled text. The remaining compare functions are not each run.
+
+  - id: C5K-011
+    claim: >-
+      The assignment element `{ Dest := Expr }` assigns while the rung has
+      power at that point and passes power through; it takes any IEC
+      expression evaluated every scan (`MOV`, `CPT`, `ADD`, `SUB`, `MUL`,
+      `DIV`, `MOD`, `NEG`, `ABS`).
+    source: "#compare-math-and-data-movement"
+    tests:
+      - go ./lang/ld TestAssignmentElement
+    partial: true
+    note: Checked as the generated netlist (SEL on the rung power) and that it compiles; no test scans a rung and reads the assigned tag. The page still marks these rows "in review".
+
+  - id: C5K-012
+    claim: >-
+      `Status.3` on an integer tag is a BOOL, readable and assignable, with
+      bit 0 least significant.
+    source: "#compare-math-and-data-movement"
+    tests:
+      - "go ./lang/conformance TestConformance/st-partial-access/a bit and a byte of a word read as BOOL and BYTE"
+      - "go ./lang/conformance TestConformance/st-partial-access/writing bits packs a word, leaving its other bits alone"
+      - go ./lang/ld TestBitAccessInLadder
+      - go ./lang/st TestBitAccess
+
+  - id: C5K-013
+    claim: >-
+      A function block called in a rung takes rung power on its first free
+      BOOL input and continues from its first BOOL output, keeps state per
+      instance (two instances of one block share nothing), and its pins are
+      readable as contacts and operands (`m101.Pin`).
+    source: "#subroutines-and-add-on-instructions"
+    tests:
+      - go ./lang/ld TestLadderFunctionBlockRuns
+      - go ./lang/ld TestLadderFunctionBlockPowerPins
+    partial: true
+    note: State retention per instance is tested for one instance; two simultaneous instances are not.
+
+  - id: C5K-014
+    claim: >-
+      A manifest tag is in scope in every program without a declaration, as
+      a Logix controller-scope tag is in every routine; `VAR_EXTERNAL` stays
+      legal and must agree with the tag's `type:`.
+    source: "#tags-tasks-and-programs"
+    tests:
+      - go ./internal/project TestManifestTagsAreImplicit
+      - go ./internal/project TestImplicitTagsBindOnlyWhereUsed
+      - go ./internal/project TestExplicitDeclarationMustAgreeWithTypedTag
+
+  - id: C5K-015
+    claim: >-
+      A function block does not see manifest tags implicitly: like an AOI it
+      takes what it needs as parameters or names a tag in its own
+      `VAR_EXTERNAL`.
+    source: "#tags-tasks-and-programs"
+    tests:
+      - go ./internal/project TestFunctionBlocksDoNotSeeTagsImplicitly
+
+  - id: C5K-016
+    claim: >-
+      A tag's `type:` takes `BOOL`, `DINT`, `REAL`, `TIME`, a UDT or an
+      `ARRAY`, and `init:` must agree with it.
+    source: "#tags-tasks-and-programs"
+    tests:
+      - go ./internal/project TestElementaryTagTypes
+      - go ./internal/project TestTagTypeAndInitMustAgree
+
+  - id: C5K-017
+    claim: >-
+      A tag's `alias:` field (with `dialect: logix`) is the rack-point alias
+      and is written as a Logix alias tag.
+    source: "#tags-tasks-and-programs"
+    tests:
+      - go ./logix/writer TestAliasTags
+      - go ./logix/importer TestDialectAndAliasImport
+    partial: true
+    note: Writer and importer are tested; the page marks this row "in review" though #225 has merged.
+
+  - id: C5K-018
+    claim: >-
+      `JMP`/`LBL` and `MCR` are not supported: they are declined rather than
+      approximated.
+    source: "#declined-by-design"
+    tests: []
+    note: No test asserts that these instructions are refused or what the diagnostic says.
+
+  - id: C5K-019
+    claim: >-
+      The MCR replacement works: rungs in a `FUNCTION_BLOCK` with an `Enable`
+      input and `[ Start | Run ] /Stop Enable ( Run )` leave every output
+      dead while `Enable` is FALSE.
+    source: "#mcr"
+    tests: []
+    note: The pattern is documented but no test builds and scans it.
+
+  - id: C5K-020
+    claim: >-
+      A Rockwell `.L5X` export opens as ladder with no Studio 5000
+      installed.
+    source: "#where-the-rest-is"
+    tests:
+      - go ./cmd/naut TestLogixGraphEmitsTheLadderModel
+      - go ./lang/l5x TestLadderContactsAndCoils

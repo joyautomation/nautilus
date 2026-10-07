@@ -1,0 +1,171 @@
+---
+// /verified/runtime/ — the runtime claims inventory (docs/claims/) joined to
+// the last green CI run: claims per page with their verdicts, then the test
+// suite itself as data — counts, statement coverage, the conformance
+// matrix. Data: src/lib/runtime.ts.
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { Badge } from '@astrojs/starlight/components';
+import { GROUPS, VERDICTS, groupOf, loadRuntime, pageSlug, pct } from '../../../lib/runtime';
+import { commitUrl, formatDate, loadVerified } from '../../../lib/verified';
+import '../../../styles/verified.css';
+
+const r = loadRuntime();
+const repo = loadVerified().repository;
+const pages = (r?.pages ?? []).map((p) => {
+  const claims = r!.claims.filter((c) => c.file === p.file);
+  const n = (v: string) => claims.filter((c) => c.verdict === v).length;
+  return { ...p, group: groupOf(p), total: claims.length, verified: n('verified'), partial: n('partial'), gap: n('gap'), other: n('failing') + n('unrun') };
+});
+const total = r?.claims.length ?? 0;
+const verified = r?.verdicts.verified ?? 0;
+const partial = r?.verdicts.partial ?? 0;
+const t = r?.totals;
+const langs = ['st', 'ld', 'fbd', 'sfc'];
+const conformanceTests = (r?.conformance ?? []).reduce((a, f) => a + f.tests, 0);
+const tested = (r?.packages ?? []).filter((p) => p.statements > 0);
+---
+
+<StarlightPage
+  frontmatter={{
+    title: 'Verified: runtime',
+    description:
+      'Every behaviour the nautilus documentation promises about the runtime, languages and drivers, with the tests that prove it in the last green CI run.',
+    tableOfContents: false,
+    prev: false,
+    next: false,
+  }}
+>
+  <p class="vf-lede">
+    Every behaviour the documentation promises about the runtime, the languages and the drivers,
+    with the tests that prove it. The verdicts come from the <strong>last green CI run</strong> on
+    <code>main</code>, including the jobs that test against someone else's implementation: the
+    Sparkplug TCK, pymodbus, snmpsim, DMTF's Redfish mockup and node_exporter. Claims nothing tests
+    yet are listed too, as gaps.
+  </p>
+
+  {
+    !r ? (
+      <p class="vf-empty">No verified run yet. This page fills in once a green CI run's runtime evidence has been baked into the site.</p>
+    ) : (
+      <>
+        <p class="vf-muted">
+          <small>
+            {r.run.local ? 'Local evidence file' : <>Last green CI run {formatDate(r.run.date)}</>}
+            {r.run.sha && (
+              <>
+                {' '}on <a href={commitUrl(repo, r.run.sha)}><code>{r.run.sha.slice(0, 7)}</code></a>
+              </>
+            )}
+            {r.run.runUrl && <> · <a href={r.run.runUrl}>run {r.run.runId}</a></>}
+          </small>
+        </p>
+
+        <h2>Claims</h2>
+        <p>
+          <strong>{verified} of {total}</strong> claims are verified by a passing test
+          {partial > 0 && <>, and {partial} more partly</>}. Each page's claims come from
+          {' '}<a href={`https://github.com/${repo}/tree/main/docs/claims`}>docs/claims</a>, one file
+          per documentation page, and CI fails if a claim names a test that does not exist.
+        </p>
+        <p class="vf-counts">
+          {VERDICTS.filter((v) => r.verdicts[v.key]).map((v) => (
+            <Badge text={`${r.verdicts[v.key]} ${v.label}`} variant={v.variant} />
+          ))}
+        </p>
+        {GROUPS.map((g) => {
+          const rows = pages.filter((p) => p.group === g.key);
+          return rows.length > 0 && (
+            <>
+              <h3>{g.label}</h3>
+              <table class="vf-sections">
+                <thead>
+                  <tr><th>Page</th><th>Verified</th><th></th><th>Partly</th><th>No test yet</th></tr>
+                </thead>
+                <tbody>
+                  {rows.map((p) => (
+                    <tr>
+                      <td><a href={`/verified/runtime/${pageSlug(p)}/`}>{p.title}</a></td>
+                      <td class="num">{p.verified} / {p.total}</td>
+                      <td style="width: 30%">
+                        <div class="vf-bar vf-bar-split" role="presentation">
+                          <span style={`width: ${pct(p.verified, p.total)}%`} />
+                          <span class="vf-bar-partial" style={`width: ${pct(p.partial, p.total)}%`} />
+                        </div>
+                      </td>
+                      <td class="num">{p.partial || ''}</td>
+                      <td class="num">{p.gap || ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          );
+        })}
+
+        <h2>The test suite</h2>
+        <p>The same run, as numbers. These are counts, not claims: they show the size of the suite, not what it proves.</p>
+        <dl class="vf-stats">
+          <div><dt>Go packages</dt><dd>{t!.packages}</dd></div>
+          <div><dt>tests</dt><dd>{t!.tests.toLocaleString('en')}</dd></div>
+          <div><dt>subtests</dt><dd>{t!.subtests.toLocaleString('en')}</dd></div>
+          <div><dt>passed</dt><dd>{t!.passed.toLocaleString('en')}</dd></div>
+          <div><dt>skipped</dt><dd>{t!.skipped.toLocaleString('en')}</dd></div>
+          <div><dt>statement coverage</dt><dd>{pct(t!.covered, t!.statements)}%</dd></div>
+        </dl>
+        <p class="vf-muted">
+          <small>
+            Skipped tests need a peer or hardware that job lacks: Postgres, a Logix controller, a
+            real BMC. A test that passes in any job counts as passed. Coverage comes from the plain
+            <code>go test ./...</code> job only.
+          </small>
+        </p>
+
+        <h3>Language conformance</h3>
+        <p>
+          The <a href={`https://github.com/${repo}/tree/main/lang/conformance`}>conformance corpus</a>:
+          {' '}{r.conformance.length} features, {conformanceTests} tests. Each feature is written in every
+          language that can express it, and one test asserts all of them in the same step.
+        </p>
+        <table class="vf-sections vf-matrix">
+          <thead>
+            <tr><th>Feature</th>{langs.map((l) => <th>{l.toUpperCase()}</th>)}<th>Tests</th><th></th></tr>
+          </thead>
+          <tbody>
+            {r.conformance.map((f) => (
+              <tr>
+                <td><a href={`https://github.com/${repo}/tree/main/lang/conformance/${f.feature}`}><code>{f.feature}</code></a></td>
+                {langs.map((l) => <td class="vf-mark">{f.langs.includes(l) ? '✓' : ''}</td>)}
+                <td class="num">{f.tests}</td>
+                <td>
+                  {f.failed > 0 ? <Badge text={`${f.failed} failed`} variant="danger" /> : f.passed === f.tests && f.tests > 0 ? <Badge text="pass" variant="success" /> : <Badge text={`${f.passed} / ${f.tests} ran`} variant="note" />}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <h3>By package</h3>
+        <details>
+          <summary>{tested.length} packages with statements, by coverage</summary>
+          <table class="vf-sections">
+            <thead>
+              <tr><th>Package</th><th>Tests</th><th>Coverage</th><th></th></tr>
+            </thead>
+            <tbody>
+              {[...tested].sort((a, b) => pct(b.covered, b.statements) - pct(a.covered, a.statements)).map((p) => (
+                <tr>
+                  <td><a href={`https://github.com/${repo}/tree/main/${p.path.replace(/^\.\/?/, '')}`}><code>{p.path.replace(/^\.\//, '')}</code></a></td>
+                  <td class="num">{p.tests + p.subtests || ''}</td>
+                  <td class="num">{pct(p.covered, p.statements)}%</td>
+                  <td style="width: 30%">
+                    <div class="vf-bar" role="presentation"><span style={`width: ${pct(p.covered, p.statements)}%`} /></div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      </>
+    )
+  }
+</StarlightPage>

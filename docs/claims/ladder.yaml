@@ -1,0 +1,319 @@
+page: website/src/content/docs/languages/ladder.mdx
+title: Ladder Diagram
+prefix: LD
+claims:
+  - id: LD-001
+    claim: >-
+      A .ld file's rungs compile and run; a normally-open contact passes
+      power when its tag is TRUE and a normally-closed contact (/Tag) when it
+      is FALSE.
+    source: "#a-rung-in-text"
+    tests:
+      - go ./lang/ld TestTranspileRungs
+      - go ./lang/ld TestLadderCompilesEndToEnd
+      - go ./lang/conformance TestConformance/ld-coils
+
+  - id: LD-002
+    claim: >-
+      A rising-edge contact (+Tag) passes one scan of power on Tag's 0 to 1
+      transition and a falling-edge contact (-Tag) one scan on 1 to 0.
+    source: "#a-rung-in-text"
+    tests:
+      - go ./lang/conformance TestConformance/ld-coils/+ contact passes one scan on the rise, - contact one scan on the fall
+      - go ./lang/ld TestEdgeContactOneShot
+      - go ./lang/ld TestEdgeContactLowersToST
+
+  - id: LD-003
+    claim: >-
+      A parallel branch [ a | b ] is the OR of its legs; each leg is a series
+      and branches nest.
+    source: "#a-rung-in-text"
+    tests:
+      - go ./lang/ld TestRungShapes
+      - go ./lang/conformance TestConformance/ld-coils/nested branch, bare leg passes at once
+      - go ./lang/conformance TestConformance/ld-coils/nested branch, FB leg is Q false at PT-1ms, true at PT, drop resets
+
+  - id: LD-004
+    claim: >-
+      A function contact such as EQ(P101_Mode, 0) passes power when the call
+      returns TRUE; a leading / negates any BOOL term, including a function
+      call or an accessor chain such as /t1.Q.
+    source: "#a-rung-in-text"
+    tests:
+      - go ./lang/ld TestNegatedFunctionContact
+      - go ./lang/ld TestFunctionContactExpressionArgs
+      - go ./lang/conformance TestConformance/ld-coils/negated function contact passes power when the call returns FALSE
+
+  - id: LD-005
+    claim: >-
+      A block in the rung is driven by power on its power-in pin and power
+      continues from its power-out pin; every other pin is named in the
+      parentheses, with => capturing an output pin (BOOL or not) into a
+      variable.
+    source: "#a-rung-in-text"
+    tests:
+      - go ./lang/ld TestLadderOutputBinding
+      - go ./lang/ld TestInsertBlockCapturingOutputs
+      - go ./lang/ld TestLadderFunctionBlockRuns
+      - go ./lang/ld TestTranspileRungs
+
+  - id: LD-006
+    claim: >-
+      An output coil ( Tag ) assigns Tag the rung condition every scan; a set
+      coil ( S Tag ) latches Tag := Tag OR condition; a reset coil ( R Tag )
+      unlatches Tag := Tag AND NOT condition.
+    source: "#a-rung-in-text"
+    tests:
+      - go ./lang/conformance TestConformance/ld-coils/S coil latches, R coil unlatches, R wins a same-scan tie
+      - go ./lang/ld TestTranspileRungs
+
+  - id: LD-007
+    claim: >-
+      A P coil is TRUE for exactly one scan when the rung condition rises; an
+      N coil for one scan when it falls; a condition already TRUE on the first
+      scan counts as a rising edge.
+    source: "#a-rung-in-text"
+    tests:
+      - go ./lang/conformance TestConformance/ld-coils/P coil is TRUE for exactly one scan on the rising edge
+      - go ./lang/conformance TestConformance/ld-coils/first scan with A already TRUE counts as a rising edge
+      - go ./lang/conformance TestConformance/ld-coils/N coil is TRUE for exactly one scan on the falling edge
+
+  - id: LD-008
+    claim: >-
+      Contacts and coils take accessor references, so array elements and
+      struct members address directly (Levels[2], PIT_001.VALUE).
+    source: "#a-rung-in-text"
+    tests:
+      - go ./lang/ld TestTranspileRungs
+      - go ./lang/ld TestBitAccessInLadder
+      - go ./lang/ld TestFBInstanceArrayInLadder
+    partial: true
+    note: Array elements are tested; no ladder test with a struct-member (dotted) contact or coil.
+
+  - id: LD-009
+    claim: >-
+      A rung header carries a (* ... *) comment, and full-line // comments
+      inside the block are diagram notes; neither changes behaviour.
+    source: "#a-rung-in-text"
+    tests:
+      - go ./lang/ld TestLadderComments
+      - go ./lang/ld TestRungHeaderMultilineComment
+      - go ./lang/ld TestRungHeaderCommentWithAsterisks
+
+  - id: LD-010
+    claim: >-
+      Series elements AND together and branch legs OR, so
+      [ Start | Run ] /Stop ( Run ) compiles to
+      Run := AND(OR(Start, Run), NOT Stop) (the seal-in).
+    source: "#how-a-rung-evaluates"
+    tests:
+      - go ./lang/ld TestTranspileRungs
+
+  - id: LD-011
+    claim: >-
+      A rung needs at least one coil or a function block as its last element;
+      a rung whose only output is a block (A B t1:TON(PT := T#5S)) is
+      complete and its output is t1.Q read elsewhere.
+    source: "#how-a-rung-evaluates"
+    tests:
+      - go ./lang/ld TestFBOnlyRung
+      - go ./lang/ld TestRungErrors
+      - go ./lang/conformance TestConformance/ld-coils/FB-only rung (no coil) still runs, its outputs read elsewhere
+
+  - id: LD-012
+    claim: >-
+      Several coils on one rung share one condition, evaluated once and
+      fanned out.
+    source: "#how-a-rung-evaluates"
+    tests:
+      - go ./lang/ld TestTranspileRungs
+    note: Asserts the single w_annunciate wire feeding both coils at the transpile level.
+
+  - id: LD-013
+    claim: A rung with only a coil is driven by the rail, so ( AlwaysOn ) assigns TRUE.
+    source: "#how-a-rung-evaluates"
+    tests:
+      - go ./lang/ld TestRungShapes
+
+  - id: LD-014
+    claim: >-
+      Rungs evaluate top to bottom within a scan, so a coil written on one
+      rung reads back as a contact on the next rung in the same scan.
+    source: "#how-a-rung-evaluates"
+    tests:
+      - go ./lang/conformance TestConformance/ld-coils/S coil latches, R coil unlatches, R wins a same-scan tie
+    partial: true
+    note: >-
+      The R-after-S tie shows later rungs win, but no test reads a coil as a
+      contact on a following rung as its subject.
+
+  - id: LD-015
+    claim: >-
+      Power is boolean: the six comparisons work as contacts, but a numeric
+      function as a contact (ADD(TempC, 0.0)) is a compile error, not a
+      pass-through.
+    source: "#how-a-rung-evaluates"
+    tests: []
+    note: >-
+      Comparison contacts are used in tests; no test asserts the compile
+      error for a non-BOOL function contact.
+
+  - id: LD-016
+    claim: >-
+      Standard blocks use fixed power pins: TON/TOF/TP IN and Q, CTU CU, CTD
+      CD, R_TRIG/F_TRIG CLK, SR S1/Q1, RS S/Q1.
+    source: "#how-a-rung-evaluates"
+    tests:
+      - go ./lang/ld TestCatalogListsStandardThenLibraryBlocks
+      - go ./lang/ld TestBlockPins
+    partial: true
+    note: >-
+      A palette test checks that standard blocks carry power pins; the exact
+      per-block pin names are not asserted.
+
+  - id: LD-017
+    claim: >-
+      Passing the power pin yourself (t1:TON(IN := x)) is an error, because
+      power owns it.
+    source: "#how-a-rung-evaluates"
+    tests:
+      - go ./lang/ld TestRungErrors
+    note: The "power pin passed" case of TestRungErrors.
+
+  - id: LD-018
+    claim: >-
+      Coils assign BOOL only; a timer's elapsed time or a counter's value is
+      stored with the => output binding.
+    source: "#how-a-rung-evaluates"
+    tests:
+      - go ./lang/ld TestLadderOutputBinding
+    partial: true
+    note: The binding is tested; no test asserts that a coil on a non-BOOL target is rejected.
+
+  - id: LD-019
+    claim: >-
+      Any instance output is readable as inst.Pin anywhere, including as a
+      contact, without a => capture.
+    source: "#how-a-rung-evaluates"
+    tests:
+      - go ./lang/ld TestLadderFunctionBlockRuns
+      - go ./lang/ld TestNegatedFunctionContact
+
+  - id: LD-020
+    claim: >-
+      Edge contacts and coils get a stable derived instance name (from the
+      rung, the tag and the repeat position) so the edge's retained state
+      survives an unrelated edit.
+    source: "#how-a-rung-evaluates"
+    tests:
+      - go ./lang/ld TestEdgeTrigNamesMatchTheCompiler
+    partial: true
+    note: Names are asserted; survival across an online edit is not.
+
+  - id: LD-021
+    claim: >-
+      LD transpiles in one hop to the FBD netlist, then to ST, so the
+      built-in vocabulary, user FUNCTIONs and FUNCTION_BLOCKs from library
+      .st files, and arrays/structs through accessors all work in ladder.
+    source: "#types-functions-and-blocks"
+    tests:
+      - go ./lang/ld TestLadderCompilesEndToEnd
+      - go ./lang/ld TestLadderFunctionBlockFromST
+      - go ./lang/ld TestFBInstanceArrayInLadder
+
+  - id: LD-022
+    claim: >-
+      A user block drops into a rung like a TON: power lands on EN if declared,
+      otherwise the first BOOL VAR_INPUT not bound by name, and continues from
+      ENO or the first BOOL VAR_OUTPUT.
+    source: "#types-functions-and-blocks"
+    tests:
+      - go ./lang/ld TestLadderFunctionBlockPowerPins
+
+  - id: LD-023
+    claim: >-
+      Instance state persists across scans, and an online edit carries it by
+      name and type.
+    source: "#types-functions-and-blocks"
+    tests:
+      - go ./lang/ld TestLadderFunctionBlockRuns
+      - go ./runtime TestSwapWarmCarriesRetainedState
+    partial: true
+    note: >-
+      Persistence across scans is tested for ladder blocks; warm-swap
+      carrying is tested for ST/FBD, not for a ladder program.
+
+  - id: LD-024
+    claim: >-
+      A .ld file may hold FUNCTION_BLOCKs whose bodies are rungs, and a .ld
+      file with no PROGRAM is a project library; two instances are independent
+      with their own state; VAR_* sections including VAR_IN_OUT (a UDT by
+      reference) work.
+    source: "#types-functions-and-blocks"
+    tests:
+      - go ./lang/ld TestLadderFunctionBlockLowers
+      - go ./lang/ld TestLadderFunctionBlockRuns
+      - go ./lang/ld TestLadderFunctionBlockInOutStructPin
+      - go ./lang/ld TestLadderFunctionBlockNested
+      - go ./lang/ld TestLibraryDocCommentResolvesAsLibrary
+
+  - id: LD-025
+    claim: >-
+      naut check composes the line maps back through both hops, so a type
+      error in the ST a rung produced reports at that rung's RUNG line.
+    source: "#tooling"
+    tests:
+      - go ./lang/ld TestLineMap
+      - go ./lang/ld TestRungErrors
+    partial: true
+    note: >-
+      The line map is tested at the transpile level; no end-to-end check that
+      naut check prints the RUNG line for a type error.
+
+  - id: LD-026
+    claim: >-
+      Online edits treat .ld as the program source; download, diff against the
+      controller and naut pull move the ladder text itself.
+    source: "#tooling"
+    tests: []
+    note: >-
+      Runtime online-edit tests cover ST and FBD sources only (TestLanguageDetection
+      checks fbd and st); no test for .ld download/pull.
+
+  - id: LD-027
+    claim: Jumps and labels (JMP, JMPC, LBL, RET) are not supported.
+    source: "#not-supported"
+    tests: []
+    note: No test asserts the rejection.
+
+  - id: LD-028
+    claim: Master control relay zones (MCR) are not supported.
+    source: "#not-supported"
+    tests: []
+    note: No test asserts the rejection.
+
+  - id: LD-029
+    claim: Negated coils ( /Tag ) are rejected.
+    source: "#not-supported"
+    tests: []
+    note: No test asserts the rejection.
+
+  - id: LD-030
+    claim: >-
+      A coil inside a branch, or ahead of a later block, is an error: the
+      output zone is contiguous at the rung's right end.
+    source: "#not-supported"
+    tests:
+      - go ./lang/ld TestRungErrors
+    partial: true
+    note: >-
+      Covers a coil mid-rung ahead of a contact ("right end"); coil inside a
+      branch and coil ahead of a block are not separately asserted.
+
+  - id: LD-031
+    claim: >-
+      The ladder vocabulary is the IEC built-ins only; vendor instruction
+      sets are not accepted.
+    source: "#not-supported"
+    tests: []
+    note: No test asserts that a vendor instruction is rejected.

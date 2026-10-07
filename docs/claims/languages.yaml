@@ -1,0 +1,92 @@
+page: website/src/content/docs/languages/index.md
+title: Languages overview
+prefix: LANG
+claims:
+  - id: LANG-001
+    claim: >-
+      A program file is .st, .ld, .fbd or .sfc, and the languages mix freely in
+      one controller (one program file per task) against one tag store.
+    source: "#four-languages-one-program-model"
+    tests:
+      - go ./runtime TestTasks
+      - go ./runtime TestLibrariesUserFBFromFBD
+      - go ./lang/conformance TestConformance/st-var-temp
+    partial: true
+    note: >-
+      TestTasks runs several tasks; the conformance fixtures run the same
+      logic in all four languages. No single test mixes all four against one
+      store.
+
+  - id: LANG-002
+    claim: >-
+      The same program written in ST, ladder, FBD and SFC behaves identically
+      (the standard function blocks, timers, counters, latches, coils and
+      conversions give the same results in every language).
+    source: "#one-compile-chain"
+    tests:
+      - go ./lang/conformance TestConformance/fb-ton
+      - go ./lang/conformance TestConformance/fb-sr
+      - go ./lang/conformance TestConformance/ld-coils
+      - go ./lang/conformance TestConformance/st-case-insensitive
+    partial: true
+    note: >-
+      Each feature fixture runs the logic in every language it can express;
+      the matrix covers the standard blocks, not every built-in.
+
+  - id: LANG-003
+    claim: >-
+      FBD and SFC transpile to ST in one hop and ladder in two (LD to FBD to
+      ST), and ST lowers to the typed IR the runtime executes.
+    source: "#one-compile-chain"
+    tests:
+      - go ./lang/ld TestLadderCompilesEndToEnd
+      - go ./lang/fbd TestArrayCompilesEndToEnd
+      - go ./lang/sfc TestTranspileShape
+
+  - id: LANG-004
+    claim: >-
+      The hops preserve line maps, so a diagnostic anywhere in the chain lands
+      on the source: an .ld error at the rung, an .sfc error at the step or
+      transition.
+    source: "#one-compile-chain"
+    tests:
+      - go ./lang/ld TestLineMap
+      - go ./lang/fbd TestTranspileLineMap
+    partial: true
+    note: >-
+      LD and FBD line maps are tested; no test for SFC step/transition line
+      mapping of a compile error.
+
+  - id: LANG-005
+    claim: >-
+      Built-in functions and function blocks, user FUNCTION_BLOCKs from .st,
+      .ld or .fbd library files, arrays and structs behave the same in every
+      language.
+    source: "#one-compile-chain"
+    tests:
+      - go ./runtime TestLibrariesUserFBFromFBD
+      - go ./lang/ld TestLadderFunctionBlockFromST
+      - go ./lang/fbd TestSharedTypes
+    partial: true
+    note: Ladder and FBD consumers are tested; no SFC action calling a library block.
+
+  - id: LANG-006
+    claim: >-
+      naut new --language ld (or fbd, sfc) scaffolds a minimal project in that
+      language.
+    source: "#which-language-for-which-job"
+    tests:
+      - go ./lang/sfc TestSeedInitCheckClean
+      - go ./lang/fbd TestSeedBlankFile
+      - go ./lang/ld TestSeedBlankLadder
+    partial: true
+    note: The seed content is tested; the naut new command itself is not.
+
+  - id: LANG-007
+    claim: >-
+      Tasks are declared in nautilus.yaml, one program file each, at their own
+      scan rate.
+    source: "#which-language-for-which-job"
+    tests:
+      - go ./runtime TestTasks
+      - go ./runtime TestTasksRunConcurrently

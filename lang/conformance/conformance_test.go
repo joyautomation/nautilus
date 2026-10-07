@@ -65,12 +65,16 @@ func runFeature(t *testing.T, f Feature) {
 	if len(results) == 0 {
 		t.Fatalf("%s: no acceptance tests (expected %s_test.yaml with at least one test)", f.Name, f.Name)
 	}
+	// One subtest per YAML test, so a claim in docs/claims can name the
+	// exact test that proves it: TestConformance/<feature>/<test name>.
 	for _, r := range results {
-		if r.Passed {
+		t.Run(r.Name, func(t *testing.T) {
+			if !r.Passed {
+				t.Errorf("FAIL %s\n%s", r.Name, acceptance.FormatFailure(r))
+				return
+			}
 			t.Logf("ok   %s (%s, %d scans)", r.Name, r.Elapsed, r.Scans)
-			continue
-		}
-		t.Errorf("FAIL %s\n%s", r.Name, acceptance.FormatFailure(r))
+		})
 	}
 }
 

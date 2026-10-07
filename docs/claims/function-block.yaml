@@ -1,0 +1,295 @@
+page: website/src/content/docs/languages/function-block.mdx
+title: Function Block Diagram
+prefix: FBD
+claims:
+  - id: FBD-001
+    claim: >-
+      An .fbd body is a netlist of named wires, coils, and function-block
+      instances inside an ordinary ST POU; everything before FBD and after
+      END_FBD is plain ST.
+    source: "#a-netlist-line-by-line"
+    tests:
+      - go ./lang/fbd TestTranspileMultipleBlocks
+      - go ./lang/fbd TestFunctionBlockInstance
+      - go ./lang/fbd TestSplitBlocksRejectsMalformed
+
+  - id: FBD-002
+    claim: >-
+      A coil writes a variable; the target may be an array element or struct
+      member (TempHist[1] := TempC), and array/struct accessors work as
+      inputs.
+    source: "#a-netlist-line-by-line"
+    tests:
+      - go ./lang/fbd TestArrayTranspile
+      - go ./lang/fbd TestArrayCompilesEndToEnd
+      - go ./lang/fbd TestGraphStructMemberIsInputChip
+      - go ./lang/fbd TestArrayElementFeedback
+
+  - id: FBD-003
+    claim: >-
+      An FB instance is declared and called in one statement
+      (lic : PID(...)); lic : PID alone declares it and lic(PV := ...) calls
+      it later; lic.CV reads an output pin.
+    source: "#a-netlist-line-by-line"
+    tests:
+      - go ./lang/fbd TestFunctionBlockInstance
+      - go ./lang/fbd TestInstanceDeclaredInHeaderIsNotRedeclared
+      - go ./lang/fbd TestOutputReferenceFromFBPin
+      - go ./lang/fbd TestGraphFBInstancePins
+
+  - id: FBD-004
+    claim: >-
+      The => output binding (ET => Elapsed) captures a non-BOOL pin into a
+      variable.
+    source: "#a-netlist-line-by-line"
+    tests:
+      - go ./lang/fbd TestOutputBinding
+
+  - id: FBD-005
+    claim: >-
+      Inline NOT negates a pin; constants (5.0, T#10S, TRUE, 'ok') are
+      literal inputs.
+    source: "#a-netlist-line-by-line"
+    tests:
+      - go ./lang/fbd TestSealInLatch
+      - go ./lang/fbd TestEditToggleNot
+      - go ./lang/fbd TestEditSetLiteral
+    partial: true
+    note: Negation is tested through the seal-in and edit ops; literal forms are not enumerated.
+
+  - id: FBD-006
+    claim: >-
+      Statements may end with ; or just a newline, and full-line // comments
+      are allowed in the body.
+    source: "#a-netlist-line-by-line"
+    tests:
+      - go ./lang/fbd TestStatementsLenient
+      - go ./lang/fbd TestCommentsInModel
+
+  - id: FBD-007
+    claim: >-
+      A standard function's inputs are positional (LIMIT(0.0, x, 9.0)) or all
+      named by their standard names (LIMIT(MN := 0.0, IN := x, MX := 9.0)).
+    source: "#a-netlist-line-by-line"
+    tests:
+      - go ./lang/fbd TestUserFunctionPinNames
+      - go ./lang/fbd TestENOErrors
+    partial: true
+    note: >-
+      Named EN/ENO forms are tested; a plain all-named standard call and the
+      mixing rule are only exercised via the ENO error cases.
+
+  - id: FBD-008
+    claim: >-
+      Compilation transpiles the netlist to ST and runs it through the ST
+      front end, so errors map back to the exact .fbd line.
+    source: "#how-a-diagram-evaluates"
+    tests:
+      - go ./lang/fbd TestTranspileLineMap
+
+  - id: FBD-009
+    claim: >-
+      A wire is a pure combinational expression inlined at every read, so
+      fan-out duplicates an expression rather than creating shared state.
+    source: "#how-a-diagram-evaluates"
+    tests:
+      - go ./lang/fbd TestArithmeticAndFanout
+      - go ./lang/fbd TestGraphFanoutAndNesting
+
+  - id: FBD-010
+    claim: >-
+      Wires must be acyclic: a wire that reads itself, directly or through
+      another wire, is a compile error ("combinational loop through wire").
+    source: "#how-a-diagram-evaluates"
+    tests:
+      - go ./lang/fbd TestCombinationalLoopRejected
+      - go ./lang/fbd TestGraphCombinationalLoopRejected
+
+  - id: FBD-011
+    claim: >-
+      A variable read early in the body carries the value its coil wrote on
+      the previous scan, so HighLevelAlm := AND(OR(above, HighLevelAlm),
+      NOT below) is a seal-in latch.
+    source: "#how-a-diagram-evaluates"
+    tests:
+      - go ./lang/fbd TestSealInLatch
+      - go ./lang/fbd TestGraphSealInLatch
+      - go ./lang/fbd TestArrayElementFeedback
+
+  - id: FBD-012
+    claim: >-
+      Statements evaluate in source order, except that a function-block call
+      is emitted ahead of any statement that reads its output pins, so
+      lic.CV reads this scan's result wherever lic sits in the file.
+    source: "#how-a-diagram-evaluates"
+    tests:
+      - go ./lang/fbd TestFunctionBlockInstance
+      - go ./lang/fbd TestNetworksRunInOrder
+    partial: true
+    note: Ordering is asserted on transpiled text; the "ties keep source order" rule is not tested on its own.
+
+  - id: FBD-013
+    claim: >-
+      A body can be divided into NETWORKs; network 1 runs to completion, then
+      network 2, and the FB-before-reader rule holds within a network only,
+      so a read of a later network's FB output sees the previous scan's
+      value.
+    source: "#networks"
+    tests:
+      - go ./lang/fbd TestNetworksRunInOrder
+      - go ./lang/fbd TestNetworksParseModelAndOrder
+      - go ./lang/fbd TestNetworkParseEdges
+
+  - id: FBD-014
+    claim: >-
+      Statements before the first NETWORK line are an untitled first network,
+      and a body with no NETWORK line is one network.
+    source: "#networks"
+    tests:
+      - go ./lang/fbd TestNetworksParseModelAndOrder
+      - go ./lang/fbd TestNetworksRunInOrder
+
+  - id: FBD-015
+    claim: >-
+      Any block takes EN (BOOL, TRUE when unbound) and gives ENO; while EN is
+      FALSE a function's result is not written (its variable keeps its value)
+      and a function block's outputs and internal state hold.
+    source: "#enoeno-execution-control"
+    tests:
+      - go ./lang/conformance TestConformance/fbd-en-eno
+      - go ./lang/fbd TestENOFunctionGatesItsCoil
+      - go ./lang/fbd TestENOModelAndTranspile
+
+  - id: FBD-016
+    claim: >-
+      ENO is EN AND no error; DIV and MOD report a zero divisor through ENO.
+    source: "#enoeno-execution-control"
+    tests:
+      - go ./lang/conformance TestConformance/fbd-en-eno/DIV's ENO is FALSE on a zero divisor, TRUE otherwise
+      - go ./lang/conformance TestConformance/fbd-en-eno/DIV with EN FALSE holds its result and reports ENO FALSE
+
+  - id: FBD-017
+    claim: >-
+      A block with EN/ENO must drive a variable (a coil, directly or through
+      its named wire), and its ENO reads like a pin (t1.ENO, sp.ENO).
+    source: "#enoeno-execution-control"
+    tests:
+      - go ./lang/fbd TestENOErrors
+      - go ./lang/fbd TestENOFunctionGatesItsCoil
+
+  - id: FBD-018
+    claim: >-
+      An FB with EN FALSE does not run: edges it misses are not counted, and
+      its edge memory is stale so a rise across the gap counts on return.
+    source: "#enoeno-execution-control"
+    tests:
+      - go ./lang/conformance TestConformance/fbd-en-eno/an FB with EN FALSE does not run — edges it misses are not counted
+      - go ./lang/conformance TestConformance/fbd-en-eno/the FB's edge memory is stale while disabled — a rise across it counts on return
+
+  - id: FBD-019
+    claim: >-
+      AND, OR, XOR, ADD and MUL take two or more inputs; SUB, DIV, MOD and
+      the comparisons take exactly two; MOVE is a one-input pass-through.
+    source: "#types-functions-and-blocks"
+    tests:
+      - go ./lang/fbd TestOpArityConversionsFromRegistry
+      - go ./lang/conformance TestConformance/st-xor
+    partial: true
+    note: >-
+      Arity is checked for conversions and unknown functions in the editor,
+      and n-ary XOR runs; no test asserts a compile error for the wrong
+      arity of SUB/DIV/comparisons.
+
+  - id: FBD-020
+    claim: >-
+      An FB input left out of the call keeps its value (its declared initial
+      value until something writes it).
+    source: "#types-functions-and-blocks"
+    tests:
+      - go ./lang/fbd TestPickerLeavesDefaultedInputsUnbound
+      - go ./acceptance TestFBVarConstantWritesBack
+    partial: true
+    note: >-
+      The editor leaves defaulted inputs unbound and FB initial values are
+      tested in ST; no FBD-level run asserts the kept value.
+
+  - id: FBD-021
+    claim: >-
+      User-defined TYPE structs work as inputs and coil targets.
+    source: "#types-functions-and-blocks"
+    tests:
+      - go ./lang/fbd TestSharedTypes
+      - go ./lang/fbd TestGraphStructMemberIsInputChip
+
+  - id: FBD-022
+    claim: >-
+      A user FUNCTION_BLOCK instantiates in FBD the way a TON does, whether
+      authored in an ST, FBD or ladder library file; a .fbd/.ld/.st file with
+      no PROGRAM is a project library.
+    source: "#types-functions-and-blocks"
+    tests:
+      - go ./runtime TestLibrariesUserFBFromFBD
+      - go ./lang/fbd TestInsertLibraryFBAllPinsOpen
+      - go ./lang/ld TestLadderFunctionBlockFromST
+
+  - id: FBD-023
+    claim: >-
+      A controller running an FBD program serves and accepts the .fbd text;
+      a warm swap migrates retained state by name and type, so a PID's
+      integral or a running TON keeps its value.
+    source: "#tooling"
+    tests:
+      - go ./runtime TestSwapWarmFBDCarriesRetainedState
+      - go ./runtime TestLanguageDetection
+    partial: true
+    note: Carry-over is tested on a small FBD program, not specifically a PID or running TON.
+
+  - id: FBD-024
+    claim: >-
+      A failed compile on an FBD download leaves the running program
+      untouched.
+    source: "#tooling"
+    tests:
+      - go ./runtime TestSwapWarmFBDCompileErrorLeavesRunning
+
+  - id: FBD-025
+    claim: >-
+      An edit routes to a task by PROGRAM name, so a task's own .fbd
+      downloads without disturbing another task's program.
+    source: "#tooling"
+    tests: []
+    note: No test asserts per-task routing by PROGRAM name.
+
+  - id: FBD-026
+    claim: Authoring a FUNCTION in FBD is not supported; functions are ST.
+    source: "#not-supported"
+    tests: []
+    note: No test asserts the rejection.
+
+  - id: FBD-027
+    claim: >-
+      There are no execution-order overrides and no control flow (IF, CASE,
+      loops) in the netlist.
+    source: "#not-supported"
+    tests: []
+    note: No test asserts that IF/CASE/loops are rejected in an FBD body.
+
+  - id: FBD-028
+    claim: >-
+      Inline arithmetic in an array index is not supported; the index is
+      computed on a named wire first.
+    source: "#not-supported"
+    tests: []
+    note: No test asserts the rejection.
+
+  - id: FBD-029
+    claim: Defining the same wire twice is a compile error.
+    source: "#not-supported"
+    tests: []
+    note: Only the self-feeding half (combinational loop) is tested; see FBD-010.
+
+  - id: FBD-030
+    claim: A wire that feeds itself is a compile error.
+    source: "#not-supported"
+    tests:
+      - go ./lang/fbd TestCombinationalLoopRejected

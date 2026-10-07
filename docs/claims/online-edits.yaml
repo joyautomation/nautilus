@@ -1,0 +1,132 @@
+page: website/src/content/docs/guides/online-edits.mdx
+title: Online edits
+prefix: OE
+claims:
+  - id: OE-001
+    claim: >-
+      A warm swap carries retained state (integrators, timers, counters)
+      across by name and type, and reports what could not carry over (new
+      variables, changed types) as resets.
+    source: "#online-edits"
+    tests:
+      - go ./runtime TestSwapWarmCarriesRetainedState
+      - go ./runtime TestSwapWarmTypeChangeResets
+      - go ./runtime TestSwapWarmFBDCarriesRetainedState
+  - id: OE-002
+    claim: >-
+      A program that fails to compile leaves the running program untouched
+      (the PUT answers 422 and the hash is unchanged), so a typo cannot
+      fault the controller.
+    source: "#online-edits"
+    tests:
+      - go ./runtime TestSwapWarmCompileErrorLeavesRunning
+      - go ./runtime TestSwapWarmFBDCompileErrorLeavesRunning
+      - go ./server TestProgramOnlineEditFlow
+  - id: OE-003
+    claim: >-
+      Online edits are off by default: GET /api/program stays open, but PUT
+      /api/program and rollback answer 403 unless Options.OnlineEdits is set.
+    source: "#online-edits"
+    tests:
+      - go ./server TestProgramEndpointsGated
+  - id: OE-004
+    claim: >-
+      With a token configured, tag writes and online edits require it while
+      reads (and naut pull) stay open.
+    source: "#working-against-a-remote-controller"
+    tests:
+      - go ./server TestWriteAuthToken
+      - go ./server TestWriteAuthBaseLayer
+    partial: true
+    note: >-
+      The tag-write half is asserted; online-edit endpoints (PUT /api/program,
+      rollback, activate) with a token set are not.
+  - id: OE-005
+    claim: >-
+      Online edits are ephemeral: a restart reverts to the program the binary
+      embeds, and only committing to git makes an edit permanent.
+    source: "#online-edits"
+    tests: []
+    note: >-
+      Gap. No test restarts a controller after an online edit and checks the embedded program returns.
+  - id: OE-006
+    claim: >-
+      A PUT with a stale baseHash is refused with 409, and a successful PUT
+      marks the program dirty with rollback armed and the edited logic
+      running on the next scan.
+    source: "#online-edits"
+    tests:
+      - go ./server TestProgramOnlineEditFlow
+  - id: OE-007
+    claim: >-
+      Rollback restores the previous program and its pre-swap state, is
+      single-shot, and a second rollback answers 409.
+    source: "#online-edits"
+    tests:
+      - go ./server TestProgramOnlineEditFlow
+      - go ./runtime TestSwapWarmCarriesRetainedState
+  - id: OE-008
+    claim: >-
+      naut pull --host writes each running program back into the workspace
+      file that declares its POU (a new program lands in <POU>.st), leaving
+      the files that already match untouched.
+    source: "#pulling-field-edits-back"
+    tests:
+      - go ./cmd/naut TestPullMultiTask
+      - go ./cmd/naut TestPullSingleProgramRenameTolerant
+    partial: true
+    note: >-
+      That generated type files are never touched is not asserted.
+  - id: OE-009
+    claim: >-
+      naut pull --check reports drift by exiting non-zero without writing
+      anything, and exits zero once the workspace matches.
+    source: "#pulling-field-edits-back"
+    tests:
+      - go ./cmd/naut TestPullMultiTask
+  - id: OE-010
+    claim: >-
+      A download sends the program's composition: the project's library
+      prelude (PROGRAM-less .st files verbatim, then .ld/.fbd libraries
+      transpiled to ST) followed by the program file as written, and naut
+      compose prints it, with --json splitting prelude, program, POU and
+      library paths.
+    source: "#pulling-field-edits-back"
+    tests:
+      - go ./cmd/naut TestComposeMatchesTheRuntime
+      - go ./cmd/naut TestComposeJSON
+      - go ./cmd/naut TestComposeGraphicalProgramUsesLadderLibrary
+      - go ./cmd/naut TestComposeOverrides
+    partial: true
+    note: >-
+      The "a .ld program stays ladder; the controller transpiles it" half is not asserted.
+  - id: OE-011
+    claim: >-
+      Composition is a single definition shared by the runtime, the language
+      server, download and pull, so a program round-trips losslessly.
+    source: "#pulling-field-edits-back"
+    tests:
+      - go ./cmd/naut TestComposeMatchesTheRuntime
+    partial: true
+    note: >-
+      Only runtime equality is asserted, not an end-to-end download then pull round trip.
+  - id: OE-012
+    claim: >-
+      Programs are addressed by POU name: GET /api/program lists every
+      program, a PUT routes by the POU in the submitted source, ?pou= and
+      ?task= select one for GET and rollback, and an unknown POU is a 404
+      rather than silently retargeting the main program.
+    source: "#every-program-both-directions"
+    tests:
+      - go ./server TestProgramTaskRouting
+    partial: true
+    note: >-
+      The ?task= selector is not exercised, only ?pou=.
+  - id: OE-013
+    claim: >-
+      Retained state carries across a swap of a non-main task's program the
+      same way as the main task's.
+    source: "#every-program-both-directions"
+    tests: []
+    note: >-
+      Gap. Routing to a task program is tested; carrying its state across the swap is not.

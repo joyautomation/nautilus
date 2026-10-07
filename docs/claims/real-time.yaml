@@ -1,0 +1,238 @@
+page: website/src/content/docs/guides/real-time.md
+title: Scan timing and real-time
+prefix: RT
+claims:
+  - id: RT-001
+    claim: >-
+      Lateness is counted per task, cumulative since start, as the time from a
+      slot's due time to the scan actually starting; late counts scans that
+      started more than the threshold after their slot, and an early sample
+      counts as a scan, not as late.
+    source: "#what-the-diagnostics-measure"
+    tests:
+      - go ./runtime TestLateTrackerCountsAndPercentiles
+      - go ./runtime TestLateUs
+
+  - id: RT-002
+    claim: >-
+      overruns counts scans whose execution took longer than the period.
+    source: "#what-the-diagnostics-measure"
+    tests:
+      - go ./runtime TestLateTrackerCountsAndPercentiles
+    partial: true
+    note: Asserted on the tracker with a flag handed in; the detection of an over-period execution by the run loop is not asserted.
+
+  - id: RT-003
+    claim: >-
+      The late threshold is the task's late-threshold, defaulting to a tenth
+      of the period.
+    source: "#what-the-diagnostics-measure"
+    tests:
+      - go ./runtime TestLateThresholdDefaults
+      - go ./runtime TestLatenessUnderVirtualClock
+    partial: true
+    note: The late-threshold manifest key is not parsed in a project-level test. The page example comment says the default for the 1 ms task is 100 µs, consistent with a tenth.
+
+  - id: RT-004
+    claim: >-
+      p50, p99 and p999 are bucket upper edges at most 3 percent above the
+      true value (never below), and empty trackers report zeros.
+    source: "#what-the-diagnostics-measure"
+    tests:
+      - go ./runtime TestLateTrackerCountsAndPercentiles
+      - go ./runtime TestLateTrackerEmpty
+      - go ./runtime TestFineBucketsAreMonotonic
+      - go ./runtime TestFineResolution
+
+  - id: RT-005
+    claim: >-
+      The lateness histogram is 1-2-5 log spaced from 1 µs to 100 ms
+      (histogram of 17 buckets over 16 edges in bucketsUs).
+    source: "#what-the-diagnostics-measure"
+    tests:
+      - go ./runtime TestLateTrackerCountsAndPercentiles
+      - go ./runtime TestCoarseIndex
+    partial: true
+    note: Asserts the snapshot has 17 buckets and 16 edges and the bucket indexes; the exact 1-2-5 edge values are not listed.
+
+  - id: RT-006
+    claim: >-
+      Under a virtual clock (acceptance tests) lateness stays at zero.
+    source: "#what-the-diagnostics-measure"
+    tests:
+      - go ./runtime TestLatenessUnderVirtualClock
+
+  - id: RT-007
+    claim: >-
+      The scan block reports scan time (lastMs, min and max, histogram, phase
+      bar) separately from lateness, per task.
+    source: "#what-the-diagnostics-measure"
+    tests:
+      - go ./runtime TestScanStatsDiagnostics
+      - go ./server TestFrameCarriesScanDiagnostics
+
+  - id: RT-008
+    claim: >-
+      The loop keeps an absolute schedule: it does not start a scan before its
+      slot, does not drift (about 150 scans in 300 ms at 2 ms), and a stall of
+      several periods is reported as missed slots instead of being fired as a
+      burst of catch-up scans.
+    source: "#what-the-runtime-does"
+    tests:
+      - go ./runtime TestRunLoopHoldsScheduleAndCountsMissed
+    note: Bounds are loose to tolerate shared CI runners.
+
+  - id: RT-009
+    claim: >-
+      The sleep lands on its deadline (not before) and returns promptly on
+      cancel instead of at the next slot.
+    source: "#what-the-runtime-does"
+    tests:
+      - go ./runtime TestSleepUntilLandsOnDeadline
+      - go ./runtime TestSleepUntilReturnsOnCancel
+      - go ./runtime TestRunLoopStopsOnCancel
+
+  - id: RT-010
+    claim: >-
+      On Linux the sleep is the kernel's absolute sleep (clock_nanosleep) on
+      a thread of the task's own with reduced timer slack, avoiding the
+      one-millisecond rounding of a Go timer.
+    source: "#what-the-runtime-does"
+    tests:
+      - go ./runtime TestSleepUntilLandsOnDeadline
+    partial: true
+    note: Checks the wake-up lands within 10 ms of the deadline; the sub-millisecond precision and timer-slack setting are not asserted (hardware dependent).
+
+  - id: RT-011
+    claim: >-
+      Task isolation: each scan snapshots its external tags, executes
+      privately, and commits what changed as one unit, so a reader never sees
+      a scan half-done and an equal-value write does not bump a tag's
+      generation.
+    source: "#what-the-runtime-does"
+    tests:
+      - go ./runtime TestScanViewSnapshotAndCommit
+      - go ./runtime TestScanCommitsAreAtomic
+
+  - id: RT-012
+    claim: >-
+      A fast task never waits behind a slow task, and tasks run concurrently.
+    source: "#what-the-runtime-does"
+    tests:
+      - go ./runtime TestFastTaskDoesNotWaitForSlowTask
+      - go ./runtime TestTasksRunConcurrently
+    note: TestFastTaskDoesNotWaitForSlowTask skips on machines where the slow scan takes under 5 ms.
+
+  - id: RT-013
+    claim: >-
+      Two tasks writing the same tag resolve by commit order, last commit wins.
+    source: "#what-the-runtime-does"
+    tests:
+      - go ./runtime TestScanViewSnapshotAndCommit
+
+  - id: RT-014
+    claim: >-
+      The VM makes no allocation per builtin call, user-function call or
+      function-block step, so the scan loop gives the garbage collector no
+      work.
+    source: "#what-the-runtime-does"
+    tests: []
+    note: Verified by allocation benchmarks (b.ReportAllocs) that do not assert a zero count; no AllocsPerRun test.
+
+  - id: RT-015
+    claim: >-
+      A 1 ms task alone runs every scan with p99 lateness around 30 to 55 µs
+      on a busy desktop with a stock kernel, and a 20 ms task beside it
+      changes nothing it can see.
+    source: "#what-the-runtime-does"
+    tests: []
+    partial: true
+    note: Hardware-dependent latency figure measured with tools/jitter and docs/design/realtime.md; not CI-testable.
+
+  - id: RT-016
+    claim: >-
+      A task's cpu setting pins its thread to the given core on Linux, and
+      pinning to a nonexistent CPU fails.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./runtime TestApplySchedAffinity
+    note: Skips when only one CPU is allowed.
+
+  - id: RT-017
+    claim: >-
+      A task's priority requests SCHED_FIFO at that priority (1 to 99); a
+      priority outside the range is refused.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./runtime TestApplySchedFIFORefusalIsExplicit
+    partial: true
+    note: The refusal path and range check are asserted; successful SCHED_FIFO is only exercised where the CI user has the capability (the refusal test skips when granted).
+
+  - id: RT-018
+    claim: >-
+      A refused SCHED_FIFO or pin request is loud: the error names the fix
+      (CAP_SYS_NICE, setcap, ulimit -r), the refusal is recorded in the
+      task's sched stats (which the dashboard shows as REFUSED), and the task
+      runs at normal priority.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./runtime TestApplySchedFIFORefusalIsExplicit
+      - go ./runtime TestRunReportsSched
+    partial: true
+    note: The REFUSED dashboard label (a Svelte component) and the logged error line are not covered by a Go test.
+
+  - id: RT-019
+    claim: >-
+      Run reports the applied or refused placement (CPUs, priority, error) in
+      Stats for the main task and each task.
+    source: "#priority-and-pinning"
+    tests:
+      - go ./runtime TestRunReportsSched
+
+  - id: RT-020
+    claim: >-
+      SCHED_FIFO priority reduces p99 lateness from 55 µs to 20 µs and the
+      worst case from 2.3 ms to 0.3 ms on the busy desktop; cpu alone worsens
+      p99 to 300 to 400 µs.
+    source: "#priority-and-pinning"
+    tests: []
+    partial: true
+    note: Hardware and load dependent measurement; not CI-testable.
+
+  - id: RT-021
+    claim: >-
+      A task that continuously overruns its period under the kernel RT
+      throttle (95 percent of every second) shows as missed slots.
+    source: "#priority-and-pinning"
+    tests: []
+    partial: true
+    note: Depends on kernel sched_rt_runtime_us; not CI-testable. Missed-slot counting itself is covered by TestRunLoopHoldsScheduleAndCountsMissed.
+
+  - id: RT-022
+    claim: >-
+      Kernel boot parameters (isolcpus, nohz_full, rcu_nocbs, irqaffinity)
+      keep a pinned core quiet.
+    source: "#keeping-a-core-quiet"
+    tests: []
+    partial: true
+    note: Kernel configuration guidance, not a runtime behaviour a test can falsify.
+
+  - id: RT-023
+    claim: >-
+      With GOGC=off and a memory limit, GC collections drop from 448 a minute
+      with a 2.1 ms worst pause to 12 with an 82 µs worst pause under 50 MB/s
+      of allocation elsewhere.
+    source: "#the-garbage-collector"
+    tests: []
+    partial: true
+    note: Hardware and workload dependent measurement; not CI-testable.
+
+  - id: RT-024
+    claim: >-
+      tools/jitter runs a mixed resource (1 ms loopback I/O task, 10 ms task,
+      slow task, allocation-heavy task) on the real scheduler and writes a
+      report with machine, kernel, Go version and settings beside the
+      numbers.
+    source: "#measuring-it-yourself"
+    tests: []
+    note: No test for the jitter tool.

@@ -1,0 +1,616 @@
+page: website/src/content/docs/languages/structured-text.mdx
+title: Structured Text
+prefix: ST
+claims:
+  - id: ST-001
+    claim: >-
+      Statements evaluate top to bottom, so a value assigned on one line is
+      what the next line reads in the same scan.
+    source: "#a-program-top-to-bottom"
+    tests:
+      - go ./lang/st TestLowerRealArithmetic
+      - go ./lang/ir TestIfElse
+      - go ./lang/ir TestForSum
+    partial: true
+    note: >-
+      Ordering is exercised implicitly by every program test; no test asserts
+      "write then read in the same scan" as its subject.
+
+  - id: ST-002
+    claim: >-
+      Program-local VAR keeps its value from scan to scan.
+    source: "#a-program-top-to-bottom"
+    tests:
+      - go ./lang/ir TestRetainedAccumulator
+      - go ./lang/st TestLowerRetainedAccumulator
+      - go ./lang/conformance TestConformance/st-var-temp
+
+  - id: ST-003
+    claim: >-
+      In a manifest project every tag in nautilus.yaml is in scope in every
+      program without a VAR_EXTERNAL declaration, typed by its type: (or its
+      init:).
+    source: "#a-program-top-to-bottom"
+    tests:
+      - go ./lang/st TestLowerImplicitGlobals
+      - go ./lang/st TestImplicitGlobalsBindOnUse
+      - go ./lang/st TestTagTypesAndUntypedTags
+
+  - id: ST-004
+    claim: >-
+      A VAR_EXTERNAL that names a manifest tag must agree with the tag's
+      type.
+    source: "#a-program-top-to-bottom"
+    tests:
+      - go ./lang/st TestLowerExplicitGlobalShadowsImplicit
+    partial: true
+    note: >-
+      Only shadowing of the implicit binding is tested; no test asserts the
+      type-mismatch error between a VAR_EXTERNAL and the manifest type.
+
+  - id: ST-005
+    claim: >-
+      Naming a tag binds it in the tag store rather than creating it, and
+      reading a tag nothing has ever written faults the scan with "undefined
+      tag".
+    source: "#a-program-top-to-bottom"
+    tests: []
+    note: >-
+      Only the runtime's SetPath/force "undefined tag" errors are tested; no
+      test runs a program that reads a never-written tag and asserts the scan
+      fault.
+
+  - id: ST-006
+    claim: >-
+      A FUNCTION_BLOCK sees no tag it does not declare in its own
+      VAR_EXTERNAL.
+    source: "#a-program-top-to-bottom"
+    tests:
+      - go ./lang/st TestMigrateProgramGlobals_SkipsFunctionBlockFiles
+      - go ./lang/st TestMigrateProgramGlobals_SkipsFBTypeGlobals
+    partial: true
+    note: >-
+      The migration tests show globals are not injected into FB files; no
+      test asserts the compile error for an FB naming an undeclared tag.
+
+  - id: ST-007
+    claim: >-
+      The declaration sections VAR, VAR_INPUT, VAR_OUTPUT, VAR_IN_OUT,
+      VAR_TEMP, VAR_GLOBAL and VAR_EXTERNAL parse, each closed by END_VAR,
+      with RETAIN or CONSTANT allowed after the section keyword.
+    source: "#declarations"
+    tests:
+      - go ./lang/st TestParseVarBlockKinds
+      - go ./lang/st TestParseVarRetainConstant
+
+  - id: ST-008
+    claim: >-
+      VAR_GLOBAL and VAR_EXTERNAL resolve identically: both name a tag in the
+      store.
+    source: "#declarations"
+    tests:
+      - go ./lang/st TestLowerGlobalVar
+      - go ./lang/ir TestGlobalReadWrite
+    partial: true
+    note: Only VAR_GLOBAL-as-tag is exercised; no test compares the two forms.
+
+  - id: ST-009
+    claim: >-
+      A declared initial value (Gain : REAL := 2.0;) is where the variable
+      starts, in a PROGRAM, in every FUNCTION_BLOCK instance, and on every
+      FUNCTION call.
+    source: "#declarations"
+    tests:
+      - go ./lang/st TestUserFB_InitialValues
+      - go ./lang/st TestUserFunc_InitialValues
+      - go ./acceptance TestFBVarConstantWritesBack
+    partial: true
+    note: >-
+      FB and FUNCTION initial values are tested; a PROGRAM VAR initial value
+      is only covered incidentally (e.g. TestLowerIntToRealPromotion).
+
+  - id: ST-010
+    claim: >-
+      An initial value (:=) on a VAR_GLOBAL or VAR_EXTERNAL is a compile
+      error; the tag's init: in the manifest sets it instead.
+    source: "#declarations"
+    tests:
+      - go ./lang/st TestExternalInitialValueRejected
+    partial: true
+    note: Tested for VAR_EXTERNAL only, not for VAR_GLOBAL.
+
+  - id: ST-011
+    claim: >-
+      VAR_TEMP starts every scan of a program, and every call of a function
+      block or function, at its initial value (or zero), never at what the
+      last execution left.
+    source: "#declarations"
+    tests:
+      - go ./lang/conformance TestConformance/st-var-temp
+      - go ./lang/st TestVarTempResetsEveryScan
+      - go ./lang/st TestVarTempResetsEveryFBCall
+      - go ./lang/st TestVarTempInFunction
+
+  - id: ST-012
+    claim: >-
+      VAR CONSTANT is a named value folded at compile time; assigning one is a
+      compile error.
+    source: "#declarations"
+    tests:
+      - go ./lang/st TestConstantCannotBeWritten
+      - go ./lang/st TestConstantInBoundsAndInitialValues
+      - go ./lang/conformance TestConstantsAndMembersAreNotWritable
+
+  - id: ST-013
+    claim: >-
+      VAR_GLOBAL CONSTANT in a library file declares project constants every
+      POU sees; a constant is not a tag.
+    source: "#declarations"
+    tests:
+      - go ./lang/st TestGlobalConstantsVisibleEverywhere
+      - go ./lang/st TestGlobalConstantsLibraryAlone
+      - go ./lang/st TestGlobalConstantCannotBeWritten
+      - go ./lang/st TestLocalShadowsGlobalConstant
+      - go ./lang/conformance TestConformance/st-global-constants
+
+  - id: ST-014
+    claim: >-
+      A standalone VAR_GLOBAL block at the top of a library file (a Codesys
+      gvl.st) declares globals for every program; one the manifest does not
+      declare becomes a state tag starting at the zero of its type.
+    source: "#declarations"
+    tests:
+      - go ./lang/st TestFileScopeVarGlobalAheadOfProgram
+    partial: true
+    note: >-
+      Parsing/lowering of the file-scope block is tested; the creation of a
+      zero-valued state tag for an undeclared global is not asserted.
+
+  - id: ST-015
+    claim: >-
+      The elementary types BOOL, SINT..LINT/USINT..ULINT/BYTE..LWORD, REAL,
+      LREAL, TIME, LTIME, STRING, WSTRING, CHAR and WCHAR are accepted.
+    source: "#declarations"
+    tests:
+      - go ./lang/st TestKeywordAndTypeNames
+      - go ./lang/st TestResolveTypeName
+    partial: true
+    note: Names are listed and resolved; WSTRING/CHAR/WCHAR runtime behaviour is untested.
+
+  - id: ST-016
+    claim: >-
+      All integer kinds share one 64-bit representation, so a declared width
+      documents intent without narrowing (INT does not wrap at 16 bits, DINT
+      not at 32).
+    source: "#declarations"
+    tests:
+      - go ./lang/conformance TestConformance/st-int-width
+      - go ./lang/conformance TestConformance/st-bitwise/bits above 32 survive - the width is 64 bits
+
+  - id: ST-017
+    claim: TIME counts milliseconds.
+    source: "#declarations"
+    tests:
+      - go ./lang/conformance TestConformance/fn-conversions/TIME is milliseconds in both directions
+      - go ./lang/conformance TestConformance/st-conversions-matrix/TIME is milliseconds, and wraps like any integer when narrowed
+      - go ./lang/ir TestParseDuration
+
+  - id: ST-018
+    claim: >-
+      ARRAY[lo..hi] OF T takes several comma-separated dimensions and any
+      element type, including a UDT or a function block, with arbitrary lower
+      bounds.
+    source: "#declarations"
+    tests:
+      - go ./lang/st TestLowerArrayOneBasedIndexing
+      - go ./lang/st TestLowerArrayArbitraryLowerBound
+      - go ./lang/st TestLowerMultiDimArray
+      - go ./lang/st TestFBInstanceArray
+      - go ./lang/st TestParseMultiDimArray
+
+  - id: ST-019
+    claim: >-
+      Array bounds are integer constants: a literal, a named constant, or
+      arithmetic on them (ARRAY[1..N_TANKS]).
+    source: "#declarations"
+    tests:
+      - go ./lang/st TestConstantInBoundsAndInitialValues
+      - go ./lang/conformance TestConformance/st-global-constants/an INT constant from a constant expression sizes an array and bounds a loop
+
+  - id: ST-020
+    claim: >-
+      TYPE ... END_TYPE declares a STRUCT, an alias for another type, or an
+      enumeration; enumeration members are used as Mode#Run or plain Run and
+      shown by name in live values.
+    source: "#declarations"
+    tests:
+      - go ./lang/st TestParseStructTypeDecl
+      - go ./lang/st TestEnumBasics
+      - go ./lang/st TestEnumAmbiguousMemberResolvedByContext
+      - go ./lang/conformance TestConformance/st-enum
+      - go ./runtime TestEnumTagsRenderByName
+    partial: true
+    note: Struct and enum are covered; no test for a TYPE alias of another type.
+
+  - id: ST-021
+    claim: >-
+      A struct-typed VAR_EXTERNAL tag is written one field at a time
+      (P101.Running := TRUE) or whole, and each field write reaches the tag
+      store as a member write.
+    source: "#declarations"
+    tests:
+      - go ./lang/st TestExternalStructFieldAssignment
+      - go ./lang/st TestVarInOutExternalStructField
+      - go ./lang/st TestLowerNestedAggregateAssign
+      - go ./runtime TestSetPathNestedMember
+    partial: true
+    note: Field assignment lowers correctly; the member-write path to the store is tested via SetPath, not from an ST program.
+
+  - id: ST-022
+    claim: >-
+      Literals cover decimals and exponents (1.5e3), based integers (16#FF,
+      2#1010, 8#777), typed forms (INT#42, BOOL#TRUE, STRING#'hi') and
+      durations (T#5s, T#500ms, T#1h30m).
+    source: "#declarations"
+    tests:
+      - go ./lang/st TestParseBasedNumbers
+      - go ./lang/st TestParseTypedLiterals
+      - go ./lang/st TestParseTimeLiterals
+      - go ./lang/st TestLowerBasedLiteral
+      - go ./lang/ir TestParseDuration
+    partial: true
+    note: No test for the exponent literal form (1.5e3).
+
+  - id: ST-023
+    claim: Block comments (* ... *) nest, and // comments to end of line.
+    source: "#declarations"
+    tests:
+      - go ./lang/st TestBlockComment_NestedTwoLevels
+      - go ./lang/st TestBlockComment_NestedThreeLevels
+      - go ./lang/st TestLineComment_StillWorks
+      - go ./lang/st TestBlockComment_Unterminated_SimpleCase
+
+  - id: ST-024
+    claim: >-
+      RETAIN parses and changes nothing at runtime: every program VAR and
+      function block instance already keeps its value scan to scan.
+    source: "#declarations"
+    tests:
+      - go ./lang/st TestParseVarRetainConstant
+    partial: true
+    note: Parsing only; "changes nothing at runtime" is not asserted.
+
+  - id: ST-025
+    claim: >-
+      A warm swap carries program VAR and FB instance state across an online
+      edit by name and type.
+    source: "#declarations"
+    tests:
+      - go ./runtime TestSwapWarmCarriesRetainedState
+      - go ./runtime TestSwapWarmTypeChangeResets
+
+  - id: ST-026
+    claim: >-
+      IF/ELSIF/ELSE, CASE, FOR ... BY, WHILE, REPEAT ... UNTIL, EXIT, CONTINUE
+      and RETURN execute with their standard meaning.
+    source: "#statements-and-expressions"
+    tests:
+      - go ./lang/st TestLowerIfElsif
+      - go ./lang/st TestLowerForLoopSum
+      - go ./lang/st TestLowerWhileWithExit
+      - go ./lang/st TestLowerContinueSkipsEven
+      - go ./lang/st TestLowerRepeatUntil
+      - go ./lang/ir TestReturnEarly
+
+  - id: ST-027
+    claim: >-
+      A CASE label is a constant (literal, named constant or enumeration
+      member), a comma list, or an inclusive lo..hi range; a value outside
+      every label falls to ELSE.
+    source: "#statements-and-expressions"
+    tests:
+      - go ./lang/st TestLowerCaseMultipleValues
+      - go ./lang/st TestLowerCaseRanges
+      - go ./lang/st TestCaseConstantLabelForms
+      - go ./lang/st TestCaseNamedConstantLabels
+      - go ./lang/conformance TestConformance/st-case-constants
+      - go ./lang/conformance TestConformance/st-enum/CASE labels and comparisons on members, qualified and not
+
+  - id: ST-028
+    claim: >-
+      Two CASE labels with the same value, or overlapping ranges, are a
+      compile error; a non-constant label is a compile error.
+    source: "#statements-and-expressions"
+    tests:
+      - go ./lang/st TestCaseDuplicateLabelValues
+      - go ./lang/st TestCaseLabelMustBeConstant
+      - go ./lang/conformance TestCaseDuplicateConstantLabelDiagnosed
+
+  - id: ST-029
+    claim: >-
+      Assignment is :=, equality is =, and inequality is <>.
+    source: "#statements-and-expressions"
+    tests:
+      - go ./lang/st TestLowerScalarAssign
+      - go ./lang/st TestLowerIfElsif
+    partial: true
+    note: Exercised incidentally; no dedicated test for the = and <> operators.
+
+  - id: ST-030
+    claim: >-
+      REGION name ... END_REGION groups statements for folding and the
+      Outline; it opens no scope and runs its statements in order.
+    source: "#statements-and-expressions"
+    tests:
+      - go ./lang/st TestRegionIsANoOpGrouping
+      - go ./lang/st TestRegionOpensNoScope
+      - go ./lang/st TestRegionInFBAndCase
+      - go ./lang/st TestRegionErrors
+      - go ./lang/conformance TestConformance/st-region
+
+  - id: ST-031
+    claim: >-
+      Operator precedence, tightest first: unary NOT and -; * / MOD; + -;
+      the comparisons; AND; XOR; OR.
+    source: "#statements-and-expressions"
+    tests: []
+    note: >-
+      The ST parser has no precedence test; the only precedence tests are the
+      ladder expression parser's (a different grammar).
+
+  - id: ST-032
+    claim: An INT widens to REAL where one is expected.
+    source: "#statements-and-expressions"
+    tests:
+      - go ./lang/st TestLowerIntToRealPromotion
+      - go ./lang/ir TestSeedFromInitAcceptsIntForReal
+    partial: true
+    note: The second test covers seeding from a manifest init, not ST expressions.
+
+  - id: ST-033
+    claim: >-
+      The other direction (REAL into an INT target) is a compile error;
+      narrowing goes through a conversion.
+    source: "#statements-and-expressions"
+    tests:
+      - go ./lang/st TestConversionCompileErrors
+      - go ./lang/st TestLowerAssignRealToBool
+    partial: true
+    note: >-
+      Tests assert related "cannot assign / cannot pass" errors; none assigns
+      a REAL expression directly to an INT variable.
+
+  - id: ST-034
+    claim: >-
+      REAL_TO_DINT (or TO_DINT) rounds to nearest with ties to even (2.5
+      becomes 2, 3.5 becomes 4); TRUNC_DINT truncates toward zero.
+    source: "#statements-and-expressions"
+    tests:
+      - go ./lang/conformance TestConformance/fn-conversions/REAL_TO_INT rounds half to even, not half away from zero
+      - go ./lang/conformance TestConformance/fn-conversions/TRUNC goes toward zero for both signs
+      - go ./lang/conformance TestConformance/st-conversions-matrix/REAL to integer rounds half to even; TRUNC goes toward zero
+      - go ./lang/st TestBuiltinRealRoundingTiesToEven
+      - go ./lang/st TestBuiltinTruncStaysTruncation
+
+  - id: ST-035
+    claim: >-
+      Every IEC <A>_TO_<B> conversion between the elementary types exists.
+    source: "#statements-and-expressions"
+    tests:
+      - go ./lang/ir TestConversionMatrixShape
+      - go ./lang/st TestConversionMatrixThroughST
+      - go ./lang/conformance TestConformance/st-conversions-matrix
+
+  - id: ST-036
+    claim: >-
+      Integer narrowing wraps to the target width (DINT_TO_INT(70000) is
+      4464).
+    source: "#statements-and-expressions"
+    tests:
+      - go ./lang/conformance TestConformance/st-conversions-matrix/integer narrowing wraps at the target width (DINT to INT, UINT, BYTE)
+      - go ./lang/ir TestConversionSemantics
+
+  - id: ST-037
+    claim: >-
+      A REAL or STRING with no value in the target type (out of range,
+      unparseable, non-finite) faults the scan.
+    source: "#statements-and-expressions"
+    tests:
+      - go ./lang/conformance TestConversionRangeFaults
+      - go ./lang/conformance TestStringParseFaults
+      - go ./lang/ir TestConversionFaults
+
+  - id: ST-038
+    claim: >-
+      A function block instance is declared like a variable (dwell : TON;)
+      and invoked as its own statement with named arguments; => copies an
+      output into a target at the call site and dwell.Q reads one anywhere.
+    source: "#statements-and-expressions"
+    tests:
+      - go ./lang/st TestFBTONReachesQAfterPT
+      - go ./lang/st TestUserFB_OutputBinding
+      - go ./lang/st TestUserFB_OutputBindingRejectsInput
+      - go ./lang/st TestFBCallWithoutInstanceErrors
+      - go ./lang/conformance TestConformance/fb-ton
+
+  - id: ST-039
+    claim: >-
+      Struct fields and array elements use .field and [i] on either side of an
+      assignment.
+    source: "#statements-and-expressions"
+    tests:
+      - go ./lang/st TestLowerUDTFieldAccess
+      - go ./lang/st TestLowerNestedAggregateAssign
+      - go ./lang/st TestParseArrayIndexAssignmentTarget
+      - go ./lang/st TestStructAssignmentIsACopy
+
+  - id: ST-040
+    claim: An array index outside the declared bounds faults the scan.
+    source: "#statements-and-expressions"
+    tests: []
+    note: >-
+      Only the runtime SetPath bounds error (lang/ir setfield) is tested; no
+      test runs an ST array access out of range and asserts the scan fault.
+
+  - id: ST-041
+    claim: >-
+      FUNCTION is stateless and returns one value assigned to the function's
+      own name; FUNCTION_BLOCK is stateful and each instance owns its slots.
+    source: "#functions-and-function-blocks"
+    tests:
+      - go ./lang/st TestUserFunc_DeclareAndCall
+      - go ./lang/st TestUserFunc_NoState
+      - go ./lang/st TestUserFB_DeclareAndCall
+      - go ./lang/st TestUserFB_RetainsState
+      - go ./lang/st TestUserFunc_NamedArgs
+
+  - id: ST-042
+    claim: >-
+      FUNCTION_BLOCK pins may be any type, a user TYPE included, and a struct
+      input is copied in.
+    source: "#functions-and-function-blocks"
+    tests:
+      - go ./lang/st TestFBStructPins
+      - go ./lang/st TestFBStructPinFromLibraryFile
+      - go ./lang/st TestFBStructInputIsCopied
+      - go ./lang/st TestFBUnknownPinTypeStillErrors
+
+  - id: ST-043
+    claim: >-
+      A VAR_IN_OUT pin is a reference: the caller binds a variable with :=
+      and the block's writes land in that variable when the call returns.
+    source: "#functions-and-function-blocks"
+    tests:
+      - go ./lang/st TestVarInOutScalar
+      - go ./lang/st TestVarInOutStructLocal
+      - go ./lang/st TestUserFB_VarConstant_InOutWriteBack
+
+  - id: ST-044
+    claim: >-
+      A VAR_EXTERNAL UDT bound to a VAR_IN_OUT pin round-trips through the tag
+      store as one whole-struct write.
+    source: "#functions-and-function-blocks"
+    tests:
+      - go ./runtime TestVarInOutStructTagRoundTrip
+      - go ./lang/st TestVarInOutExternalStructTag
+
+  - id: ST-045
+    claim: >-
+      Every VAR_IN_OUT must be bound at every call, to an assignable of
+      exactly the pin's type.
+    source: "#functions-and-function-blocks"
+    tests:
+      - go ./lang/st TestVarInOutMustBeBound
+      - go ./lang/st TestVarInOutTypeMustMatch
+      - go ./lang/st TestVarInOutRejectsNonLValue
+
+  - id: ST-046
+    claim: >-
+      A .st file with no PROGRAM keyword is a library of TYPE, FUNCTION and
+      FUNCTION_BLOCK declarations in scope for every program in the directory;
+      blocks may also be written in .ld/.fbd libraries, composed after the ST
+      libraries.
+    source: "#functions-and-function-blocks"
+    tests:
+      - go ./runtime TestLibrariesUserFBFromFBD
+      - go ./lang/st TestFBStructPinFromLibraryFile
+      - go ./lang/ld TestLadderFunctionBlockFromST
+      - go ./lang/st TestGlobalConstantsLibraryAlone
+    partial: true
+    note: Composition order (ST libraries first) is not asserted on its own.
+
+  - id: ST-047
+    claim: >-
+      naut check prints gcc-style file:line:col: message diagnostics and
+      exits non-zero when it finds any.
+    source: "#tooling"
+    tests:
+      - go ./lang/st TestParseErrorPos
+      - go ./lang/st TestLowerErrorPinsOffendingName
+    partial: true
+    note: >-
+      Positions are tested at the compiler level; the CLI's output format and
+      exit code are not asserted from this page.
+
+  - id: ST-048
+    claim: >-
+      Downloading a program warm-swaps it into a running controller with
+      state carried across, and a failed compile leaves the running program
+      untouched.
+    source: "#tooling"
+    tests:
+      - go ./runtime TestSwapWarmCarriesRetainedState
+      - go ./runtime TestSwapWarmCompileErrorLeavesRunning
+
+  - id: ST-049
+    claim: >-
+      A program in a *_test.yaml runs on a virtual clock and tests assert on
+      tags over virtual time.
+    source: "#tooling"
+    tests:
+      - go ./acceptance TestVirtualDtIsExact
+      - go ./acceptance TestRunsAreReproducible
+
+  - id: ST-050
+    claim: Pointers and references (REF_TO, dereference) are not supported.
+    source: "#not-supported"
+    tests: []
+    note: No test asserts the rejection.
+
+  - id: ST-051
+    claim: >-
+      VAR_ACCESS, CONFIGURATION, RESOURCE and TASK declarations are not
+      supported; tasks come from nautilus.yaml or Go composition.
+    source: "#not-supported"
+    tests: []
+    note: No test asserts the rejection.
+
+  - id: ST-052
+    claim: >-
+      Subrange types are not supported; TYPE declares only a STRUCT, an
+      enumeration, or an alias.
+    source: "#not-supported"
+    tests: []
+    note: No test asserts the rejection.
+
+  - id: ST-053
+    claim: >-
+      DATE, TOD, TIME_OF_DAY, DT and DATE_AND_TIME are rejected as unknown
+      scalar types, and their literals do not evaluate.
+    source: "#not-supported"
+    tests: []
+    note: >-
+      No rejection test. lang/st TestKeywordAndTypeNames asserts ScalarTypeNames
+      contains "TOD", which may contradict the page; worth checking.
+
+  - id: ST-054
+    claim: Exponentiation with ** is not supported; EXPT(base, exp) is used instead.
+    source: "#not-supported"
+    tests:
+      - go ./lang/conformance TestConformance/fn-trig-log
+    partial: true
+    note: >-
+      EXPT working is covered by fn-trig-log; the rejection of ** in ST is
+      not asserted.
+
+  - id: ST-055
+    claim: Length-qualified strings (STRING[80]) are a parse error.
+    source: "#not-supported"
+    tests: []
+    note: No test asserts the rejection.
+
+  - id: ST-056
+    claim: >-
+      Aggregate initializers (:= [1, 2, 3]) in a declaration are a parse
+      error.
+    source: "#not-supported"
+    tests: []
+    note: No test asserts the rejection.
+
+  - id: ST-057
+    claim: >-
+      SCL's # local prefix is rejected with a message saying to drop the #.
+    source: "#not-supported"
+    tests:
+      - go ./lang/st TestHashPrefixRejectedEverywhere
+      - go ./lang/conformance TestHashPrefixDiagnosed

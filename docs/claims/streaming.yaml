@@ -1,0 +1,340 @@
+page: website/src/content/docs/guides/streaming.md
+title: Streaming and data quality
+prefix: STR
+claims:
+  - id: STR-001
+    claim: >-
+      With ?delta=1 the first frame is a complete snapshot (full true, seq 1)
+      and every later frame carries only the tags whose value changed since
+      the previous frame sent to that client; a quiet tick carries no tags.
+    source: "#delta-frames"
+    tests:
+      - go ./server TestDeltaStreamSendsOnlyWhatChanged
+
+  - id: STR-002
+    claim: >-
+      Rewriting a tag with the same value is not a change and produces no
+      delta.
+    source: "#delta-frames"
+    tests:
+      - go ./server TestDeltaStreamSendsOnlyWhatChanged
+
+  - id: STR-003
+    claim: >-
+      seq is the client's own frame counter, starting at 1 for each new
+      connection.
+    source: "#delta-frames"
+    tests:
+      - go ./server TestDeltaStreamSendsOnlyWhatChanged
+    partial: true
+    note: Counting from 1 and incrementing are asserted; reset on a new connection is not asserted separately (TestDeltaIsPerClient covers a second connection's first frame being full).
+
+  - id: STR-004
+    claim: >-
+      Deltas are per client: two clients at different points in the stream each
+      receive their own correct delta.
+    source: "#delta-frames"
+    tests:
+      - go ./server TestDeltaIsPerClient
+
+  - id: STR-005
+    claim: >-
+      A full frame (replace, not merge) is sent when the controller's set of
+      tag names changes, and the stream then returns to deltas.
+    source: "#delta-frames"
+    tests:
+      - go ./server TestDeltaResyncsWhenTheTagSetChanges
+
+  - id: STR-006
+    claim: >-
+      A full resync frame is sent periodically (30 s by default,
+      configurable via ResyncInterval) and a negative interval disables it.
+    source: "#why-it-cannot-lose-an-update"
+    tests:
+      - go ./server TestDeltaPeriodicResync
+      - go ./server TestResyncCanBeDisabled
+    partial: true
+    note: The 30 s default value is not asserted.
+
+  - id: STR-007
+    claim: >-
+      A delta client's merged state always equals the controller's store, even
+      with writes running concurrently with broadcasts; no update is lost.
+    source: "#why-it-cannot-lose-an-update"
+    tests:
+      - go ./server TestDeltaMergedStateMatchesTheStore
+
+  - id: STR-008
+    claim: >-
+      A frame dropped for a slow client costs latency, never content: the
+      client's generation advances only when a frame is enqueued, so the next
+      frame carries what the dropped one would have.
+    source: "#why-it-cannot-lose-an-update"
+    tests: []
+    note: No test fills a client's queue to force a dropped frame and checks the next frame catches up; the concurrent-writes test covers ordering but not drops.
+
+  - id: STR-009
+    claim: >-
+      A client that asks for nothing gets the stream as it always was: whole
+      frames, no seq, no full marker.
+    source: "#deltas-are-opt-in"
+    tests:
+      - go ./server TestDefaultStreamIsUnchanged
+      - go ./server TestStreamDeliversFrames
+
+  - id: STR-010
+    claim: ?full=1 forces whole frames even alongside ?delta=1.
+    source: "#deltas-are-opt-in"
+    tests:
+      - go ./server TestFullParamOverridesDelta
+
+  - id: STR-011
+    claim: >-
+      A delta frame keeps the headline diagnostics (ts, scans) on every tick.
+    source: "#delta-frames"
+    tests:
+      - go ./server TestDeltaFrameKeepsDiagnostics
+
+  - id: STR-012
+    claim: >-
+      A delta frame is about 51x, 17x and 4.8x smaller than a full frame at 1
+      percent, 5 percent and 20 percent churn on 10,000 tags.
+    source: "#what-it-costs"
+    tests: []
+    note: Measured by a benchmark (FrameBytes), not asserted by any test; the ratios are not CI-checked.
+
+  - id: STR-013
+    claim: >-
+      With ?blocks=delta, the drivers, alarms and scan blocks are absent from a
+      delta frame unless they changed: drivers when their hash of operator
+      visible fields moves, alarms when rev moves, scan on a cadence.
+    source: "#the-frame-floor"
+    tests:
+      - go ./server TestDeltaStreamGatesNonTagBlocks
+
+  - id: STR-014
+    claim: >-
+      The driver block ignores free-running readouts (volatile metrics, the
+      observation stamp, re-rendered ages) in its change hash, but a state,
+      message, error, device or non-volatile metric change does change it.
+    source: "#the-frame-floor"
+    tests:
+      - go ./server TestHashDriversIgnoresWhatFreeRuns
+      - go ./server TestHashDriversStableWhenEmpty
+
+  - id: STR-015
+    claim: >-
+      VolatileExtra excludes nested churn by key or by path (with * matching
+      any key or list element), and a path that matches nothing excludes
+      nothing.
+    source: "#the-frame-floor"
+    tests:
+      - go ./server TestHashDriversHonoursVolatileExtra
+      - go ./server TestHashDriversIgnoresNestedChurn
+      - go ./server TestVolatileExtraPathForms
+
+  - id: STR-016
+    claim: >-
+      The scan block rides a cadence (DiagnosticsInterval, 3 s by default)
+      while the headline rides every frame; a negative interval sends the scan
+      block on every frame.
+    source: "#the-frame-floor"
+    tests:
+      - go ./server TestScanBlockRidesItsCadence
+      - go ./server TestScanBlockOnEveryFrameWhenDisabled
+    partial: true
+    note: The 3 s default is not asserted.
+
+  - id: STR-017
+    claim: >-
+      A full frame carries all blocks (scan, drivers, alarms), so a client is
+      never more than one resync from a block it can vouch for.
+    source: "#the-frame-floor"
+    tests:
+      - go ./server TestDeltaResyncCarriesEveryBlock
+
+  - id: STR-018
+    claim: >-
+      A client's record of which blocks it holds advances only when a frame is
+      enqueued, so a dropped frame re-offers the block rather than losing it.
+    source: "#the-frame-floor"
+    tests: []
+    note: Only the connect-repeat superset is tested; no test drops a frame and checks the block is re-offered.
+
+  - id: STR-019
+    claim: quality is not gated; it is sent whole on every delta frame, and clears when the entries return to good.
+    source: "#the-frame-floor"
+    tests:
+      - go ./server TestDeltaFrameCarriesQuality
+
+  - id: STR-020
+    claim: >-
+      A frame floor of 4.3 MB a minute drops to about 0.15 MB (about 28x
+      less) for a client subscribed to no tags against a 55-node driver
+      status.
+    source: "#what-the-floor-costs-now"
+    tests: []
+    note: Benchmark figure (FrameFloor); not asserted by a test.
+
+  - id: STR-021
+    claim: >-
+      Driver freshness travels as moments: metrics[].atMs and a server-stamped
+      asOfMs on the status, so a client renders age as asOfMs minus atMs.
+    source: "#ages-move-to-the-client"
+    tests:
+      - go ./server TestDeltaStreamGatesNonTagBlocks
+    partial: true
+    note: Only asserts asOfMs is stamped on a driver status; atMs is not asserted on a real adapter, and the client-side age rendering is not a Go test.
+
+  - id: STR-022
+    claim: >-
+      Merging blocks is opt-in: a delta client that did not send ?blocks=delta
+      still gets every block on every frame, and a plain stream does too.
+    source: "#merging-blocks-is-opt-in-separately"
+    tests:
+      - go ./server TestDeltaStreamWithoutOptInCarriesEveryBlock
+      - go ./server TestPlainStreamCarriesEveryBlockEveryFrame
+
+  - id: STR-023
+    claim: /api/meta reports blockDeltas true on a controller that understands ?blocks=delta.
+    source: "#merging-blocks-is-opt-in-separately"
+    tests: []
+    note: TestMetaAdvertisesQualityAndDeltas checks quality and deltas only, not blockDeltas.
+
+  - id: STR-024
+    claim: >-
+      ?tags= takes comma-separated globs matched with path.Match against the
+      whole dotted tag name, so Tank* matches Tank101 and Tank101.Level and
+      *.Level matches member addresses.
+    source: "#tag-filters"
+    tests:
+      - go ./server TestMatchAnySpansDottedNames
+      - go ./server TestTagFilterParsing
+
+  - id: STR-025
+    claim: >-
+      The tag filter applies to every frame including the first, to delta
+      streams (an out-of-filter change yields an empty delta), and to
+      /api/state.
+    source: "#tag-filters"
+    tests:
+      - go ./server TestStreamTagFilter
+      - go ./server TestFilteredDeltaStream
+      - go ./server TestStateTagFilter
+
+  - id: STR-026
+    claim: >-
+      Diagnostics, driver status and alarm counts are never filtered by a tag
+      filter.
+    source: "#tag-filters"
+    tests:
+      - go ./server TestStateTagFilter
+    partial: true
+    note: Asserts only that scan stats survive a filtered /api/state; drivers and alarms are not checked.
+
+  - id: STR-027
+    claim: A tag pattern that does not compile is a 400, not a silent match-nothing; an unbounded pattern list is refused.
+    source: "#tag-filters"
+    tests:
+      - go ./server TestBadTagPatternIsRejected
+      - go ./server TestTagFilterParsing
+
+  - id: STR-028
+    claim: >-
+      Frames carry a quality map holding only non-good entries (good is
+      absent), and a healthy plant omits the field entirely.
+    source: "#per-tag-quality"
+    tests:
+      - go ./server TestFrameOmitsQualityWhenEverythingIsGood
+      - go ./server TestFrameCarriesQuality
+      - go ./runtime TestQualityDropsGoodEntries
+      - go ./runtime TestQualityIsEmptyWhenHealthy
+
+  - id: STR-029
+    claim: >-
+      A name in quality need not be in tags: a notConnected source with no
+      value is still reported without inventing a tag value.
+    source: "#per-tag-quality"
+    tests:
+      - go ./server TestFrameCarriesQuality
+
+  - id: STR-030
+    claim: The quality wire tokens are good, stale, bad and notConnected.
+    source: "#per-tag-quality"
+    tests:
+      - go ./io TestQualityTokensAreStableWireFormat
+
+  - id: STR-031
+    claim: The quality map is filtered by the same tag filter, so a filtered stream never carries quality for a tag it is not sending.
+    source: "#tag-filters"
+    tests:
+      - go ./server TestQualityIsFiltered
+
+  - id: STR-032
+    claim: >-
+      A driver implementing io.QualityReporter is authoritative: whatever it
+      reports about a tag stands, including over the runtime's derived
+      staleness; io.Memory implements it.
+    source: "#where-it-comes-from"
+    tests:
+      - go ./runtime TestQualityFromDriverWins
+      - go ./io TestMemoryReportsQuality
+      - go ./io TestMemoryQualityIsIndependentOfValues
+      - go ./io TestMultiQualityMerges
+
+  - id: STR-033
+    claim: >-
+      For tags the driver said nothing about, a failed (or not yet happened)
+      input read makes every driver-bound input stale, and it clears when
+      reads recover.
+    source: "#where-it-comes-from"
+    tests:
+      - go ./runtime TestQualityDerivesStaleFromFailedReads
+      - go ./runtime TestQualityBeforeFirstScan
+
+  - id: STR-034
+    claim: A failed output write does not mark inputs stale.
+    source: "#where-it-comes-from"
+    tests:
+      - go ./runtime TestQualityIgnoresFailedWrites
+
+  - id: STR-035
+    claim: >-
+      The Sparkplug host driver reports node-scoped stale after NDEATH,
+      device-scoped stale on DDEATH, notConnected before birth, and stale for
+      a sweep-expired source.
+    source: "#where-it-comes-from"
+    tests:
+      - go ./sparkplug/host TestQualityPreBirthNotConnected
+      - go ./sparkplug/host TestQualityNDeathStaleScopedToNode
+      - go ./sparkplug/host TestQualityDeviceDeathStaleJustThatDevice
+      - go ./sparkplug/host TestQualityStaleSweepMarksStale
+      - go ./sparkplug/host TestQualityMissingMetricFromBirth
+
+  - id: STR-036
+    claim: >-
+      /api/meta reports quality true when the controller can report quality at
+      all (and false when nothing could ever be non-good), and deltas true.
+    source: "#the-capability-flag"
+    tests:
+      - go ./server TestMetaAdvertisesQualityAndDeltas
+      - go ./runtime TestReportsQuality
+
+  - id: STR-037
+    claim: >-
+      A dotted member path resolves to its root tag's quality; an unknown tag
+      is good.
+    source: "#from-the-hmi-kit"
+    tests:
+      - go ./runtime TestTagQualityResolvesDottedPathsToTheirRoot
+    note: The client-side RealtimeClient.quality() and delta merge (hmi/src/lib/delta.ts) are TypeScript and not covered by a Go test; the Go test covers the runtime resolution.
+    partial: true
+
+  - id: STR-038
+    claim: >-
+      The HMI client's delta merge keeps frame.tags complete and retains the
+      last scan, drivers and alarms blocks, and falls back to pass-through
+      against a controller without deltas.
+    source: "#from-the-hmi-kit"
+    tests: []
+    note: Client-side TypeScript behaviour with its own non-Go tests (hmi/src/lib/delta.ts); not in the Go or naut test results.
