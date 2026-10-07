@@ -4,7 +4,8 @@
 //	go run ./tools/evidence check
 //	    Validate every claim file against the source tree: schema, unique
 //	    ids, and that each referenced test function, conformance feature and
-//	    acceptance test exists. Runs in CI on every push.
+//	    acceptance test exists. Exits 1 on any problem. CI never gates a
+//	    PR on it: the runtime-evidence job reports it instead.
 //
 //	go test -json ./... | go run ./tools/evidence cat
 //	    Print a `go test -json` stream as the plain output it carries, and
@@ -14,8 +15,13 @@
 //	go run ./tools/evidence build -in evidence/ -cover cover.out -o evidence.json
 //	    Merge every job's results (go test -json files, naut-*.ndjson from
 //	    `naut test -json` tagged with "root") with the coverage profile and
-//	    the claims, and write the evidence file the site renders. -strict
-//	    fails when a claim names a test that no job reported.
+//	    the claims, and write the evidence file the site renders. Claim
+//	    problems are recorded, not fatal: a broken file is left out, a
+//	    broken reference reads "not reported". -strict exits 1 when there is
+//	    any problem or a reference no job reported (CI uses it on main to
+//	    drive the rolling issue). -baseline <evidence.json> compares with an
+//	    earlier run and -summary <file> writes the comparison as markdown
+//	    (CI's PR job summary).
 package main
 
 import (
@@ -61,11 +67,11 @@ func runCheck(args []string) error {
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
 	root := fs.String("root", ".", "repository root")
 	fs.Parse(args)
-	files, err := loadClaims(filepath.Join(*root, "docs", "claims"))
+	files, problems, err := loadClaims(filepath.Join(*root, "docs", "claims"))
 	if err != nil {
 		return err
 	}
-	errs := checkClaims(*root, files)
+	errs := append(problems, checkClaims(*root, files)...)
 	for _, e := range errs {
 		fmt.Fprintln(os.Stderr, e)
 	}
@@ -122,6 +128,7 @@ type Evidence struct {
 	Claims      []ClaimResult      `json:"claims"`
 	Verdicts    map[string]int     `json:"verdicts"`
 	Missing     []string           `json:"missing,omitempty"`
+	Problems    []string           `json:"problems,omitempty"` // claim files/refs that do not check
 	Naut        map[string]Summary `json:"naut,omitempty"`
 }
 
@@ -175,16 +182,16 @@ func runBuild(args []string) error {
 	in := fs.String("in", "evidence", "directory of go test -json files and naut-*.ndjson")
 	cover := fs.String("cover", "", "coverage profile (optional)")
 	outPath := fs.String("o", "evidence.json", "output file")
-	strict := fs.Bool("strict", false, "fail when a claim names a test no job reported")
+	strict := fs.Bool("strict", false, "exit 1 on any claim problem or a reference no job reported")
+	baseline := fs.String("baseline", "", "an earlier evidence.json to compare with (optional)")
+	summary := fs.String("summary", "", "write the run's claims summary as markdown here (optional)")
 	fs.Parse(args)
 
-	files, err := loadClaims(filepath.Join(*root, "docs", "claims"))
+	files, problems, err := loadClaims(filepath.Join(*root, "docs", "claims"))
 	if err != nil {
 		return err
 	}
-	if errs := checkClaims(*root, files); len(errs) > 0 {
-		return fmt.Errorf("docs/claims does not check (go run ./tools/evidence check):\n%s", strings.Join(errs, "\n"))
-	}
+	problems = append(problems, checkClaims(*root, files)...)
 	res := newResults()
 	if err := res.readDir(*in); err != nil {
 		return err
@@ -210,6 +217,7 @@ func runBuild(args []string) error {
 		Packages:    res.packages(cov),
 		Pages:       files,
 		Verdicts:    map[string]int{},
+		Problems:    problems,
 	}
 	for _, p := range ev.Packages {
 		t := &ev.Totals
@@ -246,7 +254,11 @@ func runBuild(args []string) error {
 		for _, c := range f.Claims {
 			cr := ClaimResult{ID: c.ID, File: f.File, Claim: strings.TrimSpace(c.Claim), Source: c.Source, Partial: c.Partial, Note: strings.TrimSpace(c.Note), Refs: []RefResult{}}
 			for _, t := range c.Tests {
-				ref, _ := parseRef(t) // checked above
+				ref, err := parseRef(t)
+				if err != nil { // reported in problems
+					cr.Refs = append(cr.Refs, RefResult{Ref: strings.TrimSpace(t), Status: "missing"})
+					continue
+				}
 				rr := res.lookup(ref)
 				if rr.Status == "missing" {
 					missing[ref.Raw] = true
@@ -271,13 +283,82 @@ func runBuild(args []string) error {
 		return err
 	}
 	fmt.Printf("%s: %d packages, %d tests + %d subtests, %d claims %v\n", *outPath, ev.Totals.Packages, ev.Totals.Tests, ev.Totals.Subtests, len(ev.Claims), ev.Verdicts)
+	for _, p := range ev.Problems {
+		fmt.Fprintln(os.Stderr, "problem:", p)
+	}
 	if len(ev.Missing) > 0 {
 		fmt.Fprintf(os.Stderr, "%d reference(s) matched no test result:\n  %s\n", len(ev.Missing), strings.Join(ev.Missing, "\n  "))
-		if *strict {
-			return fmt.Errorf("claims name tests no job ran (rename? subtest typo?)")
+	}
+	if *summary != "" {
+		var base *Evidence
+		if *baseline != "" {
+			if b, err := os.ReadFile(*baseline); err == nil {
+				base = &Evidence{}
+				if json.Unmarshal(b, base) != nil {
+					base = nil
+				}
+			}
+		}
+		if err := os.WriteFile(*summary, []byte(summarize(&ev, base)), 0o644); err != nil {
+			return err
 		}
 	}
+	if *strict && len(ev.Problems)+len(ev.Missing) > 0 {
+		return fmt.Errorf("%d claim problem(s), %d reference(s) no job reported", len(ev.Problems), len(ev.Missing))
+	}
 	return nil
+}
+
+// summarize renders a run's claims as markdown: verdict counts (with the
+// change from base when there is one), what does not check, and which
+// claims changed verdict.
+func summarize(ev, base *Evidence) string {
+	var b strings.Builder
+	b.WriteString("### Runtime claims\n\n")
+	b.WriteString("Informational: claims never fail a PR. On `main`, problems open the rolling \"claims out of date\" issue.\n\n")
+	b.WriteString("| verdict | claims |\n|---|--:|\n")
+	for _, v := range []string{"verified", "partial", "failing", "unrun", "gap"} {
+		n := ev.Verdicts[v]
+		cell := fmt.Sprint(n)
+		if base != nil {
+			if d := n - base.Verdicts[v]; d != 0 {
+				cell += fmt.Sprintf(" (%+d)", d)
+			}
+		}
+		fmt.Fprintf(&b, "| %s | %s |\n", v, cell)
+	}
+	if len(ev.Problems)+len(ev.Missing) == 0 {
+		b.WriteString("\nEvery claim checks and every reference matched a test result.\n")
+	}
+	list := func(title string, items []string) {
+		if len(items) == 0 {
+			return
+		}
+		fmt.Fprintf(&b, "\n**%s** (%d)\n\n", title, len(items))
+		for i, it := range items {
+			if i == 30 {
+				fmt.Fprintf(&b, "- … and %d more\n", len(items)-30)
+				break
+			}
+			fmt.Fprintf(&b, "- `%s`\n", it)
+		}
+	}
+	list("Claim problems", ev.Problems)
+	list("References no job reported (renamed or removed test?)", ev.Missing)
+	if base != nil {
+		was := map[string]string{}
+		for _, c := range base.Claims {
+			was[c.ID] = c.Verdict
+		}
+		var changed []string
+		for _, c := range ev.Claims {
+			if w, ok := was[c.ID]; ok && w != c.Verdict {
+				changed = append(changed, fmt.Sprintf("%s: %s → %s", c.ID, w, c.Verdict))
+			}
+		}
+		list("Verdicts changed since main", changed)
+	}
+	return b.String()
 }
 
 func verdict(c ClaimResult) string {

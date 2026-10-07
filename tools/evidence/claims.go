@@ -67,29 +67,31 @@ func parseRef(s string) (Ref, error) {
 // spaces in a subtest name to underscores.
 func (r Ref) GoName() string { return strings.ReplaceAll(r.Test, " ", "_") }
 
-// loadClaims reads every *.yaml under dir, sorted by file name.
-func loadClaims(dir string) ([]ClaimFile, error) {
+// loadClaims reads every *.yaml under dir, sorted by file name. A file
+// that does not parse is left out and reported in problems, so one broken
+// file never hides the rest; err is only for an unreadable directory.
+func loadClaims(dir string) (files []ClaimFile, problems []string, err error) {
 	paths, err := filepath.Glob(filepath.Join(dir, "*.yaml"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sort.Strings(paths)
-	var out []ClaimFile
 	for _, p := range paths {
 		b, err := os.ReadFile(p)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		var f ClaimFile
 		dec := yaml.NewDecoder(bytes.NewReader(b))
 		dec.KnownFields(true)
 		if err := dec.Decode(&f); err != nil {
-			return nil, fmt.Errorf("%s: %w", p, err)
+			problems = append(problems, fmt.Sprintf("docs/claims/%s: %v", filepath.Base(p), err))
+			continue
 		}
 		f.File = filepath.Base(p)
-		out = append(out, f)
+		files = append(files, f)
 	}
-	return out, nil
+	return files, problems, nil
 }
 
 var testFunc = regexp.MustCompile(`(?m)^func (Test\w+)\(`)

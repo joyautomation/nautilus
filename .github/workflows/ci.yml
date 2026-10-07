@@ -439,25 +439,74 @@ jobs:
   runtime-evidence:
     # Joins every job's test results to the claims inventory (docs/claims)
     # and keeps the result for the docs site's /verified/runtime/ pages,
-    # which bake the last green main run's artifact. -strict fails when a
-    # claim names a test no job ran, so a renamed subtest cannot leave a
-    # claim pointing at nothing.
+    # which bake the last green main run's artifact. Claims never block:
+    # the job is continue-on-error, a claim problem is only reported (the
+    # PR's job summary, compared with main's last evidence), and on main a
+    # problem opens or updates the rolling "claims out of date" issue,
+    # which a clean run closes.
     name: Runtime evidence — claims × test results
     needs: [go, sparkplug-tck, modbus-sim, snmp-sim, redfish-sim, prom-sim]
     runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: read # main's last evidence, for the PR comparison
+      issues: write # the rolling "claims out of date" issue
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version: '1.24'}
       - uses: actions/download-artifact@v4
         with: {pattern: evidence-*, path: evidence}
+      - name: main's last evidence (a PR is compared with it)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -n "$id" ]; then
+            gh run download "$id" --repo "$GITHUB_REPOSITORY" -n runtime-evidence -D "$RUNNER_TEMP/base" || echo "main's run $id has no runtime-evidence artifact"
+          fi
       - name: Build the evidence file
         run: |
           mkdir -p runtime-evidence
-          go run ./tools/evidence build -in evidence -cover evidence/evidence-go/cover.out -o runtime-evidence/evidence.json -strict
+          base=()
+          [ -f "$RUNNER_TEMP/base/evidence.json" ] && base=(-baseline "$RUNNER_TEMP/base/evidence.json")
+          go run ./tools/evidence build -in evidence -cover evidence/evidence-go/cover.out \
+            -o runtime-evidence/evidence.json "${base[@]}" -summary "$RUNNER_TEMP/claims.md"
+          cat "$RUNNER_TEMP/claims.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Upload runtime evidence
         uses: actions/upload-artifact@v4
         with:
           name: runtime-evidence
           path: runtime-evidence/
           retention-days: 90 # the docs build downloads the last green main run's evidence
+      # Main only: problems (a claim that does not check, a reference no job
+      # reported) open the rolling issue or add a comment to it; a clean run
+      # closes it. The site keeps showing them honestly ("not reported").
+      - name: Rolling issue
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="claims out of date"
+          n=$(jq '((.problems // []) | length) + ((.missing // []) | length)' runtime-evidence/evidence.json)
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number,title --jq "[.[]|select(.title==\"$title\")][0].number // empty")
+          if [ "$n" = 0 ]; then
+            [ -z "$num" ] || gh issue close "$num" --repo "$GITHUB_REPOSITORY" --comment "Every claim checks again: $RUN_URL"
+            exit 0
+          fi
+          body=$RUNNER_TEMP/issue.md
+          {
+            echo "Main at **${GITHUB_SHA::8}** — $n claim problem(s) — $RUN_URL"
+            echo
+            echo "A claim in \`docs/claims/\` names a test that no longer exists or that no job ran (usually a rename). Fix the reference; \`go run ./tools/evidence check\` checks by hand."
+            echo
+            cat "$RUNNER_TEMP/claims.md"
+          } >"$body"
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label claims-audit --body-file "$body"
+          fi

@@ -466,11 +466,20 @@ async function bakeRuntime() {
     log(existsSync(RUNTIME_FILE) ? 'runtime: no GITHUB_TOKEN — keeping existing evidence' : 'runtime: no GITHUB_TOKEN — no evidence');
     return;
   }
-  const run = await latestGreenRun('ci.yml');
-  if (!run) return log('runtime: no green ci.yml run on main');
-  const arts = await gh(`/repos/${REPO}/actions/runs/${run.id}/artifacts?per_page=100`);
-  const art = (arts?.artifacts ?? []).find((a) => a.name === 'runtime-evidence' && !a.expired);
-  if (!art) return log(`runtime: run ${run.id} has no runtime-evidence artifact${existsSync(RUNTIME_FILE) ? ' — keeping existing evidence' : ''}`);
+  // The evidence job never blocks CI (continue-on-error), so a green run
+  // can lack the artifact: walk back to the newest green run that has it.
+  const runs = await gh(`/repos/${REPO}/actions/workflows/ci.yml/runs?status=success&branch=main&per_page=10`);
+  let run = null;
+  let art = null;
+  for (const r of runs?.workflow_runs ?? []) {
+    const arts = await gh(`/repos/${REPO}/actions/runs/${r.id}/artifacts?per_page=100`);
+    art = (arts?.artifacts ?? []).find((a) => a.name === 'runtime-evidence' && !a.expired) ?? null;
+    if (art) {
+      run = r;
+      break;
+    }
+  }
+  if (!run) return log(`runtime: none of the last 10 green ci.yml runs on main has a runtime-evidence artifact${existsSync(RUNTIME_FILE) ? ' — keeping existing evidence' : ''}`);
   const tmp = mkdtempSync(join(tmpdir(), 'verified-runtime-'));
   try {
     const zip = join(tmp, 'a.zip');

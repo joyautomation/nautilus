@@ -7,9 +7,14 @@ this one covers everything that is not a gesture.
 
 The docs site's `/verified/runtime/` pages are built from these files
 joined to the `go test -json` output of the last green CI run on `main`,
-so every claim shows the verdict of the tests it names. `go run
-./tools/evidence check` (run in CI) fails when a claim names a test that
-does not exist, so a rename cannot silently orphan a claim.
+so every claim shows the verdict of the tests it names.
+
+Claims never block a PR. CI's `runtime-evidence` job reports, in the PR's
+job summary, any claim that does not check or names a test no job ran, and
+which verdicts changed since `main`. On `main` the same problems open (or
+update) the rolling **claims out of date** issue, and a clean run closes it.
+By hand: `go run ./tools/evidence check`, or
+`NAUTILUS_CLAIMS_CHECK=1 go test ./tools/evidence`.
 
 ## Layout
 

@@ -2,21 +2,28 @@ package main
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 )
 
-// TestClaimsCheck holds the real inventory to the source tree, so a test
-// rename that orphans a claim fails `go test ./...` on the PR that does it.
+// TestClaimsCheck holds the real inventory to the source tree. It is
+// opt-in (NAUTILUS_CLAIMS_CHECK=1): claims never block a functional PR.
+// CI's runtime-evidence job runs the same check, reports it on PRs and
+// keeps a rolling issue on main; `go run ./tools/evidence check` runs it
+// by hand.
 func TestClaimsCheck(t *testing.T) {
-	files, err := loadClaims("../../docs/claims")
+	if os.Getenv("NAUTILUS_CLAIMS_CHECK") == "" {
+		t.Skip("set NAUTILUS_CLAIMS_CHECK=1 (or run `go run ./tools/evidence check`)")
+	}
+	files, problems, err := loadClaims("../../docs/claims")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(files) == 0 {
 		t.Fatal("docs/claims has no claim files")
 	}
-	for _, e := range checkClaims("../..", files) {
+	for _, e := range append(problems, checkClaims("../..", files)...) {
 		t.Error(e)
 	}
 }
@@ -150,5 +157,23 @@ func TestCat(t *testing.T) {
 	}
 	if err := runCat(strings.NewReader(`{"Action":"fail","Package":"pkg"}`), &out); err == nil {
 		t.Error("cat of a failing stream returned nil")
+	}
+}
+
+func TestSummarize(t *testing.T) {
+	base := &Evidence{Verdicts: map[string]int{"verified": 2, "gap": 1}, Claims: []ClaimResult{
+		{ID: "MB-001", Verdict: "verified"}, {ID: "MB-002", Verdict: "verified"}, {ID: "MB-003", Verdict: "gap"},
+	}}
+	ev := &Evidence{Verdicts: map[string]int{"verified": 1, "unrun": 1, "gap": 1}, Claims: []ClaimResult{
+		{ID: "MB-001", Verdict: "verified"}, {ID: "MB-002", Verdict: "unrun"}, {ID: "MB-003", Verdict: "gap"},
+	}, Missing: []string{"go ./modbus TestGone"}}
+	got := summarize(ev, base)
+	for _, want := range []string{"| verified | 1 (-1) |", "| unrun | 1 (+1) |", "| gap | 1 |", "`go ./modbus TestGone`", "`MB-002: verified → unrun`"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("summary lacks %q:\n%s", want, got)
+		}
+	}
+	if clean := summarize(&Evidence{Verdicts: map[string]int{}}, nil); !strings.Contains(clean, "Every claim checks") {
+		t.Errorf("a clean run should say so:\n%s", clean)
 	}
 }
