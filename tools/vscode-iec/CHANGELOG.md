@@ -3,6 +3,20 @@
 All notable changes to the **nautilus IEC 61131-3** extension are documented
 here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A rung's coils see one evaluation of its condition.** In a rung where
+  a coil writes a tag the condition reads, such as `/Lamp ( Lamp ) ( Horn )`,
+  later coils re-evaluated the condition after the earlier coil's write, so
+  `Horn` got the opposite of the rung's result. The condition is now
+  evaluated once, as the ladder page says and as a controller does, and held
+  in a generated BOOL, `<rung>__power`, which shows among the program's
+  locals. **Programs with such a rung compute different (correct) values
+  after upgrading.** Rungs without the pattern are unchanged. Comes from the
+  runtime and `naut lsp`, so it needs the next `naut` release. (#258)
+
 ## [0.13.2] - 2026-10-04
 
 ### Added

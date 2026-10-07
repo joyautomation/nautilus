@@ -1,0 +1,30 @@
+# ld-coil-fanout — a rung's condition is evaluated once and fanned out to
+# every coil, even when a coil writes a tag the condition reads (the
+# ladder page's "How a rung evaluates"; #258). ST is the reference: it
+# evaluates the condition into a temporary first, as a controller does.
+# FBD inlines a wire at every read by design (function-block page), so it
+# is not a column here.
+#
+#   go test ./lang/conformance/ -run 'TestConformance/ld-coil-fanout'
+name: ld-coil-fanout
+
+tasks:
+  - program: ld-coil-fanout.st
+    scan: 1ms
+  - name: ld
+    program: ld-coil-fanout.ld
+    scan: 1ms
+
+tags:
+  # Outputs, one set per language.
+  - { name: st_Lamp,  role: state, init: false }
+  - { name: st_Horn,  role: state, init: false }
+  - { name: st_Done,  role: state, init: false }
+  - { name: st_Pulse, role: state, init: false }
+  - { name: ld_Lamp,  role: state, init: false }
+  - { name: ld_Horn,  role: state, init: false }
+  - { name: ld_Done,  role: state, init: false }
+  - { name: ld_Pulse, role: state, init: false }
+
+driver:
+  type: memory

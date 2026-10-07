@@ -178,13 +178,20 @@ func TranspileWithLines(src string, libs ...string) (string, []int, error) {
 
 	inLD, sawLD := false, false
 	var rung *rungParse
+	// Rung-power variables the current LD body needs (see compile), declared
+	// in a VAR block inserted just before its FBD line.
+	var power []string
+	fbdAt, fbdLine := 0, 0
 	flushRung := func() error {
 		if rung == nil {
 			return nil
 		}
-		stmts, err := rung.compile(res)
+		stmts, pv, err := rung.compile(res)
 		if err != nil {
 			return err
+		}
+		if pv != "" {
+			power = append(power, pv)
 		}
 		for _, s := range stmts {
 			emit("  "+s, rung.line)
@@ -200,10 +207,16 @@ func TranspileWithLines(src string, libs ...string) (string, []int, error) {
 		switch {
 		case !inLD && ldStartRe.MatchString(stripped):
 			inLD, sawLD = true, true
+			fbdAt, fbdLine, power = len(out), n, nil
 			emit("FBD", n)
 		case inLD && ldEndRe.MatchString(stripped):
 			if err := flushRung(); err != nil {
 				return "", nil, err
+			}
+			if len(power) > 0 {
+				decl := "VAR " + strings.Join(power, ", ") + " : BOOL; END_VAR (* rung power, evaluated once *)"
+				out = append(out[:fbdAt], append([]string{decl}, out[fbdAt:]...)...)
+				lineOf = append(lineOf[:fbdAt], append([]int{fbdLine}, lineOf[fbdAt:]...)...)
 			}
 			inLD = false
 			emit("END_FBD", n)
@@ -368,14 +381,17 @@ func checkDuplicateFBs(src string) error {
 }
 
 // compile parses the rung text and emits FBD statements.
-func (r *rungParse) compile(res *resolver) ([]string, error) {
+// compile lowers one rung to netlist statements. power is the name of a
+// BOOL variable the rung's condition is stored in, when it needs one (the
+// caller declares it); "" otherwise.
+func (r *rungParse) compile(res *resolver) (stmts []string, power string, err error) {
 	p := &rungTok{src: r.text, line: r.line}
 	elems, err := p.series(false)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if p.peek() != "" {
-		return nil, p.errf("unexpected %q", p.peek())
+		return nil, "", p.errf("unexpected %q", p.peek())
 	}
 
 	// Split trailing coils from the condition elements.
@@ -391,7 +407,7 @@ func (r *rungParse) compile(res *resolver) ([]string, error) {
 	}
 	for _, e := range elems[:condEnd] {
 		if _, ok := e.(coilEl); ok {
-			return nil, fmt.Errorf("ld: rung %s (line %d): coils must sit at the rung's right end", r.name, r.line)
+			return nil, "", fmt.Errorf("ld: rung %s (line %d): coils must sit at the rung's right end", r.name, r.line)
 		}
 	}
 	// A rung's only output may be a function block instance — its own
@@ -399,22 +415,32 @@ func (r *rungParse) compile(res *resolver) ([]string, error) {
 	// would be — or an assignment. Only a bare rung (no coil, no FB, no
 	// assignment anywhere) is illegal.
 	if len(coils) == 0 && !hasFB(elems) {
-		return nil, fmt.Errorf("ld: rung %s (line %d): a rung needs at least one coil, function block or assignment", r.name, r.line)
+		return nil, "", fmt.Errorf("ld: rung %s (line %d): a rung needs at least one coil, function block or assignment", r.name, r.line)
 	}
 
 	ec := &edgeCtx{rung: r.name, seen: map[string]int{}}
-	var stmts []string
 	cond, err := seriesCond(elems[:condEnd], ec, &stmts, res)
 	if err != nil {
-		return nil, fmt.Errorf("ld: rung %s (line %d): %w", r.name, r.line, err)
+		return nil, "", fmt.Errorf("ld: rung %s (line %d): %w", r.name, r.line, err)
 	}
 
-	// Several coils share the condition through a named wire, so the
-	// diagram shows one rail fanning out — and the logic evaluates once.
+	// Several coils share the condition, evaluated once. A named wire says
+	// so in the netlist, but FBD inlines a wire at every read — so when a
+	// coil writes a tag the condition reads (`/Lamp ( Lamp ) ( Horn )`),
+	// the condition is stored in a BOOL variable instead, or a later coil
+	// would see the earlier coil's write.
 	if len(coils) > 1 && cond != "TRUE" {
-		wire := "w_" + r.name
-		stmts = append(stmts, fmt.Sprintf("%s = %s", wire, cond))
-		cond = wire
+		if coilsFeedCondition(coils, cond) {
+			// A generated name (a double underscore, like FBD's hidden
+			// <name>__ENO): never one of the user's own variables.
+			power = r.name + "__power"
+			stmts = append(stmts, fmt.Sprintf("%s := %s", power, cond))
+			cond = power
+		} else {
+			wire := "w_" + r.name
+			stmts = append(stmts, fmt.Sprintf("%s = %s", wire, cond))
+			cond = wire
+		}
 	}
 	for _, c := range coils {
 		switch c.mode {
@@ -434,7 +460,29 @@ func (r *rungParse) compile(res *resolver) ([]string, error) {
 			stmts = append(stmts, fmt.Sprintf("%s := %s", c.ref, cond))
 		}
 	}
-	return stmts, nil
+	return stmts, power, nil
+}
+
+var condIdentRe = regexp.MustCompile(`(^|[^.A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)`)
+
+// coilsFeedCondition reports whether any coil writes a variable the
+// condition reads, comparing root names case-insensitively (`M.Cmd` and
+// `Levels[2]` write M and Levels). Over-matching only costs a variable.
+func coilsFeedCondition(coils []coilEl, cond string) bool {
+	reads := map[string]bool{}
+	for _, m := range condIdentRe.FindAllStringSubmatch(cond, -1) {
+		reads[strings.ToUpper(m[2])] = true
+	}
+	for _, c := range coils {
+		root := c.ref
+		if i := strings.IndexAny(root, ".["); i >= 0 {
+			root = root[:i]
+		}
+		if reads[strings.ToUpper(strings.TrimSpace(root))] {
+			return true
+		}
+	}
+	return false
 }
 
 // hasFB reports whether elems contains a function block instance,
