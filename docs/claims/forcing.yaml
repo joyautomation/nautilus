@@ -31,7 +31,6 @@ claims:
     source: "#what-a-force-does"
     tests:
       - go ./runtime TestForceStructMember
-      - go ./server TestForceEnumMemberByPath
   - id: FRC-004
     claim: >-
       A forced value is coerced like any write: an enumerated tag or member

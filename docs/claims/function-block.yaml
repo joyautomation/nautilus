@@ -212,8 +212,8 @@ claims:
 
   - id: FBD-018
     claim: >-
-      An FB with EN FALSE does not run: edges it misses are not counted, and
-      its edge memory is stale so a rise across the gap counts on return.
+      While EN is FALSE a function block does not run: its outputs and
+      internal state hold.
     source: "#enoeno-execution-control"
     tests:
       - go ./lang/conformance TestConformance/fbd-en-eno/an FB with EN FALSE does not run — edges it misses are not counted

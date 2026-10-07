@@ -112,6 +112,9 @@ claims:
     source: "#states"
     tests:
       - go ./alarm TestOffDelayHoldsTheAlarmUp
+    partial: true
+    note: >-
+      Only t=0 and t=31s against a 30 s delay are checked: nothing just under the delay, and a bounce restarting the hold is never shown.
 
   - id: ALM-011
     claim: >-

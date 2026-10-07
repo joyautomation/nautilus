@@ -41,6 +41,9 @@ claims:
       - go ./lang/ld TestNegatedFunctionContact
       - go ./lang/ld TestFunctionContactExpressionArgs
       - go ./lang/conformance TestConformance/ld-coils/negated function contact passes power when the call returns FALSE
+    partial: true
+    note: >-
+      The plain function contact is matched only by a substring that the negated form also contains, so a regression negating it would pass.
 
   - id: LD-005
     claim: >-

@@ -36,6 +36,9 @@ claims:
     tests:
       - go ./internal/project TestManifestTagsAreImplicit
       - go ./lang/st TestLowerImplicitGlobals
+    partial: true
+    note: >-
+      Typing from type: is asserted; typing from init: is not (the result does not depend on the init-derived type).
 
   - id: ST-004
     claim: >-
@@ -101,7 +104,6 @@ claims:
       - go ./lang/st TestConstantInBoundsAndInitialValues
       - go ./lang/st TestUserFB_InitialValues
       - go ./lang/st TestUserFunc_InitialValues
-      - go ./acceptance TestFBVarConstantWritesBack
     note: >-
       TestConstantInBoundsAndInitialValues asserts a PROGRAM VAR's initial
       value (start : INT := N + 1) in its result.

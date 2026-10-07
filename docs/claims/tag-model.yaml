@@ -440,6 +440,10 @@ claims:
     tests:
       - go ./runtime TestGenerationAdvancesOnlyOnChange
       - go ./runtime TestGenerationStructWrites
+    partial: true
+    note: >-
+      The per-tag generation is read only right after a changing write; a same-value rewrite leaving it unchanged is never checked.
+
   - id: TAG-041
     claim: >-
       Tags.SnapshotInto refills the caller's map with Sample{Value, Gen}

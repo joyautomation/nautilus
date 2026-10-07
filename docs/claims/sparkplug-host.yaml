@@ -415,6 +415,10 @@ claims:
     source: "#"
     tests:
       - go ./sparkplug/host TestStateGroupFilter
+    partial: true
+    note: >-
+      A foreign group is shown rejected, but the configured group being consumed (and the plural group-ids form) is never shown, so a filter that drops everything would pass.
+
   - id: SPH-043
     claim: >-
       `Start` owns the connection and its reconnect loop; the driver

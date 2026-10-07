@@ -91,10 +91,9 @@ claims:
     source: "#retained-state"
     tests:
       - go ./retain TestFileStoreSaveLoadRoundTrip
+    partial: true
     note: >-
-      Rewritten to the page's promise; missing-file, corrupt-JSON and temp-file
-      behaviour are code details the page does not state, so their tests were
-      removed.
+      The round trip is tested on a fileStore built directly; retain.New choosing the file store outside a cluster, and the retain.file wiring, are not exercised.
 
   - id: RED-011
     claim: >-
@@ -196,7 +195,9 @@ claims:
     source: "#redundancy"
     tests:
       - go ./leader TestStandalone
-      - go ./server TestClusterEndpointNilCluster
+    partial: true
+    note: >-
+      The standalone elector is tested; nothing shows the runtime scanning with a redundancy: section outside a cluster.
 
   - id: RED-022
     claim: >-
