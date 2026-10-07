@@ -1,0 +1,18 @@
+# A rung's condition is evaluated once and fanned out (#258). ST is the
+# reference; every step asserts st_ and ld_ together.
+tests:
+  - name: a coil that writes the condition's own tag does not change what the next coil sees
+    steps:
+      - scans: 1
+        expect: { st_Lamp: true, st_Horn: true, ld_Lamp: true, ld_Horn: true }
+      - scans: 1
+        expect: { st_Lamp: false, st_Horn: false, ld_Lamp: false, ld_Horn: false }
+      - scans: 1
+        expect: { st_Lamp: true, st_Horn: true, ld_Lamp: true, ld_Horn: true }
+
+  - name: a set coil and a plain coil share one evaluation of the condition
+    steps:
+      - scans: 1
+        expect: { st_Done: true, st_Pulse: true, ld_Done: true, ld_Pulse: true }
+      - scans: 2
+        expect: { st_Done: true, st_Pulse: false, ld_Done: true, ld_Pulse: false }

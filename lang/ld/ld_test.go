@@ -1141,3 +1141,52 @@ END_PROGRAM
 		t.Errorf("element = %+v", e)
 	}
 }
+
+// A rung whose coil writes a tag its own condition reads stores the
+// condition in a BOOL variable: FBD inlines a wire at every read, so a
+// wire would let the second coil see the first coil's write (#258). The
+// runtime behaviour is pinned by lang/conformance/ld-coil-fanout; this
+// pins the shape, the line map, and that the netlist still compiles and
+// graphs. A rung without the hazard keeps its wire (TestTranspileRungs).
+func TestRungPowerVariable(t *testing.T) {
+	src := `PROGRAM Main
+VAR_EXTERNAL Lamp, Horn : BOOL; END_VAR
+LD
+  RUNG blink
+    /lamp ( Lamp ) ( Horn )
+END_LD
+END_PROGRAM
+`
+	out, lineOf, err := TranspileWithLines(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"VAR w_blink : BOOL; END_VAR",
+		"w_blink := NOT lamp",
+		"Lamp := w_blink",
+		"Horn := w_blink",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "w_blink = ") {
+		t.Errorf("the condition is still a wire:\n%s", out)
+	}
+	lines := strings.Split(out, "\n")
+	if len(lineOf) != len(lines) {
+		t.Fatalf("line map has %d entries for %d lines", len(lineOf), len(lines))
+	}
+	for i, l := range lines {
+		if strings.HasPrefix(l, "VAR w_blink") && lineOf[i] != 3 {
+			t.Errorf("the power declaration maps to line %d, want 3 (LD)", lineOf[i])
+		}
+	}
+	if _, err := fbd.Compile(out); err != nil {
+		t.Fatalf("emitted FBD does not compile: %v\n%s", err, out)
+	}
+	if _, err := fbd.Graph(out); err != nil {
+		t.Fatalf("emitted FBD does not graph: %v", err)
+	}
+}
