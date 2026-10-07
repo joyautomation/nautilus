@@ -1162,10 +1162,10 @@ END_PROGRAM
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"VAR w_blink : BOOL; END_VAR",
-		"w_blink := NOT lamp",
-		"Lamp := w_blink",
-		"Horn := w_blink",
+		"VAR blink__power : BOOL; END_VAR",
+		"blink__power := NOT lamp",
+		"Lamp := blink__power",
+		"Horn := blink__power",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
@@ -1179,7 +1179,7 @@ END_PROGRAM
 		t.Fatalf("line map has %d entries for %d lines", len(lineOf), len(lines))
 	}
 	for i, l := range lines {
-		if strings.HasPrefix(l, "VAR w_blink") && lineOf[i] != 3 {
+		if strings.HasPrefix(l, "VAR blink__power") && lineOf[i] != 3 {
 			t.Errorf("the power declaration maps to line %d, want 3 (LD)", lineOf[i])
 		}
 	}

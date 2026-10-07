@@ -102,7 +102,9 @@ Run, Run's own contact holds it in, Stop drops it out.
 Coils sit at the right end of a rung. A rung needs at least one coil or a
 function block as its last element: `A B t1:TON(PT := T#5S)` is a complete
 rung whose only output is `t1.Q`, read elsewhere. Several coils share one
-condition, evaluated once and fanned out. A rung with only a coil is driven
+condition, evaluated once and fanned out. (When a coil writes a tag the
+condition reads, as in `/Lamp ( Lamp ) ( Horn )`, the condition is held in a
+generated BOOL, `<rung>__power`, which shows among the program's locals.) A rung with only a coil is driven
 by the rail, so `( AlwaysOn )` assigns TRUE. Rungs evaluate
 top to bottom within a scan, so a coil written on one rung reads back as a
 contact on the next rung in the same scan.

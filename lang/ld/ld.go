@@ -430,14 +430,17 @@ func (r *rungParse) compile(res *resolver) (stmts []string, power string, err er
 	// the condition is stored in a BOOL variable instead, or a later coil
 	// would see the earlier coil's write.
 	if len(coils) > 1 && cond != "TRUE" {
-		name := "w_" + r.name
 		if coilsFeedCondition(coils, cond) {
-			stmts = append(stmts, fmt.Sprintf("%s := %s", name, cond))
-			power = name
+			// A generated name (a double underscore, like FBD's hidden
+			// <name>__ENO): never one of the user's own variables.
+			power = r.name + "__power"
+			stmts = append(stmts, fmt.Sprintf("%s := %s", power, cond))
+			cond = power
 		} else {
-			stmts = append(stmts, fmt.Sprintf("%s = %s", name, cond))
+			wire := "w_" + r.name
+			stmts = append(stmts, fmt.Sprintf("%s = %s", wire, cond))
+			cond = wire
 		}
-		cond = name
 	}
 	for _, c := range coils {
 		switch c.mode {
