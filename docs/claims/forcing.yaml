@@ -1,0 +1,173 @@
+page: website/src/content/docs/guides/forcing.md
+title: Forcing
+prefix: FRC
+claims:
+  - id: FRC-001
+    claim: >-
+      A force on an input replaces the driver's reading before the logic
+      runs, every scan, so the program sees the forced value.
+    source: "#what-a-force-does"
+    tests:
+      - go ./runtime TestForceInputOverridesDriver
+      - go ./acceptance TestForceHoldsAgainstPlantAndLogic
+  - id: FRC-002
+    claim: >-
+      A force on an output or state tag is laid back over whatever the logic
+      wrote every scan, so the driver is handed the forced value.
+    source: "#what-a-force-does"
+    tests:
+      - go ./acceptance TestForceHoldsAgainstPlantAndLogic
+    partial: true
+    note: >-
+      The acceptance test holds PumpRun FALSE while the logic writes TRUE
+      every scan, but checks the tag only; the driver being handed the
+      forced value is not asserted. TestForceOutputReappliedAfterLogic was
+      dropped: its seal-in reads Motor back, so a forced FALSE makes the
+      logic compute FALSE too and a one-time write would pass it.
+  - id: FRC-003
+    claim: >-
+      Forcing a struct member (P101.Speed, Recipe.Steps[2].Mode) holds only
+      that member; the rest of the struct follows its writers.
+    source: "#what-a-force-does"
+    tests:
+      - go ./runtime TestForceStructMember
+  - id: FRC-004
+    claim: >-
+      A forced value is coerced like any write: an enumerated tag or member
+      takes its member name, and a name that is no member is refused with the
+      list of members.
+    source: "#what-a-force-does"
+    tests:
+      - go ./runtime TestForceEnumMemberByName
+      - go ./server TestForceEnumMemberByPath
+  - id: FRC-005
+    claim: >-
+      The force table records the actual value the tag would hold (the
+      driver's latest reading, the logic's latest write) and removing a force
+      puts the tag back to it at once, not on the next write.
+    source: "#what-a-force-does"
+    tests:
+      - go ./runtime TestUnforceRestoresActual
+      - go ./runtime TestForceInputOverridesDriver
+    partial: true
+    note: >-
+      The driver's latest reading as the actual value, and the restore at
+      once on unforce, are asserted for an input only. The logic's latest
+      write as the actual value is not: TestForceOutputReappliedAfterLogic
+      only checks actual is non-nil, which a table recording the forced
+      value would also pass.
+  - id: FRC-006
+    claim: >-
+      A write to a forced tag through POST /api/tags is refused with 409
+      rather than accepted and silently overridden.
+    source: "#what-a-force-does"
+    tests:
+      - go ./server TestForceAPI
+  - id: FRC-008
+    claim: >-
+      Set Active Step jumps a running SFC chart once: every step is
+      deactivated and the target activated, old steps see a falling edge and
+      the new step a rising edge, and nothing is held, so the chart evolves
+      normally from the next scan.
+    source: "#sfc-set-a-step-fire-a-transition"
+    tests:
+      - go ./runtime TestSFCSetStep
+    partial: true
+    note: >-
+      The N action starting and stopping is asserted; P0/P1/final-scan
+      action edges and Step.T restarting from zero are not.
+  - id: FRC-009
+    claim: >-
+      Fire Transition takes one transition once whatever its condition says
+      (sources deactivated, targets activated), is refused when a source step
+      is not active, and addresses an unnamed transition as t<line>.
+    source: "#sfc-set-a-step-fire-a-transition"
+    tests:
+      - go ./runtime TestSFCFireTransition
+      - go ./server TestSFCAPI
+  - id: FRC-010
+    claim: >-
+      An SFC command needs pou only when two running charts share the step
+      or transition name.
+    source: "#the-api"
+    tests:
+      - go ./runtime TestSFCProgramResolution
+      - go ./server TestSFCAPI
+    partial: true
+    note: >-
+      Only the single-chart case (resolved without pou) is asserted; no test
+      runs two charts sharing a name to show pou is then required and
+      resolves it.
+  - id: FRC-011
+    claim: >-
+      Forces are not retained: a restart comes up with no forces.
+    source: "#lifetime"
+    tests:
+      - go ./runtime TestRetainSavesActualNotForced
+    partial: true
+    note: >-
+      Asserts a forced setpoint is retained at its actual value, never the
+      forced one; a restart coming up with an empty force table is not
+      exercised.
+  - id: FRC-012
+    claim: >-
+      The force table lives on the leader (a standby proxies the API to it),
+      and a takeover or a leader stepping down drops it.
+    source: "#lifetime"
+    tests:
+      - go ./runtime TestTakeoverDropsForces
+      - go ./server TestForceProxiedFromStandby
+  - id: FRC-013
+    claim: >-
+      Every force, removal, clear-all, step jump and fired transition leaves
+      a line in the controller log with the caller's address.
+    source: "#lifetime"
+    tests:
+      - go ./server TestForceAPI
+      - go ./server TestSFCAPI
+    partial: true
+    note: >-
+      Asserts the force, clear-all, step-jump and fired-transition lines
+      appear; the removal line, and the caller's address on any line, are
+      not checked.
+  - id: FRC-014
+    claim: >-
+      Every force and SFC write passes the same guard as POST /api/tags:
+      same-origin by default, the token when NAUTILUS_TOKEN is set.
+    source: "#the-api"
+    tests:
+      - go ./server TestForceAuth
+    partial: true
+    note: >-
+      Cross-origin refusal is asserted on all five write endpoints; the token
+      requirement only on POST /api/forces, set through Options.AuthToken
+      rather than the NAUTILUS_TOKEN variable.
+  - id: FRC-015
+    claim: >-
+      GET /api/forces lists name, value, actual and sinceMs; DELETE
+      /api/forces/{name} removes one (404 if it was not forced); POST
+      /api/forces/clear removes all and returns the count.
+    source: "#the-api"
+    tests:
+      - go ./server TestForceAPI
+    partial: true
+    note: >-
+      The force list is asserted on the POST response; a GET /api/forces
+      body is never read, and the `actual` and `sinceMs` fields are not
+      asserted.
+  - id: FRC-016
+    claim: >-
+      Every stream frame carries forces while at least one force is active
+      and omits it when none is; it is never delta-gated; /api/meta
+      advertises "forces": true.
+    source: "#the-api"
+    tests:
+      - go ./server TestStreamCarriesForces
+      - go ./server TestForceAPI
+  - id: FRC-017
+    claim: >-
+      An acceptance test can hold a tag the same way, with force: and
+      unforce: steps.
+    source: "#in-tests"
+    tests:
+      - go ./acceptance TestForceHoldsAgainstPlantAndLogic

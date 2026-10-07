@@ -1,0 +1,142 @@
+page: website/src/content/docs/getting-started.md
+title: Getting started
+prefix: GS
+claims:
+  - id: GS-001
+    claim: >-
+      naut new scaffolds four templates: the tour (three tasks in three IEC
+      languages and a simulated plant), minimal (one task, one program, one
+      test), sdk (a Go project) and sdk-demo (a Go project with plant
+      physics in Go).
+    source: "#2-scaffold-a-project"
+    tests:
+      - go ./cmd/naut TestScaffoldVariants
+  - id: GS-002
+    claim: >-
+      A freshly scaffolded project can be run, tested and shipped with the
+      CLI alone: its programs compile and its acceptance tests pass.
+    source: "#2-scaffold-a-project"
+    tests:
+      - go ./cmd/naut TestScaffoldedManifestProjectsPass
+    partial: true
+    note: >-
+      Covers the manifest templates (minimal in st/fbd/ld, the tour, the tour
+      with --deploy); the sdk and sdk-demo templates' go test is not run, and
+      naut check / naut build are not run on the scaffold (runtime.New
+      compiles it instead).
+  - id: GS-003
+    claim: >-
+      naut check is the CI gate: it compiles every program and cross-checks
+      it against the manifest.
+    source: "#1-install-the-cli"
+    tests:
+      - go ./cmd/naut TestCheckReportsIdentifierColumn
+      - go ./cmd/naut TestCheckFailsOnUndeclaredRead
+      - go ./cmd/naut TestCheckWarnsOnUndeclaredWrite
+      - go ./cmd/naut TestCheckManifestAgreesWithPrograms
+  - id: GS-004
+    claim: >-
+      naut build emits one self-contained, deployable controller binary from
+      the project, with no Go toolchain anywhere.
+    source: "#2-scaffold-a-project"
+    tests:
+      - go ./cmd/naut TestBuildEmbedRoundTrip
+      - go ./cmd/naut TestBuildEmbedsHMIAndBuiltBinaryServesIt
+    partial: true
+    note: >-
+      The tests append the project to a fake runner file and load it back
+      from the embedded archive with the same loader naut run uses; the
+      emitted file is never executed, so the real binary starting from its
+      own embedded project is not asserted.
+  - id: GS-005
+    claim: >-
+      naut run starts the scan loop, dashboard and tag API on
+      http://localhost:8080; GET /api/state returns the raw tag snapshot and
+      the dashboard at / is served.
+    source: "#2-scaffold-a-project"
+    tests:
+      - go ./server TestStateSnapshot
+      - go ./server TestLandingPage
+    partial: true
+    note: >-
+      Server behaviour is asserted; the default :8080 bind of naut run itself is not.
+  - id: GS-006
+    claim: >-
+      Acceptance tests run against a virtual clock, so a ten-second on-delay
+      or a loop's settling time is asserted exactly and deterministically
+      (the low-temp alarm waits its full 10 s).
+    source: "#2-scaffold-a-project"
+    tests:
+      - go ./acceptance TestLowTempAlarmWaitsItsFullDelay
+      - go ./acceptance TestPISettlesSetpointStep
+      - go ./acceptance TestVirtualDtIsExact
+      - go ./acceptance TestRunsAreReproducible
+      - naut testdata/projects/heated-tank low-temp alarm waits its full 10 s
+  - id: GS-007
+    claim: >-
+      The fixture for tests comes from nautilus.yaml, so a retuned manifest
+      gain changes what the tests run against.
+    source: "#4-make-it-yours"
+    tests: []
+    note: >-
+      Gap. TestHeatedTankSuite was listed, but it only runs the suite against
+      a fixture the test itself loads from the manifest; it would pass
+      whatever the fixture's source, and no test retunes a gain and watches
+      the result follow.
+  - id: GS-008
+    claim: >-
+      In the dashboard setpoints are click-to-set (BOOLs by toggle) while
+      inputs and outputs stay read-only, because the driver rewrites an
+      input and the logic an output within a scan.
+    source: "#2-scaffold-a-project"
+    tests: []
+    note: >-
+      Gap. TestDashboardScriptParses was listed, but it only syntax-checks
+      the dashboard script (and skips without node); which roles are
+      editable in the UI is not asserted.
+  - id: GS-009
+    claim: >-
+      Swapping the simulated plant for real field I/O (delete the sim task,
+      point driver: at the bus) leaves the control logic unchanged: it reads
+      the same tags either way.
+    source: "#4-make-it-yours"
+    tests: []
+    note: >-
+      Gap. TestGivenAndExpectAddressFields was listed, but it tests given:
+      on a UDT field, not a sim-to-driver swap; the swap is not tested end
+      to end.
+  - id: GS-010
+    claim: >-
+      An SDK project's go test runs the same acceptance suites on the same
+      virtual clock.
+    source: "#2-scaffold-a-project"
+    tests:
+      - go ./examples/go-sdk TestPISettles
+    partial: true
+    note: >-
+      Verified by the SDK example; the scaffolded sdk template itself is not run.
+  - id: GS-011
+    claim: >-
+      The scaffolded CI gates on naut check, naut test and naut build.
+    source: "#4-make-it-yours"
+    tests:
+      - go ./cmd/naut TestScaffoldVariants/demo manifest project
+    partial: true
+    note: >-
+      Asserts ci.yml is scaffolded; the gate commands inside are not asserted.
+  - id: GS-012
+    claim: >-
+      One release build runs on macOS, Linux and Windows (amd64 and arm64)
+      with no runtime dependencies, and release archives ship a
+      checksums.txt.
+    source: "#getting-started"
+    tests: []
+    note: >-
+      Gap. A release-pipeline property; verified by the release workflow, not a Go test.
+  - id: GS-013
+    claim: >-
+      naut version answers once the CLI is on PATH.
+    source: "#1-install-the-cli"
+    tests: []
+    note: >-
+      Gap. No test invokes `naut version`.

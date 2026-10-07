@@ -1,0 +1,208 @@
+page: website/src/content/docs/guides/blocks-and-tasks.md
+title: Function blocks, libraries, and tasks
+prefix: TASK
+claims:
+  - id: TASK-001
+    claim: >-
+      Library files (TYPE, FUNCTION, FUNCTION_BLOCK declarations) passed as
+      Options.Libraries compose ahead of the program, and a FUNCTION_BLOCK
+      instance keeps its own state per instance across scans.
+    source: "#function-blocks-libraries-and-tasks"
+    tests:
+      - go ./runtime TestLibrariesUserFBFromFBD
+      - go ./internal/project TestLadderLibraryProjectRuns
+    partial: true
+    note: >-
+      Per-instance state isolation (two instances of one block not sharing a
+      VAR) is not asserted at this level; the language-level tests in
+      lang/st cover FB instance semantics.
+  - id: TASK-002
+    claim: >-
+      A user FUNCTION_BLOCK instantiates from an FBD diagram exactly like a
+      built-in block, and a .ld or .fbd file holding FUNCTION_BLOCKs is a
+      library the same as a .st one.
+    source: "#function-blocks-libraries-and-tasks"
+    tests:
+      - go ./runtime TestLibrariesUserFBFromFBD
+      - go ./internal/project TestLadderLibraryComposes
+      - go ./cmd/naut TestComposeGraphicalProgramUsesLadderLibrary
+    partial: true
+    note: >-
+      An FBD-authored library block is not exercised separately from the ladder one.
+  - id: TASK-003
+    claim: >-
+      The tooling composes libraries byte-identically to the runtime:
+      naut compose, check, test and pull see the same prelude the runtime
+      boots with.
+    source: "#function-blocks-libraries-and-tasks"
+    tests:
+      - go ./cmd/naut TestComposeMatchesTheRuntime
+      - go ./cmd/naut TestCheckLibDirClean
+      - go ./cmd/naut TestTestLibDir
+      - go ./internal/project TestLibDirComposes
+    partial: true
+    note: >-
+      The LSP and `naut pull` sides are not asserted against the runtime composition here.
+  - id: TASK-004
+    claim: >-
+      A block's VAR section persists across scans, and a warm online edit
+      carries instance state across the swap by name and type (a PI keeps
+      its integral).
+    source: "#function-blocks-libraries-and-tasks"
+    tests:
+      - go ./runtime TestSwapWarmCarriesRetainedState
+      - go ./runtime TestSwapWarmTypeChangeResets
+    partial: true
+    note: >-
+      The swap test carries program VARs and a TON; carrying a user
+      FUNCTION_BLOCK instance's integral is not asserted by name.
+  - id: TASK-005
+    claim: >-
+      In a manifest project, any .st, .ld or .fbd file with no PROGRAM in the
+      project root or anywhere under lib/ (at any depth) is a library, and
+      all of them compose into one prelude ahead of every task.
+    source: "#where-library-files-live-the-root-and-lib"
+    tests:
+      - go ./internal/project TestLibDirComposes
+      - go ./internal/project TestLadderLibraryComposes
+      - go ./cmd/naut TestCheckLibDirClean
+    partial: true
+    note: >-
+      Root libraries (.st and .ld) and nested lib/ libraries are asserted to
+      compose; a PROGRAM-less .fbd library file is never exercised, and the
+      prelude reaching a second task (rather than only the main task) is not
+      asserted.
+  - id: TASK-006
+    claim: >-
+      The prelude order is fixed: .st libraries first, then transpiled
+      .ld/.fbd ones, each group sorted by project-relative path.
+    source: "#where-library-files-live-the-root-and-lib"
+    tests:
+      - go ./internal/project TestLibDirComposes
+      - go ./internal/project TestLadderLibraryComposes
+      - go ./cmd/naut TestComposeJSON
+    partial: true
+    note: >-
+      The tier order (.st before transpiled .ld, even when the .ld sorts
+      first alphabetically) is asserted. Path sorting within a group is seen
+      only for two .st files under lib/ and a single .ld, so root and lib/
+      files interleaving by project-relative path (lib/pump.st before a root
+      units.st) and ordering within the graphical group are not asserted; no
+      .fbd library is exercised.
+  - id: TASK-007
+    claim: >-
+      A block declared in both the root and lib/ is the same duplicate-name
+      error as declaring it in two root files.
+    source: "#where-library-files-live-the-root-and-lib"
+    tests:
+      - go ./internal/project TestLibDirDuplicateAcrossRootAndLib
+  - id: TASK-008
+    claim: >-
+      lib/ holds libraries only: a file under lib/ that declares a PROGRAM is
+      an error naming the file.
+    source: "#where-library-files-live-the-root-and-lib"
+    tests:
+      - go ./internal/project TestLibDirRefusesAProgram
+      - go ./cmd/naut TestCheckLibDirRefusesAProgram
+      - go ./cmd/naut TestComposeRefusesAProgramInLib
+  - id: TASK-009
+    claim: >-
+      No other folder composes: hmi/, tags/, deploy/, node_modules/ and any
+      other subdirectory are ignored however many .st files they hold.
+    source: "#where-library-files-live-the-root-and-lib"
+    tests:
+      - go ./internal/project TestOtherSubdirsStayIgnored
+      - go ./internal/project TestLibDirComposes
+      - go ./cmd/naut TestComposeMatchesTheRuntime
+    partial: true
+    note: >-
+      tags/ is asserted (its redeclared block would be a duplicate-name
+      error) and hmi/ is asserted by the fixture's hmi/ignored.st staying out
+      of the library list and naut compose; deploy/ and node_modules/ are
+      never exercised. The hmi/x.st PROGRAM in TestOtherSubdirsStayIgnored
+      alone could not fail, since a stray PROGRAM file outside lib/ is not
+      an error either way.
+  - id: TASK-010
+    claim: >-
+      naut build ships lib/ inside the binary, and errors in library files
+      are named by their project path (lib/motor.ld).
+    source: "#where-library-files-live-the-root-and-lib"
+    tests:
+      - go ./cmd/naut TestBuildShipsLibDir
+      - go ./internal/project TestLibDirErrorsUseProjectPaths
+  - id: TASK-011
+    claim: >-
+      Several programs run as tasks at their own rates against one shared
+      tag store, each with its own measured-dt tag, with no calling between
+      them; the main task owns field I/O.
+    source: "#more-than-one-program-tasks"
+    tests:
+      - go ./runtime TestTasks
+      - go ./runtime TestTasksRunConcurrently
+      - go ./runtime TestRuntimeDrivesOutputs
+    partial: true
+    note: >-
+      Only the main task reading inputs and writing outputs is asserted; extra tasks touching I/O is not.
+  - id: TASK-012
+    claim: >-
+      Each scan copies its program's external tags in, executes privately and
+      commits what changed as one unit, so a reader never sees a scan
+      half-done and a fast task never waits behind a slow one.
+    source: "#more-than-one-program-tasks"
+    tests:
+      - go ./runtime TestScanViewSnapshotAndCommit
+      - go ./runtime TestScanCommitsAreAtomic
+      - go ./runtime TestFastTaskDoesNotWaitForSlowTask
+  - id: TASK-013
+    claim: >-
+      Two tasks writing the same tag resolve by commit order (last wins).
+    source: "#more-than-one-program-tasks"
+    tests: []
+    note: >-
+      Gap. No test has two tasks write one tag and asserts which value survives.
+  - id: TASK-014
+    claim: >-
+      Each additional task's health is reported in Stats().Tasks and
+      rendered in the built-in dashboard and the HMI kit's ScanDiagnostics.
+    source: "#more-than-one-program-tasks"
+    tests:
+      - go ./runtime TestTasks
+    partial: true
+    note: >-
+      TestTasks asserts a task's row in Stats().Tasks with its scan count
+      and zero logic errors. Overruns, a task's fault reaching its row, and
+      the dashboard / ScanDiagnostics rendering are not asserted. (The
+      earlier refs TestScanStatsDiagnostics, TestMainTaskFaultKeepsMessage
+      and TestFrameCarriesScanDiagnostics test the main task's stats only,
+      and "a fault is kept as its message" is not a promise of the page.)
+  - id: TASK-015
+    claim: >-
+      A task's cpu: pins its thread to a core and priority: runs it under
+      SCHED_FIFO (Linux); the placement is reported in the stats.
+    source: "#more-than-one-program-tasks"
+    tests:
+      - go ./runtime TestApplySchedAffinity
+      - go ./runtime TestRunReportsSched
+    partial: true
+    note: >-
+      The FIFO grant is skipped on CI hosts without CAP_SYS_NICE.
+  - id: TASK-016
+    claim: >-
+      A placement request the OS refuses is logged and shown as REFUSED on
+      the task's row, and the task runs normally rather than silently falling
+      back.
+    source: "#more-than-one-program-tasks"
+    tests:
+      - go ./runtime TestApplySchedFIFORefusalIsExplicit
+      - go ./runtime TestRunReportsSched
+    partial: true
+    note: >-
+      The dashboard REFUSED label itself is not asserted.
+  - id: TASK-017
+    claim: >-
+      Pinning alone on a stock kernel makes a fast task worse; it should be
+      used together with an isolated core or a real-time priority.
+    source: "#more-than-one-program-tasks"
+    tests: []
+    note: >-
+      Gap, and not a test-shaped claim; it rests on the measurements in the real-time guide.

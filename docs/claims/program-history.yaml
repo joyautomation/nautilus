@@ -1,0 +1,171 @@
+page: website/src/content/docs/guides/program-history.md
+title: Program history
+prefix: PH
+claims:
+  - id: PH-001
+    claim: >-
+      GET /api/program/history serves every commit that touched the project
+      (author, date, subject and the full diff) from the controller itself,
+      with the built sha the deployed baseline corresponds to.
+    source: "#program-history"
+    tests:
+      - go ./server TestProgramHistoryEndpoint
+      - go ./internal/vcs TestCapture
+    partial: true
+    note: >-
+      The commit date is asserted nowhere, and no test commits outside the
+      project's subtree to show only commits that touched the project are
+      served. Author, subject, diff, sha and built are asserted (capture in
+      TestCapture, serving in TestProgramHistoryEndpoint).
+  - id: PH-002
+    claim: >-
+      The response's programs list is the live layer per task (task, pou,
+      hash, dirty), so one read shows whether online edits have drifted from
+      what CI shipped.
+    source: "#program-history"
+    tests:
+      - go ./server TestProgramHistoryEndpoint
+    partial: true
+    note: >-
+      Only the presence and POU of the programs layer is asserted, not the dirty flag after an edit.
+  - id: PH-003
+    claim: >-
+      A build from an uncommitted tree is flagged builtDirty: true rather
+      than passed off as clean lineage.
+    source: "#program-history"
+    tests:
+      - go ./internal/vcs TestCapture
+    partial: true
+    note: >-
+      Asserts the captured BuiltDirty flag; the JSON field name on the endpoint is not asserted.
+  - id: PH-004
+    claim: >-
+      naut build snapshots the project's git history into the emitted
+      binary, and the deployed controller serves it with no git binary, no
+      .git directory and no network.
+    source: "#where-the-history-comes-from"
+    tests:
+      - go ./cmd/naut TestBuildEmbedsHistory
+    partial: true
+    note: >-
+      The distroless / no-git environment is not reproduced; the round trip through the archive is.
+  - id: PH-005
+    claim: >-
+      naut run in a checkout captures history live from the repo on first request.
+    source: "#where-the-history-comes-from"
+    tests: []
+    note: >-
+      Gap. Capture is tested directly, but the lazy capture on first request in naut run is not.
+  - id: PH-006
+    claim: >-
+      The endpoint never fails for lack of provenance: outside a repo it
+      serves an empty history.
+    source: "#where-the-history-comes-from"
+    tests:
+      - go ./server TestProgramHistoryEndpoint
+      - go ./internal/vcs TestCaptureNoRepo
+  - id: PH-007
+    claim: >-
+      Snapshots are stored git-style, so files dedupe on git's blob ids (an
+      unchanged file costs one blob across commits).
+    source: "#where-the-history-comes-from"
+    tests:
+      - go ./internal/vcs TestCapture
+  - id: PH-008
+    claim: >-
+      POST /api/program/activate {sha} rebuilds every task's program source
+      as it was at that commit, with libraries composed ahead as boot
+      composes them, and warm-swaps each one.
+    source: "#activating-a-revision"
+    tests:
+      - go ./server TestActivate
+      - go ./internal/vcs TestSnapshotComposesSources
+      - go ./server TestActivateImplicitTags
+    partial: true
+    note: >-
+      Every activation test uses a single-task project, so "every task" is
+      not asserted (a swap of only the main task would pass); library
+      composition is asserted in vcs, while the server tests stub the
+      sha-to-sources wiring.
+  - id: PH-009
+    claim: >-
+      Activation is gated like any online edit: it needs online-edits: true
+      and the write token if one is set.
+    source: "#activating-a-revision"
+    tests:
+      - go ./server TestActivateRejections
+    partial: true
+    note: >-
+      Refusal with online edits off is asserted; the token requirement is not.
+  - id: PH-010
+    claim: >-
+      Retained state survives an activation (migrated by name and type) and
+      what cannot carry over is reported per task in resets.
+    source: "#activating-a-revision"
+    tests:
+      - go ./runtime TestSwapWarmCarriesRetainedState
+    partial: true
+    note: >-
+      The swap mechanism is tested; the activate endpoint's per-task
+      resets report is not asserted.
+  - id: PH-011
+    claim: >-
+      Activation is all or nothing: every source compiles before any swap,
+      so a controller is never left running half of two revisions, and a
+      commit that no longer compiles is rejected whole.
+    source: "#activating-a-revision"
+    tests:
+      - go ./server TestActivateRejections
+    partial: true
+    note: >-
+      Asserted with a single task; the multi-task never-half-swapped case is not.
+  - id: PH-012
+    claim: >-
+      Each program keeps its one-step rollback after an activation, and
+      activating built returns to exactly what CI shipped.
+    source: "#activating-a-revision"
+    tests:
+      - go ./server TestActivate
+    partial: true
+    note: >-
+      Rollback is asserted; activating the built sha as the way back to the shipped baseline is not.
+  - id: PH-013
+    claim: >-
+      Activation is ephemeral: a restart boots the binary's embedded
+      programs.
+    source: "#activating-a-revision"
+    tests: []
+    note: >-
+      Gap. Same as the online-edit ephemerality claim; no restart is simulated.
+  - id: PH-014
+    claim: >-
+      After an activation the history reports active: <sha>, and a hand edit
+      or rollback clears that claim.
+    source: "#activating-a-revision"
+    tests:
+      - go ./server TestActivate
+    partial: true
+    note: >-
+      Clearing on rollback is asserted; clearing on a hand edit is not.
+  - id: PH-015
+    claim: >-
+      A commit that changed topology (added a task, renamed one) is refused
+      with a 409 naming the difference.
+    source: "#what-activation-cannot-do"
+    tests:
+      - go ./server TestActivateRejections
+    partial: true
+    note: >-
+      The 409 for an added and for a missing task is asserted, and the added
+      case's error says "topology"; that the error names the differing task
+      is not asserted.
+  - id: PH-016
+    claim: >-
+      Activation covers logic only: the cold plane (tasks, tags, drivers,
+      retain and redundancy wiring) stays as the running manifest booted it.
+    source: "#what-activation-cannot-do"
+    tests:
+      - go ./server TestActivateRejections
+    partial: true
+    note: >-
+      Only the topology refusal is asserted; a tag or driver change in the old commit being ignored is not.

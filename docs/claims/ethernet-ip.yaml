@@ -1,0 +1,473 @@
+page: website/src/content/docs/guides/ethernet-ip.md
+title: EtherNet/IP
+prefix: EIP
+claims:
+  - id: EIP-001
+    claim: >-
+      An `eip` driver without `host:` or without `manifest:` is rejected at
+      project load (so `naut check` fails, not `naut run`).
+    source: "#"
+    tests: []
+    note: >-
+      TestSchemaRequiresWhatLoaderRequires was removed: it builds the eip
+      driver against an empty filesystem, so buildDriver fails reading the
+      missing manifest file whether or not the host/manifest checks exist;
+      its remaining assertion is about the JSON schema, not project load.
+  - id: EIP-002
+    claim: >-
+      `New` never dials: it decodes the manifest, rejects bad scan-class
+      configuration and partitions bindings into scan classes offline, so
+      check and build pass with no controller.
+    source: "#"
+    tests:
+      - go ./eip TestScanClassErrors
+    partial: true
+    note: >-
+      Offline validation is asserted for scan-class errors only; that New
+      opens no socket, strict manifest decoding (a misspelled key is an
+      error) and duplicate-name rejection have no eip test.
+  - id: EIP-003
+    claim: >-
+      `naut eip browse` prints one line per tag with its name, type name
+      and array dimensions, including program-scope tags as
+      `Program:<prog>.<tag>`.
+    source: "#generating-the-manifest-naut-eip-import"
+    tests:
+      - go ./cmd/naut TestLogixEmulateBrowseAndImport
+      - go ./eip/logix TestBrowseAgainstEmulator
+    partial: true
+    note: >-
+      Program-scope names and the presence of the strings REAL/BOOL are
+      asserted; array dimensions in the output are not, and the
+      eip/logix test checks the client's symbol list, not printed lines.
+  - id: EIP-004
+    claim: >-
+      `naut eip import` always writes `eip_types.st`; with `--format yaml`
+      it also writes `eip_manifest.yaml` and `tags/eip.yaml`, with
+      `--format go` it writes `eip_manifest.go`, and a missing `--out`
+      directory is created.
+    source: "#generating-the-manifest-naut-eip-import"
+    tests:
+      - go ./cmd/naut TestEIPImportCreatesOutDir
+      - go ./cmd/naut TestEIPImportGoFormat
+      - go ./cmd/naut TestLogixEmulateBrowseAndImport
+  - id: EIP-005
+    claim: >-
+      The import selects device tags by `--tags` globs, excludes module I/O
+      such as `Local:1:I` by default, and marks `--writable` matches as
+      writable outputs.
+    source: "#generating-the-manifest-naut-eip-import"
+    tests:
+      - go ./eip/codegen TestGenerate
+      - go ./eip/codegen TestTagsYAMLDerivesRoles
+    partial: true
+    note: >-
+      The default module-I/O exclusion and the writable mark are asserted;
+      selection by `--tags` globs is never exercised (no test sets tag
+      patterns), nor that an explicit pattern brings module I/O back in.
+  - id: EIP-006
+    claim: >-
+      The generated tag file gives output role to `--writable` matches and
+      input otherwise, names the UDT in `type:` for struct bindings only,
+      and says in its header that it is generated.
+    source: "#generating-the-manifest-naut-eip-import"
+    tests:
+      - go ./eip/codegen TestTagsYAMLDerivesRoles
+      - go ./eip/codegen TestTagsYAMLEmitsTypeForUDTsOnly
+      - go ./eip/codegen TestTagsYAMLHeader
+  - id: EIP-007
+    claim: >-
+      `--tags-skip` leaves hand-declared tags out of the tag file, and a
+      skip pattern that matches nothing is an error rather than a silent
+      regeneration of a hand-written tag.
+    source: "#generating-the-manifest-naut-eip-import"
+    tests:
+      - go ./eip/codegen TestTagsYAMLSkip
+      - go ./eip/codegen TestTagsYAMLRejectsStaleSkip
+  - id: EIP-008
+    claim: >-
+      `naut eip tags` re-derives just the tag file from the committed
+      manifest with no controller.
+    source: "#generating-the-manifest-naut-eip-import"
+    tests:
+      - go ./eip/codegen TestTagsYAMLDerivesRoles
+    partial: true
+    note: >-
+      The generator function is tested; the `naut eip tags` subcommand
+      itself (flags, -o, -skip) has no test.
+  - id: EIP-009
+    claim: >-
+      At every connect the driver validates the manifest against the live
+      controller (missing tag, changed template type, lost UDT member) and
+      drift fails the connection listing every problem rather than
+      mis-decoding.
+    source: "#generating-the-manifest-naut-eip-import"
+    tests: []
+    note: >-
+      No test drives a drifted controller against a manifest.
+  - id: EIP-010
+    claim: >-
+      UDTs become real ST `TYPE` structs a program can use, with the
+      controller's member names verbatim and nested UDTs emitted
+      dependencies-first so the block compiles top to bottom.
+    source: "#types-udts-become-st-types"
+    tests:
+      - go ./eip/codegen TestGenerate
+  - id: EIP-011
+    claim: >-
+      A Logix string template (`DINT LEN` plus `SINT[] DATA`) becomes the
+      type `STRING`, not a struct; array members become `ARRAY[0..n-1]`;
+      `STIME`/`DATE`/`TIME_OF_DAY` map to `DINT` and `DATE_AND_TIME` to
+      `LINT`.
+    source: "#types-udts-become-st-types"
+    tests:
+      - go ./eip/codegen TestGenerate
+    partial: true
+    note: >-
+      The STRING template is asserted; array member bounds and the
+      STIME/DATE/TIME_OF_DAY/DATE_AND_TIME mappings are not.
+  - id: EIP-013
+    claim: >-
+      Tag names are sanitized into identifiers (`Program:MainProgram.Motor`
+      becomes `MainProgram_Motor`, other punctuation becomes `_`, runs
+      collapse, a leading digit gets a `Tag_` prefix, a collision gets
+      `_2`) while the device path stays in the manifest's `device:`.
+    source: "#types-udts-become-st-types"
+    tests:
+      - go ./eip/codegen TestGenerate
+      - go ./cmd/naut TestLogixEmulateBrowseAndImport
+    partial: true
+    note: >-
+      The program-scope case and the `device:` path are asserted; the
+      leading-digit prefix, run collapsing and `_2` collision rule are not.
+  - id: EIP-014
+    claim: >-
+      What cannot be imported (multi-dimensional arrays, members with an
+      undecoded type code, templates that could not be uploaded) is
+      reported as `skipped:` lines with a reason and never reaches the
+      manifest.
+    source: "#types-udts-become-st-types"
+    tests: []
+    note: >-
+      The emulator-side skip list is tested (EIP-024); the importer's
+      `skipped:` output has no test.
+  - id: EIP-015
+    claim: >-
+      A binding's scan class comes from the manifest's `scanclass`,
+      overridden by `tag-classes:` globs matched against either the
+      nautilus tag name or the device path; unassigned bindings are the
+      `default` class at `scan-rate`.
+    source: "#scan-classes-and-leaf-mode"
+    tests:
+      - go ./eip TestScanClasses
+    partial: true
+    note: >-
+      A glob matching only the device path (`Program:MainProgram.*` for
+      Motor) and the default class are asserted; a glob matching only the
+      nautilus name is not distinguished (every other binding's name equals
+      its device path), and the manifest `scanclass` key and "later
+      assignments win" are not asserted.
+  - id: EIP-016
+    claim: >-
+      Naming a scan class without defining its rate is a load error.
+    source: "#scan-classes-and-leaf-mode"
+    tests:
+      - go ./eip TestScanClassErrors
+  - id: EIP-017
+    claim: >-
+      The reserved class `none` catalogs a tag without polling it: it never
+      appears in the input set or snapshot, and stays a valid write target.
+    source: "#scan-classes-and-leaf-mode"
+    tests:
+      - go ./eip TestScanClasses
+  - id: EIP-018
+    claim: >-
+      Each class polls at its own rate, and every class is polled once
+      immediately on connect so a slow class does not delay the first
+      snapshot.
+    source: "#scan-classes-and-leaf-mode"
+    tests:
+      - go ./eip TestScanClasses
+  - id: EIP-019
+    claim: >-
+      Elementary scalars are batched into Multiple Service Packets sized to
+      the negotiated 500-byte connection, so a class of many scalars costs a
+      handful of round trips.
+    source: "#scan-classes-and-leaf-mode"
+    tests:
+      - go ./eip/logix TestBatchedReads
+    partial: true
+    note: >-
+      Batched reads return correct values, with a missing tag failing alone;
+      the 500-byte sizing and the round-trip count are not asserted.
+  - id: EIP-020
+    claim: >-
+      Structs, strings and arrays are read whole with one Read Tag for the
+      root and decoded into the manifest type.
+    source: "#scan-classes-and-leaf-mode"
+    tests:
+      - go ./eip/logix TestReadStructRoot
+      - go ./eip TestDriverPollAndWrite
+    partial: true
+    note: >-
+      Read Tag Fragmented fallback for large values is not asserted;
+      strings and arrays through the driver are not read in a test.
+  - id: EIP-021
+    claim: >-
+      When the controller refuses a whole-struct read (privilege
+      violation), that binding drops to leaf mode for the session: members
+      are read individually and the struct is assembled client-side in
+      manifest field order.
+    source: "#scan-classes-and-leaf-mode"
+    tests: []
+    note: >-
+      TestDriverLeafModeFallback was removed: it checks only the assembled
+      values, which a whole-struct read produces identically, so it passes
+      whether or not the refusal happened and leaf mode ran. Session-long
+      stickiness is also unasserted.
+  - id: EIP-022
+    claim: >-
+      In leaf mode a member the controller never serves is detected by its
+      CIP status, logged once, dropped from the poll set and assembled as
+      the IEC zero; a member failing for any other reason holds the
+      binding's last good value, so a partial struct is never published.
+    source: "#scan-classes-and-leaf-mode"
+    tests: []
+    note: >-
+      The emulator only refuses whole-struct roots; per-member never-serve
+      and transient failures are not simulated.
+  - id: EIP-023
+    claim: >-
+      `/api/drivers` counts the bindings in leaf mode as `leaf structs`.
+    source: "#scan-classes-and-leaf-mode"
+    tests: []
+    note: >-
+      The status mapper test builds health without leaf counts.
+  - id: EIP-024
+    claim: >-
+      The eip driver reports no per-tag quality of its own: before the first
+      successful poll every input reads Stale (read error), and after a
+      connection drops the last snapshot keeps being served as Good.
+    source: "#per-tag-quality"
+    tests: []
+    note: >-
+      Neither the pre-first-poll Stale nor the post-drop Good-with-held
+      values is asserted by any test.
+  - id: EIP-025
+    claim: >-
+      A dotted path resolves to its root tag, since a UDT arrives whole.
+    source: "#per-tag-quality"
+    tests: []
+    note: >-
+      No test.
+  - id: EIP-026
+    claim: >-
+      A `writable` binding is a `role: output` tag; output changes reach
+      the controller, and a scalar goes as one CIP Write Tag with its Logix
+      type code.
+    source: "#writes"
+    tests:
+      - go ./eip TestDriverPollAndWrite
+      - go ./eip TestRuntimeRoundTrip
+      - go ./cmd/naut TestLogixEmulateDriverRoundTrip
+    partial: true
+    note: >-
+      Tests only check the value lands in the emulator store; that a
+      scalar goes as one CIP Write Tag and with its Logix type code is not
+      asserted.
+  - id: EIP-027
+    claim: >-
+      A struct output is written member by member symbolically
+      (`Device.Member.Sub`), nested structs recursing.
+    source: "#writes"
+    tests:
+      - go ./eip TestDriverPollAndWrite
+    partial: true
+    note: >-
+      The member values of a nested struct landing in the emulator are
+      asserted; that they go as per-member symbolic writes (rather than one
+      write of the root) is not observed.
+  - id: EIP-028
+    claim: >-
+      An unchanged output value never reaches the wire twice.
+    source: "#writes"
+    tests: []
+    note: >-
+      No test counts writes on the wire (the Modbus driver has one).
+  - id: EIP-029
+    claim: >-
+      Strings and array members inside a struct are not written, and a
+      top-level STRING or array binding is not a writable target.
+    source: "#writes"
+    tests: []
+    note: >-
+      Listed under Not supported; nothing asserts the refusal.
+  - id: EIP-030
+    claim: >-
+      There is no baseline rule: the first scan's output values, including
+      an output's `init:`, are written to the controller.
+    source: "#writes"
+    tests:
+      - go ./cmd/naut TestLogixEmulateDriverRoundTrip
+    partial: true
+    note: >-
+      The round trip calls Scan once and waits for Batch_Ack on the
+      emulator, so the first scan's output being written is asserted; that
+      an output's `init:` reaches the controller is not.
+  - id: EIP-031
+    claim: >-
+      A write that fails because the connection broke is requeued (latest
+      value per tag) and retried after reconnect; a write the controller
+      refuses on a live connection is logged, dropped for that flush, and
+      goes again when the value changes.
+    source: "#writes"
+    tests: []
+    note: >-
+      No test breaks the connection or refuses a write.
+  - id: EIP-032
+    claim: >-
+      A write kicks the poll loop awake rather than waiting out the next
+      interval.
+    source: "#writes"
+    tests: []
+    note: >-
+      Latency of a write against a slow scan rate is not tested.
+  - id: EIP-033
+    claim: >-
+      The driver has no write gate: nothing inside it suppresses a command
+      (a standby replica instead skips scans).
+    source: "#writes"
+    tests: []
+    note: >-
+      An absence; the standby-skips-scans behaviour is a runtime property
+      not tested here.
+  - id: EIP-034
+    claim: >-
+      `/api/drivers` reports Kind `ethernet-ip` with state connected,
+      connecting, error (with `lastError`) or degraded (connected while
+      every poll fails).
+    source: "#apidrivers"
+    tests:
+      - go ./internal/project TestEIPStatusStates
+  - id: EIP-035
+    claim: >-
+      The status row is named by host with `Detail: "<host> · slot N"`,
+      carries the listed metrics, and reconnects back off from 1s to about
+      30s, resetting on success.
+    source: "#apidrivers"
+    tests: []
+    note: >-
+      The state test does not assert detail, metrics or the backoff
+      schedule.
+  - id: EIP-036
+    claim: >-
+      `naut logix emulate` serves a ControlLogix from an L5X export:
+      controller tags become symbols, program tags are served as
+      `Program:<prog>.<tag>`, initial values come from the export, and
+      aliases, multi-dimensional arrays and types without a public shape
+      (`MESSAGE`, `AXIS_*`) are skipped and reported.
+    source: "#no-plc-the-logix-emulator"
+    tests:
+      - go ./cmd/naut TestLogixEmulateBrowseAndImport
+      - go ./cmd/naut TestLogixEmulateVarietyValues
+    partial: true
+    note: >-
+      Program tags, export initial values and the alias / MESSAGE /
+      AXIS-typed member skips are asserted; skipping a multi-dimensional
+      array is not.
+  - id: EIP-037
+    claim: >-
+      `--values` seeds values by client-style path (objects seed members,
+      arrays elements, strings a STRING tag), `--surface` serves a
+      hand-written surface, and bad usage (no source, both sources, bad
+      listen address, unknown seed tag, missing file) exits non-zero.
+    source: "#no-plc-the-logix-emulator"
+    tests:
+      - go ./cmd/naut TestLogixEmulateVarietyValues
+      - go ./cmd/naut TestLogixEmulateUsage
+    partial: true
+    note: >-
+      Only array seeding is exercised (`Trend`); object-member and STRING
+      seeds are not. `--surface` serving is not exercised, only its usage
+      errors; port `0` and `--name` are not asserted.
+  - id: EIP-038
+    claim: >-
+      `--ramp` drifts every numeric leaf, leaves BOOLs alone, and a leaf a
+      client writes stops drifting and keeps the write.
+    source: "#no-plc-the-logix-emulator"
+    tests:
+      - go ./cmd/naut TestLogixEmulateRamp
+  - id: EIP-039
+    claim: >-
+      Client writes land in the emulator, so a project's outputs read back
+      on the next poll, and the whole browse, import, poll, write path runs
+      against it.
+    source: "#no-plc-the-logix-emulator"
+    tests:
+      - go ./cmd/naut TestLogixEmulateDriverRoundTrip
+      - go ./eip TestRuntimeRoundTrip
+    partial: true
+    note: >-
+      Writes landing in the emulator store and the import, poll, write path
+      are asserted; no test reads a written output back through the
+      driver's next poll.
+  - id: EIP-040
+    claim: >-
+      The emulator serves Forward_Open, symbolic Read/Write Tag (plain and
+      fragmented), Multiple Service Packet batches, tag-list upload,
+      Template services, and the Identity and Program Name objects, which
+      both nautilus's client and pycomm3 speak.
+    source: "#no-plc-the-logix-emulator"
+    tests:
+      - go ./eip/logix TestBrowseAgainstEmulator
+      - go ./eip/logix TestReadWriteScalars
+      - go ./eip/logix TestBatchedReads
+    partial: true
+    note: >-
+      Fragmented transfer, the Identity object and pycomm3 compatibility
+      are not tested (no pycomm3 job in CI).
+  - id: EIP-041
+    claim: >-
+      The emulator's `DenyStructRoots` switch refuses struct roots the way
+      a real controller refuses an AOI backing tag, which is how leaf mode
+      is tested.
+    source: "#no-plc-the-logix-emulator"
+    tests: []
+    note: >-
+      TestDriverLeafModeFallback was removed: it would pass the same if
+      DenyStructRoots did nothing (a whole-struct read yields the same
+      assembled values); it checks neither the refusal nor that leaf mode
+      was entered.
+  - id: EIP-042
+    claim: >-
+      `naut test` never opens a socket: whatever `driver:` configures,
+      every acceptance test substitutes the in-memory loopback driver, and
+      `given:` writes struct bindings field by field using the generated
+      `type:`.
+    source: "#testing"
+    tests: []
+    note: >-
+      Exercised by example projects (batch-skid) but no test asserts the
+      driver substitution or the field-by-field struct `given:`.
+  - id: EIP-043
+    claim: >-
+      Non-Logix CIP devices, implicit Class 1 I/O, PCCC/SLC/PLC-5/Micro800,
+      multi-dimensional arrays, and writing strings or arrays are not
+      supported.
+    source: "#not-supported"
+    tests: []
+    note: >-
+      Absences; the importer skipping multi-dimensional arrays is not
+      tested.
+  - id: EIP-044
+    claim: >-
+      `WithScanRate`, `WithScanClass` and `WithTagClass` configure polling
+      from Go, and `ScanClasses()` returns the resolved groups.
+    source: "#from-go"
+    tests:
+      - go ./eip TestScanClasses
+    partial: true
+    note: >-
+      WithScanClass, WithTagClass and ScanClasses are asserted;
+      WithScanRate's value is not observable (the 250ms default would pass
+      the same 5s wait).

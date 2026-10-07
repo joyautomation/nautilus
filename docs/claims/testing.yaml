@@ -1,0 +1,392 @@
+page: docs/testing.md
+title: Testing (naut test)
+prefix: TEST
+claims:
+  - id: TEST-001
+    claim: >-
+      naut test runs the resource on a virtual clock that both the measured
+      scan-to-scan dt (bound to dt-tag) and the TON/TOF/TP millisecond base
+      follow, so advance: 10s runs ten seconds of process time exactly.
+    source: "#why-virtual-time"
+    tests:
+      - go ./acceptance TestVirtualDtIsExact
+      - go ./acceptance TestLowTempAlarmWaitsItsFullDelay
+      - naut testdata/projects/heated-tank low-temp alarm waits its full 10 s
+    partial: true
+    note: >-
+      TOF and TP on the virtual base are covered by the conformance corpus, not here.
+  - id: TEST-002
+    claim: >-
+      Runs are deterministic: the scheduler lands the clock exactly on each
+      tick, so dt is exactly the configured period and a loop's trajectory is
+      identical on every run.
+    source: "#why-virtual-time"
+    tests:
+      - go ./acceptance TestRunsAreReproducible
+      - go ./acceptance TestVirtualDtIsExact
+  - id: TEST-003
+    claim: >-
+      The fixture is nautilus.yaml: tasks, scan rates, tag roles, seeds,
+      units and descriptions come from the manifest, so a test never
+      restates them.
+    source: "#a-test-file"
+    tests:
+      - go ./acceptance TestHeatedTankSuite
+    partial: true
+    note: >-
+      The suite runs against the manifest; a retuned manifest value flowing into the tests is not asserted.
+  - id: TEST-004
+    claim: >-
+      A test file that breaks the format's rules is refused: a step takes at
+      most one of scans, advance or until, hold applies only with until, a
+      test needs a name, and a test has either steps: or inline step keys,
+      not both.
+    source: "#steps-and-time"
+    tests:
+      - go ./acceptance TestSpecRejectsMistakes
+  - id: TEST-005
+    claim: >-
+      A test with no steps: is one step, so that step's keys may be written
+      inline on the test.
+    source: "#a-test-file"
+    tests:
+      - go ./acceptance TestShorthandIsOneStep
+      - go ./acceptance TestFailureLinePointsAtTheAssertion
+  - id: TEST-006
+    claim: >-
+      scans: N runs until the main task has completed N more scans.
+    source: "#steps-and-time"
+    tests:
+      - go ./acceptance TestPumpSealInHysteresis
+      - naut testdata/projects/heated-tank pump seals in below the start level and drops out above it
+    partial: true
+    note: >-
+      The Go scheduler's Scans(n) is exercised; the YAML `scans:` count against the main task specifically is not isolated.
+  - id: TEST-007
+    claim: >-
+      advance: d runs every due tick up to now+d and lands exactly there;
+      a step with none of scans/advance/until asserts on the seeded state
+      before anything runs.
+    source: "#steps-and-time"
+    tests:
+      - go ./acceptance TestVirtualDtIsExact
+      - go ./acceptance TestLowTempAlarmWaitsItsFullDelay
+    partial: true
+    note: >-
+      The omit-all-three-keys seeded-state assertion has no test, and no
+      test reads the clock after an advance to show it lands exactly on
+      now+d (the TON test only brackets the trip between 9.5 s and 10.5 s).
+  - id: TEST-008
+    claim: >-
+      until: runs up to the bound and stops as soon as expect holds; with
+      hold: the expectation must stay true for that long, so a loop that
+      merely passes through its target does not count as settled.
+    source: "#steps-and-time"
+    tests:
+      - go ./acceptance TestPISettlesSetpointStep
+      - naut testdata/projects/heated-tank PI settles a 65 to 72 C setpoint step and holds it
+    partial: true
+    note: >-
+      No test shows an overshooting loop failing a hold: that a pass-through is rejected is untested.
+  - id: TEST-009
+    claim: >-
+      always: is checked after every scan in the step (an invariant, not an
+      endpoint).
+    source: "#steps-and-time"
+    tests: []
+    note: >-
+      Gap. The tests that used to be listed cannot tell checking after every
+      scan from checking only at the end of the step: heated-tank's always:
+      simply holds throughout, and the failure-line "always" case
+      (TestFailureLinePointsAtTheAssertion) is false at the endpoint too. No
+      test has a transient mid-step violation that recovers by the end.
+  - id: TEST-010
+    claim: >-
+      given: writes are routed by the role the manifest declared: an input
+      goes to the driver's input image and arrives at the top of the next
+      scan, everything else is written straight to the store, applied before
+      the step's first scan.
+    source: "#given-setting-the-world"
+    tests:
+      - go ./acceptance TestGivenComposesAfterZeroScans
+    partial: true
+    note: >-
+      A non-input given visible with scans: 0 (written straight to the store,
+      before the first scan) is asserted. No test shows an input given
+      landing in the driver's input image and arriving only at the top of the
+      next scan. (TestPumpSealInHysteresis was removed: it sets tags directly
+      in Go and never goes through given:.)
+  - id: TEST-011
+    claim: >-
+      Writing an undeclared tag in given: is an error, not a new tag.
+    source: "#given-setting-the-world"
+    tests: []
+    note: >-
+      Gap. Only force: of an unknown tag is asserted (undefined tag), not given:.
+  - id: TEST-012
+    claim: >-
+      A dotted name in given: addresses one field of a UDT tag and zero-fills
+      the rest of that struct the first time a test touches it, and every
+      dotted field of the same tag in one given map composes onto a single
+      write, independent of key order.
+    source: "#given-setting-the-world"
+    tests:
+      - go ./acceptance TestGivenSingleFieldStillZeroFillsTheRest
+      - go ./acceptance TestGivenComposesTwoFieldsOfSameStructInOneMap
+      - go ./acceptance TestGivenNestedFieldAndSiblingFieldCompose
+      - go ./acceptance TestGivenScalarAndStructFieldInSameStep
+  - id: TEST-013
+    claim: >-
+      An array element is [n] from the declared lower bound in given: and
+      expect:, an enumeration member takes its name (or integer) at any
+      depth, and a name that is no member fails the test with the members
+      listed.
+    source: "#given-setting-the-world"
+    tests:
+      - go ./acceptance TestGivenEnumMemberByPath
+      - go ./acceptance TestGivenEnumNonMemberNamesMembers
+  - id: TEST-014
+    claim: >-
+      Tests never open a socket: whatever driver: says (including eip), the
+      harness substitutes a stub, so a project bound to hardware is testable
+      offline.
+    source: "#given-setting-the-world"
+    tests: []
+    note: >-
+      Gap. No test loads a project with a network driver and checks that no connection is attempted.
+  - id: TEST-015
+    claim: >-
+      Expectations take an exact value (BOOL, STRING or number) or a
+      matcher: near with tol (defaulting to the file's tolerance), gt, ge,
+      lt, le, between (inclusive) and eq.
+    source: "#expectations"
+    tests:
+      - go ./acceptance TestExpectShapes
+      - go ./acceptance TestSchemaMatchersAreImplemented
+      - naut testdata/projects/heated-tank PI settles a 65 to 72 C setpoint step and holds it
+    partial: true
+    note: >-
+      The matchers parse and the near/between forms run in the suite; the
+      semantics of each comparison (ge vs gt boundaries, inclusive between,
+      the tolerance default) are not asserted by a dedicated test.
+  - id: TEST-016
+    claim: >-
+      An ST expression string (or a list mixing mappings and strings) is
+      compiled by the same compiler as the logic, can use tags and library
+      FUNCTIONs, and a mapping is tag matchers while a string is an
+      expression.
+    source: "#expectations"
+    tests:
+      - go ./acceptance TestExpectShapes
+      - go ./acceptance TestExpressionAddressesStructField
+      - go ./acceptance TestFailureLinePointsAtTheAssertion
+    partial: true
+    note: >-
+      Mapping vs string parsing, a mixed list, an expression over tags, and a
+      false expression failing are asserted. No test calls a library
+      FUNCTION from an expectation (TestTestLibDir was removed: the libdir
+      fixture's suite has no expression expectations at all).
+  - id: TEST-017
+    claim: >-
+      Program locals are addressable as task.local in the matcher form
+      (exact or with a matcher), resolution is tag-first then <tag>.<field>
+      then <task>.<local> then an error naming both namespaces, and
+      task.local is not a name an ST expression string can use.
+    source: "#expectations"
+    tests:
+      - go ./acceptance TestTaskLocalStillResolves
+      - go ./acceptance TestTaskLocalInListForm
+      - go ./acceptance TestUnknownHeadNamesBothNamespaces
+      - go ./acceptance TestTaskLocalNotResolvedInExpression
+    partial: true
+    note: >-
+      Only exact-value task-local matchers are asserted, never a comparison
+      matcher (main.integral: { gt: 0.0 }). The resolution order is not
+      asserted: every name in the tests resolves one way only; no case has a
+      name that is both a tag (or tag field) and a task local.
+  - id: TEST-018
+    claim: >-
+      A scan that faults fails the test that ran it, with the error and the
+      virtual timestamp, without the author writing an assertion.
+    source: "#expectations"
+    tests: []
+    note: >-
+      Gap. A failure with step 0 / line 0 for a faulted scan is described
+      in the docs; no acceptance test provokes a faulting scan.
+  - id: TEST-019
+    claim: >-
+      alarms: asserts host alarm state (active, unacked, shelved, state,
+      priority, journal) at the end of a step, and the ack, shelve and
+      unshelve verbs in given: make the same calls as POST /api/alarms/*.
+    source: "#alarms"
+    tests:
+      - go ./acceptance TestAlarmAckVerb
+      - go ./acceptance TestAlarmShelveAndUnshelveVerbs
+      - go ./acceptance TestAlarmOnDelayWalksInVirtualTime
+      - go ./acceptance TestAlarmFailureNamesWhatItSaw
+    partial: true
+    note: >-
+      Only active: is shown failing on a mismatch (TestAlarmFailureNamesWhatItSaw);
+      unacked, shelved, state, priority and journal appear only in passing
+      tests, so a check that ignored them would still pass. That the verbs
+      make the same calls as POST /api/alarms/* is not asserted.
+  - id: TEST-020
+    claim: >-
+      The alarm engine reads the runtime's virtual clock, so a five-minute
+      on-delay is walked exactly and a fifteen-minute shelf expires under
+      advance: 16m.
+    source: "#alarms"
+    tests:
+      - go ./acceptance TestAlarmOnDelayWalksInVirtualTime
+      - go ./acceptance TestAlarmShelveAndUnshelveVerbs
+      - naut examples/lift-station a shelved high-level alarm is silent and always expires
+  - id: TEST-021
+    claim: >-
+      Using alarms: keys without a manifest alarms: section is an error
+      rather than a quiet pass, and alarms: does not combine with until:.
+    source: "#alarms"
+    tests:
+      - go ./acceptance TestAlarmKeysWithoutAnEngineAreAnError
+      - go ./acceptance TestAlarmsAndUntilAreRefused
+  - id: TEST-022
+    claim: >-
+      Alarm state does not leak between tests, and WithAlarms builds the
+      manifest's own engine over each test's runtime with an in-memory
+      journal and no notifiers.
+    source: "#from-a-go-project"
+    tests:
+      - go ./acceptance TestAlarmStateDoesNotLeakBetweenTests
+    partial: true
+    note: >-
+      The in-memory journal and absence of notifiers are not asserted.
+  - id: TEST-023
+    claim: >-
+      suspend: [task] stops the named tasks from scanning for the duration of
+      a test (file default overridable per test), turning a closed loop into
+      an open-loop test.
+    source: "#freezing-tasks"
+    tests:
+      - naut testdata/projects/heated-tank low-temp alarm waits its full 10 s
+      - go ./acceptance TestLowTempAlarmWaitsItsFullDelay
+    partial: true
+    note: >-
+      The file-level suspend default and the per-test override are not asserted.
+  - id: TEST-024
+    claim: >-
+      force: puts tags in the controller's force table and they stay held
+      against the driver's input image, the plant model and the logic until
+      unforce: names them (or all); dotted member paths work as in given:;
+      forces end with the test.
+    source: "#forcing-holding-a-tag-against-its-writers"
+    tests:
+      - go ./acceptance TestForceHoldsAgainstPlantAndLogic
+    partial: true
+    note: >-
+      Holding against the plant model and the logic, unforce by name and
+      unforce: all are asserted. Holding against a driver's input image,
+      dotted member paths in a force: step and forces ending with the test
+      are not. (TestForceStepMistakes was removed with the claim's
+      mistakes-are-errors clause, which the page does not make.)
+  - id: TEST-025
+    claim: >-
+      A failure reports the assertion that broke (file:line of the tag key,
+      expression or alarms: key), the step and its first line, the virtual
+      time, and a trajectory of the process values with their units and
+      descriptions.
+    source: "#reading-a-failure"
+    tests:
+      - go ./acceptance TestFailureLinePointsAtTheAssertion
+      - go ./acceptance TestFailureReportsBothLines
+    partial: true
+    note: >-
+      Line and step line are asserted; the trajectory trace with unit and description is not.
+  - id: TEST-026
+    claim: >-
+      The -json event carries the test's line, passed, scans, elapsedMs and
+      for failures step, line, stepLine, atMs, reason, detail and trace.
+    source: "#in-ci"
+    tests:
+      - go ./acceptance TestFailureReportsBothLines
+    partial: true
+    note: >-
+      Only the failure line/stepLine/detail fields are decoded; the other fields and the trace are not.
+  - id: TEST-027
+    claim: >-
+      naut test exits non-zero on any failure, and -run filters tests by
+      name pattern.
+    source: "#in-ci"
+    tests: []
+    note: >-
+      Gap. cmd/naut has no test for the test subcommand's exit code or -run flag.
+  - id: TEST-028
+    claim: >-
+      *_test.yaml files are discovered in the project, and never reach a
+      deployed controller: naut build excludes them from the embedded
+      project.
+    source: "#in-ci"
+    tests:
+      - go ./acceptance TestDiscovery
+    partial: true
+    note: >-
+      Discovery is asserted; the exclusion from the built binary's archive
+      is not (TestDiscovery's comment promises it but only checks discovery).
+  - id: TEST-029
+    claim: >-
+      An SDK (Go) project runs the same suites through the same harness
+      (acceptance.Run with WithAlarms), and hand-written Go tests get the
+      virtual clock through acceptance.NewRuntime and its scheduler's
+      Advance, Scans, AdvanceUntil and Suspend.
+    source: "#from-a-go-project"
+    tests:
+      - go ./acceptance TestPumpSealInHysteresis
+      - go ./acceptance TestPISettlesSetpointStep
+      - go ./examples/go-sdk TestPISettles
+    partial: true
+    note: >-
+      The YAML-from-Go acceptance.Run entry point is exercised through RunDir (TestHeatedTankSuite), not Run.
+  - id: TEST-030
+    claim: >-
+      The harness replays one deterministic interleaving (next task due,
+      ties broken by declaration order).
+    source: "#what-these-tests-cannot-do"
+    tests:
+      - go ./acceptance TestRunsAreReproducible
+    partial: true
+    note: >-
+      Reproducibility is asserted; the declaration-order tie break is not isolated.
+  - id: TEST-031
+    claim: >-
+      naut test --target logix drives the same scenarios against a Logix
+      controller: given writes go to the controller and wait to read back,
+      advance: d is d of wall time plus a poll, scans: n is n task periods
+      plus a poll (a continuous task counting one poll each),
+      until/hold/always are evaluated per poll, suspend is a no-op, and alarm
+      verbs are unavailable.
+    source: "#against-a-logix-controller"
+    tests:
+      - go ./acceptance TestLiveSealInAndAlarm
+      - go ./acceptance TestLiveUntilHoldAndAlways
+      - go ./acceptance TestLiveRefusesWhatAControllerCannotDo
+    partial: true
+    note: >-
+      Run against an in-process fake controller; the real-controller run is
+      verified on hardware only. Given writes going to the controller and
+      a write that never reads back being refused are asserted; the
+      advance/scans timing, suspend being a no-op and the alarm-verb refusal
+      are not, and the always: case breaks at the endpoint too, so it cannot
+      tell per-poll from end-of-step checking. (TestLiveScansWaitOnTheHeartbeat
+      and TestLiveReseedsInputsPerTest were removed: heartbeat-counted scans
+      and per-test reseeding are not on the page.)
+  - id: TEST-032
+    claim: >-
+      Program-scope tags on a Logix controller are served as
+      <Program>_<Tag>, and a scenario may use the bare name.
+    source: "#against-a-logix-controller"
+    tests:
+      - go ./acceptance TestLiveSealInAndAlarm
+    partial: true
+    note: >-
+      Bare-name resolution is asserted against a fake controller that serves
+      MainProgram_-prefixed names (the scenario passes, and a failure names
+      MainProgram_RunCmd); a real controller's naming is verified on hardware
+      only.

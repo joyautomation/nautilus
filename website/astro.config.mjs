@@ -88,6 +88,7 @@ export default defineConfig({
             { label: 'Component', link: '/verified/component/' },
             { label: 'Commands', link: '/verified/commands/' },
             { label: 'Other claims', link: '/verified/other/' },
+            { label: 'Runtime', link: '/verified/runtime/' },
           ],
         },
       ],

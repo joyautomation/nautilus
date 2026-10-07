@@ -1,0 +1,62 @@
+page: website/src/content/docs/languages/not-supported.md
+title: Not supported, by design
+prefix: NS
+claims:
+  - id: NS-001
+    claim: Ladder JMP and LBL are rejected; rungs run top to bottom every scan.
+    source: "#not-supported-by-design"
+    tests: []
+    note: No test asserts the rejection.
+
+  - id: NS-002
+    claim: Ladder MCR zones are rejected.
+    source: "#not-supported-by-design"
+    tests: []
+    note: No test asserts the rejection.
+
+  - id: NS-003
+    claim: There is no library manager; shared blocks live in lib/ and are vendored with git.
+    source: "#not-supported-by-design"
+    tests: []
+    note: A decline of a feature; nothing to assert beyond lib/ composition (see ST-046).
+
+  - id: NS-004
+    claim: >-
+      There is no numeric SFC transition priority; declaration order defines a
+      single deterministic outcome.
+    source: "#not-supported-by-design"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-alt-priority
+    partial: true
+    note: Declaration-order outcome is tested; rejection of a numeric priority is not.
+
+  - id: NS-005
+    claim: >-
+      An SFC transition condition is one ST boolean expression; a condition
+      written in LD or FBD is rejected.
+    source: "#not-supported-by-design"
+    tests: []
+    note: >-
+      No test asserts that a non-ST condition is rejected. TestCheckEmptyCondition
+      (dropped) asserts the empty-condition error, which says nothing about
+      LD or FBD conditions.
+  - id: NS-006
+    claim: >-
+      SFC action bodies are ST; LD, FBD and IL action bodies are rejected.
+    source: "#not-supported-by-design"
+    tests: []
+    note: No test asserts the rejection.
+
+  - id: NS-007
+    claim: >-
+      The vocabulary is the IEC standard; vendor idioms come only as an opt-in
+      dialect: of blocks (logix in review; siemens and codesys reserved).
+    source: "#not-supported-by-design"
+    tests: []
+    note: No test asserts the default-off behaviour or the reserved dialect names.
+
+  - id: NS-008
+    claim: Negated coils ( /Tag ) are rejected; use an NC contact or a reset coil.
+    source: "#not-supported-by-design"
+    tests: []
+    note: No test asserts the rejection.

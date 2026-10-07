@@ -1,0 +1,428 @@
+page: website/src/content/docs/guides/sparkplug-host.md
+title: Consuming a Sparkplug fleet
+prefix: SPH
+claims:
+  - id: SPH-001
+    claim: >-
+      `broker`, `host-id`, `group-id` (or `group-ids`) and `manifest` are
+      required for a sparkplug-host driver; a project missing one fails
+      `naut check` (at load), not `naut run`.
+    source: "#"
+    tests:
+      - go ./internal/project TestLoadSparkplugHostErrors
+      - go ./internal/project TestSchemaRequiresWhatLoaderRequires
+    partial: true
+    note: >-
+      Each missing key is asserted to fail the loader `naut check` uses;
+      that `group-ids` alone satisfies the group requirement is not
+      asserted (only `group-id` is ever set).
+  - id: SPH-002
+    claim: >-
+      `New` never dials: it builds the whole driver (manifest, indexes,
+      companion tags) offline, so a complete sparkplug-host project passes
+      `naut check` with no broker in sight.
+    source: "#from-go"
+    tests:
+      - go ./sparkplug/host TestDriverNewNeverDials
+      - go ./internal/project TestLoadSparkplugHostDriver
+      - go ./cmd/naut TestCheckSparkplugHostProjectOffline
+  - id: SPH-003
+    claim: >-
+      The broker password is never read from the manifest: it comes from
+      `NAUTILUS_MQTT_PASSWORD`.
+    source: "#"
+    tests: []
+    note: >-
+      No test asserts the env-only password rule.
+  - id: SPH-004
+    claim: >-
+      `primary` defaults to true: a host project that does not set it
+      publishes STATE.
+    source: "#"
+    tests: []
+    note: >-
+      TestDriverNewDefaults (formerly listed) asserts Go `Config` defaults
+      the page does not state (reorder-timeout 5s, state-form,
+      rebirth-on-start) and never checks `primary`; the project-level
+      `primary` default is untested (driver tests set `Primary: true`
+      explicitly).
+  - id: SPH-005
+    claim: >-
+      The primary host publishes STATE on `spBv1.0/STATE/<host-id>`,
+      `state-form: both` also publishes the legacy `STATE/<host-id>` form,
+      and a passive consumer (`primary: false`) publishes no STATE.
+    source: "#"
+    tests:
+      - go ./sparkplug/host TestMqttStateBirthMatchesWill
+      - go ./sparkplug/host TestMqttStateFormBothPublishesLegacy
+      - go ./sparkplug/host TestMqttPassiveConsumerPublishesNoState
+      - go ./sparkplug/host TestTCKHostConformance
+  - id: SPH-006
+    claim: >-
+      `Stop` publishes the STATE death certificate before disconnecting.
+    source: "#from-go"
+    tests:
+      - go ./sparkplug/host TestMqttStopPublishesStateDeath
+      - go ./sparkplug/host TestTCKHostConformance
+  - id: SPH-007
+    claim: >-
+      `naut sparkplug import --sites` generates the types, manifest and tag
+      file offline from a committed site list, identical for the metrics
+      it shares with the live (from-births) path.
+    source: "#generating-the-manifest-naut-sparkplug-import"
+    tests:
+      - go ./cmd/naut TestSparkplugImportFromSites
+      - go ./sparkplug/host/codegen TestFromSitesMatchesFromBirths
+  - id: SPH-008
+    claim: >-
+      Live import asks every node heard from to rebirth (births are not
+      retained) and generates from what birthed.
+    source: "#generating-the-manifest-naut-sparkplug-import"
+    tests:
+      - go ./sparkplug/host TestDiscoverAsksForRebirth
+    partial: true
+    note: >-
+      Discovery asking for rebirth is asserted; the `naut sparkplug import
+      --broker` command itself is not run against a broker.
+  - id: SPH-010
+    claim: >-
+      `naut sparkplug import` writes Sparkplug Templates as ST `TYPE`s in
+      `sparkplug_types.st`, composed automatically as a library so a
+      program can use them with no entry in `nautilus.yaml`.
+    source: "#generating-the-manifest-naut-sparkplug-import"
+    tests:
+      - go ./cmd/naut TestSparkplugImportFromSites
+      - go ./sparkplug/host/codegen TestGenerateGolden
+      - go ./cmd/naut TestCheckSparkplugHostProjectOffline
+  - id: SPH-011
+    claim: >-
+      `naut sparkplug tags` re-derives the tag file from a committed
+      manifest with no broker.
+    source: "#generating-the-manifest-naut-sparkplug-import"
+    tests:
+      - go ./sparkplug/host/codegen TestTagsRoundTrip
+      - go ./cmd/naut TestSparkplugImportFromSites
+  - id: SPH-012
+    claim: >-
+      `naut sparkplug browse` prints what is on the wire without generating
+      anything.
+    source: "#generating-the-manifest-naut-sparkplug-import"
+    tests: []
+    note: >-
+      The browse command has no test.
+  - id: SPH-013
+    claim: >-
+      The driver subscribes to the group and presents every edge node's
+      (and device's) data as `role: input` tags.
+    source: "#"
+    tests:
+      - go ./sparkplug/host TestStateNBirthAppliesValues
+      - go ./sparkplug/host TestStateAliasOnlyNData
+      - go ./sparkplug/host TestStateDeviceLifecycle
+      - go ./sparkplug/host TestMqttNBirthReachesReadInputs
+  - id: SPH-014
+    claim: >-
+      The companions exist per site and device: `<site>__Online` is true
+      from NBIRTH to the matching NDEATH, `<site>_<device>__Online` does
+      the same per device, and `<site>__LastBirthMs` is the epoch ms of the
+      last NBIRTH.
+    source: "#the-online-rebirth-companions"
+    tests:
+      - go ./sparkplug/host TestStateNBirthAppliesValues
+      - go ./sparkplug/host TestStateNDeathKeepsValues
+      - go ./sparkplug/host TestStateStaleNDeathIgnored
+      - go ./sparkplug/host TestStateDeviceLifecycle
+      - go ./sparkplug/host TestCompanionTagNames
+      - go ./sparkplug/host TestBuildIndexesSynthesizesDefaultCompanions
+    partial: true
+    note: >-
+      `__LastBirthMs` is asserted against a single NBIRTH's timestamp; a
+      second NBIRTH moving it to the newer birth is not asserted.
+  - id: SPH-015
+    claim: >-
+      The driver never invents or zeroes a value on death: an NDEATH keeps
+      every value (and takes the node and its devices offline), and a
+      DDEATH keeps the device's values.
+    source: "#the-online-rebirth-companions"
+    tests:
+      - go ./sparkplug/host TestStateNDeathKeepsValues
+      - go ./sparkplug/host TestStateDeviceLifecycle
+      - go ./sparkplug/host TestEdgeToHostDogfood
+  - id: SPH-016
+    claim: >-
+      A rising edge on the `<site>__Rebirth` output sends NCMD Node
+      Control/Rebirth to that site; a false value sends nothing.
+    source: "#the-online-rebirth-companions"
+    tests:
+      - go ./sparkplug/host TestMqttRebirthTagRisingEdge
+    partial: true
+    note: >-
+      The test only matches the NCMD topic; that the payload carries Node
+      Control/Rebirth is not decoded, and a held-true value not
+      re-commanding (edge, not level) is not asserted.
+  - id: SPH-017
+    claim: >-
+      A data tag stays absent from the driver's snapshot until its site has
+      birthed (so reading it faults the scan), while `__Online` is present
+      from t=0 as false.
+    source: "#the-online-rebirth-companions"
+    tests:
+      - go ./sparkplug/host TestStateNBirthAppliesValues
+    partial: true
+    note: >-
+      The absent-until-birth and false-from-t=0 snapshot are asserted at the
+      driver; that the runtime scan then faults is not tested here.
+  - id: SPH-018
+    claim: >-
+      `Quality()` reports non-Good entries only: a binding never delivered
+      (site never birthed, or the birth omits that metric) is NotConnected,
+      and a binding whose site is not online (NDEATH, silence past
+      `stale-after`, or DDEATH for a device-scoped metric) is Stale,
+      scoped to the node or device concerned.
+    source: "#per-tag-quality"
+    tests:
+      - go ./sparkplug/host TestQualityPreBirthNotConnected
+      - go ./sparkplug/host TestQualityBirthEmptyMap
+      - go ./sparkplug/host TestQualityNDeathStaleScopedToNode
+      - go ./sparkplug/host TestQualityDeviceDeathStaleJustThatDevice
+      - go ./sparkplug/host TestQualityStaleSweepMarksStale
+      - go ./sparkplug/host TestQualityMissingMetricFromBirth
+  - id: SPH-019
+    claim: >-
+      Writable bindings and the companions are host-authored and get no
+      quality verdict.
+    source: "#per-tag-quality"
+    tests:
+      - go ./sparkplug/host TestQualityPreBirthNotConnected
+      - go ./sparkplug/host TestQualityStaleSweepMarksStale
+  - id: SPH-020
+    claim: >-
+      Silence longer than `stale-after` marks a node stale without
+      disturbing its values.
+    source: "#per-tag-quality"
+    tests:
+      - go ./sparkplug/host TestStateSweepStale
+      - go ./sparkplug/host TestQualityStaleSweepMarksStale
+  - id: SPH-021
+    claim: >-
+      Output writes leave as NCMD (node metrics) or DCMD (device metrics),
+      QoS 0, not retained, with full metric names (never aliases).
+    source: "#writes-dcmdncmd"
+    tests:
+      - go ./sparkplug/host TestMqttWriteOutputsSendsDCMD
+      - go ./sparkplug/host TestEdgeToHostDogfood
+    partial: true
+    note: >-
+      DCMD topic, retain false and the full metric name are asserted on the
+      wire; QoS 0 is not, and a plain node-metric NCMD is only shown landing
+      at the edge, not inspected on the wire.
+  - id: SPH-022
+    claim: >-
+      A command to a dark site is held (the latest value per tag) and
+      delivered once on the site's next NBIRTH/DBIRTH, after the birth has
+      settled what the site holds.
+    source: "#writes-to-a-site-that-is-down"
+    tests:
+      - go ./sparkplug/host TestMqttWriteToOfflineNodeIsQueued
+      - go ./sparkplug/host TestMqttQueuedWriteIsDeliveredOnBirth
+      - go ./sparkplug/host TestEdgeToHostQueuedWriteReachesAWokenSite
+      - go ./sparkplug/host TestMqttChangePushCadence
+      - go ./sparkplug/host TestQueueOfflineIsBoundedPerNode
+  - id: SPH-023
+    claim: >-
+      If the site comes back already holding the commanded value, nothing
+      goes on the wire; otherwise one command goes out, only for the
+      members the operator touched.
+    source: "#writes-to-a-site-that-is-down"
+    tests:
+      - go ./sparkplug/host TestMqttQueuedWriteTheSiteAlreadyHoldsIsNotSent
+      - go ./sparkplug/host TestEdgeToHostQueuedWriteReachesAWokenSite
+  - id: SPH-024
+    claim: >-
+      The offline queue holds at most 256 tags per site, and a write past
+      a full queue is counted as `WriteDrops`.
+    source: "#writes-to-a-site-that-is-down"
+    tests:
+      - go ./sparkplug/host TestQueueOfflineIsBoundedPerNode
+    partial: true
+    note: >-
+      The 256-per-site bound is asserted on `queueOffline` directly; the
+      overflow is checked as that function's return value, not as the
+      `Status.WriteDrops` counter.
+  - id: SPH-025
+    claim: >-
+      `Status` counts `WriteQueued`, `QueuedWrites` per site, and a "queued
+      writes" metric on `/api/drivers`.
+    source: "#writes-to-a-site-that-is-down"
+    tests:
+      - go ./sparkplug/host TestQueueOfflineIsBoundedPerNode
+      - go ./sparkplug/host TestMqttWriteToOfflineNodeIsQueued
+    partial: true
+    note: >-
+      `WriteQueued` and the fleet-level `QueuedWrites` are asserted; the
+      per-site `Status.Nodes[].QueuedWrites` field and the "queued writes"
+      metric on `/api/drivers` for a sparkplug-host driver are not.
+  - id: SPH-026
+    claim: >-
+      A UDT is never writable as a whole: a `--writable` glob that matches
+      a Template metric is a hard error, and controls are bound per member.
+    source: "#writing-template-members"
+    tests:
+      - go ./sparkplug/host/codegen TestWritableWholeTemplateIsAnError
+      - go ./sparkplug/host TestValidateMemberBindings
+  - id: SPH-027
+    claim: >-
+      A member binding is a scalar tag carrying the leaf member's type
+      (named `<prefix>_<metric>_<member path>`), is output-only
+      (`writable: true` required), with `member:` a dotted path into the
+      type shape; reads keep coming from the parent struct tag.
+    source: "#writing-template-members"
+    tests:
+      - go ./sparkplug/host TestValidateMemberBindings
+      - go ./sparkplug/host TestValidateErrors/member binding must be writable
+      - go ./sparkplug/host TestStateTemplateAssemblyAndPartialUpdate
+      - go ./sparkplug/host/codegen TestWritableMemberGlobs
+      - go ./sparkplug/host/codegen TestSitesWritableMemberList
+  - id: SPH-028
+    claim: >-
+      Writing a member publishes a partial template naming the parent
+      metric and carrying only that member; two members of one UDT in one
+      coalesce window go out as one partial template, and nested paths
+      build intermediate templates with their TemplateRef.
+    source: "#writing-template-members"
+    tests:
+      - go ./sparkplug/host TestMqttWriteMemberSendsPartialTemplate
+      - go ./sparkplug/host TestMqttWriteNestedMembersCoalesce
+  - id: SPH-029
+    claim: >-
+      A partial template written by the host merges member by member into
+      nautilus's own edge, so members the host did not write are kept.
+    source: "#writing-template-members"
+    tests:
+      - go ./sparkplug TestCommandPartialTemplateKeepsOtherMembers
+      - go ./sparkplug TestCommandNestedPartialTemplate
+      - go ./sparkplug/host TestEdgeToHostQueuedWriteReachesAWokenSite
+  - id: SPH-030
+    claim: >-
+      The first output snapshot after `Start` is a baseline that is
+      recorded and published to nobody, so a host connecting to an online
+      fleet never zeroes an edge's setpoints.
+    source: "#outputs-are-commands-the-baseline-rule"
+    tests:
+      - go ./sparkplug/host TestMqttStartCommandsNothing
+      - go ./sparkplug/host TestEdgeToHostStartKeepsSetpoints
+      - go ./sparkplug/host TestMqttChangePushCadence
+  - id: SPH-031
+    claim: >-
+      After the baseline only a value that actually moved is a command,
+      published once however many scans hand it back.
+    source: "#outputs-are-commands-the-baseline-rule"
+    tests:
+      - go ./sparkplug/host TestMqttOperatorWritePublishesOnce
+      - go ./sparkplug/host TestMqttChangePushCadence
+  - id: SPH-032
+    claim: >-
+      A member output adopts the site's live value when its parent template
+      arrives (NBIRTH, DBIRTH, NDATA or rebirth): writing the value the
+      panel already reports sends nothing, anything else sends one partial
+      template; before the first birth an operator write still publishes.
+    source: "#outputs-are-commands-the-baseline-rule"
+    tests:
+      - go ./sparkplug/host TestMqttMemberBaselineAdoptsLiveValue
+      - go ./sparkplug/host TestEdgeToHostMemberBaselineAdoptsLiveValue
+      - go ./sparkplug/host TestEdgeToHostQueuedWriteReachesAWokenSite
+    partial: true
+    note: >-
+      Adoption on NBIRTH and a pre-birth member write being delivered are
+      asserted; the NDATA/DBIRTH/rebirth triggers are not each tested.
+  - id: SPH-033
+    claim: >-
+      A reconnect replays nothing: change detection survives a dropped
+      connection, while commands raised during the outage are queued and go
+      out on reconnect.
+    source: "#outputs-are-commands-the-baseline-rule"
+    tests:
+      - go ./sparkplug/host TestMqttReconnectDoesNotReplayOutputs
+    partial: true
+    note: >-
+      Commands raised while the broker is away being delivered on reconnect
+      is not directly tested (the offline-site queue is).
+  - id: SPH-034
+    claim: >-
+      `__Rebirth` is unaffected by the baseline rule: its baseline is false
+      and only a rising edge is a command.
+    source: "#outputs-are-commands-the-baseline-rule"
+    tests:
+      - go ./sparkplug/host TestMqttRebirthTagRisingEdge
+    partial: true
+    note: >-
+      The test (false baseline, then false, then true -> NCMD) passes under
+      the ordinary baseline rule too. Untested: TRUE in the first snapshot
+      still commanding (the "unaffected" part), and a held-true or falling
+      value not re-commanding.
+  - id: SPH-035
+    claim: >-
+      `/api/drivers` reports Kind `sparkplug-host`, Name the host-id, state
+      error (broker down), connecting (no births yet), degraded (any node
+      offline or strict-mode unknowns) or connected, with one device row
+      per edge node and device sub-rows flattened as `W6/plc1`.
+    source: "#apidrivers"
+    tests:
+      - go ./internal/project TestHostStatusStates
+      - go ./internal/project TestHostStatusDeviceRows
+  - id: SPH-036
+    claim: >-
+      With a `redundancy:` section only the leader may claim to be online:
+      the STATE publish and every outbound NCMD/DCMD are gated on
+      leadership, not just on `primary: true`.
+    source: "#redundancy"
+    tests: []
+    note: >-
+      No test exercises the leadership gate on STATE or commands.
+  - id: SPH-037
+    claim: >-
+      The host passes the Sparkplug TCK host-application profile (NBIRTH,
+      DBIRTH, NDATA, a deliberate sequence gap, DDEATH, NDEATH) with a
+      non-zero PASS count and zero FAIL.
+    source: "#conformance"
+    tests:
+      - go ./sparkplug/host TestTCKHostConformance
+    note: >-
+      Runs only with NAUTILUS_TCK=1 in the sparkplug-tck CI job. The
+      reorder-success scenario is deliberately not scored (harness
+      limitation); the reorder-timeout rebirth path is.
+  - id: SPH-038
+    claim: >-
+      A sequence gap left unfilled for `reorder-timeout` sends NCMD Rebirth
+      to the node; a gap filled inside the window drains without one.
+    source: "#"
+    tests:
+      - go ./sparkplug/host TestStateSeqGapRequestsRebirth
+      - go ./sparkplug/host TestStateOutOfOrderFillInDrains
+      - go ./sparkplug/host TestTCKHostConformance
+  - id: SPH-041
+    claim: >-
+      Metrics the manifest never bound are handled by `on-unknown` (`log`,
+      `ignore` or `strict`); under `strict` the driver reports degraded.
+    source: "#"
+    tests:
+      - go ./sparkplug/host TestStateUnknownMetricDiscovery
+      - go ./sparkplug/host TestStateDiscoveryPolicies
+      - go ./internal/project TestHostStatusStates
+  - id: SPH-042
+    claim: >-
+      Only the configured group(s) are consumed from the broker.
+    source: "#"
+    tests:
+      - go ./sparkplug/host TestStateGroupFilter
+    partial: true
+    note: >-
+      A foreign group is shown rejected, but the configured group being consumed (and the plural group-ids form) is never shown, so a filter that drops everything would pass.
+
+  - id: SPH-043
+    claim: >-
+      `Start` owns the connection and its reconnect loop; the driver
+      reconnects after a broker restart.
+    source: "#from-go"
+    tests:
+      - go ./sparkplug/host TestMqttReconnectsAfterBrokerRestart

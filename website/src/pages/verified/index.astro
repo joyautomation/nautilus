@@ -52,6 +52,12 @@ const covered = stats.reduce((a, s) => a + s.covered, 0);
     <RunCard set="gestures" blurb="The webview gesture harness from CI (headless browser, no extension host)." />
   </div>
 
+  <p>
+    The runtime, languages and drivers have their own page:
+    <a href="/verified/runtime/">every claim the documentation makes about them</a>, with the
+    tests that prove it in the last green CI run.
+  </p>
+
   <h2>By editor</h2>
   <p>
     A claim counts as covered when at least one test linked to it passed in the last green runs{

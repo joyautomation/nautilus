@@ -17,7 +17,14 @@ jobs:
       - uses: actions/setup-go@v5
         with: {go-version: '1.24'}
       - run: go vet ./...
-      - run: go test ./...
+      # -json and the coverage profile are kept as runtime evidence (the
+      # runtime-evidence job joins them to docs/claims); `evidence cat`
+      # prints the stream as the usual go test output.
+      - name: go test ./...
+        shell: bash
+        run: |
+          mkdir -p evidence
+          go test -json -coverprofile=evidence/cover.out ./... | tee evidence/go-test.json | go run ./tools/evidence cat
       - run: go build ./...
       # The spatial rig's HDRI, backdrop and floor textures live in a GitHub
       # release, not in git (examples/spatial-rig/hmi/assets.json); naut
@@ -62,6 +69,23 @@ jobs:
             fi
           done < <(find examples -name nautilus.yaml -print0 | sort -z)
           exit $fail
+      # Every acceptance suite again as JSON, tagged with its project root,
+      # for the runtime evidence (docs/claims can name a test with
+      # `naut <root> <name>`). Verdicts only: the step above gates.
+      - name: naut test -json (runtime evidence)
+        run: |
+          go build -o "$RUNNER_TEMP/naut" ./cmd/naut
+          while IFS= read -r -d '' m; do
+            root=$(dirname "$m")
+            ls "$root"/*_test.yaml >/dev/null 2>&1 || continue
+            "$RUNNER_TEMP/naut" test -json "$root" | jq -c --arg root "$root" '. + {root: $root}' >> evidence/naut-tests.ndjson || true
+          done < <(find examples testdata/projects -name nautilus.yaml -print0 | sort -z)
+      - name: Keep the results as runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-go
+          path: evidence/
+          retention-days: 14
   sparkplug-tck:
     name: Sparkplug B — TCK conformance
     runs-on: ubuntu-latest
@@ -73,14 +97,24 @@ jobs:
       # joyautomation/sparkplug-tck-go edge-node profile (embeds its own
       # broker) and fails on any conformance assertion failure.
       - name: Edge-node profile
-        run: NAUTILUS_TCK=1 go test ./sparkplug/ -run TestTCKConformance -v -timeout 90s
+        shell: bash
+        run: |
+          mkdir -p evidence
+          NAUTILUS_TCK=1 go test -json ./sparkplug/ -run TestTCKConformance -v -timeout 90s | tee evidence/tck-edge.json | go run ./tools/evidence cat
       # The host-application profile's twin: sparkplug/host.Driver is the SUT,
       # and the test scripts its own raw-paho edge node into the harness
       # broker (births, a deliberate seq gap that must provoke NCMD/Rebirth,
       # D/NDEATH) because the harness does not simulate one. Asserts zero FAIL
       # and a non-zero PASS count, so an all-N/A run cannot pass silently.
       - name: Host-application profile
-        run: NAUTILUS_TCK=1 go test ./sparkplug/host/ -run TestTCKHostConformance -v -timeout 120s
+        shell: bash
+        run: NAUTILUS_TCK=1 go test -json ./sparkplug/host/ -run TestTCKHostConformance -v -timeout 120s | tee evidence/tck-host.json | go run ./tools/evidence cat
+      - name: Keep the results as runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-tck
+          path: evidence/
+          retention-days: 14
 
   hmi-3d:
     name: HMI 3D package — test, check, package; build the example
@@ -300,9 +334,17 @@ jobs:
       # round trip per function code, exception 0x02 → one Bad block, and the
       # latency-above-timeout path. Skipped without the env vars.
       - name: Foreign-stack tests
+        shell: bash
         run: |
+          mkdir -p evidence
           NAUTILUS_MODBUS_SIM=127.0.0.1:5020 NAUTILUS_MODBUS_SIM_SLOW=127.0.0.1:5021 \
-            go test ./modbus/ -run TestForeign -v -timeout 120s
+            go test -json ./modbus/ -run TestForeign -v -timeout 120s | tee evidence/modbus-foreign.json | go run ./tools/evidence cat
+      - name: Keep the results as runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-modbus
+          path: evidence/
+          retention-days: 14
   snmp-sim:
     name: SNMP — foreign stack (snmpsim)
     runs-on: ubuntu-latest
@@ -329,7 +371,16 @@ jobs:
       # a table end, wrong credentials → error with a legible message, a
       # counter step → rate. The test waits for the source itself.
       - name: Foreign-stack tests
-        run: NAUTILUS_SNMP_SIM=127.0.0.1:1161 go test ./snmp/ -run TestForeign -v -timeout 300s
+        shell: bash
+        run: |
+          mkdir -p evidence
+          NAUTILUS_SNMP_SIM=127.0.0.1:1161 go test -json ./snmp/ -run TestForeign -v -timeout 300s | tee evidence/snmp-foreign.json | go run ./tools/evidence cat
+      - name: Keep the results as runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-snmp
+          path: evidence/
+          retention-days: 14
   redfish-sim:
     name: Redfish — foreign stack (DMTF mockup server)
     runs-on: ubuntu-latest
@@ -345,8 +396,17 @@ jobs:
       # the server itself (session recovery), so the script only prepares
       # the directory and runs the test.
       - name: Foreign-stack tests
-        run: scripts/redfish-sim.sh
+        shell: bash
+        run: |
+          mkdir -p evidence
+          GO_TEST_FLAGS=-json scripts/redfish-sim.sh | tee evidence/redfish-foreign.json | go run ./tools/evidence cat
         timeout-minutes: 15
+      - name: Keep the results as runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-redfish
+          path: evidence/
+          retention-days: 14
   prom-sim:
     name: Prometheus — foreign stack (node_exporter)
     runs-on: ubuntu-latest
@@ -366,4 +426,87 @@ jobs:
           done
           curl -sf http://127.0.0.1:9100/metrics > /dev/null || { echo '::error::node_exporter did not start'; cat sim.log; exit 1; }
       - name: Foreign-stack tests
-        run: NAUTILUS_PROM_SIM=127.0.0.1:9100 go test ./prom/... -run TestForeign -v -timeout 300s
+        shell: bash
+        run: |
+          mkdir -p evidence
+          NAUTILUS_PROM_SIM=127.0.0.1:9100 go test -json ./prom/... -run TestForeign -v -timeout 300s | tee evidence/prom-foreign.json | go run ./tools/evidence cat
+      - name: Keep the results as runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-prom
+          path: evidence/
+          retention-days: 14
+  runtime-evidence:
+    # Joins every job's test results to the claims inventory (docs/claims)
+    # and keeps the result for the docs site's /verified/runtime/ pages,
+    # which bake the last green main run's artifact. Claims never block:
+    # the job is continue-on-error, a claim problem is only reported (the
+    # PR's job summary, compared with main's last evidence), and on main a
+    # problem opens or updates the rolling "claims out of date" issue,
+    # which a clean run closes.
+    name: Runtime evidence — claims × test results
+    needs: [go, sparkplug-tck, modbus-sim, snmp-sim, redfish-sim, prom-sim]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+      actions: read # main's last evidence, for the PR comparison
+      issues: write # the rolling "claims out of date" issue
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.24'}
+      - uses: actions/download-artifact@v4
+        with: {pattern: evidence-*, path: evidence}
+      - name: main's last evidence (a PR is compared with it)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')
+          if [ -n "$id" ]; then
+            gh run download "$id" --repo "$GITHUB_REPOSITORY" -n runtime-evidence -D "$RUNNER_TEMP/base" || echo "main's run $id has no runtime-evidence artifact"
+          fi
+      - name: Build the evidence file
+        run: |
+          mkdir -p runtime-evidence
+          base=()
+          [ -f "$RUNNER_TEMP/base/evidence.json" ] && base=(-baseline "$RUNNER_TEMP/base/evidence.json")
+          go run ./tools/evidence build -in evidence -cover evidence/evidence-go/cover.out \
+            -o runtime-evidence/evidence.json "${base[@]}" -summary "$RUNNER_TEMP/claims.md"
+          cat "$RUNNER_TEMP/claims.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-evidence
+          path: runtime-evidence/
+          retention-days: 90 # the docs build downloads the last green main run's evidence
+      # Main only: problems (a claim that does not check, a reference no job
+      # reported) open the rolling issue or add a comment to it; a clean run
+      # closes it. The site keeps showing them honestly ("not reported").
+      - name: Rolling issue
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="claims out of date"
+          n=$(jq '((.problems // []) | length) + ((.missing // []) | length)' runtime-evidence/evidence.json)
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"$title\" in:title" --json number,title --jq "[.[]|select(.title==\"$title\")][0].number // empty")
+          if [ "$n" = 0 ]; then
+            [ -z "$num" ] || gh issue close "$num" --repo "$GITHUB_REPOSITORY" --comment "Every claim checks again: $RUN_URL"
+            exit 0
+          fi
+          body=$RUNNER_TEMP/issue.md
+          {
+            echo "Main at **${GITHUB_SHA::8}** — $n claim problem(s) — $RUN_URL"
+            echo
+            echo "A claim in \`docs/claims/\` names a test that no longer exists or that no job ran (usually a rename). Fix the reference; \`go run ./tools/evidence check\` checks by hand."
+            echo
+            cat "$RUNNER_TEMP/claims.md"
+          } >"$body"
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label claims-audit --body-file "$body"
+          fi

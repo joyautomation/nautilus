@@ -1,0 +1,173 @@
+page: website/src/content/docs/coming-from/tia-portal.md
+title: Coming from TIA Portal
+prefix: CTIA
+claims:
+  - id: CTIA-001
+    claim: >-
+      Manifest tags (the PLC tag table) are in scope in every program
+      without a declaration, `VAR_EXTERNAL` stays legal, and a function block
+      reaches a tag only through its own `VAR_EXTERNAL`.
+    source: "#program-organisation"
+    tests:
+      - go ./internal/project TestManifestTagsAreImplicit
+      - go ./internal/project TestFunctionBlocksDoNotSeeTagsImplicitly
+      - go ./internal/project TestExplicitDeclarationMustAgreeWithTypedTag
+
+  - id: CTIA-002
+    claim: >-
+      A tag's `type:` is any elementary type, a UDT or an `ARRAY`, and its
+      `init:` must agree with it.
+    source: "#program-organisation"
+    tests:
+      - go ./internal/project TestElementaryTagTypes
+      - go ./internal/project TestTagTypeAndInitMustAgree
+      - go ./internal/project TestTimeMembersSeedFromInit
+
+  - id: CTIA-003
+    claim: >-
+      `init:` seeds a TIME member from `T#2s`, `2s` or milliseconds, and an
+      array member from a list.
+    source: "#program-organisation"
+    tests:
+      - go ./internal/project TestTimeMembersSeedFromInit
+
+  - id: CTIA-004
+    claim: >-
+      An error in one block is reported once, on its own line; the blocks
+      that use it are not marked.
+    source: "#program-organisation"
+    tests:
+      - go ./cmd/naut TestCheckGoldenLibraryErrorOnce
+      - go ./cmd/naut TestCheckLibraryErrorAttributedWhenLibraryNotChecked
+
+  - id: CTIA-005
+    claim: >-
+      A library is files in `lib/`, composed ahead of every task.
+    source: "#program-organisation"
+    tests:
+      - go ./cmd/naut TestCheckLibDirClean
+      - go ./cmd/naut TestTestLibDir
+    partial: true
+    note: >-
+      A lib/ fixture's blocks are shown usable from the project's one task
+      (check and acceptance suite pass); composition ahead of every task in a
+      multi-task project is not asserted.
+
+  - id: CTIA-006
+    claim: >-
+      `CASE` labels that are named constants (`VAR CONSTANT`, a project
+      constant or an enumeration member) end their clause, and two labels
+      with one value are an error naming both.
+    source: "#scl"
+    tests:
+      - go ./lang/conformance TestConformance/st-case-constants
+      - go ./lang/conformance TestConformance/st-enum
+      - go ./lang/conformance TestCaseDuplicateConstantLabelDiagnosed
+    partial: true
+    note: >-
+      `VAR CONSTANT` and enumeration-member labels, and the duplicate-value
+      error, are asserted; a project constant (`VAR_GLOBAL CONSTANT`) as a
+      CASE label is not exercised.
+
+  - id: CTIA-007
+    claim: >-
+      Identifiers are case-insensitive: any casing names the one
+      declaration, in ST, ladder, FBD and SFC; diagnostics, live values and
+      the API show it as declared.
+    source: "#scl"
+    tests:
+      - go ./lang/conformance TestConformance/st-case-insensitive
+      - go ./lang/st TestLowerCaseInsensitiveIdentifiers
+      - go ./lang/fbd TestCaseInsensitiveCallsKeepSpelling
+    partial: true
+    note: Resolution is covered in all four languages; the "shown as declared" part is only checked for FBD call spelling, not in live values or the API.
+
+  - id: CTIA-008
+    claim: >-
+      The SCL `#name` prefix is rejected everywhere with "the # prefix is
+      Siemens SCL syntax; write the name without it".
+    source: "#scl"
+    tests:
+      - go ./lang/st TestHashPrefixRejectedEverywhere
+      - go ./lang/conformance TestHashPrefixDiagnosed
+
+  - id: CTIA-009
+    claim: >-
+      `VAR_TEMP` starts every call (and every scan of a program) at its
+      initial value, while `VAR` keeps its value.
+    source: "#scl"
+    tests:
+      - go ./lang/conformance TestConformance/st-var-temp
+
+  - id: CTIA-010
+    claim: >-
+      `REGION ... END_REGION` groups statements and opens no scope; it folds
+      in the editor and shows in the Outline.
+    source: "#scl"
+    tests:
+      - go ./lang/conformance TestConformance/st-region
+    partial: true
+    note: Runtime effect is tested; folding in the editor and the Outline entry are editor behaviour with no runtime test.
+
+  - id: CTIA-011
+    claim: >-
+      User constants are declared with `VAR CONSTANT` in a block, or with
+      `VAR_GLOBAL CONSTANT` in a `lib/` file for the whole project.
+    source: "#scl"
+    tests:
+      - go ./lang/conformance TestConformance/st-case-constants
+      - go ./lang/conformance TestConformance/st-global-constants
+
+  - id: CTIA-012
+    claim: >-
+      `Word.%X3` bit access and `%B`/`%W`/`%D` partial access work, with
+      Logix's `Word.3` as an alternative spelling, and writing a bit leaves
+      the word's other bits alone.
+    source: "#scl"
+    tests:
+      - go ./lang/conformance TestConformance/st-partial-access
+    partial: true
+    note: "%X and %B are exercised; %W and %D are not, and \"bounded by the declared type\" has no negative test."
+
+  - id: CTIA-013
+    claim: >-
+      Standard timers carry the IEC pins: `t(IN := Run, PT := T#5S); Done
+      := t.Q;` times PT and raises `Q`.
+    source: "#scl"
+    tests:
+      - go ./lang/st TestFBTONReachesQAfterPT
+      - go ./lang/conformance TestConformance/fb-ton
+
+  - id: CTIA-014
+    claim: >-
+      Standard blocks have no `EN`/`ENO` and always evaluate; a user block in
+      a ladder rung takes power on its `EN` pin if it declares one.
+    source: "#fbd-and-ladder"
+    tests: []
+    note: >-
+      The old reference, fbd-en-eno, tests FBD EN/ENO (EN FALSE skips a call),
+      which is the opposite of this page's "none" and is what the page lists
+      as planned (#206); the page looks out of date. No test asserts a ladder
+      user block taking power on a declared EN pin.
+
+  - id: CTIA-015
+    claim: >-
+      Execution follows source order by network, with a block evaluated
+      before its readers.
+    source: "#fbd-and-ladder"
+    tests:
+      - go ./lang/fbd TestNetworksRunInOrder
+    partial: true
+    note: Tested for FBD networks; ladder rungs run in source order but that is not separately asserted.
+
+  - id: CTIA-016
+    claim: >-
+      An unconnected input of a block call must be bound or dropped from the
+      call.
+    source: "#fbd-and-ladder"
+    tests:
+      - go ./lang/fbd TestPickerLeavesDefaultedInputsUnbound
+    partial: true
+    note: >-
+      The test asserts that an FBD call with defaulted inputs dropped compiles;
+      that an input left open (`_`) is refused (#205) has no test.

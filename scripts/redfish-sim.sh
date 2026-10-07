@@ -59,4 +59,6 @@ if [ "${1:-}" = "--prepare" ]; then
   exit 0
 fi
 cd "$repo"
-NAUTILUS_REDFISH_SIM="$dir" exec go test ./redfish/ -run TestForeign -v -count=1
+# GO_TEST_FLAGS=-json is how CI keeps the results as runtime evidence.
+# shellcheck disable=SC2086
+NAUTILUS_REDFISH_SIM="$dir" exec go test ./redfish/ -run TestForeign -v -count=1 ${GO_TEST_FLAGS:-}

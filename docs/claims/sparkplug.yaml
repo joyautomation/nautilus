@@ -1,0 +1,229 @@
+page: website/src/content/docs/guides/sparkplug.md
+title: Publishing to MQTT (Sparkplug B)
+prefix: SPB
+claims:
+  - id: SPB-001
+    claim: >-
+      The node's birth certificate (NBIRTH) lists the whole tag store with
+      names, types and current values, and each tag's `unit:` and `desc:`
+      arrive as the `engUnit` and `documentation` metric properties,
+      including on template members.
+    source: "#"
+    tests:
+      - go ./sparkplug TestBirthStatesUnitAndDescAsProperties
+      - go ./sparkplug TestPropertiesRoundTrip
+      - go ./sparkplug TestTCKConformance
+    partial: true
+    note: >-
+      `unit:` and `desc:` as `engUnit`/`documentation` on top-level tags and
+      `unit:` on a template member are asserted; `desc:` on a template
+      member, and that the birth lists the whole tag store with names,
+      types and current values, are not asserted (the TCK checks birth
+      structure, not completeness). Ignition mapping them onto tag
+      properties is host behaviour not tested here.
+  - id: SPB-002
+    claim: >-
+      Types map faithfully: BOOL to Boolean, integers to Int64, REAL to
+      Double, UDT to Template.
+    source: "#"
+    tests:
+      - go ./sparkplug TestFaithfulTypingFromIR
+      - go ./sparkplug TestStructToTemplate
+  - id: SPB-003
+    claim: >-
+      A host can write tags back via NCMD: a scalar command overwrites the
+      tag in the store for the program to act on.
+    source: "#"
+    tests:
+      - go ./sparkplug TestCommandScalarStillReplaces
+  - id: SPB-005
+    claim: >-
+      `Node Control/Rebirth` is honored: the node answers the command with
+      a fresh NBIRTH.
+    source: "#"
+    tests:
+      - go ./sparkplug TestTCKConformance
+      - go ./sparkplug TestRebirthCommandStopsDataUntilTheNBIRTH
+  - id: SPB-006
+    claim: >-
+      Only `broker` and `group-id` are required.
+    source: "#"
+    tests:
+      - go ./internal/project TestSparkplugConfig
+    partial: true
+    note: >-
+      A section missing `group-id` erroring is asserted; a section missing
+      `broker` erroring, and a section with only `broker` and `group-id`
+      building a node, are not (the passing case sets many optional keys).
+  - id: SPB-007
+    claim: >-
+      The password is never read from the manifest: it comes from
+      `NAUTILUS_MQTT_PASSWORD`.
+    source: "#"
+    tests: []
+    note: >-
+      No test asserts the env-only password rule or that a `password:` key
+      is rejected.
+  - id: SPB-008
+    claim: >-
+      `ssl://host:8883` brokers connect over TLS.
+    source: "#"
+    tests: []
+    note: >-
+      No TLS broker test.
+  - id: SPB-009
+    claim: >-
+      `edge-node` defaults to the project name.
+    source: "#"
+    tests: []
+    note: >-
+      No test asserts the default.
+  - id: SPB-010
+    claim: >-
+      `deadband` publishes a numeric only when it moved more than that in
+      absolute units; zero publishes on any change.
+    source: "#publish-classes"
+    tests:
+      - go ./sparkplug TestRBEDeadbandAndHeartbeat
+      - go ./sparkplug TestRBEDeadbandOnStructMembers
+      - go ./sparkplug TestRBEDeadbandOnNestedStruct
+    partial: true
+    note: >-
+      Sub- and over-deadband moves are asserted (scalars and struct
+      members); a zero deadband publishing a small numeric change is not.
+  - id: SPB-011
+    claim: >-
+      `min-interval` means never publishing more often than that, even on
+      change.
+    source: "#publish-classes"
+    tests:
+      - go ./sparkplug TestRBEDeadbandAndHeartbeat
+      - go ./sparkplug TestRBEMinIntervalStillAppliesToStructs
+  - id: SPB-012
+    claim: >-
+      `max-interval` publishes at least that often even when the value is
+      unchanged (heartbeat).
+    source: "#publish-classes"
+    tests:
+      - go ./sparkplug TestRBEDeadbandAndHeartbeat
+      - go ./sparkplug TestShouldPublishSampleGeneration
+  - id: SPB-013
+    claim: >-
+      `every-change: true` publishes every transition unconditionally,
+      ignoring deadband and rate limits, while an unchanged sample stays
+      quiet.
+    source: "#publish-classes"
+    tests:
+      - go ./sparkplug TestRBEDisableAndBoolChange
+    partial: true
+    note: >-
+      A transition publishing inside `min-interval` and an unchanged sample
+      staying quiet are asserted (with BOOL values); ignoring the deadband
+      (a sub-deadband numeric change still publishing) is not.
+  - id: SPB-014
+    claim: >-
+      `metric-classes` assigns tags to a named class by glob, and every tag
+      unassigned uses `default-class`.
+    source: "#publish-classes"
+    tests:
+      - go ./sparkplug TestClassResolution
+  - id: SPB-015
+    claim: >-
+      With `device:` set, the field driver's input tags publish as a
+      Sparkplug device under the edge node; everything else publishes at
+      node level, and without `device` the whole store publishes at node
+      level.
+    source: "#devices-and-driver-health"
+    tests:
+      - go ./sparkplug TestRebirthCommandMidTickStopsTheNextRecord
+    partial: true
+    note: >-
+      Only a device's DDATA appearing in a tick is exercised incidentally;
+      no test asserts the device/node split of metrics.
+  - id: SPB-016
+    claim: >-
+      The device's DBIRTH/DDEATH follow the driver's connection health: when
+      the driver link drops the host sees the device die rather than stale
+      values.
+    source: "#devices-and-driver-health"
+    tests: []
+    note: >-
+      No test drives a device `Health` function false and asserts DDEATH.
+  - id: SPB-017
+    claim: >-
+      With `primary-host` set, the node defers its birth until the host's
+      STATE is ONLINE and dies (NDEATH) when the host goes offline, and both
+      the 2.x (plain ONLINE/OFFLINE) and 3.0 (JSON) STATE encodings are
+      accepted.
+    source: "#primary-host-and-store-and-forward"
+    tests:
+      - go ./sparkplug TestParseState
+    partial: true
+    note: >-
+      Only the STATE payload parser is tested; deferring birth and the
+      NDEATH on host offline are not.
+  - id: SPB-018
+    claim: >-
+      With `store-forward: N`, data messages are buffered while the broker
+      is unreachable (or the primary host is offline) and replayed, marked
+      historical, once delivery resumes.
+    source: "#primary-host-and-store-and-forward"
+    tests:
+      - go ./sparkplug TestStoreForwardBuffersAcrossABrokerOutage
+      - go ./sparkplug TestNoPublishWhileTheConnectionIsNotOpen
+      - go ./sparkplug TestTimedOutTickIsBufferedWhenStoreForwardIsOn
+    partial: true
+    note: >-
+      Buffering while the primary host is offline (as opposed to the broker)
+      is not tested.
+  - id: SPB-019
+    claim: >-
+      The store-and-forward buffer is a bounded ring that drops the oldest
+      record when full, and the drain is rate-limited.
+    source: "#primary-host-and-store-and-forward"
+    tests:
+      - go ./sparkplug TestStoreForwardRingAndDrain
+    partial: true
+    note: >-
+      Ring drop-oldest and batched drain are asserted; the rate-limit
+      interval on reconnect is not.
+  - id: SPB-022
+    claim: >-
+      `bdseq-file` persists the birth-death sequence number across
+      restarts; without it bdSeq restarts at 0 each run.
+    source: "#primary-host-and-store-and-forward"
+    tests:
+      - go ./sparkplug TestTCKConformance
+    partial: true
+    note: >-
+      The TCK checks bdSeq in a single session; persistence across a
+      restart through the file is not tested.
+  - id: SPB-023
+    claim: >-
+      The node passes the Sparkplug TCK edge-node profile, run against a
+      live node on every push.
+    source: "#conformance"
+    tests:
+      - go ./sparkplug TestTCKConformance
+    note: >-
+      Runs only with NAUTILUS_TCK=1 in the sparkplug-tck CI job (strong
+      evidence there; skipped locally).
+  - id: SPB-024
+    claim: >-
+      MQTT and protobuf live only in the sparkplug package; the runtime
+      core stays stdlib-only.
+    source: "#conformance"
+    tests: []
+    note: >-
+      An architectural constraint with no test.
+  - id: SPB-025
+    claim: >-
+      `driver: {type: sparkplug-host}` presents an edge-node group as input
+      tags in a central project, with writes going back as NCMD/DCMD.
+    source: "#the-other-side-of-the-wire"
+    tests:
+      - go ./internal/project TestLoadSparkplugHostDriver
+      - go ./sparkplug/host TestTCKHostConformance
+    partial: true
+    note: >-
+      Covered in depth by the sparkplug-host claims file.

@@ -1,0 +1,1885 @@
+page: docs/functions.md
+title: Language reference
+prefix: FN
+claims:
+  # ── How a scan evaluates ────────────────────────────────────────────
+  - id: FN-001
+    claim: >-
+      Statements and rungs evaluate top to bottom within a scan: a value
+      written by one is visible to the ones below it in the same scan and to
+      everything on the next scan (the seal-in idiom works).
+    source: "#how-a-scan-evaluates"
+    tests:
+      - go ./runtime TestLadderProgram
+    partial: true
+    note: >-
+      The seal-in is proven end to end (TestLadderProgram); "visible below in
+      the same scan" is exercised implicitly, not asserted as its own case.
+      Removed: TestSealInLatch hands Run back in on each fresh run, so it
+      cannot show a value carrying to the next scan; TestIfElse runs one IF
+      statement and says nothing about statement order.
+
+  - id: FN-002
+    claim: >-
+      A diagnostic raised anywhere in the .ld/.fbd to ST chain lands on the
+      user's own source line (the rung, the FBD statement), because every
+      hop preserves a line map.
+    source: "#how-a-scan-evaluates"
+    tests:
+      - go ./lang/ld TestLineMap
+      - go ./lang/fbd TestTranspileLineMap
+    partial: true
+    note: >-
+      The line maps are tested; the .sfc hop and the final diagnostic
+      position in the editor are not asserted here.
+
+  - id: FN-003
+    claim: >-
+      Logic that does not type-check is a compile diagnostic on the offending
+      line or rung, never a silent coercion (for example a REAL assigned to a
+      BOOL).
+    source: "#how-a-scan-evaluates"
+    tests:
+      - go ./lang/st TestLowerAssignRealToBool
+      - go ./lang/st TestLowerErrorPinsOffendingName
+      - go ./lang/st TestLowerIfNonBool
+    partial: true
+    note: Sampled cases; there is no exhaustive type-rule matrix.
+
+  # ── FBD networks ────────────────────────────────────────────────────
+  - id: FN-004
+    claim: >-
+      FBD execution order is network order: network 1 runs completely, then
+      network 2. A read of a later network's FB output sees the value from
+      the previous scan.
+    source: "#fbd-networks"
+    tests:
+      - go ./lang/fbd TestNetworksRunInOrder
+      - go ./lang/fbd TestNetworksParseModelAndOrder
+
+  - id: FN-005
+    claim: >-
+      Statements before the first NETWORK line form an untitled first
+      network, and a body with no NETWORK line is a single network, exactly
+      the program it always was.
+    source: "#fbd-networks"
+    tests:
+      - go ./lang/fbd TestNetworksParseModelAndOrder
+      - go ./lang/fbd TestNetworkParseEdges
+    partial: true
+    note: >-
+      The implicit untitled first network is asserted. For a body with no
+      NETWORK line the test only checks that no networks are reported and
+      that `Network := A` is not read as a NETWORK line; nothing runs the
+      body and compares it with the same body before networks existed, so
+      "exactly the program it always was" (same execution) is not asserted.
+
+  - id: FN-006
+    claim: >-
+      NETWORK stands alone on its line; a tag that happens to be called
+      Network still works (Network := x is a coil), and a statement on the
+      NETWORK line is refused.
+    source: "#fbd-networks"
+    tests:
+      - go ./lang/fbd TestNetworkParseEdges
+
+  - id: FN-007
+    claim: >-
+      A read that crosses a network boundary (an FB output or a wire from
+      another network) draws as a variable box in the reading network, never
+      as a line across bands.
+    source: "#fbd-networks"
+    tests:
+      - go ./lang/fbd TestNetworksParseModelAndOrder
+    partial: true
+    note: >-
+      Only the FB-output case is asserted: network 3's read of c1.Q gets a
+      variable box (v:c1.Q). The test does not check which network the box
+      is in or that no edge crosses bands, and has no wire read from another
+      network. TestGraphNetworksSplitInputChips and
+      TestGraphCrossNetworkCoilReadBecomesChip were removed: they have no
+      NETWORK lines and test the connectivity-derived chip convention.
+
+  # ── Ladder power flow ───────────────────────────────────────────────
+  - id: FN-008
+    claim: >-
+      Series ladder elements AND together, parallel branch legs OR (legs are
+      series and nest freely), a plain contact passes power when its tag is
+      TRUE and an NC contact (/Tag) when it is FALSE.
+    source: "#ladder-power-flow"
+    tests:
+      - go ./lang/ld TestRungShapes
+      - go ./lang/ld TestTranspileRungs
+      - go ./lang/conformance TestConformance/ld-coils/nested branch, bare leg passes at once
+      - go ./lang/conformance TestConformance/ld-coils/nested branch, FB leg is Q false at PT-1ms, true at PT, drop resets
+
+  - id: FN-009
+    claim: >-
+      A rising-edge contact (+Tag) passes power for exactly one scan on the
+      tag's 0 to 1 transition and a falling-edge contact (-Tag) for one scan
+      on 1 to 0; holding the input steady fires neither again.
+    source: "#ladder-power-flow"
+    tests:
+      - go ./lang/ld TestEdgeContactOneShot
+      - go ./lang/conformance TestConformance/ld-coils/+ contact passes one scan on the rise, - contact one scan on the fall
+
+  - id: FN-010
+    claim: >-
+      A plain coil sets its tag to the rung condition every scan; a set coil
+      latches (Tag := Tag OR condition) and a reset coil unlatches (Tag :=
+      Tag AND NOT condition).
+    source: "#ladder-power-flow"
+    tests:
+      - go ./lang/conformance TestConformance/ld-coils/S coil latches, R coil unlatches, R wins a same-scan tie
+      - go ./lang/conformance TestConformance/ld-coils/+ contact passes one scan on the rise, - contact one scan on the fall
+
+  - id: FN-011
+    claim: >-
+      A P coil is TRUE for exactly one scan when the rung condition rises and
+      an N coil for one scan when it falls.
+    source: "#ladder-power-flow"
+    tests:
+      - go ./lang/conformance TestConformance/ld-coils/P coil is TRUE for exactly one scan on the rising edge
+      - go ./lang/conformance TestConformance/ld-coils/N coil is TRUE for exactly one scan on the falling edge
+
+  - id: FN-012
+    claim: >-
+      Edge instances get a stable derived name (from rung name, reference
+      and position among repeats), so the R_TRIG's retained state survives an
+      unrelated edit; two edge contacts on the same tag in one rung are
+      independent instances.
+    source: "#ladder-power-flow"
+    tests:
+      - go ./lang/ld TestEdgeContactSyntax
+      - go ./lang/ld TestEdgeTrigNamesMatchTheCompiler
+    partial: true
+    note: >-
+      Naming and independence are asserted; retained state surviving an
+      actual online edit is not tested at this level.
+
+  - id: FN-013
+    claim: >-
+      A function contact FN(args) passes power when the call yields TRUE, and
+      /FN(args) negates it; the negation applies to any BOOL-yielding contact
+      term (a plain ref, an accessor chain such as /t1.Q, a call such as
+      /GT(a, b)).
+    source: "#ladder-power-flow"
+    tests:
+      - go ./lang/ld TestNegatedFunctionContact
+      - go ./lang/ld TestFunctionContactExpressionArgs
+      - go ./lang/ld TestTranspileRungs
+      - go ./lang/conformance TestConformance/ld-coils/negated function contact passes power when the call returns FALSE
+
+  - id: FN-014
+    claim: >-
+      A rung with only a coil is driven by the rail (TRUE), and multiple
+      coils on one rung share the same condition.
+    source: "#ladder-power-flow"
+    tests:
+      - go ./lang/ld TestRungShapes
+      - go ./lang/ld TestTranspileRungs
+
+  - id: FN-015
+    claim: >-
+      A rung's only output may be a function block instance, with no trailing
+      coil: its own output (inst.Q, inst.DN) is read elsewhere.
+    source: "#ladder-power-flow"
+    tests:
+      - go ./lang/ld TestFBOnlyRung
+      - go ./lang/conformance TestConformance/ld-coils/FB-only rung (no coil) still runs, its outputs read elsewhere
+
+  - id: FN-016
+    claim: >-
+      A rung's trailing output zone (coils or a rung-final function block)
+      must be contiguous at the rung's right end; a coil ahead of later
+      elements is the compile error "coils must sit at the rung's right end".
+    source: "#ladder-power-flow"
+    tests:
+      - go ./lang/ld TestRungErrors
+    partial: true
+    note: Asserts the "right end" error for a mid-rung coil; the coil-before-FB case is not separate.
+
+  - id: FN-017
+    claim: >-
+      The BOOL rule: anything that gates ladder power must yield BOOL.
+      Comparisons (GT, GE, LT, LE, EQ, NE) are valid contacts; a numeric
+      function such as ADD(TempC, 0.0) used as a contact is a compile error,
+      not a pass-through.
+    source: "#ladder-power-flow"
+    tests:
+      - go ./lang/ld TestFunctionContactExpressionArgs
+    partial: true
+    note: >-
+      Comparison contacts compile. No test feeds a numeric function to a
+      contact and asserts the error text.
+
+  - id: FN-018
+    claim: >-
+      An assignment element { Tag := expr } is made only when the rung has
+      power at that point and passes power through unchanged; several may be
+      chained with ";".
+    source: "#ladder-power-flow"
+    tests:
+      - go ./lang/ld TestAssignmentElement
+    partial: true
+    note: >-
+      Asserts the lowering (SEL on the rung condition) and that it compiles;
+      no test runs the rung and watches the value hold when unpowered.
+
+  - id: FN-019
+    claim: >-
+      An assignment element's value is evaluated every scan like any block
+      (compiled as a SEL), so an array index in it must stay valid while the
+      rung is false.
+    source: "#ladder-power-flow"
+    tests: []
+    note: Gap. The SEL lowering is shown in FN-018 but nothing tests the out-of-range-index consequence.
+
+  - id: FN-020
+    claim: >-
+      The standard's output binding (inst:TON(PT := T#5S, ET => Elapsed))
+      stores an FB output into a variable at the call site, in ladder, FBD
+      and ST.
+    source: "#ladder-power-flow"
+    tests:
+      - go ./lang/conformance TestConformance/ld-coils/FB-only rung (no coil) still runs, its outputs read elsewhere
+      - go ./lang/st TestUserFB_OutputBinding
+      - go ./lang/fbd TestOutputBinding
+    partial: true
+    note: >-
+      Ladder (CV => ld_Cnt in ld-coils) and ST (Y => result) are run and the
+      bound variable asserted. In FBD, TestOutputBinding only checks that
+      "ET => Elapsed" transpiles verbatim and compiles; nothing runs an FBD
+      output binding (other than ENO) and reads the variable.
+      TestLadderOutputBinding was removed: it too only checks text and
+      compilation, and ladder is covered by the conformance run.
+
+  - id: FN-021
+    claim: >-
+      Any instance output is addressable as inst.Pin everywhere, including
+      from another task's FBD/ST program.
+    source: "#ladder-power-flow"
+    tests:
+      - go ./lang/conformance TestConformance/ld-coils/FB-only rung (no coil) still runs, its outputs read elsewhere
+    partial: true
+    note: >-
+      A rung reading cnt.Q from another rung of the same program is asserted.
+      No test reads one task's instance output from another task, and a
+      non-BOOL pin (inst.ET) used as a contact argument is untested.
+      TestFBOnlyRung was removed: it checks lowering text only.
+
+  # ── SFC qualifiers and step supervision ─────────────────────────────
+  - id: FN-022
+    claim: >-
+      The untimed action qualifiers behave as specified: N active while the
+      step is active, S / R set / reset once on the activation scan, P1 / P
+      one scan on activation and P0 one scan on deactivation.
+    source: "#sfc-action-qualifiers-and-step-supervision"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-qualifiers
+
+  - id: FN-023
+    claim: >-
+      The timed qualifiers L, D, SD, DS and SL behave as specified: L active
+      from activation for the duration, D once active the duration, SD / DS /
+      SL stored past leaving the step, SL for the duration even after
+      leaving.
+    source: "#sfc-action-qualifiers-and-step-supervision"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers
+
+  - id: FN-024
+    claim: >-
+      An R acts on its step's activation scan and clears the S, SD, DS and SL
+      latches on its target; a timed SL that has run out stays latched until
+      an R.
+    source: "#sfc-action-qualifiers-and-step-supervision"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers/R resets the stored qualifiers
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers/R before PT cuts SL short and stops SD from ever coming on
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers/re-entry restarts L and D; a timed-out SL stays off until an R
+      - go ./lang/conformance TestConformance/sfc-timed-qualifiers/after an R, SL arms again on the next activation
+    partial: true
+    note: >-
+      R clearing SD, DS and SL on its activation scan is asserted, and so is
+      a timed-out SL staying off until an R. R clearing an S-qualified latch
+      is not asserted: sfc-qualifiers has no R on an S target.
+
+  - id: FN-025
+    claim: >-
+      Both association spellings compile and mean the same: "Q Target;" /
+      "Q Target(T#3S);" and the standard's textual "Target(Q);" /
+      "Target(Q, T#3S);". The duration of a timed qualifier is a TIME literal
+      or a TIME variable.
+    source: "#sfc-action-qualifiers-and-step-supervision"
+    tests:
+      - go ./lang/sfc TestIECAssociationForm
+      - go ./lang/sfc TestTimedQualifiersParseAndCheckClean
+    partial: true
+    note: Parsing and checking are asserted; a TIME-variable duration is not run in the corpus.
+
+  - id: FN-026
+    claim: >-
+      Every timed association has its own timer, retained across an online
+      edit.
+    source: "#sfc-action-qualifiers-and-step-supervision"
+    tests:
+      - go ./lang/sfc TestTimedLoweringStableSlots
+    partial: true
+    note: >-
+      One TON per association, and slot names that stay stable across an
+      edit (what a warm swap migrates by), are tested. No test shows a
+      running timed association's elapsed time surviving an edit.
+      TestWarmMigration was removed: it only migrates a step token.
+
+  - id: FN-027
+    claim: >-
+      A step's MAXTIME makes Step.ERR TRUE once the step has been active
+      longer than the limit (Step.ERR is legal in transition conditions and
+      action bodies); it stays TRUE after the step is left and clears on the
+      step's next activation.
+    source: "#sfc-action-qualifiers-and-step-supervision"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-step-maxtime
+
+  - id: FN-028
+    claim: >-
+      "ERROR :=" on a step mirrors Step.ERR into a BOOL variable (a manifest
+      tag an alarm can watch).
+    source: "#sfc-action-qualifiers-and-step-supervision"
+    tests:
+      - go ./lang/conformance TestConformance/sfc-step-maxtime
+
+  # ── Case-insensitivity ──────────────────────────────────────────────
+  - id: FN-029
+    claim: >-
+      Identifiers are case-insensitive in every language: variables, tags,
+      POUs, TYPEs, FB instances and pins, struct members, SFC steps/actions
+      and their .X/.T flags, and FBD wires.
+    source: "#identifiers-are-case-insensitive"
+    tests:
+      - go ./lang/conformance TestConformance/st-case-insensitive
+      - go ./lang/st TestLowerCaseInsensitiveIdentifiers
+      - go ./lang/fbd TestCaseInsensitiveCallsKeepSpelling
+      - go ./lang/fbd TestCaseInsensitiveWiresAndInstances
+      - go ./runtime TestTagNamesAreCaseInsensitive
+
+  - id: FN-030
+    claim: >-
+      The declaration's spelling is the name shown: the tag store, live
+      values and the HTTP API answer with the declared spelling however a
+      program spells it, and no second tag appears.
+    source: "#identifiers-are-case-insensitive"
+    tests:
+      - go ./runtime TestTagNamesAreCaseInsensitive
+      - go ./server TestWriteTagAnyCasing
+    partial: true
+    note: >-
+      Store and HTTP write are covered; Sparkplug metric names, diagnostics,
+      hover and the L5X tag list spelling are not asserted.
+
+  - id: FN-031
+    claim: >-
+      Two declarations that differ only in case in the same scope (variables,
+      POUs, TYPEs, manifest tags, block pins) are a duplicate-declaration
+      error naming both; the same name in different scopes is fine.
+    source: "#identifiers-are-case-insensitive"
+    tests:
+      - go ./lang/st TestLowerCaseOnlyDuplicates
+      - go ./lang/st TestLowerCaseDifferentScopesCoexist
+    partial: true
+    note: >-
+      Variables, FUNCTIONs, FUNCTION_BLOCKs, TYPEs and FB pins are tested,
+      each error naming both spellings. Two manifest tags that differ only
+      in case are not tested.
+
+  - id: FN-032
+    claim: >-
+      The HTTP API accepts any casing for a tag or member path on writes, and
+      forces and acceptance-test given:/expect: keys accept any casing too.
+    source: "#identifiers-are-case-insensitive"
+    tests:
+      - go ./server TestWriteTagAnyCasing
+      - go ./runtime TestTagNamesAreCaseInsensitive
+      - go ./lang/conformance TestConformance/st-case-insensitive
+    partial: true
+    note: >-
+      Covered: HTTP writes by any casing; Force/Unforce by any casing at the
+      tag store; given:/expect: keys in other casings (the st-case-insensitive
+      corpus runs through the acceptance runner). A force sent over the HTTP
+      API with another casing is not tested.
+
+  # ── Project tags in scope ───────────────────────────────────────────
+  - id: FN-033
+    claim: >-
+      Every tag the manifest declares is in scope in every PROGRAM (ST,
+      ladder, FBD, SFC) without a declaration.
+    source: "#project-tags-are-in-scope"
+    tests:
+      - go ./internal/project TestManifestTagsAreImplicit
+      - go ./internal/project TestImplicitTagsBindOnlyWhereUsed
+      - go ./lang/st TestImplicitGlobalsBindOnUse
+    partial: true
+    note: Not asserted per language; ST is the main path.
+
+  - id: FN-034
+    claim: >-
+      A tag's type is its type: (any elementary type, a project TYPE or an
+      ARRAY of either), else the type its init: implies; a tag with neither
+      cannot be typed and naming it is an error that says to give it a type:.
+    source: "#project-tags-are-in-scope"
+    tests:
+      - go ./internal/project TestElementaryTagTypes
+      - go ./internal/project TestImplicitStructTagBindsInOut
+      - go ./internal/project TestUntypedTagSaysGiveItAType
+      - go ./lang/st TestTagTypesAndUntypedTags
+    partial: true
+    note: >-
+      Asserted: elementary type:, a project TYPE, an ARRAY OF REAL, and the
+      untyped-tag error. Not asserted: the type an init: implies (TRUE BOOL,
+      a number REAL, T#5s TIME, other text STRING), or an ARRAY of a project
+      TYPE; both error assertions match only "is a project tag with no type",
+      not the "give it a type:" wording. TestTagTypeAndInitMustAgree was
+      removed: type:/init: disagreement is not promised here.
+
+  - id: FN-035
+    claim: >-
+      VAR_EXTERNAL stays legal and must agree with a stated type: (an error
+      at the declaration otherwise); two programs binding one untyped tag
+      with different types is an error naming both.
+    source: "#project-tags-are-in-scope"
+    tests:
+      - go ./internal/project TestExplicitDeclarationMustAgreeWithTypedTag
+      - go ./internal/project TestProgramsDisagreeingOnAnUntypedTag
+    partial: true
+    note: >-
+      Asserted: the VAR_EXTERNAL disagreement error, and that two programs
+      disagreeing on an untyped tag is an error. Not asserted: that this
+      error names both programs (the test only matches "give it a type: in
+      the manifest"), or the error's position at the declaration.
+
+  - id: FN-036
+    claim: >-
+      A program's own VAR with a tag's name shadows the tag (IEC scoping),
+      and naut check and the editor warn.
+    source: "#project-tags-are-in-scope"
+    tests:
+      - go ./internal/project TestLocalShadowsTag
+    partial: true
+    note: Shadowing is asserted; the naut check / editor warning text is not.
+
+  - id: FN-037
+    claim: >-
+      FUNCTION_BLOCK and FUNCTION bodies do not see tags implicitly; a block
+      reaches a tag only through its own VAR_EXTERNAL.
+    source: "#project-tags-are-in-scope"
+    tests:
+      - go ./internal/project TestFunctionBlocksDoNotSeeTagsImplicitly
+    partial: true
+    note: A FUNCTION_BLOCK body is asserted (error without, works with VAR_EXTERNAL); a FUNCTION body is not tested.
+
+  - id: FN-038
+    claim: >-
+      A GVL file (a library .st holding a file-level VAR_GLOBAL block)
+      declares globals for every program; one the manifest does not declare
+      is a state tag starting at zero.
+    source: "#project-tags-are-in-scope"
+    tests:
+      - go ./internal/project TestGVLComposesIntoEveryProgram
+      - go ./internal/project TestGVLRedeclarationMustAgree
+      - go ./lang/st TestFileScopeVarGlobalAheadOfProgram
+    partial: true
+    note: Composition is tested; "starts at zero" is not asserted directly.
+
+  # ── Types ───────────────────────────────────────────────────────────
+  - id: FN-039
+    claim: >-
+      Integer kinds share one 64-bit runtime representation, so arithmetic
+      on INT, DINT, UINT or WORD never wraps at the declared width.
+    source: "#types"
+    tests:
+      - go ./lang/conformance TestConformance/st-int-width
+
+  - id: FN-040
+    claim: >-
+      A diagnostic names the declared integer type (DINT, WORD), and partial
+      access knows a DINT has 32 bits.
+    source: "#types"
+    tests:
+      - go ./lang/st TestPartialAccessErrorsNameDeclaredType
+    partial: true
+    note: Only the partial-access diagnostic is asserted.
+
+  - id: FN-041
+    claim: >-
+      TIME counts milliseconds; literals T#500MS, T#5S, T#2M30S parse, and
+      TIME values compare with the ordinary comparisons.
+    source: "#types"
+    tests:
+      - go ./lang/st TestLowerTimeArithmetic
+      - go ./lang/conformance TestConformance/fn-conversions/TIME is milliseconds in both directions
+      - go ./lang/conformance TestConformance/sfc-step-t/a Step.T condition fires one scan after T reaches PT
+    partial: true
+    note: >-
+      Milliseconds (T#2s + T#500ms = 2500) and a TIME comparison (Wait.T >=
+      T#100ms) are asserted. The value of a compound literal such as T#2M30S
+      is not. TestParseTimeLiterals was removed: it checks only that the raw
+      literal text survives parsing, not its value.
+
+  - id: FN-042
+    claim: >-
+      Mixed numeric arguments promote to REAL; comparing or combining a
+      STRING with a number is a compile error, not a coercion.
+    source: "#types"
+    tests:
+      - go ./lang/st TestLowerIntToRealPromotion
+    partial: true
+    note: Promotion is asserted. The STRING-versus-number error has no test.
+
+  - id: FN-043
+    claim: >-
+      A user TYPE is first-class: it can be a variable, a tag, a struct
+      field, an array element, a FUNCTION argument or return and a
+      FUNCTION_BLOCK pin, and structs nest.
+    source: "#types"
+    tests:
+      - go ./lang/st TestLowerUDTFieldAccess
+      - go ./lang/st TestLowerNestedAggregateAssign
+      - go ./lang/st TestFBStructPins
+      - go ./lang/st TestEnumInStructsPinsArrays
+    partial: true
+    note: FUNCTION argument/return of a UDT type is not separately tested.
+
+  - id: FN-044
+    claim: >-
+      Assigning a struct or an array copies it (b := a; b.F := 1 leaves a.F
+      alone), and so does passing a struct to a VAR_INPUT pin; only
+      VAR_IN_OUT writes back to the caller.
+    source: "#types"
+    tests:
+      - go ./lang/st TestStructAssignmentIsACopy
+      - go ./lang/st TestFBStructInputIsCopied
+    partial: true
+    note: Struct copy is tested; array copy-on-assign is not.
+
+  - id: FN-045
+    claim: >-
+      A field or element of a tag assigns directly (P101.Running := TRUE,
+      Levels[2] := 41.0); the whole aggregate round-trips through the tag
+      store.
+    source: "#types"
+    tests:
+      - go ./lang/st TestExternalStructFieldAssignment
+      - go ./lang/st TestVarInOutExternalStructField
+    partial: true
+    note: Struct fields are tested; array-element assignment on a tag is not.
+
+  # ── Enumerations ────────────────────────────────────────────────────
+  - id: FN-046
+    claim: >-
+      An enumerated TYPE member without ":= n" takes the previous value plus
+      one (the first, 0); names and values are unique within the type; the
+      type's initial value is the one after the list, else the first member;
+      a Codesys base type after the list is accepted.
+    source: "#enumerations"
+    tests:
+      - go ./lang/st TestEnumBasics
+      - go ./lang/st TestEnumDeclarationErrors
+      - go ./lang/conformance TestCodesysEnumTypeCompiles
+    partial: true
+    note: >-
+      Uniqueness errors, first member 0, and the Codesys base type (DINT
+      after the list) are asserted. No fixture has an implicit member after
+      an explicit one (Mode has no values, Valve and WashState give every
+      later member a value), so position-based numbering would pass too;
+      and every type's initial value after the list is its first member
+      (Mode := Idle), so "after the list" is not told apart from "first
+      member".
+
+  - id: FN-047
+    claim: >-
+      A member is named qualified (WashState#Fill), or bare where only one
+      enumeration in scope has it or the context says which; otherwise the
+      compiler asks for the qualified form.
+    source: "#enumerations"
+    tests:
+      - go ./lang/st TestEnumAmbiguousMemberResolvedByContext
+      - go ./lang/st TestEnumTypeErrors
+      - go ./lang/conformance TestConformance/st-enum/CASE labels and comparisons on members, qualified and not
+
+  - id: FN-048
+    claim: >-
+      Values of one enumeration compare (=, <>, and < / > by member value)
+      and are CASE labels; assignment is between the same enumeration only,
+      and an enumeration does not mix with an integer and has no arithmetic.
+    source: "#enumerations"
+    tests:
+      - go ./lang/st TestEnumBasics
+      - go ./lang/st TestEnumTypeErrors
+      - go ./lang/conformance TestConformance/st-enum
+    partial: true
+    note: >-
+      =, <>, > and CASE labels run, and every refusal (INT, other enum,
+      arithmetic) is asserted. < is never used, and > is only applied to
+      Mode, whose member values equal their positions, so ordering "by
+      member value" is not told apart from ordering by position.
+
+  - id: FN-049
+    claim: >-
+      Enumeration conversion is explicit: TO_INT(s) (or any TO_<type>) gives
+      the member's integer and TO_WashState(n) gives the member with integer
+      n; a number no member has keeps that number.
+    source: "#enumerations"
+    tests:
+      - go ./lang/st TestEnumConversions
+
+  - id: FN-050
+    claim: >-
+      A manifest tag may be typed with an enumeration, seeded by member name
+      or number.
+    source: "#enumerations"
+    tests:
+      - go ./internal/project TestEnumTypedTag
+      - go ./lang/conformance TestConformance/st-enum/a tag of an enumerated type starts at the type's initial member
+    partial: true
+    note: >-
+      Seeding by name (init: Run) is asserted. Seeding by number (init: 10)
+      is not: the test only writes 10.0 at run time with SetPath.
+
+  - id: FN-051
+    claim: >-
+      Live values show the member name: /api/state, the live stream, the
+      editors' inline values and acceptance expect: all show and take the
+      member name, while a value underneath is its integer (what Sparkplug,
+      Modbus and the retain store carry).
+    source: "#enumerations"
+    tests:
+      - go ./acceptance TestGivenEnumMemberByPath
+      - go ./acceptance TestGivenEnumNonMemberNamesMembers
+      - go ./lang/st TestEnumFromTagStore
+    partial: true
+    note: >-
+      Acceptance given/expect names are covered; /api/state, the SSE stream
+      and the integer on Sparkplug/Modbus/retain are not asserted.
+
+  # ── Constants ───────────────────────────────────────────────────────
+  - id: FN-052
+    claim: >-
+      VAR CONSTANT reads fold at compile time; assigning one (or a field,
+      element or bit of one, or using it as a FOR variable) is a compile
+      error.
+    source: "#constants"
+    tests:
+      - go ./lang/st TestConstantCannotBeWritten
+      - go ./lang/conformance TestConstantsAndMembersAreNotWritable
+    partial: true
+    note: Whole-constant and FOR-variable writes are tested; field/element/bit of a constant is not.
+
+  - id: FN-053
+    claim: >-
+      A constant's value, an initial value and an array bound may be a
+      constant expression (literals, other constants and operators).
+    source: "#constants"
+    tests:
+      - go ./lang/st TestConstantInBoundsAndInitialValues
+      - go ./lang/conformance TestConformance/st-global-constants/an INT constant from a constant expression sizes an array and bounds a loop
+
+  - id: FN-054
+    claim: >-
+      VAR_GLOBAL CONSTANT in a library file declares project constants,
+      visible to every POU in every language (ST, ladder, FBD, SFC) and
+      folded the same way.
+    source: "#constants"
+    tests:
+      - go ./lang/conformance TestConformance/st-global-constants
+      - go ./lang/st TestGlobalConstantsVisibleEverywhere
+      - go ./lang/st TestGlobalConstantsLibraryAlone
+
+  - id: FN-055
+    claim: >-
+      A project constant is not a tag (no manifest entry, live value or API
+      path), a POU's own declaration of the same name shadows it, and its
+      type is elementary or an enumeration.
+    source: "#constants"
+    tests:
+      - go ./lang/st TestLocalShadowsGlobalConstant
+      - go ./lang/st TestGlobalConstantRules
+      - go ./lang/st TestGlobalConstantsVisibleEverywhere
+    partial: true
+    note: >-
+      Shadowing and the type rule are tested, and constants are asserted
+      absent from the compiled program's globals (so they are no tag); the
+      API and live values are not checked directly.
+
+  # ── VAR_TEMP ────────────────────────────────────────────────────────
+  - id: FN-056
+    claim: >-
+      VAR_TEMP starts every scan of a PROGRAM, and every call of a
+      FUNCTION_BLOCK or FUNCTION, at its declared initial value (or its
+      type's zero), never at what the previous scan or call left.
+    source: "#temporaries-var_temp"
+    tests:
+      - go ./lang/conformance TestConformance/st-var-temp
+      - go ./lang/st TestVarTempResetsEveryScan
+      - go ./lang/st TestVarTempResetsEveryFBCall
+      - go ./lang/st TestVarTempInFunction
+
+  - id: FN-057
+    claim: >-
+      A temp cannot be RETAIN and cannot be a function-block instance, and
+      an online edit never carries a temp over.
+    source: "#temporaries-var_temp"
+    tests:
+      - go ./lang/st TestVarTempRejections
+      - go ./lang/st TestVarTempNotMigrated
+
+  # ── REGION ──────────────────────────────────────────────────────────
+  - id: FN-058
+    claim: >-
+      REGION groups statements, nests, appears anywhere a statement can, and
+      changes nothing about how they run: it opens no scope and declares
+      nothing, and REGION is not a reserved word (a variable may be called
+      Region).
+    source: "#structure-region"
+    tests:
+      - go ./lang/conformance TestConformance/st-region
+      - go ./lang/st TestRegionIsANoOpGrouping
+      - go ./lang/st TestRegionOpensNoScope
+      - go ./lang/st TestRegionInFBAndCase
+
+  - id: FN-059
+    claim: >-
+      A REGION must be closed inside the statement list it opened in (not
+      across an END_IF).
+    source: "#structure-region"
+    tests:
+      - go ./lang/st TestRegionErrors
+
+  # ── CASE labels ─────────────────────────────────────────────────────
+  - id: FN-060
+    claim: >-
+      A CASE label is a constant: a literal, a named constant, an enumeration
+      member or a range of them; each label ends the clause before it, named
+      or not.
+    source: "#case-labels"
+    tests:
+      - go ./lang/st TestCaseNamedConstantLabels
+      - go ./lang/st TestCaseConstantLabelForms
+      - go ./lang/conformance TestConformance/st-case-constants
+      - go ./lang/st TestGlobalConstantsVisibleEverywhere
+      - go ./lang/conformance TestConformance/st-enum/CASE labels and comparisons on members, qualified and not
+
+  - id: FN-061
+    claim: A variable is not a CASE label (compile error).
+    source: "#case-labels"
+    tests:
+      - go ./lang/st TestCaseLabelMustBeConstant
+
+  - id: FN-062
+    claim: >-
+      Two CASE labels with the same value (two constants, a constant and a
+      literal, a value inside a range) are a compile error naming both.
+    source: "#case-labels"
+    tests:
+      - go ./lang/st TestCaseDuplicateLabelValues
+      - go ./lang/conformance TestCaseDuplicateConstantLabelDiagnosed
+
+  # ── SCL # prefix ────────────────────────────────────────────────────
+  - id: FN-063
+    claim: >-
+      The SCL "#name" local prefix is rejected wherever it appears with "the
+      # prefix is Siemens SCL syntax; write the name without it", including
+      on an assignment target.
+    source: "#scls--prefix"
+    tests:
+      - go ./lang/st TestHashPrefixRejectedEverywhere
+      - go ./lang/conformance TestHashPrefixDiagnosed
+
+  # ── Operators ───────────────────────────────────────────────────────
+  - id: FN-064
+    claim: >-
+      AND, OR and XOR are logical on BOOL and bitwise on integers, over all
+      64 bits (-8 AND 6 = 0).
+    source: "#operators"
+    tests:
+      - go ./lang/conformance TestConformance/st-bitwise
+      - go ./lang/conformance TestConformance/st-xor
+    partial: true
+    note: >-
+      Bitwise AND/OR/XOR on integers (ST and FBD, bits above 32) and XOR's
+      BOOL truth table are asserted. Logical AND and OR on BOOL are not
+      asserted by these features, and the n-ary (3+ input) block form is not
+      exercised. The claim no longer says "XOR of n inputs is TRUE when an
+      odd number are": that came from the test, not the page.
+
+  - id: FN-065
+    claim: >-
+      NOT is negation on BOOL and bitwise complement on an integer (NOT 0 =
+      -1, NOT 12 = -13).
+    source: "#operators"
+    tests:
+      - go ./lang/conformance TestConformance/st-bitwise
+      - go ./lang/st TestLowerNotOnInt
+    partial: true
+    note: The integer complement is asserted (NOT 0 = -1, NOT 12 = -13); NOT on a BOOL is not asserted by these tests.
+
+  - id: FN-066
+    claim: >-
+      ADD and MUL are n-ary, SUB is binary, and the result has the common
+      type of the arguments.
+    source: "#operators"
+    tests:
+      - go ./lang/st TestLowerRealArithmetic
+    partial: true
+    note: >-
+      One REAL addition is asserted; the n-ary arity, SUB, MUL and the
+      "common type" rule are not. TestBuiltinNumerics was removed: it tests
+      EXPT, TRUNC and ATAN2.
+
+  - id: FN-067
+    claim: DIV gives the quotient and MOD the remainder of two integers.
+    source: "#operators"
+    tests:
+      - go ./lang/conformance TestConformance/st-div-zero/ordinary division truncates toward zero, MOD keeps the dividend's sign
+
+  - id: FN-068
+    claim: >-
+      DIV by zero yields 0 for integer and REAL (never Inf or NaN), MOD by
+      zero yields 0, and the scan keeps running.
+    source: "#operators"
+    tests:
+      - go ./lang/conformance TestConformance/st-div-zero
+      - go ./runtime TestDivideByZeroCountsAndKeepsScanning
+
+  - id: FN-069
+    claim: >-
+      Every divide-by-zero bumps the controller-wide divZero counter in the
+      scan stats (/api/state stats.divZero), counted since start.
+    source: "#operators"
+    tests:
+      - go ./runtime TestDivideByZeroCountsAndKeepsScanning
+    partial: true
+    note: The runtime counter is tested; its appearance at /api/state under stats.divZero is not.
+
+  - id: FN-070
+    claim: MOVE passes its single input through as an assignment (FBD wiring aid).
+    source: "#operators"
+    tests: []
+    note: Gap. No test exercises the MOVE block.
+
+  - id: FN-071
+    claim: >-
+      GT, GE, LT, LE, EQ, NE take two comparable arguments (numeric or TIME)
+      and return BOOL.
+    source: "#operators"
+    tests:
+      - go ./lang/ld TestFunctionContactExpressionArgs
+      - go ./lang/conformance TestConformance/sfc-step-t/a Step.T condition fires one scan after T reaches PT
+    partial: true
+    note: >-
+      GT and EQ compile as contacts (BOOL), and one TIME comparison (>=) is
+      run; there is no per-function truth-table test. TestLowerTimeArithmetic
+      was removed: it adds TIMEs and compares nothing.
+
+  # ── Standard functions ──────────────────────────────────────────────
+  - id: FN-072
+    claim: >-
+      A standard-function call is positional or formal (every input by its
+      standard name: LIMIT(MN := 0.0, IN := x, MX := 100.0)); one call is
+      one or the other, never a mix.
+    source: "#standard-functions"
+    tests:
+      - go ./lang/st TestENOnFunctionAssign
+      - go ./lang/st TestENOOnlyAndPositional
+      - go ./lang/st TestENErrors
+    partial: true
+    note: >-
+      Formal LIMIT (MN/IN/MX) and MAX (IN1/IN2) calls run, and a mixed call
+      is refused ("formal or positional"). The SEL (G/IN0/IN1) and MUX
+      (K/IN0...) formal names are not exercised. TestUserFunc_NamedArgs was
+      removed: it calls a user FUNCTION, not a standard one.
+
+  - id: FN-073
+    claim: SEL(G, IN0, IN1) returns IN0 when G is FALSE and IN1 when G is TRUE.
+    source: "#selection"
+    tests:
+      - go ./lang/st TestBuiltinSelMux
+    partial: true
+    note: Only G = TRUE (IN1) is asserted; G = FALSE returning IN0 is not.
+
+  - id: FN-074
+    claim: >-
+      MUX(K, IN0, ..., INn) picks the K-th input, 0-based.
+    source: "#selection"
+    tests:
+      - go ./lang/conformance TestConformance/st-mux-fault/K picks the K-th input, 0-based
+      - go ./lang/st TestBuiltinSelMux
+
+  - id: FN-075
+    claim: >-
+      A MUX selector outside 0..n faults the scan; clamping K with LIMIT
+      keeps it in range.
+    source: "#selection"
+    tests:
+      - go ./lang/conformance TestMuxOutOfRangeFaults
+      - go ./lang/conformance TestConformance/st-mux-fault/LIMIT keeps a wandering selector in range, so the scan never faults
+      - go ./lang/st TestBuiltinMuxOutOfRangeFaults
+
+  - id: FN-076
+    claim: >-
+      MIN and MAX are n-ary numeric and LIMIT(MN, IN, MX) clamps IN into
+      [MN, MX].
+    source: "#selection"
+    tests:
+      - go ./lang/st TestBuiltinMinMaxLimit
+      - go ./lang/conformance TestConformance/st-mux-fault/LIMIT keeps a wandering selector in range, so the scan never faults
+    partial: true
+    note: >-
+      Two-input MIN and MAX and LIMIT clamping at both ends are asserted;
+      MIN or MAX with three or more inputs is not run.
+
+  - id: FN-077
+    claim: ABS returns the absolute value in the argument's own type.
+    source: "#numeric"
+    tests:
+      - go ./lang/st TestBuiltinABS
+    partial: true
+    note: Only ABS of an INT (-5 to 5) is asserted; a REAL argument and the result type are not.
+
+  - id: FN-078
+    claim: >-
+      SQRT, LN, LOG (base 10, not natural), EXP, EXPT and the trigonometric
+      functions SIN/COS/TAN (radians), ASIN/ACOS/ATAN and the quadrant-correct
+      ATAN2 return REAL with the stated meaning.
+    source: "#numeric"
+    tests:
+      - go ./lang/conformance TestConformance/fn-trig-log
+      - go ./lang/st TestBuiltinNumerics
+
+  - id: FN-079
+    claim: >-
+      TRUNC truncates toward zero for both signs, into the 64-bit integer an
+      undeclared INT is; TRUNC_<int> does the same into the typed integer.
+    source: "#numeric"
+    tests:
+      - go ./lang/conformance TestConformance/fn-conversions/TRUNC goes toward zero for both signs
+      - go ./lang/conformance TestConformance/st-conversions-matrix/REAL to integer rounds half to even; TRUNC goes toward zero
+      - go ./lang/ir TestConversionSemantics
+      - go ./lang/st TestBuiltinTruncStaysTruncation
+    partial: true
+    note: >-
+      Toward-zero truncation is asserted for TRUNC and the typed TRUNC_DINT /
+      TRUNC_INT. That TRUNC's result is a 64-bit integer (a value beyond 32
+      bits survives) is not.
+
+  - id: FN-080
+    claim: >-
+      SHL and SHR shift left / right (SHR zero-fills) and ROL and ROR rotate;
+      all operate over 64 bits, so a WORD you think of as 16 bits rotates as
+      a 64-bit value.
+    source: "#bit-operations"
+    tests:
+      - go ./lang/conformance TestConformance/st-int-width/shifts act on 64 bits
+      - go ./lang/conformance TestConformance/st-int-width/ROL and ROR rotate over 64 bits, not the declared 16
+      - go ./lang/st TestBuiltinBitOps
+
+  - id: FN-081
+    claim: >-
+      Word.3 is bit 3 of an integer as a BOOL, readable anywhere a BOOL is
+      (IF, a ladder contact, a compare argument) and assignable (a ladder
+      coil too), numbered from 0 at the least significant end; the IEC
+      Word.%X3 spelling works, and so do bits of array elements and
+      structure members.
+    source: "#bit-operations"
+    tests:
+      - go ./lang/st TestBitAccess
+      - go ./lang/ld TestBitAccessInLadder
+      - go ./lang/conformance TestConformance/st-partial-access
+    partial: true
+    note: >-
+      Asserted: reading and writing w.0 / w.1 (LSB is bit 0), .3 and .%X3
+      reading the same bit, and a ladder contact and coil on a bit (run in
+      the conformance corpus; TestBitAccessInLadder checks lowering only).
+      Not asserted: a bit read in an IF condition or a compare argument, and
+      bits of an array element or a structure member (Words[2].15,
+      P101.Status.12).
+
+  - id: FN-082
+    claim: >-
+      Partial access (w.%B1, w.%W0, w.%D1, w.%L0) reads as an unsigned
+      integer of that width and writes back only its own bits; ladder
+      contacts/coils and FBD wires take every form.
+    source: "#bit-operations"
+    tests:
+      - go ./lang/conformance TestConformance/st-partial-access
+      - go ./lang/st TestPartialAccessReadWrite
+    partial: true
+    note: >-
+      %X, %B, %W and %D read and write back only their bits. Not asserted:
+      %L; reading as unsigned (no part that is read has its top bit set);
+      and the ladder and FBD forms beyond %X (ladder) and %X / %B (FBD).
+
+  - id: FN-083
+    claim: >-
+      A partial access must fit the declared type: d.%X32 on a DINT or w.16
+      on a WORD is a compile error that names the type.
+    source: "#bit-operations"
+    tests:
+      - go ./lang/st TestPartialAccessErrorsNameDeclaredType
+
+  - id: FN-084
+    claim: >-
+      String functions use 1-based positions, and length and position
+      arguments clamp to the string instead of faulting (LEFT, RIGHT, MID,
+      INSERT, DELETE, REPLACE).
+    source: "#strings"
+    tests:
+      - go ./lang/conformance TestConformance/st-string-clamp
+      - go ./lang/st TestBuiltinStrings
+
+  - id: FN-085
+    claim: >-
+      FIND returns the 1-based position of IN2 in IN1, and 0 when absent or
+      when IN2 is empty.
+    source: "#strings"
+    tests:
+      - go ./lang/conformance TestConformance/st-string-clamp/FIND is 1-based and gives 0 when absent or when the needle is empty
+
+  - id: FN-086
+    claim: LEN returns the length, and CONCAT is n-ary.
+    source: "#strings"
+    tests:
+      - go ./lang/st TestBuiltinStrings
+      - go ./lang/conformance TestConformance/st-string-clamp/in-range arguments behave as the standard says (1-based)
+
+  # ── Type conversions ────────────────────────────────────────────────
+  - id: FN-087
+    claim: >-
+      Every <A>_TO_<B> between the 18 elementary types exists (294
+      functions) except the marked cells, which are compile errors, as is the
+      overloaded TO_<type> for the same cells; there are no implicit
+      conversions across kinds.
+    source: "#type-conversions"
+    tests:
+      - go ./lang/ir TestConversionMatrixShape
+      - go ./lang/st TestConversionCompileErrors
+      - go ./lang/st TestConversionMatrixThroughST
+
+  - id: FN-088
+    claim: >-
+      Integer narrowing wraps: the result keeps the target's low bits, read
+      signed or unsigned as the target is (DINT_TO_INT(70000) = 4464,
+      INT_TO_USINT(-1) = 255, BYTE_TO_SINT(255) = -1, SINT_TO_WORD(-1) =
+      16#FFFF).
+    source: "#type-conversions"
+    tests:
+      - go ./lang/conformance TestConformance/st-conversions-matrix/integer narrowing wraps at the target width (DINT to INT, UINT, BYTE)
+      - go ./lang/ir TestConversionSemantics
+
+  - id: FN-089
+    claim: >-
+      The argument of a conversion is read as its own declared type first, so
+      UINT_TO_DINT(u) with u at -1 sees 65535.
+    source: "#type-conversions"
+    tests:
+      - go ./lang/conformance TestConformance/st-conversions-matrix/sign - a signed source sign-extends, an unsigned one does not
+      - go ./lang/ir TestConversionSemantics
+
+  - id: FN-090
+    claim: >-
+      REAL to integer and REAL to TIME round to nearest, ties to even (2.5 to
+      2, 3.5 to 4, -2.5 to -2); TRUNC* go toward zero.
+    source: "#type-conversions"
+    tests:
+      - go ./lang/conformance TestConformance/fn-conversions/REAL_TO_INT rounds half to even, not half away from zero
+      - go ./lang/conformance TestConformance/fn-conversions/REAL_TO_TIME rounds milliseconds half to even
+      - go ./lang/conformance TestConformance/st-conversions-matrix/REAL to integer rounds half to even; TRUNC goes toward zero
+      - go ./lang/st TestBuiltinRealRoundingTiesToEven
+
+  - id: FN-091
+    claim: >-
+      A REAL with no value in the target (beyond its range, NaN or infinite)
+      faults the scan; LREAL_TO_SINT(127.5) faults while
+      LREAL_TO_SINT(-128.5) rounds to the even -128 and does not.
+    source: "#type-conversions"
+    tests:
+      - go ./lang/conformance TestConversionRangeFaults
+      - go ./lang/ir TestConversionFaults
+      - go ./lang/conformance TestConformance/st-conversions-matrix/REAL to integer rounds half to even; TRUNC goes toward zero
+
+  - id: FN-092
+    claim: >-
+      REAL and bit-string conversions are binary transfers of the IEEE 754
+      pattern, only at the same width (REAL_TO_DWORD(1.0) = 16#3F800000); a
+      pattern that is NaN or infinite faults; REAL_TO_WORD is a compile error
+      that says what to write instead.
+    source: "#type-conversions"
+    tests:
+      - go ./lang/conformance TestConformance/st-conversions-matrix/REAL to DWORD and back is the IEEE 754 bit pattern (binary transfer)
+      - go ./lang/conformance TestConversionRangeFaults/NaN bit pattern
+      - go ./lang/st TestConversionCompileErrors
+      - go ./lang/ir TestConversionSemantics
+    partial: true
+    note: >-
+      REAL <-> DWORD and LREAL <-> LWORD bit patterns, the NaN-pattern fault
+      and the REAL_TO_WORD message (REAL_TO_UINT / REAL_TO_DWORD) are
+      asserted. A pattern that is infinite (e.g. 16#7F800000) faulting is
+      not.
+
+  - id: FN-093
+    claim: >-
+      Integers convert to REAL exactly up to 2^53 (REAL and LREAL are both
+      float64 at run time), ULINT and LWORD convert unsigned, and
+      REAL_TO_LREAL / LREAL_TO_REAL change only the type.
+    source: "#type-conversions"
+    tests:
+      - go ./lang/conformance TestConformance/st-conversions-matrix/integers to REAL - REAL holds LREAL precision here
+      - go ./lang/ir TestConversionSemantics
+    partial: true
+    note: >-
+      Exactness (16777217), ULINT read unsigned (ULINT_TO_LREAL, ULINT_TO_STRING)
+      and LREAL_TO_REAL keeping 0.1 are asserted. LWORD converting unsigned
+      and REAL_TO_LREAL are not.
+
+  - id: FN-094
+    claim: >-
+      BOOL converts to 0/1 of any numeric type (1 ms for TIME); any number
+      converts to TRUE when it is nonzero in the source width
+      (BYTE_TO_BOOL(256) is FALSE).
+    source: "#type-conversions"
+    tests:
+      - go ./lang/conformance TestConformance/st-conversions-matrix/BOOL is 0 and 1; a number is TRUE when nonzero in the source width
+      - go ./lang/conformance TestConformance/fn-conversions/BOOL to INT and REAL, INT and REAL to BOOL
+      - go ./lang/ir TestConversionSemantics
+
+  - id: FN-095
+    claim: >-
+      TIME and LTIME count milliseconds (LTIME is not nanoseconds), and
+      TIME_TO_INT wraps like any integer narrowing.
+    source: "#type-conversions"
+    tests:
+      - go ./lang/conformance TestConformance/st-conversions-matrix/TIME is milliseconds, and wraps like any integer when narrowed
+      - go ./lang/conformance TestConformance/fn-conversions/TIME is milliseconds in both directions
+      - go ./lang/ir TestConversionSemantics
+    note: >-
+      LTIME appears in neither conformance program; TestConversionSemantics
+      covers it (TIME_TO_LTIME(42) = 42, LTIME_TO_LREAL(250) = 250,
+      LTIME#5000ms both ways), which a nanosecond LTIME would fail.
+
+  - id: FN-096
+    claim: >-
+      STRING_TO_x parses after trimming blanks: decimal or base-prefixed
+      integers (16#FF, 2#1010, 8#17) with _ separators, decimal/exponent
+      REALs, durations (T#1m30s, 90s, 500ms), and BOOL as TRUE/FALSE/1/0 in
+      any case.
+    source: "#type-conversions"
+    tests:
+      - go ./lang/conformance TestConformance/fn-conversions/parsing from STRING
+      - go ./lang/conformance TestConformance/st-conversions-matrix/STRING formatting, parsing and round trips
+      - go ./lang/ir TestConversionSemantics
+      - go ./lang/ir TestConversionStringRoundTrip
+    partial: true
+    note: >-
+      Asserted: trimming, decimal, 16# and 2# with _, decimal REALs (and
+      1e+21 back through the round trip), T#1m30s, and TRUE/true/1/FALSE/0.
+      Not asserted: the 8# prefix, and bare durations without T# ("90s",
+      "500ms").
+
+  - id: FN-097
+    claim: >-
+      Text that does not parse, or parses to a value the target cannot hold
+      (STRING_TO_SINT('128'), STRING_TO_UINT('-1')), faults the scan.
+    source: "#type-conversions"
+    tests:
+      - go ./lang/conformance TestStringParseFaults
+      - go ./lang/conformance TestConversionRangeFaults
+
+  - id: FN-098
+    claim: >-
+      Formatting to STRING is decimal for integers (unsigned for U- and
+      bit-string types), the shortest exact form for REAL, T#5000ms /
+      LTIME#5000ms for durations, so STRING_TO_x(x_TO_STRING(v)) gives v
+      back.
+    source: "#type-conversions"
+    tests:
+      - go ./lang/conformance TestConformance/fn-conversions/formatting to STRING
+      - go ./lang/ir TestConversionSemantics
+      - go ./lang/ir TestConversionStringRoundTrip
+
+  - id: FN-099
+    claim: >-
+      TO_<type>(x) is the overloaded form (an expression's integer converts
+      as LINT, an enumeration as its integer); TRUNC_<int>(x) and
+      <real>_TRUNC_<int>(x) truncate toward zero; TO_<Enum>(n) gives the
+      member.
+    source: "#type-conversions"
+    tests:
+      - go ./lang/ir TestOverloadedTo
+      - go ./lang/ir TestConversionSemantics
+      - go ./lang/st TestConversionMatrixThroughST
+      - go ./lang/st TestEnumConversions
+
+  - id: FN-100
+    claim: >-
+      DATE, TIME_OF_DAY and DATE_AND_TIME are not run-time types yet and
+      have no conversions.
+    source: "#type-conversions"
+    tests: []
+    note: Gap (a negative; no test asserts they are rejected).
+
+  # ── Standard function blocks ────────────────────────────────────────
+  - id: FN-101
+    claim: >-
+      TON (on-delay): Q rises after IN has been TRUE for PT; ET is the
+      elapsed time.
+    source: "#standard-function-blocks"
+    tests:
+      - go ./lang/conformance TestConformance/fb-ton
+
+  - id: FN-102
+    claim: >-
+      TOF (off-delay): Q stays TRUE for PT after IN drops.
+    source: "#standard-function-blocks"
+    tests:
+      - go ./lang/conformance TestConformance/fb-tof
+
+  - id: FN-103
+    claim: >-
+      TP (pulse): rising IN produces a PT-wide TRUE pulse, a rising edge
+      during the pulse is ignored, afterwards ET holds at PT while IN stays
+      TRUE and returns to 0 the scan IN is FALSE.
+    source: "#standard-function-blocks"
+    tests:
+      - go ./lang/conformance TestConformance/fb-tp
+
+  - id: FN-104
+    claim: >-
+      CTU counts rising CU edges, Q is TRUE when CV reaches PV, and R resets.
+    source: "#standard-function-blocks"
+    tests:
+      - go ./lang/st TestFBCTUCountsAndResets
+    partial: true
+    note: >-
+      No conformance feature (ST/LD/FBD) exists for CTU as for the other
+      counters; edge-only counting and R dominance are not separately pinned.
+
+  - id: FN-105
+    claim: >-
+      CTD counts down from PV (LD loads PV), and Q is TRUE when CV is at or
+      below 0.
+    source: "#standard-function-blocks"
+    tests:
+      - go ./lang/conformance TestConformance/fb-ctd
+
+  - id: FN-106
+    claim: >-
+      CTUD (inputs CU, CD, R, LD, PV; outputs QU, QD, CV) is an up/down
+      counter.
+    source: "#standard-function-blocks"
+    tests:
+      - go ./lang/conformance TestConformance/fb-ctud
+
+  - id: FN-107
+    claim: >-
+      R_TRIG's Q is TRUE for exactly one scan on CLK's rising edge.
+    source: "#standard-function-blocks"
+    tests:
+      - go ./lang/st TestFBRTrigDetectsRisingEdge
+      - go ./lang/conformance TestConformance/ld-coils/P coil is TRUE for exactly one scan on the rising edge
+    partial: true
+    note: There is no fb-r-trig conformance feature; the ST test is a single sequence and the ladder P coil uses the implicit R_TRIG.
+
+  - id: FN-108
+    claim: >-
+      F_TRIG's Q is a one-scan pulse on CLK's falling edge.
+    source: "#standard-function-blocks"
+    tests:
+      - go ./lang/conformance TestConformance/fb-f-trig
+
+  - id: FN-109
+    claim: SR (S1, R → Q1) is a set-dominant latch.
+    source: "#standard-function-blocks"
+    tests:
+      - go ./lang/conformance TestConformance/fb-sr
+
+  - id: FN-110
+    claim: RS (S, R1 → Q1) is a reset-dominant latch.
+    source: "#standard-function-blocks"
+    tests:
+      - go ./lang/conformance TestConformance/fb-rs
+
+  - id: FN-111
+    claim: >-
+      Each function-block instance keeps its own state between scans, and its
+      outputs read as inst.Pin from any language.
+    source: "#standard-function-blocks"
+    tests:
+      - go ./lang/st TestUserFB_RetainsState
+      - go ./lang/conformance TestConformance/fb-ton
+    partial: true
+    note: Per-instance independence for the built-in blocks is not separately asserted.
+
+  # ── EN / ENO ────────────────────────────────────────────────────────
+  - id: FN-112
+    claim: >-
+      With EN FALSE a function call does not execute: its result is not
+      assigned and the variable it drives keeps its value.
+    source: "#eneno-execution-control"
+    tests:
+      - go ./lang/conformance TestConformance/fbd-en-eno/EN FALSE leaves the function's result unassigned
+      - go ./lang/conformance TestConformance/fbd-en-eno/EN FALSE from power-up never assigns (the tag keeps its init)
+      - go ./lang/st TestENOnFunctionAssign
+
+  - id: FN-113
+    claim: >-
+      With EN FALSE a function-block body does not run: outputs, every =>
+      binding and internal state (a counter's edge memory, a timer's start)
+      keep their values until it runs again.
+    source: "#eneno-execution-control"
+    tests:
+      - go ./lang/conformance TestConformance/fbd-en-eno/an FB with EN FALSE does not run — edges it misses are not counted
+      - go ./lang/conformance TestConformance/fbd-en-eno/the FB's edge memory is stale while disabled — a rise across it counts on return
+      - go ./lang/st TestENOnFBCall
+
+  - id: FN-114
+    claim: >-
+      ENO = EN AND no error; a call that errors faults the scan, so a call
+      that returns has ENO = EN, except FBD's DIV and MOD whose ENO is FALSE
+      on a zero divisor (the result is still 0, counted in divZero).
+    source: "#eneno-execution-control"
+    tests:
+      - go ./lang/conformance TestConformance/fbd-en-eno/EN TRUE runs the call and ENO is TRUE
+      - go ./lang/conformance TestConformance/fbd-en-eno/DIV's ENO is FALSE on a zero divisor, TRUE otherwise
+      - go ./lang/conformance TestConformance/fbd-en-eno/DIV with EN FALSE holds its result and reports ENO FALSE
+    partial: true
+    note: DIV is covered; MOD's ENO is not separately asserted.
+
+  - id: FN-115
+    claim: >-
+      In ST, EN and ENO are formal arguments (t1(EN := Enable, ..., ENO =>
+      t1Ok); LIMIT(EN := ..., ENO => ok)).
+    source: "#eneno-execution-control"
+    tests:
+      - go ./lang/st TestENOnFBCall
+      - go ./lang/st TestENOnFunctionAssign
+      - go ./lang/st TestENOOnlyAndPositional
+
+  - id: FN-116
+    claim: >-
+      A function's EN/ENO needs its call to be a statement of its own (the
+      whole right-hand side of an assignment, or a user FUNCTION called as a
+      statement); inside a larger expression it is a compile error.
+    source: "#eneno-execution-control"
+    tests:
+      - go ./lang/st TestENErrors
+      - go ./lang/st TestENOnFunctionAssign
+    partial: true
+    note: >-
+      The compile error inside a larger expression and the whole-right-hand-
+      side form are asserted. A user FUNCTION called as a statement with
+      EN/ENO is not exercised.
+
+  - id: FN-117
+    claim: >-
+      In FBD, any block takes EN/ENO the same way; a block with EN/ENO must
+      drive a variable (never another block's input), and ENO reads as a wire
+      (t1.ENO, sp.ENO) that feeds a coil or the next block's EN.
+    source: "#eneno-execution-control"
+    tests:
+      - go ./lang/fbd TestENOModelAndTranspile
+      - go ./lang/fbd TestENOFunctionGatesItsCoil
+      - go ./lang/fbd TestENOErrors
+      - go ./lang/conformance TestConformance/fbd-en-eno
+    partial: true
+    note: >-
+      EN/ENO on LIMIT, DIV, TON and CTU, the "must drive a variable" error,
+      and ENO wired to a coil are asserted. ENO feeding the next block's EN
+      (the EN/ENO chain) is not.
+
+  - id: FN-118
+    claim: >-
+      A user block that declares its own EN input or ENO output keeps them as
+      ordinary pins: its body decides what they mean.
+    source: "#eneno-execution-control"
+    tests:
+      - go ./lang/st TestENOnUserFunctionStatementAndOwnEN
+    partial: true
+    note: >-
+      The test shows a block declaring EN/ENO compiles and binds them, but it
+      cannot tell "ordinary pin" from "execution control": the body only
+      counts when EN is TRUE and sets ENO := EN, so skipping the body on EN
+      FALSE gives the same results.
+
+  # ── Power pins in ladder ────────────────────────────────────────────
+  - id: FN-119
+    claim: >-
+      In a rung, rung power drives a standard block's power-in pin (TON/TOF/TP
+      IN, CTU CU, CTD CD, R_TRIG/F_TRIG CLK, SR S1, RS S) and continues from
+      its power-out pin (Q, or Q1 for SR/RS).
+    source: "#power-pins-in-ladder"
+    tests:
+      - go ./lang/ld TestTranspileRungs
+      - go ./lang/conformance TestConformance/fb-sr
+      - go ./lang/conformance TestConformance/fb-rs
+      - go ./lang/conformance TestConformance/fb-ctd
+    partial: true
+    note: The ld column of the FB features covers TON/TOF/TP/CTD/CTUD/SR/RS/F_TRIG; CTU and R_TRIG power pins are not pinned.
+
+  - id: FN-120
+    claim: >-
+      For a user FUNCTION_BLOCK, power drives EN else the first BOOL
+      VAR_INPUT the call does not bind by name, and continues from ENO else
+      the first BOOL VAR_OUTPUT.
+    source: "#power-pins-in-ladder"
+    tests:
+      - go ./lang/ld TestLadderFunctionBlockPowerPins
+    partial: true
+    note: >-
+      Power on the first BOOL input and out of the first BOOL output is
+      asserted. Not asserted: preferring a declared EN / ENO over the first
+      BOOL pin, and skipping an earlier BOOL input that the call binds by
+      name (in every fixture the first BOOL input is the unbound one).
+
+  - id: FN-121
+    claim: >-
+      Passing the power pin explicitly in the argument list (t1:TON(IN :=
+      x)) is a compile error: power owns it.
+    source: "#power-pins-in-ladder"
+    tests:
+      - go ./lang/ld TestRungErrors
+
+  - id: FN-122
+    claim: >-
+      A block with no power-in (every BOOL input bound by name, or none) is
+      called unconditionally and may only sit on a rail-driven rung; with
+      contacts ahead of it is the error "no free BOOL input for the rung's
+      power".
+    source: "#power-pins-in-ladder"
+    tests:
+      - go ./lang/ld TestLadderFunctionBlockPowerPins
+      - go ./lang/ld TestLadderFunctionBlockInOutStructPin
+
+  - id: FN-123
+    claim: >-
+      A block with no BOOL output passes power through unchanged, so whatever
+      conditioned the block still conditions the coils to its right.
+    source: "#power-pins-in-ladder"
+    tests:
+      - go ./lang/ld TestLadderFunctionBlockPowerPins
+
+  - id: FN-124
+    claim: >-
+      A user block's pins are resolved from the whole compile (this file's
+      FUNCTION_BLOCKs plus every project library); a block whose type nothing
+      in the compile declares falls back to IN/Q.
+    source: "#power-pins-in-ladder"
+    tests:
+      - go ./lang/ld TestLadderFunctionBlockNested
+      - go ./internal/project TestLadderLibraryProjectRuns
+    partial: true
+    note: >-
+      Power pins resolved from another file (Debounce's IN/OUT) and from
+      project libraries (PumpSeq, Scale) are asserted. The IN/Q fallback for
+      an undeclared type has no test. TestLadderLibraryComposes and
+      TestLadderFunctionBlockFromST were replaced: they test composition and
+      an ST call, not pin resolution.
+
+  # ── PID ─────────────────────────────────────────────────────────────
+  - id: FN-125
+    claim: >-
+      PID output CV is clamped to [CV_MIN, CV_MAX], and leaving both unbound
+      falls back to the IEC 0..100 range instead of pinning CV at zero.
+    source: "#pid-closed-loop-control"
+    tests:
+      - go ./lang/st TestPIDDefaultClampRange
+      - go ./lang/st TestPIDAntiWindupStaysClamped
+    partial: true
+    note: The ceiling clamp and the 0..100 fallback are asserted; clamping at CV_MIN is not.
+
+  - id: FN-126
+    claim: >-
+      DIRECT := FALSE is reverse acting (error = SP - PV, raise CV when PV is
+      low, a heater) and DIRECT := TRUE direct acting (error = PV - SP, a
+      cooling valve).
+    source: "#pid-closed-loop-control"
+    tests:
+      - go ./lang/st TestPIDDirectVsReverse
+
+  - id: FN-127
+    claim: >-
+      Manual mode (AUTO = FALSE): CV tracks CV_MAN and the integral is
+      back-solved every scan so returning to AUTO is bumpless, with no jump
+      in CV.
+    source: "#pid-closed-loop-control"
+    tests:
+      - go ./lang/st TestPIDManualToAutoBumpless
+
+  - id: FN-128
+    claim: >-
+      Anti-windup is conditional integration: the integral does not
+      accumulate when that would push the unclamped output further past a rail
+      it has reached, CV comes off the rail as soon as the error reverses,
+      and SAT_HI / SAT_LO report the clamp.
+    source: "#pid-closed-loop-control"
+    tests:
+      - go ./lang/st TestPIDAntiWindupStaysClamped
+    partial: true
+    note: The high rail and SAT_HI are covered; SAT_LO and the low rail are not.
+
+  - id: FN-129
+    claim: >-
+      DT left at 0 (unbound) makes the block measure elapsed time itself from
+      the scan clock; a bound DT is used as seconds since the last call.
+    source: "#pid-closed-loop-control"
+    tests:
+      - go ./lang/st TestPIDDTZeroUsesScanDt
+    partial: true
+    note: The self-measured case is covered; a bound DT overriding it is not.
+
+  - id: FN-130
+    claim: >-
+      PID is closed-loop control: around a process it drives PV to the
+      setpoint and holds it there.
+    source: "#pid-closed-loop-control"
+    tests:
+      - go ./lang/st TestPIDStepResponseConverges
+
+  - id: FN-131
+    claim: >-
+      KP = 0 disables the whole controller, not just the P term; KI = 0
+      disables integral action and KD = 0 derivative action.
+    source: "#pid-closed-loop-control"
+    tests: []
+    note: Gap. No test sets a gain to zero and checks the output.
+
+  - id: FN-132
+    claim: >-
+      The derivative acts on PV, not on error (a setpoint step never kicks
+      D_TERM), through a fixed first-order filter with time constant KD/10.
+    source: "#pid-closed-loop-control"
+    tests: []
+    note: Gap. D_TERM and the filter are not asserted anywhere.
+
+  - id: FN-133
+    claim: >-
+      DB is a deadband on error: within +/-DB the P and I terms see zero
+      error, while the D term still sees every PV move.
+    source: "#pid-closed-loop-control"
+    tests: []
+    note: Gap. DB is wired in the harness but never driven.
+
+  - id: FN-134
+    claim: RESET = TRUE zeroes the integral this scan.
+    source: "#pid-closed-loop-control"
+    tests: []
+    note: Gap.
+
+  - id: FN-135
+    claim: >-
+      The diagnostic outputs hold their stated values: ERR is the error
+      before the deadband, and P_TERM, I_TERM, D_TERM are the three
+      contributions to CV.
+    source: "#pid-closed-loop-control"
+    tests: []
+    note: Gap. The terms are exposed in the harness but not asserted against the formula CV = KP*(error + KI*integral + KD*d(PV)/dt).
+
+  # ── Arrays of instances ─────────────────────────────────────────────
+  - id: FN-136
+    claim: >-
+      A function-block instance can be declared in an array
+      (Timers : ARRAY[0..3] OF TON); each element is its own instance with
+      its own retained state, callable by index in ST and in a rung, and the
+      index may be a variable.
+    source: "#arrays-of-instances"
+    tests:
+      - go ./lang/st TestFBInstanceArray
+      - go ./lang/ld TestFBInstanceArrayInLadder
+    partial: true
+    note: >-
+      In ST two elements behave as separate instances in one scan
+      (Timers[0] done, Timers[1] not); a rung lowers to an indexed call and
+      compiles. Not asserted: an element's state carried across scans, and a
+      variable index at run time. TestArrayCompilesEndToEnd was removed: it
+      is about arrays of REAL, not of instances.
+
+  - id: FN-137
+    claim: >-
+      On a Logix target an array of instances is one TIMER[4] tag; an element
+      called with a literal index carries its preset in the tag's data, one
+      called with a computed index takes a MOVE to its .PRE ahead of the
+      rung.
+    source: "#arrays-of-instances"
+    tests: []
+    note: Gap. No Logix writer test covers FB instance arrays.
+
+  # ── Dialects ────────────────────────────────────────────────────────
+  - id: FN-138
+    claim: >-
+      dialect: names are nautilus (the default, adds nothing), logix, and
+      the reserved siemens and codesys.
+    source: "#dialects"
+    tests:
+      - go ./internal/dialect TestLogixLibraryParsesAndIsDeclarationsOnly
+    partial: true
+    note: >-
+      nautilus adding nothing, logix having a library, and siemens reserved
+      and empty are asserted. codesys is not, nor that a project without
+      dialect: gets nautilus. The claim no longer says the logix library is
+      declarations only or that an unknown dialect is an error: the test
+      asserts both, but the page does not promise them.
+
+  - id: FN-139
+    claim: >-
+      The logix dialect's TONR is a TON whose Reset clears the accumulated
+      time and Q while TRUE; the free-running pulse is t:TONR(PT := T#1S,
+      Reset := t.Q).
+    source: "#dialects"
+    tests: []
+    note: Gap. No test runs TONR on the nautilus runtime (the writer test only checks the Logix emission).
+
+  - id: FN-140
+    claim: >-
+      On a Logix controller a TONR is written as a TON with a RES(t) rung
+      ahead of the timer's rung.
+    source: "#dialects"
+    tests:
+      - go ./logix/writer TestTONR
+
+  - id: FN-141
+    claim: >-
+      A manifest tag's alias: is emitted by the Logix writer as an alias tag,
+      and the L5X importer turns an export's alias tags, and rack points the
+      logic named directly, into tags with alias:.
+    source: "#dialects"
+    tests:
+      - go ./logix/writer TestAliasTags
+      - go ./logix/importer TestDialectAndAliasImport
+    partial: true
+    note: >-
+      The writer's alias tags and the importer's handling of rack points
+      named directly in the logic are asserted. No importer test feeds an
+      export that contains alias tags.
+
+  - id: FN-142
+    claim: >-
+      The nautilus runtime ignores a tag's alias: binding: the tag is a tag,
+      so a simulation runs the same source.
+    source: "#dialects"
+    tests: []
+    note: Gap. No runtime test shows an aliased tag behaving as a plain tag.
+
+  # ── User function blocks ────────────────────────────────────────────
+  - id: FN-143
+    claim: >-
+      A FUNCTION_BLOCK pin (VAR_INPUT / VAR_OUTPUT / VAR_IN_OUT / VAR) and a
+      FUNCTION's inputs, locals and return type may be any type, including a
+      user TYPE with nested structs, resolved against the whole compile; a
+      pin naming an undeclared type is a compile error naming the type.
+    source: "#a-pin-may-be-any-type-including-a-user-type"
+    tests:
+      - go ./lang/st TestFBStructPins
+      - go ./lang/st TestFBStructPinFromLibraryFile
+      - go ./lang/st TestFBUnknownPinTypeStillErrors
+      - go ./lang/st TestVarInOutStructLocal
+    partial: true
+    note: >-
+      VAR_INPUT, VAR_OUTPUT and VAR_IN_OUT pins of a nested user TYPE (also
+      from a library), and the unknown-type error, are asserted. A
+      FUNCTION's input, local or return of a user TYPE, and a block VAR of a
+      user TYPE, are not.
+
+  - id: FN-144
+    claim: >-
+      A call may leave any VAR_INPUT out: it keeps its value, the declared
+      initial value until something writes it (as an unconnected FB input in
+      TIA or CODESYS); EN, unbound, is TRUE.
+    source: "#an-input-left-unbound-keeps-its-value"
+    tests:
+      - go ./lang/st TestENOOnlyAndPositional
+    partial: true
+    note: >-
+      Unbound EN reading TRUE is asserted (on a standard function). No test
+      leaves a user block's VAR_INPUT unbound and checks it keeps its
+      declared initial value. TestUserFB_InitialValues and
+      TestUserFunc_InitialValues were removed: they bind every input and
+      test VAR / VAR_OUTPUT initial values.
+
+  - id: FN-145
+    claim: >-
+      A VAR_IN_OUT is bound to a variable, and what the block writes into it
+      is visible to the caller when the call returns (scalar, struct local,
+      VAR_EXTERNAL struct tag as one whole-struct write).
+    source: "#var_in_out-is-a-reference-pin"
+    tests:
+      - go ./lang/st TestVarInOutScalar
+      - go ./lang/st TestVarInOutStructLocal
+      - go ./lang/st TestVarInOutExternalStructTag
+      - go ./lang/st TestUserFB_VarConstant_InOutWriteBack
+
+  - id: FN-146
+    claim: >-
+      A VAR_IN_OUT argument must be assignable (a variable, a struct field,
+      an array element or a VAR_EXTERNAL tag); an expression is a compile
+      error.
+    source: "#var_in_out-is-a-reference-pin"
+    tests:
+      - go ./lang/st TestVarInOutRejectsNonLValue
+    partial: true
+    note: Rejection is covered; acceptance of an array-element argument is not separately shown.
+
+  - id: FN-147
+    claim: >-
+      The argument's type must match a VAR_IN_OUT pin exactly (an INT does
+      not stand in for a REAL pin).
+    source: "#var_in_out-is-a-reference-pin"
+    tests:
+      - go ./lang/st TestVarInOutTypeMustMatch
+
+  - id: FN-148
+    claim: >-
+      Every VAR_IN_OUT must be bound at every call site (a compile error
+      otherwise).
+    source: "#var_in_out-is-a-reference-pin"
+    tests:
+      - go ./lang/st TestVarInOutMustBeBound
+
+  - id: FN-149
+    claim: A VAR_IN_OUT pin's own type may not be a function block.
+    source: "#var_in_out-is-a-reference-pin"
+    tests:
+      - go ./lang/st TestVarInOutRejectsFBPinType
+
+  - id: FN-150
+    claim: >-
+      Two calls in one scan bound to different variables each see and update
+      their own.
+    source: "#var_in_out-is-a-reference-pin"
+    tests: []
+    note: Gap. No test makes two calls to one block with different bound variables in the same scan.
+
+  - id: FN-151
+    claim: >-
+      FUNCTIONs have no VAR_IN_OUT or VAR_OUTPUT: an IEC function is a single
+      return value, and the compiler says so.
+    source: "#var_in_out-is-a-reference-pin"
+    tests: []
+    note: Gap.
+
+  - id: FN-152
+    claim: >-
+      A VAR_IN_OUT is bound with :=, like an input; the => form binds
+      outputs, so it is not the way to bind an IN_OUT (a compile-time rule).
+    source: "#var_in_out-is-a-reference-pin"
+    tests:
+      - go ./lang/st TestVarInOutScalar
+      - go ./lang/st TestUserFB_OutputBindingRejectsInput
+    partial: true
+    note: >-
+      Binding an IN_OUT with := works. The refusal of => is only shown on a
+      VAR_INPUT (and only that lowering fails, not which error), never on a
+      VAR_IN_OUT.
+
+  # ── Function blocks in ladder ───────────────────────────────────────
+  - id: FN-153
+    claim: >-
+      A .ld file may define FUNCTION_BLOCKs whose body is rungs, each
+      instance with its own retained state (two pumps are two instances,
+      each with its own seal-in and its own t1).
+    source: "#function-blocks-in-ladder"
+    tests:
+      - go ./lang/ld TestLadderFunctionBlockRuns
+      - go ./lang/ld TestLadderFunctionBlockLowers
+    partial: true
+    note: >-
+      A ladder block lowers to a FUNCTION_BLOCK and one instance keeps its
+      seal-in and its TON across scans. Two instances of one block running
+      independently are not tested. TestLadderFunctionBlockNested was
+      removed from this claim: nesting is not what the page promises here.
+
+  - id: FN-154
+    claim: >-
+      A ladder block's VAR_* sections are ordinary POU declarations,
+      VAR_IN_OUT included, so a ladder block can take a UDT by reference.
+    source: "#function-blocks-in-ladder"
+    tests:
+      - go ./lang/ld TestLadderFunctionBlockInOutStructPin
+
+  - id: FN-155
+    claim: >-
+      A ladder block is called from ladder with power on its power-in pin and
+      => capturing outputs, and from ST or FBD like any other block.
+    source: "#calling-one"
+    tests:
+      - go ./lang/ld TestLadderFunctionBlockRuns
+      - go ./lang/ld TestLadderFunctionBlockFromST
+    partial: true
+    note: >-
+      Ladder (power on Start, Run => PumpRun) and ST calls are run and
+      asserted; an FBD call of a ladder block is not. TestLadderOutputBinding
+      was removed: it binds a TON's ET, not a ladder block's output.
+
+  - id: FN-156
+    claim: >-
+      An FB instance a rung declares inline needs no VAR entry, and a
+      declaration in the POU's own header wins (the rung is a call on it, not
+      a second declaration).
+    source: "#calling-one"
+    tests:
+      - go ./lang/ld TestLadderFunctionBlockNested
+      - go ./lang/ld TestLadderFunctionBlockLowers
+    note: >-
+      TestLadderFunctionBlockNested runs an inline d1:Debounce() with no VAR
+      entry; TestLadderFunctionBlockLowers asserts a header-declared t1 is
+      declared once and compiles. Removed: TestInlineRungBody (a one-line
+      rung, not an inline instance), TestInsertReusesHeaderDeclaredInstance
+      (an editor insert) and the FBD TestInstanceDeclaredInHeaderIsNotRedeclared
+      (not ladder).
+
+  - id: FN-157
+    claim: >-
+      A .ld file with no PROGRAM is a project library whose blocks join the
+      prelude ahead of every task, usable from any language; .fbd libraries
+      work the same way.
+    source: "#a-ld-library"
+    tests:
+      - go ./internal/project TestLadderLibraryComposes
+      - go ./internal/project TestLadderLibraryProjectRuns
+    partial: true
+    note: .ld is covered; an .fbd library is not.
+
+  - id: FN-158
+    claim: >-
+      A library may sit in the project root or under lib/; lib/ holds
+      libraries only (a PROGRAM there is an error) and no other subdirectory
+      composes.
+    source: "#a-ld-library"
+    tests:
+      - go ./internal/project TestLibDirComposes
+      - go ./internal/project TestLibDirRefusesAProgram
+      - go ./internal/project TestOtherSubdirsStayIgnored
+      - go ./internal/project TestLadderLibraryProjectRuns
+    note: >-
+      The libdir fixture has lib/ libraries only; the project-root case is
+      TestLadderLibraryProjectRuns, whose blocks.ld and scale.st sit in the
+      root and run.
+
+  - id: FN-159
+    claim: >-
+      Composition order is every .st library first, then every transpiled
+      .ld / .fbd library, each group sorted by project-relative path; order
+      never decides whether a call resolves (blocks may reference each other
+      in either direction, across files), only which duplicate is reported.
+    source: "#a-ld-library"
+    tests:
+      - go ./internal/project TestLibDirComposes
+      - go ./internal/project TestLibDirDuplicateAcrossRootAndLib
+    partial: true
+    note: Ordering is asserted; mutual forward references across files are not.
+
+  - id: FN-160
+    claim: >-
+      Declaring the same FUNCTION_BLOCK twice in one .ld file is refused with
+      the second declaration's line, before anything is transpiled.
+    source: "#a-ld-library"
+    tests:
+      - go ./lang/ld TestLadderFunctionBlockErrors
