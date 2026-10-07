@@ -16,13 +16,12 @@ claims:
     claim: >-
       `VAR_EXTERNAL` is optional: a ladder or ST program that names a
       manifest tag it did not declare still gets its controller tag, typed
-      from the manifest, and a declared one is not written twice.
+      from the manifest.
     source: "#a-project-with-a-logix-target"
     tests:
       - go ./logix/writer TestImplicitTagsBecomeControllerTags
       - go ./logix/writer TestImplicitTagsInST
       - go ./logix/writer TestImplicitTagsLadderMembersAndLiterals
-      - go ./logix/writer TestDeclarationCaseFindsTheManifestEntry
 
   - id: LGA-003
     claim: >-
@@ -58,24 +57,21 @@ claims:
     claim: >-
       Contacts `X` `/X`, branches (nesting kept) and coils `( X )`
       `( S X )` `( R X )` are written as `XIC` `XIO`, `[ , ]` and `OTE`
-      `OTL` `OTU`, and the export reads back to the same rungs.
+      `OTL` `OTU`.
     source: "#what-the-target-accepts"
     tests:
       - go ./logix/writer TestNeutralTextSpelling
-      - go ./logix/writer TestSubsetRoundTrips
-      - go ./logix/writer TestDemoLineRoundTrips
-      - go ./logix/writer TestRoundTripCatchesABrokenRung
 
   - id: LGA-007
     claim: >-
       Edge contacts and edge coils (`+X`, `-X`, `( P X )`, `( N X )`) are
-      written as `ONS` and `OSF` with generated storage bits whose names are
-      a pure function of rung and reference, so regenerating is never drift.
+      written as `ONS` and `OSF` with generated storage bits.
     source: "#what-the-target-accepts"
     tests:
       - go ./logix/writer TestEdgeCoils
       - go ./logix/writer TestEdgeAtBranchLegHead
-      - go ./logix/writer TestWriteIsDeterministic
+      - go ./logix/writer TestGolden/subset
+    note: "`-X` (to `OSF`) is asserted only through the subset golden snapshot."
 
   - id: LGA-008
     claim: >-
@@ -86,31 +82,39 @@ claims:
     source: "#what-the-target-accepts"
     tests:
       - go ./logix/writer TestAssignmentsAndExpressionCompares
+      - go ./logix/writer TestGolden/subset
+    partial: true
+    note: >-
+      MOVE, ADD, SUB, MUL, DIV, ABS, CPT and CMP are asserted, and the plain
+      compares GE, NE, GT and LT (golden snapshot). MOD, NEG, SQR and XPY are
+      never asserted as their own instructions: the writer folds those shapes
+      into CPT. LE as a plain compare instruction is not asserted.
 
   - id: LGA-009
     claim: >-
       `TON`, `TOF` and `CTU` blocks are written as the Logix instructions on
-      `TIMER` / `COUNTER` tags, with the preset landing in the tag, `t.Q`
-      written as `t.DN` and `t.ET` as `t.ACC`.
+      `TIMER` / `COUNTER` tags, with `t.Q` written as `t.DN` and `t.ET` as
+      `t.ACC`.
     source: "#what-the-target-accepts"
     tests:
       - go ./logix/writer TestNeutralTextSpelling
-      - go ./logix/writer TestTimerPresetLandsInTheTag
       - go ./logix/writer TestCounterEndsItsRung
       - go ./logix/writer TestOutputCapturesAndResetConditions
+      - go ./logix/writer TestGolden/subset
+    note: "`TOF` and the `TIMER` / `COUNTER` tag types are asserted through the subset golden snapshot."
 
   - id: LGA-010
     claim: >-
-      `Word.3` passes through as bit 3 of the word, as Logix spells it, in
-      contacts, coils, assignment targets and UDT members.
+      `Word.3` is written as bit 3 of the word, as Logix spells it.
     source: "#what-the-target-accepts"
     tests:
       - go ./logix/writer TestBitAccessPassesThrough
 
   - id: LGA-011
     claim: >-
-      An array of timers or counters becomes one Logix tag with dimensions,
-      each element preset from the rung that runs it.
+      An array of timers or counters (`ARRAY [0..3] OF TON`) becomes one
+      Logix `TIMER` or `COUNTER` tag with the array's dimension
+      (`TIMER[4]`).
     source: "#what-the-target-accepts"
     tests:
       - go ./logix/writer TestArraysOfBlocks
@@ -123,44 +127,41 @@ claims:
     source: "#what-the-target-accepts"
     tests:
       - go ./logix/writer TestTimerPresetLandsInTheTag
-      - go ./logix/writer TestParseTime
-    partial: true
-    note: Type-by-type mapping of the elementary types has no dedicated test; TIME outside a preset is covered by the rejection claim.
+      - go ./logix/writer TestGolden/subset
+    note: The elementary types are asserted through the subset golden snapshot (BOOL, SINT, INT, DINT, REAL, LREAL tags).
 
   - id: LGA-013
-    claim: STRUCT types in a library become UDTs, nested types first and members in order.
+    claim: STRUCT types in a library become UDTs.
     source: "#what-the-target-accepts"
     tests:
       - go ./logix/writer TestUserDefinedTypes
 
   - id: LGA-014
     claim: >-
-      Enumerations become `DINT` tags, and an initial value or a member the
-      program names is the member's integer value.
+      Enumerations become `DINT` tags, and a member, plain or qualified
+      (`Run`, `Mode#Run`), is written as its integer value.
     source: "#what-the-target-accepts"
     tests:
       - go ./logix/writer TestEnumerationsAreDINT
 
   - id: LGA-015
     claim: >-
-      A user FUNCTION_BLOCK (ladder or ST) becomes an Add-On Instruction,
-      with the inputs as parameters, outputs read from the instance and the
-      call as the instruction.
+      A user FUNCTION_BLOCK, in ladder or ST, becomes an Add-On
+      Instruction.
     source: "#what-the-target-accepts"
     tests:
       - go ./logix/writer TestAddOnInstructionFromLadderBlock
       - go ./logix/writer TestAddOnInstructionPowerAndST
-      - go ./logix/writer TestAOIOutputReadAsMember
-      - go ./logix/importer TestAOIConformanceImportsAndWritesBack
 
   - id: LGA-016
     claim: >-
-      An ST program is written as a Logix ST routine with its statements
-      close to as written, TIME as milliseconds and booleans as 1 and 0.
+      An ST program's assignments, IF, CASE, FOR, WHILE, REPEAT, EXIT,
+      operators and maths are written as Logix ST, close to as written.
     source: "#what-the-target-accepts"
     tests:
       - go ./logix/writer TestStructuredText
-      - go ./logix/writer TestWriteRoutineForST
+    partial: true
+    note: Assignments, IF/ELSIF, CASE, FOR, operators and ABS/SQRT/EXPT are asserted; WHILE, REPEAT and EXIT are not written by any test.
 
   - id: LGA-017
     claim: >-
@@ -173,19 +174,22 @@ claims:
       - go ./logix/writer TestStructuredTextRejections
       - go ./logix/writer TestUserDefinedTypeRejections
     partial: true
-    note: Most rules have a case. `logix/name` is only tested for length and consecutive underscores (not trailing), and the AOI-with-array `logix/type` case is not tested.
+    note: >-
+      Most rules have a case. `logix/name` is only tested for length and
+      consecutive underscores (not trailing), and the AOI-with-array
+      `logix/type` case is not tested. That the message names the
+      alternative is not asserted, and only the ladder rejections assert
+      the line and that no document is emitted.
 
   - id: LGA-018
     claim: >-
       A project with a `target: logix` section gets the Logix rules from
       `naut check` without asking, and `naut check --target logix` applies
-      them to any project, in located gcc-style lines; without the target
-      the same file checks clean.
+      them to any project.
     source: "#rejected-at-check-time-by-name"
     tests:
       - go ./cmd/naut TestCheckRunsTheManifestTarget
       - go ./cmd/naut TestCheckTargetLogix
-      - go ./cmd/naut TestCheckTargetLogixRefusesOtherLanguages
 
   - id: LGA-019
     claim: >-
@@ -201,7 +205,7 @@ claims:
   - id: LGA-020
     claim: >-
       The writer emits a `TONR` as a `TON` with a `RES(t)` rung ahead of the
-      timer's rung, in ladder and in ST.
+      timer's rung.
     source: "#vendor-idioms-dialect-logix"
     tests:
       - go ./logix/writer TestTONR
@@ -220,10 +224,10 @@ claims:
   - id: LGA-022
     claim: >-
       `naut logix import --project` writes a nautilus project from a full
-      export: the manifest with `target: logix` filled from the controller,
-      tags with descriptions, UDTs as IEC types, every ladder routine as a
-      PROGRAM and every AOI as a FUNCTION_BLOCK in `lib/`; the project
-      checks clean for the Logix target.
+      export: the manifest with `target: logix` filled from the controller
+      (and `dialect: logix` when the export uses its idioms), the tags with
+      their descriptions, UDTs as IEC types, every ladder routine as a
+      PROGRAM and every AOI as a FUNCTION_BLOCK in `lib/`.
     source: "#bringing-an-existing-program-in"
     tests:
       - go ./cmd/naut TestLogixImportProject
@@ -231,11 +235,16 @@ claims:
       - go ./logix/importer TestUDTConformanceImportsAndWritesBack
       - go ./logix/importer TestAOIConformanceImportsAndWritesBack
       - go ./logix/importer TestDialectAndAliasImport
+    partial: true
+    note: >-
+      Every fixture has one ladder routine, so "every ladder routine as a
+      PROGRAM" is not asserted for an export with several. Descriptions are
+      asserted only for program-scope tags (as VAR comments).
 
   - id: LGA-023
     claim: >-
       A rung with no nautilus form is kept as a comment and reported, never
-      guessed at, and the partial program still parses and writes.
+      guessed at.
     source: "#bringing-an-existing-program-in"
     tests:
       - go ./logix/importer TestRefusalsKeepTheProgramValid
@@ -249,19 +258,8 @@ claims:
     source: "#bringing-an-existing-program-in"
     tests:
       - go ./logix/importer TestDialectAndAliasImport
-
-  - id: LGA-025
-    claim: >-
-      Imported programs write back to identical or equivalent rung text
-      (the writer's whole v1 subset, DemoLine, implicit-ST programs).
-    source: "#bringing-an-existing-program-in"
-    tests:
-      - go ./logix/importer TestSubsetGoldenImportsAndWritesBack
-      - go ./logix/importer TestDemoLineImportsAndWritesBack
-      - go ./logix/importer TestImplicitSTGoldenImportsAndWritesBack
-      - go ./logix/importer TestHumanIdiomsImport
-      - go ./logix/importer TestBranchOutputsAndHoistedBlocks
-      - go ./logix/importer TestDataInstructionsImportAndWriteBack
+    partial: true
+    note: Rack points named directly and the TONR fold are asserted; no fixture carries an existing Logix alias tag, so alias tags in the export becoming `alias:` is not.
 
   - id: LGA-026
     claim: >-
@@ -304,8 +302,8 @@ claims:
   - id: LGA-029
     claim: >-
       `naut logix deploy --download` refuses without `--yes`, and the
-      controller must already be in Program mode or `--program-mode` passed;
-      a download does not also import rungs.
+      controller must already be in Program mode or `--program-mode`
+      passed.
     source: "#the-loop"
     tests:
       - go ./cmd/naut TestLogixDeployRefusals
@@ -326,30 +324,27 @@ claims:
 
   - id: LGA-031
     claim: >-
-      A project whose program has Logix-subset diagnostics is refused by
-      `naut logix deploy` before the agent is called; a project with no
-      `target: logix` section, or `--online` without a comm path, is refused.
-    source: "#the-loop"
+      A program the target cannot express is refused before anything is
+      written: `naut logix deploy` stops on the diagnostic before the agent
+      is called.
+    source: "#rejected-at-check-time-by-name"
     tests:
       - go ./logix/deploy TestSubsetDiagnosticsStopEverything
-      - go ./cmd/naut TestLogixDeployNeedsATargetSection
-      - go ./cmd/naut TestLogixDeployRefusals
 
   - id: LGA-032
     claim: >-
-      `naut logix mode` reads the mode, and changing it requires `--yes`, a
-      known mode name and a comm path (or a project directory that has one).
+      `naut logix mode [--yes run|program] <project-dir>` reads or changes
+      the controller's mode; a change takes `--yes`.
     source: "#the-loop"
     tests:
       - go ./cmd/naut TestLogixModeRefusesAChangeWithoutConfirmation
       - go ./cmd/naut TestLogixModeTakesTheProjectDirectory
     partial: true
-    note: Only the refusals are tested; reading the mode is not.
+    note: Only the refusal without `--yes` (with a comm path or a project directory) is tested; reading or changing the mode is not.
 
   - id: LGA-033
     claim: >-
-      `naut logix write program.ld` writes an L5X without a project, and a
-      program the target refuses produces no file.
+      `naut logix write program.ld` writes an L5X without a project.
     source: "#the-loop"
     tests:
       - go ./cmd/naut TestLogixWrite
@@ -358,16 +353,20 @@ claims:
     claim: >-
       `naut test --target logix` runs the project's acceptance tests against
       the controller over EtherNet/IP: `given` writes go to the controller,
-      `until`, `hold` and `always` are checked on every poll, and `scans: n`
-      waits on exactly n counts of the heartbeat.
+      `advance:` is wall time, `until`, `hold` and `always` are checked on
+      every poll, and it waits on the `side.heartbeat` scan counter.
     source: "#the-loop"
     tests:
       - go ./acceptance TestLiveSealInAndAlarm
       - go ./acceptance TestLiveUntilHoldAndAlways
       - go ./acceptance TestLiveScansWaitOnTheHeartbeat
-      - go ./acceptance TestLiveReseedsInputsPerTest
     partial: true
-    note: Run against a stand-in controller (mechanics only); no test drives a real or emulated Logix controller through `naut test --target logix`.
+    note: >-
+      Run against a stand-in controller (mechanics only); no test drives a
+      real or emulated Logix controller through `naut test --target logix`.
+      The `always` case's violation persists to the end of the step, so it
+      cannot tell every-poll from end-of-step checking; `advance:` as wall
+      time is asserted only as a positive elapsed time.
 
   - id: LGA-035
     claim: >-
@@ -382,8 +381,7 @@ claims:
 
   - id: LGA-036
     claim: >-
-      Anything outside the subset is refused, not approximated: the writer
-      returns no document alongside a diagnostic.
+      Anything outside the subset is refused, not approximated.
     source: "#what-it-does-not-do-yet"
     tests:
       - go ./logix/writer TestRejections

@@ -16,8 +16,14 @@ claims:
       wrote every scan, so the driver is handed the forced value.
     source: "#what-a-force-does"
     tests:
-      - go ./runtime TestForceOutputReappliedAfterLogic
       - go ./acceptance TestForceHoldsAgainstPlantAndLogic
+    partial: true
+    note: >-
+      The acceptance test holds PumpRun FALSE while the logic writes TRUE
+      every scan, but checks the tag only; the driver being handed the
+      forced value is not asserted. TestForceOutputReappliedAfterLogic was
+      dropped: its seal-in reads Motor back, so a forced FALSE makes the
+      logic compute FALSE too and a one-time write would pass it.
   - id: FRC-003
     claim: >-
       Forcing a struct member (P101.Speed, Recipe.Steps[2].Mode) holds only
@@ -44,7 +50,13 @@ claims:
     tests:
       - go ./runtime TestUnforceRestoresActual
       - go ./runtime TestForceInputOverridesDriver
-      - go ./runtime TestForceOutputReappliedAfterLogic
+    partial: true
+    note: >-
+      The driver's latest reading as the actual value, and the restore at
+      once on unforce, are asserted for an input only. The logic's latest
+      write as the actual value is not: TestForceOutputReappliedAfterLogic
+      only checks actual is non-nil, which a table recording the forced
+      value would also pass.
   - id: FRC-006
     claim: >-
       A write to a forced tag through POST /api/tags is refused with 409
@@ -52,16 +64,6 @@ claims:
     source: "#what-a-force-does"
     tests:
       - go ./server TestForceAPI
-  - id: FRC-007
-    claim: >-
-      A force on an unknown tag, with a value of the wrong type, or on a
-      member of a scalar is refused and leaves no entry (400 over the API),
-      and a controller with a custom tag writer refuses the force API.
-    source: "#the-api"
-    tests:
-      - go ./runtime TestForceRefusals
-      - go ./server TestForceAPI
-      - go ./server TestForceRefusedWithTagWriter
   - id: FRC-008
     claim: >-
       Set Active Step jumps a running SFC chart once: every step is
@@ -71,7 +73,6 @@ claims:
     source: "#sfc-set-a-step-fire-a-transition"
     tests:
       - go ./runtime TestSFCSetStep
-      - go ./server TestSFCAPI
     partial: true
     note: >-
       The N action starting and stopping is asserted; P0/P1/final-scan
@@ -87,24 +88,28 @@ claims:
       - go ./server TestSFCAPI
   - id: FRC-010
     claim: >-
-      pou is needed only when two running charts share a step or transition
-      name; an unknown step is a 404 and an ST-only controller refuses SFC
-      commands.
+      An SFC command needs pou only when two running charts share the step
+      or transition name.
     source: "#the-api"
     tests:
       - go ./runtime TestSFCProgramResolution
       - go ./server TestSFCAPI
+    partial: true
+    note: >-
+      Only the single-chart case (resolved without pou) is asserted; no test
+      runs two charts sharing a name to show pou is then required and
+      resolves it.
   - id: FRC-011
     claim: >-
-      Forces are not retained: a restart comes up with no forces, and a
-      forced setpoint is retained at its actual value, never the forced one.
+      Forces are not retained: a restart comes up with no forces.
     source: "#lifetime"
     tests:
       - go ./runtime TestRetainSavesActualNotForced
     partial: true
     note: >-
-      Retain never saves the forced value is asserted; a full restart
-      coming up with an empty force table is not.
+      Asserts a forced setpoint is retained at its actual value, never the
+      forced one; a restart coming up with an empty force table is not
+      exercised.
   - id: FRC-012
     claim: >-
       The force table lives on the leader (a standby proxies the API to it),
@@ -113,9 +118,6 @@ claims:
     tests:
       - go ./runtime TestTakeoverDropsForces
       - go ./server TestForceProxiedFromStandby
-    partial: true
-    note: >-
-      The leader-stepping-down case is not asserted separately from takeover.
   - id: FRC-013
     claim: >-
       Every force, removal, clear-all, step jump and fired transition leaves
@@ -126,14 +128,21 @@ claims:
       - go ./server TestSFCAPI
     partial: true
     note: >-
-      Asserts the audit lines appear; that they carry the caller's address is not checked.
+      Asserts the force, clear-all, step-jump and fired-transition lines
+      appear; the removal line, and the caller's address on any line, are
+      not checked.
   - id: FRC-014
     claim: >-
-      The force API passes the same guard as POST /api/tags: with a token
-      set, requests without it get 401.
+      Every force and SFC write passes the same guard as POST /api/tags:
+      same-origin by default, the token when NAUTILUS_TOKEN is set.
     source: "#the-api"
     tests:
       - go ./server TestForceAuth
+    partial: true
+    note: >-
+      Cross-origin refusal is asserted on all five write endpoints; the token
+      requirement only on POST /api/forces, set through Options.AuthToken
+      rather than the NAUTILUS_TOKEN variable.
   - id: FRC-015
     claim: >-
       GET /api/forces lists name, value, actual and sinceMs; DELETE
@@ -144,7 +153,9 @@ claims:
       - go ./server TestForceAPI
     partial: true
     note: >-
-      The `actual` and `sinceMs` fields are not asserted in the response body.
+      The force list is asserted on the POST response; a GET /api/forces
+      body is never read, and the `actual` and `sinceMs` fields are not
+      asserted.
   - id: FRC-016
     claim: >-
       Every stream frame carries forces while at least one force is active
@@ -156,13 +167,8 @@ claims:
       - go ./server TestForceAPI
   - id: FRC-017
     claim: >-
-      An acceptance test can hold a tag with force: and unforce: steps (a
-      force wins against the plant model and the logic, unforce: all returns
-      both) and forces end with the test.
+      An acceptance test can hold a tag the same way, with force: and
+      unforce: steps.
     source: "#in-tests"
     tests:
       - go ./acceptance TestForceHoldsAgainstPlantAndLogic
-      - go ./acceptance TestForceStepMistakes
-    partial: true
-    note: >-
-      Forces ending with the test is not asserted.

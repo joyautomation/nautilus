@@ -12,11 +12,16 @@ claims:
       - go ./runtime TestSwapWarmCarriesRetainedState
       - go ./runtime TestSwapWarmTypeChangeResets
       - go ./runtime TestSwapWarmFBDCarriesRetainedState
+    partial: true
+    note: >-
+      An integrator carrying (ST and FBD) and new / retyped variables being
+      reported as resets are asserted. Timers and counters are not: the TON
+      in the swap fixture is declared but never run or read back, and the
+      counter is dropped by the edit.
   - id: OE-002
     claim: >-
-      A program that fails to compile leaves the running program untouched
-      (the PUT answers 422 and the hash is unchanged), so a typo cannot
-      fault the controller.
+      A program that fails to compile leaves the running program untouched,
+      so a typo cannot fault the controller.
     source: "#online-edits"
     tests:
       - go ./runtime TestSwapWarmCompileErrorLeavesRunning
@@ -24,11 +29,13 @@ claims:
       - go ./server TestProgramOnlineEditFlow
   - id: OE-003
     claim: >-
-      Online edits are off by default: GET /api/program stays open, but PUT
-      /api/program and rollback answer 403 unless Options.OnlineEdits is set.
+      Online edits are off by default: a controller refuses a pushed program
+      unless online edits are enabled for it (server.Options{OnlineEdits:
+      true}).
     source: "#online-edits"
     tests:
       - go ./server TestProgramEndpointsGated
+      - go ./server TestProgramOnlineEditFlow
   - id: OE-004
     claim: >-
       With a token configured, tag writes and online edits require it while
@@ -49,18 +56,10 @@ claims:
     tests: []
     note: >-
       Gap. No test restarts a controller after an online edit and checks the embedded program returns.
-  - id: OE-006
-    claim: >-
-      A PUT with a stale baseHash is refused with 409, and a successful PUT
-      marks the program dirty with rollback armed and the edited logic
-      running on the next scan.
-    source: "#online-edits"
-    tests:
-      - go ./server TestProgramOnlineEditFlow
   - id: OE-007
     claim: >-
-      Rollback restores the previous program and its pre-swap state, is
-      single-shot, and a second rollback answers 409.
+      An online edit can be rolled back, restoring the program that ran
+      before it.
     source: "#online-edits"
     tests:
       - go ./server TestProgramOnlineEditFlow
@@ -68,19 +67,22 @@ claims:
   - id: OE-008
     claim: >-
       naut pull --host writes each running program back into the workspace
-      file that declares its POU (a new program lands in <POU>.st), leaving
-      the files that already match untouched.
+      file that declares its POU (a new program lands in <POU>.st or
+      <POU>.fbd); only program files are rewritten, generated type files are
+      never touched.
     source: "#pulling-field-edits-back"
     tests:
       - go ./cmd/naut TestPullMultiTask
       - go ./cmd/naut TestPullSingleProgramRenameTolerant
     partial: true
     note: >-
-      That generated type files are never touched is not asserted.
+      Pulling into the declaring file and creating <POU>.st are asserted;
+      a new FBD program landing in <POU>.fbd and generated type files being
+      left alone are not.
   - id: OE-009
     claim: >-
-      naut pull --check reports drift by exiting non-zero without writing
-      anything, and exits zero once the workspace matches.
+      naut pull --check reports drift in any of the controller's programs and
+      exits non-zero, so CI can fail on un-pulled edits.
     source: "#pulling-field-edits-back"
     tests:
       - go ./cmd/naut TestPullMultiTask
@@ -96,10 +98,14 @@ claims:
       - go ./cmd/naut TestComposeMatchesTheRuntime
       - go ./cmd/naut TestComposeJSON
       - go ./cmd/naut TestComposeGraphicalProgramUsesLadderLibrary
-      - go ./cmd/naut TestComposeOverrides
     partial: true
     note: >-
-      The "a .ld program stays ladder; the controller transpiles it" half is not asserted.
+      The lib/ prelude (.st verbatim, then .ld transpiled), a .ld program
+      kept as written and compiling on the controller, and the --json split
+      are asserted. Root-level PROGRAM-less files in the prelude and the
+      controller reporting the original .ld source are not asserted through
+      compose. (TestComposeOverrides, unsaved editor buffers, was removed: the
+      page does not describe overrides.)
   - id: OE-011
     claim: >-
       Composition is a single definition shared by the runtime, the language
@@ -114,8 +120,7 @@ claims:
     claim: >-
       Programs are addressed by POU name: GET /api/program lists every
       program, a PUT routes by the POU in the submitted source, ?pou= and
-      ?task= select one for GET and rollback, and an unknown POU is a 404
-      rather than silently retargeting the main program.
+      ?task= select one for GET and rollback.
     source: "#every-program-both-directions"
     tests:
       - go ./server TestProgramTaskRouting

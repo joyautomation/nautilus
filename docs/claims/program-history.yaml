@@ -4,14 +4,19 @@ prefix: PH
 claims:
   - id: PH-001
     claim: >-
-      GET /api/program/history serves the commits that touched the project
-      (sha, author, date, subject, full diff and an activatable flag) from
-      the controller itself, newest first, with the built sha and an
-      editable flag.
+      GET /api/program/history serves every commit that touched the project
+      (author, date, subject and the full diff) from the controller itself,
+      with the built sha the deployed baseline corresponds to.
     source: "#program-history"
     tests:
       - go ./server TestProgramHistoryEndpoint
       - go ./internal/vcs TestCapture
+    partial: true
+    note: >-
+      The commit date is asserted nowhere, and no test commits outside the
+      project's subtree to show only commits that touched the project are
+      served. Author, subject, diff, sha and built are asserted (capture in
+      TestCapture, serving in TestProgramHistoryEndpoint).
   - id: PH-002
     claim: >-
       The response's programs list is the live layer per task (task, pou,
@@ -53,40 +58,45 @@ claims:
       Gap. Capture is tested directly, but the lazy capture on first request in naut run is not.
   - id: PH-006
     claim: >-
-      The endpoint never fails for lack of provenance: outside a repo, or
-      with no history wired, it serves an empty history.
+      The endpoint never fails for lack of provenance: outside a repo it
+      serves an empty history.
     source: "#where-the-history-comes-from"
     tests:
       - go ./server TestProgramHistoryEndpoint
       - go ./internal/vcs TestCaptureNoRepo
   - id: PH-007
     claim: >-
-      Snapshots are stored git-style, so files dedupe on blob ids (an
-      unchanged file costs one blob across commits), and acceptance suites
-      are left out of snapshots.
+      Snapshots are stored git-style, so files dedupe on git's blob ids (an
+      unchanged file costs one blob across commits).
     source: "#where-the-history-comes-from"
     tests:
       - go ./internal/vcs TestCapture
   - id: PH-008
     claim: >-
-      POST /api/program/activate {sha} (short or full) rebuilds every task's
-      program source as it was at that commit, with libraries composed ahead
-      as boot composes them, and warm-swaps each one.
+      POST /api/program/activate {sha} rebuilds every task's program source
+      as it was at that commit, with libraries composed ahead as boot
+      composes them, and warm-swaps each one.
     source: "#activating-a-revision"
     tests:
       - go ./server TestActivate
       - go ./internal/vcs TestSnapshotComposesSources
       - go ./server TestActivateImplicitTags
+    partial: true
+    note: >-
+      Every activation test uses a single-task project, so "every task" is
+      not asserted (a swap of only the main task would pass); library
+      composition is asserted in vcs, while the server tests stub the
+      sha-to-sources wiring.
   - id: PH-009
     claim: >-
-      Activation is gated like any online edit: it needs online edits
-      enabled (403 otherwise) and the write token if one is set.
+      Activation is gated like any online edit: it needs online-edits: true
+      and the write token if one is set.
     source: "#activating-a-revision"
     tests:
       - go ./server TestActivateRejections
     partial: true
     note: >-
-      The 403 gate is asserted; the token requirement is not.
+      Refusal with online edits off is asserted; the token requirement is not.
   - id: PH-010
     claim: >-
       Retained state survives an activation (migrated by name and type) and
@@ -101,8 +111,8 @@ claims:
   - id: PH-011
     claim: >-
       Activation is all or nothing: every source compiles before any swap,
-      and a commit that no longer compiles is rejected whole (422) leaving
-      the running program untouched.
+      so a controller is never left running half of two revisions, and a
+      commit that no longer compiles is rejected whole.
     source: "#activating-a-revision"
     tests:
       - go ./server TestActivateRejections
@@ -139,11 +149,16 @@ claims:
       Clearing on rollback is asserted; clearing on a hand edit is not.
   - id: PH-015
     claim: >-
-      An unknown sha is a 404, and a commit that changed topology (added or
-      renamed a task) is refused with a 409 naming the difference.
+      A commit that changed topology (added a task, renamed one) is refused
+      with a 409 naming the difference.
     source: "#what-activation-cannot-do"
     tests:
       - go ./server TestActivateRejections
+    partial: true
+    note: >-
+      The 409 for an added and for a missing task is asserted, and the added
+      case's error says "topology"; that the error names the differing task
+      is not asserted.
   - id: PH-016
     claim: >-
       Activation covers logic only: the cold plane (tasks, tags, drivers,

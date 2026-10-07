@@ -38,8 +38,7 @@ claims:
 
   - id: C5K-004
     claim: >-
-      Branches `[ a | b ]` nest, and a bare leg passes power at once while a
-      block in another leg times normally.
+      Branches `[ a | b ]` are parallel legs, nested to any depth.
     source: "#contacts-and-coils"
     tests:
       - "go ./lang/conformance TestConformance/ld-coils/nested branch, bare leg passes at once"
@@ -49,13 +48,12 @@ claims:
 
   - id: C5K-005
     claim: >-
-      `t:TON(PT := T#5S)` behaves like a Logix TON: `t.Q` (the `.DN` bit) is
-      FALSE until PT has elapsed and `t.ET` (the `.ACC`) is a TIME that
-      clamps at PT.
+      `t:TON(PT := T#5S)` stands in for `TON t PRE 5000`: `t.Q` is the
+      `.DN` bit, TRUE once PT has elapsed, and `t.ET` is the `.ACC`, a
+      `TIME`.
     source: "#timers-and-counters"
     tests:
       - "go ./lang/conformance TestConformance/fb-ton/Q false at PT-1ms, true at PT, ET clamps at PT"
-      - "go ./lang/conformance TestConformance/fb-ton/IN dropping resets Q and ET, and a new rise times from scratch"
 
   - id: C5K-006
     claim: >-
@@ -79,8 +77,7 @@ claims:
   - id: C5K-008
     claim: >-
       `CTD` is the IEC block: it counts down from `PV` loaded by `LD`, and
-      `Q` means `CV <= 0` (so before any load it is already TRUE); this
-      differs from a Logix CTD.
+      `Q` means `CV <= 0`; this differs from a Logix CTD.
     source: "#timers-and-counters"
     tests:
       - "go ./lang/conformance TestConformance/fb-ctd/LD loads PV into CV and clears Q"
@@ -135,10 +132,10 @@ claims:
 
   - id: C5K-013
     claim: >-
-      A function block called in a rung takes rung power on its first free
-      BOOL input and continues from its first BOOL output, keeps state per
-      instance (two instances of one block share nothing), and its pins are
-      readable as contacts and operands (`m101.Pin`).
+      A block called in a rung takes rung power on its input pin and passes
+      it on from its output pin, keeps its own state per instance (two instances of one block
+      share nothing), and its pins are readable anywhere as contacts or
+      operands (`m101.Pin`).
     source: "#subroutines-and-add-on-instructions"
     tests:
       - go ./lang/ld TestLadderFunctionBlockRuns
@@ -154,7 +151,6 @@ claims:
     source: "#tags-tasks-and-programs"
     tests:
       - go ./internal/project TestManifestTagsAreImplicit
-      - go ./internal/project TestImplicitTagsBindOnlyWhereUsed
       - go ./internal/project TestExplicitDeclarationMustAgreeWithTypedTag
 
   - id: C5K-015
@@ -174,6 +170,7 @@ claims:
     tests:
       - go ./internal/project TestElementaryTagTypes
       - go ./internal/project TestTagTypeAndInitMustAgree
+      - go ./internal/project TestTimeMembersSeedFromInit
 
   - id: C5K-017
     claim: >-

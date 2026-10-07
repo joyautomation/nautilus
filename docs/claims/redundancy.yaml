@@ -4,34 +4,37 @@ prefix: RED
 claims:
   - id: RED-001
     claim: >-
-      Retained values (every role setpoint tag) are applied before the first
-      scan and win over the manifest init seeds.
+      Retained values are applied before the first scan and win over the
+      manifest's init seeds.
     source: "#retained-state"
     tests:
       - go ./runtime TestRetainedValueLoadsBeforeFirstScan
+    partial: true
+    note: >-
+      Win-over-init is asserted. "Before the first scan" is not: the test reads
+      SP after the first scan with a program that never reads SP, so a load
+      that landed after the first scan's logic would pass too.
 
   - id: RED-002
     claim: >-
-      Only setpoint-role tags are retained: a tag outside the retained set is
-      ignored even if the store names it, and a state-role tag is never
-      saved.
+      Every `role: setpoint` tag is saved to the retain store.
     source: "#retained-state"
     tests:
-      - go ./runtime TestLoadIgnoresTagsOutsideTheRetainedSet
       - go ./runtime TestRetainStateContents
+    note: >-
+      Rewritten to the page's wording. TestLoadIgnoresTagsOutsideTheRetainedSet
+      was removed: its program writes Count every scan, so a wrongly loaded 999
+      would be overwritten and the test cannot fail. That non-setpoint roles
+      are not saved is RED-006.
 
   - id: RED-003
-    claim: >-
-      A retained integer-kind tag comes back as an integer, not retyped to
-      REAL.
+    claim: An integer-typed setpoint tag is restored with its retained value.
     source: "#retained-state"
     tests:
       - go ./runtime TestLoadRestoresIntegerKind
 
   - id: RED-004
-    claim: >-
-      A retained struct tag persists and restores member by member, merging
-      into the seed so members the store did not name keep their seed value.
+    claim: A struct-typed setpoint tag is saved and restored with its retained member values.
     source: "#retained-state"
     tests:
       - go ./runtime TestRetainStatePersistsStructTag
@@ -40,8 +43,8 @@ claims:
   - id: RED-005
     claim: >-
       The source of an online-edited program is retained and run after a
-      restart, still shows as modified (dirty) so naut pull sees it, and a
-      never-edited program is not persisted.
+      restart, still shows as modified so naut pull sees it, and a never-edited
+      program is not persisted.
     source: "#retained-state"
     tests:
       - go ./runtime TestRetainedProgramApplies
@@ -70,44 +73,42 @@ claims:
     note: The 2-second save interval and the 2-second worst-case loss bound are not asserted.
 
   - id: RED-008
-    claim: >-
-      Store failures surface in diagnostics (retainErrors, lastRetainError):
-      a failed save and a broken retained program both leave a trace.
+    claim: Store failures surface in diagnostics as retainErrors and lastRetainError.
     source: "#retained-state"
     tests:
       - go ./runtime TestSaverWritesOnChangeAndRetriesOnFailure
-      - go ./runtime TestBrokenRetainedProgramIsReportedNotFatal
-
-  - id: RED-009
-    claim: >-
-      A retained program that no longer compiles does not take down the
-      controller: the built-in program runs and the error is reported.
-    source: "#retained-state"
-    tests:
-      - go ./runtime TestBrokenRetainedProgramIsReportedNotFatal
+    partial: true
+    note: >-
+      A failed save is asserted to bump retainErrors; lastRetainError after a
+      store failure is not asserted, nor is a failed load. (The broken-program
+      test, which does check lastRetainError, is not a store failure and was
+      removed.)
 
   - id: RED-010
     claim: >-
-      The file store round-trips state, treats a missing file as empty state,
-      errors on corrupt JSON, and leaves no temp file after a save.
+      Outside a cluster, retained state is saved to the file named by
+      retain.file and loads back from it.
     source: "#retained-state"
     tests:
       - go ./retain TestFileStoreSaveLoadRoundTrip
-      - go ./retain TestFileStoreLoadMissingFile
-      - go ./retain TestFileStoreLoadCorruptJSON
-      - go ./retain TestFileStoreSaveLeavesNoTmpFile
+    note: >-
+      Rewritten to the page's promise; missing-file, corrupt-JSON and temp-file
+      behaviour are code details the page does not state, so their tests were
+      removed.
 
   - id: RED-011
     claim: >-
-      The ConfigMap store creates the ConfigMap when absent, updates it when
-      present, round-trips state, and sends no auth header without a token.
+      In a cluster, retained state is saved to the named ConfigMap (created if
+      absent) and loads back from it.
     source: "#retained-state"
     tests:
-      - go ./retain TestConfigMapStoreLoadMissing
       - go ./retain TestConfigMapStoreSaveCreatesWhenAbsent
       - go ./retain TestConfigMapStoreSaveUpdatesWhenPresent
       - go ./retain TestConfigMapStoreRoundTrip
-      - go ./retain TestConfigMapStoreNoAuthHeaderWhenTokenPathEmpty
+    note: >-
+      Rewritten to the page's promise; load-when-missing and the no-auth-header
+      case are code details the page does not state, so their tests were
+      removed.
 
   - id: RED-012
     claim: >-
@@ -120,35 +121,35 @@ claims:
 
   - id: RED-013
     claim: >-
-      The leader scans; a standby executes no scans at all (no logic, no
-      stats, no output writes).
+      The leader scans; a standby does nothing at all: no field I/O, no logic,
+      no output writes.
     source: "#redundancy"
     tests:
       - go ./runtime TestStandbyDoesNotScan
+      - go ./runtime TestTakeoverReloadsAndResetsFrames
+    partial: true
+    note: >-
+      Asserted: a standby runs no scans (stats count 0) and no logic, and a
+      leader scans. No field I/O and no output writes to a driver are not
+      asserted (the test project has no drivers).
 
   - id: RED-014
     claim: >-
-      Replicas elect exactly one leader through a Lease: a fresh lease is
-      acquired on the first tick, the leader renews without bumping
-      transitions, and a follower steals an expired lease.
+      Replicas elect exactly one leader through a Lease: the first replica
+      acquires it, keeps it by renewing, and a standby takes it only once it
+      expires; two replicas racing for an expired lease cannot both win.
     source: "#redundancy"
     tests:
       - go ./leader TestFreshClusterAcquire
       - go ./leader TestRenew
       - go ./leader TestFollowerThenSteal
-
-  - id: RED-015
-    claim: >-
-      Two replicas racing to steal an expired lease cannot both win: exactly
-      one succeeds (compare-and-swap).
-    source: "#redundancy"
-    tests:
       - go ./leader TestCASRace
+    note: RED-015 (the racing case) merged here.
 
   - id: RED-016
     claim: >-
-      A leader that cannot renew steps down once the lease duration elapses,
-      not before.
+      Failover is bounded by the lease: a leader that cannot renew steps down
+      once the lease duration elapses, not before.
     source: "#redundancy"
     tests:
       - go ./leader TestStepDown
@@ -162,12 +163,16 @@ claims:
 
   - id: RED-018
     claim: >-
-      A clean shutdown releases the lease so a standby takes it on its next
-      tick: Release drops leadership locally and expires the lease, and the
-      follower acquires immediately.
+      A clean shutdown (SIGTERM) hands the lease over so a standby takes it on
+      its next tick rather than waiting out the lease.
     source: "#redundancy"
     tests:
       - go ./leader TestRelease
+    partial: true
+    note: >-
+      Release is asserted to drop leadership and let the follower acquire on
+      its next tick; that a SIGTERM shutdown calls Release (cmd/naut defer) is
+      not tested.
 
   - id: RED-019
     claim: >-
@@ -186,37 +191,42 @@ claims:
 
   - id: RED-021
     claim: >-
-      Outside a cluster (no Kubernetes service host) the elector is always
-      leader in standalone mode and Run returns immediately.
-    source: "#retained-state"
+      Outside a cluster redundancy degrades gracefully: the controller runs
+      standalone and is always the leader.
+    source: "#redundancy"
     tests:
       - go ./leader TestStandalone
       - go ./server TestClusterEndpointNilCluster
 
   - id: RED-022
     claim: >-
-      A standby reverse-proxies API traffic to the leader and relays the
-      response untouched.
+      A standby reverse-proxies API traffic to the leader, whose address rides
+      inside the Lease.
     source: "#redundancy"
     tests:
       - go ./server TestStandbyProxiesToLeader
       - go ./server TestForceProxiedFromStandby
     partial: true
-    note: Verified for GET /api/state and force; not for every route, and not for writes forwarded to the leader.
+    note: >-
+      Proxying is asserted for GET /api/state and POST /api/forces with a fake
+      cluster status that hands the server the leader address; that a standby
+      learns that address from the Lease is not asserted.
 
   - id: RED-023
     claim: >-
-      A standby answers /api/cluster and the static dashboard itself, and
-      serves locally when no leader address is known.
+      Every replica serves the dashboard itself, and a standby answers
+      /api/cluster with its own view rather than the leader's.
     source: "#redundancy"
     tests:
       - go ./server TestStandbyAnswersClusterAndIndexLocally
-      - go ./server TestStandbyWithNoLeaderServesLocally
+    note: >-
+      TestStandbyWithNoLeaderServesLocally removed: serving locally with no
+      known leader is not a promise of the page.
 
   - id: RED-024
     claim: >-
-      GET /api/cluster reports each replica's own view (mode, pod, leader,
-      leader transitions) and never exposes the leader's pod address.
+      GET /api/cluster reports each replica's own view: mode, leader and leader
+      transitions.
     source: "#redundancy"
     tests:
       - go ./server TestClusterEndpointReportsStatus
@@ -239,7 +249,10 @@ claims:
     tests:
       - go ./leader TestRelease
     partial: true
-    note: Release makes the lease immediately takeable; the verbs-used (no delete) guarantee is not asserted against a recorded request log.
+    note: >-
+      Release makes the lease immediately takeable; neither the epoch renew
+      time nor the verbs used (no delete) are asserted against a recorded
+      request log.
 
   - id: RED-027
     claim: >-
@@ -250,13 +263,3 @@ claims:
       - go ./runtime TestStandbyDoesNotScan
       - go ./runtime TestTakeoverReloadsAndResetsFrames
     note: Both tests drive the runtime with a hand-written flag Coordinator, which exercises the seam.
-
-  - id: RED-028
-    claim: >-
-      Acknowledged and shelved alarms persist through the retain store and
-      survive a failover.
-    source: "#retained-state"
-    tests:
-      - go ./runtime TestAlarmStateRoundTripsThroughRetain
-      - go ./runtime TestTakeoverRestoresAlarmsOnTheLeadershipEdge
-    note: Page links retain from the alarms guide; claim is cross-referenced here.

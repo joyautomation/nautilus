@@ -35,11 +35,11 @@ claims:
       An SFC transition condition is one ST boolean expression; a condition
       written in LD or FBD is rejected.
     source: "#not-supported-by-design"
-    tests:
-      - go ./lang/sfc TestCheckEmptyCondition
-    partial: true
-    note: Only the empty-condition error is asserted; a non-ST condition is not tested.
-
+    tests: []
+    note: >-
+      No test asserts that a non-ST condition is rejected. TestCheckEmptyCondition
+      (dropped) asserts the empty-condition error, which says nothing about
+      LD or FBD conditions.
   - id: NS-006
     claim: >-
       SFC action bodies are ST; LD, FBD and IL action bodies are rejected.

@@ -8,13 +8,14 @@ claims:
       what the next line reads in the same scan.
     source: "#a-program-top-to-bottom"
     tests:
-      - go ./lang/st TestLowerRealArithmetic
-      - go ./lang/ir TestIfElse
-      - go ./lang/ir TestForSum
-    partial: true
+      - go ./lang/st TestLowerUDTFieldAccess
+      - go ./lang/st TestVarTempResetsEveryScan
     note: >-
-      Ordering is exercised implicitly by every program test; no test asserts
-      "write then read in the same scan" as its subject.
+      Both run one scan whose later lines read values assigned on earlier
+      lines (sum := pt.x + pt.y after the field writes; Out := n after
+      n := n + 1), so a reordering would change the asserted result. The
+      earlier refs (TestLowerRealArithmetic, ir TestIfElse, ir TestForSum)
+      were single-statement or IR-level and asserted nothing of ordering.
 
   - id: ST-002
     claim: >-
@@ -23,6 +24,7 @@ claims:
     tests:
       - go ./lang/ir TestRetainedAccumulator
       - go ./lang/st TestLowerRetainedAccumulator
+      - go ./lang/st TestVarTempResetsEveryScan
       - go ./lang/conformance TestConformance/st-var-temp
 
   - id: ST-003
@@ -32,9 +34,8 @@ claims:
       init:).
     source: "#a-program-top-to-bottom"
     tests:
+      - go ./internal/project TestManifestTagsAreImplicit
       - go ./lang/st TestLowerImplicitGlobals
-      - go ./lang/st TestImplicitGlobalsBindOnUse
-      - go ./lang/st TestTagTypesAndUntypedTags
 
   - id: ST-004
     claim: >-
@@ -42,11 +43,8 @@ claims:
       type.
     source: "#a-program-top-to-bottom"
     tests:
-      - go ./lang/st TestLowerExplicitGlobalShadowsImplicit
-    partial: true
-    note: >-
-      Only shadowing of the implicit binding is tested; no test asserts the
-      type-mismatch error between a VAR_EXTERNAL and the manifest type.
+      - go ./internal/project TestExplicitDeclarationMustAgreeWithTypedTag
+      - go ./lang/st TestTagTypesAndUntypedTags
 
   - id: ST-005
     claim: >-
@@ -66,12 +64,8 @@ claims:
       VAR_EXTERNAL.
     source: "#a-program-top-to-bottom"
     tests:
-      - go ./lang/st TestMigrateProgramGlobals_SkipsFunctionBlockFiles
-      - go ./lang/st TestMigrateProgramGlobals_SkipsFBTypeGlobals
-    partial: true
-    note: >-
-      The migration tests show globals are not injected into FB files; no
-      test asserts the compile error for an FB naming an undeclared tag.
+      - go ./internal/project TestFunctionBlocksDoNotSeeTagsImplicitly
+      - go ./lang/st TestTagTypesAndUntypedTags
 
   - id: ST-007
     claim: >-
@@ -82,6 +76,10 @@ claims:
     tests:
       - go ./lang/st TestParseVarBlockKinds
       - go ./lang/st TestParseVarRetainConstant
+      - go ./lang/st TestExternalStructFieldAssignment
+    note: >-
+      TestExternalStructFieldAssignment supplies VAR_EXTERNAL and VAR_GLOBAL,
+      which the two parser tests do not include.
 
   - id: ST-008
     claim: >-
@@ -90,7 +88,6 @@ claims:
     source: "#declarations"
     tests:
       - go ./lang/st TestLowerGlobalVar
-      - go ./lang/ir TestGlobalReadWrite
     partial: true
     note: Only VAR_GLOBAL-as-tag is exercised; no test compares the two forms.
 
@@ -101,13 +98,13 @@ claims:
       FUNCTION call.
     source: "#declarations"
     tests:
+      - go ./lang/st TestConstantInBoundsAndInitialValues
       - go ./lang/st TestUserFB_InitialValues
       - go ./lang/st TestUserFunc_InitialValues
       - go ./acceptance TestFBVarConstantWritesBack
-    partial: true
     note: >-
-      FB and FUNCTION initial values are tested; a PROGRAM VAR initial value
-      is only covered incidentally (e.g. TestLowerIntToRealPromotion).
+      TestConstantInBoundsAndInitialValues asserts a PROGRAM VAR's initial
+      value (start : INT := N + 1) in its result.
 
   - id: ST-010
     claim: >-
@@ -116,8 +113,11 @@ claims:
     source: "#declarations"
     tests:
       - go ./lang/st TestExternalInitialValueRejected
-    partial: true
-    note: Tested for VAR_EXTERNAL only, not for VAR_GLOBAL.
+      - go ./lang/st TestGlobalConstantRules
+      - go ./internal/project TestManifestTagsAreImplicit
+    note: >-
+      TestGlobalConstantRules carries the VAR_GLOBAL case; TestManifestTagsAreImplicit
+      shows init: seeding the tag a program reads.
 
   - id: ST-011
     claim: >-
@@ -139,7 +139,6 @@ claims:
     tests:
       - go ./lang/st TestConstantCannotBeWritten
       - go ./lang/st TestConstantInBoundsAndInitialValues
-      - go ./lang/conformance TestConstantsAndMembersAreNotWritable
 
   - id: ST-013
     claim: >-
@@ -150,7 +149,6 @@ claims:
       - go ./lang/st TestGlobalConstantsVisibleEverywhere
       - go ./lang/st TestGlobalConstantsLibraryAlone
       - go ./lang/st TestGlobalConstantCannotBeWritten
-      - go ./lang/st TestLocalShadowsGlobalConstant
       - go ./lang/conformance TestConformance/st-global-constants
 
   - id: ST-014
@@ -161,10 +159,12 @@ claims:
     source: "#declarations"
     tests:
       - go ./lang/st TestFileScopeVarGlobalAheadOfProgram
+      - go ./internal/project TestGVLComposesIntoEveryProgram
     partial: true
     note: >-
-      Parsing/lowering of the file-scope block is tested; the creation of a
-      zero-valued state tag for an undeclared global is not asserted.
+      TestGVLComposesIntoEveryProgram asserts two programs share the GVL
+      globals through the tag store and that an undeclared one starts at
+      zero; the created tag's role being state is not asserted.
 
   - id: ST-015
     claim: >-
@@ -198,15 +198,15 @@ claims:
   - id: ST-018
     claim: >-
       ARRAY[lo..hi] OF T takes several comma-separated dimensions and any
-      element type, including a UDT or a function block, with arbitrary lower
-      bounds.
+      element type, including a UDT or a function block.
     source: "#declarations"
     tests:
       - go ./lang/st TestLowerArrayOneBasedIndexing
       - go ./lang/st TestLowerArrayArbitraryLowerBound
       - go ./lang/st TestLowerMultiDimArray
-      - go ./lang/st TestFBInstanceArray
       - go ./lang/st TestParseMultiDimArray
+      - go ./lang/st TestLowerNestedAggregateAssign
+      - go ./lang/st TestFBInstanceArray
 
   - id: ST-019
     claim: >-
@@ -241,10 +241,13 @@ claims:
     tests:
       - go ./lang/st TestExternalStructFieldAssignment
       - go ./lang/st TestVarInOutExternalStructField
-      - go ./lang/st TestLowerNestedAggregateAssign
-      - go ./runtime TestSetPathNestedMember
     partial: true
-    note: Field assignment lowers correctly; the member-write path to the store is tested via SetPath, not from an ST program.
+    note: >-
+      Field assignment to a VAR_EXTERNAL struct is asserted against a fake
+      host; a whole-struct write to the tag and the member-write path into
+      the runtime tag store are not. (TestLowerNestedAggregateAssign, a local
+      array, and runtime TestSetPathNestedMember, the SetPath API rather than
+      an ST write, were dropped as not about this claim.)
 
   - id: ST-022
     claim: >-
@@ -268,7 +271,6 @@ claims:
       - go ./lang/st TestBlockComment_NestedTwoLevels
       - go ./lang/st TestBlockComment_NestedThreeLevels
       - go ./lang/st TestLineComment_StillWorks
-      - go ./lang/st TestBlockComment_Unterminated_SimpleCase
 
   - id: ST-024
     claim: >-
@@ -288,6 +290,12 @@ claims:
     tests:
       - go ./runtime TestSwapWarmCarriesRetainedState
       - go ./runtime TestSwapWarmTypeChangeResets
+    partial: true
+    note: >-
+      Program VAR carry (Total) and the reset on a type change are asserted.
+      FB instance state is not: the test's Debounce : TON is never called, so
+      its carried state is indistinguishable from a reset; the only evidence
+      is its absence from the reset report.
 
   - id: ST-026
     claim: >-
@@ -296,11 +304,16 @@ claims:
     source: "#statements-and-expressions"
     tests:
       - go ./lang/st TestLowerIfElsif
+      - go ./lang/st TestLowerCaseRanges
       - go ./lang/st TestLowerForLoopSum
       - go ./lang/st TestLowerWhileWithExit
       - go ./lang/st TestLowerContinueSkipsEven
       - go ./lang/st TestLowerRepeatUntil
       - go ./lang/ir TestReturnEarly
+    partial: true
+    note: >-
+      No test runs a FOR loop with a BY step; RETURN is tested only on
+      hand-built IR, never from an ST program.
 
   - id: ST-027
     claim: >-
@@ -318,12 +331,10 @@ claims:
 
   - id: ST-028
     claim: >-
-      Two CASE labels with the same value, or overlapping ranges, are a
-      compile error; a non-constant label is a compile error.
+      Two CASE labels with the same value are a compile error.
     source: "#statements-and-expressions"
     tests:
       - go ./lang/st TestCaseDuplicateLabelValues
-      - go ./lang/st TestCaseLabelMustBeConstant
       - go ./lang/conformance TestCaseDuplicateConstantLabelDiagnosed
 
   - id: ST-029
@@ -338,15 +349,18 @@ claims:
 
   - id: ST-030
     claim: >-
-      REGION name ... END_REGION groups statements for folding and the
-      Outline; it opens no scope and runs its statements in order.
+      REGION name ... END_REGION only groups statements (for folding and the
+      Outline); it opens no scope.
     source: "#statements-and-expressions"
     tests:
       - go ./lang/st TestRegionIsANoOpGrouping
-      - go ./lang/st TestRegionOpensNoScope
       - go ./lang/st TestRegionInFBAndCase
-      - go ./lang/st TestRegionErrors
       - go ./lang/conformance TestConformance/st-region
+    note: >-
+      TestRegionOpensNoScope was dropped: it names an undeclared variable
+      inside a region and expects "undeclared", which passes whether or not
+      a region opens a scope. TestRegionErrors (REGION syntax errors) is not
+      a promise of the page.
 
   - id: ST-031
     claim: >-
@@ -363,9 +377,11 @@ claims:
     source: "#statements-and-expressions"
     tests:
       - go ./lang/st TestLowerIntToRealPromotion
-      - go ./lang/ir TestSeedFromInitAcceptsIntForReal
     partial: true
-    note: The second test covers seeding from a manifest init, not ST expressions.
+    note: >-
+      Only an INT in REAL arithmetic assigned to a REAL is asserted; an INT
+      passed to a REAL parameter is not. (ir TestSeedFromInitAcceptsIntForReal
+      was dropped: it is about manifest init seeding, not ST.)
 
   - id: ST-033
     claim: >-
@@ -374,11 +390,11 @@ claims:
     source: "#statements-and-expressions"
     tests:
       - go ./lang/st TestConversionCompileErrors
-      - go ./lang/st TestLowerAssignRealToBool
     partial: true
     note: >-
-      Tests assert related "cannot assign / cannot pass" errors; none assigns
-      a REAL expression directly to an INT variable.
+      Only passing a REAL to an INT parameter ("cannot pass REAL as INT") is
+      asserted; no test assigns a REAL expression directly to an INT
+      variable. (TestLowerAssignRealToBool, REAL into BOOL, was dropped.)
 
   - id: ST-034
     claim: >-
@@ -386,11 +402,7 @@ claims:
       becomes 2, 3.5 becomes 4); TRUNC_DINT truncates toward zero.
     source: "#statements-and-expressions"
     tests:
-      - go ./lang/conformance TestConformance/fn-conversions/REAL_TO_INT rounds half to even, not half away from zero
-      - go ./lang/conformance TestConformance/fn-conversions/TRUNC goes toward zero for both signs
       - go ./lang/conformance TestConformance/st-conversions-matrix/REAL to integer rounds half to even; TRUNC goes toward zero
-      - go ./lang/st TestBuiltinRealRoundingTiesToEven
-      - go ./lang/st TestBuiltinTruncStaysTruncation
 
   - id: ST-035
     claim: >-
@@ -400,6 +412,11 @@ claims:
       - go ./lang/ir TestConversionMatrixShape
       - go ./lang/st TestConversionMatrixThroughST
       - go ./lang/conformance TestConformance/st-conversions-matrix
+    partial: true
+    note: >-
+      The matrix test pins 18 conversion types; WSTRING, CHAR and WCHAR,
+      which the page lists as elementary types, are not among them, so no
+      conversion to or from them is asserted (they may not exist).
 
   - id: ST-036
     claim: >-
@@ -412,8 +429,7 @@ claims:
 
   - id: ST-037
     claim: >-
-      A REAL or STRING with no value in the target type (out of range,
-      unparseable, non-finite) faults the scan.
+      A REAL or a STRING with no value in the target type faults the scan.
     source: "#statements-and-expressions"
     tests:
       - go ./lang/conformance TestConversionRangeFaults
@@ -429,9 +445,6 @@ claims:
     tests:
       - go ./lang/st TestFBTONReachesQAfterPT
       - go ./lang/st TestUserFB_OutputBinding
-      - go ./lang/st TestUserFB_OutputBindingRejectsInput
-      - go ./lang/st TestFBCallWithoutInstanceErrors
-      - go ./lang/conformance TestConformance/fb-ton
 
   - id: ST-039
     claim: >-
@@ -442,7 +455,6 @@ claims:
       - go ./lang/st TestLowerUDTFieldAccess
       - go ./lang/st TestLowerNestedAggregateAssign
       - go ./lang/st TestParseArrayIndexAssignmentTarget
-      - go ./lang/st TestStructAssignmentIsACopy
 
   - id: ST-040
     claim: An array index outside the declared bounds faults the scan.
@@ -462,18 +474,19 @@ claims:
       - go ./lang/st TestUserFunc_NoState
       - go ./lang/st TestUserFB_DeclareAndCall
       - go ./lang/st TestUserFB_RetainsState
-      - go ./lang/st TestUserFunc_NamedArgs
+    partial: true
+    note: >-
+      "Each instance owns its slots" is not asserted: every user-FB test uses
+      a single instance. (TestUserFunc_NamedArgs was dropped as not about
+      this claim.)
 
   - id: ST-042
     claim: >-
-      FUNCTION_BLOCK pins may be any type, a user TYPE included, and a struct
-      input is copied in.
+      FUNCTION_BLOCK pins may be any type, a user TYPE included.
     source: "#functions-and-function-blocks"
     tests:
       - go ./lang/st TestFBStructPins
       - go ./lang/st TestFBStructPinFromLibraryFile
-      - go ./lang/st TestFBStructInputIsCopied
-      - go ./lang/st TestFBUnknownPinTypeStillErrors
 
   - id: ST-043
     claim: >-
@@ -493,6 +506,11 @@ claims:
     tests:
       - go ./runtime TestVarInOutStructTagRoundTrip
       - go ./lang/st TestVarInOutExternalStructTag
+    partial: true
+    note: >-
+      The round trip is asserted (the block sees its own write-back next
+      scan); that it lands as one whole-struct write rather than per-field
+      writes is not observed by either test.
 
   - id: ST-045
     claim: >-
@@ -548,6 +566,7 @@ claims:
       tags over virtual time.
     source: "#tooling"
     tests:
+      - go ./lang/conformance TestConformance/fb-ton/Q false at PT-1ms, true at PT, ET clamps at PT
       - go ./acceptance TestVirtualDtIsExact
       - go ./acceptance TestRunsAreReproducible
 
@@ -580,8 +599,9 @@ claims:
     source: "#not-supported"
     tests: []
     note: >-
-      No rejection test. lang/st TestKeywordAndTypeNames asserts ScalarTypeNames
-      contains "TOD", which may contradict the page; worth checking.
+      No rejection test. (Checked by hand: `naut check` reports `unknown scalar
+      type "TOD"`; the name appearing in lang/st's IEC name table does not make
+      it a usable type.)
 
   - id: ST-054
     claim: Exponentiation with ** is not supported; EXPT(base, exp) is used instead.

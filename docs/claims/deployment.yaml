@@ -13,6 +13,10 @@ claims:
       - go ./cmd/naut TestScaffoldVariants/demo with deploy
       - go ./cmd/naut TestScaffoldVariants/demo manifest project
       - go ./cmd/naut TestDeployWorkflowRenders
+    partial: true
+    note: >-
+      The no-feature cases assert Dockerfile and deploy/k8s.yaml are absent
+      but never that .github/workflows/deploy.yml is absent.
   - id: DEP-002
     claim: >-
       The scaffolded deploy workflow runs check, test and build, builds the
@@ -24,8 +28,8 @@ claims:
     partial: true
     note: >-
       Asserts the workflow text contains naut build, naut test, ghcr.io and
-      the repository variable; it never runs the workflow, so the image tag
-      being the commit sha is not exercised.
+      the repository variable; the naut check step and the GITHUB_TOKEN
+      login are not asserted, and the workflow is never run.
   - id: DEP-003
     claim: >-
       Every merge that passes its acceptance suites becomes an image tagged
@@ -36,13 +40,11 @@ claims:
       Gap. A CI-pipeline property of the scaffolded workflows; nothing in the test suite executes it.
   - id: DEP-004
     claim: >-
-      naut build emits a self-contained controller binary (runtime plus
-      project in one file), which a rebuild from a built binary replaces
-      rather than stacking.
+      naut build emits a self-contained controller: runtime plus project in
+      one binary.
     source: "#the-image"
     tests:
       - go ./cmd/naut TestBuildEmbedRoundTrip
-      - go ./cmd/naut TestBuildEmbedsHMIAndBuiltBinaryServesIt
   - id: DEP-005
     claim: >-
       The Dockerfile is distroless/static with no shell, so the binary must
@@ -61,8 +63,8 @@ claims:
       - go ./cmd/naut TestDeployWorkflowRenders
   - id: DEP-007
     claim: >-
-      A Lease elects the scanning leader, and a standby acquires it when the
-      leader's lease lapses or the leader steps down.
+      A Lease elects the scanning leader, and when the leader dies the
+      standby acquires the lease on its next 1 s tick, 4 s at worst.
     source: "#the-cluster"
     tests:
       - go ./leader TestFreshClusterAcquire
@@ -94,7 +96,6 @@ claims:
     source: "#the-cluster"
     tests:
       - go ./server TestStandbyProxiesToLeader
-      - go ./server TestStandbyWithNoLeaderServesLocally
       - go ./server TestLeaderNeverProxies
   - id: DEP-010
     claim: >-
@@ -113,4 +114,6 @@ claims:
       - go ./cmd/naut TestBuildEmbedsHistory
     partial: true
     note: >-
-      See PH-004; the no-git runtime environment is not reproduced.
+      Asserts the history rides the built archive and decodes back; serving
+      it over GET /api/program/history from the built binary, and the
+      no-git runtime environment, are not exercised here (see PH-004).

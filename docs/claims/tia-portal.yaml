@@ -21,11 +21,12 @@ claims:
     tests:
       - go ./internal/project TestElementaryTagTypes
       - go ./internal/project TestTagTypeAndInitMustAgree
+      - go ./internal/project TestTimeMembersSeedFromInit
 
   - id: CTIA-003
     claim: >-
       `init:` seeds a TIME member from `T#2s`, `2s` or milliseconds, and an
-      array member from a list, including inside nested structs.
+      array member from a list.
     source: "#program-organisation"
     tests:
       - go ./internal/project TestTimeMembersSeedFromInit
@@ -41,15 +42,16 @@ claims:
 
   - id: CTIA-005
     claim: >-
-      Files in `lib/` are composed ahead of every task, and a project with
-      a `lib/` directory checks, tests and builds with its blocks.
+      A library is files in `lib/`, composed ahead of every task.
     source: "#program-organisation"
     tests:
       - go ./cmd/naut TestCheckLibDirClean
       - go ./cmd/naut TestTestLibDir
-      - go ./cmd/naut TestBuildShipsLibDir
     partial: true
-    note: Composition ahead of every task is shown only indirectly, by the lib fixture passing its acceptance suite.
+    note: >-
+      A lib/ fixture's blocks are shown usable from the project's one task
+      (check and acceptance suite pass); composition ahead of every task in a
+      multi-task project is not asserted.
 
   - id: CTIA-006
     claim: >-
@@ -59,7 +61,13 @@ claims:
     source: "#scl"
     tests:
       - go ./lang/conformance TestConformance/st-case-constants
+      - go ./lang/conformance TestConformance/st-enum
       - go ./lang/conformance TestCaseDuplicateConstantLabelDiagnosed
+    partial: true
+    note: >-
+      `VAR CONSTANT` and enumeration-member labels, and the duplicate-value
+      error, are asserted; a project constant (`VAR_GLOBAL CONSTANT`) as a
+      CASE label is not exercised.
 
   - id: CTIA-007
     claim: >-
@@ -77,7 +85,7 @@ claims:
   - id: CTIA-008
     claim: >-
       The SCL `#name` prefix is rejected everywhere with "the # prefix is
-      Siemens SCL syntax; write the name without it", with a line number.
+      Siemens SCL syntax; write the name without it".
     source: "#scl"
     tests:
       - go ./lang/st TestHashPrefixRejectedEverywhere
@@ -93,8 +101,8 @@ claims:
 
   - id: CTIA-010
     claim: >-
-      `REGION ... END_REGION` groups statements without opening a scope:
-      statements inside run in order, nested regions too.
+      `REGION ... END_REGION` groups statements and opens no scope; it folds
+      in the editor and shows in the Outline.
     source: "#scl"
     tests:
       - go ./lang/conformance TestConformance/st-region
@@ -103,13 +111,12 @@ claims:
 
   - id: CTIA-011
     claim: >-
-      `VAR CONSTANT` in a block, or `VAR_GLOBAL CONSTANT` in a `lib/` file,
-      defines user constants folded at compile time (sizing arrays, bounding
-      loops, as timer presets); writing one is an error.
+      User constants are declared with `VAR CONSTANT` in a block, or with
+      `VAR_GLOBAL CONSTANT` in a `lib/` file for the whole project.
     source: "#scl"
     tests:
+      - go ./lang/conformance TestConformance/st-case-constants
       - go ./lang/conformance TestConformance/st-global-constants
-      - go ./lang/conformance TestConstantsAndMembersAreNotWritable
 
   - id: CTIA-012
     claim: >-
@@ -133,20 +140,20 @@ claims:
 
   - id: CTIA-014
     claim: >-
-      Standard function blocks (and `FUNCTION` calls) evaluate every scan:
-      `EN`/`ENO` do not exist on them, except that an FBD block with `EN`
-      FALSE does not run and `DIV` raises `ENO` FALSE on a zero divisor.
+      Standard blocks have no `EN`/`ENO` and always evaluate; a user block in
+      a ladder rung takes power on its `EN` pin if it declares one.
     source: "#fbd-and-ladder"
-    tests:
-      - go ./lang/conformance TestConformance/fbd-en-eno
-    partial: true
-    note: The page lists EN/ENO as planned for FBD (#206) while the conformance corpus already tests it; the page's "no EN/ENO today" claim and the ladder user-block EN pin are not tested.
+    tests: []
+    note: >-
+      The old reference, fbd-en-eno, tests FBD EN/ENO (EN FALSE skips a call),
+      which is the opposite of this page's "none" and is what the page lists
+      as planned (#206); the page looks out of date. No test asserts a ladder
+      user block taking power on a declared EN pin.
 
   - id: CTIA-015
     claim: >-
-      Execution order is source order by network, with a block evaluated
-      before its readers within one network; a read of a later network's
-      block output sees last scan's value.
+      Execution follows source order by network, with a block evaluated
+      before its readers.
     source: "#fbd-and-ladder"
     tests:
       - go ./lang/fbd TestNetworksRunInOrder
@@ -156,9 +163,11 @@ claims:
   - id: CTIA-016
     claim: >-
       An unconnected input of a block call must be bound or dropped from the
-      call; a block call from the palette leaves defaulted inputs unbound.
+      call.
     source: "#fbd-and-ladder"
     tests:
       - go ./lang/fbd TestPickerLeavesDefaultedInputsUnbound
     partial: true
-    note: Only the picker's behaviour is tested; the error for an input left open (#205) has no test.
+    note: >-
+      The test asserts that an FBD call with defaulted inputs dropped compiles;
+      that an input left open (`_`) is refused (#205) has no test.

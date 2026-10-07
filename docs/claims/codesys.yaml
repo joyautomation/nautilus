@@ -35,43 +35,49 @@ claims:
     tests:
       - go ./internal/project TestManifestTagsAreImplicit
       - go ./internal/project TestFunctionBlocksDoNotSeeTagsImplicitly
+    partial: true
+    note: >-
+      Only tags declared in nautilus.yaml are shown to be in scope without a
+      declaration; a tag from tags/*.yaml is not. That VAR_EXTERNAL stays legal
+      for a manifest tag is not asserted by these tests (the block side is).
 
   - id: CCS-004
     claim: >-
       A `gvl.st` with a file-level `VAR_GLOBAL` block declares globals for
       every program; one the manifest does not declare is a `state` tag
-      starting at zero, and a program that redeclares one with another type
-      is an error.
+      starting at zero. An initial value goes in the manifest's `init:`.
     source: "#project-and-data"
     tests:
       - go ./internal/project TestGVLComposesIntoEveryProgram
-      - go ./internal/project TestGVLRedeclarationMustAgree
       - go ./cmd/naut TestCheckGoldenGVL
     partial: true
-    note: The initial value coming from the manifest's `init:` is not tested for a GVL global.
+    note: >-
+      Composition into every program and the zero start are asserted. That the
+      global is a `state` tag, and that the manifest's `init:` sets its initial
+      value, are not.
 
   - id: CCS-005
     claim: >-
       `VAR_GLOBAL CONSTANT` in a `lib/` file is seen by every POU and folded
-      at compile time; the constants are not tags and cannot be written.
+      at compile time; the constants are not tags.
     source: "#project-and-data"
     tests:
       - go ./lang/conformance TestConformance/st-global-constants
-      - go ./lang/conformance TestConstantsAndMembersAreNotWritable
     partial: true
-    note: "\"Not tags\" is not asserted directly."
+    note: >-
+      Read from PROGRAMs in all four languages, including as an array bound
+      (which needs a compile-time value); a FUNCTION_BLOCK or FUNCTION reading
+      one is not exercised, and "not tags" is not asserted.
 
   - id: CCS-006
     claim: >-
       Enumerations (`TYPE E : (A, B, C)` and `(A := 1, ...)`) work as in
       Codesys: `E#A` or plain `A` in comparisons and `CASE` labels,
-      `TO_INT`, and live values show the member name; a non-member write or
-      init is refused.
+      `TO_INT` / `TO_E`, and live values show the member name.
     source: "#project-and-data"
     tests:
       - go ./lang/conformance TestConformance/st-enum
       - go ./internal/project TestEnumTypedTag
-      - go ./lang/conformance TestCodesysEnumTypeCompiles
     partial: true
     note: "`TO_E` conversion from an integer is not tested."
 
@@ -89,8 +95,8 @@ claims:
 
   - id: CCS-009
     claim: >-
-      `VAR_IN_OUT` passes the caller's variable by reference, so a block
-      reads and writes the caller's struct.
+      `VAR_IN_OUT` works as in Codesys: the block reads and writes the
+      caller's variable by reference.
     source: "#project-and-data"
     tests:
       - go ./lang/ld TestLadderFunctionBlockInOutStructPin
@@ -99,9 +105,9 @@ claims:
 
   - id: CCS-010
     claim: >-
-      `Step.X` is TRUE while the step is active and `Step.T` is the elapsed
-      TIME in the step, starting at 0 on activation, not running while the
-      step is inactive and restarting on re-entry.
+      `Step.X` and `Step.T` work as in Codesys: `Step.X` is TRUE while the
+      step is active and `Step.T` is the elapsed `TIME` in the step, usable
+      in a condition such as `ChargeA.T >= T#5M`.
     source: "#sfc"
     tests:
       - go ./lang/conformance TestConformance/sfc-step-t

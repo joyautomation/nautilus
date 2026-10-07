@@ -8,15 +8,12 @@ claims:
       one controller (one program file per task) against one tag store.
     source: "#four-languages-one-program-model"
     tests:
-      - go ./runtime TestTasks
-      - go ./runtime TestLibrariesUserFBFromFBD
-      - go ./lang/conformance TestConformance/st-var-temp
-    partial: true
+      - go ./lang/conformance TestConformance/st-case-insensitive
     note: >-
-      TestTasks runs several tasks; the conformance fixtures run the same
-      logic in all four languages. No single test mixes all four against one
-      store.
-
+      The fixture runs four tasks, one .st, .ld, .fbd and .sfc program each,
+      in one controller reading the same Level/Start tags. TestTasks
+      (ST-only tasks) and TestLibrariesUserFBFromFBD (a library block) were
+      dropped as adjacent.
   - id: LANG-002
     claim: >-
       The same program written in ST, ladder, FBD and SFC behaves identically
@@ -76,17 +73,26 @@ claims:
       language.
     source: "#which-language-for-which-job"
     tests:
-      - go ./lang/sfc TestSeedInitCheckClean
-      - go ./lang/fbd TestSeedBlankFile
-      - go ./lang/ld TestSeedBlankLadder
+      - go ./cmd/naut TestScaffoldedManifestProjectsPass/minimal-ld
+      - go ./cmd/naut TestScaffoldedManifestProjectsPass/minimal-fbd
+      - go ./cmd/naut TestScaffoldVariants/minimal manifest project
+      - go ./cmd/naut TestScaffoldVariants/sdk, ladder program
     partial: true
-    note: The seed content is tested; the naut new command itself is not.
-
+    note: >-
+      The ld and fbd scaffolds are generated, loaded, compiled and their
+      tests pass; no test scaffolds an sfc project. The old refs (editor
+      blank-file seeding in lang/sfc, lang/fbd, lang/ld) did not test naut new.
   - id: LANG-007
     claim: >-
       Tasks are declared in nautilus.yaml, one program file each, at their own
       scan rate.
     source: "#which-language-for-which-job"
     tests:
+      - go ./internal/project TestLoad
       - go ./runtime TestTasks
-      - go ./runtime TestTasksRunConcurrently
+    partial: true
+    note: >-
+      nautilus.yaml tasks load with their own scan periods and each runs its
+      own program, and a task's dt follows its period; no test asserts tasks
+      actually execute at their declared rates. TestTasksRunConcurrently
+      (dropped) only shows both tasks scan.

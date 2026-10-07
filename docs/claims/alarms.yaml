@@ -5,41 +5,41 @@ claims:
   - id: ALM-001
     claim: >-
       A project with no alarms section behaves exactly as before: there is no
-      alarm engine, all five /api/alarms routes answer 404 (naming the manifest
-      key), /api/meta reports alarms false, and stream frames carry no alarms
-      field.
+      alarm engine, all five /api/alarms routes answer 404, /api/meta reports
+      alarms false, and stream frames carry no alarms field.
     source: "#the-shape"
     tests:
       - go ./internal/project TestNoAlarmsSectionMeansNoEngine
       - go ./server TestAlarmRoutes404WithoutAnEngine
       - go ./server TestFrameCarriesAlarmSummary
-      - go ./runtime TestNoAlarmRetainerLeavesTheStateAlone
+    note: >-
+      "Naming the manifest key" dropped (the page does not say it).
+      TestNoAlarmRetainerLeavesTheStateAlone removed: retain contents are not
+      one of the listed promises.
 
   - id: ALM-002
     claim: >-
-      A rule with a member matches struct members only, a rule without a member
-      matches flat BOOL tags only, and match type, member and tag are globs
-      (case-insensitive identifiers).
+      match takes type, member and tag, all globs; a rule with a member matches
+      struct members, and a rule without one matches flat BOOL tags.
     source: "#rules-versus-definitions"
     tests:
       - go ./alarm TestMatchMemberDiscriminatesStructFromFlat
+    partial: true
+    note: >-
+      Member and tag globs and the struct-versus-flat split are asserted. A
+      glob in type is never tested (every case spells the type literally), and
+      no test shows a member-less rule skipping a flat non-BOOL tag.
+      "Case-insensitive" dropped (not on the page).
 
   - id: ALM-003
-    claim: >-
-      Rules are tried in file order and the first matching rule wins; a member
-      no rule claims produces no definition.
+    claim: Rules are tried in file order and the first matching rule wins.
     source: "#rules-versus-definitions"
     tests:
       - go ./alarm TestExpandCoversTheFleetFromFewRules
-      - go ./internal/project TestRulesExpandAgainstComposedTags
-
-  - id: ALM-004
-    claim: >-
-      Rule expansion is deterministic: the same inputs produce the same
-      definitions, sorted by id, whatever order the tags arrive in.
-    source: "#rules-versus-definitions"
-    tests:
-      - go ./alarm TestExpandIsDeterministic
+    note: >-
+      "A member no rule claims produces no definition" dropped (not on the
+      page), and with it TestRulesExpandAgainstComposedTags, which asserted
+      only that clause.
 
   - id: ALM-005
     claim: >-
@@ -49,6 +49,8 @@ claims:
     tests:
       - go ./alarm TestExpandRejectsUnknownPlaceholder
       - go ./internal/project TestBadTemplateFailsAtLoad
+    partial: true
+    note: Both tests put the bad placeholder in a name template; id, site, area, display and enable templates are not tested.
 
   - id: ALM-006
     claim: >-
@@ -60,27 +62,38 @@ claims:
       - go ./alarm TestExpandRejectsDuplicateIDs
       - go ./alarm TestExpandRejectsRuleCollidingWithExplicitAlarm
       - go ./internal/project TestAlarmFilesDuplicateIDIsAnError
+    partial: true
+    note: >-
+      Error-not-last-wins is asserted for all three pairs, but naming both
+      sources only for two rules ("rule 0" and "rule 1"). The rule-versus-entry
+      test checks only the id. The manifest-versus-alarm-file test checks only
+      the substring "declared by both", and the message actually reads
+      `alarm "X" is declared by both alarm "X" and alarm "X"`: it names
+      neither the file nor the manifest.
 
   - id: ALM-007
     claim: >-
-      Alarm files are bare YAML lists composed with the manifest definitions,
-      and unknown keys in an alarm file or manifest alarms section are
-      rejected.
+      Alarm files are bare YAML lists, composed with the manifest's own alarms
+      section.
     source: "#rules-versus-definitions"
     tests:
       - go ./alarm TestLoadAlarmFile
-      - go ./alarm TestLoadRejectsUnknownKey
-      - go ./alarm TestLoadRejectsUnknownKeyInsideMatch
       - go ./internal/project TestAlarmFilesCompose
-      - go ./internal/project TestManifestAlarmsDecodeStrictly
+    note: >-
+      Unknown-key rejection dropped (the page does not promise it), and with it
+      TestLoadRejectsUnknownKey, TestLoadRejectsUnknownKeyInsideMatch and
+      TestManifestAlarmsDecodeStrictly.
 
   - id: ALM-008
     claim: >-
-      A site-from or area-from pattern must carry a capture group; the first
-      group becomes the site or area of each definition.
+      site-from and area-from patterns set each definition's site and area
+      from the tag name (RTU9_WEL15_FIT_001 gives site RTU9, area WEL15).
     source: "#the-shape"
     tests:
-      - go ./internal/project TestSiteFromNeedsACaptureGroup
+      - go ./internal/project TestRulesExpandAgainstComposedTags
+    note: >-
+      Rewritten to the page's example. The capture-group-required load error
+      (TestSiteFromNeedsACaptureGroup) is not a promise of the page.
 
   - id: ALM-009
     claim: >-
@@ -122,34 +135,34 @@ claims:
 
   - id: ALM-013
     claim: >-
-      Shelving takes an expiry; the shelf always expires (a shelf in the past,
-      or an open-ended shelve request, is refused and answered 400 naming the
-      permanent shelf), and the alarm returns to the state it interrupted.
+      A shelf always expires (there is no permanent shelf), and the alarm then
+      returns to the state it interrupted rather than dropping to Normal.
     source: "#states"
     tests:
       - go ./alarm TestShelveExpires
       - go ./alarm TestShelveRejectsThePastAndTheUnshelvable
       - go ./server TestAckShelveAndUnshelve
       - naut examples/lift-station a shelved high-level alarm is silent and always expires
+    note: >-
+      The 400 status and "permanent shelf" message dropped from the claim (not
+      on the page); the tests still show both a past shelf and an open-ended
+      request refused.
 
   - id: ALM-014
     claim: >-
-      A shelved alarm is silent (not on the active list, no journal events
-      while the condition cycles) but its condition is still tracked; a
-      non-shelvable alarm refuses to be shelved.
+      A shelved alarm is silent: off the active list, and journalling nothing
+      while its condition cycles.
     source: "#states"
     tests:
       - go ./alarm TestShelveIsSilentButStillTracks
-      - go ./alarm TestShelveRejectsThePastAndTheUnshelvable
-
-  - id: ALM-015
-    claim: >-
-      Acknowledging a shelved alarm acknowledges the state underneath, so
-      shelving is not a back-door acknowledgement and unshelving restores
-      Ack-Active.
-    source: "#states"
-    tests:
-      - go ./alarm TestAckingAShelvedAlarmAcksWhatIsUnderneath
+      - go ./alarm TestShelveExpires
+      - naut examples/lift-station a shelved high-level alarm is silent and always expires
+    note: >-
+      "Condition still tracked" dropped: not on the page, and the test cannot
+      show it (the condition ends true and the interrupted state was already
+      Unack-Active, so unshelve gives the same answer either way). The
+      non-shelvable refusal is not a page promise, so
+      TestShelveRejectsThePastAndTheUnshelvable was removed here.
 
   - id: ALM-016
     claim: >-
@@ -163,13 +176,14 @@ claims:
 
   - id: ALM-017
     claim: >-
-      A definition whose tag does not resolve (a site that has never birthed),
-      or whose condition is not a BOOL, is Suppressed with a reason naming the
-      path, never an error that faults the engine.
+      A definition whose tag does not resolve (a site that has never birthed)
+      is Suppressed with a reason, never an error that faults the engine.
     source: "#states"
     tests:
       - go ./alarm TestMissingTagSuppressesWithAReason
-      - go ./alarm TestNonBoolConditionIsSuppressedNotFatal
+    note: >-
+      The non-BOOL case is not on the page; TestNonBoolConditionIsSuppressedNotFatal
+      was removed.
 
   - id: ALM-018
     claim: >-
@@ -180,6 +194,12 @@ claims:
     tests:
       - go ./alarm TestRetainedAckSurvivesRestart
       - go ./runtime TestAlarmStateRoundTripsThroughRetain
+    partial: true
+    note: >-
+      The two halves are tested apart: the engine's snapshot and restore, and
+      the runtime's retain plumbing with a fake engine. Registering the real
+      engine with the runtime (rt.SetAlarms in cmd/naut) is not tested, so
+      dropping that line would leave both tests green.
 
   - id: ALM-019
     claim: >-
@@ -195,14 +215,18 @@ claims:
 
   - id: ALM-020
     claim: >-
-      Only ack and shelf are persisted: a retained ack applies to the one
-      activation it was made on, a retained active state is never restored,
-      and a retained entry for an unknown alarm or an expired shelf is
-      ignored.
+      Only ack and shelf persist; active and RTN are not retained but re-derive
+      from the field.
     source: "#ack-is-host-state"
     tests:
       - go ./alarm TestRetainedAckSurvivesRestart
-      - go ./alarm TestRestoreIgnoresUnknownAndExpired
+    partial: true
+    note: >-
+      The snapshot holds only ack and shelf (the retained record has no field
+      for anything else). No test restores an ack while the field is false to
+      show the state re-derives rather than coming back active. The
+      unknown-id and expired-shelf cases are not on the page, so
+      TestRestoreIgnoresUnknownAndExpired was removed.
 
   - id: ALM-021
     claim: >-
@@ -210,47 +234,53 @@ claims:
       tags.
     source: "#ack-is-host-state"
     tests: []
-    note: No test asserts that ack or shelve performs no tag write.
+    note: >-
+      No test asserts that ack or shelve performs no tag write.
+      (TestAlarmAckVerb's `expect: FIT_001.L: true` after an ack cannot count:
+      the program rewrites that bit every scan.)
 
   - id: ALM-022
-    claim: >-
-      GET /api/alarms returns a timestamp, a summary and the active alarm
-      list, with state, priority counts and a non-zero rev.
+    claim: GET /api/alarms returns a timestamp, the summary and the active alarm list.
     source: "#the-api"
     tests:
       - go ./server TestAlarmsListAndSummary
 
   - id: ALM-023
     claim: >-
-      POST /api/alarms/ack acknowledges by ids or all in one request and
-      returns the count acked; an unknown id answers 404 naming it with
-      nothing half-applied.
+      POST /api/alarms/ack acknowledges the listed ids, or all of them in one
+      request.
     source: "#the-api"
     tests:
       - go ./server TestAckShelveAndUnshelve
       - go ./alarm TestAckAllAndUnknownID
+    note: The returned count, the 404 for an unknown id and the no-half-apply rule are code details, not page claims.
 
   - id: ALM-024
     claim: >-
-      POST /api/alarms/shelve records who shelved it and until when, and
-      POST /api/alarms/unshelve returns the alarm to the state it held.
+      POST /api/alarms/shelve shelves an alarm for the given seconds and
+      records who (by); POST /api/alarms/unshelve takes it off the shelf.
     source: "#the-api"
     tests:
       - go ./server TestAckShelveAndUnshelve
+    partial: true
+    note: >-
+      The shelf's expiry is asserted only to be non-zero, not to be now plus
+      the requested seconds.
 
   - id: ALM-025
     claim: >-
       GET /api/alarms/journal filters by from, to, site, priority, id, kind,
-      state and free text q (matching names as well as ids), comma-separated
-      values and AND across fields, newest first, answers an empty list (not
-      null) for no matches, and a malformed from or to is a 400.
+      state, free text q and limit.
     source: "#the-api"
     tests:
       - go ./server TestJournalQuery
-      - go ./server TestParseTimeAcceptsBothForms
       - go ./alarm TestJournalFiltering
-    note: Filters priority, id, state and limit are exercised only at the alarm package level, if at all.
     partial: true
+    note: >-
+      Over HTTP only kind, site and q are asserted (plus a malformed from
+      rejected). Priority, id, the from/to range and limit are asserted only
+      on the ring journal. The state filter is not asserted anywhere.
+      TestParseTimeAcceptsBothForms removed (a parse helper, not a filter).
 
   - id: ALM-026
     claim: >-
@@ -259,7 +289,10 @@ claims:
     source: "#the-api"
     tests:
       - go ./server TestAlarmWritesHonorAuth
-    note: Same-origin default for browser writes is not asserted here.
+    note: >-
+      No token gives 401 and X-Nautilus-Token gives 200; an Authorization:
+      Bearer token is not tried, and the same-origin default for browser writes
+      is not asserted.
     partial: true
 
   - id: ALM-027
@@ -276,14 +309,21 @@ claims:
     tests:
       - go ./server TestFrameCarriesAlarmSummary
       - go ./alarm TestSummaryCounts
+    partial: true
+    note: >-
+      The frame test checks active and worst; the engine test adds unacked,
+      shelved, byPriority and newest. Suppressed and rev are not checked in
+      these tests, and the frame's JSON field names are not asserted.
 
   - id: ALM-029
     claim: >-
-      The summary rev bumps on any state change (activation, ack) and stays
-      constant across quiet scans.
+      The summary rev bumps on any state change and stays constant across
+      quiet scans.
     source: "#the-api"
     tests:
       - go ./alarm TestSummaryRevBumpsOnlyOnChange
+    partial: true
+    note: Bumps are asserted for activation and ack only; rtn, shelve, unshelve, suppress and unsuppress are not checked.
 
   - id: ALM-030
     claim: >-
@@ -292,14 +332,7 @@ claims:
     source: "#the-api"
     tests:
       - go ./server TestMetaReportsAlarmsAndShelveTimes
-      - go ./alarm TestConfigShelveDurationsFallBack
-
-  - id: ALM-031
-    claim: >-
-      The active list sorts worst priority first, then newest.
-    source: "#the-api"
-    tests:
-      - go ./alarm TestActiveSortsWorstThenNewest
+    note: TestConfigShelveDurationsFallBack removed (default shelve times are not a page claim).
 
   - id: ALM-032
     claim: >-
@@ -310,7 +343,7 @@ claims:
       - go ./alarm TestStateMachineTable
       - go ./alarm TestSuppressedWhenEnableFalse
       - go ./alarm TestShelveExpires
-      - go ./alarm TestEventJSONShape
+    note: TestEventJSONShape removed (it serialises a hand-built event; no state change is involved).
 
   - id: ALM-033
     claim: >-
@@ -323,47 +356,56 @@ claims:
     partial: true
 
   - id: ALM-034
-    claim: >-
-      The file journal sink writes rotated JSONL, queries span the rotated
-      generations, and a torn line is skipped.
+    claim: The file journal sink is a durable journal written as rotated JSONL.
     source: "#the-journal"
     tests:
       - go ./alarm TestFileJournalRoundTrip
       - go ./alarm TestFileJournalRotatesAndStillQueriesAcross
-      - go ./alarm TestFileJournalSkipsATornLine
+    note: >-
+      Querying across generations and skipping a torn line are code details,
+      not page claims; TestFileJournalSkipsATornLine was removed.
 
   - id: ALM-035
-    claim: >-
-      The postgres journal sink creates its table idempotently at startup and
-      queries newest first.
+    claim: The postgres journal sink creates its table idempotently at startup.
     source: "#the-journal"
     tests:
       - go ./alarm TestPGJournal
     partial: true
-    note: Skips unless NAUTILUS_TEST_DATABASE_URL points at a real Postgres; verified only where one is provided.
+    note: >-
+      Skips unless NAUTILUS_TEST_DATABASE_URL points at a real Postgres (no CI
+      job sets it); idempotence shows only on a second run against the same
+      database. "Queries newest first" dropped (not on the page).
 
   - id: ALM-036
     claim: >-
-      The postgres sink's dsn-env names an environment variable (default
-      NAUTILUS_ALARM_DB_URL, falling back to DATABASE_URL); with neither set
-      startup fails naming the variable rather than running without a durable
-      sink.
+      The postgres sink reads its connection string from the environment
+      variable dsn-env names, defaulting to NAUTILUS_ALARM_DB_URL and falling
+      back to DATABASE_URL.
     source: "#the-journal"
     tests:
       - go ./internal/project TestPostgresJournalNeedsAnEnvironmentVariable
+    partial: true
+    note: >-
+      Only the both-unset case is tested (the error names
+      NAUTILUS_ALARM_DB_URL). That a set dsn-env, the default or the
+      DATABASE_URL fallback is actually read is not asserted.
 
   - id: ALM-038
     claim: >-
-      Notifiers (log, webhook with headers) receive each event, run off the
-      scan goroutine, and a webhook retries on failure and reports a final
-      non-success status.
+      Notifiers (log, and webhook with a header) receive each event and run off
+      the scan goroutine.
     source: "#the-journal"
     tests:
-      - go ./alarm TestLogNotifier
       - go ./alarm TestWebhookPostsTheEventAsJSON
-      - go ./alarm TestWebhookRetriesThenSucceeds
-      - go ./alarm TestWebhookGivesUpAndReportsTheStatus
       - go ./alarm TestEngineNotifiesOffTheScanGoroutine
+    partial: true
+    note: >-
+      Asserted: the engine hands each event to a notifier, and the webhook
+      posts it with a custom header. Not asserted: running off the scan
+      goroutine (the test passes with synchronous delivery too), the log
+      notifier's output (TestLogNotifier logs to io.Discard and checks only
+      for no error, so it was removed), and header-env. Retry and
+      final-status behaviour are not page claims; their tests were removed.
 
   - id: ALM-039
     claim: >-
@@ -380,6 +422,11 @@ claims:
     source: "#where-the-engine-runs"
     tests:
       - go ./internal/project TestEngineEvaluatesOnScan
+    partial: true
+    note: >-
+      One scan is shown to be enough (the bit the logic sets in that scan is
+      seen); that evaluation happens exactly once per main scan is not
+      asserted.
 
   - id: ALM-041
     claim: A standby never evaluates alarms because it skips Scan.
@@ -392,11 +439,11 @@ claims:
   - id: ALM-042
     claim: >-
       The same engine works on a single controller against a BOOL its own
-      ladder computes, on a one-box memory-driver project.
+      logic computes, on a one-box memory-driver project.
     source: "#where-the-engine-runs"
     tests:
       - naut examples/lift-station a shelved high-level alarm is silent and always expires
-      - go ./acceptance TestLiveSealInAndAlarm
+    note: TestLiveSealInAndAlarm removed (it checks a tag on a fake live controller; no alarm engine is involved).
 
   - id: ALM-043
     claim: >-
@@ -409,18 +456,22 @@ claims:
 
   - id: ALM-044
     claim: >-
-      Acceptance tests can assert alarm state in virtual time with the alarms
-      matchers (active, unacked, shelved, state, priority, journal) and the
-      ack, shelve and unshelve verbs, and alarm state does not leak between
-      tests.
+      Acceptance tests assert alarm state with the alarms matchers (active,
+      unacked, shelved, state, priority, journal) and drive it with the ack,
+      shelve and unshelve verbs, in virtual time so an on-delay is exact.
     source: "#testing"
     tests:
       - go ./acceptance TestAlarmOnDelayWalksInVirtualTime
       - go ./acceptance TestAlarmAckVerb
       - go ./acceptance TestAlarmShelveAndUnshelveVerbs
-      - go ./acceptance TestAlarmStateDoesNotLeakBetweenTests
       - go ./acceptance TestAlarmFailureNamesWhatItSaw
-      - go ./acceptance TestAlarmKeysWithoutAnEngineAreAnError
+    partial: true
+    note: >-
+      Only the active matcher is shown to fail on a wrong expectation
+      (TestAlarmFailureNamesWhatItSaw). unacked, shelved, state, priority and
+      journal appear only in suites that must pass, so a matcher that ignored
+      its argument would go unnoticed. The no-leak and no-engine error cases
+      are not page claims; their tests were removed.
 
   - id: ALM-045
     claim: >-

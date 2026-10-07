@@ -4,13 +4,12 @@ prefix: LGX
 claims:
   - id: LGX-001
     claim: >-
-      `naut logix import` reads an L5X export on any OS with no Rockwell
-      software and writes a tag file and an IEC types file that, together
-      with a program that names them, check clean as a nautilus project.
+      `naut logix import` reads an L5X export directly, on any OS with no
+      Rockwell software, and turns its UDTs into IEC types and its tags into
+      a tag file.
     source: "#half-one-reading-l5x--no-rockwell-software"
     tests:
       - go ./cmd/naut TestLogixImportProducesACheckableProject
-      - go ./lang/l5x TestParseControllerExport
 
   - id: LGX-002
     claim: >-
@@ -23,13 +22,16 @@ claims:
 
   - id: LGX-003
     claim: >-
-      Import takes controller-scope tags by default and reaches into
-      program-scope tags only when `--scope` asks for them; an unknown scope
-      is an error rather than an empty file.
+      `naut logix import --scope '*'` imports program-scope tags along with
+      the controller-scope ones.
     source: "#tags-arrive-documented"
     tests:
-      - go ./cmd/naut TestLogixImportRecoversDescriptions
       - go ./lang/l5x TestTagsScopes
+    partial: true
+    note: >-
+      Scope selection is asserted on the library (TagsYAML with Scope "*");
+      the CLI test that passes `--scope '*'` binds only controller-scope
+      tags, so a CLI that dropped the flag would not be caught.
 
   - id: LGX-004
     claim: >-
@@ -39,54 +41,46 @@ claims:
     source: "#tags-arrive-documented"
     tests:
       - go ./lang/l5x TestTypesRendersUserUDTs
-      - go ./lang/l5x TestArrayOfStructuresDecodes
       - go ./cmd/naut TestLogixImportProducesACheckableProject
 
   - id: LGX-005
     claim: >-
-      `naut logix graph` turns an RLL routine into the same ladder model
-      `naut ld graph` emits for a `.ld` file (contacts, nested branches,
-      in-rung blocks, coils), and reports an unknown routine as a JSON error.
+      An L5X RLL routine renders as the same ladder model as nautilus `.ld`
+      source: contacts, branches, in-rung blocks and coils.
     source: "#ladder-in-your-editor"
     tests:
       - go ./cmd/naut TestLogixGraphEmitsTheLadderModel
-      - go ./cmd/naut TestLogixGraphReportsErrorsAsJSON
       - go ./lang/l5x TestLadderContactsAndCoils
       - go ./lang/l5x TestLadderNestedBranchesAndBlocks
 
   - id: LGX-006
     claim: >-
       An instruction nautilus has never seen still draws, as a box with its
-      mnemonic and operands verbatim; a rung with no output is still a rung.
+      operands.
     source: "#ladder-in-your-editor"
     tests:
       - go ./lang/l5x TestLadderUnknownInstructionsDraw
 
   - id: LGX-007
     claim: >-
-      `naut logix normalize` pins the volatile export attributes (ExportDate
-      and the other attributes that move on every export) and is idempotent;
-      attribute line-wrapping and the comm path do not make two exports of
-      unchanged code differ.
+      Normalizing pins `ExportDate` and the other attributes that move on
+      every export, so two exports of unchanged code compare equal.
     source: "#drift-detection"
     tests:
       - go ./lang/l5x TestNormalizePinsTheVolatileAttributes
-      - go ./lang/l5x TestNormalizeIsIdempotent
       - go ./lang/l5x TestNormalizeDropsTheCommPath
       - go ./lang/l5x TestNormalizeIgnoresAttributeWrapping
       - go ./cmd/naut TestLogixNormalizeWritesAPinnedExport
 
   - id: LGX-008
     claim: >-
-      `naut logix normalize --check` exits 0 when two exports are the same
-      project and 1 when a real change (a setpoint, a rung) separates them;
-      normalization never swallows a real change.
+      `naut logix normalize --check` compares two exports after normalizing:
+      exports of unchanged code compare equal, and a real change still shows
+      as drift.
     source: "#drift-detection"
     tests:
       - go ./cmd/naut TestLogixNormalizeChecksDrift
       - go ./lang/l5x TestNormalizeKeepsARealChange
-      - go ./lang/l5x TestLogicIgnoresValues
-      - go ./lang/l5x TestLogicDiffNamesTheChange
 
   - id: LGX-009
     claim: >-
@@ -98,7 +92,6 @@ claims:
     source: "#live-values-from-a-running-controller"
     tests:
       - go ./logix/facade TestLiveValuesFromTheController
-      - go ./logix/facade TestDriverStatusInTheFrame
 
   - id: LGX-010
     claim: >-
@@ -123,21 +116,33 @@ claims:
     source: "#live-values-from-a-running-controller"
     tests:
       - go ./logix/facade TestWritesReachTheController
+    partial: true
+    note: >-
+      That the write reaches the controller is asserted. The frame is checked
+      only after a write whose read-back equals the value sent, so a frame
+      that echoed the request would pass too: "the value read back, not the
+      value sent" is not distinguished.
 
   - id: LGX-013
     claim: >-
-      A write names one value (`P101.Run`); naming a whole UDT, a missing
-      member, an unknown tag or a wrongly typed value is refused with a
-      message that says why.
+      A write names one value, so a member such as `P101.Run` can be written
+      but a whole UDT cannot; a tag the controller refuses to write returns
+      its refusal.
     source: "#live-values-from-a-running-controller"
     tests:
+      - go ./logix/facade TestWritesReachTheController
       - go ./logix/facade TestWritesThatCannotWork
+    partial: true
+    note: >-
+      Member writes and the whole-UDT refusal are asserted. Every refusal
+      tested comes from the facade itself; a refusal coming back from the
+      controller is never exercised.
 
   - id: LGX-014
     claim: >-
-      Program commands against a served Logix controller (Diff with
-      Controller, Download, rollback, activate) are refused with a message
-      that points at `naut logix drift` or `naut logix push`.
+      Against a served Logix controller, *Diff with Controller* and
+      *Download* explain that there is no nautilus source and point at
+      `naut logix drift` and `naut logix push`.
     source: "#live-values-from-a-running-controller"
     tests:
       - go ./logix/facade TestProgramEndpoints
@@ -153,40 +158,48 @@ claims:
 
   - id: LGX-016
     claim: >-
-      `naut logix probe` reports each SDK prerequisite as its own gate and
-      exits non-zero when the SDK is unusable, while still printing the
-      gates.
+      `naut logix probe` reports each SDK prerequisite (FactoryTalk token,
+      FlexNet feature, CodeMeter entitlement) as its own gate, so one
+      failure does not mask the rest.
     source: "#check-it-before-you-trust-it"
     tests:
-      - go ./cmd/naut TestLogixProbeExitCodeFollowsUsability
+      - go ./cmd/naut TestLogixProbePrintsTheRemedyForAFailingGate
       - go ./logix/logixd TestAgentProbeReportsGates
     partial: true
-    note: Exit-code behaviour is CI-tested against a fake agent; the real multi-gate probe is verified on hardware only.
+    note: >-
+      CI shows the CLI printing a passing and a failing gate on separate
+      lines against a fake agent; the real gates are verified on hardware
+      only, and that one failing gate does not mask another is not asserted.
 
   - id: LGX-017
     claim: >-
-      A failing probe gate prints its remedy underneath; a passing gate
-      carries no advice.
+      A probe gate that fails prints what to do about it, underneath the
+      failure.
     source: "#when-something-isnt-working"
     tests:
       - go ./cmd/naut TestLogixProbePrintsTheRemedyForAFailingGate
+    partial: true
+    note: >-
+      The remedy text is asserted to appear in the output; its position
+      under the failing gate is not.
 
   - id: LGX-018
     claim: >-
-      An unreachable `logixd` is a fatal error whose message names the URL
-      nautilus tried; an unauthorized one is reported as such.
+      An agent that is not running is reported as `logixd: unreachable ...
+      connection refused`; a wrong bearer token as `logixd: unauthorized` /
+      HTTP 401.
     source: "#when-something-isnt-working"
     tests:
-      - go ./cmd/naut TestLogixAgentReportsAnUnreachableAgentHelpfully
       - go ./logix/logixd TestClientUnreachableIsFatalAndNamesTheURL
-      - go ./logix/logixd TestClientClassifiesErrors
     partial: true
-    note: The 401 "unauthorized" wording from the page is not asserted; error kinds are.
+    note: >-
+      The test asserts an unreachable agent is an error naming the URL, not
+      the `logixd: unreachable` wording; the `logixd: unauthorized` reply
+      comes from the C# agent and has no CI test.
 
   - id: LGX-019
     claim: >-
-      `naut logix convert` stages the input to the agent, converts between
-      ACD and L5X in either direction, and fetches the result.
+      `naut logix convert` converts ACD to L5X and L5X to ACD.
     source: "#what-you-can-then-do"
     tests:
       - go ./cmd/naut TestLogixConvertStagesAndFetches
@@ -196,14 +209,13 @@ claims:
 
   - id: LGX-020
     claim: >-
-      `naut logix build` compiles a project through the SDK without a
-      controller, and rejects an unknown build target.
+      `naut logix build` compiles a project through the SDK, with no
+      controller.
     source: "#what-you-can-then-do"
     tests:
-      - go ./cmd/naut TestLogixBuildRejectsAnUnknownTarget
       - go ./logix/logixd TestSDKBuild
     partial: true
-    note: Argument handling is CI-tested; the build itself is verified on hardware only.
+    note: Verified on hardware only (needs NAUTILUS_LOGIXD_URL); skipped in CI.
 
   - id: LGX-021
     claim: >-
@@ -211,10 +223,11 @@ claims:
       1 on a mismatch, so it works as a CI gate; it requests the same export
       kind (detailed or basic) as the repo file.
     source: "#online-edits"
-    tests:
-      - go ./logix/logixd TestConvertSendsDetailedFlag
-    partial: true
-    note: Only the detailed-flag plumbing is tested. The drift verb's exit code and kind matching have no test (logix drift is hardware only).
+    tests: []
+    note: >-
+      No test runs `naut logix drift`. TestConvertSendsDetailedFlag was
+      listed, but it only checks the client puts a caller-chosen flag on a
+      convert request; it would pass if drift ignored the repo file's kind.
 
   - id: LGX-022
     claim: >-
@@ -226,23 +239,23 @@ claims:
       - go ./logix/logixd TestParseLinxConfigFindsTheController
       - go ./logix/logixd TestAgentCommPaths
     partial: true
-    note: Parsing the Linx configuration is CI-tested; the live agent listing is verified on hardware only.
+    note: >-
+      Parsing the Linx configuration (comm path and controller name) is
+      CI-tested; the catalog number is not asserted there, and the live
+      agent listing is verified on hardware only.
 
   - id: LGX-023
     claim: >-
       `naut logix push --accept` or `--finalize` without `--comm-path` is
-      refused, as is giving both; a push needs a program and a routine.
+      refused rather than landing as unaccepted pending edits.
     source: "#online-edits"
     tests:
       - go ./cmd/naut TestLogixPushRefusesOnlineOptionsWithoutACommPath
-      - go ./cmd/naut TestLogixPushRefusesBothOnlineOptions
-      - go ./cmd/naut TestLogixPushRequiresProgramAndRoutine
 
   - id: LGX-024
     claim: >-
-      `--finalize`, `--accept` and neither flag send FinalizeEdits,
-      AcceptEdits and LeaveEdits to the SDK respectively, with the chosen
-      position, replace count and routine path.
+      `--accept` sends the change to the controller; `--finalize` also
+      assembles it if the controller is in Run.
     source: "#online-edits"
     tests:
       - go ./cmd/naut TestLogixPushSendsTheChosenOnlineOption
@@ -255,30 +268,27 @@ claims:
     claim: >-
       An online edit takes no project file: it uploads the program the
       controller is running, imports the rungs into that, and sends it back.
-      An offline import does not touch the controller.
     source: "#online-edits"
     tests:
       - go ./cmd/naut TestLogixPushSendsTheChosenOnlineOption
       - go ./logix/logixd TestSDKUploadFromController
     partial: true
-    note: The upload-from-controller flow is CI-tested against a fake agent; the claim that a disk project cannot go online is verified on hardware only.
-
-  - id: LGX-026
-    claim: >-
-      `naut logix download` refuses without `--yes` and without
-      `--comm-path`, and the refusal never reaches the agent.
-    source: "#what-nautilus-will-not-pretend-to-do"
-    tests:
-      - go ./cmd/naut TestLogixDownloadRefusesWithoutConfirmation
-      - go ./cmd/naut TestLogixDownloadRequiresACommPath
+    note: >-
+      CI asserts, against a fake agent, that an online push takes one file
+      and uploads from the given comm path; the upload on a real controller
+      is hardware only, and sending the result back is not asserted.
 
   - id: LGX-027
     claim: >-
-      A download never changes the controller mode unless explicitly asked:
-      `ensureProgramMode` is sent exactly as the caller set it.
+      `download` never changes the controller mode unless explicitly asked.
     source: "#security"
     tests:
       - go ./logix/logixd TestDownloadSendsEnsureProgramModeExplicitly
+    partial: true
+    note: >-
+      Only the Go client is tested: it forwards the caller's
+      ensureProgramMode unchanged. That the agent leaves the mode alone when
+      not asked is in the C# agent, which has no automated tests.
 
   - id: LGX-028
     claim: >-
@@ -312,7 +322,10 @@ claims:
     tests:
       - go ./logix/logixd TestAgentRejectsMissingToken
     partial: true
-    note: Verified on hardware only (needs a running agent with a token); skipped in CI.
+    note: >-
+      Verified on hardware only (needs a running agent with a token);
+      skipped in CI. Only a wrong token is sent; a request with no token at
+      all is not tested.
 
   - id: LGX-032
     claim: >-
@@ -331,6 +344,5 @@ claims:
     source: "#when-something-isnt-working"
     tests:
       - go ./logix/writer TestMnemonicsAreCorpusVocabulary
-      - go ./logix/writer TestNeutralTextSpelling
     partial: true
     note: Checked against a vocabulary of surveyed exports, not against the SDK importer (SDK acceptance is verified on hardware only).

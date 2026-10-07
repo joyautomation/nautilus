@@ -6,15 +6,18 @@ claims:
     claim: >-
       The snmp, redfish and prometheus drivers deliver one shared UDT set
       (Server, Fan, PSU, TempSensor, Switch, SwitchPort, PDU, PDUOutlet,
-      UPS) whose rendered ST `TYPE`s compile, whose slot order matches the
-      delivered struct values, and whose member names are valid unique
-      identifiers.
+      UPS), so a program compiled against those types reads the values the
+      drivers deliver.
     source: "#"
     tests:
       - go ./hw TestTypesRenderAndCompile
-      - go ./hw TestTypesWellFormed
-      - go ./hw TestStructDefIdentity
       - go ./hw TestBaseThroughRuntime
+    partial: true
+    note: >-
+      Every type in the hw table compiles slot for slot and a driver-built
+      SwitchPort is read by a compiled program; that the table holds exactly
+      the nine UDTs the page names is not asserted, and the snmp-vs-prometheus
+      render comparison leaves redfish out.
   - id: IT-002
     claim: >-
       The alarm members the page lists (`Fault`, `Warning`, `High`,
@@ -34,7 +37,6 @@ claims:
       `NODE1_Fan2 : Fan`, `NODE1_Temp_Inlet : TempSensor`), not arrays.
     source: "#"
     tests:
-      - go ./snmp/codegen TestManifestRoundTrips
       - go ./redfish/codegen TestImportParts
       - go ./prom/codegen TestGenerateNodeGolden
     partial: true
@@ -53,16 +55,28 @@ claims:
       - go ./cmd/naut TestPrometheusImportIsByteIdenticalOnRerun
       - go ./hw TestTypesRenderAndCompile
       - go ./prom TestForeignImportByteIdenticalOnRerun
+    partial: true
+    note: >-
+      SNMP and Redfish golden-compare and re-run-check all three files;
+      Prometheus's `hw_types.st` is never golden-compared or re-run-checked
+      (only parsed). "All three write the same body" is asserted for the
+      snmp and prometheus renderings (and snmp across two devices); the
+      Redfish importer's body is never compared with the others'.
   - id: IT-005
     claim: >-
-      The generated manifest loads through the core, and every binding the
-      importer writes resolves on the device it came from.
+      The generated manifest is explicit: every member of every tag names
+      its OID, its Redfish resource and path, or its metric selector.
     source: "#import-then-run"
     tests:
-      - go ./cmd/naut TestSnmpImportLoadsThroughCore
-      - go ./cmd/naut TestSnmpTypesCompile
       - go ./redfish/codegen TestGeneratedBindingsResolve
       - go ./prom/codegen TestGenerateNodeEveryBindingResolves
+    partial: true
+    note: >-
+      The Redfish and Prometheus tests assert every generated binding
+      resolves on the device it came from; no test asserts that every
+      member of every tag is bound, and SNMP is not checked (the two SNMP
+      tests listed before only loaded the manifest and compiled
+      hw_types.st, which says nothing about explicit bindings).
   - id: IT-006
     claim: >-
       An import from a recording gives the same bytes as from the live
@@ -73,15 +87,6 @@ claims:
       - go ./redfish/codegen TestLiveImportMatchesRecording
       - go ./cmd/naut TestRedfishLiveImportAndRecord
       - go ./prom TestForeignImportByteIdenticalOnRerun
-  - id: IT-007
-    claim: >-
-      The manifest is explicit and decoded strictly: a misspelled key is an
-      error (with a line), in all three manifests.
-    source: "#import-then-run"
-    tests:
-      - go ./snmp TestManifestRejectsUnknownKeys
-      - go ./redfish TestManifestStrictKeys
-      - go ./prom TestManifestUnknownKey
   - id: IT-008
     claim: >-
       `manifest:` is the only required key and `New` never dials, so check
@@ -105,17 +110,30 @@ claims:
     tests:
       - go ./hw TestBaseClassAssignments
       - go ./hw TestBaseDeliversDerivesAndReports
+    partial: true
+    note: >-
+      Class membership from glob assignments is asserted in `hw` with the
+      assignments set directly; the `scan-classes` / `tag-classes` keys in
+      `nautilus.yaml` reaching the snmp/redfish/prometheus drivers, and the
+      slow class actually polling at its own rate, are not asserted.
   - id: IT-010
     claim: >-
       Credentials are never in the manifest, the tag file, a log line or an
-      error: a source names an env variable or a file, a secret written into
-      a manifest never appears in an error message, and no message carries
-      the value.
+      error: a source names the variable (`community-env`, `auth-env`,
+      `priv-env`, `password-env`) or the file (`community-file`,
+      `password-file`) the driver reads where it runs.
     source: "#credentials"
     tests:
       - go ./snmp TestCredentials
       - go ./redfish TestManifestNeverEchoesSecrets
-      - go ./prom TestManifestCredentialRules
+    partial: true
+    note: >-
+      SNMP resolves community/priv from an env variable and a file and its
+      warnings never carry the value; Redfish refuses a password in the host
+      URL without echoing it. No test scans log lines or the generated tag
+      file for a secret, and Redfish `password-file` is not exercised here.
+      TestManifestCredentialRules was removed: it only checks that bearer env
+      and file are not both set.
   - id: IT-011
     claim: >-
       An unset credential variable or unreadable file is a warning at
@@ -134,14 +152,13 @@ claims:
       them is not tested.
   - id: IT-012
     claim: >-
-      SNMPv3 with SHA-256 and AES-128 interoperates, MD5 and DES are
-      accepted with a warning, and every privacy flavour (including the two
-      incompatible "AES-256" algorithms) interoperates with a foreign
-      agent.
+      SNMPv3 with SHA-256 and AES-128 works, and MD5 and DES are accepted
+      with a warning.
     source: "#credentials"
     tests:
       - go ./snmp TestCredentials
-      - go ./snmp TestForeignPrivacyFlavours
+      - go ./snmp TestForeignDecodeAgreement
+      - go ./snmp TestForeignPrivacyFlavours/des
   - id: IT-013
     claim: >-
       `<id>__Online` is true while the source answered within `stale-after`;
@@ -175,7 +192,6 @@ claims:
     source: "#quality-rates-and-companions"
     tests:
       - naut examples/it-rack a port that is enabled but has no link alarms after 15 s, and is suppressed while the switch is dark
-      - go ./internal/project TestRulesExpandAgainstComposedTags
   - id: IT-016
     claim: >-
       `InBps`, `OutBps` and `ErrorRate` are per-second rates of wire
@@ -221,13 +237,19 @@ claims:
       the 1 s to 60 s ladder and the `/api/drivers` rendering are not.
   - id: IT-019
     claim: >-
-      A wrong SNMPv3 key or user reads as `wrong credentials` (one round
-      trip, via the agent's Report) rather than a timeout; a wrong v2c
-      community is a timeout whose message says what that means.
+      A wrong SNMPv3 key reads as `wrong credentials`, not as a timeout.
     source: "#quality-rates-and-companions"
     tests:
-      - go ./snmp TestForeignWrongCredentials
-      - go ./snmp TestDriverWrongCommunity
+      - go ./snmp TestForeignWrongCredentials/v3 wrong auth key
+      - go ./snmp TestForeignWrongCredentials/v3 wrong priv key
+    partial: true
+    note: >-
+      The tests assert a wrong v3 auth or priv key puts a credentials
+      diagnosis (not "no answer within") in the source's LastError. The
+      string the page quotes, `wrong credentials`, does not exist in the
+      code: the driver says "authentication failed" / "privacy failed", and
+      the test checks those. The `/api/drivers` rendering is not asserted.
+      (TestDriverWrongCommunity removed: the v2c case is not on the page.)
   - id: IT-020
     claim: >-
       A rule on `(type, member)` expands to every matching tag with
@@ -272,7 +294,7 @@ claims:
     claim: >-
       The first value seen after a start is a baseline that is never
       written, so `init: false` on an outlet command cannot switch the
-      outlet at boot; a change is sent once even when handed again.
+      outlet off at boot.
     source: "#writes-are-off"
     tests:
       - go ./hw TestBaseWrites
@@ -305,18 +327,23 @@ claims:
   - id: IT-027
     claim: >-
       `naut snmp serve`, `naut redfish serve` and `naut prometheus serve`
-      stand in for a device from a recording: the served values are the
-      recorded ones inverted through each binding, `--ramp` drifts them,
-      and the served surface matches the walks.
+      stand in for the device from its recording (a walk, a mockup, a
+      `.prom` file), and `--ramp` drifts the SNMP and exporter values.
     source: "#the-bench-recordings-and-stand-ins"
     tests:
-      - go ./snmp TestServeInvertsEveryBinding
-      - go ./snmp TestPlantDrivesTheDriver
-      - go ./redfish TestServeInvertsEveryBinding
-      - go ./redfish TestPlantDrivesTheDriver
+      - go ./cmd/naut TestSnmpLiveEqualsRecording
       - go ./cmd/naut TestSnmpServeRamp
+      - go ./cmd/naut TestRedfishLiveImportAndRecord
       - go ./cmd/naut TestPrometheusServeAnswersHTTP
-      - go ./snmp TestSimDataMatchesWalks
+    partial: true
+    note: >-
+      SNMP and Redfish serve are shown to stand in (a live import against
+      them equals the recording's import), and SNMP `--ramp` moves counters.
+      The Prometheus stand-in is tested through the serve package only (it
+      answers with the seeded body), and its `--ramp` is not asserted. The
+      plant/inversion and snmpsim-fixture tests listed before were removed:
+      they test the plant-feed path and fixture drift, not what the page
+      says.
   - id: IT-028
     claim: >-
       The bench stand-ins listen on `127.0.0.1:1161` (SNMP v2c),
@@ -410,8 +437,16 @@ claims:
       - go ./prom TestForeignCpuMemPollAndRate
       - go ./prom TestForeignMetricRenamedAway
       - go ./prom/codegen TestGenerateNodeAgainstRealScrape
-      - go ./prom/codegen TestGenerateNodeTempCollision
+      - go ./prom/codegen TestGenerateNodeGolden
       - go ./hw TestExprEval
+    partial: true
+    note: >-
+      Parsing a real scrape, a missing metric marking the tag Bad, CpuPct
+      and MemPct from expressions, and hwmon fans/temps in the generated
+      manifest (golden) are asserted. RootDiskPct and uptime values are never
+      checked (the golden shows the uptime expression generated; RootDiskPct
+      is not in the fixture). TestGenerateNodeTempCollision removed: it tests
+      a tag-name collision error, not the profile.
   - id: IT-035
     claim: >-
       The prometheus driver scrapes the exporter directly, with no

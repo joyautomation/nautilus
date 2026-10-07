@@ -21,8 +21,6 @@ claims:
     tests:
       - go ./lang/conformance TestConformance/ld-coils/+ contact passes one scan on the rise, - contact one scan on the fall
       - go ./lang/ld TestEdgeContactOneShot
-      - go ./lang/ld TestEdgeContactLowersToST
-
   - id: LD-003
     claim: >-
       A parallel branch [ a | b ] is the OR of its legs; each leg is a series
@@ -52,11 +50,10 @@ claims:
       variable.
     source: "#a-rung-in-text"
     tests:
-      - go ./lang/ld TestLadderOutputBinding
-      - go ./lang/ld TestInsertBlockCapturingOutputs
-      - go ./lang/ld TestLadderFunctionBlockRuns
       - go ./lang/ld TestTranspileRungs
-
+      - go ./lang/ld TestLadderFunctionBlockRuns
+      - go ./lang/ld TestLadderOutputBinding
+      - go ./lang/conformance TestConformance/ld-coils/FB-only rung (no coil) still runs, its outputs read elsewhere
   - id: LD-006
     claim: >-
       An output coil ( Tag ) assigns Tag the rung condition every scan; a set
@@ -85,21 +82,23 @@ claims:
     source: "#a-rung-in-text"
     tests:
       - go ./lang/ld TestTranspileRungs
-      - go ./lang/ld TestBitAccessInLadder
       - go ./lang/ld TestFBInstanceArrayInLadder
-    partial: true
-    note: Array elements are tested; no ladder test with a struct-member (dotted) contact or coil.
-
+      - go ./lang/ld TestLadderFunctionBlockInOutStructPin
+    note: >-
+      Array-element contact and coil (Levels[1] ( Levels[2] )) and an
+      instance-array element; struct members as contact and coil
+      (M.Cmd ( M.Running )) are run in the VAR_IN_OUT test.
+      TestBitAccessInLadder was dropped: integer bit access is a different
+      feature.
   - id: LD-009
     claim: >-
       A rung header carries a (* ... *) comment, and full-line // comments
-      inside the block are diagram notes; neither changes behaviour.
+      inside the block are diagram notes.
     source: "#a-rung-in-text"
     tests:
       - go ./lang/ld TestLadderComments
       - go ./lang/ld TestRungHeaderMultilineComment
       - go ./lang/ld TestRungHeaderCommentWithAsterisks
-
   - id: LD-010
     claim: >-
       Series elements AND together and branch legs OR, so
@@ -125,10 +124,14 @@ claims:
       Several coils on one rung share one condition, evaluated once and
       fanned out.
     source: "#how-a-rung-evaluates"
-    tests:
-      - go ./lang/ld TestTranspileRungs
-    note: Asserts the single w_annunciate wire feeding both coils at the transpile level.
-
+    tests: []
+    note: >-
+      Not covered, and not true as built. TestTranspileRungs (dropped) only
+      shows the FBD wire w_annunciate feeding both coils; FBD inlines a wire
+      at every read, so the ST evaluates the condition once per coil. A rung
+      /Lamp ( Lamp ) ( Horn ) lowers to Lamp := NOT (Lamp); Horn := NOT (Lamp);
+      so Horn sees the Lamp the first coil just wrote, not the shared
+      condition.
   - id: LD-013
     claim: A rung with only a coil is driven by the rail, so ( AlwaysOn ) assigns TRUE.
     source: "#how-a-rung-evaluates"
@@ -164,13 +167,20 @@ claims:
       CD, R_TRIG/F_TRIG CLK, SR S1/Q1, RS S/Q1.
     source: "#how-a-rung-evaluates"
     tests:
-      - go ./lang/ld TestCatalogListsStandardThenLibraryBlocks
-      - go ./lang/ld TestBlockPins
+      - go ./lang/conformance TestConformance/fb-ton
+      - go ./lang/conformance TestConformance/fb-tof
+      - go ./lang/conformance TestConformance/fb-tp
+      - go ./lang/conformance TestConformance/fb-ctd
+      - go ./lang/conformance TestConformance/fb-f-trig
+      - go ./lang/conformance TestConformance/fb-sr
+      - go ./lang/conformance TestConformance/fb-rs
+      - go ./lang/conformance TestConformance/ld-coils/FB-only rung (no coil) still runs, its outputs read elsewhere
     partial: true
     note: >-
-      A palette test checks that standard blocks carry power pins; the exact
-      per-block pin names are not asserted.
-
+      Each fixture's ladder program drives the block from rung power and
+      reads Q/Q1 as the coil, run against ST; R_TRIG has no ladder fixture.
+      The palette/editor tests (TestCatalogListsStandardThenLibraryBlocks,
+      TestBlockPins) were dropped.
   - id: LD-017
     claim: >-
       Passing the power pin yourself (t1:TON(IN := x)) is an error, because
@@ -187,9 +197,9 @@ claims:
     source: "#how-a-rung-evaluates"
     tests:
       - go ./lang/ld TestLadderOutputBinding
+      - go ./lang/conformance TestConformance/ld-coils/FB-only rung (no coil) still runs, its outputs read elsewhere
     partial: true
-    note: The binding is tested; no test asserts that a coil on a non-BOOL target is rejected.
-
+    note: The binding is tested (a counter's CV is run); no test asserts that a coil on a non-BOOL target is rejected.
   - id: LD-019
     claim: >-
       Any instance output is readable as inst.Pin anywhere, including as a
@@ -217,10 +227,12 @@ claims:
       .st files, and arrays/structs through accessors all work in ladder.
     source: "#types-functions-and-blocks"
     tests:
+      - go ./lang/ld TestTranspileRungs
       - go ./lang/ld TestLadderCompilesEndToEnd
-      - go ./lang/ld TestLadderFunctionBlockFromST
+      - go ./lang/conformance TestConformance/st-case-insensitive/a FUNCTION called in another casing computes its result
+      - go ./internal/project TestLadderLibraryProjectRuns
       - go ./lang/ld TestFBInstanceArrayInLadder
-
+      - go ./lang/ld TestLadderFunctionBlockInOutStructPin
   - id: LD-022
     claim: >-
       A user block drops into a rung like a TON: power lands on EN if declared,
@@ -229,7 +241,13 @@ claims:
     source: "#types-functions-and-blocks"
     tests:
       - go ./lang/ld TestLadderFunctionBlockPowerPins
-
+      - go ./internal/project TestLadderLibraryProjectRuns
+    partial: true
+    note: >-
+      Power onto EN is run (the ST library's Scale), onto the first BOOL input
+      and out of the first BOOL output is asserted. Power continuing from ENO
+      is not tested, nor skipping a first BOOL input bound by name to land on
+      the next one.
   - id: LD-023
     claim: >-
       Instance state persists across scans, and an online edit carries it by
@@ -253,10 +271,10 @@ claims:
     tests:
       - go ./lang/ld TestLadderFunctionBlockLowers
       - go ./lang/ld TestLadderFunctionBlockRuns
+      - go ./internal/project TestLadderLibraryProjectRuns
+      - naut testdata/projects/ladder-subroutines each instance seals in and drops out on its own
+      - naut testdata/projects/ladder-subroutines each instance's TON is its own retained state
       - go ./lang/ld TestLadderFunctionBlockInOutStructPin
-      - go ./lang/ld TestLadderFunctionBlockNested
-      - go ./lang/ld TestLibraryDocCommentResolvesAsLibrary
-
   - id: LD-025
     claim: >-
       naut check composes the line maps back through both hops, so a type
@@ -264,12 +282,11 @@ claims:
     source: "#tooling"
     tests:
       - go ./lang/ld TestLineMap
-      - go ./lang/ld TestRungErrors
     partial: true
     note: >-
       The line map is tested at the transpile level; no end-to-end check that
-      naut check prints the RUNG line for a type error.
-
+      naut check prints the RUNG line for a type error. TestRungErrors
+      (dropped) covers structural rung errors, not mapped type errors.
   - id: LD-026
     claim: >-
       Online edits treat .ld as the program source; download, diff against the

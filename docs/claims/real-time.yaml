@@ -2,16 +2,21 @@ page: website/src/content/docs/guides/real-time.md
 title: Scan timing and real-time
 prefix: RT
 claims:
+
   - id: RT-001
     claim: >-
-      Lateness is counted per task, cumulative since start, as the time from a
+      Lateness is kept per task, cumulative since start, as the time from a
       slot's due time to the scan actually starting; late counts scans that
-      started more than the threshold after their slot, and an early sample
-      counts as a scan, not as late.
+      started more than the threshold after their slot.
     source: "#what-the-diagnostics-measure"
     tests:
       - go ./runtime TestLateTrackerCountsAndPercentiles
       - go ./runtime TestLateUs
+      - go ./runtime TestLatenessUnderVirtualClock
+    note: >-
+      "An early sample counts as a scan, not as late" dropped (not on the
+      page). TestLatenessUnderVirtualClock added for the per-task clause: main
+      and the fast task carry separate lateness blocks.
 
   - id: RT-002
     claim: >-
@@ -35,62 +40,61 @@ claims:
 
   - id: RT-004
     claim: >-
-      p50, p99 and p999 are bucket upper edges at most 3 percent above the
-      true value (never below), and empty trackers report zeros.
+      p50, p99 and p999 are bucket upper edges, at most 3 percent above the
+      true value.
     source: "#what-the-diagnostics-measure"
     tests:
       - go ./runtime TestLateTrackerCountsAndPercentiles
-      - go ./runtime TestLateTrackerEmpty
       - go ./runtime TestFineBucketsAreMonotonic
       - go ./runtime TestFineResolution
+    partial: true
+    note: >-
+      The tests bound the error at 1/32 (3.125 %), not the page's 3 %: with
+      fineSub = 32 the widest bucket is 3.125 % of its lower edge, so the
+      page's figure is slightly optimistic. "Empty trackers report zeros"
+      dropped (not on the page), with TestLateTrackerEmpty.
 
   - id: RT-005
-    claim: >-
-      The lateness histogram is 1-2-5 log spaced from 1 µs to 100 ms
-      (histogram of 17 buckets over 16 edges in bucketsUs).
+    claim: The lateness histogram is 1-2-5 log-spaced from 1 µs to 100 ms.
     source: "#what-the-diagnostics-measure"
     tests:
-      - go ./runtime TestLateTrackerCountsAndPercentiles
       - go ./runtime TestCoarseIndex
+      - go ./runtime TestLateTrackerCountsAndPercentiles
     partial: true
-    note: Asserts the snapshot has 17 buckets and 16 edges and the bucket indexes; the exact 1-2-5 edge values are not listed.
-
-  - id: RT-006
-    claim: >-
-      Under a virtual clock (acceptance tests) lateness stays at zero.
-    source: "#what-the-diagnostics-measure"
-    tests:
-      - go ./runtime TestLatenessUnderVirtualClock
+    note: >-
+      Bucket indexes pin the edges at 1, 2, 5, 1000 and 100000 µs and the
+      count between them; the other edge values, and the bucketsUs list
+      reported in the snapshot, are not listed.
 
   - id: RT-007
     claim: >-
-      The scan block reports scan time (lastMs, min and max, histogram, phase
-      bar) separately from lateness, per task.
+      The scan block reports scan time (lastMs, minMs/maxMs, a 2 ms histogram,
+      the phase bar) separately from lateness.
     source: "#what-the-diagnostics-measure"
     tests:
       - go ./runtime TestScanStatsDiagnostics
       - go ./server TestFrameCarriesScanDiagnostics
+    partial: true
+    note: >-
+      lastMs, min/max and a 15-bucket histogram are asserted. The 2 ms bucket
+      width and the phase-bar fields (beyond ExecUs > 0) are not. "Per task"
+      dropped (the page keeps lateness, not scan time, per task).
 
   - id: RT-008
     claim: >-
-      The loop keeps an absolute schedule: it does not start a scan before its
-      slot, does not drift (about 150 scans in 300 ms at 2 ms), and a stall of
-      several periods is reported as missed slots instead of being fired as a
-      burst of catch-up scans.
+      The loop keeps an absolute schedule so lateness never accumulates, and a
+      loop more than a whole period behind skips the lost slots and reports
+      them as missed instead of firing a burst of catch-up scans.
     source: "#what-the-runtime-does"
     tests:
       - go ./runtime TestRunLoopHoldsScheduleAndCountsMissed
-    note: Bounds are loose to tolerate shared CI runners.
-
-  - id: RT-009
-    claim: >-
-      The sleep lands on its deadline (not before) and returns promptly on
-      cancel instead of at the next slot.
-    source: "#what-the-runtime-does"
-    tests:
-      - go ./runtime TestSleepUntilLandsOnDeadline
-      - go ./runtime TestSleepUntilReturnsOnCancel
-      - go ./runtime TestRunLoopStopsOnCancel
+    partial: true
+    note: >-
+      Missed-slot reporting and the no-burst bound (scans + missed <= 152) are
+      asserted. Non-accumulation is not: the lower bound of 120 of about 150
+      scans would also pass a loop that drifted by up to 20 %. (Bounds are
+      loose for shared CI runners.) "Does not start before its slot" dropped
+      from the claim (not on the page).
 
   - id: RT-010
     claim: >-
@@ -105,23 +109,25 @@ claims:
 
   - id: RT-011
     claim: >-
-      Task isolation: each scan snapshots its external tags, executes
+      Task isolation: each scan copies its external tags in, executes
       privately, and commits what changed as one unit, so a reader never sees
-      a scan half-done and an equal-value write does not bump a tag's
-      generation.
+      a scan half-done.
     source: "#what-the-runtime-does"
     tests:
       - go ./runtime TestScanViewSnapshotAndCommit
       - go ./runtime TestScanCommitsAreAtomic
+    note: The equal-value-write generation rule dropped from the claim (not on the page).
 
   - id: RT-012
     claim: >-
-      A fast task never waits behind a slow task, and tasks run concurrently.
+      Tasks run concurrently, and a fast task never waits behind a slow one.
     source: "#what-the-runtime-does"
     tests:
       - go ./runtime TestFastTaskDoesNotWaitForSlowTask
-      - go ./runtime TestTasksRunConcurrently
-    note: TestFastTaskDoesNotWaitForSlowTask skips on machines where the slow scan takes under 5 ms.
+    note: >-
+      Skips on machines where the slow scan takes under 5 ms.
+      TestTasksRunConcurrently removed: it only checks that both tasks scanned
+      during Run, which a sequential scheduler would pass too.
 
   - id: RT-013
     claim: >-
@@ -150,44 +156,47 @@ claims:
     note: Hardware-dependent latency figure measured with tools/jitter and docs/design/realtime.md; not CI-testable.
 
   - id: RT-016
-    claim: >-
-      A task's cpu setting pins its thread to the given core on Linux, and
-      pinning to a nonexistent CPU fails.
+    claim: A task's cpu setting pins its thread to that core (Linux).
     source: "#priority-and-pinning"
     tests:
       - go ./runtime TestApplySchedAffinity
-    note: Skips when only one CPU is allowed.
+      - go ./runtime TestRunReportsSched
+    partial: true
+    note: >-
+      Pinning is asserted on applySched (skips when only one CPU is allowed),
+      and Run is shown to apply a CPU list from Options. The cpu: manifest key
+      is not parsed in a project-level test. The nonexistent-CPU failure is
+      not a page claim.
 
   - id: RT-017
     claim: >-
-      A task's priority requests SCHED_FIFO at that priority (1 to 99); a
-      priority outside the range is refused.
+      A task's priority requests SCHED_FIFO at that priority (1 to 99).
     source: "#priority-and-pinning"
     tests:
       - go ./runtime TestApplySchedFIFORefusalIsExplicit
     partial: true
-    note: The refusal path and range check are asserted; successful SCHED_FIFO is only exercised where the CI user has the capability (the refusal test skips when granted).
+    note: >-
+      The refusal path and the 1-99 range check are asserted, but the whole
+      test skips where SCHED_FIFO is granted, and a successful SCHED_FIFO
+      grant is never asserted. The priority: manifest key is not parsed in a
+      project-level test.
 
   - id: RT-018
     claim: >-
-      A refused SCHED_FIFO or pin request is loud: the error names the fix
-      (CAP_SYS_NICE, setcap, ulimit -r), the refusal is recorded in the
-      task's sched stats (which the dashboard shows as REFUSED), and the task
-      runs at normal priority.
+      A refused SCHED_FIFO or pin request is loud: the error names the fix,
+      the refusal shows on the task's row (REFUSED), and the task runs at
+      normal priority.
     source: "#priority-and-pinning"
     tests:
       - go ./runtime TestApplySchedFIFORefusalIsExplicit
       - go ./runtime TestRunReportsSched
     partial: true
-    note: The REFUSED dashboard label (a Svelte component) and the logged error line are not covered by a Go test.
-
-  - id: RT-019
-    claim: >-
-      Run reports the applied or refused placement (CPUs, priority, error) in
-      Stats for the main task and each task.
-    source: "#priority-and-pinning"
-    tests:
-      - go ./runtime TestRunReportsSched
+    note: >-
+      Asserted: a SCHED_FIFO refusal names CAP_SYS_NICE, setcap and ulimit -r,
+      and Run records either applied or the refusal in the task's sched stats
+      (RT-019 merged here). Not asserted: the REFUSED dashboard label (a
+      Svelte component), the logged error line, the wording of a pin refusal,
+      and that the refused task keeps scanning.
 
   - id: RT-020
     claim: >-

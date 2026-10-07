@@ -36,6 +36,12 @@ claims:
     source: "#delta-frames"
     tests:
       - go ./server TestDeltaIsPerClient
+    partial: true
+    note: >-
+      The test's two clients are at the same point when the shared tick goes
+      out (A was ticked past SP=71, B's first full frame already holds it), so a
+      single fleet-wide generation would pass too; two clients genuinely at
+      different generations at one broadcast are not exercised.
 
   - id: STR-005
     claim: >-
@@ -80,7 +86,6 @@ claims:
     source: "#deltas-are-opt-in"
     tests:
       - go ./server TestDefaultStreamIsUnchanged
-      - go ./server TestStreamDeliversFrames
 
   - id: STR-010
     claim: ?full=1 forces whole frames even alongside ?delta=1.
@@ -94,6 +99,11 @@ claims:
     source: "#delta-frames"
     tests:
       - go ./server TestDeltaFrameKeepsDiagnostics
+    partial: true
+    note: >-
+      Only one delta frame is checked, without ?blocks=delta and on the connect
+      repeat that carries the scan block anyway; ts/scans on a frame whose scan
+      block has been gated out is not asserted.
 
   - id: STR-012
     claim: >-
@@ -111,27 +121,34 @@ claims:
     source: "#the-frame-floor"
     tests:
       - go ./server TestDeltaStreamGatesNonTagBlocks
+      - go ./server TestScanBlockRidesItsCadence
 
   - id: STR-014
     claim: >-
-      The driver block ignores free-running readouts (volatile metrics, the
-      observation stamp, re-rendered ages) in its change hash, but a state,
-      message, error, device or non-volatile metric change does change it.
+      The driver block is hashed over everything an operator would call a
+      change and nothing that free-runs: a message counter climbing
+      (DriverMetric.Volatile), an age ticking or the server's own observation
+      stamp does not change the hash, while a real change (state, message, a
+      device) does.
     source: "#the-frame-floor"
     tests:
       - go ./server TestHashDriversIgnoresWhatFreeRuns
-      - go ./server TestHashDriversStableWhenEmpty
 
   - id: STR-015
     claim: >-
-      VolatileExtra excludes nested churn by key or by path (with * matching
-      any key or list element), and a path that matches nothing excludes
-      nothing.
+      DriverStatus.VolatileExtra excludes protocol-specific fields from the
+      driver hash by key or by path (with * matching any key or list element),
+      so `nodes.*.lastMsgMs` excludes the nested churn while the rest of the
+      roster is still watched.
     source: "#the-frame-floor"
     tests:
       - go ./server TestHashDriversHonoursVolatileExtra
       - go ./server TestHashDriversIgnoresNestedChurn
       - go ./server TestVolatileExtraPathForms
+    partial: true
+    note: >-
+      `*` is only exercised over list elements (extra.nodes is a list); `*`
+      matching any key of a nested map is not asserted.
 
   - id: STR-016
     claim: >-
@@ -143,7 +160,10 @@ claims:
       - go ./server TestScanBlockRidesItsCadence
       - go ./server TestScanBlockOnEveryFrameWhenDisabled
     partial: true
-    note: The 3 s default is not asserted.
+    note: >-
+      The 3 s default is not asserted, and neither cadence test checks that
+      the headline (ts, scans) is present on the frames where the scan block is
+      absent.
 
   - id: STR-017
     claim: >-
@@ -166,6 +186,12 @@ claims:
     source: "#the-frame-floor"
     tests:
       - go ./server TestDeltaFrameCarriesQuality
+    partial: true
+    note: >-
+      The test never ticks twice with the same Bad quality, so "sent whole on
+      every delta frame / not gated" is unasserted; the clear check (no quality
+      on the frame after Level returns to Good) would pass even if quality were
+      gated on change.
 
   - id: STR-020
     claim: >-
@@ -213,9 +239,8 @@ claims:
 
   - id: STR-025
     claim: >-
-      The tag filter applies to every frame including the first, to delta
-      streams (an out-of-filter change yields an empty delta), and to
-      /api/state.
+      The tag filter applies to every frame including the first (plain and
+      delta streams alike), and to /api/state.
     source: "#tag-filters"
     tests:
       - go ./server TestStreamTagFilter
@@ -233,11 +258,10 @@ claims:
     note: Asserts only that scan stats survive a filtered /api/state; drivers and alarms are not checked.
 
   - id: STR-027
-    claim: A tag pattern that does not compile is a 400, not a silent match-nothing; an unbounded pattern list is refused.
+    claim: A tag pattern path.Match cannot compile is a 400, not a silent match-nothing.
     source: "#tag-filters"
     tests:
       - go ./server TestBadTagPatternIsRejected
-      - go ./server TestTagFilterParsing
 
   - id: STR-028
     claim: >-
@@ -269,6 +293,11 @@ claims:
     source: "#tag-filters"
     tests:
       - go ./server TestQualityIsFiltered
+    partial: true
+    note: >-
+      Asserted on /api/state only, not on /api/stream; and the test only checks
+      that out-of-filter quality is dropped, so an implementation that dropped
+      all quality whenever a filter is set would also pass.
 
   - id: STR-032
     claim: >-
@@ -279,8 +308,6 @@ claims:
     tests:
       - go ./runtime TestQualityFromDriverWins
       - go ./io TestMemoryReportsQuality
-      - go ./io TestMemoryQualityIsIndependentOfValues
-      - go ./io TestMultiQualityMerges
 
   - id: STR-033
     claim: >-
@@ -300,16 +327,12 @@ claims:
 
   - id: STR-035
     claim: >-
-      The Sparkplug host driver reports node-scoped stale after NDEATH,
-      device-scoped stale on DDEATH, notConnected before birth, and stale for
-      a sweep-expired source.
+      The Sparkplug host driver reports quality from what it knows: which edge
+      node died (its tags stale) and which has never birthed (notConnected).
     source: "#where-it-comes-from"
     tests:
       - go ./sparkplug/host TestQualityPreBirthNotConnected
       - go ./sparkplug/host TestQualityNDeathStaleScopedToNode
-      - go ./sparkplug/host TestQualityDeviceDeathStaleJustThatDevice
-      - go ./sparkplug/host TestQualityStaleSweepMarksStale
-      - go ./sparkplug/host TestQualityMissingMetricFromBirth
 
   - id: STR-036
     claim: >-
@@ -319,6 +342,11 @@ claims:
     tests:
       - go ./server TestMetaAdvertisesQualityAndDeltas
       - go ./runtime TestReportsQuality
+    partial: true
+    note: >-
+      /api/meta is only checked on a driver-bound controller (quality true);
+      the false case is asserted on runtime.ReportsQuality, not on the
+      /api/meta response.
 
   - id: STR-037
     claim: >-
@@ -327,7 +355,7 @@ claims:
     source: "#from-the-hmi-kit"
     tests:
       - go ./runtime TestTagQualityResolvesDottedPathsToTheirRoot
-    note: The client-side RealtimeClient.quality() and delta merge (hmi/src/lib/delta.ts) are TypeScript and not covered by a Go test; the Go test covers the runtime resolution.
+    note: The client-side RealtimeClient.quality() and delta merge (hmi/src/lib/delta.ts) are TypeScript and not covered by a Go test; the Go test covers the runtime resolution only, and "an exact entry for the full path still wins" is not asserted.
     partial: true
 
   - id: STR-038

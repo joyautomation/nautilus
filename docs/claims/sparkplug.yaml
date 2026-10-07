@@ -15,20 +15,20 @@ claims:
       - go ./sparkplug TestTCKConformance
     partial: true
     note: >-
-      Unit and description as properties are asserted; the claim that
-      Ignition maps them onto tag properties is a host behaviour not tested
-      here.
+      `unit:` and `desc:` as `engUnit`/`documentation` on top-level tags and
+      `unit:` on a template member are asserted; `desc:` on a template
+      member, and that the birth lists the whole tag store with names,
+      types and current values, are not asserted (the TCK checks birth
+      structure, not completeness). Ignition mapping them onto tag
+      properties is host behaviour not tested here.
   - id: SPB-002
     claim: >-
       Types map faithfully: BOOL to Boolean, integers to Int64, REAL to
-      Double, UDT to Template (nested templates and ordered definitions
-      included).
+      Double, UDT to Template.
     source: "#"
     tests:
       - go ./sparkplug TestFaithfulTypingFromIR
       - go ./sparkplug TestStructToTemplate
-      - go ./sparkplug TestTemplateDefsNestedAndOrdered
-      - go ./sparkplug TestDefinitionTemplateTwoLevelNestedTemplateRef
   - id: SPB-003
     claim: >-
       A host can write tags back via NCMD: a scalar command overwrites the
@@ -38,22 +38,23 @@ claims:
       - go ./sparkplug TestCommandScalarStillReplaces
   - id: SPB-005
     claim: >-
-      `Node Control/Rebirth` is honored: the node answers with a fresh
-      NBIRTH, and no DATA (or device birth/death) leaves before that NBIRTH
-      once the command is accepted.
+      `Node Control/Rebirth` is honored: the node answers the command with
+      a fresh NBIRTH.
     source: "#"
     tests:
       - go ./sparkplug TestTCKConformance
       - go ./sparkplug TestRebirthCommandStopsDataUntilTheNBIRTH
-      - go ./sparkplug TestTickCannotOvertakeTheNBIRTH
-      - go ./sparkplug TestRebirthCommandMidTickStopsTheNextRecord
   - id: SPB-006
     claim: >-
-      Only `broker` and `group-id` are required; a sparkplug section
-      without a group-id is a readable error and no section means no node.
+      Only `broker` and `group-id` are required.
     source: "#"
     tests:
       - go ./internal/project TestSparkplugConfig
+    partial: true
+    note: >-
+      A section missing `group-id` erroring is asserted; a section missing
+      `broker` erroring, and a section with only `broker` and `group-id`
+      building a node, are not (the passing case sets many optional keys).
   - id: SPB-007
     claim: >-
       The password is never read from the manifest: it comes from
@@ -80,17 +81,20 @@ claims:
   - id: SPB-010
     claim: >-
       `deadband` publishes a numeric only when it moved more than that in
-      absolute units (zero publishes on any change), including for numeric
-      members of structs and nested structs.
+      absolute units; zero publishes on any change.
     source: "#publish-classes"
     tests:
       - go ./sparkplug TestRBEDeadbandAndHeartbeat
       - go ./sparkplug TestRBEDeadbandOnStructMembers
       - go ./sparkplug TestRBEDeadbandOnNestedStruct
+    partial: true
+    note: >-
+      Sub- and over-deadband moves are asserted (scalars and struct
+      members); a zero deadband publishing a small numeric change is not.
   - id: SPB-011
     claim: >-
-      `min-interval` rate-limits publishing even on change, for scalars and
-      structs alike.
+      `min-interval` means never publishing more often than that, even on
+      change.
     source: "#publish-classes"
     tests:
       - go ./sparkplug TestRBEDeadbandAndHeartbeat
@@ -111,11 +115,15 @@ claims:
     source: "#publish-classes"
     tests:
       - go ./sparkplug TestRBEDisableAndBoolChange
+    partial: true
+    note: >-
+      A transition publishing inside `min-interval` and an unchanged sample
+      staying quiet are asserted (with BOOL values); ignoring the deadband
+      (a sub-deadband numeric change still publishing) is not.
   - id: SPB-014
     claim: >-
-      `metric-classes` assigns tags to a named class by glob, unmatched
-      tags use `default-class`, and a tag in the no-publish class is not
-      published.
+      `metric-classes` assigns tags to a named class by glob, and every tag
+      unassigned uses `default-class`.
     source: "#publish-classes"
     tests:
       - go ./sparkplug TestClassResolution
@@ -156,10 +164,9 @@ claims:
       NDEATH on host offline are not.
   - id: SPB-018
     claim: >-
-      With `store-forward: N`, data is buffered while the broker is
-      unreachable and replayed marked historical, in order, after the
-      reconnect's birth, then live data continues with the next sequence
-      numbers.
+      With `store-forward: N`, data messages are buffered while the broker
+      is unreachable (or the primary host is offline) and replayed, marked
+      historical, once delivery resumes.
     source: "#primary-host-and-store-and-forward"
     tests:
       - go ./sparkplug TestStoreForwardBuffersAcrossABrokerOutage
@@ -180,12 +187,6 @@ claims:
     note: >-
       Ring drop-oldest and batched drain are asserted; the rate-limit
       interval on reconnect is not.
-  - id: SPB-020
-    claim: >-
-      Without store-and-forward an unborn node samples nothing.
-    source: "#primary-host-and-store-and-forward"
-    tests:
-      - go ./sparkplug TestUnbornNodeWithoutStoreForwardStaysQuiet
   - id: SPB-022
     claim: >-
       `bdseq-file` persists the birth-death sequence number across
@@ -199,9 +200,8 @@ claims:
       restart through the file is not tested.
   - id: SPB-023
     claim: >-
-      The node passes the Sparkplug TCK edge-node profile (NBIRTH/NDATA
-      ordering and sequence numbers, NDEATH, rebirth) against a live node
-      on every push.
+      The node passes the Sparkplug TCK edge-node profile, run against a
+      live node on every push.
     source: "#conformance"
     tests:
       - go ./sparkplug TestTCKConformance

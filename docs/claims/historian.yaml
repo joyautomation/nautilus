@@ -5,15 +5,17 @@ claims:
   - id: HST-001
     claim: >-
       The collector records every numeric or boolean leaf of GET /api/state
-      matching -tags (booleans as 0/1) once per interval, and skips strings
-      and null values.
+      matching -tags (booleans as 0/1) once per interval, and skips strings.
     source: "#struct-udt-tags"
     tests:
       - go ./cmd/naut TestSampleOfRecordsNumbers
       - go ./cmd/naut TestSampleOfRecordsBoolsAsZeroOne
       - go ./cmd/naut TestSampleOfSkipsStringsAndNil
       - go ./cmd/naut TestCollectOnceAgainstRealisticFrame
-    note: The once-per-interval polling cadence itself is not asserted; collectOnce is tested per poll.
+    note: >-
+      The once-per-interval polling cadence itself is not asserted;
+      collectOnce is tested per poll. ("Null values" dropped from the claim:
+      not on the page.)
     partial: true
 
   - id: HST-002
@@ -35,7 +37,11 @@ claims:
       - go ./cmd/naut TestSampleOfGlobFiltering
       - go ./cmd/naut TestSampleOfMultiplePatterns
       - go ./cmd/naut TestSampleOfDottedPatternMatchesNestedMember
-    note: The default of * (all numerics) when -tags is omitted is not asserted at the flag level.
+    note: >-
+      Asserted: * matching across dots (*_FIT_*) and *.VALUE. Not asserted: that
+      a dotless pattern naming a struct tag never matches its members (no test
+      uses a struct tag's bare name as a pattern), and the default of * when
+      -tags is omitted.
     partial: true
 
   - id: HST-004
@@ -44,14 +50,6 @@ claims:
     tests:
       - go ./cmd/naut TestSampleOfExcludeTrimsMatchedNoise
 
-  - id: HST-005
-    claim: >-
-      An unreachable source (for example mid-failover) records nothing and
-      the collector carries on without panicking or blocking.
-    source: "#the-historian"
-    tests:
-      - go ./cmd/naut TestCollectOnceSourceUnreachable
-
   - id: HST-006
     claim: >-
       With -min-interval at its default 0, every matched tag is recorded on
@@ -59,6 +57,8 @@ claims:
     source: "#cutting-rowsminute---deadband---min-interval"
     tests:
       - go ./cmd/naut TestChangeFilterDisabledByDefault
+    partial: true
+    note: The behaviour at 0 is asserted on the filter directly; that the -min-interval flag defaults to 0 is not.
 
   - id: HST-007
     claim: >-
@@ -93,14 +93,19 @@ claims:
   - id: HST-010
     claim: >-
       GET /history returns downsampled [unixMs, value] pairs per tag as
-      bucket averages, with maxPoints (default 600) bounding the points; the
-      bucket is never smaller than one second.
+      bucket averages, with maxPoints bounding the points.
     source: "#serving-history-to-the-hmi"
     tests:
       - go ./hist TestSeriesIsChartWireFormat
       - go ./hist TestStorePostgres
     partial: true
-    note: Bucket averaging in SQL runs only in TestStorePostgres, which skips in CI (no Postgres). The TestBucketSize* tests exercise a test-local mirror of the formula, not the production code, so they are not cited.
+    note: >-
+      The [ts, value] wire shape is asserted in CI. Bucket averaging runs only
+      in TestStorePostgres, which skips in CI (no Postgres) and checks only
+      that a series comes back, not averages or the point bound. The
+      TestBucketSize* tests exercise a test-local mirror of the formula, not
+      the production code, so they are not cited. The 1-second bucket floor
+      and the default of 600 dropped from the claim (not stated by the page).
 
   - id: HST-011
     claim: GET /history/span returns the first and last sample and the count, and GET /healthz answers.
@@ -119,7 +124,10 @@ claims:
     tests:
       - go ./hist TestStorePostgres
     partial: true
-    note: Skips in CI without Postgres; no test asserts that a glob is not expanded.
+    note: >-
+      TestStorePostgres (skipped in CI) queries exact names, including one with
+      a comma and brace, at the store level. The /history CSV parsing, dotted
+      names, and the absence of globbing are not asserted.
 
   - id: HST-013
     claim: >-
@@ -132,51 +140,72 @@ claims:
 
   - id: HST-014
     claim: >-
-      GET /history/agg takes tags, from, to, bucket and fn, rejects a missing
-      tags or fn and a malformed bucket with 400, and returns one row per tag
-      per bucket as {tag, ts, value} with ts in milliseconds since the epoch.
+      GET /history/agg takes tags, from, to, bucket and fn and returns
+      [{tag, ts, value}], one row per tag per bucket, ts being the bucket's
+      start in milliseconds since the epoch.
     source: "#aggregates"
     tests:
-      - go ./cmd/naut TestHandleAggRequiresTags
-      - go ./cmd/naut TestHandleAggRequiresFn
-      - go ./cmd/naut TestHandleAggRejectsBadBucket
       - go ./cmd/naut TestHandleAggParsesQueryIntoAggQuery
-      - go ./cmd/naut TestHandleAggPropagatesStoreError
+      - go ./hist TestAggregateAndSnapshotPostgres
+    partial: true
+    note: >-
+      In CI: the parameters reach the store and a row comes back as {tag, ts,
+      value} with ts in ms. One row per tag per bucket is asserted only in the
+      Postgres test (skipped in CI). The 400s for missing tags or fn or a bad
+      bucket, and the 500 on a store error, are not page claims; their tests
+      were removed.
 
   - id: HST-015
-    claim: >-
-      Omitting bucket aggregates the whole [from,to) range as a single row per
-      tag, and an empty series yields no buckets.
+    claim: Omitting bucket aggregates the whole [from,to) range as a single row per tag.
     source: "#aggregates"
     tests:
       - go ./hist TestBucketizeNoBucketingIsWholeRangeAtFrom
-      - go ./hist TestBucketizeEmptySeriesYieldsNoBuckets
+      - go ./hist TestAggregateAndSnapshotPostgres
+    partial: true
+    note: >-
+      In CI only the Go-side path (first, last, delta, ontime) is tested; the
+      SQL path (min, max, avg, sum, count) gives a single row only in the
+      Postgres test, which skips in CI. The half-open upper bound is not
+      asserted. "An empty series yields no buckets" dropped (not on the page),
+      with TestBucketizeEmptySeriesYieldsNoBuckets.
 
   - id: HST-016
     claim: >-
       Buckets align to the Unix epoch, not to from, so a 24h bucket lands on
-      UTC midnight and a sample exactly on a boundary starts the new bucket.
+      UTC midnight.
     source: "#aggregates"
     tests:
       - go ./hist TestBucketizeAlignsToEpochFloor
     partial: true
-    note: Go-side bucketing is tested; the SQL aggregate's alignment runs only against Postgres (skipped in CI).
+    note: >-
+      Go-side bucketing is tested (with 1h buckets); the SQL aggregate's
+      alignment runs only against Postgres (skipped in CI). "A sample exactly
+      on a boundary starts the new bucket" dropped (not on the page).
 
   - id: HST-017
-    claim: min, max, avg, sum and count aggregate over a bucket's samples; an unknown fn is rejected before any query.
+    claim: min, max, avg, sum and count aggregate over a bucket's samples.
     source: "#aggregates"
     tests:
       - go ./hist TestSQLAggFnsCoversDocumentedFunctions
-      - go ./hist TestAggregateUnknownFnErrorsWithoutTouchingDB
       - go ./hist TestAggregateAndSnapshotPostgres
     partial: true
-    note: The SQL results are asserted only in the Postgres test, which skips in CI; the CI-run tests check the dispatch table.
+    note: >-
+      The CI test only checks the fn-to-SQL-expression table. Results are
+      asserted only in the Postgres test (skipped in CI), and there only for
+      min, max and avg, not sum or count. The unknown-fn rejection is not a
+      page claim; TestAggregateUnknownFnErrorsWithoutTouchingDB was removed.
 
   - id: HST-018
     claim: first and last return a bucket's earliest and latest value, and delta is last minus first.
     source: "#aggregates"
     tests:
       - go ./hist TestFirstLastDeltaReducers
+      - go ./hist TestAggregateAndSnapshotPostgres
+    partial: true
+    note: >-
+      The reducers are tested directly in CI. That fn=first/last/delta reaches
+      the right reducer is asserted only for delta, in the Postgres test
+      (skipped in CI).
 
   - id: HST-019
     claim: >-
@@ -187,33 +216,34 @@ claims:
     tests:
       - go ./hist TestOntimeSeconds
     partial: true
-    note: The straddling-boundary drop is not separately asserted.
+    note: >-
+      The reducer is tested directly; the straddling-boundary drop is not
+      asserted, and fn=ontime reaching it is asserted only in the Postgres
+      test (skipped in CI).
 
   - id: HST-020
     claim: >-
-      GET /history/at returns each tag's last value at-or-before at, omits a
-      tag with no such sample, and requires tags.
+      GET /history/at returns each tag's last value at-or-before at, and omits
+      a tag with no such sample.
     source: "#aggregates"
     tests:
-      - go ./cmd/naut TestHandleAtRequiresTags
       - go ./cmd/naut TestHandleAtParsesQueryAndReturnsSnapshot
-      - go ./cmd/naut TestHandleAtPropagatesStoreError
       - go ./hist TestAggregateAndSnapshotPostgres
     partial: true
-    note: The at-or-before and absent-tag semantics are asserted only in the Postgres test (skipped in CI).
-
-  - id: HST-021
-    claim: Aggregate and Snapshot with no tags are no-ops returning nil without touching the database.
-    source: "#from-go"
-    tests:
-      - go ./hist TestAggregateEmptyTagsIsNoop
-      - go ./hist TestSnapshotEmptyTagsIsNoop
+    note: >-
+      The at-or-before and absent-tag semantics are asserted only in the
+      Postgres test (skipped in CI); the CI test checks parameter passing and
+      the JSON shape against a fake store. "Requires tags" (400) and the
+      store-error 500 are not page claims; their tests were removed.
 
   - id: HST-022
     claim: hist.Sink is a one-method seam (Insert) that a different store can implement.
     source: "#from-go"
     tests:
       - go ./hist TestFakeSinkRecordsInserts
+    note: >-
+      The load-bearing part is the compile-time `var _ Sink = (*fakeSink)(nil)`
+      beside the test; the test body only checks the fake itself.
 
   - id: HST-023
     claim: >-
@@ -223,4 +253,4 @@ claims:
     tests:
       - go ./hist TestStorePostgres
     partial: true
-    note: Skips unless NAUTILUS_TEST_DATABASE_URL is set; not run in CI.
+    note: Skips unless NAUTILUS_TEST_DATABASE_URL is set; not run in CI. The index is never checked.

@@ -10,7 +10,6 @@ claims:
     source: "#"
     tests:
       - go ./internal/project TestLoadModbusErrors
-      - go ./modbus/codegen TestParseRejectsUnknownKey
       - go ./modbus TestParseManifestRejectsUnknownKeys
       - go ./internal/project TestSchemaRequiresWhatLoaderRequires
   - id: MB-002
@@ -25,12 +24,10 @@ claims:
   - id: MB-003
     claim: >-
       `naut modbus import` emits a manifest and a tag file that are
-      byte-identical on every re-run, and the generated manifest loads
-      through the strict manifest loader, validates and plans.
+      byte-identical on every re-run.
     source: "#generating-the-manifest-naut-modbus-import"
     tests:
       - go ./cmd/naut TestModbusImportGolden
-      - go ./cmd/naut TestModbusImportLoadsThroughCore
       - go ./modbus/codegen TestGenerateDeterministic
   - id: MB-004
     claim: >-
@@ -43,6 +40,12 @@ claims:
       - go ./modbus/codegen TestGenerateAppliesOverridesAndDefaults
       - go ./modbus/codegen TestGenerateInstanceFilter
       - go ./modbus/codegen TestGenerateWritableAndTagGlobs
+    partial: true
+    note: >-
+      Type-level settings and instance-only fields (host, unit-id,
+      enable-tag) are asserted, but the sample map never has an instance
+      override a type-level value, so per-instance overrides are not
+      asserted.
   - id: MB-005
     claim: >-
       The generated tag file gives each tag the right role (input or output)
@@ -76,6 +79,10 @@ claims:
     source: "#the-block-plan"
     tests:
       - go ./modbus TestPlanGapTolerance
+    partial: true
+    note: >-
+      The test bridges a 7-register hole and splits at 9; a hole of exactly
+      8 (the documented limit) is never planned, so a gap of 7 would pass.
   - id: MB-009
     claim: >-
       Without `max-block`, a block holds at most 125 registers (FC3/FC4) or
@@ -87,6 +94,10 @@ claims:
       - go ./modbus TestPlanCoilCap
       - go ./modbus TestPlanMaxBlockOverride
       - go ./modbus TestPlanMultiRegisterValueNeverSplits
+    partial: true
+    note: >-
+      The caps are exercised on the holding (FC3) and coil (FC1) tables
+      only; the input (FC4) and discrete (FC2) caps are not.
   - id: MB-010
     claim: >-
       The reserved scan class `none` catalogs a tag without ever polling it;
@@ -122,12 +133,15 @@ claims:
       output.
     source: "#addressing-word-order-byte-order"
     tests:
-      - go ./modbus TestClientReadsAndDecodes
+      - go ./modbus TestWriteCoalescingAndBaseline
+      - go ./modbus TestForeignDecodesEverySeededValue
     partial: true
     note: >-
-      The client reads the PDU address it is given; no test asserts that
-      the documented 40001-to-0 convention holds in `browse` or the plan
-      output.
+      The wire recorder sees binding address 200 go out as PDU address 200,
+      and manifest addresses read a foreign server's seeded PDU addresses;
+      `browse` and the plan output are not asserted. TestClientReadsAndDecodes
+      was dropped: it seeds and reads the same address through our own
+      slave, so a shift on both sides would pass.
   - id: MB-014
     claim: >-
       Marking a binding on a read-only table (input or discrete) `writable`
@@ -144,10 +158,11 @@ claims:
     tests:
       - go ./modbus TestDecodeGolden
       - go ./modbus TestParseFormat
-      - go ./modbus TestCoilFormatDefaultsToBool
+      - go ./modbus TestValidateErrors/register format on coil table
     partial: true
     note: >-
-      The "bit tables take only bool" validation is not asserted by name.
+      "Bit tables take only bool" is asserted for the coil table only; a
+      register format on the discrete table is not.
   - id: MB-016
     claim: >-
       Scaling is `engineering = raw * scale + offset` on read, inverted on
@@ -157,6 +172,7 @@ claims:
       - go ./modbus TestDecodeGolden/scaled uint16
       - go ./modbus TestDecodeGolden/offset only
       - go ./modbus TestEncodeInvertsScaling
+      - go ./modbus TestForeignWriteRoundTrip
   - id: MB-017
     claim: >-
       Word order and byte order are per source: `wordorder: little`
@@ -185,9 +201,13 @@ claims:
       landed, and data tags stay absent from the snapshot until their block
       has been read at least once.
     source: "#the-online-companion-and-enable"
-    tests: []
+    tests:
+      - go ./modbus TestForeignExceptionMarksOnlyThatBlock
+    partial: true
     note: >-
-      No test reads the snapshot between Start and the first poll.
+      A tag whose block never answers is asserted absent from the snapshot;
+      no test reads the snapshot between Start and the first poll to see
+      `__Online` already present.
   - id: MB-020
     claim: >-
       A source with an `enable:` tag that is false is parked: it closes the
@@ -198,8 +218,9 @@ claims:
       - go ./modbus TestEnableTagParksSource
     partial: true
     note: >-
-      A never-delivered tag reporting NotConnected while parked, and the
-      enable tag acting while the write gate is closed, are not asserted.
+      A never-delivered tag reporting NotConnected while parked, that no
+      connection is attempted while parked, and the enable tag acting while
+      the write gate is closed are not asserted.
   - id: MB-021
     claim: >-
       The enable tag is a command to the driver, not a register write: it
@@ -207,6 +228,11 @@ claims:
     source: "#the-online-companion-and-enable"
     tests:
       - go ./modbus TestEnableTagParksSource
+    partial: true
+    note: >-
+      `OutputNames()` membership and the tag acting on the source are
+      asserted; no wire recorder checks that writing it sends no register
+      write.
   - id: MB-022
     claim: >-
       A Modbus exception response marks only that block's tags Bad while
@@ -225,6 +251,12 @@ claims:
     source: "#per-tag-quality"
     tests:
       - go ./modbus TestBlockParksAfterConsecutiveExceptionsAndUnparks
+      - go ./modbus TestExceptionOnOneBlockLeavesOthersGood
+    partial: true
+    note: >-
+      Parking, sibling polling, the single probe and `badBlocks` are
+      asserted, but both tests wait for the driver's own exceptionsToPark
+      constant, so the threshold of three is not pinned.
   - id: MB-024
     claim: >-
       A transport failure (dial refused, timeout, short read, wrong unit id)
@@ -240,7 +272,10 @@ claims:
       - go ./modbus TestRequestShortReadIsUnexpectedEOF
     partial: true
     note: >-
-      Dial-refused is covered by slave death only.
+      Dial refused (slave death) and timeout take the source down with
+      values held; wrong unit id and short read are asserted only as
+      transport errors at the request level, not as taking the source
+      down.
   - id: MB-025
     claim: >-
       Reconnect backoff is exponential from `retrymin` (1s) to `retrymax`
@@ -260,7 +295,8 @@ claims:
     partial: true
     note: >-
       Held values are asserted; the NotConnected quality for a
-      never-delivered tag is not.
+      never-delivered tag is not (TestForeignLatencyAboveTimeoutReconnects
+      explicitly accepts Good or NotConnected).
   - id: MB-027
     claim: >-
       Quality is reported non-Good only (a healthy plant reports an empty
@@ -268,7 +304,6 @@ claims:
     source: "#per-tag-quality"
     tests:
       - go ./modbus TestDriverDeliversTagsPerClass
-      - go ./io TestMultiQualityMerges
     partial: true
     note: >-
       No test runs two sources and kills one to show the other stays Good.
@@ -281,7 +316,6 @@ claims:
     tests:
       - go ./modbus TestWriteCoalescingAndBaseline
       - go ./modbus TestForeignWriteRoundTrip
-      - go ./modbus TestSlaveRoundTripWrites
   - id: MB-029
     claim: >-
       The first output snapshot after `Start` is a baseline that writes
@@ -363,25 +397,19 @@ claims:
   - id: MB-038
     claim: >-
       `naut modbus serve` stands in for a plant from the manifest alone: a
-      seeded engineering-unit value is stored with the binding's scaling
-      and word order inverted, and two sources on one unit id and table are
-      refused.
+      `--values` seed in engineering units is stored with the binding's
+      scaling and word order inverted.
     source: "#bench-without-a-device-serve-and-browse"
     tests:
       - go ./cmd/naut TestModbusServeSeedSmoke
-      - go ./cmd/naut TestModbusServeRefusesUnitCollision
-      - go ./cmd/naut TestModbusServeRejectsUnknownSeed
   - id: MB-039
     claim: >-
-      The bench slave is multi-unit like a real gateway and answers unknown
-      units, unsupported functions and bad counts with the right Modbus
-      exceptions.
+      The bench slave serves the whole manifest on one listener,
+      multi-unit like a real gateway.
     source: "#bench-without-a-device-serve-and-browse"
     tests:
+      - go ./cmd/naut TestModbusServeSeedSmoke
       - go ./modbus TestSlaveMultiUnit
-      - go ./modbus/slave TestUnknownUnitAnswersGatewayException
-      - go ./modbus/slave TestUnsupportedFunctionAnswersIllegalFunction
-      - go ./modbus/slave TestMalformedCountAnswersIllegalDataValue
   - id: MB-040
     claim: >-
       `--ramp` drifts the numeric inputs and `--listen` defaults to
@@ -408,7 +436,6 @@ claims:
     tests:
       - go ./io TestMultiRoutesAndMerges
       - go ./internal/project TestDriversBuildAMultiWithStatusRows
-      - go ./internal/project TestDriversExplicitNameCollisionIsAnError
   - id: MB-043
     claim: >-
       A tag delivered by two drivers is a load error naming both, reported
@@ -422,8 +449,10 @@ claims:
       - go ./cmd/naut TestCheckReportsDuplicateTagAcrossDrivers
     partial: true
     note: >-
-      A tag writable through two drivers (as opposed to delivered by two)
-      is not separately tested.
+      A tag writable through two drivers is refused in
+      TestMultiDuplicateTagIsAnError, but only the tag name is checked in
+      that error; naming both drivers is asserted for the delivered case
+      only.
   - id: MB-044
     claim: >-
       Each driver keeps its own `/api/drivers` row in a multi-driver set,
@@ -433,6 +462,12 @@ claims:
     tests:
       - go ./internal/project TestDriversBuildAMultiWithStatusRows
       - go ./io TestMultiQualityMerges
+    partial: true
+    note: >-
+      The Sparkplug health gate is checked only with both child brokers
+      down, which an any-child-healthy gate would also report unhealthy;
+      one child up and one down is not tested, so "only when every child
+      bus is" is not asserted.
   - id: MB-045
     claim: >-
       The `memory` loopback cannot join a `drivers:` list.
@@ -477,6 +512,11 @@ claims:
       - go ./modbus TestForeignWriteRoundTrip
       - go ./modbus TestForeignExceptionMarksOnlyThatBlock
       - go ./modbus TestForeignLatencyAboveTimeoutReconnects
+    partial: true
+    note: >-
+      The slow-response test never delivers a value before the timeouts
+      start, so "values held" through the reconnect is not asserted by the
+      foreign run.
   - id: MB-049
     claim: >-
       Modbus RTU/ASCII, BCD, int64 and string formats, one-based

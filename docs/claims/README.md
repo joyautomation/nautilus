@@ -64,9 +64,31 @@ claims:
 
 An empty `tests: []` is a **gap**, and gaps are the point: they are listed
 on the site as "no test yet" rather than left out. Do not stretch a test
-to cover a claim it does not assert. A test covers a claim only when its
-body actually checks the promised behaviour (read the test, not just its
-name).
+to cover a claim it does not assert.
+
+### When a test covers a claim
+
+A claim is fully covered (`partial: false`) only when all of these hold.
+An audit of the first draft found 40% of "verified" claims failing one of
+them:
+
+1. **It would fail if the feature broke.** Read the test body and ask:
+   if the promised behaviour were removed or wrong, would this test go
+   red? A test that exercises the path but cannot tell working from broken
+   is not coverage. Examples: an `always:` that never sees a transient
+   violation can't tell every-scan from end-of-step checking; a load test
+   whose program overwrites the loaded value every scan can't see a wrong
+   load; a fallback test that passes whether or not the fallback ran.
+2. **Every clause is asserted.** A claim joining promises with "and" or
+   "or" (DIV *and* MOD, TIME *and* LTIME, by name *or* by number, `lib/`
+   *or* the project root) is covered only when each clause is. Otherwise
+   `partial: true` and the note names the unasserted clause.
+3. **The page says it.** The claim states what the page promises, in the
+   page's terms. Detail taken from the code or a test (status codes,
+   message strings, extra cases) is not a claim of the page; if the page
+   quotes a string, check the code produces that string.
+4. **Every listed test earns its place.** A test about something adjacent
+   (a different diagnostic, an editor gesture) does not go in the list.
 
 ## Which tests count
 
