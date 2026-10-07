@@ -1,8 +1,8 @@
 ---
 // /verified/runtime/ — the runtime claims inventory (docs/claims/) joined to
 // the last green CI run: claims per page with their verdicts, then the test
-// suite itself as data — counts, statement coverage, the conformance
-// matrix. Data: src/lib/runtime.ts.
+// suite itself as data — test counts and the conformance matrix. Statement
+// coverage is in the evidence file but not shown yet. Data: src/lib/runtime.ts.
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
 import { Badge } from '@astrojs/starlight/components';
 import { GROUPS, VERDICTS, groupOf, loadRuntime, pageSlug, pct } from '../../../lib/runtime';
@@ -22,7 +22,6 @@ const partial = r?.verdicts.partial ?? 0;
 const t = r?.totals;
 const langs = ['st', 'ld', 'fbd', 'sfc'];
 const conformanceTests = (r?.conformance ?? []).reduce((a, f) => a + f.tests, 0);
-const tested = (r?.packages ?? []).filter((p) => p.statements > 0);
 ---
 
 <StarlightPage
@@ -110,13 +109,11 @@ const tested = (r?.packages ?? []).filter((p) => p.statements > 0);
           <div><dt>subtests</dt><dd>{t!.subtests.toLocaleString('en')}</dd></div>
           <div><dt>passed</dt><dd>{t!.passed.toLocaleString('en')}</dd></div>
           <div><dt>skipped</dt><dd>{t!.skipped.toLocaleString('en')}</dd></div>
-          <div><dt>statement coverage</dt><dd>{pct(t!.covered, t!.statements)}%</dd></div>
         </dl>
         <p class="vf-muted">
           <small>
             Skipped tests need a peer or hardware that job lacks: Postgres, a Logix controller, a
-            real BMC. A test that passes in any job counts as passed. Coverage comes from the plain
-            <code>go test ./...</code> job only.
+            real BMC. A test that passes in any job counts as passed.
           </small>
         </p>
 
@@ -144,27 +141,6 @@ const tested = (r?.packages ?? []).filter((p) => p.statements > 0);
           </tbody>
         </table>
 
-        <h3>By package</h3>
-        <details>
-          <summary>{tested.length} packages with statements, by coverage</summary>
-          <table class="vf-sections">
-            <thead>
-              <tr><th>Package</th><th>Tests</th><th>Coverage</th><th></th></tr>
-            </thead>
-            <tbody>
-              {[...tested].sort((a, b) => pct(b.covered, b.statements) - pct(a.covered, a.statements)).map((p) => (
-                <tr>
-                  <td><a href={`https://github.com/${repo}/tree/main/${p.path.replace(/^\.\/?/, '')}`}><code>{p.path.replace(/^\.\//, '')}</code></a></td>
-                  <td class="num">{p.tests + p.subtests || ''}</td>
-                  <td class="num">{pct(p.covered, p.statements)}%</td>
-                  <td style="width: 30%">
-                    <div class="vf-bar" role="presentation"><span style={`width: ${pct(p.covered, p.statements)}%`} /></div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </details>
       </>
     )
   }
