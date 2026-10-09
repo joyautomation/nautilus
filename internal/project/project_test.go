@@ -207,6 +207,7 @@ sparkplug:
   group-id: Joy
   device: plc
   store-forward: 5000
+  flatten-udts: true
   default-class: { deadband: 0.5, max-interval: 30s }
   classes:
     fast: { deadband: 0.1, max-interval: 5s }
@@ -226,6 +227,9 @@ sparkplug:
 	node, err := p.Sparkplug(rt)
 	if err != nil || node == nil {
 		t.Fatalf("node: %v, %v", node, err)
+	}
+	if !p.sparkplug.FlattenUDTs {
+		t.Error("flatten-udts: true did not parse")
 	}
 
 	// No section → no node; missing group-id → a readable error.

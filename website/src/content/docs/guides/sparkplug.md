@@ -20,6 +20,7 @@ sparkplug:
   bdseq-file: /var/lib/nautilus/line1.bdseq
   device: plc1                       # the field driver's tags as a Sparkplug DEVICE
   store-forward: 5000
+  flatten-udts: false                # true: UDT members as plain metrics (below)
   default-class: { deadband: 0.5, max-interval: 30s }
   classes:
     fast:   { deadband: 0.1, min-interval: 1s, max-interval: 5s }
@@ -35,6 +36,30 @@ BOOL→Boolean, integers→Int64, REAL→Double, UDT→Template — and a host c
 write tags back via NCMD (a setpoint written in the SCADA host lands in
 the tag store for the program to act on). `Node Control/Rebirth` is
 honored.
+
+## UDTs on hosts that don't read Templates
+
+A UDT tag publishes as a Sparkplug Template: its definition in the
+NBIRTH, each tag an instance. Templates are standard Sparkplug B, but
+some hosts skip Template metrics, and a UDT tag then never arrives at
+all. `flatten-udts: true` publishes each member as a plain metric of its
+own instead, named by its path with `/` between levels. Hosts show that
+as a folder tree:
+
+| `flatten-udts: false` (default) | `flatten-udts: true` |
+|---|---|
+| `P101`, a Template instance of `Motor` | `P101/Running` Boolean, `P101/Speed` Double |
+| the `Motor` definition in the NBIRTH | no definitions |
+| a nested UDT as a Template member | `P101/Drive/Torque`, at any depth |
+
+The UDT member's `unit:` and `desc:` carry over to its metric. A `desc:`
+on the UDT tag itself has nowhere to go and is left out. Report by
+exception still decides per tag: the class and deadband that cover
+`P101` cover all of its members. When `P101` publishes, a data message
+carries only the members that moved since the last publish. A
+`max-interval` heartbeat carries all of them. A host writes a member
+back under the same name (`P101/Speed`), and it lands in the tag store
+as `P101.Speed`.
 
 ## Publish classes
 

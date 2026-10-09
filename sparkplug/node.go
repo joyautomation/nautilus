@@ -57,6 +57,7 @@ type Node struct {
 
 	devices  []Device
 	tagOwner map[string]string // tag -> device id ("" = node level)
+	flatten  bool              // WithFlattenUDTs: UDT members as plain metrics, no Templates
 
 	// publish classes
 	classRBE    map[string]RBE

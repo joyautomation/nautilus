@@ -48,7 +48,7 @@ END_PROGRAM
 // newCommandNode builds a Node over a real runtime whose Motor1 UDT tag is
 // seeded with distinguishable values at every level, plus a logger writing
 // into buf so the log-once diagnostics are assertable.
-func newCommandNode(t *testing.T, buf *bytes.Buffer) *Node {
+func newCommandNode(t *testing.T, buf *bytes.Buffer, opts ...Option) *Node {
 	t.Helper()
 	rt, err := runtime.New(runtime.Options{
 		Program:   cmdProgramST,
@@ -79,7 +79,7 @@ func newCommandNode(t *testing.T, buf *bytes.Buffer) *Node {
 	rt.Tags().Set("Motor1", m)
 
 	log := slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	n, err := New(rt, Config{GroupID: "G", EdgeNode: "E", Log: log})
+	n, err := New(rt, Config{GroupID: "G", EdgeNode: "E", Log: log}, opts...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
