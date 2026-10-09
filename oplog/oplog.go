@@ -401,22 +401,26 @@ func (n *Node) rewrite() error {
 	if err := tmp.Close(); err != nil {
 		return fail(err)
 	}
-	if err := os.Rename(tmpName, n.o.File); err != nil {
+	// Close the old handle before the rename, not after: Windows refuses to
+	// replace a file that is open (Go opens without FILE_SHARE_DELETE), so
+	// renaming over a live handle fails there. Then reopen whichever file
+	// is in place, the new one or, if the rename failed, the old.
+	n.file.Close()
+	renameErr := os.Rename(tmpName, n.o.File)
+	if renameErr != nil {
 		os.Remove(tmpName)
-		return err
-	}
-	if d, err := os.Open(dir); err == nil {
-		_ = d.Sync()
+	} else if d, err := os.Open(dir); err == nil {
+		_ = d.Sync() // not supported on Windows; NTFS journals the rename
 		d.Close()
 	}
-	// The old handle points at the unlinked file: reopen the new one.
-	n.file.Close()
 	f, err := os.OpenFile(n.o.File, os.O_RDWR|os.O_APPEND, 0o600)
 	if err != nil {
-		return err
+		// n.file stays the closed handle, so every later write fails
+		// loudly rather than being skipped as if there were no file.
+		return errors.Join(renameErr, err)
 	}
 	n.file = f
-	return nil
+	return renameErr
 }
 
 func truncateStr(s string, n int) string {

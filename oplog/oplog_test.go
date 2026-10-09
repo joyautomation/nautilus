@@ -295,3 +295,45 @@ func TestStandalone(t *testing.T) {
 		t.Error("standalone is always writable")
 	}
 }
+
+// The rewrite (a follower dropping an uncommitted suffix) replaces the file
+// while the node holds it open. Windows refuses a rename over an open file,
+// so this is the test the Windows CI job exists for: rewrite, keep
+// appending, and reopen to the same log.
+func TestRewriteThenAppendThenReopen(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "n.jsonl")
+	n, err := New(Options{Self: "http://a", File: file, Apply: func(Entry) error { return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, id := range []string{"a", "b"} {
+		if _, err := n.Propose(ctx, Entry{Kind: KindAck, IDs: []string{id}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n.mu.Lock()
+	err = n.rewrite()
+	n.mu.Unlock()
+	if err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if e, err := n.Propose(ctx, Entry{Kind: KindAck, IDs: []string{"c"}}); err != nil || e.Seq != 3 {
+		t.Fatalf("append after rewrite: %+v %v", e, err)
+	}
+	if err := n.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var replayed int
+	m, err := New(Options{Self: "http://a", File: file, Apply: func(Entry) error { replayed++; return nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if m.LastSeq() != 3 || replayed != 3 {
+		t.Fatalf("after reopen: last %d replayed %d, want 3 and 3", m.LastSeq(), replayed)
+	}
+	if left, _ := filepath.Glob(file + ".*.tmp"); len(left) != 0 {
+		t.Fatalf("temp files left behind: %v", left)
+	}
+}
