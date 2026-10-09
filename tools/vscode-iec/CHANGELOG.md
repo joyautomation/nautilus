@@ -31,6 +31,11 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Added
 
+- **`sparkplug.flatten-udts` in `nautilus.yaml`** — completion and
+  validation for the new option that publishes each UDT member as a plain
+  Sparkplug metric (`P101/Running`) instead of a Template, for hosts that
+  do not read Templates. Needs a `naut` newer than 0.15.0.
+
 - **The whole IEC conversion matrix.** Every `<A>_TO_<B>` between `BOOL`,
   the integers, the bit strings, `REAL`/`LREAL`, `TIME`/`LTIME` and
   `STRING` (`DINT_TO_REAL`, `WORD_TO_INT`, `STRING_TO_TIME`, …), the

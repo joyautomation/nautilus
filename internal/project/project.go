@@ -186,6 +186,10 @@ type SparkplugConfig struct {
 	// (or the primary host) is unreachable and replays them, marked
 	// historical, on reconnect. Zero disables (the default).
 	StoreForward int `yaml:"store-forward"`
+	// FlattenUDTs publishes each UDT member as a plain metric
+	// ("P101/Running") instead of the tag as one Sparkplug Template, for
+	// hosts that do not read Templates. Default false: Templates.
+	FlattenUDTs bool `yaml:"flatten-udts"`
 	// RBE tuning: a default class, named classes, and glob assignments.
 	DefaultClass  *RBEConfig           `yaml:"default-class"`
 	Classes       map[string]RBEConfig `yaml:"classes"`
@@ -451,6 +455,9 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 	var opts []sparkplug.Option
 	if c.StoreForward > 0 {
 		opts = append(opts, sparkplug.WithStoreForward(c.StoreForward))
+	}
+	if c.FlattenUDTs {
+		opts = append(opts, sparkplug.WithFlattenUDTs())
 	}
 	if c.DefaultClass != nil {
 		opts = append(opts, sparkplug.WithDefaultRBE(rbe(*c.DefaultClass)))

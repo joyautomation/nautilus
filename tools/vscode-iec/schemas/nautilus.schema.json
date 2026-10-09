@@ -686,6 +686,11 @@
           "minimum": 1,
           "description": "Buffer up to this many data messages while the broker (or the primary host) is unreachable and replay them, marked historical, on reconnect. Omit to disable."
         },
+        "flatten-udts": {
+          "type": "boolean",
+          "default": false,
+          "description": "Publish each UDT member as a plain metric named by its path (P101/Running) instead of the tag as one Sparkplug Template, for hosts that do not read Templates. Commands address members by the same name."
+        },
         "default-class": {
           "$ref": "#/definitions/rbe",
           "description": "Report-by-exception tuning applied to metrics with no class."

@@ -55,6 +55,12 @@ func (n *Node) applyCommand(payload Payload) {
 		if m.Name == "" || m.IsNull {
 			continue
 		}
+		if n.flatten && m.Name != "Node Control/Rebirth" {
+			// Flattened, a member is published as "P101/Speed" and a host
+			// writes it back under that name: the store's path for it is
+			// "P101.Speed" (see flatten.go).
+			m.Name = memberPath(m.Name)
+		}
 		if m.Datatype == spb.DataType_Template {
 			n.commandTemplate(m)
 			continue

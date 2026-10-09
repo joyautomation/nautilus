@@ -5,6 +5,7 @@ import (
 
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/sparkplug/spb"
 )
 
 // scanAndPublish samples the tag store once, applies each metric's RBE rule,
@@ -306,7 +307,19 @@ func (n *Node) collectChanged(snap map[string]runtime.Sample, now time.Time, own
 		// Data messages carry the full metric name (aliases are unusable
 		// under the TCK — see birth.go).
 		m.Timestamp = nowMs()
-		out = append(out, m)
+		if n.flatten && m.Datatype == spb.DataType_Template {
+			// Only the members that moved since the last publish; st.last
+			// is still that publish's value here (record comes after).
+			var prev []Metric
+			if st.primed {
+				if pm, err := MetricFromValue(name, st.last, tmplRef); err == nil {
+					prev = flattenMetric(pm)
+				}
+			}
+			out = append(out, changedLeaves(flattenMetric(m), prev)...)
+		} else {
+			out = append(out, m)
+		}
 		st.record(v, s.Gen, now)
 	}
 	return out
@@ -355,7 +368,7 @@ func (n *Node) publishDeviceBirth(d Device) {
 		if err != nil {
 			continue
 		}
-		ms = append(ms, m)
+		ms = append(ms, n.expand(m)...)
 	}
 	p, err := Payload{Timestamp: ts, Seq: n.nextSeq(), Metrics: ms}.Encode()
 	n.mu.Unlock()
