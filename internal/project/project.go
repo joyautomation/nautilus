@@ -77,6 +77,7 @@ type Manifest struct {
 	// drivers: is an error. One entry behaves exactly like driver:.
 	Drivers   []DriverConfig   `yaml:"drivers"`
 	Sparkplug *SparkplugConfig `yaml:"sparkplug"`
+	OPCUA     *OPCUAConfig     `yaml:"opcua"`
 	// Retain persists operator state (setpoints, online edits) across
 	// restarts; Redundancy elects one scanning leader among replicas.
 	// Both are wired by `naut run` — check/build/LSP only validate.
@@ -446,6 +447,9 @@ type Project struct {
 	// (see alarms.go) for the same reason Sparkplug is: Load must stay
 	// side-effect-free so check, build and the LSP can use it.
 	Alarms *AlarmsConfig
+
+	//OPCUA
+	OPCUA *OPCUAConfig
 }
 
 // RetainNames resolves the retain section's defaults against the project
@@ -867,6 +871,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		},
 		sparkplug:  m.Sparkplug,
 		drivers:    drivers,
+		OPCUA:      m.OPCUA,
 		Retain:     m.Retain,
 		Redundancy: m.Redundancy,
 		Alarms:     m.Alarms,
@@ -1452,4 +1457,11 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 	default:
 		return nil, fmt.Errorf("driver type %q: manifest projects support memory, eip, sparkplug-host, modbus, snmp, redfish, prometheus and replay — custom buses are the Go tier (io.Driver)", d.Type)
 	}
+}
+
+// OPCUAConfig configures the optional OPC UA server.
+type OPCUAConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Endpoint string `yaml:"endpoint"`
+	Interval string `yaml:"interval"`
 }
