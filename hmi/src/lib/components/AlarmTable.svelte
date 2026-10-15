@@ -12,6 +12,7 @@
 	import { untrack } from 'svelte';
 	import type { AlarmInstance, AlarmState, Priority } from '../alarms.svelte.js';
 	import { DEFAULT_SHELVE_TIMES_S, PRIORITY_META, PRIORITY_ORDER, STATE_META } from '../alarms.svelte.js';
+	import AlarmSign from './AlarmSign.svelte';
 	import Modal from './Modal.svelte';
 	import Button from './Button.svelte';
 	import Icon from './Icon.svelte';
@@ -375,7 +376,7 @@
 						</td>
 						<td class="col-priority">
 							<span class="prio" style="--c: {PRIORITY_META[a.priority].color}" title={PRIORITY_META[a.priority].label}>
-								<span aria-hidden="true">{PRIORITY_META[a.priority].glyph}</span>
+								<AlarmSign priority={a.priority} size={14} title={PRIORITY_META[a.priority].label} />
 							</span>
 						</td>
 						<td class="col-active num" title={fmtTime(a.activeMs)}>

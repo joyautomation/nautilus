@@ -34,16 +34,44 @@ export type AlarmState =
 	| 'suppressed';
 
 /** Module-scope metadata for each priority — reused by the banner and table.
- * Never color alone: every priority carries a label and a glyph, the same
- * convention as `ConnectionBadge`'s `STATE_META`. Colors are the kit's
- * reserved roles — no new tokens (`--crit`/`--serious`/`--warn`/`--ink-2`/
- * `--muted` cover critical → diagnostic per the brief, §5). */
+ * Never color alone: every priority carries a label and a shape
+ * (`PRIORITY_SIGN`, drawn by `<AlarmSign>`), the same convention as
+ * `ConnectionBadge`'s `STATE_META`. Colors are the kit's reserved roles — no
+ * new tokens (`--crit`/`--serious`/`--warn`/`--ink-2`/`--muted` cover
+ * critical → diagnostic per the brief, §5). `glyph` is the shape as a
+ * character (critical's hexagon is the nearest one an octagon has in most
+ * fonts), for plain text only (a CSV, a notification); a screen draws
+ * `<AlarmSign>`. */
 export const PRIORITY_META: Record<Priority, { label: string; color: string; glyph: string }> = {
-	critical: { label: 'Critical', color: 'var(--crit)', glyph: '■' },
+	critical: { label: 'Critical', color: 'var(--crit)', glyph: '⬣' },
 	high: { label: 'High', color: 'var(--serious)', glyph: '▲' },
-	medium: { label: 'Medium', color: 'var(--warn)', glyph: '▲' },
+	medium: { label: 'Medium', color: 'var(--warn)', glyph: '◆' },
 	low: { label: 'Low', color: 'var(--ink-2)', glyph: '●' },
-	diagnostic: { label: 'Diagnostic', color: 'var(--muted)', glyph: '○' }
+	diagnostic: { label: 'Diagnostic', color: 'var(--muted)', glyph: '■' }
+};
+
+/**
+ * How each priority is drawn, so its urgency reads before its colour does:
+ * a distinct shape per level (colour-blind safe, and legible at a glance
+ * across a rack), a mark inside it, and what the level asks of the operator
+ * — how soon it must be acted on (ISA-18.2: priority is the time to
+ * respond). Neither ISA-18.2 nor ISA-101 prescribes the shapes, only that
+ * priority is never carried by colour alone.
+ */
+export interface PrioritySign {
+	shape: 'octagon' | 'triangle' | 'diamond' | 'circle' | 'square';
+	/** The mark inside the shape. */
+	glyph: string;
+	/** What the level asks for, in the operator's words. */
+	urgency: string;
+}
+
+export const PRIORITY_SIGN: Record<string, PrioritySign> = {
+	critical: { shape: 'octagon', glyph: '!!', urgency: 'act now' },
+	high: { shape: 'triangle', glyph: '!', urgency: 'act within minutes' },
+	medium: { shape: 'diamond', glyph: '!', urgency: 'act this shift' },
+	low: { shape: 'circle', glyph: 'i', urgency: 'when convenient' },
+	diagnostic: { shape: 'square', glyph: '?', urgency: 'for the record' }
 };
 
 /** Module-scope metadata for each ISA-18.2 state — label, color, and whether

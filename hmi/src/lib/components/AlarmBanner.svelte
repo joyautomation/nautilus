@@ -8,6 +8,7 @@
 	// reduced-motion.
 	import type { AlarmSummary, Priority } from '../alarms.svelte.js';
 	import { PRIORITY_META, PRIORITY_ORDER } from '../alarms.svelte.js';
+	import AlarmSign from './AlarmSign.svelte';
 
 	let {
 		summary,
@@ -64,7 +65,7 @@
 	<span class="counts">
 		{#each byPriority as { p, n } (p)}
 			<span class="count" style="--c: {PRIORITY_META[p].color}" title={PRIORITY_META[p].label}>
-				<span class="glyph" aria-hidden="true">{PRIORITY_META[p].glyph}</span>{n}
+				<AlarmSign priority={p} size={12} title={PRIORITY_META[p].label} />{n}
 			</span>
 		{/each}
 		{#if !byPriority.length}
@@ -194,9 +195,6 @@
 		font-family: inherit;
 		font-weight: 500;
 		color: var(--muted);
-	}
-	.glyph {
-		font-size: 10px;
 	}
 	.newest {
 		display: flex;

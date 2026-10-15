@@ -104,7 +104,8 @@ export { default as AlarmBanner } from './components/AlarmBanner.svelte';
 export { default as AlarmTable } from './components/AlarmTable.svelte';
 export { default as AlarmJournal } from './components/AlarmJournal.svelte';
 export { default as AckButton, worstFirst, ackLine } from './components/AckButton.svelte';
-export { AlarmClient, createAlarmClient, shouldRefetch, PRIORITY_ORDER, PRIORITY_META, STATE_META, DEFAULT_SHELVE_TIMES_S } from './alarms.svelte.js';
+export { AlarmClient, createAlarmClient, shouldRefetch, PRIORITY_ORDER, PRIORITY_META, PRIORITY_SIGN, STATE_META, DEFAULT_SHELVE_TIMES_S } from './alarms.svelte.js';
+export { default as AlarmSign } from './components/AlarmSign.svelte';
 export type {
 	Priority,
 	AlarmState,
@@ -116,7 +117,8 @@ export type {
 	AlarmJournalFilter,
 	AlarmJournalResult,
 	AlarmClientOptions,
-	FrameWithAlarms
+	FrameWithAlarms,
+	PrioritySign
 } from './alarms.svelte.js';
 
 // App-shell primitives: icons, menus, navigation, dialogs, toasts — the

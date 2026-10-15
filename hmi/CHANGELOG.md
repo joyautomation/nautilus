@@ -1,5 +1,30 @@
 # Changelog — @joyautomation/nautilus-hmi
 
+## 0.8.0 — 2026-10-15 (minor: additive, no breaking changes)
+
+### Added
+
+- **`<AlarmSign>`: one shape per priority, drawn.** Critical is an octagon,
+  high a triangle, medium a diamond, low a circle and diagnostic a square,
+  each with a mark inside (`!!`, `!`, `!`, `i`, `?`) and the priority's
+  colour, so a level reads by shape before colour. It is the 3D package's
+  sign moved into the kit, so the banner, the alarm table, the 3D markers
+  and an app's own lists draw the same thing. `hollow` outlines it for an
+  alarm back to normal and waiting for acknowledgement; `ink` (the mark and
+  outline, default `var(--surface)`) keeps it legible in either theme.
+  `PRIORITY_SIGN` and the `PrioritySign` type come with it. Neither ISA-18.2
+  nor ISA-101 prescribes the shapes, only that colour never carries
+  priority alone.
+- **Two icons:** `equals` and `arrows-right-left`, from Heroicons like the
+  rest.
+
+### Changed
+
+- **`<AlarmBanner>` and `<AlarmTable>` draw `<AlarmSign>`** instead of a
+  text glyph. High and medium were both `▲`, told apart by colour alone.
+- **`PRIORITY_META.glyph` matches the signs** (`⬣ ▲ ◆ ● ■`) and is for
+  plain text only (a CSV, a notification).
+
 ## 0.7.1 — 2026-10-14 (patch)
 
 ### Fixed

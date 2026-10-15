@@ -193,8 +193,10 @@ shapes are contracted against `docs/design/alarms.md` (see `src/lib/alarms.ts`).
 `AlarmTable`'s columns, widths, and default sort (Active Time, descending) come verbatim from the
 Perspective view the brief was reverse-engineered from: Priority | Active Time | State | Label |
 Pipeline | Ack Time | Ack User. State colors follow the reserved status tokens
-(`--crit`/`--serious`/`--warn`/`--ink-2`/`--muted`) and are never color-alone — every state and
-priority also carries a label and a glyph, same convention as `ConnectionBadge`'s `STATE_META`.
+(`--crit`/`--serious`/`--warn`/`--ink-2`/`--muted`) and are never color-alone — every
+state also carries a label, and every priority a label and a shape (`AlarmSign`: critical octagon,
+high triangle, medium diamond, low circle, diagnostic square), same convention as
+`ConnectionBadge`'s `STATE_META`.
 2,000+ row lists are handled with simple pagination rather than a virtualization dependency.
 `AlarmJournal` takes a `from`/`to` (epoch ms) range plus an `onrange` callback so the host re-fetches
 via `alarms.journal(...)` and hands back fresh `events`; its CSV export is a client-side
@@ -566,6 +568,7 @@ reduced-motion via `data-motion`.
 | `Histogram` | `counts: number[]`, `bucketWidth`, `unit`, `height`, `color` |
 | `NumberField` | `label`, `unit`, `value`, `min`, `max`, `step`, `onsubmit(v)` |
 | `AlarmBanner` | `summary: AlarmSummary`, `now`, `onclick?`, `href?` |
+| `AlarmSign` | `priority`, `color?` (the priority's role), `size?` (16), `hollow?` (back to normal, unacknowledged), `ink?` (mark and outline, `var(--surface)`), `title?` |
 | `AlarmTable` | `alarms: AlarmInstance[]`, `sites?`, `now`, `onack(ids,by)`, `onshelve(id,until,by)`, `onunshelve?(id,by)`, `shelveTimes?`, `operator?`, `onselect?(instance)`, `pageSize?`, `confirmAck?` |
 | `AckButton` | `alarms?: AlarmInstance[]`, `ids?` (`['*']` = ack all), `onack(ids,by)`, `label?`, `operator?`, `confirmAck?`, `variant?`, `size?`, `icon?`, `disabled?` |
 | `FaceplateShell` | `label`, `tag?`, `typeName?`, `quality?`, `present?`, `simulated?`, `showQuality?`, `as: 'modal' \| 'page' \| 'auto'`, `breakpoint?`, `size?`, `tabs?`, `bind:active`, `simTab?`, `chips?`, `closeOnEscape?`, `closeOnBackdrop?`, `simNote?`, `onclose`, snippets `hero` / `status` / `panel(label, i)` / `sim` / `children` / `footer(writable)` |
