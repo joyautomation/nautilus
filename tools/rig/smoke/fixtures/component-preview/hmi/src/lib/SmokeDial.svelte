@@ -17,3 +17,9 @@
   <text x="80" y="44" text-anchor="middle" data-role="label" font-size="16" fill="currentColor">{label}</text>
   <text x="80" y="78" text-anchor="middle" data-role="value" font-size="22" fill={color}>{value}</text>
 </svg>
+
+<style>
+  /* The check edits `normal` to `italic` here and reads the computed style
+     back from the pane: a <style> change must reach it like markup does. */
+  [data-role=value] { font-style: normal; }
+</style>

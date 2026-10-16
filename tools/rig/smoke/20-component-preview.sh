@@ -7,7 +7,9 @@
 #   open         a .svelte's editor title has the button; the pane opens
 #                beside and the island mounts (the component's own SVG in
 #                the webview DOM) showing the component's default label
-#   on type      an unsaved edit to that default shows in the pane, no save
+#   on type      an unsaved edit to that default shows in the pane, no save;
+#                so does an edit inside <style> (injected CSS is keyed by
+#                filename in Svelte 5 — the pane must drop the stale sheet)
 #   props strip  adding `label` in the strip renders it at once and writes
 #                {Name}.component.json next to the .svelte, preview.props
 #   error        a syntax error shows the banner OVER the last good render
@@ -79,6 +81,16 @@ else
   fail "the pane did not follow the unsaved edit (label '$(label)', status '$(status)', banner '$(banner)')" "$(shot on-type-missed)"
 fi
 grep -qF "dial v2" "$F" && fail "the edit reached disk without a save" || true
+
+# ── on type, <style>: a CSS edit reaches the pane too ──────────────────────
+# Svelte 5 keys injected styles by filename; the pane must drop the old
+# <style> on every rebuild or the first stylesheet wins forever.
+text_replace "$F" "font-style: normal;" "font-style: italic;"
+if wait_js 'win.getComputedStyle(doc.querySelector(".stage [data-role=value]")).fontStyle === "italic"' 30; then
+  pass "a <style> edit re-styled the island (value is italic now)" "$(shot on-type-css)"
+else
+  fail "the <style> edit did not reach the pane (font-style '$(wv 'win.getComputedStyle(doc.querySelector(".stage [data-role=value]")).fontStyle')', status '$(status)')" "$(shot on-type-css-missed)"
+fi
 
 # ── the props strip: renders at once, writes the sidecar ───────────────────
 click_el 'doc.querySelector("form.add input[placeholder=prop]")' || fail "no prop-name field in the props strip"
