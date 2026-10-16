@@ -18,6 +18,15 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   when they parse (`62`, `true`, `[1, 2]`), else as text. The pane follows
   the active `.svelte` editor and zooms 50 to 400 %. Needs workspace
   trust, like the mimic editor's user components.
+- **Preview a page for use.** Open a `+page.svelte` (or `+layout.svelte`)
+  and press its browser button, or run **nautilus: Preview HMI Page**: the
+  project's own `npm run dev` starts in a terminal on a free port (reused
+  while that terminal lives) and the file's route opens in VS Code's
+  Simple Browser beside the text. Vite's hot reload keeps it current as
+  you type; the dev server is pointed at `nautilus.runtimeUrl` through
+  `CONTROLLER_URL`, and when nothing answers there the extension offers
+  to start `naut run .` in the project above. Works from a Remote SSH
+  window (the port is forwarded). Needs workspace trust.
 - **A multi-leg OR in one step, and a branch you can select (ladder).**
   Ctrl- or Shift-click several elements of one series (the rung, or one
   leg of a branch), then press `O` or the toolbar's **OR**: they become

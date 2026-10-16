@@ -147,6 +147,11 @@ commit (*Open With → Text Editor* any time).
   with sample props you set in the pane (saved to `{Name}.component.json`,
   so the AI or teammate who writes the next component can ship its preview
   data with it).
+- Writing a page? Open a `+page.svelte` and press its browser button
+  (**nautilus: Preview HMI Page**): the project's own `npm run dev` starts
+  in a terminal and the page's route opens in VS Code's Simple Browser
+  beside the text, live-reloading as you type, with values from the
+  controller at `nautilus.runtimeUrl`. Also works from a Remote SSH window.
 
 ## Testing
 
@@ -237,6 +242,7 @@ The most used; all are under **nautilus:** in the Command Palette.
 | Get Started | Open the walkthrough |
 | Open as Diagram Editor / Show Source | Switch a file between text and diagram |
 | Open FBD / Ladder / SFC Diagram Preview | Diagram beside the text |
+| Open Component Preview / Preview HMI Page | A `.svelte` component, or a whole route, beside the text |
 | Diff … Diagram (vs git HEAD / between git revisions… / vs Controller) | Visual diff |
 | Connect to Controller… | Set `nautilus.runtimeUrl` for this workspace |
 | Set Live Value… | Write a tag on the controller |
