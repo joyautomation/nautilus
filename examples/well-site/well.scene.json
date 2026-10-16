@@ -1,0 +1,49 @@
+{
+	"name": "Well 1",
+	"look": "paper",
+	"camera": { "projection": "orthographic", "width": 7.5, "pos": [7.4, 6.0, 6.8], "target": [0.3, 0.0, -0.4] },
+	"kinds": {
+		"well": {
+			"type": "Well",
+			"members": ["Pump", "Depth", "Static", "Flow", "LL"],
+			"component": "hmi/src/lib/Well.svelte"
+		},
+		"meter": {
+			"type": "Meter",
+			"members": ["Flow"],
+			"component": "hmi/src/lib/Meter.svelte"
+		},
+		"chem-feed": {
+			"type": "ChemFeed",
+			"members": ["Residual", "Low"],
+			"status": "{Residual:1} mg/L",
+			"bounds": { "size": [0.9, 0.5, 0.5], "center": [0.1, 0.22, 0] },
+			"labelAt": [0.1, 0.5, 0],
+			"assembly": {
+				"nodes": [
+					{ "id": "tank", "kind": "tank", "tag": "Tank", "pos": [-0.15, 0, 0], "scale": 0.9 },
+					{ "id": "pump", "kind": "pump", "tag": "Pump", "pos": [0.4, 0, 0], "scale": 0.7 }
+				],
+				"pipes": [
+					{ "points": [[0.03, 0.05, 0], [0.3, 0.05, 0], [0.3, 0.09, 0]], "radius": 0.01, "bind": { "flowing": "Pump.Running" } }
+				]
+			}
+		}
+	},
+	"fixtures": [
+		{ "kind": "plane", "pos": [0.85, 0, -0.65], "size": [4.5, 2.5] }
+	],
+	"nodes": [
+		{ "id": "WL101", "kind": "well", "tag": "WL101", "label": "WL-101", "pos": [-2.0, 0, 0] },
+		{ "id": "FIT101", "kind": "meter", "tag": "FIT101", "label": "FIT-101", "pos": [-0.95, 0.35, 0] },
+		{ "id": "FCV101", "kind": "valve", "tag": "FCV101", "label": "FCV-101", "pos": [-0.2, 0.35, 0], "rot": [0, 0, -90] },
+		{ "id": "R101", "kind": "tank", "tag": "R101", "label": "R-101", "pos": [1.9, 0, -0.2], "scale": 2.6 },
+		{ "id": "CL101", "kind": "chem-feed", "tag": "CL101", "label": "CL-101", "pos": [-1.0, 0, -1.3] }
+	],
+	"pipes": [
+		{ "id": "wellhead-to-meter", "points": [[-1.85, 0.35, 0], [-1.07, 0.35, 0]], "radius": 0.02, "bind": { "flowing": "WL101.Pump.Running" } },
+		{ "id": "meter-to-valve", "points": [[-0.83, 0.35, 0], [-0.28, 0.35, 0]], "radius": 0.02, "bind": { "flowing": "FIT101.Flow" } },
+		{ "id": "valve-to-reservoir", "points": [[-0.12, 0.35, 0], [1.1, 0.35, 0], [1.1, 1.15, 0], [1.1, 1.15, -0.2], [1.5, 1.15, -0.2]], "radius": 0.02, "bind": { "flowing": "FCV101.Pos" } },
+		{ "id": "chem-injection", "points": [[-0.6, 0.12, -1.3], [-0.6, 0.12, -0.9], [-1.45, 0.12, -0.9], [-1.45, 0.12, -0.02], [-1.45, 0.33, -0.02]], "radius": 0.008, "bind": { "flowing": "CL101.Pump.Running" } }
+	]
+}

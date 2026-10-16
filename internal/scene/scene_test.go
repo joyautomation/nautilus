@@ -355,7 +355,18 @@ func TestDriveVocabularyMatchesTheSchema(t *testing.T) {
 			Environment struct {
 				Properties map[string]any `json:"properties"`
 			} `json:"environment"`
+			Camera struct {
+				Properties map[string]any `json:"properties"`
+			} `json:"camera"`
+			Pipe struct {
+				Properties map[string]any `json:"properties"`
+			} `json:"pipe"`
 		} `json:"definitions"`
+		Properties struct {
+			Look struct {
+				Enum []string `json:"enum"`
+			} `json:"look"`
+		} `json:"properties"`
 	}
 	if err := json.Unmarshal(data, &schema); err != nil {
 		t.Fatal(err)
@@ -377,6 +388,46 @@ func TestDriveVocabularyMatchesTheSchema(t *testing.T) {
 			t.Errorf("schema environment has no property %q", f)
 		}
 	}
+	for _, f := range []string{"pos", "target", "fov", "projection", "width"} {
+		if _, ok := schema.Definitions.Camera.Properties[f]; !ok {
+			t.Errorf("schema camera has no property %q", f)
+		}
+	}
+	for _, f := range []string{"id", "points", "radius", "bind", "arrows"} {
+		if _, ok := schema.Definitions.Pipe.Properties[f]; !ok {
+			t.Errorf("schema pipe has no property %q", f)
+		}
+	}
+	if got := schema.Properties.Look.Enum; strings.Join(got, ",") != strings.Join(Looks, ",") {
+		t.Errorf("schema look enum %v, Go %v", got, Looks)
+	}
+}
+
+func TestLookAndCameraProjection(t *testing.T) {
+	ok := func(d Doc) {
+		t.Helper()
+		if errs, _ := Check(&d, rigTags); len(errs) > 0 {
+			t.Errorf("unexpected: %v", errs)
+		}
+	}
+	bad := func(d Doc, path string) {
+		t.Helper()
+		errs, _ := Check(&d, rigTags)
+		if len(errs) != 1 || !strings.HasPrefix(errs[0], path+": ") {
+			t.Errorf("want one error at %s, got %v", path, errs)
+		}
+	}
+	node := []Node{{ID: "a", Kind: "tank", Pos: Vec{0, 0, 0}}}
+	for _, l := range Looks {
+		ok(Doc{Look: l, Nodes: node})
+	}
+	bad(Doc{Look: "sketch", Nodes: node}, "/look")
+	ok(Doc{Nodes: node, Camera: &Camera{Pos: Vec{4, 3.27, 4}, Target: Vec{0, 0, 0}, Projection: "orthographic", Width: 7}})
+	bad(Doc{Nodes: node, Camera: &Camera{Pos: Vec{1, 1, 1}, Target: Vec{0, 0, 0}, Projection: "iso"}}, "/camera/projection")
+	bad(Doc{Nodes: node, Camera: &Camera{Pos: Vec{1, 1, 1}, Target: Vec{0, 0, 0}, Width: 5}}, "/camera/width")
+	bad(Doc{Nodes: node, Camera: &Camera{Pos: Vec{1, 1, 1}, Target: Vec{0, 0, 0}, Projection: "orthographic", Fov: 30}}, "/camera/fov")
+	no := false
+	ok(Doc{Nodes: node, Pipes: []Pipe{{Points: []Vec{{0, 0, 0}, {1, 0, 0}}, Arrows: &no}}})
 }
 
 // Builtin must match hmi-3d's registry AND the models/kinds.json that

@@ -163,7 +163,7 @@
 				<Self {...part} />
 			{/each}
 			{#each def.assembly.pipes ?? [] as p, i (p.id ?? i)}
-				<Pipe points={p.points} radius={p.radius} flowing={p.bind?.flowing} />
+				<Pipe points={p.points} radius={p.radius} flowing={p.bind?.flowing} arrows={p.arrows} />
 			{/each}
 		{:else if def?.component}
 			{@const Model = def.component}
@@ -186,7 +186,7 @@
 				<T.EdgesGeometry args={[new BoxGeometry(...bounds.size.map((v) => v * 1.04))]} />
 				<T.LineBasicMaterial color={palette.hover} />
 			</T.LineSegments>
-			<T.Mesh position={bounds.center} raycast={() => {}}>
+			<T.Mesh position={bounds.center} raycast={() => {}} userData={{ ink: false }}>
 				<T.BoxGeometry args={bounds.size.map((v) => v * 1.04) as Vec3} />
 				<T.MeshBasicMaterial color={palette.hover} transparent opacity={0.18} depthWrite={false} />
 			</T.Mesh>

@@ -205,3 +205,32 @@ describe('validateScene: kinds as data, environment, textures (§3c)', () => {
 		expect(kindMembers({ members: ['PortsUp'], status: '{Fault?FAULT:ok} {PortsUp}' })).toEqual(['PortsUp', 'Fault']);
 	});
 });
+
+describe('the look, the camera projection and pipe arrows (§3f)', () => {
+	it('accepts each look and rejects an unknown one', () => {
+		for (const look of ['lit', 'flat', 'paper']) expect(validateScene({ ...rig, look }, KINDS).ok).toBe(true);
+		const r = validateScene({ ...rig, look: 'sketch' }, KINDS);
+		expect(r.errors).toEqual([{ path: '/look', message: "must be 'lit', 'flat' or 'paper'" }]);
+	});
+
+	it('accepts an orthographic camera with a width', () => {
+		const doc = { ...rig, camera: { pos: [4, 3.27, 4], target: [0, 0, 0], projection: 'orthographic', width: 7 } };
+		expect(validateScene(doc, KINDS)).toEqual({ ok: true, errors: [] });
+	});
+
+	it('rejects a bad projection, a width without orthographic, and fov with it', () => {
+		expect(validateScene({ ...rig, camera: { pos: [1, 1, 1], target: [0, 0, 0], projection: 'iso' } }).errors.map((e) => e.path)).toEqual(['/camera/projection']);
+		expect(validateScene({ ...rig, camera: { pos: [1, 1, 1], target: [0, 0, 0], width: 5 } }).errors.map((e) => e.path)).toEqual(['/camera/width']);
+		expect(validateScene({ ...rig, camera: { pos: [1, 1, 1], target: [0, 0, 0], projection: 'orthographic', width: 0 } }).errors.map((e) => e.path)).toEqual(['/camera/width']);
+		expect(
+			validateScene({ ...rig, camera: { pos: [1, 1, 1], target: [0, 0, 0], projection: 'orthographic', fov: 30 } }).errors.map((e) => e.path)
+		).toEqual(['/camera/fov']);
+	});
+
+	it('a pipe may switch its arrows off, with a boolean', () => {
+		const pipes = [{ points: [[0, 0, 0], [1, 0, 0]], arrows: false }];
+		expect(validateScene({ ...rig, pipes }, KINDS).ok).toBe(true);
+		const r = validateScene({ ...rig, pipes: [{ ...pipes[0], arrows: 'no' }] }, KINDS);
+		expect(r.errors).toEqual([{ path: '/pipes/0/arrows', message: 'must be true or false' }]);
+	});
+});

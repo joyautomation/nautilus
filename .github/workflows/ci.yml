@@ -154,6 +154,9 @@ jobs:
       # arrangement as webview-ui and hmi/.
       - run: npm ci && npm run check && npm run build
         working-directory: examples/spatial-rig/hmi
+      # examples/well-site/hmi: the paper look (design §3f), same arrangement.
+      - run: npm ci && npm run check && npm run build
+        working-directory: examples/well-site/hmi
   vscode-iec:
     name: VS Code extension — compile, test
     runs-on: ubuntu-latest

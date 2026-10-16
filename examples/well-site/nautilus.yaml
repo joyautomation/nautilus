@@ -1,0 +1,79 @@
+# well-site — one production well, drawn. A submersible pump in a casing,
+# the discharge run through a meter and a control valve to a reservoir,
+# and a hypochlorite feed on the line: five struct tags with a simulated
+# aquifer behind them, and a *.scene.json that places them as an
+# isometric line drawing (`look: paper`, docs/design/spatial-hmi.md §3f).
+# The view is examples/well-site/hmi, on @joyautomation/nautilus-hmi-3d.
+#
+#   naut check .     validate offline
+#   naut test  .     3 acceptance tests, virtual time (well_test.yaml)
+#   naut run   .     dashboard + tag API on http://0.0.0.0:8080
+#   naut build .     one deployable controller binary, 3D view included
+name: well-site
+
+server:
+  addr: "0.0.0.0:8080"
+  # The 3D view, once built (see hmi/README.md). Tolerates being absent:
+  # check/run/build fall back to the dashboard until the first npm run build.
+  hmi: hmi/build
+
+tasks:
+  - program: control.st
+    scan: 100ms
+    dt-tag: ControlDtS
+  - name: sim
+    program: sim.st
+    scan: 100ms
+    dt-tag: SimDtS
+
+tags:
+  # The site. Each asset is ONE struct tag (types.st), so a scene node
+  # binds `WL101` and its parts read WL101.Pump, WL101.Depth, ...
+  - { name: WL101,  role: state, type: Well,     init: { Depth: 0.45, Static: 0.45 }, desc: "Well 1" }
+  - { name: FIT101, role: state, type: Meter,    desc: "Discharge meter" }
+  - { name: FCV101, role: state, type: Valve,    desc: "Discharge valve" }
+  - { name: CL101,  role: state, type: ChemFeed, init: { Tank: { Level: 70.0 }, Residual: 0.0 }, desc: "Hypochlorite feed" }
+  - { name: R101,   role: state, type: Tank,     init: { Level: 35.0, TempC: 14.0 }, desc: "Reservoir" }
+
+  - { name: StartLevel,  role: setpoint, init: 40.0, unit: "%",    desc: "Well pump start level (reservoir)" }
+  - { name: StopLevel,   role: setpoint, init: 85.0, unit: "%",    desc: "Well pump stop level (reservoir)" }
+  - { name: MaxDepth,    role: setpoint, init: 1.4,  unit: "m",    desc: "Deepest pumping level allowed" }
+  - { name: ResidualLow, role: setpoint, init: 0.5,  unit: "mg/L", desc: "Chlorine residual low limit" }
+
+  # Make something happen: flip these from the dashboard (README).
+  - { name: InjectPumpFault, role: setpoint, init: false, desc: "Test: trip the well pump" }
+  - { name: InjectDrought,   role: setpoint, init: false, desc: "Test: sink the static water level" }
+
+alarms:
+  defaults: { ack-required: true, auto-clear: true, shelve: true }
+  journal: { keep: 200 }
+  rules:
+    - match: { type: Well, member: LL }
+      name: "{desc} drawn down past the limit"
+      priority: high
+      on-delay: 2s
+    - match: { type: Well, member: Fault }
+      name: "{desc} pump fault"
+      priority: medium
+    - match: { type: ChemFeed, member: Fault }
+      name: "{desc} pump fault"
+      priority: medium
+    - match: { type: Valve, member: Fault }
+      name: "{desc} position disagrees with command"
+      priority: medium
+      on-delay: 3s
+    - match: { type: ChemFeed, member: Low }
+      name: "{desc} residual low"
+      priority: medium
+      on-delay: 30s
+    - match: { type: Tank, member: HH }
+      name: "{desc} level high-high"
+      priority: high
+      on-delay: 2s
+    - match: { type: Tank, member: LL }
+      name: "{desc} level low-low"
+      priority: high
+      on-delay: 2s
+
+driver:
+  type: memory   # no field I/O; the aquifer is sim.st

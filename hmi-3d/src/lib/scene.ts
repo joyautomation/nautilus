@@ -16,9 +16,21 @@ export type Vec3 = [number, number, number];
 export interface SceneCamera {
 	pos: Vec3;
 	target: Vec3;
-	/** Vertical field of view, degrees. Default 45. */
+	/** Vertical field of view, degrees. Default 45. Perspective only. */
 	fov?: number;
+	/** `perspective` (default), or `orthographic`: no vanishing point, so a
+	 * pos on a 45° azimuth and a 35.26° elevation is the isometric drawing. */
+	projection?: 'perspective' | 'orthographic';
+	/** Orthographic only: how many metres of scene span the view's width.
+	 * Default 6. */
+	width?: number;
 }
+
+/** How the scene is drawn (docs/design/spatial-hmi.md §3f). `lit` (default):
+ * data kinds, PBR, textures and the environment. `flat`: grey primitives
+ * under three lights. `paper`: the drawn look — near-white fills, every
+ * edge inked, a paper backdrop, and only an alarm brings colour. */
+export type SceneLook = 'lit' | 'flat' | 'paper';
 
 /** Static, unbound geometry: the desk, a floor slab, the origin marker. */
 export interface SceneFixture {
@@ -109,6 +121,10 @@ export interface ScenePipe {
 	/** `flowing` is the one live prop a pipe has, the same key the mimic's
 	 * pipe binds. Booleans as-is; a number is flowing above 2 (%). */
 	bind?: { flowing?: string };
+	/** Chevrons travelling along the run while it flows (default true), so
+	 * direction reads even where colour cannot. The run's direction is the
+	 * order of its points. */
+	arrows?: boolean;
 }
 
 /** An assembly (docs/design/spatial-hmi.md §3d): a kind made of kinds.
@@ -189,6 +205,8 @@ export function kindDefinedBy(k: SceneKind | undefined): 'model' | 'component' |
 
 export interface SceneDoc {
 	name?: string;
+	/** The look the document asks for; the page may override it. Default `lit`. */
+	look?: SceneLook;
 	/** Kind contracts: overrides for the built-ins, declarations for the app's own, data kinds. */
 	kinds?: Record<string, SceneKind>;
 	environment?: SceneEnvironment;
@@ -242,6 +260,8 @@ export function isBindingRef(ref: unknown): boolean {
 
 type Err = (path: string, message: string) => void;
 
+export const LOOKS: readonly SceneLook[] = ['lit', 'flat', 'paper'];
+
 /** One node's structural rules — a document node or an assembly's part. */
 function checkNode(n: unknown, p: string, err: Err, known: Set<string> | null, ids: Set<string>): void {
 	if (!isObj(n)) return err(p, 'must be an object');
@@ -269,6 +289,7 @@ function checkPipe(pipe: unknown, p: string, err: Err): void {
 	if (!Array.isArray(pipe.points) || pipe.points.length < 2) err(`${p}/points`, 'needs at least two points');
 	else pipe.points.forEach((pt, j) => isVec3(pt) || err(`${p}/points/${j}`, 'must be [x, y, z] metres'));
 	if (pipe.radius !== undefined && !(isNum(pipe.radius) && pipe.radius > 0)) err(`${p}/radius`, 'must be > 0');
+	if (pipe.arrows !== undefined && typeof pipe.arrows !== 'boolean') err(`${p}/arrows`, 'must be true or false');
 	if (pipe.bind !== undefined) {
 		if (!isObj(pipe.bind)) err(`${p}/bind`, 'must be an object');
 		else {
@@ -304,13 +325,21 @@ export function validateScene(doc: unknown, kinds?: Iterable<string>): { ok: boo
 
 	if (!isObj(doc)) return { ok: false, errors: [{ path: '', message: 'scene must be an object' }] };
 
+	if (doc.look !== undefined && !LOOKS.includes(doc.look as SceneLook)) err('/look', "must be 'lit', 'flat' or 'paper'");
+
 	if (doc.camera !== undefined) {
 		if (!isObj(doc.camera)) err('/camera', 'must be an object');
 		else {
-			if (!isVec3(doc.camera.pos)) err('/camera/pos', 'must be [x, y, z] metres');
-			if (!isVec3(doc.camera.target)) err('/camera/target', 'must be [x, y, z] metres');
-			if (doc.camera.fov !== undefined && !(isNum(doc.camera.fov) && doc.camera.fov > 0 && doc.camera.fov < 180))
+			const c = doc.camera;
+			if (!isVec3(c.pos)) err('/camera/pos', 'must be [x, y, z] metres');
+			if (!isVec3(c.target)) err('/camera/target', 'must be [x, y, z] metres');
+			if (c.fov !== undefined && !(isNum(c.fov) && c.fov > 0 && c.fov < 180))
 				err('/camera/fov', 'must be a number of degrees between 0 and 180');
+			if (c.projection !== undefined && c.projection !== 'perspective' && c.projection !== 'orthographic')
+				err('/camera/projection', "must be 'perspective' or 'orthographic'");
+			if (c.width !== undefined && !(isNum(c.width) && c.width > 0)) err('/camera/width', 'must be a number of metres > 0');
+			if (c.width !== undefined && c.projection !== 'orthographic') err('/camera/width', 'only an orthographic camera has a width');
+			if (c.fov !== undefined && c.projection === 'orthographic') err('/camera/fov', 'an orthographic camera has no field of view; use width');
 		}
 	}
 
