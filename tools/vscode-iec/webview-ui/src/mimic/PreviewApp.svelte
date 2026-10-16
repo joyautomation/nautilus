@@ -87,6 +87,20 @@
 		});
 	}
 
+	// Svelte 5 scopes a component's CSS under `svelte-` + a hash of the
+	// FILENAME (not of the CSS), and its runtime injector skips a style
+	// element whose id is already in the document — so without this, the
+	// stylesheet the FIRST bundle injected would outlive every rebuild and a
+	// colour change in the component's style block would never show (the
+	// mimic editor never hits it: it reloads the whole page per rebuild).
+	// Drop them right before the keyed remount; the new bundle's components
+	// re-inject theirs on mount. The pane's own stylesheet is a link element,
+	// not one of these. (No angle brackets in this comment: Svelte's parser
+	// trips on a literal style tag inside a script block, even commented.)
+	function dropInjectedStyles() {
+		for (const el of document.head.querySelectorAll('style[id^="svelte-"]')) el.remove();
+	}
+
 	function loadBundle(src: string, v: number) {
 		document.getElementById('nx-preview-bundle')?.remove();
 		const s = document.createElement('script');
@@ -102,6 +116,7 @@
 			const has = !!window.__NX_USER_COMPONENTS__?.[component];
 			log(`bundle v${v} loaded; registry has ${component}: ${has}`);
 			loadError = '';
+			dropInjectedStyles();
 			version = v;
 		};
 		s.onerror = () => {
