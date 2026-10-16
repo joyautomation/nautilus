@@ -1,3 +1,4 @@
 {
-	"ports": [{ "name": "discharge", "x": 0.5, "y": 0, "dir": "up" }]
+	"ports": [{ "name": "discharge", "x": 0.5, "y": 0, "dir": "up" }],
+	"preview": { "props": { "running": true, "speedHz": 48.5, "label": "P-101" } }
 }

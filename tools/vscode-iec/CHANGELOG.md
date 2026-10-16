@@ -5,6 +5,20 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ## [Unreleased]
 
+### Added
+
+- **See a component while you edit it.** Open a `{Name}.svelte` and press
+  the preview button in its editor title (or **nautilus: Open Component
+  Preview**): a pane beside the text renders the component for real,
+  compiled with the project's own Svelte as you type, not only on save. A
+  compile error shows over the last good render instead of blanking the
+  pane. Sample props live in the sidecar's new `preview.props` key
+  (`{Name}.component.json`, created next to the `.svelte` on the first
+  add) and are edited from the pane's props strip: values read as JSON
+  when they parse (`62`, `true`, `[1, 2]`), else as text. The pane follows
+  the active `.svelte` editor and zooms 50 to 400 %. Needs workspace
+  trust, like the mimic editor's user components.
+
 ## [0.19.1] - 2026-10-26
 
 Requires naut 0.19.0 or later for the items marked so; everything else

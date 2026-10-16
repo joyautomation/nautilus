@@ -48,6 +48,15 @@ OUT=$(cd "$OUT" && pwd)
   ( cd "$SRC/hmi-3d" && npm ci && npm run package )
   ( cd "$SRC/tools/vscode-iec" && npm ci && npm ci --prefix webview-ui \
       && npx --yes @vscode/vsce package -o "$OUT/vscode-iec.vsix" )
+  # The component preview (check 20) compiles a .svelte with the PROJECT's
+  # own svelte (userComponentBuild.ts), and the container has no npm: a
+  # node_modules with the extension's own pinned svelte in it is assembled
+  # here, once per build, and pushed beside the VSIX.
+  ( rm -rf "$OUT/svelte-fixture" && mkdir -p "$OUT/svelte-fixture" && cd "$OUT/svelte-fixture" \
+      && printf '{ "name": "fixture", "private": true }\n' >package.json \
+      && npm install --no-audit --no-fund --no-package-lock \
+           "svelte@$(node -p "require('$SRC/tools/vscode-iec/node_modules/svelte/package.json').version")" \
+      && tar -czf "$OUT/svelte-node_modules.tgz" node_modules )
 } >"$OUT/build.log" 2>&1 || { echo "build failed — $OUT/build.log" >&2; tail -20 "$OUT/build.log" >&2; exit 1; }
 echo "$SHA" >"$OUT/SHA"
 echo "NAUT=$OUT/naut"

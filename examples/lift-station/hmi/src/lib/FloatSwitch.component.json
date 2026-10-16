@@ -1,3 +1,4 @@
 {
-	"ports": [{ "name": "mount", "x": 0, "y": 0.1, "dir": "left" }]
+	"ports": [{ "name": "mount", "x": 0, "y": 0.1, "dir": "left" }],
+	"preview": { "props": { "tripped": true, "label": "LSH-101" } }
 }

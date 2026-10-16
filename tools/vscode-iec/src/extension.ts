@@ -30,6 +30,7 @@ import { SceneEditorProvider } from "./sceneEditor";
 import { ComponentEditorProvider } from "./componentEditor";
 import { UserComponentManager } from "./userComponents";
 import { registerEditComponentPortsCommand } from "./editComponentPorts";
+import { registerComponentPreview } from "./componentPreview";
 import { registerNewProjectCommand } from "./newProject";
 import { AcceptanceTests } from "./acceptanceTests";
 import { cliVersion, checkCliVersion, initCli, installCliCommand, resolveCliNow, showCliInfo, showCliMissing } from "./cli";
@@ -165,6 +166,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // mimic editor's workspace-wide sidecar index so a sidecar created here
   // shows up in every open mimic panel immediately.
   context.subscriptions.push(registerEditComponentPortsCommand(mimic.componentIndex));
+  // "Open Component Preview": a `{Name}.svelte` rendered live beside its
+  // text editor, compiled from the buffer as you type (componentPreview.ts).
+  context.subscriptions.push(registerComponentPreview(context, userComponents, mimic.componentIndex));
   context.subscriptions.push(registerNewProjectCommand());
 
   // Getting Started walkthrough: its own command (also reachable from the
