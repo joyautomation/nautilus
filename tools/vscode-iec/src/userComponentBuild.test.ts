@@ -64,3 +64,39 @@ test("buildUserComponentsBundle still emits a bundle when a component is missing
   const code = await fs.promises.readFile(outfile, "utf8");
   assert.match(code, /__NX_USER_COMPONENTS__/);
 });
+
+test(
+  "buildUserComponentsBundle compiles from `sources` text in place of the disk file",
+  { skip: !HAS_FIXTURE ? "testdata/user-components fixture missing, or svelte isn't npm-installed here" : false },
+  async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "nx-user-components-"));
+    const outfile = path.join(dir, "user-components.js");
+    // The buffer's text, not the disk's: a marker that is nowhere in Supply.svelte.
+    const marker = "nx-preview-buffer-text-" + Date.now();
+    const text = `<script lang="ts">\n\tlet { label = '' }: { label?: string } = $props();\n</script>\n<div class="x">${marker} {label}</div>\n`;
+    const result = await buildUserComponentsBundle({ Supply: SUPPLY }, outfile, { sources: { [SUPPLY]: text } });
+    assert.deepEqual(result.diagnostics, []);
+    assert.deepEqual(result.built, ["Supply"]);
+    const code = await fs.promises.readFile(outfile, "utf8");
+    assert.match(code, new RegExp(marker));
+    assert.doesNotMatch(code, /tempC/); // nothing of the disk file made it in
+  }
+);
+
+test(
+  "buildUserComponentsBundle reports a syntax error in `sources` text as a diagnostic and builds nothing",
+  { skip: !HAS_FIXTURE ? "testdata/user-components fixture missing, or svelte isn't npm-installed here" : false },
+  async () => {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "nx-user-components-"));
+    const outfile = path.join(dir, "user-components.js");
+    const result = await buildUserComponentsBundle(
+      { Supply: SUPPLY },
+      outfile,
+      { sources: { [SUPPLY]: "<script>\n\tlet x = \n</script>\n<div>{x</div>\n" } }
+    );
+    assert.deepEqual(result.built, []);
+    assert.equal(result.diagnostics.length, 1);
+    assert.equal(result.diagnostics[0].component, "Supply");
+    assert.ok(result.diagnostics[0].message.length > 0);
+  }
+);

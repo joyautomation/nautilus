@@ -24,8 +24,9 @@ import * as vscode from "vscode";
 import {
   aggregateComponentFiles,
   isCandidateComponentSveltePath,
-  patchComponentPortsText,
+  patchComponentEntryText,
   validatePortList,
+  type ComponentEntryPatch,
   type ComponentFile,
   type ComponentsManifest,
   type Port,
@@ -37,8 +38,9 @@ export const EXCLUDE_GLOB = "**/{node_modules,.git,out,dist,build,.svelte-kit}/*
 /** A sidecar's CURRENT text: the open buffer's (unsaved edits included)
  * when VS Code has the file open, the disk copy otherwise. Every read that
  * feeds a later edit must go through here — a disk read of a dirty buffer
- * followed by a whole-file replace would throw away the unsaved edits. */
-async function readText(uri: vscode.Uri): Promise<string> {
+ * followed by a whole-file replace would throw away the unsaved edits.
+ * Missing file reads as "" (a fresh entry). */
+export async function readText(uri: vscode.Uri): Promise<string> {
   const open = vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString());
   if (open) return open.getText();
   try {
@@ -170,22 +172,20 @@ export async function discoverSvelteComponentNames(): Promise<string[]> {
   return [...names].sort();
 }
 
-async function newSidecarLocation(docUri: vscode.Uri, component: string): Promise<vscode.Uri> {
+/** Where a component's sidecar goes when none exists yet: next to
+ * `{Name}.svelte` if the workspace has one, else next to `docUri` (the
+ * mimic being edited, or the .svelte itself for the preview pane). */
+export async function sidecarLocation(index: ComponentIndex, docUri: vscode.Uri, component: string): Promise<vscode.Uri> {
+  const existing = index.locate(component);
+  if (existing) return existing;
   const source = await locateComponentSource(component);
   const dir = source ? vscode.Uri.joinPath(source, "..") : vscode.Uri.joinPath(docUri, "..");
   return vscode.Uri.joinPath(dir, `${component}.component.json`);
 }
 
-/** Apply one component's shared-ports edit: read the existing sidecar's
- * CURRENT text (its open buffer, unsaved edits included — see readText),
- * patch JUST the `ports` key — every other key (future per-component
- * metadata) passes through untouched — and write back as a single
- * WorkspaceEdit, or delete the file outright if the edit leaves nothing
- * worth keeping. A sidecar whose text doesn't parse right now (hand edit
- * mid-keystroke) refuses with a message rather than being replaced.
- * `ports: null` with no existing sidecar is a no-op — there's nothing to
- * clear. Refreshes `index` on success so the caller's next broadcast
- * reflects the write immediately, without waiting on the watcher. */
+/** Apply one component's shared-ports edit — see writeComponentEntryEdit;
+ * this is its `ports` form. `ports: null` with no existing sidecar is a
+ * no-op — there's nothing to clear. */
 export async function writeComponentPortsEdit(
   index: ComponentIndex,
   docUri: vscode.Uri,
@@ -193,9 +193,27 @@ export async function writeComponentPortsEdit(
   ports: Port[] | null
 ): Promise<{ ok: boolean; error?: string }> {
   if (ports !== null && !validatePortList(ports)) return { ok: false, error: "invalid ports list" };
-  const existing = index.locate(component);
-  if (!existing && ports === null) return { ok: true };
-  const target = existing ?? (await newSidecarLocation(docUri, component));
+  if (!index.locate(component) && ports === null) return { ok: true };
+  return writeComponentEntryEdit(index, docUri, component, { ports }, "ports on the canvas");
+}
+
+/** Apply a patch to one component's sidecar: read the existing sidecar's
+ * CURRENT text (its open buffer, unsaved edits included — see readText),
+ * patch JUST the named keys — every other key (future per-component
+ * metadata) passes through untouched — and write back as a single
+ * WorkspaceEdit, or delete the file outright if the edit leaves nothing
+ * worth keeping. A sidecar whose text doesn't parse right now (hand edit
+ * mid-keystroke) refuses with a message rather than being replaced.
+ * Refreshes `index` on success so the caller's next broadcast reflects the
+ * write immediately, without waiting on the watcher. */
+export async function writeComponentEntryEdit(
+  index: ComponentIndex,
+  docUri: vscode.Uri,
+  component: string,
+  patch: ComponentEntryPatch,
+  what = "the sidecar"
+): Promise<{ ok: boolean; error?: string }> {
+  const target = await sidecarLocation(index, docUri, component);
   // Open (or reuse) the document so what we patch IS what we replace — the
   // disk copy may be behind a dirty buffer.
   // (A new-sidecar target that already exists — the index lagging a
@@ -218,7 +236,7 @@ export async function writeComponentPortsEdit(
       openDoc = undefined; // vanished between the check and now
     }
   }
-  const res = patchComponentPortsText(openDoc?.getText() ?? "", ports);
+  const res = patchComponentEntryText(openDoc?.getText() ?? "", patch, what);
   if ("error" in res) return { ok: false, error: `${component}.component.json: ${res.error}` };
 
   const edit = new vscode.WorkspaceEdit();

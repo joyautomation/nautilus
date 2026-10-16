@@ -64,6 +64,9 @@ rig_push_tree "$HERE" "/home/$RIG_USER/smoke"
 _rig mkdir -p "/home/$RIG_USER/smoke-assets"
 L5X=$REPO/lang/l5x/testdata/DemoProgram.L5X
 [[ -f $L5X ]] && rig_push "$L5X" "/home/$RIG_USER/smoke-assets/DemoProgram.L5X"
+# Check 20's svelte node_modules (build.sh assembles it beside the VSIX).
+SVELTE_NM=$(dirname "$VSIX")/svelte-node_modules.tgz
+[[ -f $SVELTE_NM ]] && rig_push "$SVELTE_NM" "/home/$RIG_USER/smoke-assets/svelte-node_modules.tgz"
 _rig rm -f /tmp/ext.vsix; rig_push "$VSIX" /tmp/ext.vsix; _rig chmod 644 /tmp/ext.vsix
 _rig chown -R "$RIG_USER:$RIG_USER" "/home/$RIG_USER"
 rig_run "rm -rf ~/out/smoke; mkdir -p ~/out/smoke; chmod +x ~/smoke/*.sh"

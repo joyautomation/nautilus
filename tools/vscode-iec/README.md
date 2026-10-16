@@ -142,6 +142,11 @@ commit (*Open With → Text Editor* any time).
 - Every gesture is one text edit, so undo is text undo. Press `p` to edit an
   equipment's ports; **Nautilus: Edit Component Ports…** does the same for
   the built-ins.
+- Writing a component? Open its `.svelte` and press the preview button in
+  the editor title: the component renders beside the text as you type,
+  with sample props you set in the pane (saved to `{Name}.component.json`,
+  so the AI or teammate who writes the next component can ship its preview
+  data with it).
 
 ## Testing
 
