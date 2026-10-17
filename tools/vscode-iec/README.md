@@ -144,9 +144,11 @@ commit (*Open With → Text Editor* any time).
   the built-ins.
 - Writing a component? Open its `.svelte` and press the preview button in
   the editor title: the component renders beside the text as you type,
-  with sample props you set in the pane (saved to `{Name}.component.json`,
-  so the AI or teammate who writes the next component can ship its preview
-  data with it).
+  with sample props you set in the pane and its pipe connection points
+  drawn on the render — turn **ports** on in the pane's header to drag,
+  add (double-click the render) or remove them. Props and ports both go
+  to `{Name}.component.json`, so the AI or teammate who writes the next
+  component can ship its preview data and ports with it.
 - Writing a page? Open a `+page.svelte` and press its browser button
   (**nautilus: Preview HMI Page**): the project's own `npm run dev` starts
   in a terminal and the page's route opens in VS Code's Simple Browser

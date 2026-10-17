@@ -4,7 +4,9 @@
 // (userComponentBuild.ts, the same harness the mimic editor's user islands
 // use) from the DIRTY buffer, so the pane tracks typing, not just saves —
 // with sample props from the `preview` key of its `{Name}.component.json`
-// sidecar, editable from the pane's props strip. VS Code supplies the rest
+// sidecar, editable from the pane's props strip, and the sidecar's `ports`
+// drawn over the render and edited there too (one pane per component: its
+// render, its sample props, its connection points). VS Code supplies the rest
 // (the editor, the split, undo, the Svelte language server); this file is
 // only the pane and its build loop. Like the FBD preview, the pane is a
 // singleton that follows the active editor from one component to the next.
@@ -27,8 +29,15 @@ import * as fs from "fs";
 import * as path from "path";
 import { webviewOptions } from "./fbdPreview";
 import { buildUserComponentsBundle, type ComponentDiagnostic } from "./userComponentBuild";
-import { componentNameFromSveltePath, parseComponentEntry, validatePreviewEntry } from "./mimicComponentIndex";
-import { COMPONENT_GLOB, ComponentIndex, readText, sidecarLocation, writeComponentEntryEdit } from "./mimicComponents";
+import { componentNameFromSveltePath, parseComponentEntry, validatePortList, validatePreviewEntry } from "./mimicComponentIndex";
+import {
+  COMPONENT_GLOB,
+  ComponentIndex,
+  readText,
+  sidecarLocation,
+  writeComponentEntryEdit,
+  writeComponentPortsEdit,
+} from "./mimicComponents";
 import type { UserComponentManager } from "./userComponents";
 import { previewSources } from "./componentPreviewLogic";
 
@@ -180,7 +189,7 @@ export class ComponentPreview implements vscode.Disposable {
       if (this.buildDebounce) clearTimeout(this.buildDebounce);
       if (this.docDebounce) clearTimeout(this.docDebounce);
     });
-    this.panel.webview.onDidReceiveMessage((msg: { type?: string; props?: unknown; message?: unknown }) => {
+    this.panel.webview.onDidReceiveMessage((msg: { type?: string; props?: unknown; ports?: unknown; message?: unknown }) => {
       switch (msg?.type) {
         case "previewLog":
           logPreview(`pane: ${String(msg.message)}`);
@@ -193,6 +202,9 @@ export class ComponentPreview implements vscode.Disposable {
           return;
         case "previewSetProps":
           void this.writeProps(msg.props);
+          return;
+        case "previewSetPorts":
+          void this.writePorts(msg.ports);
           return;
         case "openSidecar":
           void this.openSidecar();
@@ -218,6 +230,7 @@ export class ComponentPreview implements vscode.Disposable {
     const text = await readText(sidecar);
     const entry = parseComponentEntry(text);
     const props = validatePreviewEntry(entry.preview) ? (entry.preview.props ?? {}) : {};
+    const ports = validatePortList(entry.ports) ? entry.ports : [];
     if (this.target !== target) return; // moved on while reading
     void this.panel.webview.postMessage({
       type: "previewDoc",
@@ -226,6 +239,7 @@ export class ComponentPreview implements vscode.Disposable {
       sidecar: path.basename(sidecar.path),
       hasSidecar: text.trim() !== "",
       props,
+      ports,
     });
   }
 
@@ -239,6 +253,17 @@ export class ComponentPreview implements vscode.Disposable {
     const map = props as Record<string, unknown>;
     const preview = Object.keys(map).length === 0 ? null : { props: map };
     const res = await writeComponentEntryEdit(this.index, target.uri, target.name, { preview }, "preview props");
+    if (!res.ok && res.error) void vscode.window.showWarningMessage(`nautilus: ${res.error}`);
+    void this.postDoc();
+  }
+
+  /** The ports overlay's edit: the whole list to the sidecar's `ports`
+   * key, the same path the standalone *.component.json editor and the
+   * mimic editor's ports mode take. */
+  private async writePorts(ports: unknown): Promise<void> {
+    const target = this.target;
+    if (!target || !validatePortList(ports)) return;
+    const res = await writeComponentPortsEdit(this.index, target.uri, target.name, ports);
     if (!res.ok && res.error) void vscode.window.showWarningMessage(`nautilus: ${res.error}`);
     void this.postDoc();
   }

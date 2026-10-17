@@ -1,13 +1,20 @@
 // "Nautilus: Edit Component Ports…" — graphical port editing for BUILT-IN
-// components (Tank, Pump, ...), reusing the same Component Editor a
-// project's own custom components get. Built-ins have no *.component.json
+// components (Tank, Pump, ...) in the standalone Component Editor; a
+// custom component with a .svelte in the workspace goes to the component
+// preview pane instead, where its ports sit on the live render. Built-ins have no *.component.json
 // of their own until the user asks to override one; this command is that
 // ask: pick a component (built-in, already-discovered custom, or any bare
 // .svelte component in the workspace with no sidecar yet), then open its
 // sidecar — creating one, prefilled with the component's current default
 // ports, if it doesn't exist yet.
 import * as vscode from "vscode";
-import { ComponentIndex, EXCLUDE_GLOB, discoverSvelteComponentNames, writeComponentPortsEdit } from "./mimicComponents";
+import {
+  ComponentIndex,
+  EXCLUDE_GLOB,
+  discoverSvelteComponentNames,
+  locateComponentSource,
+  writeComponentPortsEdit,
+} from "./mimicComponents";
 import { BUILTIN_COMPONENT_NAMES, BUILTIN_COMPONENT_PORTS } from "./builtinComponents";
 
 /** Where a brand-new sidecar lands when there's no natural anchor yet
@@ -72,6 +79,19 @@ export function registerEditComponentPortsCommand(index: ComponentIndex): vscode
       matchOnDescription: true,
     });
     if (!pick) return;
+
+    // A component with a .svelte in the workspace is edited in the
+    // component preview pane — its render, sample props and ports in one
+    // place (componentPreview.ts); the standalone sidecar editor below
+    // stays for built-ins, which have no source here to render from.
+    if (!BUILTIN_COMPONENT_NAMES.includes(pick.name)) {
+      const source = await locateComponentSource(pick.name);
+      if (source) {
+        await vscode.window.showTextDocument(source, { preserveFocus: false });
+        await vscode.commands.executeCommand("nautilus.component.preview");
+        return;
+      }
+    }
 
     const existing = index.locate(pick.name);
     if (existing) {

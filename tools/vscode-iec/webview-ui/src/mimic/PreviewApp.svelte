@@ -14,10 +14,31 @@
 	// so the strip, the zoom and the scroll stay put between keystrokes.
 	// A failed compile posts only diagnostics: the last good island stays,
 	// dimmed, under the error.
+	//
+	// Ports: the sidecar's `ports` (the mimic editor's pipe connection
+	// points) are drawn over the live render as dots and edited right here
+	// — the same gestures and panel as the standalone *.component.json
+	// editor (ComponentApp.svelte; portsGestures.ts is the shared math) —
+	// so one pane beside a .svelte covers its render, its sample props and
+	// its ports, all three writing the one sidecar. The dots are always
+	// shown; the gestures take the pointer only in Ports mode (header
+	// toggle), so outside it the component itself stays clickable.
 	import { vscode } from '../vscodeApi';
 	import UserIsland from './UserIsland.svelte';
+	import PortsPanel from './PortsPanel.svelte';
 	import { hasUserComponent, setUserComponentDiagnostics } from './userComponentsState.svelte';
 	import { formatPropValue, isPropName, kindOf, parsePropInput } from './previewProps';
+	import { resolvedPortDir, type PortDir as HmiPortDir } from '@joyautomation/nautilus-hmi/mimic';
+	import {
+		fmtFraction,
+		newPortAtFreeSlot,
+		newPortAtPoint,
+		roundPort,
+		toFraction,
+		type Box,
+		type Port,
+		type PortDir
+	} from './portsGestures';
 
 	type Diagnostic = { component: string; message: string };
 
@@ -26,6 +47,7 @@
 	let sidecar = $state('');
 	let hasSidecar = $state(false);
 	let props = $state<Record<string, unknown>>({});
+	let ports = $state<Port[]>([]);
 	/** Generation of the bundle currently mounted; keys the island. */
 	let version = $state(0);
 	let building = $state(false);
@@ -52,6 +74,7 @@
 				sidecar?: string;
 				hasSidecar?: boolean;
 				props?: Record<string, unknown>;
+				ports?: Port[];
 				src?: string;
 				version?: number;
 				building?: boolean;
@@ -63,6 +86,9 @@
 				sidecar = m.sidecar ?? '';
 				hasSidecar = !!m.hasSidecar;
 				props = m.props ?? {};
+				ports = m.ports ?? [];
+				drag = null;
+				if (selected !== null && selected >= ports.length) selected = null;
 			} else if (m?.type === 'previewBundle' && m.src && m.version) {
 				loadBundle(m.src, m.version);
 			} else if (m?.type === 'previewDiagnostics') {
@@ -183,10 +209,104 @@
 		}
 	}
 	const propNames = $derived(Object.keys(props));
+
+	// ── ports: dots over the render, the panel beside ────────────────────────
+	// Fractions of the rendered box, exactly as the mimic editor reads them.
+	// Pointer math works off the box's on-screen rect, so zoom never enters
+	// into it; the dots live inside the scaled box and shrink their radius by
+	// the zoom to stay the same size on screen.
+	let portsMode = $state(false);
+	let boxEl = $state<HTMLDivElement | null>(null);
+	let drag = $state<{ index: number; fx: number; fy: number; moved: boolean } | null>(null);
+	let selected = $state<number | null>(null);
+	const TICK: Record<HmiPortDir, [number, number]> = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
+	const TICK_LEN = 10;
+	const displayPorts = $derived(
+		ports.map((p, i) => (drag && drag.index === i ? { ...p, x: drag.fx, y: drag.fy } : p))
+	);
+	const portsPx = $derived(
+		displayPorts.map((p) => {
+			const w = box?.w ?? 0;
+			const h = box?.h ?? 0;
+			const dir = resolvedPortDir(p);
+			const x = p.x * w;
+			const y = p.y * h;
+			const [tx, ty] = dir ? TICK[dir] : [0, 0];
+			return { name: p.name, x, y, fx: p.x, fy: p.y, dir, tickX: x + (tx * TICK_LEN) / zoom, tickY: y + (ty * TICK_LEN) / zoom };
+		})
+	);
+	/** The box in its own (unscaled-fraction) space + the pointer in it. */
+	function portSpace(e: { clientX: number; clientY: number }): { box: Box; pt: [number, number] } {
+		const r = boxEl!.getBoundingClientRect();
+		return { box: { x: 0, y: 0, w: r.width, h: r.height }, pt: [e.clientX - r.left, e.clientY - r.top] };
+	}
+	/** Every ports edit is the whole list to the host, which patches the
+	 * sidecar's `ports` key (same path as the standalone editor) and
+	 * confirms with a fresh previewDoc; `ports` is updated here first so
+	 * the dot lands where it was dropped without waiting on the round trip. */
+	function commitPorts(next: Port[]) {
+		ports = next.map(roundPort);
+		vscode.postMessage({ type: 'previewSetPorts', ports: $state.snapshot(ports) });
+	}
+	function portDown(e: PointerEvent, i: number) {
+		if (!portsMode || e.button !== 0) return;
+		e.stopPropagation();
+		(e.currentTarget as Element).setPointerCapture(e.pointerId);
+		selected = i;
+		const p = ports[i];
+		drag = { index: i, fx: p.x, fy: p.y, moved: false };
+	}
+	function portDelete(i: number) {
+		commitPorts(ports.filter((_, j) => j !== i));
+		if (selected === i) selected = null;
+	}
+	/** Double-click on the render in Ports mode: a port on the nearer edge,
+	 * quarter-snapped, auto-named (portsGestures.ts's newPortAtPoint). */
+	function addPortAt(e: MouseEvent) {
+		if (!portsMode || !boxEl) return;
+		e.stopPropagation();
+		const { box: b, pt } = portSpace(e);
+		commitPorts([...ports, newPortAtPoint(b, pt, ports)]);
+	}
+	function addPortAtFreeSlot() {
+		commitPorts([...ports, newPortAtFreeSlot(ports)]);
+	}
+	function renamePort(i: number, name: string): boolean {
+		const trimmed = name.trim();
+		if (trimmed === '' || ports.some((p, j) => j !== i && p.name === trimmed)) return false;
+		commitPorts(ports.map((p, j) => (j === i ? { ...p, name: trimmed } : p)));
+		return true;
+	}
+	function setPortDir(i: number, dir: PortDir | null): void {
+		commitPorts(ports.map((p, j) => (j === i ? { ...p, dir: dir ?? undefined } : p)));
+	}
+	function onPortMove(e: PointerEvent) {
+		if (!drag || !boxEl) return;
+		const { box: b, pt } = portSpace(e);
+		const [fx, fy] = toFraction(b, pt);
+		if (fx !== drag.fx || fy !== drag.fy) {
+			drag.fx = fx;
+			drag.fy = fy;
+			drag.moved = true;
+		}
+	}
+	function onPortUp() {
+		if (!drag) return;
+		if (drag.moved) {
+			const d = drag;
+			commitPorts(ports.map((p, i) => (i === d.index ? { ...p, x: d.fx, y: d.fy } : p)));
+		}
+		drag = null;
+	}
+	function onKey(e: KeyboardEvent) {
+		if (e.key === 'Escape') selected = null;
+	}
 	const statusText = $derived(
 		building ? 'compiling…' : error ? 'error' : available ? 'live' : component ? 'waiting for the first compile…' : ''
 	);
 </script>
+
+<svelte:window onpointermove={onPortMove} onpointerup={onPortUp} onkeydown={onKey} />
 
 <div class="pane">
 	<header>
@@ -198,6 +318,15 @@
 			{statusText}
 		</span>
 		<span class="spacer"></span>
+		<button
+			class="mode"
+			class:on={portsMode}
+			data-kind="ports-toggle"
+			title="Ports mode: drag a dot to move it, double-click the render to add one, double-click a dot to remove it"
+			onclick={() => (portsMode = !portsMode)}
+		>
+			ports {portsMode ? 'on' : 'off'}
+		</button>
 		<label class="zoom">
 			zoom
 			<select bind:value={zoom}>
@@ -216,7 +345,49 @@
 				{#key version}
 					<div class="scale" style="transform: scale({zoom})">
 						<div class="box" bind:this={measureEl}>
-							<UserIsland name={component} {props} />
+							<div bind:this={boxEl}>
+								<UserIsland name={component} {props} />
+							</div>
+							{#if box}
+								<!-- svelte-ignore a11y_no_static_element_interactions -->
+								<svg
+									class="ports"
+									class:on={portsMode}
+									width={box.w}
+									height={box.h}
+									viewBox="0 0 {box.w} {box.h}"
+									ondblclick={addPortAt}
+									onpointerdown={() => (selected = null)}
+								>
+									{#each portsPx as port, i (i)}
+										{#if port.dir}
+											<line class="tick" x1={port.x} y1={port.y} x2={port.tickX} y2={port.tickY} style="stroke-width: {2 / zoom}px" />
+										{/if}
+										<!-- svelte-ignore a11y_no_static_element_interactions -->
+										<circle
+											class="port"
+											data-id={port.name}
+											data-kind="port"
+											class:sel={selected === i}
+											cx={port.x}
+											cy={port.y}
+											r={6 / zoom}
+											style="stroke-width: {2 / zoom}px"
+											onpointerdown={(e) => portDown(e, i)}
+											ondblclick={(e) => {
+												e.stopPropagation();
+												if (portsMode) portDelete(i);
+											}}
+											><title>{port.name} · {fmtFraction(port.fx, port.fy)}{port.dir ? ` · exits ${port.dir}` : ''}</title></circle
+										>
+									{/each}
+								</svg>
+								{#if drag}
+									<span class="coord" style="left: {drag.fx * box.w + 10 / zoom}px; top: {drag.fy * box.h - 20 / zoom}px; transform: scale({1 / zoom}); transform-origin: left top">
+										{fmtFraction(drag.fx, drag.fy)}
+									</span>
+								{/if}
+							{/if}
 						</div>
 					</div>
 				{/key}
@@ -265,6 +436,23 @@
 				<button class="link" onclick={() => vscode.postMessage({ type: 'openSidecar' })}>{sidecar}</button>
 				{hasSidecar ? '' : '(created on the first add)'}
 			</p>
+
+			<div class="ports-panel">
+				<PortsPanel
+					{ports}
+					{selected}
+					onSelect={(i) => (selected = i)}
+					onRename={renamePort}
+					onDelete={portDelete}
+					onAdd={addPortAtFreeSlot}
+					onSetDir={setPortDir}
+				/>
+				<p class="note">
+					{portsMode
+						? 'Drag a dot · double-click the render to add · double-click a dot to remove · Esc deselects'
+						: 'Turn ports on in the header to move, add or remove them on the render.'}
+				</p>
+			</div>
 		</aside>
 	</div>
 </div>
@@ -372,9 +560,86 @@
 		transform-origin: center;
 	}
 	.box {
+		position: relative;
 		display: inline-block;
 		outline: 1px dashed var(--nx-border);
 		outline-offset: 4px;
+	}
+	/* See ComponentApp.svelte: a bare svg root is inline-level and reserves
+	   descender space below itself, so the measured box would be taller
+	   than the shape and bottom-edge dots would float. */
+	.box :global(svg) {
+		display: block;
+	}
+	.mode {
+		font: inherit;
+		font-size: 12px;
+		padding: 2px 8px;
+		border: 1px solid var(--nx-border);
+		border-radius: 4px;
+		background: transparent;
+		color: var(--nx-muted);
+		cursor: pointer;
+	}
+	.mode.on {
+		background: var(--nx-sel-bg);
+		color: var(--nx-sel-ink);
+		border-color: var(--nx-sel-ink);
+	}
+	svg.ports {
+		position: absolute;
+		inset: 0;
+		overflow: visible;
+		pointer-events: none;
+	}
+	/* Ports mode: the overlay takes the pointer so a double-click on the
+	   render adds a port instead of reaching the component. */
+	svg.ports.on {
+		pointer-events: all;
+		cursor: copy;
+	}
+	.port {
+		fill: var(--nx-sel-bg);
+		stroke: var(--nx-sel-ink);
+		pointer-events: none;
+	}
+	svg.ports.on .port {
+		pointer-events: all;
+		cursor: grab;
+	}
+	.port.sel {
+		fill: var(--nx-sel-ink);
+	}
+	.tick {
+		stroke: var(--nx-sel-ink);
+		pointer-events: none;
+	}
+	.coord {
+		position: absolute;
+		font-size: 11px;
+		font-family: var(--nx-mono);
+		color: var(--nx-ink);
+		background: var(--nx-bg);
+		border: 1px solid var(--nx-border);
+		border-radius: 4px;
+		padding: 1px 5px;
+		pointer-events: none;
+		white-space: nowrap;
+	}
+	.ports-panel {
+		margin-top: 8px;
+		padding-top: 8px;
+		border-top: 1px solid var(--nx-border);
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+	}
+	/* PortsPanel is its own side column elsewhere; here it is a section. */
+	.ports-panel :global(aside) {
+		width: auto;
+		border-left: none;
+		padding: 0;
+		overflow: visible;
 	}
 	.empty {
 		color: var(--nx-muted);

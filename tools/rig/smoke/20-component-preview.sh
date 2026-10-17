@@ -12,6 +12,8 @@
 #                filename in Svelte 5 — the pane must drop the stale sheet)
 #   props strip  adding `label` in the strip renders it at once and writes
 #                {Name}.component.json next to the .svelte, preview.props
+#   ports        Ports mode on, double-click the render's top edge: a dot,
+#                a panel row and `ports: [p1]` in the same sidecar
 #   error        a syntax error shows the banner OVER the last good render
 #                (the island stays, dimmed); undoing it clears the banner
 #   follow       opening another .svelte moves the pane to that component
@@ -111,6 +113,33 @@ PY
 else
   fail "no SmokeDial.component.json appeared next to the .svelte"
 fi
+
+# ── ports on the render: Ports mode, double-click the top edge ─────────────
+# The sidecar's `ports` (the mimic editor's pipe connection points) are
+# edited on the live render in the same pane; the gesture takes the pointer
+# only in Ports mode so the component stays clickable otherwise.
+click_el 'doc.querySelector("header [data-kind=ports-toggle]")' || fail "no ports toggle in the pane header"
+dclick_el 'doc.querySelector(".stage svg.ports")' 0.5 0.04 || fail "the ports overlay is not on screen"
+ports_on_disk() {
+  python3 - "$SIDE" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+ps = d.get("ports") or []
+sys.exit(0 if len(ps) == 1 and ps[0].get("name") == "p1" and ps[0].get("y") == 0 else 1)
+PY
+}
+if wait_js 'doc.querySelectorAll(".stage svg.ports circle[data-kind=port]").length === 1' 10 \
+   && wait_js '[...doc.querySelectorAll("aside [data-kind=port-name]")].some(i => i.value === "p1")' 10; then
+  # The dot is optimistic; the host's write (and its save — the sidecar is
+  # open in no tab) follows a beat behind.
+  for _ in $(seq 1 20); do ports_on_disk && break; sleep 0.5; done
+  ports_on_disk \
+    && pass "a double-click on the render in Ports mode added port p1 (dot on the render, row in the panel, sidecar ports: $(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])).get("ports")))' "$SIDE"))" "$(shot ports)" \
+    || fail "the dot and row appeared but the sidecar's ports are not [p1 on the top edge]: $(tr -d '\n' <"$SIDE")"
+else
+  fail "double-clicking the render in Ports mode added no port (dots: $(wv 'doc.querySelectorAll(".stage svg.ports circle").length'), rows: $(wv 'doc.querySelectorAll("aside [data-kind=port-name]").length'))" "$(shot ports-missed)"
+fi
+click_el 'doc.querySelector("header [data-kind=ports-toggle]")' || true   # back off, so the next steps' clicks reach the editor as before
 
 # ── a syntax error: banner over the last render; undo clears it ───────────
 key ctrl+1
