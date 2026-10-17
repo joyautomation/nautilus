@@ -151,7 +151,9 @@ commit (*Open With → Text Editor* any time).
   (**nautilus: Preview HMI Page**): the project's own `npm run dev` starts
   in a terminal and the page's route opens in VS Code's Simple Browser
   beside the text, live-reloading as you type, with values from the
-  controller at `nautilus.runtimeUrl`. Also works from a Remote SSH window.
+  controller at `nautilus.runtimeUrl`. Hold **Alt+X** in the page and
+  hover to see which `.svelte` drew what; click to jump to it. Also works
+  from a Remote SSH window.
 
 ## Testing
 

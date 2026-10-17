@@ -97,7 +97,20 @@ async function ensureServer(root: string): Promise<DevServer | null> {
   const terminal = vscode.window.createTerminal({
     name: `hmi dev: ${path.basename(root)}`,
     cwd: root,
-    env: { CONTROLLER_URL: runtimeUrl() },
+    env: {
+      CONTROLLER_URL: runtimeUrl(),
+      // The Svelte Inspector (vite-plugin-svelte ships it; off unless asked):
+      // hold Alt+X in the page, hover to see which component drew what,
+      // click to open that .svelte at the line. Enabled from the
+      // environment so the project's own config stays untouched; the
+      // corner button is shown always so it can be found. A click calls
+      // Vite's /__open-in-editor, which launches `code -r -g file:line:col`
+      // — the integrated terminal has VS Code's own CLI on PATH, local or
+      // remote, so it lands in THIS window. A LAUNCH_EDITOR the user set
+      // already wins.
+      SVELTE_INSPECTOR_OPTIONS: JSON.stringify({ showToggleButton: "always", toggleButtonPos: "bottom-right" }),
+      LAUNCH_EDITOR: process.env.LAUNCH_EDITOR ?? "code",
+    },
   });
   terminal.show(true);
   terminal.sendText(shellLine("npm", devServerArgs(port), process.platform === "win32"));

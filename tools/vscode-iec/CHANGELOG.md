@@ -25,7 +25,10 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   Simple Browser beside the text. Vite's hot reload keeps it current as
   you type; the dev server is pointed at `nautilus.runtimeUrl` through
   `CONTROLLER_URL`, and when nothing answers there the extension offers
-  to start `naut run .` in the project above. Works from a Remote SSH
+  to start `naut run .` in the project above. The Svelte Inspector is on
+  in that server: hold **Alt+X** in the page (or press its corner button)
+  and hover to see which `.svelte` drew what, click to open it at the
+  line — in this window, local or Remote SSH. Works from a Remote SSH
   window (the port is forwarded). Needs workspace trust.
 - **A multi-leg OR in one step, and a branch you can select (ladder).**
   Ctrl- or Shift-click several elements of one series (the rung, or one
