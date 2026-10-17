@@ -38,6 +38,18 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   line — in this window, local or Remote SSH. Works from a Remote SSH
   window (the port is forwarded). Needs workspace trust.
 
+### Fixed
+
+- **A port dot can be dragged after a double-click added it.** In the
+  sidecar editor (and the new preview pane) the double-click that adds a
+  port left the render's text selected; the next drag on a dot then
+  started the browser's native drag of that selection a few pixels in,
+  which cancelled the pointer and took the dot's capture with it — the
+  dot stopped, or the drop never reached the sidecar. The gesture now
+  cancels the selection and the native drag, and the dot commits the
+  drop on its own pointerup, pointercancel and lostpointercapture, not
+  only on the window's.
+
 ## [0.19.1] - 2026-10-26
 
 Requires naut 0.19.0 or later for the items marked so; everything else

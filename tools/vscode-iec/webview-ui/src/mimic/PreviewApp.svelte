@@ -251,6 +251,12 @@
 	function portDown(e: PointerEvent, i: number) {
 		if (!portsMode || e.button !== 0) return;
 		e.stopPropagation();
+		// Cancelling pointerdown stops the browser starting a text selection
+		// or a native drag of one (the double-click that adds a port leaves
+		// the render's text selected); a native drag would fire pointercancel
+		// a few pixels in and take the dot's pointer capture with it.
+		e.preventDefault();
+		window.getSelection()?.removeAllRanges();
 		(e.currentTarget as Element).setPointerCapture(e.pointerId);
 		selected = i;
 		const p = ports[i];
@@ -290,6 +296,11 @@
 			drag.moved = true;
 		}
 	}
+	/** The drop. Wired to the dot itself (pointerup, pointercancel,
+	 * lostpointercapture) as well as the window: under pointer capture the
+	 * release is delivered to the captured element, and the capture can also
+	 * end without any pointerup at all. Idempotent — whichever fires first
+	 * commits, the rest find no drag. */
 	function onPortUp() {
 		if (!drag) return;
 		if (drag.moved) {
@@ -340,7 +351,8 @@
 	{/if}
 
 	<div class="body">
-		<div class="stage" class:stale={!!error}>
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="stage" class:stale={!!error} ondragstart={(e) => e.preventDefault()}>
 			{#if available}
 				{#key version}
 					<div class="scale" style="transform: scale({zoom})">
@@ -374,6 +386,9 @@
 											r={6 / zoom}
 											style="stroke-width: {2 / zoom}px"
 											onpointerdown={(e) => portDown(e, i)}
+											onpointerup={onPortUp}
+											onpointercancel={onPortUp}
+											onlostpointercapture={onPortUp}
 											ondblclick={(e) => {
 												e.stopPropagation();
 												if (portsMode) portDelete(i);
@@ -562,6 +577,9 @@
 	.box {
 		position: relative;
 		display: inline-block;
+		/* a dot drag must not select the render's text under it, nor start
+		   a native drag of a selection (which cancels the pointer) */
+		user-select: none;
 		outline: 1px dashed var(--nx-border);
 		outline-offset: 4px;
 	}
