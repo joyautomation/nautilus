@@ -142,6 +142,20 @@ commit (*Open With → Text Editor* any time).
 - Every gesture is one text edit, so undo is text undo. Press `p` to edit an
   equipment's ports; **Nautilus: Edit Component Ports…** does the same for
   the built-ins.
+- Writing a component? Open its `.svelte` and press the preview button in
+  the editor title: the component renders beside the text as you type,
+  with sample props you set in the pane and its pipe connection points
+  drawn on the render — turn **ports** on in the pane's header to drag,
+  add (double-click the render) or remove them. Props and ports both go
+  to `{Name}.component.json`, so the AI or teammate who writes the next
+  component can ship its preview data and ports with it.
+- Writing a page? Open a `+page.svelte` and press its browser button
+  (**nautilus: Preview HMI Page**): the project's own `npm run dev` starts
+  in a terminal and the page's route opens in VS Code's Simple Browser
+  beside the text, live-reloading as you type, with values from the
+  controller at `nautilus.runtimeUrl`. Hold **Alt+X** in the page and
+  hover to see which `.svelte` drew what; click to jump to it. Also works
+  from a Remote SSH window.
 
 ## Testing
 
@@ -232,6 +246,7 @@ The most used; all are under **nautilus:** in the Command Palette.
 | Get Started | Open the walkthrough |
 | Open as Diagram Editor / Show Source | Switch a file between text and diagram |
 | Open FBD / Ladder / SFC Diagram Preview | Diagram beside the text |
+| Open Component Preview / Preview HMI Page | A `.svelte` component, or a whole route, beside the text |
 | Diff … Diagram (vs git HEAD / between git revisions… / vs Controller) | Visual diff |
 | Connect to Controller… | Set `nautilus.runtimeUrl` for this workspace |
 | Set Live Value… | Write a tag on the controller |

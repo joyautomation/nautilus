@@ -1,0 +1,8 @@
+{
+  "name": "hmi",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "svelte": "^5"
+  }
+}

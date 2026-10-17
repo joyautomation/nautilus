@@ -7,6 +7,36 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Added
 
+- **See a component while you edit it.** Open a `{Name}.svelte` and press
+  the preview button in its editor title (or **nautilus: Open Component
+  Preview**): a pane beside the text renders the component for real,
+  compiled with the project's own Svelte as you type, not only on save. A
+  compile error shows over the last good render instead of blanking the
+  pane. Sample props live in the sidecar's new `preview.props` key
+  (`{Name}.component.json`, created next to the `.svelte` on the first
+  add) and are edited from the pane's props strip: values read as JSON
+  when they parse (`62`, `true`, `[1, 2]`), else as text. The pane follows
+  the active `.svelte` editor and zooms 50 to 400 %. The sidecar's
+  `ports` are drawn on the render as dots and edited in the same pane:
+  turn **ports** on in the header, then drag a dot, double-click the
+  render to add one on the nearer edge, double-click a dot to remove it,
+  or use the panel to rename, delete, set an exit direction or add at a
+  free slot — the same gestures as the sidecar editor and the mimic
+  editor's ports mode. **Edit Component Ports…** on a custom component
+  now opens this pane; built-ins keep the standalone sidecar editor.
+  Needs workspace trust, like the mimic editor's user components.
+- **Preview a page for use.** Open a `+page.svelte` (or `+layout.svelte`)
+  and press its browser button, or run **nautilus: Preview HMI Page**: the
+  project's own `npm run dev` starts in a terminal on a free port (reused
+  while that terminal lives) and the file's route opens in VS Code's
+  Simple Browser beside the text. Vite's hot reload keeps it current as
+  you type; the dev server is pointed at `nautilus.runtimeUrl` through
+  `CONTROLLER_URL`, and when nothing answers there the extension offers
+  to start `naut run .` in the project above. The Svelte Inspector is on
+  in that server: hold **Alt+X** in the page (or press its corner button)
+  and hover to see which `.svelte` drew what, click to open it at the
+  line — in this window, local or Remote SSH. Works from a Remote SSH
+  window (the port is forwarded). Needs workspace trust.
 - **A multi-leg OR in one step, and a branch you can select (ladder).**
   Ctrl- or Shift-click several elements of one series (the rung, or one
   leg of a branch), then press `O` or the toolbar's **OR**: they become
@@ -26,6 +56,15 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- **A port dot can be dragged after a double-click added it.** In the
+  sidecar editor (and the new preview pane) the double-click that adds a
+  port left the render's text selected; the next drag on a dot then
+  started the browser's native drag of that selection a few pixels in,
+  which cancelled the pointer and took the dot's capture with it — the
+  dot stopped, or the drop never reached the sidecar. The gesture now
+  cancels the selection and the native drag, and the dot commits the
+  drop on its own pointerup, pointercancel and lostpointercapture, not
+  only on the window's.
 - **An FBD insert no longer re-lays out a network you arranged.** Adding
   a block that joins a network re-ran that network's auto-layout, so
   blocks you had placed could swap rows (in a take, existing blocks

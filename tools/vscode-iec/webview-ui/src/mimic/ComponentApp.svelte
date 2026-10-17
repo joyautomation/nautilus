@@ -136,6 +136,12 @@
 	function portDown(e: PointerEvent, i: number) {
 		if (e.button !== 0) return;
 		e.stopPropagation();
+		// Cancelling pointerdown stops the browser starting a text selection
+		// or a native drag of one (the double-click that adds a port leaves
+		// the render's text selected); a native drag would fire pointercancel
+		// a few pixels in and take the dot's pointer capture with it.
+		e.preventDefault();
+		window.getSelection()?.removeAllRanges();
 		(e.currentTarget as Element).setPointerCapture(e.pointerId);
 		selected = i;
 		const p = ports[i];
@@ -243,6 +249,7 @@
 					bind:this={stageEl}
 					style="width: {STAGE_W}px; height: {STAGE_H}px"
 					onpointerdown={() => (selected = null)}
+					ondragstart={(e) => e.preventDefault()}
 				>
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div
@@ -275,6 +282,9 @@
 								cy={port.y}
 								r="6"
 								onpointerdown={(e) => portDown(e, i)}
+								onpointerup={onup}
+								onpointercancel={onup}
+								onlostpointercapture={onup}
 								ondblclick={(e) => {
 									e.stopPropagation();
 									portDelete(i);
@@ -413,6 +423,9 @@
 	.canvas {
 		position: relative;
 		flex: none;
+		/* a dot drag must not select the render's text under it, nor start
+		   a native drag of a selection (which cancels the pointer) */
+		user-select: none;
 	}
 	.box {
 		position: absolute;
