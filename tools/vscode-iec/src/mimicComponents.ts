@@ -250,6 +250,25 @@ export async function writeComponentEntryEdit(
     edit.createFile(target, { overwrite: true, contents: Buffer.from(res.text, "utf8") });
   }
   const ok = await vscode.workspace.applyEdit(edit);
+  // A sidecar no editor shows (the preview pane or the mimic editor wrote
+  // it from the side) would otherwise sit dirty and invisible until VS
+  // Code asks about it on exit; one the user has open stays theirs to
+  // save, undo included.
+  if (ok && openDoc && res.text !== null && !shownInTab(openDoc.uri)) await openDoc.save();
   if (ok) await index.refresh();
   return { ok };
+}
+
+/** Whether any editor tab (text or custom) shows `uri`. */
+function shownInTab(uri: vscode.Uri): boolean {
+  const key = uri.toString();
+  return vscode.window.tabGroups.all.some((g) =>
+    g.tabs.some((t) => {
+      const input = t.input;
+      return (
+        (input instanceof vscode.TabInputText || input instanceof vscode.TabInputCustom) &&
+        input.uri.toString() === key
+      );
+    })
+  );
 }

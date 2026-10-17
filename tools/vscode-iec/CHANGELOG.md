@@ -16,8 +16,15 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   (`{Name}.component.json`, created next to the `.svelte` on the first
   add) and are edited from the pane's props strip: values read as JSON
   when they parse (`62`, `true`, `[1, 2]`), else as text. The pane follows
-  the active `.svelte` editor and zooms 50 to 400 %. Needs workspace
-  trust, like the mimic editor's user components.
+  the active `.svelte` editor and zooms 50 to 400 %. The sidecar's
+  `ports` are drawn on the render as dots and edited in the same pane:
+  turn **ports** on in the header, then drag a dot, double-click the
+  render to add one on the nearer edge, double-click a dot to remove it,
+  or use the panel to rename, delete, set an exit direction or add at a
+  free slot — the same gestures as the sidecar editor and the mimic
+  editor's ports mode. **Edit Component Ports…** on a custom component
+  now opens this pane; built-ins keep the standalone sidecar editor.
+  Needs workspace trust, like the mimic editor's user components.
 - **Preview a page for use.** Open a `+page.svelte` (or `+layout.svelte`)
   and press its browser button, or run **nautilus: Preview HMI Page**: the
   project's own `npm run dev` starts in a terminal on a free port (reused
