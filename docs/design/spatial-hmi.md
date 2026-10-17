@@ -669,12 +669,21 @@ What it is, in the terms the package already has:
 
 - **Fills near white, lines dark.** `paperPalette(theme)` lays its
   near-whites over the theme's palette: steel, shell, running and fluid
-  all land on the same quiet greys, labels become white cards with dark
-  ink, and the backdrop is the sheet (`palette.paper`, set as the scene's
+  all land on the same quiet greys, labels are dark lettering, and the
+  backdrop is the sheet (`palette.paper`, set as the scene's
   background so the page behind the canvas does not matter). The priority
   colours, the selection and the hover come through untouched, so an
   alarm reads exactly as it does in the lit scene. ISA-101 restraint,
   drawn: the only colour on the page is an alarm.
+- **Labels are lettering, not cards — in every look.** `Label` draws
+  the title and the status as text with a tight halo in the backdrop's
+  colour (paper, or the theme's surface), no box and no border, so the
+  line work shows between the letters. It is sized in metres of the
+  scene (12 px across a 7.5 m drawing on a desktop), clamped to 10–14 px,
+  so on a phone the labels shrink with the drawing instead of covering
+  it, and in perspective the far ones are the small ones. Still to do
+  (James, 2026-10-17, on his phone): tier the text — title only below a
+  zoom threshold, the value on tap, an alarmed node keeping its value.
 - **Every edge inked.** `PaperOutlines` walks the scene once a frame and
   gives every mesh a `LineSegments` child cut from its geometry
   (`EdgesGeometry`, 20° threshold), so the lines follow a turning coupling

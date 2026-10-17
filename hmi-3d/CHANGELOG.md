@@ -4,8 +4,8 @@
 
 **Added.** The paper look (`look: "paper"` in the document, or
 `<SceneView look="paper">`; design §3f): the scene as an isometric line
-drawing — near-white fills, every edge inked, a paper backdrop, labels as
-white cards — where the only colour is an alarm, drawn as a soft glow
+drawing — near-white fills, every edge inked, a paper backdrop — where
+the only colour is an alarm, drawn as a soft glow
 instead of the wireframe cage, and flow is the chevrons moving. The lines
 are `PaperOutlines`, an edge pass over every mesh in the scene that a kind
 opts a mesh out of with `userData={{ ink: false }}`; the colours are
@@ -17,6 +17,13 @@ through untouched. `SceneDoc.look` is the document's choice, and the
 metres across the view): no vanishing point, so a position on a 45°
 azimuth and a 35.26° elevation is the isometric drawing. The perspective
 camera and its `fov` are unchanged and remain the default.
+
+**Changed.** Labels are lettering, not cards, in every look: the title
+and the status as text with a tight halo in the backdrop's colour (the
+paper, or the theme's surface), no box and no border, so the drawing
+shows between the letters. They are sized in metres of the scene and
+clamped to 10–14 px, so on a phone they shrink with the drawing instead
+of covering it, and in perspective the far labels are the small ones.
 
 **Added.** Pipes carry chevrons along the run while it flows, in the order
 of the run's points, so direction reads even where colour cannot; a pipe

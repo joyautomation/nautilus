@@ -91,7 +91,7 @@ export function paletteFromTheme(el: Element): Palette {
 /**
  * The paper look's colours (docs/design/spatial-hmi.md §3f), laid over a
  * theme palette: the equipment goes near-white and the lines dark, labels
- * become white cards with dark ink, and the backdrop is paper — while the
+ * are dark lettering haloed in paper, and the backdrop is paper — while the
  * priority colours, the selection and the hover come through untouched,
  * so an alarm reads exactly as it does in the lit scene. Steel, fluid and
  * running all land on the same quiet greys on purpose: in this look the
@@ -110,7 +110,7 @@ export function paperPalette(base: Palette = DEFAULT_PALETTE): Palette {
 		handle: '#8a8a86',
 		ink: '#45453f',
 		paper: '#f4f3ef',
-		label: { bg: '#ffffff', ink: '#2b2b28', border: '#d6d6d1' },
+		label: { bg: '#f4f3ef', ink: '#2b2b28', border: '#d6d6d1' },
 		priority: { ...base.priority }
 	};
 }
