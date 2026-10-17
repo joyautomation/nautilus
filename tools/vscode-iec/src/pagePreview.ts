@@ -122,19 +122,24 @@ async function ensureServer(root: string): Promise<DevServer | null> {
   return server;
 }
 
-/** Open `url` beside the text editor — Simple Browser when VS Code has
- * it (it ships built in), the system browser otherwise. Through
- * asExternalUri so a Remote-SSH / Codespaces window reaches the forwarded
- * port rather than its own localhost. */
+/** Open `url` beside the text editor — in VS Code's own Simple Browser
+ * tab (a built-in extension), the system browser only if that fails.
+ * Through asExternalUri so a Remote-SSH / Codespaces window reaches the
+ * forwarded port rather than its own localhost.
+ *
+ * Call the command straight away rather than looking for it first:
+ * `simpleBrowser.api.open` is registered when the Simple Browser
+ * extension ACTIVATES (its activation event is this very command), so it
+ * is absent from getCommands() until then — a check-then-call opened the
+ * system browser on a fresh window. */
 async function openBeside(url: string): Promise<void> {
   const ext = await vscode.env.asExternalUri(vscode.Uri.parse(url));
-  const cmds = await vscode.commands.getCommands(true);
-  if (cmds.includes("simpleBrowser.api.open")) {
+  try {
     await vscode.commands.executeCommand("simpleBrowser.api.open", ext, {
       viewColumn: vscode.ViewColumn.Beside,
       preserveFocus: true,
     });
-  } else {
+  } catch {
     await vscode.env.openExternal(ext);
   }
 }
