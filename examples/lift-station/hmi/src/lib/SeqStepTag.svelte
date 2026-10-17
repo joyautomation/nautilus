@@ -32,11 +32,11 @@
 		width: 6px;
 		height: 6px;
 		border-radius: 50%;
-		background: var(--s1, #3987e5);
+		background: var(--axis, #383835);
 		flex-shrink: 0;
 	}
 	.v {
-		color: var(--ink, #e7e6df);
+		color: var(--text, #e7e6df);
 		font-family: var(--mono, ui-monospace, monospace);
 	}
 </style>
