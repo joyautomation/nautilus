@@ -56,6 +56,15 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Fixed
 
+- **A port dot can be dragged after a double-click added it.** In the
+  sidecar editor (and the new preview pane) the double-click that adds a
+  port left the render's text selected; the next drag on a dot then
+  started the browser's native drag of that selection a few pixels in,
+  which cancelled the pointer and took the dot's capture with it — the
+  dot stopped, or the drop never reached the sidecar. The gesture now
+  cancels the selection and the native drag, and the dot commits the
+  drop on its own pointerup, pointercancel and lostpointercapture, not
+  only on the window's.
 - **An FBD insert no longer re-lays out a network you arranged.** Adding
   a block that joins a network re-ran that network's auto-layout, so
   blocks you had placed could swap rows (in a take, existing blocks

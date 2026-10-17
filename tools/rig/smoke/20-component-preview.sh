@@ -14,6 +14,7 @@
 #                {Name}.component.json next to the .svelte, preview.props
 #   ports        Ports mode on, double-click the render's top edge: a dot,
 #                a panel row and `ports: [p1]` in the same sidecar
+#   ports-drag   drag that dot along the edge: it moves, the sidecar follows
 #   error        a syntax error shows the banner OVER the last good render
 #                (the island stays, dimmed); undoing it clears the banner
 #   follow       opening another .svelte moves the pane to that component
@@ -138,6 +139,29 @@ if wait_js 'doc.querySelectorAll(".stage svg.ports circle[data-kind=port]").leng
     || fail "the dot and row appeared but the sidecar's ports are not [p1 on the top edge]: $(tr -d '\n' <"$SIDE")"
 else
   fail "double-clicking the render in Ports mode added no port (dots: $(wv 'doc.querySelectorAll(".stage svg.ports circle").length'), rows: $(wv 'doc.querySelectorAll("aside [data-kind=port-name]").length'))" "$(shot ports-missed)"
+fi
+
+# ── drag the dot: p1 slides along the top edge to its right quarter ────────
+# A real press-carry-release (xdotool), since pointer capture + window
+# pointermove is what a synthetic click can't exercise.
+DOT='doc.querySelector(".stage svg.ports circle[data-kind=port]")'
+read -r dx dy <<<"$(el_at "$DOT")"
+read -r bx by bw bh _ <<<"$(el_box 'doc.querySelector(".stage svg.ports")')"
+g_drag "$dx" "$dy" $((bx + bw * 3 / 4)) "$dy"
+ports_dragged() {
+  python3 - "$SIDE" <<'PY'
+import json, sys
+ps = json.load(open(sys.argv[1])).get("ports") or []
+sys.exit(0 if len(ps) == 1 and ps[0]["name"] == "p1" and abs(ps[0]["x"] - 0.75) < 0.05 and ps[0]["y"] == 0 else 1)
+PY
+}
+if wait_js '(() => { const c = doc.querySelector(".stage svg.ports circle[data-kind=port]"); const s = doc.querySelector(".stage svg.ports"); return c && s && +c.getAttribute("cx") > s.width.baseVal.value * 0.65; })()' 5; then
+  for _ in $(seq 1 20); do ports_dragged && break; sleep 0.5; done
+  ports_dragged \
+    && pass "dragging the dot moved p1 to the top edge's right quarter (sidecar ports: $(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1])).get("ports")))' "$SIDE"))" "$(shot ports-dragged)" \
+    || fail "the dot moved on screen but the sidecar did not follow: $(tr -d '\n' <"$SIDE")"
+else
+  fail "dragging the dot did not move it (cx: $(wv "$DOT"'?.getAttribute("cx")') of $(wv 'doc.querySelector(".stage svg.ports")?.getAttribute("width")'), sidecar: $(tr -d '\n' <"$SIDE"))" "$(shot ports-drag-missed)"
 fi
 click_el 'doc.querySelector("header [data-kind=ports-toggle]")' || true   # back off, so the next steps' clicks reach the editor as before
 
