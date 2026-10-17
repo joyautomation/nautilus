@@ -7,10 +7,16 @@
 	import { RepeatWrapping, SRGBColorSpace, NoColorSpace, type MeshStandardMaterial, type Texture } from 'three';
 	import { getContext } from 'svelte';
 	import type { SceneFixture } from '../scene.js';
+	import { DEFAULT_PALETTE, type Palette } from '../palette.js';
 	import type { ViewState } from './view.js';
 
 	let { fixture }: { fixture: SceneFixture } = $props();
 	const view = getContext<ViewState>('hmi3d:view') ?? { lit: false };
+	const palette = getContext<Palette>('hmi3d:palette') ?? DEFAULT_PALETTE;
+	// The default paints: dark slabs in the lit and flat looks, the
+	// palette's near-whites on paper (§3f), where a floor is a sheet.
+	let boxColor = $derived(fixture.color ?? (view.paper ? palette.steelDark : '#3a3833'));
+	let markerColor = $derived(fixture.color ?? (view.paper ? palette.ink : '#e8e6e1'));
 	const deg = Math.PI / 180;
 	let rot = $derived<[number, number, number]>(
 		fixture.rot ? [fixture.rot[0] * deg, fixture.rot[1] * deg, fixture.rot[2] * deg] : [0, 0, 0]
@@ -23,6 +29,7 @@
 	// the loader's transform), because a change after it needs another.
 	let tex = $derived(view.lit && fixture.kind === 'plane' ? fixture.texture : undefined);
 	let maps = $state<{ map?: Texture; normalMap?: Texture; roughnessMap?: Texture }>({});
+	let planeColor = $derived(fixture.color ?? (maps.map ? '#ffffff' : view.paper ? palette.shell : '#2a2a28'));
 	$effect(() => {
 		const t = tex;
 		if (!t) {
@@ -66,7 +73,7 @@
 	<T.Mesh position={fixture.pos} rotation={rot} castShadow receiveShadow>
 		<T.BoxGeometry args={[size[0], size[1] ?? 1, size[2] ?? 1]} />
 		<T.MeshStandardMaterial
-			color={fixture.color ?? '#3a3833'}
+			color={boxColor}
 			transparent={opacity < 1}
 			{opacity}
 			metalness={view.lit ? 0.1 : 0}
@@ -78,14 +85,14 @@
 	<T.Mesh position={fixture.pos} rotation={[-Math.PI / 2 + rot[0], rot[1], rot[2]]} receiveShadow>
 		<T.PlaneGeometry args={[size[0], size[1] ?? size[0]]} />
 		{#if fixture.kind === 'marker'}
-			<T.MeshBasicMaterial color={fixture.color ?? '#e8e6e1'} transparent={opacity < 1} {opacity} side={2} />
+			<T.MeshBasicMaterial color={markerColor} transparent={opacity < 1} {opacity} side={2} />
 		{:else}
 			<T.MeshStandardMaterial
 				bind:ref={mat}
 				map={maps.map}
 				normalMap={maps.normalMap}
 				roughnessMap={maps.roughnessMap}
-				color={fixture.color ?? (maps.map ? '#ffffff' : '#2a2a28')}
+				color={planeColor}
 				transparent={opacity < 1}
 				{opacity}
 				metalness={0}

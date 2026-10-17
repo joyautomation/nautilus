@@ -1,0 +1,36 @@
+# Acceptance tests for the well site, in virtual time.
+tolerance: 0.5
+
+tests:
+  - name: the well pump starts below the start level and stops above the stop level
+    suspend: [sim]
+    steps:
+      - given: { R101.Level: 30.0 }
+        scans: 1
+        expect: { WL101.Pump.Run: true, FCV101.Cmd: 100.0 }
+      - given: { R101.Level: 90.0 }
+        scans: 1
+        expect: { WL101.Pump.Run: false, FCV101.Cmd: 0.0 }
+
+  - name: an injected pump fault stops the pump and raises its alarm
+    given: { InjectPumpFault: true, R101.Level: 30.0 }
+    advance: 1s
+    expect: { WL101.Pump.Fault: true, WL101.Fault: true, WL101.Pump.Run: false, WL101.Pump.Running: false }
+    alarms: { active: ["WL101.Fault"] }
+
+  - name: a drought draws the well down past the limit, which stops the pump and alarms
+    given: { InjectDrought: true, R101.Level: 30.0 }
+    steps:
+      - advance: 60s
+        expect: { WL101.LL: true, WL101.Pump.Run: false }
+        alarms: { active: ["WL101.LL"] }
+      # The limit holds while the well recovers: no chatter on the line.
+      - advance: 60s
+        expect: { WL101.LL: true }
+        alarms: { active: ["WL101.LL"] }
+
+  - name: a normal valve stroke is not a valve fault
+    given: { R101.Level: 30.0 }
+    advance: 20s
+    expect: { FCV101.Pos: 100.0, FCV101.Fault: false }
+    alarms: { active: [] }

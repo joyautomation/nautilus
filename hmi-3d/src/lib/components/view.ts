@@ -4,4 +4,7 @@
 // on — and `false` is the Milestone 1 flat look.
 export interface ViewState {
 	lit: boolean;
+	/** The paper look (§3f): near-white fills, inked edges, a paper
+	 * backdrop. A kind that draws its own lines or glows reads this. */
+	paper?: boolean;
 }

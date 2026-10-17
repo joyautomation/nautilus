@@ -12,6 +12,14 @@
       "type": "string",
       "description": "Display name for the scene."
     },
+    "look": {
+      "enum": [
+        "lit",
+        "flat",
+        "paper"
+      ],
+      "description": "How the scene is drawn (docs/design/spatial-hmi.md §3f); the page may override it. `lit` (default): data kinds, PBR, textures and the environment. `flat`: grey primitives under three lights. `paper`: the drawn look — near-white fills, every edge inked, a paper backdrop; only an alarm brings colour, and flow is the chevrons moving."
+    },
     "kinds": {
       "type": "object",
       "additionalProperties": {
@@ -201,7 +209,19 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "exclusiveMaximum": 180,
-          "description": "Vertical field of view, degrees. Default 45."
+          "description": "Vertical field of view, degrees. Default 45. Perspective only."
+        },
+        "projection": {
+          "enum": [
+            "perspective",
+            "orthographic"
+          ],
+          "description": "`perspective` (default), or `orthographic`: no vanishing point, so a pos on a 45° azimuth and a 35.26° elevation from the target is the isometric drawing."
+        },
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Orthographic only: how many metres of scene span the view's width. Default 6."
         }
       }
     },
@@ -425,6 +445,10 @@
           "type": "number",
           "exclusiveMinimum": 0,
           "description": "Metres. Default 0.012."
+        },
+        "arrows": {
+          "type": "boolean",
+          "description": "Chevrons travelling along the run while it flows (default true), so direction reads even where colour cannot. The run's direction is the order of its points."
         },
         "bind": {
           "type": "object",

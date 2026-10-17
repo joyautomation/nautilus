@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -25,7 +26,10 @@ import (
 // Doc is a *.scene.json. Field names and meaning mirror hmi-3d's scene.ts,
 // which is the renderer's view of the same file.
 type Doc struct {
-	Name        string          `json:"name,omitempty"`
+	Name string `json:"name,omitempty"`
+	// Look is how the document asks to be drawn: lit (default), flat, or
+	// paper (hmi-3d's scene.ts, SceneLook).
+	Look        string          `json:"look,omitempty"`
 	Kinds       map[string]Kind `json:"kinds,omitempty"`
 	Environment *Environment    `json:"environment,omitempty"`
 	Camera      *Camera         `json:"camera,omitempty"`
@@ -169,6 +173,10 @@ type Camera struct {
 	Pos    Vec     `json:"pos"`
 	Target Vec     `json:"target"`
 	Fov    float64 `json:"fov,omitempty"`
+	// Projection is perspective (default) or orthographic; Width is the
+	// metres across an orthographic view.
+	Projection string  `json:"projection,omitempty"`
+	Width      float64 `json:"width,omitempty"`
 }
 
 type Fixture struct {
@@ -205,7 +213,12 @@ type Pipe struct {
 	Points []Vec             `json:"points"`
 	Radius float64           `json:"radius,omitempty"`
 	Bind   map[string]string `json:"bind,omitempty"`
+	// Arrows: chevrons travel the run while it flows. nil = true.
+	Arrows *bool `json:"arrows,omitempty"`
 }
+
+// Looks are the values Doc.Look takes; hmi-3d's LOOKS.
+var Looks = []string{"lit", "flat", "paper"}
 
 // Builtin is the contract the package's built-in kinds carry. It must
 // match hmi-3d's builtinRegistry (registry.ts): same names, same members.
@@ -675,10 +688,25 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 		}
 	}
 
+	if d.Look != "" && !slices.Contains(Looks, d.Look) {
+		errf("/look", "must be 'lit', 'flat' or 'paper', not %q", d.Look)
+	}
+
 	if d.Camera != nil {
 		vec3("/camera/pos", d.Camera.Pos, "metres")
 		vec3("/camera/target", d.Camera.Target, "metres")
-		if d.Camera.Fov != 0 && (d.Camera.Fov <= 0 || d.Camera.Fov >= 180) {
+		ortho := d.Camera.Projection == "orthographic"
+		if d.Camera.Projection != "" && d.Camera.Projection != "perspective" && !ortho {
+			errf("/camera/projection", "must be 'perspective' or 'orthographic', not %q", d.Camera.Projection)
+		}
+		if d.Camera.Width < 0 {
+			errf("/camera/width", "must be a number of metres > 0")
+		} else if d.Camera.Width != 0 && !ortho {
+			errf("/camera/width", "only an orthographic camera has a width")
+		}
+		if d.Camera.Fov != 0 && ortho {
+			errf("/camera/fov", "an orthographic camera has no field of view; use width")
+		} else if d.Camera.Fov != 0 && (d.Camera.Fov <= 0 || d.Camera.Fov >= 180) {
 			errf("/camera/fov", "must be between 0 and 180 degrees")
 		}
 	}

@@ -18,6 +18,10 @@ export interface Palette {
 	/** The node under the pointer: the one a click would pick. */
 	hover: string;
 	handle: string;
+	/** The drawn line: an inked edge in the paper look, a flow chevron. */
+	ink: string;
+	/** What the paper look paints behind everything. */
+	paper: string;
 	label: { bg: string; ink: string; border: string };
 	/** Alarm priority -> colour, keyed by the kit's Priority names. */
 	priority: Record<string, string>;
@@ -34,6 +38,8 @@ export const DEFAULT_PALETTE: Palette = {
 	selected: '#e8e6e1',
 	hover: '#6aa5e8',
 	handle: '#c9a227',
+	ink: '#3a3a38',
+	paper: '#f4f3ef',
 	label: { bg: '#1a1a19', ink: '#e8e6e1', border: '#383835' },
 	priority: {
 		critical: '#d03b3b',
@@ -80,4 +86,31 @@ export function paletteFromTheme(el: Element): Palette {
 	const axis = get('--axis');
 	if (axis) p.label.border = axis;
 	return p;
+}
+
+/**
+ * The paper look's colours (docs/design/spatial-hmi.md §3f), laid over a
+ * theme palette: the equipment goes near-white and the lines dark, labels
+ * are dark lettering haloed in paper, and the backdrop is paper — while the
+ * priority colours, the selection and the hover come through untouched,
+ * so an alarm reads exactly as it does in the lit scene. Steel, fluid and
+ * running all land on the same quiet greys on purpose: in this look the
+ * only colour is an alarm, and flow is shown by the chevrons moving.
+ */
+export function paperPalette(base: Palette = DEFAULT_PALETTE): Palette {
+	return {
+		...base,
+		steel: '#f7f7f5',
+		steelDark: '#e3e3df',
+		shell: '#fbfbfa',
+		fluid: '#dfe6ee',
+		running: '#f7f7f5',
+		stale: '#d9d9d5',
+		selected: '#2b2b28',
+		handle: '#8a8a86',
+		ink: '#45453f',
+		paper: '#f4f3ef',
+		label: { bg: '#f4f3ef', ink: '#2b2b28', border: '#d6d6d1' },
+		priority: { ...base.priority }
+	};
 }

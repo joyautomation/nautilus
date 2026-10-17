@@ -35,6 +35,12 @@ to see what the VS Code extension does against a real project.
   `rig.scene.json` rendered live by `@joyautomation/nautilus-hmi-3d` (orbit,
   click-to-inspect, alarm halos, quality greying). The test bed for the
   spatial HMI; the process is deliberately tiny.
+- **[`well-site/`](well-site/)** — one production well, **drawn**: the
+  same spatial package in its paper look (`look: paper`, an orthographic
+  camera), an isometric line drawing where the ground is cut away to show
+  the casing, the water in it and the submersible pump, the discharge
+  run through a meter and a valve to a reservoir, and a hypochlorite feed
+  — with a simulated aquifer behind it. The first screen in that style.
 
 Each project runs the same way:
 

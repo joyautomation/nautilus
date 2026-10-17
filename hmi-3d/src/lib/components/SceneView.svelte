@@ -9,10 +9,10 @@
 	import { onMount, setContext, type Snippet } from 'svelte';
 	import { Canvas } from '@threlte/core';
 	import type { RealtimeClient, AlarmClient, NautilusFrame } from '@joyautomation/nautilus-hmi';
-	import { validateScene, type SceneCamera, type SceneDoc, type SceneEnvironment, type SceneError, type SceneGrid } from '../scene.js';
+	import { validateScene, type SceneCamera, type SceneDoc, type SceneEnvironment, type SceneError, type SceneGrid, type SceneLook } from '../scene.js';
 	import { builtinRegistry, componentRegistry, type NodeRegistry } from '../registry.js';
 	import { worstAlarmByAsset, alarmAsset } from '../alarms.js';
-	import { DEFAULT_PALETTE, paletteFromTheme, type Palette } from '../palette.js';
+	import { DEFAULT_PALETTE, paletteFromTheme, paperPalette, type Palette } from '../palette.js';
 	import { PerfSampler } from '../perf.svelte.js';
 	import type { PlacedNode } from '../context.js';
 	import type { ViewState } from './view.js';
@@ -31,7 +31,7 @@
 		environment,
 		perf = false,
 		inspector = true,
-		look = $bindable('lit'),
+		look = $bindable(),
 		selected = $bindable(null),
 		onselect,
 		oncontext,
@@ -53,11 +53,13 @@
 		perf?: boolean;
 		/** Open the asset drawer on a pick. */
 		inspector?: boolean;
-		/** `lit` (default): data kinds, PBR materials, textures and the
-		 * document's environment. `flat`: the Milestone 1 look — built-in
-		 * primitives and three lights — for a project with no assets, a
-		 * low-end tier, or the before half of a before/after. */
-		look?: 'lit' | 'flat';
+		/** `lit`: data kinds, PBR materials, textures and the document's
+		 * environment. `flat`: the Milestone 1 look — built-in primitives
+		 * and three lights — for a project with no assets, a low-end tier,
+		 * or the before half of a before/after. `paper`: the drawn look
+		 * (§3f): near-white fills, inked edges, colour only on an alarm.
+		 * Absent: the document's `look`, else `lit`. */
+		look?: SceneLook;
 		selected?: string | null;
 		onselect?: (id: string) => void;
 		/** A node was right-clicked (a context menu's cue); `event` is the
@@ -70,11 +72,17 @@
 	} = $props();
 
 	// The palette is context, so every model reads the same theme colours.
-	// It starts as the defaults and is re-read from the DOM once mounted.
+	// It starts as the defaults and is re-read from the DOM once mounted;
+	// the paper look lays its near-whites over whatever the theme gave.
 	let palette = $state<Palette>(DEFAULT_PALETTE);
 	setContext('hmi3d:palette', palette);
+	let themed = $state<Palette>(DEFAULT_PALETTE);
+	let theLook = $derived<SceneLook>(look ?? doc?.look ?? 'lit');
+	$effect(() => {
+		Object.assign(palette, theLook === 'paper' ? paperPalette(themed) : themed);
+	});
 	// The look, read by every model for its material values (view.ts).
-	const view = $state<ViewState>({ lit: true });
+	const view = $state<ViewState>({ lit: true, paper: false });
 	setContext('hmi3d:view', view);
 
 	// Component kinds (§3d) join the registry from the app's modules; their
@@ -107,7 +115,7 @@
 	const sampler = new PerfSampler();
 	let stage: HTMLElement;
 	onMount(() => {
-		Object.assign(palette, paletteFromTheme(stage));
+		themed = paletteFromTheme(stage);
 		if (!perf) return;
 		sampler.start();
 		const off = rt.onFrame((f) => sampler.onFrame(f.ts));
@@ -137,7 +145,7 @@
 				isGood={(t) => rt.isGood(t)}
 				alarms={byAsset}
 				{selected}
-				{look}
+				look={theLook}
 				{camera}
 				{grid}
 				{environment}
