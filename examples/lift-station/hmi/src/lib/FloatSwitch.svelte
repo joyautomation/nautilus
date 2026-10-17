@@ -19,7 +19,7 @@
 </script>
 
 <svg
-	viewBox="0 0 46 70"
+	viewBox="-10 0 80 70"
 	{width}
 	role="img"
 	aria-label={`Float switch ${label}: ${tripped ? 'tripped' : 'clear'}`}
