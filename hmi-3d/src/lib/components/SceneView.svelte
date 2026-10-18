@@ -61,7 +61,10 @@
 		 * (§3f): near-white fills, inked edges, colour only on an alarm.
 		 * Absent: the document's `look`, else `lit`. */
 		look?: SceneLook;
+		/** The picked node's id. Bind it to follow the selection; Escape
+		 * clears it (and closes the drawer). */
 		selected?: string | null;
+		/** A node was picked. Not called on Escape — a bound `selected` goes null. */
 		onselect?: (id: string) => void;
 		/** A node was right-clicked (a context menu's cue); `event` is the
 		 * browser's, for clientX / clientY. Picks nothing. */
@@ -126,6 +129,13 @@
 		if (inspector) drawerOpen = true;
 		onselect?.(id);
 	}
+	// Escape deselects, wherever the focus is: the cage goes, the drawer
+	// closes (the kit's Drawer closes itself on Escape too, as a dialog).
+	function onkey(e: KeyboardEvent) {
+		if (e.key !== 'Escape' || selected === null) return;
+		selected = null;
+		drawerOpen = false;
+	}
 
 	const sampler = new PerfSampler();
 	let stage: HTMLElement;
@@ -140,6 +150,8 @@
 		};
 	});
 </script>
+
+<svelte:window onkeydown={onkey} />
 
 <div class="stage" bind:this={stage}>
 	{#if !check.ok}

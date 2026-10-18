@@ -56,6 +56,9 @@ through it, and so does the pick. The selection cage took the click too:
 once a well was selected, its box surrounded the pumps in it and every
 click on a pump re-selected the well. It no longer raycasts.
 
+**Added.** Escape deselects: the selection cage goes and the drawer
+closes; a bound `selected` reads `null`.
+
 **Fixed.** The drawer of a flat-tag node (a `bind` map, no `tag`) showed
 its quality and nothing else. It now lists every bound ref under its
 member name, with the tag it reads, and its quality is the worst of
