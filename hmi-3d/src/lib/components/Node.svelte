@@ -115,7 +115,7 @@
 
 	$effect(() => {
 		if (parent || !scene || id === undefined) return;
-		return scene.register({ id, tag, kind, label: title });
+		return scene.register({ id, tag, bind, kind, label: title });
 	});
 	// A node that goes away while hovered must not leave the cursor behind.
 	$effect(() => () => {
@@ -197,7 +197,10 @@
 				<AlarmMarker at={[bounds.center[0], bounds.center[1] + bounds.size[1] / 2 + 0.012, bounds.center[2]]} priority={alarm.priority} unacked={alarm.unacked} active={alarm.active} />
 			{/if}
 		{:else if isSel}
-			<T.Mesh position={bounds.center}>
+			<!-- The selection cage takes no raycast either: a selected well's
+			     box surrounds the pumps standing in it, and would otherwise
+			     catch every click meant for them. -->
+			<T.Mesh position={bounds.center} raycast={() => {}} userData={{ ink: false }}>
 				<T.BoxGeometry args={bounds.size} />
 				<T.MeshBasicMaterial color={palette.selected} wireframe transparent opacity={0.35} />
 			</T.Mesh>

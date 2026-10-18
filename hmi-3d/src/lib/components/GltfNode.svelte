@@ -153,6 +153,12 @@
 						o.castShadow = true;
 						o.receiveShadow = true;
 						original.set(o, o.material);
+						// Water and glass take no clicks: a translucent mesh
+						// (a well's fluid, a sight glass) is what the eye looks
+						// THROUGH, and a pick that stopped at it would hand
+						// every click on the pump in the well to the well.
+						const mat = Array.isArray(o.material) ? o.material[0] : o.material;
+						if (mat && mat.transparent && mat.opacity < 1) o.raycast = () => {};
 					}
 					baseRot.set(o, o.rotation.clone());
 				});

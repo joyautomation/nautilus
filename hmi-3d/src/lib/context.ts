@@ -14,6 +14,8 @@ export const NODE = 'hmi3d:node';
 export interface PlacedNode {
 	id: string;
 	tag?: string;
+	/** A flat-tag node's bind map (member → ref), what the drawer lists when there is no `tag`. */
+	bind?: Record<string, string>;
 	kind?: string;
 	label: string;
 }

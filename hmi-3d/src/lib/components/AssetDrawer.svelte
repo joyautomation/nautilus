@@ -1,6 +1,8 @@
 <script lang="ts">
 	// Click-to-inspect: the kit's 2D faceplate for the node's kind, every
-	// member of its struct, its quality and its alarms, in the kit's Drawer.
+	// member of its struct (or, for a flat-tag node, every bound ref under
+	// its member name, with the tag it reads), its quality and its alarms,
+	// in the kit's Drawer.
 	// Read-only: no writes leave this panel until the write path ships.
 	import { Drawer } from '@joyautomation/nautilus-hmi';
 	import type { PlacedNode } from '../context.js';
@@ -36,8 +38,8 @@
 		{#if members.length}
 			<dl>
 				{#each members as [k, x]}
-					<dt>{k}</dt>
-					<dd>{typeof x === 'number' ? x.toFixed(2) : String(x)}</dd>
+					<dt>{k}{#if node.bind?.[k]}<span class="ref">{node.bind[k]}</span>{/if}</dt>
+					<dd>{x === undefined ? '—' : typeof x === 'number' ? x.toFixed(2) : String(x)}</dd>
 				{/each}
 			</dl>
 		{:else if node.tag}
@@ -58,6 +60,11 @@
 	}
 	dt {
 		color: var(--ink-2, #a8a6a1);
+	}
+	.ref {
+		display: block;
+		font-size: 11px;
+		color: var(--muted, #8a887d);
 	}
 	dd {
 		margin: 0;

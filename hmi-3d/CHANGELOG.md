@@ -48,6 +48,19 @@ either. A model kind under a built-in's name still yields to the built-in
 in those looks, which is the before/after the flat look exists for;
 `registryFor` takes the look as a fourth argument to say so.
 
+**Fixed.** A data kind's translucent meshes (a well's water, a sight
+glass) took the click: the pick stops at the nearest hit, so every click
+on a pump standing in the well selected the well. A mesh whose material
+is transparent with opacity below 1 now takes no clicks — the eye looks
+through it, and so does the pick. The selection cage took the click too:
+once a well was selected, its box surrounded the pumps in it and every
+click on a pump re-selected the well. It no longer raycasts.
+
+**Fixed.** The drawer of a flat-tag node (a `bind` map, no `tag`) showed
+its quality and nothing else. It now lists every bound ref under its
+member name, with the tag it reads, and its quality is the worst of
+those tags'.
+
 **Fixed.** A node's label read its status off the struct tag alone. A
 flat-tag project (`"bind": { "level": "LIT101_Level" }` on a `tank` with
 no `tag`, the arrangement the README describes) drew the fluid at the
