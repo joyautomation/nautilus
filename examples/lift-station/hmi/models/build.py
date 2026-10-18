@@ -207,7 +207,7 @@ def build_well():
     concrete = pbr("Concrete", CONCRETE, metallic=0.0, roughness=0.95)
     concrete_dark = pbr("ConcreteDark", CONCRETE_DARK, metallic=0.0, roughness=0.95)
     steel = pbr("Steel", STEEL, metallic=0.75, roughness=0.35)
-    fluid = pbr("Fluid", FLUID, metallic=0.0, roughness=0.3, alpha=0.6)
+    fluid = pbr("Fluid", FLUID, metallic=0.0, roughness=0.3, alpha=0.35)
     R, WALL, DEPTH = 1.25, 0.2, 3.0
     cylinder("Floor", concrete_dark, R + WALL, 0.15, axis="y", pos=(0, -0.075, 0), segments=72)
     arc_ring("Wall", concrete, R, R + WALL, 0, DEPTH, math.pi / 2, 2 * math.pi)
@@ -249,14 +249,16 @@ def build_pump():
         parent(box(f"Vane{i}", dark, (0.22, 0.025, 0.05), (0, 0.075, 0), yaw=i * math.pi / 3), hub)
     v = cylinder("Volute", steel, 0.3, 0.3, axis="y", pos=(0, 0.29, 0))
     smooth(v)
-    cylinder("Discharge", steel, 0.075, 0.32, axis="z", pos=(0, 0.36, -0.36), segments=24)
-    sphere("Elbow", steel, 0.08, pos=(0, 0.36, -0.5))
-    # The riser runs up past the motor cap, strapped to it, so the scene's
-    # pipe leaves the pump where the eye expects a pipe to leave a pump
-    # (the flange top is local (0, 1.49, -0.5)) rather than at a stub
-    # under the water.
-    cylinder("Riser", steel, 0.075, 1.1, axis="y", pos=(0, 0.91, -0.5), segments=24)
-    cylinder("RiserFlange", dark, 0.11, 0.03, axis="y", pos=(0, 1.475, -0.5), segments=24)
+    # The discharge: out of the volute low down, a base elbow turning it
+    # up, and a short flanged stub. The scene's own pipe takes over at the
+    # flange top, local (0, 0.43, -0.5), and runs straight up past the
+    # motor — one continuous pipe from the pump's base in every look,
+    # rather than a riser in the model that a drawn water surface hides.
+    cylinder("Discharge", steel, 0.075, 0.32, axis="z", pos=(0, 0.2, -0.36), segments=24)
+    sphere("Elbow", steel, 0.08, pos=(0, 0.2, -0.5))
+    cylinder("Stub", steel, 0.075, 0.2, axis="y", pos=(0, 0.3, -0.5), segments=24)
+    cylinder("Flange", dark, 0.11, 0.03, axis="y", pos=(0, 0.415, -0.5), segments=24)
+    # A strap from the motor to where that pipe passes it.
     box("Strap", dark, (0.06, 0.05, 0.34), (0, 1.1, -0.33))
     m = cylinder("Motor", steel, 0.21, 0.75, axis="y", pos=(0, 0.815, 0))
     smooth(m)

@@ -64,9 +64,9 @@
 		{ "id": "TOPROC", "kind": "force-main", "label": "FORCE MAIN", "pos": [4.6, 0.45, -0.3] }
 	],
 	"pipes": [
-		{ "id": "p101-cv101", "points": [[0, -1.51, -0.8], [0, 0.45, -0.8], [2.0, 0.45, -0.8]], "radius": 0.075, "bind": { "flowing": "P101_Running" } },
+		{ "id": "p101-cv101", "points": [[0, -2.57, -0.8], [0, 0.45, -0.8], [2.0, 0.45, -0.8]], "radius": 0.075, "bind": { "flowing": "P101_Running" } },
 		{ "id": "cv101-header", "points": [[2.4, 0.45, -0.8], [2.9, 0.45, -0.8], [2.9, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "P101_Running" } },
-		{ "id": "p102-cv102", "points": [[1, -1.51, 0.2], [1, 0.45, 0.2], [2.0, 0.45, 0.2]], "radius": 0.075, "bind": { "flowing": "P102_Running" } },
+		{ "id": "p102-cv102", "points": [[1, -2.57, 0.2], [1, 0.45, 0.2], [2.0, 0.45, 0.2]], "radius": 0.075, "bind": { "flowing": "P102_Running" } },
 		{ "id": "cv102-header", "points": [[2.4, 0.45, 0.2], [2.9, 0.45, 0.2], [2.9, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "P102_Running" } },
 		{ "id": "header", "points": [[2.9, 0.45, -0.3], [3.47, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "FIT101_Flow" } },
 		{ "id": "force-main", "points": [[3.83, 0.45, -0.3], [4.6, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "FIT101_Flow" } },
