@@ -5,15 +5,19 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import {
   aggregateComponentFiles,
+  applyComponentEntryPatch,
   applyComponentPortsEdit,
   componentNameFromFilename,
+  componentNameFromSveltePath,
   formatComponentEntry,
   isCandidateComponentSveltePath,
   paletteCustomComponents,
   parseComponentEntry,
   parseComponentEntryStrict,
   patchComponentPortsText,
+  patchComponentPreviewText,
   validatePortList,
+  validatePreviewEntry,
   type ComponentFile,
 } from "./mimicComponentIndex";
 
@@ -277,4 +281,63 @@ test("patchComponentPortsText patches only ports; other keys survive; empty resu
   assert.deepEqual(patchComponentPortsText("", [{ name: "a", x: 0, y: 0 }]), {
     text: formatComponentEntry({ ports: [{ name: "a", x: 0, y: 0 }] }),
   });
+});
+
+// ── the `preview` key + generic entry patching (component preview pane) ─────
+
+test("componentNameFromSveltePath names a component source and refuses route files", () => {
+  assert.equal(componentNameFromSveltePath("/p/src/lib/HeatExchanger.svelte"), "HeatExchanger");
+  assert.equal(componentNameFromSveltePath("C:\\p\\src\\lib\\Tank.svelte"), "Tank");
+  assert.equal(componentNameFromSveltePath("/p/src/routes/+page.svelte"), null);
+  assert.equal(componentNameFromSveltePath("/p/src/routes/well/Panel.svelte"), null);
+  assert.equal(componentNameFromSveltePath("/p/src/lib/+layout.svelte"), null);
+  assert.equal(componentNameFromSveltePath("/p/src/lib/notes.md"), null);
+  assert.equal(componentNameFromSveltePath("/p/.svelte"), null);
+});
+
+test("parseComponentEntryStrict accepts a preview with props and refuses a malformed one", () => {
+  assert.deepEqual(parseComponentEntryStrict('{"preview": {"props": {"levelPct": 62}}}'), {
+    preview: { props: { levelPct: 62 } },
+  });
+  assert.deepEqual(parseComponentEntryStrict('{"preview": {}}'), { preview: {} });
+  assert.throws(() => parseComponentEntryStrict('{"preview": [1]}'), /preview must be an object/);
+  assert.throws(() => parseComponentEntryStrict('{"preview": {"props": 5}}'), /preview must be an object/);
+  // The forgiving parse keeps whatever is there; validatePreviewEntry is the guard.
+  assert.equal(validatePreviewEntry(parseComponentEntry('{"preview": "x"}').preview), false);
+  assert.equal(validatePreviewEntry({ props: { a: 1 } }), true);
+});
+
+test("applyComponentEntryPatch sets and deletes named keys, passing the rest through", () => {
+  const entry = { ports: [{ name: "in", x: 0, y: 0.5 }], preview: { props: { a: 1 } }, palette: { group: "x" } };
+  assert.deepEqual(applyComponentEntryPatch(entry, { preview: { props: { a: 2 } } }), {
+    ports: [{ name: "in", x: 0, y: 0.5 }],
+    preview: { props: { a: 2 } },
+    palette: { group: "x" },
+  });
+  assert.deepEqual(applyComponentEntryPatch(entry, { ports: null }), {
+    preview: { props: { a: 1 } },
+    palette: { group: "x" },
+  });
+  // The ports form is the same patch.
+  assert.deepEqual(applyComponentPortsEdit(entry, null), applyComponentEntryPatch(entry, { ports: null }));
+});
+
+test("patchComponentPreviewText writes preview.props beside existing keys and drops it when empty", () => {
+  const start = '{\n  "ports": [{ "name": "in", "x": 0, "y": 0.5 }]\n}\n';
+  const res = patchComponentPreviewText(start, { levelPct: 62, label: "T-101" });
+  assert.ok("text" in res && res.text);
+  const entry = JSON.parse(res.text!);
+  assert.deepEqual(entry, { ports: [{ name: "in", x: 0, y: 0.5 }], preview: { props: { levelPct: 62, label: "T-101" } } });
+  // Emptying the props removes the whole key; with nothing else left the file goes too.
+  const cleared = patchComponentPreviewText(res.text!, {});
+  assert.ok("text" in cleared);
+  assert.deepEqual(JSON.parse(cleared.text!), { ports: [{ name: "in", x: 0, y: 0.5 }] });
+  const gone = patchComponentPreviewText('{"preview": {"props": {"a": 1}}}', {});
+  assert.deepEqual(gone, { text: null });
+  // A fresh (empty) sidecar is a fresh entry.
+  const fresh = patchComponentPreviewText("", { a: 1 });
+  assert.deepEqual(JSON.parse((fresh as { text: string }).text), { preview: { props: { a: 1 } } });
+  // Mid-keystroke JSON refuses, naming the edit.
+  const bad = patchComponentPreviewText('{"ports": [', { a: 1 });
+  assert.ok("error" in bad && /preview props/.test(bad.error));
 });

@@ -200,7 +200,7 @@ export function buildWebviewHtml(
 export function webviewOptions(extensionUri: vscode.Uri, extraRoots: vscode.Uri[] = []): vscode.WebviewOptions {
   return {
     enableScripts: true,
-    // extraRoots: the mimic/Component Editor add the user-components
+    // extraRoots: the mimic editor adds the user-components
     // storage directory here (see userComponents.ts) so their webview can
     // load the compiled bundle alongside the extension's own media/dist.
     localResourceRoots: [vscode.Uri.joinPath(extensionUri, "media"), ...extraRoots],

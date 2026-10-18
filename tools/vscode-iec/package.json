@@ -313,6 +313,20 @@
         "title": "nautilus: Edit Component Ports…"
       },
       {
+        "command": "nautilus.copyKitComponent",
+        "title": "nautilus: Copy Kit Component to Project…"
+      },
+      {
+        "command": "nautilus.component.preview",
+        "title": "nautilus: Open Component Preview",
+        "icon": "$(open-preview)"
+      },
+      {
+        "command": "nautilus.page.preview",
+        "title": "nautilus: Preview HMI Page",
+        "icon": "$(browser)"
+      },
+      {
         "command": "nautilus.newProject",
         "title": "nautilus: Create Project…"
       },
@@ -461,6 +475,16 @@
           "group": "navigation@2"
         },
         {
+          "command": "nautilus.component.preview",
+          "when": "!activeCustomEditorId && (resourceExtname == .svelte && resourceFilename =~ /^[^+]/ || resourceFilename =~ /\\.component\\.json$/)",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nautilus.page.preview",
+          "when": "!activeCustomEditorId && resourceFilename =~ /^\\+(page|layout)\\.svelte$/",
+          "group": "navigation@2"
+        },
+        {
           "command": "nautilus.ld.preview",
           "when": "!activeCustomEditorId && resourceLangId == iec-ld",
           "group": "navigation@2"
@@ -556,6 +580,14 @@
         {
           "command": "nautilus.fbd.preview",
           "when": "resourceLangId == iec-fbd"
+        },
+        {
+          "command": "nautilus.component.preview",
+          "when": "resourceExtname == .svelte || resourceFilename =~ /\\.component\\.json$/"
+        },
+        {
+          "command": "nautilus.page.preview",
+          "when": "resourceExtname == .svelte"
         },
         {
           "command": "nautilus.ld.preview",
@@ -701,16 +733,6 @@
           }
         ],
         "priority": "default"
-      },
-      {
-        "viewType": "nautilus.componentEditor",
-        "displayName": "Component Editor",
-        "selector": [
-          {
-            "filenamePattern": "*.component.json"
-          }
-        ],
-        "priority": "default"
       }
     ],
     "yamlValidation": [
@@ -739,6 +761,10 @@
       {
         "fileMatch": "*.scene.json",
         "url": "./schemas/nautilus-scene.schema.json"
+      },
+      {
+        "fileMatch": "*.component.json",
+        "url": "./schemas/nautilus-component.schema.json"
       }
     ],
     "walkthroughs": [
@@ -824,7 +850,7 @@
     "vscode:prepublish": "npm run compile && npm run build:webview",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node --test out/fbMonitorTitle.test.js out/testState.test.js out/sourceGuard.test.js out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/logixDeployLogic.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js out/sceneKinds.test.js out/acceptanceMessage.test.js out/forces.test.js out/xrefTarget.test.js out/tagTypes.test.js && npm --prefix webview-ui run test",
+    "test": "npm run compile && node --test out/fbMonitorTitle.test.js out/testState.test.js out/sourceGuard.test.js out/scan.test.js out/cliResolve.test.js out/cliInstall.test.js out/gitHistory.test.js out/programSync.test.js out/composeCli.test.js out/onlineEditConfirm.test.js out/logixDeployLogic.test.js out/mimicOps.test.js out/mimicComponentIndex.test.js out/userComponentBuild.test.js out/componentPreview.test.js out/copyKitComponent.test.js out/pagePreviewLogic.test.js out/l5xRouting.test.js out/previewFollow.test.js out/newProjectLogic.test.js out/diagramKeyPolicy.test.js out/webviewReady.test.js out/sourceDoc.test.js out/sceneKinds.test.js out/acceptanceMessage.test.js out/forces.test.js out/xrefTarget.test.js out/tagTypes.test.js && npm --prefix webview-ui run test",
     "build:webview": "npm --prefix webview-ui run build",
     "test:e2e": "npm run compile && node out/e2e/run.js"
   },

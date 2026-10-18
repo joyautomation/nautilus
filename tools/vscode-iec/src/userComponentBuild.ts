@@ -43,6 +43,13 @@ function resolveSvelteCompiler(fromFile: string): SvelteCompilerModule {
 
 type CompiledFile = { code: string; resolveDir: string };
 
+/** Build-time knobs. `sources` maps an absolute `.svelte` path to the text
+ * to compile INSTEAD of what's on disk — the component preview
+ * (componentPreview.ts) passes every dirty Svelte buffer here so the pane
+ * tracks typing, not just saves. A path that isn't in the map reads from
+ * disk as always. */
+export type BuildOptions = { sources?: Record<string, string> };
+
 /** Compile one `.svelte` / `.svelte.js` / `.svelte.ts` file with the
  * project's own compiler, caching by absolute path (the entry's own
  * dependency graph can reference the same file more than once). Throws on
@@ -56,11 +63,16 @@ type CompiledFile = { code: string; resolveDir: string };
  * plain runes modules) has no such built-in TS support, so those get
  * transpiled with esbuild first — the one place this harness's own esbuild
  * (not the user's toolchain) does real work. */
-async function compileSvelteFile(absPath: string, cache: Map<string, CompiledFile>): Promise<CompiledFile> {
+async function compileSvelteFile(
+  absPath: string,
+  cache: Map<string, CompiledFile>,
+  sources: Record<string, string> = {}
+): Promise<CompiledFile> {
   const cached = cache.get(absPath);
   if (cached) return cached;
   const compiler = resolveSvelteCompiler(absPath);
-  const source = await fs.promises.readFile(absPath, "utf8");
+  const override = sources[absPath];
+  const source = override !== undefined ? override : await fs.promises.readFile(absPath, "utf8");
   const resolveDir = path.dirname(absPath);
 
   let result: CompiledFile;
@@ -136,15 +148,17 @@ const EMPTY_BUNDLE_JS =
  * instead. */
 export async function buildUserComponentsBundle(
   components: Record<string, string>,
-  outfile: string
+  outfile: string,
+  options: BuildOptions = {}
 ): Promise<BuildResult> {
   const diagnostics: ComponentDiagnostic[] = [];
   const cache = new Map<string, CompiledFile>();
   const usable: [string, string][] = [];
+  const sources = options.sources ?? {};
 
   for (const [name, absPath] of Object.entries(components)) {
     try {
-      await compileSvelteFile(absPath, cache);
+      await compileSvelteFile(absPath, cache, sources);
       usable.push([name, absPath]);
     } catch (err) {
       diagnostics.push({ component: name, message: describeError(err) });
@@ -184,7 +198,7 @@ export async function buildUserComponentsBundle(
       });
       build.onLoad({ filter: /\.svelte(\.(js|ts))?$/ }, async (args) => {
         try {
-          const compiled = await compileSvelteFile(args.path, cache);
+          const compiled = await compileSvelteFile(args.path, cache, sources);
           return { contents: compiled.code, loader: "js", resolveDir: compiled.resolveDir };
         } catch (err) {
           const base = path.basename(args.path).replace(/\.svelte(\.(js|ts))?$/, "");
