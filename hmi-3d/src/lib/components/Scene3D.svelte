@@ -111,17 +111,21 @@
 		};
 	});
 
-	// Data kinds: the loader chunk is fetched once a lit document has one,
-	// and until it arrives (or when a model fails) the Svelte kind of the
-	// same name renders, so a project with no assets — or a bad path — is
-	// grey primitives, never a hole.
+	// Data kinds: the loader chunk is fetched once a document has one, and
+	// until it arrives (or when a model fails) the Svelte kind of the same
+	// name renders, so a project with no assets — or a bad path — is grey
+	// primitives, never a hole. In the flat and paper looks a model kind
+	// that overrides a built-in's name keeps the built-in (the before/after
+	// the flat look is for); one under a new name draws its model in that
+	// look's materials (GltfNode reads the view), so a station of modelled
+	// kinds is never a page of labels over nothing.
 	let hasModels = $derived(Object.values(doc?.kinds ?? {}).some((k) => k.model));
 	let GltfNode = $state<Component<NodeProps> | null>(null);
 	$effect(() => {
-		if (lit && hasModels && !GltfNode) import('./GltfNode.svelte').then((m) => (GltfNode = m.default as Component<NodeProps>));
+		if (hasModels && !GltfNode) import('./GltfNode.svelte').then((m) => (GltfNode = m.default as Component<NodeProps>));
 	});
 	let failed = $state<Record<string, boolean>>({});
-	let effective = $derived(doc ? registryFor(doc, registry, lit ? GltfNode : null) : registry);
+	let effective = $derived(doc ? registryFor(doc, registry, GltfNode, lit) : registry);
 
 	// The pickable node under the pointer; Node draws its hover outline.
 	// The cursor goes on the canvas itself: OrbitControls writes `cursor:

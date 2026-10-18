@@ -36,6 +36,18 @@ look so the edge pass draws a pipe as its silhouette.
 `naut check` and the extension's schema know `look`, `camera.projection`,
 `camera.width` and `pipes[].arrows`.
 
+**Changed.** A data kind (a `kinds` entry with a `model`) now draws in
+every look. The flat and paper looks left model kinds to the Svelte kind
+of the same name, so a scene whose kinds are all glTF under their own
+names — `examples/lift-station` — was labels over nothing once the look
+button was pressed. `GltfNode` now reads the view: flat wears the model's
+colours with no metalness and no maps (the built-ins' values), paper a
+near-white fill (the palette's fluid grey where the model is translucent)
+for `PaperOutlines` to ink, and a drive's tint or emissive goes on top of
+either. A model kind under a built-in's name still yields to the built-in
+in those looks, which is the before/after the flat look exists for;
+`registryFor` takes the look as a fourth argument to say so.
+
 **Fixed.** A node's label read its status off the struct tag alone. A
 flat-tag project (`"bind": { "level": "LIT101_Level" }` on a `tank` with
 no `tag`, the arrangement the README describes) drew the fluid at the

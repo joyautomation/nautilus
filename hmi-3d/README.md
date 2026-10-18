@@ -304,7 +304,11 @@ maps. The built-ins get metalness/roughness in this look, colours unchanged.
 `<SceneView look="flat">` renders the same document as Milestone 1 did —
 primitives, three lights, no assets — for a project without assets, a
 low-end tier, or a before/after. `bind:look` and a button in the `hud`
-snippet flip it live (`examples/spatial-rig/hmi` does).
+snippet flip it live (`examples/spatial-rig/hmi` does). A data kind under
+a built-in's name yields to the built-in here (that is the before/after);
+one under a new name still draws its model, in the look's matte greys, so
+a station of modelled kinds (`examples/lift-station`) is never a page of
+labels over nothing.
 
 `look: "paper"` in the document (or `<SceneView look="paper">`, design
 §3f) draws it instead: near-white fills, every edge inked, a paper

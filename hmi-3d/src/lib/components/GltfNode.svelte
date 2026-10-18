@@ -9,6 +9,12 @@
 	// are cached per URL for the page's life; each node gets a clone of the
 	// scene graph (geometry shared, materials cloned only where a drive or
 	// stale quality touches them, and those clones disposed on unmount).
+	//
+	// The look (view.ts) picks the materials: lit wears the model's own;
+	// flat is the same colours with no metalness and no maps, the values
+	// the built-in kinds use; paper is a near-white fill (a translucent
+	// material — a fluid — the palette's fluid grey) for PaperOutlines to
+	// ink. A drive's tint or emissive goes on top of whichever is worn.
 	import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 	const cache = new Map<string, Promise<GLTF>>();
@@ -27,9 +33,10 @@
 
 <script lang="ts">
 	import { T, useTask } from '@threlte/core';
-	import { Box3, Color, Euler, Mesh, MeshStandardMaterial, Object3D, Vector3 } from 'three';
+	import { Box3, Color, Euler, Mesh, MeshStandardMaterial, Object3D, Vector3, type Material } from 'three';
 	import { getContext, onDestroy } from 'svelte';
 	import { DEFAULT_PALETTE, type Palette } from '../palette.js';
+	import type { ViewState } from './view.js';
 	import { evalDrives, type MeshState } from '../drives.js';
 	import type { SceneKind, Vec3 } from '../scene.js';
 	import type { NodeProps } from '../registry.js';
@@ -52,6 +59,8 @@
 		onfail?: (err: unknown) => void;
 	} = $props();
 	const palette = getContext<Palette>('hmi3d:palette') ?? DEFAULT_PALETTE;
+	const view = getContext<ViewState>('hmi3d:view') ?? { lit: true };
+	let lookKey = $derived(view.paper ? 'paper' : view.lit ? 'lit' : 'flat');
 
 	let root = $state<Object3D | null>(null);
 	const meshes = new Map<string, Object3D>();
@@ -59,20 +68,57 @@
 	/** Materials this node cloned (so a tint on one pump never paints the next). */
 	const owned = new Map<Mesh, MeshStandardMaterial>();
 	const original = new Map<Mesh, Mesh['material']>();
+	/** The look's version of each model material (flat and paper only; lit wears the original). */
+	const bases = new Map<Material, MeshStandardMaterial>();
+	/** The look the clones in `owned` and `bases` were made for. */
+	let painted = '';
 	let staleMat: MeshStandardMaterial | undefined;
 	let missing = new Set<string>();
+
+	/** What the mesh wears in this look with no drive on it. From the
+	 * model's own material, never what the mesh wears now: that may be the
+	 * stale grey, and a clone of it would stay grey once good. */
+	function baseMaterial(m: Mesh): MeshStandardMaterial | undefined {
+		const cur = original.get(m) ?? m.material;
+		const src = Array.isArray(cur) ? cur[0] : cur;
+		if (!(src instanceof MeshStandardMaterial)) return undefined;
+		if (view.lit) return src;
+		let b = bases.get(src);
+		if (b) return b;
+		b = src.clone();
+		b.metalness = 0;
+		b.roughness = view.paper ? 1 : 0.6;
+		b.map = null;
+		b.metalnessMap = null;
+		b.roughnessMap = null;
+		b.normalMap = null;
+		b.emissiveMap = null;
+		if (view.paper) {
+			b.color.set(src.transparent ? palette.fluid : palette.steel);
+			b.emissive.set(0);
+			b.emissiveIntensity = 0;
+		}
+		bases.set(src, b);
+		return b;
+	}
 
 	function ownMaterial(m: Mesh): MeshStandardMaterial | undefined {
 		let mat = owned.get(m);
 		if (mat) return mat;
-		// From the model's own material, never what the mesh wears now: that
-		// may be the stale grey, and a clone of it would stay grey once good.
-		const cur = original.get(m) ?? m.material;
-		const src = Array.isArray(cur) ? cur[0] : cur;
-		if (!(src instanceof MeshStandardMaterial)) return undefined;
+		const src = baseMaterial(m);
+		if (!src) return undefined;
 		mat = src.clone();
 		owned.set(m, mat);
 		return mat;
+	}
+
+	/** Drop the clones made for the last look (or the last model). */
+	function dropPaint() {
+		for (const m of owned.values()) m.dispose();
+		owned.clear();
+		for (const b of bases.values()) b.dispose();
+		bases.clear();
+		painted = '';
 	}
 
 	/** A palette slot or a CSS colour. */
@@ -86,8 +132,7 @@
 	/** Let go of the previous clone's meshes and the materials cloned for
 	 * it (a new model, or unmount); the cached glTF's own are never touched. */
 	function release() {
-		for (const m of owned.values()) m.dispose();
-		owned.clear();
+		dropPaint();
 		original.clear();
 		meshes.clear();
 		baseRot.clear();
@@ -137,11 +182,17 @@
 	let states = $derived(evalDrives(data.drive, value, over as Record<string, unknown>));
 	let spins = $derived(states.filter((s) => s.spin && s.spin.radPerS !== 0));
 
-	// Apply everything but spin whenever the value (or quality) changes.
+	// Apply everything but spin whenever the value (or quality) changes;
+	// a change of look drops the clones made for the last one first.
 	$effect(() => {
 		const r = root;
+		const key = lookKey;
 		if (!r) return;
 		void good;
+		if (painted !== key) {
+			dropPaint();
+			painted = key;
+		}
 		for (const s of states) apply(s);
 		applyQuality();
 	});
@@ -159,8 +210,7 @@
 		if (o instanceof Mesh && (s.tint !== undefined || s.emissive !== undefined)) {
 			const mat = ownMaterial(o);
 			if (!mat) return;
-			const src = original.get(o);
-			const srcMat = (Array.isArray(src) ? src[0] : src) as MeshStandardMaterial | undefined;
+			const srcMat = baseMaterial(o);
 			if (s.tint !== undefined) mat.color.set(s.tint ? colour(s.tint) : (srcMat?.color ?? new Color('#888')));
 			if (s.emissive !== undefined) {
 				if (s.emissive) {
@@ -176,13 +226,13 @@
 	}
 
 	/** Bad quality: every mesh in the stale grey, translucent — a stale
-	 * model must never look like a healthy one. Good again: its own paint. */
+	 * model must never look like a healthy one. Good again: the look's paint. */
 	function applyQuality() {
 		for (const [m, orig] of original) {
 			if (!good) {
 				staleMat ??= new MeshStandardMaterial({ color: palette.stale, transparent: true, opacity: 0.45, metalness: 0, roughness: 0.8 });
 				m.material = staleMat;
-			} else m.material = owned.get(m) ?? orig;
+			} else m.material = owned.get(m) ?? baseMaterial(m) ?? orig;
 		}
 	}
 

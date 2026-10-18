@@ -122,8 +122,24 @@ describe('assemblies', () => {
 		expect(r.skid.members).toEqual(['Fault', 'Pump', 'Valve']);
 		expect(r.skid.status?.({ Fault: true }, true)).toBe('FAULT');
 		expect(r.skid.bounds).toEqual(assemblyBounds(skid.assembly!, registry));
-		// with no glTF component (flat look), the model kind stays the Svelte kind
+		// with no glTF component (the chunk not loaded), the model kind stays the Svelte kind
 		expect(r.pump).toBe(registry.pump);
+	});
+
+	it('registryFor draws a model kind in every look unless a Svelte kind has its name', () => {
+		const gltf = {} as unknown as Parameters<typeof registryFor>[2];
+		const doc: SceneDoc = {
+			kinds: { pump: { model: 'models/pump.glb' }, 'wet-well': { model: 'models/wet-well.glb', status: '{Level:1} %' } },
+			nodes: []
+		};
+		const lit = registryFor(doc, registry, gltf, true);
+		expect(lit.pump.component).toBe(gltf);
+		expect(lit['wet-well'].component).toBe(gltf);
+		// flat or paper: the built-in's primitives are the before/after; a new name keeps its model
+		const flat = registryFor(doc, registry, gltf, false);
+		expect(flat.pump).toBe(registry.pump);
+		expect(flat['wet-well'].component).toBe(gltf);
+		expect(flat['wet-well'].status?.({ Level: 42 }, true)).toBe('42.0 %');
 	});
 
 	it('validates parts as nodes in the kind’s frame, tags as members, and stays flat', () => {

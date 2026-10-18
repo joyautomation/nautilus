@@ -180,16 +180,21 @@ export function assemblyBounds(a: SceneAssembly, registry: NodeRegistry): Box {
  * replaces the geometry; a new name gets the drawer's member table and,
  * if it has a `status` template, that text. `GltfNode` is the component
  * for every model kind; it is passed in so this module never imports it
- * (it is a dynamic import, §3c) — `null` leaves model kinds to the Svelte
- * kind of the same name (the flat look, or the chunk not yet loaded).
+ * (it is a dynamic import, §3c) — `null` (the chunk not yet loaded, or
+ * loading failed) leaves model kinds to the Svelte kind of the same name.
+ * `lit` false is the flat or paper look: a model kind under a name the
+ * registry knows yields to that Svelte kind (the built-in primitives are
+ * the before half of a before/after), while a model kind under a new name
+ * still draws its model, in that look's materials — a scene of modelled
+ * kinds is never a page of labels over nothing.
  */
-export function registryFor(doc: SceneDoc, registry: NodeRegistry, gltf: Component<NodeProps> | null): NodeRegistry {
+export function registryFor(doc: SceneDoc, registry: NodeRegistry, gltf: Component<NodeProps> | null, lit = true): NodeRegistry {
 	const out: NodeRegistry = { ...registry };
 	for (const [name, k] of Object.entries(doc.kinds ?? {})) {
 		const base = registry[name];
 		const tpl = k.status;
 		const status = tpl ? (value: unknown, good: boolean, over?: Record<string, unknown>) => formatStatus(tpl, value, good, over) : base?.status;
-		if (k.model && gltf) {
+		if (k.model && gltf && (lit || !base)) {
 			out[name] = {
 				component: gltf,
 				data: k,

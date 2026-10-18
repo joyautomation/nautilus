@@ -8,7 +8,7 @@
 	// mimic shows as text — the sequence step and the alarm banner — in the
 	// HUD, where a 3D drawing has no place for them.
 	import { AlarmBanner, AckButton } from '@joyautomation/nautilus-hmi';
-	import { SceneView, type SceneDoc } from '@joyautomation/nautilus-hmi-3d';
+	import { SceneView, LOOKS, type SceneDoc, type SceneLook } from '@joyautomation/nautilus-hmi-3d';
 	import sceneDoc from '../../../../lift-station.scene.json';
 	import SeqStepTag from '$lib/SeqStepTag.svelte';
 	import { rt, alarms } from '$lib/client.svelte';
@@ -19,12 +19,17 @@
 	const tags = $derived((rt.frame?.tags ?? {}) as Record<string, unknown>);
 	const str = (k: string) => (typeof tags[k] === 'string' ? (tags[k] as string) : '');
 
-	// `lit` is the scene as authored (the glTF kinds); `flat` is the same
-	// document as the kit's grey primitives, which have no wet well or
-	// float, so it is the honest "before" of the pair rather than a view
-	// to operate from. `?perf` adds the fps / latency HUD.
-	let look = $state<'lit' | 'flat'>('lit');
-	const perf = typeof location !== 'undefined' && new URLSearchParams(location.search).has('perf');
+	// The look: `lit` is the scene as authored (the glTF kinds in their own
+	// paint), `flat` the same models in the kit's matte greys, `paper` the
+	// station as a line drawing (design §3f). The document names none, so
+	// it opens lit; `?look=flat|paper` starts elsewhere, and the HUD button
+	// cycles the three. `?perf` adds the fps / latency HUD.
+	const query = typeof location !== 'undefined' ? new URLSearchParams(location.search) : undefined;
+	const asked = query?.get('look');
+	let look = $state<SceneLook | undefined>(LOOKS.includes(asked as SceneLook) ? (asked as SceneLook) : undefined);
+	let shown = $derived(look ?? doc.look ?? 'lit');
+	const next = () => (look = LOOKS[(LOOKS.indexOf(shown) + 1) % LOOKS.length]);
+	const perf = query?.has('perf') ?? false;
 </script>
 
 <svelte:head><title>Lift Station — 3D view</title></svelte:head>
@@ -34,9 +39,7 @@
 		{#snippet hud()}
 			<div class="bar">
 				<a class="pill" href="/" title="The operator screen: the P&ID mimic, faceplates, setpoints, trend">← operator screen</a>
-				<button class="pill" onclick={() => (look = look === 'lit' ? 'flat' : 'lit')} title="Switch between the modelled scene and the kit's flat primitives">
-					{look}
-				</button>
+				<button class="pill" onclick={next} title="Cycle the look: lit, flat, paper">{shown}</button>
 				<span class="seq">
 					Sequence <SeqStepTag text={str('SeqStep')} width={110} />
 				</span>

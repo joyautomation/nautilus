@@ -694,6 +694,15 @@ What it is, in the terms the package already has:
   box); wireframes and shader materials (the selection box, the grid) are
   skipped on their own. The built-in pipes grow facets in this look so
   the pass draws a pipe as its silhouette, not a bundle of longitudinals.
+- **Models are drawn too.** A data kind's glTF (§3c) renders in this look
+  and the flat one, not only lit: `GltfNode` reads the view and wears a
+  near-white fill on paper (the fluid grey where the model is
+  translucent) or the model's colours matte in flat, with a drive's tint
+  or emissive on top; the edge pass inks it like anything else. A model
+  kind under a built-in's name yields to the built-in in these looks —
+  that is the before/after the flat look is for — while one under its own
+  name keeps its model, so `examples/lift-station`, all six kinds glTF,
+  is a drawing on paper and never labels over nothing.
 - **Flat light, no tone mapping.** An ambient of π (three's physical
   units: that lights a white face to white) and a weak key, so one face
   tells from the next by a few percent and the lines do the rest; the

@@ -353,8 +353,11 @@ label text (`LIT-101 62.3 %` on the well, `12.34 L/s` on a flow meter
 FIT-101 on the header), and its `SeqStep` pill and the alarm banner sit
 in the HUD, where a drawing has no place for them. Orbit with the mouse,
 click an asset for its drawer; `?perf` adds the frame rate and latency.
-Keeping the P&ID and the 3D view of one station side by side is the
-point: each is a check on the other.
+The HUD's look button cycles `lit` (the models in their own paint),
+`flat` (the same models matte) and `paper` (the station as a line
+drawing, design §3f — the look `examples/well-site` opens in); `?look=paper`
+starts there. Keeping the P&ID and the 3D view of one station side by
+side is the point: each is a check on the other.
 
 Two things about the file are worth reading:
 
