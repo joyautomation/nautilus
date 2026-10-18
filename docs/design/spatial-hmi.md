@@ -711,9 +711,11 @@ What it is, in the terms the package already has:
 - **An alarm is a glow.** The halo's wireframe cage is a modelling idiom;
   on paper it is a translucent fill a little larger than the node's box,
   pulsing while unacknowledged, with the alarm sign above it as always.
-- **Flow is motion.** Pipes carry chevrons along the run while it flows,
+- **Flow is motion.** Pipes carry a train along the run while it flows,
   in the order of the run's points (any look; `arrows: false` to go
-  without). On paper, where a flowing pipe is as white as a still one,
+  without): bulges in the pipe's own colour in the lit and flat looks (a
+  slug travelling the line, as argonaut's site pipes show it), chevrons
+  on paper. On paper, where a flowing pipe is as white as a still one,
   the chevrons are the whole story — which is also the one thing a static
   P&ID never shows well.
 - **No vanishing point.** `camera.projection: "orthographic"` with

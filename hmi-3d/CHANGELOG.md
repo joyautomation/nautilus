@@ -25,10 +25,12 @@ shows between the letters. They are sized in metres of the scene and
 clamped to 10–14 px, so on a phone they shrink with the drawing instead
 of covering it, and in perspective the far labels are the small ones.
 
-**Added.** Pipes carry chevrons along the run while it flows, in the order
+**Added.** Pipes carry motion along the run while it flows, in the order
 of the run's points, so direction reads even where colour cannot; a pipe
-sets `arrows: false` to go without. In the lit and flat looks they ride
-the pipe in the shell grey; on paper they are the ink.
+sets `arrows: false` to go without. In the lit and flat looks it is a
+train of bulges in the pipe's own colour — a slug travelling the line,
+crossing the bends, the way argonaut's site pipes show it; on paper, where
+a bulge on a white pipe is nothing, it is a train of inked chevrons.
 
 **Changed.** The flat look's pipes and bends have more facets in the paper
 look so the edge pass draws a pipe as its silhouette.

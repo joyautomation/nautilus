@@ -313,7 +313,8 @@ labels over nothing.
 `look: "paper"` in the document (or `<SceneView look="paper">`, design
 §3f) draws it instead: near-white fills, every edge inked, a paper
 backdrop. The only colour is an alarm, drawn as a
-soft glow; flow is the chevrons moving along the pipes. Pair it with an
+soft glow; flow is the chevrons moving along the pipes (the lit and flat
+looks show it as bulges travelling the pipe). Pair it with an
 orthographic camera for the isometric drawing:
 
 ```json
