@@ -151,6 +151,12 @@ commit (*Open With → Text Editor* any time).
   component can ship its preview data and ports with it. That sidecar
   opens as plain JSON; its own preview button lands the same pane on the
   component it describes, a kit built-in included.
+- Want your own tank symbol? **nautilus: Copy Kit Component to Project…**
+  copies the kit's Tank (or any kit component) into `src/lib` as a
+  component of your own, imports rewritten to the package, sidecar
+  seeded with the kit's ports, and opens it with the preview beside —
+  change the drawing from there. Register it on the page with
+  `<Mimic registry={{ MyTank }}>` and point equipment at it by name.
 - Writing a page? Open a `+page.svelte` and press its browser button
   (**nautilus: Preview HMI Page**): the project's own `npm run dev` starts
   in a terminal and the page's route opens in VS Code's Simple Browser
@@ -280,6 +286,7 @@ The most used; all are under **nautilus:** in the Command Palette.
 | Open as Diagram Editor / Show Source | Switch a file between text and diagram |
 | Open FBD / Ladder / SFC Diagram Preview | Diagram beside the text |
 | Open Component Preview / Preview HMI Page | A `.svelte` component, or a whole route, beside the text |
+| Copy Kit Component to Project… | Start your own symbol from one the kit ships |
 | Diff … Diagram (vs git HEAD / between git revisions… / vs Controller) | Visual diff |
 | Connect to Controller… | Set `nautilus.runtimeUrl` for this workspace |
 | Set Live Value… | Write a tag on the controller |

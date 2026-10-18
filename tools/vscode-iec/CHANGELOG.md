@@ -32,6 +32,16 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   component. The standalone Component Editor for sidecars is gone (it
   also ran away sizing a component with a plain HTML root).
   Needs workspace trust, like the mimic editor's user components.
+- **Copy Kit Component to Project….** Start your own symbol from one the
+  kit ships: pick a kit component (the mimic built-ins first), name the
+  copy (MyTank), and its `.svelte` lands in the project's `src/lib` as a
+  component of the project's own — the kit's source as written, its
+  relative imports rewritten to `@joyautomation/nautilus-hmi` (which
+  exports the helpers), a header saying where it came from. A mimic
+  built-in's copy gets a `{Name}.component.json` with the kit's ports
+  and sample props, so pipes connect where they did. The copy opens with
+  the preview beside it. Register it on a page with
+  `<Mimic registry={{ MyTank }}>` and point equipment at it by name.
 - **Preview a page for use.** Open a `+page.svelte` (or `+layout.svelte`)
   and press its browser button, or run **nautilus: Preview HMI Page**: the
   project's own `npm run dev` starts in a terminal on a free port (reused

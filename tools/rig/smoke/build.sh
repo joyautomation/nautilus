@@ -50,12 +50,17 @@ OUT=$(cd "$OUT" && pwd)
       && npx --yes @vscode/vsce package -o "$OUT/vscode-iec.vsix" )
   # The component preview (check 20) compiles a .svelte with the PROJECT's
   # own svelte (userComponentBuild.ts), and the container has no npm: a
-  # node_modules with the extension's own pinned svelte in it is assembled
-  # here, once per build, and pushed beside the VSIX.
+  # node_modules with the extension's own pinned svelte in it — and the kit
+  # just packaged above, so a copied kit component (Copy Kit Component…)
+  # and anything importing @joyautomation/nautilus-hmi compiles — is
+  # assembled here, once per build, and pushed beside the VSIX.
   ( rm -rf "$OUT/svelte-fixture" && mkdir -p "$OUT/svelte-fixture" && cd "$OUT/svelte-fixture" \
       && printf '{ "name": "fixture", "private": true }\n' >package.json \
+      && KIT_TGZ=$(cd "$SRC/hmi" && npm pack --silent --pack-destination "$OUT/svelte-fixture" | tail -1) \
       && npm install --no-audit --no-fund --no-package-lock \
            "svelte@$(node -p "require('$SRC/tools/vscode-iec/node_modules/svelte/package.json').version")" \
+           "./$KIT_TGZ" \
+      && rm -f "./$KIT_TGZ" \
       && tar -czf "$OUT/svelte-node_modules.tgz" node_modules )
 } >"$OUT/build.log" 2>&1 || { echo "build failed — $OUT/build.log" >&2; tail -20 "$OUT/build.log" >&2; exit 1; }
 echo "$SHA" >"$OUT/SHA"
