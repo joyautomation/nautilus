@@ -57,6 +57,7 @@
 			<p class="subtle">WW-101 duplex sewage lift station — P-101 / P-102 duty/standby</p>
 		</div>
 		<div class="head-right">
+			<a class="view3d" href="/3d" title="The same station in 3D: lift-station.scene.json, rendered by @joyautomation/nautilus-hmi-3d">3D view →</a>
 			<AlarmBanner summary={alarms.summary} />
 			<StatusPill kind={rt.connected ? 'good' : 'critical'} label={rt.connected ? 'Connected' : 'Offline'} />
 		</div>
@@ -229,6 +230,19 @@
 		align-items: center;
 		gap: 10px;
 		flex-wrap: wrap;
+	}
+	.view3d {
+		font-size: 0.8rem;
+		font-weight: 600;
+		text-decoration: none;
+		color: var(--ink-2);
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		padding: 4px 10px;
+	}
+	.view3d:hover {
+		color: var(--ink);
+		border-color: var(--s1);
 	}
 	.card {
 		background: var(--surface);

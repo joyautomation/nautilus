@@ -55,8 +55,11 @@ export interface NodeKindDef {
 	/** Where the floating label sits, local space; on a data kind, absent =
 	 * the top centre of the bounds. */
 	labelAt?: Vec3;
-	/** The label's value text. Pure, so it is testable and matches the panel. */
-	status?: (value: unknown, good: boolean) => string;
+	/** The label's value text. Pure, so it is testable and matches the panel.
+	 * `over` is the node's resolved `bind` map (prop -> value), which wins
+	 * over the struct's member the way it does for the geometry, so a
+	 * flat-tag node's label says what its model shows. */
+	status?: (value: unknown, good: boolean, over?: Record<string, unknown>) => string;
 	/** The 2D faceplate the inspector drawer shows; absent = the member table only. */
 	panel?: Component<PanelProps>;
 }
@@ -137,7 +140,9 @@ export function componentRegistry(
 			members: declared.length ? declared : meta.members,
 			bounds: k.bounds && k.bounds !== 'auto' ? k.bounds : meta.bounds,
 			labelAt: k.labelAt ?? meta.labelAt,
-			status: k.status ? ((tpl) => (value: unknown, good: boolean) => formatStatus(tpl, value, good))(k.status) : meta.status
+			status: k.status
+				? ((tpl) => (value: unknown, good: boolean, over?: Record<string, unknown>) => formatStatus(tpl, value, good, over))(k.status)
+				: meta.status
 		});
 	}
 	return { registry, errors };
@@ -183,7 +188,7 @@ export function registryFor(doc: SceneDoc, registry: NodeRegistry, gltf: Compone
 	for (const [name, k] of Object.entries(doc.kinds ?? {})) {
 		const base = registry[name];
 		const tpl = k.status;
-		const status = tpl ? (value: unknown, good: boolean) => formatStatus(tpl, value, good) : base?.status;
+		const status = tpl ? (value: unknown, good: boolean, over?: Record<string, unknown>) => formatStatus(tpl, value, good, over) : base?.status;
 		if (k.model && gltf) {
 			out[name] = {
 				component: gltf,

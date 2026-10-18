@@ -186,3 +186,20 @@ describe('how a part reads its struct', () => {
 		expect(out).toEqual({ running: true, off: false });
 	});
 });
+
+describe('status with bound overrides (a flat-tag project)', () => {
+	// A node with no struct tag binds every prop (`bind: { level: "LIT101_Level" }`);
+	// the geometry reads those overrides, and so must the label's status.
+	it('a data kind’s template reads the node’s bound props', () => {
+		const doc: SceneDoc = { kinds: { well: { model: 'models/well.glb', status: '{Level:1} %' } }, nodes: [] };
+		const r = registryFor(doc, registry, fake());
+		expect(r.well.status?.(undefined, true, { level: 61.26 })).toBe('61.3 %');
+		expect(r.well.status?.(undefined, true)).toBe('— %');
+	});
+	it('a component kind’s template reads them too', () => {
+		const meta: KindMeta = { type: 'Skid', members: ['Fault'] };
+		const mods = { '/src/lib/Skid.svelte': { default: fake(), kind: meta } };
+		const r = componentRegistry({ kinds: { skid: { component: 'hmi/src/lib/Skid.svelte', members: meta.members, status: '{Fault?FAULT:ok}' } }, nodes: [] }, mods, registry);
+		expect(r.registry.skid.status?.(undefined, true, { fault: true })).toBe('FAULT');
+	});
+});

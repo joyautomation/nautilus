@@ -81,8 +81,9 @@ alarms by priority, greys anything whose tag is not good quality, and with
 - **`bind`** is the mimic's binding map, `prop -> ref`, with dotted paths:
   `"cmd": "Demand"`, `"speed": "P101.Speed"`, `"ok": "!P101.Fault"`. An
   absent tag leaves the prop unset. A bound prop overrides the member on the
-  built-in kinds, so a project with flat tags (`T101_Level`) can use `tank`
-  with no `tag` at all.
+  built-in kinds — in the geometry and in the label's status text — so a
+  project with flat tags (`T101_Level`) can use `tank` with no `tag` at all
+  (`examples/lift-station` is one).
 - **`pipes`** bind `flowing` (a boolean as-is, a number above 2 %).
 - **`fixtures`** are static context (`box`, `plane`, `marker`); `grid` is
   a reference grid on a horizontal plane.

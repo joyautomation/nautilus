@@ -1,7 +1,9 @@
 // The built-in kinds' pure parts: what each reads off its struct tag and
 // the status text its label shows. The Svelte components in components/
 // read the same members; keeping the text here makes it testable and keeps
-// a label and a drawer saying the same thing.
+// a label and a drawer saying the same thing. Every reader takes the node's
+// bound overrides too (`bind: { level: "LIT101_Level" }` on a node with no
+// struct tag), so a flat-tag project's label agrees with its geometry.
 import { member, num } from './bindings.js';
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -26,8 +28,8 @@ export function tankState(value: unknown, over: { level?: unknown; tempC?: unkno
 		tempC: num(over.tempC ?? member(value, 'TempC'))
 	};
 }
-export function tankStatus(value: unknown, good: boolean): string {
-	return good ? `${tankState(value).level.toFixed(1)} %` : 'stale';
+export function tankStatus(value: unknown, good: boolean, over: { level?: unknown; tempC?: unknown } = {}): string {
+	return good ? `${tankState(value, over).level.toFixed(1)} %` : 'stale';
 }
 
 export interface PumpState {
@@ -42,9 +44,9 @@ export function pumpState(value: unknown, over: { running?: unknown; fault?: unk
 		speed: clamp(num(over.speed ?? member(value, 'Speed')), 0, 100)
 	};
 }
-export function pumpStatus(value: unknown, good: boolean): string {
+export function pumpStatus(value: unknown, good: boolean, over: { running?: unknown; fault?: unknown; speed?: unknown } = {}): string {
 	if (!good) return 'stale';
-	const s = pumpState(value);
+	const s = pumpState(value, over);
 	return s.fault ? 'FAULT' : s.running ? `run ${s.speed.toFixed(0)} %` : 'stopped';
 }
 
@@ -58,8 +60,8 @@ export function valveState(value: unknown, over: { pos?: unknown; cmd?: unknown 
 		cmd: clamp(num(over.cmd ?? member(value, 'Cmd')), 0, 100)
 	};
 }
-export function valveStatus(value: unknown, good: boolean): string {
+export function valveStatus(value: unknown, good: boolean, over: { pos?: unknown; cmd?: unknown } = {}): string {
 	if (!good) return 'stale';
-	const s = valveState(value);
+	const s = valveState(value, over);
 	return `${s.pos.toFixed(0)} % (cmd ${s.cmd.toFixed(0)})`;
 }

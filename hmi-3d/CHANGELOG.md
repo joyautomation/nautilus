@@ -36,6 +36,15 @@ look so the edge pass draws a pipe as its silhouette.
 `naut check` and the extension's schema know `look`, `camera.projection`,
 `camera.width` and `pipes[].arrows`.
 
+**Fixed.** A node's label read its status off the struct tag alone. A
+flat-tag project (`"bind": { "level": "LIT101_Level" }` on a `tank` with
+no `tag`, the arrangement the README describes) drew the fluid at the
+bound level and labelled it `0.0 %`; a data kind's `{Level:1} %` read `—`.
+A kind's `status` — the built-ins', a data kind's template, a component's
+`kind` export — now receives the node's resolved `bind` map as a third
+argument, the same overrides the geometry reads, so the label and the
+model agree. The first flat-tag scene is `examples/lift-station`.
+
 ## 0.1.4 — 2026-10-15
 
 **Fixed.** The VLAN view held one ERPS state for the whole site: a failed

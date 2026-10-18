@@ -203,7 +203,7 @@
 			</T.Mesh>
 		{/if}
 		{#if title}
-			<Label at={labelAt} anchor={labelAnchor} title={title} value={(status ?? def?.status)?.(value, good) ?? ''} {good} />
+			<Label at={labelAt} anchor={labelAnchor} title={title} value={(status ?? def?.status)?.(value, good, over) ?? ''} {good} />
 		{/if}
 	</T.Group>
 {/if}
