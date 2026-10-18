@@ -62,6 +62,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httputil"
@@ -762,12 +763,22 @@ func (s *Server) handleNautilusIndex(w http.ResponseWriter, r *http.Request) {
 // HTML.
 func (s *Server) handleHMI() http.Handler {
 	fsrv := http.FileServer(http.FS(s.hmi))
+	// The hash is cached per file, keyed by its size and mod time as well
+	// as its path: an embedded bundle never changes under a path, but a
+	// directory served by `naut run` is rebuilt in place, and a hash
+	// cached by path alone would answer a stale tab's If-None-Match with
+	// 304 forever after the rebuild — the new HTML, new models, never
+	// seen until a hard reload.
 	var mu sync.Mutex
 	etags := map[string]string{}
 	etagFor := func(lookup string) string {
+		key := lookup
+		if st, err := fs.Stat(s.hmi, lookup); err == nil {
+			key = fmt.Sprintf("%s|%d|%d", lookup, st.Size(), st.ModTime().UnixNano())
+		}
 		mu.Lock()
 		defer mu.Unlock()
-		if e, ok := etags[lookup]; ok {
+		if e, ok := etags[key]; ok {
 			return e
 		}
 		b, err := fs.ReadFile(s.hmi, lookup)
@@ -776,7 +787,7 @@ func (s *Server) handleHMI() http.Handler {
 		}
 		sum := sha256.Sum256(b)
 		e := `"` + hex.EncodeToString(sum[:8]) + `"`
-		etags[lookup] = e
+		etags[key] = e
 		return e
 	}
 	serve := func(w http.ResponseWriter, r *http.Request, lookup string) {
