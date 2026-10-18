@@ -23,6 +23,9 @@
 #   builtin      Edit Component Ports… → Tank: the pane renders the kit's
 #                Tank with its 4 default ports; "+ Add port" writes a
 #                Tank.component.json override (5 ports) into the project
+#   copy         Copy Kit Component… → Tank as MyTank: src/lib/MyTank.svelte
+#                (imports rewritten to the package), its sidecar with the
+#                kit's 4 ports, and the pane compiling and rendering it
 #
 # Everything is read from the DOM (the island's data-role text, header
 # .status, .banner, .stage.stale) and from the sidecar on disk. The project's
@@ -231,4 +234,25 @@ if wait_js 'doc.querySelectorAll(".stage svg.ports circle[data-kind=port]").leng
   fi
 else
   fail "Edit Component Ports… → Tank did not render the built-in in the pane (dots: $(wv 'doc.querySelectorAll(".stage svg.ports circle").length'), status '$(status)', title '$(wv 'doc.querySelector("header .title")?.textContent.trim()')')" "$(shot builtin-missed)"
+fi
+
+# ── copy: Copy Kit Component… → Tank as MyTank, compiled in the pane ───────
+# The fixture node_modules carries the packaged kit (build.sh), so the copy
+# — whose `../color.js` became an import of @joyautomation/nautilus-hmi —
+# compiles like any custom component.
+vs_cmd "nautilus: Copy Kit Component" 2
+g_type "Tank"; sleep 0.8; key Return; sleep 1.5      # the component pick
+key Return; sleep 4                                  # the name box, default MyTank
+COPY=$PROJ/hmi/src/lib/MyTank.svelte
+COPY_SIDE=$PROJ/hmi/src/lib/MyTank.component.json
+if [[ -f $COPY ]] && grep -q "from '@joyautomation/nautilus-hmi'" "$COPY" && ! grep -q "from '\.\./" "$COPY"; then
+  for _ in $(seq 1 20); do [[ -f $COPY_SIDE ]] && python3 -c 'import json,sys; sys.exit(0 if len(json.load(open(sys.argv[1])).get("ports") or []) == 4 else 1)' "$COPY_SIDE" && break; sleep 0.5; done
+  if wait_js 'doc.querySelector(".stage svg[aria-label^=Tank]") && doc.querySelectorAll(".stage svg.ports circle[data-kind=port]").length === 4' 60 \
+     && [[ $(wv 'doc.querySelector("header .title")?.textContent.trim()') == "MyTank.svelte" ]] && [[ $(status) == "live" ]]; then
+    pass "Copy Kit Component… → Tank as MyTank: src/lib/MyTank.svelte imports the package (no relative imports), its sidecar carries the kit's 4 ports, and the pane compiled and rendered it live" "$(shot copy)"
+  else
+    fail "MyTank.svelte was written but the pane did not render it (status '$(status)', title '$(wv 'doc.querySelector("header .title")?.textContent.trim()')', dots $(wv 'doc.querySelectorAll(".stage svg.ports circle").length'), banner '$(banner | head -c 160)', sidecar: $([[ -f $COPY_SIDE ]] && tr -d '\n' <"$COPY_SIDE" || echo none))" "$(shot copy-missed)"
+  fi
+else
+  fail "Copy Kit Component… did not write src/lib/MyTank.svelte with package imports ($([[ -f $COPY ]] && grep -n "^\s*import" "$COPY" | head -3 | tr '\n' ' ' || echo 'no file'))" "$(shot copy-missed)"
 fi

@@ -7,8 +7,9 @@
 // changing a built-in's default ports means editing BOTH files.
 //
 // Used by the "Edit Component Ports…" command (editComponentPorts.ts) for
-// its QuickPick list and to prefill a brand-new sidecar with the built-in's
-// current defaults.
+// its QuickPick list, by the component preview (componentPreview.ts) to
+// show a built-in's default ports until a sidecar overrides them, and by
+// "Copy Kit Component…" (copyKitComponent.ts) to seed the copy's sidecar.
 import type { Port } from "./mimicComponentIndex";
 
 export const BUILTIN_COMPONENT_PORTS: Record<string, Port[]> = {
@@ -32,3 +33,14 @@ export const BUILTIN_COMPONENT_PORTS: Record<string, Port[]> = {
 };
 
 export const BUILTIN_COMPONENT_NAMES = Object.keys(BUILTIN_COMPONENT_PORTS);
+
+/** Mirror of registry.ts's DEMO_PROPS (same manual-sync rule as the ports
+ * above): the sample props a copy of a built-in starts with, so its
+ * preview shows the component mid-motion rather than empty. */
+export const BUILTIN_DEMO_PROPS: Record<string, Record<string, unknown>> = {
+  Sparkline: { values: [4, 6, 5, 8, 6, 9, 7, 8] },
+  Tank: { levelPct: 62, tempC: 65 },
+  Pump: { running: true },
+  Valve: { openPct: 70 },
+  Gauge: { value: 65, setpoint: 65 },
+};
