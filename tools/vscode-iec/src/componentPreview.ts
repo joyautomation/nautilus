@@ -6,13 +6,18 @@
 // with sample props from the `preview` key of its `{Name}.component.json`
 // sidecar, editable from the pane's props strip, and the sidecar's `ports`
 // drawn over the render and edited there too (one pane per component: its
-// render, its sample props, its connection points). VS Code supplies the rest
+// render, its sample props, its connection points). It is THE editor for a
+// sidecar: a `{Name}.component.json` opens as plain JSON, and its preview
+// button lands here on the component it describes — a built-in (Tank,
+// Pump, …) rendered from the kit's own registry, since there is no source
+// to compile, with the kit's default ports shown until the sidecar
+// overrides them. VS Code supplies the rest
 // (the editor, the split, undo, the Svelte language server); this file is
 // only the pane and its build loop. Like the FBD preview, the pane is a
 // singleton that follows the active editor from one component to the next.
 //
 // The preview's bundle is its own file (component-preview.js), never the
-// shared user-components.js the mimic/Component Editor panels load: a
+// shared user-components.js the mimic panels load: a
 // half-typed component must not break every open mimic, and the shared
 // manager (userComponents.ts) rebuilds from DISK on save, which is the
 // right moment for those panels. A failed compile keeps the last good
@@ -29,17 +34,25 @@ import * as fs from "fs";
 import * as path from "path";
 import { webviewOptions } from "./fbdPreview";
 import { buildUserComponentsBundle, type ComponentDiagnostic } from "./userComponentBuild";
-import { componentNameFromSveltePath, parseComponentEntry, validatePortList, validatePreviewEntry } from "./mimicComponentIndex";
+import {
+  componentNameFromFilename,
+  componentNameFromSveltePath,
+  parseComponentEntry,
+  validatePortList,
+  validatePreviewEntry,
+} from "./mimicComponentIndex";
 import {
   COMPONENT_GLOB,
   ComponentIndex,
+  locateComponentSource,
   readText,
   sidecarLocation,
   writeComponentEntryEdit,
   writeComponentPortsEdit,
 } from "./mimicComponents";
 import type { UserComponentManager } from "./userComponents";
-import { previewSources } from "./componentPreviewLogic";
+import { previewSources, previewTargetForPath } from "./componentPreviewLogic";
+import { BUILTIN_COMPONENT_NAMES, BUILTIN_COMPONENT_PORTS } from "./builtinComponents";
 
 const BUILD_DEBOUNCE_MS = 300;
 
@@ -54,7 +67,13 @@ function logPreview(msg: string): void {
 const DOC_DEBOUNCE_MS = 150;
 const BUNDLE_FILE = "component-preview.js";
 
-type Target = { uri: vscode.Uri; name: string };
+/** What the pane shows. A custom component's `uri` is its .svelte (compiled
+ * from the buffer); a built-in's is only an anchor — the sidecar if one
+ * exists, else wherever a new one should land — since the kit renders it. */
+type Target = { uri: vscode.Uri; name: string; builtin: boolean };
+
+/** The argument "Edit Component Ports…" passes for a built-in. */
+export type PreviewArg = { name: string; uri: vscode.Uri };
 
 function previewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   // The mimic editor's bundle, mounted in its third mode (see
@@ -124,10 +143,10 @@ export class ComponentPreview implements vscode.Disposable {
         else sidecarChanged(e.document.uri);
       }),
       vscode.window.onDidChangeActiveTextEditor((ed) => {
-        // Follow the active component, like the markdown preview.
+        // Follow the active component, like the markdown preview — its
+        // .svelte, or its sidecar.
         if (!this.panel || !ed) return;
-        const name = componentNameFromSveltePath(ed.document.uri.fsPath);
-        if (name) this.retarget({ uri: ed.document.uri, name });
+        void this.follow(ed.document.uri);
       }),
       vscode.workspace.onDidGrantWorkspaceTrust(() => {
         if (this.panel) this.scheduleBuild();
@@ -135,35 +154,77 @@ export class ComponentPreview implements vscode.Disposable {
     );
   }
 
-  /** Open (or reveal) the preview for the active component's .svelte. */
-  async preview(): Promise<void> {
+  /** Open (or reveal) the preview: for a built-in named by the caller
+   * (Edit Component Ports…), else for the active file — a component's
+   * .svelte, or a `{Name}.component.json` (a built-in's straight from the
+   * kit; a custom one's from its .svelte, which opens beside). */
+  async preview(arg?: PreviewArg): Promise<void> {
+    if (arg && BUILTIN_COMPONENT_NAMES.includes(arg.name)) {
+      this.ensurePanel();
+      this.retarget({ uri: arg.uri, name: arg.name, builtin: true });
+      return;
+    }
     const doc = vscode.window.activeTextEditor?.document;
-    const name = doc ? componentNameFromSveltePath(doc.uri.fsPath) : null;
-    if (!doc || !name) {
+    const target = doc ? await this.targetFor(doc.uri, true) : null;
+    if (!target) {
       if (this.panel && this.target) {
         this.panel.reveal(undefined, true);
         return;
       }
       void vscode.window.showErrorMessage(
-        "nautilus: open a component's .svelte file first (a SvelteKit +page.svelte or route file isn't a component)"
+        "nautilus: open a component's .svelte or .component.json first (a SvelteKit +page.svelte or route file isn't a component)"
       );
       return;
     }
     this.ensurePanel();
-    this.retarget({ uri: doc.uri, name });
+    this.retarget(target);
+  }
+
+  /** The target `uri` previews, or null when it previews nothing. A custom
+   * component's sidecar resolves to its .svelte; with `open`, that source
+   * is also shown (the pane sits beside the text it tracks). */
+  private async targetFor(uri: vscode.Uri, open: boolean): Promise<Target | null> {
+    const what = previewTargetForPath(uri.fsPath, BUILTIN_COMPONENT_NAMES, componentNameFromSveltePath, componentNameFromFilename);
+    if (!what) return null;
+    if (what.kind === "svelte") return { uri, name: what.name, builtin: false };
+    if (what.kind === "builtin") return { uri, name: what.name, builtin: true };
+    const source = await locateComponentSource(what.name);
+    if (!source) {
+      if (open) {
+        void vscode.window.showWarningMessage(
+          `nautilus: no ${what.name}.svelte in the workspace to render — edit the JSON by hand, or open the component's source`
+        );
+      }
+      return null;
+    }
+    if (open) await vscode.window.showTextDocument(source, { preserveFocus: true, viewColumn: vscode.ViewColumn.Active });
+    return { uri: source, name: what.name, builtin: false };
+  }
+
+  private async follow(uri: vscode.Uri): Promise<void> {
+    const target = await this.targetFor(uri, false);
+    if (target && this.panel) this.retarget(target);
   }
 
   private retarget(next: Target): void {
     if (!this.panel) return;
-    if (this.target?.uri.toString() === next.uri.toString()) {
+    if (this.target?.uri.toString() === next.uri.toString() && this.target.name === next.name) {
       this.panel.reveal(undefined, true);
       return;
     }
     this.target = next;
     this.panel.title = `Preview: ${next.name}`;
-    logPreview(`target ${next.name} (${next.uri.fsPath})`);
+    logPreview(`target ${next.name} (${next.builtin ? "built-in; anchor " : ""}${next.uri.fsPath})`);
     this.scheduleDoc();
-    this.scheduleBuild();
+    if (next.builtin) {
+      // Nothing to compile: the kit's registry renders it. Clear what the
+      // last custom component left.
+      if (this.buildDebounce) clearTimeout(this.buildDebounce);
+      this.diagnostics = [];
+      this.postDiagnostics();
+    } else {
+      this.scheduleBuild();
+    }
   }
 
   private isTargetSidecar(uri: vscode.Uri): boolean {
@@ -210,7 +271,7 @@ export class ComponentPreview implements vscode.Disposable {
           void this.openSidecar();
           return;
         case "openSource":
-          if (this.target) void vscode.window.showTextDocument(this.target.uri, { preserveFocus: false });
+          if (this.target && !this.target.builtin) void vscode.window.showTextDocument(this.target.uri, { preserveFocus: false });
           return;
       }
     });
@@ -230,16 +291,22 @@ export class ComponentPreview implements vscode.Disposable {
     const text = await readText(sidecar);
     const entry = parseComponentEntry(text);
     const props = validatePreviewEntry(entry.preview) ? (entry.preview.props ?? {}) : {};
-    const ports = validatePortList(entry.ports) ? entry.ports : [];
+    // A built-in without a ports override shows the kit's defaults; the
+    // first edit writes the whole list, defaults included, to the sidecar.
+    const own = validatePortList(entry.ports) ? entry.ports : null;
+    const inherited = own === null && target.builtin;
+    const ports = own ?? (inherited ? (BUILTIN_COMPONENT_PORTS[target.name] ?? []) : []);
     if (this.target !== target) return; // moved on while reading
     void this.panel.webview.postMessage({
       type: "previewDoc",
       component: target.name,
-      file: path.basename(target.uri.path),
+      file: target.builtin ? target.name : path.basename(target.uri.path),
+      builtin: target.builtin,
       sidecar: path.basename(sidecar.path),
       hasSidecar: text.trim() !== "",
       props,
       ports,
+      portsInherited: inherited,
     });
   }
 
@@ -292,7 +359,7 @@ export class ComponentPreview implements vscode.Disposable {
 
   private async rebuild(): Promise<void> {
     const target = this.target;
-    if (!this.panel || !target) return;
+    if (!this.panel || !target || target.builtin) return;
     if (!vscode.workspace.isTrusted) {
       this.diagnostics = [
         { component: "*", message: "the preview compiles and runs this project's own code — trust the workspace to turn it on" },
@@ -372,7 +439,9 @@ export class ComponentPreview implements vscode.Disposable {
 }
 
 /** "nautilus: Open Component Preview" — the editor-title button on a
- * `.svelte` and its Command Palette entry. */
+ * `.svelte` or a `.component.json`, its Command Palette entry, and the
+ * target of "Edit Component Ports…" (which passes a PreviewArg for a
+ * built-in). */
 export function registerComponentPreview(
   context: vscode.ExtensionContext,
   userComponents: UserComponentManager,
@@ -381,6 +450,6 @@ export function registerComponentPreview(
   const preview = new ComponentPreview(context, userComponents, index);
   return vscode.Disposable.from(
     preview,
-    vscode.commands.registerCommand("nautilus.component.preview", () => preview.preview())
+    vscode.commands.registerCommand("nautilus.component.preview", (arg?: PreviewArg) => preview.preview(arg))
   );
 }

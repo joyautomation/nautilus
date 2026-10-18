@@ -1,27 +1,25 @@
-// "Nautilus: Edit Component Ports…" — graphical port editing for BUILT-IN
-// components (Tank, Pump, ...) in the standalone Component Editor; a
-// custom component with a .svelte in the workspace goes to the component
-// preview pane instead, where its ports sit on the live render. Built-ins have no *.component.json
-// of their own until the user asks to override one; this command is that
-// ask: pick a component (built-in, already-discovered custom, or any bare
-// .svelte component in the workspace with no sidecar yet), then open its
-// sidecar — creating one, prefilled with the component's current default
-// ports, if it doesn't exist yet.
+// "Nautilus: Edit Component Ports…" — pick a component (built-in, already-
+// discovered custom, or any bare .svelte component in the workspace with
+// no sidecar yet) and edit its ports on its render in the component
+// preview pane (componentPreview.ts): a custom component from its .svelte,
+// a built-in (Tank, Pump, ...) from the kit's registry, showing the kit's
+// default ports until the first edit writes an override to
+// `{Name}.component.json` — created then, next to the active mimic.
 import * as vscode from "vscode";
 import {
   ComponentIndex,
   EXCLUDE_GLOB,
   discoverSvelteComponentNames,
   locateComponentSource,
-  writeComponentPortsEdit,
 } from "./mimicComponents";
-import { BUILTIN_COMPONENT_NAMES, BUILTIN_COMPONENT_PORTS } from "./builtinComponents";
+import { BUILTIN_COMPONENT_NAMES } from "./builtinComponents";
+import type { PreviewArg } from "./componentPreview";
 
-/** Where a brand-new sidecar lands when there's no natural anchor yet
- * (writeComponentPortsEdit falls back to next to THIS uri's directory when
- * the component has no discoverable .svelte source — true for every
- * built-in). Prefers the active *.mimic.json, then any in the workspace,
- * then the first workspace folder itself. */
+/** Where a built-in's brand-new sidecar lands when the pane's first edit
+ * creates it (sidecarLocation falls back to THIS uri's directory when the
+ * component has no discoverable .svelte source — true for every built-in).
+ * Prefers the active *.mimic.json, then any in the workspace, then the
+ * first workspace folder itself. */
 async function pickSidecarAnchor(): Promise<vscode.Uri | undefined> {
   const active = vscode.window.activeTextEditor?.document.uri;
   if (active && active.path.endsWith(".mimic.json")) return active;
@@ -80,45 +78,31 @@ export function registerEditComponentPortsCommand(index: ComponentIndex): vscode
     });
     if (!pick) return;
 
-    // A component with a .svelte in the workspace is edited in the
-    // component preview pane — its render, sample props and ports in one
-    // place (componentPreview.ts); the standalone sidecar editor below
-    // stays for built-ins, which have no source here to render from.
-    if (!BUILTIN_COMPONENT_NAMES.includes(pick.name)) {
-      const source = await locateComponentSource(pick.name);
-      if (source) {
-        await vscode.window.showTextDocument(source, { preserveFocus: false });
-        await vscode.commands.executeCommand("nautilus.component.preview");
+    // A built-in renders from the kit in the preview pane; its sidecar (an
+    // override of the kit's ports) is the anchor when it exists, else the
+    // pane's first edit creates one next to the active mimic.
+    if (BUILTIN_COMPONENT_NAMES.includes(pick.name)) {
+      const uri = index.locate(pick.name) ?? (await pickSidecarAnchor());
+      if (!uri) {
+        void vscode.window.showWarningMessage("nautilus: open a folder before editing component ports.");
         return;
       }
-    }
-
-    const existing = index.locate(pick.name);
-    if (existing) {
-      await vscode.commands.executeCommand("vscode.openWith", existing, "nautilus.componentEditor");
+      const arg: PreviewArg = { name: pick.name, uri };
+      await vscode.commands.executeCommand("nautilus.component.preview", arg);
       return;
     }
 
-    const anchor = await pickSidecarAnchor();
-    if (!anchor) {
-      void vscode.window.showWarningMessage("nautilus: open a folder before editing component ports.");
-      return;
-    }
-
-    // Prefill with the component's current defaults: the built-in table for
-    // a built-in, or an empty list for a custom component (sidecar-
-    // discovered, or a bare .svelte file with no sidecar yet — see
-    // undiscoveredNames above). Either way the Component Editor lets ports
-    // be added from there.
-    const defaults = BUILTIN_COMPONENT_PORTS[pick.name] ?? [];
-    const res = await writeComponentPortsEdit(index, anchor, pick.name, defaults);
-    if (!res.ok) {
-      void vscode.window.showErrorMessage(
-        `nautilus: couldn't create ${pick.name}.component.json${res.error ? ` — ${res.error}` : ""}`
+    // A custom component is edited on its live render — its .svelte opens
+    // and the pane follows (sample props and ports in one place; the
+    // sidecar is created by the first edit when there is none yet).
+    const source = await locateComponentSource(pick.name);
+    if (!source) {
+      void vscode.window.showWarningMessage(
+        `nautilus: no ${pick.name}.svelte in the workspace to render — edit ${pick.name}.component.json by hand`
       );
       return;
     }
-    const created = index.locate(pick.name);
-    if (created) await vscode.commands.executeCommand("vscode.openWith", created, "nautilus.componentEditor");
+    await vscode.window.showTextDocument(source, { preserveFocus: false });
+    await vscode.commands.executeCommand("nautilus.component.preview");
   });
 }
