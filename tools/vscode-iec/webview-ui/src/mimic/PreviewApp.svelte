@@ -17,14 +17,21 @@
 	//
 	// Ports: the sidecar's `ports` (the mimic editor's pipe connection
 	// points) are drawn over the live render as dots and edited right here
-	// — the same gestures and panel as the standalone *.component.json
-	// editor (ComponentApp.svelte; portsGestures.ts is the shared math) —
-	// so one pane beside a .svelte covers its render, its sample props and
-	// its ports, all three writing the one sidecar. The dots are always
-	// shown; the gestures take the pointer only in Ports mode (header
-	// toggle), so outside it the component itself stays clickable.
+	// — the same gestures as the mimic editor's ports mode (portsGestures.ts
+	// is the shared math) — so one pane covers a component's render, its
+	// sample props and its ports, all three writing the one sidecar. The
+	// dots are always shown; the gestures take the pointer only in Ports
+	// mode (header toggle), so outside it the component itself stays
+	// clickable.
+	//
+	// Built-ins: a kit component (Tank, Pump, … — registry.ts) has no source
+	// here to compile, so the pane mounts the registry's own component
+	// instead of a user island; its sidecar is then purely a ports override,
+	// and until one exists the kit's default ports are shown (host-supplied,
+	// `portsInherited`) so the first drag starts from them.
 	import { vscode } from '../vscodeApi';
 	import UserIsland from './UserIsland.svelte';
+	import { registry, DEMO_PROPS } from './registry';
 	import PortsPanel from './PortsPanel.svelte';
 	import { hasUserComponent, setUserComponentDiagnostics } from './userComponentsState.svelte';
 	import { formatPropValue, isPropName, kindOf, parsePropInput } from './previewProps';
@@ -46,8 +53,12 @@
 	let file = $state('');
 	let sidecar = $state('');
 	let hasSidecar = $state(false);
+	/** A kit component, rendered from the registry rather than a bundle. */
+	let builtin = $state(false);
 	let props = $state<Record<string, unknown>>({});
 	let ports = $state<Port[]>([]);
+	/** The ports shown are the kit's defaults (no sidecar `ports` yet). */
+	let portsInherited = $state(false);
 	/** Generation of the bundle currently mounted; keys the island. */
 	let version = $state(0);
 	let building = $state(false);
@@ -59,7 +70,9 @@
 	let zoom = $state(1);
 	let box = $state<{ w: number; h: number } | null>(null);
 
-	const available = $derived(component !== '' && hasUserComponent(component));
+	const available = $derived(component !== '' && (builtin ? !!registry[component] : hasUserComponent(component)));
+	/** What a built-in renders with: the kit's demo props under the sidecar's. */
+	const builtinProps = $derived({ ...(DEMO_PROPS[component] ?? {}), ...props });
 	/** The error for THIS component, or a build-wide one ("*"). */
 	const error = $derived(
 		loadError || (diagnostics.find((d) => d.component === component || d.component === '*')?.message ?? '')
@@ -73,8 +86,10 @@
 				file?: string;
 				sidecar?: string;
 				hasSidecar?: boolean;
+				builtin?: boolean;
 				props?: Record<string, unknown>;
 				ports?: Port[];
+				portsInherited?: boolean;
 				src?: string;
 				version?: number;
 				building?: boolean;
@@ -85,8 +100,10 @@
 				file = m.file ?? '';
 				sidecar = m.sidecar ?? '';
 				hasSidecar = !!m.hasSidecar;
+				builtin = !!m.builtin;
 				props = m.props ?? {};
 				ports = m.ports ?? [];
+				portsInherited = !!m.portsInherited;
 				drag = null;
 				if (selected !== null && selected >= ports.length) selected = null;
 			} else if (m?.type === 'previewBundle' && m.src && m.version) {
@@ -313,7 +330,7 @@
 		if (e.key === 'Escape') selected = null;
 	}
 	const statusText = $derived(
-		building ? 'compiling…' : error ? 'error' : available ? 'live' : component ? 'waiting for the first compile…' : ''
+		builtin ? 'built-in' : building ? 'compiling…' : error ? 'error' : available ? 'live' : component ? 'waiting for the first compile…' : ''
 	);
 </script>
 
@@ -321,9 +338,13 @@
 
 <div class="pane">
 	<header>
-		<button class="link title" title="Go to the source" onclick={() => vscode.postMessage({ type: 'openSource' })}>
-			{file || 'Component Preview'}
-		</button>
+		{#if builtin}
+			<span class="title" title="A kit component — rendered from the kit, no source here">{component}</span>
+		{:else}
+			<button class="link title" title="Go to the source" onclick={() => vscode.postMessage({ type: 'openSource' })}>
+				{file || 'Component Preview'}
+			</button>
+		{/if}
 		{#if box}<span class="size">{box.w} × {box.h}</span>{/if}
 		<span class="status" class:s-building={building} class:s-err={!!error && !building} class:s-ok={available && !error && !building}>
 			{statusText}
@@ -358,7 +379,12 @@
 					<div class="scale" style="transform: scale({zoom})">
 						<div class="box" bind:this={measureEl}>
 							<div bind:this={boxEl}>
-								<UserIsland name={component} {props} />
+								{#if builtin}
+									{@const C = registry[component]}
+									<C {...builtinProps} />
+								{:else}
+									<UserIsland name={component} {props} />
+								{/if}
 							</div>
 							{#if box}
 								<!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -409,7 +435,7 @@
 			{:else if component}
 				<p class="empty">{error ? 'nothing to show until it compiles' : 'compiling ' + file + '…'}</p>
 			{:else}
-				<p class="empty">open a component's .svelte file</p>
+				<p class="empty">open a component's .svelte or .component.json file</p>
 			{/if}
 		</div>
 
@@ -462,6 +488,9 @@
 					onAdd={addPortAtFreeSlot}
 					onSetDir={setPortDir}
 				/>
+				{#if portsInherited}
+					<p class="note">These are the kit's default ports for {component}; the first change writes them all to {sidecar} as this project's override.</p>
+				{/if}
 				<p class="note">
 					{portsMode
 						? 'Drag a dot · double-click the render to add · double-click a dot to remove · Esc deselects'
@@ -583,7 +612,7 @@
 		outline: 1px dashed var(--nx-border);
 		outline-offset: 4px;
 	}
-	/* See ComponentApp.svelte: a bare svg root is inline-level and reserves
+	/* A bare svg root is inline-level and reserves
 	   descender space below itself, so the measured box would be taller
 	   than the shape and bottom-edge dots would float. */
 	.box :global(svg) {

@@ -18,6 +18,11 @@
 #   error        a syntax error shows the banner OVER the last good render
 #                (the island stays, dimmed); undoing it clears the banner
 #   follow       opening another .svelte moves the pane to that component
+#   sidecar      a {Name}.component.json opens as plain JSON; its title
+#                button lands the pane on that component
+#   builtin      Edit Component Ports… → Tank: the pane renders the kit's
+#                Tank with its 4 default ports; "+ Add port" writes a
+#                Tank.component.json override (5 ports) into the project
 #
 # Everything is read from the DOM (the island's data-role text, header
 # .status, .banner, .stage.stale) and from the sidecar on disk. The project's
@@ -187,4 +192,43 @@ if wait_js 'doc.querySelector(".stage [data-role=pill]")' 30; then
   pass "opening SmokePill.svelte moved the pane to it (pill '$(wv 'doc.querySelector(".stage [data-role=pill]")?.textContent.trim()')')" "$(shot follow)"
 else
   fail "the pane did not follow to SmokePill.svelte (status '$(status)')" "$(shot follow-missed)"
+fi
+
+# ── sidecar: a .component.json is plain JSON with the preview button ───────
+# The standalone sidecar editor is gone; the preview pane is the editor for
+# the file. Open SmokeDial's sidecar (the strip created it above): a text
+# editor (the Ports panel is not in a custom editor), the title button
+# present, and a click on it moves the pane back to SmokeDial.
+open_file SmokeDial.component.json 3
+if [[ $(title) == "SmokeDial.component.json"* ]] && pg 'document.querySelector(".editor-group-container.active .monaco-editor") !== null' | grep -q true \
+   && [[ -n $(pg "$(title_action_el 'Open Component Preview')") ]]; then
+  page_click "$(title_action_el 'Open Component Preview')" 3
+  if wait_js 'doc.querySelector(".stage [data-role=label]")' 30 && [[ $(wv 'doc.querySelector("header .title")?.textContent.trim()') == "SmokeDial.svelte" ]]; then
+    pass "SmokeDial.component.json opened as plain JSON; its preview button moved the pane to SmokeDial (label '$(label)')" "$(shot sidecar)"
+  else
+    fail "the sidecar's preview button did not land the pane on SmokeDial (title '$(wv 'doc.querySelector("header .title")?.textContent.trim()')', status '$(status)')" "$(shot sidecar-missed)"
+  fi
+else
+  fail "SmokeDial.component.json did not open as a plain text editor with a preview button (title '$(title)')" "$(shot sidecar-missed)"
+fi
+
+# ── builtin: Edit Component Ports… → Tank renders from the kit ─────────────
+vs_cmd "nautilus: Edit Component Ports" 2
+g_type "Tank"; sleep 0.8; key Return; sleep 3
+if wait_js 'doc.querySelectorAll(".stage svg.ports circle[data-kind=port]").length === 4' 20 \
+   && [[ $(status) == "built-in" ]]; then
+  click_button "+ Add port" || true
+  TANK_SIDE=
+  for _ in $(seq 1 20); do
+    TANK_SIDE=$(find "$PROJ" -name Tank.component.json -not -path "*/node_modules/*" | head -1)
+    [[ -n $TANK_SIDE ]] && python3 -c 'import json,sys; sys.exit(0 if len(json.load(open(sys.argv[1])).get("ports") or []) == 5 else 1)' "$TANK_SIDE" && break
+    TANK_SIDE=; sleep 0.5
+  done
+  if [[ -n $TANK_SIDE ]]; then
+    pass "Edit Component Ports… → Tank renders the kit's Tank in the pane with its 4 default ports; + Add port wrote ${TANK_SIDE#$PROJ/} with 5 ports" "$(shot builtin)"
+  else
+    fail "Tank rendered with its default ports but + Add port wrote no 5-port Tank.component.json ($(find "$PROJ" -name Tank.component.json -not -path '*/node_modules/*' | head -1))" "$(shot builtin-missed)"
+  fi
+else
+  fail "Edit Component Ports… → Tank did not render the built-in in the pane (dots: $(wv 'doc.querySelectorAll(".stage svg.ports circle").length'), status '$(status)', title '$(wv 'doc.querySelector("header .title")?.textContent.trim()')')" "$(shot builtin-missed)"
 fi

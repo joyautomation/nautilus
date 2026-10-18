@@ -1,6 +1,6 @@
 <script lang="ts">
 	// Ports side panel for the standalone *.component.json editor
-	// (ComponentApp.svelte) AND the mimic editor's ports-mode (via
+	// (PreviewApp.svelte) AND the mimic editor's ports-mode (via
 	// EditorCanvas.svelte -> its own instance of this panel) — styled like
 	// the mimic editor's PropsPanel (same --nx-* tokens, same
 	// .nx-input/.del idioms). One row per port: a name text input (rename),

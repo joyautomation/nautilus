@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "nautilus component sidecar",
+  "description": "`{Name}.component.json`, next to a mimic component: per-component metadata the component's own .svelte can't carry — its pipe connection points for the P&ID (`ports`) and the sample props the component preview renders it with (`preview`). Written by the component preview pane (the editor-title preview button on the .svelte or on this file) and read by the mimic editor; hand-editable, diffable. Any other key passes through the pane's edits untouched, reserved for future per-component metadata.",
+  "type": "object",
+  "properties": {
+    "ports": {
+      "type": "array",
+      "description": "Where pipes connect, as fractions of the rendered box (0,0 top-left to 1,1 bottom-right). For a kit built-in (Tank, Pump, …) this overrides the kit's defaults for the whole project; absent = the kit's defaults, or none for a custom component.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "x", "y"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "How a pipe end anchors to this port by name (a *.mimic.json pipe's from/to). Unique within the list."
+          },
+          "x": { "type": "number", "minimum": 0, "maximum": 1, "description": "Fraction of the box width." },
+          "y": { "type": "number", "minimum": 0, "maximum": 1, "description": "Fraction of the box height." },
+          "dir": {
+            "type": "string",
+            "enum": ["left", "right", "up", "down"],
+            "description": "The direction a pipe LEAVES this port. Absent = inferred from the nearest edge."
+          }
+        }
+      }
+    },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "What the component preview pane renders the component with.",
+      "properties": {
+        "props": {
+          "type": "object",
+          "description": "Sample prop values by prop name — any JSON value, passed to the component as-is.",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

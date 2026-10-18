@@ -21,9 +21,16 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   turn **ports** on in the header, then drag a dot, double-click the
   render to add one on the nearer edge, double-click a dot to remove it,
   or use the panel to rename, delete, set an exit direction or add at a
-  free slot — the same gestures as the sidecar editor and the mimic
-  editor's ports mode. **Edit Component Ports…** on a custom component
-  now opens this pane; built-ins keep the standalone sidecar editor.
+  free slot — the same gestures as the mimic editor's ports mode. The
+  pane is now THE editor for a `{Name}.component.json`: the file opens
+  as plain JSON (hand-editable, diffable, with a schema for hover help
+  and validation) with the same preview button in its title, which lands
+  the pane on the component it describes — a
+  built-in (Tank, Pump, …) rendered from the kit's own registry, showing
+  the kit's default ports until the first change writes the project's
+  override. **Edit Component Ports…** opens this pane for every
+  component. The standalone Component Editor for sidecars is gone (it
+  also ran away sizing a component with a plain HTML root).
   Needs workspace trust, like the mimic editor's user components.
 - **Preview a page for use.** Open a `+page.svelte` (or `+layout.svelte`)
   and press its browser button, or run **nautilus: Preview HMI Page**: the

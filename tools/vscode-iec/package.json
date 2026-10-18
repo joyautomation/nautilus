@@ -472,7 +472,7 @@
         },
         {
           "command": "nautilus.component.preview",
-          "when": "!activeCustomEditorId && resourceExtname == .svelte && resourceFilename =~ /^[^+]/",
+          "when": "!activeCustomEditorId && (resourceExtname == .svelte && resourceFilename =~ /^[^+]/ || resourceFilename =~ /\\.component\\.json$/)",
           "group": "navigation@2"
         },
         {
@@ -579,7 +579,7 @@
         },
         {
           "command": "nautilus.component.preview",
-          "when": "resourceExtname == .svelte"
+          "when": "resourceExtname == .svelte || resourceFilename =~ /\\.component\\.json$/"
         },
         {
           "command": "nautilus.page.preview",
@@ -729,16 +729,6 @@
           }
         ],
         "priority": "default"
-      },
-      {
-        "viewType": "nautilus.componentEditor",
-        "displayName": "Component Editor",
-        "selector": [
-          {
-            "filenamePattern": "*.component.json"
-          }
-        ],
-        "priority": "default"
       }
     ],
     "yamlValidation": [
@@ -767,6 +757,10 @@
       {
         "fileMatch": "*.scene.json",
         "url": "./schemas/nautilus-scene.schema.json"
+      },
+      {
+        "fileMatch": "*.component.json",
+        "url": "./schemas/nautilus-component.schema.json"
       }
     ],
     "walkthroughs": [

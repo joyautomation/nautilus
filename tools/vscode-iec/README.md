@@ -141,14 +141,16 @@ commit (*Open With → Text Editor* any time).
   canvas animates with the real process.
 - Every gesture is one text edit, so undo is text undo. Press `p` to edit an
   equipment's ports; **Nautilus: Edit Component Ports…** does the same for
-  the built-ins.
+  any component, built-in or custom, in the preview pane.
 - Writing a component? Open its `.svelte` and press the preview button in
   the editor title: the component renders beside the text as you type,
   with sample props you set in the pane and its pipe connection points
   drawn on the render — turn **ports** on in the pane's header to drag,
   add (double-click the render) or remove them. Props and ports both go
   to `{Name}.component.json`, so the AI or teammate who writes the next
-  component can ship its preview data and ports with it.
+  component can ship its preview data and ports with it. That sidecar
+  opens as plain JSON; its own preview button lands the same pane on the
+  component it describes, a kit built-in included.
 - Writing a page? Open a `+page.svelte` and press its browser button
   (**nautilus: Preview HMI Page**): the project's own `npm run dev` starts
   in a terminal and the page's route opens in VS Code's Simple Browser

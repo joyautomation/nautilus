@@ -1,4 +1,4 @@
-// User-authored Svelte components INSIDE the mimic/Component Editor webviews
+// User-authored Svelte components INSIDE the mimic editor webview
 // ("self-contained islands compiled with the user's own dependencies"): a
 // mimic referencing a non-built-in component (or a *.component.json sidecar
 // for one) gets its `{Name}.svelte` found in the workspace, compiled with
@@ -174,7 +174,7 @@ export class UserComponentManager implements vscode.Disposable {
   }
 
   /** Rebuild whenever any discovered component's OWN .svelte file changes —
-   * editing HeatExchanger.svelte live-updates the mimic/Component Editor,
+   * editing HeatExchanger.svelte live-updates the mimic editor,
    * the same way editing the .mimic.json text does. */
   private setupWatcher(located: Map<string, vscode.Uri>): void {
     this.fileWatcher?.dispose();
@@ -204,7 +204,7 @@ function setsEqual(a: Set<string>, b: Set<string>): boolean {
   return true;
 }
 
-/** Shared by mimicEditor.ts and componentEditor.ts: the user-components
+/** Shared by mimicEditor.ts (and once the sidecar editor): the user-components
  * <script> tag, cache-busted so reassigning webview.html after a rebuild is
  * guaranteed to reload it — omitted entirely until a bundle has ever been
  * built (an untrusted workspace, or a doc with no custom components, never
