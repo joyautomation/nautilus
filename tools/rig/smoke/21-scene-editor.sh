@@ -17,8 +17,9 @@
 # .lbl labels the renderer floats over nodes, the Properties panel's id
 # field) and from the file on disk. The stage needs WebGL in the webview;
 # the Xvfb rig has no GPU, so VS Code's software fallback is what is under
-# test here — if it is absent the editor must say so (.nogl), which is
-# reported as a NOTE and the gesture verdicts are SKIPped, not failed.
+# test here (VSCODE_ARGS passes Chromium's SwiftShader flags) — if it is
+# still absent the editor must say so (.nogl), which is reported as a NOTE
+# and the gesture verdicts are SKIPped, not failed.
 set -euo pipefail
 CHECK=21-scene-editor
 source "$HOME/smoke/lib.sh"
@@ -41,9 +42,20 @@ cat >"$F" <<'JSON'
 JSON
 git -C "$PROJ" add -A && git -C "$PROJ" commit -qm "a scene"
 
-smoke_open "$PROJ" plant.scene.json
+# Launch on the program, then open the scene the way a user does (Quick
+# Open): checks 05 and 07 open their mimic the same way. The custom editor
+# is the default for *.scene.json, so no "Open With" is needed.
+# The rig has no GPU: ask Chromium for software WebGL (SwiftShader through
+# ANGLE), the same flags the headless gesture harness uses. Without them
+# the webview has no WebGL and the editor shows its notice (also checked).
+# `=1` on the boolean switches: VS Code's CLI parser gives an unknown bare
+# `--flag` the NEXT token as its value, which would eat the project path
+# and open the Welcome page instead. Chromium ignores a boolean's value.
+export VSCODE_ARGS="--enable-unsafe-swiftshader=1 --use-angle=swiftshader --ignore-gpu-blocklist=1"
+smoke_open "$PROJ" sim.st
 key Escape
 hide_sidebar
+open_file plant.scene.json 10
 [[ $(title) == "plant.scene.json"* ]] || { fail "VS Code did not open plant.scene.json: $(title)"; exit 1; }
 
 palette() { wv '[...doc.querySelectorAll("[data-kind=palette-item]")].map(b => b.dataset.id).join(" ")'; }
@@ -58,6 +70,7 @@ if ! wait_js 'doc.querySelector("[data-kind=palette-item]")' 30; then
   png=$(shot no-editor)
   fail "plant.scene.json did not open in the Scene Editor (no palette after 30 s)" "$png"
   echo "--- nautilus scene channel ---"; scene_log | tail -20 || true
+  echo "--- exthost errors ---"; exthost_log | grep -iE "error|exception|scene" | tail -20 || true
   exit 1
 fi
 if wait_js 'doc.querySelector(".stage .nogl")' 2; then

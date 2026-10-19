@@ -315,8 +315,11 @@ launch_vscode() { # <project dir> [file to open]
       *) disable+=(--disable-extension "$ext") ;;
     esac
   done
+  # VSCODE_ARGS: extra switches for this launch (a check that needs software
+  # WebGL in the webview passes Chromium's SwiftShader flags; the Xvfb rig has
+  # no GPU). Word-split on purpose.
   setsid code --user-data-dir="$PROFILE" --new-window --disable-workspace-trust \
-    "${disable[@]}" "$1" ${2:+"$2"} \
+    "${disable[@]}" ${VSCODE_ARGS:-} "$1" ${2:+"$2"} \
     </dev/null >/tmp/capture-vscode.log 2>&1 &
   disown
   local i n st
