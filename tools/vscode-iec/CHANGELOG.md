@@ -7,6 +7,20 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
 
 ### Added
 
+- **A 3D scene editor.** A `*.scene.json` now opens as the 3D view itself
+  (the same `@joyautomation/nautilus-hmi-3d` renderer the built HMI uses,
+  in its own webview bundle), with a palette of the document's kinds, a
+  move/turn gizmo on the selected node (`G` / `R`, snapped to the grid
+  cell and 15°, Shift for free), a panel that edits the node's fields by
+  number, `Del`, `Esc` and **Save view**. The JSON stays canonical: every
+  gesture is one text edit (undo is text undo; a move diffs as one `pos`
+  line), and a hand edit beside it re-renders live. Models, textures and
+  HDRIs resolve where `naut check` looks (next to the scene, `hmi/static/`,
+  `hmi/build/`); a missing file is named in a banner and draws as a grey
+  box, as does a component kind (the app builds those, not the editor).
+  Live values come from `nautilus.runtimeUrl` as the mimic's do. *Open
+  With → Text Editor* is a right-click away; a window without WebGL says
+  so instead of failing. Setting: `nautilus.scene.snapToGrid`.
 - **A multi-leg OR in one step, and a branch you can select (ladder).**
   Ctrl- or Shift-click several elements of one series (the rung, or one
   leg of a branch), then press `O` or the toolbar's **OR**: they become

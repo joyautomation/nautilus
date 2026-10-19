@@ -739,6 +739,102 @@ cheap, needs no render target, and follows animation for free. Line width
 is one pixel (WebGL ignores `linewidth`), which is right at 1× and thin on
 a HiDPI capture; a fat-line material is the fix if it matters.
 
+## 3g. The scene editor: AI writes the document, a person tweaks it
+
+The mimic editor already has the loop James wants everywhere (2026-10-15):
+an AI (or `naut scene init`) writes the document, a person relocates and
+renames by hand, and the diff shows exactly the hand's work. §3g is that
+loop for `*.scene.json`, in three slices. The first is built (PR "scene
+editor", 2026-10-18); the other two are designed here so the first does not
+paint them out.
+
+**Slice 1 — drop and place (built).** `*.scene.json` opens, by default, as
+the 3D view itself: a VS Code custom editor (`nautilus.sceneEditor`,
+`tools/vscode-iec/src/sceneEditor.ts`) hosting **this package** in a third
+webview bundle (`scene-editor.js`: hmi-3d, Threlte and three — 290 kB
+gzipped, which no P&ID should carry). The text stays canonical, exactly as
+the mimic's does: every gesture is a structural op (`sceneOps.ts`:
+`addNode`, `moveNode`, `updateNode`, `deleteNode`, `addPipe`,
+`setPipePoints`, `deletePipe`, `setCamera`, `batch`), applied in the
+extension host as one `WorkspaceEdit`, so text undo covers a drag and a
+rename alike; a hand edit beside it re-renders live. Serialization is
+canonical (fixed key order, a `[x, y, z]` on one line, millimetres and
+tenth-degrees), so a document the AI wrote is normalized by its first
+gesture and every later move diffs as one `pos` line.
+
+- The palette is `paletteKinds(doc)` from item 1b: the built-ins and the
+  document's own `kinds`, captioned by how each is defined. Click one, then
+  click the ground, and a node of it lands at that point on the grid (the
+  grid's plane, else the environment's floor, else y = 0), with an id
+  spelled like the tag it will bind (`PUMP1`).
+- Selection is the renderer's own pick; the gizmo is three's
+  `TransformControls` on the node's root group, which `PlacedNode.object`
+  now announces (hmi-3d 0.1.5). Move (G) or turn (R); release posts ONE
+  `moveNode` with the group's position and rotation, snapped to the grid
+  cell and 15° unless Shift is held. The panel edits the same fields by
+  number (id, kind, tag, label, pos, rot, scale) and shows `bind` read-only;
+  Del deletes; Esc deselects or disarms; "Save view" writes the orbit camera
+  to `camera`.
+- The webview has no app root, so the host resolves every asset path the
+  document names (models, the HDRI and backdrop, fixture textures) where
+  `naut check` looks — next to the scene, under `hmi/static/`, `hmi/build/`
+  — and hands the stage a copy with webview URIs (`sceneEditorLogic.ts`). A
+  path found nowhere stays as written, is listed in a banner, and the kind
+  draws as the grey placeholder box. A **component kind** draws as that
+  same placeholder, sized by its declared `bounds`: the extension does not
+  compile Threlte components (§3d's rule), and the box is enough to place
+  and label it. Live values come from `nautilus.runtimeUrl` as the mimic's
+  do, so a bound pump turns while it is being placed.
+- The gizmo is for nodes. A pipe is drawn and renders, but is not yet
+  grabbable (slice 3). Looks: the editor renders `lit`; the document's
+  `look` passes through untouched.
+
+Verified two ways, both in `tools/vscode-iec`: the gesture harness drives
+the production bundle in headless Chrome with software WebGL
+(`gesture-harness/scene.test.mjs`: open, place, pick/Esc/Del, panel edit,
+a real gizmo drag that posts one snapped `moveNode`, and a text echo that
+moves a label), and `sceneOps.test.ts` holds the reducer and its canonical
+form. A window without WebGL gets a notice and the text editor, not an
+exception.
+
+**Slice 2 — one editor per kind.** A kind is the 3D twin of a mimic
+component, and James wants an editor per kind the way `.svelte` components
+got the preview pane (2026-10-15): one for a submersible pump, one for a
+valve, one for a flow meter. What there is to edit on a kind: its model
+(built elsewhere — Blender — and only *chosen* here), its **drives**
+(which named mesh spins, turns, scales, tints or shows, driven by which
+member), its `status` template, its `type` and `members`, and — new, for
+slice 3 — its **ports**. The pane renders the one kind on a turntable with
+sample member values (the 3D `preview.props`), lists the model's mesh
+names so a drive targets a real one, previews the status text, and places
+ports by clicking the model. Today a kind lives inline in the scene's
+`kinds` block; for a kind to be reused across scenes and have a file to
+open, a `kinds` entry may name a **`{Name}.kind.json`** (`"submersible-pump":
+"hmi/kinds/SubmersiblePump.kind.json"`), the same entry's keys in a file of
+its own, discovered by the palette like a mimic sidecar. That needs the
+contract in three places as always (TS, Go, schema, each with its sync
+test), and is why it is its own PR.
+
+**Slice 3 — pipes and connections.** The lesson of the lift station
+(2026-10-18) was that a connection must be a scene pipe, not a model part,
+or a look can hide it — and that typing the world point of a pump's flange
+by hand is the tedium. So: a kind declares `ports` in its own frame
+(`{ "discharge": { "at": [0, 0.43, -0.5], "dir": [0, 1, 0] } }`, a point
+and the direction a pipe leaves it); a pipe end may be `from: { node:
+"P101", port: "discharge" }` instead of a point, resolved through the
+node's `pos`/`rot` by the renderer and `naut check` alike; an anchored pipe
+follows its node when the gizmo moves it. The editor draws a pipe port to
+port (the mimic's gesture), suggests an orthogonal route in 3D (leave along
+`dir`, rise to a header height, run, drop — `autoroute.ts` with a third
+axis), and lets a vertex be dragged on the gizmo. `flowing` binds as it
+does now. The reducer's `addPipe` / `setPipePoints` / `deletePipe` are
+already there for it.
+
+**Not in scope, named so it is not forgotten:** argonaut's `parts` scene
+format (`role` / `if`, one AI-written screen serving many sites) still
+needs folding into `kinds` + fixtures before the two formats converge; the
+editor edits this package's document and will edit the converged one.
+
 ## 4. The node registry
 
 ```ts
@@ -923,7 +1019,11 @@ Proposed order, each with an exit and the capture moment it produces
    rig gained two simulated transfer skids, `Skid.svelte` and the JSON
    assembly, and a `/composed` route; 60 fps / 34 ms with five nodes (§9);
    the takes are `content/assets/capture/n63/out/`.*
-2. **Place equipment by dragging.** Locating things is the one authoring
+2. **Place equipment by dragging.** *Designed as §3g, slice 1, and built
+   2026-10-18: the `*.scene.json` custom editor in VS Code, hosting this
+   package in its own webview bundle; palette, gizmo, panel, ops to text.
+   The browser-side write-back is not built; the kind editor and pipes
+   are §3g's slices 2 and 3.* Locating things is the one authoring
    step `naut scene init` cannot finish, and a number typed into `pos` is
    the tedium to remove. An edit mode on `SceneView`: click an asset,
    drag it on the ground plane (Threlte's `TransformControls`, snapped to

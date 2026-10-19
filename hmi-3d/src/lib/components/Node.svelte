@@ -14,7 +14,7 @@
 	// node. That is how a component composes kinds, and how a data
 	// assembly's parts render.
 	import { T } from '@threlte/core';
-	import { BoxGeometry } from 'three';
+	import { BoxGeometry, type Group } from 'three';
 	import type { IntersectionEvent } from '@threlte/extras';
 	import { getContext, setContext, type Snippet } from 'svelte';
 	import { SCENE, NODE, type SceneContext, type NodeContext } from '../context.js';
@@ -97,6 +97,9 @@
 	let labelAt = $derived<Vec3>(labelAtProp ?? def?.labelAt ?? [bounds.center[0], bounds.center[1] + bounds.size[1] / 2 + 0.02, bounds.center[2]]);
 	let nodeProps = $derived<NodeProps>({ value, good, label: title, selected: isSel, ...props, ...over });
 	let pickable = $derived(!parent && id !== undefined);
+	/** The node's root group, announced with the node so an editor can
+	 * attach a gizmo to it. */
+	let group = $state<Group>();
 
 	setContext<NodeContext>(NODE, {
 		get value() {
@@ -115,7 +118,7 @@
 
 	$effect(() => {
 		if (parent || !scene || id === undefined) return;
-		return scene.register({ id, tag, bind, kind, label: title });
+		return scene.register({ id, tag, bind, kind, label: title, object: group });
 	});
 	// A node that goes away while hovered must not leave the cursor behind.
 	$effect(() => () => {
@@ -125,6 +128,7 @@
 
 {#if scene}
 	<T.Group
+		bind:ref={group}
 		position={pos}
 		rotation={rad(rot)}
 		{scale}

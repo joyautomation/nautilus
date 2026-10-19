@@ -6,11 +6,13 @@
 // is what makes a part a part.
 import type { AssetAlarm } from './alarms.js';
 import type { NodeKindDef, NodeRegistry, Box } from './defs.js';
+import type { Object3D } from 'three';
 
 export const SCENE = 'hmi3d:scene';
 export const NODE = 'hmi3d:node';
 
-/** A node the scene knows about — what the inspector drawer needs. */
+/** A node the scene knows about — what the inspector drawer needs, and
+ * the group it renders in, for a tool that moves it (an editor's gizmo). */
 export interface PlacedNode {
 	id: string;
 	tag?: string;
@@ -18,6 +20,9 @@ export interface PlacedNode {
 	bind?: Record<string, string>;
 	kind?: string;
 	label: string;
+	/** The node's root group, once mounted: its position and rotation ARE
+	 * the document's `pos` and `rot` (metres, degrees → radians). */
+	object?: Object3D;
 }
 
 export interface SceneContext {

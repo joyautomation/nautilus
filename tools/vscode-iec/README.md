@@ -143,6 +143,31 @@ commit (*Open With → Text Editor* any time).
   equipment's ports; **Nautilus: Edit Component Ports…** does the same for
   the built-ins.
 
+## 3D scene editor
+
+`*.scene.json` documents for the
+[`@joyautomation/nautilus-hmi-3d`](https://www.npmjs.com/package/@joyautomation/nautilus-hmi-3d)
+`<SceneView>` component open as the 3D view itself, with the same renderer
+the built HMI uses. The JSON stays the file you commit (*Open With → Text
+Editor* any time), which is the point: an AI or `naut scene init` writes
+the scene, and you drag what landed in the wrong place.
+
+- The palette lists the built-in kinds and the document's own (glTF
+  models, assemblies, component kinds). Pick one, click the ground, and a
+  node lands there on the grid.
+- Click a node for a gizmo: move (`G`) or turn (`R`), snapped to the grid
+  cell and 15° unless you hold Shift. The panel beside it edits the same
+  fields by number. `Del` deletes, `Esc` deselects, **Save view** writes
+  the orbit camera into the document.
+- Models, textures and HDRIs are found where `naut check` finds them
+  (next to the scene, under `hmi/static/`, `hmi/build/`); a missing file
+  is named in a banner and its kind draws as a grey box. A component kind
+  draws as a box of its declared bounds — the editor places it, the app
+  renders it.
+- With a controller running, bound nodes animate while you place them.
+  Every gesture is one text edit, so undo is text undo and a move diffs as
+  one `pos` line.
+
 ## Testing
 
 ![Acceptance tests in the Testing view, with a failure shown on the assertion](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/testing-view.png)
@@ -220,6 +245,7 @@ server.
 | `nautilus.confirmControllerWrites` | `true` | Confirm before Download or Rollback changes what a controller runs. Leave it on for anything that might be live. |
 | `nautilus.logix.resetValuesOnDownload` | `false` | Download Project to Logix Controller keeps the controller's tag values where the tag is unchanged; turn this on to start every tag at the project's value (`naut logix deploy --download --reset-values`). |
 | `nautilus.mimic.snapToGrid` | `true` | Snap dragged equipment, labels and pipe points to the grid in the mimic editor. |
+| `nautilus.scene.snapToGrid` | `true` | Snap a dragged node to the grid cell and its rotation to 15° in the scene editor; Shift while dragging is a free move. |
 
 ## Commands
 

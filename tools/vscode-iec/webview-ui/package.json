@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "build": "vite build && vite build --config vite.mimic.config.ts",
+    "build": "vite build && vite build --config vite.mimic.config.ts && vite build --config vite.scene.config.ts",
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "node --experimental-strip-types --test src/sfc.test.ts src/liveResolve.test.ts src/suggest.test.ts src/keyForward.test.ts src/ladderLayout.test.ts src/ladderSelect.test.ts src/placement.test.ts src/viewFit.test.ts src/ladder.test.ts src/mimic/ports.test.ts src/mimic/portsGestures.test.ts src/mimic/routing.test.ts src/mimic/pipeDraft.test.ts src/mimic/autoroute.test.ts src/mimic/mimicClip.test.ts src/mimic/opPayload.test.ts",
     "test:gestures": "node --test gesture-harness/*.test.mjs"
@@ -12,6 +12,7 @@
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.2.0",
     "@types/node": "^22.20.4",
+    "@types/three": "^0.186.0",
     "svelte": "^5.56.4",
     "svelte-check": "^4.7.6",
     "typescript": "^6.0.3",
@@ -19,6 +20,10 @@
   },
   "dependencies": {
     "@joyautomation/nautilus-hmi": "file:../../../hmi",
-    "@xyflow/svelte": "^1.6.2"
+    "@joyautomation/nautilus-hmi-3d": "file:../../../hmi-3d",
+    "@threlte/core": "^8.6.1",
+    "@threlte/extras": "^9.22.2",
+    "@xyflow/svelte": "^1.6.2",
+    "three": "^0.186.1"
   }
 }
