@@ -44,6 +44,8 @@ OUT=$(cd "$OUT" && pwd)
   echo "building $SHA from $SRC"
   ( cd "$SRC" && go build -o "$OUT/naut" ./cmd/naut )
   ( cd "$SRC/hmi" && npm ci && npm run package )
+  # webview-ui links hmi-3d too (the scene editor's bundle), by file:.
+  ( cd "$SRC/hmi-3d" && npm ci && npm run package )
   ( cd "$SRC/tools/vscode-iec" && npm ci && npm ci --prefix webview-ui \
       && npx --yes @vscode/vsce package -o "$OUT/vscode-iec.vsix" )
 } >"$OUT/build.log" 2>&1 || { echo "build failed — $OUT/build.log" >&2; tail -20 "$OUT/build.log" >&2; exit 1; }
