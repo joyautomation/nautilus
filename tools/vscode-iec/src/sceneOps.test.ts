@@ -150,3 +150,12 @@ test("a hand-written document normalizes on its first edit, kinds and environmen
   assert.ok(out.startsWith('{\n  "kinds": {'));
   assert.ok(out.includes('"id": "A",\n      "kind": "tank",\n      "pos": [1, 0, 0]'));
 });
+
+test("setLook writes the document's look and refuses one the renderer has no idea of", () => {
+  const r = applySceneOp('{"nodes":[]}', { type: "setLook", look: "paper" });
+  assert.ok("text" in r, JSON.stringify(r));
+  assert.equal(JSON.parse(r.text).look, "paper");
+  assert.equal(r.text.indexOf('"look"') < r.text.indexOf('"nodes"'), true, "look sits before nodes in the canonical order");
+  const bad = applySceneOp('{"nodes":[]}', { type: "setLook", look: "neon" });
+  assert.ok("error" in bad);
+});

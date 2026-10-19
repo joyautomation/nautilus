@@ -12,6 +12,7 @@
 		validateScene,
 		DEFAULT_PALETTE,
 		paletteFromTheme,
+		paperPalette,
 		type NodeProps,
 		type NodeRegistry,
 		type Palette,
@@ -20,7 +21,7 @@
 	} from '@joyautomation/nautilus-hmi-3d';
 	import PlaceholderKind from './PlaceholderKind.svelte';
 	import SceneInner from './SceneInner.svelte';
-	import { ed } from './sceneState.svelte';
+	import { ed, stageLook } from './sceneState.svelte';
 
 	type Vec3 = [number, number, number];
 	type Box = { size: Vec3; center: Vec3 };
@@ -28,8 +29,8 @@
 
 	const palette = $state<Palette>(structuredClone(DEFAULT_PALETTE));
 	setContext('hmi3d:palette', palette);
-	// Scene3D writes `lit` from its look prop; models read it for materials.
-	const view = $state({ lit: true });
+	// Scene3D writes `lit` and `paper` from the look; kinds read them.
+	const view = $state({ lit: true, paper: false });
 	setContext('hmi3d:view', view);
 
 	/** A placeholder component drawing `box`: Svelte 5 components are
@@ -58,7 +59,9 @@
 		return reg;
 	});
 
-	const errors = $derived<SceneError[]>(doc ? validateScene(doc, Object.keys(registry)).errors : []);
+	// Validated as written (ed.doc): the rendered copy's asset paths are
+	// webview URIs, which the path rule (no scheme) rightly refuses.
+	const errors = $derived<SceneError[]>(ed.doc ? validateScene(ed.doc, Object.keys(registry)).errors : []);
 	// The renderer refuses an invalid document (a node of a kind nobody
 	// defines, a pipe of one point). The editor still shows what it can:
 	// the errors, and the stage with the offending entries filtered out.
@@ -79,8 +82,15 @@
 	// without software GL) would make the renderer throw inside <Canvas>;
 	// say so instead, with the text editor a click away.
 	let webgl = $state(true);
+	// The theme's colours, read once the stage is in the DOM; the palette
+	// follows the look from there (paper lays its near-whites over them,
+	// as SceneView does).
+	let themed = $state<Palette | null>(null);
+	$effect(() => {
+		if (themed) Object.assign(palette, stageLook() === 'paper' ? paperPalette(themed) : themed);
+	});
 	onMount(() => {
-		Object.assign(palette, paletteFromTheme(stage));
+		themed = paletteFromTheme(stage);
 		try {
 			const c = document.createElement('canvas');
 			webgl = !!(c.getContext('webgl2') ?? c.getContext('webgl'));

@@ -3,7 +3,8 @@
 	// snap, live pill), the kinds palette, the stage, and the node panel.
 	// Document state arrives from the extension host (sceneDoc / sceneError
 	// / sceneTags / sceneConfig messages); every gesture goes back as an op.
-	import { announceReady, disarm, ed, missingAssets, postOp, reopenAsText, setSnapToGrid, toggleLive } from './sceneState.svelte';
+	import { LOOKS, type SceneLook } from '@joyautomation/nautilus-hmi-3d';
+	import { announceReady, disarm, ed, missingAssets, postOp, reopenAsText, setSnapToGrid, stageLook, toggleLive } from './sceneState.svelte';
 	import KindPalette from './KindPalette.svelte';
 	import Stage3D from './Stage3D.svelte';
 	import NodePanel from './NodePanel.svelte';
@@ -44,6 +45,16 @@
 		announceReady();
 		return () => window.removeEventListener('message', onMsg);
 	});
+
+	// A look preview that the document now has is no longer a preview.
+	$effect(() => {
+		if (ed.look && ed.look === (ed.doc?.look ?? 'lit')) ed.look = null;
+	});
+	const LOOK_TIP: Record<SceneLook, string> = {
+		lit: 'Lit: materials and lights, the glTF models (the document\'s default)',
+		flat: 'Flat: the built-in primitives under three lights — a model kind draws as the built-in of its name, or a grey box',
+		paper: 'Paper: the scene as an isometric line drawing — a model kind draws as the built-in of its name, or a grey box'
+	};
 
 	// Prune a selection whose node vanished (deleted via text editing).
 	$effect(() => {
@@ -103,6 +114,11 @@
 		>
 			Snap: {ed.snapToGrid ? 'On' : 'Off'}
 		</button>
+		<span class="tools" role="toolbar" aria-label="Look">
+			{#each LOOKS as l (l)}
+				<button class:active={stageLook() === l} onclick={() => (ed.look = l)} title={LOOK_TIP[l]}>{l[0].toUpperCase() + l.slice(1)}</button>
+			{/each}
+		</span>
 		<span class="spacer"></span>
 		<button
 			class="live nx-pill"

@@ -12,7 +12,11 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   in its own webview bundle), with a palette of the document's kinds, a
   move/turn gizmo on the selected node (`G` / `R`, snapped to the grid
   cell and 15°, Shift for free), a panel that edits the node's fields by
-  number, `Del`, `Esc` and **Save view**. The JSON stays canonical: every
+  number, `Del`, `Esc` and **Save view**. The toolbar switches the look
+  (lit, flat, paper) as a preview; **Use … as the scene's look** writes
+  it. A click picks through glass — the pump inside the wet well, not the
+  well — and clicking the same spot again cycles through what is stacked
+  there; a label picks its node. The JSON stays canonical: every
   gesture is one text edit (undo is text undo; a move diffs as one `pos`
   line), and a hand edit beside it re-renders live. Models, textures and
   HDRIs resolve where `naut check` looks (next to the scene, `hmi/static/`,

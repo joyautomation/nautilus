@@ -51,6 +51,11 @@
 		if (!ed.view) return;
 		postOp({ type: 'setCamera', pos: ed.view.pos, target: ed.view.target });
 	}
+	/** The toolbar's look preview, when it differs from the document's. */
+	const previewLook = $derived(ed.look && ed.look !== (doc?.look ?? 'lit') ? ed.look : null);
+	function useLook() {
+		if (previewLook) postOp({ type: 'setLook', look: previewLook });
+	}
 	const AXES = ['x', 'y', 'z'] as const;
 	const fmt = (v: number | undefined) => (v === undefined ? '' : String(Math.round(v * 1000) / 1000));
 </script>
@@ -117,6 +122,8 @@
 			<dd>{Object.keys(doc.kinds ?? {}).length}</dd>
 			<dt>grid</dt>
 			<dd>{doc.grid?.cell ?? 0.1} m</dd>
+			<dt>look</dt>
+			<dd>{doc.look ?? 'lit'}{#if previewLook} <i>(stage: {previewLook})</i>{/if}</dd>
 		</dl>
 		<div class="head sub">Camera</div>
 		{#if ed.view}
@@ -127,6 +134,9 @@
 		{/if}
 		<div class="actions">
 			<button onclick={saveView} disabled={!ed.view} title="Write the current orbit view to the document's camera">Save view as the scene's camera</button>
+			{#if previewLook}
+				<button onclick={useLook} title="Write the look on stage to the document (look: {previewLook})">Use {previewLook} as the scene's look</button>
+			{/if}
 		</div>
 		<p class="hint">Click a node to edit it. Pick a kind on the left, then click the ground to place one.</p>
 	{/if}

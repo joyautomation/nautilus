@@ -74,7 +74,10 @@
 	}
 
 	const deg = 180 / Math.PI;
-	/** The gizmo released: write where the node now is. */
+	/** The gizmo released: write where the node now is — unless that is
+	 * where the document already has it (a click on a handle without a
+	 * drag), which would be an empty edit on the undo stack. The host
+	 * rounds pos to the millimetre and rot to a tenth of a degree. */
 	function onDrop() {
 		const obj = selected;
 		const id = ed.selected;
@@ -83,6 +86,13 @@
 		const r = obj.rotation;
 		const pos = snapPos([p.x, p.y, p.z], shift);
 		const rot: Vec3 = [r.x * deg, r.y * deg, r.z * deg];
+		const was = ed.doc?.nodes.find((n) => n.id === id);
+		if (was) {
+			const mm = (v: number) => Math.round(v * 1000);
+			const dd = (v: number) => Math.round(v * 10);
+			const wasRot = was.rot ?? [0, 0, 0];
+			if (pos.every((v, i) => mm(v) === mm(was.pos[i])) && rot.every((v, i) => dd(v) === dd(wasRot[i]))) return;
+		}
 		postOp({ type: 'moveNode', id, pos, rot });
 	}
 
@@ -102,7 +112,7 @@
 	});
 </script>
 
-<Scene3D {doc} {registry} {tags} selected={ed.selected} look="lit" onpick={onPick} bind:placed>
+<Scene3D {doc} {registry} {tags} selected={ed.selected} look={ed.look ?? undefined} onpick={onPick} bind:placed>
 	<!-- The ground: invisible to the eye, opaque to the raycaster (a
 	     material with visible=false is skipped by three's Mesh.raycast, so
 	     it is transparent instead). -->

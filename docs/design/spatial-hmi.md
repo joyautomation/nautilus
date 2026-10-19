@@ -767,9 +767,14 @@ gesture and every later move diffs as one `pos` line.
   click the ground, and a node of it lands at that point on the grid (the
   grid's plane, else the environment's floor, else y = 0), with an id
   spelled like the tag it will bind (`PUMP1`).
-- Selection is the renderer's own pick; the gizmo is three's
+- Selection is the renderer's own pick, which now resolves through glass:
+  of everything under the pointer the frontmost node with an opaque
+  surface is picked (the pump inside the wet well, not the well's shell),
+  a click on the already-selected node goes one deeper so the same spot
+  cycles through what is stacked there, and a node's label picks it
+  (hmi-3d `resolvePick`). The gizmo is three's
   `TransformControls` on the node's root group, which `PlacedNode.object`
-  now announces (hmi-3d 0.1.5). Move (G) or turn (R); release posts ONE
+  now announces (hmi-3d 0.2.0). Move (G) or turn (R); release posts ONE
   `moveNode` with the group's position and rotation, snapped to the grid
   cell and 15° unless Shift is held. The panel edits the same fields by
   number (id, kind, tag, label, pos, rot, scale) and shows `bind` read-only;
@@ -786,14 +791,18 @@ gesture and every later move diffs as one `pos` line.
   and label it. Live values come from `nautilus.runtimeUrl` as the mimic's
   do, so a bound pump turns while it is being placed.
 - The gizmo is for nodes. A pipe is drawn and renders, but is not yet
-  grabbable (slice 3). Looks: the editor renders `lit`; the document's
-  `look` passes through untouched.
+  grabbable (slice 3). Looks: the stage shows the document's `look` (lit
+  by default); the toolbar previews any of the three without an edit, and
+  the panel's "Use … as the scene's look" writes it (`setLook`), the
+  camera's pattern. The document is validated as written, not the copy
+  with webview URIs, which the asset-path rule would refuse.
 
 Verified two ways, both in `tools/vscode-iec`: the gesture harness drives
 the production bundle in headless Chrome with software WebGL
 (`gesture-harness/scene.test.mjs`: open, place, pick/Esc/Del, panel edit,
-a real gizmo drag that posts one snapped `moveNode`, and a text echo that
-moves a label), and `sceneOps.test.ts` holds the reducer and its canonical
+a real gizmo drag that posts one snapped `moveNode`, a text echo that
+moves a label, a look preview and `setLook`, and a pick through a tank's
+glass to the pump inside), and `sceneOps.test.ts` holds the reducer and its canonical
 form. A window without WebGL gets a notice and the text editor, not an
 exception.
 

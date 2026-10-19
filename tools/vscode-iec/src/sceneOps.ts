@@ -60,7 +60,11 @@ export type SceneOp =
   | { type: "addPipe"; points: Vec3[]; id?: string; bind?: { flowing?: string } }
   | { type: "setPipePoints"; index: number; points: Vec3[] }
   | { type: "deletePipe"; index: number }
-  | { type: "setCamera"; pos: Vec3; target: Vec3 };
+  | { type: "setCamera"; pos: Vec3; target: Vec3 }
+  | { type: "setLook"; look: string };
+
+/** Mirror of hmi-3d's LOOKS. */
+const LOOKS = ["lit", "flat", "paper"];
 
 export const EMPTY_DOC: SceneDoc = { nodes: [] };
 
@@ -286,6 +290,11 @@ function applyOpToDoc(doc: SceneDoc, op: SceneOp): string | undefined {
     case "setCamera": {
       if (!isVec3(op.pos) || !isVec3(op.target)) return "a camera needs pos and target as [x, y, z]";
       doc.camera = { ...(doc.camera ?? {}), pos: roundPos(op.pos), target: roundPos(op.target) };
+      break;
+    }
+    case "setLook": {
+      if (!LOOKS.includes(op.look)) return "look must be lit, flat or paper";
+      doc.look = op.look;
       break;
     }
     default:

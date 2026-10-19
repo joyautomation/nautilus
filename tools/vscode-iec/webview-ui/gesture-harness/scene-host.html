@@ -51,6 +51,11 @@
 				const inp = document.querySelector('aside[aria-label=Properties] input');
 				return inp ? inp.value : null;
 			};
+			// A button by the start of its text (toolbar looks, the panel's actions).
+			window.__button = (text) => {
+				const b = Array.from(document.querySelectorAll('button')).find((x) => x.textContent.trim().startsWith(text));
+				return b ? { active: b.classList.contains('active'), ...vpCenter(b) } : null;
+			};
 			window.__footer = () => document.querySelector('footer')?.textContent.trim() ?? '';
 			window.__ready = () => !!document.querySelector('[data-kind=palette-item]') && !!document.querySelector('.stage canvas');
 		</script>

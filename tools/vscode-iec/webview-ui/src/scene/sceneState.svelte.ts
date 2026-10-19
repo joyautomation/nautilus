@@ -5,7 +5,7 @@
 // document, only in-flight gestures (a drag's live position, the armed
 // kind, the selection).
 import { vscode } from '../vscodeApi';
-import type { SceneDoc, Vec3 } from '@joyautomation/nautilus-hmi-3d';
+import type { SceneDoc, SceneLook, Vec3 } from '@joyautomation/nautilus-hmi-3d';
 import { cloneSafe, opFailureMessage } from '../mimic/opPayload';
 
 /** Mirror of src/sceneOps.ts (extension host). Patch semantics: a key set
@@ -19,7 +19,8 @@ export type SceneOp =
 	| { type: 'addPipe'; points: Vec3[]; id?: string; bind?: { flowing?: string } }
 	| { type: 'setPipePoints'; index: number; points: Vec3[] }
 	| { type: 'deletePipe'; index: number }
-	| { type: 'setCamera'; pos: Vec3; target: Vec3 };
+	| { type: 'setCamera'; pos: Vec3; target: Vec3 }
+	| { type: 'setLook'; look: SceneLook };
 
 /** Mirror of src/sceneKinds.ts's PaletteKind. */
 export type PaletteKind = {
@@ -62,8 +63,15 @@ export const ed = $state({
 	/** Mirrors `nautilus.scene.snapToGrid`. */
 	snapToGrid: true,
 	/** The orbit camera as it stands, kept by the stage for "Save view". */
-	view: null as { pos: Vec3; target: Vec3 } | null
+	view: null as { pos: Vec3; target: Vec3 } | null,
+	/** A look previewed from the toolbar; null = the document's. */
+	look: null as SceneLook | null
 });
+
+/** The look on stage: the toolbar's preview, else the document's, else lit. */
+export function stageLook(): SceneLook {
+	return ed.look ?? ed.doc?.look ?? 'lit';
+}
 
 /** The asset paths the host could not find, for the banner. */
 export function missingAssets(): AssetReport[] {

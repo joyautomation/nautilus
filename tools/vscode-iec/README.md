@@ -158,7 +158,12 @@ the scene, and you drag what landed in the wrong place.
 - Click a node for a gizmo: move (`G`) or turn (`R`), snapped to the grid
   cell and 15° unless you hold Shift. The panel beside it edits the same
   fields by number. `Del` deletes, `Esc` deselects, **Save view** writes
-  the orbit camera into the document.
+  the orbit camera into the document. A click picks through glass (the
+  pump inside the tank, not the tank); click the same spot again to go
+  one deeper, or click a node's label.
+- **Lit / Flat / Paper** in the toolbar previews a look; **Use … as the
+  scene's look** in the panel writes it to the document. In flat and
+  paper a glTF kind draws as the built-in of its name, or a grey box.
 - Models, textures and HDRIs are found where `naut check` finds them
   (next to the scene, under `hmi/static/`, `hmi/build/`); a missing file
   is named in a banner and its kind draws as a grey box. A component kind

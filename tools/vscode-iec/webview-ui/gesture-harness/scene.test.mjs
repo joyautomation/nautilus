@@ -256,3 +256,55 @@ test('S06 text: a doc echoed back with a changed pos moves the label', async () 
 		assert.deepEqual(s.exceptions(), []);
 	});
 });
+
+test('S07 look: the toolbar previews a look without an edit; "Use … as the scene\'s look" posts setLook; the echo clears the preview', async () => {
+	await withScene(rigDoc(), async (s) => {
+		const btn = (text) => s.b.eval(`JSON.stringify(window.__button(${JSON.stringify(text)}))`).then(JSON.parse);
+		assert.ok((await btn('Lit')).active, 'the document has no look: lit is on');
+		const paper = await btn('Paper');
+		await s.b.click(paper.cx, paper.cy);
+		await sleep(400);
+		assert.ok((await btn('Paper')).active, 'paper is on stage');
+		assert.deepEqual(await s.ops(), [], 'a preview is not an edit');
+		const use = await btn('Use paper');
+		assert.ok(use, "the panel offers to write the look");
+		await s.b.click(use.cx, use.cy);
+		await sleep(200);
+		assert.deepEqual(await s.ops(), [{ type: 'setLook', look: 'paper' }]);
+		const d = rigDoc();
+		d.look = 'paper';
+		await s.deliver(d);
+		await sleep(300);
+		assert.equal(await btn('Use paper'), null, 'the document has the look now');
+		assert.ok((await btn('Paper')).active);
+		assert.ok(await s.canvas(), 'the stage is still drawing');
+		assert.deepEqual(s.exceptions(), []);
+	});
+});
+
+test('S08 pick through glass: a click on the pump inside a tank picks the pump; again cycles to the tank; a label picks its node', async () => {
+	const d = rigDoc();
+	d.nodes = [
+		{ id: 'T1', kind: 'tank', label: 'T-1', pos: [0.6, 0, 0.2] },
+		{ id: 'P1', kind: 'pump', label: 'P-1', pos: [0.6, 0, 0.2] }
+	];
+	await withScene(d, async (s) => {
+		const pump = (await s.labels()).find((l) => l.title === 'P-1');
+		const p = under(pump, 25);
+		await s.b.click(p.x, p.y);
+		await sleep(200);
+		assert.equal(await s.panelId(), 'P1', 'the opaque pump behind the glass, not the glass');
+		await s.b.click(p.x, p.y);
+		await sleep(200);
+		assert.equal(await s.panelId(), 'T1', 'a second click on the same spot goes one deeper');
+		await s.b.click(p.x, p.y);
+		await sleep(200);
+		assert.equal(await s.panelId(), 'P1', 'and round again');
+		const tank = (await s.labels()).find((l) => l.title === 'T-1');
+		await s.b.click(tank.cx, tank.cy);
+		await sleep(200);
+		assert.equal(await s.panelId(), 'T1', 'the lettering picks the node it names');
+		assert.deepEqual(await s.ops(), []);
+		assert.deepEqual(s.exceptions(), []);
+	});
+});

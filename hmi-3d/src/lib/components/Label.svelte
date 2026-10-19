@@ -26,7 +26,8 @@
 		title,
 		value = '',
 		good = true,
-		anchor = 'center'
+		anchor = 'center',
+		onpick
 	}: {
 		at: Vec3;
 		title: string;
@@ -36,6 +37,10 @@
 		 * or its right or left end, vertically centred (a tag beside a
 		 * device in a rack, level with it). */
 		anchor?: 'center' | 'left' | 'right';
+		/** A click on the lettering picks the node it names — the one way to
+		 * pick a node whose model sits behind another's. Absent: the label
+		 * takes no pointer events at all. */
+		onpick?: () => void;
 	} = $props();
 	const palette = getContext<Palette>('hmi3d:palette') ?? DEFAULT_PALETTE;
 	const view = getContext<ViewState | undefined>('hmi3d:view');
@@ -80,18 +85,49 @@
 </script>
 
 <T.Group position={at} bind:ref={group}>
-	<HTML center pointerEvents="none">
-		<div
-			class="lbl"
-			class:toLeft={anchor === 'right'}
-			class:toRight={anchor === 'left'}
-			class:bad={!good}
-			style:font-size="{px}px"
-			style:color={palette.label.ink}
-			style:text-shadow={shadow}
-		>
+	<HTML center pointerEvents={onpick ? 'auto' : 'none'}>
+		{#snippet text()}
 			<b>{title}</b>{#if value}<span>{value}</span>{/if}
-		</div>
+		{/snippet}
+		{#if onpick}
+			<!-- A real button: the lettering picks the node it names. The
+			     overlay sits inside the canvas's wrapper, where the orbit
+			     controls and the raycaster listen: the pointer-down stays here
+			     (the orbit would capture the pointer and swallow the click),
+			     and the click stays here (behind the lettering is the floor,
+			     which would deselect). Capture-phase handlers: Svelte delegates
+			     a plain onclick to the root, which is too late to stop a native
+			     listener on the wrapper in between. -->
+			<button
+				type="button"
+				class="lbl pick"
+				class:toLeft={anchor === 'right'}
+				class:toRight={anchor === 'left'}
+				class:bad={!good}
+				style:font-size="{px}px"
+				style:color={palette.label.ink}
+				style:text-shadow={shadow}
+				onpointerdowncapture={(e) => e.stopPropagation()}
+				onclickcapture={(e) => {
+					e.stopPropagation();
+					onpick();
+				}}
+			>
+				{@render text()}
+			</button>
+		{:else}
+			<div
+				class="lbl"
+				class:toLeft={anchor === 'right'}
+				class:toRight={anchor === 'left'}
+				class:bad={!good}
+				style:font-size="{px}px"
+				style:color={palette.label.ink}
+				style:text-shadow={shadow}
+			>
+				{@render text()}
+			</div>
+		{/if}
 	</HTML>
 </T.Group>
 
@@ -117,6 +153,15 @@
 	}
 	.toRight {
 		transform: translateX(50%);
+	}
+	/* The button is lettering too: no chrome of its own. */
+	.pick {
+		cursor: pointer;
+		background: none;
+		border: 0;
+		margin: 0;
+		font: inherit;
+		font-size: inherit;
 	}
 	.bad {
 		opacity: 0.6;
