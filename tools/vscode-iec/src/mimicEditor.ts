@@ -75,8 +75,9 @@ function setSnapToGridConfig(value: boolean): void {
 }
 
 /** The shared live-values switch (liveValues.ts owns it; the toolbar pill
- * flips it through the same `nautilus.liveValues.toggle` command). */
-function liveEnabled(): boolean {
+ * flips it through the same `nautilus.liveValues.toggle` command). Shared
+ * with the scene editor (sceneEditor.ts), which polls the same way. */
+export function liveEnabled(): boolean {
   return vscode.workspace.getConfiguration("nautilus").get<boolean>("liveValues.enabled", true);
 }
 
@@ -87,7 +88,7 @@ export function reopenAsText(uri: vscode.Uri): void {
 }
 
 /** Fetch the controller's tag snapshot, or null when unreachable. */
-async function fetchTags(): Promise<Record<string, unknown> | null> {
+export async function fetchTags(): Promise<Record<string, unknown> | null> {
   const url = vscode.workspace.getConfiguration("nautilus").get<string>("runtimeUrl", "http://localhost:8080");
   try {
     const resp = await fetch(`${url}/api/state`, { signal: AbortSignal.timeout(1500) });

@@ -26,6 +26,7 @@ import { LdEditorProvider, LdPreview } from "./ldPreview";
 import { SfcEditorProvider, SfcPreview } from "./sfcPreview";
 import { registerDiagramCommands } from "./diagramCommands";
 import { MimicEditorProvider } from "./mimicEditor";
+import { SceneEditorProvider } from "./sceneEditor";
 import { ComponentEditorProvider } from "./componentEditor";
 import { UserComponentManager } from "./userComponents";
 import { registerEditComponentPortsCommand } from "./editComponentPorts";
@@ -155,6 +156,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // doc is spatial-first; the JSON is an "Open With → Text Editor" away).
   const mimic = new MimicEditorProvider(context, userComponents);
   context.subscriptions.push(mimic.register());
+  // "*.scene.json" opens as the 3D scene editor by default, for the same
+  // reason (docs/design/spatial-hmi.md §3g).
+  context.subscriptions.push(new SceneEditorProvider(context).register());
   context.subscriptions.push(new ComponentEditorProvider(context, userComponents).register());
   // Graphical port editing for BUILT-INS (Tank, Pump, ...), reusing the same
   // Component Editor a project's own custom components get — shares the

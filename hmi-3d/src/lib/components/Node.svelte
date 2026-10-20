@@ -14,7 +14,7 @@
 	// node. That is how a component composes kinds, and how a data
 	// assembly's parts render.
 	import { T } from '@threlte/core';
-	import { BoxGeometry } from 'three';
+	import { BoxGeometry, type Group } from 'three';
 	import type { IntersectionEvent } from '@threlte/extras';
 	import { getContext, setContext, type Snippet } from 'svelte';
 	import { SCENE, NODE, type SceneContext, type NodeContext } from '../context.js';
@@ -26,6 +26,7 @@
 	import AlarmMarker from './AlarmMarker.svelte';
 	import Label from './Label.svelte';
 	import Pipe from './Pipe.svelte';
+	import { resolvePick, seeThrough } from '../pick.js';
 	import Self from './Node.svelte';
 
 	let {
@@ -97,6 +98,22 @@
 	let labelAt = $derived<Vec3>(labelAtProp ?? def?.labelAt ?? [bounds.center[0], bounds.center[1] + bounds.size[1] / 2 + 0.02, bounds.center[2]]);
 	let nodeProps = $derived<NodeProps>({ value, good, label: title, selected: isSel, ...props, ...over });
 	let pickable = $derived(!parent && id !== undefined);
+	/** The node's root group, announced with the node so an editor can
+	 * attach a gizmo to it. */
+	let group = $state<Group>();
+	// The group carries the node's id for the raycaster's hits, so a click
+	// on any mesh under the pointer resolves to the node it belongs to.
+	$effect(() => {
+		if (group) group.userData.nodeId = pickable ? id : undefined;
+	});
+	/** The node a click picks: the frontmost opaque one under the pointer
+	 * (through a tank's glass to the pump inside), and one deeper when the
+	 * natural target is already selected (pick.ts). The frontmost node's
+	 * handler is the one that fires, so it decides for everything behind. */
+	function pickTarget(e: IntersectionEvent<MouseEvent>): string {
+		const hits = e.intersections.map((h) => ({ node: h.eventObject.userData.nodeId as string | undefined, opaque: !seeThrough(h.object) }));
+		return resolvePick(hits, scene?.selected) ?? id!;
+	}
 
 	setContext<NodeContext>(NODE, {
 		get value() {
@@ -115,7 +132,7 @@
 
 	$effect(() => {
 		if (parent || !scene || id === undefined) return;
-		return scene.register({ id, tag, bind, kind, label: title });
+		return scene.register({ id, tag, bind, kind, label: title, object: group });
 	});
 	// A node that goes away while hovered must not leave the cursor behind.
 	$effect(() => () => {
@@ -125,6 +142,7 @@
 
 {#if scene}
 	<T.Group
+		bind:ref={group}
 		position={pos}
 		rotation={rad(rot)}
 		{scale}
@@ -145,7 +163,7 @@
 			? (e: IntersectionEvent<MouseEvent>) => {
 					if (e.delta > DRAG_PX) return;
 					e.stopPropagation();
-					scene.pick(id!);
+					scene.pick(pickTarget(e));
 				}
 			: undefined}
 		oncontextmenu={pickable
@@ -206,7 +224,7 @@
 			</T.Mesh>
 		{/if}
 		{#if title}
-			<Label at={labelAt} anchor={labelAnchor} title={title} value={(status ?? def?.status)?.(value, good, over) ?? ''} {good} />
+			<Label at={labelAt} anchor={labelAnchor} title={title} value={(status ?? def?.status)?.(value, good, over) ?? ''} {good} onpick={pickable ? () => scene.pick(id!) : undefined} />
 		{/if}
 	</T.Group>
 {/if}

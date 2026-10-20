@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<!-- Host page for the scene editor's gesture harness (scene.test.mjs).
+		     Stands in for the extension's webview shell (src/sceneEditor.ts):
+		     mounts #app, loads the PRODUCTION scene-editor bundle unmodified,
+		     and performs the host side of the message protocol. No CSP, no
+		     acquireVsCodeApi, so vscodeApi.ts's fallback captures every posted
+		     message on window.__POSTED__ for the driver to assert on. -->
+		<title>scene gesture harness</title>
+		<link rel="stylesheet" href="./scene-editor.css" />
+		<style>
+			html, body { margin: 0; height: 100%; }
+			#app { height: 100vh; }
+		</style>
+	</head>
+	<body>
+		<div id="app"></div>
+		<script>
+			window.__POSTED__ = [];
+			window.__deliver = (msg) => window.postMessage(msg, '*');
+			window.__posted = () => window.__POSTED__;
+			window.__ops = () => window.__POSTED__.filter((m) => m && m.type === 'sceneOp').map((m) => m.op);
+			window.__reset = () => { window.__POSTED__.length = 0; };
+
+			const vpCenter = (el) => {
+				const r = el.getBoundingClientRect();
+				return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, w: r.width, h: r.height, left: r.left, top: r.top };
+			};
+			// Palette buttons, in order, with the armed one flagged.
+			window.__kinds = () =>
+				Array.from(document.querySelectorAll('[data-kind=palette-item]')).map((b) => ({
+					name: b.dataset.id, armed: b.classList.contains('armed'), ...vpCenter(b)
+				}));
+			// The stage's WebGL canvas.
+			window.__canvas = () => {
+				const c = document.querySelector('.stage canvas');
+				return c ? vpCenter(c) : null;
+			};
+			// The floating labels the renderer draws (hmi-3d's Label: an HTML
+			// overlay per node) — title text and viewport centre, so a click can
+			// be aimed at a node by name.
+			window.__labels = () =>
+				Array.from(document.querySelectorAll('.stage .lbl')).map((l) => ({
+					title: l.querySelector('b')?.textContent?.trim() ?? l.textContent.trim(), ...vpCenter(l)
+				}));
+			// The node panel's id field, when a node is selected.
+			window.__panelId = () => {
+				const inp = document.querySelector('aside[aria-label=Properties] input');
+				return inp ? inp.value : null;
+			};
+			// A button by the start of its text (toolbar looks, the panel's actions).
+			window.__button = (text) => {
+				const b = Array.from(document.querySelectorAll('button')).find((x) => x.textContent.trim().startsWith(text));
+				return b ? { active: b.classList.contains('active'), ...vpCenter(b) } : null;
+			};
+			window.__footer = () => document.querySelector('footer')?.textContent.trim() ?? '';
+			window.__ready = () => !!document.querySelector('[data-kind=palette-item]') && !!document.querySelector('.stage canvas');
+		</script>
+		<script src="./scene-editor.js"></script>
+	</body>
+</html>

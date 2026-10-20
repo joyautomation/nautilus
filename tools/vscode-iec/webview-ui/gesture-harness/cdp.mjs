@@ -46,7 +46,11 @@ export class Browser {
 		ws.addEventListener('message', (ev) => this._onMessage(ev));
 	}
 
-	static async launch({ width = 1400, height = 900, headless = true } = {}) {
+	/** `webgl`: software WebGL (SwiftShader through ANGLE) for a bundle that
+	 * draws into a canvas — the scene editor's three.js stage. Off by
+	 * default: the 2D editors never need it and the GPU process costs a
+	 * second per launch. */
+	static async launch({ width = 1400, height = 900, headless = true, webgl = false } = {}) {
 		const chrome = findChrome();
 		const userDataDir = mkdtempSync(join(tmpdir(), 'mimic-harness-'));
 		const args = [
@@ -55,7 +59,7 @@ export class Browser {
 			`--user-data-dir=${userDataDir}`,
 			'--no-first-run',
 			'--no-default-browser-check',
-			'--disable-gpu',
+			...(webgl ? ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] : ['--disable-gpu']),
 			'--disable-dev-shm-usage',
 			// Off by default; GitHub's ubuntu-24.04 runners refuse Chrome's
 			// sandbox (AppArmor blocks unprivileged user namespaces), so CI sets this.

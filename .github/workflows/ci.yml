@@ -176,6 +176,11 @@ jobs:
       - name: Build hmi (webview-ui's local dependency)
         run: npm ci && npm run package
         working-directory: hmi
+      # ...and hmi-3d the same way (file:../../../hmi-3d), for the scene
+      # editor's bundle; its dist/ must exist before webview-ui type-checks.
+      - name: Build hmi-3d (webview-ui's local dependency)
+        run: npm ci && npm run package
+        working-directory: hmi-3d
       # webview-ui is a separate npm package (its own lockfile/deps, e.g.
       # the local hmi package the mimic routing tests import) — `npm test`
       # now also runs its pure-logic test files, so its deps must exist too.
@@ -204,6 +209,9 @@ jobs:
       - name: Build hmi (webview-ui's local dependency)
         run: npm ci && npm run package
         working-directory: hmi
+      - name: Build hmi-3d (webview-ui's local dependency)
+        run: npm ci && npm run package
+        working-directory: hmi-3d
       - run: npm ci
       - run: npm ci --prefix webview-ui
       - run: npm --prefix webview-ui run build
