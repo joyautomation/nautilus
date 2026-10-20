@@ -16,8 +16,10 @@ to see what the VS Code extension does against a real project.
 
 - **[`lift-station/`](lift-station/)** — a duplex sewage lift station: SFC
   duty/standby sequencing, an FBD level-to-speed PID, LD interlocks and a
-  ladder-authored motor-starter library, Modbus TCP to the VFDs, and a
-  custom-component HMI mimic.
+  ladder-authored motor-starter library, Modbus TCP to the VFDs, a
+  custom-component HMI mimic — and the same station in 3D beside it
+  (`lift-station.scene.json`: flat-tag bindings, six kinds as glTF data),
+  so the two views can be compared.
 - **[`batch-skid/`](batch-skid/)** — a two-ingredient batch mixing skid: SFC
   recipe phases with every qualifier, an FBD dosing/temperature PID, an
   EtherNet/IP handshake with an "existing" Logix line (a read-only `.L5X`,
@@ -88,6 +90,7 @@ is four projects, not one — `naut run sites/well-1`, `sites/well-2`,
 | HMI: a mimic with custom Svelte components and port overrides | lift-station | `hmi/`, `lift-station.mimic.json` |
 | HMI: a mimic built entirely from the kit's built-in components | batch-skid, remote-fleet | `batch-skid.mimic.json`, `scada/fleet.mimic.json` |
 | HMI: a 3D scene bound to struct tags (`@joyautomation/nautilus-hmi-3d`) | spatial-rig | `rig.scene.json`, `hmi/` |
+| HMI: a 3D scene over flat tags (`bind`, no struct), its kinds as glTF data, beside the 2D mimic of the same station | lift-station | `lift-station.scene.json`, `hmi/models/build.py`, `hmi/src/routes/3d/` |
 | The SDK path: a custom `io.Driver`, no manifest | go-sdk | `plant.go` |
 | A plant simulation of IT hardware: a `replay` driver, fault inputs as tags, `naut snmp serve --from` | it-cluster | `lib/switch.st`, `replay_manifest.yaml` |
 

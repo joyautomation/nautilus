@@ -122,8 +122,24 @@ describe('assemblies', () => {
 		expect(r.skid.members).toEqual(['Fault', 'Pump', 'Valve']);
 		expect(r.skid.status?.({ Fault: true }, true)).toBe('FAULT');
 		expect(r.skid.bounds).toEqual(assemblyBounds(skid.assembly!, registry));
-		// with no glTF component (flat look), the model kind stays the Svelte kind
+		// with no glTF component (the chunk not loaded), the model kind stays the Svelte kind
 		expect(r.pump).toBe(registry.pump);
+	});
+
+	it('registryFor draws a model kind in every look unless a Svelte kind has its name', () => {
+		const gltf = {} as unknown as Parameters<typeof registryFor>[2];
+		const doc: SceneDoc = {
+			kinds: { pump: { model: 'models/pump.glb' }, 'wet-well': { model: 'models/wet-well.glb', status: '{Level:1} %' } },
+			nodes: []
+		};
+		const lit = registryFor(doc, registry, gltf, true);
+		expect(lit.pump.component).toBe(gltf);
+		expect(lit['wet-well'].component).toBe(gltf);
+		// flat or paper: the built-in's primitives are the before/after; a new name keeps its model
+		const flat = registryFor(doc, registry, gltf, false);
+		expect(flat.pump).toBe(registry.pump);
+		expect(flat['wet-well'].component).toBe(gltf);
+		expect(flat['wet-well'].status?.({ Level: 42 }, true)).toBe('42.0 %');
 	});
 
 	it('validates parts as nodes in the kind’s frame, tags as members, and stays flat', () => {
@@ -184,5 +200,22 @@ describe('how a part reads its struct', () => {
 	it('resolveRefs uses the reader, negation and absence as everywhere', () => {
 		const out = resolveRefs({ running: 'Pump.Running', off: '!Pump.Running', missing: 'Nope' }, (p) => readPart(sk, {}, p));
 		expect(out).toEqual({ running: true, off: false });
+	});
+});
+
+describe('status with bound overrides (a flat-tag project)', () => {
+	// A node with no struct tag binds every prop (`bind: { level: "LIT101_Level" }`);
+	// the geometry reads those overrides, and so must the label's status.
+	it('a data kind’s template reads the node’s bound props', () => {
+		const doc: SceneDoc = { kinds: { well: { model: 'models/well.glb', status: '{Level:1} %' } }, nodes: [] };
+		const r = registryFor(doc, registry, fake());
+		expect(r.well.status?.(undefined, true, { level: 61.26 })).toBe('61.3 %');
+		expect(r.well.status?.(undefined, true)).toBe('— %');
+	});
+	it('a component kind’s template reads them too', () => {
+		const meta: KindMeta = { type: 'Skid', members: ['Fault'] };
+		const mods = { '/src/lib/Skid.svelte': { default: fake(), kind: meta } };
+		const r = componentRegistry({ kinds: { skid: { component: 'hmi/src/lib/Skid.svelte', members: meta.members, status: '{Fault?FAULT:ok}' } }, nodes: [] }, mods, registry);
+		expect(r.registry.skid.status?.(undefined, true, { fault: true })).toBe('FAULT');
 	});
 });

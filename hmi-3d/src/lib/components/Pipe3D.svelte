@@ -1,9 +1,11 @@
 <script lang="ts">
 	// A pipe run: cylinders along a polyline with spheres at the bends.
-	// Flow shows as the fluid colour, and as chevrons travelling the run in
-	// the order of its points; a bad-quality binding greys it out and stops
-	// them. In the paper look the pipe stays white and the chevrons are the
-	// whole story.
+	// Flow shows as the fluid colour, and as motion along the run in the
+	// order of its points: in the lit and flat looks a train of bulges in
+	// the pipe's own colour (a slug travelling the line, the way argonaut's
+	// site pipes show it), on paper a train of inked chevrons, since a
+	// bulge on a white pipe against white paper is nothing. A bad-quality
+	// binding greys the pipe out and stops the train.
 	import { T, useTask } from '@threlte/core';
 	import { Quaternion, Vector3 } from 'three';
 	import { getContext } from 'svelte';
@@ -38,34 +40,38 @@
 	);
 	let color = $derived(!good ? palette.stale : flowing ? palette.fluid : palette.steel);
 
-	// The chevrons: one every `pitch` along each segment, all advancing
-	// together at `speed`, so a run reads as one stream. Sized off the
-	// pipe, standing proud of it, so they show on an opaque pipe too.
-	let pitch = $derived(Math.max(0.12, radius * 12));
-	let speed = $derived(pitch * 2);
+	// The train: one marker every `pitch` of distance along the whole run
+	// (segment to segment, so a slug crosses a bend instead of restarting
+	// after it), all advancing together at `speed`. Chevrons are closer
+	// together and quicker than bulges, as marks are to a moving mass.
+	let total = $derived(segments.reduce((a, s) => a + s.len, 0));
+	let pitch = $derived(view.paper ? Math.max(0.12, radius * 12) : Math.max(0.3, radius * 18));
+	let speed = $derived(view.paper ? pitch * 2 : pitch * 1.2);
 	let head = $derived(radius * 1.8);
+	// A bulge: a sphere a little wider than the pipe, stretched along it.
+	let bulge = $derived(radius * 1.28);
+	let margin = $derived(view.paper ? head : bulge * 2.2);
 	let phase = $state(0);
 	let moving = $derived(arrows && flowing && good);
 	useTask((dt) => {
 		if (moving) phase = (phase + speed * dt) % pitch;
 	});
-	let chevrons = $derived.by(() => {
+	let train = $derived.by(() => {
 		if (!moving) return [];
 		const out: { pos: Vec3; quat: [number, number, number, number] }[] = [];
-		for (const s of segments) {
-			const n = Math.floor((s.len - head * 2) / pitch);
-			if (n < 1) continue;
-			// Centre the train in the segment, then slide it by the phase.
-			const start = (s.len - (n - 1) * pitch) / 2 - pitch / 2;
-			for (let k = 0; k < n; k++) {
-				const t = start + k * pitch + phase;
-				if (t < head || t > s.len - head) continue;
-				out.push({ pos: [s.a[0] + s.dir[0] * t, s.a[1] + s.dir[1] * t, s.a[2] + s.dir[2] * t], quat: s.quat });
-			}
+		let k = 0;
+		let before = 0;
+		for (let d = phase; d < total; d += pitch) {
+			while (k < segments.length - 1 && d > before + segments[k].len) before += segments[k++].len;
+			const s = segments[k];
+			const t = d - before;
+			// Keep a marker off the ends of the run, where it would poke out
+			// of the open pipe or into whatever the run meets.
+			if (d < margin || d > total - margin) continue;
+			out.push({ pos: [s.a[0] + s.dir[0] * t, s.a[1] + s.dir[1] * t, s.a[2] + s.dir[2] * t], quat: s.quat });
 		}
 		return out;
 	});
-	let chevronColor = $derived(view.paper ? palette.ink : palette.shell);
 </script>
 
 {#each segments as s}
@@ -80,10 +86,18 @@
 		<T.MeshStandardMaterial {color} {...pbr} />
 	</T.Mesh>
 {/each}
-{#each chevrons as c}
-	<!-- an arrowhead pointing +y, turned onto the segment; no clicks, no ink -->
-	<T.Mesh position={c.pos} quaternion={c.quat} raycast={() => {}} userData={{ ink: false }}>
-		<T.ConeGeometry args={[head, head * 2, 4]} />
-		<T.MeshBasicMaterial color={chevronColor} />
-	</T.Mesh>
+{#each train as c}
+	{#if view.paper}
+		<!-- an arrowhead pointing +y, turned onto the segment; no clicks, no ink of its own -->
+		<T.Mesh position={c.pos} quaternion={c.quat} raycast={() => {}} userData={{ ink: false }}>
+			<T.ConeGeometry args={[head, head * 2, 4]} />
+			<T.MeshBasicMaterial color={palette.ink} />
+		</T.Mesh>
+	{:else}
+		<!-- a slug: the pipe's own colour, so it reads as the pipe swelling -->
+		<T.Mesh position={c.pos} quaternion={c.quat} scale={[1, 2.2, 1]} raycast={() => {}} userData={{ ink: false }}>
+			<T.SphereGeometry args={[bulge, 20, 12]} />
+			<T.MeshStandardMaterial {color} {...pbr} />
+		</T.Mesh>
+	{/if}
 {/each}

@@ -121,9 +121,10 @@ export interface ScenePipe {
 	/** `flowing` is the one live prop a pipe has, the same key the mimic's
 	 * pipe binds. Booleans as-is; a number is flowing above 2 (%). */
 	bind?: { flowing?: string };
-	/** Chevrons travelling along the run while it flows (default true), so
-	 * direction reads even where colour cannot. The run's direction is the
-	 * order of its points. */
+	/** Motion along the run while it flows (default true): a train of
+	 * bulges in the lit and flat looks, of chevrons on paper, so direction
+	 * reads even where colour cannot. The run's direction is the order of
+	 * its points. */
 	arrows?: boolean;
 }
 

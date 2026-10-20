@@ -16,6 +16,10 @@
 #   permissives.ld   HOA, interlocks, the high-high override, fail-to-run
 #   stats.st         runtime hours/starts, the flow totalizer
 #   sim.st           bench only: the wet well and two pump/VFD models
+#
+# The operator screen (hmi/, served from server.hmi once built) carries the
+# P&ID mimic (lift-station.mimic.json) and, at /3d, the same station in
+# 3D (lift-station.scene.json); `naut check` holds both files to the tags.
 name: lift-station
 
 server:

@@ -9,7 +9,8 @@
 	import { onMount, setContext, type Snippet } from 'svelte';
 	import { Canvas } from '@threlte/core';
 	import type { RealtimeClient, AlarmClient, NautilusFrame } from '@joyautomation/nautilus-hmi';
-	import { validateScene, type SceneCamera, type SceneDoc, type SceneEnvironment, type SceneError, type SceneGrid, type SceneLook } from '../scene.js';
+	import { readPath, resolveRefs } from '../bindings.js';
+	import { validateScene, refRoot, type SceneCamera, type SceneDoc, type SceneEnvironment, type SceneError, type SceneGrid, type SceneLook } from '../scene.js';
 	import { builtinRegistry, componentRegistry, type NodeRegistry } from '../registry.js';
 	import { worstAlarmByAsset, alarmAsset } from '../alarms.js';
 	import { DEFAULT_PALETTE, paletteFromTheme, paperPalette, type Palette } from '../palette.js';
@@ -60,7 +61,10 @@
 		 * (§3f): near-white fills, inked edges, colour only on an alarm.
 		 * Absent: the document's `look`, else `lit`. */
 		look?: SceneLook;
+		/** The picked node's id. Bind it to follow the selection; Escape
+		 * clears it (and closes the drawer). */
 		selected?: string | null;
+		/** A node was picked. Not called on Escape — a bound `selected` goes null. */
 		onselect?: (id: string) => void;
 		/** A node was right-clicked (a context menu's cue); `event` is the
 		 * browser's, for clientX / clientY. Picks nothing. */
@@ -105,11 +109,32 @@
 	let nodeAlarms = $derived(
 		node?.tag ? (alarms?.instances ?? []).filter((a) => a.state !== 'normal' && alarmAsset(a.tag) === node!.tag) : []
 	);
+	// What the drawer shows: the struct under the node's tag, or, for a
+	// flat-tag node, its bound refs resolved into one object under the
+	// member names (the same map the geometry reads). Quality is the
+	// tag's, or the worst of the refs' root tags.
+	let nodeValue = $derived(node?.tag ? tags[node.tag] : node?.bind ? resolveRefs(node.bind, (p) => readPath(tags, p)) : undefined);
+	let nodeQuality = $derived.by(() => {
+		if (!node) return 'good';
+		if (node.tag) return rt.quality(node.tag);
+		for (const ref of Object.values(node.bind ?? {})) {
+			const q = rt.quality(refRoot(ref));
+			if (q !== 'good') return q;
+		}
+		return 'good';
+	});
 
 	function pick(id: string) {
 		selected = id;
 		if (inspector) drawerOpen = true;
 		onselect?.(id);
+	}
+	// Escape deselects, wherever the focus is: the cage goes, the drawer
+	// closes (the kit's Drawer closes itself on Escape too, as a dialog).
+	function onkey(e: KeyboardEvent) {
+		if (e.key !== 'Escape' || selected === null) return;
+		selected = null;
+		drawerOpen = false;
 	}
 
 	const sampler = new PerfSampler();
@@ -125,6 +150,8 @@
 		};
 	});
 </script>
+
+<svelte:window onkeydown={onkey} />
 
 <div class="stage" bind:this={stage}>
 	{#if !check.ok}
@@ -171,8 +198,8 @@
 		bind:open={drawerOpen}
 		{node}
 		def={node?.kind ? withComponents.registry[node.kind] : undefined}
-		value={node?.tag ? tags[node.tag] : undefined}
-		quality={node?.tag ? rt.quality(node.tag) : 'good'}
+		value={nodeValue}
+		quality={nodeQuality}
 		alarms={nodeAlarms}
 	/>
 {/if}

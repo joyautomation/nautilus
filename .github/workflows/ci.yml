@@ -138,7 +138,7 @@ jobs:
           retention-days: 14
 
   hmi-3d:
-    name: HMI 3D package — test, check, package; build the example
+    name: HMI 3D package — test, check, package; build the examples
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -157,6 +157,10 @@ jobs:
       # examples/well-site/hmi: the paper look (design §3f), same arrangement.
       - run: npm ci && npm run check && npm run build
         working-directory: examples/well-site/hmi
+      # examples/lift-station/hmi links the package the same way, for the
+      # /3d view it carries beside its mimic (lift-station.scene.json).
+      - run: npm ci && npm run check && npm run build
+        working-directory: examples/lift-station/hmi
   vscode-iec:
     name: VS Code extension — compile, test
     runs-on: ubuntu-latest

@@ -17,6 +17,10 @@ describe('tank', () => {
 		expect(tankStatus({ Level: 48.25 }, true)).toBe('48.3 %');
 		expect(tankStatus({ Level: 48.25 }, false)).toBe('stale');
 	});
+	it('status reads the bound override too, so a flat-tag label agrees with the fluid', () => {
+		expect(tankStatus(undefined, true, { level: 61.26 })).toBe('61.3 %');
+		expect(tankStatus({ Level: 10 }, true, { level: 61.26 })).toBe('61.3 %');
+	});
 });
 
 describe('pump', () => {
@@ -30,6 +34,11 @@ describe('pump', () => {
 		expect(pumpStatus({ Running: true, Fault: true }, true)).toBe('FAULT');
 		expect(pumpStatus({ Running: true }, false)).toBe('stale');
 	});
+	it('status reads the bound overrides (a flat-tag pump)', () => {
+		expect(pumpStatus(undefined, true, { running: true, speed: 50 })).toBe('run 50 %');
+		expect(pumpStatus(undefined, true, { running: false })).toBe('stopped');
+		expect(pumpStatus(undefined, true, { fault: true })).toBe('FAULT');
+	});
 });
 
 describe('valve', () => {
@@ -40,5 +49,8 @@ describe('valve', () => {
 	it('status', () => {
 		expect(valveStatus({ Pos: 40.4, Cmd: 50 }, true)).toBe('40 % (cmd 50)');
 		expect(valveStatus({ Pos: 40 }, false)).toBe('stale');
+	});
+	it('status reads the bound overrides (a flat-tag valve)', () => {
+		expect(valveStatus(undefined, true, { pos: 100, cmd: 100 })).toBe('100 % (cmd 100)');
 	});
 });

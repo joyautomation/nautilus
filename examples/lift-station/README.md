@@ -117,6 +117,7 @@ commits, independent of both the working tree and the controller.
 | Acceptance tests: virtual time, `suspend:`, `advance:`/`until:`, alarm verbs | `lift-station_test.yaml` | [Testing](https://nautilus.joyautomation.com/reference/testing/) |
 | HMI: a P&ID mimic (`*.mimic.json`), custom components + port sidecars | `lift-station.mimic.json`, `hmi/src/lib/*.component.json` | [HMI kit](https://nautilus.joyautomation.com/reference/hmi/) |
 | HMI: faceplates, alarm banner/ack, live trend, driver status, scan diagnostics | `hmi/src/routes/+page.svelte` | [HMI kit](https://nautilus.joyautomation.com/reference/hmi/) |
+| HMI: the same station in 3D — a `*.scene.json` over flat tags, six kinds as glTF data | `lift-station.scene.json`, `hmi/models/build.py`, `hmi/src/routes/3d/` | [3D package](../../hmi-3d/README.md) |
 
 ## The control narrative
 
@@ -238,7 +239,7 @@ where the point is exercising reads/writes, not a full run simulation.
 
 `hmi/` is a SvelteKit app built on the published
 [`@joyautomation/nautilus-hmi`](https://www.npmjs.com/package/@joyautomation/nautilus-hmi)
-kit (0.6.0) — one page, not a catalog: the wet-well mimic, an alarm banner
+kit (0.8.0) — one page, not a catalog: the wet-well mimic, an alarm banner
 with an ack-all button, two pump faceplates (HOA selector, running/speed/
 amps, starts/run-hours from `P101_Stats`/`P102_Stats`, fail-to-run/locked-
 out pills, a Reset faults button), the five level setpoints
@@ -248,9 +249,14 @@ panel (honestly empty here — this project runs the loopback/Modbus
 drivers, not EtherNet/IP or Sparkplug), and scan diagnostics. It follows
 `examples/hmi-demo`'s pattern; that example's README is the deeper
 reference for the mimic format, custom components, faceplates and the
-dev proxy.
+dev proxy. A second route, `/3d`, is the same station in 3D (below).
+
+The 3D view consumes `@joyautomation/nautilus-hmi-3d` from this checkout
+(`file:../../../hmi-3d`, as `examples/spatial-rig` does), so build that
+package once first:
 
 ```sh
+cd ../../hmi-3d && npm install && npm run package && cd -
 cd hmi
 npm install
 npm run dev             # http://localhost:5173, proxying /api to :8080 —
@@ -329,3 +335,52 @@ until one is added:
 
 `SeqStepTag.svelte` (the `SeqStep` readout) is custom too, but ports-free
 and unanchored — nothing pipes to a text label, so it has no sidecar.
+
+### The 3D view
+
+`/3d` is the same station in space: `lift-station.scene.json`, at the
+project root beside the mimic, rendered by
+[`@joyautomation/nautilus-hmi-3d`](../../hmi-3d) (the package
+`examples/spatial-rig` is the test bed for). It places the equipment the
+mimic draws — WW-101 cut open, the two floats on their cables, P-101 and
+P-102 on the well floor, CV-101 and CV-102 on a valve pad, the force-main
+connector — in metres, and binds the same tags: the water in the well is
+`LIT101_Level`; each pump's body goes green, its lamp lights and its
+impeller turns on `P101_Running` / `P101_SpeedHz`; each float swings up
+on `LSHH101` / `LSLL101`; the discharge pipes flow on the pump's running
+bit and the header on `FIT101_Flow`. The mimic's two readouts become
+label text (`LIT-101 62.3 %` on the well, `12.34 L/s` on a flow meter
+FIT-101 on the header), and its `SeqStep` pill and the alarm banner sit
+in the HUD, where a drawing has no place for them. Orbit with the mouse,
+click an asset for its drawer; `?perf` adds the frame rate and latency.
+The HUD's look button cycles `lit` (the models in their own paint),
+`flat` (the same models matte) and `paper` (the station as a line
+drawing, design §3f — the look `examples/well-site` opens in); `?look=paper`
+starts there. Keeping the P&ID and the 3D view of one station side by
+side is the point: each is a check on the other.
+
+Two things about the file are worth reading:
+
+- **Flat tags, no struct.** The rig binds one struct tag per node and
+  reads members off it (`P101.Running`); this project's tags are flat
+  (`P101_Running`), so every node here has no `tag` and a `bind` map
+  instead — the mimic's own grammar, `"bind": { "running": "P101_Running",
+  "speedHz": "P101_SpeedHz" }`, supplying each member the kind reads, in
+  the label's status text as well as the geometry. `naut check .` holds
+  every ref to the manifest's tags. One thing the struct-tag form gives
+  that this cannot yet: alarm halos follow a node's `tag`, so here the
+  alarms are in the HUD banner, not on the equipment.
+- **Six kinds as data.** The package's built-ins are a tank, a pump and a
+  valve; a lift station has a wet well, submersible pumps, float switches,
+  check valves, a flow meter and a force main leaving the drawing. Each is
+  a `kinds` entry with a glTF under `hmi/static/models/` and a `drive`
+  list naming the meshes live values move (`Fluid` scales with level,
+  `Motor` and `Volute` tint while running, `FloatUp` / `FloatDown` show by
+  the switch, `Display` lights with flow), plus a `status` template for the
+  label — no Svelte names a pump. `hmi/models/build.py` generates the six
+  models with Blender (`blender -b -P hmi/models/build.py`), the same
+  recipe as the package's own `models/build.py`, so a mesh name or a
+  dimension is a line to change and a file to regenerate.
+
+The scene editor (drag-to-place, a palette) is not here yet: the
+positions in the file were set by hand against the running process.

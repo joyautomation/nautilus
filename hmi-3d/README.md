@@ -81,8 +81,9 @@ alarms by priority, greys anything whose tag is not good quality, and with
 - **`bind`** is the mimic's binding map, `prop -> ref`, with dotted paths:
   `"cmd": "Demand"`, `"speed": "P101.Speed"`, `"ok": "!P101.Fault"`. An
   absent tag leaves the prop unset. A bound prop overrides the member on the
-  built-in kinds, so a project with flat tags (`T101_Level`) can use `tank`
-  with no `tag` at all.
+  built-in kinds — in the geometry and in the label's status text — so a
+  project with flat tags (`T101_Level`) can use `tank` with no `tag` at all
+  (`examples/lift-station` is one).
 - **`pipes`** bind `flowing` (a boolean as-is, a number above 2 %).
 - **`fixtures`** are static context (`box`, `plane`, `marker`); `grid` is
   a reference grid on a horizontal plane.
@@ -303,12 +304,17 @@ maps. The built-ins get metalness/roughness in this look, colours unchanged.
 `<SceneView look="flat">` renders the same document as Milestone 1 did —
 primitives, three lights, no assets — for a project without assets, a
 low-end tier, or a before/after. `bind:look` and a button in the `hud`
-snippet flip it live (`examples/spatial-rig/hmi` does).
+snippet flip it live (`examples/spatial-rig/hmi` does). A data kind under
+a built-in's name yields to the built-in here (that is the before/after);
+one under a new name still draws its model, in the look's matte greys, so
+a station of modelled kinds (`examples/lift-station`) is never a page of
+labels over nothing.
 
 `look: "paper"` in the document (or `<SceneView look="paper">`, design
 §3f) draws it instead: near-white fills, every edge inked, a paper
 backdrop. The only colour is an alarm, drawn as a
-soft glow; flow is the chevrons moving along the pipes. Pair it with an
+soft glow; flow is the chevrons moving along the pipes (the lit and flat
+looks show it as bulges travelling the pipe). Pair it with an
 orthographic camera for the isometric drawing:
 
 ```json

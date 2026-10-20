@@ -1,5 +1,56 @@
 # Changelog — @joyautomation/nautilus-hmi-3d
 
+## 0.2.1 — 2026-10-20
+
+**Changed.** In the lit and flat looks, flow is a train of bulges in the
+pipe's own colour — a slug travelling the line, crossing the bends, the
+way argonaut's site pipes show it — instead of the chevrons 0.2.0 rode
+in every look; on paper, where a bulge on a white pipe is nothing, the
+chevrons stay as the ink. `arrows: false` still goes without.
+
+**Changed.** A data kind (a `kinds` entry with a `model`) now draws in
+every look. The flat and paper looks left model kinds to the Svelte kind
+of the same name, so a scene whose kinds are all glTF under their own
+names — `examples/lift-station` — was labels over nothing once the look
+button was pressed. `GltfNode` now reads the view: flat wears the model's
+colours with no metalness and no maps (the built-ins' values), paper a
+near-white fill (the palette's fluid grey where the model is translucent)
+for `PaperOutlines` to ink, and a drive's tint or emissive goes on top of
+either. A model kind under a built-in's name still yields to the built-in
+in those looks, which is the before/after the flat look exists for;
+`registryFor` takes the look as a fourth argument to say so.
+
+**Fixed.** A data kind's translucent meshes (a well's water, a sight
+glass) took the click: the pick stops at the nearest hit, so every click
+on a pump standing in the well selected the well. A mesh whose material
+is transparent with opacity below 1 now takes no clicks — the eye looks
+through it, and so does the pick. The selection cage took the click too:
+once a well was selected, its box surrounded the pumps in it and every
+click on a pump re-selected the well. It no longer raycasts.
+
+**Added.** Escape deselects: the selection cage goes and the drawer
+closes; a bound `selected` reads `null`.
+
+**Fixed.** The drawer of a flat-tag node (a `bind` map, no `tag`) showed
+its quality and nothing else. It now lists every bound ref under its
+member name, with the tag it reads, and its quality is the worst of
+those tags'.
+
+**Fixed.** A node's label read its status off the struct tag alone. A
+flat-tag project (`"bind": { "level": "LIT101_Level" }` on a `tank` with
+no `tag`, the arrangement the README describes) drew the fluid at the
+bound level and labelled it `0.0 %`; a data kind's `{Level:1} %` read `—`.
+A kind's `status` — the built-ins', a data kind's template, a component's
+`kind` export — now receives the node's resolved `bind` map as a third
+argument, the same overrides the geometry reads, so the label and the
+model agree. The first flat-tag scene is `examples/lift-station`.
+
+**Changed.** The kit dependency is `@joyautomation/nautilus-hmi` ^0.8.0
+(the `AlarmSign` the lift station's mimic uses), the version an app that
+links both packages already has, so TypeScript sees one copy of the
+kit's classes (a `#private` field is only equal to itself when both
+copies are the same version). `examples/well-site/hmi` moves with it.
+
 ## 0.2.0 — 2026-10-16
 
 **Added.** The paper look (`look: "paper"` in the document, or
