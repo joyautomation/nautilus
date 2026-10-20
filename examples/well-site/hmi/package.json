@@ -10,7 +10,7 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
 	},
 	"dependencies": {
-		"@joyautomation/nautilus-hmi": "^0.7.0",
+		"@joyautomation/nautilus-hmi": "^0.8.0",
 		"@joyautomation/nautilus-hmi-3d": "file:../../../hmi-3d",
 		"@threlte/core": "^8.6.1",
 		"@threlte/extras": "^9.22.0",

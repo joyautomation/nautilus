@@ -1,42 +1,12 @@
 # Changelog — @joyautomation/nautilus-hmi-3d
 
-## 0.2.0 — 2026-10-16
+## 0.2.1 — 2026-10-20
 
-**Added.** The paper look (`look: "paper"` in the document, or
-`<SceneView look="paper">`; design §3f): the scene as an isometric line
-drawing — near-white fills, every edge inked, a paper backdrop — where
-the only colour is an alarm, drawn as a soft glow
-instead of the wireframe cage, and flow is the chevrons moving. The lines
-are `PaperOutlines`, an edge pass over every mesh in the scene that a kind
-opts a mesh out of with `userData={{ ink: false }}`; the colours are
-`paperPalette(theme)`, laid over the theme's so the priority colours come
-through untouched. `SceneDoc.look` is the document's choice, and the
-`look` prop now overrides it rather than defaulting to `lit`.
-
-**Added.** `camera.projection: "orthographic"` with `camera.width` (the
-metres across the view): no vanishing point, so a position on a 45°
-azimuth and a 35.26° elevation is the isometric drawing. The perspective
-camera and its `fov` are unchanged and remain the default.
-
-**Changed.** Labels are lettering, not cards, in every look: the title
-and the status as text with a tight halo in the backdrop's colour (the
-paper, or the theme's surface), no box and no border, so the drawing
-shows between the letters. They are sized in metres of the scene and
-clamped to 10–14 px, so on a phone they shrink with the drawing instead
-of covering it, and in perspective the far labels are the small ones.
-
-**Added.** Pipes carry motion along the run while it flows, in the order
-of the run's points, so direction reads even where colour cannot; a pipe
-sets `arrows: false` to go without. In the lit and flat looks it is a
-train of bulges in the pipe's own colour — a slug travelling the line,
-crossing the bends, the way argonaut's site pipes show it; on paper, where
-a bulge on a white pipe is nothing, it is a train of inked chevrons.
-
-**Changed.** The flat look's pipes and bends have more facets in the paper
-look so the edge pass draws a pipe as its silhouette.
-
-`naut check` and the extension's schema know `look`, `camera.projection`,
-`camera.width` and `pipes[].arrows`.
+**Changed.** In the lit and flat looks, flow is a train of bulges in the
+pipe's own colour — a slug travelling the line, crossing the bends, the
+way argonaut's site pipes show it — instead of the chevrons 0.2.0 rode
+in every look; on paper, where a bulge on a white pipe is nothing, the
+chevrons stay as the ink. `arrows: false` still goes without.
 
 **Changed.** A data kind (a `kinds` entry with a `model`) now draws in
 every look. The flat and paper looks left model kinds to the Svelte kind
@@ -74,6 +44,48 @@ A kind's `status` — the built-ins', a data kind's template, a component's
 `kind` export — now receives the node's resolved `bind` map as a third
 argument, the same overrides the geometry reads, so the label and the
 model agree. The first flat-tag scene is `examples/lift-station`.
+
+**Changed.** The kit dependency is `@joyautomation/nautilus-hmi` ^0.8.0
+(the `AlarmSign` the lift station's mimic uses), the version an app that
+links both packages already has, so TypeScript sees one copy of the
+kit's classes (a `#private` field is only equal to itself when both
+copies are the same version). `examples/well-site/hmi` moves with it.
+
+## 0.2.0 — 2026-10-16
+
+**Added.** The paper look (`look: "paper"` in the document, or
+`<SceneView look="paper">`; design §3f): the scene as an isometric line
+drawing — near-white fills, every edge inked, a paper backdrop — where
+the only colour is an alarm, drawn as a soft glow
+instead of the wireframe cage, and flow is the chevrons moving. The lines
+are `PaperOutlines`, an edge pass over every mesh in the scene that a kind
+opts a mesh out of with `userData={{ ink: false }}`; the colours are
+`paperPalette(theme)`, laid over the theme's so the priority colours come
+through untouched. `SceneDoc.look` is the document's choice, and the
+`look` prop now overrides it rather than defaulting to `lit`.
+
+**Added.** `camera.projection: "orthographic"` with `camera.width` (the
+metres across the view): no vanishing point, so a position on a 45°
+azimuth and a 35.26° elevation is the isometric drawing. The perspective
+camera and its `fov` are unchanged and remain the default.
+
+**Changed.** Labels are lettering, not cards, in every look: the title
+and the status as text with a tight halo in the backdrop's colour (the
+paper, or the theme's surface), no box and no border, so the drawing
+shows between the letters. They are sized in metres of the scene and
+clamped to 10–14 px, so on a phone they shrink with the drawing instead
+of covering it, and in perspective the far labels are the small ones.
+
+**Added.** Pipes carry chevrons along the run while it flows, in the order
+of the run's points, so direction reads even where colour cannot; a pipe
+sets `arrows: false` to go without. In the lit and flat looks they ride
+the pipe in the shell grey; on paper they are the ink.
+
+**Changed.** The flat look's pipes and bends have more facets in the paper
+look so the edge pass draws a pipe as its silhouette.
+
+`naut check` and the extension's schema know `look`, `camera.projection`,
+`camera.width` and `pipes[].arrows`.
 
 ## 0.1.4 — 2026-10-15
 
