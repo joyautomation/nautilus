@@ -162,8 +162,8 @@ the scene, and you drag what landed in the wrong place.
   pump inside the tank, not the tank); click the same spot again to go
   one deeper, or click a node's label.
 - **Lit / Flat / Paper** in the toolbar previews a look; **Use … as the
-  scene's look** in the panel writes it to the document. In flat and
-  paper a glTF kind draws as the built-in of its name, or a grey box.
+  scene's look** in the panel writes it to the document; the models
+  render in every look (on paper as white fills with inked edges).
 - Models, textures and HDRIs are found where `naut check` finds them
   (next to the scene, under `hmi/static/`, `hmi/build/`); a missing file
   is named in a banner and its kind draws as a grey box. A component kind

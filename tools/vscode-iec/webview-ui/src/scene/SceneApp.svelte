@@ -52,8 +52,8 @@
 	});
 	const LOOK_TIP: Record<SceneLook, string> = {
 		lit: 'Lit: materials and lights, the glTF models (the document\'s default)',
-		flat: 'Flat: the built-in primitives under three lights — a model kind draws as the built-in of its name, or a grey box',
-		paper: 'Paper: the scene as an isometric line drawing — a model kind draws as the built-in of its name, or a grey box'
+		flat: 'Flat: the models and primitives under plain lights, no environment',
+		paper: 'Paper: the scene as a line drawing — white fills, inked edges'
 	};
 
 	// Prune a selection whose node vanished (deleted via text editing).
