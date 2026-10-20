@@ -1,5 +1,22 @@
 # Changelog — @joyautomation/nautilus-hmi-3d
 
+## 0.2.2 — 2026-10-20
+
+**Added.** `PlacedNode.object`: a placed node announces its root group
+along with its id, tag, kind and label, so a tool outside the package can
+attach a gizmo to it — the scene editor in the VS Code extension moves a
+node with three's TransformControls on that group and writes the result
+back to the document as `pos` and `rot`. Everything the drawer read is
+unchanged.
+
+**Changed.** A click resolves across every node under the pointer, not
+only the nearest hit: the frontmost node with an opaque surface is picked
+(a built-in tank's shell, which still raycasts, is looked through the way
+a model's glass is since 0.2.1), and a click on the node already selected
+goes one deeper, so clicking the same spot again cycles through the nodes
+stacked there (`resolvePick`, `seeThrough`). A node's label picks it too,
+which reaches a node whose model is entirely behind another's.
+
 ## 0.2.1 — 2026-10-20
 
 **Changed.** In the lit and flat looks, flow is a train of bulges in the
