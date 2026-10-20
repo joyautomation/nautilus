@@ -774,7 +774,7 @@ gesture and every later move diffs as one `pos` line.
   cycles through what is stacked there, and a node's label picks it
   (hmi-3d `resolvePick`). The gizmo is three's
   `TransformControls` on the node's root group, which `PlacedNode.object`
-  now announces (hmi-3d 0.2.0). Move (G) or turn (R); release posts ONE
+  now announces (hmi-3d 0.2.2). Move (G) or turn (R); release posts ONE
   `moveNode` with the group's position and rotation, snapped to the grid
   cell and 15° unless Shift is held. The panel edits the same fields by
   number (id, kind, tag, label, pos, rot, scale) and shows `bind` read-only;
