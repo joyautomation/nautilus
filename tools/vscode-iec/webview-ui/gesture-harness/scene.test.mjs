@@ -250,8 +250,13 @@ test('S06 text: a doc echoed back with a changed pos moves the label', async () 
 		const d = rigDoc();
 		d.nodes[1].pos = [0.8, 0, 0.2];
 		await s.deliver(d);
-		await sleep(200);
-		const after = (await s.labels()).find((l) => l.title === 'P-101');
+		// The echo re-renders on the next frames; software WebGL on CI takes
+		// its time, so wait for the move rather than a fixed beat.
+		let after = before;
+		for (let i = 0; i < 30 && Math.abs(after.cx - before.cx) <= 20; i++) {
+			await sleep(100);
+			after = (await s.labels()).find((l) => l.title === 'P-101');
+		}
 		assert.ok(Math.abs(after.cx - before.cx) > 20, `the label moved: ${before.cx} -> ${after.cx}`);
 		assert.deepEqual(s.exceptions(), []);
 	});
