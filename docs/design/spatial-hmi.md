@@ -656,6 +656,78 @@ right by construction.
   `profile` prop) needs parts that pick on their own inside a node — a
   change to §3d's rule, deferred until the AR layer needs the document.
 
+## 3f. The paper look: the scene as a drawing
+
+The lit look is a photograph of the plant; the flat look is a model of it.
+The third look is a **drawing** of it — the isometric line art that
+engineering illustration has used for a century, and that an operator
+reads faster than either, because nothing in it is there for realism.
+`look: "paper"` in the document (or `<SceneView look="paper">`; the prop
+overrides the document, and absent both it is `lit`).
+
+What it is, in the terms the package already has:
+
+- **Fills near white, lines dark.** `paperPalette(theme)` lays its
+  near-whites over the theme's palette: steel, shell, running and fluid
+  all land on the same quiet greys, labels are dark lettering, and the
+  backdrop is the sheet (`palette.paper`, set as the scene's
+  background so the page behind the canvas does not matter). The priority
+  colours, the selection and the hover come through untouched, so an
+  alarm reads exactly as it does in the lit scene. ISA-101 restraint,
+  drawn: the only colour on the page is an alarm.
+- **Labels are lettering, not cards — in every look.** `Label` draws
+  the title and the status as text with a tight halo in the backdrop's
+  colour (paper, or the theme's surface), no box and no border, so the
+  line work shows between the letters. It is sized in metres of the
+  scene (12 px across a 7.5 m drawing on a desktop), clamped to 10–14 px,
+  so on a phone the labels shrink with the drawing instead of covering
+  it, and in perspective the far ones are the small ones. Still to do
+  (James, 2026-10-17, on his phone): tier the text — title only below a
+  zoom threshold, the value on tap, an alarmed node keeping its value.
+- **Every edge inked.** `PaperOutlines` walks the scene once a frame and
+  gives every mesh a `LineSegments` child cut from its geometry
+  (`EdgesGeometry`, 20° threshold), so the lines follow a turning coupling
+  and a growing fluid column without the kind knowing. Fills are pushed
+  back a hair (polygon offset) so a line that lies on a face wins the
+  depth test; hidden lines stay hidden, as in a drawing. A kind opts a
+  mesh out with `userData={{ ink: false }}` (a glow, a chevron, a helper
+  box); wireframes and shader materials (the selection box, the grid) are
+  skipped on their own. The built-in pipes grow facets in this look so
+  the pass draws a pipe as its silhouette, not a bundle of longitudinals.
+- **Flat light, no tone mapping.** An ambient of π (three's physical
+  units: that lights a white face to white) and a weak key, so one face
+  tells from the next by a few percent and the lines do the rest; the
+  filmic tone curve, which exists to keep a lit scene's highlights, is
+  off for this look because it would turn the whites grey.
+- **An alarm is a glow.** The halo's wireframe cage is a modelling idiom;
+  on paper it is a translucent fill a little larger than the node's box,
+  pulsing while unacknowledged, with the alarm sign above it as always.
+- **Flow is motion.** Pipes carry chevrons along the run while it flows,
+  in the order of the run's points (any look; `arrows: false` to go
+  without). On paper, where a flowing pipe is as white as a still one,
+  the chevrons are the whole story — which is also the one thing a static
+  P&ID never shows well.
+- **No vanishing point.** `camera.projection: "orthographic"` with
+  `camera.width` (the metres across the view). Threlte sizes an
+  orthographic frustum in pixels, so the zoom is pixels per metre: the
+  canvas width over the document's width. A position on a 45° azimuth and
+  a 35.26° elevation from the target is the isometric drawing; the orbit
+  still works, so the view can be freed when someone wants to look round.
+
+The look is a presentation of the same document: the same kinds, the same
+bindings, the same `naut check`. A project authors one scene and picks the
+look per screen. `examples/well-site/` is the first drawn screen — a
+production well with the ground cut away so the casing, the water in it
+and the submersible pump are in view, the part of a well screen a P&ID
+cannot show.
+
+Open: a true outline *post-process* (depth/normal edges) would ink glTF
+models with dense meshes more cleanly than per-geometry edges, and let
+line weight vary with depth; the per-mesh pass was chosen because it is
+cheap, needs no render target, and follows animation for free. Line width
+is one pixel (WebGL ignores `linewidth`), which is right at 1× and thin on
+a HiDPI capture; a fat-line material is the fix if it matters.
+
 ## 4. The node registry
 
 ```ts

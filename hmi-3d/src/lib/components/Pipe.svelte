@@ -9,7 +9,7 @@
 	import type { Vec3 } from '../scene.js';
 	import Pipe3D from './Pipe3D.svelte';
 
-	let { points, radius, flowing }: { points: Vec3[]; radius?: number; flowing?: string } = $props();
+	let { points, radius, flowing, arrows }: { points: Vec3[]; radius?: number; flowing?: string; arrows?: boolean } = $props();
 	const scene = getContext<SceneContext | undefined>(SCENE);
 	const parent = getContext<NodeContext | undefined>(NODE);
 
@@ -20,4 +20,4 @@
 	let good = $derived(parent ? parent.good : flowing ? bindingsGood({ flowing }, (t) => scene?.isGood(t) ?? true) : true);
 </script>
 
-<Pipe3D {points} {radius} flowing={on} {good} />
+<Pipe3D {points} {radius} flowing={on} {good} {arrows} />

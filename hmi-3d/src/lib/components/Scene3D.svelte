@@ -13,12 +13,15 @@
 	// bundle holds at its Milestone 1 size.
 	import { T, useThrelte } from '@threlte/core';
 	import { Grid, OrbitControls, interactivity } from '@threlte/extras';
+	import { Color, NoToneMapping } from 'three';
 	import { getContext, setContext, type Component, type Snippet } from 'svelte';
-	import type { SceneCamera, SceneDoc, SceneEnvironment, SceneGrid, Vec3 } from '../scene.js';
+	import type { SceneCamera, SceneDoc, SceneEnvironment, SceneGrid, SceneLook, Vec3 } from '../scene.js';
 	import { registryFor, type NodeRegistry, type NodeProps, type Box } from '../registry.js';
 	import type { AssetAlarm } from '../alarms.js';
 	import { SCENE, type PlacedNode, type SceneContext } from '../context.js';
+	import { DEFAULT_PALETTE, type Palette } from '../palette.js';
 	import type { ViewState } from './view.js';
+	import PaperOutlines from './PaperOutlines.svelte';
 	import Node from './Node.svelte';
 	import Pipe from './Pipe.svelte';
 	import Fixture3D from './Fixture3D.svelte';
@@ -30,7 +33,7 @@
 		isGood = () => true,
 		alarms = new Map(),
 		selected = null,
-		look = 'lit',
+		look,
 		camera,
 		grid,
 		environment,
@@ -48,8 +51,9 @@
 		alarms?: Map<string, AssetAlarm>;
 		selected?: string | null;
 		/** `lit`: data kinds, PBR, textures and the environment (§3c).
-		 * `flat`: the Milestone 1 look — built-in primitives, three lights. */
-		look?: 'lit' | 'flat';
+		 * `flat`: the Milestone 1 look — built-in primitives, three lights.
+		 * `paper`: the drawn look (§3f). Absent: the document's, else lit. */
+		look?: SceneLook;
 		/** Stand-ins for the document's blocks when composing in Svelte. */
 		camera?: SceneCamera;
 		grid?: SceneGrid;
@@ -65,8 +69,13 @@
 		children?: Snippet;
 	} = $props();
 	const view = getContext<ViewState>('hmi3d:view');
+	const palette = getContext<Palette>('hmi3d:palette') ?? DEFAULT_PALETTE;
+	let theLook = $derived<SceneLook>(look ?? doc?.look ?? 'lit');
+	let paper = $derived(theLook === 'paper');
 	$effect(() => {
-		if (view) view.lit = look === 'lit';
+		if (!view) return;
+		view.lit = theLook === 'lit';
+		view.paper = paper;
 	});
 
 	// Threlte's pointer plugin: every T.Group below with an onclick becomes
@@ -75,8 +84,32 @@
 
 	let cam = $derived(camera ?? doc?.camera ?? { pos: [2, 1.5, 2.5] as Vec3, target: [0, 0, 0] as Vec3 });
 	let theGrid = $derived(grid ?? doc?.grid);
-	let lit = $derived(look === 'lit');
+	let lit = $derived(theLook === 'lit');
 	let env = $derived(lit ? (environment ?? doc?.environment) : undefined);
+
+	// An orthographic camera's frustum is in pixels (Threlte sizes it to
+	// the canvas), so its zoom is pixels per metre: the canvas's width over
+	// the metres the document wants across it.
+	const { canvas, size, scene, renderer, invalidate } = useThrelte();
+	let ortho = $derived(cam.projection === 'orthographic');
+	let zoom = $derived($size.width / (cam.width ?? 6));
+
+	// Paper: the backdrop is the sheet itself, whatever the page behind the
+	// canvas is, and no tone mapping — the filmic curve exists to keep a
+	// lit scene's highlights, and would turn this look's whites grey. Both
+	// go again with the look.
+	$effect(() => {
+		if (!paper) return;
+		scene.background = new Color(palette.paper);
+		const was = renderer.toneMapping;
+		renderer.toneMapping = NoToneMapping;
+		invalidate();
+		return () => {
+			scene.background = null;
+			renderer.toneMapping = was;
+			invalidate();
+		};
+	});
 
 	// Data kinds: the loader chunk is fetched once a lit document has one,
 	// and until it arrives (or when a model fails) the Svelte kind of the
@@ -94,7 +127,6 @@
 	// The cursor goes on the canvas itself: OrbitControls writes `cursor:
 	// auto` on the canvas's wrapper, which would override one set on body.
 	let hovered = $state<string | null>(null);
-	const { canvas } = useThrelte();
 	$effect(() => () => {
 		canvas.style.cursor = '';
 	});
@@ -147,14 +179,27 @@
 	});
 </script>
 
-<T.PerspectiveCamera makeDefault position={cam.pos} fov={cam.fov ?? 45} near={0.01} far={100}>
-	<OrbitControls target={cam.target} enableDamping />
-</T.PerspectiveCamera>
+{#if ortho}
+	<T.OrthographicCamera makeDefault position={cam.pos} {zoom} near={-100} far={100}>
+		<OrbitControls target={cam.target} enableDamping />
+	</T.OrthographicCamera>
+{:else}
+	<T.PerspectiveCamera makeDefault position={cam.pos} fov={cam.fov ?? 45} near={0.01} far={100}>
+		<OrbitControls target={cam.target} enableDamping />
+	</T.PerspectiveCamera>
+{/if}
 
 {#if env}
 	{#await import('./Surroundings.svelte') then m}
 		<m.default {env} />
 	{/await}
+{:else if paper}
+	<!-- Nearly flat: the lines carry the form, the light only tells one
+	     face from the next. (Physical units: an ambient of π lights a
+	     white face to white; the key adds a few percent by its angle.) -->
+	<T.AmbientLight intensity={2.6} />
+	<T.DirectionalLight position={[3, 5, 4]} intensity={0.8} />
+	<PaperOutlines color={palette.ink} />
 {:else}
 	<T.AmbientLight intensity={0.6} />
 	<T.DirectionalLight position={[3, 5, 4]} intensity={1.6} />
@@ -166,9 +211,9 @@
 		cellSize={theGrid.cell ?? 0.1}
 		sectionSize={theGrid.section ?? 1}
 		gridSize={theGrid.size ?? [4, 4]}
-		cellColor="#2c2c2a"
-		sectionColor="#44443f"
-		fadeDistance={12}
+		cellColor={paper ? '#e6e6e2' : '#2c2c2a'}
+		sectionColor={paper ? '#d2d2cd' : '#44443f'}
+		fadeDistance={paper ? 40 : 12}
 	/>
 {/if}
 
@@ -178,7 +223,7 @@
 	{/each}
 
 	{#each doc.pipes ?? [] as p, i (p.id ?? i)}
-		<Pipe points={p.points} radius={p.radius} flowing={p.bind?.flowing} />
+		<Pipe points={p.points} radius={p.radius} flowing={p.bind?.flowing} arrows={p.arrows} />
 	{/each}
 
 	{#each doc.nodes as n (n.id)}

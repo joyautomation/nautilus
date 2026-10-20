@@ -1,11 +1,25 @@
 <script lang="ts">
-	// A floating label: the node's title and its kind's status text, as an
-	// HTML overlay anchored to a point in the scene. Bad quality reads as
+	// A floating label: the node's title and its kind's status text, as
+	// lettering on the scene. Dark ink with a tight halo in the backdrop's
+	// colour — no card, no border — so the line work shows between the
+	// letters instead of disappearing under a box. It is sized in metres of
+	// the scene (LABEL_M), so it shrinks with the drawing on a phone and, in
+	// perspective, the far labels are the smaller ones; MIN_PX keeps it
+	// legible, MAX_PX keeps a close-up from shouting. Bad quality reads as
 	// italic and dimmed — "stale", never a healthy-looking number.
+	import { T, useTask, useThrelte } from '@threlte/core';
 	import { HTML } from '@threlte/extras';
 	import { getContext } from 'svelte';
+	import { Vector3, type Group, type OrthographicCamera, type PerspectiveCamera } from 'three';
 	import { DEFAULT_PALETTE, type Palette } from '../palette.js';
 	import type { Vec3 } from '../scene.js';
+	import type { ViewState } from './view.js';
+
+	/** The title's font size in scene metres: 12 px across a 7.5 m wide
+	 * drawing on a 1400 px desktop view, 10 px (the floor) on a phone. */
+	const LABEL_M = 0.065;
+	const MIN_PX = 10;
+	const MAX_PX = 14;
 
 	let {
 		at,
@@ -24,31 +38,77 @@
 		anchor?: 'center' | 'left' | 'right';
 	} = $props();
 	const palette = getContext<Palette>('hmi3d:palette') ?? DEFAULT_PALETTE;
+	const view = getContext<ViewState | undefined>('hmi3d:view');
+	const { camera, size } = useThrelte();
+
+	// The halo is whatever the label floats over: the paper, or the theme's
+	// surface in the lit and flat looks. Eight 1 px copies make a solid rim,
+	// two soft ones fill the corners of the counters.
+	const halo = $derived(view?.paper ? palette.paper : palette.label.bg);
+	const shadow = $derived(
+		['1px 0', '-1px 0', '0 1px', '0 -1px', '1px 1px', '-1px -1px', '1px -1px', '-1px 1px']
+			.map((o) => `${o} 0 ${halo}`)
+			.concat([`0 0 3px ${halo}`, `0 0 3px ${halo}`])
+			.join(', ')
+	);
+
+	// Pixels per scene metre at the label, from the camera: an orthographic
+	// camera's zoom IS that (Threlte sizes its frustum in pixels); a
+	// perspective camera's follows from the vertical fov and the distance.
+	let group = $state<Group>();
+	let px = $state(12);
+	const here = new Vector3();
+	const eye = new Vector3();
+	useTask(
+		() => {
+			const cam = camera.current;
+			if (!group || !cam) return;
+			let perMetre: number;
+			if ((cam as OrthographicCamera).isOrthographicCamera) {
+				perMetre = (cam as OrthographicCamera).zoom;
+			} else {
+				const p = cam as PerspectiveCamera;
+				const dist = here.setFromMatrixPosition(group.matrixWorld).distanceTo(eye.setFromMatrixPosition(p.matrixWorld));
+				perMetre = size.current.height / (2 * Math.tan((p.fov * Math.PI) / 360) * Math.max(dist, 1e-3));
+			}
+			const want = Math.min(MAX_PX, Math.max(MIN_PX, LABEL_M * perMetre));
+			// A quarter pixel of hysteresis: no DOM write while the camera rests.
+			if (Math.abs(want - px) >= 0.25) px = want;
+		},
+		{ autoInvalidate: false }
+	);
 </script>
 
-<HTML position={at} center pointerEvents="none">
-	<div
-		class="lbl"
-		class:toLeft={anchor === 'right'}
-		class:toRight={anchor === 'left'}
-		class:bad={!good}
-		style:background="color-mix(in srgb, {palette.label.bg} 85%, transparent)"
-		style:color={palette.label.ink}
-		style:border-color={palette.label.border}
-	>
-		<b>{title}</b>{#if value}<span>{value}</span>{/if}
-	</div>
-</HTML>
+<T.Group position={at} bind:ref={group}>
+	<HTML center pointerEvents="none">
+		<div
+			class="lbl"
+			class:toLeft={anchor === 'right'}
+			class:toRight={anchor === 'left'}
+			class:bad={!good}
+			style:font-size="{px}px"
+			style:color={palette.label.ink}
+			style:text-shadow={shadow}
+		>
+			<b>{title}</b>{#if value}<span>{value}</span>{/if}
+		</div>
+	</HTML>
+</T.Group>
 
 <style>
 	.lbl {
 		display: flex;
-		gap: 6px;
-		padding: 2px 6px;
-		border-radius: 4px;
-		font: 12px/1.3 system-ui, sans-serif;
+		align-items: baseline;
+		gap: 0.5em;
+		padding: 0 2px;
+		font-family: system-ui, sans-serif;
+		line-height: 1.3;
 		white-space: nowrap;
-		border: 1px solid;
+	}
+	/* The value is the quieter half: a step smaller, a shade lighter. */
+	.lbl span {
+		font-size: 0.92em;
+		opacity: 0.8;
 	}
 	/* `center` on the HTML centres the box on the point; shift it by half
 	   its width so an end sits there instead */

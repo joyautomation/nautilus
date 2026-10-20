@@ -305,6 +305,26 @@ primitives, three lights, no assets — for a project without assets, a
 low-end tier, or a before/after. `bind:look` and a button in the `hud`
 snippet flip it live (`examples/spatial-rig/hmi` does).
 
+`look: "paper"` in the document (or `<SceneView look="paper">`, design
+§3f) draws it instead: near-white fills, every edge inked, a paper
+backdrop. The only colour is an alarm, drawn as a
+soft glow; flow is the chevrons moving along the pipes. Pair it with an
+orthographic camera for the isometric drawing:
+
+```json
+"look": "paper",
+"camera": { "projection": "orthographic", "width": 7.5, "pos": [7.4, 6.0, 6.8], "target": [0.3, 0, -0.4] }
+```
+
+The lines are `PaperOutlines`, an edge pass over every mesh; a kind that
+draws a glow or a helper box keeps it un-inked with
+`userData={{ ink: false }}`. `examples/well-site/` is the first drawn
+screen.
+
+Labels, in every look, are lettering with a halo in the backdrop's colour
+rather than cards, sized in metres of the scene and clamped to 10–14 px:
+on a phone they shrink with the drawing instead of covering it.
+
 The glTF loader and the HDRI loaders are **dynamic imports**: a document
 without a `model` or an `environment` never fetches them, and the base
 bundle stays where it was.
