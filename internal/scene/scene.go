@@ -66,6 +66,106 @@ type Kind struct {
 	// kind's own frame, and a part's Tag is a MEMBER of the assembly's
 	// struct — the nested UDT is the only parameter.
 	Assembly *Assembly `json:"assembly,omitempty"`
+	// File is set when the `kinds` entry was the path of a `{Name}.kind.json`
+	// (design §3g, slice 2): a kind in a file of its own, relative to the
+	// scene file like a component. The other fields are empty until
+	// ResolveKindFiles reads the file; Encode writes the path back.
+	File string `json:"-"`
+}
+
+// kindJSON is Kind without the methods, for the two JSON forms below.
+type kindJSON Kind
+
+// UnmarshalJSON takes a `kinds` entry in either form: the contract inline,
+// or a string — the path of the kind file that holds it. Unknown fields
+// are refused as Parse refuses them at the top level.
+func (k *Kind) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		var path string
+		if err := json.Unmarshal(b, &path); err != nil {
+			return err
+		}
+		*k = Kind{File: path}
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	var v kindJSON
+	if err := dec.Decode(&v); err != nil {
+		return err
+	}
+	*k = Kind(v)
+	return nil
+}
+
+// MarshalJSON writes a file-backed kind as its path, so a document that
+// names kind files round-trips through Encode as written.
+func (k Kind) MarshalJSON() ([]byte, error) {
+	if k.File != "" {
+		return json.Marshal(k.File)
+	}
+	return json.Marshal(kindJSON(k))
+}
+
+// kindPath is a kind file's path: relative to the scene file, a
+// `.kind.json`, no scheme, not absolute, no `..` — a component's rules.
+func kindPath(p string) bool {
+	return assetPath(p) && strings.HasSuffix(p, ".kind.json") && !strings.HasPrefix(p, "/")
+}
+
+// KindFiles lists every kind file the document names, with the JSON path
+// of the entry — source paths relative to the scene file, like
+// Components, so they are read against the same root.
+func (d *Doc) KindFiles() (paths [][2]string) {
+	names := make([]string, 0, len(d.Kinds))
+	for k := range d.Kinds {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		if f := d.Kinds[k].File; f != "" {
+			paths = append(paths, [2]string{"/kinds/" + k, f})
+		}
+	}
+	return paths
+}
+
+// ResolveKindFiles reads every kind file the document names (`read` is
+// built from the scene file's directory) and puts what it holds into the
+// entry, keeping File so Encode writes the path back; Check then holds
+// the kind — and its nodes — to the file's contract exactly as if it were
+// inline. A file that cannot be read or parsed, or that holds a component
+// or an assembly (those stay inline, where the scene can see them), is an
+// error at the entry, and the entry stays empty.
+func ResolveKindFiles(d *Doc, read func(path string) ([]byte, error)) (errs []string) {
+	for _, kf := range d.KindFiles() {
+		p, file := kf[0], kf[1]
+		name := strings.TrimPrefix(p, "/kinds/")
+		if !kindPath(file) {
+			errs = append(errs, p+": a kind file is a {Name}.kind.json as a path relative to the scene file (hmi/src/lib/kinds/pump.kind.json)")
+			continue
+		}
+		data, err := read(file)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %q was not found next to the scene file — a kind file's path is relative to it", p, file))
+			continue
+		}
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.DisallowUnknownFields()
+		var v kindJSON
+		if err := dec.Decode(&v); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %s: %s", p, file, err))
+			continue
+		}
+		k := Kind(v)
+		if k.Component != "" || k.Assembly != nil {
+			errs = append(errs, fmt.Sprintf("%s: %s holds a %s kind — a kind file is a data kind (model + drives) or a contract; a component or an assembly stays inline in the scene", p, file, k.DefinedBy()))
+			continue
+		}
+		k.File = file
+		d.Kinds[name] = k
+	}
+	return errs
 }
 
 // Assembly is a kind's parts and pipes (§3d).
@@ -78,6 +178,8 @@ type Assembly struct {
 // "component", "assembly", or "" for a contract-only entry.
 func (k Kind) DefinedBy() string {
 	switch {
+	case k.File != "" && k.Model == "" && k.Type == "" && k.Members == nil && k.Status == "" && k.Drive == nil:
+		return "file"
 	case k.Model != "":
 		return "model"
 	case k.Component != "":
@@ -652,6 +754,14 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 			if m == "" {
 				errf(fmt.Sprintf("/kinds/%s/members/%d", k, i), "empty member name")
 			}
+		}
+		if v.DefinedBy() == "file" {
+			// Unresolved (Check alone, without ResolveKindFiles): the path
+			// is held to its rules; what the file holds is checked once read.
+			if !kindPath(v.File) {
+				errf("/kinds/"+k, "a kind file is a {Name}.kind.json as a path relative to the scene file (hmi/src/lib/kinds/pump.kind.json)")
+			}
+			continue
 		}
 		checkKind(k, v, errf)
 		if v.Component != "" && v.Type == "" && len(v.Members) == 0 {
