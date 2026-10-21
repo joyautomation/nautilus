@@ -806,23 +806,61 @@ glass to the pump inside), and `sceneOps.test.ts` holds the reducer and its cano
 form. A window without WebGL gets a notice and the text editor, not an
 exception.
 
-**Slice 2 — one editor per kind.** A kind is the 3D twin of a mimic
-component, and James wants an editor per kind the way `.svelte` components
-got the preview pane (2026-10-15): one for a submersible pump, one for a
-valve, one for a flow meter. What there is to edit on a kind: its model
-(built elsewhere — Blender — and only *chosen* here), its **drives**
-(which named mesh spins, turns, scales, tints or shows, driven by which
-member), its `status` template, its `type` and `members`, and — new, for
-slice 3 — its **ports**. The pane renders the one kind on a turntable with
-sample member values (the 3D `preview.props`), lists the model's mesh
-names so a drive targets a real one, previews the status text, and places
-ports by clicking the model. Today a kind lives inline in the scene's
-`kinds` block; for a kind to be reused across scenes and have a file to
-open, a `kinds` entry may name a **`{Name}.kind.json`** (`"submersible-pump":
-"hmi/kinds/SubmersiblePump.kind.json"`), the same entry's keys in a file of
-its own, discovered by the palette like a mimic sidecar. That needs the
-contract in three places as always (TS, Go, schema, each with its sync
-test), and is why it is its own PR.
+**Slice 2 — one editor per kind (built).** A kind is the 3D twin of a
+mimic component, and James wants an editor per kind the way `.svelte`
+components got the preview pane (2026-10-15): one for a submersible pump,
+one for a valve, one for a flow meter. Built 2026-10-21 (PR "kind editor"):
+
+- **A kind in a file of its own.** A `kinds` entry may be the path of a
+  **`{Name}.kind.json`** relative to the scene file (`"submersible-pump":
+  "hmi/src/lib/kinds/submersible-pump.kind.json"`), holding the same keys
+  an inline entry does — `type`, `members`, `model`, `bounds`, `labelAt`,
+  `status`, `drive` — so one pump is declared once and placed in every
+  scene, and has a file to open. A component or an assembly stays inline,
+  where the scene can see it. The contract is in three places as always:
+  hmi-3d (`SceneKindEntry`, `isKindPath`, `inlineKindFiles(doc, modules)`
+  — the app globs `*.kind.json` into `modules` beside its `.svelte` files
+  and `SceneView` inlines them first; `validateKind` checks one file on
+  its own), `internal/scene` (`Kind.File`, a string entry parses as a
+  file; `ResolveKindFiles` reads it next to the scene in `naut check`;
+  `Encode` writes the path back) and the extension's schema (the `kinds`
+  entry is the contract *or* a path; `nautilus-kind.schema.json` for the
+  file is **derived** from the scene schema's `kindContract` by
+  `npm run gen:kind-schema`, held to it by a test). `examples/lift-station`
+  is the dogfood: its six kinds moved into `hmi/src/lib/kinds/`.
+- **The editor** (`nautilus.kindEditor`, `tools/vscode-iec/src/kindEditor.ts`,
+  the scene bundle mounted as the kind app from `<body data-scene-mode>`,
+  the way the mimic bundle hosts the component editor) opens
+  `*.kind.json` as the kind itself: ONE node of it on the stage, composed
+  into a one-node document under the kind's own name, so what is on stage
+  is exactly what a scene that places it would draw; a **turntable** on
+  the node's group (`T` toggles); the look toolbar. The model is loaded
+  once more for what the panel needs from it: its **named objects**, which
+  fill every drive row's mesh menu (a name the model lacks is flagged in
+  the row and in a banner), and its box, which frames the camera.
+  **Sample values** per member — a boolean where a tint / emissive /
+  visible or a `{X?a:b}` reads it, a number elsewhere, defaulting to on and
+  50 — drive the meshes and preview the `status` text; they are webview
+  state, never written. The panel edits `type`, `members`, `model`,
+  `status`, `labelAt`, `bounds`, and the drives as rows (mesh, channel,
+  the channel's few fields); every change is one op (`kindOps.ts`:
+  `setField`, `addDrive`, `updateDrive`, `deleteDrive`, `moveDrive`)
+  applied as one `WorkspaceEdit`, and the canonical form puts each drive
+  on one line, so a drive is a row in the editor and a row in the diff.
+  The scene editor's palette captions a file-backed kind `glTF · file`
+  with an **edit kind** link that opens it beside the scene; a kind file
+  the scene names but the host cannot read is named in a banner and its
+  nodes draw as the grey box.
+- **Verified** by `gesture-harness/kind.test.mjs` (the production bundle,
+  headless Chrome with software WebGL, the package's `valve.glb` handed
+  over as a data: URI: open, add a drive, a channel and a mesh change, a
+  typed field, a sample value changing the status preview without an op,
+  the turntable turning and holding, a model not found), `kindOps.test.ts`
+  for the reducer and its canonical form, `kindEditorLogic.test.ts` for
+  the model lookup (up from the kind file's folder through the scene
+  editor's roots), and rig smoke check 22 in a real VS Code.
+- **Ports** are slice 3's: a kind will declare them in its own frame and
+  the kind editor will place them by clicking the model.
 
 **Slice 3 — pipes and connections.** The lesson of the lift station
 (2026-10-18) was that a connection must be a scene pipe, not a model part,

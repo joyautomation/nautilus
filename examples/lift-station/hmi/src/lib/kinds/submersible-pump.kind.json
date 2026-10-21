@@ -1,0 +1,11 @@
+{
+  "model": "models/submersible-pump.glb",
+  "labelAt": [0, 1.5, 0],
+  "status": "{Running?run:stopped} {SpeedHz:0} Hz",
+  "drive": [
+    { "mesh": "Motor", "tint": { "bind": "Running", "on": "running" } },
+    { "mesh": "Volute", "tint": { "bind": "Running", "on": "running" } },
+    { "mesh": "Lamp", "emissive": { "bind": "Running", "on": "running", "intensity": 2 } },
+    { "mesh": "Impeller", "spin": { "axis": "y", "revPerS": { "bind": "SpeedHz", "scale": 0.0333 } } }
+  ]
+}

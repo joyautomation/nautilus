@@ -117,7 +117,7 @@ commits, independent of both the working tree and the controller.
 | Acceptance tests: virtual time, `suspend:`, `advance:`/`until:`, alarm verbs | `lift-station_test.yaml` | [Testing](https://nautilus.joyautomation.com/reference/testing/) |
 | HMI: a P&ID mimic (`*.mimic.json`), custom components + port sidecars | `lift-station.mimic.json`, `hmi/src/lib/*.component.json` | [HMI kit](https://nautilus.joyautomation.com/reference/hmi/) |
 | HMI: faceplates, alarm banner/ack, live trend, driver status, scan diagnostics | `hmi/src/routes/+page.svelte` | [HMI kit](https://nautilus.joyautomation.com/reference/hmi/) |
-| HMI: the same station in 3D — a `*.scene.json` over flat tags, six kinds as glTF data | `lift-station.scene.json`, `hmi/models/build.py`, `hmi/src/routes/3d/` | [3D package](../../hmi-3d/README.md) |
+| HMI: the same station in 3D — a `*.scene.json` over flat tags, six kinds as glTF data in files of their own | `lift-station.scene.json`, `hmi/src/lib/kinds/`, `hmi/models/build.py`, `hmi/src/routes/3d/` | [3D package](../../hmi-3d/README.md) |
 
 ## The control narrative
 
@@ -370,17 +370,24 @@ Two things about the file are worth reading:
   every ref to the manifest's tags. One thing the struct-tag form gives
   that this cannot yet: alarm halos follow a node's `tag`, so here the
   alarms are in the HUD banner, not on the equipment.
-- **Six kinds as data.** The package's built-ins are a tank, a pump and a
-  valve; a lift station has a wet well, submersible pumps, float switches,
-  check valves, a flow meter and a force main leaving the drawing. Each is
-  a `kinds` entry with a glTF under `hmi/static/models/` and a `drive`
-  list naming the meshes live values move (`Fluid` scales with level,
-  `Motor` and `Volute` tint while running, `FloatUp` / `FloatDown` show by
-  the switch, `Display` lights with flow), plus a `status` template for the
-  label — no Svelte names a pump. `hmi/models/build.py` generates the six
+- **Six kinds as data, each in a file of its own.** The package's
+  built-ins are a tank, a pump and a valve; a lift station has a wet well,
+  submersible pumps, float switches, check valves, a flow meter and a
+  force main leaving the drawing. Each is a `hmi/src/lib/kinds/*.kind.json`
+  the scene names by path (`"wet-well": "hmi/src/lib/kinds/wet-well.kind.json"`):
+  a glTF under `hmi/static/models/` and a `drive` list naming the meshes
+  live values move (`Fluid` scales with level, `Motor` and `Volute` tint
+  while running, `FloatUp` / `FloatDown` show by the switch, `Display`
+  lights with flow), plus a `status` template for the label — no Svelte
+  names a pump. The 3D page globs the files into `modules` for the view,
+  the way it would component files; `naut check` reads them next to the
+  scene; in VS Code each opens in the **kind editor** — the model on a
+  turntable, its mesh names for the drives, sample values for the label. `hmi/models/build.py` generates the six
   models with Blender (`blender -b -P hmi/models/build.py`), the same
   recipe as the package's own `models/build.py`, so a mesh name or a
   dimension is a line to change and a file to regenerate.
 
-The scene editor (drag-to-place, a palette) is not here yet: the
-positions in the file were set by hand against the running process.
+In VS Code the scene opens in the **scene editor** (a palette of these
+kinds, a gizmo, the looks) and each kind file in the kind editor; the
+positions in the file were first set by hand against the running process
+and have been nudged there since.

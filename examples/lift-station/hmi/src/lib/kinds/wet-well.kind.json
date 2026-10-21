@@ -1,0 +1,12 @@
+{
+  "model": "models/wet-well.glb",
+  "bounds": {
+    "size": [3, 3, 3],
+    "center": [0, 1.5, 0]
+  },
+  "labelAt": [-0.2, 3.3, 1.2],
+  "status": "LIT-101 {Level:1} %",
+  "drive": [
+    { "mesh": "Fluid", "scale": { "axis": "y", "to": { "bind": "Level", "scale": 0.0296, "min": 0.01, "max": 2.96 } } }
+  ]
+}

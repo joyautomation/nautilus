@@ -1,0 +1,7 @@
+{
+  "model": "models/flow-meter.glb",
+  "status": "{Flow:2} L/s",
+  "drive": [
+    { "mesh": "Display", "emissive": { "bind": "Flow", "threshold": 2, "on": "running", "intensity": 1.2 } }
+  ]
+}
