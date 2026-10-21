@@ -10,6 +10,10 @@
 	import { AlarmBanner, AckButton } from '@joyautomation/nautilus-hmi';
 	import { SceneView, LOOKS, type SceneDoc, type SceneLook } from '@joyautomation/nautilus-hmi-3d';
 	import sceneDoc from '../../../../lift-station.scene.json';
+	// The six kinds live in files of their own (hmi/src/lib/kinds/*.kind.json,
+	// design §3g): the scene names each by path, and the view pairs the
+	// path with the module Vite found, as it does a component kind's.
+	const modules = import.meta.glob('/src/lib/kinds/*.kind.json', { eager: true });
 	import SeqStepTag from '$lib/SeqStepTag.svelte';
 	import { rt, alarms } from '$lib/client.svelte';
 
@@ -35,7 +39,7 @@
 <svelte:head><title>Lift Station — 3D view</title></svelte:head>
 
 <div class="stage">
-	<SceneView {doc} {rt} {alarms} {perf} bind:look>
+	<SceneView {doc} {rt} {alarms} {modules} {perf} bind:look>
 		{#snippet hud()}
 			<div class="bar">
 				<a class="pill" href="/" title="The operator screen: the P&ID mimic, faceplates, setpoints, trend">← operator screen</a>
