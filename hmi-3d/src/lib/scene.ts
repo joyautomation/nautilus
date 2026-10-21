@@ -169,6 +169,13 @@ export interface SceneKind {
 	drive?: Drive[];
 }
 
+/** A `kinds` entry: the contract inline, or the path of a `{Name}.kind.json`
+ * holding the same keys — a kind in a file of its own, reused across
+ * scenes and opened in its own editor (§3g slice 2). The path is relative
+ * to the scene file, like a component's (`hmi/src/lib/kinds/pump.kind.json`),
+ * and the app hands SceneView the file through `modules` the same way. */
+export type SceneKindEntry = SceneKind | string;
+
 /** The members an assembly reads off its struct: every part's `tag`, and
  * the root of every ref inside it, deduplicated, in order (§3d). */
 export function assemblyMembers(a: SceneAssembly | undefined): string[] {
@@ -188,16 +195,20 @@ export function assemblyMembers(a: SceneAssembly | undefined): string[] {
 
 /** Every member a kind reads: `members`, plus what its drives, its status
  * template and its assembly name — so nothing repeats the list (§3c, §3d). */
-export function kindMembers(k: SceneKind | undefined): string[] {
+export function kindMembers(k: SceneKindEntry | undefined): string[] {
+	if (typeof k === 'string') return [];
 	const out = [...(k?.members ?? [])];
 	for (const m of [...driveMembers(k?.drive), ...statusMembers(k?.status), ...assemblyMembers(k?.assembly)])
 		if (!out.includes(m)) out.push(m);
 	return out;
 }
 
-/** How a `kinds` entry defines its kind, if it does. */
-export function kindDefinedBy(k: SceneKind | undefined): 'model' | 'component' | 'assembly' | undefined {
+/** How a `kinds` entry defines its kind, if it does. `file` is a path
+ * entry: what the file defines is known once it is inlined (defs.ts
+ * `inlineKindFiles`). */
+export function kindDefinedBy(k: SceneKindEntry | undefined): 'model' | 'component' | 'assembly' | 'file' | undefined {
 	if (!k) return undefined;
+	if (typeof k === 'string') return 'file';
 	if (k.model !== undefined) return 'model';
 	if (k.component !== undefined) return 'component';
 	if (k.assembly !== undefined) return 'assembly';
@@ -208,8 +219,9 @@ export interface SceneDoc {
 	name?: string;
 	/** The look the document asks for; the page may override it. Default `lit`. */
 	look?: SceneLook;
-	/** Kind contracts: overrides for the built-ins, declarations for the app's own, data kinds. */
-	kinds?: Record<string, SceneKind>;
+	/** Kind contracts: overrides for the built-ins, declarations for the app's
+	 * own, data kinds — inline, or as the path of a kind file. */
+	kinds?: Record<string, SceneKindEntry>;
 	environment?: SceneEnvironment;
 	camera?: SceneCamera;
 	fixtures?: SceneFixture[];
@@ -243,6 +255,12 @@ export function isAssetPath(p: unknown): p is string {
  * `.svelte` file, no scheme, no `..`, not absolute. */
 export function isComponentPath(p: unknown): p is string {
 	return isAssetPath(p) && p.endsWith('.svelte') && !p.startsWith('/');
+}
+
+/** A kind file path (§3g): a `{Name}.kind.json`, relative to the scene
+ * file like a component's — no scheme, no `..`, not absolute. */
+export function isKindPath(p: unknown): p is string {
+	return isAssetPath(p) && p.endsWith('.kind.json') && !p.startsWith('/');
 }
 
 const MEMBER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -301,6 +319,64 @@ function checkPipe(pipe: unknown, p: string, err: Err): void {
 	}
 }
 
+/** The checks one kind's definition gets, inline or in its own file:
+ * paths, one way of being defined, bounds, label, status, drives. `p` is
+ * the JSON-pointer prefix the messages carry. */
+function checkKindDef(def: Record<string, unknown>, p: string, known: Set<string> | null, assemblies: Set<string>): SceneError[] {
+	const errors: SceneError[] = [];
+	const err = (path: string, message: string) => errors.push({ path, message });
+	if (def.type !== undefined && !isStr(def.type)) err(`${p}/type`, 'must be a UDT name');
+	if (def.members !== undefined && !(Array.isArray(def.members) && def.members.every(isStr)))
+		err(`${p}/members`, 'must be an array of member names');
+	if (def.model !== undefined && !(isAssetPath(def.model) && /\.(glb|gltf)$/i.test(def.model)))
+		err(`${p}/model`, 'must be a URL path to a .glb or .gltf (models/pump.glb)');
+	if (def.component !== undefined && !isComponentPath(def.component))
+		err(`${p}/component`, 'must be a .svelte file as a path relative to the scene file (hmi/src/lib/Skid.svelte)');
+	const ways = ['model', 'component', 'assembly'].filter((w) => def[w] !== undefined);
+	if (ways.length > 1) err(p, `a kind is defined one way, not ${ways.join(' and ')}`);
+	if (def.assembly !== undefined) {
+		const ap = `${p}/assembly`;
+		if (!isObj(def.assembly) || !Array.isArray(def.assembly.nodes)) err(ap, 'must be { nodes: [...], pipes?: [...] }');
+		else {
+			const ids = new Set<string>();
+			def.assembly.nodes.forEach((n, i) => {
+				checkNode(n, `${ap}/nodes/${i}`, err, known, ids);
+				if (!isObj(n)) return;
+				if (n.tag !== undefined && !isMemberName(n.tag)) err(`${ap}/nodes/${i}/tag`, "a part's tag is one member of the assembly's struct (Pump)");
+				if (isStr(n.kind) && assemblies.has(n.kind)) err(`${ap}/nodes/${i}/kind`, `"${n.kind}" is an assembly; a part is a built-in, a data kind or a component kind`);
+			});
+			if (def.assembly.pipes !== undefined) {
+				if (!Array.isArray(def.assembly.pipes)) err(`${ap}/pipes`, 'must be an array');
+				else def.assembly.pipes.forEach((pipe, i) => checkPipe(pipe, `${ap}/pipes/${i}`, err));
+			}
+		}
+	}
+	if (def.bounds !== undefined && def.bounds !== 'auto') {
+		if (!isObj(def.bounds) || !isVec3(def.bounds.size) || !isVec3(def.bounds.center))
+			err(`${p}/bounds`, "must be 'auto' or { size: [w, h, d], center: [x, y, z] }");
+	}
+	if (def.labelAt !== undefined && !isVec3(def.labelAt)) err(`${p}/labelAt`, 'must be [x, y, z] metres');
+	if (def.status !== undefined && !validStatusTemplate(def.status))
+		err(`${p}/status`, 'must be a template over members: "{Level:1} %", "{Running?run:stopped}"');
+	if (def.drive !== undefined) errors.push(...validateDrives(def.drive, `${p}/drive`));
+	if (def.model === undefined && def.drive !== undefined) err(`${p}/drive`, 'drives need a model — without one the Svelte kind of this name renders');
+	if (ways.length === 0 && (def.bounds !== undefined || def.labelAt !== undefined))
+		err(p, 'bounds and labelAt need a model, a component or an assembly — without one the registry\'s kind of this name renders');
+	return errors;
+}
+
+/** Validate a kind file's content on its own (the kind editor, a test):
+ * the same rules a `kinds` entry gets, with paths from the file's root. A
+ * `component` or an `assembly` is refused — a kind file is a data kind or
+ * a bare contract; those two stay inline, where the scene can see them. */
+export function validateKind(def: unknown): { ok: boolean; errors: SceneError[] } {
+	if (!isObj(def)) return { ok: false, errors: [{ path: '', message: 'a kind file is an object: { model, status, drive, ... }' }] };
+	const errors = checkKindDef(def, '', null, new Set());
+	for (const w of ['component', 'assembly'] as const)
+		if (def[w] !== undefined) errors.push({ path: `/${w}`, message: `a kind file is a data kind (model + drives) or a contract — a ${w} kind stays inline in the scene` });
+	return { ok: errors.length === 0, errors };
+}
+
 /**
  * Validate a scene document structurally — the same job `naut check` does
  * for a manifest, so a typo in a scene file is a list of errors with paths
@@ -319,6 +395,9 @@ export function validateScene(doc: unknown, kinds?: Iterable<string>): { ok: boo
 	const assemblies = new Set<string>();
 	if (isObj(doc) && isObj(doc.kinds))
 		for (const [k, def] of Object.entries(doc.kinds)) {
+			// A kind file defines its kind too; what it holds is checked once
+			// it is inlined (SceneView does that from the app's modules).
+			if (isKindPath(def)) known?.add(k);
 			if (!isObj(def)) continue;
 			if (def.model !== undefined || def.component !== undefined || def.assembly !== undefined) known?.add(k);
 			if (def.assembly !== undefined) assemblies.add(k);
@@ -384,46 +463,16 @@ export function validateScene(doc: unknown, kinds?: Iterable<string>): { ok: boo
 		if (!isObj(doc.kinds)) err('/kinds', 'must be an object of kind -> { type, members }');
 		else
 			for (const [k, def] of Object.entries(doc.kinds)) {
-				if (!isObj(def)) {
-					err(`/kinds/${k}`, 'must be an object with type and/or members');
+				if (typeof def === 'string') {
+					if (!isKindPath(def))
+						err(`/kinds/${k}`, 'a kind file is a {Name}.kind.json as a path relative to the scene file (hmi/src/lib/kinds/pump.kind.json)');
 					continue;
 				}
-				if (def.type !== undefined && !isStr(def.type)) err(`/kinds/${k}/type`, 'must be a UDT name');
-				if (def.members !== undefined && !(Array.isArray(def.members) && def.members.every(isStr)))
-					err(`/kinds/${k}/members`, 'must be an array of member names');
-				if (def.model !== undefined && !isAssetPath(def.model)) err(`/kinds/${k}/model`, 'must be a URL path to a .glb or .gltf (models/pump.glb)');
-				if (def.component !== undefined && !isComponentPath(def.component))
-					err(`/kinds/${k}/component`, 'must be a .svelte file as a path relative to the scene file (hmi/src/lib/Skid.svelte)');
-				const ways = ['model', 'component', 'assembly'].filter((w) => def[w] !== undefined);
-				if (ways.length > 1) err(`/kinds/${k}`, `a kind is defined one way, not ${ways.join(' and ')}`);
-				if (def.assembly !== undefined) {
-					const ap = `/kinds/${k}/assembly`;
-					if (!isObj(def.assembly) || !Array.isArray(def.assembly.nodes)) err(ap, 'must be { nodes: [...], pipes?: [...] }');
-					else {
-						const ids = new Set<string>();
-						def.assembly.nodes.forEach((n, i) => {
-							checkNode(n, `${ap}/nodes/${i}`, err, known, ids);
-							if (!isObj(n)) return;
-							if (n.tag !== undefined && !isMemberName(n.tag)) err(`${ap}/nodes/${i}/tag`, "a part's tag is one member of the assembly's struct (Pump)");
-							if (isStr(n.kind) && assemblies.has(n.kind)) err(`${ap}/nodes/${i}/kind`, `"${n.kind}" is an assembly; a part is a built-in, a data kind or a component kind`);
-						});
-						if (def.assembly.pipes !== undefined) {
-							if (!Array.isArray(def.assembly.pipes)) err(`${ap}/pipes`, 'must be an array');
-							else def.assembly.pipes.forEach((pipe, i) => checkPipe(pipe, `${ap}/pipes/${i}`, err));
-						}
-					}
+				if (!isObj(def)) {
+					err(`/kinds/${k}`, 'must be an object with type and/or members, or the path of a kind file');
+					continue;
 				}
-				if (def.bounds !== undefined && def.bounds !== 'auto') {
-					if (!isObj(def.bounds) || !isVec3(def.bounds.size) || !isVec3(def.bounds.center))
-						err(`/kinds/${k}/bounds`, "must be 'auto' or { size: [w, h, d], center: [x, y, z] }");
-				}
-				if (def.labelAt !== undefined && !isVec3(def.labelAt)) err(`/kinds/${k}/labelAt`, 'must be [x, y, z] metres');
-				if (def.status !== undefined && !validStatusTemplate(def.status))
-					err(`/kinds/${k}/status`, 'must be a template over members: "{Level:1} %", "{Running?run:stopped}"');
-				if (def.drive !== undefined) errors.push(...validateDrives(def.drive, `/kinds/${k}/drive`));
-				if (def.model === undefined && def.drive !== undefined) err(`/kinds/${k}/drive`, 'drives need a model — without one the Svelte kind of this name renders');
-				if (ways.length === 0 && (def.bounds !== undefined || def.labelAt !== undefined))
-					err(`/kinds/${k}`, 'bounds and labelAt need a model, a component or an assembly — without one the registry\'s kind of this name renders');
+				errors.push(...checkKindDef(def, `/kinds/${k}`, known, assemblies));
 				// A kind the document defines is complete on its own; one it only
 				// declares must be something the app registers.
 				if (known && !known.has(k)) err(`/kinds/${k}`, `"${k}" is declared but the app registers no such kind`);

@@ -19,7 +19,7 @@ import PumpPanel from './components/PumpPanel.svelte';
 import ValvePanel from './components/ValvePanel.svelte';
 
 export type { NodeProps, PanelProps, NodeKindDef, NodeRegistry, Box, KindMeta } from './defs.js';
-export { kindOf, matchModule, componentRegistry, assemblyBounds, registryFor } from './defs.js';
+export { kindOf, matchModule, componentRegistry, inlineKindFiles, assemblyBounds, registryFor } from './defs.js';
 
 export const tankKind: NodeKindDef = {
 	component: Tank3D as Component<NodeProps>,

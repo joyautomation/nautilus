@@ -33,11 +33,12 @@ export { default as Fixture3D } from './components/Fixture3D.svelte';
 // loaders back into the base bundle (§3c, §6).
 
 // The scene document: types, the validator, and the subscription list.
-export { validateScene, sceneTags, isBindingRef, isAssetPath, isComponentPath, isMemberName, refRoot, kindMembers, assemblyMembers, kindDefinedBy, LOOKS } from './scene.js';
+export { validateScene, validateKind, sceneTags, isBindingRef, isAssetPath, isComponentPath, isKindPath, isMemberName, refRoot, kindMembers, assemblyMembers, kindDefinedBy, LOOKS } from './scene.js';
 export type {
 	SceneDoc,
 	SceneLook,
 	SceneKind,
+	SceneKindEntry,
 	SceneAssembly,
 	SceneNode,
 	ScenePipe,
@@ -58,7 +59,7 @@ export type { Drive, DriveChannel, MeshState, NumExpr, BoolExpr, Axis } from './
 export { resolveNodeBindings, resolveRefs, readPart, bindingsGood, readPath, member, num, flowing } from './bindings.js';
 
 // The registry: extend `builtinRegistry` with your own kinds.
-export { builtinRegistry, registryFor, tankKind, pumpKind, valveKind, kindOf, componentRegistry, matchModule, assemblyBounds } from './registry.js';
+export { builtinRegistry, registryFor, tankKind, pumpKind, valveKind, kindOf, componentRegistry, inlineKindFiles, matchModule, assemblyBounds } from './registry.js';
 export type { NodeKindDef, NodeProps, PanelProps, NodeRegistry, KindMeta, Box } from './registry.js';
 export { BUILTIN_CONTRACT, tankState, tankStatus, pumpState, pumpStatus, valveState, valveStatus } from './kinds.js';
 

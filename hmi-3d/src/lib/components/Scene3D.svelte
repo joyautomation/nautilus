@@ -119,7 +119,7 @@
 	// the flat look is for); one under a new name draws its model in that
 	// look's materials (GltfNode reads the view), so a station of modelled
 	// kinds is never a page of labels over nothing.
-	let hasModels = $derived(Object.values(doc?.kinds ?? {}).some((k) => k.model));
+	let hasModels = $derived(Object.values(doc?.kinds ?? {}).some((k) => typeof k !== 'string' && k.model));
 	let GltfNode = $state<Component<NodeProps> | null>(null);
 	$effect(() => {
 		if (hasModels && !GltfNode) import('./GltfNode.svelte').then((m) => (GltfNode = m.default as Component<NodeProps>));
