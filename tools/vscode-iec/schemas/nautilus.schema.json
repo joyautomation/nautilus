@@ -64,6 +64,25 @@
       "minItems": 1,
       "description": "Several field drivers on one scan \u2014 e.g. an EtherNet/IP poll plus a Sparkplug feed. Each entry is the same shape as driver:, plus an optional name to tell status rows apart. A tag may be owned by exactly one driver; a duplicate is a load-time error naming both. One entry behaves exactly like driver:. Do not set driver: as well."
     },
+    "opcua": {
+      "type": "object",
+      "description": "Optional OPC UA server configuration",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "endpoint": {
+          "type": "string",
+          "default": "localhost:4840"
+        },
+        "interval": {
+          "$ref": "#/definitions/duration",
+          "default": "1s"
+        }
+      }
+    },
     "sparkplug": {
       "$ref": "#/definitions/sparkplug",
       "description": "Republish the tag store as a Sparkplug B edge node."
@@ -664,6 +683,25 @@
           }
         }
       ]
+    },
+    "opcua": {
+      "type": "object",
+      "description": "Optional OPC UA server configuration",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "endpoint": {
+          "type": "string",
+          "default": "localhost:4840"
+        },
+        "interval": {
+          "$ref": "#/definitions/duration",
+          "default": "1s"
+        }
+      }
     },
     "sparkplug": {
       "type": "object",
