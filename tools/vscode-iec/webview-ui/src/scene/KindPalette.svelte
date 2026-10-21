@@ -3,14 +3,14 @@
 	// `kinds` entries (sceneKinds.ts's paletteKinds, posted by the host).
 	// Click one to arm placement, then click the ground to drop it there;
 	// click it again (or Esc) to disarm.
-	import { armPlace, ed, type PaletteKind } from './sceneState.svelte';
+	import { armPlace, ed, openKind, type PaletteKind } from './sceneState.svelte';
 
 	function caption(k: PaletteKind): string {
 		switch (k.definedBy) {
 			case 'builtin':
 				return 'built-in';
 			case 'model':
-				return 'glTF';
+				return k.file ? 'glTF · file' : 'glTF';
 			case 'component':
 				return 'component';
 			case 'assembly':
@@ -24,6 +24,7 @@
 		if (k.type) bits.push(`binds a ${k.type}`);
 		if (k.members.length) bits.push(`reads ${k.members.join(', ')}`);
 		if (k.source) bits.push(k.source);
+		if (k.file) bits.push(k.file);
 		return bits.join(' · ');
 	}
 </script>
@@ -42,6 +43,9 @@
 			<span class="name">{k.name}</span>
 			<span class="cap">{caption(k)}</span>
 		</button>
+		{#if k.file}
+			<button class="edit" data-kind="palette-edit" data-id={k.name} onclick={() => openKind(k.file!)} title="Open {k.file} in the kind editor, beside the scene">edit kind</button>
+		{/if}
 	{/each}
 	{#if ed.kinds.length === 0}
 		<div class="empty">No kinds yet</div>
@@ -105,5 +109,19 @@
 		color: var(--nx-muted);
 		font-size: 12px;
 		padding: 4px;
+	}
+	.edit {
+		align-self: flex-end;
+		margin-top: -4px;
+		border: 0;
+		background: none;
+		color: var(--nx-accent);
+		cursor: pointer;
+		font: inherit;
+		font-size: 11px;
+		padding: 0 4px 2px;
+	}
+	.edit:hover {
+		text-decoration: underline;
 	}
 </style>

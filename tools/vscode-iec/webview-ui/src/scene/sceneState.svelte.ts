@@ -30,7 +30,12 @@ export type PaletteKind = {
 	members: string[];
 	source?: string;
 	parts?: number;
+	/** The kind file the entry names, relative to the scene (§3g). */
+	file?: string;
 };
+
+/** Mirror of src/sceneEditorLogic.ts's KindFileReport. */
+export type KindFileReport = { name: string; path: string; file?: string; error?: string };
 
 /** Mirror of src/sceneEditorLogic.ts's AssetReport: where each asset path
  * the document names was found (`file` absent = nowhere). */
@@ -54,6 +59,8 @@ export const ed = $state({
 	/** The palette: built-ins plus the document's own kinds. */
 	kinds: [] as PaletteKind[],
 	assets: [] as AssetReport[],
+	/** The kind files the document names, and what came of each. */
+	kindFiles: [] as KindFileReport[],
 	/** The selected node's id. */
 	selected: null as string | null,
 	tool: 'select' as Tool,
@@ -117,6 +124,11 @@ export function trace(msg: string): void {
  * current doc, config and tags. */
 export function announceReady(): void {
 	vscode.postMessage({ type: 'sceneReady' });
+}
+
+/** Open a file-backed kind in the kind editor, beside the scene. */
+export function openKind(file: string): void {
+	vscode.postMessage({ type: 'openKind', value: file });
 }
 
 export function setSnapToGrid(value: boolean): void {
