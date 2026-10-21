@@ -222,6 +222,48 @@ any other:
   `kindOf(Skid, kind)` makes the registry entry:
   `registry={{ ...builtinRegistry, skid: kindOf(Skid, kind) }}`.
 
+### A kind in a file of its own
+
+A data kind that several scenes place — or one you want to open in the
+extension's kind editor (design §3g) — lives in a **`{Name}.kind.json`**,
+and the `kinds` entry names the file instead of holding the keys:
+
+```json
+"kinds": { "pump": "hmi/src/lib/kinds/pump.kind.json" }
+```
+
+```json
+// hmi/src/lib/kinds/pump.kind.json — the same keys an inline entry takes
+{
+	"type": "Motor",
+	"model": "models/pump.glb",
+	"status": "{Running?run:stopped} {SpeedHz:0} Hz",
+	"drive": [
+		{ "mesh": "Motor", "tint": { "bind": "Running", "on": "running" } },
+		{ "mesh": "Impeller", "spin": { "axis": "y", "revPerS": { "bind": "SpeedHz", "scale": 0.0333 } } }
+	]
+}
+```
+
+- The path is **relative to the scene file**, like a component's, and
+  the file reaches the view the same way: through `modules`, with the
+  JSON files in the glob —
+
+```svelte
+<SceneView {doc} {rt} {alarms} modules={import.meta.glob(['/src/**/*.svelte', '/src/**/*.kind.json'], { eager: true })} />
+```
+
+- `inlineKindFiles(doc, modules)` is the step `SceneView` takes first:
+  the document with every path entry replaced by its file's object, and
+  the errors (a path no module matches, a file that is not an object)
+  listed with the document's. A kind file holds a data kind or a bare
+  contract; a `component` or an `assembly` stays inline in the scene.
+  `validateKind(obj)` checks one file on its own.
+- `naut check` reads the file next to the scene and holds the kind's nodes
+  to it; the VS Code extension's palette lists the kind with its file, and
+  the file opens in the **kind editor** — the model on a turntable, its
+  mesh names for the drives, sample values for the status text.
+
 ### An assembly: a kind made of kinds
 
 The composition primitive in both worlds. In the document, parts and

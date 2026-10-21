@@ -1,5 +1,27 @@
 # Changelog — @joyautomation/nautilus-hmi-3d
 
+## 0.3.0 — 2026-10-21
+
+**Added.** A kind in a file of its own (design §3g, slice 2). A `kinds`
+entry may be the path of a `{Name}.kind.json` relative to the scene file
+(`"pump": "hmi/src/lib/kinds/pump.kind.json"`), holding the same keys an
+inline entry does — `type`, `members`, `model`, `bounds`, `labelAt`,
+`status`, `drive` — so one pump is declared once and placed in every
+scene, and has a file to open in the extension's kind editor. The app
+hands SceneView the files through `modules`, the way it hands it
+component files: `import.meta.glob(['$lib/**/*.svelte',
+'$lib/**/*.kind.json'], { eager: true })`; `inlineKindFiles(doc,
+modules)` is the pure step (exported), and its errors — a path no module
+matches, a module that is not an object — list with the document's.
+`validateScene` accepts a path entry as a kind the document brings;
+`validateKind(obj)` checks one file on its own, with paths from its root
+(a `component` or `assembly` is refused there — those stay inline, where
+the scene can see them). `isKindPath`, `kindDefinedBy(...) === 'file'`
+and the `SceneKindEntry` type go with it.
+
+**Changed.** `model` must end in `.glb` or `.gltf` in `validateScene` as
+it already had to for `naut check` and the schema.
+
 ## 0.2.2 — 2026-10-20
 
 **Added.** `PlacedNode.object`: a placed node announces its root group
