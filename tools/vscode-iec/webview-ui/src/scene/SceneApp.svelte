@@ -17,6 +17,7 @@
 				rendered?: typeof ed.rendered;
 				kinds?: typeof ed.kinds;
 				assets?: typeof ed.assets;
+				kindFiles?: typeof ed.kindFiles;
 				title?: string;
 				message?: string;
 				tags?: Record<string, unknown> | null;
@@ -28,6 +29,7 @@
 				ed.rendered = m.rendered ?? m.doc;
 				ed.kinds = m.kinds ?? [];
 				ed.assets = m.assets ?? [];
+				ed.kindFiles = m.kindFiles ?? [];
 				ed.title = m.title ?? ed.title;
 				ed.error = '';
 			} else if (m?.type === 'sceneError') {
@@ -87,6 +89,8 @@
 	}
 
 	const missing = $derived(missingAssets());
+	/** Kind files that did not inline: not found, or not a kind. */
+	const badKindFiles = $derived(ed.kindFiles.filter((f) => !f.file || f.error));
 	const hint = $derived(
 		ed.tool === 'place'
 			? `click the ground to place a ${ed.placeKind} · Shift = off-grid · Esc cancels`
@@ -145,6 +149,14 @@
 			<div class="err" role="alert">
 				<span>JSON: {ed.error} — the scene is read-only until the text parses again</span>
 				<button class="reopen" onclick={reopenAsText}>Reopen as Text Editor</button>
+			</div>
+		{/if}
+		{#if badKindFiles.length}
+			<div class="warn" role="status">
+				<span>
+					{#each badKindFiles as f, i (f.name)}{i ? ' · ' : ''}<b>{f.name}</b>: {f.error ? `${f.path} — ${f.error}` : `${f.path} not found next to the scene file`}{/each}
+					— {badKindFiles.length === 1 ? 'the kind draws' : 'those kinds draw'} as a grey box until the file is right.
+				</span>
 			</div>
 		{/if}
 		{#if missing.length}

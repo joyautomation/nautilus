@@ -96,3 +96,16 @@ test(
     }
   }
 );
+
+test("paletteKinds: a file-backed kind carries its file; an uninlined one is listed by its file", () => {
+  const inlined = { kinds: { pump: { model: "models/pump.glb", status: "{Speed:0} %" }, well: { model: "models/well.glb" }, gone: "hmi/src/lib/kinds/gone.kind.json" } };
+  const rows = paletteKinds(inlined, { pump: "hmi/src/lib/kinds/pump.kind.json", well: "hmi/src/lib/kinds/well.kind.json", gone: "hmi/src/lib/kinds/gone.kind.json" });
+  const by = Object.fromEntries(rows.map((r) => [r.name, r]));
+  assert.equal(by.pump.definedBy, "model");
+  assert.equal(by.pump.file, "hmi/src/lib/kinds/pump.kind.json");
+  assert.deepEqual(by.pump.members, ["Running", "Fault", "Speed"]);
+  assert.equal(by.well.definedBy, "model");
+  assert.equal(by.well.file, "hmi/src/lib/kinds/well.kind.json");
+  assert.deepEqual(by.gone, { name: "gone", definedBy: "declared", members: [], file: "hmi/src/lib/kinds/gone.kind.json" });
+  assert.equal(by.tank.file, undefined);
+});

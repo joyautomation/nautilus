@@ -27,6 +27,7 @@ import { SfcEditorProvider, SfcPreview } from "./sfcPreview";
 import { registerDiagramCommands } from "./diagramCommands";
 import { MimicEditorProvider } from "./mimicEditor";
 import { SceneEditorProvider } from "./sceneEditor";
+import { KindEditorProvider } from "./kindEditor";
 import { UserComponentManager } from "./userComponents";
 import { registerEditComponentPortsCommand } from "./editComponentPorts";
 import { registerComponentPreview } from "./componentPreview";
@@ -161,6 +162,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // "*.scene.json" opens as the 3D scene editor by default, for the same
   // reason (docs/design/spatial-hmi.md §3g).
   context.subscriptions.push(new SceneEditorProvider(context).register());
+  // "*.kind.json" — a 3D kind in a file of its own — opens as the kind on
+  // a turntable with its drives (§3g, slice 2).
+  context.subscriptions.push(new KindEditorProvider(context).register());
   // "Edit Component Ports…": pick any component (built-in or custom) and
   // edit its ports on its render in the component preview pane — shares the
   // mimic editor's workspace-wide sidecar index so a sidecar written there

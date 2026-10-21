@@ -45,7 +45,10 @@
 
 	const registry = $derived.by((): NodeRegistry => {
 		const reg: NodeRegistry = { ...builtinRegistry };
-		for (const [name, k] of Object.entries(doc?.kinds ?? {})) {
+		for (const [name, entry] of Object.entries(doc?.kinds ?? {})) {
+			// A kind file the host could not inline (missing, not a kind) is a
+			// bare name here: its nodes draw as the fallback box.
+			const k = typeof entry === 'string' ? {} : entry;
 			// A model or an assembly is laid on by Scene3D itself (registryFor);
 			// a re-pointed built-in keeps the built-in's own component. What
 			// needs a stand-in is a kind with no Svelte component here: a

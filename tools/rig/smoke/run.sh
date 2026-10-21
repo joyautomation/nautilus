@@ -61,6 +61,10 @@ rig_push "$RIG_DIR/lib/lib.sh" "/home/$RIG_USER/lib.sh"
 rig_push_tree "$RIG_DIR/verbs" "/home/$RIG_USER/fixtures"
 rig_push_tree "$HERE/fixtures" "/home/$RIG_USER/fixtures"
 rig_push_tree "$HERE" "/home/$RIG_USER/smoke"
+# ~/fixtures/models: the package's built-in tank, for check 22's kind file
+# (an app copies the models it uses into hmi/static/models/ the same way).
+_rig mkdir -p "/home/$RIG_USER/fixtures/models"
+rig_push "$REPO/hmi-3d/models/tank.glb" "/home/$RIG_USER/fixtures/models/tank.glb"
 _rig mkdir -p "/home/$RIG_USER/smoke-assets"
 L5X=$REPO/lang/l5x/testdata/DemoProgram.L5X
 [[ -f $L5X ]] && rig_push "$L5X" "/home/$RIG_USER/smoke-assets/DemoProgram.L5X"

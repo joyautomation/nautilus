@@ -54,6 +54,22 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   and hover to see which `.svelte` drew what, click to open it at the
   line — in this window, local or Remote SSH. Works from a Remote SSH
   window (the port is forwarded). Needs workspace trust.
+- **A 3D kind editor, and kinds in files of their own.** A scene's
+  `kinds` entry may now be the path of a `{Name}.kind.json` relative to the
+  scene (`"pump": "hmi/src/lib/kinds/pump.kind.json"`), holding the same
+  keys an inline entry does, so one pump is declared once and placed in
+  every scene; the schema knows the file (`nautilus-kind.schema.json`,
+  derived from the scene schema's kind contract) and the scene editor
+  inlines it, captions the kind `glTF · file` and offers **edit kind**.
+  The file opens as the kind itself: its model on a turntable (`T`), in
+  any look; the model's named objects fill every drive row's mesh menu
+  and a name the model lacks is flagged; sample values per member drive
+  the meshes and preview the `status` text without touching the file;
+  `type`, `members`, `model`, `status`, `labelAt`, `bounds` and the
+  drives (mesh, channel, fields; **Add drive**, `×`) are edited beside it,
+  each change one text edit with one drive per line. `naut check` reads
+  the file next to the scene. `examples/lift-station`'s six kinds moved
+  into `hmi/src/lib/kinds/`.
 
 ### Fixed
 

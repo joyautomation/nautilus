@@ -195,6 +195,32 @@ the scene, and you drag what landed in the wrong place.
   Every gesture is one text edit, so undo is text undo and a move diffs as
   one `pos` line.
 
+## 3D kind editor
+
+A `{Name}.kind.json` — a 3D kind in a file of its own, the same keys a
+scene's `kinds` entry takes (`type`, `members`, `model`, `bounds`,
+`labelAt`, `status`, `drive`), named by the scene as
+`"pump": "hmi/src/lib/kinds/pump.kind.json"` — opens as the kind itself:
+its model on a turntable (`T` toggles), in the lit, flat or paper look.
+
+- The model's named objects fill every drive's mesh menu, so a drive
+  targets something that exists; a name the model lacks is flagged. A
+  drive is a row: its mesh, its channel (`spin`, `turn`, `scale`, `tint`,
+  `emissive`, `visible`) and the channel's few fields. **Add drive**,
+  `×` removes.
+- **Sample values** for the members the kind reads (a checkbox where a
+  tint or a `{X?a:b}` reads it, a number elsewhere) drive the meshes and
+  preview the `status` text; they are never written to the file.
+- `type`, `members`, `model`, `status`, `labelAt` and `bounds` are edited
+  beside it. Every change is one text edit, one drive per line, so undo
+  is text undo and a drive diffs as one line. The scene editor's palette
+  captions a file-backed kind `glTF · file` and its **edit kind** link
+  opens the file beside the scene.
+- The model is found up from the file's folder through the same roots
+  the scene editor uses (`hmi/static/`, `hmi/build/`); not found, the
+  panel says so and the kind draws as a grey box with its drives still
+  editable by name.
+
 ## Testing
 
 ![Acceptance tests in the Testing view, with a failure shown on the assertion](https://raw.githubusercontent.com/joyautomation/nautilus/main/tools/vscode-iec/images/testing-view.png)
