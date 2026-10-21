@@ -630,6 +630,9 @@ func TestKindContractMatchesTheSchema(t *testing.T) {
 	rt := reflect.TypeOf(Kind{})
 	for i := 0; i < rt.NumField(); i++ {
 		name, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+		if name == "-" {
+			continue // File: the path form of the entry, not a key
+		}
 		fromGo = append(fromGo, name)
 	}
 	sort.Strings(fromGo)
@@ -645,5 +648,111 @@ func TestKindContractMatchesTheSchema(t *testing.T) {
 		if _, ok := schema.Definitions.Assembly.Properties[f]; !ok {
 			t.Errorf("schema assembly has no property %q", f)
 		}
+	}
+}
+
+// A kind in a file of its own (design §3g, slice 2): the entry is a path,
+// resolved next to the scene file and then checked as if it were inline.
+func TestKindFilesResolveAndCheck(t *testing.T) {
+	d := parse(t, `{"kinds": {
+		"subpump": "hmi/src/lib/kinds/pump.kind.json",
+		"tank": {"type": "Tank"}
+	}, "nodes": [{"id": "P1", "kind": "subpump", "tag": "P1", "pos": [0, 0, 0]}]}`)
+	if got := d.Kinds["subpump"].DefinedBy(); got != "file" {
+		t.Fatalf("unresolved entry DefinedBy = %q, want file", got)
+	}
+	if kf := d.KindFiles(); len(kf) != 1 || kf[0] != [2]string{"/kinds/subpump", "hmi/src/lib/kinds/pump.kind.json"} {
+		t.Fatalf("KindFiles = %v", kf)
+	}
+	// Before resolution, Check holds the path only.
+	if errs, _ := Check(d, nil); len(errs) != 0 {
+		t.Fatalf("unresolved: %v", errs)
+	}
+	files := map[string]string{
+		"hmi/src/lib/kinds/pump.kind.json": `{"type": "Motor", "model": "models/pump.glb", "status": "{Running?run:stopped} {SpeedHz:0} Hz",
+			"drive": [{"mesh": "Impeller", "spin": {"axis": "y", "revPerS": {"bind": "SpeedHz", "scale": 0.0333}}}]}`,
+	}
+	read := func(p string) ([]byte, error) {
+		if s, ok := files[p]; ok {
+			return []byte(s), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	if errs := ResolveKindFiles(d, read); len(errs) != 0 {
+		t.Fatalf("resolve: %v", errs)
+	}
+	k := d.Kinds["subpump"]
+	if k.File != "hmi/src/lib/kinds/pump.kind.json" || k.Model != "models/pump.glb" || k.DefinedBy() != "model" {
+		t.Fatalf("resolved kind = %+v", k)
+	}
+	// The file's members reach the node check: P1 is a Motor with SpeedHz and Running.
+	tags := []TagInfo{{Name: "P1", TypeName: "Motor", Struct: udt("Motor", "Running:bool", "Fault:bool")}}
+	errs, _ := Check(d, tags)
+	if len(errs) != 1 || !strings.Contains(errs[0], `/nodes/0/tag: Motor "P1" has no member SpeedHz, which kind "subpump" reads`) {
+		t.Fatalf("resolved check: %v", errs)
+	}
+	// Assets see the model from the file.
+	if a := d.Assets(); len(a) != 1 || a[0][1] != "models/pump.glb" {
+		t.Fatalf("assets = %v", a)
+	}
+	// Encode writes the path back, not the file's content.
+	out, err := Encode(d)
+	if err != nil || !strings.Contains(string(out), `"subpump": "hmi/src/lib/kinds/pump.kind.json"`) || strings.Contains(string(out), "Impeller") {
+		t.Fatalf("encode: %v\n%s", err, out)
+	}
+}
+
+func TestKindFilesErrors(t *testing.T) {
+	d := parse(t, `{"kinds": {
+		"a": "/abs/a.kind.json",
+		"b": "hmi/b.json",
+		"c": "hmi/missing.kind.json",
+		"d": "hmi/bad.kind.json",
+		"e": "hmi/comp.kind.json",
+		"f": "hmi/unknown.kind.json"
+	}, "nodes": []}`)
+	files := map[string]string{
+		"hmi/bad.kind.json":     `{"model": `,
+		"hmi/comp.kind.json":    `{"component": "hmi/src/lib/Skid.svelte"}`,
+		"hmi/unknown.kind.json": `{"model": "models/x.glb", "colour": "red"}`,
+	}
+	read := func(p string) ([]byte, error) {
+		if s, ok := files[p]; ok {
+			return []byte(s), nil
+		}
+		return nil, os.ErrNotExist
+	}
+	// Check alone refuses the malformed paths.
+	errs, _ := Check(d, nil)
+	if len(errs) != 2 || !strings.Contains(errs[0], "/kinds/a: a kind file is a {Name}.kind.json") || !strings.Contains(errs[1], "/kinds/b: a kind file is") {
+		t.Fatalf("check unresolved: %v", errs)
+	}
+	errs = ResolveKindFiles(d, read)
+	for _, want := range []string{
+		"/kinds/a: a kind file is a {Name}.kind.json",
+		"/kinds/b: a kind file is a {Name}.kind.json",
+		`/kinds/c: "hmi/missing.kind.json" was not found next to the scene file`,
+		"/kinds/d: hmi/bad.kind.json: ",
+		"/kinds/e: hmi/comp.kind.json holds a component kind",
+		`/kinds/f: hmi/unknown.kind.json: json: unknown field "colour"`,
+	} {
+		found := false
+		for _, e := range errs {
+			if strings.Contains(e, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("missing %q in %v", want, errs)
+		}
+	}
+	if len(errs) != 6 {
+		t.Errorf("got %d errors: %v", len(errs), errs)
+	}
+}
+
+func TestKindEntryRejectsUnknownFieldsInline(t *testing.T) {
+	if _, err := Parse([]byte(`{"kinds": {"pump": {"model": "models/p.glb", "colour": "red"}}, "nodes": []}`)); err == nil || !strings.Contains(err.Error(), "colour") {
+		t.Fatalf("want an unknown-field error, got %v", err)
 	}
 }

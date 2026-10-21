@@ -1,0 +1,296 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "nautilus kind file",
+  "description": "A 3D kind in a file of its own ({Name}.kind.json, docs/design/spatial-hmi.md §3g): the same keys a scene's `kinds` entry takes — type, members, model, bounds, labelAt, status, drive — so one pump is declared once and placed in every scene that names the file (\"pump\": \"hmi/src/lib/kinds/pump.kind.json\"). A component or an assembly kind stays inline in the scene. Derived from nautilus-scene.schema.json's kindContract by `npm run gen:kind-schema`.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The UDT a node of this kind binds. The built-ins default to tank → Tank, pump → Motor, valve → Valve; re-point one here if the project's UDT is named differently."
+    },
+    "members": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "The members the kind's component reads off the struct, so `naut check` can hold every node of this kind to the same standard."
+    },
+    "model": {
+      "type": "string",
+      "pattern": "^(?![a-zA-Z]+:)(?!.*(^|/)\\.\\.(/|$)).+\\.(glb|gltf)$",
+      "description": "A glTF/GLB as a URL path from the app root (`models/pump.glb` → `/models/pump.glb`; `hmi/static/` in source). Metres, +y up; the node's pos/rot/scale place the model's origin. A data kind under a built-in's name keeps that built-in's contract, status text and faceplate and replaces only the geometry."
+    },
+    "bounds": {
+      "oneOf": [
+        {
+          "const": "auto"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "size",
+            "center"
+          ],
+          "properties": {
+            "size": {
+              "$ref": "#/definitions/vec3"
+            },
+            "center": {
+              "$ref": "#/definitions/vec3"
+            }
+          }
+        }
+      ],
+      "description": "The halo / selection box: 'auto' (default; the loaded model's box) or an explicit local-space box."
+    },
+    "labelAt": {
+      "$ref": "#/definitions/vec3",
+      "description": "Where the label floats, local metres. Default: the top centre of the bounds."
+    },
+    "status": {
+      "type": "string",
+      "description": "The label's value text as a template over members: `{Level:1} %` → `48.3 %`; `{Running?run:stopped}`. Reads `stale` when quality is bad."
+    },
+    "drive": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/drive"
+      },
+      "description": "What live values do to named meshes in the model. Each drive names one mesh and one channel."
+    }
+  },
+  "definitions": {
+    "axis": {
+      "enum": [
+        "x",
+        "y",
+        "z"
+      ]
+    },
+    "boolExpr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bind"
+      ],
+      "properties": {
+        "bind": {
+          "type": "string",
+          "pattern": "^!?[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "A member of the node's struct; true, or a number above `threshold`. A leading `!` negates."
+        },
+        "threshold": {
+          "type": "number",
+          "description": "A number counts as true above this. Default 0."
+        }
+      }
+    },
+    "drive": {
+      "type": "object",
+      "required": [
+        "mesh"
+      ],
+      "properties": {
+        "mesh": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The name of a mesh (node) in the model."
+        },
+        "spin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "axis",
+            "revPerS"
+          ],
+          "properties": {
+            "axis": {
+              "$ref": "#/definitions/axis"
+            },
+            "revPerS": {
+              "$ref": "#/definitions/numExpr"
+            }
+          },
+          "description": "Turn the mesh continuously about its local axis, at revPerS revolutions per second."
+        },
+        "turn": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "axis",
+            "deg"
+          ],
+          "properties": {
+            "axis": {
+              "$ref": "#/definitions/axis"
+            },
+            "deg": {
+              "$ref": "#/definitions/numExpr"
+            }
+          },
+          "description": "Set the mesh's rotation about its local axis, degrees from the model's own."
+        },
+        "scale": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "axis",
+            "to"
+          ],
+          "properties": {
+            "axis": {
+              "enum": [
+                "x",
+                "y",
+                "z",
+                "xyz"
+              ]
+            },
+            "to": {
+              "$ref": "#/definitions/numExpr"
+            }
+          },
+          "description": "Set the mesh's scale on that axis (a fluid whose origin is its base)."
+        },
+        "tint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bind",
+            "on"
+          ],
+          "properties": {
+            "bind": {
+              "type": "string",
+              "pattern": "^!?[A-Za-z_][A-Za-z0-9_]*$",
+              "description": "A member of the node's struct; true, or a number above `threshold`. A leading `!` negates."
+            },
+            "threshold": {
+              "type": "number",
+              "description": "A number counts as true above this. Default 0."
+            },
+            "on": {
+              "type": "string",
+              "minLength": 1,
+              "description": "A palette slot (`running`, `fluid`, `handle`, `stale`, a priority name) or a CSS colour."
+            },
+            "off": {
+              "type": "string",
+              "minLength": 1,
+              "description": "A palette slot (`running`, `fluid`, `handle`, `stale`, a priority name) or a CSS colour. Absent = the model's own colour."
+            }
+          },
+          "description": "The mesh's colour is `on` while true, else `off` or the model's own."
+        },
+        "emissive": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bind",
+            "on"
+          ],
+          "properties": {
+            "bind": {
+              "type": "string",
+              "pattern": "^!?[A-Za-z_][A-Za-z0-9_]*$",
+              "description": "A member of the node's struct; true, or a number above `threshold`. A leading `!` negates."
+            },
+            "threshold": {
+              "type": "number",
+              "description": "A number counts as true above this. Default 0."
+            },
+            "on": {
+              "type": "string",
+              "minLength": 1,
+              "description": "A palette slot (`running`, `fluid`, `handle`, `stale`, a priority name) or a CSS colour."
+            },
+            "intensity": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Default 1."
+            }
+          },
+          "description": "The mesh glows `on` while true."
+        },
+        "visible": {
+          "$ref": "#/definitions/boolExpr",
+          "description": "The mesh is shown while true."
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "spin"
+          ]
+        },
+        {
+          "required": [
+            "turn"
+          ]
+        },
+        {
+          "required": [
+            "scale"
+          ]
+        },
+        {
+          "required": [
+            "tint"
+          ]
+        },
+        {
+          "required": [
+            "emissive"
+          ]
+        },
+        {
+          "required": [
+            "visible"
+          ]
+        }
+      ],
+      "description": "One mesh, one channel: spin, turn, scale, tint, emissive or visible. The vocabulary is fixed (docs/design/spatial-hmi.md §3c); a kind that needs more is a Svelte component in the registry."
+    },
+    "numExpr": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "bind"
+      ],
+      "properties": {
+        "bind": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "A member of the node's struct (`Speed`). The node's own `bind` overrides it by the built-ins' rule (`speed` overrides `Speed`)."
+        },
+        "scale": {
+          "type": "number",
+          "description": "Multiplier. Default 1."
+        },
+        "offset": {
+          "type": "number",
+          "description": "Added after scale. Default 0."
+        },
+        "min": {
+          "type": "number"
+        },
+        "max": {
+          "type": "number"
+        }
+      },
+      "description": "member × scale + offset, clamped to [min, max]."
+    },
+    "vec3": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    }
+  }
+}

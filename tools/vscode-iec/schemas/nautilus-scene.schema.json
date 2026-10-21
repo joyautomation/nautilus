@@ -23,9 +23,18 @@
     "kinds": {
       "type": "object",
       "additionalProperties": {
-        "$ref": "#/definitions/kindContract"
+        "oneOf": [
+          {
+            "$ref": "#/definitions/kindContract"
+          },
+          {
+            "type": "string",
+            "pattern": "^(?![a-zA-Z]+:)(?!/)(?!.*(^|/)\\.\\.(/|$)).+\\.kind\\.json$",
+            "description": "The path of a {Name}.kind.json holding the contract (docs/design/spatial-hmi.md §3g): a kind in a file of its own, relative to this scene file like a component (`hmi/src/lib/kinds/pump.kind.json`). The app hands SceneView the file through `modules`; `naut check` reads it next to the scene; the extension opens it in the kind editor."
+          }
+        ]
       },
-      "description": "The kind ↔ struct-type contract (docs/design/spatial-hmi.md §3b): overrides for the built-in kinds (tank → Tank, pump → Motor, valve → Valve) and declarations for kinds the app registers itself. Keyed by kind name. `naut check` holds every node of a declared kind to its `type` and `members`."
+      "description": "The kind ↔ struct-type contract (docs/design/spatial-hmi.md §3b): overrides for the built-in kinds (tank → Tank, pump → Motor, valve → Valve) and declarations for kinds the app registers itself. Keyed by kind name. `naut check` holds every node of a declared kind to its `type` and `members`. An entry is the contract inline, or the path of a `{Name}.kind.json` that holds it."
     },
     "environment": {
       "$ref": "#/definitions/environment",
