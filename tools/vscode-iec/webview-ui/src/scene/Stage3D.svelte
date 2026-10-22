@@ -57,7 +57,7 @@
 			if (reg[name] && !k.component) continue;
 			if (k.assembly) continue;
 			const box = k.bounds && k.bounds !== 'auto' ? k.bounds : FALLBACK;
-			reg[name] = { component: placeholderFor(box), bounds: box, type: k.type, members: k.members, labelAt: k.labelAt };
+			reg[name] = { component: placeholderFor(box), bounds: box, type: k.type, members: k.members, labelAt: k.labelAt, fallback: true };
 		}
 		return reg;
 	});

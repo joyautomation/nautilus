@@ -17,7 +17,10 @@ matches, a module that is not an object — list with the document's.
 `validateKind(obj)` checks one file on its own, with paths from its root
 (a `component` or `assembly` is refused there — those stay inline, where
 the scene can see them). `isKindPath`, `kindDefinedBy(...) === 'file'`
-and the `SceneKindEntry` type go with it.
+and the `SceneKindEntry` type go with it. A registry entry may be marked
+`fallback: true` — an editor's stand-in box for a model that does not
+load — and `registryFor` lays the model over it in every look; only a
+real Svelte kind of the same name keeps its primitives in flat and paper.
 
 **Changed.** `model` must end in `.glb` or `.gltf` in `validateScene` as
 it already had to for `naut check` and the schema.

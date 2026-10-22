@@ -126,7 +126,7 @@ describe('assemblies', () => {
 		expect(r.pump).toBe(registry.pump);
 	});
 
-	it('registryFor draws a model kind in every look unless a Svelte kind has its name', () => {
+	it('registryFor draws a model kind in every look unless a real Svelte kind has its name', () => {
 		const gltf = {} as unknown as Parameters<typeof registryFor>[2];
 		const doc: SceneDoc = {
 			kinds: { pump: { model: 'models/pump.glb' }, 'wet-well': { model: 'models/wet-well.glb', status: '{Level:1} %' } },
@@ -140,6 +140,10 @@ describe('assemblies', () => {
 		expect(flat.pump).toBe(registry.pump);
 		expect(flat['wet-well'].component).toBe(gltf);
 		expect(flat['wet-well'].status?.({ Level: 42 }, true)).toBe('42.0 %');
+		// an editor's stand-in box under the kind's name is not a Svelte kind: the model draws over it in every look
+		const stub = { ...registry, 'wet-well': { component: fake(), bounds: { size: [1, 2, 1] as [number, number, number], center: [0, 1, 0] as [number, number, number] }, fallback: true } };
+		expect(registryFor(doc, stub, gltf, false)['wet-well'].component).toBe(gltf);
+		expect(registryFor(doc, stub, null, false)['wet-well']).toBe(stub['wet-well']);
 	});
 
 	it('validates parts as nodes in the kind’s frame, tags as members, and stays flat', () => {
