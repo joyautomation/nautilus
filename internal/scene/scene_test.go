@@ -756,3 +756,70 @@ func TestKindEntryRejectsUnknownFieldsInline(t *testing.T) {
 		t.Fatalf("want an unknown-field error, got %v", err)
 	}
 }
+
+// Ports on a kind and pipe ends anchored to them (design §3g, slice 3).
+func TestCheckPortsAndAnchors(t *testing.T) {
+	parse := func(src string) *Doc {
+		t.Helper()
+		d, err := Parse([]byte(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	ok := parse(`{
+		"kinds": {
+			"subpump": {"type": "Motor", "model": "models/subpump.glb", "ports": {"suction": {"at": [0, 0.1, 0.2], "dir": [0, 0, 1]}, "discharge": {"at": [0, 0.43, -0.5]}}},
+			"tank": {"ports": {"inlet": {"at": [0, 0.5, 0], "dir": [0, 1, 0]}}}
+		},
+		"nodes": [
+			{"id": "P101", "kind": "subpump", "pos": [1, 0, 2], "rot": [0, 90, 0]},
+			{"id": "T101", "kind": "tank", "pos": [3, 0, 0], "scale": 2},
+			{"id": "XV1", "kind": "valve", "pos": [0, 0, 0]}
+		],
+		"pipes": [
+			{"from": {"node": "P101", "port": "discharge"}, "to": {"node": "T101", "port": "inlet"}},
+			{"from": {"node": "XV1", "port": "out"}, "points": [[1, 1, 1]]}
+		]
+	}`)
+	if errs, _ := Check(ok, nil); len(errs) != 0 {
+		t.Fatalf("anchored pipes: %v", errs)
+	}
+	if ok.EffectiveKinds()["tank"].Ports["inlet"].At[1] != 0.5 {
+		t.Error("EffectiveKinds dropped the tank's ports")
+	}
+	bad := parse(`{
+		"kinds": {"subpump": {"model": "models/subpump.glb", "ports": {"a/b": {"at": [0, 0, 0]}, "ok": {"at": [1], "dir": [0, 0, 0]}}}},
+		"nodes": [{"id": "P101", "kind": "subpump", "pos": [0, 0, 0]}],
+		"pipes": [
+			{"from": {"node": "P999", "port": "ok"}, "to": {"node": "P101", "port": "vent"}},
+			{"from": {"node": "P101", "port": "ok"}, "points": []},
+			{"from": {"node": "P101"}, "points": [[0, 0, 0], [1, 0, 0]]}
+		]
+	}`)
+	errs, _ := Check(bad, nil)
+	got := strings.Join(errs, "\n")
+	for _, want := range []string{
+		"/kinds/subpump/ports/a/b: a port name",
+		"/kinds/subpump/ports/ok/at:",
+		"/kinds/subpump/ports/ok/dir:",
+		`/pipes/0/from/node: no node "P999" in this frame`,
+		`/pipes/0/to/port: kind "subpump" has no port "vent" (it has a/b, ok)`,
+		"/pipes/1/points: needs at least two points counting the anchored ends",
+		"/pipes/2/from/port: must name one of the node's kind's ports",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	// Encode keeps an anchor as written and a port's vectors on one line.
+	out, err := Encode(ok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"from": {`, `"port": "discharge"`, `"at": [0, 0.43, -0.5]`} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("Encode lost %q:\n%s", want, out)
+		}
+	}
+}

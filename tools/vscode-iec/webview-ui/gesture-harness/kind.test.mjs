@@ -17,6 +17,9 @@
 //   K07 pick      the pointer over a part hovers it; a click picks it and
 //                 "Add drive" starts on it; a chip picks by name; Esc and
 //                 a click on the ground clear it; the part's drive row lights
+//   K08 ports     a click on a part records where it landed; "Add port here"
+//                 posts setPort there, facing out; a port in the file is a
+//                 mark on the stage and a row in the panel; rename, delete
 //
 // Bundle under test: env SCENE_BUNDLE, else ../media/dist.
 import { test } from 'node:test';
@@ -143,6 +146,15 @@ class Kind {
 	}
 	rowPicked(i) {
 		return this.b.eval(`window.__rowPicked(${i})`);
+	}
+	hit() {
+		return this.b.eval('JSON.stringify(window.__hit())').then(JSON.parse);
+	}
+	kports() {
+		return this.b.eval('JSON.stringify(window.__kports())').then(JSON.parse);
+	}
+	portRows() {
+		return this.b.eval('JSON.stringify(window.__portRows())').then(JSON.parse);
 	}
 	/** Type into a panel field and leave it (Tab), the way a value is committed. */
 	async type(label, text) {
@@ -326,6 +338,49 @@ test('K07 pick: hover and click on the model pick a part, "Add drive" starts on 
 		await sleep(200);
 		assert.equal(await k.picked(), null, 'a click on empty ground clears the pick');
 		assert.deepEqual(await k.ops(), []);
+		assert.deepEqual(k.exceptions(), []);
+	});
+});
+
+test('K08 ports: a click records where it landed; "Add port here" posts setPort there facing out; a port is a mark and a row; rename and delete', { skip: !MODEL_URI && 'no model' }, async () => {
+	const kind = { ...valveKind(), ports: { inlet: { at: [-0.1, 0.05, 0], dir: [-1, 0, 0] } } };
+	await withKind(kind, {}, async (k) => {
+		const tt = await k.button('Turntable');
+		await k.b.click(tt.cx, tt.cy);
+		await sleep(200);
+		// The file's port is on stage and in the panel.
+		const marks = await k.kports();
+		assert.deepEqual(marks.map((m) => m.name), ['inlet'], JSON.stringify(marks));
+		const rows = await k.portRows();
+		assert.equal(rows.length, 1);
+		assert.deepEqual(rows[0].at, [-0.1, 0.05, 0]);
+		assert.deepEqual(rows[0].dir, [-1, 0, 0]);
+		assert.ok(await k.button('Add port here'), 'Add port here');
+		assert.equal(await k.hit(), null, 'nothing clicked yet');
+		// Click the body: the hit is a point on it, with an outward normal.
+		const body = await k.partAt('Body');
+		await k.b.click(body.x, body.y);
+		await sleep(250);
+		assert.equal(await k.picked(), 'Body');
+		const hit = await k.hit();
+		assert.ok(hit && hit.at.length === 3 && hit.dir.length === 3, JSON.stringify(hit));
+		assert.ok(Math.abs(Math.hypot(...hit.dir) - 1) < 0.01, `unit normal: ${hit.dir}`);
+		// The panel grew with the pick (the picked line): find the button again.
+		const add = await k.button('Add port here');
+		await k.b.click(add.cx, add.cy);
+		await sleep(200);
+		let ops = await k.ops();
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.deepEqual(ops[0], { type: 'setPort', name: 'body', port: { at: hit.at, dir: hit.dir } });
+		await k.reset();
+		// Rename and delete go through the row.
+		await k.type('port name', 'drain');
+		assert.deepEqual(await k.ops(), [{ type: 'renamePort', name: 'inlet', to: 'drain' }]);
+		await k.reset();
+		const del = await k.b.eval(`JSON.stringify((() => { const b = document.querySelector('[data-kind=port-row] [aria-label="remove port"]'); const r = b.getBoundingClientRect(); return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 }; })())`).then(JSON.parse);
+		await k.b.click(del.cx, del.cy);
+		await sleep(150);
+		assert.deepEqual(await k.ops(), [{ type: 'deletePort', name: 'inlet' }]);
 		assert.deepEqual(k.exceptions(), []);
 	});
 });

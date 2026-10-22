@@ -10,8 +10,9 @@
 	import { getContext } from 'svelte';
 	import { useTask, useThrelte } from '@threlte/core';
 	import { Box3, BoxGeometry, EdgesGeometry, Group, LineBasicMaterial, LineSegments, Matrix4, Mesh, MeshBasicMaterial, Object3D, Raycaster, Vector2, Vector3, type Intersection } from 'three';
-	import { DEFAULT_PALETTE, Scene3D, resolvePick, seeThrough, type NodeRegistry, type Palette, type PickHit, type PlacedNode, type SceneDoc } from '@joyautomation/nautilus-hmi-3d';
+	import { DEFAULT_PALETTE, Scene3D, resolvePick, seeThrough, type NodeRegistry, type Palette, type PickHit, type PlacedNode, type SceneDoc, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
 	import { kd } from './kindState.svelte';
+	import { layPortMarks, type PortMark } from './marks';
 
 	let { doc, registry, tags }: { doc: SceneDoc; registry: NodeRegistry; tags: Record<string, unknown> } = $props();
 
@@ -51,7 +52,7 @@
 		for (let p: Object3D | null = o; p && p !== root; p = p.parent) if (!p.visible) return false;
 		return true;
 	}
-	function hitsAt(clientX: number, clientY: number): PickHit[] {
+	function raycast(clientX: number, clientY: number): Intersection[] {
 		if (!root) return [];
 		const r = canvas.getBoundingClientRect();
 		if (!r.width || !r.height) return [];
@@ -62,7 +63,28 @@
 			if ((o as Mesh).isMesh && !o.userData.nxHighlight && shown(o)) Mesh.prototype.raycast.call(o as Mesh, raycaster, hits);
 		});
 		hits.sort((a, b) => a.distance - b.distance);
-		return hits.map((h) => ({ node: partOf(h.object) ?? undefined, opaque: !seeThrough(h.object) }));
+		return hits;
+	}
+	const toPick = (hits: Intersection[]): PickHit[] => hits.map((h) => ({ node: partOf(h.object) ?? undefined, opaque: !seeThrough(h.object) }));
+	function hitsAt(clientX: number, clientY: number): PickHit[] {
+		return toPick(raycast(clientX, clientY));
+	}
+	/** The click's point and the surface's outward normal, in the kind's
+	 * frame (root's local space) — where a port goes. */
+	function hitOn(hits: Intersection[], part: string): { at: Vec3; dir: Vec3 } | null {
+		const h = hits.find((x) => partOf(x.object) === part);
+		if (!h || !root) return null;
+		const at = root.worldToLocal(h.point.clone());
+		let dir: Vector3 | null = null;
+		if (h.face) {
+			const n = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+			// A direction into root's frame: through the inverse of its rotation only.
+			const inv = new Matrix4().copy(root.matrixWorld).invert();
+			dir = n.transformDirection(inv).normalize();
+		}
+		const mm = (v: number) => Math.round(v * 1000) / 1000 + 0;
+		const d = dir ?? new Vector3(0, 1, 0);
+		return { at: [mm(at.x), mm(at.y), mm(at.z)], dir: [mm(d.x), mm(d.y), mm(d.z)] };
 	}
 
 	let down: { x: number; y: number } | null = null;
@@ -79,7 +101,9 @@
 		const d = down;
 		down = null;
 		if (!d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > DRAG_PX) return;
-		kd.picked = resolvePick(hitsAt(e.clientX, e.clientY), kd.picked);
+		const hits = raycast(e.clientX, e.clientY);
+		kd.picked = resolvePick(toPick(hits), kd.picked);
+		kd.hit = kd.picked ? hitOn(hits, kd.picked) : null;
 	}
 	function onLeave() {
 		if (kd.hover) kd.hover = null;
@@ -197,6 +221,21 @@
 		};
 	});
 
+	// The kind's ports, as marks under the node: they turn with it. The
+	// hovered one (a panel row) grows.
+	let marks = new Map<string, PortMark>();
+	$effect(() => {
+		const ports = kd.kind?.ports;
+		const hot = kd.hoverPort;
+		void kd.modelState;
+		if (!root) return;
+		marks = layPortMarks(root, ports, marks, hot, Math.max(0.5, Math.min(3, Math.max(...(kd.bounds?.size ?? [0.4])) / 0.6)));
+		invalidate();
+		return () => {
+			marks = layPortMarks(root, undefined, marks, null);
+		};
+	});
+
 	// Harness hook: what is on stage, read-only, and where a part is on
 	// the page so a test can put the pointer on it.
 	$effect(() => {
@@ -205,6 +244,14 @@
 			rotation: () => placed.PREVIEW?.object?.rotation.y ?? null,
 			hover: () => kd.hover,
 			picked: () => kd.picked,
+			hit: () => kd.hit,
+			ports: () => {
+				const r = canvas.getBoundingClientRect();
+				return [...marks.entries()].map(([name, m]) => {
+					const c = m.getWorldPosition(new Vector3()).project(camera.current);
+					return { name, x: r.left + ((c.x + 1) / 2) * r.width, y: r.top + ((1 - c.y) / 2) * r.height };
+				});
+			},
 			partAt: (name: string) => {
 				const part = findPart(name);
 				if (!part) return null;

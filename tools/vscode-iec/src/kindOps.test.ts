@@ -119,3 +119,21 @@ test("a batch is all or nothing, and an op on bad JSON is refused", () => {
   assert.match(refuse("{", { type: "setField", key: "type", value: "x" }), /not valid JSON/);
   assert.match(refuse("{}", { type: "batch", ops: [{ type: "setField", key: "type", value: "x" }, { type: "deleteDrive", index: 9 }] }), /no drive 9/);
 });
+
+test("ports: set, rename (keeping its place), delete; one per line between status and drive", () => {
+  const withPort = apply(BASE, { type: "setPort", name: "discharge", port: { at: [0, 0.4321, -0.5], dir: [0, 1, 0] } });
+  assert.match(withPort, /"status": "[^"]+",\n  "ports": \{\n    "discharge": \{ "at": \[0, 0.432, -0.5\], "dir": \[0, 1, 0\] \}\n  \},\n  "drive": \[/);
+  const two = apply(withPort, { type: "setPort", name: "suction", port: { at: [0, 0.1, 0.2] } });
+  assert.match(two, /"discharge": \{[^\n]*\},\n    "suction": \{ "at": \[0, 0.1, 0.2\] \}\n/);
+  const renamed = apply(two, { type: "renamePort", name: "discharge", to: "outlet" });
+  assert.deepEqual(Object.keys(parseKind(renamed).ports!), ["outlet", "suction"], "renaming keeps the port's place");
+  assert.match(refuse(renamed, { type: "renamePort", name: "outlet", to: "suction" }), /already exists/);
+  assert.match(refuse(renamed, { type: "setPort", name: "a/b", port: { at: [0, 0, 0] } }), /port name/);
+  assert.match(refuse(renamed, { type: "setPort", name: "x", port: { at: [0, 0, 0], dir: [0, 0, 0] } }), /non-zero/);
+  const one = apply(renamed, { type: "deletePort", name: "outlet" });
+  assert.deepEqual(Object.keys(parseKind(one).ports!), ["suction"]);
+  const none = apply(one, { type: "deletePort", name: "suction" });
+  assert.equal(parseKind(none).ports, undefined, "the last port deleted drops the key");
+  assert.equal(none, BASE);
+  assert.match(refuse(none, { type: "deletePort", name: "suction" }), /no port/);
+});

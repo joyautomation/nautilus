@@ -68,6 +68,14 @@
 					name: c.dataset.name, picked: c.classList.contains('picked'), drives: Number(c.querySelector('small')?.textContent ?? 0), ...vpCenter(c)
 				}));
 			window.__pickedLine = () => document.querySelector('[data-kind=picked]')?.textContent.replace(/\s+/g, ' ').trim() ?? null;
+			// Ports: the stage's marks (projected), the last click's point, the panel's rows.
+			window.__hit = () => (window.__nxKind ? window.__nxKind.hit() : null);
+			window.__kports = () => (window.__nxKind ? window.__nxKind.ports() : []);
+			window.__portRows = () =>
+				Array.from(document.querySelectorAll('[data-kind=port-row]')).map((r) => ({
+					name: r.dataset.name, at: Array.from(r.querySelectorAll('[aria-label^="port at"]')).map((i) => Number(i.value)),
+					dir: Array.from(r.querySelectorAll('[aria-label^="port dir"]')).map((i) => Number(i.value)), ...vpCenter(r)
+				}));
 			window.__rowPicked = (i) => document.querySelector('[data-kind=drive-row][data-index="' + i + '"]')?.classList.contains('picked') ?? null;
 			window.__ready = () => !!document.querySelector('aside[aria-label=Kind]') && !!document.querySelector('.stage canvas');
 		</script>

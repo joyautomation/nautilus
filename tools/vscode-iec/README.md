@@ -209,6 +209,13 @@ its model on a turntable (`T` toggles), in the lit, flat or paper look.
   with the parts it sits in and its drives, and **Add drive** starts on
   it. The **Parts** list picks by name; hovering a name or a drive row
   lights the part on the model. `Esc` or a click on the ground clears.
+- **Ports go where you click.** With a part picked, **Add port here**
+  puts a port at the point the click landed, facing out of the surface
+  (`"ports": { "discharge": { "at": [...], "dir": [...] } }`); each port
+  is an amber mark on the model and a row in the panel (name, `at`,
+  `dir`, **here** to move it to the last click, `×`). A scene anchors a
+  pipe end to a port — `"from": { "node": "P101", "port": "discharge" }`
+  — and the pipe follows the node when it is moved.
 - The model's named objects fill every drive's mesh menu, so a drive
   targets something that exists; a name the model lacks is flagged. A
   drive is a row: its mesh, its channel (`spin`, `turn`, `scale`, `tint`,

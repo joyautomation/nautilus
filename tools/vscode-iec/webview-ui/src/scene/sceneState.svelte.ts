@@ -5,7 +5,7 @@
 // document, only in-flight gestures (a drag's live position, the armed
 // kind, the selection).
 import { vscode } from '../vscodeApi';
-import type { SceneDoc, SceneLook, Vec3 } from '@joyautomation/nautilus-hmi-3d';
+import type { PipeAnchor, SceneDoc, SceneLook, Vec3 } from '@joyautomation/nautilus-hmi-3d';
 import { cloneSafe, opFailureMessage } from '../mimic/opPayload';
 
 /** Mirror of src/sceneOps.ts (extension host). Patch semantics: a key set
@@ -16,7 +16,7 @@ export type SceneOp =
 	| { type: 'moveNode'; id: string; pos: Vec3; rot?: Vec3 }
 	| { type: 'updateNode'; id: string; patch: Record<string, unknown> }
 	| { type: 'deleteNode'; id: string }
-	| { type: 'addPipe'; points: Vec3[]; id?: string; bind?: { flowing?: string } }
+	| { type: 'addPipe'; points?: Vec3[]; from?: PipeAnchor; to?: PipeAnchor; id?: string; bind?: { flowing?: string } }
 	| { type: 'setPipePoints'; index: number; points: Vec3[] }
 	| { type: 'deletePipe'; index: number }
 	| { type: 'setCamera'; pos: Vec3; target: Vec3 }
@@ -66,6 +66,11 @@ export const ed = $state({
 	tool: 'select' as Tool,
 	/** The kind armed for placement (tool === 'place'). */
 	placeKind: '',
+	/** A pipe being drawn: its first end, a port that was clicked. The next
+	 * port clicked is the other end. */
+	pipeFrom: null as PipeAnchor | null,
+	/** The port under the pointer on the stage. */
+	hoverPort: null as PipeAnchor | null,
 	gizmo: 'translate' as Gizmo,
 	/** Mirrors `nautilus.scene.snapToGrid`. */
 	snapToGrid: true,
@@ -150,6 +155,7 @@ export function armPlace(kind: string): void {
 export function disarm(): void {
 	ed.tool = 'select';
 	ed.placeKind = '';
+	ed.pipeFrom = null;
 }
 
 /** The grid pitch a drag snaps to, metres: the document's grid cell. */

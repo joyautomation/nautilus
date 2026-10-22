@@ -93,9 +93,12 @@ export function paletteFromTheme(el: Element): Palette {
  * theme palette: the equipment goes near-white and the lines dark, labels
  * are dark lettering haloed in paper, and the backdrop is paper — while the
  * priority colours, the selection and the hover come through untouched,
- * so an alarm reads exactly as it does in the lit scene. Steel, fluid and
- * running all land on the same quiet greys on purpose: in this look the
- * only colour is an alarm, and flow is shown by the chevrons moving.
+ * so an alarm reads exactly as it does in the lit scene. Steel, shell and
+ * fluid land on quiet near-whites: the drawing carries the form, and flow
+ * is shown by the chevrons moving. `running` keeps its colour (James,
+ * 2026-10-22: "tint should still apply to paper") — a tint drive naming
+ * it, or a built-in pump that is running, reads as a state on the page
+ * the way an alarm does.
  */
 export function paperPalette(base: Palette = DEFAULT_PALETTE): Palette {
 	return {
@@ -104,7 +107,6 @@ export function paperPalette(base: Palette = DEFAULT_PALETTE): Palette {
 		steelDark: '#e3e3df',
 		shell: '#fbfbfa',
 		fluid: '#dfe6ee',
-		running: '#f7f7f5',
 		stale: '#d9d9d5',
 		selected: '#2b2b28',
 		handle: '#8a8a86',

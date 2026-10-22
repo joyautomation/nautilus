@@ -19,7 +19,7 @@
 	import { getContext, setContext, type Snippet } from 'svelte';
 	import { SCENE, NODE, type SceneContext, type NodeContext } from '../context.js';
 	import { readPath, readPart, resolveRefs, bindingsGood } from '../bindings.js';
-	import type { Vec3 } from '../scene.js';
+	import { resolvePipePoints, type Vec3 } from '../scene.js';
 	import type { NodeProps, Box } from '../registry.js';
 	import { DEFAULT_PALETTE, type Palette } from '../palette.js';
 	import Halo from './Halo.svelte';
@@ -181,7 +181,10 @@
 				<Self {...part} />
 			{/each}
 			{#each def.assembly.pipes ?? [] as p, i (p.id ?? i)}
-				<Pipe points={p.points} radius={p.radius} flowing={p.bind?.flowing} arrows={p.arrows} />
+				{@const pts = resolvePipePoints(p, def.assembly.nodes, (k) => scene.registry[k]?.ports)}
+				{#if pts}
+					<Pipe points={pts} radius={p.radius} flowing={p.bind?.flowing} arrows={p.arrows} />
+				{/if}
 			{/each}
 		{:else if def?.component}
 			{@const Model = def.component}
