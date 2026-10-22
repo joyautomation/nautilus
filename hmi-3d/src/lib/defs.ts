@@ -62,6 +62,12 @@ export interface NodeKindDef {
 	status?: (value: unknown, good: boolean, over?: Record<string, unknown>) => string;
 	/** The 2D faceplate the inspector drawer shows; absent = the member table only. */
 	panel?: Component<PanelProps>;
+	/** A stand-in, not a kind of its own: what an editor draws when a
+	 * model kind's file does not load. `registryFor` lays the model over
+	 * it in every look — only a real Svelte kind of the same name (a
+	 * built-in re-pointed at a model) keeps its primitives in flat and
+	 * paper. */
+	fallback?: boolean;
 }
 
 export type NodeRegistry = Record<string, NodeKindDef>;
@@ -241,7 +247,7 @@ export function registryFor(doc: SceneDoc, registry: NodeRegistry, gltf: Compone
 		const base = registry[name];
 		const tpl = k.status;
 		const status = tpl ? (value: unknown, good: boolean, over?: Record<string, unknown>) => formatStatus(tpl, value, good, over) : base?.status;
-		if (k.model && gltf && (lit || !base)) {
+		if (k.model && gltf && (lit || !base || base.fallback)) {
 			out[name] = {
 				component: gltf,
 				data: k,

@@ -114,8 +114,9 @@
 		const reg: NodeRegistry = { ...builtinRegistry };
 		const k = kd.kind;
 		// A kind under a built-in's name keeps the built-in; any other name
-		// gets a placeholder for when there is no model (or it fails).
-		if (!reg[kd.name]) reg[kd.name] = { component: placeholderFor(box), bounds: box, type: k?.type, members: k?.members, labelAt: k?.labelAt };
+		// gets a placeholder for when there is no model (or it fails) — a
+		// `fallback`, so the model still draws over it in flat and paper.
+		if (!reg[kd.name]) reg[kd.name] = { component: placeholderFor(box), bounds: box, type: k?.type, members: k?.members, labelAt: k?.labelAt, fallback: true };
 		return reg;
 	});
 	const tags = $derived<Record<string, unknown>>({ PREVIEW: sampleStruct() });
