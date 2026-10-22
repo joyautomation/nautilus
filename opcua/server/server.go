@@ -22,6 +22,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -142,6 +144,12 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 		port = p
 	}
+	// gopcua announces its node-set import and its listener on the
+	// standard logger, unconditionally; those lines are not ours to show
+	// an operator (the run banner says where we listen). Everything else
+	// written to the logger in this window passes through untouched.
+	restore := quietGopcua()
+	defer restore()
 	srv := opcserver.New(
 		opcserver.EndPoint(s.host, port),
 		opcserver.ServerName("Nautilus · "+s.opts.Name),
@@ -271,12 +279,22 @@ func (s *Server) Status() Status {
 // for the readings that follow), and, when anything is monitored, notifies
 // the monitored items whose node covers a changed tag: the tag itself, or
 // a member of it.
+//
+// The notifications are this package's, not gopcua's ChangeNotification:
+// that one sends on a subscription's channel while holding the monitored
+// item lock, and blocks when the channel is full — which, once the
+// subscription's goroutine has gone (its deletion wants the same lock),
+// is a deadlock that takes the sweep, every Status call and every new
+// subscription with it. Here the send never blocks: a full channel marks
+// the node pending and the next tick tries again, so a slow subscriber
+// delays its own notifications and nothing else.
 func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 	defer close(done)
 	tags := s.rt.Tags()
 	gen := tags.Generation()
 	var buf []runtime.Change
 	changed := map[string]struct{}{}
+	pending := map[string]struct{}{} // node id strings whose send was refused
 	t := time.NewTicker(s.opts.Sweep)
 	defer t.Stop()
 	for {
@@ -286,53 +304,112 @@ func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 		case <-t.C:
 		}
 		buf, gen = tags.ChangedSince(gen, buf[:0])
-		if len(buf) == 0 {
+		if len(buf) == 0 && len(pending) == 0 {
 			continue
 		}
 		now := time.Now()
-		for _, c := range buf {
-			s.ns.stampAt(c.Name, c.Gen, now)
-		}
-		monitored := s.monitoredNodes()
-		if len(monitored) == 0 {
-			continue
-		}
 		clear(changed)
 		for _, c := range buf {
+			s.ns.stampAt(c.Name, c.Gen, now)
 			changed[ir.NameKey(c.Name)] = struct{}{}
 		}
-		for _, nid := range monitored {
-			root, _ := ir.SplitAddress(nid.StringID())
-			if _, ok := changed[ir.NameKey(root)]; ok {
-				s.srv.ChangeNotification(nid)
+		for _, mon := range s.monitored() {
+			root, _ := ir.SplitAddress(mon.nid.StringID())
+			_, moved := changed[ir.NameKey(root)]
+			_, retry := pending[mon.key]
+			if !moved && !retry {
+				continue
+			}
+			if s.notify(mon) {
+				delete(pending, mon.key)
+			} else {
+				pending[mon.key] = struct{}{}
 			}
 		}
 	}
 }
 
-// monitoredNodes lists the node ids of ours that some subscription is
-// monitoring right now. The map is gopcua's, read under its own lock and
-// released before any notification goes back in.
-func (s *Server) monitoredNodes() []*ua.NodeID {
+// monitoredNode is one of our nodes some subscription is watching, with
+// the items watching it.
+type monitoredNode struct {
+	key   string // the node id as gopcua keys it
+	nid   *ua.NodeID
+	items []*opcserver.MonitoredItem
+}
+
+// monitored lists the nodes of ours under monitoring right now. gopcua's
+// maps are read under its lock and copied out, so no notification is ever
+// sent with the lock held.
+func (s *Server) monitored() []monitoredNode {
 	mi := s.srv.MonitoredItemService
 	if mi == nil {
 		return nil
 	}
 	mi.Mu.Lock()
-	keys := make([]string, 0, len(mi.Nodes))
-	for k := range mi.Nodes {
-		keys = append(keys, k)
-	}
-	mi.Mu.Unlock()
-	var out []*ua.NodeID
-	for _, k := range keys {
+	out := make([]monitoredNode, 0, len(mi.Nodes))
+	for k, items := range mi.Nodes {
 		nid, err := ua.ParseNodeID(k)
 		if err != nil || nid.Namespace() != s.ns.id || nid.Type() != ua.NodeIDTypeString {
 			continue
 		}
-		out = append(out, nid)
+		out = append(out, monitoredNode{key: k, nid: nid, items: append([]*opcserver.MonitoredItem(nil), items...)})
 	}
+	mi.Mu.Unlock()
 	return out
+}
+
+// notify reads the node once and offers the reading to every item watching
+// it. It reports false when any subscription's channel was full, so the
+// caller tries that node again next tick rather than dropping the change.
+func (s *Server) notify(mon monitoredNode) bool {
+	ok := true
+	var dv *ua.DataValue
+	for _, item := range mon.items {
+		if item == nil || item.Sub == nil || item.Req == nil || item.Req.ItemToMonitor == nil || item.Req.RequestedParameters == nil {
+			continue
+		}
+		if dv == nil {
+			dv = s.ns.Attribute(mon.nid, item.Req.ItemToMonitor.AttributeID)
+		}
+		n := &ua.MonitoredItemNotification{ClientHandle: item.Req.RequestedParameters.ClientHandle, Value: dv}
+		select {
+		case item.Sub.NotifyChannel <- n:
+		default:
+			ok = false
+		}
+	}
+	return ok
+}
+
+// quietGopcua filters gopcua's startup chatter out of the standard logger
+// until the returned function restores the previous writer.
+func quietGopcua() (restore func()) {
+	prev := log.Writer()
+	log.SetOutput(&lineFilter{w: prev, drop: func(line string) bool {
+		return strings.HasPrefix(line, "New Node Set:") || strings.HasPrefix(line, "doing ") || strings.HasPrefix(line, "Started listening on ")
+	}})
+	return func() { log.SetOutput(prev) }
+}
+
+// lineFilter is an io.Writer that drops the lines drop says to and passes
+// the rest through. The standard logger writes one line per call, with
+// its prefix and timestamp first, so the message is matched after them.
+type lineFilter struct {
+	w    io.Writer
+	drop func(line string) bool
+}
+
+func (f *lineFilter) Write(p []byte) (int, error) {
+	line := strings.TrimRight(string(p), "\n")
+	// Strip the standard logger's "2006/01/02 15:04:05 " stamp when present.
+	msg := line
+	if len(msg) > 20 && msg[4] == '/' && msg[7] == '/' && msg[10] == ' ' && msg[13] == ':' && msg[16] == ':' && msg[19] == ' ' {
+		msg = msg[20:]
+	}
+	if f.drop(msg) {
+		return len(p), nil
+	}
+	return f.w.Write(p)
 }
 
 // freePort asks the OS for a port nobody is listening on.

@@ -320,7 +320,9 @@ func variant(m member) (*ua.Variant, error) {
 	case id.SByte:
 		return ua.NewVariant(mapInts(v.Arr, func(n int64) int8 { return int8(n) }))
 	case id.Byte:
-		return ua.NewVariant(mapInts(v.Arr, func(n int64) uint8 { return uint8(n) }))
+		// gopcua sends a plain []byte as a ByteString; ua.ByteArray is its
+		// alias for an array of Byte, which is what an ARRAY OF BYTE is.
+		return ua.NewVariant(ua.ByteArray(mapInts(v.Arr, func(n int64) uint8 { return uint8(n) })))
 	case id.Int16:
 		return ua.NewVariant(mapInts(v.Arr, func(n int64) int16 { return int16(n) }))
 	case id.UInt16:

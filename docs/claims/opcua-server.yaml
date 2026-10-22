@@ -12,7 +12,9 @@ claims:
     tests:
       - go ./internal/project TestOPCUAConfig
       - go ./cmd/naut TestCheckRefusesBadOPCUAEndpoint
+      - go ./cmd/naut TestNautRunServesOPCUA
       - go ./opcua/server TestParseEndpoint
+      - go ./opcua/server TestNewRefusesNothingButABadEndpoint
 
   - id: OPC-002
     claim: >-
@@ -24,12 +26,14 @@ claims:
     source: "#what-a-client-sees"
     tests:
       - go ./opcua/server TestBrowseWalksTheStore
+      - go ./opcua/server TestBrowseFiltersThroughTheClient
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
-    note: >-
-      Function-block pins as children are implemented (value.go children)
-      but not exercised by a test; the fixture's FB is a program-local VAR,
-      not a tag.
-    partial: true
+      - go ./opcua/server TestFBPinsAreChildNodes
+      - go ./opcua/server TestChildrenListMembersInDeclarationOrder
+      - go ./opcua/server TestChildrenOfAnFBAreItsVisiblePins
+      - go ./opcua/server TestWalkResolvesEveryMemberShape
+      - go ./opcua/server TestNamespaceBrowseReferences
+      - go ./opcua/server TestForeignAsyncuaClient
 
   - id: OPC-003
     claim: >-
@@ -41,6 +45,9 @@ claims:
     tests:
       - go ./opcua/server TestBrowseWalksTheStore
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+      - go ./opcua/server TestNamespaceResolvesOnlyItsOwnStringIDs
+      - go ./opcua/server TestNamespaceDescriptionFromTagMeta
+      - go ./opcua/server TestForeignAsyncuaClient
 
   - id: OPC-004
     claim: >-
@@ -51,12 +58,11 @@ claims:
     source: "#types"
     tests:
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
-    note: >-
-      Boolean, Int32 (DINT and enumeration), Double, Duration, String and
-      the Double/Int32 array cases are read back; the other integer widths
-      share the one mapping function (value.go intType) and are not each
-      asserted.
-    partial: true
+      - go ./opcua/server TestEveryIntegerWidthReadsAsItsOwnType
+      - go ./opcua/server TestDataTypeFollowsTheDeclaredWidth
+      - go ./opcua/server TestScalarConvertsInRangeAndWidensOutOfRange
+      - go ./opcua/server TestVariantEncodesArraysOfEachKind
+      - go ./opcua/server TestForeignAsyncuaClient
 
   - id: OPC-005
     claim: >-
@@ -66,6 +72,7 @@ claims:
     source: "#quality-and-timestamps"
     tests:
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+      - go ./opcua/server TestStatusOfQuality
 
   - id: OPC-006
     claim: >-
@@ -75,6 +82,9 @@ claims:
     source: "#quality-and-timestamps"
     tests:
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+      - go ./opcua/server TestStampAtMovesOnlyWithTheGeneration
+      - go ./opcua/server TestSubscriptionCoversArraysElementsAndStaysQuiet
+      - go ./opcua/server TestForeignAsyncuaClient
 
   - id: OPC-007
     claim: >-
@@ -84,8 +94,14 @@ claims:
     source: "#subscriptions"
     tests:
       - go ./opcua/server TestSubscriptionHearsChanges
+      - go ./opcua/server TestSubscriptionCoversArraysElementsAndStaysQuiet
+      - go ./opcua/server TestSubscriptionFollowsTheRunningProgram
+      - go ./opcua/server TestThousandsOfMovingTagsUnderConcurrentClients
+      - go ./opcua/server TestForeignAsyncuaClient
     note: >-
-      The 100 ms sweep cadence and MinimumSamplingInterval are not asserted.
+      The 100 ms sweep cadence is not asserted (tests run a 20 ms sweep);
+      MinimumSamplingInterval reporting the sweep is asserted in
+      TestNamespaceAttributesOfFolderAndMembers.
     partial: true
 
   - id: OPC-008
@@ -95,7 +111,11 @@ claims:
     source: "#security"
     tests:
       - go ./opcua/server TestAnonymousWriteIsRefused
+      - go ./opcua/server TestNamespaceSetAttributeRefusesEverything
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+      - go ./opcua/server TestNamespaceAttributesOfFolderAndMembers
+      - go ./cmd/naut TestNautRunServesOPCUA
+      - go ./opcua/server TestForeignAsyncuaClient
 
   - id: OPC-009
     claim: >-
@@ -104,9 +124,18 @@ claims:
       counts.
     source: "#status"
     tests:
+      - go ./cmd/naut TestNautRunServesOPCUA
+      - go ./opcua/server TestStatusCountsWhatClientsHold
       - go ./opcua/server TestSubscriptionHearsChanges
-    note: >-
-      The Status struct the row is built from is asserted; the
-      opcua-server row shape in /api/drivers (internal/project opcuaStatus)
-      has no test of its own.
-    partial: true
+
+  - id: OPC-010
+    claim: >-
+      An endpoint already in use is reported on stderr at start ("continuing
+      without it") and as an error on the opcua-server row; the controller
+      runs regardless. Stop closes every session; a restart on the same
+      endpoint serves again.
+    source: "#status"
+    tests:
+      - go ./cmd/naut TestNautRunContinuesWhenOPCUAPortIsTaken
+      - go ./opcua/server TestStartReportsAPortInUse
+      - go ./opcua/server TestStopDropsClientsAndRestartReusesThePort

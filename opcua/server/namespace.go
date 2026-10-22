@@ -306,9 +306,11 @@ func wantRef(bd *ua.BrowseDescription, r *ua.ReferenceDescription) bool {
 	if want.IntID() == have {
 		return true
 	}
-	if !bd.IncludeSubtypes {
-		return false
-	}
+	// The abstract reference types are matched by their subtypes whether
+	// or not IncludeSubtypes is set: no reference IS a "References" or a
+	// "HierarchicalReferences", so an exact match on one would return
+	// nothing, and clients (gopcua's defaults a nil type to References
+	// without the flag) mean "everything" by it.
 	switch want.IntID() {
 	case id.References:
 		return true

@@ -99,7 +99,11 @@ func startServer(t *testing.T, rt *runtime.Runtime) (*Server, *opcua.Client) {
 	if err := c.Connect(ctx); err != nil {
 		t.Fatalf("connect %s: %v", s.URL(), err)
 	}
-	t.Cleanup(func() { c.Close(ctx) })
+	t.Cleanup(func() {
+		cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		c.Close(cctx)
+	})
 	return s, c
 }
 
