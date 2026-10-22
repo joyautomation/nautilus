@@ -859,6 +859,27 @@ one for a valve, one for a flow meter. Built 2026-10-21 (PR "kind editor"):
   for the reducer and its canonical form, `kindEditorLogic.test.ts` for
   the model lookup (up from the kind file's folder through the scene
   editor's roots), and rig smoke check 22 in a real VS Code.
+- **Click a part to pick it** (2026-10-22, James: "click-and-pick was
+  exactly what I was thinking"). The division of labour this editor is
+  for: AI does the open-ended work (a model from a picture, sensible part
+  names), a person does the small, frequent, must-be-deterministic
+  tweaks (this part turns this colour on this input, this one spins with
+  that speed) — and every such tweak begins with *which part*. So the
+  stage raycasts the model's meshes itself (`Mesh.prototype.raycast`,
+  past the renderer's no-raycast on glass and water: here a sight glass
+  IS a part someone may want a drive on), orders the hits the way the
+  scene does (`resolvePick`, exported: the frontmost opaque part over the
+  glass in front of it, and one deeper when the picked part is hit again,
+  so the impeller inside the volute is reachable), and names the nearest
+  named ancestor. The hovered and picked parts wear a box in the part's
+  own frame, added as its child so it turns, scales and hides with it;
+  the panel's **Parts** chips pick by name and hovering a chip or a drive
+  row lights the part; `kd.picked` is where **Add drive** starts and
+  where slice 3's ports will be placed. Pointer events go on the canvas's
+  wrapper, where OrbitControls captures the pointer. `Scene3D` takes
+  `pick={false}` so a host that picks parts itself gets no node-level
+  hover cage under them. K07 in the harness; rig check 22 clicks the
+  model.
 - **Ports** are slice 3's: a kind will declare them in its own frame and
   the kind editor will place them by clicking the model.
 

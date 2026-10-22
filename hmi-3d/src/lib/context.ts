@@ -36,6 +36,8 @@ export interface SceneContext {
 	readonly selected: string | null;
 	/** The pickable node under the pointer (the frontmost one), or null. */
 	readonly hovered: string | null;
+	/** Whether nodes pick at all (Scene3D's `pick` prop). */
+	readonly picks: boolean;
 	hover(id: string | null): void;
 	/** The kind a node renders with: its registry entry, or the Svelte kind
 	 * of the same name once its model has failed to load. */

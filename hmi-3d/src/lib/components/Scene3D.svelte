@@ -38,6 +38,7 @@
 		grid,
 		environment,
 		placed = $bindable({}),
+		pick = true,
 		onpick,
 		oncontext,
 		children
@@ -61,6 +62,10 @@
 		/** Every placed node with an id, as they announce themselves — what
 		 * the inspector drawer reads. Bind it, or let it be. */
 		placed?: Record<string, PlacedNode>;
+		/** Whether nodes pick at all: the hover outline, the pointer cursor,
+		 * onpick. Off for a viewer that picks nothing, or a host that picks
+		 * parts inside one model itself (the kind editor). */
+		pick?: boolean;
 		/** A node was clicked (not dragged). Never fires for a click on nothing. */
 		onpick?: (id: string) => void;
 		/** A node was right-clicked; `event` is the browser's (clientX/Y). */
@@ -155,6 +160,9 @@
 		},
 		get hovered() {
 			return hovered;
+		},
+		get picks() {
+			return pick;
 		},
 		hover(id) {
 			hovered = id;

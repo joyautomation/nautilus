@@ -97,7 +97,7 @@
 	let bounds = $derived<Box>(box ?? (def && scene ? scene.boundsOf(id, def.bounds) : { size: [0.3, 0.3, 0.3], center: [0, 0.15, 0] }));
 	let labelAt = $derived<Vec3>(labelAtProp ?? def?.labelAt ?? [bounds.center[0], bounds.center[1] + bounds.size[1] / 2 + 0.02, bounds.center[2]]);
 	let nodeProps = $derived<NodeProps>({ value, good, label: title, selected: isSel, ...props, ...over });
-	let pickable = $derived(!parent && id !== undefined);
+	let pickable = $derived(!parent && id !== undefined && scene?.picks !== false);
 	/** The node's root group, announced with the node so an editor can
 	 * attach a gizmo to it. */
 	let group = $state<Group>();

@@ -72,6 +72,8 @@ export { default as AlarmKey } from './components/AlarmKey.svelte';
 
 // Colours from the theme, and the measurement sampler behind PerfHud.
 export { DEFAULT_PALETTE, paletteFromTheme, paperPalette } from './palette.js';
+export { resolvePick, seeThrough } from './pick.js';
+export type { PickHit } from './pick.js';
 export { default as PaperOutlines } from './components/PaperOutlines.svelte';
 export type { Palette } from './palette.js';
 export { PerfSampler, PLAUSIBLE_E2E_MS } from './perf.svelte.js';

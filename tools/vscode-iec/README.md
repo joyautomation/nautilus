@@ -203,6 +203,12 @@ scene's `kinds` entry takes (`type`, `members`, `model`, `bounds`,
 `"pump": "hmi/src/lib/kinds/pump.kind.json"` — opens as the kind itself:
 its model on a turntable (`T` toggles), in the lit, flat or paper look.
 
+- **Click a part on the model to pick it.** The part under the pointer
+  lights up; a click picks it (a second click on the same spot goes to
+  the part behind — the impeller inside the volute), the panel names it
+  with the parts it sits in and its drives, and **Add drive** starts on
+  it. The **Parts** list picks by name; hovering a name or a drive row
+  lights the part on the model. `Esc` or a click on the ground clears.
 - The model's named objects fill every drive's mesh menu, so a drive
   targets something that exists; a name the model lacks is flagged. A
   drive is a row: its mesh, its channel (`spin`, `turn`, `scale`, `tint`,

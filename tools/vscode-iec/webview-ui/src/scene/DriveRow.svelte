@@ -93,7 +93,16 @@
 	const fmt = (v: number | undefined) => (v === undefined ? '' : String(v));
 </script>
 
-<div class="drive" data-kind="drive-row" data-index={index}>
+<div
+	class="drive"
+	class:picked={kd.picked === drive.mesh}
+	role="group"
+	aria-label="drive {index + 1} on {drive.mesh}"
+	data-kind="drive-row"
+	data-index={index}
+	onpointerenter={() => kd.modelState === 'ok' && (kd.hover = drive.mesh)}
+	onpointerleave={() => kd.hover === drive.mesh && (kd.hover = null)}
+>
 	<div class="row">
 		{#if kd.modelState === 'ok'}
 			<select class="nx-input mesh" value={drive.mesh} onchange={setMesh} aria-label="mesh" title={inModel ? 'The object in the model this drive moves' : 'Not in the model'} class:bad={!inModel}>
@@ -141,6 +150,9 @@
 		display: flex;
 		flex-direction: column;
 		gap: 3px;
+	}
+	.drive.picked {
+		border-color: var(--nx-accent);
 	}
 	.row {
 		display: flex;

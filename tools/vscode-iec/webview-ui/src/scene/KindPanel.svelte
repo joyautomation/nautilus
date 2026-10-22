@@ -4,7 +4,7 @@
 	// values that drive the stage — kept here, never written to the file.
 	import { formatStatus, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
 	import DriveRow from './DriveRow.svelte';
-	import { blankDrive, kd, memberShape, members, postOp, sampleStruct } from './kindState.svelte';
+	import { ancestorsOf, blankDrive, drivesOn, kd, memberShape, members, postOp, sampleStruct } from './kindState.svelte';
 
 	const kind = $derived(kd.kind);
 	const memberList = $derived(members());
@@ -51,9 +51,16 @@
 		next[key][i] = v;
 		postOp({ type: 'setField', key: 'bounds', value: next });
 	}
+	/** A new drive on the picked part, else the model's first object. */
 	function addDrive() {
-		const mesh = kd.meshes[0] ?? 'Mesh';
+		const mesh = kd.picked ?? kd.meshes[0] ?? 'Mesh';
 		postOp({ type: 'addDrive', drive: blankDrive(mesh, kd.meshes.length ? 'tint' : 'visible') });
+	}
+	function pick(m: string | null) {
+		kd.picked = m;
+	}
+	function hover(m: string | null) {
+		if (m === null ? kd.hover !== null : kd.hover !== m) kd.hover = m;
 	}
 	function sampleNum(e: Event, m: string) {
 		const raw = (e.currentTarget as HTMLInputElement).value.trim();
@@ -123,16 +130,51 @@
 			</div>
 		{/if}
 
+		{#if kd.modelState === 'ok'}
+			<div class="head sub">Parts <span class="count">{kd.meshes.length}</span></div>
+			{#if kd.picked}
+				<p class="note part" data-kind="picked">
+					<b>{kd.picked}</b>
+					{#each ancestorsOf(kd.picked) as a (a)}
+						<span class="in">· in <button class="link" onclick={() => pick(a)} title="Pick the part this one is part of">{a}</button></span>
+					{/each}
+					· {drivesOn(kd.picked)} drive{drivesOn(kd.picked) === 1 ? '' : 's'}
+					· <button class="link" onclick={() => pick(null)} title="Nothing picked (Esc)">clear</button>
+				</p>
+			{:else}
+				<p class="note">Click a part on the model, or a name here — a new drive starts on it.</p>
+			{/if}
+			<div class="chips" role="listbox" aria-label="Parts">
+				{#each kd.meshes as m (m)}
+					<button
+						class="chip"
+						class:picked={kd.picked === m}
+						class:hover={kd.hover === m}
+						class:driven={drivesOn(m) > 0}
+						role="option"
+						aria-selected={kd.picked === m}
+						data-kind="part"
+						data-name={m}
+						onclick={() => pick(kd.picked === m ? null : m)}
+						onpointerenter={() => hover(m)}
+						onpointerleave={() => kd.hover === m && hover(null)}
+						title={drivesOn(m) ? `${m} · ${drivesOn(m)} drive${drivesOn(m) === 1 ? '' : 's'}` : m}
+					>
+						{m}{#if drivesOn(m)}<small>{drivesOn(m)}</small>{/if}
+					</button>
+				{/each}
+			</div>
+		{/if}
+
 		<div class="head sub">Drives <span class="count">{kind.drive?.length ?? 0}</span></div>
 		{#each kind.drive ?? [] as d, i (i + ':' + d.mesh)}
 			<DriveRow drive={d} index={i} />
 		{/each}
 		<div class="actions">
-			<button onclick={addDrive} title="A new drive on the model's first object — pick the mesh and channel in its row">Add drive</button>
+			<button onclick={addDrive} title={kd.picked ? `A new drive on ${kd.picked} — pick the channel in its row` : "A new drive on the model's first object — pick the mesh and channel in its row"}>
+				Add drive{#if kd.picked} on <code>{kd.picked}</code>{/if}
+			</button>
 		</div>
-		{#if kd.modelState === 'ok'}
-			<p class="note">Objects in the model: {kd.meshes.join(', ') || 'none named'}</p>
-		{/if}
 
 		<div class="head sub">Sample values</div>
 		{#if memberList.length === 0}
@@ -256,5 +298,52 @@
 	}
 	.actions button:hover {
 		background: var(--nx-hover);
+	}
+	.actions button code {
+		font-family: var(--nx-mono);
+	}
+	.note.part b {
+		font-family: var(--nx-mono);
+		color: var(--nx-ui-ink);
+	}
+	.chips {
+		/* a scrolling flex item of the aside's column would shrink to nothing */
+		flex: none;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 3px;
+		max-height: 132px;
+		overflow-y: auto;
+	}
+	.chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 3px;
+		padding: 1px 6px;
+		border: 1px solid var(--nx-border);
+		border-radius: 10px;
+		background: transparent;
+		color: var(--nx-ui-ink);
+		cursor: pointer;
+		font: inherit;
+		font-family: var(--nx-mono);
+		font-size: 11px;
+		line-height: 1.5;
+	}
+	.chip small {
+		font-size: 9px;
+		opacity: 0.7;
+	}
+	.chip.driven {
+		border-color: var(--nx-muted);
+	}
+	.chip.hover,
+	.chip:hover {
+		background: var(--nx-hover);
+	}
+	.chip.picked {
+		background: var(--nx-sel-bg);
+		color: var(--nx-sel-ink);
+		border-color: var(--nx-sel-bg);
 	}
 </style>

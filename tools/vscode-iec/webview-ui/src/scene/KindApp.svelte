@@ -49,6 +49,7 @@
 	}
 	function onKey(e: KeyboardEvent) {
 		if (e.key === 'Escape' && inField(e)) (e.target as HTMLElement).blur();
+		else if (e.key === 'Escape' && kd.picked) kd.picked = null;
 		else if (!inField(e) && (e.key === 't' || e.key === 'T')) kd.turntable = !kd.turntable;
 	}
 
@@ -56,7 +57,9 @@
 		kd.modelState === 'failed'
 			? 'the model did not load — check the path in the panel'
 			: kd.modelState === 'ok'
-				? `${kd.meshes.length} named objects in the model · pick one per drive · sample values drive the preview · T toggles the turntable`
+				? kd.picked
+					? `${kd.picked} picked · Add drive starts on it · click the same spot again for the part behind · Esc clears`
+					: `${kd.meshes.length} parts in the model · click one to pick it · sample values drive the preview · T toggles the turntable`
 				: 'a kind is a model and a few drives · name a .glb in the panel to see it here'
 	);
 </script>
