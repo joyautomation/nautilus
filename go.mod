@@ -5,6 +5,7 @@ go 1.24.0
 require (
 	github.com/charmbracelet/huh v1.0.0
 	github.com/eclipse/paho.mqtt.golang v1.5.1
+	github.com/gopcua/opcua v0.9.1
 	github.com/gosnmp/gosnmp v1.45.0
 	github.com/lib/pq v1.10.9
 	github.com/mochi-mqtt/server/v2 v2.7.9
@@ -28,7 +29,6 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/google/uuid v1.6.0 // indirect
-	github.com/gopcua/opcua v0.9.1 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

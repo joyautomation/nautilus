@@ -70,7 +70,7 @@ func TestDriversOneEntryIsSugarForDriver(t *testing.T) {
 	if _, ok := p.Runtime.Driver.(*nio.Memory); !ok {
 		t.Fatalf("driver = %T, want *io.Memory (no Multi wrapper for one entry)", p.Runtime.Driver)
 	}
-	if fn := p.DriverStatus(nil); fn != nil {
+	if fn := p.DriverStatus(nil, nil); fn != nil {
 		t.Fatalf("a lone memory driver reports no status, got %+v", fn())
 	}
 }
@@ -147,7 +147,7 @@ func TestDriversBuildAMultiWithStatusRows(t *testing.T) {
 	}
 
 	// One status row per child, not a blend.
-	fn := p.DriverStatus(nil)
+	fn := p.DriverStatus(nil, nil)
 	if fn == nil {
 		t.Fatal("DriverStatus must report a multi-driver set")
 	}

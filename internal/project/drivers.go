@@ -8,6 +8,7 @@ import (
 	"github.com/joyautomation/nautilus/eip"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/modbus"
+	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/prom"
 	"github.com/joyautomation/nautilus/redfish"
 	"github.com/joyautomation/nautilus/replay"
@@ -21,9 +22,9 @@ import (
 // generic server.DriverStatus envelope the HMI components render. Wired as
 // server.Options.Drivers so /api/drivers and the stream frame carry it, with
 // the server package staying free of any driver dependency.
-func (p *Project) DriverStatus(node *sparkplug.Node) func() []server.DriverStatus {
+func (p *Project) DriverStatus(node *sparkplug.Node, opc *opcuaserver.Server) func() []server.DriverStatus {
 	rows := driverStatusFuncs(p.Runtime.Driver)
-	if len(rows) == 0 && node == nil {
+	if len(rows) == 0 && node == nil && opc == nil {
 		return nil
 	}
 	return func() []server.DriverStatus {
@@ -33,6 +34,9 @@ func (p *Project) DriverStatus(node *sparkplug.Node) func() []server.DriverStatu
 		}
 		if node != nil {
 			out = append(out, sparkplugStatus(node.Status()))
+		}
+		if opc != nil {
+			out = append(out, opcuaStatus(opc.Status()))
 		}
 		return out
 	}
@@ -464,6 +468,38 @@ func plural(n int, word string) string {
 		return word
 	}
 	return word + "s"
+}
+
+// opcuaStatus adapts the OPC UA server's health: one row, listening or
+// not, with what the clients are watching. Subscriptions and monitored
+// items change only when a client (re)connects, so they are not volatile.
+func opcuaStatus(st opcuaserver.Status) server.DriverStatus {
+	s := server.DriverStatus{
+		Kind:      "opcua-server",
+		Name:      "OPC UA",
+		Detail:    st.Endpoint,
+		SinceMs:   st.SinceMs,
+		LastError: st.LastError,
+	}
+	switch {
+	case st.Listening:
+		s.State = "connected"
+		s.Message = fmt.Sprintf("Serving %d %s · %d %s, %d monitored %s",
+			st.Tags, plural(st.Tags, "tag"), st.Subscriptions, plural(st.Subscriptions, "subscription"), st.MonitoredItems, plural(st.MonitoredItems, "item"))
+	case st.LastError != "":
+		s.State = "error"
+		s.Message = "Not listening — " + st.LastError
+	default:
+		s.State = "offline"
+		s.Message = "Not started"
+	}
+	s.Metrics = []server.DriverMetric{
+		{Label: "tags", Value: float64(st.Tags)},
+		{Label: "subscriptions", Value: float64(st.Subscriptions)},
+		{Label: "monitored items", Value: float64(st.MonitoredItems)},
+	}
+	s.Extra = map[string]any{"endpoint": st.Endpoint, "access": "read-only"}
+	return s
 }
 
 func sparkplugStatus(st sparkplug.Status) server.DriverStatus {

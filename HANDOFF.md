@@ -57,6 +57,8 @@ sparkplug/host       Sparkplug B host application driver + `naut sparkplug
                      import|browse|tags` codegen (TCK host profile in CI)
 modbus/              Modbus TCP driver: wire, codec, block planner, per-source polling,
                      in-process slave, codegen for `naut modbus import|browse|serve|tags`
+opcua/server         OPC UA server (gopcua for the protocol, our own NameSpace over the tag
+                     store): browse/read/subscribe, read-only; `opcua:` in the manifest
 retain/, leader/, hist/  retained state (file/ConfigMap), Lease election, historian
 server/              tag API (state/SSE/write) + branded dashboard
 cmd/naut         CLI: new, run, build, check, test, lsp, pull

@@ -1,0 +1,112 @@
+page: website/src/content/docs/guides/opcua-server.md
+title: OPC UA server
+prefix: OPC
+claims:
+  - id: OPC-001
+    claim: >-
+      An opcua: section serves the tag store as an OPC UA address space; the
+      section's presence turns the server on, endpoint is its only setting
+      (default opc.tcp://localhost:4840), and naut check refuses an endpoint
+      that is not opc.tcp://host:port.
+    source: "#serving-opc-ua"
+    tests:
+      - go ./internal/project TestOPCUAConfig
+      - go ./cmd/naut TestCheckRefusesBadOPCUAEndpoint
+      - go ./opcua/server TestParseEndpoint
+
+  - id: OPC-002
+    claim: >-
+      Under Objects there is one folder named after the project; a scalar
+      tag is a Variable, a UDT tag an Object whose members (nested UDTs
+      included) are child nodes, an array of scalars a Variable holding an
+      OPC UA array, and an array of UDTs an Object with one child per element
+      indexed from the declared lower bound.
+    source: "#what-a-client-sees"
+    tests:
+      - go ./opcua/server TestBrowseWalksTheStore
+      - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+    note: >-
+      Function-block pins as children are implemented (value.go children)
+      but not exercised by a test; the fixture's FB is a program-local VAR,
+      not a tag.
+    partial: true
+
+  - id: OPC-003
+    claim: >-
+      Node ids are string ids in the tag store's address form in namespace
+      2 (ns=2;s=Level, ns=2;s=P101.Drive.Speed, ns=2;s=Levels[2]); a node id
+      in another casing resolves to the same tag; a tag's desc and unit become
+      the node's Description as "desc [unit]".
+    source: "#what-a-client-sees"
+    tests:
+      - go ./opcua/server TestBrowseWalksTheStore
+      - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+
+  - id: OPC-004
+    claim: >-
+      Each node's DataType is the declared IEC type: BOOL Boolean, the eight
+      integer widths their OPC UA integer, an enumeration Int32, REAL/LREAL
+      Double, TIME Duration in milliseconds, STRING String, and an array of
+      scalars an array of the element type.
+    source: "#types"
+    tests:
+      - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+    note: >-
+      Boolean, Int32 (DINT and enumeration), Double, Duration, String and
+      the Double/Int32 array cases are read back; the other integer widths
+      share the one mapping function (value.go intType) and are not each
+      asserted.
+    partial: true
+
+  - id: OPC-005
+    claim: >-
+      A value's status code is the tag's quality — good Good, stale
+      Uncertain_LastUsableValue, bad Bad_DeviceFailure, not connected
+      Bad_NotConnected — and a member of a UDT carries its tag's quality.
+    source: "#quality-and-timestamps"
+    tests:
+      - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+
+  - id: OPC-006
+    claim: >-
+      SourceTimestamp is the time the tag's current value was first seen
+      and moves only when the value does; ServerTimestamp is the time of
+      the read.
+    source: "#quality-and-timestamps"
+    tests:
+      - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+
+  - id: OPC-007
+    claim: >-
+      A subscription's monitored items are notified of a change to the tag
+      they cover (the tag itself or a member of it) without the server
+      polling a copy of the tag store.
+    source: "#subscriptions"
+    tests:
+      - go ./opcua/server TestSubscriptionHearsChanges
+    note: >-
+      The 100 ms sweep cadence and MinimumSamplingInterval are not asserted.
+    partial: true
+
+  - id: OPC-008
+    claim: >-
+      The server is read-only: a write to a value is answered
+      Bad_UserAccessDenied and does not land, and AccessLevel is CurrentRead.
+    source: "#security"
+    tests:
+      - go ./opcua/server TestAnonymousWriteIsRefused
+      - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+
+  - id: OPC-009
+    claim: >-
+      GET /api/drivers carries an opcua-server row with the endpoint,
+      whether it is listening, and the subscription and monitored-item
+      counts.
+    source: "#status"
+    tests:
+      - go ./opcua/server TestSubscriptionHearsChanges
+    note: >-
+      The Status struct the row is built from is asserted; the
+      opcua-server row shape in /api/drivers (internal/project opcuaStatus)
+      has no test of its own.
+    partial: true

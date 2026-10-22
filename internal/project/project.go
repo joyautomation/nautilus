@@ -31,6 +31,7 @@ import (
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/modbus"
+	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/prom"
 	"github.com/joyautomation/nautilus/redfish"
 	"github.com/joyautomation/nautilus/replay"
@@ -801,6 +802,11 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	if opts.Driver, drivers, err = buildDrivers(fsys, m); err != nil {
 		return nil, err
 	}
+	if m.OPCUA != nil && m.OPCUA.Endpoint != "" {
+		if _, _, err := opcuaserver.ParseEndpoint(m.OPCUA.Endpoint); err != nil {
+			return nil, err
+		}
+	}
 	if m.Sparkplug != nil {
 		switch m.Sparkplug.PrimaryHostOffline {
 		case "", "buffer":
@@ -1459,9 +1465,23 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 	}
 }
 
-// OPCUAConfig configures the optional OPC UA server.
+// OPCUAConfig is the manifest's `opcua:` section: serve the tag store as an
+// OPC UA address space (read-only; see opcua/server). The section's
+// presence turns the server on, like `sparkplug:`.
 type OPCUAConfig struct {
-	Enabled  bool   `yaml:"enabled"`
+	// Endpoint is the listen address, "opc.tcp://host:port" (or
+	// "host:port"); the default is opc.tcp://localhost:4840 — loopback, so
+	// exposing a controller to the network is a line an author writes.
 	Endpoint string `yaml:"endpoint"`
-	Interval string `yaml:"interval"`
+}
+
+// OPCUA builds the manifest's OPC UA server over a compiled runtime, or
+// (nil, nil) when the manifest has no opcua section. Nothing listens until
+// Start.
+func (p *Project) OPCUAServer(rt *runtime.Runtime) (*opcuaserver.Server, error) {
+	c := p.OPCUA
+	if c == nil {
+		return nil, nil
+	}
+	return opcuaserver.New(rt, opcuaserver.Options{Endpoint: c.Endpoint, Name: p.Name})
 }

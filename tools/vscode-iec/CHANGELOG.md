@@ -41,6 +41,11 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   point. With an element selected, **+ add** inserts one column to its
   right. Either way it moves down to the first clear place if that spot
   is taken: an insert never lands on another element. (#78)
+- **Manifest schema: `opcua:`.** A controller serves its tag store as an
+  OPC UA address space (read-only: browse, read, subscribe) when the
+  section is present; `endpoint` (default `opc.tcp://localhost:4840`) is
+  its one key, with completion and hover. `naut check` refuses an endpoint
+  that is not `opc.tcp://host:port`. (#278)
 
 ### Fixed
 
