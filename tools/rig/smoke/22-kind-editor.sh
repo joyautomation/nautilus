@@ -11,6 +11,9 @@
 #            and Ctrl+S writes it to disk in the canonical form
 #   undo     Ctrl+Z takes the drive back out — text undo covers the gesture
 #   field    a typed `type` lands in the file
+#   pick     a click on the model picks a part — through the tank's glass
+#            and water to the opaque Base, the way the scene picks — the
+#            panel names it, and "Add drive on Base" puts a drive on it
 #   scene    the scene that names the file opens in the Scene Editor with
 #            the kind in its palette captioned as a file, and no banner
 #
@@ -128,6 +131,36 @@ if grep -q '"type": "WetWell"' "$F"; then
   pass "a typed type landed in the file as one edit" "$png"
 else
   fail "after typing a type the file reads: $(tr '\n' ' ' <"$F" | cut -c1-200)" "$png"
+fi
+
+# ── pick ───────────────────────────────────────────────────────────────────
+# Hold the turntable, then click where the stage says the Fluid is: the
+# shell is glass and the fluid water, so the pick goes through both to the
+# first opaque part, the Base (resolvePick — a second click would cycle on
+# to the shell, then the water).
+click_el '[...doc.querySelectorAll("header button")].find(b => b.textContent.trim().startsWith("Turntable"))'
+sleep 0.5
+if ! p=$(cdp point 'win.__nxKind ? win.__nxKind.partAt("Fluid") : null'); then
+  png=$(shot no-part)
+  fail "the stage could not say where the Fluid is" "$png"
+else
+  g_click $p 0.8
+  picked=$(wv 'doc.querySelector("[data-kind=picked] b")?.textContent.trim() ?? ""')
+  if [[ $picked == "Base" ]]; then
+    click_el '[...doc.querySelectorAll("aside[aria-label=Kind] button")].find(b => b.textContent.trim().startsWith("Add drive"))'
+    sleep 1.2
+    key ctrl+s; sleep 1.5
+    png=$(shot picked)
+    if [[ $(grep -c '"mesh": "Base"' "$F") == 1 ]] && [[ $(drives_in_file) == 2 ]]; then
+      pass "a click on the tank picked the Base through the glass and the water, and Add drive put a drive on it: $(grep '"mesh"' "$F" | tail -1 | cut -c1-90)" "$png"
+    else
+      fail "after picking the Base, Add drive wrote: $(grep '"mesh"' "$F" | tr '\n' ' ' | cut -c1-200)" "$png"
+    fi
+    key ctrl+z; sleep 1.2; key ctrl+s; sleep 1.0
+  else
+    png=$(shot not-picked)
+    fail "a click on the tank at $p picked '$picked', not the Base behind the water" "$png"
+  fi
 fi
 
 # ── scene ──────────────────────────────────────────────────────────────────

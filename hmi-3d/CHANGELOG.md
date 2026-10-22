@@ -21,6 +21,10 @@ and the `SceneKindEntry` type go with it. A registry entry may be marked
 `fallback: true` — an editor's stand-in box for a model that does not
 load — and `registryFor` lays the model over it in every look; only a
 real Svelte kind of the same name keeps its primitives in flat and paper.
+`resolvePick` and `seeThrough` (pick.ts) are exported, so an editor
+picking parts inside one model orders its hits the way the scene does,
+and `Scene3D` takes `pick={false}` for a host that picks nothing at the
+node level (no hover outline, no pointer cursor, no `onpick`).
 
 **Changed.** `model` must end in `.glb` or `.gltf` in `validateScene` as
 it already had to for `naut check` and the schema.

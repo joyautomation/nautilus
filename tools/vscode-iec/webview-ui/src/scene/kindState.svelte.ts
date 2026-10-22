@@ -34,6 +34,13 @@ export const kd = $state({
 	error: '',
 	/** What the model said once loaded: its named objects and its box. */
 	meshes: [] as string[],
+	/** Each named object's nearest named ancestor (none at the top), so
+	 * the panel can say "Vane1 · in Impeller". */
+	parentOf: {} as Record<string, string | null>,
+	/** The part under the pointer (on the stage, a chip or a drive row)
+	 * and the part a click picked — a drive starts on it. Webview state. */
+	hover: null as string | null,
+	picked: null as string | null,
 	bounds: null as Box | null,
 	modelState: 'none' as 'none' | 'loading' | 'ok' | 'failed',
 	/** Sample member values for the preview (never written to the file). */
@@ -41,6 +48,22 @@ export const kd = $state({
 	look: 'lit' as SceneLook,
 	turntable: true
 });
+
+/** The named ancestors of a part, nearest first. */
+export function ancestorsOf(name: string): string[] {
+	const out: string[] = [];
+	let p = kd.parentOf[name] ?? null;
+	while (p && !out.includes(p)) {
+		out.push(p);
+		p = kd.parentOf[p] ?? null;
+	}
+	return out;
+}
+
+/** How many drives name a part. */
+export function drivesOn(name: string): number {
+	return (kd.kind?.drive ?? []).filter((d) => d.mesh === name).length;
+}
 
 /** The members the kind reads, in order: `members`, then the drives' and
  * the status template's — what hmi-3d's kindMembers and naut check see. */

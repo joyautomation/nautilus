@@ -14,6 +14,9 @@
 //   K05 turntable the model turns while on, holds while off
 //   K06 missing   a model the host did not find: no stage model, the panel
 //                 says so, drives are still editable by name
+//   K07 pick      the pointer over a part hovers it; a click picks it and
+//                 "Add drive" starts on it; a chip picks by name; Esc and
+//                 a click on the ground clear it; the part's drive row lights
 //
 // Bundle under test: env SCENE_BUNDLE, else ../media/dist.
 import { test } from 'node:test';
@@ -116,6 +119,30 @@ class Kind {
 	}
 	labels() {
 		return this.b.eval('JSON.stringify(window.__labels())').then(JSON.parse);
+	}
+	hover() {
+		return this.b.eval('window.__hover()');
+	}
+	picked() {
+		return this.b.eval('window.__picked()');
+	}
+	/** Where a part's centre is on the page (null until the model is on stage). */
+	async partAt(name) {
+		for (let i = 0; i < 40; i++) {
+			const at = await this.b.eval(`JSON.stringify(window.__partAt(${JSON.stringify(name)}))`).then(JSON.parse);
+			if (at) return at;
+			await sleep(100);
+		}
+		return null;
+	}
+	parts() {
+		return this.b.eval('JSON.stringify(window.__parts())').then(JSON.parse);
+	}
+	pickedLine() {
+		return this.b.eval('window.__pickedLine()');
+	}
+	rowPicked(i) {
+		return this.b.eval(`window.__rowPicked(${i})`);
 	}
 	/** Type into a panel field and leave it (Tab), the way a value is committed. */
 	async type(label, text) {
@@ -247,6 +274,58 @@ test('K06 missing: a model the host did not find — the panel says so, drives a
 		assert.ok(labels.some((l) => l.title === 'valve-x'), 'the placeholder box still carries the label');
 		await k.type('mesh', 'Stem');
 		assert.deepEqual(await k.ops(), [{ type: 'updateDrive', index: 0, drive: { mesh: 'Stem', turn: { axis: 'z', deg: { bind: 'Pos', scale: 0.9 } } } }]);
+		assert.deepEqual(k.exceptions(), []);
+	});
+});
+
+test('K07 pick: hover and click on the model pick a part, "Add drive" starts on it, a chip picks by name, Esc clears', { skip: !MODEL_URI && 'no model' }, async () => {
+	await withKind(valveKind(), {}, async (k) => {
+		// Hold the turntable so a part stays where partAt says it is.
+		const tt = await k.button('Turntable');
+		await k.b.click(tt.cx, tt.cy);
+		await sleep(200);
+		const body = await k.partAt('Body');
+		assert.ok(body, 'the Body is on stage');
+		await k.b.moveTo(body.x, body.y);
+		await sleep(200);
+		assert.equal(await k.hover(), 'Body', 'the pointer over the body hovers it');
+		assert.equal(await k.picked(), null);
+		await k.b.click(body.x, body.y);
+		await sleep(250);
+		assert.equal(await k.picked(), 'Body');
+		assert.match(await k.pickedLine(), /^Body · 0 drives · clear$/);
+		assert.deepEqual(await k.ops(), [], 'a pick is webview state, not an op');
+		// "Add drive" starts on the picked part.
+		const add = await k.button('Add drive');
+		assert.ok(add, 'Add drive');
+		await k.b.click(add.cx, add.cy);
+		await sleep(200);
+		const ops = await k.ops();
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.equal(ops[0].type, 'addDrive');
+		assert.equal(ops[0].drive.mesh, 'Body');
+		await k.reset();
+		// A chip picks by name; the part's drive row lights.
+		const handle = (await k.parts()).find((p) => p.name === 'Handle');
+		assert.ok(handle && handle.drives === 1, JSON.stringify(await k.parts()));
+		await k.b.click(handle.cx, handle.cy);
+		await sleep(200);
+		assert.equal(await k.picked(), 'Handle');
+		assert.equal(await k.rowPicked(0), true, 'the Handle drive row is marked');
+		assert.match(await k.pickedLine(), /^Handle · 1 drive · clear$/);
+		// Esc clears; a click on the ground clears too.
+		await k.b.pressKey('Escape', { keyCode: 27 });
+		await sleep(150);
+		assert.equal(await k.picked(), null);
+		assert.equal(await k.rowPicked(0), false);
+		await k.b.click(body.x, body.y);
+		await sleep(200);
+		assert.equal(await k.picked(), 'Body');
+		const c = await k.b.eval('JSON.stringify(window.__canvas())').then(JSON.parse);
+		await k.b.click(c.left + 20, c.top + c.h - 20);
+		await sleep(200);
+		assert.equal(await k.picked(), null, 'a click on empty ground clears the pick');
+		assert.deepEqual(await k.ops(), []);
 		assert.deepEqual(k.exceptions(), []);
 	});
 });

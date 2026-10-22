@@ -46,6 +46,7 @@
 		const url = kd.rendered?.model;
 		if (!url || (kd.model && !kd.model.file)) {
 			kd.meshes = [];
+			kd.parentOf = {};
 			kd.bounds = null;
 			kd.modelState = 'none';
 			return;
@@ -57,8 +58,13 @@
 			(gltf) => {
 				if (cancelled) return;
 				const names: string[] = [];
+				const parentOf: Record<string, string | null> = {};
 				gltf.scene.traverse((o) => {
-					if (o.name && o !== gltf.scene) names.push(o.name);
+					if (!o.name || o === gltf.scene) return;
+					names.push(o.name);
+					let p = o.parent;
+					while (p && p !== gltf.scene && !p.name) p = p.parent;
+					parentOf[o.name] = p && p !== gltf.scene ? p.name : null;
 				});
 				gltf.scene.updateMatrixWorld(true);
 				const box = new Box3().setFromObject(gltf.scene);
@@ -67,13 +73,17 @@
 				box.getSize(size);
 				box.getCenter(center);
 				kd.meshes = names;
+				kd.parentOf = parentOf;
 				kd.bounds = { size: size.toArray() as Vec3, center: center.toArray() as Vec3 };
 				kd.modelState = 'ok';
+				if (kd.picked && !names.includes(kd.picked)) kd.picked = null;
+				if (kd.hover && !names.includes(kd.hover)) kd.hover = null;
 			},
 			(err) => {
 				if (cancelled) return;
 				console.warn('nautilus kind: could not load the model', err);
 				kd.meshes = [];
+				kd.parentOf = {};
 				kd.bounds = null;
 				kd.modelState = 'failed';
 			}

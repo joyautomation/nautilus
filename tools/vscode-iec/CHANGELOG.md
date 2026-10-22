@@ -22,7 +22,11 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   drives (mesh, channel, fields; **Add drive**, `×`) are edited beside it,
   each change one text edit with one drive per line. `naut check` reads
   the file next to the scene. `examples/lift-station`'s six kinds moved
-  into `hmi/src/lib/kinds/`.
+  into `hmi/src/lib/kinds/`. **Click a part on the model to pick it**:
+  the part under the pointer lights, a click picks it (again on the same
+  spot: the part behind), the panel names it with what it sits in and
+  its drives, **Add drive** starts on it, the **Parts** list picks by
+  name, and a hovered name or drive row lights its part; `Esc` clears.
 - **A 3D scene editor.** A `*.scene.json` now opens as the 3D view itself
   (the same `@joyautomation/nautilus-hmi-3d` renderer the built HMI uses,
   in its own webview bundle), with a palette of the document's kinds, a

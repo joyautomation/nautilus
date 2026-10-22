@@ -58,6 +58,17 @@
 				return b ? { active: b.classList.contains('active'), ...vpCenter(b) } : null;
 			};
 			window.__rotation = () => (window.__nxKind ? window.__nxKind.rotation() : null);
+			// The part picker: what is hovered / picked on the stage, where a
+			// part is on the page, the panel's chips and its picked line.
+			window.__hover = () => (window.__nxKind ? window.__nxKind.hover() : null);
+			window.__picked = () => (window.__nxKind ? window.__nxKind.picked() : null);
+			window.__partAt = (name) => (window.__nxKind ? window.__nxKind.partAt(name) : null);
+			window.__parts = () =>
+				Array.from(document.querySelectorAll('[data-kind=part]')).map((c) => ({
+					name: c.dataset.name, picked: c.classList.contains('picked'), drives: Number(c.querySelector('small')?.textContent ?? 0), ...vpCenter(c)
+				}));
+			window.__pickedLine = () => document.querySelector('[data-kind=picked]')?.textContent.replace(/\s+/g, ' ').trim() ?? null;
+			window.__rowPicked = (i) => document.querySelector('[data-kind=drive-row][data-index="' + i + '"]')?.classList.contains('picked') ?? null;
 			window.__ready = () => !!document.querySelector('aside[aria-label=Kind]') && !!document.querySelector('.stage canvas');
 		</script>
 		<script src="./scene-editor.js"></script>
