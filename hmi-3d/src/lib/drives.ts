@@ -39,15 +39,23 @@ export interface ScaleDrive {
 	mesh: string;
 	scale: { axis: Axis | 'xyz'; to: NumExpr };
 }
+/** A colour read off an analog: `ramp` is stops of [value, colour] in
+ * ascending value; the colour between two stops is interpolated, beyond
+ * the ends clamped. Colours are palette slots or CSS colours, as `on` is. */
+export interface RampExpr {
+	bind: string;
+	ramp: [number, string][];
+}
 export interface TintDrive {
 	mesh: string;
 	/** `on` / `off` are palette slots (`running`, `fluid`, `handle`, a priority
-	 * name) or CSS colours. Absent `off` = the model's own material colour. */
-	tint: BoolExpr & { on: string; off?: string };
+	 * name) or CSS colours. Absent `off` = the model's own material colour.
+	 * Or a ramp: the colour varies with a number. */
+	tint: (BoolExpr & { on: string; off?: string }) | RampExpr;
 }
 export interface EmissiveDrive {
 	mesh: string;
-	emissive: BoolExpr & { on: string; intensity?: number };
+	emissive: (BoolExpr & { on: string; intensity?: number }) | (RampExpr & { intensity?: number });
 }
 export interface VisibleDrive {
 	mesh: string;
@@ -68,8 +76,11 @@ export interface MeshState {
 	/** Absolute rotation, radians. */
 	turn?: { axis: Axis; rad: number };
 	scale?: Vec3;
-	tint?: string | null;
-	emissive?: { color: string; intensity: number } | null;
+	/** A colour name, null for the model's own, or a ramp with the value
+	 * to read it at (the component interpolates, since the stops may be
+	 * palette slots it alone can resolve). */
+	tint?: string | null | { ramp: [number, string][]; value: number };
+	emissive?: { color: string; intensity: number } | { ramp: [number, string][]; value: number; intensity: number } | null;
 	visible?: boolean;
 }
 
@@ -128,12 +139,31 @@ export function evalDrives(drives: Drive[] | undefined, value: unknown, over: Re
 			const k = evalNum(d.scale.to, value, over);
 			const a = d.scale.axis;
 			s.scale = [a === 'x' || a === 'xyz' ? k : 1, a === 'y' || a === 'xyz' ? k : 1, a === 'z' || a === 'xyz' ? k : 1];
-		} else if ('tint' in d) s.tint = evalBool(d.tint, value, over) ? d.tint.on : (d.tint.off ?? null);
-		else if ('emissive' in d)
-			s.emissive = evalBool(d.emissive, value, over) ? { color: d.emissive.on, intensity: d.emissive.intensity ?? 1 } : null;
+		} else if ('tint' in d) {
+			if ('ramp' in d.tint) s.tint = { ramp: d.tint.ramp, value: num(read(d.tint.bind, value, over)) };
+			else s.tint = evalBool(d.tint, value, over) ? d.tint.on : (d.tint.off ?? null);
+		} else if ('emissive' in d) {
+			if ('ramp' in d.emissive) s.emissive = { ramp: d.emissive.ramp, value: num(read(d.emissive.bind, value, over)), intensity: d.emissive.intensity ?? 1 };
+			else s.emissive = evalBool(d.emissive, value, over) ? { color: d.emissive.on, intensity: d.emissive.intensity ?? 1 } : null;
+		}
 		else if ('visible' in d) s.visible = evalBool(d.visible, value, over);
 		return s;
 	});
+}
+
+/** Where a value sits on a ramp: the stop below, the stop above and the
+ * blend between them (0 = the lower stop's colour). Beyond the ends the
+ * end stop, blend 0. Pure, so the component only mixes the two colours. */
+export function rampAt(ramp: [number, string][], value: number): { from: string; to: string; t: number } {
+	if (!ramp.length) return { from: '#888', to: '#888', t: 0 };
+	if (!(value > ramp[0][0])) return { from: ramp[0][1], to: ramp[0][1], t: 0 };
+	for (let i = 1; i < ramp.length; i++) {
+		const [v0, c0] = ramp[i - 1];
+		const [v1, c1] = ramp[i];
+		if (value <= v1) return { from: c0, to: c1, t: v1 === v0 ? 1 : (value - v0) / (v1 - v0) };
+	}
+	const last = ramp[ramp.length - 1][1];
+	return { from: last, to: last, t: 0 };
 }
 
 /** The members a list of drives reads, deduplicated, in order. */
@@ -186,6 +216,17 @@ export function validateDrives(drives: unknown, base: string): { path: string; m
 			if (!isStr(e.bind) || !MEMBER_RE.test(e.bind)) err(`${ep}/bind`, 'must name a member of the struct (a leading ! negates)');
 			if (e.threshold !== undefined && !isNum(e.threshold)) err(`${ep}/threshold`, 'must be a number');
 		};
+		const rampExpr = (e: Record<string, unknown>, ep: string) => {
+			if (!isStr(e.bind) || !MEMBER_RE.test(e.bind) || e.bind.startsWith('!')) err(`${ep}/bind`, 'must name a member of the struct (a number)');
+			const r = e.ramp;
+			if (!Array.isArray(r) || r.length < 2) return err(`${ep}/ramp`, 'must be at least two [value, colour] stops');
+			let prev = -Infinity;
+			r.forEach((stop, i) => {
+				if (!Array.isArray(stop) || stop.length !== 2 || !isNum(stop[0]) || !isStr(stop[1])) return err(`${ep}/ramp/${i}`, 'must be [value, colour]');
+				if (!(stop[0] > prev)) err(`${ep}/ramp/${i}`, 'stops go up in value');
+				prev = stop[0];
+			});
+		};
 		const axis = (a: unknown, ap: string, xyz = false) => {
 			if (!(isStr(a) && (AXES.has(a) || (xyz && a === 'xyz')))) err(ap, xyz ? "must be 'x', 'y', 'z' or 'xyz'" : "must be 'x', 'y' or 'z'");
 		};
@@ -203,13 +244,23 @@ export function validateDrives(drives: unknown, base: string): { path: string; m
 				numExpr(body.to, `${p}/scale/to`);
 				break;
 			case 'tint':
-				boolExpr(body, `${p}/tint`);
-				if (!isStr(body.on)) err(`${p}/tint/on`, 'must be a palette slot or a CSS colour');
-				if (body.off !== undefined && !isStr(body.off)) err(`${p}/tint/off`, 'must be a palette slot or a CSS colour');
+				if (body.ramp !== undefined) {
+					rampExpr(body, `${p}/tint`);
+					for (const k of ['on', 'off', 'threshold']) if (body[k] !== undefined) err(`${p}/tint/${k}`, 'not with a ramp');
+				} else {
+					boolExpr(body, `${p}/tint`);
+					if (!isStr(body.on)) err(`${p}/tint/on`, 'must be a palette slot or a CSS colour');
+					if (body.off !== undefined && !isStr(body.off)) err(`${p}/tint/off`, 'must be a palette slot or a CSS colour');
+				}
 				break;
 			case 'emissive':
-				boolExpr(body, `${p}/emissive`);
-				if (!isStr(body.on)) err(`${p}/emissive/on`, 'must be a palette slot or a CSS colour');
+				if (body.ramp !== undefined) {
+					rampExpr(body, `${p}/emissive`);
+					for (const k of ['on', 'threshold']) if (body[k] !== undefined) err(`${p}/emissive/${k}`, 'not with a ramp');
+				} else {
+					boolExpr(body, `${p}/emissive`);
+					if (!isStr(body.on)) err(`${p}/emissive/on`, 'must be a palette slot or a CSS colour');
+				}
 				if (body.intensity !== undefined && !(isNum(body.intensity) && body.intensity >= 0)) err(`${p}/emissive/intensity`, 'must be ≥ 0');
 				break;
 			case 'visible':

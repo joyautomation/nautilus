@@ -47,6 +47,7 @@
 		if (!url || (kd.model && !kd.model.file)) {
 			kd.meshes = [];
 			kd.parentOf = {};
+			kd.parts = {};
 			kd.bounds = null;
 			kd.modelState = 'none';
 			return;
@@ -59,14 +60,18 @@
 				if (cancelled) return;
 				const names: string[] = [];
 				const parentOf: Record<string, string | null> = {};
+				const parts: Record<string, { size: Vec3; center: Vec3 }> = {};
+				gltf.scene.updateMatrixWorld(true);
 				gltf.scene.traverse((o) => {
 					if (!o.name || o === gltf.scene) return;
 					names.push(o.name);
 					let p = o.parent;
 					while (p && p !== gltf.scene && !p.name) p = p.parent;
 					parentOf[o.name] = p && p !== gltf.scene ? p.name : null;
+					// The scene has no parent: a world box is a box in the kind's frame.
+					const b = new Box3().setFromObject(o);
+					if (!b.isEmpty()) parts[o.name] = { size: b.getSize(new Vector3()).toArray() as Vec3, center: b.getCenter(new Vector3()).toArray() as Vec3 };
 				});
-				gltf.scene.updateMatrixWorld(true);
 				const box = new Box3().setFromObject(gltf.scene);
 				const size = new Vector3();
 				const center = new Vector3();
@@ -74,6 +79,7 @@
 				box.getCenter(center);
 				kd.meshes = names;
 				kd.parentOf = parentOf;
+				kd.parts = parts;
 				kd.bounds = { size: size.toArray() as Vec3, center: center.toArray() as Vec3 };
 				kd.modelState = 'ok';
 				if (kd.picked && !names.includes(kd.picked)) kd.picked = null;
@@ -84,6 +90,7 @@
 				console.warn('nautilus kind: could not load the model', err);
 				kd.meshes = [];
 				kd.parentOf = {};
+				kd.parts = {};
 				kd.bounds = null;
 				kd.modelState = 'failed';
 			}

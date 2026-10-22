@@ -45,6 +45,10 @@ export interface SceneContext {
 	/** A kind's box for this node: explicit, or what its model reported. */
 	boundsOf(id: string | undefined, bounds: Box | 'auto'): Box;
 	reportBounds(id: string | undefined, box: Box): void;
+	/** The named parts' boxes a node's model reported, in the node's frame —
+	 * what a box-point port or label resolves against. */
+	partsOf(id: string | undefined): Record<string, Box> | undefined;
+	reportParts(id: string | undefined, parts: Record<string, Box>): void;
 	reportFailed(id: string | undefined): void;
 	pick(id: string): void;
 	/** A right-click on a pickable node, with the browser's event (for

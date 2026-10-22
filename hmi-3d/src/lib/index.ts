@@ -33,12 +33,16 @@ export { default as Fixture3D } from './components/Fixture3D.svelte';
 // loaders back into the base bundle (§3c, §6).
 
 // The scene document: types, the validator, and the subscription list.
-export { validateScene, validateKind, sceneTags, isBindingRef, isAssetPath, isComponentPath, isKindPath, isMemberName, refRoot, kindMembers, assemblyMembers, kindDefinedBy, docPorts, portInFrame, rotateXYZ, resolvePipePoints, LOOKS } from './scene.js';
+export { validateScene, validateKind, sceneTags, isBindingRef, isAssetPath, isComponentPath, isKindPath, isMemberName, refRoot, kindMembers, assemblyMembers, kindDefinedBy, docPorts, portInFrame, rotateXYZ, resolvePipePoints, resolvePoint, resolvePort, anchorPoint, anchorNormal, isAnchorWord, isBoxPoint, ANCHOR_WORDS, LOOKS } from './scene.js';
 export type {
 	SceneDoc,
 	SceneLook,
 	SceneKind,
 	ScenePort,
+	ScenePoint,
+	BoxPoint,
+	SceneBox,
+	KindBoxes,
 	PipeAnchor,
 	PipeFrame,
 	SceneKindEntry,
@@ -55,8 +59,8 @@ export type {
 } from './scene.js';
 
 // Kinds as data: the drive vocabulary, evaluated from the document.
-export { DRIVE_CHANNELS, evalDrives, evalNum, evalBool, driveMembers, validateDrives, formatStatus, statusMembers, propFor } from './drives.js';
-export type { Drive, DriveChannel, MeshState, NumExpr, BoolExpr, Axis } from './drives.js';
+export { DRIVE_CHANNELS, evalDrives, evalNum, evalBool, rampAt, driveMembers, validateDrives, formatStatus, statusMembers, propFor } from './drives.js';
+export type { Drive, DriveChannel, MeshState, NumExpr, BoolExpr, RampExpr, Axis } from './drives.js';
 
 // Bindings: the mimic's grammar plus dotted paths, evaluated from the doc.
 export { resolveNodeBindings, resolveRefs, readPart, bindingsGood, readPath, member, num, flowing } from './bindings.js';

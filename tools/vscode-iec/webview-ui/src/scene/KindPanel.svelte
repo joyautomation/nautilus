@@ -2,8 +2,9 @@
 	// The panel: the kind's fields, each committed per change (blur / Enter)
 	// as a setField op; its drives as rows (DriveRow); and the sample
 	// values that drive the stage — kept here, never written to the file.
-	import { formatStatus, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
+	import { formatStatus, type ScenePoint, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
 	import DriveRow from './DriveRow.svelte';
+	import PointFields from './PointFields.svelte';
 	import { ancestorsOf, blankDrive, drivesOn, kd, memberShape, members, postOp, sampleStruct } from './kindState.svelte';
 	import { portNameFrom } from './marks';
 
@@ -24,14 +25,8 @@
 	}
 	const AXES = ['x', 'y', 'z'] as const;
 	const fmt = (v: number | undefined) => (v === undefined ? '' : String(Math.round(v * 1000) / 1000));
-	function labelAt(e: Event, i: number) {
-		const raw = (e.currentTarget as HTMLInputElement).value.trim();
-		const cur: Vec3 = [...(kind?.labelAt ?? [0, 0, 0])] as Vec3;
-		if (raw === '' && !kind?.labelAt) return;
-		const v = raw === '' ? 0 : Number(raw);
-		if (!isFinite(v)) return;
-		cur[i] = v;
-		postOp({ type: 'setField', key: 'labelAt', value: cur });
+	function setLabelAt(p: ScenePoint | string) {
+		postOp({ type: 'setField', key: 'labelAt', value: p });
 	}
 	function clearLabelAt() {
 		postOp({ type: 'setField', key: 'labelAt', value: null });
@@ -79,17 +74,36 @@
 		}
 		postOp({ type: 'renamePort', name, to });
 	}
-	function portVec(e: Event, name: string, key: 'at' | 'dir', i: number) {
+	function portAt(name: string, at: ScenePoint | string) {
+		const port = kind?.ports?.[name];
+		if (!port || typeof at === 'string') return;
+		postOp({ type: 'setPort', name, port: { ...port, at } });
+	}
+	function portDir(e: Event, name: string, i: number) {
 		const port = kind?.ports?.[name];
 		if (!port) return;
 		const raw = (e.currentTarget as HTMLInputElement).value.trim();
+		const cur: Vec3 = [...(port.dir ?? [0, 0, 0])] as Vec3;
 		const v = raw === '' ? 0 : Number(raw);
 		if (!isFinite(v)) return;
-		const next = { at: [...port.at] as Vec3, dir: [...(port.dir ?? [0, 1, 0])] as Vec3 };
-		next[key][i] = v;
-		if (key === 'dir' && next.dir.every((c) => c === 0)) return;
+		cur[i] = v;
+		// All blank: back to the default (out of the anchored face, else up).
+		const next = { ...port };
+		if (cur.every((c) => c === 0)) delete next.dir;
+		else next.dir = cur;
 		postOp({ type: 'setPort', name, port: next });
 	}
+	/** "Add port at top of Motor": a port anchored on the picked part's box (or the bounds). */
+	function addPortAt(e: Event) {
+		const sel = e.currentTarget as HTMLSelectElement;
+		const v = sel.value;
+		sel.value = '';
+		if (!v) return;
+		const [where, anchor] = v.split(':');
+		const part = where === 'part' ? kd.picked : null;
+		postOp({ type: 'setPort', name: portNameFrom(part ?? anchor, Object.keys(kind?.ports ?? {})), port: { at: part ? { part, anchor } : { anchor } } });
+	}
+	const ANCHORS = ['top', 'bottom', 'left', 'right', 'front', 'back', 'center'];
 	function deletePort(name: string) {
 		postOp({ type: 'deletePort', name });
 	}
@@ -143,13 +157,15 @@
 		{#if kind.status}
 			<p class="note">reads <b data-kind="status-preview">{statusPreview}</b> with the samples below</p>
 		{/if}
-		<div class="vec">
-			<span>label at <small>m</small></span>
-			{#each AXES as a, i (a)}
-				<input class="nx-input" type="number" step="0.01" value={fmt(kind.labelAt?.[i])} onchange={(e) => labelAt(e, i)} aria-label="labelAt {a}" title={a} placeholder="top" />
-			{/each}
+		<div class="fact top">
+			<span>label at</span>
+			{#if kind.labelAt === undefined}
+				<span class="muted">the top of the bounds · <button class="link" onclick={() => setLabelAt('top')}>set</button></span>
+			{:else}
+				<PointFields value={kind.labelAt} parts={kd.meshes} picked={kd.picked} name="label" words onchange={setLabelAt} />
+			{/if}
 		</div>
-		{#if kind.labelAt}<button class="link" onclick={clearLabelAt}>label at the top of the bounds</button>{/if}
+		{#if kind.labelAt !== undefined}<button class="link" onclick={clearLabelAt}>label at the top of the bounds (default)</button>{/if}
 		<label>
 			<span>bounds</span>
 			<select class="nx-input" value={boundsMode} onchange={setBoundsMode} title="The halo and selection box">
@@ -212,20 +228,27 @@
 					<button class="link" onclick={() => movePortHere(name)} disabled={!kd.hit} title={kd.hit ? `Move this port to where you clicked (${fmtHit(kd.hit.at)})` : 'Click a part on the model first'}>here</button>
 					<button class="del" onclick={() => deletePort(name)} title="Remove this port" aria-label="remove port">×</button>
 				</div>
-				<div class="vec">
-					<span>at <small>m</small></span>
-					{#each AXES as a, i (a)}<input class="nx-input" type="number" step="0.01" value={fmt(port.at[i])} onchange={(e) => portVec(e, name, 'at', i)} aria-label="port at {a}" title={a} />{/each}
+				<div class="fact top">
+					<span>at</span>
+					<PointFields value={port.at} parts={kd.meshes} picked={kd.picked} name="port at" onchange={(p) => portAt(name, p)} />
 				</div>
 				<div class="vec">
 					<span>dir</span>
-					{#each AXES as a, i (a)}<input class="nx-input" type="number" step="0.1" value={fmt((port.dir ?? [0, 1, 0])[i])} onchange={(e) => portVec(e, name, 'dir', i)} aria-label="port dir {a}" title="{a} — the direction a pipe leaves" />{/each}
+					{#each AXES as a, i (a)}<input class="nx-input" type="number" step="0.1" value={fmt(port.dir?.[i])} onchange={(e) => portDir(e, name, i)} aria-label="port dir {a}" title="{a} — the direction a pipe leaves; blank = out of the anchored face, else up" placeholder={Array.isArray(port.at) ? (i === 1 ? '1' : '0') : 'face'} />{/each}
 				</div>
 			</div>
 		{/each}
-		<div class="actions">
+		<div class="actions two">
 			<button onclick={addPortHere} disabled={!kd.hit} title={kd.hit ? `A port where you clicked (${fmtHit(kd.hit.at)}), facing out of the surface` : 'Click a part on the model first — the port goes where you clicked'}>
 				Add port here{#if kd.hit && kd.picked}<small>&nbsp;on {kd.picked}</small>{/if}
 			</button>
+			<select class="nx-input" value="" onchange={addPortAt} aria-label="add port at" data-kind="add-port-at" disabled={kd.modelState !== 'ok'} title="A port on a face of the picked part's box, or of the bounds — it survives a re-export of the model">
+				<option value="" disabled>Add port at…</option>
+				{#if kd.picked}
+					{#each ANCHORS as a (a)}<option value="part:{a}">{a} of {kd.picked}</option>{/each}
+				{/if}
+				{#each ANCHORS as a (a)}<option value="bounds:{a}">{a} of the bounds</option>{/each}
+			</select>
 		</div>
 
 		<div class="head sub">Drives <span class="count">{kind.drive?.length ?? 0}</span></div>
@@ -292,6 +315,23 @@
 		grid-template-columns: 58px 1fr;
 		align-items: center;
 		gap: 4px;
+	}
+	.fact.top {
+		align-items: start;
+	}
+	.fact .muted {
+		color: var(--nx-muted);
+	}
+	.actions.two {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 4px;
+	}
+	.actions select {
+		width: 100%;
+		min-width: 0;
+		padding: 4px 6px;
+		font-size: 12px;
 	}
 	.vec {
 		grid-template-columns: 58px 1fr 1fr 1fr;

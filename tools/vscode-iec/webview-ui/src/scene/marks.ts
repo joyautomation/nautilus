@@ -3,8 +3,8 @@
 // pipe leaves it — built as plain three objects added under a node's own
 // group, so they turn, scale and move with it (the turntable, the gizmo).
 // Pure three; no Svelte.
-import { BufferGeometry, Group, Line, LineBasicMaterial, Mesh, MeshBasicMaterial, SphereGeometry, Vector3, type Object3D } from 'three';
-import type { ScenePort, Vec3 } from '@joyautomation/nautilus-hmi-3d';
+import { Box3, BufferGeometry, Group, Line, LineBasicMaterial, Matrix4, Mesh, MeshBasicMaterial, SphereGeometry, Vector3, type Object3D } from 'three';
+import { resolvePort, type KindBoxes, type SceneBox, type ScenePort, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
 
 export const PORT_COLOR = '#f2b640';
 export const PORT_HOT = '#ffe08a';
@@ -13,9 +13,9 @@ export const PORT_R = 0.016;
 
 export type PortMark = Group & { userData: { nxPort: string; nxHighlight: true; ink: false } };
 
-/** A mark for one port, in the frame the port is declared in. `hot` is the
- * hovered / armed look. */
-export function makePortMark(name: string, port: ScenePort, { scale = 1, hot = false } = {}): PortMark {
+/** A mark for one resolved port (its point and direction in the frame it
+ * is declared in). `hot` is the hovered / armed look. */
+export function makePortMark(name: string, port: { at: Vec3; dir: Vec3 }, { scale = 1, hot = false } = {}): PortMark {
 	const g = new Group() as PortMark;
 	g.userData = { nxPort: name, nxHighlight: true, ink: false };
 	g.position.set(...port.at);
@@ -25,7 +25,7 @@ export function makePortMark(name: string, port: ScenePort, { scale = 1, hot = f
 	dot.userData = { nxPortDot: name, nxHighlight: true, ink: false };
 	dot.renderOrder = 998;
 	g.add(dot);
-	const d = new Vector3(...(port.dir ?? [0, 1, 0]));
+	const d = new Vector3(...port.dir);
 	if (d.lengthSq() > 0) {
 		d.normalize().multiplyScalar(r * 4);
 		const line = new Line(new BufferGeometry().setFromPoints([new Vector3(0, 0, 0), d]), new LineBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.9 }));
@@ -47,16 +47,41 @@ export function dropMark(g: Object3D | null | undefined): void {
 	});
 }
 
-/** Lay one mark per port under `parent`, dropping what was there. Returns
- * the marks by port name. */
-export function layPortMarks(parent: Object3D, ports: Record<string, ScenePort> | undefined, previous: Map<string, PortMark>, hot: string | null, scale = 1): Map<string, PortMark> {
+/** Lay one mark per port under `parent`, dropping what was there. A port
+ * on a box not known yet (the model still loading) gets no mark; the
+ * caller lays again once it is. Returns the marks by port name. */
+export function layPortMarks(parent: Object3D, ports: Record<string, ScenePort> | undefined, boxes: KindBoxes | undefined, previous: Map<string, PortMark>, hot: string | null, scale = 1): Map<string, PortMark> {
 	for (const m of previous.values()) dropMark(m);
 	const out = new Map<string, PortMark>();
 	for (const [name, port] of Object.entries(ports ?? {})) {
-		const m = makePortMark(name, port, { scale, hot: name === hot });
+		const r = resolvePort(port, boxes);
+		if (!r) continue;
+		const m = makePortMark(name, r, { scale, hot: name === hot });
 		parent.add(m);
 		out.set(name, m);
 	}
+	return out;
+}
+
+/** Each named part's box in `group`'s own frame, from the meshes under it
+ * (the renderer's clone of the model, once loaded) — skipping marks and
+ * highlights. Empty until the model is on stage. */
+export function partBoxes(group: Object3D): Record<string, SceneBox> {
+	group.updateWorldMatrix(true, true);
+	const inv = new Matrix4().copy(group.matrixWorld).invert();
+	const out: Record<string, SceneBox> = {};
+	const m = new Matrix4();
+	group.traverse((o) => {
+		if (!o.name || o === group || o.userData.nxHighlight) return;
+		const box = new Box3();
+		o.traverse((c) => {
+			const mesh = c as Mesh;
+			if (!mesh.isMesh || c.userData.nxHighlight || !mesh.geometry) return;
+			if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+			box.union(mesh.geometry.boundingBox!.clone().applyMatrix4(m.multiplyMatrices(inv, mesh.matrixWorld)));
+		});
+		if (!box.isEmpty() && !(o.name in out)) out[o.name] = { size: box.getSize(new Vector3()).toArray() as Vec3, center: box.getCenter(new Vector3()).toArray() as Vec3 };
+	});
 	return out;
 }
 

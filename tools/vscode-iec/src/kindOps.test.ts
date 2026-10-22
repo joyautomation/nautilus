@@ -137,3 +137,29 @@ test("ports: set, rename (keeping its place), delete; one per line between statu
   assert.equal(none, BASE);
   assert.match(refuse(none, { type: "deletePort", name: "suction" }), /no port/);
 });
+
+test("box points: a port or the label at top / left / front of a part; words on the bounds", () => {
+  const at = apply(BASE, { type: "setPort", name: "discharge", port: { at: { part: "Flange", anchor: "top-front", offset: [0, 0.0049, 0] } } });
+  assert.match(at, /"discharge": \{ "at": \{ "part": "Flange", "anchor": "top-front", "offset": \[0, 0.005, 0\] \} \}/);
+  const plain = apply(BASE, { type: "setPort", name: "s", port: { at: { anchor: "left", offset: [0, 0, 0] }, dir: [0, 0, 1] } });
+  assert.match(plain, /"s": \{ "at": \{ "anchor": "left" \}, "dir": \[0, 0, 1\] \}/, "a zero offset is dropped; no part = the bounds");
+  assert.match(refuse(BASE, { type: "setPort", name: "x", port: { at: { anchor: "top-bottom" } } }), /anchor/);
+  assert.match(refuse(BASE, { type: "setPort", name: "x", port: { at: { anchor: "top", size: 1 } as never } }), /anchor/);
+  const word = apply(BASE, { type: "setField", key: "labelAt", value: "top" });
+  assert.match(word, /"labelAt": "top",/);
+  const part = apply(BASE, { type: "setField", key: "labelAt", value: { part: "Motor", anchor: "top", offset: [0, 0.02, 0] } });
+  assert.match(part, /"labelAt": \{\n    "part": "Motor",\n    "anchor": "top",\n    "offset": \[0, 0.02, 0\]\n  \},/);
+  assert.match(refuse(BASE, { type: "setField", key: "labelAt", value: "up" }), /labelAt is/);
+});
+
+test("ramps: a tint or emissive over a number; stops ascend; no on / off with it", () => {
+  const ramp: [number, string][] = [[20, "fluid"], [60, "#ffffff"], [90, "critical"]];
+  const out = apply(BASE, { type: "addDrive", drive: { mesh: "Shell", tint: { bind: "TempC", ramp } } });
+  assert.match(out, /\{ "mesh": "Shell", "tint": \{ "bind": "TempC", "ramp": \[\[20, "fluid"\], \[60, "#ffffff"\], \[90, "critical"\]\] \} \}/);
+  const glow = apply(out, { type: "addDrive", drive: { mesh: "Lamp", emissive: { bind: "Speed", ramp: [[0, "stale"], [60, "running"]], intensity: 2 } } });
+  assert.match(glow, /"emissive": \{ "bind": "Speed", "ramp": \[\[0, "stale"\], \[60, "running"\]\], "intensity": 2 \}/);
+  assert.match(refuse(BASE, { type: "addDrive", drive: { mesh: "Shell", tint: { bind: "TempC", ramp: [[20, "fluid"]] } } }), /at least two/);
+  assert.match(refuse(BASE, { type: "addDrive", drive: { mesh: "Shell", tint: { bind: "TempC", ramp: [[20, "fluid"], [10, "x"]] } } }), /go up/);
+  assert.match(refuse(BASE, { type: "addDrive", drive: { mesh: "Shell", tint: { bind: "!TempC", ramp } } }), /a number/);
+  assert.match(refuse(BASE, { type: "addDrive", drive: { mesh: "Shell", tint: { bind: "TempC", ramp, on: "x" } as never } }), /not with a ramp/);
+});

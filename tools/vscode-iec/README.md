@@ -216,6 +216,16 @@ its model on a turntable (`T` toggles), in the lit, flat or paper look.
   `dir`, **here** to move it to the last click, `×`). A scene anchors a
   pipe end to a port — `"from": { "node": "P101", "port": "discharge" }`
   — and the pipe follows the node when it is moved.
+- **A point by name.** A port's `at`, and `labelAt`, may be a place on a
+  box instead of metres: **Add port at… top of Motor** writes
+  `{ "part": "Motor", "anchor": "top" }`; `"labelAt": "top"` is the top of
+  the bounds; `top-front`, `left`, `center` and an `offset` are there
+  too. It survives the model being re-exported. Each such row has a
+  mode menu (metres · on the bounds · on a part).
+- **A colour from a number.** Tick **ramp** on a tint or emissive drive
+  and it becomes stops of value → colour (`"ramp": [[20, "fluid"], [90,
+  "critical"]]`), interpolated between stops and clamped beyond them;
+  the sample value slides the colour live.
 - The model's named objects fill every drive's mesh menu, so a drive
   targets something that exists; a name the model lacks is flagged. A
   drive is a row: its mesh, its channel (`spin`, `turn`, `scale`, `tint`,

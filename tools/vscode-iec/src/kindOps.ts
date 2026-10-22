@@ -15,24 +15,30 @@ export type Vec3 = [number, number, number];
 
 export type NumExpr = { bind: string; scale?: number; offset?: number; min?: number; max?: number };
 export type BoolExpr = { bind: string; threshold?: number };
+/** A colour over a number: stops of [value, colour], ascending. */
+export type RampExpr = { bind: string; ramp: [number, string][] };
 export type Drive = { mesh: string } & (
   | { spin: { axis: string; revPerS: NumExpr } }
   | { turn: { axis: string; deg: NumExpr } }
   | { scale: { axis: string; to: NumExpr } }
-  | { tint: BoolExpr & { on: string; off?: string } }
-  | { emissive: BoolExpr & { on: string; intensity?: number } }
+  | { tint: (BoolExpr & { on: string; off?: string }) | RampExpr }
+  | { emissive: (BoolExpr & { on: string; intensity?: number }) | (RampExpr & { intensity?: number }) }
   | { visible: BoolExpr }
 );
 
+/** A place on a box (a part's, or the kind's bounds): survives a re-export. */
+export type BoxPoint = { part?: string; anchor: string; offset?: Vec3 };
+export type Point = Vec3 | BoxPoint;
 /** A port (design §3g, slice 3): where a pipe meets the kind, in its frame. */
-export type Port = { at: Vec3; dir?: Vec3 };
+export type Port = { at: Point; dir?: Vec3 };
 
 export type KindDoc = {
   type?: string;
   members?: string[];
   model?: string;
   bounds?: "auto" | { size: Vec3; center: Vec3 };
-  labelAt?: Vec3;
+  /** Metres, an anchor word on the bounds, or a place on a part's box. */
+  labelAt?: Point | string;
   status?: string;
   ports?: Record<string, Port>;
   drive?: Drive[];
@@ -64,6 +70,18 @@ const isStr = (v: unknown): v is string => typeof v === "string" && v.length > 0
 const isVec3 = (v: unknown): v is Vec3 => Array.isArray(v) && v.length === 3 && v.every(isNum);
 const MEMBER_RE = /^!?[A-Za-z_][A-Za-z0-9_]*$/;
 const PORT_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+export const ANCHOR_WORDS = ["center", "top", "bottom", "left", "right", "front", "back"] as const;
+const AXIS_OF: Record<string, number> = { left: 0, right: 0, bottom: 1, top: 1, back: 2, front: 2 };
+/** `top`, `top-front`, `center`: one or two face words, at most one per axis. */
+export function isAnchorWord(v: unknown): v is string {
+  if (!isStr(v)) return false;
+  const w = v.split("-");
+  if (w.length > 2 || !w.every((x) => (ANCHOR_WORDS as readonly string[]).includes(x))) return false;
+  return w.length === 1 || (!w.includes("center") && AXIS_OF[w[0]] !== AXIS_OF[w[1]]);
+}
+export const isBoxPoint = (v: unknown): v is BoxPoint =>
+  isObj(v) && isAnchorWord(v.anchor) && (v.part === undefined || isStr(v.part)) && (v.offset === undefined || isVec3(v.offset)) && Object.keys(v).every((k) => ["part", "anchor", "offset"].includes(k));
+const POINT_HELP = "[x, y, z] metres, or { part?, anchor: top | bottom | left | right | front | back | center (or two, top-front), offset? }";
 const PLAIN_MEMBER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function parseKind(text: string): KindDoc {
@@ -122,10 +140,15 @@ export function formatKind(doc: KindDoc): string {
   const portRows: string[] = [];
   if (ports && Object.keys(ports).length === 0) delete d.ports;
   else if (ports) {
-    for (const [name, port] of Object.entries(ports)) portRows.push(`${JSON.stringify(name)}: ${compact(ordered(port, ["at", "dir"]))}`);
+    for (const [name, port] of Object.entries(ports)) {
+      const o = ordered(port, ["at", "dir"]);
+      if (isObj(o.at)) o.at = ordered(o.at as Json, ["part", "anchor", "offset"]);
+      portRows.push(`${JSON.stringify(name)}: ${compact(o)}`);
+    }
     d.ports = "\u0000ports";
   }
   if (d.bounds !== undefined && d.bounds !== "auto" && isObj(d.bounds)) d.bounds = ordered(d.bounds, ["size", "center"]);
+  if (isObj(d.labelAt)) d.labelAt = ordered(d.labelAt, ["part", "anchor", "offset"]);
   const rows: string[] = [];
   if (drives && drives.length) {
     for (const drv of drives) {
@@ -133,7 +156,7 @@ export function formatKind(doc: KindDoc): string {
       const row = ordered(drv, ch ? ["mesh", ch] : ["mesh"]);
       if (ch && isObj(row[ch])) {
         const c = row[ch] as Json;
-        const inner = ch === "spin" ? ["axis", "revPerS"] : ch === "turn" ? ["axis", "deg"] : ch === "scale" ? ["axis", "to"] : ["bind", "threshold", "on", "off", "intensity"];
+        const inner = ch === "spin" ? ["axis", "revPerS"] : ch === "turn" ? ["axis", "deg"] : ch === "scale" ? ["axis", "to"] : ["bind", "threshold", "on", "off", "ramp", "intensity"];
         const o = ordered(c, inner);
         for (const k of ["revPerS", "deg", "to"]) if (isObj(o[k])) o[k] = ordered(o[k] as Json, ["bind", "scale", "offset", "min", "max"]);
         row[ch] = o;
@@ -152,8 +175,8 @@ export function formatKind(doc: KindDoc): string {
 /** Why a port is not one, or undefined when it is. */
 export function portError(name: unknown, port: unknown): string | undefined {
   if (!isStr(name) || !PORT_RE.test(name)) return "a port name is letters, digits, _ or -";
-  if (!isObj(port)) return "a port is { at: [x, y, z], dir?: [x, y, z] }";
-  if (!isVec3(port.at)) return "at is [x, y, z] metres in the kind's frame";
+  if (!isObj(port)) return "a port is { at: [x, y, z] | { part?, anchor, offset? }, dir?: [x, y, z] }";
+  if (!(isVec3(port.at) || isBoxPoint(port.at))) return `at is ${POINT_HELP}`;
   if (port.dir !== undefined && !(isVec3(port.dir) && port.dir.some((c) => c !== 0))) return "dir is a non-zero [x, y, z] direction";
   return undefined;
 }
@@ -179,6 +202,19 @@ export function driveError(d: unknown): string | undefined {
     if (c.threshold !== undefined && !isNum(c.threshold)) return "threshold must be a number";
     return undefined;
   };
+  const ramp = (): string | undefined => {
+    if (!isStr(c.bind) || !PLAIN_MEMBER_RE.test(c.bind)) return "bind must name a member of the struct (a number)";
+    const r = c.ramp;
+    if (!Array.isArray(r) || r.length < 2) return "a ramp is at least two [value, colour] stops";
+    let prev = -Infinity;
+    for (const stop of r) {
+      if (!Array.isArray(stop) || stop.length !== 2 || !isNum(stop[0]) || !isStr(stop[1])) return "a ramp stop is [value, colour]";
+      if (!(stop[0] > prev)) return "ramp stops go up in value";
+      prev = stop[0];
+    }
+    for (const k of ["on", "off", "threshold"]) if (c[k] !== undefined) return `${k} is not with a ramp`;
+    return undefined;
+  };
   switch (ch) {
     case "spin":
       return axis(c.axis, false) ?? num(c.revPerS, "revPerS");
@@ -187,8 +223,10 @@ export function driveError(d: unknown): string | undefined {
     case "scale":
       return axis(c.axis, true) ?? num(c.to, "to");
     case "tint":
+      if (c.ramp !== undefined) return ramp();
       return bool() ?? (isStr(c.on) ? (c.off !== undefined && !isStr(c.off) ? "off must be a palette slot or a CSS colour" : undefined) : "on must be a palette slot or a CSS colour");
     case "emissive":
+      if (c.ramp !== undefined) return ramp() ?? (c.intensity !== undefined && !isNum(c.intensity) ? "intensity must be a number" : undefined);
       return bool() ?? (isStr(c.on) ? (c.intensity !== undefined && !isNum(c.intensity) ? "intensity must be a number" : undefined) : "on must be a palette slot or a CSS colour");
     case "visible":
       return bool();
@@ -206,7 +244,7 @@ function fieldError(key: KindField, v: unknown): string | undefined {
     case "bounds":
       return v === "auto" || (isObj(v) && isVec3(v.size) && isVec3(v.center)) ? undefined : "bounds is 'auto' or { size: [w, h, d], center: [x, y, z] }";
     case "labelAt":
-      return isVec3(v) ? undefined : "labelAt is [x, y, z] metres";
+      return isVec3(v) || isAnchorWord(v) || isBoxPoint(v) ? undefined : `labelAt is ${POINT_HELP}, or an anchor word on the bounds (top)`;
     case "status":
       return typeof v === "string" ? undefined : "status is a template over members";
   }
@@ -214,6 +252,13 @@ function fieldError(key: KindField, v: unknown): string | undefined {
 
 const mm = (v: number): number => Math.round(v * 1000) / 1000 + 0;
 const roundVec = (v: Vec3): Vec3 => [mm(v[0]), mm(v[1]), mm(v[2])];
+/** A box point with its offset rounded, in the canonical key order, without an empty part. */
+const roundPoint = (p: BoxPoint): BoxPoint => {
+  const out: BoxPoint = { anchor: p.anchor };
+  if (p.part) out.part = p.part;
+  if (p.offset && p.offset.some((c) => c !== 0)) out.offset = roundVec(p.offset);
+  return out;
+};
 
 /** Apply one op to the document text; the result is the canonical text. */
 export function applyKindOp(text: string, op: KindOp): { text: string } | { error: string } {
@@ -248,7 +293,8 @@ function applyOpToDoc(doc: KindDoc, op: KindOp): string | undefined {
       const e = fieldError(op.key, op.value);
       if (e) return e;
       let v = op.value;
-      if (op.key === "labelAt") v = roundVec(v as Vec3);
+      if (op.key === "labelAt" && isVec3(v)) v = roundVec(v);
+      else if (op.key === "labelAt" && isBoxPoint(v)) v = roundPoint(v);
       if (op.key === "bounds" && isObj(v)) v = { size: roundVec(v.size as Vec3), center: roundVec(v.center as Vec3) };
       d[op.key] = v;
       return undefined;
@@ -287,7 +333,7 @@ function applyOpToDoc(doc: KindDoc, op: KindOp): string | undefined {
     case "setPort": {
       const e = portError(op.name, op.port);
       if (e) return e;
-      const port: Port = { at: roundVec(op.port.at) };
+      const port: Port = { at: isVec3(op.port.at) ? roundVec(op.port.at) : roundPoint(op.port.at) };
       if (op.port.dir) port.dir = roundVec(op.port.dir);
       (doc.ports ??= {})[op.name] = port;
       return undefined;

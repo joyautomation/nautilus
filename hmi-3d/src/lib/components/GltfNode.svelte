@@ -37,7 +37,7 @@
 	import { getContext, onDestroy } from 'svelte';
 	import { DEFAULT_PALETTE, type Palette } from '../palette.js';
 	import type { ViewState } from './view.js';
-	import { evalDrives, type MeshState } from '../drives.js';
+	import { evalDrives, rampAt, type MeshState } from '../drives.js';
 	import type { SceneKind, Vec3 } from '../scene.js';
 	import type { NodeProps } from '../registry.js';
 
@@ -46,6 +46,7 @@
 		good = true,
 		data,
 		onbounds,
+		onparts,
 		onfail,
 		label: _label,
 		selected: _selected,
@@ -55,6 +56,9 @@
 		data: SceneKind;
 		/** The model's local box, once loaded — the halo and label use it. */
 		onbounds?: (b: { size: Vec3; center: Vec3 }) => void;
+		/** Each named part's box in the model's frame, once loaded — what a
+		 * box-point port or label resolves against. */
+		onparts?: (parts: Record<string, { size: Vec3; center: Vec3 }>) => void;
 		/** The model could not be loaded; Scene3D falls back to the Svelte kind. */
 		onfail?: (err: unknown) => void;
 	} = $props();
@@ -169,6 +173,17 @@
 				box.getSize(size);
 				box.getCenter(center);
 				onbounds?.({ size: size.toArray() as Vec3, center: center.toArray() as Vec3 });
+				if (onparts) {
+					// The clone has no parent yet, so a world box is a box in the
+					// model's own frame — the node's.
+					const parts: Record<string, { size: Vec3; center: Vec3 }> = {};
+					for (const [name, o] of meshes) {
+						const b = new Box3().setFromObject(o);
+						if (b.isEmpty()) continue;
+						parts[name] = { size: b.getSize(new Vector3()).toArray() as Vec3, center: b.getCenter(new Vector3()).toArray() as Vec3 };
+					}
+					onparts(parts);
+				}
 				missing = new Set((data.drive ?? []).map((d) => d.mesh).filter((m) => !meshes.has(m)));
 				if (missing.size)
 					console.warn(`hmi-3d: ${url} has no mesh named ${[...missing].join(', ')} (it has ${[...meshes.keys()].join(', ')})`);
@@ -203,6 +218,12 @@
 		applyQuality();
 	});
 
+	/** A ramp's colour at its value: the two stops around it, mixed. */
+	function mixed(r: { ramp: [number, string][]; value: number }): Color {
+		const { from, to, t } = rampAt(r.ramp, r.value);
+		return new Color(colour(from)).lerp(new Color(colour(to)), t);
+	}
+
 	function apply(s: MeshState) {
 		const o = meshes.get(s.mesh);
 		if (!o) return;
@@ -217,9 +238,15 @@
 			const mat = ownMaterial(o);
 			if (!mat) return;
 			const srcMat = baseMaterial(o);
-			if (s.tint !== undefined) mat.color.set(s.tint ? colour(s.tint) : (srcMat?.color ?? new Color('#888')));
+			if (s.tint !== undefined) {
+				if (s.tint && typeof s.tint === 'object') mat.color.copy(mixed(s.tint));
+				else mat.color.set(s.tint ? colour(s.tint) : (srcMat?.color ?? new Color('#888')));
+			}
 			if (s.emissive !== undefined) {
-				if (s.emissive) {
+				if (s.emissive && 'ramp' in s.emissive) {
+					mat.emissive.copy(mixed(s.emissive));
+					mat.emissiveIntensity = s.emissive.intensity;
+				} else if (s.emissive) {
 					mat.emissive.set(colour(s.emissive.color));
 					mat.emissiveIntensity = s.emissive.intensity;
 				} else {

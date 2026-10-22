@@ -3,7 +3,7 @@
 // The host owns the file; the webview holds the sample values that drive
 // the preview, what the model told it (mesh names, bounds), and the look.
 import { vscode } from '../vscodeApi';
-import { kindMembers, type Drive, type SceneKind, type SceneLook, type ScenePort, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
+import { kindMembers, type Drive, type KindBoxes, type SceneBox, type SceneKind, type SceneLook, type ScenePort, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
 import { cloneSafe, opFailureMessage } from '../mimic/opPayload';
 
 /** Mirror of src/kindOps.ts (extension host). `null` deletes a field. */
@@ -40,6 +40,9 @@ export const kd = $state({
 	/** Each named object's nearest named ancestor (none at the top), so
 	 * the panel can say "Vane1 · in Impeller". */
 	parentOf: {} as Record<string, string | null>,
+	/** Each named part's box in the kind's frame — what a port or label
+	 * "at top of Flange" resolves against. */
+	parts: {} as Record<string, SceneBox>,
 	/** The part under the pointer (on the stage, a chip or a drive row)
 	 * and the part a click picked — a drive starts on it. Webview state. */
 	hover: null as string | null,
@@ -57,6 +60,13 @@ export const kd = $state({
 	look: 'lit' as SceneLook,
 	turntable: true
 });
+
+/** The boxes a kind's points resolve against: the model's box (else the
+ * declared bounds) and each part's. */
+export function boxes(): KindBoxes {
+	const declared = kd.kind?.bounds;
+	return { bounds: kd.bounds ?? (declared && declared !== 'auto' ? declared : undefined), parts: kd.parts };
+}
 
 /** The named ancestors of a part, nearest first. */
 export function ancestorsOf(name: string): string[] {
@@ -88,8 +98,8 @@ export function memberShape(m: string): 'bool' | 'num' {
 	if (!k) return 'num';
 	const strip = (b: string) => b.replace(/^!/, '');
 	for (const d of k.drive ?? []) {
-		if ('tint' in d && strip(d.tint.bind) === m) return 'bool';
-		if ('emissive' in d && strip(d.emissive.bind) === m) return 'bool';
+		if ('tint' in d && !('ramp' in d.tint) && strip(d.tint.bind) === m) return 'bool';
+		if ('emissive' in d && !('ramp' in d.emissive) && strip(d.emissive.bind) === m) return 'bool';
 		if ('visible' in d && strip(d.visible.bind) === m) return 'bool';
 	}
 	if (k.status) {

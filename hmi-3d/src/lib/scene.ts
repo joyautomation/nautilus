@@ -112,11 +112,98 @@ export interface SceneNode {
 	bind?: Record<string, string>;
 }
 
+/** A box in a kind's frame: the kind's bounds, or one named part's. */
+export interface SceneBox {
+	size: Vec3;
+	center: Vec3;
+}
+
+/** A point named by where it sits on a box (§3g, slice 3): `anchor` is a
+ * face or corner word — `top`, `bottom`, `left` (−x), `right` (+x),
+ * `front` (+z), `back` (−z), `center`, or two joined (`top-front`) — on
+ * the named `part`'s box, or on the kind's own bounds when `part` is
+ * absent; `offset` nudges in metres. It survives the model being
+ * re-exported and reads better than three numbers. */
+export interface BoxPoint {
+	part?: string;
+	anchor: string;
+	offset?: Vec3;
+}
+
+/** A point in a kind's frame: metres, or a place on a box. */
+export type ScenePoint = Vec3 | BoxPoint;
+
 /** A port on a kind (§3g, slice 3): where a pipe meets it, in the kind's
- * own frame, and the direction a pipe leaves it (unit vector; default up). */
+ * own frame, and the direction a pipe leaves it (unit vector; default:
+ * out of the anchored face, else up). */
 export interface ScenePort {
-	at: Vec3;
+	at: ScenePoint;
 	dir?: Vec3;
+}
+
+export const ANCHOR_WORDS = ['center', 'top', 'bottom', 'left', 'right', 'front', 'back'] as const;
+const AXIS_OF: Record<string, 0 | 1 | 2> = { left: 0, right: 0, bottom: 1, top: 1, back: 2, front: 2 };
+const SIGN_OF: Record<string, -1 | 1> = { left: -1, right: 1, bottom: -1, top: 1, back: -1, front: 1 };
+
+/** `top`, `front`, `top-front`, `center`: one or two face words, at most
+ * one per axis, in any order. */
+export function isAnchorWord(s: unknown): s is string {
+	if (typeof s !== 'string' || !s) return false;
+	const parts = s.split('-');
+	if (parts.length > 2 || !parts.every((w) => (ANCHOR_WORDS as readonly string[]).includes(w))) return false;
+	if (parts.length === 2 && (parts.includes('center') || AXIS_OF[parts[0]] === AXIS_OF[parts[1]])) return false;
+	return true;
+}
+
+/** The point an anchor word names on a box. */
+export function anchorPoint(box: SceneBox, anchor: string): Vec3 {
+	const p: Vec3 = [...box.center] as Vec3;
+	for (const w of anchor.split('-')) {
+		if (w === 'center') continue;
+		const a = AXIS_OF[w];
+		p[a] = box.center[a] + (SIGN_OF[w] * box.size[a]) / 2;
+	}
+	return p;
+}
+
+/** The outward direction of an anchor: the face's normal (a corner's is
+ * the sum, unit); `center` is up. */
+export function anchorNormal(anchor: string): Vec3 {
+	const d: Vec3 = [0, 0, 0];
+	for (const w of anchor.split('-')) if (w !== 'center') d[AXIS_OF[w]] += SIGN_OF[w];
+	const len = Math.hypot(...d);
+	return len ? ([d[0] / len, d[1] / len, d[2] / len] as Vec3) : [0, 1, 0];
+}
+
+/** The boxes a kind's points resolve against: its bounds and, once the
+ * model is loaded, each named part's box, all in the kind's frame. */
+export type KindBoxes = { bounds?: SceneBox; parts?: Record<string, SceneBox> };
+
+export function isBoxPoint(v: unknown): v is BoxPoint {
+	return isObj(v) && isAnchorWord(v.anchor) && (v.part === undefined || isStr(v.part)) && (v.offset === undefined || isVec3(v.offset));
+}
+
+/** A point in the kind's frame, from metres, a box point, or a bare
+ * anchor word (on the bounds). Null when the box it names is not known
+ * yet (the model has not loaded) or does not exist. */
+export function resolvePoint(p: ScenePoint | string | undefined, boxes: KindBoxes | undefined): Vec3 | null {
+	if (p === undefined) return null;
+	if (isVec3(p)) return [p[0], p[1], p[2]];
+	const bp: BoxPoint = typeof p === 'string' ? { anchor: p } : p;
+	const box = bp.part !== undefined ? boxes?.parts?.[bp.part] : boxes?.bounds;
+	if (!box) return null;
+	const at = anchorPoint(box, bp.anchor);
+	if (bp.offset) for (let i = 0; i < 3; i++) at[i] += bp.offset[i];
+	return at;
+}
+
+/** A port's point and direction in the kind's frame; null until its box is known. */
+export function resolvePort(port: ScenePort, boxes: KindBoxes | undefined): { at: Vec3; dir: Vec3 } | null {
+	const at = resolvePoint(port.at, boxes);
+	if (!at) return null;
+	const dir = port.dir ?? (isVec3(port.at) ? [0, 1, 0] : anchorNormal(port.at.anchor));
+	const len = Math.hypot(...dir) || 1;
+	return { at, dir: [dir[0] / len, dir[1] / len, dir[2] / len] };
 }
 
 /** A pipe end anchored to a node's port: resolved through the node's
@@ -181,8 +268,9 @@ export interface SceneKind {
 	assembly?: SceneAssembly;
 	/** The halo / selection box: the loaded model's box, or an explicit one. */
 	bounds?: 'auto' | { size: Vec3; center: Vec3 };
-	/** Where the label floats. Default: the top centre of the bounds. */
-	labelAt?: Vec3;
+	/** Where the label floats: metres, a box point, or a bare anchor word on
+	 * the bounds. Default: `top`. */
+	labelAt?: ScenePoint | string;
 	/** The label's value text as a template: `{Level:1} %`, `{Running?run:stopped}`. */
 	status?: string;
 	/** Where pipes meet this kind, in its own frame (§3g, slice 3). */
@@ -281,28 +369,32 @@ export function rotateXYZ(v: Vec3, rot: Vec3 | undefined): Vec3 {
 
 /** A port in the frame the node sits in: its point through the node's
  * pos / rot / scale, its direction through rot alone (unit). */
-export function portInFrame(node: Pick<SceneNode, 'pos' | 'rot' | 'scale'>, port: ScenePort): { at: Vec3; dir: Vec3 } {
+export function portInFrame(node: Pick<SceneNode, 'pos' | 'rot' | 'scale'>, port: ScenePort, boxes?: KindBoxes): { at: Vec3; dir: Vec3 } | null {
+	const local = resolvePort(port, boxes);
+	if (!local) return null;
 	const s = node.scale ?? 1;
-	const r = rotateXYZ([port.at[0] * s, port.at[1] * s, port.at[2] * s], node.rot);
+	const r = rotateXYZ([local.at[0] * s, local.at[1] * s, local.at[2] * s], node.rot);
 	const at: Vec3 = [node.pos[0] + r[0], node.pos[1] + r[1], node.pos[2] + r[2]];
-	const d = rotateXYZ(port.dir ?? [0, 1, 0], node.rot);
+	const d = rotateXYZ(local.dir, node.rot);
 	const len = Math.hypot(d[0], d[1], d[2]) || 1;
 	return { at, dir: [d[0] / len, d[1] / len, d[2] / len] };
 }
 
 /** A pipe's run as points: an anchored end resolved through its node and
- * port, the `points` between. Null when an anchor names no node, or a port
- * its kind does not have — the pipe cannot be drawn. */
+ * port, the `points` between. Null when an anchor names no node, a port
+ * its kind does not have, or a port on a box not yet known (the model
+ * still loading) — the pipe cannot be drawn yet. */
 export function resolvePipePoints(
 	pipe: Pick<ScenePipe, 'from' | 'to' | 'points'>,
 	nodes: readonly SceneNode[],
-	portsOf: (kind: string) => Record<string, ScenePort> | undefined
+	portsOf: (kind: string) => Record<string, ScenePort> | undefined,
+	boxesOf?: (nodeId: string) => KindBoxes | undefined
 ): Vec3[] | null {
 	const end = (a: PipeAnchor | undefined): Vec3 | null | undefined => {
 		if (!a) return undefined;
 		const n = nodes.find((x) => x.id === a.node);
 		const port = n && portsOf(n.kind)?.[a.port];
-		return n && port ? portInFrame(n, port).at : null;
+		return n && port ? (portInFrame(n, port, boxesOf?.(n.id))?.at ?? null) : null;
 	};
 	const from = end(pipe.from);
 	const to = end(pipe.to);
@@ -444,9 +536,10 @@ function checkKindDef(def: Record<string, unknown>, p: string, known: Set<string
 			for (const [name, port] of Object.entries(def.ports)) {
 				const pp = `${p}/ports/${name}`;
 				if (!PORT_RE.test(name)) err(pp, 'a port name is letters, digits, _ or -');
-				if (!isObj(port)) err(pp, 'must be { at: [x, y, z], dir?: [x, y, z] }');
+				if (!isObj(port)) err(pp, 'must be { at: [x, y, z] | { part?, anchor, offset? }, dir?: [x, y, z] }');
 				else {
-					if (!isVec3(port.at)) err(`${pp}/at`, "must be [x, y, z] metres in the kind's frame");
+					if (!(isVec3(port.at) || isBoxPoint(port.at)))
+						err(`${pp}/at`, "must be [x, y, z] metres in the kind's frame, or { part?, anchor: top | bottom | left | right | front | back | center (or two, top-front), offset? }");
 					if (port.dir !== undefined && !(isVec3(port.dir) && port.dir.some((c) => c !== 0))) err(`${pp}/dir`, 'must be a non-zero [x, y, z] direction');
 				}
 			}
@@ -483,7 +576,8 @@ function checkKindDef(def: Record<string, unknown>, p: string, known: Set<string
 		if (!isObj(def.bounds) || !isVec3(def.bounds.size) || !isVec3(def.bounds.center))
 			err(`${p}/bounds`, "must be 'auto' or { size: [w, h, d], center: [x, y, z] }");
 	}
-	if (def.labelAt !== undefined && !isVec3(def.labelAt)) err(`${p}/labelAt`, 'must be [x, y, z] metres');
+	if (def.labelAt !== undefined && !(isVec3(def.labelAt) || isAnchorWord(def.labelAt) || isBoxPoint(def.labelAt)))
+		err(`${p}/labelAt`, 'must be [x, y, z] metres, an anchor word (top, top-front, …) on the bounds, or { part?, anchor, offset? }');
 	if (def.status !== undefined && !validStatusTemplate(def.status))
 		err(`${p}/status`, 'must be a template over members: "{Level:1} %", "{Running?run:stopped}"');
 	if (def.drive !== undefined) errors.push(...validateDrives(def.drive, `${p}/drive`));

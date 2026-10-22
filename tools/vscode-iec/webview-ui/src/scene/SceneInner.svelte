@@ -11,9 +11,9 @@
 	import type { IntersectionEvent } from '@threlte/extras';
 	import { Raycaster, Vector2, Vector3, type Intersection } from 'three';
 	import type { TransformControls as TransformControlsImpl } from 'three/examples/jsm/controls/TransformControls.js';
-	import { Scene3D, docPorts, portInFrame, routePorts, type NodeRegistry, type PipeAnchor, type PlacedNode, type SceneDoc, type ScenePort, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
+	import { Scene3D, docPorts, portInFrame, routePorts, type KindBoxes, type NodeRegistry, type PipeAnchor, type PlacedNode, type SceneBox, type SceneDoc, type ScenePort, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
 	import { ROT_SNAP_DEG, disarm, ed, groundY, postOp, snapCell, snapPos } from './sceneState.svelte';
-	import { dropMark, layPortMarks, portOf, type PortMark } from './marks';
+	import { dropMark, layPortMarks, partBoxes, portOf, type PortMark } from './marks';
 
 	let { doc, registry }: { doc: SceneDoc; registry: NodeRegistry } = $props();
 
@@ -98,21 +98,54 @@
 	// nodes, not ports), and a click that hits a mark is kept from the
 	// node pick behind it.
 	const portsOf = (kind: string): Record<string, ScenePort> | undefined => docPorts(doc, kind) ?? registry[kind]?.ports;
+	/** What a node's box-point ports resolve against: the kind's declared
+	 * bounds and the parts under the node's group — present once the
+	 * renderer has the model on stage. */
+	function boxesOf(n: SceneDoc['nodes'][number]): KindBoxes {
+		const group = placed[n.id]?.object;
+		const parts = group ? partBoxes(group) : {};
+		const entry = doc.kinds?.[n.kind];
+		const declared = entry && typeof entry === 'object' ? entry.bounds : undefined;
+		const fallback = registry[n.kind]?.bounds;
+		const b: SceneBox | undefined = declared && declared !== 'auto' ? declared : fallback && fallback !== 'auto' ? fallback : undefined;
+		return { bounds: b, parts };
+	}
 	let marks = new Map<string, Map<string, PortMark>>();
-	$effect(() => {
+	/** Nodes with a port on a box not yet on stage: laid again as the model arrives. */
+	const pending = new Set<string>();
+	function layNode(n: SceneDoc['nodes'][number]) {
+		const group = placed[n.id]?.object;
+		if (!group) return;
 		const hot = ed.pipeFrom;
 		const hover = ed.hoverPort;
-		for (const n of doc.nodes) {
-			const group = placed[n.id]?.object;
-			if (!group) continue;
-			const hotName = hot?.node === n.id ? hot.port : hover?.node === n.id ? hover.port : null;
-			marks.set(n.id, layPortMarks(group, portsOf(n.kind), marks.get(n.id) ?? new Map(), hotName, 1 / (n.scale ?? 1)));
-		}
+		const hotName = hot?.node === n.id ? hot.port : hover?.node === n.id ? hover.port : null;
+		const ports = portsOf(n.kind);
+		const laid = layPortMarks(group, ports, boxesOf(n), marks.get(n.id) ?? new Map(), hotName, 1 / (n.scale ?? 1));
+		marks.set(n.id, laid);
+		if (Object.keys(ports ?? {}).length > laid.size) pending.add(n.id);
+		else pending.delete(n.id);
+	}
+	$effect(() => {
+		void ed.pipeFrom;
+		void ed.hoverPort;
+		for (const n of doc.nodes) layNode(n);
 		for (const [id, m] of marks)
 			if (!doc.nodes.some((n) => n.id === id)) {
 				for (const mark of m.values()) dropMark(mark);
 				marks.delete(id);
+				pending.delete(id);
 			}
+	});
+	let retryAt = 0;
+	useTask(() => {
+		if (!pending.size) return;
+		const now = performance.now();
+		if (now < retryAt) return;
+		retryAt = now + 300;
+		for (const id of [...pending]) {
+			const n = doc.nodes.find((x) => x.id === id);
+			if (n) layNode(n);
+		}
 	});
 	const raycaster = new Raycaster();
 	const ndc = new Vector2();
@@ -176,7 +209,7 @@
 	function endOf(a: PipeAnchor): { at: Vec3; dir: Vec3 } | null {
 		const n = doc.nodes.find((x) => x.id === a.node);
 		const port = n && portsOf(n.kind)?.[a.port];
-		return n && port ? portInFrame(n, port) : null;
+		return n && port ? portInFrame(n, port, boxesOf(n)) : null;
 	}
 	$effect(() => {
 		dom.addEventListener('pointermove', onPortMove);

@@ -5,7 +5,7 @@
 // imported here, so the unit tests can bundle it; registry.ts adds the
 // built-ins and re-exports all of it.
 import type { Component } from 'svelte';
-import { kindMembers, type SceneAssembly, type SceneDoc, type SceneError, type SceneKind, type SceneKindEntry, type ScenePort, type Vec3 } from './scene.js';
+import { kindMembers, type SceneAssembly, type SceneDoc, type SceneError, type SceneKind, type SceneKindEntry, type ScenePoint, type ScenePort, type Vec3 } from './scene.js';
 import { formatStatus } from './drives.js';
 
 /** What every kind's component receives. Static `props` and resolved `bind`
@@ -54,7 +54,7 @@ export interface NodeKindDef {
 	bounds: { size: Vec3; center: Vec3 } | 'auto';
 	/** Where the floating label sits, local space; on a data kind, absent =
 	 * the top centre of the bounds. */
-	labelAt?: Vec3;
+	labelAt?: ScenePoint | string;
 	/** The label's value text. Pure, so it is testable and matches the panel.
 	 * `over` is the node's resolved `bind` map (prop -> value), which wins
 	 * over the struct's member the way it does for the geometry, so a
