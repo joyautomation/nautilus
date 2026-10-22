@@ -16,7 +16,7 @@
 	import { Color, NoToneMapping, PMREMGenerator } from 'three';
 	import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 	import { getContext, setContext, type Component, type Snippet } from 'svelte';
-	import { docPorts, resolvePipePoints, type SceneCamera, type SceneDoc, type SceneEnvironment, type SceneGrid, type SceneLook, type Vec3 } from '../scene.js';
+	import { docPorts, resolvePipePoints, type KindBoxes, type SceneCamera, type SceneDoc, type SceneEnvironment, type SceneGrid, type SceneLook, type Vec3 } from '../scene.js';
 	import { registryFor, type NodeRegistry, type NodeProps, type Box } from '../registry.js';
 	import type { AssetAlarm } from '../alarms.js';
 	import { SCENE, type PlacedNode, type SceneContext } from '../context.js';
@@ -161,8 +161,15 @@
 		canvas.style.cursor = '';
 	});
 
-	// Bounds a data kind reports once its model is loaded.
+	// Bounds a data kind reports once its model is loaded, and its parts'.
 	let autoBounds = $state<Record<string, Box>>({});
+	let partBoxes = $state<Record<string, Record<string, Box>>>({});
+	/** What a node's box-point ports resolve against. */
+	function boxesOf(id: string): KindBoxes | undefined {
+		const n = doc?.nodes.find((x) => x.id === id);
+		const d = n && effective[n.kind];
+		return { bounds: d ? (d.bounds === 'auto' ? autoBounds[id] : d.bounds) : autoBounds[id], parts: partBoxes[id] };
+	}
 	const FALLBACK: Box = { size: [0.3, 0.3, 0.3], center: [0, 0.15, 0] };
 
 	setContext<SceneContext>(SCENE, {
@@ -197,6 +204,10 @@
 		boundsOf: (id, b) => (b === 'auto' ? (id !== undefined ? (autoBounds[id] ?? FALLBACK) : FALLBACK) : b),
 		reportBounds(id, box) {
 			if (id !== undefined) autoBounds[id] = box;
+		},
+		partsOf: (id) => (id !== undefined ? partBoxes[id] : undefined),
+		reportParts(id, parts) {
+			if (id !== undefined) partBoxes[id] = parts;
 		},
 		reportFailed(id) {
 			if (id !== undefined) failed[id] = true;
@@ -259,7 +270,7 @@
 		<!-- An anchored end resolves through its node's pos / rot / scale and
 		     the port its kind declares (the document's entry first, then the
 		     registry's); a pipe whose anchor resolves to nothing is not drawn. -->
-		{@const pts = resolvePipePoints(p, doc.nodes, (k) => docPorts(doc, k) ?? effective[k]?.ports)}
+		{@const pts = resolvePipePoints(p, doc.nodes, (k) => docPorts(doc, k) ?? effective[k]?.ports, boxesOf)}
 		{#if pts}
 			<Pipe points={pts} radius={p.radius} flowing={p.bind?.flowing} arrows={p.arrows} />
 		{/if}

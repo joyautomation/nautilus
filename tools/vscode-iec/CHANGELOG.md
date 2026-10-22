@@ -38,6 +38,13 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   so the pipe follows its nodes when they move; the panel lists the
   scene's pipes with `×`. `naut check` and the schema know ports and
   anchors; `hmi-3d` resolves them.
+- **A point by name, and a colour from a number.** A port's `at` and the
+  kind's `labelAt` may be a place on a box — `{ "part": "Motor",
+  "anchor": "top" }`, or `"top"` for the bounds, with `offset` — resolved
+  once the model is loaded, so it survives a re-export; **Add port at…**
+  offers the faces of the picked part, and each row has a mode menu. A
+  tint or emissive drive may be a **ramp** of `[value, colour]` stops over
+  a number instead of on / off.
 - **A 3D scene editor.** A `*.scene.json` now opens as the 3D view itself
   (the same `@joyautomation/nautilus-hmi-3d` renderer the built HMI uses,
   in its own webview bundle), with a palette of the document's kinds, a

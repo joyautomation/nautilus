@@ -71,9 +71,12 @@
 			// Ports: the stage's marks (projected), the last click's point, the panel's rows.
 			window.__hit = () => (window.__nxKind ? window.__nxKind.hit() : null);
 			window.__kports = () => (window.__nxKind ? window.__nxKind.ports() : []);
+			window.__pointMode = (sel) => document.querySelector(sel + ' [data-kind=point]')?.dataset.mode ?? null;
+			window.__rampStops = (i) => Array.from(document.querySelectorAll('[data-kind=drive-row][data-index="' + i + '"] [data-kind=ramp-stop]')).map((r) => [Number(r.querySelector('[aria-label="stop value"]').value), r.querySelector('[aria-label="stop colour"]').value]);
+			window.__select = (label, value, within) => { const s = document.querySelector((within ?? 'aside[aria-label=Kind]') + ' [aria-label="' + label + '"]'); if (!s) return false; s.value = value; s.dispatchEvent(new Event('change', { bubbles: true })); return true; };
 			window.__portRows = () =>
 				Array.from(document.querySelectorAll('[data-kind=port-row]')).map((r) => ({
-					name: r.dataset.name, at: Array.from(r.querySelectorAll('[aria-label^="port at"]')).map((i) => Number(i.value)),
+					name: r.dataset.name, at: ['x', 'y', 'z'].map((a) => Number(r.querySelector('[aria-label="port at ' + a + '"]')?.value)),
 					dir: Array.from(r.querySelectorAll('[aria-label^="port dir"]')).map((i) => Number(i.value)), ...vpCenter(r)
 				}));
 			window.__rowPicked = (i) => document.querySelector('[data-kind=drive-row][data-index="' + i + '"]')?.classList.contains('picked') ?? null;

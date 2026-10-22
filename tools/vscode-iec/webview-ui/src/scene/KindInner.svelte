@@ -11,7 +11,7 @@
 	import { useTask, useThrelte } from '@threlte/core';
 	import { Box3, BoxGeometry, EdgesGeometry, Group, LineBasicMaterial, LineSegments, Matrix4, Mesh, MeshBasicMaterial, Object3D, Raycaster, Vector2, Vector3, type Intersection } from 'three';
 	import { DEFAULT_PALETTE, Scene3D, resolvePick, seeThrough, type NodeRegistry, type Palette, type PickHit, type PlacedNode, type SceneDoc, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
-	import { kd } from './kindState.svelte';
+	import { boxes, kd } from './kindState.svelte';
 	import { layPortMarks, type PortMark } from './marks';
 
 	let { doc, registry, tags }: { doc: SceneDoc; registry: NodeRegistry; tags: Record<string, unknown> } = $props();
@@ -228,11 +228,12 @@
 		const ports = kd.kind?.ports;
 		const hot = kd.hoverPort;
 		void kd.modelState;
+		void kd.parts;
 		if (!root) return;
-		marks = layPortMarks(root, ports, marks, hot, Math.max(0.5, Math.min(3, Math.max(...(kd.bounds?.size ?? [0.4])) / 0.6)));
+		marks = layPortMarks(root, ports, boxes(), marks, hot, Math.max(0.5, Math.min(3, Math.max(...(kd.bounds?.size ?? [0.4])) / 0.6)));
 		invalidate();
 		return () => {
-			marks = layPortMarks(root, undefined, marks, null);
+			marks = layPortMarks(root, undefined, undefined, marks, null);
 		};
 	});
 

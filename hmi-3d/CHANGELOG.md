@@ -38,6 +38,17 @@ node; `validateScene` holds an anchor to a node in its frame and a port
 its kind has (when the kind's ports are known). `resolvePipePoints`,
 `portInFrame`, `rotateXYZ`, `docPorts` and `routePorts` (an orthogonal
 run between two ports: leave, rise to a header, run, drop) are exported.
+A port's `at`, and a kind's `labelAt`, may be a **box point** instead of
+metres — `{ "part": "Flange", "anchor": "top-front", "offset": [0, 0.01,
+0] }` on a named part's box, or on the kind's bounds without `part`
+(`"labelAt": "top"` as the bare word) — resolved once the model reports
+its parts (`GltfNode` `onparts`, `SceneContext.partsOf`), so it survives
+a re-export; `resolvePoint`, `resolvePort`, `anchorPoint`,
+`anchorNormal`, `isAnchorWord`, `isBoxPoint` and `ANCHOR_WORDS` are
+exported. A `tint` or `emissive` drive may be a **ramp** — `{ "bind":
+"TempC", "ramp": [[20, "fluid"], [90, "critical"]] }` — the colour
+interpolated between the two stops around the value and clamped beyond
+the ends (`rampAt`); palette slots and CSS colours mix alike.
 
 **Changed.** `model` must end in `.glb` or `.gltf` in `validateScene` as
 it already had to for `naut check` and the schema. The **lit look without

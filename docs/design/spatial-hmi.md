@@ -910,6 +910,33 @@ one for a valve, one for a flow meter. Built 2026-10-21 (PR "kind editor"):
   capture phase. Still to do in this slice: vertex drag on the gizmo, a
   re-route when an anchored node moves (today the first leg stretches),
   ports on the built-in kinds.
+- **A point by name, and a colour from a number** (James, 2026-10-22:
+  "what if I want a port to be top, left, center… relative to the surface?
+  (same question for the label)" and "the color variable based on an
+  analog"). A port's `at` and a kind's `labelAt` take a **box point**: `{
+  "part": "Flange", "anchor": "top-front", "offset": [0, 0.01, 0] }` on
+  a named part's box, or on the kind's bounds without `part` (`"labelAt":
+  "top"` as the bare word); anchor words are the six faces, `center`, or
+  two faces on different axes; `dir` defaults to the anchored face's
+  normal. The point is known once the model has loaded — `GltfNode`
+  reports each part's box (`onparts`), `Scene3D` keeps them per node
+  (`partsOf`), `Node` resolves the label and the pipes resolve their
+  anchors through `boxesOf`; `naut check` holds the words, not the
+  metres. The kind editor computes the part boxes itself (it loads the
+  model for the names already), the scene editor reads them off the
+  node's group once the renderer has the model on stage and lays marks
+  again as models arrive. In the panel every point has a mode menu
+  (metres · on the bounds · on a part) and **Add port at…** offers the
+  faces of the picked part. A `tint` or `emissive` drive may be a
+  **ramp** of `[value, colour]` stops (`rampAt` picks the two around the
+  value; `GltfNode` mixes them, so palette slots work in a ramp); the
+  drive row has a **ramp** tick and a stop editor, and the member reads
+  as a number. On scripting (James: "will it ever make sense to let users
+  script complex animations?"): the second rung already exists — a
+  component kind is a Svelte component on Threlte, the whole JavaScript
+  story in 3D; what is missing is **Eject to component**, writing a
+  .svelte from a kind file with its model and drives, to be built before
+  any expression language in JSON.
 - **Variants of a kind** (James, 2026-10-22, on the float switch: "sometimes
   low (down) is active and high (up) is active"). Today: one kind per
   variant, sharing the model — `float-switch-high.kind.json` and

@@ -12,6 +12,7 @@ import {
 	statusMembers,
 	validStatusTemplate,
 	channelOf,
+	rampAt,
 	type Drive
 } from '../src/lib/drives.js';
 
@@ -136,5 +137,37 @@ describe('status templates', () => {
 		expect(validStatusTemplate('{Level %')).toBe(false);
 		expect(validStatusTemplate('{1bad}')).toBe(false);
 		expect(validStatusTemplate(3)).toBe(false);
+	});
+});
+
+describe('a colour ramp on an analog', () => {
+	const ramp: [number, string][] = [[20, 'fluid'], [60, '#ffffff'], [90, 'critical']];
+	it('rampAt: the two stops around the value and the blend; clamped beyond the ends', () => {
+		expect(rampAt(ramp, 10)).toEqual({ from: 'fluid', to: 'fluid', t: 0 });
+		expect(rampAt(ramp, 20)).toEqual({ from: 'fluid', to: 'fluid', t: 0 });
+		expect(rampAt(ramp, 40)).toEqual({ from: 'fluid', to: '#ffffff', t: 0.5 });
+		expect(rampAt(ramp, 75)).toEqual({ from: '#ffffff', to: 'critical', t: 0.5 });
+		expect(rampAt(ramp, 120)).toEqual({ from: 'critical', to: 'critical', t: 0 });
+	});
+	it('evalDrives hands the component the ramp and the value, for tint and emissive', () => {
+		const drives: Drive[] = [
+			{ mesh: 'Shell', tint: { bind: 'TempC', ramp } },
+			{ mesh: 'Lamp', emissive: { bind: 'Speed', ramp: [[0, 'stale'], [60, 'running']], intensity: 2 } }
+		];
+		const [a, b] = evalDrives(drives, { TempC: 40, Speed: 30 });
+		expect(a.tint).toEqual({ ramp, value: 40 });
+		expect(b.emissive).toEqual({ ramp: [[0, 'stale'], [60, 'running']], value: 30, intensity: 2 });
+		expect(driveMembers(drives)).toEqual(['TempC', 'Speed']);
+	});
+	it('validateDrives: a ramp has two ascending [value, colour] stops, a plain member, and no on / off', () => {
+		expect(validateDrives([{ mesh: 'Shell', tint: { bind: 'TempC', ramp } }], '/d')).toEqual([]);
+		const r = validateDrives(
+			[
+				{ mesh: 'Shell', tint: { bind: '!TempC', ramp: [[20, 'fluid']], on: 'x' } },
+				{ mesh: 'Shell', emissive: { bind: 'TempC', ramp: [[20, 'fluid'], [10, 'x'], [30, 5]] } }
+			],
+			'/d'
+		);
+		expect(r.map((e) => e.path)).toEqual(['/d/0/tint/bind', '/d/0/tint/ramp', '/d/0/tint/on', '/d/1/emissive/ramp/1', '/d/1/emissive/ramp/2']);
 	});
 });

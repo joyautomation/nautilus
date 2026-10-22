@@ -373,3 +373,26 @@ test('S09 pipe: a click on a port, then another — ONE addPipe anchored at both
 		assert.deepEqual(s.exceptions(), []);
 	});
 });
+
+test('S10 anchored by name: ports "at top" of the bounds resolve to marks and a pipe runs between them', async () => {
+	const doc = {
+		...rigDoc(),
+		kinds: { tank: { ports: { inlet: { at: { anchor: 'top' } } } }, pump: { ports: { discharge: { at: { anchor: 'top' } }, suction: { at: { anchor: 'left' } } } } }
+	};
+	await withScene(doc, async (s) => {
+		const ports = await s.ports();
+		assert.deepEqual(ports.map((p) => `${p.node}.${p.port}`).sort(), ['P101.discharge', 'P101.suction', 'T101.inlet'], JSON.stringify(ports));
+		const pd = ports.find((p) => p.port === 'discharge');
+		const ti = ports.find((p) => p.port === 'inlet');
+		await s.b.click(pd.x, pd.y);
+		await sleep(250);
+		await s.b.click(ti.x, ti.y);
+		await sleep(250);
+		const ops = await s.ops();
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.equal(ops[0].type, 'addPipe');
+		assert.deepEqual(ops[0].from, { node: 'P101', port: 'discharge' });
+		assert.deepEqual(ops[0].to, { node: 'T101', port: 'inlet' });
+		assert.deepEqual(s.exceptions(), []);
+	});
+});

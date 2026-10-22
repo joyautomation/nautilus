@@ -785,8 +785,9 @@ func TestCheckPortsAndAnchors(t *testing.T) {
 	if errs, _ := Check(ok, nil); len(errs) != 0 {
 		t.Fatalf("anchored pipes: %v", errs)
 	}
-	if ok.EffectiveKinds()["tank"].Ports["inlet"].At[1] != 0.5 {
-		t.Error("EffectiveKinds dropped the tank's ports")
+	var inlet Vec
+	if err := json.Unmarshal(ok.EffectiveKinds()["tank"].Ports["inlet"].At, &inlet); err != nil || len(inlet) != 3 || inlet[1] != 0.5 {
+		t.Errorf("EffectiveKinds dropped the tank's ports: %v %v", inlet, err)
 	}
 	bad := parse(`{
 		"kinds": {"subpump": {"model": "models/subpump.glb", "ports": {"a/b": {"at": [0, 0, 0]}, "ok": {"at": [1], "dir": [0, 0, 0]}}}},
@@ -820,6 +821,70 @@ func TestCheckPortsAndAnchors(t *testing.T) {
 	for _, want := range []string{`"from": {`, `"port": "discharge"`, `"at": [0, 0.43, -0.5]`} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("Encode lost %q:\n%s", want, out)
+		}
+	}
+}
+
+// Box points (a port or a label at top / left / front of a part) and
+// colour ramps on an analog (design §3g).
+func TestCheckBoxPointsAndRamps(t *testing.T) {
+	parse := func(src string) *Doc {
+		t.Helper()
+		d, err := Parse([]byte(src))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	ok := parse(`{
+		"kinds": {"subpump": {"model": "models/p.glb", "labelAt": "top",
+			"ports": {"discharge": {"at": {"part": "Flange", "anchor": "top-front", "offset": [0, 0.01, 0]}}, "suction": {"at": [0, 0.1, 0.2]}},
+			"drive": [
+				{"mesh": "Shell", "tint": {"bind": "TempC", "ramp": [[20, "fluid"], [60, "#ffffff"], [90, "critical"]]}},
+				{"mesh": "Lamp", "emissive": {"bind": "Speed", "ramp": [[0, "stale"], [60, "running"]], "intensity": 2}}
+			]},
+			"well": {"model": "models/w.glb", "labelAt": {"part": "Lid", "anchor": "top"}}},
+		"nodes": [{"id": "P1", "kind": "subpump", "pos": [0, 0, 0]}]
+	}`)
+	if errs, _ := Check(ok, nil); len(errs) != 0 {
+		t.Fatalf("box points and ramps: %v", errs)
+	}
+	members := ok.EffectiveKinds()["subpump"].Members
+	if !contains(members, "TempC") || !contains(members, "Speed") {
+		t.Errorf("a ramp's bind is a member the kind reads: %v", members)
+	}
+	out, err := Encode(ok)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"labelAt": "top"`, `"anchor": "top-front"`, `"ramp": [`, `"fluid"`, `"offset": [0, 0.01, 0]`} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("Encode lost %q:\n%s", want, out)
+		}
+	}
+	bad := parse(`{
+		"kinds": {"subpump": {"model": "models/p.glb", "labelAt": "up",
+			"ports": {"a": {"at": {"anchor": "top-bottom"}}, "b": {"at": {"anchor": "left", "offset": [1]}}, "c": {"at": "top"}},
+			"drive": [
+				{"mesh": "Shell", "tint": {"bind": "!TempC", "ramp": [[20, "fluid"]], "on": "x"}},
+				{"mesh": "Lamp", "emissive": {"bind": "Speed", "ramp": [[20, "fluid"], [10, "x"]]}}
+			]}},
+		"nodes": []
+	}`)
+	errs, _ := Check(bad, nil)
+	got := strings.Join(errs, "\n")
+	for _, want := range []string{
+		"/kinds/subpump/labelAt:",
+		"/kinds/subpump/ports/a/at/anchor:",
+		"/kinds/subpump/ports/b/at/offset:",
+		"/kinds/subpump/ports/c/at:",
+		"/kinds/subpump/drive/0/tint/bind:",
+		"/kinds/subpump/drive/0/tint/ramp: must be at least two",
+		"/kinds/subpump/drive/0/tint: on, off and threshold are not with a ramp",
+		"/kinds/subpump/drive/1/emissive/ramp/1: stops go up",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
 		}
 	}
 }

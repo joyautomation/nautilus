@@ -20,6 +20,9 @@
 //   K08 ports     a click on a part records where it landed; "Add port here"
 //                 posts setPort there, facing out; a port in the file is a
 //                 mark on the stage and a row in the panel; rename, delete
+//   K09 anchors   a port "at top of Body" is a mark on the body; "Add port
+//                 at…" posts a box point on the picked part; the label's
+//                 mode switches to a part; a tint becomes a ramp with stops
 //
 // Bundle under test: env SCENE_BUNDLE, else ../media/dist.
 import { test } from 'node:test';
@@ -231,14 +234,14 @@ test('K02 drive: "Add drive" posts addDrive on the first object; a channel chang
 });
 
 test('K03 field: a typed type posts setField; blank deletes', { skip: !MODEL_URI && 'no model' }, async () => {
-	await withKind(valveKind(), {}, async (k) => {
+	await withKind({ ...valveKind(), labelAt: [0, 0.2, 0] }, {}, async (k) => {
 		await k.type('type', 'ControlValve');
 		assert.deepEqual(await k.ops(), [{ type: 'setField', key: 'type', value: 'ControlValve' }]);
 		await k.reset();
 		await k.type('status', '');
 		assert.deepEqual(await k.ops(), [{ type: 'setField', key: 'status', value: null }]);
 		await k.reset();
-		await k.type('labelAt y', '0.3');
+		await k.type('label y', '0.3');
 		assert.deepEqual(await k.ops(), [{ type: 'setField', key: 'labelAt', value: [0, 0.3, 0] }]);
 		assert.deepEqual(k.exceptions(), []);
 	});
@@ -381,6 +384,58 @@ test('K08 ports: a click records where it landed; "Add port here" posts setPort 
 		await k.b.click(del.cx, del.cy);
 		await sleep(150);
 		assert.deepEqual(await k.ops(), [{ type: 'deletePort', name: 'inlet' }]);
+		assert.deepEqual(k.exceptions(), []);
+	});
+});
+
+test('K09 anchors and ramps: a port at top of a part is a mark on it; "Add port at…" posts a box point; the label goes on a part; a tint becomes a ramp', { skip: !MODEL_URI && 'no model' }, async () => {
+	const kind = { ...valveKind(), ports: { top: { at: { part: 'Body', anchor: 'top' } }, side: { at: { anchor: 'left' } } } };
+	kind.drive.push({ mesh: 'Body', tint: { bind: 'Running', on: 'running' } });
+	await withKind(kind, {}, async (k) => {
+		const tt = await k.button('Turntable');
+		await k.b.click(tt.cx, tt.cy);
+		await sleep(200);
+		// Both ports resolved to marks: on the body's box, and on the bounds.
+		const marks = await k.kports();
+		assert.deepEqual(marks.map((m) => m.name).sort(), ['side', 'top'], JSON.stringify(marks));
+		const body = await k.partAt('Body');
+		const top = marks.find((m) => m.name === 'top');
+		assert.ok(top.y < body.y, `the top port sits above the body's centre: ${top.y} < ${body.y}`);
+		assert.equal(await k.b.eval(`window.__pointMode('[data-kind=port-row][data-name=top]')`), 'part');
+		assert.equal(await k.b.eval(`window.__pointMode('[data-kind=port-row][data-name=side]')`), 'bounds');
+		// Pick the body, then "Add port at… bottom of Body".
+		await k.b.click(body.x, body.y);
+		await sleep(250);
+		assert.equal(await k.picked(), 'Body');
+		await k.reset();
+		assert.ok(await k.b.eval(`window.__select('add port at', 'part:bottom')`));
+		await sleep(200);
+		assert.deepEqual(await k.ops(), [{ type: 'setPort', name: 'body', port: { at: { part: 'Body', anchor: 'bottom' } } }]);
+		await k.reset();
+		// The label: default → set → on a part.
+		const set = await k.b.eval(`JSON.stringify((() => { const b = [...document.querySelectorAll('aside[aria-label=Kind] button')].find((x) => x.textContent.trim() === 'set'); const r = b.getBoundingClientRect(); return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 }; })())`).then(JSON.parse);
+		await k.b.click(set.cx, set.cy);
+		await sleep(200);
+		assert.deepEqual(await k.ops(), [{ type: 'setField', key: 'labelAt', value: 'top' }]);
+		await k.deliver({ ...kind, labelAt: 'top' });
+		await k.reset();
+		assert.ok(await k.b.eval(`window.__select('label mode', 'part')`));
+		await sleep(200);
+		assert.deepEqual(await k.ops(), [{ type: 'setField', key: 'labelAt', value: { part: 'Body', anchor: 'top' } }], 'the picked part is the default');
+		await k.reset();
+		// The tint on the body becomes a ramp: two stops, the member a number.
+		await k.b.eval(`(() => { const c = document.querySelector('[data-kind=drive-row][data-index="1"] [aria-label=ramp]'); c.checked = true; c.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+		await sleep(200);
+		const ops = await k.ops();
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.deepEqual(ops[0], { type: 'updateDrive', index: 1, drive: { mesh: 'Body', tint: { bind: 'Running', ramp: [[0, 'stale'], [100, 'running']] } } });
+		const ramped = { ...kind, drive: [kind.drive[0], ops[0].drive] };
+		await k.deliver(ramped);
+		await k.reset();
+		assert.deepEqual(await k.b.eval('JSON.stringify(window.__rampStops(1))').then(JSON.parse), [[0, 'stale'], [100, 'running']]);
+		const sample = await k.field('sample Running');
+		assert.equal(sample.tag, 'INPUT');
+		assert.notEqual(await k.b.eval(`document.querySelector('[aria-label="sample Running"]').type`), 'checkbox', 'a ramp reads its member as a number');
 		assert.deepEqual(k.exceptions(), []);
 	});
 });

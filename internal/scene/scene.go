@@ -53,9 +53,11 @@ type Kind struct {
 	Members []string `json:"members,omitempty"`
 	// A data kind (docs/design/spatial-hmi.md §3c): a glTF as a URL path
 	// from the app root, and what live values do to its named meshes.
-	Model   string          `json:"model,omitempty"`
-	Bounds  json.RawMessage `json:"bounds,omitempty"` // "auto" | {size, center}
-	LabelAt Vec             `json:"labelAt,omitempty"`
+	Model  string          `json:"model,omitempty"`
+	Bounds json.RawMessage `json:"bounds,omitempty"` // "auto" | {size, center}
+	// LabelAt: [x, y, z] metres, an anchor word on the bounds ("top"), or
+	// {part?, anchor, offset?} — a place on a part's box (design §3g).
+	LabelAt json.RawMessage `json:"labelAt,omitempty"`
 	Status  string          `json:"status,omitempty"`
 	// Ports (design §3g, slice 3): where pipes meet this kind, in its own
 	// frame — a point and the direction a pipe leaves it (default up).
@@ -234,13 +236,61 @@ type ScaleDrive struct {
 }
 type TintDrive struct {
 	BoolExpr
-	On  string `json:"on"`
+	On  string `json:"on,omitempty"`
 	Off string `json:"off,omitempty"`
+	// Ramp: the colour varies with a number — stops of [value, colour].
+	Ramp []RampStop `json:"ramp,omitempty"`
 }
 type EmissiveDrive struct {
 	BoolExpr
-	On        string   `json:"on"`
-	Intensity *float64 `json:"intensity,omitempty"`
+	On        string     `json:"on,omitempty"`
+	Intensity *float64   `json:"intensity,omitempty"`
+	Ramp      []RampStop `json:"ramp,omitempty"`
+}
+
+// RampStop is one [value, colour] of a ramp.
+type RampStop struct {
+	Value  float64
+	Colour string
+}
+
+func (r *RampStop) UnmarshalJSON(b []byte) error {
+	var pair []json.RawMessage
+	if err := json.Unmarshal(b, &pair); err != nil || len(pair) != 2 {
+		return fmt.Errorf("a ramp stop is [value, colour]")
+	}
+	if err := json.Unmarshal(pair[0], &r.Value); err != nil {
+		return fmt.Errorf("a ramp stop's value is a number")
+	}
+	if err := json.Unmarshal(pair[1], &r.Colour); err != nil {
+		return fmt.Errorf("a ramp stop's colour is a string")
+	}
+	return nil
+}
+
+func (r RampStop) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]any{r.Value, r.Colour})
+}
+
+// checkRamp: a plain member, at least two stops going up in value.
+func checkRamp(path, bind string, ramp []RampStop, errf func(path, format string, a ...any)) {
+	if !memberRe.MatchString(bind) || strings.HasPrefix(bind, "!") {
+		errf(path+"/bind", "must name a member of the struct (a number)")
+	}
+	if len(ramp) < 2 {
+		errf(path+"/ramp", "must be at least two [value, colour] stops")
+		return
+	}
+	prev := math.Inf(-1)
+	for i, stop := range ramp {
+		if stop.Colour == "" {
+			errf(fmt.Sprintf("%s/ramp/%d", path, i), "must be [value, colour]")
+		}
+		if !(stop.Value > prev) {
+			errf(fmt.Sprintf("%s/ramp/%d", path, i), "stops go up in value")
+		}
+		prev = stop.Value
+	}
 }
 
 // DriveChannels is the vocabulary, in the schema's order. hmi-3d's
@@ -313,10 +363,65 @@ type Node struct {
 	Bind  map[string]string `json:"bind,omitempty"`
 }
 
-// Port is where a pipe meets a kind, in the kind's frame.
+// Port is where a pipe meets a kind, in the kind's frame. At is [x, y, z]
+// metres or {part?, anchor, offset?}, a place on a box (checkPoint).
 type Port struct {
-	At  Vec `json:"at"`
-	Dir Vec `json:"dir,omitempty"`
+	At  json.RawMessage `json:"at"`
+	Dir Vec             `json:"dir,omitempty"`
+}
+
+// BoxPoint is a point named by where it sits on a box: a part's, or the
+// kind's bounds when Part is empty. The renderer resolves it once the
+// model is loaded; the checker holds the words.
+type BoxPoint struct {
+	Part   string `json:"part,omitempty"`
+	Anchor string `json:"anchor"`
+	Offset Vec    `json:"offset,omitempty"`
+}
+
+var anchorRe = regexp.MustCompile(`^(center|top|bottom|left|right|front|back)(-(top|bottom|left|right|front|back))?$`)
+
+var anchorAxis = map[string]int{"left": 0, "right": 0, "bottom": 1, "top": 1, "back": 2, "front": 2}
+
+// validAnchor: one face word, center, or two faces on different axes.
+func validAnchor(a string) bool {
+	if !anchorRe.MatchString(a) {
+		return false
+	}
+	w := strings.Split(a, "-")
+	return len(w) == 1 || (w[0] != "center" && anchorAxis[w[0]] != anchorAxis[w[1]])
+}
+
+// checkPoint holds a point to its forms: [x, y, z], a box point, and — when
+// word is true (labelAt) — a bare anchor word.
+func checkPoint(path string, raw json.RawMessage, word bool, errf func(path, format string, a ...any)) {
+	var v Vec
+	if err := json.Unmarshal(raw, &v); err == nil {
+		if len(v) != 3 || !finite(v) {
+			errf(path, "must be [x, y, z] metres")
+		}
+		return
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if !word || !validAnchor(s) {
+			errf(path, "must be [x, y, z] metres, an anchor word (top, top-front, …), or { part?, anchor, offset? }")
+		}
+		return
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var bp BoxPoint
+	if err := dec.Decode(&bp); err != nil {
+		errf(path, "must be [x, y, z] metres%s, or { part?, anchor: top | bottom | left | right | front | back | center (or two, top-front), offset? }", map[bool]string{true: ", an anchor word on the bounds", false: ""}[word])
+		return
+	}
+	if !validAnchor(bp.Anchor) {
+		errf(path+"/anchor", "must be top, bottom, left, right, front, back, center, or two on different axes (top-front)")
+	}
+	if bp.Offset != nil && (len(bp.Offset) != 3 || !finite(bp.Offset)) {
+		errf(path+"/offset", "must be [x, y, z] metres")
+	}
 }
 
 // Anchor is a pipe end on a node's port: resolved through the node's
@@ -641,8 +746,8 @@ func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
 			errf(p+"/bounds", "must be 'auto' or { size: [w, h, d], center: [x, y, z] }")
 		}
 	}
-	if v.LabelAt != nil && (len(v.LabelAt) != 3 || !finite(v.LabelAt)) {
-		errf(p+"/labelAt", "must be [x, y, z] metres")
+	if v.LabelAt != nil {
+		checkPoint(p+"/labelAt", v.LabelAt, true, errf)
 	}
 	if v.Status != "" && !validStatusTemplate(v.Status) {
 		errf(p+"/status", `must be a template over members: "{Level:1} %%", "{Running?run:stopped}"`)
@@ -653,8 +758,10 @@ func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
 		if !portRe.MatchString(name) {
 			errf(pp, "a port name is letters, digits, _ or -")
 		}
-		if len(port.At) != 3 || !finite(port.At) {
-			errf(pp+"/at", "must be [x, y, z] metres in the kind's frame")
+		if port.At == nil {
+			errf(pp+"/at", "must be [x, y, z] metres in the kind's frame, or { part?, anchor, offset? }")
+		} else {
+			checkPoint(pp+"/at", port.At, false, errf)
 		}
 		if port.Dir != nil && (len(port.Dir) != 3 || !finite(port.Dir) || (port.Dir[0] == 0 && port.Dir[1] == 0 && port.Dir[2] == 0)) {
 			errf(pp+"/dir", "must be a non-zero [x, y, z] direction")
@@ -718,14 +825,28 @@ func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
 			axis(dp+"/scale/axis", d.Scale.Axis, true)
 			num(dp+"/scale/to", d.Scale.To)
 		case d.Tint != nil:
-			boolean(dp+"/tint", d.Tint.BoolExpr)
-			if d.Tint.On == "" {
-				errf(dp+"/tint/on", "must be a palette slot or a CSS colour")
+			if d.Tint.Ramp != nil {
+				checkRamp(dp+"/tint", d.Tint.Bind, d.Tint.Ramp, errf)
+				if d.Tint.On != "" || d.Tint.Off != "" || d.Tint.Threshold != nil {
+					errf(dp+"/tint", "on, off and threshold are not with a ramp")
+				}
+			} else {
+				boolean(dp+"/tint", d.Tint.BoolExpr)
+				if d.Tint.On == "" {
+					errf(dp+"/tint/on", "must be a palette slot or a CSS colour")
+				}
 			}
 		case d.Emissive != nil:
-			boolean(dp+"/emissive", d.Emissive.BoolExpr)
-			if d.Emissive.On == "" {
-				errf(dp+"/emissive/on", "must be a palette slot or a CSS colour")
+			if d.Emissive.Ramp != nil {
+				checkRamp(dp+"/emissive", d.Emissive.Bind, d.Emissive.Ramp, errf)
+				if d.Emissive.On != "" || d.Emissive.Threshold != nil {
+					errf(dp+"/emissive", "on and threshold are not with a ramp")
+				}
+			} else {
+				boolean(dp+"/emissive", d.Emissive.BoolExpr)
+				if d.Emissive.On == "" {
+					errf(dp+"/emissive/on", "must be a palette slot or a CSS colour")
+				}
 			}
 			if d.Emissive.Intensity != nil && *d.Emissive.Intensity < 0 {
 				errf(dp+"/emissive/intensity", "must be ≥ 0")
