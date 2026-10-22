@@ -5,7 +5,7 @@
 // imported here, so the unit tests can bundle it; registry.ts adds the
 // built-ins and re-exports all of it.
 import type { Component } from 'svelte';
-import { kindMembers, type SceneAssembly, type SceneDoc, type SceneError, type SceneKind, type SceneKindEntry, type Vec3 } from './scene.js';
+import { kindMembers, type SceneAssembly, type SceneDoc, type SceneError, type SceneKind, type SceneKindEntry, type ScenePort, type Vec3 } from './scene.js';
 import { formatStatus } from './drives.js';
 
 /** What every kind's component receives. Static `props` and resolved `bind`
@@ -60,6 +60,9 @@ export interface NodeKindDef {
 	 * over the struct's member the way it does for the geometry, so a
 	 * flat-tag node's label says what its model shows. */
 	status?: (value: unknown, good: boolean, over?: Record<string, unknown>) => string;
+	/** Where pipes meet this kind, in its frame (§3g slice 3); a document's
+	 * `kinds` entry may add or override them. */
+	ports?: Record<string, ScenePort>;
 	/** The 2D faceplate the inspector drawer shows; absent = the member table only. */
 	panel?: Component<PanelProps>;
 	/** A stand-in, not a kind of its own: what an editor draws when a
@@ -256,6 +259,7 @@ export function registryFor(doc: SceneDoc, registry: NodeRegistry, gltf: Compone
 				bounds: k.bounds && k.bounds !== 'auto' ? k.bounds : 'auto',
 				labelAt: k.labelAt,
 				status,
+				ports: k.ports ?? base?.ports,
 				panel: base?.panel
 			};
 		} else if (k.assembly) {
@@ -266,6 +270,7 @@ export function registryFor(doc: SceneDoc, registry: NodeRegistry, gltf: Compone
 				bounds: k.bounds && k.bounds !== 'auto' ? k.bounds : assemblyBounds(k.assembly, registry),
 				labelAt: k.labelAt,
 				status,
+				ports: k.ports ?? base?.ports,
 				panel: base?.panel
 			};
 		}

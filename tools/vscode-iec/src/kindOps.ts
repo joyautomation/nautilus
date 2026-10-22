@@ -24,6 +24,9 @@ export type Drive = { mesh: string } & (
   | { visible: BoolExpr }
 );
 
+/** A port (design §3g, slice 3): where a pipe meets the kind, in its frame. */
+export type Port = { at: Vec3; dir?: Vec3 };
+
 export type KindDoc = {
   type?: string;
   members?: string[];
@@ -31,6 +34,7 @@ export type KindDoc = {
   bounds?: "auto" | { size: Vec3; center: Vec3 };
   labelAt?: Vec3;
   status?: string;
+  ports?: Record<string, Port>;
   drive?: Drive[];
 };
 
@@ -44,7 +48,11 @@ export type KindOp =
   | { type: "addDrive"; drive: Drive; index?: number }
   | { type: "updateDrive"; index: number; drive: Drive }
   | { type: "deleteDrive"; index: number }
-  | { type: "moveDrive"; index: number; to: number };
+  | { type: "moveDrive"; index: number; to: number }
+  /** Add or replace a port. */
+  | { type: "setPort"; name: string; port: Port }
+  | { type: "renamePort"; name: string; to: string }
+  | { type: "deletePort"; name: string };
 
 export const DRIVE_CHANNELS = ["spin", "turn", "scale", "tint", "emissive", "visible"] as const;
 export type DriveChannel = (typeof DRIVE_CHANNELS)[number];
@@ -55,6 +63,7 @@ const isNum = (v: unknown): v is number => typeof v === "number" && isFinite(v);
 const isStr = (v: unknown): v is string => typeof v === "string" && v.length > 0;
 const isVec3 = (v: unknown): v is Vec3 => Array.isArray(v) && v.length === 3 && v.every(isNum);
 const MEMBER_RE = /^!?[A-Za-z_][A-Za-z0-9_]*$/;
+const PORT_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 const PLAIN_MEMBER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export function parseKind(text: string): KindDoc {
@@ -104,10 +113,18 @@ function compact(v: unknown): string {
  * on one line, each drive `{ "mesh", <channel> }` on ONE line (a drive is
  * a row in the editor and a row in the diff), empty lists dropped. */
 export function formatKind(doc: KindDoc): string {
-  const d = ordered(doc as Json, ["type", "members", "model", "bounds", "labelAt", "status", "drive"]);
+  const d = ordered(doc as Json, ["type", "members", "model", "bounds", "labelAt", "status", "ports", "drive"]);
   if (Array.isArray(d.members) && d.members.length === 0) delete d.members;
   const drives = Array.isArray(d.drive) ? (d.drive as Json[]) : undefined;
   if (drives && drives.length === 0) delete d.drive;
+  // Ports, one per line too: `"discharge": { "at": [0, 0.43, -0.5], "dir": [0, 1, 0] }`.
+  const ports = isObj(d.ports) ? (d.ports as Record<string, Json>) : undefined;
+  const portRows: string[] = [];
+  if (ports && Object.keys(ports).length === 0) delete d.ports;
+  else if (ports) {
+    for (const [name, port] of Object.entries(ports)) portRows.push(`${JSON.stringify(name)}: ${compact(ordered(port, ["at", "dir"]))}`);
+    d.ports = "\u0000ports";
+  }
   if (d.bounds !== undefined && d.bounds !== "auto" && isObj(d.bounds)) d.bounds = ordered(d.bounds, ["size", "center"]);
   const rows: string[] = [];
   if (drives && drives.length) {
@@ -128,7 +145,17 @@ export function formatKind(doc: KindDoc): string {
   }
   let json = JSON.stringify(d, null, 2).replace(VEC_RE, (_m, a, b, c) => `[${a}, ${b}, ${c}]`);
   if (rows.length) json = json.replace('"\\u0000drives"', `[\n${rows.map((r) => "    " + r).join(",\n")}\n  ]`);
+  if (portRows.length) json = json.replace('"\\u0000ports"', `{\n${portRows.map((r) => "    " + r).join(",\n")}\n  }`);
   return json + "\n";
+}
+
+/** Why a port is not one, or undefined when it is. */
+export function portError(name: unknown, port: unknown): string | undefined {
+  if (!isStr(name) || !PORT_RE.test(name)) return "a port name is letters, digits, _ or -";
+  if (!isObj(port)) return "a port is { at: [x, y, z], dir?: [x, y, z] }";
+  if (!isVec3(port.at)) return "at is [x, y, z] metres in the kind's frame";
+  if (port.dir !== undefined && !(isVec3(port.dir) && port.dir.some((c) => c !== 0))) return "dir is a non-zero [x, y, z] direction";
+  return undefined;
 }
 
 // ── op application ─────────────────────────────────────────────────────────
@@ -255,6 +282,33 @@ function applyOpToDoc(doc: KindDoc, op: KindOp): string | undefined {
       if (!Number.isInteger(op.to) || op.to < 0 || op.to >= list.length) return `no drive slot ${op.to}`;
       const [d] = list.splice(op.index, 1);
       list.splice(op.to, 0, d);
+      return undefined;
+    }
+    case "setPort": {
+      const e = portError(op.name, op.port);
+      if (e) return e;
+      const port: Port = { at: roundVec(op.port.at) };
+      if (op.port.dir) port.dir = roundVec(op.port.dir);
+      (doc.ports ??= {})[op.name] = port;
+      return undefined;
+    }
+    case "renamePort": {
+      const ports = doc.ports ?? {};
+      if (!(op.name in ports)) return `no port "${op.name}"`;
+      if (!isStr(op.to) || !PORT_RE.test(op.to)) return "a port name is letters, digits, _ or -";
+      if (op.to === op.name) return undefined;
+      if (op.to in ports) return `a port "${op.to}" already exists`;
+      // Keep the port's place in the list: rebuild in order.
+      const next: Record<string, Port> = {};
+      for (const [k, v] of Object.entries(ports)) next[k === op.name ? op.to : k] = v;
+      doc.ports = next;
+      return undefined;
+    }
+    case "deletePort": {
+      const ports = doc.ports ?? {};
+      if (!(op.name in ports)) return `no port "${op.name}"`;
+      delete ports[op.name];
+      if (Object.keys(ports).length === 0) delete doc.ports;
       return undefined;
     }
     default:

@@ -27,6 +27,17 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   spot: the part behind), the panel names it with what it sits in and
   its drives, **Add drive** starts on it, the **Parts** list picks by
   name, and a hovered name or drive row lights its part; `Esc` clears.
+- **Ports and anchored pipes (design §3g, slice 3).** A kind declares
+  `ports` in its own frame; in the kind editor **Add port here** puts one
+  where the last click landed on the model, facing out of the surface,
+  and each port is a mark on the model and a row in the panel (rename,
+  `at`, `dir`, **here**, `×`). In the scene editor every node's ports
+  wear a mark that follows the gizmo; **click a port, then another** to
+  run a pipe — one `addPipe` anchored at both ends (`from` / `to` as
+  `{ node, port }`) with an orthogonal route between them as its points,
+  so the pipe follows its nodes when they move; the panel lists the
+  scene's pipes with `×`. `naut check` and the schema know ports and
+  anchors; `hmi-3d` resolves them.
 - **A 3D scene editor.** A `*.scene.json` now opens as the 3D view itself
   (the same `@joyautomation/nautilus-hmi-3d` renderer the built HMI uses,
   in its own webview bundle), with a palette of the document's kinds, a

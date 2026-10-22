@@ -880,8 +880,46 @@ one for a valve, one for a flow meter. Built 2026-10-21 (PR "kind editor"):
   `pick={false}` so a host that picks parts itself gets no node-level
   hover cage under them. K07 in the harness; rig check 22 clicks the
   model.
-- **Ports** are slice 3's: a kind will declare them in its own frame and
-  the kind editor will place them by clicking the model.
+- **Ports and anchored pipes (slice 3a/3b, built 2026-10-22).** The
+  contract is as sketched below and in three places as always: a kind's
+  `ports` (`{ "discharge": { "at": [x, y, z], "dir": [x, y, z] } }`, the
+  point in the kind's frame and the direction a pipe leaves it, default
+  up) and a pipe's `from` / `to` (`{ "node", "port" }`), with `points` the
+  run between anchored ends (absent for a straight pipe) — hmi-3d
+  (`ScenePort`, `PipeAnchor`, `validateScene` holds an anchor to a node in
+  its frame and a port its kind has when known, `resolvePipePoints` /
+  `portInFrame` / `rotateXYZ` resolve through `pos` / `rot` / `scale`,
+  `routePorts` is the orthogonal route; a registry entry may carry
+  `ports`; `Scene3D` and `Node` draw a resolved run), `internal/scene`
+  (`Port`, `Anchor`, `checkPipeRun` in the document's and an assembly's
+  frame, `EffectiveKinds` carries ports) and the schema (`port`, `anchor`;
+  the derived kind schema follows). **In the kind editor** a click on a
+  part records where it landed and the surface's outward normal, in the
+  kind's frame (`kd.hit`); **Add port here** posts `setPort` there, named
+  after the part; ports are amber marks under the node's group (they turn
+  with it) and rows in the panel (`renamePort`, `setPort`, `deletePort`;
+  **here** moves a port to the last click). **In the scene editor** every
+  node's ports wear marks under the node's own group, so they follow the
+  gizmo live; a click on a port starts a pipe, a click on another ends
+  it: ONE `addPipe` with both anchors and `routePorts` between (Esc or the
+  ground cancels); the marks are raycast by the editor (the renderer's
+  picker knows nodes, not ports) and a click that hits one is kept from
+  the node pick behind it. Gotcha: a port at the top of a node sits under
+  its label, an HTML overlay whose own pointerdown stops at it (so a drag
+  on a label does not orbit) — the press is taken on the window in the
+  capture phase. Still to do in this slice: vertex drag on the gizmo, a
+  re-route when an anchored node moves (today the first leg stretches),
+  ports on the built-in kinds.
+- **Variants of a kind** (James, 2026-10-22, on the float switch: "sometimes
+  low (down) is active and high (up) is active"). Today: one kind per
+  variant, sharing the model — `float-switch-high.kind.json` and
+  `float-switch-low.kind.json` with the two `visible` drives inverted;
+  nothing new in the grammar, and the AI makes the second from the first.
+  Not by negating the bind on the node: that would flip the status text
+  too. When variants multiply: a kind declares `params` with defaults, a
+  node sets them in `props`, and a drive's boolean takes a `flip`
+  naming one (`{ "bind": "Tripped", "flip": "activeLow" }`) — small and
+  deterministic, added when it earns its place.
 
 **Slice 3 — pipes and connections.** The lesson of the lift station
 (2026-10-18) was that a connection must be a scene pipe, not a model part,

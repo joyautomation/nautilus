@@ -164,6 +164,16 @@
           "type": "string",
           "description": "The label's value text as a template over members: `{Level:1} %` → `48.3 %`; `{Running?run:stopped}`. Reads `stale` when quality is bad."
         },
+        "ports": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/port"
+          },
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$"
+          },
+          "description": "Where pipes meet this kind, in its own frame: port name -> { at, dir? }."
+        },
         "drive": {
           "type": "array",
           "items": {
@@ -434,21 +444,25 @@
     "pipe": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "points"
-      ],
       "properties": {
         "id": {
           "type": "string",
           "minLength": 1
         },
+        "from": {
+          "$ref": "#/definitions/anchor",
+          "description": "The first end, anchored to a node's port (instead of a first point)."
+        },
+        "to": {
+          "$ref": "#/definitions/anchor",
+          "description": "The last end, anchored to a node's port (instead of a last point)."
+        },
         "points": {
           "type": "array",
-          "minItems": 2,
           "items": {
             "$ref": "#/definitions/vec3"
           },
-          "description": "Polyline in scene metres, at least two points."
+          "description": "Polyline in scene metres: the whole run, or the run between anchored ends (may be absent with both ends anchored). At least two points counting the anchored ends."
         },
         "radius": {
           "type": "number",
@@ -470,7 +484,20 @@
           },
           "description": "A pipe binds only 'flowing'."
         }
-      }
+      },
+      "anyOf": [
+        {
+          "required": [
+            "from",
+            "to"
+          ]
+        },
+        {
+          "required": [
+            "points"
+          ]
+        }
+      ]
     },
     "axis": {
       "enum": [
@@ -775,6 +802,45 @@
         }
       },
       "description": "PBR maps for a plane (a concrete floor). Loaded only in the lit look."
+    },
+    "port": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "at"
+      ],
+      "properties": {
+        "at": {
+          "$ref": "#/definitions/vec3",
+          "description": "Where a pipe meets the kind, metres in the kind's own frame."
+        },
+        "dir": {
+          "$ref": "#/definitions/vec3",
+          "description": "The direction a pipe leaves the port (unit vector). Default up, [0, 1, 0]."
+        }
+      },
+      "description": "A port on a kind (design §3g, slice 3): the point a pipe meets it and the direction a pipe leaves it, in the kind's frame."
+    },
+    "anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node",
+        "port"
+      ],
+      "properties": {
+        "node": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The id of a node in this frame."
+        },
+        "port": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One of the node's kind's ports."
+        }
+      },
+      "description": "A pipe end anchored to a node's port, resolved through the node's pos / rot / scale so the pipe follows the node."
     }
   }
 }

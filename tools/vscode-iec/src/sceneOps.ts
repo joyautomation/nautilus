@@ -28,9 +28,15 @@ export type SceneNode = {
   bind?: Record<string, string>;
 };
 
+/** A pipe end anchored to a node's port (design §3g, slice 3). */
+export type PipeAnchor = { node: string; port: string };
+
 export type ScenePipe = {
   id?: string;
-  points: Vec3[];
+  from?: PipeAnchor;
+  to?: PipeAnchor;
+  /** The run, or the run between anchored ends (may be absent with both). */
+  points?: Vec3[];
   radius?: number;
   bind?: { flowing?: string };
 };
@@ -57,7 +63,7 @@ export type SceneOp =
   | { type: "moveNode"; id: string; pos: Vec3; rot?: Vec3 }
   | { type: "updateNode"; id: string; patch: Record<string, unknown> }
   | { type: "deleteNode"; id: string }
-  | { type: "addPipe"; points: Vec3[]; id?: string; bind?: { flowing?: string } }
+  | { type: "addPipe"; points?: Vec3[]; from?: PipeAnchor; to?: PipeAnchor; id?: string; bind?: { flowing?: string } }
   | { type: "setPipePoints"; index: number; points: Vec3[] }
   | { type: "deletePipe"; index: number }
   | { type: "setCamera"; pos: Vec3; target: Vec3 }
@@ -128,7 +134,7 @@ export function formatScene(doc: SceneDoc): string {
       key === "nodes"
         ? ["id", "kind", "tag", "label", "pos", "rot", "scale", "props", "bind"]
         : key === "pipes"
-          ? ["id", "points", "radius", "bind"]
+          ? ["id", "from", "to", "points", "radius", "bind"]
           : ["kind", "pos", "size", "rot", "color", "opacity", "texture"];
     d[key] = arr.map((item) => {
       const o = ordered(item, order);
@@ -263,8 +269,18 @@ function applyOpToDoc(doc: SceneDoc, op: SceneOp): string | undefined {
       break;
     }
     case "addPipe": {
-      if (!validPoints(op.points)) return "a pipe needs at least two [x, y, z] points";
-      const pipe: ScenePipe = { points: op.points.map(roundPos) };
+      const pts = op.points ?? [];
+      if (!Array.isArray(pts) || !pts.every(isVec3)) return "a pipe's points are [x, y, z] each";
+      const pipe: ScenePipe = {};
+      for (const k of ["from", "to"] as const) {
+        const a = op[k];
+        if (a === undefined) continue;
+        if (!a || typeof a !== "object" || !ID_RE.test(String(a.node)) || typeof a.port !== "string" || !a.port) return `${k} is { node, port }`;
+        if (!doc.nodes.some((n) => n.id === a.node)) return `no node "${a.node}" to anchor ${k} to`;
+        pipe[k] = { node: a.node, port: a.port };
+      }
+      if (pts.length + (pipe.from ? 1 : 0) + (pipe.to ? 1 : 0) < 2) return "a pipe needs at least two points counting the anchored ends";
+      if (pts.length || !(pipe.from && pipe.to)) pipe.points = pts.map(roundPos);
       if (op.id !== undefined) {
         if (!ID_RE.test(op.id)) return `id "${op.id}" must be a name`;
         if (idTaken(doc, op.id)) return `id "${op.id}" is already taken`;
@@ -277,8 +293,10 @@ function applyOpToDoc(doc: SceneDoc, op: SceneOp): string | undefined {
     case "setPipePoints": {
       const pipe = (doc.pipes ?? [])[op.index];
       if (!pipe) return `no pipe #${op.index}`;
-      if (!validPoints(op.points)) return "a pipe needs at least two [x, y, z] points";
-      pipe.points = op.points.map(roundPos);
+      if (!Array.isArray(op.points) || !op.points.every(isVec3)) return "a pipe's points are [x, y, z] each";
+      if (op.points.length + (pipe.from ? 1 : 0) + (pipe.to ? 1 : 0) < 2) return "a pipe needs at least two points counting the anchored ends";
+      if (op.points.length === 0) delete pipe.points;
+      else pipe.points = op.points.map(roundPos);
       break;
     }
     case "deletePipe": {
@@ -303,6 +321,3 @@ function applyOpToDoc(doc: SceneDoc, op: SceneOp): string | undefined {
   return undefined;
 }
 
-function validPoints(points: unknown): points is Vec3[] {
-  return Array.isArray(points) && points.length >= 2 && points.every(isVec3);
-}

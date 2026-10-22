@@ -55,6 +55,16 @@
       "type": "string",
       "description": "The label's value text as a template over members: `{Level:1} %` → `48.3 %`; `{Running?run:stopped}`. Reads `stale` when quality is bad."
     },
+    "ports": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/port"
+      },
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_-]*$"
+      },
+      "description": "Where pipes meet this kind, in its own frame: port name -> { at, dir? }."
+    },
     "drive": {
       "type": "array",
       "items": {
@@ -283,6 +293,24 @@
         }
       },
       "description": "member × scale + offset, clamped to [min, max]."
+    },
+    "port": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "at"
+      ],
+      "properties": {
+        "at": {
+          "$ref": "#/definitions/vec3",
+          "description": "Where a pipe meets the kind, metres in the kind's own frame."
+        },
+        "dir": {
+          "$ref": "#/definitions/vec3",
+          "description": "The direction a pipe leaves the port (unit vector). Default up, [0, 1, 0]."
+        }
+      },
+      "description": "A port on a kind (design §3g, slice 3): the point a pipe meets it and the direction a pipe leaves it, in the kind's frame."
     },
     "vec3": {
       "type": "array",

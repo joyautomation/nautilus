@@ -30,7 +30,7 @@ describe('the drive vocabulary matches the extension schema', () => {
 		expect(Object.keys(schema.definitions.environment.properties).sort()).toEqual(['backdrop', 'background', 'floor', 'fog', 'hdri', 'intensity', 'shadows']);
 	});
 	it('the kind contract has the data-kind, component and assembly fields (§3c, §3d)', () => {
-		expect(Object.keys(schema.definitions.kindContract.properties).sort()).toEqual(['assembly', 'bounds', 'component', 'drive', 'labelAt', 'members', 'model', 'status', 'type']);
+		expect(Object.keys(schema.definitions.kindContract.properties).sort()).toEqual(['assembly', 'bounds', 'component', 'drive', 'labelAt', 'members', 'model', 'ports', 'status', 'type']);
 		expect(Object.keys(schema.definitions.assembly.properties).sort()).toEqual(['nodes', 'pipes']);
 	});
 	it('the schema accepts what validateScene accepts for a component kind and an assembly', () => {

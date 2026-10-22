@@ -57,7 +57,10 @@ type Kind struct {
 	Bounds  json.RawMessage `json:"bounds,omitempty"` // "auto" | {size, center}
 	LabelAt Vec             `json:"labelAt,omitempty"`
 	Status  string          `json:"status,omitempty"`
-	Drive   []Drive         `json:"drive,omitempty"`
+	// Ports (design §3g, slice 3): where pipes meet this kind, in its own
+	// frame — a point and the direction a pipe leaves it (default up).
+	Ports map[string]Port `json:"ports,omitempty"`
+	Drive []Drive         `json:"drive,omitempty"`
 	// A component kind (§3d): a Svelte file as a source path relative to
 	// the scene file. The app builds it; the checker sees the file and the
 	// contract above, and never runs Svelte.
@@ -310,9 +313,26 @@ type Node struct {
 	Bind  map[string]string `json:"bind,omitempty"`
 }
 
+// Port is where a pipe meets a kind, in the kind's frame.
+type Port struct {
+	At  Vec `json:"at"`
+	Dir Vec `json:"dir,omitempty"`
+}
+
+// Anchor is a pipe end on a node's port: resolved through the node's
+// pos / rot / scale by the renderer, so the pipe follows the node.
+type Anchor struct {
+	Node string `json:"node"`
+	Port string `json:"port"`
+}
+
 type Pipe struct {
-	ID     string            `json:"id,omitempty"`
-	Points []Vec             `json:"points"`
+	ID string `json:"id,omitempty"`
+	// From / To: the ends, when anchored to ports; Points is then the run
+	// between them (may be empty: a straight pipe port to port).
+	From   *Anchor           `json:"from,omitempty"`
+	To     *Anchor           `json:"to,omitempty"`
+	Points []Vec             `json:"points,omitempty"`
 	Radius float64           `json:"radius,omitempty"`
 	Bind   map[string]string `json:"bind,omitempty"`
 	// Arrows: chevrons travel the run while it flows. nil = true.
@@ -392,6 +412,9 @@ func (d *Doc) EffectiveKinds() map[string]Kind {
 		}
 		cur.Model, cur.Bounds, cur.LabelAt, cur.Status, cur.Drive = v.Model, v.Bounds, v.LabelAt, v.Status, v.Drive
 		cur.Component, cur.Assembly = v.Component, v.Assembly
+		if v.Ports != nil {
+			cur.Ports = v.Ports
+		}
 		// The members a kind reads are `members` plus whatever its drives,
 		// its status template and its assembly name, so nothing repeats
 		// the list.
@@ -468,6 +491,66 @@ func assemblyMembers(a *Assembly) []string {
 		add(p.Bind["flowing"])
 	}
 	return out
+}
+
+var portRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
+
+func sortedPortNames(m map[string]Port) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// checkPipeRun holds a pipe's ends and run to the frame it sits in: an
+// anchor names a node of the frame and a port its kind has (when the
+// kind's ports are known — a kind of the app's is taken on trust), and
+// the run has at least two points counting the anchored ends.
+func checkPipeRun(p string, pipe Pipe, nodes []Node, kinds map[string]Kind, errf func(path, format string, a ...any)) {
+	ends := 0
+	for _, end := range []struct {
+		key string
+		a   *Anchor
+	}{{"from", pipe.From}, {"to", pipe.To}} {
+		if end.a == nil {
+			continue
+		}
+		ends++
+		ap := p + "/" + end.key
+		if end.a.Node == "" {
+			errf(ap+"/node", "must name a node")
+			continue
+		}
+		if end.a.Port == "" {
+			errf(ap+"/port", "must name one of the node's kind's ports")
+			continue
+		}
+		var node *Node
+		for i := range nodes {
+			if nodes[i].ID == end.a.Node {
+				node = &nodes[i]
+				break
+			}
+		}
+		if node == nil {
+			errf(ap+"/node", "no node %q in this frame", end.a.Node)
+			continue
+		}
+		if k, ok := kinds[node.Kind]; ok && k.Ports != nil {
+			if _, has := k.Ports[end.a.Port]; !has {
+				errf(ap+"/port", "kind %q has no port %q (it has %s)", node.Kind, end.a.Port, strings.Join(sortedPortNames(k.Ports), ", "))
+			}
+		}
+	}
+	if len(pipe.Points)+ends < 2 {
+		if ends > 0 {
+			errf(p+"/points", "needs at least two points counting the anchored ends")
+		} else {
+			errf(p+"/points", "needs at least two points")
+		}
+	}
 }
 
 func sortedKeys(m map[string]string) []string {
@@ -563,6 +646,19 @@ func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
 	}
 	if v.Status != "" && !validStatusTemplate(v.Status) {
 		errf(p+"/status", `must be a template over members: "{Level:1} %%", "{Running?run:stopped}"`)
+	}
+	for _, name := range sortedPortNames(v.Ports) {
+		port := v.Ports[name]
+		pp := p + "/ports/" + name
+		if !portRe.MatchString(name) {
+			errf(pp, "a port name is letters, digits, _ or -")
+		}
+		if len(port.At) != 3 || !finite(port.At) {
+			errf(pp+"/at", "must be [x, y, z] metres in the kind's frame")
+		}
+		if port.Dir != nil && (len(port.Dir) != 3 || !finite(port.Dir) || (port.Dir[0] == 0 && port.Dir[1] == 0 && port.Dir[2] == 0)) {
+			errf(pp+"/dir", "must be a non-zero [x, y, z] direction")
+		}
 	}
 	if v.Model == "" && v.Drive != nil {
 		errf(p+"/drive", "drives need a model — without one the Svelte kind of this name renders")
@@ -975,9 +1071,7 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 		}
 		for i, pipe := range a.Pipes {
 			p := fmt.Sprintf("%s/pipes/%d", ap, i)
-			if len(pipe.Points) < 2 {
-				errf(p+"/points", "needs at least two points")
-			}
+			checkPipeRun(p, pipe, a.Nodes, kinds, errf)
 			for j, pt := range pipe.Points {
 				vec3(fmt.Sprintf("%s/points/%d", p, j), pt, "metres")
 			}
@@ -1074,9 +1168,7 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 
 	for i, pipe := range d.Pipes {
 		p := fmt.Sprintf("/pipes/%d", i)
-		if len(pipe.Points) < 2 {
-			errf(p+"/points", "needs at least two points")
-		}
+		checkPipeRun(p, pipe, d.Nodes, kinds, errf)
 		for j, pt := range pipe.Points {
 			vec3(fmt.Sprintf("%s/points/%d", p, j), pt, "metres")
 		}

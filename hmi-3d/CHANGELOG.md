@@ -26,8 +26,26 @@ picking parts inside one model orders its hits the way the scene does,
 and `Scene3D` takes `pick={false}` for a host that picks nothing at the
 node level (no hover outline, no pointer cursor, no `onpick`).
 
+**Added (slice 3, ports).** A kind declares **`ports`** in its own frame
+(`"ports": { "discharge": { "at": [0, 0.43, -0.5], "dir": [0, 1, 0] } }`:
+a point and the direction a pipe leaves it, default up), inline or in
+its kind file; a registry entry may carry `ports` too. A pipe end may be
+anchored instead of placed — `"from": { "node": "P101", "port":
+"discharge" }`, `"to": …` — and `points` is then the run between the
+ends (absent for a straight pipe port to port). The renderer resolves an
+anchor through the node's `pos` / `rot` / `scale`, so a pipe follows its
+node; `validateScene` holds an anchor to a node in its frame and a port
+its kind has (when the kind's ports are known). `resolvePipePoints`,
+`portInFrame`, `rotateXYZ`, `docPorts` and `routePorts` (an orthogonal
+run between two ports: leave, rise to a header, run, drop) are exported.
+
 **Changed.** `model` must end in `.glb` or `.gltf` in `validateScene` as
-it already had to for `naut check` and the schema.
+it already had to for `naut check` and the schema. The **lit look without
+an HDRI** now lights PBR materials from three's generated RoomEnvironment
+(no asset), so a metal model is no longer near-black until a document
+names an `environment`. On **paper**, `running` keeps its colour: a tint
+drive that names it, or a running built-in pump, reads as a state on the
+page the way an alarm does (steel, shell and fluid stay near-white).
 
 ## 0.2.2 — 2026-10-20
 

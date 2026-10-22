@@ -33,11 +33,14 @@ export { default as Fixture3D } from './components/Fixture3D.svelte';
 // loaders back into the base bundle (§3c, §6).
 
 // The scene document: types, the validator, and the subscription list.
-export { validateScene, validateKind, sceneTags, isBindingRef, isAssetPath, isComponentPath, isKindPath, isMemberName, refRoot, kindMembers, assemblyMembers, kindDefinedBy, LOOKS } from './scene.js';
+export { validateScene, validateKind, sceneTags, isBindingRef, isAssetPath, isComponentPath, isKindPath, isMemberName, refRoot, kindMembers, assemblyMembers, kindDefinedBy, docPorts, portInFrame, rotateXYZ, resolvePipePoints, LOOKS } from './scene.js';
 export type {
 	SceneDoc,
 	SceneLook,
 	SceneKind,
+	ScenePort,
+	PipeAnchor,
+	PipeFrame,
 	SceneKindEntry,
 	SceneAssembly,
 	SceneNode,
@@ -73,6 +76,8 @@ export { default as AlarmKey } from './components/AlarmKey.svelte';
 // Colours from the theme, and the measurement sampler behind PerfHud.
 export { DEFAULT_PALETTE, paletteFromTheme, paperPalette } from './palette.js';
 export { resolvePick, seeThrough } from './pick.js';
+export { routePorts } from './route.js';
+export type { RouteEnd } from './route.js';
 export type { PickHit } from './pick.js';
 export { default as PaperOutlines } from './components/PaperOutlines.svelte';
 export type { Palette } from './palette.js';

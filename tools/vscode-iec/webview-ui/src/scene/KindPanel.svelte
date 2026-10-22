@@ -5,6 +5,7 @@
 	import { formatStatus, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
 	import DriveRow from './DriveRow.svelte';
 	import { ancestorsOf, blankDrive, drivesOn, kd, memberShape, members, postOp, sampleStruct } from './kindState.svelte';
+	import { portNameFrom } from './marks';
 
 	const kind = $derived(kd.kind);
 	const memberList = $derived(members());
@@ -59,6 +60,43 @@
 	function pick(m: string | null) {
 		kd.picked = m;
 	}
+	// ── ports ──
+	const ports = $derived(Object.entries(kind?.ports ?? {}));
+	/** A port where the last click landed, named after the picked part. */
+	function addPortHere() {
+		if (!kd.hit) return;
+		postOp({ type: 'setPort', name: portNameFrom(kd.picked, Object.keys(kind?.ports ?? {})), port: { at: kd.hit.at, dir: kd.hit.dir } });
+	}
+	function movePortHere(name: string) {
+		if (!kd.hit) return;
+		postOp({ type: 'setPort', name, port: { at: kd.hit.at, dir: kd.hit.dir } });
+	}
+	function renamePort(e: Event, name: string) {
+		const to = (e.currentTarget as HTMLInputElement).value.trim();
+		if (to === '' || to === name) {
+			(e.currentTarget as HTMLInputElement).value = name;
+			return;
+		}
+		postOp({ type: 'renamePort', name, to });
+	}
+	function portVec(e: Event, name: string, key: 'at' | 'dir', i: number) {
+		const port = kind?.ports?.[name];
+		if (!port) return;
+		const raw = (e.currentTarget as HTMLInputElement).value.trim();
+		const v = raw === '' ? 0 : Number(raw);
+		if (!isFinite(v)) return;
+		const next = { at: [...port.at] as Vec3, dir: [...(port.dir ?? [0, 1, 0])] as Vec3 };
+		next[key][i] = v;
+		if (key === 'dir' && next.dir.every((c) => c === 0)) return;
+		postOp({ type: 'setPort', name, port: next });
+	}
+	function deletePort(name: string) {
+		postOp({ type: 'deletePort', name });
+	}
+	function hoverPort(name: string | null) {
+		if (kd.hoverPort !== name) kd.hoverPort = name;
+	}
+	const fmtHit = (v: Vec3) => v.map((c) => fmt(c)).join(', ');
 	function hover(m: string | null) {
 		if (m === null ? kd.hover !== null : kd.hover !== m) kd.hover = m;
 	}
@@ -165,6 +203,30 @@
 				{/each}
 			</div>
 		{/if}
+
+		<div class="head sub">Ports <span class="count">{ports.length}</span></div>
+		{#each ports as [name, port] (name)}
+			<div class="port" data-kind="port-row" data-name={name} role="group" aria-label="port {name}" onpointerenter={() => hoverPort(name)} onpointerleave={() => kd.hoverPort === name && hoverPort(null)}>
+				<div class="row">
+					<input class="nx-input pname" value={name} onchange={(e) => renamePort(e, name)} aria-label="port name" spellcheck="false" title="The port's name — what a pipe's from/to names" />
+					<button class="link" onclick={() => movePortHere(name)} disabled={!kd.hit} title={kd.hit ? `Move this port to where you clicked (${fmtHit(kd.hit.at)})` : 'Click a part on the model first'}>here</button>
+					<button class="del" onclick={() => deletePort(name)} title="Remove this port" aria-label="remove port">×</button>
+				</div>
+				<div class="vec">
+					<span>at <small>m</small></span>
+					{#each AXES as a, i (a)}<input class="nx-input" type="number" step="0.01" value={fmt(port.at[i])} onchange={(e) => portVec(e, name, 'at', i)} aria-label="port at {a}" title={a} />{/each}
+				</div>
+				<div class="vec">
+					<span>dir</span>
+					{#each AXES as a, i (a)}<input class="nx-input" type="number" step="0.1" value={fmt((port.dir ?? [0, 1, 0])[i])} onchange={(e) => portVec(e, name, 'dir', i)} aria-label="port dir {a}" title="{a} — the direction a pipe leaves" />{/each}
+				</div>
+			</div>
+		{/each}
+		<div class="actions">
+			<button onclick={addPortHere} disabled={!kd.hit} title={kd.hit ? `A port where you clicked (${fmtHit(kd.hit.at)}), facing out of the surface` : 'Click a part on the model first — the port goes where you clicked'}>
+				Add port here{#if kd.hit && kd.picked}<small>&nbsp;on {kd.picked}</small>{/if}
+			</button>
+		</div>
 
 		<div class="head sub">Drives <span class="count">{kind.drive?.length ?? 0}</span></div>
 		{#each kind.drive ?? [] as d, i (i + ':' + d.mesh)}
@@ -296,8 +358,57 @@
 		cursor: pointer;
 		font: inherit;
 	}
-	.actions button:hover {
+	.actions button:hover:not(:disabled) {
 		background: var(--nx-hover);
+	}
+	.actions button:disabled {
+		opacity: 0.55;
+		cursor: default;
+	}
+	.actions button small {
+		opacity: 0.75;
+	}
+	.port {
+		border: 1px solid var(--nx-border);
+		border-radius: 6px;
+		padding: 4px 6px;
+		display: flex;
+		flex-direction: column;
+		gap: 3px;
+	}
+	.port:hover {
+		border-color: var(--nx-muted);
+	}
+	.port .row {
+		display: flex;
+		gap: 4px;
+		align-items: center;
+	}
+	.port .pname {
+		flex: 1;
+		min-width: 0;
+		font-family: var(--nx-mono);
+	}
+	.port .vec {
+		grid-template-columns: 34px 1fr 1fr 1fr;
+	}
+	.port .link:disabled {
+		opacity: 0.45;
+		cursor: default;
+	}
+	.port .del {
+		border: 1px solid transparent;
+		border-radius: 4px;
+		background: transparent;
+		color: var(--nx-muted);
+		cursor: pointer;
+		font: inherit;
+		font-size: 14px;
+		line-height: 1;
+		padding: 2px 6px;
+	}
+	.port .del:hover {
+		color: var(--nx-err);
 	}
 	.actions button code {
 		font-family: var(--nx-mono);

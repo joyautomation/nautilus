@@ -9,10 +9,11 @@
 	import { T, useThrelte, useTask } from '@threlte/core';
 	import { TransformControls, useOrbitControls } from '@threlte/extras';
 	import type { IntersectionEvent } from '@threlte/extras';
-	import { Vector3 } from 'three';
+	import { Raycaster, Vector2, Vector3, type Intersection } from 'three';
 	import type { TransformControls as TransformControlsImpl } from 'three/examples/jsm/controls/TransformControls.js';
-	import { Scene3D, type NodeRegistry, type PlacedNode, type SceneDoc, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
+	import { Scene3D, docPorts, portInFrame, routePorts, type NodeRegistry, type PipeAnchor, type PlacedNode, type SceneDoc, type ScenePort, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
 	import { ROT_SNAP_DEG, disarm, ed, groundY, postOp, snapCell, snapPos } from './sceneState.svelte';
+	import { dropMark, layPortMarks, portOf, type PortMark } from './marks';
 
 	let { doc, registry }: { doc: SceneDoc; registry: NodeRegistry } = $props();
 
@@ -42,7 +43,19 @@
 				return [r.left + ((v.x + 1) / 2) * r.width, r.top + ((1 - v.y) / 2) * r.height];
 			},
 			gizmoAxis: () => controls?.axis ?? null,
-			size: () => ({ w: size.current.width, h: size.current.height })
+			size: () => ({ w: size.current.width, h: size.current.height }),
+			ports: () => {
+				const r = dom.getBoundingClientRect();
+				const out: { node: string; port: string; x: number; y: number }[] = [];
+				for (const [node, m] of marks)
+					for (const [port, mark] of m) {
+						const c = mark.getWorldPosition(new Vector3()).project(camera.current);
+						out.push({ node, port, x: r.left + ((c.x + 1) / 2) * r.width, y: r.top + ((1 - c.y) / 2) * r.height });
+					}
+				return out;
+			},
+			pipeFrom: () => ed.pipeFrom,
+			portAt: (x: number, y: number) => portAt(x, y)
 		};
 		return () => {
 			delete w.__nxScene;
@@ -66,12 +79,119 @@
 			return;
 		}
 		ed.selected = null;
+		ed.pipeFrom = null;
 	}
 
 	function onPick(id: string) {
 		if (ed.tool === 'place') return;
+		// A click that landed on a port is the pipe gesture's, not a pick.
+		if (portClick) return;
 		ed.selected = id;
 	}
+
+	// ── ports and pipes (§3g slice 3) ──────────────────────────────────
+	// Every node's ports wear a mark under the node's own group, so they
+	// follow the gizmo live. A click on a port starts a pipe; a click on
+	// another port ends it: ONE addPipe anchored at both ends, with the
+	// orthogonal route between them as its points. Esc or the ground
+	// cancels. The marks are raycast here (the renderer's picker knows
+	// nodes, not ports), and a click that hits a mark is kept from the
+	// node pick behind it.
+	const portsOf = (kind: string): Record<string, ScenePort> | undefined => docPorts(doc, kind) ?? registry[kind]?.ports;
+	let marks = new Map<string, Map<string, PortMark>>();
+	$effect(() => {
+		const hot = ed.pipeFrom;
+		const hover = ed.hoverPort;
+		for (const n of doc.nodes) {
+			const group = placed[n.id]?.object;
+			if (!group) continue;
+			const hotName = hot?.node === n.id ? hot.port : hover?.node === n.id ? hover.port : null;
+			marks.set(n.id, layPortMarks(group, portsOf(n.kind), marks.get(n.id) ?? new Map(), hotName, 1 / (n.scale ?? 1)));
+		}
+		for (const [id, m] of marks)
+			if (!doc.nodes.some((n) => n.id === id)) {
+				for (const mark of m.values()) dropMark(mark);
+				marks.delete(id);
+			}
+	});
+	const raycaster = new Raycaster();
+	const ndc = new Vector2();
+	function portAt(clientX: number, clientY: number): PipeAnchor | null {
+		const r = dom.getBoundingClientRect();
+		if (!r.width || !r.height) return null;
+		ndc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+		raycaster.setFromCamera(ndc, camera.current);
+		const hits: Intersection[] = [];
+		for (const m of marks.values()) for (const mark of m.values()) raycaster.intersectObject(mark, true, hits);
+		hits.sort((a, b) => a.distance - b.distance);
+		for (const h of hits) {
+			const port = portOf(h.object);
+			if (!port) continue;
+			for (const [id, m] of marks) if ([...m.values()].some((mark) => mark === h.object || mark.children.includes(h.object))) return { node: id, port };
+		}
+		return null;
+	}
+	let portDown: { x: number; y: number } | null = null;
+	/** Set by the pointerup that hit a port, read by the renderer's pick
+	 * (its click) right after, so the node under the port is not picked. */
+	let portClick = false;
+	function onPortMove(e: PointerEvent) {
+		if (e.buttons) return;
+		const p = portAt(e.clientX, e.clientY);
+		const cur = ed.hoverPort;
+		if ((p?.node ?? null) !== (cur?.node ?? null) || (p?.port ?? null) !== (cur?.port ?? null)) ed.hoverPort = p;
+	}
+	/** On the window, capture phase: a port at the top of a node sits under
+	 * the node's label, an HTML overlay whose own pointerdown stops at it
+	 * (so a drag on a label does not orbit) — a listener on the canvas's
+	 * wrapper would never see the press. */
+	function onPortDown(e: PointerEvent) {
+		if (!dom.contains(e.target as Node)) return;
+		portDown = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
+		portClick = false;
+	}
+	function onPortUp(e: PointerEvent) {
+		const d = portDown;
+		portDown = null;
+		if (!d || Math.hypot(e.clientX - d.x, e.clientY - d.y) > DRAG_PX || ed.tool === 'place') return;
+		const p = portAt(e.clientX, e.clientY);
+		if (!p) return;
+		portClick = true;
+		setTimeout(() => (portClick = false), 0);
+		const from = ed.pipeFrom;
+		if (!from) {
+			ed.pipeFrom = p;
+			ed.selected = null;
+			return;
+		}
+		if (from.node === p.node && from.port === p.port) {
+			ed.pipeFrom = null;
+			return;
+		}
+		const a = endOf(from);
+		const b = endOf(p);
+		if (a && b) postOp({ type: 'addPipe', from, to: p, points: routePorts(a, b) });
+		ed.pipeFrom = null;
+	}
+	function endOf(a: PipeAnchor): { at: Vec3; dir: Vec3 } | null {
+		const n = doc.nodes.find((x) => x.id === a.node);
+		const port = n && portsOf(n.kind)?.[a.port];
+		return n && port ? portInFrame(n, port) : null;
+	}
+	$effect(() => {
+		dom.addEventListener('pointermove', onPortMove);
+		window.addEventListener('pointerdown', onPortDown, true);
+		dom.addEventListener('pointerup', onPortUp);
+		return () => {
+			dom.removeEventListener('pointermove', onPortMove);
+			window.removeEventListener('pointerdown', onPortDown, true);
+			dom.removeEventListener('pointerup', onPortUp);
+		};
+	});
+	$effect(() => {
+		const el = dom.querySelector('canvas') as HTMLElement | null;
+		if (el) el.style.cursor = ed.hoverPort ? 'crosshair' : '';
+	});
 
 	const deg = 180 / Math.PI;
 	/** The gizmo released: write where the node now is — unless that is

@@ -3,7 +3,7 @@
 // The host owns the file; the webview holds the sample values that drive
 // the preview, what the model told it (mesh names, bounds), and the look.
 import { vscode } from '../vscodeApi';
-import { kindMembers, type Drive, type SceneKind, type SceneLook, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
+import { kindMembers, type Drive, type SceneKind, type SceneLook, type ScenePort, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
 import { cloneSafe, opFailureMessage } from '../mimic/opPayload';
 
 /** Mirror of src/kindOps.ts (extension host). `null` deletes a field. */
@@ -14,7 +14,10 @@ export type KindOp =
 	| { type: 'addDrive'; drive: Drive; index?: number }
 	| { type: 'updateDrive'; index: number; drive: Drive }
 	| { type: 'deleteDrive'; index: number }
-	| { type: 'moveDrive'; index: number; to: number };
+	| { type: 'moveDrive'; index: number; to: number }
+	| { type: 'setPort'; name: string; port: ScenePort }
+	| { type: 'renamePort'; name: string; to: string }
+	| { type: 'deletePort'; name: string };
 
 /** Mirror of src/sceneEditorLogic.ts's AssetReport. */
 export type AssetReport = { pointer: string; path: string; file?: string };
@@ -41,6 +44,12 @@ export const kd = $state({
 	 * and the part a click picked — a drive starts on it. Webview state. */
 	hover: null as string | null,
 	picked: null as string | null,
+	/** Where the last click landed on the picked part, in the kind's frame:
+	 * the point and the surface's outward normal — where "Add port here"
+	 * puts a port, and the direction it gives it. */
+	hit: null as { at: Vec3; dir: Vec3 } | null,
+	/** The port under the pointer in the panel (its mark grows on stage). */
+	hoverPort: null as string | null,
 	bounds: null as Box | null,
 	modelState: 'none' as 'none' | 'loading' | 'ok' | 'failed',
 	/** Sample member values for the preview (never written to the file). */

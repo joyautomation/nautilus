@@ -159,3 +159,19 @@ test("setLook writes the document's look and refuses one the renderer has no ide
   const bad = applySceneOp('{"nodes":[]}', { type: "setLook", look: "neon" });
   assert.ok("error" in bad);
 });
+
+test("a pipe may be anchored to ports: addPipe with from/to, points between or none", () => {
+  const anchored = apply(BASE, { type: "addPipe", from: { node: "P101", port: "discharge" }, to: { node: "T101", port: "inlet" } });
+  const p = doc(anchored).pipes!.at(-1)!;
+  assert.deepEqual(p, { from: { node: "P101", port: "discharge" }, to: { node: "T101", port: "inlet" } });
+  assert.match(anchored, /"from": \{\n\s+"node": "P101",\n\s+"port": "discharge"\n\s+\},/);
+  const routed = apply(anchored, { type: "addPipe", from: { node: "P101", port: "discharge" }, points: [[0.5, 0.9, 0.2], [1, 0.9, 0.4]] });
+  assert.deepEqual(doc(routed).pipes!.at(-1)!.points, [[0.5, 0.9, 0.2], [1, 0.9, 0.4]]);
+  assert.match(refuse(BASE, { type: "addPipe", from: { node: "P101", port: "discharge" }, points: [] }), /at least two points counting/);
+  assert.match(refuse(BASE, { type: "addPipe", from: { node: "P999", port: "x" }, to: { node: "T101", port: "inlet" } }), /no node "P999"/);
+  // setPipePoints on an anchored pipe may empty the run.
+  const idx = doc(routed).pipes!.length - 1;
+  const straight = apply(routed, { type: "setPipePoints", index: idx, points: [[0, 1, 0]] });
+  assert.deepEqual(doc(straight).pipes![idx].points, [[0, 1, 0]]);
+  assert.match(refuse(routed, { type: "setPipePoints", index: idx, points: [] }), /at least two points counting/);
+});

@@ -75,7 +75,7 @@
 				(e.target as HTMLElement).blur();
 				return;
 			}
-			if (ed.tool === 'place') disarm();
+			if (ed.tool === 'place' || ed.pipeFrom) disarm();
 			else ed.selected = null;
 			return;
 		}
@@ -94,9 +94,11 @@
 	const hint = $derived(
 		ed.tool === 'place'
 			? `click the ground to place a ${ed.placeKind} · Shift = off-grid · Esc cancels`
-			: ed.selected
+			: ed.pipeFrom
+				? `pipe from ${ed.pipeFrom.node}.${ed.pipeFrom.port} · click another port to run it there · Esc cancels`
+				: ed.selected
 				? `drag the gizmo to move (G) or turn (R) · Shift = off-grid · Del deletes · Esc deselects`
-				: 'click a node to select it · drag to orbit, right-drag to pan, wheel to zoom · pick a kind on the left to place one'
+				: 'click a node to select it · click a port, then another, to run a pipe · drag to orbit, right-drag to pan, wheel to zoom · pick a kind on the left to place one'
 	);
 </script>
 

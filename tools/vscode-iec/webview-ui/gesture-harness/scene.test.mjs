@@ -94,6 +94,15 @@ class Scene {
 	labels() {
 		return this.b.eval('JSON.stringify(window.__labels())').then(JSON.parse);
 	}
+	ports() {
+		return this.b.eval('JSON.stringify(window.__ports())').then(JSON.parse);
+	}
+	pipeFrom() {
+		return this.b.eval('JSON.stringify(window.__pipeFrom())').then(JSON.parse);
+	}
+	pipeRows() {
+		return this.b.eval('JSON.stringify(window.__pipeRows())').then(JSON.parse);
+	}
 	canvas() {
 		return this.b.eval('JSON.stringify(window.__canvas())').then(JSON.parse);
 	}
@@ -310,6 +319,57 @@ test('S08 pick through glass: a click on the pump inside a tank picks the pump; 
 		await sleep(200);
 		assert.equal(await s.panelId(), 'T1', 'the lettering picks the node it names');
 		assert.deepEqual(await s.ops(), []);
+		assert.deepEqual(s.exceptions(), []);
+	});
+});
+
+test('S09 pipe: a click on a port, then another — ONE addPipe anchored at both ends with an orthogonal run; Esc cancels; the pipe lists and deletes', async () => {
+	const doc = {
+		...rigDoc(),
+		kinds: {
+			tank: { ports: { inlet: { at: [0, 0.47, 0], dir: [0, 1, 0] } } },
+			pump: { ports: { discharge: { at: [0, 0.22, 0], dir: [0, 1, 0] }, suction: { at: [-0.22, 0.09, 0], dir: [-1, 0, 0] } } }
+		}
+	};
+	await withScene(doc, async (s) => {
+		const ports = await s.ports();
+		assert.deepEqual(ports.map((p) => `${p.node}.${p.port}`).sort(), ['P101.discharge', 'P101.suction', 'T101.inlet'], JSON.stringify(ports));
+		const pd = ports.find((p) => p.port === 'discharge');
+		const ti = ports.find((p) => p.port === 'inlet');
+		await s.b.click(pd.x, pd.y);
+		await sleep(250);
+		assert.deepEqual(await s.pipeFrom(), { node: 'P101', port: 'discharge' });
+		assert.equal(await s.panelId(), null, 'a port click is not a node pick');
+		assert.match(await s.b.eval('window.__footer()'), /pipe from P101\.discharge/);
+		await s.b.pressKey('Escape');
+		await sleep(150);
+		assert.equal(await s.pipeFrom(), null, 'Esc cancels');
+		await s.b.click(pd.x, pd.y);
+		await sleep(250);
+		await s.b.click(ti.x, ti.y);
+		await sleep(250);
+		const ops = await s.ops();
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.equal(ops[0].type, 'addPipe');
+		assert.deepEqual(ops[0].from, { node: 'P101', port: 'discharge' });
+		assert.deepEqual(ops[0].to, { node: 'T101', port: 'inlet' });
+		// The run: up from the pump's discharge to a header above the tank's inlet lead, across, and down.
+		assert.ok(ops[0].points.length >= 2, JSON.stringify(ops[0].points));
+		const h = Math.max(...ops[0].points.map((p) => p[1]));
+		assert.ok(h > 0.47 + 0.1, `header above the inlet's lead: ${h}`);
+		assert.equal(await s.pipeFrom(), null, 'done drawing');
+		// Echoed back, the pipe lists in the panel and deletes from there.
+		const d = { ...doc, pipes: [{ from: ops[0].from, to: ops[0].to, points: ops[0].points }] };
+		await s.reset();
+		await s.deliver(d);
+		await sleep(400);
+		const rows = await s.pipeRows();
+		assert.equal(rows.length, 1);
+		assert.match(rows[0], /P101\.discharge → T101\.inlet · \d+ between/);
+		const del = await s.b.eval(`JSON.stringify((() => { const b = document.querySelector('[data-kind=pipe-row] button'); const r = b.getBoundingClientRect(); return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 }; })())`).then(JSON.parse);
+		await s.b.click(del.cx, del.cy);
+		await sleep(150);
+		assert.deepEqual(await s.ops(), [{ type: 'deletePipe', index: 0 }]);
 		assert.deepEqual(s.exceptions(), []);
 	});
 });
