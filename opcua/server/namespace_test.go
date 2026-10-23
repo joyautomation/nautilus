@@ -10,35 +10,35 @@ import (
 	"github.com/joyautomation/nautilus/runtime"
 )
 
-// newNamespace is a namespace over rt as Start would build it, at index 2,
+// newNamespace is a namespace over rt as Start would build it, at index 1,
 // with no gopcua server behind it: Browse, Attribute and SetAttribute are
 // plain methods, so the address-space rules can be checked without a
 // socket.
 func newNamespace(rt *runtime.Runtime) *namespace {
-	return &namespace{rt: rt, uri: "urn:test", title: "proj", sweep: 100 * time.Millisecond, id: 2, stamps: map[string]stamp{}}
+	return &namespace{rt: rt, uri: "urn:test", title: "proj", sweep: 100 * time.Millisecond, id: 1, stamps: map[string]stamp{}}
 }
 
 func TestNamespaceResolvesOnlyItsOwnStringIDs(t *testing.T) {
 	rt, _ := newRuntime(t)
 	ns := newNamespace(rt)
-	if m, ok := ns.resolve(ua.NewStringNodeID(2, "level")); !ok || m.addr != "Level" {
+	if m, ok := ns.resolve(ua.NewStringNodeID(1, "level")); !ok || m.addr != "Level" {
 		t.Errorf("case-folded lookup: %v %v", m, ok)
 	}
 	for _, nid := range []*ua.NodeID{
-		ua.NewStringNodeID(1, "Level"), // another namespace
+		ua.NewStringNodeID(2, "Level"), // another namespace
 		ua.NewStringNodeID(3, "Level"),
-		ua.NewNumericNodeID(2, 7),  // not a string id
-		ua.NewNumericNodeID(2, 1),  // the folder is not a member
-		ua.NewStringNodeID(2, ""),  // no tag
-		ua.NewStringNodeID(2, "."), // no tag either
-		ua.NewStringNodeID(2, "Level.X"),
+		ua.NewNumericNodeID(1, 7),  // not a string id
+		ua.NewNumericNodeID(1, 1),  // the folder is not a member
+		ua.NewStringNodeID(1, ""),  // no tag
+		ua.NewStringNodeID(1, "."), // no tag either
+		ua.NewStringNodeID(1, "Level.X"),
 		nil,
 	} {
 		if m, ok := ns.resolve(nid); ok {
 			t.Errorf("%v resolved to %s", nid, m.addr)
 		}
 	}
-	if !ns.isFolder(ua.NewNumericNodeID(2, folderID)) || ns.isFolder(ua.NewNumericNodeID(0, folderID)) || ns.isFolder(ua.NewStringNodeID(2, "1")) {
+	if !ns.isFolder(ua.NewNumericNodeID(1, folderID)) || ns.isFolder(ua.NewNumericNodeID(0, folderID)) || ns.isFolder(ua.NewStringNodeID(1, "1")) {
 		t.Error("isFolder")
 	}
 }
@@ -46,24 +46,24 @@ func TestNamespaceResolvesOnlyItsOwnStringIDs(t *testing.T) {
 func TestNamespaceAttributesOfFolderAndMembers(t *testing.T) {
 	rt, _ := newRuntime(t)
 	ns := newNamespace(rt)
-	folder := ua.NewNumericNodeID(2, folderID)
+	folder := ua.NewNumericNodeID(1, folderID)
 	if got := ns.Attribute(folder, ua.AttributeIDNodeClass).Value.Value(); got != int32(ua.NodeClassObject) {
 		t.Errorf("folder class %v", got)
 	}
-	if got := ns.Attribute(folder, ua.AttributeIDBrowseName).Value.Value().(*ua.QualifiedName); got.Name != "proj" || got.NamespaceIndex != 2 {
+	if got := ns.Attribute(folder, ua.AttributeIDBrowseName).Value.Value().(*ua.QualifiedName); got.Name != "proj" || got.NamespaceIndex != 1 {
 		t.Errorf("folder browse name %+v", got)
 	}
 	if st := ns.Attribute(folder, ua.AttributeIDValue).Status; st != ua.StatusBadAttributeIDInvalid {
 		t.Errorf("folder value: %s", st)
 	}
-	if st := ns.Attribute(ua.NewStringNodeID(2, "Nope"), ua.AttributeIDBrowseName).Status; st != ua.StatusBadNodeIDUnknown {
+	if st := ns.Attribute(ua.NewStringNodeID(1, "Nope"), ua.AttributeIDBrowseName).Status; st != ua.StatusBadNodeIDUnknown {
 		t.Errorf("unknown node: %s", st)
 	}
 	if st := ns.Attribute(ua.NewStringNodeID(5, "Level"), ua.AttributeIDValue).Status; st != ua.StatusBadNodeIDUnknown {
 		t.Errorf("foreign namespace: %s", st)
 	}
 
-	speed := ua.NewStringNodeID(2, "P101.Drive.Speed")
+	speed := ua.NewStringNodeID(1, "P101.Drive.Speed")
 	attrs := map[ua.AttributeID]any{
 		ua.AttributeIDNodeClass:               int32(ua.NodeClassVariable),
 		ua.AttributeIDValueRank:               int32(-1),
@@ -104,7 +104,7 @@ func TestNamespaceAttributesOfFolderAndMembers(t *testing.T) {
 	}
 
 	// An object: class, event notifier, no value/data type.
-	p101 := ua.NewStringNodeID(2, "P101")
+	p101 := ua.NewStringNodeID(1, "P101")
 	if got := ns.Attribute(p101, ua.AttributeIDNodeClass).Value.Value(); got != int32(ua.NodeClassObject) {
 		t.Errorf("P101 class %v", got)
 	}
@@ -118,7 +118,7 @@ func TestNamespaceAttributesOfFolderAndMembers(t *testing.T) {
 	}
 
 	// An array variable: rank 1, its length as the one dimension.
-	hours := ua.NewStringNodeID(2, "P101.Hours")
+	hours := ua.NewStringNodeID(1, "P101.Hours")
 	if got := ns.Attribute(hours, ua.AttributeIDValueRank).Value.Value(); got != int32(1) {
 		t.Errorf("Hours rank %v", got)
 	}
@@ -143,7 +143,7 @@ func TestNamespaceDescriptionFromTagMeta(t *testing.T) {
 	}
 	ns := newNamespace(rt)
 	for name, want := range map[string]string{"A": "Flow [gpm]", "B": "Flow", "C": "[gpm]", "D": ""} {
-		got := ns.Attribute(ua.NewStringNodeID(2, name), ua.AttributeIDDescription).Value.Value().(*ua.LocalizedText).Text
+		got := ns.Attribute(ua.NewStringNodeID(1, name), ua.AttributeIDDescription).Value.Value().(*ua.LocalizedText).Text
 		if got != want {
 			t.Errorf("%s description %q, want %q", name, got, want)
 		}
@@ -165,7 +165,7 @@ func TestNamespaceBrowseReferences(t *testing.T) {
 		return out
 	}
 	// The folder: type definition, its parent Objects (inverse), the tags.
-	folder := ua.NewNumericNodeID(2, folderID)
+	folder := ua.NewNumericNodeID(1, folderID)
 	fwd := all(folder, ua.BrowseDirectionForward)
 	if fwd["FolderType"] == nil || fwd["FolderType"].ReferenceTypeID.IntID() != id.HasTypeDefinition {
 		t.Errorf("folder forward refs %v", fwd)
@@ -178,23 +178,23 @@ func TestNamespaceBrowseReferences(t *testing.T) {
 		t.Errorf("folder inverse refs %v", inv)
 	}
 	// A tag: inverse is the folder; a member: inverse is its parent.
-	if inv := all(ua.NewStringNodeID(2, "Level"), ua.BrowseDirectionInverse); len(inv) != 1 || inv["proj"] == nil || inv["proj"].NodeID.NodeID.IntID() != folderID {
+	if inv := all(ua.NewStringNodeID(1, "Level"), ua.BrowseDirectionInverse); len(inv) != 1 || inv["proj"] == nil || inv["proj"].NodeID.NodeID.IntID() != folderID {
 		t.Errorf("Level inverse refs %v", inv)
 	}
-	inv = all(ua.NewStringNodeID(2, "P101.Drive.Speed"), ua.BrowseDirectionInverse)
+	inv = all(ua.NewStringNodeID(1, "P101.Drive.Speed"), ua.BrowseDirectionInverse)
 	if len(inv) != 1 || inv["Drive"] == nil || inv["Drive"].NodeID.NodeID.StringID() != "P101.Drive" || inv["Drive"].ReferenceTypeID.IntID() != id.HasComponent {
 		t.Errorf("Speed inverse refs %v", inv)
 	}
-	if inv := all(ua.NewStringNodeID(2, "Pumps[2].Hours"), ua.BrowseDirectionInverse); inv["Pumps[2]"] == nil || inv["Pumps[2]"].NodeID.NodeID.StringID() != "Pumps[2]" {
+	if inv := all(ua.NewStringNodeID(1, "Pumps[2].Hours"), ua.BrowseDirectionInverse); inv["Pumps[2]"] == nil || inv["Pumps[2]"].NodeID.NodeID.StringID() != "Pumps[2]" {
 		t.Errorf("Pumps[2].Hours inverse refs %v", inv)
 	}
 	// A variable's forward refs: its type definition only.
-	fwd = all(ua.NewStringNodeID(2, "Level"), ua.BrowseDirectionForward)
+	fwd = all(ua.NewStringNodeID(1, "Level"), ua.BrowseDirectionForward)
 	if len(fwd) != 1 || fwd["BaseDataVariableType"] == nil || fwd["BaseDataVariableType"].NodeClass != ua.NodeClassVariableType {
 		t.Errorf("Level forward refs %v", fwd)
 	}
 	// An object's: type definition and components.
-	fwd = all(ua.NewStringNodeID(2, "P101"), ua.BrowseDirectionForward)
+	fwd = all(ua.NewStringNodeID(1, "P101"), ua.BrowseDirectionForward)
 	if fwd["BaseObjectType"] == nil || fwd["Drive"] == nil || fwd["Drive"].ReferenceTypeID.IntID() != id.HasComponent || fwd["Drive"].NodeClass != ua.NodeClassObject || fwd["Running"].NodeClass != ua.NodeClassVariable {
 		t.Errorf("P101 forward refs %v", fwd)
 	}
@@ -206,7 +206,7 @@ func TestNamespaceBrowseReferences(t *testing.T) {
 		}
 	}
 	// Bad requests.
-	if st := ns.Browse(&ua.BrowseDescription{NodeID: ua.NewStringNodeID(2, "Nope")}).StatusCode; st != ua.StatusBadNodeIDUnknown {
+	if st := ns.Browse(&ua.BrowseDescription{NodeID: ua.NewStringNodeID(1, "Nope")}).StatusCode; st != ua.StatusBadNodeIDUnknown {
 		t.Errorf("unknown: %s", st)
 	}
 	if st := ns.Browse(&ua.BrowseDescription{}).StatusCode; st != ua.StatusBadNodeIDInvalid {
@@ -220,7 +220,7 @@ func TestNamespaceBrowseReferences(t *testing.T) {
 func TestNamespaceBrowseOrderIsStable(t *testing.T) {
 	rt, _ := newRuntime(t)
 	ns := newNamespace(rt)
-	bd := &ua.BrowseDescription{NodeID: ua.NewNumericNodeID(2, folderID), BrowseDirection: ua.BrowseDirectionForward, NodeClassMask: uint32(ua.NodeClassVariable | ua.NodeClassObject)}
+	bd := &ua.BrowseDescription{NodeID: ua.NewNumericNodeID(1, folderID), BrowseDirection: ua.BrowseDirectionForward, NodeClassMask: uint32(ua.NodeClassVariable | ua.NodeClassObject)}
 	first := ns.Browse(bd).References
 	for i := 0; i < 5; i++ {
 		again := ns.Browse(bd).References
@@ -245,11 +245,11 @@ func TestNamespaceSetAttributeRefusesEverything(t *testing.T) {
 	ns := newNamespace(rt)
 	dv := &ua.DataValue{EncodingMask: ua.DataValueValue, Value: ua.MustVariant(1.0)}
 	cases := map[*ua.NodeID]map[ua.AttributeID]ua.StatusCode{
-		ua.NewStringNodeID(2, "Level"):            {ua.AttributeIDValue: ua.StatusBadUserAccessDenied, ua.AttributeIDDescription: ua.StatusBadNotWritable},
-		ua.NewStringNodeID(2, "P101.Drive.Speed"): {ua.AttributeIDValue: ua.StatusBadUserAccessDenied},
-		ua.NewStringNodeID(2, "P101"):             {ua.AttributeIDValue: ua.StatusBadNotWritable},
-		ua.NewNumericNodeID(2, folderID):          {ua.AttributeIDValue: ua.StatusBadNotWritable, ua.AttributeIDDisplayName: ua.StatusBadNotWritable},
-		ua.NewStringNodeID(2, "Nope"):             {ua.AttributeIDValue: ua.StatusBadNodeIDUnknown},
+		ua.NewStringNodeID(1, "Level"):            {ua.AttributeIDValue: ua.StatusBadUserAccessDenied, ua.AttributeIDDescription: ua.StatusBadNotWritable},
+		ua.NewStringNodeID(1, "P101.Drive.Speed"): {ua.AttributeIDValue: ua.StatusBadUserAccessDenied},
+		ua.NewStringNodeID(1, "P101"):             {ua.AttributeIDValue: ua.StatusBadNotWritable},
+		ua.NewNumericNodeID(1, folderID):          {ua.AttributeIDValue: ua.StatusBadNotWritable, ua.AttributeIDDisplayName: ua.StatusBadNotWritable},
+		ua.NewStringNodeID(1, "Nope"):             {ua.AttributeIDValue: ua.StatusBadNodeIDUnknown},
 	}
 	for nid, attrs := range cases {
 		for a, want := range attrs {

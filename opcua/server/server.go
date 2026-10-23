@@ -136,8 +136,9 @@ func (s *Server) Start(ctx context.Context) error {
 		return nil
 	}
 	port := s.port
+	listen, aliases := endpointHosts(s.host)
 	if port == 0 {
-		p, err := freePort(s.host)
+		p, err := freePort(listen)
 		if err != nil {
 			s.lastErr = err
 			return err
@@ -150,14 +151,21 @@ func (s *Server) Start(ctx context.Context) error {
 	// written to the logger in this window passes through untouched.
 	restore := quietGopcua()
 	defer restore()
-	srv := opcserver.New(
-		opcserver.EndPoint(s.host, port),
-		opcserver.ServerName("Nautilus · "+s.opts.Name),
+	// gopcua listens on the first endpoint and advertises them all, and a
+	// client finds an endpoint only by its exact URL: the listener's own,
+	// then one per name it answers to (see endpointHosts).
+	opts := []opcserver.Option{
+		opcserver.EndPoint(listen, port),
+		opcserver.ServerName("Nautilus · " + s.opts.Name),
 		opcserver.ManufacturerName("Joy Automation"),
 		opcserver.ProductName("Nautilus"),
 		opcserver.EnableSecurity("None", ua.MessageSecurityModeNone),
 		opcserver.EnableAuthMode(ua.UserTokenTypeAnonymous),
-	)
+	}
+	for _, a := range aliases {
+		opts = append(opts, opcserver.EndPoint(a, port))
+	}
+	srv := opcserver.New(opts...)
 	ns := &namespace{
 		rt:     s.rt,
 		uri:    "urn:joyautomation:nautilus:" + s.opts.Name,
@@ -166,6 +174,7 @@ func (s *Server) Start(ctx context.Context) error {
 		stamps: map[string]stamp{},
 	}
 	srv.AddNamespace(ns)
+	registerServices(srv, ns)
 	// Hang the project folder off ns=0's Objects, where every client
 	// starts browsing.
 	root, err := srv.Namespace(0)
@@ -184,8 +193,13 @@ func (s *Server) Start(ctx context.Context) error {
 		s.lastErr = err
 		return fmt.Errorf("opcua: listen %s: %w", net.JoinHostPort(s.host, strconv.Itoa(port)), err)
 	}
+	// Every value the store holds now was first seen now, as far as any
+	// OPC UA client can tell: stamp them before the first read, or the
+	// first client to read a tag would date every initial value to its
+	// own connect time.
+	ns.seed(time.Now())
 	s.srv, s.ns, s.cancel = srv, ns, cancel
-	s.url = "opc.tcp://" + net.JoinHostPort(s.host, strconv.Itoa(port))
+	s.url = endpointURL(listen, port)
 	s.up, s.since, s.lastErr = true, time.Now(), nil
 	s.done = make(chan struct{})
 	go s.sweep(cctx, s.done)
@@ -207,16 +221,18 @@ func (s *Server) Stop() {
 	<-done
 }
 
-// URL is the endpoint the server listens on — the configured one, or the
-// one a port of 0 resolved to. Empty before Start.
+// URL is the endpoint the server listens on, as a client dials it: the
+// address the configured host resolved to (127.0.0.1 for localhost) and
+// the port a port of 0 resolved to. Empty before Start.
 func (s *Server) URL() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.url
 }
 
-// NamespaceIndex is the namespace index tag nodes live in (ns=2 unless
-// gopcua grows another built-in namespace). 0 before Start.
+// NamespaceIndex is the namespace index tag nodes live in: 1, the entry
+// after ns=0's http://opcfoundation.org/UA/ in the NamespaceArray (gopcua
+// has no other built-in namespace). 0 before Start.
 func (s *Server) NamespaceIndex() uint16 {
 	s.mu.Lock()
 	defer s.mu.Unlock()

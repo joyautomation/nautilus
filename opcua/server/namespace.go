@@ -8,10 +8,10 @@
 // that already knows nautilus (an HMI binding, a test manifest, a Sparkplug
 // metric name) can write the node id down without browsing for it:
 //
-//	ns=2;s=Level              a tag
-//	ns=2;s=P101.Drive.Speed   a member of a UDT tag
-//	ns=2;s=Levels[2]          an element of an array of structs
-//	ns=2;i=1                  the project folder under Objects
+//	ns=1;s=Level              a tag
+//	ns=1;s=P101.Drive.Speed   a member of a UDT tag
+//	ns=1;s=Levels[2]          an element of an array of structs
+//	ns=1;i=1                  the project folder under Objects
 //
 // A struct, an FB instance and an array of either are Objects with one
 // child per member; a scalar and an array of scalars are Variables. Tag
@@ -441,6 +441,17 @@ func (ns *namespace) readValue(m member) *ua.DataValue {
 		dv.SourceTimestamp = ns.stampAt(root, gen, now)
 	}
 	return dv
+}
+
+// seed records now as the time every tag's current generation was first
+// seen: the server's start, for a value nothing has changed since.
+func (ns *namespace) seed(now time.Time) {
+	tags := ns.rt.Tags()
+	for _, name := range tags.AppendNames(nil) {
+		if gen, ok := tags.TagGeneration(name); ok {
+			ns.stampAt(name, gen, now)
+		}
+	}
 }
 
 // stampAt returns the time generation gen of root was first seen, recording
