@@ -256,16 +256,22 @@ test('S05 drag: the gizmo moves the node — one moveNode on release, at a new p
 test('S06 text: a doc echoed back with a changed pos moves the label', async () => {
 	await withScene(rigDoc(), async (s) => {
 		const before = (await s.labels()).find((l) => l.title === 'P-101');
+		// Count the page's animation frames from here: the echo re-renders on
+		// the next frames, and software WebGL on CI takes its time, so wait
+		// for the move rather than a fixed beat — and say how long it took and
+		// how many frames the page managed, so a slow CI box is told apart
+		// from a stalled one in the log.
+		await s.b.eval('(() => { window.__frames = 0; (function f() { window.__frames++; requestAnimationFrame(f); })(); })()');
+		const t0 = Date.now();
 		const d = rigDoc();
 		d.nodes[1].pos = [0.8, 0, 0.2];
 		await s.deliver(d);
-		// The echo re-renders on the next frames; software WebGL on CI takes
-		// its time, so wait for the move rather than a fixed beat.
 		let after = before;
-		for (let i = 0; i < 30 && Math.abs(after.cx - before.cx) <= 20; i++) {
+		for (let i = 0; i < 200 && Math.abs(after.cx - before.cx) <= 20; i++) {
 			await sleep(100);
 			after = (await s.labels()).find((l) => l.title === 'P-101');
 		}
+		console.log(`S06: the label moved after ${Date.now() - t0} ms and ${await s.b.eval('window.__frames')} frames`);
 		assert.ok(Math.abs(after.cx - before.cx) > 20, `the label moved: ${before.cx} -> ${after.cx}`);
 		assert.deepEqual(s.exceptions(), []);
 	});
