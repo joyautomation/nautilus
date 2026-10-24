@@ -168,7 +168,14 @@ else ever fails to render. Tests pin all three.
   (2) The **custom data area** ("MMP Pointers"): scattered channel
   addresses are mapped into one contiguous block, sized for "4 pointers
   × 32 channels × 16 modules = 2048", so a whole rack is one read or one
-  stream. (3) The I/O unit's **communication watchdog** (off by default)
+  stream. Where the pointers point matters, and the strings do not show
+  which addresses Opto's driver uses. Measured on the `optommp-driver`
+  branch: a pointer into the packed values (`F1000300`) costs `mmpServer`
+  about 0.5 ms each time it is resolved. 36 of them streamed every 20 ms
+  held it at 90 % of a core. Pointers into the expanded per-channel read
+  areas return the same values, NaN included, for next to nothing. The
+  stream configuration is also stored to flash, so a driver that sets it
+  must restore it on a clean stop. (3) The I/O unit's **communication watchdog** (off by default)
   and a **power-up-clear check** ("PUC expected before communicating
   with I/O unit"). On quality: the CODESYS process image carries **no
   per-channel status**. An analog channel maps `EU` (a REAL) and nothing
