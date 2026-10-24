@@ -34,6 +34,11 @@ type ManifestOptions struct {
 	// ScratchBits / ScratchInts / ScratchFloats add that many writable
 	// scratchpad tags from element 0.
 	ScratchBits, ScratchInts, ScratchFloats int
+	// CustomArea, Stream and Watchdog are copied into the manifest
+	// (Manifest documents them); Watchdog nil leaves the unit's alone.
+	CustomArea bool
+	Stream     time.Duration
+	Watchdog   *time.Duration
 }
 
 // GenerateManifest maps every configured I/O channel of the chassis onto a
@@ -46,7 +51,12 @@ func GenerateManifest(ch Chassis, o ManifestOptions) (Manifest, error) {
 	if o.Host == "" {
 		return Manifest{}, fmt.Errorf("optommp: a host is required")
 	}
-	m := Manifest{Host: o.Host, Port: o.Port, ScanRate: Duration(o.ScanRate), Unit: ch.Part}
+	m := Manifest{Host: o.Host, Port: o.Port, ScanRate: Duration(o.ScanRate), Unit: ch.Part,
+		CustomArea: o.CustomArea && o.Stream == 0, Stream: Duration(o.Stream)}
+	if o.Watchdog != nil {
+		w := Duration(*o.Watchdog)
+		m.Watchdog = &w
+	}
 	for _, mod := range ch.Modules {
 		info, _ := LookupModule(mod.Type)
 		n := info.Channels
@@ -133,6 +143,18 @@ func ManifestYAML(m Manifest, command string) []byte {
 	}
 	if m.Unit != "" {
 		fmt.Fprintf(&b, "unit: %s\n", yamlString(m.Unit))
+	}
+	if m.CustomArea {
+		b.WriteString("custom-area: true\n")
+	}
+	if m.Stream != 0 {
+		fmt.Fprintf(&b, "stream: %s\n", time.Duration(m.Stream))
+	}
+	if m.StreamPort != 0 {
+		fmt.Fprintf(&b, "stream-port: %d\n", m.StreamPort)
+	}
+	if m.Watchdog != nil {
+		fmt.Fprintf(&b, "watchdog: %s\n", time.Duration(*m.Watchdog))
 	}
 	if len(m.Modules) > 0 {
 		b.WriteString("modules:\n")
@@ -260,6 +282,15 @@ func ManifestCommand(o ManifestOptions) string {
 	}
 	if o.ScratchFloats > 0 {
 		fmt.Fprintf(&b, " --scratch-floats %d", o.ScratchFloats)
+	}
+	if o.CustomArea && o.Stream == 0 {
+		b.WriteString(" --custom-area")
+	}
+	if o.Stream != 0 {
+		fmt.Fprintf(&b, " --stream %s", o.Stream)
+	}
+	if o.Watchdog != nil {
+		fmt.Fprintf(&b, " --watchdog %s", *o.Watchdog)
 	}
 	return b.String()
 }

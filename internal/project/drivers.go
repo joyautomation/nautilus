@@ -613,7 +613,23 @@ func optommpStatus(h optommp.Health) server.DriverStatus {
 		{Label: "reads", Value: float64(h.Reads), Volatile: true},
 		{Label: "writes", Value: float64(h.Writes), Volatile: true},
 		{Label: "errors", Value: float64(h.Errors)},
-		{Label: "scan", Value: float64(h.ScanUs) / 1000, Text: fmt.Sprintf("%.2f ms, %d request(s) every %s", float64(h.ScanUs)/1000, h.Requests, h.ScanRate), Volatile: true},
+	}
+	switch h.Mode {
+	case "stream":
+		s.Metrics = append(s.Metrics,
+			server.DriverMetric{Label: "stream", Value: float64(h.GapMaxUs) / 1000, Text: fmt.Sprintf("every %s, longest gap %.1f ms", h.Stream, float64(h.GapMaxUs)/1000), Volatile: true},
+			server.DriverMetric{Label: "late", Value: float64(h.Late)})
+	default:
+		how := ""
+		if h.Mode == "custom area" {
+			how = " through the custom area"
+		}
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "scan", Value: float64(h.ScanUs) / 1000,
+			Text: fmt.Sprintf("%.2f ms, %d request(s) every %s%s", float64(h.ScanUs)/1000, h.Requests, h.ScanRate, how), Volatile: true})
+	}
+	if h.WatchdogMs > 0 {
+		s.Metrics = append(s.Metrics, server.DriverMetric{Label: "watchdog", Value: float64(h.WatchdogMs),
+			Text: fmt.Sprintf("%d ms, %d of %d bound outputs have a watchdog value", h.WatchdogMs, h.Armed, h.Armable)})
 	}
 	return s
 }

@@ -57,6 +57,15 @@ Import flags:
                  Add N writable scratchpad tags of that kind from element 0
                  (<id>_SP_B0, _I0, _F0): the registers a PAC Control
                  strategy or groov View on the same unit shares
+  --custom-area  Map every word a scan needs into the processor's custom
+                 data area, so a scan is one read (rewrites its pointers)
+  --stream D     Have the processor push inputs over UDP every D instead of
+                 being polled (implies --custom-area; rewrites its streaming
+                 configuration, restored when the driver stops)
+  --watchdog D   Set the I/O unit's communication watchdog to D (0s turns it
+                 off): outputs with a watchdog value set in groov Manage go
+                 to it after D without a request. Left out, the unit's
+                 setting is left alone
   --modbus       Write the Modbus projection instead
   --modbus-port  Modbus/TCP port that manifest polls (default 502)
 
@@ -132,6 +141,9 @@ func runOptommpImport(args []string) int {
 	sBits := fs.Int("scratch-bits", 0, "writable scratchpad bit tags to add")
 	sInts := fs.Int("scratch-ints", 0, "writable scratchpad integer tags to add")
 	sFloats := fs.Int("scratch-floats", 0, "writable scratchpad float tags to add")
+	customArea := fs.Bool("custom-area", false, "fetch through the processor's custom data area")
+	stream := fs.Duration("stream", 0, "stream interval (0: poll)")
+	watchdog := fs.String("watchdog", "", "I/O unit communication watchdog (0s: off; empty: leave alone)")
 	asModbus := fs.Bool("modbus", false, "write the Modbus projection instead")
 	modbusPort := fs.Int("modbus-port", 502, "Modbus/TCP port the --modbus manifest polls")
 	ch, ok := optommpScan(fs, args, host, port, timeout, "import")
@@ -171,6 +183,14 @@ func runOptommpImport(args []string) int {
 			ID: *id, Host: dialHost, Port: *port, ScanRate: *scanRate,
 			Latches: *latches, Quality: *quality,
 			ScratchBits: *sBits, ScratchInts: *sInts, ScratchFloats: *sFloats,
+			CustomArea: *customArea, Stream: *stream,
+		}
+		if *watchdog != "" {
+			wd, err := time.ParseDuration(*watchdog)
+			if err != nil {
+				return fail(fmt.Errorf("--watchdog: %w", err))
+			}
+			opts.Watchdog = &wd
 		}
 		if opts.Port == optommp.DefaultPort {
 			opts.Port = 0

@@ -104,3 +104,28 @@ func TestOptommpImportModbus(t *testing.T) {
 		t.Error("--modbus also wrote an optommp manifest")
 	}
 }
+
+func TestOptommpImportCommOptions(t *testing.T) {
+	port := optommptest.NewBench().Listen(t)
+	dir := t.TempDir()
+	out, code := capture(t, func() int {
+		return runOptommp([]string{"import", "--host", "127.0.0.1", "--port", fmt.Sprint(port), "--out", dir,
+			"--stream", "20ms", "--watchdog", "0s"})
+	})
+	if code != 0 {
+		t.Fatalf("import exited %d:\n%s", code, out)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, "optommp_manifest.yaml"))
+	m, err := optommp.ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Stream == 0 || m.Watchdog == nil || *m.Watchdog != 0 || !strings.Contains(string(raw), "--stream 20ms --watchdog 0s") {
+		t.Errorf("manifest:\n%s", raw[:300])
+	}
+	if _, code := capture(t, func() int {
+		return runOptommp([]string{"import", "--host", "127.0.0.1", "--port", fmt.Sprint(port), "--out", dir, "--watchdog", "soon"})
+	}); code == 0 {
+		t.Error("a bad --watchdog was accepted")
+	}
+}

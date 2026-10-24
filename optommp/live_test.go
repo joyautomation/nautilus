@@ -9,12 +9,21 @@ package optommp
 // output slot 1 channel 3 on and off and expects input slot 0 channel 6
 // to follow (a field wire between them — the bench EPIC has four), and
 // exercises scratchpad float 1023; both are left as found.
+//
+// NAUT_OPTOMMP_MODE picks how inputs arrive: poll (default), custom (the
+// custom data area, one read a scan) or stream=20ms (pushed over UDP; the
+// test checks the pointers and streaming configuration are put back as
+// found).
+// NAUT_OPTOMMP_HOLD=20s keeps the driver running that long after the
+// checks, for measuring the processor's load.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -31,11 +40,50 @@ func TestLiveDriver(t *testing.T) {
 		t.Fatal(err)
 	}
 	ch, err := Scan(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamWas, err := c.Read(addrStreamConfig, streamConfigLen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pointersWas, err := c.Read(addrCustomConfig, MaxBlock)
 	c.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, err := GenerateManifest(ch, ManifestOptions{ID: "LIVE", Host: host, Latches: true})
+	o := ManifestOptions{ID: "LIVE", Host: host, Latches: true}
+	switch mode := os.Getenv("NAUT_OPTOMMP_MODE"); {
+	case mode == "" || mode == "poll":
+	case mode == "custom":
+		o.CustomArea = true
+	case strings.HasPrefix(mode, "stream="):
+		if o.Stream, err = time.ParseDuration(strings.TrimPrefix(mode, "stream=")); err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatalf("NAUT_OPTOMMP_MODE %q: want poll, custom or stream=<interval>", mode)
+	}
+	if o.CustomArea || o.Stream > 0 {
+		defer func() {
+			c, err := Dial(context.Background(), host, 0, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			now, err := c.Read(addrStreamConfig, streamConfigLen)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(now[8:], streamWas[8:]) {
+				t.Errorf("streaming configuration not restored:\nwas % x\nnow % x", streamWas, now)
+			}
+			if p, err := c.Read(addrCustomConfig, MaxBlock); err != nil || !bytes.Equal(p, pointersWas) {
+				t.Errorf("custom data area pointers not restored (%v)", err)
+			}
+		}()
+	}
+	m, err := GenerateManifest(ch, o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +106,7 @@ func TestLiveDriver(t *testing.T) {
 	}
 	eventually("first scan", func() bool { return drv.Health().Reads > 2 })
 	h := drv.Health()
-	t.Logf("%s firmware %s: %d tags, %d bad, %d requests/scan, last scan %d µs", h.Unit, h.Firmware, h.Tags, h.BadTags, h.Requests, h.ScanUs)
+	t.Logf("%s firmware %s, %s: %d tags, %d bad, %d requests/scan, last scan %d µs", h.Unit, h.Firmware, h.Mode, h.Tags, h.BadTags, h.Requests, h.ScanUs)
 	if h.Faults != "" {
 		t.Errorf("chassis faults on a fresh import: %s", h.Faults)
 	}
@@ -102,4 +150,10 @@ func TestLiveDriver(t *testing.T) {
 	eventually("scratch float read back", func() bool { x, _ := drv.ReadInputs(); return x["LIVE_SP_F1023"] == 12.5 })
 	drv.WriteOutputs(nio.Values{"LIVE_SP_F1023": prev})
 	eventually("scratch float restored", func() bool { x, _ := drv.ReadInputs(); return x["LIVE_SP_F1023"] == prev })
+	if hold, _ := time.ParseDuration(os.Getenv("NAUT_OPTOMMP_HOLD")); hold > 0 {
+		time.Sleep(hold)
+	}
+	if h := drv.Health(); h.Mode == "stream" {
+		t.Logf("stream: %d datagrams, longest gap %.2f ms, late %d", h.Reads, float64(h.GapMaxUs)/1000, h.Late)
+	}
 }

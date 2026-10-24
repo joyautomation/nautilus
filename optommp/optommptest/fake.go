@@ -13,6 +13,7 @@ import (
 	"net"
 	"sync"
 	"testing"
+	"time"
 )
 
 // The memory-map addresses the fake acts on (form 1465).
@@ -26,9 +27,22 @@ const (
 	addrDigitalPacked   = 0xF1001900
 	addrDigitalMOMO     = 0xF1001A00
 	addrAnalogWrite     = 0xF02A0000
+	addrAnalogRead      = 0xF0260000
+	addrDigitalRead     = 0xF01E0000
 	addrDigitalClear    = 0xF02E0000
 	addrScratchBits     = 0xF0D80000
 	addrScratchOn       = 0xF0D80400
+	addrWatchdog        = 0xF0300054
+	addrSetWatchdog     = 0xF0380010
+	addrCustomConfig    = 0xF0D50000
+	addrCustomData      = 0xF0D60000
+	customWords         = 1024
+	addrStreamStart     = 0xF03FFFC8
+	addrStreamSize      = 0xF03FFFCC
+	addrStreamOn        = 0xF03FFFD0
+	addrStreamInterval  = 0xF03FFFD4
+	addrStreamPort      = 0xF03FFFD8
+	addrStreamTarget    = 0xF03FFFE0
 
 	configModuleStride  = 0x3000
 	configChannelStride = 0xC0
@@ -62,6 +76,12 @@ type Device struct {
 	reqs int // requests served
 	// drop, when set, closes the connection on the next request.
 	drop bool
+
+	lastReq  time.Time // when the last request arrived (watchdog)
+	tripped  bool      // the watchdog fired
+	streams  int       // datagrams sent
+	paused   bool      // streaming withheld (a lost stream)
+	streamer bool      // the streaming goroutine is running
 }
 
 // NewBench is the bench GRV-EPIC-PR1: slot 0 GRV-IACDCTTL-24 (DI 3 on),
@@ -69,6 +89,9 @@ type Device struct {
 // slot 3 GRV-IV-24 at ±160 V (ch 0 8.4 V); every other value NaN.
 func NewBench() *Device {
 	d := &Device{mem: map[uint32]byte{}}
+	// Streaming as the bench unit shipped: off, 1000 ms, port 5001.
+	d.putU32(addrStreamInterval, 1000)
+	d.putU32(addrStreamPort, 5001)
 	d.put(addrUnitDescription, []byte("GRV-EPIC-PR1"))
 	d.put(addrFirmware, []byte{3, 6, 1, 0})
 	module := func(slot int, mtype uint32, chans int, ctype uint32) {
@@ -128,6 +151,44 @@ func (d *Device) u32(addr uint32) uint32 {
 	return binary.BigEndian.Uint32([]byte{d.mem[addr], d.mem[addr+1], d.mem[addr+2], d.mem[addr+3]})
 }
 
+// read is what a block read returns: the custom data area resolves each
+// word through its pointer (an unset pointer reads 0), as on the bench.
+func (d *Device) read(addr uint32, n int) []byte {
+	out := make([]byte, n)
+	for i := 0; i < n; i++ {
+		a := addr + uint32(i)
+		if a >= addrCustomData && a < addrCustomData+4*customWords {
+			if p := d.u32(addrCustomConfig + (a-addrCustomData)&^3); p != 0 {
+				out[i] = d.mem[d.alias(p+(a-addrCustomData)&3)]
+			}
+			continue
+		}
+		out[i] = d.mem[d.alias(a)]
+	}
+	return out
+}
+
+// alias maps the expanded per-channel read areas onto the packed values
+// they mirror: an analog channel's EU value, a digital channel's feature
+// value.
+func (d *Device) alias(a uint32) uint32 {
+	switch {
+	case a >= addrAnalogRead && a < addrAnalogRead+maxModules*pointModuleStride:
+		off := a - addrAnalogRead
+		slot, ch, field := off/pointModuleStride, off%pointModuleStride/pointChannelStride, off%pointChannelStride
+		if ch < maxChannels && field < 4 {
+			return addrPackedValues + slot*valuesModuleStride + ch*4 + field
+		}
+	case a >= addrDigitalRead && a < addrDigitalRead+maxModules*clearModuleStride:
+		off := a - addrDigitalRead
+		slot, ch, field := off/clearModuleStride, off%clearModuleStride/clearChannelStride, off%clearChannelStride
+		if ch < maxChannels && field >= 0x10 && field < 0x14 {
+			return addrPackedValues + slot*valuesModuleStride + ch*4 + field - 0x10
+		}
+	}
+	return a
+}
+
 // U32 reads a quadlet of the device's memory.
 func (d *Device) U32(addr uint32) uint32 {
 	d.mu.Lock()
@@ -167,6 +228,13 @@ func (d *Device) setDigital(slot, ch int, on bool) {
 // effects acts out a write's side effects.
 func (d *Device) effects(addr uint32, data []byte) {
 	switch {
+	case addr == addrSetWatchdog && len(data) == 4:
+		d.put(addrWatchdog, data)
+	case addr <= addrStreamOn && addr+uint32(len(data)) > addrStreamOn:
+		if d.u32(addrStreamOn) != 0 && !d.streamer {
+			d.streamer = true
+			go d.stream()
+		}
 	case addr >= addrDigitalMOMO && addr < addrDigitalMOMO+0x80:
 		for off := 0; off+8 <= len(data); off += 8 {
 			slot := int(addr-addrDigitalMOMO)/momoModuleStride + off/momoModuleStride
@@ -227,6 +295,7 @@ func (d *Device) Serve(conn net.Conn) {
 		n := int(binary.BigEndian.Uint16(hdr[12:14]))
 		d.mu.Lock()
 		d.reqs++
+		d.feedWatchdog()
 		if d.drop {
 			d.drop = false
 			d.mu.Unlock()
@@ -237,9 +306,7 @@ func (d *Device) Serve(conn net.Conn) {
 			resp := make([]byte, 16+n)
 			resp[3] = tcodeReadBlockResponse << 4
 			binary.BigEndian.PutUint16(resp[12:14], uint16(n))
-			for i := 0; i < n; i++ {
-				resp[16+i] = d.mem[addr+uint32(i)]
-			}
+			copy(resp[16:], d.read(addr, n))
 			d.readEffects(addr, n)
 			d.mu.Unlock()
 			conn.Write(resp)
@@ -258,6 +325,87 @@ func (d *Device) Serve(conn net.Conn) {
 			d.mu.Unlock()
 		}
 	}
+}
+
+// feedWatchdog records a request, and a trip if the gap since the last
+// one outran the watchdog time.
+func (d *Device) feedWatchdog() {
+	now := time.Now()
+	d.checkWatchdog(now)
+	d.lastReq = now
+}
+
+func (d *Device) checkWatchdog(now time.Time) {
+	wd := time.Duration(d.u32(addrWatchdog)) * time.Millisecond
+	if wd > 0 && !d.lastReq.IsZero() && now.Sub(d.lastReq) > wd {
+		d.tripped = true
+	}
+}
+
+// WatchdogTripped reports whether the communication watchdog has fired:
+// a gap between requests (or since the last one) longer than its time.
+func (d *Device) WatchdogTripped() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.checkWatchdog(time.Now())
+	return d.tripped
+}
+
+// stream sends the configured area to target #1 every interval while
+// streaming is on, the way the bench unit does: a 2-byte length (header
+// included), a zero, 0xAn with n counting up, the start address, the data.
+func (d *Device) stream() {
+	var u *net.UDPConn
+	defer func() {
+		if u != nil {
+			u.Close()
+		}
+	}()
+	for seq := byte(0); ; seq++ {
+		d.mu.Lock()
+		if d.u32(addrStreamOn) == 0 {
+			d.streamer = false
+			d.mu.Unlock()
+			return
+		}
+		interval := time.Duration(d.u32(addrStreamInterval)) * time.Millisecond
+		start, size := d.u32(addrStreamStart), int(d.u32(addrStreamSize))
+		to := &net.UDPAddr{IP: net.IP(d.read(addrStreamTarget, 4)), Port: int(d.u32(addrStreamPort))}
+		var pkt []byte
+		if !d.paused {
+			pkt = make([]byte, 8+size)
+			binary.BigEndian.PutUint16(pkt, uint16(len(pkt)))
+			pkt[3] = 0xA0 | seq&0xF
+			binary.BigEndian.PutUint32(pkt[4:], start)
+			copy(pkt[8:], d.read(start, size))
+			d.streams++
+		}
+		d.mu.Unlock()
+		if pkt != nil {
+			if u == nil {
+				var err error
+				if u, err = net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}); err != nil {
+					return
+				}
+			}
+			u.WriteToUDP(pkt, to)
+		}
+		time.Sleep(max(interval, time.Millisecond))
+	}
+}
+
+// PauseStream withholds (true) or resumes (false) the stream's datagrams.
+func (d *Device) PauseStream(paused bool) {
+	d.mu.Lock()
+	d.paused = paused
+	d.mu.Unlock()
+}
+
+// Streams is how many stream datagrams the device has sent.
+func (d *Device) Streams() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.streams
 }
 
 // SetDigital switches one channel as the module would (state, latches).

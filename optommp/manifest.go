@@ -15,6 +15,18 @@ package optommp
 //	  - { name: EPIC_M2_AI00, point: ai, slot: 2, channel: 0, unit: "°C", lo: -270, hi: 150 }
 //	  - { name: EPIC_SP_F0, point: scratch-float, index: 0, writable: true }
 //
+// Three options change how the driver talks to the processor; each writes
+// the processor's own configuration, so none is on unless the manifest
+// says so:
+//
+//	custom-area: true   map every word a scan needs into the processor's
+//	                    custom data area, so a scan is one read
+//	stream: 20ms        the processor pushes that area over UDP every 20 ms
+//	                    instead of being polled (implies custom-area)
+//	watchdog: 500ms     the I/O unit's communication watchdog: outputs
+//	                    with a watchdog value go to it after 500 ms without
+//	                    a request; 0s turns it off, absent leaves it alone
+//
 // A binding's point says what it reads (and, for outputs, writes):
 //
 //	di, do          channel state, bool (do is written)
@@ -73,6 +85,14 @@ const DefaultScanRate = 100 * time.Millisecond
 // DefaultTimeout bounds one request.
 const DefaultTimeout = 2 * time.Second
 
+// Custom data area and stream limits (form 1465, "Custom Configuration
+// Area" and "Streaming Configuration"): 1024 pointers, and a stream
+// carries at most 1480 bytes of data.
+const (
+	MaxCustomWords = 1024
+	MaxStreamWords = 1480 / 4
+)
+
 // Manifest is one processor's I/O surface.
 type Manifest struct {
 	// Host is the processor's address; 127.0.0.1 when nautilus runs on it.
@@ -86,6 +106,22 @@ type Manifest struct {
 	Timeout Duration `yaml:"timeout"`
 	// Unit documents the processor the manifest was imported from.
 	Unit string `yaml:"unit"`
+	// CustomArea maps the words a scan needs into the processor's custom
+	// data area (form 1465, F0D50000), so a scan is one read. The driver
+	// owns pointers 0..n-1 while it runs.
+	CustomArea bool `yaml:"custom-area"`
+	// Stream, when non-zero, has the processor push the custom data area
+	// to the driver over UDP at this interval instead of being polled. It
+	// implies CustomArea and replaces the scan rate for inputs.
+	Stream Duration `yaml:"stream"`
+	// StreamPort is the local UDP port the stream is sent to (default:
+	// any free port).
+	StreamPort int `yaml:"stream-port"`
+	// Watchdog sets the I/O unit's communication watchdog: after this long
+	// without a request, outputs whose channel has a watchdog value
+	// configured go to it. 0s turns it off; nil leaves the unit's setting
+	// alone.
+	Watchdog *Duration `yaml:"watchdog"`
 	// Modules is the chassis as imported. The driver checks each slot's
 	// module type against it on connect and every few seconds after: a
 	// slot that is empty or holds another module makes its tags Bad.
@@ -187,6 +223,30 @@ func (m Manifest) Validate() error {
 	}
 	if m.ScanRate < 0 || (m.ScanRate > 0 && time.Duration(m.ScanRate) < time.Millisecond) {
 		errs = append(errs, fmt.Errorf("scan-rate %s (want at least 1ms)", time.Duration(m.ScanRate)))
+	}
+	if m.Stream < 0 || (m.Stream > 0 && time.Duration(m.Stream) < time.Millisecond) {
+		errs = append(errs, fmt.Errorf("stream %s (want at least 1ms, or leave it out to poll)", time.Duration(m.Stream)))
+	}
+	if m.StreamPort < 0 || m.StreamPort > 65535 {
+		errs = append(errs, fmt.Errorf("stream-port %d", m.StreamPort))
+	}
+	if m.StreamPort != 0 && m.Stream == 0 {
+		errs = append(errs, fmt.Errorf("stream-port without stream"))
+	}
+	if m.Watchdog != nil {
+		if w := time.Duration(*m.Watchdog); w < 0 || w%time.Millisecond != 0 {
+			errs = append(errs, fmt.Errorf("watchdog %s (want whole milliseconds; 0s turns it off)", w))
+		} else if w > 0 && m.Stream == 0 && m.ScanRate > 0 && w < 3*time.Duration(m.ScanRate) {
+			errs = append(errs, fmt.Errorf("watchdog %s is under three scans (%s each): it would trip in normal running", w, time.Duration(m.ScanRate)))
+		}
+	}
+	if m.CustomArea || m.Stream > 0 {
+		n := len(planWords(m.Tags, true))
+		if n > MaxCustomWords {
+			errs = append(errs, fmt.Errorf("custom-area: the bindings need %d words, the processor has %d pointers", n, MaxCustomWords))
+		} else if m.Stream > 0 && n > MaxStreamWords {
+			errs = append(errs, fmt.Errorf("stream: the bindings need %d words, a stream carries at most %d — drop quality or latch tags, or poll", n, MaxStreamWords))
+		}
 	}
 	slots := map[int]bool{}
 	for _, mod := range m.Modules {

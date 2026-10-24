@@ -90,6 +90,11 @@ func NewClient(conn net.Conn, timeout time.Duration) *Client {
 // Close closes the connection.
 func (c *Client) Close() error { return c.conn.Close() }
 
+// LocalAddr / RemoteAddr are the connection's ends: the address a stream
+// is sent to, and the only one it is accepted from.
+func (c *Client) LocalAddr() net.Addr  { return c.conn.LocalAddr() }
+func (c *Client) RemoteAddr() net.Addr { return c.conn.RemoteAddr() }
+
 // Read reads n bytes at addr, chunking at MaxBlock.
 func (c *Client) Read(addr uint32, n int) ([]byte, error) {
 	out := make([]byte, 0, n)

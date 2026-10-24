@@ -16,6 +16,12 @@ package optommp
 // output or a scratchpad element one write each. WriteOutputs wakes the
 // loop, so a command does not wait for the next poll.
 //
+// With custom-area the scan is one read of the processor's custom data
+// area, its pointers naming every word the bindings need; with stream the
+// processor pushes that area over UDP and the driver sends only writes,
+// latch clears and the chassis check (stream.go). Writes go over TCP in
+// every mode.
+//
 // Quality per tag: NotConnected until first delivered; Stale after the
 // socket drops; Bad when the slot is empty or holds another module than
 // the manifest says, when a digital channel is absent or its quality bit
@@ -85,12 +91,21 @@ func (s span) n() int      { return s.hi - s.lo + 1 }
 
 func newSpan() span { return span{lo: -1, hi: -1} }
 
-// readPlan is which areas a scan reads, from the bindings.
-type readPlan struct {
-	values, digital, quality span // slots
-	ints, floats             span // scratchpad indexes
-	bits                     bool
-	slots                    []int // slots any channel binding names
+// scanPlan is the words a scan needs (plan.go) and how each binding
+// decodes from them.
+type scanPlan struct {
+	words []uint32  // addresses, sorted, unique
+	refs  []tagRef  // per binding, in manifest order
+	areas []area    // packed-mode reads
+	src   []wordSrc // per word: its packed-mode area and offset
+	slots []int     // slots any channel binding names
+}
+
+// tagRef is a binding's words as indexes into the scan's word image; qual
+// is -1 when the binding has no quality word.
+type tagRef struct {
+	val, qual int
+	bit       uint
 }
 
 // Driver polls one processor.
@@ -101,19 +116,25 @@ type Driver struct {
 	chassis  time.Duration // chassis re-check interval
 	log      *slog.Logger
 	dial     func(ctx context.Context) (net.Conn, error)
-	plan     readPlan
+	plan     scanPlan
+	custom   bool // fetch through the custom data area
 	outputs  map[string]Binding
 	expect   map[int]uint32 // slot → module type the manifest names
 
-	mu        sync.Mutex
-	in        map[string]any
-	quality   map[string]nio.Quality
-	commanded map[string]any // last output value accepted
-	pending   map[string]any // accepted, not yet written
-	slotFault map[int]string // slot → why its tags are Bad
-	absent    []byte         // channel-present mask as last read (nil: unknown)
-	unit      string
-	firmware  string
+	mu             sync.Mutex
+	in             map[string]any
+	quality        map[string]nio.Quality
+	commanded      map[string]any // last output value accepted
+	pending        map[string]any // accepted, not yet written
+	slotFault      map[int]string // slot → why its tags are Bad
+	absent         []byte         // channel-present mask as last read (nil: unknown)
+	unit           string
+	firmware       string
+	watchdogMs     int64  // the unit's watchdog as last read; -1 before
+	armed, armable int    // bound outputs with a watchdog value enabled / all
+	streamOrig     []byte // streaming configuration as first found
+	customOrig     []byte // the custom area's pointers as first found
+	streamFrom     net.IP // the processor, the only sender a stream is taken from
 
 	gateMu    sync.Mutex
 	writeGate func() bool
@@ -124,7 +145,9 @@ type Driver struct {
 	errs      atomic.Uint64
 	scanUs    atomic.Int64
 	requests  atomic.Int64
-	lastErr   atomic.Value // string
+	late      atomic.Uint64 // times the stream went quiet long enough to go Stale
+	gapMaxUs  atomic.Int64  // longest gap between datagrams
+	lastErr   atomic.Value  // string
 
 	kick   chan struct{}
 	cancel context.CancelFunc
@@ -138,19 +161,20 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 		return nil, err
 	}
 	d := &Driver{
-		m:         m,
-		scanRate:  time.Duration(m.ScanRate),
-		retryMin:  defaultRetryMin,
-		chassis:   chassisEvery,
-		log:       slog.Default(),
-		outputs:   map[string]Binding{},
-		expect:    map[int]uint32{},
-		in:        map[string]any{},
-		quality:   map[string]nio.Quality{},
-		commanded: map[string]any{},
-		pending:   map[string]any{},
-		slotFault: map[int]string{},
-		kick:      make(chan struct{}, 1),
+		m:          m,
+		scanRate:   time.Duration(m.ScanRate),
+		retryMin:   defaultRetryMin,
+		chassis:    chassisEvery,
+		log:        slog.Default(),
+		outputs:    map[string]Binding{},
+		expect:     map[int]uint32{},
+		in:         map[string]any{},
+		quality:    map[string]nio.Quality{},
+		commanded:  map[string]any{},
+		pending:    map[string]any{},
+		slotFault:  map[int]string{},
+		watchdogMs: -1,
+		kick:       make(chan struct{}, 1),
 	}
 	d.lastErr.Store("")
 	for _, o := range opts {
@@ -168,7 +192,14 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 	for _, mod := range m.Modules {
 		d.expect[mod.Slot] = uint32(mod.Type)
 	}
-	p := readPlan{values: newSpan(), digital: newSpan(), quality: newSpan(), ints: newSpan(), floats: newSpan()}
+	custom := m.CustomArea || m.Stream > 0
+	words := planWords(m.Tags, custom)
+	index := make(map[uint32]int, len(words))
+	for i, w := range words {
+		index[w] = i
+	}
+	p := scanPlan{words: words}
+	p.areas, p.src = packedAreas(words)
 	slots := map[int]bool{}
 	for _, b := range m.Tags {
 		d.quality[b.Name] = nio.NotConnected
@@ -178,28 +209,18 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 		if b.isChannel() {
 			slots[b.Slot] = true
 		}
-		switch b.Point {
-		case PointAI, PointAO:
-			p.values.add(b.Slot)
-		case PointCounter:
-			p.values.add(b.Slot)
-			p.digital.add(b.Slot) // its quality is the channel's
-		case PointDI, PointDO, PointOnLatch, PointOffLatch:
-			p.digital.add(b.Slot)
-		case PointQuality:
-			p.quality.add(b.Slot)
-		case PointScratchBit:
-			p.bits = true
-		case PointScratchInt:
-			p.ints.add(b.Index)
-		case PointScratchFloat:
-			p.floats.add(b.Index)
+		w := wordsFor(b, custom)
+		r := tagRef{val: index[w.val], qual: -1, bit: w.bit}
+		if w.qual != 0 {
+			r.qual = index[w.qual]
 		}
+		p.refs = append(p.refs, r)
 	}
 	for s := range slots {
 		p.slots = append(p.slots, s)
 	}
 	sort.Ints(p.slots)
+	d.custom = custom
 	d.plan = p
 	return d, nil
 }
@@ -250,13 +271,7 @@ func (d *Driver) run(ctx context.Context) {
 			c.Close()
 		}
 		d.connected.Store(false)
-		d.mu.Lock()
-		for name, q := range d.quality {
-			if q != nio.NotConnected {
-				d.quality[name] = nio.Stale
-			}
-		}
-		d.mu.Unlock()
+		d.markStale()
 		if ctx.Err() != nil {
 			return
 		}
@@ -276,7 +291,8 @@ func (d *Driver) run(ctx context.Context) {
 	}
 }
 
-// session is one connection: power-up clear, chassis check, then poll
+// session is one connection: power-up clear, chassis check, the
+// configuration the manifest asks for, then poll (or receive the stream)
 // until an error. polled reports whether at least one scan completed.
 func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error) {
 	if puc, err := c.ReadUint32(addrPUCFlag); err != nil {
@@ -302,9 +318,21 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 	if err := d.checkChassis(c); err != nil {
 		return false, err
 	}
+	uc, err := d.configure(c)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		if ctx.Err() != nil {
+			d.restore(c) // a clean stop: leave the unit as it was found
+		}
+	}()
 	d.connected.Store(true)
 	d.log.Info("optommp: connected", "host", d.m.Host, "unit", unit, "firmware", fw,
-		"tags", len(d.m.Tags), "scan", d.scanRate)
+		"tags", len(d.m.Tags), "mode", d.mode())
+	if uc != nil {
+		return d.streamLoop(ctx, c, uc)
+	}
 
 	tick := time.NewTicker(d.scanRate)
 	defer tick.Stop()
@@ -317,6 +345,11 @@ func (d *Driver) session(ctx context.Context, c *Client) (polled bool, err error
 		if time.Now().After(nextChassis) {
 			if err := d.checkChassis(c); err != nil {
 				return polled, err
+			}
+			if d.custom {
+				if err := d.verifyCustom(c); err != nil {
+					return polled, err
+				}
 			}
 			nextChassis = time.Now().Add(d.chassis)
 		}
@@ -386,98 +419,91 @@ func (d *Driver) checkChassis(c *Client) error {
 	return nil
 }
 
-// poll is one scan: the reads the plan names, decoded into tags, then the
+// poll is one polled scan: the words fetched, decoded into tags, then the
 // latches it saw cleared and the pending outputs written.
 func (d *Driver) poll(c *Client) error {
 	t0 := time.Now()
-	reqs := 0
-	read := func(s span, base uint32, stride int) ([]byte, error) {
-		if s.empty() {
-			return nil, nil
-		}
-		n := s.n() * stride
-		reqs += (n + MaxBlock - 1) / MaxBlock
-		return c.Read(base+uint32(s.lo*stride), n)
-	}
-	values, err := read(d.plan.values, addrPackedValues, valuesModuleStride)
+	img, reqs, err := d.fetch(c)
 	if err != nil {
 		return err
 	}
-	digital, err := read(d.plan.digital, addrDigitalPacked, digitalModuleStride)
-	if err != nil {
-		return err
-	}
-	codes, err := read(d.plan.quality, addrQualityCodes, qualityModuleStride)
-	if err != nil {
-		return err
-	}
-	ints, err := read(d.plan.ints, addrScratchInts, 4)
-	if err != nil {
-		return err
-	}
-	floats, err := read(d.plan.floats, addrScratchFloats, 4)
-	if err != nil {
-		return err
-	}
-	var bits uint64
-	if d.plan.bits {
-		b, err := c.Read(addrScratchBits, 8)
+	n, err := d.deliver(c, img)
+	d.requests.Store(int64(reqs + n))
+	d.scanUs.Store(time.Since(t0).Microseconds())
+	return err
+}
+
+// fetch reads the scan's words: the packed areas one block read each, or
+// the custom data area in one.
+func (d *Driver) fetch(c *Client) (img []uint32, reqs int, err error) {
+	img = make([]uint32, len(d.plan.words))
+	if d.custom {
+		n := len(img) * 4
+		b, err := c.Read(addrCustomData, n)
 		if err != nil {
-			return err
+			return nil, 0, err
 		}
-		reqs++
-		bits = binary.BigEndian.Uint64(b)
+		for i := range img {
+			img[i] = binary.BigEndian.Uint32(b[i*4:])
+		}
+		return img, (n + MaxBlock - 1) / MaxBlock, nil
 	}
-
-	u32 := func(buf []byte, off int) uint32 { return binary.BigEndian.Uint32(buf[off:]) }
-	digWord := func(slot, field int) uint32 {
-		return u32(digital, (slot-d.plan.digital.lo)*digitalModuleStride+field)
+	bufs := make([][]byte, len(d.plan.areas))
+	for k, a := range d.plan.areas {
+		if bufs[k], err = c.Read(a.base, a.n); err != nil {
+			return nil, 0, err
+		}
+		reqs += (a.n + MaxBlock - 1) / MaxBlock
 	}
-	type clear struct{ addr uint32 }
-	var clears []clear
+	for i, s := range d.plan.src {
+		img[i] = binary.BigEndian.Uint32(bufs[s.area][s.off:])
+	}
+	return img, reqs, nil
+}
 
+// deliver decodes one word image — polled or streamed — into values and
+// quality, clears the latches it reported, and writes pending outputs. It
+// returns the requests that took.
+func (d *Driver) deliver(c *Client, img []uint32) (int, error) {
+	var clears []uint32
 	d.mu.Lock()
-	for _, b := range d.m.Tags {
+	for i, b := range d.m.Tags {
+		r := d.plan.refs[i]
+		w := img[r.val]
+		set := w>>r.bit&1 == 1
 		var v any
 		q := nio.Good
-		bit := uint(b.Channel)
 		switch b.Point {
-		case PointDI, PointDO:
-			v = digWord(b.Slot, 0)>>bit&1 == 1
+		case PointDI, PointDO, PointScratchBit:
+			v = set
 		case PointAI, PointAO:
-			f := float64(math.Float32frombits(u32(values, (b.Slot-d.plan.values.lo)*valuesModuleStride+b.Channel*4)))
+			f := float64(math.Float32frombits(w))
 			v = f
 			if math.IsNaN(f) || math.IsInf(f, 0) {
 				q = nio.Bad
 			}
-		case PointCounter:
-			v = int64(u32(values, (b.Slot-d.plan.values.lo)*valuesModuleStride+b.Channel*4))
+		case PointCounter, PointQuality:
+			v = int64(w)
 		case PointOnLatch, PointOffLatch:
-			field, off := 8, clearOnLatch
-			if b.Point == PointOffLatch {
-				field, off = 12, clearOffLatch
-			}
-			set := digWord(b.Slot, field)>>bit&1 == 1
 			v = set
 			if set {
-				clears = append(clears, clear{addrDigitalClear + uint32(b.Slot*clearModuleStride+b.Channel*clearChannelStride+off)})
+				off := clearOnLatch
+				if b.Point == PointOffLatch {
+					off = clearOffLatch
+				}
+				clears = append(clears, addrDigitalClear+uint32(b.Slot*clearModuleStride+b.Channel*clearChannelStride+off))
 			}
-		case PointQuality:
-			v = int64(u32(codes, (b.Slot-d.plan.quality.lo)*qualityModuleStride+b.Channel*4))
-		case PointScratchBit:
-			v = bits>>uint(b.Index)&1 == 1
 		case PointScratchInt:
-			v = int64(int32(u32(ints, (b.Index-d.plan.ints.lo)*4)))
+			v = int64(int32(w))
 		case PointScratchFloat:
-			v = float64(math.Float32frombits(u32(floats, (b.Index-d.plan.floats.lo)*4)))
+			v = float64(math.Float32frombits(w))
 		}
 		if b.isChannel() {
 			if _, bad := d.slotFault[b.Slot]; bad {
 				q = nio.Bad
 			}
-			switch b.Point {
-			case PointDI, PointDO, PointCounter, PointOnLatch, PointOffLatch:
-				if digWord(b.Slot, 4)>>bit&1 == 1 {
+			if r.qual >= 0 {
+				if img[r.qual]>>r.bit&1 == 1 {
 					q = nio.Bad // the processor's quality bit for the channel
 				}
 				if d.absent != nil && !packedBit(d.absent, b.Slot*MaxChannels+b.Channel) {
@@ -491,17 +517,15 @@ func (d *Driver) poll(c *Client) error {
 	d.mu.Unlock()
 	d.reads.Add(1)
 
-	for _, cl := range clears {
-		if _, err := c.Read(cl.addr, 4); err != nil {
-			return err
+	reqs := 0
+	for _, addr := range clears {
+		if _, err := c.Read(addr, 4); err != nil {
+			return reqs, err
 		}
 		reqs++
 	}
 	n, err := d.flushCount(c)
-	reqs += n
-	d.requests.Store(int64(reqs))
-	d.scanUs.Store(time.Since(t0).Microseconds())
-	return err
+	return reqs + n, err
 }
 
 func (d *Driver) flush(c *Client) error {
@@ -719,12 +743,33 @@ type Health struct {
 	ScanRate       time.Duration
 	LastError      string
 	Tags, BadTags  int
+	// Mode is how inputs arrive: "poll", "custom area" (polled, one
+	// read) or "stream".
+	Mode     string
+	Stream   time.Duration // the stream interval, 0 when polling
+	Late     uint64        // times the stream went quiet long enough to go Stale
+	GapMaxUs int64         // longest gap between datagrams since start
+	// WatchdogMs is the unit's communication watchdog as last read (0 =
+	// off, -1 = not yet read); Armed of Armable bound outputs have a
+	// watchdog value enabled.
+	WatchdogMs     int64
+	Armed, Armable int
+}
+
+func (d *Driver) mode() string {
+	switch {
+	case d.m.Stream > 0:
+		return "stream"
+	case d.custom:
+		return "custom area"
+	}
+	return "poll"
 }
 
 // Health reports the driver's state for /api/drivers.
 func (d *Driver) Health() Health {
 	d.mu.Lock()
-	h := Health{Unit: d.unit, Firmware: d.firmware}
+	h := Health{Unit: d.unit, Firmware: d.firmware, WatchdogMs: d.watchdogMs, Armed: d.armed, Armable: d.armable}
 	var faults []string
 	for _, s := range d.plan.slots {
 		if f, ok := d.slotFault[s]; ok {
@@ -746,6 +791,8 @@ func (d *Driver) Health() Health {
 	h.ScanRate = d.scanRate
 	h.LastError = d.lastErr.Load().(string)
 	h.Tags = len(d.m.Tags)
+	h.Mode, h.Stream = d.mode(), time.Duration(d.m.Stream)
+	h.Late, h.GapMaxUs = d.late.Load(), d.gapMaxUs.Load()
 	return h
 }
 

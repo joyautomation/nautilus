@@ -1,6 +1,7 @@
 package optommp
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -97,5 +98,65 @@ tags:
 	}
 	if _, err := ParseManifest([]byte("host: h\nmodules:\n  - { slot: 0, type: nope }\ntags:\n  - { name: A, point: di }\n")); err == nil || !strings.Contains(err.Error(), "type code") {
 		t.Errorf("bad type code: %v", err)
+	}
+}
+
+func TestManifestCommOptions(t *testing.T) {
+	dev := newBenchDevice()
+	wd := 500 * time.Millisecond
+	o := ManifestOptions{ID: "EPIC", Host: "192.0.2.10", Stream: 20 * time.Millisecond, Watchdog: &wd}
+	m := benchManifest(t, dev, o)
+	cmd := ManifestCommand(o)
+	if cmd != "naut optommp import --host 192.0.2.10 --stream 20ms --watchdog 500ms" {
+		t.Errorf("command: %s", cmd)
+	}
+	raw := ManifestYAML(m, cmd)
+	if !strings.Contains(string(raw), "\nstream: 20ms\nwatchdog: 500ms\n") || strings.Contains(string(raw), "custom-area") {
+		t.Errorf("manifest header:\n%s", raw[:400])
+	}
+	back, err := ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again := ManifestYAML(back, cmd); string(again) != string(raw) {
+		t.Errorf("not byte-identical after a round trip")
+	}
+	if back.Watchdog == nil || time.Duration(*back.Watchdog) != wd || time.Duration(back.Stream) != 20*time.Millisecond {
+		t.Errorf("parsed: watchdog %v stream %s", back.Watchdog, time.Duration(back.Stream))
+	}
+
+	// watchdog: 0s is "turn it off", not "leave it alone".
+	off, err := ParseManifest([]byte("host: h\ncustom-area: true\nwatchdog: 0s\ntags:\n  - { name: A, point: di }\n"))
+	if err != nil || off.Watchdog == nil || *off.Watchdog != 0 || !off.CustomArea {
+		t.Errorf("watchdog 0s: %v %v", off.Watchdog, err)
+	}
+}
+
+func TestManifestCommOptionValidation(t *testing.T) {
+	var tags strings.Builder
+	for i := 0; i < 400; i++ {
+		fmt.Fprintf(&tags, "  - { name: Q%d, point: quality, slot: %d, channel: %d }\n", i, i/32, i%32)
+	}
+	_, err := ParseManifest([]byte("host: h\nscan-rate: 100ms\nstream: 500us\nstream-port: 70000\nwatchdog: 250ms\ntags:\n" + tags.String()))
+	if err == nil {
+		t.Fatal("accepted a broken manifest")
+	}
+	for _, want := range []string{"stream 500µs", "stream-port 70000", "stream: the bindings need 400 words, a stream carries at most 370"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q:\n%v", want, err)
+		}
+	}
+	_, err = ParseManifest([]byte("host: h\nscan-rate: 100ms\nstream-port: 5000\nwatchdog: 250ms\ntags:\n  - { name: A, point: di }\n"))
+	for _, want := range []string{"stream-port without stream", "watchdog 250ms is under three scans"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("error lacks %q:\n%v", want, err)
+		}
+	}
+	if _, err := ParseManifest([]byte("host: h\nwatchdog: 1500us\ntags:\n  - { name: A, point: di }\n")); err == nil || !strings.Contains(err.Error(), "whole milliseconds") {
+		t.Errorf("sub-ms watchdog: %v", err)
+	}
+	// Polled through the custom area, 400 words fit.
+	if _, err := ParseManifest([]byte("host: h\ncustom-area: true\ntags:\n" + tags.String())); err != nil {
+		t.Errorf("custom-area with 400 words: %v", err)
 	}
 }

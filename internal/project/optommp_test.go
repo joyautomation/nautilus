@@ -125,3 +125,22 @@ func TestOptommpStatus(t *testing.T) {
 		t.Fatalf("down: %+v", s)
 	}
 }
+
+func TestOptommpStatusStreamAndWatchdog(t *testing.T) {
+	h := optommp.Health{Host: "10.0.0.5", Port: 2001, Connected: true, Mode: "stream", Stream: 20 * time.Millisecond,
+		GapMaxUs: 21500, Late: 2, WatchdogMs: 500, Armed: 3, Armable: 12}
+	s := optommpStatus(h)
+	got := map[string]string{}
+	for _, m := range s.Metrics {
+		got[m.Label] = m.Text
+	}
+	if got["stream"] != "every 20ms, longest gap 21.5 ms" || got["watchdog"] != "500 ms, 3 of 12 bound outputs have a watchdog value" {
+		t.Errorf("metrics: %+v", s.Metrics)
+	}
+	if _, ok := got["scan"]; ok {
+		t.Error("a streaming driver shows a poll scan")
+	}
+	if _, ok := got["late"]; !ok {
+		t.Error("no late count")
+	}
+}
