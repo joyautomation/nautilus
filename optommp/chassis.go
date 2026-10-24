@@ -64,10 +64,24 @@ type Channel struct {
 	Kind    Kind
 	Desc    string // range / probe type from the table
 	Unit    string
+	Lo, Hi  float64 // engineering range: the configured scale, else the table's
+	Feature uint32  // digital feature (counter, totalizer …), 0 when none
+	Name    string  // channel name stored in the processor's map, often empty
 	Present bool    // the channel-present bit; digital modules set it
 	State   bool    // digital state at scan time
 	Value   float64 // analog engineering value at scan time (NaN when none)
 }
+
+// Offsets inside one channel-configuration row (0xC0 bytes).
+const (
+	cfgModuleType  = 0x00
+	cfgChannelType = 0x04
+	cfgFeature     = 0x08
+	cfgHighScale   = 0x14
+	cfgLowScale    = 0x18
+	cfgName        = 0x30 // 0x33 bytes, zero-terminated
+	cfgUnits       = 0x78 // 0x10 bytes, zero-terminated
+)
 
 // Scan reads the chassis. One read per module for the configuration (so an
 // unknown module type still lands in the listing) plus three packed reads
@@ -101,11 +115,11 @@ func Scan(c *Client) (Chassis, error) {
 		if err != nil {
 			return ch, fmt.Errorf("slot %d: %w", slot, err)
 		}
-		mtype := binary.BigEndian.Uint32(cfg[0:4])
+		mtype := binary.BigEndian.Uint32(cfg[cfgModuleType:])
 		m := Module{Slot: slot, Type: mtype, Part: ModuleName(mtype)}
 		for i := 0; i < MaxChannels; i++ {
 			row := cfg[i*configChannelStride:]
-			ctype := binary.BigEndian.Uint32(row[4:8])
+			ctype := binary.BigEndian.Uint32(row[cfgChannelType:])
 			if ctype == 0 {
 				continue
 			}
@@ -114,14 +128,29 @@ func Scan(c *Client) (Chassis, error) {
 				Index:   i,
 				Type:    ctype,
 				Kind:    KindOf(ctype),
+				Feature: binary.BigEndian.Uint32(row[cfgFeature:]),
+				Name:    cString(row[cfgName : cfgName+0x33]),
 				Present: packedBit(present, bit),
 				State:   packedBit(state, bit),
 				Value:   math.NaN(),
 			}
 			if info, ok := LookupChannel(ctype); ok {
-				chn.Desc, chn.Unit = info.Desc, info.Unit
+				chn.Desc, chn.Unit, chn.Lo, chn.Hi = info.Desc, info.Unit, info.Lo, info.Hi
 			} else {
 				chn.Desc = fmt.Sprintf("channel type 0x%08X", ctype)
+			}
+			if chn.Kind == KindAI || chn.Kind == KindAO {
+				// The processor's own scale and units win over the table:
+				// groov Manage can rescale a channel (a 4-20 mA loop read as
+				// 0-100 %), and the map then reports the rescaled values.
+				hi := float64(math.Float32frombits(binary.BigEndian.Uint32(row[cfgHighScale:])))
+				lo := float64(math.Float32frombits(binary.BigEndian.Uint32(row[cfgLowScale:])))
+				if hi != lo && !math.IsNaN(hi) && !math.IsNaN(lo) {
+					chn.Lo, chn.Hi = lo, hi
+				}
+				if u := cString(row[cfgUnits : cfgUnits+0x10]); u != "" {
+					chn.Unit = u
+				}
 			}
 			if chn.Kind == KindAI || chn.Kind == KindAO {
 				chn.Value = float64(math.Float32frombits(binary.BigEndian.Uint32(values[bit*4:])))
@@ -141,6 +170,17 @@ func Scan(c *Client) (Chassis, error) {
 func packedBit(mask []byte, i int) bool {
 	w := binary.BigEndian.Uint32(mask[(i/32)*4:])
 	return w>>(uint(i)%32)&1 == 1
+}
+
+// cString is a zero-terminated (or zero-padded) string field, trimmed.
+func cString(b []byte) string {
+	for i, c := range b {
+		if c == 0 {
+			b = b[:i]
+			break
+		}
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // String renders the chassis as the browse listing.
