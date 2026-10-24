@@ -92,6 +92,37 @@ here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.
   offers the faces of the picked part, and each row has a mode menu. A
   tint or emissive drive may be a **ramp** of `[value, colour]` stops over
   a number instead of on / off.
+- **Blink and pulse, in one click.** Two presets in the kind editor —
+  **Blink on {member}** (a glow on the picked part that flashes twice a
+  second while the member is true) and **Pulse on {member}** (the part
+  breathes, ±10 % once a second) — each a drive row like any other
+  afterwards: every boolean row (`tint`, `emissive`, `visible`) has a
+  **blink** field in Hz, and the new `pulse` channel has **Hz** and **±**
+  (`"pulse": { "bind": "Alarm", "hz": 1, "amount": 0.1 }`). The schema,
+  `naut check` and `hmi-3d` carry both.
+- **Eject to component…** (kind editor header): writes `{Name}.svelte`
+  beside the kind file — a `<script module>` exporting the contract
+  (`type`, `members`, `bounds`, `labelAt`, `ports`, `status`) and an
+  instance holding the model and the drive rows as data, rendered by
+  `hmi-3d`'s new `<ModelNode>` — offers to re-point every scene naming
+  the file at the component, and opens it beside. Nothing is lost on the
+  way out; the file is open ground for anything Threlte. The kind file
+  stays.
+- **Ask AI…** (kind editor header): picks one of five prompts about this
+  file — a model from a picture, sensible part names, drives for the
+  UDT's members, a variant of the kind, or a stub to finish — and opens
+  the editor's chat with it, or copies it (and opens Claude Code's
+  sidebar when it is installed).
+- **Vertex drag, and pipes that follow a move** (scene editor). Select a
+  pipe in the panel and its points wear handles on the stage; a click
+  on one puts the gizmo on it, a drag posts one `setPipePoints`, `Del`
+  drops the point, `Esc` clears the point then the pipe. Moving a node
+  whose anchored pipe still has the suggested run re-routes the run in
+  the same edit as the move; a run someone laid by hand is left alone.
+  The built-in tank, pump and valve have ports (`inlet` / `outlet`,
+  `suction` / `discharge`, `in` / `out`), and `examples/lift-station`'s
+  kinds carry ports as box points with the scene's pipes anchored to
+  them.
 
 ### Fixed
 

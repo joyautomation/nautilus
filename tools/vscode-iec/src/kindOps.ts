@@ -14,7 +14,8 @@
 export type Vec3 = [number, number, number];
 
 export type NumExpr = { bind: string; scale?: number; offset?: number; min?: number; max?: number };
-export type BoolExpr = { bind: string; threshold?: number };
+/** `blink`: while true, the effect alternates at this rate (Hz). */
+export type BoolExpr = { bind: string; threshold?: number; blink?: number };
 /** A colour over a number: stops of [value, colour], ascending. */
 export type RampExpr = { bind: string; ramp: [number, string][] };
 export type Drive = { mesh: string } & (
@@ -24,6 +25,8 @@ export type Drive = { mesh: string } & (
   | { tint: (BoolExpr & { on: string; off?: string }) | RampExpr }
   | { emissive: (BoolExpr & { on: string; intensity?: number }) | (RampExpr & { intensity?: number }) }
   | { visible: BoolExpr }
+  /** The mesh breathes while true: scale 1 ± amount (default 0.1) at hz (default 1). */
+  | { pulse: BoolExpr & { hz?: number; amount?: number } }
 );
 
 /** A place on a box (a part's, or the kind's bounds): survives a re-export. */
@@ -60,7 +63,7 @@ export type KindOp =
   | { type: "renamePort"; name: string; to: string }
   | { type: "deletePort"; name: string };
 
-export const DRIVE_CHANNELS = ["spin", "turn", "scale", "tint", "emissive", "visible"] as const;
+export const DRIVE_CHANNELS = ["spin", "turn", "scale", "tint", "emissive", "visible", "pulse"] as const;
 export type DriveChannel = (typeof DRIVE_CHANNELS)[number];
 
 type Json = Record<string, unknown>;
@@ -156,7 +159,7 @@ export function formatKind(doc: KindDoc): string {
       const row = ordered(drv, ch ? ["mesh", ch] : ["mesh"]);
       if (ch && isObj(row[ch])) {
         const c = row[ch] as Json;
-        const inner = ch === "spin" ? ["axis", "revPerS"] : ch === "turn" ? ["axis", "deg"] : ch === "scale" ? ["axis", "to"] : ["bind", "threshold", "on", "off", "ramp", "intensity"];
+        const inner = ch === "spin" ? ["axis", "revPerS"] : ch === "turn" ? ["axis", "deg"] : ch === "scale" ? ["axis", "to"] : ch === "pulse" ? ["bind", "threshold", "hz", "amount"] : ["bind", "threshold", "on", "off", "ramp", "intensity", "blink"];
         const o = ordered(c, inner);
         for (const k of ["revPerS", "deg", "to"]) if (isObj(o[k])) o[k] = ordered(o[k] as Json, ["bind", "scale", "offset", "min", "max"]);
         row[ch] = o;
@@ -200,6 +203,7 @@ export function driveError(d: unknown): string | undefined {
   const bool = () => {
     if (!isStr(c.bind) || !MEMBER_RE.test(c.bind)) return "bind must name a member of the struct (a leading ! negates)";
     if (c.threshold !== undefined && !isNum(c.threshold)) return "threshold must be a number";
+    if (c.blink !== undefined && !(isNum(c.blink) && c.blink > 0)) return "blink is a rate in Hz, above 0";
     return undefined;
   };
   const ramp = (): string | undefined => {
@@ -212,7 +216,7 @@ export function driveError(d: unknown): string | undefined {
       if (!(stop[0] > prev)) return "ramp stops go up in value";
       prev = stop[0];
     }
-    for (const k of ["on", "off", "threshold"]) if (c[k] !== undefined) return `${k} is not with a ramp`;
+    for (const k of ["on", "off", "threshold", "blink"]) if (c[k] !== undefined) return `${k} is not with a ramp`;
     return undefined;
   };
   switch (ch) {
@@ -230,6 +234,8 @@ export function driveError(d: unknown): string | undefined {
       return bool() ?? (isStr(c.on) ? (c.intensity !== undefined && !isNum(c.intensity) ? "intensity must be a number" : undefined) : "on must be a palette slot or a CSS colour");
     case "visible":
       return bool();
+    case "pulse":
+      return bool() ?? (c.hz !== undefined && !(isNum(c.hz) && c.hz > 0) ? "hz is a rate in Hz, above 0" : c.amount !== undefined && !(isNum(c.amount) && c.amount > 0 && c.amount <= 1) ? "amount is a fraction of the size, above 0 and at most 1" : undefined);
   }
 }
 

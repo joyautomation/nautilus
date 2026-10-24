@@ -4,7 +4,7 @@
 	// fields clear with an empty value (the host's patch null deletes the
 	// key). Numbers are typed in metres and degrees, the document's units.
 	import { docPorts, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
-	import { ed, postOp } from './sceneState.svelte';
+	import { ed, postOp, selectPipe } from './sceneState.svelte';
 
 	const doc = $derived(ed.doc);
 	const node = $derived(ed.selected && doc ? (doc.nodes.find((n) => n.id === ed.selected) ?? null) : null);
@@ -71,6 +71,7 @@
 	};
 	function deletePipe(i: number) {
 		postOp({ type: 'deletePipe', index: i });
+		if (ed.selectedPipe === i) selectPipe(null);
 	}
 </script>
 
@@ -146,8 +147,8 @@
 			<div class="head sub">Pipes</div>
 			<ul class="pipes">
 				{#each pipes as p, i (p.id ?? i)}
-					<li data-kind="pipe-row" data-index={i}>
-						<span>{p.id ? `${p.id} · ` : ''}{pipeText(p)}</span>
+					<li data-kind="pipe-row" data-index={i} class:selected={ed.selectedPipe === i}>
+						<button class="sel" onclick={() => selectPipe(ed.selectedPipe === i ? null : i)} title={ed.selectedPipe === i ? 'Deselect' : 'Select: its points get handles on the stage — click one, drag the gizmo'} aria-label="select pipe {i}">{p.id ? `${p.id} · ` : ''}{pipeText(p)}</button>
 						<button class="del" onclick={() => deletePipe(i)} title="Remove this pipe" aria-label="remove pipe {i}">×</button>
 					</li>
 				{/each}
@@ -303,7 +304,21 @@
 		font-family: var(--nx-mono);
 		font-size: 11px;
 	}
-	.pipes li span {
+	.pipes li.selected {
+		border-color: var(--nx-accent);
+	}
+	.pipes li .sel {
+		background: none;
+		border: 0;
+		color: inherit;
+		font: inherit;
+		text-align: left;
+		padding: 0;
+		cursor: pointer;
+		flex: 1;
+		min-width: 0;
+	}
+	.pipes li .sel {
 		flex: 1;
 		min-width: 0;
 		overflow: hidden;

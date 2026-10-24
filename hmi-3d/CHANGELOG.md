@@ -50,6 +50,26 @@ exported. A `tint` or `emissive` drive may be a **ramp** — `{ "bind":
 interpolated between the two stops around the value and clamped beyond
 the ends (`rampAt`); palette slots and CSS colours mix alike.
 
+**Added (blink, pulse, ports on the built-ins, ModelNode).** A boolean
+drive (`tint`, `emissive`, `visible`) may carry **`blink`**, a rate in
+Hz: while the bool holds the effect alternates with its off state (the
+tint's `off`, no glow, hidden), half the period each way; `evalDrives`
+hands the component the on state with `blink: { hz, off }` and
+`GltfNode` keeps the clock, repainting only when the phase changes
+(`blinkOn` is exported, pure). A seventh channel, **`pulse`** (`{ "bind":
+"Alarm", "hz": 1, "amount": 0.1 }`): the mesh breathes — its scale
+swings 1 ± amount about its own at `hz` while the bool holds, back to
+the model's own when it drops (`pulseAt` exported; `DRIVE_CHANNELS`
+grows by one, and `validateDrives` refuses `blink` with a `ramp`, a rate
+≤ 0, an amount outside (0, 1]). The **built-in kinds have ports**:
+tank `inlet` / `outlet`, pump `suction` / `discharge`, valve `in` /
+`out`, in `BUILTIN_CONTRACT` (so `builtinRegistry` carries them),
+`models/kinds.json` and `internal/scene`'s `Builtin`, held together by
+the contract tests. **`<ModelNode data={{ model, drive }} …/>`** is
+exported: a model with drives for a component of your own — what the
+kind editor's "Eject to component" writes — which dynamic-imports
+`GltfNode`, so the glTF loader stays a chunk.
+
 **Changed.** `model` must end in `.glb` or `.gltf` in `validateScene` as
 it already had to for `naut check` and the schema. The **lit look without
 an HDRI** now lights PBR materials from three's generated RoomEnvironment

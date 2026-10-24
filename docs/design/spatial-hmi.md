@@ -907,9 +907,23 @@ one for a valve, one for a flow meter. Built 2026-10-21 (PR "kind editor"):
   the node pick behind it. Gotcha: a port at the top of a node sits under
   its label, an HTML overlay whose own pointerdown stops at it (so a drag
   on a label does not orbit) — the press is taken on the window in the
-  capture phase. Still to do in this slice: vertex drag on the gizmo, a
-  re-route when an anchored node moves (today the first leg stretches),
-  ports on the built-in kinds.
+  capture phase. **Built 2026-10-24:** vertex drag — a pipe selected in
+  the panel wears a handle per point of its own (not its anchored ends:
+  those belong to their nodes), a click on one puts the translate gizmo
+  on it, release posts ONE `setPipePoints`, `Del` drops the point (while
+  the run keeps two points counting the ends), `Esc` clears the point,
+  then the pipe; a re-route when an anchored node moves — a pipe anchored
+  at both ends whose run is still exactly what `routePorts` drew is
+  routed again from the node's new place in the SAME op as the move (a
+  batch), while a run someone tweaked is left alone, its first leg
+  stretching as a hand-laid pipe should; and ports on the built-in kinds
+  (tank `inlet` / `outlet`, pump `suction` / `discharge`, valve `in` /
+  `out`), in `BUILTIN_CONTRACT`, `models/kinds.json` and `internal/scene`'s
+  `Builtin`, held together by the contract tests on each side. The
+  lift-station kinds carry ports as box points (`top` of the pump's
+  `Flange`, `left` of a `FlangeIn`) and the example's pipes are anchored
+  to them (`naut check` resolves the words through the model's part
+  boxes offline, as before).
 - **A point by name, and a colour from a number** (James, 2026-10-22:
   "what if I want a port to be top, left, center… relative to the surface?
   (same question for the label)" and "the color variable based on an
@@ -936,7 +950,57 @@ one for a valve, one for a flow meter. Built 2026-10-21 (PR "kind editor"):
   component kind is a Svelte component on Threlte, the whole JavaScript
   story in 3D; what is missing is **Eject to component**, writing a
   .svelte from a kind file with its model and drives, to be built before
-  any expression language in JSON.
+  any expression language in JSON. **Built 2026-10-24:** the kind
+  editor's **Eject to component…** writes `{Name}.svelte` beside the kind
+  file (`kindEject.ts`: a `<script module>` exporting `kind: KindMeta`
+  with the type, members, bounds — the stage's measured box when the
+  file says `auto` — labelAt, ports and a `status` closure over
+  `formatStatus`; an instance script holding `model` and the `drive`
+  rows as data; `<ModelNode data={{ model, drive }} …/>`, hmi-3d's new
+  export that dynamic-imports `GltfNode` so the glTF loader stays a
+  chunk), then offers to re-point every scene naming the file at the
+  component (`{ "component", "type", "members" }` — what `componentRegistry`
+  and `naut check` hold a component kind to; the kind file stays, so a
+  text undo brings it back) and opens the `.svelte` beside. Nothing is
+  lost on the way out: the same drives apply, and the file is open ground
+  for anything Threlte. The lift-station page globs
+  `/src/lib/kinds/*.svelte` beside the kind files, so an ejected kind
+  joins the app the way a kind file did.
+- **One-click animations: blink and pulse** (James, 2026-10-22: "common
+  animations, like rotation based on an input, maybe pulsing"). Two
+  additions to the vocabulary, in all three places as always: a boolean
+  drive (`tint`, `emissive`, `visible`) may carry **`blink`**, a rate in
+  Hz — while the bool holds, the effect alternates with its off state
+  (the tint's `off` colour, no glow, hidden), half the period each way;
+  and a seventh channel, **`pulse`** (`{ "bind": "Alarm", "hz": 1,
+  "amount": 0.1 }`): the mesh breathes, its scale swinging 1 ± amount
+  about its own scale while the bool holds, back to the model's own when
+  it drops. `evalDrives` hands the component the on state with the off
+  state and the rate (`MeshState.blink`) or the pulse; `GltfNode` keeps a
+  clock in its `useTask` and repaints a blinking mesh only when its phase
+  changes (`blinkOn`, `pulseAt` exported, pure). Neither is a ramp's
+  partner: `blink` with a `ramp` is refused. In the kind editor every
+  boolean row has a **blink** field (Hz, blank = steady), a pulse row has
+  **Hz** and **±**, and two preset buttons — **Blink on {member}**,
+  **Pulse on {member}** — put a finished row on the picked part in one
+  click, reading the first member the kind already reads as a boolean
+  (a tint, a visible, a `{X?a:b}`), else the first member, else `Fault`;
+  the row is the same as one built by hand, tuned in place afterwards.
+  The built-in `visible` and `pulse` read as booleans in the sample
+  panel.
+- **The AI on-ramp** (James, 2026-10-22: "give users a suggestion or an
+  easy path to understand that AI is how they accomplish a certain
+  activity"). **Ask AI…** in the kind editor's header picks one of five
+  prompts about THIS file — a model from a picture (export rules: metres,
+  Y up, origin at the base, PascalCase parts, one mesh per thing a drive
+  targets), sensible part names (listing the model's current ones),
+  drives for the UDT's members (the vocabulary spelled out, starting
+  with the picked part), a variant of the kind, or a stub to finish — and
+  opens the editor's chat with it (`workbench.action.chat.open`,
+  partial, so it is read before it is sent); with no chat command it
+  goes to the clipboard and Claude Code's sidebar opens if it is
+  installed. The division of labour is in the placeholder: the tweaks
+  stay in the panel.
 - **Variants of a kind** (James, 2026-10-22, on the float switch: "sometimes
   low (down) is active and high (up) is active"). Today: one kind per
   variant, sharing the model — `float-switch-high.kind.json` and

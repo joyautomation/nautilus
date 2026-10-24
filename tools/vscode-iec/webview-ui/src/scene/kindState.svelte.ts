@@ -101,6 +101,7 @@ export function memberShape(m: string): 'bool' | 'num' {
 		if ('tint' in d && !('ramp' in d.tint) && strip(d.tint.bind) === m) return 'bool';
 		if ('emissive' in d && !('ramp' in d.emissive) && strip(d.emissive.bind) === m) return 'bool';
 		if ('visible' in d && strip(d.visible.bind) === m) return 'bool';
+		if ('pulse' in d && strip(d.pulse.bind) === m) return 'bool';
 	}
 	if (k.status) {
 		for (const x of k.status.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)(\?[^}]*)?(:\d)?\}/g)) if (x[1] === m && x[2]) return 'bool';
@@ -146,6 +147,19 @@ export function reopenAsText(): void {
 	vscode.postMessage({ type: 'reopenAsText' });
 }
 
+/** Eject to component (design §3g): the host writes a `.svelte` beside
+ * this file with the model and the drives as code — the scripting rung.
+ * The measured box goes along, so a kind with `auto` bounds keeps them. */
+export function ejectKind(): void {
+	vscode.postMessage({ type: 'kindEject', bounds: cloneSafe(kd.bounds), parts: cloneSafe(kd.meshes) });
+}
+
+/** The AI on-ramp: the host opens the chat with a prompt about this kind
+ * (a model from a picture, sensible part names, a variant), or copies it. */
+export function askAi(): void {
+	vscode.postMessage({ type: 'kindAskAi', picked: kd.picked, parts: cloneSafe(kd.meshes) });
+}
+
 export function trace(msg: string): void {
 	vscode.postMessage({ type: 'kindTrace', msg });
 }
@@ -156,12 +170,13 @@ export function announceReady(): void {
 }
 
 /** A drive's channel name, when it has exactly one. */
-export function channelOf(d: Drive): 'spin' | 'turn' | 'scale' | 'tint' | 'emissive' | 'visible' {
+export function channelOf(d: Drive): 'spin' | 'turn' | 'scale' | 'tint' | 'emissive' | 'visible' | 'pulse' {
 	if ('spin' in d) return 'spin';
 	if ('turn' in d) return 'turn';
 	if ('scale' in d) return 'scale';
 	if ('tint' in d) return 'tint';
 	if ('emissive' in d) return 'emissive';
+	if ('pulse' in d) return 'pulse';
 	return 'visible';
 }
 
@@ -179,7 +194,26 @@ export function blankDrive(mesh: string, channel: ReturnType<typeof channelOf>, 
 			return { mesh, tint: { bind, on: 'running' } };
 		case 'emissive':
 			return { mesh, emissive: { bind, on: 'running', intensity: 2 } };
+		case 'pulse':
+			return { mesh, pulse: { bind, hz: 1, amount: 0.1 } };
 		default:
 			return { mesh, visible: { bind } };
 	}
+}
+
+/** The member a one-click preset reads: the first the kind already reads
+ * as a boolean (a tint, a visible, a `{X?a:b}`), else the first member,
+ * else `Fault` — the name a motor's alarm usually has. */
+export function presetBind(): string {
+	const list = members();
+	return list.find((m) => memberShape(m) === 'bool') ?? list[0] ?? 'Fault';
+}
+
+/** The one-click presets (James, 2026-10-22: "common animations, like
+ * rotation based on an input, maybe pulsing"): a drive that blinks a
+ * glow or breathes the part while a boolean holds — the file row is the
+ * same as one built by hand, so it is tuned in its row afterwards. */
+export function presetDrive(kind: 'blink' | 'pulse', mesh: string): Drive {
+	const bind = presetBind();
+	return kind === 'blink' ? { mesh, emissive: { bind, on: 'critical', intensity: 2, blink: 2 } } : { mesh, pulse: { bind, hz: 1, amount: 0.1 } };
 }

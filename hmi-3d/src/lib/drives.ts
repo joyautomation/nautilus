@@ -21,10 +21,13 @@ export interface NumExpr {
 }
 
 /** A boolean read off the struct: `true`, or a number above `threshold`
- * (default 0). A leading `!` on `bind` negates, as everywhere else. */
+ * (default 0). A leading `!` on `bind` negates, as everywhere else.
+ * `blink`: while true, the effect alternates at this rate (Hz) — a lamp
+ * that flashes on a fault, a part that flickers in and out. */
 export interface BoolExpr {
 	bind: string;
 	threshold?: number;
+	blink?: number;
 }
 
 export interface SpinDrive {
@@ -61,11 +64,17 @@ export interface VisibleDrive {
 	mesh: string;
 	visible: BoolExpr;
 }
-export type Drive = SpinDrive | TurnDrive | ScaleDrive | TintDrive | EmissiveDrive | VisibleDrive;
+/** The mesh breathes while true: its scale swings by `amount` (default
+ * 0.1, so 0.9 … 1.1) at `hz` (default 1) about its own origin. */
+export interface PulseDrive {
+	mesh: string;
+	pulse: BoolExpr & { hz?: number; amount?: number };
+}
+export type Drive = SpinDrive | TurnDrive | ScaleDrive | TintDrive | EmissiveDrive | VisibleDrive | PulseDrive;
 
 /** The vocabulary. The extension's schema and internal/scene carry the same
  * list; a test on each side reads the schema so the three cannot drift. */
-export const DRIVE_CHANNELS = ['spin', 'turn', 'scale', 'tint', 'emissive', 'visible'] as const;
+export const DRIVE_CHANNELS = ['spin', 'turn', 'scale', 'tint', 'emissive', 'visible', 'pulse'] as const;
 export type DriveChannel = (typeof DRIVE_CHANNELS)[number];
 
 /** What GltfNode does to one mesh this frame. `null` = leave the model's own. */
@@ -82,6 +91,12 @@ export interface MeshState {
 	tint?: string | null | { ramp: [number, string][]; value: number };
 	emissive?: { color: string; intensity: number } | { ramp: [number, string][]; value: number; intensity: number } | null;
 	visible?: boolean;
+	/** The state alternates with `off` at `hz` while it holds (the
+	 * component keeps the clock): the tint's off colour, no glow, hidden. */
+	blink?: { hz: number; off: MeshState };
+	/** Breathe: scale 1 ± amount at hz, about the mesh's own scale; null =
+	 * back to the model's own. */
+	pulse?: { hz: number; amount: number } | null;
 }
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
@@ -141,14 +156,35 @@ export function evalDrives(drives: Drive[] | undefined, value: unknown, over: Re
 			s.scale = [a === 'x' || a === 'xyz' ? k : 1, a === 'y' || a === 'xyz' ? k : 1, a === 'z' || a === 'xyz' ? k : 1];
 		} else if ('tint' in d) {
 			if ('ramp' in d.tint) s.tint = { ramp: d.tint.ramp, value: num(read(d.tint.bind, value, over)) };
-			else s.tint = evalBool(d.tint, value, over) ? d.tint.on : (d.tint.off ?? null);
+			else {
+				const on = evalBool(d.tint, value, over);
+				s.tint = on ? d.tint.on : (d.tint.off ?? null);
+				if (on && d.tint.blink) s.blink = { hz: d.tint.blink, off: { mesh: d.mesh, tint: d.tint.off ?? null } };
+			}
 		} else if ('emissive' in d) {
 			if ('ramp' in d.emissive) s.emissive = { ramp: d.emissive.ramp, value: num(read(d.emissive.bind, value, over)), intensity: d.emissive.intensity ?? 1 };
-			else s.emissive = evalBool(d.emissive, value, over) ? { color: d.emissive.on, intensity: d.emissive.intensity ?? 1 } : null;
-		}
-		else if ('visible' in d) s.visible = evalBool(d.visible, value, over);
+			else {
+				const on = evalBool(d.emissive, value, over);
+				s.emissive = on ? { color: d.emissive.on, intensity: d.emissive.intensity ?? 1 } : null;
+				if (on && d.emissive.blink) s.blink = { hz: d.emissive.blink, off: { mesh: d.mesh, emissive: null } };
+			}
+		} else if ('visible' in d) {
+			s.visible = evalBool(d.visible, value, over);
+			if (s.visible && d.visible.blink) s.blink = { hz: d.visible.blink, off: { mesh: d.mesh, visible: false } };
+		} else if ('pulse' in d) s.pulse = evalBool(d.pulse, value, over) ? { hz: d.pulse.hz ?? 1, amount: d.pulse.amount ?? 0.1 } : null;
 		return s;
 	});
+}
+
+/** Whether a blinking state is in its on phase at `t` seconds: half the
+ * period on, half off, from t = 0. */
+export function blinkOn(hz: number, t: number): boolean {
+	return Math.floor(t * hz * 2) % 2 === 0;
+}
+
+/** The scale factor of a pulse at `t` seconds: 1 ± amount, a sine at hz. */
+export function pulseAt(p: { hz: number; amount: number }, t: number): number {
+	return 1 + p.amount * Math.sin(2 * Math.PI * p.hz * t);
 }
 
 /** Where a value sits on a ramp: the stop below, the stop above and the
@@ -174,6 +210,7 @@ export function driveMembers(drives: Drive[] | undefined): string[] {
 		if (!ch) continue;
 		const body = (d as unknown as Record<string, unknown>)[ch] as Record<string, unknown>;
 		const expr = ch === 'spin' ? body.revPerS : ch === 'turn' ? body.deg : ch === 'scale' ? body.to : body;
+		// (tint, emissive, visible and pulse read `bind` on the body itself)
 		const bind = isObj(expr) ? expr.bind : undefined;
 		if (isStr(bind)) {
 			const m = bindMember(bind);
@@ -215,6 +252,7 @@ export function validateDrives(drives: unknown, base: string): { path: string; m
 		const boolExpr = (e: Record<string, unknown>, ep: string) => {
 			if (!isStr(e.bind) || !MEMBER_RE.test(e.bind)) err(`${ep}/bind`, 'must name a member of the struct (a leading ! negates)');
 			if (e.threshold !== undefined && !isNum(e.threshold)) err(`${ep}/threshold`, 'must be a number');
+			if (e.blink !== undefined && !(isNum(e.blink) && e.blink > 0)) err(`${ep}/blink`, 'must be a rate in Hz, above 0');
 		};
 		const rampExpr = (e: Record<string, unknown>, ep: string) => {
 			if (!isStr(e.bind) || !MEMBER_RE.test(e.bind) || e.bind.startsWith('!')) err(`${ep}/bind`, 'must name a member of the struct (a number)');
@@ -246,7 +284,7 @@ export function validateDrives(drives: unknown, base: string): { path: string; m
 			case 'tint':
 				if (body.ramp !== undefined) {
 					rampExpr(body, `${p}/tint`);
-					for (const k of ['on', 'off', 'threshold']) if (body[k] !== undefined) err(`${p}/tint/${k}`, 'not with a ramp');
+					for (const k of ['on', 'off', 'threshold', 'blink']) if (body[k] !== undefined) err(`${p}/tint/${k}`, 'not with a ramp');
 				} else {
 					boolExpr(body, `${p}/tint`);
 					if (!isStr(body.on)) err(`${p}/tint/on`, 'must be a palette slot or a CSS colour');
@@ -256,7 +294,7 @@ export function validateDrives(drives: unknown, base: string): { path: string; m
 			case 'emissive':
 				if (body.ramp !== undefined) {
 					rampExpr(body, `${p}/emissive`);
-					for (const k of ['on', 'threshold']) if (body[k] !== undefined) err(`${p}/emissive/${k}`, 'not with a ramp');
+					for (const k of ['on', 'threshold', 'blink']) if (body[k] !== undefined) err(`${p}/emissive/${k}`, 'not with a ramp');
 				} else {
 					boolExpr(body, `${p}/emissive`);
 					if (!isStr(body.on)) err(`${p}/emissive/on`, 'must be a palette slot or a CSS colour');
@@ -265,6 +303,11 @@ export function validateDrives(drives: unknown, base: string): { path: string; m
 				break;
 			case 'visible':
 				boolExpr(body, `${p}/visible`);
+				break;
+			case 'pulse':
+				boolExpr(body, `${p}/pulse`);
+				if (body.hz !== undefined && !(isNum(body.hz) && body.hz > 0)) err(`${p}/pulse/hz`, 'must be a rate in Hz, above 0');
+				if (body.amount !== undefined && !(isNum(body.amount) && body.amount > 0 && body.amount <= 1)) err(`${p}/pulse/amount`, 'must be a fraction of the size, above 0 and at most 1');
 				break;
 		}
 	});

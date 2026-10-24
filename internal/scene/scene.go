@@ -205,6 +205,7 @@ type Drive struct {
 	Tint     *TintDrive     `json:"tint,omitempty"`
 	Emissive *EmissiveDrive `json:"emissive,omitempty"`
 	Visible  *BoolExpr      `json:"visible,omitempty"`
+	Pulse    *PulseDrive    `json:"pulse,omitempty"`
 }
 
 // NumExpr is member × Scale + Offset, clamped to [Min, Max].
@@ -217,9 +218,19 @@ type NumExpr struct {
 }
 
 // BoolExpr is true, or a number above Threshold; a leading `!` negates.
+// Blink: while true, the effect alternates at this rate (Hz).
 type BoolExpr struct {
 	Bind      string   `json:"bind"`
 	Threshold *float64 `json:"threshold,omitempty"`
+	Blink     *float64 `json:"blink,omitempty"`
+}
+
+// PulseDrive: the mesh breathes while true — its scale swings by Amount
+// (default 0.1) at Hz (default 1).
+type PulseDrive struct {
+	BoolExpr
+	Hz     *float64 `json:"hz,omitempty"`
+	Amount *float64 `json:"amount,omitempty"`
 }
 
 type SpinDrive struct {
@@ -296,7 +307,7 @@ func checkRamp(path, bind string, ramp []RampStop, errf func(path, format string
 // DriveChannels is the vocabulary, in the schema's order. hmi-3d's
 // DRIVE_CHANNELS and the extension schema carry the same list; a test on
 // each side reads the schema so the three cannot drift.
-var DriveChannels = []string{"spin", "turn", "scale", "tint", "emissive", "visible"}
+var DriveChannels = []string{"spin", "turn", "scale", "tint", "emissive", "visible", "pulse"}
 
 // Environment is the surroundings (§3c): an HDRI, the backdrop, shadows.
 type Environment struct {
@@ -448,11 +459,22 @@ type Pipe struct {
 var Looks = []string{"lit", "flat", "paper"}
 
 // Builtin is the contract the package's built-in kinds carry. It must
-// match hmi-3d's builtinRegistry (registry.ts): same names, same members.
+// match hmi-3d's BUILTIN_CONTRACT (kinds.ts) and models/kinds.json: same
+// names, same members, same ports (TestBuiltinMatchesTheDataKinds).
 var Builtin = map[string]Kind{
-	"tank":  {Type: "Tank", Members: []string{"Level", "TempC"}},
-	"pump":  {Type: "Motor", Members: []string{"Running", "Fault", "Speed"}},
-	"valve": {Type: "Valve", Members: []string{"Pos", "Cmd"}},
+	"tank":  {Type: "Tank", Members: []string{"Level", "TempC"}, Ports: builtinPorts(`{"inlet": {"at": [0, 0.46, 0], "dir": [0, 1, 0]}, "outlet": {"at": [0.25, 0, 0], "dir": [1, 0, 0]}}`)},
+	"pump":  {Type: "Motor", Members: []string{"Running", "Fault", "Speed"}, Ports: builtinPorts(`{"suction": {"at": [-0.21, 0.09, 0], "dir": [-1, 0, 0]}, "discharge": {"at": [0, 0.21, 0], "dir": [0, 1, 0]}}`)},
+	"valve": {Type: "Valve", Members: []string{"Pos", "Cmd"}, Ports: builtinPorts(`{"in": {"at": [0, -0.08, 0], "dir": [0, -1, 0]}, "out": {"at": [0, 0.08, 0], "dir": [0, 1, 0]}}`)},
+}
+
+// builtinPorts decodes a built-in's ports from the same JSON a kind file
+// would hold — the one spelling, so the table reads like the contract.
+func builtinPorts(src string) map[string]Port {
+	var out map[string]Port
+	if err := json.Unmarshal([]byte(src), &out); err != nil {
+		panic("builtin ports: " + err.Error())
+	}
+	return out
 }
 
 // Parse decodes a scene file. Unknown fields are errors, so a typo'd key
@@ -568,6 +590,8 @@ func driveMembers(drives []Drive) []string {
 			add(d.Emissive.Bind)
 		case d.Visible != nil:
 			add(d.Visible.Bind)
+		case d.Pulse != nil:
+			add(d.Pulse.Bind)
 		}
 	}
 	return out
@@ -782,6 +806,9 @@ func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
 		if !memberRe.MatchString(strings.TrimPrefix(e.Bind, "!")) {
 			errf(path+"/bind", "must name a member of the struct (a leading ! negates)")
 		}
+		if e.Blink != nil && *e.Blink <= 0 {
+			errf(path+"/blink", "must be a rate in Hz, above 0")
+		}
 	}
 	axis := func(path, a string, xyz bool) {
 		switch a {
@@ -805,7 +832,7 @@ func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
 			errf(dp+"/mesh", "must name a mesh in the model")
 		}
 		n := 0
-		for _, set := range []bool{d.Spin != nil, d.Turn != nil, d.Scale != nil, d.Tint != nil, d.Emissive != nil, d.Visible != nil} {
+		for _, set := range []bool{d.Spin != nil, d.Turn != nil, d.Scale != nil, d.Tint != nil, d.Emissive != nil, d.Visible != nil, d.Pulse != nil} {
 			if set {
 				n++
 			}
@@ -827,8 +854,8 @@ func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
 		case d.Tint != nil:
 			if d.Tint.Ramp != nil {
 				checkRamp(dp+"/tint", d.Tint.Bind, d.Tint.Ramp, errf)
-				if d.Tint.On != "" || d.Tint.Off != "" || d.Tint.Threshold != nil {
-					errf(dp+"/tint", "on, off and threshold are not with a ramp")
+				if d.Tint.On != "" || d.Tint.Off != "" || d.Tint.Threshold != nil || d.Tint.Blink != nil {
+					errf(dp+"/tint", "on, off, threshold and blink are not with a ramp")
 				}
 			} else {
 				boolean(dp+"/tint", d.Tint.BoolExpr)
@@ -839,8 +866,8 @@ func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
 		case d.Emissive != nil:
 			if d.Emissive.Ramp != nil {
 				checkRamp(dp+"/emissive", d.Emissive.Bind, d.Emissive.Ramp, errf)
-				if d.Emissive.On != "" || d.Emissive.Threshold != nil {
-					errf(dp+"/emissive", "on and threshold are not with a ramp")
+				if d.Emissive.On != "" || d.Emissive.Threshold != nil || d.Emissive.Blink != nil {
+					errf(dp+"/emissive", "on, threshold and blink are not with a ramp")
 				}
 			} else {
 				boolean(dp+"/emissive", d.Emissive.BoolExpr)
@@ -853,6 +880,14 @@ func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
 			}
 		case d.Visible != nil:
 			boolean(dp+"/visible", *d.Visible)
+		case d.Pulse != nil:
+			boolean(dp+"/pulse", d.Pulse.BoolExpr)
+			if d.Pulse.Hz != nil && *d.Pulse.Hz <= 0 {
+				errf(dp+"/pulse/hz", "must be a rate in Hz, above 0")
+			}
+			if d.Pulse.Amount != nil && (*d.Pulse.Amount <= 0 || *d.Pulse.Amount > 1) {
+				errf(dp+"/pulse/amount", "must be a fraction of the size, above 0 and at most 1")
+			}
 		}
 	}
 }

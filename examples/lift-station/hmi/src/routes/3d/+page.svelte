@@ -12,8 +12,10 @@
 	import sceneDoc from '../../../../lift-station.scene.json';
 	// The six kinds live in files of their own (hmi/src/lib/kinds/*.kind.json,
 	// design §3g): the scene names each by path, and the view pairs the
-	// path with the module Vite found, as it does a component kind's.
-	const modules = import.meta.glob('/src/lib/kinds/*.kind.json', { eager: true });
+	// path with the module Vite found, as it does a component kind's — a
+	// kind ejected to a .svelte beside its file (the kind editor's "Eject
+	// to component") joins the same way.
+	const modules = import.meta.glob(['/src/lib/kinds/*.kind.json', '/src/lib/kinds/*.svelte'], { eager: true });
 	import SeqStepTag from '$lib/SeqStepTag.svelte';
 	import { rt, alarms } from '$lib/client.svelte';
 

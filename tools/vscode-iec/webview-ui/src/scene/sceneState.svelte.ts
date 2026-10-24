@@ -71,6 +71,12 @@ export const ed = $state({
 	pipeFrom: null as PipeAnchor | null,
 	/** The port under the pointer on the stage. */
 	hoverPort: null as PipeAnchor | null,
+	/** The selected pipe (an index into doc.pipes): its points wear
+	 * handles on the stage. Selecting a pipe deselects the node. */
+	selectedPipe: null as number | null,
+	/** The selected point of that pipe (an index into its `points`): the
+	 * gizmo is on it; release posts setPipePoints. */
+	selectedVertex: null as number | null,
 	gizmo: 'translate' as Gizmo,
 	/** Mirrors `nautilus.scene.snapToGrid`. */
 	snapToGrid: true,
@@ -156,6 +162,28 @@ export function disarm(): void {
 	ed.tool = 'select';
 	ed.placeKind = '';
 	ed.pipeFrom = null;
+}
+
+/** Select a pipe (its points get handles), or none. */
+export function selectPipe(index: number | null): void {
+	ed.selectedPipe = index;
+	ed.selectedVertex = null;
+	if (index !== null) ed.selected = null;
+}
+
+/** Drop the selected vertex from its pipe — when the run keeps at least
+ * two points counting the anchored ends; a shorter run is the pipe's
+ * delete, not a vertex's. */
+export function deleteSelectedVertex(): boolean {
+	const i = ed.selectedPipe;
+	const v = ed.selectedVertex;
+	const pipe = i !== null ? ed.doc?.pipes?.[i] : undefined;
+	if (!pipe || v === null) return false;
+	const points = (pipe.points ?? []).filter((_, k) => k !== v);
+	if (points.length + (pipe.from ? 1 : 0) + (pipe.to ? 1 : 0) < 2) return false;
+	postOp({ type: 'setPipePoints', index: i!, points });
+	ed.selectedVertex = null;
+	return true;
 }
 
 /** The grid pitch a drag snaps to, metres: the document's grid cell. */

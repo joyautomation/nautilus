@@ -163,3 +163,23 @@ test("ramps: a tint or emissive over a number; stops ascend; no on / off with it
   assert.match(refuse(BASE, { type: "addDrive", drive: { mesh: "Shell", tint: { bind: "!TempC", ramp } } }), /a number/);
   assert.match(refuse(BASE, { type: "addDrive", drive: { mesh: "Shell", tint: { bind: "TempC", ramp, on: "x" } as never } }), /not with a ramp/);
 });
+
+test("blink and pulse: validated, and written in the row's key order", () => {
+  assert.equal(driveError({ mesh: "Lamp", emissive: { bind: "Fault", on: "critical", intensity: 2, blink: 2 } }), undefined);
+  assert.equal(driveError({ mesh: "Lamp", visible: { bind: "!Fault", blink: 0.5 } }), undefined);
+  assert.equal(driveError({ mesh: "Dome", pulse: { bind: "Alarm", hz: 1, amount: 0.1 } }), undefined);
+  assert.equal(driveError({ mesh: "Dome", pulse: { bind: "Alarm" } }), undefined);
+  assert.match(driveError({ mesh: "Lamp", visible: { bind: "Fault", blink: 0 } }) ?? "", /blink is a rate/);
+  assert.match(driveError({ mesh: "Lamp", tint: { bind: "T", ramp: [[0, "a"], [1, "b"]], blink: 1 } }) ?? "", /blink is not with a ramp/);
+  assert.match(driveError({ mesh: "Dome", pulse: { bind: "Alarm", hz: 0 } }) ?? "", /hz is a rate/);
+  assert.match(driveError({ mesh: "Dome", pulse: { bind: "Alarm", amount: 1.5 } }) ?? "", /amount is a fraction/);
+  const text = apply(BASE, {
+    type: "batch",
+    ops: [
+      { type: "addDrive", drive: { mesh: "Dome", pulse: { amount: 0.2, bind: "Alarm", hz: 2 } } },
+      { type: "addDrive", drive: { mesh: "Lamp", emissive: { blink: 2, on: "critical", bind: "Fault", intensity: 2 } } },
+    ],
+  });
+  assert.ok(text.includes('{ "mesh": "Dome", "pulse": { "bind": "Alarm", "hz": 2, "amount": 0.2 } }'), text);
+  assert.ok(text.includes('{ "mesh": "Lamp", "emissive": { "bind": "Fault", "on": "critical", "intensity": 2, "blink": 2 } }'), text);
+});

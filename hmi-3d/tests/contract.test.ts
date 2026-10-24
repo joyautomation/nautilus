@@ -52,6 +52,9 @@ describe('the built-ins as data (models/kinds.json)', () => {
 		for (const [name, k] of Object.entries(kinds))
 			for (const m of driveMembers(k.drive as Drive[])) expect(BUILTIN_CONTRACT[name].members ?? []).toContain(m);
 	});
+	it('carries the same ports as the contract (the pipe anchors a scene may name)', () => {
+		for (const [name, k] of Object.entries(kinds)) expect(k.ports).toEqual(BUILTIN_CONTRACT[name].ports);
+	});
 	it('validates as a scene', () => {
 		const doc = { kinds, nodes: [] };
 		expect(validateScene(doc, Object.keys(BUILTIN_CONTRACT))).toEqual({ ok: true, errors: [] });

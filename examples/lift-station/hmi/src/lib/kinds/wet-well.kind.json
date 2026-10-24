@@ -6,6 +6,9 @@
   },
   "labelAt": [-0.2, 3.3, 1.2],
   "status": "LIT-101 {Level:1} %",
+  "ports": {
+    "inlet": { "at": { "part": "Inlet", "anchor": "back" } }
+  },
   "drive": [
     { "mesh": "Fluid", "scale": { "axis": "y", "to": { "bind": "Level", "scale": 0.0296, "min": 0.01, "max": 2.96 } } }
   ]

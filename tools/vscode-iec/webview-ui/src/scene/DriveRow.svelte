@@ -7,7 +7,7 @@
 
 	let { drive, index }: { drive: Drive; index: number } = $props();
 
-	const CHANNELS = ['spin', 'turn', 'scale', 'tint', 'emissive', 'visible'] as const;
+	const CHANNELS = ['spin', 'turn', 'scale', 'tint', 'emissive', 'visible', 'pulse'] as const;
 	const ch = $derived(channelOf(drive));
 	const inModel = $derived(kd.modelState !== 'ok' || kd.meshes.includes(drive.mesh));
 	const num = $derived.by(() => ('spin' in drive ? drive.spin.revPerS : 'turn' in drive ? drive.turn.deg : 'scale' in drive ? drive.scale.to : null));
@@ -17,6 +17,7 @@
 		if ('tint' in drive) return 'ramp' in drive.tint ? null : drive.tint;
 		if ('emissive' in drive) return 'ramp' in drive.emissive ? null : drive.emissive;
 		if ('visible' in drive) return drive.visible;
+		if ('pulse' in drive) return drive.pulse;
 		return null;
 	});
 	const axis = $derived('spin' in drive ? drive.spin.axis : 'turn' in drive ? drive.turn.axis : 'scale' in drive ? drive.scale.axis : '');
@@ -68,6 +69,7 @@
 		else if ('scale' in d) d.scale.to.bind = v;
 		else if ('tint' in d) d.tint.bind = v;
 		else if ('emissive' in d) d.emissive.bind = v;
+		else if ('pulse' in d) d.pulse.bind = v;
 		else d.visible.bind = v;
 		post(d);
 	}
@@ -80,10 +82,10 @@
 		} else if ('emissive' in d && !('ramp' in d.emissive) && key === 'on' && v !== '') d.emissive.on = v;
 		post(d);
 	}
-	function setOptNum(e: Event, key: 'threshold' | 'intensity') {
+	function setOptNum(e: Event, key: 'threshold' | 'intensity' | 'blink' | 'hz' | 'amount') {
 		const d = clone();
 		const raw = (e.currentTarget as HTMLInputElement).value.trim();
-		const b = 'tint' in d ? d.tint : 'emissive' in d ? d.emissive : 'visible' in d ? d.visible : null;
+		const b = 'tint' in d ? d.tint : 'emissive' in d ? d.emissive : 'visible' in d ? d.visible : 'pulse' in d ? d.pulse : null;
 		if (!b) return;
 		const o = b as unknown as Record<string, unknown>;
 		if (raw === '') delete o[key];
@@ -187,6 +189,12 @@
 		{:else if bool}
 			<input class="nx-input bind" value={bool.bind} onchange={setBind} list="kind-members" aria-label="bind" placeholder="member (! negates)" spellcheck="false" title="The member read; a leading ! negates" />
 			<label title="true above this (a number)"><span>&gt;</span><input class="nx-input" type="number" step="any" value={fmt(bool.threshold)} onchange={(e) => setOptNum(e, 'threshold')} aria-label="threshold" placeholder="0" /></label>
+			{#if 'pulse' in drive}
+				<label title="breaths per second"><span>Hz</span><input class="nx-input" type="number" step="any" min="0" value={fmt(drive.pulse.hz)} onchange={(e) => setOptNum(e, 'hz')} aria-label="hz" placeholder="1" /></label>
+				<label title="how far the size swings: 0.1 is 0.9 … 1.1"><span>±</span><input class="nx-input" type="number" step="0.05" min="0" max="1" value={fmt(drive.pulse.amount)} onchange={(e) => setOptNum(e, 'amount')} aria-label="amount" placeholder="0.1" /></label>
+			{:else}
+				<label title="blink while true: flashes per second (blank = steady)"><span>blink</span><input class="nx-input" type="number" step="any" min="0" value={fmt(bool.blink)} onchange={(e) => setOptNum(e, 'blink')} aria-label="blink" placeholder="Hz" /></label>
+			{/if}
 			{#if 'tint' in drive && !('ramp' in drive.tint)}
 				<label title="palette slot or CSS colour while true"><span>on</span><input class="nx-input" value={drive.tint.on} onchange={(e) => setText(e, 'on')} aria-label="on" spellcheck="false" /></label>
 				<label title="while false (blank = the model's own)"><span>off</span><input class="nx-input" value={drive.tint.off ?? ''} onchange={(e) => setText(e, 'off')} aria-label="off" spellcheck="false" placeholder="own" /></label>

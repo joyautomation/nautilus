@@ -6,6 +6,9 @@
   },
   "labelAt": [0, 0.08, 0],
   "status": "{Tripped?TRIPPED:clear}",
+  "ports": {
+    "cable": { "at": { "part": "Clamp", "anchor": "top" } }
+  },
   "drive": [
     { "mesh": "FloatUp", "visible": { "bind": "Tripped" } },
     { "mesh": "FloatDown", "visible": { "bind": "!Tripped" } },

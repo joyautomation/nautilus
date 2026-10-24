@@ -2,6 +2,9 @@
   "model": "models/submersible-pump.glb",
   "labelAt": [0, 1.5, 0],
   "status": "{Running?run:stopped} {SpeedHz:0} Hz",
+  "ports": {
+    "discharge": { "at": { "part": "Flange", "anchor": "top" } }
+  },
   "drive": [
     { "mesh": "Motor", "tint": { "bind": "Running", "on": "running" } },
     { "mesh": "Volute", "tint": { "bind": "Running", "on": "running" } },
