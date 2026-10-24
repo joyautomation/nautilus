@@ -1,0 +1,61 @@
+page: website/src/content/docs/guides/groov-epic.md
+title: Opto 22 groov EPIC
+prefix: EPIC
+claims:
+  - id: EPIC-001
+    claim: >-
+      `naut optommp browse` and `import` read module type and channel type
+      per slot, the channel-present mask and the current values from the
+      processor over OptoMMP.
+    source: "#import-the-chassis"
+    tests:
+      - go ./optommp TestScanBenchChassis
+      - go ./optommp TestKindOf
+    partial: true
+    note: >-
+      Against an in-process fake of the bench chassis. The live read of
+      the real processor is not in CI; the bench nightly
+      (docs/design/bench-testing.md) is where it will be checked.
+  - id: EPIC-002
+    claim: >-
+      `naut optommp import` binds every channel to the processor's Modbus
+      map: digital state at coil/discrete 512 + slot*64 + ch, analog values
+      as float32 at input register 4608 + (slot*64 + ch)*2, outputs
+      writable, tags named <id>_M<slot>_<Kind><ch>.
+    source: "#import-the-chassis"
+    tests:
+      - go ./optommp TestGenerateModbusMap
+  - id: EPIC-003
+    claim: >-
+      Re-running the import on an unchanged chassis writes byte-identical
+      files.
+    source: "#import-the-chassis"
+    tests:
+      - go ./optommp TestGenerateModbusMap
+    partial: true
+    note: Generation is deterministic in the test; a run-twice-and-compare test is not written.
+  - id: EPIC-004
+    claim: >-
+      OptoMMP block writes and reads round-trip through the wire client.
+    source: "#import-the-chassis"
+    tests:
+      - go ./optommp TestWriteRoundTrip
+  - id: EPIC-005
+    claim: >-
+      An analog channel the processor reports as NaN renders as JSON null
+      on the tag API and stream, and its tag's quality is bad.
+    source: "#unwired-channels-read-nan"
+    tests:
+      - go ./server TestStateRendersNaNAsNull
+      - go ./modbus TestNaNFloatIsBadQuality
+  - id: EPIC-006
+    claim: >-
+      The runtime on the processor ran the epic-bench project (77 tags,
+      100 ms scan) at about 4 % of one core and 17 MB resident beside
+      Opto's own runtimes.
+    source: "#run-it-on-the-processor"
+    tests: []
+    note: >-
+      A bench measurement (2026-10-24), written up in
+      docs/design/open-controllers.md §2.3. No automated test yet; the
+      bench nightly is planned to record it per run.
