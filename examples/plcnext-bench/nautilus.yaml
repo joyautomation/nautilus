@@ -3,7 +3,9 @@
 # A Phoenix Contact AXC F 2152 (ARMv7, PREEMPT_RT Linux, firmware 2023.0)
 # with four Axioline modules on its local bus. The same `naut` binary,
 # cross-compiled for the controller, runs this project there and drives
-# the modules through the firmware's data-access socket; PLCnext Engineer
+# the modules through rt/plcnext-io's in-process shim (transport: shm in
+# the manifest; the BusConductor handshake goes over the firmware's
+# data-access socket); PLCnext Engineer
 # is not involved and no IEC program of Phoenix's runs. BusConductor
 # (Phoenix Contact's own open component) configures the bus at start.
 #

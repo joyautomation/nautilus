@@ -261,6 +261,21 @@ examples/plcnext-bench/controller/   the three project files that differ from up
                  PCWE.gds.config (the two connectors), pcwe.plm.config (library path), PCWE.opcua.config
 ```
 
+With `transport: shm` (stage 2 of tier 2, §3.4) the image takes a
+second route; the handshake stays on the socket:
+
+```
+  plcnext firmware ─ ACF ─▶ nautilus_io (rt/plcnext-io, C, 1 ms cycle)
+     Arp.Io.AxlC 1:IN / 1:OUT / DiagVars  ◀── ANSI-C Begin/EndRead, Begin/EndWrite
+                                   │
+                     /dev/shm/nautilus-plcnext-io  (4 KiB, two seqlock blocks)
+                     shim → naut: input frame · RUN · stamps · lateness · output echo
+                     naut → shim: output bytes · stamp · generation · watchdog
+                                   │
+  naut  plcnext.Driver shmImage: copy in, copy out every scan; Stale on a stalled
+        shim, Bad on RUN false, a new shim start ⇒ new session ⇒ handshake again
+```
+
 Dependencies: `google.golang.org/grpc` (new) and `protobuf` (already
 present), inside `plcnext/` only; the core stays stdlib. The ARMv7 static
 build with both new packages is 22 MB (20 MB before them).
@@ -293,6 +308,21 @@ stops (inputs Bad) and restarts (Good), and `DAE_NotExists` on a
 missing connector → `NotConnected`. `examples/plcnext-bench/` checks
 and tests offline. Cross-compile is clean.
 
+Stage 2 on the bench (2026-10-24): `examples/plcnext-bench` on
+`transport: shm`. The heartbeat is in the shim's own view of the output
+frame (`naut plcnext shm --watch`, byte 2 `00`/`80` every 500 ms,
+generation applied = written); the image costs 0.03–0.05 ms a scan
+against ~11 ms over gRPC, inputs are 0.1–1.1 ms old when the program
+reads them, naut takes 4 % of a core at 50 ms (9 % on gRPC) and the
+shim 3 %. `kill -9` of naut drops the frame to zero after the 1 s
+output watchdog; a runtime restart is recovered without a human (shim
+restarts, naut sees the new start stamp, re-handshakes; ~20 s to
+outputs). A 5 ms scan costs naut 21.5 % and pushes the best-effort shim
+to ~2 % late cycles (worst 12 ms), so FIFO is the next lever, not a
+faster scan. `go test ./plcnext/` drives the shm transport against a
+fake shim on a real mapping and checks the Go layout against the C
+header.
+
 Not verified: a human looking at the DO16 LEDs (the output mirror
 toggles; the module's UP supply is what makes a channel actually
 switch, and the bus reports "Supply missing (Up)" on slot 4, so James's
@@ -318,10 +348,15 @@ driver re-handshakes on its own).
    `setcap`): about 1 cycle in 1 500 later than 200 µs, worst 1.7 ms.
    Three hard lessons are in its README: never exit during ACF start-up
    (it rebooted the controller), never call the ANSI-C surface before
-   the PLC's first `Start*` callback, never guess a signature. Stage 2
-   is the seqlock page `rt/fastloop` defines, between this process and
-   the Go driver (`transport: shm`), so the manifest and tags stay as
-   they are and only the bytes' route changes.
+   the PLC's first `Start*` callback, never guess a signature. **Stage 2
+   (built and running, 2026-10-24):** the seqlock page between this
+   process and the Go driver (`transport: shm`, layout in
+   `rt/plcnext-io/nautilus_io_shm.h`), with an output watchdog in the
+   shim; the manifest and tags are unchanged, only the bytes' route.
+   Numbers in §3.3 and `rt/plcnext-io/README.md`. Left: SCHED_FIFO for
+   the shim (root once, for `setcap`), and naut's own start at boot
+   (`examples/plcnext-bench/controller/naut-keepalive.sh` from admin's
+   crontab — written and tried by hand, the crontab not yet installed).
 3. **Not pursued:** the OPC UA server on 4840 as the I/O path — it sees
    exactly what data access sees (the mirrored eCLR ports, never raw
    Axioline ports) at a higher cost per read, though it was the tool
@@ -349,7 +384,8 @@ driver re-handshakes on its own).
    then on the controller `naut-arm plcnext browse` and the heartbeat
    run.~~ Done 2026-10-24 (§3.3). Next on that side: James looks at the
    DO16 LEDs while the heartbeat runs, wires UP to slot 4 so the analog
-   module reads, and the on-controller run gets a systemd unit.
+   module reads, and the on-controller run starts at boot (no systemd on
+   the controller: admin's crontab and `naut-keepalive.sh`, §3.4).
 2. ~~James: order the free `GROOV-LIC-SHELL`; then the EPIC run moves onto
    the EPIC.~~ Done 2026-10-24: the license was already on the unit, the
    shell is on, nautilus ran on the EPIC. Next on that side: a systemd
@@ -358,7 +394,10 @@ driver re-handshakes on its own).
 4. `naut plcnext import` from a bus scan (module list → manifest) once
    BusConductor's `NUM_MODULES` and the image are readable, so the
    offsets stop being hand-typed.
-5. Decide whether tier 2 is wanted before anyone builds it.
+5. ~~Decide whether tier 2 is wanted before anyone builds it.~~ Built:
+   stages 1 and 2 run on the bench (§3.4). Next on it: a root path for
+   `setcap cap_sys_nice+ep` on the shim, then the FIFO lateness numbers
+   beside the best-effort ones.
 
 ## 5. Not adopted
 
