@@ -1,7 +1,7 @@
 #!/bin/sh
 # naut-keepalive.sh — start `naut run` for the bench project unless it is
 # already running. The controller has no systemd and admin cannot write
-# /etc/init.d, but admin may keep a crontab (vixie cron, started at boot
+# /etc/init.d, but admin may keep a crontab (cronie, started at boot
 # before the plcnext runtime), so:
 #
 #   @reboot   /opt/plcnext/apps/nautilus/plcnext-bench/controller/naut-keepalive.sh

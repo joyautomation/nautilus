@@ -120,8 +120,8 @@ ssh admin@192.168.82.216 /opt/plcnext/apps/nautilus/plcnext-bench/controller/nau
 ```
 
 **Surviving a reboot.** The controller has no systemd and `admin`
-cannot write `/etc/init.d`, but it may keep a crontab (vixie cron, which
-starts before the plcnext runtime). `controller/naut-keepalive.sh`
+cannot write `/etc/init.d`, but it may keep a crontab (cronie 1.6.1,
+`S90crond`, which starts before `S99plcnext`). `controller/naut-keepalive.sh`
 starts `naut run` for this project unless it is already running (pid in
 `naut.pid`, log in `naut-run.log`, one 1 MB generation kept), so
 
@@ -132,7 +132,8 @@ ssh admin@192.168.82.216 'printf "@reboot %s\n* * * * * %s\n" \
 ```
 
 starts it at boot and restarts it within a minute of a crash; `crontab
--r` takes it out. naut need not wait for the runtime: the driver retries
+-r` takes it out. Installed on the bench: a killed naut was back at the
+next minute. naut need not wait for the runtime: the driver retries
 the socket and the page with backoff. It is deliberately not an ACF
 `<Process>` like the shim — a declared ACF process that exits during
 start-up takes the whole runtime down, and naut can exit (a bad project,

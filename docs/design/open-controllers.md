@@ -354,9 +354,10 @@ driver re-handshakes on its own).
    `rt/plcnext-io/nautilus_io_shm.h`), with an output watchdog in the
    shim; the manifest and tags are unchanged, only the bytes' route.
    Numbers in §3.3 and `rt/plcnext-io/README.md`. Left: SCHED_FIFO for
-   the shim (root once, for `setcap`), and naut's own start at boot
-   (`examples/plcnext-bench/controller/naut-keepalive.sh` from admin's
-   crontab — written and tried by hand, the crontab not yet installed).
+   the shim (root once, for `setcap`). naut's own start is
+   `examples/plcnext-bench/controller/naut-keepalive.sh` from admin's
+   crontab, at boot and every minute: installed, and a killed naut came
+   back at the next minute; a reboot has not been tried yet.
 3. **Not pursued:** the OPC UA server on 4840 as the I/O path — it sees
    exactly what data access sees (the mirrored eCLR ports, never raw
    Axioline ports) at a higher cost per read, though it was the tool
@@ -384,8 +385,9 @@ driver re-handshakes on its own).
    then on the controller `naut-arm plcnext browse` and the heartbeat
    run.~~ Done 2026-10-24 (§3.3). Next on that side: James looks at the
    DO16 LEDs while the heartbeat runs, wires UP to slot 4 so the analog
-   module reads, and the on-controller run starts at boot (no systemd on
-   the controller: admin's crontab and `naut-keepalive.sh`, §3.4).
+   module reads, and a reboot proves the on-controller run's boot start
+   (no systemd on the controller: admin's crontab and
+   `naut-keepalive.sh`, installed, §3.4).
 2. ~~James: order the free `GROOV-LIC-SHELL`; then the EPIC run moves onto
    the EPIC.~~ Done 2026-10-24: the license was already on the unit, the
    shell is on, nautilus ran on the EPIC. Next on that side: a systemd
