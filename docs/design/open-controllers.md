@@ -4,8 +4,9 @@ Status: **groov EPIC built and verified on the bench; PLCnext built and
 verified against a fake firmware, one restart away from the bench.**
 Written 2026-10-23 on the `plcnext-groov` branch (worktree
 `~/Development/joyautomation/nautilus-plcnext-groov`). Context: this is
-**Field drivers** work (`optommp/` is an importer; `plcnext/` is a driver)
-plus two bench projects; nothing above the `io.Driver` seam changed.
+**Field drivers** work (`optommp/` and `plcnext/` are drivers, `optommp/`
+also the importer) plus two bench projects; nothing above the `io.Driver`
+seam changed.
 
 **The question asked:** two controllers are on the office network, an
 Opto 22 groov EPIC and a Phoenix Contact PLCnext. Can nautilus use them as
@@ -14,10 +15,11 @@ through theirs if it is open?
 
 **The short answer:** yes, through the nautilus runtime, differently on
 each. Neither vendor's own IEC engine is usable as a target (§1). The EPIC
-is nautilus I/O today with zero new runtime code: the processor's stock
-firmware exposes the chassis over OptoMMP and Modbus/TCP, a new importer
-turns the chassis into a Modbus manifest, and a 1 Hz heartbeat written by
-an ST program was read back off the EPIC's own coil (§2). The PLCnext is
+is nautilus I/O through the processor's stock firmware: it exposes the
+chassis over OptoMMP, the `optommp` driver polls it with per-channel
+quality (first through a Modbus projection, since superseded), and a 1 Hz
+heartbeat written by an ST program running on the EPIC itself was read
+back off the EPIC's own output (§2). The PLCnext is
 the stronger story — the nautilus runtime running *on* the controller,
 driving its Axioline modules, with Phoenix Contact's IEC engine idle — and
 it is built, tested, and cross-compiled; what remains is one documented
@@ -84,28 +86,76 @@ Block reads of 0x600 bytes answer in 0.6 ms; 0x800 hangs the request
 Cross-checked live: slot 2 channel 0 read 19.72 °C at input register 4864
 and 20.19 °C over OptoMMP; slot 3 channel 0 read 8.40 V both ways.
 
-**Decision: OptoMMP for discovery, Modbus for scan.** The runtime already
-has a Modbus driver with block planning, quality, status rows, a bench
-slave and CI. A second scan-rate transport for the same bytes would be a
-second driver to keep honest for no gain; the chassis knowledge (module
-tables, type codes, address arithmetic) is exactly what an *importer*
-should hold, behind the anti-corruption rule that vendor spellings stop at
-the package. Hence:
+**Decision, first pass (2026-10-23): OptoMMP for discovery, Modbus for
+scan.** The runtime already had a Modbus driver with block planning,
+quality, status rows, a bench slave and CI, so the importer projected the
+chassis onto the processor's Modbus map (`naut optommp import --modbus`
+still does) and the project said `driver: {type: modbus}`.
+
+**Decision, second pass (2026-10-24, James): an OptoMMP driver.** Two
+findings turned it. Every OptoMMP request costs ≈ 0.75 ms p50 / 1.5 ms
+p99 inside `mmpServer` whatever its size, the same on loopback as over
+the LAN, and the processor's Modbus server sits behind the same server —
+so Modbus buys no speed, only a second translation. And OptoMMP carries
+what Modbus cannot: per-channel quality. The driver (`optommp/driver.go`,
+`driver: {type: optommp}`) reads, per scan, only the packed areas its
+bindings need — two requests for an ordinary chassis:
+
+| area | address | per scan |
+|---|---|---|
+| packed values (analog EU, digital feature value) | `F1000300 + slot*0x80` | analog / counter slots |
+| expanded digital packed data: state, **quality mask**, on-latch, off-latch | `F1001900 + slot*0x10` | digital slots |
+| quality indicator codes | `F1002080 + slot*0x100 + ch*4` | only if `quality` tags are bound |
+| scratchpad bits / int32 / float | `F0D80000` / `F0D81000` / `F0D82000` | only if bound |
+
+and writes when outputs change: digital outputs through the **must-on /
+must-off** masks (`F1001A00 + slot*8`, one write for every commanded
+channel on every module; zero bits leave a channel alone — measured, the
+guide contradicts itself on this), analog outputs at `F02A0000 +
+slot*0x1000 + ch*0x40`, scratchpad elements in place and scratchpad bits
+through their on/off masks (`F0D80400`). On-/off-latch tags read the
+packed latch mask and clear only a latch they saw set, by reading its
+quadlet in the read-and-clear area (`F02E0000 + slot*0x600 + ch*0x18`,
++4 on, +8 off) — so a pulse shorter than the scan is delivered once.
+Module types and the channel-present mask (`F1000BC0`) are re-read every
+5 s; the power-up-clear flag (`F0300004`) is checked on connect and the
+PUC sent (`F0380000`) when owed.
+
+Quality per tag: **Bad** for an empty slot or one holding a module the
+manifest does not name, a digital channel the module lacks (present mask)
+or whose quality bit is set, and a NaN analog (the processor reports
+every bad-quality analog reading as NaN; unwired ICTD channels carry
+code 9); **Stale** after the socket drops; **NotConnected** until first
+read. On the bench, slots without a digital module read quality mask
+`FFFFFFFF` in the digital area and digital channel-present bits are the
+only ones set (analog modules set none) — the driver applies each check
+only where it means something.
 
 ```
 optommp/
   wire.go       read/write block over TCP 2001 (pure stdlib)
   modules.go    form 1465's groov I/O table as data: module type → part + channel count,
                 channel type → range/unit; Kind from the family byte (0x50/0x54 DI, 0x90/0x94 DO, 0x60 AI, 0xA0 AO)
-  chassis.go    Scan: one read per slot + the three packed areas → Chassis{Modules{Channels}}
-  modbusmap.go  Chassis → modbus.Manifest + tag file on the form 1678 addresses
-cmd/naut/optommp.go   naut optommp browse | import
+  chassis.go    Scan: one read per slot + the packed areas → Chassis{Modules{Channels}}
+                (type, feature, configured scale and units, name, present, value)
+  memmap.go     the areas the driver polls and writes
+  manifest.go   optommp_manifest.yaml: host, port, scan-rate, modules, bindings (points
+                di do ai ao counter on-latch off-latch quality scratch-bit/-int/-float)
+  driver.go     the io.Driver
+  generate.go   Chassis → manifest + tag file
+  modbusmap.go  Chassis → modbus.Manifest + tag file on the form 1678 addresses (--modbus)
+  optommptest/  the bench chassis as an in-process device, for tests
+cmd/naut/optommp.go   naut optommp browse | import [--modbus]
 ```
 
-`naut optommp import --host <epic>` writes `modbus_manifest.yaml` and
-`tags/optommp.yaml`; the project says `driver: {type: modbus}`. Tag names
-are `<id>_M<slot>_<Kind><ch>` — `EPIC_M1_DO11`. Outputs are writable
-bindings (coils, holding floats).
+`naut optommp import --host <epic>` writes `optommp_manifest.yaml` and
+`tags/optommp.yaml`; the project says `driver: {type: optommp}`. Tag
+names are `<id>_M<slot>_<Kind><ch>` — `EPIC_M1_DO11` — with or without
+`--modbus`, so a project moves between the two untouched. Optional tags:
+`_Count` (a digital channel with a feature configured), `--latches`
+(`_OnLatch`, `_OffLatch`), `--quality` (`_Quality`), `--scratch-bits
+/-ints/-floats N` (`<id>_SP_B0` …). Outputs are read back, so a DO tag
+shows what the module is doing.
 
 ### 2.3 Verified
 
@@ -133,15 +183,39 @@ branch at three layers: `runtime` renders a non-finite REAL as JSON
 link); `/api/state` answers 500 with the encoder's reason if anything
 else ever fails to render. Tests pin all three.
 
+
+**On the OptoMMP driver (2026-10-24, afternoon).** The same chassis,
+re-imported onto `driver: {type: optommp}`, ran from the laptop and then
+on the EPIC (the static ARMv7 build — which first had to stop computing
+memory-map addresses in `int`, they overflow it on 32-bit). DO11 read off
+the processor over a second OptoMMP connection carried the 1 Hz
+heartbeat; scratchpad float 0 carried the ICTD reading `bench.st`
+publishes; the 11 unwired ICTD channels were Bad; zero driver errors.
+Measured on the EPIC, one minute each, CPU and RSS of `naut` from
+`/proc`, scan time from the driver's status row:
+
+| driver + task scan | CPU (one core) | RSS | scan p50 / max | requests / scan |
+|---|---|---|---|---|
+| 100 ms | 3.9 % | 19.2 MB | 1.77 / 2.94 ms | 3 |
+| 20 ms | 14.7 % | 20.9 MB | 1.70 / 3.42 ms | 3 |
+| 5 ms | 35.3 % | 21.3 MB | 2.20 / 5.20 ms | 3 |
+
+At 100 ms that is the Modbus path's cost with per-channel quality added;
+5 ms is the floor (one scan in that minute took 5.2 ms). The bench has
+four field wires from outputs to inputs (DO3→DI6, DO4→DI8, DO5→DI10,
+DO6→DI12); the env-gated live test (`NAUT_OPTOMMP_LIVE=<host>
+NAUT_OPTOMMP_LOOPBACK="1.3>0.6" go test ./optommp -run Live`) drives one
+and reads it back in about one scan (21 ms at 20 ms), catches and clears
+the on-latch, and writes and restores a scratchpad float.
+
 ### 2.4 Not done, and why
 
 - **groov Manage REST API.** Richer (module names, channel names from the
   configuration), needs an API key James would mint. OptoMMP needed none,
   so it was not pursued.
-- **Channel quality from the present mask.** The Modbus path carries no
-  per-channel quality beyond the NaN verdict above; the channel-present
-  mask is only on OptoMMP. An OptoMMP *driver* could carry it; not worth
-  it until a project needs it.
+- **Channel quality on the Modbus path.** It still carries none beyond
+  the NaN verdict; the quality mask, codes and present mask are OptoMMP
+  only. Done in the optommp driver (§2.2).
 - **A path to the I/O below OptoMMP: there is none, Opto's CODESYS
   driver included.** Read from the free *Opto 22 Library Package for
   CODESYS* 3.1.3.0 (`Opto22-3.1.3.0-codesys-b2.signed.package`, 2026-03;
@@ -209,9 +283,23 @@ else ever fails to render. Tests pin all three.
   small: `mmpServer` almost certainly scans the bus itself and answers
   OptoMMP from its own image. OptoMMP's UDP streaming is the
   low-latency path, and it is the one Opto's own runtime uses.
+- **Streaming and the custom data area.** OptoMMP can push inputs as UDP
+  datagrams at a set interval, and map scattered addresses into one
+  contiguous block (one read for a whole rack). Both are device
+  configuration shared with every other client of the processor (Opto's
+  own CODESYS driver writes the same areas), and at two requests a scan
+  the poll is already at the server's floor. Next if a project needs
+  sub-5 ms or the CPU back.
+- **The communication watchdog.** The processor can set outputs to
+  watchdog values when OptoMMP traffic stops; it is per-unit
+  configuration in groov Manage, so the driver neither sets nor reads it.
+- **Counter reset.** `_Count` reads the feature value; clearing it (a
+  read of the read-and-clear area's +0 quadlet) is not exposed yet.
+- **Analog min/max** (`F0260008`) is not bound; one read per module per
+  scan for a value groov Manage already shows.
 - `naut optommp import` names tags by slot and channel; channel names
   configured in groov Manage are not reachable over OptoMMP.
-- **Start on boot.** The on-EPIC run was hand-started over SSH; a systemd
+- **Start on boot.** The on-EPIC runs were hand-started over SSH; a systemd
   unit for the shell user (systemd is there) is the obvious next step,
   with a `naut build` of the project so one binary is the deliverable.
 - `plcnext` reports one quality for the whole image; a NaN in a float32
@@ -401,7 +489,7 @@ driver re-handshakes on its own).
 - **EPIC today:** a credible "nautilus controls real I/O" demo on a
   recognisable product, with nothing installed on the product. The import
   story (`browse`, `import`, commit, `check`) is the same one every other
-  driver tells. Cost: one importer package, no runtime change.
+  driver tells. Cost: one driver package (stdlib only), no runtime change.
 - **PLCnext, running since 2026-10-24:** the first instance of *nautilus as the
   runtime on a vendor's own PLC hardware* — the N-55 / N-90 idea, and the
   thing no facade can claim. Cost so far: one driver package and a gRPC
@@ -429,8 +517,9 @@ driver re-handshakes on its own).
 
 ## 5. Not adopted
 
-- An OptoMMP `io.Driver`: the Modbus driver already does the job; one
-  transport per device class.
+- ~~An OptoMMP `io.Driver`: the Modbus driver already does the job; one
+  transport per device class.~~ Reversed 2026-10-24 (§2.2): Modbus on the
+  EPIC is the same server, no faster, and blind to channel quality.
 - DDI bus configuration over `IAxioMasterService`: unimplemented on this
   firmware; BusConductor is the vendor's supported answer.
 - Driving the EPIC through groov Manage's REST API or the PLCnext through
