@@ -1,0 +1,6 @@
+# The oracle clients, pinned to what the blackbox runs recorded (REPORT.md
+# provenance, `pip freeze` in the container). Bump only when a run did.
+asyncua==2.1.0
+pymodbus==3.16.1
+paho-mqtt==2.1.0
+protobuf==7.36.2
