@@ -4,13 +4,16 @@ package plcnext
 // build` pass on a laptop), Start connects to the firmware's socket, runs
 // the BusConductor handshake, and polls the input image at the scan rate;
 // WriteOutputs merges into a kept output image the loop flushes as one
-// span. Each scan is two round trips at most: one Read of the input
-// elements plus the bus RUN bit, one Write of the output span if anything
-// changed.
+// span. On transport grpc each scan is two round trips at most: one Read
+// of the input elements plus the bus RUN bit, one Write of the output
+// span if anything changed. On transport shm each scan is two copies in
+// and out of the shim's page (shm.go), the output one every scan so the
+// shim's watchdog sees this process alive.
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -68,6 +71,10 @@ type Driver struct {
 	quality  nio.Quality    // of every input, as one source
 	out      []byte         // the output image as last commanded
 	outDirty bool
+	why      string    // why the inputs are degraded, "" while they are not
+	shim     ShimState // transport shm: the page as last read
+	shimSeen bool
+	inAgeUs  int64 // … and how old its input frame was then
 
 	connected  atomic.Bool
 	configured atomic.Bool
@@ -134,11 +141,7 @@ func (d *Driver) run(ctx context.Context) {
 	defer close(d.done)
 	backoff := defaultRetryMin
 	for {
-		c, err := d.dial(ctx)
-		if err == nil {
-			err = d.session(ctx, c)
-			c.Close()
-		}
+		err := d.session(ctx)
 		d.connected.Store(false)
 		d.mu.Lock()
 		if d.quality == nio.Good || d.quality == nio.Bad {
@@ -161,23 +164,47 @@ func (d *Driver) run(ctx context.Context) {
 	}
 }
 
-// session is one connection: handshake, then poll until an error.
-func (d *Driver) session(ctx context.Context, c dataAccess) error {
-	st, err := conductBus(ctx, c, d.m.BusConductor, d.m.RunPort)
-	if err != nil {
-		return err
+// session is one connection: handshake, then poll until an error. The
+// handshake is gRPC on either transport (BusConductor's ports are GDS
+// ports); a shm transport with no BusConductor never dials at all.
+func (d *Driver) session(ctx context.Context) error {
+	st := BusState{Configured: true, Running: true}
+	var im image
+	if d.m.Transport == TransportGRPC || d.m.BusConductor != "" {
+		c, err := d.dial(ctx)
+		if err != nil {
+			return err
+		}
+		defer c.Close()
+		if st, err = conductBus(ctx, c, d.m.BusConductor, d.m.RunPort); err != nil {
+			return err
+		}
+		im = grpcImage{c: c, m: &d.m}
+	}
+	if d.m.Transport == TransportShm {
+		p, err := openShmPage(d.m.Shm)
+		if err != nil {
+			return err
+		}
+		defer p.Close()
+		p.gen = p.u64(shmOffOutGen) // generations keep climbing across a naut restart
+		im = &shmImage{p: p, watchdog: d.m.watchdog()}
 	}
 	d.configured.Store(st.Configured)
 	d.running.Store(st.Running)
 	d.modules.Store(int64(st.Modules))
 	d.connected.Store(true)
-	d.log.Info("plcnext: connected", "socket", d.m.Socket, "inputs", d.m.Inputs, "outputs", d.m.Outputs,
+	route := d.m.Socket
+	if d.m.Transport == TransportShm {
+		route = d.m.Shm
+	}
+	d.log.Info("plcnext: connected", "transport", d.m.Transport, "via", route, "inputs", d.m.Inputs, "outputs", d.m.Outputs,
 		"in_bytes", d.inLen, "out_bytes", d.outLen, "modules", st.Modules, "bus_running", st.Running)
 
 	tick := time.NewTicker(d.scanRate)
 	defer tick.Stop()
 	for {
-		if err := d.poll(ctx, c); err != nil {
+		if err := d.poll(ctx, im); err != nil {
 			return err
 		}
 		select {
@@ -311,60 +338,154 @@ func conductBus(ctx context.Context, c dataAccess, component, runPort string) (B
 	return st, nil
 }
 
-// poll reads the input span (and the RUN bit) once and flushes a dirty
-// output span.
-func (d *Driver) poll(ctx context.Context, c dataAccess) error {
+// image is one scan's route for the bytes: the GDS mirror ports over
+// gRPC, or the shim's page.
+type image interface {
+	// read returns the input span and what it is worth. An error ends the
+	// session; a reading with no bytes keeps the last inputs at its quality.
+	read(ctx context.Context, n int) (reading, error)
+	// write publishes the output image. everyScan routes are written every
+	// scan (the write is the shim's watchdog heartbeat); the others only
+	// when an output changed.
+	write(ctx context.Context, out []byte) error
+	everyScan() bool
+}
+
+type reading struct {
+	img     []byte
+	q       nio.Quality // of every input, as one source
+	running bool        // the bus exchanges process data
+	why     string      // when the reading is degraded: what is wrong
+}
+
+// grpcImage is the data-access route: one Read of the input elements plus
+// the RUN bit, one Write of the output span when it changed.
+type grpcImage struct {
+	c dataAccess
+	m *Manifest
+}
+
+func (g grpcImage) read(ctx context.Context, n int) (reading, error) {
 	var extra []string
-	if d.m.RunPort != "" {
-		extra = []string{d.m.RunPort}
+	if g.m.RunPort != "" {
+		extra = []string{g.m.RunPort}
 	}
-	t0 := time.Now()
 	cctx, cancel := withTimeout(ctx, defaultCallTO)
-	img, flags, err := c.ReadBytes(cctx, d.m.Inputs, d.inLen, extra...)
+	img, flags, err := g.c.ReadBytes(cctx, g.m.Inputs, n, extra...)
 	cancel()
+	if err != nil {
+		return reading{}, err
+	}
+	r := reading{img: img, q: nio.Good, running: true}
+	if len(flags) > 0 {
+		r.running = flags[0]
+	}
+	// The image is being refreshed, but a bus that is not exchanging
+	// process data is delivering stale bytes with a live socket: Bad, the
+	// reading, not the link.
+	if !r.running {
+		r.q = nio.Bad
+	}
+	return r, nil
+}
+
+func (g grpcImage) write(ctx context.Context, out []byte) error {
+	cctx, cancel := withTimeout(ctx, defaultCallTO)
+	defer cancel()
+	return g.c.WriteBytes(cctx, g.m.Outputs, 0, out)
+}
+
+func (grpcImage) everyScan() bool { return false }
+
+// shmImage is the shim's page: a copy, never a wait. Nothing about it
+// ends the session — the mapping outlives a shim restart — so a shim that
+// stalls or restarts makes the inputs Stale until it cycles again.
+type shmImage struct {
+	p        *shmPage
+	watchdog time.Duration
+	st       ShimState
+}
+
+func (s *shmImage) read(_ context.Context, n int) (reading, error) {
+	if err := s.p.read(&s.st); err != nil {
+		return reading{q: nio.Stale, why: err.Error()}, nil
+	}
+	now := monoNow()
+	if age := time.Duration(now - s.st.StampNs); age > shmStaleAfter {
+		return reading{q: nio.Stale, why: fmt.Sprintf("plcnext: shm: the shim (pid %d) has not cycled for %v", s.st.PID, age.Round(time.Millisecond))}, nil
+	}
+	if !s.st.PLC() {
+		return reading{q: nio.Stale, why: "plcnext: shm: the PLC domain is not started; the shim is not touching the frames"}, nil
+	}
+	if age := time.Duration(now - s.st.FrameNs); age > shmStaleAfter {
+		return reading{q: nio.Stale, why: fmt.Sprintf("plcnext: shm: the input frame is %v old", age.Round(time.Millisecond))}, nil
+	}
+	r := reading{img: s.st.Inputs[:n], q: nio.Good, running: true}
+	if s.st.RunKnown() && !s.st.Running() {
+		r.q, r.running = nio.Bad, false
+	}
+	return r, nil
+}
+
+func (s *shmImage) write(_ context.Context, out []byte) error {
+	s.p.write(out, monoNow(), s.watchdog)
+	return nil
+}
+
+func (*shmImage) everyScan() bool { return true }
+
+// poll reads the input span (and the RUN bit) once and flushes the output
+// span — when it changed, or every scan on a route that wants that.
+func (d *Driver) poll(ctx context.Context, im image) error {
+	t0 := time.Now()
+	r, err := im.read(ctx, d.inLen)
 	if err != nil {
 		return err
 	}
 	d.rttUs.Store(time.Since(t0).Microseconds())
 	d.reads.Add(1)
-	running := true
-	if len(flags) > 0 {
-		running = flags[0]
-	}
-	d.running.Store(running)
+	d.running.Store(r.running)
 
 	d.mu.Lock()
-	for _, b := range d.m.Tags {
-		if b.Dir != DirIn {
-			continue
+	if r.img != nil {
+		for _, b := range d.m.Tags {
+			if b.Dir != DirIn {
+				continue
+			}
+			v, err := decode(b, r.img, d.m.ByteOrder)
+			if err != nil {
+				d.mu.Unlock()
+				return err
+			}
+			d.in[b.Name] = v
 		}
-		v, err := decode(b, img, d.m.ByteOrder)
-		if err != nil {
-			d.mu.Unlock()
-			return err
-		}
-		d.in[b.Name] = v
 	}
-	// The image is being refreshed, but a bus that is not exchanging
-	// process data is delivering stale bytes with a live socket: Bad, the
-	// reading, not the link.
-	if running {
-		d.quality = nio.Good
-	} else {
-		d.quality = nio.Bad
+	d.quality = r.q
+	if r.why != d.why {
+		if r.why != "" {
+			d.fail(errors.New(r.why))
+			d.log.Warn("plcnext: inputs degraded", "quality", r.q, "why", r.why)
+		} else {
+			d.log.Info("plcnext: inputs fresh again")
+		}
+		d.why = r.why
+	}
+	if s, ok := im.(*shmImage); ok {
+		d.shim = s.st
+		d.shimSeen = true
+		if s.st.StampNs != 0 {
+			d.inAgeUs = (monoNow() - s.st.FrameNs) / 1000
+		}
 	}
 	var flush []byte
-	if d.outDirty {
+	if d.outDirty || im.everyScan() {
 		flush = append([]byte(nil), d.out...)
 		d.outDirty = false
 	}
 	d.mu.Unlock()
 
 	if flush != nil {
-		cctx, cancel := withTimeout(ctx, defaultCallTO)
-		err := c.WriteBytes(cctx, d.m.Outputs, 0, flush)
-		cancel()
-		if err != nil {
+		if err := im.write(ctx, flush); err != nil {
 			d.mu.Lock()
 			d.outDirty = true // retry on the next poll of the next session
 			d.mu.Unlock()
@@ -383,7 +504,7 @@ func (d *Driver) fail(err error) {
 // ReadInputs is io.Driver: the latest decoded image, never blocking on
 // the socket.
 func (d *Driver) ReadInputs() (nio.Values, error) {
-	out := make(nio.Values, len(d.in))
+	out := nio.Values{} // sized under the lock, by ReadInputsInto
 	return out, d.ReadInputsInto(out)
 }
 
@@ -443,6 +564,7 @@ func (d *Driver) Quality() map[string]nio.Quality {
 
 // Health is the status row's raw material.
 type Health struct {
+	Transport, Shm                 string
 	Socket, Inputs, Outputs        string
 	Connected, Configured, Running bool
 	Modules                        int
@@ -450,18 +572,51 @@ type Health struct {
 	Reads, Writes, Errors          uint64
 	RTTus                          int64
 	LastError                      string
-	Tags                           int
+	// Degraded is why the inputs are not Good right now beyond a stopped
+	// bus (a stalled shim, a PLC that is not started), "" when they are.
+	Degraded string
+	Tags     int
+	// Shim is the in-process tier as last seen through its page
+	// (transport shm, once read); nil otherwise.
+	Shim *ShimHealth
+}
+
+// ShimHealth is rt/plcnext-io/nautilus_io's cycle as it reports it.
+type ShimHealth struct {
+	PID                      uint32
+	PeriodUs, LateUs         uint32 // its cycle, and the lateness threshold Late counts against
+	WorstUs, LastUs          uint32
+	Cycles, Late, Torn       uint64
+	FIFO, Watchdog, RunKnown bool
+	InputAgeUs               int64  // how old the input frame was when this driver read it
+	Written, Applied         uint64 // output generations: this driver's last, and the one in the bus frame
 }
 
 // Health reports the driver's state for /api/drivers.
 func (d *Driver) Health() Health {
-	return Health{
-		Socket: d.m.Socket, Inputs: d.m.Inputs, Outputs: d.m.Outputs,
+	h := Health{
+		Transport: d.m.Transport, Socket: d.m.Socket, Inputs: d.m.Inputs, Outputs: d.m.Outputs,
 		Connected: d.connected.Load(), Configured: d.configured.Load(), Running: d.running.Load(),
 		Modules: int(d.modules.Load()), InBytes: d.inLen, OutBytes: d.outLen,
 		Reads: d.reads.Load(), Writes: d.writes.Load(), Errors: d.errs.Load(),
 		RTTus: d.rttUs.Load(), LastError: d.lastErr.Load().(string), Tags: len(d.m.Tags),
 	}
+	if d.m.Transport == TransportShm {
+		h.Shm = d.m.Shm
+	}
+	d.mu.Lock()
+	h.Degraded = d.why
+	if d.shimSeen {
+		st := d.shim
+		h.Shim = &ShimHealth{
+			PID: st.PID, PeriodUs: st.PeriodNs / 1000, LateUs: st.LateUs, WorstUs: st.WorstUs, LastUs: st.LastUs,
+			Cycles: st.Cycles, Late: st.Late, Torn: st.Torn,
+			FIFO: st.FIFO(), Watchdog: st.Watchdog(), RunKnown: st.RunKnown(),
+			InputAgeUs: d.inAgeUs, Written: st.OutGen, Applied: st.Applied,
+		}
+	}
+	d.mu.Unlock()
+	return h
 }
 
 // Handshake runs the BusConductor handshake over a real client, for

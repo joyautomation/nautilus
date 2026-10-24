@@ -4,8 +4,10 @@ package main
 // Phoenix Contact PLCnext controller: browse (bring the bus up through
 // BusConductor and dump the mirrored process image — run ON the
 // controller, where the socket is), read / write (any GDS name, to learn
-// what it is before a manifest binds it), and tags (derive the tag file
-// from a committed plcnext_manifest.yaml, anywhere).
+// what it is before a manifest binds it), shm (look at the in-process
+// shim's exchange page — what it read from the bus, what it wrote to it,
+// its cycle), and tags (derive the tag file from a committed
+// plcnext_manifest.yaml, anywhere).
 
 import (
 	"context"
@@ -38,6 +40,13 @@ Usage:
         On the controller: write a scalar port as its own type (true,
         17, 2.5 …). BusConductor's requests act on a RISING EDGE sampled
         every 100 ms: write false, then true, to make one.
+  naut plcnext shm [--shm /dev/shm/nautilus-plcnext-io] [--watch 250ms]
+        On the controller: read the exchange page of rt/plcnext-io's
+        nautilus_io (transport: shm) without writing it — the shim's
+        cycle and lateness, the bus RUN bit, the input frame, and the
+        output bytes it put on the bus (its own view of the frame), with
+        who owns them and how fresh they are. --watch prints one line per
+        interval until interrupted.
   naut plcnext tags <plcnext_manifest.yaml> [-o tags/plcnext.yaml]
         Anywhere: derive the tag file from the committed manifest.
 
@@ -69,6 +78,8 @@ func runPlcnext(args []string) int {
 		return runPlcnextRead(args[1:])
 	case "write":
 		return runPlcnextWrite(args[1:])
+	case "shm":
+		return runPlcnextShm(args[1:])
 	case "tags":
 		return runPlcnextTags(args[1:])
 	default:
@@ -202,6 +213,84 @@ func runPlcnextWrite(args []string) int {
 	}
 	fmt.Printf("%s: %s\n", port, desc)
 	return 0
+}
+
+func runPlcnextShm(args []string) int {
+	fs := flag.NewFlagSet("plcnext shm", flag.ContinueOnError)
+	path := fs.String("shm", plcnext.DefaultShm, "the shim's exchange page")
+	n := fs.Int("bytes", 16, "frame bytes to dump")
+	watch := fs.Duration("watch", 0, "print one line per interval until interrupted")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	*n = min(max(*n, 1), 512)
+	v, err := plcnext.OpenShm(*path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "naut plcnext shm: %v\n", err)
+		return 1
+	}
+	defer v.Close()
+	st, stampAge, frameAge, err := v.Read()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "naut plcnext shm: %v\n", err)
+		return 1
+	}
+	if *watch > 0 {
+		for {
+			fmt.Printf("in % x | out % x | run %s | input age %.2f ms | gen %d/%d%s\n",
+				st.Inputs[:min(*n, 8)], st.Echo[:min(*n, 8)], runText(st), plcnextMs(frameAge), st.Applied, st.OutGen, wdText(st))
+			time.Sleep(*watch)
+			if st, _, frameAge, err = v.Read(); err != nil {
+				fmt.Fprintf(os.Stderr, "naut plcnext shm: %v\n", err)
+				return 1
+			}
+		}
+	}
+	sched := "best-effort"
+	if st.FIFO() {
+		sched = "SCHED_FIFO"
+	}
+	fmt.Printf("nautilus_io pid %d: %d µs cycle, %s; status %#02x (PLC started %t, bus RUN %s)\n",
+		st.PID, st.PeriodNs/1000, sched, st.Status, st.PLC(), runText(st))
+	fmt.Printf("last cycle %.2f ms ago; input frame %.2f ms old\n", plcnextMs(stampAge), plcnextMs(frameAge))
+	fmt.Printf("%d cycles, %d late (>%d µs, %.3f %%), worst %.2f ms, this cycle %d µs\n",
+		st.Cycles, st.Late, st.LateUs, plcnextPct(st.Late, st.Cycles), float64(st.WorstUs)/1000, st.LastUs)
+	if st.OutLen == 0 {
+		fmt.Println("outputs: nobody has written the page; the frame is held at zero")
+	} else {
+		fmt.Printf("outputs: naut owns %d byte(s), generation %d (%d applied to the frame), watchdog %d ms%s; torn reads %d\n",
+			st.OutLen, st.OutGen, st.Applied, st.WatchdogMs, wdText(st), st.Torn)
+	}
+	fmt.Printf("input frame[0..%d):\n%s", *n, hexdump(st.Inputs[:*n]))
+	fmt.Printf("output frame[0..%d), as the shim wrote it:\n%s", *n, hexdump(st.Echo[:*n]))
+	return 0
+}
+
+func runText(st plcnext.ShimState) string {
+	switch {
+	case !st.RunKnown():
+		return "unknown"
+	case st.Running():
+		return "true"
+	default:
+		return "false"
+	}
+}
+
+func wdText(st plcnext.ShimState) string {
+	if st.Watchdog() {
+		return " — WATCHDOG: outputs stale, frame driven to zero"
+	}
+	return ""
+}
+
+func plcnextMs(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
+
+func plcnextPct(a, b uint64) float64 {
+	if b == 0 {
+		return 0
+	}
+	return 100 * float64(a) / float64(b)
 }
 
 func hexdump(b []byte) string {

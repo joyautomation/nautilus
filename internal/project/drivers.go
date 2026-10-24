@@ -554,15 +554,20 @@ func agoText(ms int64) string {
 	}
 }
 
-// replayStatus is a recording being played back. Only what changes when
-// someone acts is in it (speed, pause, a loaded or failed recording); the
-// clock's position moves every scan, so it rides as a Volatile metric and
-// never pushes the block onto a delta stream by itself.
 // plcnextStatus is the one-row status of the controller's own I/O: the
-// socket, whether BusConductor has the bus up, image sizes and round trip.
+// route (the firmware's socket, or the in-process shim's page), whether
+// BusConductor has the bus up, image sizes and round trip — and on
+// transport shm the shim's own cycle: input age, lateness, the output
+// generation it has applied.
 func plcnextStatus(h plcnext.Health) server.DriverStatus {
-	s := server.DriverStatus{Kind: "plcnext", Name: "plcnext", Detail: h.Socket, LastError: h.LastError}
+	detail := h.Socket
+	if h.Transport == plcnext.TransportShm {
+		detail = "shm " + h.Shm
+	}
+	s := server.DriverStatus{Kind: "plcnext", Name: "plcnext", Detail: detail, LastError: h.LastError}
 	switch {
+	case h.Connected && h.Degraded != "":
+		s.State, s.Message = "error", h.Degraded
 	case h.Connected && h.Configured && h.Running:
 		s.State, s.Message = "connected", fmt.Sprintf("Axioline bus running, %d module(s)", h.Modules)
 	case h.Connected && h.Configured:
@@ -574,6 +579,9 @@ func plcnextStatus(h plcnext.Health) server.DriverStatus {
 	default:
 		s.State, s.Message = "connecting", "Connecting to the firmware"
 	}
+	if h.Shim != nil && h.Shim.Watchdog {
+		s.State, s.Message = "error", "The shim's output watchdog lapsed: outputs are driven to zero"
+	}
 	s.Metrics = []server.DriverMetric{
 		{Label: "tags", Value: float64(h.Tags)},
 		{Label: "reads", Value: float64(h.Reads), Volatile: true},
@@ -582,9 +590,25 @@ func plcnextStatus(h plcnext.Health) server.DriverStatus {
 		{Label: "rtt", Value: float64(h.RTTus) / 1000, Text: fmt.Sprintf("%.2f ms", float64(h.RTTus)/1000), Volatile: true},
 		{Label: "image", Value: float64(h.InBytes), Text: fmt.Sprintf("%d in / %d out bytes", h.InBytes, h.OutBytes)},
 	}
+	if sh := h.Shim; sh != nil {
+		sched := "best-effort"
+		if sh.FIFO {
+			sched = "SCHED_FIFO"
+		}
+		s.Metrics = append(s.Metrics,
+			server.DriverMetric{Label: "input age", Value: float64(sh.InputAgeUs) / 1000, Text: fmt.Sprintf("%.2f ms", float64(sh.InputAgeUs)/1000), Volatile: true},
+			server.DriverMetric{Label: "shim cycle", Value: float64(sh.PeriodUs), Text: fmt.Sprintf("%d µs, %s", sh.PeriodUs, sched)},
+			server.DriverMetric{Label: "shim late", Value: float64(sh.Late), Text: fmt.Sprintf("%d of %d (>%d µs), worst %.1f ms", sh.Late, sh.Cycles, sh.LateUs, float64(sh.WorstUs)/1000), Volatile: true},
+			server.DriverMetric{Label: "outputs applied", Value: float64(sh.Applied), Text: fmt.Sprintf("gen %d of %d", sh.Applied, sh.Written), Volatile: true},
+		)
+	}
 	return s
 }
 
+// replayStatus is a recording being played back. Only what changes when
+// someone acts is in it (speed, pause, a loaded or failed recording); the
+// clock's position moves every scan, so it rides as a Volatile metric and
+// never pushes the block onto a delta stream by itself.
 func replayStatus(h replay.Health) server.DriverStatus {
 	s := server.DriverStatus{Kind: "replay", Name: "replay", Detail: h.History, LastError: h.LastError}
 	switch {
