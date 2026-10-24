@@ -177,8 +177,31 @@ else ever fails to render. Tests pin all three.
   module*, *Invalid channel type… may not be compatible* at
   configuration time, timeouts named "no response to command" and
   "missed incoming stream", the watchdog timeout and auto-reconnect.
-  Missing module, link timeout and NaN are therefore the whole quality
-  model for an OptoMMP driver. Nothing finer exists to expose.
+  That is a limit of Opto's CODESYS mapping, not of OptoMMP: the memory
+  map also has a per-channel quality mask in the expanded digital packed
+  data (`F1001900`) and quality indicator codes (`F1002080`), which the
+  `optommp` driver reads and CODESYS does not surface.
+
+  **What sits under `mmpServer`** (read-only look on the bench EPIC,
+  2026-10-24; nothing changed). The groov I/O modules are not reached
+  through an FPGA device node. The backplane is **ARCNET**: a COM20020
+  controller brought up as `arc0` (node 01, about 470 frames received a
+  second), driven by Opto kernel modules `com20020-o22`, `arc-o22proto`
+  (which registers a socket family, `O22ArcProto`) and `arc-o22encap`.
+  `/dev/fpgaDirectIo` (`root:mmp22 0660`) belongs to `o22_civ_direct_io`,
+  "a basic char driver to toggle direct I/O on fpga", and is not the
+  module I/O path. The kernel modules are all GPL, but no source or
+  written offer is published or on the box, so it would have to be
+  requested from Opto, and it would show only the ARCNET transport. The
+  module protocol itself (commands, channel configuration, framing) is
+  in `mmpServer`, which is closed. Replicating it is not worth doing.
+  `mmpServer` is the bus's one processor node, so a second master beside
+  it would interleave transactions with the modules. Replacing it means
+  stopping `mmpServer`, which takes OptoMMP, Modbus, PAC Control, CODESYS
+  and groov Manage's I/O with it, and it needs root. The gain would be
+  small: `mmpServer` almost certainly scans the bus itself and answers
+  OptoMMP from its own image. OptoMMP's UDP streaming is the
+  low-latency path, and it is the one Opto's own runtime uses.
 - `naut optommp import` names tags by slot and channel; channel names
   configured in groov Manage are not reachable over OptoMMP.
 - **Start on boot.** The on-EPIC run was hand-started over SSH; a systemd
