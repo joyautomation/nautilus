@@ -560,6 +560,11 @@
         "threshold": {
           "type": "number",
           "description": "A number counts as true above this. Default 0."
+        },
+        "blink": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "While true, the effect alternates at this rate (Hz): half the period on, half off. Not with a ramp."
         }
       }
     },
@@ -658,6 +663,11 @@
                   "type": "string",
                   "minLength": 1,
                   "description": "A palette slot (`running`, `fluid`, `handle`, `stale`, a priority name) or a CSS colour. Absent = the model's own colour."
+                },
+                "blink": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "While true, the effect alternates at this rate (Hz): half the period on, half off. Not with a ramp."
                 }
               }
             },
@@ -726,6 +736,11 @@
                   "type": "number",
                   "minimum": 0,
                   "description": "Default 1."
+                },
+                "blink": {
+                  "type": "number",
+                  "exclusiveMinimum": 0,
+                  "description": "While true, the effect alternates at this rate (Hz): half the period on, half off. Not with a ramp."
                 }
               }
             },
@@ -774,6 +789,36 @@
         "visible": {
           "$ref": "#/definitions/boolExpr",
           "description": "The mesh is shown while true."
+        },
+        "pulse": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "bind"
+          ],
+          "properties": {
+            "bind": {
+              "type": "string",
+              "pattern": "^!?[A-Za-z_][A-Za-z0-9_]*$",
+              "description": "A member of the node's struct; true, or a number above `threshold`. A leading `!` negates."
+            },
+            "threshold": {
+              "type": "number",
+              "description": "A number counts as true above this. Default 0."
+            },
+            "hz": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "description": "Breaths per second. Default 1."
+            },
+            "amount": {
+              "type": "number",
+              "exclusiveMinimum": 0,
+              "maximum": 1,
+              "description": "How far the scale swings, as a fraction: 0.1 is 0.9 … 1.1. Default 0.1."
+            }
+          },
+          "description": "The mesh breathes while true: its scale swings by `amount` at `hz` about its own origin."
         }
       },
       "oneOf": [
@@ -806,9 +851,14 @@
           "required": [
             "visible"
           ]
+        },
+        {
+          "required": [
+            "pulse"
+          ]
         }
       ],
-      "description": "One mesh, one channel: spin, turn, scale, tint, emissive or visible. The vocabulary is fixed (docs/design/spatial-hmi.md §3c); a kind that needs more is a Svelte component in the registry."
+      "description": "One mesh, one channel: spin, turn, scale, tint, emissive, visible or pulse. The vocabulary is fixed (docs/design/spatial-hmi.md §3c); a kind that needs more is a Svelte component in the registry (or this kind, ejected to one)."
     },
     "environment": {
       "type": "object",

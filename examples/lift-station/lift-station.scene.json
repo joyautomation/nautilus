@@ -30,12 +30,12 @@
 		{ "id": "TOPROC", "kind": "force-main", "label": "FORCE MAIN", "pos": [4.6, 0.45, -0.3] }
 	],
 	"pipes": [
-		{ "id": "p101-cv101", "points": [[0, -2.57, -0.8], [0, 0.45, -0.8], [2.0, 0.45, -0.8]], "radius": 0.075, "bind": { "flowing": "P101_Running" } },
-		{ "id": "cv101-header", "points": [[2.4, 0.45, -0.8], [2.9, 0.45, -0.8], [2.9, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "P101_Running" } },
-		{ "id": "p102-cv102", "points": [[1, -2.57, 0.2], [1, 0.45, 0.2], [2.0, 0.45, 0.2]], "radius": 0.075, "bind": { "flowing": "P102_Running" } },
-		{ "id": "cv102-header", "points": [[2.4, 0.45, 0.2], [2.9, 0.45, 0.2], [2.9, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "P102_Running" } },
-		{ "id": "header", "points": [[2.9, 0.45, -0.3], [3.47, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "FIT101_Flow" } },
-		{ "id": "force-main", "points": [[3.83, 0.45, -0.3], [4.6, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "FIT101_Flow" } },
-		{ "id": "lsll-cable", "points": [[-0.95, 0, -0.15], [-0.95, -2.42, -0.15]], "radius": 0.008 }
+		{ "id": "p101-cv101", "from": { "node": "P101", "port": "discharge" }, "to": { "node": "CV101", "port": "inlet" }, "points": [[0, 0.45, -0.8]], "radius": 0.075, "bind": { "flowing": "P101_Running" } },
+		{ "id": "cv101-header", "from": { "node": "CV101", "port": "outlet" }, "points": [[2.9, 0.45, -0.8], [2.9, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "P101_Running" } },
+		{ "id": "p102-cv102", "from": { "node": "P102", "port": "discharge" }, "to": { "node": "CV102", "port": "inlet" }, "points": [[1, 0.45, 0.2]], "radius": 0.075, "bind": { "flowing": "P102_Running" } },
+		{ "id": "cv102-header", "from": { "node": "CV102", "port": "outlet" }, "points": [[2.9, 0.45, 0.2], [2.9, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "P102_Running" } },
+		{ "id": "header", "to": { "node": "FIT101", "port": "inlet" }, "points": [[2.9, 0.45, -0.3]], "radius": 0.075, "bind": { "flowing": "FIT101_Flow" } },
+		{ "id": "force-main", "from": { "node": "FIT101", "port": "outlet" }, "to": { "node": "TOPROC", "port": "inlet" }, "radius": 0.075, "bind": { "flowing": "FIT101_Flow" } },
+		{ "id": "lsll-cable", "to": { "node": "LSLL101", "port": "cable" }, "points": [[-0.95, 0, -0.15]], "radius": 0.008 }
 	]
 }

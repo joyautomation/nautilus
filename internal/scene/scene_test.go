@@ -298,7 +298,11 @@ func TestCheckDataKindsStructural(t *testing.T) {
 			{"mesh": "M", "spin": {"axis": "x", "revPerS": {"bind": "Speed"}}, "tint": {"bind": "Running", "on": "running"}},
 			{"mesh": "M", "scale": {"axis": "xyz", "to": {"bind": "Level"}}},
 			{"mesh": "M", "tint": {"bind": "Running"}},
-			{"mesh": "M", "emissive": {"bind": "Fault", "on": "critical", "intensity": -1}}
+			{"mesh": "M", "emissive": {"bind": "Fault", "on": "critical", "intensity": -1}},
+			{"mesh": "M", "visible": {"bind": "Fault", "blink": 0}},
+			{"mesh": "M", "pulse": {"bind": "Alarm", "hz": 0, "amount": 2}},
+			{"mesh": "M", "tint": {"bind": "T", "ramp": [[0, "a"], [1, "b"]], "blink": 1}},
+			{"mesh": "M", "pulse": {"bind": "!Alarm", "hz": 2, "amount": 0.5, "blink": 1}}
 		]}},
 		"environment": {"hdri": "env/x.png", "backdrop": "env/x.txt", "background": "wall", "intensity": -1, "fog": {"near": 5, "far": 2}},
 		"fixtures": [{"kind": "box", "pos": [0, 0, 0], "texture": {"map": "a.jpg"}}],
@@ -309,8 +313,9 @@ func TestCheckDataKindsStructural(t *testing.T) {
 		"/kinds/a/model:", "/kinds/b/model:", "/kinds/c/bounds:", "/kinds/c/labelAt:", "/kinds/c/status:",
 		"/kinds/d/drive: drives need a model",
 		"/kinds/e/drive/0/mesh:", "/kinds/e/drive/0/spin/axis:", "/kinds/e/drive/0/spin/revPerS/bind:",
-		"/kinds/e/drive/1: a drive has exactly one of spin, turn, scale, tint, emissive, visible",
+		"/kinds/e/drive/1: a drive has exactly one of spin, turn, scale, tint, emissive, visible, pulse",
 		"/kinds/e/drive/3/tint/on:", "/kinds/e/drive/4/emissive/intensity:",
+		"/kinds/e/drive/5/visible/blink:", "/kinds/e/drive/6/pulse/hz:", "/kinds/e/drive/6/pulse/amount:", "/kinds/e/drive/7/tint: on, off, threshold and blink are not with a ramp",
 		"/environment/hdri:", "/environment/backdrop:", "/environment/fog/far:", "/environment/background:", "/environment/intensity:",
 		"/fixtures/0/texture: only a plane",
 	} {
@@ -320,6 +325,9 @@ func TestCheckDataKindsStructural(t *testing.T) {
 	}
 	if strings.Contains(got, "/kinds/e/drive/2") {
 		t.Errorf("xyz is a valid scale axis:\n%s", got)
+	}
+	if strings.Contains(got, "/kinds/e/drive/8") {
+		t.Errorf("a pulse with a negated bind, a rate, an amount and a blink is valid:\n%s", got)
 	}
 	// A channel outside the vocabulary is an unknown field at parse time.
 	if _, err := Parse([]byte(`{"kinds": {"x": {"model": "m.glb", "drive": [{"mesh": "M", "wobble": {}}]}}, "nodes": []}`)); err == nil || !strings.Contains(err.Error(), "wobble") {
@@ -454,6 +462,14 @@ func TestBuiltinMatchesTheDataKinds(t *testing.T) {
 		}
 		if k.Model != "models/"+name+".glb" {
 			t.Errorf("%s model: %s", name, k.Model)
+		}
+		if strings.Join(sortedPortNames(k.Ports), ",") != strings.Join(sortedPortNames(b.Ports), ",") {
+			t.Errorf("%s ports: kinds.json %v, Builtin %v", name, sortedPortNames(k.Ports), sortedPortNames(b.Ports))
+		}
+		for pn, bp := range b.Ports {
+			if kp, ok := k.Ports[pn]; ok && (string(kp.At) != string(bp.At) || !reflect.DeepEqual(kp.Dir, bp.Dir)) {
+				t.Errorf("%s port %s: kinds.json %s %v, Builtin %s %v", name, pn, kp.At, kp.Dir, bp.At, bp.Dir)
+			}
 		}
 	}
 	if len(kinds) != len(Builtin) {
@@ -880,7 +896,7 @@ func TestCheckBoxPointsAndRamps(t *testing.T) {
 		"/kinds/subpump/ports/c/at:",
 		"/kinds/subpump/drive/0/tint/bind:",
 		"/kinds/subpump/drive/0/tint/ramp: must be at least two",
-		"/kinds/subpump/drive/0/tint: on, off and threshold are not with a ramp",
+		"/kinds/subpump/drive/0/tint: on, off, threshold and blink are not with a ramp",
 		"/kinds/subpump/drive/1/emissive/ramp/1: stops go up",
 	} {
 		if !strings.Contains(got, want) {

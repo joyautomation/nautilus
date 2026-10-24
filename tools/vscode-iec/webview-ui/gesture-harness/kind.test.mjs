@@ -439,3 +439,35 @@ test('K09 anchors and ramps: a port at top of a part is a mark on it; "Add port 
 		assert.deepEqual(k.exceptions(), []);
 	});
 });
+
+test('K10 presets: "Blink on" and "Pulse on" each post ONE addDrive on the picked part, reading the first boolean member; the rows show blink / Hz / ± fields', { skip: !MODEL_URI && 'no model' }, async () => {
+	await withKind(valveKind(), {}, async (k) => {
+		// Pick a part by its chip, so the presets land on it.
+		await k.b.eval(`document.querySelector('[data-kind=part][data-name=Handle]').click()`);
+		await sleep(100);
+		const blink = await k.button('Blink on');
+		assert.ok(blink, 'a Blink preset');
+		await k.b.click(blink.cx, blink.cy);
+		await sleep(150);
+		let ops = await k.ops();
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.deepEqual(ops[0], { type: 'addDrive', drive: { mesh: 'Handle', emissive: { bind: 'Cmd', on: 'critical', intensity: 2, blink: 2 } } });
+		await k.reset();
+		const pulse = await k.button('Pulse on');
+		await k.b.click(pulse.cx, pulse.cy);
+		await sleep(150);
+		ops = await k.ops();
+		assert.deepEqual(ops[0], { type: 'addDrive', drive: { mesh: 'Handle', pulse: { bind: 'Cmd', hz: 1, amount: 0.1 } } });
+		// Echoed back, the rows carry the clocked fields.
+		const kind = valveKind();
+		kind.drive = [ops[0].drive, { mesh: 'Handle', emissive: { bind: 'Cmd', on: 'critical', intensity: 2, blink: 2 } }];
+		await k.reset();
+		await k.deliver(kind);
+		await sleep(300);
+		const rows = await k.drives();
+		assert.equal(rows[0].channel, 'pulse');
+		assert.ok(rows[0].fields.includes('hz') && rows[0].fields.includes('amount'), JSON.stringify(rows[0].fields));
+		assert.ok(rows[1].fields.includes('blink'), JSON.stringify(rows[1].fields));
+		assert.deepEqual(k.exceptions(), []);
+	});
+});

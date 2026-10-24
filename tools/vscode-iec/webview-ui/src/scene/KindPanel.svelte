@@ -5,7 +5,7 @@
 	import { formatStatus, type ScenePoint, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
 	import DriveRow from './DriveRow.svelte';
 	import PointFields from './PointFields.svelte';
-	import { ancestorsOf, blankDrive, drivesOn, kd, memberShape, members, postOp, sampleStruct } from './kindState.svelte';
+	import { ancestorsOf, blankDrive, drivesOn, kd, memberShape, members, postOp, presetBind, presetDrive, sampleStruct } from './kindState.svelte';
 	import { portNameFrom } from './marks';
 
 	const kind = $derived(kd.kind);
@@ -51,6 +51,12 @@
 	function addDrive() {
 		const mesh = kd.picked ?? kd.meshes[0] ?? 'Mesh';
 		postOp({ type: 'addDrive', drive: blankDrive(mesh, kd.meshes.length ? 'tint' : 'visible') });
+	}
+	/** One click, one common animation on the picked part: a glow that
+	 * blinks, or a part that breathes, while a boolean holds. */
+	function preset(kind: 'blink' | 'pulse') {
+		const mesh = kd.picked ?? kd.meshes[0] ?? 'Mesh';
+		postOp({ type: 'addDrive', drive: presetDrive(kind, mesh) });
 	}
 	function pick(m: string | null) {
 		kd.picked = m;
@@ -260,6 +266,10 @@
 				Add drive{#if kd.picked} on <code>{kd.picked}</code>{/if}
 			</button>
 		</div>
+		<div class="actions two presets">
+			<button onclick={() => preset('blink')} data-kind="preset-blink" title={`${kd.picked ?? kd.meshes[0] ?? 'the part'} glows and blinks twice a second while ${presetBind()} is true — tune it in its row`}>Blink on {presetBind()}</button>
+			<button onclick={() => preset('pulse')} data-kind="preset-pulse" title={`${kd.picked ?? kd.meshes[0] ?? 'the part'} breathes (±10 % once a second) while ${presetBind()} is true — tune it in its row`}>Pulse on {presetBind()}</button>
+		</div>
 
 		<div class="head sub">Sample values</div>
 		{#if memberList.length === 0}
@@ -284,7 +294,7 @@
 
 <style>
 	aside {
-		width: 300px;
+		width: 340px;
 		flex: none;
 		overflow-y: auto;
 		border-left: 1px solid var(--nx-border);

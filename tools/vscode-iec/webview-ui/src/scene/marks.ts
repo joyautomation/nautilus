@@ -85,6 +85,23 @@ export function partBoxes(group: Object3D): Record<string, SceneBox> {
 	return out;
 }
 
+/** The box of everything under `group`, in its own frame — a model kind's
+ * `auto` bounds, measured off the stage, for a port "at top" of the
+ * bounds of a kind that declares none. Empty until the model is on stage. */
+export function groupBox(group: Object3D): SceneBox | undefined {
+	group.updateWorldMatrix(true, true);
+	const inv = new Matrix4().copy(group.matrixWorld).invert();
+	const box = new Box3();
+	const m = new Matrix4();
+	group.traverse((c) => {
+		const mesh = c as Mesh;
+		if (!mesh.isMesh || c.userData.nxHighlight || !mesh.geometry) return;
+		if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+		box.union(mesh.geometry.boundingBox!.clone().applyMatrix4(m.multiplyMatrices(inv, mesh.matrixWorld)));
+	});
+	return box.isEmpty() ? undefined : { size: box.getSize(new Vector3()).toArray() as Vec3, center: box.getCenter(new Vector3()).toArray() as Vec3 };
+}
+
 /** The port a raycast hit belongs to, or null. */
 export function portOf(o: Object3D | null | undefined, stopAt?: Object3D | null): string | null {
 	for (let p = o; p && p !== stopAt; p = p.parent) if (typeof p.userData?.nxPort === 'string') return p.userData.nxPort as string;

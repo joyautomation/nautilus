@@ -4,7 +4,7 @@
 	// Document state arrives from the extension host (sceneDoc / sceneError
 	// / sceneTags / sceneConfig messages); every gesture goes back as an op.
 	import { LOOKS, type SceneLook } from '@joyautomation/nautilus-hmi-3d';
-	import { announceReady, disarm, ed, missingAssets, postOp, reopenAsText, setSnapToGrid, stageLook, toggleLive } from './sceneState.svelte';
+	import { announceReady, deleteSelectedVertex, disarm, ed, missingAssets, postOp, reopenAsText, selectPipe, setSnapToGrid, stageLook, toggleLive } from './sceneState.svelte';
 	import KindPalette from './KindPalette.svelte';
 	import Stage3D from './Stage3D.svelte';
 	import NodePanel from './NodePanel.svelte';
@@ -64,6 +64,14 @@
 		const d = ed.doc;
 		if (s && d && !d.nodes.some((n) => n.id === s)) ed.selected = null;
 	});
+	// And a selected pipe or vertex the document no longer has.
+	$effect(() => {
+		const i = ed.selectedPipe;
+		const v = ed.selectedVertex;
+		const pipe = i !== null ? ed.doc?.pipes?.[i] : undefined;
+		if (i !== null && !pipe) selectPipe(null);
+		else if (v !== null && !(pipe?.points ?? [])[v]) ed.selectedVertex = null;
+	});
 
 	function inField(e: KeyboardEvent): boolean {
 		const t = e.target as HTMLElement | null;
@@ -76,6 +84,8 @@
 				return;
 			}
 			if (ed.tool === 'place' || ed.pipeFrom) disarm();
+			else if (ed.selectedVertex !== null) ed.selectedVertex = null;
+			else if (ed.selectedPipe !== null) selectPipe(null);
 			else ed.selected = null;
 			return;
 		}
@@ -84,6 +94,12 @@
 			e.preventDefault();
 			postOp({ type: 'deleteNode', id: ed.selected });
 			ed.selected = null;
+		} else if ((e.key === 'Delete' || e.key === 'Backspace') && ed.selectedPipe !== null) {
+			e.preventDefault();
+			if (ed.selectedVertex === null || !deleteSelectedVertex()) {
+				postOp({ type: 'deletePipe', index: ed.selectedPipe });
+				selectPipe(null);
+			}
 		} else if (e.key === 'g' || e.key === 'G') ed.gizmo = 'translate';
 		else if (e.key === 'r' || e.key === 'R') ed.gizmo = 'rotate';
 	}
@@ -96,7 +112,11 @@
 			? `click the ground to place a ${ed.placeKind} · Shift = off-grid · Esc cancels`
 			: ed.pipeFrom
 				? `pipe from ${ed.pipeFrom.node}.${ed.pipeFrom.port} · click another port to run it there · Esc cancels`
-				: ed.selected
+				: ed.selectedVertex !== null
+					? `drag the gizmo to move the point · Shift = off-grid · Del removes the point · Esc`
+					: ed.selectedPipe !== null
+						? `pipe ${ed.doc?.pipes?.[ed.selectedPipe]?.id ?? '#' + ed.selectedPipe}: click a point on the stage to move it · Del deletes the pipe · Esc`
+						: ed.selected
 				? `drag the gizmo to move (G) or turn (R) · Shift = off-grid · Del deletes · Esc deselects`
 				: 'click a node to select it · click a port, then another, to run a pipe · drag to orbit, right-drag to pan, wheel to zoom · pick a kind on the left to place one'
 	);

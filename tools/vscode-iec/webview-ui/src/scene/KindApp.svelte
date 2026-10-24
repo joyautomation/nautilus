@@ -4,7 +4,7 @@
 	// fields and drives. The file arrives from the extension host (kindDoc
 	// / kindError); every change goes back as an op.
 	import { LOOKS, type SceneLook } from '@joyautomation/nautilus-hmi-3d';
-	import { announceReady, kd, reopenAsText } from './kindState.svelte';
+	import { announceReady, askAi, ejectKind, kd, reopenAsText } from './kindState.svelte';
 	import KindStage from './KindStage.svelte';
 	import KindPanel from './KindPanel.svelte';
 
@@ -82,6 +82,8 @@
 			Turntable: {kd.turntable ? 'On' : 'Off'}
 		</button>
 		<span class="spacer"></span>
+		<button class="toggle" onclick={askAi} data-kind="ask-ai" title="Hand the open-ended work to the AI: a model from a picture, sensible part names, a variant of this kind — opens the chat with a prompt about this file">Ask AI…</button>
+		<button class="toggle" onclick={ejectKind} data-kind="eject" disabled={!kd.kind?.model} title="Write a .svelte beside this file with the model and these drives as code — the whole Threlte / JavaScript story when drives are not enough">Eject to component…</button>
 		<span class="state" class:bad={kd.modelState === 'failed'} class:warn={kd.model && !kd.model.file}>
 			{#if !kd.kind?.model}no model{:else if kd.model && !kd.model.file}model not found{:else if kd.modelState === 'failed'}model failed to load{:else if kd.modelState === 'ok'}● model{:else}loading model…{/if}
 		</span>

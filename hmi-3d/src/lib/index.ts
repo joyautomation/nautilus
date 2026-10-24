@@ -28,6 +28,8 @@ export { default as Pipe3D } from './components/Pipe3D.svelte';
 export { default as Halo } from './components/Halo.svelte';
 export { default as Label } from './components/Label.svelte';
 export { default as Fixture3D } from './components/Fixture3D.svelte';
+// A model with drives for a component of your own (an ejected kind).
+export { default as ModelNode } from './components/ModelNode.svelte';
 // GltfNode and Surroundings are deliberately NOT exported here: Scene3D
 // dynamic-imports them, and a static export would fold the glTF and HDRI
 // loaders back into the base bundle (§3c, §6).
@@ -59,8 +61,8 @@ export type {
 } from './scene.js';
 
 // Kinds as data: the drive vocabulary, evaluated from the document.
-export { DRIVE_CHANNELS, evalDrives, evalNum, evalBool, rampAt, driveMembers, validateDrives, formatStatus, statusMembers, propFor } from './drives.js';
-export type { Drive, DriveChannel, MeshState, NumExpr, BoolExpr, RampExpr, Axis } from './drives.js';
+export { DRIVE_CHANNELS, evalDrives, evalNum, evalBool, rampAt, blinkOn, pulseAt, driveMembers, validateDrives, formatStatus, statusMembers, propFor } from './drives.js';
+export type { Drive, DriveChannel, MeshState, NumExpr, BoolExpr, RampExpr, PulseDrive, Axis } from './drives.js';
 
 // Bindings: the mimic's grammar plus dotted paths, evaluated from the doc.
 export { resolveNodeBindings, resolveRefs, readPart, bindingsGood, readPath, member, num, flowing } from './bindings.js';
