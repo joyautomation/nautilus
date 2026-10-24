@@ -72,6 +72,7 @@ type Driver struct {
 	out      []byte         // the output image as last commanded
 	outDirty bool
 	why      string    // why the inputs are degraded, "" while they are not
+	cause    string    // … its stable name (reading.cause)
 	shim     ShimState // transport shm: the page as last read
 	shimSeen bool
 	inAgeUs  int64 // … and how old its input frame was then
@@ -142,6 +143,9 @@ func (d *Driver) run(ctx context.Context) {
 	backoff := defaultRetryMin
 	for {
 		err := d.session(ctx)
+		if d.connected.Load() {
+			backoff = defaultRetryMin // a session that ran retries promptly, whatever came before it
+		}
 		d.connected.Store(false)
 		d.mu.Lock()
 		if d.quality == nio.Good || d.quality == nio.Bad {
@@ -355,7 +359,8 @@ type reading struct {
 	img     []byte
 	q       nio.Quality // of every input, as one source
 	running bool        // the bus exchanges process data
-	why     string      // when the reading is degraded: what is wrong
+	why     string      // when the reading is degraded: what is wrong, now
+	cause   string      // … and a stable name for it, so a change is logged once, not every scan
 }
 
 // grpcImage is the data-access route: one Read of the input elements plus
@@ -397,28 +402,38 @@ func (g grpcImage) write(ctx context.Context, out []byte) error {
 
 func (grpcImage) everyScan() bool { return false }
 
-// shmImage is the shim's page: a copy, never a wait. Nothing about it
-// ends the session — the mapping outlives a shim restart — so a shim that
-// stalls or restarts makes the inputs Stale until it cycles again.
+// shmImage is the shim's page: a copy, never a wait. A shim that stalls
+// makes the inputs Stale until it cycles again, on the same mapping. A
+// shim that RESTARTED ends the session: the ACF restarts it with the
+// plcnext runtime, and a restarted runtime has a bus that needs
+// BusConductor's handshake again — which the gRPC transport gets from its
+// socket dropping.
 type shmImage struct {
 	p        *shmPage
 	watchdog time.Duration
 	st       ShimState
+	started  int64 // the shim's start stamp this session first saw
 }
 
 func (s *shmImage) read(_ context.Context, n int) (reading, error) {
 	if err := s.p.read(&s.st); err != nil {
-		return reading{q: nio.Stale, why: err.Error()}, nil
+		return reading{q: nio.Stale, why: err.Error(), cause: "page"}, nil
+	}
+	switch {
+	case s.started == 0:
+		s.started = s.st.StartedNs
+	case s.st.StartedNs != s.started && s.st.StartedNs != 0:
+		return reading{}, fmt.Errorf("plcnext: shm: the shim restarted (now pid %d); handshaking again", s.st.PID)
 	}
 	now := monoNow()
 	if age := time.Duration(now - s.st.StampNs); age > shmStaleAfter {
-		return reading{q: nio.Stale, why: fmt.Sprintf("plcnext: shm: the shim (pid %d) has not cycled for %v", s.st.PID, age.Round(time.Millisecond))}, nil
+		return reading{q: nio.Stale, why: fmt.Sprintf("plcnext: shm: the shim (pid %d) has not cycled for %v", s.st.PID, age.Round(time.Millisecond)), cause: "stalled"}, nil
 	}
 	if !s.st.PLC() {
-		return reading{q: nio.Stale, why: "plcnext: shm: the PLC domain is not started; the shim is not touching the frames"}, nil
+		return reading{q: nio.Stale, why: "plcnext: shm: the PLC domain is not started; the shim is not touching the frames", cause: "plc"}, nil
 	}
 	if age := time.Duration(now - s.st.FrameNs); age > shmStaleAfter {
-		return reading{q: nio.Stale, why: fmt.Sprintf("plcnext: shm: the input frame is %v old", age.Round(time.Millisecond))}, nil
+		return reading{q: nio.Stale, why: fmt.Sprintf("plcnext: shm: the input frame is %v old", age.Round(time.Millisecond)), cause: "frame"}, nil
 	}
 	r := reading{img: s.st.Inputs[:n], q: nio.Good, running: true}
 	if s.st.RunKnown() && !s.st.Running() {
@@ -461,15 +476,16 @@ func (d *Driver) poll(ctx context.Context, im image) error {
 		}
 	}
 	d.quality = r.q
-	if r.why != d.why {
-		if r.why != "" {
+	if r.cause != d.cause {
+		if r.cause != "" {
 			d.fail(errors.New(r.why))
 			d.log.Warn("plcnext: inputs degraded", "quality", r.q, "why", r.why)
 		} else {
 			d.log.Info("plcnext: inputs fresh again")
 		}
-		d.why = r.why
+		d.cause = r.cause
 	}
+	d.why = r.why
 	if s, ok := im.(*shmImage); ok {
 		d.shim = s.st
 		d.shimSeen = true

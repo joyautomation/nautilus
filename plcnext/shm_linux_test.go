@@ -128,13 +128,25 @@ func (s *fakeShim) loop() {
 	}
 }
 
+// restart is what page_open does for a shim that comes back: a fresh
+// start stamp and pid on the same page.
+func (s *fakeShim) restart() {
+	binary.LittleEndian.PutUint32(s.mem[shmOffPID:], 4243)
+	binary.LittleEndian.PutUint64(s.mem[shmOffStartedNs:], uint64(monoNow()))
+}
+
 func (s *fakeShim) setInput(off int, b byte) { s.mu.Lock(); s.inputs[off] = b; s.mu.Unlock() }
 func (s *fakeShim) setRun(v bool)            { s.mu.Lock(); s.run = v; s.mu.Unlock() }
 func (s *fakeShim) out(off int) byte         { s.mu.Lock(); defer s.mu.Unlock(); return s.frame[off] }
 
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
+	eventuallyWithin(t, 3*time.Second, what, cond)
+}
+
+func eventuallyWithin(t *testing.T, d time.Duration, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(d)
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatal(what)
@@ -220,11 +232,28 @@ func TestDriverOverShm(t *testing.T) {
 	if why := d.Health().Degraded; !strings.Contains(why, "has not cycled") {
 		t.Errorf("degraded %q", why)
 	}
+	errs := d.Health().Errors
+	time.Sleep(50 * time.Millisecond) // ten more scans of the same stall
+	if e := d.Health().Errors; e != errs {
+		t.Errorf("one stall counted %d more errors: logged every scan, not once", e-errs)
+	}
 	shim.stalled.Store(false)
 	eventually(t, "a shim that resumed never made the inputs Good", func() bool { return d.Quality()["DI_00"] == nio.Good })
 	if h := d.Health(); h.Degraded != "" || h.Reads <= reads {
 		t.Errorf("after resume: %+v", h)
 	}
+
+	// A shim that restarted (the runtime did) ends the session, so the
+	// BusConductor handshake runs again on a fresh connection.
+	f.mu.Lock()
+	f.writes = nil
+	f.bools["configured"], f.bools[DefaultRunPort] = false, false
+	f.bools["BcComponent1/BusConductor.CONFIG_REQ"], f.bools["BcComponent1/BusConductor.START_IO_REQ"] = false, false
+	f.mu.Unlock()
+	shim.restart()
+	eventuallyWithin(t, 10*time.Second, "a shim restart never re-ran the handshake", func() bool {
+		return strings.Contains(f.wrote(), "START_IO_REQ=true") && d.Quality()["DI_00"] == nio.Good
+	})
 
 	// The driver stopping is the shim's watchdog: its outputs stop being
 	// refreshed and the frame goes to zero.
