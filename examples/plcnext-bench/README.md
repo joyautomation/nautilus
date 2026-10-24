@@ -40,28 +40,39 @@ hand-written per-module TIC configuration from an earlier experiment
 (`/opt/plcnext/projects/PCWE/Io/Arp.Io.AxlC/{1..4}.tic`) that the
 firmware **rejects at boot** (`Output.log`: `AXIO conf with neg. result:
 cmd 0x0711, errCode 0x0c13 … Abort download`), so no `Arp.Io.AxlC` port
-exists today. The fix is the documented BusConductor deployment, which
-is a copy of files plus **one restart of the plcnext runtime**, an action
-the build session was not permitted to take on its own:
+exists today. The fix is BusConductor's own documented no-Engineer
+deployment: a **separate project directory** holding its generic
+Axioline configuration, the `current` symlink pointed at it, and **one
+restart of the plcnext runtime** — an action the build session was not
+permitted to take on its own. `PCWE` is left untouched, so the rollback
+is re-pointing the symlink.
 
 ```sh
-# on the laptop, with github.com/PLCnext/BusConductor cloned beside this repo
-B=../BusConductor
-ssh admin@192.168.82.216 'cd /opt/plcnext/projects && tar czf /opt/plcnext/PCWE.bak.tgz PCWE && rm -f PCWE/Io/Arp.Io.AxlC/*.tic PCWE/Io/Arp.Io.AxlC/links.xml'
-scp -r $B/generic_axioline/Io/Arp.Io.AxlC/.    admin@192.168.82.216:/opt/plcnext/projects/PCWE/Io/Arp.Io.AxlC/
-scp    $B/generic_axioline/Plc/Gds/PCWE.gds.config admin@192.168.82.216:/opt/plcnext/projects/PCWE/Plc/Gds/
-scp    $B/generic_axioline/Plc/Eclr/eCLR.img    admin@192.168.82.216:/opt/plcnext/projects/PCWE/Plc/Eclr/
-scp    $B/no_engineer/Plc/Esm/PCWE.esm.config   admin@192.168.82.216:/opt/plcnext/projects/PCWE/Plc/Esm/
-scp    $B/no_engineer/Plc/Plm/pcwe.plm.config   admin@192.168.82.216:/opt/plcnext/projects/PCWE/Plc/Plm/
-scp    $B/no_engineer/Plc/Meta/PCWE.meta.config admin@192.168.82.216:/opt/plcnext/projects/PCWE/Plc/Meta/
-# Libs/BusConductor (libBusConductor.so, same md5 as upstream) is already on the controller
-ssh admin@192.168.82.216 'sudo /etc/init.d/plcnext restart'
+# on the laptop: one tarball = BusConductor's generic_axioline overlaid with no_engineer
+git clone https://github.com/PLCnext/BusConductor /tmp/bc && cd /tmp/bc
+mkdir -p /tmp/bcp && cp -r generic_axioline/. no_engineer/. /tmp/bcp/
+tar czf BusConductor-project.tgz -C /tmp/bcp . && scp BusConductor-project.tgz admin@192.168.82.216:/opt/plcnext/
+
+# on the controller
+ssh admin@192.168.82.216
+mkdir -p /opt/plcnext/projects/BusConductor
+tar xzf /opt/plcnext/BusConductor-project.tgz -C /opt/plcnext/projects/BusConductor
+cd /opt/plcnext/projects && sudo rm current && sudo ln -s BusConductor current
+sudo /etc/init.d/plcnext restart          # ~1 min; then check:
+grep -i 'busconductor\|axio' /opt/plcnext/logs/Output.log | tail -5
 ```
 
-(`Plc/Gds`, `Plc/Eclr` and `Services/OpcUA` directories may need creating
-first; the controller's `Output.log` from 2025-04-05 shows exactly this
-BusConductor component running on this firmware, so the library is
-known-good here.)
+Rollback: `cd /opt/plcnext/projects && sudo rm current && sudo ln -s PCWE
+current && sudo /etc/init.d/plcnext restart`.
+
+What is on the controller today, for the record (2026-10-24): `PCWE` is
+the April 2025 BusConductor install (its `Libs/BusConductor` matches
+upstream byte for byte, and `Plc/Esm`/`Plc/Plm` `.bak` files are the
+upstream no-Engineer configs) that the tentacle experiment then edited:
+per-device `1..4.tic`, a modified parent TIC, no `Plc/Gds` and no
+`Plc/Eclr`. An empty `projects/BusConductor` directory from that day is
+already there. The controller's `Output.log` from 2025-04-05 shows this
+same component running on this firmware, so the library is known-good.
 
 Then, on the controller:
 
