@@ -90,6 +90,32 @@ Changing a disposition on import (a `gate` check that needs a second of
 wall clock, a `release` check that turned out deterministic) is allowed
 and recorded in the manifest entry's `note`, and goes to reconciliation.
 
+## The loop, unattended
+
+`tools/blackbox/loop.sh <brief> [max rounds]`, run from the worktree whose
+HEAD is under test, alternates the two agents until the tester has nothing
+new to say. A round builds `naut` from HEAD, hands it to the blackbox repo
+as `<branch>-<sha>` with the docs named in `DOCS`, brings the container up,
+starts a tester session in the blackbox directory ("Run brief NNN", then
+"Retest run <parent> against <label>"), reads the run folder it leaves, and,
+if there are new findings or reopens, starts a development session here
+with the triage-import-write-back brief above. A round with nothing new is
+CLEAN and the loop stops. A development session that lands no commit means
+everything left is filed or disputed, and the loop stops for the operator.
+The default cap is three rounds.
+
+What makes this safe to leave alone: the script is the only thing that
+knows both paths, and each agent is started in its own directory with its
+own hooks, so the tester's wall holds; the prompts that cross it carry a
+brief id, a run id and a label; neither agent merges; `disputed` and
+`wontfix` are still words only the operator confirms. What it does not
+replace: writing the brief, ruling at reconciliation, and the merge.
+
+The first two rounds of brief 001 were run by hand (2026-10-22 and
+2026-10-24) and are what the script encodes. It belongs on the self-hosted
+runner next, keyed to a PR label, once it has run unattended on a box with
+a person watching.
+
 ## What this does not do
 
 It does not run the tester. A standing-brief run on every release is the

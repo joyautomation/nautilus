@@ -64,6 +64,14 @@ Only `gate` and `release` entries have scripts the runner executes. The
 others are listed so the manifest is the full record of what the tester
 proposed.
 
+## The loop
+
+`tools/blackbox/loop.sh <brief> [max rounds]` runs brief → tester → triage →
+retest unattended until the tester finds nothing new; `docs/design/blackbox.md`
+"The loop, unattended" says what each round does and when it stops. Env:
+`BB` (the blackbox repo), `DOCS` (the guide to hand over), `TESTER_FLAGS`,
+`DEV_FLAGS`, `KEEP=1`.
+
 ## Importing a run
 
 1. For each entry in the run's `checks.yaml` with disposition `gate` or
