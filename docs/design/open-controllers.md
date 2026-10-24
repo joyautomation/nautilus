@@ -305,13 +305,23 @@ driver re-handshakes on its own).
 
 1. **Best-effort (built):** gRPC data access at a scan rate of tens of
    milliseconds. Remote-I/O class. Honest about it in the status row.
-2. **Deterministic (next):** an Arp C-API program (`ArpPlcIo_GetBufferPtrByPortName`,
-   `ArpPlcGds_BeginRead/Write`) running in the ESM cycle, as Phoenix
-   Contact's `SampleRuntime` (C++) and `rust-sample-runtime` do. Needs the
-   PLCnext SDK matching firmware 2023.0 and cgo across the armhf Yocto
-   sysroot, which is why `rt/` (the Rust fast loop + shared-memory tag
-   exchange) is the natural home: a small C/Rust I/O shim exchanging the
-   image with the Go runtime over shared memory, not cgo in the core.
+2. **In-process (stage 1 built and running on the bench, 2026-10-24):**
+   `rt/plcnext-io/nautilus_io`, an ACF-started C process that joins the
+   firmware as a module application and reads/writes the Axioline frames
+   through the ANSI-C API in its own 1 ms cycle — Phoenix Contact's
+   `SampleRuntime` shape, built **without the SDK** (every entry point is
+   a C export of a shipped library, `ArpSystemModuleMain2` standing in
+   for the static `ArpSystemModule_Setup`; zig cross-compiles it). Its
+   input frame matches the gRPC mirror byte for byte; it is the output
+   frame's only writer; ~2 % of a core. Best-effort scheduling for now
+   (file capabilities are needed for SCHED_FIFO and `admin` cannot
+   `setcap`): about 1 cycle in 1 500 later than 200 µs, worst 1.7 ms.
+   Three hard lessons are in its README: never exit during ACF start-up
+   (it rebooted the controller), never call the ANSI-C surface before
+   the PLC's first `Start*` callback, never guess a signature. Stage 2
+   is the seqlock page `rt/fastloop` defines, between this process and
+   the Go driver (`transport: shm`), so the manifest and tags stay as
+   they are and only the bytes' route changes.
 3. **Not pursued:** the OPC UA server on 4840 as the I/O path — it sees
    exactly what data access sees (the mirrored eCLR ports, never raw
    Axioline ports) at a higher cost per read, though it was the tool
