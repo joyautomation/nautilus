@@ -142,6 +142,43 @@ else ever fails to render. Tests pin all three.
   per-channel quality beyond the NaN verdict above; the channel-present
   mask is only on OptoMMP. An OptoMMP *driver* could carry it; not worth
   it until a project needs it.
+- **A path to the I/O below OptoMMP: there is none, Opto's CODESYS
+  driver included.** Read from the free *Opto 22 Library Package for
+  CODESYS* 3.1.3.0 (`Opto22-3.1.3.0-codesys-b2.signed.package`, 2026-03;
+  nothing installed on the EPIC). The EPIC PLC device description
+  (`devices/plc/grv-epic-pr1.devdesc.xml`, runtime 3.5.21.40) hangs its
+  I/O off the library FB `IoDrvGroovPLC`, and the I/O unit
+  (`devices/iounit/grv-epic-pr1.devdesc.xml`) off `IoDrvOptoIoUnit`,
+  whose parameters are *Address* (default `'127.0.0.1'`, "Use
+  '127.0.0.1' for local I/O") and *Port* (default `2001`, "OptoMMP
+  Port"). No native component, `.so`, device node or shared-memory name
+  appears in the device descriptions or the compiled library
+  (`Opto22.compiled-library-v3`). The driver is plain IEC code over the
+  runtime's `SysSocket`: a TCP command/response client (`MmpClient`) and
+  UDP sockets (`SysSockCreateUdp`, `SysSockSendToUdp`/`RecvFromUdp`), with
+  OptoMMP transaction codes and labels checked on every reply. So Opto's
+  own CODESYS runtime reaches local I/O exactly as `naut` does, as an
+  OptoMMP client of `mmpServer` on loopback, and OptoMMP is the floor for
+  everyone. Three OptoMMP features it leans on are worth taking for the
+  `optommp` driver (branch `optommp-driver`). (1) **Streaming**: the
+  driver writes the stream target address, port, start address, data
+  size and interval (*Streaming Interval*, default 20 ms, "equal to or
+  shorter than the bus-cycle time"), and the EPIC then pushes inputs as
+  UDP datagrams into one shared socket, instead of being polled.
+  (2) The **custom data area** ("MMP Pointers"): scattered channel
+  addresses are mapped into one contiguous block, sized for "4 pointers
+  × 32 channels × 16 modules = 2048", so a whole rack is one read or one
+  stream. (3) The I/O unit's **communication watchdog** (off by default)
+  and a **power-up-clear check** ("PUC expected before communicating
+  with I/O unit"). On quality: the CODESYS process image carries **no
+  per-channel status**. An analog channel maps `EU` (a REAL) and nothing
+  else; a digital channel maps state, on/off latch and feature value.
+  Status is per module and per link: a diagnostic string, *Missing
+  module*, *Invalid channel type… may not be compatible* at
+  configuration time, timeouts named "no response to command" and
+  "missed incoming stream", the watchdog timeout and auto-reconnect.
+  Missing module, link timeout and NaN are therefore the whole quality
+  model for an OptoMMP driver. Nothing finer exists to expose.
 - `naut optommp import` names tags by slot and channel; channel names
   configured in groov Manage are not reachable over OptoMMP.
 - **Start on boot.** The on-EPIC run was hand-started over SSH; a systemd
