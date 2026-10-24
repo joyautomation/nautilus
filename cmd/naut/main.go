@@ -66,8 +66,9 @@ Usage:
                           on a grid; nobody types a node). naut check
                           holds every scene file to the tags and UDTs.
   naut optommp <cmd>  Opto 22 groov EPIC/RIO tools: browse (the chassis the
-                          processor reports) and import (that chassis as a
-                          Modbus manifest + tag file for the modbus driver).
+                          processor reports) and import (that chassis as an
+                          optommp manifest + tag file for the optommp driver,
+                          or --modbus for the processor's Modbus map).
   naut plcnext <cmd>  Phoenix Contact PLCnext tools: browse (BusConductor
                           state and the process image, on the controller)
                           and tags (the tag file for a plcnext manifest).

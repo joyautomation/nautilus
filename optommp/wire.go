@@ -1,13 +1,16 @@
 // Package optommp speaks OptoMMP, the memory-mapped protocol every Opto 22
 // groov EPIC, groov RIO and SNAP PAC answers on TCP 2001: a 16-byte
 // IEEE 1394-style header, then a block of bytes read from or written to an
-// address in the device's memory map. It is the commissioning seam for a
-// groov chassis — `naut optommp browse` lists the modules and channels the
-// processor sees, `naut optommp import` turns that chassis into a Modbus
-// manifest the ordinary `modbus` driver polls — so the scan-rate transport
-// stays the one driver the runtime already has, and Opto 22's spellings
-// (module part numbers, channel type codes, memory-map addresses) stop at
-// this package.
+// address in the device's memory map. It is both the commissioning seam
+// for a groov chassis — `naut optommp browse` lists the modules and
+// channels the processor sees, `naut optommp import` turns that chassis
+// into an optommp_manifest.yaml — and the driver that polls it (Driver,
+// `driver: {type: optommp}`): every channel's state or value with
+// per-channel quality, outputs, counters, latches and the scratchpad. The
+// older projection onto the processor's Modbus/TCP map (modbusmap.go,
+// `import --modbus`) stays for projects that want the modbus driver.
+// Opto 22's spellings (module part numbers, channel type codes,
+// memory-map addresses) stop at this package.
 //
 // Pure stdlib. Addresses and layouts are from the OptoMMP Protocol Guide
 // (Opto 22 form 1465) and the Modbus/TCP Protocol Guide (form 1678); the

@@ -110,7 +110,7 @@ func TagsYAML(out Output, command, tagsPath string) ([]byte, error) {
 // Command renders the generating invocation recorded in both files.
 func Command(opts MapOptions) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "naut optommp import --host %s", opts.Host)
+	fmt.Fprintf(&b, "naut optommp import --modbus --host %s", opts.Host)
 	if opts.ID != "EPIC" {
 		fmt.Fprintf(&b, " --id %s", opts.ID)
 	}

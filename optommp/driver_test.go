@@ -35,7 +35,7 @@ func startDriver(t *testing.T, d *fakeDevice, m Manifest) *Driver {
 	t.Helper()
 	drv, err := New(m, WithScanRate(5*time.Millisecond), WithDialer(func(context.Context) (net.Conn, error) {
 		a, b := net.Pipe()
-		go d.serve(b)
+		go d.Serve(b)
 		return a, nil
 	}))
 	if err != nil {
@@ -159,9 +159,7 @@ func TestDriverHoldsCommandsAcrossADrop(t *testing.T) {
 	drv := startDriver(t, dev, benchManifest(t, dev, ManifestOptions{}))
 	eventually(t, "first scan", func() bool { return drv.Health().Reads > 0 })
 
-	dev.mu.Lock()
-	dev.drop = true
-	dev.mu.Unlock()
+	dev.Drop()
 	eventually(t, "Stale after the drop", func() bool { return drv.Quality()["EPIC_M0_DI00"] == nio.Stale })
 	drv.WriteOutputs(nio.Values{"EPIC_M1_DO05": true})
 	eventually(t, "Good after the reconnect", func() bool { return drv.Quality()["EPIC_M0_DI00"] == nio.Good })
@@ -229,7 +227,7 @@ func TestDriverLatchesCatchAPulseBetweenScans(t *testing.T) {
 	m := benchManifest(t, dev, ManifestOptions{Latches: true})
 	drv, err := New(m, WithDialer(func(context.Context) (net.Conn, error) {
 		a, b := net.Pipe()
-		go dev.serve(b)
+		go dev.Serve(b)
 		return a, nil
 	}))
 	if err != nil {
@@ -237,7 +235,7 @@ func TestDriverLatchesCatchAPulseBetweenScans(t *testing.T) {
 	}
 	// Drive the scans by hand: one session, poll by poll.
 	a, b := net.Pipe()
-	go dev.serve(b)
+	go dev.Serve(b)
 	c := NewClient(a, time.Second)
 	defer c.Close()
 	if err := drv.poll(c); err != nil {
@@ -246,10 +244,8 @@ func TestDriverLatchesCatchAPulseBetweenScans(t *testing.T) {
 	if value(t, drv, "EPIC_M0_DI05_OnLatch") != false {
 		t.Fatal("latch set before any pulse")
 	}
-	dev.mu.Lock()
-	dev.setDigital(0, 5, true) // a pulse shorter than the scan
-	dev.setDigital(0, 5, false)
-	dev.mu.Unlock()
+	dev.SetDigital(0, 5, true) // a pulse shorter than the scan
+	dev.SetDigital(0, 5, false)
 	if err := drv.poll(c); err != nil {
 		t.Fatal(err)
 	}
@@ -288,9 +284,9 @@ func TestDriverAnalogOutput(t *testing.T) {
 	// A GRV-OVMALC-8 in slot 4, channels at 0-10 V.
 	for i := 0; i < 8; i++ {
 		row := uint32(addrChannelConfig + 4*configModuleStride + i*configChannelStride)
-		dev.putU32(row, 0xA0000003)
-		dev.putU32(row+4, 0xA0000020)
-		dev.putU32(addrPackedValues+uint32(4*32+i)*4, 0)
+		dev.PutU32(row, 0xA0000003)
+		dev.PutU32(row+4, 0xA0000020)
+		dev.PutU32(addrPackedValues+uint32(4*32+i)*4, 0)
 	}
 	m := benchManifest(t, dev, ManifestOptions{})
 	drv := startDriver(t, dev, m)
@@ -305,7 +301,7 @@ func TestDriverAnalogOutput(t *testing.T) {
 func TestDriverSendsThePowerupClear(t *testing.T) {
 	dev := newBenchDevice()
 	m := benchManifest(t, dev, ManifestOptions{})
-	dev.putU32(addrPUCFlag, 1)
+	dev.PutU32(addrPUCFlag, 1)
 	drv := startDriver(t, dev, m)
 	eventually(t, "first scan", func() bool { return drv.Health().Reads > 0 })
 	if got := dev.U32(addrPowerupClear); got != 1 {
@@ -315,7 +311,7 @@ func TestDriverSendsThePowerupClear(t *testing.T) {
 
 func TestDriverQualityCodes(t *testing.T) {
 	dev := newBenchDevice()
-	dev.putU32(addrQualityCodes+2*qualityModuleStride+1*4, 9)
+	dev.PutU32(addrQualityCodes+2*qualityModuleStride+1*4, 9)
 	drv := startDriver(t, dev, benchManifest(t, dev, ManifestOptions{Quality: true}))
 	eventually(t, "first scan", func() bool { return drv.Health().Reads > 0 })
 	if v := value(t, drv, "EPIC_M2_AI01_Quality"); v != int64(9) {

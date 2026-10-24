@@ -8,6 +8,7 @@ import (
 	"github.com/joyautomation/nautilus/eip"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/optommp"
 	"github.com/joyautomation/nautilus/plcnext"
 	"github.com/joyautomation/nautilus/prom"
 	"github.com/joyautomation/nautilus/redfish"
@@ -59,6 +60,8 @@ func driverStatusFuncs(d nio.Driver) []func() server.DriverStatus {
 		return []func() server.DriverStatus{func() server.DriverStatus { return hwStatus(drv.Health()) }}
 	case *plcnext.Driver:
 		return []func() server.DriverStatus{func() server.DriverStatus { return plcnextStatus(drv.Health()) }}
+	case *optommp.Driver:
+		return []func() server.DriverStatus{func() server.DriverStatus { return optommpStatus(drv.Health()) }}
 	case *replay.Driver:
 		return []func() server.DriverStatus{func() server.DriverStatus { return replayStatus(drv.Health()) }}
 	case *nio.Multi:
@@ -581,6 +584,36 @@ func plcnextStatus(h plcnext.Health) server.DriverStatus {
 		{Label: "errors", Value: float64(h.Errors)},
 		{Label: "rtt", Value: float64(h.RTTus) / 1000, Text: fmt.Sprintf("%.2f ms", float64(h.RTTus)/1000), Volatile: true},
 		{Label: "image", Value: float64(h.InBytes), Text: fmt.Sprintf("%d in / %d out bytes", h.InBytes, h.OutBytes)},
+	}
+	return s
+}
+
+// optommpStatus is the one-row status of a groov chassis: the processor
+// and firmware, whether every bound slot holds the module the manifest
+// names, and what a scan costs.
+func optommpStatus(h optommp.Health) server.DriverStatus {
+	s := server.DriverStatus{Kind: "optommp", Name: h.Host, LastError: h.LastError}
+	s.Detail = fmt.Sprintf("%s:%d", h.Host, h.Port)
+	if h.Unit != "" {
+		s.Detail = fmt.Sprintf("%s · firmware %s · %s", h.Unit, h.Firmware, s.Detail)
+	}
+	switch {
+	case h.Connected && h.Faults != "":
+		s.State, s.Message = "error", h.Faults
+	case h.Connected:
+		s.State, s.Message = "connected", fmt.Sprintf("%d module(s) as imported, %d of %d tags bad", h.Modules, h.BadTags, h.Tags)
+	case h.LastError != "":
+		s.State, s.Message = "error", "Not connected to the processor"
+	default:
+		s.State, s.Message = "connecting", "Connecting to the processor"
+	}
+	s.Metrics = []server.DriverMetric{
+		{Label: "tags", Value: float64(h.Tags)},
+		{Label: "bad", Value: float64(h.BadTags)},
+		{Label: "reads", Value: float64(h.Reads), Volatile: true},
+		{Label: "writes", Value: float64(h.Writes), Volatile: true},
+		{Label: "errors", Value: float64(h.Errors)},
+		{Label: "scan", Value: float64(h.ScanUs) / 1000, Text: fmt.Sprintf("%.2f ms, %d request(s) every %s", float64(h.ScanUs)/1000, h.Requests, h.ScanRate), Volatile: true},
 	}
 	return s
 }
