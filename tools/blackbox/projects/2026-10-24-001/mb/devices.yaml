@@ -1,0 +1,8 @@
+devices:
+  temp-controller:
+    registers:
+      - {tag: Tpv, address: 0, format: int16, scale: 0.1, unit: degC, desc: process temperature}
+      - {tag: AlmH, address: 12, table: discrete, desc: high temperature alarm}
+      - {tag: Tx, address: 500, format: int16, desc: a register the slave does not serve}
+instances:
+  - {id: TC_A, type: temp-controller, host: 127.0.0.1:5020, unit-id: 1}

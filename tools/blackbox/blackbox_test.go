@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -18,8 +19,9 @@ import (
 // came from. Only entries with a Script and a disposition the run was asked
 // for become subtests; the rest are listed for the record.
 type Manifest struct {
-	Oracles map[string]string `yaml:"oracles"`
-	Checks  []Check           `yaml:"checks"`
+	Oracles  map[string]string            `yaml:"oracles"`
+	Projects map[string]map[string]string `yaml:"projects"` // the tester's address notes, kept as written
+	Checks   []Check                      `yaml:"checks"`
 }
 
 // Check is one entry of the manifest; the field names are the tester's
@@ -37,6 +39,15 @@ type Check struct {
 	Env         map[string]string `yaml:"env"`
 	Timeout     string            `yaml:"timeout"`
 	Note        string            `yaml:"note"`
+
+	// The tester's own bookkeeping, kept verbatim.
+	ExpectedToday string `yaml:"expected_today"`
+	Group         string `yaml:"group"`
+
+	// Open names the issue a check's finding is filed under while it is
+	// unfixed: the check is expected to fail, and does not fail the job
+	// until it unexpectedly passes, which is the signal to clear this.
+	Open string `yaml:"open"`
 }
 
 // TestBlackbox starts each project the manifest names, once, and runs every
@@ -83,8 +94,12 @@ func TestBlackbox(t *testing.T) {
 	}
 
 	for _, project := range order {
-		sut := startProject(t, naut, filepath.Join(base, project))
-		for _, c := range byProject[project] {
+		sut := startProject(t, naut, filepath.Join(base, project), m.Projects[project])
+		// A check for an open finding may leave the SUT damaged (the
+		// overflow one flips a node's type for good), so those run last.
+		checks := byProject[project]
+		sort.SliceStable(checks, func(i, j int) bool { return checks[i].Open == "" && checks[j].Open != "" })
+		for _, c := range checks {
 			c := c
 			t.Run(c.ID, func(t *testing.T) { runCheck(t, python, filepath.Join(base, c.Script), sut, c) })
 		}
@@ -147,7 +162,9 @@ type project struct {
 
 // startProject copies the project to a temp dir (naut run writes state
 // beside the manifest), starts naut run there and waits for the HTTP API.
-func startProject(t *testing.T, naut, src string) *sut {
+// addrs is the manifest's note of where the project listens (the tester's
+// own words); what it leaves out is read from the project's nautilus.yaml.
+func startProject(t *testing.T, naut, src string, addrs map[string]string) *sut {
 	t.Helper()
 	dir := t.TempDir()
 	if out, err := exec.Command("cp", "-r", src+"/.", dir).CombinedOutput(); err != nil {
@@ -163,6 +180,18 @@ func startProject(t *testing.T, naut, src string) *sut {
 	}
 	if p.Server.Addr == "" {
 		p.Server.Addr = "localhost:8080"
+	}
+	if a := addrs["http"]; a != "" {
+		p.Server.Addr = strings.TrimPrefix(a, "http://")
+	}
+	if a := addrs["opcua"]; a != "" {
+		p.OPCUA.Endpoint = a
+	}
+	if a := addrs["modbus"]; a != "" {
+		p.Modbus.Listen = a
+	}
+	if a := addrs["mqtt"]; a != "" {
+		p.MQTT.Broker = a
 	}
 
 	cmd := exec.Command(naut, "run")
@@ -211,9 +240,14 @@ func startProject(t *testing.T, naut, src string) *sut {
 		time.Sleep(100 * time.Millisecond)
 	}
 
+	nautDir, _ := filepath.Abs(filepath.Dir(naut))
 	env := []string{
 		"SUT_PROJECT=" + dir,
 		"SUT_HTTP=http://" + p.Server.Addr,
+		// Checks that start a controller of their own call `naut`, and the
+		// shell ones call the oracles' CLI tools, as the tester's container
+		// had them on PATH.
+		"PATH=" + nautDir + string(os.PathListSeparator) + filepath.Dir(os.Getenv("NAUTILUS_BLACKBOX_PYTHON")) + string(os.PathListSeparator) + os.Getenv("PATH"),
 	}
 	if p.OPCUA.Endpoint != "" {
 		env = append(env, "SUT_OPCUA="+p.OPCUA.Endpoint)
@@ -257,7 +291,12 @@ func runCheck(t *testing.T, python, script string, s *sut, c Check) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, python, "-I", abs)
+	var cmd *exec.Cmd
+	if strings.HasSuffix(abs, ".sh") {
+		cmd = exec.CommandContext(ctx, "bash", abs)
+	} else {
+		cmd = exec.CommandContext(ctx, python, "-I", abs)
+	}
 	cmd.Dir = s.dir
 	cmd.Env = append(append(os.Environ(), s.env...), envList(c.Env)...)
 	out, err := cmd.CombinedOutput()
@@ -269,8 +308,13 @@ func runCheck(t *testing.T, python, script string, s *sut, c Check) {
 	if ctx.Err() != nil {
 		t.Fatalf("%s: no verdict within %s", c.ID, timeout)
 	}
-	if err != nil {
+	switch {
+	case err != nil && c.Open != "":
+		t.Skipf("%s: fails as expected; its finding is open under %s", c.ID, c.Open)
+	case err != nil:
 		t.Fatalf("%s: %v", c.ID, err)
+	case c.Open != "":
+		t.Fatalf("%s passes, so the finding filed under %s is fixed: clear `open` in checks.yaml", c.ID, c.Open)
 	}
 }
 
