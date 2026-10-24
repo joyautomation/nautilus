@@ -41,7 +41,7 @@ OUT=$HERE/out; mkdir -p "$OUT"
 log=$OUT/loop-$(date +%Y%m%d-%H%M%S)-brief$brief.log
 say() { printf '%s %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$log"; }
 [[ -d $BB/briefs ]] || { echo "no blackbox repo at $BB (set BB)"; exit 1; }
-[[ -f $BB/briefs/$brief-*.md ]] || { echo "no brief $brief under $BB/briefs"; exit 1; }
+compgen -G "$BB/briefs/$brief-*.md" >/dev/null || { echo "no brief $brief under $BB/briefs"; exit 1; }
 branch=$(git -C "$DEV" rev-parse --abbrev-ref HEAD)
 parent=""   # the run the next retest is scoped to
 
