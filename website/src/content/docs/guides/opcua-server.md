@@ -71,8 +71,13 @@ tag's `desc:` and `unit:` from the [tag model](/guides/tag-model/) become
 the node's `Description` — `Wet well level [ft]`.
 
 A Read of an array honours its `IndexRange`: `2` is one element, `1:3` a
-slice, counted from 0; an index the array does not reach, or a range on a
-scalar, is `Bad_IndexRangeNoData`. One Read may name up to 10 000 nodes —
+slice, counted from 0. A `STRING` is an array of characters, so `0:3` on
+one is its first four, and an array of strings takes a second dimension
+(`1,0` is the first character of the second string); an index the value
+does not reach, or a range on a number or a boolean, is
+`Bad_IndexRangeNoData`. A monitored item's `IndexRange` means the same:
+the item hears its slice, and only when the slice changes. One Read may
+name up to 10 000 nodes —
 the `MaxNodesPerRead` the `Server` object advertises is the limit the
 server enforces, with `Bad_TooManyOperations` past it — so a project of a
 few thousand tags is still one call. A Browse lists each reference once,

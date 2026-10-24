@@ -217,21 +217,32 @@ claims:
       - go ./opcua/server TestNewItemHearsTheCurrentValueOnce
       - go ./tools/blackbox TestBlackbox/001-F25-publish-interval-zero-crash
       - go ./tools/blackbox TestBlackbox/001-F27-setmonitoringmode-disabled
+      - go ./tools/blackbox TestBlackbox/001-P-publish-interval-revised-range
+      - go ./tools/blackbox TestBlackbox/001-P-monitoring-mode-transitions
 
   - id: OPC-015
     claim: >-
-      A Read honours IndexRange (a slice of an array counted from 0;
-      Bad_IndexRangeNoData for an index the array does not reach or a range
-      on a scalar; Bad_IndexRangeInvalid for a range that is not one), names
-      at most the 10 000 nodes MaxNodesPerRead advertises
+      A Read honours IndexRange (a slice of an array counted from 0; a
+      String as an array of characters and an array of Strings with a
+      second dimension over them; Bad_IndexRangeNoData for an index the
+      value does not reach or a range on a number or boolean;
+      Bad_IndexRangeInvalid for a range that is not one), a monitored
+      item's IndexRange means the same and the item hears only its slice,
+      a Read names at most the 10 000 nodes MaxNodesPerRead advertises
       (Bad_TooManyOperations past it), and a Browse lists each reference
       once, the standard Server object's included.
     source: "#what-a-client-sees"
     tests:
       - go ./opcua/server TestParseNumericRange
       - go ./opcua/server TestReadHonoursIndexRange
+      - go ./opcua/server TestMonitoredItemHonoursIndexRange
       - go ./opcua/server TestReadOverTheAdvertisedLimitIsRefused
       - go ./opcua/server TestBrowseListsEachReferenceOnce
       - go ./tools/blackbox TestBlackbox/001-F28-read-indexrange
+      - go ./tools/blackbox TestBlackbox/001-F32-monitoreditem-indexrange
+      - go ./tools/blackbox TestBlackbox/001-F33-indexrange-string
+      - go ./tools/blackbox TestBlackbox/001-P-indexrange-error-codes
       - go ./tools/blackbox TestBlackbox/001-F29-server-browse-duplicate-refs
+      - go ./tools/blackbox TestBlackbox/001-P-browse-paging-dedup
       - go ./tools/blackbox TestBlackbox/001-F30-maxnodesperread-enforced
+      - go ./tools/blackbox TestBlackbox/001-P-read-limit-boundary

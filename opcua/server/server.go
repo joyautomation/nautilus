@@ -394,11 +394,7 @@ func (s *Server) current(mon monitoredNode) (*ua.DataValue, reading, bool) {
 			continue
 		}
 		dv := s.ns.Attribute(mon.nid, item.Req.ItemToMonitor.AttributeID)
-		now := reading{status: dv.Status}
-		if dv.Value != nil {
-			now.value = dv.Value.Value()
-		}
-		return dv, now, true
+		return dv, readingOf(dv), true
 	}
 	return nil, reading{}, false
 }
@@ -462,6 +458,7 @@ type itemState struct {
 	sent  time.Time
 	dirty bool
 	mode  ua.MonitoringMode
+	last  reading // what the item was last told, for one with an IndexRange
 }
 
 // notify reads the node once and offers the reading to every item watching
@@ -470,16 +467,18 @@ type itemState struct {
 // Reporting, is owed it anyway. An item whose sampling interval has not
 // elapsed since its last value is marked dirty and left for a later tick,
 // which is what sampling at that interval means; a Disabled or Sampling
-// item is marked and never sent (Part 4 §5.12.4). It reports false when
-// any item is still owed a value — a full channel, or an interval not yet
-// up — so the caller comes back to this node next tick.
+// item is marked and never sent (Part 4 §5.12.4). An item with an
+// IndexRange hears its slice, and only when the slice has changed: a move
+// elsewhere in the array is nothing to it. It reports false when any item
+// is still owed a value — a full channel, or an interval not yet up — so
+// the caller comes back to this node next tick.
 func (s *Server) notify(mon monitoredNode, last map[string]reading, retry bool, items map[*opcserver.MonitoredItem]*itemState, now time.Time) bool {
 	dv, cur, ok := s.current(mon)
 	if !ok {
 		return true
 	}
 	prev, seen := last[mon.key]
-	changed := !seen || prev.status != cur.status || !reflect.DeepEqual(prev.value, cur.value)
+	changed := !seen || !prev.equal(cur)
 	last[mon.key] = cur
 	done := true
 	for _, w := range mon.items {
@@ -495,9 +494,10 @@ func (s *Server) notify(mon monitoredNode, last map[string]reading, retry bool, 
 		if changed {
 			st.dirty = true
 		}
+		resumed := false
 		if w.mode != st.mode {
 			if w.mode == ua.MonitoringModeReporting {
-				st.dirty = true
+				st.dirty, resumed = true, true
 			}
 			st.mode = w.mode
 		}
@@ -508,15 +508,38 @@ func (s *Server) notify(mon monitoredNode, last map[string]reading, retry bool, 
 			done = false // not due yet; the next value it sees is the one current then
 			continue
 		}
-		n := &ua.MonitoredItemNotification{ClientHandle: item.Req.RequestedParameters.ClientHandle, Value: dv}
+		told, mine := dv, cur
+		if rng := item.Req.ItemToMonitor.IndexRange; rng != "" {
+			told = indexRange(dv, rng)
+			mine = readingOf(told)
+			if !resumed && !st.sent.IsZero() && st.last.equal(mine) {
+				st.dirty = false // the array moved, the slice did not
+				continue
+			}
+		}
+		n := &ua.MonitoredItemNotification{ClientHandle: item.Req.RequestedParameters.ClientHandle, Value: told}
 		select {
 		case item.Sub.NotifyChannel <- n:
-			st.sent, st.dirty = now, false
+			st.sent, st.dirty, st.last = now, false, mine
 		default:
 			done = false
 		}
 	}
 	return done
+}
+
+// readingOf reduces a value to what a node or an item is told of it.
+func readingOf(dv *ua.DataValue) reading {
+	r := reading{status: dv.Status}
+	if dv.Value != nil {
+		r.value = dv.Value.Value()
+	}
+	return r
+}
+
+// equal reports whether two readings say the same thing.
+func (r reading) equal(o reading) bool {
+	return r.status == o.status && reflect.DeepEqual(r.value, o.value)
 }
 
 // sampling is the interval an item was granted, the same arithmetic

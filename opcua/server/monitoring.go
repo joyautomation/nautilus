@@ -201,6 +201,9 @@ func initialValue(srv *opcserver.Server, item *opcserver.MonitoredItem) {
 	if dv == nil {
 		dv = status(ua.StatusBadNodeIDUnknown)
 	}
+	if rng := item.Req.ItemToMonitor.IndexRange; rng != "" {
+		dv = indexRange(dv, rng)
+	}
 	select {
 	case item.Sub.NotifyChannel <- &ua.MonitoredItemNotification{ClientHandle: item.Req.RequestedParameters.ClientHandle, Value: dv}:
 	case <-time.After(5 * time.Second):
@@ -225,7 +228,9 @@ func reviseSampling(requested, publishing float64, sweep time.Duration) float64 
 
 // monitorable is the code CreateMonitoredItems answers for one item: Good
 // when the node exists and has the attribute, otherwise what a Read of it
-// says; Bad_MonitoringModeInvalid for a mode that is not one.
+// says; Bad_MonitoringModeInvalid for a mode that is not one. An
+// IndexRange is judged the way a Read judges it (indexrange.go): one the
+// value does not reach, or one that is not a range, refuses the item.
 func monitorable(srv *opcserver.Server, ns *namespace, item *ua.MonitoredItemCreateRequest) ua.StatusCode {
 	if item == nil || item.ItemToMonitor == nil || item.ItemToMonitor.NodeID == nil {
 		return ua.StatusBadNodeIDInvalid
@@ -236,20 +241,25 @@ func monitorable(srv *opcserver.Server, ns *namespace, item *ua.MonitoredItemCre
 	if item.MonitoringMode > ua.MonitoringModeReporting {
 		return ua.StatusBadMonitoringModeInvalid
 	}
-	nid, attr := item.ItemToMonitor.NodeID, item.ItemToMonitor.AttributeID
+	nid, attr, rng := item.ItemToMonitor.NodeID, item.ItemToMonitor.AttributeID, item.ItemToMonitor.IndexRange
+	var dv *ua.DataValue
 	if nid.Namespace() == ns.id {
-		dv := ns.Attribute(nid, attr)
-		if dv == nil {
-			return ua.StatusBadNodeIDUnknown
-		}
-		switch dv.Status {
-		case ua.StatusBadNodeIDUnknown, ua.StatusBadNodeIDInvalid, ua.StatusBadAttributeIDInvalid:
-			return dv.Status
-		}
-		return ua.StatusGood
+		dv = ns.Attribute(nid, attr)
+	} else if space, err := srv.Namespace(int(nid.Namespace())); err == nil && srv.Node(nid) != nil {
+		dv = space.Attribute(nid, attr)
 	}
-	if srv.Node(nid) == nil {
+	if dv == nil {
 		return ua.StatusBadNodeIDUnknown
+	}
+	switch dv.Status {
+	case ua.StatusBadNodeIDUnknown, ua.StatusBadNodeIDInvalid, ua.StatusBadAttributeIDInvalid:
+		return dv.Status
+	}
+	if rng != "" {
+		switch code := indexRange(dv, rng).Status; code {
+		case ua.StatusBadIndexRangeInvalid, ua.StatusBadIndexRangeNoData:
+			return code
+		}
 	}
 	return ua.StatusGood
 }

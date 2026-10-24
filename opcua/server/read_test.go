@@ -52,7 +52,7 @@ func TestReadHonoursIndexRange(t *testing.T) {
 	}
 	noData := map[*ua.NodeID]string{
 		levels: "3", s.NodeID("Levels"): "1:9", s.NodeID("P101.Hours"): "0,1",
-		s.NodeID("Level"): "0", s.NodeID("Label"): "0", s.NodeID("Running"): "0:1",
+		s.NodeID("Level"): "0", s.NodeID("Label"): "6", s.NodeID("Running"): "0:1",
 	}
 	for nid, rng := range noData {
 		if dv := rd(nid, ua.AttributeIDValue, rng); dv.Status != ua.StatusBadIndexRangeNoData {
@@ -66,6 +66,27 @@ func TestReadHonoursIndexRange(t *testing.T) {
 		if dv := rd(levels, ua.AttributeIDValue, rng); dv.Status != ua.StatusBadIndexRangeInvalid {
 			t.Errorf("Levels[%s] = %s, want Bad_IndexRangeInvalid", rng, dv.Status)
 		}
+	}
+	// F-33: a String is an array of characters (Part 4 §7.22), and an
+	// array of Strings has a second dimension over them.
+	label := s.NodeID("Label") // "Pump 1"
+	for rng, want := range map[string]string{"0": "P", "0:3": "Pump", "5": "1", "0:5": "Pump 1"} {
+		if dv := rd(label, ua.AttributeIDValue, rng); dv.Status != ua.StatusGood || dv.Value.Value() != want {
+			t.Errorf("Label[%s] = %v %s, want %q", rng, dv.Value, dv.Status, want)
+		}
+	}
+	if dv := rd(label, ua.AttributeIDValue, "0,1"); dv.Status != ua.StatusBadIndexRangeNoData {
+		t.Errorf("Label[0,1] = %s, want Bad_IndexRangeNoData", dv.Status)
+	}
+	nsArray := ua.NewNumericNodeID(0, id.Server_NamespaceArray) // [the UA namespace, ours]
+	if dv := rd(nsArray, ua.AttributeIDValue, "1,0:2"); dv.Status != ua.StatusGood || !reflect.DeepEqual(dv.Value.Value(), []string{"urn"}) {
+		t.Errorf("NamespaceArray[1,0:2] = %v %s, want [urn]", dv.Value, dv.Status)
+	}
+	if dv := rd(nsArray, ua.AttributeIDValue, "0:1,0:99"); dv.Status != ua.StatusBadIndexRangeNoData {
+		t.Errorf("NamespaceArray[0:1,0:99] = %s, want Bad_IndexRangeNoData", dv.Status)
+	}
+	if dv := rd(levels, ua.AttributeIDValue, "0,0"); dv.Status != ua.StatusBadIndexRangeNoData {
+		t.Errorf("Levels[0,0] = %s, want Bad_IndexRangeNoData (a REAL has no characters)", dv.Status)
 	}
 	// A node that is not there keeps its own answer.
 	if dv := rd(s.NodeID("Nope"), ua.AttributeIDValue, "0"); dv.Status != ua.StatusBadNodeIDUnknown {

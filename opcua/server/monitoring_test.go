@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"testing"
 	"time"
 
@@ -343,5 +344,78 @@ func TestNewItemHearsTheCurrentValueOnce(t *testing.T) {
 	got := count(notify, 400*time.Millisecond)
 	if got[1] != 1 || got[2] != 1 {
 		t.Errorf("initial values: Level %d times, ServerStatus.State %d times; want once each", got[1], got[2])
+	}
+}
+
+// F-32: a monitored item's IndexRange means what a Read's does: the item
+// is told its slice, only when the slice changes, and a range the value
+// does not reach, or one that is not a range, refuses the item when it is
+// created. The item was created Good for any range and told the whole
+// array.
+func TestMonitoredItemHonoursIndexRange(t *testing.T) {
+	rt, _ := newRuntime(t)
+	s, c := startServer(t, rt)
+	ctx := context.Background()
+	notify := make(chan *opcua.PublishNotificationData, 64)
+	sub, err := c.Subscribe(ctx, &opcua.SubscriptionParameters{Interval: 20 * time.Millisecond}, notify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Cancel(ctx)
+	ranged := func(rng string, handle uint32) *ua.MonitoredItemCreateRequest {
+		req := opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("Levels"), ua.AttributeIDValue, handle)
+		req.ItemToMonitor.IndexRange = rng
+		return req
+	}
+	resp, err := sub.Monitor(ctx, ua.TimestampsToReturnBoth, ranged("1", 1), ranged("0:1", 2), ranged("3", 3), ranged("x", 4),
+		ranged("0,0", 5), opcua.NewMonitoredItemCreateRequestWithDefaults(ua.NewNumericNodeID(0, id.Server_NamespaceArray), ua.AttributeIDValue, 6))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []ua.StatusCode{ua.StatusGood, ua.StatusGood, ua.StatusBadIndexRangeNoData, ua.StatusBadIndexRangeInvalid, ua.StatusBadIndexRangeNoData, ua.StatusGood} {
+		if got := resp.Results[i].StatusCode; got != want {
+			t.Errorf("item %d: %s, want %s", i+1, got, want)
+		}
+	}
+	values := func(d time.Duration) map[uint32][]any {
+		got := map[uint32][]any{}
+		deadline := time.After(d)
+		for {
+			select {
+			case n := <-notify:
+				if dc, ok := n.Value.(*ua.DataChangeNotification); ok {
+					for _, m := range dc.MonitoredItems {
+						got[m.ClientHandle] = append(got[m.ClientHandle], m.Value.Value.Value())
+					}
+				}
+			case <-deadline:
+				return got
+			}
+		}
+	}
+	got := values(300 * time.Millisecond)
+	if !reflect.DeepEqual(got[1], []any{[]float64{2}}) || !reflect.DeepEqual(got[2], []any{[]float64{1, 2}}) {
+		t.Errorf("initial values: Levels[1] told %v, Levels[0:1] told %v", got[1], got[2])
+	}
+	if len(got[6]) != 1 {
+		t.Errorf("the Server-object item was told %v", got[6])
+	}
+	// A move inside the slice is heard as the slice; one outside it is not heard.
+	if err := rt.Tags().SetPath("Levels[1]", 5.0); err != nil {
+		t.Fatal(err)
+	}
+	got = values(300 * time.Millisecond)
+	if !reflect.DeepEqual(got[1], []any{[]float64{5}}) || !reflect.DeepEqual(got[2], []any{[]float64{1, 5}}) {
+		t.Errorf("after Levels[1] = 5: Levels[1] told %v, Levels[0:1] told %v", got[1], got[2])
+	}
+	if err := rt.Tags().SetPath("Levels[2]", 9.0); err != nil {
+		t.Fatal(err)
+	}
+	got = values(300 * time.Millisecond)
+	if len(got[1]) != 0 || len(got[2]) != 0 {
+		t.Errorf("after Levels[2] = 9: Levels[1] told %v, Levels[0:1] told %v; neither slice moved", got[1], got[2])
+	}
+	if dv := read(t, c, s.NodeID("Levels"), ua.AttributeIDValue); !reflect.DeepEqual(dv.Value.Value(), []float64{1, 5, 9}) {
+		t.Errorf("Levels = %v", dv.Value.Value())
 	}
 }

@@ -34,12 +34,16 @@ func parseNumericRange(s string) ([]span, ua.StatusCode) {
 	return out, ua.StatusGood
 }
 
-// indexRange is a Read's IndexRange applied to an attribute's value: the
-// selected slice of an array, Bad_IndexRangeNoData when the value is not
-// an array, has fewer dimensions than the range names, or does not reach
-// every index named (Part 4 §7.22, as open62541 reads it). A value that
-// is already a bad status is returned as it is: the range has nothing to
-// select from. The server's arrays are one-dimensional.
+// indexRange is a ReadValueId's IndexRange applied to an attribute's
+// value, for a Read or a monitored item: the selected slice of an array,
+// the selected characters of a String, or, for an array of Strings, the
+// selected elements cut to the characters a second dimension names;
+// Bad_IndexRangeNoData when the value has fewer dimensions than the range
+// names or does not reach every index named (Part 4 §7.22: a String is an
+// array of characters, a ByteString an array of bytes, and a scalar has
+// no dimension to index). A value that is already a bad status is
+// returned as it is: the range has nothing to select from. The server's
+// own arrays are one-dimensional.
 func indexRange(dv *ua.DataValue, rng string) *ua.DataValue {
 	if dv == nil || dv.Status&0x80000000 != 0 { // a bad status: nothing to select from
 		return dv
@@ -51,19 +55,56 @@ func indexRange(dv *ua.DataValue, rng string) *ua.DataValue {
 	if dv.Value == nil {
 		return status(ua.StatusBadIndexRangeNoData)
 	}
-	v := reflect.ValueOf(dv.Value.Value())
-	if v.Kind() != reflect.Slice || len(spans) != 1 {
+	out, ok := cut(dv.Value.Value(), spans)
+	if !ok {
 		return status(ua.StatusBadIndexRangeNoData)
 	}
-	sp := spans[0]
-	if sp.hi >= v.Len() {
-		return status(ua.StatusBadIndexRangeNoData)
-	}
-	nv, err := ua.NewVariant(v.Slice(sp.lo, sp.hi+1).Interface())
+	nv, err := ua.NewVariant(out)
 	if err != nil {
 		return status(ua.StatusBadIndexRangeNoData)
 	}
 	cp := *dv
 	cp.Value = nv
 	return &cp
+}
+
+// cut is val reduced to the spans: one over an array or a String, two
+// over an array of Strings. Not ok when val has fewer dimensions than
+// there are spans or does not reach an index.
+func cut(val any, spans []span) (any, bool) {
+	if s, ok := val.(string); ok {
+		if len(spans) != 1 {
+			return nil, false
+		}
+		return substring(s, spans[0])
+	}
+	v := reflect.ValueOf(val)
+	if v.Kind() != reflect.Slice || len(spans) > 2 || spans[0].hi >= v.Len() {
+		return nil, false
+	}
+	v = v.Slice(spans[0].lo, spans[0].hi+1)
+	if len(spans) == 1 {
+		return v.Interface(), true
+	}
+	strs, ok := v.Interface().([]string)
+	if !ok {
+		return nil, false
+	}
+	out := make([]string, len(strs))
+	for i, s := range strs {
+		if out[i], ok = substring(s, spans[1]); !ok {
+			return nil, false
+		}
+	}
+	return out, true
+}
+
+// substring is the characters of s the span names, counted in characters
+// rather than bytes so that a range never cuts a multi-byte character.
+func substring(s string, sp span) (string, bool) {
+	r := []rune(s)
+	if sp.hi >= len(r) {
+		return "", false
+	}
+	return string(r[sp.lo : sp.hi+1]), true
 }

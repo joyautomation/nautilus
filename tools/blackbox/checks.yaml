@@ -21,6 +21,9 @@ projects:
   projects/2026-10-24-001b/typed:
     http: http://localhost:8080
     opcua: opc.tcp://localhost:4840
+  projects/2026-10-24-001c/typed:
+    http: http://localhost:8080
+    opcua: opc.tcp://localhost:4840
 checks:
 - id: 001-F01-namespace-index
   run: 2026-10-24-001
@@ -680,3 +683,121 @@ checks:
     monitored-item lock) is reproduced by go ./opcua/server
     TestCreateMonitoredItemsNeverBlocksOnAStalledSubscription.'
   group: new findings of this run
+# Run 2026-10-24-001c: the retest of 001b against opcua-server-71e700c. The 44 checks of
+# 2026-10-24-001 and the 6 of 001b were re-run unchanged (not re-listed); these are the
+# checks new to it. Its evidence/typed is byte-identical to the parents'.
+- id: 001-F26-concurrent-items-no-freeze
+  run: 2026-10-24-001c
+  finding: F-26
+  disposition: release
+  surface: opcua
+  oracle: asyncua + Part 4; HTTP scan counter (nautilus itself) as the liveness witness
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-F26-concurrent-items-no-freeze.py
+  env: {}
+  expected_today: pass
+  note: 'The strongest attempt made at the once-seen freeze, as a check: 20 clients x 30 rounds of
+    creating/deleting items on Server-object Variables and project tags (queue size 1) at a 100 ms
+    publishing interval, ~15 s. Passed here and in two longer forms (evidence/probes/deadlock-try1.txt,
+    deadlock2.txt) and after the parent''s three probes run concurrently (evidence/probes/f26-chain.log).
+    Never reproduced the freeze on any build, so a pass is weak evidence; `release`, could be `soak`.'
+  group: scoped findings of the parent (fixed-unverified -> verified)
+- id: 001-F32-monitoreditem-indexrange
+  run: 2026-10-24-001c
+  finding: F-32
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-F32-monitoreditem-indexrange.py
+  env: {}
+  expected_today: fail
+  note: 'CreateMonitoredItems ignores ItemToMonitor.IndexRange (Read honours it since 71e700c): the item
+    is notified with the whole array; an out-of-range or malformed range is accepted as Good. Writes
+    RealArr through POST /api/tags and restores it.'
+  group: new findings of this run
+- id: 001-F33-indexrange-string
+  run: 2026-10-24-001c
+  finding: F-33
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §7.22
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-F33-indexrange-string.py
+  env: {}
+  expected_today: fail
+  note: 'papercut. An IndexRange on a String value (a substring, Part 4 §7.22) is Bad_IndexRangeNoData;
+    the guide says "a range on a scalar" is NoData, so guide and spec disagree — judged by the spec.'
+  group: new findings of this run
+- id: 001-F34-modifysubscription-no-op
+  run: 2026-10-24-001c
+  finding: F-34
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §5.13.3
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-F34-modifysubscription-no-op.py
+  env: {}
+  expected_today: fail
+  note: 'papercut. ModifySubscription no longer Bad_ServiceUnsupported (F-31) but answers the current
+    values and changes nothing; the guide says so. May be one with F-31 (nautilus#431).'
+  group: new findings of this run
+  open: '#433'
+- id: 001-P-publish-interval-revised-range
+  run: 2026-10-24-001c
+  pass: every RequestedPublishingInterval (0, 1, 50, 99, -1, NaN, 100..3600000, 3600001, 1e9) is revised to a positive supported rate; the sweep for anything under it, an hour as the ceiling
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §5.13.2.2; HTTP scan counter (nautilus itself) for liveness
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-P-publish-interval-revised-range.py
+  env: {}
+  expected_today: pass
+  group: edges of the fixes, newly checked
+- id: 001-P-monitoring-mode-transitions
+  run: 2026-10-24-001c
+  pass: created Disabled is silent; Sampling silent; Reporting resumes within a sweep with the current value; an idle tag re-enabled hears its value once; a bogus item id is Bad_MonitoredItemIdInvalid on SetMonitoringMode and DeleteMonitoredItems and the controller survives
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §5.12.4
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-P-monitoring-mode-transitions.py
+  env: {}
+  expected_today: pass
+  note: counts notifications over 1 s windows on Counter (100 ms sweep); thresholds have slack (>=7 of ~10).
+  group: edges of the fixes, newly checked
+- id: 001-P-indexrange-error-codes
+  run: 2026-10-24-001c
+  pass: Read IndexRange error codes — slices counted from 0; past-the-end, scalar, extra-dimension and over-running ranges Bad_IndexRangeNoData; malformed ('abc', '2:1', '0:0', '1:1', '-1', '1.5') Bad_IndexRangeInvalid; empty range = whole value; a Grid row is indexable
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §7.22
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-P-indexrange-error-codes.py
+  env: {}
+  expected_today: pass
+  note: 'a range that runs past the end (0:9 on 4 elements) is NoData here, not the overlap; Part 4 is
+    not explicit, so that case is recorded as observed, not asserted against the spec. Strings are F-33.'
+  group: edges of the fixes, newly checked
+- id: 001-P-browse-paging-dedup
+  run: 2026-10-24-001c
+  pass: Browse/BrowseNext of i=2253 (forward, inverse, both), i=2268, i=2274 list each reference once and paging by 1, 5, 7 returns the same list in the same order; a recursive HasChild walk of 708 nodes under Server finds no duplicate
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §5.8.2/§5.8.3
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-P-browse-paging-dedup.py
+  env: {}
+  expected_today: pass
+  group: edges of the fixes, newly checked
+- id: 001-P-read-limit-boundary
+  run: 2026-10-24-001c
+  pass: a Read of exactly MaxNodesPerRead (10 000) nodes succeeds and one more is Bad_TooManyOperations; the other OperationLimits are not advertised (noted, not asserted)
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4/5
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-P-read-limit-boundary.py
+  env: {}
+  expected_today: pass
+  group: edges of the fixes, newly checked
