@@ -1,0 +1,803 @@
+# Checks imported from the black-box tester's runs, verbatim (tools/blackbox/README.md).
+# Each entry is the tester's, with `run` added, paths rewritten to this tree, and `open`
+# naming the issue while a check's finding is unfixed. `expected_today` and `group` are
+# the tester's own notes from the run and are not read by the runner.
+oracles:
+  asyncua: 2.1.0
+  pymodbus: 3.16.1
+  cryptography: 50.0.2
+  python: '3.12'
+projects:
+  projects/2026-10-24-001/typed:
+    http: http://localhost:8080
+    opcua: opc.tcp://localhost:4840
+  projects/2026-10-24-001/typed-any:
+    http: http://localhost:8081
+    opcua: opc.tcp://0.0.0.0:4841
+  projects/2026-10-24-001/mb:
+    http: http://localhost:8082
+    opcua: opc.tcp://localhost:4842
+    modbus: 127.0.0.1:5020
+  projects/2026-10-24-001b/typed:
+    http: http://localhost:8080
+    opcua: opc.tcp://localhost:4840
+  projects/2026-10-24-001c/typed:
+    http: http://localhost:8080
+    opcua: opc.tcp://localhost:4840
+checks:
+- id: 001-F01-namespace-index
+  run: 2026-10-24-001
+  finding: F-01
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 3
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F01-namespace-index.py
+  env: {}
+  expected_today: pass
+  group: findings of the parent run, in scope (fixed-unverified -> verified)
+- id: 001-F02-ipv4-loopback
+  run: 2026-10-24-001
+  finding: F-02
+  disposition: gate
+  surface: opcua
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F02-ipv4-loopback.py
+  env: {}
+  note: skips (exit 0) when the configured host is not localhost; reports [::1] as INFO (refused on dee0ce0)
+  expected_today: pass
+  group: findings of the parent run, in scope (fixed-unverified -> verified)
+- id: 001-F03-unknown-namespace-read
+  run: 2026-10-24-001
+  finding: F-03
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F03-unknown-namespace-read.py
+  env: {}
+  expected_today: pass
+  group: findings of the parent run, in scope (fixed-unverified -> verified)
+- id: 001-F04a-server-variable-access-attrs
+  run: 2026-10-24-001
+  finding: F-04
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 3
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F04a-server-variable-access-attrs.py
+  env: {}
+  note: the access-level half of F-04
+  expected_today: pass
+  group: findings of the parent run, in scope (fixed-unverified -> verified)
+- id: 001-F04b-server-identity-mandatory-vars
+  run: 2026-10-24-001
+  finding: F-04
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4/5
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F04b-server-identity-mandatory-vars.py
+  env: {}
+  note: 'the rest of F-04 (issue 424): ApplicationUri, BuildInfo identity, ServerArray/ServiceLevel/Auditing. Also shows BuildInfo
+    (i=2260) reading Good with a null value while ServerStatus.BuildInfo is populated'
+  expected_today: fail
+  group: findings of the parent run, in scope (fixed-unverified -> verified)
+  open: '#424'
+- id: 001-F05-schemeless-endpoint
+  run: 2026-10-24-001
+  finding: F-05
+  disposition: gate
+  surface: cli
+  oracle: naut exit code + banner (nautilus itself), uaread
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F05-schemeless-endpoint.sh
+  env: {}
+  note: starts its own instance on 8090/4850
+  expected_today: pass
+  group: findings of the parent run, in scope (fixed-unverified -> verified)
+- id: 001-F07-monitored-items-refused
+  run: 2026-10-24-001
+  finding: F-07
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F07-monitored-items-refused.py
+  env: {}
+  expected_today: pass
+  group: findings of the parent run, in scope (fixed-unverified -> verified)
+- id: 001-F08-server-object-read-only
+  run: 2026-10-24-001
+  finding: F-08
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 5
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F08-server-object-read-only.py
+  env: {}
+  note: restores any value a write managed to change
+  expected_today: pass
+  group: findings of the parent run, in scope (fixed-unverified -> verified)
+- id: 001-F09-fb-instance-no-node
+  run: 2026-10-24-001
+  finding: F-09
+  disposition: gate
+  surface: opcua
+  oracle: asyncua; GET /api/state names the local (nautilus itself)
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F09-fb-instance-no-node.py
+  env: {}
+  expected_today: pass
+  group: findings of the parent run, in scope (fixed-unverified -> verified)
+- id: 001-F10-2d-array-rows
+  run: 2026-10-24-001
+  finding: F-10
+  disposition: gate
+  surface: opcua
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F10-2d-array-rows.py
+  env: {}
+  expected_today: pass
+  group: findings of the parent run, in scope (fixed-unverified -> verified)
+- id: 001-F12-source-timestamp-start
+  run: 2026-10-24-001
+  finding: F-12
+  disposition: gate
+  surface: opcua
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F12-source-timestamp-start.py
+  env: {}
+  note: waits until the server is 4 s old; reads setpoints no program writes
+  expected_today: pass
+  group: findings of the parent run, in scope (fixed-unverified -> verified)
+- id: 001-F17-endpoints-advertised
+  run: 2026-10-24-001
+  finding: F-17
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001/typed-any
+  script: checks/2026-10-24-001/001-F17-endpoints-advertised.py
+  env: {}
+  note: run it against evidence/typed too (loopback case); derives interface addresses with `ip -j -4 addr`
+  expected_today: pass
+  group: findings of the parent run, in scope (fixed-unverified -> verified)
+- id: 001-F06-overflow-int64
+  run: 2026-10-24-001
+  finding: F-06
+  disposition: gate
+  surface: opcua (premise api)
+  oracle: asyncua + Part 3
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F06-overflow-int64.py
+  env: {}
+  note: issue 421. Writes Int1 through the HTTP API; on the bug the node's DataType flips to Double for good, so run it LAST
+    and restart the server after
+  expected_today: fail
+  group: findings of the parent run, out of scope (filed), rerun because they were cheap
+  open: '#421'
+- id: 001-F11-enum-names
+  run: 2026-10-24-001
+  finding: F-11
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 3/8
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F11-enum-names.py
+  env: {}
+  note: issue 425 (gap); states the Part 8 expectation, stronger than the guide
+  expected_today: fail
+  group: findings of the parent run, out of scope (filed), rerun because they were cheap
+  open: '#425'
+- id: 001-F13-closesession-deletes-subscriptions
+  run: 2026-10-24-001
+  finding: F-13
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4; counts from GET /api/drivers (nautilus itself)
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F13-closesession-deletes-subscriptions.py
+  env: {}
+  note: issue 422; leaves one subscription behind on the bug (expires after the default lifetime)
+  expected_today: fail
+  group: findings of the parent run, out of scope (filed), rerun because they were cheap
+  open: '#422'
+- id: 001-F14-shutdown-with-session
+  run: 2026-10-24-001
+  finding: F-14
+  disposition: release
+  surface: cli · opcua
+  oracle: process exit timing; asyncua
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F14-shutdown-with-session.py
+  env: {}
+  note: issue 423; starts its own instances on 8095/4855; 10 s per case on the bug
+  expected_today: fail
+  group: findings of the parent run, out of scope (filed), rerun because they were cheap
+  open: '#423'
+- id: 001-F15-status-change-notified
+  run: 2026-10-24-001
+  finding: F-15
+  disposition: release
+  surface: opcua
+  oracle: asyncua + Part 4; pymodbus as the device
+  project: projects/2026-10-24-001/mb
+  script: checks/2026-10-24-001/001-F15-status-change-notified.py
+  env:
+    SUT_MODBUS: 127.0.0.1:5020
+  note: issue 419; starts a pymodbus slave; the driver's reconnect backoff can be 60 s, so allow 5 min
+  expected_today: fail
+  group: findings of the parent run, out of scope (filed), rerun because they were cheap
+  open: '#419'
+- id: 001-F16-undelivered-tag-has-node
+  run: 2026-10-24-001
+  finding: F-16
+  disposition: release
+  surface: opcua
+  oracle: asyncua + Part 3; pymodbus; GET /api/state quality (nautilus itself)
+  project: projects/2026-10-24-001/mb
+  script: checks/2026-10-24-001/001-F16-undelivered-tag-has-node.py
+  env:
+    SUT_MODBUS: 127.0.0.1:5020
+  note: issue 420; the Bad_DeviceFailure half. The Bad_NotConnected half is 001-O-not-connected-before-device
+  expected_today: fail
+  group: findings of the parent run, out of scope (filed), rerun because they were cheap
+  open: '#420'
+- id: 001-F18-modbus-import-host-port
+  run: 2026-10-24-001
+  finding: F-18
+  disposition: gate
+  surface: cli (modbus import / driver)
+  oracle: naut's own log (nautilus itself)
+  project: projects/2026-10-24-001/mb
+  script: checks/2026-10-24-001/001-F18-modbus-import-host-port.sh
+  env: {}
+  note: issue 426; imports into a copy on 8093/4853 and runs it 3 s
+  expected_today: fail
+  group: findings of the parent run, out of scope (filed), rerun because they were cheap
+  open: '#426'
+- id: 001-F19-parse-error-message
+  run: 2026-10-24-001
+  finding: F-19
+  disposition: gate
+  surface: cli
+  oracle: naut's messages (nautilus itself)
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F19-parse-error-message.sh
+  env: {}
+  note: issue 427
+  expected_today: fail
+  group: findings of the parent run, out of scope (filed), rerun because they were cheap
+  open: '#427'
+- id: 001-F20-revised-sampling-interval
+  run: 2026-10-24-001
+  finding: F-20
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F20-revised-sampling-interval.py
+  env: {}
+  expected_today: fail
+  group: new findings of this run
+- id: 001-F21-udt-member-notified-once
+  run: 2026-10-24-001
+  finding: F-21
+  disposition: release
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F21-udt-member-notified-once.py
+  env: {}
+  note: watches 2 s of scans
+  expected_today: fail
+  group: new findings of this run
+- id: 001-F22-udt-member-source-timestamp
+  run: 2026-10-24-001
+  finding: F-22
+  disposition: gate
+  surface: opcua
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-F22-udt-member-source-timestamp.py
+  env: {}
+  note: may share a cause with F-21
+  expected_today: fail
+  group: new findings of this run
+- id: 001-F23-createsession-serverendpoints
+  run: 2026-10-24-001
+  finding: F-23
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001/typed-any
+  script: checks/2026-10-24-001/001-F23-createsession-serverendpoints.py
+  env: {}
+  note: dials 127.0.1.1; skips unless the server is bound to 0.0.0.0
+  expected_today: fail
+  group: new findings of this run
+  open: '#430'
+- id: 001-F24-advertises-0000
+  run: 2026-10-24-001
+  finding: F-24
+  disposition: gate
+  surface: opcua
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed-any
+  script: checks/2026-10-24-001/001-F24-advertises-0000.py
+  env: {}
+  note: skips unless the server is bound to 0.0.0.0
+  expected_today: fail
+  group: new findings of this run
+- id: 001-P-project-folder
+  run: 2026-10-24-001
+  pass: one project folder under Objects with name and description
+  disposition: gate
+  surface: opcua
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-project-folder.py
+  env: {}
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-every-tag-a-node
+  run: 2026-10-24-001
+  pass: every manifest tag is a node ns=1;s=<name> and nothing else is
+  disposition: gate
+  surface: opcua
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-every-tag-a-node.py
+  env: {}
+  note: the expected tag list is copied from evidence/typed/nautilus.yaml
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-case-insensitive
+  run: 2026-10-24-001
+  pass: node ids resolve case-insensitively
+  disposition: gate
+  surface: opcua
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-case-insensitive.py
+  env: {}
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-description
+  run: 2026-10-24-001
+  pass: desc and unit become Description "Wet well level [ft]
+  disposition: gate
+  surface: opcua
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-description.py
+  env: {}
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-shapes
+  run: 2026-10-24-001
+  pass: scalar/UDT/nested/array/array-of-UDT node shapes
+  disposition: gate
+  surface: opcua
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-shapes.py
+  env: {}
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-type-table
+  run: 2026-10-24-001
+  pass: the guide's type table row by row with init values
+  disposition: gate
+  surface: opcua
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-type-table.py
+  env: {}
+  note: fails after 001-F06 has run on a build with the bug
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-read-only-tags
+  run: 2026-10-24-001
+  pass: AccessLevel CurrentRead everywhere; writes refused Bad_UserAccessDenied / Bad_NotWritable
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + guide
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-read-only-tags.py
+  env: {}
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-read-error-codes
+  run: 2026-10-24-001
+  pass: Read answers Bad_NodeIdUnknown / Bad_AttributeIdInvalid per Part 4
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-read-error-codes.py
+  env: {}
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-sampling-interval
+  run: 2026-10-24-001
+  pass: MinimumSamplingInterval is 100 on every Variable
+  disposition: gate
+  surface: opcua
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-sampling-interval.py
+  env: {}
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-security-none-anonymous
+  run: 2026-10-24-001
+  pass: policy None, mode None, anonymous token only
+  disposition: gate
+  surface: opcua
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-security-none-anonymous.py
+  env: {}
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-http-write-notified
+  run: 2026-10-24-001
+  pass: an HTTP write reaches a subscriber within a sweep with Good and a fresh SourceTimestamp
+  disposition: gate
+  surface: opcua · api
+  oracle: asyncua; the HTTP API is the actuator
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-http-write-notified.py
+  env: {}
+  note: writes and restores Level, Str1, Mode1, IntArr, Recipe.TargetL
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-counter-cadence
+  run: 2026-10-24-001
+  pass: one notification per 100 ms change with no skips; a same-value rewrite is silent
+  disposition: release
+  surface: opcua
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-counter-cadence.py
+  env: {}
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-driver-row
+  run: 2026-10-24-001
+  pass: GET /api/drivers opcua-server row with live subscription counts
+  disposition: gate
+  surface: api
+  oracle: asyncua; the row is nautilus's own word
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-driver-row.py
+  env: {}
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-ten-subscribers
+  run: 2026-10-24-001
+  pass: ten sessions x five items all served; a killed client harms nobody
+  disposition: release
+  surface: opcua
+  oracle: asyncua; HTTP scan count (nautilus itself)
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-ten-subscribers.py
+  env: {}
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-build-serves-opcua
+  run: 2026-10-24-001
+  pass: naut build output serves OPC UA
+  disposition: release
+  surface: cli · opcua
+  oracle: uaread/uals (asyncua)
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-build-serves-opcua.sh
+  env: {}
+  note: builds a copy on 8091/4851
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-restart-under-subscriber
+  run: 2026-10-24-001
+  pass: restart under a subscriber; old client told; new server accepts
+  disposition: release
+  surface: cli · opcua
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-restart-under-subscriber.py
+  env: {}
+  note: own instances on 8092/4852; accepts Bad_ServerHalted (pr-416) or Bad_Shutdown (dee0ce0)
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-stale-quality
+  run: 2026-10-24-001
+  pass: Good -> Uncertain_LastUsableValue (value held) -> Good with a Modbus slave
+  disposition: release
+  surface: opcua · modbus
+  oracle: asyncua; pymodbus as the device
+  project: projects/2026-10-24-001/mb
+  script: checks/2026-10-24-001/001-P-stale-quality.py
+  env:
+    SUT_MODBUS: 127.0.0.1:5020
+  note: starts and stops a pymodbus slave; allow 5 min for the driver's backoff
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-check-refuses-bad-endpoints
+  run: 2026-10-24-001
+  pass: naut check refuses nine malformed endpoints with a message
+  disposition: gate
+  surface: cli
+  oracle: naut exit code and message (nautilus itself)
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-check-refuses-bad-endpoints.sh
+  env: {}
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-P-port-in-use
+  run: 2026-10-24-001
+  pass: a second controller on a taken OPC UA port says so and runs regardless
+  disposition: gate
+  surface: cli · api
+  oracle: naut's log and GET /api/drivers (nautilus itself)
+  project: projects/2026-10-24-001/typed
+  script: checks/2026-10-24-001/001-P-port-in-use.sh
+  env: {}
+  note: starts a copy on 8099 with the SUT's OPC UA port
+  expected_today: pass
+  group: what passed (the regression suite)
+- id: 001-O-not-connected-before-device
+  run: 2026-10-24-001
+  finding: F-16
+  disposition: once
+  surface: opcua
+  oracle: uals/uaread (asyncua); GET /api/state
+  project: projects/2026-10-24-001/mb
+  note: 'the Bad_NotConnected half: a controller started with no device has no nodes for its three inputs (evidence/20-mb-before-device.txt),
+    as the guide''s new limits paragraph now says'
+  group: judged by a reader, or needing a human
+- id: 001-O-hostname-not-advertised-on-loopback
+  run: 2026-10-24-001
+  pass: guide wording
+  disposition: once
+  surface: website:opcua-server
+  oracle: asyncua
+  project: projects/2026-10-24-001/typed
+  note: 'the guide lists ''the machine''s host name'' among the advertised names; with endpoint localhost the server binds
+    127.0.0.1 only and advertises localhost and 127.0.0.1 - right, but not what the sentence says (evidence: out/001-F17-endpoints-advertised.txt)'
+  group: judged by a reader, or needing a human
+- id: 001-M-uaexpert-connects
+  run: 2026-10-24-001
+  pass: the guide's "UAExpert" claim
+  disposition: manual
+  surface: opcua
+  oracle: UAExpert
+  project: projects/2026-10-24-001/typed-any
+  note: only asyncua was available; F-23 is where UAExpert would differ (it verifies CreateSession's ServerEndpoints)
+  group: judged by a reader, or needing a human
+- id: 001-M-udt-member-quality-from-device
+  run: 2026-10-24-001
+  pass: a member of a UDT is exactly as trustworthy as its tag
+  disposition: manual
+  surface: opcua
+  oracle: a device that delivers a UDT
+  project: projects/2026-10-24-001/mb
+  note: the Modbus device map produces scalars only; not reachable with the oracles at hand
+  group: judged by a reader, or needing a human
+# Run 2026-10-24-001b: a fresh full run of brief 001 against opcua-server-475f4bf. Its
+# regression sweep re-ran the 44 checks above unchanged (not re-listed); these are the
+# checks new to it. Its evidence/typed is byte-identical to the parent run's.
+- id: 001-F25-publish-interval-zero-crash
+  run: 2026-10-24-001b
+  finding: F-25
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4; HTTP scan counter (nautilus itself) as the liveness witness
+  project: projects/2026-10-24-001b/typed
+  script: checks/2026-10-24-001b/001-F25-publish-interval-zero-crash.py
+  env: {}
+  expected_today: fail
+  note: 'SEVERE. Starts its OWN throwaway controller on 8151/4951 (a copy of SUT_PROJECT) because
+    the finding crashes it; asks for a pub-0 subscription; asserts the controller is still alive.
+    On this build the naut process panics (time.NewTicker(0)) and exits within ~1 s.'
+  group: new findings of this run
+- id: 001-F27-setmonitoringmode-disabled
+  run: 2026-10-24-001b
+  finding: F-27
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001b/typed
+  script: checks/2026-10-24-001b/001-F27-setmonitoringmode-disabled.py
+  env: {}
+  expected_today: fail
+  note: Disabled answers Good but the item keeps reporting (Part 4 §5.12.4).
+  group: new findings of this run
+- id: 001-F28-read-indexrange
+  run: 2026-10-24-001b
+  finding: F-28
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001b/typed
+  script: checks/2026-10-24-001b/001-F28-read-indexrange.py
+  env: {}
+  expected_today: fail
+  note: IndexRange ignored; out-of-range and scalar ranges answer Good (Part 4 §7.22).
+  group: new findings of this run
+- id: 001-F29-server-browse-duplicate-refs
+  run: 2026-10-24-001b
+  finding: F-29
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001b/typed
+  script: checks/2026-10-24-001b/001-F29-server-browse-duplicate-refs.py
+  env: {}
+  expected_today: fail
+  note: 'Browse of the Server object (i=2253, i=2268, i=2274) returns duplicate references; gopcua
+    Server-object family with F-04.'
+  group: new findings of this run
+- id: 001-F30-maxnodesperread-enforced
+  run: 2026-10-24-001b
+  finding: F-30
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4/5
+  project: projects/2026-10-24-001b/typed
+  script: checks/2026-10-24-001b/001-F30-maxnodesperread-enforced.py
+  env: {}
+  expected_today: fail
+  note: MaxNodesPerRead advertised 32 but a Read of 33+ nodes succeeds (Part 4 §5.10.2).
+  group: new findings of this run
+- id: 001-F31-services-unsupported
+  run: 2026-10-24-001b
+  finding: F-31
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001b/typed
+  script: checks/2026-10-24-001b/001-F31-services-unsupported.py
+  env: {}
+  expected_today: fail
+  note: 'gap. ModifyMonitoredItems, ModifySubscription, SetPublishingMode, TransferSubscriptions,
+    TranslateBrowsePathsToNodeIds, Call all return Bad_ServiceUnsupported.'
+  group: new findings of this run
+  open: '#431'
+- id: 001-O-mutex-deadlock
+  run: 2026-10-24-001b
+  finding: F-26
+  disposition: once
+  surface: opcua
+  oracle: the product's SIGQUIT goroutine dump + /proc thread state
+  project: projects/2026-10-24-001b/typed
+  note: 'no deterministic script — observed once under accumulated concurrent monitored-item load,
+    not reproduced on demand (evidence/scripts/deadlock.py did NOT trigger it at publish 100 ms).
+    The stack (gopcua MonitoredItemService mutex) is in evidence/probes/mutex-deadlock-stack.txt.
+    Distinct from F-25 (crash); a reader should judge whether it shares the subscription cause.
+    Here: the cause read from the dump (gopcua sends an item''s first value while holding the
+    monitored-item lock) is reproduced by go ./opcua/server
+    TestCreateMonitoredItemsNeverBlocksOnAStalledSubscription.'
+  group: new findings of this run
+# Run 2026-10-24-001c: the retest of 001b against opcua-server-71e700c. The 44 checks of
+# 2026-10-24-001 and the 6 of 001b were re-run unchanged (not re-listed); these are the
+# checks new to it. Its evidence/typed is byte-identical to the parents'.
+- id: 001-F26-concurrent-items-no-freeze
+  run: 2026-10-24-001c
+  finding: F-26
+  disposition: release
+  surface: opcua
+  oracle: asyncua + Part 4; HTTP scan counter (nautilus itself) as the liveness witness
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-F26-concurrent-items-no-freeze.py
+  env: {}
+  expected_today: pass
+  note: 'The strongest attempt made at the once-seen freeze, as a check: 20 clients x 30 rounds of
+    creating/deleting items on Server-object Variables and project tags (queue size 1) at a 100 ms
+    publishing interval, ~15 s. Passed here and in two longer forms (evidence/probes/deadlock-try1.txt,
+    deadlock2.txt) and after the parent''s three probes run concurrently (evidence/probes/f26-chain.log).
+    Never reproduced the freeze on any build, so a pass is weak evidence; `release`, could be `soak`.'
+  group: scoped findings of the parent (fixed-unverified -> verified)
+- id: 001-F32-monitoreditem-indexrange
+  run: 2026-10-24-001c
+  finding: F-32
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-F32-monitoreditem-indexrange.py
+  env: {}
+  expected_today: fail
+  note: 'CreateMonitoredItems ignores ItemToMonitor.IndexRange (Read honours it since 71e700c): the item
+    is notified with the whole array; an out-of-range or malformed range is accepted as Good. Writes
+    RealArr through POST /api/tags and restores it.'
+  group: new findings of this run
+- id: 001-F33-indexrange-string
+  run: 2026-10-24-001c
+  finding: F-33
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §7.22
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-F33-indexrange-string.py
+  env: {}
+  expected_today: fail
+  note: 'papercut. An IndexRange on a String value (a substring, Part 4 §7.22) is Bad_IndexRangeNoData;
+    the guide says "a range on a scalar" is NoData, so guide and spec disagree — judged by the spec.'
+  group: new findings of this run
+- id: 001-F34-modifysubscription-no-op
+  run: 2026-10-24-001c
+  finding: F-34
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §5.13.3
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-F34-modifysubscription-no-op.py
+  env: {}
+  expected_today: fail
+  note: 'papercut. ModifySubscription no longer Bad_ServiceUnsupported (F-31) but answers the current
+    values and changes nothing; the guide says so. May be one with F-31 (nautilus#431).'
+  group: new findings of this run
+  open: '#433'
+- id: 001-P-publish-interval-revised-range
+  run: 2026-10-24-001c
+  pass: every RequestedPublishingInterval (0, 1, 50, 99, -1, NaN, 100..3600000, 3600001, 1e9) is revised to a positive supported rate; the sweep for anything under it, an hour as the ceiling
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §5.13.2.2; HTTP scan counter (nautilus itself) for liveness
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-P-publish-interval-revised-range.py
+  env: {}
+  expected_today: pass
+  group: edges of the fixes, newly checked
+- id: 001-P-monitoring-mode-transitions
+  run: 2026-10-24-001c
+  pass: created Disabled is silent; Sampling silent; Reporting resumes within a sweep with the current value; an idle tag re-enabled hears its value once; a bogus item id is Bad_MonitoredItemIdInvalid on SetMonitoringMode and DeleteMonitoredItems and the controller survives
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §5.12.4
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-P-monitoring-mode-transitions.py
+  env: {}
+  expected_today: pass
+  note: counts notifications over 1 s windows on Counter (100 ms sweep); thresholds have slack (>=7 of ~10).
+  group: edges of the fixes, newly checked
+- id: 001-P-indexrange-error-codes
+  run: 2026-10-24-001c
+  pass: Read IndexRange error codes — slices counted from 0; past-the-end, scalar, extra-dimension and over-running ranges Bad_IndexRangeNoData; malformed ('abc', '2:1', '0:0', '1:1', '-1', '1.5') Bad_IndexRangeInvalid; empty range = whole value; a Grid row is indexable
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §7.22
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-P-indexrange-error-codes.py
+  env: {}
+  expected_today: pass
+  note: 'a range that runs past the end (0:9 on 4 elements) is NoData here, not the overlap; Part 4 is
+    not explicit, so that case is recorded as observed, not asserted against the spec. Strings are F-33.'
+  group: edges of the fixes, newly checked
+- id: 001-P-browse-paging-dedup
+  run: 2026-10-24-001c
+  pass: Browse/BrowseNext of i=2253 (forward, inverse, both), i=2268, i=2274 list each reference once and paging by 1, 5, 7 returns the same list in the same order; a recursive HasChild walk of 708 nodes under Server finds no duplicate
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §5.8.2/§5.8.3
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-P-browse-paging-dedup.py
+  env: {}
+  expected_today: pass
+  group: edges of the fixes, newly checked
+- id: 001-P-read-limit-boundary
+  run: 2026-10-24-001c
+  pass: a Read of exactly MaxNodesPerRead (10 000) nodes succeeds and one more is Bad_TooManyOperations; the other OperationLimits are not advertised (noted, not asserted)
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4/5
+  project: projects/2026-10-24-001c/typed
+  script: checks/2026-10-24-001c/001-P-read-limit-boundary.py
+  env: {}
+  expected_today: pass
+  group: edges of the fixes, newly checked

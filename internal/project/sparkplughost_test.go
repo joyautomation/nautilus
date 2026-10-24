@@ -296,7 +296,7 @@ func TestSparkplugHostQueuedWritesAreReportedOnAPIDrivers(t *testing.T) {
 	waitFor(t, "the host to connect", func() bool { return drv.Status().Connected })
 
 	queuedMetric := func() (float64, bool) {
-		for _, m := range p.DriverStatus(nil)()[0].Metrics {
+		for _, m := range p.DriverStatus(nil, nil)()[0].Metrics {
 			if m.Label == "queued writes" {
 				return m.Value, true
 			}

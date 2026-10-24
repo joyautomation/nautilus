@@ -34,6 +34,7 @@ io/          Driver seam — bring your own bus (Modbus, EtherNet/IP, OPC-UA, si
 eip/         EtherNet/IP driver for Allen-Bradley Logix: pure-Go CIP stack,
              tag browse + UDT import codegen, polling io.Driver, Logix emulator
 sparkplug/   Sparkplug B edge node (and host application) over MQTT
+opcua/server OPC UA server: the tag store as an address space (browse, read, subscribe)
 retain/      retained-memory stores: file, Kubernetes ConfigMap
 leader/      redundancy: Kubernetes Lease leader election
 oplog/       redundancy: a replicated log of operator intent (acks, shelves), agreed by a majority

@@ -1,0 +1,62 @@
+# The independent tester's `release` checks (tools/blackbox) against the
+# binary a CLI release actually published: the tarball from the GitHub
+# Release, checksums verified, never a rebuild. The runner and the checks are
+# taken from the released tag's tree. Runs when goreleaser publishes a CLI
+# release (release.yml); the extension's vscode-v* releases are skipped. By
+# hand: Actions → blackbox-release → Run workflow with a tag.
+name: blackbox-release
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: CLI release tag, e.g. v0.18.0
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  release-checks:
+    name: Black-box — the tester's release checks against the published CLI
+    if: github.event_name == 'workflow_dispatch' || (startsWith(github.event.release.tag_name, 'v') && !startsWith(github.event.release.tag_name, 'vscode-v'))
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.24'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: pip install -r tools/blackbox/requirements.txt
+      # The same fetch the tester's operator does (nautilus-blackbox
+      # bin/fetch.sh): the linux/amd64 asset, checked against checksums.txt.
+      - name: Fetch the published binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver=${TAG#v}
+          mkdir -p "$RUNNER_TEMP/rel"
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D "$RUNNER_TEMP/rel" \
+            -p "nautilus_${ver}_linux_amd64.tar.gz" -p checksums.txt
+          ( cd "$RUNNER_TEMP/rel" && grep "nautilus_${ver}_linux_amd64.tar.gz" checksums.txt | sha256sum -c - )
+          tar -C "$RUNNER_TEMP/rel" -xzf "$RUNNER_TEMP/rel/nautilus_${ver}_linux_amd64.tar.gz"
+          naut=$(find "$RUNNER_TEMP/rel" -type f -name naut | head -1)
+          [ -n "$naut" ] || { echo '::error::no naut in the release tarball'; find "$RUNNER_TEMP/rel" -type f; exit 1; }
+          chmod +x "$naut"; "$naut" --help | head -1
+          echo "NAUTILUS_BLACKBOX_NAUT=$naut" >> "$GITHUB_ENV"
+      - name: Release checks
+        shell: bash
+        run: |
+          mkdir -p evidence
+          NAUTILUS_BLACKBOX_PYTHON="$(which python)" NAUTILUS_BLACKBOX_DISPOSITION=release \
+            go test -json ./tools/blackbox -run TestBlackbox -v -timeout 1800s | tee evidence/blackbox-release.json | go run ./tools/evidence cat
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidence-blackbox-release-${{ env.TAG }}
+          path: evidence/
+          retention-days: 90

@@ -1,0 +1,248 @@
+page: website/src/content/docs/guides/opcua-server.md
+title: OPC UA server
+prefix: OPC
+claims:
+  - id: OPC-001
+    claim: >-
+      An opcua: section serves the tag store as an OPC UA address space; the
+      section's presence turns the server on, endpoint is its only setting
+      (default opc.tcp://localhost:4840, which listens on 127.0.0.1), and
+      naut check refuses an endpoint that is not opc.tcp://host:port (a bare
+      host:port is read as opc.tcp://host:port).
+    source: "#serving-opc-ua"
+    tests:
+      - go ./internal/project TestOPCUAConfig
+      - go ./cmd/naut TestCheckRefusesBadOPCUAEndpoint
+      - go ./cmd/naut TestNautRunServesOPCUA
+      - go ./opcua/server TestParseEndpoint
+      - go ./opcua/server TestNewRefusesNothingButABadEndpoint
+      - go ./opcua/server TestEndpointHosts
+      - go ./opcua/server TestEndpointsMatchEveryAliasAndFallBackToAll
+
+  - id: OPC-011
+    claim: >-
+      The server advertises one endpoint per name it answers to (the host
+      written, every interface address for 0.0.0.0, the host name, loopback)
+      and never the wildcard itself; a client may dial any of them, and
+      GetEndpoints for an unknown URL returns every endpoint rather than none.
+    source: "#serving-opc-ua"
+    tests:
+      - go ./opcua/server TestEndpointHosts
+      - go ./opcua/server TestEndpointsMatchEveryAliasAndFallBackToAll
+      - go ./opcua/server TestWildcardIsNotAdvertised
+    partial: true
+    note: >-
+      A session through a name the server was not told about (a NAT address,
+      a DNS alias) gets the list from GetEndpoints but an empty
+      ServerEndpoints from CreateSession, which is gopcua's and cannot be
+      wrapped; #430.
+
+  - id: OPC-002
+    claim: >-
+      Under Objects there is one folder named after the project; a scalar
+      tag is a Variable, a UDT tag an Object whose members (nested UDTs
+      included) are child nodes, an array of scalars a Variable holding an
+      OPC UA array, and an array of UDTs an Object with one child per element
+      indexed from the declared lower bound.
+    source: "#what-a-client-sees"
+    tests:
+      - go ./opcua/server TestBrowseWalksTheStore
+      - go ./opcua/server TestBrowseFiltersThroughTheClient
+      - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+      - go ./opcua/server TestFBPinsAreChildNodes
+      - go ./opcua/server TestChildrenListMembersInDeclarationOrder
+      - go ./opcua/server TestChildrenOfAnFBAreItsVisiblePins
+      - go ./opcua/server TestWalkResolvesEveryMemberShape
+      - go ./opcua/server TestNamespaceBrowseReferences
+      - go ./opcua/server TestForeignAsyncuaClient
+
+  - id: OPC-003
+    claim: >-
+      Node ids are string ids in the tag store's address form in namespace
+      1 (ns=1;s=Level, ns=1;s=P101.Drive.Speed, ns=1;s=Levels[2]), the entry
+      after http://opcfoundation.org/UA/ in the NamespaceArray with the URI
+      urn:joyautomation:nautilus:<project>; a node id in another casing
+      resolves to the same tag; a tag's desc and unit become the node's
+      Description as "desc [unit]".
+    source: "#what-a-client-sees"
+    tests:
+      - go ./opcua/server TestProjectNamespaceIsIndexOne
+      - go ./opcua/server TestBrowseWalksTheStore
+      - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+      - go ./opcua/server TestNamespaceResolvesOnlyItsOwnStringIDs
+      - go ./opcua/server TestNamespaceDescriptionFromTagMeta
+      - go ./opcua/server TestForeignAsyncuaClient
+
+  - id: OPC-004
+    claim: >-
+      Each node's DataType is the declared IEC type: BOOL Boolean, the eight
+      integer widths their OPC UA integer, an enumeration Int32, REAL/LREAL
+      Double, TIME Duration in milliseconds, STRING String, and an array of
+      scalars an array of the element type.
+    source: "#types"
+    tests:
+      - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+      - go ./opcua/server TestEveryIntegerWidthReadsAsItsOwnType
+      - go ./opcua/server TestDataTypeFollowsTheDeclaredWidth
+      - go ./opcua/server TestScalarConvertsInRangeAndWidensOutOfRange
+      - go ./opcua/server TestVariantEncodesArraysOfEachKind
+      - go ./opcua/server TestForeignAsyncuaClient
+
+  - id: OPC-005
+    claim: >-
+      A value's status code is the tag's quality — good Good, stale
+      Uncertain_LastUsableValue, bad Bad_DeviceFailure, not connected
+      Bad_NotConnected — and a member of a UDT carries its tag's quality.
+    source: "#quality-and-timestamps"
+    tests:
+      - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+      - go ./opcua/server TestStatusOfQuality
+    note: >-
+      The mapping is tested on the status function and on store-held values.
+      A driver input never delivered has no node yet (#420), so
+      Bad_NotConnected is unobservable end to end, and a quality-only change
+      is not pushed to subscriptions (#419); the page says so.
+    partial: true
+
+  - id: OPC-006
+    claim: >-
+      SourceTimestamp is the time the tag's current value was first seen
+      (the server's start for a value unchanged since) and moves only when
+      the value does, a member of a UDT holding its own while a sibling
+      moves; ServerTimestamp is the time of the read.
+    source: "#quality-and-timestamps"
+    tests:
+      - go ./opcua/server TestSourceTimestampIsSeededAtStart
+      - go ./opcua/server TestIdleUDTMemberStaysQuietWhenASiblingMoves
+      - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+      - go ./opcua/server TestStampAtMovesOnlyWithTheGeneration
+      - go ./opcua/server TestSubscriptionCoversArraysElementsAndStaysQuiet
+      - go ./opcua/server TestForeignAsyncuaClient
+
+  - id: OPC-007
+    claim: >-
+      A subscription's monitored items are notified of a change to the tag
+      they cover (the tag itself or a member of it) without the server
+      polling a copy of the tag store.
+    source: "#subscriptions"
+    tests:
+      - go ./opcua/server TestSubscriptionHearsChanges
+      - go ./opcua/server TestSubscriptionCoversArraysElementsAndStaysQuiet
+      - go ./opcua/server TestSubscriptionFollowsTheRunningProgram
+      - go ./opcua/server TestThousandsOfMovingTagsUnderConcurrentClients
+      - go ./opcua/server TestForeignAsyncuaClient
+    note: >-
+      The 100 ms sweep cadence is not asserted (tests run a 20 ms sweep);
+      MinimumSamplingInterval reporting the sweep is asserted in
+      TestNamespaceAttributesOfFolderAndMembers.
+    partial: true
+
+  - id: OPC-012
+    claim: >-
+      CreateMonitoredItems refuses, in its own result, an item on a node id
+      that is not a node or on an attribute the node lacks (a Value on an
+      Object or the folder), with the code a Read gives, and creates the rest.
+    source: "#subscriptions"
+    tests:
+      - go ./opcua/server TestCreateMonitoredItemsRejectsWhatCannotBeMonitored
+
+  - id: OPC-013
+    claim: >-
+      A created item's RevisedSamplingInterval is the nearest multiple of
+      the sweep to what was requested (the sweep for "fastest"), the item is
+      then sampled at that rate, and a monitored member of a UDT is notified
+      only when its own value or status changes, not when a sibling moves.
+    source: "#subscriptions"
+    tests:
+      - go ./opcua/server TestRevisedSamplingIntervalIsAMultipleOfTheSweep
+      - go ./opcua/server TestIdleUDTMemberStaysQuietWhenASiblingMoves
+
+  - id: OPC-008
+    claim: >-
+      The server is read-only: a write to a value is answered
+      Bad_UserAccessDenied and does not land, AccessLevel is CurrentRead,
+      and the standard Server object and its variables are as read-only as
+      the project's nodes.
+    source: "#security"
+    tests:
+      - go ./opcua/server TestAnonymousWriteIsRefused
+      - go ./opcua/server TestServerObjectIsReadOnly
+      - go ./opcua/server TestNamespaceSetAttributeRefusesEverything
+      - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
+      - go ./opcua/server TestNamespaceAttributesOfFolderAndMembers
+      - go ./cmd/naut TestNautRunServesOPCUA
+      - go ./opcua/server TestForeignAsyncuaClient
+
+  - id: OPC-009
+    claim: >-
+      GET /api/drivers carries an opcua-server row with the endpoint,
+      whether it is listening, and the subscription and monitored-item
+      counts.
+    source: "#status"
+    tests:
+      - go ./cmd/naut TestNautRunServesOPCUA
+      - go ./opcua/server TestStatusCountsWhatClientsHold
+      - go ./opcua/server TestSubscriptionHearsChanges
+
+  - id: OPC-010
+    claim: >-
+      An endpoint already in use is reported on stderr at start ("continuing
+      without it") and as an error on the opcua-server row; the controller
+      runs regardless. Stop closes every session; a restart on the same
+      endpoint serves again.
+    source: "#status"
+    tests:
+      - go ./cmd/naut TestNautRunContinuesWhenOPCUAPortIsTaken
+      - go ./opcua/server TestStartReportsAPortInUse
+      - go ./opcua/server TestStopDropsClientsAndRestartReusesThePort
+
+  - id: OPC-014
+    claim: >-
+      A requested publishing interval is revised to what the server supports
+      (0 and anything below the sweep become the sweep, nothing slower than
+      an hour) rather than booked as asked, and a ModifySubscription that
+      follows is answered with the subscription's own values rather than
+      refused; SetMonitoringMode is honoured, a
+      Disabled or Sampling item being silent until it is Reporting again and
+      then hearing the current value first, and an item created Disabled
+      silent from the start; and an item id that is not an item is refused
+      in its own result. Items are booked without a blocking send, so a
+      subscription that stops draining cannot freeze the server.
+    source: "#subscriptions"
+    tests:
+      - go ./opcua/server TestRevisePublishing
+      - go ./opcua/server TestPublishingIntervalIsRevisedNotActedOn
+      - go ./opcua/server TestMonitoringModeIsHonoured
+      - go ./opcua/server TestCreateMonitoredItemsNeverBlocksOnAStalledSubscription
+      - go ./opcua/server TestNewItemHearsTheCurrentValueOnce
+      - go ./tools/blackbox TestBlackbox/001-F25-publish-interval-zero-crash
+      - go ./tools/blackbox TestBlackbox/001-F27-setmonitoringmode-disabled
+      - go ./tools/blackbox TestBlackbox/001-P-publish-interval-revised-range
+      - go ./tools/blackbox TestBlackbox/001-P-monitoring-mode-transitions
+
+  - id: OPC-015
+    claim: >-
+      A Read honours IndexRange (a slice of an array counted from 0; a
+      String as an array of characters and an array of Strings with a
+      second dimension over them; Bad_IndexRangeNoData for an index the
+      value does not reach or a range on a number or boolean;
+      Bad_IndexRangeInvalid for a range that is not one), a monitored
+      item's IndexRange means the same and the item hears only its slice,
+      a Read names at most the 10 000 nodes MaxNodesPerRead advertises
+      (Bad_TooManyOperations past it), and a Browse lists each reference
+      once, the standard Server object's included.
+    source: "#what-a-client-sees"
+    tests:
+      - go ./opcua/server TestParseNumericRange
+      - go ./opcua/server TestReadHonoursIndexRange
+      - go ./opcua/server TestMonitoredItemHonoursIndexRange
+      - go ./opcua/server TestReadOverTheAdvertisedLimitIsRefused
+      - go ./opcua/server TestBrowseListsEachReferenceOnce
+      - go ./tools/blackbox TestBlackbox/001-F28-read-indexrange
+      - go ./tools/blackbox TestBlackbox/001-F32-monitoreditem-indexrange
+      - go ./tools/blackbox TestBlackbox/001-F33-indexrange-string
+      - go ./tools/blackbox TestBlackbox/001-P-indexrange-error-codes
+      - go ./tools/blackbox TestBlackbox/001-F29-server-browse-duplicate-refs
+      - go ./tools/blackbox TestBlackbox/001-P-browse-paging-dedup
+      - go ./tools/blackbox TestBlackbox/001-F30-maxnodesperread-enforced
+      - go ./tools/blackbox TestBlackbox/001-P-read-limit-boundary

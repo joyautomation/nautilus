@@ -64,6 +64,10 @@
       "minItems": 1,
       "description": "Several field drivers on one scan \u2014 e.g. an EtherNet/IP poll plus a Sparkplug feed. Each entry is the same shape as driver:, plus an optional name to tell status rows apart. A tag may be owned by exactly one driver; a duplicate is a load-time error naming both. One entry behaves exactly like driver:. Do not set driver: as well."
     },
+    "opcua": {
+      "$ref": "#/definitions/opcua",
+      "description": "Serve the tag store as an OPC UA address space (read-only). Any OPC UA client browses, reads and subscribes to the tags; the section's presence turns the server on."
+    },
     "sparkplug": {
       "$ref": "#/definitions/sparkplug",
       "description": "Republish the tag store as a Sparkplug B edge node."
@@ -664,6 +668,17 @@
           }
         }
       ]
+    },
+    "opcua": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "default": "opc.tcp://localhost:4840",
+          "description": "Listen address, opc.tcp://host:port (or host:port). Defaults to loopback: use opc.tcp://0.0.0.0:4840 to serve every interface."
+        }
+      }
     },
     "sparkplug": {
       "type": "object",
