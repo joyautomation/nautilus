@@ -2,6 +2,7 @@ package plcnext
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -24,6 +25,13 @@ func TestShmLayoutMatchesTheShimsHeader(t *testing.T) {
 			continue
 		}
 		v := strings.TrimSuffix(fields[2], "ULL")
+		if fields[1] == "NIO_HIST_LE_US" {
+			list := strings.Trim(strings.Join(fields[2:], ""), "{}")
+			if list != strings.Trim(strings.ReplaceAll(fmt.Sprint(ShimHistLeUs), " ", ","), "[]") {
+				t.Errorf("NIO_HIST_LE_US {%s}, ShimHistLeUs %v", list, ShimHistLeUs)
+			}
+			continue
+		}
 		if n, err := strconv.ParseUint(v, 0, 64); err == nil {
 			got[fields[1]] = n
 		} else if strings.HasPrefix(v, `"`) && fields[1] == "NIO_SHM_PATH" {
@@ -41,6 +49,7 @@ func TestShmLayoutMatchesTheShimsHeader(t *testing.T) {
 		"NIO_OFF_FRAME_NS": shmOffFrameNs, "NIO_OFF_CYCLES": shmOffCycles, "NIO_OFF_LATE": shmOffLate,
 		"NIO_OFF_WORST_US": shmOffWorstUs, "NIO_OFF_LAST_US": shmOffLastUs, "NIO_OFF_APPLIED": shmOffApplied,
 		"NIO_OFF_TORN": shmOffTorn, "NIO_OFF_INPUTS": shmOffInputs, "NIO_OFF_ECHO": shmOffEcho,
+		"NIO_OFF_HIST": shmOffHist, "NIO_HIST_N": shmHistN, "NIO_OFF_WORST_WIN_US": shmOffWorstWinUs, "NIO_OFF_PRIO": shmOffPrio,
 		"NIO_OFF_OUT_SEQ": shmOffOutSeq, "NIO_OFF_OUT_LEN": shmOffOutLen, "NIO_OFF_OUT_NS": shmOffOutNs,
 		"NIO_OFF_OUT_GEN": shmOffOutGen, "NIO_OFF_WATCHDOG_MS": shmOffWatchdogMs, "NIO_OFF_OUTPUTS": shmOffOutputs,
 		"NIO_ST_PLC": shmStPLC, "NIO_ST_FRAMES": shmStFrames, "NIO_ST_RUN_KNOWN": shmStRunKnown,

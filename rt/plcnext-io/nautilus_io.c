@@ -369,17 +369,33 @@ int main(int argc, char **argv) {
     }
 
     // Real-time cycle: pinned priority, absolute schedule, lateness kept.
+    // The priority is 50 (the firmware's interrupt threads' level, under its
+    // ESM tasks at 97-98) unless nautilus_io.prio beside the binary says
+    // otherwise; it only takes with CAP_SYS_NICE (setcap, README).
+    int prio = 50;
+    char priopath[PATH_MAX];
+    snprintf(priopath, sizeof priopath, "%s/nautilus_io.prio", exe);
+    FILE *pf = fopen(priopath, "r");
+    if (pf) {
+        int v;
+        if (fscanf(pf, "%d", &v) == 1 && v >= 1 && v <= 96) prio = v;
+        else logln("%s: want a priority 1..96; using %d", priopath, prio);
+        fclose(pf);
+    }
     bool fifo = false;
-    struct sched_param sp = { .sched_priority = 50 };
-    if (sched_setscheduler(0, SCHED_FIFO, &sp) == 0) fifo = true;
-    else logln("SCHED_FIFO refused (%s); running best-effort", strerror(errno));
+    struct sched_param sp = { .sched_priority = prio };
+    if (sched_setscheduler(0, SCHED_FIFO, &sp) == 0) { fifo = true; logln("SCHED_FIFO priority %d", prio); }
+    else logln("SCHED_FIFO %d refused (%s); running best-effort", prio, strerror(errno));
 
     page_open((uint32_t)CYCLE_NS, LATE_US);
 
     struct timespec next, now;
     clock_gettime(CLOCK_MONOTONIC, &next);
     uint64_t cycles = 0, late = 0, frame_ns = 0, applied = 0, torn = 0;
-    long worst_us = 0;
+    long worst_us = 0, worst_win = 0, worst_win_done = 0;
+    static const long hist_le[] = NIO_HIST_LE_US;
+    _Static_assert(sizeof hist_le / sizeof hist_le[0] == NIO_HIST_N - 1, "NIO_HIST_LE_US has NIO_HIST_N-1 bounds");
+    uint64_t hist[NIO_HIST_N] = {0};
     struct outs o = {0};
     unsigned char inbuf[NIO_FRAME_LEN] = {0}, frame_out[NIO_FRAME_LEN] = {0};
     unsigned char last_in[8] = {0}, last_out[8] = {0};
@@ -393,7 +409,11 @@ int main(int argc, char **argv) {
         long l = ts_diff_us(&now, &next);
         if (l < 0) l = 0;
         if (l > worst_us) worst_us = l;
+        if (l > worst_win) worst_win = l;
         if (l > LATE_US) late++;
+        int b = 0;
+        while (b < NIO_HIST_N - 1 && l > hist_le[b]) b++;
+        hist[b]++;
         uint64_t t0 = ts_ns(&now);
         if (!pg && cycles % 1000 == 999) page_open((uint32_t)CYCLE_NS, LATE_US);
 
@@ -463,14 +483,19 @@ int main(int argc, char **argv) {
             *PG32(NIO_OFF_LAST_US) = (uint32_t)l;
             *PG64(NIO_OFF_APPLIED) = applied;
             *PG64(NIO_OFF_TORN) = torn;
+            memcpy(pg + NIO_OFF_HIST, hist, sizeof hist);
+            *PG32(NIO_OFF_WORST_WIN_US) = (uint32_t)worst_win_done;
+            *PG32(NIO_OFF_PRIO) = (uint32_t)prio;
             memcpy(pg + NIO_OFF_INPUTS, inbuf, NIO_FRAME_LEN);
             memcpy(pg + NIO_OFF_ECHO, frame_out, NIO_FRAME_LEN);
             in_end();
         }
         if (cycles % 10000 == 9999) {
+            worst_win_done = worst_win;
+            worst_win = 0;
             hex8(hi, inbuf); hex8(ho, frame_out);
-            logln("%llu cycles, %llu late (>%d us), worst %ld us; in[0..8): %s  out[0..8): %s; gen %llu, torn %llu, status 0x%02x",
-                  (unsigned long long)cycles + 1, (unsigned long long)late, LATE_US, worst_us, hi, ho,
+            logln("%llu cycles, %llu late (>%d us), worst %ld us (%ld this window); in[0..8): %s  out[0..8): %s; gen %llu, torn %llu, status 0x%02x",
+                  (unsigned long long)cycles + 1, (unsigned long long)late, LATE_US, worst_us, worst_win_done, hi, ho,
                   (unsigned long long)applied, (unsigned long long)torn, status);
         }
     }

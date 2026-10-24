@@ -47,6 +47,11 @@ Usage:
         output bytes it put on the bus (its own view of the frame), with
         who owns them and how fresh they are. --watch prints one line per
         interval until interrupted.
+  naut plcnext bench [--for 5m] [--label …] [--out bench.jsonl] [--api http://127.0.0.1:8080]
+        On the controller: measure one window of the shim and naut — the
+        shim's lateness percentiles and worst 10 s window, naut's scan
+        lateness, and the CPU each used — for comparing runs (best-effort
+        against SCHED_FIFO, quiet against loaded). --out appends a JSON line.
   naut plcnext tags <plcnext_manifest.yaml> [-o tags/plcnext.yaml]
         Anywhere: derive the tag file from the committed manifest.
 
@@ -80,6 +85,8 @@ func runPlcnext(args []string) int {
 		return runPlcnextWrite(args[1:])
 	case "shm":
 		return runPlcnextShm(args[1:])
+	case "bench":
+		return runPlcnextBench(args[1:])
 	case "tags":
 		return runPlcnextTags(args[1:])
 	default:

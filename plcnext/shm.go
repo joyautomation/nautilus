@@ -49,6 +49,11 @@ const (
 	shmOffTorn    = 120
 	shmOffInputs  = 128
 	shmOffEcho    = 640
+	// After version 1, in space a version-1 shim leaves zero.
+	shmOffHist       = 1152
+	shmHistN         = 12
+	shmOffWorstWinUs = 1248
+	shmOffPrio       = 1252
 
 	shmOffOutSeq     = 2048
 	shmOffOutLen     = 2052
@@ -65,6 +70,10 @@ const (
 	shmStWatchdog = 0x20
 )
 
+// ShimHistLeUs are the upper bounds of the shim's lateness histogram
+// buckets (NIO_HIST_LE_US); the last bucket is everything over the last bound.
+var ShimHistLeUs = [shmHistN - 1]uint32{10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000}
+
 // shmStaleAfter is how old the shim's stamp may be before its frames are
 // Stale: a hundred of its 1 ms cycles, well past the worst best-effort
 // lateness measured on the bench (under 10 ms).
@@ -74,21 +83,24 @@ const shmStaleAfter = 100 * time.Millisecond
 // what this side last wrote — what `naut plcnext shm` prints and Health
 // summarises.
 type ShimState struct {
-	PID       uint32
-	PeriodNs  uint32
-	LateUs    uint32 // the threshold Late counts against
-	StartedNs int64
-	Status    uint32
-	StampNs   int64 // the shim's last cycle, CLOCK_MONOTONIC
-	FrameNs   int64 // its last input-frame read
-	Cycles    uint64
-	Late      uint64
-	WorstUs   uint32
-	LastUs    uint32
-	Applied   uint64 // the outputs generation in the bus frame
-	Torn      uint64 // cycles the shim found this side mid-write on every try
-	Inputs    [shmFrameLen]byte
-	Echo      [shmFrameLen]byte // what the shim wrote to the output frame
+	PID        uint32
+	PeriodNs   uint32
+	LateUs     uint32 // the threshold Late counts against
+	StartedNs  int64
+	Status     uint32
+	StampNs    int64 // the shim's last cycle, CLOCK_MONOTONIC
+	FrameNs    int64 // its last input-frame read
+	Cycles     uint64
+	Late       uint64
+	WorstUs    uint32
+	LastUs     uint32
+	Applied    uint64           // the outputs generation in the bus frame
+	Torn       uint64           // cycles the shim found this side mid-write on every try
+	Hist       [shmHistN]uint64 // cycles by lateness since start, buckets ShimHistLeUs; zero from an older shim
+	WorstWinUs uint32           // worst lateness in the last completed 10 000-cycle window
+	Prio       uint32           // the SCHED_FIFO priority asked for (granted when FIFO())
+	Inputs     [shmFrameLen]byte
+	Echo       [shmFrameLen]byte // what the shim wrote to the output frame
 
 	OutLen     uint32
 	OutNs      int64
@@ -166,6 +178,11 @@ func (p *shmPage) read(out *ShimState) error {
 		st.LastUs = p.u32(shmOffLastUs)
 		st.Applied = p.u64(shmOffApplied)
 		st.Torn = p.u64(shmOffTorn)
+		for i := range st.Hist {
+			st.Hist[i] = p.u64(shmOffHist + 8*i)
+		}
+		st.WorstWinUs = p.u32(shmOffWorstWinUs)
+		st.Prio = p.u32(shmOffPrio)
 		copy(st.Inputs[:], p.mem[shmOffInputs:shmOffInputs+shmFrameLen])
 		copy(st.Echo[:], p.mem[shmOffEcho:shmOffEcho+shmFrameLen])
 		if atomic.LoadUint32(seq) != s1 {

@@ -54,6 +54,13 @@
 #define NIO_OFF_TORN 120       // u64  cycles naut's block was mid-write on every try (last outputs kept)
 #define NIO_OFF_INPUTS 128     // [NIO_FRAME_LEN] the Axioline input frame
 #define NIO_OFF_ECHO 640       // [NIO_FRAME_LEN] what the shim wrote to the output frame this cycle
+// Added after version 1 shipped, in space a version-1 reader ignores (an
+// older shim leaves it zero): enough to compare two runs window by window.
+#define NIO_OFF_HIST 1152      // [NIO_HIST_N]u64 cycles by lateness, since start; bucket i is <= NIO_HIST_LE_US[i], the last is everything over
+#define NIO_HIST_N 12
+#define NIO_HIST_LE_US {10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000}
+#define NIO_OFF_WORST_WIN_US 1248 // u32 worst lateness in the last completed window of 10000 cycles
+#define NIO_OFF_PRIO 1252      // u32  the SCHED_FIFO priority asked for (granted when NIO_ST_FIFO)
 
 // outputs block: naut writes, the shim reads
 #define NIO_OFF_OUT_SEQ 2048   // u32  seqlock

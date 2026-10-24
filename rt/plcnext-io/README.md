@@ -134,10 +134,26 @@ have one writer: the project's `PCWE.gds.config` has no connector into
 (`cap_sys_nice`, …) and its children do not inherit them. The ESM tasks
 run at FIFO 97–98 in that process. Giving `nautilus_io` the same needs
 `setcap cap_sys_nice+ep nautilus_io` as root, and `admin`'s sudo on a
-PLCnext is an allowlist without `setcap`. Until that is solved the
+PLCnext is an allowlist without `setcap` (it does have `passwd`, which
+is Phoenix's documented way to a root login). Until that is solved the
 cycle is best-effort, which the numbers above describe honestly; with
 it, the sample runtime's 1 ms cycle with sub-100 µs jitter is the
 expectation.
+
+The shim asks for priority 50 — the level of the firmware's interrupt
+threads, under its ESM tasks (97–98), its network receive task (95) and
+`T_Cyclic100` (82). A `nautilus_io.prio` file beside the binary holding
+one number (1–96) asks for another; the page reports what was asked
+(`NIO_OFF_PRIO`) and whether it was granted (`NIO_ST_FIFO`).
+
+To compare, `naut plcnext bench` on the controller measures one window
+from the page and naut's `/api/state`: the shim's lateness histogram
+(cumulative in the page, so a window is a difference), its worst
+10 000-cycle window, naut's scan lateness, and CPU.
+`examples/plcnext-bench/controller/bench-matrix.sh <mode> 5m` runs it
+quiet, under two busy loops, and under a stream over ssh, appending JSON
+lines to `/opt/plcnext/apps/nautilus/bench.jsonl`; run it once
+best-effort and once after the `setcap`.
 
 ## The exchange page
 
