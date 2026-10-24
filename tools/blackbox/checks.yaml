@@ -18,6 +18,9 @@ projects:
     http: http://localhost:8082
     opcua: opc.tcp://localhost:4842
     modbus: 127.0.0.1:5020
+  projects/2026-10-24-001b/typed:
+    http: http://localhost:8080
+    opcua: opc.tcp://localhost:4840
 checks:
 - id: 001-F01-namespace-index
   run: 2026-10-24-001
@@ -582,3 +585,98 @@ checks:
   project: projects/2026-10-24-001/mb
   note: the Modbus device map produces scalars only; not reachable with the oracles at hand
   group: judged by a reader, or needing a human
+# Run 2026-10-24-001b: a fresh full run of brief 001 against opcua-server-475f4bf. Its
+# regression sweep re-ran the 44 checks above unchanged (not re-listed); these are the
+# checks new to it. Its evidence/typed is byte-identical to the parent run's.
+- id: 001-F25-publish-interval-zero-crash
+  run: 2026-10-24-001b
+  finding: F-25
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4; HTTP scan counter (nautilus itself) as the liveness witness
+  project: projects/2026-10-24-001b/typed
+  script: checks/2026-10-24-001b/001-F25-publish-interval-zero-crash.py
+  env: {}
+  expected_today: fail
+  note: 'SEVERE. Starts its OWN throwaway controller on 8151/4951 (a copy of SUT_PROJECT) because
+    the finding crashes it; asks for a pub-0 subscription; asserts the controller is still alive.
+    On this build the naut process panics (time.NewTicker(0)) and exits within ~1 s.'
+  group: new findings of this run
+- id: 001-F27-setmonitoringmode-disabled
+  run: 2026-10-24-001b
+  finding: F-27
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001b/typed
+  script: checks/2026-10-24-001b/001-F27-setmonitoringmode-disabled.py
+  env: {}
+  expected_today: fail
+  note: Disabled answers Good but the item keeps reporting (Part 4 §5.12.4).
+  group: new findings of this run
+- id: 001-F28-read-indexrange
+  run: 2026-10-24-001b
+  finding: F-28
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001b/typed
+  script: checks/2026-10-24-001b/001-F28-read-indexrange.py
+  env: {}
+  expected_today: fail
+  note: IndexRange ignored; out-of-range and scalar ranges answer Good (Part 4 §7.22).
+  group: new findings of this run
+- id: 001-F29-server-browse-duplicate-refs
+  run: 2026-10-24-001b
+  finding: F-29
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001b/typed
+  script: checks/2026-10-24-001b/001-F29-server-browse-duplicate-refs.py
+  env: {}
+  expected_today: fail
+  note: 'Browse of the Server object (i=2253, i=2268, i=2274) returns duplicate references; gopcua
+    Server-object family with F-04.'
+  group: new findings of this run
+- id: 001-F30-maxnodesperread-enforced
+  run: 2026-10-24-001b
+  finding: F-30
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4/5
+  project: projects/2026-10-24-001b/typed
+  script: checks/2026-10-24-001b/001-F30-maxnodesperread-enforced.py
+  env: {}
+  expected_today: fail
+  note: MaxNodesPerRead advertised 32 but a Read of 33+ nodes succeeds (Part 4 §5.10.2).
+  group: new findings of this run
+- id: 001-F31-services-unsupported
+  run: 2026-10-24-001b
+  finding: F-31
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4
+  project: projects/2026-10-24-001b/typed
+  script: checks/2026-10-24-001b/001-F31-services-unsupported.py
+  env: {}
+  expected_today: fail
+  note: 'gap. ModifyMonitoredItems, ModifySubscription, SetPublishingMode, TransferSubscriptions,
+    TranslateBrowsePathsToNodeIds, Call all return Bad_ServiceUnsupported.'
+  group: new findings of this run
+  open: '#431'
+- id: 001-O-mutex-deadlock
+  run: 2026-10-24-001b
+  finding: F-26
+  disposition: once
+  surface: opcua
+  oracle: the product's SIGQUIT goroutine dump + /proc thread state
+  project: projects/2026-10-24-001b/typed
+  note: 'no deterministic script — observed once under accumulated concurrent monitored-item load,
+    not reproduced on demand (evidence/scripts/deadlock.py did NOT trigger it at publish 100 ms).
+    The stack (gopcua MonitoredItemService mutex) is in evidence/probes/mutex-deadlock-stack.txt.
+    Distinct from F-25 (crash); a reader should judge whether it shares the subscription cause.
+    Here: the cause read from the dump (gopcua sends an item''s first value while holding the
+    monitored-item lock) is reproduced by go ./opcua/server
+    TestCreateMonitoredItemsNeverBlocksOnAStalledSubscription.'
+  group: new findings of this run

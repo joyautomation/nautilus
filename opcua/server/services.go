@@ -15,20 +15,25 @@
 //   - Read: a node id in a namespace the server does not have answered the
 //     bare Bad; it is Bad_NodeIdUnknown. The four access attributes Part 3
 //     makes mandatory, which gopcua's built-in nodes lack, read as read-only.
-//   - CreateMonitoredItems: gopcua answered Good for any node id at all,
-//     and the bad ones surfaced later as a notification carrying an error.
-//     An item on a node that does not exist, or on an Object, is refused
-//     at creation with the code a Read of it would give.
+//   - Read, again (2026-10-24): IndexRange was ignored, so a client asking
+//     for one element of an array got the whole array, and an index past
+//     its end got data instead of Bad_IndexRangeNoData (indexrange.go). And
+//     the Server object advertised MaxNodesPerRead = 32 while a Read of 500
+//     nodes succeeded; the limit is now one the server has and enforces.
+//   - Browse: gopcua's Server object lists most of its references two or
+//     three times (browse.go).
+//   - CreateSubscription, ModifySubscription, CreateMonitoredItems,
+//     SetMonitoringMode, DeleteMonitoredItems: monitoring.go, each for a
+//     crash, a freeze or a Good that meant nothing.
 //
 // gopcua honours a handler registered before Start and keeps it, so these
 // are installed between New and Start; the ones that need gopcua's own
-// bookkeeping (monitored items) delegate to its service for the items that
-// pass.
+// bookkeeping (subscriptions, monitored items) work on its exported state
+// under its locks.
 package server
 
 import (
 	"fmt"
-	"math"
 	"net"
 	"os"
 	"strings"
@@ -136,8 +141,26 @@ func registerServices(srv *opcserver.Server, ns *namespace) {
 	srv.RegisterHandler(id.WriteRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
 		return writeAttributes(srv, ns, r)
 	})
+	srv.RegisterHandler(id.BrowseRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return browseNodes(srv, r)
+	})
+	srv.RegisterHandler(id.BrowseNextRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return browseNextNodes(srv, r)
+	})
+	srv.RegisterHandler(id.CreateSubscriptionRequest_Encoding_DefaultBinary, func(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
+		return createSubscription(srv, ns, sc, r, reqID)
+	})
+	srv.RegisterHandler(id.ModifySubscriptionRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return modifySubscription(srv, r)
+	})
 	srv.RegisterHandler(id.CreateMonitoredItemsRequest_Encoding_DefaultBinary, func(sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
 		return createMonitoredItems(srv, ns, sc, r, reqID)
+	})
+	srv.RegisterHandler(id.SetMonitoringModeRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return setMonitoringMode(srv, r)
+	})
+	srv.RegisterHandler(id.DeleteMonitoredItemsRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return deleteMonitoredItems(srv, r)
 	})
 }
 
@@ -232,13 +255,27 @@ func findServers(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
 	return &ua.FindServersResponse{ResponseHeader: header(req.RequestHeader), Servers: servers}, nil
 }
 
+// maxNodesPerRead is the most nodes one Read may name, and the number the
+// Server object's OperationLimits advertise: ten thousand, so a project of
+// a few thousand tags is still one call, well inside the 2 MB message cap.
+// gopcua advertised 32 and enforced nothing (black-box F-30); a limit a
+// client reads is one it chunks its reads to, so it has to be true.
+const maxNodesPerRead = 10000
+
 // readAttributes is the Read service: each node's attribute from its
 // namespace, Bad_NodeIdUnknown for a namespace the server does not have,
-// and the access attributes filled in where gopcua's nodes lack them.
+// the access attributes filled in where gopcua's nodes lack them, and an
+// IndexRange applied to the value.
 func readAttributes(srv *opcserver.Server, ns *namespace, r ua.Request) (ua.Response, error) {
 	req, ok := r.(*ua.ReadRequest)
 	if !ok {
 		return nil, ua.StatusBadRequestTypeInvalid
+	}
+	if len(req.NodesToRead) == 0 {
+		return nil, ua.StatusBadNothingToDo
+	}
+	if len(req.NodesToRead) > maxNodesPerRead {
+		return nil, ua.StatusBadTooManyOperations
 	}
 	results := make([]*ua.DataValue, len(req.NodesToRead))
 	for i, n := range req.NodesToRead {
@@ -257,6 +294,9 @@ func readAttributes(srv *opcserver.Server, ns *namespace, r ua.Request) (ua.Resp
 		}
 		if dv.Status == ua.StatusBadAttributeIDInvalid && n.NodeID.Namespace() != ns.id {
 			dv = accessAttribute(srv, n.NodeID, n.AttributeID, dv)
+		}
+		if n.IndexRange != "" {
+			dv = indexRange(dv, n.IndexRange)
 		}
 		results[i] = dv
 	}
@@ -313,103 +353,4 @@ func writeAttributes(srv *opcserver.Server, ns *namespace, r ua.Request) (ua.Res
 		}
 	}
 	return &ua.WriteResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
-}
-
-// createMonitoredItems checks each item before gopcua books it: an item
-// on a node id that is not a node, or on an attribute the node does not
-// have (a Value on an Object or the folder), is answered with that code in
-// its own result, and only the rest are created. gopcua alone answers
-// Good for everything and lets the bad ones fail inside a notification,
-// which a client that trusts the create result never reads.
-func createMonitoredItems(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel, r ua.Request, reqID uint32) (ua.Response, error) {
-	req, ok := r.(*ua.CreateMonitoredItemsRequest)
-	if !ok {
-		return nil, ua.StatusBadRequestTypeInvalid
-	}
-	mi := srv.MonitoredItemService
-	if mi == nil {
-		return nil, ua.StatusBadInternalError
-	}
-	results := make([]*ua.MonitoredItemCreateResult, len(req.ItemsToCreate))
-	fwd := &ua.CreateMonitoredItemsRequest{
-		RequestHeader:      req.RequestHeader,
-		SubscriptionID:     req.SubscriptionID,
-		TimestampsToReturn: req.TimestampsToReturn,
-	}
-	var slots []int // results index of each forwarded item
-	for i, item := range req.ItemsToCreate {
-		if code := monitorable(srv, ns, item); code != ua.StatusGood {
-			results[i] = &ua.MonitoredItemCreateResult{StatusCode: code, FilterResult: ua.NewExtensionObject(nil)}
-			continue
-		}
-		fwd.ItemsToCreate = append(fwd.ItemsToCreate, item)
-		slots = append(slots, i)
-	}
-	resp, err := mi.CreateMonitoredItems(sc, fwd, reqID)
-	if err != nil {
-		return nil, err
-	}
-	out, ok := resp.(*ua.CreateMonitoredItemsResponse)
-	if !ok {
-		return resp, nil
-	}
-	// gopcua revises the sampling interval to the publishing interval,
-	// whatever was asked. This server samples at multiples of its sweep
-	// (the sweep itself is MinimumSamplingInterval), and the sweep holds
-	// each item to the rate granted here, so the revised value is true.
-	for j, i := range slots {
-		if j < len(out.Results) {
-			results[i] = out.Results[j]
-			if results[i] != nil && results[i].StatusCode == ua.StatusOK {
-				var asked float64
-				if rp := req.ItemsToCreate[i].RequestedParameters; rp != nil {
-					asked = rp.SamplingInterval
-				}
-				results[i].RevisedSamplingInterval = reviseSampling(asked, out.Results[j].RevisedSamplingInterval, ns.sweep)
-			}
-		}
-	}
-	out.Results = results
-	return out, nil
-}
-
-// reviseSampling is the sampling interval granted, in milliseconds: the
-// nearest multiple of the sweep to what was requested, never faster than
-// the sweep; 0 (fastest) is the sweep, and a negative request (sample at
-// the publishing interval) takes publishing as the request.
-func reviseSampling(requested, publishing float64, sweep time.Duration) float64 {
-	sw := float64(sweep) / float64(time.Millisecond)
-	want := requested
-	if want < 0 {
-		want = publishing
-	}
-	if want <= sw {
-		return sw
-	}
-	return math.Round(want/sw) * sw
-}
-
-// monitorable is the code CreateMonitoredItems answers for one item: Good
-// when the node exists and has the attribute, otherwise what a Read of it
-// says.
-func monitorable(srv *opcserver.Server, ns *namespace, item *ua.MonitoredItemCreateRequest) ua.StatusCode {
-	if item == nil || item.ItemToMonitor == nil || item.ItemToMonitor.NodeID == nil {
-		return ua.StatusBadNodeIDInvalid
-	}
-	nid, attr := item.ItemToMonitor.NodeID, item.ItemToMonitor.AttributeID
-	if nid.Namespace() == ns.id {
-		dv := ns.Attribute(nid, attr)
-		if dv == nil {
-			return ua.StatusBadNodeIDUnknown
-		}
-		switch dv.Status {
-		case ua.StatusBadNodeIDUnknown, ua.StatusBadNodeIDInvalid, ua.StatusBadAttributeIDInvalid:
-			return dv.Status
-		}
-		return ua.StatusGood
-	}
-	if srv.Node(nid) == nil {
-		return ua.StatusBadNodeIDUnknown
-	}
-	return ua.StatusGood
 }

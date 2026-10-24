@@ -177,6 +177,10 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	srv.AddNamespace(ns)
 	registerServices(srv, ns)
+	// The Read limit advertised is the one readAttributes enforces.
+	if n := srv.Node(ua.NewNumericNodeID(0, id.Server_ServerCapabilities_OperationLimits_MaxNodesPerRead)); n != nil {
+		n.SetAttribute(ua.AttributeIDValue, opcserver.DataValueFromValue(uint32(maxNodesPerRead)))
+	}
 	// Hang the project folder off ns=0's Objects, where every client
 	// starts browsing.
 	root, err := srv.Namespace(0)
@@ -307,7 +311,9 @@ func (s *Server) Status() Status {
 // is a deadlock that takes the sweep, every Status call and every new
 // subscription with it. Here the send never blocks: a full channel marks
 // the node pending and the next tick tries again, so a slow subscriber
-// delays its own notifications and nothing else.
+// delays its own notifications and nothing else. An item's first value is
+// the sweep's too (monitoring.go books items without sending), as is the
+// value an item hears when it is set back to Reporting.
 func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 	defer close(done)
 	tags := s.rt.Tags()
@@ -341,21 +347,17 @@ func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 		clear(liveItems)
 		for _, mon := range s.monitored() {
 			live[mon.key] = struct{}{}
-			for _, item := range mon.items {
-				liveItems[item] = struct{}{}
+			owed := false // an item new under monitoring, or back to Reporting, is owed the current value
+			for _, w := range mon.items {
+				liveItems[w.item] = struct{}{}
+				if st := items[w.item]; watching(w.item) && (st == nil || st.mode != w.mode) {
+					owed = true
+				}
 			}
 			root, _ := ir.SplitAddress(mon.nid.StringID())
 			_, moved := changed[ir.NameKey(root)]
 			_, retry := pending[mon.key]
-			if _, seen := last[mon.key]; !seen && !moved && !retry {
-				// New under monitoring on a quiet tick: gopcua has sent its
-				// initial value, and that is what it was last told.
-				if _, now, ok := s.current(mon); ok {
-					last[mon.key] = now
-				}
-				continue
-			}
-			if !moved && !retry {
+			if !moved && !retry && !owed {
 				continue
 			}
 			if s.notify(mon, last, retry, items, now) {
@@ -386,7 +388,8 @@ func watching(item *opcserver.MonitoredItem) bool {
 // current reads the node once, for the attribute its first live item
 // watches, and reduces it to what the node would be told.
 func (s *Server) current(mon monitoredNode) (*ua.DataValue, reading, bool) {
-	for _, item := range mon.items {
+	for _, w := range mon.items {
+		item := w.item
 		if !watching(item) {
 			continue
 		}
@@ -412,7 +415,15 @@ type reading struct {
 type monitoredNode struct {
 	key   string // the node id as gopcua keys it
 	nid   *ua.NodeID
-	items []*opcserver.MonitoredItem
+	items []watched
+}
+
+// watched is a monitored item with its mode as it was when the lock was
+// held: SetMonitoringMode writes the mode under gopcua's lock, and the
+// sweep reads it there.
+type watched struct {
+	item *opcserver.MonitoredItem
+	mode ua.MonitoringMode
 }
 
 // monitored lists the nodes of ours under monitoring right now. gopcua's
@@ -430,7 +441,13 @@ func (s *Server) monitored() []monitoredNode {
 		if err != nil || nid.Namespace() != s.ns.id || nid.Type() != ua.NodeIDTypeString {
 			continue
 		}
-		out = append(out, monitoredNode{key: k, nid: nid, items: append([]*opcserver.MonitoredItem(nil), items...)})
+		mon := monitoredNode{key: k, nid: nid, items: make([]watched, 0, len(items))}
+		for _, item := range items {
+			if item != nil {
+				mon.items = append(mon.items, watched{item: item, mode: item.Mode})
+			}
+		}
+		out = append(out, mon)
 	}
 	mi.Mu.Unlock()
 	return out
@@ -438,20 +455,24 @@ func (s *Server) monitored() []monitoredNode {
 
 // itemState is one monitored item's sampling: the interval it was granted
 // (CreateMonitoredItems revised it to a multiple of the sweep), when it was
-// last sent a value, and whether its node has changed since.
+// last sent a value, whether its node has changed since, and the mode it
+// was last seen in.
 type itemState struct {
 	every time.Duration
 	sent  time.Time
 	dirty bool
+	mode  ua.MonitoringMode
 }
 
 // notify reads the node once and offers the reading to every item watching
-// it that is due. A reading equal to what the node was last told, on a
-// tick that is not a retry, says nothing. An item whose sampling interval
-// has not elapsed since its last value is marked dirty and left for a
-// later tick, which is what sampling at that interval means. It reports
-// false when any item is still owed a value — a full channel, or an
-// interval not yet up — so the caller comes back to this node next tick.
+// it that is due. A reading equal to what the node was last told says
+// nothing new, but an item new under monitoring, or just set back to
+// Reporting, is owed it anyway. An item whose sampling interval has not
+// elapsed since its last value is marked dirty and left for a later tick,
+// which is what sampling at that interval means; a Disabled or Sampling
+// item is marked and never sent (Part 4 §5.12.4). It reports false when
+// any item is still owed a value — a full channel, or an interval not yet
+// up — so the caller comes back to this node next tick.
 func (s *Server) notify(mon monitoredNode, last map[string]reading, retry bool, items map[*opcserver.MonitoredItem]*itemState, now time.Time) bool {
 	dv, cur, ok := s.current(mon)
 	if !ok {
@@ -459,24 +480,28 @@ func (s *Server) notify(mon monitoredNode, last map[string]reading, retry bool, 
 	}
 	prev, seen := last[mon.key]
 	changed := !seen || prev.status != cur.status || !reflect.DeepEqual(prev.value, cur.value)
-	if !changed && !retry {
-		return true
-	}
 	last[mon.key] = cur
 	done := true
-	for _, item := range mon.items {
+	for _, w := range mon.items {
+		item := w.item
 		if !watching(item) {
 			continue
 		}
 		st := items[item]
 		if st == nil {
-			st = &itemState{every: s.sampling(item)}
+			st = &itemState{every: s.sampling(item), dirty: true, mode: w.mode}
 			items[item] = st
 		}
 		if changed {
 			st.dirty = true
 		}
-		if !st.dirty {
+		if w.mode != st.mode {
+			if w.mode == ua.MonitoringModeReporting {
+				st.dirty = true
+			}
+			st.mode = w.mode
+		}
+		if !st.dirty || st.mode != ua.MonitoringModeReporting {
 			continue
 		}
 		if !st.sent.IsZero() && now.Sub(st.sent) < st.every-s.opts.Sweep/2 {

@@ -70,6 +70,14 @@ Tag names are IEC identifiers, so `ns=1;s=level` resolves to `Level`. A
 tag's `desc:` and `unit:` from the [tag model](/guides/tag-model/) become
 the node's `Description` — `Wet well level [ft]`.
 
+A Read of an array honours its `IndexRange`: `2` is one element, `1:3` a
+slice, counted from 0; an index the array does not reach, or a range on a
+scalar, is `Bad_IndexRangeNoData`. One Read may name up to 10 000 nodes —
+the `MaxNodesPerRead` the `Server` object advertises is the limit the
+server enforces, with `Bad_TooManyOperations` past it — so a project of a
+few thousand tags is still one call. A Browse lists each reference once,
+the standard `Server` object's included.
+
 ## Types
 
 The tag store holds every integer as 64 bits and every real as a double,
@@ -111,14 +119,20 @@ for a value nothing has changed since — and moves only when the value
 does: a member of a UDT keeps its own timestamp while a sibling member
 changes. `ServerTimestamp` is the time of the read.
 
-Two limits of the current server, found by its black-box run and tracked
+Three limits of the current server, found by its black-box runs and tracked
 as issues: a driver input that has never been delivered has no node until
 its first value arrives, so `Bad_NotConnected` cannot be observed and a
 client that browsed early must browse again
 ([#420](https://github.com/joyautomation/nautilus/issues/420)); and a
 change of quality alone, with the value unchanged, is visible to a Read but
 not yet pushed to a subscription
-([#419](https://github.com/joyautomation/nautilus/issues/419)).
+([#419](https://github.com/joyautomation/nautilus/issues/419)); and a
+subscription's interval, counts and items are fixed once created, and it
+cannot be paused or moved to a new session (`ModifySubscription` answers
+with the values it has; `ModifyMonitoredItems`, `SetPublishingMode` and
+`TransferSubscriptions`, like `TranslateBrowsePathsToNodeIds` and `Call`,
+answer `Bad_ServiceUnsupported`;
+[#431](https://github.com/joyautomation/nautilus/issues/431)).
 
 ## Subscriptions
 
@@ -130,7 +144,14 @@ monitored items whose value or status actually changed; a member of a UDT
 is quiet while its siblings move. A subscriber hears of a change within
 one sweep plus its own publishing interval; `MinimumSamplingInterval`
 reports the sweep; a requested sampling interval is revised to the nearest
-multiple of it, and the item is sampled at that rate.
+multiple of it, and the item is sampled at that rate. A requested publishing
+interval is revised the same way — `0` asks for the fastest and is granted
+the sweep; nothing slower than an hour is granted — rather than booked as
+asked, and a `ModifySubscription` that follows (asyncua sends one to
+realign its counts) is answered with the values the subscription has.
+`SetMonitoringMode` means what it answers: a `Disabled` or `Sampling`
+item is silent until it is `Reporting` again, and then hears the current
+value first; an item created `Disabled` is silent from the start.
 
 An item that cannot be monitored — a node id that is not a node, or a
 Value on an Object or the folder — is refused when it is created, with the
