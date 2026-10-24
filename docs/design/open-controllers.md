@@ -16,7 +16,8 @@ through theirs if it is open?
 **The short answer:** yes, through the nautilus runtime, differently on
 each. Neither vendor's own IEC engine is usable as a target (§1). The EPIC
 is nautilus I/O through the processor's stock firmware: it exposes the
-chassis over OptoMMP, the `optommp` driver polls it with per-channel
+chassis over OptoMMP, the `optommp` driver polls it — or has it stream
+its inputs over UDP, as Opto's own CODESYS driver does — with per-channel
 quality (first through a Modbus projection, since superseded), and a 1 Hz
 heartbeat written by an ST program running on the EPIC itself was read
 back off the EPIC's own output (§2). The PLCnext is
@@ -121,6 +122,45 @@ Module types and the channel-present mask (`F1000BC0`) are re-read every
 5 s; the power-up-clear flag (`F0300004`) is checked on connect and the
 PUC sent (`F0380000`) when owed.
 
+**Custom data area, streaming, watchdog (2026-10-24, evening).** Opto's
+own CODESYS I/O driver turned out to be plain IEC code talking OptoMMP to
+`127.0.0.1:2001` (§2.4 on `plcnext-groov`); it uses three features the
+first driver did not, now manifest options, each off unless named
+because each writes the processor's configuration:
+
+| option | areas | what it does |
+|---|---|---|
+| `custom-area: true` | pointers `F0D50000` (1024), data `F0D60000` | every word a scan needs becomes a pointer, so a scan is one read |
+| `stream: 20ms` | `F03FFFC0`: +8 start, +C size (≤ 1480 B), +10 on, +14 interval, +18 port, +20 target #1 | the processor pushes that area over UDP to the driver's address on the connection; inputs cost no request |
+| `watchdog: 500ms` | set `F0380010`, read `F0300054`; per channel `+0x24` value, `+0x28` enable | outputs with a watchdog value go to it after that long without a request; `0s` turns it off, absent leaves it alone |
+
+A datagram is a 2-byte length (header included), a zero, `0xAn` (n
+counts up), the start address, then the data; the driver takes it only
+from the processor's address. Five missed intervals (at least 100 ms)
+make every tag Stale until the next datagram; none for the request
+timeout ends the session and the reconnect configures the stream again.
+While streaming, the only TCP traffic is writes, latch clears and the
+5 s chassis check — and, with a watchdog set, a read every third of its
+time to keep it fed. A clean stop puts the pointers and the streaming
+configuration (stored to flash) back as first found; the watchdog stays
+as set, since a stopped controller is what it is for. The pointers are
+read back every 5 s: another client rewriting them would otherwise hand
+the driver its data.
+
+The bench found one trap. **A pointer into the packed values costs
+mmpServer ≈ 0.5 ms every time it is resolved**: 43 pointers (36 analog)
+read in 17.7 ms, and streamed every 20 ms they held mmpServer at 90 % of
+a core. Pointers into the digital packed data, scratchpad or module
+configuration cost nothing measurable — and so do pointers into each
+channel's *expanded* read area, which returns the same value, NaN
+included: analog `F0260000 + slot*0x1000 + ch*0x40`, digital feature
+value `F01E0000 + slot*0x600 + ch*0x18 + 0x10`. So a pointer names those
+(`optommp/plan.go`); a packed poll still reads the packed values, where
+one block read is cheap. (Pointers into the unit status area at
+`F0300000` cost 33 ms each — not used.) Every binding decodes from one
+word image however it was filled, so all three modes deliver the same
+values and the same quality.
+
 Quality per tag: **Bad** for an empty slot or one holding a module the
 manifest does not name, a digital channel the module lacks (present mask)
 or whose quality bit is set, and a NaN analog (the processor reports
@@ -139,13 +179,16 @@ optommp/
   chassis.go    Scan: one read per slot + the packed areas → Chassis{Modules{Channels}}
                 (type, feature, configured scale and units, name, present, value)
   memmap.go     the areas the driver polls and writes
-  manifest.go   optommp_manifest.yaml: host, port, scan-rate, modules, bindings (points
-                di do ai ao counter on-latch off-latch quality scratch-bit/-int/-float)
+  manifest.go   optommp_manifest.yaml: host, port, scan-rate, custom-area, stream, watchdog,
+                modules, bindings (points di do ai ao counter on-latch off-latch quality
+                scratch-bit/-int/-float)
+  plan.go       the words a scan needs: packed reads, or pointers for the custom area
   driver.go     the io.Driver
+  stream.go     watchdog, pointers and stream configuration; the stream loop
   generate.go   Chassis → manifest + tag file
   modbusmap.go  Chassis → modbus.Manifest + tag file on the form 1678 addresses (--modbus)
   optommptest/  the bench chassis as an in-process device, for tests
-cmd/naut/optommp.go   naut optommp browse | import [--modbus]
+cmd/naut/optommp.go   naut optommp browse | import [--custom-area] [--stream D] [--watchdog D] [--modbus]
 ```
 
 `naut optommp import --host <epic>` writes `optommp_manifest.yaml` and
@@ -207,6 +250,25 @@ DO6→DI12); the env-gated live test (`NAUT_OPTOMMP_LIVE=<host>
 NAUT_OPTOMMP_LOOPBACK="1.3>0.6" go test ./optommp -run Live`) drives one
 and reads it back in about one scan (21 ms at 20 ms), catches and clears
 the on-latch, and writes and restores a scratchpad float.
+
+**Custom area and streaming on the EPIC (2026-10-24, evening).** The
+live test passes in every mode (`NAUT_OPTOMMP_MODE=custom` or
+`stream=20ms`) and checks the pointers and streaming configuration come
+back as found. The bench project on the EPIC, one minute per row, with
+mmpServer's own CPU beside `naut`'s (mmpServer idles at 6.6 %):
+
+| inputs | naut CPU | naut RSS | mmpServer CPU | per scan |
+|---|---|---|---|---|
+| packed poll, 20 ms | 13.7 % | 20.7 MB | 12.4 % | 3 requests, 1.62 ms p50 |
+| custom area, 20 ms | 12.0 % | 19.7 MB | 8.4 % | 1 request, 0.53 ms p50 |
+| stream, 20 ms | 10.0 % | 19.5 MB | 8.3 % | none; longest gap 25.7 ms |
+| stream, 5 ms (task 5 ms) | 20.5 % | 21.5 MB | 11.1 % | none; longest gap 24.1 ms, never late |
+
+Streaming every 5 ms costs less than polling every 20 ms did, and a
+quarter of what the 5 ms poll cost `naut` (35.3 %). From the laptop the
+20 ms stream arrived p50 20.00 / p99 20.21 / max 20.28 ms apart. The
+watchdog is tested against the in-process device only; it has not been
+switched on on the bench unit (it moves real outputs; James's call).
 
 ### 2.4 Not done, and why
 
@@ -283,16 +345,22 @@ the on-latch, and writes and restores a scratchpad float.
   small: `mmpServer` almost certainly scans the bus itself and answers
   OptoMMP from its own image. OptoMMP's UDP streaming is the
   low-latency path, and it is the one Opto's own runtime uses.
-- **Streaming and the custom data area.** OptoMMP can push inputs as UDP
-  datagrams at a set interval, and map scattered addresses into one
-  contiguous block (one read for a whole rack). Both are device
-  configuration shared with every other client of the processor (Opto's
-  own CODESYS driver writes the same areas), and at two requests a scan
-  the poll is already at the server's floor. Next if a project needs
-  sub-5 ms or the CPU back.
-- **The communication watchdog.** The processor can set outputs to
-  watchdog values when OptoMMP traffic stops; it is per-unit
-  configuration in groov Manage, so the driver neither sets nor reads it.
+- **Outputs through pointers.** Opto's CODESYS driver also maps outputs
+  into the custom area and writes them all each cycle. The driver writes
+  on change instead — every digital output in one must-on/must-off write
+  — so there is nothing to gain and the "only commanded channels"
+  guarantee to lose.
+- **Sharing the custom area or the stream.** The processor has one
+  stream configuration and one set of pointers; the driver owns pointers
+  0..n-1 and stream target #1 while it runs, warns when it finds them in
+  use, and notices within 5 s if another client rewrites the pointers.
+  Two nautilus instances (or nautilus and CODESYS) on one unit would
+  fight; a manifest offset into the pointer table is the fix if it ever
+  matters.
+- **Watchdog values per channel.** The manifest sets the unit's watchdog
+  time; which outputs it moves, and to what, stays groov Manage
+  configuration (the driver reports how many bound outputs have one).
+  Not switched on on the bench yet (§2.3).
 - **Counter reset.** `_Count` reads the feature value; clearing it (a
   read of the read-and-clear area's +0 quadlet) is not exposed yet.
 - **Analog min/max** (`F0260008`) is not bound; one read per module per

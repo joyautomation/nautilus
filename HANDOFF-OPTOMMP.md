@@ -42,8 +42,12 @@ everything the processor knows about its channels (quality included).
   `F1000B00`, packed analog values at `F1000300`), one write when outputs
   change, and a 5 ms scan is the honest floor. The processor's own Modbus
   server lives behind the same server; no faster path exists for third
-  parties (brief §2 has the evidence: `mmpServer` alone owns the FPGA
-  device node; Opto documents only OptoMMP for on-device programs).
+  parties: the backplane to the modules is ARCNET (a COM20020 as `arc0`,
+  driven through Opto's own kernel modules), its module protocol lives
+  inside the closed `mmpServer`, and Opto documents only OptoMMP for
+  on-device programs. (`/dev/fpgaDirectIo` is a char driver for the
+  processor's direct I/O, not the module path. Brief §2.4 on
+  `plcnext-groov` has the write-up.)
 
 ## Deliver, committing after each piece
 

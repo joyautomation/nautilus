@@ -111,6 +111,35 @@ the processor's OptoMMP server whatever the scan rate, so 5 ms is the
 floor: the slowest scan in that minute took 5.2 ms. 20 ms leaves the
 processor's other tenants plenty.
 
+### Streaming instead of polling
+
+The project ships polling, because the other two modes write the
+processor's own configuration. One line in `optommp_manifest.yaml`
+changes that (or re-import with `--custom-area` / `--stream 20ms`):
+
+- `custom-area: true` maps every word the scan needs into the processor's
+  custom data area, so a scan is one read;
+- `stream: 20ms` has the processor push that area to nautilus over UDP
+  every 20 ms; nautilus then sends only writes, latch clears and a chassis
+  check every 5 s.
+
+Measured the same way on 2026-10-24 evening, with the processor's
+`mmpServer` beside `naut` (it idles at 6.6 %):
+
+| inputs | naut CPU | RSS | mmpServer CPU | per scan |
+|---|---|---|---|---|
+| packed poll, 20 ms | 13.7 % | 20.7 MB | 12.4 % | 3 requests, 1.62 ms |
+| custom area, 20 ms | 12.0 % | 19.7 MB | 8.4 % | 1 request, 0.53 ms |
+| stream, 20 ms | 10.0 % | 19.5 MB | 8.3 % | none; longest gap 25.7 ms |
+| stream, 5 ms (task 5 ms) | 20.5 % | 21.5 MB | 11.1 % | none; longest gap 24.1 ms |
+
+A clean stop (Ctrl-C, SIGTERM) puts the pointers and the streaming
+configuration back as nautilus found them; a `kill -9` leaves the
+processor streaming to a port nobody reads until nautilus next starts.
+`watchdog: 500ms` sets the I/O unit's communication watchdog — outputs
+given a watchdog value in groov Manage go to it after 500 ms without a
+request; it is not set on this bench.
+
 That run also found a runtime bug: the EPIC reports every **unwired
 ICTD channel as NaN**, and one NaN tag made `/api/state` answer 200 with
 an empty body and the SSE stream skip every frame — a blank dashboard
