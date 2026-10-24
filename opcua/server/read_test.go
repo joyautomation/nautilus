@@ -25,10 +25,13 @@ func TestParseNumericRange(t *testing.T) {
 	}
 }
 
-// F-28: a Read with an IndexRange returns the slice named, and an index
-// the array does not reach, a range on a scalar, or more dimensions than
-// the array has is Bad_IndexRangeNoData; a range that is not one is
+// F-28: a Read with an IndexRange returns the slice named, and a lower
+// bound the array does not reach, a range on a scalar, or more dimensions
+// than the array has is Bad_IndexRangeNoData; a range that is not one is
 // Bad_IndexRangeInvalid. gopcua returned the whole value for every range.
+// F-35/F-36: an upper bound past the end is the partial result (Part 4
+// §7.27), and in an array of Strings an element too short for the
+// substring is "".
 func TestReadHonoursIndexRange(t *testing.T) {
 	rt, _ := newRuntime(t)
 	s, c := startServer(t, rt)
@@ -41,7 +44,7 @@ func TestReadHonoursIndexRange(t *testing.T) {
 		return resp.Results[0]
 	}
 	levels := s.NodeID("Levels") // [1, 2, 3]
-	for rng, want := range map[string][]float64{"0": {1}, "2": {3}, "1:2": {2, 3}, "0:2": {1, 2, 3}} {
+	for rng, want := range map[string][]float64{"0": {1}, "2": {3}, "1:2": {2, 3}, "0:2": {1, 2, 3}, "1:9": {2, 3}, "2:3": {3}} {
 		dv := rd(levels, ua.AttributeIDValue, rng)
 		if dv.Status != ua.StatusGood || !reflect.DeepEqual(dv.Value.Value(), want) {
 			t.Errorf("Levels[%s] = %v %s, want %v", rng, dv.Value, dv.Status, want)
@@ -51,7 +54,7 @@ func TestReadHonoursIndexRange(t *testing.T) {
 		t.Errorf("Levels.ArrayDimensions[0] = %v %s", dv.Value, dv.Status)
 	}
 	noData := map[*ua.NodeID]string{
-		levels: "3", s.NodeID("Levels"): "1:9", s.NodeID("P101.Hours"): "0,1",
+		levels: "3", s.NodeID("Levels"): "3:9", s.NodeID("P101.Hours"): "0,1",
 		s.NodeID("Level"): "0", s.NodeID("Label"): "6", s.NodeID("Running"): "0:1",
 	}
 	for nid, rng := range noData {
@@ -70,7 +73,7 @@ func TestReadHonoursIndexRange(t *testing.T) {
 	// F-33: a String is an array of characters (Part 4 §7.22), and an
 	// array of Strings has a second dimension over them.
 	label := s.NodeID("Label") // "Pump 1"
-	for rng, want := range map[string]string{"0": "P", "0:3": "Pump", "5": "1", "0:5": "Pump 1"} {
+	for rng, want := range map[string]string{"0": "P", "0:3": "Pump", "5": "1", "0:5": "Pump 1", "5:20": "1", "0:99": "Pump 1"} {
 		if dv := rd(label, ua.AttributeIDValue, rng); dv.Status != ua.StatusGood || dv.Value.Value() != want {
 			t.Errorf("Label[%s] = %v %s, want %q", rng, dv.Value, dv.Status, want)
 		}
@@ -82,8 +85,16 @@ func TestReadHonoursIndexRange(t *testing.T) {
 	if dv := rd(nsArray, ua.AttributeIDValue, "1,0:2"); dv.Status != ua.StatusGood || !reflect.DeepEqual(dv.Value.Value(), []string{"urn"}) {
 		t.Errorf("NamespaceArray[1,0:2] = %v %s, want [urn]", dv.Value, dv.Status)
 	}
-	if dv := rd(nsArray, ua.AttributeIDValue, "0:1,0:99"); dv.Status != ua.StatusBadIndexRangeNoData {
-		t.Errorf("NamespaceArray[0:1,0:99] = %s, want Bad_IndexRangeNoData", dv.Status)
+	if dv := rd(nsArray, ua.AttributeIDValue, "0:9,0:2"); dv.Status != ua.StatusGood || !reflect.DeepEqual(dv.Value.Value(), []string{"htt", "urn"}) {
+		t.Errorf("NamespaceArray[0:9,0:2] = %v %s, want [htt urn]", dv.Value, dv.Status)
+	}
+	if dv := rd(nsArray, ua.AttributeIDValue, "2,0"); dv.Status != ua.StatusBadIndexRangeNoData {
+		t.Errorf("NamespaceArray[2,0] = %s, want Bad_IndexRangeNoData", dv.Status)
+	}
+	for rng, want := range map[string][]string{"0:1,30:99": {"", "t-station"}, "1,27:99": {"lift-station"}, "0:5,27": {"/", "l"}} {
+		if dv := rd(nsArray, ua.AttributeIDValue, rng); dv.Status != ua.StatusGood || !reflect.DeepEqual(dv.Value.Value(), want) {
+			t.Errorf("NamespaceArray[%s] = %v %s, want %q", rng, dv.Value, dv.Status, want)
+		}
 	}
 	if dv := rd(levels, ua.AttributeIDValue, "0,0"); dv.Status != ua.StatusBadIndexRangeNoData {
 		t.Errorf("Levels[0,0] = %s, want Bad_IndexRangeNoData (a REAL has no characters)", dv.Status)

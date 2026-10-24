@@ -368,11 +368,12 @@ func TestMonitoredItemHonoursIndexRange(t *testing.T) {
 		return req
 	}
 	resp, err := sub.Monitor(ctx, ua.TimestampsToReturnBoth, ranged("1", 1), ranged("0:1", 2), ranged("3", 3), ranged("x", 4),
-		ranged("0,0", 5), opcua.NewMonitoredItemCreateRequestWithDefaults(ua.NewNumericNodeID(0, id.Server_NamespaceArray), ua.AttributeIDValue, 6))
+		ranged("0,0", 5), opcua.NewMonitoredItemCreateRequestWithDefaults(ua.NewNumericNodeID(0, id.Server_NamespaceArray), ua.AttributeIDValue, 6),
+		ranged("1:9", 7)) // F-35: an upper bound past the end is the partial result
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i, want := range []ua.StatusCode{ua.StatusGood, ua.StatusGood, ua.StatusBadIndexRangeNoData, ua.StatusBadIndexRangeInvalid, ua.StatusBadIndexRangeNoData, ua.StatusGood} {
+	for i, want := range []ua.StatusCode{ua.StatusGood, ua.StatusGood, ua.StatusBadIndexRangeNoData, ua.StatusBadIndexRangeInvalid, ua.StatusBadIndexRangeNoData, ua.StatusGood, ua.StatusGood} {
 		if got := resp.Results[i].StatusCode; got != want {
 			t.Errorf("item %d: %s, want %s", i+1, got, want)
 		}
@@ -399,6 +400,9 @@ func TestMonitoredItemHonoursIndexRange(t *testing.T) {
 	}
 	if len(got[6]) != 1 {
 		t.Errorf("the Server-object item was told %v", got[6])
+	}
+	if !reflect.DeepEqual(got[7], []any{[]float64{2, 3}}) {
+		t.Errorf("initial value: Levels[1:9] told %v, want [[2 3]]", got[7])
 	}
 	// A move inside the slice is heard as the slice; one outside it is not heard.
 	if err := rt.Tags().SetPath("Levels[1]", 5.0); err != nil {

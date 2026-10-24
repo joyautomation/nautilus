@@ -43,6 +43,7 @@ type Check struct {
 	// The tester's own bookkeeping, kept verbatim.
 	ExpectedToday string `yaml:"expected_today"`
 	Group         string `yaml:"group"`
+	Revised       string `yaml:"revised"` // the run that revised a check under its old id
 
 	// Open names the issue a check's finding is filed under while it is
 	// unfixed: the check is expected to fail, and does not fail the job

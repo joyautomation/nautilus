@@ -24,6 +24,9 @@ projects:
   projects/2026-10-24-001c/typed:
     http: http://localhost:8080
     opcua: opc.tcp://localhost:4840
+  projects/2026-10-24-001d/typed:
+    http: http://localhost:8080
+    opcua: opc.tcp://localhost:4840
 checks:
 - id: 001-F01-namespace-index
   run: 2026-10-24-001
@@ -766,19 +769,6 @@ checks:
   expected_today: pass
   note: counts notifications over 1 s windows on Counter (100 ms sweep); thresholds have slack (>=7 of ~10).
   group: edges of the fixes, newly checked
-- id: 001-P-indexrange-error-codes
-  run: 2026-10-24-001c
-  pass: Read IndexRange error codes — slices counted from 0; past-the-end, scalar, extra-dimension and over-running ranges Bad_IndexRangeNoData; malformed ('abc', '2:1', '0:0', '1:1', '-1', '1.5') Bad_IndexRangeInvalid; empty range = whole value; a Grid row is indexable
-  disposition: gate
-  surface: opcua
-  oracle: asyncua + Part 4 §7.22
-  project: projects/2026-10-24-001c/typed
-  script: checks/2026-10-24-001c/001-P-indexrange-error-codes.py
-  env: {}
-  expected_today: pass
-  note: 'a range that runs past the end (0:9 on 4 elements) is NoData here, not the overlap; Part 4 is
-    not explicit, so that case is recorded as observed, not asserted against the spec. Strings are F-33.'
-  group: edges of the fixes, newly checked
 - id: 001-P-browse-paging-dedup
   run: 2026-10-24-001c
   pass: Browse/BrowseNext of i=2253 (forward, inverse, both), i=2268, i=2274 list each reference once and paging by 1, 5, 7 returns the same list in the same order; a recursive HasChild walk of 708 nodes under Server finds no duplicate
@@ -800,4 +790,93 @@ checks:
   script: checks/2026-10-24-001c/001-P-read-limit-boundary.py
   env: {}
   expected_today: pass
+  group: edges of the fixes, newly checked
+# Run 2026-10-24-001d: the retest of 001c against opcua-server-840cb84. The 59 earlier checks
+# were re-run unchanged (not re-listed) except 001-P-indexrange-error-codes, which the run revised
+# under the same id; its 001c entry and script are replaced by the entry below. These are the
+# checks new to it. Its evidence/typed is byte-identical to the parents'.
+- id: 001-P-indexrange-error-codes
+  run: 2026-10-24-001d
+  pass: Read IndexRange error codes — slices counted from 0; past-the-end, scalar and extra-dimension ranges Bad_IndexRangeNoData; malformed ('abc', '2:1', '0:0', '1:1', '-1', '1.5') Bad_IndexRangeInvalid; empty range = whole value; a Grid row is indexable
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §7.27
+  project: projects/2026-10-24-001d/typed
+  script: checks/2026-10-24-001d/001-P-indexrange-error-codes.py
+  env: {}
+  expected_today: pass
+  revised: 2026-10-24-001d
+  note: 'REVISED, same id. Run 001c''s copy asserted that RealArr ''0:9'' and ''3:4'' (upper bound past the
+    end) are Bad_IndexRangeNoData, although its own note called that "observed, not asserted". Part 4
+    v1.05.07 §7.27 asks for the partial result there (F-35), so those two rows are removed: left in, the
+    check would fail on the fix for F-35. The importer should replace the 001c copy with this one. The
+    overrunning cases are now asserted, the other way, by 001-F35. Here: the 001c entry and its script
+    were removed on import, as the run asks (for reconciliation).'
+  group: carried from the parent, revised
+- id: 001-F35-indexrange-upper-overrun
+  run: 2026-10-24-001d
+  finding: F-35
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §7.27
+  project: projects/2026-10-24-001d/typed
+  script: checks/2026-10-24-001d/001-F35-indexrange-upper-overrun.py
+  env: {}
+  expected_today: fail
+  note: 'An IndexRange whose upper bound runs past the end (RealArr 0:9, 2:9, 3:4; IntArr 1:5; Str1 3:20;
+    StrArr 0:5,0) is Bad_IndexRangeNoData on Read and at CreateMonitoredItems; Part 4 asks for the partial
+    result. Writes RealArr/Str1/StrArr through POST /api/tags and restores the project values. ~1 s.'
+  group: new findings of this run
+- id: 001-F36-strarr-substring-overrun
+  run: 2026-10-24-001d
+  finding: F-36
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §7.27
+  project: projects/2026-10-24-001d/typed
+  script: checks/2026-10-24-001d/001-F36-strarr-substring-overrun.py
+  env: {}
+  expected_today: fail
+  note: 'Arrays of Strings: a substring range past the end of some elements is NoData for the whole read
+    instead of per-element partial / null-or-empty. May be one with F-35. Writes StrArr and restores it.'
+  group: new findings of this run
+- id: 001-F37-empty-string-is-null
+  run: 2026-10-24-001d
+  finding: F-37
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 6 §5.2.2.4; the HTTP value is nautilus itself
+  project: projects/2026-10-24-001d/typed
+  script: checks/2026-10-24-001d/001-F37-empty-string-is-null.py
+  env: {}
+  expected_today: fail
+  note: 'papercut. A String set to "" (HTTP says "") reads over OPC UA as a null String (None); in an array
+    too. asyncua decodes '''' and null apart (control: evidence/scripts/asyncua-empty-string-control.py).'
+  group: new findings of this run
+  open: '#434'
+- id: 001-P-monitoreditem-indexrange-edges
+  run: 2026-10-24-001d
+  pass: a monitored item's IndexRange is judged and applied as Read's — NoData on a scalar, Invalid when malformed; a String item hears its substring only when it changes; three items on one array each hear only their own slice; Disabled -> Reporting hears the slice; NamespaceArray '0' is a one-element slice
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + Part 4 §5.12.2 / §7.27; the guide (840cb84)
+  project: projects/2026-10-24-001d/typed
+  script: checks/2026-10-24-001d/001-P-monitoreditem-indexrange-edges.py
+  env: {}
+  expected_today: pass
+  note: '~6 s; four 0.6 s notification windows at a 100 ms publishing interval. Passed 4 of 4 runs here.
+    Writes RealArr and Str1 through POST /api/tags and restores them.'
+  group: edges of the fixes, newly checked
+- id: 001-P-string-indexrange-characters
+  run: 2026-10-24-001d
+  pass: IndexRange on Strings counts characters (é, ö, 日本語), past the end is NoData, an empty String has no index 0, an array of Strings takes the character dimension, NamespaceArray '0,0:3' is ['http']; ranges on number, boolean, TIME, enum and LINT scalars are NoData
+  disposition: gate
+  surface: opcua
+  oracle: asyncua + the guide (840cb84); Part 4 §7.27 does not say bytes or characters
+  project: projects/2026-10-24-001d/typed
+  script: checks/2026-10-24-001d/001-P-string-indexrange-characters.py
+  env: {}
+  expected_today: pass
+  note: '~2 s. Characters rather than bytes is asserted from the guide ("A STRING is an array of characters"),
+    not the spec. Writes Str1/StrArr and restores them.'
   group: edges of the fixes, newly checked

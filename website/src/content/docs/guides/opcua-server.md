@@ -73,9 +73,11 @@ the node's `Description` — `Wet well level [ft]`.
 A Read of an array honours its `IndexRange`: `2` is one element, `1:3` a
 slice, counted from 0. A `STRING` is an array of characters, so `0:3` on
 one is its first four, and an array of strings takes a second dimension
-(`1,0` is the first character of the second string); an index the value
-does not reach, or a range on a number or a boolean, is
-`Bad_IndexRangeNoData`. A monitored item's `IndexRange` means the same:
+(`1,0` is the first character of the second string). A range that starts
+past the end of the value, or a range on a number or a boolean, is
+`Bad_IndexRangeNoData`; one that starts inside it and runs past the end is
+what there is, so `0:9` on four elements is all four, and in an array of
+strings a string too short for the range is `""`. A monitored item's `IndexRange` means the same:
 the item hears its slice, and only when the slice changes. One Read may
 name up to 10 000 nodes —
 the `MaxNodesPerRead` the `Server` object advertises is the limit the
