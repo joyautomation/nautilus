@@ -1,5 +1,13 @@
 # Handoff: PLCnext in-process tier, stage 2 (branch `plcnext-shm`)
 
+**Status 2026-10-24: pieces 1–3 done and running on the bench** (commits
+dc441b4, 65ed843, 4de35bc, cc8d11b). Open: James installs admin's
+crontab for `naut-keepalive.sh` (the recipe is in
+examples/plcnext-bench/README.md, "Surviving a reboot"; the auto-mode
+classifier will not do it), a reboot to prove it, piece 4 (a root path
+for `setcap`), and eyes on the DO16 LEDs. On the controller:
+`naut.prev` and `io/nautilus_io.stage1` are the previous binaries.
+
 Goal: the C shim `rt/plcnext-io/nautilus_io` becomes the I/O side of the
 `plcnext` driver — the Axioline frames cross to the Go runtime through a
 shared-memory seqlock page instead of the firmware's gRPC service — so the
