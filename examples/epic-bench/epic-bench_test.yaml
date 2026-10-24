@@ -1,0 +1,48 @@
+# Acceptance tests for bench.st — virtual time, no EPIC on the network.
+# The driver is not dialed under `naut test`, and a polled input the
+# driver has never delivered is undefined (reading it faults the scan,
+# exactly as it would with the cable pulled), so every test gives the
+# inputs the program reads.
+tolerance: 0.001
+
+tests:
+  - name: heartbeat toggles every half period
+    given: &inputs
+      BlinkPeriodS: 1.0
+      EPIC_M0_DI00: false
+      EPIC_M0_DI01: false
+      EPIC_M0_DI02: false
+      EPIC_M0_DI03: false
+      EPIC_M0_DI04: false
+      EPIC_M0_DI05: false
+      EPIC_M0_DI06: false
+      EPIC_M0_DI07: false
+      EPIC_M0_DI08: false
+      EPIC_M0_DI09: false
+      EPIC_M0_DI10: false
+      EPIC_M2_AI00: 0.0
+      EPIC_M3_AI00: 0.0
+    steps:
+      - advance: 600ms
+        expect: { Blink: true, EPIC_M1_DO11: true }
+      - advance: 500ms
+        expect: { Blink: false, EPIC_M1_DO11: false }
+      - advance: 500ms
+        expect: { EPIC_M1_DO11: true }
+
+  - name: the pushbuttons mirror to the lamps
+    given: *inputs
+    steps:
+      - given: { EPIC_M0_DI00: true, EPIC_M0_DI10: true }
+        advance: 200ms
+        expect: { EPIC_M1_DO00: true, EPIC_M1_DO10: true, EPIC_M1_DO05: false }
+      - given: { EPIC_M0_DI00: false }
+        advance: 200ms
+        expect: { EPIC_M1_DO00: false, EPIC_M1_DO10: true }
+
+  - name: analog channels land on their engineering tags
+    given: *inputs
+    steps:
+      - given: { EPIC_M2_AI00: 21.5, EPIC_M3_AI00: 8.4 }
+        advance: 200ms
+        expect: { BenchTempC: 21.5, BenchVoltsV: 8.4 }
