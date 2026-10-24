@@ -94,6 +94,15 @@ class Scene {
 	labels() {
 		return this.b.eval('JSON.stringify(window.__labels())').then(JSON.parse);
 	}
+	ports() {
+		return this.b.eval('JSON.stringify(window.__ports())').then(JSON.parse);
+	}
+	pipeFrom() {
+		return this.b.eval('JSON.stringify(window.__pipeFrom())').then(JSON.parse);
+	}
+	pipeRows() {
+		return this.b.eval('JSON.stringify(window.__pipeRows())').then(JSON.parse);
+	}
 	canvas() {
 		return this.b.eval('JSON.stringify(window.__canvas())').then(JSON.parse);
 	}
@@ -247,16 +256,22 @@ test('S05 drag: the gizmo moves the node — one moveNode on release, at a new p
 test('S06 text: a doc echoed back with a changed pos moves the label', async () => {
 	await withScene(rigDoc(), async (s) => {
 		const before = (await s.labels()).find((l) => l.title === 'P-101');
+		// Count the page's animation frames from here: the echo re-renders on
+		// the next frames, and software WebGL on CI takes its time, so wait
+		// for the move rather than a fixed beat — and say how long it took and
+		// how many frames the page managed, so a slow CI box is told apart
+		// from a stalled one in the log.
+		await s.b.eval('(() => { window.__frames = 0; (function f() { window.__frames++; requestAnimationFrame(f); })(); })()');
+		const t0 = Date.now();
 		const d = rigDoc();
 		d.nodes[1].pos = [0.8, 0, 0.2];
 		await s.deliver(d);
-		// The echo re-renders on the next frames; software WebGL on CI takes
-		// its time, so wait for the move rather than a fixed beat.
 		let after = before;
-		for (let i = 0; i < 30 && Math.abs(after.cx - before.cx) <= 20; i++) {
+		for (let i = 0; i < 200 && Math.abs(after.cx - before.cx) <= 20; i++) {
 			await sleep(100);
 			after = (await s.labels()).find((l) => l.title === 'P-101');
 		}
+		console.log(`S06: the label moved after ${Date.now() - t0} ms and ${await s.b.eval('window.__frames')} frames`);
 		assert.ok(Math.abs(after.cx - before.cx) > 20, `the label moved: ${before.cx} -> ${after.cx}`);
 		assert.deepEqual(s.exceptions(), []);
 	});
@@ -310,6 +325,215 @@ test('S08 pick through glass: a click on the pump inside a tank picks the pump; 
 		await sleep(200);
 		assert.equal(await s.panelId(), 'T1', 'the lettering picks the node it names');
 		assert.deepEqual(await s.ops(), []);
+		assert.deepEqual(s.exceptions(), []);
+	});
+});
+
+test('S09 pipe: a click on a port, then another — ONE addPipe anchored at both ends with an orthogonal run; Esc cancels; the pipe lists and deletes', async () => {
+	const doc = {
+		...rigDoc(),
+		kinds: {
+			tank: { ports: { inlet: { at: [0, 0.47, 0], dir: [0, 1, 0] } } },
+			pump: { ports: { discharge: { at: [0, 0.22, 0], dir: [0, 1, 0] }, suction: { at: [-0.22, 0.09, 0], dir: [-1, 0, 0] } } }
+		}
+	};
+	await withScene(doc, async (s) => {
+		const ports = await s.ports();
+		assert.deepEqual(ports.map((p) => `${p.node}.${p.port}`).sort(), ['P101.discharge', 'P101.suction', 'T101.inlet'], JSON.stringify(ports));
+		const pd = ports.find((p) => p.port === 'discharge');
+		const ti = ports.find((p) => p.port === 'inlet');
+		await s.b.click(pd.x, pd.y);
+		await sleep(250);
+		assert.deepEqual(await s.pipeFrom(), { node: 'P101', port: 'discharge' });
+		assert.equal(await s.panelId(), null, 'a port click is not a node pick');
+		assert.match(await s.b.eval('window.__footer()'), /pipe from P101\.discharge/);
+		await s.b.pressKey('Escape');
+		await sleep(150);
+		assert.equal(await s.pipeFrom(), null, 'Esc cancels');
+		await s.b.click(pd.x, pd.y);
+		await sleep(250);
+		await s.b.click(ti.x, ti.y);
+		await sleep(250);
+		const ops = await s.ops();
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.equal(ops[0].type, 'addPipe');
+		assert.deepEqual(ops[0].from, { node: 'P101', port: 'discharge' });
+		assert.deepEqual(ops[0].to, { node: 'T101', port: 'inlet' });
+		// The run: up from the pump's discharge to a header above the tank's inlet lead, across, and down.
+		assert.ok(ops[0].points.length >= 2, JSON.stringify(ops[0].points));
+		const h = Math.max(...ops[0].points.map((p) => p[1]));
+		assert.ok(h > 0.47 + 0.1, `header above the inlet's lead: ${h}`);
+		assert.equal(await s.pipeFrom(), null, 'done drawing');
+		// Echoed back, the pipe lists in the panel and deletes from there.
+		const d = { ...doc, pipes: [{ from: ops[0].from, to: ops[0].to, points: ops[0].points }] };
+		await s.reset();
+		await s.deliver(d);
+		await sleep(400);
+		const rows = await s.pipeRows();
+		assert.equal(rows.length, 1);
+		assert.match(rows[0], /P101\.discharge → T101\.inlet · \d+ between/);
+		const del = await s.b.eval(`JSON.stringify((() => { const b = document.querySelector('[data-kind=pipe-row] button.del'); const r = b.getBoundingClientRect(); return { cx: r.left + r.width / 2, cy: r.top + r.height / 2 }; })())`).then(JSON.parse);
+		await s.b.click(del.cx, del.cy);
+		await sleep(150);
+		assert.deepEqual(await s.ops(), [{ type: 'deletePipe', index: 0 }]);
+		assert.deepEqual(s.exceptions(), []);
+	});
+});
+
+test('S10 anchored by name: ports "at top" of the bounds resolve to marks and a pipe runs between them', async () => {
+	const doc = {
+		...rigDoc(),
+		kinds: { tank: { ports: { inlet: { at: { anchor: 'top' } } } }, pump: { ports: { discharge: { at: { anchor: 'top' } }, suction: { at: { anchor: 'left' } } } } }
+	};
+	await withScene(doc, async (s) => {
+		const ports = await s.ports();
+		assert.deepEqual(ports.map((p) => `${p.node}.${p.port}`).sort(), ['P101.discharge', 'P101.suction', 'T101.inlet'], JSON.stringify(ports));
+		const pd = ports.find((p) => p.port === 'discharge');
+		const ti = ports.find((p) => p.port === 'inlet');
+		await s.b.click(pd.x, pd.y);
+		await sleep(250);
+		await s.b.click(ti.x, ti.y);
+		await sleep(250);
+		const ops = await s.ops();
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.equal(ops[0].type, 'addPipe');
+		assert.deepEqual(ops[0].from, { node: 'P101', port: 'discharge' });
+		assert.deepEqual(ops[0].to, { node: 'T101', port: 'inlet' });
+		assert.deepEqual(s.exceptions(), []);
+	});
+});
+
+/** S05's gizmo walk: from a world point, step the pointer out along the
+ * projected +x until the controls report the X handle, then drag it
+ * `px` pixels further out. */
+async function dragGizmoX(s, origin, px = 120) {
+	const project = (x, y, z) => s.b.eval(`JSON.stringify(window.__nxScene.project(${x}, ${y}, ${z}))`).then(JSON.parse);
+	const axis = () => s.b.eval('window.__nxScene.gizmoAxis()');
+	const [ox, oy] = await project(...origin);
+	const [ax, ay] = await project(origin[0] + 0.5, origin[1], origin[2]);
+	const len = Math.hypot(ax - ox, ay - oy);
+	const dir = [(ax - ox) / len, (ay - oy) / len];
+	let start = null;
+	for (let d = 10; d <= 140; d += 5) {
+		const x = ox + dir[0] * d;
+		const y = oy + dir[1] * d;
+		await s.b.moveTo(x, y);
+		await sleep(30);
+		if ((await axis()) === 'X') {
+			start = { x, y };
+			break;
+		}
+	}
+	assert.ok(start, "the pointer found the gizmo's X handle along the projected +x axis");
+	await s.b.mouseDown(start.x, start.y);
+	await s.b.mouseMove(start.x + dir[0] * 20, start.y + dir[1] * 20);
+	await s.b.mouseMove(start.x + dir[0] * px, start.y + dir[1] * px);
+	await sleep(50);
+	await s.b.mouseUp(start.x + dir[0] * px, start.y + dir[1] * px);
+	await sleep(250);
+}
+
+test('S11 vertex drag: a pipe picked in the panel wears a handle per point; a click on one puts the gizmo on it; a drag posts ONE setPipePoints; Del removes the point; Esc', async () => {
+	const doc = { ...rigDoc(), pipes: [{ id: 'run', points: [[0.2, 0.3, 0.9], [0.2, 0.8, 0.9], [1.2, 0.8, 0.9], [1.2, 0.3, 0.9]] }] };
+	await withScene(doc, async (s) => {
+		assert.deepEqual(await s.b.eval('JSON.stringify(window.__vertices())').then(JSON.parse), [], 'no handles until a pipe is selected');
+		const row = await s.b.eval('JSON.stringify(window.__pipeRowButton(0))').then(JSON.parse);
+		await s.b.click(row.cx, row.cy);
+		await sleep(250);
+		assert.equal(await s.b.eval('window.__selectedPipe()'), 0);
+		const hs = await s.b.eval('JSON.stringify(window.__vertices())').then(JSON.parse);
+		assert.equal(hs.length, 4, JSON.stringify(hs));
+		const h1 = hs.find((h) => h.index === 1);
+		await s.b.click(h1.x, h1.y);
+		await sleep(250);
+		assert.equal(await s.b.eval('window.__selectedVertex()'), 1, 'the handle took the click');
+		assert.equal(await s.panelId(), null, 'and nothing was picked behind it');
+		await dragGizmoX(s, [0.2, 0.8, 0.9]);
+		const ops = await s.ops();
+		assert.equal(ops.length, 1, 'one op per drag: ' + JSON.stringify(ops));
+		assert.equal(ops[0].type, 'setPipePoints');
+		assert.equal(ops[0].index, 0);
+		assert.equal(ops[0].points.length, 4);
+		assert.ok(ops[0].points[1][0] > 0.2, 'point 1 moved along +x: ' + JSON.stringify(ops[0].points[1]));
+		assert.ok(Math.abs(ops[0].points[1][1] - 0.8) < 1e-6 && Math.abs(ops[0].points[1][2] - 0.9) < 1e-6, 'and only along x');
+		assert.deepEqual(ops[0].points[0], [0.2, 0.3, 0.9], 'the others stayed');
+		// Echo it back; the handle is where the point now is; Del drops the point.
+		const d2 = { ...doc, pipes: [{ id: 'run', points: ops[0].points }] };
+		await s.reset();
+		await s.deliver(d2);
+		await sleep(300);
+		assert.equal(await s.b.eval('window.__selectedVertex()'), 1, 'the selection survives the echo');
+		await s.b.pressKey('Delete');
+		await sleep(150);
+		assert.deepEqual(await s.ops(), [{ type: 'setPipePoints', index: 0, points: [ops[0].points[0], ops[0].points[2], ops[0].points[3]] }]);
+		assert.equal(await s.b.eval('window.__selectedVertex()'), null, 'the removed point is no longer selected');
+		assert.equal(await s.b.eval('window.__selectedPipe()'), 0, 'the pipe still is');
+		// Pick a point again; Esc clears the point first, then the pipe.
+		const h0 = (await s.b.eval('JSON.stringify(window.__vertices())').then(JSON.parse)).find((h) => h.index === 0);
+		await s.b.click(h0.x, h0.y);
+		await sleep(200);
+		assert.equal(await s.b.eval('window.__selectedVertex()'), 0);
+		await s.b.pressKey('Escape');
+		await sleep(100);
+		assert.equal(await s.b.eval('window.__selectedVertex()'), null, 'Esc clears the vertex');
+		assert.equal(await s.b.eval('window.__selectedPipe()'), 0, 'but keeps the pipe');
+		await s.b.pressKey('Escape');
+		await sleep(100);
+		assert.equal(await s.b.eval('window.__selectedPipe()'), null, 'a second Esc clears the pipe');
+		assert.deepEqual(await s.b.eval('JSON.stringify(window.__vertices())').then(JSON.parse), []);
+		assert.deepEqual(s.exceptions(), []);
+	});
+});
+
+test('S12 re-route: moving a node whose anchored pipe still has the suggested run posts the move and the new run in ONE batch; a hand-laid run is left alone', async () => {
+	const kinds = {
+		tank: { ports: { inlet: { at: [0, 0.47, 0], dir: [0, 1, 0] } } },
+		pump: { ports: { discharge: { at: [0, 0.22, 0], dir: [0, 1, 0] } } }
+	};
+	await withScene({ ...rigDoc(), kinds }, async (s) => {
+		// Draw the pipe port to port, so its run is routePorts's own.
+		const ports = await s.ports();
+		const pd = ports.find((p) => p.port === 'discharge');
+		const ti = ports.find((p) => p.port === 'inlet');
+		await s.b.click(pd.x, pd.y);
+		await sleep(200);
+		await s.b.click(ti.x, ti.y);
+		await sleep(250);
+		const [add] = await s.ops();
+		assert.equal(add.type, 'addPipe');
+		const doc = { ...rigDoc(), kinds, pipes: [{ id: 'p', from: add.from, to: add.to, points: add.points }] };
+		await s.reset();
+		await s.deliver(doc);
+		await sleep(300);
+		// Select the tank (click its label) and drag it along +x.
+		const tank = (await s.labels()).find((l) => l.title === 'T-101');
+		await s.b.click(tank.cx, tank.cy);
+		await sleep(250);
+		assert.equal(await s.panelId(), 'T101');
+		await dragGizmoX(s, [1.2, 0, 0.4]);
+		const ops = await s.ops();
+		assert.equal(ops.length, 1, JSON.stringify(ops));
+		assert.equal(ops[0].type, 'batch', 'the move and the re-route travel together');
+		assert.equal(ops[0].ops[0].type, 'moveNode');
+		assert.equal(ops[0].ops[0].id, 'T101');
+		assert.equal(ops[0].ops[1].type, 'setPipePoints');
+		assert.equal(ops[0].ops[1].index, 0);
+		const newX = ops[0].ops[0].pos[0];
+		assert.ok(newX > 1.2, 'moved along +x');
+		const last = ops[0].ops[1].points[ops[0].ops[1].points.length - 1];
+		assert.ok(Math.abs(last[0] - newX) < 1e-6, `the run's last leg drops at the tank's new x: ${JSON.stringify(last)} vs ${newX}`);
+		// A run someone edited is not re-routed: the move goes alone.
+		const tweaked = { ...doc, pipes: [{ ...doc.pipes[0], points: [[0.2, 0.9, 0.2], [1.2, 0.9, 0.4]] }] };
+		await s.reset();
+		await s.deliver(tweaked);
+		await sleep(300);
+		const tank2 = (await s.labels()).find((l) => l.title === 'T-101');
+		await s.b.click(tank2.cx, tank2.cy);
+		await sleep(250);
+		await dragGizmoX(s, [1.2, 0, 0.4]);
+		const ops2 = await s.ops();
+		assert.equal(ops2.length, 1, JSON.stringify(ops2));
+		assert.equal(ops2[0].type, 'moveNode', 'a hand-laid run stays: ' + JSON.stringify(ops2[0]));
 		assert.deepEqual(s.exceptions(), []);
 	});
 });

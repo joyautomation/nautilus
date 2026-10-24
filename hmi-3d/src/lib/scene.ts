@@ -112,10 +112,117 @@ export interface SceneNode {
 	bind?: Record<string, string>;
 }
 
+/** A box in a kind's frame: the kind's bounds, or one named part's. */
+export interface SceneBox {
+	size: Vec3;
+	center: Vec3;
+}
+
+/** A point named by where it sits on a box (§3g, slice 3): `anchor` is a
+ * face or corner word — `top`, `bottom`, `left` (−x), `right` (+x),
+ * `front` (+z), `back` (−z), `center`, or two joined (`top-front`) — on
+ * the named `part`'s box, or on the kind's own bounds when `part` is
+ * absent; `offset` nudges in metres. It survives the model being
+ * re-exported and reads better than three numbers. */
+export interface BoxPoint {
+	part?: string;
+	anchor: string;
+	offset?: Vec3;
+}
+
+/** A point in a kind's frame: metres, or a place on a box. */
+export type ScenePoint = Vec3 | BoxPoint;
+
+/** A port on a kind (§3g, slice 3): where a pipe meets it, in the kind's
+ * own frame, and the direction a pipe leaves it (unit vector; default:
+ * out of the anchored face, else up). */
+export interface ScenePort {
+	at: ScenePoint;
+	dir?: Vec3;
+}
+
+export const ANCHOR_WORDS = ['center', 'top', 'bottom', 'left', 'right', 'front', 'back'] as const;
+const AXIS_OF: Record<string, 0 | 1 | 2> = { left: 0, right: 0, bottom: 1, top: 1, back: 2, front: 2 };
+const SIGN_OF: Record<string, -1 | 1> = { left: -1, right: 1, bottom: -1, top: 1, back: -1, front: 1 };
+
+/** `top`, `front`, `top-front`, `center`: one or two face words, at most
+ * one per axis, in any order. */
+export function isAnchorWord(s: unknown): s is string {
+	if (typeof s !== 'string' || !s) return false;
+	const parts = s.split('-');
+	if (parts.length > 2 || !parts.every((w) => (ANCHOR_WORDS as readonly string[]).includes(w))) return false;
+	if (parts.length === 2 && (parts.includes('center') || AXIS_OF[parts[0]] === AXIS_OF[parts[1]])) return false;
+	return true;
+}
+
+/** The point an anchor word names on a box. */
+export function anchorPoint(box: SceneBox, anchor: string): Vec3 {
+	const p: Vec3 = [...box.center] as Vec3;
+	for (const w of anchor.split('-')) {
+		if (w === 'center') continue;
+		const a = AXIS_OF[w];
+		p[a] = box.center[a] + (SIGN_OF[w] * box.size[a]) / 2;
+	}
+	return p;
+}
+
+/** The outward direction of an anchor: the face's normal (a corner's is
+ * the sum, unit); `center` is up. */
+export function anchorNormal(anchor: string): Vec3 {
+	const d: Vec3 = [0, 0, 0];
+	for (const w of anchor.split('-')) if (w !== 'center') d[AXIS_OF[w]] += SIGN_OF[w];
+	const len = Math.hypot(...d);
+	return len ? ([d[0] / len, d[1] / len, d[2] / len] as Vec3) : [0, 1, 0];
+}
+
+/** The boxes a kind's points resolve against: its bounds and, once the
+ * model is loaded, each named part's box, all in the kind's frame. */
+export type KindBoxes = { bounds?: SceneBox; parts?: Record<string, SceneBox> };
+
+export function isBoxPoint(v: unknown): v is BoxPoint {
+	return isObj(v) && isAnchorWord(v.anchor) && (v.part === undefined || isStr(v.part)) && (v.offset === undefined || isVec3(v.offset));
+}
+
+/** A point in the kind's frame, from metres, a box point, or a bare
+ * anchor word (on the bounds). Null when the box it names is not known
+ * yet (the model has not loaded) or does not exist. */
+export function resolvePoint(p: ScenePoint | string | undefined, boxes: KindBoxes | undefined): Vec3 | null {
+	if (p === undefined) return null;
+	if (isVec3(p)) return [p[0], p[1], p[2]];
+	const bp: BoxPoint = typeof p === 'string' ? { anchor: p } : p;
+	const box = bp.part !== undefined ? boxes?.parts?.[bp.part] : boxes?.bounds;
+	if (!box) return null;
+	const at = anchorPoint(box, bp.anchor);
+	if (bp.offset) for (let i = 0; i < 3; i++) at[i] += bp.offset[i];
+	return at;
+}
+
+/** A port's point and direction in the kind's frame; null until its box is known. */
+export function resolvePort(port: ScenePort, boxes: KindBoxes | undefined): { at: Vec3; dir: Vec3 } | null {
+	const at = resolvePoint(port.at, boxes);
+	if (!at) return null;
+	const dir = port.dir ?? (isVec3(port.at) ? [0, 1, 0] : anchorNormal(port.at.anchor));
+	const len = Math.hypot(...dir) || 1;
+	return { at, dir: [dir[0] / len, dir[1] / len, dir[2] / len] };
+}
+
+/** A pipe end anchored to a node's port: resolved through the node's
+ * `pos` / `rot` / `scale` by the renderer and `naut check` alike, so the
+ * pipe follows the node when it is moved. */
+export interface PipeAnchor {
+	node: string;
+	port: string;
+}
+
 export interface ScenePipe {
 	id?: string;
-	/** Polyline in scene metres, at least two points. */
-	points: Vec3[];
+	/** The ends, when anchored to ports; `points` are then the run between
+	 * them (may be empty: a straight pipe port to port). */
+	from?: PipeAnchor;
+	to?: PipeAnchor;
+	/** Polyline in scene metres. With both ends anchored it may be absent;
+	 * the run needs at least two points counting the anchored ends. */
+	points?: Vec3[];
 	/** Metres. Default 0.012. */
 	radius?: number;
 	/** `flowing` is the one live prop a pipe has, the same key the mimic's
@@ -161,13 +268,23 @@ export interface SceneKind {
 	assembly?: SceneAssembly;
 	/** The halo / selection box: the loaded model's box, or an explicit one. */
 	bounds?: 'auto' | { size: Vec3; center: Vec3 };
-	/** Where the label floats. Default: the top centre of the bounds. */
-	labelAt?: Vec3;
+	/** Where the label floats: metres, a box point, or a bare anchor word on
+	 * the bounds. Default: `top`. */
+	labelAt?: ScenePoint | string;
 	/** The label's value text as a template: `{Level:1} %`, `{Running?run:stopped}`. */
 	status?: string;
+	/** Where pipes meet this kind, in its own frame (§3g, slice 3). */
+	ports?: Record<string, ScenePort>;
 	/** What live values do to named meshes in the model. */
 	drive?: Drive[];
 }
+
+/** A `kinds` entry: the contract inline, or the path of a `{Name}.kind.json`
+ * holding the same keys — a kind in a file of its own, reused across
+ * scenes and opened in its own editor (§3g slice 2). The path is relative
+ * to the scene file, like a component's (`hmi/src/lib/kinds/pump.kind.json`),
+ * and the app hands SceneView the file through `modules` the same way. */
+export type SceneKindEntry = SceneKind | string;
 
 /** The members an assembly reads off its struct: every part's `tag`, and
  * the root of every ref inside it, deduplicated, in order (§3d). */
@@ -188,16 +305,20 @@ export function assemblyMembers(a: SceneAssembly | undefined): string[] {
 
 /** Every member a kind reads: `members`, plus what its drives, its status
  * template and its assembly name — so nothing repeats the list (§3c, §3d). */
-export function kindMembers(k: SceneKind | undefined): string[] {
+export function kindMembers(k: SceneKindEntry | undefined): string[] {
+	if (typeof k === 'string') return [];
 	const out = [...(k?.members ?? [])];
 	for (const m of [...driveMembers(k?.drive), ...statusMembers(k?.status), ...assemblyMembers(k?.assembly)])
 		if (!out.includes(m)) out.push(m);
 	return out;
 }
 
-/** How a `kinds` entry defines its kind, if it does. */
-export function kindDefinedBy(k: SceneKind | undefined): 'model' | 'component' | 'assembly' | undefined {
+/** How a `kinds` entry defines its kind, if it does. `file` is a path
+ * entry: what the file defines is known once it is inlined (defs.ts
+ * `inlineKindFiles`). */
+export function kindDefinedBy(k: SceneKindEntry | undefined): 'model' | 'component' | 'assembly' | 'file' | undefined {
 	if (!k) return undefined;
+	if (typeof k === 'string') return 'file';
 	if (k.model !== undefined) return 'model';
 	if (k.component !== undefined) return 'component';
 	if (k.assembly !== undefined) return 'assembly';
@@ -208,8 +329,9 @@ export interface SceneDoc {
 	name?: string;
 	/** The look the document asks for; the page may override it. Default `lit`. */
 	look?: SceneLook;
-	/** Kind contracts: overrides for the built-ins, declarations for the app's own, data kinds. */
-	kinds?: Record<string, SceneKind>;
+	/** Kind contracts: overrides for the built-ins, declarations for the app's
+	 * own, data kinds — inline, or as the path of a kind file. */
+	kinds?: Record<string, SceneKindEntry>;
 	environment?: SceneEnvironment;
 	camera?: SceneCamera;
 	fixtures?: SceneFixture[];
@@ -220,6 +342,68 @@ export interface SceneDoc {
 	 * read-only until the write path ships, so a non-empty list is an error
 	 * rather than a silent no-op. */
 	writable?: string[];
+}
+
+/** The ports a document's own `kinds` entry gives a kind, if it is inline
+ * and has any; undefined otherwise (a file not yet inlined, the app's kind). */
+export function docPorts(doc: { kinds?: Record<string, SceneKindEntry> } | null | undefined, kind: string): Record<string, ScenePort> | undefined {
+	const k = doc?.kinds?.[kind];
+	return k && typeof k !== 'string' ? k.ports : undefined;
+}
+
+const DEG = Math.PI / 180;
+/** `v` turned by a node's `rot` (degrees, XYZ order — three's Euler): about
+ * z, then y, then x, the way Rx·Ry·Rz applies. */
+export function rotateXYZ(v: Vec3, rot: Vec3 | undefined): Vec3 {
+	if (!rot) return [v[0], v[1], v[2]];
+	let [x, y, z] = v;
+	const [ax, ay, az] = [rot[0] * DEG, rot[1] * DEG, rot[2] * DEG];
+	// z
+	[x, y] = [x * Math.cos(az) - y * Math.sin(az), x * Math.sin(az) + y * Math.cos(az)];
+	// y
+	[x, z] = [x * Math.cos(ay) + z * Math.sin(ay), -x * Math.sin(ay) + z * Math.cos(ay)];
+	// x
+	[y, z] = [y * Math.cos(ax) - z * Math.sin(ax), y * Math.sin(ax) + z * Math.cos(ax)];
+	return [x, y, z];
+}
+
+/** A port in the frame the node sits in: its point through the node's
+ * pos / rot / scale, its direction through rot alone (unit). */
+export function portInFrame(node: Pick<SceneNode, 'pos' | 'rot' | 'scale'>, port: ScenePort, boxes?: KindBoxes): { at: Vec3; dir: Vec3 } | null {
+	const local = resolvePort(port, boxes);
+	if (!local) return null;
+	const s = node.scale ?? 1;
+	const r = rotateXYZ([local.at[0] * s, local.at[1] * s, local.at[2] * s], node.rot);
+	const at: Vec3 = [node.pos[0] + r[0], node.pos[1] + r[1], node.pos[2] + r[2]];
+	const d = rotateXYZ(local.dir, node.rot);
+	const len = Math.hypot(d[0], d[1], d[2]) || 1;
+	return { at, dir: [d[0] / len, d[1] / len, d[2] / len] };
+}
+
+/** A pipe's run as points: an anchored end resolved through its node and
+ * port, the `points` between. Null when an anchor names no node, a port
+ * its kind does not have, or a port on a box not yet known (the model
+ * still loading) — the pipe cannot be drawn yet. */
+export function resolvePipePoints(
+	pipe: Pick<ScenePipe, 'from' | 'to' | 'points'>,
+	nodes: readonly SceneNode[],
+	portsOf: (kind: string) => Record<string, ScenePort> | undefined,
+	boxesOf?: (nodeId: string) => KindBoxes | undefined
+): Vec3[] | null {
+	const end = (a: PipeAnchor | undefined): Vec3 | null | undefined => {
+		if (!a) return undefined;
+		const n = nodes.find((x) => x.id === a.node);
+		const port = n && portsOf(n.kind)?.[a.port];
+		return n && port ? (portInFrame(n, port, boxesOf?.(n.id))?.at ?? null) : null;
+	};
+	const from = end(pipe.from);
+	const to = end(pipe.to);
+	if (from === null || to === null) return null;
+	const out: Vec3[] = [];
+	if (from) out.push(from);
+	out.push(...(pipe.points ?? []));
+	if (to) out.push(to);
+	return out.length >= 2 ? out : null;
 }
 
 export interface SceneError {
@@ -243,6 +427,12 @@ export function isAssetPath(p: unknown): p is string {
  * `.svelte` file, no scheme, no `..`, not absolute. */
 export function isComponentPath(p: unknown): p is string {
 	return isAssetPath(p) && p.endsWith('.svelte') && !p.startsWith('/');
+}
+
+/** A kind file path (§3g): a `{Name}.kind.json`, relative to the scene
+ * file like a component's — no scheme, no `..`, not absolute. */
+export function isKindPath(p: unknown): p is string {
+	return isAssetPath(p) && p.endsWith('.kind.json') && !p.startsWith('/');
 }
 
 const MEMBER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -285,10 +475,40 @@ function checkNode(n: unknown, p: string, err: Err, known: Set<string> | null, i
 	}
 }
 
-function checkPipe(pipe: unknown, p: string, err: Err): void {
+/** The frame a pipe's anchors resolve in: the nodes beside it (the
+ * document's, or an assembly's) and what ports each node's kind has, when
+ * known (undefined = the kind is the app's or a file not yet inlined: the
+ * port is taken on trust). */
+export type PipeFrame = { nodes: unknown; portsOf: (kind: string) => Record<string, ScenePort> | undefined };
+
+const PORT_RE = /^[A-Za-z_][A-Za-z0-9_-]*$/;
+
+function checkAnchor(a: unknown, p: string, err: Err, frame: PipeFrame | undefined): void {
+	if (!isObj(a)) return err(p, 'must be { node, port }');
+	if (!isStr(a.node)) return err(`${p}/node`, 'must name a node');
+	if (!isStr(a.port)) return err(`${p}/port`, "must name one of the node's kind's ports");
+	if (!frame || !Array.isArray(frame.nodes)) return;
+	const n = frame.nodes.find((x) => isObj(x) && x.id === a.node) as Record<string, unknown> | undefined;
+	if (!n) return err(`${p}/node`, `no node "${a.node}" in this frame`);
+	const ports = isStr(n.kind) ? frame.portsOf(n.kind) : undefined;
+	if (ports && !(a.port in ports))
+		err(`${p}/port`, `kind "${String(n.kind)}" has no port "${a.port}" (it has ${Object.keys(ports).join(', ') || 'none'})`);
+}
+
+function checkPipe(pipe: unknown, p: string, err: Err, frame?: PipeFrame): void {
 	if (!isObj(pipe)) return err(p, 'must be an object');
-	if (!Array.isArray(pipe.points) || pipe.points.length < 2) err(`${p}/points`, 'needs at least two points');
-	else pipe.points.forEach((pt, j) => isVec3(pt) || err(`${p}/points/${j}`, 'must be [x, y, z] metres'));
+	let ends = 0;
+	for (const k of ['from', 'to'] as const)
+		if (pipe[k] !== undefined) {
+			ends++;
+			checkAnchor(pipe[k], `${p}/${k}`, err, frame);
+		}
+	if (pipe.points !== undefined && !Array.isArray(pipe.points)) err(`${p}/points`, 'must be an array of [x, y, z]');
+	else {
+		const pts = pipe.points ?? [];
+		if (pts.length + ends < 2) err(`${p}/points`, ends ? 'needs at least two points counting the anchored ends' : 'needs at least two points');
+		pts.forEach((pt, j) => isVec3(pt) || err(`${p}/points/${j}`, 'must be [x, y, z] metres'));
+	}
 	if (pipe.radius !== undefined && !(isNum(pipe.radius) && pipe.radius > 0)) err(`${p}/radius`, 'must be > 0');
 	if (pipe.arrows !== undefined && typeof pipe.arrows !== 'boolean') err(`${p}/arrows`, 'must be true or false');
 	if (pipe.bind !== undefined) {
@@ -299,6 +519,84 @@ function checkPipe(pipe: unknown, p: string, err: Err): void {
 				err(`${p}/bind/flowing`, `"${String(pipe.bind.flowing)}" is not a tag ref`);
 		}
 	}
+}
+
+/** The checks one kind's definition gets, inline or in its own file:
+ * paths, one way of being defined, bounds, label, status, drives. `p` is
+ * the JSON-pointer prefix the messages carry. */
+function checkKindDef(def: Record<string, unknown>, p: string, known: Set<string> | null, assemblies: Set<string>): SceneError[] {
+	const errors: SceneError[] = [];
+	const err = (path: string, message: string) => errors.push({ path, message });
+	if (def.type !== undefined && !isStr(def.type)) err(`${p}/type`, 'must be a UDT name');
+	if (def.members !== undefined && !(Array.isArray(def.members) && def.members.every(isStr)))
+		err(`${p}/members`, 'must be an array of member names');
+	if (def.ports !== undefined) {
+		if (!isObj(def.ports)) err(`${p}/ports`, 'must be an object of port name -> { at, dir? }');
+		else
+			for (const [name, port] of Object.entries(def.ports)) {
+				const pp = `${p}/ports/${name}`;
+				if (!PORT_RE.test(name)) err(pp, 'a port name is letters, digits, _ or -');
+				if (!isObj(port)) err(pp, 'must be { at: [x, y, z] | { part?, anchor, offset? }, dir?: [x, y, z] }');
+				else {
+					if (!(isVec3(port.at) || isBoxPoint(port.at)))
+						err(`${pp}/at`, "must be [x, y, z] metres in the kind's frame, or { part?, anchor: top | bottom | left | right | front | back | center (or two, top-front), offset? }");
+					if (port.dir !== undefined && !(isVec3(port.dir) && port.dir.some((c) => c !== 0))) err(`${pp}/dir`, 'must be a non-zero [x, y, z] direction');
+				}
+			}
+	}
+	if (def.model !== undefined && !(isAssetPath(def.model) && /\.(glb|gltf)$/i.test(def.model)))
+		err(`${p}/model`, 'must be a URL path to a .glb or .gltf (models/pump.glb)');
+	if (def.component !== undefined && !isComponentPath(def.component))
+		err(`${p}/component`, 'must be a .svelte file as a path relative to the scene file (hmi/src/lib/Skid.svelte)');
+	const ways = ['model', 'component', 'assembly'].filter((w) => def[w] !== undefined);
+	if (ways.length > 1) err(p, `a kind is defined one way, not ${ways.join(' and ')}`);
+	if (def.assembly !== undefined) {
+		const ap = `${p}/assembly`;
+		if (!isObj(def.assembly) || !Array.isArray(def.assembly.nodes)) err(ap, 'must be { nodes: [...], pipes?: [...] }');
+		else {
+			const ids = new Set<string>();
+			def.assembly.nodes.forEach((n, i) => {
+				checkNode(n, `${ap}/nodes/${i}`, err, known, ids);
+				if (!isObj(n)) return;
+				if (n.tag !== undefined && !isMemberName(n.tag)) err(`${ap}/nodes/${i}/tag`, "a part's tag is one member of the assembly's struct (Pump)");
+				if (isStr(n.kind) && assemblies.has(n.kind)) err(`${ap}/nodes/${i}/kind`, `"${n.kind}" is an assembly; a part is a built-in, a data kind or a component kind`);
+			});
+			if (def.assembly.pipes !== undefined) {
+				if (!Array.isArray(def.assembly.pipes)) err(`${ap}/pipes`, 'must be an array');
+				else {
+					// Anchors inside an assembly resolve among its parts; a part's
+					// kind is one the document declares, or the app's.
+					const frame: PipeFrame = { nodes: def.assembly.nodes, portsOf: () => undefined };
+					def.assembly.pipes.forEach((pipe, i) => checkPipe(pipe, `${ap}/pipes/${i}`, err, frame));
+				}
+			}
+		}
+	}
+	if (def.bounds !== undefined && def.bounds !== 'auto') {
+		if (!isObj(def.bounds) || !isVec3(def.bounds.size) || !isVec3(def.bounds.center))
+			err(`${p}/bounds`, "must be 'auto' or { size: [w, h, d], center: [x, y, z] }");
+	}
+	if (def.labelAt !== undefined && !(isVec3(def.labelAt) || isAnchorWord(def.labelAt) || isBoxPoint(def.labelAt)))
+		err(`${p}/labelAt`, 'must be [x, y, z] metres, an anchor word (top, top-front, …) on the bounds, or { part?, anchor, offset? }');
+	if (def.status !== undefined && !validStatusTemplate(def.status))
+		err(`${p}/status`, 'must be a template over members: "{Level:1} %", "{Running?run:stopped}"');
+	if (def.drive !== undefined) errors.push(...validateDrives(def.drive, `${p}/drive`));
+	if (def.model === undefined && def.drive !== undefined) err(`${p}/drive`, 'drives need a model — without one the Svelte kind of this name renders');
+	if (ways.length === 0 && (def.bounds !== undefined || def.labelAt !== undefined))
+		err(p, 'bounds and labelAt need a model, a component or an assembly — without one the registry\'s kind of this name renders');
+	return errors;
+}
+
+/** Validate a kind file's content on its own (the kind editor, a test):
+ * the same rules a `kinds` entry gets, with paths from the file's root. A
+ * `component` or an `assembly` is refused — a kind file is a data kind or
+ * a bare contract; those two stay inline, where the scene can see them. */
+export function validateKind(def: unknown): { ok: boolean; errors: SceneError[] } {
+	if (!isObj(def)) return { ok: false, errors: [{ path: '', message: 'a kind file is an object: { model, status, drive, ... }' }] };
+	const errors = checkKindDef(def, '', null, new Set());
+	for (const w of ['component', 'assembly'] as const)
+		if (def[w] !== undefined) errors.push({ path: `/${w}`, message: `a kind file is a data kind (model + drives) or a contract — a ${w} kind stays inline in the scene` });
+	return { ok: errors.length === 0, errors };
 }
 
 /**
@@ -319,6 +617,9 @@ export function validateScene(doc: unknown, kinds?: Iterable<string>): { ok: boo
 	const assemblies = new Set<string>();
 	if (isObj(doc) && isObj(doc.kinds))
 		for (const [k, def] of Object.entries(doc.kinds)) {
+			// A kind file defines its kind too; what it holds is checked once
+			// it is inlined (SceneView does that from the app's modules).
+			if (isKindPath(def)) known?.add(k);
 			if (!isObj(def)) continue;
 			if (def.model !== undefined || def.component !== undefined || def.assembly !== undefined) known?.add(k);
 			if (def.assembly !== undefined) assemblies.add(k);
@@ -384,46 +685,16 @@ export function validateScene(doc: unknown, kinds?: Iterable<string>): { ok: boo
 		if (!isObj(doc.kinds)) err('/kinds', 'must be an object of kind -> { type, members }');
 		else
 			for (const [k, def] of Object.entries(doc.kinds)) {
-				if (!isObj(def)) {
-					err(`/kinds/${k}`, 'must be an object with type and/or members');
+				if (typeof def === 'string') {
+					if (!isKindPath(def))
+						err(`/kinds/${k}`, 'a kind file is a {Name}.kind.json as a path relative to the scene file (hmi/src/lib/kinds/pump.kind.json)');
 					continue;
 				}
-				if (def.type !== undefined && !isStr(def.type)) err(`/kinds/${k}/type`, 'must be a UDT name');
-				if (def.members !== undefined && !(Array.isArray(def.members) && def.members.every(isStr)))
-					err(`/kinds/${k}/members`, 'must be an array of member names');
-				if (def.model !== undefined && !isAssetPath(def.model)) err(`/kinds/${k}/model`, 'must be a URL path to a .glb or .gltf (models/pump.glb)');
-				if (def.component !== undefined && !isComponentPath(def.component))
-					err(`/kinds/${k}/component`, 'must be a .svelte file as a path relative to the scene file (hmi/src/lib/Skid.svelte)');
-				const ways = ['model', 'component', 'assembly'].filter((w) => def[w] !== undefined);
-				if (ways.length > 1) err(`/kinds/${k}`, `a kind is defined one way, not ${ways.join(' and ')}`);
-				if (def.assembly !== undefined) {
-					const ap = `/kinds/${k}/assembly`;
-					if (!isObj(def.assembly) || !Array.isArray(def.assembly.nodes)) err(ap, 'must be { nodes: [...], pipes?: [...] }');
-					else {
-						const ids = new Set<string>();
-						def.assembly.nodes.forEach((n, i) => {
-							checkNode(n, `${ap}/nodes/${i}`, err, known, ids);
-							if (!isObj(n)) return;
-							if (n.tag !== undefined && !isMemberName(n.tag)) err(`${ap}/nodes/${i}/tag`, "a part's tag is one member of the assembly's struct (Pump)");
-							if (isStr(n.kind) && assemblies.has(n.kind)) err(`${ap}/nodes/${i}/kind`, `"${n.kind}" is an assembly; a part is a built-in, a data kind or a component kind`);
-						});
-						if (def.assembly.pipes !== undefined) {
-							if (!Array.isArray(def.assembly.pipes)) err(`${ap}/pipes`, 'must be an array');
-							else def.assembly.pipes.forEach((pipe, i) => checkPipe(pipe, `${ap}/pipes/${i}`, err));
-						}
-					}
+				if (!isObj(def)) {
+					err(`/kinds/${k}`, 'must be an object with type and/or members, or the path of a kind file');
+					continue;
 				}
-				if (def.bounds !== undefined && def.bounds !== 'auto') {
-					if (!isObj(def.bounds) || !isVec3(def.bounds.size) || !isVec3(def.bounds.center))
-						err(`/kinds/${k}/bounds`, "must be 'auto' or { size: [w, h, d], center: [x, y, z] }");
-				}
-				if (def.labelAt !== undefined && !isVec3(def.labelAt)) err(`/kinds/${k}/labelAt`, 'must be [x, y, z] metres');
-				if (def.status !== undefined && !validStatusTemplate(def.status))
-					err(`/kinds/${k}/status`, 'must be a template over members: "{Level:1} %", "{Running?run:stopped}"');
-				if (def.drive !== undefined) errors.push(...validateDrives(def.drive, `/kinds/${k}/drive`));
-				if (def.model === undefined && def.drive !== undefined) err(`/kinds/${k}/drive`, 'drives need a model — without one the Svelte kind of this name renders');
-				if (ways.length === 0 && (def.bounds !== undefined || def.labelAt !== undefined))
-					err(`/kinds/${k}`, 'bounds and labelAt need a model, a component or an assembly — without one the registry\'s kind of this name renders');
+				errors.push(...checkKindDef(def, `/kinds/${k}`, known, assemblies));
 				// A kind the document defines is complete on its own; one it only
 				// declares must be something the app registers.
 				if (known && !known.has(k)) err(`/kinds/${k}`, `"${k}" is declared but the app registers no such kind`);
@@ -463,7 +734,10 @@ export function validateScene(doc: unknown, kinds?: Iterable<string>): { ok: boo
 
 	if (doc.pipes !== undefined) {
 		if (!Array.isArray(doc.pipes)) err('/pipes', 'must be an array');
-		else doc.pipes.forEach((pipe, i) => checkPipe(pipe, `/pipes/${i}`, err));
+		else {
+			const frame: PipeFrame = { nodes: doc.nodes, portsOf: (k) => docPorts(doc, k) };
+			doc.pipes.forEach((pipe, i) => checkPipe(pipe, `/pipes/${i}`, err, frame));
+		}
 	}
 
 	if (doc.writable !== undefined) {

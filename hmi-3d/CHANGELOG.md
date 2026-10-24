@@ -1,5 +1,83 @@
 # Changelog — @joyautomation/nautilus-hmi-3d
 
+## 0.3.0 — 2026-10-21
+
+**Added.** A kind in a file of its own (design §3g, slice 2). A `kinds`
+entry may be the path of a `{Name}.kind.json` relative to the scene file
+(`"pump": "hmi/src/lib/kinds/pump.kind.json"`), holding the same keys an
+inline entry does — `type`, `members`, `model`, `bounds`, `labelAt`,
+`status`, `drive` — so one pump is declared once and placed in every
+scene, and has a file to open in the extension's kind editor. The app
+hands SceneView the files through `modules`, the way it hands it
+component files: `import.meta.glob(['$lib/**/*.svelte',
+'$lib/**/*.kind.json'], { eager: true })`; `inlineKindFiles(doc,
+modules)` is the pure step (exported), and its errors — a path no module
+matches, a module that is not an object — list with the document's.
+`validateScene` accepts a path entry as a kind the document brings;
+`validateKind(obj)` checks one file on its own, with paths from its root
+(a `component` or `assembly` is refused there — those stay inline, where
+the scene can see them). `isKindPath`, `kindDefinedBy(...) === 'file'`
+and the `SceneKindEntry` type go with it. A registry entry may be marked
+`fallback: true` — an editor's stand-in box for a model that does not
+load — and `registryFor` lays the model over it in every look; only a
+real Svelte kind of the same name keeps its primitives in flat and paper.
+`resolvePick` and `seeThrough` (pick.ts) are exported, so an editor
+picking parts inside one model orders its hits the way the scene does,
+and `Scene3D` takes `pick={false}` for a host that picks nothing at the
+node level (no hover outline, no pointer cursor, no `onpick`).
+
+**Added (slice 3, ports).** A kind declares **`ports`** in its own frame
+(`"ports": { "discharge": { "at": [0, 0.43, -0.5], "dir": [0, 1, 0] } }`:
+a point and the direction a pipe leaves it, default up), inline or in
+its kind file; a registry entry may carry `ports` too. A pipe end may be
+anchored instead of placed — `"from": { "node": "P101", "port":
+"discharge" }`, `"to": …` — and `points` is then the run between the
+ends (absent for a straight pipe port to port). The renderer resolves an
+anchor through the node's `pos` / `rot` / `scale`, so a pipe follows its
+node; `validateScene` holds an anchor to a node in its frame and a port
+its kind has (when the kind's ports are known). `resolvePipePoints`,
+`portInFrame`, `rotateXYZ`, `docPorts` and `routePorts` (an orthogonal
+run between two ports: leave, rise to a header, run, drop) are exported.
+A port's `at`, and a kind's `labelAt`, may be a **box point** instead of
+metres — `{ "part": "Flange", "anchor": "top-front", "offset": [0, 0.01,
+0] }` on a named part's box, or on the kind's bounds without `part`
+(`"labelAt": "top"` as the bare word) — resolved once the model reports
+its parts (`GltfNode` `onparts`, `SceneContext.partsOf`), so it survives
+a re-export; `resolvePoint`, `resolvePort`, `anchorPoint`,
+`anchorNormal`, `isAnchorWord`, `isBoxPoint` and `ANCHOR_WORDS` are
+exported. A `tint` or `emissive` drive may be a **ramp** — `{ "bind":
+"TempC", "ramp": [[20, "fluid"], [90, "critical"]] }` — the colour
+interpolated between the two stops around the value and clamped beyond
+the ends (`rampAt`); palette slots and CSS colours mix alike.
+
+**Added (blink, pulse, ports on the built-ins, ModelNode).** A boolean
+drive (`tint`, `emissive`, `visible`) may carry **`blink`**, a rate in
+Hz: while the bool holds the effect alternates with its off state (the
+tint's `off`, no glow, hidden), half the period each way; `evalDrives`
+hands the component the on state with `blink: { hz, off }` and
+`GltfNode` keeps the clock, repainting only when the phase changes
+(`blinkOn` is exported, pure). A seventh channel, **`pulse`** (`{ "bind":
+"Alarm", "hz": 1, "amount": 0.1 }`): the mesh breathes — its scale
+swings 1 ± amount about its own at `hz` while the bool holds, back to
+the model's own when it drops (`pulseAt` exported; `DRIVE_CHANNELS`
+grows by one, and `validateDrives` refuses `blink` with a `ramp`, a rate
+≤ 0, an amount outside (0, 1]). The **built-in kinds have ports**:
+tank `inlet` / `outlet`, pump `suction` / `discharge`, valve `in` /
+`out`, in `BUILTIN_CONTRACT` (so `builtinRegistry` carries them),
+`models/kinds.json` and `internal/scene`'s `Builtin`, held together by
+the contract tests. **`<ModelNode data={{ model, drive }} …/>`** is
+exported: a model with drives for a component of your own — what the
+kind editor's "Eject to component" writes — which dynamic-imports
+`GltfNode`, so the glTF loader stays a chunk.
+
+**Changed.** `model` must end in `.glb` or `.gltf` in `validateScene` as
+it already had to for `naut check` and the schema. The **lit look without
+an HDRI** now lights PBR materials from three's generated RoomEnvironment
+(no asset), so a metal model is no longer near-black until a document
+names an `environment`. On **paper**, `running` keeps its colour: a tint
+drive that names it, or a running built-in pump, reads as a state on the
+page the way an alarm does (steel, shell and fluid stay near-white).
+
 ## 0.2.2 — 2026-10-20
 
 **Added.** `PlacedNode.object`: a placed node announces its root group

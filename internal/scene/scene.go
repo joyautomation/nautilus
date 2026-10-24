@@ -53,11 +53,16 @@ type Kind struct {
 	Members []string `json:"members,omitempty"`
 	// A data kind (docs/design/spatial-hmi.md §3c): a glTF as a URL path
 	// from the app root, and what live values do to its named meshes.
-	Model   string          `json:"model,omitempty"`
-	Bounds  json.RawMessage `json:"bounds,omitempty"` // "auto" | {size, center}
-	LabelAt Vec             `json:"labelAt,omitempty"`
+	Model  string          `json:"model,omitempty"`
+	Bounds json.RawMessage `json:"bounds,omitempty"` // "auto" | {size, center}
+	// LabelAt: [x, y, z] metres, an anchor word on the bounds ("top"), or
+	// {part?, anchor, offset?} — a place on a part's box (design §3g).
+	LabelAt json.RawMessage `json:"labelAt,omitempty"`
 	Status  string          `json:"status,omitempty"`
-	Drive   []Drive         `json:"drive,omitempty"`
+	// Ports (design §3g, slice 3): where pipes meet this kind, in its own
+	// frame — a point and the direction a pipe leaves it (default up).
+	Ports map[string]Port `json:"ports,omitempty"`
+	Drive []Drive         `json:"drive,omitempty"`
 	// A component kind (§3d): a Svelte file as a source path relative to
 	// the scene file. The app builds it; the checker sees the file and the
 	// contract above, and never runs Svelte.
@@ -66,6 +71,106 @@ type Kind struct {
 	// kind's own frame, and a part's Tag is a MEMBER of the assembly's
 	// struct — the nested UDT is the only parameter.
 	Assembly *Assembly `json:"assembly,omitempty"`
+	// File is set when the `kinds` entry was the path of a `{Name}.kind.json`
+	// (design §3g, slice 2): a kind in a file of its own, relative to the
+	// scene file like a component. The other fields are empty until
+	// ResolveKindFiles reads the file; Encode writes the path back.
+	File string `json:"-"`
+}
+
+// kindJSON is Kind without the methods, for the two JSON forms below.
+type kindJSON Kind
+
+// UnmarshalJSON takes a `kinds` entry in either form: the contract inline,
+// or a string — the path of the kind file that holds it. Unknown fields
+// are refused as Parse refuses them at the top level.
+func (k *Kind) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		var path string
+		if err := json.Unmarshal(b, &path); err != nil {
+			return err
+		}
+		*k = Kind{File: path}
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	var v kindJSON
+	if err := dec.Decode(&v); err != nil {
+		return err
+	}
+	*k = Kind(v)
+	return nil
+}
+
+// MarshalJSON writes a file-backed kind as its path, so a document that
+// names kind files round-trips through Encode as written.
+func (k Kind) MarshalJSON() ([]byte, error) {
+	if k.File != "" {
+		return json.Marshal(k.File)
+	}
+	return json.Marshal(kindJSON(k))
+}
+
+// kindPath is a kind file's path: relative to the scene file, a
+// `.kind.json`, no scheme, not absolute, no `..` — a component's rules.
+func kindPath(p string) bool {
+	return assetPath(p) && strings.HasSuffix(p, ".kind.json") && !strings.HasPrefix(p, "/")
+}
+
+// KindFiles lists every kind file the document names, with the JSON path
+// of the entry — source paths relative to the scene file, like
+// Components, so they are read against the same root.
+func (d *Doc) KindFiles() (paths [][2]string) {
+	names := make([]string, 0, len(d.Kinds))
+	for k := range d.Kinds {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		if f := d.Kinds[k].File; f != "" {
+			paths = append(paths, [2]string{"/kinds/" + k, f})
+		}
+	}
+	return paths
+}
+
+// ResolveKindFiles reads every kind file the document names (`read` is
+// built from the scene file's directory) and puts what it holds into the
+// entry, keeping File so Encode writes the path back; Check then holds
+// the kind — and its nodes — to the file's contract exactly as if it were
+// inline. A file that cannot be read or parsed, or that holds a component
+// or an assembly (those stay inline, where the scene can see them), is an
+// error at the entry, and the entry stays empty.
+func ResolveKindFiles(d *Doc, read func(path string) ([]byte, error)) (errs []string) {
+	for _, kf := range d.KindFiles() {
+		p, file := kf[0], kf[1]
+		name := strings.TrimPrefix(p, "/kinds/")
+		if !kindPath(file) {
+			errs = append(errs, p+": a kind file is a {Name}.kind.json as a path relative to the scene file (hmi/src/lib/kinds/pump.kind.json)")
+			continue
+		}
+		data, err := read(file)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %q was not found next to the scene file — a kind file's path is relative to it", p, file))
+			continue
+		}
+		dec := json.NewDecoder(bytes.NewReader(data))
+		dec.DisallowUnknownFields()
+		var v kindJSON
+		if err := dec.Decode(&v); err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %s: %s", p, file, err))
+			continue
+		}
+		k := Kind(v)
+		if k.Component != "" || k.Assembly != nil {
+			errs = append(errs, fmt.Sprintf("%s: %s holds a %s kind — a kind file is a data kind (model + drives) or a contract; a component or an assembly stays inline in the scene", p, file, k.DefinedBy()))
+			continue
+		}
+		k.File = file
+		d.Kinds[name] = k
+	}
+	return errs
 }
 
 // Assembly is a kind's parts and pipes (§3d).
@@ -78,6 +183,8 @@ type Assembly struct {
 // "component", "assembly", or "" for a contract-only entry.
 func (k Kind) DefinedBy() string {
 	switch {
+	case k.File != "" && k.Model == "" && k.Type == "" && k.Members == nil && k.Status == "" && k.Drive == nil:
+		return "file"
 	case k.Model != "":
 		return "model"
 	case k.Component != "":
@@ -98,6 +205,7 @@ type Drive struct {
 	Tint     *TintDrive     `json:"tint,omitempty"`
 	Emissive *EmissiveDrive `json:"emissive,omitempty"`
 	Visible  *BoolExpr      `json:"visible,omitempty"`
+	Pulse    *PulseDrive    `json:"pulse,omitempty"`
 }
 
 // NumExpr is member × Scale + Offset, clamped to [Min, Max].
@@ -110,9 +218,19 @@ type NumExpr struct {
 }
 
 // BoolExpr is true, or a number above Threshold; a leading `!` negates.
+// Blink: while true, the effect alternates at this rate (Hz).
 type BoolExpr struct {
 	Bind      string   `json:"bind"`
 	Threshold *float64 `json:"threshold,omitempty"`
+	Blink     *float64 `json:"blink,omitempty"`
+}
+
+// PulseDrive: the mesh breathes while true — its scale swings by Amount
+// (default 0.1) at Hz (default 1).
+type PulseDrive struct {
+	BoolExpr
+	Hz     *float64 `json:"hz,omitempty"`
+	Amount *float64 `json:"amount,omitempty"`
 }
 
 type SpinDrive struct {
@@ -129,19 +247,67 @@ type ScaleDrive struct {
 }
 type TintDrive struct {
 	BoolExpr
-	On  string `json:"on"`
+	On  string `json:"on,omitempty"`
 	Off string `json:"off,omitempty"`
+	// Ramp: the colour varies with a number — stops of [value, colour].
+	Ramp []RampStop `json:"ramp,omitempty"`
 }
 type EmissiveDrive struct {
 	BoolExpr
-	On        string   `json:"on"`
-	Intensity *float64 `json:"intensity,omitempty"`
+	On        string     `json:"on,omitempty"`
+	Intensity *float64   `json:"intensity,omitempty"`
+	Ramp      []RampStop `json:"ramp,omitempty"`
+}
+
+// RampStop is one [value, colour] of a ramp.
+type RampStop struct {
+	Value  float64
+	Colour string
+}
+
+func (r *RampStop) UnmarshalJSON(b []byte) error {
+	var pair []json.RawMessage
+	if err := json.Unmarshal(b, &pair); err != nil || len(pair) != 2 {
+		return fmt.Errorf("a ramp stop is [value, colour]")
+	}
+	if err := json.Unmarshal(pair[0], &r.Value); err != nil {
+		return fmt.Errorf("a ramp stop's value is a number")
+	}
+	if err := json.Unmarshal(pair[1], &r.Colour); err != nil {
+		return fmt.Errorf("a ramp stop's colour is a string")
+	}
+	return nil
+}
+
+func (r RampStop) MarshalJSON() ([]byte, error) {
+	return json.Marshal([]any{r.Value, r.Colour})
+}
+
+// checkRamp: a plain member, at least two stops going up in value.
+func checkRamp(path, bind string, ramp []RampStop, errf func(path, format string, a ...any)) {
+	if !memberRe.MatchString(bind) || strings.HasPrefix(bind, "!") {
+		errf(path+"/bind", "must name a member of the struct (a number)")
+	}
+	if len(ramp) < 2 {
+		errf(path+"/ramp", "must be at least two [value, colour] stops")
+		return
+	}
+	prev := math.Inf(-1)
+	for i, stop := range ramp {
+		if stop.Colour == "" {
+			errf(fmt.Sprintf("%s/ramp/%d", path, i), "must be [value, colour]")
+		}
+		if !(stop.Value > prev) {
+			errf(fmt.Sprintf("%s/ramp/%d", path, i), "stops go up in value")
+		}
+		prev = stop.Value
+	}
 }
 
 // DriveChannels is the vocabulary, in the schema's order. hmi-3d's
 // DRIVE_CHANNELS and the extension schema carry the same list; a test on
 // each side reads the schema so the three cannot drift.
-var DriveChannels = []string{"spin", "turn", "scale", "tint", "emissive", "visible"}
+var DriveChannels = []string{"spin", "turn", "scale", "tint", "emissive", "visible", "pulse"}
 
 // Environment is the surroundings (§3c): an HDRI, the backdrop, shadows.
 type Environment struct {
@@ -208,9 +374,81 @@ type Node struct {
 	Bind  map[string]string `json:"bind,omitempty"`
 }
 
+// Port is where a pipe meets a kind, in the kind's frame. At is [x, y, z]
+// metres or {part?, anchor, offset?}, a place on a box (checkPoint).
+type Port struct {
+	At  json.RawMessage `json:"at"`
+	Dir Vec             `json:"dir,omitempty"`
+}
+
+// BoxPoint is a point named by where it sits on a box: a part's, or the
+// kind's bounds when Part is empty. The renderer resolves it once the
+// model is loaded; the checker holds the words.
+type BoxPoint struct {
+	Part   string `json:"part,omitempty"`
+	Anchor string `json:"anchor"`
+	Offset Vec    `json:"offset,omitempty"`
+}
+
+var anchorRe = regexp.MustCompile(`^(center|top|bottom|left|right|front|back)(-(top|bottom|left|right|front|back))?$`)
+
+var anchorAxis = map[string]int{"left": 0, "right": 0, "bottom": 1, "top": 1, "back": 2, "front": 2}
+
+// validAnchor: one face word, center, or two faces on different axes.
+func validAnchor(a string) bool {
+	if !anchorRe.MatchString(a) {
+		return false
+	}
+	w := strings.Split(a, "-")
+	return len(w) == 1 || (w[0] != "center" && anchorAxis[w[0]] != anchorAxis[w[1]])
+}
+
+// checkPoint holds a point to its forms: [x, y, z], a box point, and — when
+// word is true (labelAt) — a bare anchor word.
+func checkPoint(path string, raw json.RawMessage, word bool, errf func(path, format string, a ...any)) {
+	var v Vec
+	if err := json.Unmarshal(raw, &v); err == nil {
+		if len(v) != 3 || !finite(v) {
+			errf(path, "must be [x, y, z] metres")
+		}
+		return
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		if !word || !validAnchor(s) {
+			errf(path, "must be [x, y, z] metres, an anchor word (top, top-front, …), or { part?, anchor, offset? }")
+		}
+		return
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var bp BoxPoint
+	if err := dec.Decode(&bp); err != nil {
+		errf(path, "must be [x, y, z] metres%s, or { part?, anchor: top | bottom | left | right | front | back | center (or two, top-front), offset? }", map[bool]string{true: ", an anchor word on the bounds", false: ""}[word])
+		return
+	}
+	if !validAnchor(bp.Anchor) {
+		errf(path+"/anchor", "must be top, bottom, left, right, front, back, center, or two on different axes (top-front)")
+	}
+	if bp.Offset != nil && (len(bp.Offset) != 3 || !finite(bp.Offset)) {
+		errf(path+"/offset", "must be [x, y, z] metres")
+	}
+}
+
+// Anchor is a pipe end on a node's port: resolved through the node's
+// pos / rot / scale by the renderer, so the pipe follows the node.
+type Anchor struct {
+	Node string `json:"node"`
+	Port string `json:"port"`
+}
+
 type Pipe struct {
-	ID     string            `json:"id,omitempty"`
-	Points []Vec             `json:"points"`
+	ID string `json:"id,omitempty"`
+	// From / To: the ends, when anchored to ports; Points is then the run
+	// between them (may be empty: a straight pipe port to port).
+	From   *Anchor           `json:"from,omitempty"`
+	To     *Anchor           `json:"to,omitempty"`
+	Points []Vec             `json:"points,omitempty"`
 	Radius float64           `json:"radius,omitempty"`
 	Bind   map[string]string `json:"bind,omitempty"`
 	// Arrows: chevrons travel the run while it flows. nil = true.
@@ -221,11 +459,22 @@ type Pipe struct {
 var Looks = []string{"lit", "flat", "paper"}
 
 // Builtin is the contract the package's built-in kinds carry. It must
-// match hmi-3d's builtinRegistry (registry.ts): same names, same members.
+// match hmi-3d's BUILTIN_CONTRACT (kinds.ts) and models/kinds.json: same
+// names, same members, same ports (TestBuiltinMatchesTheDataKinds).
 var Builtin = map[string]Kind{
-	"tank":  {Type: "Tank", Members: []string{"Level", "TempC"}},
-	"pump":  {Type: "Motor", Members: []string{"Running", "Fault", "Speed"}},
-	"valve": {Type: "Valve", Members: []string{"Pos", "Cmd"}},
+	"tank":  {Type: "Tank", Members: []string{"Level", "TempC"}, Ports: builtinPorts(`{"inlet": {"at": [0, 0.46, 0], "dir": [0, 1, 0]}, "outlet": {"at": [0.25, 0, 0], "dir": [1, 0, 0]}}`)},
+	"pump":  {Type: "Motor", Members: []string{"Running", "Fault", "Speed"}, Ports: builtinPorts(`{"suction": {"at": [-0.21, 0.09, 0], "dir": [-1, 0, 0]}, "discharge": {"at": [0, 0.21, 0], "dir": [0, 1, 0]}}`)},
+	"valve": {Type: "Valve", Members: []string{"Pos", "Cmd"}, Ports: builtinPorts(`{"in": {"at": [0, -0.08, 0], "dir": [0, -1, 0]}, "out": {"at": [0, 0.08, 0], "dir": [0, 1, 0]}}`)},
+}
+
+// builtinPorts decodes a built-in's ports from the same JSON a kind file
+// would hold — the one spelling, so the table reads like the contract.
+func builtinPorts(src string) map[string]Port {
+	var out map[string]Port
+	if err := json.Unmarshal([]byte(src), &out); err != nil {
+		panic("builtin ports: " + err.Error())
+	}
+	return out
 }
 
 // Parse decodes a scene file. Unknown fields are errors, so a typo'd key
@@ -290,6 +539,9 @@ func (d *Doc) EffectiveKinds() map[string]Kind {
 		}
 		cur.Model, cur.Bounds, cur.LabelAt, cur.Status, cur.Drive = v.Model, v.Bounds, v.LabelAt, v.Status, v.Drive
 		cur.Component, cur.Assembly = v.Component, v.Assembly
+		if v.Ports != nil {
+			cur.Ports = v.Ports
+		}
 		// The members a kind reads are `members` plus whatever its drives,
 		// its status template and its assembly name, so nothing repeats
 		// the list.
@@ -338,6 +590,8 @@ func driveMembers(drives []Drive) []string {
 			add(d.Emissive.Bind)
 		case d.Visible != nil:
 			add(d.Visible.Bind)
+		case d.Pulse != nil:
+			add(d.Pulse.Bind)
 		}
 	}
 	return out
@@ -366,6 +620,66 @@ func assemblyMembers(a *Assembly) []string {
 		add(p.Bind["flowing"])
 	}
 	return out
+}
+
+var portRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
+
+func sortedPortNames(m map[string]Port) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// checkPipeRun holds a pipe's ends and run to the frame it sits in: an
+// anchor names a node of the frame and a port its kind has (when the
+// kind's ports are known — a kind of the app's is taken on trust), and
+// the run has at least two points counting the anchored ends.
+func checkPipeRun(p string, pipe Pipe, nodes []Node, kinds map[string]Kind, errf func(path, format string, a ...any)) {
+	ends := 0
+	for _, end := range []struct {
+		key string
+		a   *Anchor
+	}{{"from", pipe.From}, {"to", pipe.To}} {
+		if end.a == nil {
+			continue
+		}
+		ends++
+		ap := p + "/" + end.key
+		if end.a.Node == "" {
+			errf(ap+"/node", "must name a node")
+			continue
+		}
+		if end.a.Port == "" {
+			errf(ap+"/port", "must name one of the node's kind's ports")
+			continue
+		}
+		var node *Node
+		for i := range nodes {
+			if nodes[i].ID == end.a.Node {
+				node = &nodes[i]
+				break
+			}
+		}
+		if node == nil {
+			errf(ap+"/node", "no node %q in this frame", end.a.Node)
+			continue
+		}
+		if k, ok := kinds[node.Kind]; ok && k.Ports != nil {
+			if _, has := k.Ports[end.a.Port]; !has {
+				errf(ap+"/port", "kind %q has no port %q (it has %s)", node.Kind, end.a.Port, strings.Join(sortedPortNames(k.Ports), ", "))
+			}
+		}
+	}
+	if len(pipe.Points)+ends < 2 {
+		if ends > 0 {
+			errf(p+"/points", "needs at least two points counting the anchored ends")
+		} else {
+			errf(p+"/points", "needs at least two points")
+		}
+	}
 }
 
 func sortedKeys(m map[string]string) []string {
@@ -456,11 +770,26 @@ func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
 			errf(p+"/bounds", "must be 'auto' or { size: [w, h, d], center: [x, y, z] }")
 		}
 	}
-	if v.LabelAt != nil && (len(v.LabelAt) != 3 || !finite(v.LabelAt)) {
-		errf(p+"/labelAt", "must be [x, y, z] metres")
+	if v.LabelAt != nil {
+		checkPoint(p+"/labelAt", v.LabelAt, true, errf)
 	}
 	if v.Status != "" && !validStatusTemplate(v.Status) {
 		errf(p+"/status", `must be a template over members: "{Level:1} %%", "{Running?run:stopped}"`)
+	}
+	for _, name := range sortedPortNames(v.Ports) {
+		port := v.Ports[name]
+		pp := p + "/ports/" + name
+		if !portRe.MatchString(name) {
+			errf(pp, "a port name is letters, digits, _ or -")
+		}
+		if port.At == nil {
+			errf(pp+"/at", "must be [x, y, z] metres in the kind's frame, or { part?, anchor, offset? }")
+		} else {
+			checkPoint(pp+"/at", port.At, false, errf)
+		}
+		if port.Dir != nil && (len(port.Dir) != 3 || !finite(port.Dir) || (port.Dir[0] == 0 && port.Dir[1] == 0 && port.Dir[2] == 0)) {
+			errf(pp+"/dir", "must be a non-zero [x, y, z] direction")
+		}
 	}
 	if v.Model == "" && v.Drive != nil {
 		errf(p+"/drive", "drives need a model — without one the Svelte kind of this name renders")
@@ -476,6 +805,9 @@ func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
 	boolean := func(path string, e BoolExpr) {
 		if !memberRe.MatchString(strings.TrimPrefix(e.Bind, "!")) {
 			errf(path+"/bind", "must name a member of the struct (a leading ! negates)")
+		}
+		if e.Blink != nil && *e.Blink <= 0 {
+			errf(path+"/blink", "must be a rate in Hz, above 0")
 		}
 	}
 	axis := func(path, a string, xyz bool) {
@@ -500,7 +832,7 @@ func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
 			errf(dp+"/mesh", "must name a mesh in the model")
 		}
 		n := 0
-		for _, set := range []bool{d.Spin != nil, d.Turn != nil, d.Scale != nil, d.Tint != nil, d.Emissive != nil, d.Visible != nil} {
+		for _, set := range []bool{d.Spin != nil, d.Turn != nil, d.Scale != nil, d.Tint != nil, d.Emissive != nil, d.Visible != nil, d.Pulse != nil} {
 			if set {
 				n++
 			}
@@ -520,20 +852,42 @@ func checkKind(k string, v Kind, errf func(path, format string, a ...any)) {
 			axis(dp+"/scale/axis", d.Scale.Axis, true)
 			num(dp+"/scale/to", d.Scale.To)
 		case d.Tint != nil:
-			boolean(dp+"/tint", d.Tint.BoolExpr)
-			if d.Tint.On == "" {
-				errf(dp+"/tint/on", "must be a palette slot or a CSS colour")
+			if d.Tint.Ramp != nil {
+				checkRamp(dp+"/tint", d.Tint.Bind, d.Tint.Ramp, errf)
+				if d.Tint.On != "" || d.Tint.Off != "" || d.Tint.Threshold != nil || d.Tint.Blink != nil {
+					errf(dp+"/tint", "on, off, threshold and blink are not with a ramp")
+				}
+			} else {
+				boolean(dp+"/tint", d.Tint.BoolExpr)
+				if d.Tint.On == "" {
+					errf(dp+"/tint/on", "must be a palette slot or a CSS colour")
+				}
 			}
 		case d.Emissive != nil:
-			boolean(dp+"/emissive", d.Emissive.BoolExpr)
-			if d.Emissive.On == "" {
-				errf(dp+"/emissive/on", "must be a palette slot or a CSS colour")
+			if d.Emissive.Ramp != nil {
+				checkRamp(dp+"/emissive", d.Emissive.Bind, d.Emissive.Ramp, errf)
+				if d.Emissive.On != "" || d.Emissive.Threshold != nil || d.Emissive.Blink != nil {
+					errf(dp+"/emissive", "on, threshold and blink are not with a ramp")
+				}
+			} else {
+				boolean(dp+"/emissive", d.Emissive.BoolExpr)
+				if d.Emissive.On == "" {
+					errf(dp+"/emissive/on", "must be a palette slot or a CSS colour")
+				}
 			}
 			if d.Emissive.Intensity != nil && *d.Emissive.Intensity < 0 {
 				errf(dp+"/emissive/intensity", "must be ≥ 0")
 			}
 		case d.Visible != nil:
 			boolean(dp+"/visible", *d.Visible)
+		case d.Pulse != nil:
+			boolean(dp+"/pulse", d.Pulse.BoolExpr)
+			if d.Pulse.Hz != nil && *d.Pulse.Hz <= 0 {
+				errf(dp+"/pulse/hz", "must be a rate in Hz, above 0")
+			}
+			if d.Pulse.Amount != nil && (*d.Pulse.Amount <= 0 || *d.Pulse.Amount > 1) {
+				errf(dp+"/pulse/amount", "must be a fraction of the size, above 0 and at most 1")
+			}
 		}
 	}
 }
@@ -652,6 +1006,14 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 			if m == "" {
 				errf(fmt.Sprintf("/kinds/%s/members/%d", k, i), "empty member name")
 			}
+		}
+		if v.DefinedBy() == "file" {
+			// Unresolved (Check alone, without ResolveKindFiles): the path
+			// is held to its rules; what the file holds is checked once read.
+			if !kindPath(v.File) {
+				errf("/kinds/"+k, "a kind file is a {Name}.kind.json as a path relative to the scene file (hmi/src/lib/kinds/pump.kind.json)")
+			}
+			continue
 		}
 		checkKind(k, v, errf)
 		if v.Component != "" && v.Type == "" && len(v.Members) == 0 {
@@ -865,9 +1227,7 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 		}
 		for i, pipe := range a.Pipes {
 			p := fmt.Sprintf("%s/pipes/%d", ap, i)
-			if len(pipe.Points) < 2 {
-				errf(p+"/points", "needs at least two points")
-			}
+			checkPipeRun(p, pipe, a.Nodes, kinds, errf)
 			for j, pt := range pipe.Points {
 				vec3(fmt.Sprintf("%s/points/%d", p, j), pt, "metres")
 			}
@@ -964,9 +1324,7 @@ func Check(d *Doc, tags []TagInfo) (errs, warns []string) {
 
 	for i, pipe := range d.Pipes {
 		p := fmt.Sprintf("/pipes/%d", i)
-		if len(pipe.Points) < 2 {
-			errf(p+"/points", "needs at least two points")
-		}
+		checkPipeRun(p, pipe, d.Nodes, kinds, errf)
 		for j, pt := range pipe.Points {
 			vec3(fmt.Sprintf("%s/points/%d", p, j), pt, "metres")
 		}

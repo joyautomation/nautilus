@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<!-- Host page for the kind editor's gesture harness (kind.test.mjs).
+		     Stands in for the extension's webview shell (src/kindEditor.ts):
+		     <body data-scene-mode="kind"> mounts the kind editor from the SAME
+		     production scene-editor bundle, and this page performs the host side
+		     of the message protocol. No CSP, no acquireVsCodeApi, so vscodeApi.ts's
+		     fallback captures every posted message on window.__POSTED__. -->
+		<title>kind gesture harness</title>
+		<link rel="stylesheet" href="./scene-editor.css" />
+		<style>
+			html, body { margin: 0; height: 100%; }
+			#app { height: 100vh; }
+		</style>
+	</head>
+	<body data-scene-mode="kind">
+		<div id="app"></div>
+		<script>
+			window.__POSTED__ = [];
+			window.__deliver = (msg) => window.postMessage(msg, '*');
+			window.__posted = () => window.__POSTED__;
+			window.__ops = () => window.__POSTED__.filter((m) => m && m.type === 'kindOp').map((m) => m.op);
+			window.__reset = () => { window.__POSTED__.length = 0; };
+
+			const vpCenter = (el) => {
+				const r = el.getBoundingClientRect();
+				return { cx: r.left + r.width / 2, cy: r.top + r.height / 2, w: r.width, h: r.height, left: r.left, top: r.top };
+			};
+			window.__canvas = () => {
+				const c = document.querySelector('.stage canvas');
+				return c ? vpCenter(c) : null;
+			};
+			window.__labels = () =>
+				Array.from(document.querySelectorAll('.stage .lbl')).map((l) => ({
+					title: l.querySelector('b')?.textContent?.trim() ?? l.textContent.trim(), ...vpCenter(l)
+				}));
+			// The header's model state pill, the footer, the status preview.
+			window.__state = () => document.querySelector('header .state')?.textContent.trim() ?? '';
+			window.__footer = () => document.querySelector('footer')?.textContent.trim() ?? '';
+			window.__status = () => document.querySelector('[data-kind=status-preview]')?.textContent.trim() ?? null;
+			// A panel input by aria-label, with its value and centre.
+			window.__field = (label) => {
+				const i = document.querySelector('aside[aria-label=Kind] [aria-label="' + label + '"]');
+				return i ? { value: i.type === 'checkbox' ? i.checked : i.value, tag: i.tagName, ...vpCenter(i) } : null;
+			};
+			// Drive rows: mesh + channel per row, and each row's own fields.
+			window.__drives = () =>
+				Array.from(document.querySelectorAll('[data-kind=drive-row]')).map((r) => ({
+					mesh: r.querySelector('[aria-label=mesh]')?.value, channel: r.querySelector('[aria-label=channel]')?.value,
+					fields: Array.from(r.querySelectorAll('[aria-label]')).map((f) => f.getAttribute('aria-label')),
+					options: Array.from(r.querySelector('[aria-label=mesh]')?.options ?? []).map((o) => o.value)
+				}));
+			window.__button = (text) => {
+				const b = Array.from(document.querySelectorAll('button')).find((x) => x.textContent.trim().startsWith(text));
+				return b ? { active: b.classList.contains('active'), ...vpCenter(b) } : null;
+			};
+			window.__rotation = () => (window.__nxKind ? window.__nxKind.rotation() : null);
+			// The part picker: what is hovered / picked on the stage, where a
+			// part is on the page, the panel's chips and its picked line.
+			window.__hover = () => (window.__nxKind ? window.__nxKind.hover() : null);
+			window.__picked = () => (window.__nxKind ? window.__nxKind.picked() : null);
+			window.__partAt = (name) => (window.__nxKind ? window.__nxKind.partAt(name) : null);
+			window.__parts = () =>
+				Array.from(document.querySelectorAll('[data-kind=part]')).map((c) => ({
+					name: c.dataset.name, picked: c.classList.contains('picked'), drives: Number(c.querySelector('small')?.textContent ?? 0), ...vpCenter(c)
+				}));
+			window.__pickedLine = () => document.querySelector('[data-kind=picked]')?.textContent.replace(/\s+/g, ' ').trim() ?? null;
+			// Ports: the stage's marks (projected), the last click's point, the panel's rows.
+			window.__hit = () => (window.__nxKind ? window.__nxKind.hit() : null);
+			window.__kports = () => (window.__nxKind ? window.__nxKind.ports() : []);
+			window.__pointMode = (sel) => document.querySelector(sel + ' [data-kind=point]')?.dataset.mode ?? null;
+			window.__rampStops = (i) => Array.from(document.querySelectorAll('[data-kind=drive-row][data-index="' + i + '"] [data-kind=ramp-stop]')).map((r) => [Number(r.querySelector('[aria-label="stop value"]').value), r.querySelector('[aria-label="stop colour"]').value]);
+			window.__select = (label, value, within) => { const s = document.querySelector((within ?? 'aside[aria-label=Kind]') + ' [aria-label="' + label + '"]'); if (!s) return false; s.value = value; s.dispatchEvent(new Event('change', { bubbles: true })); return true; };
+			window.__portRows = () =>
+				Array.from(document.querySelectorAll('[data-kind=port-row]')).map((r) => ({
+					name: r.dataset.name, at: ['x', 'y', 'z'].map((a) => Number(r.querySelector('[aria-label="port at ' + a + '"]')?.value)),
+					dir: Array.from(r.querySelectorAll('[aria-label^="port dir"]')).map((i) => Number(i.value)), ...vpCenter(r)
+				}));
+			window.__rowPicked = (i) => document.querySelector('[data-kind=drive-row][data-index="' + i + '"]')?.classList.contains('picked') ?? null;
+			window.__ready = () => !!document.querySelector('aside[aria-label=Kind]') && !!document.querySelector('.stage canvas');
+		</script>
+		<script src="./scene-editor.js"></script>
+	</body>
+</html>

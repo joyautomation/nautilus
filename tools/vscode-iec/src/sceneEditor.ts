@@ -19,7 +19,8 @@ import * as path from "path";
 import { webviewOptions } from "./fbdPreview";
 import { applySceneOp, parseScene, type SceneOp } from "./sceneOps";
 import { paletteKinds } from "./sceneKinds";
-import { resolveSceneAssets } from "./sceneEditorLogic";
+import { inlineKindFilesOnDisk, resolveSceneAssets } from "./sceneEditorLogic";
+import { KindEditorProvider } from "./kindEditor";
 import { fetchTags, liveEnabled, reopenAsText } from "./mimicEditor";
 
 const DEBOUNCE_MS = 150;
@@ -101,16 +102,23 @@ export class SceneEditorProvider implements vscode.CustomTextEditorProvider {
 
     const postDoc = () => {
       try {
-        const doc = parseScene(document.getText());
+        const written = parseScene(document.getText());
+        // A `kinds` entry that names a kind file (§3g) is inlined from disk
+        // first, so the palette, the validation and the stage all see the
+        // kind the file holds; the report says which ones were not found.
+        const { doc, files } = inlineKindFilesOnDisk(written, sceneDir, exists, (f) => fs.readFileSync(f, "utf8"));
         const { doc: rendered, assets } = resolveSceneAssets(doc, sceneDir, exists, (f) =>
           panel.webview.asWebviewUri(vscode.Uri.file(f)).toString()
         );
+        const fileOf: Record<string, string> = {};
+        for (const f of files) fileOf[f.name] = f.path;
         void panel.webview.postMessage({
           type: "sceneDoc",
           doc,
           rendered,
           assets,
-          kinds: paletteKinds(doc),
+          kindFiles: files,
+          kinds: paletteKinds(doc, fileOf),
           title: document.uri.path.split("/").pop() ?? "scene",
         });
       } catch (err) {
@@ -170,6 +178,15 @@ export class SceneEditorProvider implements vscode.CustomTextEditorProvider {
         case "setSnapToGrid":
           setSnapConfig(!!msg.value);
           return;
+        // The palette's "edit" on a file-backed kind: open its file in the
+        // kind editor, beside the scene.
+        case "openKind": {
+          const p = typeof msg.value === "string" ? msg.value : "";
+          if (!p) return;
+          const uri = vscode.Uri.file(path.join(sceneDir, p));
+          void vscode.commands.executeCommand("vscode.openWith", uri, KindEditorProvider.viewType, vscode.ViewColumn.Beside);
+          return;
+        }
         case "sceneOp": {
           const op = msg.op;
           if (!op) return;

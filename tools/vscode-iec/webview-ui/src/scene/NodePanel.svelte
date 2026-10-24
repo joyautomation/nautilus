@@ -3,8 +3,8 @@
 	// Enter) as updateNode ops; nothing selected = the document. Optional
 	// fields clear with an empty value (the host's patch null deletes the
 	// key). Numbers are typed in metres and degrees, the document's units.
-	import type { Vec3 } from '@joyautomation/nautilus-hmi-3d';
-	import { ed, postOp } from './sceneState.svelte';
+	import { docPorts, type Vec3 } from '@joyautomation/nautilus-hmi-3d';
+	import { ed, postOp, selectPipe } from './sceneState.svelte';
 
 	const doc = $derived(ed.doc);
 	const node = $derived(ed.selected && doc ? (doc.nodes.find((n) => n.id === ed.selected) ?? null) : null);
@@ -58,6 +58,21 @@
 	}
 	const AXES = ['x', 'y', 'z'] as const;
 	const fmt = (v: number | undefined) => (v === undefined ? '' : String(Math.round(v * 1000) / 1000));
+	/** The selected node's ports: from the rendered document (kind files inlined). */
+	const nodePorts = $derived(node ? Object.keys(docPorts(ed.rendered, node.kind) ?? {}) : []);
+	const pipes = $derived(doc?.pipes ?? []);
+	const pipeText = (p: (typeof pipes)[number]) => {
+		const end = (a: { node: string; port: string } | undefined) => (a ? `${a.node}.${a.port}` : null);
+		const f = end(p.from);
+		const t = end(p.to);
+		const n = p.points?.length ?? 0;
+		if (f || t) return `${f ?? 'point'} → ${t ?? 'point'}${n ? ` · ${n} between` : ''}`;
+		return `${n} points`;
+	};
+	function deletePipe(i: number) {
+		postOp({ type: 'deletePipe', index: i });
+		if (ed.selectedPipe === i) selectPipe(null);
+	}
 </script>
 
 <aside aria-label="Properties">
@@ -98,6 +113,9 @@
 			<span>scale</span>
 			<input class="nx-input" type="number" step="0.1" min="0.01" value={fmt(node.scale)} onchange={scale} placeholder="1" />
 		</label>
+		{#if nodePorts.length}
+			<p class="note">ports: <code>{nodePorts.join(', ')}</code> — click one on the stage to run a pipe</p>
+		{/if}
 		{#if node.bind && Object.keys(node.bind).length}
 			<div class="head sub">bind</div>
 			<dl class="bind">
@@ -117,7 +135,7 @@
 			<dt>nodes</dt>
 			<dd>{doc.nodes.length}</dd>
 			<dt>pipes</dt>
-			<dd>{doc.pipes?.length ?? 0}</dd>
+			<dd>{pipes.length}</dd>
 			<dt>kinds</dt>
 			<dd>{Object.keys(doc.kinds ?? {}).length}</dd>
 			<dt>grid</dt>
@@ -125,6 +143,17 @@
 			<dt>look</dt>
 			<dd>{doc.look ?? 'lit'}{#if previewLook} <i>(stage: {previewLook})</i>{/if}</dd>
 		</dl>
+		{#if pipes.length}
+			<div class="head sub">Pipes</div>
+			<ul class="pipes">
+				{#each pipes as p, i (p.id ?? i)}
+					<li data-kind="pipe-row" data-index={i} class:selected={ed.selectedPipe === i}>
+						<button class="sel" onclick={() => selectPipe(ed.selectedPipe === i ? null : i)} title={ed.selectedPipe === i ? 'Deselect' : 'Select: its points get handles on the stage — click one, drag the gizmo'} aria-label="select pipe {i}">{p.id ? `${p.id} · ` : ''}{pipeText(p)}</button>
+						<button class="del" onclick={() => deletePipe(i)} title="Remove this pipe" aria-label="remove pipe {i}">×</button>
+					</li>
+				{/each}
+			</ul>
+		{/if}
 		<div class="head sub">Camera</div>
 		{#if ed.view}
 			<div class="cam">
@@ -249,5 +278,65 @@
 		color: var(--nx-muted);
 		margin: 8px 0 0;
 		line-height: 1.4;
+	}
+	.note {
+		margin: 0;
+		color: var(--nx-muted);
+		line-height: 1.4;
+		overflow-wrap: anywhere;
+	}
+	.note code {
+		font-family: var(--nx-mono);
+		color: var(--nx-ui-ink);
+	}
+	.pipes {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+	}
+	.pipes li {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		font-family: var(--nx-mono);
+		font-size: 11px;
+	}
+	.pipes li.selected {
+		border-color: var(--nx-accent);
+	}
+	.pipes li .sel {
+		background: none;
+		border: 0;
+		color: inherit;
+		font: inherit;
+		text-align: left;
+		padding: 0;
+		cursor: pointer;
+		flex: 1;
+		min-width: 0;
+	}
+	.pipes li .sel {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.pipes .del {
+		border: 1px solid transparent;
+		border-radius: 4px;
+		background: transparent;
+		color: var(--nx-muted);
+		cursor: pointer;
+		font: inherit;
+		font-size: 14px;
+		line-height: 1;
+		padding: 1px 6px;
+	}
+	.pipes .del:hover {
+		color: var(--nx-err);
 	}
 </style>

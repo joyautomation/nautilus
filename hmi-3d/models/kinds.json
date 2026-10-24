@@ -1,18 +1,34 @@
 {
 	"tank": {
 		"model": "models/tank.glb",
-		"drive": [{ "mesh": "Fluid", "scale": { "axis": "y", "to": { "bind": "Level", "scale": 0.0039, "min": 0.005, "max": 0.39 } } }]
+		"ports": {
+			"inlet": {"at": [0, 0.46, 0], "dir": [0, 1, 0]},
+			"outlet": {"at": [0.25, 0, 0], "dir": [1, 0, 0]}
+		},
+		"drive": [
+			{"mesh": "Fluid", "scale": {"axis": "y", "to": {"bind": "Level", "scale": 0.0039, "min": 0.005, "max": 0.39}}}
+		]
 	},
 	"pump": {
 		"model": "models/pump.glb",
+		"ports": {
+			"suction": {"at": [-0.21, 0.09, 0], "dir": [-1, 0, 0]},
+			"discharge": {"at": [0, 0.21, 0], "dir": [0, 1, 0]}
+		},
 		"drive": [
-			{ "mesh": "Coupling", "spin": { "axis": "x", "revPerS": { "bind": "Speed", "scale": 0.02 } } },
-			{ "mesh": "Motor", "tint": { "bind": "Running", "on": "running" } },
-			{ "mesh": "Volute", "tint": { "bind": "Running", "on": "running" } }
+			{"mesh": "Coupling", "spin": {"axis": "x", "revPerS": {"bind": "Speed", "scale": 0.02}}},
+			{"mesh": "Motor", "tint": {"bind": "Running", "on": "running"}},
+			{"mesh": "Volute", "tint": {"bind": "Running", "on": "running"}}
 		]
 	},
 	"valve": {
 		"model": "models/valve.glb",
-		"drive": [{ "mesh": "Handle", "turn": { "axis": "z", "deg": { "bind": "Pos", "scale": -0.9, "offset": 90 } } }]
+		"ports": {
+			"in": {"at": [0, -0.08, 0], "dir": [0, -1, 0]},
+			"out": {"at": [0, 0.08, 0], "dir": [0, 1, 0]}
+		},
+		"drive": [
+			{"mesh": "Handle", "turn": {"axis": "z", "deg": {"bind": "Pos", "scale": -0.9, "offset": 90}}}
+		]
 	}
 }

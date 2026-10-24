@@ -37,6 +37,9 @@ export type PaletteKind = {
   source?: string;
   /** An assembly's part count, for the palette's caption. */
   parts?: number;
+  /** The kind file the entry names (design §3g), relative to the scene —
+   * the palette says so, and offers to open it in the kind editor. */
+  file?: string;
 };
 
 type Json = Record<string, unknown>;
@@ -89,20 +92,23 @@ export function entryMembers(entry: unknown): string[] {
  * malformed document (no object, `kinds` not an object) lists the
  * built-ins alone — the palette never disappears because a file is
  * mid-edit. */
-export function paletteKinds(doc: unknown): PaletteKind[] {
+export function paletteKinds(doc: unknown, files: Record<string, string> = {}): PaletteKind[] {
   const kinds = isObj(doc) && isObj(doc.kinds) ? doc.kinds : {};
   const out: PaletteKind[] = [];
+  const withFile = (row: PaletteKind): PaletteKind => (files[row.name] ? { ...row, file: files[row.name] } : row);
   for (const b of BUILTIN_KINDS) {
     const entry = kinds[b.name];
     const e = isObj(entry) ? entry : undefined;
     const extra = entryMembers(e).filter((m) => !b.members.includes(m));
-    out.push({
-      name: b.name,
-      definedBy: e && str(e.model) ? "model" : "builtin",
-      type: (e && str(e.type)) ?? b.type,
-      members: [...b.members, ...extra],
-      ...(e && str(e.model) ? { source: str(e.model) } : {}),
-    });
+    out.push(
+      withFile({
+        name: b.name,
+        definedBy: e && str(e.model) ? "model" : "builtin",
+        type: (e && str(e.type)) ?? b.type,
+        members: [...b.members, ...extra],
+        ...(e && str(e.model) ? { source: str(e.model) } : {}),
+      })
+    );
   }
   const custom = Object.keys(kinds)
     .filter((k) => k && !BUILTIN_KINDS.some((b) => b.name === k))
@@ -110,7 +116,9 @@ export function paletteKinds(doc: unknown): PaletteKind[] {
   for (const name of custom) {
     const e = kinds[name];
     if (!isObj(e)) {
-      out.push({ name, definedBy: "declared", members: [] });
+      // A kind file not inlined (missing, or not a kind): the name stays
+      // in the palette, as the file it names.
+      out.push(withFile({ name, definedBy: "declared", members: [], ...(typeof e === "string" ? { file: e } : {}) }));
       continue;
     }
     const definedBy: KindDefinedBy = str(e.model) ? "model" : str(e.component) ? "component" : isObj(e.assembly) ? "assembly" : "declared";
@@ -118,7 +126,7 @@ export function paletteKinds(doc: unknown): PaletteKind[] {
     if (definedBy === "model") row.source = str(e.model);
     if (definedBy === "component") row.source = str(e.component);
     if (definedBy === "assembly") row.parts = Array.isArray((e.assembly as Json).nodes) ? ((e.assembly as Json).nodes as unknown[]).length : 0;
-    out.push(row);
+    out.push(withFile(row));
   }
   return out;
 }

@@ -96,3 +96,66 @@ function setPointer(doc: unknown, pointer: string, value: unknown): void {
   if (Array.isArray(cur)) cur[Number(last)] = value;
   else if (isObj(cur)) cur[last] = value;
 }
+
+// ── kind files ─────────────────────────────────────────────────────────────
+
+/** One `kinds` entry that names a kind file: where it was looked for, and
+ * what came of it — `file` absent = not found, `error` = found but not a
+ * kind. Posted to the webview for its banner and the palette's caption. */
+export type KindFileReport = { name: string; path: string; file?: string; error?: string };
+
+/** A kind file path (hmi-3d's isKindPath): relative to the scene file,
+ * a `.kind.json`, no scheme, not absolute, no `..`. */
+export function isKindPath(p: unknown): p is string {
+  return typeof p === "string" && p.endsWith(".kind.json") && !/^[a-z]+:/i.test(p) && !p.startsWith("/") && !p.split(/[\\/]/).includes("..");
+}
+
+/** The document with every kind-file entry replaced by the object the
+ * file holds — what hmi-3d's inlineKindFiles does from the app's modules,
+ * done here from disk, relative to the scene file's directory (the rule a
+ * component path follows). An entry whose file is missing or not a kind
+ * stays as written and is reported; a `component` or `assembly` in a
+ * kind file is refused as everywhere else. */
+export function inlineKindFilesOnDisk(
+  doc: unknown,
+  sceneDir: string,
+  exists: (file: string) => boolean,
+  read: (file: string) => string
+): { doc: unknown; files: KindFileReport[] } {
+  const files: KindFileReport[] = [];
+  if (!isObj(doc) || !isObj(doc.kinds)) return { doc, files };
+  const entries = Object.entries(doc.kinds);
+  if (!entries.some(([, k]) => typeof k === "string")) return { doc, files };
+  const copy = JSON.parse(JSON.stringify(doc)) as Json;
+  const kinds = copy.kinds as Json;
+  for (const [name, k] of entries) {
+    if (typeof k !== "string") continue;
+    if (!isKindPath(k)) {
+      files.push({ name, path: k, error: "a kind file is a {Name}.kind.json as a path relative to the scene file" });
+      continue;
+    }
+    const file = path.join(sceneDir, k);
+    if (!exists(file)) {
+      files.push({ name, path: k });
+      continue;
+    }
+    let obj: unknown;
+    try {
+      obj = JSON.parse(read(file));
+    } catch (err) {
+      files.push({ name, path: k, file, error: `not valid JSON: ${err instanceof Error ? err.message : String(err)}` });
+      continue;
+    }
+    if (!isObj(obj)) {
+      files.push({ name, path: k, file, error: "a kind file is an object: { model, status, drive, ... }" });
+      continue;
+    }
+    if (obj.component !== undefined || obj.assembly !== undefined) {
+      files.push({ name, path: k, file, error: "a kind file is a data kind or a contract — a component or an assembly kind stays inline in the scene" });
+      continue;
+    }
+    kinds[name] = obj;
+    files.push({ name, path: k, file });
+  }
+  return { doc: copy, files };
+}

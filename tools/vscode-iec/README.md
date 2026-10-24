@@ -161,6 +161,13 @@ the scene, and you drag what landed in the wrong place.
   the orbit camera into the document. A click picks through glass (the
   pump inside the tank, not the tank); click the same spot again to go
   one deeper, or click a node's label.
+- **Pipes port to port.** Every node's ports wear amber marks; click
+  one, then another, and a pipe runs between them (an orthogonal route,
+  anchored at both ends, so it follows its nodes). Select a pipe in the
+  panel and its points wear handles: click one for the gizmo, drag,
+  `Del` removes the point, `Esc` clears. A pipe still on its suggested
+  route is re-routed when either node moves; one you laid by hand is
+  left as laid.
 - **Lit / Flat / Paper** in the toolbar previews a look; **Use … as the
   scene's look** in the panel writes it to the document; the models
   render in every look (on paper as white fills with inked edges).
@@ -172,6 +179,75 @@ the scene, and you drag what landed in the wrong place.
 - With a controller running, bound nodes animate while you place them.
   Every gesture is one text edit, so undo is text undo and a move diffs as
   one `pos` line.
+
+## 3D kind editor
+
+A `{Name}.kind.json` — a 3D kind in a file of its own, the same keys a
+scene's `kinds` entry takes (`type`, `members`, `model`, `bounds`,
+`labelAt`, `status`, `drive`), named by the scene as
+`"pump": "hmi/src/lib/kinds/pump.kind.json"` — opens as the kind itself:
+its model on a turntable (`T` toggles), in the lit, flat or paper look.
+
+- **Click a part on the model to pick it.** The part under the pointer
+  lights up; a click picks it (a second click on the same spot goes to
+  the part behind — the impeller inside the volute), the panel names it
+  with the parts it sits in and its drives, and **Add drive** starts on
+  it. The **Parts** list picks by name; hovering a name or a drive row
+  lights the part on the model. `Esc` or a click on the ground clears.
+- **Ports go where you click.** With a part picked, **Add port here**
+  puts a port at the point the click landed, facing out of the surface
+  (`"ports": { "discharge": { "at": [...], "dir": [...] } }`); each port
+  is an amber mark on the model and a row in the panel (name, `at`,
+  `dir`, **here** to move it to the last click, `×`). A scene anchors a
+  pipe end to a port — `"from": { "node": "P101", "port": "discharge" }`
+  — and the pipe follows the node when it is moved. The built-in tank,
+  pump and valve have ports of their own (`inlet` / `outlet`, `suction` /
+  `discharge`, `in` / `out`).
+- **A point by name.** A port's `at`, and `labelAt`, may be a place on a
+  box instead of metres: **Add port at… top of Motor** writes
+  `{ "part": "Motor", "anchor": "top" }`; `"labelAt": "top"` is the top of
+  the bounds; `top-front`, `left`, `center` and an `offset` are there
+  too. It survives the model being re-exported. Each such row has a
+  mode menu (metres · on the bounds · on a part).
+- **A colour from a number.** Tick **ramp** on a tint or emissive drive
+  and it becomes stops of value → colour (`"ramp": [[20, "fluid"], [90,
+  "critical"]]`), interpolated between stops and clamped beyond them;
+  the sample value slides the colour live.
+- **Blink and pulse in one click.** **Blink on {member}** puts a glow
+  on the picked part that flashes twice a second while the member is
+  true; **Pulse on {member}** makes the part breathe (±10 % once a
+  second). Each is an ordinary drive row afterwards: every boolean row
+  (`tint`, `emissive`, `visible`) has a **blink** field in Hz, and a
+  `pulse` row has **Hz** and **±** (`"pulse": { "bind": "Alarm", "hz": 1,
+  "amount": 0.1 }`).
+- The model's named objects fill every drive's mesh menu, so a drive
+  targets something that exists; a name the model lacks is flagged. A
+  drive is a row: its mesh, its channel (`spin`, `turn`, `scale`, `tint`,
+  `emissive`, `visible`, `pulse`) and the channel's few fields. **Add
+  drive**, `×` removes.
+- **Eject to component…** writes `{Name}.svelte` beside the kind file —
+  the model and these drives as code (`<ModelNode data={{ model, drive }}
+  …/>` from `@joyautomation/nautilus-hmi-3d`, plus the contract `naut
+  check` holds nodes to), offers to point the scenes that name the file
+  at it, and opens it beside: the place for anything the drive
+  vocabulary cannot say, with nothing lost on the way out. The kind file
+  stays.
+- **Ask AI…** picks a prompt about this file — a model from a picture,
+  sensible part names, drives for the UDT's members, a variant — and
+  opens your editor's chat with it (or copies it for Claude Code). The
+  open-ended work is the AI's; the tweaks stay in this panel.
+- **Sample values** for the members the kind reads (a checkbox where a
+  tint or a `{X?a:b}` reads it, a number elsewhere) drive the meshes and
+  preview the `status` text; they are never written to the file.
+- `type`, `members`, `model`, `status`, `labelAt` and `bounds` are edited
+  beside it. Every change is one text edit, one drive per line, so undo
+  is text undo and a drive diffs as one line. The scene editor's palette
+  captions a file-backed kind `glTF · file` and its **edit kind** link
+  opens the file beside the scene.
+- The model is found up from the file's folder through the same roots
+  the scene editor uses (`hmi/static/`, `hmi/build/`); not found, the
+  panel says so and the kind draws as a grey box with its drives still
+  editable by name.
 
 ## Testing
 

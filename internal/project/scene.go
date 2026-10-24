@@ -103,7 +103,11 @@ func (p *Project) CheckScenes(fsys fs.FS, rt *runtime.Runtime) (reports []SceneR
 			errs = append(errs, fmt.Sprintf("scene %s: %s", f, perr))
 			continue
 		}
-		e, w := scene.Check(doc, tags)
+		// A kind file's path is relative to the scene file, like a
+		// component's; what it holds is checked as if it were inline.
+		e := scene.ResolveKindFiles(doc, func(f string) ([]byte, error) { return fs.ReadFile(fsys, path.Clean(f)) })
+		ce, w := scene.Check(doc, tags)
+		e = append(e, ce...)
 		e = append(e, scene.CheckAssets(doc, p.assetExists(fsys))...)
 		// A component path is relative to the scene file, which sits at the
 		// project root (SceneFiles).
