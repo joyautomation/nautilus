@@ -573,9 +573,9 @@ func (d *Driver) flushCount(c *Client) (int, error) {
 				errs = append(errs, fmt.Errorf("%s: %w", name, err))
 				continue
 			}
-			addr := uint32(addrScratchFloats + b.Index*4)
+			addr := addrScratchFloats + uint32(b.Index*4)
 			if b.Point == PointAO {
-				addr = uint32(addrAnalogWrite + b.Slot*pointModuleStride + b.Channel*pointChannelStride)
+				addr = addrAnalogWrite + uint32(b.Slot*pointModuleStride+b.Channel*pointChannelStride)
 			}
 			data := make([]byte, 4)
 			binary.BigEndian.PutUint32(data, math.Float32bits(float32(f)))
@@ -588,7 +588,7 @@ func (d *Driver) flushCount(c *Client) (int, error) {
 			}
 			data := make([]byte, 4)
 			binary.BigEndian.PutUint32(data, uint32(int32(i)))
-			writes = append(writes, pointWrite{uint32(addrScratchInts + b.Index*4), data, []string{name}})
+			writes = append(writes, pointWrite{addrScratchInts + uint32(b.Index*4), data, []string{name}})
 		}
 	}
 	if len(momo) > 0 {
@@ -604,7 +604,7 @@ func (d *Driver) flushCount(c *Client) (int, error) {
 			binary.BigEndian.PutUint32(data[off:], mask[0])
 			binary.BigEndian.PutUint32(data[off+4:], mask[1])
 		}
-		writes = append([]pointWrite{{uint32(addrDigitalMOMO + s.lo*momoModuleStride), data, momoNames}}, writes...)
+		writes = append([]pointWrite{{addrDigitalMOMO + uint32(s.lo*momoModuleStride), data, momoNames}}, writes...)
 	}
 	if len(bitNames) > 0 {
 		data := make([]byte, 16)

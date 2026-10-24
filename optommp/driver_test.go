@@ -283,7 +283,7 @@ func TestDriverAnalogOutput(t *testing.T) {
 	dev := newBenchDevice()
 	// A GRV-OVMALC-8 in slot 4, channels at 0-10 V.
 	for i := 0; i < 8; i++ {
-		row := uint32(addrChannelConfig + 4*configModuleStride + i*configChannelStride)
+		row := addrChannelConfig + uint32(4*configModuleStride+i*configChannelStride)
 		dev.PutU32(row, 0xA0000003)
 		dev.PutU32(row+4, 0xA0000020)
 		dev.PutU32(addrPackedValues+uint32(4*32+i)*4, 0)
