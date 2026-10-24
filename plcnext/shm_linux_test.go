@@ -32,10 +32,11 @@ type fakeShim struct {
 	run    bool
 	frame  [shmFrameLen]byte // the "bus" output frame
 
-	stalled atomic.Bool
-	cycles  uint64
-	stop    chan struct{}
-	done    chan struct{}
+	stalled  atomic.Bool
+	midWrite atomic.Bool // stalled with its sequence odd: descheduled inside a write
+	cycles   uint64
+	stop     chan struct{}
+	done     chan struct{}
 }
 
 func startFakeShim(t *testing.T, path string) *fakeShim {
@@ -80,6 +81,14 @@ func (s *fakeShim) loop() {
 		}
 		if s.stalled.Load() {
 			continue
+		}
+		if seq := s.seq(shmOffInSeq); s.midWrite.Load() {
+			if q := atomic.LoadUint32(seq); q&1 == 0 {
+				atomic.StoreUint32(seq, q+1)
+			}
+			continue
+		} else if q := atomic.LoadUint32(seq); q&1 == 1 {
+			atomic.StoreUint32(seq, q+1)
 		}
 		s.cycles++
 		now := monoNow()
@@ -242,6 +251,22 @@ func TestDriverOverShm(t *testing.T) {
 	if h := d.Health(); h.Degraded != "" || h.Reads <= reads {
 		t.Errorf("after resume: %+v", h)
 	}
+
+	// A shim descheduled inside its write leaves the sequence odd: the
+	// driver keeps its last copy (still Good, no error) until that copy is
+	// as old as a stall, then it is one.
+	errs = d.Health().Errors
+	shim.midWrite.Store(true)
+	eventually(t, "a torn page was never held", func() bool { return d.Health().Shim.Held > 0 })
+	if h := d.Health(); h.Degraded == "" && h.Errors != errs {
+		t.Errorf("a held read counted %d errors", h.Errors-errs)
+	}
+	eventually(t, "a shim stuck mid-write never made the inputs Stale", func() bool { return d.Quality()["DI_00"] == nio.Stale })
+	if why := d.Health().Degraded; !strings.Contains(why, "has not cycled") {
+		t.Errorf("stuck mid-write: degraded %q", why)
+	}
+	shim.midWrite.Store(false)
+	eventually(t, "a shim that finished its write never made the inputs Good", func() bool { return d.Quality()["DI_00"] == nio.Good })
 
 	// A shim that restarted (the runtime did) ends the session, so the
 	// BusConductor handshake runs again on a fresh connection.

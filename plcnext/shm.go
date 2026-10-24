@@ -111,7 +111,9 @@ func (s ShimState) FIFO() bool { return s.Status&shmStFIFO != 0 }
 func (s ShimState) Watchdog() bool { return s.Status&shmStWatchdog != 0 }
 
 // errShmTorn: the shim was mid-write every time this side looked. It
-// writes for microseconds a millisecond, so this is a symptom, not weather.
+// writes for microseconds a millisecond, but a best-effort shim can be
+// descheduled inside that window (the bench sees it now and then),
+// so the driver keeps its last copy for the scan rather than failing it.
 var errShmTorn = errors.New("plcnext: shm: the shim was mid-write on every try")
 
 // shmPage is a mapping of the page.
@@ -142,12 +144,14 @@ func (p *shmPage) header() error {
 }
 
 // read copies the shim's block between two equal even sequence reads.
-// The shim never stops for us, so a bounded number of tries.
-func (p *shmPage) read(st *ShimState) error {
+// The shim never stops for us, so a bounded number of tries; st changes
+// only on success.
+func (p *shmPage) read(out *ShimState) error {
 	if err := p.header(); err != nil {
 		return err
 	}
 	seq := p.seq(shmOffInSeq)
+	var st ShimState
 	for range 64 {
 		s1 := atomic.LoadUint32(seq)
 		if s1&1 == 1 {
@@ -175,6 +179,7 @@ func (p *shmPage) read(st *ShimState) error {
 		st.OutNs = int64(p.u64(shmOffOutNs))
 		st.OutGen = p.u64(shmOffOutGen)
 		st.WatchdogMs = p.u32(shmOffWatchdogMs)
+		*out = st
 		return nil
 	}
 	return errShmTorn

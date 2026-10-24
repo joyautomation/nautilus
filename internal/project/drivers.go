@@ -588,19 +588,37 @@ func plcnextStatus(h plcnext.Health) server.DriverStatus {
 		{Label: "writes", Value: float64(h.Writes), Volatile: true},
 		{Label: "errors", Value: float64(h.Errors)},
 		{Label: "rtt", Value: float64(h.RTTus) / 1000, Text: fmt.Sprintf("%.2f ms", float64(h.RTTus)/1000), Volatile: true},
-		{Label: "image", Value: float64(h.InBytes), Text: fmt.Sprintf("%d in / %d out bytes", h.InBytes, h.OutBytes)},
+		{Label: "i/o bytes", Value: float64(h.InBytes), Text: fmt.Sprintf("%d / %d", h.InBytes, h.OutBytes)},
 	}
+	// The card's tiles hold about nine characters of value and ten of
+	// label, so each shim fact is a short value under its own label;
+	// `naut plcnext shm` has the long form.
 	if sh := h.Shim; sh != nil {
-		sched := "best-effort"
+		sched := "normal"
 		if sh.FIFO {
-			sched = "SCHED_FIFO"
+			sched = "FIFO"
+		}
+		latePct := 0.0
+		if sh.Cycles > 0 {
+			latePct = 100 * float64(sh.Late) / float64(sh.Cycles)
+		}
+		// The shim reads the outputs a cycle after this driver writes them,
+		// so one generation behind is current.
+		applied := "current"
+		if sh.Written > sh.Applied+1 {
+			applied = fmt.Sprintf("%d behind", sh.Written-sh.Applied)
 		}
 		s.Metrics = append(s.Metrics,
 			server.DriverMetric{Label: "input age", Value: float64(sh.InputAgeUs) / 1000, Text: fmt.Sprintf("%.2f ms", float64(sh.InputAgeUs)/1000), Volatile: true},
-			server.DriverMetric{Label: "shim cycle", Value: float64(sh.PeriodUs), Text: fmt.Sprintf("%d µs, %s", sh.PeriodUs, sched)},
-			server.DriverMetric{Label: "shim late", Value: float64(sh.Late), Text: fmt.Sprintf("%d of %d (>%d µs), worst %.1f ms", sh.Late, sh.Cycles, sh.LateUs, float64(sh.WorstUs)/1000), Volatile: true},
-			server.DriverMetric{Label: "outputs applied", Value: float64(sh.Applied), Text: fmt.Sprintf("gen %d of %d", sh.Applied, sh.Written), Volatile: true},
+			server.DriverMetric{Label: "shim cycle", Value: float64(sh.PeriodUs) / 1000, Text: fmt.Sprintf("%g ms", float64(sh.PeriodUs)/1000)},
+			server.DriverMetric{Label: "shim sched", Value: 0, Text: sched},
+			server.DriverMetric{Label: "shim late", Value: latePct, Text: fmt.Sprintf("%.2f %%", latePct), Volatile: true},
+			server.DriverMetric{Label: "shim worst", Value: float64(sh.WorstUs) / 1000, Text: fmt.Sprintf("%.1f ms", float64(sh.WorstUs)/1000), Volatile: true},
+			server.DriverMetric{Label: "outputs", Value: float64(sh.Written - min(sh.Applied, sh.Written)), Text: applied, Volatile: true},
 		)
+		if sh.Held > 0 {
+			s.Metrics = append(s.Metrics, server.DriverMetric{Label: "held reads", Value: float64(sh.Held), Volatile: true})
+		}
 	}
 	return s
 }

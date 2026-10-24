@@ -84,7 +84,8 @@ type Driver struct {
 	reads      atomic.Uint64
 	writes     atomic.Uint64
 	errs       atomic.Uint64
-	lastErr    atomic.Value // string
+	held       atomic.Uint64 // shm reads that kept the previous copy (reading.held)
+	lastErr    atomic.Value  // string
 	rttUs      atomic.Int64
 
 	cancel context.CancelFunc
@@ -361,6 +362,7 @@ type reading struct {
 	running bool        // the bus exchanges process data
 	why     string      // when the reading is degraded: what is wrong, now
 	cause   string      // … and a stable name for it, so a change is logged once, not every scan
+	held    bool        // the shim was mid-write every try: this is the previous copy
 }
 
 // grpcImage is the data-access route: one Read of the input elements plus
@@ -416,8 +418,14 @@ type shmImage struct {
 }
 
 func (s *shmImage) read(_ context.Context, n int) (reading, error) {
+	held := false
 	if err := s.p.read(&s.st); err != nil {
-		return reading{q: nio.Stale, why: err.Error(), cause: "page"}, nil
+		// Mid-write every try: keep the last copy for this scan. Its stamp
+		// still ages, so a shim that died mid-write turns Stale below.
+		if !errors.Is(err, errShmTorn) || s.st.StampNs == 0 {
+			return reading{q: nio.Stale, why: err.Error(), cause: "page"}, nil
+		}
+		held = true
 	}
 	switch {
 	case s.started == 0:
@@ -435,7 +443,7 @@ func (s *shmImage) read(_ context.Context, n int) (reading, error) {
 	if age := time.Duration(now - s.st.FrameNs); age > shmStaleAfter {
 		return reading{q: nio.Stale, why: fmt.Sprintf("plcnext: shm: the input frame is %v old", age.Round(time.Millisecond)), cause: "frame"}, nil
 	}
-	r := reading{img: s.st.Inputs[:n], q: nio.Good, running: true}
+	r := reading{img: s.st.Inputs[:n], q: nio.Good, running: true, held: held}
 	if s.st.RunKnown() && !s.st.Running() {
 		r.q, r.running = nio.Bad, false
 	}
@@ -459,6 +467,9 @@ func (d *Driver) poll(ctx context.Context, im image) error {
 	}
 	d.rttUs.Store(time.Since(t0).Microseconds())
 	d.reads.Add(1)
+	if r.held {
+		d.held.Add(1)
+	}
 	d.running.Store(r.running)
 
 	d.mu.Lock()
@@ -606,6 +617,7 @@ type ShimHealth struct {
 	FIFO, Watchdog, RunKnown bool
 	InputAgeUs               int64  // how old the input frame was when this driver read it
 	Written, Applied         uint64 // output generations: this driver's last, and the one in the bus frame
+	Held                     uint64 // this driver's reads that kept the previous copy: the shim was mid-write every try
 }
 
 // Health reports the driver's state for /api/drivers.
@@ -628,7 +640,7 @@ func (d *Driver) Health() Health {
 			PID: st.PID, PeriodUs: st.PeriodNs / 1000, LateUs: st.LateUs, WorstUs: st.WorstUs, LastUs: st.LastUs,
 			Cycles: st.Cycles, Late: st.Late, Torn: st.Torn,
 			FIFO: st.FIFO(), Watchdog: st.Watchdog(), RunKnown: st.RunKnown(),
-			InputAgeUs: d.inAgeUs, Written: st.OutGen, Applied: st.Applied,
+			InputAgeUs: d.inAgeUs, Written: st.OutGen, Applied: st.Applied, Held: d.held.Load(),
 		}
 	}
 	d.mu.Unlock()
