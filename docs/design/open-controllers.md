@@ -270,6 +270,34 @@ quarter of what the 5 ms poll cost `naut` (35.3 %). From the laptop the
 watchdog is tested against the in-process device only; it has not been
 switched on on the bench unit (it moves real outputs; James's call).
 
+**PREEMPT_RT on the EPIC (2026-10-24, night).** The processor's kernel is
+`5.15.91-rt57 PREEMPT_RT`, and a task's `priority:` uses it once the
+binary may: `sudo setcap cap_sys_nice+ep naut` (the shell user's rtprio
+limit is 0). The bench project, polling, 20 ms task and 20 ms driver
+scan, firmware 4.1.2.0, Ignition Edge and the PAC engine running beside
+it. Each row is 5 minutes (≈ 15,100 scans) after a 10 s warm-up. Lateness
+is the task's wake-up lateness from the runtime's own histogram, so values
+are bucket ranges. "4 hogs" is four `while :; do :; done` shells at
+normal priority, one per core. Priority 20 sits below mmpServer, which runs
+16 threads at SCHED_FIFO 30.
+
+| task | load | p50 | p99 | p99.9 | max | late > 2 ms | driver scan p50 / p99 / max |
+|---|---|---|---|---|---|---|---|
+| normal | quiet | 50–100 µs | 0.5–1 ms | 2–5 ms | 10–20 ms | 31 | 1.93 / 4.45 / 5.64 ms |
+| FIFO 20 | quiet | 50–100 µs | 200–500 µs | 200–500 µs | 2–5 ms | 1 | 1.64 / 3.68 / 4.67 ms |
+| normal | 4 hogs | 50–100 µs | 0.5–1 ms | 1–2 ms | 5–10 ms | 6 | 1.95 / 6.05 / 8.54 ms |
+| FIFO 20 | 4 hogs | 50–100 µs | 100–200 µs | 200–500 µs | 200–500 µs | 0 | 1.79 / 5.88 / 6.10 ms |
+
+FIFO 20 takes the tail off the task. Under load, its worst wake-up went
+from 5–10 ms to under 0.5 ms, with none late. The quiet EPIC was worse than
+the loaded one at normal priority. A likely cause is Ignition's bursts and
+idle cores waking up, but that was not investigated, nor was the one
+2–5 ms wake left at FIFO 20 on a quiet EPIC. The driver gains nothing. Its
+poll loop still runs at normal priority, and each request waits on
+mmpServer, so the I/O scan's p99 is 4–6 ms in every row. The task's
+timing is now tighter than the inputs it reads (§2.4). Every row had zero
+driver errors and no overruns.
+
 ### 2.4 Not done, and why
 
 - **groov Manage REST API.** Richer (module names, channel names from the
@@ -361,6 +389,11 @@ switched on on the bench unit (it moves real outputs; James's call).
   time; which outputs it moves, and to what, stays groov Manage
   configuration (the driver reports how many bound outputs have one).
   Not switched on on the bench yet (§2.3).
+- **The driver at real-time priority.** `priority:` covers the task's
+  thread, not the OptoMMP poll or stream loop (§2.3, PREEMPT_RT). A
+  manifest `priority:` that locks the driver's goroutine to a thread and
+  applies SCHED_FIFO the same way would close that gap. Not built. Above
+  mmpServer's 30 it would starve the server it waits on.
 - **Counter reset.** `_Count` reads the feature value; clearing it (a
   read of the read-and-clear area's +0 quadlet) is not exposed yet.
 - **Analog min/max** (`F0260008`) is not bound; one read per module per
