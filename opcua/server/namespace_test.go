@@ -15,7 +15,7 @@ import (
 // plain methods, so the address-space rules can be checked without a
 // socket.
 func newNamespace(rt *runtime.Runtime) *namespace {
-	return &namespace{rt: rt, uri: "urn:test", title: "proj", sweep: 100 * time.Millisecond, id: 1, stamps: map[string]stamp{}}
+	return &namespace{rt: rt, uri: "urn:test", title: "proj", sweep: 100 * time.Millisecond, id: 1, stamps: map[string]stamp{}, mstamps: map[string]mstamp{}}
 }
 
 func TestNamespaceResolvesOnlyItsOwnStringIDs(t *testing.T) {

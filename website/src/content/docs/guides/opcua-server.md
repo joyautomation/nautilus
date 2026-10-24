@@ -26,9 +26,11 @@ is a line you write: `opc.tcp://0.0.0.0:4840` listens on every interface.
 An OPC UA client finds an endpoint by its exact URL, so the server
 advertises one per name it answers to: the host you wrote, every interface
 address when you wrote `0.0.0.0`, the machine's host name, and loopback. A
-client may dial any of them, and one that asks about a URL the server
-never heard of (a NAT address, a DNS alias) is given the whole list to
-choose from rather than nothing.
+client may dial any of them. One that asks about a URL the server never
+heard of (a NAT address, a DNS alias) is given the whole list by
+GetEndpoints, but the session itself has to be opened through one of the
+advertised names: there is no way yet to advertise a name the host does
+not know about ([#430](https://github.com/joyautomation/nautilus/issues/430)).
 
 The server is **read-only**: a write is answered `Bad_UserAccessDenied`,
 never silently dropped. See [Security](#security) for why, and what comes
@@ -106,7 +108,8 @@ dead reading the way an HMI treats a bad binding:
 A member of a UDT is exactly as trustworthy as its tag. `SourceTimestamp`
 is the time the tag's current value was first seen — the server's start,
 for a value nothing has changed since — and moves only when the value
-does; `ServerTimestamp` is the time of the read.
+does: a member of a UDT keeps its own timestamp while a sibling member
+changes. `ServerTimestamp` is the time of the read.
 
 Two limits of the current server, found by its black-box run and tracked
 as issues: a driver input that has never been delivered has no node until
@@ -123,9 +126,11 @@ A client may create subscriptions and monitor any Variable. The server
 never polls a copy of the tag store: every 100 ms it asks the store which
 tags changed since the last sweep — one integer compare per tag, using the
 same write generations the HTTP stream uses — and notifies only the
-monitored items that cover a changed tag. A subscriber hears of a change
-within one sweep plus its own publishing interval; `MinimumSamplingInterval`
-reports the sweep.
+monitored items whose value or status actually changed; a member of a UDT
+is quiet while its siblings move. A subscriber hears of a change within
+one sweep plus its own publishing interval; `MinimumSamplingInterval`
+reports the sweep; a requested sampling interval is revised to the nearest
+multiple of it, and the item is sampled at that rate.
 
 An item that cannot be monitored — a node id that is not a node, or a
 Value on an Object or the folder — is refused when it is created, with the

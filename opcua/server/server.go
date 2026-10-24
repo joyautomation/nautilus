@@ -25,6 +25,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -167,11 +168,12 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	srv := opcserver.New(opts...)
 	ns := &namespace{
-		rt:     s.rt,
-		uri:    "urn:joyautomation:nautilus:" + s.opts.Name,
-		title:  s.opts.Name,
-		sweep:  s.opts.Sweep,
-		stamps: map[string]stamp{},
+		rt:      s.rt,
+		uri:     "urn:joyautomation:nautilus:" + s.opts.Name,
+		title:   s.opts.Name,
+		sweep:   s.opts.Sweep,
+		stamps:  map[string]stamp{},
+		mstamps: map[string]mstamp{},
 	}
 	srv.AddNamespace(ns)
 	registerServices(srv, ns)
@@ -294,7 +296,9 @@ func (s *Server) Status() Status {
 // to a reused buffer — stamps those changes with the time (SourceTimestamp
 // for the readings that follow), and, when anything is monitored, notifies
 // the monitored items whose node covers a changed tag: the tag itself, or
-// a member of it.
+// a member of it — and whose reading actually differs from the one last
+// sent, since the store's generation is per tag and a member of a UDT
+// moves its idle siblings' generation without moving their values.
 //
 // The notifications are this package's, not gopcua's ChangeNotification:
 // that one sends on a subscription's channel while holding the monitored
@@ -311,6 +315,10 @@ func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 	var buf []runtime.Change
 	changed := map[string]struct{}{}
 	pending := map[string]struct{}{} // node id strings whose send was refused
+	last := map[string]reading{}     // what each monitored node was last told
+	live := map[string]struct{}{}    // the nodes monitored this tick, to prune last
+	items := map[*opcserver.MonitoredItem]*itemState{}
+	liveItems := map[*opcserver.MonitoredItem]struct{}{}
 	t := time.NewTicker(s.opts.Sweep)
 	defer t.Stop()
 	for {
@@ -320,29 +328,83 @@ func (s *Server) sweep(ctx context.Context, done chan struct{}) {
 		case <-t.C:
 		}
 		buf, gen = tags.ChangedSince(gen, buf[:0])
-		if len(buf) == 0 && len(pending) == 0 {
-			continue
-		}
+		// A quiet tick still walks the monitored nodes: a node new under
+		// monitoring is recorded then, so the first change after it is
+		// compared with what gopcua's initial notification told the client.
 		now := time.Now()
 		clear(changed)
 		for _, c := range buf {
 			s.ns.stampAt(c.Name, c.Gen, now)
 			changed[ir.NameKey(c.Name)] = struct{}{}
 		}
+		clear(live)
+		clear(liveItems)
 		for _, mon := range s.monitored() {
+			live[mon.key] = struct{}{}
+			for _, item := range mon.items {
+				liveItems[item] = struct{}{}
+			}
 			root, _ := ir.SplitAddress(mon.nid.StringID())
 			_, moved := changed[ir.NameKey(root)]
 			_, retry := pending[mon.key]
+			if _, seen := last[mon.key]; !seen && !moved && !retry {
+				// New under monitoring on a quiet tick: gopcua has sent its
+				// initial value, and that is what it was last told.
+				if _, now, ok := s.current(mon); ok {
+					last[mon.key] = now
+				}
+				continue
+			}
 			if !moved && !retry {
 				continue
 			}
-			if s.notify(mon) {
+			if s.notify(mon, last, retry, items, now) {
 				delete(pending, mon.key)
 			} else {
 				pending[mon.key] = struct{}{}
 			}
 		}
+		for k := range last {
+			if _, ok := live[k]; !ok {
+				delete(last, k)
+			}
+		}
+		for it := range items {
+			if _, ok := liveItems[it]; !ok {
+				delete(items, it)
+			}
+		}
 	}
+}
+
+// watching reports whether item is a live monitored item with a request
+// behind it; gopcua's maps can hold less.
+func watching(item *opcserver.MonitoredItem) bool {
+	return item != nil && item.Sub != nil && item.Req != nil && item.Req.ItemToMonitor != nil && item.Req.RequestedParameters != nil
+}
+
+// current reads the node once, for the attribute its first live item
+// watches, and reduces it to what the node would be told.
+func (s *Server) current(mon monitoredNode) (*ua.DataValue, reading, bool) {
+	for _, item := range mon.items {
+		if !watching(item) {
+			continue
+		}
+		dv := s.ns.Attribute(mon.nid, item.Req.ItemToMonitor.AttributeID)
+		now := reading{status: dv.Status}
+		if dv.Value != nil {
+			now.value = dv.Value.Value()
+		}
+		return dv, now, true
+	}
+	return nil, reading{}, false
+}
+
+// reading is what a monitored node was last told: enough to know whether
+// the next sweep has anything new to say about it.
+type reading struct {
+	value  any
+	status ua.StatusCode
 }
 
 // monitoredNode is one of our nodes some subscription is watching, with
@@ -374,27 +436,69 @@ func (s *Server) monitored() []monitoredNode {
 	return out
 }
 
+// itemState is one monitored item's sampling: the interval it was granted
+// (CreateMonitoredItems revised it to a multiple of the sweep), when it was
+// last sent a value, and whether its node has changed since.
+type itemState struct {
+	every time.Duration
+	sent  time.Time
+	dirty bool
+}
+
 // notify reads the node once and offers the reading to every item watching
-// it. It reports false when any subscription's channel was full, so the
-// caller tries that node again next tick rather than dropping the change.
-func (s *Server) notify(mon monitoredNode) bool {
-	ok := true
-	var dv *ua.DataValue
+// it that is due. A reading equal to what the node was last told, on a
+// tick that is not a retry, says nothing. An item whose sampling interval
+// has not elapsed since its last value is marked dirty and left for a
+// later tick, which is what sampling at that interval means. It reports
+// false when any item is still owed a value — a full channel, or an
+// interval not yet up — so the caller comes back to this node next tick.
+func (s *Server) notify(mon monitoredNode, last map[string]reading, retry bool, items map[*opcserver.MonitoredItem]*itemState, now time.Time) bool {
+	dv, cur, ok := s.current(mon)
+	if !ok {
+		return true
+	}
+	prev, seen := last[mon.key]
+	changed := !seen || prev.status != cur.status || !reflect.DeepEqual(prev.value, cur.value)
+	if !changed && !retry {
+		return true
+	}
+	last[mon.key] = cur
+	done := true
 	for _, item := range mon.items {
-		if item == nil || item.Sub == nil || item.Req == nil || item.Req.ItemToMonitor == nil || item.Req.RequestedParameters == nil {
+		if !watching(item) {
 			continue
 		}
-		if dv == nil {
-			dv = s.ns.Attribute(mon.nid, item.Req.ItemToMonitor.AttributeID)
+		st := items[item]
+		if st == nil {
+			st = &itemState{every: s.sampling(item)}
+			items[item] = st
+		}
+		if changed {
+			st.dirty = true
+		}
+		if !st.dirty {
+			continue
+		}
+		if !st.sent.IsZero() && now.Sub(st.sent) < st.every-s.opts.Sweep/2 {
+			done = false // not due yet; the next value it sees is the one current then
+			continue
 		}
 		n := &ua.MonitoredItemNotification{ClientHandle: item.Req.RequestedParameters.ClientHandle, Value: dv}
 		select {
 		case item.Sub.NotifyChannel <- n:
+			st.sent, st.dirty = now, false
 		default:
-			ok = false
+			done = false
 		}
 	}
-	return ok
+	return done
+}
+
+// sampling is the interval an item was granted, the same arithmetic
+// CreateMonitoredItems answered with.
+func (s *Server) sampling(item *opcserver.MonitoredItem) time.Duration {
+	ms := reviseSampling(item.Req.RequestedParameters.SamplingInterval, item.Sub.RevisedPublishingInterval, s.opts.Sweep)
+	return time.Duration(ms * float64(time.Millisecond))
 }
 
 // quietGopcua filters gopcua's startup chatter out of the standard logger

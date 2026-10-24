@@ -20,6 +20,7 @@
 package server
 
 import (
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -50,6 +51,17 @@ type namespace struct {
 	// whichever comes first. Keyed by root tag: a UDT changes whole.
 	mu     sync.Mutex
 	stamps map[string]stamp
+	// mstamps is the same bookkeeping one level down: a member of a UDT or
+	// an array element, keyed by address, with the value last seen there.
+	// The store's generation is per tag, so when one member moves every
+	// sibling's generation moves with it; a member's SourceTimestamp holds
+	// unless its own value changed.
+	mstamps map[string]mstamp
+}
+
+type mstamp struct {
+	val any
+	at  time.Time
 }
 
 type stamp struct {
@@ -439,8 +451,28 @@ func (ns *namespace) readValue(m member) *ua.DataValue {
 	}
 	if gen, ok := ns.rt.Tags().TagGeneration(root); ok {
 		dv.SourceTimestamp = ns.stampAt(root, gen, now)
+		if m.addr != root {
+			dv.SourceTimestamp = ns.memberStampAt(m.addr, v.Value(), dv.SourceTimestamp)
+		}
 	}
 	return dv
+}
+
+// memberStampAt returns the time the member at addr was first seen holding
+// val: rootAt (when its tag's current generation was first seen) if the
+// value is new there, else the time recorded for it. A sibling's change
+// moves the tag's generation, not this member's timestamp.
+func (ns *namespace) memberStampAt(addr string, val any, rootAt time.Time) time.Time {
+	ns.mu.Lock()
+	defer ns.mu.Unlock()
+	if s, ok := ns.mstamps[addr]; ok && reflect.DeepEqual(s.val, val) {
+		return s.at
+	}
+	if ns.mstamps == nil {
+		ns.mstamps = map[string]mstamp{}
+	}
+	ns.mstamps[addr] = mstamp{val: val, at: rootAt}
+	return rootAt
 }
 
 // seed records now as the time every tag's current generation was first

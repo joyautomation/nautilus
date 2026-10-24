@@ -22,13 +22,20 @@ claims:
   - id: OPC-011
     claim: >-
       The server advertises one endpoint per name it answers to (the host
-      written, every interface address for 0.0.0.0, the host name, loopback),
-      a client may dial any of them, and GetEndpoints for an unknown URL
-      returns every endpoint rather than none.
+      written, every interface address for 0.0.0.0, the host name, loopback)
+      and never the wildcard itself; a client may dial any of them, and
+      GetEndpoints for an unknown URL returns every endpoint rather than none.
     source: "#serving-opc-ua"
     tests:
       - go ./opcua/server TestEndpointHosts
       - go ./opcua/server TestEndpointsMatchEveryAliasAndFallBackToAll
+      - go ./opcua/server TestWildcardIsNotAdvertised
+    partial: true
+    note: >-
+      A session through a name the server was not told about (a NAT address,
+      a DNS alias) gets the list from GetEndpoints but an empty
+      ServerEndpoints from CreateSession, which is gopcua's and cannot be
+      wrapped; #430.
 
   - id: OPC-002
     claim: >-
@@ -101,10 +108,12 @@ claims:
     claim: >-
       SourceTimestamp is the time the tag's current value was first seen
       (the server's start for a value unchanged since) and moves only when
-      the value does; ServerTimestamp is the time of the read.
+      the value does, a member of a UDT holding its own while a sibling
+      moves; ServerTimestamp is the time of the read.
     source: "#quality-and-timestamps"
     tests:
       - go ./opcua/server TestSourceTimestampIsSeededAtStart
+      - go ./opcua/server TestIdleUDTMemberStaysQuietWhenASiblingMoves
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
       - go ./opcua/server TestStampAtMovesOnlyWithTheGeneration
       - go ./opcua/server TestSubscriptionCoversArraysElementsAndStaysQuiet
@@ -136,6 +145,17 @@ claims:
     source: "#subscriptions"
     tests:
       - go ./opcua/server TestCreateMonitoredItemsRejectsWhatCannotBeMonitored
+
+  - id: OPC-013
+    claim: >-
+      A created item's RevisedSamplingInterval is the nearest multiple of
+      the sweep to what was requested (the sweep for "fastest"), the item is
+      then sampled at that rate, and a monitored member of a UDT is notified
+      only when its own value or status changes, not when a sibling moves.
+    source: "#subscriptions"
+    tests:
+      - go ./opcua/server TestRevisedSamplingIntervalIsAMultipleOfTheSweep
+      - go ./opcua/server TestIdleUDTMemberStaysQuietWhenASiblingMoves
 
   - id: OPC-008
     claim: >-

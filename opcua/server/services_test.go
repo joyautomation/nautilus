@@ -281,3 +281,180 @@ func TestSourceTimestampIsSeededAtStart(t *testing.T) {
 		t.Errorf("SourceTimestamp %v is the read time %v", dv.SourceTimestamp, dv.ServerTimestamp)
 	}
 }
+
+// readDV reads one node's Value with both timestamps through the client.
+func readDV(t *testing.T, c *opcua.Client, nid *ua.NodeID) *ua.DataValue {
+	t.Helper()
+	resp, err := c.Read(context.Background(), &ua.ReadRequest{
+		NodesToRead:        []*ua.ReadValueID{{NodeID: nid, AttributeID: ua.AttributeIDValue}},
+		TimestampsToReturn: ua.TimestampsToReturnBoth,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp.Results[0]
+}
+
+// A client told "10 ms" that sees 100 ms updates has nothing true to plan
+// on: the revised sampling interval is a multiple of the sweep — the sweep
+// for "fastest" and for anything faster, the nearest multiple otherwise —
+// and the item is then sampled at that rate (retest run 2026-10-24-001,
+// F-20).
+func TestRevisedSamplingIntervalIsAMultipleOfTheSweep(t *testing.T) {
+	rt, _ := newRuntime(t)
+	s, c := startServer(t, rt) // Sweep: 20 ms
+	ctx := context.Background()
+	notify := make(chan *opcua.PublishNotificationData, 1024)
+	sub, err := c.Subscribe(ctx, &opcua.SubscriptionParameters{Interval: 5 * time.Millisecond}, notify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Cancel(ctx)
+	for _, tc := range []struct{ asked, want float64 }{{0, 20}, {-1, 20}, {7, 20}, {1000, 1000}, {150, 160}} {
+		item := opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("Label"), ua.AttributeIDValue, 1)
+		item.RequestedParameters.SamplingInterval = tc.asked
+		res, err := sub.Monitor(ctx, ua.TimestampsToReturnBoth, item)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := res.Results[0].RevisedSamplingInterval; got != tc.want {
+			t.Errorf("asked %v ms on a 5 ms subscription: revised %v, want %v", tc.asked, got, tc.want)
+		}
+		if _, err := sub.Unmonitor(ctx, res.Results[0].MonitoredItemID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Two items on the same node, one at the sweep and one at 200 ms, while
+	// the value moves every 25 ms for 600 ms: the slow one is held to its
+	// rate, the fast one hears most changes.
+	fast := opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("Level"), ua.AttributeIDValue, 10)
+	slow := opcua.NewMonitoredItemCreateRequestWithDefaults(s.NodeID("Level"), ua.AttributeIDValue, 20)
+	slow.RequestedParameters.SamplingInterval = 200
+	if _, err := sub.Monitor(ctx, ua.TimestampsToReturnBoth, fast, slow); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	for len(notify) > 0 {
+		<-notify
+	}
+	for i := 0; i < 24; i++ {
+		rt.Tags().Set("Level", 100.0+float64(i))
+		time.Sleep(25 * time.Millisecond)
+	}
+	time.Sleep(150 * time.Millisecond)
+	counts := map[uint32]int{}
+	for len(notify) > 0 {
+		if dcn, ok := (<-notify).Value.(*ua.DataChangeNotification); ok {
+			for _, it := range dcn.MonitoredItems {
+				counts[it.ClientHandle]++
+			}
+		}
+	}
+	if counts[10] < 12 {
+		t.Errorf("item sampled at the sweep: %d notifications for 24 changes over 600 ms, want at least 12", counts[10])
+	}
+	if counts[20] < 2 || counts[20] > 5 {
+		t.Errorf("item sampled at 200 ms: %d notifications over 600 ms, want 2–5", counts[20])
+	}
+}
+
+// The store's generation is per tag, so one member moving moves its idle
+// siblings' generation: they must not be notified, and their
+// SourceTimestamp must not move (retest run 2026-10-24-001, F-21, F-22).
+func TestIdleUDTMemberStaysQuietWhenASiblingMoves(t *testing.T) {
+	rt, _ := newRuntime(t)
+	s, c := startServer(t, rt)
+	ctx := context.Background()
+	amps, speed := s.NodeID("P101.Drive.Amps"), s.NodeID("P101.Drive.Speed")
+	notify := make(chan *opcua.PublishNotificationData, 256)
+	sub, err := c.Subscribe(ctx, &opcua.SubscriptionParameters{Interval: 20 * time.Millisecond}, notify)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sub.Cancel(ctx)
+	if _, err := sub.Monitor(ctx, ua.TimestampsToReturnBoth,
+		opcua.NewMonitoredItemCreateRequestWithDefaults(amps, ua.AttributeIDValue, 1),
+		opcua.NewMonitoredItemCreateRequestWithDefaults(speed, ua.AttributeIDValue, 2)); err != nil {
+		t.Fatal(err)
+	}
+	drain := func(d time.Duration) map[uint32]int {
+		counts := map[uint32]int{}
+		deadline := time.After(d)
+		for {
+			select {
+			case n := <-notify:
+				if dcn, ok := n.Value.(*ua.DataChangeNotification); ok {
+					for _, it := range dcn.MonitoredItems {
+						counts[it.ClientHandle]++
+					}
+				}
+			case <-deadline:
+				return counts
+			}
+		}
+	}
+	drain(200 * time.Millisecond) // the initial values
+	before := readDV(t, c, amps)
+	for i := 0; i < 5; i++ {
+		if err := rt.Tags().SetPath("P101.Drive.Speed", 10.0+float64(i)); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	counts := drain(200 * time.Millisecond)
+	if counts[2] < 3 {
+		t.Errorf("Speed moved five times: %d notifications, want at least 3", counts[2])
+	}
+	if counts[1] != 0 {
+		t.Errorf("Amps never moved: %d notifications, want none", counts[1])
+	}
+	after := readDV(t, c, amps)
+	if !after.SourceTimestamp.Equal(before.SourceTimestamp) {
+		t.Errorf("Amps SourceTimestamp moved %v → %v while only Speed changed", before.SourceTimestamp, after.SourceTimestamp)
+	}
+	if sp := readDV(t, c, speed); !sp.SourceTimestamp.After(before.SourceTimestamp) {
+		t.Errorf("Speed SourceTimestamp %v did not move past %v", sp.SourceTimestamp, before.SourceTimestamp)
+	}
+}
+
+// 0.0.0.0 is the address the server binds, not a name a client can dial:
+// it appears in neither GetEndpoints nor FindServers (retest run
+// 2026-10-24-001, F-24).
+func TestWildcardIsNotAdvertised(t *testing.T) {
+	rt, _ := newRuntime(t)
+	s, err := New(rt, Options{Endpoint: "0.0.0.0:0", Name: "lift-station", Sweep: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Stop)
+	resp, err := getEndpoints(s.srv, &ua.GetEndpointsRequest{RequestHeader: &ua.RequestHeader{}, EndpointURL: "opc.tcp://nowhere.invalid:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eps := urls(resp.(*ua.GetEndpointsResponse).Endpoints)
+	if len(eps) < 2 {
+		t.Fatalf("GetEndpoints for an unknown URL: %q, want the whole advertised list", eps)
+	}
+	for _, u := range eps {
+		if wildcardURL(u) {
+			t.Errorf("GetEndpoints advertises the wildcard: %q", eps)
+		}
+	}
+	fresp, err := findServers(s.srv, &ua.FindServersRequest{RequestHeader: &ua.RequestHeader{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers := fresp.(*ua.FindServersResponse).Servers
+	if len(servers) != 1 || len(servers[0].DiscoveryURLs) == 0 {
+		t.Fatalf("FindServers: %+v, want one server with discovery URLs", servers)
+	}
+	for _, u := range servers[0].DiscoveryURLs {
+		if wildcardURL(u) {
+			t.Errorf("FindServers lists the wildcard as a discovery URL: %q", servers[0].DiscoveryURLs)
+		}
+	}
+}

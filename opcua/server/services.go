@@ -28,6 +28,7 @@ package server
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"os"
 	"strings"
@@ -126,6 +127,9 @@ func registerServices(srv *opcserver.Server, ns *namespace) {
 	srv.RegisterHandler(id.GetEndpointsRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
 		return getEndpoints(srv, r)
 	})
+	srv.RegisterHandler(id.FindServersRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+		return findServers(srv, r)
+	})
 	srv.RegisterHandler(id.ReadRequest_Encoding_DefaultBinary, func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
 		return readAttributes(srv, ns, r)
 	})
@@ -163,7 +167,7 @@ func getEndpoints(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
 	if !ok {
 		return nil, ua.StatusBadRequestTypeInvalid
 	}
-	all := srv.Endpoints()
+	all := advertised(srv.Endpoints())
 	want := normURL(req.EndpointURL)
 	var match []*ua.EndpointDescription
 	for _, ep := range all {
@@ -178,6 +182,55 @@ func getEndpoints(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
 }
 
 func normURL(u string) string { return strings.ToLower(strings.TrimSuffix(u, "/")) }
+
+// advertised drops the endpoint gopcua listens on when that is a wildcard:
+// 0.0.0.0 is the address the server binds, not a name a client can dial, so
+// the aliases registered beside it are the whole list a client sees.
+func advertised(eps []*ua.EndpointDescription) []*ua.EndpointDescription {
+	out := make([]*ua.EndpointDescription, 0, len(eps))
+	for _, ep := range eps {
+		if ep == nil || wildcardURL(ep.EndpointURL) {
+			continue
+		}
+		out = append(out, ep)
+	}
+	return out
+}
+
+func wildcardURL(u string) bool {
+	rest := strings.TrimPrefix(u, "opc.tcp://")
+	host, _, err := net.SplitHostPort(rest)
+	if err != nil {
+		return false
+	}
+	switch host {
+	case "0.0.0.0", "::", "":
+		return true
+	}
+	return false
+}
+
+// findServers is the FindServers service: the server's own description,
+// as gopcua answers it, with the wildcard kept out of the discovery URLs
+// the same way getEndpoints keeps it out of the endpoints.
+func findServers(srv *opcserver.Server, r ua.Request) (ua.Response, error) {
+	req, ok := r.(*ua.FindServersRequest)
+	if !ok {
+		return nil, ua.StatusBadRequestTypeInvalid
+	}
+	var servers []*ua.ApplicationDescription
+	if eps := srv.Endpoints(); len(eps) > 0 && eps[0] != nil && eps[0].Server != nil {
+		app := *eps[0].Server
+		app.DiscoveryURLs = nil
+		for _, u := range eps[0].Server.DiscoveryURLs {
+			if !wildcardURL(u) {
+				app.DiscoveryURLs = append(app.DiscoveryURLs, u)
+			}
+		}
+		servers = append(servers, &app)
+	}
+	return &ua.FindServersResponse{ResponseHeader: header(req.RequestHeader), Servers: servers}, nil
+}
 
 // readAttributes is the Read service: each node's attribute from its
 // namespace, Bad_NodeIdUnknown for a namespace the server does not have,
@@ -300,13 +353,40 @@ func createMonitoredItems(srv *opcserver.Server, ns *namespace, sc *uasc.SecureC
 	if !ok {
 		return resp, nil
 	}
+	// gopcua revises the sampling interval to the publishing interval,
+	// whatever was asked. This server samples at multiples of its sweep
+	// (the sweep itself is MinimumSamplingInterval), and the sweep holds
+	// each item to the rate granted here, so the revised value is true.
 	for j, i := range slots {
 		if j < len(out.Results) {
 			results[i] = out.Results[j]
+			if results[i] != nil && results[i].StatusCode == ua.StatusOK {
+				var asked float64
+				if rp := req.ItemsToCreate[i].RequestedParameters; rp != nil {
+					asked = rp.SamplingInterval
+				}
+				results[i].RevisedSamplingInterval = reviseSampling(asked, out.Results[j].RevisedSamplingInterval, ns.sweep)
+			}
 		}
 	}
 	out.Results = results
 	return out, nil
+}
+
+// reviseSampling is the sampling interval granted, in milliseconds: the
+// nearest multiple of the sweep to what was requested, never faster than
+// the sweep; 0 (fastest) is the sweep, and a negative request (sample at
+// the publishing interval) takes publishing as the request.
+func reviseSampling(requested, publishing float64, sweep time.Duration) float64 {
+	sw := float64(sweep) / float64(time.Millisecond)
+	want := requested
+	if want < 0 {
+		want = publishing
+	}
+	if want <= sw {
+		return sw
+	}
+	return math.Round(want/sw) * sw
 }
 
 // monitorable is the code CreateMonitoredItems answers for one item: Good
