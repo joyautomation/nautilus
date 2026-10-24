@@ -5,6 +5,7 @@
 package modbus
 
 import (
+	"math"
 	"sort"
 
 	nio "github.com/joyautomation/nautilus/io"
@@ -82,7 +83,10 @@ func (d *Driver) Health() Health {
 //
 //   - a tag whose source is connected is Good — unless its block is
 //     exception-marked, which is Bad (the connection is fine, THIS span of
-//     addresses is refused: FTIR's reg-46 collision made visible).
+//     addresses is refused: FTIR's reg-46 collision made visible), or the
+//     device delivered a float that is not a number — NaN or ±Inf, which
+//     is how a groov EPIC reports an analog channel with nothing wired —
+//     which is Bad too: the reading, not the link, is the problem.
 //   - a tag delivered at least once whose source is now dead or parked is
 //     Stale: the value holds, greyed, with its age — never a silent zero.
 //   - a tag never delivered on a dead/parked source is NotConnected.
@@ -109,8 +113,12 @@ func (d *Driver) Quality() map[string]nio.Quality {
 					// the device has never answered for is NotConnected even
 					// while the socket is up: connected is not the same as
 					// heard from (a gateway that accepts TCP and never replies).
-					if _, delivered := s.snapshot[t.Name]; !delivered {
+					v, delivered := s.snapshot[t.Name]
+					switch {
+					case !delivered:
 						mark(t.Name, nio.NotConnected)
+					case notANumber(v):
+						mark(t.Name, nio.Bad)
 					}
 				default:
 					if _, delivered := s.snapshot[t.Name]; delivered {
@@ -124,6 +132,13 @@ func (d *Driver) Quality() map[string]nio.Quality {
 		s.mu.Unlock()
 	}
 	return out
+}
+
+// notANumber reports a delivered float the device marked as no reading:
+// NaN or ±Inf, the IEEE markers an open analog channel comes back as.
+func notANumber(v any) bool {
+	f, ok := v.(float64)
+	return ok && (math.IsNaN(f) || math.IsInf(f, 0))
 }
 
 // Connections lists each source and the tags it delivers — its polled

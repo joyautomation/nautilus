@@ -865,8 +865,17 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Encode before writing: a value JSON cannot render would otherwise
+	// go out as a 200 with an empty body, which every client reads as
+	// "no tags" and nobody can diagnose. A 500 with the encoder's reason
+	// is a bug report; silence was a blank dashboard.
+	b, err := json.Marshal(s.frame(pats))
+	if err != nil {
+		http.Error(w, "state: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.frame(pats))
+	w.Write(b)
 }
 
 // handleDrivers serves the current field-driver / publisher status list.
