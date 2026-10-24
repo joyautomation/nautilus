@@ -2,7 +2,7 @@
 # binding in the manifest. Do not edit — re-run after changing the manifest.
 #
 # Compose it into a project with:  tag-files: [tags/plcnext.yaml]
-- { name: AI_00, role: input, desc: "slot 4 analog input 0, raw counts" }
+- { name: AI_00, role: input, desc: "slot 4 analog input 0, raw counts (0x8020 = supply missing)" }
 - { name: AI_01, role: input, desc: "slot 4 analog input 1, raw counts" }
 - { name: AO_00, role: output, init: 0.0, desc: "slot 4 analog output 0, raw counts" }
 - { name: AO_01, role: output, init: 0.0, desc: "slot 4 analog output 1, raw counts" }

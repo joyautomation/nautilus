@@ -178,10 +178,45 @@ tried returns `DAE_NotExists`. The same log shows that on 2025-04-05 the
 ("Creating local I/O configuration… Done enabling data output"), and its
 `libBusConductor.so` is still in the project's `Libs/` (md5 identical to
 upstream) — it was later unplugged from `pcwe.plm.config` in favour of
-the hand-written TICs. Restoring the stock BusConductor deployment is the
-fix; it is a file copy plus `sudo /etc/init.d/plcnext restart`, which
-this session's sandbox refused as a remote write. The exact recipe is in
-`examples/plcnext-bench/README.md`.
+the hand-written TICs. Restoring the stock BusConductor deployment was
+the fix, done 2026-10-24 as BusConductor's own no-Engineer layout: a
+separate `/opt/plcnext/projects/BusConductor` with the `current`
+symlink pointed at it (PCWE untouched, rollback is the symlink), and a
+runtime restart. The recipe and the three config files it needs are in
+`examples/plcnext-bench/` (`controller/`).
+
+**What the firmware's data-access service turned out to be** (measured
+on 2023.0, each point by trying it; the brief's whole PLCnext path
+rests on these three):
+
+1. It resolves ports of MainProcess components only — eCLR variables,
+   ESM, Device.Interface, PLM components such as BcComponent1. The I/O
+   components' own ports (`Arp.Io.AxlC/0.DI4096`, even the standard
+   `Arp.Io.PnC/PNIO_SYSTEM_BF`) answer `DAE_NotExists` under every
+   spelling, and the OPC UA server with `GdsPortsToProvide=All` lists
+   the same set (4 763 nodes, none under `Arp.Io.*`). I/O data reaches
+   a service only through a **GDS connector** into a MainProcess port.
+   Phoenix Contact's own runtime samples read I/O through the in-process
+   C API for this reason.
+2. It reads and writes **array elements by name** (`Port[17]`) and
+   answers `DAE_NotSupported` for an array (or struct) as a whole.
+3. BusConductor's request flags act on a **rising edge sampled by a
+   100 ms task**: a flag raised and dropped inside one cycle is never
+   seen. The first handshake "succeeded" (CONFIGURED, four modules) and
+   left the bus configured but not running; `AXIO_DIAG_STATUS_REG_RUN`
+   is the truth, and the driver now reads it with every scan.
+
+The connector that makes the image reachable with no Engineer project
+and no SDK: a bare controller's eCLR exposes the PROFINET-device
+process-image system variables `Arp.Plc.Eclr/PND_S1_INPUTS` and
+`PND_S1_OUTPUTS`, 512 bytes each — exactly the BusConductor image size —
+and the project's `PCWE.gds.config` normally connects them to the
+(unused) PROFINET device. Re-pointing those two connectors at
+`Arp.Io.AxlC/0.DI4096` and `DO4096` mirrors the Axioline image onto
+ports the service can read. A purpose-built C++ component with two
+array ports is the tidy version of the same thing, and needs the SDK;
+an empty Engineer program with two array ports is the other, and needs
+Engineer once. Both are listed under not-adopted-yet, not never.
 
 ### 3.2 Architecture
 
@@ -189,15 +224,20 @@ this session's sandbox refused as a remote write. The exact recipe is in
   controller (AXC F 2152)
   ┌──────────────────────────────────────────────────────────────┐
   │  plcnext firmware                                            │
-  │   Axioline master ──500 µs──▶ GDS  Arp.Io.AxlC/0.DI4096      │
-  │                     ◀────────       Arp.Io.AxlC/0.DO4096     │
-  │   BusConductor (BcComponent1): CONFIG_REQ → CONFIGURED,      │
-  │                                START_IO_REQ, NUM_MODULES     │
+  │   Axioline master ──500 µs──▶ Arp.Io.AxlC/0.DI4096 ─┐ GDS    │
+  │                     ◀──────── Arp.Io.AxlC/0.DO4096 ◀┤connector│
+  │                 Arp.Plc.Eclr/PND_S1_INPUTS  ◀───────┘ (gds.  │
+  │                 Arp.Plc.Eclr/PND_S1_OUTPUTS ────────┘ config) │
+  │   BusConductor (BcComponent1): CONFIG_REQ ⇡ → CONFIGURED,    │
+  │                                START_IO_REQ ⇡, NUM_MODULES   │
+  │   Arp.Plc.Eclr/AXIO_DIAG_STATUS_REG_RUN  (the bus is running)│
   │   IDataAccessService over unix:///run/plcnext/grpc.sock      │
-  │                 ▲ ReadSingle / WriteSingle                    │
-  │  naut-arm (one static binary, the project on its tail)       │
-  │   plcnext.Driver: handshake · poll DI4096 at scan-rate ·     │
-  │                   write DO4096 whole when any output changed │
+  │                 ▲ Read [PND_S1_INPUTS[0..n), RUN]  one RPC   │
+  │                 ▼ Write [PND_S1_OUTPUTS[0..m)]     one RPC   │
+  │  naut (one static binary, the project on its tail)           │
+  │   plcnext.Driver: handshake (idempotent, held edges) · poll  │
+  │     the input span + RUN at scan-rate · flush the output     │
+  │     span when any output changed · RUN=false ⇒ inputs Bad    │
   │   runtime scan loop · tag API :8080 · HMI                    │
   └──────────────────────────────────────────────────────────────┘
 ```
@@ -205,16 +245,20 @@ this session's sandbox refused as a remote write. The exact recipe is in
 ```
 plcnext/
   proto/, gen/   Phoenix Contact's Data Access protos (from github.com/PLCnext/gRPC), buf-generated
-  gds.go         Client over grpc; OctetstringN ⇄ []byte (one Uint8 ObjectType per byte)
-  manifest.go    plcnext_manifest.yaml: socket, bus-conductor, inputs/outputs, byte-order,
-                 modules (documentation), tags {name, dir, offset, format bit:N|int16|…, scale, bias}
+  gds.go         Client over grpc: element-wise ReadBytes/WriteBytes (Read/Write multi-item RPCs),
+                 scalars, Describe and WriteScalar for the CLI
+  manifest.go    plcnext_manifest.yaml: socket, bus-conductor, inputs/outputs (the mirrored ports),
+                 run-port, byte-order, modules (documentation), tags {name, dir, offset, format
+                 bit:N|int16|…, scale, bias}; span() = how many bytes the bindings reach
   codec.go       bindings ⇄ the byte image; bit writes merge into the kept output image
   driver.go      io.Driver + BatchReader + QualityReporter; New never dials; Start: dial →
-                 BusConductor pulse → size the output image from the controller → poll loop;
-                 reconnect with backoff; Health for /api/drivers
+                 conductBus (skip what is already configured/running; edge = low, 300 ms, high) →
+                 poll loop; reconnect with backoff; Health for /api/drivers; Handshake for the CLI
   tags.go        tag file from the manifest
-cmd/naut/plcnext.go   naut plcnext browse (on the controller) | tags
-internal/project      driver type "plcnext"; status row; schema enum
+cmd/naut/plcnext.go   naut plcnext browse | read | write (on the controller) | tags
+internal/project      driver type "plcnext"; status row (connected / bus not running / …); schema enum
+examples/plcnext-bench/controller/   the three project files that differ from upstream BusConductor:
+                 PCWE.gds.config (the two connectors), pcwe.plm.config (library path), PCWE.opcua.config
 ```
 
 Dependencies: `google.golang.org/grpc` (new) and `protobuf` (already
@@ -223,18 +267,39 @@ build with both new packages is 22 MB (20 MB before them).
 
 ### 3.3 Verified, and not
 
-Verified: `go test ./plcnext/` runs the driver against an in-process
-`IDataAccessService` that behaves like the firmware with BusConductor
-behind it (handshake order, CONFIGURED latch, 512-byte images, bit
-merges, `DAE_NotExists` on an unconfigured bus → `NotConnected` quality
-and a status-row error). `examples/plcnext-bench/` checks and tests
-offline. Cross-compile is clean.
+Verified on the controller (2026-10-24): BusConductor configures the bus
+(`CONFIGURED=true NUM_MODULES=4`), the held-edge `START_IO_REQ` brings
+it to `RUN=true` (`ACT`, `RDY` true; `PF` true because slot 4 has no UP
+supply — see below), the GDS connectors deliver live data into the
+mirrored ports, and `naut run` of `examples/plcnext-bench` on the
+controller drove the DO16 module's output 15 at 1 Hz as read back from
+the output mirror, with the status row saying "Axioline bus running,
+4 module(s)". Cost on the dual-core ARM: 9 % of one core, 23 MB
+resident, beside a firmware that already idles at load 4–5. The gRPC
+round trip for 8 elements plus the RUN bit is ~11 ms, so the 50 ms
+scan is honest; the scan itself executes in under 1 ms.
 
-Not verified: anything on the controller after the restart — the port
-names BusConductor creates on *this* firmware, the byte order of Axioline
-words in the image (manifest default `big`; one bit on one LED settles
-it), analog scaling, and the real poll latency. `naut plcnext browse` is
-written for exactly that first session.
+Measured, not assumed: in BusConductor's generic mode every module
+occupies its frame length in BOTH images (DI16 2 bytes, DO16 2 bytes,
+the 0-bit device 0, AI2/AO2 4 bytes), so the analog inputs are at
+input bytes 4..7 and the DO16 at output bytes 2..3, not the 2..5 / 0..1
+the hand-typed manifest assumed. The manifest now says so.
+
+`go test ./plcnext/` runs the driver against an in-process
+`IDataAccessService` that now behaves like the real one on the three
+points in §3.1 (whole-array reads refused, elements served, RUN raised
+by START_IO_REQ, idempotent reconnect), plus bit merges, a bus that
+stops (inputs Bad) and restarts (Good), and `DAE_NotExists` on a
+missing connector → `NotConnected`. `examples/plcnext-bench/` checks
+and tests offline. Cross-compile is clean.
+
+Not verified: a human looking at the DO16 LEDs (the output mirror
+toggles; the module's UP supply is what makes a channel actually
+switch, and the bus reports "Supply missing (Up)" on slot 4, so James's
+eyes on slot 2 are the next data point), analog values (slot 4 reads
+0x8020, Axioline's supply-missing marker, until UP is wired), and a
+reboot of the controller (the symlink and project files persist; the
+driver re-handshakes on its own).
 
 ### 3.4 The tiers
 
@@ -247,9 +312,12 @@ written for exactly that first session.
    sysroot, which is why `rt/` (the Rust fast loop + shared-memory tag
    exchange) is the natural home: a small C/Rust I/O shim exchanging the
    image with the Go runtime over shared memory, not cgo in the core.
-3. **Not pursued:** the OPC UA server on 4840 as the I/O path (it carries
-   the eCLR program's variables, not raw Axioline ports) and the
-   EtherNet/IP adapter on 44818 (would need an Engineer project to map).
+3. **Not pursued:** the OPC UA server on 4840 as the I/O path — it sees
+   exactly what data access sees (the mirrored eCLR ports, never raw
+   Axioline ports) at a higher cost per read, though it was the tool
+   that proved the point (`naut opcua browse` from the opcua branch, with
+   `GdsPortsToProvide=All`); and the EtherNet/IP adapter on 44818
+   (would need an Engineer project to map).
 
 ## 4. What each path is worth
 
@@ -257,7 +325,7 @@ written for exactly that first session.
   recognisable product, with nothing installed on the product. The import
   story (`browse`, `import`, commit, `check`) is the same one every other
   driver tells. Cost: one importer package, no runtime change.
-- **PLCnext after the restart:** the first instance of *nautilus as the
+- **PLCnext, running since 2026-10-24:** the first instance of *nautilus as the
   runtime on a vendor's own PLC hardware* — the N-55 / N-90 idea, and the
   thing no facade can claim. Cost so far: one driver package and a gRPC
   dependency. Cost to make it deterministic: the `rt/` shim.
@@ -267,9 +335,11 @@ written for exactly that first session.
 
 ### Next steps, in order
 
-1. James: restart the PLCnext runtime after the BusConductor restore
-   (recipe in `examples/plcnext-bench/README.md`), then on the controller
-   `naut-arm plcnext browse` and the heartbeat run.
+1. ~~James: restart the PLCnext runtime after the BusConductor restore,
+   then on the controller `naut-arm plcnext browse` and the heartbeat
+   run.~~ Done 2026-10-24 (§3.3). Next on that side: James looks at the
+   DO16 LEDs while the heartbeat runs, wires UP to slot 4 so the analog
+   module reads, and the on-controller run gets a systemd unit.
 2. ~~James: order the free `GROOV-LIC-SHELL`; then the EPIC run moves onto
    the EPIC.~~ Done 2026-10-24: the license was already on the unit, the
    shell is on, nautilus ran on the EPIC. Next on that side: a systemd

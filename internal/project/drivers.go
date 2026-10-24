@@ -563,8 +563,10 @@ func agoText(ms int64) string {
 func plcnextStatus(h plcnext.Health) server.DriverStatus {
 	s := server.DriverStatus{Kind: "plcnext", Name: "plcnext", Detail: h.Socket, LastError: h.LastError}
 	switch {
+	case h.Connected && h.Configured && h.Running:
+		s.State, s.Message = "connected", fmt.Sprintf("Axioline bus running, %d module(s)", h.Modules)
 	case h.Connected && h.Configured:
-		s.State, s.Message = "connected", fmt.Sprintf("Axioline bus up, %d module(s)", h.Modules)
+		s.State, s.Message = "error", fmt.Sprintf("Axioline bus configured (%d module(s)) but not running: inputs are Bad", h.Modules)
 	case h.Connected:
 		s.State, s.Message = "connecting", "Configuring the Axioline bus"
 	case h.LastError != "":

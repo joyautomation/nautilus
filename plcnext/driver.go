@@ -3,7 +3,10 @@ package plcnext
 // driver.go is the io.Driver: New never dials (so `naut check` and `naut
 // build` pass on a laptop), Start connects to the firmware's socket, runs
 // the BusConductor handshake, and polls the input image at the scan rate;
-// WriteOutputs merges into a kept output image the loop flushes whole.
+// WriteOutputs merges into a kept output image the loop flushes as one
+// span. Each scan is two round trips at most: one Read of the input
+// elements plus the bus RUN bit, one Write of the output span if anything
+// changed.
 
 import (
 	"context"
@@ -23,6 +26,11 @@ const (
 	defaultRetryMin   = time.Second
 	defaultRetryMax   = 30 * time.Second
 	busConductorPorts = "/BusConductor."
+	// edgeHold is how long a request flag is held low before it is raised:
+	// BusConductor's program samples its ports from a 100 ms cyclic task
+	// and acts on a RISING EDGE, so a flag raised and dropped inside one
+	// cycle is never seen. Three cycles low, then high and left high.
+	edgeHold = 300 * time.Millisecond
 )
 
 // Option configures New.
@@ -52,22 +60,23 @@ type Driver struct {
 	scanRate time.Duration
 	log      *slog.Logger
 	dial     func(ctx context.Context) (dataAccess, error)
+	inLen    int // bytes of the input image the bindings reach
+	outLen   int // … and of the output image
 
 	mu       sync.Mutex
 	in       map[string]any // latest decoded inputs
 	quality  nio.Quality    // of every input, as one source
 	out      []byte         // the output image as last commanded
 	outDirty bool
-	outSize  int
 
 	connected  atomic.Bool
 	configured atomic.Bool
+	running    atomic.Bool
 	modules    atomic.Int64
 	reads      atomic.Uint64
 	writes     atomic.Uint64
 	errs       atomic.Uint64
 	lastErr    atomic.Value // string
-	inLen      atomic.Int64
 	rttUs      atomic.Int64
 
 	cancel context.CancelFunc
@@ -84,11 +93,12 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 		m:        m,
 		scanRate: defaultScanRate,
 		log:      slog.Default(),
+		inLen:    m.span(DirIn),
+		outLen:   m.span(DirOut),
 		in:       map[string]any{},
 		quality:  nio.NotConnected,
-		out:      make([]byte, 512),
-		outSize:  512,
 	}
+	d.out = make([]byte, d.outLen)
 	d.lastErr.Store("")
 	for _, o := range opts {
 		o(d)
@@ -131,7 +141,7 @@ func (d *Driver) run(ctx context.Context) {
 		}
 		d.connected.Store(false)
 		d.mu.Lock()
-		if d.quality == nio.Good {
+		if d.quality == nio.Good || d.quality == nio.Bad {
 			d.quality = nio.Stale
 		}
 		d.mu.Unlock()
@@ -153,27 +163,16 @@ func (d *Driver) run(ctx context.Context) {
 
 // session is one connection: handshake, then poll until an error.
 func (d *Driver) session(ctx context.Context, c dataAccess) error {
-	if err := d.handshake(ctx, c); err != nil {
-		return err
-	}
-	// Size the output image from the controller's own, so a write never
-	// changes the port's length.
-	cctx, cancel := withTimeout(ctx, defaultCallTO)
-	outImg, err := c.ReadBytes(cctx, d.m.Outputs)
-	cancel()
+	st, err := conductBus(ctx, c, d.m.BusConductor, d.m.RunPort)
 	if err != nil {
 		return err
 	}
-	d.mu.Lock()
-	if len(outImg) != d.outSize {
-		d.outSize = len(outImg)
-		img := make([]byte, d.outSize)
-		copy(img, d.out)
-		d.out = img
-	}
-	d.mu.Unlock()
+	d.configured.Store(st.Configured)
+	d.running.Store(st.Running)
+	d.modules.Store(int64(st.Modules))
 	d.connected.Store(true)
-	d.log.Info("plcnext: connected", "socket", d.m.Socket, "inputs", d.m.Inputs, "outputs", d.m.Outputs, "out_bytes", len(outImg))
+	d.log.Info("plcnext: connected", "socket", d.m.Socket, "inputs", d.m.Inputs, "outputs", d.m.Outputs,
+		"in_bytes", d.inLen, "out_bytes", d.outLen, "modules", st.Modules, "bus_running", st.Running)
 
 	tick := time.NewTicker(d.scanRate)
 	defer tick.Stop()
@@ -189,78 +188,150 @@ func (d *Driver) session(ctx context.Context, c dataAccess) error {
 	}
 }
 
-// handshake pulses BusConductor: configure the bus as found, wait for
-// CONFIGURED, start I/O exchange. Its request ports are edge-triggered,
-// so they are set back to false afterwards.
-func (d *Driver) handshake(ctx context.Context, c dataAccess) error {
-	if d.m.BusConductor == "" {
-		d.configured.Store(true)
-		return nil
-	}
-	p := func(name string) string { return d.m.BusConductor + busConductorPorts + name }
+// BusState is what the handshake found.
+type BusState struct {
+	Configured bool
+	Running    bool
+	Modules    int
+}
+
+// conductBus brings the local bus up through BusConductor, idempotently:
+// a bus already configured is left alone, a bus already running is left
+// alone, so a driver reconnect never restarts I/O that is fine. Each
+// request flag is given a held rising edge (edgeHold). runPort, when
+// set, is the controller's own AXIO RUN diagnostic — the truth about
+// whether process data is being exchanged, which CONFIGURED is not.
+func conductBus(ctx context.Context, c dataAccess, component, runPort string) (BusState, error) {
+	var st BusState
 	call := func(f func(context.Context) error) error {
 		cctx, cancel := withTimeout(ctx, defaultCallTO)
 		defer cancel()
 		return f(cctx)
 	}
-	if err := call(func(cx context.Context) error { return c.WriteBool(cx, p("CONFIG_MUST_MATCH"), false) }); err != nil {
-		return err
-	}
-	if err := call(func(cx context.Context) error { return c.WriteBool(cx, p("CONFIG_REQ"), true) }); err != nil {
-		return err
-	}
-	deadline := time.Now().Add(configureWait)
-	for {
-		var ok bool
-		if err := call(func(cx context.Context) error {
+	readBool := func(port string) (bool, error) {
+		var v bool
+		err := call(func(cx context.Context) error {
 			var err error
-			ok, err = c.ReadBool(cx, p("CONFIGURED"))
+			v, err = c.ReadBool(cx, port)
 			return err
-		}); err != nil {
-			return err
-		}
-		if ok {
-			break
-		}
-		if time.Now().After(deadline) {
-			return errors.New("plcnext: BusConductor did not report CONFIGURED within " + configureWait.String())
-		}
+		})
+		return v, err
+	}
+	writeBool := func(port string, v bool) error {
+		return call(func(cx context.Context) error { return c.WriteBool(cx, port, v) })
+	}
+	wait := func(d time.Duration) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(250 * time.Millisecond):
+		case <-time.After(d):
+			return nil
 		}
 	}
-	_ = call(func(cx context.Context) error { return c.WriteBool(cx, p("CONFIG_REQ"), false) })
-	var n float64
-	if err := call(func(cx context.Context) error {
-		var err error
-		n, err = c.ReadNumber(cx, p("NUM_MODULES"))
-		return err
-	}); err == nil {
-		d.modules.Store(int64(n))
+	edge := func(port string) error {
+		if err := writeBool(port, false); err != nil {
+			return err
+		}
+		if err := wait(edgeHold); err != nil {
+			return err
+		}
+		return writeBool(port, true)
 	}
-	if err := call(func(cx context.Context) error { return c.WriteBool(cx, p("START_IO_REQ"), true) }); err != nil {
-		return err
+	until := func(port string, what string) error {
+		deadline := time.Now().Add(configureWait)
+		for {
+			ok, err := readBool(port)
+			if err != nil {
+				return err
+			}
+			if ok {
+				return nil
+			}
+			if time.Now().After(deadline) {
+				return errors.New("plcnext: " + what + " within " + configureWait.String())
+			}
+			if err := wait(250 * time.Millisecond); err != nil {
+				return err
+			}
+		}
 	}
-	_ = call(func(cx context.Context) error { return c.WriteBool(cx, p("START_IO_REQ"), false) })
-	d.configured.Store(true)
-	d.log.Info("plcnext: BusConductor configured the local bus", "modules", int(n))
-	return nil
+
+	if component == "" {
+		st.Configured = true
+	} else {
+		p := func(name string) string { return component + busConductorPorts + name }
+		configured, err := readBool(p("CONFIGURED"))
+		if err != nil {
+			return st, err
+		}
+		if !configured {
+			if err := writeBool(p("CONFIG_MUST_MATCH"), false); err != nil {
+				return st, err
+			}
+			if err := edge(p("CONFIG_REQ")); err != nil {
+				return st, err
+			}
+			if err := until(p("CONFIGURED"), "BusConductor did not report CONFIGURED"); err != nil {
+				return st, err
+			}
+		}
+		st.Configured = true
+		_ = call(func(cx context.Context) error {
+			n, err := c.ReadNumber(cx, p("NUM_MODULES"))
+			st.Modules = int(n)
+			return err
+		})
+		running := false
+		if runPort != "" {
+			if running, err = readBool(runPort); err != nil {
+				return st, err
+			}
+		}
+		if !running {
+			if err := edge(p("START_IO_REQ")); err != nil {
+				return st, err
+			}
+			if runPort != "" {
+				if err := until(runPort, "the Axioline bus did not report RUN"); err != nil {
+					return st, err
+				}
+			} else if err := wait(edgeHold); err != nil {
+				return st, err
+			}
+		}
+	}
+	st.Running = true
+	if runPort != "" {
+		running, err := readBool(runPort)
+		if err != nil {
+			return st, err
+		}
+		st.Running = running
+	}
+	return st, nil
 }
 
-// poll reads the input image once and flushes a dirty output image.
+// poll reads the input span (and the RUN bit) once and flushes a dirty
+// output span.
 func (d *Driver) poll(ctx context.Context, c dataAccess) error {
+	var extra []string
+	if d.m.RunPort != "" {
+		extra = []string{d.m.RunPort}
+	}
 	t0 := time.Now()
 	cctx, cancel := withTimeout(ctx, defaultCallTO)
-	img, err := c.ReadBytes(cctx, d.m.Inputs)
+	img, flags, err := c.ReadBytes(cctx, d.m.Inputs, d.inLen, extra...)
 	cancel()
 	if err != nil {
 		return err
 	}
 	d.rttUs.Store(time.Since(t0).Microseconds())
 	d.reads.Add(1)
-	d.inLen.Store(int64(len(img)))
+	running := true
+	if len(flags) > 0 {
+		running = flags[0]
+	}
+	d.running.Store(running)
 
 	d.mu.Lock()
 	for _, b := range d.m.Tags {
@@ -274,7 +345,14 @@ func (d *Driver) poll(ctx context.Context, c dataAccess) error {
 		}
 		d.in[b.Name] = v
 	}
-	d.quality = nio.Good
+	// The image is being refreshed, but a bus that is not exchanging
+	// process data is delivering stale bytes with a live socket: Bad, the
+	// reading, not the link.
+	if running {
+		d.quality = nio.Good
+	} else {
+		d.quality = nio.Bad
+	}
 	var flush []byte
 	if d.outDirty {
 		flush = append([]byte(nil), d.out...)
@@ -284,7 +362,7 @@ func (d *Driver) poll(ctx context.Context, c dataAccess) error {
 
 	if flush != nil {
 		cctx, cancel := withTimeout(ctx, defaultCallTO)
-		err := c.WriteBytes(cctx, d.m.Outputs, flush)
+		err := c.WriteBytes(cctx, d.m.Outputs, 0, flush)
 		cancel()
 		if err != nil {
 			d.mu.Lock()
@@ -347,8 +425,9 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 }
 
 // Quality is io.QualityReporter: one source, so one quality for every
-// input — Good while the image is being refreshed, Stale after the socket
-// drops, NotConnected before the first read.
+// input — Good while the image is being refreshed and the bus runs, Bad
+// while the bus is stopped, Stale after the socket drops, NotConnected
+// before the first read.
 func (d *Driver) Quality() map[string]nio.Quality {
 	d.mu.Lock()
 	q := d.quality
@@ -364,26 +443,29 @@ func (d *Driver) Quality() map[string]nio.Quality {
 
 // Health is the status row's raw material.
 type Health struct {
-	Socket, Inputs, Outputs string
-	Connected, Configured   bool
-	Modules                 int
-	InBytes, OutBytes       int
-	Reads, Writes, Errors   uint64
-	RTTus                   int64
-	LastError               string
-	Tags                    int
+	Socket, Inputs, Outputs        string
+	Connected, Configured, Running bool
+	Modules                        int
+	InBytes, OutBytes              int
+	Reads, Writes, Errors          uint64
+	RTTus                          int64
+	LastError                      string
+	Tags                           int
 }
 
 // Health reports the driver's state for /api/drivers.
 func (d *Driver) Health() Health {
-	d.mu.Lock()
-	outSize := d.outSize
-	d.mu.Unlock()
 	return Health{
 		Socket: d.m.Socket, Inputs: d.m.Inputs, Outputs: d.m.Outputs,
-		Connected: d.connected.Load(), Configured: d.configured.Load(),
-		Modules: int(d.modules.Load()), InBytes: int(d.inLen.Load()), OutBytes: outSize,
+		Connected: d.connected.Load(), Configured: d.configured.Load(), Running: d.running.Load(),
+		Modules: int(d.modules.Load()), InBytes: d.inLen, OutBytes: d.outLen,
 		Reads: d.reads.Load(), Writes: d.writes.Load(), Errors: d.errs.Load(),
 		RTTus: d.rttUs.Load(), LastError: d.lastErr.Load().(string), Tags: len(d.m.Tags),
 	}
+}
+
+// Handshake runs the BusConductor handshake over a real client, for
+// `naut plcnext browse`.
+func Handshake(ctx context.Context, c *Client, component, runPort string) (BusState, error) {
+	return conductBus(ctx, c, component, runPort)
 }

@@ -4,9 +4,15 @@
 // a Unix socket (/run/plcnext/grpc.sock), and BusConductor — Phoenix
 // Contact's own open component, github.com/PLCnext/BusConductor — configures
 // the Axioline bus at run time and presents the whole process image as two
-// byte arrays, Arp.Io.AxlC/0.DI4096 and Arp.Io.AxlC/0.DO4096. This driver
-// polls the one, writes the other, and binds nautilus tags to byte and bit
-// offsets inside them; PLCnext Engineer is never involved.
+// 512-byte arrays, Arp.Io.AxlC/0.DI4096 and Arp.Io.AxlC/0.DO4096. The
+// data-access service cannot see I/O components' ports directly, so the
+// project's GDS configuration connects those two onto a pair of
+// MainProcess byte-array ports it can — on a bare controller the eCLR
+// system variables Arp.Plc.Eclr/PND_S1_INPUTS and PND_S1_OUTPUTS, 512
+// bytes each, which the PROFINET device (unused here) would otherwise
+// own. This driver polls the one, writes the other, and binds nautilus
+// tags to byte and bit offsets inside them; PLCnext Engineer is never
+// involved.
 //
 // What crosses the seam upward is io.Driver; Phoenix Contact's spellings
 // (GDS port names, Arp types, BusConductor's ports) stop here. The gRPC and
@@ -33,10 +39,17 @@ import (
 
 // Defaults for the manifest's optional keys.
 const (
-	DefaultSocket     = "/run/plcnext/grpc.sock"
-	DefaultInputs     = "Arp.Io.AxlC/0.DI4096"
-	DefaultOutputs    = "Arp.Io.AxlC/0.DO4096"
-	DefaultComponent  = "BcComponent1"
+	DefaultSocket    = "/run/plcnext/grpc.sock"
+	DefaultInputs    = "Arp.Plc.Eclr/PND_S1_INPUTS"
+	DefaultOutputs   = "Arp.Plc.Eclr/PND_S1_OUTPUTS"
+	DefaultRunPort   = "Arp.Plc.Eclr/AXIO_DIAG_STATUS_REG_RUN"
+	DefaultComponent = "BcComponent1"
+	// AxiolineInputs / AxiolineOutputs are BusConductor's own image ports,
+	// the start and end of the GDS connectors that mirror them onto
+	// DefaultInputs / DefaultOutputs. The driver never names them; the
+	// project's gds.config does.
+	AxiolineInputs    = "Arp.Io.AxlC/0.DI4096"
+	AxiolineOutputs   = "Arp.Io.AxlC/0.DO4096"
 	DefaultByteOrder  = "big"
 	ByteOrderBig      = "big"
 	ByteOrderLittle   = "little"
@@ -57,10 +70,17 @@ type Manifest struct {
 	// deployment. Empty skips the handshake for a controller whose bus
 	// is configured some other way.
 	BusConductor string `yaml:"bus-conductor"`
-	// Inputs / Outputs are the GDS ports holding the process image
-	// (defaults DefaultInputs / DefaultOutputs).
+	// Inputs / Outputs are the MainProcess byte-array ports the GDS
+	// connectors mirror the process image onto (defaults DefaultInputs /
+	// DefaultOutputs). The driver reads and writes them element by
+	// element, as the data-access service requires.
 	Inputs  string `yaml:"inputs"`
 	Outputs string `yaml:"outputs"`
+	// RunPort is the controller's own "the local bus is exchanging
+	// process data" diagnostic (default DefaultRunPort); it is read with
+	// every scan and a stopped bus makes every input Bad. Empty disables
+	// the check.
+	RunPort string `yaml:"run-port"`
 	// ByteOrder is how multi-byte values sit in the arrays: "big"
 	// (default; Axioline process data is Motorola order) or "little".
 	ByteOrder string `yaml:"byte-order"`
@@ -172,6 +192,29 @@ func (m *Manifest) fillDefaults() {
 	if m.ByteOrder == "" {
 		m.ByteOrder = DefaultByteOrder
 	}
+	switch m.RunPort {
+	case "":
+		m.RunPort = DefaultRunPort
+	case "none":
+		m.RunPort = ""
+	}
+}
+
+// span is how many bytes of an image the bindings in that direction
+// reach: what one scan reads, and what one flush writes. At least one
+// byte, so an image with no bindings still polls (the RUN bit rides on
+// the same round trip).
+func (m Manifest) span(dir string) int {
+	n := 1
+	for _, b := range m.Tags {
+		if b.Dir != dir {
+			continue
+		}
+		if end := b.Offset + b.format().Bytes(); end > n {
+			n = end
+		}
+	}
+	return n
 }
 
 // Validate checks the bindings offline — the whole of what `naut check`
