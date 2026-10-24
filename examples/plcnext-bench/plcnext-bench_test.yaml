@@ -1,0 +1,43 @@
+# Acceptance tests for bench.st — virtual time, on the laptop. The driver
+# is not started under `naut test`; a polled input the driver has never
+# delivered is undefined, so each test gives every input the program reads.
+tolerance: 0.001
+
+tests:
+  - name: heartbeat toggles every half period
+    given: &inputs
+      BlinkPeriodS: 1.0
+      DI_00: false
+      DI_01: false
+      DI_02: false
+      DI_03: false
+      DI_04: false
+      DI_05: false
+      DI_06: false
+      DI_07: false
+      DI_08: false
+      DI_09: false
+      DI_10: false
+      DI_11: false
+      DI_12: false
+      DI_13: false
+      DI_14: false
+      DI_15: false
+      AI_00: 0.0
+      AI_01: 0.0
+    # Half a period is ten 50 ms scans; REAL accumulation lands the toggle
+    # on the tenth or eleventh scan, so each step allows one scan of slack.
+    steps:
+      - advance: 600ms
+        expect: { DO_15: true }
+      - advance: 600ms
+        expect: { DO_15: false }
+      - advance: 600ms
+        expect: { DO_15: true }
+
+  - name: inputs mirror to outputs
+    given: *inputs
+    steps:
+      - given: { DI_00: true, DI_14: true, AI_00: 1234.0 }
+        advance: 100ms
+        expect: { DO_00: true, DO_14: true, DO_07: false, AO_00: 1234.0 }
