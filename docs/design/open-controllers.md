@@ -327,9 +327,8 @@ Not verified: a human looking at the DO16 LEDs (the output mirror
 toggles; the module's UP supply is what makes a channel actually
 switch, and the bus reports "Supply missing (Up)" on slot 4, so James's
 eyes on slot 2 are the next data point), analog values (slot 4 reads
-0x8020, Axioline's supply-missing marker, until UP is wired), and a
-reboot of the controller (the symlink and project files persist; the
-driver re-handshakes on its own).
+0x8020, Axioline's supply-missing marker, until UP is wired). A reboot
+is verified (§3.4).
 
 ### 3.4 The tiers
 
@@ -361,7 +360,12 @@ driver re-handshakes on its own).
    Numbers in §3.3 and `rt/plcnext-io/README.md`. naut's own start is
    `examples/plcnext-bench/controller/naut-keepalive.sh` from admin's
    crontab, at boot and every minute: installed, and a killed naut came
-   back at the next minute; a reboot has not been tried yet.
+   back at the next minute, and a `sudo reboot` on 2026-10-25 came back with no hand on it: cron's
+   `@reboot` started naut on CPU 0 11 s into boot, the driver retried the
+   data-access socket until the runtime was up and was connected over shm
+   ~35 s later (handshake included); the shim came up FIFO 80 on CPU 1, the
+   capabilities survived (they live in the overlay's upper layer), and the
+   heartbeat was back on the frame.
 3. **Not pursued:** the OPC UA server on 4840 as the I/O path — it sees
    exactly what data access sees (the mirrored eCLR ports, never raw
    Axioline ports) at a higher cost per read, though it was the tool
@@ -389,9 +393,7 @@ driver re-handshakes on its own).
    then on the controller `naut-arm plcnext browse` and the heartbeat
    run.~~ Done 2026-10-24 (§3.3). Next on that side: James looks at the
    DO16 LEDs while the heartbeat runs, wires UP to slot 4 so the analog
-   module reads, and a reboot proves the on-controller run's boot start
-   (no systemd on the controller: admin's crontab and
-   `naut-keepalive.sh`, installed, §3.4).
+   module reads. The boot start is proven (§3.4).
 2. ~~James: order the free `GROOV-LIC-SHELL`; then the EPIC run moves onto
    the EPIC.~~ Done 2026-10-24: the license was already on the unit, the
    shell is on, nautilus ran on the EPIC. Next on that side: a systemd
@@ -402,8 +404,7 @@ driver re-handshakes on its own).
    offsets stop being hand-typed.
 5. ~~Decide whether tier 2 is wanted before anyone builds it.~~ Built:
    stages 1 and 2 run on the bench (§3.4), the shim at SCHED_FIFO since
-   2026-10-25. Next on it: a reboot of the controller, and whether a
-   deploy should carry the `setcap` step (today a capability is lost
+   2026-10-25. Next on it: whether a deploy should carry the `setcap` step (today a capability is lost
    with every copy of a new build).
 
 ## 5. Not adopted

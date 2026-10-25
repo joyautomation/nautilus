@@ -7,8 +7,13 @@ James's OK; a killed naut came back at the next minute). Piece 4: James ran the 
 (root locked again after), and the shim runs FIFO 80 with naut's task
 at FIFO 40 (the bench's deployed `nautilus.yaml` has `priority: 40`; the
 repo's does not, since without the capability it is an error on the
-card). Redeploying either binary drops its capability. Open: a reboot
-to prove the boot start, and eyes on the DO16 LEDs. The bench pins the shim to CPU 1 and naut to CPU 0
+card). Redeploying either binary drops its capability. Reboot proven:
+a `sudo reboot` on 2026-10-25 came back with no hand on it: cron's
+`@reboot` started naut on CPU 0 11 s into boot, the driver retried the
+data-access socket until the runtime was up and was connected over shm
+~35 s later (handshake included); the shim came up FIFO 80 on CPU 1, the
+capabilities survived (they live in the overlay's upper layer), and the
+heartbeat was back on the frame. Open: eyes on the DO16 LEDs. The bench pins the shim to CPU 1 and naut to CPU 0
 (`io/nautilus_io.cpu`, `naut.cpu`; rt/plcnext-io/README.md has the
 best-effort numbers that chose it). On the controller: `naut.prev`,
 `io/nautilus_io.stage1`, `io/nautilus_io.stage2a` (before the lateness

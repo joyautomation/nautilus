@@ -135,7 +135,9 @@ ssh admin@192.168.82.216 'printf "@reboot %s\n* * * * * %s\n" \
 
 starts it at boot and restarts it within a minute of a crash; `crontab
 -r` takes it out. Installed on the bench: a killed naut was back at the
-next minute. naut need not wait for the runtime: the driver retries
+next minute, and after a `sudo reboot` naut, the shim and the heartbeat
+were all back about a minute after the controller answered ssh, with no
+hand on it. naut need not wait for the runtime: the driver retries
 the socket and the page with backoff. It is deliberately not an ACF
 `<Process>` like the shim — a declared ACF process that exits during
 start-up takes the whole runtime down, and naut can exit (a bad project,
