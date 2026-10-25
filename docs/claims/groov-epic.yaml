@@ -191,3 +191,26 @@ claims:
       A bench measurement (2026-10-25, firmware 4.1.2.0, 20 ms scans, 5
       minutes a row, quiet and with four busy loops), conditions in
       docs/design/open-controllers.md §2.3. Not repeatable in CI.
+  - id: EPIC-018
+    claim: >-
+      The systemd unit in the guide installs, enables and starts nautilus
+      on the processor; systemd stops it with SIGTERM, which nautilus
+      handles as a clean stop; AmbientCapabilities gives CAP_SYS_NICE to a
+      binary that has no file capability.
+    source: "#start-it-on-boot"
+    tests:
+      - go ./optommp TestDriverStopPutsTheStreamConfigBack
+    partial: true
+    note: >-
+      Tried on the bench EPIC on 2026-10-25 (systemd 250): the unit was
+      installed and enabled, started with `systemctl start`, and the
+      driver connected. `systemctl restart` stopped it with SIGTERM
+      ("Deactivated successfully", no kill) and it came back connected.
+      That was in poll mode, which has nothing to restore. The stream
+      restore on stop is tested against the fake through the driver's
+      Stop; SIGTERM reaches the same stop (cmd/naut/runcmd.go cancels
+      its context on SIGINT or SIGTERM), but that is not tested end to
+      end. `systemd-run -p AmbientCapabilities=CAP_SYS_NICE` gave an
+      uncapped binary CapEff 0x800000, and 0 without it. The processor
+      has NOT been rebooted with the unit in place, so starting on boot
+      is unproven.
