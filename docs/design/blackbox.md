@@ -24,39 +24,95 @@ each finding in the run folder, a built binary with its provenance, the
 public docs, and a retest request naming a brief and a commit. Never:
 source, Go tests, design notes, CI configuration.
 
-## What the development agent does with a run
+## The loop
 
-1. **Triage.** Read `REPORT.md` and `FINDINGS.md`. For each finding: fix it
-   on the PR under review when the finding is about that PR and the fix is
-   small, else file an issue under `blackbox:<kind>` (`bug`, `papercut`,
-   `docs`, `gap`), else propose `disputed` with a reason. Write the status
-   back beside the finding: `filed #N`, `fixed-unverified <commit>`,
-   `disputed <reason>`. Never `verified`; that word belongs to the tester's
-   retest. Never close a finding as invalid on your own: `disputed` is a
-   proposal the operator rules on.
-2. **Import.** Copy every check whose proposed disposition is `gate` or
-   `release` into `tools/blackbox/` verbatim (below). A rewritten check is
-   no longer the foreign client's check; if one cannot run as written, it
-   is not imported, and the manifest says why.
-3. **Stage the retest.** Build `naut` from the fix commit, hand it to the
-   blackbox repo with `bin/fetch.sh --local <label> <binary> <docs-dir>
-   "<origin note naming the commit>"`, and tell the operator the brief and
-   the label. The tester's retest upgrades `fixed-unverified` to
-   `verified` or reopens.
-4. **Reconcile.** Bring to the operator: disputes, any disposition changed
-   on import, any imported check later retired from CI. Record the ruling
-   in the run folder.
+Four steps. The tester thinks in the first one only; after that the loop
+is the development side against the tester's own checks, until they pass.
 
-A PR carrying black-box fixes is ready to merge when its findings are
-`fixed-unverified`, the checks for them are imported and green, and a
-retest has made them `verified` (or the operator has said why not this
-time).
+1. **Brief run.** A person starts it and watches. From the worktree under
+   test, `tools/blackbox/handoff.sh <docs…>` builds `naut`, stages it in
+   the blackbox repo as `<branch>-<sha>` with the guide a PR adds, and
+   prints the label; in the blackbox directory, `bin/brief.sh <brief>
+   <label>` brings the container up and starts the tester on the brief,
+   streaming. Hours, by design: the tester reads the docs and the specs,
+   probes, decides what is a finding, and writes a check for everything it
+   did, pass or fail, with a proposed disposition. Its judgment is spent
+   here and nowhere else.
+2. **Development.** The development agent reads the run folder, fixes on
+   the branch what is the branch's and small, files the rest under
+   `blackbox:<kind>` (`bug`, `papercut`, `docs`, `gap`), proposes
+   `disputed` with a reason when a finding looks wrong, imports every
+   `gate` and `release` check verbatim into `tools/blackbox/`, and cites
+   each check from the claims it proves. Status lines go back beside each
+   finding: `filed #N`, `fixed-unverified <commit>`, `disputed <reason>`.
+   Never close a finding as invalid alone: `disputed` is a proposal the
+   operator rules on.
+3. **Retest.** The gate: `go test ./tools/blackbox` locally and the
+   `blackbox-gate` job on the PR. The tester's checks are its verdict, so
+   a check that passes on a commit is the fix verified, and the development
+   agent writes `verified <commit>` beside the finding when the gate is
+   green there. No tester session: running the tester again only to rerun
+   its own scripts spends hours on what the runner does in a minute.
+4. **Repeat 2 and 3** until every check for a finding that is not filed or
+   disputed passes. A check for an open finding carries `open: #N` in the
+   manifest, is skipped while it fails, and fails the job the day it
+   passes, which is the signal to close the issue.
+
+A PR carrying black-box fixes is ready to merge when every finding it
+claims is `verified <commit>` with the gate green on that commit, and the
+rest are `filed` or ruled at reconciliation.
+
+**Reconciliation** is the operator's, after step 2: every `disputed`
+finding, every disposition changed on import (recorded in the manifest
+entry's `note`), every imported check later retired from CI, and the brief
+itself (retire, promote to standing, amend). A check the development side
+believes is wrong is the one case where the tester is consulted again,
+with the evidence from both sides, and the operator rules.
+
+**Another pass** of step 1 is a new run of the brief against the merged
+build, when the coverage below says there is more ground. The tester
+carries its prior checks forward by id rather than inventing them again,
+so the suite grows instead of churning.
+
+The first loop on brief 001 (2026-10-22 to 2026-10-24) was run with a
+script that alternated the two agents unattended, three rounds, tester
+retests included. It found the ground above: the retests were slow, blind
+and largely rerunning scripts the runner already had, while the
+development rounds pushed unreviewed commits. The script is gone; the
+hand-off and the gate are what it reduced to.
+
+## Coverage
+
+The tester cannot measure its own coverage and must not try, since any
+measure of it lives on this side of the wall. Two measures this side keeps:
+
+- **Lines.** The gate job builds `naut` coverage-instrumented
+  (`NAUTILUS_BLACKBOX_COVERDIR`), and each project's `naut` writes its
+  counters on exit. The job prints the per-package percentages and keeps
+  the profile in the `evidence-blackbox` artifact. It says where a foreign
+  client has never been, which is what the next brief points at.
+- **Claims.** `go run ./tools/evidence blackbox` counts, per claims file,
+  the claims that cite a black-box check and names the ones that do not.
+  That is the requirements matrix of black-box testing: did the tester
+  look at what we promised, as opposed to what the code does.
+
+**Fails when it should.** Every check written for a finding was born
+failing on a real build, and the manifest records that (`expected_today`).
+The born-green checks, the ones that confirm a promise held, are the
+uncertain ones. The honest test is mutation: break the server deliberately
+and see which checks notice. With a container per mutant that is a
+scheduled job on one package, not a per-PR one, and worth running only
+once the line coverage says the suite reaches the code it claims to.
+Until then, a check that passes against every artifact ever staged,
+including the pre-fix ones under `artifacts/` in the blackbox repo, is the
+one to be suspicious of.
 
 ## tools/blackbox
 
 ```
 tools/blackbox/
   README.md          how to run the checks locally; the contract a check meets
+  handoff.sh         step 1: build naut from HEAD and stage it for the tester
   checks.yaml        the manifest: one entry per imported check
   requirements.txt   the oracle clients, pinned to the versions the runs recorded
   checks/<run>/…     the scripts, byte for byte as the tester wrote them
@@ -74,15 +130,17 @@ client that wrote the check never saw the code.
 For each project named in the manifest the runner copies the project to a
 temp dir, starts `naut run` there (the binary from `NAUTILUS_BLACKBOX_NAUT`,
 else one it builds), waits for the HTTP API, and runs each check as
-`python -I <script>` with `SUT_HTTP`, `SUT_OPCUA`, `SUT_MODBUS`, `SUT_MQTT`
-and `SUT_PROJECT` in the environment, taken from the project's
-`nautilus.yaml`. Exit 0 passes. The check's stdout is the evidence.
+`python -I <script>` (or `bash`) with `SUT_HTTP`, `SUT_OPCUA`,
+`SUT_MODBUS`, `SUT_MQTT` and `SUT_PROJECT` in the environment, taken from
+the manifest's `projects:` map or the project's `nautilus.yaml`. Exit 0
+passes. The check's stdout is the evidence. Checks for open findings run
+last within a project, since one may leave the SUT damaged.
 
 Dispositions map to jobs:
 
 | disposition | job | SUT |
 |---|---|---|
-| `gate` | ci.yml `blackbox-gate`, every PR | built from the PR |
+| `gate` | ci.yml `blackbox-gate`, every PR | built from the PR, coverage-instrumented |
 | `release` | blackbox-release.yml, on a published CLI release | the release tarball, checksums verified |
 | `soak`, `manual`, `once` | none; listed in the manifest with `note` | — |
 
@@ -90,37 +148,11 @@ Changing a disposition on import (a `gate` check that needs a second of
 wall clock, a `release` check that turned out deterministic) is allowed
 and recorded in the manifest entry's `note`, and goes to reconciliation.
 
-## The loop, unattended
-
-`tools/blackbox/loop.sh <brief> [max rounds]`, run from the worktree whose
-HEAD is under test, alternates the two agents until the tester has nothing
-new to say. A round builds `naut` from HEAD, hands it to the blackbox repo
-as `<branch>-<sha>` with the docs named in `DOCS`, brings the container up,
-starts a tester session in the blackbox directory ("Run brief NNN", then
-"Retest run <parent> against <label>"), reads the run folder it leaves, and,
-if there are new findings or reopens, starts a development session here
-with the triage-import-write-back brief above. A round with nothing new is
-CLEAN and the loop stops. A development session that lands no commit means
-everything left is filed or disputed, and the loop stops for the operator.
-The default cap is three rounds.
-
-What makes this safe to leave alone: the script is the only thing that
-knows both paths, and each agent is started in its own directory with its
-own hooks, so the tester's wall holds; the prompts that cross it carry a
-brief id, a run id and a label; neither agent merges; `disputed` and
-`wontfix` are still words only the operator confirms. What it does not
-replace: writing the brief, ruling at reconciliation, and the merge.
-
-The first two rounds of brief 001 were run by hand (2026-10-22 and
-2026-10-24) and are what the script encodes. It belongs on the self-hosted
-runner next, keyed to a PR label, once it has run unattended on a box with
-a person watching.
-
 ## What this does not do
 
-It does not run the tester. A standing-brief run on every release is the
-tester's job, started by the operator today; a tag-triggered job on the
+It does not start the tester by itself. A standing-brief run on every
+release is a person's decision today; a tag-triggered job on the
 self-hosted runner (`tools/rig/RUNNER.md`) that holds only the release
 artifact and the public docs would do it without a checkout, and is the
-next step once two or three standing briefs exist. It also does not grade
-its own fixes: `verified` is the tester's word.
+next step once two or three standing briefs exist. It does not let an
+agent merge, rule a dispute, or retire a check.

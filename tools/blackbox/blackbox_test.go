@@ -125,10 +125,17 @@ func loadManifest(t *testing.T, path string) Manifest {
 
 // buildNaut builds the CLI from this checkout: the gate job's SUT. The
 // release job hands in the published binary with NAUTILUS_BLACKBOX_NAUT.
+// With NAUTILUS_BLACKBOX_COVERDIR set the binary is coverage-instrumented
+// and each project's naut writes its counters there on exit: the measure
+// of how much of the code the foreign client's checks reach.
 func buildNaut(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "naut")
-	cmd := exec.Command("go", "build", "-o", bin, "./cmd/naut")
+	args := []string{"build", "-o", bin}
+	if os.Getenv("NAUTILUS_BLACKBOX_COVERDIR") != "" {
+		args = append(args, "-cover", "-coverpkg=./...")
+	}
+	cmd := exec.Command("go", append(args, "./cmd/naut")...)
 	cmd.Dir = filepath.Join("..", "..")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build ./cmd/naut: %v\n%s", err, out)
@@ -201,6 +208,12 @@ func startProject(t *testing.T, naut, src string, addrs map[string]string) *sut 
 		if !strings.HasPrefix(kv, "NAUTILUS_ADDR=") { // the project's addr is the one the checks were written against
 			cmd.Env = append(cmd.Env, kv)
 		}
+	}
+	if dir := os.Getenv("NAUTILUS_BLACKBOX_COVERDIR"); dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		cmd.Env = append(cmd.Env, "GOCOVERDIR="+dir)
 	}
 	var out strings.Builder
 	cmd.Stdout, cmd.Stderr = &out, &out

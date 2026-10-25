@@ -555,7 +555,26 @@ jobs:
         run: |
           mkdir -p evidence
           NAUTILUS_BLACKBOX_PYTHON="$(which python)" NAUTILUS_BLACKBOX_DISPOSITION=gate \
+          NAUTILUS_BLACKBOX_COVERDIR="$PWD/evidence/blackbox-cover" \
             go test -json ./tools/blackbox -run TestBlackbox -v -timeout 600s | tee evidence/blackbox-gate.json | go run ./tools/evidence cat
+      - name: Coverage — how far the foreign client's checks reach
+        # The SUT was coverage-instrumented (NAUTILUS_BLACKBOX_COVERDIR); the
+        # counters say which code a client that never saw it exercised. Per
+        # package here, the full profile in the artifact; the tester cannot
+        # measure this and should not, the next brief is aimed with it.
+        if: always()
+        shell: bash
+        run: |
+          if [ -d evidence/blackbox-cover ] && [ -n "$(ls -A evidence/blackbox-cover)" ]; then
+            go tool covdata textfmt -i=evidence/blackbox-cover -o evidence/blackbox-cover.txt
+            go tool covdata percent -i=evidence/blackbox-cover | grep -vE '\s0\.0%' | sort
+            rm -r evidence/blackbox-cover
+          else
+            echo "no coverage data (no gate checks ran)"
+          fi
+      - name: Claims coverage — which promises a black-box check proves
+        if: always()
+        run: go run ./tools/evidence blackbox
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:

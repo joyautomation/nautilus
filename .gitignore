@@ -24,5 +24,3 @@ tools/vscode-iec/.vscode-test/
 /naut
 *.exe
 
-# The black-box loop writes its logs here (tools/blackbox/loop.sh).
-tools/blackbox/out/
