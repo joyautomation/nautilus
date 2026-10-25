@@ -11,6 +11,10 @@ claims:
       host:port is read as opc.tcp://host:port).
     source: "#serving-opc-ua"
     tests:
+      - go ./tools/blackbox TestBlackbox/001-F05-schemeless-endpoint
+      - go ./tools/blackbox TestBlackbox/001-F02-ipv4-loopback
+      - go ./tools/blackbox TestBlackbox/001-P-check-refuses-bad-endpoints
+      - go ./tools/blackbox TestBlackbox/001-P-build-serves-opcua
       - go ./internal/project TestOPCUAConfig
       - go ./cmd/naut TestCheckRefusesBadOPCUAEndpoint
       - go ./cmd/naut TestNautRunServesOPCUA
@@ -27,6 +31,8 @@ claims:
       GetEndpoints for an unknown URL returns every endpoint rather than none.
     source: "#serving-opc-ua"
     tests:
+      - go ./tools/blackbox TestBlackbox/001-F17-endpoints-advertised
+      - go ./tools/blackbox TestBlackbox/001-F24-advertises-0000
       - go ./opcua/server TestEndpointHosts
       - go ./opcua/server TestEndpointsMatchEveryAliasAndFallBackToAll
       - go ./opcua/server TestWildcardIsNotAdvertised
@@ -46,6 +52,11 @@ claims:
       indexed from the declared lower bound.
     source: "#what-a-client-sees"
     tests:
+      - go ./tools/blackbox TestBlackbox/001-P-project-folder
+      - go ./tools/blackbox TestBlackbox/001-P-every-tag-a-node
+      - go ./tools/blackbox TestBlackbox/001-P-shapes
+      - go ./tools/blackbox TestBlackbox/001-F09-fb-instance-no-node
+      - go ./tools/blackbox TestBlackbox/001-F10-2d-array-rows
       - go ./opcua/server TestBrowseWalksTheStore
       - go ./opcua/server TestBrowseFiltersThroughTheClient
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
@@ -66,6 +77,10 @@ claims:
       Description as "desc [unit]".
     source: "#what-a-client-sees"
     tests:
+      - go ./tools/blackbox TestBlackbox/001-F01-namespace-index
+      - go ./tools/blackbox TestBlackbox/001-F03-unknown-namespace-read
+      - go ./tools/blackbox TestBlackbox/001-P-case-insensitive
+      - go ./tools/blackbox TestBlackbox/001-P-description
       - go ./opcua/server TestProjectNamespaceIsIndexOne
       - go ./opcua/server TestBrowseWalksTheStore
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
@@ -81,6 +96,7 @@ claims:
       scalars an array of the element type.
     source: "#types"
     tests:
+      - go ./tools/blackbox TestBlackbox/001-P-type-table
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
       - go ./opcua/server TestEveryIntegerWidthReadsAsItsOwnType
       - go ./opcua/server TestDataTypeFollowsTheDeclaredWidth
@@ -95,6 +111,7 @@ claims:
       Bad_NotConnected — and a member of a UDT carries its tag's quality.
     source: "#quality-and-timestamps"
     tests:
+      - go ./tools/blackbox TestBlackbox/001-P-stale-quality
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
       - go ./opcua/server TestStatusOfQuality
     note: >-
@@ -112,6 +129,9 @@ claims:
       moves; ServerTimestamp is the time of the read.
     source: "#quality-and-timestamps"
     tests:
+      - go ./tools/blackbox TestBlackbox/001-F12-source-timestamp-start
+      - go ./tools/blackbox TestBlackbox/001-F22-udt-member-source-timestamp
+      - go ./tools/blackbox TestBlackbox/001-P-http-write-notified
       - go ./opcua/server TestSourceTimestampIsSeededAtStart
       - go ./opcua/server TestIdleUDTMemberStaysQuietWhenASiblingMoves
       - go ./opcua/server TestReadsCarryTypesQualityAndTimestamps
@@ -126,6 +146,10 @@ claims:
       polling a copy of the tag store.
     source: "#subscriptions"
     tests:
+      - go ./tools/blackbox TestBlackbox/001-P-counter-cadence
+      - go ./tools/blackbox TestBlackbox/001-P-http-write-notified
+      - go ./tools/blackbox TestBlackbox/001-P-ten-subscribers
+      - go ./tools/blackbox TestBlackbox/001-F21-udt-member-notified-once
       - go ./opcua/server TestSubscriptionHearsChanges
       - go ./opcua/server TestSubscriptionCoversArraysElementsAndStaysQuiet
       - go ./opcua/server TestSubscriptionFollowsTheRunningProgram
@@ -144,6 +168,8 @@ claims:
       Object or the folder), with the code a Read gives, and creates the rest.
     source: "#subscriptions"
     tests:
+      - go ./tools/blackbox TestBlackbox/001-F07-monitored-items-refused
+      - go ./tools/blackbox TestBlackbox/001-P-read-error-codes
       - go ./opcua/server TestCreateMonitoredItemsRejectsWhatCannotBeMonitored
 
   - id: OPC-013
@@ -154,6 +180,9 @@ claims:
       only when its own value or status changes, not when a sibling moves.
     source: "#subscriptions"
     tests:
+      - go ./tools/blackbox TestBlackbox/001-F20-revised-sampling-interval
+      - go ./tools/blackbox TestBlackbox/001-F21-udt-member-notified-once
+      - go ./tools/blackbox TestBlackbox/001-P-sampling-interval
       - go ./opcua/server TestRevisedSamplingIntervalIsAMultipleOfTheSweep
       - go ./opcua/server TestIdleUDTMemberStaysQuietWhenASiblingMoves
 
@@ -165,6 +194,9 @@ claims:
       the project's nodes.
     source: "#security"
     tests:
+      - go ./tools/blackbox TestBlackbox/001-P-read-only-tags
+      - go ./tools/blackbox TestBlackbox/001-F08-server-object-read-only
+      - go ./tools/blackbox TestBlackbox/001-F04a-server-variable-access-attrs
       - go ./opcua/server TestAnonymousWriteIsRefused
       - go ./opcua/server TestServerObjectIsReadOnly
       - go ./opcua/server TestNamespaceSetAttributeRefusesEverything
@@ -180,6 +212,7 @@ claims:
       counts.
     source: "#status"
     tests:
+      - go ./tools/blackbox TestBlackbox/001-P-driver-row
       - go ./cmd/naut TestNautRunServesOPCUA
       - go ./opcua/server TestStatusCountsWhatClientsHold
       - go ./opcua/server TestSubscriptionHearsChanges
@@ -192,6 +225,8 @@ claims:
       endpoint serves again.
     source: "#status"
     tests:
+      - go ./tools/blackbox TestBlackbox/001-P-port-in-use
+      - go ./tools/blackbox TestBlackbox/001-P-restart-under-subscriber
       - go ./cmd/naut TestNautRunContinuesWhenOPCUAPortIsTaken
       - go ./opcua/server TestStartReportsAPortInUse
       - go ./opcua/server TestStopDropsClientsAndRestartReusesThePort
