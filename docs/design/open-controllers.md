@@ -295,8 +295,44 @@ idle cores waking up, but that was not investigated, nor was the one
 2–5 ms wake left at FIFO 20 on a quiet EPIC. The driver gains nothing. Its
 poll loop still runs at normal priority, and each request waits on
 mmpServer, so the I/O scan's p99 is 4–6 ms in every row. The task's
-timing is now tighter than the inputs it reads (§2.4). Every row had zero
+timing is now tighter than the inputs it reads. Every row had zero
 driver errors and no overruns.
+
+**The driver at real-time priority (2026-10-25).** A manifest
+`priority: N` runs the optommp driver's whole loop on one locked thread
+at SCHED_FIFO N:
+- the TCP socket is read and written with blocking syscalls on that
+  thread;
+- scans sleep to their slot with `clock_nanosleep`;
+- a stream is received with blocking `recvfrom` on the same thread;
+- commands are picked up between scans, a millisecond at a time.
+
+This keeps Go's network poller and timers, which run on normal-priority
+threads, out of the wake-up path. Same conditions as above, 5 minutes per
+row, with the task at FIFO 20 where marked. The driver sits at 25, above
+the task that consumes its inputs and below mmpServer. The driver's
+numbers are its own: wake-up lateness and scan time over every scan since
+start, so the first 10 s are included.
+
+| task | driver | load | task p99 / max | late > 2 ms | driver wake p99 / max | driver scan p99 / max | naut CPU |
+|---|---|---|---|---|---|---|---|
+| normal | normal | quiet | 200–500 µs / 5–10 ms | 3 | 1–2 / 9.96 ms | 2–5 / 10.3 ms | 14.5 % |
+| FIFO 20 | normal | quiet | 100–200 µs / 200–500 µs | 0 | 1–2 / 16.2 ms | 2–5 / 13.9 ms | 13.1 % |
+| FIFO 20 | FIFO 25 | quiet | 100–200 µs / 200–500 µs | 0 | 0.1–0.2 / 5.54 ms | 2–5 / 24.8 ms | 16.5 % |
+| normal | normal | 4 hogs | 200–500 µs / 2–5 ms | 8 | 1–2 / 6.44 ms | 2–5 / 14.6 ms | 13.4 % |
+| FIFO 20 | normal | 4 hogs | 100–200 µs / 0.5–1 ms | 0 | 1–2 / 5.10 ms | 2–5 / 13.0 ms | 14.7 % |
+| FIFO 20 | FIFO 25 | 4 hogs | 100–200 µs / 0.5–1 ms | 0 | 0.1–0.2 / 1.75 ms | 2–5 / 7.43 ms | 18.3 % |
+
+The driver now starts each scan on time: wake-up p99 went from 1–2 ms to
+under 0.2 ms, and under load the worst went from 5–6 ms to 1.75 ms. How
+long a scan takes did not change. Its p99 is in the 2–5 ms bucket in every
+row, because the time is spent inside mmpServer waiting for the reply.
+The worst scan, 24.8 ms on a quiet EPIC with the driver at FIFO 25, was
+not investigated. So for input freshness the gain is the wake-up's
+1–2 ms at p99, and the cost is 2–4 points of `naut` CPU from the
+millisecond command check. The bench project does not set either
+priority. The 1-2-5 buckets are too coarse to separate scan times inside
+2–5 ms; the runtime's finer histogram would.
 
 ### 2.4 Not done, and why
 
@@ -389,11 +425,10 @@ driver errors and no overruns.
   time; which outputs it moves, and to what, stays groov Manage
   configuration (the driver reports how many bound outputs have one).
   Not switched on on the bench yet (§2.3).
-- **The driver at real-time priority.** `priority:` covers the task's
-  thread, not the OptoMMP poll or stream loop (§2.3, PREEMPT_RT). A
-  manifest `priority:` that locks the driver's goroutine to a thread and
-  applies SCHED_FIFO the same way would close that gap. Not built. Above
-  mmpServer's 30 it would starve the server it waits on.
+- **The scan time itself.** Driver `priority:` (§2.3) makes the driver
+  start on time; the 2–5 ms a scan takes is inside mmpServer and not
+  ours to shorten. Going above mmpServer's 30 would starve the server
+  every request waits on. Streaming removes the request entirely.
 - **Counter reset.** `_Count` reads the feature value; clearing it (a
   read of the read-and-clear area's +0 quadlet) is not exposed yet.
 - **Analog min/max** (`F0260008`) is not bound; one read per module per
