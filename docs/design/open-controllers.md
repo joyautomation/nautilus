@@ -142,6 +142,73 @@ else ever fails to render. Tests pin all three.
   per-channel quality beyond the NaN verdict above; the channel-present
   mask is only on OptoMMP. An OptoMMP *driver* could carry it; not worth
   it until a project needs it.
+- **A path to the I/O below OptoMMP: there is none, Opto's CODESYS
+  driver included.** Read from the free *Opto 22 Library Package for
+  CODESYS* 3.1.3.0 (`Opto22-3.1.3.0-codesys-b2.signed.package`, 2026-03;
+  nothing installed on the EPIC). The EPIC PLC device description
+  (`devices/plc/grv-epic-pr1.devdesc.xml`, runtime 3.5.21.40) hangs its
+  I/O off the library FB `IoDrvGroovPLC`, and the I/O unit
+  (`devices/iounit/grv-epic-pr1.devdesc.xml`) off `IoDrvOptoIoUnit`,
+  whose parameters are *Address* (default `'127.0.0.1'`, "Use
+  '127.0.0.1' for local I/O") and *Port* (default `2001`, "OptoMMP
+  Port"). No native component, `.so`, device node or shared-memory name
+  appears in the device descriptions or the compiled library
+  (`Opto22.compiled-library-v3`). The driver is plain IEC code over the
+  runtime's `SysSocket`: a TCP command/response client (`MmpClient`) and
+  UDP sockets (`SysSockCreateUdp`, `SysSockSendToUdp`/`RecvFromUdp`), with
+  OptoMMP transaction codes and labels checked on every reply. So Opto's
+  own CODESYS runtime reaches local I/O exactly as `naut` does, as an
+  OptoMMP client of `mmpServer` on loopback, and OptoMMP is the floor for
+  everyone. Three OptoMMP features it leans on are worth taking for the
+  `optommp` driver (branch `optommp-driver`). (1) **Streaming**: the
+  driver writes the stream target address, port, start address, data
+  size and interval (*Streaming Interval*, default 20 ms, "equal to or
+  shorter than the bus-cycle time"), and the EPIC then pushes inputs as
+  UDP datagrams into one shared socket, instead of being polled.
+  (2) The **custom data area** ("MMP Pointers"): scattered channel
+  addresses are mapped into one contiguous block, sized for "4 pointers
+  × 32 channels × 16 modules = 2048", so a whole rack is one read or one
+  stream. Where the pointers point matters, and the strings do not show
+  which addresses Opto's driver uses. Measured on the `optommp-driver`
+  branch: a pointer into the packed values (`F1000300`) costs `mmpServer`
+  about 0.5 ms each time it is resolved. 36 of them streamed every 20 ms
+  held it at 90 % of a core. Pointers into the expanded per-channel read
+  areas return the same values, NaN included, for next to nothing. The
+  stream configuration is also stored to flash, so a driver that sets it
+  must restore it on a clean stop. (3) The I/O unit's **communication watchdog** (off by default)
+  and a **power-up-clear check** ("PUC expected before communicating
+  with I/O unit"). On quality: the CODESYS process image carries **no
+  per-channel status**. An analog channel maps `EU` (a REAL) and nothing
+  else; a digital channel maps state, on/off latch and feature value.
+  Status is per module and per link: a diagnostic string, *Missing
+  module*, *Invalid channel type… may not be compatible* at
+  configuration time, timeouts named "no response to command" and
+  "missed incoming stream", the watchdog timeout and auto-reconnect.
+  That is a limit of Opto's CODESYS mapping, not of OptoMMP: the memory
+  map also has a per-channel quality mask in the expanded digital packed
+  data (`F1001900`) and quality indicator codes (`F1002080`), which the
+  `optommp` driver reads and CODESYS does not surface.
+
+  **What sits under `mmpServer`** (read-only look on the bench EPIC,
+  2026-10-24; nothing changed). The groov I/O modules are not reached
+  through an FPGA device node. The backplane is **ARCNET**: a COM20020
+  controller brought up as `arc0` (node 01, about 470 frames received a
+  second), driven by Opto kernel modules `com20020-o22`, `arc-o22proto`
+  (which registers a socket family, `O22ArcProto`) and `arc-o22encap`.
+  `/dev/fpgaDirectIo` (`root:mmp22 0660`) belongs to `o22_civ_direct_io`,
+  "a basic char driver to toggle direct I/O on fpga", and is not the
+  module I/O path. The kernel modules are all GPL, but no source or
+  written offer is published or on the box, so it would have to be
+  requested from Opto, and it would show only the ARCNET transport. The
+  module protocol itself (commands, channel configuration, framing) is
+  in `mmpServer`, which is closed. Replicating it is not worth doing.
+  `mmpServer` is the bus's one processor node, so a second master beside
+  it would interleave transactions with the modules. Replacing it means
+  stopping `mmpServer`, which takes OptoMMP, Modbus, PAC Control, CODESYS
+  and groov Manage's I/O with it, and it needs root. The gain would be
+  small: `mmpServer` almost certainly scans the bus itself and answers
+  OptoMMP from its own image. OptoMMP's UDP streaming is the
+  low-latency path, and it is the one Opto's own runtime uses.
 - `naut optommp import` names tags by slot and channel; channel names
   configured in groov Manage are not reachable over OptoMMP.
 - **Start on boot.** The on-EPIC run was hand-started over SSH; a systemd

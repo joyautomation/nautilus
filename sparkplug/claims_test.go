@@ -567,6 +567,11 @@ func TestMQTTAndProtobufLiveOnlyInTheSparkplugPackage(t *testing.T) {
 				inSparkplug++
 				continue
 			}
+			// The PLCnext driver's generated stubs for the firmware's
+			// gRPC data-access service carry protobuf, not MQTT.
+			if strings.HasPrefix(rel, "plcnext/gen/") && !strings.HasPrefix(p, "github.com/eclipse/paho") {
+				continue
+			}
 			t.Errorf("%s imports %s; MQTT and protobuf belong to the sparkplug package", rel, p)
 		}
 		return nil
