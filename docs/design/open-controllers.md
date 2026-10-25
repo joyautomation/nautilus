@@ -44,10 +44,15 @@ I/O.
 ### 2.1 What the bench unit is
 
 `192.168.82.243`, `GRV-EPIC-PR1`, four modules. Ports open: 80/443 (groov
-Manage), **502 Modbus/TCP**, **2001 OptoMMP**, 8088 (Ignition Edge, Jetty),
-22001 (PAC Control engine). 22 was closed on the first day; the shell
+Manage), **502 Modbus/TCP**, **2001 OptoMMP**, 8088 (Jetty, which that first scan took for Ignition
+Edge), 22001 (PAC Control engine). 22 was closed on the first day; the shell
 license was already on the unit and James enabled the shell server and a
-shell user on 2026-10-24. From the shell: quad-core ARMv7 (Cortex-A9
+shell user on 2026-10-24. Ignition Edge is not on the unit: on 2026-10-25
+the shell found no Ignition service or install and nothing listening on
+8088. What runs beside nautilus is Opto's: `mmpServer` (the I/O server,
+≈ 10 % CPU), the PAC Control engine and its REST bridge (2–4 % CPU),
+groov View with the local-display browser, Node-RED (idle), and groov
+Manage. From the shell: quad-core ARMv7 (Cortex-A9
 class, VFPv3/NEON), Opto groov Linux 4.1.3 (Yocto kirkstone), kernel
 5.15.91 PREEMPT_RT, 1.8 GB RAM, 4 GB free on `/`, sudo with password.
 
@@ -213,7 +218,7 @@ The output was switched back off afterwards.
 build as for the PLCnext) ran the same project on the processor's own
 Linux, polling its own Modbus server: 1 Hz heartbeat on coil 587 as
 read from the laptop, 77 tags, 4 % of one core, 17 MB resident, with
-Ignition Edge and the PAC Control engine still running beside it. The
+the PAC Control engine, groov View and Node-RED still running beside it. The
 controller and its I/O now share a chassis; nothing is off-box.
 
 That run surfaced a runtime bug worth more than the demo: the eleven
@@ -249,7 +254,11 @@ four field wires from outputs to inputs (DO3→DI6, DO4→DI8, DO5→DI10,
 DO6→DI12); the env-gated live test (`NAUT_OPTOMMP_LIVE=<host>
 NAUT_OPTOMMP_LOOPBACK="1.3>0.6" go test ./optommp -run Live`) drives one
 and reads it back in about one scan (21 ms at 20 ms), catches and clears
-the on-latch, and writes and restores a scratchpad float.
+the on-latch, and writes and restores a scratchpad float. With
+`epic-bench` running, forcing `EPIC_M1_DO03` on (`POST /api/forces`)
+lights the chain within half a second: DO3 → wire → DI6 → `bench.st`
+→ DO6 → wire → DI12, and clearing the force drops all four (re-checked
+2026-10-25).
 
 **Custom area and streaming on the EPIC (2026-10-24, evening).** The
 live test passes in every mode (`NAUT_OPTOMMP_MODE=custom` or
@@ -274,8 +283,8 @@ switched on on the bench unit (it moves real outputs; James's call).
 `5.15.91-rt57 PREEMPT_RT`, and a task's `priority:` uses it once the
 binary may: `sudo setcap cap_sys_nice+ep naut` (the shell user's rtprio
 limit is 0). The bench project, polling, 20 ms task and 20 ms driver
-scan, firmware 4.1.2.0, Ignition Edge and the PAC engine running beside
-it. Each row is 5 minutes (≈ 15,100 scans) after a 10 s warm-up. Lateness
+scan, firmware 4.1.2.0, the PAC engine, groov View and Node-RED running
+beside it. Each row is 5 minutes (≈ 15,100 scans) after a 10 s warm-up. Lateness
 is the task's wake-up lateness from the runtime's own histogram, so values
 are bucket ranges. "4 hogs" is four `while :; do :; done` shells at
 normal priority, one per core. Priority 20 sits below mmpServer, which runs
@@ -290,8 +299,8 @@ normal priority, one per core. Priority 20 sits below mmpServer, which runs
 
 FIFO 20 takes the tail off the task. Under load, its worst wake-up went
 from 5–10 ms to under 0.5 ms, with none late. The quiet EPIC was worse than
-the loaded one at normal priority. A likely cause is Ignition's bursts and
-idle cores waking up, but that was not investigated, nor was the one
+the loaded one at normal priority. A likely cause is idle cores waking up,
+but that was not investigated, nor was the one
 2–5 ms wake left at FIFO 20 on a quiet EPIC. The driver gains nothing. Its
 poll loop still runs at normal priority, and each request waits on
 mmpServer, so the I/O scan's p99 is 4–6 ms in every row. The task's

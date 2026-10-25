@@ -34,8 +34,9 @@ everything the processor knows about its channels (quality included).
   `EPIC_PASSWORD`). The password contains `$` and `#`: read it with
   `grep '^EPIC_PASSWORD=' .env | cut -d= -f2-`, never `source`. The shell
   user is not the groov Manage admin. `naut` (ARM build) and
-  `~/nautilus/epic-bench` are already on the EPIC. Ignition Edge and the
-  PAC engine run beside it; leave them alone.
+  `~/nautilus/epic-bench` are already on the EPIC. The PAC engine,
+  groov View and Node-RED run beside it; leave them alone. (No Ignition
+  Edge: checked 2026-10-25.)
 - Measured: one OptoMMP request ≈ 0.75 ms p50 / 1.5 ms p99 **regardless of
   size and the same on loopback as over the LAN** — the cost is inside
   Opto's server. So: two block reads per scan (packed digital state at
