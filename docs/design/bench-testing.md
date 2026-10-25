@@ -135,7 +135,7 @@ caught.
 | E1 | deploy this commit's ARMv7 build; `naut version` reports the commit | build/packaging |
 | E2 | `naut optommp browse`: four modules, expected part numbers and channel types | memory map, importer |
 | E3 | import twice: byte-identical, and equal to the committed `examples/epic-bench` files | determinism, drift |
-| E4 | digital loopback through the runtime **on** the EPIC: write patterns to DO3–6 via `POST /api/tags`, read DI6/8/10/12 within N scans; repeated for each driver mode (Modbus projection, OptoMMP poll, custom area, stream 20 ms) | driver regressions per mode |
+| E4 | digital loopback through the runtime **on** the EPIC: force patterns onto DO3–6 via `POST /api/forces` (a plain tag write is overwritten next scan: epic-bench's program assigns DO3 := DI3), read DI6/8/10/12 within N scans, then `/api/forces/clear`; repeated for each driver mode (Modbus projection, OptoMMP poll, custom area, stream 20 ms) | driver regressions per mode |
 | E5 | quality: unwired ICTD → `null` in `/api/state` and quality bad; wired ICTD good and in range | the NaN class |
 | E6 | budgets: `naut` and `mmpServer` CPU over 60 s per mode, against a stored baseline (fail at +50 %); RSS | the pointer-cost class; the evidence for guide numbers |
 | E7 | link loss: `naut` on the runner targets the EPIC through a harness TCP proxy; cut it → quality goes stale within the timeout; restore → recovers without a restart | reconnect logic (no root needed anywhere) |
