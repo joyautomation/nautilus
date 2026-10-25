@@ -170,11 +170,18 @@ heartbeat on output 15, and echoes analog input 0 to analog output 0.
 ## Timing, honestly
 
 The firmware refreshes the Axioline frames every 500 µs. On `transport:
-shm` the shim copies them every 1 ms — best-effort scheduling for now,
-about 1 cycle in 1 500 later than 200 µs on a quiet controller, bursts
-of more under network load, because `admin` cannot give it SCHED_FIFO —
-and naut's scan reads the latest copy; the program's own scan (50 ms
-here) is the rate that matters. On `transport: grpc` each poll is one
-round trip of ~11 ms for this manifest's eight bytes, remote-I/O grade.
-Neither is motion grade until the shim runs SCHED_FIFO, which needs root
-once (`setcap cap_sys_nice+ep`); rt/plcnext-io/README.md has the detail.
+shm` the shim copies them every 1 ms and naut's scan reads the latest
+copy; the program's own scan (50 ms here) is the rate that matters. On
+`transport: grpc` each poll is one round trip of ~11 ms for this
+manifest's eight bytes, remote-I/O grade.
+
+The shim's own timing depends on its scheduling. Out of the box it is
+best-effort (`admin` cannot grant SCHED_FIFO): pinned to CPU 1 with
+naut on CPU 0, about 1 cycle in 800 later than 200 µs on a quiet
+controller and a third of them under a stream into its Ethernet. After
+the owner's one-time `setcap` step (rt/plcnext-io/README.md, Real-time
+priority) it runs FIFO 80: no cycle later than 200 µs quiet or beside
+two busy loops, 3 % under the stream and none by more than 1 ms. On the
+bench it is set, and the deployed `nautilus.yaml` gives the scan task
+`priority: 40`; this copy does not, because on a controller without the
+capability the task would report it as an error.

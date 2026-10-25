@@ -1,11 +1,14 @@
 # Handoff: PLCnext in-process tier, stage 2 (branch `plcnext-shm`)
 
-**Status 2026-10-24: pieces 1–3 done and running on the bench** (commits
+**Status 2026-10-25: pieces 1–4 done and running on the bench** (commits
 dc441b4, 65ed843, 4de35bc, cc8d11b). admin's crontab runs
 `naut-keepalive.sh` at boot and every minute (installed 2026-10-24 with
-James's OK; a killed naut came back at the next minute). Open: a reboot
-to prove the boot start, piece 4 (a root path for `setcap`), and eyes on
-the DO16 LEDs. The bench pins the shim to CPU 1 and naut to CPU 0
+James's OK; a killed naut came back at the next minute). Piece 4: James ran the `passwd`/`su`/`setcap` step
+(root locked again after), and the shim runs FIFO 80 with naut's task
+at FIFO 40 (the bench's deployed `nautilus.yaml` has `priority: 40`; the
+repo's does not, since without the capability it is an error on the
+card). Redeploying either binary drops its capability. Open: a reboot
+to prove the boot start, and eyes on the DO16 LEDs. The bench pins the shim to CPU 1 and naut to CPU 0
 (`io/nautilus_io.cpu`, `naut.cpu`; rt/plcnext-io/README.md has the
 best-effort numbers that chose it). On the controller: `naut.prev`,
 `io/nautilus_io.stage1`, `io/nautilus_io.stage2a` (before the lateness

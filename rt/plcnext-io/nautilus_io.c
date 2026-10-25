@@ -369,10 +369,12 @@ int main(int argc, char **argv) {
     }
 
     // Real-time cycle: pinned priority, absolute schedule, lateness kept.
-    // The priority is 50 (the firmware's interrupt threads' level, under its
-    // ESM tasks at 97-98) unless nautilus_io.prio beside the binary says
-    // otherwise; it only takes with CAP_SYS_NICE (setcap, README).
-    int prio = 50;
+    // The priority is 80 (over the firmware's interrupt threads at 50, a tie
+    // with eth0's that made the cycle's lateness a coin toss under network
+    // load; under T_Cyclic100 at 82, the network receive task at 95 and the
+    // ESM at 97-98) unless nautilus_io.prio beside the binary says otherwise;
+    // it only takes with CAP_SYS_NICE (setcap, README).
+    int prio = 80;
     char priopath[PATH_MAX];
     snprintf(priopath, sizeof priopath, "%s/nautilus_io.prio", exe);
     FILE *pf = fopen(priopath, "r");

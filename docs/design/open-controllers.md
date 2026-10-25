@@ -343,9 +343,14 @@ driver re-handshakes on its own).
    a C export of a shipped library, `ArpSystemModuleMain2` standing in
    for the static `ArpSystemModule_Setup`; zig cross-compiles it). Its
    input frame matches the gRPC mirror byte for byte; it is the output
-   frame's only writer; ~2 % of a core. Best-effort scheduling for now
-   (file capabilities are needed for SCHED_FIFO and `admin` cannot
-   `setcap`): about 1 cycle in 1 500 later than 200 µs, worst 1.7 ms.
+   frame's only writer; ~2 % of a core. SCHED_FIFO needs a file
+   capability, which `admin` cannot set; with the owner's one-time root
+   step (`passwd`, `su`, `setcap`, root locked again; recipe in the
+   README) the shim runs FIFO 80 pinned to CPU 1 and no cycle is later
+   than 200 µs quiet or beside two busy loops (worst 51 µs and 154 µs
+   over 3 min); under an ssh stream into the controller 3.2 % are, none
+   by more than 1 ms. Best-effort it is 0.1–3 % late quiet, worst up to
+   13 ms, and two-thirds late under the stream.
    Three hard lessons are in its README: never exit during ACF start-up
    (it rebooted the controller), never call the ANSI-C surface before
    the PLC's first `Start*` callback, never guess a signature. **Stage 2
@@ -353,8 +358,7 @@ driver re-handshakes on its own).
    process and the Go driver (`transport: shm`, layout in
    `rt/plcnext-io/nautilus_io_shm.h`), with an output watchdog in the
    shim; the manifest and tags are unchanged, only the bytes' route.
-   Numbers in §3.3 and `rt/plcnext-io/README.md`. Left: SCHED_FIFO for
-   the shim (root once, for `setcap`). naut's own start is
+   Numbers in §3.3 and `rt/plcnext-io/README.md`. naut's own start is
    `examples/plcnext-bench/controller/naut-keepalive.sh` from admin's
    crontab, at boot and every minute: installed, and a killed naut came
    back at the next minute; a reboot has not been tried yet.
@@ -397,9 +401,10 @@ driver re-handshakes on its own).
    BusConductor's `NUM_MODULES` and the image are readable, so the
    offsets stop being hand-typed.
 5. ~~Decide whether tier 2 is wanted before anyone builds it.~~ Built:
-   stages 1 and 2 run on the bench (§3.4). Next on it: a root path for
-   `setcap cap_sys_nice+ep` on the shim, then the FIFO lateness numbers
-   beside the best-effort ones.
+   stages 1 and 2 run on the bench (§3.4), the shim at SCHED_FIFO since
+   2026-10-25. Next on it: a reboot of the controller, and whether a
+   deploy should carry the `setcap` step (today a capability is lost
+   with every copy of a new build).
 
 ## 5. Not adopted
 

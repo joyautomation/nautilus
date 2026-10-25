@@ -95,9 +95,31 @@ best-effort cannot help much under heavy traffic: two busy loops are
 shut out, an ssh stream is not. That last column is what SCHED_FIFO is
 for. The bench pins both (`nautilus_io.cpu`, `naut.cpu`, below).
 
+With SCHED_FIFO (after the `setcap` below; shim on CPU 1, naut on CPU 0
+with its scan task at FIFO 40, same 3 min windows):
+
+| shim | quiet | two busy loops | stream over ssh |
+|---|---:|---:|---:|
+| pinned, best-effort (above) | 0.13 % late, worst 2.6 ms | 0.20 %, worst 0.95 ms | 33 %, worst 9.6 ms |
+| FIFO 50 | 0 late; p99 ≤ 50 µs, worst 55 µs | 0 late (1 over 100 µs); worst 118 µs | 0.21 % in one run, 20 % in the next; worst ≤ 1–2 ms |
+| **FIFO 80** | **0 late; p50 ≤ 10 µs, p99 ≤ 20 µs, worst 51 µs** | **0 late; p99.99 ≤ 100 µs, worst 154 µs** | **3.2 % in both runs; p99 ≤ 500 µs, worst ≤ 1 ms** |
+
+naut's own scan at FIFO 40 stays within 500 µs of its deadline quiet and
+under the busy loops (the FIFO 50 busy-loop run had a worst scan of
+≤ 10 ms), and
+within 1–2 ms under the stream.
+
+So the shim's default is 80. At 50 it ties with eth0's interrupt thread,
+and between equal FIFO priorities whoever runs first finishes first:
+the same load, measured twice, gave 0.2 % and 20 %. At 80 the result
+repeats to the hundredth of a percent, and what is left under a stream
+is the network receive task (`stmmacRxTsk`, FIFO 95) on the same core,
+which nothing under the ESM outranks. Nothing is late by more than a
+millisecond in any FIFO run: the 1 ms cycle holds; the 200 µs line does
+not, while someone streams into the controller's Ethernet.
+
 Not yet: a human confirming the DO16 LED blinks (the frame is written;
-the module's UP supply decides whether a channel switches), and
-SCHED_FIFO numbers.
+the module's UP supply decides whether a channel switches).
 
 ## Three things the bench taught, each the hard way
 
@@ -148,22 +170,31 @@ have one writer: the project's `PCWE.gds.config` has no connector into
 
 ## Real-time priority
 
-`sched_setscheduler(SCHED_FIFO)` is refused: the firmware's own
-`Arp.System.Application` carries file capabilities
+Out of the box `sched_setscheduler(SCHED_FIFO)` is refused: the
+firmware's own `Arp.System.Application` carries file capabilities
 (`cap_sys_nice`, …) and its children do not inherit them. The ESM tasks
-run at FIFO 97–98 in that process. Giving `nautilus_io` the same needs
-`setcap cap_sys_nice+ep nautilus_io` as root, and `admin`'s sudo on a
-PLCnext is an allowlist without `setcap` (it does have `passwd`, which
-is Phoenix's documented way to a root login). Until that is solved the
-cycle is best-effort, which the numbers above describe honestly; with
-it, the sample runtime's 1 ms cycle with sub-100 µs jitter is the
-expectation.
+run at FIFO 97–98 in that process. `nautilus_io` needs the same file
+capability, and `admin`'s sudo on a PLCnext is an allowlist without
+`setcap`, but it has `passwd`, which is Phoenix's documented way to a
+root login. So, once per binary, typed by the controller's owner:
 
-The shim asks for priority 50 — the level of the firmware's interrupt
-threads, under its ESM tasks (97–98), its network receive task (95) and
-`T_Cyclic100` (82). A `nautilus_io.prio` file beside the binary holding
-one number (1–96) asks for another; the page reports what was asked
-(`NIO_OFF_PRIO`) and whether it was granted (`NIO_ST_FIFO`).
+```sh
+ssh -t admin@<plc> 'sudo passwd root && su -c "setcap cap_sys_nice+ep /opt/plcnext/apps/nautilus/io/nautilus_io; setcap cap_sys_nice+ep /opt/plcnext/apps/nautilus/naut; getcap /opt/plcnext/apps/nautilus/io/nautilus_io /opt/plcnext/apps/nautilus/naut"; sudo passwd -l root'
+```
+
+sets a root password, uses it once, and locks root again. A capability
+belongs to the file: copying a new build into place drops it, so the
+step is part of every deploy of either binary that should run FIFO.
+Without it both run best-effort and say so (the page's `NIO_ST_FIFO`,
+the log's `refused`, naut's `scan.sched`). naut needs it only for a
+task with `priority:`; the bench's scan task is at 40 once it is set.
+
+The shim asks for priority 80 — over the firmware's interrupt threads
+(50), under `T_Cyclic100` (82), its network receive task (95) and the
+ESM (97–98); the FIFO table above is why not 50. A `nautilus_io.prio`
+file beside the binary holding one number (1–96) asks for another; the
+page reports what was asked (`NIO_OFF_PRIO`) and whether it was granted
+(`NIO_ST_FIFO`).
 
 A `nautilus_io.cpu` file beside the binary pins the cycle to one CPU;
 that needs no capability. Use CPU 1, with naut on CPU 0 (`naut.cpu`
