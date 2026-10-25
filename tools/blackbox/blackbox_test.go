@@ -313,6 +313,9 @@ func runCheck(t *testing.T, python, script string, s *sut, c Check) {
 	}
 	cmd.Dir = s.dir
 	cmd.Env = append(append(os.Environ(), s.env...), envList(c.Env)...)
+	if dir := os.Getenv("NAUTILUS_BLACKBOX_COVERDIR"); dir != "" { // a check that starts its own naut counts too
+		cmd.Env = append(cmd.Env, "GOCOVERDIR="+dir)
+	}
 	out, err := cmd.CombinedOutput()
 	what := c.Finding
 	if what == "" {
