@@ -14,17 +14,20 @@ claims:
     partial: true
     note: >-
       Against an in-process fake of the bench chassis. The live read of
-      the real processor is not in CI; the bench nightly
+      the real processor is the env-gated TestLiveDriver
+      (NAUT_OPTOMMP_LIVE), not in CI; the bench nightly
       (docs/design/bench-testing.md) is where it will be checked.
   - id: EPIC-002
     claim: >-
-      `naut optommp import` binds every channel to the processor's Modbus
-      map: digital state at coil/discrete 512 + slot*64 + ch, analog values
-      as float32 at input register 4608 + (slot*64 + ch)*2, outputs
-      writable, tags named <id>_M<slot>_<Kind><ch>.
+      `naut optommp import` writes an optommp driver manifest and a tag
+      file that load and check as a project: one tag per channel named
+      <id>_M<slot>_<Kind><ch>, outputs writable, with _Count, _OnLatch /
+      _OffLatch, _Quality and scratchpad tags on request.
     source: "#import-the-chassis"
     tests:
-      - go ./optommp TestGenerateModbusMap
+      - go ./cmd/naut TestOptommpImportMakesACheckableProject
+      - go ./internal/project TestLoadOptommpDriver
+      - go ./optommp TestManifestRoundTrip
   - id: EPIC-003
     claim: >-
       Re-running the import on an unchanged chassis writes byte-identical
@@ -32,30 +35,159 @@ claims:
     source: "#import-the-chassis"
     tests:
       - go ./optommp TestGenerateModbusMap
+      - go ./optommp TestManifestRoundTrip
     partial: true
-    note: Generation is deterministic in the test; a run-twice-and-compare test is not written.
+    note: Generation is deterministic in the tests; a run-twice-and-compare test is not written.
   - id: EPIC-004
     claim: >-
-      OptoMMP block writes and reads round-trip through the wire client.
+      `--modbus` binds every channel to the processor's Modbus map instead:
+      digital state at coil/discrete 512 + slot*64 + ch, analog values as
+      float32 at input register 4608 + (slot*64 + ch)*2.
     source: "#import-the-chassis"
     tests:
-      - go ./optommp TestWriteRoundTrip
+      - go ./optommp TestGenerateModbusMap
+      - go ./cmd/naut TestOptommpImportModbus
   - id: EPIC-005
     claim: >-
+      A scan is the fewest requests the bindings allow (three for the
+      bench chassis), and digital outputs go out in one must-on/must-off
+      write that touches only the commanded channels, read back.
+    source: "#what-a-scan-does"
+    tests:
+      - go ./optommp TestDriverReadsTheBenchChassis
+      - go ./optommp TestDriverWritesOnlyTheCommandedChannels
+      - go ./optommp TestDriverWriteGate
+      - go ./optommp TestDriverAnalogOutput
+      - go ./optommp TestWriteRoundTrip
+  - id: EPIC-006
+    claim: >-
+      The driver checks the chassis against the manifest on connect and
+      every few seconds, reconnects when the processor goes away, and
+      sends commands written meanwhile once it is back.
+    source: "#what-a-scan-does"
+    tests:
+      - go ./optommp TestDriverSwappedOrEmptySlotIsBad
+      - go ./optommp TestDriverHoldsCommandsAcrossADrop
+      - go ./optommp TestDriverSendsThePowerupClear
+  - id: EPIC-007
+    claim: >-
+      Quality is per channel: an empty or mismatched slot, an absent
+      channel, a channel flagged in the module's quality mask and a NaN
+      analog reading are bad; a dead connection is stale; a tag never
+      read is not connected; the processor's quality code is the _Quality
+      tag.
+    source: "#quality-per-channel"
+    tests:
+      - go ./optommp TestDriverSwappedOrEmptySlotIsBad
+      - go ./optommp TestDriverAbsentChannelIsBad
+      - go ./optommp TestDriverDigitalQualityBit
+      - go ./optommp TestDriverAnalogNaNIsBadAndRecovers
+      - go ./optommp TestDriverNotConnectedBeforeFirstScan
+      - go ./optommp TestDriverQualityCodes
+      - go ./internal/project TestLoadOptommpDriver
+  - id: EPIC-008
+    claim: >-
       An analog channel the processor reports as NaN renders as JSON null
-      on the tag API and stream, and its tag's quality is bad.
-    source: "#unwired-channels-read-nan"
+      on the tag API and stream.
+    source: "#quality-per-channel"
     tests:
       - go ./server TestStateRendersNaNAsNull
       - go ./modbus TestNaNFloatIsBadQuality
-  - id: EPIC-006
+  - id: EPIC-009
     claim: >-
-      The runtime on the processor ran the epic-bench project (77 tags,
-      100 ms scan) at about 4 % of one core and 17 MB resident beside
-      Opto's own runtimes.
+      On/off latches catch a pulse shorter than a scan.
+    source: "#import-the-chassis"
+    tests:
+      - go ./optommp TestDriverLatchesCatchAPulseBetweenScans
+  - id: EPIC-010
+    claim: >-
+      `custom-area: true` makes a scan one read with the same values; the
+      driver rewrites its pointers when another client changes them.
+    source: "#poll-custom-area-or-stream"
+    tests:
+      - go ./optommp TestDriverCustomAreaIsOneReadWithTheSameResult
+      - go ./optommp TestDriverRewritesCustomPointersAnotherClientChanged
+  - id: EPIC-011
+    claim: >-
+      `stream:` has the processor push inputs over UDP; a late stream
+      makes every tag stale, a stream gone for the request timeout ends
+      the session, and a clean stop puts the stream configuration and
+      pointers back as found.
+    source: "#poll-custom-area-or-stream"
+    tests:
+      - go ./optommp TestDriverStreams
+      - go ./optommp TestDriverStreamLateIsStaleThenTimesOut
+      - go ./optommp TestDriverStopPutsTheStreamConfigBack
+  - id: EPIC-012
+    claim: >-
+      Measured on the bench EPIC at 20 ms: packed poll 13.7 % naut CPU
+      with 3 requests a scan, custom area 12.0 % with one, stream 10.0 %
+      with none.
+    source: "#poll-custom-area-or-stream"
+    tests: []
+    note: >-
+      A bench measurement (2026-10-24), conditions in
+      docs/design/open-controllers.md §2.3. No automated test; the bench
+      nightly is planned to record it per run.
+  - id: EPIC-013
+    claim: >-
+      A custom-area pointer into the packed analog area costs the
+      processor's I/O server about 0.5 ms each time it is resolved; the
+      driver points into the per-channel areas instead.
+    source: "#poll-custom-area-or-stream"
+    tests:
+      - go ./optommp TestDriverCustomAreaIsOneReadWithTheSameResult
+    partial: true
+    note: >-
+      The test pins which areas the pointers name; the cost was measured
+      on the bench EPIC (2026-10-24, brief §2.2) and is not in CI.
+  - id: EPIC-014
+    claim: >-
+      `watchdog:` sets the I/O unit's communication watchdog (0s turns it
+      off, absent leaves it alone); a polling manifest refuses one shorter
+      than three scans; while streaming the driver reads often enough to
+      keep it fed.
+    source: "#the-communication-watchdog"
+    tests:
+      - go ./optommp TestDriverWatchdog
+      - go ./optommp TestDriverWatchdogOffAndLeftAlone
+      - go ./optommp TestManifestCommOptionValidation
+      - go ./internal/project TestOptommpStatusStreamAndWatchdog
+    partial: true
+    note: Against the in-process fake only; not yet switched on on the bench unit.
+  - id: EPIC-015
+    claim: >-
+      The runtime on the processor ran the epic-bench project (73 tags,
+      polling) at 3.9 % of one core and 19.2 MB resident at 100 ms, 14.7 %
+      at 20 ms, beside Opto's own software.
     source: "#run-it-on-the-processor"
     tests: []
     note: >-
       A bench measurement (2026-10-24), written up in
       docs/design/open-controllers.md §2.3. No automated test yet; the
       bench nightly is planned to record it per run.
+  - id: EPIC-016
+    claim: >-
+      The driver manifest's `priority:` runs the driver loop on one
+      SCHED_FIFO thread, polling or streaming, and reports its wake-up
+      lateness and scan time; refused, it says why and runs normally.
+    source: "#timing-on-the-processors-real-time-kernel"
+    tests:
+      - go ./optommp TestDriverPriorityPolls
+      - go ./optommp TestDriverPriorityStreams
+      - go ./optommp TestDriverPriorityStreamGoesLate
+      - go ./optommp TestManifestPriority
+      - go ./optommp TestTimingStats
+      - go ./internal/project TestOptommpStatusTimingAndPriority
+  - id: EPIC-017
+    claim: >-
+      On the bench EPIC's PREEMPT_RT kernel, task priority 20 left no scan
+      more than 2 ms late in 5 minutes, quiet or loaded; driver priority 25
+      brought the driver's wake-up p99 from 1–2 ms to under 0.2 ms; the
+      scan's 2–5 ms p99 did not change.
+    source: "#timing-on-the-processors-real-time-kernel"
+    tests: []
+    note: >-
+      A bench measurement (2026-10-25, firmware 4.1.2.0, 20 ms scans, 5
+      minutes a row, quiet and with four busy loops), conditions in
+      docs/design/open-controllers.md §2.3. Not repeatable in CI.
