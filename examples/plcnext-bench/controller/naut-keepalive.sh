@@ -27,7 +27,14 @@ fi
 if [ -f "$LOG" ] && [ "$(wc -c < "$LOG")" -gt 1048576 ]; then
 	mv "$LOG" "$LOG.1"
 fi
+# naut.cpu beside naut, one CPU number, pins the whole process there: on a
+# two-core controller naut wandering onto the shim's core is most of the
+# shim's lateness (rt/plcnext-io/README.md, Real-time priority).
+PIN=
+if [ -f "$APP/naut.cpu" ] && command -v taskset > /dev/null; then
+	PIN="taskset -c $(cat "$APP/naut.cpu")"
+fi
 cd "$PROJECT" || exit 1
-echo "naut-keepalive: starting naut run in $PROJECT at $(date)" >> "$LOG"
-setsid nohup "$APP/naut" run . >> "$LOG" 2>&1 < /dev/null &
+echo "naut-keepalive: starting ${PIN:+$PIN }naut run in $PROJECT at $(date)" >> "$LOG"
+setsid nohup $PIN "$APP/naut" run . >> "$LOG" 2>&1 < /dev/null &
 echo $! > "$PIDFILE"

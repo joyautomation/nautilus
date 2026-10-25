@@ -5,9 +5,12 @@ dc441b4, 65ed843, 4de35bc, cc8d11b). admin's crontab runs
 `naut-keepalive.sh` at boot and every minute (installed 2026-10-24 with
 James's OK; a killed naut came back at the next minute). Open: a reboot
 to prove the boot start, piece 4 (a root path for `setcap`), and eyes on
-the DO16 LEDs. On the controller:
-`naut.prev`, `io/nautilus_io.stage1` and `io/nautilus_io.stage2a` (before
-the lateness histogram) are the previous binaries.
+the DO16 LEDs. The bench pins the shim to CPU 1 and naut to CPU 0
+(`io/nautilus_io.cpu`, `naut.cpu`; rt/plcnext-io/README.md has the
+best-effort numbers that chose it). On the controller: `naut.prev`,
+`io/nautilus_io.stage1`, `io/nautilus_io.stage2a` (before the lateness
+histogram) and `io/nautilus_io.stage2b` (before the CPU pin) are the
+previous binaries.
 
 **When this branch rebases onto plcnext-groov** (asked by that branch's
 session, 2026-10-24): its user guide

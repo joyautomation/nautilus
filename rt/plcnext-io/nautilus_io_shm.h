@@ -61,6 +61,7 @@
 #define NIO_HIST_LE_US {10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000}
 #define NIO_OFF_WORST_WIN_US 1248 // u32 worst lateness in the last completed window of 10000 cycles
 #define NIO_OFF_PRIO 1252      // u32  the SCHED_FIFO priority asked for (granted when NIO_ST_FIFO)
+#define NIO_OFF_CPU 1256       // u32  the CPU the cycle is pinned to, plus one; 0 = not pinned
 
 // outputs block: naut writes, the shim reads
 #define NIO_OFF_OUT_SEQ 2048   // u32  seqlock

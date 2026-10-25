@@ -30,6 +30,8 @@ type benchResult struct {
 	ShimPrio  uint32    `json:"shimPrio"`
 	ShimFIFO  bool      `json:"shimFifo"`
 	NautSched string    `json:"nautSched"`
+	ShimCores string    `json:"shimCores"` // the CPUs the shim's cycle may run on: one when pinned, else "any"
+	NautCores string    `json:"nautCores"` // naut's affinity, as /proc says it
 
 	Cycles       uint64    `json:"cycles"`
 	Late         uint64    `json:"late"` // over the shim's own threshold
@@ -103,6 +105,10 @@ func runPlcnextBench(args []string) int {
 	r := benchResult{
 		Label: *label, Start: t0.UTC(), Seconds: secs, ShimPrio: b.Prio, ShimFIFO: b.FIFO(),
 		Cycles: b.Cycles - a.Cycles, Late: b.Late - a.Late, LateUs: b.LateUs, ShimWorstUs: worst,
+		ShimCores: "any", NautCores: cpusAllowed(nautPID),
+	}
+	if b.CPU > 0 {
+		r.ShimCores = strconv.Itoa(int(b.CPU) - 1)
 	}
 	hist := make([]uint64, len(b.Hist))
 	for i := range hist {
@@ -140,7 +146,7 @@ func runPlcnextBench(args []string) int {
 	if r.ShimFIFO {
 		sched = fmt.Sprintf("SCHED_FIFO %d", r.ShimPrio)
 	}
-	fmt.Printf("%s — %.0f s, shim %s, naut %s\n", orDash(r.Label), secs, sched, orDash(r.NautSched))
+	fmt.Printf("%s — %.0f s, shim %s on CPU %s, naut %s on CPU %s\n", orDash(r.Label), secs, sched, r.ShimCores, orDash(r.NautSched), orDash(r.NautCores))
 	fmt.Printf("shim:  %d cycles, %d late (>%d µs, %.3f %%); p50 %s, p99 %s, p99.9 %s, p99.99 %s; worst 10 s window %s\n",
 		r.Cycles, r.Late, r.LateUs, plcnextPct(r.Late, r.Cycles), r.ShimP50, r.ShimP99, r.ShimP999, r.ShimP9999, usText(float64(worst)))
 	fmt.Printf("       lateness ≤")
@@ -271,6 +277,23 @@ func findNaut() int {
 		}
 	}
 	return 0
+}
+
+// cpusAllowed is a process's affinity ("0-1", "0"), or "" without one.
+func cpusAllowed(pid int) string {
+	if pid <= 0 {
+		return ""
+	}
+	st, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return ""
+	}
+	for _, l := range strings.Split(string(st), "\n") {
+		if v, ok := strings.CutPrefix(l, "Cpus_allowed_list:"); ok {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 type cpuTicks struct{ shim, naut, total, idle uint64 }

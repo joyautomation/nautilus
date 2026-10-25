@@ -386,6 +386,24 @@ int main(int argc, char **argv) {
     struct sched_param sp = { .sched_priority = prio };
     if (sched_setscheduler(0, SCHED_FIFO, &sp) == 0) { fifo = true; logln("SCHED_FIFO priority %d", prio); }
     else logln("SCHED_FIFO %d refused (%s); running best-effort", prio, strerror(errno));
+    // nautilus_io.cpu beside the binary pins the cycle to one CPU, away from
+    // naut and from whichever core takes the network's receive work. Unlike
+    // the priority this needs no capability: a thread may pin itself.
+    int cpu = -1;
+    snprintf(priopath, sizeof priopath, "%s/nautilus_io.cpu", exe);
+    if ((pf = fopen(priopath, "r"))) {
+        int v;
+        if (fscanf(pf, "%d", &v) == 1 && v >= 0 && v < CPU_SETSIZE) cpu = v;
+        else logln("%s: want a CPU number; not pinning", priopath);
+        fclose(pf);
+    }
+    if (cpu >= 0) {
+        cpu_set_t set;
+        CPU_ZERO(&set);
+        CPU_SET(cpu, &set);
+        if (sched_setaffinity(0, sizeof set, &set) == 0) logln("cycle pinned to CPU %d", cpu);
+        else { logln("pinning to CPU %d refused (%s); not pinned", cpu, strerror(errno)); cpu = -1; }
+    }
 
     page_open((uint32_t)CYCLE_NS, LATE_US);
 
@@ -486,6 +504,7 @@ int main(int argc, char **argv) {
             memcpy(pg + NIO_OFF_HIST, hist, sizeof hist);
             *PG32(NIO_OFF_WORST_WIN_US) = (uint32_t)worst_win_done;
             *PG32(NIO_OFF_PRIO) = (uint32_t)prio;
+            *PG32(NIO_OFF_CPU) = (uint32_t)(cpu + 1);
             memcpy(pg + NIO_OFF_INPUTS, inbuf, NIO_FRAME_LEN);
             memcpy(pg + NIO_OFF_ECHO, frame_out, NIO_FRAME_LEN);
             in_end();

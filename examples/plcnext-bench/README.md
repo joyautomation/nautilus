@@ -114,7 +114,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags='-s -w' 
 scp naut-arm admin@192.168.82.216:/opt/plcnext/apps/nautilus/naut
 scp -r examples/plcnext-bench admin@192.168.82.216:/opt/plcnext/apps/nautilus/
 ssh admin@192.168.82.216 'cd /opt/plcnext/apps/nautilus && ./naut plcnext browse'   # CONFIGURED=true NUM_MODULES=4 RUN=true + both images
-# 4. the shim (transport: shm) — build, deploy and recovery in rt/plcnext-io/README.md
+# 4. the shim (transport: shm) — build, deploy and recovery in rt/plcnext-io/README.md;
+#    before its restart, pin the shim to CPU 1 and naut to CPU 0 (its README's lateness table says why)
+ssh admin@192.168.82.216 'cd /opt/plcnext/apps/nautilus && echo 1 > io/nautilus_io.cpu && echo 0 > naut.cpu'
 ssh admin@192.168.82.216 /opt/plcnext/apps/nautilus/naut plcnext shm            # status 0x0f: PLC started, frames, RUN
 ssh admin@192.168.82.216 /opt/plcnext/apps/nautilus/plcnext-bench/controller/naut-keepalive.sh   # dashboard + tag API on :8080
 ```

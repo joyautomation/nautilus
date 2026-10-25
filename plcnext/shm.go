@@ -54,6 +54,7 @@ const (
 	shmHistN         = 12
 	shmOffWorstWinUs = 1248
 	shmOffPrio       = 1252
+	shmOffCPU        = 1256
 
 	shmOffOutSeq     = 2048
 	shmOffOutLen     = 2052
@@ -99,6 +100,7 @@ type ShimState struct {
 	Hist       [shmHistN]uint64 // cycles by lateness since start, buckets ShimHistLeUs; zero from an older shim
 	WorstWinUs uint32           // worst lateness in the last completed 10 000-cycle window
 	Prio       uint32           // the SCHED_FIFO priority asked for (granted when FIFO())
+	CPU        uint32           // the CPU the cycle is pinned to, plus one; 0 = not pinned
 	Inputs     [shmFrameLen]byte
 	Echo       [shmFrameLen]byte // what the shim wrote to the output frame
 
@@ -183,6 +185,7 @@ func (p *shmPage) read(out *ShimState) error {
 		}
 		st.WorstWinUs = p.u32(shmOffWorstWinUs)
 		st.Prio = p.u32(shmOffPrio)
+		st.CPU = p.u32(shmOffCPU)
 		copy(st.Inputs[:], p.mem[shmOffInputs:shmOffInputs+shmFrameLen])
 		copy(st.Echo[:], p.mem[shmOffEcho:shmOffEcho+shmFrameLen])
 		if atomic.LoadUint32(seq) != s1 {

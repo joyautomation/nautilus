@@ -255,7 +255,10 @@ func runPlcnextShm(args []string) int {
 	}
 	sched := "best-effort"
 	if st.FIFO() {
-		sched = "SCHED_FIFO"
+		sched = fmt.Sprintf("SCHED_FIFO %d", st.Prio)
+	}
+	if st.CPU > 0 {
+		sched += fmt.Sprintf(" on CPU %d", st.CPU-1)
 	}
 	fmt.Printf("nautilus_io pid %d: %d µs cycle, %s; status %#02x (PLC started %t, bus RUN %s)\n",
 		st.PID, st.PeriodNs/1000, sched, st.Status, st.PLC(), runText(st))

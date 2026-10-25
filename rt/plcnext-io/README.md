@@ -66,15 +66,34 @@ Stage 2 — nautilus's I/O through it — is done and running on the bench:
 | shim CPU | — | 2.8–2.9 % |
 | naut resident | 23 MB | 20 MB |
 
-Lateness, best-effort (SCHED_FIFO refused, below): on a quiet controller
-about 1 cycle in 1 500 is later than 200 µs, the same as stage 1. It is
-bursty, and the bursts are other load: a 20 MB scp over the controller's
-Ethernet (the NIC's receive thread runs at RT priority) put 250–1 400
-late cycles into a 10 s window, and naut at a 5 ms scan raised the rate
-to about 2 % with a worst of 12 ms and a few dozen torn reads of
-nautilus's block (the shim kept the previous outputs each time, as
-designed). The 50 ms scan stays the bench's setting; SCHED_FIFO for the
-shim is what isolates it from both.
+Lateness, best-effort (SCHED_FIFO refused, below), measured with
+`naut plcnext bench` (2026-10-24, 3–5 min windows, naut at a 50 ms
+scan, late = more than 200 µs after the shim's 1 ms deadline):
+
+| shim / naut | quiet | two busy loops | stream over ssh |
+|---|---:|---:|---:|
+| both free (the firmware's default) | 0.2–2.8 % late, worst 5–13 ms | 2.2 %, worst 4.3 ms | 66.5 %, worst 25 ms |
+| naut stopped | 0.12 %, worst 0.25–2.4 ms | | |
+| shim CPU 0, naut CPU 1 | 16 %, worst 5.2 ms | 19 %, worst 1.3 ms | 33 %, worst 9.5 ms |
+| **shim CPU 1, naut CPU 0** | **0.13 %, worst 2.6 ms** | **0.20 %, worst 0.95 ms** | **33 %, worst 9.6 ms** |
+
+"Worst" is the worst 10 000-cycle window the bench saw. Percentiles are
+in `bench.jsonl`; for the pinned row, p99 ≤ 200 µs and p99.9 ≤ 500 µs
+quiet and under the busy loops.
+
+What it says. On a two-core controller the shim's lateness is mostly
+who shares its core. Left alone the scheduler keeps the shim's cycle on
+CPU 1 and lets naut's threads wander onto it; how often they do is why
+the unpinned quiet runs range from 0.2 % to 2.8 %; the "1 cycle in
+1 500" this page quoted before came from single 10 s windows and does
+not hold up. CPU 0 carries the
+firmware's periodic RT tasks (one ESM core, `T_Cyclic100`, the
+Profinet timers), and a best-effort shim there is late one cycle in
+six. CPU 1 carries the other ESM core and the network receive path
+(`stmmacRxTsk` at FIFO 95, eth0's IRQ thread at 50), so pinning
+best-effort cannot help much under heavy traffic: two busy loops are
+shut out, an ssh stream is not. That last column is what SCHED_FIFO is
+for. The bench pins both (`nautilus_io.cpu`, `naut.cpu`, below).
 
 Not yet: a human confirming the DO16 LED blinks (the frame is written;
 the module's UP supply decides whether a channel switches), and
@@ -146,14 +165,18 @@ threads, under its ESM tasks (97–98), its network receive task (95) and
 one number (1–96) asks for another; the page reports what was asked
 (`NIO_OFF_PRIO`) and whether it was granted (`NIO_ST_FIFO`).
 
+A `nautilus_io.cpu` file beside the binary pins the cycle to one CPU;
+that needs no capability. Use CPU 1, with naut on CPU 0 (`naut.cpu`
+beside naut, read by `naut-keepalive.sh`): the table above is why.
+
 To compare, `naut plcnext bench` on the controller measures one window
 from the page and naut's `/api/state`: the shim's lateness histogram
 (cumulative in the page, so a window is a difference), its worst
 10 000-cycle window, naut's scan lateness, and CPU.
 `examples/plcnext-bench/controller/bench-matrix.sh <mode> 5m` runs it
 quiet, under two busy loops, and under a stream over ssh, appending JSON
-lines to `/opt/plcnext/apps/nautilus/bench.jsonl`; run it once
-best-effort and once after the `setcap`.
+lines to `/opt/plcnext/apps/nautilus/bench.jsonl` with the CPUs
+each side ran on; run it once best-effort and once after the `setcap`.
 
 ## The exchange page
 

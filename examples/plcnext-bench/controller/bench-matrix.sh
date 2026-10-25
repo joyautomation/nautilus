@@ -3,8 +3,8 @@
 # `naut plcnext bench` under three loads, each for the same window, the
 # results appended as JSON lines on the controller. Run it from a machine
 # that reaches the controller over ssh, once per mode (the shim and naut
-# best-effort, then with SCHED_FIFO — rt/plcnext-io/README.md), and
-# compare the lines.
+# best-effort, pinned, then with SCHED_FIFO — rt/plcnext-io/README.md),
+# and compare the lines; each line records the CPUs the shim and naut ran on.
 #
 #   bench-matrix.sh normal 5m
 #   SSH="ssh admin@192.168.82.216" bench-matrix.sh fifo50 5m

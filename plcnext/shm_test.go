@@ -49,7 +49,7 @@ func TestShmLayoutMatchesTheShimsHeader(t *testing.T) {
 		"NIO_OFF_FRAME_NS": shmOffFrameNs, "NIO_OFF_CYCLES": shmOffCycles, "NIO_OFF_LATE": shmOffLate,
 		"NIO_OFF_WORST_US": shmOffWorstUs, "NIO_OFF_LAST_US": shmOffLastUs, "NIO_OFF_APPLIED": shmOffApplied,
 		"NIO_OFF_TORN": shmOffTorn, "NIO_OFF_INPUTS": shmOffInputs, "NIO_OFF_ECHO": shmOffEcho,
-		"NIO_OFF_HIST": shmOffHist, "NIO_HIST_N": shmHistN, "NIO_OFF_WORST_WIN_US": shmOffWorstWinUs, "NIO_OFF_PRIO": shmOffPrio,
+		"NIO_OFF_HIST": shmOffHist, "NIO_HIST_N": shmHistN, "NIO_OFF_WORST_WIN_US": shmOffWorstWinUs, "NIO_OFF_PRIO": shmOffPrio, "NIO_OFF_CPU": shmOffCPU,
 		"NIO_OFF_OUT_SEQ": shmOffOutSeq, "NIO_OFF_OUT_LEN": shmOffOutLen, "NIO_OFF_OUT_NS": shmOffOutNs,
 		"NIO_OFF_OUT_GEN": shmOffOutGen, "NIO_OFF_WATCHDOG_MS": shmOffWatchdogMs, "NIO_OFF_OUTPUTS": shmOffOutputs,
 		"NIO_ST_PLC": shmStPLC, "NIO_ST_FRAMES": shmStFrames, "NIO_ST_RUN_KNOWN": shmStRunKnown,
